@@ -51,6 +51,7 @@ namespace ACE.Server.WorldObjects
         {
             var before = vital.Current;
             vital.Current = (uint)Math.Clamp(newVal, 0, vital.MaxValue);
+            if (vital == Health && vital.Current != before) ReportVRHealthBar();
             return (int)(vital.Current - before);
         }
 
@@ -62,16 +63,18 @@ namespace ACE.Server.WorldObjects
         /// <summary>
         /// Updates a vital relative to current value
         /// </summary>
-        public int UpdateVitalDelta(CreatureVital vital, int delta)
+        public int UpdateVitalDelta(CreatureVital vital, int delta, uint feedbackFlags = 0)
         {
             var newVital = (int)vital.Current + delta;
 
-            return UpdateVital(vital, newVital);
+            var change = UpdateVital(vital, newVital);
+            if (vital == Health) ReportHealthChange(change, feedbackFlags);
+            return change;
         }
 
-        public int UpdateVitalDelta(CreatureVital vital, uint delta)
+        public int UpdateVitalDelta(CreatureVital vital, uint delta, uint feedbackFlags = 0)
         {
-            return UpdateVitalDelta(vital, (int)delta);
+            return UpdateVitalDelta(vital, (int)delta, feedbackFlags);
         }
 
         /// <summary>

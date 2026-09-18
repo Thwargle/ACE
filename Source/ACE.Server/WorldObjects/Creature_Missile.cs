@@ -77,7 +77,7 @@ namespace ACE.Server.WorldObjects
         /// <summary>
         /// Launches a projectile from player to target
         /// </summary>
-        public WorldObject LaunchProjectile(WorldObject weapon, WorldObject ammo, WorldObject target, Vector3 origin, Quaternion orientation, Vector3 velocity)
+        public WorldObject LaunchProjectile(WorldObject weapon, WorldObject ammo, WorldObject target, Vector3 origin, Quaternion orientation, Vector3 velocity, bool vrFreeAim = false)
         {
             var player = this as Player;
 
@@ -96,6 +96,12 @@ namespace ACE.Server.WorldObjects
 
             proj.ProjectileLauncher = weapon;
             proj.ProjectileAmmo = ammo;
+            proj.IsVRFreeAimProjectile = vrFreeAim && player != null;
+            if (proj.IsVRFreeAimProjectile)
+            {
+                proj.VRMissileAttackSkill = player.GetEffectiveAttackSkill();
+                proj.VRMissileAccuracy = player.AccuracyLevel + .6f;
+            }
 
             proj.Location = new Position(Location);
             proj.Location.Pos = origin;
@@ -373,7 +379,7 @@ namespace ACE.Server.WorldObjects
             obj.CurrentMotionState = null;
 
             obj.PhysicsObj.Velocity = velocity;
-            obj.PhysicsObj.ProjectileTarget = target.PhysicsObj;
+            obj.PhysicsObj.ProjectileTarget = target?.PhysicsObj;
 
             // Projectiles with RotationSpeed get omega values and "align path" turned off which
             // creates the nice swirling animation

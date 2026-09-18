@@ -2,6 +2,12 @@ namespace ACE.Server.Network.GameEvent
 {
     public enum GameEventType
     {
+        VRCapabilities                        = 0xF7D0,
+        VRPose                                = 0xF7D1,
+        VRHealthChange                        = 0xF7D2,
+        VRSpellProfile                        = 0xF7D3,
+        VRRecovery                            = 0xF7D4,
+        VRCasting                             = 0xF7D5,
         AllegianceUpdateAborted                = 0x0003,
         PopupString                            = 0x0004,
         PlayerDescription                      = 0x0013,

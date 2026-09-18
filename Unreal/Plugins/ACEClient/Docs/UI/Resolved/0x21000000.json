@@ -1,0 +1,481 @@
+{
+  "id": "0x21000000",
+  "name": "patch",
+  "displayWidth": 800,
+  "displayHeight": 600,
+  "roots": [
+    {
+      "elementId": "0x10000422",
+      "elementName": "Meter_Patch",
+      "type": "0x00000007",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 325,
+      "height": 46,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": [
+        {
+          "elementId": "0x00000002",
+          "elementName": "",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [],
+          "x": 0,
+          "y": 0,
+          "width": 325,
+          "height": 46,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x1000041A",
+      "elementName": "PatchField",
+      "type": "0x00000003",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 800,
+      "height": 600,
+      "zLevel": 1000,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": [
+        {
+          "elementId": "0x1000041E",
+          "elementName": "ConnectProgress",
+          "type": "0x00000007",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [],
+          "x": 40,
+          "y": 514,
+          "width": 325,
+          "height": 46,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "children": [
+            {
+              "elementId": "0x00000002",
+              "elementName": "",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 0,
+              "y": 0,
+              "width": 325,
+              "height": 46,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "children": []
+            }
+          ]
+        },
+        {
+          "elementId": "0x1000041F",
+          "elementName": "PatchProgress",
+          "type": "0x00000007",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [],
+          "x": 420,
+          "y": 514,
+          "width": 325,
+          "height": 46,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "children": [
+            {
+              "elementId": "0x00000002",
+              "elementName": "",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 0,
+              "y": 0,
+              "width": 325,
+              "height": 46,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "children": []
+            }
+          ]
+        },
+        {
+          "elementId": "0x10000420",
+          "elementName": "ConnectText",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 0,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ],
+            "UICore_Text_horizontal_justification": 1,
+            "UICore_Text_vertical_justification": 1,
+            "UICore_Element_ShouldEraseBackground": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_entry": {
+                  "table": "0x23000002",
+                  "id": "0x045DA533"
+                }
+              }
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            },
+            {
+              "stateId": "0x1000003B",
+              "stateName": "inprogress",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_entry": {
+                  "table": "0x23000002",
+                  "id": "0x0032A2F7"
+                }
+              }
+            },
+            {
+              "stateId": "0x1000003C",
+              "stateName": "done",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_entry": {
+                  "table": "0x23000002",
+                  "id": "0x0B032A54"
+                }
+              }
+            }
+          ],
+          "x": 28,
+          "y": 560,
+          "width": 354,
+          "height": 20,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "children": []
+        },
+        {
+          "elementId": "0x1000041C",
+          "elementName": "CancelButton",
+          "type": "0x00000001",
+          "defaultState": "",
+          "passToChildren": true,
+          "properties": {
+            "UICore_Text_left_margin": 0,
+            "UICore_Text_fonts": [
+              "0x40000016"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ],
+            "UICore_Text_horizontal_justification": 1,
+            "UICore_Text_vertical_justification": 1,
+            "UICore_Text_outline": true,
+            "UICore_Button_rollover": true,
+            "UICore_Text_entry": {
+              "table": "0x23000002",
+              "id": "0x0800AD3C"
+            }
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004CA9",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000002",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004CAA",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004CA8",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004CA7",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 696,
+          "y": 30,
+          "width": 100,
+          "height": 45,
+          "zLevel": 5,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "children": []
+        },
+        {
+          "elementId": "0x1000041D",
+          "elementName": "CopyrightText",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 0,
+            "UICore_Text_fonts": [
+              "0x40000002"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ],
+            "UICore_Text_horizontal_justification": 1,
+            "UICore_Text_vertical_justification": 4,
+            "UICore_Text_entry": {
+              "table": "0x23000002",
+              "id": "0x0A407D14"
+            },
+            "UICore_Element_ShouldEraseBackground": true
+          },
+          "fontHeight": 14,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 0,
+          "y": 467,
+          "width": 800,
+          "height": 40,
+          "zLevel": 5,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "children": []
+        },
+        {
+          "elementId": "0x10000421",
+          "elementName": "PatchText",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 0,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ],
+            "UICore_Text_horizontal_justification": 1,
+            "UICore_Text_vertical_justification": 1,
+            "UICore_Text_entry": {
+              "table": "0x23000002",
+              "id": "0x0712A673"
+            },
+            "UICore_Element_ShouldEraseBackground": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 408,
+          "y": 560,
+          "width": 354,
+          "height": 20,
+          "zLevel": 5,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "children": []
+        },
+        {
+          "elementId": "0x1000041B",
+          "elementName": "TitleImage",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [],
+          "x": 0,
+          "y": 30,
+          "width": 800,
+          "height": 482,
+          "zLevel": 10,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 1,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "imageFile": "0x06001343",
+          "children": []
+        }
+      ]
+    }
+  ]
+}

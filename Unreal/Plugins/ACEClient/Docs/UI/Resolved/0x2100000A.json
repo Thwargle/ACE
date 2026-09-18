@@ -1,0 +1,343 @@
+{
+  "id": "0x2100000A",
+  "name": "classic_powerbar",
+  "displayWidth": 800,
+  "displayHeight": 600,
+  "roots": [
+    {
+      "elementId": "0x10000033",
+      "elementName": "RootPowerbar_Field",
+      "type": "0x1000000F",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Element_hide": true
+      },
+      "fontHeight": 0,
+      "states": [
+        {
+          "stateId": "0x10000042",
+          "stateName": "JumpMode",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x10000043",
+          "stateName": "MeleeMode",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x10000044",
+          "stateName": "MissileMode",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x10000045",
+          "stateName": "DDDMode",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 760,
+      "height": 15,
+      "zLevel": 1000,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": [
+        {
+          "elementId": "0x10000034",
+          "elementName": "Powerbar",
+          "type": "0x00000007",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Meter_child_direction": 1,
+            "UICore_Meter_move_fill": false,
+            "UICore_Meter_smooth_movement": true
+          },
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x10000042",
+              "stateName": "JumpMode",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            },
+            {
+              "stateId": "0x10000043",
+              "stateName": "MeleeMode",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            },
+            {
+              "stateId": "0x10000044",
+              "stateName": "MissileMode",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            },
+            {
+              "stateId": "0x10000045",
+              "stateName": "DDDMode",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 760,
+          "height": 15,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 1,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "imageFile": "0x06004D0B",
+          "children": [
+            {
+              "elementId": "0x100005EE",
+              "elementName": "adv_recklessness_fill",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 76,
+              "y": 0,
+              "width": 608,
+              "height": 15,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 1,
+              "leftEdge": 4,
+              "topEdge": 1,
+              "rightEdge": 4,
+              "bottomEdge": 1,
+              "imageFile": "0x0600715E",
+              "children": []
+            },
+            {
+              "elementId": "0x00000002",
+              "elementName": "",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [
+                {
+                  "stateId": "0x10000042",
+                  "stateName": "JumpMode",
+                  "passToChildren": false,
+                  "imageFile": "0x06001354",
+                  "alphaFile": "",
+                  "drawMode": 1,
+                  "hasMedia": true,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x10000043",
+                  "stateName": "MeleeMode",
+                  "passToChildren": false,
+                  "imageFile": "0x06001200",
+                  "alphaFile": "",
+                  "drawMode": 1,
+                  "hasMedia": true,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x10000044",
+                  "stateName": "MissileMode",
+                  "passToChildren": false,
+                  "imageFile": "0x06001200",
+                  "alphaFile": "",
+                  "drawMode": 1,
+                  "hasMedia": true,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x10000045",
+                  "stateName": "DDDMode",
+                  "passToChildren": false,
+                  "imageFile": "0x0600195B",
+                  "alphaFile": "",
+                  "drawMode": 1,
+                  "hasMedia": true,
+                  "properties": {}
+                }
+              ],
+              "x": 0,
+              "y": 0,
+              "width": 760,
+              "height": 15,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 1,
+              "topEdge": 1,
+              "rightEdge": 1,
+              "bottomEdge": 1,
+              "children": []
+            },
+            {
+              "elementId": "0x10000035",
+              "elementName": "Powerbar_Text",
+              "type": "0x0000000C",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {
+                "UICore_Text_left_margin": 0,
+                "UICore_Text_fonts": [
+                  "0x40000002"
+                ],
+                "UICore_Text_top_margin": 0,
+                "UICore_Text_font_colors": [
+                  "0xFFFFFFFF"
+                ],
+                "UICore_Text_horizontal_justification": 1,
+                "UICore_Text_vertical_justification": 1
+              },
+              "fontHeight": 14,
+              "states": [
+                {
+                  "stateId": "0x0000000D",
+                  "stateName": "",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {
+                    "UICore_Text_font_colors": [
+                      "0xFF4C4C4C"
+                    ]
+                  }
+                },
+                {
+                  "stateId": "0x10000042",
+                  "stateName": "JumpMode",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {
+                    "UICore_Text_entry": {
+                      "table": "0x23000001",
+                      "id": "0x0EA020D4"
+                    },
+                    "UICore_Text_horizontal_justification": 3
+                  }
+                },
+                {
+                  "stateId": "0x10000043",
+                  "stateName": "MeleeMode",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {
+                    "UICore_Text_entry": {
+                      "table": "0x23000001",
+                      "id": "0x0704E064"
+                    },
+                    "UICore_Text_horizontal_justification": 3
+                  }
+                },
+                {
+                  "stateId": "0x10000044",
+                  "stateName": "MissileMode",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {
+                    "UICore_Text_entry": {
+                      "table": "0x23000001",
+                      "id": "0x03C437D4"
+                    },
+                    "UICore_Text_horizontal_justification": 3
+                  }
+                },
+                {
+                  "stateId": "0x10000045",
+                  "stateName": "DDDMode",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {
+                    "UICore_Text_left_margin": 5,
+                    "UICore_Text_horizontal_justification": 2
+                  }
+                }
+              ],
+              "x": 0,
+              "y": 0,
+              "width": 755,
+              "height": 15,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 1,
+              "topEdge": 1,
+              "rightEdge": 1,
+              "bottomEdge": 1,
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

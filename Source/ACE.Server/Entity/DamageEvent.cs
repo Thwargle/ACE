@@ -178,7 +178,7 @@ namespace ACE.Server.Entity
             Weapon = damageSource.ProjectileSource == null ? attacker.GetEquippedMeleeWeapon() : (damageSource.ProjectileLauncher ?? damageSource.ProjectileAmmo);
 
             AttackType = attacker.AttackType;
-            AttackHeight = attacker.AttackHeight ?? AttackHeight.Medium;
+            AttackHeight = damageSource.IsVRFreeAimProjectile ? AttackHeight.Medium : attacker.AttackHeight ?? AttackHeight.Medium;
 
             // check lifestone protection
             if (playerDefender != null && playerDefender.UnderLifestoneProtection)
@@ -385,9 +385,9 @@ namespace ACE.Server.Entity
         /// </summary>
         public float GetEvadeChance(Creature attacker, Creature defender)
         {
-            AccuracyMod = attacker.GetAccuracyMod(Weapon);
+            AccuracyMod = DamageSource.VRMissileAccuracy ?? attacker.GetAccuracyMod(Weapon);
 
-            EffectiveAttackSkill = attacker.GetEffectiveAttackSkill();
+            EffectiveAttackSkill = DamageSource.VRMissileAttackSkill ?? attacker.GetEffectiveAttackSkill();
 
             //var attackType = attacker.GetCombatType();
 

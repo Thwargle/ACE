@@ -1,0 +1,462 @@
+{
+  "id": "0x2100004D",
+  "name": "layout_2100004D",
+  "displayWidth": 800,
+  "displayHeight": 600,
+  "roots": [
+    {
+      "elementId": "0x1000043A",
+      "elementName": "PanelTabTemplate",
+      "type": "0x0000000C",
+      "defaultState": "0x0000000B",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000000"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1,
+        "UICore_Element_DrawAfterChildren": true
+      },
+      "fontHeight": 16,
+      "states": [
+        {
+          "stateId": "0x0000000B",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF7F7F7F"
+            ]
+          }
+        },
+        {
+          "stateId": "0x0000000C",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFCCCCCC"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 100,
+      "height": 25,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 1,
+      "rightEdge": 1,
+      "bottomEdge": 1,
+      "children": [
+        {
+          "elementId": "0x10000439",
+          "elementName": "LeftEnd",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x0000000B",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06005D93",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000C",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06005D92",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 17,
+          "height": 25,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 2,
+          "bottomEdge": 2,
+          "children": []
+        },
+        {
+          "elementId": "0x100000E9",
+          "elementName": "middle",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x0000000B",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06005D95",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000C",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06005D94",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 17,
+          "y": 0,
+          "width": 66,
+          "height": 25,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 2,
+          "children": []
+        },
+        {
+          "elementId": "0x10000215",
+          "elementName": "RightEnd",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x0000000B",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06005D97",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000C",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06005D96",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 83,
+          "y": 0,
+          "width": 17,
+          "height": 25,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 2,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x1000036F",
+      "elementName": "Tab_Blue",
+      "type": "0x00000003",
+      "defaultState": "0x0000000B",
+      "passToChildren": true,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [
+        {
+          "stateId": "0x0000000B",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x0000000C",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x1000001E",
+          "stateName": "rollover",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 33,
+      "height": 25,
+      "zLevel": 1,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": [
+        {
+          "elementId": "0x100000E8",
+          "elementName": "left",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": true,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x0000000B",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "0x06005D93",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000C",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "0x06005D92",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            },
+            {
+              "stateId": "0x1000001E",
+              "stateName": "rollover",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 9,
+          "height": 25,
+          "zLevel": 1,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 2,
+          "bottomEdge": 2,
+          "children": []
+        },
+        {
+          "elementId": "0x100000E9",
+          "elementName": "middle",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": true,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x0000000B",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "0x06005D95",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000C",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "0x06005D94",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            },
+            {
+              "stateId": "0x1000001E",
+              "stateName": "rollover",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            }
+          ],
+          "x": 9,
+          "y": 0,
+          "width": 15,
+          "height": 25,
+          "zLevel": 1,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 2,
+          "children": []
+        },
+        {
+          "elementId": "0x100000EA",
+          "elementName": "right",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": true,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x0000000B",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "0x06005D97",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000C",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "0x06005D96",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            },
+            {
+              "stateId": "0x1000001E",
+              "stateName": "rollover",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            }
+          ],
+          "x": 24,
+          "y": 0,
+          "width": 9,
+          "height": 25,
+          "zLevel": 1,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 2,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 2,
+          "children": []
+        }
+      ]
+    }
+  ]
+}

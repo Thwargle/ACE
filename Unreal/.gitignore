@@ -1,0 +1,33 @@
+# Unreal Engine / Visual Studio
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+# Build/ contains checked-in packaging and profiling scripts.
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+.vs/
+*.xcodeproj
+*.xcworkspace
+
+# Local
+*.log
+*.pdb
+*.exe
+*.dll
+*.target
+*.modules
+
+# Generated retail DAT imports; the runtime reads the user's DAT installation.
+/Content/*
+!/Content/ACE/
+/Content/ACE/*
+!/Content/ACE/RuntimeMaterials/
+/diag/*
+!/diag/UIInventory/
+/PackagedVR/
+/UpgradeLog*.htm

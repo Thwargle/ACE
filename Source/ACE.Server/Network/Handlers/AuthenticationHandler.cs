@@ -125,7 +125,13 @@ namespace ACE.Server.Network.Handlers
 
             session.Network.ConnectionData.DiscardSeeds();
 
-            session.Network.EnqueueSend(connectRequest);
+            // IMPORTANT: Do not EnqueueSend(ConnectRequest) until auth succeeds and State is
+            // AuthConnectResponse. ConnectRequest used to be queued first; on low-RTT links the
+            // client can reply with ConnectResponse before State flips, and NetworkManager then
+            // silently drops that ConnectResponse (session lookup requires AuthConnectResponse),
+            // leaving the client stuck at "waiting for characters".
+            // On auth failure we still send ConnectRequest first so encrypted boot/error messages
+            // can be decoded, then Terminate without ever entering AuthConnectResponse.
 
             if (loginRequest.NetAuthType < NetAuthType.AccountPassword)
             {
@@ -133,6 +139,7 @@ namespace ACE.Server.Network.Handlers
                 {
                     //log.Info($"Incoming ping from a Thwarg-Launcher client... Sending Pong...");
 
+                    session.Network.EnqueueSend(connectRequest);
                     session.Terminate(SessionTerminationReason.PongSentClosingConnection, new GameMessageCharacterError(CharacterError.ServerCrash1));
 
                     return;
@@ -143,6 +150,7 @@ namespace ACE.Server.Network.Handlers
                 else
                     log.DebugFormat("client {0} connected with no Password or GlsTicket included so booting", loginRequest.Account);
 
+                session.Network.EnqueueSend(connectRequest);
                 session.Terminate(SessionTerminationReason.NotAuthorizedNoPasswordOrGlsTicketIncludedInLoginReq, new GameMessageCharacterError(CharacterError.AccountInvalid));
 
                 return;
@@ -150,6 +158,7 @@ namespace ACE.Server.Network.Handlers
 
             if (account == null)
             {
+                session.Network.EnqueueSend(connectRequest);
                 session.Terminate(SessionTerminationReason.NotAuthorizedAccountNotFound, new GameMessageCharacterError(CharacterError.AccountDoesntExist));
                 return;
             }
@@ -158,6 +167,7 @@ namespace ACE.Server.Network.Handlers
             {
                 if (NetworkManager.Find(account.AccountName) != null)
                 {
+                    session.Network.EnqueueSend(connectRequest);
                     session.Terminate(SessionTerminationReason.AccountInUse, new GameMessageCharacterError(CharacterError.Logon));
                     return;
                 }
@@ -172,6 +182,7 @@ namespace ACE.Server.Network.Handlers
                     else
                         log.DebugFormat("client {0} connected with non matching password so booting", loginRequest.Account);
 
+                    session.Network.EnqueueSend(connectRequest);
                     session.Terminate(SessionTerminationReason.NotAuthorizedPasswordMismatch, new GameMessageBootAccount(" because the password entered for this account was not correct"));
 
                     // TO-DO: temporary lockout of account preventing brute force password discovery
@@ -190,6 +201,7 @@ namespace ACE.Server.Network.Handlers
                         previouslyConnectedAccount.Terminate(SessionTerminationReason.AccountLoggedIn, new GameMessageCharacterError(CharacterError.Logon));
 
                         // We still can't let the new account in. They'll need to retry after the previous account has been successfully booted.
+                        session.Network.EnqueueSend(connectRequest);
                         session.Terminate(SessionTerminationReason.AccountInUse, new GameMessageCharacterError(CharacterError.Logon));
                         return;
                     }
@@ -207,6 +219,7 @@ namespace ACE.Server.Network.Handlers
                 else
                     log.DebugFormat("client {0} connected with GlsTicket which is not implemented yet so booting", loginRequest.Account);
 
+                session.Network.EnqueueSend(connectRequest);
                 session.Terminate(SessionTerminationReason.NotAuthorizedGlsTicketNotImplementedToProcLoginReq, new GameMessageCharacterError(CharacterError.AccountInvalid));
 
                 return;
@@ -218,6 +231,7 @@ namespace ACE.Server.Network.Handlers
                 if (now < account.BanExpireTime.Value)
                 {
                     var reason = account.BanReason;
+                    session.Network.EnqueueSend(connectRequest);
                     session.Terminate(SessionTerminationReason.AccountBanned, new GameMessageAccountBanned(account.BanExpireTime.Value, $"{(reason != null ? $" - {reason}" : null)}"), null, reason);
                     return;
                 }
@@ -230,7 +244,10 @@ namespace ACE.Server.Network.Handlers
             account.UpdateLastLogin(session.EndPointC2S.Address);
 
             session.SetAccount(account.AccountId, account.AccountName, (AccessLevel)account.AccessLevel);
+            // Enter AuthConnectResponse BEFORE ConnectRequest hits the wire so a fast
+            // ConnectResponse from the client is matched by NetworkManager.
             session.State = SessionState.AuthConnectResponse;
+            session.Network.EnqueueSend(connectRequest);
         }
 
         public static void HandleConnectResponse(Session session)

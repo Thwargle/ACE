@@ -25,8 +25,11 @@ namespace ACE.Server.WorldObjects
                     Close(null);
                     return;
                 }
-                var withinUseRadius = CurrentLandblock.WithinUseRadius(viewer, Guid, out var targetValid);
-                if (!withinUseRadius)
+                // Close outside interact UseRadius by a clear margin so open-at-UseRadius
+                // (double-click walk-to) does not immediately auto-close the loot window.
+                var closeRadius = (UseRadius ?? 0.5f) + 2.0f;
+                var withinCloseRadius = CurrentLandblock.WithinUseRadius(viewer, Guid, out var targetValid, closeRadius);
+                if (!withinCloseRadius)
                 {
                     Close(viewer);
                     return;

@@ -1,0 +1,44 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "ACE Client",
+	"Description": "Asheron's Call Emulator (ACE) network client — login, enter world, movement, and DAT Setup mesh viewing over the retail UDP protocol.",
+	"Category": "Networking",
+	"CreatedBy": "ACE Community",
+	"CreatedByURL": "https://github.com/ACEmulator/ACE",
+	"DocsURL": "https://acemulator.github.io/protocol/",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": false,
+	"IsBetaVersion": true,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "ACEOpenXR",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit",
+			"PlatformAllowList": [ "Android" ]
+		},
+		{
+			"Name": "ACEClient",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "OpenXR",
+			"Enabled": true
+		},
+		{
+			"Name": "XRBase",
+			"Enabled": true
+		},
+		{
+			"Name": "ProceduralMeshComponent",
+			"Enabled": true
+		}
+	]
+}

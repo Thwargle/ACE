@@ -1,0 +1,253 @@
+#pragma once
+
+class FACEWorldBakeByteReader;
+
+namespace EACEWorldBakePortalSoundType
+{
+	enum Type : uint32
+	{
+		Invalid = 0,
+		Speak1 = 1,
+		Random = 2,
+		Attack1 = 3,
+		Attack2 = 4,
+		Attack3 = 5,
+		SpecialAttack1 = 6,
+		SpecialAttack2 = 7,
+		SpecialAttack3 = 8,
+		Damage1 = 9,
+		Damage2 = 10,
+		Damage3 = 11,
+		Wound1 = 12,
+		Wound2 = 13,
+		Wound3 = 14,
+		Death1 = 15,
+		Death2 = 16,
+		Death3 = 17,
+		Grunt1 = 18,
+		Grunt2 = 19,
+		Grunt3 = 20,
+		Oh1 = 21,
+		Oh2 = 22,
+		Oh3 = 23,
+		Heave1 = 24,
+		Heave2 = 25,
+		Heave3 = 26,
+		Knockdown1 = 27,
+		Knockdown2 = 28,
+		Knockdown3 = 29,
+		Swoosh1 = 30,
+		Swoosh2 = 31,
+		Swoosh3 = 32,
+		Thump1 = 33,
+		Smash1 = 34,
+		Scratch1 = 35,
+		Spear = 36,
+		Sling = 37,
+		Dagger = 38,
+		ArrowWhiz1 = 39,
+		ArrowWhiz2 = 40,
+		CrossbowPull = 41,
+		CrossbowRelease = 42,
+		BowPull = 43,
+		BowRelease = 44,
+		ThrownWeaponRelease1 = 45,
+		ArrowLand = 46,
+		Collision = 47,
+		HitFlesh1 = 48,
+		HitLeather1 = 49,
+		HitChain1 = 50,
+		HitPlate1 = 51,
+		HitMissile1 = 52,
+		HitMissile2 = 53,
+		HitMissile3 = 54,
+		Footstep1 = 55,
+		Footstep2 = 56,
+		Walk1 = 57,
+		Dance1 = 58,
+		Dance2 = 59,
+		Dance3 = 60,
+		Hidden1 = 61,
+		Hidden2 = 62,
+		Hidden3 = 63,
+		Eat1 = 64,
+		Drink1 = 65,
+		Open = 66,
+		Close = 67,
+		OpenSlam = 68,
+		CloseSlam = 69,
+		Ambient1 = 70,
+		Ambient2 = 71,
+		Ambient3 = 72,
+		Ambient4 = 73,
+		Ambient5 = 74,
+		Ambient6 = 75,
+		Ambient7 = 76,
+		Ambient8 = 77,
+		Waterfall = 78,
+		LogOut = 79,
+		LogIn = 80,
+		LifestoneOn = 81,
+		AttribUp = 82,
+		AttribDown = 83,
+		SkillUp = 84,
+		SkillDown = 85,
+		HealthUp = 86,
+		HealthDown = 87,
+		ShieldUp = 88,
+		ShieldDown = 89,
+		EnchantUp = 90,
+		EnchantDown = 91,
+		VisionUp = 92,
+		VisionDown = 93,
+		Fizzle = 94,
+		Launch = 95,
+		Explode = 96,
+		TransUp = 97,
+		TransDown = 98,
+		BreatheFlame = 99,
+		BreatheAcid = 100,
+		BreatheFrost = 101,
+		BreatheLightning = 102,
+		Create = 103,
+		Destroy = 104,
+		Lockpicking = 105,
+		EnterPortal = 106,
+		ExitPortal = 107,
+		GeneralQuery = 108,
+		GeneralError = 109,
+		TransientMessage = 110,
+		IconPickUp = 111,
+		IconSuccessfulDrop = 112,
+		IconInvalidDrop = 113,
+		ButtonPress = 114,
+		GrabSlider = 115,
+		ReleaseSlider = 116,
+		NewTargetSelected = 117,
+		Roar = 118,
+		Bell = 119,
+		Chant1 = 120,
+		Chant2 = 121,
+		DarkWhispers1 = 122,
+		DarkWhispers2 = 123,
+		DarkLaugh = 124,
+		DarkWind = 125,
+		DarkSpeech = 126,
+		Drums = 127,
+		GhostSpeak = 128,
+		Breathing = 129,
+		Howl = 130,
+		LostSouls = 131,
+		Squeal = 132,
+		Thunder1 = 133,
+		Thunder2 = 134,
+		Thunder3 = 135,
+		Thunder4 = 136,
+		Thunder5 = 137,
+		Thunder6 = 138,
+		RaiseTrait = 139,
+		WieldObject = 140,
+		UnwieldObject = 141,
+		ReceiveItem = 142,
+		PickUpItem = 143,
+		DropItem = 144,
+		ResistSpell = 145,
+		PicklockFail = 146,
+		LockSuccess = 147,
+		OpenFailDueToLock = 148,
+		TriggerActivated = 149,
+		SpellExpire = 150,
+		ItemManaDepleted = 151,
+		TriggerActivated1 = 152,
+		TriggerActivated2 = 153,
+		TriggerActivated3 = 154,
+		TriggerActivated4 = 155,
+		TriggerActivated5 = 156,
+		TriggerActivated6 = 157,
+		TriggerActivated7 = 158,
+		TriggerActivated8 = 159,
+		TriggerActivated9 = 160,
+		TriggerActivated10 = 161,
+		TriggerActivated11 = 162,
+		TriggerActivated12 = 163,
+		TriggerActivated13 = 164,
+		TriggerActivated14 = 165,
+		TriggerActivated15 = 166,
+		TriggerActivated16 = 167,
+		TriggerActivated17 = 168,
+		TriggerActivated18 = 169,
+		TriggerActivated19 = 170,
+		TriggerActivated20 = 171,
+		TriggerActivated21 = 172,
+		TriggerActivated22 = 173,
+		TriggerActivated23 = 174,
+		TriggerActivated24 = 175,
+		TriggerActivated25 = 176,
+		TriggerActivated26 = 177,
+		TriggerActivated27 = 178,
+		TriggerActivated28 = 179,
+		TriggerActivated29 = 180,
+		TriggerActivated30 = 181,
+		TriggerActivated31 = 182,
+		TriggerActivated32 = 183,
+		TriggerActivated33 = 184,
+		TriggerActivated34 = 185,
+		TriggerActivated35 = 186,
+		TriggerActivated36 = 187,
+		TriggerActivated37 = 188,
+		TriggerActivated38 = 189,
+		TriggerActivated39 = 190,
+		TriggerActivated40 = 191,
+		TriggerActivated41 = 192,
+		TriggerActivated42 = 193,
+		TriggerActivated43 = 194,
+		TriggerActivated44 = 195,
+		TriggerActivated45 = 196,
+		TriggerActivated46 = 197,
+		TriggerActivated47 = 198,
+		TriggerActivated48 = 199,
+		TriggerActivated49 = 200,
+		TriggerActivated50 = 201,
+		HealthDownVoid = 202,
+		RegenDownVoid = 203,
+		SkillDownVoid = 204
+	};
+}
+
+struct ACEWORLDBAKEDATTOOLS_API FACEWorldBakePortalSoundWave
+{
+	FACEWorldBakePortalSoundWave();
+	FACEWorldBakePortalSoundWave(FACEWorldBakeByteReader& Reader);
+	//
+	uint32 ResourceId;
+	//
+	uint32 ChunkSize; // always 18 or 30 (wav or pcm?)
+	//
+	uint32 DataSize;
+	//
+	uint16 FormatTag; // FRiffFormatChunk // pcm = 0x0001 // PCM, mp3 = 0x0055 // ISO/MPEG Layer3 Format
+	//
+	uint16 Channels; // channels?
+	//
+	uint32 SamplesPerSec; // samples per sec?
+	//
+	uint32 AvgBytesPerSec; // bytes per sec?
+	//
+	uint16 BlockAlign; // block align?
+	//
+	uint16 BitsPerSample; // bits per sample?
+	//
+	uint16 BytesEx; // cbsize?
+	//
+	uint16 mp3wID;
+	//
+	uint32 mp3fdwFlags;
+	//
+	uint16 mp3nBlockSize;
+	//
+	uint16 mp3nFramesPerBlock;
+	//
+	uint16 mp3nCodecDelay;
+	//
+	uint8* WaveData;
+};

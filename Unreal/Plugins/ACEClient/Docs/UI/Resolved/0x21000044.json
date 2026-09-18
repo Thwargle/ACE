@@ -1,0 +1,636 @@
+{
+  "id": "0x21000044",
+  "name": "layout_21000044",
+  "displayWidth": 800,
+  "displayHeight": 600,
+  "roots": [
+    {
+      "elementId": "0x10000327",
+      "elementName": "LargeSquareCheckBox",
+      "type": "0x00000001",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 18,
+        "UICore_Text_fonts": [
+          "0x40000000"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 2,
+        "UICore_Text_vertical_justification": 1,
+        "UICore_Button_boolean_button": true
+      },
+      "fontHeight": 16,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000006",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000008",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 120,
+      "height": 18,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 2,
+      "rightEdge": 2,
+      "bottomEdge": 1,
+      "children": [
+        {
+          "elementId": "0x10000328",
+          "elementName": "image",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x0600191F",
+              "alphaFile": "",
+              "drawMode": 1,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x0600191F",
+              "alphaFile": "",
+              "drawMode": 1,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000006",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x0600191A",
+              "alphaFile": "",
+              "drawMode": 1,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000008",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x0600191A",
+              "alphaFile": "",
+              "drawMode": 1,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 0,
+          "y": 1,
+          "width": 17,
+          "height": 17,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 2,
+          "bottomEdge": 1,
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x10000329",
+      "elementName": "SmallRoundCheckBox",
+      "type": "0x00000001",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 16,
+        "UICore_Text_fonts": [
+          "0x40000002"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 2,
+        "UICore_Text_vertical_justification": 1,
+        "UICore_Button_boolean_button": true
+      },
+      "fontHeight": 14,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000006",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000008",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 100,
+      "height": 14,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 2,
+      "rightEdge": 2,
+      "bottomEdge": 1,
+      "children": [
+        {
+          "elementId": "0x10000328",
+          "elementName": "image",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004D15",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004D16",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000006",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004D17",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000008",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004D18",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004D19",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 0,
+          "y": 1,
+          "width": 13,
+          "height": 13,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 2,
+          "bottomEdge": 1,
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x1000032A",
+      "elementName": "SmallRound_TextOnLeft_CheckBox",
+      "type": "0x00000001",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000002"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 3,
+        "UICore_Text_vertical_justification": 1,
+        "UICore_Button_boolean_button": true,
+        "UICore_Text_right_margin": 16
+      },
+      "fontHeight": 14,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000006",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000008",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 100,
+      "height": 14,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 2,
+      "rightEdge": 2,
+      "bottomEdge": 1,
+      "children": [
+        {
+          "elementId": "0x10000328",
+          "elementName": "image",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004D15",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004D16",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000006",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004D17",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000008",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004D18",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004D19",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 87,
+          "y": 1,
+          "width": 13,
+          "height": 13,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 2,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x1000032B",
+      "elementName": "OptionCheckboxTemplate",
+      "type": "0x10000035",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Button_boolean_button": true,
+        "UICore_Text_left_margin": 18,
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000002"
+        ],
+        "UICore_Element_tooltip_ID": 268436375,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Element_tooltip_layout": "0x21000041",
+        "UICore_Element_tooltips_on": true,
+        "UICore_Text_horizontal_justification": 2,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 14,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000006",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000008",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 100,
+      "height": 14,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 2,
+      "rightEdge": 2,
+      "bottomEdge": 1,
+      "children": [
+        {
+          "elementId": "0x10000328",
+          "elementName": "image",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004D15",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004D16",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000006",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004D17",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000008",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004D18",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004D19",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 0,
+          "y": 1,
+          "width": 13,
+          "height": 13,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 2,
+          "bottomEdge": 1,
+          "children": []
+        }
+      ]
+    }
+  ]
+}

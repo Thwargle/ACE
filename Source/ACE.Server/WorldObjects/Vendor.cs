@@ -245,13 +245,19 @@ namespace ACE.Server.WorldObjects
 
             var rotateTime = Rotate(player);    // vendor rotates towards player
 
+            // Already open for this player: refresh the merchandise list without another greeting.
+            // A client that re-sends Use before ApproachVendor lands would otherwise queue one
+            // Open emote per send and the vendor greets several times for one interaction.
+            var alreadyOpen = lastPlayerInfo != null && lastPlayerInfo.Guid == player.Guid
+                && player.LastOpenedContainerId == Guid;
+
             // TODO: remove this when DelayManager is not forward propagating current tick time
 
             var actionChain = new ActionChain();
             actionChain.AddDelaySeconds(0.001f);  // force to run after rotate.EnqueueBroadcastAction
             actionChain.AddAction(this, LoadInventory);
             actionChain.AddDelaySeconds(rotateTime);
-            actionChain.AddAction(this, () => ApproachVendor(player, VendorType.Open));
+            actionChain.AddAction(this, () => ApproachVendor(player, alreadyOpen ? VendorType.Undef : VendorType.Open));
             actionChain.EnqueueChain();
 
             if (lastPlayerInfo == null)
@@ -351,12 +357,7 @@ namespace ACE.Server.WorldObjects
 
             if (dist > UseRadius)
             {
-                if (lastPlayer.LastOpenedContainerId == Guid)
-                    lastPlayer.LastOpenedContainerId = ObjectGuid.Invalid;
-
-                EmoteManager.DoVendorEmote(VendorType.Close, lastPlayer);
-                lastPlayerInfo = null;
-
+                CloseForPlayer(lastPlayer);
                 return;
             }
 
@@ -364,6 +365,29 @@ namespace ACE.Server.WorldObjects
             closeChain.AddDelaySeconds(closeInterval);
             closeChain.AddAction(this, CheckClose);
             closeChain.EnqueueChain();
+        }
+
+        /// <summary>
+        /// Player closed the vendor UI (NoLongerViewingContents) or walked out of UseRadius.
+        /// </summary>
+        public void CloseForPlayer(Player player)
+        {
+            if (player == null)
+                return;
+
+            if (lastPlayerInfo == null || lastPlayerInfo.Guid != player.Guid)
+            {
+                // Still clear LastOpenedContainerId if this vendor was marked open.
+                if (player.LastOpenedContainerId == Guid)
+                    player.LastOpenedContainerId = ObjectGuid.Invalid;
+                return;
+            }
+
+            if (player.LastOpenedContainerId == Guid)
+                player.LastOpenedContainerId = ObjectGuid.Invalid;
+
+            EmoteManager.DoVendorEmote(VendorType.Close, player);
+            lastPlayerInfo = null;
         }
 
         public void CheckResetToHome()

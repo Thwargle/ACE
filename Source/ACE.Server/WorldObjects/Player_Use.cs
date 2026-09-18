@@ -246,6 +246,7 @@ namespace ACE.Server.WorldObjects
         /// <param name="errorType">An optional error message</param>
         public void SendUseDoneEvent(WeenieError errorType = WeenieError.None)
         {
+            if (!MagicState.IsCasting || errorType != WeenieError.None) EndVRCast();
             Session.Network.EnqueueSend(new GameEventUseDone(Session, errorType));
         }
 
@@ -261,6 +262,10 @@ namespace ACE.Server.WorldObjects
 
             if (container != null && container.Viewer == Guid.Full)
                 container.Close(this);
+
+            // Retail closes the vendor UI with the same GameAction; vendors are Creatures, not Containers.
+            if (CurrentLandblock?.GetObject(objectGuid) is Vendor vendor)
+                vendor.CloseForPlayer(this);
         }
 
         public Pet CurrentActivePet { get; set; }

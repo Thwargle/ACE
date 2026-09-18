@@ -375,7 +375,7 @@ namespace ACE.Server.WorldObjects
         public virtual uint TakeDamage(WorldObject source, DamageType damageType, float amount, bool crit = false)
         {
             var tryDamage = (int)Math.Round(amount);
-            var damage = -UpdateVitalDelta(Health, -tryDamage);
+            var damage = -UpdateVitalDelta(Health, -tryDamage, (damageType == DamageType.Nether ? 1u : 0u) | (crit ? 2u : 0u));
 
             // TODO: update monster stamina?
 
@@ -399,7 +399,7 @@ namespace ACE.Server.WorldObjects
 
         public void EmitSplatter(Creature target, float damage)
         {
-            if (target.IsDead) return;
+            if (damage <= 0) return;
 
             target.EnqueueBroadcast(new GameMessageSound(target.Guid, Sound.HitFlesh1, 0.5f));
             if (damage >= target.Health.MaxValue * 0.25f)

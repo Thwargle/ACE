@@ -1,0 +1,86 @@
+// Auto-generated from ACE.Entity MaterialType.cs
+static const TCHAR* GetMaterialTypeName(uint32 MaterialType)
+{
+	switch (MaterialType)
+	{
+	case 0x00000000: return TEXT("Unknown");
+	case 0x00000001: return TEXT("Ceramic");
+	case 0x00000002: return TEXT("Porcelain");
+	case 0x00000003: return TEXT("Cloth");
+	case 0x00000004: return TEXT("Linen");
+	case 0x00000005: return TEXT("Satin");
+	case 0x00000006: return TEXT("Silk");
+	case 0x00000007: return TEXT("Velvet");
+	case 0x00000008: return TEXT("Wool");
+	case 0x00000009: return TEXT("Gem");
+	case 0x0000000A: return TEXT("Agate");
+	case 0x0000000B: return TEXT("Amber");
+	case 0x0000000C: return TEXT("Amethyst");
+	case 0x0000000D: return TEXT("Aquamarine");
+	case 0x0000000E: return TEXT("Azurite");
+	case 0x0000000F: return TEXT("Black Garnet");
+	case 0x00000010: return TEXT("Black Opal");
+	case 0x00000011: return TEXT("Bloodstone");
+	case 0x00000012: return TEXT("Carnelian");
+	case 0x00000013: return TEXT("Citrine");
+	case 0x00000014: return TEXT("Diamond");
+	case 0x00000015: return TEXT("Emerald");
+	case 0x00000016: return TEXT("Fire Opal");
+	case 0x00000017: return TEXT("Green Garnet");
+	case 0x00000018: return TEXT("Green Jade");
+	case 0x00000019: return TEXT("Hematite");
+	case 0x0000001A: return TEXT("Imperial Topaz");
+	case 0x0000001B: return TEXT("Jet");
+	case 0x0000001C: return TEXT("Lapis Lazuli");
+	case 0x0000001D: return TEXT("Lavender Jade");
+	case 0x0000001E: return TEXT("Malachite");
+	case 0x0000001F: return TEXT("Moonstone");
+	case 0x00000020: return TEXT("Onyx");
+	case 0x00000021: return TEXT("Opal");
+	case 0x00000022: return TEXT("Peridot");
+	case 0x00000023: return TEXT("Red Garnet");
+	case 0x00000024: return TEXT("Red Jade");
+	case 0x00000025: return TEXT("Rose Quartz");
+	case 0x00000026: return TEXT("Ruby");
+	case 0x00000027: return TEXT("Sapphire");
+	case 0x00000028: return TEXT("Smokey Quartz");
+	case 0x00000029: return TEXT("Sunstone");
+	case 0x0000002A: return TEXT("Tiger Eye");
+	case 0x0000002B: return TEXT("Tourmaline");
+	case 0x0000002C: return TEXT("Turquoise");
+	case 0x0000002D: return TEXT("White Jade");
+	case 0x0000002E: return TEXT("White Quartz");
+	case 0x0000002F: return TEXT("White Sapphire");
+	case 0x00000030: return TEXT("Yellow Garnet");
+	case 0x00000031: return TEXT("Yellow Topaz");
+	case 0x00000032: return TEXT("Zircon");
+	case 0x00000033: return TEXT("Ivory");
+	case 0x00000034: return TEXT("Leather");
+	case 0x00000035: return TEXT("Armoredillo Hide");
+	case 0x00000036: return TEXT("Gromnie Hide");
+	case 0x00000037: return TEXT("Reed Shark Hide");
+	case 0x00000038: return TEXT("Metal");
+	case 0x00000039: return TEXT("Brass");
+	case 0x0000003A: return TEXT("Bronze");
+	case 0x0000003B: return TEXT("Copper");
+	case 0x0000003C: return TEXT("Gold");
+	case 0x0000003D: return TEXT("Iron");
+	case 0x0000003E: return TEXT("Pyreal");
+	case 0x0000003F: return TEXT("Silver");
+	case 0x00000040: return TEXT("Steel");
+	case 0x00000041: return TEXT("Stone");
+	case 0x00000042: return TEXT("Alabaster");
+	case 0x00000043: return TEXT("Granite");
+	case 0x00000044: return TEXT("Marble");
+	case 0x00000045: return TEXT("Obsidian");
+	case 0x00000046: return TEXT("Sandstone");
+	case 0x00000047: return TEXT("Serpentine");
+	case 0x00000048: return TEXT("Wood");
+	case 0x00000049: return TEXT("Ebony");
+	case 0x0000004A: return TEXT("Mahogany");
+	case 0x0000004B: return TEXT("Oak");
+	case 0x0000004C: return TEXT("Pine");
+	case 0x0000004D: return TEXT("Teak");
+	default: return TEXT("Unknown");
+	}
+}

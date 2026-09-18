@@ -310,7 +310,16 @@ namespace ACE.Server.Entity
         /// Returns a simple scale for the spell formula,
         /// based on the first scarab
         /// </summary>
-        public float Scale { get => ScarabScale[FirstScarab]; }
+        public float Scale
+        {
+            get
+            {
+                var scarabs = Scarabs;
+                if (scarabs == null || scarabs.Count == 0)
+                    return 1.0f;
+                return ScarabScale.TryGetValue(scarabs[0], out var scale) ? scale : 1.0f;
+            }
+        }
 
         /// <summary>
         /// Returns the total casting time,

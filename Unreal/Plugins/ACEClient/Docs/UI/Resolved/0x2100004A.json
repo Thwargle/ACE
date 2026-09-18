@@ -1,0 +1,1309 @@
+{
+  "id": "0x2100004A",
+  "name": "layout_2100004A",
+  "displayWidth": 800,
+  "displayHeight": 600,
+  "roots": [
+    {
+      "elementId": "0x10000407",
+      "elementName": "TownField",
+      "type": "0x1000003D",
+      "defaultState": "0x10000034",
+      "passToChildren": true,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [
+        {
+          "stateId": "0x10000034",
+          "stateName": "holtburg",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x10000035",
+          "stateName": "sanamar",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x10000036",
+          "stateName": "yaraq",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x10000037",
+          "stateName": "shoushi",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 800,
+      "height": 600,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": [
+        {
+          "elementId": "0x10000408",
+          "elementName": "TownName",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_outline": true,
+            "UICore_Text_left_margin": 7,
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_fonts": [
+              "0x40000014"
+            ],
+            "UICore_Text_bottom_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFFDAA755"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 1
+          },
+          "fontHeight": 48,
+          "states": [
+            {
+              "stateId": "0x10000034",
+              "stateName": "holtburg",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_entry": {
+                  "table": "0x23000002",
+                  "id": "0x0F4321B7"
+                }
+              }
+            },
+            {
+              "stateId": "0x10000035",
+              "stateName": "sanamar",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_entry": {
+                  "table": "0x23000002",
+                  "id": "0x05D3F822"
+                }
+              }
+            },
+            {
+              "stateId": "0x10000036",
+              "stateName": "yaraq",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_entry": {
+                  "table": "0x23000002",
+                  "id": "0x0BA33F11"
+                }
+              }
+            },
+            {
+              "stateId": "0x10000037",
+              "stateName": "shoushi",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_entry": {
+                  "table": "0x23000002",
+                  "id": "0x05615249"
+                }
+              }
+            }
+          ],
+          "x": 13,
+          "y": 75,
+          "width": 180,
+          "height": 60,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "children": []
+        },
+        {
+          "elementId": "0x10000409",
+          "elementName": "TownText",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 9,
+            "UICore_Text_right_margin": 26,
+            "UICore_Text_top_margin": 15,
+            "UICore_Text_bottom_margin": 15,
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_one_line": false,
+            "UICore_Text_fonts": [
+              "0x40000009"
+            ],
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ]
+          },
+          "fontHeight": 16,
+          "states": [],
+          "x": 9,
+          "y": 140,
+          "width": 250,
+          "height": 406,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 3,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "imageFile": "0x06004CC2",
+          "children": [
+            {
+              "elementId": "0x100002DE",
+              "elementName": "UpLeftCorner",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 0,
+              "y": 0,
+              "width": 34,
+              "height": 34,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 3,
+              "leftEdge": 1,
+              "topEdge": 1,
+              "rightEdge": 2,
+              "bottomEdge": 2,
+              "imageFile": "0x06004CC3",
+              "children": []
+            },
+            {
+              "elementId": "0x100002DF",
+              "elementName": "UpRightCorner",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 216,
+              "y": 0,
+              "width": 34,
+              "height": 34,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 3,
+              "leftEdge": 2,
+              "topEdge": 1,
+              "rightEdge": 1,
+              "bottomEdge": 2,
+              "imageFile": "0x06004CC4",
+              "children": []
+            },
+            {
+              "elementId": "0x100002E0",
+              "elementName": "LowLeftCorner",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 0,
+              "y": 374,
+              "width": 34,
+              "height": 35,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 3,
+              "leftEdge": 1,
+              "topEdge": 2,
+              "rightEdge": 2,
+              "bottomEdge": 1,
+              "imageFile": "0x06004CC5",
+              "children": []
+            },
+            {
+              "elementId": "0x100002E1",
+              "elementName": "LowRightCorner",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 216,
+              "y": 374,
+              "width": 34,
+              "height": 35,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 3,
+              "leftEdge": 2,
+              "topEdge": 2,
+              "rightEdge": 1,
+              "bottomEdge": 1,
+              "imageFile": "0x06004CC6",
+              "children": []
+            },
+            {
+              "elementId": "0x100002E2",
+              "elementName": "Top",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 34,
+              "y": 0,
+              "width": 182,
+              "height": 7,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 3,
+              "leftEdge": 1,
+              "topEdge": 1,
+              "rightEdge": 1,
+              "bottomEdge": 2,
+              "imageFile": "0x06004CC7",
+              "children": []
+            },
+            {
+              "elementId": "0x100002E3",
+              "elementName": "Bottom",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 34,
+              "y": 402,
+              "width": 182,
+              "height": 7,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 3,
+              "leftEdge": 1,
+              "topEdge": 2,
+              "rightEdge": 1,
+              "bottomEdge": 1,
+              "imageFile": "0x06004CC7",
+              "children": []
+            },
+            {
+              "elementId": "0x100000E8",
+              "elementName": "left",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 0,
+              "y": 34,
+              "width": 5,
+              "height": 341,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 3,
+              "leftEdge": 1,
+              "topEdge": 1,
+              "rightEdge": 2,
+              "bottomEdge": 1,
+              "imageFile": "0x06004CB8",
+              "children": []
+            },
+            {
+              "elementId": "0x100000EA",
+              "elementName": "right",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 245,
+              "y": 34,
+              "width": 5,
+              "height": 341,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 3,
+              "leftEdge": 2,
+              "topEdge": 1,
+              "rightEdge": 1,
+              "bottomEdge": 1,
+              "imageFile": "0x06004CB8",
+              "children": []
+            }
+          ]
+        },
+        {
+          "elementId": "0x1000040A",
+          "elementName": "MapBox",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": true,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [],
+          "x": 288,
+          "y": 65,
+          "width": 481,
+          "height": 481,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 3,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "imageFile": "0x06004CC2",
+          "children": [
+            {
+              "elementId": "0x100002DE",
+              "elementName": "UpLeftCorner",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 0,
+              "y": 0,
+              "width": 34,
+              "height": 34,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 3,
+              "leftEdge": 1,
+              "topEdge": 1,
+              "rightEdge": 2,
+              "bottomEdge": 2,
+              "imageFile": "0x06004CC3",
+              "children": []
+            },
+            {
+              "elementId": "0x100002DF",
+              "elementName": "UpRightCorner",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 447,
+              "y": 0,
+              "width": 34,
+              "height": 34,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 3,
+              "leftEdge": 2,
+              "topEdge": 1,
+              "rightEdge": 1,
+              "bottomEdge": 2,
+              "imageFile": "0x06004CC4",
+              "children": []
+            },
+            {
+              "elementId": "0x100002E0",
+              "elementName": "LowLeftCorner",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 0,
+              "y": 449,
+              "width": 34,
+              "height": 35,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 3,
+              "leftEdge": 1,
+              "topEdge": 2,
+              "rightEdge": 2,
+              "bottomEdge": 1,
+              "imageFile": "0x06004CC5",
+              "children": []
+            },
+            {
+              "elementId": "0x100002E1",
+              "elementName": "LowRightCorner",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 447,
+              "y": 449,
+              "width": 34,
+              "height": 35,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 3,
+              "leftEdge": 2,
+              "topEdge": 2,
+              "rightEdge": 1,
+              "bottomEdge": 1,
+              "imageFile": "0x06004CC6",
+              "children": []
+            },
+            {
+              "elementId": "0x100002E2",
+              "elementName": "Top",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 34,
+              "y": 0,
+              "width": 413,
+              "height": 7,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 3,
+              "leftEdge": 1,
+              "topEdge": 1,
+              "rightEdge": 1,
+              "bottomEdge": 2,
+              "imageFile": "0x06004CC7",
+              "children": []
+            },
+            {
+              "elementId": "0x100002E3",
+              "elementName": "Bottom",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 34,
+              "y": 477,
+              "width": 413,
+              "height": 7,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 3,
+              "leftEdge": 1,
+              "topEdge": 2,
+              "rightEdge": 1,
+              "bottomEdge": 1,
+              "imageFile": "0x06004CC7",
+              "children": []
+            },
+            {
+              "elementId": "0x100000E8",
+              "elementName": "left",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 0,
+              "y": 34,
+              "width": 5,
+              "height": 416,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 3,
+              "leftEdge": 1,
+              "topEdge": 1,
+              "rightEdge": 2,
+              "bottomEdge": 1,
+              "imageFile": "0x06004CB8",
+              "children": []
+            },
+            {
+              "elementId": "0x100000EA",
+              "elementName": "right",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 476,
+              "y": 34,
+              "width": 5,
+              "height": 416,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 3,
+              "leftEdge": 2,
+              "topEdge": 1,
+              "rightEdge": 1,
+              "bottomEdge": 1,
+              "imageFile": "0x06004CB8",
+              "children": []
+            },
+            {
+              "elementId": "0x100001EC",
+              "elementName": "Map",
+              "type": "0x00000003",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {},
+              "fontHeight": 0,
+              "states": [],
+              "x": 5,
+              "y": 5,
+              "width": 471,
+              "height": 471,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 1,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "imageFile": "0x06004D5F",
+              "children": []
+            },
+            {
+              "elementId": "0x1000040B",
+              "elementName": "Sanamar",
+              "type": "0x00000001",
+              "defaultState": "0x00000001",
+              "passToChildren": true,
+              "properties": {
+                "UICore_Button_boolean_button": true
+              },
+              "fontHeight": 0,
+              "states": [
+                {
+                  "stateId": "0x00000001",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000003",
+                  "stateName": "",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": true,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000006",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                }
+              ],
+              "x": 41,
+              "y": 58,
+              "width": 93,
+              "height": 52,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "children": [
+                {
+                  "elementId": "0x1000040C",
+                  "elementName": "TownWidget",
+                  "type": "0x00000003",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {},
+                  "fontHeight": 0,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004D60",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000006",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004D61",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    }
+                  ],
+                  "x": 30,
+                  "y": 0,
+                  "width": 38,
+                  "height": 38,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 0,
+                  "topEdge": 0,
+                  "rightEdge": 0,
+                  "bottomEdge": 0,
+                  "children": []
+                },
+                {
+                  "elementId": "0x10000409",
+                  "elementName": "TownText",
+                  "type": "0x0000000C",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {
+                    "UICore_Text_outline": true,
+                    "UICore_Text_entry": {
+                      "table": "0x23000002",
+                      "id": "0x05D3F822"
+                    },
+                    "UICore_Text_left_margin": 0,
+                    "UICore_Text_top_margin": 0,
+                    "UICore_Text_fonts": [
+                      "0x4000000F"
+                    ],
+                    "UICore_Text_bottom_margin": 0,
+                    "UICore_Text_horizontal_justification": 1,
+                    "UICore_Text_vertical_justification": 1
+                  },
+                  "fontHeight": 30,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "",
+                      "alphaFile": "",
+                      "drawMode": 0,
+                      "hasMedia": false,
+                      "properties": {
+                        "UICore_Text_font_colors": [
+                          "0xFFDAA755"
+                        ]
+                      }
+                    },
+                    {
+                      "stateId": "0x00000006",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "",
+                      "alphaFile": "",
+                      "drawMode": 0,
+                      "hasMedia": false,
+                      "properties": {
+                        "UICore_Text_font_colors": [
+                          "0xFFFFFFFF"
+                        ]
+                      }
+                    }
+                  ],
+                  "x": 0,
+                  "y": 22,
+                  "width": 91,
+                  "height": 28,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 0,
+                  "topEdge": 0,
+                  "rightEdge": 0,
+                  "bottomEdge": 0,
+                  "children": []
+                }
+              ]
+            },
+            {
+              "elementId": "0x1000040D",
+              "elementName": "Holtburg",
+              "type": "0x00000001",
+              "defaultState": "0x00000001",
+              "passToChildren": true,
+              "properties": {
+                "UICore_Button_boolean_button": true
+              },
+              "fontHeight": 0,
+              "states": [
+                {
+                  "stateId": "0x00000001",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000003",
+                  "stateName": "",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": true,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000006",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                }
+              ],
+              "x": 262,
+              "y": 89,
+              "width": 106,
+              "height": 80,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "children": [
+                {
+                  "elementId": "0x1000040C",
+                  "elementName": "TownWidget",
+                  "type": "0x00000003",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {},
+                  "fontHeight": 0,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004D60",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000006",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004D61",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    }
+                  ],
+                  "x": 36,
+                  "y": 36,
+                  "width": 38,
+                  "height": 38,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 0,
+                  "topEdge": 0,
+                  "rightEdge": 0,
+                  "bottomEdge": 0,
+                  "children": []
+                },
+                {
+                  "elementId": "0x10000409",
+                  "elementName": "TownText",
+                  "type": "0x0000000C",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {
+                    "UICore_Text_outline": true,
+                    "UICore_Text_entry": {
+                      "table": "0x23000002",
+                      "id": "0x0F4321B7"
+                    },
+                    "UICore_Text_left_margin": 0,
+                    "UICore_Text_top_margin": 0,
+                    "UICore_Text_fonts": [
+                      "0x4000000F"
+                    ],
+                    "UICore_Text_bottom_margin": 0,
+                    "UICore_Text_horizontal_justification": 1,
+                    "UICore_Text_vertical_justification": 1
+                  },
+                  "fontHeight": 30,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "",
+                      "alphaFile": "",
+                      "drawMode": 0,
+                      "hasMedia": false,
+                      "properties": {
+                        "UICore_Text_font_colors": [
+                          "0xFFDAA755"
+                        ]
+                      }
+                    },
+                    {
+                      "stateId": "0x00000006",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "",
+                      "alphaFile": "",
+                      "drawMode": 0,
+                      "hasMedia": false,
+                      "properties": {
+                        "UICore_Text_font_colors": [
+                          "0xFFFFFFFF"
+                        ]
+                      }
+                    }
+                  ],
+                  "x": 0,
+                  "y": 4,
+                  "width": 100,
+                  "height": 37,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 0,
+                  "topEdge": 0,
+                  "rightEdge": 0,
+                  "bottomEdge": 0,
+                  "children": []
+                }
+              ]
+            },
+            {
+              "elementId": "0x1000040E",
+              "elementName": "Yaraq",
+              "type": "0x00000001",
+              "defaultState": "0x00000001",
+              "passToChildren": true,
+              "properties": {
+                "UICore_Button_boolean_button": true
+              },
+              "fontHeight": 0,
+              "states": [
+                {
+                  "stateId": "0x00000001",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000003",
+                  "stateName": "",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": true,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000006",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                }
+              ],
+              "x": 200,
+              "y": 243,
+              "width": 90,
+              "height": 67,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "children": [
+                {
+                  "elementId": "0x1000040C",
+                  "elementName": "TownWidget",
+                  "type": "0x00000003",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {},
+                  "fontHeight": 0,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004D60",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000006",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004D61",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    }
+                  ],
+                  "x": 37,
+                  "y": 28,
+                  "width": 38,
+                  "height": 38,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 0,
+                  "topEdge": 0,
+                  "rightEdge": 0,
+                  "bottomEdge": 0,
+                  "children": []
+                },
+                {
+                  "elementId": "0x10000409",
+                  "elementName": "TownText",
+                  "type": "0x0000000C",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {
+                    "UICore_Text_outline": true,
+                    "UICore_Text_entry": {
+                      "table": "0x23000002",
+                      "id": "0x0BA33F11"
+                    },
+                    "UICore_Text_left_margin": 0,
+                    "UICore_Text_top_margin": 0,
+                    "UICore_Text_fonts": [
+                      "0x4000000F"
+                    ],
+                    "UICore_Text_bottom_margin": 0,
+                    "UICore_Text_horizontal_justification": 1,
+                    "UICore_Text_vertical_justification": 1
+                  },
+                  "fontHeight": 30,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "",
+                      "alphaFile": "",
+                      "drawMode": 0,
+                      "hasMedia": false,
+                      "properties": {
+                        "UICore_Text_font_colors": [
+                          "0xFFDAA755"
+                        ]
+                      }
+                    },
+                    {
+                      "stateId": "0x00000006",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "",
+                      "alphaFile": "",
+                      "drawMode": 0,
+                      "hasMedia": false,
+                      "properties": {
+                        "UICore_Text_font_colors": [
+                          "0xFFFFFFFF"
+                        ]
+                      }
+                    }
+                  ],
+                  "x": 5,
+                  "y": 6,
+                  "width": 75,
+                  "height": 32,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 0,
+                  "topEdge": 0,
+                  "rightEdge": 0,
+                  "bottomEdge": 0,
+                  "children": []
+                }
+              ]
+            },
+            {
+              "elementId": "0x1000040F",
+              "elementName": "Shoushi",
+              "type": "0x00000001",
+              "defaultState": "0x00000001",
+              "passToChildren": true,
+              "properties": {
+                "UICore_Button_boolean_button": true
+              },
+              "fontHeight": 0,
+              "states": [
+                {
+                  "stateId": "0x00000001",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000003",
+                  "stateName": "",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": true,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000006",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                }
+              ],
+              "x": 378,
+              "y": 306,
+              "width": 85,
+              "height": 68,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "children": [
+                {
+                  "elementId": "0x1000040C",
+                  "elementName": "TownWidget",
+                  "type": "0x00000003",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {},
+                  "fontHeight": 0,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004D60",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000006",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004D61",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    }
+                  ],
+                  "x": 12,
+                  "y": 4,
+                  "width": 38,
+                  "height": 38,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 0,
+                  "topEdge": 0,
+                  "rightEdge": 0,
+                  "bottomEdge": 0,
+                  "children": []
+                },
+                {
+                  "elementId": "0x10000409",
+                  "elementName": "TownText",
+                  "type": "0x0000000C",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {
+                    "UICore_Text_outline": true,
+                    "UICore_Text_entry": {
+                      "table": "0x23000002",
+                      "id": "0x05615249"
+                    },
+                    "UICore_Text_left_margin": 0,
+                    "UICore_Text_top_margin": 0,
+                    "UICore_Text_fonts": [
+                      "0x4000000F"
+                    ],
+                    "UICore_Text_bottom_margin": 0,
+                    "UICore_Text_horizontal_justification": 1,
+                    "UICore_Text_vertical_justification": 1
+                  },
+                  "fontHeight": 30,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "",
+                      "alphaFile": "",
+                      "drawMode": 0,
+                      "hasMedia": false,
+                      "properties": {
+                        "UICore_Text_font_colors": [
+                          "0xFFDAA755"
+                        ]
+                      }
+                    },
+                    {
+                      "stateId": "0x00000006",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "",
+                      "alphaFile": "",
+                      "drawMode": 0,
+                      "hasMedia": false,
+                      "properties": {
+                        "UICore_Text_font_colors": [
+                          "0xFFFFFFFF"
+                        ]
+                      }
+                    }
+                  ],
+                  "x": 0,
+                  "y": 30,
+                  "width": 78,
+                  "height": 28,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 0,
+                  "topEdge": 0,
+                  "rightEdge": 0,
+                  "bottomEdge": 0,
+                  "children": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

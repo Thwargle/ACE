@@ -1,0 +1,2066 @@
+{
+  "id": "0x2100003F",
+  "name": "layout_2100003F",
+  "displayWidth": 800,
+  "displayHeight": 600,
+  "roots": [
+    {
+      "elementId": "0x10000370",
+      "elementName": "tabfont",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000000"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 16,
+      "states": [
+        {
+          "stateId": "0x0000000B",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF7F7F7F"
+            ]
+          }
+        },
+        {
+          "stateId": "0x0000000C",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFCCCCCC"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000371",
+      "elementName": "fieldvaluelarge",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000001"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFCCCCCC"
+        ],
+        "UICore_Text_tag_fonts": [
+          "0x40000001"
+        ],
+        "UICore_Text_tag_font_colors": [
+          "0xFF00B200"
+        ],
+        "UICore_Text_horizontal_justification": 2,
+        "UICore_Text_vertical_justification": 4
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF333333"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000006",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000007",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000008",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF333333"
+            ]
+          }
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF333333"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000372",
+      "elementName": "fieldvaluemedium",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000000"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFCCCCCC"
+        ],
+        "UICore_Text_tag_fonts": [
+          "0x40000000"
+        ],
+        "UICore_Text_tag_font_colors": [
+          "0xFF00B200"
+        ],
+        "UICore_Text_horizontal_justification": 2,
+        "UICore_Text_vertical_justification": 4
+      },
+      "fontHeight": 16,
+      "states": [
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF333333"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000006",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000007",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000008",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF333333"
+            ]
+          }
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF333333"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000373",
+      "elementName": "fieldvaluesmall",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000002"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFCCCCCC"
+        ],
+        "UICore_Text_tag_fonts": [
+          "0x40000002"
+        ],
+        "UICore_Text_tag_font_colors": [
+          "0xFF00B200"
+        ],
+        "UICore_Text_horizontal_justification": 2,
+        "UICore_Text_vertical_justification": 4
+      },
+      "fontHeight": 14,
+      "states": [
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF333333"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000006",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000007",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000008",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF333333"
+            ]
+          }
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF333333"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000374",
+      "elementName": "basefont12",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000025"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 11,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000375",
+      "elementName": "basefont14",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000002"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 14,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000376",
+      "elementName": "basefont16",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000000"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 16,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000377",
+      "elementName": "basefont18",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000001"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000378",
+      "elementName": "basefont20",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000004"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 20,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000379",
+      "elementName": "basefont22",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000005"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 22,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x1000037A",
+      "elementName": "basefont24",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000006"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 24,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x1000037B",
+      "elementName": "sansfont12",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000007"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 12,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x1000037C",
+      "elementName": "sansfont14",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000008"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 14,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x1000037D",
+      "elementName": "sansfont16",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000009"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 16,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x1000037E",
+      "elementName": "sansfont18",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x4000000A"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x1000037F",
+      "elementName": "sansfont20",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x4000000B"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 20,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000380",
+      "elementName": "sansfont22",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x4000000C"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 22,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000381",
+      "elementName": "sansfont24",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x4000000D"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 24,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000382",
+      "elementName": "fancyfont24",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_outline": true,
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x4000000E"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFF27F"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 24,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4726"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000383",
+      "elementName": "fancyfont30",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_outline": true,
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x4000000F"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFF27F"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 30,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4726"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000384",
+      "elementName": "fancyfont36",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_outline": true,
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000010"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFF27F"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 36,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4726"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000385",
+      "elementName": "fancyfont38",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_outline": true,
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000011"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFF27F"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 38,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4726"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000386",
+      "elementName": "fancyfont40",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_outline": true,
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000012"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFF27F"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 40,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4726"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000387",
+      "elementName": "fancyfont46",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_outline": true,
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000013"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFF27F"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 46,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4726"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000388",
+      "elementName": "fancyfont48",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_outline": true,
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000014"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFF27F"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 48,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4726"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000389",
+      "elementName": "Font_BookEditPage",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_editable": true,
+        "UICore_Text_fonts": [
+          "0x40000009"
+        ],
+        "UICore_Text_lose_focus_on_escape": true,
+        "UICore_Text_font_colors": [
+          "0xFF000000"
+        ],
+        "UICore_Text_selectable": true,
+        "UICore_Text_horizontal_justification": 2,
+        "UICore_Text_one_line": false,
+        "UICore_Text_vertical_justification": 4
+      },
+      "fontHeight": 16,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 257,
+      "height": 243,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 1,
+      "rightEdge": 1,
+      "bottomEdge": 1,
+      "children": []
+    },
+    {
+      "elementId": "0x1000047A",
+      "elementName": "Font_BookMenu",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_fonts": [
+          "0x40000001"
+        ],
+        "UICore_Text_font_colors": [
+          "0xFF000000"
+        ]
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x00000007",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 273,
+      "height": 18,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 1,
+      "rightEdge": 1,
+      "bottomEdge": 1,
+      "children": []
+    },
+    {
+      "elementId": "0x1000038A",
+      "elementName": "Font_VendorPullDownTitle",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 4,
+        "UICore_Text_fonts": [
+          "0x40000002"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 2,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 14,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 100,
+      "height": 18,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 1,
+      "rightEdge": 2,
+      "bottomEdge": 2,
+      "children": []
+    },
+    {
+      "elementId": "0x1000038B",
+      "elementName": "Font_VendorPullDownListItem",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 4,
+        "UICore_Text_fonts": [
+          "0x40000000"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFCCCCCC"
+        ],
+        "UICore_Text_tag_fonts": [
+          "0x40000000"
+        ],
+        "UICore_Text_tag_font_colors": [
+          "0xFF00B200"
+        ],
+        "UICore_Text_horizontal_justification": 2,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 16,
+      "states": [
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF333333"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000006",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000007",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000008",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF333333"
+            ]
+          }
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF333333"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 100,
+      "height": 18,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 1,
+      "rightEdge": 2,
+      "bottomEdge": 2,
+      "children": []
+    },
+    {
+      "elementId": "0x1000038C",
+      "elementName": "UIOption_HeaderText",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 2,
+        "UICore_Text_top_margin": 2,
+        "UICore_Text_fonts": [
+          "0x40000000"
+        ],
+        "UICore_Text_font_colors": [
+          "0xFFFFEF00"
+        ],
+        "UICore_Text_horizontal_justification": 2,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 16,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x1000038D",
+      "elementName": "UIOption_MenuItemText",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_fonts": [
+          "0x40000002"
+        ],
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 14,
+      "states": [
+        {
+          "stateId": "0x00000007",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x1000038E",
+      "elementName": "UIOption_SliderText",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_fonts": [
+          "0x40000002"
+        ],
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 3,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 14,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x1000038F",
+      "elementName": "UIOption_SliderLabelText",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_fonts": [
+          "0x40000025"
+        ],
+        "UICore_Text_font_colors": [
+          "0xFFE5E5E5"
+        ],
+        "UICore_Text_horizontal_justification": 3,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 11,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000390",
+      "elementName": "Text_Tooltip",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 2,
+        "UICore_Text_right_margin": 2,
+        "UICore_Text_fonts": [
+          "0x40000002"
+        ],
+        "UICore_Text_top_margin": 2,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_bottom_margin": 2,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 14,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000391",
+      "elementName": "Text_MapDateTime",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_fonts": [
+          "0x40000002"
+        ],
+        "UICore_Text_font_colors": [
+          "0xFF000000"
+        ]
+      },
+      "fontHeight": 14,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000392",
+      "elementName": "Text_MapCoordinates",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_fonts": [
+          "0x40000004"
+        ],
+        "UICore_Text_font_colors": [
+          "0xFF000000"
+        ]
+      },
+      "fontHeight": 20,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000393",
+      "elementName": "Text_MapNote",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 2,
+        "UICore_Text_right_margin": 2,
+        "UICore_Text_fonts": [
+          "0x40000015"
+        ],
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ]
+      },
+      "fontHeight": 20,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000394",
+      "elementName": "MenuDialog_MenuItemText",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_fonts": [
+          "0x40000002"
+        ],
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 14,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100004C5",
+      "elementName": "AdminUI_MenuItemText",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 4,
+        "UICore_Text_fonts": [
+          "0x40000001"
+        ],
+        "UICore_Text_font_colors": [
+          "0xFF3F2D14"
+        ],
+        "UICore_Text_horizontal_justification": 2,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 18,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    }
+  ]
+}

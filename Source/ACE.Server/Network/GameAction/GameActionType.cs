@@ -2,6 +2,8 @@ namespace ACE.Server.Network.GameAction
 {
     public enum GameActionType
     {
+        VRCombat                            = 0xF7D0,
+        VRPose                              = 0xF7D1,
         SetSingleCharacterOption             = 0x0005,
         TargetedMeleeAttack                  = 0x0008,
         TargetedMissileAttack                = 0x000A,

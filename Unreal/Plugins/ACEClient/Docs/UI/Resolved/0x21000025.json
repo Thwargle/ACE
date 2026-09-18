@@ -1,0 +1,121 @@
+{
+  "id": "0x21000025",
+  "name": "classic_house",
+  "displayWidth": 800,
+  "displayHeight": 600,
+  "roots": [
+    {
+      "elementId": "0x100001E5",
+      "elementName": "RootHouse_Field",
+      "type": "0x10000025",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Element_VisibilityToggle_ToggleType": 1,
+        "UICore_Element_VisibilityToggle_InputAction": 268435480
+      },
+      "fontHeight": 0,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 300,
+      "height": 600,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 1,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "imageFile": "0x06004CC2",
+      "children": [
+        {
+          "elementId": "0x100001E6",
+          "elementName": "HouseTextListBox",
+          "type": "0x00000005",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_ListBox_entry_templates": [
+              {
+                "0x00000063": "0x21000025",
+                "0x00000062": 268435943
+              }
+            ]
+          },
+          "fontHeight": 0,
+          "states": [],
+          "x": 5,
+          "y": 5,
+          "width": 290,
+          "height": 590,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 2,
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x100001E7",
+      "elementName": "HouseTextEntryTemplate",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000000"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF",
+          "0xFF00FF00",
+          "0xFFFFFF00"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1,
+        "UICore_Text_bottom_margin": 8,
+        "UICore_Element_max_width": 280,
+        "UICore_Element_min_width": 280,
+        "UICore_Text_one_line": false
+      },
+      "fontHeight": 16,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 280,
+      "height": 28,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 1,
+      "rightEdge": 1,
+      "bottomEdge": 2,
+      "children": []
+    }
+  ]
+}

@@ -232,6 +232,16 @@ namespace ACE.Server.WorldObjects
             // TODO: We should exclude objects that never tick physics (Monsters)
             // TODO: Perhaps for objects that have a throttle (Creatures), we use a list and only iterate through the pending creatures
 
+            // Flight timeout must also run for inactive/stalled missiles. The old
+            // active check could bypass expiry indefinitely after physics stopped.
+            if (PhysicsObj != null && (PhysicsObj.State & PhysicsState.Missile) != 0
+                && (WielderId ?? 0) == 0 && (ContainerId ?? 0) == 0
+                && physicsCreationTime + ProjectileTimeout <= PhysicsTimer.CurrentTime)
+            {
+                PhysicsObj.set_active(false);
+                Destroy();
+                return false;
+            }
             if (PhysicsObj == null || !PhysicsObj.is_active())
                 return false;
 
@@ -264,21 +274,12 @@ namespace ACE.Server.WorldObjects
                 //var isMissile = Missile ?? false;
                 if ((PhysicsObj.State & PhysicsState.Missile) != 0) // This is a bit more performant than the line above
                 {
-                    if (physicsCreationTime + ProjectileTimeout <= PhysicsTimer.CurrentTime)
-                    {
-                        // only for projectiles?
-                        //Console.WriteLine("Timeout reached - destroying " + Name);
-                        PhysicsObj.set_active(false);
-                        Destroy();
-                        return false;
-                    }
-
                     // missiles always run an update
                 }
                 else
                 {
                     // determine if updates should be run for object
-                    var runUpdate = PhysicsObj.IsAnimating || PhysicsObj.InitialUpdates <= 1;
+                    var runUpdate = IsVRFallingDrop || PhysicsObj.IsAnimating || PhysicsObj.InitialUpdates <= 1;
 
                     if (!runUpdate)
                         return false;
@@ -364,6 +365,8 @@ namespace ACE.Server.WorldObjects
 
                 if (cachedVelocityFix)
                     PhysicsObj.CachedVelocity = Vector3.Zero;
+
+                UpdateVRDropFall();
 
                 return landblockUpdate;
             }

@@ -1,0 +1,136 @@
+{
+  "id": "0x21000011",
+  "name": "classic_spewbox",
+  "displayWidth": 800,
+  "displayHeight": 600,
+  "roots": [
+    {
+      "elementId": "0x10000048",
+      "elementName": "RootSpewBox_Field",
+      "type": "0x10000016",
+      "defaultState": "",
+      "passToChildren": true,
+      "properties": {
+        "UICore_Element_hide": false
+      },
+      "fontHeight": 0,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 450,
+      "height": 72,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 3,
+      "topEdge": 1,
+      "rightEdge": 3,
+      "bottomEdge": 2,
+      "children": [
+        {
+          "elementId": "0x10000049",
+          "elementName": "SpewBoxListBox",
+          "type": "0x00000005",
+          "defaultState": "0x0000000D",
+          "passToChildren": false,
+          "properties": {
+            "UI_SpewBox_MaxMessagesToDisplay": 4
+          },
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 450,
+          "height": 72,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x1000004A",
+      "elementName": "SpewBoxMessage_Template",
+      "type": "0x0000000C",
+      "defaultState": "0x10000002",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000001"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        },
+        {
+          "stateId": "0x10000002",
+          "stateName": "changed",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_outline": true,
+            "UICore_Text_left_margin": 5,
+            "UICore_Text_right_margin": 5,
+            "UICore_Text_font_colors": [
+              "0xFFFF0000"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 450,
+      "height": 18,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    }
+  ]
+}

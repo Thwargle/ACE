@@ -1,0 +1,3843 @@
+{
+  "id": "0x21000059",
+  "name": "layout_21000059",
+  "displayWidth": 800,
+  "displayHeight": 600,
+  "roots": [
+    {
+      "elementId": "0x100004B0",
+      "elementName": "RootAdminQualities_Field",
+      "type": "0x1000003F",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 406,
+      "height": 315,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": [
+        {
+          "elementId": "0x100004E0",
+          "elementName": "AdminQualitiesEditorFrame",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [],
+          "x": 0,
+          "y": 0,
+          "width": 406,
+          "height": 275,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "children": [
+            {
+              "elementId": "0x100004B2",
+              "elementName": "AdminQualitiesListBox",
+              "type": "0x00000005",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {
+                "UICore_ListBox_entry_templates": [
+                  {
+                    "0x00000063": "0x21000059",
+                    "0x00000062": 268436660
+                  },
+                  {
+                    "0x00000063": "0x21000059",
+                    "0x00000062": 268436685
+                  },
+                  {
+                    "0x00000063": "0x21000059",
+                    "0x00000062": 268436664
+                  },
+                  {
+                    "0x00000063": "0x21000059",
+                    "0x00000062": 268436665
+                  },
+                  {
+                    "0x00000063": "0x21000059",
+                    "0x00000062": 268436726
+                  },
+                  {
+                    "0x00000063": "0x21000059",
+                    "0x00000062": 268436666
+                  },
+                  {
+                    "0x00000063": "0x21000059",
+                    "0x00000062": 268436680
+                  },
+                  {
+                    "0x00000063": "0x21000059",
+                    "0x00000062": 268436703
+                  },
+                  {
+                    "0x00000063": "0x21000059",
+                    "0x00000062": 268436702
+                  },
+                  {
+                    "0x00000063": "0x21000059",
+                    "0x00000062": 268436709
+                  },
+                  {
+                    "0x00000063": "0x21000059",
+                    "0x00000062": 268436705
+                  }
+                ],
+                "UICore_Scrollable_vertical_scrollbar": 268436659
+              },
+              "fontHeight": 0,
+              "states": [],
+              "x": 0,
+              "y": 0,
+              "width": 390,
+              "height": 275,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 1,
+              "topEdge": 1,
+              "rightEdge": 1,
+              "bottomEdge": 1,
+              "children": []
+            },
+            {
+              "elementId": "0x100004B3",
+              "elementName": "AdminQualitiesListBoxScrollbar",
+              "type": "0x0000000B",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {
+                "UICore_Scrollbar_hide_when_disabled": false,
+                "UICore_Scrollbar_min_widget_size": 16,
+                "UICore_Scrollbar_proportional": true,
+                "UICore_Scrollbar_increment_button": 268435570,
+                "UICore_Scrollbar_smooth_movement": true,
+                "UICore_Scrollbar_decrement_button": 268435569
+              },
+              "fontHeight": 0,
+              "states": [],
+              "x": 390,
+              "y": 0,
+              "width": 16,
+              "height": 275,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 3,
+              "leftEdge": 2,
+              "topEdge": 1,
+              "rightEdge": 1,
+              "bottomEdge": 1,
+              "imageFile": "0x06004C5F",
+              "children": [
+                {
+                  "elementId": "0x00000001",
+                  "elementName": "",
+                  "type": "0x00000001",
+                  "defaultState": "0x00000001",
+                  "passToChildren": false,
+                  "properties": {
+                    "UICore_Button_rollover": true
+                  },
+                  "fontHeight": 0,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": true,
+                      "imageFile": "",
+                      "alphaFile": "",
+                      "drawMode": 0,
+                      "hasMedia": false,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000002",
+                      "stateName": "",
+                      "passToChildren": true,
+                      "imageFile": "",
+                      "alphaFile": "",
+                      "drawMode": 0,
+                      "hasMedia": false,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000003",
+                      "stateName": "",
+                      "passToChildren": true,
+                      "imageFile": "",
+                      "alphaFile": "",
+                      "drawMode": 0,
+                      "hasMedia": false,
+                      "properties": {}
+                    }
+                  ],
+                  "x": 0,
+                  "y": 0,
+                  "width": 16,
+                  "height": 16,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 0,
+                  "topEdge": 0,
+                  "rightEdge": 0,
+                  "bottomEdge": 0,
+                  "children": [
+                    {
+                      "elementId": "0x10000364",
+                      "elementName": "widget_top_field",
+                      "type": "0x00000003",
+                      "defaultState": "",
+                      "passToChildren": false,
+                      "properties": {},
+                      "fontHeight": 0,
+                      "states": [
+                        {
+                          "stateId": "0x00000001",
+                          "stateName": "",
+                          "passToChildren": false,
+                          "imageFile": "0x06004C60",
+                          "alphaFile": "",
+                          "drawMode": 3,
+                          "hasMedia": true,
+                          "properties": {}
+                        },
+                        {
+                          "stateId": "0x00000002",
+                          "stateName": "",
+                          "passToChildren": false,
+                          "imageFile": "0x06004C61",
+                          "alphaFile": "",
+                          "drawMode": 3,
+                          "hasMedia": true,
+                          "properties": {}
+                        },
+                        {
+                          "stateId": "0x00000003",
+                          "stateName": "",
+                          "passToChildren": false,
+                          "imageFile": "0x06004C62",
+                          "alphaFile": "",
+                          "drawMode": 3,
+                          "hasMedia": true,
+                          "properties": {}
+                        }
+                      ],
+                      "x": 0,
+                      "y": 0,
+                      "width": 16,
+                      "height": 3,
+                      "zLevel": 0,
+                      "baseLayout": "0x00000000",
+                      "baseElement": "0x00000000",
+                      "drawMode": 0,
+                      "leftEdge": 1,
+                      "topEdge": 1,
+                      "rightEdge": 1,
+                      "bottomEdge": 2,
+                      "children": []
+                    },
+                    {
+                      "elementId": "0x10000365",
+                      "elementName": "widget_mid_field",
+                      "type": "0x00000003",
+                      "defaultState": "",
+                      "passToChildren": false,
+                      "properties": {},
+                      "fontHeight": 0,
+                      "states": [
+                        {
+                          "stateId": "0x00000001",
+                          "stateName": "",
+                          "passToChildren": false,
+                          "imageFile": "0x06004C63",
+                          "alphaFile": "",
+                          "drawMode": 3,
+                          "hasMedia": true,
+                          "properties": {}
+                        },
+                        {
+                          "stateId": "0x00000002",
+                          "stateName": "",
+                          "passToChildren": false,
+                          "imageFile": "0x06004C64",
+                          "alphaFile": "",
+                          "drawMode": 3,
+                          "hasMedia": true,
+                          "properties": {}
+                        },
+                        {
+                          "stateId": "0x00000003",
+                          "stateName": "",
+                          "passToChildren": false,
+                          "imageFile": "0x06004C65",
+                          "alphaFile": "",
+                          "drawMode": 3,
+                          "hasMedia": true,
+                          "properties": {}
+                        }
+                      ],
+                      "x": 0,
+                      "y": 3,
+                      "width": 16,
+                      "height": 10,
+                      "zLevel": 0,
+                      "baseLayout": "0x00000000",
+                      "baseElement": "0x00000000",
+                      "drawMode": 0,
+                      "leftEdge": 1,
+                      "topEdge": 1,
+                      "rightEdge": 1,
+                      "bottomEdge": 1,
+                      "children": []
+                    },
+                    {
+                      "elementId": "0x10000366",
+                      "elementName": "widget_bottom_field",
+                      "type": "0x00000003",
+                      "defaultState": "",
+                      "passToChildren": false,
+                      "properties": {},
+                      "fontHeight": 0,
+                      "states": [
+                        {
+                          "stateId": "0x00000001",
+                          "stateName": "",
+                          "passToChildren": false,
+                          "imageFile": "0x06004C66",
+                          "alphaFile": "",
+                          "drawMode": 3,
+                          "hasMedia": true,
+                          "properties": {}
+                        },
+                        {
+                          "stateId": "0x00000002",
+                          "stateName": "",
+                          "passToChildren": false,
+                          "imageFile": "0x06004C67",
+                          "alphaFile": "",
+                          "drawMode": 3,
+                          "hasMedia": true,
+                          "properties": {}
+                        },
+                        {
+                          "stateId": "0x00000003",
+                          "stateName": "",
+                          "passToChildren": false,
+                          "imageFile": "0x06004C68",
+                          "alphaFile": "",
+                          "drawMode": 3,
+                          "hasMedia": true,
+                          "properties": {}
+                        }
+                      ],
+                      "x": 0,
+                      "y": 13,
+                      "width": 16,
+                      "height": 3,
+                      "zLevel": 0,
+                      "baseLayout": "0x00000000",
+                      "baseElement": "0x00000000",
+                      "drawMode": 0,
+                      "leftEdge": 1,
+                      "topEdge": 2,
+                      "rightEdge": 1,
+                      "bottomEdge": 1,
+                      "children": []
+                    }
+                  ]
+                },
+                {
+                  "elementId": "0x10000071",
+                  "elementName": "ScrollBar_Down",
+                  "type": "0x00000001",
+                  "defaultState": "0x00000001",
+                  "passToChildren": false,
+                  "properties": {
+                    "UICore_Button_hot_button": true,
+                    "UICore_Button_hot_click_first_interval": 0.5,
+                    "UICore_Button_hot_click_interval": 0.1,
+                    "UICore_Button_rollover": true
+                  },
+                  "fontHeight": 0,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C69",
+                      "alphaFile": "",
+                      "drawMode": 1,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000002",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C6A",
+                      "alphaFile": "",
+                      "drawMode": 1,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000003",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C6B",
+                      "alphaFile": "",
+                      "drawMode": 1,
+                      "hasMedia": true,
+                      "properties": {}
+                    }
+                  ],
+                  "x": 0,
+                  "y": 0,
+                  "width": 16,
+                  "height": 16,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 2,
+                  "topEdge": 1,
+                  "rightEdge": 1,
+                  "bottomEdge": 2,
+                  "children": []
+                },
+                {
+                  "elementId": "0x10000072",
+                  "elementName": "ScrollBar_Up",
+                  "type": "0x00000001",
+                  "defaultState": "0x00000001",
+                  "passToChildren": false,
+                  "properties": {
+                    "UICore_Button_hot_button": true,
+                    "UICore_Button_hot_click_first_interval": 0.5,
+                    "UICore_Button_hot_click_interval": 0.1,
+                    "UICore_Button_rollover": true
+                  },
+                  "fontHeight": 0,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C6C",
+                      "alphaFile": "",
+                      "drawMode": 1,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000002",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C6D",
+                      "alphaFile": "",
+                      "drawMode": 1,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000003",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C6E",
+                      "alphaFile": "",
+                      "drawMode": 1,
+                      "hasMedia": true,
+                      "properties": {}
+                    }
+                  ],
+                  "x": 0,
+                  "y": 259,
+                  "width": 16,
+                  "height": 16,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 2,
+                  "topEdge": 2,
+                  "rightEdge": 1,
+                  "bottomEdge": 1,
+                  "children": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "elementId": "0x100004D6",
+          "elementName": "AdminQualitiesButtonFrame",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [],
+          "x": 0,
+          "y": 275,
+          "width": 406,
+          "height": 40,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 2,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "children": [
+            {
+              "elementId": "0x100004D7",
+              "elementName": "AdminQualitiesRefreshButton",
+              "type": "0x00000001",
+              "defaultState": "",
+              "passToChildren": true,
+              "properties": {
+                "UICore_Text_left_margin": 7,
+                "UICore_Text_fonts": [
+                  "0x40000001"
+                ],
+                "UICore_Text_top_margin": 0,
+                "UICore_Text_font_colors": [
+                  "0xFFFFFFFF"
+                ],
+                "UICore_Text_horizontal_justification": 1,
+                "UICore_Text_vertical_justification": 1,
+                "UICore_Text_right_margin": 7,
+                "UICore_Element_DrawAfterChildren": true,
+                "UICore_Button_rollover": true,
+                "UICore_Element_min_width": 65,
+                "UICore_Text_one_line": true,
+                "UICore_Text_entry": {
+                  "table": "0x23000001",
+                  "id": "0x0024C9BE"
+                }
+              },
+              "fontHeight": 18,
+              "states": [
+                {
+                  "stateId": "0x00000001",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000002",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000003",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": true,
+                  "properties": {
+                    "UICore_Text_outline": true
+                  }
+                },
+                {
+                  "stateId": "0x0000000D",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                }
+              ],
+              "x": 10,
+              "y": 5,
+              "width": 100,
+              "height": 32,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 1,
+              "topEdge": 1,
+              "rightEdge": 2,
+              "bottomEdge": 2,
+              "children": [
+                {
+                  "elementId": "0x100002CE",
+                  "elementName": "StripButtonLeft",
+                  "type": "0x00000003",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {},
+                  "fontHeight": 0,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C96",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000002",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C96",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000003",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C95",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x0000000D",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C94",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    }
+                  ],
+                  "x": 0,
+                  "y": 0,
+                  "width": 32,
+                  "height": 32,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 1,
+                  "topEdge": 1,
+                  "rightEdge": 2,
+                  "bottomEdge": 1,
+                  "children": []
+                },
+                {
+                  "elementId": "0x100002CF",
+                  "elementName": "StripButtonMiddle",
+                  "type": "0x00000003",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {},
+                  "fontHeight": 0,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C99",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000002",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C99",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000003",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C98",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x0000000D",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C97",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    }
+                  ],
+                  "x": 32,
+                  "y": 0,
+                  "width": 36,
+                  "height": 32,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 1,
+                  "topEdge": 1,
+                  "rightEdge": 1,
+                  "bottomEdge": 1,
+                  "children": []
+                },
+                {
+                  "elementId": "0x100002D0",
+                  "elementName": "StripButtonRight",
+                  "type": "0x00000003",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {},
+                  "fontHeight": 0,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C9C",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000002",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C9C",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000003",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C9B",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x0000000D",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C9A",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    }
+                  ],
+                  "x": 68,
+                  "y": 0,
+                  "width": 32,
+                  "height": 32,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 2,
+                  "topEdge": 1,
+                  "rightEdge": 1,
+                  "bottomEdge": 1,
+                  "children": []
+                }
+              ]
+            },
+            {
+              "elementId": "0x100004D8",
+              "elementName": "AdminQualitiesApplyButton",
+              "type": "0x00000001",
+              "defaultState": "",
+              "passToChildren": true,
+              "properties": {
+                "UICore_Text_left_margin": 7,
+                "UICore_Text_fonts": [
+                  "0x40000001"
+                ],
+                "UICore_Text_top_margin": 0,
+                "UICore_Text_font_colors": [
+                  "0xFFFFFFFF"
+                ],
+                "UICore_Text_horizontal_justification": 1,
+                "UICore_Text_vertical_justification": 1,
+                "UICore_Text_right_margin": 7,
+                "UICore_Element_DrawAfterChildren": true,
+                "UICore_Button_rollover": true,
+                "UICore_Element_min_width": 65,
+                "UICore_Text_one_line": true,
+                "UICore_Text_entry": {
+                  "table": "0x23000001",
+                  "id": "0x0390CF9E"
+                }
+              },
+              "fontHeight": 18,
+              "states": [
+                {
+                  "stateId": "0x00000001",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000002",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000003",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": true,
+                  "properties": {
+                    "UICore_Text_outline": true
+                  }
+                },
+                {
+                  "stateId": "0x0000000D",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                }
+              ],
+              "x": 120,
+              "y": 5,
+              "width": 100,
+              "height": 32,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 1,
+              "topEdge": 1,
+              "rightEdge": 2,
+              "bottomEdge": 2,
+              "children": [
+                {
+                  "elementId": "0x100002CE",
+                  "elementName": "StripButtonLeft",
+                  "type": "0x00000003",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {},
+                  "fontHeight": 0,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C96",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000002",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C96",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000003",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C95",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x0000000D",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C94",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    }
+                  ],
+                  "x": 0,
+                  "y": 0,
+                  "width": 32,
+                  "height": 32,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 1,
+                  "topEdge": 1,
+                  "rightEdge": 2,
+                  "bottomEdge": 1,
+                  "children": []
+                },
+                {
+                  "elementId": "0x100002CF",
+                  "elementName": "StripButtonMiddle",
+                  "type": "0x00000003",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {},
+                  "fontHeight": 0,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C99",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000002",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C99",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000003",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C98",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x0000000D",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C97",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    }
+                  ],
+                  "x": 32,
+                  "y": 0,
+                  "width": 36,
+                  "height": 32,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 1,
+                  "topEdge": 1,
+                  "rightEdge": 1,
+                  "bottomEdge": 1,
+                  "children": []
+                },
+                {
+                  "elementId": "0x100002D0",
+                  "elementName": "StripButtonRight",
+                  "type": "0x00000003",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {},
+                  "fontHeight": 0,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C9C",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000002",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C9C",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000003",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C9B",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x0000000D",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C9A",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    }
+                  ],
+                  "x": 68,
+                  "y": 0,
+                  "width": 32,
+                  "height": 32,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 2,
+                  "topEdge": 1,
+                  "rightEdge": 1,
+                  "bottomEdge": 1,
+                  "children": []
+                }
+              ]
+            },
+            {
+              "elementId": "0x100004DD",
+              "elementName": "AdminQualitiesAttachToSelectedButton",
+              "type": "0x00000001",
+              "defaultState": "",
+              "passToChildren": true,
+              "properties": {
+                "UICore_Text_left_margin": 7,
+                "UICore_Text_fonts": [
+                  "0x40000001"
+                ],
+                "UICore_Text_top_margin": 0,
+                "UICore_Text_font_colors": [
+                  "0xFFFFFFFF"
+                ],
+                "UICore_Text_horizontal_justification": 1,
+                "UICore_Text_vertical_justification": 1,
+                "UICore_Text_right_margin": 7,
+                "UICore_Element_DrawAfterChildren": true,
+                "UICore_Button_rollover": true,
+                "UICore_Element_min_width": 65,
+                "UICore_Text_one_line": true,
+                "UICore_Text_entry": {
+                  "table": "0x23000001",
+                  "id": "0x0CCA708E"
+                }
+              },
+              "fontHeight": 18,
+              "states": [
+                {
+                  "stateId": "0x00000001",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000002",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000003",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": true,
+                  "properties": {
+                    "UICore_Text_outline": true
+                  }
+                },
+                {
+                  "stateId": "0x0000000D",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                }
+              ],
+              "x": 256,
+              "y": 5,
+              "width": 140,
+              "height": 32,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 1,
+              "topEdge": 1,
+              "rightEdge": 2,
+              "bottomEdge": 2,
+              "children": [
+                {
+                  "elementId": "0x100002CE",
+                  "elementName": "StripButtonLeft",
+                  "type": "0x00000003",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {},
+                  "fontHeight": 0,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C96",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000002",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C96",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000003",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C95",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x0000000D",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C94",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    }
+                  ],
+                  "x": 0,
+                  "y": 0,
+                  "width": 32,
+                  "height": 32,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 1,
+                  "topEdge": 1,
+                  "rightEdge": 2,
+                  "bottomEdge": 1,
+                  "children": []
+                },
+                {
+                  "elementId": "0x100002CF",
+                  "elementName": "StripButtonMiddle",
+                  "type": "0x00000003",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {},
+                  "fontHeight": 0,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C99",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000002",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C99",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000003",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C98",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x0000000D",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C97",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    }
+                  ],
+                  "x": 32,
+                  "y": 0,
+                  "width": 76,
+                  "height": 32,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 1,
+                  "topEdge": 1,
+                  "rightEdge": 1,
+                  "bottomEdge": 1,
+                  "children": []
+                },
+                {
+                  "elementId": "0x100002D0",
+                  "elementName": "StripButtonRight",
+                  "type": "0x00000003",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {},
+                  "fontHeight": 0,
+                  "states": [
+                    {
+                      "stateId": "0x00000001",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C9C",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000002",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C9C",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x00000003",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C9B",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    },
+                    {
+                      "stateId": "0x0000000D",
+                      "stateName": "",
+                      "passToChildren": false,
+                      "imageFile": "0x06004C9A",
+                      "alphaFile": "",
+                      "drawMode": 3,
+                      "hasMedia": true,
+                      "properties": {}
+                    }
+                  ],
+                  "x": 108,
+                  "y": 0,
+                  "width": 32,
+                  "height": 32,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 0,
+                  "leftEdge": 2,
+                  "topEdge": 1,
+                  "rightEdge": 1,
+                  "bottomEdge": 1,
+                  "children": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "elementId": "0x100004B4",
+      "elementName": "AdminQualitiesListBoxHeaderTemplate",
+      "type": "0x0000000C",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 4,
+        "UICore_Text_fonts": [
+          "0x40000001"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 2,
+        "UICore_Text_vertical_justification": 1,
+        "UICore_Text_right_margin": 4,
+        "UICore_Text_one_line": true
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C4C4C"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 18,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 1,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "imageFile": "0x0600604C",
+      "children": []
+    },
+    {
+      "elementId": "0x100004CD",
+      "elementName": "AdminQualitiesListBoxValuelessEntryTemplate",
+      "type": "0x00000003",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 18,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 1,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "imageFile": "0x06006067",
+      "children": [
+        {
+          "elementId": "0x100004CE",
+          "elementName": "EntryName",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 4,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 390,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 3,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "imageFile": "0x06006073",
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x100004B8",
+      "elementName": "AdminQualitiesListBoxReadOnlyEntryTemplate",
+      "type": "0x00000003",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 18,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 1,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "imageFile": "0x06006067",
+      "children": [
+        {
+          "elementId": "0x100004CE",
+          "elementName": "EntryName",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 4,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 230,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 3,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "imageFile": "0x06006071",
+          "children": []
+        },
+        {
+          "elementId": "0x100004CF",
+          "elementName": "EntryValue",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFF3F2D14"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 1,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 230,
+          "y": 0,
+          "width": 160,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 1,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "imageFile": "0x06006068",
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x100004B9",
+      "elementName": "AdminQualitiesListBoxEditEntryTemplate",
+      "type": "0x00000003",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 18,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 1,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "imageFile": "0x06006067",
+      "children": [
+        {
+          "elementId": "0x100004CE",
+          "elementName": "EntryName",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 4,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 230,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 3,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "imageFile": "0x06006071",
+          "children": []
+        },
+        {
+          "elementId": "0x100004CF",
+          "elementName": "EntryValue",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFF3F2D14"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 1,
+            "UICore_Text_editable": true,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 230,
+          "y": 0,
+          "width": 160,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 1,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "imageFile": "0x06006058",
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x100004F6",
+      "elementName": "AdminQualitiesListBoxMultilineEditEntryTemplate",
+      "type": "0x00000003",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 54,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 1,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "imageFile": "0x06006067",
+      "children": [
+        {
+          "elementId": "0x100004CE",
+          "elementName": "EntryName",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 4,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 230,
+          "height": 54,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 3,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "imageFile": "0x06006117",
+          "children": []
+        },
+        {
+          "elementId": "0x100004CF",
+          "elementName": "EntryValue",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFF3F2D14"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 4,
+            "UICore_Text_editable": true,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": false
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 230,
+          "y": 0,
+          "width": 160,
+          "height": 54,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 1,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "imageFile": "0x06006116",
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x100004BA",
+      "elementName": "AdminQualitiesListBoxMenuEntryTemplate",
+      "type": "0x00000003",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 18,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 1,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "imageFile": "0x06006067",
+      "children": [
+        {
+          "elementId": "0x100004CE",
+          "elementName": "EntryName",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 4,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 230,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 3,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "imageFile": "0x06006071",
+          "children": []
+        },
+        {
+          "elementId": "0x100004CF",
+          "elementName": "EntryValue",
+          "type": "0x00000006",
+          "defaultState": "",
+          "passToChildren": true,
+          "properties": {
+            "UICore_Menu_listbox": 268436672,
+            "UICore_Menu_popup": 268436669,
+            "UICore_Menu_popup_layout": "0x21000043",
+            "UICore_Menu_selection_display": 268436668,
+            "UICore_Button_rollover": true,
+            "UICore_Menu_text_item": 268436676,
+            "UICore_Menu_text_item_layout": "0x21000043"
+          },
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000002",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000006",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000007",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000008",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            }
+          ],
+          "x": 230,
+          "y": 0,
+          "width": 160,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "children": [
+            {
+              "elementId": "0x100004BC",
+              "elementName": "Menu_AdminUI_SelectionDisplay",
+              "type": "0x0000000C",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {
+                "UICore_Text_left_margin": 4,
+                "UICore_Text_fonts": [
+                  "0x40000001"
+                ],
+                "UICore_Text_font_colors": [
+                  "0xFF3F2D14"
+                ],
+                "UICore_Text_horizontal_justification": 2,
+                "UICore_Text_vertical_justification": 1
+              },
+              "fontHeight": 18,
+              "states": [],
+              "x": 0,
+              "y": 0,
+              "width": 160,
+              "height": 18,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 1,
+              "leftEdge": 1,
+              "topEdge": 1,
+              "rightEdge": 1,
+              "bottomEdge": 1,
+              "imageFile": "0x06006069",
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "elementId": "0x100004C8",
+      "elementName": "AdminQualitiesListBoxAttributeEntryTemplate",
+      "type": "0x00000003",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 36,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 1,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "imageFile": "0x06006067",
+      "children": [
+        {
+          "elementId": "0x100004CE",
+          "elementName": "EntryName",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 4,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 230,
+          "height": 36,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 3,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "imageFile": "0x06006072",
+          "children": [
+            {
+              "elementId": "0x100004E4",
+              "elementName": "InitLevelLabel",
+              "type": "0x0000000C",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {
+                "UICore_Text_left_margin": 4,
+                "UICore_Text_fonts": [
+                  "0x40000001"
+                ],
+                "UICore_Text_top_margin": 0,
+                "UICore_Text_font_colors": [
+                  "0xFFFFFFFF"
+                ],
+                "UICore_Text_horizontal_justification": 3,
+                "UICore_Text_vertical_justification": 1,
+                "UICore_Text_entry": {
+                  "table": "0x23000001",
+                  "id": "0x058CC0EC"
+                },
+                "UICore_Text_right_margin": 4,
+                "UICore_Text_one_line": true
+              },
+              "fontHeight": 18,
+              "states": [
+                {
+                  "stateId": "0x0000000D",
+                  "stateName": "",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {
+                    "UICore_Text_font_colors": [
+                      "0xFF4C4C4C"
+                    ]
+                  }
+                }
+              ],
+              "x": 0,
+              "y": 0,
+              "width": 230,
+              "height": 18,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "children": []
+            }
+          ]
+        },
+        {
+          "elementId": "0x100004F2",
+          "elementName": "InitLevel",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFF3F2D14"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 1,
+            "UICore_Text_editable": true,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 230,
+          "y": 0,
+          "width": 160,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 1,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "imageFile": "0x06006058",
+          "children": []
+        },
+        {
+          "elementId": "0x100004CF",
+          "elementName": "EntryValue",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFF3F2D14"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 1,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 0,
+          "y": 18,
+          "width": 230,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 1,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "imageFile": "0x06006102",
+          "children": []
+        },
+        {
+          "elementId": "0x100004F4",
+          "elementName": "TotalLevelLabel",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 0,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFF3F2D14"
+            ],
+            "UICore_Text_horizontal_justification": 3,
+            "UICore_Text_vertical_justification": 1,
+            "UICore_Text_entry": {
+              "table": "0x23000001",
+              "id": "0x05AD2B1C"
+            },
+            "UICore_Text_right_margin": 2,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 185,
+          "y": 18,
+          "width": 45,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "children": []
+        },
+        {
+          "elementId": "0x100004F3",
+          "elementName": "TotalLevel",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFF3F2D14"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 1,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 230,
+          "y": 18,
+          "width": 160,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 1,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "imageFile": "0x06006068",
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x100004DF",
+      "elementName": "AdminQualitiesListBoxSkillEntryTemplate",
+      "type": "0x00000003",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 36,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 1,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "imageFile": "0x06006067",
+      "children": [
+        {
+          "elementId": "0x100004CE",
+          "elementName": "EntryName",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 4,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 230,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 3,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "imageFile": "0x06006073",
+          "children": []
+        },
+        {
+          "elementId": "0x100004E2",
+          "elementName": "AdvancementLevelMenu",
+          "type": "0x00000006",
+          "defaultState": "",
+          "passToChildren": true,
+          "properties": {
+            "UICore_Menu_listbox": 268436672,
+            "UICore_Menu_popup": 268436669,
+            "UICore_Menu_popup_layout": "0x21000043",
+            "UICore_Menu_selection_display": 268436668,
+            "UICore_Button_rollover": true,
+            "UICore_Menu_text_item": 268436676,
+            "UICore_Menu_text_item_layout": "0x21000043"
+          },
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000002",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000006",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000007",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000008",
+              "stateName": "",
+              "passToChildren": true,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {}
+            }
+          ],
+          "x": 230,
+          "y": 0,
+          "width": 160,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "children": [
+            {
+              "elementId": "0x100004BC",
+              "elementName": "Menu_AdminUI_SelectionDisplay",
+              "type": "0x0000000C",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {
+                "UICore_Text_left_margin": 4,
+                "UICore_Text_fonts": [
+                  "0x40000001"
+                ],
+                "UICore_Text_font_colors": [
+                  "0xFF3F2D14"
+                ],
+                "UICore_Text_horizontal_justification": 2,
+                "UICore_Text_vertical_justification": 1
+              },
+              "fontHeight": 18,
+              "states": [],
+              "x": 0,
+              "y": 0,
+              "width": 160,
+              "height": 18,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 1,
+              "leftEdge": 1,
+              "topEdge": 1,
+              "rightEdge": 1,
+              "bottomEdge": 1,
+              "imageFile": "0x06006069",
+              "children": []
+            }
+          ]
+        },
+        {
+          "elementId": "0x100004CF",
+          "elementName": "EntryValue",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFF3F2D14"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 1,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 0,
+          "y": 18,
+          "width": 230,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 1,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "imageFile": "0x06006102",
+          "children": []
+        },
+        {
+          "elementId": "0x100004E4",
+          "elementName": "InitLevelLabel",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 0,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFF3F2D14"
+            ],
+            "UICore_Text_horizontal_justification": 3,
+            "UICore_Text_vertical_justification": 1,
+            "UICore_Text_entry": {
+              "table": "0x23000001",
+              "id": "0x0F6AB4BC"
+            },
+            "UICore_Text_right_margin": 2,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 185,
+          "y": 18,
+          "width": 45,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "children": []
+        },
+        {
+          "elementId": "0x100004E3",
+          "elementName": "InitLevelValue",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFF3F2D14"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 1,
+            "UICore_Text_editable": true,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 230,
+          "y": 18,
+          "width": 160,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 1,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "imageFile": "0x06006058",
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x100004DE",
+      "elementName": "AdminQualitiesListBoxPositionEntryTemplate",
+      "type": "0x00000003",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 18,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 1,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "imageFile": "0x06006067",
+      "children": [
+        {
+          "elementId": "0x100004CE",
+          "elementName": "EntryName",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 4,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 130,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 3,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "imageFile": "0x060060FF",
+          "children": []
+        },
+        {
+          "elementId": "0x100004CF",
+          "elementName": "EntryValue",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFF3F2D14"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 1,
+            "UICore_Text_editable": true,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 130,
+          "y": 0,
+          "width": 260,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 1,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "imageFile": "0x06006100",
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x100004E5",
+      "elementName": "AdminQualitiesListBoxBodyPartEntryTemplate",
+      "type": "0x00000003",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 36,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 1,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "imageFile": "0x06006067",
+      "children": [
+        {
+          "elementId": "0x100004F0",
+          "elementName": "BodyPartEntryFrame",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [],
+          "x": 0,
+          "y": 0,
+          "width": 390,
+          "height": 36,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 3,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "imageFile": "0x06006114",
+          "children": [
+            {
+              "elementId": "0x100004CE",
+              "elementName": "EntryName",
+              "type": "0x0000000C",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {
+                "UICore_Text_left_margin": 4,
+                "UICore_Text_fonts": [
+                  "0x40000001"
+                ],
+                "UICore_Text_top_margin": 0,
+                "UICore_Text_font_colors": [
+                  "0xFFFFFFFF"
+                ],
+                "UICore_Text_horizontal_justification": 2,
+                "UICore_Text_vertical_justification": 4,
+                "UICore_Text_right_margin": 4,
+                "UICore_Text_selectable": true,
+                "UICore_Text_one_line": true
+              },
+              "fontHeight": 18,
+              "states": [
+                {
+                  "stateId": "0x0000000D",
+                  "stateName": "",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {
+                    "UICore_Text_font_colors": [
+                      "0xFF4C4C4C"
+                    ]
+                  }
+                }
+              ],
+              "x": 0,
+              "y": 0,
+              "width": 130,
+              "height": 18,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 1,
+              "topEdge": 1,
+              "rightEdge": 1,
+              "bottomEdge": 1,
+              "children": []
+            },
+            {
+              "elementId": "0x100004E6",
+              "elementName": "DamageType",
+              "type": "0x00000006",
+              "defaultState": "",
+              "passToChildren": true,
+              "properties": {
+                "UICore_Menu_listbox": 268436672,
+                "UICore_Menu_popup": 268436669,
+                "UICore_Menu_popup_layout": "0x21000043",
+                "UICore_Menu_selection_display": 268436668,
+                "UICore_Button_rollover": true,
+                "UICore_Menu_text_item": 268436676,
+                "UICore_Menu_text_item_layout": "0x21000043",
+                "UICore_Element_tooltip_ID": 268436373,
+                "UICore_Element_tooltip_layout": "0x21000041",
+                "UICore_Element_tooltip_entry": {
+                  "table": "0x23000001",
+                  "id": "0x0FF16BF5"
+                },
+                "UICore_Element_tooltips_on": true
+              },
+              "fontHeight": 0,
+              "states": [
+                {
+                  "stateId": "0x00000001",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000002",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000003",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000006",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000007",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                },
+                {
+                  "stateId": "0x00000008",
+                  "stateName": "",
+                  "passToChildren": true,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {}
+                }
+              ],
+              "x": 130,
+              "y": 0,
+              "width": 160,
+              "height": 18,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "children": [
+                {
+                  "elementId": "0x100004BC",
+                  "elementName": "Menu_AdminUI_SelectionDisplay",
+                  "type": "0x0000000C",
+                  "defaultState": "",
+                  "passToChildren": false,
+                  "properties": {
+                    "UICore_Text_left_margin": 4,
+                    "UICore_Text_fonts": [
+                      "0x40000001"
+                    ],
+                    "UICore_Text_font_colors": [
+                      "0xFF3F2D14"
+                    ],
+                    "UICore_Text_horizontal_justification": 2,
+                    "UICore_Text_vertical_justification": 1
+                  },
+                  "fontHeight": 18,
+                  "states": [],
+                  "x": 0,
+                  "y": 0,
+                  "width": 160,
+                  "height": 18,
+                  "zLevel": 0,
+                  "baseLayout": "0x00000000",
+                  "baseElement": "0x00000000",
+                  "drawMode": 1,
+                  "leftEdge": 1,
+                  "topEdge": 1,
+                  "rightEdge": 1,
+                  "bottomEdge": 1,
+                  "imageFile": "0x06006069",
+                  "children": []
+                }
+              ]
+            },
+            {
+              "elementId": "0x100004E7",
+              "elementName": "DamageValue",
+              "type": "0x0000000C",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {
+                "UICore_Text_left_margin": 4,
+                "UICore_Text_fonts": [
+                  "0x40000001"
+                ],
+                "UICore_Text_top_margin": 0,
+                "UICore_Text_font_colors": [
+                  "0xFF3F2D14"
+                ],
+                "UICore_Text_horizontal_justification": 2,
+                "UICore_Text_vertical_justification": 1,
+                "UICore_Text_editable": true,
+                "UICore_Text_right_margin": 4,
+                "UICore_Element_tooltip_ID": 268436373,
+                "UICore_Element_tooltip_layout": "0x21000041",
+                "UICore_Text_selectable": true,
+                "UICore_Element_tooltip_entry": {
+                  "table": "0x23000001",
+                  "id": "0x0BEB9FF5"
+                },
+                "UICore_Element_tooltips_on": true,
+                "UICore_Text_one_line": true
+              },
+              "fontHeight": 18,
+              "states": [
+                {
+                  "stateId": "0x0000000D",
+                  "stateName": "",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {
+                    "UICore_Text_font_colors": [
+                      "0xFF4C4C4C"
+                    ]
+                  }
+                }
+              ],
+              "x": 290,
+              "y": 0,
+              "width": 38,
+              "height": 18,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "children": []
+            },
+            {
+              "elementId": "0x100004EF",
+              "elementName": "DamageVariance",
+              "type": "0x0000000C",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {
+                "UICore_Text_left_margin": 4,
+                "UICore_Text_fonts": [
+                  "0x40000001"
+                ],
+                "UICore_Text_top_margin": 0,
+                "UICore_Text_font_colors": [
+                  "0xFF3F2D14"
+                ],
+                "UICore_Text_horizontal_justification": 2,
+                "UICore_Text_vertical_justification": 1,
+                "UICore_Text_editable": true,
+                "UICore_Text_right_margin": 4,
+                "UICore_Element_tooltip_ID": 268436373,
+                "UICore_Element_tooltip_layout": "0x21000041",
+                "UICore_Text_selectable": true,
+                "UICore_Element_tooltip_entry": {
+                  "table": "0x23000001",
+                  "id": "0x031095B5"
+                },
+                "UICore_Element_tooltips_on": true,
+                "UICore_Text_one_line": true
+              },
+              "fontHeight": 18,
+              "states": [
+                {
+                  "stateId": "0x0000000D",
+                  "stateName": "",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {
+                    "UICore_Text_font_colors": [
+                      "0xFF4C4C4C"
+                    ]
+                  }
+                }
+              ],
+              "x": 328,
+              "y": 0,
+              "width": 62,
+              "height": 18,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "children": []
+            },
+            {
+              "elementId": "0x100004E8",
+              "elementName": "SlashArmorValue",
+              "type": "0x0000000C",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {
+                "UICore_Text_left_margin": 4,
+                "UICore_Text_fonts": [
+                  "0x40000001"
+                ],
+                "UICore_Text_top_margin": 0,
+                "UICore_Text_font_colors": [
+                  "0xFF3F2D14"
+                ],
+                "UICore_Text_horizontal_justification": 2,
+                "UICore_Text_vertical_justification": 1,
+                "UICore_Text_editable": true,
+                "UICore_Text_right_margin": 4,
+                "UICore_Element_tooltip_ID": 268436373,
+                "UICore_Element_tooltip_layout": "0x21000041",
+                "UICore_Text_selectable": true,
+                "UICore_Element_tooltip_entry": {
+                  "table": "0x23000001",
+                  "id": "0x01E47D42"
+                },
+                "UICore_Element_tooltips_on": true,
+                "UICore_Text_one_line": true
+              },
+              "fontHeight": 18,
+              "states": [
+                {
+                  "stateId": "0x0000000D",
+                  "stateName": "",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {
+                    "UICore_Text_font_colors": [
+                      "0xFF4C4C4C"
+                    ]
+                  }
+                }
+              ],
+              "x": 0,
+              "y": 18,
+              "width": 56,
+              "height": 18,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "children": []
+            },
+            {
+              "elementId": "0x100004E9",
+              "elementName": "PierceArmorValue",
+              "type": "0x0000000C",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {
+                "UICore_Text_left_margin": 4,
+                "UICore_Text_fonts": [
+                  "0x40000001"
+                ],
+                "UICore_Text_top_margin": 0,
+                "UICore_Text_font_colors": [
+                  "0xFF3F2D14"
+                ],
+                "UICore_Text_horizontal_justification": 2,
+                "UICore_Text_vertical_justification": 1,
+                "UICore_Text_editable": true,
+                "UICore_Text_right_margin": 4,
+                "UICore_Element_tooltip_ID": 268436373,
+                "UICore_Element_tooltip_layout": "0x21000041",
+                "UICore_Text_selectable": true,
+                "UICore_Element_tooltip_entry": {
+                  "table": "0x23000001",
+                  "id": "0x0B5AB662"
+                },
+                "UICore_Element_tooltips_on": true,
+                "UICore_Text_one_line": true
+              },
+              "fontHeight": 18,
+              "states": [
+                {
+                  "stateId": "0x0000000D",
+                  "stateName": "",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {
+                    "UICore_Text_font_colors": [
+                      "0xFF4C4C4C"
+                    ]
+                  }
+                }
+              ],
+              "x": 56,
+              "y": 18,
+              "width": 55,
+              "height": 18,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "children": []
+            },
+            {
+              "elementId": "0x100004EA",
+              "elementName": "BludgeonArmorValue",
+              "type": "0x0000000C",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {
+                "UICore_Text_left_margin": 4,
+                "UICore_Text_fonts": [
+                  "0x40000001"
+                ],
+                "UICore_Text_top_margin": 0,
+                "UICore_Text_font_colors": [
+                  "0xFF3F2D14"
+                ],
+                "UICore_Text_horizontal_justification": 2,
+                "UICore_Text_vertical_justification": 1,
+                "UICore_Text_editable": true,
+                "UICore_Text_right_margin": 4,
+                "UICore_Element_tooltip_ID": 268436373,
+                "UICore_Element_tooltip_layout": "0x21000041",
+                "UICore_Text_selectable": true,
+                "UICore_Element_tooltip_entry": {
+                  "table": "0x23000001",
+                  "id": "0x09C9BD72"
+                },
+                "UICore_Element_tooltips_on": true,
+                "UICore_Text_one_line": true
+              },
+              "fontHeight": 18,
+              "states": [
+                {
+                  "stateId": "0x0000000D",
+                  "stateName": "",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {
+                    "UICore_Text_font_colors": [
+                      "0xFF4C4C4C"
+                    ]
+                  }
+                }
+              ],
+              "x": 111,
+              "y": 18,
+              "width": 56,
+              "height": 18,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "children": []
+            },
+            {
+              "elementId": "0x100004EB",
+              "elementName": "ColdArmorValue",
+              "type": "0x0000000C",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {
+                "UICore_Text_left_margin": 4,
+                "UICore_Text_fonts": [
+                  "0x40000001"
+                ],
+                "UICore_Text_top_margin": 0,
+                "UICore_Text_font_colors": [
+                  "0xFF3F2D14"
+                ],
+                "UICore_Text_horizontal_justification": 2,
+                "UICore_Text_vertical_justification": 1,
+                "UICore_Text_editable": true,
+                "UICore_Text_right_margin": 4,
+                "UICore_Element_tooltip_ID": 268436373,
+                "UICore_Element_tooltip_layout": "0x21000041",
+                "UICore_Text_selectable": true,
+                "UICore_Element_tooltip_entry": {
+                  "table": "0x23000001",
+                  "id": "0x080A4EF2"
+                },
+                "UICore_Element_tooltips_on": true,
+                "UICore_Text_one_line": true
+              },
+              "fontHeight": 18,
+              "states": [
+                {
+                  "stateId": "0x0000000D",
+                  "stateName": "",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {
+                    "UICore_Text_font_colors": [
+                      "0xFF4C4C4C"
+                    ]
+                  }
+                }
+              ],
+              "x": 167,
+              "y": 18,
+              "width": 55,
+              "height": 18,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "children": []
+            },
+            {
+              "elementId": "0x100004EC",
+              "elementName": "FireArmorValue",
+              "type": "0x0000000C",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {
+                "UICore_Text_left_margin": 4,
+                "UICore_Text_fonts": [
+                  "0x40000001"
+                ],
+                "UICore_Text_top_margin": 0,
+                "UICore_Text_font_colors": [
+                  "0xFF3F2D14"
+                ],
+                "UICore_Text_horizontal_justification": 2,
+                "UICore_Text_vertical_justification": 1,
+                "UICore_Text_editable": true,
+                "UICore_Text_right_margin": 4,
+                "UICore_Element_tooltip_ID": 268436373,
+                "UICore_Element_tooltip_layout": "0x21000041",
+                "UICore_Text_selectable": true,
+                "UICore_Element_tooltip_entry": {
+                  "table": "0x23000001",
+                  "id": "0x021A4BB2"
+                },
+                "UICore_Element_tooltips_on": true,
+                "UICore_Text_one_line": true
+              },
+              "fontHeight": 18,
+              "states": [
+                {
+                  "stateId": "0x0000000D",
+                  "stateName": "",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {
+                    "UICore_Text_font_colors": [
+                      "0xFF4C4C4C"
+                    ]
+                  }
+                }
+              ],
+              "x": 222,
+              "y": 18,
+              "width": 56,
+              "height": 18,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "children": []
+            },
+            {
+              "elementId": "0x100004ED",
+              "elementName": "AcidArmorValue",
+              "type": "0x0000000C",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {
+                "UICore_Text_left_margin": 4,
+                "UICore_Text_fonts": [
+                  "0x40000001"
+                ],
+                "UICore_Text_top_margin": 0,
+                "UICore_Text_font_colors": [
+                  "0xFF3F2D14"
+                ],
+                "UICore_Text_horizontal_justification": 2,
+                "UICore_Text_vertical_justification": 1,
+                "UICore_Text_editable": true,
+                "UICore_Text_right_margin": 4,
+                "UICore_Element_tooltip_ID": 268436373,
+                "UICore_Element_tooltip_layout": "0x21000041",
+                "UICore_Text_selectable": true,
+                "UICore_Element_tooltip_entry": {
+                  "table": "0x23000001",
+                  "id": "0x050A4122"
+                },
+                "UICore_Element_tooltips_on": true,
+                "UICore_Text_one_line": true
+              },
+              "fontHeight": 18,
+              "states": [
+                {
+                  "stateId": "0x0000000D",
+                  "stateName": "",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {
+                    "UICore_Text_font_colors": [
+                      "0xFF4C4C4C"
+                    ]
+                  }
+                }
+              ],
+              "x": 278,
+              "y": 18,
+              "width": 56,
+              "height": 18,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "children": []
+            },
+            {
+              "elementId": "0x100004EE",
+              "elementName": "ElectricArmorValue",
+              "type": "0x0000000C",
+              "defaultState": "",
+              "passToChildren": false,
+              "properties": {
+                "UICore_Text_left_margin": 4,
+                "UICore_Text_fonts": [
+                  "0x40000001"
+                ],
+                "UICore_Text_top_margin": 0,
+                "UICore_Text_font_colors": [
+                  "0xFF3F2D14"
+                ],
+                "UICore_Text_horizontal_justification": 2,
+                "UICore_Text_vertical_justification": 1,
+                "UICore_Text_editable": true,
+                "UICore_Text_right_margin": 4,
+                "UICore_Element_tooltip_ID": 268436373,
+                "UICore_Element_tooltip_layout": "0x21000041",
+                "UICore_Text_selectable": true,
+                "UICore_Element_tooltip_entry": {
+                  "table": "0x23000001",
+                  "id": "0x0F89BB22"
+                },
+                "UICore_Element_tooltips_on": true,
+                "UICore_Text_one_line": true
+              },
+              "fontHeight": 18,
+              "states": [
+                {
+                  "stateId": "0x0000000D",
+                  "stateName": "",
+                  "passToChildren": false,
+                  "imageFile": "",
+                  "alphaFile": "",
+                  "drawMode": 0,
+                  "hasMedia": false,
+                  "properties": {
+                    "UICore_Text_font_colors": [
+                      "0xFF4C4C4C"
+                    ]
+                  }
+                }
+              ],
+              "x": 334,
+              "y": 18,
+              "width": 56,
+              "height": 18,
+              "zLevel": 0,
+              "baseLayout": "0x00000000",
+              "baseElement": "0x00000000",
+              "drawMode": 0,
+              "leftEdge": 0,
+              "topEdge": 0,
+              "rightEdge": 0,
+              "bottomEdge": 0,
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "elementId": "0x100004E1",
+      "elementName": "AdminQualitiesListBoxNewEntryTemplate",
+      "type": "0x00000003",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 390,
+      "height": 18,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 1,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "imageFile": "0x06006067",
+      "children": [
+        {
+          "elementId": "0x100004CE",
+          "elementName": "EntryName",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFF3F2D14"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 1,
+            "UICore_Text_editable": true,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 230,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 3,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "imageFile": "0x06006101",
+          "children": []
+        },
+        {
+          "elementId": "0x100004CF",
+          "elementName": "EntryValue",
+          "type": "0x0000000C",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Text_left_margin": 4,
+            "UICore_Text_fonts": [
+              "0x40000001"
+            ],
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ],
+            "UICore_Text_horizontal_justification": 2,
+            "UICore_Text_vertical_justification": 4,
+            "UICore_Text_right_margin": 4,
+            "UICore_Text_selectable": true,
+            "UICore_Text_one_line": true
+          },
+          "fontHeight": 18,
+          "states": [
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": false,
+              "properties": {
+                "UICore_Text_font_colors": [
+                  "0xFF4C4C4C"
+                ]
+              }
+            }
+          ],
+          "x": 230,
+          "y": 0,
+          "width": 160,
+          "height": 18,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 1,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "imageFile": "0x06006068",
+          "children": []
+        }
+      ]
+    }
+  ]
+}

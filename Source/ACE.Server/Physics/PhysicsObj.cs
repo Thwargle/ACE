@@ -382,6 +382,11 @@ namespace ACE.Server.Physics
         {
             bool ethereal = false;
 
+            // Tracked free-flight shots use a continuous animated-body sweep in
+            // UpdateObjectInternal. Do not let a movement cylinder impact first.
+            if (WeenieObj?.IsCreature == true && transition.ObjectInfo.Object.vrProjectileSweep)
+                return TransitionState.OK;
+
             if (State.HasFlag(PhysicsState.Ethereal) && State.HasFlag(PhysicsState.IgnoreCollisions))
                 return TransitionState.OK;
 
@@ -1652,6 +1657,10 @@ namespace ACE.Server.Physics
 
         public int InitialUpdates;
 
+        private bool UsesVRProjectileContact => State.HasFlag(PhysicsState.Missile)
+            && WeenieObj?.WorldObject?.IsVRFreeAimProjectile == true;
+        private bool vrProjectileSweep;
+
         public void UpdateObjectInternal(double quantum)
         {
             if ((TransientState & TransientStateFlags.Active) == 0 || CurCell == null)
@@ -1664,7 +1673,7 @@ namespace ACE.Server.Physics
             var newPos = new Position(Position.ObjCellID);
             UpdatePositionInternal(quantum, ref newPos.Frame);
 
-            if (PartArray != null && PartArray.GetNumSphere() != 0)
+            if (PartArray != null && (PartArray.GetNumSphere() != 0 || WeenieObj?.WorldObject?.IsVRFallingDrop == true))
             {
                 if (newPos.Frame.Equals(Position.Frame))
                 {
@@ -1688,7 +1697,17 @@ namespace ACE.Server.Physics
                         return;
                     }
 
-                    var transit = transition(Position, newPos, false);
+                    PhysicsObj vrBody = null;
+                    if (UsesVRProjectileContact)
+                    {
+                        vrBody = ACE.Server.Entity.VRProjectileContact.FirstContact(this,newPos,out var fraction);
+                        if (vrBody != null)
+                            newPos.Frame.Origin = Vector3.Lerp(Position.Frame.Origin,newPos.Frame.Origin,fraction);
+                    }
+                    Transition transit;
+                    vrProjectileSweep = UsesVRProjectileContact;
+                    try { transit = transition(Position, newPos, false); }
+                    finally { vrProjectileSweep = false; }
 
 
                     // temporarily modified while debug path is examined
@@ -1697,6 +1716,14 @@ namespace ACE.Server.Physics
                         CachedVelocity = Position.GetOffset(transit.SpherePath.CurPos) / (float)quantum;
 
                         SetPositionInternal(transit);
+                        // The ordinary transition still clips against walls and
+                        // terrain before this endpoint. Only a reached, live shot
+                        // may impact the first body. Selection never participates.
+                        if (vrBody != null && UsesVRProjectileContact && is_active()
+                            && !transit.CollisionInfo.CollidedWithEnvironment
+                            && !transit.CollisionInfo.CollisionNormalValid
+                            && Position.GetOffset(newPos).LengthSquared() < .000001f)
+                            report_object_collision(vrBody,false);
                     }
                     else
                     {

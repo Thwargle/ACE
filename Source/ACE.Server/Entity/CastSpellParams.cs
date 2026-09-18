@@ -6,6 +6,7 @@ namespace ACE.Server.Entity
     public class CastSpellParams
     {
         public Spell Spell { get; set; }
+        public VRCombatRequest VRAim { get; set; }
         //public bool IsWeaponSpell { get; set; }
         public WorldObject CasterItem { get; set; }
         public uint MagicSkill { get; set; }

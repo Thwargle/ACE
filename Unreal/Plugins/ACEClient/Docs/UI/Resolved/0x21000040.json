@@ -1,0 +1,3140 @@
+{
+  "id": "0x21000040",
+  "name": "layout_21000040",
+  "displayWidth": 800,
+  "displayHeight": 600,
+  "roots": [
+    {
+      "elementId": "0x1000047F",
+      "elementName": "button_image",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002B9",
+      "elementName": "button_basefont12",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000025"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 11,
+      "states": [
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002BA",
+      "elementName": "button_basefont14",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000002"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 14,
+      "states": [
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002BB",
+      "elementName": "button_basefont16",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000000"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 16,
+      "states": [
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002BC",
+      "elementName": "button_basefont18",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000001"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002BD",
+      "elementName": "button_presseffect_basefont16",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000000"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 16,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_left_margin": 0,
+            "UICore_Text_top_margin": 0
+          }
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_left_margin": 1,
+            "UICore_Text_top_margin": 1
+          }
+        },
+        {
+          "stateId": "0x00000006",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_left_margin": 0,
+            "UICore_Text_top_margin": 0
+          }
+        },
+        {
+          "stateId": "0x00000008",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_left_margin": 1,
+            "UICore_Text_top_margin": 1
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002BE",
+      "elementName": "button_presseffect_basefont18",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000001"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_left_margin": 0,
+            "UICore_Text_top_margin": 0
+          }
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_left_margin": 1,
+            "UICore_Text_top_margin": 1
+          }
+        },
+        {
+          "stateId": "0x00000006",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_left_margin": 0,
+            "UICore_Text_top_margin": 0
+          }
+        },
+        {
+          "stateId": "0x00000008",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_left_margin": 1,
+            "UICore_Text_top_margin": 1
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002BF",
+      "elementName": "button_blank_hilite_stone18",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Button_boolean_button": true,
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000016"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_left_margin": 0,
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFF956A4A"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000006",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_left_margin": 0,
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFFF5CD6A"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002C0",
+      "elementName": "button_blank_hilite_stone24",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x4000000E"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 24,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_left_margin": 0,
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFF956A4A"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000006",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_left_margin": 0,
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFFF5CD6A"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002C1",
+      "elementName": "button_blank_hilite_stone30",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Button_boolean_button": true,
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x4000000F"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 30,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_left_margin": 0,
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFF956A4A"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000006",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_left_margin": 0,
+            "UICore_Text_top_margin": 0,
+            "UICore_Text_font_colors": [
+              "0xFFF5CD6A"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002C3",
+      "elementName": "button_blank_3state_Gulim14",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_outline": true,
+        "UICore_Button_ghosted": true,
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000017"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Button_rollover": true,
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 14,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFF287"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFF0000"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002C4",
+      "elementName": "button_blank_3state_Gulim18",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_outline": true,
+        "UICore_Button_ghosted": true,
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000018"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Button_rollover": true,
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFF287"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFF0000"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002C5",
+      "elementName": "button_blank_3state_Tahoma20",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_outline": true,
+        "UICore_Button_ghosted": true,
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x4000000B"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Button_rollover": true,
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 20,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFF287"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFF0000"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFFFFF"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002C6",
+      "elementName": "Button_ArrowLeft",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Button_rollover": true
+      },
+      "fontHeight": 0,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004C8F",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004C90",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004C91",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 47,
+      "height": 44,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002C7",
+      "elementName": "Button_ArrowRight",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_outline": true,
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000010"
+        ],
+        "UICore_Text_bottom_margin": 0,
+        "UICore_Button_rollover": true,
+        "UICore_Text_horizontal_justification": 2,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 36,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004C92",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004C93",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06005F13",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 47,
+      "height": 44,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002C8",
+      "elementName": "Button_Finish",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_outline": true,
+        "UICore_Text_entry": {
+          "table": "0x23000002",
+          "id": "0x0D054928"
+        },
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000024"
+        ],
+        "UICore_Text_bottom_margin": 0,
+        "UICore_Button_rollover": true,
+        "UICore_Text_horizontal_justification": 2,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 42,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF66FF00"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFF0000"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 97,
+      "height": 44,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x10000486",
+      "elementName": "button_sansfont16",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000009"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 16,
+      "states": [
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002C9",
+      "elementName": "button_sansfont18",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x4000000A"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002CA",
+      "elementName": "button_sansfont20",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x4000000B"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 20,
+      "states": [
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002CB",
+      "elementName": "button_sansfont22",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x4000000C"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 22,
+      "states": [
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002CC",
+      "elementName": "button_fancyfont18",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000016"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002CD",
+      "elementName": "Button_RedBar",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": true,
+      "properties": {
+        "UICore_Text_left_margin": 7,
+        "UICore_Text_fonts": [
+          "0x40000001"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1,
+        "UICore_Text_right_margin": 7,
+        "UICore_Element_DrawAfterChildren": true,
+        "UICore_Button_rollover": true,
+        "UICore_Element_min_width": 65,
+        "UICore_Text_one_line": true
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_outline": true
+          }
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 79,
+      "height": 32,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 1,
+      "rightEdge": 1,
+      "bottomEdge": 2,
+      "children": [
+        {
+          "elementId": "0x100002CE",
+          "elementName": "StripButtonLeft",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004C96",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000002",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004C96",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004C95",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004C94",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 32,
+          "height": 32,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 2,
+          "bottomEdge": 1,
+          "children": []
+        },
+        {
+          "elementId": "0x100002CF",
+          "elementName": "StripButtonMiddle",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004C99",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000002",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004C99",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004C98",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004C97",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 32,
+          "y": 0,
+          "width": 15,
+          "height": 32,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "children": []
+        },
+        {
+          "elementId": "0x100002D0",
+          "elementName": "StripButtonRight",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004C9C",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000002",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004C9C",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004C9B",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004C9A",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 47,
+          "y": 0,
+          "width": 32,
+          "height": 32,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 2,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x10000618",
+      "elementName": "Button_BlueBar",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": true,
+      "properties": {
+        "UICore_Text_left_margin": 7,
+        "UICore_Text_fonts": [
+          "0x40000001"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1,
+        "UICore_Text_right_margin": 7,
+        "UICore_Element_DrawAfterChildren": true,
+        "UICore_Button_rollover": true,
+        "UICore_Element_min_width": 65,
+        "UICore_Text_one_line": true
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_outline": true
+          }
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 79,
+      "height": 32,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 1,
+      "rightEdge": 1,
+      "bottomEdge": 2,
+      "children": [
+        {
+          "elementId": "0x100002CE",
+          "elementName": "StripButtonLeft",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x060074A9",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000002",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x060074A9",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x060074A8",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x060074A7",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 32,
+          "height": 32,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 2,
+          "bottomEdge": 1,
+          "children": []
+        },
+        {
+          "elementId": "0x100002CF",
+          "elementName": "StripButtonMiddle",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x060074AC",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000002",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x060074AC",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x060074AB",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x060074AA",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 32,
+          "y": 0,
+          "width": 15,
+          "height": 32,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "children": []
+        },
+        {
+          "elementId": "0x100002D0",
+          "elementName": "StripButtonRight",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x060074AF",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000002",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x060074AF",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x060074AE",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x060074AD",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 47,
+          "y": 0,
+          "width": 32,
+          "height": 32,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 2,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x100002D1",
+      "elementName": "Button_RedLarge_Shadow",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": true,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x4000000B"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFB219"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1,
+        "UICore_Text_outline": true,
+        "UICore_Button_rollover": true
+      },
+      "fontHeight": 20,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004C9E",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004C9F",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFD24C"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004CA0",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_fonts": [
+              "0x4000000A"
+            ],
+            "UICore_Text_font_colors": [
+              "0xFFFFF27F"
+            ]
+          }
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004CA1",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFA8966D"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 170,
+      "height": 99,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "alphaFile": "0x06004C9D",
+      "children": []
+    },
+    {
+      "elementId": "0x100002D2",
+      "elementName": "Button_RedHuge_Shadow",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": true,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x4000000C"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFB219"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1,
+        "UICore_Text_outline": true,
+        "UICore_Button_rollover": true
+      },
+      "fontHeight": 22,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004CA3",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004CA4",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFD24C"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004CA5",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_fonts": [
+              "0x40000019"
+            ],
+            "UICore_Text_font_colors": [
+              "0xFFFFF27F"
+            ]
+          }
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004CA6",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFA8966D"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 254,
+      "height": 113,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "alphaFile": "0x06004CA2",
+      "children": []
+    },
+    {
+      "elementId": "0x100002D3",
+      "elementName": "Button_OvalSparkleBorder",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": true,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000016"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1,
+        "UICore_Text_outline": true,
+        "UICore_Button_rollover": true
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004CA9",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004CAA",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004CA8",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004CA7",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 105,
+      "height": 55,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    },
+    {
+      "elementId": "0x100002D4",
+      "elementName": "Button_BrownStrip",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": true,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000001"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1,
+        "UICore_Element_DrawAfterChildren": true,
+        "UICore_Element_max_width": 300,
+        "UICore_Button_rollover": true,
+        "UICore_Element_min_width": 53
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_outline": true
+          }
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 100,
+      "height": 36,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 1,
+      "rightEdge": 1,
+      "bottomEdge": 2,
+      "children": [
+        {
+          "elementId": "0x100002CE",
+          "elementName": "StripButtonLeft",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004CAD",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000002",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004CAD",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004CAC",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004CAB",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 68,
+          "height": 36,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "children": []
+        },
+        {
+          "elementId": "0x100002D0",
+          "elementName": "StripButtonRight",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004CB0",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000002",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004CB0",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004CAF",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06004CAE",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 68,
+          "y": 0,
+          "width": 32,
+          "height": 36,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 2,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x100002D5",
+      "elementName": "Button_BlueStrip",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": true,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000001"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1,
+        "UICore_Element_DrawAfterChildren": true,
+        "UICore_Element_max_width": 300,
+        "UICore_Button_rollover": true,
+        "UICore_Element_min_width": 53
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_outline": true
+          }
+        },
+        {
+          "stateId": "0x00000006",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000008",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 100,
+      "height": 36,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 1,
+      "rightEdge": 1,
+      "bottomEdge": 2,
+      "children": [
+        {
+          "elementId": "0x100002CE",
+          "elementName": "StripButtonLeft",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06001AB2",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000002",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06001AB2",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06001AB4",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06001AB0",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 68,
+          "height": 36,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "children": []
+        },
+        {
+          "elementId": "0x100002D0",
+          "elementName": "StripButtonRight",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06001AB3",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000002",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06001AB3",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06001AB5",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06001AB1",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 68,
+          "y": 0,
+          "width": 32,
+          "height": 36,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 2,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x100002D6",
+      "elementName": "Button_BlueStrip_Short",
+      "type": "0x00000001",
+      "defaultState": "0x00000001",
+      "passToChildren": true,
+      "properties": {
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000001"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFFFFF"
+        ],
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1,
+        "UICore_Element_DrawAfterChildren": true,
+        "UICore_Element_max_width": 300,
+        "UICore_Button_rollover": true,
+        "UICore_Element_min_width": 53
+      },
+      "fontHeight": 18,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_outline": true
+          }
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 100,
+      "height": 27,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 1,
+      "rightEdge": 1,
+      "bottomEdge": 2,
+      "children": [
+        {
+          "elementId": "0x100002CE",
+          "elementName": "StripButtonLeft",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06002D3C",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000002",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06002D3C",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06002D3D",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06002D3B",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 0,
+          "y": 0,
+          "width": 68,
+          "height": 27,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 1,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "children": []
+        },
+        {
+          "elementId": "0x100002D0",
+          "elementName": "StripButtonRight",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {},
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x00000001",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06002D39",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000002",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06002D39",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x00000003",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06002D38",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            },
+            {
+              "stateId": "0x0000000D",
+              "stateName": "",
+              "passToChildren": false,
+              "imageFile": "0x06002D3A",
+              "alphaFile": "",
+              "drawMode": 3,
+              "hasMedia": true,
+              "properties": {}
+            }
+          ],
+          "x": 68,
+          "y": 0,
+          "width": 32,
+          "height": 27,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 2,
+          "topEdge": 1,
+          "rightEdge": 1,
+          "bottomEdge": 1,
+          "children": []
+        }
+      ]
+    },
+    {
+      "elementId": "0x100002D7",
+      "elementName": "Button_BookPreviousPage",
+      "type": "0x00000001",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06001269",
+          "alphaFile": "",
+          "drawMode": 1,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x0600126A",
+          "alphaFile": "",
+          "drawMode": 1,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x0600126B",
+          "alphaFile": "",
+          "drawMode": 1,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 30,
+      "width": 54,
+      "height": 33,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 1,
+      "rightEdge": 1,
+      "bottomEdge": 2,
+      "children": []
+    },
+    {
+      "elementId": "0x100002D8",
+      "elementName": "Button_BookNextPage",
+      "type": "0x00000001",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06001266",
+          "alphaFile": "",
+          "drawMode": 1,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06001267",
+          "alphaFile": "",
+          "drawMode": 1,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06001268",
+          "alphaFile": "",
+          "drawMode": 1,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 235,
+      "y": 306,
+      "width": 65,
+      "height": 32,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 2,
+      "topEdge": 1,
+      "rightEdge": 1,
+      "bottomEdge": 1,
+      "children": []
+    },
+    {
+      "elementId": "0x100002D9",
+      "elementName": "Button_CharManagement_EnterGame",
+      "type": "0x00000001",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Text_outline": true,
+        "UICore_Text_left_margin": 0,
+        "UICore_Text_fonts": [
+          "0x40000012"
+        ],
+        "UICore_Text_top_margin": 0,
+        "UICore_Text_font_colors": [
+          "0xFFFFF27F"
+        ],
+        "UICore_Button_rollover": true,
+        "UICore_Text_horizontal_justification": 1,
+        "UICore_Text_vertical_justification": 1
+      },
+      "fontHeight": 40,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004CB2",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFF27F"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000002",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004CB3",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFFFFF27F"
+            ]
+          }
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004CB3",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_fonts": [
+              "0x40000011"
+            ],
+            "UICore_Text_font_colors": [
+              "0xFFC6B26D"
+            ]
+          }
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004CB5",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Text_font_colors": [
+              "0xFF4C472D"
+            ]
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 0,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "alphaFile": "0x06004CB1",
+      "children": []
+    },
+    {
+      "elementId": "0x100002DA",
+      "elementName": "Button_GreenTriangle",
+      "type": "0x00000001",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004CB6",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06004CB7",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 30,
+      "height": 26,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 1,
+      "rightEdge": 1,
+      "bottomEdge": 1,
+      "children": []
+    },
+    {
+      "elementId": "0x100005EC",
+      "elementName": "Button_GreenTriangle_10",
+      "type": "0x00000001",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x0600712B",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {}
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x0600712C",
+          "alphaFile": "",
+          "drawMode": 3,
+          "hasMedia": true,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 30,
+      "height": 26,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 1,
+      "rightEdge": 1,
+      "bottomEdge": 1,
+      "children": []
+    },
+    {
+      "elementId": "0x10000527",
+      "elementName": "button_ChatLogNewNonVisibleTextIndicator",
+      "type": "0x00000001",
+      "defaultState": "0x0000000D",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [
+        {
+          "stateId": "0x00000001",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06005F0E",
+          "alphaFile": "",
+          "drawMode": 1,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Element_hide": false
+          }
+        },
+        {
+          "stateId": "0x00000003",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "0x06005F0E",
+          "alphaFile": "",
+          "drawMode": 1,
+          "hasMedia": true,
+          "properties": {
+            "UICore_Element_hide": false
+          }
+        },
+        {
+          "stateId": "0x0000000D",
+          "stateName": "",
+          "passToChildren": false,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {
+            "UICore_Element_hide": true
+          }
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 16,
+      "height": 16,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    }
+  ]
+}

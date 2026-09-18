@@ -1,0 +1,15168 @@
+#include "UI/ACEUIGameplayBinder.h"
+#include "UI/ACEChatEntry.h"
+#include "ACEEquipmentRules.h"
+#include "UI/ACERetailTextEntry.h"
+#include "ACEProfiling.h"
+#include "Misc/ScopeExit.h"
+#include "UI/ACEVideoSettingsWidget.h"
+#include "Components/MultiLineEditableText.h"
+#include "ACEAppraisalFormatting.h"
+#include "ACEInputBindings.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "UI/ACECaptureImage.h"
+#include "ACERetailPaperDoll.h"
+#include "ACEInventoryRules.h"
+#include "ACECharacterOptions.h"
+#include "UI/ACEUICanvasWidget.h"
+#include "UI/ACEUIElementManager.h"
+#include "UI/ACEUIResourceResolver.h"
+#include "UI/ACERetailTextBlock.h"
+#include "UI/ACEUILayoutResolver.h"
+#include "UI/ACEUIElement.h"
+#include "UI/ACEUITypes.h"
+#include "ACEClientSubsystem.h"
+#include "ACEDatSubsystem.h"
+#include "ACEPlayerController.h"
+#include "VR/ACEVRComponent.h"
+#include "ACEWorldEntityActor.h"
+#include "ACECharacterAppearanceComponent.h"
+#include "ACECombatStance.h"
+#include "ACEOpcodes.h"
+#include "ACEMotionCommandNames.generated.h"
+#include "ACESession.h"
+#include "Components/Border.h"
+#include "Components/ProgressBar.h"
+#include "Components/Image.h"
+#include "Components/PointLightComponent.h"
+#include "Components/SceneCaptureComponent2D.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "Components/TextBlock.h"
+#include "Components/EditableTextBox.h"
+#include "Components/ScrollBox.h"
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
+#include "Components/CapsuleComponent.h"
+#include "Components/MeshComponent.h"
+#include "Components/TextRenderComponent.h"
+#include "Blueprint/WidgetTree.h"
+#include "Blueprint/WidgetLayoutLibrary.h"
+#include "Blueprint/SlateBlueprintLibrary.h"
+#include "Engine/Texture2D.h"
+#include "EngineUtils.h"
+#include "GameFramework/Pawn.h"
+#include "Styling/CoreStyle.h"
+#include "UI/ACEUIFontStyles.h"
+#include "Dat/ACEDatTextLayout.h"
+#include "Misc/App.h"
+#include "HAL/PlatformTime.h"
+#include "GameFramework/PlayerController.h"
+#include "Misc/Optional.h"
+#include "Algo/Sort.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Misc/ConfigCacheIni.h"
+#include "Misc/FileHelper.h"
+#include "HAL/FileManager.h"
+#include "Templates/TypeHash.h"
+
+#include "Protocol/ACECharacterTitleNames.inl"
+
+namespace
+{
+	struct FSpellbookRowTemplate
+	{
+		TSharedPtr<FACEUIElement> Root, Icon, Text, Selected;
+		FSpellbookRowTemplate()
+		{
+			// UI_ItemList_ItemSlotID in SpellBook_SpellList selects this retail template.
+			Root = UACEUILayoutResolver::LoadTemplate(0x21000037, 0x10000343);
+			if (Root) for (const auto& Child : Root->Children)
+			{
+				if (Child->ElementName == TEXT("ItemSlot_Icon")) Icon = Child;
+				if (Child->ElementName == TEXT("ItemSlot_Text")) Text = Child;
+				if (Child->ElementName == TEXT("ItemSlot_Icon_Selected")) Selected = Child;
+			}
+		}
+		int32 Height() const { return Root ? FMath::Max(1, Root->Height) : 32; }
+	};
+	const FSpellbookRowTemplate& SpellbookTemplate()
+	{
+		static const FSpellbookRowTemplate Value;
+		return Value;
+	}
+	const FLinearColor HealthColor(0.75f, 0.12f, 0.12f, 0.92f);
+	const FLinearColor StaminaColor(0.75f, 0.65f, 0.1f, 0.92f);
+	const FLinearColor ManaColor(0.15f, 0.35f, 0.85f, 0.92f);
+	const FLinearColor SlotEmptyColor(0.05f, 0.05f, 0.06f, 0.55f);
+	const FLinearColor TextGold(0.92f, 0.82f, 0.45f, 1.f);
+	const FLinearColor TextWhite(0.95f, 0.95f, 0.9f, 1.f);
+	const FLinearColor TextGreen(0.35f, 0.85f, 0.40f, 1.f);
+	const FLinearColor TextRed(0.90f, 0.22f, 0.18f, 1.f);
+	/**
+	 * Retail ClientCommunicationSystem::BuildChatColorLookupTable (acclient.c:287161)
+	 * float RGB constants (acclient.c:45151-45164), keyed by LogTextType.
+	 */
+	const FLinearColor ChatGreen(0.5f, 1.f, 0.498f, 1.f);          // default fill / World_Broadcast
+	const FLinearColor ChatWhite(1.f, 1.f, 1.f, 1.f);              // Speech (2)
+	const FLinearColor ChatGrey(0.824f, 0.824f, 0.784f, 1.f);      // Emote (12)
+	const FLinearColor ChatYellow(1.f, 1.f, 0.247f, 1.f);          // Tell (3) / Social (10) / Fellowship (19)
+	const FLinearColor ChatTan(0.824f, 0.824f, 0.392f, 1.f);       // Speech_Direct_Send (4) / Social_Send (11)
+	const FLinearColor ChatPink(1.f, 0.588f, 0.588f, 1.f);         // Channel (8) / Channel_Send (9)
+	const FLinearColor ChatOrange(0.933f, 0.573f, 0.118f, 1.f);    // Allegiance (18)
+	const FLinearColor ChatDarkRed(1.f, 0.247f, 0.247f, 1.f);      // Combat (6) / Combat_Enemy (21) / Help (15)
+	const FLinearColor ChatLightRed(0.96f, 0.459f, 0.447f, 1.f);   // Combat_Self (22)
+	const FLinearColor ChatLightBlue(0.247f, 0.749f, 1.f, 1.f);    // Magic (7) / Spellcasting (17)
+	const FLinearColor ChatCyan(0.247f, 0.863f, 0.863f, 1.f);      // Advancement (13)
+	const FLinearColor ChatBrightPurple(1.f, 0.498f, 1.f, 1.f);    // System (5)
+	/** Overlays must sit above DAT chrome (InOutZOrder routinely exceeds 500). */
+	constexpr int32 StatOverlayZ = 100000;
+	FLinearColor ColorForChatType(int32 ChatType)
+	{
+		switch (ChatType)
+		{
+		case ACEChatMessageType::Speech:
+			return ChatWhite;
+		case ACEChatMessageType::Tell:
+		case ACEChatMessageType::AdminTell:
+		case ACEChatMessageType::Social:
+		case ACEChatMessageType::Fellowship:
+			return ChatYellow;
+		case ACEChatMessageType::OutgoingTell:
+		case ACEChatMessageType::SocialSend:
+			return ChatTan;
+		case ACEChatMessageType::CombatSelf:
+			return ChatLightRed;
+		case ACEChatMessageType::CombatEnemy:
+		case ACEChatMessageType::Combat:
+		case ACEChatMessageType::Help:
+			return ChatDarkRed;
+		case ACEChatMessageType::Magic:
+		case ACEChatMessageType::Spellcasting:
+			return ChatLightBlue;
+		case ACEChatMessageType::Channel:
+		case ACEChatMessageType::ChannelSend:
+			return ChatPink;
+		case ACEChatMessageType::Allegiance:
+			return ChatOrange;
+		case ACEChatMessageType::Emote:
+			return ChatGrey;
+		case ACEChatMessageType::Advancement:
+			return ChatCyan;
+		case ACEChatMessageType::System:
+			return ChatBrightPurple;
+	case ACEChatMessageType::Abuse:
+		return FLinearColor(0.706f, 0.863f, 0.941f, 1.f); // retail colorBlueGrey
+	case ACEChatMessageType::General:
+	case ACEChatMessageType::Trade:
+	case ACEChatMessageType::LFG:
+	case ACEChatMessageType::Roleplay:
+	case ACEChatMessageType::Society:
+		return FLinearColor(0.55f, 0.62f, 0.70f, 1.f);    // retail global-chat blue-grey
+	case ACEChatMessageType::ChatError:
+			return FLinearColor(1.f, 0.f, 0.f, 1.f);          // retail colorBrightRed
+		default:
+			// Retail fills every LogTextType slot with green before overrides
+			// (Broadcast/World_Broadcast/Recall/Craft/Salvaging all stay green).
+			return ChatGreen;
+		}
+	}
+	FString FormatGenderHeritageTitle(const FACEPlayerVitals& V)
+	{
+		FString Gender;
+		if (V.Gender == 1) { Gender = TEXT("Male"); }
+		else if (V.Gender == 2) { Gender = TEXT("Female"); }
+		FString Heritage;
+		switch (V.HeritageGroup)
+		{
+		case 1: Heritage = TEXT("Aluvian"); break;
+		case 2: Heritage = TEXT("Gharu'ndim"); break;
+		case 3: Heritage = TEXT("Sho"); break;
+		case 4: Heritage = TEXT("Viamontian"); break;
+		case 5: Heritage = TEXT("Umbraen"); break;
+		case 6: Heritage = TEXT("Gearknight"); break;
+		case 7: Heritage = TEXT("Tumerok"); break;
+		case 8: Heritage = TEXT("Lugian"); break;
+		case 9: Heritage = TEXT("Empyrean"); break;
+		case 10: Heritage = TEXT("Penumbraen"); break;
+		case 11: Heritage = TEXT("Undead"); break;
+		case 12:
+		case 13: Heritage = TEXT("Olthoi"); break;
+		default: break;
+		}
+		FString Line;
+		if (!Gender.IsEmpty()) { Line = Gender; }
+		if (!Heritage.IsEmpty())
+		{
+			Line = Line.IsEmpty() ? Heritage : (Line + TEXT(" ") + Heritage);
+		}
+		if (!V.TemplateName.IsEmpty())
+		{
+			Line = Line.IsEmpty() ? V.TemplateName : (Line + TEXT(" ") + V.TemplateName);
+		}
+		return Line;
+	}
+	FString FormatPkStatus(int32 Status)
+	{
+		if ((Status & 0x04) != 0) { return TEXT("Player Killer"); }
+		if ((Status & 0x40) != 0) { return TEXT("Player Killer Lite"); }
+		if ((Status & 0x20) != 0) { return TEXT("Free"); }
+		return TEXT("Non-Player Killer");
+	}
+	FString FormatXpNumber(int64 Value)
+	{
+		return FText::AsNumber(Value).ToString();
+	}
+	/** Retail selected-item / stack label: "10,200 Pyreals" or "10637 Pyreals (of 10637)". */
+	FString FormatItemStackName(const FACEWorldObject& Obj, int32 AmountOverride = INDEX_NONE)
+	{
+		const int32 TotalRaw = Obj.StackSize > 0 ? Obj.StackSize : 1;
+		const int32 Total = (Obj.MaxStackSize > 0) ? FMath::Min(TotalRaw, Obj.MaxStackSize) : TotalRaw;
+		const bool bStackable = Obj.MaxStackSize > 1 || Obj.StackSize > 1;
+		if (!bStackable)
+		{
+			return Obj.Name;
+		}
+		const int32 Amt = (AmountOverride > 0) ? FMath::Clamp(AmountOverride, 1, Total) : Total;
+		if (Amt < Total)
+		{
+			return FString::Printf(TEXT("%s %s (of %s)"),
+				*FormatXpNumber(Amt), *Obj.Name, *FormatXpNumber(Total));
+		}
+		return FString::Printf(TEXT("%s %s"), *FormatXpNumber(Amt), *Obj.Name);
+	}
+	/** Retail MotionCommand.Pickup — play locally when looting (server also broadcasts). */
+	void PlayLocalPickupMotion(AACEPlayerController* PC)
+	{
+		if (!PC)
+		{
+			return;
+		}
+		if (APawn* Pawn = PC->GetPawn())
+		{
+			if (UACECharacterAppearanceComponent* App =
+				Pawn->FindComponentByClass<UACECharacterAppearanceComponent>())
+			{
+				App->PlayActionMotion(static_cast<int32>(0x40000018));
+			}
+		}
+	}
+
+	/** Fill the retail ordered item list, followed by the remaining empty grid cells. */
+	void BuildPackSlotGuids(const TArray<FACEWorldObject>& Items, int32 Capacity,
+		TArray<int32>& OutSlotGuids, TArray<FACEWorldObject>& OutSlotObjs)
+	{
+		// Retail IDList is dense; empty grid cells follow the last server item.
+		OutSlotGuids.Init(0, Capacity);
+		OutSlotObjs.SetNum(Capacity);
+		for (int32 I = 0; I < FMath::Min(Items.Num(), Capacity); ++I)
+		{
+			OutSlotGuids[I] = Items[I].Guid;
+			OutSlotObjs[I] = Items[I];
+		}
+	}
+	uint32 VendorSellCost(int32 Value, float SellRate)
+	{
+		return static_cast<uint32>(FMath::Max(1, FMath::CeilToInt(SellRate * static_cast<float>(FMath::Max(0, Value)) - 0.1f)));
+	}
+	int32 VendorBuyPayout(int32 Value, float BuyRate)
+	{
+		return FMath::Max(1, FMath::FloorToInt(BuyRate * static_cast<float>(FMath::Max(0, Value)) + 0.1f));
+	}
+	/** Retail ItemSlot_Generic empty cell / selected overlay (LayoutDesc 0x21000037). */
+	constexpr int32 DidInvSlotBg = 0x06004D20;
+	constexpr int32 DidInvSlotSelected = 0x06004D09;
+	/** ACE.Entity.Enum.UiEffects — tint inventory cell behind magical/elemental icons. */
+	namespace ACEUiEffects
+	{
+		constexpr uint32 Magical = 0x0001;
+		constexpr uint32 Poisoned = 0x0002;
+		constexpr uint32 BoostHealth = 0x0004;
+		constexpr uint32 BoostMana = 0x0008;
+		constexpr uint32 BoostStamina = 0x0010;
+		constexpr uint32 Fire = 0x0020;
+		constexpr uint32 Lightning = 0x0040;
+		constexpr uint32 Frost = 0x0080;
+		constexpr uint32 Acid = 0x0100;
+		constexpr uint32 Bludgeoning = 0x0200;
+		constexpr uint32 Slashing = 0x0400;
+		constexpr uint32 Piercing = 0x0800;
+		constexpr uint32 Nether = 0x1000;
+	}
+	bool TryUiEffectTint(uint32 Effects, FLinearColor& OutTint)
+	{
+		if (Effects == 0)
+		{
+			return false;
+		}
+		// Match retail priority: Magical blue is the common loot glow.
+		if (Effects & ACEUiEffects::Magical)
+		{
+			OutTint = FLinearColor(0.20f, 0.55f, 1.0f, 1.f);
+			return true;
+		}
+		if (Effects & ACEUiEffects::Fire)
+		{
+			OutTint = FLinearColor(1.0f, 0.35f, 0.10f, 1.f);
+			return true;
+		}
+		if (Effects & ACEUiEffects::Frost)
+		{
+			OutTint = FLinearColor(0.45f, 0.85f, 1.0f, 1.f);
+			return true;
+		}
+		if (Effects & ACEUiEffects::Lightning)
+		{
+			OutTint = FLinearColor(0.70f, 0.40f, 1.0f, 1.f);
+			return true;
+		}
+		if (Effects & ACEUiEffects::Acid)
+		{
+			OutTint = FLinearColor(0.35f, 0.90f, 0.25f, 1.f);
+			return true;
+		}
+		if (Effects & ACEUiEffects::Nether)
+		{
+			OutTint = FLinearColor(0.45f, 0.15f, 0.55f, 1.f);
+			return true;
+		}
+		if (Effects & ACEUiEffects::Poisoned)
+		{
+			OutTint = FLinearColor(0.25f, 0.75f, 0.20f, 1.f);
+			return true;
+		}
+		if (Effects & ACEUiEffects::BoostHealth)
+		{
+			OutTint = FLinearColor(0.95f, 0.20f, 0.20f, 1.f);
+			return true;
+		}
+		if (Effects & ACEUiEffects::BoostStamina)
+		{
+			OutTint = FLinearColor(0.95f, 0.80f, 0.15f, 1.f);
+			return true;
+		}
+		if (Effects & ACEUiEffects::BoostMana)
+		{
+			OutTint = FLinearColor(0.25f, 0.45f, 0.95f, 1.f);
+			return true;
+		}
+		if (Effects & (ACEUiEffects::Bludgeoning | ACEUiEffects::Slashing | ACEUiEffects::Piercing))
+		{
+			OutTint = FLinearColor(0.85f, 0.85f, 0.85f, 1.f);
+			return true;
+		}
+		return false;
+	}
+	/** SmallRoundCheckBox: off / pressed (light green) / selected (full green).
+	 *  0x06004D17 is a large fill atlas tile — do not use it as the checkbox glyph. */
+	constexpr int32 DidCheckboxOff = 0x06004D15;
+	constexpr int32 DidCheckboxPressed = 0x06004D16;
+	constexpr int32 DidCheckboxOn = 0x06004D18;
+	constexpr int32 DidCombatBtn = 0x06004D1C;
+	constexpr int32 DidEmptyPackSlot = 0x06000F6E; // ItemSlot_Container, not toolbar backpack art.
+	constexpr int32 DidAttrIconStrength = 0x060002C8;
+	constexpr int32 DidAttrIconEndurance = 0x060002C4;
+	constexpr int32 DidAttrIconQuickness = 0x060002C6;
+	constexpr int32 DidAttrIconCoordination = 0x060002C9;
+	constexpr int32 DidAttrIconFocus = 0x060002C5;
+	constexpr int32 DidAttrIconSelf = 0x060002C7;
+	constexpr int32 DidAttrIconHealth = 0x06004C3B;
+	constexpr int32 DidAttrIconStamina = 0x06004C3C;
+	constexpr int32 DidAttrIconMana = 0x06004C3D;
+	constexpr int32 DidListInfoBg = 0x06000F93;
+	constexpr int32 DidSkillHeaderSpec = 0x06000F90;
+	constexpr int32 DidSkillHeaderTrain = 0x06000F86;
+	constexpr int32 DidSkillHeaderUntrain = 0x06000F98;
+	/** Raise triangles: lit (available) vs dark (unavailable). */
+	constexpr uint32 DidRaise1Lit = 0x06004CB6;
+	constexpr uint32 DidRaise1Dark = 0x06004CB7;
+	constexpr uint32 DidRaise10Lit = 0x0600712B;
+	constexpr uint32 DidRaise10Dark = 0x0600712C;
+
+	struct FDollSlotMap
+	{
+		const TCHAR* Name;
+		int64 Mask;
+		/** Retail ItemSlot_Equip_* empty silhouette (LayoutDesc 0x21000037). */
+		int32 EmptyIconDid;
+	};
+
+	/**
+	 * Doll slot → preferred EquipMask for GetAndWield.
+	 * Mag-nus gmPaperDollUI::GetLocationInfoFromElementID uses single bits for pants
+	 * (UpperLegWear=0x40) and shirt (ChestWear=0x2). Display matching still uses
+	 * ItemMatchesDollSlot for multi-bit CurrentWieldedLocation.
+	 */
+	const FDollSlotMap GDollSlots[] = {
+		{ TEXT("Inv_HeadSlot"), ACEEquipMask::HeadWear, 0x06006D7F },
+		{ TEXT("Inv_ChestSlot"), ACEEquipMask::ChestArmor, 0x06006D7B },
+		{ TEXT("Inv_AbdomenSlot"), ACEEquipMask::AbdomenArmor, 0x06006D79 },
+		{ TEXT("Inv_UpperArmSlot"), ACEEquipMask::UpperArmArmor, 0x06006D87 },
+		{ TEXT("Inv_LowerArmSlot"), ACEEquipMask::LowerArmArmor, 0x06006D81 },
+		{ TEXT("Inv_HandSlot"), ACEEquipMask::HandWear, 0x06006D7D },
+		{ TEXT("Inv_UpperLegSlot"), ACEEquipMask::UpperLegArmor, 0x06006D89 },
+		{ TEXT("Inv_LowerLegSlot"), ACEEquipMask::LowerLegArmor, 0x06006D83 },
+		// Mag-nus pants element → UpperLegWear only (0x40).
+		{ TEXT("Inv_ClothesPantsSlot"), ACEEquipMask::UpperLegWear, 0x060032C4 },
+		{ TEXT("Inv_FootSlot"), ACEEquipMask::FootWear, 0x06006D85 },
+		{ TEXT("Inv_NeckSlot"), ACEEquipMask::NeckWear, 0x06000F68 },
+		{ TEXT("Inv_LeftWristSlot"), ACEEquipMask::WristWearLeft, 0x06000F5D },
+		{ TEXT("Inv_RightWristSlot"), ACEEquipMask::WristWearRight, 0x06000F6A },
+		{ TEXT("Inv_LeftRingSlot"), ACEEquipMask::FingerWearLeft, 0x06000F5A },
+		{ TEXT("Inv_RightRingSlot"), ACEEquipMask::FingerWearRight, 0x06000F6B },
+		{ TEXT("Inv_WeaponReadySlot"), ACEEquipMask::MeleeWeapon | ACEEquipMask::TwoHanded
+			| ACEEquipMask::Held | ACEEquipMask::MissileWeapon, 0x06000F66 },
+		{ TEXT("Inv_ShieldReadySlot"), ACEEquipMask::Shield, 0x06000F6C },
+		{ TEXT("Inv_AmmoReadySlot"), ACEEquipMask::MissileAmmo, 0x06000F5E },
+		// Mag-nus shirt element → ChestWear only (0x2).
+		{ TEXT("Inv_ClothesShirtSlot"), ACEEquipMask::ChestWear, 0x060032C5 },
+		{ TEXT("Inv_TrinketOneSlot"), ACEEquipMask::TrinketOne, 0x06006A6C },
+		{ TEXT("Inv_CloakSlot"), ACEEquipMask::Cloak, 0x0600708F },
+		{ TEXT("Inv_SigilOneSlot"), ACEEquipMask::SigilOne, 0x06006BEF },
+		{ TEXT("Inv_SigilTwoSlot"), ACEEquipMask::SigilTwo, 0x06006BF0 },
+		{ TEXT("Inv_SigilThreeSlot"), ACEEquipMask::SigilThree, 0x06006BF1 },
+	};
+
+	/** Main-body armor only — Show Equipment toggles these; jewelry/clothes/weapons stay. */
+	bool IsMainBodyDollSlot(const TCHAR* SlotName)
+	{
+		return FCString::Strcmp(SlotName, TEXT("Inv_HeadSlot")) == 0
+			|| FCString::Strcmp(SlotName, TEXT("Inv_ChestSlot")) == 0
+			|| FCString::Strcmp(SlotName, TEXT("Inv_AbdomenSlot")) == 0
+			|| FCString::Strcmp(SlotName, TEXT("Inv_UpperArmSlot")) == 0
+			|| FCString::Strcmp(SlotName, TEXT("Inv_LowerArmSlot")) == 0
+			|| FCString::Strcmp(SlotName, TEXT("Inv_HandSlot")) == 0
+			|| FCString::Strcmp(SlotName, TEXT("Inv_UpperLegSlot")) == 0
+			|| FCString::Strcmp(SlotName, TEXT("Inv_LowerLegSlot")) == 0
+			|| FCString::Strcmp(SlotName, TEXT("Inv_FootSlot")) == 0;
+	}
+
+	/** Match equipped items to doll silhouettes (display). */
+	bool ItemMatchesDollSlot(const FACEWorldObject& Obj, int64 SlotMask)
+	{
+		const int64 Loc = Obj.CurrentWieldedLocation;
+		if (Loc == 0)
+		{
+			return false;
+		}
+		constexpr int64 ClothesLegs = ACEEquipMask::UpperLegWear | ACEEquipMask::LowerLegWear;
+		constexpr int64 Foot = ACEEquipMask::FootWear;
+		constexpr int64 ShirtCore = ACEEquipMask::ChestWear
+			| ACEEquipMask::UpperArmWear | ACEEquipMask::LowerArmWear;
+		constexpr int64 ArmorBits = ACEEquipMask::ChestArmor | ACEEquipMask::AbdomenArmor
+			| ACEEquipMask::UpperArmArmor | ACEEquipMask::LowerArmArmor
+			| ACEEquipMask::UpperLegArmor | ACEEquipMask::LowerLegArmor;
+
+		// Pants preferred bit is UpperLegWear — also accept LowerLegWear-only trousers.
+		if (SlotMask == ACEEquipMask::UpperLegWear)
+		{
+			return (Loc & ClothesLegs) != 0 && (Loc & Foot) == 0 && (Loc & ArmorBits) == 0;
+		}
+		// Shirt preferred bit is ChestWear — require shirt-core coverage, never armor/pants.
+		if (SlotMask == ACEEquipMask::ChestWear)
+		{
+			if ((Loc & ArmorBits) != 0) { return false; }
+			if ((Loc & ClothesLegs) != 0 && (Loc & Foot) == 0) { return false; }
+			return (Loc & ShirtCore) != 0;
+		}
+		if ((Loc & SlotMask) == 0)
+		{
+			return false;
+		}
+		if (SlotMask == Foot && (Loc & ClothesLegs) != 0 && (Loc & Foot) == 0)
+		{
+			return false;
+		}
+		return true;
+	}
+
+	FSlateBrush MakeSolidBrush(const FLinearColor& Color)
+	{
+		FSlateBrush Brush;
+		Brush.DrawAs = ESlateBrushDrawType::Box;
+		Brush.TintColor = FSlateColor(Color);
+		Brush.Margin = FMargin(0.f);
+		return Brush;
+	}
+
+	FSlateBrush MakeRoundBlipBrush(const FLinearColor& Color)
+	{
+		FSlateBrush Brush;
+		Brush.DrawAs = ESlateBrushDrawType::RoundedBox;
+		Brush.TintColor = FSlateColor(Color);
+		Brush.OutlineSettings.CornerRadii = FVector4(4.f, 4.f, 4.f, 4.f);
+		Brush.OutlineSettings.RoundingType = ESlateBrushRoundingType::FixedRadius;
+		return Brush;
+	}
+}
+
+void UACEUIGameplayBinder::Initialize(UACEClientSubsystem* InClient, UACEUIElementManager* InManager,
+	UACEUICanvasWidget* InCanvas, AACEPlayerController* InPC)
+{
+	Shutdown();
+	Client = InClient;
+	Manager = InManager;
+	Canvas = InCanvas;
+	PlayerController = InPC;
+	CombatMode = static_cast<int32>(ACECombatMode::NonCombat);
+	ActivePanelPage.Reset();
+	SelectedPackGuid = 0;
+	InventoryScrollOffset = 0;
+
+	if (Manager)
+	{
+		ActivatedHandle = Manager->OnElementActivated.AddUObject(this, &UACEUIGameplayBinder::OnElementActivated);
+	}
+	if (Client)
+	{
+		Client->OnChatMessage.AddDynamic(this, &UACEUIGameplayBinder::HandleChatMessage);
+		Client->OnAppraisal.AddDynamic(this, &UACEUIGameplayBinder::HandleAppraisal);
+		Client->OnSelectionChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleSelectionChanged);
+		Client->OnVitalsUpdated.AddDynamic(this, &UACEUIGameplayBinder::HandleVitalsUpdated);
+		Client->OnExternalContainerOpened.AddDynamic(this, &UACEUIGameplayBinder::HandleExternalContainerOpened);
+		Client->OnExternalContainerClosed.AddDynamic(this, &UACEUIGameplayBinder::HandleExternalContainerClosed);
+		Client->OnVendorOpened.AddDynamic(this, &UACEUIGameplayBinder::HandleVendorOpened);
+		Client->OnTradeStateChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleTradeStateChanged);
+		Client->OnChessEvent.AddDynamic(this, &UACEUIGameplayBinder::HandleChessEvent);
+		Client->OnCharacterTitlesChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleCharacterTitlesChanged);
+		Client->OnFellowshipChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleFellowshipChanged);
+		Client->OnAllegianceChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleAllegianceChanged);
+		Client->OnFriendsChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleFriendsChanged);
+		Client->OnContractsChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleContractsChanged);
+		Client->OnEnchantmentsChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleEnchantmentsChanged);
+		Client->OnLinkStatusChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleLinkStatusChanged);
+		Client->OnBookChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleBookChanged);
+		LastVitals = Client->GetPlayerVitals();
+		LastLinkStatus = Client->GetLinkStatus();
+		LastSelection = Client->GetSelectedObject();
+		SelectedPackGuid = Client->GetPlayerGuid();
+		if (LastVitals.bValid && LastVitals.CombatMode != 0)
+		{
+			CombatMode = LastVitals.CombatMode;
+		}
+	}
+	LoadVitalDisplayPreference();
+	bBound = true;
+	SanitizeFloatyPanelChrome();
+	if (Manager)
+	{
+		Manager->SetElementVisibleByName(TEXT("RootGameplay_Keyboard_Field"), false);
+		Manager->SetElementVisibleByName(TEXT("RootKeyboard_Field"), false);
+	}
+	ApplyPreferredStance(CombatMode);
+	SyncCombatModeButtons();
+	SyncSpellcastTabChrome();
+	SyncInventoryButtonVisual();
+	RefreshStatusIndicators();
+	EnsureOverlays();
+	RefreshStatusIndicators();
+}
+
+void UACEUIGameplayBinder::Shutdown()
+{
+	SelectionFlashUntil=0;
+	TickSelectionFlash();
+	ACEInputBindings::Cancel();
+	for (UWidget* Row:KeyboardRows) if (Row) Row->RemoveFromParent();
+	for (UTextBlock* Label:KeyboardLabels) if (Label) Label->RemoveFromParent();
+	KeyboardRows.Reset(); KeyboardLabels.Reset();
+	if (VideoSettings) VideoSettings->RemoveFromParent();
+	VideoSettings=nullptr;
+	CancelInventoryDrag();
+	CancelSpellDrag();
+	ReleasePaperDollPreview();
+	ReleaseExamPaperDollPreview();
+	if (ExamCreatureDetailsScroll) ExamCreatureDetailsScroll->RemoveFromParent();
+	ExamCreatureDetailsScroll = nullptr; ExamCreatureDetailsCanvas = nullptr; ExamCreatureDetailsSize = nullptr;
+	ExamMiscLabels.Reset(); ExamMiscValues.Reset(); ExamMiscRows.Reset(); ExamCreatureScrolledGuid = 0;
+	for (UTextBlock* Text : ExamAttributeLabels) if (Text) Text->RemoveFromParent();
+	for (UTextBlock* Text : ExamAttributeValues) if (Text) Text->RemoveFromParent();
+	if (ExamLevel) ExamLevel->RemoveFromParent();
+	for (UTextBlock* Text : ExamCreatureHeadings) if (Text) Text->RemoveFromParent();
+	ExamCreatureHeadings.Reset();
+	for (const auto& Row : ExamAttributeRows)
+		if (const auto Parent = Row->Parent.Pin()) Parent->Children.Remove(Row);
+	ExamAttributeLabels.Reset(); ExamAttributeValues.Reset(); ExamAttributeRows.Reset(); ExamLevel = nullptr;
+	if (Manager && ActivatedHandle.IsValid())
+	{
+		Manager->OnElementActivated.Remove(ActivatedHandle);
+		ActivatedHandle.Reset();
+	}
+	if (Client && bBound)
+	{
+		Client->OnChatMessage.RemoveDynamic(this, &UACEUIGameplayBinder::HandleChatMessage);
+		Client->OnAppraisal.RemoveDynamic(this, &UACEUIGameplayBinder::HandleAppraisal);
+		Client->OnSelectionChanged.RemoveDynamic(this, &UACEUIGameplayBinder::HandleSelectionChanged);
+		Client->OnVitalsUpdated.RemoveDynamic(this, &UACEUIGameplayBinder::HandleVitalsUpdated);
+		Client->OnExternalContainerOpened.RemoveDynamic(this, &UACEUIGameplayBinder::HandleExternalContainerOpened);
+		Client->OnExternalContainerClosed.RemoveDynamic(this, &UACEUIGameplayBinder::HandleExternalContainerClosed);
+		Client->OnVendorOpened.RemoveDynamic(this, &UACEUIGameplayBinder::HandleVendorOpened);
+		Client->OnTradeStateChanged.RemoveDynamic(this, &UACEUIGameplayBinder::HandleTradeStateChanged);
+		Client->OnChessEvent.RemoveDynamic(this, &UACEUIGameplayBinder::HandleChessEvent);
+		Client->OnCharacterTitlesChanged.RemoveDynamic(this, &UACEUIGameplayBinder::HandleCharacterTitlesChanged);
+		Client->OnFellowshipChanged.RemoveDynamic(this, &UACEUIGameplayBinder::HandleFellowshipChanged);
+		Client->OnAllegianceChanged.RemoveDynamic(this, &UACEUIGameplayBinder::HandleAllegianceChanged);
+		Client->OnFriendsChanged.RemoveDynamic(this, &UACEUIGameplayBinder::HandleFriendsChanged);
+		Client->OnContractsChanged.RemoveDynamic(this, &UACEUIGameplayBinder::HandleContractsChanged);
+		Client->OnEnchantmentsChanged.RemoveDynamic(this, &UACEUIGameplayBinder::HandleEnchantmentsChanged);
+		Client->OnLinkStatusChanged.RemoveDynamic(this, &UACEUIGameplayBinder::HandleLinkStatusChanged);
+		Client->OnBookChanged.RemoveDynamic(this, &UACEUIGameplayBinder::HandleBookChanged);
+	}
+	bBound = false;
+	Client = nullptr;
+	Manager = nullptr;
+	Canvas = nullptr;
+	PlayerController = nullptr;
+	HideSelectionMarkers();
+	SelectionMarkerBox = nullptr;
+	SelectionMarkerCorners.Reset();
+}
+
+void UACEUIGameplayBinder::TickSelectionFlash()
+{
+	bool bCaptureDoll = false;
+	const float Amount = FMath::Clamp(float((SelectionFlashUntil - FPlatformTime::Seconds()) / .4), 0.f, 1.f);
+	for (int32 I = 0; I < FlashMeshes.Num(); ++I)
+		if (auto* Mesh = FlashMeshes[I].Get(); Mesh && Mesh->GetMaterial(FlashMaterialSlots[I]) == FlashMaterials[I])
+		{
+			bCaptureDoll |= Mesh->GetOwner() == PaperDollPreviewActor;
+			if (Amount <= 0) Mesh->SetMaterial(FlashMaterialSlots[I], FlashOriginalMaterials[I]);
+			else
+			{
+				float Base = 1;
+				FlashOriginalMaterials[I]->GetScalarParameterValue(TEXT("EmissiveStrength"), Base);
+				FlashMaterials[I]->SetScalarParameterValue(TEXT("EmissiveStrength"), Mesh->GetOwner() == PaperDollPreviewActor ? (Amount > .5f ? Base + 1.f : Base * .6f) : Base + Amount);
+			}
+		}
+	if (bCaptureDoll && PaperDollCapture && !bShowPaperdollSlots) PaperDollCapture->CaptureScene();
+	if (Amount <= 0)
+	{
+		FlashMeshes.Reset(); FlashMaterialSlots.Reset(); FlashOriginalMaterials.Reset(); FlashMaterials.Reset();
+	}
+}
+
+void UACEUIGameplayBinder::SetRetailTooltip(UWidget* Widget, const FText& Text)
+{
+	if (!Widget || !Canvas || !Canvas->WidgetTree) return;
+	if (Widget->GetToolTipText().EqualTo(Text) && Widget->GetToolTip()) return;
+	Widget->SetToolTipText(Text);
+	if (Text.IsEmpty()) { Widget->SetToolTip(nullptr); return; }
+	auto* Frame = Cast<UBorder>(Widget->GetToolTip());
+	if (!Frame)
+	{
+		Frame = Canvas->WidgetTree->ConstructWidget<UBorder>();
+		Frame->SetBrushColor(FLinearColor(.48f, .36f, .13f, 1)); Frame->SetPadding(FMargin(1));
+		auto* Body = Canvas->WidgetTree->ConstructWidget<UBorder>();
+		Body->SetBrushColor(FLinearColor(.025f, .025f, .025f, .98f)); Body->SetPadding(FMargin(5, 3));
+		auto* Label = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		Label->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 10));
+		Label->SetColorAndOpacity(FLinearColor(.94f, .9f, .74f, 1));
+		Body->SetContent(Label); Frame->SetContent(Body); Widget->SetToolTip(Frame);
+	}
+	if (auto* Body = Cast<UBorder>(Frame->GetContent()))
+		if (auto* Label = Cast<UTextBlock>(Body->GetContent())) Label->SetText(Text);
+}
+
+void UACEUIGameplayBinder::TickRefresh()
+{
+	ACE_PROFILE_SCOPE(HUD);
+	if (!bBound || !Canvas || !Manager)
+	{
+		return;
+	}
+	EnsureOverlays();
+	// "Stay in chat mode after sending" — refocus after the commit's focus clear.
+	Manager->BeginNameLookupPass();
+	ON_SCOPE_EXIT { if (Manager) Manager->EndNameLookupPass(); };
+	if (bPendingChatRefocus)
+	{
+		bPendingChatRefocus = false;
+		FocusChatEntryWindow(PendingChatRefocusWindow);
+	}
+	// Keep drag ghosts tracking the cursor even when MouseMove is sparse under capture.
+	if ((bInvDragPending || bSpellDragPending) && FSlateApplication::IsInitialized()
+		&& !(PlayerController && PlayerController->IsVRActive()))
+	{
+		const FVector2D Local = Canvas->GetCachedGeometry().AbsoluteToLocal(
+			FSlateApplication::Get().GetCursorPos());
+		if (bInvDragPending)
+		{
+			UpdateInventoryDrag(Local);
+		}
+		if (bSpellDragPending)
+		{
+			UpdateSpellDrag(Local);
+		}
+	}
+	TickTransientInfo();
+	TickSelectionFlash();
+	RefreshVitalsOverlays();
+	RefreshRadarOverlays();
+	RefreshSelectionOverlay();
+	RefreshExaminationOverlay();
+	RefreshInventoryOverlays();
+	RefreshPanelBodyText();
+	RefreshAttributeOverlays();
+	RefreshSkillOverlays();
+	RefreshTitleOverlays();
+	RefreshSpellHotbarOverlays();
+	RefreshSpellbookOverlays();
+	RefreshSpellbookChromeLabels();
+	RefreshExternalContainerOverlays();
+	RefreshVendorOverlays();
+	RefreshTradeOverlays();
+	RefreshManaStoneConfirmation();
+	RefreshServerConfirmation();
+	RefreshSalvageOverlays();
+	RefreshSocialOverlays();
+	RefreshQuestOverlays();
+	RefreshOptionsOverlays();
+	RefreshKeyboardOverlays();
+	RefreshComponentOverlays();
+	RefreshWorldOverlays();
+	RefreshAbuseOverlays();
+	RefreshUrgentOverlays();
+	RefreshBookOverlays();
+	RefreshMiniGameOverlays();
+	RefreshChatChromeOverlays();
+	RefreshShortcutOverlays();
+	RefreshSkillTabLabels();
+	RefreshPanelTitleOverlay();
+	RefreshCombatPanelOverlays();
+	RefreshEffectsOverlays(true);
+	RefreshEffectsOverlays(false);
+	RefreshVitaePanelOverlays();
+	RefreshLinkStatusPanelOverlays();
+	TickStatusPanels(FApp::GetDeltaTime());
+	TickCombatAutoAttack(FApp::GetDeltaTime());
+	TickEnvPanelRangeChecks();
+	if (PendingLootCloseGuid != 0 && FPlatformTime::Seconds() >= PendingLootCloseAt)
+	{
+		if (OpenLootContainerGuid == PendingLootCloseGuid)
+		{
+			// Spurious CloseGroundContainer while still in interact range — keep panel.
+			if (IsBeyondContainerUseRadius(PendingLootCloseGuid))
+			{
+				HideExternalContainer(false);
+			}
+		}
+		PendingLootCloseGuid = 0;
+		PendingLootCloseAt = 0.0;
+	}
+	{
+		const int32 EquipMode = ResolveEquippedCombatMode();
+		// Never force EquipMode over an explicit Melee/Missile/Magic choice every tick —
+		// that spam-fights ChangeCombatMode and flashes peace until a cast recovers
+		// LastCombatMode on the server. Only drop to NonCombat when gear no longer
+		// supports the active mode (sheathed wand / no bow).
+		if (LastEquipModeSnapshot == INDEX_NONE)
+		{
+			LastEquipModeSnapshot = EquipMode;
+		}
+		else if (EquipMode != LastEquipModeSnapshot)
+		{
+			LastEquipModeSnapshot = EquipMode;
+			if (CombatMode == static_cast<int32>(ACECombatMode::Magic) && !HasEquippedCaster())
+			{
+				ApplyCombatMode(static_cast<int32>(ACECombatMode::NonCombat));
+			}
+			else if (CombatMode == static_cast<int32>(ACECombatMode::Missile) && !HasEquippedMissileWeapon())
+			{
+				ApplyCombatMode(static_cast<int32>(ACECombatMode::NonCombat));
+			}
+			else
+			{
+				ApplyPreferredStance(CombatMode);
+				SyncCombatModeButtons();
+			}
+		}
+		else
+		{
+			const int32 StanceKey = (CombatMode << 8) | EquipMode;
+			if (StanceKey != LastAppliedStanceKey)
+			{
+				LastAppliedStanceKey = StanceKey;
+				ApplyPreferredStance(CombatMode);
+				SyncCombatModeButtons();
+			}
+		}
+		if (PendingCombatMode != 0 && FPlatformTime::Seconds() >= PendingCombatModeUntil)
+		{
+			PendingCombatMode = 0;
+		}
+	}
+	SyncInventoryButtonVisual();
+	if (bChatStickToBottom && ChatLog)
+	{
+		ChatLog->ForceLayoutPrepass();
+		const float EndOff = ChatLog->GetScrollOffsetOfEnd();
+		// Wrapped lines grow after the first layout pass — keep snapping while stick
+		// is on and the end offset is still moving (or a message just armed pending).
+		if (bPendingChatScrollToEnd || EndOff > ChatStickEndOffset + 0.5f
+			|| ChatLog->GetScrollOffset() < EndOff - 2.f)
+		{
+			ChatLog->SetScrollOffset(EndOff);
+			ChatStickEndOffset = EndOff;
+		}
+		bPendingChatScrollToEnd = false;
+	}
+	else
+	{
+		ChatStickEndOffset = -1.f;
+	}
+	SyncChatScrollbar();
+	SyncChatJumpIndicator();
+	SyncInventoryScrollbars();
+	if (ActivePanelPage == TEXT("SkillManagementPanel_Field"))
+	{
+		ReflowSkillManagementPanelGeometry();
+		SyncStatListScrollbar();
+	}
+	if (ActivePanelPage == TEXT("SpellManagementPanel_Field")
+		&& ActiveSpellPanelTab == TEXT("SpellbookPage"))
+	{
+		ReflowSpellbookPanelGeometry();
+		SyncSpellbookScrollbar();
+	}
+}
+
+void UACEUIGameplayBinder::OnElementActivated(TSharedPtr<FACEUIElement> Element)
+{
+	if (bTradeOpen && Element && (Element->ElementName == TEXT("ScrollBar_Left") || Element->ElementName == TEXT("ScrollBar_Right")))
+	{
+		for (auto Parent=Element->Parent.Pin(); Parent; Parent=Parent->Parent.Pin())
+		{
+			int32* Offset = Parent->ElementName == TEXT("TradeSelf_ItemListScroll") ? &TradeSelfOffset
+				: Parent->ElementName == TEXT("TradeOther_ItemListScroll") ? &TradeOtherOffset : nullptr;
+			if (Offset)
+			{
+				*Offset += Element->ElementName == TEXT("ScrollBar_Left") ? -1 : 1;
+				RefreshTradeOverlays();
+				return;
+			}
+		}
+	}
+	// DAT chat scrollbar buttons (also appear under examine / floating chats).
+	for (TSharedPtr<FACEUIElement> Cur = Element; Cur.IsValid(); Cur = Cur->Parent.Pin())
+	{
+		if (Cur->ElementName != TEXT("ScrollBar_Up") && Cur->ElementName != TEXT("ScrollBar_Down"))
+		{
+			continue;
+		}
+		const int32 Dir = (Cur->ElementName == TEXT("ScrollBar_Up")) ? -1 : 1;
+		bool bMainChat = false;
+		bool bInvItems = false;
+		bool bInvPacks = false;
+		int32 FloatyChatIdx = 0;
+		for (TSharedPtr<FACEUIElement> A = Cur; A.IsValid(); A = A->Parent.Pin())
+		{
+			if (A->ElementName == TEXT("BookPanel_Field") && BookScroll)
+			{
+				BookScroll->SetScrollOffset(FMath::Clamp(BookScroll->GetScrollOffset()+Dir*28.f,0.f,BookScroll->GetScrollOffsetOfEnd()));
+				RefreshBookOverlays(); return;
+			}
+			if (A->ElementName == TEXT("ItemDisplayTextScrollbar") && ExamScroll)
+			{
+				ExamScroll->SetScrollOffset(FMath::Clamp(ExamScroll->GetScrollOffset() + Dir * 28.f,
+					0.f, ExamScroll->GetScrollOffsetOfEnd()));
+				return;
+			}
+
+			if (A->ElementName == TEXT("RootGameplay_FloatyMainChat_Field"))
+			{
+				bMainChat = true;
+				break;
+			}
+			for (int32 W = 1; W <= NumFloatyChats; ++W)
+			{
+				if (A->ElementName == FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"), W))
+				{
+					FloatyChatIdx = W;
+					break;
+				}
+			}
+			if (FloatyChatIdx > 0)
+			{
+				break;
+			}
+			if (A->ElementName == TEXT("Inv_3DItemList_Scrollbar")
+				|| A->ElementName == TEXT("ThreeDItemsField"))
+			{
+				bInvItems = true;
+				break;
+			}
+			if (A->ElementName == TEXT("Inv_ContainerList_Scrollbar")
+				|| A->ElementName == TEXT("BackpackField"))
+			{
+				bInvPacks = true;
+				break;
+			}
+			if (A->ElementName == TEXT("StatManagement_List_Scrollbar")
+				|| A->ElementName == TEXT("StatManagement_List"))
+			{
+				if (ActivePanelPage == TEXT("SkillManagementPanel_Field")
+					&& ActiveSkillTab == TEXT("SkillPage"))
+				{
+					SkillListScrollOffset = FMath::Max(0, SkillListScrollOffset + Dir);
+					RefreshSkillOverlays();
+					SyncStatListScrollbar();
+					return;
+				}
+			}
+			if (A->ElementName == TEXT("SpellBook_SpellList_Scrollbar")
+				|| A->ElementName == TEXT("SpellBook_SpellList")
+				|| A->ElementName == TEXT("SpellbookPage"))
+			{
+				if (ActivePanelPage == TEXT("SpellManagementPanel_Field")
+					&& ActiveSpellPanelTab == TEXT("SpellbookPage"))
+				{
+					SpellbookScrollOffset = FMath::Max(0, SpellbookScrollOffset + Dir);
+					RefreshSpellbookOverlays();
+					SyncSpellbookScrollbar();
+					return;
+				}
+			}
+			if (A->ElementName == TEXT("SpellScroll") || A->ElementName == TEXT("Spellcasting"))
+			{
+				const int32 ActiveBar = Client ? Client->GetActiveSpellBar() : 0;
+				const TArray<int32> Bar = Client ? Client->GetSpellBar(ActiveBar) : TArray<int32>();
+				int32 Filled = 0;
+				for (int32 i = 0; i < Bar.Num(); ++i)
+				{
+					if (Bar[i] == 0) { break; }
+					++Filled;
+				}
+				constexpr int32 Visible = 13;
+                // Scrolling changes the viewport, never the selected spell.
+                const int32 MaxOff = FMath::Max(0, Filled + 1 - Visible);
+                SpellHotbarScrollOffset = FMath::Clamp(SpellHotbarScrollOffset + Dir, 0, MaxOff);
+				RefreshSpellHotbarOverlays();
+				return;
+			}
+		}
+        if (bMainChat || FloatyChatIdx>0)
+        {
+            ScrollChatLog(Dir*28.f,FloatyChatIdx);
+            return;
+        }
+		if (bInvItems && ActivePanelPage == TEXT("InventoryPanel_Field"))
+		{
+			TSharedPtr<FACEUIElement> GridEl = Manager
+				? Manager->FindElementUnder(TEXT("InventoryPanel_Field"), TEXT("Inv_3DItemList"))
+				: nullptr;
+			const int32 Cols = GridEl.IsValid() ? FMath::Max(1, GridEl->Width / 32) : 6;
+			const int32 Rows = GridEl.IsValid() ? FMath::Max(1, GridEl->Height / 32) : 3;
+			const int32 PageSize = Cols * Rows;
+			FACEWorldObject PackObj;
+			int32 Capacity = PageSize;
+			if (Client && Client->GetWorldObject(SelectedPackGuid, PackObj) && PackObj.ItemsCapacity > 0)
+			{
+				Capacity = PackObj.ItemsCapacity;
+			}
+			const int32 MaxOff = FMath::Max(0, Capacity - PageSize);
+			InventoryScrollOffset = FMath::Clamp(InventoryScrollOffset + Dir * Cols, 0, MaxOff);
+			SyncInventoryScrollbars();
+			RefreshInventoryOverlays();
+			return;
+		}
+		if (bInvPacks && ActivePanelPage == TEXT("InventoryPanel_Field"))
+		{
+			PackScrollOffset = FMath::Max(0, PackScrollOffset + Dir);
+			SyncInventoryScrollbars();
+			RefreshInventoryOverlays();
+			return;
+		}
+		break;
+	}
+
+	// FloatyChat1-4 children share names with MainChat (SendButton / ChatPanelTextEntry /
+	// CloseChatWindowButton) — resolve the owning window by ancestor root first.
+	{
+		int32 ChatWindow = 0;
+		for (TSharedPtr<FACEUIElement> A = Element; A.IsValid() && ChatWindow == 0; A = A->Parent.Pin())
+		{
+			for (int32 W = 1; W <= NumFloatyChats; ++W)
+			{
+				if (A->ElementName == FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"), W))
+				{
+					ChatWindow = W;
+					break;
+				}
+			}
+		}
+		if (ChatWindow > 0)
+		{
+			for (TSharedPtr<FACEUIElement> Cur = Element; Cur.IsValid(); Cur = Cur->Parent.Pin())
+			{
+				const FString& N = Cur->ElementName;
+				if (N == TEXT("SendButton"))
+				{
+					TrySendChatFromEntry(nullptr, ChatWindow);
+					return;
+				}
+				if (N == TEXT("ChatPanelTextEntry") || N == TEXT("ChatPanelTextEntryField"))
+				{
+					FocusChatEntryWindow(ChatWindow);
+					return;
+				}
+				if (N == TEXT("CloseChatWindowButton"))
+				{
+					SetFloatyVisible(FString::Printf(
+						TEXT("RootGameplay_FloatyChat%d_Field"), ChatWindow), false);
+					return;
+				}
+			}
+		}
+	}
+
+	for (TSharedPtr<FACEUIElement> Cur = Element; Cur.IsValid(); Cur = Cur->Parent.Pin())
+	{
+		if (!Cur->ElementName.IsEmpty() && HandleNamedClick(Cur->ElementName))
+		{
+			return;
+		}
+	}
+
+	if (!Canvas)
+	{
+		return;
+	}
+}
+
+bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
+{
+	if (HandleJournalNamedClick(Name)) return true;
+	if (HandleOptionsNamedClick(Name))
+	{
+		return true;
+	}
+	if (HandleWorldNamedClick(Name))
+	{
+		return true;
+	}
+	if (HandleDialogNamedClick(Name))
+	{
+		return true;
+	}
+	if (Name == TEXT("HealthMeter") || Name == TEXT("StaminaMeter") || Name == TEXT("ManaMeter")
+		|| Name == TEXT("PlayerHealthLabel") || Name == TEXT("PlayerStaminaLabel")
+		|| Name == TEXT("PlayerManaLabel"))
+	{
+		bShowVitalNumbers = !bShowVitalNumbers;
+		SaveVitalDisplayPreference();
+		RefreshVitalsOverlays();
+		return true;
+	}
+	if (Name == TEXT("ChatLogNewNonVisibleTextIndicator"))
+	{
+		if (ChatLog)
+		{
+			ChatLog->ScrollToEnd();
+			bChatStickToBottom = true;
+			SyncChatScrollbar();
+			SyncChatJumpIndicator();
+		}
+		return true;
+	}
+	if (Name == TEXT("InventoryButton") || Name == TEXT("BigBackpack_Icon_DragAccept"))
+	{
+		TogglePanelPage(TEXT("InventoryPanel_Field"));
+		return true;
+	}
+	if (Name == TEXT("PanelButton_SocialButton"))
+	{
+		TogglePanelPage(TEXT("SocialPanel_Field"));
+		if (ActivePanelPage == TEXT("SocialPanel_Field"))
+		{
+			SyncSocialPanelTab(ActiveSocialTab.IsEmpty() ? TEXT("AllegiancePage") : ActiveSocialTab);
+		}
+		return true;
+	}
+	if (Name == TEXT("CloseSocialPanelButton"))
+	{
+		HidePanel();
+		if (Client)
+		{
+			Client->SendFellowshipUpdateRequest(false);
+			Client->SendAllegianceUpdateRequest(false);
+		}
+		return true;
+	}
+	if (Name == TEXT("AllegianceTab"))
+	{
+		SyncSocialPanelTab(TEXT("AllegiancePage"));
+		return true;
+	}
+	if (Name == TEXT("FellowshipTab"))
+	{
+		SyncSocialPanelTab(TEXT("FellowshipPage"));
+		return true;
+	}
+	if (Name == TEXT("FriendsTab"))
+	{
+		SyncSocialPanelTab(TEXT("FriendsPage"));
+		return true;
+	}
+	if (Name == TEXT("ContractNameSortButton") || Name == TEXT("ContractStatusSortButton"))
+	{
+		bQuestSortByStatus = (Name == TEXT("ContractStatusSortButton"));
+		QuestScrollOffset = 0;
+		RefreshQuestOverlays();
+		return true;
+	}
+	if (Name == TEXT("ContractAbandonButton"))
+	{
+		if (Client && SelectedContractId != 0)
+		{
+			Client->SendAbandonContract(SelectedContractId);
+			SelectedContractId = 0;
+			RefreshQuestOverlays();
+		}
+		else
+		{
+			PostInventorySystemMessage(TEXT("Select a contract to abandon."));
+		}
+		return true;
+	}
+	if (Name == TEXT("SquelchTab"))
+	{
+		SyncSocialPanelTab(TEXT("SquelchPage"));
+		return true;
+	}
+	if (Name == TEXT("SquelchCharacterButton") || Name == TEXT("SquelchAccountButton"))
+	{
+		EnsureSocialEntryBoxes();
+		const FString Target = SquelchNameEntry
+			? SquelchNameEntry->GetText().ToString().TrimStartAndEnd() : FString();
+		if (Target.IsEmpty())
+		{
+			PostInventorySystemMessage(TEXT("Type a character name to squelch."));
+			return true;
+		}
+		if (Client)
+		{
+			if (Name == TEXT("SquelchAccountButton"))
+			{
+				Client->SendModifyAccountSquelch(true, Target);
+			}
+			else
+			{
+				// guid 0 → server resolves by name; 1 = ChatMessageType.AllChannels.
+				Client->SendModifyCharacterSquelch(true, 0, Target, 1);
+			}
+		}
+		if (SquelchNameEntry)
+		{
+			SquelchNameEntry->SetText(FText::GetEmpty());
+		}
+		return true;
+	}
+	if (Name == TEXT("SquelchRemoveButton"))
+	{
+		if (!Client || (SelectedSquelchGuid == 0 && SelectedSquelchName.IsEmpty()))
+		{
+			PostInventorySystemMessage(TEXT("Select a squelched character first."));
+			return true;
+		}
+		bool bAccount = false;
+		for (const FACESquelchEntry& E : Client->GetSquelches())
+		{
+			if (E.Guid == SelectedSquelchGuid)
+			{
+				bAccount = E.bAccount;
+				break;
+			}
+		}
+		if (bAccount)
+		{
+			Client->SendModifyAccountSquelch(false, SelectedSquelchName);
+		}
+		else
+		{
+			Client->SendModifyCharacterSquelch(false, SelectedSquelchGuid, SelectedSquelchName, 1);
+		}
+		SelectedSquelchGuid = 0;
+		SelectedSquelchName.Reset();
+		return true;
+	}
+	if (Name == TEXT("KickButton"))
+	{
+		// Retail: breaking a vassal's allegiance removes them from your tree.
+		if (Client && SelectedVassalGuid != 0)
+		{
+			Client->SendBreakAllegiance(SelectedVassalGuid);
+		}
+		else
+		{
+			PostInventorySystemMessage(TEXT("Select a vassal to remove."));
+		}
+		return true;
+	}
+	if (Name == TEXT("TellButton"))
+	{
+		if (SelectedFriendGuid != 0 && Client)
+		{
+			for (const FACEFriendInfo& F : Client->GetFriends())
+			{
+				if (F.Guid == SelectedFriendGuid)
+				{
+					if (ChatEntry)
+					{
+						ChatEntry->SetText(FText::FromString(
+							FString::Printf(TEXT("/tell %s "), *F.Name)));
+					}
+					FocusChatEntry();
+					break;
+				}
+			}
+		}
+		else
+		{
+			PostInventorySystemMessage(TEXT("Select a friend first."));
+		}
+		return true;
+	}
+	if (Name == TEXT("RemoveButton"))
+	{
+		if (Client && SelectedFriendGuid != 0)
+		{
+			Client->SendRemoveFriend(SelectedFriendGuid);
+			SelectedFriendGuid = 0;
+		}
+		else
+		{
+			PostInventorySystemMessage(TEXT("Select a friend to remove."));
+		}
+		return true;
+	}
+	if (Name == TEXT("AddButton"))
+	{
+		EnsureSocialEntryBoxes();
+		const FString FriendName = FriendNameEntry
+			? FriendNameEntry->GetText().ToString().TrimStartAndEnd() : FString();
+		if (FriendName.IsEmpty())
+		{
+			PostInventorySystemMessage(TEXT("Type a character name to add."));
+			return true;
+		}
+		if (Client)
+		{
+			Client->SendAddFriend(FriendName);
+		}
+		if (FriendNameEntry)
+		{
+			FriendNameEntry->SetText(FText::GetEmpty());
+		}
+		return true;
+	}
+	if (Name == TEXT("IgnoreAllegianceRequests") || Name == TEXT("IgnoreFellowshipRequests")
+		|| Name == TEXT("FellowshipAutoAcceptRequests") || Name == TEXT("FellowshipShareLoot")
+		|| Name == TEXT("AppearOffline_Checkbox"))
+	{
+		int32 Option = 0x01;
+		if (Name == TEXT("IgnoreFellowshipRequests")) { Option = 0x02; }
+		else if (Name == TEXT("FellowshipAutoAcceptRequests")) { Option = 0x12; }
+		else if (Name == TEXT("FellowshipShareLoot")) { Option = 0x11; }
+		else if (Name == TEXT("AppearOffline_Checkbox")) { Option = 0x27; }
+		ToggleCharacterOption(Option);
+		RefreshSocialButtonLabels();
+		return true;
+	}
+	if (Name == TEXT("CreateFellowshipButton"))
+	{
+		EnsureSocialEntryBoxes();
+		FString FellowName = FellowshipNameEntry
+			? FellowshipNameEntry->GetText().ToString().TrimStartAndEnd() : FString();
+		if (FellowName.IsEmpty())
+		{
+			FellowName = TEXT("Fellowship");
+		}
+		if (Client)
+		{
+			Client->SendFellowshipCreate(FellowName, bPendingFellowShareXP);
+		}
+		return true;
+	}
+	if (Name == TEXT("FellowQuitButton"))
+	{
+		if (Client) { Client->SendFellowshipQuit(false); }
+		return true;
+	}
+	if (Name == TEXT("FellowDisbandButton"))
+	{
+		if (Client) { Client->SendFellowshipQuit(true); }
+		return true;
+	}
+	if (Name == TEXT("FellowRecruitButton"))
+	{
+		if (Client && LastSelection.bValid && LastSelection.Guid != 0)
+		{
+			Client->SendFellowshipRecruit(LastSelection.Guid);
+		}
+		else
+		{
+			PostInventorySystemMessage(TEXT("Select a player to recruit."));
+		}
+		return true;
+	}
+	if (Name == TEXT("FellowDismissButton"))
+	{
+		if (Client && SelectedFellowGuid != 0)
+		{
+			Client->SendFellowshipDismiss(SelectedFellowGuid);
+		}
+		return true;
+	}
+	if (Name == TEXT("FellowLeaderButton"))
+	{
+		if (Client && SelectedFellowGuid != 0)
+		{
+			Client->SendFellowshipAssignNewLeader(SelectedFellowGuid);
+		}
+		return true;
+	}
+	if (Name == TEXT("FellowOpenButton"))
+	{
+		if (Client)
+		{
+			const FACEFellowshipInfo Info = Client->GetFellowship();
+			Client->SendFellowshipChangeOpenness(!Info.bOpen);
+		}
+		return true;
+	}
+	if (Name == TEXT("FellowshipShareXP"))
+	{
+		// Retail ShareFellowshipExpAndLuminance (0x0F) — also the default for new fellowships.
+		ToggleCharacterOption(0x0F);
+		bPendingFellowShareXP = Client ? Client->IsCharacterOptionSet(0x0F) : !bPendingFellowShareXP;
+		RefreshSocialButtonLabels();
+		return true;
+	}
+	if (Name == TEXT("SwearButton"))
+	{
+		if (Client && LastSelection.bValid && LastSelection.Guid != 0)
+		{
+			Client->SendSwearAllegiance(LastSelection.Guid);
+		}
+		else
+		{
+			PostInventorySystemMessage(TEXT("Select a player to swear allegiance to."));
+		}
+		return true;
+	}
+	if (Name == TEXT("BreakButton"))
+	{
+		if (Client)
+		{
+			const FACEAllegianceInfo Info = Client->GetAllegiance();
+			const int32 Target = Info.PatronGuid != 0 ? Info.PatronGuid : Info.MonarchGuid;
+			if (Target != 0)
+			{
+				Client->SendBreakAllegiance(Target);
+			}
+		}
+		return true;
+	}
+	if (Name == TEXT("CloseSalvagePanelButton"))
+	{
+		HideSalvagePanel();
+		return true;
+	}
+	if (Name == TEXT("Salvage_Button"))
+	{
+		SubmitSalvageQueue();
+		return true;
+	}
+	if (Name == TEXT("CloseQuestPanelButton"))
+	{
+		HidePanel();
+		return true;
+	}
+	if (Name == TEXT("PanelButton_MagicButton"))
+	{
+		TogglePanelPage(TEXT("SpellManagementPanel_Field"));
+		return true;
+	}
+	if (Name == TEXT("PanelButton_SkillManagementButton"))
+	{
+		TogglePanelPage(TEXT("SkillManagementPanel_Field"));
+		return true;
+	}
+	if (Name == TEXT("PanelButton_QuestManagementButton"))
+	{
+		TogglePanelPage(TEXT("QuestManagementPanel_Field"));
+		RefreshQuestOverlays();
+		return true;
+	}
+	if (Name == TEXT("PanelButton_WorldButton"))
+	{
+		TogglePanelPage(TEXT("WorldPanel_Field"));
+		return true;
+	}
+	if (Name == TEXT("PanelButton_OptionsButton"))
+	{
+		TogglePanelPage(TEXT("OptionsPanel_Field"));
+		return true;
+	}
+	if (Name == TEXT("CloseInvPanelButton") || Name == TEXT("ClosePanelButton")
+		|| Name == TEXT("CloseExaminationWindowButton"))
+	{
+		if (Name == TEXT("CloseExaminationWindowButton"))
+		{
+			ShowExamination(false);
+		}
+		else
+		{
+			HidePanel();
+		}
+		return true;
+	}
+	if (Name == TEXT("PanelButton_UseSelectedButton"))
+	{
+		UseSelectedObject();
+		return true;
+	}
+	if (Name == TEXT("PanelButton_ExamineSelectedButton"))
+	{
+		ExamineSelectedObject();
+		return true;
+	}
+	if (Name == TEXT("PeaceModeButton"))
+	{
+		// Retail: peace button toggles peace ↔ equipped weapon class.
+		const int32 Next = (CombatMode == static_cast<int32>(ACECombatMode::NonCombat))
+			? ResolveEquippedCombatMode()
+			: static_cast<int32>(ACECombatMode::NonCombat);
+		ApplyCombatMode(Next);
+		return true;
+	}
+	if (Name == TEXT("MeleeModeButton"))
+	{
+		const int32 Next = (CombatMode == static_cast<int32>(ACECombatMode::Melee))
+			? static_cast<int32>(ACECombatMode::NonCombat)
+			: static_cast<int32>(ACECombatMode::Melee);
+		ApplyCombatMode(Next);
+		return true;
+	}
+	if (Name == TEXT("MissileModeButton"))
+	{
+		const int32 Next = (CombatMode == static_cast<int32>(ACECombatMode::Missile))
+			? static_cast<int32>(ACECombatMode::NonCombat)
+			: static_cast<int32>(ACECombatMode::Missile);
+		ApplyCombatMode(Next);
+		return true;
+	}
+	if (Name == TEXT("MagicModeButton"))
+	{
+		const int32 Next = (CombatMode == static_cast<int32>(ACECombatMode::Magic))
+			? static_cast<int32>(ACECombatMode::NonCombat)
+			: static_cast<int32>(ACECombatMode::Magic);
+		ApplyCombatMode(Next);
+		return true;
+	}
+	if (Name == TEXT("HighAttack") || Name == TEXT("MediumAttack") || Name == TEXT("LowAttack"))
+	{
+		// gmCombatUI::SetRequestedAttackHeight starts a request at the slider's power.
+		BeginCombatPowerCharge(Name == TEXT("HighAttack") ? ACEAttackHeight::High
+			: Name == TEXT("LowAttack") ? ACEAttackHeight::Low : ACEAttackHeight::Medium);
+		return true;
+	}
+	if (Name == TEXT("AutoRepeatAttack"))
+	{
+		bCombatAutoRepeat = !bCombatAutoRepeat;
+		if (Client) Client->SendSetSingleCharacterOption(0x00, bCombatAutoRepeat);
+		return true;
+	}
+	if (Name == TEXT("AutoTarget"))
+	{
+		bCombatAutoTarget = !bCombatAutoTarget;
+		if (Client) Client->SendSetSingleCharacterOption(0x0D, bCombatAutoTarget);
+		return true;
+	}
+	if (Name == TEXT("ViewCombatTarget"))
+	{
+		bCombatViewTarget = !bCombatViewTarget;
+		if (Client) Client->SendSetSingleCharacterOption(0x07, bCombatViewTarget);
+		return true;
+	}
+	if (Name == TEXT("LockUI"))
+	{
+		if (Manager)
+		{
+			Manager->ToggleUiLocked();
+		}
+		return true;
+	}
+	if (Name == TEXT("StatManagement_Footer_RaiseButton"))
+	{
+		RaiseSelectedStat(1);
+		return true;
+	}
+	if (Name == TEXT("StatManagement_Footer_Raise10Button"))
+	{
+		RaiseSelectedStat(10);
+		return true;
+	}
+	if (Name == TEXT("SendButton"))
+	{
+		TrySendChatFromEntry();
+		return true;
+	}
+	if (Name == TEXT("ChatPanelTextEntry") || Name == TEXT("ChatEntryField"))
+	{
+		FocusChatEntry();
+		return true;
+	}
+	if (Name == TEXT("AttributeTab"))
+	{
+		ShowPanelPage(TEXT("SkillManagementPanel_Field"));
+		SyncSkillPanelTab(TEXT("AttributePage"));
+		return true;
+	}
+	if (Name == TEXT("SkillTab"))
+	{
+		ShowPanelPage(TEXT("SkillManagementPanel_Field"));
+		SyncSkillPanelTab(TEXT("SkillPage"));
+		return true;
+	}
+	if (Name == TEXT("CharacterTitleTab"))
+	{
+		ShowPanelPage(TEXT("SkillManagementPanel_Field"));
+		SyncSkillPanelTab(TEXT("CharacterTitlePage"));
+		return true;
+	}
+	if (Name == TEXT("CharacterTitle_SetAsDisplayButton"))
+	{
+		if (Client && SelectedTitleId != 0)
+		{
+			Client->SendSetTitle(SelectedTitleId);
+		}
+		else
+		{
+			PostInventorySystemMessage(TEXT("Select a title first."));
+		}
+		return true;
+	}
+	if (Name == TEXT("ChatTarget") || Name == TEXT("ChatTargetButtonText"))
+	{
+		// Retail opens destination popup; right-click cycles filter (@filter).
+		ToggleChatTargetPopup();
+		return true;
+	}
+	if (Name == TEXT("MaximizeButton"))
+	{
+		ToggleFloaty(TEXT("RootGameplay_FloatyMainChat_Field"));
+		return true;
+	}
+	if (Name == TEXT("Paperdoll_Slots_Checkbox"))
+	{
+		bShowPaperdollSlots = !bShowPaperdollSlots;
+		RefreshInventoryOverlays();
+		return true;
+	}
+	if (Name == TEXT("CastSpellButton") || Name.StartsWith(TEXT("StripButton")))
+	{
+		CastSelectedHotbarSpell();
+		return true;
+	}
+	if (Name == TEXT("BuiltInSpell") || Name.StartsWith(TEXT("BuiltInSpell_")))
+	{
+		if (BuiltInSpellId != 0 && Client)
+		{
+			constexpr double DoubleClickSeconds = 0.75;
+			const double Now = FPlatformTime::Seconds();
+			const bool bWasSelected = SelectedCombatSpellSlot < 0;
+			SelectedCombatSpellSlot = -1;
+			if (bWasSelected && BuiltInSpellId == LastSpellClickId
+				&& (Now - LastSpellClickTime) < DoubleClickSeconds)
+			{
+				if (!Client->SendCastSpell(BuiltInSpellId, BuiltInCasterGuid))
+				{
+					PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+				}
+				LastSpellClickSlot = INDEX_NONE;
+				LastSpellClickId = 0;
+				LastSpellClickTime = 0.0;
+			}
+			else
+			{
+				LastSpellClickSlot = -1;
+				LastSpellClickId = BuiltInSpellId;
+				LastSpellClickTime = Now;
+			}
+			RefreshSpellHotbarOverlays();
+		}
+		return true;
+	}
+	if (Name.StartsWith(TEXT("Spellcast_Tab")))
+	{
+		FString Rest = Name;
+		Rest.RemoveFromStart(TEXT("Spellcast_Tab"));
+		const int32 Tab = FCString::Atoi(*Rest);
+		if (Tab >= 1 && Tab <= 8 && Client)
+		{
+			Client->SetActiveSpellBar(Tab - 1);
+			SelectedCombatSpellSlot = 0;
+			SpellHotbarScrollOffset = 0;
+			ApplyCombatMode(CombatMode);
+			SyncSpellcastTabChrome();
+			return true;
+		}
+		return true;
+	}
+	if (Name == TEXT("SpellbookTab"))
+	{
+		ShowPanelPage(TEXT("SpellManagementPanel_Field"));
+		SyncSpellPanelTab(TEXT("SpellbookPage"));
+		return true;
+	}
+	if (Name == TEXT("SpellComponentTab"))
+	{
+		ShowPanelPage(TEXT("SpellManagementPanel_Field"));
+		SyncSpellPanelTab(TEXT("SpellComponentPage"));
+		return true;
+	}
+	if (Name == TEXT("ScrollBar_Up") || Name == TEXT("ScrollBar_Down"))
+	{
+		// Inventory scrollbars are handled in OnElementActivated (need ancestry).
+		if (ActivePanelPage == TEXT("SpellManagementPanel_Field")
+			&& ActiveSpellPanelTab == TEXT("SpellbookPage"))
+		{
+			const int32 Dir = (Name == TEXT("ScrollBar_Up")) ? -1 : 1;
+			SpellbookScrollOffset = FMath::Max(0, SpellbookScrollOffset + Dir);
+			RefreshSpellbookOverlays();
+			SyncSpellbookScrollbar();
+			return true;
+		}
+		if (ActivePanelPage == TEXT("PositiveEffectsPanel_Field")
+			|| ActivePanelPage == TEXT("NegativeEffectsPanel_Field"))
+		{
+			const int32 Dir = (Name == TEXT("ScrollBar_Up")) ? -1 : 1;
+			EffectsScrollOffset = FMath::Max(0, EffectsScrollOffset + Dir);
+			RefreshEffectsOverlays(ActivePanelPage == TEXT("PositiveEffectsPanel_Field"));
+			return true;
+		}
+	}
+	if (Name == TEXT("ScrollBar_Left") || Name == TEXT("ScrollBar_Right"))
+	{
+		if (OpenVendorGuid != 0)
+		{
+			const int32 Dir = (Name == TEXT("ScrollBar_Left")) ? -1 : 1;
+			int32* Offset = &VendorItemsScrollOffset;
+			if (ActiveVendorPage == 1) { Offset = &VendorBuyScrollOffset; }
+			else if (ActiveVendorPage == 2) { Offset = &VendorSellScrollOffset; }
+			*Offset = FMath::Max(0, *Offset + Dir);
+			RefreshVendorOverlays();
+			return true;
+		}
+	}
+	if (ToggleSpellbookFilter(Name))
+	{
+		return true;
+	}
+	if (Name == TEXT("FloatingChat1")) { ToggleFloaty(TEXT("RootGameplay_FloatyChat1_Field")); return true; }
+	if (Name == TEXT("FloatingChat2")) { ToggleFloaty(TEXT("RootGameplay_FloatyChat2_Field")); return true; }
+	if (Name == TEXT("FloatingChat3")) { ToggleFloaty(TEXT("RootGameplay_FloatyChat3_Field")); return true; }
+	if (Name == TEXT("FloatingChat4")) { ToggleFloaty(TEXT("RootGameplay_FloatyChat4_Field")); return true; }
+	if (Name == TEXT("PositiveEffectsIndicator")) { TogglePanelPage(TEXT("PositiveEffectsPanel_Field")); return true; }
+	if (Name == TEXT("NegativeEffectsIndicator")) { TogglePanelPage(TEXT("NegativeEffectsPanel_Field")); return true; }
+	if (Name == TEXT("LinkStatusIndicator")) { TogglePanelPage(TEXT("LinkStatusPanel_Field")); return true; }
+	if (Name == TEXT("VitaeIndicator")) { TogglePanelPage(TEXT("VitaePanel_Field")); return true; }
+	if (Name == TEXT("BurdenIndicator")) { TogglePanelPage(TEXT("CharacterInfoPanel_Field")); return true; }
+	if (Name == TEXT("MiniGameIndicator")) { TogglePanelPage(TEXT("MiniGamePanel_Field")); return true; }
+	if (Name == TEXT("LogoffButton"))
+	{
+		if (Client)
+		{
+			Client->Logout();
+		}
+		return true;
+	}
+	if (Name == TEXT("Inv_MainPackSlot"))
+	{
+		if (Client) { SelectedPackGuid = Client->GetPlayerGuid(); }
+		InventoryScrollOffset = 0;
+		RefreshInventoryOverlays();
+		SyncInventoryScrollbars();
+		return true;
+	}
+	if (Name == TEXT("CloseExtContainerPanelButton"))
+	{
+		HideExternalContainer(true);
+		return true;
+	}
+	if (Name == TEXT("CloseVendorPanelButton") || Name == TEXT("VendorCloseButton"))
+	{
+		HideVendorPanel();
+		return true;
+	}
+	if (Name == TEXT("VendorItemsTab"))
+	{
+		SetVendorPage(0);
+		return true;
+	}
+	if (Name == TEXT("VendorBuyTab"))
+	{
+		SetVendorPage(1);
+		return true;
+	}
+	if (Name == TEXT("VendorSellTab"))
+	{
+		SetVendorPage(2);
+		return true;
+	}
+	if (Name == TEXT("Menu_Vendor_SelectionWidget") || Name == TEXT("Menu_Vendor_SelectionDisplay")
+		|| Name == TEXT("VendorItemTypeList") || Name == TEXT("Menu_Vendor"))
+	{
+		ToggleVendorFilterDropdown();
+		return true;
+	}
+	if (Name == TEXT("VendorItemBuy_Button") || Name == TEXT("VendorBuyBuyItem_Button"))
+	{
+		if (ActiveVendorPage == 1)
+		{
+			BuyVendorCartItem();
+		}
+		else
+		{
+			BuySelectedVendorItem();
+		}
+		return true;
+	}
+	if (Name == TEXT("VendorItemAdd_Button"))
+	{
+		AddSelectedVendorItemToBuyCart();
+		return true;
+	}
+	if (Name == TEXT("VendorBuyBuyAll_Button"))
+	{
+		if (Client && OpenVendorGuid != 0 && VendorBuyCart.Num() > 0)
+		{
+			Client->SendBuyItems(OpenVendorGuid, VendorBuyCart);
+			VendorBuyCart.Reset();
+			RefreshVendorOverlays();
+		}
+		return true;
+	}
+	if (Name == TEXT("VendorSellSellItem_Button") || Name == TEXT("VendorSellButton")
+		|| Name == TEXT("VendorSellButtonSmall") || Name == TEXT("VendorSellSellAll_Button"))
+	{
+		SellVendorCart();
+		return true;
+	}
+	if (Name == TEXT("VendorSellClearItem_Button") || Name == TEXT("VendorBuyClearItem_Button"))
+	{
+		if (ActiveVendorPage == 1)
+		{
+			if (VendorSelectedGuid != 0)
+			{
+				VendorBuyCart.RemoveAll([this](const TPair<int32, int32>& P)
+				{
+					return P.Value == VendorSelectedGuid;
+				});
+				VendorSelectedGuid = 0;
+				RefreshVendorOverlays();
+			}
+		}
+		else if (VendorSellSelectedGuid != 0)
+		{
+			VendorSellCart.RemoveAll([this](const TPair<int32, int32>& P)
+			{
+				return P.Value == VendorSellSelectedGuid;
+			});
+			VendorSellSelectedGuid = 0;
+			RefreshVendorOverlays();
+		}
+		return true;
+	}
+	if (Name == TEXT("VendorSellClearAll_Button") || Name == TEXT("VendorBuyClearAll_Button")
+		|| Name == TEXT("VendorItemClear_Button"))
+	{
+		if (ActiveVendorPage == 1)
+		{
+			VendorBuyCart.Reset();
+		}
+		else if (ActiveVendorPage == 2)
+		{
+			VendorSellCart.Reset();
+			VendorSellSelectedGuid = 0;
+		}
+		else
+		{
+			VendorBuyCart.Reset();
+			VendorSellCart.Reset();
+			VendorSellSelectedGuid = 0;
+		}
+		RefreshVendorOverlays();
+		return true;
+	}
+	if (Name == TEXT("CloseSecureTradeButton"))
+	{
+		HideTradePanel(true);
+		return true;
+	}
+	if (Name == TEXT("TradeSelfTradeButton") || Name == TEXT("AcceptTradeButton"))
+	{
+		if (Client && bTradeOpen)
+		{
+			if (Client->GetTradeAcceptedGuid() == Client->GetPlayerGuid()) Client->SendDeclineTrade();
+			else if (!Client->GetTradeSelfItems().IsEmpty() || !Client->GetTradePartnerItems().IsEmpty()) Client->SendAcceptTrade();
+		}
+		return true;
+	}
+	if (Name == TEXT("TradeDeclineButton") || Name == TEXT("DeclineTradeButton"))
+	{
+		if (Client) { Client->SendDeclineTrade(); }
+		return true;
+	}
+	if (Name == TEXT("TradeResetButton") || Name == TEXT("ResetTradeButton")
+		|| Name == TEXT("TradeClearButton") || Name == TEXT("Trade_ClearAllButon"))
+	{
+		if (Client) { Client->SendResetTrade(); }
+		return true;
+	}
+
+	// ShortcutBar_ShortcutNButton — visible row maps through ShortcutBarPage.
+	if (Name.StartsWith(TEXT("ShortcutBar_Shortcut")) && Name.EndsWith(TEXT("Button")))
+	{
+		FString Rest = Name;
+		Rest.RemoveFromStart(TEXT("ShortcutBar_Shortcut"));
+		Rest.RemoveFromEnd(TEXT("Button"));
+		const int32 Slot = FCString::Atoi(*Rest);
+		if (Slot >= 1 && Slot <= 9)
+		{
+			const int32 Guid = Client ? Client->GetShortcutObject(Slot - 1 + ShortcutBarPage * 9) : 0;
+			const double Now = FPlatformTime::Seconds();
+			const bool bDouble = Guid != 0 && Guid == LastInvClickGuid && Now - LastInvClickTime < InventoryDoubleClickSeconds();
+			SelectInventoryGuid(Guid);
+			LastInvClickGuid = bDouble ? 0 : Guid;
+			LastInvClickTime = bDouble ? 0.0 : Now;
+			if (bDouble) UseShortcutSlot(Slot + ShortcutBarPage * 9);
+			return true;
+		}
+	}
+	if (Name.StartsWith(TEXT("ShortcutBar2_Shortcut")) && Name.EndsWith(TEXT("Button")))
+	{
+		// Row 2 hidden; ignore clicks on residual DAT nodes.
+		return true;
+	}
+
+	// Paper doll / inventory item click via ElementName when overlay not used
+	for (const FDollSlotMap& Slot : GDollSlots)
+	{
+		if (Name == Slot.Name)
+		{
+			if (!Client) { return true; }
+			for (const FACEWorldObject& Obj : Client->GetEquippedItems())
+			{
+				if (ItemMatchesDollSlot(Obj, Slot.Mask))
+				{
+					SelectInventoryGuid(Obj.Guid);
+					return true;
+				}
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
+void UACEUIGameplayBinder::SetFloatyVisible(const FString& ElementName, bool bVisible)
+{
+	if (!Manager)
+	{
+		return;
+	}
+	Manager->SetElementVisibleByName(ElementName, bVisible);
+	if (bVisible)
+	{
+		if (TSharedPtr<FACEUIElement> El = Manager->FindElementByName(ElementName))
+		{
+			Manager->BringFloatyToFront(El);
+		}
+	}
+}
+
+void UACEUIGameplayBinder::ToggleFloaty(const FString& ElementName)
+{
+	if (!Manager)
+	{
+		return;
+	}
+	TSharedPtr<FACEUIElement> El = Manager->FindElementByName(ElementName);
+	const bool bOn = El.IsValid() && El->bVisible;
+	SetFloatyVisible(ElementName, !bOn);
+}
+
+void UACEUIGameplayBinder::SanitizeFloatyPanelChrome()
+{
+	if (!Manager)
+	{
+		return;
+	}
+	// LayoutDesc loads every Panel_*_Field as visible — stacked page backgrounds look like
+	// a double-shadowed interface. Hide all pages here; ShowPanelPage reveals one.
+	static const TCHAR* Pages[] = {
+		TEXT("AbusePanel_Field"), TEXT("PositiveEffectsPanel_Field"), TEXT("NegativeEffectsPanel_Field"),
+		TEXT("LinkStatusPanel_Field"), TEXT("UrgentAssistancePanel_Field"), TEXT("VitaePanel_Field"),
+		TEXT("WorldPanel_Field"), TEXT("OptionsPanel_Field"), TEXT("SkillManagementPanel_Field"),
+		TEXT("QuestManagementPanel_Field"), TEXT("SocialPanel_Field"), TEXT("SpellManagementPanel_Field"),
+		TEXT("BookPanel_Field"), TEXT("CharacterInfoPanel_Field"), TEXT("MiniGamePanel_Field"),
+		TEXT("InventoryPanel_Field"),
+	};
+	for (const TCHAR* Page : Pages)
+	{
+		if (!ActivePanelPage.IsEmpty() && ActivePanelPage == Page)
+		{
+			continue;
+		}
+		Manager->SetElementVisibleByName(Page, false);
+	}
+	// Page bodies that re-paint the same slab as the floaty root (0x06004CC2) double-darken
+	// ("shadow over the interface areas" on Attributes/Titles/Options/Social tabs). Keep the
+	// root fill (inventory/skills rely on it); drop the redundant page copies. Inner list /
+	// entry boxes keep theirs — retail intends those as darker insets. Spellbook pages stay
+	// opaque (kept behind list overlays, see FACEUIElement::IsOpaquePageSlab).
+	// SkillManagement_Attribute_Field exists twice in the layout, so walk the whole tree
+	// instead of FindElementByName (first match only).
+	static const TSet<FString> DuplicateSlabs = {
+		TEXT("VitaeBackground"), TEXT("LinkStatusBackground"),
+		TEXT("SkillManagement_Attribute_Field"), TEXT("CharacterTitlePage"),
+		TEXT("HousePage"), TEXT("CharacterSettingsPage"), TEXT("GameplayOptionsPage"),
+		TEXT("ChatPage"), TEXT("ConfigPage"),
+		TEXT("AllegiancePage"), TEXT("FellowshipPage"), TEXT("SquelchPage"), TEXT("FriendsPage"),
+		TEXT("ContractsPage"), TEXT("PageListPage"), TEXT("CharacterInfoBackground"),
+	};
+	if (TSharedPtr<FACEUIElement> PanelRoot = Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")))
+	{
+		TArray<TSharedPtr<FACEUIElement>> Stack;
+		Stack.Add(PanelRoot);
+		while (Stack.Num() > 0)
+		{
+			TSharedPtr<FACEUIElement> El = Stack.Pop(EAllowShrinking::No);
+			if (!El.IsValid())
+			{
+				continue;
+			}
+			if (El->ImageFileId == 0x06004CC2u && DuplicateSlabs.Contains(El->ElementName))
+			{
+				El->ImageFileId = 0;
+				El->DrawMode = 0;
+			}
+			else if (El->ImageFileId == 0x06004CC2u)
+			{
+				if (TSharedPtr<FACEUIElement> Parent = El->Parent.Pin())
+				{
+					if (Parent->ImageFileId == 0x06004CC2u
+						&& !El->ElementName.Contains(TEXT("List"))
+						&& !El->ElementName.Contains(TEXT("Entry"))
+						&& !El->ElementName.Contains(TEXT("Box"))
+						&& !El->ElementName.Contains(TEXT("Spellbook")))
+					{
+						El->ImageFileId = 0;
+						El->DrawMode = 0;
+					}
+				}
+			}
+			for (const TSharedPtr<FACEUIElement>& Child : El->Children)
+			{
+				Stack.Add(Child);
+			}
+		}
+	}
+}
+
+void UACEUIGameplayBinder::ShowPanelPage(const FString& PageElementName)
+{
+	SanitizeFloatyPanelChrome();
+	SetFloatyVisible(TEXT("RootGameplay_FloatyPanel_Field"), true);
+	if (!Manager)
+	{
+		return;
+	}
+	static const TCHAR* Pages[] = {
+		TEXT("AbusePanel_Field"), TEXT("PositiveEffectsPanel_Field"), TEXT("NegativeEffectsPanel_Field"),
+		TEXT("LinkStatusPanel_Field"), TEXT("UrgentAssistancePanel_Field"), TEXT("VitaePanel_Field"),
+		TEXT("WorldPanel_Field"), TEXT("OptionsPanel_Field"), TEXT("SkillManagementPanel_Field"),
+		TEXT("QuestManagementPanel_Field"), TEXT("SocialPanel_Field"), TEXT("SpellManagementPanel_Field"),
+		TEXT("BookPanel_Field"), TEXT("CharacterInfoPanel_Field"), TEXT("MiniGamePanel_Field"),
+		TEXT("InventoryPanel_Field"),
+	};
+	for (const TCHAR* Page : Pages)
+	{
+		Manager->SetElementVisibleByName(Page, PageElementName == Page);
+	}
+	ActivePanelPage = PageElementName;
+	// Drop overlays that belong to other panel pages so they cannot ghost through.
+	RefreshInventoryOverlays();
+	RefreshAttributeOverlays();
+	RefreshSkillOverlays();
+	RefreshSpellbookOverlays();
+	RefreshEffectsOverlays(true);
+	RefreshEffectsOverlays(false);
+	RefreshVitaePanelOverlays();
+	RefreshLinkStatusPanelOverlays();
+	if (PageElementName == TEXT("InventoryPanel_Field") && Client && SelectedPackGuid == 0)
+	{
+		SelectedPackGuid = Client->GetPlayerGuid();
+	}
+	if (PageElementName == TEXT("SocialPanel_Field"))
+	{
+		SyncSocialPanelTab(ActiveSocialTab.IsEmpty() ? TEXT("AllegiancePage") : ActiveSocialTab);
+	}
+	if (PageElementName == TEXT("OptionsPanel_Field"))
+	{
+		if (Client)
+		{
+			// Snapshot for the Reset button before any checkbox edits.
+			OptionsSnapshot1 = Client->GetCharacterOptions1();
+			OptionsSnapshot2 = Client->GetCharacterOptions2();
+			MainChatFilterSnapshot = MainChatTypeFilter;
+			FloatyChatFilterSnapshot = FloatyChatFilters;
+			ChatOpacitySnapshot = FVector2D(ChatInactiveOpacity,ChatActiveOpacity);
+		}
+		SyncOptionsPanelTab(ActiveOptionsTab.IsEmpty() ? TEXT("GameplayOptionsPage") : ActiveOptionsTab);
+	}
+	else
+	{
+		HideOptionsOverlays();
+	}
+	if (PageElementName == TEXT("QuestManagementPanel_Field"))
+	{
+		RefreshQuestOverlays();
+	}
+	if (PageElementName == TEXT("WorldPanel_Field"))
+	{
+		SyncWorldPanelTab(ActiveWorldTab.IsEmpty() ? TEXT("MapPage") : ActiveWorldTab);
+	}
+	else
+	{
+		HideWorldOverlays();
+	}
+	if (PageElementName == TEXT("AbusePanel_Field"))
+	{
+		if (AbuseNameEntry) { AbuseNameEntry->SetText(FText::GetEmpty()); }
+		if (AbuseComplaintEntry) { AbuseComplaintEntry->SetText(FText::GetEmpty()); }
+		SyncAbusePanelPage(1);
+	}
+	else if (PageElementName == TEXT("UrgentAssistancePanel_Field"))
+	{
+		if (UrgentComplaintEntry) { UrgentComplaintEntry->SetText(FText::GetEmpty()); }
+		SyncUrgentPanelPage(1);
+	}
+	else if (PageElementName == TEXT("BookPanel_Field"))
+	{
+		RefreshBookOverlays();
+	}
+	else if (PageElementName == TEXT("MiniGamePanel_Field"))
+	{
+		RefreshMiniGameOverlays();
+	}
+	else
+	{
+		HideDialogOverlays();
+	}
+	if (PageElementName == TEXT("PositiveEffectsPanel_Field"))
+	{
+		bEffectsListPositive = true;
+		EffectsScrollOffset = 0;
+		RefreshEffectsOverlays(true);
+	}
+	if (PageElementName == TEXT("NegativeEffectsPanel_Field"))
+	{
+		bEffectsListPositive = false;
+		EffectsScrollOffset = 0;
+		RefreshEffectsOverlays(false);
+	}
+	if (PageElementName == TEXT("VitaePanel_Field"))
+	{
+		RefreshVitaePanelOverlays();
+	}
+	if (PageElementName == TEXT("LinkStatusPanel_Field"))
+	{
+		LastLinkPingRequestAt = 0.0;
+		RefreshLinkStatusPanelOverlays();
+	}
+	// Skill panel stacks Attribute/Skill/Title pages in LayoutDesc — only one visible (retail tabs).
+	if (PageElementName == TEXT("SkillManagementPanel_Field"))
+	{
+		SyncSkillPanelTab(ActiveSkillTab.IsEmpty() ? TEXT("AttributePage") : ActiveSkillTab);
+	}
+	if (PageElementName == TEXT("SpellManagementPanel_Field"))
+	{
+		SyncSpellPanelTab(ActiveSpellPanelTab.IsEmpty() ? TEXT("SpellbookPage") : ActiveSpellPanelTab);
+	}
+	else
+	{
+		// Leave spellbook — collapse filter checkbox overlays (they are not DAT-clipped).
+		SyncSpellbookFilterCheckboxes();
+		RefreshSpellbookChromeLabels();
+	}
+	if (TSharedPtr<FACEUIElement> Panel = Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")))
+	{
+		Manager->BringFloatyToFront(Panel);
+	}
+	SyncInventoryButtonVisual();
+}
+
+void UACEUIGameplayBinder::HidePanel()
+{
+	SetFloatyVisible(TEXT("RootGameplay_FloatyPanel_Field"), false);
+	ActivePanelPage.Reset();
+	HideWorldOverlays();
+	HideDialogOverlays();
+	SanitizeFloatyPanelChrome();
+	RefreshSocialOverlays();
+	RefreshInventoryOverlays();
+	RefreshEffectsOverlays(true);
+	RefreshEffectsOverlays(false);
+	RefreshVitaePanelOverlays();
+	RefreshLinkStatusPanelOverlays();
+	SyncSpellbookFilterCheckboxes();
+	RefreshSpellbookChromeLabels();
+	SyncInventoryButtonVisual();
+}
+
+void UACEUIGameplayBinder::SyncInventoryButtonVisual()
+{
+	if (!Manager)
+	{
+		return;
+	}
+	const TCHAR* Pages[] = {TEXT("Social"), TEXT("SpellManagement"), TEXT("SkillManagement"), TEXT("QuestManagement"), TEXT("World"), TEXT("Options")};
+	const TCHAR* Buttons[] = {TEXT("Social"), TEXT("Magic"), TEXT("SkillManagement"), TEXT("QuestManagement"), TEXT("World"), TEXT("Options")};
+	for (int32 I=0; I<UE_ARRAY_COUNT(Pages); ++I)
+	{
+		if (auto Button = Manager->FindElementByName(FString::Printf(TEXT("PanelButton_%sButton"), Buttons[I])))
+			Button->bHighlighted = ActivePanelPage == FString::Printf(TEXT("%sPanel_Field"), Pages[I]);
+	}
+	const bool bInvOpen = ActivePanelPage == TEXT("InventoryPanel_Field");
+	// Retail toolbar: 0x06004CF7 closed bag, 0x06004CF8 open/pressed bag.
+	constexpr uint32 DidBagClosed = 0x06004CF7u;
+	constexpr uint32 DidBagOpen = 0x06004CF8u;
+	if (TSharedPtr<FACEUIElement> Btn = Manager->FindElementByName(TEXT("InventoryButton")))
+	{
+		Btn->ImageFileId = bInvOpen ? DidBagOpen : DidBagClosed;
+	}
+	// 0x060011F9 is ItemSlot_GenericDragOver (green ring) — only for drag-over, not idle chrome.
+	Manager->SetElementVisibleByName(TEXT("BigBackpack_Icon_DragAccept"),
+		bInvDragActive || bInvDragPending);
+}
+
+void UACEUIGameplayBinder::TogglePanelPage(const FString& PageElementName)
+{
+	if (ActivePanelPage == PageElementName)
+	{
+		HidePanel();
+	}
+	else
+	{
+		ShowPanelPage(PageElementName);
+	}
+}
+
+void UACEUIGameplayBinder::ToggleGameplayPanel(const FString& PageElementName)
+{
+	TogglePanelPage(PageElementName);
+}
+
+void UACEUIGameplayBinder::HandleEscape()
+{
+	if (!Manager) return;
+	if (bChatTargetPopupOpen) { CloseChatTargetPopup(); return; }
+	if (bVendorFilterDropdownOpen) { CloseVendorFilterDropdown(); return; }
+	for (const TCHAR* Name : {TEXT("RootGameplay_Keyboard_Field"), TEXT("RootKeyboard_Field")})
+	{
+		const auto Keyboard = Manager->FindElementByName(Name);
+		if (Keyboard && Keyboard->bVisible)
+		{
+			ACEInputBindings::Cancel();
+			Manager->SetElementVisibleByName(Name, false);
+			RefreshKeyboardOverlays();
+			return;
+		}
+	}
+	const auto Exam = Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field"));
+	if (Exam && Exam->bVisible) { ShowExamination(false); RefreshExaminationOverlay(); return; }
+	if (OpenLootContainerGuid != 0) { HideExternalContainer(true); return; }
+	if (OpenVendorGuid != 0) { HideVendorPanel(); return; }
+	if (bTradeOpen) { HideTradePanel(true); return; }
+	if (OpenSalvageToolGuid != 0) { HideSalvagePanel(); return; }
+	if (!ActivePanelPage.IsEmpty()) { HidePanel(); return; }
+	ActiveOptionsTab = TEXT("GameplayOptionsPage");
+	ShowPanelPage(TEXT("OptionsPanel_Field"));
+}
+
+void UACEUIGameplayBinder::ToggleKeyboardMappingUI()
+{
+	if (!Manager)
+	{
+		return;
+	}
+	TSharedPtr<FACEUIElement> El = Manager->FindElementByName(TEXT("RootGameplay_Keyboard_Field"));
+	if (!El.IsValid())
+	{
+		El = Manager->FindElementByName(TEXT("RootKeyboard_Field"));
+	}
+	if (!El.IsValid())
+	{
+		PostInventorySystemMessage(
+			TEXT("Keyboard: W/S move, A/D turn, Q/E sidestep, Shift walk, Space jump, ")
+			TEXT("G sit, B lie down, C crouch, K point, J wave, I inventory, P skills, ")
+			TEXT("M magic, U quests, O options, ~ combat, Home last attacker, Enter chat."));
+		return;
+	}
+	const bool bOn = !El->bVisible;
+	if (bOn) ACEInputBindings::BeginEdit(); else ACEInputBindings::Cancel();
+	El->bVisible = bOn;
+	Manager->SetElementVisibleByName(El->ElementName, bOn);
+	if (bOn) Manager->BringFloatyToFront(El);
+}
+
+void UACEUIGameplayBinder::ToggleCombatModeHotkey()
+{
+	if (CombatMode == static_cast<int32>(ACECombatMode::NonCombat))
+	{
+		ApplyCombatMode(ResolveEquippedCombatMode());
+	}
+	else
+	{
+		ApplyCombatMode(static_cast<int32>(ACECombatMode::NonCombat));
+	}
+}
+
+void UACEUIGameplayBinder::PlayEmoteHotkey(uint32 MotionCommand, bool bHoldPose)
+{
+	if (!Client || MotionCommand == 0)
+	{
+		return;
+	}
+	Client->SendSoulEmoteMotion(static_cast<int32>(MotionCommand));
+	APawn* Pawn = PlayerController ? PlayerController->GetPawn() : nullptr;
+	UACECharacterAppearanceComponent* App = Pawn
+		? Pawn->FindComponentByClass<UACECharacterAppearanceComponent>()
+		: nullptr;
+	if (App)
+	{
+		App->PlayActionMotion(static_cast<int32>(MotionCommand), 1.f, 0, bHoldPose);
+	}
+}
+
+void UACEUIGameplayBinder::ApplyPanelTabChrome(const FString& TabElementName, bool bSelected)
+{
+	if (!Manager || TabElementName.IsEmpty())
+	{
+		return;
+	}
+	// Prefer the tab under the active skill/spell panel — FindElementByName can hit a hidden
+	// duplicate from another embedded layout with the same ElementName.
+	TSharedPtr<FACEUIElement> Tab = Manager->FindElementUnder(ActivePanelPage, TabElementName);
+	if (ActivePanelPage == TEXT("SkillManagementPanel_Field"))
+	{
+		Tab = Manager->FindElementUnder(TEXT("SkillManagementPanel_Field"), TabElementName);
+	}
+	else if (ActivePanelPage == TEXT("SpellManagementPanel_Field"))
+	{
+		Tab = Manager->FindElementUnder(TEXT("SpellManagementPanel_Field"), TabElementName);
+	}
+	else if (ActivePanelPage == TEXT("OptionsPanel_Field"))
+	{
+		Tab = Manager->FindElementUnder(TEXT("OptionsPanel_Field"), TabElementName);
+	}
+	else if (ActivePanelPage == TEXT("SocialPanel_Field"))
+	{
+		Tab = Manager->FindElementUnder(TEXT("SocialPanel_Field"), TabElementName);
+	}
+	else if (ActivePanelPage == TEXT("WorldPanel_Field"))
+	{
+		Tab = Manager->FindElementUnder(TEXT("WorldPanel_Field"), TabElementName);
+	}
+	if (!Tab.IsValid())
+	{
+		Tab = Manager->FindElementByName(TabElementName);
+	}
+	if (!Tab.IsValid())
+	{
+		return;
+	}
+	// PanelTabTemplate / Tab_Blue: odd DIDs = selected (raised / connected), even = idle.
+	// UIElement_Panel::OpenTab sets 12 for the open tab and 11 for closed tabs.
+	if (Tab->States.Contains(11) || Tab->States.Contains(12))
+	{
+		Tab->DefaultState = bSelected ? 12u : 11u;
+		Tab->bUseExplicitState = true;
+		return;
+	}
+	constexpr uint32 DidLeftSel = 0x06005D93, DidMidSel = 0x06005D95, DidRightSel = 0x06005D97;
+	constexpr uint32 DidLeftIdle = 0x06005D92, DidMidIdle = 0x06005D94, DidRightIdle = 0x06005D96;
+	const uint32 Left = bSelected ? DidLeftSel : DidLeftIdle;
+	const uint32 Mid = bSelected ? DidMidSel : DidMidIdle;
+	const uint32 Right = bSelected ? DidRightSel : DidRightIdle;
+	auto ApplyChild = [](const TSharedPtr<FACEUIElement>& Node, uint32 Did)
+	{
+		if (!Node.IsValid()) { return; }
+		Node->ImageFileId = Did;
+		Node->bVisible = true;
+		Node->DrawMode = 3;
+	};
+	TArray<TSharedPtr<FACEUIElement>> Stack;
+	Stack.Add(Tab);
+	while (Stack.Num() > 0)
+	{
+		TSharedPtr<FACEUIElement> Node = Stack.Pop(EAllowShrinking::No);
+		if (!Node.IsValid()) { continue; }
+		if (Node->ElementName == TEXT("LeftEnd") || Node->ElementName == TEXT("left"))
+		{
+			ApplyChild(Node, Left);
+		}
+		else if (Node->ElementName == TEXT("middle") || Node->ElementName == TEXT("Middle"))
+		{
+			ApplyChild(Node, Mid);
+		}
+		else if (Node->ElementName == TEXT("RightEnd") || Node->ElementName == TEXT("right"))
+		{
+			ApplyChild(Node, Right);
+		}
+		for (const TSharedPtr<FACEUIElement>& Ch : Node->Children)
+		{
+			Stack.Add(Ch);
+		}
+	}
+}
+
+void UACEUIGameplayBinder::SyncSpellcastTabChrome()
+{
+	if (!Manager || !Client)
+	{
+		return;
+	}
+	constexpr uint32 DidActive = 0x06005EB8;
+	constexpr uint32 DidIdle = 0x06005EB9;
+	const int32 ActiveBar = Client->GetActiveSpellBar();
+	for (int32 i = 1; i <= 8; ++i)
+	{
+		const FString Name = FString::Printf(TEXT("Spellcast_Tab%d"), i);
+		if (TSharedPtr<FACEUIElement> Tab = Manager->FindElementByName(Name))
+		{
+			Tab->ImageFileId = (i - 1 == ActiveBar) ? DidActive : DidIdle;
+			Tab->bVisible = true;
+			// gmSpellcastingUI handles clicks on these authored Text controls.
+			Tab->bActivatable = true;
+			// Retail UIElement_Panel::Update: selected=12, closed=11.
+			Tab->DefaultState = (i - 1 == ActiveBar) ? 12u : 11u;
+		}
+	}
+}
+
+void UACEUIGameplayBinder::SyncRaiseButtonChrome(bool bCanRaise1, bool bCanRaise10)
+{
+	if (!Manager)
+	{
+		return;
+	}
+	const FString Page = ActiveSkillTab.IsEmpty() ? TEXT("AttributePage") : ActiveSkillTab;
+	const FString Footer = (Page == TEXT("SkillPage"))
+		? TEXT("StatManagement_Footer_Meter")
+		: TEXT("StatManagement_Footer_Text");
+	auto SetBtn = [&](const FString& BtnName, uint32 LitDid, uint32 DarkDid, bool bLit)
+	{
+		TSharedPtr<FACEUIElement> Btn;
+		if (TSharedPtr<FACEUIElement> Foot = Manager->FindElementUnder(Page, Footer))
+		{
+			TArray<TSharedPtr<FACEUIElement>> Stack;
+			Stack.Add(Foot);
+			while (Stack.Num() > 0 && !Btn.IsValid())
+			{
+				TSharedPtr<FACEUIElement> Cur = Stack.Pop(EAllowShrinking::No);
+				if (!Cur.IsValid()) { continue; }
+				if (Cur->ElementName == BtnName) { Btn = Cur; break; }
+				for (const TSharedPtr<FACEUIElement>& Child : Cur->Children)
+				{
+					Stack.Add(Child);
+				}
+			}
+		}
+		if (!Btn.IsValid())
+		{
+			Btn = Manager->FindElementUnder(Page, BtnName);
+		}
+		if (Btn.IsValid())
+		{
+			Btn->ImageFileId = bLit ? LitDid : DarkDid;
+			Btn->bVisible = true;
+			Btn->bActivatable = bLit;
+		}
+	};
+	SetBtn(TEXT("StatManagement_Footer_RaiseButton"), DidRaise1Lit, DidRaise1Dark, bCanRaise1);
+	SetBtn(TEXT("StatManagement_Footer_Raise10Button"), DidRaise10Lit, DidRaise10Dark, bCanRaise10);
+}
+
+void UACEUIGameplayBinder::SyncSkillPanelTab(const FString& PageName)
+{
+	if (!Manager)
+	{
+		return;
+	}
+	ActiveSkillTab = PageName;
+	static const TCHAR* Tabs[] = {
+		TEXT("AttributePage"), TEXT("SkillPage"), TEXT("CharacterTitlePage"),
+	};
+	for (const TCHAR* Tab : Tabs)
+	{
+		Manager->SetElementVisibleByName(Tab, PageName == Tab);
+	}
+	// Retail footers sit on each page — toggle under the active page only (duplicate names).
+	auto SetFooter = [this](const FString& Page, const FString& Footer, bool bVis)
+	{
+		if (TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(Page, Footer))
+		{
+			El->bVisible = bVis;
+		}
+	};
+	for (const TCHAR* Tab : Tabs)
+	{
+		const bool bActive = PageName == Tab;
+		SetFooter(Tab, TEXT("StatManagement_Footer_Default"), bActive && PageName == TEXT("CharacterTitlePage"));
+		SetFooter(Tab, TEXT("StatManagement_Footer_Text"), bActive && PageName == TEXT("AttributePage"));
+		SetFooter(Tab, TEXT("StatManagement_Footer_Meter"), bActive && PageName == TEXT("SkillPage"));
+	}
+	ApplyPanelTabChrome(TEXT("AttributeTab"), PageName == TEXT("AttributePage"));
+	ApplyPanelTabChrome(TEXT("SkillTab"), PageName == TEXT("SkillPage"));
+	ApplyPanelTabChrome(TEXT("CharacterTitleTab"), PageName == TEXT("CharacterTitlePage"));
+}
+
+void UACEUIGameplayBinder::SyncSpellPanelTab(const FString& PageName)
+{
+	if (!Manager)
+	{
+		return;
+	}
+	ActiveSpellPanelTab = PageName;
+	SpellbookScrollOffset = 0;
+	ComponentScrollOffset = 0;
+	Manager->SetElementVisibleByName(TEXT("SpellbookPage"), PageName == TEXT("SpellbookPage"));
+	Manager->SetElementVisibleByName(TEXT("SpellComponentPage"), PageName == TEXT("SpellComponentPage"));
+	ApplyPanelTabChrome(TEXT("SpellbookTab"), PageName == TEXT("SpellbookPage"));
+	ApplyPanelTabChrome(TEXT("SpellComponentTab"), PageName == TEXT("SpellComponentPage"));
+	if (PageName == TEXT("SpellbookPage"))
+	{
+		ReflowSpellbookPanelGeometry();
+	}
+	// Always sync so filter overlays collapse when leaving Spellbook (Components tab).
+	SyncSpellbookFilterCheckboxes();
+	RefreshSpellbookChromeLabels();
+	RefreshComponentOverlays();
+}
+
+void UACEUIGameplayBinder::ShowExamination(bool bVisible)
+{
+	if (!bVisible && EditingInscriptionGuid && ExamInscriptionEditor)
+		HandleInscriptionCommitted(ExamInscriptionEditor->GetText(), ETextCommit::OnUserMovedFocus);
+
+	if (!bVisible && Client)
+	{
+		DismissedIdentifySerial = Client->GetIdentifyRequestSerial();
+		bExaminationDismissed = true;
+	}
+	SetFloatyVisible(TEXT("RootGameplay_FloatyExamination_Field"), bVisible);
+	if (!bVisible)
+	{
+		return;
+	}
+	EnsureExamineItemChrome();
+	EnsureExamineCreatureChrome();
+	SyncExamineBodyVisibility(LastAppraisal.bIsCreature);
+	if (Manager)
+	{
+		Manager->SyncLockedChromeVisibility();
+	}
+}
+
+void UACEUIGameplayBinder::EnsureExamineCreatureChrome()
+{
+	// Layout 0x2100006B already supplies the frame. Do not graft 0x2100001C here.
+}
+
+void UACEUIGameplayBinder::EnsureExamineItemChrome()
+{
+	// Keep the resolved floaty layout, including its text viewport and paper strip.
+}
+
+void UACEUIGameplayBinder::SyncExamineBodyVisibility(bool bCreature)
+{
+	if (!Manager) return;
+	Manager->SetElementVisibleByName(TEXT("BasicCreatureExamineUI"), !ExaminedSpellId && bCreature);
+	Manager->SetElementVisibleByName(TEXT("ItemExamineUI"), !ExaminedSpellId && !bCreature);
+	Manager->SetElementVisibleByName(TEXT("SpellExamineUI"), ExaminedSpellId != 0);
+	// Conditional children retain their authored states. Revealing entire trees
+	// stacked the paperdoll, attributes and both scrollbar variants together.
+	Manager->SetElementVisibleByName(TEXT("ItemDisplayTextScrollbar_Reveal"), false);
+}
+
+void UACEUIGameplayBinder::ApplyCombatMode(int32 Mode)
+{
+	ApplyCombatModeInternal(Mode, true);
+}
+
+void UACEUIGameplayBinder::ApplyCombatModeInternal(int32 Mode, bool bSendToServer)
+{
+	CombatMode = Mode;
+	if (bSendToServer)
+	{
+		if (Mode == static_cast<int32>(ACECombatMode::NonCombat))
+		{
+			PendingCombatMode = 0;
+			PendingCombatModeUntil = 0.0;
+		}
+		else
+		{
+			PendingCombatMode = Mode;
+			PendingCombatModeUntil = FPlatformTime::Seconds() + 5.0;
+		}
+	}
+	else
+	{
+		PendingCombatMode = 0;
+	}
+	if (Client && bSendToServer)
+	{
+		Client->SendChangeCombatMode(CombatMode);
+	}
+	ApplyPreferredStance(CombatMode);
+	SyncCombatModeButtons();
+	LastAppliedStanceKey = (CombatMode << 8) | ResolveEquippedCombatMode();
+	LastEquipModeSnapshot = ResolveEquippedCombatMode();
+	const bool bInCombat = CombatMode != static_cast<int32>(ACECombatMode::NonCombat);
+	SetFloatyVisible(TEXT("RootGameplay_FloatyCombatPanel_Field"), bInCombat);
+	if (bInCombat)
+	{
+		if (bSendToServer
+			&& (CombatMode == static_cast<int32>(ACECombatMode::Melee)
+				|| CombatMode == static_cast<int32>(ACECombatMode::Missile)))
+		{
+			TryAutoTargetOnCombatEnter();
+		}
+		SetFloatyVisible(TEXT("RootGameplay_FloatyEnvPanel_Field"),
+			OpenLootContainerGuid != 0 || OpenVendorGuid != 0 || bTradeOpen);
+		const bool bMagic = CombatMode == static_cast<int32>(ACECombatMode::Magic);
+		if (Manager)
+		{
+			Manager->SetElementVisibleByName(TEXT("Spellcasting"), bMagic);
+			Manager->SetElementVisibleByName(TEXT("CombatPanel"), !bMagic);
+			for (int32 i = 0; i < 8; ++i)
+			{
+				Manager->SetElementVisibleByName(
+					FString::Printf(TEXT("Spellcasting_Bank%d"), i + 1),
+					bMagic && Client && Client->GetActiveSpellBar() == i);
+			}
+			SyncSpellcastTabChrome();
+		}
+		if (bMagic)
+		{
+			// Fixed 13-slot layout (right arrow against last slot) is applied in RefreshSpellHotbarOverlays.
+			if (Manager)
+			{
+				Manager->SetElementVisibleByName(TEXT("CastSpellButton"), true);
+			}
+			RefreshSpellHotbarOverlays();
+		}
+		else
+		{
+			FitCombatFloatyContentWidth(600);
+			if (CastSpellLabel)
+			{
+				CastSpellLabel->SetVisibility(ESlateVisibility::Collapsed);
+			}
+			RefreshCombatPanelOverlays();
+		}
+	}
+	else
+	{
+		bCombatPowerCharging = false;
+		bCombatAttackRequestPending = false;
+		bCombatRepeatActive = false;
+	}
+}
+
+void UACEUIGameplayBinder::SyncCombatModeFromServer(int32 Mode)
+{
+	ApplyCombatModeInternal(Mode, /*bSendToServer*/ false);
+}
+
+void UACEUIGameplayBinder::ApplyPreferredStance(int32 Mode)
+{
+	if (!PlayerController)
+	{
+		return;
+	}
+	APawn* P = PlayerController->GetPawn();
+	if (!P)
+	{
+		return;
+	}
+	UACECharacterAppearanceComponent* App = P->FindComponentByClass<UACECharacterAppearanceComponent>();
+	if (!App)
+	{
+		return;
+	}
+	uint32 Stance = ACEMotion::StanceNonCombat;
+	if (Client)
+	{
+		const TArray<FACEWorldObject> Equipped = Client->GetEquippedItems();
+		Stance = ACECombatStance::ResolveForCombatMode(Equipped, static_cast<uint32>(Mode));
+		if (TSharedPtr<FACESession> Session = Client->GetSession())
+		{
+			Session->SetCurrentStance(Stance);
+		}
+	}
+	App->SetPreferredStyle(static_cast<int32>(Stance));
+}
+
+void UACEUIGameplayBinder::RefreshCombatPanelOverlays()
+{
+	if (Client && Client->GetSessionState() == EACESessionState::InWorld)
+	{
+		bCombatAutoRepeat = Client->IsCharacterOptionSet(0x00);
+		bCombatAutoTarget = Client->IsCharacterOptionSet(0x0D);
+		bCombatViewTarget = Client->IsCharacterOptionSet(0x07);
+	}
+	const bool bMeleeOrMissile = CombatMode == static_cast<int32>(ACECombatMode::Melee)
+		|| CombatMode == static_cast<int32>(ACECombatMode::Missile);
+	auto HideCombatOverlays = [this]()
+	{
+		auto Collapse = [](UWidget* W)
+		{
+			if (W) { W->SetVisibility(ESlateVisibility::Collapsed); }
+		};
+		Collapse(CombatSpeedLabel);
+		Collapse(CombatPowerLabel);
+		Collapse(CombatPowerFill);
+		Collapse(CombatCheckboxAutoRepeat);
+		Collapse(CombatCheckboxAutoTarget);
+		Collapse(CombatCheckboxViewTarget);
+		for (UTextBlock* T : CombatAttackLabels) { Collapse(T); }
+		for (UTextBlock* T : CombatCheckboxLabels) { Collapse(T); }
+	};
+	if (!bMeleeOrMissile || !Manager || !Canvas || !Canvas->WidgetTree)
+	{
+		HideCombatOverlays();
+		return;
+	}
+	TSharedPtr<FACEUIElement> CombatRoot = Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field"));
+	TSharedPtr<FACEUIElement> CombatPanel = Manager->FindElementUnder(
+		TEXT("RootGameplay_FloatyCombatPanel_Field"), TEXT("CombatPanel"));
+	if (!CombatRoot.IsValid() || !CombatRoot->bVisible || !CombatPanel.IsValid() || !CombatPanel->bVisible)
+	{
+		HideCombatOverlays();
+		return;
+	}
+
+	// Melee/missile authored frame is 600 — keep internal black fill flush with gold chrome.
+	FitCombatFloatyContentWidth(600);
+
+	EnsureOverlays();
+	const bool bMissile = CombatMode == static_cast<int32>(ACECombatMode::Missile);
+	PlaceTextOnElement(CombatSpeedLabel, TEXT("Speed"), TEXT("Speed"), 8, TextGold, 620);
+	PlaceTextOnElement(CombatPowerLabel, TEXT("Power"),
+		bMissile ? TEXT("Accuracy") : TEXT("Power"), 8, TextGold, 620);
+
+	while (CombatCheckboxLabels.Num() < 3)
+	{
+		UTextBlock* L = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		L->SetVisibility(ESlateVisibility::HitTestInvisible);
+		L->SetJustification(ETextJustify::Left);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 8);
+		L->SetFont(Font);
+		CombatCheckboxLabels.Add(L);
+	}
+	auto PlaceCheckboxLabel = [&](int32 Index, const FString& ElementName, const FString& Contents)
+	{
+		UTextBlock* Text = CombatCheckboxLabels[Index];
+		TSharedPtr<FACEUIElement> El = Manager->FindElementByName(ElementName);
+		if (!Text || !El.IsValid())
+		{
+			if (Text) { Text->SetVisibility(ESlateVisibility::Collapsed); }
+			return;
+		}
+		// The DAT text state already reserves 18 pixels for its checkbox child.
+		PlaceTextOnElement(Text, El, Contents, 8, TextWhite, 621);
+	};
+	PlaceCheckboxLabel(0, TEXT("AutoRepeatAttack"), TEXT("Auto Repeat"));
+	PlaceCheckboxLabel(1, TEXT("AutoTarget"), TEXT("Auto Target"));
+	PlaceCheckboxLabel(2, TEXT("ViewCombatTarget"), TEXT("View Combat"));
+
+	while (CombatAttackLabels.Num() < 3)
+	{
+		UTextBlock* L = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		L->SetVisibility(ESlateVisibility::HitTestInvisible);
+		L->SetJustification(ETextJustify::Center);
+		CombatAttackLabels.Add(L);
+	}
+	const FLinearColor HiCol = CombatAttackHeight == ACEAttackHeight::High ? TextGold : TextWhite;
+	const FLinearColor MedCol = CombatAttackHeight == ACEAttackHeight::Medium ? TextGold : TextWhite;
+	const FLinearColor LowCol = CombatAttackHeight == ACEAttackHeight::Low ? TextGold : TextWhite;
+	PlaceTextOnElement(CombatAttackLabels[0], TEXT("HighAttack"), TEXT("High"), 8, HiCol, 622);
+	PlaceTextOnElement(CombatAttackLabels[1], TEXT("MediumAttack"), TEXT("Medium"), 8, MedCol, 622);
+	PlaceTextOnElement(CombatAttackLabels[2], TEXT("LowAttack"), TEXT("Low"), 8, LowCol, 622);
+	for (const TCHAR* Name : {TEXT("HighAttack"),TEXT("MediumAttack"),TEXT("LowAttack")})
+	{
+		if (auto El = Manager->FindElementByName(Name))
+			El->bHighlighted = FCString::Strcmp(Name,TEXT("HighAttack")) == 0 ? CombatAttackHeight == ACEAttackHeight::High
+				: FCString::Strcmp(Name,TEXT("LowAttack")) == 0 ? CombatAttackHeight == ACEAttackHeight::Low : CombatAttackHeight == ACEAttackHeight::Medium;
+	}
+
+	auto SetCheckbox = [&](const FString& Name, bool bChecked, TObjectPtr<UBorder>& Border)
+	{
+		TSharedPtr<FACEUIElement> El = Manager->FindElementByName(Name);
+		if (!El.IsValid())
+		{
+			return;
+		}
+		El->bHighlighted = bChecked;
+		El->bActivatable = true;
+		// Composite button states are passed to the authored image child (4D15..4D19).
+		// Do not replace them with the unrelated round option-button icons.
+		for (const TSharedPtr<FACEUIElement>& Child : El->Children)
+		{
+			if (Child.IsValid())
+			{
+				Child->bActivatable = false;
+			}
+		}
+		if (Border) { Border->SetVisibility(ESlateVisibility::Collapsed); }
+	};
+	SetCheckbox(TEXT("AutoRepeatAttack"), bCombatAutoRepeat, CombatCheckboxAutoRepeat);
+	SetCheckbox(TEXT("AutoTarget"), bCombatAutoTarget, CombatCheckboxAutoTarget);
+	SetCheckbox(TEXT("ViewCombatTarget"), bCombatViewTarget, CombatCheckboxViewTarget);
+
+	const float DisplayPower = bCombatPowerCharging ? CombatPowerOrAccuracy : 0.f;
+
+	if (TSharedPtr<FACEUIElement> Meter = Manager->FindElementByName(TEXT("PowerMeter")))
+	{
+		Meter->MeterFillFraction = FMath::Clamp(DisplayPower, 0.f, 1.f);
+	}
+	if (TSharedPtr<FACEUIElement> Fill = Manager->FindElementByName(TEXT("basic_recklessness_fill")))
+	{
+		if (TSharedPtr<FACEUIElement> Parent = Fill->Parent.Pin())
+		{
+			Parent->MeterFillFraction = FMath::Clamp(DisplayPower, 0.f, 1.f);
+		}
+	}
+
+	// Move the authored thumb; drawing another overlay left two handles on the track.
+	if (CombatPowerFill) { CombatPowerFill->SetVisibility(ESlateVisibility::Collapsed); }
+	if (TSharedPtr<FACEUIElement> Slider = Manager->FindElementByName(TEXT("PowerSlider")))
+	{
+		for (const TSharedPtr<FACEUIElement>& Child : Slider->Children)
+		{
+			if (Child.IsValid() && Child->ElementId == 1)
+			{
+				Child->X = FMath::RoundToInt(FMath::Clamp(RequestedAttackPower, 0.f, 1.f)
+					* FMath::Max(0, Slider->Width - Child->Width));
+				Child->bActivatable = false;
+			}
+		}
+	}
+}
+
+void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
+{
+	if (PlayerController && PlayerController->IsVRActive())
+	{
+		bCombatRepeatActive = bCombatAttackRequestPending = bCombatPowerCharging = false;
+		return;
+	}
+	if (CombatMode != static_cast<int32>(ACECombatMode::Melee)
+		&& CombatMode != static_cast<int32>(ACECombatMode::Missile))
+	{
+		return;
+	}
+
+	const double Now = FPlatformTime::Seconds();
+	if (Client && Client->GetSession())
+	{
+		const auto Session = Client->GetSession();
+		if (Session->GetCombatEventRevision() != LastCombatEventRevision)
+		{
+			LastCombatEventRevision = Session->GetCombatEventRevision();
+			if (Session->GetLastAttackError() != 0)
+			{
+				bCombatRepeatActive = false;
+				bCombatAttackRequestPending = false;
+			}
+			bCombatPowerCharging = !Session->IsServerAttackInProgress()
+				&& (bCombatAttackRequestPending || (bCombatRepeatActive && bCombatAutoRepeat));
+			CombatPowerBuildStartTime = Now;
+			CombatPowerOrAccuracy = 0.f;
+			// ClientCombatSystem::HandleAttackDone only replaces a server repeat when
+			// the desired slider power changed. Sending every second restarted melee turns.
+			if (bCombatPowerCharging && bCombatRepeatActive
+				&& !FMath::IsNearlyEqual(LastCombatAttackPower, RequestedAttackPower, .01f))
+			{
+				CombatPowerOrAccuracy = RequestedAttackPower;
+				FireCombatAttack();
+			}
+		}
+		if (bCombatRepeatActive)
+		{
+			FACEWorldObject Target;
+			if (!Client->GetWorldObject(LastCombatAttackTarget, Target) || !Target.IsAttackable())
+			{
+				bCombatRepeatActive = false;
+				bCombatPowerCharging = bCombatAttackRequestPending;
+			}
+		}
+	}
+	if (!bCombatPowerCharging) return;
+	const float T = GetCombatPowerChargeDuration();
+	CombatPowerOrAccuracy = FMath::Clamp(static_cast<float>(Now-CombatPowerBuildStartTime)
+		/ FMath::Max(.05f,T),0.f,RequestedAttackPower);
+	if (bCombatAttackRequestPending && CombatPowerOrAccuracy >= RequestedAttackPower - KINDA_SMALL_NUMBER)
+	{
+		bCombatAttackRequestPending = false;
+		bCombatPowerCharging = false;
+		FireCombatAttack();
+	}
+}
+
+float UACEUIGameplayBinder::GetCombatPowerChargeDuration() const
+{
+	// Retail GetPowerBarLevel: T = 0.8 DualWieldCombat (0x80000046), else 1.0.
+	uint32 Stance = ACEMotion::StanceNonCombat;
+	if (Client && Client->GetSession())
+	{
+		Stance = Client->GetSession()->GetCurrentStance();
+	}
+	return (Stance == ACEMotion::StanceDualWield) ? 0.8f : 1.0f;
+}
+
+void UACEUIGameplayBinder::BeginCombatPowerCharge(uint32 AttackHeight)
+{
+	if (PlayerController && PlayerController->IsVRActive()) return;
+	if (CombatMode != static_cast<int32>(ACECombatMode::Melee)
+		&& CombatMode != static_cast<int32>(ACECombatMode::Missile))
+	{
+		return;
+	}
+	CombatAttackHeight = AttackHeight;
+	bCombatAttackRequestPending = true;
+	bCombatPowerCharging = true;
+	CombatPowerBuildStartTime = FPlatformTime::Seconds();
+	CombatPowerOrAccuracy = 0.f;
+}
+
+void UACEUIGameplayBinder::TryAutoTargetOnCombatEnter()
+{
+	if (Client && Client->GetSessionState() == EACESessionState::InWorld)
+		bCombatAutoTarget = Client->IsCharacterOptionSet(0x0D);
+	if (!bCombatAutoTarget || !Client || !Client->GetSession())
+	{
+		return;
+	}
+	const TSharedPtr<FACESession> Session = Client->GetSession();
+	const int32 Attacker = Session->GetLastAttackerGuid();
+	if (Attacker == 0 || Attacker == Client->GetPlayerGuid())
+	{
+		return;
+	}
+	if (FPlatformTime::Seconds() - Session->GetLastAttackerTimeSeconds() > 15.0)
+	{
+		return;
+	}
+	FACEWorldObject Obj;
+	if (!Client->GetWorldObject(Attacker, Obj) || !Obj.IsAttackable())
+	{
+		return;
+	}
+	Client->SelectObject(Attacker);
+}
+
+void UACEUIGameplayBinder::FireCombatAttack()
+{
+	if (PlayerController && PlayerController->IsVRActive()) return;
+	if (!Client)
+	{
+		return;
+	}
+	int32 TargetGuid = 0;
+	if (LastSelection.bValid && LastSelection.Guid != 0
+		&& LastSelection.Guid != Client->GetPlayerGuid())
+	{
+		TargetGuid = LastSelection.Guid;
+	}
+	else
+	{
+		const FACESelectedObject Sel = Client->GetSelectedObject();
+		if (Sel.bValid && Sel.Guid != 0 && Sel.Guid != Client->GetPlayerGuid())
+		{
+			TargetGuid = Sel.Guid;
+		}
+	}
+	if (TargetGuid == 0)
+	{
+		return;
+	}
+
+	FACEWorldObject Target;
+	if (!Client->GetWorldObject(TargetGuid, Target) || !Target.IsAttackable())
+	{
+		return;
+	}
+
+	if (CombatMode == static_cast<int32>(ACECombatMode::Missile))
+	{
+		uint32 Stance = ACEMotion::StanceNonCombat;
+		if (Client->GetSession())
+		{
+			Stance = Client->GetSession()->GetCurrentStance();
+		}
+		const bool bMissileStance =
+			Stance == ACEMotion::StanceBowCombat
+			|| Stance == ACEMotion::StanceCrossbow
+			|| Stance == ACEMotion::StanceSling
+			|| Stance == ACEMotion::StanceThrownWeapon
+			|| Stance == ACEMotion::StanceAtlatl
+			|| Stance == ACEMotion::StanceThrownShield;
+		if (!bMissileStance)
+		{
+			return;
+		}
+		Client->SendTargetedMissileAttack(TargetGuid, static_cast<int32>(CombatAttackHeight), CombatPowerOrAccuracy);
+	}
+	else if (CombatMode == static_cast<int32>(ACECombatMode::Melee))
+	{
+		if (PlayerController) PlayerController->FaceWorldTarget(TargetGuid);
+		Client->SendTargetedMeleeAttack(TargetGuid, static_cast<int32>(CombatAttackHeight), CombatPowerOrAccuracy);
+	}
+	LastCombatAttackTarget = TargetGuid;
+	LastCombatAttackPower = CombatPowerOrAccuracy;
+	bCombatRepeatActive = bCombatAutoRepeat;
+}
+
+bool UACEUIGameplayBinder::TryBeginCombatPowerDrag(FVector2D CanvasLocalPos)
+{
+	if (!Manager || (CombatMode != static_cast<int32>(ACECombatMode::Melee)
+		&& CombatMode != static_cast<int32>(ACECombatMode::Missile)))
+	{
+		return false;
+	}
+	TSharedPtr<FACEUIElement> Slider = Manager->FindElementByName(TEXT("PowerSlider"));
+	TSharedPtr<FACEUIElement> CombatRoot = Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field"));
+	if (!Slider.IsValid() || !CombatRoot.IsValid() || !CombatRoot->bVisible
+		|| !Canvas || !Canvas->IsElementExposedAt(Slider, CanvasLocalPos))
+	{
+		return false;
+	}
+	const FIntPoint O = Slider->GetScreenOrigin();
+	if (CanvasLocalPos.X < O.X || CanvasLocalPos.Y < O.Y
+		|| CanvasLocalPos.X >= O.X + Slider->Width || CanvasLocalPos.Y >= O.Y + Slider->Height)
+	{
+		return false;
+	}
+	bCombatPowerDrag = true;
+	UpdateCombatPowerDrag(CanvasLocalPos);
+	return true;
+}
+
+void UACEUIGameplayBinder::UpdateCombatPowerDrag(FVector2D CanvasLocalPos)
+{
+	if (!bCombatPowerDrag || !Manager)
+	{
+		return;
+	}
+	TSharedPtr<FACEUIElement> Slider = Manager->FindElementByName(TEXT("PowerSlider"));
+	if (!Slider.IsValid())
+	{
+		return;
+	}
+	const FIntPoint O = Slider->GetScreenOrigin();
+	const float TrackW = static_cast<float>(FMath::Max(1, Slider->Width - 12));
+	CombatPowerOrAccuracy = FMath::Clamp((CanvasLocalPos.X - static_cast<float>(O.X)) / TrackW, 0.f, 1.f);
+	RequestedAttackPower = CombatPowerOrAccuracy;
+}
+
+bool UACEUIGameplayBinder::TryFinishCombatPowerDrag(FVector2D CanvasLocalPos)
+{
+	if (!bCombatPowerDrag)
+	{
+		return false;
+	}
+	UpdateCombatPowerDrag(CanvasLocalPos);
+	bCombatPowerDrag = false;
+	RequestedAttackPower = CombatPowerOrAccuracy;
+	return true;
+}
+
+bool UACEUIGameplayBinder::HitTestSpellBarSlot(FVector2D Absolute, int32& OutSlotIndex) const
+{
+	OutSlotIndex = INDEX_NONE;
+	auto Test = [&](const TArray<TObjectPtr<UBorder>>& Borders) -> bool
+	{
+		for (int32 i = 0; i < Borders.Num() && i < SpellBarSpellIds.Num(); ++i)
+		{
+			UBorder* Border = Borders[i];
+			if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed)
+			{
+				continue;
+			}
+			if (Canvas->IsWidgetExposedAt(Border, Absolute))
+			{
+				OutSlotIndex = i;
+				return true;
+			}
+		}
+		return false;
+	};
+	// Icons for filled spells; empty-cell backgrounds for append / insert targets.
+	return Test(SpellBarIcons) || Test(SpellBarSlotBgs);
+}
+
+bool UACEUIGameplayBinder::HitTestSpellbookRow(FVector2D Absolute, int32& OutSpellId) const
+{
+	OutSpellId = 0;
+	for (int32 i = 0; i < SpellbookIcons.Num() && i < SpellbookRowIds.Num(); ++i)
+	{
+		UBorder* Background = SpellbookRowBackgrounds.IsValidIndex(i) ? SpellbookRowBackgrounds[i] : nullptr;
+		if (Background && Background->GetVisibility() != ESlateVisibility::Collapsed && Canvas->IsWidgetExposedAt(Background, Absolute))
+		{ OutSpellId = SpellbookRowIds[i]; return OutSpellId != 0; }
+		UBorder* Icon = SpellbookIcons[i];
+		if (Icon && Icon->GetVisibility() != ESlateVisibility::Collapsed
+			&& Canvas->IsWidgetExposedAt(Icon, Absolute))
+		{
+			OutSpellId = SpellbookRowIds[i];
+			return OutSpellId != 0;
+		}
+		UTextBlock* Row = SpellbookRows.IsValidIndex(i) ? SpellbookRows[i] : nullptr;
+		if (Row && Row->GetVisibility() != ESlateVisibility::Collapsed
+			&& Canvas->IsWidgetExposedAt(Row, Absolute))
+		{
+			OutSpellId = SpellbookRowIds[i];
+			return OutSpellId != 0;
+		}
+	}
+	return false;
+}
+
+bool UACEUIGameplayBinder::TryBeginSpellDrag(FVector2D CanvasLocalPos)
+{
+	if (!Client || !Canvas || !Canvas->GetElementLayer())
+	{
+		return false;
+	}
+	const FVector2D Absolute = Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos);
+
+	int32 SpellId = 0;
+	int32 SourceSlot = INDEX_NONE;
+	if (HitTestSpellbookRow(Absolute, SpellId) && SpellId != 0)
+	{
+		SelectedSpellbookId = SpellId;
+		RefreshSpellbookOverlays();
+		SourceSlot = INDEX_NONE;
+	}
+	else if (HitTestSpellBarSlot(Absolute, SourceSlot)
+		&& SpellBarSpellIds.IsValidIndex(SourceSlot) && SpellBarSpellIds[SourceSlot] != 0)
+	{
+		SpellId = SpellBarSpellIds[SourceSlot];
+	}
+	else
+	{
+		return false;
+	}
+
+	// Retail: second press within the double-click window casts immediately (same as inventory).
+	// Detect on MouseDown — spell drag otherwise swallows the click before TryHandleOverlayClick.
+	if (SourceSlot != INDEX_NONE && SpellId != 0)
+	{
+		SelectedCombatSpellSlot = SourceSlot + SpellHotbarScrollOffset;
+		const double Now = FPlatformTime::Seconds();
+		constexpr double DoubleClickSeconds = 0.75;
+		if (SourceSlot == LastSpellClickSlot && SpellId == LastSpellClickId
+			&& (Now - LastSpellClickTime) < DoubleClickSeconds)
+		{
+			if (!Client->SendCastSpell(SpellId))
+			{
+				PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+			}
+			LastSpellClickSlot = INDEX_NONE;
+			LastSpellClickId = 0;
+			LastSpellClickTime = 0.0;
+			RefreshSpellHotbarOverlays();
+			return true;
+		}
+		LastSpellClickSlot = SourceSlot;
+		LastSpellClickId = SpellId;
+		LastSpellClickTime = Now;
+		RefreshSpellHotbarOverlays();
+	}
+
+	FString SpellName;
+	uint32 IconDid = 0;
+	if (PlayerController)
+	{
+		if (UGameInstance* GI = PlayerController->GetGameInstance())
+		{
+			if (UACEDatSubsystem* Dat = GI->GetSubsystem<UACEDatSubsystem>())
+			{
+				Dat->TryGetSpellInfo(static_cast<uint32>(SpellId), SpellName, IconDid);
+			}
+		}
+	}
+	SpellDragId = SpellId;
+	SpellDragIconDid = static_cast<int32>(IconDid);
+	SpellDragSourceBarSlot = SourceSlot;
+	SpellDragStartLocal = CanvasLocalPos;
+	bSpellDragPending = true;
+	bSpellDragActive = false;
+	return true;
+}
+
+void UACEUIGameplayBinder::SelectVRSpell(int32 Spell)
+{
+	if (!Client) return;
+	SelectedCombatSpellSlot = Client->GetSpellBar(Client->GetActiveSpellBar()).Find(Spell);
+	RefreshSpellHotbarOverlays();
+}
+
+void UACEUIGameplayBinder::CancelPointerGestures()
+{
+	CancelSpellDrag(); CancelInventoryDrag();
+	bCombatPowerDrag = false;
+	TryFinishScrollbarDrag();
+	if (Manager) Manager->CancelPointerCapture();
+	if (Canvas) Canvas->ResetPointerOwnership();
+}
+
+void UACEUIGameplayBinder::UpdateSpellDrag(FVector2D CanvasLocalPos)
+{
+	if (!bSpellDragPending || SpellDragId == 0 || !Canvas || !Canvas->WidgetTree)
+	{
+		return;
+	}
+	if (!bSpellDragActive)
+	{
+		if (FVector2D::Distance(CanvasLocalPos, SpellDragStartLocal) < 12.f)
+		{
+			return;
+		}
+		bSpellDragActive = true;
+	}
+	if (!SpellDragIcon)
+	{
+		SpellDragIcon = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+		SpellDragIcon->SetPadding(FMargin(0.f));
+		SpellDragIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
+	}
+	SetSpellIcon(SpellDragIcon, SpellDragId);
+	SpellDragIcon->SetBrushColor(FLinearColor(1.f, 1.f, 1.f, 0.85f));
+	SpellDragIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
+	if (SpellDragIcon->GetParent() != Canvas->GetElementLayer())
+	{
+		Canvas->GetElementLayer()->AddChild(SpellDragIcon);
+	}
+	if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(SpellDragIcon->Slot))
+	{
+		Slot->SetAnchors(FAnchors(0.f, 0.f));
+		Slot->SetAutoSize(false);
+		Slot->SetPosition(CanvasLocalPos - FVector2D(16.f, 16.f));
+		Slot->SetSize(FVector2D(32.f, 32.f));
+		Canvas->SetOverlayOrder(SpellDragIcon, nullptr, 250000);
+	}
+}
+
+bool UACEUIGameplayBinder::TryFinishSpellDrag(FVector2D CanvasLocalPos)
+{
+	if (!bSpellDragPending || SpellDragId == 0)
+	{
+		return false;
+	}
+	const int32 SpellId = SpellDragId;
+	const int32 SourceSlot = SpellDragSourceBarSlot;
+	const bool bWasDragging = bSpellDragActive;
+	CancelSpellDrag();
+	if (!Client || !bWasDragging)
+	{
+		// Select only on release without a drag. Keep the retail windows open so
+		// the next gesture can rearrange a spell bank or continue shopping.
+		if (Client && PlayerController && PlayerController->IsVRActive()) Client->SendCastSpell(SpellId);
+		return true;
+	}
+	const FVector2D Absolute = Canvas
+		? Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos)
+		: CanvasLocalPos;
+
+	int32 DestSlot = INDEX_NONE;
+	if (HitTestSpellBarSlot(Absolute, DestSlot))
+	{
+		const int32 BarIndex = Client->GetActiveSpellBar();
+		const TArray<int32> Bar = Client->GetSpellBar(BarIndex);
+		int32 Filled = 0;
+		for (int32 i = 0; i < Bar.Num(); ++i)
+		{
+			if (Bar[i] == 0) { break; }
+			++Filled;
+		}
+		const int32 AbsDest = DestSlot + SpellHotbarScrollOffset;
+		// Empty / past-end → first available (append). Occupied → insert + shift right.
+		int32 InsertAt = AbsDest;
+		if (InsertAt >= Filled || (Bar.IsValidIndex(InsertAt) && Bar[InsertAt] == 0))
+		{
+			InsertAt = Filled;
+		}
+        const int32 SelectedId=Bar.IsValidIndex(SelectedCombatSpellSlot) ? Bar[SelectedCombatSpellSlot] : 0;
+		Client->SendAddSpellToBar(SpellId, InsertAt, BarIndex);
+        if (SelectedId) SelectedCombatSpellSlot=Client->GetSpellBar(BarIndex).Find(SelectedId);
+		RefreshSpellHotbarOverlays();
+		return true;
+	}
+
+	// Dropped off the bar (or back onto spellbook) while dragging from the bar → remove.
+	if (SourceSlot != INDEX_NONE)
+	{
+		const bool bOverSpellbook = ActivePanelPage == TEXT("SpellManagementPanel_Field")
+			&& ActiveSpellPanelTab == TEXT("SpellbookPage");
+		TSharedPtr<FACEUIElement> CombatRoot = Manager
+			? Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field"))
+			: nullptr;
+		bool bOverCombatBar = false;
+		if (CombatRoot.IsValid() && CombatRoot->bVisible)
+		{
+			const FIntPoint O = CombatRoot->GetScreenOrigin();
+			bOverCombatBar = CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
+				&& CanvasLocalPos.X < O.X + CombatRoot->Width
+				&& CanvasLocalPos.Y < O.Y + CombatRoot->Height;
+		}
+		if (bOverSpellbook || !bOverCombatBar)
+		{
+			Client->SendRemoveSpellFromBar(SpellId, Client->GetActiveSpellBar());
+			RefreshSpellHotbarOverlays();
+		}
+	}
+	return true;
+}
+
+void UACEUIGameplayBinder::SyncCombatModeButtons()
+{
+	if (!Manager)
+	{
+		return;
+	}
+	// Retail stacks four mode buttons at the same rect; show the active mode art.
+	const int32 Equipped = ResolveEquippedCombatMode();
+	const bool bPeace = CombatMode == static_cast<int32>(ACECombatMode::NonCombat);
+	Manager->SetElementVisibleByName(TEXT("PeaceModeButton"), bPeace);
+	Manager->SetElementVisibleByName(TEXT("MeleeModeButton"),
+		!bPeace && CombatMode == static_cast<int32>(ACECombatMode::Melee));
+	Manager->SetElementVisibleByName(TEXT("MissileModeButton"),
+		!bPeace && CombatMode == static_cast<int32>(ACECombatMode::Missile));
+	Manager->SetElementVisibleByName(TEXT("MagicModeButton"),
+		!bPeace && CombatMode == static_cast<int32>(ACECombatMode::Magic));
+	// When in peace, still leave Melee/Missile/Magic hittable via Peace button cycling —
+	// clicking PeaceMode when already peace enters equipped mode (retail peace↔combat).
+	if (bPeace)
+	{
+		// Expose only PeaceModeButton visually; click handler on Peace enters Equipped.
+		(void)Equipped;
+	}
+}
+
+int32 UACEUIGameplayBinder::ResolveEquippedCombatMode() const
+{
+	return Client ? static_cast<int32>(ACECombatStance::ResolveEquippedMode(Client->GetEquippedItems()))
+		: static_cast<int32>(ACECombatMode::Melee);
+}
+
+bool UACEUIGameplayBinder::HasEquippedCaster() const
+{
+	if (!Client)
+	{
+		return false;
+	}
+	for (const FACEWorldObject& Obj : Client->GetEquippedItems())
+	{
+		const int64 Loc = Obj.CurrentWieldedLocation;
+		if ((Loc & ACEEquipMask::Held) != 0)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UACEUIGameplayBinder::HasEquippedMissileWeapon() const
+{
+	if (!Client)
+	{
+		return false;
+	}
+	for (const FACEWorldObject& Obj : Client->GetEquippedItems())
+	{
+		const int64 Loc = Obj.CurrentWieldedLocation;
+		if ((Loc & ACEEquipMask::MissileWeapon) != 0
+			|| ((Loc & (ACEEquipMask::MeleeWeapon | ACEEquipMask::TwoHanded)) != 0
+				&& (Obj.ItemType & ACEItemType::MissileWeapon) != 0))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+void UACEUIGameplayBinder::UseSelectedObject()
+{
+	if (!Client || !LastSelection.bValid || LastSelection.Guid == 0)
+	{
+		return;
+	}
+	if (Client->SortInventoryItem(LastSelection.Guid)) return;
+
+	if (PlayerController)
+	{
+		PlayerController->InteractWithObject(LastSelection.Guid);
+	}
+	else
+	{
+		FACEWorldObject Loot;
+		if (Client->GetWorldObject(LastSelection.Guid, Loot) && Loot.IsWorldLootable())
+		{
+			Client->SendPutItemInContainer(LastSelection.Guid, Client->GetPlayerGuid(), 0);
+		}
+		else
+		{
+			Client->SendUseItem(LastSelection.Guid);
+		}
+	}
+}
+
+void UACEUIGameplayBinder::ExamineSelectedObject()
+{
+	if (!Client || !LastSelection.bValid || LastSelection.Guid == 0)
+	{
+		return;
+	}
+	Client->SendIdentifyObject(LastSelection.Guid);
+}
+
+void UACEUIGameplayBinder::UseShortcutSlot(int32 SlotIndex1Based)
+{
+	if (!Client || SlotIndex1Based < 1)
+	{
+		return;
+	}
+	const int32 Guid = Client->GetShortcutObject(SlotIndex1Based - 1);
+	if (Guid != 0)
+	{
+		// Same as inventory double-click: wield weapons/armor, Use gems/food/etc.
+		UseInventoryItem(Guid);
+	}
+}
+
+void UACEUIGameplayBinder::ActivateHotbarSlot(int32 SlotIndex)
+{
+	if (!Client || SlotIndex < 0 || SlotIndex >= 10)
+	{
+		return;
+	}
+	const bool bMagic = CombatMode == static_cast<int32>(ACECombatMode::Magic);
+	TSharedPtr<FACEUIElement> CombatRoot = Manager
+		? Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field"))
+		: nullptr;
+	const bool bSpellBarOpen = bMagic && CombatRoot.IsValid() && CombatRoot->bVisible;
+	if (bSpellBarOpen)
+	{
+		// Scrolling changes the view, never the first ten key bindings.
+		const TArray<int32> Bar = Client->GetSpellBar(Client->GetActiveSpellBar());
+		const int32 SpellId = Bar.IsValidIndex(SlotIndex) ? Bar[SlotIndex] : 0;
+		if (SpellId != 0)
+		{
+			SelectedCombatSpellSlot = SlotIndex;
+			if (!Client->SendCastSpell(SpellId))
+			{
+				PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+			}
+		}
+		return;
+	}
+	UseShortcutSlot(SlotIndex + 1 + ShortcutBarPage * 9);
+}
+
+void UACEUIGameplayBinder::SelectInventoryGuid(int32 Guid)
+{
+	if (!Client || Guid == 0)
+	{
+		return;
+	}
+	Client->SelectObject(Guid);
+}
+
+void UACEUIGameplayBinder::PostInventorySystemMessage(const FString& Text)
+{
+	// Retail shows these ("You're too busy!" etc.) as the transient center-top banner.
+	HandleChatMessage(Text, FString(), ACEChatMessageType::TransientInfo);
+}
+
+void UACEUIGameplayBinder::ShowTransientInfo(const FString& Message)
+{
+	if (!Canvas || !Canvas->WidgetTree || Message.IsEmpty())
+	{
+		return;
+	}
+	if (!TransientInfoText)
+	{
+		TransientInfoText = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		TransientInfoText->SetJustification(ETextJustify::Center);
+		TransientInfoText->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 12));
+		// Retail transient text gold-yellow with a dark drop shadow for readability.
+		TransientInfoText->SetColorAndOpacity(FSlateColor(FLinearColor(1.f, 0.9f, 0.2f)));
+		TransientInfoText->SetShadowColorAndOpacity(FLinearColor(0.f, 0.f, 0.f, 0.9f));
+		TransientInfoText->SetShadowOffset(FVector2D(1.f, 1.f));
+	}
+	TransientInfoText->SetText(FText::FromString(Message));
+	TransientInfoText->SetVisibility(ESlateVisibility::HitTestInvisible);
+	TransientInfoText->SetRenderOpacity(1.f);
+	TransientInfoShownAt = FPlatformTime::Seconds();
+
+	if (UCanvasPanel* Layer = Canvas->GetElementLayer())
+	{
+		if (TransientInfoText->GetParent() != Layer)
+		{
+			Layer->AddChild(TransientInfoText);
+		}
+		if (UCanvasPanelSlot* InfoSlot = Cast<UCanvasPanelSlot>(TransientInfoText->Slot))
+		{
+			// Anchored top-center of the viewport, below the 3D view's upper edge.
+			InfoSlot->SetAnchors(FAnchors(0.5f, 0.f, 0.5f, 0.f));
+			InfoSlot->SetAlignment(FVector2D(0.5f, 0.f));
+			InfoSlot->SetAutoSize(true);
+			InfoSlot->SetPosition(FVector2D(0.f, 48.f));
+			Canvas->SetOverlayOrder(TransientInfoText, Manager->FindElementByName(TEXT("RootGameplay_SmartBox_Field")), 15000);
+		}
+	}
+}
+
+void UACEUIGameplayBinder::TickTransientInfo()
+{
+	if (!TransientInfoText || TransientInfoText->GetVisibility() == ESlateVisibility::Collapsed)
+	{
+		return;
+	}
+	// Retail hold ≈ 4s, then a short fade before hiding.
+	constexpr double HoldSeconds = 4.0;
+	constexpr double FadeSeconds = 1.0;
+	const double Elapsed = FPlatformTime::Seconds() - TransientInfoShownAt;
+	if (Elapsed <= HoldSeconds)
+	{
+		TransientInfoText->SetRenderOpacity(1.f);
+		return;
+	}
+	if (Elapsed >= HoldSeconds + FadeSeconds)
+	{
+		TransientInfoText->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+	TransientInfoText->SetRenderOpacity(
+		1.f - static_cast<float>((Elapsed - HoldSeconds) / FadeSeconds));
+}
+
+void UACEUIGameplayBinder::FitCombatFloatyContentWidth(int32 ContentW)
+{
+	if (!Manager || ContentW <= 0)
+	{
+		return;
+	}
+	TSharedPtr<FACEUIElement> CombatRoot = Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field"));
+	TSharedPtr<FACEUIElement> CombatPanel = Manager->FindElementUnder(
+		TEXT("RootGameplay_FloatyCombatPanel_Field"), TEXT("CombatPanel"));
+	if (!CombatRoot.IsValid())
+	{
+		return;
+	}
+	constexpr int32 Chrome = 10; // left+right borders
+	CombatRoot->Width = ContentW + Chrome;
+	if (CombatPanel.IsValid())
+	{
+		CombatPanel->Width = ContentW;
+		// Authored mid/right backgrounds target 800 — resize so the fill matches the gold frame.
+		if (TSharedPtr<FACEUIElement> Left = Manager->FindElementUnder(TEXT("CombatPanel"), TEXT("background_left")))
+		{
+			Left->Width = 10;
+			Left->X = 0;
+		}
+		constexpr int32 RightW = 100;
+		if (TSharedPtr<FACEUIElement> Mid = Manager->FindElementUnder(TEXT("CombatPanel"), TEXT("background_mid")))
+		{
+			Mid->X = 10;
+			Mid->Width = FMath::Max(1, ContentW - 10 - RightW);
+		}
+		if (TSharedPtr<FACEUIElement> Right = Manager->FindElementUnder(TEXT("CombatPanel"), TEXT("background_right")))
+		{
+			Right->X = FMath::Max(10, ContentW - RightW);
+			Right->Width = RightW;
+		}
+	}
+	for (const TCHAR* Border : {
+		TEXT("CombatPanelTopBorder"), TEXT("CombatPanelBottomBorder"),
+		TEXT("CombatPanelTopBorder_Locked"), TEXT("CombatPanelBottomBorder_Locked") })
+	{
+		if (TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(
+			TEXT("RootGameplay_FloatyCombatPanel_Field"), Border))
+		{
+			El->Width = ContentW;
+		}
+	}
+	for (const TCHAR* Corner : {
+		TEXT("CombatPanelTopRightCorner"), TEXT("CombatPanelBottomRightCorner"),
+		TEXT("CombatPanelRightBorder"), TEXT("CombatPanelTopRightCorner_Locked"),
+		TEXT("CombatPanelBottomRightCorner_Locked"), TEXT("CombatPanelRightBorder_Locked") })
+	{
+		if (TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(
+			TEXT("RootGameplay_FloatyCombatPanel_Field"), Corner))
+		{
+			El->X = ContentW + 5;
+		}
+	}
+	if (TSharedPtr<FACEUIElement> Spell = Manager->FindElementByName(TEXT("Spellcasting")))
+	{
+		Spell->Width = ContentW;
+	}
+	if (TSharedPtr<FACEUIElement> Bg = Manager->FindElementUnder(TEXT("Spellcasting"), TEXT("SpellcastSlot_Background")))
+	{
+		Bg->Width = ContentW;
+	}
+	if (TSharedPtr<FACEUIElement> TabBg = Manager->FindElementUnder(TEXT("Spellcasting"), TEXT("SpellcastSlot_TabBackground")))
+	{
+		TabBg->Width = ContentW;
+	}
+	if (TSharedPtr<FACEUIElement> Panel = Manager->FindElementUnder(TEXT("Spellcasting"), TEXT("SpellcastPanel")))
+	{
+		Panel->Width = ContentW;
+	}
+	// Keep Cast inside the framed content (caller may place Cast explicitly before this).
+	if (TSharedPtr<FACEUIElement> Cast = Manager->FindElementByName(TEXT("CastSpellButton")))
+	{
+		constexpr int32 CastW = 75;
+		Cast->Width = CastW;
+		// Only snap to the right edge when still on the authored 800-wide Cast x.
+		if (Cast->X <= 0 || Cast->X >= ContentW - CastW)
+		{
+			Cast->X = FMath::Max(0, ContentW - CastW - 6);
+		}
+	}
+}
+
+void UACEUIGameplayBinder::ExpandCombatFloatyForWideContent()
+{
+	FitCombatFloatyContentWidth(800);
+}
+
+void UACEUIGameplayBinder::ExpandEnvFloatyForWideContent()
+{
+	// The resolved retail layout is 610x120 with 600x110 content. The former
+	// 800-pixel override stretched the lists but left their nested bevels at 600.
+	// Keep the authored geometry; normal edge anchoring handles user resizing.
+	if (!Manager) return;
+	if (auto Root = Manager->FindElementByName(TEXT("RootGameplay_FloatyEnvPanel_Field")))
+	{
+		UACEUIElementManager::ApplyFloatyResizeLayout(Root);
+	}
+}
+int64 UACEUIGameplayBinder::ResolveWieldLocation(const FACEWorldObject& Obj, int64 PreferredSlotMask) const
+{
+	if (PreferredSlotMask == ACEEquipMask::Shield && ACEEquipmentRules::CanWieldInSlot(Obj, PreferredSlotMask))
+		return ACEEquipMask::Shield;
+	if (Obj.ValidLocations == 0)
+	{
+		return 0;
+	}
+	// Armor / clothing: ACE expects the full ValidLocations mask.
+	if ((Obj.ItemType & (ACEItemType::Armor | ACEItemType::Clothing)) != 0)
+	{
+		return Obj.ValidLocations;
+	}
+
+	auto SlotOccupied = [this](int64 Bit) -> bool
+	{
+		if (!Client || Bit == 0)
+		{
+			return false;
+		}
+		for (const FACEWorldObject& Eq : Client->GetEquippedItems())
+		{
+			if ((Eq.CurrentWieldedLocation & Bit) != 0)
+			{
+				return true;
+			}
+		}
+		return false;
+	};
+
+	auto PickDual = [&](int64 Left, int64 Right) -> int64
+	{
+		const int64 Both = Left | Right;
+		if ((Obj.ValidLocations & Both) == 0)
+		{
+			return 0;
+		}
+		if (PreferredSlotMask != 0 && (Obj.ValidLocations & PreferredSlotMask) != 0
+			&& (PreferredSlotMask & Both) != 0 && !SlotOccupied(PreferredSlotMask))
+		{
+			return PreferredSlotMask;
+		}
+		const bool bCanLeft = (Obj.ValidLocations & Left) != 0;
+		const bool bCanRight = (Obj.ValidLocations & Right) != 0;
+		if (bCanLeft && !SlotOccupied(Left))
+		{
+			return Left;
+		}
+		if (bCanRight && !SlotOccupied(Right))
+		{
+			return Right;
+		}
+		// Both occupied (or only one valid and occupied) — return preferred/left for swap.
+		if (PreferredSlotMask != 0 && (Obj.ValidLocations & PreferredSlotMask) != 0
+			&& (PreferredSlotMask & Both) != 0)
+		{
+			return PreferredSlotMask;
+		}
+		if (bCanLeft)
+		{
+			return Left;
+		}
+		if (bCanRight)
+		{
+			return Right;
+		}
+		return 0;
+	};
+
+	if (const int64 Finger = PickDual(ACEEquipMask::FingerWearLeft, ACEEquipMask::FingerWearRight))
+	{
+		return Finger;
+	}
+	if (const int64 Wrist = PickDual(ACEEquipMask::WristWearLeft, ACEEquipMask::WristWearRight))
+	{
+		return Wrist;
+	}
+
+	// Never return a multi-bit doll mask (e.g. full ShirtWear) as the wield location —
+	// ACE clothing/armor already returned ValidLocations above; other wearables need a bit.
+	auto IsSingleBit = [](int64 M) { return M != 0 && (M & (M - 1)) == 0; };
+	if (PreferredSlotMask != 0 && (Obj.ValidLocations & PreferredSlotMask) != 0
+		&& IsSingleBit(PreferredSlotMask))
+	{
+		return PreferredSlotMask;
+	}
+	if (PreferredSlotMask != 0)
+	{
+		const int64 Overlap = Obj.ValidLocations & PreferredSlotMask;
+		if (IsSingleBit(Overlap))
+		{
+			return Overlap;
+		}
+		// Multi-bit overlap (shirt core): use the object's authored ValidLocations.
+		if (Overlap != 0)
+		{
+			return Obj.ValidLocations;
+		}
+	}
+	static const int64 Priority[] = {
+		ACEEquipMask::Held,
+		ACEEquipMask::MeleeWeapon,
+		ACEEquipMask::TwoHanded,
+		ACEEquipMask::MissileWeapon,
+		ACEEquipMask::Shield,
+		ACEEquipMask::MissileAmmo,
+		ACEEquipMask::HeadWear,
+		ACEEquipMask::ChestArmor,
+		ACEEquipMask::ChestWear,
+		ACEEquipMask::AbdomenArmor,
+		ACEEquipMask::UpperArmArmor,
+		ACEEquipMask::LowerArmArmor,
+		ACEEquipMask::HandWear,
+		ACEEquipMask::UpperLegArmor,
+		ACEEquipMask::LowerLegArmor,
+		ACEEquipMask::FootWear,
+		ACEEquipMask::NeckWear,
+		ACEEquipMask::WristWearLeft,
+		ACEEquipMask::WristWearRight,
+		ACEEquipMask::FingerWearLeft,
+		ACEEquipMask::FingerWearRight,
+	};
+	for (const int64 Bit : Priority)
+	{
+		if ((Obj.ValidLocations & Bit) != 0)
+		{
+			return Bit;
+		}
+	}
+	return Obj.ValidLocations;
+}
+
+void UACEUIGameplayBinder::UnequipConflictsAndWield(int32 Guid, const FACEWorldObject& Obj, int64 Loc)
+{
+	if (!Client || Guid == 0 || Loc == 0)
+	{
+		return;
+	}
+	const int32 Self = Client->GetPlayerGuid();
+	constexpr int64 WeaponHand = ACEEquipMask::MeleeWeapon | ACEEquipMask::TwoHanded
+		| ACEEquipMask::MissileWeapon | ACEEquipMask::Held;
+	constexpr int64 Jewelry = ACEEquipMask::NeckWear | ACEEquipMask::WristWearLeft
+		| ACEEquipMask::WristWearRight | ACEEquipMask::FingerWearLeft | ACEEquipMask::FingerWearRight
+		| ACEEquipMask::TrinketOne | ACEEquipMask::Cloak | ACEEquipMask::SigilOne
+		| ACEEquipMask::SigilTwo | ACEEquipMask::SigilThree;
+	const bool bWeaponHand = (Loc & WeaponHand) != 0;
+	const uint32 NewCov = ACEInferClothingPriority(Loc, Obj.ItemType);
+	const bool bClothingOrArmor = NewCov != 0;
+
+	for (const FACEWorldObject& Eq : Client->GetEquippedItems())
+	{
+		if (Eq.Guid == Guid || Eq.CurrentWieldedLocation == 0)
+		{
+			continue;
+		}
+		const int64 EqLoc = Eq.CurrentWieldedLocation;
+		bool bConflict = false;
+		if ((Loc == ACEEquipMask::Shield && ((EqLoc & (ACEEquipMask::Held | ACEEquipMask::TwoHanded)) != 0
+			|| ((EqLoc & ACEEquipMask::MissileWeapon) != 0 && Eq.AmmoType != 0)))
+			|| ((EqLoc & ACEEquipMask::Shield) != 0 && ((Loc & (ACEEquipMask::Held | ACEEquipMask::TwoHanded)) != 0
+				|| ((Loc & ACEEquipMask::MissileWeapon) != 0 && Obj.AmmoType != 0))))
+		{
+			bConflict = true;
+		}
+		else if (bWeaponHand && (EqLoc & WeaponHand) != 0)
+		{
+			bConflict = true;
+		}
+		else if (bClothingOrArmor)
+		{
+			// Retail Creature_Equipment: Clothing conflicts use ClothingPriority, not EquipMask.
+			const uint32 EqCov = ACEInferClothingPriority(EqLoc, Eq.ItemType);
+			if (EqCov != 0)
+			{
+				bConflict = (NewCov & EqCov) != 0;
+			}
+			else if ((EqLoc & Loc) != 0)
+			{
+				bConflict = true;
+			}
+		}
+		else if ((Loc & Jewelry) != 0 && (EqLoc & Loc) != 0)
+		{
+			bConflict = true;
+		}
+		else if ((EqLoc & Loc) != 0 && ACEInferClothingPriority(EqLoc, Eq.ItemType) == 0)
+		{
+			bConflict = true;
+		}
+		if (bConflict)
+		{
+			Client->SendPutItemInContainer(Eq.Guid, Self, 0);
+		}
+	}
+	Client->SendGetAndWieldItem(Guid, Loc);
+}
+
+void UACEUIGameplayBinder::UseInventoryItem(int32 Guid)
+{
+	if (!Client || Guid == 0)
+	{
+		return;
+	}
+	FACEWorldObject Obj;
+	if (!Client->GetWorldObject(Guid, Obj))
+	{
+		Client->SendUseItem(Guid);
+		return;
+	}
+	Client->SelectObject(Guid);
+
+	const bool bManaStone = (Obj.ItemType & ACEItemType::ManaStone) != 0;
+	// Completing a pending dual-use: second click on another inventory item.
+	if (PendingUseWithSourceGuid != 0 && PendingUseWithSourceGuid != Guid)
+	{
+		TryCompletePendingUseWithTarget(Guid);
+		return;
+	}
+    // Re-clicking the source is not a request to consume it on the player.
+    if (PendingUseWithSourceGuid == Guid) return;
+
+	if (Guid == Client->GetPlayerGuid())
+	{
+		SelectedPackGuid = Guid;
+		InventoryScrollOffset = 0;
+		ShowPanelPage(TEXT("InventoryPanel_Field"));
+		RefreshInventoryOverlays();
+		SyncInventoryScrollbars();
+		return;
+	}
+
+	if (Client->IsUseBusy())
+	{
+		PostInventorySystemMessage(TEXT("You're too busy!"));
+		return;
+	}
+	// Inventory activation follows the retail decision tree. Neither item charges
+	// nor a guessed list of wearable item types changes the advertised useability.
+	const int32 Self = Client->GetPlayerGuid();
+	bool bOwned = Obj.WielderId == Self || Obj.ContainerId == Self;
+	int32 Owner = Obj.ContainerId;
+	TSet<int32> Visited;
+	while (!bOwned && Owner != 0 && !Visited.Contains(Owner))
+	{
+		Visited.Add(Owner);
+		FACEWorldObject Container;
+		if (!Client->GetWorldObject(Owner, Container)) break;
+		bOwned = Container.ContainerId == Self || Container.WielderId == Self;
+		Owner = Container.ContainerId;
+	}
+	if (bOwned)
+	{
+		const EACEOwnedItemUse Result = ACEInventoryRules::DetermineOwnedUse(Obj, Self);
+		if (Result == EACEOwnedItemUse::Backpack)
+		{
+			Client->SendPutItemInContainer(Guid, Self, 0);
+			ApplyPreferredStance(CombatMode);
+			return;
+		}
+		if (Result == EACEOwnedItemUse::WieldRight || Result == EACEOwnedItemUse::WieldLeft
+			|| Result == EACEOwnedItemUse::AutoWear)
+		{
+			const int64 Preferred = Result == EACEOwnedItemUse::WieldLeft ? ACEEquipMask::Shield : 0;
+			const int64 Location = ResolveWieldLocation(Obj, Preferred);
+			if (Location) UnequipConflictsAndWield(Guid, Obj, Location);
+			return;
+		}
+		if (Result == EACEOwnedItemUse::Salvage)
+		{
+			ShowSalvagePanel(Guid);
+			return;
+		}
+		if (ACEInventoryRules::IsContainer(Obj))
+		{
+			SelectedPackGuid = Guid;
+			InventoryScrollOffset = 0;
+			ShowPanelPage(TEXT("InventoryPanel_Field"));
+			RefreshInventoryOverlays();
+			SyncInventoryScrollbars();
+			return;
+		}
+	}
+	if (!ACEInventoryRules::IsUsable(Obj.ItemUseable))
+	{
+		PostInventorySystemMessage(FString::Printf(TEXT("The %s cannot be used"), *Obj.Name));
+		return;
+	}
+	if (Obj.CurrentWieldedLocation == 0 && ACEInventoryRules::LeastLimitedSourceUse(Obj.ItemUseable) == 4)
+	{
+		PostInventorySystemMessage(FString::Printf(TEXT("You must wield the %s to use it"), *Obj.Name));
+		return;
+	}
+	const bool bDualUseTargeting = ACEItemUseable::IsTargeted(Obj.ItemUseable);
+	if (bDualUseTargeting)
+	{
+		PendingUseWithSourceGuid = Guid;
+		SyncPendingUseCursor();
+		if (bManaStone)
+		{
+			// Structure>0 ≈ charged stone (PublicWeenieDesc); empty stones drain a target item.
+			PostInventorySystemMessage((Obj.UiEffects & 1) != 0
+				? TEXT("Select an item to give mana to, or click yourself to charge all equipped items.")
+				: TEXT("Select an item to drain mana from (the item will be destroyed)."));
+		}
+		else
+		{
+			PostInventorySystemMessage(TEXT("Select a target for that item."));
+		}
+		return;
+	}
+	if (Client->IsUseBusy())
+	{
+		PostInventorySystemMessage(TEXT("You're too busy!"));
+		return;
+	}
+	Client->SendUseItem(Guid);
+}
+
+bool UACEUIGameplayBinder::TryCompletePendingUseWithTarget(int32 TargetGuid)
+{
+	if (PendingUseWithSourceGuid == 0 || TargetGuid == 0 || !Client)
+	{
+		return false;
+	}
+	// Same guid only allowed when targeting self via the mana stone (use → player).
+	if (PendingUseWithSourceGuid == TargetGuid && TargetGuid != Client->GetPlayerGuid())
+	{
+		return false;
+	}
+	if (Client->IsUseBusy())
+	{
+		PostInventorySystemMessage(TEXT("You're too busy!"));
+		PendingUseWithSourceGuid = 0;
+		SyncPendingUseCursor();
+		return true;
+	}
+	FACEWorldObject Source, Target;
+	if (!Client->GetWorldObject(PendingUseWithSourceGuid, Source) || !Client->GetWorldObject(TargetGuid, Target))
+	{
+		CancelPendingUseWith();
+		return true;
+	}
+	// ItemHolder::TargetAcquired: empty mana stones destroy the selected item.
+	// Retail blocks Retained items and requires the authored Yes/No dialog first.
+	if ((Source.ItemType & ACEItemType::ManaStone) && !(Source.UiEffects & 1))
+	{
+		if (Target.ObjectDescriptionFlags & ACEObjectDescFlag::Retained)
+			PostInventorySystemMessage(TEXT("You cannot drain the mana of this item because it is \"Retained\"."));
+		else if (TargetGuid != Client->GetPlayerGuid()) ShowManaStoneConfirmation(Source.Guid, Target);
+		else PostInventorySystemMessage(TEXT("Select an item to drain into the empty mana stone."));
+	}
+	else Client->SendUseWithTarget(Source.Guid, TargetGuid);
+	PendingUseWithSourceGuid = 0;
+	SyncPendingUseCursor();
+	return true;
+}
+
+void UACEUIGameplayBinder::ShowManaStoneConfirmation(int32 Source, const FACEWorldObject& Target)
+{
+	if (!Manager || !Canvas || !Canvas->WidgetTree) return;
+	if (!ManaStoneConfirmRoot)
+	{
+		ManaStoneConfirmRoot = UACEUILayoutResolver::LoadTemplate(0x2100003C, 0x15);
+		if (!ManaStoneConfirmRoot) return;
+		ManaStoneConfirmRoot->ElementName = TEXT("RootGameplay_FloatyManaStoneConfirmation_Field");
+		TFunction<void(TSharedPtr<FACEUIElement>)> NameControls = [&](TSharedPtr<FACEUIElement> Node)
+		{
+			if (Node->ElementId == 0x3D)
+			{
+				Node->LeftEdge = Node->RightEdge = Node->TopEdge = Node->BottomEdge = 3;
+			}
+			if (Node->ElementId == 0x3E) Node->ElementName = TEXT("ManaStoneConfirmationBody");
+			if (Node->ElementId == 0x17) Node->ElementName = TEXT("ManaStoneConfirmationYes");
+			if (Node->ElementId == 0x19) Node->ElementName = TEXT("ManaStoneConfirmationNo");
+			for (const auto& Child : Node->Children) NameControls(Child);
+		};
+		NameControls(ManaStoneConfirmRoot);
+		// Join the gameplay window stack so DAT chrome and text share one paint base.
+		if (auto GameplayRoot=Manager->FindElementByName(TEXT("RootGameplay_Field"))) GameplayRoot->AddChild(ManaStoneConfirmRoot);
+		else Manager->AddRoot(ManaStoneConfirmRoot);
+		for (int32 I=0; I<3; ++I)
+			ManaStoneConfirmLabels.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
+	}
+	ManaStoneConfirmSource = Source;
+	ManaStoneConfirmTarget = Target.Guid;
+	ManaStoneConfirmRoot->bVisible = true;
+	// Size the body from the same DAT glyph advances that paint it. DialogFactory
+	// grows the authored box to the wrapped text, then centers it in the viewport.
+	const auto Body = Manager->FindElementByName(TEXT("ManaStoneConfirmationBody"));
+	FACEDatFont Font;
+	if (Body && Canvas->GetResourceResolver()->ResolveFont(Body->FontId, Font))
+	{
+		const FString Prompt = FString::Printf(TEXT("\nAre you sure you want to attempt to destroy your %s and drain its mana into this stone?"), *Target.Name);
+		const int32 H = ACEDatText::Layout(Font,Prompt,Body->Width-Body->TextMargins.Left-Body->TextMargins.Right,false).Num()*Font.MaxCharHeight
+			+ Body->TextMargins.Top+Body->TextMargins.Bottom;
+		const int32 Delta=H-Body->Height;
+		if (auto Box=Body->Parent.Pin())
+		{
+			Box->Height+=Delta; Box->LayoutAuthoredH=Box->LastReflowH=Box->Height;
+			for (const auto& Child:Box->Children)
+			{
+				if (Child->TopEdge==2) Child->Y+=Delta;
+				else if (Child->BottomEdge==1) Child->Height+=Delta;
+				Child->LayoutAuthoredH=Child->LastReflowH=Child->Height;
+			}
+		}
+	}
+	Manager->BringFloatyToFront(ManaStoneConfirmRoot);
+	RefreshManaStoneConfirmation();
+}
+
+void UACEUIGameplayBinder::RefreshManaStoneConfirmation()
+{
+	if (!ManaStoneConfirmSource || !Client || ManaStoneConfirmLabels.Num()!=3) return;
+	FACEWorldObject Target;
+	if (!Client->GetWorldObject(ManaStoneConfirmTarget, Target)) { FinishManaStoneConfirmation(false); return; }
+	const FString Prompt = FString::Printf(TEXT("\nAre you sure you want to attempt to destroy your %s and drain its mana into this stone?"), *Target.Name);
+	PlaceTextOnElement(ManaStoneConfirmLabels[0], TEXT("ManaStoneConfirmationBody"), Prompt, 12, TextWhite, 200020);
+	PlaceTextOnElement(ManaStoneConfirmLabels[1], TEXT("ManaStoneConfirmationYes"), TEXT("Yes"), 12, TextWhite, 200020, true);
+	PlaceTextOnElement(ManaStoneConfirmLabels[2], TEXT("ManaStoneConfirmationNo"), TEXT("No"), 12, TextWhite, 200020, true);
+}
+
+void UACEUIGameplayBinder::FinishManaStoneConfirmation(bool bAccept)
+{
+	const int32 Source = ManaStoneConfirmSource, Target = ManaStoneConfirmTarget;
+	ManaStoneConfirmSource = ManaStoneConfirmTarget = 0;
+	if (ManaStoneConfirmRoot) ManaStoneConfirmRoot->bVisible = false;
+	for (UTextBlock* Label : ManaStoneConfirmLabels) if (Label) Label->SetVisibility(ESlateVisibility::Collapsed);
+	FACEWorldObject SourceObject, TargetObject;
+	if (bAccept && Source && Client && !Client->IsUseBusy()
+		&& Client->GetWorldObject(Source, SourceObject) && Client->GetWorldObject(Target, TargetObject)
+		&& !(TargetObject.ObjectDescriptionFlags & ACEObjectDescFlag::Retained))
+		Client->SendUseWithTarget(Source, Target);
+}
+
+void UACEUIGameplayBinder::SyncPendingUseCursor()
+{
+	if (PlayerController)
+	{
+		PlayerController->SetPendingUseTargeting(PendingUseWithSourceGuid != 0);
+	}
+}
+
+void UACEUIGameplayBinder::CancelPendingUseWith()
+{
+	FinishManaStoneConfirmation(false);
+	if (PendingUseWithSourceGuid == 0)
+	{
+		return;
+	}
+	PendingUseWithSourceGuid = 0;
+	SyncPendingUseCursor();
+}
+
+int32 UACEUIGameplayBinder::GetPendingUseWithSourceGuid() const
+{
+	return PendingUseWithSourceGuid;
+}
+
+bool UACEUIGameplayBinder::IsPendingUseTargetCompatible(int32 TargetGuid) const
+{
+	if (!Client) return false;
+	FACEWorldObject Source, Target;
+	if (!Client->GetWorldObject(PendingUseWithSourceGuid,Source) || !Client->GetWorldObject(TargetGuid,Target)) return false;
+	auto Owned = [&](FACEWorldObject Object)
+	{
+		TSet<int32> Visited;
+		while (Object.Guid && !Visited.Contains(Object.Guid))
+		{
+			Visited.Add(Object.Guid);
+			const int32 Parent = Object.WielderId ? Object.WielderId : Object.ContainerId;
+			if (Parent == Client->GetPlayerGuid()) return true;
+			if (!Parent || !Client->GetWorldObject(Parent,Object)) break;
+		}
+		return false;
+	};
+	return ACEInventoryRules::IsTargetCompatible(Source,Target,Client->GetPlayerGuid(),
+		Owned(Source),Owned(Target),Client->GetTradeSelfItems().Contains(TargetGuid));
+}
+
+int32 UACEUIGameplayBinder::FindUpperEquippedItem(int64 Mask) const
+{
+	int32 Guid = 0; uint32 Priority = 0;
+	if (Client && Mask) for (const auto& Item : Client->GetEquippedItems())
+	{
+		const uint32 Locations = uint32(Item.CurrentWieldedLocation & Mask);
+		if (!Locations) continue;
+		uint32 Candidate = uint32(Item.ClothingPriority);
+		if (!Candidate && Locations >= 0x200 && Locations <= 0x4000) Candidate = 127;
+		if (!Guid || Candidate >= Priority) { Guid = Item.Guid; Priority = Candidate; }
+	}
+	return Guid;
+}
+
+int32 UACEUIGameplayBinder::GetInventoryTargetAt(FVector2D Absolute) const
+{
+	if (!Client || !Canvas || !Manager || ActivePanelPage != TEXT("InventoryPanel_Field")) return 0;
+	int32 Guid=0, Slot=0;
+	if (HitTestInventorySlot(Absolute,Guid,Slot)) return Guid;
+	if (HitTestPackSlot(Absolute,Guid)) return Guid;
+	FString SlotName; int64 Mask=0;
+	if (HitTestDollSlot(Absolute,SlotName,Mask))
+	{
+		if (const int32 Worn = FindUpperEquippedItem(Mask)) return Worn;
+		return Client->GetPlayerGuid();
+	}
+	const auto Doll=Manager->FindElementUnder(TEXT("InventoryPanel_Field"),TEXT("PaperDoll"));
+	const FVector2D Local=Canvas->GetCachedGeometry().AbsoluteToLocal(Absolute);
+	if (Doll && Canvas->IsElementExposedAt(Doll,Local))
+	{
+		const FVector2D P=Local/Canvas->GetLastScale2D()-FVector2D(Doll->GetScreenOrigin());
+		if (P.X>=0 && P.Y>=0 && P.X<Doll->Width && P.Y<Doll->Height) return Client->GetPlayerGuid();
+	}
+	return 0;
+}
+
+void UACEUIGameplayBinder::CancelInventoryDrag()
+{
+	if (PaperDollDragTargetIcon) PaperDollDragTargetIcon->SetVisibility(ESlateVisibility::Collapsed);
+	InvDragGuid = 0;
+	InvDragIconDid = 0;
+	InvDragSourcePack = 0;
+	InvDragSourceSlot = INDEX_NONE;
+	InvDragPackSlotIndex = INDEX_NONE;
+	bInvDragPending = false;
+	bInvDragActive = false;
+	bInvDoubleClickPending = false;
+	if (InvDragIcon)
+	{
+		InvDragIcon->SetVisibility(ESlateVisibility::Collapsed);
+	}
+	SyncInventoryButtonVisual();
+}
+
+void UACEUIGameplayBinder::CancelSpellDrag()
+{
+	SpellDragId = 0;
+	SpellDragIconDid = 0;
+	SpellDragSourceBarSlot = INDEX_NONE;
+	bSpellDragPending = false;
+	bSpellDragActive = false;
+	if (SpellDragIcon)
+	{
+		SpellDragIcon->SetVisibility(ESlateVisibility::Collapsed);
+	}
+}
+
+bool UACEUIGameplayBinder::HitTestInventorySlot(FVector2D Absolute, int32& OutGuid, int32& OutSlotIndex) const
+{
+	OutGuid = 0;
+	OutSlotIndex = INDEX_NONE;
+	auto TestArray = [&](const TArray<TObjectPtr<UBorder>>& Borders) -> bool
+	{
+		for (int32 i = 0; i < Borders.Num() && i < InventorySlotGuids.Num(); ++i)
+		{
+			UBorder* Border = Borders[i];
+			if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed)
+			{
+				continue;
+			}
+			if (Canvas->IsWidgetExposedAt(Border, Absolute))
+			{
+				OutGuid = InventorySlotGuids[i];
+				OutSlotIndex = InventoryScrollOffset + i;
+				return true;
+			}
+		}
+		return false;
+	};
+	// Prefer icon, then empty cell background (drop targets).
+	return TestArray(InventorySlots) || TestArray(InventorySlotBgs);
+}
+
+bool UACEUIGameplayBinder::HitTestPackSlot(FVector2D Absolute, int32& OutPackGuid) const
+{
+	OutPackGuid = 0;
+	for (int32 i = 0; i < PackSlots.Num() && i < PackSlotGuids.Num(); ++i)
+	{
+		UBorder* Border = PackSlots[i];
+		if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed)
+		{
+			continue;
+		}
+		if (Canvas->IsWidgetExposedAt(Border, Absolute))
+		{
+			OutPackGuid = PackSlotGuids[i];
+			return OutPackGuid != 0;
+		}
+	}
+	return false;
+}
+
+bool UACEUIGameplayBinder::HitTestDollSlot(FVector2D Absolute, FString& OutSlotName, int64& OutMask) const
+{
+	OutSlotName.Reset();
+	OutMask = 0;
+	// Prefer overlay icons when visible (equipped / show-equipment on).
+	for (const auto& Pair : PaperDollIcons)
+	{
+		UBorder* Border = Pair.Value;
+		if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed)
+		{
+			continue;
+		}
+		if (!Canvas->IsWidgetExposedAt(Border, Absolute))
+		{
+			continue;
+		}
+		for (const FDollSlotMap& Slot : GDollSlots)
+		{
+			if (Pair.Key == Slot.Name)
+			{
+				OutSlotName = Slot.Name;
+				OutMask = Slot.Mask;
+				return true;
+			}
+		}
+	}
+	// Retail: drops still work when Show Equipment is off — hit DAT slot geometry.
+	if (!Manager || !Canvas || !Canvas->GetElementLayer())
+	{
+		return false;
+	}
+	const FGeometry LayerGeo = Canvas->GetElementLayer()->GetCachedGeometry();
+	const FVector2D Local = LayerGeo.AbsoluteToLocal(Absolute);
+	for (const FDollSlotMap& Slot : GDollSlots)
+	{
+		TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(TEXT("InventoryPanel_Field"), Slot.Name);
+		if (!El.IsValid())
+		{
+			El = Manager->FindElementByName(Slot.Name);
+		}
+		if (!El.IsValid() || !El->bVisible || (!bShowPaperdollSlots && IsMainBodyDollSlot(Slot.Name)))
+		{
+			continue;
+		}
+		const FIntPoint O = El->GetScreenOrigin();
+		if (Local.X >= O.X && Local.Y >= O.Y
+			&& Local.X < O.X + El->Width && Local.Y < O.Y + El->Height)
+		{
+			OutSlotName = Slot.Name;
+			OutMask = Slot.Mask;
+			return true;
+		}
+	}
+	if (!bShowPaperdollSlots)
+	{
+		const auto Mask = Manager->FindElementUnder(TEXT("InventoryPanel_Field"), TEXT("PaperDollDragMask"));
+		if (Mask && Canvas->IsElementExposedAt(Mask, Canvas->GetCachedGeometry().AbsoluteToLocal(Absolute)))
+		{
+			const FVector2D P = Local - FVector2D(Mask->GetScreenOrigin());
+			if (P.X >= 0 && P.Y >= 0 && P.X < Mask->Width && P.Y < Mask->Height)
+			{
+				OutSlotName = TEXT("PaperDoll");
+				if (auto* Resources = Canvas->GetResourceResolver())
+					OutMask = Resources->ResolvePaperDollSelectionMask(FIntPoint(FMath::FloorToInt(P.X), FMath::FloorToInt(P.Y)));
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool UACEUIGameplayBinder::IsPointerOverInventoryPanel(FVector2D CanvasLocalPos) const
+{
+	if (!Manager || ActivePanelPage != TEXT("InventoryPanel_Field"))
+	{
+		return false;
+	}
+	TSharedPtr<FACEUIElement> Page = Manager->FindElementByName(TEXT("InventoryPanel_Field"));
+	if (!Page.IsValid() || !Page->bVisible)
+	{
+		return false;
+	}
+	const FIntPoint O = Page->GetScreenOrigin();
+	return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
+		&& CanvasLocalPos.X < O.X + Page->Width && CanvasLocalPos.Y < O.Y + Page->Height;
+}
+
+bool UACEUIGameplayBinder::TryBeginInventoryDrag(FVector2D CanvasLocalPos)
+{
+	if (!Canvas || !Canvas->GetElementLayer())
+	{
+		return false;
+	}
+	const FVector2D Absolute = Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos);
+
+	// Loot panel items → drag into inventory (double-click picks up).
+	if (OpenLootContainerGuid != 0)
+	{
+		for (int32 i = 0; i < ExtItemSlots.Num() && i < ExtItemGuids.Num(); ++i)
+		{
+			UBorder* Border = ExtItemSlots[i];
+			if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed)
+			{
+				continue;
+			}
+			if (!Canvas->IsWidgetExposedAt(Border, Absolute))
+			{
+				continue;
+			}
+			const int32 Guid = ExtItemGuids[i];
+			if (Guid == 0)
+			{
+				return false;
+			}
+			const double Now = FPlatformTime::Seconds();
+			const double DoubleClickSeconds = InventoryDoubleClickSeconds();
+			bInvDoubleClickPending = Guid == LastInvClickGuid && (Now - LastInvClickTime) < DoubleClickSeconds;
+			FACEWorldObject Obj;
+			if (Client)
+			{
+				Client->GetWorldObject(Guid, Obj);
+			}
+			InvDragGuid = Guid;
+			InvDragIconDid = Obj.IconId;
+			InvDragSourcePack = OpenLootSelectedPackGuid != 0 ? OpenLootSelectedPackGuid : OpenLootContainerGuid;
+			InvDragSourceSlot = i + ExtItemScrollOffset;
+			InvDragPackSlotIndex = INDEX_NONE;
+			InvDragStartLocal = CanvasLocalPos;
+			bInvDragPending = true;
+			bInvDragActive = false;
+			SelectInventoryGuid(Guid);
+			return true;
+		}
+	}
+
+	if (ActivePanelPage != TEXT("InventoryPanel_Field") || !Manager
+		|| !Canvas->IsElementExposedAt(Manager->FindElementByName(TEXT("InventoryPanel_Field")), CanvasLocalPos))
+	{
+		return false;
+	}
+
+	int32 Guid = 0;
+	int32 SlotIndex = INDEX_NONE;
+	const bool bHitSlot = HitTestInventorySlot(Absolute, Guid, SlotIndex);
+	// Empty-cell hits must not fall through to grid math (scale mismatch grabbed neighbors).
+	if (!bHitSlot)
+	{
+		// Fallback: DAT grid math in scaled canvas space (borders can lag one frame).
+		if (TSharedPtr<FACEUIElement> GridEl = Manager
+			? Manager->FindElementByName(TEXT("Inv_3DItemList")) : nullptr)
+		{
+			const FIntPoint Origin = GridEl->GetScreenOrigin();
+			const float SX = FMath::Max(KINDA_SMALL_NUMBER, Canvas->GetLastScaleX());
+			const float SY = FMath::Max(KINDA_SMALL_NUMBER, Canvas->GetLastScaleY());
+			constexpr int32 Cell = 32;
+			const int32 Cols = FMath::Max(1, GridEl->Width / Cell);
+			const int32 Rows = FMath::Max(1, GridEl->Height / Cell);
+			const int32 RelX = FMath::FloorToInt(CanvasLocalPos.X / SX) - Origin.X;
+			const int32 RelY = FMath::FloorToInt(CanvasLocalPos.Y / SY) - Origin.Y;
+			if (RelX >= 0 && RelY >= 0 && RelX < GridEl->Width && RelY < GridEl->Height)
+			{
+				const int32 Col = RelX / Cell;
+				const int32 Row = RelY / Cell;
+				const int32 PageIndex = Row * Cols + Col;
+				if (InventorySlotGuids.IsValidIndex(PageIndex) && InventorySlotGuids[PageIndex] != 0
+					&& PageIndex < Cols * Rows)
+				{
+					Guid = InventorySlotGuids[PageIndex];
+					SlotIndex = InventoryScrollOffset + PageIndex;
+				}
+			}
+		}
+	}
+
+	if (Guid != 0)
+	{
+		// Arm double-click on MouseDown, but Use only on MouseUp if this press never
+		// becomes an active drag — otherwise select→drag was impossible within 0.75s.
+		const double Now = FPlatformTime::Seconds();
+		const double DoubleClickSeconds = InventoryDoubleClickSeconds();
+		const bool bDoubleClick = Guid == LastInvClickGuid
+			&& (Now - LastInvClickTime) < DoubleClickSeconds;
+
+		FACEWorldObject Obj;
+		InvDragGuid = Guid;
+		InvDragIconDid = Client && Client->GetWorldObject(Guid, Obj) ? Obj.IconId : 0;
+		InvDragSourcePack = SelectedPackGuid;
+		InvDragSourceSlot = SlotIndex;
+		InvDragPackSlotIndex = INDEX_NONE;
+		InvDragStartLocal = CanvasLocalPos;
+		bInvDragPending = true;
+		bInvDragActive = false;
+		bInvDoubleClickPending = bDoubleClick;
+		SelectInventoryGuid(Guid);
+		return true;
+	}
+
+	// Packs: retail also permits a shortcut to the player/main backpack.
+	for (int32 i = 0; i < PackSlots.Num() && i < PackSlotGuids.Num(); ++i)
+	{
+		UBorder* Border = PackSlots[i];
+		if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed)
+		{
+			continue;
+		}
+		if (!Canvas->IsWidgetExposedAt(Border, Absolute))
+		{
+			continue;
+		}
+		const int32 PackGuid = PackSlotGuids[i];
+		if (!Client || PackGuid == 0)
+		{
+			continue;
+		}
+		FACEWorldObject Obj;
+		if (!Client->GetWorldObject(PackGuid, Obj))
+		{
+			continue;
+		}
+		// Select immediately so a click (no drag) shows this pack's inventory.
+		SelectedPackGuid = PackGuid;
+		InventoryScrollOffset = 0;
+		RefreshInventoryOverlays();
+		SyncInventoryScrollbars();
+		InvDragGuid = PackGuid;
+		InvDragIconDid = PackGuid == Client->GetPlayerGuid() ? 0x06004CF7u : Obj.IconId;
+		InvDragSourcePack = Client->GetPlayerGuid();
+		InvDragSourceSlot = INDEX_NONE;
+		InvDragPackSlotIndex = i;
+		InvDragStartLocal = CanvasLocalPos;
+		bInvDragPending = true;
+		bInvDragActive = false;
+		SelectInventoryGuid(PackGuid);
+		return true;
+	}
+
+	FString DollName;
+	int64 DollMask = 0;
+	if (HitTestDollSlot(Absolute, DollName, DollMask) && Client)
+	{
+		for (const FACEWorldObject& Obj : Client->GetEquippedItems())
+		{
+			if (Obj.Guid == FindUpperEquippedItem(DollMask))
+			{
+				const double Now = FPlatformTime::Seconds();
+				const double DoubleClickSeconds = InventoryDoubleClickSeconds();
+				const bool bDoubleClick = Obj.Guid == LastInvClickGuid
+					&& (Now - LastInvClickTime) < DoubleClickSeconds;
+				InvDragGuid = Obj.Guid;
+				InvDragIconDid = Obj.IconId;
+				InvDragSourcePack = 0;
+				InvDragSourceSlot = INDEX_NONE;
+				InvDragStartLocal = CanvasLocalPos;
+				bInvDragPending = true;
+				bInvDragActive = false;
+				bInvDoubleClickPending = bDoubleClick;
+				SelectInventoryGuid(Obj.Guid);
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+void UACEUIGameplayBinder::UpdateInventoryDrag(FVector2D CanvasLocalPos)
+{
+	if (!bInvDragPending || InvDragGuid == 0 || !Canvas || !Canvas->WidgetTree)
+	{
+		return;
+	}
+	if (!bInvDragActive)
+	{
+		// 12px — Windows double-click jitter often exceeds 6px and was killing Use.
+		if (FVector2D::Distance(CanvasLocalPos, InvDragStartLocal) < InventoryDragThreshold())
+		{
+			return;
+		}
+		bInvDragActive = true;
+		bInvDoubleClickPending = false;
+		LastInvClickGuid = 0;
+		LastInvClickTime = 0.0;
+		SyncInventoryButtonVisual();
+	}
+	if (!InvDragIcon)
+	{
+		InvDragIcon = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+		InvDragIcon->SetPadding(FMargin(0.f));
+		InvDragIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
+	}
+	SetIconDid(InvDragIcon, InvDragIconDid);
+	// ItemSlot's DAT accept/reject artwork belongs to the hovered equipment box.
+	if (PaperDollDragTargetIcon) PaperDollDragTargetIcon->SetVisibility(ESlateVisibility::Collapsed);
+	FString TargetName; int64 TargetMask = 0;
+	const FVector2D Absolute = Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos);
+	if (Client && HitTestDollSlot(Absolute, TargetName, TargetMask) && TargetName != TEXT("PaperDoll"))
+	{
+		const auto TargetElement = Manager->FindElementUnder(TEXT("InventoryPanel_Field"), TargetName);
+		FACEWorldObject Item;
+		if (TargetElement && Client->GetWorldObject(InvDragGuid, Item))
+		{
+			if (!PaperDollDragTargetIcon)
+			{
+				PaperDollDragTargetIcon = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+				PaperDollDragTargetIcon->SetPadding(FMargin(0));
+			}
+			const bool bAccept = ACEEquipmentRules::CanWieldInSlot(Item, TargetMask);
+			SetIconDid(PaperDollDragTargetIcon, bAccept ? 0x060011F9 : 0x060011F8);
+			PaperDollDragTargetIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
+			Canvas->PlaceWidgetAtElement(PaperDollDragTargetIcon, TargetElement, 120004);
+		}
+	}
+	InvDragIcon->SetBrushColor(FLinearColor(1.f, 1.f, 1.f, 0.85f));
+	InvDragIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
+	if (InvDragIcon->GetParent() != Canvas->GetElementLayer())
+	{
+		Canvas->GetElementLayer()->AddChild(InvDragIcon);
+	}
+	if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(InvDragIcon->Slot))
+	{
+		Slot->SetAnchors(FAnchors(0.f, 0.f));
+		Slot->SetAutoSize(false);
+		Slot->SetPosition(CanvasLocalPos - FVector2D(16.f, 16.f));
+		Slot->SetSize(FVector2D(32.f, 32.f));
+		// Above SyncElementWidgets / inventory overlays (those climb past 20k).
+		Canvas->SetOverlayOrder(InvDragIcon, nullptr, 250000);
+	}
+}
+
+void UACEUIGameplayBinder::AssignInventoryShortcut(int32 Guid, int32 SlotIndex)
+{
+	if (!Client || !Guid || SlotIndex < 0 || SlotIndex >= 18) return;
+	// gmToolbarUI::OnUIElementMessage / CreateShortcutToItem: remove the
+	// destination, move this item's binding, then rehome the displaced item.
+	const int32 Displaced = Client->GetShortcutObject(SlotIndex);
+	if (Displaced) Client->SendRemoveShortcut(SlotIndex);
+	for (int32 Index = 0; Index < 18; ++Index)
+		if (Client->GetShortcutObject(Index) == Guid) Client->SendRemoveShortcut(Index);
+	Client->SendAddShortcut(SlotIndex, Guid);
+	if (Displaced && Displaced != Guid)
+	{
+		for (int32 Offset = 1; Offset < 18; ++Offset)
+		{
+			const int32 Index = (SlotIndex + Offset) % 18;
+			if (!Client->GetShortcutObject(Index))
+			{
+				Client->SendAddShortcut(Index, Displaced);
+				break;
+			}
+		}
+	}
+	RefreshShortcutOverlays();
+	RefreshInventoryOverlays();
+}
+
+bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
+{
+	if (!bInvDragPending || InvDragGuid == 0)
+	{
+		return false;
+	}
+	const int32 Guid = InvDragGuid;
+	const int32 SourcePack = InvDragSourcePack;
+	const int32 SourceSlot = InvDragSourceSlot;
+	const int32 DragPackSlot = InvDragPackSlotIndex;
+	const bool bWasDragging = bInvDragActive;
+	const bool bDoubleClick = bInvDoubleClickPending;
+	const bool bLootSource = OpenLootContainerGuid != 0
+		&& (SourcePack == OpenLootContainerGuid || SourcePack == OpenLootSelectedPackGuid);
+	CancelInventoryDrag();
+
+	if (!Client)
+	{
+		return true;
+	}
+
+	if (!Canvas || !Canvas->GetElementLayer())
+	{
+		return true;
+	}
+	const FVector2D Absolute = Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos);
+
+	auto RecordClick = [this, Guid]()
+	{
+		const double Now = FPlatformTime::Seconds();
+		LastInvClickGuid = Guid;
+		LastInvClickTime = Now;
+		SelectInventoryGuid(Guid);
+	};
+
+	if (!bWasDragging)
+	{
+		// True double-click (second press released without drag) → Use / wield / arm dual-use.
+		if (bDoubleClick && Guid != 0)
+		{
+			SelectInventoryGuid(Guid);
+			if (bLootSource)
+			{
+				Client->SendPutItemInContainer(Guid, Client->GetPlayerGuid(), 0);
+				PlayLocalPickupMotion(PlayerController);
+			}
+			else UseInventoryItem(Guid);
+			LastInvClickGuid = 0;
+			LastInvClickTime = 0.0;
+			return true;
+		}
+		// Dual-use (mana stone / key): MouseDown starts a pending drag so OverlayClick never
+		// runs — complete UseWithTarget on the click release instead.
+		if (PendingUseWithSourceGuid != 0 && Guid != 0 && Client)
+		{
+			if (PendingUseWithSourceGuid != Guid)
+			{
+				TryCompletePendingUseWithTarget(Guid);
+				return true;
+			}
+
+		}
+		// Single click release — arm double-click for the next MouseDown.
+		// Side-pack click already selected the pack on MouseDown.
+		if (DragPackSlot != INDEX_NONE && Guid != 0)
+		{
+			SelectedPackGuid = Guid;
+			InventoryScrollOffset = 0;
+			RefreshInventoryOverlays();
+			SyncInventoryScrollbars();
+		}
+		RecordClick();
+		return true;
+	}
+
+	// Toolbar shortcut slot → AddShortCut.
+	for (int32 i = 0; i < ShortcutIcons.Num() && i < 9; ++i)
+	{
+		UBorder* Border = ShortcutIcons[i];
+		if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed)
+		{
+			continue;
+		}
+		if (Canvas->IsWidgetExposedAt(Border, Absolute))
+		{
+			AssignInventoryShortcut(Guid, ShortcutBarPage * 9 + i);
+			return true;
+		}
+	}
+	for (int32 Vis = 1; Vis <= 9; ++Vis)
+	{
+		TSharedPtr<FACEUIElement> El = Manager
+			? Manager->FindElementByName(FString::Printf(TEXT("ShortcutBar_Shortcut%dButton"), Vis))
+			: nullptr;
+		if (!El.IsValid() || !El->bVisible || !Canvas->IsElementExposedAt(El, CanvasLocalPos))
+		{
+			continue;
+		}
+		const FIntPoint O = El->GetScreenOrigin();
+		if (CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
+			&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height)
+		{
+			AssignInventoryShortcut(Guid, ShortcutBarPage * 9 + (Vis - 1));
+			return true;
+		}
+	}
+
+	// Drop onto open vendor UI → stage the item or a pack's contents in the Sell cart.
+	if (OpenVendorGuid != 0 && Manager)
+	{
+		auto HitVendorUi = [&](const TCHAR* Name) -> bool
+		{
+			TSharedPtr<FACEUIElement> El = Manager->FindElementByName(Name);
+			if (!El.IsValid() || !El->bVisible || !Canvas->IsElementExposedAt(El, CanvasLocalPos))
+			{
+				return false;
+			}
+			const FIntPoint O = El->GetScreenOrigin();
+			return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
+				&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height;
+		};
+		if (HitVendorUi(TEXT("Vendor")) || HitVendorUi(TEXT("VendorPanel"))
+			|| HitVendorUi(TEXT("RootGameplay_FloatyEnvPanel_Field")))
+		{
+			AddInventoryGuidToVendorSellCart(Guid);
+			return true;
+		}
+	}
+
+
+	// Main backpack supports shortcuts and bulk vendor selection, never moving the player.
+	if (Guid == Client->GetPlayerGuid()) return true;
+
+	// Paper doll → wield into that slot (or complete dual-use / mana stone on self).
+	FString DollName;
+	int64 DollMask = 0;
+	if (HitTestDollSlot(Absolute, DollName, DollMask))
+	{
+		FACEWorldObject Obj;
+		if (!Client->GetWorldObject(Guid, Obj))
+		{
+			return true;
+		}
+		if (PendingUseWithSourceGuid != 0 || (Obj.ItemType & ACEItemType::ManaStone) != 0
+			|| ACEItemUseable::IsTargeted(Obj.ItemUseable))
+		{
+			int32 Target = Client->GetPlayerGuid();
+			if (const int32 Worn = FindUpperEquippedItem(DollMask)) Target = Worn;
+			if (!PendingUseWithSourceGuid) PendingUseWithSourceGuid = Guid;
+			TryCompletePendingUseWithTarget(Target);
+			return true;
+		}
+		// AcceptPaperDollDragObject auto-wears body clothing anywhere on the model.
+		if (DollName == TEXT("PaperDoll")) DollMask = 0x08007FFF;
+		constexpr int64 ClothesLegs = ACEEquipMask::UpperLegWear | ACEEquipMask::LowerLegWear;
+		constexpr int64 Foot = ACEEquipMask::FootWear;
+		constexpr int64 ShirtCore = ACEEquipMask::ChestWear
+			| ACEEquipMask::UpperArmWear | ACEEquipMask::LowerArmWear;
+		constexpr int64 ArmorBits = ACEEquipMask::ChestArmor | ACEEquipMask::AbdomenArmor
+			| ACEEquipMask::UpperArmArmor | ACEEquipMask::LowerArmArmor
+			| ACEEquipMask::UpperLegArmor | ACEEquipMask::LowerLegArmor;
+		// Boots belong on Inv_FootSlot only; pants belong on Inv_ClothesPantsSlot only.
+		if (DollMask == ACEEquipMask::UpperLegWear && (Obj.ValidLocations & Foot) != 0)
+		{
+			PostInventorySystemMessage(TEXT("That item cannot be equipped there."));
+			return true;
+		}
+		if (DollMask == Foot && (Obj.ValidLocations & ClothesLegs) != 0
+			&& (Obj.ValidLocations & Foot) == 0)
+		{
+			PostInventorySystemMessage(TEXT("That item cannot be equipped there."));
+			return true;
+		}
+		if (DollMask == ACEEquipMask::ChestWear && (Obj.ValidLocations & ArmorBits) != 0
+			&& (Obj.ValidLocations & ShirtCore) == 0)
+		{
+			PostInventorySystemMessage(TEXT("That item cannot be equipped there."));
+			return true;
+		}
+		// Trousers → undershirt reject.
+		if (DollMask == ACEEquipMask::ChestWear
+			&& (Obj.ValidLocations & ClothesLegs) != 0
+			&& (Obj.ValidLocations & Foot) == 0
+			&& (Obj.ValidLocations & ShirtCore) == 0)
+		{
+			PostInventorySystemMessage(TEXT("That item cannot be equipped there."));
+			return true;
+		}
+		if (Obj.ValidLocations != 0 && !ACEEquipmentRules::CanWieldInSlot(Obj, DollMask))
+		{
+			PostInventorySystemMessage(TEXT("That item cannot be equipped there."));
+			return true;
+		}
+		const int64 Loc = ResolveWieldLocation(Obj, DollMask);
+		if (Loc != 0)
+		{
+			const int32 Stack = Obj.StackSize > 0 ? Obj.StackSize : 1;
+			int32 Amt = SelectedStackAmount;
+			if (LastSelection.Guid != Guid || Amt <= 0)
+			{
+				Amt = Stack;
+			}
+			Amt = FMath::Clamp(Amt, 1, Stack);
+			if (Stack > 1 && Amt < Stack)
+			{
+				Client->SendStackableSplitToWield(Guid, Loc, Amt);
+			}
+			else
+			{
+				UnequipConflictsAndWield(Guid, Obj, Loc);
+			}
+		}
+		else
+		{
+			Client->SendUseItem(Guid);
+		}
+		return true;
+	}
+
+	// Drop onto open salvage (Ust) panel.
+	if (OpenSalvageToolGuid != 0 && Manager)
+	{
+		auto HitSalvageUi = [&](const TCHAR* Name) -> bool
+		{
+			TSharedPtr<FACEUIElement> El = Manager->FindElementByName(Name);
+			if (!El.IsValid() || !El->bVisible || !Canvas->IsElementExposedAt(El, CanvasLocalPos))
+			{
+				return false;
+			}
+			const FIntPoint O = El->GetScreenOrigin();
+			return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
+				&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height;
+		};
+		if (HitSalvageUi(TEXT("SalvagePanel")) || HitSalvageUi(TEXT("SalvageItemsList"))
+			|| HitSalvageUi(TEXT("RootGameplay_FloatyEnvPanel_Field")))
+		{
+			AddItemToSalvageQueue(Guid);
+			return true;
+		}
+	}
+
+	// Drop onto open trade UI → offer that item on our side of the window.
+	if (bTradeOpen && Manager)
+	{
+		auto HitTradeUi = [&](const TCHAR* Name) -> bool
+		{
+			TSharedPtr<FACEUIElement> El = Manager->FindElementByName(Name);
+			if (!El.IsValid() || !El->bVisible || !Canvas->IsElementExposedAt(El, CanvasLocalPos))
+			{
+				return false;
+			}
+			const FIntPoint O = El->GetScreenOrigin();
+			return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
+				&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height;
+		};
+		if (HitTradeUi(TEXT("SecureTrade")) || HitTradeUi(TEXT("TradePanel"))
+			|| HitTradeUi(TEXT("TradeSelfItemsList")) || HitTradeUi(TEXT("TradeOtherItemsList"))
+			|| HitTradeUi(TEXT("RootGameplay_FloatyEnvPanel_Field")))
+		{
+			Client->SendAddToTrade(Guid, 0);
+			return true;
+		}
+	}
+
+
+	// Pack tab → move into that pack (or rearrange side packs onto player placement).
+	int32 PackGuid = 0;
+	if (HitTestPackSlot(Absolute, PackGuid))
+	{
+		if (DragPackSlot != INDEX_NONE)
+		{
+			int32 DestPlacement = 0;
+			for (int32 i = 0; i < PackSlots.Num() && i < PackSlotGuids.Num(); ++i)
+			{
+				UBorder* Border = PackSlots[i];
+				if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed)
+				{
+					continue;
+				}
+				if (Canvas->IsWidgetExposedAt(Border, Absolute))
+				{
+					DestPlacement = (i == 0) ? 0 : (PackScrollOffset + (i - 1));
+					break;
+				}
+			}
+			FACEWorldObject SourceBag;
+            if (Client->GetWorldObject(Guid, SourceBag) && SourceBag.PlacementPosition >= 0
+                && SourceBag.PlacementPosition < DestPlacement) --DestPlacement;
+            Client->SendPutItemInContainer(Guid, Client->GetPlayerGuid(), FMath::Max(0, DestPlacement));
+			return true;
+		}
+		if (PackGuid != 0)
+		{
+			Client->SendPutItemInContainer(Guid, PackGuid, 0);
+			if (bLootSource)
+			{
+				PlayLocalPickupMotion(PlayerController);
+			}
+			return true;
+		}
+	}
+
+	// Grid cell → reorder / merge / move within open pack.
+	int32 DestGuid = 0;
+	int32 DestSlot = INDEX_NONE;
+	if (HitTestInventorySlot(Absolute, DestGuid, DestSlot))
+	{
+		// Returning a drag to its source cell cancels it; it cannot arm a double-click.
+		if (DestSlot == SourceSlot && (SourcePack == 0 || SourcePack == SelectedPackGuid))
+		{
+			LastInvClickGuid = 0;
+			LastInvClickTime = 0.0;
+			return true;
+		}
+		const int32 Container = SelectedPackGuid != 0 ? SelectedPackGuid
+			: (SourcePack != 0 ? SourcePack : Client->GetPlayerGuid());
+		// Removing the source shifts a later occupied destination one place left.
+		const int32 InsertSlot = DestSlot - ((SourcePack == Container && SourceSlot >= 0
+			&& SourceSlot < DestSlot && DestGuid != 0) ? 1 : 0);
+		const auto FinishLootPut = [&]()
+		{
+			if (bLootSource)
+			{
+				PlayLocalPickupMotion(PlayerController);
+			}
+		};
+		if (DestGuid != 0 && DestGuid != Guid)
+		{
+			FACEWorldObject SrcObj, DestObj;
+			const bool bHaveSrc = Client->GetWorldObject(Guid, SrcObj);
+			const bool bHaveDest = Client->GetWorldObject(DestGuid, DestObj);
+			if (bHaveSrc && bHaveDest
+				&& SrcObj.WeenieClassId != 0 && SrcObj.WeenieClassId == DestObj.WeenieClassId
+				&& (SrcObj.MaxStackSize > 1 || DestObj.MaxStackSize > 1))
+			{
+				const int32 DestSize = DestObj.StackSize > 0 ? DestObj.StackSize : 1;
+				const int32 Max = DestObj.MaxStackSize > 0 ? DestObj.MaxStackSize
+					: (SrcObj.MaxStackSize > 0 ? SrcObj.MaxStackSize : 0);
+				const int32 SrcSize = SrcObj.StackSize > 0 ? SrcObj.StackSize : 1;
+				const int32 Room = Max > 1 ? (Max - DestSize) : 0;
+				if (Room > 0)
+				{
+					Client->SendStackableMerge(Guid, DestGuid, FMath::Min(SrcSize, Room));
+					FinishLootPut();
+					return true;
+				}
+				// Same WCID but no stack room → place at this slot (server shifts inventory).
+				Client->SendPutItemInContainer(Guid, Container, FMath::Max(0, InsertSlot));
+				FinishLootPut();
+				return true;
+			}
+			// Inventory→inventory drag is always reorder (retail PutItemInContainer).
+			// UseWithTarget (key on chest, dye on armor, etc.) is double-click → arm dual-use
+			// → click target, or drag onto a world object — never drop-on-grid-cell.
+			Client->SendPutItemInContainer(Guid, Container, FMath::Max(0, InsertSlot));
+			FinishLootPut();
+			return true;
+		}
+		FACEWorldObject SrcForSplit;
+		const int32 SrcStack = (Client->GetWorldObject(Guid, SrcForSplit) && SrcForSplit.StackSize > 0)
+			? SrcForSplit.StackSize : 1;
+		int32 SplitAmt = SelectedStackAmount;
+		if (LastSelection.Guid != Guid || SplitAmt <= 0)
+		{
+			SplitAmt = SrcStack;
+		}
+		SplitAmt = FMath::Clamp(SplitAmt, 1, SrcStack);
+		if (DestGuid == 0 && SrcStack > 1 && SplitAmt < SrcStack)
+		{
+			Client->SendStackableSplitToContainer(Guid, Container, FMath::Max(0, DestSlot), SplitAmt);
+			FinishLootPut();
+			return true;
+		}
+		Client->SendPutItemInContainer(Guid, Container, FMath::Max(0, InsertSlot));
+		FinishLootPut();
+		return true;
+	}
+
+	// Outside inventory panel → give to world target, vendor sell cart, or drop.
+	if (!IsPointerOverInventoryPanel(CanvasLocalPos))
+	{
+		FACEWorldObject Obj;
+		if (!Client->GetWorldObject(Guid, Obj))
+		{
+			return true;
+		}
+
+		if (PlayerController && PlayerController->IsPickupApproachActive())
+		{
+			PostInventorySystemMessage(TEXT("You're too busy!"));
+			return true;
+		}
+
+		if (PlayerController && Canvas)
+		{
+			// Drag release under mouse capture: convert slate absolute → viewport local for deproject.
+			// Deprojection needs viewport pixels, not DPI-scaled widget coordinates.
+			FVector2D ViewportLocal = FVector2D::ZeroVector, ViewportWidgetPosition;
+			if (!PlayerController->IsVRActive()) USlateBlueprintLibrary::AbsoluteToViewport(PlayerController, Absolute,
+				ViewportLocal, ViewportWidgetPosition);
+			AACEWorldEntityActor* Target = PlayerController->PickWorldEntityAtScreenPosition(
+				ViewportLocal.X, ViewportLocal.Y);
+			if (!Target)
+			{
+				Target = PlayerController->PickWorldEntityUnderCursor();
+			}
+
+			auto ResolveGiveTargetObj = [&](AACEWorldEntityActor* Candidate, FACEWorldObject& OutObj) -> bool
+			{
+				if (!Candidate)
+				{
+					return false;
+				}
+				return Client->GetWorldObject(Candidate->GetACEGuid(), OutObj)
+					&& OutObj.IsGiveOrCreatureTarget();
+			};
+
+			FACEWorldObject TargetObj;
+			bool bGiveTarget = ResolveGiveTargetObj(Target, TargetObj);
+
+			// Pick miss / scenery hit → fall back to the currently selected world NPC when it is
+			// a give target and either is that selection or sits near the cursor.
+			if (!bGiveTarget && !PlayerController->IsVRActive())
+			{
+				const FACESelectedObject Sel = Client->GetSelectedObject();
+				if (Sel.bValid && Sel.Guid != 0 && Sel.Guid != Guid)
+				{
+					FACEWorldObject SelObj;
+					if (Client->GetWorldObject(Sel.Guid, SelObj) && SelObj.IsGiveOrCreatureTarget())
+					{
+						AACEWorldEntityActor* SelActor = nullptr;
+						if (UWorld* World = PlayerController->GetWorld())
+						{
+							for (TActorIterator<AACEWorldEntityActor> It(World); It; ++It)
+							{
+								if (It->GetACEGuid() == Sel.Guid)
+								{
+									SelActor = *It;
+									break;
+								}
+							}
+						}
+						bool bAcceptSelected = (SelActor == nullptr);
+						if (SelActor)
+						{
+							FVector2D Screen = FVector2D::ZeroVector;
+							const bool bOnScreen = PlayerController->ProjectWorldLocationToScreen(
+								SelActor->GetActorLocation(), Screen);
+							constexpr float MaxScreenDistPx = 96.f;
+							const float DistSq = bOnScreen
+								? FVector2D::DistSquared(Screen, ViewportLocal)
+								: TNumericLimits<float>::Max();
+							// Selected NPC: accept on full pick miss, or when near the drop cursor.
+							bAcceptSelected = !Target || DistSq <= MaxScreenDistPx * MaxScreenDistPx;
+						}
+						const FACEPosition PlayerPos = Client->GetPlayerPosition();
+						if (bAcceptSelected && PlayerPos.IsValid() && SelObj.bHasPosition)
+						{
+							const uint32 PC = static_cast<uint32>(PlayerPos.CellId);
+							const uint32 SC = static_cast<uint32>(SelObj.Position.CellId);
+							const bool bPlayerIndoor = (PC & 0xFFFFu) >= 0x0100u;
+							const bool bSelIndoor = (SC & 0xFFFFu) >= 0x0100u;
+							if (bPlayerIndoor && bSelIndoor && PC != SC)
+							{
+								bAcceptSelected = false;
+							}
+						}
+						if (bAcceptSelected)
+						{
+							Target = SelActor;
+							TargetObj = SelObj;
+							bGiveTarget = true;
+						}
+					}
+				}
+			}
+
+			if (Target || bGiveTarget)
+			{
+				const int32 TargetGuid = bGiveTarget ? TargetObj.Guid
+					: (Target ? Target->GetACEGuid() : 0);
+				const bool bHaveTarget = TargetGuid != 0
+					&& (bGiveTarget || Client->GetWorldObject(TargetGuid, TargetObj));
+				if (bHaveTarget && PlayerController->IsVRActive())
+				{
+					const APawn* Pawn = PlayerController->GetPawn();
+					const auto* Capsule = Pawn ? Pawn->FindComponentByClass<UCapsuleComponent>() : nullptr;
+					const float Radius = TargetObj.UseRadius > 0.f ? TargetObj.UseRadius : .6f;
+					if (!Capsule || PlayerController->GetUseCylinderDistanceCm(TargetObj,
+						Pawn->GetActorLocation() - FVector(0, 0, Capsule->GetScaledCapsuleHalfHeight()),
+						TargetObj.Position.ToUnrealLocation(PlayerController->WorldScale)) > Radius * PlayerController->WorldScale + 5.f)
+					{
+						PostInventorySystemMessage(TEXT("Move closer before giving or using an item on that target."));
+						return true;
+					}
+				}
+				if (bHaveTarget && TargetObj.IsVendor())
+				{
+					if (OpenVendorGuid == TargetGuid)
+					{
+						AddInventoryGuidToVendorSellCart(Guid);
+						return true;
+					}
+					PendingVendorSellGuid = Guid;
+					PlayerController->InteractWithObject(TargetGuid);
+					return true;
+				}
+				if (bGiveTarget)
+				{
+					int32 Amt = SelectedStackAmount;
+					if (LastSelection.Guid != Guid || Amt <= 0)
+					{
+						Amt = FMath::Max(1, Obj.StackSize > 0 ? Obj.StackSize : 1);
+					}
+					Amt = FMath::Max(1, FMath::Clamp(Amt, 1, FMath::Max(1, Obj.StackSize > 0 ? Obj.StackSize : 1)));
+					// Give is not a vendor sell — clear any leftover sell cart / pending drag-sell.
+					PendingVendorSellGuid = 0;
+					VendorSellCart.Reset();
+					VendorSellSelectedGuid = 0;
+					// Approach without Use — server CreateMoveToChain + GiveObjectRequest completes hand-off.
+					float DistAc = TargetObj.UseRadius;
+					if (DistAc == 0.f)
+					{
+						DistAc = 0.6f;
+					}
+					PlayerController->BeginUseApproach(TargetGuid, DistAc,
+						/*bPickupIntoInventory*/ false, /*bFireActionWhenInRange*/ false);
+					Client->SendGiveObjectRequest(TargetGuid, Guid, Amt);
+					return true;
+				}
+				// Drag item onto world object → UseWithTarget (keys, dyes, alchemy).
+				// Never UseWithTarget for NPCs/creatures — those are GiveObjectRequest turn-ins.
+				if (TargetGuid != 0
+					&& !TargetObj.IsGiveOrCreatureTarget()
+					&& (TargetObj.ItemType & ACEItemType::Creature) == 0
+					&& !TargetObj.bIsPlayer)
+				{
+					Client->SendUseWithTarget(Guid, TargetGuid);
+					PendingUseWithSourceGuid = 0;
+					SyncPendingUseCursor();
+					return true;
+				}
+				// Creature/NPC that failed give classification — still attempt Give.
+				if (TargetGuid != 0
+					&& ((TargetObj.ItemType & ACEItemType::Creature) != 0
+						|| TargetObj.bIsPlayer || TargetObj.IsVendor()))
+				{
+					int32 Amt = SelectedStackAmount;
+					if (LastSelection.Guid != Guid || Amt <= 0)
+					{
+						Amt = FMath::Max(1, Obj.StackSize > 0 ? Obj.StackSize : 1);
+					}
+					Amt = FMath::Max(1, FMath::Clamp(Amt, 1, FMath::Max(1, Obj.StackSize > 0 ? Obj.StackSize : 1)));
+					PendingVendorSellGuid = 0;
+					VendorSellCart.Reset();
+					VendorSellSelectedGuid = 0;
+					float DistAc = TargetObj.UseRadius;
+					if (DistAc == 0.f)
+					{
+						DistAc = 0.6f;
+					}
+					PlayerController->BeginUseApproach(TargetGuid, DistAc,
+						/*bPickupIntoInventory*/ false, /*bFireActionWhenInRange*/ false);
+					Client->SendGiveObjectRequest(TargetGuid, Guid, Amt);
+					return true;
+				}
+			}
+		}
+
+		// Releasing a tracked inventory drag over empty world uses the same
+		// server-authoritative drop/split action as the desktop client.
+		if (!Obj.CanDropToWorld())
+		{
+			PostInventorySystemMessage(TEXT("You cannot drop that item."));
+			return true;
+		}
+		{
+			const int32 Stack = Obj.StackSize > 0 ? Obj.StackSize : 1;
+			int32 Amt = SelectedStackAmount;
+			if (LastSelection.Guid != Guid || Amt <= 0)
+			{
+				Amt = Stack;
+			}
+			Amt = FMath::Clamp(Amt, 1, Stack);
+			if (Stack > 1 && Amt < Stack)
+			{
+				Client->SendStackableSplitTo3D(Guid, Amt);
+			}
+			else
+			{
+				Client->SendDropItem(Guid);
+			}
+		}
+		return true;
+	}
+
+	// A cancelled drag cannot arm a subsequent double-click use.
+	LastInvClickGuid = 0;
+	LastInvClickTime = 0.0;
+	return true;
+}
+
+bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool bRightClick)
+{
+	if (!Canvas || !Canvas->GetElementLayer())
+	{
+		return false;
+	}
+	const FGeometry LayerGeo = Canvas->GetElementLayer()->GetCachedGeometry();
+	const FVector2D Absolute = LayerGeo.LocalToAbsolute(CanvasLocalPos);
+	if (bRightClick && InspectSpellAt(CanvasLocalPos)) return true;
+	if (bRightClick && Client && ActivePanelPage == TEXT("InventoryPanel_Field"))
+	{
+		FString SlotName;
+		int64 Mask = 0;
+		if (HitTestDollSlot(Absolute, SlotName, Mask))
+		{
+			const int32 Guid = FindUpperEquippedItem(Mask);
+			if (Guid) { SelectInventoryGuid(Guid); Client->SendIdentifyObject(Guid); }
+			return true;
+		}
+	}
+	if (!bRightClick && Manager && CanEditInscription())
+	{
+		const auto Element = Manager->FindElementUnder(TEXT("RootGameplay_FloatyExamination_Field"), TEXT("ItemInscriptionText"));
+		const FVector2D EditPoint = Canvas->ViewportToLayout(CanvasLocalPos);
+		const FIntPoint EditOrigin = Element ? Element->GetScreenOrigin() : FIntPoint::ZeroValue;
+		if (Element && Canvas->IsElementExposedAt(Element, CanvasLocalPos)
+			&& EditPoint.X >= EditOrigin.X && EditPoint.Y >= EditOrigin.Y
+			&& EditPoint.X < EditOrigin.X + Element->Width && EditPoint.Y < EditOrigin.Y + Element->Height)
+		{
+			BeginInscriptionEdit();
+			return true;
+		}
+	}
+	if (bTradeOpen)
+	{
+		for (bool bSelf : {true, false})
+		{
+			const auto& Slots = bSelf ? TradeSelfSlots : TradeOtherSlots;
+			const auto& Guids = bSelf ? TradeSelfGuids : TradeOtherGuids;
+			for (int32 I=0; I<Slots.Num() && I<Guids.Num(); ++I)
+				if (Guids[I] && Slots[I] && Canvas->IsWidgetExposedAt(Slots[I], Absolute))
+				{
+					SelectInventoryGuid(Guids[I]);
+					if (bRightClick && Client) Client->SendIdentifyObject(Guids[I]);
+					RefreshTradeOverlays();
+					return true;
+				}
+		}
+	}
+
+	// Show Equipment checkbox (PaperDollDragMask used to steal this hit).
+	if (!bRightClick && Manager && ActivePanelPage == TEXT("InventoryPanel_Field"))
+	{
+		TSharedPtr<FACEUIElement> Cb = Manager->FindElementUnder(
+			TEXT("InventoryPanel_Field"), TEXT("Paperdoll_Slots_Checkbox"));
+		if (!Cb.IsValid())
+		{
+			Cb = Manager->FindElementByName(TEXT("Paperdoll_Slots_Checkbox"));
+		}
+		if (Cb.IsValid() && Cb->bVisible && Canvas->IsElementExposedAt(Cb, CanvasLocalPos))
+		{
+			const FIntPoint O = Cb->GetScreenOrigin();
+			if (CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
+				&& CanvasLocalPos.X < O.X + Cb->Width && CanvasLocalPos.Y < O.Y + Cb->Height)
+			{
+				bShowPaperdollSlots = !bShowPaperdollSlots;
+				RefreshInventoryOverlays();
+				return true;
+			}
+		}
+	}
+
+	// Dual-use targeting: click equipped doll slot (without starting an inv drag).
+	if (!bRightClick && PendingUseWithSourceGuid != 0 && Client)
+	{
+		FString DollName;
+		int64 DollMask = 0;
+		if (HitTestDollSlot(Absolute, DollName, DollMask))
+		{
+			for (const FACEWorldObject& Eq : Client->GetEquippedItems())
+			{
+				if (ItemMatchesDollSlot(Eq, DollMask))
+				{
+					TryCompletePendingUseWithTarget(Eq.Guid);
+					return true;
+				}
+			}
+			TryCompletePendingUseWithTarget(Client->GetPlayerGuid());
+			return true;
+		}
+	}
+
+	if (!bRightClick && TryHandleVendorFilterDropdownClick(Absolute))
+	{
+		return true;
+	}
+	if (!bRightClick && TryHandleChatTargetPopupClick(Absolute))
+	{
+		return true;
+	}
+	if (!bRightClick && TryHandleChatNameClick(Absolute))
+	{
+		return true;
+	}
+	if (!bRightClick && TryHandleChessBoardClick(CanvasLocalPos))
+	{
+		return true;
+	}
+	if (!bRightClick && TryHandleEffectsListClick(Absolute))
+	{
+		return true;
+	}
+	if (!bRightClick && TryHandleOptionsListClick(CanvasLocalPos))
+	{
+		return true;
+	}
+	if (TryHandleComponentListClick(CanvasLocalPos, bRightClick))
+	{
+		return true;
+	}
+	if (!bRightClick && ActivePanelPage == TEXT("QuestManagementPanel_Field"))
+	{
+		for (int32 i = 0; i < QuestRows.Num() && i < QuestRowIds.Num(); ++i)
+		{
+			UTextBlock* Row = QuestRows[i];
+			if (!Row || Row->GetVisibility() == ESlateVisibility::Collapsed || QuestRowIds[i] == 0)
+			{
+				continue;
+			}
+			if (Canvas->IsWidgetExposedAt(Row, Absolute)
+				|| (QuestStatusRows.IsValidIndex(i) && Canvas->IsWidgetExposedAt(QuestStatusRows[i], Absolute)))
+			{
+				if (ActiveQuestTab == TEXT("PageListPage"))
+				{
+					JournalPageIndex = -QuestRowIds[i]-1;
+					const double Now=FPlatformTime::Seconds();
+					if (LastJournalClickPage==JournalPageIndex && Now-LastJournalClickTime<.4)
+						ActiveQuestTab = TEXT("JournalPage");
+					LastJournalClickPage=JournalPageIndex; LastJournalClickTime=Now; bJournalFieldsDirty=true;
+				}
+				else SelectedContractId = QuestRowIds[i];
+				RefreshQuestOverlays();
+				return true;
+			}
+		}
+	}
+	// Right-click ChatTarget cycles the log filter (All / Speech / Combat / System).
+	if (bRightClick && Manager)
+	{
+		TSharedPtr<FACEUIElement> Target = Manager->FindElementByName(TEXT("ChatTarget"));
+		TSharedPtr<FACEUIElement> TargetTxt = Manager->FindElementByName(TEXT("ChatTargetButtonText"));
+		auto Hit = [&](const TSharedPtr<FACEUIElement>& El) -> bool
+		{
+			if (!El.IsValid() || !El->bVisible) { return false; }
+			const FIntPoint O = El->GetScreenOrigin();
+			return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
+				&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height;
+		};
+		if (Hit(Target) || Hit(TargetTxt))
+		{
+			CycleChatFilterMode();
+			return true;
+		}
+	}
+
+	// Salvage queue: left = select, right = remove.
+	if (OpenSalvageToolGuid != 0)
+	{
+		for (int32 i = 0; i < SalvageItemSlots.Num() && i < SalvageItemSlotGuids.Num(); ++i)
+		{
+			UBorder* Icon = SalvageItemSlots[i];
+			if (!Icon || Icon->GetVisibility() == ESlateVisibility::Collapsed)
+			{
+				continue;
+			}
+			if (Canvas->IsWidgetExposedAt(Icon, Absolute))
+			{
+				const int32 Guid = SalvageItemSlotGuids[i];
+				if (Guid == 0)
+				{
+					return true;
+				}
+				if (bRightClick)
+				{
+					RemoveItemFromSalvageQueue(Guid);
+				}
+				else
+				{
+					SelectInventoryGuid(Guid);
+				}
+				return true;
+			}
+		}
+	}
+
+	// Social fellowship / friends row selection.
+	if (ActivePanelPage == TEXT("SocialPanel_Field") && !bRightClick)
+	{
+		if (ActiveSocialTab == TEXT("FellowshipPage"))
+		{
+			for (int32 i = 0; i < FellowRows.Num() && i < FellowRowGuids.Num(); ++i)
+			{
+				UTextBlock* Row = FellowRows[i];
+				if (!Row || Row->GetVisibility() == ESlateVisibility::Collapsed)
+				{
+					continue;
+				}
+				if (Canvas->IsWidgetExposedAt(Row, Absolute))
+				{
+					SelectedFellowGuid = FellowRowGuids[i];
+					RefreshFellowshipOverlays();
+					return true;
+				}
+			}
+		}
+		if (ActiveSocialTab == TEXT("FriendsPage"))
+		{
+			for (int32 i = 0; i < FriendRows.Num() && i < FriendRowGuids.Num(); ++i)
+			{
+				UTextBlock* Row = FriendRows[i];
+				if (!Row || Row->GetVisibility() == ESlateVisibility::Collapsed)
+				{
+					continue;
+				}
+				if (Canvas->IsWidgetExposedAt(Row, Absolute))
+				{
+					SelectedFriendGuid = FriendRowGuids[i];
+					if (SelectedFriendGuid != 0 && Client)
+					{
+						// Second click on same friend removes (retail-style management).
+						static int32 LastFriendClickGuid = 0;
+						static double LastFriendClickTime = 0.0;
+						const double Now = FPlatformTime::Seconds();
+						if (LastFriendClickGuid == SelectedFriendGuid && (Now - LastFriendClickTime) < 0.4)
+						{
+							Client->SendRemoveFriend(SelectedFriendGuid);
+							SelectedFriendGuid = 0;
+							LastFriendClickGuid = 0;
+						}
+						else
+						{
+							LastFriendClickGuid = SelectedFriendGuid;
+							LastFriendClickTime = Now;
+						}
+					}
+					RefreshFriendsOverlays();
+					return true;
+				}
+			}
+		}
+		if (ActiveSocialTab == TEXT("SquelchPage"))
+		{
+			for (int32 i = 0; i < SquelchRows.Num() && i < SquelchRowGuids.Num(); ++i)
+			{
+				UTextBlock* Row = SquelchRows[i];
+				if (!Row || Row->GetVisibility() == ESlateVisibility::Collapsed)
+				{
+					continue;
+				}
+				if (Canvas->IsWidgetExposedAt(Row, Absolute))
+				{
+					SelectedSquelchGuid = SquelchRowGuids[i];
+					SelectedSquelchName = SquelchRowNames.IsValidIndex(i)
+						? SquelchRowNames[i] : FString();
+					if (SquelchNameEntry && !SelectedSquelchName.IsEmpty())
+					{
+						SquelchNameEntry->SetText(FText::FromString(SelectedSquelchName));
+					}
+					RefreshSquelchOverlays();
+					return true;
+				}
+			}
+		}
+		if (ActiveSocialTab == TEXT("AllegiancePage"))
+		{
+			for (int32 i = 0; i < VassalRows.Num() && i < VassalRowGuids.Num(); ++i)
+			{
+				UTextBlock* Row = VassalRows[i];
+				if (!Row || Row->GetVisibility() == ESlateVisibility::Collapsed)
+				{
+					continue;
+				}
+				if (Canvas->IsWidgetExposedAt(Row, Absolute))
+				{
+					SelectedVassalGuid = VassalRowGuids[i];
+					RefreshAllegianceOverlays();
+					return true;
+				}
+			}
+		}
+	}
+
+	// Spellbook filter overlays — DAT School_/Level_ shells are easy to miss; hit UMG boxes too.
+	if (!bRightClick && ActivePanelPage == TEXT("SpellManagementPanel_Field")
+		&& ActiveSpellPanelTab == TEXT("SpellbookPage"))
+	{
+		static const TCHAR* FilterNames[] = {
+			TEXT("School_War"), TEXT("School_Life"), TEXT("School_Item"), TEXT("School_Creature"),
+			TEXT("School_Void"), TEXT("Level_One"), TEXT("Level_Two"), TEXT("Level_Three"),
+			TEXT("Level_Four"), TEXT("Level_Five"), TEXT("Level_Six"), TEXT("Level_Seven"),
+			TEXT("Level_Eight"),
+		};
+		for (int32 i = 0; i < SpellbookFilterCheckboxes.Num() && i < UE_ARRAY_COUNT(FilterNames); ++i)
+		{
+			UBorder* Box = SpellbookFilterCheckboxes[i];
+			if (!Box || Box->GetVisibility() == ESlateVisibility::Collapsed)
+			{
+				continue;
+			}
+			if (Canvas->IsWidgetExposedAt(Box, Absolute))
+			{
+				return ToggleSpellbookFilter(FilterNames[i]);
+			}
+		}
+	}
+
+	// Radar blips: select (and identify on right-click).
+	for (int32 i = 0; i < RadarBlips.Num() && i < RadarBlipGuids.Num(); ++i)
+	{
+		UBorder* Blip = RadarBlips[i];
+		if (!Blip || Blip->GetVisibility() == ESlateVisibility::Collapsed)
+		{
+			continue;
+		}
+		if (Canvas->IsWidgetExposedAt(Blip, Absolute))
+		{
+			const int32 Guid = RadarBlipGuids[i];
+			if (Guid != 0 && Client)
+			{
+				Client->SelectObject(Guid);
+				if (bRightClick)
+				{
+					Client->SendIdentifyObject(Guid);
+				}
+			}
+			return true;
+		}
+	}
+
+	if (!bRightClick && Manager && ActivePanelPage == TEXT("SkillManagementPanel_Field"))
+	{
+		// Raise / Raise×10 sit outside the list overlays — hit-test DAT buttons explicitly
+		// so XP spend still works if element activation misses a duplicate footer.
+		auto FindNamedUnder = [](const TSharedPtr<FACEUIElement>& Root, const FString& Name) -> TSharedPtr<FACEUIElement>
+		{
+			if (!Root.IsValid()) { return nullptr; }
+			TArray<TSharedPtr<FACEUIElement>> Stack;
+			Stack.Add(Root);
+			while (Stack.Num() > 0)
+			{
+				TSharedPtr<FACEUIElement> Cur = Stack.Pop(EAllowShrinking::No);
+				if (!Cur.IsValid()) { continue; }
+				if (Cur->ElementName == Name && Cur->bVisible) { return Cur; }
+				for (const TSharedPtr<FACEUIElement>& Child : Cur->Children)
+				{
+					Stack.Add(Child);
+				}
+			}
+			return nullptr;
+		};
+		auto HitRaiseUnder = [&](const FString& Page, const FString& Footer, const FString& BtnName) -> bool
+		{
+			TSharedPtr<FACEUIElement> Btn;
+			if (TSharedPtr<FACEUIElement> Foot = Manager->FindElementUnder(Page, Footer))
+			{
+				Btn = FindNamedUnder(Foot, BtnName);
+			}
+			if (!Btn.IsValid())
+			{
+				Btn = Manager->FindElementUnder(Page, BtnName);
+			}
+			if (!Btn.IsValid() || !Btn->bVisible || Btn->Width <= 0 || Btn->Height <= 0)
+			{
+				return false;
+			}
+			const FIntPoint O = Btn->GetScreenOrigin();
+			const int32 X = FMath::RoundToInt(CanvasLocalPos.X);
+			const int32 Y = FMath::RoundToInt(CanvasLocalPos.Y);
+			return X >= O.X && Y >= O.Y && X < O.X + Btn->Width && Y < O.Y + Btn->Height;
+		};
+		const FString Page = ActiveSkillTab;
+		const FString Footer = (Page == TEXT("SkillPage"))
+			? TEXT("StatManagement_Footer_Meter")
+			: TEXT("StatManagement_Footer_Text");
+		if (HitRaiseUnder(Page, Footer, TEXT("StatManagement_Footer_RaiseButton")))
+		{
+			RaiseSelectedStat(1);
+			return true;
+		}
+		if (HitRaiseUnder(Page, Footer, TEXT("StatManagement_Footer_Raise10Button")))
+		{
+			RaiseSelectedStat(10);
+			return true;
+		}
+
+		if (ActiveSkillTab == TEXT("AttributePage"))
+		{
+			for (int32 i = 0; i < AttributeRowHighlights.Num(); ++i)
+			{
+				UBorder* Hi = AttributeRowHighlights[i];
+				if (!Hi || Hi->GetVisibility() == ESlateVisibility::Collapsed)
+				{
+					continue;
+				}
+				if (Canvas->IsWidgetExposedAt(Hi, Absolute))
+				{
+					// gmAttributeUI::SetSelection toggles an already-selected row off.
+					SelectedAttributeRow = SelectedAttributeRow == i ? INDEX_NONE : i;
+					RefreshAttributeOverlays();
+					return true;
+				}
+			}
+		}
+		else if (ActiveSkillTab == TEXT("SkillPage"))
+		{
+			auto HitSkillRow = [&](const TArray<TObjectPtr<UBorder>>& Borders) -> bool
+			{
+				for (int32 i = 0; i < Borders.Num() && i < SkillRowIds.Num(); ++i)
+				{
+					UBorder* Border = Borders[i];
+					if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed)
+					{
+						continue;
+					}
+					if (Canvas->IsWidgetExposedAt(Border, Absolute))
+					{
+						if (SkillRowIds[i] != 0)
+						{
+							SelectedSkillId = (SelectedSkillId == SkillRowIds[i]) ? 0 : SkillRowIds[i];
+							RefreshSkillOverlays();
+						}
+						return true;
+					}
+				}
+				return false;
+			};
+			if (HitSkillRow(SkillRowHighlights) || HitSkillRow(SkillRowIcons))
+			{
+				return true;
+			}
+		}
+		if (!bRightClick && ActiveSkillTab == TEXT("CharacterTitlePage") && Client)
+		{
+			const TArray<int32>& Titles = SortedTitleIds;
+			for (int32 i = 0; i < TitleRows.Num(); ++i)
+			{
+				UTextBlock* Row = TitleRows[i];
+				if (!Row || Row->GetVisibility() == ESlateVisibility::Collapsed)
+				{
+					continue;
+				}
+				if (Canvas->IsWidgetExposedAt(Row, Absolute))
+				{
+					const int32 TitleIndex = TitleListScrollOffset + i;
+					if (Titles.IsValidIndex(TitleIndex))
+					{
+						SelectedTitleId = Titles[TitleIndex];
+						RefreshTitleOverlays();
+					}
+					return true;
+				}
+			}
+		}
+	}
+
+	for (int32 i = 0; i < InventorySlots.Num() && i < InventorySlotGuids.Num(); ++i)
+	{
+		UBorder* Border = InventorySlots[i];
+		if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed)
+		{
+			continue;
+		}
+		if (Canvas->IsWidgetExposedAt(Border, Absolute))
+		{
+			const int32 Guid = InventorySlotGuids[i];
+			if (Guid != 0)
+			{
+				if (!bRightClick && PendingUseWithSourceGuid != 0 && PendingUseWithSourceGuid != Guid)
+				{
+					TryCompletePendingUseWithTarget(Guid);
+					return true;
+				}
+				SelectInventoryGuid(Guid);
+				if (bRightClick && Client)
+				{
+					Client->SendIdentifyObject(Guid);
+				}
+			}
+			return true;
+		}
+	}
+	for (int32 i = 0; i < ExtPackSlots.Num() && i < ExtPackGuids.Num(); ++i)
+	{
+		UBorder* Border = ExtPackSlots[i];
+		if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed)
+		{
+			continue;
+		}
+		if (Canvas->IsWidgetExposedAt(Border, Absolute))
+		{
+			if (!bRightClick && ExtPackGuids[i] != 0)
+			{
+				OpenLootSelectedPackGuid = ExtPackGuids[i];
+				ExtItemScrollOffset = 0;
+				RefreshExternalContainerOverlays();
+			}
+			return true;
+		}
+	}
+	for (int32 i = 0; i < ExtItemSlots.Num() && i < ExtItemGuids.Num(); ++i)
+	{
+		UBorder* Border = ExtItemSlots[i];
+		if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed)
+		{
+			continue;
+		}
+		if (Canvas->IsWidgetExposedAt(Border, Absolute))
+		{
+			const int32 Guid = ExtItemGuids[i];
+			if (Guid != 0 && Client)
+			{
+				if (bRightClick)
+				{
+					Client->SendIdentifyObject(Guid);
+				}
+				else
+				{
+					SelectInventoryGuid(Guid);
+					const double Now = FPlatformTime::Seconds();
+					constexpr double DoubleClickSeconds = 0.75;
+					if (Guid == LastInvClickGuid && (Now - LastInvClickTime) < DoubleClickSeconds)
+					{
+						Client->SendPutItemInContainer(Guid, Client->GetPlayerGuid(), 0);
+						PlayLocalPickupMotion(PlayerController);
+						LastInvClickGuid = 0;
+						LastInvClickTime = 0.0;
+					}
+					else
+					{
+						LastInvClickGuid = Guid;
+						LastInvClickTime = Now;
+					}
+				}
+			}
+			return true;
+		}
+	}
+	for (int32 i = 0; i < VendorItemSlots.Num() && i < VendorItemGuids.Num(); ++i)
+	{
+		UBorder* Border = VendorItemSlots[i];
+		if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed)
+		{
+			continue;
+		}
+		if (Canvas->IsWidgetExposedAt(Border, Absolute))
+		{
+			const int32 Guid = VendorItemGuids[i];
+			if (Guid != 0 && Client)
+			{
+				if (bRightClick)
+				{
+					Client->SendIdentifyObject(Guid);
+				}
+				else if (ActiveVendorPage == 2)
+				{
+					VendorSellSelectedGuid = Guid;
+					SelectInventoryGuid(Guid);
+					RefreshVendorOverlays();
+				}
+				else
+				{
+					VendorSelectedGuid = Guid;
+					SelectInventoryGuid(Guid);
+					const double Now = FPlatformTime::Seconds();
+					constexpr double DoubleClickSeconds = 0.75;
+					if (Guid == LastInvClickGuid && (Now - LastInvClickTime) < DoubleClickSeconds)
+					{
+						BuySelectedVendorItem();
+						LastInvClickGuid = 0;
+						LastInvClickTime = 0.0;
+					}
+					else
+					{
+						LastInvClickGuid = Guid;
+						LastInvClickTime = Now;
+						RefreshVendorOverlays();
+					}
+				}
+			}
+			return true;
+		}
+	}
+	for (int32 i = 0; i < PackSlots.Num() && i < PackSlotGuids.Num(); ++i)
+	{
+		UBorder* Border = PackSlots[i];
+		if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed)
+		{
+			continue;
+		}
+		if (Canvas->IsWidgetExposedAt(Border, Absolute))
+		{
+			const int32 PackGuid = PackSlotGuids[i];
+			if (bRightClick)
+			{
+				if (Client && PackGuid) { SelectInventoryGuid(PackGuid); Client->SendIdentifyObject(PackGuid); }
+			}
+			else
+			{
+				if (PackGuid == 0)
+				{
+					return true;
+				}
+				SelectedPackGuid = PackGuid;
+				InventoryScrollOffset = 0;
+				RefreshInventoryOverlays();
+				SyncInventoryScrollbars();
+			}
+			return true;
+		}
+	}
+	for (int32 i = 0; i < SpellBarIcons.Num() && i < SpellBarSpellIds.Num(); ++i)
+	{
+		UBorder* Border = SpellBarIcons[i];
+		if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed)
+		{
+			continue;
+		}
+		if (Canvas->IsWidgetExposedAt(Border, Absolute))
+		{
+			if (!bRightClick)
+			{
+				SelectedCombatSpellSlot = i + SpellHotbarScrollOffset;
+				const int32 SpellId = SpellBarSpellIds[i];
+				if (SpellId != 0)
+				{
+					// Retail: first click selects; second click within the double-click window casts.
+					constexpr double DoubleClickSeconds = 0.75;
+					const double Now = FPlatformTime::Seconds();
+					if (i == LastSpellClickSlot && SpellId == LastSpellClickId
+						&& (Now - LastSpellClickTime) < DoubleClickSeconds)
+					{
+						SelectedCombatSpellSlot = i + SpellHotbarScrollOffset;
+						if (!Client->SendCastSpell(SpellId))
+						{
+							PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+						}
+						LastSpellClickSlot = INDEX_NONE;
+						LastSpellClickId = 0;
+						LastSpellClickTime = 0.0;
+					}
+					else
+					{
+						LastSpellClickSlot = i;
+						LastSpellClickId = SpellId;
+						LastSpellClickTime = Now;
+					}
+					RefreshSpellHotbarOverlays();
+				}
+			}
+			return true;
+		}
+	}
+	// BuiltInSpell icon overlays are HitTestInvisible — hit-test their bounds explicitly.
+	if (!bRightClick && Client && BuiltInSpellId != 0 && BuiltInSpellIconBorders.Num() > 0)
+	{
+		if (UBorder* Bi = BuiltInSpellIconBorders[0])
+		{
+			if (Bi->GetVisibility() != ESlateVisibility::Collapsed
+				&& Canvas->IsWidgetExposedAt(Bi, Absolute))
+			{
+				constexpr double DoubleClickSeconds = 0.75;
+				const double Now = FPlatformTime::Seconds();
+				const bool bWasSelected = SelectedCombatSpellSlot < 0;
+				SelectedCombatSpellSlot = -1;
+				if (bWasSelected && BuiltInSpellId == LastSpellClickId
+					&& (Now - LastSpellClickTime) < DoubleClickSeconds)
+				{
+					if (!Client->SendCastSpell(BuiltInSpellId, BuiltInCasterGuid))
+					{
+						PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+					}
+					LastSpellClickSlot = INDEX_NONE;
+					LastSpellClickId = 0;
+					LastSpellClickTime = 0.0;
+				}
+				else
+				{
+					LastSpellClickSlot = -1;
+					LastSpellClickId = BuiltInSpellId;
+					LastSpellClickTime = Now;
+				}
+				RefreshSpellHotbarOverlays();
+				return true;
+			}
+		}
+	}
+	for (const auto& Pair : PaperDollIcons)
+	{
+		UBorder* Border = Pair.Value;
+		if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed)
+		{
+			continue;
+		}
+		if (Canvas->IsWidgetExposedAt(Border, Absolute))
+		{
+			for (const FDollSlotMap& Slot : GDollSlots)
+			{
+				if (Pair.Key != Slot.Name || !Client)
+				{
+					continue;
+				}
+				for (const FACEWorldObject& Obj : Client->GetEquippedItems())
+				{
+					if (ItemMatchesDollSlot(Obj, Slot.Mask))
+					{
+						SelectInventoryGuid(Obj.Guid);
+						if (bRightClick)
+						{
+							Client->SendIdentifyObject(Obj.Guid);
+						}
+						return true;
+					}
+				}
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
+void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString& Sender, int32 ChatType)
+{
+	// Retail: WeenieError / TransientString messages are the yellow center-top banner that
+	// fades out — they never enter the chat log.
+	if (ChatType == ACEChatMessageType::TransientInfo)
+	{
+		ShowTransientInfo(Text);
+		return;
+	}
+
+	if (!ChatLog)
+	{
+		EnsureOverlays();
+	}
+	if (!ChatLog || !Canvas || !Canvas->WidgetTree)
+	{
+		return;
+	}
+
+	// Local send already appended "You say, …" — ignore the server HearSpeech echo for self.
+	if (Client && !Sender.IsEmpty() && ChatType == ACEChatMessageType::Speech)
+	{
+		FACEWorldObject Self;
+		if (Client->GetWorldObject(Client->GetPlayerGuid(), Self) && !Self.Name.IsEmpty()
+			&& (Sender.Equals(Self.Name, ESearchCase::IgnoreCase)
+				|| Sender.Equals(TEXT("You"), ESearchCase::IgnoreCase)))
+		{
+			// Allow the explicit local "You" append through; drop only the server echo
+			// that uses the character name.
+			if (!Sender.Equals(TEXT("You"), ESearchCase::IgnoreCase))
+			{
+				return;
+			}
+		}
+	}
+
+	// Retail @filter global squelch — client-local errors always show.
+	if (ChatType != ACEChatMessageType::ChatError
+		&& (GlobalChatTypeFilter & (1ull << (static_cast<uint32>(ChatType) & 63))) == 0)
+	{
+		return;
+	}
+
+	FString Line;
+	if (ACEChatMessageType::IsGlobalChannel(ChatType)
+        || ChatType == ACEChatMessageType::Channel || ChatType == ACEChatMessageType::ChannelSend
+        || ChatType == ACEChatMessageType::Social || ChatType == ACEChatMessageType::SocialSend
+        || ChatType == ACEChatMessageType::Fellowship || ChatType == ACEChatMessageType::Abuse
+        || ChatType == ACEChatMessageType::Help)
+	{
+		// The channel decoder already includes the channel and speaker.
+		Line = Text;
+	}
+	else if (ChatType == ACEChatMessageType::OutgoingTell)
+	{
+		Line = Sender.IsEmpty() ? Text : FString::Printf(TEXT("%s, \"%s\""), *Sender, *Text);
+	}
+	else if (ChatType == ACEChatMessageType::Tell)
+	{
+		Line = FString::Printf(TEXT("%s tells you, \"%s\""),
+			Sender.IsEmpty() ? TEXT("Someone") : *Sender, *Text);
+	}
+	else if (ChatType == ACEChatMessageType::Emote)
+	{
+		// DAT ChatEmote strings are fragments ("wave." / "waves.") — Mag-nus prepends
+		// "You " locally and "Name " for SoulEmote broadcasts.
+		if (Sender.IsEmpty() || Sender.Equals(TEXT("You"), ESearchCase::IgnoreCase))
+		{
+			Line = Text.StartsWith(TEXT("You "), ESearchCase::CaseSensitive)
+				? Text
+				: FString::Printf(TEXT("You %s"), *Text);
+		}
+		else
+		{
+			Line = FString::Printf(TEXT("%s %s"), *Sender, *Text);
+		}
+	}
+	else if (!Sender.IsEmpty())
+	{
+		if (Sender.Equals(TEXT("You"), ESearchCase::IgnoreCase))
+		{
+			Line = FString::Printf(TEXT("You say, \"%s\""), *Text);
+		}
+		else
+		{
+			Line = FString::Printf(TEXT("%s says, \"%s\""), *Sender, *Text);
+		}
+	}
+	else
+	{
+		Line = Text;
+	}
+	if (ChatType == ACEChatMessageType::OutgoingTell)
+	{
+		const FString Key = Line.ToLower();
+		const double NowSec = FPlatformTime::Seconds();
+		if (Key == LastOutgoingTellLineKey && (NowSec - LastOutgoingTellLineTime) < 2.0)
+		{
+			return;
+		}
+		LastOutgoingTellLineKey = Key;
+		LastOutgoingTellLineTime = NowSec;
+	}
+	// Retail AddTextToScroll: "Display timestamps" option prefixes "%#H:%M:%S "
+	// (hour without leading zero); client-local error lines (LTT 26) are exempt.
+	if (Client && ChatType != ACEChatMessageType::ChatError
+		&& (Client->GetCharacterOptions2() & 0x00000040u) != 0)
+	{
+		const FDateTime Now = FDateTime::Now();
+		Line = FString::Printf(TEXT("%d:%02d:%02d %s"),
+			Now.GetHour(), Now.GetMinute(), Now.GetSecond(), *Line);
+	}
+	// Retail @log mirror — appends the displayed line to the chosen text file.
+	if (bChatMirrorToFile && !ChatMirrorFilePath.IsEmpty())
+	{
+		FFileHelper::SaveStringToFile(Line + LINE_TERMINATOR, *ChatMirrorFilePath,
+			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM, &IFileManager::Get(),
+			FILEWRITE_Append);
+	}
+
+	const FLinearColor Color = ColorForChatType(ChatType);
+	// Player-attributed rows become click-to-tell targets (retail <Tell:IIDString>).
+	FString ClickSender;
+	if (!Sender.IsEmpty() && !Sender.Equals(TEXT("You"), ESearchCase::IgnoreCase)
+		&& (ChatType == ACEChatMessageType::Speech
+			|| ChatType == ACEChatMessageType::Tell
+			|| ChatType == ACEChatMessageType::Emote
+			|| ChatType == ACEChatMessageType::Social
+			|| ChatType == ACEChatMessageType::Channel
+			|| ChatType == ACEChatMessageType::Fellowship
+			|| ChatType == ACEChatMessageType::Allegiance))
+	{
+		ClickSender = Sender;
+	}
+
+	// Main window honours the quick filter cycle; retail floaty windows use their
+	// own 64-bit type filters and only receive lines while visible.
+	if (PassesChatFilter(ChatType) && (MainChatTypeFilter & (1ull << (static_cast<uint32>(ChatType) & 63))) != 0)
+	{
+		AppendChatLineToLog(0, Line, Color, ClickSender);
+	}
+	else if (!bChatStickToBottom)
+	{
+		SyncChatJumpIndicator();
+	}
+	if (Manager)
+	{
+		for (int32 W = 1; W <= NumFloatyChats; ++W)
+		{
+			TSharedPtr<FACEUIElement> Root = Manager->FindElementByName(
+				FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"), W));
+			if (!Root.IsValid() || !Root->bVisible)
+			{
+				continue;
+			}
+			if (FloatyChatFilters.IsValidIndex(W - 1)
+				&& (FloatyChatFilters[W - 1] & (1ull << (static_cast<uint32>(ChatType) & 63))) == 0)
+			{
+				continue;
+			}
+			AppendChatLineToLog(W, Line, Color, ClickSender);
+		}
+	}
+}
+
+void UACEUIGameplayBinder::HandleAppraisal(const FACEAppraisalInfo& Appraisal)
+{
+	if (Client && bExaminationDismissed && Client->GetIdentifyRequestSerial() <= DismissedIdentifySerial) return;
+	if (Client && Client->GetIdentifyRequestGuid() && Client->GetIdentifyRequestGuid() != Appraisal.ObjectGuid) return;
+	bExaminationDismissed = false;
+	if (EditingInscriptionGuid && EditingInscriptionGuid != Appraisal.ObjectGuid && ExamInscriptionEditor)
+		HandleInscriptionCommitted(ExamInscriptionEditor->GetText(), ETextCommit::OnUserMovedFocus);
+	LastAppraisal = Appraisal;
+	ExaminedSpellId = 0;
+	ShowExamination(true);
+	RefreshExaminationOverlay();
+}
+
+void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Selection)
+{
+	const bool bNewClick = Selection.Guid != LastSelection.Guid
+		|| Selection.SelectionSerial != LastSelection.SelectionSerial;
+	if (bNewClick)
+	{
+	SelectionFlashUntil = 0;
+	TickSelectionFlash(); // restore the previous selection before changing it
+	SelectionFlashUntil = FPlatformTime::Seconds() + .4;
+	TArray<UPrimitiveComponent*> Meshes;
+	if (Selection.bValid && PlayerController)
+		for (TActorIterator<AACEWorldEntityActor> It(PlayerController->GetWorld()); It; ++It)
+			if (It->GetACEGuid() == Selection.Guid) { It->GetComponents(Meshes); break; }
+	if (Selection.bValid && Client && PaperDollPreviewActor)
+	{
+		if (Selection.Guid == Client->GetPlayerGuid())
+		{
+			TArray<UPrimitiveComponent*> DollMeshes; PaperDollPreviewActor->GetComponents(DollMeshes);
+			for (auto* Mesh : DollMeshes) Meshes.AddUnique(Mesh);
+		}
+		else if (auto* App = PaperDollPreviewActor->FindComponentByClass<UACECharacterAppearanceComponent>())
+		{
+			// gmPaperDollUI::GetSelectionMaskFromObject / ApplyPartSelectionLighting:
+			// only the upper visible garment lights up, using the retail Setup part numbers.
+			struct FRegion { int64 Mask; int32 Parts[4]; };
+			const FRegion Regions[] = {
+				{1,{16,-1,-1,-1}}, {0x202,{9,-1,-1,-1}}, {0x404,{0,-1,-1,-1}},
+				{0x808,{10,13,-1,-1}}, {0x1010,{11,14,-1,-1}}, {0x20,{12,15,-1,-1}},
+				{0x2040,{1,5,-1,-1}}, {0x4080,{2,6,-1,-1}}, {0x100,{3,4,7,8}}
+			};
+			for (const auto& Region : Regions) if (FindUpperEquippedItem(Region.Mask) == Selection.Guid)
+				for (int32 Part : Region.Parts) if (Part >= 0)
+					if (auto* Mesh = Cast<UPrimitiveComponent>(App->GetPartMesh(Part))) Meshes.AddUnique(Mesh);
+		}
+	}
+	for (UPrimitiveComponent* Mesh : Meshes)
+		for (int32 Index = 0; Index < Mesh->GetNumMaterials(); ++Index)
+			if (auto* Original = Mesh->GetMaterial(Index))
+			{
+				auto* Source = Cast<UMaterialInstanceDynamic>(Original);
+				auto* Flash = UMaterialInstanceDynamic::Create(Source ? Source->Parent.Get() : Original, this);
+				Flash->CopyMaterialUniformParameters(Original);
+				FlashMeshes.Add(Mesh); FlashMaterialSlots.Add(Index);
+				FlashOriginalMaterials.Add(Original); FlashMaterials.Add(Flash);
+				Mesh->SetMaterial(Index, Flash);
+			}
+	TickSelectionFlash();
+	}
+	const bool SameStackSelection = LastSelection.Guid == Selection.Guid;
+	const int32 PreviousStackAmount = SelectedStackAmount;
+	LastSelection = Selection;
+	SelectedStackAmount = 1;
+	SelectedStackMax = 1;
+	if (Client && Selection.bValid && Selection.Guid != 0)
+	{
+		FACEWorldObject Obj;
+		if (Client->GetWorldObject(Selection.Guid, Obj))
+		{
+			const int32 Total = Obj.StackSize > 0 ? Obj.StackSize : 1;
+			SelectedStackMax = (Obj.MaxStackSize > 0) ? FMath::Min(Total, Obj.MaxStackSize) : Total;
+			const bool VendorStock=OpenVendorGuid!=0 && Client->GetVendorMerchandise().ContainsByPredicate(
+				[&](const FACEWorldObject& Item) { return Item.Guid==Obj.Guid; });
+			if (VendorStock)
+			{
+				const int32 Limit=Obj.MaxStackSize>1 ? Obj.MaxStackSize : 100;
+				SelectedStackMax=Obj.VendorQuantityAvailable<0 ? Limit : FMath::Max(1,FMath::Min(Limit,Obj.VendorQuantityAvailable));
+			}
+			SelectedStackAmount=SameStackSelection ? FMath::Clamp(PreviousStackAmount,1,SelectedStackMax)
+				: VendorStock ? 1 : SelectedStackMax;
+		}
+		// Keep an open examine/inspect panel in sync with the current selection.
+		if (Manager)
+		{
+			if (TSharedPtr<FACEUIElement> Exam = Manager->FindElementByName(
+					TEXT("RootGameplay_FloatyExamination_Field"));
+				Exam.IsValid() && Exam->bVisible)
+			{
+				Client->SendIdentifyObject(Selection.Guid);
+			}
+		}
+	}
+	RefreshSelectionOverlay();
+}
+
+void UACEUIGameplayBinder::HandleVitalsUpdated(const FACEPlayerVitals& Vitals)
+{
+	LastVitals = Vitals;
+	// The session owns optimistic mode and filters the server's transient peace
+	// motion during stance changes. A second pending-mode filter here suppresses
+	// an intentional Y-to-peace request and leaves the retail/wrist art stale.
+	if (Vitals.bValid && Vitals.CombatMode != CombatMode)
+	{
+		ApplyCombatModeInternal(Vitals.CombatMode, false);
+	}
+	RefreshVitalsOverlays();
+	// XP / skill-credit spends update PrivateUpdate* → refresh raise footer immediately.
+	if (ActivePanelPage == TEXT("SkillManagementPanel_Field"))
+	{
+		RefreshAttributeOverlays();
+		RefreshSkillOverlays();
+	}
+}
+
+void UACEUIGameplayBinder::FocusChatEntry()
+{
+	FocusChatEntryWindow(0);
+}
+
+double UACEUIGameplayBinder::InventoryDoubleClickSeconds() const
+{
+	return PlayerController && PlayerController->IsVRActive() ? .85 : .5;
+}
+
+float UACEUIGameplayBinder::InventoryDragThreshold() const
+{
+	return PlayerController && PlayerController->IsVRActive() ? 24.f : 12.f;
+}
+
+void UACEUIGameplayBinder::ClearChatEntryFocus()
+{
+	// Controller pointers own a virtual Slate user; stealing every user's focus
+	// here interrupts vendor clicks and captured item/spell drags.
+	if (PlayerController && PlayerController->IsVRActive())
+	{
+		PlayerController->GetVRComponent()->DismissTextEntry();
+		return;
+	}
+	if (ChatEntry && ChatEntry->HasKeyboardFocus())
+	{
+		FSlateApplication::Get().ClearKeyboardFocus(EFocusCause::Cleared);
+	}
+	// Always restore viewport focus so WASD works with skills/inventory open.
+	if (FSlateApplication::IsInitialized())
+	{
+		FSlateApplication::Get().SetAllUserFocusToGameViewport();
+	}
+}
+
+void UACEUIGameplayBinder::LoadVitalDisplayPreference()
+{
+	if (!GConfig)
+	{
+		return;
+	}
+	bool bNumbers = false;
+	if (GConfig->GetBool(TEXT("ACEClient"), TEXT("ShowVitalNumbers"), bNumbers, GGameUserSettingsIni))
+	{
+		bShowVitalNumbers = bNumbers;
+	}
+}
+
+void UACEUIGameplayBinder::SaveVitalDisplayPreference() const
+{
+	if (!GConfig)
+	{
+		return;
+	}
+	GConfig->SetBool(TEXT("ACEClient"), TEXT("ShowVitalNumbers"), bShowVitalNumbers, GGameUserSettingsIni);
+	GConfig->Flush(false, GGameUserSettingsIni);
+}
+
+void UACEUIGameplayBinder::SetJumpChargeFraction(float Fraction)
+{
+	if (!Canvas || !Canvas->WidgetTree || !Canvas->GetElementLayer())
+	{
+		return;
+	}
+	EnsureOverlays();
+	const float Clamped = FMath::Clamp(Fraction, 0.f, 1.f);
+	const bool bShow = Clamped > 0.01f;
+
+	// Prefer retail classic_floatypowerbar embedded as RootGameplay_PowerBar_Field
+	// (layout 0x21000072): Meter "Powerbar" track 0x06004D0B, yellow fill 0x06001354.
+	// Hide adv_recklessness_fill (0x0600715E red) during jump charge.
+	bool bUsedLayoutMeter = false;
+	if (Manager)
+	{
+		FString PowerRootName = TEXT("RootGameplay_PowerBar_Field");
+		TSharedPtr<FACEUIElement> PowerRoot = Manager->FindElementByName(PowerRootName);
+		if (!PowerRoot.IsValid())
+		{
+			PowerRootName = TEXT("RootFloatyPowerBar_Field");
+			PowerRoot = Manager->FindElementByName(PowerRootName);
+		}
+		TSharedPtr<FACEUIElement> Meter = PowerRoot.IsValid()
+			? Manager->FindElementUnder(PowerRootName, TEXT("Powerbar"))
+			: nullptr;
+		if (PowerRoot.IsValid() && Meter.IsValid() && Meter->Type == ACEUI::ElementType::Meter)
+		{
+			bUsedLayoutMeter = true;
+			// gmPowerbarUI::RecvNotice_BeginPowerbar(PBM_JUMP): Height/yellow fill.
+			PowerRoot->DefaultState = 0x10000042;
+			Manager->SetElementVisibleByName(PowerRootName, bShow);
+			Meter->MeterFillFraction = bShow ? Clamped : -1.f;
+			Meter->bVisible = bShow;
+			for (const TSharedPtr<FACEUIElement>& Child : Meter->Children)
+			{
+				if (!Child.IsValid())
+				{
+					continue;
+				}
+				if (Child->ElementName == TEXT("adv_recklessness_fill")
+					|| Child->ImageFileId == 0x0600715E)
+				{
+					Child->bVisible = false;
+				}
+				else if (Child->ImageFileId == 0x06001354)
+				{
+					Child->bVisible = bShow;
+				}
+				else if (Child->ElementName == TEXT("Powerbar_Text"))
+				{
+					Child->bVisible = bShow;
+				}
+			}
+		}
+	}
+
+	auto CollapseBorder = [](TObjectPtr<UBorder>& Border)
+	{
+		if (Border)
+		{
+			Border->SetVisibility(ESlateVisibility::Collapsed);
+		}
+	};
+	auto CollapseText = [](TObjectPtr<UTextBlock>& Text)
+	{
+		if (Text)
+		{
+			Text->SetVisibility(ESlateVisibility::Collapsed);
+		}
+	};
+
+	if (bUsedLayoutMeter)
+	{
+		CollapseBorder(JumpChargeFrame);
+		CollapseBorder(JumpChargeFill);
+        if (bShow)
+        {
+            if (!JumpChargeLabel)
+                JumpChargeLabel=Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+            // JumpMode's UICore_Text_entry is language DAT 0x0529BD74: Height.
+            auto Label=Manager->FindElementByName(TEXT("Powerbar_Text"));
+            PlaceTextOnElement(JumpChargeLabel,Label,TEXT("Height"),14,FLinearColor::White,9002,true);
+        }
+        else CollapseText(JumpChargeLabel);
+		return;
+	}
+
+	// Fallback Slate overlay when PowerBar layout is unavailable.
+	auto EnsureBarBorder = [&](TObjectPtr<UBorder>& Border, int32 IconDid)
+	{
+		if (!Border)
+		{
+			Border = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+			Border->SetPadding(FMargin(0.f));
+			Border->SetVisibility(ESlateVisibility::HitTestInvisible);
+			Canvas->GetElementLayer()->AddChild(Border);
+		}
+		SetIconDid(Border, IconDid);
+	};
+	EnsureBarBorder(JumpChargeFrame, 0x06004D0B);
+	EnsureBarBorder(JumpChargeFill, 0x06001354);
+	if (!JumpChargeLabel)
+	{
+		JumpChargeLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		JumpChargeLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
+		JumpChargeLabel->SetJustification(ETextJustify::Left);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9);
+		JumpChargeLabel->SetFont(Font);
+		JumpChargeLabel->SetColorAndOpacity(FSlateColor(FLinearColor(0.95f, 0.95f, 0.9f, 1.f)));
+		JumpChargeLabel->SetText(FText::FromString(TEXT("Height")));
+		Canvas->GetElementLayer()->AddChild(JumpChargeLabel);
+	}
+
+	if (!bShow)
+	{
+		JumpChargeFrame->SetVisibility(ESlateVisibility::Collapsed);
+		JumpChargeFill->SetVisibility(ESlateVisibility::Collapsed);
+		JumpChargeLabel->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+	JumpChargeFrame->SetVisibility(ESlateVisibility::HitTestInvisible);
+	JumpChargeFill->SetVisibility(ESlateVisibility::HitTestInvisible);
+	JumpChargeLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
+
+	const FVector2D View = Canvas->GetCachedGeometry().GetLocalSize();
+	const float BarW = FMath::Clamp(View.X * 0.42f, 220.f, 520.f);
+	constexpr float BarH = 14.f;
+	constexpr float LabelW = 48.f;
+	const float TotalW = BarW + 6.f + LabelW;
+	const float X = View.X * 0.5f - TotalW * 0.5f;
+	const float Y = View.Y * 0.48f;
+	const float FillW = FMath::Max(2.f, BarW * Clamped);
+
+	if (UCanvasPanelSlot* FrameSlot = Cast<UCanvasPanelSlot>(JumpChargeFrame->Slot))
+	{
+		FrameSlot->SetAutoSize(false);
+		FrameSlot->SetAnchors(FAnchors(0.f, 0.f));
+		FrameSlot->SetAlignment(FVector2D(0.f, 0.f));
+		FrameSlot->SetPosition(FVector2D(X, Y));
+		FrameSlot->SetSize(FVector2D(BarW, BarH));
+		Canvas->SetOverlayOrder(JumpChargeFrame, Manager->FindElementByName(TEXT("RootGameplay_SmartBox_Field")), 9000);
+	}
+	if (UCanvasPanelSlot* FillSlot = Cast<UCanvasPanelSlot>(JumpChargeFill->Slot))
+	{
+		FillSlot->SetAutoSize(false);
+		FillSlot->SetAnchors(FAnchors(0.f, 0.f));
+		FillSlot->SetAlignment(FVector2D(0.f, 0.f));
+		FillSlot->SetPosition(FVector2D(X, Y));
+		FillSlot->SetSize(FVector2D(FillW, BarH));
+		Canvas->SetOverlayOrder(JumpChargeFill, Manager->FindElementByName(TEXT("RootGameplay_SmartBox_Field")), 9001);
+	}
+	if (UCanvasPanelSlot* LabelSlot = Cast<UCanvasPanelSlot>(JumpChargeLabel->Slot))
+	{
+		LabelSlot->SetAutoSize(false);
+		LabelSlot->SetAnchors(FAnchors(0.f, 0.f));
+		LabelSlot->SetAlignment(FVector2D(0.f, 0.f));
+		LabelSlot->SetPosition(FVector2D(X + BarW + 6.f, Y - 1.f));
+		LabelSlot->SetSize(FVector2D(LabelW, BarH + 2.f));
+		Canvas->SetOverlayOrder(JumpChargeLabel, Manager->FindElementByName(TEXT("RootGameplay_SmartBox_Field")), 9002);
+	}
+}
+
+bool UACEUIGameplayBinder::TrySendChatFromEntry(const FString* OverrideText, int32 SourceWindow)
+{
+	UEditableTextBox* Entry = GetChatEntryWidget(SourceWindow);
+	if (!Client || !Entry)
+	{
+		return false;
+	}
+	// Retail m_eWindowID: commands know which window's entry they came from
+	// (@title / @clear target the source window).
+	ChatSourceWindow = SourceWindow;
+	FString Message = OverrideText ? *OverrideText : Entry->GetText().ToString();
+	// Strip BOM / zero-width / NBSP that break @/ prefix detection.
+	Message.ReplaceInline(TEXT("\uFEFF"), TEXT(""));
+	Message.ReplaceInline(TEXT("\u200B"), TEXT(""));
+	Message.ReplaceInline(TEXT("\u00A0"), TEXT(" "));
+	Message.TrimStartAndEndInline();
+	if (Message.IsEmpty())
+	{
+		FocusChatEntryWindow(SourceWindow);
+		return true;
+	}
+	CloseChatTargetPopup();
+
+	if (auto* Chat = Cast<UACEChatEntry>(Entry)) Chat->RememberSubmitted(Message);
+
+	// Retail "Stay in chat mode after sending" (PlayerOption 0x0B): keep the entry
+	// focused after the send. Deferred one tick — the edit box clears keyboard
+	// focus after the commit delegate returns, which would undo a same-frame focus.
+	if (Client && (Client->GetCharacterOptions1() & 0x00000800u) != 0)
+	{
+		bPendingChatRefocus = true;
+		PendingChatRefocusWindow = SourceWindow;
+	}
+
+	// Retail pose emote: *bow* / *wave* → ChatPoseTable + SoulEmote (+ local motion).
+	if (Message.StartsWith(TEXT("*")))
+	{
+		FString Emote = Message.Mid(1).TrimStartAndEnd();
+		if (Emote.EndsWith(TEXT("*")))
+		{
+			Emote.LeftChopInline(1);
+			Emote.TrimStartAndEndInline();
+		}
+		if (!Emote.IsEmpty())
+		{
+			UACEDatSubsystem* Dat = nullptr;
+			if (PlayerController)
+			{
+				if (UGameInstance* GI = PlayerController->GetGameInstance())
+				{
+					Dat = GI->GetSubsystem<UACEDatSubsystem>();
+				}
+			}
+			FString CmdName, MyEmote, OtherEmote;
+			if (Dat && Dat->TryGetChatPose(Emote, CmdName, MyEmote, OtherEmote))
+			{
+				FString PlayerName = TEXT("Someone");
+				FACEWorldObject SelfObj;
+				if (Client->GetWorldObject(Client->GetPlayerGuid(), SelfObj) && !SelfObj.Name.IsEmpty())
+				{
+					PlayerName = SelfObj.Name;
+				}
+				const TCHAR* Possessive = TEXT("his");
+				if (LastVitals.bValid && LastVitals.Gender == 2) // Female
+				{
+					Possessive = TEXT("her");
+				}
+				auto FormatEmote = [&](FString S) -> FString
+				{
+					S.ReplaceInline(TEXT("%s"), *PlayerName);
+					S.ReplaceInline(TEXT("%S"), *PlayerName);
+					S.ReplaceInline(TEXT("%p"), Possessive);
+					S.ReplaceInline(TEXT("%P"), Possessive);
+					return S;
+				};
+				// DAT strings are fragments: My="wave." Other="waves." Mag-nus prepends You/Name.
+				if (!OtherEmote.IsEmpty())
+				{
+					Client->SendSoulEmote(FormatEmote(OtherEmote));
+				}
+				if (!MyEmote.IsEmpty())
+				{
+					AppendLocalChatLine(FormatEmote(MyEmote), ACEChatMessageType::Emote);
+				}
+				auto NormalizePoseKey = [](FString S) -> FString
+				{
+					S = S.ToLower();
+					S.ReplaceInline(TEXT(" "), TEXT(""));
+					S.ReplaceInline(TEXT("-"), TEXT(""));
+					S.ReplaceInline(TEXT("_"), TEXT(""));
+					return S;
+				};
+				uint32 MotionCmd = 0;
+				const FString MotionKey = NormalizePoseKey(CmdName);
+				const FString EmoteKey = NormalizePoseKey(Emote);
+				if (!ACEMotionName::TryResolve(MotionKey, MotionCmd))
+				{
+					ACEMotionName::TryResolve(EmoteKey, MotionCmd);
+				}
+				if (MotionCmd != 0)
+				{
+					Client->SendSoulEmoteMotion(static_cast<int32>(MotionCmd));
+					APawn* Pawn = PlayerController ? PlayerController->GetPawn() : nullptr;
+					UACECharacterAppearanceComponent* App = Pawn
+						? Pawn->FindComponentByClass<UACECharacterAppearanceComponent>()
+						: nullptr;
+					if (App)
+					{
+						// Play enter link/cycle, then hold last frame until WASD (retail).
+						App->PlayActionMotion(static_cast<int32>(MotionCmd), 1.f, 0, true);
+					}
+					UE_LOG(LogTemp, Log, TEXT("ACE ChatPose: '%s' → cmd='%s' motion=0x%08X"),
+						*Emote, *CmdName, MotionCmd);
+				}
+				else
+				{
+					UE_LOG(LogTemp, Warning,
+						TEXT("ACE ChatPose: unmapped cmd='%s' emote='%s'"), *CmdName, *Emote);
+				}
+			}
+			else
+			{
+				// Unknown pose key — fall back to text emote (@e).
+				Client->SendEmote(Emote);
+			}
+		}
+		Entry->SetText(FText::GetEmpty());
+		return true;
+	}
+
+	// Mag-nus CommunicationSystem::OnChatCommand — @ / / / : / ; never go as Speech.
+	const TCHAR Lead = Message[0];
+	if (Lead == TCHAR('@') || Lead == TCHAR('/') || Lead == TCHAR(':') || Lead == TCHAR(';')
+		|| Lead == 0xFF20) // fullwidth ＠
+	{
+		if (Lead == 0xFF20)
+		{
+			Message = TEXT("@") + Message.Mid(1);
+		}
+		else if (Lead == TCHAR('/'))
+		{
+			Message = TEXT("@") + Message.Mid(1);
+		}
+		bool bClearEntry = true;
+		TryDispatchChatCommand(Message, Entry, &bClearEntry);
+		if (bClearEntry)
+		{
+			Entry->SetText(FText::GetEmpty());
+		}
+		else
+		{
+			FocusChatEntryWindow(SourceWindow);
+		}
+		return true;
+	}
+
+	// ChatTarget destination: Say, fellowship/allegiance channels, or Turbine global chat.
+	if (ChatSendIsTurbine(ChatSendChannel))
+	{
+		if (TSharedPtr<FACESession> S = Client->GetSession())
+		{
+			const uint32 ChatType = ChatSendTurbineChatType(ChatSendChannel);
+			const int32 Opt = (ChatType == ACETurbineChat::General) ? 0x23
+				: (ChatType == ACETurbineChat::Trade) ? 0x24
+				: (ChatType == ACETurbineChat::LFG) ? 0x25
+				: (ChatType == ACETurbineChat::Roleplay) ? 0x26
+				: (ChatType == ACETurbineChat::Society) ? 0x2E
+				: INDEX_NONE;
+			if (Opt != INDEX_NONE && !Client->IsCharacterOptionSet(Opt))
+			{
+				HandleChatMessage(FString::Printf(TEXT("You are not listening to the %s channel!"),
+					ChatType == ACETurbineChat::Trade ? TEXT("Trade")
+					: ChatType == ACETurbineChat::LFG ? TEXT("LFG")
+					: ChatType == ACETurbineChat::Roleplay ? TEXT("Roleplay")
+					: ChatType == ACETurbineChat::Society ? TEXT("Society")
+					: TEXT("General")),
+					FString(), ACEChatMessageType::ChatError);
+			}
+			else
+			{
+				S->SendTurbineChat(S->GetTurbineChannelId(ChatType), ChatType, Message);
+			}
+		}
+	}
+	else if (ChatSendChannel==12)
+	{
+		const auto Selection=Client->GetSelectedObject(); FACEWorldObject Target;
+		if (Selection.bValid && Client->GetWorldObject(Selection.Guid,Target) && Target.bIsPlayer)
+		{
+			Client->SendTalkDirect(Target.Guid,Message); LastOutgoingTellName=Target.Name;
+		}
+		else { AppendLocalChatLine(TEXT("Select a player to tell."),ACEChatMessageType::ChatError); return true; }
+	}
+	else
+	{
+		const uint32 Chan = ChatSendChannelId(ChatSendChannel);
+		if (Chan != 0)
+		{
+			Client->SendChatChannel(static_cast<int32>(Chan), Message);
+		}
+		else
+		{
+			Client->SendChatMessage(Message);
+			HandleChatMessage(Message, TEXT("You"), ACEChatMessageType::Speech);
+		}
+	}
+	Entry->SetText(FText::GetEmpty());
+	return true;
+}
+
+bool UACEUIGameplayBinder::ScrollChatLog(float PixelDelta, int32 Window)
+{
+    UScrollBox* Log=GetChatLogWidget(Window);
+    if (!Log) return false;
+    const float MaxOffset=FMath::Max(0.f,Log->GetScrollOffsetOfEnd());
+    const float Next=FMath::Clamp(Log->GetScrollOffset()+PixelDelta,0.f,MaxOffset);
+    Log->SetScrollOffset(Next);
+    const bool Stick=MaxOffset<=KINDA_SMALL_NUMBER || Next>=MaxOffset-2.f;
+    if (Window==0)
+    {
+        bChatStickToBottom=Stick; ChatStickEndOffset=Stick ? MaxOffset : -1.f;
+        SyncChatJumpIndicator();
+    }
+    else bFloatyChatStickToBottom[Window-1]=Stick;
+    SyncChatScrollbar(Window);
+    return true;
+}
+
+int32 UACEUIGameplayBinder::ChatWindowAtPointer(FVector2D CanvasLocalPos) const
+{
+    if (!Manager || !Canvas) return INDEX_NONE;
+    const FVector2D P=Canvas->ViewportToLayout(CanvasLocalPos);
+    for (int32 W=0; W<=NumFloatyChats; ++W)
+    {
+        const FString Root=W ? FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"),W) : TEXT("RootGameplay_FloatyMainChat_Field");
+        for (const TCHAR* Name : {TEXT("ChatLog"),TEXT("ChatLogScrollbar")})
+        {
+            const auto El=Manager->FindElementUnder(Root,Name);
+            if (!El || !Canvas->IsElementExposedAt(El,CanvasLocalPos)) continue;
+            const FIntPoint O=El->GetScreenOrigin();
+            if (P.X>=O.X && P.Y>=O.Y && P.X<O.X+El->Width && P.Y<O.Y+El->Height) return W;
+        }
+    }
+    return INDEX_NONE;
+}
+
+bool UACEUIGameplayBinder::IsPointerOverChatLog(FVector2D CanvasLocalPos) const
+{
+    return ChatWindowAtPointer(CanvasLocalPos)!=INDEX_NONE;
+}
+
+void UACEUIGameplayBinder::SyncChatScrollbar(int32 Window)
+{
+    UScrollBox* Log=GetChatLogWidget(Window);
+    if (!Manager || !Log) return;
+    const FString Root=Window ? FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"),Window) : TEXT("RootGameplay_FloatyMainChat_Field");
+    const auto Bar=Manager->FindElementUnder(Root,TEXT("ChatLogScrollbar"));
+    if (!Bar || Bar->Height<=0) return;
+    const float MaxOffset=FMath::Max(0.f,Log->GetScrollOffsetOfEnd());
+    const float Frac=MaxOffset>KINDA_SMALL_NUMBER ? FMath::Clamp(Log->GetScrollOffset()/MaxOffset,0.f,1.f) : 0.f;
+    const float ViewH=FMath::Max(1.f,Log->GetCachedGeometry().GetLocalSize().Y);
+    SyncDatScrollbar(Bar,Frac,ViewH/(ViewH+MaxOffset));
+}
+
+void UACEUIGameplayBinder::SyncChatJumpIndicator()
+{
+	if (!Manager || !ChatLog)
+	{
+		return;
+	}
+	TSharedPtr<FACEUIElement> Indicator = Manager->FindElementUnder(
+		TEXT("RootGameplay_FloatyMainChat_Field"), TEXT("ChatLogNewNonVisibleTextIndicator"));
+	if (!Indicator.IsValid())
+	{
+		Indicator = Manager->FindElementByName(TEXT("ChatLogNewNonVisibleTextIndicator"));
+	}
+	if (!Indicator.IsValid())
+	{
+		return;
+	}
+	const float MaxOffset = FMath::Max(0.f, ChatLog->GetScrollOffsetOfEnd());
+	const bool bShow = !bChatStickToBottom && MaxOffset > KINDA_SMALL_NUMBER;
+	Indicator->bVisible = bShow;
+	if (!bShow)
+	{
+		return;
+	}
+	// Left gutter of ChatLog (UMG text is inset by 16px). Negative X is orphan-culled.
+	TSharedPtr<FACEUIElement> ChatLogEl = Manager->FindElementUnder(
+		TEXT("RootGameplay_FloatyMainChat_Field"), TEXT("ChatLog"));
+	if (ChatLogEl.IsValid())
+	{
+		Indicator->X = 0;
+		Indicator->Y = FMath::Max(0, ChatLogEl->Height - 16);
+		Indicator->Width = 16;
+		Indicator->Height = 16;
+	}
+}
+
+void UACEUIGameplayBinder::SyncDatScrollbar(const TSharedPtr<FACEUIElement>& Bar, float Frac, float VisibleFrac)
+{
+	if (IsScrollbarDragActive() && ScrollDragBar.Pin() == Bar) Frac = ScrollDragFraction;
+	if (!Bar.IsValid() || Bar->Height <= 0 || Bar->Width <= 0)
+	{
+		return;
+	}
+	constexpr int32 Btn = 16;
+	for (const auto& Child : Bar->Children)
+	{
+		if (!Child) continue;
+		Child->EdgeAnchorX=Child->EdgeAnchorY=0; Child->RecomputeLayoutOffset();
+		for (const auto& Part : Child->Children)
+			if (Part) { Part->EdgeAnchorX=Part->EdgeAnchorY=0; Part->RecomputeLayoutOffset(); }
+	}
+	TSharedPtr<FACEUIElement> Up;
+	TSharedPtr<FACEUIElement> Down;
+	TSharedPtr<FACEUIElement> Left;
+	TSharedPtr<FACEUIElement> Right;
+	TSharedPtr<FACEUIElement> Thumb;
+	for (const TSharedPtr<FACEUIElement>& Child : Bar->Children)
+	{
+		if (!Child.IsValid())
+		{
+			continue;
+		}
+		if (Child->ElementName == TEXT("ScrollBar_Up")) { Up = Child; }
+		else if (Child->ElementName == TEXT("ScrollBar_Down")) { Down = Child; }
+		else if (Child->ElementName == TEXT("ScrollBar_Left")) { Left = Child; }
+		else if (Child->ElementName == TEXT("ScrollBar_Right")) { Right = Child; }
+		else if (Child->Type == ACEUI::ElementType::Scrollbar
+			|| Child->ElementName.IsEmpty()
+			|| Child->ElementName.Contains(TEXT("widget_")))
+		{
+			if (!Thumb.IsValid() || Child->Type == ACEUI::ElementType::Scrollbar
+				|| Child->ElementName.IsEmpty())
+			{
+				Thumb = Child;
+			}
+		}
+	}
+
+	const bool bHorizontal = (Left.IsValid() || Right.IsValid())
+		|| (Bar->Width > Bar->Height * 1.5f);
+	// Keep the authored track media/draw mode.
+	const float SizeFrac = VisibleFrac > 0.f
+		? FMath::Clamp(VisibleFrac, 0.08f, 1.f)
+		: 0.35f;
+
+	if (bHorizontal)
+	{
+		const int32 Track = FMath::Max(0, Bar->Width - Btn * 2);
+		const int32 ThumbW = FMath::Clamp(
+			FMath::RoundToInt(static_cast<float>(Track) * SizeFrac),
+			8, FMath::Max(8, Track));
+		const int32 Travel = FMath::Max(0, Track - ThumbW);
+		const bool bRightFirst = Right.IsValid() && Left.IsValid() && Right->X <= Left->X;
+		// Track image on Bar must not outrank arrows/thumb (authored Bar.ZLevel is often high).
+		Bar->ZLevel = 0;
+		if (Left.IsValid())
+		{
+			Left->X = bRightFirst ? (Bar->Width - Btn) : 0;
+			Left->Y = 0;
+			Left->Width = Btn;
+			Left->Height = Bar->Height;
+			Left->bVisible = true;
+			Left->ZLevel = 50;
+		}
+		if (Right.IsValid())
+		{
+			Right->X = bRightFirst ? 0 : (Bar->Width - Btn);
+			Right->Y = 0;
+			Right->Width = Btn;
+			Right->Height = Bar->Height;
+			Right->bVisible = true;
+			Right->ZLevel = 50;
+		}
+		if (Up.IsValid()) { Up->bVisible = false; }
+		if (Down.IsValid()) { Down->bVisible = false; }
+		if (Thumb.IsValid())
+		{
+			const int32 TrackStart = Btn;
+			Thumb->X = TrackStart + FMath::RoundToInt(FMath::Clamp(Frac, 0.f, 1.f) * static_cast<float>(Travel));
+			Thumb->Y = 0;
+			Thumb->Width = ThumbW;
+			Thumb->Height = Bar->Height;
+			Thumb->bVisible = true;
+			Thumb->ZLevel = 40;
+			for (const TSharedPtr<FACEUIElement>& Part : Thumb->Children)
+			{
+				if (!Part.IsValid()) { continue; }
+				Part->ZLevel = 40;
+				if (Part->ElementName == TEXT("widget_left_field") || Part->ElementName == TEXT("widget_top_field"))
+				{
+					Part->X = 0; Part->Y = 0; Part->Width = 3; Part->Height = Bar->Height;
+				}
+				else if (Part->ElementName == TEXT("widget_mid_field"))
+				{
+					Part->X = 3; Part->Y = 0; Part->Width = FMath::Max(2, ThumbW - 6); Part->Height = Bar->Height;
+				}
+				else if (Part->ElementName == TEXT("widget_right_field") || Part->ElementName == TEXT("widget_bottom_field"))
+				{
+					Part->X = FMath::Max(3, ThumbW - 3); Part->Y = 0; Part->Width = 3; Part->Height = Bar->Height;
+				}
+			}
+		}
+		return;
+	}
+
+	// Vertical: Up always at top, Down at bottom (authored Y can both be 0 before layout).
+	Bar->ZLevel = 0; // track/bevel paints under interactive chrome
+	if (Up.IsValid())
+	{
+		Up->X = 0;
+		Up->Y = 0;
+		Up->Width = Btn;
+		Up->Height = Btn;
+		Up->bVisible = true;
+		Up->ZLevel = 50; // above thumb track / slider line
+	}
+	if (Down.IsValid())
+	{
+		Down->X = 0;
+		Down->Y = Bar->Height - Btn;
+		Down->Width = Btn;
+		Down->Height = Btn;
+		Down->bVisible = true;
+		Down->ZLevel = 50;
+	}
+	if (Left.IsValid())
+	{
+		Left->ZLevel = 50;
+	}
+	if (Right.IsValid())
+	{
+		Right->ZLevel = 50;
+	}
+	if (Thumb.IsValid())
+	{
+		const int32 Track = FMath::Max(0, Bar->Height - Btn * 2);
+		const int32 ThumbH = FMath::Clamp(
+			FMath::RoundToInt(static_cast<float>(Track) * SizeFrac),
+			16, FMath::Max(16, Track));
+		const int32 Travel = FMath::Max(0, Track - ThumbH);
+		Thumb->X = 0;
+		Thumb->Y = Btn + FMath::RoundToInt(FMath::Clamp(Frac, 0.f, 1.f) * static_cast<float>(Travel));
+		Thumb->Width = Btn;
+		Thumb->Height = ThumbH;
+		Thumb->bVisible = true;
+		Thumb->ZLevel = 40; // under Up/Down arrows
+		for (const TSharedPtr<FACEUIElement>& Part : Thumb->Children)
+		{
+			if (!Part.IsValid()) { continue; }
+			Part->ZLevel = 40;
+			if (Part->ElementName == TEXT("widget_top_field"))
+			{
+				Part->Y = 0; Part->Height = 3;
+			}
+			else if (Part->ElementName == TEXT("widget_mid_field"))
+			{
+				Part->Y = 3; Part->Height = FMath::Max(2, ThumbH - 6);
+			}
+			else if (Part->ElementName == TEXT("widget_bottom_field"))
+			{
+				Part->Y = FMath::Max(3, ThumbH - 3); Part->Height = 3;
+			}
+		}
+	}
+}
+
+void UACEUIGameplayBinder::ReflowInventoryPanelGeometry()
+{
+	if (!Manager || ActivePanelPage != TEXT("InventoryPanel_Field"))
+	{
+		return;
+	}
+	TSharedPtr<FACEUIElement> Page = Manager->FindElementByName(TEXT("InventoryPanel_Field"));
+	if (!Page.IsValid() || Page->Height <= 0)
+	{
+		return;
+	}
+	const int32 PanelH = Page->Height;
+
+	// Stretch InvBackground / Blackness to the live panel height; keep underlay art visible.
+	if (TSharedPtr<FACEUIElement> Bg = Manager->FindElementUnder(TEXT("InventoryPanel_Field"), TEXT("InvBackgroundImage")))
+	{
+		Bg->X = 0;
+		Bg->Y = 0;
+		Bg->Width = Page->Width;
+		Bg->Height = PanelH;
+		Bg->bVisible = true;
+		Bg->ImageFileId = 0x06004D0A;
+		Bg->DrawMode = 3;
+		Bg->ZLevel = 1; // underlay sort still paints first among siblings
+	}
+	if (TSharedPtr<FACEUIElement> Black = Manager->FindElementUnder(TEXT("InventoryPanel_Field"), TEXT("Blackness")))
+	{
+		Black->Y = FMath::Max(0, PanelH - 1);
+		Black->Width = Page->Width;
+		Black->Height = 1;
+		Black->bVisible = true;
+		if (Black->ImageFileId == 0)
+		{
+			Black->ImageFileId = 0x06004D0B;
+		}
+	}
+
+	// Authored: ThreeDItemsField @ y=237 h=120 under a 362 panel. Grow with extra height.
+	TSharedPtr<FACEUIElement> ItemsField = Manager->FindElementUnder(
+		TEXT("InventoryPanel_Field"), TEXT("ThreeDItemsField"));
+	if (ItemsField.IsValid())
+	{
+		const int32 ItemsH = FMath::Max(120, PanelH - ItemsField->Y);
+		ItemsField->Height = ItemsH;
+		for (const TSharedPtr<FACEUIElement>& Child : ItemsField->Children)
+		{
+			if (!Child.IsValid())
+			{
+				continue;
+			}
+			if (Child->ElementName == TEXT("Inv_3DItemList")
+				|| Child->ElementName == TEXT("Inv_3DItemList_Scrollbar"))
+			{
+				Child->Height = FMath::Max(32, ItemsH - Child->Y);
+			}
+		}
+	}
+
+	TSharedPtr<FACEUIElement> PackField = Manager->FindElementUnder(
+		TEXT("InventoryPanel_Field"), TEXT("BackpackField"));
+	if (PackField.IsValid())
+	{
+		PackField->Height = FMath::Max(339, PanelH - PackField->Y);
+		// Burden chrome occupies the top of the backpack column (bar y=8 h=58 → list at y=73).
+		constexpr int32 BurdenReserveY = 73;
+		for (const TSharedPtr<FACEUIElement>& Child : PackField->Children)
+		{
+			if (!Child.IsValid())
+			{
+				continue;
+			}
+			if (Child->ElementName == TEXT("Inv_ContainerList")
+				|| Child->ElementName == TEXT("Inv_ContainerList_Scrollbar"))
+			{
+				Child->Y = FMath::Max(Child->Y, BurdenReserveY);
+				Child->Height = FMath::Max(36, PackField->Height - Child->Y);
+			}
+		}
+	}
+}
+
+void UACEUIGameplayBinder::ReflowSkillManagementPanelGeometry()
+{
+	if (!Manager || ActivePanelPage != TEXT("SkillManagementPanel_Field"))
+	{
+		return;
+	}
+	TSharedPtr<FACEUIElement> Panel = Manager->FindElementByName(TEXT("SkillManagementPanel_Field"));
+	if (!Panel.IsValid() || Panel->Height <= 0)
+	{
+		return;
+	}
+	const FString PageName = ActiveSkillTab.IsEmpty() ? TEXT("AttributePage") : ActiveSkillTab;
+	TSharedPtr<FACEUIElement> Page = Manager->FindElementUnder(
+		TEXT("SkillManagementPanel_Field"), PageName);
+	if (!Page.IsValid())
+	{
+		return;
+	}
+	// Tabs occupy the top 25px; grow the active page to fill the floaty.
+	constexpr int32 TabH = 25;
+	Page->Y = TabH;
+	Page->Height = FMath::Max(200, Panel->Height - TabH);
+
+	TSharedPtr<FACEUIElement> Field;
+	if (PageName == TEXT("AttributePage") || PageName == TEXT("SkillPage"))
+	{
+		Field = Manager->FindElementUnder(PageName, TEXT("SkillManagement_Attribute_Field"));
+		if (!Field.IsValid())
+		{
+			Field = Manager->FindElementUnder(PageName, TEXT("SkillManagement_Skill_Field"));
+		}
+	}
+	else if (PageName == TEXT("CharacterTitlePage"))
+	{
+		Field = Manager->FindElementUnder(PageName, TEXT("CharacterTitle_Field"));
+		if (!Field.IsValid())
+		{
+			Field = Page;
+		}
+	}
+	if (!Field.IsValid())
+	{
+		Field = Page;
+	}
+	Field->Height = Page->Height;
+	Field->Width = Page->Width;
+
+	constexpr int32 HeaderH = 110;
+	constexpr int32 DividerH = 7;
+	constexpr int32 FooterH = 55;
+	const int32 ListY = HeaderH + DividerH;
+	const int32 ListH = FMath::Max(48, Field->Height - ListY - DividerH - FooterH);
+	const int32 FooterY = ListY + ListH + DividerH;
+
+	auto StretchUnder = [&](const FString& Name, int32 X, int32 Y, int32 W, int32 H)
+	{
+		if (TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(PageName, Name))
+		{
+			El->X = X;
+			El->Y = Y;
+			El->Width = W;
+			El->Height = H;
+		}
+	};
+	StretchUnder(TEXT("StatManagement_List"), 0, ListY, Field->Width, ListH);
+	StretchUnder(TEXT("StatManagement_List_Scrollbar"), Field->Width - 19, ListY, 16, ListH);
+	StretchUnder(TEXT("StatManagement_Divider_Bottom"), 0, ListY + ListH, Field->Width, DividerH);
+	StretchUnder(TEXT("StatManagement_Footer_Default"), 0, FooterY, Field->Width, FooterH);
+	StretchUnder(TEXT("StatManagement_Footer_Text"), 0, FooterY, Field->Width, FooterH);
+	StretchUnder(TEXT("StatManagement_Footer_Meter"), 0, FooterY, Field->Width, FooterH);
+	if (PageName == TEXT("CharacterTitlePage"))
+	{
+		const int32 TitleListH = FMath::Max(32, Field->Height - 145);
+		StretchUnder(TEXT("CharacterTitle_CurrentDisplayLabel"), 8, 20, Field->Width - 30, 18);
+		StretchUnder(TEXT("CharacterTitle_CurrentDisplayText"), 8, 40, Field->Width - 30, 18);
+		StretchUnder(TEXT("CharacterTitle_Spacer1"), 0, 60, Field->Width, 9);
+		StretchUnder(TEXT("CharacterTitle_ListLabel"), 8, 70, Field->Width - 30, 18);
+		StretchUnder(TEXT("CharacterTitle_ListBox"), 8, 90, Field->Width - 30, TitleListH);
+		StretchUnder(TEXT("CharacterTitle_ListBox_Scrollbar"), Field->Width - 20, 90, 16, TitleListH);
+		StretchUnder(TEXT("CharacterTitle_Spacer2"), 0, 95 + TitleListH, Field->Width, 9);
+		StretchUnder(TEXT("CharacterTitle_SetAsDisplayButton"), (Field->Width - 200) / 2, 105 + TitleListH, 200, 32);
+	}
+}
+
+void UACEUIGameplayBinder::ReflowSpellbookPanelGeometry()
+{
+	if (!Manager || ActivePanelPage != TEXT("SpellManagementPanel_Field")
+		|| ActiveSpellPanelTab != TEXT("SpellbookPage"))
+	{
+		return;
+	}
+	TSharedPtr<FACEUIElement> Panel = Manager->FindElementByName(TEXT("SpellManagementPanel_Field"));
+	TSharedPtr<FACEUIElement> Page = Manager->FindElementByName(TEXT("SpellbookPage"));
+	if (!Panel.IsValid() || !Page.IsValid() || Panel->Height <= 0)
+	{
+		return;
+	}
+	constexpr int32 TabH = 25;
+	constexpr int32 FilterH = 113;
+	Page->Y = TabH;
+	Page->Width = Panel->Width;
+	Page->Height = FMath::Max(FilterH + 48, Panel->Height - TabH);
+	const int32 ListH = FMath::Max(48, Page->Height - FilterH);
+	const int32 ListW = FMath::Max(32, Page->Width - 20);
+
+	auto Stretch = [&](const FString& Name, int32 X, int32 Y, int32 W, int32 H)
+	{
+		if (TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(TEXT("SpellbookPage"), Name))
+		{
+			El->X = X;
+			El->Y = Y;
+			El->Width = W;
+			El->Height = H;
+		}
+	};
+	Stretch(TEXT("SpellBook_SpellList"), 0, 0, ListW, ListH);
+	Stretch(TEXT("SpellBook_SpellList_Scrollbar"), ListW, 0, 16, ListH);
+	Stretch(TEXT("FilterBox"), 0, ListH, Page->Width, FilterH);
+}
+
+void UACEUIGameplayBinder::SyncSpellbookScrollbar()
+{
+	if (!Manager || ActivePanelPage != TEXT("SpellManagementPanel_Field")
+		|| ActiveSpellPanelTab != TEXT("SpellbookPage"))
+	{
+		return;
+	}
+	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(
+		TEXT("SpellbookPage"), TEXT("SpellBook_SpellList"));
+	TSharedPtr<FACEUIElement> Bar = Manager->FindElementUnder(
+		TEXT("SpellbookPage"), TEXT("SpellBook_SpellList_Scrollbar"));
+	if (!ListEl.IsValid() || !Bar.IsValid())
+	{
+		return;
+	}
+	Bar->Height = ListEl->Height;
+	Bar->Y = ListEl->Y;
+	Bar->bVisible = true;
+	const int32 RowH = SpellbookTemplate().Height();
+	const int32 PageSize = FMath::Max(1, ListEl->Height / RowH);
+	const int32 MaxOff = FMath::Max(0, SpellbookFilteredCount - PageSize);
+	const float Frac = MaxOff > 0
+		? FMath::Clamp(static_cast<float>(SpellbookScrollOffset) / static_cast<float>(MaxOff), 0.f, 1.f)
+		: 0.f;
+	const float VisibleFrac = SpellbookFilteredCount > 0
+		? FMath::Clamp(static_cast<float>(PageSize) / static_cast<float>(SpellbookFilteredCount), 0.08f, 1.f)
+		: 1.f;
+	SyncDatScrollbar(Bar, Frac, VisibleFrac);
+}
+
+bool UACEUIGameplayBinder::ToggleSpellbookFilter(const FString& Name)
+{
+	if (ActivePanelPage != TEXT("SpellManagementPanel_Field")
+		|| ActiveSpellPanelTab != TEXT("SpellbookPage"))
+	{
+		return false;
+	}
+	auto ToggleBit = [](uint32& Mask, int32 BitIndex) -> bool
+	{
+		if (BitIndex < 0 || BitIndex > 31)
+		{
+			return false;
+		}
+		Mask ^= (1u << BitIndex);
+		return true;
+	};
+	bool bChanged = false;
+	if (Name == TEXT("School_War")) { bChanged = ToggleBit(SpellbookSchoolFilterMask, 0); }
+	else if (Name == TEXT("School_Life")) { bChanged = ToggleBit(SpellbookSchoolFilterMask, 1); }
+	else if (Name == TEXT("School_Item")) { bChanged = ToggleBit(SpellbookSchoolFilterMask, 2); }
+	else if (Name == TEXT("School_Creature")) { bChanged = ToggleBit(SpellbookSchoolFilterMask, 3); }
+	else if (Name == TEXT("School_Void")) { bChanged = ToggleBit(SpellbookSchoolFilterMask, 4); }
+	else if (Name == TEXT("Level_One")) { bChanged = ToggleBit(SpellbookLevelFilterMask, 0); }
+	else if (Name == TEXT("Level_Two")) { bChanged = ToggleBit(SpellbookLevelFilterMask, 1); }
+	else if (Name == TEXT("Level_Three")) { bChanged = ToggleBit(SpellbookLevelFilterMask, 2); }
+	else if (Name == TEXT("Level_Four")) { bChanged = ToggleBit(SpellbookLevelFilterMask, 3); }
+	else if (Name == TEXT("Level_Five")) { bChanged = ToggleBit(SpellbookLevelFilterMask, 4); }
+	else if (Name == TEXT("Level_Six")) { bChanged = ToggleBit(SpellbookLevelFilterMask, 5); }
+	else if (Name == TEXT("Level_Seven")) { bChanged = ToggleBit(SpellbookLevelFilterMask, 6); }
+	else if (Name == TEXT("Level_Eight")) { bChanged = ToggleBit(SpellbookLevelFilterMask, 7); }
+	if (!bChanged)
+	{
+		return false;
+	}
+	SpellbookFilterPressedName = Name;
+	SpellbookFilterPressedUntil = FPlatformTime::Seconds() + 0.15;
+	SpellbookScrollOffset = 0;
+	SyncSpellbookFilterCheckboxes();
+	RefreshSpellbookOverlays();
+	SyncSpellbookScrollbar();
+	return true;
+}
+
+void UACEUIGameplayBinder::SyncSpellbookFilterCheckboxes()
+{
+	if (!Manager || !Canvas || !Canvas->WidgetTree
+		|| ActivePanelPage != TEXT("SpellManagementPanel_Field")
+		|| ActiveSpellPanelTab != TEXT("SpellbookPage"))
+	{
+		for (UBorder* B : SpellbookFilterCheckboxes)
+		{
+			if (B) { B->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		// Hide DAT filter chrome entirely off the spellbook tab / when panel closed.
+		if (TSharedPtr<FACEUIElement> Filter = Manager
+			? Manager->FindElementByName(TEXT("FilterBox")) : nullptr)
+		{
+			Filter->bVisible = false;
+		}
+		if (TSharedPtr<FACEUIElement> Del = Manager
+			? Manager->FindElementUnder(TEXT("FilterBox"), TEXT("DeleteSpell_Button"))
+			: nullptr)
+		{
+			Del->bVisible = false;
+			for (const TSharedPtr<FACEUIElement>& C : Del->Children)
+			{
+				if (C.IsValid()) { C->bVisible = false; }
+			}
+		}
+		return;
+	}
+	if (TSharedPtr<FACEUIElement> Filter = Manager->FindElementByName(TEXT("FilterBox")))
+	{
+		Filter->bVisible = true;
+	}
+	// Retail has no working delete-spell UI here — hide the chrome entirely.
+	if (TSharedPtr<FACEUIElement> Del = Manager->FindElementUnder(TEXT("FilterBox"), TEXT("DeleteSpell_Button")))
+	{
+		Del->bVisible = false;
+		for (const TSharedPtr<FACEUIElement>& C : Del->Children)
+		{
+			if (C.IsValid()) { C->bVisible = false; }
+		}
+	}
+	if (TSharedPtr<FACEUIElement> DelL = Manager->FindElementUnder(TEXT("FilterBox"), TEXT("DeleteSpell_Label")))
+	{
+		DelL->bVisible = false;
+	}
+
+	struct FFilterCb
+	{
+		const TCHAR* Name;
+		uint32 Mask;
+		int32 Bit;
+	};
+	const FFilterCb Cbs[] = {
+		{ TEXT("School_War"), SpellbookSchoolFilterMask, 0 },
+		{ TEXT("School_Life"), SpellbookSchoolFilterMask, 1 },
+		{ TEXT("School_Item"), SpellbookSchoolFilterMask, 2 },
+		{ TEXT("School_Creature"), SpellbookSchoolFilterMask, 3 },
+		{ TEXT("School_Void"), SpellbookSchoolFilterMask, 4 },
+		{ TEXT("Level_One"), SpellbookLevelFilterMask, 0 },
+		{ TEXT("Level_Two"), SpellbookLevelFilterMask, 1 },
+		{ TEXT("Level_Three"), SpellbookLevelFilterMask, 2 },
+		{ TEXT("Level_Four"), SpellbookLevelFilterMask, 3 },
+		{ TEXT("Level_Five"), SpellbookLevelFilterMask, 4 },
+		{ TEXT("Level_Six"), SpellbookLevelFilterMask, 5 },
+		{ TEXT("Level_Seven"), SpellbookLevelFilterMask, 6 },
+		{ TEXT("Level_Eight"), SpellbookLevelFilterMask, 7 },
+	};
+	while (SpellbookFilterCheckboxes.Num() < UE_ARRAY_COUNT(Cbs) && Canvas->WidgetTree)
+	{
+		UBorder* B = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+		B->SetPadding(FMargin(0.f));
+		B->SetVisibility(ESlateVisibility::HitTestInvisible);
+		SpellbookFilterCheckboxes.Add(B);
+	}
+	for (int32 i = 0; i < UE_ARRAY_COUNT(Cbs); ++i)
+	{
+		UBorder* Box = SpellbookFilterCheckboxes.IsValidIndex(i) ? SpellbookFilterCheckboxes[i] : nullptr;
+		TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(TEXT("FilterBox"), Cbs[i].Name);
+		if (!Box || !El.IsValid())
+		{
+			if (Box) { Box->SetVisibility(ESlateVisibility::Collapsed); }
+			continue;
+		}
+		// The shared checkbox template is 90px wide, while the spellbook packs
+		// several filters 50/65px apart. Retail sizes each instance to its cell.
+		if (const auto Parent = El->Parent.Pin())
+		{
+			int32 Right = Parent->Width;
+			for (const auto& Sibling : Parent->Children)
+				if (Sibling != El && Sibling->Y == El->Y && Sibling->X > El->X) Right = FMath::Min(Right, Sibling->X);
+			El->Width = FMath::Max(13, Right - El->X - 2);
+			El->LayoutAuthoredW = El->LastReflowW = El->Width;
+			for (const auto& Child : El->Children)
+				if (Child->Width > 13) { Child->Width = FMath::Max(0, El->Width - Child->X); Child->LayoutAuthoredW = Child->LastReflowW = Child->Width; }
+		}
+		bool bAncestorsVisible = El->bVisible;
+		for (TSharedPtr<FACEUIElement> P = El->Parent.Pin(); P.IsValid(); P = P->Parent.Pin())
+		{
+			if (!P->bVisible) { bAncestorsVisible = false; break; }
+		}
+		if (!bAncestorsVisible)
+		{
+			Box->SetVisibility(ESlateVisibility::Collapsed);
+			continue;
+		}
+		const bool bOn = (Cbs[i].Mask & (1u << Cbs[i].Bit)) != 0;
+		const bool bPressed = !SpellbookFilterPressedName.IsEmpty()
+			&& SpellbookFilterPressedName == Cbs[i].Name
+			&& FPlatformTime::Seconds() < SpellbookFilterPressedUntil;
+		Box->SetVisibility(ESlateVisibility::HitTestInvisible);
+		const int32 Did = bPressed ? DidCheckboxPressed : (bOn ? DidCheckboxOn : DidCheckboxOff);
+		SetIconDid(Box, Did);
+		// Pin to the authored 13×13 image child — never stretch to the full filter row.
+		// Keep the DAT image visible for hit-test ancestry; overlay paints the on/off glyph.
+		TSharedPtr<FACEUIElement> ImgEl;
+		for (const TSharedPtr<FACEUIElement>& Child : El->Children)
+		{
+			if (Child.IsValid() && (Child->ElementName == TEXT("image") || Child->ImageFileId != 0))
+			{
+				ImgEl = Child;
+				Child->bVisible = true;
+				break;
+			}
+		}
+		const TSharedPtr<FACEUIElement>& PlaceEl = ImgEl.IsValid() ? ImgEl : El;
+		const FIntPoint Origin = PlaceEl->GetScreenOrigin();
+		const float SX = Canvas->GetLastScaleX();
+		const float SY = Canvas->GetLastScaleY();
+		if (Box->GetParent() != Canvas->GetElementLayer())
+		{
+			Canvas->GetElementLayer()->AddChild(Box);
+		}
+		if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Box->Slot))
+		{
+			Slot->SetAnchors(FAnchors(0.f, 0.f));
+			Slot->SetAlignment(FVector2D(0.f, 0.f));
+			Slot->SetAutoSize(false);
+			const float ImgY = ImgEl.IsValid() ? 0.f : 1.f;
+			Slot->SetPosition(FVector2D(
+				static_cast<float>(Origin.X) * SX,
+				(static_cast<float>(Origin.Y) + ImgY) * SY));
+			Slot->SetSize(FVector2D(13.f * SX, 13.f * SY));
+			Canvas->SetOverlayOrder(Box, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), StatOverlayZ);
+		}
+	}
+}
+
+bool UACEUIGameplayBinder::IsPointerOverSpellbookList(FVector2D CanvasLocalPos) const
+{
+	if (!Manager || ActivePanelPage != TEXT("SpellManagementPanel_Field")
+		|| ActiveSpellPanelTab != TEXT("SpellbookPage"))
+	{
+		return false;
+	}
+	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(
+		TEXT("SpellbookPage"), TEXT("SpellBook_SpellList"));
+	TSharedPtr<FACEUIElement> BarEl = Manager->FindElementUnder(
+		TEXT("SpellbookPage"), TEXT("SpellBook_SpellList_Scrollbar"));
+	auto Contains = [&](const TSharedPtr<FACEUIElement>& El) -> bool
+	{
+		if (!El.IsValid() || !El->bVisible || El->Width <= 0 || El->Height <= 0)
+		{
+			return false;
+		}
+		const FIntPoint O = El->GetScreenOrigin();
+		return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
+			&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height;
+	};
+	return Contains(ListEl) || Contains(BarEl);
+}
+
+bool UACEUIGameplayBinder::IsPointerOverEffectsList(FVector2D CanvasLocalPos) const
+{
+	if (!Manager
+		|| (ActivePanelPage != TEXT("PositiveEffectsPanel_Field")
+			&& ActivePanelPage != TEXT("NegativeEffectsPanel_Field")))
+	{
+		return false;
+	}
+	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(ActivePanelPage, TEXT("Effects_SpellList"));
+	TSharedPtr<FACEUIElement> BarEl = Manager->FindElementUnder(ActivePanelPage, TEXT("Effects_SpellList_Scrollbar"));
+	auto Contains = [&](const TSharedPtr<FACEUIElement>& El) -> bool
+	{
+		if (!El.IsValid() || !El->bVisible || El->Width <= 0 || El->Height <= 0)
+		{
+			return false;
+		}
+		const FIntPoint O = El->GetScreenOrigin();
+		return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
+			&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height;
+	};
+	return Contains(ListEl) || Contains(BarEl);
+}
+
+bool UACEUIGameplayBinder::ScrollEffectsList(float WheelDelta)
+{
+	if (ActivePanelPage != TEXT("PositiveEffectsPanel_Field")
+		&& ActivePanelPage != TEXT("NegativeEffectsPanel_Field"))
+	{
+		return false;
+	}
+	const int32 Dir = (WheelDelta > 0.f) ? -1 : 1;
+	EffectsScrollOffset = FMath::Max(0, EffectsScrollOffset + Dir);
+	RefreshEffectsOverlays(ActivePanelPage == TEXT("PositiveEffectsPanel_Field"));
+	return true;
+}
+
+bool UACEUIGameplayBinder::ScrollSpellbook(float WheelDelta)
+{
+	if (!Manager || ActivePanelPage != TEXT("SpellManagementPanel_Field")
+		|| ActiveSpellPanelTab != TEXT("SpellbookPage"))
+	{
+		return false;
+	}
+	const int32 Dir = (WheelDelta > 0.f) ? -1 : 1;
+	SpellbookScrollOffset = FMath::Max(0, SpellbookScrollOffset + Dir * 3);
+	RefreshSpellbookOverlays();
+	SyncSpellbookScrollbar();
+	return true;
+}
+
+void UACEUIGameplayBinder::SyncStatListScrollbar()
+{
+	if (!Manager || ActivePanelPage != TEXT("SkillManagementPanel_Field"))
+	{
+		return;
+	}
+	const FString PageName = ActiveSkillTab.IsEmpty() ? TEXT("AttributePage") : ActiveSkillTab;
+	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(PageName, TEXT("StatManagement_List"));
+	TSharedPtr<FACEUIElement> Bar = Manager->FindElementUnder(PageName, TEXT("StatManagement_List_Scrollbar"));
+	if (!ListEl.IsValid() || !Bar.IsValid())
+	{
+		return;
+	}
+	Bar->Height = ListEl->Height;
+	Bar->Y = ListEl->Y;
+	Bar->bVisible = true;
+	float Frac = 0.f;
+	if (PageName == TEXT("SkillPage"))
+	{
+		constexpr int32 RowH = 18;
+		const int32 PageSize = FMath::Max(1, ListEl->Height / RowH);
+		const int32 MaxOff = FMath::Max(0, SkillListContentCount - PageSize);
+		Frac = MaxOff > 0
+			? FMath::Clamp(static_cast<float>(SkillListScrollOffset) / static_cast<float>(MaxOff), 0.f, 1.f)
+			: 0.f;
+	}
+	SyncDatScrollbar(Bar, Frac);
+}
+
+void UACEUIGameplayBinder::SyncInventoryScrollbars()
+{
+	if (!Manager || ActivePanelPage != TEXT("InventoryPanel_Field"))
+	{
+		return;
+	}
+	TSharedPtr<FACEUIElement> GridEl = Manager->FindElementUnder(
+		TEXT("InventoryPanel_Field"), TEXT("Inv_3DItemList"));
+	TSharedPtr<FACEUIElement> ItemBar = Manager->FindElementUnder(
+		TEXT("InventoryPanel_Field"), TEXT("Inv_3DItemList_Scrollbar"));
+	if (GridEl.IsValid() && ItemBar.IsValid())
+	{
+		constexpr int32 Cell = 32;
+		const int32 Cols = FMath::Max(1, GridEl->Width / Cell);
+		const int32 Rows = FMath::Max(1, GridEl->Height / Cell);
+		const int32 PageSize = Cols * Rows;
+		FACEWorldObject PackObj;
+		int32 Capacity = PageSize;
+		if (Client && Client->GetWorldObject(SelectedPackGuid, PackObj) && PackObj.ItemsCapacity > 0)
+		{
+			Capacity = PackObj.ItemsCapacity;
+		}
+		else if (Client && SelectedPackGuid == Client->GetPlayerGuid())
+		{
+			Capacity = 102;
+		}
+		else
+		{
+			Capacity = 24;
+		}
+		Capacity = FMath::Max(Capacity, PageSize);
+		const int32 MaxOff = FMath::Max(0, Capacity - PageSize);
+		InventoryScrollOffset = FMath::Clamp(InventoryScrollOffset - (InventoryScrollOffset % Cols), 0, MaxOff);
+		const float Frac = MaxOff > 0
+			? FMath::Clamp(static_cast<float>(InventoryScrollOffset) / static_cast<float>(MaxOff), 0.f, 1.f)
+			: 0.f;
+		// Authored: grid x=15 w=192, scrollbar x=207 (flush right of grid — not overlapping).
+		ItemBar->X = GridEl->X + GridEl->Width;
+		ItemBar->Y = GridEl->Y;
+		ItemBar->Height = GridEl->Height;
+		ItemBar->bVisible = MaxOff > 0;
+		const float VisibleFrac = Capacity > 0
+			? FMath::Clamp(static_cast<float>(PageSize) / static_cast<float>(Capacity), 0.08f, 1.f)
+			: 1.f;
+		if (ItemBar->bVisible)
+		{
+			SyncDatScrollbar(ItemBar, Frac, VisibleFrac);
+		}
+	}
+
+	TSharedPtr<FACEUIElement> PackList = Manager->FindElementUnder(
+		TEXT("InventoryPanel_Field"), TEXT("Inv_ContainerList"));
+	TSharedPtr<FACEUIElement> PackBar = Manager->FindElementUnder(
+		TEXT("InventoryPanel_Field"), TEXT("Inv_ContainerList_Scrollbar"));
+	if (PackList.IsValid() && PackBar.IsValid() && Client)
+	{
+		FACEWorldObject SelfObj;
+		Client->GetWorldObject(Client->GetPlayerGuid(), SelfObj);
+		const int32 SidePackCapacity = FMath::Clamp(
+			SelfObj.ContainersCapacity > 0 ? SelfObj.ContainersCapacity : 7, 1, 24);
+		constexpr int32 Cell = 36;
+		const int32 MaxVisible = FMath::Max(1, PackList->Height / Cell);
+		const int32 MaxOff = FMath::Max(0, SidePackCapacity - MaxVisible);
+		PackScrollOffset = FMath::Clamp(PackScrollOffset, 0, MaxOff);
+		const float Frac = MaxOff > 0
+			? FMath::Clamp(static_cast<float>(PackScrollOffset) / static_cast<float>(MaxOff), 0.f, 1.f)
+			: 0.f;
+		// Authored: list x=6 w=36, bar x=41 — left of Inv_BurdenBar at x=44.
+		PackBar->X = PackList->X + PackList->Width;
+		PackBar->Y = PackList->Y;
+		PackBar->Height = PackList->Height;
+		PackBar->bVisible = MaxOff > 0;
+		const float VisibleFrac = SidePackCapacity > 0
+			? FMath::Clamp(static_cast<float>(MaxVisible) / static_cast<float>(SidePackCapacity), 0.08f, 1.f)
+			: 1.f;
+		if (PackBar->bVisible)
+		{
+			SyncDatScrollbar(PackBar, Frac, VisibleFrac);
+		}
+	}
+}
+
+bool UACEUIGameplayBinder::IsPointerOverInventoryGrid(FVector2D CanvasLocalPos) const
+{
+	if (!Manager || ActivePanelPage != TEXT("InventoryPanel_Field"))
+	{
+		return false;
+	}
+	TSharedPtr<FACEUIElement> GridEl = Manager->FindElementUnder(
+		TEXT("InventoryPanel_Field"), TEXT("Inv_3DItemList"));
+	TSharedPtr<FACEUIElement> BarEl = Manager->FindElementUnder(
+		TEXT("InventoryPanel_Field"), TEXT("Inv_3DItemList_Scrollbar"));
+	auto Contains = [&](const TSharedPtr<FACEUIElement>& El) -> bool
+	{
+		if (!El.IsValid() || !El->bVisible)
+		{
+			return false;
+		}
+		const FIntPoint O = El->GetScreenOrigin();
+		return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
+			&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height;
+	};
+	return Contains(GridEl) || Contains(BarEl);
+}
+
+bool UACEUIGameplayBinder::IsPointerOverPackList(FVector2D CanvasLocalPos) const
+{
+	if (!Manager || ActivePanelPage != TEXT("InventoryPanel_Field"))
+	{
+		return false;
+	}
+	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementByName(TEXT("Inv_ContainerList"));
+	TSharedPtr<FACEUIElement> BarEl = Manager->FindElementUnder(
+		TEXT("InventoryPanel_Field"), TEXT("Inv_ContainerList_Scrollbar"));
+	if (!BarEl.IsValid())
+	{
+		BarEl = Manager->FindElementByName(TEXT("Inv_ContainerList_Scrollbar"));
+	}
+	auto Contains = [&](const TSharedPtr<FACEUIElement>& El) -> bool
+	{
+		if (!El.IsValid() || !El->bVisible)
+		{
+			return false;
+		}
+		const FIntPoint O = El->GetScreenOrigin();
+		return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
+			&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height;
+	};
+	return Contains(ListEl) || Contains(BarEl);
+}
+
+bool UACEUIGameplayBinder::ScrollPackList(float WheelDelta)
+{
+	if (!Manager || ActivePanelPage != TEXT("InventoryPanel_Field") || !Client)
+	{
+		return false;
+	}
+	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementByName(TEXT("Inv_ContainerList"));
+	if (!ListEl.IsValid())
+	{
+		return false;
+	}
+	FACEWorldObject SelfObj;
+	Client->GetWorldObject(Client->GetPlayerGuid(), SelfObj);
+	const int32 SidePackCapacity = FMath::Clamp(
+		SelfObj.ContainersCapacity > 0 ? SelfObj.ContainersCapacity : 7, 1, 24);
+	constexpr int32 Cell = 36;
+	const int32 MaxVisible = FMath::Max(1, ListEl->Height / Cell);
+	const int32 MaxOff = FMath::Max(0, SidePackCapacity - MaxVisible);
+	const int32 Dir = (WheelDelta > 0.f) ? -1 : 1;
+	PackScrollOffset = FMath::Clamp(PackScrollOffset + Dir, 0, MaxOff);
+	SyncInventoryScrollbars();
+	RefreshInventoryOverlays();
+	return true;
+}
+
+bool UACEUIGameplayBinder::ScrollInventoryGrid(float WheelDelta)
+{
+	if (!Manager || ActivePanelPage != TEXT("InventoryPanel_Field"))
+	{
+		return false;
+	}
+	TSharedPtr<FACEUIElement> GridEl = Manager->FindElementUnder(
+		TEXT("InventoryPanel_Field"), TEXT("Inv_3DItemList"));
+	if (!GridEl.IsValid())
+	{
+		return false;
+	}
+	constexpr int32 Cell = 32;
+	const int32 Cols = FMath::Max(1, GridEl->Width / Cell);
+	const int32 Rows = FMath::Max(1, GridEl->Height / Cell);
+	const int32 PageSize = Cols * Rows;
+	FACEWorldObject PackObj;
+	int32 Capacity = PageSize;
+	if (Client && Client->GetWorldObject(SelectedPackGuid, PackObj) && PackObj.ItemsCapacity > 0)
+	{
+		Capacity = PackObj.ItemsCapacity;
+	}
+	Capacity = FMath::Max(Capacity, PageSize);
+	const int32 MaxOff = FMath::Max(0, Capacity - PageSize);
+	const int32 Dir = (WheelDelta > 0.f) ? -Cols : Cols; // wheel up → scroll toward start
+	InventoryScrollOffset = FMath::Clamp(InventoryScrollOffset + Dir, 0, MaxOff);
+	InventoryScrollOffset -= InventoryScrollOffset % Cols;
+	SyncInventoryScrollbars();
+	RefreshInventoryOverlays();
+	return true;
+}
+
+bool UACEUIGameplayBinder::IsPointerOverStatList(FVector2D CanvasLocalPos) const
+{
+	if (!Manager || ActivePanelPage != TEXT("SkillManagementPanel_Field"))
+	{
+		return false;
+	}
+	const FString Page = ActiveSkillTab.IsEmpty() ? TEXT("AttributePage") : ActiveSkillTab;
+	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(Page, TEXT("StatManagement_List"));
+	if (!ListEl.IsValid() && Page == TEXT("CharacterTitlePage"))
+	{
+		ListEl = Manager->FindElementUnder(Page, TEXT("CharacterTitle_ListBox"));
+	}
+	TSharedPtr<FACEUIElement> BarEl = Manager->FindElementUnder(Page, TEXT("StatManagement_List_Scrollbar"));
+	auto Contains = [&](const TSharedPtr<FACEUIElement>& El) -> bool
+	{
+		if (!El.IsValid() || !El->bVisible || El->Width <= 0 || El->Height <= 0)
+		{
+			return false;
+		}
+		const FIntPoint O = El->GetScreenOrigin();
+		return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
+			&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height;
+	};
+	return Contains(ListEl) || Contains(BarEl);
+}
+
+bool UACEUIGameplayBinder::GetStatTooltipAt(FVector2D Absolute, FString& OutText) const
+{
+	if (GetMapTooltipAt(Absolute, OutText)) return true;
+	if (!Canvas || ActivePanelPage != TEXT("SkillManagementPanel_Field")) return false;
+	const bool Attributes = ActiveSkillTab == TEXT("AttributePage");
+	if (!Attributes && ActiveSkillTab != TEXT("SkillPage")) return false;
+	const auto& Values = Attributes ? AttributeRowValues : SkillRowValues;
+	const auto& Names = Attributes ? AttributeRows : SkillRows;
+	for (int32 I = 0; I < Values.Num(); ++I)
+	{
+		if (!Values[I] || Values[I]->GetVisibility() == ESlateVisibility::Collapsed) continue;
+		if (Canvas->IsWidgetExposedAt(Values[I], Absolute)
+			|| (Names.IsValidIndex(I) && Names[I] && Canvas->IsWidgetExposedAt(Names[I], Absolute)))
+		{
+			OutText = Values[I]->GetToolTipText().ToString();
+			if (Names.IsValidIndex(I) && Names[I] && !OutText.IsEmpty()) OutText = Names[I]->GetText().ToString() + TEXT("\n") + OutText;
+			return !OutText.IsEmpty();
+		}
+	}
+	return false;
+}
+
+bool UACEUIGameplayBinder::ScrollStatList(float WheelDelta)
+{
+	if (!Manager || ActivePanelPage != TEXT("SkillManagementPanel_Field"))
+	{
+		return false;
+	}
+	const int32 Dir = (WheelDelta > 0.f) ? -1 : 1;
+	if (ActiveSkillTab == TEXT("CharacterTitlePage"))
+	{
+		TitleListScrollOffset = FMath::Max(0, TitleListScrollOffset + Dir * 3);
+		RefreshTitleOverlays();
+		return true;
+	}
+	if (ActiveSkillTab != TEXT("SkillPage"))
+	{
+		return false;
+	}
+	SkillListScrollOffset = FMath::Max(0, SkillListScrollOffset + Dir * 3);
+	RefreshSkillOverlays();
+	SyncStatListScrollbar();
+	return true;
+}
+
+bool UACEUIGameplayBinder::IsChatEntryFocused() const
+{
+	// This gate also suppresses movement keys while editing other HUD text.
+	if (EditingInscriptionGuid && ExamInscriptionEditor && ExamInscriptionEditor->HasKeyboardFocus()) return true;
+	for (const auto& Entry : ComponentDesiredEntries) if (Entry && Entry->HasKeyboardFocus()) return true;
+	if (ChatEntry && ChatEntry->HasKeyboardFocus())
+	{
+		return true;
+	}
+	for (const TObjectPtr<UEditableTextBox>& Entry : FloatyChatEntries)
+	{
+		if (Entry && Entry->HasKeyboardFocus())
+		{
+			return true;
+		}
+	}
+	if (FellowshipNameEntry && FellowshipNameEntry->HasKeyboardFocus())
+	{
+		return true;
+	}
+	if (FriendNameEntry && FriendNameEntry->HasKeyboardFocus())
+	{
+		return true;
+	}
+	return false;
+}
+
+bool UACEUIGameplayBinder::IsPointerOverShortcutBar(FVector2D CanvasLocalPos) const
+{
+	if (!Manager)
+	{
+		return false;
+	}
+	for (int32 Vis = 1; Vis <= 9; ++Vis)
+	{
+		TSharedPtr<FACEUIElement> El = Manager->FindElementByName(
+			FString::Printf(TEXT("ShortcutBar_Shortcut%dButton"), Vis));
+		if (!El.IsValid() || !El->bVisible)
+		{
+			continue;
+		}
+		bool bAncestorsVisible = true;
+		for (TSharedPtr<FACEUIElement> P = El->Parent.Pin(); P.IsValid(); P = P->Parent.Pin())
+		{
+			if (!P->bVisible) { bAncestorsVisible = false; break; }
+		}
+		if (!bAncestorsVisible)
+		{
+			continue;
+		}
+		const FIntPoint O = El->GetScreenOrigin();
+		if (CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
+			&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UACEUIGameplayBinder::ScrollShortcutBar(float WheelDelta)
+{
+	// Positive wheel = page toward slots 1–9.
+	const int32 Next = FMath::Clamp(ShortcutBarPage + (WheelDelta > 0.f ? -1 : 1), 0, 1);
+	if (Next == ShortcutBarPage)
+	{
+		return false;
+	}
+	ShortcutBarPage = Next;
+	RefreshShortcutOverlays();
+	return true;
+}
+
+void UACEUIGameplayBinder::CastSelectedHotbarSpell()
+{
+	if (!Client)
+	{
+		return;
+	}
+	int32 ToCast = 0;
+	if (SelectedCombatSpellSlot < 0)
+	{
+		ToCast = BuiltInSpellId;
+	}
+	else
+	{
+        const TArray<int32> Bar = Client->GetSpellBar(Client->GetActiveSpellBar());
+        ToCast = Bar.IsValidIndex(SelectedCombatSpellSlot) ? Bar[SelectedCombatSpellSlot] : 0;
+	}
+	if (ToCast == 0)
+	{
+		return;
+	}
+	const int32 CasterGuid = (SelectedCombatSpellSlot < 0) ? BuiltInCasterGuid : 0;
+	if (!Client->SendCastSpell(ToCast, CasterGuid))
+	{
+		PostInventorySystemMessage(TEXT("You must select a target for that spell."));
+	}
+}
+
+void UACEUIGameplayBinder::RefreshChatChromeOverlays()
+{
+	RefreshChatOpacity();
+	if (!Canvas || !Canvas->WidgetTree || !Manager)
+	{
+		return;
+	}
+	EnsureOverlays();
+	if (!ChatTargetLabel)
+	{
+		ChatTargetLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		ChatTargetLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
+		ChatTargetLabel->SetJustification(ETextJustify::Center);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 8);
+		ChatTargetLabel->SetFont(Font);
+		ChatTargetLabel->SetColorAndOpacity(FSlateColor(TextGold));
+	}
+	if (!ChatSendLabel)
+	{
+		ChatSendLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		ChatSendLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
+		ChatSendLabel->SetJustification(ETextJustify::Center);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 8);
+		ChatSendLabel->SetFont(Font);
+		ChatSendLabel->SetColorAndOpacity(FSlateColor(TextWhite));
+	}
+	const FString Dest = ChatSendChannelLabel(ChatSendChannel);
+	while (ChatWindowLabels.Num() < 4)
+	{
+		ChatWindowLabels.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
+	}
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		const FString ButtonName = FString::Printf(TEXT("FloatingChat%d"), Index + 1);
+		PlaceTextOnElement(ChatWindowLabels[Index], ButtonName, FString::FromInt(Index + 1), 8, TextWhite, 540);
+		if (TSharedPtr<FACEUIElement> Button = Manager->FindElementByName(ButtonName))
+		{
+			const auto Window = Manager->FindElementByName(FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"), Index + 1));
+			Button->bHighlighted = Window.IsValid() && Window->bVisible;
+		}
+	}
+	PlaceTextOnElement(ChatTargetLabel, TEXT("ChatTargetButtonText"), Dest, 8, TextGold, 540);
+	// Also paint ChatTarget itself when ButtonText node is missing.
+	if (TSharedPtr<FACEUIElement> TargetBtn = Manager->FindElementUnder(
+		TEXT("RootGameplay_FloatyMainChat_Field"), TEXT("ChatTarget")))
+	{
+		if (!Manager->FindElementUnder(TEXT("RootGameplay_FloatyMainChat_Field"), TEXT("ChatTargetButtonText")).IsValid())
+		{
+			PlaceTextOnElement(ChatTargetLabel, TEXT("ChatTarget"), Dest, 8, TextGold, 540);
+		}
+	}
+	// SendButton has no child text node — place label on the button itself.
+	if (TSharedPtr<FACEUIElement> Send = Manager->FindElementUnder(
+		TEXT("RootGameplay_FloatyMainChat_Field"), TEXT("SendButton")))
+	{
+		ChatSendLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
+		ChatSendLabel->SetText(FText::FromString(TEXT("Send")));
+		Canvas->PlaceWidgetAtElement(ChatSendLabel, Send, 540, FMargin(2.f, 1.f));
+	}
+	else
+	{
+		ChatSendLabel->SetVisibility(ESlateVisibility::Collapsed);
+	}
+	if (bChatTargetPopupOpen)
+	{
+		RefreshChatTargetPopup();
+	}
+}
+
+void UACEUIGameplayBinder::RefreshShortcutOverlays()
+{
+	if (!Client || !Manager || !Canvas || !Canvas->WidgetTree)
+	{
+		for (UBorder* B : ShortcutIcons)
+		{
+			if (B) { B->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (UBorder* B : ShortcutSlotBgs)
+		{
+			if (B) { B->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (UBorder* B : ShortcutNumberIcons)
+			if (B) B->SetVisibility(ESlateVisibility::Collapsed);
+		for (UTextBlock* T : ShortcutSlotNumbers)
+		{
+			if (T) { T->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		return;
+	}
+	auto PlaceSlot = [&](const FString& ElementName, int32 SlotIndex0, int32 ArrayIndex)
+	{
+		TSharedPtr<FACEUIElement> El = Manager->FindElementByName(ElementName);
+		UBorder* Bg = EnsureIconBorder(ShortcutSlotBgs, ArrayIndex);
+		UBorder* Icon = EnsureIconBorder(ShortcutIcons, ArrayIndex);
+		UBorder* Number = EnsureIconBorder(ShortcutNumberIcons, ArrayIndex);
+		UTextBlock* Num = ShortcutSlotNumbers.IsValidIndex(ArrayIndex) ? ShortcutSlotNumbers[ArrayIndex] : nullptr;
+		if (Num) { Num->SetVisibility(ESlateVisibility::Collapsed); }
+		if (!El.IsValid() || !Icon || !Bg)
+		{
+			if (Icon) { Icon->SetVisibility(ESlateVisibility::Collapsed); }
+			if (Bg) { Bg->SetVisibility(ESlateVisibility::Collapsed); }
+			if (Number) Number->SetVisibility(ESlateVisibility::Collapsed);
+			return;
+		}
+		bool bAncestorsVisible = El->bVisible;
+		for (TSharedPtr<FACEUIElement> P = El->Parent.Pin(); P.IsValid(); P = P->Parent.Pin())
+		{
+			if (!P->bVisible) { bAncestorsVisible = false; break; }
+		}
+		if (!bAncestorsVisible)
+		{
+			Icon->SetVisibility(ESlateVisibility::Collapsed);
+			Bg->SetVisibility(ESlateVisibility::Collapsed);
+			if (Number) Number->SetVisibility(ESlateVisibility::Collapsed);
+			return;
+		}
+		// Retail ItemSlot_Shortcut_01..09 / _10 (key 0) numbered empty backgrounds.
+		// Occupied slots also carry IconUnderlay / UiEffects like the inventory grid.
+
+		const int32 Guid = Client->GetShortcutObject(SlotIndex0);
+		FACEWorldObject Obj;
+		const bool bHave = Guid != 0 && Client->GetWorldObject(Guid, Obj);
+		if (bHave && Guid == Client->GetPlayerGuid()) Obj.IconId = 0x06004CF7u;
+		
+		Bg->SetVisibility(ESlateVisibility::HitTestInvisible);
+		if (bHave)
+		{
+			SetItemSlotBackground(Bg, &Obj);
+		}
+		else
+		{
+			if (SlotIndex0 < 10) SetIconDid(Bg, SlotIndex0 < 9 ? 0x060010FA + SlotIndex0 : 0x060074CF);
+			else SetItemSlotBackground(Bg, nullptr);
+		}
+		Canvas->PlaceWidgetAtElement(Bg, El, 529);
+		Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
+		SetItemSlotForeground(Icon,bHave ? &Obj : nullptr);
+		if (bHave && !Obj.Name.IsEmpty())
+		{
+			SetRetailTooltip(Icon, FText::FromString(Obj.Name));
+		}
+		Canvas->PlaceWidgetAtElement(Icon, El, 530);
+		if (Number)
+		{
+			Number->SetVisibility(bHave && SlotIndex0 < 10 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+			SetIconDid(Number, SlotIndex0 < 9 ? 0x0600109E + SlotIndex0 : 0x060074D3);
+			Canvas->PlaceWidgetAtElement(Number, El, 531);
+		}
+	};
+	for (int32 i = 0; i < 9; ++i)
+	{
+		const int32 SlotIndex0 = ShortcutBarPage * 9 + i;
+		PlaceSlot(FString::Printf(TEXT("ShortcutBar_Shortcut%dButton"), i + 1), SlotIndex0, i);
+	}
+	// Second authored row stays hidden — one visible row; wheel flips ShortcutBarPage.
+	for (int32 i = 0; i < 9; ++i)
+	{
+		const FString Name = FString::Printf(TEXT("ShortcutBar2_Shortcut%dButton"), i + 1);
+		if (TSharedPtr<FACEUIElement> El = Manager->FindElementByName(Name))
+		{
+			El->bVisible = false;
+		}
+		const int32 ArrayIndex = i + 9;
+		if (ShortcutIcons.IsValidIndex(ArrayIndex) && ShortcutIcons[ArrayIndex])
+		{
+			ShortcutIcons[ArrayIndex]->SetVisibility(ESlateVisibility::Collapsed);
+		}
+		if (ShortcutSlotBgs.IsValidIndex(ArrayIndex) && ShortcutSlotBgs[ArrayIndex])
+		{
+			ShortcutSlotBgs[ArrayIndex]->SetVisibility(ESlateVisibility::Collapsed);
+		}
+	}
+}
+
+void UACEUIGameplayBinder::RefreshSkillTabLabels()
+{
+	if (!Manager || !Canvas || !Canvas->WidgetTree
+		|| ActivePanelPage != TEXT("SkillManagementPanel_Field"))
+	{
+		for (UTextBlock* L : SkillTabLabels)
+		{
+			if (L) { L->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		return;
+	}
+	struct FTabLabel { const TCHAR* Element; const TCHAR* Text; };
+	static const FTabLabel Tabs[] = {
+		{ TEXT("AttributeTab"), TEXT("Attributes") },
+		{ TEXT("SkillTab"), TEXT("Skills") },
+		{ TEXT("CharacterTitleTab"), TEXT("Titles") },
+	};
+	while (SkillTabLabels.Num() < UE_ARRAY_COUNT(Tabs) && Canvas->WidgetTree)
+	{
+		UTextBlock* L = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		L->SetVisibility(ESlateVisibility::HitTestInvisible);
+		L->SetJustification(ETextJustify::Center);
+		SkillTabLabels.Add(L);
+	}
+	for (int32 i = 0; i < UE_ARRAY_COUNT(Tabs); ++i)
+	{
+		UTextBlock* Label = SkillTabLabels.IsValidIndex(i) ? SkillTabLabels[i] : nullptr;
+		if (!Label) { continue; }
+		TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(
+			TEXT("SkillManagementPanel_Field"), Tabs[i].Element);
+		if (!El.IsValid())
+		{
+			Label->SetVisibility(ESlateVisibility::Collapsed);
+			continue;
+		}
+		Label->SetVisibility(ESlateVisibility::HitTestInvisible);
+		Label->SetText(FText::FromString(Tabs[i].Text));
+		const bool bSel =
+			(i == 0 && ActiveSkillTab == TEXT("AttributePage"))
+			|| (i == 1 && ActiveSkillTab == TEXT("SkillPage"))
+			|| (i == 2 && ActiveSkillTab == TEXT("CharacterTitlePage"));
+		Label->SetColorAndOpacity(FSlateColor(bSel ? TextGold : FLinearColor(0.55f, 0.55f, 0.5f, 1.f)));
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(bSel ? TEXT("Bold") : TEXT("Regular"), 9);
+		Label->SetFont(Font);
+		// DAT image paint climbs past 20k as SyncElementRecursive increments z per element —
+		// 575 buried these labels under the tab chrome ("shadow over tab names").
+		Canvas->PlaceWidgetAtElement(Label, El, 100000, FMargin(14.f, 4.f, 8.f, 4.f));
+	}
+}
+
+void UACEUIGameplayBinder::RefreshPanelTitleOverlay()
+{
+	if (!Manager || !Canvas || !Canvas->WidgetTree || ActivePanelPage.IsEmpty())
+	{
+		if (PanelTitleLabel) { PanelTitleLabel->SetVisibility(ESlateVisibility::Collapsed); }
+		return;
+	}
+	FString Title;
+	if (ActivePanelPage == TEXT("InventoryPanel_Field")) { Title = TEXT("Inventory"); }
+	else if (ActivePanelPage == TEXT("SkillManagementPanel_Field"))
+	{
+		if (ActiveSkillTab == TEXT("SkillPage")) { Title = TEXT("Skills"); }
+		else if (ActiveSkillTab == TEXT("CharacterTitlePage")) { Title = TEXT("Titles"); }
+		else { Title = TEXT("Attributes"); }
+	}
+	else if (ActivePanelPage == TEXT("SpellManagementPanel_Field")) { Title = TEXT("Spellbook"); }
+	else if (ActivePanelPage == TEXT("SocialPanel_Field")) { Title = TEXT("Social"); }
+	else if (ActivePanelPage == TEXT("QuestManagementPanel_Field")) { Title = TEXT("Quests"); }
+	if (Title.IsEmpty())
+	{
+		if (PanelTitleLabel) { PanelTitleLabel->SetVisibility(ESlateVisibility::Collapsed); }
+		return;
+	}
+	if (!PanelTitleLabel)
+	{
+		PanelTitleLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		PanelTitleLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
+		PanelTitleLabel->SetJustification(ETextJustify::Center);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 11);
+		PanelTitleLabel->SetFont(Font);
+		PanelTitleLabel->SetColorAndOpacity(FSlateColor(TextGold));
+	}
+	TSharedPtr<FACEUIElement> TitleEl = Manager->FindElementUnder(ActivePanelPage, TEXT("DisplayedBookNameText"));
+	if (!TitleEl.IsValid())
+	{
+		TitleEl = Manager->FindElementUnder(ActivePanelPage, TEXT("TitleText"));
+	}
+	if (!TitleEl.IsValid())
+	{
+		TitleEl = Manager->FindElementUnder(ActivePanelPage, TEXT("TitleBackground"));
+	}
+	if (!TitleEl.IsValid())
+	{
+		TitleEl = Manager->FindElementUnder(ActivePanelPage, TEXT("TitleBar"));
+	}
+	if (!TitleEl.IsValid())
+	{
+		PanelTitleLabel->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+	PanelTitleLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
+	PanelTitleLabel->SetText(FText::FromString(Title));
+	Canvas->PlaceWidgetAtElement(PanelTitleLabel, TitleEl, 560, FMargin(24.f, 4.f, 24.f, 4.f));
+}
+
+void UACEUIGameplayBinder::RefreshAttributeOverlays()
+{
+	auto CollapseAttr = [this]()
+	{
+		for (UTextBlock* Row : AttributeRows) { if (Row) { Row->SetVisibility(ESlateVisibility::Collapsed); } }
+		for (UTextBlock* Row : AttributeRowValues) { if (Row) { Row->SetVisibility(ESlateVisibility::Collapsed); } }
+		for (UBorder* B : AttributeRowIcons) { if (B) { B->SetVisibility(ESlateVisibility::Collapsed); } }
+		for (UBorder* B : AttributeRowHighlights) { if (B) { B->SetVisibility(ESlateVisibility::Collapsed); } }
+		auto Hide = [](UTextBlock* T) { if (T) { T->SetVisibility(ESlateVisibility::Collapsed); } };
+		Hide(AttrHeaderName); Hide(AttrHeaderTitle); Hide(AttrHeaderPk);
+		Hide(AttrHeaderLevel); Hide(AttrHeaderXp); Hide(AttrHeaderXpToLevelLabel); Hide(AttrHeaderXpToLevel);
+		Hide(AttrHeaderTotalXpLabel); Hide(AttrHeaderLevelLabel);
+		Hide(AttrHeaderLuminanceLabel); Hide(AttrHeaderLuminanceValue);
+		Hide(AttrFooterTitle); Hide(AttrFooterLine1Label); Hide(AttrFooterLine1Value);
+		Hide(AttrFooterLine2Label); Hide(AttrFooterLine2Value);
+	};
+	if (!Manager || !Canvas || !Canvas->WidgetTree
+		|| ActivePanelPage != TEXT("SkillManagementPanel_Field")
+		|| ActiveSkillTab != TEXT("AttributePage"))
+	{
+		CollapseAttr();
+		return;
+	}
+	EnsureOverlays();
+	ReflowSkillManagementPanelGeometry();
+	if (!LastVitals.bValid && Client)
+	{
+		LastVitals = Client->GetPlayerVitals();
+	}
+	FACEWorldObject Self;
+	FString CharName = TEXT("Character");
+	if (Client && Client->GetWorldObject(Client->GetPlayerGuid(), Self) && !Self.Name.IsEmpty())
+	{
+		CharName = Self.Name;
+	}
+	int64 XpNeeded = 0;
+	UACEDatSubsystem* Dat = Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr;
+	if (PlayerController)
+	{
+		if (UGameInstance* GI = PlayerController->GetGameInstance())
+		{
+			Dat = GI->GetSubsystem<UACEDatSubsystem>();
+		}
+	}
+	if (Dat && LastVitals.bValid)
+	{
+		float Progress = 0.f;
+		Dat->TryGetXpToNextLevel(LastVitals.TotalExperience, LastVitals.Level, XpNeeded, &Progress);
+		if (TSharedPtr<FACEUIElement> Meter = Manager->FindElementUnder(
+			TEXT("AttributePage"), TEXT("StatManagement_Header_XPToLevelMeter")))
+		{
+			Meter->MeterFillFraction = FMath::Clamp(Progress, 0.f, 1.f);
+		}
+	}
+
+	PlaceTextUnder(AttrHeaderName, TEXT("AttributePage"), TEXT("StatManagement_Header_Name"),
+		CharName, 11, TextWhite, StatOverlayZ);
+	PlaceTextUnder(AttrHeaderTitle, TEXT("AttributePage"), TEXT("StatManagement_Header_Title"),
+		FormatGenderHeritageTitle(LastVitals), 9, TextWhite, StatOverlayZ);
+	PlaceTextUnder(AttrHeaderPk, TEXT("AttributePage"), TEXT("StatManagement_Header_PKStatus"),
+		FormatPkStatus(LastVitals.PlayerKillerStatus), 9, TextWhite, StatOverlayZ);
+	PlaceTextUnder(AttrHeaderLevelLabel, TEXT("AttributePage"), TEXT("StatManagement_Header_LevelLabel"),
+		TEXT("Character Level"), 8, TextWhite, StatOverlayZ);
+	if (AttrHeaderLevel) { AttrHeaderLevel->SetJustification(ETextJustify::Center); }
+	PlaceTextUnder(AttrHeaderLevel, TEXT("AttributePage"), TEXT("StatManagement_Header_LevelValue"),
+		LastVitals.bValid ? FString::FromInt(LastVitals.Level) : FString(), 18, TextGold, StatOverlayZ);
+	PlaceTextUnder(AttrHeaderTotalXpLabel, TEXT("AttributePage"), TEXT("StatManagement_Header_TotalXPLabel"),
+		TEXT("Total Experience (XP)"), 8, TextWhite, StatOverlayZ);
+	if (AttrHeaderXp) { AttrHeaderXp->SetJustification(ETextJustify::Right); }
+	PlaceTextUnder(AttrHeaderXp, TEXT("AttributePage"), TEXT("StatManagement_Header_TotalXPValue"),
+		LastVitals.bValid ? FormatXpNumber(LastVitals.TotalExperience) : FString(), 9, TextWhite, StatOverlayZ);
+	PlaceTextUnder(AttrHeaderXpToLevelLabel, TEXT("AttributePage"), TEXT("StatManagement_Header_XPToLevelMeterLabel"),
+		TEXT("XP for next level"), 8, TextRed, StatOverlayZ);
+	if (AttrHeaderXpToLevel) { AttrHeaderXpToLevel->SetJustification(ETextJustify::Right); }
+	PlaceTextUnder(AttrHeaderXpToLevel, TEXT("AttributePage"), TEXT("StatManagement_Header_XPToLevelMeterValue"),
+		XpNeeded > 0 ? FormatXpNumber(XpNeeded) : TEXT("Max"), 8, TextWhite, StatOverlayZ);
+	const bool bHasLum = LastVitals.bValid && LastVitals.MaximumLuminance > 0;
+	PlaceTextUnder(AttrHeaderLuminanceLabel, TEXT("AttributePage"), TEXT("StatManagement_Header_LuminanceLabel"),
+		bHasLum ? TEXT("Luminance") : FString(), 8, TextWhite, StatOverlayZ);
+	if (AttrHeaderLuminanceValue) { AttrHeaderLuminanceValue->SetJustification(ETextJustify::Right); }
+	PlaceTextUnder(AttrHeaderLuminanceValue, TEXT("AttributePage"), TEXT("StatManagement_Header_LuminanceValue"),
+		bHasLum
+			? FString::Printf(TEXT("%s / %s"),
+				*FormatXpNumber(LastVitals.AvailableLuminance),
+				*FormatXpNumber(LastVitals.MaximumLuminance))
+			: FString(),
+		8, TextGold, StatOverlayZ);
+
+	struct FAttrRow { const TCHAR* Name; const TCHAR* Desc; int32 IconDid; int32 AttrId; int32 VitalId; };
+	const FAttrRow Rows[] = {
+		{ TEXT("Strength"), TEXT("Melee damage and burden capacity."), DidAttrIconStrength, 1, 0 },
+		{ TEXT("Endurance"), TEXT("Raises Health and Stamina pools."), DidAttrIconEndurance, 2, 0 },
+		{ TEXT("Coordination"), TEXT("Missile accuracy and craft skills."), DidAttrIconCoordination, 4, 0 },
+		{ TEXT("Quickness"), TEXT("Run speed and melee defense."), DidAttrIconQuickness, 3, 0 },
+		{ TEXT("Focus"), TEXT("Magic accuracy and mana conversion."), DidAttrIconFocus, 5, 0 },
+		{ TEXT("Self"), TEXT("Mana pool and mental resistance."), DidAttrIconSelf, 6, 0 },
+		{ TEXT("Health"), TEXT("Your life. Raised with Health XP."), DidAttrIconHealth, 0, 1 },
+		{ TEXT("Stamina"), TEXT("Attacks and movement. Raised with Stamina XP."), DidAttrIconStamina, 0, 3 },
+		{ TEXT("Mana"), TEXT("Powers spells. Raised with Mana XP."), DidAttrIconMana, 0, 5 },
+	};
+	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(
+		TEXT("AttributePage"), TEXT("StatManagement_List"));
+	if (!ListEl.IsValid())
+	{
+		return;
+	}
+	const FIntPoint Origin = ListEl->GetScreenOrigin();
+	constexpr int32 RowH = 18;
+	const int32 MaxRows = FMath::Min(static_cast<int32>(UE_ARRAY_COUNT(Rows)), FMath::Max(1, ListEl->Height / RowH));
+	if (SelectedAttributeRow < 0 || SelectedAttributeRow >= UE_ARRAY_COUNT(Rows))
+	{
+		SelectedAttributeRow = INDEX_NONE;
+	}
+
+	auto EnsureRowText = [this](TArray<TObjectPtr<UTextBlock>>& Arr, int32 Count, ETextJustify::Type Justify)
+	{
+		while (Arr.Num() < Count && Canvas->WidgetTree)
+		{
+			UTextBlock* Row = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+			Row->SetVisibility(ESlateVisibility::HitTestInvisible);
+			FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9);
+			Row->SetFont(Font);
+			Row->SetJustification(Justify);
+			Arr.Add(Row);
+		}
+	};
+	EnsureRowText(AttributeRows, MaxRows, ETextJustify::Left);
+	EnsureRowText(AttributeRowValues, MaxRows, ETextJustify::Right);
+
+	for (int32 i = 0; i < AttributeRows.Num() || i < AttributeRowIcons.Num() || i < AttributeRowValues.Num(); ++i)
+	{
+		UBorder* Icon = EnsureIconBorder(AttributeRowIcons, i);
+		UBorder* Hi = EnsureIconBorder(AttributeRowHighlights, i);
+		UTextBlock* Name = AttributeRows.IsValidIndex(i) ? AttributeRows[i].Get() : nullptr;
+		UTextBlock* Val = AttributeRowValues.IsValidIndex(i) ? AttributeRowValues[i].Get() : nullptr;
+		if (i >= MaxRows)
+		{
+			if (Name) { Name->SetVisibility(ESlateVisibility::Collapsed); }
+			if (Val) { Val->SetVisibility(ESlateVisibility::Collapsed); }
+			if (Icon) { Icon->SetVisibility(ESlateVisibility::Collapsed); }
+			if (Hi) { Hi->SetVisibility(ESlateVisibility::Collapsed); }
+			continue;
+		}
+		FString Value;
+		FLinearColor ValueColor = TextWhite;
+		if (Rows[i].AttrId != 0)
+		{
+			const int32 Current = LastVitals.GetAttributeCurrent(Rows[i].AttrId);
+			const int32 Base = LastVitals.GetAttributeBase(Rows[i].AttrId);
+			Value = FString::FromInt(Current);
+			ValueColor = Current > Base ? FLinearColor::Green : Current < Base ? FLinearColor::Red : TextWhite;
+			if (Val) Val->SetToolTipText(FText::FromString(FString::Printf(TEXT("Base: %d\nCurrent: %d"), Base, Current)));
+		}
+		else if (Rows[i].VitalId == 1)
+		{
+			Value = FString::Printf(TEXT("%d/%d"), LastVitals.Health, LastVitals.MaxHealth);
+			ValueColor = FLinearColor::Green;
+		}
+		else if (Rows[i].VitalId == 3)
+		{
+			Value = FString::Printf(TEXT("%d/%d"), LastVitals.Stamina, LastVitals.MaxStamina);
+			ValueColor = FLinearColor::Green;
+		}
+		else
+		{
+			Value = FString::Printf(TEXT("%d/%d"), LastVitals.Mana, LastVitals.MaxMana);
+			ValueColor = FLinearColor::Green;
+		}
+		const float Y = static_cast<float>(Origin.Y + i * RowH);
+		const float ListW = static_cast<float>(ListEl->Width - 18);
+		if (Hi)
+		{
+			// Retail list selection uses textured list-info fill (0x06000F93), not a solid wash.
+			// Unselected rows keep an invisible (no-draw) highlight so TryHandleOverlayClick
+			// still has a hit target — Collapsed rows made the attributes list unclickable.
+			Hi->SetVisibility(ESlateVisibility::HitTestInvisible);
+			// Clear through the same cache as selection so reselecting restores the brush.
+			SetIconDid(Hi, SelectedAttributeRow == i ? DidListInfoBg : 0,
+				FLinearColor(1.f, 1.f, 1.f, 0.85f));
+			if (Hi->GetParent() != Canvas->GetElementLayer())
+			{
+				Canvas->GetElementLayer()->AddChild(Hi);
+			}
+			if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Hi->Slot))
+			{
+				Slot->SetAnchors(FAnchors(0.f, 0.f));
+				Slot->SetPosition(FVector2D(static_cast<float>(Origin.X), Y));
+				Slot->SetSize(FVector2D(ListW, static_cast<float>(RowH)));
+				Canvas->SetOverlayOrder(Hi, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), StatOverlayZ);
+			}
+		}
+		if (Icon)
+		{
+			Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
+			SetIconDid(Icon, Rows[i].IconDid);
+			if (Icon->GetParent() != Canvas->GetElementLayer())
+			{
+				Canvas->GetElementLayer()->AddChild(Icon);
+			}
+			if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Icon->Slot))
+			{
+				Slot->SetAnchors(FAnchors(0.f, 0.f));
+				Slot->SetPosition(FVector2D(static_cast<float>(Origin.X + 2), Y));
+				Slot->SetSize(FVector2D(18.f, 18.f));
+				Canvas->SetOverlayOrder(Icon, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), StatOverlayZ + 1);
+			}
+		}
+		if (Name)
+		{
+			Name->SetText(FText::FromString(Rows[i].Name));
+			Name->SetVisibility(ESlateVisibility::HitTestInvisible);
+			Name->SetColorAndOpacity(FSlateColor(i == SelectedAttributeRow ? TextGold : TextWhite));
+			if (Name->GetParent() != Canvas->GetElementLayer())
+			{
+				Canvas->GetElementLayer()->AddChild(Name);
+			}
+			if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Name->Slot))
+			{
+				Slot->SetAnchors(FAnchors(0.f, 0.f));
+				Slot->SetPosition(FVector2D(static_cast<float>(Origin.X + 24), Y));
+				Slot->SetSize(FVector2D(ListW - 100.f, static_cast<float>(RowH)));
+				Canvas->SetOverlayOrder(Name, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), StatOverlayZ + 2);
+			}
+		}
+		if (Val)
+		{
+			Val->SetText(FText::FromString(Value));
+			Val->SetVisibility(ESlateVisibility::HitTestInvisible);
+			Val->SetJustification(ETextJustify::Right);
+			Val->SetColorAndOpacity(FSlateColor(
+				ValueColor));
+			if (Val->GetParent() != Canvas->GetElementLayer())
+			{
+				Canvas->GetElementLayer()->AddChild(Val);
+			}
+			if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Val->Slot))
+			{
+				Slot->SetAnchors(FAnchors(0.f, 0.f));
+				Slot->SetPosition(FVector2D(static_cast<float>(Origin.X + ListW - 72.f), Y));
+				Slot->SetSize(FVector2D(70.f, static_cast<float>(RowH)));
+				Canvas->SetOverlayOrder(Val, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), StatOverlayZ + 2);
+			}
+		}
+	}
+
+	// Retail Footer_Text: XP to raise for the selected attribute + unassigned XP.
+	const bool bHasSel = SelectedAttributeRow >= 0 && SelectedAttributeRow < 9;
+	int32 SelXpSpent = 0;
+	int64 SelXpToNext = 0;
+	int64 SelMaxSpend = 0;
+	bool bAttributeXpKnown = false;
+	if (bHasSel && Dat)
+	{
+		const FAttrRow& Sel = Rows[SelectedAttributeRow];
+		if (Sel.AttrId != 0)
+		{
+			SelXpSpent = LastVitals.GetAttributeXpSpent(Sel.AttrId);
+			bAttributeXpKnown = Dat->TryGetAttributeXpToNextRank(SelXpSpent, SelXpToNext, &SelMaxSpend);
+		}
+		else
+		{
+			switch (Sel.VitalId)
+			{
+			case 1: SelXpSpent = LastVitals.HealthXpSpent; break;
+			case 3: SelXpSpent = LastVitals.StaminaXpSpent; break;
+			case 5: SelXpSpent = LastVitals.ManaXpSpent; break;
+			default: break;
+			}
+			bAttributeXpKnown = Dat->TryGetVitalXpToNextRank(SelXpSpent, SelXpToNext, &SelMaxSpend);
+		}
+	}
+	FString StatTitle = TEXT("Select an Attribute to Improve");
+	int32 Bonus = 0;
+	if (bHasSel)
+	{
+		const FAttrRow& Sel = Rows[SelectedAttributeRow];
+		const int32 Current = Sel.AttrId ? LastVitals.GetAttributeCurrent(Sel.AttrId)
+			: Sel.VitalId == 1 ? LastVitals.MaxHealth : Sel.VitalId == 3 ? LastVitals.MaxStamina : LastVitals.MaxMana;
+		const int32 Base = Sel.AttrId ? LastVitals.GetAttributeBase(Sel.AttrId)
+			: Sel.VitalId == 1 ? LastVitals.HealthStart + LastVitals.HealthRanks + FMath::RoundToInt(LastVitals.Endurance / 2.f)
+			: Sel.VitalId == 3 ? LastVitals.StaminaStart + LastVitals.StaminaRanks + LastVitals.Endurance
+			: LastVitals.ManaStart + LastVitals.ManaRanks + LastVitals.Self;
+		Bonus = Current - Base;
+		StatTitle = FString::Printf(TEXT("%s: %d"), Sel.Name, Current);
+	}
+	const int32 ModifierBegin = StatTitle.Len();
+	if (Bonus) StatTitle += FString::Printf(TEXT(" (%+d)"), Bonus);
+	PlaceTextUnder(AttrFooterTitle, TEXT("AttributePage"), TEXT("StatManagement_Footer_Title"),
+		StatTitle, 9, TextWhite, StatOverlayZ);
+	if (auto* Retail = Cast<UACERetailTextBlock>(AttrFooterTitle))
+		Retail->SetModifierSuffix(ModifierBegin, Bonus > 0 ? FLinearColor::Green : FLinearColor::Red);
+
+	PlaceTextUnder(AttrFooterLine1Label, TEXT("AttributePage"), TEXT("StatManagement_Footer_LineOneLabel"),
+		TEXT("Experience needed to raise"), 8, TextWhite, StatOverlayZ);
+	if (AttrFooterLine1Label) { AttrFooterLine1Label->SetJustification(ETextJustify::Left); }
+	if (AttrFooterLine1Value) { AttrFooterLine1Value->SetJustification(ETextJustify::Right); }
+	PlaceTextUnder(AttrFooterLine1Value, TEXT("AttributePage"), TEXT("StatManagement_Footer_LineOneValue"),
+		(bHasSel && SelXpToNext > 0) ? FormatXpNumber(SelXpToNext)
+			: bHasSel && bAttributeXpKnown ? TEXT("Infinite") : TEXT("—"), 8, TextWhite, StatOverlayZ);
+	PlaceTextUnder(AttrFooterLine2Label, TEXT("AttributePage"), TEXT("StatManagement_Footer_LineTwoLabel"),
+		TEXT("Unassigned Experience"), 8, TextWhite, StatOverlayZ);
+	if (AttrFooterLine2Label) { AttrFooterLine2Label->SetJustification(ETextJustify::Left); }
+	if (AttrFooterLine2Value) { AttrFooterLine2Value->SetJustification(ETextJustify::Right); }
+	PlaceTextUnder(AttrFooterLine2Value, TEXT("AttributePage"), TEXT("StatManagement_Footer_LineTwoValue"),
+		LastVitals.bValid ? FormatXpNumber(LastVitals.AvailableExperience) : FString(),
+		8, TextWhite, StatOverlayZ);
+	const bool bCanRaise = bHasSel && SelXpToNext > 0 && SelMaxSpend > 0
+		&& LastVitals.AvailableExperience >= SelXpToNext;
+	int64 XpTen = 0;
+	if (bHasSel && Dat)
+	{
+		if (Rows[SelectedAttributeRow].AttrId != 0) Dat->TryGetAttributeXpToNextRank(SelXpSpent, XpTen, nullptr, 10);
+		else Dat->TryGetVitalXpToNextRank(SelXpSpent, XpTen, nullptr, 10);
+	}
+	const bool bCanRaise10 = bCanRaise && XpTen > 0 && LastVitals.AvailableExperience >= XpTen;
+	SyncRaiseButtonChrome(bCanRaise, bCanRaise10);
+	SyncStatListScrollbar();
+}
+
+void UACEUIGameplayBinder::RefreshSkillOverlays()
+{
+	auto Collapse = [this]()
+	{
+		for (UTextBlock* Row : SkillRows) { if (Row) { Row->SetVisibility(ESlateVisibility::Collapsed); } }
+		for (UTextBlock* Row : SkillRowValues) { if (Row) { Row->SetVisibility(ESlateVisibility::Collapsed); } }
+		for (UBorder* B : SkillRowIcons) { if (B) { B->SetVisibility(ESlateVisibility::Collapsed); } }
+		for (UBorder* B : SkillRowHighlights) { if (B) { B->SetVisibility(ESlateVisibility::Collapsed); } }
+		for (UTextBlock* H : SkillSectionHeaders) { if (H) { H->SetVisibility(ESlateVisibility::Collapsed); } }
+	};
+	if (!Manager || !Canvas || !Canvas->WidgetTree || !Client
+		|| ActivePanelPage != TEXT("SkillManagementPanel_Field")
+		|| ActiveSkillTab != TEXT("SkillPage"))
+	{
+		Collapse();
+		return;
+	}
+	EnsureOverlays();
+	ReflowSkillManagementPanelGeometry();
+	if (!LastVitals.bValid)
+	{
+		LastVitals = Client->GetPlayerVitals();
+	}
+	// Shared header fields with Attributes tab.
+	FACEWorldObject Self;
+	FString CharName = TEXT("Character");
+	if (Client->GetWorldObject(Client->GetPlayerGuid(), Self) && !Self.Name.IsEmpty())
+	{
+		CharName = Self.Name;
+	}
+	int64 XpNeeded = 0;
+	UACEDatSubsystem* Dat = Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr;
+	if (!Dat && PlayerController)
+	{
+		if (UGameInstance* GI = PlayerController->GetGameInstance())
+		{
+			Dat = GI->GetSubsystem<UACEDatSubsystem>();
+		}
+	}
+	if (Dat)
+	{
+		float Progress = 0.f;
+		Dat->TryGetXpToNextLevel(LastVitals.TotalExperience, LastVitals.Level, XpNeeded, &Progress);
+		if (TSharedPtr<FACEUIElement> Meter = Manager->FindElementUnder(
+			TEXT("SkillPage"), TEXT("StatManagement_Header_XPToLevelMeter")))
+		{
+			Meter->MeterFillFraction = FMath::Clamp(Progress, 0.f, 1.f);
+		}
+	}
+	PlaceTextUnder(AttrHeaderName, TEXT("SkillPage"), TEXT("StatManagement_Header_Name"),
+		CharName, 11, TextWhite, StatOverlayZ);
+	PlaceTextUnder(AttrHeaderTitle, TEXT("SkillPage"), TEXT("StatManagement_Header_Title"),
+		FormatGenderHeritageTitle(LastVitals), 9, TextWhite, StatOverlayZ);
+	PlaceTextUnder(AttrHeaderPk, TEXT("SkillPage"), TEXT("StatManagement_Header_PKStatus"),
+		FormatPkStatus(LastVitals.PlayerKillerStatus), 9, TextWhite, StatOverlayZ);
+	PlaceTextUnder(AttrHeaderLevelLabel, TEXT("SkillPage"), TEXT("StatManagement_Header_LevelLabel"),
+		TEXT("Character Level"), 8, TextWhite, StatOverlayZ);
+	if (AttrHeaderLevel) { AttrHeaderLevel->SetJustification(ETextJustify::Center); }
+	PlaceTextUnder(AttrHeaderLevel, TEXT("SkillPage"), TEXT("StatManagement_Header_LevelValue"),
+		FString::FromInt(LastVitals.Level), 18, TextGold, StatOverlayZ);
+	PlaceTextUnder(AttrHeaderTotalXpLabel, TEXT("SkillPage"), TEXT("StatManagement_Header_TotalXPLabel"),
+		TEXT("Total Experience (XP)"), 8, TextWhite, StatOverlayZ);
+	if (AttrHeaderXp) { AttrHeaderXp->SetJustification(ETextJustify::Right); }
+	PlaceTextUnder(AttrHeaderXp, TEXT("SkillPage"), TEXT("StatManagement_Header_TotalXPValue"),
+		FormatXpNumber(LastVitals.TotalExperience), 9, TextWhite, StatOverlayZ);
+	PlaceTextUnder(AttrHeaderXpToLevelLabel, TEXT("SkillPage"), TEXT("StatManagement_Header_XPToLevelMeterLabel"),
+		TEXT("XP for next level"), 8, TextRed, StatOverlayZ);
+	if (AttrHeaderXpToLevel) { AttrHeaderXpToLevel->SetJustification(ETextJustify::Right); }
+	PlaceTextUnder(AttrHeaderXpToLevel, TEXT("SkillPage"), TEXT("StatManagement_Header_XPToLevelMeterValue"),
+		XpNeeded > 0 ? FormatXpNumber(XpNeeded) : TEXT("Max"), 8, TextWhite, StatOverlayZ);
+	const bool bHasLum = LastVitals.MaximumLuminance > 0;
+	PlaceTextUnder(AttrHeaderLuminanceLabel, TEXT("SkillPage"), TEXT("StatManagement_Header_LuminanceLabel"),
+		bHasLum ? TEXT("Luminance") : FString(), 8, TextWhite, StatOverlayZ);
+	if (AttrHeaderLuminanceValue) { AttrHeaderLuminanceValue->SetJustification(ETextJustify::Right); }
+	PlaceTextUnder(AttrHeaderLuminanceValue, TEXT("SkillPage"), TEXT("StatManagement_Header_LuminanceValue"),
+		bHasLum
+			? FString::Printf(TEXT("%s / %s"),
+				*FormatXpNumber(LastVitals.AvailableLuminance),
+				*FormatXpNumber(LastVitals.MaximumLuminance))
+			: FString(),
+		8, TextGold, StatOverlayZ);
+
+	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(
+		TEXT("SkillPage"), TEXT("StatManagement_List"));
+	if (!ListEl.IsValid())
+	{
+		return;
+	}
+
+	struct FSkillLine
+	{
+		enum class EKind : uint8 { Header, Skill } Kind = EKind::Skill;
+		FString Caption;
+		const FACESkillInfo* Skill = nullptr;
+		int32 HeaderDid = 0;
+	};
+	TArray<FSkillLine> Lines;
+	// Retail SAC: Inactive=0, Untrained=1, Trained=2, Specialized=3.
+	// Untrained vs Unusable both use SAC=Untrained; MinLevel 1 = usable when untrained.
+	enum class ESkillSection : uint8 { Specialized, Trained, Untrained, Unusable };
+	struct FGroup { ESkillSection Section; const TCHAR* Caption; int32 HeaderDid; };
+	const FGroup Groups[] = {
+		{ ESkillSection::Specialized, TEXT("Specialized"), DidSkillHeaderSpec },
+		{ ESkillSection::Trained, TEXT("Trained"), DidSkillHeaderTrain },
+		{ ESkillSection::Untrained, TEXT("Untrained"), DidSkillHeaderUntrain },
+		{ ESkillSection::Unusable, TEXT("Unusable"), DidSkillHeaderUntrain },
+	};
+	auto SectionFor = [&](const FACESkillInfo& Sk) -> TOptional<ESkillSection>
+	{
+		if (Sk.SkillId <= 0) { return {}; }
+		if (Sk.AdvancementClass >= 3) { return ESkillSection::Specialized; }
+		if (Sk.AdvancementClass == 2) { return ESkillSection::Trained; }
+		if (Sk.AdvancementClass != 1) { return {}; } // Inactive — omit
+		uint32 MinLevel = 0;
+		if (Dat)
+		{
+			Dat->TryGetSkillMinLevel(static_cast<uint32>(Sk.SkillId), MinLevel);
+		}
+		// Default to Untrained list when DAT MinLevel is missing.
+		return (MinLevel == 0 || MinLevel == 1) ? ESkillSection::Untrained : ESkillSection::Unusable;
+	};
+	for (const FGroup& Group : Groups)
+	{
+		TArray<const FACESkillInfo*> GroupSkills;
+		for (const FACESkillInfo& Sk : LastVitals.Skills)
+		{
+			const TOptional<ESkillSection> Sec = SectionFor(Sk);
+			if (!Sec.IsSet() || Sec.GetValue() != Group.Section)
+			{
+				continue;
+			}
+			GroupSkills.Add(&Sk);
+		}
+		if (GroupSkills.Num() == 0)
+		{
+			continue;
+		}
+		Algo::Sort(GroupSkills, [](const FACESkillInfo* A, const FACESkillInfo* B)
+		{
+			return A && B && A->Name < B->Name;
+		});
+		FSkillLine H;
+		H.Kind = FSkillLine::EKind::Header;
+		H.Caption = Group.Caption;
+		H.HeaderDid = Group.HeaderDid;
+		Lines.Add(H);
+		for (const FACESkillInfo* Sk : GroupSkills)
+		{
+			FSkillLine L;
+			L.Skill = Sk;
+			L.HeaderDid = Group.HeaderDid;
+			Lines.Add(L);
+		}
+	}
+
+	constexpr int32 RowH = 18;
+	const int32 PageSize = FMath::Max(1, ListEl->Height / RowH);
+	SkillListContentCount = Lines.Num();
+	const int32 MaxScroll = FMath::Max(0, Lines.Num() - PageSize);
+	SkillListScrollOffset = FMath::Clamp(SkillListScrollOffset, 0, MaxScroll);
+	const FIntPoint Origin = ListEl->GetScreenOrigin();
+	const float ListW = static_cast<float>(ListEl->Width - 18);
+
+	SkillRowIds.SetNum(PageSize);
+	while (SkillRows.Num() < PageSize && Canvas->WidgetTree)
+	{
+		UTextBlock* Row = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		Row->SetVisibility(ESlateVisibility::HitTestInvisible);
+		Row->SetJustification(ETextJustify::Left);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9);
+		Row->SetFont(Font);
+		SkillRows.Add(Row);
+	}
+	while (SkillRowValues.Num() < PageSize && Canvas->WidgetTree)
+	{
+		UTextBlock* Row = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		Row->SetVisibility(ESlateVisibility::HitTestInvisible);
+		Row->SetJustification(ETextJustify::Right);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9);
+		Row->SetFont(Font);
+		SkillRowValues.Add(Row);
+	}
+	while (SkillSectionHeaders.Num() < PageSize && Canvas->WidgetTree)
+	{
+		UTextBlock* Row = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		Row->SetVisibility(ESlateVisibility::HitTestInvisible);
+		Row->SetJustification(ETextJustify::Left);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 9);
+		Row->SetFont(Font);
+		Row->SetColorAndOpacity(FSlateColor(TextGold));
+		SkillSectionHeaders.Add(Row);
+	}
+
+	for (int32 i = 0; i < PageSize; ++i)
+	{
+		UBorder* Icon = EnsureIconBorder(SkillRowIcons, i);
+		UBorder* Hi = EnsureIconBorder(SkillRowHighlights, i);
+		UTextBlock* Name = SkillRows.IsValidIndex(i) ? SkillRows[i].Get() : nullptr;
+		UTextBlock* Val = SkillRowValues.IsValidIndex(i) ? SkillRowValues[i].Get() : nullptr;
+		UTextBlock* Sec = SkillSectionHeaders.IsValidIndex(i) ? SkillSectionHeaders[i].Get() : nullptr;
+		SkillRowIds[i] = 0;
+		const int32 Idx = i + SkillListScrollOffset;
+		if (!Lines.IsValidIndex(Idx))
+		{
+			if (Name) { Name->SetVisibility(ESlateVisibility::Collapsed); }
+			if (Val) { Val->SetVisibility(ESlateVisibility::Collapsed); }
+			if (Icon) { Icon->SetVisibility(ESlateVisibility::Collapsed); }
+			if (Hi) { Hi->SetVisibility(ESlateVisibility::Collapsed); }
+			if (Sec) { Sec->SetVisibility(ESlateVisibility::Collapsed); }
+			continue;
+		}
+		const FSkillLine& Line = Lines[Idx];
+		const float Y = static_cast<float>(Origin.Y + i * RowH);
+		if (Line.Kind == FSkillLine::EKind::Header)
+		{
+			if (Name) { Name->SetVisibility(ESlateVisibility::Collapsed); }
+			if (Val) { Val->SetVisibility(ESlateVisibility::Collapsed); }
+			if (Hi) { Hi->SetVisibility(ESlateVisibility::Collapsed); }
+			if (Icon)
+			{
+				Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
+				SetIconDid(Icon, Line.HeaderDid);
+				if (Icon->GetParent() != Canvas->GetElementLayer())
+				{
+					Canvas->GetElementLayer()->AddChild(Icon);
+				}
+				if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Icon->Slot))
+				{
+					Slot->SetAnchors(FAnchors(0.f, 0.f));
+					Slot->SetPosition(FVector2D(static_cast<float>(Origin.X), Y));
+					Slot->SetSize(FVector2D(ListW, static_cast<float>(RowH)));
+					Canvas->SetOverlayOrder(Icon, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), StatOverlayZ);
+					Icon->SetBrushColor(FLinearColor::White);
+				}
+			}
+			if (Sec)
+			{
+				Sec->SetText(FText::FromString(Line.Caption));
+				Sec->SetVisibility(ESlateVisibility::HitTestInvisible);
+				if (Sec->GetParent() != Canvas->GetElementLayer())
+				{
+					Canvas->GetElementLayer()->AddChild(Sec);
+				}
+				if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Sec->Slot))
+				{
+					Slot->SetAnchors(FAnchors(0.f, 0.f));
+					Slot->SetPosition(FVector2D(static_cast<float>(Origin.X + 8), Y));
+					Slot->SetSize(FVector2D(ListW - 12.f, static_cast<float>(RowH)));
+					Canvas->SetOverlayOrder(Sec, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), StatOverlayZ + 1);
+				}
+			}
+			continue;
+		}
+		if (Sec) { Sec->SetVisibility(ESlateVisibility::Collapsed); }
+		const FACESkillInfo& Sk = *Line.Skill;
+		SkillRowIds[i] = Sk.SkillId;
+		const bool bSel = SelectedSkillId != 0 && Sk.SkillId == SelectedSkillId;
+		if (Hi)
+		{
+			Hi->SetVisibility(ESlateVisibility::HitTestInvisible);
+			SetIconDid(Hi, bSel ? DidListInfoBg : 0, FLinearColor(1.f, 1.f, 1.f, 0.85f));
+			if (Hi->GetParent() != Canvas->GetElementLayer())
+			{
+				Canvas->GetElementLayer()->AddChild(Hi);
+			}
+			if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Hi->Slot))
+			{
+				Slot->SetAnchors(FAnchors(0.f, 0.f));
+				Slot->SetPosition(FVector2D(static_cast<float>(Origin.X), Y));
+				Slot->SetSize(FVector2D(ListW, static_cast<float>(RowH)));
+				Canvas->SetOverlayOrder(Hi, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), StatOverlayZ);
+			}
+		}
+		if (Icon)
+		{
+			FString SkillName;
+			uint32 SkillIcon = 0;
+			if (Dat) Dat->TryGetSkillInfo(static_cast<uint32>(Sk.SkillId), SkillName, SkillIcon);
+			SetIconDid(Icon, SkillIcon);
+			Icon->SetBrushColor(FLinearColor::White);
+			Icon->SetVisibility(SkillIcon ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+			if (Icon->GetParent() != Canvas->GetElementLayer()) Canvas->GetElementLayer()->AddChild(Icon);
+			if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Icon->Slot))
+			{
+				Slot->SetAnchors(FAnchors(0.f, 0.f));
+				Slot->SetPosition(FVector2D(static_cast<float>(Origin.X), Y));
+				Slot->SetSize(FVector2D(RowH, RowH));
+				Canvas->SetOverlayOrder(Icon, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), StatOverlayZ + 1);
+			}
+		}
+		if (Name)
+		{
+			Name->SetText(FText::FromString(Sk.Name));
+			Name->SetVisibility(ESlateVisibility::HitTestInvisible);
+			Name->SetJustification(ETextJustify::Left);
+			Name->SetColorAndOpacity(FSlateColor(bSel ? TextGold : TextWhite));
+			if (Name->GetParent() != Canvas->GetElementLayer())
+			{
+				Canvas->GetElementLayer()->AddChild(Name);
+			}
+			if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Name->Slot))
+			{
+				Slot->SetAnchors(FAnchors(0.f, 0.f));
+				Slot->SetPosition(FVector2D(static_cast<float>(Origin.X + RowH + 2), Y));
+				Slot->SetSize(FVector2D(ListW - RowH - 64.f, static_cast<float>(RowH)));
+				Canvas->SetOverlayOrder(Name, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), StatOverlayZ + 1);
+			}
+		}
+		if (Val)
+		{
+			Val->SetText(FText::AsNumber(Sk.Current));
+			Val->SetVisibility(ESlateVisibility::HitTestInvisible);
+			Val->SetJustification(ETextJustify::Right);
+			Val->SetColorAndOpacity(FSlateColor(Sk.Current > Sk.Base ? FLinearColor::Green : Sk.Current < Sk.Base ? FLinearColor::Red : TextWhite));
+			Val->SetToolTipText(FText::FromString(FString::Printf(TEXT("Base: %d\nCurrent: %d"), Sk.Base, Sk.Current)));
+			if (Val->GetParent() != Canvas->GetElementLayer())
+			{
+				Canvas->GetElementLayer()->AddChild(Val);
+			}
+			if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Val->Slot))
+			{
+				Slot->SetAnchors(FAnchors(0.f, 0.f));
+				Slot->SetPosition(FVector2D(static_cast<float>(Origin.X + ListW - 56.f), Y));
+				Slot->SetSize(FVector2D(52.f, static_cast<float>(RowH)));
+				Canvas->SetOverlayOrder(Val, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), StatOverlayZ + 1);
+			}
+		}
+	}
+
+	const FACESkillInfo* Sel = nullptr;
+	for (const FACESkillInfo& Sk : LastVitals.Skills)
+	{
+		if (Sk.SkillId == SelectedSkillId) { Sel = &Sk; break; }
+	}
+	int64 XpToNext = 0;
+	int64 MaxSpend = 0;
+	int32 TrainCost = 0;
+	bool bSkillXpKnown = false;
+	const bool bNeedsTrain = Sel && Sel->AdvancementClass > 0 && Sel->AdvancementClass < 2;
+	if (Sel && Dat)
+	{
+		if (bNeedsTrain)
+		{
+			Dat->TryGetSkillTrainedCost(static_cast<uint32>(Sel->SkillId), TrainCost);
+		}
+		else
+		{
+			bSkillXpKnown = Dat->TryGetSkillXpToNextRank(Sel->AdvancementClass, Sel->XpSpent, XpToNext, &MaxSpend);
+		}
+	}
+	PlaceTextUnder(AttrFooterTitle, TEXT("SkillPage"), TEXT("StatManagement_Footer_Title"),
+		Sel ? FString::Printf(TEXT("%s: %d%s"), *Sel->Name, Sel->Current,
+			Sel->Current == Sel->Base ? TEXT("") : *FString::Printf(TEXT(" (%+d)"), Sel->Current-Sel->Base))
+			: TEXT("Select a Skill"), 9, TextWhite, StatOverlayZ);
+	if (auto* Retail = Cast<UACERetailTextBlock>(AttrFooterTitle))
+		Retail->SetModifierSuffix(Sel ? FString::Printf(TEXT("%s: %d"), *Sel->Name, Sel->Current).Len() : -1,
+			Sel && Sel->Current > Sel->Base ? FLinearColor::Green : FLinearColor::Red);
+	if (bNeedsTrain)
+	{
+		PlaceTextUnder(AttrFooterLine1Label, TEXT("SkillPage"), TEXT("StatManagement_Footer_LineOneLabel"),
+			TEXT("Skill Credits to train"), 8, TextWhite, StatOverlayZ);
+		if (AttrFooterLine1Label) { AttrFooterLine1Label->SetJustification(ETextJustify::Left); }
+		if (AttrFooterLine1Value) { AttrFooterLine1Value->SetJustification(ETextJustify::Right); }
+		PlaceTextUnder(AttrFooterLine1Value, TEXT("SkillPage"), TEXT("StatManagement_Footer_LineOneValue"),
+			Sel ? FString::FromInt(TrainCost) : TEXT("—"), 8, TextWhite, StatOverlayZ);
+		PlaceTextUnder(AttrFooterLine2Label, TEXT("SkillPage"), TEXT("StatManagement_Footer_LineTwoLabel"),
+			TEXT("Skill Credits Available"), 8, TextWhite, StatOverlayZ);
+		if (AttrFooterLine2Label) { AttrFooterLine2Label->SetJustification(ETextJustify::Left); }
+		if (AttrFooterLine2Value) { AttrFooterLine2Value->SetJustification(ETextJustify::Right); }
+		PlaceTextUnder(AttrFooterLine2Value, TEXT("SkillPage"), TEXT("StatManagement_Footer_LineTwoValue"),
+			FString::FromInt(LastVitals.AvailableSkillCredits), 8, TextWhite, StatOverlayZ);
+	}
+	else
+	{
+		PlaceTextUnder(AttrFooterLine1Label, TEXT("SkillPage"), TEXT("StatManagement_Footer_LineOneLabel"),
+			TEXT("XP to raise"), 8, TextWhite, StatOverlayZ);
+		if (AttrFooterLine1Label) { AttrFooterLine1Label->SetJustification(ETextJustify::Left); }
+		if (AttrFooterLine1Value) { AttrFooterLine1Value->SetJustification(ETextJustify::Right); }
+		PlaceTextUnder(AttrFooterLine1Value, TEXT("SkillPage"), TEXT("StatManagement_Footer_LineOneValue"),
+			(Sel && XpToNext > 0) ? FormatXpNumber(XpToNext)
+				: Sel && bSkillXpKnown && Sel->AdvancementClass >= 2 ? TEXT("Infinite") : TEXT("—"), 8, TextWhite, StatOverlayZ);
+		PlaceTextUnder(AttrFooterLine2Label, TEXT("SkillPage"), TEXT("StatManagement_Footer_LineTwoLabel"),
+			TEXT("Unassigned Experience"), 8, TextWhite, StatOverlayZ);
+		if (AttrFooterLine2Label) { AttrFooterLine2Label->SetJustification(ETextJustify::Left); }
+		if (AttrFooterLine2Value) { AttrFooterLine2Value->SetJustification(ETextJustify::Right); }
+		PlaceTextUnder(AttrFooterLine2Value, TEXT("SkillPage"), TEXT("StatManagement_Footer_LineTwoValue"),
+			FormatXpNumber(LastVitals.AvailableExperience), 8, TextWhite, StatOverlayZ);
+	}
+	{
+		bool bCanRaise1 = false;
+		bool bCanRaise10 = false;
+		if (Sel)
+		{
+			if (bNeedsTrain)
+			{
+				bCanRaise1 = LastVitals.AvailableSkillCredits >= TrainCost;
+				bCanRaise10 = false; // retail: train uses Raise once, not ×10
+			}
+			else if (XpToNext > 0 && MaxSpend > 0)
+			{
+				bCanRaise1 = LastVitals.AvailableExperience >= XpToNext;
+				int64 XpTen = 0;
+				if (ActiveSkillTab == TEXT("SkillPage"))
+				{
+					for (const auto& S : LastVitals.Skills) if (S.SkillId == SelectedSkillId)
+						Dat->TryGetSkillXpToNextRank(S.AdvancementClass, S.XpSpent, XpTen, nullptr, 10);
+				}
+				else if (SelectedAttributeRow < 6)
+					Dat->TryGetAttributeXpToNextRank(LastVitals.GetAttributeXpSpent(SelectedAttributeRow == 2 ? 4 : SelectedAttributeRow == 3 ? 3 : SelectedAttributeRow + 1), XpTen, nullptr, 10);
+				else
+					Dat->TryGetVitalXpToNextRank(SelectedAttributeRow == 6 ? LastVitals.HealthXpSpent : SelectedAttributeRow == 7 ? LastVitals.StaminaXpSpent : LastVitals.ManaXpSpent, XpTen, nullptr, 10);
+				bCanRaise10 = XpTen > 0 && LastVitals.AvailableExperience >= XpTen;
+			}
+		}
+		SyncRaiseButtonChrome(bCanRaise1, bCanRaise10);
+	}
+	if (TSharedPtr<FACEUIElement> Meter = Manager->FindElementUnder(
+		TEXT("SkillPage"), TEXT("StatManagement_Footer_Meter")))
+	{
+		// Nested meter fill child may share the name — prefer type Meter.
+		TSharedPtr<FACEUIElement> Fill = Meter;
+		for (const TSharedPtr<FACEUIElement>& Child : Meter->Children)
+		{
+			if (Child.IsValid() && Child->Type == ACEUI::ElementType::Meter)
+			{
+				Fill = Child;
+				break;
+			}
+		}
+		float Frac = 0.f;
+		if (XpToNext > 0 && MaxSpend > 0)
+		{
+			Frac = 1.f - (static_cast<float>(XpToNext) / static_cast<float>(MaxSpend + XpToNext));
+		}
+		Fill->MeterFillFraction = FMath::Clamp(Frac, 0.f, 1.f);
+	}
+	SyncStatListScrollbar();
+}
+
+void UACEUIGameplayBinder::RefreshTitleOverlays()
+{
+	for (auto Row : TitleRowElements) { if (Row) Row->bVisible = false; }
+	for (UTextBlock* Row : TitleRows)
+	{
+		if (Row) { Row->SetVisibility(ESlateVisibility::Collapsed); }
+	}
+	auto HideTitleChrome = [this]()
+	{
+		if (TitleCurrentLabel) { TitleCurrentLabel->SetVisibility(ESlateVisibility::Collapsed); }
+		if (TitleCurrentValue) { TitleCurrentValue->SetVisibility(ESlateVisibility::Collapsed); }
+		if (TitleSetButtonLabel) { TitleSetButtonLabel->SetVisibility(ESlateVisibility::Collapsed); }
+	};
+	if (!Manager || !Canvas || !Canvas->WidgetTree
+		|| ActivePanelPage != TEXT("SkillManagementPanel_Field")
+		|| ActiveSkillTab != TEXT("CharacterTitlePage"))
+	{
+		HideTitleChrome();
+		return;
+	}
+	EnsureOverlays();
+	ReflowSkillManagementPanelGeometry();
+	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(
+		TEXT("CharacterTitlePage"), TEXT("CharacterTitle_ListBox"));
+	if (!ListEl.IsValid())
+	{
+		ListEl = Manager->FindElementByName(TEXT("CharacterTitle_ListBox"));
+	}
+	if (!ListEl.IsValid())
+	{
+		HideTitleChrome();
+		return;
+	}
+	SortedTitleIds = Client ? Client->GetCharacterTitleIds() : TArray<int32>();
+	SortedTitleIds.Remove(0);
+	SortedTitleIds.Sort([](int32 A, int32 B) { return FCString::Strcmp(GetCharacterTitleName(A), GetCharacterTitleName(B)) < 0; });
+	const TArray<int32>& Titles = SortedTitleIds;
+	const int32 DisplayId = Client ? Client->GetDisplayTitleId() : 0;
+	if (SelectedTitleId != 0 && !Titles.Contains(SelectedTitleId))
+	{
+		SelectedTitleId = 0;
+	}
+	if (SelectedTitleId == 0 && DisplayId != 0)
+	{
+		SelectedTitleId = DisplayId;
+	}
+
+	auto EnsureTitleLabel = [this](TObjectPtr<UTextBlock>& Label, ETextJustify::Type Justify)
+	{
+		if (!Label && Canvas->WidgetTree)
+		{
+			Label = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+			Label->SetJustification(Justify);
+		}
+	};
+	EnsureTitleLabel(TitleCurrentLabel, ETextJustify::Left);
+	EnsureTitleLabel(TitleCurrentValue, ETextJustify::Left);
+	EnsureTitleLabel(TitleSetButtonLabel, ETextJustify::Center);
+	PlaceTextUnder(TitleCurrentLabel, TEXT("CharacterTitlePage"),
+		TEXT("CharacterTitle_CurrentDisplayLabel"), TEXT("Current Title"), 9, TextWhite, 570);
+	const FString DisplayName = DisplayId != 0
+		? GetCharacterTitleName(static_cast<uint32>(DisplayId)) : TEXT("(none)");
+	PlaceTextUnder(TitleCurrentValue, TEXT("CharacterTitlePage"),
+		TEXT("CharacterTitle_CurrentDisplayText"), DisplayName, 10, TextGold, 570);
+	PlaceTextUnder(AttrFooterTitle, TEXT("CharacterTitlePage"), TEXT("CharacterTitle_ListLabel"),
+		TEXT("Character Titles"), 10, TextGold, 570);
+	PlaceTextUnder(TitleSetButtonLabel, TEXT("CharacterTitlePage"),
+		TEXT("CharacterTitle_SetAsDisplayButton"), TEXT("Set as Display Title"), 9, TextWhite, 575);
+
+	const bool bCanSet = Titles.Contains(SelectedTitleId) && SelectedTitleId != DisplayId;
+	if (auto Button = Manager->FindElementUnder(TEXT("CharacterTitlePage"), TEXT("CharacterTitle_SetAsDisplayButton")))
+	{
+		Button->bGhosted = !bCanSet;
+		Button->bActivatable = bCanSet;
+	}
+	if (TitleSetButtonLabel) TitleSetButtonLabel->SetColorAndOpacity(FSlateColor(bCanSet ? TextWhite : FLinearColor(.45f,.45f,.45f,1.f)));
+	// classic_charactertitle's EntryTemplate is a 24px row with native selection
+	// artwork and bitmap font, not a stretched label covering the whole list.
+	constexpr int32 RowH = 24;
+	const int32 MaxTitleRows = FMath::Max(1, ListEl->Height / RowH);
+	while (TitleRows.Num() < MaxTitleRows && Canvas->WidgetTree)
+	{
+		auto Entry = UACEUILayoutResolver::LoadTemplate(0x2100005E, 0x10000536);
+		if (!Entry || Entry->Children.IsEmpty()) break;
+		Entry->ElementName = FString::Printf(TEXT("LiveCharacterTitleRow%d"), TitleRows.Num());
+		Entry->bVisible = true; Entry->bDefaultHidden = false;
+		Entry->Parent = ListEl; ListEl->Children.Add(Entry); TitleRowElements.Add(Entry);
+		Manager->InvalidateNameLookupIndex();
+		UTextBlock* Row = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		Row->SetAutoWrapText(false);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9);
+		Row->SetFont(Font);
+		TitleRows.Add(Row);
+	}
+
+	if (Titles.Num() == 0)
+	{
+		TitleListScrollOffset = 0;
+		for (auto Row : TitleRows) { if (Row) Row->SetVisibility(ESlateVisibility::Collapsed); }
+		if (auto Bar = Manager->FindElementUnder(TEXT("CharacterTitlePage"), TEXT("CharacterTitle_ListBox_Scrollbar")))
+			SyncDatScrollbar(Bar, 0.f);
+		if (TitleRows.Num() > 0 && TitleRows[0])
+		{
+			UTextBlock* Row = TitleRows[0];
+			Row->SetText(FText::FromString(TEXT("(No titles yet.)")));
+			Row->SetVisibility(ESlateVisibility::HitTestInvisible);
+			Row->SetColorAndOpacity(FSlateColor(TextWhite));
+			Canvas->PlaceWidgetAtElement(Row, ListEl, 571, FMargin(6.f, 4.f, 6.f, 4.f));
+		}
+		return;
+	}
+
+	const int32 VisibleRows = MaxTitleRows;
+	const int32 MaxOff = FMath::Max(0, Titles.Num() - VisibleRows);
+	TitleListScrollOffset = FMath::Clamp(TitleListScrollOffset, 0, MaxOff);
+	if (auto Bar = Manager->FindElementUnder(TEXT("CharacterTitlePage"), TEXT("CharacterTitle_ListBox_Scrollbar")))
+		SyncDatScrollbar(Bar, MaxOff > 0 ? static_cast<float>(TitleListScrollOffset) / MaxOff : 0.f);
+
+	for (int32 i = 0; i < TitleRows.Num(); ++i)
+	{
+		UTextBlock* Row = TitleRows[i];
+		if (!Row)
+		{
+			continue;
+		}
+		const int32 TitleIndex = TitleListScrollOffset + i;
+		if (TitleIndex >= Titles.Num() || i >= VisibleRows)
+		{
+			Row->SetVisibility(ESlateVisibility::Collapsed);
+			continue;
+		}
+		const uint32 Tid = static_cast<uint32>(Titles[TitleIndex]);
+		const FString Name = GetCharacterTitleName(Tid);
+		const bool bSel = (static_cast<int32>(Tid) == SelectedTitleId);
+		auto Entry = TitleRowElements[i];
+		Entry->bVisible = true; Entry->X = 0; Entry->Y = i * RowH;
+		Entry->Width = ListEl->Width; Entry->Height = RowH;
+		Entry->DefaultState = bSel ? 6 : 0;
+		auto TextElement = Entry->Children[0];
+		TextElement->Width = Entry->Width; TextElement->Height = RowH;
+		Row->SetText(FText::FromString(Name));
+		Row->SetVisibility(ESlateVisibility::HitTestInvisible);
+		Row->SetColorAndOpacity(FSlateColor(TextWhite));
+		Canvas->PlaceWidgetAtElement(Row, TextElement, 571 + i);
+	}
+}
+
+void UACEUIGameplayBinder::RaiseSelectedStat(int32 Multiplier)
+{
+	if (!Client)
+	{
+		return;
+	}
+	LastVitals = Client->GetPlayerVitals();
+	if (!LastVitals.bValid)
+	{
+		PostInventorySystemMessage(TEXT("Character stats are not ready yet."));
+		return;
+	}
+	UACEDatSubsystem* Dat = nullptr;
+	if (PlayerController)
+	{
+		if (UGameInstance* GI = PlayerController->GetGameInstance())
+		{
+			Dat = GI->GetSubsystem<UACEDatSubsystem>();
+		}
+	}
+	if (!Dat)
+	{
+		return;
+	}
+	if (ActiveSkillTab == TEXT("SkillPage"))
+	{
+		const FACESkillInfo* Sel = nullptr;
+		for (const FACESkillInfo& Sk : LastVitals.Skills)
+		{
+			if (Sk.SkillId == SelectedSkillId) { Sel = &Sk; break; }
+		}
+		if (!Sel)
+		{
+			PostInventorySystemMessage(TEXT("Select a skill first."));
+			return;
+		}
+		if (Sel->AdvancementClass <= 0)
+		{
+			PostInventorySystemMessage(TEXT("That skill cannot be trained."));
+			return;
+		}
+		// Untrained (1): spend skill credits via TrainSkill. Trained+ (2+): spend XP via RaiseSkill.
+		if (Sel->AdvancementClass < 2)
+		{
+			int32 Cost = 0;
+			if (!Dat->TryGetSkillTrainedCost(static_cast<uint32>(Sel->SkillId), Cost))
+			{
+				Cost = 1;
+			}
+			if (LastVitals.AvailableSkillCredits < Cost)
+			{
+				PostInventorySystemMessage(TEXT("You do not have enough skill credits."));
+				return;
+			}
+			Client->SendTrainSkill(Sel->SkillId, Cost);
+			return;
+		}
+		int64 XpToNext = 0;
+		int64 MaxSpend = 0;
+		Dat->TryGetSkillXpToNextRank(Sel->AdvancementClass, Sel->XpSpent, XpToNext, &MaxSpend, FMath::Max(1, Multiplier));
+		if (LastVitals.AvailableExperience <= 0)
+		{
+			PostInventorySystemMessage(TEXT("You have no unassigned experience."));
+			return;
+		}
+		if (XpToNext <= 0 || MaxSpend <= 0)
+		{
+			PostInventorySystemMessage(TEXT("That skill is fully raised."));
+			return;
+		}
+		int64 Wanted = (Multiplier <= 0) ? MaxSpend : XpToNext;
+		Wanted = FMath::Min3<int64>(Wanted, MaxSpend, LastVitals.AvailableExperience);
+		Wanted = FMath::Max<int64>(1, Wanted);
+		Client->SendRaiseSkill(Sel->SkillId, static_cast<int32>(FMath::Min<int64>(Wanted, MAX_int32)));
+		return;
+	}
+	if (ActiveSkillTab != TEXT("AttributePage"))
+	{
+		return;
+	}
+	if (SelectedAttributeRow < 0 || SelectedAttributeRow > 8)
+	{
+		PostInventorySystemMessage(TEXT("Select an attribute first."));
+		return;
+	}
+	struct FAttrRow { int32 AttrId; int32 VitalId; };
+	const FAttrRow Rows[] = {
+		{ 1, 0 }, { 2, 0 }, { 4, 0 }, { 3, 0 }, { 5, 0 }, { 6, 0 },
+		{ 0, 1 }, { 0, 3 }, { 0, 5 },
+	};
+	const FAttrRow& Sel = Rows[SelectedAttributeRow];
+	int32 XpSpent = 0;
+	int64 XpToNext = 0;
+	int64 MaxSpend = 0;
+	if (Sel.AttrId != 0)
+	{
+		XpSpent = LastVitals.GetAttributeXpSpent(Sel.AttrId);
+		Dat->TryGetAttributeXpToNextRank(XpSpent, XpToNext, &MaxSpend, FMath::Max(1, Multiplier));
+	}
+	else
+	{
+		switch (Sel.VitalId)
+		{
+		case 1: XpSpent = LastVitals.HealthXpSpent; break;
+		case 3: XpSpent = LastVitals.StaminaXpSpent; break;
+		case 5: XpSpent = LastVitals.ManaXpSpent; break;
+		default: break;
+		}
+		Dat->TryGetVitalXpToNextRank(XpSpent, XpToNext, &MaxSpend, FMath::Max(1, Multiplier));
+	}
+	if (LastVitals.AvailableExperience <= 0)
+	{
+		PostInventorySystemMessage(TEXT("You have no unassigned experience."));
+		return;
+	}
+	if (XpToNext <= 0 || MaxSpend <= 0)
+	{
+		PostInventorySystemMessage(TEXT("That attribute is fully raised."));
+		return;
+	}
+	int64 Wanted = (Multiplier <= 0) ? MaxSpend : XpToNext;
+	Wanted = FMath::Min3<int64>(Wanted, MaxSpend, LastVitals.AvailableExperience);
+	Wanted = FMath::Max<int64>(1, Wanted);
+	const int32 Spend = static_cast<int32>(FMath::Min<int64>(Wanted, MAX_int32));
+	if (Sel.AttrId != 0)
+	{
+		Client->SendRaiseAttribute(Sel.AttrId, Spend);
+	}
+	else
+	{
+		Client->SendRaiseVital(Sel.VitalId, Spend);
+	}
+}
+
+void UACEUIGameplayBinder::PlaceTextUnder(UTextBlock* Text, const FString& AncestorName,
+	const FString& ElementName, const FString& Contents, int32 FontSize, const FLinearColor& Color, int32 ZOrder)
+{
+	if (!Text || !Manager || !Canvas)
+	{
+		return;
+	}
+	TSharedPtr<FACEUIElement> Ancestor = Manager->FindElementByName(AncestorName);
+	TSharedPtr<FACEUIElement> El;
+	if (Ancestor.IsValid())
+	{
+		// Prefer a match whose ancestry is visible (duplicate Footer_* names under Default/Text/Meter).
+		TArray<TSharedPtr<FACEUIElement>> Stack;
+		Stack.Add(Ancestor);
+		while (Stack.Num() > 0)
+		{
+			TSharedPtr<FACEUIElement> Cur = Stack.Pop(EAllowShrinking::No);
+			if (!Cur.IsValid())
+			{
+				continue;
+			}
+			if (Cur->ElementName == ElementName)
+			{
+				bool bVis = Cur->bVisible;
+				for (TSharedPtr<FACEUIElement> P = Cur->Parent.Pin(); P.IsValid() && P != Ancestor->Parent.Pin();
+					P = P->Parent.Pin())
+				{
+					if (!P->bVisible) { bVis = false; break; }
+					if (P == Ancestor) { break; }
+				}
+				if (bVis && Ancestor->bVisible)
+				{
+					El = Cur;
+					break;
+				}
+				if (!El.IsValid())
+				{
+					El = Cur; // fallback
+				}
+			}
+			for (int32 i = Cur->Children.Num() - 1; i >= 0; --i)
+			{
+				Stack.Add(Cur->Children[i]);
+			}
+		}
+	}
+	if (!El.IsValid())
+	{
+		El = Manager->FindElementUnder(AncestorName, ElementName);
+	}
+	if (!El.IsValid())
+	{
+		El = Manager->FindElementByName(ElementName);
+	}
+	if (!El.IsValid())
+	{
+		Text->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+	bool bAncestorsVisible = El->bVisible && (!Ancestor.IsValid() || Ancestor->bVisible);
+	for (TSharedPtr<FACEUIElement> P = El->Parent.Pin(); P.IsValid(); P = P->Parent.Pin())
+	{
+		if (!P->bVisible) { bAncestorsVisible = false; break; }
+		if (Ancestor.IsValid() && P == Ancestor) { break; }
+	}
+	if (!bAncestorsVisible || Contents.IsEmpty())
+	{
+		Text->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+	Text->SetVisibility(ESlateVisibility::HitTestInvisible);
+	Text->SetText(FText::FromString(Contents));
+	Text->SetColorAndOpacity(FSlateColor(Color));
+	const ACEUIFontStyles::FACEFontStyle Style =
+		ACEUIFontStyles::ResolveForElement(El, FontSize);
+	Text->SetFont(ACEUIFontStyles::MakeSlateFont(Style));
+	Canvas->PlaceWidgetAtElement(Text, El, ZOrder, FMargin(2.f, 1.f));
+}
+
+void UACEUIGameplayBinder::RefreshSpellcastTabLabels()
+{
+	// Retail draws the spell set index on each tab using GenericSpellcastTab's tabfont base.
+	// The LayoutDesc tab instances have no children, so the numerals are drawn here.
+	static const TCHAR* const Numerals[] = {
+		TEXT("I"), TEXT("II"), TEXT("III"), TEXT("IV"),
+		TEXT("V"), TEXT("VI"), TEXT("VII"), TEXT("VIII") };
+	constexpr int32 TabCount = UE_ARRAY_COUNT(Numerals);
+	const bool bMagic = CombatMode == static_cast<int32>(ACECombatMode::Magic);
+	TSharedPtr<FACEUIElement> CombatRoot = Manager
+		? Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field"))
+		: TSharedPtr<FACEUIElement>();
+	const bool bShow = Client && Manager && Canvas && Canvas->WidgetTree && bMagic
+		&& CombatRoot.IsValid() && CombatRoot->bVisible;
+	if (!bShow)
+	{
+		for (UTextBlock* L : SpellcastTabLabels)
+		{
+			if (L) { L->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		return;
+	}
+	while (SpellcastTabLabels.Num() < TabCount)
+	{
+		UTextBlock* L = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		L->SetVisibility(ESlateVisibility::HitTestInvisible);
+		L->SetJustification(ETextJustify::Center);
+		SpellcastTabLabels.Add(L);
+	}
+	const int32 ActiveBar = Client->GetActiveSpellBar();
+	for (int32 i = 0; i < TabCount; ++i)
+	{
+		UTextBlock* Label = SpellcastTabLabels.IsValidIndex(i) ? SpellcastTabLabels[i] : nullptr;
+		if (!Label) { continue; }
+		TSharedPtr<FACEUIElement> Tab = Manager->FindElementByName(
+			FString::Printf(TEXT("Spellcast_Tab%d"), i + 1));
+		if (!Tab.IsValid() || !Tab->bVisible || Tab->Width <= 0 || Tab->Height <= 0)
+		{
+			Label->SetVisibility(ESlateVisibility::Collapsed);
+			continue;
+		}
+		const bool bSel = (i == ActiveBar);
+		Label->SetVisibility(ESlateVisibility::HitTestInvisible);
+		Label->SetText(FText::FromString(Numerals[i]));
+		Label->SetColorAndOpacity(FSlateColor(bSel ? TextGold : FLinearColor(0.62f, 0.60f, 0.52f, 1.f)));
+		Label->SetFont(FCoreStyle::GetDefaultFontStyle(bSel ? TEXT("Bold") : TEXT("Regular"), 8));
+		Canvas->PlaceWidgetAtElement(Label, Tab, 585, FMargin(0.f, 3.f, 0.f, 2.f));
+	}
+}
+
+void UACEUIGameplayBinder::RefreshSpellHotbarOverlays()
+{
+	RefreshSpellcastTabLabels();
+	auto CollapseSpellBarWidgets = [this]()
+	{
+		for (UBorder* B : SpellBarIcons)
+		{
+			if (B) { B->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (UBorder* B : SpellBarSlotBgs)
+		{
+			if (B) { B->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (UBorder* B : SpellBarSlotNumIcons)
+		{
+			if (B) { B->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (UBorder* B : SpellBarSelectedOverlays)
+		{
+			if (B) { B->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (UTextBlock* T : SpellBarSlotNumbers)
+		{
+			if (T) { T->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (UBorder* B : BuiltInSpellIconBorders)
+		{
+			if (B) { B->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+	};
+	if (!Client || !Manager || !Canvas || !Canvas->WidgetTree || !Canvas->GetElementLayer())
+	{
+		CollapseSpellBarWidgets();
+		return;
+	}
+	const bool bMagic = CombatMode == static_cast<int32>(ACECombatMode::Magic);
+	TSharedPtr<FACEUIElement> CombatRoot = Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field"));
+	if (!bMagic || !CombatRoot.IsValid() || !CombatRoot->bVisible)
+	{
+		CollapseSpellBarWidgets();
+		if (CastSpellLabel)
+		{
+			CastSpellLabel->SetVisibility(ESlateVisibility::Collapsed);
+		}
+		if (SpellcastSpellNameLabel)
+		{
+			SpellcastSpellNameLabel->SetVisibility(ESlateVisibility::Collapsed);
+		}
+		return;
+	}
+	// SpellCastSubMenu appends one empty drop entry; arrows only scroll overflowing entries.
+	constexpr int32 Cell = 32;
+	constexpr int32 SlotGap = 2;
+	constexpr int32 ArrowW = 23;
+	constexpr int32 BuiltInW = 32;
+	constexpr int32 BuiltInX = 4;
+	constexpr int32 BankX = 40;
+	constexpr int32 VisibleSlots = 13;
+	
+	constexpr int32 CastW = 75;
+	constexpr int32 GapAfterScroll = 8;
+	constexpr int32 FramePadRight = 6;
+	const int32 ActiveBarEarly = Client->GetActiveSpellBar();
+	const TArray<int32> BarEarly = Client->GetSpellBar(ActiveBarEarly);
+	int32 FilledEarly = 0;
+	for (int32 i = 0; i < BarEarly.Num(); ++i)
+	{
+		if (BarEarly[i] == 0) { break; }
+		++FilledEarly;
+	}
+	const int32 ListW = VisibleSlots * (Cell + SlotGap) - SlotGap;
+	const bool bScrollable = FilledEarly + 1 > VisibleSlots;
+    const int32 ScrollArrowW = bScrollable ? ArrowW : 0;
+    // The retail item list tiles its entire viewport, independently of its entries.
+    // Only favorites plus the end insertion entry contribute to scrolling.
+    const int32 MaxSlots = VisibleSlots;
+    const int32 ScrollW = ScrollArrowW * 2 + ListW;
+	// Hug content: BuiltIn | bank/scroll | gap | Cast | pad — not a forced 800-wide void.
+	const int32 ContentW = BankX + ScrollW + GapAfterScroll + CastW + FramePadRight;
+	FitCombatFloatyContentWidth(ContentW);
+	if (TSharedPtr<FACEUIElement> Cast = Manager->FindElementByName(TEXT("CastSpellButton")))
+	{
+		Cast->Width = CastW;
+		Cast->X = BankX + ScrollW + GapAfterScroll;
+		Cast->bVisible = true;
+	}
+
+	auto LayoutSpellScroll = [&](const FString& BankName)
+	{
+		TSharedPtr<FACEUIElement> Bank = Manager->FindElementByName(BankName);
+		TSharedPtr<FACEUIElement> Scroll = Manager->FindElementUnder(BankName, TEXT("SpellScroll"));
+		if (!Scroll.IsValid())
+		{
+			return;
+		}
+		if (Bank.IsValid())
+		{
+			Bank->X = BankX;
+			Bank->Width = ScrollW;
+		}
+		Scroll->X = 0;
+		Scroll->Width = ScrollW;
+		if (TSharedPtr<FACEUIElement> Up = Manager->FindElementUnder(BankName, TEXT("ScrollBar_Up")))
+		{
+			Up->X = 0;
+			Up->Width = ArrowW;
+			Up->bVisible = bScrollable;
+		}
+		if (TSharedPtr<FACEUIElement> Down = Manager->FindElementUnder(BankName, TEXT("ScrollBar_Down")))
+		{
+			Down->X = FMath::Max(ArrowW, ScrollW - ArrowW);
+			Down->Width = ArrowW;
+			Down->bVisible = bScrollable;
+		}
+		if (TSharedPtr<FACEUIElement> List = Manager->FindElementUnder(BankName, TEXT("SpellList")))
+		{
+			List->X = ScrollArrowW;
+			List->Width = ListW;
+		}
+	};
+	for (int32 i = 0; i < 8; ++i)
+	{
+		LayoutSpellScroll(FString::Printf(TEXT("Spellcasting_Bank%d"), i + 1));
+	}
+    UACEDatSubsystem* Dat = Canvas->GetResourceResolver()
+        ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr;
+
+	const int32 ActiveBar = ActiveBarEarly;
+	const TArray<int32>& Bar = BarEarly;
+	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(
+		FString::Printf(TEXT("Spellcasting_Bank%d"), ActiveBar + 1), TEXT("SpellList"));
+	if (!ListEl.IsValid())
+	{
+		ListEl = Manager->FindElementUnder(TEXT("Spellcasting_Bank1"), TEXT("SpellList"));
+	}
+	if (!ListEl.IsValid())
+	{
+		return;
+	}
+	const FIntPoint Origin = ListEl->GetScreenOrigin();
+	const float SX = Canvas->GetLastScaleX();
+	const float SY = Canvas->GetLastScaleY();
+	UCanvasPanel* ElementLayer = Canvas->GetElementLayer();
+
+	// Wand/orb innate (SpellDID) — BuiltInSpell leftmost slot.
+	BuiltInSpellId = 0;
+	BuiltInCasterGuid = 0;
+	const int32 PlayerGuid = Client->GetPlayerGuid();
+	if (PlayerGuid != 0)
+	{
+		for (const FACEWorldObject& Obj : Client->GetWorldObjects())
+		{
+			if (Obj.SpellDID == 0 || (Obj.ItemType & ACEItemType::Caster) == 0)
+			{
+				continue;
+			}
+			const bool bHeldByUs = Obj.WielderId == PlayerGuid || Obj.ParentGuid == PlayerGuid;
+			const bool bHeldLoc = (Obj.CurrentWieldedLocation & ACEEquipMask::Held) != 0
+				|| (Obj.ParentGuid == PlayerGuid && (Obj.ValidLocations & ACEEquipMask::Held) != 0);
+			if (bHeldByUs && bHeldLoc)
+			{
+				BuiltInSpellId = Obj.SpellDID;
+				BuiltInCasterGuid = Obj.Guid;
+				break;
+			}
+		}
+	}
+	if (TSharedPtr<FACEUIElement> BuiltIn = Manager->FindElementByName(TEXT("BuiltInSpell")))
+	{
+		BuiltIn->bVisible = BuiltInSpellId != 0;
+		BuiltIn->bActivatable = BuiltInSpellId != 0;
+		BuiltIn->X = BuiltInX;
+		BuiltIn->Width = BuiltInW;
+		BuiltIn->Height = 32;
+		FString BuiltInName;
+		uint32 BuiltInIconDid = 0;
+		if (BuiltInSpellId != 0 && Dat)
+		{
+			Dat->TryGetSpellInfo(static_cast<uint32>(BuiltInSpellId), BuiltInName, BuiltInIconDid);
+		}
+		EnsureIconBorder(BuiltInSpellIconBorders, 0);
+		if (UBorder* Icon = EnsureIconBorder(BuiltInSpellIconBorders, 0))
+		{
+			const FIntPoint BiOrigin = BuiltIn->GetScreenOrigin();
+			if (Icon->GetParent() != ElementLayer)
+			{
+				ElementLayer->AddChild(Icon);
+			}
+			if (BuiltInSpellId != 0 && BuiltInIconDid != 0)
+			{
+				Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
+				SetSpellIcon(Icon, BuiltInSpellId);
+				if (!BuiltInName.IsEmpty())
+				{
+					SetRetailTooltip(Icon, FText::FromString(BuiltInName));
+				}
+				if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Icon->Slot))
+				{
+					Slot->SetAnchors(FAnchors(0.f, 0.f));
+					Slot->SetPosition(FVector2D(static_cast<float>(BiOrigin.X) * SX, static_cast<float>(BiOrigin.Y) * SY));
+					Slot->SetSize(FVector2D(static_cast<float>(BuiltInW) * SX, 32.f * SY));
+					Canvas->SetOverlayOrder(Icon, Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field")), 580);
+				}
+			}
+			else
+			{
+				Icon->SetVisibility(ESlateVisibility::Collapsed);
+			}
+		}
+        // gmSpellcastingUI::UpdateEndowmentIcon: spell underlay + caster drag icon.
+        if (UBorder* CasterIcon = EnsureIconBorder(BuiltInSpellIconBorders, 1))
+        {
+            FACEWorldObject Caster;
+            const bool Present = BuiltInCasterGuid != 0 && Client->GetWorldObject(BuiltInCasterGuid,Caster);
+            CasterIcon->SetVisibility(Present ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+            if (Present)
+            {
+                SetItemSlotForeground(CasterIcon,&Caster);
+                Canvas->PlaceWidgetAtElement(CasterIcon,BuiltIn,581);
+            }
+        }
+
+		if (TSharedPtr<FACEUIElement> Sel = Manager->FindElementUnder(TEXT("BuiltInSpell"), TEXT("BuiltInSpell_Selected")))
+		{
+			Sel->bVisible = (SelectedCombatSpellSlot < 0 && BuiltInSpellId != 0);
+		}
+		for (const TSharedPtr<FACEUIElement>& Child : BuiltIn->Children)
+		{
+			if (!Child.IsValid())
+			{
+				continue;
+			}
+			if (Child->ElementName == TEXT("BuiltInSpell_Selected"))
+			{
+				Child->bVisible = (SelectedCombatSpellSlot < 0 && BuiltInSpellId != 0);
+			}
+		}
+	}
+	int32 Filled = FilledEarly;
+	const int32 MaxOff = FMath::Max(0, Filled + 1 - VisibleSlots);
+	SpellHotbarScrollOffset = FMath::Clamp(SpellHotbarScrollOffset, 0, MaxOff);
+	SpellBarSpellIds.SetNum(MaxSlots);
+	while (SpellBarIcons.Num() < MaxSlots)
+	{
+		EnsureIconBorder(SpellBarIcons, SpellBarIcons.Num());
+	}
+	while (SpellBarSlotBgs.Num() < MaxSlots)
+	{
+		EnsureIconBorder(SpellBarSlotBgs, SpellBarSlotBgs.Num());
+	}
+	while (SpellBarSlotNumIcons.Num() < MaxSlots)
+	{
+		EnsureIconBorder(SpellBarSlotNumIcons, SpellBarSlotNumIcons.Num());
+	}
+	while (SpellBarSelectedOverlays.Num() < MaxSlots)
+	{
+		EnsureIconBorder(SpellBarSelectedOverlays, SpellBarSelectedOverlays.Num());
+	}
+	for (UTextBlock* T : SpellBarSlotNumbers)
+	{
+		if (T) { T->SetVisibility(ESlateVisibility::Collapsed); }
+	}
+	auto PlaceBorderAt = [&](UBorder* Border, float SlotX, float SlotY, int32 Z)
+	{
+		if (!IsValid(Border) || !ElementLayer) { return; }
+		if (Border->GetParent() != ElementLayer)
+		{
+			ElementLayer->AddChild(Border);
+		}
+		if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Border->Slot))
+		{
+			Slot->SetAnchors(FAnchors(0.f, 0.f));
+			Slot->SetPosition(FVector2D(SlotX * SX, SlotY * SY));
+			Slot->SetSize(FVector2D(static_cast<float>(Cell) * SX, static_cast<float>(Cell) * SY));
+			Canvas->SetOverlayOrder(Border, Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field")), Z);
+		}
+	};
+	for (int32 i = 0; i < SpellBarIcons.Num(); ++i)
+	{
+		UBorder* Icon = SpellBarIcons[i];
+		UBorder* Bg = SpellBarSlotBgs.IsValidIndex(i) ? SpellBarSlotBgs[i] : nullptr;
+		UBorder* NumIcon = SpellBarSlotNumIcons.IsValidIndex(i) ? SpellBarSlotNumIcons[i] : nullptr;
+		UBorder* Sel = SpellBarSelectedOverlays.IsValidIndex(i) ? SpellBarSelectedOverlays[i] : nullptr;
+		if (!Icon) { continue; }
+		if (i >= MaxSlots)
+		{
+			Icon->SetVisibility(ESlateVisibility::Collapsed);
+			if (Bg) { Bg->SetVisibility(ESlateVisibility::Collapsed); }
+			if (NumIcon) { NumIcon->SetVisibility(ESlateVisibility::Collapsed); }
+			if (Sel) { Sel->SetVisibility(ESlateVisibility::Collapsed); }
+			continue;
+		}
+		const int32 BarIndex = i + SpellHotbarScrollOffset;
+		const int32 SpellId = Bar.IsValidIndex(BarIndex) ? Bar[BarIndex] : 0;
+		SpellBarSpellIds[i] = SpellId;
+		FString SpellName;
+		uint32 IconDid = 0;
+		if (SpellId != 0 && Dat)
+		{
+			Dat->TryGetSpellInfo(static_cast<uint32>(SpellId), SpellName, IconDid);
+		}
+		const float SlotX = static_cast<float>(Origin.X + i * (Cell + SlotGap));
+		const float SlotY = static_cast<float>(Origin.Y);
+		// Empty favorites 1–9 use the retail blue numbered tiles. Occupied slots
+		// retain the small key badge; scrolling never renumbers absolute favorites.
+		constexpr int32 DidSpellSlotBg = 0x06001A97;
+		const int32 BackgroundDid = (SpellId == 0 && BarIndex < 9)
+			? 0x060010FA + BarIndex : DidSpellSlotBg;
+		constexpr int32 DidSpellSelected = 0x06004D09;
+		const int32 DigitDid = (BarIndex < 9) ? (0x060019ED + BarIndex) : 0x060019EC;
+		if (Bg)
+		{
+			Bg->SetVisibility(ESlateVisibility::HitTestInvisible);
+			SetIconDid(Bg, BackgroundDid);
+			PlaceBorderAt(Bg, SlotX, SlotY, 578);
+		}
+		if (SpellId != 0)
+		{
+			Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
+			SetSpellIcon(Icon, SpellId);
+			if (!SpellName.IsEmpty())
+			{
+				SetRetailTooltip(Icon, FText::FromString(SpellName));
+			}
+			PlaceBorderAt(Icon, SlotX, SlotY, 580);
+		}
+		else
+		{
+			Icon->SetVisibility(ESlateVisibility::Collapsed);
+			SetIconDid(Icon, 0);
+		}
+		if (NumIcon && BarIndex < 10 && SpellId != 0)
+		{
+			NumIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
+			SetIconDid(NumIcon, DigitDid);
+			PlaceBorderAt(NumIcon, SlotX, SlotY, 582);
+		}
+		else if (NumIcon)
+		{
+			NumIcon->SetVisibility(ESlateVisibility::Collapsed);
+		}
+		if (Sel)
+		{
+			const bool bSel = (BarIndex == SelectedCombatSpellSlot && SpellId != 0);
+			Sel->SetVisibility(bSel ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+			if (bSel)
+			{
+				SetIconDid(Sel, DidSpellSelected);
+				PlaceBorderAt(Sel, SlotX, SlotY, 583);
+			}
+		}
+	}
+	if (TSharedPtr<FACEUIElement> NameEl = Manager->FindElementByName(TEXT("Spellcast_SpellName")))
+	{
+		int32 SpellId = 0;
+		if (SelectedCombatSpellSlot < 0)
+		{
+			SpellId = BuiltInSpellId;
+		}
+		else if (Bar.IsValidIndex(SelectedCombatSpellSlot))
+		{
+			SpellId = Bar[SelectedCombatSpellSlot];
+		}
+		FString SpellName;
+		uint32 IconDid = 0;
+		if (SpellId != 0 && Dat)
+		{
+			Dat->TryGetSpellInfo(static_cast<uint32>(SpellId), SpellName, IconDid);
+		}
+        if (SelectedCombatSpellSlot < 0 && BuiltInCasterGuid != 0)
+        {
+            FACEWorldObject Caster;
+            if (Client->GetWorldObject(BuiltInCasterGuid, Caster))
+                SpellName = Caster.Name + TEXT(" (") + SpellName + TEXT(")");
+        }
+		if (!SpellcastSpellNameLabel && Canvas->WidgetTree)
+		{
+			SpellcastSpellNameLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+			SpellcastSpellNameLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
+			SpellcastSpellNameLabel->SetJustification(ETextJustify::Center);
+		}
+		PlaceTextOnElement(SpellcastSpellNameLabel, TEXT("Spellcast_SpellName"), SpellName, 9, TextGold, 581);
+	}
+	else if (SpellcastSpellNameLabel)
+	{
+		SpellcastSpellNameLabel->SetVisibility(ESlateVisibility::Collapsed);
+	}
+
+	// Explicit "Cast" label — DAT StripButton has no text layer in UMG.
+	if (TSharedPtr<FACEUIElement> CastEl = Manager->FindElementByName(TEXT("CastSpellButton")))
+	{
+		if (!CastSpellLabel && Canvas->WidgetTree)
+		{
+			CastSpellLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+			CastSpellLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
+			CastSpellLabel->SetJustification(ETextJustify::Center);
+		}
+		if (CastSpellLabel)
+		{
+			CastSpellLabel->SetText(FText::FromString(TEXT("Cast")));
+			CastSpellLabel->SetColorAndOpacity(FSlateColor(FLinearColor(0.95f, 0.92f, 0.75f, 1.f)));
+			FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 11);
+			CastSpellLabel->SetFont(Font);
+			CastSpellLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
+			Canvas->PlaceWidgetAtElement(CastSpellLabel, CastEl, 620, FMargin(4.f, 6.f, 4.f, 4.f));
+		}
+	}
+	else if (CastSpellLabel)
+	{
+		CastSpellLabel->SetVisibility(ESlateVisibility::Collapsed);
+	}
+}
+
+void UACEUIGameplayBinder::RefreshSpellbookChromeLabels()
+{
+	if (!Manager || !Canvas || !Canvas->WidgetTree
+		|| ActivePanelPage != TEXT("SpellManagementPanel_Field"))
+	{
+		for (UTextBlock* L : SpellbookChromeLabels)
+		{
+			if (L) { L->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		return;
+	}
+
+	struct FLabelSpec
+	{
+		const TCHAR* Ancestor;
+		const TCHAR* Element;
+		const TCHAR* Text;
+		int32 FontSize;
+		FMargin Inset;
+	};
+	static const FLabelSpec Specs[] = {
+		{ TEXT("SpellManagementPanel_Field"), TEXT("SpellbookTab"), TEXT("Spellbook"), 9, FMargin(20.f, 5.f, 8.f, 4.f) },
+		{ TEXT("SpellManagementPanel_Field"), TEXT("SpellComponentTab"), TEXT("Components"), 9, FMargin(12.f, 5.f, 8.f, 4.f) },
+		{ TEXT("FilterBox"), TEXT("Schools_Text"), TEXT("Schools"), 9, FMargin(2.f, 2.f) },
+		{ TEXT("FilterBox"), TEXT("Levels_Text"), TEXT("Levels"), 9, FMargin(2.f, 2.f) },
+		{ TEXT("FilterBox"), TEXT("School_Creature"), TEXT("Creature"), 8, FMargin(16.f, 0.f, 2.f, 0.f) },
+		{ TEXT("FilterBox"), TEXT("School_Item"), TEXT("Item"), 8, FMargin(16.f, 0.f, 2.f, 0.f) },
+		{ TEXT("FilterBox"), TEXT("School_Life"), TEXT("Life"), 8, FMargin(16.f, 0.f, 2.f, 0.f) },
+		{ TEXT("FilterBox"), TEXT("School_War"), TEXT("War"), 8, FMargin(16.f, 0.f, 2.f, 0.f) },
+		{ TEXT("FilterBox"), TEXT("School_Void"), TEXT("Void"), 8, FMargin(16.f, 0.f, 2.f, 0.f) },
+		{ TEXT("FilterBox"), TEXT("Level_One"), TEXT("1"), 8, FMargin(16.f, 0.f, 2.f, 0.f) },
+		{ TEXT("FilterBox"), TEXT("Level_Two"), TEXT("2"), 8, FMargin(16.f, 0.f, 2.f, 0.f) },
+		{ TEXT("FilterBox"), TEXT("Level_Three"), TEXT("3"), 8, FMargin(16.f, 0.f, 2.f, 0.f) },
+		{ TEXT("FilterBox"), TEXT("Level_Four"), TEXT("4"), 8, FMargin(16.f, 0.f, 2.f, 0.f) },
+		{ TEXT("FilterBox"), TEXT("Level_Five"), TEXT("5"), 8, FMargin(16.f, 0.f, 2.f, 0.f) },
+		{ TEXT("FilterBox"), TEXT("Level_Six"), TEXT("6"), 8, FMargin(16.f, 0.f, 2.f, 0.f) },
+		{ TEXT("FilterBox"), TEXT("Level_Seven"), TEXT("7"), 8, FMargin(16.f, 0.f, 2.f, 0.f) },
+		{ TEXT("FilterBox"), TEXT("Level_Eight"), TEXT("8"), 8, FMargin(16.f, 0.f, 2.f, 0.f) },
+	};
+
+	while (SpellbookChromeLabels.Num() < UE_ARRAY_COUNT(Specs) && Canvas->WidgetTree)
+	{
+		UTextBlock* L = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		L->SetVisibility(ESlateVisibility::HitTestInvisible);
+		SpellbookChromeLabels.Add(L);
+	}
+
+	const bool bShowFilters = ActiveSpellPanelTab == TEXT("SpellbookPage");
+	for (int32 i = 0; i < UE_ARRAY_COUNT(Specs); ++i)
+	{
+		UTextBlock* Label = SpellbookChromeLabels.IsValidIndex(i) ? SpellbookChromeLabels[i] : nullptr;
+		if (!Label) { continue; }
+		const bool bIsTabLabel = (i == 0 || i == 1);
+		if (!bIsTabLabel && !bShowFilters)
+		{
+			Label->SetVisibility(ESlateVisibility::Collapsed);
+			continue;
+		}
+		TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(Specs[i].Ancestor, Specs[i].Element);
+		if (!El.IsValid())
+		{
+			Label->SetVisibility(ESlateVisibility::Collapsed);
+			continue;
+		}
+		bool bAncestorsVisible = El->bVisible;
+		for (TSharedPtr<FACEUIElement> P = El->Parent.Pin(); P.IsValid(); P = P->Parent.Pin())
+		{
+			if (!P->bVisible) { bAncestorsVisible = false; break; }
+		}
+		if (!bAncestorsVisible)
+		{
+			Label->SetVisibility(ESlateVisibility::Collapsed);
+			continue;
+		}
+		Label->SetVisibility(ESlateVisibility::HitTestInvisible);
+		Label->SetText(FText::FromString(Specs[i].Text));
+		Label->SetColorAndOpacity(FSlateColor(TextGold));
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), Specs[i].FontSize);
+		Label->SetFont(Font);
+		Canvas->PlaceWidgetAtElement(Label, El, StatOverlayZ + 1, Specs[i].Inset);
+	}
+}
+
+void UACEUIGameplayBinder::RefreshSpellbookOverlays()
+{
+	if (!Client || !Manager || !Canvas || !Canvas->WidgetTree
+		|| ActivePanelPage != TEXT("SpellManagementPanel_Field")
+		|| ActiveSpellPanelTab != TEXT("SpellbookPage"))
+	{
+		for (UTextBlock* Row : SpellbookRows)
+		{
+			if (Row) { Row->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (UBorder* Icon : SpellbookIcons)
+		{
+			if (Icon) { Icon->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (UBorder* Background : SpellbookRowBackgrounds)
+			if (Background) Background->SetVisibility(ESlateVisibility::Collapsed);
+		for (UBorder* Selection : SpellbookRowSelections)
+			if (Selection) Selection->SetVisibility(ESlateVisibility::Collapsed);
+		SpellbookFilteredCount = 0;
+		return;
+	}
+	ReflowSpellbookPanelGeometry();
+	SyncSpellbookFilterCheckboxes();
+	UACEDatSubsystem* Dat = nullptr;
+	if (PlayerController)
+	{
+		if (UGameInstance* GI = PlayerController->GetGameInstance())
+		{
+			Dat = GI->GetSubsystem<UACEDatSubsystem>();
+		}
+	}
+	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(
+		TEXT("SpellbookPage"), TEXT("SpellBook_SpellList"));
+	if (!ListEl.IsValid())
+	{
+		return;
+	}
+	TArray<int32> Spells = Client->GetKnownSpells();
+	Spells.RemoveAll([&](int32 SpellId)
+	{
+		uint32 School = 0, Level = 1;
+		if (Dat)
+		{
+			Dat->TryGetSpellSchoolAndLevel(static_cast<uint32>(SpellId), School, Level);
+		}
+		const bool bSchoolOk = (School >= 1 && School <= 5)
+			? ((SpellbookSchoolFilterMask & (1u << (School - 1))) != 0)
+			: true;
+		const bool bLevelOk = (Level >= 1 && Level <= 8)
+			? ((SpellbookLevelFilterMask & (1u << (Level - 1))) != 0)
+			: true;
+		return !(bSchoolOk && bLevelOk);
+	});
+	Spells.Sort([&](int32 A, int32 B)
+	{
+		uint32 Oa = 0, Ob = 0;
+		if (Dat)
+		{
+			Dat->TryGetSpellDisplayOrder(static_cast<uint32>(A), Oa);
+			Dat->TryGetSpellDisplayOrder(static_cast<uint32>(B), Ob);
+		}
+		return Oa != Ob ? Oa < Ob : A < B;
+	});
+	SpellbookFilteredCount = Spells.Num();
+	const FIntPoint Origin = ListEl->GetScreenOrigin();
+	const int32 RowH = SpellbookTemplate().Height();
+	const auto& Template = SpellbookTemplate();
+	const int32 IconW = Template.Icon ? Template.Icon->Width : 32;
+	const int32 IconH = Template.Icon ? Template.Icon->Height : 32;
+	const int32 IconX = Template.Icon ? Template.Icon->X : 0;
+	const int32 IconY = Template.Icon ? Template.Icon->Y : 0;
+	const int32 TextX = Template.Text ? Template.Text->X : 42;
+	const int32 TextY = Template.Text ? Template.Text->Y : 0;
+	const int32 TextH = Template.Text ? Template.Text->Height : RowH;
+	const int32 RightMargin = Template.Text && Template.Root ? Template.Root->Width - TextX - Template.Text->Width : 8;
+	const int32 TextW = FMath::Max(1, ListEl->Width - TextX - RightMargin);
+	const int32 MaxRows = FMath::Max(1, ListEl->Height / RowH);
+	SpellbookScrollOffset = FMath::Clamp(SpellbookScrollOffset, 0, FMath::Max(0, Spells.Num() - MaxRows));
+	SpellbookRowIds.SetNum(MaxRows);
+	while (SpellbookRows.Num() < MaxRows && Canvas->WidgetTree)
+	{
+		UTextBlock* Row = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		Row->SetVisibility(ESlateVisibility::HitTestInvisible);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9);
+		Row->SetFont(Font);
+		Row->SetColorAndOpacity(FSlateColor(TextWhite));
+		SpellbookRows.Add(Row);
+	}
+	for (int32 i = 0; i < FMath::Max(SpellbookRows.Num(), MaxRows); ++i)
+	{
+		UBorder* Icon = EnsureIconBorder(SpellbookIcons, i);
+		UBorder* Background = EnsureIconBorder(SpellbookRowBackgrounds, i);
+		UBorder* Selection = EnsureIconBorder(SpellbookRowSelections, i);
+		UTextBlock* Row = SpellbookRows.IsValidIndex(i) ? SpellbookRows[i] : nullptr;
+		const int32 SpellIndex = SpellbookScrollOffset + i;
+		if (i >= MaxRows || !Spells.IsValidIndex(SpellIndex))
+		{
+			if (Background) { Background->SetVisibility(ESlateVisibility::Collapsed); }
+			if (Selection) { Selection->SetVisibility(ESlateVisibility::Collapsed); }
+			if (Row) { Row->SetVisibility(ESlateVisibility::Collapsed); }
+			if (Icon) { Icon->SetVisibility(ESlateVisibility::Collapsed); }
+			if (SpellbookRowIds.IsValidIndex(i)) { SpellbookRowIds[i] = 0; }
+			continue;
+		}
+		const int32 SpellId = Spells[SpellIndex];
+		SpellbookRowIds[i] = SpellId;
+		FString SpellName;
+		uint32 IconDid = 0;
+		if (Dat)
+		{
+			Dat->TryGetSpellInfo(static_cast<uint32>(SpellId), SpellName, IconDid);
+		}
+		if (SpellName.IsEmpty())
+		{
+			SpellName = FString::Printf(TEXT("Spell %d"), SpellId);
+		}
+		const float RowY = static_cast<float>(Origin.Y + i * RowH);
+		if (Background && Template.Root)
+		{
+			SetIconDid(Background, Template.Root->ImageFileId);
+			if (Template.Root->DrawMode == 1)
+			{
+				FSlateBrush Brush = Background->Background;
+				Brush.Tiling = ESlateBrushTileType::Both;
+				Background->SetBrush(Brush);
+			}
+			Background->SetVisibility(ESlateVisibility::HitTestInvisible);
+			if (Background->GetParent() != Canvas->GetElementLayer()) Canvas->GetElementLayer()->AddChild(Background);
+			if (auto* Slot = Cast<UCanvasPanelSlot>(Background->Slot))
+			{
+				Slot->SetPosition(FVector2D(Origin.X, RowY));
+				Slot->SetSize(FVector2D(ListEl->Width, RowH));
+				Canvas->SetOverlayOrder(Background, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), StatOverlayZ - 1);
+			}
+		}
+		if (Selection)
+		{
+			SetIconDid(Selection, Template.Selected ? Template.Selected->ImageFileId : 0);
+			Selection->SetVisibility(SpellId == SelectedSpellbookId ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+			if (Selection->GetParent() != Canvas->GetElementLayer()) Canvas->GetElementLayer()->AddChild(Selection);
+			if (auto* Slot = Cast<UCanvasPanelSlot>(Selection->Slot))
+			{
+				Slot->SetPosition(FVector2D(Origin.X, RowY));
+				Slot->SetSize(FVector2D(ListEl->Width, RowH));
+				Canvas->SetOverlayOrder(Selection, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), StatOverlayZ - 1);
+			}
+		}
+		if (Icon)
+		{
+			SetSpellIcon(Icon, SpellId);
+			Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
+			if (Icon->GetParent() != Canvas->GetElementLayer())
+			{
+				Canvas->GetElementLayer()->AddChild(Icon);
+			}
+			if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Icon->Slot))
+			{
+				Slot->SetAnchors(FAnchors(0.f, 0.f));
+				Slot->SetPosition(FVector2D(static_cast<float>(Origin.X + IconX), RowY + IconY));
+				Slot->SetSize(FVector2D(static_cast<float>(IconW), static_cast<float>(IconH)));
+				Canvas->SetOverlayOrder(Icon, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), StatOverlayZ);
+			}
+		}
+		if (Row)
+		{
+			if (auto* Retail = Cast<UACERetailTextBlock>(Row); Retail && Template.Text)
+			{
+				Retail->SetRetailElement(Canvas->GetResourceResolver(), Template.Text, FVector2D(1,1), TextW);
+				Retail->SetColorAndOpacity(FSlateColor(Template.Text->TextColor.Get(FLinearColor::White)));
+			}
+			Row->SetText(FText::FromString(SpellName));
+			Row->SetVisibility(ESlateVisibility::HitTestInvisible);
+			if (Row->GetParent() != Canvas->GetElementLayer())
+			{
+				Canvas->GetElementLayer()->AddChild(Row);
+			}
+			if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Row->Slot))
+			{
+				Slot->SetAnchors(FAnchors(0.f, 0.f));
+				Slot->SetPosition(FVector2D(static_cast<float>(Origin.X + TextX), RowY + TextY));
+				Slot->SetSize(FVector2D(static_cast<float>(TextW), static_cast<float>(TextH)));
+				Canvas->SetOverlayOrder(Row, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), StatOverlayZ);
+			}
+		}
+	}
+}
+
+void UACEUIGameplayBinder::HandleChatTextCommitted(const FText& Text, ETextCommit::Type CommitMethod)
+{
+	if (CommitMethod != ETextCommit::OnEnter)
+	{
+		return;
+	}
+	// Prefer the committed text — GetText() can already be cleared by focus loss.
+	const FString Committed = Text.ToString();
+	TrySendChatFromEntry(&Committed);
+}
+
+void UACEUIGameplayBinder::EnsureOverlays()
+{
+	if (!Canvas || !Canvas->WidgetTree || !Manager)
+	{
+		return;
+	}
+	UWidgetTree* Tree = Canvas->WidgetTree;
+
+	auto MakeLabel = [&](TObjectPtr<UTextBlock>& Label)
+	{
+		if (!Label)
+		{
+			Label = Tree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+			Label->SetVisibility(ESlateVisibility::HitTestInvisible);
+			Label->SetJustification(ETextJustify::Center);
+			FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 8);
+			Label->SetFont(Font);
+			Label->SetColorAndOpacity(FSlateColor(TextWhite));
+		}
+	};
+	MakeLabel(HealthLabel);
+	MakeLabel(StaminaLabel);
+	MakeLabel(ManaLabel);
+	MakeLabel(AttrHeaderName);
+	MakeLabel(AttrHeaderTitle);
+	MakeLabel(AttrHeaderPk);
+	MakeLabel(AttrHeaderLevelLabel);
+	MakeLabel(AttrHeaderLevel);
+	MakeLabel(AttrHeaderTotalXpLabel);
+	MakeLabel(AttrHeaderXp);
+	MakeLabel(AttrHeaderXpToLevelLabel);
+	MakeLabel(AttrHeaderXpToLevel);
+	MakeLabel(AttrHeaderLuminanceLabel);
+	MakeLabel(AttrHeaderLuminanceValue);
+	MakeLabel(CombatSpeedLabel);
+	MakeLabel(CombatPowerLabel);
+	MakeLabel(AttrFooterTitle);
+	MakeLabel(AttrFooterLine1Label);
+	MakeLabel(AttrFooterLine1Value);
+	MakeLabel(AttrFooterLine2Label);
+	MakeLabel(AttrFooterLine2Value);
+
+	if (!SelectionText)
+	{
+		SelectionText = Tree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		SelectionText->SetVisibility(ESlateVisibility::HitTestInvisible);
+		SelectionText->SetJustification(ETextJustify::Center);
+		SelectionText->SetAutoWrapText(true);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 8);
+		SelectionText->SetFont(Font);
+		SelectionText->SetColorAndOpacity(FSlateColor(TextGold));
+	}
+	if (!SelectionStackAmountLabel)
+	{
+		SelectionStackAmountLabel = Tree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		SelectionStackAmountLabel->SetVisibility(ESlateVisibility::Collapsed);
+		SelectionStackAmountLabel->SetJustification(ETextJustify::Center);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 8);
+		SelectionStackAmountLabel->SetFont(Font);
+		SelectionStackAmountLabel->SetColorAndOpacity(FSlateColor(TextWhite));
+	}
+	if (!ExamTitle)
+	{
+		ExamTitle = Tree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		ExamTitle->SetVisibility(ESlateVisibility::Collapsed);
+		ExamTitle->SetJustification(ETextJustify::Left);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 10);
+		ExamTitle->SetFont(Font);
+		ExamTitle->SetColorAndOpacity(FSlateColor(TextGold));
+	}
+	if (!ExamBody)
+	{
+		ExamBody = Tree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		ExamBody->SetVisibility(ESlateVisibility::Collapsed);
+		ExamBody->SetAutoWrapText(true);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9);
+		ExamBody->SetFont(Font);
+		ExamBody->SetColorAndOpacity(FSlateColor(TextWhite));
+	}
+	if (!PanelBodyText)
+	{
+		PanelBodyText = Tree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		PanelBodyText->SetVisibility(ESlateVisibility::Collapsed);
+		PanelBodyText->SetAutoWrapText(true);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9);
+		PanelBodyText->SetFont(Font);
+		PanelBodyText->SetColorAndOpacity(FSlateColor(TextWhite));
+	}
+	if (!VendorFilterText)
+	{
+		VendorFilterText = Tree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		VendorFilterText->SetVisibility(ESlateVisibility::Collapsed);
+		VendorFilterText->SetAutoWrapText(false);
+		VendorFilterText->SetJustification(ETextJustify::Left);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9);
+		VendorFilterText->SetFont(Font);
+		VendorFilterText->SetColorAndOpacity(FSlateColor(TextGold));
+	}
+	if (!ChatLog)
+	{
+		ChatLog = Tree->ConstructWidget<UScrollBox>(UScrollBox::StaticClass());
+		// HitTestInvisible so DAT Maximize / floating-chat tabs still receive clicks;
+		// wheel scrolling is handled by the canvas when the pointer is over the log.
+		ChatLog->SetVisibility(ESlateVisibility::HitTestInvisible);
+		ChatLog->SetScrollBarVisibility(ESlateVisibility::Collapsed);
+		ChatLog->SetConsumeMouseWheel(EConsumeMouseWheel::Never);
+		ChatLog->SetAnimateWheelScrolling(false);
+	}
+	if (!ChatEntry)
+	{
+		auto* MainChat = Tree->ConstructWidget<UACEChatEntry>();
+		MainChat->InitializeChat(this); ChatEntry = MainChat;
+		ChatEntry->SetVisibility(ESlateVisibility::Collapsed);
+		ChatEntry->SetHintText(FText::FromString(TEXT("")));
+		// Transparent field — DAT ChatPanelTextEntry / ChatEntryField supply the chrome.
+		// Font must fit the retail 17px entry height (default slate font looks huge/scaled).
+		FEditableTextBoxStyle Style = ChatEntry->GetWidgetStyle();
+		FSlateBrush Clear;
+		Clear.DrawAs = ESlateBrushDrawType::NoDrawType;
+		Style.BackgroundImageNormal = Clear;
+		Style.BackgroundImageHovered = Clear;
+		Style.BackgroundImageFocused = Clear;
+		Style.BackgroundImageReadOnly = Clear;
+		Style.Padding = FMargin(2.f, 0.f);
+		FSlateFontInfo EntryFont = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9);
+		Style.TextStyle.SetFont(EntryFont);
+		Style.TextStyle.ColorAndOpacity = FSlateColor(TextWhite);
+		ChatEntry->SetWidgetStyle(Style);
+		ChatEntry->SetClearKeyboardFocusOnCommit(true);
+		ChatEntry->OnTextCommitted.AddDynamic(this, &UACEUIGameplayBinder::HandleChatTextCommitted);
+	}
+
+	// FloatyChat1-4 per-window logs, entry lines, and titles (retail ChatInterface).
+	if (FloatyChatLogs.Num() != NumFloatyChats)
+	{
+		LoadFloatyChatSettings();
+	}
+	for (int32 W = 0; W < NumFloatyChats; ++W)
+	{
+		if (!FloatyChatLogs[W])
+		{
+			UScrollBox* Log = Tree->ConstructWidget<UScrollBox>(UScrollBox::StaticClass());
+			Log->SetVisibility(ESlateVisibility::Collapsed);
+			Log->SetScrollBarVisibility(ESlateVisibility::Collapsed);
+			Log->SetConsumeMouseWheel(EConsumeMouseWheel::Never);
+			Log->SetAnimateWheelScrolling(false);
+			FloatyChatLogs[W] = Log;
+		}
+		if (!FloatyChatEntries[W])
+		{
+			auto* Entry = Tree->ConstructWidget<UACEChatEntry>();
+			Entry->InitializeChat(this);
+			Entry->SetVisibility(ESlateVisibility::Collapsed);
+			Entry->SetHintText(FText::FromString(TEXT("")));
+			FEditableTextBoxStyle Style = Entry->GetWidgetStyle();
+			FSlateBrush Clear;
+			Clear.DrawAs = ESlateBrushDrawType::NoDrawType;
+			Style.BackgroundImageNormal = Clear;
+			Style.BackgroundImageHovered = Clear;
+			Style.BackgroundImageFocused = Clear;
+			Style.BackgroundImageReadOnly = Clear;
+			Style.Padding = FMargin(2.f, 0.f);
+			Style.TextStyle.SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9));
+			Style.TextStyle.ColorAndOpacity = FSlateColor(TextWhite);
+			Entry->SetWidgetStyle(Style);
+			Entry->SetClearKeyboardFocusOnCommit(true);
+			switch (W)
+			{
+			case 0:
+				Entry->OnTextCommitted.AddDynamic(this, &UACEUIGameplayBinder::HandleFloatyChat1Committed);
+				break;
+			case 1:
+				Entry->OnTextCommitted.AddDynamic(this, &UACEUIGameplayBinder::HandleFloatyChat2Committed);
+				break;
+			case 2:
+				Entry->OnTextCommitted.AddDynamic(this, &UACEUIGameplayBinder::HandleFloatyChat3Committed);
+				break;
+			default:
+				Entry->OnTextCommitted.AddDynamic(this, &UACEUIGameplayBinder::HandleFloatyChat4Committed);
+				break;
+			}
+			FloatyChatEntries[W] = Entry;
+		}
+		if (!FloatyChatTitleLabels[W])
+		{
+			UTextBlock* Title = Tree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+			Title->SetVisibility(ESlateVisibility::Collapsed);
+			Title->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 8));
+			Title->SetColorAndOpacity(FSlateColor(TextGold));
+			Title->SetJustification(ETextJustify::Center);
+			FloatyChatTitleLabels[W] = Title;
+		}
+	}
+
+	if (!RadarCoordsLabel)
+	{
+		RadarCoordsLabel = Tree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		RadarCoordsLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
+		RadarCoordsLabel->SetJustification(ETextJustify::Center);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 8);
+		RadarCoordsLabel->SetFont(Font);
+		RadarCoordsLabel->SetColorAndOpacity(FSlateColor(TextWhite));
+	}
+	if (!RadarPlayerDot)
+	{
+		RadarPlayerDot = Tree->ConstructWidget<UBorder>(UBorder::StaticClass());
+		RadarPlayerDot->SetPadding(FMargin(0.f));
+		RadarPlayerDot->SetBrush(MakeRoundBlipBrush(FLinearColor::White));
+		RadarPlayerDot->SetVisibility(ESlateVisibility::HitTestInvisible);
+	}
+	while (RadarBlips.Num() < MaxRadarBlips)
+	{
+		UBorder* Blip = Tree->ConstructWidget<UBorder>(UBorder::StaticClass());
+		Blip->SetPadding(FMargin(0.f));
+		Blip->SetBrush(MakeRoundBlipBrush(FLinearColor::Red));
+		Blip->SetVisibility(ESlateVisibility::Collapsed);
+		RadarBlips.Add(Blip);
+	}
+	RadarBlipGuids.SetNum(MaxRadarBlips);
+}
+
+void UACEUIGameplayBinder::PlaceTextOnElement(UTextBlock* Text, const FString& ElementName,
+	const FString& Contents, int32 FontSize, const FLinearColor& Color, int32 ZOrder,
+	bool bCenterInElement)
+{
+	if (!Text || !Manager || !Canvas)
+	{
+		return;
+	}
+	PlaceTextOnElement(Text, Manager->FindElementByName(ElementName), Contents, FontSize, Color,
+		ZOrder, bCenterInElement);
+}
+
+void UACEUIGameplayBinder::PlaceTextOnElement(UTextBlock* Text, TSharedPtr<FACEUIElement> El,
+	const FString& Contents, int32 FontSize, const FLinearColor& Color, int32 ZOrder,
+	bool bCenterInElement)
+{
+	if (!Text || !Manager || !Canvas)
+	{
+		return;
+	}
+	if (!El.IsValid())
+	{
+		Text->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+	bool bAncestorsVisible = El->bVisible;
+	for (TSharedPtr<FACEUIElement> P = El->Parent.Pin(); P.IsValid(); P = P->Parent.Pin())
+	{
+		if (!P->bVisible) { bAncestorsVisible = false; break; }
+	}
+	if (!bAncestorsVisible)
+	{
+		Text->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+	Text->SetVisibility(ESlateVisibility::HitTestInvisible);
+	Text->SetText(FText::FromString(Contents));
+	Text->SetColorAndOpacity(FSlateColor(El->TextColor.Get(Color)));
+	// Prefer the DAT font catalog entry (BaseLayout 0x2100003F) over the caller's guess.
+	const ACEUIFontStyles::FACEFontStyle Style =
+		ACEUIFontStyles::ResolveForElement(El, FontSize);
+	Text->SetFont(ACEUIFontStyles::MakeSlateFont(Style));
+	if (El->bHasTextLayout)
+	{
+		Text->SetJustification(El->TextHorizontalJustification == 1 ? ETextJustify::Center
+			: El->TextHorizontalJustification == 3 ? ETextJustify::Right : ETextJustify::Left);
+		if (Cast<UACERetailTextBlock>(Text) && El->FontId != 0)
+		{
+			const FVector2D Scale = Canvas->GetLastScale2D();
+			Text->SetMargin(FMargin(El->TextMargins.Left * Scale.X, El->TextMargins.Top * Scale.Y,
+				El->TextMargins.Right * Scale.X, El->TextMargins.Bottom * Scale.Y));
+			Canvas->PlaceWidgetAtElement(Text, El, ZOrder);
+			return;
+		}
+		FMargin Insets = El->TextMargins;
+		const float LineHeight = El->FontHeight > 0 ? El->FontHeight : Style.SlateSize + 2.f;
+		const float Spare = FMath::Max(0.f, El->Height - Insets.Top - Insets.Bottom - LineHeight);
+		if (El->TextVerticalJustification == 1) Insets.Top += FMath::FloorToFloat(Spare * 0.5f);
+		else if (El->TextVerticalJustification == 5) Insets.Top += Spare;
+		Canvas->PlaceWidgetAtElement(Text, El, ZOrder, Insets);
+	}
+	else if (bCenterInElement)
+	{
+		Text->SetJustification(ETextJustify::Center);
+		// Full element box + vertical center via symmetric inset (PlaceWidget is top-left).
+		const float VPad = FMath::Max(0.f,
+			(static_cast<float>(El->Height) - static_cast<float>(Style.SlateSize) - 2.f) * 0.5f);
+		Canvas->PlaceWidgetAtElement(Text, El, ZOrder, FMargin(2.f, VPad, 2.f, VPad));
+	}
+	else
+	{
+		Canvas->PlaceWidgetAtElement(Text, El, ZOrder, FMargin(2.f, 1.f));
+	}
+}
+
+void UACEUIGameplayBinder::RefreshVitalsOverlays()
+{
+	if (!Client || !Manager)
+	{
+		return;
+	}
+	// CharacterOption 0x13 SideBySideVitals: checked = one horizontal strip (Health|Stamina|Mana).
+	// Unchecked = stacked FloatyVitals (Health on top of Stamina on top of Mana).
+	const bool bSideBySide = Client->IsCharacterOptionSet(0x13);
+	auto SetVitalsFloaty = [this](const FString& Name, bool bShow)
+	{
+		if (TSharedPtr<FACEUIElement> El = Manager->FindElementByName(Name))
+		{
+			El->bVisible = bShow;
+		}
+	};
+	SetVitalsFloaty(TEXT("RootGameplay_FloatySideVitals_Field"), bSideBySide);
+	SetVitalsFloaty(TEXT("RootGameplay_FloatyVitals_Field"), !bSideBySide);
+
+	// Always pull the live session vitals — do not trust a stale LastVitals snapshot.
+	LastVitals = Client->GetPlayerVitals();
+	if (!LastVitals.bValid)
+	{
+		return;
+	}
+	const float HealthFrac = (LastVitals.MaxHealth > 0)
+		? static_cast<float>(LastVitals.Health) / static_cast<float>(LastVitals.MaxHealth) : 0.f;
+	const float StamFrac = (LastVitals.MaxStamina > 0)
+		? static_cast<float>(LastVitals.Stamina) / static_cast<float>(LastVitals.MaxStamina) : 0.f;
+	const float ManaFrac = (LastVitals.MaxMana > 0)
+		? static_cast<float>(LastVitals.Mana) / static_cast<float>(LastVitals.MaxMana) : 0.f;
+
+	// Both arrangements use the DAT ShowDetail/HideDetail states. Visibility alone
+	// cannot select the textured media: HideDetail deliberately has image ID zero.
+	for (const TCHAR* Root : {TEXT("RootGameplay_FloatyVitals_Field"), TEXT("RootGameplay_FloatySideVitals_Field")})
+	{
+		auto SetMeter = [&](const TCHAR* Name, float Fraction)
+		{
+			if (const auto Meter = Manager->FindElementUnder(Root, Name))
+			{
+				Meter->MeterFillFraction = FMath::Clamp(Fraction, 0.f, 1.f);
+				Meter->bUseExplicitState = true;
+				Meter->DefaultState = bShowVitalNumbers ? 0x10000006u : 0x10000007u;
+			}
+		};
+		SetMeter(TEXT("HealthMeter"), HealthFrac);
+		SetMeter(TEXT("StaminaMeter"), StamFrac);
+		SetMeter(TEXT("ManaMeter"), ManaFrac);
+	}
+
+	const FString HealthText = (bShowVitalNumbers && LastVitals.bValid)
+		? FString::Printf(TEXT("%d / %d"), LastVitals.Health, LastVitals.MaxHealth) : FString();
+	const FString StamText = (bShowVitalNumbers && LastVitals.bValid)
+		? FString::Printf(TEXT("%d / %d"), LastVitals.Stamina, LastVitals.MaxStamina) : FString();
+	const FString ManaText = (bShowVitalNumbers && LastVitals.bValid)
+		? FString::Printf(TEXT("%d / %d"), LastVitals.Mana, LastVitals.MaxMana) : FString();
+	PlaceTextOnElement(HealthLabel, TEXT("PlayerHealthLabel"), HealthText, 8, TextWhite, 510);
+	PlaceTextOnElement(StaminaLabel, TEXT("PlayerStaminaLabel"), StamText, 8, TextWhite, 510);
+	PlaceTextOnElement(ManaLabel, TEXT("PlayerManaLabel"), ManaText, 8, TextWhite, 510);
+}
+
+void UACEUIGameplayBinder::PlaceRadarWidget(UWidget* Widget, float ScreenX, float ScreenY, float Size, int32 ZOrder)
+{
+	if (!Widget || !Canvas || !Canvas->GetElementLayer())
+	{
+		return;
+	}
+	UCanvasPanel* Layer = Canvas->GetElementLayer();
+	if (Widget->GetParent() != Layer)
+	{
+		Layer->AddChild(Widget);
+	}
+	if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Widget->Slot))
+	{
+		Slot->SetAnchors(FAnchors(0.f, 0.f));
+		Slot->SetAlignment(FVector2D(0.f, 0.f));
+		Slot->SetAutoSize(false);
+		Slot->SetPosition(FVector2D(ScreenX, ScreenY));
+		Slot->SetSize(FVector2D(Size, Size));
+		Canvas->SetOverlayOrder(Widget, Manager->FindElementByName(TEXT("RootGameplay_Radar_Field")), ZOrder);
+	}
+}
+
+FLinearColor UACEUIGameplayBinder::ColorFromRadarBlip(uint8 RadarColor)
+{
+	switch (RadarColor)
+	{
+	case ACERadarColor::Blue: return FLinearColor(0.25f, 0.45f, 0.95f, 1.f);
+	case ACERadarColor::Gold: return FLinearColor(0.92f, 0.75f, 0.20f, 1.f);
+	case ACERadarColor::White: return FLinearColor(0.95f, 0.95f, 0.95f, 1.f);
+	case ACERadarColor::Purple: return FLinearColor(0.70f, 0.30f, 0.90f, 1.f);
+	case ACERadarColor::Red: return FLinearColor(0.90f, 0.18f, 0.15f, 1.f);
+	case ACERadarColor::Pink: return FLinearColor(0.95f, 0.45f, 0.70f, 1.f);
+	case ACERadarColor::Green: return FLinearColor(0.25f, 0.75f, 0.30f, 1.f);
+	case ACERadarColor::Yellow: return FLinearColor(0.95f, 0.88f, 0.20f, 1.f);
+	case ACERadarColor::Cyan: return FLinearColor(0.25f, 0.85f, 0.90f, 1.f);
+	case ACERadarColor::BrightGreen: return FLinearColor(0.35f, 0.95f, 0.40f, 1.f);
+	default: return FLinearColor(0.85f, 0.15f, 0.10f, 1.f);
+	}
+}
+
+uint8 UACEUIGameplayBinder::ResolveRadarColor(const FACEWorldObject& Obj)
+{
+	if (Obj.bIsPlayer)
+	{
+		if ((Obj.ObjectDescriptionFlags & ACEObjectDescFlag::PkLiteStatus) != 0)
+		{
+			return ACERadarColor::PKLite;
+		}
+		if ((Obj.ObjectDescriptionFlags & ACEObjectDescFlag::PlayerKiller) != 0)
+		{
+			return ACERadarColor::PlayerKiller;
+		}
+		if (Obj.RadarBlipColor != ACERadarColor::Default
+			&& Obj.RadarBlipColor != ACERadarColor::White)
+		{
+			return Obj.RadarBlipColor;
+		}
+		return ACERadarColor::White;
+	}
+	if (Obj.RadarBlipColor != ACERadarColor::Default)
+	{
+		return Obj.RadarBlipColor;
+	}
+	if (Obj.IsLifeStone() || (Obj.ObjectDescriptionFlags & ACEObjectDescFlag::BindStone) != 0)
+	{
+		return ACERadarColor::LifeStone;
+	}
+	if ((Obj.ItemType & ACEItemType::Portal) != 0
+		|| (Obj.ObjectDescriptionFlags & ACEObjectDescFlag::Portal) != 0)
+	{
+		return ACERadarColor::Portal;
+	}
+	if (Obj.IsVendor())
+	{
+		return ACERadarColor::Vendor;
+	}
+	if ((Obj.ItemType & ACEItemType::Creature) != 0)
+	{
+		if (Obj.IsAttackable())
+		{
+			return ACERadarColor::Creature; // gold / orange selection
+		}
+		return ACERadarColor::NPC; // yellow — friendly NPC
+	}
+	return ACERadarColor::Yellow; // loose items / misc
+}
+
+bool UACEUIGameplayBinder::ShouldShowOnRadar(const FACEWorldObject& Obj, int32 SelfGuid)
+{
+	if (Obj.Guid == 0 || Obj.Guid == SelfGuid || Obj.bDying || !Obj.bHasPosition || !Obj.Position.IsValid())
+	{
+		return false;
+	}
+	if (Obj.ParentGuid != 0 || Obj.ContainerId != 0 || Obj.WielderId != 0)
+	{
+		return false;
+	}
+	if (Obj.RadarBehavior == ACERadarBehavior::ShowNever)
+	{
+		return false;
+	}
+	if (Obj.IsHiddenAdmin() || Obj.IsCloaked()
+		|| (Obj.ObjectDescriptionFlags & ACEObjectDescFlag::UiHidden) != 0)
+	{
+		return false;
+	}
+	if (Obj.RadarBehavior == ACERadarBehavior::ShowAlways
+		|| Obj.RadarBehavior == ACERadarBehavior::ShowMovement
+		|| Obj.RadarBehavior == ACERadarBehavior::ShowAttacking)
+	{
+		return true;
+	}
+	// Undefined behavior: retail still shows players / creatures / portals / lifestones.
+	if (Obj.bIsPlayer)
+	{
+		return true;
+	}
+	if ((Obj.ItemType & ACEItemType::Creature) != 0)
+	{
+		return true;
+	}
+	if ((Obj.ItemType & ACEItemType::Portal) != 0
+		|| (Obj.ObjectDescriptionFlags & ACEObjectDescFlag::Portal) != 0
+		|| Obj.IsLifeStone()
+		|| (Obj.ObjectDescriptionFlags & ACEObjectDescFlag::BindStone) != 0)
+	{
+		return true;
+	}
+	return Obj.RadarBlipColor != ACERadarColor::Default;
+}
+
+void UACEUIGameplayBinder::RefreshRadarOverlays()
+{
+	if (!Client || !Manager || !Canvas || RadarBlips.Num() == 0)
+	{
+		return;
+	}
+	TSharedPtr<FACEUIElement> RadarImage = Manager->FindElementByName(TEXT("RadarImage"));
+	if (!RadarImage.IsValid())
+	{
+		RadarImage = Manager->FindElementByName(TEXT("RootGameplay_Radar_Field"));
+	}
+	if (!RadarImage.IsValid() || !RadarImage->bVisible)
+	{
+		if (RadarPlayerDot)
+		{
+			RadarPlayerDot->SetVisibility(ESlateVisibility::Collapsed);
+		}
+		for (UBorder* Blip : RadarBlips)
+		{
+			if (Blip)
+			{
+				Blip->SetVisibility(ESlateVisibility::Collapsed);
+			}
+		}
+		if (RadarCoordsLabel)
+		{
+			RadarCoordsLabel->SetVisibility(ESlateVisibility::Collapsed);
+		}
+		return;
+	}
+
+	const FACEPosition PlayerPos = Client->GetPlayerPosition();
+	const int32 SelfGuid = Client->GetPlayerGuid();
+	const FIntPoint Origin = RadarImage->GetScreenOrigin();
+	const float RadarW = static_cast<float>(FMath::Max(1, RadarImage->Width));
+	const float RadarH = static_cast<float>(FMath::Max(1, RadarImage->Height));
+	const float CenterX = static_cast<float>(Origin.X) + RadarW * 0.5f;
+	const float CenterY = static_cast<float>(Origin.Y) + RadarH * 0.5f;
+	const float RadiusPx = FMath::Min(RadarW, RadarH) * 0.5f - 8.f;
+	constexpr float RadarRangeAc = 60.f;
+
+	auto GlobalXY = [](const FACEPosition& Pos) -> FVector2D
+	{
+		const uint32 Cell = static_cast<uint32>(Pos.CellId);
+		return FVector2D(
+			((Cell >> 24) & 0xFF) * 192.f + Pos.Location.X,
+			((Cell >> 16) & 0xFF) * 192.f + Pos.Location.Y);
+	};
+
+	if (RadarCoordsLabel && PlayerPos.IsValid()
+		&& Client && Client->IsCharacterOptionSet(0x14))
+	{
+		const float NS = (((static_cast<uint32>(PlayerPos.CellId) >> 16) & 0xFF) * 192.f + PlayerPos.Location.Y) / 240.f - 101.95f;
+		const float EW = (((static_cast<uint32>(PlayerPos.CellId) >> 24) & 0xFF) * 192.f + PlayerPos.Location.X) / 240.f - 101.95f;
+		PlaceTextOnElement(RadarCoordsLabel, TEXT("RadarCoords"),
+			FString::Printf(TEXT("%.1f%s, %.1f%s"),
+				FMath::Abs(NS), NS >= 0.f ? TEXT("N") : TEXT("S"),
+				FMath::Abs(EW), EW >= 0.f ? TEXT("E") : TEXT("W")),
+			8, TextWhite, 520);
+		RadarCoordsLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
+	}
+	else if (RadarCoordsLabel)
+	{
+		RadarCoordsLabel->SetVisibility(ESlateVisibility::Collapsed);
+	}
+
+	if (RadarPlayerDot)
+	{
+		RadarPlayerDot->SetVisibility(ESlateVisibility::HitTestInvisible);
+		RadarPlayerDot->SetBrush(MakeRoundBlipBrush(FLinearColor::White));
+		PlaceRadarWidget(RadarPlayerDot, CenterX - 2.f, CenterY - 2.f, 4.f, 525);
+	}
+
+	const FVector2D SelfXY = PlayerPos.IsValid() ? GlobalXY(PlayerPos) : FVector2D::ZeroVector;
+	// Facing-up radar: AC forward (sin θ, cos θ) from set_heading.
+	const FVector FwdAc = PlayerPos.IsValid()
+		? PlayerPos.GetAceForwardInAcSpace().GetSafeNormal2D()
+		: FVector(0.f, 1.f, 0.f);
+	const float CosH = FwdAc.Y;
+	const float SinH = FwdAc.X;
+	const float HeadingRad = FMath::Atan2(FwdAc.X, FwdAc.Y);
+
+	// gmRadarUI: NESW tokens orbit so North stays world-north on a facing-up radar.
+	{
+		TSharedPtr<FACEUIElement> RadarParent = RadarImage->Parent.Pin();
+		auto FindToken = [&](const TCHAR* Name) -> TSharedPtr<FACEUIElement>
+		{
+			if (RadarParent.IsValid())
+			{
+				for (const TSharedPtr<FACEUIElement>& Ch : RadarParent->Children)
+				{
+					if (Ch.IsValid() && Ch->ElementName == Name)
+					{
+						return Ch;
+					}
+				}
+			}
+			return Manager->FindElementByName(Name);
+		};
+		TSharedPtr<FACEUIElement> North = FindToken(TEXT("RadarNorth"));
+		TSharedPtr<FACEUIElement> East = FindToken(TEXT("RadarEast"));
+		TSharedPtr<FACEUIElement> South = FindToken(TEXT("RadarSouth"));
+		TSharedPtr<FACEUIElement> West = FindToken(TEXT("RadarWest"));
+		const float Cx = static_cast<float>(RadarImage->X) + RadarW * 0.5f;
+		const float Cy = static_cast<float>(RadarImage->Y) + RadarH * 0.5f;
+		auto TokenMag = [Cx, Cy](const TSharedPtr<FACEUIElement>& Tok) -> float
+		{
+			if (!Tok.IsValid())
+			{
+				return 0.f;
+			}
+			const float Tx = static_cast<float>(Tok->X) + static_cast<float>(Tok->Width) * 0.5f;
+			const float Ty = static_cast<float>(Tok->Y) + static_cast<float>(Tok->Height) * 0.5f;
+			return FMath::Sqrt(FMath::Square(Cx - Tx) + FMath::Square(Cy - Ty));
+		};
+		if (!bRadarCompassAuthored)
+		{
+			RadarNorthMag = TokenMag(North);
+			RadarEastMag = TokenMag(East);
+			RadarSouthMag = TokenMag(South);
+			RadarWestMag = TokenMag(West);
+			bRadarCompassAuthored = RadarNorthMag > 1.f;
+		}
+		auto PlaceToken = [Cx, Cy, HeadingRad](const TSharedPtr<FACEUIElement>& Tok, float Mag, float AngleBias)
+		{
+			if (!Tok.IsValid() || Mag <= 1.f)
+			{
+				return;
+			}
+			const float Ang = HeadingRad + AngleBias;
+			const float CenterX = Cx + FMath::Sin(Ang) * Mag;
+			const float CenterY = Cy + FMath::Cos(Ang) * Mag;
+			Tok->X = FMath::RoundToInt(CenterX - static_cast<float>(Tok->Width) * 0.5f);
+			Tok->Y = FMath::RoundToInt(CenterY - static_cast<float>(Tok->Height) * 0.5f);
+		};
+		PlaceToken(North, RadarNorthMag, PI);
+		PlaceToken(East, RadarEastMag, PI * 0.5f);
+		PlaceToken(South, RadarSouthMag, 0.f);
+		PlaceToken(West, RadarWestMag, PI * 1.5f);
+	}
+
+	const auto RadarSession = Client->GetSession();
+	if (!RadarSession) return;
+	int32 BlipIndex = 0;
+	for (const auto& Pair : RadarSession->GetWorldObjects())
+	{
+		// Tick and packet dispatch both run on the game thread. Reading the
+		// session view avoids copying every object's clothing/property arrays.
+		const FACEWorldObject& Obj = Pair.Value;
+		if (BlipIndex >= RadarBlips.Num())
+		{
+			break;
+		}
+		if (!ShouldShowOnRadar(Obj, SelfGuid) || !PlayerPos.IsValid() || !Client->IsWorldObjectVisible(Obj))
+		{
+			continue;
+		}
+		const FVector2D Delta = GlobalXY(Obj.Position) - SelfXY;
+		if (Delta.SizeSquared() > RadarRangeAc * RadarRangeAc)
+		{
+			continue;
+		}
+		// Rotate so player facing maps to screen-up; screen Y grows downward.
+		const float RelX = Delta.X * CosH - Delta.Y * SinH; // AC right
+		const float RelY = Delta.X * SinH + Delta.Y * CosH; // AC forward
+		const float ScreenX = CenterX + RelX / RadarRangeAc * RadiusPx;
+		const float ScreenY = CenterY - RelY / RadarRangeAc * RadiusPx;
+
+		UBorder* Blip = RadarBlips[BlipIndex];
+		const FLinearColor Color = ColorFromRadarBlip(ResolveRadarColor(Obj));
+		Blip->SetBrush(MakeRoundBlipBrush(Color));
+		Blip->SetVisibility(ESlateVisibility::Visible);
+		PlaceRadarWidget(Blip, ScreenX - 3.f, ScreenY - 3.f, 6.f, 530);
+		RadarBlipGuids[BlipIndex] = Obj.Guid;
+		++BlipIndex;
+	}
+	for (int32 i = BlipIndex; i < RadarBlips.Num(); ++i)
+	{
+		RadarBlips[i]->SetVisibility(ESlateVisibility::Collapsed);
+		RadarBlipGuids[i] = 0;
+	}
+}
+
+void UACEUIGameplayBinder::RefreshSelectionOverlay()
+{
+	if (Client)
+	{
+		// Keep HealthFraction in sync — UpdateHealth may arrive without a binder-visible path.
+		LastSelection = Client->GetSelectedObject();
+	}
+	FString Name = LastSelection.bValid ? LastSelection.Name : FString();
+	FACEWorldObject SelObj;
+	bool bHaveObj = false;
+	if (LastSelection.bValid && Client)
+	{
+		bHaveObj = Client->GetWorldObject(LastSelection.Guid, SelObj);
+		if (bHaveObj)
+		{
+			const bool bStackable = SelObj.MaxStackSize > 1 || SelObj.StackSize > 1;
+			if (bStackable)
+			{
+				Name = FormatItemStackName(SelObj, SelectedStackAmount);
+			}
+			else if (Name.IsEmpty())
+			{
+				Name = SelObj.Name;
+			}
+		}
+	}
+
+	const bool bShowHealth = LastSelection.bValid && LastSelection.bShowHealth;
+	const bool bShowMana = !bShowHealth && bHaveObj && SelObj.MaxStructure > 0;
+	const bool bShowStack = !bShowHealth && !bShowMana && bHaveObj
+		&& SelectedStackMax > 1;
+	const float HealthFrac = FMath::Clamp(LastSelection.HealthFraction, 0.f, 1.f);
+	const float ManaFrac = (SelObj.MaxStructure > 0)
+		? FMath::Clamp(static_cast<float>(SelObj.Structure) / static_cast<float>(SelObj.MaxStructure), 0.f, 1.f)
+		: 0.f;
+	const float StackFrac = (SelectedStackMax > 0)
+		? FMath::Clamp(static_cast<float>(SelectedStackAmount) / static_cast<float>(SelectedStackMax), 0.f, 1.f)
+		: 0.f;
+
+	EnsureOverlays();
+
+	// Retail DAT meters only — MeterFillFraction clips the fill art (do not invent UMG bars).
+	if (Manager)
+	{
+		auto SetMeter = [this](const FString& MeterName, bool bVisible, float Frac)
+		{
+			if (TSharedPtr<FACEUIElement> Meter = Manager->FindElementByName(MeterName))
+			{
+				Meter->bVisible = bVisible;
+				Meter->MeterFillFraction = bVisible ? FMath::Clamp(Frac, 0.f, 1.f) : -1.f;
+			}
+		};
+		SetMeter(TEXT("ToolbarHealthMeter"), bShowHealth, HealthFrac);
+		SetMeter(TEXT("ToolbarManaMeter"), bShowMana, ManaFrac);
+
+		if (TSharedPtr<FACEUIElement> Slider = Manager->FindElementByName(TEXT("StackSizeSlider")))
+		{
+			Slider->bVisible = bShowStack;
+			if (bShowStack)
+			{
+				if (Slider->Children.IsValidIndex(0) && Slider->Children[0].IsValid())
+				{
+					Slider->Children[0]->bVisible = true;
+					Slider->Children[0]->Width = FMath::Max(1,
+						FMath::RoundToInt(static_cast<float>(Slider->Width) * StackFrac));
+				}
+				if (Slider->Children.IsValidIndex(1) && Slider->Children[1].IsValid())
+				{
+					const int32 ThumbW = FMath::Max(8, Slider->Children[1]->Width);
+					Slider->Children[1]->X = FMath::Clamp(
+						FMath::RoundToInt(static_cast<float>(Slider->Width) * StackFrac) - ThumbW / 2,
+						0, FMath::Max(0, Slider->Width - ThumbW));
+					Slider->Children[1]->bVisible = true;
+				}
+			}
+		}
+		if (TSharedPtr<FACEUIElement> Entry = Manager->FindElementByName(TEXT("StackSizeEntryBox")))
+		{
+			Entry->bVisible = bShowStack;
+		}
+	}
+
+	// Name in SelectedObjectText — center / wrap so it fits the field.
+	if (SelectionText && Manager && Canvas)
+	{
+		TSharedPtr<FACEUIElement> TextEl = Manager->FindElementByName(TEXT("SelectedObjectText"));
+		bool bAncestorsVisible = TextEl.IsValid() && TextEl->bVisible;
+		for (TSharedPtr<FACEUIElement> P = TextEl.IsValid() ? TextEl->Parent.Pin() : nullptr;
+			P.IsValid(); P = P->Parent.Pin())
+		{
+			if (!P->bVisible) { bAncestorsVisible = false; break; }
+		}
+		if (!LastSelection.bValid || !bAncestorsVisible || !TextEl.IsValid())
+		{
+			SelectionText->SetVisibility(ESlateVisibility::Collapsed);
+		}
+		else
+		{
+			SelectionText->SetVisibility(ESlateVisibility::HitTestInvisible);
+			SelectionText->SetText(FText::FromString(Name));
+			SelectionText->SetJustification(ETextJustify::Center);
+			SelectionText->SetAutoWrapText(true);
+			const int32 FontSize = (Name.Len() > 22) ? 7 : 8;
+			SelectionText->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), FontSize));
+			SelectionText->SetColorAndOpacity(FSlateColor(TextGold));
+			const float TopH = bShowStack ? 13.f : static_cast<float>(TextEl->Height);
+			const FMargin Inset(2.f, 1.f, 2.f,
+				FMath::Max(0.f, static_cast<float>(TextEl->Height) - TopH));
+			Canvas->PlaceWidgetAtElement(SelectionText, TextEl, 520, Inset);
+		}
+	}
+
+	if (bShowStack)
+	{
+		PlaceTextOnElement(SelectionStackAmountLabel, TEXT("StackSizeEntryBox"),
+			FormatXpNumber(SelectedStackAmount), 8, TextWhite, 525);
+		if (SelectionStackAmountLabel)
+		{
+			SelectionStackAmountLabel->SetJustification(ETextJustify::Center);
+		}
+	}
+	else if (SelectionStackAmountLabel)
+	{
+		SelectionStackAmountLabel->SetVisibility(ESlateVisibility::Collapsed);
+	}
+
+	EnsureSelectionMarkers();
+	if (SelectionMarkerCorners.Num() < 4 || !LastSelection.bValid || LastSelection.Guid == 0 || !PlayerController || !Canvas)
+	{
+		HideSelectionMarkers();
+		return;
+	}
+
+	UWorld* World = PlayerController->GetWorld();
+	if (!World)
+	{
+		HideSelectionMarkers();
+		return;
+	}
+
+	AActor* Target = nullptr;
+	for (TActorIterator<AACEWorldEntityActor> It(World); It; ++It)
+	{
+		if (It->GetACEGuid() == LastSelection.Guid)
+		{
+			Target = *It;
+			break;
+		}
+	}
+	if (!Target && Client && LastSelection.Guid == Client->GetPlayerGuid())
+	{
+		Target = PlayerController->GetPawn();
+	}
+
+	FVector WorldOrigin = FVector::ZeroVector;
+	float HalfW = 40.f;
+	float HalfH = 80.f;
+	if (Target)
+	{
+		bool bHaveGfx = false;
+		bool bHaveFrame = false;
+		FVector VisualOrigin = FVector::ZeroVector;
+		FVector VisualExtent = FVector::ZeroVector;
+		if (const UACECharacterAppearanceComponent* App =
+			Target->FindComponentByClass<UACECharacterAppearanceComponent>())
+		{
+			FBox VisualBox(ForceInit);
+			if (App->GetVisualWorldBounds(VisualBox) && VisualBox.IsValid)
+			{
+				VisualOrigin = VisualBox.GetCenter();
+				VisualExtent = VisualBox.GetExtent();
+				bHaveGfx = true;
+			}
+		}
+
+		auto FeetOf = [&]() -> FVector
+		{
+			FVector Feet = Target->GetActorLocation();
+			if (UCapsuleComponent* Cap = Cast<UCapsuleComponent>(Target->GetRootComponent()))
+			{
+				Feet.Z -= Cap->GetScaledCapsuleHalfHeight();
+			}
+			else if (bHaveGfx)
+			{
+				Feet.Z = VisualOrigin.Z - VisualExtent.Z;
+			}
+			return Feet;
+		};
+
+		const bool bCreatureLike = SelObj.bIsSelf
+			|| (SelObj.ItemType & ACEItemType::Creature) != 0;
+		if (bHaveObj && SelObj.SetupId != 0)
+		{
+			if (UGameInstance* GI = PlayerController->GetGameInstance())
+			{
+				if (UACEDatSubsystem* Dat = GI->GetSubsystem<UACEDatSubsystem>())
+				{
+					float StepUp = 0.5f, HeightAc = 2.f, RadiusAc = 0.5f, SelRadiusAc = 0.f;
+					uint32 DefAnim = 0;
+					FVector3f SelOriginAc = FVector3f::ZeroVector;
+					if (Dat->TryGetSetupPhysics(static_cast<uint32>(SelObj.SetupId), StepUp, HeightAc, RadiusAc, DefAnim,
+						nullptr, &SelOriginAc, &SelRadiusAc))
+					{
+						const float Scale = PlayerController->WorldScale * FMath::Max(0.01f, SelObj.Scale);
+						const FVector Feet = FeetOf();
+						if (SelRadiusAc > 0.05f)
+						{
+							const FVector Local = FACEPosition::AceVectorToUnreal(
+								FVector(SelOriginAc.X, SelOriginAc.Y, SelOriginAc.Z), Scale);
+							WorldOrigin = Feet + Local;
+							const float R = SelRadiusAc * Scale;
+							HalfW = R;
+							HalfH = R;
+							bHaveFrame = true;
+						}
+						else if (bCreatureLike)
+						{
+							const float RadCm = FMath::Clamp(RadiusAc, 0.08f, 3.0f) * Scale;
+							const float HeightCm = FMath::Clamp(HeightAc, 0.2f, 8.0f) * Scale;
+							HalfW = RadCm;
+							HalfH = HeightCm * 0.5f;
+							WorldOrigin = FVector(Feet.X, Feet.Y, Feet.Z + HalfH);
+							bHaveFrame = true;
+						}
+						if (!bCreatureLike && bHaveGfx)
+						{
+							const float GfxW = FMath::Max(VisualExtent.X, VisualExtent.Y);
+							const float GfxH = FMath::Max(8.f, VisualExtent.Z);
+							if (!bHaveFrame || GfxW > HalfW * 1.15f || GfxH > HalfH * 1.15f)
+							{
+								WorldOrigin = VisualOrigin;
+								HalfW = GfxW;
+								HalfH = GfxH;
+								bHaveFrame = true;
+							}
+						}
+					}
+				}
+			}
+		}
+		if (!bHaveFrame && bHaveGfx)
+		{
+			WorldOrigin = VisualOrigin;
+			HalfW = FMath::Max(VisualExtent.X, VisualExtent.Y);
+			HalfH = FMath::Max(8.f, VisualExtent.Z);
+			bHaveFrame = true;
+		}
+		if (!bHaveFrame)
+		{
+			if (const AACEWorldEntityActor* Ent = Cast<AACEWorldEntityActor>(Target))
+			{
+				if (const UCapsuleComponent* Proxy = Ent->CollisionProxy)
+				{
+					WorldOrigin = Proxy->GetComponentLocation();
+					HalfW = Proxy->GetScaledCapsuleRadius();
+					HalfH = Proxy->GetScaledCapsuleHalfHeight();
+					bHaveFrame = true;
+				}
+			}
+		}
+		if (!bHaveFrame)
+		{
+			FVector Extent(ForceInit);
+			Target->GetActorBounds(true, WorldOrigin, Extent, false);
+			HalfW = FMath::Max(Extent.X, Extent.Y);
+			HalfH = Extent.Z;
+		}
+		if (HalfW < 1.f && HalfH < 1.f)
+		{
+			WorldOrigin = Target->GetActorLocation();
+			HalfW = 25.f;
+			HalfH = 45.f;
+		}
+		HalfW = FMath::Clamp(HalfW, 8.f, 800.f);
+		HalfH = FMath::Clamp(HalfH, 8.f, 900.f);
+	}
+	else if (bHaveObj && SelObj.bHasPosition && SelObj.Position.IsValid())
+	{
+		const float Scale = PlayerController->WorldScale;
+		WorldOrigin = SelObj.Position.ToUnrealLocation(Scale);
+		HalfW = 25.f;
+		HalfH = 45.f;
+	}
+	else
+	{
+		HideSelectionMarkers();
+		return;
+	}
+
+	FVector ViewLoc;
+	FRotator ViewRot;
+	PlayerController->GetPlayerViewPoint(ViewLoc, ViewRot);
+	FVector Right = FVector::CrossProduct(ViewRot.Vector(), FVector::UpVector);
+	if (!Right.Normalize())
+	{
+		Right = ViewRot.RotateVector(FVector::RightVector);
+	}
+	const FVector Corners[4] = {
+		WorldOrigin + Right * HalfW + FVector(0.f, 0.f, HalfH),
+		WorldOrigin + Right * HalfW - FVector(0.f, 0.f, HalfH),
+		WorldOrigin - Right * HalfW + FVector(0.f, 0.f, HalfH),
+		WorldOrigin - Right * HalfW - FVector(0.f, 0.f, HalfH),
+	};
+
+	FVector2D ScreenMin(FLT_MAX, FLT_MAX);
+	FVector2D ScreenMax(-FLT_MAX, -FLT_MAX);
+	int32 Projected = 0;
+	for (const FVector& C : Corners)
+	{
+		// DPI-aware viewport/widget space — do NOT feed ProjectWorldLocationToScreen(..., true)
+		// into AbsoluteToLocal (that expects absolute desktop coords and shifts the frame
+		// toward the top-left of the viewport).
+		FVector2D WidgetPos;
+		if (!UWidgetLayoutLibrary::ProjectWorldLocationToWidgetPosition(
+			PlayerController, C, WidgetPos, /*bPlayerViewportRelative=*/true))
+		{
+			continue;
+		}
+		ScreenMin.X = FMath::Min(ScreenMin.X, WidgetPos.X);
+		ScreenMin.Y = FMath::Min(ScreenMin.Y, WidgetPos.Y);
+		ScreenMax.X = FMath::Max(ScreenMax.X, WidgetPos.X);
+		ScreenMax.Y = FMath::Max(ScreenMax.Y, WidgetPos.Y);
+		++Projected;
+	}
+	if (Projected < 2)
+	{
+		HideSelectionMarkers();
+		return;
+	}
+
+	// Retail VividTargetIndicator: resize parent to projected bbox; 12×12 corners sit on the
+	// box edges (layout 0x2100000F — NW@0,0 NE@W-12,0 SW@0,H-12 SE@W-12,H-12). No extra pad.
+	const float BoxW = ScreenMax.X - ScreenMin.X;
+	const float BoxH = ScreenMax.Y - ScreenMin.Y;
+	if (BoxW < 4.f || BoxH < 4.f)
+	{
+		HideSelectionMarkers();
+		return;
+	}
+
+	const uint8 Radar = bHaveObj ? ResolveRadarColor(SelObj) : ACERadarColor::White;
+	const FLinearColor Tint = ColorFromSelectionMarker(Radar);
+	// portal.dat VividTargetIndicator_Selected_* (SmartBox 0x2100000F runtime art).
+	constexpr int32 DidNW = 0x06004C40;
+	constexpr int32 DidNE = 0x06004C41;
+	constexpr int32 DidSW = 0x06004C42;
+	constexpr int32 DidSE = 0x06004C43;
+	constexpr float Corner = 12.f;
+	// Above DAT chrome paint (~hundreds→thousands) but below modal inventory overlays (10000).
+	constexpr int32 Z = 8500;
+
+	const float L = ScreenMin.X;
+	const float T = ScreenMin.Y;
+	const float R = ScreenMax.X;
+	const float B = ScreenMax.Y;
+	const float W = FMath::Max(Corner, R - L);
+	const float H = FMath::Max(Corner, B - T);
+	const float CenterX = (L + R) * 0.5f;
+	const float CenterY = (T + B) * 0.5f;
+
+	// Anchor the parent on the projected model center (not top-left) so the frame stays
+	// centered on the mesh when size changes.
+	if (SelectionMarkerBox)
+	{
+		SelectionMarkerBox->SetVisibility(ESlateVisibility::HitTestInvisible);
+		if (UCanvasPanelSlot* BoxSlot = Cast<UCanvasPanelSlot>(SelectionMarkerBox->Slot))
+		{
+			BoxSlot->SetAnchors(FAnchors(0.f, 0.f));
+			BoxSlot->SetAlignment(FVector2D(0.5f, 0.5f));
+			BoxSlot->SetAutoSize(false);
+			BoxSlot->SetPosition(FVector2D(CenterX, CenterY));
+			BoxSlot->SetSize(FVector2D(W, H));
+			Canvas->SetOverlayOrder(SelectionMarkerBox, Manager->FindElementByName(TEXT("RootGameplay_SmartBox_Field")), Z);
+		}
+	}
+
+	PlaceSelectionCorner(SelectionMarkerCorners[0], DidNW, 0.f, 0.f, Tint, 1);
+	PlaceSelectionCorner(SelectionMarkerCorners[1], DidNE, W - Corner, 0.f, Tint, 1);
+	PlaceSelectionCorner(SelectionMarkerCorners[2], DidSW, 0.f, H - Corner, Tint, 1);
+	PlaceSelectionCorner(SelectionMarkerCorners[3], DidSE, W - Corner, H - Corner, Tint, 1);
+}
+
+void UACEUIGameplayBinder::EnsureSelectionMarkers()
+{
+	if (!Canvas || !Canvas->WidgetTree || !Canvas->GetElementLayer())
+	{
+		return;
+	}
+	UCanvasPanel* Layer = Canvas->GetElementLayer();
+	if (!SelectionMarkerBox)
+	{
+		SelectionMarkerBox = Canvas->WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass());
+		SelectionMarkerBox->SetVisibility(ESlateVisibility::Collapsed);
+		Layer->AddChild(SelectionMarkerBox);
+	}
+	else if (SelectionMarkerBox->GetParent() != Layer)
+	{
+		Layer->AddChild(SelectionMarkerBox);
+	}
+
+	while (SelectionMarkerCorners.Num() < 4)
+	{
+		UBorder* Corner = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+		Corner->SetPadding(FMargin(0.f));
+		Corner->SetVisibility(ESlateVisibility::Collapsed);
+		SelectionMarkerBox->AddChild(Corner);
+		SelectionMarkerCorners.Add(Corner);
+	}
+	for (UBorder* Corner : SelectionMarkerCorners)
+	{
+		if (Corner && Corner->GetParent() != SelectionMarkerBox)
+		{
+			SelectionMarkerBox->AddChild(Corner);
+		}
+	}
+}
+
+void UACEUIGameplayBinder::HideSelectionMarkers()
+{
+	if (SelectionMarkerBox)
+	{
+		SelectionMarkerBox->SetVisibility(ESlateVisibility::Collapsed);
+	}
+	for (UBorder* Corner : SelectionMarkerCorners)
+	{
+		if (Corner)
+		{
+			Corner->SetVisibility(ESlateVisibility::Collapsed);
+		}
+	}
+}
+
+void UACEUIGameplayBinder::PlaceSelectionCorner(UBorder* Corner, int32 TexDid, float LocalX, float LocalY,
+	const FLinearColor& Tint, int32 ZOrder)
+{
+	if (!Corner || !SelectionMarkerBox)
+	{
+		return;
+	}
+	if (Corner->GetParent() != SelectionMarkerBox)
+	{
+		SelectionMarkerBox->AddChild(Corner);
+	}
+	// Resolve DAT corner art (12×12 grayscale). Tint multiplies after brush assign.
+	if (Canvas && Canvas->GetResourceResolver())
+	{
+		if (UTexture2D* Tex = Canvas->GetResourceResolver()->ResolveTexture(static_cast<uint32>(TexDid)))
+		{
+			FSlateBrush Brush;
+			Brush.SetResourceObject(Tex);
+			Brush.DrawAs = ESlateBrushDrawType::Image;
+			Brush.Tiling = ESlateBrushTileType::NoTile;
+			Brush.ImageSize = FVector2D(12.f, 12.f);
+			Corner->SetBrush(Brush);
+		}
+		else
+		{
+			FSlateBrush Clear;
+			Clear.DrawAs = ESlateBrushDrawType::NoDrawType;
+			Corner->SetBrush(Clear);
+		}
+	}
+	// Grayscale DAT art is tinted via brush color (retail VividTargetIndicator::SetOnScreenColor).
+	Corner->SetBrushColor(Tint);
+	Corner->SetVisibility(ESlateVisibility::HitTestInvisible);
+	if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Corner->Slot))
+	{
+		Slot->SetAnchors(FAnchors(0.f, 0.f));
+		Slot->SetAlignment(FVector2D(0.f, 0.f));
+		Slot->SetAutoSize(false);
+		Slot->SetPosition(FVector2D(LocalX, LocalY));
+		Slot->SetSize(FVector2D(12.f, 12.f));
+		Slot->SetZOrder(ZOrder);
+	}
+}
+
+FLinearColor UACEUIGameplayBinder::ColorFromSelectionMarker(uint8 RadarColor)
+{
+	// Retail VividTargetIndicator tints follow RadarColor:
+	// NPK player white, PK red, PK Lite pink, attackable creature orange,
+	// NPC/vendor/item yellow, lifestone blue, portal purple.
+	switch (RadarColor)
+	{
+	case ACERadarColor::Blue:
+		return FLinearColor(0.30f, 0.55f, 1.f, 1.f);
+	case ACERadarColor::Yellow:
+		return FLinearColor(1.f, 0.92f, 0.22f, 1.f);
+	case ACERadarColor::Gold:
+		return FLinearColor(0.95f, 0.55f, 0.12f, 1.f); // hostiles — orange
+	case ACERadarColor::White:
+		return FLinearColor(0.95f, 0.95f, 0.95f, 1.f);
+	case ACERadarColor::Red:
+		return FLinearColor(0.95f, 0.15f, 0.12f, 1.f);
+	case ACERadarColor::Pink:
+		return FLinearColor(0.95f, 0.45f, 0.70f, 1.f);
+	case ACERadarColor::Purple:
+		return FLinearColor(0.75f, 0.35f, 0.95f, 1.f);
+	case ACERadarColor::Green:
+	case ACERadarColor::BrightGreen:
+		return FLinearColor(0.30f, 0.90f, 0.35f, 1.f);
+	case ACERadarColor::Cyan:
+		return FLinearColor(0.25f, 0.85f, 0.90f, 1.f);
+	default:
+		return FLinearColor(1.f, 0.92f, 0.22f, 1.f);
+	}
+}
+
+void UACEUIGameplayBinder::RefreshExaminationOverlay()
+{
+	if (!Manager || !Canvas)
+	{
+		return;
+	}
+	TSharedPtr<FACEUIElement> ExamRoot = Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field"));
+	const bool bShow = ExamRoot.IsValid() && ExamRoot->bVisible;
+	auto HideExamExtras = [this]()
+	{
+		for (UTextBlock* Label : ExamSpellLabels) if (Label) Label->SetVisibility(ESlateVisibility::Collapsed);
+		if (ExamTitle) { ExamTitle->SetVisibility(ESlateVisibility::Collapsed); }
+		if (ExamLevel) { ExamLevel->SetVisibility(ESlateVisibility::Collapsed); }
+		if (ExamCreatureDetailsScroll) ExamCreatureDetailsScroll->SetVisibility(ESlateVisibility::Collapsed);
+		for (UTextBlock* Text : ExamCreatureHeadings) if (Text) Text->SetVisibility(ESlateVisibility::Collapsed);
+		for (UTextBlock* Text : ExamAttributeLabels) if (Text) Text->SetVisibility(ESlateVisibility::Collapsed);
+		for (UTextBlock* Text : ExamAttributeValues) if (Text) Text->SetVisibility(ESlateVisibility::Collapsed);
+		if (ExamBody) { ExamBody->SetVisibility(ESlateVisibility::Collapsed); }
+		if (ExamScroll) { ExamScroll->SetVisibility(ESlateVisibility::Collapsed); }
+		if (ExamValueLabel) { ExamValueLabel->SetVisibility(ESlateVisibility::Collapsed); }
+		if (ExamBurdenLabel) { ExamBurdenLabel->SetVisibility(ESlateVisibility::Collapsed); }
+		if (ExamInscriptionLabel) { ExamInscriptionLabel->SetVisibility(ESlateVisibility::Collapsed); }
+		if (ExamInscriptionSignature) ExamInscriptionSignature->SetVisibility(ESlateVisibility::Collapsed);
+		if (ExamInscriptionEditor) ExamInscriptionEditor->SetVisibility(ESlateVisibility::Collapsed);
+		if (ExamIconBorder) { ExamIconBorder->SetVisibility(ESlateVisibility::Collapsed); }
+		if (ExamPaperDollModelImage) { ExamPaperDollModelImage->SetVisibility(ESlateVisibility::Collapsed); }
+		if (ExamPaperDollPreviewActor)
+			if (auto* Appearance = ExamPaperDollPreviewActor->FindComponentByClass<UACECharacterAppearanceComponent>())
+				Appearance->SetComponentTickEnabled(false);
+	};
+	if (!bShow)
+	{
+		HideExamExtras();
+		return;
+	}
+	SyncExamineBodyVisibility(LastAppraisal.bIsCreature);
+	UACEUIElementManager::ApplyFloatyResizeLayout(ExamRoot);
+	if (ExaminedSpellId) { HideExamExtras(); RefreshSpellExamination(); return; }
+	for (UTextBlock* Label : ExamSpellLabels) if (Label) Label->SetVisibility(ESlateVisibility::Collapsed);
+	constexpr int32 ExamOverlayZ = 100000;
+	PlaceTextOnElement(ExamTitle, TEXT("DisplayedNameText"), ACEAppraisalFormatting::ExaminationName(LastAppraisal), 10, TextGold, ExamOverlayZ);
+	if (LastAppraisal.bIsCreature)
+	{
+		if (ExamInscriptionSignature) ExamInscriptionSignature->SetVisibility(ESlateVisibility::Collapsed);
+		if (ExamInscriptionEditor) ExamInscriptionEditor->SetVisibility(ESlateVisibility::Collapsed);
+		if (ExamBody) ExamBody->SetVisibility(ESlateVisibility::Collapsed);
+		if (ExamScroll) ExamScroll->SetVisibility(ESlateVisibility::Collapsed);
+		for (UTextBlock* Text : {ExamValueLabel.Get(), ExamBurdenLabel.Get(), ExamInscriptionLabel.Get()})
+			if (Text) Text->SetVisibility(ESlateVisibility::Collapsed);
+		if (ExamIconBorder) ExamIconBorder->SetVisibility(ESlateVisibility::Collapsed);
+		RefreshCreatureExamination();
+		RefreshExamPaperDollPreview();
+		return;
+	}
+	if (ExamLevel) ExamLevel->SetVisibility(ESlateVisibility::Collapsed);
+	if (ExamCreatureDetailsScroll) ExamCreatureDetailsScroll->SetVisibility(ESlateVisibility::Collapsed);
+	for (UTextBlock* Text : ExamCreatureHeadings) if (Text) Text->SetVisibility(ESlateVisibility::Collapsed);
+	for (UTextBlock* Text : ExamAttributeLabels) if (Text) Text->SetVisibility(ESlateVisibility::Collapsed);
+	for (UTextBlock* Text : ExamAttributeValues) if (Text) Text->SetVisibility(ESlateVisibility::Collapsed);
+	FString Body = LastAppraisal.Summary.IsEmpty()
+		? (LastAppraisal.bSuccess ? FString() : TEXT("You fail to appraise the item."))
+		: LastAppraisal.Summary;
+    // The network summary contains placeholder spell names for non-DAT consumers.
+    // ItemExamineUI formats the complete spell list and descriptions below.
+    TArray<FString> SummaryLines;
+    Body.ParseIntoArrayLines(SummaryLines, false);
+    SummaryLines.RemoveAll([](const FString& Line)
+    {
+        return Line.StartsWith(TEXT("Spells (")) || Line.StartsWith(TEXT("  Spell "))
+            || (Line.StartsWith(TEXT("Damage ")) && Line.Contains(TEXT("  Speed ")) && Line.Contains(TEXT("  Offense ")));
+    });
+    Body = FString::Join(SummaryLines, TEXT("\n"));
+	// 2100006B has no ItemValueText/ItemBurdenText. Retail explicitly inserts
+	// these lines into ItemDisplayText when those optional controls are absent.
+	FString Prefix;
+	if (!Manager->FindElementUnder(TEXT("ItemExamineUI"), TEXT("ItemValueText")))
+		Prefix += LastAppraisal.bHasValue
+			? TEXT("Value: ") + FText::AsNumber(LastAppraisal.Value).ToString() + TEXT("\n") : TEXT("Value: ???\n");
+	if (!Manager->FindElementUnder(TEXT("ItemExamineUI"), TEXT("ItemBurdenText")))
+		Prefix += LastAppraisal.bHasBurden
+			? TEXT("Burden: ") + FText::AsNumber(LastAppraisal.Burden).ToString() + TEXT("\n") : TEXT("Burden: Unknown\n");
+	Body = Prefix + ACEAppraisalFormatting::ItemDetails(LastAppraisal, Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr) + Body;
+	const FString BodyEl = LastAppraisal.bIsCreature
+		? TEXT("BasicCreatureExam_Attributes")
+		: TEXT("ItemDisplayText");
+	TSharedPtr<FACEUIElement> BodyTarget = Manager->FindElementUnder(
+		TEXT("RootGameplay_FloatyExamination_Field"), BodyEl);
+	if (!BodyTarget.IsValid())
+	{
+		BodyTarget = Manager->FindElementUnder(
+			TEXT("RootGameplay_FloatyExamination_Field"),
+			LastAppraisal.bIsCreature ? TEXT("BasicCreatureExamineUI") : TEXT("ItemExamineUI"));
+	}
+	if (ExamBody && BodyTarget.IsValid())
+	{
+		// Bind the DAT glyph/style without moving the text out of its scroll box.
+		ExamBody->SetText(FText::FromString(Body));
+		ExamBody->SetColorAndOpacity(FSlateColor(BodyTarget->TextColor.Get(TextWhite)));
+		ExamBody->SetFont(ACEUIFontStyles::MakeSlateFont(ACEUIFontStyles::ResolveForElement(BodyTarget, 9)));
+		ExamBody->SetJustification(ETextJustify::Left);
+		ExamBody->SetVisibility(ESlateVisibility::HitTestInvisible);
+		if (auto* Retail = Cast<UACERetailTextBlock>(ExamBody))
+			Retail->SetRetailElement(Canvas->GetResourceResolver(), BodyTarget, Canvas->GetLastScale2D(), BodyTarget->Width, false);
+		ExamBody->SetAutoWrapText(true);
+		ExamBody->SetClipping(EWidgetClipping::Inherit);
+		if (!ExamScroll && Canvas->WidgetTree)
+		{
+			ExamScroll = Canvas->WidgetTree->ConstructWidget<UScrollBox>(UScrollBox::StaticClass());
+			ExamScroll->SetScrollBarVisibility(ESlateVisibility::Collapsed);
+			ExamScroll->SetClipping(EWidgetClipping::ClipToBounds);
+			ExamScroll->SetAnimateWheelScrolling(false);
+		}
+		if (ExamScroll)
+		{
+			if (ExamBody->GetParent() != ExamScroll) ExamScroll->AddChild(ExamBody);
+			if (ExamScrolledObjectGuid != LastAppraisal.ObjectGuid)
+			{
+				ExamScroll->SetScrollOffset(0.f);
+				ExamScrolledObjectGuid = LastAppraisal.ObjectGuid;
+			}
+			ExamScroll->SetVisibility(ESlateVisibility::Visible);
+			Canvas->PlaceWidgetAtElement(ExamScroll, BodyTarget, ExamOverlayZ + 1);
+		}
+	}
+
+	if (ExamScroll && BodyTarget)
+	{
+		const float MaxOffset = ExamScroll->GetScrollOffsetOfEnd();
+		SyncDatScrollbar(Manager->FindElementUnder(TEXT("ItemExamineUI"), TEXT("ItemDisplayTextScrollbar")),
+			MaxOffset > 0.f ? ExamScroll->GetScrollOffset() / MaxOffset : 0.f,
+			BodyTarget->Height / FMath::Max(1.f, MaxOffset + BodyTarget->Height));
+	}
+
+	if (!LastAppraisal.bIsCreature)
+	{
+		auto EnsureExamText = [&](TObjectPtr<UTextBlock>& Label)
+		{
+			if (!Label && Canvas->WidgetTree)
+			{
+				Label = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+				FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9);
+				Label->SetFont(Font);
+			}
+		};
+		EnsureExamText(ExamValueLabel);
+		EnsureExamText(ExamBurdenLabel);
+		EnsureExamText(ExamInscriptionLabel);
+		const FString ValueStr = LastAppraisal.bSuccess
+			? FString::Printf(TEXT("Value: %d"), LastAppraisal.Value) : FString();
+		const FString BurdenStr = LastAppraisal.bSuccess
+			? FString::Printf(TEXT("Burden: %d"), LastAppraisal.Burden) : FString();
+		if (!ValueStr.IsEmpty())
+		{
+			PlaceTextUnder(ExamValueLabel, TEXT("RootGameplay_FloatyExamination_Field"),
+				TEXT("ItemValueText"), ValueStr, 9, TextWhite, ExamOverlayZ + 2);
+		}
+		else if (ExamValueLabel)
+		{
+			ExamValueLabel->SetVisibility(ESlateVisibility::Collapsed);
+		}
+		if (!BurdenStr.IsEmpty())
+		{
+			PlaceTextUnder(ExamBurdenLabel, TEXT("RootGameplay_FloatyExamination_Field"),
+				TEXT("ItemBurdenText"), BurdenStr, 9, TextWhite, ExamOverlayZ + 3);
+		}
+		else if (ExamBurdenLabel)
+		{
+			ExamBurdenLabel->SetVisibility(ESlateVisibility::Collapsed);
+		}
+        const auto InscriptionElement=Manager->FindElementUnder(TEXT("RootGameplay_FloatyExamination_Field"),TEXT("ItemInscriptionText"));
+        FACEWorldObject InspectedObject;
+        const bool bInscribable=LastAppraisal.BoolProperties.FindRef(22)
+            || (Client->GetWorldObject(LastAppraisal.ObjectGuid,InspectedObject) && (InspectedObject.ObjectDescriptionFlags & 0x2));
+        if (InscriptionElement && (bInscribable || !LastAppraisal.Inscription.IsEmpty()))
+        {
+            // ItemExamineUI::SetInscription selects the DAT uninscribed state.
+            const bool bPrompt=LastAppraisal.Inscription.IsEmpty();
+            InscriptionElement->DefaultState=bPrompt ? 0x10000050u : 1u;
+            InscriptionElement->bUseExplicitState=true;
+            InscriptionElement->TextHorizontalJustification=bPrompt ? 1 : 2;
+            InscriptionElement->TextVerticalJustification=bPrompt ? 1 : 4;
+            InscriptionElement->ResolvePaintState(false,false,false);
+            PlaceTextOnElement(ExamInscriptionLabel,InscriptionElement,bPrompt ? TEXT("<Inscribe here>") : LastAppraisal.Inscription,
+                8,FLinearColor::Black,ExamOverlayZ+4);
+            ExamInscriptionLabel->SetColorAndOpacity(FLinearColor::Black);
+			EnsureExamText(ExamInscriptionSignature);
+			const FString Scribe = LastAppraisal.StringProperties.FindRef(8);
+			PlaceTextUnder(ExamInscriptionSignature, TEXT("RootGameplay_FloatyExamination_Field"),
+				TEXT("ItemInscriptionSignatureText"), bPrompt || Scribe.IsEmpty() ? FString() : TEXT("--")+Scribe,
+				8, FLinearColor::Black, ExamOverlayZ+4);
+			if (EditingInscriptionGuid == LastAppraisal.ObjectGuid && ExamInscriptionEditor)
+			{
+				ExamInscriptionLabel->SetVisibility(ESlateVisibility::Collapsed);
+				Canvas->PlaceWidgetAtElement(ExamInscriptionEditor, InscriptionElement, ExamOverlayZ+5, FMargin(2));
+				ExamInscriptionEditor->SetVisibility(ESlateVisibility::Visible);
+			}
+        }
+        else
+		{
+			if (ExamInscriptionLabel) ExamInscriptionLabel->SetVisibility(ESlateVisibility::Collapsed);
+			if (ExamInscriptionSignature) ExamInscriptionSignature->SetVisibility(ESlateVisibility::Collapsed);
+			if (ExamInscriptionEditor) ExamInscriptionEditor->SetVisibility(ESlateVisibility::Collapsed);
+		}
+		if (LastAppraisal.IconDid != 0)
+		{
+			if (!ExamIconBorder && Canvas->WidgetTree)
+			{
+				ExamIconBorder = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+				ExamIconBorder->SetPadding(FMargin(0.f));
+				ExamIconBorder->SetVisibility(ESlateVisibility::HitTestInvisible);
+			}
+			if (ExamIconBorder)
+			{
+				SetIconDid(ExamIconBorder, LastAppraisal.IconDid);
+				if (TSharedPtr<FACEUIElement> IconEl = Manager->FindElementUnder(
+						TEXT("RootGameplay_FloatyExamination_Field"), TEXT("ItemIcon")))
+				{
+					ExamIconBorder->SetVisibility(ESlateVisibility::HitTestInvisible);
+					Canvas->PlaceWidgetAtElement(ExamIconBorder, IconEl, ExamOverlayZ + 5, FMargin(0.f));
+					if (IconEl->ImageFileId != static_cast<uint32>(LastAppraisal.IconDid))
+					{
+						IconEl->ImageFileId = static_cast<uint32>(LastAppraisal.IconDid);
+					}
+				}
+			}
+		}
+		else if (ExamIconBorder)
+		{
+			ExamIconBorder->SetVisibility(ESlateVisibility::Collapsed);
+		}
+	}
+	else
+	{
+		if (ExamValueLabel) { ExamValueLabel->SetVisibility(ESlateVisibility::Collapsed); }
+		if (ExamBurdenLabel) { ExamBurdenLabel->SetVisibility(ESlateVisibility::Collapsed); }
+		if (ExamInscriptionLabel) { ExamInscriptionLabel->SetVisibility(ESlateVisibility::Collapsed); }
+		if (ExamIconBorder) { ExamIconBorder->SetVisibility(ESlateVisibility::Collapsed); }
+	}
+	RefreshExamPaperDollPreview();
+}
+
+void UACEUIGameplayBinder::RefreshPanelBodyText()
+{
+	if (CharacterInfoScroll && ActivePanelPage != TEXT("CharacterInfoPanel_Field")) CharacterInfoScroll->SetVisibility(ESlateVisibility::Collapsed);
+	if (CharacterInfoTitle && ActivePanelPage != TEXT("CharacterInfoPanel_Field")) CharacterInfoTitle->SetVisibility(ESlateVisibility::Collapsed);
+	if (!PanelBodyText || !Manager || !Canvas || ActivePanelPage.IsEmpty())
+	{
+		if (PanelBodyText) { PanelBodyText->SetVisibility(ESlateVisibility::Collapsed); }
+		return;
+	}
+	if (ActivePanelPage == TEXT("InventoryPanel_Field")
+		|| ActivePanelPage == TEXT("SkillManagementPanel_Field")
+		|| ActivePanelPage == TEXT("SpellManagementPanel_Field")
+		|| ActivePanelPage == TEXT("OptionsPanel_Field")
+		|| ActivePanelPage == TEXT("PositiveEffectsPanel_Field")
+		|| ActivePanelPage == TEXT("NegativeEffectsPanel_Field")
+		|| ActivePanelPage == TEXT("VitaePanel_Field")
+		|| ActivePanelPage == TEXT("LinkStatusPanel_Field")
+		|| ActivePanelPage == TEXT("SocialPanel_Field")
+		|| ActivePanelPage == TEXT("QuestManagementPanel_Field")
+		|| ActivePanelPage == TEXT("WorldPanel_Field")
+		|| ActivePanelPage == TEXT("AbusePanel_Field")
+		|| ActivePanelPage == TEXT("UrgentAssistancePanel_Field")
+		|| ActivePanelPage == TEXT("BookPanel_Field")
+		|| ActivePanelPage == TEXT("MiniGamePanel_Field"))
+	{
+		// These pages use DAT chrome + dedicated overlays — no full-page text slab.
+		PanelBodyText->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+	TSharedPtr<FACEUIElement> Page = Manager->FindElementByName(ActivePanelPage);
+	if (!Page.IsValid() || !Page->bVisible)
+	{
+		PanelBodyText->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+	FString Body;
+	if (ActivePanelPage == TEXT("CharacterInfoPanel_Field"))
+	{
+		Body = BuildCharacterInformation();
+	}
+	else
+	{
+		Body = ActivePanelPage;
+	}
+	PanelBodyText->SetVisibility(ESlateVisibility::HitTestInvisible);
+	PanelBodyText->SetText(FText::FromString(Body));
+	// CharacterInfo has an authored text region (CharacterInfoText, 8px inset under
+	// the 25px title bar) — bind to it when present instead of the whole page.
+	TSharedPtr<FACEUIElement> TextEl = ActivePanelPage == TEXT("CharacterInfoPanel_Field")
+		? Manager->FindElementUnder(ActivePanelPage, TEXT("CharacterInfoText"))
+		: nullptr;
+	if (TextEl.IsValid())
+	{
+		if (const auto Background = Manager->FindElementUnder(ActivePanelPage,TEXT("CharacterInfoBackground")))
+		{
+			Background->Width=Page->Width;
+			Background->Height=FMath::Max(1,Page->Height-Background->Y);
+			TextEl->Width=FMath::Max(1,Page->Width-38);
+			TextEl->Height=Background->Height;
+			if (const auto Bar=Manager->FindElementUnder(ActivePanelPage,TEXT("CharacterInfoText_Scrollbar")))
+			{
+				Bar->X=Page->Width-20;
+				Bar->Height=Background->Height;
+			}
+		}
+		if (!CharacterInfoTitle) CharacterInfoTitle=Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		PlaceTextOnElement(CharacterInfoTitle,Manager->FindElementUnder(ActivePanelPage,TEXT("TitleText")),
+			TEXT("Character Information"),10,TextWhite,551,true);
+		PanelBodyText->SetJustification(ETextJustify::Center);
+		if (auto* Retail = Cast<UACERetailTextBlock>(PanelBodyText))
+			Retail->SetRetailElement(Canvas->GetResourceResolver(),TextEl,Canvas->GetLastScale2D(),TextEl->Width,false);
+		if (!CharacterInfoScroll)
+		{
+			CharacterInfoScroll=Canvas->WidgetTree->ConstructWidget<UScrollBox>();
+			CharacterInfoScroll->SetScrollBarVisibility(ESlateVisibility::Collapsed);
+			CharacterInfoScroll->SetClipping(EWidgetClipping::ClipToBounds);
+			CharacterInfoScroll->SetAnimateWheelScrolling(false);
+		}
+		if (PanelBodyText->GetParent()!=CharacterInfoScroll) CharacterInfoScroll->AddChild(PanelBodyText);
+		CharacterInfoScroll->SetVisibility(ESlateVisibility::Visible);
+		Canvas->PlaceWidgetAtElement(CharacterInfoScroll,TextEl,550);
+		const float Max=CharacterInfoScroll->GetScrollOffsetOfEnd();
+		SyncDatScrollbar(Manager->FindElementUnder(ActivePanelPage,TEXT("CharacterInfoText_Scrollbar")),
+			Max>0 ? CharacterInfoScroll->GetScrollOffset()/Max : 0, TextEl->Height/FMath::Max(1.f,Max+TextEl->Height));
+	}
+	else
+	{
+		Canvas->PlaceWidgetAtElement(PanelBodyText, Page, 550, FMargin(10.f, 28.f, 10.f, 10.f));
+	}
+}
+
+UBorder* UACEUIGameplayBinder::EnsureIconBorder(TArray<TObjectPtr<UBorder>>& Array, int32 Index)
+{
+	if (!Canvas || !Canvas->WidgetTree || Index < 0)
+	{
+		return nullptr;
+	}
+	while (Array.Num() <= Index)
+	{
+		Array.Add(nullptr);
+	}
+	if (!IsValid(Array[Index]))
+	{
+		UBorder* B = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+		B->SetPadding(FMargin(0.f));
+		// HitTestInvisible so clicks reach the canvas → manager / TryHandleOverlayClick.
+		B->SetVisibility(ESlateVisibility::HitTestInvisible);
+		FSlateBrush Clear;
+		Clear.DrawAs = ESlateBrushDrawType::NoDrawType;
+		B->SetBrush(Clear);
+		B->SetBrushColor(FLinearColor::Transparent);
+		Array[Index] = B;
+	}
+	return Array[Index];
+}
+
+void UACEUIGameplayBinder::SetIconDid(UBorder* Border, int32 IconDid, FLinearColor Tint)
+{
+	if (!IsValid(Border))
+	{
+		return;
+	}
+	FAceIconPaintCache& Cached = IconPaintCache.FindOrAdd(Border);
+	constexpr int32 IconStyleRev = 4;
+	const bool bWantClear = (IconDid == 0);
+	if (!bWantClear && Cached.Did == IconDid && Cached.Tint.Equals(Tint, 0.002f)
+		&& !Cached.bCleared && Cached.Style == IconStyleRev)
+	{
+		return;
+	}
+	if (bWantClear && Cached.bCleared && Cached.Style == IconStyleRev)
+	{
+		return;
+	}
+	if (IconDid != 0 && Canvas && Canvas->GetResourceResolver())
+	{
+		if (UTexture2D* Tex = Canvas->GetResourceResolver()->ResolveIconTexture(static_cast<uint32>(IconDid)))
+		{
+			FSlateBrush Brush;
+			Brush.SetResourceObject(Tex);
+			// Image honors texture alpha so parchment slot chrome shows through cutouts.
+			// ImageSize = cell size stretches the 32×32 DAT icon (letterboxing was a white frame).
+			Brush.DrawAs = ESlateBrushDrawType::Image;
+			Brush.Tiling = ESlateBrushTileType::NoTile;
+			FVector2D ImageSize(
+				static_cast<float>(FMath::Max(1, Tex->GetSizeX())),
+				static_cast<float>(FMath::Max(1, Tex->GetSizeY())));
+			if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Border->Slot))
+			{
+				const FVector2D Sz = Slot->GetSize();
+				if (Sz.X >= 1.f && Sz.Y >= 1.f)
+				{
+					ImageSize = Sz;
+				}
+			}
+			Brush.ImageSize = ImageSize;
+			Border->SetBrush(Brush);
+			Border->SetBrushColor(Tint);
+			Border->SetPadding(FMargin(0.f));
+			Cached.Did = IconDid;
+			Cached.Tint = Tint;
+			Cached.bCleared = false;
+			Cached.Style = IconStyleRev;
+			return;
+		}
+	}
+	// Retail empty slots are open paper — no dark placeholder slab.
+	FSlateBrush Clear;
+	Clear.DrawAs = ESlateBrushDrawType::NoDrawType;
+	Border->SetBrush(Clear);
+	Border->SetBrushColor(FLinearColor::Transparent);
+	Cached.Did = 0;
+	Cached.Tint = FLinearColor::Transparent;
+	Cached.bCleared = true;
+	Cached.Style = IconStyleRev;
+}
+
+void UACEUIGameplayBinder::SetSpellIcon(UBorder* Border, int32 SpellId)
+{
+	if (!Border || !Canvas || !Canvas->GetResourceResolver()) return;
+	UTexture2D* Texture = Canvas->GetResourceResolver()->ResolveSpellIcon(SpellId);
+	if (Texture && Border->Background.GetResourceObject() == Texture) return;
+	FSlateBrush Brush; Brush.SetResourceObject(Texture); Brush.ImageSize = FVector2D(32, 32);
+	Brush.DrawAs = Texture ? ESlateBrushDrawType::Image : ESlateBrushDrawType::NoDrawType;
+	Border->SetBrush(Brush); Border->SetBrushColor(FLinearColor::White); Border->SetPadding(FMargin(0));
+	IconPaintCache.Remove(Border);
+}
+
+void UACEUIGameplayBinder::SetItemSlotBackground(UBorder* Border, const FACEWorldObject* Item)
+{
+    if (!Border || !Canvas || !Canvas->GetResourceResolver()) return;
+    if (!Item) { SetIconDid(Border, DidInvSlotBg); return; }
+    UTexture2D* Texture = Canvas->GetResourceResolver()->ResolveItemBackground(Item->ItemType, Item->IconUnderlayId);
+    if (Border->Background.GetResourceObject() == Texture && Texture) return;
+    FSlateBrush Brush;
+    Brush.DrawAs = Texture ? ESlateBrushDrawType::Image : ESlateBrushDrawType::NoDrawType;
+    Brush.SetResourceObject(Texture); Brush.ImageSize = FVector2D(32,32);
+    Border->SetBrush(Brush); Border->SetBrushColor(FLinearColor::White);
+    IconPaintCache.Remove(Border);
+}
+
+void UACEUIGameplayBinder::SetItemSlotForeground(UBorder* Border, const FACEWorldObject* Item)
+{
+    if (!Border || !Canvas || !Canvas->GetResourceResolver()) return;
+    if (!Item) { SetIconDid(Border,0); return; }
+    const bool bForSale = OpenVendorGuid != 0 && VendorSellCart.ContainsByPredicate(
+        [Item](const TPair<int32,int32>& Entry) { return Entry.Value == Item->Guid; });
+    UTexture2D* Texture = Canvas->GetResourceResolver()->ResolveItemForeground(Item->IconId,Item->IconOverlayId,Item->UiEffects,bForSale);
+    const float Flash = LastSelection.bValid && Item->Guid == LastSelection.Guid
+        ? FMath::Clamp(float((SelectionFlashUntil - FPlatformTime::Seconds()) / .4),0.f,1.f) : 0.f;
+    Border->SetBrushColor(FLinearColor(1.f+Flash,1.f+Flash,1.f+Flash,1));
+    if (Border->Background.GetResourceObject() == Texture && Texture) return;
+    FSlateBrush Brush;
+    Brush.DrawAs = Texture ? ESlateBrushDrawType::Image : ESlateBrushDrawType::NoDrawType;
+    Brush.SetResourceObject(Texture); Brush.ImageSize = FVector2D(32,32);
+    Border->SetBrush(Brush); Border->SetBrushColor(FLinearColor::White);
+    IconPaintCache.Remove(Border);
+}
+
+bool UACEUIGameplayBinder::EnsurePaperDollPreviewRig()
+{
+	// Binder is a plain UObject — take the world from the widget / controller that owns the HUD.
+	UWorld* World = Canvas ? Canvas->GetWorld() : nullptr;
+	if (!World && PlayerController)
+	{
+		World = PlayerController->GetWorld();
+	}
+	if (!World)
+	{
+		World = GetWorld();
+	}
+	if (!World)
+	{
+		return false;
+	}
+	// LayoutDesc PaperDoll is 224x214; render at 2x so the doll stays crisp on large viewports.
+	constexpr int32 RtWidth = 448;
+	constexpr int32 RtHeight = 428;
+	if (!PaperDollRenderTarget)
+	{
+		PaperDollRenderTarget = NewObject<UTextureRenderTarget2D>(this);
+		PaperDollRenderTarget->ClearColor = FLinearColor(0.f, 0.f, 0.f, 1.f);
+        PaperDollRenderTarget->InitCustomFormat(RtWidth, RtHeight, PF_FloatRGBA, true);
+		PaperDollRenderTarget->UpdateResourceImmediate(true);
+	}
+	if (!PaperDollPreviewActor)
+	{
+		FActorSpawnParameters Params;
+		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		Params.ObjectFlags |= RF_Transient;
+		// Far off the playfield so the rig's own light can't spill onto the world.
+		PaperDollPreviewActor = World->SpawnActor<AActor>(AActor::StaticClass(),
+			FVector(-50000.f, -46000.f, -50000.f), FRotator::ZeroRotator, Params);
+		if (!PaperDollPreviewActor)
+		{
+			return false;
+		}
+		// The actor must stay game-visible: SetActorHiddenInGame also hides it from captures.
+		// Parts are flagged VisibleInSceneCaptureOnly in RefreshPaperDollPreview instead.
+		USceneComponent* Root = NewObject<USceneComponent>(PaperDollPreviewActor, TEXT("PaperDollRoot"));
+		PaperDollPreviewActor->SetRootComponent(Root);
+		Root->RegisterComponent();
+		PaperDollPreviewActor->SetActorLocation(FVector(-50000.f,-46000.f,-50000.f));
+		UACECharacterAppearanceComponent* Appearance = NewObject<UACECharacterAppearanceComponent>(
+			PaperDollPreviewActor, TEXT("PaperDollAppearance"));
+		Appearance->RegisterComponent();
+		UPointLightComponent* Light = NewObject<UPointLightComponent>(PaperDollPreviewActor, TEXT("PaperDollLight"));
+		Light->SetupAttachment(Root);
+		Light->RegisterComponent();
+		Light->SetIntensity(3000.f);
+		Light->SetAttenuationRadius(1200.f);
+		Light->SetCastShadows(false);
+		Light->SetRelativeLocation(FVector(-150.f, -80.f, 150.f));
+		PaperDollCapture = NewObject<USceneCaptureComponent2D>(PaperDollPreviewActor, TEXT("PaperDollCapture"));
+		PaperDollCapture->SetupAttachment(Root);
+		PaperDollCapture->RegisterComponent();
+		PaperDollCapture->SetAbsolute(true, true, true);
+		PaperDollCapture->TextureTarget = PaperDollRenderTarget;
+		PaperDollCapture->CaptureSource = ESceneCaptureSource::SCS_SceneColorHDR;
+		PaperDollCapture->bCaptureEveryFrame = false;
+		PaperDollCapture->bCaptureOnMovement = false;
+		PaperDollCapture->ShowFlags.SetAtmosphere(false);
+		PaperDollCapture->ShowFlags.SetFog(false);
+		PaperDollCapture->ShowFlags.SetMotionBlur(false);
+		PaperDollCapture->ShowFlags.SetAntiAliasing(false);
+		PaperDollCapture->ShowFlags.SetEyeAdaptation(false);
+		PaperDollCapture->ShowFlags.SetBloom(false);
+		PaperDollCapture->PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
+		PaperDollCapture->FOVAngle = ACERetailPaperDoll::HorizontalFov(224.f / 214.f);
+	}
+	return PaperDollPreviewActor != nullptr && PaperDollCapture != nullptr;
+}
+
+void UACEUIGameplayBinder::RefreshPaperDollPreview()
+{
+	if (!Manager || !Canvas || !Canvas->WidgetTree || !Client)
+	{
+		return;
+	}
+	TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(TEXT("InventoryPanel_Field"), TEXT("PaperDoll"));
+	if (!El.IsValid())
+	{
+		El = Manager->FindElementByName(TEXT("PaperDoll"));
+	}
+	const int32 Self = Client->GetPlayerGuid();
+	FACEWorldObject Obj;
+	if (!El.IsValid() || Self == 0 || !Client->GetWorldObject(Self, Obj) || Obj.SetupId == 0
+		|| !EnsurePaperDollPreviewRig())
+	{
+		if (PaperDollModelImage) { PaperDollModelImage->SetVisibility(ESlateVisibility::Collapsed); }
+		return;
+	}
+	if (!PaperDollModelImage)
+	{
+		PaperDollModelImage = Canvas->WidgetTree->ConstructWidget<UACECaptureImage>(UACECaptureImage::StaticClass());
+	}
+	if (!PaperDollModelImage)
+	{
+		return;
+	}
+	if (PaperDollModelImage->GetBrush().GetResourceObject() != PaperDollRenderTarget)
+	{
+		FSlateBrush Brush;
+		Brush.SetResourceObject(PaperDollRenderTarget);
+		Brush.ImageSize = FVector2D(El->Width, El->Height);
+		Brush.DrawAs = ESlateBrushDrawType::Image;
+		PaperDollModelImage->SetBrush(Brush);
+	}
+	PaperDollModelImage->SetVisibility(ESlateVisibility::HitTestInvisible);
+	// Show Equipment ON = slot chrome view (hide 3D). OFF = 3D model view.
+	if (bShowPaperdollSlots)
+	{
+		PaperDollModelImage->SetVisibility(ESlateVisibility::Collapsed);
+	}
+	else
+	{
+		// Below the equipment icon overlays (OverlayZ) so slot icons still read on top when shown.
+		Canvas->PlaceWidgetAtElement(PaperDollModelImage, El, 120000 - 3);
+	}
+
+	// Clothing fingerprint only — jewelry/weapon guid churn recooked the paperdoll on every
+	// wield even when ObjDesc was unchanged (multi-hundred-ms hitch).
+	uint32 Hash = HashCombine(GetTypeHash(Obj.SetupId), GetTypeHash(Obj.Appearance.GetContentHash()));
+	Hash = HashCombine(Hash, GetTypeHash(LastVitals.HeritageGroup));
+	Hash = HashCombine(Hash, GetTypeHash(Obj.Scale));
+	// Retail turns the inventory creature independently of its attached camera.
+	if (PaperDollPreviewActor)
+	{
+		PaperDollPreviewActor->SetActorRotation(FRotator::ZeroRotator);
+		if (UACECharacterAppearanceComponent* PreviewApp =
+			PaperDollPreviewActor->FindComponentByClass<UACECharacterAppearanceComponent>())
+		{
+			PreviewApp->MeshFacingYawDegrees = ACERetailPaperDoll::HeadingDegrees;
+		}
+	}
+	if (PaperDollAppliedGuid == Self && PaperDollAppliedHash == Hash)
+	{
+		// This is a fixed authored pose. Changes rebuild it; selection flash
+		// explicitly captures its changed materials. Reuse the completed texture.
+		return;
+	}
+	UACECharacterAppearanceComponent* Appearance =
+		PaperDollPreviewActor->FindComponentByClass<UACECharacterAppearanceComponent>();
+	if (!Appearance)
+	{
+		return;
+	}
+	FACEWorldObject Preview = Obj;
+	Preview.bIsSelf = false; // never treat the rig as the hidden local player
+	Appearance->MeshFacingYawDegrees = ACERetailPaperDoll::HeadingDegrees;
+	Appearance->ClearAppearance();
+	if (!Appearance->ApplyWorldObject(Preview, 100.f, false))
+	{
+		return;
+	}
+	Appearance->SetPreviewAnimation(Canvas->GetResourceResolver()->ResolvePaperDollAnimation(LastVitals.HeritageGroup), false, 1);
+	PaperDollPreviewActor->SetActorRotation(FRotator::ZeroRotator);
+	PaperDollCapture->ClearShowOnlyComponents();
+	TArray<UPrimitiveComponent*> Prims;
+	PaperDollPreviewActor->GetComponents<UPrimitiveComponent>(Prims);
+	for (UPrimitiveComponent* Prim : Prims)
+	{
+		if (!Prim || Prim->ComponentHasTag(TEXT("ACECollisionOnly")) || Prim->IsA<UCapsuleComponent>() || Prim->IsA<UTextRenderComponent>())
+		{
+			if (Prim)
+			{
+				Prim->SetVisibility(false);
+				Prim->SetHiddenInGame(true);
+			}
+			continue;
+		}
+		Prim->SetHiddenInGame(false);
+		Prim->SetVisibility(true, false);
+		Prim->SetVisibleInSceneCaptureOnly(true);
+		PaperDollCapture->ShowOnlyComponent(Prim);
+	}
+	PaperDollCapture->FOVAngle = ACERetailPaperDoll::HorizontalFov(224.f / 214.f);
+	PaperDollCapture->SetWorldLocation(PaperDollPreviewActor->GetActorLocation()
+		+ ACERetailPaperDoll::CameraPositionCm(LastVitals.HeritageGroup));
+	PaperDollCapture->SetWorldRotation(FRotator(0.f, 90.f, 0.f));
+	PaperDollAppliedGuid = Self;
+	PaperDollAppliedHash = Hash;
+	if (PaperDollCapture)
+	{
+		PaperDollCapture->CaptureScene();
+	}
+}
+
+void UACEUIGameplayBinder::ReleasePaperDollPreview()
+{
+	PaperDollAppliedGuid = 0;
+	PaperDollAppliedHash = 0;
+	if (PaperDollModelImage)
+	{
+		PaperDollModelImage->SetVisibility(ESlateVisibility::Collapsed);
+	}
+	if (PaperDollPreviewActor)
+	{
+		PaperDollPreviewActor->Destroy();
+		PaperDollPreviewActor = nullptr;
+	}
+	PaperDollCapture = nullptr;
+	PaperDollRenderTarget = nullptr;
+}
+
+bool UACEUIGameplayBinder::ApplyPreviewCaptureAppearance(AActor* PreviewActor, USceneCaptureComponent2D* Capture,
+	const FACEWorldObject& Obj, float InWorldScale)
+{
+	if (!PreviewActor || !Capture)
+	{
+		return false;
+	}
+	UACECharacterAppearanceComponent* Appearance =
+		PreviewActor->FindComponentByClass<UACECharacterAppearanceComponent>();
+	if (!Appearance)
+	{
+		return false;
+	}
+	FACEWorldObject Preview = Obj;
+	Preview.bIsSelf = false;
+	Appearance->SetPreviewCapture(true);
+	Appearance->MeshFacingYawDegrees = ACERetailPaperDoll::HeadingDegrees;
+	Appearance->ClearAppearance();
+	if (!Appearance->ApplyWorldObject(Preview, InWorldScale, false))
+	{
+		return false;
+	}
+	Appearance->SetLocomotionInput(0.f, 0.f, false, 1.f);
+	PreviewActor->SetActorRotation(FRotator::ZeroRotator);
+	// Setup placements are not the creature's Ready pose (notably Undead heads).
+	// Fit after posing, and keep UI captures out of world-distance throttling.
+	Appearance->TickComponent(0.f, LEVELTICK_All, nullptr);
+	Capture->ClearShowOnlyComponents();
+	TArray<UPrimitiveComponent*> Prims;
+	PreviewActor->GetComponents<UPrimitiveComponent>(Prims);
+	for (UPrimitiveComponent* Prim : Prims)
+	{
+		// Reusing the rig after a creature with fewer/null parts leaves those
+		// components hidden in game. ApplySetupParts restores section visibility,
+		// so clear the previous capture's hide flag before testing IsVisible().
+		if (Prim && Prim->IsA<UMeshComponent>() && Prim->IsAttachedTo(Appearance->GetMeshRoot()))
+			Prim->SetHiddenInGame(false);
+		// The capture owns an editor camera visualization mesh too. Only the
+		// appearance's visible DAT parts belong in the portrait or its bounds.
+		if (!Prim || !Prim->IsA<UMeshComponent>() || !Prim->IsAttachedTo(Appearance->GetMeshRoot()) || !Prim->IsVisible())
+		{
+			if (Prim)
+			{
+				Prim->SetVisibility(false);
+				Prim->SetHiddenInGame(true);
+			}
+			continue;
+		}
+		Prim->SetHiddenInGame(false);
+		Prim->SetVisibility(true, false);
+		Prim->SetVisibleInSceneCaptureOnly(true);
+		Capture->ShowOnlyComponent(Prim);
+	}
+	// BasicCreatureExamineUI::Init fits the rotated physics object's bounding
+	// box using a 45-degree vertical field of view. It is not the inventory's
+	// fixed heritage camera: long, wide and short creatures must fit as well.
+	FBox Bounds(ForceInit);
+	for (UPrimitiveComponent* Prim : Prims)
+	{
+		if (Prim && Prim->IsA<UMeshComponent>() && Prim->IsAttachedTo(Appearance->GetMeshRoot()) && Prim->IsVisible())
+		{
+			Prim->UpdateBounds();
+			Bounds += Prim->Bounds.GetBox();
+		}
+	}
+	if (!Bounds.IsValid) return false;
+	const float Aspect = Capture->TextureTarget ? float(Capture->TextureTarget->SizeX) / Capture->TextureTarget->SizeY : 300.f / 265.f;
+	const FVector Size = Bounds.GetSize();
+	const float Distance = FMath::Max(Size.Z, Size.X / Aspect) * 1.2071068f + Size.Y * .5f;
+	Capture->FOVAngle = ACERetailPaperDoll::HorizontalFov(Aspect);
+	Capture->SetWorldLocation(Bounds.GetCenter() - FVector(0.f, FMath::Max(1.f, Distance), 0.f));
+	Capture->SetWorldRotation(FRotator(0.f, 90.f, 0.f));
+	Capture->CaptureScene();
+	return true;
+}
+
+bool UACEUIGameplayBinder::EnsureExamPaperDollPreviewRig()
+{
+	UWorld* World = Canvas ? Canvas->GetWorld() : nullptr;
+	if (!World && PlayerController)
+	{
+		World = PlayerController->GetWorld();
+	}
+	if (!World)
+	{
+		World = GetWorld();
+	}
+	if (!World)
+	{
+		return false;
+	}
+	constexpr int32 RtWidth = 600;
+	constexpr int32 RtHeight = 530;
+	if (!ExamPaperDollRenderTarget)
+	{
+		ExamPaperDollRenderTarget = NewObject<UTextureRenderTarget2D>(this);
+		ExamPaperDollRenderTarget->ClearColor = FLinearColor(0.f, 0.f, 0.f, 1.f);
+		ExamPaperDollRenderTarget->InitCustomFormat(RtWidth, RtHeight, PF_FloatRGBA, true);
+		ExamPaperDollRenderTarget->UpdateResourceImmediate(true);
+	}
+	if (!ExamPaperDollPreviewActor)
+	{
+		FActorSpawnParameters Params;
+		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		Params.ObjectFlags |= RF_Transient;
+		ExamPaperDollPreviewActor = World->SpawnActor<AActor>(AActor::StaticClass(),
+			FVector(-50000.f, -48000.f, -50000.f), FRotator::ZeroRotator, Params);
+		if (!ExamPaperDollPreviewActor)
+		{
+			return false;
+		}
+		USceneComponent* Root = NewObject<USceneComponent>(ExamPaperDollPreviewActor, TEXT("ExamPaperDollRoot"));
+		ExamPaperDollPreviewActor->SetRootComponent(Root);
+		Root->RegisterComponent();
+		ExamPaperDollPreviewActor->SetActorLocation(FVector(-50000.f, -48000.f, -50000.f));
+		UACECharacterAppearanceComponent* Appearance = NewObject<UACECharacterAppearanceComponent>(
+			ExamPaperDollPreviewActor, TEXT("ExamPaperDollAppearance"));
+		Appearance->RegisterComponent();
+		UPointLightComponent* Light = NewObject<UPointLightComponent>(ExamPaperDollPreviewActor, TEXT("ExamPaperDollLight"));
+		Light->SetupAttachment(Root);
+		Light->RegisterComponent();
+		Light->SetIntensity(3000.f);
+		Light->SetAttenuationRadius(1200.f);
+		Light->SetCastShadows(false);
+		Light->SetRelativeLocation(FVector(-150.f, -80.f, 150.f));
+		ExamPaperDollCapture = NewObject<USceneCaptureComponent2D>(ExamPaperDollPreviewActor, TEXT("ExamPaperDollCapture"));
+		ExamPaperDollCapture->SetupAttachment(Root);
+		ExamPaperDollCapture->RegisterComponent();
+		ExamPaperDollCapture->SetAbsolute(true, true, true);
+		ExamPaperDollCapture->TextureTarget = ExamPaperDollRenderTarget;
+		ExamPaperDollCapture->CaptureSource = ESceneCaptureSource::SCS_SceneColorHDR;
+		ExamPaperDollCapture->bCaptureEveryFrame = false;
+		ExamPaperDollCapture->bCaptureOnMovement = false;
+		ExamPaperDollCapture->ShowFlags.SetAtmosphere(false);
+		ExamPaperDollCapture->ShowFlags.SetFog(false);
+		ExamPaperDollCapture->ShowFlags.SetMotionBlur(false);
+		ExamPaperDollCapture->ShowFlags.SetAntiAliasing(false);
+		ExamPaperDollCapture->ShowFlags.SetEyeAdaptation(false);
+		ExamPaperDollCapture->ShowFlags.SetBloom(false);
+		ExamPaperDollCapture->PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
+		ExamPaperDollCapture->FOVAngle = 42.f;
+	}
+	return ExamPaperDollPreviewActor != nullptr && ExamPaperDollCapture != nullptr;
+}
+
+void UACEUIGameplayBinder::RefreshExamPaperDollPreview()
+{
+	if (!Manager || !Canvas || !Canvas->WidgetTree || !Client)
+	{
+		if (ExamPaperDollModelImage) { ExamPaperDollModelImage->SetVisibility(ESlateVisibility::Collapsed); }
+		return;
+	}
+	TSharedPtr<FACEUIElement> ExamRoot = Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field"));
+	TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(TEXT("RootGameplay_FloatyExamination_Field"), TEXT("Exam_PaperDoll"));
+	if (!El.IsValid())
+	{
+		El = Manager->FindElementByName(TEXT("Exam_PaperDoll"));
+	}
+	FACEWorldObject Obj;
+	const bool bHaveObj = LastAppraisal.bIsCreature && LastAppraisal.ObjectGuid != 0
+		&& Client->GetWorldObject(LastAppraisal.ObjectGuid, Obj) && Obj.SetupId != 0;
+	if (!ExamRoot.IsValid() || !ExamRoot->bVisible || !El.IsValid() || !El->bVisible || !bHaveObj
+		|| !EnsureExamPaperDollPreviewRig())
+	{
+		if (ExamPaperDollModelImage) { ExamPaperDollModelImage->SetVisibility(ESlateVisibility::Collapsed); }
+		if (ExamPaperDollPreviewActor)
+			if (auto* Appearance = ExamPaperDollPreviewActor->FindComponentByClass<UACECharacterAppearanceComponent>())
+				Appearance->SetComponentTickEnabled(false);
+		return;
+	}
+	if (auto* Appearance = ExamPaperDollPreviewActor->FindComponentByClass<UACECharacterAppearanceComponent>())
+		Appearance->SetComponentTickEnabled(true);
+	if (!ExamPaperDollModelImage)
+	{
+		ExamPaperDollModelImage = Canvas->WidgetTree->ConstructWidget<UACECaptureImage>(UACECaptureImage::StaticClass());
+	}
+	if (!ExamPaperDollModelImage)
+	{
+		return;
+	}
+	if (ExamPaperDollModelImage->GetBrush().GetResourceObject() != ExamPaperDollRenderTarget)
+	{
+		FSlateBrush Brush;
+		Brush.SetResourceObject(ExamPaperDollRenderTarget);
+		Brush.ImageSize = FVector2D(El->Width, El->Height);
+		Brush.DrawAs = ESlateBrushDrawType::Image;
+		ExamPaperDollModelImage->SetBrush(Brush);
+	}
+	ExamPaperDollModelImage->SetVisibility(ESlateVisibility::HitTestInvisible);
+	Canvas->PlaceWidgetAtElement(ExamPaperDollModelImage, El, 100000 - 2);
+
+	uint32 Hash = HashCombine(GetTypeHash(Obj.SetupId), GetTypeHash(Obj.Appearance.GetContentHash()));
+	Hash = HashCombine(Hash, GetTypeHash(Obj.Scale));
+	Hash = HashCombine(Hash, GetTypeHash(FIntPoint(El->Width, El->Height)));
+	if (ExamPaperDollAppliedGuid == LastAppraisal.ObjectGuid && ExamPaperDollAppliedHash == Hash)
+	{
+		if (ExamPaperDollCapture)
+		{
+			static double LastExamPaperDollCapSec = 0.0;
+			const double Now = FPlatformTime::Seconds();
+			if (Now - LastExamPaperDollCapSec >= 0.125)
+			{
+				LastExamPaperDollCapSec = Now;
+				ExamPaperDollCapture->CaptureScene();
+			}
+		}
+		return;
+	}
+	const float Scale = PlayerController ? PlayerController->WorldScale : 100.f;
+	const float ResolutionScale = FMath::Min(2.f, 2048.f / FMath::Max(El->Width, El->Height));
+	const FIntPoint CaptureSize(FMath::Max(1, FMath::RoundToInt(El->Width * ResolutionScale)),
+		FMath::Max(1, FMath::RoundToInt(El->Height * ResolutionScale)));
+	if (ExamPaperDollRenderTarget->SizeX != CaptureSize.X || ExamPaperDollRenderTarget->SizeY != CaptureSize.Y)
+		ExamPaperDollRenderTarget->ResizeTarget(CaptureSize.X, CaptureSize.Y);
+	if (!ApplyPreviewCaptureAppearance(ExamPaperDollPreviewActor, ExamPaperDollCapture, Obj, Scale))
+	{
+		// Streaming can make a setup temporarily unavailable. Retry it on the
+		// next refresh instead of caching an empty or previous subject's model.
+		ExamPaperDollAppliedGuid = 0;
+		ExamPaperDollAppliedHash = 0;
+		ExamPaperDollModelImage->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+	ExamPaperDollAppliedGuid = LastAppraisal.ObjectGuid;
+	ExamPaperDollAppliedHash = Hash;
+}
+
+void UACEUIGameplayBinder::ReleaseExamPaperDollPreview()
+{
+	ExamPaperDollAppliedGuid = 0;
+	ExamPaperDollAppliedHash = 0;
+	if (ExamPaperDollModelImage)
+	{
+		ExamPaperDollModelImage->SetVisibility(ESlateVisibility::Collapsed);
+	}
+	if (ExamPaperDollPreviewActor)
+	{
+		ExamPaperDollPreviewActor->Destroy();
+		ExamPaperDollPreviewActor = nullptr;
+	}
+	ExamPaperDollCapture = nullptr;
+	ExamPaperDollRenderTarget = nullptr;
+}
+
+void UACEUIGameplayBinder::RefreshInventoryBurdenOverlays()
+{
+	if (!Manager || !Canvas || !Canvas->WidgetTree || !Client
+		|| ActivePanelPage != TEXT("InventoryPanel_Field"))
+	{
+		if (InvBurdenBeginLabel) { InvBurdenBeginLabel->SetVisibility(ESlateVisibility::Collapsed); }
+		if (InvBurdenValueLabel) { InvBurdenValueLabel->SetVisibility(ESlateVisibility::Collapsed); }
+		if (InvTitleLabel) { InvTitleLabel->SetVisibility(ESlateVisibility::Collapsed); }
+		return;
+	}
+
+	FACEWorldObject SelfObj;
+	Client->GetWorldObject(Client->GetPlayerGuid(), SelfObj);
+	const FACEPlayerVitals Vitals = Client->GetPlayerVitals();
+	// Retail / ACE.Server: capacity = buffed Strength * (150 + 30 * carrying augs).
+	const int32 Strength = FMath::Max(1, Vitals.bValid ? Vitals.GetBuffedStrength() : 100);
+	const int32 NumAugs = Vitals.bValid ? FMath::Clamp(Vitals.CarryingCapacityAugs, 0, 5) : 0;
+	const int32 BonusBurden = FMath::Clamp(30 * NumAugs, 0, 150);
+	const int32 Capacity = FMath::Max(1, 150 * Strength + Strength * BonusBurden);
+	// Prefer PropertyInt.EncumbranceVal; fall back to ObjectCreate Burden on the player weenie.
+	int32 Enc = 0;
+	if (!Client->TryGetPlayerEncumbrance(Enc))
+	{
+		if (SelfObj.Burden > 0)
+		{
+			Enc = SelfObj.Burden;
+		}
+		else
+		{
+			auto AddBurden = [&](const TArray<FACEWorldObject>& Items)
+			{
+				for (const FACEWorldObject& It : Items)
+				{
+					Enc += FMath::Max(0, It.Burden);
+				}
+			};
+			AddBurden(Client->GetEquippedItems());
+			AddBurden(Client->GetPackItems(Client->GetPlayerGuid()));
+			for (const FACEWorldObject& Pack : Client->GetPlayerPacks())
+			{
+				Enc += FMath::Max(0, Pack.Burden);
+				AddBurden(Client->GetPackItems(Pack.Guid));
+			}
+		}
+	}
+	Enc = FMath::Max(0, Enc);
+	const float BurdenRatio = static_cast<float>(Enc) / static_cast<float>(Capacity);
+	Client->SetBurden(BurdenRatio);
+
+	// Green while under capacity, yellow from 100%, red when overburdened (≥200% immobile ramp).
+	const FLinearColor BurdenTint = FLinearColor::White;
+	if (TSharedPtr<FACEUIElement> Meter = Manager->FindElementUnder(
+		TEXT("InventoryPanel_Field"), TEXT("Inv_BurdenBar")))
+	{
+		Meter->bVisible = true;
+		// Retail gmBackpackUI::SetLoadLevel: meter attribute = clamp(load / 3, 0..1)
+		// — the bar saturates at 300% burden, not at capacity.
+		Meter->MeterFillFraction = FMath::Clamp(BurdenRatio / 3.f, 0.f, 1.f);
+		Meter->ImageTint = BurdenTint;
+		// Tint fill children as well (retail meter art is nested).
+		for (const TSharedPtr<FACEUIElement>& Child : Meter->Children)
+		{
+			if (Child.IsValid())
+			{
+				Child->ImageTint = BurdenTint;
+			}
+		}
+	}
+
+	if (!InvBurdenBeginLabel)
+	{
+		InvBurdenBeginLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		InvBurdenBeginLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
+		InvBurdenBeginLabel->SetJustification(ETextJustify::Center);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 8);
+		InvBurdenBeginLabel->SetFont(Font);
+		InvBurdenBeginLabel->SetColorAndOpacity(FSlateColor(TextGold));
+	}
+	if (!InvBurdenValueLabel)
+	{
+		InvBurdenValueLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		InvBurdenValueLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
+		InvBurdenValueLabel->SetJustification(ETextJustify::Center);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 8);
+		InvBurdenValueLabel->SetFont(Font);
+	}
+
+	// Retail displays floor(load * 100) as "%d%%".
+	const int32 Pct = FMath::FloorToInt(BurdenRatio * 100.f);
+	InvBurdenValueLabel->SetColorAndOpacity(FSlateColor(BurdenTint));
+	PlaceTextOnElement(InvBurdenBeginLabel, TEXT("Inv_BurdenTextBegin"), TEXT("Burden"), 8, TextWhite, 10020);
+	PlaceTextOnElement(InvBurdenValueLabel, TEXT("Inv_BurdenText"),
+		FString::Printf(TEXT("%d%%"), Pct), 8, BurdenTint, 10021);
+
+	// Retail gmInventoryUI title: "Inventory of %s" (acclient.c:222477).
+	if (!InvTitleLabel)
+	{
+		InvTitleLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		InvTitleLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
+		InvTitleLabel->SetJustification(ETextJustify::Center);
+	}
+	if (!SelfObj.Name.IsEmpty())
+	{
+		PlaceTextOnElement(InvTitleLabel, TEXT("InvTitleText"),
+			FString::Printf(TEXT("Inventory of %s"), *SelfObj.Name), 9, TextGold, 10023);
+	}
+	else
+	{
+		InvTitleLabel->SetVisibility(ESlateVisibility::Collapsed);
+	}
+}
+
+namespace
+{
+uint32 HashOverlayGeometry(const UACEUICanvasWidget* Canvas, UACEUIElementManager* Manager, const TCHAR* WindowName)
+{
+	uint32 Hash = Canvas ? GetTypeHash(Canvas->GetCachedGeometry().GetLocalSize()) : 0;
+	if (Canvas) Hash = HashCombine(Hash, GetTypeHash(Canvas->GetLastScale2D()));
+	const auto Window = Manager ? Manager->FindElementByName(WindowName) : nullptr;
+	if (Window)
+	{
+		Hash = HashCombine(Hash, GetTypeHash(Window->GetScreenOrigin()));
+		Hash = HashCombine(Hash, GetTypeHash(FIntPoint(Window->Width, Window->Height)));
+	}
+	return Hash;
+}
+}
+
+uint64 UACEUIGameplayBinder::HashInventoryOverlayState() const
+{
+	uint64 H = HashCombine(GetTypeHash(SelectedPackGuid), GetTypeHash(InventoryScrollOffset));
+	H = HashCombine(H, HashOverlayGeometry(Canvas, Manager, TEXT("RootGameplay_FloatyPanel_Field")));
+	H = HashCombine(H, GetTypeHash(PackScrollOffset));
+	H = HashCombine(H, GetTypeHash(LastSelection.bValid ? LastSelection.Guid : 0));
+	H = HashCombine(H, GetTypeHash(bShowPaperdollSlots));
+	if (!Client)
+	{
+		return H;
+	}
+	for (int32 S = 0; S < 18; ++S) H = HashCombine(H, GetTypeHash(Client->GetShortcutObject(S)));
+	const FACEPlayerVitals Vitals = Client->GetPlayerVitals();
+	int32 Encumbrance = 0;
+	Client->TryGetPlayerEncumbrance(Encumbrance);
+	H = HashCombine(H, GetTypeHash(Encumbrance));
+	H = HashCombine(H, GetTypeHash(Vitals.GetBuffedStrength()));
+	H = HashCombine(H, GetTypeHash(Vitals.CarryingCapacityAugs));
+	H = HashCombine(H, GetTypeHash(Vitals.Level));
+	H = HashCombine(H, GetTypeHash(Vitals.AetheriaUnlocked));
+	if (Manager)
+	{
+		if (TSharedPtr<FACEUIElement> Page = Manager->FindElementByName(TEXT("InventoryPanel_Field")))
+		{
+			H = HashCombine(H, HashCombine(GetTypeHash(Page->Width), GetTypeHash(Page->Height)));
+		}
+	}
+	TArray<FACEWorldObject> Items = Client->GetPackItems(SelectedPackGuid);
+	H = HashCombine(H, GetTypeHash(Items.Num()));
+	for (const FACEWorldObject& O : Items)
+	{
+		H = HashCombine(H, GetTypeHash(O.Guid));
+		H = HashCombine(H, GetTypeHash(O.IconId));
+		H = HashCombine(H, GetTypeHash(O.IconOverlayId));
+		H = HashCombine(H, GetTypeHash(O.IconUnderlayId));
+		H = HashCombine(H, GetTypeHash(O.StackSize));
+		H = HashCombine(H, GetTypeHash(O.UiEffects));
+		H = HashCombine(H, GetTypeHash(O.PlacementPosition));
+	}
+	TArray<FACEWorldObject> Equipped = Client->GetEquippedItems();
+	H = HashCombine(H, GetTypeHash(Equipped.Num()));
+	for (const FACEWorldObject& O : Equipped)
+	{
+		H = HashCombine(H, GetTypeHash(O.Guid));
+		H = HashCombine(H, GetTypeHash(O.CurrentWieldedLocation));
+		H = HashCombine(H, GetTypeHash(O.IconId));
+		H = HashCombine(H, GetTypeHash(O.IconOverlayId));
+	}
+    H = HashCombine(H, GetTypeHash(Client->GetPackItems(Client->GetPlayerGuid()).Num()));
+    if (const auto Session = Client->GetSession())
+        if (const auto* Player = Session->GetWorldObjects().Find(Client->GetPlayerGuid()))
+            H = HashCombine(H, GetTypeHash(Player->ContainersCapacity));
+    const auto Packs = Client->GetPlayerPacks();
+    H = HashCombine(H, GetTypeHash(Packs.Num()));
+    for (const auto& Pack : Packs)
+    {
+        H = HashCombine(H, GetTypeHash(Pack.Guid));
+        H = HashCombine(H, GetTypeHash(Pack.IconId));
+        H = HashCombine(H, GetTypeHash(Pack.IconOverlayId));
+        H = HashCombine(H, GetTypeHash(Pack.IconUnderlayId));
+        H = HashCombine(H, GetTypeHash(Pack.ItemType));
+        H = HashCombine(H, GetTypeHash(Pack.UiEffects));
+        H = HashCombine(H, GetTypeHash(Pack.ItemsCapacity));
+        H = HashCombine(H, GetTypeHash(Pack.PlacementPosition));
+        H = HashCombine(H, GetTypeHash(Client->GetPackItems(Pack.Guid).Num()));
+    }
+
+	return H;
+}
+
+uint64 UACEUIGameplayBinder::HashVendorOverlayState() const
+{
+	uint64 H = HashCombine(GetTypeHash(OpenVendorGuid), GetTypeHash(ActiveVendorPage));
+	H = HashCombine(H, HashOverlayGeometry(Canvas, Manager, TEXT("RootGameplay_FloatyEnvPanel_Field")));
+	H = HashCombine(H, GetTypeHash(VendorItemTypeFilter));
+	H = HashCombine(H, GetTypeHash(bVendorFilterDropdownOpen));
+	H = HashCombine(H, GetTypeHash(VendorItemsScrollOffset));
+	H = HashCombine(H, GetTypeHash(VendorBuyScrollOffset));
+	H = HashCombine(H, GetTypeHash(VendorSellScrollOffset));
+	H = HashCombine(H, GetTypeHash(VendorSelectedGuid));
+	H = HashCombine(H, GetTypeHash(VendorSellSelectedGuid));
+	H = HashCombine(H, GetTypeHash(VendorBuyCart.Num()));
+	H = HashCombine(H, GetTypeHash(VendorSellCart.Num()));
+	for (const TPair<int32, int32>& Pair : VendorBuyCart)
+	{
+		H = HashCombine(H, HashCombine(GetTypeHash(Pair.Key), GetTypeHash(Pair.Value)));
+	}
+	for (const TPair<int32, int32>& Pair : VendorSellCart)
+	{
+		H = HashCombine(H, HashCombine(GetTypeHash(Pair.Key), GetTypeHash(Pair.Value)));
+	}
+	if (!Client)
+	{
+		return H;
+	}
+	TArray<FACEWorldObject> Merch = Client->GetVendorMerchandise();
+	H = HashCombine(H, GetTypeHash(Merch.Num()));
+	for (const FACEWorldObject& O : Merch)
+	{
+		H = HashCombine(H, GetTypeHash(O.Guid));
+		H = HashCombine(H, GetTypeHash(O.IconId));
+		H = HashCombine(H, GetTypeHash(O.StackSize));
+		H = HashCombine(H, GetTypeHash(O.Value));
+	}
+	return H;
+}
+
+uint64 UACEUIGameplayBinder::HashLootOverlayState() const
+{
+	uint64 H = HashCombine(GetTypeHash(OpenLootContainerGuid), GetTypeHash(OpenLootSelectedPackGuid));
+	H = HashCombine(H, HashOverlayGeometry(Canvas, Manager, TEXT("RootGameplay_FloatyEnvPanel_Field")));
+	H = HashCombine(H, GetTypeHash(ExtItemScrollOffset));
+	H = HashCombine(H, GetTypeHash(ExtPackScrollOffset));
+	H = HashCombine(H, GetTypeHash(LastSelection.bValid ? LastSelection.Guid : 0));
+	if (!Client || OpenLootContainerGuid == 0)
+	{
+		return H;
+	}
+	const int32 ContGuid = OpenLootSelectedPackGuid != 0 ? OpenLootSelectedPackGuid : OpenLootContainerGuid;
+	TArray<FACEWorldObject> Items = Client->GetPackItems(ContGuid);
+	// The pack strip still shows the root's containers while browsing a nested pack.
+	if (ContGuid != OpenLootContainerGuid) Items.Append(Client->GetPackItems(OpenLootContainerGuid));
+	H = HashCombine(H, GetTypeHash(Items.Num()));
+	for (const FACEWorldObject& O : Items)
+	{
+		H = HashCombine(H, GetTypeHash(O.Guid));
+		H = HashCombine(H, GetTypeHash(O.IconId));
+		H = HashCombine(H, GetTypeHash(O.IconOverlayId));
+		H = HashCombine(H, GetTypeHash(O.IconUnderlayId));
+		H = HashCombine(H, GetTypeHash(O.ItemType));
+		H = HashCombine(H, GetTypeHash(O.UiEffects));
+		H = HashCombine(H, GetTypeHash(O.StackSize));
+	}
+	return H;
+}
+
+void UACEUIGameplayBinder::RefreshInventoryOverlays()
+{
+	if (!Client || !Manager || !Canvas || ActivePanelPage != TEXT("InventoryPanel_Field"))
+	{
+		if (!bInventoryOverlaysCollapsed)
+		{
+		bInventoryOverlaysCollapsed = true;
+		LastInventoryOverlayHash = ~uint64(0);
+		for (UBorder* B : InventorySlots)
+		{
+			if (B) { B->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (UBorder* B : InventorySlotBgs)
+		{
+			if (B) { B->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (UBorder* B : InventorySlotOverlays)
+		{
+			if (B) { B->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (UBorder* B : InventorySlotSelected)
+		{
+			if (B) { B->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (UTextBlock* T : InventorySlotCounts)
+		{
+			if (T) { T->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (UBorder* B : PackSlots)
+		{
+			if (B) { B->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (UBorder* B : PackSlotBgs)
+		{
+			if (B) { B->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (UBorder* B : PackSlotSelected)
+		{
+			if (B) { B->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (UBorder* B : PackShortcutIcons) if (B) B->SetVisibility(ESlateVisibility::Collapsed);
+        for (UBorder* B : PackItemSelected) if (B) B->SetVisibility(ESlateVisibility::Collapsed);
+        if (MainPackCapacityMeter) MainPackCapacityMeter->SetVisibility(ESlateVisibility::Collapsed);
+        for (UProgressBar* B : PackCapacityMeters) if (B) B->SetVisibility(ESlateVisibility::Collapsed);
+		if (MainPackShortcutIcon) MainPackShortcutIcon->SetVisibility(ESlateVisibility::Collapsed);
+		for (auto& Pair : PaperDollIcons)
+		{
+			if (Pair.Value) { Pair.Value->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+        for (auto& Pair : PaperDollShortcutIcons)
+            if (Pair.Value) Pair.Value->SetVisibility(ESlateVisibility::Collapsed);
+		for (auto& Pair : PaperDollSelectedIcons) if (Pair.Value) Pair.Value->SetVisibility(ESlateVisibility::Collapsed);
+		if (PaperDollDragTargetIcon) PaperDollDragTargetIcon->SetVisibility(ESlateVisibility::Collapsed);
+		for (auto& Pair : PaperDollSlotBgs)
+		{
+			if (Pair.Value) { Pair.Value->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		if (PaperDollModelImage) { PaperDollModelImage->SetVisibility(ESlateVisibility::Collapsed); }
+		if (PaperdollSlotsCheckboxIcon) { PaperdollSlotsCheckboxIcon->SetVisibility(ESlateVisibility::Collapsed); }
+		if (PaperdollSlotsCheckboxLabel) { PaperdollSlotsCheckboxLabel->SetVisibility(ESlateVisibility::Collapsed); }
+		if (InvBurdenBeginLabel) { InvBurdenBeginLabel->SetVisibility(ESlateVisibility::Collapsed); }
+		if (InvBurdenValueLabel) { InvBurdenValueLabel->SetVisibility(ESlateVisibility::Collapsed); }
+		if (InvTitleLabel) { InvTitleLabel->SetVisibility(ESlateVisibility::Collapsed); }
+		if (InvContentsLabel) { InvContentsLabel->SetVisibility(ESlateVisibility::Collapsed); }
+		if (ChatLog)
+		{
+			// keep chat always — place below
+		}
+		// Still place chat overlays every tick
+		}
+	}
+	else
+	{
+		bInventoryOverlaysCollapsed = false;
+		// The opaque scene capture covers ordinary DAT widgets. Repaint the authored
+		// checkbox at its original child rectangle above the model, every frame so
+		// capture/hover changes do not depend on an inventory mutation.
+		if (auto Cb = Manager->FindElementByName(TEXT("Paperdoll_Slots_Checkbox")))
+		{
+			Cb->bHighlighted = bShowPaperdollSlots;
+			Cb->bActivatable = true;
+			Cb->ResolvePaintState(Manager->GetCaptureElement()==Cb, Manager->GetHoverElement()==Cb, Manager->GetFocusElement()==Cb);
+			for (const auto& Child : Cb->Children)
+			{
+				if (!Child) continue;
+				Child->bActivatable = false;
+				const auto* State = Child->ResolvePaintState(false, false, false);
+				const uint32 Did = State && State->ImageFileId ? State->ImageFileId : Child->ImageFileId;
+				if (!Did) continue;
+				if (!PaperdollSlotsCheckboxIcon && Canvas->WidgetTree)
+				{
+					PaperdollSlotsCheckboxIcon = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+					PaperdollSlotsCheckboxIcon->SetPadding(FMargin(0));
+				}
+				SetIconDid(PaperdollSlotsCheckboxIcon, Did);
+				PaperdollSlotsCheckboxIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
+				Canvas->PlaceWidgetAtElement(PaperdollSlotsCheckboxIcon, Child, 120001);
+				break;
+			}
+			if (!PaperdollSlotsCheckboxLabel && Canvas->WidgetTree)
+				PaperdollSlotsCheckboxLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+			PlaceTextOnElement(PaperdollSlotsCheckboxLabel, Cb, TEXT("Slots"), 8, TextWhite, 120001);
+		}
+		const uint64 OverlayHash = HashInventoryOverlayState();
+		if (OverlayHash == LastInventoryOverlayHash)
+		{
+			RefreshPaperDollPreview();
+		}
+		else
+		{
+		LastInventoryOverlayHash = OverlayHash;
+		ReflowInventoryPanelGeometry();
+		RefreshInventoryBurdenOverlays();
+
+		const int32 Self = Client->GetPlayerGuid();
+		if (SelectedPackGuid == 0)
+		{
+			SelectedPackGuid = Self;
+		}
+		// Above SyncElementWidgets DAT chrome (climbs past 10k on dense layouts).
+		constexpr int32 OverlayZ = 120000;
+
+		// Retail draws the live character in the PaperDoll viewport; equipment icons sit on top.
+		RefreshPaperDollPreview();
+
+		// Paper doll — resolve under InventoryPanel so merged layout hits the right nodes.
+		TArray<FACEWorldObject> Equipped = Client->GetEquippedItems();
+		for (const FDollSlotMap& Slot : GDollSlots)
+		{
+			TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(TEXT("InventoryPanel_Field"), Slot.Name);
+			if (!El.IsValid())
+			{
+				El = Manager->FindElementByName(Slot.Name);
+			}
+			if (!El.IsValid())
+			{
+				continue;
+			}
+			UBorder* Bg = PaperDollSlotBgs.FindRef(Slot.Name);
+			if (!Bg && Canvas->WidgetTree)
+			{
+				Bg = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+				Bg->SetPadding(FMargin(0.f));
+				PaperDollSlotBgs.Add(Slot.Name, Bg);
+			}
+			UBorder* Icon = PaperDollIcons.FindRef(Slot.Name);
+			if (!Icon && Canvas->WidgetTree)
+			{
+				Icon = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+				Icon->SetPadding(FMargin(0.f));
+				PaperDollIcons.Add(Slot.Name, Icon);
+			}
+			if (!Icon)
+			{
+				continue;
+			}
+			const FACEWorldObject* Item = nullptr;
+			for (const FACEWorldObject& Obj : Equipped)
+			{
+				if (ItemMatchesDollSlot(Obj, Slot.Mask))
+				{
+					Item = &Obj;
+					break;
+				}
+			}
+			// Show Equipment ON: main-body armor icons. OFF: 3D model + peripheral slots
+			// (jewelry, underclothes, weapons/shield/ammo) stay visible.
+			const bool bMainBody = IsMainBodyDollSlot(Slot.Name);
+			const int32 AetheriaBit = Slot.Mask == ACEEquipMask::SigilOne ? 1 : Slot.Mask == ACEEquipMask::SigilTwo ? 2 : Slot.Mask == ACEEquipMask::SigilThree ? 4 : 0;
+            const bool bUnlocked = !AetheriaBit || (Client->GetPlayerVitals().AetheriaUnlocked & AetheriaBit) != 0;
+            if (AetheriaBit) El->bVisible = bUnlocked;
+            const bool bShowThisSlot = bUnlocked && (bShowPaperdollSlots || !bMainBody);
+			const bool bHasItem = Item != nullptr;
+			UBorder* SelectedIcon = PaperDollSelectedIcons.FindRef(Slot.Name);
+			if (!SelectedIcon && Canvas->WidgetTree)
+			{
+				SelectedIcon = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+				SelectedIcon->SetPadding(FMargin(0)); PaperDollSelectedIcons.Add(Slot.Name, SelectedIcon);
+			}
+			if (SelectedIcon)
+			{
+				const bool bSelected = bShowThisSlot && Item && LastSelection.bValid && LastSelection.Guid == Item->Guid;
+				SelectedIcon->SetVisibility(bSelected ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+				if (bSelected)
+				{
+					SetIconDid(SelectedIcon, DidInvSlotSelected);
+					Canvas->PlaceWidgetAtElement(SelectedIcon, El, OverlayZ+3);
+				}
+			}
+            UBorder* ShortcutIcon=PaperDollShortcutIcons.FindRef(Slot.Name);
+            if (!ShortcutIcon && Canvas->WidgetTree)
+            {
+                ShortcutIcon=Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+                ShortcutIcon->SetPadding(FMargin(0)); PaperDollShortcutIcons.Add(Slot.Name,ShortcutIcon);
+            }
+            int32 Shortcut=INDEX_NONE;
+            for (int32 S=0; Item && S<18; ++S)
+                if (Client->GetShortcutObject(S)==Item->Guid) { Shortcut=S; break; }
+            if (ShortcutIcon)
+            {
+                ShortcutIcon->SetVisibility(bShowThisSlot && Shortcut!=INDEX_NONE ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+                if (bShowThisSlot && Shortcut!=INDEX_NONE)
+                {
+                    SetIconDid(ShortcutIcon,Shortcut<9 ? 0x0600109Eu+Shortcut : 0x060074D3u);
+                    Canvas->PlaceWidgetAtElement(ShortcutIcon,El,OverlayZ+2);
+                }
+            }
+
+			if (Bg)
+			{
+				if (bShowThisSlot)
+				{
+					Bg->SetVisibility(ESlateVisibility::HitTestInvisible);
+					if (bHasItem)
+					{
+						SetItemSlotBackground(Bg, Item);
+					}
+					else
+					{
+						SetIconDid(Bg, Slot.EmptyIconDid);
+					}
+					Canvas->PlaceWidgetAtElement(Bg, El, OverlayZ - 1);
+				}
+				else
+				{
+					Bg->SetVisibility(ESlateVisibility::Collapsed);
+				}
+			}
+			if (bShowThisSlot && bHasItem)
+			{
+				Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
+				SetItemSlotForeground(Icon, Item);
+				SetRetailTooltip(Icon, FText::FromString(Item->Name));
+				Canvas->PlaceWidgetAtElement(Icon, El, OverlayZ);
+			}
+			else
+			{
+				Icon->SetVisibility(ESlateVisibility::Collapsed);
+				SetIconDid(Icon, 0);
+			}
+		}
+
+		// Pack tabs in Inv_ContainerList — retail: main pack + ContainersCapacity side slots (usually 7).
+		TArray<FACEWorldObject> Packs = Client->GetPlayerPacks();
+		FACEWorldObject SelfObj;
+		Client->GetWorldObject(Self, SelfObj);
+		// Retail: ContainersCapacity side-pack slots (augs can raise this above 7).
+		int32 SidePackCapacity = SelfObj.ContainersCapacity > 0 ? SelfObj.ContainersCapacity : 7;
+		SidePackCapacity = FMath::Clamp(SidePackCapacity, 1, 24);
+		// Always show at least as many slots as packs we actually have.
+		SidePackCapacity = FMath::Max(SidePackCapacity, Packs.Num());
+		SidePackCapacity = FMath::Clamp(SidePackCapacity, 1, 24);
+		TSharedPtr<FACEUIElement> ListEl = Manager->FindElementByName(TEXT("Inv_ContainerList"));
+        auto MakeCapacityMeter = [&]()
+        {
+                    auto* Meter = Canvas->WidgetTree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass());
+                    Meter->SetBarFillType(EProgressBarFillType::BottomToTop);
+                    Meter->SetBarFillStyle(EProgressBarFillStyle::Mask);
+                    Meter->SetBorderPadding(FVector2D::ZeroVector);
+                    Meter->SetFillColorAndOpacity(FLinearColor::White);
+                    FProgressBarStyle Style;
+                    Style.BackgroundImage.SetResourceObject(Canvas->GetResourceResolver()->ResolveTexture(0x06004D22));
+                    Style.BackgroundImage.DrawAs=ESlateBrushDrawType::Image;
+                    Style.BackgroundImage.ImageSize=FVector2D(5,30);
+                    Style.FillImage.SetResourceObject(Canvas->GetResourceResolver()->ResolveTexture(0x06004D23));
+                    Style.FillImage.DrawAs=ESlateBrushDrawType::Image;
+                    Style.FillImage.ImageSize=FVector2D(5,30);
+                    Meter->SetWidgetStyle(Style);
+            return Meter;
+        };
+		TSharedPtr<FACEUIElement> MainPackEl = Manager->FindElementByName(TEXT("Inv_MainPackSlot"));
+		if (MainPackEl.IsValid())
+		{
+            if (!MainPackCapacityMeter) MainPackCapacityMeter=MakeCapacityMeter();
+            const int32 MainCount=Client->GetPackItems(Self).Num();
+            const int32 MainCapacity=SelfObj.ItemsCapacity > 0 ? SelfObj.ItemsCapacity : 102;
+            MainPackCapacityMeter->SetVisibility(MainCount > 0 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+            MainPackCapacityMeter->SetPercent(FMath::Clamp(float(MainCount)/MainCapacity,0.f,1.f));
+            Canvas->PlaceWidgetAtElement(MainPackCapacityMeter,MainPackEl,OverlayZ+4);
+            if (auto* MeterSlot=Cast<UCanvasPanelSlot>(MainPackCapacityMeter->Slot))
+            {
+                MeterSlot->SetPosition((FVector2D(MainPackEl->GetScreenOrigin())+FVector2D(28,3))*Canvas->GetLastScale2D());
+                MeterSlot->SetSize(FVector2D(5,30)*Canvas->GetLastScale2D());
+            }
+			if (!MainPackShortcutIcon)
+				MainPackShortcutIcon = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+			int32 MainBound = INDEX_NONE;
+			for (int32 S=0; S<18; ++S)
+				if (Client->GetShortcutObject(S)==Self) { MainBound=S; break; }
+			MainPackShortcutIcon->SetVisibility(MainBound!=INDEX_NONE ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+			if (MainBound!=INDEX_NONE)
+			{
+				SetIconDid(MainPackShortcutIcon,MainBound<9 ? 0x0600109Eu+MainBound : 0x060074D3u);
+				Canvas->PlaceWidgetAtElement(MainPackShortcutIcon, MainPackEl, OverlayZ+2, FMargin(2));
+			}
+			UBorder* MainIcon = EnsureIconBorder(PackSlots, 0);
+			UBorder* MainBg = EnsureIconBorder(PackSlotBgs, 0);
+			UBorder* MainSel = EnsureIconBorder(PackSlotSelected, 0);
+			if (MainBg)
+			{
+				// IconData::RenderIcons treats the player's main pack as Container (512).
+				FACEWorldObject MainPackStyle;
+				MainPackStyle.ItemType = ACEItemType::Container;
+				SetItemSlotBackground(MainBg, &MainPackStyle);
+				MainBg->SetVisibility(ESlateVisibility::HitTestInvisible);
+				Canvas->PlaceWidgetAtElement(MainBg, MainPackEl, OverlayZ - 1, FMargin(2));
+			}
+			if (MainIcon)
+			{
+				PackSlotGuids.SetNum(1 + SidePackCapacity);
+				PackSlotGuids[0] = Self;
+				MainIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
+				// Retail: closed bag idle, open bag when this pack is selected.
+				const bool bMainSelected = SelectedPackGuid == Self;
+				SetIconDid(MainIcon, bMainSelected ? 0x06004CF8 : 0x06004CF7);
+				MainIcon->SetRenderOpacity(1.f);
+				SetRetailTooltip(MainIcon, FText::FromString(TEXT("Main Pack")));
+				Canvas->PlaceWidgetAtElement(MainIcon, MainPackEl, OverlayZ, FMargin(2));
+			}
+			if (MainSel)
+			{
+				const bool bMainSelected = SelectedPackGuid == Self;
+				MainSel->SetVisibility(bMainSelected
+					? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+				if (bMainSelected)
+				{
+					SetIconDid(MainSel, 0x06005D9C);
+					Canvas->PlaceWidgetAtElement(MainSel, MainPackEl, OverlayZ + 1);
+				}
+			}
+		}
+		if (ListEl.IsValid())
+		{
+			const FIntPoint Origin = ListEl->GetScreenOrigin();
+			const float SX = Canvas->GetLastScaleX();
+			const float SY = Canvas->GetLastScaleY();
+			constexpr int32 Cell = 36;
+			const int32 MaxVisible = FMath::Max(1, ListEl->Height / Cell);
+			PackScrollOffset = FMath::Clamp(PackScrollOffset, 0, FMath::Max(0, SidePackCapacity - MaxVisible));
+			PackSlotGuids.SetNum(1 + MaxVisible);
+			for (int32 i = 0; i < MaxVisible; ++i)
+			{
+				UBorder* Icon = EnsureIconBorder(PackSlots, i + 1);
+				UBorder* Bg = EnsureIconBorder(PackSlotBgs, i + 1);
+				UBorder* Sel = EnsureIconBorder(PackSlotSelected, i + 1);
+				if (!Icon) { continue; }
+				const int32 PackIndex = i + PackScrollOffset;
+				if (PackIndex >= SidePackCapacity)
+				{
+					Icon->SetVisibility(ESlateVisibility::Collapsed);
+					if (Bg) { Bg->SetVisibility(ESlateVisibility::Collapsed); }
+					if (Sel) { Sel->SetVisibility(ESlateVisibility::Collapsed); }
+                    if (PackItemSelected.IsValidIndex(i) && PackItemSelected[i]) PackItemSelected[i]->SetVisibility(ESlateVisibility::Collapsed);
+                    if (PackCapacityMeters.IsValidIndex(i) && PackCapacityMeters[i]) PackCapacityMeters[i]->SetVisibility(ESlateVisibility::Collapsed);
+					PackSlotGuids[i + 1] = 0;
+					continue;
+				}
+				Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
+				const bool bSelected = Packs.IsValidIndex(PackIndex)
+					&& SelectedPackGuid == Packs[PackIndex].Guid;
+				if (Packs.IsValidIndex(PackIndex))
+				{
+					PackSlotGuids[i + 1] = Packs[PackIndex].Guid;
+					SetItemSlotForeground(Icon, &Packs[PackIndex]);
+					SetItemSlotBackground(Bg, &Packs[PackIndex]);
+					if (Bg) { Bg->SetVisibility(ESlateVisibility::HitTestInvisible); }
+					SetRetailTooltip(Icon, FText::FromString(FString::Printf(
+						TEXT("%s (%d/%d items)"), *Packs[PackIndex].Name, Client->GetPackItems(Packs[PackIndex].Guid).Num(), Packs[PackIndex].ItemsCapacity)));
+					Icon->SetRenderOpacity(1.f);
+				}
+				else
+				{
+					PackSlotGuids[i + 1] = 0;
+					// ItemSlot_Backpack/ItemSlot_Icon's authored ItemSlot_Empty state.
+					SetIconDid(Icon, DidEmptyPackSlot);
+					if (Bg) { Bg->SetVisibility(ESlateVisibility::Collapsed); }
+					SetRetailTooltip(Icon, FText::FromString(FString::Printf(
+						TEXT("Empty pack slot (%d/%d)"), PackIndex + 1, SidePackCapacity)));
+					Icon->SetRenderOpacity(1.f);
+				}
+				auto PlacePack = [&](UWidget* B, int32 Z, int32 X = 2, int32 Y = 2, int32 W = 32, int32 H = 32)
+				{
+					if (!B) { return; }
+					if (B->GetParent() != Canvas->GetElementLayer())
+					{
+						Canvas->GetElementLayer()->AddChild(B);
+					}
+					if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(B->Slot))
+					{
+						Slot->SetAnchors(FAnchors(0.f, 0.f));
+						Slot->SetPosition(FVector2D(
+							static_cast<float>(Origin.X + X) * SX,
+							static_cast<float>(Origin.Y + i * Cell + Y) * SY));
+						Slot->SetSize(FVector2D(static_cast<float>(W) * SX, static_cast<float>(H) * SY));
+						Canvas->SetOverlayOrder(B, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), Z);
+					}
+				};
+				PlacePack(Bg, OverlayZ - 1);
+				PlacePack(Icon, OverlayZ);
+                UBorder* ItemSel = EnsureIconBorder(PackItemSelected, i);
+                ItemSel->SetVisibility(Packs.IsValidIndex(PackIndex) && LastSelection.bValid && LastSelection.Guid == Packs[PackIndex].Guid
+                    ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+                SetIconDid(ItemSel, DidInvSlotSelected);
+                PlacePack(ItemSel, OverlayZ+3);
+                while (PackCapacityMeters.Num() <= i)
+                {
+                    PackCapacityMeters.Add(MakeCapacityMeter());
+                }
+                auto* Meter = PackCapacityMeters[i].Get();
+                const int32 Capacity = Packs.IsValidIndex(PackIndex) ? Packs[PackIndex].ItemsCapacity : 0;
+                const int32 Count = Capacity > 0 ? Client->GetPackItems(Packs[PackIndex].Guid).Num() : 0;
+                Meter->SetVisibility(Count > 0 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+                Meter->SetPercent(Capacity > 0 ? FMath::Clamp(float(Count)/Capacity,0.f,1.f) : 0.f);
+                PlacePack(Meter,OverlayZ+4,28,3,5,30);
+
+				UBorder* Shortcut = EnsureIconBorder(PackShortcutIcons,i);
+				int32 Bound = INDEX_NONE;
+				for (int32 S=0; Packs.IsValidIndex(PackIndex) && S<18; ++S)
+					if (Client->GetShortcutObject(S)==Packs[PackIndex].Guid) { Bound=S; break; }
+				if (Shortcut)
+				{
+					Shortcut->SetVisibility(Bound!=INDEX_NONE ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+					if (Bound!=INDEX_NONE) SetIconDid(Shortcut,Bound<9 ? 0x0600109Eu+Bound : 0x060074D3u);
+					PlacePack(Shortcut,OverlayZ+2);
+				}
+				if (Sel)
+				{
+					Sel->SetVisibility(bSelected
+						? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+					if (bSelected)
+					{
+						SetIconDid(Sel, 0x06005D9C);
+					}
+					PlacePack(Sel, OverlayZ + 1, 0, 0, 36, 36);
+				}
+			}
+			for (int32 i = MaxVisible + 1; i < PackSlots.Num(); ++i)
+			{
+				if (PackSlots[i]) { PackSlots[i]->SetVisibility(ESlateVisibility::Collapsed); }
+			}
+			for (int32 i = MaxVisible + 1; i < PackSlotBgs.Num(); ++i)
+			{
+				if (PackSlotBgs[i]) { PackSlotBgs[i]->SetVisibility(ESlateVisibility::Collapsed); }
+			}
+			for (int32 i=MaxVisible; i<PackCapacityMeters.Num(); ++i)
+                if (PackCapacityMeters[i]) PackCapacityMeters[i]->SetVisibility(ESlateVisibility::Collapsed);
+            for (int32 i=MaxVisible; i<PackItemSelected.Num(); ++i)
+                if (PackItemSelected[i]) PackItemSelected[i]->SetVisibility(ESlateVisibility::Collapsed);
+            for (int32 i=MaxVisible; i<PackShortcutIcons.Num(); ++i)
+				if (PackShortcutIcons[i]) PackShortcutIcons[i]->SetVisibility(ESlateVisibility::Collapsed);
+			for (int32 i = MaxVisible + 1; i < PackSlotSelected.Num(); ++i)
+			{
+				if (PackSlotSelected[i]) { PackSlotSelected[i]->SetVisibility(ESlateVisibility::Collapsed); }
+			}
+		}
+
+		// Item grid over Inv_3DItemList (DAT 192×96 → 6×3 cells of 32×32).
+		// Capacity is ItemsCapacity (main 102 / side packs 24); only PageSize cells are on-screen.
+		// When the panel is resized taller, ReflowInventoryPanelGeometry grows the list height.
+		TSharedPtr<FACEUIElement> GridEl = Manager->FindElementByName(TEXT("Inv_3DItemList"));
+		if (GridEl.IsValid())
+		{
+			FACEWorldObject PackObj;
+			Client->GetWorldObject(SelectedPackGuid, PackObj);
+			TArray<FACEWorldObject> Items = Client->GetPackItems(SelectedPackGuid);
+			{
+				// Retail gmInventoryUI: "Contents of Backpack" for the main pack,
+				// "Contents of %s" for sub-packs (acclient.c:222519/222536).
+				const FString ContentsText = (SelectedPackGuid == Self || PackObj.Name.IsEmpty())
+					? FString(TEXT("Contents of Backpack"))
+					: FString::Printf(TEXT("Contents of %s"), *PackObj.Name);
+				if (!InvContentsLabel && Canvas->WidgetTree)
+				{
+					InvContentsLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(
+						UACERetailTextBlock::StaticClass());
+					InvContentsLabel->SetJustification(ETextJustify::Left);
+				}
+				PlaceTextOnElement(InvContentsLabel, TEXT("Inv_ContentsText"),
+					ContentsText, 8, TextWhite, 10022);
+			}
+			constexpr int32 Cell = 32;
+			const int32 Cols = FMath::Max(1, GridEl->Width / Cell);
+			const int32 Rows = FMath::Max(1, GridEl->Height / Cell);
+			const int32 PageSize = Cols * Rows;
+			int32 Capacity = PackObj.ItemsCapacity;
+			if (Capacity <= 0)
+			{
+				Capacity = (SelectedPackGuid == Self) ? 102 : 24;
+			}
+			// Show the pack's real capacity (filled + empty). Do not invent extra cells.
+			Capacity = FMath::Clamp(Capacity, 1, 120);
+			InventoryScrollOffset = FMath::Clamp(InventoryScrollOffset, 0, FMath::Max(0, Capacity - PageSize));
+			InventoryScrollOffset -= InventoryScrollOffset % Cols;
+			const FIntPoint Origin = GridEl->GetScreenOrigin();
+			const float SX = Canvas->GetLastScaleX();
+			const float SY = Canvas->GetLastScaleY();
+			InventorySlotGuids.SetNum(PageSize);
+			TArray<int32> SlotGuids;
+			TArray<FACEWorldObject> SlotObjs;
+			BuildPackSlotGuids(Items, Capacity, SlotGuids, SlotObjs);
+			const int32 SelectedGuid = LastSelection.bValid ? LastSelection.Guid : 0;
+			for (int32 i = 0; i < PageSize; ++i)
+			{
+				UBorder* Bg = EnsureIconBorder(InventorySlotBgs, i);
+				UBorder* Icon = EnsureIconBorder(InventorySlots, i);
+				UBorder* Overlay = EnsureIconBorder(InventorySlotOverlays, i);
+				UBorder* Sel = EnsureIconBorder(InventorySlotSelected, i);
+				if (!Bg || !Icon || !Overlay || !Sel) { continue; }
+				const int32 SlotIndex = i + InventoryScrollOffset;
+				const bool bInCapacity = SlotIndex < Capacity;
+				const int32 Guid = (bInCapacity && SlotGuids.IsValidIndex(SlotIndex))
+					? SlotGuids[SlotIndex] : 0;
+				InventorySlotGuids[i] = Guid;
+				// Visible (not HitTestInvisible) so slot geometry stays in the hit path for drag/reorder.
+				Bg->SetVisibility(bInCapacity ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+				Icon->SetVisibility(bInCapacity ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+				if (!bInCapacity)
+				{
+					Overlay->SetVisibility(ESlateVisibility::Collapsed);
+					Sel->SetVisibility(ESlateVisibility::Collapsed);
+					while (InventorySlotCounts.Num() <= i)
+					{
+						InventorySlotCounts.Add(nullptr);
+					}
+					if (InventorySlotCounts[i])
+					{
+						InventorySlotCounts[i]->SetVisibility(ESlateVisibility::Collapsed);
+					}
+					continue;
+				}
+				const FACEWorldObject* SlotObj = (Guid != 0 && SlotObjs.IsValidIndex(SlotIndex))
+					? &SlotObjs[SlotIndex] : nullptr;
+				SetItemSlotBackground(Bg, SlotObj);
+				SetItemSlotForeground(Icon, SlotObj);
+				// ItemSlot (0x21000037), UI_ItemList_ShortcutOverlayArray;
+				// UIElement_UIItem::SetShortcutNum uses the first bound shortcut.
+				int32 Shortcut = INDEX_NONE;
+				if (Guid != 0) for (int32 S = 0; S < 18; ++S)
+				{
+					if (Client->GetShortcutObject(S) == Guid) { Shortcut = S; break; }
+				}
+				const bool bHasOverlay = Shortcut != INDEX_NONE;
+				Overlay->SetVisibility(bHasOverlay
+					? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+				if (bHasOverlay)
+				{
+					SetIconDid(Overlay, Shortcut < 9 ? 0x0600109Eu + Shortcut : 0x060074D3u);
+				}
+				const bool bSelected = Guid != 0 && Guid == SelectedGuid;
+				Sel->SetVisibility(bSelected ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+				if (bSelected)
+				{
+					SetIconDid(Sel, DidInvSlotSelected);
+				}
+				if (SlotObj)
+				{
+					SetRetailTooltip(Icon, FText::FromString(FormatItemStackName(*SlotObj)));
+				}
+				else
+				{
+					SetRetailTooltip(Icon, FText());
+				}
+				const int32 Col = i % Cols;
+				const int32 Row = i / Cols;
+				const FVector2D Pos(
+					static_cast<float>(Origin.X + Col * Cell) * SX,
+					static_cast<float>(Origin.Y + Row * Cell) * SY);
+				const FVector2D Size(static_cast<float>(Cell) * SX, static_cast<float>(Cell) * SY);
+				auto Place = [&](UBorder* B, int32 Z)
+				{
+					if (B->GetParent() != Canvas->GetElementLayer())
+					{
+						Canvas->GetElementLayer()->AddChild(B);
+					}
+					if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(B->Slot))
+					{
+						Slot->SetAnchors(FAnchors(0.f, 0.f));
+						Slot->SetPosition(Pos);
+						Slot->SetSize(Size);
+						Canvas->SetOverlayOrder(B, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), Z);
+					}
+				};
+				Place(Bg, OverlayZ);
+				Place(Icon, OverlayZ + 1);
+				Place(Overlay, OverlayZ + 2);
+				Place(Sel, OverlayZ + 3);
+
+				// Retail UIItem quantity overlay (UpdateQuantityDisplay: L"%d"):
+				// stack counts render as a numeral on the icon's lower-right corner.
+				while (InventorySlotCounts.Num() <= i)
+				{
+					InventorySlotCounts.Add(nullptr);
+				}
+				const bool bShowCount = SlotObj && SlotObj->StackSize > 1;
+				if (bShowCount && !InventorySlotCounts[i] && Canvas->WidgetTree)
+				{
+					UTextBlock* NewCount = Canvas->WidgetTree->ConstructWidget<UTextBlock>(
+						UACERetailTextBlock::StaticClass());
+					NewCount->SetJustification(ETextJustify::Right);
+					NewCount->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 7));
+					NewCount->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+					NewCount->SetShadowOffset(FVector2D(1.f, 1.f));
+					NewCount->SetShadowColorAndOpacity(FLinearColor::Black);
+					InventorySlotCounts[i] = NewCount;
+				}
+				UTextBlock* Count = InventorySlotCounts[i];
+				if (Count)
+				{
+					if (bShowCount)
+					{
+						Count->SetText(FText::AsNumber(SlotObj->StackSize));
+						Count->SetVisibility(ESlateVisibility::HitTestInvisible);
+						if (Count->GetParent() != Canvas->GetElementLayer())
+						{
+							Canvas->GetElementLayer()->AddChild(Count);
+						}
+						if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Count->Slot))
+						{
+							Slot->SetAnchors(FAnchors(0.f, 0.f));
+							Slot->SetPosition(FVector2D(Pos.X + 1.f, Pos.Y + Size.Y - 11.f * SY));
+							Slot->SetSize(FVector2D(Size.X - 3.f, 11.f * SY));
+							Canvas->SetOverlayOrder(Count, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), OverlayZ + 4);
+						}
+					}
+					else
+					{
+						Count->SetVisibility(ESlateVisibility::Collapsed);
+					}
+				}
+			}
+			for (int32 i = PageSize; i < InventorySlots.Num(); ++i)
+			{
+				if (InventorySlots[i]) { InventorySlots[i]->SetVisibility(ESlateVisibility::Collapsed); }
+			}
+			for (int32 i = PageSize; i < InventorySlotBgs.Num(); ++i)
+			{
+				if (InventorySlotBgs[i]) { InventorySlotBgs[i]->SetVisibility(ESlateVisibility::Collapsed); }
+			}
+			for (int32 i = PageSize; i < InventorySlotOverlays.Num(); ++i)
+			{
+				if (InventorySlotOverlays[i]) { InventorySlotOverlays[i]->SetVisibility(ESlateVisibility::Collapsed); }
+			}
+			for (int32 i = PageSize; i < InventorySlotSelected.Num(); ++i)
+			{
+				if (InventorySlotSelected[i]) { InventorySlotSelected[i]->SetVisibility(ESlateVisibility::Collapsed); }
+			}
+			for (int32 i = PageSize; i < InventorySlotCounts.Num(); ++i)
+			{
+				if (InventorySlotCounts[i]) { InventorySlotCounts[i]->SetVisibility(ESlateVisibility::Collapsed); }
+			}
+		}
+		SyncInventoryScrollbars();
+		}
+	}
+
+	// Chat overlays — ONLY MainChat (Chat1–4 also contain ChatLog / ChatPanelTextEntry).
+	if (ChatLog && ChatEntry && Manager && Canvas)
+	{
+		constexpr TCHAR MainChat[] = TEXT("RootGameplay_FloatyMainChat_Field");
+		TSharedPtr<FACEUIElement> ChatRoot = Manager->FindElementByName(MainChat);
+		TSharedPtr<FACEUIElement> LogEl = Manager->FindElementUnder(MainChat, TEXT("ChatLog"));
+		TSharedPtr<FACEUIElement> EntryEl = Manager->FindElementUnder(MainChat, TEXT("ChatPanelTextEntry"));
+		const bool bChatOn = ChatRoot.IsValid() && ChatRoot->bVisible;
+		if (bChatOn && LogEl.IsValid())
+		{
+			ChatLog->SetVisibility(ESlateVisibility::HitTestInvisible);
+			// Left 16px gutter for ChatLogNewNonVisibleTextIndicator (jump-to-bottom).
+			Canvas->PlaceWidgetAtElement(ChatLog, LogEl, 530, FMargin(16.f, 2.f, 2.f, 2.f));
+			RefreshChatRowLayout(0);
+		}
+		else if (ChatLog)
+		{
+			ChatLog->SetVisibility(ESlateVisibility::Collapsed);
+		}
+		if (bChatOn && EntryEl.IsValid())
+		{
+			ChatEntry->SetVisibility(ESlateVisibility::Visible);
+			Canvas->PlaceWidgetAtElement(ChatEntry, EntryEl, 531, FMargin(1.f, 0.f));
+		}
+		else if (ChatEntry)
+		{
+			ChatEntry->SetVisibility(ESlateVisibility::Collapsed);
+		}
+		if (bChatOn)
+		{
+			SyncChatScrollbar();
+		}
+	}
+
+	// FloatyChat1-4 logs / entries / titles follow their own DAT windows.
+	PlaceFloatyChatOverlays();
+}
+
+bool UACEUIGameplayBinder::IsScrollbarDragActive() const
+{
+	return ScrollDragTarget != EACEUIScrollTarget::None;
+}
+
+bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
+{
+	// Selected-item stack amount slider (toolbar SelectedObjectField).
+	if (Manager && SelectedStackMax > 1)
+	{
+		if (TSharedPtr<FACEUIElement> Slider = Manager->FindElementByName(TEXT("StackSizeSlider")))
+		{
+			if (Slider->bVisible && Canvas && Canvas->IsElementExposedAt(Slider, CanvasLocalPos))
+			{
+				const FIntPoint O = Slider->GetScreenOrigin();
+				if (CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
+					&& CanvasLocalPos.X < O.X + Slider->Width
+					&& CanvasLocalPos.Y < O.Y + Slider->Height)
+				{
+					ScrollDragBar.Reset();
+					ScrollDragGrabOffset = 0;
+					ScrollDragLastOffset = INDEX_NONE;
+					ScrollDragTarget = EACEUIScrollTarget::StackSize;
+					ScrollDragMaxOff = SelectedStackMax;
+					bScrollDragHorizontal = true;
+					ScrollDragTrackOrigin = O.X;
+					ScrollDragTravel = FMath::Max(1, Slider->Width);
+					UpdateScrollbarDrag(CanvasLocalPos);
+					return true;
+				}
+			}
+		}
+	}
+
+	auto TryBar = [&](const TSharedPtr<FACEUIElement>& Bar, EACEUIScrollTarget Target,
+		int32 MaxOff, bool bHorizontal) -> bool
+	{
+		if (!Bar.IsValid() || !Bar->bVisible || MaxOff <= 0
+			|| !Canvas || !Canvas->IsElementExposedAt(Bar, CanvasLocalPos))
+		{
+			return false;
+		}
+		TSharedPtr<FACEUIElement> Thumb;
+		for (const TSharedPtr<FACEUIElement>& Child : Bar->Children)
+		{
+			if (!Child.IsValid()) { continue; }
+			if (Child->Type == ACEUI::ElementType::Scrollbar || Child->ElementName.IsEmpty()
+				|| Child->ElementName.Contains(TEXT("widget_")))
+			{
+				Thumb = Child;
+				if (Child->Type == ACEUI::ElementType::Scrollbar || Child->ElementName.IsEmpty())
+				{
+					break;
+				}
+			}
+		}
+		const FIntPoint BarO = Bar->GetScreenOrigin();
+		constexpr int32 Btn = 16;
+		const bool bOverBar = CanvasLocalPos.X >= BarO.X && CanvasLocalPos.Y >= BarO.Y
+			&& CanvasLocalPos.X < BarO.X + Bar->Width && CanvasLocalPos.Y < BarO.Y + Bar->Height;
+		if (!bOverBar)
+		{
+			return false;
+		}
+		// Exclude up/down (or left/right) button chrome — those use click-to-step.
+		if (bHorizontal)
+		{
+			if (CanvasLocalPos.X < BarO.X + Btn || CanvasLocalPos.X >= BarO.X + Bar->Width - Btn)
+			{
+				return false;
+			}
+		}
+		else if (CanvasLocalPos.Y < BarO.Y + Btn || CanvasLocalPos.Y >= BarO.Y + Bar->Height - Btn)
+		{
+			return false;
+		}
+
+		ScrollDragTarget = Target;
+		ScrollDragMaxOff = MaxOff;
+		bScrollDragHorizontal = bHorizontal;
+		if (bHorizontal)
+		{
+			const int32 ThumbW = Thumb.IsValid() ? Thumb->Width : 8;
+			ScrollDragTrackOrigin = BarO.X + Btn;
+			ScrollDragTravel = FMath::Max(1, Bar->Width - Btn * 2 - ThumbW);
+		}
+		else
+		{
+			const int32 ThumbH = Thumb.IsValid() ? Thumb->Height : 8;
+			ScrollDragTrackOrigin = BarO.Y + Btn;
+			ScrollDragTravel = FMath::Max(1, Bar->Height - Btn * 2 - ThumbH);
+		}
+		ScrollDragBar = Bar;
+		ScrollDragLastOffset = INDEX_NONE;
+		const float Cursor = bHorizontal ? CanvasLocalPos.X : CanvasLocalPos.Y;
+		const float ThumbStart = Thumb ? (bHorizontal ? Thumb->GetScreenOrigin().X : Thumb->GetScreenOrigin().Y) : Cursor;
+		const float ThumbSize = Thumb ? (bHorizontal ? Thumb->Width : Thumb->Height) : 8.f;
+		ScrollDragGrabOffset = Cursor >= ThumbStart && Cursor <= ThumbStart + ThumbSize ? Cursor - ThumbStart : ThumbSize * .5f;
+		ScrollDragVisibleFraction = ThumbSize / FMath::Max(1.f, float((bHorizontal ? Bar->Width : Bar->Height) - Btn*2));
+		UpdateScrollbarDrag(CanvasLocalPos);
+		return true;
+	};
+
+	if (ActivePanelPage == TEXT("QuestManagementPanel_Field") && ActiveQuestTab == TEXT("PageListPage"))
+	{
+		auto List=Manager->FindElementUnder(ActiveQuestTab,TEXT("PageListBox"));
+		if (List && TryBar(Manager->FindElementUnder(ActiveQuestTab,TEXT("PageListBoxScrollbar")),
+			EACEUIScrollTarget::JournalList,FMath::Max(0,JournalFilteredCount-List->Height/20),false)) return true;
+	}
+	if (ActivePanelPage == TEXT("SpellManagementPanel_Field") && ActiveSpellPanelTab == TEXT("SpellComponentPage"))
+	{
+		const auto List = Manager->FindElementUnder(ActiveSpellPanelTab, TEXT("SpellComponents_ComponentList"));
+		TArray<FACEComponentRow> Rows; BuildComponentRowList(Rows);
+		if (List && TryBar(Manager->FindElementUnder(ActiveSpellPanelTab, TEXT("SpellComponents_ComponentList_Scrollbar")),
+			EACEUIScrollTarget::Components, FMath::Max(0, Rows.Num() - List->Height/32), false)) return true;
+	}
+	if (bTradeOpen && Client)
+	{
+		for (bool bSelf : {true,false})
+		{
+			const auto List=Manager->FindElementByName(bSelf ? TEXT("TradeSelfItemsList") : TEXT("TradeOtherItemsList"));
+			const auto Bar=Manager->FindElementByName(bSelf ? TEXT("TradeSelf_ItemListScroll") : TEXT("TradeOther_ItemListScroll"));
+			const int32 Capacity=bSelf ? Client->GetTradeSelfItems().Num()+1 : Client->GetTradePartnerItems().Num();
+			if (List && TryBar(Bar,bSelf ? EACEUIScrollTarget::TradeSelf : EACEUIScrollTarget::TradeOther,
+				FMath::Max(0,Capacity-FMath::Max(1,List->Width/32)),true)) return true;
+		}
+	}
+	if (ActivePanelPage == TEXT("BookPanel_Field") && BookScroll)
+		if (TryBar(GetBookScrollbar(), EACEUIScrollTarget::Book,
+			FMath::CeilToInt(BookScroll->GetScrollOffsetOfEnd()), false)) return true;
+	if (ActivePanelPage == TEXT("CharacterInfoPanel_Field") && CharacterInfoScroll)
+		if (TryBar(Manager->FindElementUnder(ActivePanelPage,TEXT("CharacterInfoText_Scrollbar")),
+			EACEUIScrollTarget::CharacterInfo,FMath::CeilToInt(CharacterInfoScroll->GetScrollOffsetOfEnd()),false)) return true;
+	if (ExamScroll && ExamScroll->GetVisibility() != ESlateVisibility::Collapsed)
+	{
+		if (TryBar(Manager->FindElementUnder(TEXT("ItemExamineUI"), TEXT("ItemDisplayTextScrollbar")),
+			EACEUIScrollTarget::Examination, FMath::CeilToInt(ExamScroll->GetScrollOffsetOfEnd()), false)) return true;
+	}
+
+	if (ActivePanelPage == TEXT("SpellManagementPanel_Field") && ActiveSpellPanelTab == TEXT("SpellbookPage"))
+	{
+		TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(TEXT("SpellbookPage"), TEXT("SpellBook_SpellList"));
+		TSharedPtr<FACEUIElement> Bar = Manager->FindElementUnder(TEXT("SpellbookPage"), TEXT("SpellBook_SpellList_Scrollbar"));
+		const int32 PageSize = ListEl.IsValid() ? FMath::Max(1, ListEl->Height / SpellbookTemplate().Height()) : 1;
+		if (TryBar(Bar, EACEUIScrollTarget::Spellbook, FMath::Max(0, SpellbookFilteredCount - PageSize), false))
+		{
+			return true;
+		}
+	}
+	if (ActivePanelPage == TEXT("InventoryPanel_Field"))
+	{
+		TSharedPtr<FACEUIElement> GridEl = Manager->FindElementUnder(TEXT("InventoryPanel_Field"), TEXT("Inv_3DItemList"));
+		TSharedPtr<FACEUIElement> ItemBar = Manager->FindElementUnder(TEXT("InventoryPanel_Field"), TEXT("Inv_3DItemList_Scrollbar"));
+		if (GridEl.IsValid())
+		{
+			constexpr int32 Cell = 32;
+			const int32 PageSize = FMath::Max(1, GridEl->Width / Cell) * FMath::Max(1, GridEl->Height / Cell);
+			FACEWorldObject PackObj;
+			int32 Capacity = PageSize;
+			if (Client && Client->GetWorldObject(SelectedPackGuid, PackObj) && PackObj.ItemsCapacity > 0)
+			{
+				Capacity = PackObj.ItemsCapacity;
+			}
+			if (TryBar(ItemBar, EACEUIScrollTarget::InvGrid, FMath::Max(0, Capacity - PageSize), false))
+			{
+				return true;
+			}
+		}
+		TSharedPtr<FACEUIElement> PackList = Manager->FindElementUnder(TEXT("InventoryPanel_Field"), TEXT("Inv_ContainerList"));
+		TSharedPtr<FACEUIElement> PackBar = Manager->FindElementUnder(TEXT("InventoryPanel_Field"), TEXT("Inv_ContainerList_Scrollbar"));
+		if (PackList.IsValid() && Client)
+		{
+			FACEWorldObject SelfObj;
+			Client->GetWorldObject(Client->GetPlayerGuid(), SelfObj);
+			const int32 Side = FMath::Clamp(SelfObj.ContainersCapacity > 0 ? SelfObj.ContainersCapacity : 7, 1, 24);
+			const int32 MaxVis = FMath::Max(1, PackList->Height / 36);
+			if (TryBar(PackBar, EACEUIScrollTarget::PackList, FMath::Max(0, Side - MaxVis), false))
+			{
+				return true;
+			}
+		}
+	}
+	if (OpenLootContainerGuid != 0)
+	{
+		TSharedPtr<FACEUIElement> ItemBar = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("Ext_ItemListScroll"));
+		TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("Ext_Container_ItemList"));
+		const int32 PageSize = ListEl.IsValid() ? FMath::Max(1, ListEl->Width / 32) : 12;
+		int32 ItemCount = 0;
+		if (Client)
+		{
+			ItemCount = Client->GetPackItems(OpenLootSelectedPackGuid != 0
+				? OpenLootSelectedPackGuid : OpenLootContainerGuid).Num();
+		}
+		if (TryBar(ItemBar, EACEUIScrollTarget::ExtItems, FMath::Max(0, ItemCount - PageSize), true))
+		{
+			return true;
+		}
+	}
+	if (ActivePanelPage == TEXT("SkillManagementPanel_Field") && ActiveSkillTab == TEXT("CharacterTitlePage"))
+	{
+		const auto List = Manager->FindElementUnder(ActiveSkillTab, TEXT("CharacterTitle_ListBox"));
+		const auto Bar = Manager->FindElementUnder(ActiveSkillTab, TEXT("CharacterTitle_ListBox_Scrollbar"));
+		const int32 Rows = List ? FMath::Max(1, List->Height / 24) : 1;
+		if (TryBar(Bar, EACEUIScrollTarget::TitleList, FMath::Max(0, SortedTitleIds.Num() - Rows), false)) return true;
+	}
+	if (ActivePanelPage == TEXT("SkillManagementPanel_Field") && ActiveSkillTab == TEXT("SkillPage"))
+	{
+		TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(TEXT("SkillPage"), TEXT("StatManagement_List"));
+		TSharedPtr<FACEUIElement> Bar = Manager->FindElementUnder(TEXT("SkillPage"), TEXT("StatManagement_List_Scrollbar"));
+		const int32 PageSize = ListEl.IsValid() ? FMath::Max(1, ListEl->Height / 18) : 1;
+		if (TryBar(Bar, EACEUIScrollTarget::StatList, FMath::Max(0, SkillListContentCount - PageSize), false))
+		{
+			return true;
+		}
+	}
+	if (ActivePanelPage == TEXT("PositiveEffectsPanel_Field")
+		|| ActivePanelPage == TEXT("NegativeEffectsPanel_Field"))
+	{
+		TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(ActivePanelPage, TEXT("Effects_SpellList"));
+		TSharedPtr<FACEUIElement> Bar = Manager->FindElementUnder(ActivePanelPage, TEXT("Effects_SpellList_Scrollbar"));
+		const int32 PageSize = ListEl.IsValid() ? FMath::Max(1, ListEl->Height / 24) : 10;
+		int32 FilteredCount = 0;
+		if (Client)
+		{
+			for (const FACEActiveEnchantment& E : Client->GetActiveEnchantments())
+			{
+				if (E.bVitae || E.SpellId == 666) { continue; }
+				const bool bWantPos = ActivePanelPage == TEXT("PositiveEffectsPanel_Field");
+				if (E.bBeneficial == bWantPos) { ++FilteredCount; }
+			}
+		}
+		if (TryBar(Bar, EACEUIScrollTarget::Effects, FMath::Max(0, FilteredCount - PageSize), false))
+		{
+			return true;
+		}
+	}
+	if (ActivePanelPage == TEXT("OptionsPanel_Field") && ActiveOptionsPage() != INDEX_NONE)
+	{
+		TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(ActiveOptionsTab, ActiveOptionsListName());
+		const TCHAR* BarName = (ActiveOptionsTab == TEXT("CharacterSettingsPage"))
+			? TEXT("CharacterOptionsListBoxScrollbar") : TEXT("OptionsListBoxScrollbar");
+		TSharedPtr<FACEUIElement> Bar = Manager->FindElementUnder(ActiveOptionsTab, BarName);
+		TArray<const FACECharacterOptionDesc*> PageOptions;
+		ACECharacterOptions::GetPageOptions(static_cast<uint8>(ActiveOptionsPage()), PageOptions);
+		const int32 PageSize = ListEl.IsValid() ? FMath::Max(1, ListEl->Height / 16) : 16;
+		if (TryBar(Bar, EACEUIScrollTarget::OptionsList,
+			ActiveOptionsTab == TEXT("ConfigPage") && VideoSettings
+				? FMath::CeilToInt(CastChecked<UACEVideoSettingsWidget>(VideoSettings)->GetScrollEnd())
+				: FMath::Max(0, GetOptionsRowCount() - PageSize), false))
+		{
+			return true;
+		}
+	}
+    for (int32 W=0; W<=NumFloatyChats; ++W)
+    {
+        auto* Log=GetChatLogWidget(W);
+        if (!Log || Log->GetVisibility()==ESlateVisibility::Collapsed) continue;
+        const FString Root=W ? FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"),W) : TEXT("RootGameplay_FloatyMainChat_Field");
+        ScrollDragChatWindow=W;
+        if (TryBar(Manager->FindElementUnder(Root,TEXT("ChatLogScrollbar")),EACEUIScrollTarget::Chat,
+            FMath::Max(0,FMath::CeilToInt(Log->GetScrollOffsetOfEnd())),false)) return true;
+    }
+	if (OpenVendorGuid != 0 && Manager)
+	{
+		const TCHAR* ScrollName = TEXT("Vendor_ItemListScroll");
+		EACEUIScrollTarget VendorTarget = EACEUIScrollTarget::VendorItems;
+		int32 Offset = VendorItemsScrollOffset;
+		if (ActiveVendorPage == 1)
+		{
+			ScrollName = TEXT("Vendor_BuyListScroll");
+			VendorTarget = EACEUIScrollTarget::VendorBuy;
+			Offset = VendorBuyScrollOffset;
+		}
+		else if (ActiveVendorPage == 2)
+		{
+			ScrollName = TEXT("Vendor_SellListScroll");
+			VendorTarget = EACEUIScrollTarget::VendorSell;
+			Offset = VendorSellScrollOffset;
+		}
+		(void)Offset;
+		TSharedPtr<FACEUIElement> VendorBar = Manager->FindElementByName(ScrollName);
+		constexpr int32 Cell = 32;
+		TSharedPtr<FACEUIElement> ListEl;
+		if (ActiveVendorPage == 0)
+		{
+			ListEl = Manager->FindElementUnder(TEXT("VendorItemsPage"), TEXT("VendorItemsList"));
+		}
+		else if (ActiveVendorPage == 1)
+		{
+			ListEl = Manager->FindElementUnder(TEXT("VendorBuyPage"), TEXT("VendorBuyList"));
+		}
+		else
+		{
+			ListEl = Manager->FindElementUnder(TEXT("VendorSellPage"), TEXT("VendorSellList"));
+		}
+		int32 Capacity = 0;
+		if (Client)
+		{
+			if (ActiveVendorPage == 2) { Capacity = VendorSellCart.Num(); }
+			else if (ActiveVendorPage == 1) { Capacity = VendorBuyCart.Num(); }
+			else
+			{
+				Capacity = Client->GetVendorMerchandise().Num();
+				if (Capacity == 0) { Capacity = Client->GetPackItems(OpenVendorGuid).Num(); }
+			}
+		}
+		const int32 PageSize = ListEl.IsValid()
+			? FMath::Max(1, (ListEl->Width / Cell) * FMath::Max(1, ListEl->Height / Cell))
+			: 1;
+		if (TryBar(VendorBar, VendorTarget, FMath::Max(0, Capacity - PageSize), true))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D CanvasLocalPos)
+{
+	if (ScrollDragTarget == EACEUIScrollTarget::None || ScrollDragTravel <= 0)
+	{
+		return;
+	}
+	const float Pos = bScrollDragHorizontal ? CanvasLocalPos.X : CanvasLocalPos.Y;
+	const float T = FMath::Clamp((Pos - ScrollDragGrabOffset - static_cast<float>(ScrollDragTrackOrigin))
+		/ static_cast<float>(ScrollDragTravel), 0.f, 1.f);
+	ScrollDragFraction = T;
+	int32 Off = FMath::RoundToInt(T * static_cast<float>(ScrollDragMaxOff));
+	if (ScrollDragTarget == EACEUIScrollTarget::InvGrid)
+		if (const auto Grid = Manager->FindElementUnder(TEXT("InventoryPanel_Field"), TEXT("Inv_3DItemList")))
+			Off -= Off % FMath::Max(1, Grid->Width/32);
+	if (const auto Bar = ScrollDragBar.Pin()) SyncDatScrollbar(Bar, T, ScrollDragVisibleFraction);
+	if (Off == ScrollDragLastOffset && ScrollDragTarget != EACEUIScrollTarget::Chat) return;
+	ScrollDragLastOffset = Off;
+	switch (ScrollDragTarget)
+	{
+	case EACEUIScrollTarget::Components:
+		ComponentScrollOffset = Off; RefreshComponentOverlays(); break;
+	case EACEUIScrollTarget::JournalList:
+		JournalScrollOffset=Off; RefreshQuestOverlays(); break;
+	case EACEUIScrollTarget::CharacterInfo:
+		if (CharacterInfoScroll) CharacterInfoScroll->SetScrollOffset(Off);
+		break;
+	case EACEUIScrollTarget::Book:
+		if (BookScroll) BookScroll->SetScrollOffset(Off);
+		break;
+	case EACEUIScrollTarget::Examination:
+		if (ExamScroll) ExamScroll->SetScrollOffset(Off);
+		break;
+
+	case EACEUIScrollTarget::Spellbook:
+		SpellbookScrollOffset = Off;
+		RefreshSpellbookOverlays();
+		SyncSpellbookScrollbar();
+		break;
+	case EACEUIScrollTarget::InvGrid:
+		InventoryScrollOffset = Off;
+		RefreshInventoryOverlays();
+		SyncInventoryScrollbars();
+		break;
+	case EACEUIScrollTarget::PackList:
+		PackScrollOffset = Off;
+		RefreshInventoryOverlays();
+		SyncInventoryScrollbars();
+		break;
+	case EACEUIScrollTarget::ExtItems:
+		ExtItemScrollOffset = Off;
+		RefreshExternalContainerOverlays();
+		SyncExternalContainerScrollbars();
+		break;
+	case EACEUIScrollTarget::ExtPacks:
+		ExtPackScrollOffset = Off;
+		RefreshExternalContainerOverlays();
+		SyncExternalContainerScrollbars();
+		break;
+	case EACEUIScrollTarget::StatList:
+		SkillListScrollOffset = Off;
+		RefreshSkillOverlays();
+		SyncStatListScrollbar();
+		break;
+	case EACEUIScrollTarget::TitleList:
+		TitleListScrollOffset = Off;
+		RefreshTitleOverlays();
+		break;
+	case EACEUIScrollTarget::Effects:
+		EffectsScrollOffset = Off;
+		RefreshEffectsOverlays(ActivePanelPage == TEXT("PositiveEffectsPanel_Field"));
+		break;
+	case EACEUIScrollTarget::OptionsList:
+		if (ActiveOptionsTab == TEXT("ConfigPage"))
+		{
+			if (auto* Video = Cast<UACEVideoSettingsWidget>(VideoSettings)) Video->SetScrollOffset(T*ScrollDragMaxOff);
+			SyncOptionsScrollbar();
+			break;
+		}
+		OptionsScrollOffset = Off;
+		RefreshOptionsOverlays();
+		break;
+	case EACEUIScrollTarget::StackSize:
+		{
+			// Map track fraction onto 1..SelectedStackMax (not 0..Max).
+			const int32 Amt = FMath::Clamp(
+				FMath::RoundToInt(T * static_cast<float>(SelectedStackMax)),
+				1, FMath::Max(1, SelectedStackMax));
+			SelectedStackAmount = Amt;
+			RefreshSelectionOverlay();
+			break;
+		}
+    case EACEUIScrollTarget::Chat:
+        if (auto* Log=GetChatLogWidget(ScrollDragChatWindow))
+            ScrollChatLog(T*Log->GetScrollOffsetOfEnd()-Log->GetScrollOffset(),ScrollDragChatWindow);
+        break;
+	case EACEUIScrollTarget::TradeSelf:
+		TradeSelfOffset=Off; RefreshTradeOverlays(); break;
+	case EACEUIScrollTarget::TradeOther:
+		TradeOtherOffset=Off; RefreshTradeOverlays(); break;
+	case EACEUIScrollTarget::VendorItems:
+		VendorItemsScrollOffset = Off;
+		RefreshVendorOverlays();
+		SyncVendorScrollbars();
+		break;
+	case EACEUIScrollTarget::VendorBuy:
+		VendorBuyScrollOffset = Off;
+		RefreshVendorOverlays();
+		SyncVendorScrollbars();
+		break;
+	case EACEUIScrollTarget::VendorSell:
+		VendorSellScrollOffset = Off;
+		RefreshVendorOverlays();
+		SyncVendorScrollbars();
+		break;
+	default:
+		break;
+	}
+}
+
+bool UACEUIGameplayBinder::TryFinishScrollbarDrag()
+{
+	if (ScrollDragTarget == EACEUIScrollTarget::None)
+	{
+		return false;
+	}
+	ScrollDragTarget = EACEUIScrollTarget::None;
+	ScrollDragBar.Reset();
+	ScrollDragGrabOffset = 0.f;
+	ScrollDragLastOffset = INDEX_NONE;
+	return true;
+}
+
+bool UACEUIGameplayBinder::IsBeyondContainerUseRadius(int32 ContainerGuid) const
+{
+	if (!Client || ContainerGuid == 0)
+	{
+		return true;
+	}
+	FACEWorldObject Cont;
+	if (!Client->GetWorldObject(ContainerGuid, Cont) || !Cont.bHasPosition)
+	{
+		// Missing position — don't force-close (may still be streaming).
+		return false;
+	}
+	const FACEPosition PlayerPos = Client->GetPlayerPosition();
+	if (!PlayerPos.IsValid())
+	{
+		return false;
+	}
+	// Interact uses Setup cylinder gap ≤ UseRadius. Auto-close must sit strictly outside
+	// that band — center Dist2D was overlapping interact range and closed loot on open.
+	const float UseR = Cont.UseRadius > 0.f ? Cont.UseRadius : 0.5f;
+	constexpr float CloseHysteresisAc = 2.0f;
+	const float CloseLimitAc = UseR + CloseHysteresisAc;
+
+	if (AACEPlayerController* PC = PlayerController.Get())
+	{
+		const float Scale = FMath::Max(1.f, PC->WorldScale);
+		const FVector SelfCm = PlayerPos.ToUnrealLocation(Scale);
+		const FVector ContCm = Cont.Position.ToUnrealLocation(Scale);
+		const float GapAc = PC->GetUseCylinderDistanceCm(Cont, SelfCm, ContCm) / Scale;
+		return GapAc > CloseLimitAc;
+	}
+
+	const FVector P = PlayerPos.ToUnrealLocation(1.f);
+	const FVector C = Cont.Position.ToUnrealLocation(1.f);
+	const float Dist2D = FVector2D(P.X - C.X, P.Y - C.Y).Size();
+	// Rough radii so fallback still clears interact range.
+	return Dist2D > (CloseLimitAc + 1.0f);
+}
+
+void UACEUIGameplayBinder::TickEnvPanelRangeChecks()
+{
+	if (!Client)
+	{
+		return;
+	}
+	// Vendor CloseForPlayer only runs the goodbye emote — no CloseGroundContainer packet.
+	// Mirror server CheckClose on the client so the panel leaves with the thanks message.
+	if (OpenVendorGuid != 0 && IsBeyondContainerUseRadius(OpenVendorGuid))
+	{
+		HideVendorPanel();
+	}
+	if (OpenLootContainerGuid != 0)
+	{
+		if (IsBeyondContainerUseRadius(OpenLootContainerGuid))
+		{
+			// Debounce — cylinder gap can flicker across the close band while looting.
+			if (PendingLootRangeCloseAt <= 0.0)
+			{
+				PendingLootRangeCloseAt = FPlatformTime::Seconds() + 0.6;
+			}
+			else if (FPlatformTime::Seconds() >= PendingLootRangeCloseAt)
+			{
+				PendingLootCloseGuid = 0;
+				PendingLootCloseAt = 0.0;
+				PendingLootRangeCloseAt = 0.0;
+				HideExternalContainer(true);
+			}
+		}
+		else
+		{
+			PendingLootRangeCloseAt = 0.0;
+		}
+	}
+	else
+	{
+		PendingLootRangeCloseAt = 0.0;
+	}
+}
+
+void UACEUIGameplayBinder::SyncEnvPanelMode()
+{
+	if (!Manager)
+	{
+		return;
+	}
+	const bool bLoot = OpenLootContainerGuid != 0;
+	const bool bVendor = OpenVendorGuid != 0;
+	const bool bTrade = bTradeOpen;
+	const bool bSalvage = OpenSalvageToolGuid != 0;
+	const bool bAny = bLoot || bVendor || bTrade || bSalvage;
+	SetFloatyVisible(TEXT("RootGameplay_FloatyEnvPanel_Field"), bAny);
+	// Only one env mode panel at a time — Salvage/Trade ghosts under vendor/loot otherwise.
+	Manager->SetElementVisibleByName(TEXT("SalvagePanel"), bSalvage);
+	Manager->SetElementVisibleByName(TEXT("SecureTrade"), bTrade);
+	Manager->SetElementVisibleByName(TEXT("ExternalContainer"), bLoot);
+	Manager->SetElementVisibleByName(TEXT("Vendor"), bVendor);
+	// Visibility inherits from the mode root. Preserve authored hidden focus/locked frames.
+	auto SetEnvTreeVisible = [this](const TCHAR* RootName, bool bShow)
+	{
+		if (TSharedPtr<FACEUIElement> Root = Manager->FindElementByName(RootName))
+		{
+			Root->bVisible = bShow;
+		}
+	};
+	SetEnvTreeVisible(TEXT("SalvagePanel"), bSalvage);
+	SetEnvTreeVisible(TEXT("SecureTrade"), bTrade);
+	SetEnvTreeVisible(TEXT("ExternalContainer"), bLoot);
+	SetEnvTreeVisible(TEXT("Vendor"), bVendor);
+	// Mag-nus gmEnvPanelUI::SetupChildren hides Slumlord until house UI — wood/maroon
+	// ghost behind Vendor Buy is Slumlord (0x06004CC2 + HouseBuy buttons) left visible.
+	SetEnvTreeVisible(TEXT("Slumlord"), false);
+	// Collapse inactive mode chrome so authored backgrounds cannot ghost through.
+	if (!bVendor)
+	{
+		Manager->SetElementVisibleByName(TEXT("VendorPanel"), false);
+		Manager->SetElementVisibleByName(TEXT("VendorItemsPage"), false);
+		Manager->SetElementVisibleByName(TEXT("VendorBuyPage"), false);
+		Manager->SetElementVisibleByName(TEXT("VendorSellPage"), false);
+		for (UBorder* B : VendorItemSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UBorder* B : VendorItemSlotBgs) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UTextBlock* L : VendorTabLabels) { if (L) L->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UTextBlock* L : VendorButtonLabels) { if (L) L->SetVisibility(ESlateVisibility::Collapsed); }
+	}
+	if (!bLoot)
+	{
+		for (UBorder* B : ExtItemSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UBorder* B : ExtItemSlotBgs) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UBorder* B : ExtPackSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UBorder* B : ExtPackSlotBgs) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+	}
+	if (!bTrade)
+	{
+		for (UBorder* B : TradeSelfSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UBorder* B : TradeOtherSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+	}
+	if (!bSalvage)
+	{
+		for (UBorder* B : SalvageItemSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		if (SalvageWarningLabel) { SalvageWarningLabel->SetVisibility(ESlateVisibility::Collapsed); }
+	}
+	if (bSalvage)
+	{
+		ExpandEnvFloatyForWideContent();
+		Manager->SetElementVisibleByName(TEXT("CloseSalvagePanelButton"), true);
+		Manager->SetElementVisibleByName(TEXT("Salvage_Button"), SalvageQueueGuids.Num() > 0);
+	}
+	if (bVendor)
+	{
+		ExpandEnvFloatyForWideContent();
+		SyncVendorPageVisibility();
+		RefreshVendorTabLabels();
+		RefreshVendorButtonLabels();
+		Manager->SetElementVisibleByName(TEXT("CloseVendorPanelButton"), true);
+	}
+	if (bLoot)
+	{
+		ExpandEnvFloatyForWideContent();
+		if (TSharedPtr<FACEUIElement> CloseBtn = Manager->FindElementUnder(
+			TEXT("ExternalContainer"), TEXT("CloseExtContainerPanelButton")))
+		{
+			CloseBtn->bVisible = true;
+		}
+		Manager->SetElementVisibleByName(TEXT("CloseExtContainerPanelButton"), true);
+	}
+	if (bTrade)
+	{
+		ExpandEnvFloatyForWideContent();
+	}
+	if (bAny)
+	{
+		if (TSharedPtr<FACEUIElement> Env = Manager->FindElementByName(TEXT("RootGameplay_FloatyEnvPanel_Field")))
+		{
+			Manager->BringFloatyToFront(Env);
+		}
+	}
+}
+
+void UACEUIGameplayBinder::ShowExternalContainer(int32 Guid)
+{
+	if (Guid == 0)
+	{
+		return;
+	}
+	OpenLootContainerGuid = Guid;
+	OpenLootSelectedPackGuid = Guid;
+	ExtItemScrollOffset = 0;
+	ExtPackScrollOffset = 0;
+	OpenVendorGuid = 0;
+	PendingVendorSellGuid = 0;
+	VendorSellCart.Reset();
+	VendorBuyCart.Reset();
+	bTradeOpen = false;
+	OpenSalvageToolGuid = 0;
+	SalvageQueueGuids.Reset();
+	if (PlayerController)
+	{
+		PlayerController->EndUseApproach();
+	}
+	SyncEnvPanelMode();
+	RefreshExternalContainerOverlays();
+}
+
+void UACEUIGameplayBinder::HideExternalContainer(bool bNotifyServer)
+{
+	const int32 Guid = OpenLootContainerGuid;
+	OpenLootContainerGuid = 0;
+	OpenLootSelectedPackGuid = 0;
+	ExtItemScrollOffset = 0;
+	PendingLootCloseGuid = 0;
+	PendingLootCloseAt = 0.0;
+	PendingLootRangeCloseAt = 0.0;
+	for (UBorder* B : ExtItemSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+	for (UBorder* B : ExtItemSlotBgs) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+	for (UBorder* B : ExtPackSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+	for (UBorder* B : ExtPackSlotBgs) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+	SyncEnvPanelMode();
+	if (Guid != 0 && Client)
+	{
+		Client->ClearContainerContents(Guid);
+		if (bNotifyServer)
+		{
+			Client->SendNoLongerViewingContents(Guid);
+		}
+	}
+}
+
+void UACEUIGameplayBinder::ShowVendorPanel(int32 Guid)
+{
+	if (Guid == 0)
+	{
+		return;
+	}
+	const bool bSameVendor = (Guid == OpenVendorGuid);
+	OpenVendorGuid = Guid;
+	OpenLootContainerGuid = 0;
+	bTradeOpen = false;
+	OpenSalvageToolGuid = 0;
+	SalvageQueueGuids.Reset();
+	if (!bSameVendor)
+	{
+		ActiveVendorPage = 0;
+		VendorItemsScrollOffset = 0;
+		VendorBuyScrollOffset = 0;
+		VendorSellScrollOffset = 0;
+		VendorItemTypeFilter = 0;
+		VendorSelectedGuid = 0;
+		VendorSellSelectedGuid = 0;
+		VendorBuyCart.Reset();
+		VendorSellCart.Reset();
+		CloseVendorFilterDropdown();
+	}
+	if (PlayerController)
+	{
+		PlayerController->EndUseApproach();
+	}
+	SyncEnvPanelMode();
+	RefreshVendorOverlays();
+}
+
+void UACEUIGameplayBinder::HideVendorPanel()
+{
+	const int32 Guid = OpenVendorGuid;
+	OpenVendorGuid = 0;
+	VendorSelectedGuid = 0;
+	VendorSellSelectedGuid = 0;
+	PendingVendorSellGuid = 0;
+	VendorBuyCart.Reset();
+	VendorSellCart.Reset();
+	CloseVendorFilterDropdown();
+	for (UBorder* B : VendorItemSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+	for (UBorder* B : VendorItemSlotBgs) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+	HideVendorTextOverlays();
+	SyncEnvPanelMode();
+	if (Guid != 0 && Client)
+	{
+		Client->SendNoLongerViewingContents(Guid);
+	}
+}
+
+void UACEUIGameplayBinder::SetVendorPage(int32 PageIndex)
+{
+	ActiveVendorPage = FMath::Clamp(PageIndex, 0, 2);
+	CloseVendorFilterDropdown();
+	SyncVendorPageVisibility();
+	RefreshVendorTabLabels();
+	RefreshVendorOverlays();
+}
+
+void UACEUIGameplayBinder::SyncVendorPageVisibility()
+{
+	if (!Manager || OpenVendorGuid == 0)
+	{
+		return;
+	}
+	Manager->SetElementVisibleByName(TEXT("VendorPanel"), true);
+	// Recursive — SetEnvTreeVisible(Vendor,true) re-shows Items chrome under Buy otherwise.
+	auto SetPageTree = [this](const TCHAR* PageName, bool bShow)
+	{
+		if (TSharedPtr<FACEUIElement> Root = Manager->FindElementByName(PageName))
+		{
+			TArray<TSharedPtr<FACEUIElement>> Stack;
+			Stack.Add(Root);
+			while (Stack.Num() > 0)
+			{
+				TSharedPtr<FACEUIElement> Cur = Stack.Pop(EAllowShrinking::No);
+				if (!Cur.IsValid()) { continue; }
+				Cur->bVisible = bShow;
+				for (const TSharedPtr<FACEUIElement>& Ch : Cur->Children)
+				{
+					Stack.Add(Ch);
+				}
+			}
+		}
+	};
+	SetPageTree(TEXT("VendorItemsPage"), ActiveVendorPage == 0);
+	SetPageTree(TEXT("VendorBuyPage"), ActiveVendorPage == 1);
+	SetPageTree(TEXT("VendorSellPage"), ActiveVendorPage == 2);
+}
+
+void UACEUIGameplayBinder::RefreshVendorTabLabels()
+{
+	if (!Manager || !Canvas || !Canvas->WidgetTree || OpenVendorGuid == 0)
+	{
+		for (UTextBlock* L : VendorTabLabels)
+		{
+			if (L) { L->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		return;
+	}
+	EnsureOverlays();
+	static const TCHAR* TabNames[] = {
+		TEXT("VendorItemsTab"), TEXT("VendorBuyTab"), TEXT("VendorSellTab")
+	};
+	// Retail-facing labels for the three vendor pages (DAT tabs are image-only).
+	static const TCHAR* TabLabels[] = { TEXT("Items"), TEXT("Buy"), TEXT("Sell") };
+	while (VendorTabLabels.Num() < 3)
+	{
+		UTextBlock* L = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		L->SetVisibility(ESlateVisibility::HitTestInvisible);
+		L->SetJustification(ETextJustify::Center);
+		VendorTabLabels.Add(L);
+	}
+	for (int32 i = 0; i < 3; ++i)
+	{
+		const FLinearColor Col = (ActiveVendorPage == i) ? TextGold : TextWhite;
+		ApplyPanelTabChrome(TabNames[i], ActiveVendorPage == i);
+		PlaceTextOnElement(VendorTabLabels[i], TabNames[i], TabLabels[i], 9, Col, 10050);
+	}
+}
+
+void UACEUIGameplayBinder::RefreshVendorButtonLabels()
+{
+	if (!Manager || !Canvas || !Canvas->WidgetTree || OpenVendorGuid == 0)
+	{
+		for (UTextBlock* L : VendorButtonLabels)
+		{
+			if (L) { L->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		return;
+	}
+	EnsureOverlays();
+	struct FVendorBtn
+	{
+		const TCHAR* Element;
+		const TCHAR* Label;
+		int32 Page; // -1 = items, 0/1/2 = match ActiveVendorPage, 99 = always
+	};
+	static const FVendorBtn Specs[] = {
+		{ TEXT("VendorItemBuy_Button"), TEXT("Buy"), -1 },
+		{ TEXT("VendorItemAdd_Button"), TEXT("Add"), -1 },
+		{ TEXT("VendorBuyBuyItem_Button"), TEXT("Buy"), 1 },
+		{ TEXT("VendorBuyBuyAll_Button"), TEXT("Buy All"), 1 },
+		{ TEXT("VendorBuyClearItem_Button"), TEXT("Clear"), 1 },
+		{ TEXT("VendorBuyClearAll_Button"), TEXT("Clear All"), 1 },
+		{ TEXT("VendorSellSellItem_Button"), TEXT("Sell"), 2 },
+		{ TEXT("VendorSellSellAll_Button"), TEXT("Sell All"), 2 },
+		{ TEXT("VendorSellClearItem_Button"), TEXT("Clear"), 2 },
+		{ TEXT("VendorSellClearAll_Button"), TEXT("Clear All"), 2 },
+	};
+	constexpr int32 N = UE_ARRAY_COUNT(Specs);
+	while (VendorButtonLabels.Num() < N)
+	{
+		UTextBlock* L = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		L->SetVisibility(ESlateVisibility::HitTestInvisible);
+		L->SetJustification(ETextJustify::Center);
+		VendorButtonLabels.Add(L);
+	}
+	for (int32 i = 0; i < N; ++i)
+	{
+		const bool bShow = (Specs[i].Page < 0 && ActiveVendorPage == 0)
+			|| Specs[i].Page == ActiveVendorPage;
+		if (!bShow)
+		{
+			if (VendorButtonLabels[i])
+			{
+				VendorButtonLabels[i]->SetVisibility(ESlateVisibility::Collapsed);
+			}
+			continue;
+		}
+		PlaceTextOnElement(VendorButtonLabels[i], Specs[i].Element, Specs[i].Label, 8, TextGold, 10060, true);
+	}
+}
+
+FString UACEUIGameplayBinder::VendorFilterLabel() const
+{
+	switch (VendorItemTypeFilter)
+	{
+	case 1: return TEXT("Weapons");
+	case 2: return TEXT("Armor");
+	case 3: return TEXT("Clothing");
+	case 4: return TEXT("Jewelry");
+	case 5: return TEXT("Misc");
+	default: return TEXT("All");
+	}
+}
+
+bool UACEUIGameplayBinder::VendorItemMatchesFilter(const FACEWorldObject& O, int32 FilterIndex) const
+{
+	switch (FilterIndex)
+	{
+	case 1: // Weapons
+		return (O.ItemType & (ACEItemType::MeleeWeapon | ACEItemType::MissileWeapon | ACEItemType::Caster)) != 0;
+	case 2: // Armor
+		return (O.ItemType & ACEItemType::Armor) != 0;
+	case 3: // Clothing
+		return (O.ItemType & ACEItemType::Clothing) != 0;
+	case 4: // Jewelry
+		return (O.ItemType & ACEItemType::Jewelry) != 0;
+	case 5: // Misc
+		return (O.ItemType & (ACEItemType::MeleeWeapon | ACEItemType::MissileWeapon | ACEItemType::Caster
+			| ACEItemType::Armor | ACEItemType::Clothing | ACEItemType::Jewelry)) == 0;
+	default:
+		return true;
+	}
+}
+
+void UACEUIGameplayBinder::GetVendorFilterSourceItems(TArray<FACEWorldObject>& Out) const
+{
+	Out.Reset();
+	if (!Client || OpenVendorGuid == 0)
+	{
+		return;
+	}
+	Out = Client->GetVendorMerchandise();
+	if (Out.Num() == 0)
+	{
+		Out = Client->GetPackItems(OpenVendorGuid);
+	}
+}
+
+void UACEUIGameplayBinder::RebuildVendorVisibleFilters()
+{
+	VendorVisibleFilterIndices.Reset();
+	VendorVisibleFilterIndices.Add(0);
+	TArray<FACEWorldObject> Items;
+	GetVendorFilterSourceItems(Items);
+	for (int32 FilterId = 1; FilterId < VendorFilterCount; ++FilterId)
+	{
+		for (const FACEWorldObject& O : Items)
+		{
+			if (VendorItemMatchesFilter(O, FilterId))
+			{
+				VendorVisibleFilterIndices.Add(FilterId);
+				break;
+			}
+		}
+	}
+	if (!VendorVisibleFilterIndices.Contains(VendorItemTypeFilter))
+	{
+		VendorItemTypeFilter = 0;
+	}
+}
+
+void UACEUIGameplayBinder::PlaceVendorFilterCaption()
+{
+	if (!Canvas || !Manager || OpenVendorGuid == 0)
+	{
+		if (VendorFilterText)
+		{
+			VendorFilterText->SetVisibility(ESlateVisibility::Collapsed);
+		}
+		return;
+	}
+	EnsureOverlays();
+	TSharedPtr<FACEUIElement> Display = Manager->FindElementUnder(
+		TEXT("VendorItemsPage"), TEXT("Menu_Vendor_SelectionDisplay"));
+	if (!Display.IsValid())
+	{
+		Display = Manager->FindElementUnder(
+			TEXT("VendorItemTypeList"), TEXT("Menu_Vendor_SelectionDisplay"));
+	}
+	if (!Display.IsValid())
+	{
+		Display = Manager->FindElementByName(TEXT("Menu_Vendor_SelectionDisplay"));
+	}
+	PlaceTextOnElement(VendorFilterText, Display, VendorFilterLabel(), 9, TextGold, 200010);
+	if (auto Arrow = Manager->FindElementByName(TEXT("Menu_Vendor_SelectionWidget")))
+	{
+		Arrow->bVisible = true;
+		Arrow->ImageFileId = 0x060012B1;
+		Arrow->DrawMode = 3;
+	}
+}
+
+void UACEUIGameplayBinder::ToggleVendorFilterDropdown()
+{
+	bVendorFilterDropdownOpen = !bVendorFilterDropdownOpen;
+	RefreshVendorFilterDropdown();
+}
+
+void UACEUIGameplayBinder::SetVendorItemTypeFilter(int32 FilterIndex)
+{
+	VendorItemTypeFilter = FMath::Clamp(FilterIndex, 0, VendorFilterCount - 1);
+	CloseVendorFilterDropdown();
+	RefreshVendorOverlays();
+}
+
+void UACEUIGameplayBinder::CloseVendorFilterDropdown()
+{
+	bVendorFilterDropdownOpen = false;
+	if (VendorFilterDropdownBg)
+	{
+		VendorFilterDropdownBg->SetVisibility(ESlateVisibility::Collapsed);
+	}
+	for (UTextBlock* L : VendorFilterDropdownLabels)
+	{
+		if (L) { L->SetVisibility(ESlateVisibility::Collapsed); }
+	}
+}
+
+void UACEUIGameplayBinder::RefreshVendorFilterDropdown()
+{
+	if (!Canvas || !Canvas->WidgetTree || !Manager || OpenVendorGuid == 0 || !bVendorFilterDropdownOpen)
+	{
+		CloseVendorFilterDropdown();
+		return;
+	}
+	TSharedPtr<FACEUIElement> Menu = Manager->FindElementUnder(
+		TEXT("VendorItemsPage"), TEXT("VendorItemTypeList"));
+	if (!Menu.IsValid())
+	{
+		Menu = Manager->FindElementByName(TEXT("VendorItemTypeList"));
+	}
+	if (!Menu.IsValid())
+	{
+		CloseVendorFilterDropdown();
+		return;
+	}
+	EnsureOverlays();
+	RebuildVendorVisibleFilters();
+	constexpr int32 RowH = 18;
+	constexpr int32 DropZ = 200000;
+	const int32 Rows = FMath::Max(1, VendorVisibleFilterIndices.Num());
+	const FIntPoint Origin = Menu->GetScreenOrigin();
+	const float SX = Canvas->GetLastScaleX();
+	const float SY = Canvas->GetLastScaleY();
+	const float W = FMath::Max(100.f, static_cast<float>(Menu->Width)) * SX;
+	const float X = static_cast<float>(Origin.X) * SX;
+	const float Y = static_cast<float>(Origin.Y + Menu->Height) * SY;
+
+	if (!VendorFilterDropdownBg)
+	{
+		VendorFilterDropdownBg = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+		VendorFilterDropdownBg->SetPadding(FMargin(0.f));
+		FSlateBrush Brush;
+		Brush.DrawAs = ESlateBrushDrawType::Box;
+		Brush.TintColor = FSlateColor(FLinearColor(0.08f, 0.07f, 0.05f, 0.94f));
+		VendorFilterDropdownBg->SetBrush(Brush);
+		Canvas->GetElementLayer()->AddChild(VendorFilterDropdownBg);
+	}
+	VendorFilterDropdownBg->SetVisibility(ESlateVisibility::Visible);
+	if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(VendorFilterDropdownBg->Slot))
+	{
+		Slot->SetAnchors(FAnchors(0.f, 0.f));
+		Slot->SetPosition(FVector2D(X, Y));
+		Slot->SetSize(FVector2D(W, static_cast<float>(Rows * RowH) * SY));
+		Canvas->SetOverlayOrder(VendorFilterDropdownBg, nullptr, DropZ);
+	}
+
+	while (VendorFilterDropdownLabels.Num() < Rows)
+	{
+		UTextBlock* L = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+		L->SetJustification(ETextJustify::Left);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9);
+		L->SetFont(Font);
+		Canvas->GetElementLayer()->AddChild(L);
+		VendorFilterDropdownLabels.Add(L);
+	}
+	for (int32 i = 0; i < Rows; ++i)
+	{
+		UTextBlock* L = VendorFilterDropdownLabels[i];
+		const int32 FilterId = VendorVisibleFilterIndices.IsValidIndex(i)
+			? VendorVisibleFilterIndices[i] : i;
+		const int32 Prev = VendorItemTypeFilter;
+		VendorItemTypeFilter = FilterId;
+		const FString Label = VendorFilterLabel();
+		VendorItemTypeFilter = Prev;
+		L->SetText(FText::FromString(Label));
+		L->SetColorAndOpacity(FSlateColor(FilterId == VendorItemTypeFilter ? TextGold : TextWhite));
+		L->SetVisibility(ESlateVisibility::HitTestInvisible);
+		if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(L->Slot))
+		{
+			Slot->SetAnchors(FAnchors(0.f, 0.f));
+			Slot->SetPosition(FVector2D(X + 4.f * SX, Y + static_cast<float>(i * RowH) * SY));
+			Slot->SetSize(FVector2D(W - 8.f * SX, static_cast<float>(RowH) * SY));
+			Canvas->SetOverlayOrder(L, nullptr, DropZ + 1);
+		}
+	}
+	for (int32 i = Rows; i < VendorFilterDropdownLabels.Num(); ++i)
+	{
+		if (VendorFilterDropdownLabels[i])
+		{
+			VendorFilterDropdownLabels[i]->SetVisibility(ESlateVisibility::Collapsed);
+		}
+	}
+}
+
+bool UACEUIGameplayBinder::TryHandleVendorFilterDropdownClick(FVector2D Absolute)
+{
+	if (!bVendorFilterDropdownOpen)
+	{
+		return false;
+	}
+	if (VendorFilterDropdownBg
+		&& VendorFilterDropdownBg->GetVisibility() != ESlateVisibility::Collapsed
+		&& Canvas->IsWidgetExposedAt(VendorFilterDropdownBg, Absolute))
+	{
+		const FGeometry& Geo = VendorFilterDropdownBg->GetCachedGeometry();
+		const FVector2D Local = Geo.AbsoluteToLocal(Absolute);
+		const FVector2D Size = Geo.GetLocalSize();
+		if (Size.Y > 1.f)
+		{
+			const int32 VisibleRows = FMath::Max(1, VendorVisibleFilterIndices.Num());
+			const int32 Row = FMath::Clamp(
+				static_cast<int32>(Local.Y * static_cast<float>(VisibleRows) / Size.Y),
+				0, VisibleRows - 1);
+			const int32 FilterId = VendorVisibleFilterIndices.IsValidIndex(Row)
+				? VendorVisibleFilterIndices[Row] : Row;
+			SetVendorItemTypeFilter(FilterId);
+			return true;
+		}
+		return true;
+	}
+	CloseVendorFilterDropdown();
+	return false;
+}
+
+void UACEUIGameplayBinder::BuySelectedVendorItem()
+{
+	if (!Client || OpenVendorGuid == 0 || VendorSelectedGuid == 0)
+	{
+		return;
+	}
+	TArray<TPair<int32, int32>> One;
+	One.Emplace(LastSelection.Guid==VendorSelectedGuid ? FMath::Clamp(SelectedStackAmount,1,SelectedStackMax) : 1, VendorSelectedGuid);
+	Client->SendBuyItems(OpenVendorGuid, One);
+}
+
+void UACEUIGameplayBinder::AddSelectedVendorItemToBuyCart()
+{
+	if (!Client || OpenVendorGuid == 0 || VendorSelectedGuid == 0)
+	{
+		return;
+	}
+	const int32 Quantity=LastSelection.Guid==VendorSelectedGuid ? FMath::Clamp(SelectedStackAmount,1,SelectedStackMax) : 1;
+	for (TPair<int32, int32>& P : VendorBuyCart)
+	{
+		if (P.Value == VendorSelectedGuid)
+		{
+			P.Key = FMath::Min(SelectedStackMax,P.Key+Quantity);
+			ActiveVendorPage = 1;
+			SyncVendorPageVisibility();
+			RefreshVendorOverlays();
+			return;
+		}
+	}
+	VendorBuyCart.Emplace(Quantity, VendorSelectedGuid);
+	ActiveVendorPage = 1;
+	SyncVendorPageVisibility();
+	RefreshVendorOverlays();
+}
+
+void UACEUIGameplayBinder::BuyVendorCartItem()
+{
+	if (!Client || OpenVendorGuid == 0)
+	{
+		return;
+	}
+	int32 Guid = VendorSelectedGuid;
+	if (Guid == 0 && VendorBuyCart.Num() > 0)
+	{
+		Guid = VendorBuyCart[0].Value;
+	}
+	if (Guid == 0)
+	{
+		return;
+	}
+	int32 Amt = 1;
+	for (const TPair<int32, int32>& P : VendorBuyCart)
+	{
+		if (P.Value == Guid)
+		{
+			Amt = P.Key;
+			break;
+		}
+	}
+	TArray<TPair<int32, int32>> One;
+	One.Emplace(Amt, Guid);
+	Client->SendBuyItems(OpenVendorGuid, One);
+	VendorBuyCart.RemoveAll([Guid](const TPair<int32, int32>& P) { return P.Value == Guid; });
+	RefreshVendorOverlays();
+}
+
+int32 UACEUIGameplayBinder::CountPlayerPyreals() const
+{
+	if (!Client)
+	{
+		return 0;
+	}
+	int32 Total = 0;
+	auto AddPack = [&](int32 PackGuid)
+	{
+		for (const FACEWorldObject& Obj : Client->GetPackItems(PackGuid))
+		{
+			if (Obj.WeenieClassId == 273 || Obj.Name.Contains(TEXT("Pyreal")))
+			{
+				Total += Obj.StackSize > 0 ? Obj.StackSize : 1;
+			}
+		}
+	};
+	AddPack(Client->GetPlayerGuid());
+	for (const FACEWorldObject& Pack : Client->GetPlayerPacks())
+	{
+		AddPack(Pack.Guid);
+	}
+	return Total;
+}
+
+void UACEUIGameplayBinder::HideVendorTextOverlays()
+{
+	auto Hide = [](UTextBlock* T)
+	{
+		if (T) { T->SetVisibility(ESlateVisibility::Collapsed); }
+	};
+	for (UTextBlock* L : VendorTabLabels) { Hide(L); }
+	for (UTextBlock* L : VendorFilterDropdownLabels) { Hide(L); }
+	Hide(VendorItemNameLabel);
+	Hide(VendorItemCostLabel);
+	Hide(VendorBuyCostLabel);
+	Hide(VendorBuyPurseLabel);
+	Hide(VendorSellCostLabel);
+	Hide(VendorSellPurseLabel);
+	Hide(VendorFilterText);
+	if (VendorFilterDropdownBg)
+	{
+		VendorFilterDropdownBg->SetVisibility(ESlateVisibility::Collapsed);
+	}
+	// Do not touch PanelBodyText / SpellcastSpellNameLabel here — that stole the hotbar name.
+}
+
+void UACEUIGameplayBinder::RefreshVendorInfoTexts()
+{
+	if (!Client || !Manager || OpenVendorGuid == 0)
+	{
+		HideVendorTextOverlays();
+		return;
+	}
+	EnsureOverlays();
+	auto EnsureLabel = [this](TObjectPtr<UTextBlock>& Label) -> UTextBlock*
+	{
+		if (!Label && Canvas && Canvas->WidgetTree)
+		{
+			Label = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+			Label->SetVisibility(ESlateVisibility::HitTestInvisible);
+			Label->SetAutoWrapText(true);
+		}
+		return Label;
+	};
+	auto Hide = [](UTextBlock* T) { if (T) { T->SetVisibility(ESlateVisibility::Collapsed); } };
+
+	const int32 Purse = CountPlayerPyreals();
+	const float SellRate = Client->GetVendorSellRate();
+	const float BuyRate = Client->GetVendorBuyRate();
+
+	FACEWorldObject Focus;
+	const bool bHaveFocus = VendorSelectedGuid != 0 && Client->GetWorldObject(VendorSelectedGuid, Focus);
+
+	// Collapse labels that belong to inactive pages so they cannot linger on-screen.
+	if (ActiveVendorPage != 0)
+	{
+		Hide(VendorItemNameLabel);
+		Hide(VendorItemCostLabel);
+	}
+	if (ActiveVendorPage != 1)
+	{
+		Hide(VendorBuyCostLabel);
+		Hide(VendorBuyPurseLabel);
+	}
+	if (ActiveVendorPage != 2)
+	{
+		Hide(VendorSellCostLabel);
+		Hide(VendorSellPurseLabel);
+	}
+
+	if (ActiveVendorPage == 0)
+	{
+		const FString ItemName = bHaveFocus ? FormatItemStackName(Focus) : FString();
+		PlaceTextOnElement(EnsureLabel(VendorItemNameLabel), TEXT("VendorItemName_Text"),
+			ItemName, 9, TextWhite, 10040);
+		FString CostText;
+		if (bHaveFocus)
+		{
+			const uint32 Cost = VendorSellCost(Focus.Value, SellRate);
+			CostText = FString::Printf(TEXT("costs %sp (you have %sp)"),
+				*FormatXpNumber(Cost), *FormatXpNumber(Purse));
+		}
+		PlaceTextOnElement(EnsureLabel(VendorItemCostLabel), TEXT("VendorItemCost_Text"),
+			CostText, 8, TextGold, 10040);
+	}
+	else if (ActiveVendorPage == 1)
+	{
+		int32 ItemCount = 0;
+		int32 Worth = 0;
+		for (const TPair<int32, int32>& P : VendorBuyCart)
+		{
+			ItemCount += P.Key;
+			FACEWorldObject Obj;
+			if (Client->GetWorldObject(P.Value, Obj))
+			{
+				Worth += static_cast<int32>(VendorSellCost(Obj.Value, SellRate)) * P.Key;
+			}
+		}
+		PlaceTextOnElement(EnsureLabel(VendorBuyCostLabel), TEXT("VendorBuyCost_Text"),
+			FString::Printf(TEXT("Buying %d items worth %sp"), ItemCount, *FormatXpNumber(Worth)),
+			8, TextWhite, 10040);
+		PlaceTextOnElement(EnsureLabel(VendorBuyPurseLabel), TEXT("VendorBuyPurse_Text"),
+			FString::Printf(TEXT("You have %sp"), *FormatXpNumber(Purse)),
+			8, TextWhite, 10040);
+	}
+	else if (ActiveVendorPage == 2)
+	{
+		const int32 ItemCount = VendorSellCart.Num();
+		int32 Worth = 0;
+		for (const TPair<int32, int32>& P : VendorSellCart)
+		{
+			FACEWorldObject Obj;
+			if (Client->GetWorldObject(P.Value, Obj))
+			{
+				Worth += VendorBuyPayout(Obj.Value, BuyRate);
+			}
+		}
+		PlaceTextOnElement(EnsureLabel(VendorSellCostLabel), TEXT("VendorSellCost_Text"),
+			FString::Printf(TEXT("Selling %d items worth %sp"), ItemCount, *FormatXpNumber(Worth)),
+			8, TextWhite, 10040);
+		PlaceTextOnElement(EnsureLabel(VendorSellPurseLabel), TEXT("VendorSellPurse_Text"),
+			FString::Printf(TEXT("You have %sp"), *FormatXpNumber(Purse)),
+			8, TextWhite, 10040);
+	}
+}
+
+void UACEUIGameplayBinder::AddInventoryGuidToVendorSellCart(int32 Guid)
+{
+	if (!Client || Guid == 0 || OpenVendorGuid == 0)
+	{
+		return;
+	}
+	FACEWorldObject Obj;
+	if (!Client->GetWorldObject(Guid, Obj))
+	{
+		return;
+	}
+	if ((Obj.ItemType & ACEItemType::Container) != 0 || Obj.ItemsCapacity > 0)
+	{
+		// A pack is a bulk selection, never the item offered for sale. Use complete
+		// stacks and refresh once after the batch; an earlier partial-stack selection
+		// must not truncate one of the contents when the pack is dragged.
+		for (const FACEWorldObject& Item : Client->GetPackItems(Guid))
+		{
+			if ((Item.ItemType & ACEItemType::Container) != 0 || Item.ItemsCapacity > 0
+				|| Item.Attuned != 0 || Item.WielderId != 0 || Item.CurrentWieldedLocation != 0
+				|| !Client->GetSession() || !Client->GetSession()->CanVendorBuyItem(Item)) continue;
+			TPair<int32, int32>* Existing = VendorSellCart.FindByPredicate(
+				[&Item](const TPair<int32, int32>& Entry) { return Entry.Value == Item.Guid; });
+			const int32 Amount = FMath::Max(1, Item.StackSize);
+			if (Existing) Existing->Key = Amount;
+			else VendorSellCart.Emplace(Amount, Item.Guid);
+			VendorSellSelectedGuid = Item.Guid;
+		}
+		ActiveVendorPage = 2;
+		SyncVendorPageVisibility();
+		RefreshVendorOverlays();
+		return;
+	}
+	if ((Obj.ItemType & ACEItemType::Container) != 0 || Obj.Attuned != 0)
+	{
+		PostInventorySystemMessage(TEXT("That item cannot be sold."));
+		return;
+	}
+	for (const TPair<int32, int32>& P : VendorSellCart)
+	{
+		if (P.Value == Guid)
+		{
+			VendorSellSelectedGuid = Guid;
+			ActiveVendorPage = 2;
+			SyncVendorPageVisibility();
+			RefreshVendorOverlays();
+			return;
+		}
+	}
+	const int32 Amt = (LastSelection.Guid == Guid && SelectedStackAmount > 0)
+		? SelectedStackAmount
+		: FMath::Max(1, Obj.StackSize > 0 ? Obj.StackSize : 1);
+	VendorSellCart.Emplace(Amt, Guid);
+	VendorSellSelectedGuid = Guid;
+	ActiveVendorPage = 2;
+	SyncVendorPageVisibility();
+	RefreshVendorOverlays();
+}
+
+void UACEUIGameplayBinder::SellVendorCart()
+{
+	if (!Client || OpenVendorGuid == 0)
+	{
+		return;
+	}
+	if (VendorSellCart.Num() == 0)
+	{
+		if (VendorSellSelectedGuid != 0)
+		{
+			AddInventoryGuidToVendorSellCart(VendorSellSelectedGuid);
+		}
+		else if (LastSelection.bValid)
+		{
+			AddInventoryGuidToVendorSellCart(LastSelection.Guid);
+		}
+	}
+	if (VendorSellCart.Num() == 0)
+	{
+		return;
+	}
+	Client->SendSellItems(OpenVendorGuid, VendorSellCart);
+	VendorSellCart.Reset();
+	VendorSellSelectedGuid = 0;
+	RefreshVendorOverlays();
+}
+
+void UACEUIGameplayBinder::ShowTradePanel(int32 PartnerGuid)
+{
+	TradeSelfOffset = TradeOtherOffset = 0;
+	TradePartnerGuid = PartnerGuid;
+	bTradeOpen = true;
+	OpenLootContainerGuid = 0;
+	OpenVendorGuid = 0;
+	OpenSalvageToolGuid = 0;
+	SalvageQueueGuids.Reset();
+	PendingVendorSellGuid = 0;
+	VendorSellCart.Reset();
+	VendorBuyCart.Reset();
+	SyncEnvPanelMode();
+	RefreshTradeOverlays();
+}
+
+void UACEUIGameplayBinder::HideTradePanel(bool bNotifyServer)
+{
+	bTradeOpen = false;
+	RefreshTradeOverlays();
+	TradePartnerGuid = 0;
+	for (UBorder* B : TradeSelfSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+	for (UBorder* B : TradeOtherSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+	SyncEnvPanelMode();
+	if (bNotifyServer && Client)
+	{
+		Client->SendCloseTrade();
+	}
+}
+
+void UACEUIGameplayBinder::HandleExternalContainerOpened(int32 Guid)
+{
+	// Don't cancel a pending out-of-range close with a late ViewContents.
+	if (PendingLootCloseGuid != 0 && Guid == PendingLootCloseGuid
+		&& IsBeyondContainerUseRadius(Guid))
+	{
+		return;
+	}
+	PendingLootCloseGuid = 0;
+	PendingLootCloseAt = 0.0;
+	// Same corpse ViewContents again — refresh icons only; do not reset scroll/selection
+	// (that looked like a random reload every time the server re-sent contents).
+	if (Guid != 0 && Guid == OpenLootContainerGuid)
+	{
+		RefreshExternalContainerOverlays();
+		return;
+	}
+	ShowExternalContainer(Guid);
+}
+
+void UACEUIGameplayBinder::HandleExternalContainerClosed(int32 Guid)
+{
+	if (Guid != 0 && Guid == OpenLootContainerGuid)
+	{
+		// Out of UseRadius: close immediately. Debounce only when still near the corpse
+		// (server/client edge flicker at the radius boundary).
+		if (IsBeyondContainerUseRadius(Guid))
+		{
+			PendingLootCloseGuid = 0;
+			PendingLootCloseAt = 0.0;
+			HideExternalContainer(false);
+			return;
+		}
+		PendingLootCloseGuid = Guid;
+		PendingLootCloseAt = FPlatformTime::Seconds() + 0.35;
+		return;
+	}
+	(void)Guid;
+	HideExternalContainer(false);
+}
+
+void UACEUIGameplayBinder::HandleVendorOpened(int32 Guid)
+{
+	// Same vendor ApproachVendor again (Holding Use retries) — refresh merchandise only;
+	// do not wipe an in-progress sell cart that drag-drop already filled.
+	if (Guid != 0 && Guid == OpenVendorGuid)
+	{
+		RefreshVendorOverlays();
+	}
+	else
+	{
+		ShowVendorPanel(Guid);
+	}
+	if (PendingVendorSellGuid != 0)
+	{
+		const int32 SellGuid = PendingVendorSellGuid;
+		PendingVendorSellGuid = 0;
+		AddInventoryGuidToVendorSellCart(SellGuid);
+	}
+}
+
+void UACEUIGameplayBinder::HandleTradeStateChanged(int32 EventType)
+{
+	using namespace ACEGameEvent;
+	if (EventType == OpenTrade || EventType == RegisterTrade)
+	{
+		const int32 Partner = Client ? Client->GetTradePartnerGuid() : 0;
+		ShowTradePanel(Partner);
+	}
+	else if (EventType == CloseTrade)
+	{
+		HideTradePanel(false);
+	}
+	else
+	{
+		RefreshTradeOverlays();
+	}
+}
+
+void UACEUIGameplayBinder::HandleCharacterTitlesChanged()
+{
+	RefreshTitleOverlays();
+}
+
+void UACEUIGameplayBinder::SyncExternalContainerScrollbars()
+{
+	if (!Manager || OpenLootContainerGuid == 0)
+	{
+		return;
+	}
+	// Pack-row Up/Down from ScrollTemplate look like tabs — never show on loot.
+	TSharedPtr<FACEUIElement> PackScroll = Manager->FindElementUnder(
+		TEXT("ExternalContainer"), TEXT("Ext_ContainerListScroll"));
+	if (PackScroll.IsValid())
+	{
+		for (const TSharedPtr<FACEUIElement>& Child : PackScroll->Children)
+		{
+			if (!Child.IsValid()) { continue; }
+			if (Child->ElementName == TEXT("ScrollBar_Up") || Child->ElementName == TEXT("ScrollBar_Down"))
+			{
+				Child->bVisible = false;
+			}
+		}
+	}
+	// Retail loot close (X) at the right of the pack row.
+	if (TSharedPtr<FACEUIElement> CloseBtn = Manager->FindElementUnder(
+		TEXT("ExternalContainer"), TEXT("CloseExtContainerPanelButton")))
+	{
+		CloseBtn->bVisible = true;
+	}
+	Manager->SetElementVisibleByName(TEXT("CloseExtContainerPanelButton"), true);
+
+	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("Ext_Container_ItemList"));
+	TSharedPtr<FACEUIElement> Bar = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("Ext_ItemListScroll"));
+	if (!ListEl.IsValid() || !Bar.IsValid())
+	{
+		return;
+	}
+	const int32 PageSize = FMath::Max(1, ListEl->Width / 32);
+	const int32 ContGuid = OpenLootSelectedPackGuid != 0 ? OpenLootSelectedPackGuid : OpenLootContainerGuid;
+	FACEWorldObject ContObj;
+	if (Client) { Client->GetWorldObject(ContGuid, ContObj); }
+	int32 Capacity = ContObj.ItemsCapacity > 0 ? ContObj.ItemsCapacity : 0;
+	const int32 Count = Client ? Client->GetPackItems(ContGuid).Num() : 0;
+	if (Capacity <= 0) { Capacity = FMath::Max(Count, PageSize); }
+	const int32 MaxOff = FMath::Max(0, Capacity - PageSize);
+	ExtItemScrollOffset = FMath::Clamp(ExtItemScrollOffset, 0, MaxOff);
+	const float Frac = MaxOff > 0
+		? static_cast<float>(ExtItemScrollOffset) / static_cast<float>(MaxOff) : 0.f;
+	const float VisibleFrac = Capacity > 0
+		? FMath::Clamp(static_cast<float>(PageSize) / static_cast<float>(Capacity), 0.08f, 1.f) : 1.f;
+	Bar->bVisible = MaxOff > 0;
+	if (MaxOff > 0)
+	{
+		SyncDatScrollbar(Bar, Frac, VisibleFrac);
+	}
+}
+
+void UACEUIGameplayBinder::RefreshExternalContainerOverlays()
+{
+	if (!Client || !Manager || !Canvas || !Canvas->WidgetTree || OpenLootContainerGuid == 0)
+	{
+		if (bLootOverlaysCollapsed)
+		{
+			return;
+		}
+		bLootOverlaysCollapsed = true;
+		LastLootOverlayHash = ~uint64(0);
+		for (UBorder* B : ExtItemSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UBorder* B : ExtItemSlotBgs) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UBorder* B : ExtItemSlotSelected) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UBorder* B : ExtPackSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UBorder* B : ExtPackSlotBgs) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		return;
+	}
+	const uint64 LootHash = HashLootOverlayState();
+	if (LootHash == LastLootOverlayHash)
+	{
+		return;
+	}
+	LastLootOverlayHash = LootHash;
+	bLootOverlaysCollapsed = false;
+	SyncEnvPanelMode();
+	constexpr int32 OverlayZ = 120000;
+	constexpr int32 Cell = 32;
+	const int32 ContGuid = OpenLootSelectedPackGuid != 0 ? OpenLootSelectedPackGuid : OpenLootContainerGuid;
+	const int32 SelectedGuid = LastSelection.bValid ? LastSelection.Guid : 0;
+
+	auto PlaceCell = [&](UBorder* B, float ScreenX, float ScreenY, int32 Z)
+	{
+		if (!B) { return; }
+		const float SX = Canvas->GetLastScaleX();
+		const float SY = Canvas->GetLastScaleY();
+		if (B->GetParent() != Canvas->GetElementLayer())
+		{
+			Canvas->GetElementLayer()->AddChild(B);
+		}
+		if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(B->Slot))
+		{
+			Slot->SetAnchors(FAnchors(0.f, 0.f));
+			Slot->SetPosition(FVector2D(ScreenX * SX, ScreenY * SY));
+			Slot->SetSize(FVector2D(static_cast<float>(Cell) * SX, static_cast<float>(Cell) * SY));
+			Canvas->SetOverlayOrder(B, Manager->FindElementByName(TEXT("RootGameplay_FloatyEnvPanel_Field")), Z);
+		}
+	};
+
+	// Nested packs in ContainerList — corpse root icon + optional side packs (no tab chrome).
+	TSharedPtr<FACEUIElement> PackList = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("ContainerList"));
+	TSharedPtr<FACEUIElement> RootIconEl = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("Container"));
+	TArray<FACEWorldObject> Nested;
+	{
+		TArray<FACEWorldObject> All = Client->GetPackItems(OpenLootContainerGuid);
+		for (const FACEWorldObject& O : All)
+		{
+			if ((O.ItemType & ACEItemType::Container) != 0 || O.ItemsCapacity > 0 || O.ContainersCapacity > 0)
+			{
+				Nested.Add(O);
+			}
+		}
+	}
+	if (RootIconEl.IsValid())
+	{
+		UBorder* Bg = EnsureIconBorder(ExtItemSlotBgs, 0); // reuse pool index for root pack bg via pack path
+		UBorder* Icon = EnsureIconBorder(ExtPackSlots, 0);
+		if (Icon)
+		{
+			ExtPackGuids.SetNum(1 + Nested.Num());
+			ExtPackGuids[0] = OpenLootContainerGuid;
+			FACEWorldObject RootObj;
+			Client->GetWorldObject(OpenLootContainerGuid, RootObj);
+			const FIntPoint O = RootIconEl->GetScreenOrigin();
+			if (Bg)
+			{
+				SetItemSlotBackground(Bg, RootObj.IconId != 0 ? &RootObj : nullptr);
+				Bg->SetVisibility(ESlateVisibility::HitTestInvisible);
+				PlaceCell(Bg, static_cast<float>(O.X), static_cast<float>(O.Y), OverlayZ);
+			}
+			if (RootObj.IconId) SetItemSlotForeground(Icon, &RootObj);
+			else SetIconDid(Icon, DidEmptyPackSlot);
+			Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
+			Icon->SetRenderOpacity(ContGuid == OpenLootContainerGuid ? 1.f : 0.55f);
+			PlaceCell(Icon, static_cast<float>(O.X), static_cast<float>(O.Y), OverlayZ + 1);
+		}
+	}
+	if (PackList.IsValid())
+	{
+		const FIntPoint Origin = PackList->GetScreenOrigin();
+		const int32 MaxVis = FMath::Max(1, PackList->Width / Cell);
+		ExtPackScrollOffset = FMath::Clamp(ExtPackScrollOffset, 0, FMath::Max(0, Nested.Num() - MaxVis));
+		ExtPackGuids.SetNum(1 + MaxVis);
+		for (int32 i = 0; i < MaxVis; ++i)
+		{
+			UBorder* Icon = EnsureIconBorder(ExtPackSlots, i + 1);
+			UBorder* Bg = EnsureIconBorder(ExtPackSlotBgs, i);
+			if (!Icon) { continue; }
+			const int32 Idx = i + ExtPackScrollOffset;
+			if (!Nested.IsValidIndex(Idx))
+			{
+				Icon->SetVisibility(ESlateVisibility::Collapsed);
+				if (Bg) { Bg->SetVisibility(ESlateVisibility::Collapsed); }
+				ExtPackGuids[i + 1] = 0;
+				continue;
+			}
+			ExtPackGuids[i + 1] = Nested[Idx].Guid;
+			SetItemSlotForeground(Icon, &Nested[Idx]);
+			SetItemSlotBackground(Bg, &Nested[Idx]);
+			if (Bg)
+			{
+				Bg->SetVisibility(ESlateVisibility::HitTestInvisible);
+				PlaceCell(Bg, static_cast<float>(Origin.X + i * Cell), static_cast<float>(Origin.Y), OverlayZ);
+			}
+			Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
+			Icon->SetRenderOpacity(ContGuid == Nested[Idx].Guid ? 1.f : 0.55f);
+			SetRetailTooltip(Icon, FText::FromString(Nested[Idx].Name));
+			PlaceCell(Icon,
+				static_cast<float>(Origin.X + i * Cell),
+				static_cast<float>(Origin.Y),
+				OverlayZ + 1);
+		}
+		for (int32 i = MaxVis + 1; i < ExtPackSlots.Num(); ++i)
+		{
+			if (ExtPackSlots[i]) { ExtPackSlots[i]->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+		for (int32 i = MaxVis; i < ExtPackSlotBgs.Num(); ++i)
+		{
+			if (ExtPackSlotBgs[i]) { ExtPackSlotBgs[i]->SetVisibility(ESlateVisibility::Collapsed); }
+		}
+	}
+
+	TSharedPtr<FACEUIElement> ItemList = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("Ext_Container_ItemList"));
+	if (!ItemList.IsValid())
+	{
+		SyncExternalContainerScrollbars();
+		return;
+	}
+	TArray<FACEWorldObject> Items = Client->GetPackItems(ContGuid);
+	if (ContGuid == OpenLootContainerGuid)
+	{
+		Items.RemoveAll([](const FACEWorldObject& O)
+		{
+			return (O.ItemType & ACEItemType::Container) != 0;
+		});
+	}
+	FACEWorldObject ContObj;
+	Client->GetWorldObject(ContGuid, ContObj);
+	int32 Capacity = ContObj.ItemsCapacity;
+	if (Capacity <= 0)
+	{
+		Capacity = FMath::Max(Items.Num(), 1);
+	}
+	Capacity = FMath::Clamp(Capacity, 1, 120);
+	const int32 PageSize = FMath::Max(1, ItemList->Width / Cell);
+	const int32 MaxOff = FMath::Max(0, Capacity - PageSize);
+	ExtItemScrollOffset = FMath::Clamp(ExtItemScrollOffset, 0, MaxOff);
+	const FIntPoint Origin = ItemList->GetScreenOrigin();
+	ExtItemGuids.SetNum(PageSize);
+	// Item + empty slot backgrounds (DidInvSlotBg) + selection frame (DidInvSlotSelected).
+	constexpr int32 ItemBgBase = 1;
+	for (int32 i = 0; i < PageSize; ++i)
+	{
+		UBorder* Bg = EnsureIconBorder(ExtItemSlotBgs, ItemBgBase + i);
+		UBorder* Icon = EnsureIconBorder(ExtItemSlots, i);
+		UBorder* Sel = EnsureIconBorder(ExtItemSlotSelected, i);
+		if (!Bg || !Icon || !Sel) { continue; }
+		const int32 Idx = i + ExtItemScrollOffset;
+		const bool bInCapacity = Idx < Capacity;
+		ExtItemGuids[i] = (bInCapacity && Items.IsValidIndex(Idx)) ? Items[Idx].Guid : 0;
+		if (!bInCapacity)
+		{
+			Bg->SetVisibility(ESlateVisibility::Collapsed);
+			Icon->SetVisibility(ESlateVisibility::Collapsed);
+			Sel->SetVisibility(ESlateVisibility::Collapsed);
+			continue;
+		}
+		Bg->SetVisibility(ESlateVisibility::HitTestInvisible);
+		PlaceCell(Bg,
+			static_cast<float>(Origin.X + i * Cell),
+			static_cast<float>(Origin.Y),
+			OverlayZ);
+		const int32 Guid = ExtItemGuids[i];
+		const FACEWorldObject* ExtObj = (Guid != 0 && Items.IsValidIndex(Idx)) ? &Items[Idx] : nullptr;
+		SetItemSlotBackground(Bg, ExtObj);
+		SetItemSlotForeground(Icon, ExtObj);
+		Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
+		if (Guid != 0)
+		{
+			SetRetailTooltip(Icon, FText::FromString(Items[Idx].Name));
+		}
+		else
+		{
+			SetRetailTooltip(Icon, FText());
+		}
+		PlaceCell(Icon,
+			static_cast<float>(Origin.X + i * Cell),
+			static_cast<float>(Origin.Y),
+			OverlayZ + 1);
+		const bool bSelected = Guid != 0 && Guid == SelectedGuid;
+		Sel->SetVisibility(bSelected ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+		if (bSelected)
+		{
+			SetIconDid(Sel, DidInvSlotSelected);
+			PlaceCell(Sel,
+				static_cast<float>(Origin.X + i * Cell),
+				static_cast<float>(Origin.Y),
+				OverlayZ + 2);
+		}
+	}
+	for (int32 i = PageSize; i < ExtItemSlots.Num(); ++i)
+	{
+		if (ExtItemSlots[i]) { ExtItemSlots[i]->SetVisibility(ESlateVisibility::Collapsed); }
+	}
+	for (int32 i = ItemBgBase + PageSize; i < ExtItemSlotBgs.Num(); ++i)
+	{
+		if (ExtItemSlotBgs[i]) { ExtItemSlotBgs[i]->SetVisibility(ESlateVisibility::Collapsed); }
+	}
+	for (int32 i = PageSize; i < ExtItemSlotSelected.Num(); ++i)
+	{
+		if (ExtItemSlotSelected[i]) { ExtItemSlotSelected[i]->SetVisibility(ESlateVisibility::Collapsed); }
+	}
+	SyncExternalContainerScrollbars();
+}
+
+void UACEUIGameplayBinder::RefreshVendorOverlays()
+{
+	if (!Client || !Manager || !Canvas || OpenVendorGuid == 0)
+	{
+		if (bVendorOverlaysCollapsed)
+		{
+			return;
+		}
+		bVendorOverlaysCollapsed = true;
+		LastVendorOverlayHash = ~uint64(0);
+		for (UBorder* B : VendorItemSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UBorder* B : VendorItemSlotBgs) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		HideVendorTextOverlays();
+		return;
+	}
+	const uint64 VendorHash = HashVendorOverlayState();
+	if (VendorHash == LastVendorOverlayHash)
+	{
+		PlaceVendorFilterCaption();
+		if (bVendorFilterDropdownOpen)
+		{
+			RefreshVendorFilterDropdown();
+		}
+		return;
+	}
+	LastVendorOverlayHash = VendorHash;
+	bVendorOverlaysCollapsed = false;
+	SyncEnvPanelMode();
+	constexpr int32 OverlayZ = 120000;
+	constexpr int32 Cell = 32;
+
+	RebuildVendorVisibleFilters();
+
+	const TCHAR* ListParent = TEXT("VendorItemsPage");
+	const TCHAR* ListName = TEXT("VendorItemsList");
+	if (ActiveVendorPage == 1)
+	{
+		ListParent = TEXT("VendorBuyPage");
+		ListName = TEXT("VendorBuyList");
+	}
+	else if (ActiveVendorPage == 2)
+	{
+		ListParent = TEXT("VendorSellPage");
+		ListName = TEXT("VendorSellList");
+	}
+
+	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(ListParent, ListName);
+	if (!ListEl.IsValid())
+	{
+		ListEl = Manager->FindElementByName(ListName);
+	}
+	if (!ListEl.IsValid() && ActiveVendorPage != 0)
+	{
+		// Fall back to merchandise list geometry if buy/sell list missing.
+		ListEl = Manager->FindElementUnder(TEXT("VendorItemsPage"), TEXT("VendorItemsList"));
+	}
+	if (!ListEl.IsValid())
+	{
+		PlaceVendorFilterCaption();
+		return;
+	}
+
+	TArray<FACEWorldObject> Items;
+	if (ActiveVendorPage == 2)
+	{
+		// Sell page: only items the player dragged into the sell cart.
+		for (const TPair<int32, int32>& P : VendorSellCart)
+		{
+			FACEWorldObject Obj;
+			if (Client->GetWorldObject(P.Value, Obj))
+			{
+				Items.Add(Obj);
+			}
+		}
+	}
+	else if (ActiveVendorPage == 1)
+	{
+		// Buying page: staged purchase list (not merchandise).
+		for (const TPair<int32, int32>& P : VendorBuyCart)
+		{
+			FACEWorldObject Obj;
+			if (Client->GetWorldObject(P.Value, Obj))
+			{
+				Items.Add(Obj);
+			}
+		}
+	}
+	else
+	{
+		Items = Client->GetVendorMerchandise();
+		if (Items.Num() == 0)
+		{
+			Items = Client->GetPackItems(OpenVendorGuid);
+		}
+		if (VendorItemTypeFilter != 0)
+		{
+			Items.RemoveAll([&](const FACEWorldObject& O)
+			{
+				return !VendorItemMatchesFilter(O, VendorItemTypeFilter);
+			});
+		}
+	}
+
+	PlaceVendorFilterCaption();
+	if (bVendorFilterDropdownOpen)
+	{
+		RefreshVendorFilterDropdown();
+	}
+	RefreshVendorInfoTexts();
+
+	const int32 FocusGuid = (ActiveVendorPage == 2)
+		? (VendorSellSelectedGuid != 0 ? VendorSellSelectedGuid
+			: (LastSelection.bValid ? LastSelection.Guid : 0))
+		: VendorSelectedGuid;
+
+	const int32 Cols = FMath::Max(1, ListEl->Width / Cell);
+	const int32 Rows = FMath::Max(1, ListEl->Height / Cell);
+	const int32 PageSize = Cols * Rows;
+	int32* ScrollOffset = &VendorItemsScrollOffset;
+	if (ActiveVendorPage == 1) { ScrollOffset = &VendorBuyScrollOffset; }
+	else if (ActiveVendorPage == 2) { ScrollOffset = &VendorSellScrollOffset; }
+	const int32 MaxOff = FMath::Max(0, Items.Num() - PageSize);
+	*ScrollOffset = FMath::Clamp(*ScrollOffset, 0, MaxOff);
+	const FIntPoint Origin = ListEl->GetScreenOrigin();
+	const float SX = Canvas->GetLastScaleX();
+	const float SY = Canvas->GetLastScaleY();
+	VendorItemGuids.SetNum(PageSize);
+	auto PlaceCell = [&](UBorder* Border, float X, float Y, int32 Z)
+	{
+		if (!Border) { return; }
+		if (Border->GetParent() != Canvas->GetElementLayer())
+		{
+			Canvas->GetElementLayer()->AddChild(Border);
+		}
+		if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Border->Slot))
+		{
+			Slot->SetAnchors(FAnchors(0.f, 0.f));
+			Slot->SetPosition(FVector2D(X * SX, Y * SY));
+			Slot->SetSize(FVector2D(static_cast<float>(Cell) * SX, static_cast<float>(Cell) * SY));
+			Canvas->SetOverlayOrder(Border, Manager->FindElementByName(TEXT("RootGameplay_FloatyEnvPanel_Field")), Z);
+		}
+	};
+	for (int32 i = 0; i < PageSize; ++i)
+	{
+		UBorder* Bg = EnsureIconBorder(VendorItemSlotBgs, i);
+		UBorder* Icon = EnsureIconBorder(VendorItemSlots, i);
+		if (!Bg || !Icon) { continue; }
+		const int32 Idx = i + *ScrollOffset;
+		const int32 Col = i % Cols;
+		const int32 Row = i / Cols;
+		const float CellX = static_cast<float>(Origin.X + Col * Cell);
+		const float CellY = static_cast<float>(Origin.Y + Row * Cell);
+		if (!Items.IsValidIndex(Idx))
+		{
+			SetItemSlotBackground(Bg, nullptr);
+			Bg->SetVisibility(ESlateVisibility::HitTestInvisible);
+			PlaceCell(Bg, CellX, CellY, OverlayZ);
+			Icon->SetVisibility(ESlateVisibility::Collapsed);
+			VendorItemGuids[i] = 0;
+			continue;
+		}
+		VendorItemGuids[i] = Items[Idx].Guid;
+		SetItemSlotBackground(Bg, &Items[Idx]);
+		Bg->SetVisibility(ESlateVisibility::HitTestInvisible);
+		PlaceCell(Bg, CellX, CellY, OverlayZ);
+		SetItemSlotForeground(Icon, &Items[Idx]);
+		Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
+		SetRetailTooltip(Icon, FText::FromString(Items[Idx].Name));
+		Icon->SetRenderOpacity(Items[Idx].Guid == FocusGuid ? 1.f : 0.85f);
+		PlaceCell(Icon, CellX, CellY, OverlayZ + 1);
+	}
+	for (int32 i = PageSize; i < VendorItemSlots.Num(); ++i)
+	{
+		if (VendorItemSlots[i]) { VendorItemSlots[i]->SetVisibility(ESlateVisibility::Collapsed); }
+	}
+	for (int32 i = PageSize; i < VendorItemSlotBgs.Num(); ++i)
+	{
+		if (VendorItemSlotBgs[i]) { VendorItemSlotBgs[i]->SetVisibility(ESlateVisibility::Collapsed); }
+	}
+	SyncVendorScrollbars();
+	RefreshVendorTabLabels();
+}
+
+void UACEUIGameplayBinder::SyncVendorScrollbars()
+{
+	if (!Manager || OpenVendorGuid == 0)
+	{
+		return;
+	}
+	const TCHAR* ScrollName = TEXT("Vendor_ItemListScroll");
+	int32 Offset = VendorItemsScrollOffset;
+	if (ActiveVendorPage == 1)
+	{
+		ScrollName = TEXT("Vendor_BuyListScroll");
+		Offset = VendorBuyScrollOffset;
+	}
+	else if (ActiveVendorPage == 2)
+	{
+		ScrollName = TEXT("Vendor_SellListScroll");
+		Offset = VendorSellScrollOffset;
+	}
+	TSharedPtr<FACEUIElement> Bar = Manager->FindElementByName(ScrollName);
+	if (!Bar.IsValid())
+	{
+		return;
+	}
+	constexpr int32 Cell = 32;
+	TSharedPtr<FACEUIElement> ListEl;
+	if (ActiveVendorPage == 0)
+	{
+		ListEl = Manager->FindElementUnder(TEXT("VendorItemsPage"), TEXT("VendorItemsList"));
+	}
+	else if (ActiveVendorPage == 1)
+	{
+		ListEl = Manager->FindElementUnder(TEXT("VendorBuyPage"), TEXT("VendorBuyList"));
+	}
+	else
+	{
+		ListEl = Manager->FindElementUnder(TEXT("VendorSellPage"), TEXT("VendorSellList"));
+	}
+	int32 Capacity = 0;
+	if (Client)
+	{
+		if (ActiveVendorPage == 2)
+		{
+			Capacity = VendorSellCart.Num();
+		}
+		else if (ActiveVendorPage == 1)
+		{
+			Capacity = VendorBuyCart.Num();
+		}
+		else
+		{
+			Capacity = Client->GetVendorMerchandise().Num();
+			if (Capacity == 0)
+			{
+				Capacity = Client->GetPackItems(OpenVendorGuid).Num();
+			}
+		}
+	}
+	const int32 PageSize = ListEl.IsValid()
+		? FMath::Max(1, (ListEl->Width / Cell) * FMath::Max(1, ListEl->Height / Cell))
+		: 1;
+	const int32 MaxOff = FMath::Max(0, Capacity - PageSize);
+	const float Frac = MaxOff > 0 ? static_cast<float>(Offset) / static_cast<float>(MaxOff) : 0.f;
+	const float VisibleFrac = Capacity > 0
+		? FMath::Clamp(static_cast<float>(PageSize) / static_cast<float>(Capacity), 0.08f, 1.f) : 1.f;
+	Bar->bVisible = true;
+	SyncDatScrollbar(Bar, Frac, VisibleFrac);
+}
+
+bool UACEUIGameplayBinder::CanEditInscription() const
+{
+	if (!Client || !Client->GetSession() || !LastAppraisal.bSuccess || LastAppraisal.bIsCreature) return false;
+	FACEWorldObject Item;
+	if (!Client->GetWorldObject(LastAppraisal.ObjectGuid, Item)) return false;
+	if (!LastAppraisal.BoolProperties.FindRef(22) && !(Item.ObjectDescriptionFlags & 2)) return false;
+	const FString Scribe = LastAppraisal.StringProperties.FindRef(8);
+	const FString Account = LastAppraisal.StringProperties.FindRef(23);
+	if (!Scribe.IsEmpty() && !Scribe.Equals(Client->GetSession()->GetPlayerName(), ESearchCase::IgnoreCase)
+		&& (Account.IsEmpty() || !Account.Equals(Client->GetSession()->GetAccountName(), ESearchCase::IgnoreCase))) return false;
+	// Packs may be nested. Do not allow writing items offered by another player.
+	TSet<int32> Seen;
+	while (!Seen.Contains(Item.Guid))
+	{
+		Seen.Add(Item.Guid);
+		if (Item.ContainerId == Client->GetPlayerGuid() || Item.WielderId == Client->GetPlayerGuid()) return true;
+		if (!Item.ContainerId || !Client->GetWorldObject(Item.ContainerId, Item)) break;
+	}
+	return false;
+}
+
+void UACEUIGameplayBinder::BeginInscriptionEdit()
+{
+	if (!CanEditInscription() || !Canvas || !Canvas->WidgetTree) return;
+	if (EditingInscriptionGuid == LastAppraisal.ObjectGuid) return;
+	if (!ExamInscriptionEditor)
+	{
+		ExamInscriptionEditor = Canvas->WidgetTree->ConstructWidget<UACERetailTextEntry>();
+		ExamInscriptionEditor->bMultiline = true;
+		ExamInscriptionEditor->OnTextCommitted.AddDynamic(this, &UACEUIGameplayBinder::HandleInscriptionCommitted);
+	}
+	const auto Element = Manager->FindElementUnder(TEXT("RootGameplay_FloatyExamination_Field"), TEXT("ItemInscriptionText"));
+	ExamInscriptionEditor->SetRetailElement(Canvas->GetResourceResolver(), Element);
+	ExamInscriptionEditor->TextColor = FLinearColor::Black;
+	EditingInscriptionGuid = LastAppraisal.ObjectGuid;
+	EditingInscriptionOriginal = LastAppraisal.Inscription;
+	ExamInscriptionEditor->SetText(FText::FromString(EditingInscriptionOriginal));
+	RefreshExaminationOverlay();
+	ExamInscriptionEditor->SetKeyboardFocus();
+}
+
+void UACEUIGameplayBinder::HandleInscriptionCommitted(const FText& Text, ETextCommit::Type Method)
+{
+	const int32 Guid = EditingInscriptionGuid;
+	if (!Guid) return;
+	EditingInscriptionGuid = 0; // Collapsing the editor can also trigger focus loss.
+	if (Method != ETextCommit::OnCleared && Guid == LastAppraisal.ObjectGuid && CanEditInscription()
+		&& Text.ToString() != EditingInscriptionOriginal)
+	{
+		Client->SendSetInscription(Guid, Text.ToString());
+		LastAppraisal.Inscription = Text.ToString();
+		LastAppraisal.StringProperties.Add(7, Text.ToString());
+		LastAppraisal.StringProperties.Add(8, Text.IsEmpty() ? FString() : Client->GetSession()->GetPlayerName());
+		// No writing acknowledgement exists; read back the authoritative inscription.
+		Client->SendIdentifyObject(Guid);
+	}
+	if (ExamInscriptionEditor) ExamInscriptionEditor->SetVisibility(ESlateVisibility::Collapsed);
+	RefreshExaminationOverlay();
+}
+
+void UACEUIGameplayBinder::RefreshTradeOverlays()
+{
+	if (!Client || !Manager || !Canvas || !bTradeOpen)
+	{
+		for (auto* Array : {&TradeSelfSlots, &TradeOtherSlots, &TradeSelfBackgrounds, &TradeOtherBackgrounds, &TradeSelfSelections, &TradeOtherSelections})
+			for (const auto& Widget : *Array) if (Widget) Widget->SetVisibility(ESlateVisibility::Collapsed);
+		for (auto* Array : {&TradeLabels, &TradeSelfCounts, &TradeOtherCounts})
+			for (const auto& Widget : *Array) if (Widget) Widget->SetVisibility(ESlateVisibility::Collapsed);
+		if (Manager) if (auto Indicator=Manager->FindElementByName(TEXT("TradeOtherTradeIndicator"))) Indicator->bVisible=false;
+		return;
+	}
+	SyncEnvPanelMode();
+	constexpr int32 OverlayZ=120000, Cell=32;
+	const FVector2D Scale=Canvas->GetLastScale2D();
+	const auto Root=Manager->FindElementByName(TEXT("RootGameplay_FloatyEnvPanel_Field"));
+	auto Fill=[&](const TCHAR* ListName, const TCHAR* BarName, TArray<TObjectPtr<UBorder>>& Icons,
+		TArray<TObjectPtr<UBorder>>& Backgrounds, TArray<TObjectPtr<UBorder>>& Selections, TArray<TObjectPtr<UTextBlock>>& Counts,
+		TArray<int32>& Guids, const TArray<int32>& Offers, int32& Offset, bool bSelf)
+	{
+		const auto List=Manager->FindElementByName(ListName);
+		if (!List) return;
+		// gmSecureTradeUI: one horizontal item list, including an empty self slot.
+		const int32 Page=FMath::Max(1,List->Width/Cell);
+		const int32 Capacity=Offers.Num()+(bSelf ? 1 : 0);
+		const int32 MaxOffset=FMath::Max(0,Capacity-Page);
+		Offset=FMath::Clamp(Offset,0,MaxOffset);
+		Guids.SetNumZeroed(Page);
+		const FIntPoint Origin=List->GetScreenOrigin();
+		for (int32 I=0; I<Page; ++I)
+		{
+			UBorder* Icon=EnsureIconBorder(Icons,I);
+			UBorder* Bg=EnsureIconBorder(Backgrounds,I);
+			UBorder* Selection=EnsureIconBorder(Selections,I);
+			while (Counts.Num()<=I) Counts.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
+			UTextBlock* Count=Counts[I];
+			FACEWorldObject Item;
+			const bool bItem=Offers.IsValidIndex(Offset+I) && Client->GetWorldObject(Offers[Offset+I],Item);
+			Guids[I]=bItem ? Item.Guid : 0;
+			SetIconDid(Selection,DidInvSlotSelected);
+			Selection->SetVisibility(bItem && Client->GetSelectedObject().Guid==Item.Guid ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+			SetItemSlotBackground(Bg,bItem ? &Item : nullptr);
+			SetItemSlotForeground(Icon,bItem ? &Item : nullptr);
+			Bg->SetVisibility(ESlateVisibility::HitTestInvisible);
+			Icon->SetVisibility(bItem ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+			SetRetailTooltip(Icon, FText::FromString(Item.Name));
+			Count->SetText(FText::AsNumber(Item.StackSize));
+			Count->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 7));
+			Count->SetColorAndOpacity(TextWhite);
+			Count->SetJustification(ETextJustify::Right);
+			Count->SetVisibility(bItem && Item.StackSize>1 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+			for (UWidget* Widget : {static_cast<UWidget*>(Bg),static_cast<UWidget*>(Icon),static_cast<UWidget*>(Count),static_cast<UWidget*>(Selection)})
+			{
+				if (Widget->GetParent()!=Canvas->GetElementLayer()) Canvas->GetElementLayer()->AddChild(Widget);
+				if (auto Slot=Cast<UCanvasPanelSlot>(Widget->Slot))
+				{
+					Slot->SetAnchors(FAnchors(0,0));
+					Slot->SetPosition(FVector2D(Origin.X+I*Cell,Origin.Y+(Widget==Count ? 20 : 0))*Scale);
+					Slot->SetSize(FVector2D(Cell,Widget==Count ? 12 : Cell)*Scale);
+					Canvas->SetOverlayOrder(Widget,Root,OverlayZ+(Widget==Bg ? -1 : Widget==Selection ? 2 : Widget==Count ? 1 : 0));
+				}
+			}
+		}
+		for (auto* Array : {&Icons,&Backgrounds,&Selections}) for (int32 I=Page; I<Array->Num(); ++I) (*Array)[I]->SetVisibility(ESlateVisibility::Collapsed);
+		for (int32 I=Page; I<Counts.Num(); ++I) Counts[I]->SetVisibility(ESlateVisibility::Collapsed);
+		if (auto Bar=Manager->FindElementByName(BarName))
+		{
+			Bar->bVisible=MaxOffset>0;
+			SyncDatScrollbar(Bar,MaxOffset ? float(Offset)/MaxOffset : 0.f,Capacity ? FMath::Min(1.f,float(Page)/Capacity) : 1.f);
+		}
+	};
+	Fill(TEXT("TradeSelfItemsList"),TEXT("TradeSelf_ItemListScroll"),TradeSelfSlots,TradeSelfBackgrounds,TradeSelfSelections,TradeSelfCounts,TradeSelfGuids,Client->GetTradeSelfItems(),TradeSelfOffset,true);
+	Fill(TEXT("TradeOtherItemsList"),TEXT("TradeOther_ItemListScroll"),TradeOtherSlots,TradeOtherBackgrounds,TradeOtherSelections,TradeOtherCounts,TradeOtherGuids,Client->GetTradePartnerItems(),TradeOtherOffset,false);
+	while (TradeLabels.Num()<6) TradeLabels.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
+	FACEWorldObject Partner; Client->GetWorldObject(TradePartnerGuid,Partner);
+	PlaceTextOnElement(TradeLabels[0],TEXT("TradeOtherPlayerName"),Partner.Name,10,TextWhite,OverlayZ+2);
+	PlaceTextOnElement(TradeLabels[1],TEXT("TradeSelfPlayerName"),TEXT("Your offer"),10,TextWhite,OverlayZ+2);
+	PlaceTextOnElement(TradeLabels[2],TEXT("TradeSelfTotalItemsLabel"),FString::Printf(TEXT("Total items: %d"),Client->GetTradeSelfItems().Num()),10,TextWhite,OverlayZ+2);
+	PlaceTextOnElement(TradeLabels[3],TEXT("TradeOtherTotalItemsLabel"),FString::Printf(TEXT("Total items: %d"),Client->GetTradePartnerItems().Num()),10,TextWhite,OverlayZ+2);
+	PlaceTextOnElement(TradeLabels[4],TEXT("TradeSelfTradeButton"),TEXT("Trade"),10,TextWhite,OverlayZ+2,true);
+	PlaceTextOnElement(TradeLabels[5],TEXT("Trade_ClearAllButon"),TEXT("Clear All"),10,TextWhite,OverlayZ+2,true);
+	if (auto Indicator=Manager->FindElementByName(TEXT("TradeOtherTradeIndicator")))
+		Indicator->bVisible=Client->GetTradeAcceptedGuid()!=0 && Client->GetTradeAcceptedGuid()!=Client->GetPlayerGuid();
+	if (auto Button=Manager->FindElementByName(TEXT("TradeSelfTradeButton")))
+		Button->bHighlighted=Client->GetTradeAcceptedGuid()==Client->GetPlayerGuid();
+}
+
+bool UACEUIGameplayBinder::IsPointerOverExternalContainer(FVector2D CanvasLocalPos) const
+{
+	if (!Manager || OpenLootContainerGuid == 0)
+	{
+		return false;
+	}
+	TSharedPtr<FACEUIElement> Root = Manager->FindElementByName(TEXT("ExternalContainer"));
+	if (!Root.IsValid() || !Root->bVisible)
+	{
+		return false;
+	}
+	const FIntPoint O = Root->GetScreenOrigin();
+	return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
+		&& CanvasLocalPos.X < O.X + Root->Width && CanvasLocalPos.Y < O.Y + Root->Height;
+}
+
+bool UACEUIGameplayBinder::ScrollExternalContainer(float WheelDelta)
+{
+	if (OpenLootContainerGuid == 0)
+	{
+		return false;
+	}
+	const int32 Dir = (WheelDelta > 0.f) ? -1 : 1;
+	ExtItemScrollOffset = FMath::Max(0, ExtItemScrollOffset + Dir * 3);
+	RefreshExternalContainerOverlays();
+	return true;
+}
+
+
+void UACEUIGameplayBinder::RefreshServerConfirmation()
+{
+	const auto Session = Client ? Client->GetSession() : nullptr;
+	if (!Session || Session->GetConfirmations().IsEmpty())
+	{
+		if (ServerConfirmRoot) ServerConfirmRoot->bVisible = false;
+		for (UTextBlock* Label : ServerConfirmLabels) if (Label) Label->SetVisibility(ESlateVisibility::Collapsed);
+		ServerConfirmPrompt.Reset(); return;
+	}
+	if (!Manager || !Canvas || !Canvas->WidgetTree) return;
+	if (!ServerConfirmRoot)
+	{
+		ServerConfirmRoot = UACEUILayoutResolver::LoadTemplate(0x2100003C, 0x15);
+		if (!ServerConfirmRoot) return;
+		ServerConfirmRoot->ElementName = TEXT("RootGameplay_FloatyServerConfirmation_Field");
+		TFunction<void(TSharedPtr<FACEUIElement>)> NameControls = [&](TSharedPtr<FACEUIElement> Node)
+		{
+			if (Node->ElementId == 0x3D)
+			{
+				Node->LeftEdge = Node->RightEdge = Node->TopEdge = Node->BottomEdge = 3;
+			}
+			if (Node->ElementId == 0x3E) Node->ElementName = TEXT("ServerConfirmationBody");
+			if (Node->ElementId == 0x17) Node->ElementName = TEXT("ServerConfirmationYes");
+			if (Node->ElementId == 0x19) Node->ElementName = TEXT("ServerConfirmationNo");
+			for (const auto& Child : Node->Children) NameControls(Child);
+		};
+		NameControls(ServerConfirmRoot);
+		// Join the gameplay window stack so DAT chrome and text share one paint base.
+		if (auto GameplayRoot=Manager->FindElementByName(TEXT("RootGameplay_Field"))) GameplayRoot->AddChild(ServerConfirmRoot);
+		else Manager->AddRoot(ServerConfirmRoot);
+		for (int32 I=0; I<3; ++I)
+			ServerConfirmLabels.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
+	}
+
+	const auto& Pending = Session->GetConfirmations()[0];
+	if (!ServerConfirmRoot->bVisible || ServerConfirmType != Pending.Type || ServerConfirmContext != Pending.Context || ServerConfirmPrompt != Pending.Prompt)
+	{
+		ServerConfirmType = Pending.Type; ServerConfirmContext = Pending.Context; ServerConfirmPrompt = Pending.Prompt;
+		ServerConfirmRoot->bVisible = true;
+		const auto Body = Manager->FindElementByName(TEXT("ServerConfirmationBody"));
+		FACEDatFont Font;
+		if (Body && Canvas->GetResourceResolver()->ResolveFont(Body->FontId, Font))
+		{
+			const int32 H = ACEDatText::Layout(Font, ServerConfirmPrompt, Body->Width-Body->TextMargins.Left-Body->TextMargins.Right, false).Num()*Font.MaxCharHeight
+				+ Body->TextMargins.Top+Body->TextMargins.Bottom;
+			const int32 Delta = H-Body->Height;
+			if (auto Box = Body->Parent.Pin())
+			{
+				Box->Height += Delta; Box->LayoutAuthoredH = Box->LastReflowH = Box->Height;
+				for (const auto& Child : Box->Children)
+				{
+					if (Child->TopEdge == 2) Child->Y += Delta;
+					else if (Child->BottomEdge == 1) Child->Height += Delta;
+					Child->LayoutAuthoredH = Child->LastReflowH = Child->Height;
+				}
+			}
+		}
+		Manager->BringFloatyToFront(ServerConfirmRoot);
+		if (PlayerController && PlayerController->GetPawn())
+			if (auto* VR = PlayerController->GetPawn()->FindComponentByClass<UACEVRComponent>(); VR && VR->IsActive())
+				VR->OpenRetailPanel(NAME_None);
+	}
+	PlaceTextOnElement(ServerConfirmLabels[0], TEXT("ServerConfirmationBody"), ServerConfirmPrompt, 12, TextWhite, 200020);
+	PlaceTextOnElement(ServerConfirmLabels[1], TEXT("ServerConfirmationYes"), TEXT("Yes"), 12, TextWhite, 200020, true);
+	PlaceTextOnElement(ServerConfirmLabels[2], TEXT("ServerConfirmationNo"), TEXT("No"), 12, TextWhite, 200020, true);
+}
+
+void UACEUIGameplayBinder::FinishServerConfirmation(bool bAccept)
+{
+	if (Client) if (auto Session = Client->GetSession()) Session->RespondToConfirmation(ServerConfirmType, ServerConfirmContext, bAccept);
+	RefreshServerConfirmation();
+}

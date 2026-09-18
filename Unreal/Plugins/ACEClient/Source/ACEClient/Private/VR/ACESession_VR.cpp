@@ -1,0 +1,227 @@
+#include "ACESession.h"
+
+void FACESession::HandleVRCasting(FACEBinaryReader& R)
+{
+	if (State != EACESessionState::InWorld || !SupportsVRCasting() || R.Remaining() != 24) return;
+	const uint32 Sequence=R.ReadUInt32(), Epoch=R.ReadUInt32(), Spell=R.ReadUInt32(), Phase=R.ReadUInt32();
+	const float Remaining=R.ReadFloat(), Duration=R.ReadFloat();
+	if (!Sequence || int32(Sequence-VRSequence)>0 || int32(Sequence-VRCastSequence)<0 || Epoch!=TeleportSeq || Phase>2
+		|| !FMath::IsFinite(Remaining) || !FMath::IsFinite(Duration) || Remaining<0 || Duration<Remaining || Duration>60) return;
+	// Same-cast packets advance monotonically: windup -> recoil -> ready.
+	if (Sequence==VRCastSequence && (Phase==1 || VRCastPhase==0)) return;
+	VRCastSequence=Sequence; VRCastEpoch=Epoch; VRCastPhase=Phase;
+	VRCastDuration=Duration; VRCastReadyAt=FPlatformTime::Seconds()+Remaining;
+	if (VRAimCastSequence==Sequence) VRAimUntil=Phase==1 ? VRCastReadyAt+2. : 0.;
+}
+
+uint32 FACESession::GetVRCastPhase() const
+{
+	return State==EACESessionState::InWorld && SupportsVRCasting() && VRCastEpoch==TeleportSeq
+		&& FPlatformTime::Seconds()<VRCastReadyAt+5. ? VRCastPhase : 0;
+}
+float FACESession::GetVRCastRemaining() const
+{
+	return GetVRCastPhase()==1 ? FMath::Max(0.,VRCastReadyAt-FPlatformTime::Seconds()) : 0.f;
+}
+float FACESession::GetVRCastProgress() const
+{
+	return VRCastDuration>0 ? FMath::Clamp(1.f-GetVRCastRemaining()/VRCastDuration,0.f,1.f) : 1.f;
+}
+
+void FACESession::SendVRAim(uint32 Cell, int32 Weapon, const FVector& Origin, const FVector& Direction)
+{
+	const double Now=FPlatformTime::Seconds();
+	if (!SupportsVRCasting() || State!=EACESessionState::InWorld || Weapon!=VRAimWeapon || VRCastEpoch!=TeleportSeq
+		|| Now>=VRAimUntil || Now<VRNextAim || Origin.ContainsNaN() || Direction.ContainsNaN()) return;
+	VRNextAim=Now+.05;
+	FACEBinaryWriter W;
+	for (uint32 Value : {1u,7u,++VRSequence,Cell,uint32(TeleportSeq),uint32(Weapon),uint32(VRAimSpell),VRAimCastSequence}) W.WriteUInt32(Value);
+	for (const auto& V : {Origin,Direction}) { W.WriteFloat(V.X); W.WriteFloat(V.Y); W.WriteFloat(V.Z); }
+	W.WriteFloat(0); W.WriteFloat(0);
+	SendGameAction(0xF7D0,W.GetData(),ACEQueue::WeenieQueue);
+}
+
+void FACESession::HandleVRRecovery(FACEBinaryReader& R)
+{
+	if (State != EACESessionState::InWorld || !SupportsVRRecovery() || R.Remaining() != 16) return;
+	const uint32 Sequence = R.ReadUInt32(), Epoch = R.ReadUInt32();
+	const float Remaining = R.ReadFloat(), Duration = R.ReadFloat();
+	if (!Sequence || int32(Sequence - VRSequence) > 0 || int32(Sequence - VRRecoverySequence) <= 0
+		|| Epoch != TeleportSeq || !FMath::IsFinite(Remaining) || !FMath::IsFinite(Duration)
+		|| Remaining < 0 || Duration <= 0 || Remaining > Duration || Duration > 60) return;
+	VRRecoverySequence = Sequence; VRRecoveryTeleport = Epoch;
+	VRRecoveryDuration = Duration; VRRecoveryReadyAt = FPlatformTime::Seconds() + Remaining;
+}
+
+float FACESession::GetVRRecoveryRemaining() const
+{
+	return State == EACESessionState::InWorld && SupportsVRRecovery() && VRRecoveryTeleport == TeleportSeq
+		? FMath::Max(0., VRRecoveryReadyAt - FPlatformTime::Seconds()) : 0.f;
+}
+
+float FACESession::GetVRRecoveryProgress() const
+{
+	return VRRecoveryDuration > 0 ? FMath::Clamp(1.f - GetVRRecoveryRemaining() / VRRecoveryDuration, 0.f, 1.f) : 1.f;
+}
+
+bool FACESession::SendVRDrop(uint32 Cell, int32 Item, int32 SplitAmount, const FVector& OriginAc)
+{
+	if (State != EACESessionState::InWorld || !SupportsVRDrops() || !Item || SplitAmount < 0
+		|| OriginAc.ContainsNaN() || OriginAc.SizeSquared2D() > FMath::Square(1.75f)
+		|| OriginAc.Z < .1f || OriginAc.Z > 2.5f) return false;
+	FACEBinaryWriter W;
+	W.WriteUInt32(1); W.WriteUInt32(6); W.WriteUInt32(++VRSequence); W.WriteUInt32(Cell);
+	W.WriteUInt32(TeleportSeq); W.WriteUInt32(Item); W.WriteUInt32(SplitAmount);
+	W.WriteFloat(OriginAc.X); W.WriteFloat(OriginAc.Y); W.WriteFloat(OriginAc.Z);
+	FlushAutonomousPosition(true);
+	SendGameAction(0xF7D0, W.GetData(), ACEQueue::WeenieQueue);
+	return true;
+}
+
+bool FACESession::SendVRPose(FACEVRPose Pose)
+{
+	if (State != EACESessionState::InWorld || !SupportsVRPoses()) return false;
+	FACEBinaryWriter W; W.WriteUInt32(1); W.WriteUInt32(++VRPoseSequence); W.WriteUInt32(Pose.Cell);
+	W.WriteUInt32(TeleportSeq); W.WriteUInt32(Pose.Flags); W.WriteFloat(Pose.EyeHeight); W.WriteFloat(Pose.Draw);
+	for (const FTransform& T : Pose.Poses)
+	{
+		const FVector P = T.GetLocation(); const FQuat Q = T.GetRotation();
+		if (P.ContainsNaN() || Q.ContainsNaN()) return false;
+		for (double V : {P.X, P.Y, P.Z, Q.X, Q.Y, Q.Z, Q.W}) W.WriteFloat(V);
+	}
+	SendGameAction(0xF7D1, W.GetData(), ACEQueue::WeenieQueue);
+	if (VRPoseSequence == 1) Log(TEXT("VR pose stream started: head and both hands, 20 Hz"));
+	return true;
+}
+
+void FACESession::HandleVRPose(FACEBinaryReader& R)
+{
+	if (State != EACESessionState::InWorld || !SupportsVRPoses() || R.Remaining() != 116) return;
+	const int32 Guid = static_cast<int32>(R.ReadUInt32());
+	const auto* Object = WorldObjects.Find(Guid);
+	if (!Object || !Object->bIsPlayer || Guid == PlayerGuid || R.ReadUInt32() != 1) return;
+	FACEVRPose P; P.Sequence = R.ReadUInt32(); P.Cell = R.ReadUInt32(); P.Teleport = R.ReadUInt32(); P.Flags = R.ReadUInt32();
+	P.EyeHeight = R.ReadFloat(); P.Draw = R.ReadFloat();
+	if ((P.Flags & ~31u) || !FMath::IsFinite(P.EyeHeight) || P.EyeHeight < 1 || P.EyeHeight > 2.1f || !FMath::IsFinite(P.Draw)) return;
+	for (FTransform& T : P.Poses)
+	{
+		const float X = R.ReadFloat(), Y = R.ReadFloat(), Z = R.ReadFloat();
+		const float QX = R.ReadFloat(), QY = R.ReadFloat(), QZ = R.ReadFloat(), QW = R.ReadFloat();
+		FQuat Q(QX, QY, QZ, QW); FVector V(X, Y, Z);
+		if (V.ContainsNaN() || V.SizeSquared() > 25 || Q.ContainsNaN() || !FMath::IsWithinInclusive(Q.SizeSquared(), .8, 1.2)) return;
+		Q.Normalize(); T = FTransform(Q, V);
+	}
+	P.ReceivedAt = FPlatformTime::Seconds();
+	auto& Samples = VRPoses.FindOrAdd(Guid);
+	if (Samples.Current.ReceivedAt == 0) Log(FString::Printf(TEXT("VR pose stream received from 0x%08X"), Guid));
+	if (Samples.Current.ReceivedAt > 0 && int32(P.Sequence - Samples.Current.Sequence) <= 0) return;
+	Samples.Previous = P.Teleport == Samples.Current.Teleport && P.ReceivedAt - Samples.Current.ReceivedAt < .5 ? Samples.Current : P;
+	Samples.Current = P;
+}
+
+bool FACESession::GetVRPose(int32 Guid, FACEVRPose& P) const
+{
+	const auto* S = VRPoses.Find(Guid); const auto* Object = WorldObjects.Find(Guid);
+	const double Now = FPlatformTime::Seconds();
+	if (!S || !Object || !Object->bHasPosition || !(S->Current.Flags & 4u) || Now - S->Current.ReceivedAt > .5) return false;
+	if (Object->bHasPhysicsTimestamps && Object->PhysicsTimestamps[ACEPhysicsTimeStamp::Teleport] != S->Current.Teleport) return false;
+	P = S->Current;
+	const double Span = S->Current.ReceivedAt - S->Previous.ReceivedAt;
+	const float Alpha = Span > .001 ? FMath::Clamp((Now - .075 - S->Previous.ReceivedAt) / Span, 0., 1.) : 1.f;
+	for (int32 I = 0; I < 3; ++I) P.Poses[I].Blend(S->Previous.Poses[I], S->Current.Poses[I], Alpha);
+	P.Draw = FMath::Lerp(S->Previous.Draw, S->Current.Draw, Alpha); return true;
+}
+
+void FACESession::ApplyVRWorldSnapshot(FACEBinaryReader& Reader)
+{
+	if (!Reader.CanRead(8)) return;
+	const uint32 Epoch = Reader.ReadUInt32(), Count = Reader.ReadUInt32();
+	const uint32 Trailer = (VRCapabilities & 32u) ? 8u : 0u;
+	if (Epoch != TeleportSeq || Count > 10000u || Reader.Remaining() != Count * 4u + Trailer) return;
+	TSet<int32> Live;
+	for (uint32 I = 0; I < Count; ++I) Live.Add(static_cast<int32>(Reader.ReadUInt32()));
+	auto Owned = [&](const FACEWorldObject& Object)
+	{
+		// Containers/vendor stock are sent by UI events, not the physics known-object
+		// list. Membership reconciliation must not empty an open shop or loot bag.
+		if (Object.ContainerId != 0) return true;
+		if (Object.Guid == PlayerGuid || Object.WielderId == PlayerGuid || Object.ParentGuid == PlayerGuid) return true;
+		return Live.Contains(Object.WielderId) || Live.Contains(Object.ParentGuid);
+	};
+	TArray<int32> Removed;
+	for (const auto& Pair : WorldObjects) if (!Live.Contains(Pair.Key) && !Owned(Pair.Value)) Removed.Add(Pair.Key);
+	for (int32 Guid : Removed)
+	{
+		WorldObjects.Remove(Guid); RemoveFromContainerLists(Guid); OnObjectDeleted.Broadcast(Guid);
+	}
+	Log(FString::Printf(TEXT("VR world snapshot: live=%d removed=%d epoch=%u"), Live.Num(), Removed.Num(), Epoch));
+}
+#include "Protocol/ACEBinaryWriter.h"
+
+void FACESession::SendCancelAttack()
+{
+	if (State == EACESessionState::InWorld) SendGameAction(ACEGameAction::CancelAttack, {}, ACEQueue::WeenieQueue);
+}
+
+void FACESession::RequestVRCapabilities()
+{
+	if (State != EACESessionState::InWorld) return;
+	FACEBinaryWriter W; W.WriteUInt32(1); W.WriteUInt32(0);
+	SendGameAction(0xF7D0, W.GetData(), ACEQueue::WeenieQueue);
+}
+
+void FACESession::RequestVRSpellProfile(int32 Spell)
+{
+	if (State != EACESessionState::InWorld || !(VRCapabilities & 256u) || Spell <= 0 || VRSpellProfiles.Contains(Spell)) return;
+	FACEBinaryWriter W; W.WriteUInt32(1); W.WriteUInt32(5); W.WriteUInt32(Spell);
+	if (VRCapabilities & 512u) W.WriteUInt32(1); // opt in; older VR clients still receive 12 bytes
+	SendGameAction(0xF7D0, W.GetData(), ACEQueue::WeenieQueue);
+}
+
+bool FACESession::GetVRSpellProfile(int32 Spell, float& Speed, bool& Gravity, float* Radius) const
+{
+	const auto* Profile = VRSpellProfiles.Find(Spell);
+	if (!Profile) return false;
+	Speed = Profile->X; Gravity = Profile->Y != 0; if (Radius) *Radius = Profile->Z; return true;
+}
+
+bool FACESession::SendVRCombat(uint32 Kind, uint32 Cell, int32 Weapon, int32 Subject, int32 Target,
+	const FVector& OriginAc, const FVector& DirectionOrEndAc, float Amount, float Duration)
+{
+	if (State != EACESessionState::InWorld || !SupportsVRCombat() || Kind < 1 || Kind > 3
+		|| (Weapon == 0 && (Kind != 2 || !SupportsVRUnarmed() || Subject < 0 || Subject > 1))
+		|| OriginAc.ContainsNaN() || DirectionOrEndAc.ContainsNaN() || !FMath::IsFinite(Amount) || !FMath::IsFinite(Duration))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ACE VR action rejected locally: kind=%u state=%d capabilities=0x%X weapon=0x%08X origin=%s vector=%s"),
+			Kind, int32(State), VRCapabilities, Weapon, *OriginAc.ToString(), *DirectionOrEndAc.ToString());
+		return false;
+	}
+	FACEBinaryWriter W;
+	W.WriteUInt32(1); W.WriteUInt32(Kind); W.WriteUInt32(++VRSequence); W.WriteUInt32(Cell);
+	W.WriteUInt32(TeleportSeq); W.WriteUInt32(Weapon); W.WriteUInt32(Subject); W.WriteUInt32(Target);
+	for (const FVector& V : {OriginAc, DirectionOrEndAc})
+	{ W.WriteFloat(V.X); W.WriteFloat(V.Y); W.WriteFloat(V.Z); }
+	W.WriteFloat(FMath::Clamp(Amount, 0.f, 1.f)); W.WriteFloat(FMath::Clamp(Duration, 0.f, 2.f));
+	if (Kind==2 && (VRCapabilities & 16384u))
+	{ W.WriteFloat(VRMeleeBody.X); W.WriteFloat(VRMeleeBody.Y); W.WriteFloat(VRMeleeBody.Z); }
+	if (Kind==1 && SupportsVRCasting())
+	{
+		VRAimCastSequence=VRSequence; VRAimSpell=Subject; VRAimWeapon=Weapon;
+		VRCastEpoch=TeleportSeq; VRAimUntil=FPlatformTime::Seconds()+3.; VRNextAim=0.;
+	}
+	FlushAutonomousPosition(true);
+	SendGameAction(0xF7D0, W.GetData(), ACEQueue::WeenieQueue);
+	return true;
+}
+
+void FACESession::HandleHealthFeedback(FACEBinaryReader& R)
+{
+    if (State != EACESessionState::InWorld || !SupportsHealthFeedback() || R.Remaining() != 12) return;
+    const int32 Guid = R.ReadInt32(), Change = R.ReadInt32();
+    const uint32 Flags = R.ReadUInt32();
+    if (!Guid || !Change || Change == MIN_int32 || (Flags & ~3u) != 0) return;
+    // A stale packet after portal transition must not create a phantom target.
+    const auto* Object = WorldObjects.Find(Guid);
+    if (Guid != PlayerGuid && (!Object || (Object->ItemType & ACEItemType::Creature) == 0)) return;
+    OnHealthFeedback.Broadcast(Guid, Change, Flags);
+}

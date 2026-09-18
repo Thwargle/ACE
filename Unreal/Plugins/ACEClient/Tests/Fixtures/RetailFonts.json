@@ -1,0 +1,2013 @@
+{
+  "fonts": [
+    {
+      "id": "40000000",
+      "height": 16,
+      "maxWidth": 16,
+      "count": 1050,
+      "glyphHash": "D68589A7EDE129F7",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 51
+        },
+        {
+          "text": "Inventory",
+          "width": 49
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 82
+        },
+        {
+          "text": "Inspection",
+          "width": 51
+        },
+        {
+          "text": "Wi.i?",
+          "width": 25
+        },
+        {
+          "text": "ENTER",
+          "width": 37
+        },
+        {
+          "text": "CREDITS",
+          "width": 48
+        },
+        {
+          "text": "EXIT",
+          "width": 24
+        }
+      ]
+    },
+    {
+      "id": "40000001",
+      "height": 18,
+      "maxWidth": 19,
+      "count": 1050,
+      "glyphHash": "084FCCD25839562B",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 58
+        },
+        {
+          "text": "Inventory",
+          "width": 60
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 97
+        },
+        {
+          "text": "Inspection",
+          "width": 62
+        },
+        {
+          "text": "Wi.i?",
+          "width": 30
+        },
+        {
+          "text": "ENTER",
+          "width": 42
+        },
+        {
+          "text": "CREDITS",
+          "width": 53
+        },
+        {
+          "text": "EXIT",
+          "width": 28
+        }
+      ]
+    },
+    {
+      "id": "40000002",
+      "height": 14,
+      "maxWidth": 15,
+      "count": 1050,
+      "glyphHash": "556E08A0FA906420",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 47
+        },
+        {
+          "text": "Inventory",
+          "width": 44
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 74
+        },
+        {
+          "text": "Inspection",
+          "width": 49
+        },
+        {
+          "text": "Wi.i?",
+          "width": 25
+        },
+        {
+          "text": "ENTER",
+          "width": 34
+        },
+        {
+          "text": "CREDITS",
+          "width": 43
+        },
+        {
+          "text": "EXIT",
+          "width": 23
+        }
+      ]
+    },
+    {
+      "id": "40000004",
+      "height": 20,
+      "maxWidth": 21,
+      "count": 1050,
+      "glyphHash": "EF83CAF1E5EB4737",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 67
+        },
+        {
+          "text": "Inventory",
+          "width": 65
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 111
+        },
+        {
+          "text": "Inspection",
+          "width": 69
+        },
+        {
+          "text": "Wi.i?",
+          "width": 34
+        },
+        {
+          "text": "ENTER",
+          "width": 49
+        },
+        {
+          "text": "CREDITS",
+          "width": 65
+        },
+        {
+          "text": "EXIT",
+          "width": 32
+        }
+      ]
+    },
+    {
+      "id": "40000005",
+      "height": 22,
+      "maxWidth": 22,
+      "count": 1050,
+      "glyphHash": "C252CB011E80E4C4",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 67
+        },
+        {
+          "text": "Inventory",
+          "width": 66
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 112
+        },
+        {
+          "text": "Inspection",
+          "width": 69
+        },
+        {
+          "text": "Wi.i?",
+          "width": 35
+        },
+        {
+          "text": "ENTER",
+          "width": 52
+        },
+        {
+          "text": "CREDITS",
+          "width": 66
+        },
+        {
+          "text": "EXIT",
+          "width": 34
+        }
+      ]
+    },
+    {
+      "id": "40000006",
+      "height": 24,
+      "maxWidth": 25,
+      "count": 1050,
+      "glyphHash": "2C7DAD44F81EF1DB",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 76
+        },
+        {
+          "text": "Inventory",
+          "width": 78
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 129
+        },
+        {
+          "text": "Inspection",
+          "width": 80
+        },
+        {
+          "text": "Wi.i?",
+          "width": 41
+        },
+        {
+          "text": "ENTER",
+          "width": 61
+        },
+        {
+          "text": "CREDITS",
+          "width": 79
+        },
+        {
+          "text": "EXIT",
+          "width": 41
+        }
+      ]
+    },
+    {
+      "id": "40000007",
+      "height": 12,
+      "maxWidth": 13,
+      "count": 1912,
+      "glyphHash": "8F20B04FB6672A3B",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 45
+        },
+        {
+          "text": "Inventory",
+          "width": 46
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 75
+        },
+        {
+          "text": "Inspection",
+          "width": 47
+        },
+        {
+          "text": "Wi.i?",
+          "width": 22
+        },
+        {
+          "text": "ENTER",
+          "width": 31
+        },
+        {
+          "text": "CREDITS",
+          "width": 42
+        },
+        {
+          "text": "EXIT",
+          "width": 22
+        }
+      ]
+    },
+    {
+      "id": "40000008",
+      "height": 14,
+      "maxWidth": 16,
+      "count": 1912,
+      "glyphHash": "CAA201F71A38F54A",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 52
+        },
+        {
+          "text": "Inventory",
+          "width": 53
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 95
+        },
+        {
+          "text": "Inspection",
+          "width": 57
+        },
+        {
+          "text": "Wi.i?",
+          "width": 26
+        },
+        {
+          "text": "ENTER",
+          "width": 37
+        },
+        {
+          "text": "CREDITS",
+          "width": 48
+        },
+        {
+          "text": "EXIT",
+          "width": 26
+        }
+      ]
+    },
+    {
+      "id": "40000009",
+      "height": 16,
+      "maxWidth": 16,
+      "count": 1912,
+      "glyphHash": "FAF6D5E4E5406342",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 55
+        },
+        {
+          "text": "Inventory",
+          "width": 53
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 97
+        },
+        {
+          "text": "Inspection",
+          "width": 58
+        },
+        {
+          "text": "Wi.i?",
+          "width": 28
+        },
+        {
+          "text": "ENTER",
+          "width": 38
+        },
+        {
+          "text": "CREDITS",
+          "width": 51
+        },
+        {
+          "text": "EXIT",
+          "width": 27
+        }
+      ]
+    },
+    {
+      "id": "4000000A",
+      "height": 18,
+      "maxWidth": 19,
+      "count": 1912,
+      "glyphHash": "666FF72E35A9D231",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 59
+        },
+        {
+          "text": "Inventory",
+          "width": 64
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 111
+        },
+        {
+          "text": "Inspection",
+          "width": 67
+        },
+        {
+          "text": "Wi.i?",
+          "width": 30
+        },
+        {
+          "text": "ENTER",
+          "width": 45
+        },
+        {
+          "text": "CREDITS",
+          "width": 60
+        },
+        {
+          "text": "EXIT",
+          "width": 33
+        }
+      ]
+    },
+    {
+      "id": "4000000B",
+      "height": 20,
+      "maxWidth": 21,
+      "count": 1912,
+      "glyphHash": "627FB9F40016FF31",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 69
+        },
+        {
+          "text": "Inventory",
+          "width": 68
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 122
+        },
+        {
+          "text": "Inspection",
+          "width": 73
+        },
+        {
+          "text": "Wi.i?",
+          "width": 35
+        },
+        {
+          "text": "ENTER",
+          "width": 49
+        },
+        {
+          "text": "CREDITS",
+          "width": 65
+        },
+        {
+          "text": "EXIT",
+          "width": 34
+        }
+      ]
+    },
+    {
+      "id": "4000000C",
+      "height": 22,
+      "maxWidth": 23,
+      "count": 1912,
+      "glyphHash": "CBCB966247BEB9D3",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 76
+        },
+        {
+          "text": "Inventory",
+          "width": 76
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 136
+        },
+        {
+          "text": "Inspection",
+          "width": 82
+        },
+        {
+          "text": "Wi.i?",
+          "width": 38
+        },
+        {
+          "text": "ENTER",
+          "width": 54
+        },
+        {
+          "text": "CREDITS",
+          "width": 72
+        },
+        {
+          "text": "EXIT",
+          "width": 38
+        }
+      ]
+    },
+    {
+      "id": "4000000D",
+      "height": 24,
+      "maxWidth": 26,
+      "count": 1912,
+      "glyphHash": "DE3574AC9DA19629",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 86
+        },
+        {
+          "text": "Inventory",
+          "width": 85
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 151
+        },
+        {
+          "text": "Inspection",
+          "width": 92
+        },
+        {
+          "text": "Wi.i?",
+          "width": 43
+        },
+        {
+          "text": "ENTER",
+          "width": 59
+        },
+        {
+          "text": "CREDITS",
+          "width": 79
+        },
+        {
+          "text": "EXIT",
+          "width": 42
+        }
+      ]
+    },
+    {
+      "id": "4000000E",
+      "height": 24,
+      "maxWidth": 27,
+      "count": 210,
+      "glyphHash": "5A57536CBE6DFAB0",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 72
+        },
+        {
+          "text": "Inventory",
+          "width": 72
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 133
+        },
+        {
+          "text": "Inspection",
+          "width": 74
+        },
+        {
+          "text": "Wi.i?",
+          "width": 38
+        },
+        {
+          "text": "ENTER",
+          "width": 67
+        },
+        {
+          "text": "CREDITS",
+          "width": 84
+        },
+        {
+          "text": "EXIT",
+          "width": 46
+        }
+      ]
+    },
+    {
+      "id": "4000000F",
+      "height": 30,
+      "maxWidth": 34,
+      "count": 210,
+      "glyphHash": "55CBEC253C211CC0",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 91
+        },
+        {
+          "text": "Inventory",
+          "width": 88
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 167
+        },
+        {
+          "text": "Inspection",
+          "width": 93
+        },
+        {
+          "text": "Wi.i?",
+          "width": 48
+        },
+        {
+          "text": "ENTER",
+          "width": 86
+        },
+        {
+          "text": "CREDITS",
+          "width": 107
+        },
+        {
+          "text": "EXIT",
+          "width": 59
+        }
+      ]
+    },
+    {
+      "id": "40000010",
+      "height": 36,
+      "maxWidth": 39,
+      "count": 210,
+      "glyphHash": "AF7C63F0DF528797",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 107
+        },
+        {
+          "text": "Inventory",
+          "width": 103
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 194
+        },
+        {
+          "text": "Inspection",
+          "width": 110
+        },
+        {
+          "text": "Wi.i?",
+          "width": 58
+        },
+        {
+          "text": "ENTER",
+          "width": 103
+        },
+        {
+          "text": "CREDITS",
+          "width": 127
+        },
+        {
+          "text": "EXIT",
+          "width": 70
+        }
+      ]
+    },
+    {
+      "id": "40000011",
+      "height": 38,
+      "maxWidth": 42,
+      "count": 210,
+      "glyphHash": "0C4D9777C2C806AD",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 112
+        },
+        {
+          "text": "Inventory",
+          "width": 111
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 207
+        },
+        {
+          "text": "Inspection",
+          "width": 115
+        },
+        {
+          "text": "Wi.i?",
+          "width": 61
+        },
+        {
+          "text": "ENTER",
+          "width": 109
+        },
+        {
+          "text": "CREDITS",
+          "width": 134
+        },
+        {
+          "text": "EXIT",
+          "width": 75
+        }
+      ]
+    },
+    {
+      "id": "40000012",
+      "height": 40,
+      "maxWidth": 43,
+      "count": 210,
+      "glyphHash": "6E16DDBA14D3594F",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 117
+        },
+        {
+          "text": "Inventory",
+          "width": 115
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 219
+        },
+        {
+          "text": "Inspection",
+          "width": 120
+        },
+        {
+          "text": "Wi.i?",
+          "width": 62
+        },
+        {
+          "text": "ENTER",
+          "width": 114
+        },
+        {
+          "text": "CREDITS",
+          "width": 142
+        },
+        {
+          "text": "EXIT",
+          "width": 78
+        }
+      ]
+    },
+    {
+      "id": "40000013",
+      "height": 46,
+      "maxWidth": 50,
+      "count": 210,
+      "glyphHash": "C95B03796D9C2CE4",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 137
+        },
+        {
+          "text": "Inventory",
+          "width": 133
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 249
+        },
+        {
+          "text": "Inspection",
+          "width": 140
+        },
+        {
+          "text": "Wi.i?",
+          "width": 72
+        },
+        {
+          "text": "ENTER",
+          "width": 131
+        },
+        {
+          "text": "CREDITS",
+          "width": 163
+        },
+        {
+          "text": "EXIT",
+          "width": 90
+        }
+      ]
+    },
+    {
+      "id": "40000014",
+      "height": 48,
+      "maxWidth": 53,
+      "count": 210,
+      "glyphHash": "2C8466961CED4B37",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 142
+        },
+        {
+          "text": "Inventory",
+          "width": 138
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 261
+        },
+        {
+          "text": "Inspection",
+          "width": 143
+        },
+        {
+          "text": "Wi.i?",
+          "width": 76
+        },
+        {
+          "text": "ENTER",
+          "width": 136
+        },
+        {
+          "text": "CREDITS",
+          "width": 169
+        },
+        {
+          "text": "EXIT",
+          "width": 93
+        }
+      ]
+    },
+    {
+      "id": "40000015",
+      "height": 20,
+      "maxWidth": 23,
+      "count": 210,
+      "glyphHash": "C2575C440A8CD036",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 59
+        },
+        {
+          "text": "Inventory",
+          "width": 57
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 111
+        },
+        {
+          "text": "Inspection",
+          "width": 62
+        },
+        {
+          "text": "Wi.i?",
+          "width": 33
+        },
+        {
+          "text": "ENTER",
+          "width": 57
+        },
+        {
+          "text": "CREDITS",
+          "width": 72
+        },
+        {
+          "text": "EXIT",
+          "width": 40
+        }
+      ]
+    },
+    {
+      "id": "40000016",
+      "height": 18,
+      "maxWidth": 20,
+      "count": 210,
+      "glyphHash": "76D66E70FCA4A839",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 53
+        },
+        {
+          "text": "Inventory",
+          "width": 52
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 97
+        },
+        {
+          "text": "Inspection",
+          "width": 53
+        },
+        {
+          "text": "Wi.i?",
+          "width": 28
+        },
+        {
+          "text": "ENTER",
+          "width": 51
+        },
+        {
+          "text": "CREDITS",
+          "width": 62
+        },
+        {
+          "text": "EXIT",
+          "width": 35
+        }
+      ]
+    },
+    {
+      "id": "40000017",
+      "height": 14,
+      "maxWidth": 14,
+      "count": 20609,
+      "glyphHash": "8E1F8BE55887295E",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 62
+        },
+        {
+          "text": "Inventory",
+          "width": 59
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 111
+        },
+        {
+          "text": "Inspection",
+          "width": 66
+        },
+        {
+          "text": "Wi.i?",
+          "width": 32
+        },
+        {
+          "text": "ENTER",
+          "width": 45
+        },
+        {
+          "text": "CREDITS",
+          "width": 59
+        },
+        {
+          "text": "EXIT",
+          "width": 30
+        }
+      ]
+    },
+    {
+      "id": "40000018",
+      "height": 18,
+      "maxWidth": 20,
+      "count": 20609,
+      "glyphHash": "3B27D35395392486",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 82
+        },
+        {
+          "text": "Inventory",
+          "width": 76
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 140
+        },
+        {
+          "text": "Inspection",
+          "width": 86
+        },
+        {
+          "text": "Wi.i?",
+          "width": 40
+        },
+        {
+          "text": "ENTER",
+          "width": 57
+        },
+        {
+          "text": "CREDITS",
+          "width": 75
+        },
+        {
+          "text": "EXIT",
+          "width": 37
+        }
+      ]
+    },
+    {
+      "id": "40000019",
+      "height": 21,
+      "maxWidth": 22,
+      "count": 1912,
+      "glyphHash": "B35AF757E4B251D7",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 70
+        },
+        {
+          "text": "Inventory",
+          "width": 70
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 125
+        },
+        {
+          "text": "Inspection",
+          "width": 77
+        },
+        {
+          "text": "Wi.i?",
+          "width": 36
+        },
+        {
+          "text": "ENTER",
+          "width": 52
+        },
+        {
+          "text": "CREDITS",
+          "width": 68
+        },
+        {
+          "text": "EXIT",
+          "width": 36
+        }
+      ]
+    },
+    {
+      "id": "4000001A",
+      "height": 16,
+      "maxWidth": 9,
+      "count": 1258,
+      "glyphHash": "30A5DD64A637F24B",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 72
+        },
+        {
+          "text": "Inventory",
+          "width": 72
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 121
+        },
+        {
+          "text": "Inspection",
+          "width": 80
+        },
+        {
+          "text": "Wi.i?",
+          "width": 40
+        },
+        {
+          "text": "ENTER",
+          "width": 40
+        },
+        {
+          "text": "CREDITS",
+          "width": 56
+        },
+        {
+          "text": "EXIT",
+          "width": 32
+        }
+      ]
+    },
+    {
+      "id": "4000001B",
+      "height": 36,
+      "maxWidth": 38,
+      "count": 1912,
+      "glyphHash": "F66A1254FD8DB62F",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 128
+        },
+        {
+          "text": "Inventory",
+          "width": 128
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 224
+        },
+        {
+          "text": "Inspection",
+          "width": 138
+        },
+        {
+          "text": "Wi.i?",
+          "width": 64
+        },
+        {
+          "text": "ENTER",
+          "width": 91
+        },
+        {
+          "text": "CREDITS",
+          "width": 120
+        },
+        {
+          "text": "EXIT",
+          "width": 63
+        }
+      ]
+    },
+    {
+      "id": "4000001C",
+      "height": 10,
+      "maxWidth": 12,
+      "count": 1050,
+      "glyphHash": "729E94887A5202DD",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 31
+        },
+        {
+          "text": "Inventory",
+          "width": 30
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 53
+        },
+        {
+          "text": "Inspection",
+          "width": 31
+        },
+        {
+          "text": "Wi.i?",
+          "width": 16
+        },
+        {
+          "text": "ENTER",
+          "width": 23
+        },
+        {
+          "text": "CREDITS",
+          "width": 29
+        },
+        {
+          "text": "EXIT",
+          "width": 15
+        }
+      ]
+    },
+    {
+      "id": "4000001D",
+      "height": 12,
+      "maxWidth": 7,
+      "count": 1258,
+      "glyphHash": "BE4A10710452F9DA",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 45
+        },
+        {
+          "text": "Inventory",
+          "width": 45
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 76
+        },
+        {
+          "text": "Inspection",
+          "width": 50
+        },
+        {
+          "text": "Wi.i?",
+          "width": 25
+        },
+        {
+          "text": "ENTER",
+          "width": 25
+        },
+        {
+          "text": "CREDITS",
+          "width": 35
+        },
+        {
+          "text": "EXIT",
+          "width": 20
+        }
+      ]
+    },
+    {
+      "id": "4000001E",
+      "height": 14,
+      "maxWidth": 8,
+      "count": 1258,
+      "glyphHash": "9AFFB8B434D1A3F2",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 63
+        },
+        {
+          "text": "Inventory",
+          "width": 63
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 106
+        },
+        {
+          "text": "Inspection",
+          "width": 70
+        },
+        {
+          "text": "Wi.i?",
+          "width": 35
+        },
+        {
+          "text": "ENTER",
+          "width": 35
+        },
+        {
+          "text": "CREDITS",
+          "width": 49
+        },
+        {
+          "text": "EXIT",
+          "width": 28
+        }
+      ]
+    },
+    {
+      "id": "4000001F",
+      "height": 18,
+      "maxWidth": 11,
+      "count": 1258,
+      "glyphHash": "3EACEB168280010E",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 90
+        },
+        {
+          "text": "Inventory",
+          "width": 90
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 151
+        },
+        {
+          "text": "Inspection",
+          "width": 100
+        },
+        {
+          "text": "Wi.i?",
+          "width": 50
+        },
+        {
+          "text": "ENTER",
+          "width": 50
+        },
+        {
+          "text": "CREDITS",
+          "width": 70
+        },
+        {
+          "text": "EXIT",
+          "width": 40
+        }
+      ]
+    },
+    {
+      "id": "40000020",
+      "height": 24,
+      "maxWidth": 14,
+      "count": 1258,
+      "glyphHash": "B3DE4B579E31CFDF",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 117
+        },
+        {
+          "text": "Inventory",
+          "width": 117
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 196
+        },
+        {
+          "text": "Inspection",
+          "width": 130
+        },
+        {
+          "text": "Wi.i?",
+          "width": 65
+        },
+        {
+          "text": "ENTER",
+          "width": 65
+        },
+        {
+          "text": "CREDITS",
+          "width": 91
+        },
+        {
+          "text": "EXIT",
+          "width": 52
+        }
+      ]
+    },
+    {
+      "id": "40000021",
+      "height": 12,
+      "maxWidth": 12,
+      "count": 20609,
+      "glyphHash": "24042FB2384C22FA",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 55
+        },
+        {
+          "text": "Inventory",
+          "width": 51
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 96
+        },
+        {
+          "text": "Inspection",
+          "width": 58
+        },
+        {
+          "text": "Wi.i?",
+          "width": 28
+        },
+        {
+          "text": "ENTER",
+          "width": 39
+        },
+        {
+          "text": "CREDITS",
+          "width": 52
+        },
+        {
+          "text": "EXIT",
+          "width": 26
+        }
+      ]
+    },
+    {
+      "id": "40000022",
+      "height": 16,
+      "maxWidth": 18,
+      "count": 20609,
+      "glyphHash": "9ED1F84386057C79",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 75
+        },
+        {
+          "text": "Inventory",
+          "width": 67
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 125
+        },
+        {
+          "text": "Inspection",
+          "width": 77
+        },
+        {
+          "text": "Wi.i?",
+          "width": 36
+        },
+        {
+          "text": "ENTER",
+          "width": 51
+        },
+        {
+          "text": "CREDITS",
+          "width": 67
+        },
+        {
+          "text": "EXIT",
+          "width": 33
+        }
+      ]
+    },
+    {
+      "id": "40000023",
+      "height": 24,
+      "maxWidth": 26,
+      "count": 20609,
+      "glyphHash": "0C81ACEB4231B9AE",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 113
+        },
+        {
+          "text": "Inventory",
+          "width": 103
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 192
+        },
+        {
+          "text": "Inspection",
+          "width": 119
+        },
+        {
+          "text": "Wi.i?",
+          "width": 54
+        },
+        {
+          "text": "ENTER",
+          "width": 77
+        },
+        {
+          "text": "CREDITS",
+          "width": 100
+        },
+        {
+          "text": "EXIT",
+          "width": 50
+        }
+      ]
+    },
+    {
+      "id": "40000024",
+      "height": 42,
+      "maxWidth": 46,
+      "count": 210,
+      "glyphHash": "1602584469188612",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 123
+        },
+        {
+          "text": "Inventory",
+          "width": 120
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 228
+        },
+        {
+          "text": "Inspection",
+          "width": 128
+        },
+        {
+          "text": "Wi.i?",
+          "width": 68
+        },
+        {
+          "text": "ENTER",
+          "width": 119
+        },
+        {
+          "text": "CREDITS",
+          "width": 148
+        },
+        {
+          "text": "EXIT",
+          "width": 81
+        }
+      ]
+    },
+    {
+      "id": "40000025",
+      "height": 11,
+      "maxWidth": 13,
+      "count": 1050,
+      "glyphHash": "2695C9653E95A0DC",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 33
+        },
+        {
+          "text": "Inventory",
+          "width": 36
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 59
+        },
+        {
+          "text": "Inspection",
+          "width": 38
+        },
+        {
+          "text": "Wi.i?",
+          "width": 18
+        },
+        {
+          "text": "ENTER",
+          "width": 27
+        },
+        {
+          "text": "CREDITS",
+          "width": 34
+        },
+        {
+          "text": "EXIT",
+          "width": 18
+        }
+      ]
+    },
+    {
+      "id": "40000026",
+      "height": 14,
+      "maxWidth": 12,
+      "count": 1419,
+      "glyphHash": "BEB4F568261035F0",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 46
+        },
+        {
+          "text": "Inventory",
+          "width": 45
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 81
+        },
+        {
+          "text": "Inspection",
+          "width": 49
+        },
+        {
+          "text": "Wi.i?",
+          "width": 23
+        },
+        {
+          "text": "ENTER",
+          "width": 32
+        },
+        {
+          "text": "CREDITS",
+          "width": 42
+        },
+        {
+          "text": "EXIT",
+          "width": 21
+        }
+      ]
+    },
+    {
+      "id": "40000027",
+      "height": 16,
+      "maxWidth": 15,
+      "count": 1419,
+      "glyphHash": "945DA9D9B273E548",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 57
+        },
+        {
+          "text": "Inventory",
+          "width": 51
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 96
+        },
+        {
+          "text": "Inspection",
+          "width": 59
+        },
+        {
+          "text": "Wi.i?",
+          "width": 30
+        },
+        {
+          "text": "ENTER",
+          "width": 43
+        },
+        {
+          "text": "CREDITS",
+          "width": 55
+        },
+        {
+          "text": "EXIT",
+          "width": 26
+        }
+      ]
+    },
+    {
+      "id": "40000028",
+      "height": 18,
+      "maxWidth": 18,
+      "count": 1419,
+      "glyphHash": "27182F0F52A137B7",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 70
+        },
+        {
+          "text": "Inventory",
+          "width": 60
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 117
+        },
+        {
+          "text": "Inspection",
+          "width": 70
+        },
+        {
+          "text": "Wi.i?",
+          "width": 36
+        },
+        {
+          "text": "ENTER",
+          "width": 53
+        },
+        {
+          "text": "CREDITS",
+          "width": 69
+        },
+        {
+          "text": "EXIT",
+          "width": 34
+        }
+      ]
+    },
+    {
+      "id": "4000002A",
+      "height": 14,
+      "maxWidth": 13,
+      "count": 1419,
+      "glyphHash": "49A7F49B288837AB",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 45
+        },
+        {
+          "text": "Inventory",
+          "width": 47
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 78
+        },
+        {
+          "text": "Inspection",
+          "width": 49
+        },
+        {
+          "text": "Wi.i?",
+          "width": 25
+        },
+        {
+          "text": "ENTER",
+          "width": 37
+        },
+        {
+          "text": "CREDITS",
+          "width": 46
+        },
+        {
+          "text": "EXIT",
+          "width": 27
+        }
+      ]
+    },
+    {
+      "id": "4000002B",
+      "height": 16,
+      "maxWidth": 16,
+      "count": 1419,
+      "glyphHash": "84F98FDFB52B545D",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 55
+        },
+        {
+          "text": "Inventory",
+          "width": 55
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 94
+        },
+        {
+          "text": "Inspection",
+          "width": 59
+        },
+        {
+          "text": "Wi.i?",
+          "width": 29
+        },
+        {
+          "text": "ENTER",
+          "width": 44
+        },
+        {
+          "text": "CREDITS",
+          "width": 58
+        },
+        {
+          "text": "EXIT",
+          "width": 32
+        }
+      ]
+    },
+    {
+      "id": "4000002C",
+      "height": 20,
+      "maxWidth": 20,
+      "count": 1419,
+      "glyphHash": "F5A7393CF7179910",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 71
+        },
+        {
+          "text": "Inventory",
+          "width": 70
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 122
+        },
+        {
+          "text": "Inspection",
+          "width": 74
+        },
+        {
+          "text": "Wi.i?",
+          "width": 38
+        },
+        {
+          "text": "ENTER",
+          "width": 59
+        },
+        {
+          "text": "CREDITS",
+          "width": 76
+        },
+        {
+          "text": "EXIT",
+          "width": 42
+        }
+      ]
+    },
+    {
+      "id": "4000002D",
+      "height": 22,
+      "maxWidth": 22,
+      "count": 1419,
+      "glyphHash": "A53AF1C93B3C449E",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 81
+        },
+        {
+          "text": "Inventory",
+          "width": 74
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 135
+        },
+        {
+          "text": "Inspection",
+          "width": 81
+        },
+        {
+          "text": "Wi.i?",
+          "width": 44
+        },
+        {
+          "text": "ENTER",
+          "width": 63
+        },
+        {
+          "text": "CREDITS",
+          "width": 81
+        },
+        {
+          "text": "EXIT",
+          "width": 44
+        }
+      ]
+    },
+    {
+      "id": "4000002E",
+      "height": 21,
+      "maxWidth": 20,
+      "count": 1419,
+      "glyphHash": "143D6494F4B46972",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 79
+        },
+        {
+          "text": "Inventory",
+          "width": 73
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 134
+        },
+        {
+          "text": "Inspection",
+          "width": 81
+        },
+        {
+          "text": "Wi.i?",
+          "width": 40
+        },
+        {
+          "text": "ENTER",
+          "width": 62
+        },
+        {
+          "text": "CREDITS",
+          "width": 79
+        },
+        {
+          "text": "EXIT",
+          "width": 39
+        }
+      ]
+    },
+    {
+      "id": "4000002F",
+      "height": 23,
+      "maxWidth": 22,
+      "count": 1419,
+      "glyphHash": "59ED673488712D2E",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 86
+        },
+        {
+          "text": "Inventory",
+          "width": 80
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 147
+        },
+        {
+          "text": "Inspection",
+          "width": 89
+        },
+        {
+          "text": "Wi.i?",
+          "width": 44
+        },
+        {
+          "text": "ENTER",
+          "width": 65
+        },
+        {
+          "text": "CREDITS",
+          "width": 86
+        },
+        {
+          "text": "EXIT",
+          "width": 44
+        }
+      ]
+    },
+    {
+      "id": "40000030",
+      "height": 20,
+      "maxWidth": 11,
+      "count": 1258,
+      "glyphHash": "FAA60342F1FB9B25",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 90
+        },
+        {
+          "text": "Inventory",
+          "width": 90
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 151
+        },
+        {
+          "text": "Inspection",
+          "width": 100
+        },
+        {
+          "text": "Wi.i?",
+          "width": 50
+        },
+        {
+          "text": "ENTER",
+          "width": 50
+        },
+        {
+          "text": "CREDITS",
+          "width": 70
+        },
+        {
+          "text": "EXIT",
+          "width": 40
+        }
+      ]
+    },
+    {
+      "id": "40000031",
+      "height": 22,
+      "maxWidth": 13,
+      "count": 1258,
+      "glyphHash": "9AF00DF8355B751D",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 108
+        },
+        {
+          "text": "Inventory",
+          "width": 108
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 181
+        },
+        {
+          "text": "Inspection",
+          "width": 120
+        },
+        {
+          "text": "Wi.i?",
+          "width": 60
+        },
+        {
+          "text": "ENTER",
+          "width": 60
+        },
+        {
+          "text": "CREDITS",
+          "width": 84
+        },
+        {
+          "text": "EXIT",
+          "width": 48
+        }
+      ]
+    },
+    {
+      "id": "40000032",
+      "height": 17,
+      "maxWidth": 17,
+      "count": 1419,
+      "glyphHash": "D2100736C5DFB777",
+      "samples": [
+        {
+          "text": "Spellbook",
+          "width": 56
+        },
+        {
+          "text": "Inventory",
+          "width": 56
+        },
+        {
+          "text": "Burden: 123/456",
+          "width": 97
+        },
+        {
+          "text": "Inspection",
+          "width": 60
+        },
+        {
+          "text": "Wi.i?",
+          "width": 31
+        },
+        {
+          "text": "ENTER",
+          "width": 48
+        },
+        {
+          "text": "CREDITS",
+          "width": 62
+        },
+        {
+          "text": "EXIT",
+          "width": 33
+        }
+      ]
+    }
+  ]
+}

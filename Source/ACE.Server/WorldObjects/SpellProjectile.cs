@@ -22,6 +22,10 @@ namespace ACE.Server.WorldObjects
 
         public Position SpawnPos { get; set; }
         public float DistanceToTarget { get; set; }
+        // Acquisition range limits choosing a retail target, not the flight of
+        // an untargeted projectile. WorldObject.ProjectileTimeout bounds missed
+        // shots, including downhill arcs and inactive physics objects.
+
         public uint LifeProjectileDamage { get; set; }
 
         public SpellProjectileInfo Info { get; set; }
@@ -226,6 +230,10 @@ namespace ACE.Server.WorldObjects
                 WorldEntryCollision = true;
             }
 
+            // Stop visual prediction at the authoritative contact before playing
+            // Explode. Otherwise a fast bolt's burst appears beyond its victim.
+            Location = PhysicsObj.Position.ACEPosition();
+            EnqueueBroadcast(new GameMessageUpdatePosition(this));
             EnqueueBroadcast(new GameMessageSetState(this, PhysicsObj.State));
             EnqueueBroadcast(new GameMessageScript(Guid, PlayScript.Explode, GetProjectileScriptIntensity(SpellType)));
 
@@ -262,6 +270,7 @@ namespace ACE.Server.WorldObjects
 
         public override void OnCollideObject(WorldObject target)
         {
+            if (IsVRFreeAimProjectile && target == ProjectileSource) return;
             //Console.WriteLine($"{Name}.OnCollideObject({target.Name})");
 
             var player = ProjectileSource as Player;
@@ -776,7 +785,7 @@ namespace ACE.Server.WorldObjects
                     percent = damage / target.Health.MaxValue;
                 }
 
-                amount = (uint)-target.UpdateVitalDelta(target.Health, (int)-Math.Round(damage));
+                amount = (uint)-target.UpdateVitalDelta(target.Health, (int)-Math.Round(damage), 1u | (critical ? 2u : 0u));
                 target.DamageHistory.Add(ProjectileSource, Spell.DamageType, amount);
 
                 //if (targetPlayer != null && targetPlayer.Fellowship != null)
@@ -795,7 +804,6 @@ namespace ACE.Server.WorldObjects
                 ShowInfo(target, heritageMod, sneakAttackMod, damageRatingMod, damageResistRatingMod, critDamageRatingMod, critDamageResistRatingMod, pkDamageRatingMod, pkDamageResistRatingMod, damage);
             }
 
-            if (target.IsAlive)
             {
                 string verb = null, plural = null;
                 Strings.GetAttackVerb(Spell.DamageType, percent, ref verb, ref plural);
@@ -843,7 +851,7 @@ namespace ACE.Server.WorldObjects
                         targetPlayer.SetCurrentAttacker(sourceCreature);
                 }
 
-                if (!nonHealth)
+                if (target.IsAlive && !nonHealth)
                 {
                     if (equippedCloak != null && Cloak.HasProcSpell(equippedCloak))
                         Cloak.TryProcSpell(target, ProjectileSource, equippedCloak, percent);
@@ -854,7 +862,7 @@ namespace ACE.Server.WorldObjects
                         target.EmoteManager.OnReceiveCritical(sourcePlayer);
                 }
             }
-            else
+            if (!target.IsAlive)
             {
                 var lastDamager = ProjectileSource != null ? new DamageHistoryInfo(ProjectileSource) : null;
                 target.OnDeath(lastDamager, Spell.DamageType, critical);

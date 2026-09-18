@@ -302,3 +302,36 @@ Database/tools/password.txt
 docker.env
 docker-compose.yml
 docker-compose.arm64
+
+# Unreal source configuration and build scripts are project inputs.
+!/Unreal/Config/
+!/Unreal/Plugins/**/Config/
+!/Quest3Test/Project/Config/
+
+# Local build outputs, SDKs, captures, game data and credentials.
+**/Binaries/
+**/Intermediate/
+**/DerivedDataCache/
+**/Saved/
+**/Packaged/
+**/PackagedVR/
+**/Logs/
+**/Performance/
+**/AndroidSDK/
+*.apk
+*.aab
+*.pak
+*.ucas
+*.utoc
+*.obb
+*.zip
+*.7z
+*.jks
+*.keystore
+client_*.dat
+Config.js
+log4net.config
+/ThirdParty/
+/_*/
+/diag/
+/tools/*.exe

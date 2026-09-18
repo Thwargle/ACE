@@ -20,6 +20,12 @@ namespace ACE.Server.WorldObjects
 
             //Console.WriteLine($"Projectile.OnCollideObject - {WorldObject.Name} ({WorldObject.Guid}) -> {target.Name} ({target.Guid})");
 
+            // A negotiated VR projectile acquires the creature it physically hit. Desktop missiles
+            // retain their original target-only collision rule. DamageTarget still checks PK rules.
+            if (worldObject.IsVRFreeAimProjectile && worldObject.ProjectileSource is Player vrSource
+                && target is Creature vrTarget && target != vrSource && vrTarget.IsAlive && vrSource.CanDamage(vrTarget))
+                worldObject.ProjectileTarget = target;
+
             if (worldObject.ProjectileTarget == null || worldObject.ProjectileTarget != target)
             {
                 //Console.WriteLine("Unintended projectile target! (should be " + ProjectileTarget.Guid.Full.ToString("X8") + " - " + ProjectileTarget.Name + ")");

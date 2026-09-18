@@ -12,6 +12,7 @@ namespace ACE.Server.Entity
         public uint SpellId;
         //public bool BuiltInSpell;
         public WorldObject CasterItem;
+        public VRCombatRequest VRAim;
 
         public CastQueue(CastQueueType type, uint targetGuid, uint spellId, WorldObject casterItem)
         {
@@ -26,6 +27,7 @@ namespace ACE.Server.Entity
     public enum CastQueueType
     {
         Targeted,
-        Untargeted
+        Untargeted,
+        Tracked
     }
 }

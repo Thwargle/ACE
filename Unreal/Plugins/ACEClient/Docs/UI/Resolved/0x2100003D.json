@@ -1,0 +1,42 @@
+{
+  "id": "0x2100003D",
+  "name": "layout_2100003D",
+  "displayWidth": 800,
+  "displayHeight": 600,
+  "roots": [
+    {
+      "elementId": "0x10000339",
+      "elementName": "ItemList_Generic",
+      "type": "0x10000031",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UI_ItemList_IsVendor": false,
+        "UI_ItemList_FixedListSize": -1,
+        "UI_ItemList_AllowDragging": true,
+        "UI_ItemList_AtLeastOneEmptySlot": false,
+        "UI_ItemList_ItemSlotID": 268436282,
+        "UI_ItemList_DragScroll_ItemScrolling": false,
+        "UI_ItemList_SingleSelection": false,
+        "UI_ItemList_DragScroll_SpellScrolling": false,
+        "UI_ItemList_IsContainer": false,
+        "UI_ItemList_IsShortcut": false
+      },
+      "fontHeight": 0,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 32,
+      "height": 32,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 1,
+      "topEdge": 1,
+      "rightEdge": 2,
+      "bottomEdge": 2,
+      "children": []
+    }
+  ]
+}

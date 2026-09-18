@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<root xmlns:android="http://schemas.android.com/apk/res/android">
+  <gameActivityOnCreateAdditions>
+    <insert><![CDATA[
+    // Quest's overlay IME edits an offscreen field. UE otherwise discards
+    // its text callbacks because the phone keyboard did not resize the view.
+    bUsesVrKeyboard = true;
+    if (newVirtualKeyboardInput != null) {
+        newVirtualKeyboardInput.setOnEditorActionListener(new OnEditorActionListener() {
+            @Override public boolean onEditorAction(TextView view, int actionId, KeyEvent event) {
+                final int action = actionId & EditorInfo.IME_MASK_ACTION;
+                final boolean enter = event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER;
+                if (action == EditorInfo.IME_ACTION_DONE || action == EditorInfo.IME_ACTION_SEND
+                    || action == EditorInfo.IME_ACTION_GO || (enter
+                        && (view.getInputType() & InputType.TYPE_TEXT_FLAG_MULTI_LINE) == 0)) {
+                    if (!enter || event.getAction() == KeyEvent.ACTION_DOWN) ACEAcceptKeyboardInput();
+                    return true;
+                }
+                return false;
+            }
+        });
+    }
+    ]]></insert>
+  </gameActivityOnCreateAdditions>
+  <gameActivityClassAdditions>
+    <insert><![CDATA[
+    // Complete the actual keyboard entry, not a key event for the hardware
+    // Slate user. Read the full buffer before hiding, including pending edits.
+    private void ACEAcceptKeyboardInput() {
+        if (newVirtualKeyboardInput == null || bKeyboardInputCommittedByEnterKey) return;
+        if (virtualKeyboardTextChangeRunnable != null) {
+            virtualKeyboardHandler.removeCallbacks(virtualKeyboardTextChangeRunnable);
+            virtualKeyboardTextChangeRunnable = null;
+        }
+        bKeyboardInputCommittedByEnterKey = true;
+        nativeVirtualKeyboardResult(true, newVirtualKeyboardInput.getText().toString());
+        AndroidThunkJava_HideVirtualKeyboardInput();
+    }
+    public void AndroidThunkJava_ACEAcceptKeyboardInput() {
+        runOnUiThread(new Runnable() { public void run() {
+            // UE's raw Enter path already set its committed flag and requested
+            // Hide. Still supply the final text to the VR entry before dismissal.
+            if (newVirtualKeyboardInput == null) return;
+            if (!bKeyboardInputCommittedByEnterKey) { ACEAcceptKeyboardInput(); return; }
+            if (virtualKeyboardTextChangeRunnable != null) {
+                virtualKeyboardHandler.removeCallbacks(virtualKeyboardTextChangeRunnable);
+                virtualKeyboardTextChangeRunnable = null;
+            }
+            nativeVirtualKeyboardResult(true, newVirtualKeyboardInput.getText().toString());
+        }});
+    }
+
+    // Keep Quest's IME in sync with client-side reply expansion. The expected
+    // text guard prevents a delayed game-thread callback overwriting new typing.
+    public void AndroidThunkJava_ACEUpdateKeyboardText(final String expected, final String replacement) {
+        runOnUiThread(new Runnable() { public void run() {
+            if (newVirtualKeyboardInput == null || !newVirtualKeyboardInput.hasFocus()
+                || lastVirtualKeyboardCommand == VirtualKeyboardCommand.VK_CMD_HIDE) return;
+            if (!newVirtualKeyboardInput.getText().toString().equals(expected)) return;
+            newVirtualKeyboardInput.setText(replacement);
+            newVirtualKeyboardInput.setSelection(replacement.length());
+        }});
+    }
+
+    // Installation-local AES-GCM key. Only ciphertext is written by the client;
+    // the key remains in Android Keystore across normal APK updates.
+    public synchronized byte[] AndroidThunkJava_ACELoginCrypt(byte[] input, boolean encrypt) {
+        try {
+            if (input == null || input.length > 131072) return null;
+            final String alias = getPackageName() + ".ACELogin.v1";
+            java.security.KeyStore store = java.security.KeyStore.getInstance("AndroidKeyStore");
+            store.load(null);
+            if (!store.containsAlias(alias)) {
+                if (!encrypt) return null;
+                javax.crypto.KeyGenerator generator = javax.crypto.KeyGenerator.getInstance("AES", "AndroidKeyStore");
+                generator.init(new android.security.keystore.KeyGenParameterSpec.Builder(alias,
+                    android.security.keystore.KeyProperties.PURPOSE_ENCRYPT | android.security.keystore.KeyProperties.PURPOSE_DECRYPT)
+                    .setBlockModes(android.security.keystore.KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(android.security.keystore.KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setRandomizedEncryptionRequired(true).build());
+                generator.generateKey();
+            }
+            java.security.Key key = store.getKey(alias, null);
+            javax.crypto.Cipher cipher = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding");
+            final byte[] header = new byte[] {65, 67, 81, 1};
+            final byte[] aad = (getPackageName() + ":ACELogin:v1").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            if (encrypt) {
+                cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, key);
+                cipher.updateAAD(aad);
+                byte[] iv = cipher.getIV();
+                if (iv.length != 12) return null;
+                byte[] ciphertext = cipher.doFinal(input);
+                return java.nio.ByteBuffer.allocate(16 + ciphertext.length).put(header).put(iv).put(ciphertext).array();
+            }
+            if (input.length < 32 || !java.util.Arrays.equals(header, java.util.Arrays.copyOfRange(input, 0, 4))) return null;
+            cipher.init(javax.crypto.Cipher.DECRYPT_MODE, key,
+                new javax.crypto.spec.GCMParameterSpec(128, java.util.Arrays.copyOfRange(input, 4, 16)));
+            cipher.updateAAD(aad);
+            return cipher.doFinal(input, 16, input.length - 16);
+        } catch (Exception ignored) {
+            // Corrupt data, lost keys, or unavailable Keystore must fail closed.
+            // Never put credentials or decrypted payloads in Android logs.
+            return null;
+        }
+    }
+    ]]></insert>
+  </gameActivityClassAdditions>
+</root>

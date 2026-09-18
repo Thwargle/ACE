@@ -260,7 +260,7 @@ namespace ACE.Server.WorldObjects
         {
             var targetCreature = !spell.IsSelfTargeted || spell.IsFellowshipSpell ? target as Creature : this as Creature;
 
-            if (this is Gem || this is Food || this is Hook)
+            if (this is Gem || this is Food || this is Hook || this is not Creature)
                 targetCreature = target as Creature;
 
             if (spell.School == MagicSchool.LifeMagic || spell.MetaSpellType == SpellType.Dispel)
@@ -268,6 +268,7 @@ namespace ACE.Server.WorldObjects
                 // NonComponentTargetType should be 0 for untargeted spells.
                 // Return if the spell type is targeted with no target defined or the target is already dead.
                 if ((targetCreature == null || !targetCreature.IsAlive) && spell.NonComponentTargetType != ItemType.None
+                    && !(spell.IsProjectile && this is Player vrPlayer && vrPlayer.MagicState.CastSpellParams?.VRAim != null && !fromProc)
                     && spell.DispelSchool != MagicSchool.ItemEnchantment)
                 {
                     return false;
@@ -344,7 +345,8 @@ namespace ACE.Server.WorldObjects
                     return false;
             }
 
-            // play spell effects
+            // Equip spells need their one-shot activation effects too. The
+            // enchantment's lifetime is independent of the visual script.
             DoSpellEffects(spell, this, target);
 
             return true;
@@ -522,7 +524,7 @@ namespace ACE.Server.WorldObjects
                     srcVital = "stamina";
                     break;
                 default:   // Health
-                    boost = targetCreature.UpdateVitalDelta(targetCreature.Health, tryBoost);
+                    boost = targetCreature.UpdateVitalDelta(targetCreature.Health, tryBoost, 1u);
                     srcVital = "health";
 
                     if (boost >= 0)
@@ -779,7 +781,7 @@ namespace ACE.Server.WorldObjects
                     break;
                 default:   // Health
                     srcVital = "health";
-                    srcVitalChange = (uint)-transferSource.UpdateVitalDelta(transferSource.Health, -(int)srcVitalChange);
+                    srcVitalChange = (uint)-transferSource.UpdateVitalDelta(transferSource.Health, -(int)srcVitalChange, 1u);
 
                     transferSource.DamageHistory.Add(this, DamageType.Health, srcVitalChange);
 
@@ -803,7 +805,7 @@ namespace ACE.Server.WorldObjects
                     break;
                 default:   // Health
                     destVital = "health";
-                    destVitalChange = (uint)destination.UpdateVitalDelta(destination.Health, destVitalChange);
+                    destVitalChange = (uint)destination.UpdateVitalDelta(destination.Health, destVitalChange, 1u);
 
                     destination.DamageHistory.OnHeal(destVitalChange);
 
@@ -1516,6 +1518,24 @@ namespace ACE.Server.WorldObjects
 
             var spellType = SpellProjectile.GetProjectileSpellType(spell.Id);
 
+            var aim = !fromProc && this is Player vrCaster && vrCaster.MagicState.CastSpellParams?.Spell.Id == spell.Id
+                ? vrCaster.MagicState.CastSpellParams.VRAim : null;
+            if (aim != null)
+            {
+                if (!((Player)this).IsVRRequestCurrent(aim)) return new List<SpellProjectile>();
+                // Rings are a radial ground-plane formation around the caster,
+                // not a fan centered at the first projectile or at the wand tip.
+                // Keep retail origins and matching radial velocities for all rings.
+                if (spellType == ProjectileSpellType.Ring)
+                    return LaunchSpellProjectiles(spell, null, spellType, weapon, isWeaponSpell, false,
+                        CalculateProjectileOrigins(spell, spellType, null), Vector3.Transform(Vector3.UnitY, Location.Rotation)*GetProjectileSpeed(spell), lifeProjectileDamage);
+                var aimedOrigins = CalculateProjectileOrigins(spell, spellType, null);
+                var first = aimedOrigins[0];
+                for (var i = 0; i < aimedOrigins.Count; ++i) aimedOrigins[i] -= first;
+                return LaunchSpellProjectiles(spell, null, spellType, weapon, isWeaponSpell, false,
+                    aimedOrigins, aim.Vector * GetProjectileSpeed(spell), lifeProjectileDamage, aim);
+            }
+
             var origins = CalculateProjectileOrigins(spell, spellType, target);
 
             var velocity = CalculateProjectileVelocity(spell, target, spellType, origins[0]);
@@ -1756,7 +1776,7 @@ namespace ACE.Server.WorldObjects
             return dir * speed;
         }
 
-        public List<SpellProjectile> LaunchSpellProjectiles(Spell spell, WorldObject target, ProjectileSpellType spellType, WorldObject weapon, bool isWeaponSpell, bool fromProc, List<Vector3> origins, Vector3 velocity, uint lifeProjectileDamage = 0)
+        public List<SpellProjectile> LaunchSpellProjectiles(Spell spell, WorldObject target, ProjectileSpellType spellType, WorldObject weapon, bool isWeaponSpell, bool fromProc, List<Vector3> origins, Vector3 velocity, uint lifeProjectileDamage = 0, VRCombatRequest vrAim = null)
         {
             var useGravity = spellType == ProjectileSpellType.Arc;
 
@@ -1790,15 +1810,24 @@ namespace ACE.Server.WorldObjects
 
                 sp.Location = strikeSpell ? new Position(targetLoc) : new Position(casterLoc);
                 sp.Location.Pos += Vector3.Transform(origin, strikeSpell ? rotate * OneEighty : rotate);
+                if (vrAim != null)
+                    sp.Location.Pos = casterLoc.Pos + vrAim.Origin + Vector3.Transform(origin, vrAim.AimRotation);
 
                 sp.PhysicsObj.Velocity = velocity;
 
-                if (spell.SpreadAngle > 0)
+                if (spell.SpreadAngle > 0 && vrAim == null)
                 {
                     var n = Vector3.Normalize(origin);
                     var angle = Math.Atan2(-n.X, n.Y);
                     var q = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, (float)angle);
                     sp.PhysicsObj.Velocity = Vector3.Transform(velocity, q);
+                }
+                else if (spell.SpreadAngle > 0 && vrAim != null && origins.Count > 1)
+                {
+                    var steps = (i+1)/2 * (i%2==0 ? -1 : 1);
+                    var angle = steps * GetSpreadAnglePerStep(spell) * MathF.PI / 180f;
+                    var local = Vector3.Transform(Vector3.UnitY, Quaternion.CreateFromAxisAngle(Vector3.UnitZ, angle));
+                    sp.PhysicsObj.Velocity = Vector3.Transform(local, vrAim.AimRotation) * velocity.Length();
                 }
 
                 // set orientation
@@ -1807,6 +1836,7 @@ namespace ACE.Server.WorldObjects
                 sp.Location.Rotation = sp.PhysicsObj.Position.Frame.Orientation;
 
                 sp.ProjectileSource = this;
+                sp.IsVRFreeAimProjectile = vrAim != null;
                 sp.FromProc = fromProc;
 
                 // side projectiles always untargeted?
@@ -1818,6 +1848,7 @@ namespace ACE.Server.WorldObjects
 
                 sp.SetProjectilePhysicsState(sp.ProjectileTarget, useGravity);
                 sp.SpawnPos = new Position(sp.Location);
+
 
                 sp.LifeProjectileDamage = lifeProjectileDamage;
 
@@ -1852,7 +1883,7 @@ namespace ACE.Server.WorldObjects
 
         public static readonly ConcurrentDictionary<uint, float> ProjectileRadiusCache = new ConcurrentDictionary<uint, float>();
 
-        private float GetProjectileRadius(Spell spell)
+        protected float GetProjectileRadius(Spell spell)
         {
             var projectileWcid = spell.WeenieClassId;
 
@@ -1895,7 +1926,7 @@ namespace ACE.Server.WorldObjects
         /// <summary>
         /// Gets the speed of a projectile based on the distance to the target.
         /// </summary>
-        private float GetProjectileSpeed(Spell spell, float? distance = null)
+        protected float GetProjectileSpeed(Spell spell, float? distance = null)
         {
             var projectileWcid = spell.WeenieClassId;
 

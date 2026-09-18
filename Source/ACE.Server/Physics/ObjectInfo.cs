@@ -59,8 +59,9 @@ namespace ACE.Server.Physics.Animation
                 if (wobj.IsPKLite())
                     State |= ObjectInfoState.IsPKLite;
             }
-            if (obj.ProjectileTarget != null)
-                TargetID = obj.ProjectileTarget.ID;
+            // Transition objects are reused. A free-aim projectile must not
+            // inherit the previous targeted projectile's creature filter.
+            TargetID = obj.ProjectileTarget?.ID ?? 0;
         }
 
         public bool IsValidWalkable(Vector3 normal)
@@ -70,6 +71,17 @@ namespace ACE.Server.Physics.Animation
 
         public bool MissileIgnore(PhysicsObj collideObj)
         {
+            // Both directions matter: a running caster can move into a shot
+            // between the projectile's own simulation ticks. Ignore only that
+            // shot's source, including at initial placement. Other players and
+            // creatures retain their normal first-contact/PvP behavior.
+            bool IsOwnVRShot(PhysicsObj shot, PhysicsObj body) =>
+                shot.WeenieObj?.WorldObject?.IsVRFreeAimProjectile == true
+                && shot.WeenieObj.WorldObject.ProjectileSource?.PhysicsObj == body
+                // IsProjectileVisible temporarily targets its own caster to
+                // prove that the muzzle is on this side of intervening walls.
+                && shot.ProjectileTarget != body;
+            if (IsOwnVRShot(Object,collideObj) || IsOwnVRShot(collideObj,Object)) return true;
             // modified for 2-way
             if (collideObj.State.HasFlag(PhysicsState.Missile))
             {

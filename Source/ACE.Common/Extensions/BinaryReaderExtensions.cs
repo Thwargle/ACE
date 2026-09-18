@@ -41,7 +41,13 @@ namespace ACE.Common.Extensions
         public static string ReadString16L(this BinaryReader reader)
         {
             ushort length = reader.ReadUInt16();
-            string rdrStr = (length != 0 ? new string(reader.ReadChars(length)) : string.Empty);
+            // String16L counts Windows-1252 bytes, matching retail and the server
+            // writer. ReadChars uses the BinaryReader's UTF-8 decoder by default:
+            // an accented name can otherwise consume bytes from the next field.
+            var bytes = reader.ReadBytes(length);
+            if (bytes.Length != length)
+                throw new EndOfStreamException("Incomplete String16L payload");
+            string rdrStr = length != 0 ? System.Text.Encoding.GetEncoding(1252).GetString(bytes) : string.Empty;
 
             // client pads string length to be a multiple of 4 including the 2 bytes for length
             reader.Skip(CalculatePadMultiple(sizeof(ushort) + (uint)length, 4u));

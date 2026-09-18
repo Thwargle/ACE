@@ -64,16 +64,18 @@ namespace ACE.Server.WorldObjects
 
             var deathMessage = Strings.GetDeathMessage(damageType, criticalHit);
 
-            // if killed by a player, send them a message
-            if (lastDamagerInfo.IsPlayer)
+            // if killed by a player (or their summon), send them a message
+            var notifyPlayer = lastDamager as Player;
+            if (notifyPlayer == null && lastDamagerInfo.PetOwner != null)
+                notifyPlayer = lastDamagerInfo.TryGetPetOwner();
+
+            if (notifyPlayer != null)
             {
                 if (criticalHit && this is Player)
                     deathMessage = Strings.PKCritical[0];
 
                 var killerMsg = string.Format(deathMessage.Killer, Name);
-
-                if (lastDamager is Player playerKiller)
-                    playerKiller.Session.Network.EnqueueSend(new GameEventKillerNotification(playerKiller.Session, killerMsg));
+                notifyPlayer.Session.Network.EnqueueSend(new GameEventKillerNotification(notifyPlayer.Session, killerMsg));
             }
             return deathMessage;
         }

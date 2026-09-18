@@ -437,7 +437,7 @@ namespace ACE.Server.WorldObjects
         /// Returns the melee swing animation - based on weapon,
         /// current stance, power bar, and attack height
         /// </summary>
-        public MotionCommand GetSwingAnimation()
+        public MotionCommand GetSwingAnimation(bool trackedPunch = false)
         {
             if (IsDualWieldAttack)
                 DualWieldAlternate = !DualWieldAlternate;
@@ -459,7 +459,7 @@ namespace ACE.Server.WorldObjects
             }
             else
             {
-                AttackType = PowerLevel > KickThreshold && !IsDualWieldAttack ? AttackType.Kick : AttackType.Punch;
+                AttackType = !trackedPunch && PowerLevel > KickThreshold && !IsDualWieldAttack ? AttackType.Kick : AttackType.Punch;
             }
 
             var motions = CombatTable.GetMotion(CurrentMotionState.Stance, AttackHeight.Value, AttackType, PrevMotionCommand);

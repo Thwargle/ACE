@@ -137,6 +137,24 @@ namespace ACE.Server.WorldObjects
             {
                 OnDamageTarget(target, damageEvent.CombatType, damageEvent.IsCritical);
 
+                // Emit the impact before death changes/removes the target. The
+                // old surviving-target branch omitted blood and damage numbers
+                // for killing blows (especially noticeable on VR melee hunts).
+                var intDamage = (uint)Math.Round(damageEvent.Damage);
+                if (!SquelchManager.Squelches.Contains(this, ChatMessageType.CombatSelf))
+                    Session.Network.EnqueueSend(new GameEventAttackerNotification(Session, target.Name, damageEvent.DamageType,
+                        (float)intDamage / target.Health.MaxValue, intDamage, damageEvent.IsCritical, damageEvent.AttackConditions));
+                if (targetPlayer == null)
+                {
+                    var splatter = (PlayScript)Enum.Parse(typeof(PlayScript), "Splatter" + GetSplatterHeight() + GetSplatterDir(target));
+                    target.EnqueueBroadcast(new GameMessageSound(target.Guid, Sound.HitFlesh1, 0.5f), new GameMessageScript(target.Guid, splatter));
+                    if (damageEvent.Damage >= target.Health.MaxValue * 0.25f)
+                    {
+                        var painSound = (Sound)Enum.Parse(typeof(Sound), "Wound" + ThreadSafeRandom.Next(1, 3), true);
+                        Session.Network.EnqueueSend(new GameMessageSound(target.Guid, painSound, 1.0f));
+                    }
+                }
+
                 if (targetPlayer != null)
                     targetPlayer.TakeDamage(this, damageEvent);
                 else
@@ -156,25 +174,6 @@ namespace ACE.Server.WorldObjects
 
             if (damageEvent.HasDamage && target.IsAlive)
             {
-                // notify attacker
-                var intDamage = (uint)Math.Round(damageEvent.Damage);
-
-                if (!SquelchManager.Squelches.Contains(this, ChatMessageType.CombatSelf))
-                    Session.Network.EnqueueSend(new GameEventAttackerNotification(Session, target.Name, damageEvent.DamageType, (float)intDamage / target.Health.MaxValue, intDamage, damageEvent.IsCritical, damageEvent.AttackConditions));
-
-                // splatter effects
-                if (targetPlayer == null)
-                {
-                    Session.Network.EnqueueSend(new GameMessageSound(target.Guid, Sound.HitFlesh1, 0.5f));
-                    if (damageEvent.Damage >= target.Health.MaxValue * 0.25f)
-                    {
-                        var painSound = (Sound)Enum.Parse(typeof(Sound), "Wound" + ThreadSafeRandom.Next(1, 3), true);
-                        Session.Network.EnqueueSend(new GameMessageSound(target.Guid, painSound, 1.0f));
-                    }
-                    var splatter = (PlayScript)Enum.Parse(typeof(PlayScript), "Splatter" + GetSplatterHeight() + GetSplatterDir(target));
-                    Session.Network.EnqueueSend(new GameMessageScript(target.Guid, splatter));
-                }
-
                 // handle Dirty Fighting
                 if (GetCreatureSkill(Skill.DirtyFighting).AdvancementClass >= SkillAdvancementClass.Trained)
                     FightDirty(target, damageEvent.Weapon);
@@ -423,7 +422,7 @@ namespace ACE.Server.WorldObjects
             var percent = (float)amount / Health.MaxValue;
 
             // update health
-            var damageTaken = (uint)-UpdateVitalDelta(Health, (int)-amount);
+            var damageTaken = (uint)-UpdateVitalDelta(Health, (int)-amount, damageType == DamageType.Nether ? 1u : 0u);
 
             // update stamina
             //UpdateVitalDelta(Stamina, -1);
@@ -505,7 +504,7 @@ namespace ACE.Server.WorldObjects
             }
 
             // update health
-            var damageTaken = (uint)-UpdateVitalDelta(Health, (int)-amount);
+            var damageTaken = (uint)-UpdateVitalDelta(Health, (int)-amount, crit ? 2u : 0u);
             DamageHistory.Add(source, damageType, damageTaken);
 
             // update stamina
@@ -521,17 +520,10 @@ namespace ACE.Server.WorldObjects
             //if (Fellowship != null)
                 //Fellowship.OnVitalUpdate(this);
 
-            if (Health.Current <= 0)
-            {
-                OnDeath(new DamageHistoryInfo(source), damageType, crit);
-                Die();
-                return (int)damageTaken;
-            }
-
             if (!BodyParts.Indices.TryGetValue(bodyPart, out var iDamageLocation))
             {
                 log.Warn($"{Name}.TakeDamage({source.Name}, {damageType}, {amount}, {bodyPart}, {crit}): avoided crash for bad damage location");
-                return 0;
+                iDamageLocation = (int)DamageLocation.Chest;
             }
             var damageLocation = (DamageLocation)iDamageLocation;
 
@@ -544,6 +536,13 @@ namespace ACE.Server.WorldObjects
                 var hitSound = new GameMessageSound(Guid, GetHitSound(source, bodyPart), 1.0f);
                 var splatter = new GameMessageScript(Guid, (PlayScript)Enum.Parse(typeof(PlayScript), "Splatter" + creature.GetSplatterHeight() + creature.GetSplatterDir(this)));
                 EnqueueBroadcast(hitSound, splatter);
+            }
+
+            if (Health.Current <= 0)
+            {
+                OnDeath(new DamageHistoryInfo(source), damageType, crit);
+                Die();
+                return (int)damageTaken;
             }
 
             if (percent >= 0.1f)

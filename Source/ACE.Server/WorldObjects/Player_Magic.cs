@@ -620,7 +620,15 @@ namespace ACE.Server.WorldObjects
 
             var windupTime = 0.0f;
 
-            foreach (var windupGesture in spell.Formula.WindupGestures)
+            // Lead scarab Gesture is 0x80000000 (invalid) — skip it. L1 FastTick used to
+            // pack that into CommandList and briefly corrupt the cast ActionCommand.
+            var windups = spell.Formula.WindupGestures
+                .Where(g => g != MotionCommand.Invalid && (uint)g != 0x80000000u)
+                .ToList();
+            if (windups.Count == 0)
+                return;
+
+            foreach (var windupGesture in windups)
             {
                 if (RecordCast.Enabled)
                 {
@@ -642,19 +650,17 @@ namespace ACE.Server.WorldObjects
             }
 
             if (FastTick)
-                windupTime = EnqueueMotionAction(castChain, spell.Formula.WindupGestures, CastSpeed, MotionStance.Magic, checkCasting: true);
+                windupTime = EnqueueMotionAction(castChain, windups, CastSpeed, MotionStance.Magic, checkCasting: true);
         }
 
         public void DoCastGesture(Spell spell, WorldObject casterItem, ActionChain castChain)
         {
             MagicState.CastGesture = spell.Formula.CastGesture;
 
-            if (casterItem != null)
-            {
-                //var caster = GetEquippedWand();
-                if (casterItem.UseUserAnimation != 0)
-                    MagicState.CastGesture = casterItem.UseUserAnimation;
-            }
+            // Only using an item's built-in spell overrides the formula's gesture.
+            // A wand equipped for a spellbook cast supplies casting stats, not its use animation.
+            if (casterItem != null && casterItem.UseUserAnimation != 0)
+                MagicState.CastGesture = casterItem.UseUserAnimation;
 
             if (RecordCast.Enabled)
             {
@@ -711,6 +717,12 @@ namespace ACE.Server.WorldObjects
                 return;
             }
 
+            if (state.VRAim != null && (!IsVRRequestCurrent(state.VRAim) || CombatMode != CombatMode.Magic
+                || GetEquippedWand()?.Guid.Full != state.VRAim.Weapon))
+            {
+                FinishCast();
+                return;
+            }
             DoCastSpell(state.Spell, state.CasterItem, state.MagicSkill, state.ManaUsed, state.Target, state.Status, checkAngle);
         }
 
@@ -834,6 +846,7 @@ namespace ACE.Server.WorldObjects
 
         public void DoCastSpell_Inner(Spell spell, WorldObject casterItem, uint manaUsed, WorldObject target, CastingPreCheckStatus castingPreCheckStatus, bool finishCast = true)
         {
+            ReleaseVRCast();
             if (RecordCast.Enabled)
                 RecordCast.Log($"DoCastSpell_Inner()");
 
@@ -1369,10 +1382,14 @@ namespace ACE.Server.WorldObjects
 
             if (MagicState.CastQueue != null)
             {
-                if (MagicState.CastQueue.Type == CastQueueType.Targeted)
-                    HandleActionCastTargetedSpell(MagicState.CastQueue.TargetGuid, MagicState.CastQueue.SpellId, MagicState.CastQueue.CasterItem);
+                var queued = MagicState.CastQueue;
+                MagicState.CastQueue = null;
+                if (queued.Type == CastQueueType.Tracked)
+                    CastVRSpell(queued.VRAim);
+                else if (queued.Type == CastQueueType.Targeted)
+                    HandleActionCastTargetedSpell(queued.TargetGuid, queued.SpellId, queued.CasterItem);
                 else
-                    HandleActionMagicCastUnTargetedSpell(MagicState.CastQueue.SpellId);
+                    HandleActionMagicCastUnTargetedSpell(queued.SpellId);
             }
         }
 

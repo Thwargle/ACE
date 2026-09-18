@@ -658,6 +658,17 @@ namespace ACE.Server.WorldObjects
             return pickupChain;
         }
 
+        // A currently tracked VR player releases items without the desktop
+        // bend/place animation. Inventory validation and server placement remain
+        // shared. Merely negotiating VR capabilities in desktop mode is not enough.
+        private ActionChain StartDropChain(bool vrRelease = false)
+        {
+            if (!vrRelease && !HasActiveVRHands) return StartPickupChain();
+            StopExistingMoveToChains();
+            EnqueueBroadcast(new GameMessageUpdatePosition(this));
+            return new ActionChain();
+        }
+
         private MotionCommand GetPickupMotion(WorldObject objectWereReachingToward)
         {
             if (objectWereReachingToward.Location == null)
@@ -1368,7 +1379,7 @@ namespace ACE.Server.WorldObjects
         /// - drop an equipped item
         /// - drop an item from inventory
         /// </summary>
-        public void HandleActionDropItem(uint itemGuid)
+        public void HandleActionDropItem(uint itemGuid, VRCombatRequest vrDrop = null)
         {
             if (IsBusy || Teleporting || suicideInProgress)
             {
@@ -1405,11 +1416,11 @@ namespace ACE.Server.WorldObjects
                 return;
             }
 
-            var actionChain = StartPickupChain();
+            var actionChain = StartDropChain(vrDrop != null);
 
             actionChain.AddAction(this, () =>
             {
-                if (CurrentLandblock == null) // Maybe we were teleported as we were motioning to drop the item
+                if (CurrentLandblock == null || (vrDrop != null && !IsVRRequestCurrent(vrDrop)))
                 {
                     Session.Network.EnqueueSend(new GameEventInventoryServerSaveFailed(Session, item.Guid.Full, WeenieError.ActionCancelled));
                     return;
@@ -1434,7 +1445,7 @@ namespace ACE.Server.WorldObjects
                     }
                 }
 
-                if (TryDropItem(item))
+                if (TryDropItem(item, vrDrop))
                 {
                     // drop success
                     Session.Network.EnqueueSend(
@@ -1462,15 +1473,17 @@ namespace ACE.Server.WorldObjects
                         log.Warn($"0x{item.Guid}:{item.Name} for player {Name} lost from HandleActionDropItem failure.");
                 }
 
-                var returnStance = new Motion(CurrentMotionState.Stance);
-                EnqueueBroadcastMotion(returnStance);
+                if (vrDrop == null)
+                    EnqueueBroadcastMotion(new Motion(CurrentMotionState.Stance));
             });
 
             actionChain.EnqueueChain();
         }
 
-        private bool TryDropItem(WorldObject item)
+        private bool TryDropItem(WorldObject item, VRCombatRequest vrDrop = null)
         {
+            if (vrDrop != null) return TryReleaseVRItem(item, vrDrop.Origin);
+            item.IsVRFallingDrop = false; // an item caught mid-fall may later be placed by a desktop player
             item.Location = new Position(Location);
             item.Placement = ACE.Entity.Enum.Placement.Resting;  // This is needed to make items lay flat on the ground.
 
@@ -2474,8 +2487,13 @@ namespace ACE.Server.WorldObjects
         /// This is raised when we:
         /// - try to split a stack onto the landblock
         /// </summary>
-        public void HandleActionStackableSplitTo3D(uint stackId, int amount)
+        public void HandleActionStackableSplitTo3D(uint stackId, int amount, VRCombatRequest vrDrop = null)
         {
+            if (vrDrop != null && (IsBusy || Teleporting || suicideInProgress))
+            {
+                Session.Network.EnqueueSend(new GameEventInventoryServerSaveFailed(Session, stackId, WeenieError.YoureTooBusy));
+                return;
+            }
             if (amount <= 0)
             {
                 log.WarnFormat("Player 0x{0:X8}:{1} tried to split item with invalid amount ({3}) 0x{2:X8}.", Guid.Full, Name, stackId, amount);
@@ -2531,11 +2549,11 @@ namespace ACE.Server.WorldObjects
                 return;
             }
 
-            var actionChain = StartPickupChain();
+            var actionChain = StartDropChain(vrDrop != null);
 
             actionChain.AddAction(this, () =>
             {
-                if (CurrentLandblock == null) // Maybe we were teleported as we were motioning to drop the item
+                if (CurrentLandblock == null || (vrDrop != null && !IsVRRequestCurrent(vrDrop)))
                 {
                     Session.Network.EnqueueSend(new GameEventInventoryServerSaveFailed(Session, stackId, WeenieError.ActionCancelled));
                     return;
@@ -2566,7 +2584,7 @@ namespace ACE.Server.WorldObjects
                 if (stack.WeenieType == WeenieType.Coin)
                     UpdateCoinValue();
 
-                if (TryDropItem(newStack))
+                if (TryDropItem(newStack, vrDrop))
                 {
                     EnqueueBroadcast(new GameMessageSound(Guid, Sound.DropItem));
                 }
@@ -2586,8 +2604,8 @@ namespace ACE.Server.WorldObjects
                     newStack.Destroy();
                 }
 
-                var returnStance = new Motion(CurrentMotionState.Stance);
-                EnqueueBroadcastMotion(returnStance);
+                if (vrDrop == null)
+                    EnqueueBroadcastMotion(new Motion(CurrentMotionState.Stance));
             });
 
             actionChain.EnqueueChain();

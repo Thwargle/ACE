@@ -1,0 +1,183 @@
+{
+  "id": "0x21000001",
+  "name": "intro",
+  "displayWidth": 800,
+  "displayHeight": 600,
+  "roots": [
+    {
+      "elementId": "0x10000419",
+      "elementName": "IntroField",
+      "type": "0x00000003",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {
+        "UICore_Element_ObjectMode": 0,
+        "UI_Intro_StateArray": [
+          268435512,
+          268435513,
+          268435514,
+          268435518
+        ]
+      },
+      "fontHeight": 0,
+      "states": [
+        {
+          "stateId": "0x10000038",
+          "stateName": "frame1",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x10000039",
+          "stateName": "frame2",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x1000003A",
+          "stateName": "frame3",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        },
+        {
+          "stateId": "0x1000003E",
+          "stateName": "IntroVideo",
+          "passToChildren": true,
+          "imageFile": "",
+          "alphaFile": "",
+          "drawMode": 0,
+          "hasMedia": false,
+          "properties": {}
+        }
+      ],
+      "x": 0,
+      "y": 0,
+      "width": 800,
+      "height": 600,
+      "zLevel": 0,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": [
+        {
+          "elementId": "0x10000434",
+          "elementName": "SplashScreenField",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Element_hide": true,
+            "UICore_Element_ObjectMode": 3
+          },
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x10000038",
+              "stateName": "frame1",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": true,
+              "properties": {
+                "UICore_Element_hide": false
+              }
+            },
+            {
+              "stateId": "0x10000039",
+              "stateName": "frame2",
+              "passToChildren": false,
+              "imageFile": "0x0600610F",
+              "alphaFile": "",
+              "drawMode": 1,
+              "hasMedia": true,
+              "properties": {
+                "UICore_Element_hide": false
+              }
+            },
+            {
+              "stateId": "0x1000003A",
+              "stateName": "frame3",
+              "passToChildren": false,
+              "imageFile": "0x06006EBC",
+              "alphaFile": "",
+              "drawMode": 1,
+              "hasMedia": true,
+              "properties": {
+                "UICore_Element_hide": false
+              }
+            }
+          ],
+          "x": 80,
+          "y": 60,
+          "width": 640,
+          "height": 480,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "children": []
+        },
+        {
+          "elementId": "0x10000444",
+          "elementName": "IntroVideoField",
+          "type": "0x00000003",
+          "defaultState": "",
+          "passToChildren": false,
+          "properties": {
+            "UICore_Element_hide": true,
+            "UICore_Element_ObjectMode": 3
+          },
+          "fontHeight": 0,
+          "states": [
+            {
+              "stateId": "0x1000003E",
+              "stateName": "IntroVideo",
+              "passToChildren": false,
+              "imageFile": "",
+              "alphaFile": "",
+              "drawMode": 0,
+              "hasMedia": true,
+              "properties": {
+                "UICore_Element_hide": false
+              }
+            }
+          ],
+          "x": 80,
+          "y": 60,
+          "width": 640,
+          "height": 480,
+          "zLevel": 0,
+          "baseLayout": "0x00000000",
+          "baseElement": "0x00000000",
+          "drawMode": 0,
+          "leftEdge": 0,
+          "topEdge": 0,
+          "rightEdge": 0,
+          "bottomEdge": 0,
+          "children": []
+        }
+      ]
+    }
+  ]
+}

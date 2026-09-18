@@ -1,0 +1,31 @@
+{
+  "id": "0x2100000B",
+  "name": "classic_radar",
+  "displayWidth": 800,
+  "displayHeight": 600,
+  "roots": [
+    {
+      "elementId": "0x10000036",
+      "elementName": "RootRadar_Field",
+      "type": "0x10000010",
+      "defaultState": "",
+      "passToChildren": false,
+      "properties": {},
+      "fontHeight": 0,
+      "states": [],
+      "x": 0,
+      "y": 0,
+      "width": 1,
+      "height": 1,
+      "zLevel": 1000,
+      "baseLayout": "0x00000000",
+      "baseElement": "0x00000000",
+      "drawMode": 0,
+      "leftEdge": 0,
+      "topEdge": 0,
+      "rightEdge": 0,
+      "bottomEdge": 0,
+      "children": []
+    }
+  ]
+}

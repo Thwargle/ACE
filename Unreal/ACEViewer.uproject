@@ -1,0 +1,60 @@
+{
+  "FileVersion": 3,
+  "EngineAssociation": "5.8",
+  "Category": "Games",
+  "Description": "Asheron's Call Emulator (ACE) client viewer - login, character appearance, and landblock terrain via ACEClient plugin.",
+  "Modules": [
+    {
+      "Name": "ACEViewer",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ],
+  "Plugins": [
+    {
+      "Name": "OpenXR",
+      "Enabled": true
+    },
+    {
+      "Name": "ACEWorldBake",
+      "Enabled": true
+    },
+    {
+      "Name": "EditorScriptingUtilities",
+      "Enabled": true
+    },
+    {
+      "Name": "BlueprintMaterialTextureNodes",
+      "Enabled": true
+    },
+    {
+      "Name": "Interchange",
+      "Enabled": true,
+      "SupportedTargetPlatforms": [
+        "Win64",
+        "Linux",
+        "Mac"
+      ]
+    },
+    {
+      "Name": "ACEClient",
+      "Enabled": true
+    },
+    {
+      "Name": "ProceduralMeshComponent",
+      "Enabled": true
+    },
+    {
+      "Name": "ModelContextProtocol",
+      "Enabled": false
+    },
+    {
+      "Name": "Terminal",
+      "Enabled": false
+    },
+    {
+      "Name": "ResonanceAudio",
+      "Enabled": false
+    }
+  ]
+}

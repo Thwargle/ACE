@@ -1,6 +1,7 @@
 using System;
 
 using ACE.Entity;
+using ACE.Server.Managers;
 using ACE.Server.WorldObjects;
 
 namespace ACE.Server.Entity
@@ -31,8 +32,16 @@ namespace ACE.Server.Entity
 
             TotalDamage = totalDamage;
 
-            if (attacker is CombatPet combatPet && combatPet.P_PetOwner != null)
-                PetOwner = new WeakReference<Player>(combatPet.P_PetOwner);
+            // CombatPet and passive Pet both set P_PetOwner; also resolve via PetOwner instance id
+            // so kill XP still credits the summoner if the typed reference was lost.
+            if (attacker is Pet pet && pet.P_PetOwner != null)
+                PetOwner = new WeakReference<Player>(pet.P_PetOwner);
+            else if (attacker.PetOwner != null)
+            {
+                var owner = PlayerManager.GetOnlinePlayer(attacker.PetOwner.Value);
+                if (owner != null)
+                    PetOwner = new WeakReference<Player>(owner);
+            }
         }
 
         public WorldObject TryGetAttacker()
