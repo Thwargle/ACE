@@ -335,3 +335,5 @@ log4net.config
 /_*/
 /diag/
 /tools/*.exe
+/LocalArchive/
+/Releases/

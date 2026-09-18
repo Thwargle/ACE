@@ -1,11 +1,17 @@
-name: docker build
+name: Publish Docker server (manual)
 
 on:
-  schedule:
-    - cron: '0 2 * * *' # run at 2 AM UTC
-  push:
-    branches:
-      - 'master'
+  # Optional server-container publishing, separate from Windows/Quest releases.
+  # Ordinary pushes and source checkouts do not need a Docker Hub account.
+  workflow_dispatch:
+    inputs:
+      dockerhub_repository:
+        description: 'Your Docker Hub repository (username/image); requires DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets'
+        required: true
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
   docker:
@@ -33,12 +39,4 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: acemulator/ace:latest
-      -
-        name: Update repo description
-        uses: peter-evans/dockerhub-description@v5
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
-          repository: acemulator/ace
-          short-description: ${{ github.event.repository.description }}
+          tags: ${{ inputs.dockerhub_repository }}:latest

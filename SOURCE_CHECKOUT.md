@@ -82,4 +82,11 @@ required by both clients; its changes are documented in
 This export preserves newer upstream server changes already present in this ACE
 repository. VR edits were compared against their original base and merged where
 both versions changed the same file, instead of reverting upstream fixes or package
-updates. The working VR tree and all installed builds remain in `C:\dev\ACE_VR`.
+updates. `C:\dev\ACE` is now the canonical working directory for the server,
+Windows client, and Quest client. Local tools, installed builds, and releases
+also live here in Git-ignored directories. Historical source variants and
+migration records are kept under the ignored `LocalArchive` directory.
+
+The optional Docker Hub publishing workflow is manual. Normal Git pushes do not
+require Docker Hub credentials. Windows and Quest releases use the build scripts
+above and do not use Docker Hub.

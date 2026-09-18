@@ -124,7 +124,7 @@ Further work should be driven by these measurements:
 From the project root in PowerShell 7:
 
 ```powershell
-pwsh -NoProfile -File Unreal/Build/VR/Measure-PCPerformance.ps1 -OutputRoot C:/dev/ACE_VR/Unreal/Saved/PCPerformance/NewComparison
+pwsh -NoProfile -File Unreal/Build/VR/Measure-PCPerformance.ps1 -OutputRoot ./Unreal/Saved/PCPerformance/NewComparison
 ```
 
 Run without an editor, another client, a build or another GPU workload. The
