@@ -1,14 +1,5 @@
 #pragma once
-#include "CoreMinimal.h"
-
-/** Last entries on this installation. Nothing is supplied on a fresh install. */
-struct FACELoginSettings
-{
-	FString Host;
-	FString Port = TEXT("9000");
-	FString Account;
-	FString Password;
-};
+#include "ACELoginProfile.h"
 
 namespace ACELoginSettings
 {

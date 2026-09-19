@@ -66,7 +66,7 @@
     // the key remains in Android Keystore across normal APK updates.
     public synchronized byte[] AndroidThunkJava_ACELoginCrypt(byte[] input, boolean encrypt) {
         try {
-            if (input == null || input.length > 131072) return null;
+            if (input == null || input.length > 1048576) return null;
             final String alias = getPackageName() + ".ACELogin.v1";
             java.security.KeyStore store = java.security.KeyStore.getInstance("AndroidKeyStore");
             store.load(null);

@@ -35,7 +35,11 @@ bool FACEInteractionRecoveryTest::RunTest(const FString&)
     Session.OnNPCSpeech.AddLambda([&](int32 Guid,const FString& Text){if(Guid==200 && Text==TEXT("Welcome")) ++Speech;});
     Session.OnChatMessage.AddLambda([&](const FString&,const FString&,int32){++Chat;});
     Session.OnCombatFeedback.AddLambda([&](const FString&,int32 Amount,bool,bool){Damage=Amount;});
-    FACEWorldObject NPC; NPC.Guid=200; NPC.ItemType=ACEItemType::Creature; Session.WorldObjects.Add(200,NPC);
+    // Health feedback now requires a positioned, nearby target (stale targets
+    // after teleport are deliberately ignored). Model an actual nearby NPC.
+    Session.PlayerPosition.CellId=0x7D640001;
+    FACEWorldObject NPC; NPC.Guid=200; NPC.ItemType=ACEItemType::Creature;
+    NPC.bHasPosition=true; NPC.Position=Session.PlayerPosition; Session.WorldObjects.Add(200,NPC);
     FACEBinaryWriter Tell; Tell.WriteString16L(TEXT("Welcome"));Tell.WriteString16L(TEXT("Bookie"));
     Tell.WriteUInt32(200);Tell.WriteUInt32(100);Tell.WriteUInt32(ACEChatMessageType::Tell);Tell.WriteUInt32(0);
     FACEBinaryReader TellReader(Tell.GetData());Session.HandleTell(TellReader);

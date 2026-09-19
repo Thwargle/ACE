@@ -69,15 +69,18 @@ void UACEVRComponent::UpdateTextEntryFocus()
 
 UWidget* UACEVRComponent::TextEntryUnderPointer(UWidgetInteractionComponent* Pointer) const
 {
-	if (!Client || Client->GetSessionState() != EACESessionState::InWorld || !PC->DatCanvasWidget
-		|| !PC->DatCanvasWidget->WidgetTree) return nullptr;
+	if (!PC || !Pointer || !RetailPanel) return nullptr;
 	auto* Panel = Pointer->GetHoveredWidgetComponent();
 	if (Panel != RetailPanel && Panel != ChatPanel) return nullptr;
+	// Login/server/account fields use the same explicit native keyboard session
+	// as chat. Otherwise Android's permanent Slate entry can reopen then hide it.
+	auto* SurfaceWidget = RetailPanel->GetWidget();
+	if (!SurfaceWidget || !SurfaceWidget->WidgetTree) return nullptr;
 	FVector2D Point = Pointer->Get2DHitLocation();
 	if (Panel == ChatPanel) Point = ChatRetail->ToCanvas(Point);
 	const auto HitPath = RetailPanel->GetHitWidgetPath(Point, false);
 	TArray<UWidget*> Widgets;
-	PC->DatCanvasWidget->WidgetTree->GetAllWidgets(Widgets);
+	SurfaceWidget->WidgetTree->GetAllWidgets(Widgets);
 	for (auto* Widget : Widgets)
 	{
 		if (!Cast<UEditableTextBox>(Widget) && !Cast<UACERetailTextEntry>(Widget)) continue;

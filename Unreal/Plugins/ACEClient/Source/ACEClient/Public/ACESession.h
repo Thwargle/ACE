@@ -723,6 +723,7 @@ private:
 	/** Drop in-world state after a successful logoff (keep sockets / account session). */
 	void ClearWorldState();
 
+	static TArray<uint8> BuildLoginRequestBody(const FACELoginCredentials& Credentials);
 	void SendLoginRequest();
 	void SendConnectResponse();
 	void SendCharacterLogOff();

@@ -38,8 +38,8 @@ void UACEVRComponent::PositionPanel(UWidgetComponent* Panel)
 	}
 	const FRotator Facing(0.f, Head->GetComponentRotation().Yaw, 0.f);
 	const bool Login = Panel == RetailPanel && PC && PC->LoginWidget && Panel->GetWidget() == PC->LoginWidget;
-	const float Distance = Login ? FMath::Max(110.f, Settings->PanelDistance) : Settings->PanelDistance;
-	Panel->SetWorldLocation(Head->GetComponentLocation() + Facing.Vector() * Distance + FVector(0, 0, Login ? 20.f : -10.f));
+	const float Distance = Login ? FMath::Max(150.f, Settings->PanelDistance) : Settings->PanelDistance;
+	Panel->SetWorldLocation(Head->GetComponentLocation() + Facing.Vector() * Distance + FVector(0, 0, Login ? 4.f : -10.f));
 	Panel->SetWorldRotation(FRotator(0.f, Facing.Yaw + 180.f, 0.f));
 }
 
@@ -64,7 +64,7 @@ void UACEVRComponent::UpdatePanels(float Dt)
 	const bool Login = Widget && Widget == PC->LoginWidget;
 	// Crop the login surface to the card rather than a large, mostly empty desktop.
 	// Character selection and gameplay retain their normal canvas dimensions.
-	RetailPanel->SetDrawSize(Login ? FVector2D(600, 640) : FVector2D(1280, 960));
+	RetailPanel->SetDrawSize(Login ? FVector2D(1100, 900) : FVector2D(1280, 960));
 	if (Widget)
 	{
 		if (Widget->IsInViewport()) Widget->RemoveFromParent();
@@ -89,7 +89,7 @@ void UACEVRComponent::UpdatePanels(float Dt)
 		// Hidden gameplay panels still tick the binder, which handles incoming vendor/trade updates.
 	};
 	UpdateTextEntryFocus();
-	const bool ShowMain = Available && Widget && (!InWorld || bInventoryOpen || bSettingsOpen) && (!bTextKeyboardOpen || UsesPlatformKeyboard());
+	const bool ShowMain = Available && Widget && (!InWorld || bInventoryOpen || bSettingsOpen) && (!bTextKeyboardOpen || UsesPlatformKeyboard() || Login);
 	// Keep one retail canvas painting for the pinned windows, even when its main
 	// world quad is closed. Only the visible quad participates in pointer traces.
 	RetailPanel->SetVisibility(Available && Widget);
@@ -101,8 +101,8 @@ void UACEVRComponent::UpdatePanels(float Dt)
 			Head->GetComponentQuat() * FRotator(0, 180, 0).Quaternion());
 	}
 	Show(SettingsPanel, Available && bSettingsOpen);
-	Show(KeyboardPanel, !UsesPlatformKeyboard() && Available && (bKeyboardOpen || (!InWorld && (Login || PC->DatCharGenBinder))));
-	const float PanelScale = Login ? FMath::Clamp(Settings->PanelScale, .08f, .11f) : Settings->PanelScale;
+	Show(KeyboardPanel, !UsesPlatformKeyboard() && Available && (bKeyboardOpen || (!InWorld && PC->DatCharGenBinder)));
+	const float PanelScale = Login ? FMath::Clamp(Settings->PanelScale, .09f, .10f) : Settings->PanelScale;
 	const float KeyboardScale = Login && !bSettingsOpen ? PanelScale * .68f : Settings->PanelScale * .75f;
 	KeyboardPanel->SetWorldScale3D(FVector(KeyboardScale));
 	const auto* BasePanel = bSettingsOpen ? SettingsPanel.Get() : RetailPanel.Get();
@@ -110,11 +110,11 @@ void UACEVRComponent::UpdatePanels(float Dt)
 	// or be intercepted by the transparent lower portion of the login quad.
 	const bool LoginLayout = Login && !bSettingsOpen;
 	const float KeyboardPitch = LoginLayout ? 15.f : 25.f;
-	const float Below = LoginLayout ? 320.f * PanelScale + 6.f + 200.f * KeyboardScale * FMath::Cos(FMath::DegreesToRadians(KeyboardPitch)) : 38.f;
+	const float Below = LoginLayout ? 450.f * PanelScale + 6.f + 200.f * KeyboardScale * FMath::Cos(FMath::DegreesToRadians(KeyboardPitch)) : 38.f;
 	KeyboardPanel->SetWorldLocation(BasePanel->GetComponentLocation() + BasePanel->GetForwardVector() * (LoginLayout ? 0.f : 20.f) - FVector(0, 0, Below));
 	FRotator KeyboardFacing = BasePanel->GetComponentRotation(); KeyboardFacing.Pitch = KeyboardPitch;
 	KeyboardPanel->SetWorldRotation(KeyboardFacing);
-	if (bTextKeyboardOpen) KeyboardPanel->SetWorldTransform(TextKeyboardTransform);
+	if (bTextKeyboardOpen && !LoginLayout) KeyboardPanel->SetWorldTransform(TextKeyboardTransform);
 	auto RefreshRetail = [&](UACEVRRetailSurface* Surface, UWidgetComponent* Panel, FName Window, bool Enabled)
 	{
 		Surface->SetSource(RetailPanel, PC->DatCanvasWidget, Window);

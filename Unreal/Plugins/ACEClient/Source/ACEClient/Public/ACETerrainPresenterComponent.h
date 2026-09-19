@@ -31,6 +31,7 @@ class ACECLIENT_API UACETerrainPresenterComponent : public UActorComponent
 	friend class FACERetailNetworkWeatherTest;
 	friend class FACERetailWorldEntryTest;
 	friend class FACELoadingTransitionTest;
+	friend class FACETerrainPortalRevealTest;
 
 public:
 	UACETerrainPresenterComponent();
@@ -376,6 +377,8 @@ protected:
 	/** Last outdoor landcell — dungeon interiors live on other LBs; keep this ring loaded. */
 	uint32 LastOutdoorCellId = 0;
 	uint64 LastPortalTerrainSyncFrame = MAX_uint64;
+	/** Full actor visibility must be restored once the portal tunnel releases. */
+	bool bWorldHiddenForPortal = false;
 	/** SmartBox viewer_cell — draw occupancy. 0 until RefreshViewerCellId runs. */
 	uint32 ViewerCellId = 0;
 

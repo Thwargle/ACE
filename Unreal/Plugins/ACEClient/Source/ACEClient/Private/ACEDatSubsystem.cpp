@@ -1,4 +1,5 @@
 #include "ACEDatSubsystem.h"
+#include "ACELoginSettings.h"
 #include "UI/ACEUIResourceResolver.h"
 
 UACEUIResourceResolver* UACEDatSubsystem::GetUiResources()
@@ -942,6 +943,9 @@ void UACEDatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	DatDirectory = FPaths::ProjectSavedDir() / TEXT("DAT");
 	UE_LOG(LogTemp, Log, TEXT("AC:VR DAT directory: %s"), *DatDirectory);
 #endif
+	FACELoginSettings LoginSettings;
+	if (ACELoginSettings::Load(LoginSettings) && !LoginSettings.DatDirectory.IsEmpty())
+		DatDirectory = LoginSettings.DatDirectory;
 	if (bAutoLoadOnInitialize)
 	{
 		BeginBackgroundLoad();

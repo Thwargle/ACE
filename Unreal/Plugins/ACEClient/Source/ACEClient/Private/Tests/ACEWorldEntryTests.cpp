@@ -7,6 +7,7 @@
 #include "ACEDatSubsystem.h"
 #include "ACEEnvCellActor.h"
 #include "ACELandblockActor.h"
+#include "ACETerrainChunkActor.h"
 #include "ACETerrainPresenterComponent.h"
 #include "ACELoadingScreenActor.h"
 #include "ACERetailPortalAnimation.h"
@@ -135,6 +136,57 @@ bool FACELoadingTransitionTest::RunTest(const FString&)
     TestFalse(TEXT("Rejected/cancelled world entry releases loading state"),PC->bEnterWorldLoading || PC->bPendingEnterWorldTransition);
     TestFalse(TEXT("Returning to character selection releases movement input"),PC->IsMoveInputIgnored());
     TestFalse(TEXT("Returning to character selection leaves portal space"),Dat->IsInPortalSpace());
+    return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACETerrainPortalRevealTest, "ACE.RetailParity.TerrainPortalReveal",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACETerrainPortalRevealTest::RunTest(const FString&)
+{
+    FEntryWorld Fixture;
+    auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
+    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    Dat->EnsureLoaded();
+    auto* Owner=Fixture.World->SpawnActor<AActor>();
+    auto* Terrain=NewObject<UACETerrainPresenterComponent>(Owner);
+    auto* Land=Fixture.World->SpawnActor<AACELandblockActor>();
+    auto* Chunk=Fixture.World->SpawnActor<AACETerrainChunkActor>();
+    // Both reported characters arrived outdoors on this Caulcano tower. All
+    // landscape actors finish loading inside the tunnel, before the reveal.
+    Dat->GetOrBuildLandblockMesh(0x09090000,100);
+    TestTrue(TEXT("Caulcano destination terrain loads"),Land->LoadLandblock(0x09090000,100,false,1,0));
+    TestTrue(TEXT("Caulcano terrain has drawable sections"),Land->IsOutdoorTerrainMeshReady());
+    Terrain->bHasKnownCell=true;
+    Terrain->LastKnownCellId=0x0909000C;
+    Terrain->Spawned.Add(0x09090000,Land);
+    Terrain->SpawnedChunks.Add(0x08090000,Chunk);
+    for(int32 Visit=0;Visit<2;++Visit)
+    {
+        Dat->SetInPortalSpace(true);
+        Terrain->UpdateBuildingVisibility();
+        TestTrue(TEXT("Portal hides complete landblock actors, including scenery"),Land->IsHidden());
+        TestTrue(TEXT("Portal hides chunk actors"),Chunk->IsHidden());
+        Terrain->UpdateCameraVisibility();
+        TestTrue(TEXT("Camera updates cannot reveal terrain during portal space"),Land->IsHidden());
+        Dat->SetInPortalSpace(false);
+        Terrain->KickLandblockLoginBurst();
+        // No new cell, terrain actor, movement event or room entry occurs.
+        // Exercise the normal per-frame path used by a stationary login.
+        Terrain->UpdateCameraVisibility();
+        TestFalse(TEXT("Stationary portal exit restores landblock and scenery visibility"),Land->IsHidden());
+        TestFalse(TEXT("Stationary portal exit restores chunk visibility"),Chunk->IsHidden());
+        TestFalse(TEXT("Outdoor arrival reveals terrain components too"),Land->TerrainMesh->bHiddenInGame);
+        Terrain->UpdateCameraVisibility();
+        TestFalse(TEXT("The next camera update retains the revealed world"),Land->IsHidden());
+    }
+    // Revealing the actor must not bypass the separate baked-terrain policy.
+    Terrain->bWcBakedTerrainMode=true;
+    Dat->SetInPortalSpace(true);
+    Terrain->UpdateBuildingVisibility();
+    Dat->SetInPortalSpace(false);
+    Terrain->UpdateCameraVisibility();
+    TestFalse(TEXT("Baked worlds still reveal their building actors"),Land->IsHidden());
+    TestTrue(TEXT("Baked worlds keep duplicate procedural terrain hidden"),Land->TerrainMesh->bHiddenInGame);
     return !HasAnyErrors();
 }
 

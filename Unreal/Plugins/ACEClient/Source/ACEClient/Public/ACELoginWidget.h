@@ -4,6 +4,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Components/Button.h"
 #include "ACETypes.h"
+#include "ACELoginProfile.h"
 #include "ACELoginWidget.generated.h"
 
 class UACEClientSubsystem;
@@ -13,6 +14,17 @@ class UScrollBox;
 class UVerticalBox;
 class UBorder;
 class UACELoginWidget;
+
+/** Payload-bearing buttons avoid native popup windows, which do not render in VR. */
+UCLASS()
+class UACELoginActionButton : public UButton
+{
+	GENERATED_BODY()
+public:
+	FString Action, Value;
+	UPROPERTY() TWeakObjectPtr<UACELoginWidget> Owner;
+	UFUNCTION() void HandleAction();
+};
 
 /** A single clickable character-list row. Carries its own list index so a shared OnClicked
  *  handler (dynamic multicast delegates can't carry extra payload data) can tell the owning
@@ -33,8 +45,8 @@ public:
 };
 
 /**
- * Minimal C++ login / character-select HUD.
- * Create a Blueprint child to style, or use this class directly (default slate layout via NativeConstruct).
+ * Shared desktop/VR launcher lobby with local server/account profiles.
+ * The existing retail character-selection screen takes over after authentication.
  */
 UCLASS()
 class ACECLIENT_API UACELoginWidget : public UUserWidget
@@ -42,6 +54,7 @@ class ACECLIENT_API UACELoginWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
+	void RunAction(const FString& Action, const FString& Value = FString());
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
@@ -80,6 +93,57 @@ public:
 
 protected:
 	friend class FACEMissingDatLoginTest;
+	friend class FACELauncherWidgetTest;
+	friend class FACELauncherViewportTest;
+	friend class FACEVRRigTest;
+	FACELoginSettings Profile;
+	FString ProfilePath; // Optional isolated storage for automation fixtures.
+	TArray<FACELoginServer> Directory;
+	FString EditingServerId, BrowserServerId, PendingRemoval;
+	bool bEditingGDLE = false;
+	bool bRefreshingDirectory = false;
+	float LayoutWidth = 0;
+	TSharedPtr<class IHttpRequest, ESPMode::ThreadSafe> DirectoryRequest;
+	UPROPERTY() TObjectPtr<class UWidgetSwitcher> Pages;
+	UPROPERTY() TObjectPtr<class UScaleBox> ResponsiveScale;
+	UPROPERTY() TObjectPtr<class UWrapBox> PlayLayout;
+	UPROPERTY() TObjectPtr<class USizeBox> DashboardSize;
+	UPROPERTY() TObjectPtr<class USizeBox> FooterSize;
+	UPROPERTY() TObjectPtr<class USizeBox> SidebarSize;
+	UPROPERTY() TObjectPtr<class USizeBox> DetailSize;
+	UPROPERTY() TObjectPtr<UScrollBox> ServerList;
+	UPROPERTY() TObjectPtr<UScrollBox> AccountList;
+	UPROPERTY() TObjectPtr<UScrollBox> BrowserList;
+	UPROPERTY() TObjectPtr<UTextBlock> ServerTitle;
+	UPROPERTY() TObjectPtr<UTextBlock> ServerDetail;
+	UPROPERTY() TObjectPtr<UTextBlock> ServerDescription;
+	UPROPERTY() TObjectPtr<UTextBlock> BrowserDetail;
+	UPROPERTY() TObjectPtr<UTextBlock> FileStatus;
+	UPROPERTY() TObjectPtr<UEditableTextBox> NameBox;
+	UPROPERTY() TObjectPtr<UEditableTextBox> DescriptionBox;
+	UPROPERTY() TObjectPtr<UEditableTextBox> WebsiteBox;
+	UPROPERTY() TObjectPtr<UEditableTextBox> DiscordBox;
+	UPROPERTY() TObjectPtr<UEditableTextBox> SearchBox;
+	UPROPERTY() TObjectPtr<UEditableTextBox> DatBox;
+	UPROPERTY() TObjectPtr<UBorder> ConfirmPanel;
+	UPROPERTY() TObjectPtr<UTextBlock> ConfirmText;
+	UPROPERTY() TObjectPtr<UButton> ACETypeButton;
+	UPROPERTY() TObjectPtr<UButton> GDLETypeButton;
+	UPROPERTY() TObjectPtr<UButton> WebsiteButton;
+	UPROPERTY() TObjectPtr<UButton> DiscordButton;
+	void RefreshServers();
+	void RefreshAccounts();
+	void SelectServer(const FString& Id);
+	void EditServer(bool bNew);
+	bool StoreAccount();
+	void RefreshBrowser();
+	void FetchDirectory();
+	void UpdateDatStatus();
+	UFUNCTION() void OnSearchChanged(const FText& Text);
+	UFUNCTION() void OnDatChanged(const FText& Text);
+	UTextBlock* Label(const FString& Text, int32 Size = 18, bool bMuted = false);
+	UACELoginActionButton* ActionButton(const FString& Text, const FString& Action, const FString& Value = FString(), bool bAccent = false);
+	UEditableTextBox* Field(UVerticalBox* Parent, const FString& Title, const FName Name, bool bSecret = false);
 	/** CRITICAL: builds WidgetTree->RootWidget BEFORE UUserWidget::RebuildWidget() ever runs.
 	 *  UUserWidget::RebuildWidget() captures `WidgetTree->RootWidget ? RootWidget->TakeWidget()
 	 *  : SNew(SSpacer)` at the moment it's called, and only calls NativeConstruct() AFTER that

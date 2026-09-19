@@ -3149,6 +3149,14 @@ void UACETerrainPresenterComponent::UpdateCameraVisibility()
 	UACEDatSubsystem* Dat = World && World->GetGameInstance()
 		? World->GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr;
 	if (!Dat || !bHasKnownCell || Dat->IsInPortalSpace()) return;
+	if (bWorldHiddenForPortal)
+	{
+		// Loading can finish every actor before portal exit. The deferred login
+		// burst then has no new mesh or cell change to trigger a full refresh.
+		// Component visibility below cannot clear an actor's hidden flag (which
+		// also hides its buildings/scenery). Restore once on the first world frame.
+		UpdateBuildingVisibility();
+	}
 	RefreshViewerCellId(Dat);
 	const uint32 DrawCell = ResolveDrawOccupancyCellId(Dat);
 	const bool bIndoor = IsIndoorCell(DrawCell);
@@ -3328,6 +3336,7 @@ void UACETerrainPresenterComponent::UpdateBuildingVisibility()
 	// until visibility, or enabling only that cell, leaves placement without a floor.
 	if (bPortalSpace)
 	{
+		bWorldHiddenForPortal = true;
 		for (const auto& Pair : SpawnedEnvCells)
 		{
 			if (AACEEnvCellActor* Env = Pair.Value)
@@ -3346,6 +3355,7 @@ void UACETerrainPresenterComponent::UpdateBuildingVisibility()
 		ClearOutdoorPortalDepthApertures();
 		return;
 	}
+	bWorldHiddenForPortal = false;
 
 	// Unified residency (retail SmartBox — no land CSG punch):
 	//   Outdoor: full unpunched LScape + Setup shells + StabList peeks

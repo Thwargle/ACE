@@ -320,6 +320,10 @@ struct ACECLIENT_API FACELoginCredentials
 
 	UPROPERTY(BlueprintReadWrite, Category = "ACE")
 	FString Password;
+
+	/** GDLE uses NetAuthType::Account with username:password, ACE AccountPassword. */
+	UPROPERTY(BlueprintReadWrite, Category = "ACE")
+	bool bGDLE = false;
 };
 
 /** Sub-palette range from ObjectCreate ModelData (wire Offset/Length are ×8 units). */

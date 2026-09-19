@@ -65,6 +65,8 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "ACE|DAT")
 	bool IsDatReady() const { return bPortalLoaded; }
+	/** Directory changes must not relabel a worker that is indexing another installation. */
+	bool IsDatLoading() const { return bBackgroundLoadInProgress || bCellBackgroundLoadInProgress; }
 
 	/**
 	 * When false, landblock/EnvCell presenters must not stream. Portal-space tunnel mesh

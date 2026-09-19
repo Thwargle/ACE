@@ -23,6 +23,7 @@
 #include "ACECombatStance.h"
 #include "ACEDatSubsystem.h"
 #include "ACELoginWidget.h"
+#include "ACELoginSettings.h"
 #include "ACELoadingScreenActor.h"
 #include "ACESession.h"
 #include "Camera/CameraComponent.h"
@@ -438,6 +439,9 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Rig updates before camera evaluation"), VR->PrimaryComponentTick.TickGroup == TG_PostPhysics);
 	// Reproduce reconstruction of the same login widget during the viewport-to-VR handoff.
 	auto* Login = CreateWidget<UACELoginWidget>(PC);
+	Login->ProfilePath=FPaths::ProjectSavedDir()/TEXT("Automation/VR/Login-")+FGuid::NewGuid().ToString()+TEXT(".dat");
+	FACELoginSettings LoginFixture; LoginFixture.Host=TEXT("localhost"); LoginFixture.Account=TEXT("VR fixture"); LoginFixture.Password=TEXT("fixture-only");
+	ACELoginSettings::Save(LoginFixture,Login->ProfilePath);
 	{
 		auto SlateLogin = Login->TakeWidget();
 		Login->NativeConstruct();
@@ -486,7 +490,10 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		const FVector PanelCenter = VR->RetailPanel->GetComponentLocation(), Normal = VR->RetailPanel->GetForwardVector();
 		TestTrue(TEXT("Login panel can be hit by an actual world trace"), World->LineTraceSingleByChannel(Hit, PanelCenter + Normal * 50, PanelCenter - Normal * 50, ECC_Visibility));
 		TestTrue(TEXT("Trace hits the login widget"), Hit.GetComponent() == VR->RetailPanel);
-		TestTrue(TEXT("Keyboard is visible world-space UI"), VR->KeyboardPanel->IsVisible() && VR->KeyboardPanel->GetWidgetSpace() == EWidgetSpace::World);
+		TestFalse(TEXT("Keyboard stays hidden until a login field is selected"),VR->KeyboardPanel->IsVisible());
+		VR->FocusTextEntry(Login->AccountBox); VR->UpdatePanels();
+		TestTrue(TEXT("Selecting a field shows the world-space keyboard"), VR->KeyboardPanel->IsVisible() && VR->KeyboardPanel->GetWidgetSpace() == EWidgetSpace::World);
+		TestTrue(TEXT("Login form stays visible while editing"),VR->RetailPanel->IsVisible());
 		if (FApp::CanEverRender())
 		{
 			if (GShaderCompilingManager) GShaderCompilingManager->FinishAllCompilation();
@@ -509,7 +516,7 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			{
 				const FGeometry Geometry = LoginButton->GetCachedGeometry();
 				const FVector2D ButtonCenter = Login->GetCachedGeometry().AbsoluteToLocal(Geometry.LocalToAbsolute(Geometry.GetLocalSize() * .5));
-				TestTrue(TEXT("Login button fits inside the cropped surface"), Geometry.GetLocalSize().X > 1 && ButtonCenter.Y > 0 && ButtonCenter.Y < 640);
+				TestTrue(TEXT("Login button fits inside the launcher surface"), Geometry.GetLocalSize().X > 1 && ButtonCenter.Y > 0 && ButtonCenter.Y < VR->RetailPanel->GetDrawSize().Y);
 				auto TraceControl = [&](UWidgetComponent* Panel, FVector2D Pixel)
 				{
 					const FVector2D Size = Panel->GetDrawSize();
@@ -1887,6 +1894,7 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		}
 	}
 	VR->Client->Session->State = EACESessionState::Disconnected;
+	Login->NativeDestruct(); IFileManager::Get().Delete(*Login->ProfilePath,false,true);
 	Pawn->Destroy(); PC->Destroy(); GI->Shutdown(); GEngine->DestroyWorldContext(World); World->DestroyWorld(false);
 	return true;
 }

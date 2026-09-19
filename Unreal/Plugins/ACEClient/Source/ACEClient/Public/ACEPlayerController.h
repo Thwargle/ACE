@@ -38,6 +38,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACELoadingTransitionTest;
 	friend class FACELedgeStairsTest;
 	friend class FACEMissingDatLoginTest;
+	friend class FACELauncherViewportTest;
 	friend class FACECameraEdgeTest;
 	friend class FACERetailScreenTest;
     friend class UACEUICharSelectBinder;

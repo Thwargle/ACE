@@ -44,6 +44,7 @@
 #include "ProceduralMeshComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Blueprint/UserWidget.h"
+#include "Blueprint/GameViewportSubsystem.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/GameViewportClient.h"
 #include "SceneView.h"
@@ -509,12 +510,17 @@ void AACEPlayerController::ApplyViewportSizeToLoginWidget()
 		return;
 	}
 
-	// Fill the game viewport — UACELoginWidget centers its credentials card internally
-	// (full-screen backdrop + centered panel). A fixed 520×560 outer slot mis-centers on
-	// Standalone / high-DPI windows when anchor math uses the wrong coordinate space.
-	LoginWidget->SetAnchorsInViewport(FAnchors(0.f, 0.f, 1.f, 1.f));
-	LoginWidget->SetAlignmentInViewport(FVector2D(0.f, 0.f));
-	LoginWidget->SetPositionInViewport(FVector2D::ZeroVector, /*bRemoveDPIScale*/ true);
+	// Set the complete stretch slot together. SetPositionInViewport resets anchors
+	// to (0,0), silently turning this into an auto-sized top-left widget. The lobby's
+	// anchored canvas needs the allocated viewport, not its tiny desired size.
+	if (UGameViewportSubsystem* Viewport = UGameViewportSubsystem::Get())
+	{
+		FGameViewportWidgetSlot Slot = Viewport->GetWidgetSlot(LoginWidget);
+		Slot.Anchors = FAnchors(0.f, 0.f, 1.f, 1.f);
+		Slot.Alignment = FVector2D::ZeroVector;
+		Slot.Offsets = FMargin(0.f);
+		Viewport->SetWidgetSlot(LoginWidget, Slot);
+	}
 	LoginWidget->ForceLayoutPrepass();
 
 	const FVector2D ContentDesiredSize = LoginWidget->GetDesiredSize();
@@ -5502,9 +5508,8 @@ void AACEPlayerController::FinishWorldTransition()
 			Dat->SetWorldStreamingAllowed(true);
 		}
 	}
-	// Portal UpdateBuildingVisibility hides every spawned landblock and returns. Occupancy
-	// often does not change on reveal, so unhide here or terrain stays invisible until the
-	// player enters a building or crosses a landblock.
+	// Resume deferred streaming. The presenter's first world-camera update restores
+	// actor visibility even when the destination finished loading inside the tunnel.
 	if (UWorld* RevealWorld = GetWorld())
 	{
 		if (AGameModeBase* GM = RevealWorld->GetAuthGameMode())

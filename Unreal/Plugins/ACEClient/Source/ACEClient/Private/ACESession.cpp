@@ -432,7 +432,7 @@ void FACESession::Tick(float DeltaSeconds)
 
 		if (CharacterListWaitTimer >= 20.f)
 		{
-			ConnectionError = TEXT("The server did not return the character list. Check that one server is running and UDP ports 9000/9001 are reachable.");
+			ConnectionError = FString::Printf(TEXT("The server did not return the character list. Check UDP ports %d/%d for %s."), Creds.Port, Creds.Port + 1, *Creds.Host);
 			Log(TEXT("Timed out waiting for CharacterList — server may have missed ConnectResponse (UDP port+1 / auth race), or never sent the list"));
 			SetState(EACESessionState::Failed);
 			return;
@@ -492,7 +492,11 @@ void FACESession::PollSockets()
 		int32 Packets = 0;
 		while (Sock->RecvFrom(Buffer, sizeof(Buffer), BytesRead, *FromAddr) && BytesRead > 0)
 		{
-			HandleDatagram(Buffer, BytesRead, bS2C);
+			// In particular, a cleartext login rejection must come from the endpoint
+			// we contacted, not an unrelated sender on this ephemeral UDP socket.
+			if ((ServerC2SAddr.IsValid() && *FromAddr == *ServerC2SAddr)
+				|| (ServerS2CAddr.IsValid() && *FromAddr == *ServerS2CAddr))
+				HandleDatagram(Buffer, BytesRead, bS2C);
 			// Leave the remainder queued in the socket in its original order.
 			// Continuous traffic must not monopolize an entire game frame.
 			if (++Packets >= MaxPackets || (Budget > 0 && FPlatformTime::Seconds() - Start >= Budget)) break;
@@ -546,6 +550,8 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 	TArray<uint32> RetransmitSequences;
 	uint32 ServerAckSequence = 0;
 	bool bHasServerAck = false;
+	uint32 NetErrorStringId = 0, NetErrorTableId = 0;
+	const bool bHasNetError = EnumHasAnyFlags(Flags, EACEPacketHeaderFlags::NetError | EACEPacketHeaderFlags::NetErrorDisconnect);
 	double ServerTicks = 0.0;
 	const double ReceivedAt = FPlatformTime::Seconds();
 
@@ -592,6 +598,17 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 		ServerAckSequence = Payload.ReadUInt32();
 		bHasServerAck = true;
 		OptionalBytes.Append(Payload.GetData() + Start, 4);
+	}
+	// Retail NetError is a StringInfo pair, not a game-event error number.
+	// Both optional headers occupy eight bytes and precede TimeSync on the wire.
+	for (const auto ErrorFlag : {EACEPacketHeaderFlags::NetError, EACEPacketHeaderFlags::NetErrorDisconnect})
+	{
+		if (!EnumHasAnyFlags(Flags, ErrorFlag)) continue;
+		if (!Payload.CanRead(8)) return;
+		const int32 Start = Payload.Tell();
+		NetErrorStringId = Payload.ReadUInt32();
+		NetErrorTableId = Payload.ReadUInt32();
+		OptionalBytes.Append(Payload.GetData() + Start, 8);
 	}
 	if (EnumHasAnyFlags(Flags, EACEPacketHeaderFlags::TimeSync))
 	{
@@ -736,6 +753,23 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 		return;
 	}
 	if (bEncrypted) LastServerPacketAt = ReceivedAt;
+	if (bHasNetError && (NetErrorStringId || NetErrorTableId))
+	{
+		if (State == EACESessionState::Failed || State == EACESessionState::Disconnected) return;
+		// Initial GDLE rejections have no ISAAC keys yet. Once authenticated,
+		// ignore delayed cleartext rejections from an earlier login attempt.
+		if (!bEncrypted && State != EACESessionState::AwaitConnectRequest) return;
+		const FString Reason = NetErrorStringId == 0x04DF9C54 && NetErrorTableId == 8
+			? TEXT("The server rejected the login. Check the account, password, and server address/port.")
+			: TEXT("The server reported a connection error.");
+		ConnectionError = FString::Printf(TEXT("%s (%s:%d; 0x%08X, table %u)"),
+			*Reason, *Creds.Host, Creds.Port, NetErrorStringId, NetErrorTableId);
+		Log(ConnectionError);
+		bRecoverLostConnection = State == EACESessionState::InWorld;
+		PreHandshakeDatagrams.Reset();
+		SetState(EACESessionState::Failed);
+		return;
+	}
 
 	// Cleartext NAK: retransmit cached C2S — do not advance S2C LastReceived (ACE early-return).
 	const bool bCleartextNak = EnumHasAnyFlags(Flags, EACEPacketHeaderFlags::RequestRetransmit)
@@ -1038,30 +1072,52 @@ void FACESession::HandleConnectRequest(FACEBinaryReader& Body)
 	SetState(EACESessionState::AwaitCharacterList);
 }
 
-void FACESession::SendLoginRequest()
+TArray<uint8> FACESession::BuildLoginRequestBody(const FACELoginCredentials& Creds)
 {
 	FACEBinaryWriter Body;
 	Body.WriteString16L(TEXT("1802"));
 
 	FACEBinaryWriter Auth;
-	Auth.WriteUInt32(2); // NetAuthType::AccountPassword
+	Auth.WriteUInt32(Creds.bGDLE ? 1 : 2); // NetAuthType::Account / AccountPassword
 	Auth.WriteUInt32(0); // AuthFlags
 	Auth.WriteUInt32(0); // Timestamp
-	Auth.WriteString16L(Creds.Account);
-	Auth.WriteString16L(TEXT("")); // account override
-	Auth.WriteString32L(Creds.Password);
+	if (Creds.bGDLE)
+	{
+		// ThwargLauncher passes GDLE credentials via retail's -a argument.
+		// Client::EvaluateCommandLineArg lowercases that entire argument (including
+		// the password) before NetAuthenticator packs it. Match its ASCII casing
+		// on the wire only; never alter saved credentials or ACE's case-sensitive ticket.
+		FString RetailAccount = Creds.Account + TEXT(":") + Creds.Password;
+		for (TCHAR& C : RetailAccount) if (C >= TEXT('A') && C <= TEXT('Z')) C += TEXT('a') - TEXT('A');
+		Auth.WriteString16L(RetailAccount);
+		Auth.WriteUInt32(0); // NetAuthenticator crypto-data length
+		Auth.WriteUInt32(0); // NetAuthenticator extra-data length
+	}
+	else
+	{
+		Auth.WriteString16L(Creds.Account);
+		Auth.WriteString16L(TEXT("")); // account override
+		Auth.WriteString32L(Creds.Password);
+	}
 
 	Body.WriteUInt32(static_cast<uint32>(Auth.Num()));
 	Body.WriteBytes(Auth.GetData());
 
-	SendRawPacket(EACEPacketHeaderFlags::LoginRequest, Body.GetData(), {}, false, false, 0);
+	return Body.GetData();
+}
+
+void FACESession::SendLoginRequest()
+{
+	SendRawPacket(EACEPacketHeaderFlags::LoginRequest, BuildLoginRequestBody(Creds), {}, false, false, 0);
 }
 
 void FACESession::SendConnectResponse()
 {
 	FACEBinaryWriter Body;
 	Body.WriteUInt64(ConnectionCookie);
-	SendRawPacket(EACEPacketHeaderFlags::ConnectResponse, Body.GetData(), {}, true, false, 0);
+	// GDLE routes the acknowledgement by its assigned recipient ID. ACE instead
+	// resolves the cookie on port+1 and expects the existing zero-ID response.
+	SendRawPacket(EACEPacketHeaderFlags::ConnectResponse, Body.GetData(), {}, true, false, Creds.bGDLE ? ClientId : 0);
 	Log(TEXT("ConnectResponse sent on port+1"));
 }
 

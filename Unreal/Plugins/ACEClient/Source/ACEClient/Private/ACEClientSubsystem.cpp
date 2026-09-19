@@ -295,7 +295,7 @@ void UACEClientSubsystem::TickInventorySort(float DeltaTime)
 	SortSourceGuid=0;
 }
 
-bool UACEClientSubsystem::Login(const FString& Host, int32 Port, const FString& Account, const FString& Password)
+bool UACEClientSubsystem::Login(const FString& Host, int32 Port, const FString& Account, const FString& Password, bool bGDLE)
 {
 	if (!Session)
 	{
@@ -306,6 +306,7 @@ bool UACEClientSubsystem::Login(const FString& Host, int32 Port, const FString& 
 	Creds.Port = Port;
 	Creds.Account = Account;
 	Creds.Password = Password;
+	Creds.bGDLE = bGDLE;
 	return Session->Connect(Creds);
 }
 

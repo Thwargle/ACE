@@ -177,7 +177,7 @@ public:
 	FACELinkStatusChangedDyn OnLinkStatusChanged;
 
 	UFUNCTION(BlueprintCallable, Category = "ACE")
-	bool Login(const FString& Host, int32 Port, const FString& Account, const FString& Password);
+	bool Login(const FString& Host, int32 Port, const FString& Account, const FString& Password, bool bGDLE = false);
 
 	UFUNCTION(BlueprintCallable, Category = "ACE")
 	void Logout();
