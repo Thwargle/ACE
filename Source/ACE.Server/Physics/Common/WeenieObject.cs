@@ -148,14 +148,8 @@ namespace ACE.Server.Physics.Common
 
         public bool InqRunRate(ref float rate)
         {
-            // get run skill from WorldObject
-            uint runSkill = 0;
-            if (WorldObject is Creature creature)
-                runSkill = creature.GetCreatureSkill(Skill.Run).Current;
-
-            //rate = (float)MovementSystem.GetRunRate(0.0f, 300, 1.0f);
-            rate = (float)MovementSystem.GetRunRate(0.0f, (int)runSkill, 1.0f);
-            //Console.WriteLine($"{WorldObject.Name} ({WorldObject.Guid}) - WeenieObject.InqRunRate: runSkill = {runSkill}, rate = {rate}");
+            // Use the same burden/stamina-aware rate as movement broadcasts.
+            rate = WorldObject is Creature creature ? creature.GetRunRate() : 1.0f;
             return true;
         }
 

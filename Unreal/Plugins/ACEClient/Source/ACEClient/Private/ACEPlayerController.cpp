@@ -1549,10 +1549,11 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			}
 			if (!bJumpAirborne && (!FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R)))
 			{
-				// PredictionSpeedScale tracks the server's measured ground speed so prediction
-				// neither races ahead (rubber-band) nor lags a fast character.
-				const float ForwardSpeed = Client->GetLocomotionSpeed(bRunning) * PredictionSpeedScale;
-				const float SideSpeed = Client->GetSidestepSpeed(bRunning) * PredictionSpeedScale;
+				// Retail CPhysicsObj::UpdatePositionInternal scales grounded animation
+				// displacement by the creature's size. Airborne velocity is separate.
+				const float GroundScale = GetLocalCreatureScale();
+				const float ForwardSpeed = Client->GetLocomotionSpeed(bRunning) * GroundScale;
+				const float SideSpeed = Client->GetSidestepSpeed(bRunning) * GroundScale;
 				// ACE MotionInterp: WalkBackwards → WalkForward with speed *= -0.65.
 				const float BackFactor = (F < 0.f) ? 0.65f : 1.f;
 				Pred.Location += Pred.GetAceForwardInAcSpace() * (F * BackFactor) * ForwardSpeed * DeltaTime
@@ -3075,8 +3076,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					bHavePredictedPose = true;
 					JumpAirborneSeconds = 0.f;
 					JumpWorldAceVelocity = Pred.GetAceForwardInAcSpace() * F
-						* (F < 0.f ? .65f : 1.f) * Client->GetLocomotionSpeed(bRunning) * PredictionSpeedScale
-						+ Pred.GetAceRightInAcSpace() * R * Client->GetSidestepSpeed(bRunning) * PredictionSpeedScale;
+						* (F < 0.f ? .65f : 1.f) * Client->GetLocomotionSpeed(bRunning)
+						+ Pred.GetAceRightInAcSpace() * R * Client->GetSidestepSpeed(bRunning);
 					JumpWorldAceVelocity.Z = -9.8f * DeltaTime;
 					GroundZ = Desired.Z - .5f * 9.8f * WorldScale * DeltaTime * DeltaTime;
 					bForceMovementResend = true;
@@ -3130,7 +3131,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                 {
                     LastMoveLog = Now;
                     UE_LOG(LogTemp, Log, TEXT("ACE MoveStep: dt=%.4f forward=%.3f side=%.3f run=%d vr=%d predicted=%d expected=%.2f beforeCollision=%.2f afterCollision=%.2f airborne=%d"),
-                        DeltaTime, F, R, bRunning, bVR, bLocalPredicting, F * Client->GetLocomotionSpeed(bRunning) * PredictionSpeedScale * DeltaTime * WorldScale,
+                        DeltaTime, F, R, bRunning, bVR, bLocalPredicting, F * Client->GetLocomotionSpeed(bRunning) * GetLocalCreatureScale() * DeltaTime * WorldScale,
                         FVector::Dist2D(BeforeCollision, P->GetActorLocation()), FVector::Dist2D(Desired, P->GetActorLocation()), bJumpAirborne);
                     if (Debug->GetInt() >= 2)
                         UE_LOG(LogTemp, Log, TEXT("ACE MoveContact: cell=%08X->%08X feet=%s requested=%s reached=%s along=%.2f blocker=%s normal=%s penetration=%.3f ledge=%d support=%d"),
@@ -3176,10 +3177,11 @@ float AACEPlayerController::GetLocalCreatureScale() const
 	{
 		return 1.f;
 	}
-	FACEWorldObject Self;
-	if (Client->GetWorldObject(Client->GetPlayerGuid(), Self) && Self.Scale > KINDA_SMALL_NUMBER)
+	const auto Session = Client->GetSession();
+	const auto* Self = Session ? Session->GetWorldObjects().Find(Client->GetPlayerGuid()) : nullptr;
+	if (Self && FMath::IsFinite(Self->Scale) && Self->Scale > KINDA_SMALL_NUMBER)
 	{
-		return Self.Scale;
+		return Self->Scale;
 	}
 	return 1.f;
 }
@@ -4540,8 +4542,6 @@ void AACEPlayerController::HandleEnteredWorld(int32 PlayerGuid, const FACEPositi
 	}
 	bLocalPredicting = false;
 	bHavePredictedPose = false;
-	PredictionSpeedScale = 1.f;
-	bHaveServerSpeedSample = false;
 	LastAppliedTeleportSeq = Client ? static_cast<uint16>(Client->GetTeleportSeq()) : 0;
 	LastAppliedForcePositionSeq = Client && Client->GetSession() ? Client->GetSession()->GetForcePositionSeq() : 0;
 	bHaveLastServerPose = SpawnPosition.IsValid();
@@ -5769,55 +5769,6 @@ void AACEPlayerController::SoftReconcilePredictedTowardServer(const FACEPosition
 	}
 }
 
-void AACEPlayerController::CalibratePredictionSpeedFromServer(const FACEPosition& ServerPose)
-{
-	if (IsVRActive())
-	{
-		// Analog movement already scales the retail Run/burden calculation. Packet
-		// distances also include partial stick input, collisions and arrival jitter;
-		// treating them as the maximum speed ratchets a later full-stick run down.
-		PredictionSpeedScale = 1.f;
-		bHaveServerSpeedSample = false;
-		return;
-	}
-	// Soft-reconcile while predicting used to shrink measured speed and pin PredictionSpeedScale
-	// near 0.35 (chronic slow run). Keep analytic GetLocomotionSpeed and only nudge gently upward
-	// when the server is clearly faster than we expect.
-	const bool bStraightRun = bLocalPredicting && bRunning
-		&& ForwardAxis > 0.1f
-		&& FMath::IsNearlyZero(RightAxis)
-		&& FMath::IsNearlyZero(TurnAxis);
-	if (!bStraightRun || !Client)
-	{
-		bHaveServerSpeedSample = false;
-		return;
-	}
-
-	const UWorld* World = GetWorld();
-	const double Now = World ? World->GetTimeSeconds() : 0.0;
-	const FVector PosUe = ServerPose.ToUnrealLocation(WorldScale);
-
-	if (bHaveServerSpeedSample)
-	{
-		const double Dt = Now - LastServerSpeedSampleTime;
-		if (Dt >= 0.2 && Dt <= 2.0)
-		{
-			const float DistAc = FVector::Dist2D(PosUe, LastServerSpeedSamplePosUe) / FMath::Max(1.f, WorldScale);
-			const float MeasuredSpeed = DistAc / static_cast<float>(Dt);
-			const float Analytic = Client->GetLocomotionSpeed(true);
-			if (Analytic > KINDA_SMALL_NUMBER && MeasuredSpeed > 0.2f)
-			{
-				const float RawScale = FMath::Clamp(MeasuredSpeed / Analytic, 0.90f, 1.15f);
-				PredictionSpeedScale = FMath::Lerp(PredictionSpeedScale, RawScale, 0.20f);
-			}
-		}
-	}
-
-	LastServerSpeedSamplePosUe = PosUe;
-	LastServerSpeedSampleTime = Now;
-	bHaveServerSpeedSample = true;
-}
-
 void AACEPlayerController::HandlePlayerTeleportStarted()
 {
 	// Retail: SmartBox::HandlePlayerTeleport raises waiting_for_teleport on 0xF751 and the
@@ -5839,7 +5790,6 @@ void AACEPlayerController::HandlePositionUpdate(int32 ObjectGuid, const FACEPosi
 		return;
 	}
 
-	CalibratePredictionSpeedFromServer(Position);
 
 	LastServerPose = Position;
 	bHaveLastServerPose = true;

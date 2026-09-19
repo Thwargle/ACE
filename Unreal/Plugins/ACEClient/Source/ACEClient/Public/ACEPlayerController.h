@@ -37,6 +37,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACERetailWorldEntryTest;
 	friend class FACELoadingTransitionTest;
 	friend class FACELedgeStairsTest;
+	friend class FACERunSpeedParityTest;
 	friend class FACEMissingDatLoginTest;
 	friend class FACELauncherViewportTest;
 	friend class FACECameraEdgeTest;
@@ -325,19 +326,6 @@ protected:
 
 	/** Pull PredictedPose XY toward Server in continuous Unreal space; leave Z to ground snap. */
 	void SoftReconcilePredictedTowardServer(const FACEPosition& Server, float DeltaTime, bool bAllowHeading);
-
-	/**
-	 * Client prediction runs at GetLocomotionSpeed(), but that assumes a default Run skill
-	 * (~200). A real low-skill character moves far slower on the server, so prediction races
-	 * ahead of every ~1 Hz anchor and the reconcile drags it back — the heavy rubber-band.
-	 * We measure the server's actual ground speed from consecutive self UpdatePosition packets
-	 * while running straight and fold it into PredictionSpeedScale so prediction tracks reality.
-	 */
-	void CalibratePredictionSpeedFromServer(const FACEPosition& ServerPose);
-	float PredictionSpeedScale = 1.f;
-	bool bHaveServerSpeedSample = false;
-	double LastServerSpeedSampleTime = 0.0;
-	FVector LastServerSpeedSamplePosUe = FVector::ZeroVector;
 
 	/** Numpad-driven orbit camera state. Values are captured from the pawn's spring arm. */
 	bool bCameraDefaultsCaptured = false;

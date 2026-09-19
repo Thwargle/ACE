@@ -21,7 +21,9 @@ namespace ACE.Server.Physics.Animation
         {
             var loadMod = EncumbranceSystem.GetBurdenMod(burden);
 
-            if (runSkill >= 800.0f)     // max run speed?
+            // Retail MovementSystem::GetRunRate has an exact-800 special case,
+            // not a threshold. Higher skills return to the normal curve.
+            if (runSkill == 800)
                 return 18.0f / 4.0f;
             else
                 return ((loadMod * ((float)runSkill / (runSkill + 200) * 11) + 4) / scaling) / 4.0f;

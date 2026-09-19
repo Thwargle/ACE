@@ -55,7 +55,7 @@ namespace
 	const FLinearColor HealthColor(0.62f, 0.08f, 0.06f, 1.f);
 	const FLinearColor StaminaColor(0.78f, 0.58f, 0.10f, 1.f);
 	const FLinearColor ManaColor(0.12f, 0.28f, 0.72f, 1.f);
-	const FLinearColor TextColor(0.92f, 0.89f, 0.80f, 1.f);
+	const FLinearColor HUDTextColor(0.92f, 0.89f, 0.80f, 1.f);
 	const FLinearColor GoldColor(0.87f, 0.74f, 0.35f, 1.f);
 	const FLinearColor LabelColor(0.72f, 0.68f, 0.56f, 1.f);
 	const FLinearColor ChatSystemColor(0.55f, 0.85f, 0.55f, 1.f);
@@ -120,7 +120,7 @@ namespace
 	constexpr uint32 DidRadarEast        = 0x06001938;
 	constexpr uint32 DidRadarSouth       = 0x0600193A;
 	constexpr uint32 DidRadarWest        = 0x0600193C;
-	constexpr uint32 DidLockUi           = 0x060074B7;
+	constexpr uint32 HUDDidLockUi           = 0x060074B7;
 	constexpr uint32 DidLockUiDown       = 0x060074B8;
 	constexpr uint32 DidOpenContainerOverlay = 0x06005D9C;
 	// classic_toolbar
@@ -541,7 +541,7 @@ UButton* UACEGameHUDWidget::AddToolButton(int32 X, int32 Y, int32 W, int32 H, co
 	{
 		UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
 		Label->SetText(FText::FromString(Text));
-		Label->SetColorAndOpacity(FSlateColor(TextColor));
+		Label->SetColorAndOpacity(FSlateColor(HUDTextColor));
 		Label->SetJustification(ETextJustify::Center);
 		// Labels must not steal clicks — the entire button texture is the hit target.
 		Label->SetVisibility(ESlateVisibility::HitTestInvisible);
@@ -744,9 +744,9 @@ void UACEGameHUDWidget::BuildVitalsWindow()
 		}
 	}
 
-	HealthLabel = AddCanvasLabel(OX, OY + 6, 188, 16, TEXT("Health"), TextColor, 9, ETextJustify::Center);
-	StaminaLabel = AddCanvasLabel(OX + 196, OY + 6, 188, 16, TEXT("Stamina"), TextColor, 9, ETextJustify::Center);
-	ManaLabel = AddCanvasLabel(OX + 392, OY + 6, 188, 16, TEXT("Mana"), TextColor, 9, ETextJustify::Center);
+	HealthLabel = AddCanvasLabel(OX, OY + 6, 188, 16, TEXT("Health"), HUDTextColor, 9, ETextJustify::Center);
+	StaminaLabel = AddCanvasLabel(OX + 196, OY + 6, 188, 16, TEXT("Stamina"), HUDTextColor, 9, ETextJustify::Center);
+	ManaLabel = AddCanvasLabel(OX + 392, OY + 6, 188, 16, TEXT("Mana"), HUDTextColor, 9, ETextJustify::Center);
 	BuildWindowIndex = INDEX_NONE;
 }
 
@@ -787,7 +787,7 @@ void UACEGameHUDWidget::BuildRadarWindow()
 	RadarCoordsText = AddCanvasLabel(OX, OY + 122, 120, 14, TEXT("0.0N, 0.0E"), LabelColor, 8, ETextJustify::Center);
 
 	// Retail LockUI button (27x27 art) — global floaty lock for all windows.
-	UiLockButton = AddToolButton(OX + 93, OY + 0, 27, 27, TEXT(""), 8, DidLockUi, DidLockUiDown);
+	UiLockButton = AddToolButton(OX + 93, OY + 0, 27, 27, TEXT(""), 8, HUDDidLockUi, DidLockUiDown);
 	UiLockButton->OnClicked.AddDynamic(this, &UACEGameHUDWidget::OnUiLockClicked);
 
 	BuildWindowIndex = INDEX_NONE;
@@ -830,7 +830,7 @@ void UACEGameHUDWidget::BuildRightPanel()
 	PanelPageBody->SetAutoWrapText(true);
 	PanelStatsLabels = AddCanvasLabel(OX + 14, OY + 58, 180, 360, TEXT(""), LabelColor, 10, ETextJustify::Left);
 	PanelStatsLabels->SetVisibility(ESlateVisibility::Collapsed);
-	PanelStatsValues = AddCanvasLabel(OX + 194, OY + 58, 92, 360, TEXT(""), TextColor, 10, ETextJustify::Right);
+	PanelStatsValues = AddCanvasLabel(OX + 194, OY + 58, 92, 360, TEXT(""), HUDTextColor, 10, ETextJustify::Right);
 	PanelStatsValues->SetVisibility(ESlateVisibility::Collapsed);
 
 	// Scrollable skill list (retail classic_skills) — leaves room for the XP raise footer.
@@ -1312,7 +1312,7 @@ void UACEGameHUDWidget::BuildToolbar()
 	UButton* UseBtn = AddToolButton(OX + 55, OY + 27, 23, 31, TEXT(""), 8, DidUseButton, DidUseButtonDown);
 	UseBtn->OnClicked.AddDynamic(this, &UACEGameHUDWidget::OnUseSelectedClicked);
 	SelectedFieldArt = AddArt(OX + 78, OY + 27, 140, 31, DidSelectedField, BarBackColor);
-	SelectedNameLabel = AddCanvasLabel(OX + 90, OY + 28, 116, 14, TEXT(""), TextColor, 8, ETextJustify::Left);
+	SelectedNameLabel = AddCanvasLabel(OX + 90, OY + 28, 116, 14, TEXT(""), HUDTextColor, 8, ETextJustify::Left);
 	SelectedHealthFill = WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
 	SelectedHealthFill->SetBrush(MakeFallbackBrush(HealthColor));
 	SelectedHealthFill->SetBrushColor(HealthColor);
@@ -1423,13 +1423,13 @@ void UACEGameHUDWidget::BuildCombatHotbar()
 		if (i < 9)
 		{
 			UTextBlock* Num = AddCanvasLabel(SX + 1, SY + 1, 10, 10,
-				FString::FromInt(i + 1), TextColor, 7, ETextJustify::Left);
+				FString::FromInt(i + 1), HUDTextColor, 7, ETextJustify::Left);
 			Num->SetVisibility(ESlateVisibility::HitTestInvisible);
 			CombatSpellSlotNumbers.Add(Num);
 		}
 	}
 
-	CombatSpellNameLabel = AddCanvasLabel(OX + 40, OY + 58, 450, 18, TEXT(""), TextColor, 10, ETextJustify::Left);
+	CombatSpellNameLabel = AddCanvasLabel(OX + 40, OY + 58, 450, 18, TEXT(""), HUDTextColor, 10, ETextJustify::Left);
 	CastSpellButton = AddToolButton(OX + 725, OY + 24, 75, 32, TEXT("Cast"), 11, DidCastBtn, DidCastBtnDown);
 	CastSpellButton->OnClicked.AddDynamic(this, &UACEGameHUDWidget::OnCastSpellClicked);
 
@@ -1478,7 +1478,7 @@ void UACEGameHUDWidget::BuildChat()
 	EntryStyle.SetBackgroundImageNormal(MakeRoundedBrush(BarBackColor, 2.f));
 	EntryStyle.SetBackgroundImageHovered(MakeRoundedBrush(BarBackColor, 2.f));
 	EntryStyle.SetBackgroundImageFocused(MakeRoundedBrush(FLinearColor(0.09f, 0.08f, 0.06f, 1.f), 2.f));
-	EntryStyle.SetForegroundColor(FSlateColor(TextColor));
+	EntryStyle.SetForegroundColor(FSlateColor(HUDTextColor));
 	FSlateFontInfo EntryFont = EntryStyle.TextStyle.Font;
 	EntryFont.Size = 9;
 	EntryStyle.TextStyle.SetFont(EntryFont);
@@ -1983,7 +1983,7 @@ void UACEGameHUDWidget::EnsureAttributeWidgets()
 	AttrHeaderTitle->SetVisibility(ESlateVisibility::Collapsed);
 	AttrHeaderTotalXpLabel = AddCanvasLabel(TX, TY + 70, 130, 18, TEXT("Total XP"), LabelColor, 9, ETextJustify::Left);
 	AttrHeaderTotalXpLabel->SetVisibility(ESlateVisibility::Collapsed);
-	AttrHeaderTotalXpValue = AddCanvasLabel(TX + 130, TY + 70, 100, 18, TEXT("0"), TextColor, 9, ETextJustify::Right);
+	AttrHeaderTotalXpValue = AddCanvasLabel(TX + 130, TY + 70, 100, 18, TEXT("0"), HUDTextColor, 9, ETextJustify::Right);
 	AttrHeaderTotalXpValue->SetVisibility(ESlateVisibility::Collapsed);
 	AttrHeaderDivider = AddArt(TX + 230, TY, 5, 105, DidAttrHeaderDivider, SideBarColor);
 	AttrHeaderDivider->SetVisibility(ESlateVisibility::Collapsed);
@@ -1998,7 +1998,7 @@ void UACEGameHUDWidget::EnsureAttributeWidgets()
 	AttrXpToLevelMeterFill->SetVisibility(ESlateVisibility::Collapsed);
 	AttrXpToLevelLabel = AddCanvasLabel(TX, TY + 88, 130, 17, TEXT("XP to Level"), LabelColor, 8, ETextJustify::Left);
 	AttrXpToLevelLabel->SetVisibility(ESlateVisibility::Collapsed);
-	AttrXpToLevelValue = AddCanvasLabel(TX + 130, TY + 88, 100, 17, TEXT(""), TextColor, 8, ETextJustify::Right);
+	AttrXpToLevelValue = AddCanvasLabel(TX + 130, TY + 88, 100, 17, TEXT(""), HUDTextColor, 8, ETextJustify::Right);
 	AttrXpToLevelValue->SetVisibility(ESlateVisibility::Collapsed);
 
 	AttrDividerTop = AddArt(TX, TY + 105, 300, 7, DidAttrHeaderDivider, SideBarColor, EACEHudArtTile::Horizontal);
@@ -2038,7 +2038,7 @@ void UACEGameHUDWidget::EnsureAttributeWidgets()
 		Name->SetVisibility(ESlateVisibility::Collapsed);
 		AttrRowNames.Add(Name);
 
-		UTextBlock* Value = AddCanvasLabel(TX + 175, RY, 100, 20, TEXT("0"), TextColor, 9, ETextJustify::Right);
+		UTextBlock* Value = AddCanvasLabel(TX + 175, RY, 100, 20, TEXT("0"), HUDTextColor, 9, ETextJustify::Right);
 		Value->SetVisibility(ESlateVisibility::Collapsed);
 		AttrRowValues.Add(Value);
 	}
@@ -2059,7 +2059,7 @@ void UACEGameHUDWidget::EnsureAttributeWidgets()
 	AttrRaiseXpText = AddCanvasLabel(TX + 5, TY + 302, 145, 17, TEXT(""), LabelColor, 8, ETextJustify::Left);
 	AttrRaiseXpText->SetVisibility(ESlateVisibility::Collapsed);
 	MarkLastPiece(false, true);
-	AttrUnassignedXpText = AddCanvasLabel(TX + 150, TY + 302, 95, 17, TEXT(""), TextColor, 8, ETextJustify::Right);
+	AttrUnassignedXpText = AddCanvasLabel(TX + 150, TY + 302, 95, 17, TEXT(""), HUDTextColor, 8, ETextJustify::Right);
 	AttrUnassignedXpText->SetVisibility(ESlateVisibility::Collapsed);
 	MarkLastPiece(false, true);
 	AttrSelectedHint = AddCanvasLabel(TX + 5, TY + 319, 240, 18, TEXT(""), LabelColor, 8, ETextJustify::Left);
@@ -2911,7 +2911,7 @@ void UACEGameHUDWidget::UpdateUiLockVisual()
 		return;
 	}
 	// Locked uses normal lock art; unlocked uses the pressed/alternate state.
-	const uint32 Did = bUiLocked ? DidLockUi : DidLockUiDown;
+	const uint32 Did = bUiLocked ? HUDDidLockUi : DidLockUiDown;
 	if (UTexture2D* Tex = UiTex(Did))
 	{
 		FButtonStyle Style = UiLockButton->GetStyle();
@@ -3026,7 +3026,7 @@ void UACEGameHUDWidget::RefreshSkillsUI()
 
 		UTextBlock* NameText = WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
 		NameText->SetText(FText::FromString(!Sk.Name.IsEmpty() ? Sk.Name : DatName));
-		NameText->SetColorAndOpacity(FSlateColor(bSel ? GoldColor : TextColor));
+		NameText->SetColorAndOpacity(FSlateColor(bSel ? GoldColor : HUDTextColor));
 		NameText->SetVisibility(ESlateVisibility::HitTestInvisible);
 		FSlateFontInfo NameFont = NameText->GetFont();
 		NameFont.Size = 9;
@@ -3410,7 +3410,7 @@ void UACEGameHUDWidget::RefreshSpellbookUI()
 
 		UTextBlock* NameText = WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
 		NameText->SetText(FText::FromString(SpellName));
-		NameText->SetColorAndOpacity(FSlateColor(TextColor));
+		NameText->SetColorAndOpacity(FSlateColor(HUDTextColor));
 		FSlateFontInfo NameFont = NameText->GetFont();
 		NameFont.Size = 9;
 		NameText->SetFont(NameFont);

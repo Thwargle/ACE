@@ -171,7 +171,7 @@ bool FACELedgeStairsTest::RunTest(const FString&)
  for(int32 Skill : {200,600})
  for(int32 Rate : {20,30,72,90})
  {
-  Client->SetRunSkill(Skill); Controller->PredictionSpeedScale=1.f;
+  Client->SetRunSkill(Skill);
   Place(FVector(-10000,9000,3050),0x7D640004);
   const FVector Begin=Pawn->GetActorLocation();
   Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));

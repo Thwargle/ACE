@@ -44,7 +44,7 @@ namespace
 	const FLinearColor Tile(.065f, .083f, .11f, 1);
 	const FLinearColor Gold(.78f, .57f, .25f, 1);
 	const FLinearColor Muted(.49f, .57f, .67f, 1);
-	const FLinearColor Text(.88f, .9f, .92f, 1);
+	const FLinearColor LobbyTextColor(.88f, .9f, .92f, 1);
 	void ButtonStyle(UButton* Button, bool Accent)
 	{
 		FButtonStyle Style;
@@ -55,7 +55,7 @@ namespace
 		Style.SetNormalPadding(FMargin(14,10)); Style.SetPressedPadding(FMargin(14,10));
 		Button->SetStyle(Style);
 		if (auto* Size=Cast<USizeBox>(Button->GetContent()))
-			if (auto* Caption=Cast<UTextBlock>(Size->GetContent())) Caption->SetColorAndOpacity(Accent?Ink:Text);
+			if (auto* Caption=Cast<UTextBlock>(Size->GetContent())) Caption->SetColorAndOpacity(Accent?Ink:LobbyTextColor);
 	}
 	void AddLine(UVerticalBox* Box, UWidget* Child, float Bottom = 12)
 	{
@@ -75,7 +75,7 @@ UTextBlock* UACELoginWidget::Label(const FString& String, int32 Size, bool bMute
 	auto* T = WidgetTree->ConstructWidget<UTextBlock>();
 	T->SetText(FText::FromString(String));
 	T->SetFont(FCoreStyle::GetDefaultFontStyle(Size >= 26 ? TEXT("Bold") : TEXT("Regular"), Size));
-	T->SetColorAndOpacity(bMuted ? Muted : Text);
+	T->SetColorAndOpacity(bMuted ? Muted : LobbyTextColor);
 	T->SetAutoWrapText(true);
 	T->SetVisibility(ESlateVisibility::HitTestInvisible);
 	return T;
@@ -88,7 +88,7 @@ UACELoginActionButton* UACELoginWidget::ActionButton(const FString& Title, const
 	B->OnClicked.AddDynamic(B, &UACELoginActionButton::HandleAction);
 	ButtonStyle(B, bAccent);
 	auto* T = Label(Title, 18); T->SetAutoWrapText(false); T->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
-	T->SetJustification(ETextJustify::Center); T->SetColorAndOpacity(bAccent ? Ink : Text);
+	T->SetJustification(ETextJustify::Center); T->SetColorAndOpacity(bAccent ? Ink : LobbyTextColor);
 	auto* Size = WidgetTree->ConstructWidget<USizeBox>(); Size->SetMinDesiredHeight(26);
 	Size->SetContent(T); Cast<USizeBoxSlot>(T->Slot)->SetVerticalAlignment(VAlign_Center);
 	B->SetContent(Size);
@@ -103,8 +103,8 @@ UEditableTextBox* UACELoginWidget::Field(UVerticalBox* Parent, const FString& Ti
 	Style.SetBackgroundImageNormal(FSlateRoundedBoxBrush(Ink, 6.f));
 	Style.SetBackgroundImageHovered(FSlateRoundedBoxBrush(Tile, 6.f));
 	Style.SetBackgroundImageFocused(FSlateRoundedBoxBrush(Ink, 6.f, Gold, 1.5f));
-	Style.SetForegroundColor(Text); Style.SetPadding(FMargin(12,10));
-	Style.SetTextStyle(FTextBlockStyle().SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),20)).SetColorAndOpacity(Text));
+	Style.SetForegroundColor(LobbyTextColor); Style.SetPadding(FMargin(12,10));
+	Style.SetTextStyle(FTextBlockStyle().SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),20)).SetColorAndOpacity(LobbyTextColor));
 	Box->SetWidgetStyle(Style); Box->SetIsPassword(bSecret); Box->SetClearKeyboardFocusOnCommit(true);
 	Box->SetSelectAllTextWhenFocused(true);
 	AddLine(Parent, Box, 12);

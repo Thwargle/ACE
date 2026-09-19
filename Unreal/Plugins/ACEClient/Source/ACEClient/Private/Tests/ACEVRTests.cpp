@@ -1780,10 +1780,6 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		VR->GetMovement(F,R,Run);
 		TestTrue(TEXT("Full forward Touch input reaches retail maximum independently of FPS"),FMath::IsNearlyEqual(F,1.f,.0001f) && FMath::IsNearlyZero(R));
 	}
-	PC->PredictionSpeedScale=.9f; PC->bHaveServerSpeedSample=true;
-	PC->CalibratePredictionSpeedFromServer(FACEPosition());
-	TestEqual(TEXT("VR never learns a slower run speed from analog input or delayed server positions"),PC->PredictionSpeedScale,1.f);
-	TestFalse(TEXT("VR clears the stale speed estimator"),PC->bHaveServerSpeedSample);
 	VR->Client->SetRunSkill(100); const float LowSkillSpeed = F * VR->Client->GetLocomotionSpeed(Run);
 	VR->Client->SetRunSkill(600); const float HighSkillSpeed = F * VR->Client->GetLocomotionSpeed(Run);
 	TestTrue(TEXT("VR speed increases with the character's Run skill"), HighSkillSpeed > LowSkillSpeed);

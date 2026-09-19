@@ -373,9 +373,9 @@ void UACEVRComponent::TickComponent(float Dt, ELevelTick TickType, FActorCompone
 				TimingRender / TimingFrames, TimingRHI / TimingFrames,
 				Client && Client->GetSessionState() == EACESessionState::InWorld, bInventoryOpen);
 if (TimingMoveSeconds > .1 && Client)
-                UE_LOG(LogTemp, Log, TEXT("ACE VR movement: actual=%.2fm/s requested=%.2fm/s run=%d rawStick=%.2f axis=%.2f scale=%.2f prediction=%.2f sim/wall=%.3f moving=%.2fs"),
-                    TimingMoveDistance / TimingMoveSeconds / PC->WorldScale, Client->GetLocomotionSpeed(Settings->bRun),
-                    Settings->bRun, MoveStick.Y, SmoothedMoveStick.Y, Settings->MovementScale, PC->PredictionSpeedScale,
+                UE_LOG(LogTemp, Log, TEXT("ACE VR movement: actual=%.2fm/s requested=%.2fm/s run=%d rawStick=%.2f axis=%.2f scale=%.2f bodyScale=%.2f sim/wall=%.3f moving=%.2fs"),
+                    TimingMoveDistance / TimingMoveSeconds / PC->WorldScale, Client->GetLocomotionSpeed(Settings->bRun) * PC->GetLocalCreatureScale(),
+                    Settings->bRun, MoveStick.Y, SmoothedMoveStick.Y, Settings->MovementScale, PC->GetLocalCreatureScale(),
                     TimingSeconds > 0 ? TimingWorldSeconds / TimingSeconds : 0., TimingMoveSeconds);
             TimingMoveSeconds = TimingMoveDistance = TimingWorldSeconds = 0.;
             TimingSeconds = TimingGame = TimingRender = TimingRHI = 0.; TimingFrames = 0;

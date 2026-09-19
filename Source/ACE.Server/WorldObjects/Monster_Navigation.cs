@@ -346,6 +346,7 @@ namespace ACE.Server.WorldObjects
         public float GetRunRate()
         {
             var burden = 0.0f;
+            var runSkill = GetCreatureSkill(Skill.Run).Current;
 
             // assuming burden only applies to players...
             if (this is Player player)
@@ -355,13 +356,12 @@ namespace ACE.Server.WorldObjects
                 var capacity = EncumbranceSystem.EncumbranceCapacity((int)strength, player.AugmentationIncreasedCarryingCapacity);
                 burden = EncumbranceSystem.GetBurden(capacity, EncumbranceVal ?? 0);
 
-                // TODO: find this exact formula in client
-                // technically this would be based on when the player releases / presses the movement key after stamina > 0
+                // Retail CACQualities::InqRunRate clears effective skill on
+                // exhaustion, including the special skill-800 speed.
                 if (player.IsExhausted)
-                    burden = 3.0f;
+                    runSkill = 0;
             }
 
-            var runSkill = GetCreatureSkill(Skill.Run).Current;
             var runRate = MovementSystem.GetRunRate(burden, (int)runSkill, 1.0f);
 
             return (float)runRate;

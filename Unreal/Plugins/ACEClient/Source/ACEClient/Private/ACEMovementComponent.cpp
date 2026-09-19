@@ -1,5 +1,6 @@
 #include "ACEMovementComponent.h"
 #include "ACEClientSubsystem.h"
+#include "ACESession.h"
 #include "GameFramework/Actor.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -73,9 +74,13 @@ void UACEMovementComponent::TickComponent(float DeltaTime, ELevelTick TickType, 
 		if (Pos.IsValid())
 		{
 			const float Speed = Client->GetLocomotionSpeed(bRunning);
+			const auto Session = Client->GetSession();
+			const auto* Self = Session ? Session->GetWorldObjects().Find(Client->GetPlayerGuid()) : nullptr;
+			const float Scale = Self && FMath::IsFinite(Self->Scale) && Self->Scale > KINDA_SMALL_NUMBER ? Self->Scale : 1.f;
 			// Location is AC-space; GetAce*InAcSpace for prediction.
 			const float BackFactor = (ForwardInput < 0.f) ? 0.65f : 1.f;
-			Pos.Location += (Pos.GetAceForwardInAcSpace() * (ForwardInput * BackFactor) + Pos.GetAceRightInAcSpace() * StrafeInput) * Speed * DeltaTime;
+			Pos.Location += (Pos.GetAceForwardInAcSpace() * (ForwardInput * BackFactor) * Speed
+				+ Pos.GetAceRightInAcSpace() * StrafeInput * Client->GetSidestepSpeed(bRunning)) * Scale * DeltaTime;
 			Pos.NormalizeOutdoorLandblock();
 			Client->SetReportedPosition(Pos);
 			if (bSyncActorFromServer)

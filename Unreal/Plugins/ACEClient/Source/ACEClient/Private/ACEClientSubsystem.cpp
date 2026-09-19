@@ -100,12 +100,9 @@ void UACEClientSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	});
 	Session->OnVitalsUpdated.AddLambda([this](const FACEPlayerVitals& Vitals)
 	{
-		if (Vitals.RunSkillCurrent > 0)
+		if (Vitals.bValid)
 		{
 			SetRunSkill(Vitals.RunSkillCurrent);
-		}
-		if (Vitals.JumpSkillCurrent > 0)
-		{
 			SetJumpSkill(Vitals.JumpSkillCurrent);
 		}
 		OnVitalsUpdated.Broadcast(Vitals);
@@ -1393,38 +1390,61 @@ TArray<FACEWorldObject> UACEClientSubsystem::GetPlayerPacks() const
 	return Out;
 }
 
+float UACEClientSubsystem::GetMovementBurden() const
+{
+	int32 Encumbrance = 0;
+	if (Session && Session->GetPlayerVitals().bValid && Session->TryGetPlayerEncumbrance(Encumbrance))
+	{
+		// Do not wait for the inventory UI to refresh before applying a weight or
+		// Strength change to movement. Use the same capacity as the retail HUD.
+		const auto& V = Session->GetPlayerVitals();
+		const float Capacity = FMath::Max(1, V.GetBuffedStrength()) *
+			(150.f + 30.f * FMath::Clamp(V.CarryingCapacityAugs, 0, 5));
+		return FMath::Max(0, Encumbrance) / Capacity;
+	}
+	return Burden;
+}
+
 float UACEClientSubsystem::GetRunRate() const
 {
 	// ACE.Server EncumbranceSystem.GetBurdenMod + MovementSystem.GetRunRate
+	const float Load = GetMovementBurden();
 	float LoadMod = 1.f;
-	if (Burden >= 2.f)
+	if (Load >= 2.f)
 	{
 		LoadMod = 0.f;
 	}
-	else if (Burden >= 1.f)
+	else if (Load >= 1.f)
 	{
-		LoadMod = 2.f - Burden;
+		LoadMod = 2.f - Load;
 	}
 
-	if (RunSkill >= 800)
+	// CACQualities::InqRunRate uses zero skill while exhausted. An unknown
+	// stamina value before PlayerDescription must not slow a valid preview.
+	const auto* Vitals = Session ? &Session->GetPlayerVitals() : nullptr;
+	const int32 EffectiveSkill = Vitals && Vitals->bValid && Vitals->Stamina <= 0 ? 0 : RunSkill;
+	// Retail's special case is EXACTLY 800 (verified against acclient.exe),
+	// not a cap for all higher skills. Ordinary skills use the curve below.
+	if (EffectiveSkill == 800)
 	{
 		return 18.f / 4.f;
 	}
-	const float Skill = static_cast<float>(FMath::Max(0, RunSkill));
+	const float Skill = static_cast<float>(FMath::Max(0, EffectiveSkill));
 	return (LoadMod * (Skill / (Skill + 200.f) * 11.f) + 4.f) / 4.f;
 }
 
 float UACEClientSubsystem::GetJumpHeight(float Extent) const
 {
 	// ACE.Server MovementSystem.GetJumpHeight
+	const float Load = GetMovementBurden();
 	float LoadMod = 1.f;
-	if (Burden >= 2.f)
+	if (Load >= 2.f)
 	{
 		LoadMod = 0.f;
 	}
-	else if (Burden >= 1.f)
+	else if (Load >= 1.f)
 	{
-		LoadMod = 2.f - Burden;
+		LoadMod = 2.f - Load;
 	}
 	const float Power = FMath::Clamp(Extent, 0.f, 1.f);
 	const float Skill = static_cast<float>(FMath::Max(0, JumpSkill));

@@ -268,6 +268,7 @@ public:
 	uint64 GetIdentifyRequestSerial() const { return IdentifyRequestSerial; }
 	int32 GetIdentifyRequestGuid() const { return IdentifyRequestGuid; }
 private:
+	float GetMovementBurden() const;
 	uint64 IdentifyRequestSerial = 0;
 	int32 IdentifyRequestGuid = 0;
 public:
@@ -679,7 +680,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "ACE|Movement")
 	float GetRunRate() const;
 
-	/** Predicted locomotion speed in AC units/sec (walk uses rate 1, run uses GetRunRate). */
+	/** Unscaled locomotion speed in AC units/sec. Ground prediction applies creature scale separately. */
 	UFUNCTION(BlueprintPure, Category = "ACE|Movement")
 	float GetLocomotionSpeed(bool bRunning) const;
 
@@ -742,7 +743,7 @@ private:
 	UPROPERTY()
 	TObjectPtr<class UACEUIResourceResolver> UIResourceResolver;
 
-	/** Until we parse skills from the server, default to a mid-trained Run (~200). */
+	/** Preview defaults, replaced by PlayerDescription and subsequent skill updates. */
 	int32 RunSkill = 200;
 	int32 JumpSkill = 200;
 	float Burden = 0.f;
