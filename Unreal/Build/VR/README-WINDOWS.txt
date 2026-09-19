@@ -1,8 +1,7 @@
-ACE WINDOWS TEST CLIENT - RELEASE 42
-Build 2026.09.17.52
+AC:Unreal / AC:VR - WINDOWS CLIENT
 
-1. Extract the complete ACE-Windows-Test-v42 folder. Keep ACEViewer.exe,
-   ACEViewer, and Engine together. Unreal Editor is not required.
+1. Extract the complete AC-Unreal-and-AC-VR-Windows folder. Keep ACUnreal.exe,
+   ACUnreal, and Engine together. Unreal Editor is not required.
 
 2. Have your own Asheron's Call data installed at:
       C:\Turbine\Asheron's Call
@@ -10,12 +9,14 @@ Build 2026.09.17.52
    client_local_English.dat. client_highres.dat is optional.
    Game data is not included in this download.
 
-3. Desktop play: run ACEViewer.exe.
+3. Desktop play (AC:Unreal): run AC-Unreal.bat.
+   ACUnreal.exe is the shared runtime executable.
 
    PC VR: start the Meta PC software and connect your headset. For a Quest,
    enter its PC Link/Air Link connection first. Start SteamVR and wait for the
    headset and controllers to connect. Set SteamVR as the current OpenXR
-   runtime in its settings, then double-click Launch-VR.bat.
+   runtime in its settings, then double-click AC-VR.bat (AC:VR).
+   The existing Launch-VR.bat shortcut also works.
 
 4. Enter the server host/address, port, and YOUR account and password.
    Ask the server owner for these. The packaged LAN default is not an Internet

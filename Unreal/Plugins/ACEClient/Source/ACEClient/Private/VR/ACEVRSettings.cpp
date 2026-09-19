@@ -31,6 +31,8 @@ void UACEVRSettings::ApplyRenderScale() const
 
 void UACEVRSettings::Sanitize()
 {
+	if (MovementDirection < 0) MovementDirection = bHeadRelativeMovement ? 0 : 1;
+	MovementDirection = FMath::Clamp(MovementDirection, 0, 2);
 	if (SettingsVersion < 1)
 	{
 		if (FMath::IsNearlyEqual(WristScale, .045f)) WristScale = .06f;
@@ -64,6 +66,7 @@ void UACEVRSettings::Sanitize()
 	VitalsViewOffset.Z = FMath::Clamp(VitalsViewOffset.Z, -VitalsViewOffset.X * .65, VitalsViewOffset.X * .65);
 	Clamp(MeleeMinSpeed, 250.f, 250.f, 400.f);
 	Clamp(BowFullDraw, 60.f, 30.f, 90.f);
+	Clamp(BowAnchorOffset, 10.f, 0.f, 20.f);
 	Clamp(HandPitch, 10.f, -30.f, 30.f);
 	Clamp(RenderScale, 100.f, 60.f, 150.f);
 	if (MSAASamples != 2 && MSAASamples != 4) MSAASamples = 4;

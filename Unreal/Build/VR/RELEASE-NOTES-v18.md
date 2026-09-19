@@ -22,12 +22,12 @@ the latest live sign-area sample was about 28 FPS. This release contains no new
 performance optimization beyond version 17. Later performance work will use a
 different release number.
 
-For native Quest, send ACE-Quest-Test-v18-installer-r4.zip. Extract it and read
+For native Quest, send AC-VR-Quest-v18-installer-r4.zip. Extract it and read
 README.txt, then run Install-Quest.cmd. A USB data cable, Developer Mode, Android
 Platform-Tools, and the recipient's own Asheron's Call DAT files are required.
 An existing installation can be updated without uninstalling.
 
-For PC VR or desktop play, send ACE-Windows-Test-v18.zip. Extract the complete
+For PC VR or desktop play, send AC-Unreal-and-AC-VR-Windows-v18.zip. Extract the complete
 folder and read README-WINDOWS.txt. Unreal Editor is not needed.
 
 Both clients need a reachable ACE server and the recipient's own account. The

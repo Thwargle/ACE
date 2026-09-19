@@ -188,6 +188,29 @@ bool FACERetailRuntimeRegressionTest::RunTest(const FString& Parameters)
         NPCPick->SetActorHiddenInGame(false);
         TestTrue(TEXT("VR shares the desktop model-surface priority"),
             ACEVisibleObjectPick::Trace(*World,FVector(0,8000,2000),FVector(1000,8000,2000),nullptr,nullptr,false)==NPCPick);
+        auto* WallActor=World->SpawnActor<AActor>();
+        auto* WallMesh=NewObject<UProceduralMeshComponent>(WallActor);
+        WallActor->AddInstanceComponent(WallMesh);WallMesh->RegisterComponent();
+        WallMesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+        WallMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
+        WallMesh->SetCollisionResponseToChannel(ECC_Camera,ECR_Block);
+        WallMesh->bUseComplexAsSimpleCollision=true;
+        WallMesh->SetWorldLocation(FVector(50,8000,2000));
+        WallMesh->CreateMeshSection(0,{{0,-80,-80},{0,80,-80},{0,0,80}},{0,1,2},{},{},{},{},true);
+        TestNull(TEXT("Desktop cannot click through a wall that ignores object picking"),
+            ACEVisibleObjectPick::Trace(*World,FVector(0,8000,2000),FVector(1000,8000,2000),nullptr));
+        TestNull(TEXT("VR selection ray stops at the same wall"),
+            ACEVisibleObjectPick::Trace(*World,FVector(0,8000,2000),FVector(1000,8000,2000),nullptr,nullptr,false));
+        WallMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);WallActor->Destroy();
+        TestTrue(TEXT("An unobstructed opening still allows selection"),
+            ACEVisibleObjectPick::Trace(*World,FVector(0,8000,2000),FVector(1000,8000,2000),nullptr)==NPCPick);
+        auto* DistantRoom=World->SpawnActor<AACEEnvCellActor>();
+        DistantRoom->SetActorLocation(FVector(50,8000,2000));DistantRoom->SetActorEnableCollision(false);
+        DistantRoom->SetActorHiddenInGame(false);
+        DistantRoom->CellMesh->CreateMeshSection(0,{{0,-80,-80},{0,80,-80},{0,0,80}},{0,1,2},{},{},{},{},false);
+        TestNull(TEXT("A visible room wall blocks selection even outside active movement collision"),
+            ACEVisibleObjectPick::Trace(*World,FVector(0,8000,2000),FVector(1000,8000,2000),nullptr,nullptr,false));
+        DistantRoom->Destroy();
         TArray<AActor*> Crowd;
         for(int32 I=0;I<256;++I)
         {

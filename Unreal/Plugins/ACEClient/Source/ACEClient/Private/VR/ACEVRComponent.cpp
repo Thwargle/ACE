@@ -1,4 +1,5 @@
 #include "VR/ACEVRComponent.h"
+#include "ACEClientBuild.h"
 #include "ACEVRUIStyle.h"
 #include "VR/ACEVRSettings.h"
 #include "VR/ACEVRWidget.h"
@@ -198,6 +199,7 @@ void UACEVRComponent::ActivateRig()
 	if (auto* App = GetOwner()->FindComponentByClass<UACECharacterAppearanceComponent>())
 		AddTickPrerequisiteComponent(App);
 	bActive = true;
+	ACEClientBuild::UpdateWindowTitle(GetWorld(), true);
 	Client->OnVendorOpened.AddUniqueDynamic(this, &UACEVRComponent::RevealRetailDialog);
 	Client->OnExternalContainerOpened.AddUniqueDynamic(this, &UACEVRComponent::RevealRetailDialog);
 	Client->OnTradeStateChanged.AddUniqueDynamic(this, &UACEVRComponent::TradeChanged);
@@ -332,6 +334,18 @@ void UACEVRComponent::TickComponent(float Dt, ELevelTick TickType, FActorCompone
 				const FTransform Visual = I == 0 ? Parts[I]->GetComponentTransform() : GetAvatarGrip(I == 1);
 				Pose.Poses[I] = FTransform(Visual.GetRotation(), (Visual.GetLocation()-Feet) / PC->WorldScale);
 			}
+			TArray<AActor*> Equipment; GetOwner()->GetAttachedActors(Equipment,true,true);
+			for (auto* Actor:Equipment)
+				if (auto* Item=Cast<AACEWorldEntityActor>(Actor); Item && Item->GetACEGuid()==EquippedMissileWeapon().Guid && !Item->IsHidden())
+				{
+					Pose.Weapon=Item->GetACEGuid();
+					Pose.Poses[3]=FTransform(Item->GetActorQuat(),(Item->GetActorLocation()-Feet)/PC->WorldScale);break;
+				}
+			if (AmmoActor && !AmmoActor->IsHidden())
+			{
+				Pose.Ammo=AmmoVisualGuid;
+				Pose.Poses[4]=FTransform(AmmoActor->GetActorQuat(),(AmmoActor->GetActorLocation()-Feet)/PC->WorldScale);
+			}
 			Session->SendVRPose(Pose);
 		}
 	}
@@ -429,7 +443,8 @@ bool UACEVRComponent::IsInputBlocked() const
 
 FVector UACEVRComponent::GetBodyForward() const
 {
-	const auto* Source = Settings->bHeadRelativeMovement ? static_cast<USceneComponent*>(Head.Get()) : LeftAim.Get();
+	const auto* Source = Settings->MovementDirection == 2 ? TrackingOrigin.Get()
+		: Settings->MovementDirection == 1 ? static_cast<USceneComponent*>(LeftAim.Get()) : Head.Get();
 	FVector F = Source ? Source->GetForwardVector() : FVector::ForwardVector; F.Z = 0.f;
 	return F.GetSafeNormal(SMALL_NUMBER, FVector::ForwardVector);
 }
@@ -624,6 +639,19 @@ void UACEVRComponent::UpdateComfort(float Dt)
 		const FVector Center = GetOwner()->GetActorLocation();
 		Occluded = GetWorld()->SweepSingleByChannel(Hit, Center, Head->GetComponentLocation(), FQuat::Identity,
 			ECC_Camera, FCollisionShape::MakeSphere(9.f), Q);
+		// Water shares the outdoor heightfield with land. Its surface is not a
+		// solid ceiling: retail settles the player below it by water depth.
+		// Ignore only a wet terrain hit, then repeat to retain walls/rocks beyond it.
+		auto* Dat = GetWorld()->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
+		for (int32 Attempt=0; Occluded && Attempt<4; ++Attempt)
+		{
+			auto* Surface=Hit.GetComponent();
+			if (!Dat || !Surface || !Surface->ComponentHasTag(TEXT("ACEOutdoorTerrain"))
+				|| Dat->GetOutdoorWaterDepthCm(Hit.ImpactPoint.X,Hit.ImpactPoint.Y,PC->WorldScale)<=0.f) break;
+			Q.AddIgnoredComponent(Surface);
+			Occluded=GetWorld()->SweepSingleByChannel(Hit,Center,Head->GetComponentLocation(),FQuat::Identity,
+				ECC_Camera,FCollisionShape::MakeSphere(9.f),Q);
+		}
 		// A heightfield is one-sided. If a low frame rate or a room-scale lean
 		// puts both trace endpoints below it, a sweep can miss its back face.
 		// Check the eyes themselves, and never apply outdoor height to interiors.
@@ -631,8 +659,7 @@ void UACEVRComponent::UpdateComfort(float Dt)
 		{
 			const FVector Eye = Head->GetComponentLocation();
 			float GroundZ;
-			if (auto* Dat = GetWorld()->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
-				Dat && Dat->SampleOutdoorGroundZ(Eye.X, Eye.Y, PC->WorldScale, GroundZ))
+			if (Dat && Dat->SampleOutdoorGroundZ(Eye.X, Eye.Y, PC->WorldScale, GroundZ))
 				Occluded = Eye.Z < GroundZ + 12.f;
 		}
 	}

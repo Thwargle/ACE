@@ -31,3 +31,9 @@ Saved/
 !/diag/UIInventory/
 /PackagedVR/
 /UpgradeLog*.htm
+
+# Ad-hoc validation/capture output outside the usual Saved directory.
+/Automation/
+/Validation/
+/Captures/
+/Testing/

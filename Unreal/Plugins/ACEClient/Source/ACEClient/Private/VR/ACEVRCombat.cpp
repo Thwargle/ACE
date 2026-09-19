@@ -17,6 +17,11 @@
 #include "ProceduralMeshComponent.h"
 #include "ACEVisibleObjectPick.h"
 #include "Misc/ScopeExit.h"
+#include "HAL/IConsoleManager.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
+
+static TAutoConsoleVariable<int32> CVarProjectileBodyBounds(TEXT("ace.VR.ProjectileBodyBounds"),1,
+	TEXT("Prepare creature contact bounds once per trajectory before detailed part checks."));
 
 bool UACEVRComponent::TryDropInventoryItem(int32 Item, int32 SplitAmount)
 {
@@ -57,14 +62,22 @@ bool UACEVRComponent::IsAmmoLauncher() const { const int32 Style = MissileStyle(
 FACEWorldObject UACEVRComponent::EquippedAmmo() const
 {
 	if (!Client) return {};
-	const int32 Expected = MissileStyle() == 0x20 ? 2 : 1;
-	for (const auto& Item : Client->GetEquippedItems())
-		if ((Item.CurrentWieldedLocation & ACEEquipMask::MissileAmmo) != 0
-			&& (Item.AmmoType == 0 || (Item.AmmoType & Expected) != 0)) return Item;
+	const int32 Style = MissileStyle();
+	const int32 Expected = Style == 0x10 ? (1|8|64) : Style == 0x20 ? (2|16|128) : Style == 0x400 ? (4|32|256) : 0;
+	if (!Expected) return {}; // Thrown weapons are their own ammunition.
+	if (const auto Session = Client->GetSession())
+		if (const auto* Item = Session->FindEquippedItem(ACEEquipMask::MissileAmmo, 0, Expected)) return *Item;
 	return {};
 }
 
 int32 UACEVRComponent::GetCombatMode() const { return Client ? Client->GetPlayerVitals().CombatMode : ACECombatMode::NonCombat; }
+
+bool UACEVRComponent::HasEquippedCaster() const
+{
+	if (const auto Session = Client ? Client->GetSession() : nullptr)
+		return Session->FindEquippedItem(ACEEquipMask::Held, ACEItemType::Caster) != nullptr;
+	return false;
+}
 
 FACEWorldObject UACEVRComponent::EquippedWeapon() const
 {
@@ -72,14 +85,15 @@ FACEWorldObject UACEVRComponent::EquippedWeapon() const
 	const int32 Mode = GetCombatMode();
 	const int64 Mask = Mode == ACECombatMode::Magic ? ACEEquipMask::Held : Mode == ACECombatMode::Missile
 		? ACEEquipMask::MissileWeapon : ACEEquipMask::MeleeWeapon | ACEEquipMask::TwoHanded;
-	for (const auto& Item : Client->GetEquippedItems()) if ((Item.CurrentWieldedLocation & Mask) != 0) return Item;
+	if (const auto Session = Client->GetSession())
+		if (const auto* Item = Session->FindEquippedItem(Mask)) return *Item;
 	return {};
 }
 
 FACEWorldObject UACEVRComponent::EquippedMissileWeapon() const
 {
-	if (Client) for (const auto& Item : Client->GetEquippedItems())
-		if ((Item.CurrentWieldedLocation & ACEEquipMask::MissileWeapon) != 0) return Item;
+	if (const auto Session = Client ? Client->GetSession() : nullptr)
+		if (const auto* Item = Session->FindEquippedItem(ACEEquipMask::MissileWeapon)) return *Item;
 	return {};
 }
 
@@ -172,13 +186,7 @@ void UACEVRComponent::GetSpellAim(FVector& Origin, FVector& Direction)
 FVector UACEVRComponent::GetCrossbowMuzzle() const
 {
 	if (const auto* Item = MissileVisualActor.Get(); Item && Item->Appearance)
-		if (const auto* Part = Cast<UPrimitiveComponent>(Item->Appearance->GetPartMesh(0)))
-		{
-			const FBox Box = Part->CalcLocalBounds().GetBox();
-			// +Z is the barrel, X spans the limbs, Y is the top rail. Using
-			// Max.X put the bolt on the tip of the right limb instead of the stock.
-			return Part->GetComponentTransform().TransformPosition(FVector(Box.GetCenter().X, Box.Max.Y, Box.Max.Z));
-		}
+		return Item->GetActorTransform().TransformPosition(CrossbowMuzzleLocal);
 	return GetPhysicalGrip(!Settings->bLeftHanded).GetLocation() + GetPhysicalAim(!Settings->bLeftHanded).GetUnitAxis(EAxis::X) * 55.f
 		+ GetPhysicalGrip(!Settings->bLeftHanded).GetUnitAxis(EAxis::Z) * 5.f;
 }
@@ -186,6 +194,7 @@ FVector UACEVRComponent::GetCrossbowMuzzle() const
 void UACEVRComponent::FireCrossbow()
 {
 	if (IsInputBlocked() || MissileStyle() != 0x20 || GetCombatMode() != ACECombatMode::Missile) return;
+	if (GetMeleeRecoveryRemaining() > 0) return;
 	if (!BowGrip()->IsTracked() || !BowAim()->IsTracked()) { SetCastFeedback(TEXT("Crossbow controller tracking is unavailable.")); return; }
 	const auto Weapon = EquippedMissileWeapon();
 	const auto Ammo = EquippedAmmo();
@@ -194,7 +203,7 @@ void UACEVRComponent::FireCrossbow()
 	if (auto Session = Client->GetSession(); Session && Session->SendVRCombat(3, PC->GetEffectiveCellId(), Weapon.Guid,
 		0, 0, ToAceOffset(GetCrossbowMuzzle()), FACEPosition::AceVectorToUnreal(GetPhysicalAim(!Settings->bLeftHanded).GetUnitAxis(EAxis::X)), 1.f, 0.f))
 	{
-		Pulse(Settings->bLeftHanded, .6f); SetCastFeedback(TEXT("Bolt fired. Allow the crossbow to reload before firing again."));
+		Pulse(Settings->bLeftHanded, .6f);
 		UE_LOG(LogTemp, Log, TEXT("ACE VR crossbow sent: weapon=0x%08X ammo=0x%08X"), Weapon.Guid, Ammo.Guid);
 	}
 	else SetCastFeedback(TEXT("Missile could not be sent. Check the VR server connection."));
@@ -204,21 +213,38 @@ void UACEVRComponent::GetThrownAim(FVector& Origin, FVector& Direction) const
 {
 	const FTransform Grip = GetPhysicalGrip(Settings->bLeftHanded);
 	Origin = Grip.GetLocation();
-	Direction = GetPhysicalAim(Settings->bLeftHanded).GetUnitAxis(EAxis::X);
-	if (MissileStyle() == 0x400)
-	{
-		// An atlatl is held over the shoulder. OpenXR grip +X runs from
-		// little finger to thumb; release from the heel of the palm, not
-		// the index-finger pointing ray used for an ordinary thrown dart.
-		Direction = -Grip.GetUnitAxis(EAxis::X);
-		Origin += Direction * 8.f;
-	}
+	// Atlatls and individually thrown items share the over-shoulder grip.
+	Direction = -Grip.GetUnitAxis(EAxis::X);
+	Origin += Direction * 8.f;
+}
+
+void UACEVRComponent::FireThrownMissile()
+{
+	if (IsInputBlocked() || IsAmmoLauncher() || GetCombatMode() != ACECombatMode::Missile
+		|| !WeaponGrip()->IsTracked() || !WeaponAim()->IsTracked() || GetMeleeRecoveryRemaining() > 0) return;
+	const auto Weapon = EquippedMissileWeapon();
+	if (!Weapon.Guid) return;
+	// Atlatls consume their equipped dart; ordinary thrown weapons are their own stack.
+	if (MissileStyle() == 0x400 && EquippedAmmo().Guid == 0)
+	{ SetCastFeedback(TEXT("Equip compatible darts first.")); return; }
+	FVector Origin, Direction; GetThrownAim(Origin, Direction);
+	if (auto Session = Client->GetSession(); Session && Session->SendVRCombat(3, PC->GetEffectiveCellId(), Weapon.Guid,
+		0, 0, ToAceOffset(Origin), FACEPosition::AceVectorToUnreal(Direction), 1.f, 0.f)) Pulse(Settings->bLeftHanded, .6f);
+}
+
+FVector UACEVRComponent::BowDrawDirection() const
+{
+	const FTransform Aim=GetPhysicalAim(!Settings->bLeftHanded);
+	const FVector Side=Aim.GetUnitAxis(EAxis::Y)*(Settings->bLeftHanded ? -1.f : 1.f);
+	return (GetPhysicalGrip(!Settings->bLeftHanded).GetLocation()-GetPhysicalGrip(Settings->bLeftHanded).GetLocation()
+		+ Side*Settings->BowAnchorOffset*BowFraction).GetSafeNormal(SMALL_NUMBER,Aim.GetUnitAxis(EAxis::X));
 }
 
 void UACEVRComponent::ReleaseArrow()
 {
 	const bool WasDrawn = bDrawing;
-	if (bDrawing && IsAmmoLauncher())
+	if (MissileStyle()!=0x10) { bDrawing=false; return; }
+	if (bDrawing)
 	{
 		float Fraction;
 		BowFraction = ACEVRMath::BowDraw(GetPhysicalGrip(!Settings->bLeftHanded).GetLocation(), GetPhysicalGrip(Settings->bLeftHanded).GetLocation(),
@@ -227,19 +253,16 @@ void UACEVRComponent::ReleaseArrow()
 	bDrawing = false;
 	const float Fraction = BowFraction;
 	if (!WasDrawn || IsInputBlocked() || !WeaponGrip()->IsTracked()
-		|| (IsAmmoLauncher() && (!BowGrip()->IsTracked() || !BowAim()->IsTracked())) || Fraction < .2f || BowHoldTime < .15f)
+		|| !BowGrip()->IsTracked() || !BowAim()->IsTracked() || Fraction < .2f || BowHoldTime < .15f)
 	{
-		if (WasDrawn) SetCastFeedback(IsAmmoLauncher() ? TEXT("Pull the arrow back before releasing.") : TEXT("Hold briefly, then release to throw."));
+		if (WasDrawn) SetCastFeedback(TEXT("Pull the arrow back before releasing."));
 		return;
 	}
 	const auto Weapon = EquippedMissileWeapon();
 	if (!Weapon.Guid) { SetCastFeedback(TEXT("No equipped missile weapon. Re-equip your bow.")); return; }
-	const bool BowLike = IsAmmoLauncher();
-	if (BowLike && EquippedAmmo().Guid == 0) { SetCastFeedback(TEXT("Equip compatible arrows or bolts first.")); return; }
-	FVector Origin = GetPhysicalGrip(BowLike ? !Settings->bLeftHanded : Settings->bLeftHanded).GetLocation();
-	FVector Direction = BowLike ? (GetPhysicalGrip(!Settings->bLeftHanded).GetLocation() - GetPhysicalGrip(Settings->bLeftHanded).GetLocation()).GetSafeNormal()
-		: GetPhysicalAim(Settings->bLeftHanded).GetUnitAxis(EAxis::X);
-	if (!BowLike) GetThrownAim(Origin, Direction);
+	if (EquippedAmmo().Guid == 0) { SetCastFeedback(TEXT("Equip compatible arrows first.")); return; }
+	const FVector Origin = GetPhysicalGrip(!Settings->bLeftHanded).GetLocation();
+	const FVector Direction = BowDrawDirection();
 	if (auto Session = Client->GetSession(); Session && Session->SendVRCombat(3, PC->GetEffectiveCellId(), Weapon.Guid,
 		0, 0, ToAceOffset(Origin), FACEPosition::AceVectorToUnreal(Direction), Fraction, FMath::Min(BowHoldTime, 2.f)))
 	{
@@ -298,7 +321,7 @@ void UACEVRComponent::UpdateCombat(float Dt)
 			{
 				if (auto* Item = MissileVisualActor.Get()) UpdateMissileAttachment(Item);
 				const FVector Forward = GetPhysicalAim(!Settings->bLeftHanded).GetUnitAxis(EAxis::X);
-				UpdateAmmoVisual(Ammo, GetCrossbowMuzzle() - Forward * 55.f, Forward);
+				UpdateAmmoVisual(Ammo, GetCrossbowMuzzle(), Forward, true);
 				UpdateMissileTrajectory(GetCrossbowMuzzle(), Forward, 1.f);
 				return; // Crossbow has its own authored limbs/string; no vertical bow string.
 			}
@@ -309,7 +332,7 @@ void UACEVRComponent::UpdateCombat(float Dt)
 			if (bDrawing) BowFraction = Valid ? Fraction : 0.f;
 			if (bDrawing && FVector::Distance(Bow, Hand) > 180.f) { CancelGestures(); return; }
 			const FVector Nock = bDrawing ? Hand : Bow - Forward * 12.f;
-			const FVector Direction = (Bow - Nock).GetSafeNormal(SMALL_NUMBER, Forward);
+			const FVector Direction = bDrawing ? BowDrawDirection() : Forward;
 			if (bDrawing) UpdateMissileTrajectory(Bow, Direction, BowFraction);
 			UpdateAmmoVisual(Ammo, Nock, Direction);
 			for (int32 I = 0; I < 2; ++I)
@@ -318,6 +341,8 @@ void UACEVRComponent::UpdateCombat(float Dt)
 		else
 		{
 			FVector Origin, Direction; GetThrownAim(Origin, Direction);
+			if (MissileStyle()==0x400 && EquippedAmmo().Guid)
+				UpdateAmmoVisual(EquippedAmmo(),Origin,Direction,true);
 			UpdateMissileTrajectory(Origin, Direction, 1.f);
 		}
 	}
@@ -419,7 +444,8 @@ void UACEVRComponent::UpdateUnarmed(float Dt)
 
 bool UACEVRComponent::HasMeleeRecovery() const
 {
-	return GetCombatMode() == ACECombatMode::Melee && Client && Client->GetSession() && Client->GetSession()->SupportsVRRecovery();
+	return (GetCombatMode() == ACECombatMode::Melee || GetCombatMode() == ACECombatMode::Missile)
+		&& Client && Client->GetSession() && Client->GetSession()->SupportsVRRecovery();
 }
 
 float UACEVRComponent::GetMeleeRecoveryRemaining() const
@@ -506,6 +532,8 @@ FString UACEVRComponent::GetCombatTimerText() const
 			: Phase==2 ? TEXT("Recovering") : TEXT("Cast ready");
 	}
 	const float Remaining=GetMeleeRecoveryRemaining();
+	if (GetCombatMode() == ACECombatMode::Missile)
+		return Remaining>0 ? FString::Printf(TEXT("Next shot %.1fs"),FMath::CeilToFloat(Remaining*10.f)/10.f) : TEXT("Shot ready");
 	return Remaining>0 ? FString::Printf(TEXT("Next swing %.1fs"),FMath::CeilToFloat(Remaining*10.f)/10.f) : TEXT("Swing ready");
 }
 float UACEVRComponent::GetCombatTimerProgress() const
@@ -594,11 +622,11 @@ bool UACEVRComponent::UpdateMissileAttachment(AACEWorldEntityActor* Actor)
 	const bool Missile = IsAmmoLauncher();
 	if ((Object.CurrentWieldedLocation & ACEEquipMask::MissileAmmo) != 0)
 	{
-		// Replace the server's hand/loading pose with the locally nocked copy.
-		Actor->SetActorHiddenInGame(Missile); if (Missile) return true;
+		// Only the currently compatible nocked copy is visible. A leftover
+		// arrow slot must not produce an arrow beside a thrown weapon.
+		Actor->SetActorHiddenInGame(true); return true;
 	}
-	const bool Thrown = !Missile && (MissileStyle()==0x80 || MissileStyle()==0x800);
-	if ((!Missile && !Thrown) || Actor->GetACEGuid() != EquippedMissileWeapon().Guid)
+	if (!Missile || Actor->GetACEGuid() != EquippedMissileWeapon().Guid)
 	{
 		if (MissileVisualActor == Actor)
 		{
@@ -611,9 +639,32 @@ bool UACEVRComponent::UpdateMissileAttachment(AACEWorldEntityActor* Actor)
 	if (Actor->Appearance && (MissileVisualActor != Actor || MissileVisualRevision != Actor->Appearance->GetAppearanceRevision()))
 	{
 		Object.ParentGuid = Object.ParentLocation = Object.PlacementId = 0;
+		// Authored held placement normalizes crossbows whose raw meshes use
+		// different axes. Setups without placement 3 fall back to placement 0.
+		if (MissileStyle()==0x20) Object.PlacementId=3;
 		Object.MotionTableId = Object.DefaultAnimationId = 0;
 		Actor->Appearance->ApplyWorldObject(Object, PC->WorldScale, false);
 		MissileVisualActor = Actor; MissileVisualRevision = Actor->Appearance->GetAppearanceRevision();
+		if (MissileStyle()==0x20)
+		{
+			FBox Stock(ForceInit), Grip(ForceInit);
+			for (int32 I=0;I<Actor->Appearance->GetPartCount();++I)
+				if (auto* Part=Cast<UProceduralMeshComponent>(Actor->Appearance->GetPartMesh(I)))
+				{
+					FTransform Bind; if (!Actor->Appearance->GetPartBindTransform(I,Bind)) continue;
+					for (int32 S=0;S<Part->GetNumSections();++S)
+						if (const auto* Section=Part->GetProcMeshSection(S); Section && Section->bSectionVisible)
+							for (const auto& V:Section->ProcVertexBuffer)
+							{
+								const FVector P=Bind.TransformPosition(V.Position);
+								if (FMath::Abs(P.Z)<6.f) { Stock+=P; if (FMath::Abs(P.Y)<10.f) Grip+=P; }
+							}
+				}
+			// Sparse low-poly stocks need not have vertices at the hand plane.
+			// Fall back to the stock underside, never to an unrelated model origin.
+			CrossbowGripLocal=Stock.IsValid ? FVector(FMath::Max((Grip.IsValid ? Grip.Max.X : Stock.Max.X)-2.f,Stock.Min.X+2.f),0,Stock.GetCenter().Z) : FVector::ZeroVector;
+			CrossbowMuzzleLocal=Stock.IsValid ? FVector(Stock.Min.X,Stock.Min.Y,Stock.GetCenter().Z) : FVector(0,-55,0);
+		}
 	}
 	// Script emitters use absolute transforms and cannot be descendants of a
 	// motion controller's late-update hierarchy. Keep the owner attachment;
@@ -623,26 +674,22 @@ bool UACEVRComponent::UpdateMissileAttachment(AACEWorldEntityActor* Actor)
 	// The offhand owns the bow's orientation through nock, draw and release.
 	// Switching to the hand-to-hand vector while drawing flipped the model
 	// near the nock and snapped it back on every shot.
-	const FTransform SupportGrip = GetPhysicalGrip(Thrown ? Settings->bLeftHanded : !Settings->bLeftHanded);
-	const FTransform SupportAim = GetPhysicalAim(Thrown ? Settings->bLeftHanded : !Settings->bLeftHanded);
+	const FTransform SupportGrip = GetPhysicalGrip(!Settings->bLeftHanded);
+	const FTransform SupportAim = GetPhysicalAim(!Settings->bLeftHanded);
 	const FVector Forward = SupportAim.GetUnitAxis(EAxis::X);
 	const FVector Up = SupportGrip.GetUnitAxis(EAxis::Z);
-	// Crossbow +Z follows aim, Y is the rail normal; X spans the limbs.
-	// Thrown missiles use their retail projectile +Y axis, like arrows.
-	FQuat Rotation = Thrown ? FRotationMatrix::MakeFromYZ(Forward, SupportAim.GetUnitAxis(EAxis::Z)).ToQuat()
-		: MissileStyle() == 0x20 ? FRotationMatrix::MakeFromZY(Forward, SupportAim.GetUnitAxis(EAxis::Z)).ToQuat()
+	// In the authored held frame, -Y is the barrel, -X is up, Z spans the limbs.
+	const FQuat Rotation = MissileStyle() == 0x20 ? FRotationMatrix::MakeFromYX(-Forward, -SupportAim.GetUnitAxis(EAxis::Z)).ToQuat()
 		: FRotationMatrix::MakeFromZY(-Forward, Up).ToQuat();
-	FTransform Bind;
-	if ((Thrown || MissileStyle() == 0x20) && Actor->Appearance && Actor->Appearance->GetPartBindTransform(0, Bind))
-		Rotation = Rotation * Bind.GetRotation().Inverse();
 	Actor->SetActorLocationAndRotation(SupportGrip.GetLocation()
-		- Rotation.RotateVector(Bind.GetLocation() * Actor->GetActorScale3D()), Rotation);
+		- Rotation.RotateVector((MissileStyle()==0x20 ? CrossbowGripLocal : FVector::ZeroVector) * Actor->GetActorScale3D()), Rotation);
 	Actor->SetActorEnableCollision(false);
 	return true;
 }
 
 void UACEVRComponent::UpdateMissileTrajectory(const FVector& Origin, const FVector& Direction, float Power, float SpellSpeed, bool Gravity)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACETrajectory);
 	PredictedCombatTarget.Reset();
 	const auto Session = Client ? Client->GetSession() : nullptr;
 	const bool Spell = SpellSpeed > 0.f;
@@ -661,7 +708,7 @@ void UACEVRComponent::UpdateMissileTrajectory(const FVector& Origin, const FVect
 	if (Spell) { float ProfileSpeed; bool ProfileGravity; Session->GetVRSpellProfile(SelectedSpell,ProfileSpeed,ProfileGravity,&Radius); }
 	else if (auto* Dat=GetWorld()->GetGameInstance()->GetSubsystem<UACEDatSubsystem>())
 	{
-		const auto Ammo=EquippedAmmo(); float Step,Height; uint32 Animation;
+		const auto Ammo=MissileStyle()==0x80 || MissileStyle()==0x800 ? EquippedMissileWeapon() : EquippedAmmo(); float Step,Height; uint32 Animation;
 		if (Dat->TryGetSetupPhysics(Ammo.SetupId,Step,Height,Radius,Animation)) Radius*=Ammo.Scale;
 	}
 	Radius=FMath::Max(.001f,Radius)*PC->WorldScale;
@@ -690,7 +737,12 @@ void UACEVRComponent::UpdateMissileTrajectory(const FVector& Origin, const FVect
 			if (!Body->IsHidden() && Body->IsCellVisible() && !Body->bReceivedDeathMotion
 				&& !(Body->PhysicsState & (ACEPhysicsState::Ethereal|ACEPhysicsState::IgnoreCollisions))) Bodies.Add(Body);
 		}
+	struct FBodyCandidate { AACEWorldEntityActor* Actor;FBox Bounds; };
+	TArray<FBodyCandidate,TInlineAllocator<32>> Candidates;
+	const bool UseBounds=Segments>1 && CVarProjectileBodyBounds.GetValueOnGameThread()!=0;
+	for(auto* Body:Bodies) Candidates.Add({Body,UseBounds ? Body->GetProjectileContactBounds(Radius) : FBox(ForceInit)});
 	TArray<FVector> Vertices, Normals; TArray<FVector2D> UVs; TArray<int32> Triangles;
+	Vertices.Reserve(Segments*4);Normals.Reserve(Segments*4);UVs.Reserve(Segments*4);Triangles.Reserve(Segments*6);
 	TArray<FLinearColor> Colors; TArray<FProcMeshTangent> Tangents;
 	FVector Previous = Origin, End = Origin; bool HitWorld = false;
 	AACEWorldEntityActor* HitBody = nullptr;
@@ -703,8 +755,11 @@ void UACEVRComponent::UpdateMissileTrajectory(const FVector& Origin, const FVect
 			float Earliest=1.f;
 			if (GetWorld()->SweepSingleByChannel(Hit,Previous,Next,FQuat::Identity,ECC_Pawn,FCollisionShape::MakeSphere(Radius),Query))
 			{ Earliest=Hit.Time; HitWorld=true; }
-			for (auto* Body:Bodies)
+			const FBox SegmentBounds(Previous.ComponentMin(Next),Previous.ComponentMax(Next));
+			for (const auto& Candidate:Candidates)
 			{
+				if(UseBounds && !SegmentBounds.Intersect(Candidate.Bounds)) continue;
+				auto* Body=Candidate.Actor;
 				float Along;
 				if (Body->FindProjectileContact(Previous,Next,Radius,Along) && Along<Earliest)
 				{ Earliest=Along; HitWorld=true; HitBody=Body; }
@@ -738,7 +793,7 @@ void UACEVRComponent::UpdateMissileTrajectory(const FVector& Origin, const FVect
 	// covering the target. Interaction instructions remain in peace mode.
 }
 
-void UACEVRComponent::UpdateAmmoVisual(const FACEWorldObject& Ammo, const FVector& Nock, const FVector& Direction)
+void UACEVRComponent::UpdateAmmoVisual(const FACEWorldObject& Ammo, const FVector& Nock, const FVector& Direction, bool bAtTip)
 {
 	if (!AmmoActor)
 	{
@@ -753,13 +808,23 @@ void UACEVRComponent::UpdateAmmoVisual(const FACEWorldObject& Ammo, const FVecto
 	auto* App = AmmoActor->FindComponentByClass<UACECharacterAppearanceComponent>();
 	if (AmmoVisualGuid != Ammo.Guid || App->GetSetupId() != Ammo.SetupId || App->GetAppliedAppearanceHash() != Ammo.Appearance.GetContentHash())
 	{
-		FACEWorldObject Copy = Ammo; Copy.ParentGuid = Copy.ParentLocation = Copy.PlacementId = 0;
+		FACEWorldObject Copy = Ammo; Copy.ParentGuid = Copy.ParentLocation = 0; Copy.PlacementId=52; // MissileFlight, fallback 0.
 		Copy.MotionTableId = Copy.DefaultAnimationId = 0;
 		App->ApplyWorldObject(Copy, PC->WorldScale, false); AmmoVisualGuid = Ammo.Guid;
+		FBox Bounds(ForceInit);
+		for (int32 I=0;I<App->GetPartCount();++I)
+			if (auto* Part=Cast<UProceduralMeshComponent>(App->GetPartMesh(I)))
+			{
+				FTransform Bind; if (!App->GetPartBindTransform(I,Bind)) continue;
+				for (int32 S=0;S<Part->GetNumSections();++S)
+					if (const auto* Section=Part->GetProcMeshSection(S); Section && Section->bSectionVisible)
+						for (const auto& V:Section->ProcVertexBuffer) Bounds+=Bind.TransformPosition(V.Position);
+			}
+		AmmoNockLocal=Bounds.IsValid ? FVector(Bounds.GetCenter().X,Bounds.Min.Y,Bounds.GetCenter().Z) : FVector::ZeroVector;
+		AmmoTipLocal=Bounds.IsValid ? FVector(Bounds.GetCenter().X,Bounds.Max.Y,Bounds.GetCenter().Z) : FVector::ZeroVector;
 	}
-	FTransform Bind; App->GetPartBindTransform(0, Bind);
-	const FQuat Rotation = FRotationMatrix::MakeFromYZ(Direction, GetPhysicalGrip(!Settings->bLeftHanded).GetUnitAxis(EAxis::Z)).ToQuat() * Bind.GetRotation().Inverse();
-	AmmoActor->SetActorLocationAndRotation(Nock - Rotation.RotateVector(Bind.GetLocation()), Rotation);
+	const FQuat Rotation = FRotationMatrix::MakeFromYZ(Direction, GetPhysicalGrip(!Settings->bLeftHanded).GetUnitAxis(EAxis::Z)).ToQuat();
+	AmmoActor->SetActorLocationAndRotation(Nock-Rotation.RotateVector(bAtTip ? AmmoTipLocal : AmmoNockLocal), Rotation);
 	AmmoActor->SetActorHiddenInGame(!App->HasAppearance());
 	if (!App->HasAppearance()) { Beam(Arrow, Nock, Nock + Direction * 70.f, .7f); Arrow->SetVisibility(true); }
 }

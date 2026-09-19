@@ -1,10 +1,15 @@
 #requires -Version 7.0
 param(
- [string]$Executable = (Join-Path $PSScriptRoot '../../Saved/VRWindowsArchive/Windows/ACEViewer/Binaries/Win64/ACEViewer.exe'),
+ [string]$Executable = (Join-Path $PSScriptRoot '../../Saved/VRWindowsArchive/Windows/ACUnreal/Binaries/Win64/ACUnreal.exe'),
  [string]$OutputRoot = (Join-Path $PSScriptRoot '../../Saved/PCPerformance/Review'),
  [string[]]$Scenes = @('outdoor','indoor','effects'),
  [ValidateSet('baseline','optimized')][string[]]$Variants = @('baseline','optimized'),
- [ValidateSet('scene','particles','cached-world','particle-distance','particle-idle')][string]$Comparison = 'scene'
+ [ValidateSet('scene','particles','cached-world','particle-distance','particle-idle','cached-actors','doorway-geometry','setup-metadata','cpu-render')][string]$Comparison = 'scene',
+ [switch]$Editor,
+ [switch]$MobilePreview,
+ [switch]$CameraMotion,
+ [int]$Width = 2560,
+ [int]$Height = 1440
 )
 $ErrorActionPreference='Stop'
 foreach ($scene in $Scenes) {
@@ -15,14 +20,35 @@ foreach ($scene in $Scenes) {
   New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
   $enabled=if($variant -eq 'optimized'){1}else{0}
   $settings=switch($Comparison) {
+   'cached-actors' { "ace.Render.CachedActorDraws $enabled" }
+   'doorway-geometry' { "ace.Render.CacheDoorwayGeometry $enabled" }
+   'setup-metadata' { "ace.Dat.CacheSetupMetadata $enabled" }
+   'cpu-render' { "ace.Render.CachedActorDraws $enabled,ace.Render.CacheDoorwayGeometry $enabled,ace.Dat.CacheSetupMetadata $enabled" }
    'particles' { "ace.UI.IndexedLookups 1,ace.Render.ReusePrimitiveBuffers 1,ace.Particles.ActivePrefix $enabled" }
    'cached-world' { "ace.UI.IndexedLookups 1,ace.Render.ReusePrimitiveBuffers 1,ace.Render.CachedWorldDraws $enabled" }
    'particle-distance' { "ace.UI.IndexedLookups 1,ace.Render.ReusePrimitiveBuffers 1,ace.Particles.DistanceCulling $enabled" }
    'particle-idle' { "ace.UI.IndexedLookups 1,ace.Render.ReusePrimitiveBuffers 1,ace.Particles.DistanceCulling 1,ace.Particles.IdleTickInterval $(if($enabled){'.1'}else{'0'})" }
    default { "ace.UI.IndexedLookups $enabled,ace.Render.ReusePrimitiveBuffers $enabled" }
   }
-  $commands="r.VSync 0,t.MaxFPS 0,r.SetRes 2560x1440w,$settings,ace.PerfScene $scene"
+  $commands="r.VSync 0,t.MaxFPS 0,r.SetRes ${Width}x${Height}w,$settings,ace.PerfScene $scene"
   $arguments=@('-nohmd','-unattended','-nosound','-ACEPerfQuit',"-UserDir=`"$runDirectory/`"","-abslog=`"$runDirectory/run.log`"","-ExecCmds=`"$commands`"")
+  if($CameraMotion){$arguments+='-ACEPerfCameraMotion'}
+  if($Editor){
+   $arguments=@([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../ACUnreal.uproject')),'-game')+$arguments
+  }
+  if($MobilePreview){
+   if(!$Editor){throw 'MobilePreview requires Editor mode.'}
+   $arguments+=@('-FeatureLevelES31','-ini:Engine:[/Script/Engine.RendererSettings]:r.MobileHDR=False')
+  }
+  [ordered]@{
+   startedUtc=[DateTime]::UtcNow.ToString('o')
+   scene=$scene; comparison=$Comparison; variant=$variant
+   executable=[IO.Path]::GetFullPath($Executable)
+   editor=[bool]$Editor; mobilePreview=[bool]$MobilePreview
+   cameraMotion=[bool]$CameraMotion; width=$Width; height=$Height
+   commands=$commands; warmupSeconds=45; sampleSeconds=30
+   synthetic=$true; nativeHeadset=$false
+  } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runDirectory 'run-settings.json') -Encoding utf8
   $process=Start-Process -FilePath $Executable -ArgumentList $arguments -WindowStyle Hidden -PassThru
   Write-Host "Measuring $scene / $variant (PID $($process.Id))"
   if (!$process.WaitForExit(150000)) {

@@ -6,7 +6,7 @@ namespace ACE.Server.Network.GameEvent.Events
             : base(GameEventType.VRCapabilities, GameMessageGroup.UIQueue, session, 24)
         {
             Writer.Write(1u); // version
-            Writer.Write(objects == null ? 32759u : 32767u); // 4096: live cast aim/timer, 8192: health bars, 16384: bounded melee render offset
+            Writer.Write(objects == null ? 65527u : 65535u); // 32768: opt-in v2 pose with equipment and authoritative root
             if (objects != null)
             {
                 Writer.Write((uint)teleport);

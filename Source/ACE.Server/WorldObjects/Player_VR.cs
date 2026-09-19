@@ -141,7 +141,7 @@ namespace ACE.Server.WorldObjects
             if (r.Kind == 1) { CastVRSpell(r); return; }
             if (Attacking || now < vrNextAttack || now < NextRefillTime)
             {
-                if (r.Kind == 2 && vrRecoverySubscribed) SendVRRecovery(r, now);
+                if ((r.Kind == 2 || r.Kind == 3) && vrRecoverySubscribed) SendVRRecovery(r, now);
                 else RejectVRCombat(r, "Your weapon is recovering. Swing or release again when ready.");
                 return;
             }
@@ -218,16 +218,20 @@ namespace ACE.Server.WorldObjects
             if (GetCylinderDistance(target) > (unarmed ? 1.35f : 2.8f)) { RejectVRCombat(r, "Move closer to strike this creature."); return; }
             // Include animated heads, limbs and tails outside the locomotion cylinder.
             var offset = PhysicsObj.Position.GetOffset(target.PhysicsObj.Position);
+            var hit=VRMeleeContact.Intersects(target.PhysicsObj,r.Origin-offset,r.Vector-offset,target.Height,out var contact);
             // Remote rendering interpolates sparse retail positions. Reconcile
             // only a bounded visual offset; reach, visibility, swing speed,
             // cooldown and the actual server-owned creature geometry still apply.
             if (r.ObservedBody is Vector3 observed)
             {
                 var error = observed-offset;
-                if (new Vector2(error.X,error.Y).LengthSquared() <= .8f*.8f && Math.Abs(error.Z) <= .5f)
+                if (!hit && new Vector2(error.X,error.Y).LengthSquared() <= .8f*.8f && Math.Abs(error.Z) <= .5f)
+                {
                     offset = observed;
+                    hit=VRMeleeContact.Intersects(target.PhysicsObj,r.Origin-offset,r.Vector-offset,target.Height,out contact);
+                }
             }
-            if (!VRMeleeContact.Intersects(target.PhysicsObj, r.Origin-offset, r.Vector-offset, target.Height, out var contact))
+            if (!hit)
             {
                 log.Debug($"[VR] melee geometry seq={r.Sequence} target={target.Guid} start={r.Origin} end={r.Vector} body={offset} height={target.Height:F3}");
                 RejectVRCombat(r, "The swing missed the creature's body."); return;
@@ -261,9 +265,10 @@ namespace ACE.Server.WorldObjects
             var weapon = GetEquippedMissileWeapon();
             if (weapon == null || weapon.Guid.Full != r.Weapon) { RejectVRCombat(r, "The missile weapon has changed. Try again with the equipped weapon."); return; }
             var crossbow = weapon.DefaultCombatStyle == CombatStyle.Crossbow;
+            var drawnBow = weapon.DefaultCombatStyle == CombatStyle.Bow;
             if (!VRCombatRequest.InReach(r.Origin, crossbow ? VRCombatRequest.MaxMissileMuzzleReach : 1.5f))
             { RejectVRCombat(r, "The shot origin is too far from the equipped weapon. Recenter your tracking."); return; }
-            if (CombatMode != CombatMode.Missile || r.Amount < .2f || (!crossbow && r.Duration < .15f))
+            if (CombatMode != CombatMode.Missile || r.Amount < .2f || (drawnBow && r.Duration < .15f))
             { RejectVRCombat(r, crossbow ? "Enter missile stance before firing." : "Enter missile stance and draw the arrow before releasing."); return; }
             var ammo = weapon.IsAmmoLauncher ? GetEquippedAmmo() : weapon;
             if (ammo == null) { SendWeenieError(WeenieError.YouAreOutOfAmmunition); return; }
@@ -293,8 +298,10 @@ namespace ACE.Server.WorldObjects
                 attach.EnqueueChain();
             }
             // Consume first: the last arrow must never be reattached by a queued reload.
-            var reload = GetEquippedMissileWeapon() != null && GetEquippedAmmo() != null ? ReloadMissileAmmo() : 0;
-            vrNextAttack = now.AddSeconds(Math.Max(.5, reload + r.Amount));
+            var reload = weapon.IsAmmoLauncher && GetEquippedMissileWeapon() != null && GetEquippedAmmo() != null ? ReloadMissileAmmo() : 0;
+            vrRecoveryDuration = (float)Math.Max(.5, reload + r.Amount);
+            vrNextAttack = now.AddSeconds(vrRecoveryDuration);
+            SendVRRecovery(r, now);
             if (GetEquippedMissileWeapon() == null || (weapon.IsAmmoLauncher && GetEquippedAmmo() == null))
                 SetCombatMode(CombatMode.NonCombat);
             if (UnderLifestoneProtection) LifestoneProtectionDispel();

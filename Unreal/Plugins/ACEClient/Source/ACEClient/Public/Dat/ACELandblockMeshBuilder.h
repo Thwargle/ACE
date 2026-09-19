@@ -75,6 +75,7 @@ struct FACEBuiltLandblockMesh
 /** Outdoor landblock heightfield (9×9) using RegionDesc LandHeightTable + TexMerge blends. */
 class ACECLIENT_API FACELandblockMeshBuilder
 {
+	friend class FACELandscapeTextureFidelityTest;
 public:
 	static constexpr int32 CellDim = 8;
 	static constexpr int32 VertexDim = 9;

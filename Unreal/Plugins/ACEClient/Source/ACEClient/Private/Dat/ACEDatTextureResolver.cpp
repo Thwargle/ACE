@@ -14,7 +14,7 @@
 namespace
 {
 	TAutoConsoleVariable<int32> CVarRuntimeTextureMaxSize(TEXT("ace.Texture.MaxWorldSize"), PLATFORM_ANDROID ? 512 : 0,
-		TEXT("Maximum runtime DAT world texture dimension (0 = authored size). UI and sky textures retain their authored resolution; restart to apply."));
+		TEXT("Maximum runtime DAT object texture dimension (0 = authored size). Landscape, UI and sky textures retain their authored resolution; restart to apply."));
 
 	template<typename KeyType>
 	UTexture2D* TakeRetainedTexture(KeyType Key, TMap<KeyType, TWeakObjectPtr<UTexture2D>>& Retained)

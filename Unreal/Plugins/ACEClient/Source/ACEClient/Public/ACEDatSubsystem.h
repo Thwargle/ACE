@@ -12,6 +12,7 @@
 #include "Dat/ACEDatFileTypes.h"
 #include "Dat/ACEDatMotionPlayer.h"
 #include "Dat/ACEPortalViewMask.h"
+#include "Dat/ACEOutdoorPortalPlan.h"
 #include "ACEDatSubsystem.generated.h"
 
 class UProceduralMeshComponent;
@@ -302,6 +303,10 @@ public:
 	 * landblock key; cleared with other DAT caches on reload.
 	 */
 	bool LoadLandblockInfo(uint32 LandblockId, FACEDatLandblockInfo& OutInfo);
+
+	/** Static world-space doors only; camera clipping is evaluated every frame. */
+	void LoadBuildingDoorwayApertures(uint32 LandblockId, float WorldScale,
+		TArray<ACEOutdoorPortalPlan::FAdmittedAperture>& OutApertures);
 
 	/** Raw EnvCell unpack (Flags / CellPortals) without building draw geometry. */
 	bool LoadEnvCell(uint32 EnvCellId, FACEDatEnvCell& OutCell);
@@ -679,10 +684,33 @@ private:
 	friend class FACERetailMeshApplicationTest;
 	friend class FACEMissingDatLoginTest;
 	friend class FACETerrainArrivalTest;
+	friend class FACEDoorwayGeometryCacheTest;
+	friend class FACESetupMetadataCacheTest;
 	// Entries cannot move with TMap growth while a renderer is consuming their parts.
 	TMap<uint64, TSharedPtr<const FACEBuiltSetupMesh>> SetupMeshCache;
 	TMap<uint32, TSharedPtr<FACEBuiltLandblockMesh>> LandblockCache;
 	TMap<uint32, FACEDatLandblockInfo> LandblockInfoCache;
+	struct FCachedDoorwayGeometry
+	{
+		TArray<ACEOutdoorPortalPlan::FAdmittedAperture> Apertures;
+		uint64 LastUse = 0;
+	};
+	struct FSetupRuntimeMetadata
+	{
+		float StepUp = .5f, StepDown = .5f, Height = 2.f, Radius = .5f;
+		FVector3f SelectionOrigin = FVector3f::ZeroVector;
+		float SelectionRadius = 0.f;
+		uint32 Animation = 0, Script = 0, ScriptTable = 0, SoundTable = 0;
+		TArray<FACEDatCollisionShape> Shapes;
+		bool bPhysicsBSP = false, bValid = false;
+		uint64 LastUse = 0;
+	};
+	const FSetupRuntimeMetadata* FindSetupRuntimeMetadata(uint32 SetupId);
+	TMap<uint32, FSetupRuntimeMetadata> SetupRuntimeMetadataCache;
+	FSetupRuntimeMetadata UncachedSetupRuntimeMetadata;
+	uint64 SetupRuntimeMetadataUse = 0;
+	TMap<uint64, FCachedDoorwayGeometry> DoorwayGeometryCache;
+	uint64 DoorwayGeometryUse = 0;
 	TMap<uint32, FBuildingInteriorMask> BuildingInteriorFootprints;
 	TMap<uint64, FACEBuiltEnvCellMesh> EnvCellMeshCache;
 

@@ -51,6 +51,7 @@ class ACECLIENT_API UACEScriptComponent : public UActorComponent
 	friend class FACERetailParticleLightingTest;
 	friend class FACERetailParticleTimingTest;
 	friend class FACEParticleDistanceTest;
+	friend class FACEParticleFrameReuseTest;
 	friend class FACEEntranceParticleTest;
 	friend class FACERetailWeatherTest;
 	friend class FACEVRRenderReplicationTest;
@@ -295,7 +296,8 @@ private:
 	UProceduralMeshComponent* AcquireParticleMesh(uint32 GfxObjId, bool bBlocking, int32 SortPriority = 400);
 	void ReleaseParticleMesh(UProceduralMeshComponent* Mesh);
 	FTransform GetEmitterTransform(const FActiveEmitter& Emitter) const;
-	FQuat GetParticleDrawRotation(const FVector& Position, const FQuat& SimulationRotation, uint32 Mode) const;
+	FQuat GetParticleDrawRotation(const FVector& Position, const FQuat& SimulationRotation, uint32 Mode,
+		const FVector* ViewPosition = nullptr) const;
 	/** AC XY plane (thin Z) — lies on the ground; do not tip toward camera. */
 	static bool IsGroundPlaneDiscMesh(const UProceduralMeshComponent* Mesh);
 	/** AC XZ plane (thin Y, faces −Y) — vertical sprites that should camera-billboard. */

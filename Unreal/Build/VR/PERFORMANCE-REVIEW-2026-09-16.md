@@ -39,7 +39,7 @@ The view was not rigidly controlled; this rules out shadows as the dominant
 cause in that sample, not as a meaningful GPU cost in all scenes. Quality 5
 was restored afterward.
 
-Evidence: `Quest3Test/Performance/20260916/Before.utrace`, `Before-Frames.csv`,
+Evidence: `Quest/Performance/20260916/Before.utrace`, `Before-Frames.csv`,
 `Before-{GameThread,RenderThread,RHIThread}.csv`, `Before.log`, `Before.png`,
 and `ShadowsOff.log`. Frame timings are game-loop intervals; VrApi display
 refresh and GPU-oriented App timings are different metrics.
@@ -289,7 +289,7 @@ nearby body/ground shadow in both eyes remains a separate visual check.
    composition cost. The current trace does not justify reducing texture or
    antialiasing quality, which previously caused visible regressions.
 
-Artifacts: `Quest3Test/Performance/20260916/v34-live/Optimized.utrace`, frame
+Artifacts: `Quest/Performance/20260916/v34-live/Optimized.utrace`, frame
 and scope CSVs, `Reference.log`, `ShadowComparison.log`, stereo PNGs,
 `summary.json`, and reproducible `analyze.py`. The first `ShadowsOff.log`
 contains only an asleep interval and is excluded from results. The successful
@@ -325,7 +325,7 @@ The gameplay binder retains its separate index for its much larger query batch.
 
 ### Native v35 capture and regression finding
 
-`Quest3Test/Performance/20260916/v35-live/Optimized.utrace` contains 1,937 complete
+`Quest/Performance/20260916/v35-live/Optimized.utrace` contains 1,937 complete
 game-loop frames over 34.99 seconds: **18.047 ms / 55.41 FPS**, p95 **21.746 ms**,
 p99 **23.345 ms**, maximum 24.490 ms. All frames still miss 11.111 ms. Compared
 with v34's 54.07 FPS, mean frame time is 0.448 ms lower; the tail is worse. Head
@@ -397,7 +397,7 @@ future-version artifacts are not automatically deleted.
 ### Final v36 headset verification and deployment
 
 The user returned to Caul with menus closed after the final installation.
-`Quest3Test/Performance/20260916/v36-live/Optimized.utrace` contains **1,732 frames
+`Quest/Performance/20260916/v36-live/Optimized.utrace` contains **1,732 frames
 over 29.98 seconds**, averaging **17.292 ms / 57.83 FPS**, with **p95 20.367 ms,
 p99 21.308 ms**, and maximum 24.929 ms. All frames remain over the 90 FPS budget.
 The earlier v34 capture was 18.495 ms / 54.07 FPS: this is a modest observed gain
@@ -472,7 +472,7 @@ Quest code 37 / `2026.09.16.quest.37` is installed; its installed APK matches
 Shared client source and runtime-material parity passed with zero differences.
 The server is unchanged. Device queries verified method 0, two cascades, 1024
 resolution, and runtime light range 6000 cm/exponent 7. Screenshots, settings
-queries and comparison logs are in `Quest3Test/Performance/20260916/v37-Yaraq`.
+queries and comparison logs are in `Quest/Performance/20260916/v37-Yaraq`.
 
 The live two/one/two-cascade comparison recorded 44.22, 36.30 and 37.10 FPS
 respectively (9/10/10 one-second VrApi samples at 90 Hz, render scale 0.8).

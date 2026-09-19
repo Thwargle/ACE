@@ -6,6 +6,7 @@
 #include "ACEScriptComponent.h"
 #include "ACEDatSubsystem.h"
 #include "ACEClientSubsystem.h"
+#include "ACESession.h"
 #include "ACEOpcodes.h"
 #include "ACELandblockActor.h"
 #include "ACEEnvCellActor.h"
@@ -850,6 +851,8 @@ void AACEWorldEntityActor::UpdateHeldAttachmentPose()
 	}
 	if (auto* VR = ParentActor ? ParentActor->FindComponentByClass<UACEVRComponent>() : nullptr; VR && VR->IsActive())
 		if (VR->UpdateMissileAttachment(this)) return;
+	if (auto* Remote=ParentActor ? ParentActor->FindComponentByClass<UACEVRRemoteAvatarComponent>() : nullptr)
+		if (Remote->UpdateMissileAttachment(this)) return;
 	if (!bHaveHeldLocalFrame) return;
 	UACECharacterAppearanceComponent* ParentAppearance = ParentActor
 		? ParentActor->FindComponentByClass<UACECharacterAppearanceComponent>()
@@ -935,8 +938,18 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 {
 	ACE_PROFILE_SCOPE(Remote);
 	Super::Tick(DeltaTime);
+	FACEVRPose VRRoot;
+	const auto* VRClient=GetWorld()->GetGameInstance() ? GetWorld()->GetGameInstance()->GetSubsystem<UACEClientSubsystem>() : nullptr;
+	const bool HasVRRoot=bIsPlayer && !bIsSelf && VRClient && VRClient->GetSession()
+		&& VRClient->GetSession()->GetVRPose(ACEGuid,VRRoot) && VRRoot.Version==2;
+	if (HasVRRoot)
+	{
+		RemotePredictLocation=VRRoot.Root*WorldScale;
+		RemoteAnchorLocation=RemotePredictLocation;
+		SetActorLocation(RemotePredictLocation);
+	}
 
-	if (bPendingGroundClamp && bRetryGroundClamp && !bAttachedToParent && ParentGuid == 0
+	if (!HasVRRoot && bPendingGroundClamp && bRetryGroundClamp && !bAttachedToParent && ParentGuid == 0
 		&& !bHavePhysicsVelocity)
 	{
 		GroundClampRetrySeconds -= DeltaTime;
@@ -955,7 +968,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 		}
 	}
 
-	if (!bAttachedToParent && ParentGuid == 0 && bHaveRemotePredict)
+	if (!HasVRRoot && !bAttachedToParent && ParentGuid == 0 && bHaveRemotePredict)
 	{
 		// Prediction and animation consume the same elapsed time. Discarding time
 		// below 20 FPS made actors run in place and then snap at the next F748.
@@ -1001,8 +1014,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 						// Ammunition's shaft needs its placement adjustment. Spell
 						// setups already use the authored +Y facing (rabbits/rocks
 						// included); cancelling their bind rotates the actual model.
-						FTransform Bind; if (ProjectileAmmoType && Appearance) Appearance->GetPartBindTransform(0, Bind);
-						RemotePredictRotation = FRotationMatrix::MakeFromYZ(Dir, FVector::UpVector).ToQuat() * Bind.GetRotation().Inverse();
+						RemotePredictRotation = FRotationMatrix::MakeFromYZ(Dir, FVector::UpVector).ToQuat();
 					}
 					else
 					{
@@ -1521,6 +1533,28 @@ bool AACEWorldEntityActor::FindMeleeContact(const FVector& A, const FVector& B, 
 			}
 	}
 	return Hit;
+}
+
+FBox AACEWorldEntityActor::GetProjectileContactBounds(float RadiusCm) const
+{
+	FBox Bounds(ForceInit);
+	const float Pad=FMath::Max(0.f,RadiusCm)+WorldScale*.10f;
+	if(Appearance) for(int32 P=0;P<Appearance->GetPartCount();++P)
+	{
+		auto* Part=Cast<UProceduralMeshComponent>(Appearance->GetPartMesh(P));
+		if(!Part || !Part->IsVisible()) continue;
+		const FTransform& Transform=Part->GetComponentTransform();
+		const FVector Padding=FVector(Pad)/Transform.GetScale3D().GetAbs().ComponentMax(FVector(.001f));
+		for(int32 S=0;S<Part->GetNumSections();++S)
+			if(const auto* Section=Part->GetProcMeshSection(S);Section && Section->bSectionVisible)
+				Bounds+=Section->SectionLocalBox.ExpandBy(Padding).TransformBy(Transform);
+	}
+	if(!Bounds.IsValid)
+	{
+		const float R=GetMeleeBodyRadius();
+		Bounds=FBox(GetActorLocation()-FVector(R,R,0),GetActorLocation()+FVector(R,R,GetMeleeBodyHeight())).ExpandBy(Pad);
+	}
+	return Bounds;
 }
 
 bool AACEWorldEntityActor::FindProjectileContact(const FVector& A, const FVector& B, float RadiusCm, float& Along) const

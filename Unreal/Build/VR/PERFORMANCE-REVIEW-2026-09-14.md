@@ -147,7 +147,7 @@ project's `t.MaxFPS=72` setting is not a request to change the display refresh
 rate. The native outdoor scene did not meet either a 72 Hz or 90 Hz comfort
 target. Desktop benchmark results above must not be used to claim that it does.
 
-Evidence is in `Quest3Test/Performance/20260914/`. In the outdoor diagnostic,
+Evidence is in `Quest/Performance/20260914/`. In the outdoor diagnostic,
 20 one-second app samples at 100% eye-buffer scale averaged **20.65 FPS**;
 33 samples at 80% averaged **25.24 FPS**. The runtime's App timing field averaged
 34.05 and 26.16 ms respectively. These are sequential diagnostic samples, not a

@@ -694,43 +694,43 @@ void UACEUIGameplayBinder::TickRefresh()
 	}
 	TickTransientInfo();
 	TickSelectionFlash();
-	RefreshVitalsOverlays();
-	RefreshRadarOverlays();
-	RefreshSelectionOverlay();
-	RefreshExaminationOverlay();
-	RefreshInventoryOverlays();
-	RefreshPanelBodyText();
-	RefreshAttributeOverlays();
-	RefreshSkillOverlays();
-	RefreshTitleOverlays();
-	RefreshSpellHotbarOverlays();
-	RefreshSpellbookOverlays();
-	RefreshSpellbookChromeLabels();
-	RefreshExternalContainerOverlays();
-	RefreshVendorOverlays();
-	RefreshTradeOverlays();
-	RefreshManaStoneConfirmation();
-	RefreshServerConfirmation();
-	RefreshSalvageOverlays();
-	RefreshSocialOverlays();
-	RefreshQuestOverlays();
-	RefreshOptionsOverlays();
-	RefreshKeyboardOverlays();
-	RefreshComponentOverlays();
-	RefreshWorldOverlays();
-	RefreshAbuseOverlays();
-	RefreshUrgentOverlays();
-	RefreshBookOverlays();
-	RefreshMiniGameOverlays();
-	RefreshChatChromeOverlays();
-	RefreshShortcutOverlays();
-	RefreshSkillTabLabels();
-	RefreshPanelTitleOverlay();
-	RefreshCombatPanelOverlays();
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshVitalsOverlays); RefreshVitalsOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshRadarOverlays); RefreshRadarOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshSelectionOverlay); RefreshSelectionOverlay(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshExaminationOverlay); RefreshExaminationOverlay(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshInventoryOverlays); RefreshInventoryOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshPanelBodyText); RefreshPanelBodyText(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshAttributeOverlays); RefreshAttributeOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshSkillOverlays); RefreshSkillOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshTitleOverlays); RefreshTitleOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshSpellHotbarOverlays); RefreshSpellHotbarOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshSpellbookOverlays); RefreshSpellbookOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshSpellbookChromeLabels); RefreshSpellbookChromeLabels(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshExternalContainerOverlays); RefreshExternalContainerOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshVendorOverlays); RefreshVendorOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshTradeOverlays); RefreshTradeOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshManaStoneConfirmation); RefreshManaStoneConfirmation(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshServerConfirmation); RefreshServerConfirmation(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshSalvageOverlays); RefreshSalvageOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshSocialOverlays); RefreshSocialOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshQuestOverlays); RefreshQuestOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshOptionsOverlays); RefreshOptionsOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshKeyboardOverlays); RefreshKeyboardOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshComponentOverlays); RefreshComponentOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshWorldOverlays); RefreshWorldOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshAbuseOverlays); RefreshAbuseOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshUrgentOverlays); RefreshUrgentOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshBookOverlays); RefreshBookOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshMiniGameOverlays); RefreshMiniGameOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshChatChromeOverlays); RefreshChatChromeOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshShortcutOverlays); RefreshShortcutOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshSkillTabLabels); RefreshSkillTabLabels(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshPanelTitleOverlay); RefreshPanelTitleOverlay(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshCombatPanelOverlays); RefreshCombatPanelOverlays(); }
 	RefreshEffectsOverlays(true);
 	RefreshEffectsOverlays(false);
-	RefreshVitaePanelOverlays();
-	RefreshLinkStatusPanelOverlays();
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshVitaePanelOverlays); RefreshVitaePanelOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshLinkStatusPanelOverlays); RefreshLinkStatusPanelOverlays(); }
 	TickStatusPanels(FApp::GetDeltaTime());
 	TickCombatAutoAttack(FApp::GetDeltaTime());
 	TickEnvPanelRangeChecks();
@@ -6083,10 +6083,9 @@ void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Sele
 				[&](const FACEWorldObject& Item) { return Item.Guid==Obj.Guid; });
 			if (VendorStock)
 			{
-				const int32 Limit=Obj.MaxStackSize>1 ? Obj.MaxStackSize : 100;
-				SelectedStackMax=Obj.VendorQuantityAvailable<0 ? Limit : FMath::Max(1,FMath::Min(Limit,Obj.VendorQuantityAvailable));
+				SelectedStackMax=GetVendorPurchaseLimit(Obj.Guid);
 			}
-			SelectedStackAmount=SameStackSelection ? FMath::Clamp(PreviousStackAmount,1,SelectedStackMax)
+			SelectedStackAmount=SelectedStackMax<=0 ? 0 : SameStackSelection ? FMath::Clamp(PreviousStackAmount,1,SelectedStackMax)
 				: VendorStock ? 1 : SelectedStackMax;
 		}
 		// Keep an open examine/inspect panel in sync with the current selection.
@@ -10522,6 +10521,12 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 		bHaveObj = Client->GetWorldObject(LastSelection.Guid, SelObj);
 		if (bHaveObj)
 		{
+			if (OpenVendorGuid && Client->GetVendorMerchandise().ContainsByPredicate(
+				[&](const FACEWorldObject& Stock){return Stock.Guid==SelObj.Guid;}))
+			{
+				SelectedStackMax=GetVendorPurchaseLimit(SelObj.Guid);
+				SelectedStackAmount=SelectedStackMax>0 ? FMath::Clamp(SelectedStackAmount,1,SelectedStackMax) : 0;
+			}
 			const bool bStackable = SelObj.MaxStackSize > 1 || SelObj.StackSize > 1;
 			if (bStackable)
 			{
@@ -13101,21 +13106,13 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 	{
 		TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(ActivePanelPage, TEXT("Effects_SpellList"));
 		TSharedPtr<FACEUIElement> Bar = Manager->FindElementUnder(ActivePanelPage, TEXT("Effects_SpellList_Scrollbar"));
-		const int32 PageSize = ListEl.IsValid() ? FMath::Max(1, ListEl->Height / 24) : 10;
-		int32 FilteredCount = 0;
-		if (Client)
-		{
-			for (const FACEActiveEnchantment& E : Client->GetActiveEnchantments())
-			{
-				if (E.bVitae || E.SpellId == 666) { continue; }
-				const bool bWantPos = ActivePanelPage == TEXT("PositiveEffectsPanel_Field");
-				if (E.bBeneficial == bWantPos) { ++FilteredCount; }
-			}
-		}
-		if (TryBar(Bar, EACEUIScrollTarget::Effects, FMath::Max(0, FilteredCount - PageSize), false))
+		const int32 PageSize = ListEl.IsValid() ? FMath::Max(1, ListEl->Height / 32) : 10;
+		if (TryBar(Bar, EACEUIScrollTarget::Effects, FMath::Max(0, EffectsContentCount - PageSize), false))
 		{
 			return true;
 		}
+		if (EffectsInfoScroll && TryBar(Manager->FindElementUnder(ActivePanelPage,TEXT("Effects_InfoText_Scrollbar")),
+			EACEUIScrollTarget::EffectsInfo,FMath::CeilToInt(EffectsInfoScroll->GetScrollOffsetOfEnd()),false)) return true;
 	}
 	if (ActivePanelPage == TEXT("OptionsPanel_Field") && ActiveOptionsPage() != INDEX_NONE)
 	{
@@ -13267,6 +13264,10 @@ void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D CanvasLocalPos)
 		break;
 	case EACEUIScrollTarget::Effects:
 		EffectsScrollOffset = Off;
+		RefreshEffectsOverlays(ActivePanelPage == TEXT("PositiveEffectsPanel_Field"));
+		break;
+	case EACEUIScrollTarget::EffectsInfo:
+		if (EffectsInfoScroll) EffectsInfoScroll->SetScrollOffset(Off);
 		RefreshEffectsOverlays(ActivePanelPage == TEXT("PositiveEffectsPanel_Field"));
 		break;
 	case EACEUIScrollTarget::OptionsList:
@@ -13977,6 +13978,14 @@ bool UACEUIGameplayBinder::TryHandleVendorFilterDropdownClick(FVector2D Absolute
 	return false;
 }
 
+int32 UACEUIGameplayBinder::GetVendorPurchaseLimit(int32 ItemGuid) const
+{
+	if (Client && OpenVendorGuid != 0)
+		for (const auto& Stock : Client->GetVendorMerchandise())
+			if (Stock.Guid == ItemGuid) return ACEInventoryRules::VendorPurchaseLimit(Stock);
+	return 0;
+}
+
 void UACEUIGameplayBinder::BuySelectedVendorItem()
 {
 	if (!Client || OpenVendorGuid == 0 || VendorSelectedGuid == 0)
@@ -13984,7 +13993,9 @@ void UACEUIGameplayBinder::BuySelectedVendorItem()
 		return;
 	}
 	TArray<TPair<int32, int32>> One;
-	One.Emplace(LastSelection.Guid==VendorSelectedGuid ? FMath::Clamp(SelectedStackAmount,1,SelectedStackMax) : 1, VendorSelectedGuid);
+	const int32 Limit=GetVendorPurchaseLimit(VendorSelectedGuid);
+	if (Limit<=0) return;
+	One.Emplace(LastSelection.Guid==VendorSelectedGuid ? FMath::Clamp(SelectedStackAmount,1,Limit) : 1, VendorSelectedGuid);
 	Client->SendBuyItems(OpenVendorGuid, One);
 }
 
@@ -13994,12 +14005,14 @@ void UACEUIGameplayBinder::AddSelectedVendorItemToBuyCart()
 	{
 		return;
 	}
-	const int32 Quantity=LastSelection.Guid==VendorSelectedGuid ? FMath::Clamp(SelectedStackAmount,1,SelectedStackMax) : 1;
+	const int32 Limit=GetVendorPurchaseLimit(VendorSelectedGuid);
+	if (Limit<=0) return;
+	const int32 Quantity=LastSelection.Guid==VendorSelectedGuid ? FMath::Clamp(SelectedStackAmount,1,Limit) : 1;
 	for (TPair<int32, int32>& P : VendorBuyCart)
 	{
 		if (P.Value == VendorSelectedGuid)
 		{
-			P.Key = FMath::Min(SelectedStackMax,P.Key+Quantity);
+			P.Key = static_cast<int32>(FMath::Min<int64>(Limit,static_cast<int64>(P.Key)+Quantity));
 			ActiveVendorPage = 1;
 			SyncVendorPageVisibility();
 			RefreshVendorOverlays();
@@ -14037,7 +14050,9 @@ void UACEUIGameplayBinder::BuyVendorCartItem()
 		}
 	}
 	TArray<TPair<int32, int32>> One;
-	One.Emplace(Amt, Guid);
+	const int32 Limit=GetVendorPurchaseLimit(Guid);
+	if (Limit<=0) return;
+	One.Emplace(FMath::Clamp(Amt,1,Limit), Guid);
 	Client->SendBuyItems(OpenVendorGuid, One);
 	VendorBuyCart.RemoveAll([Guid](const TPair<int32, int32>& P) { return P.Value == Guid; });
 	RefreshVendorOverlays();
@@ -14353,6 +14368,12 @@ void UACEUIGameplayBinder::HandleVendorOpened(int32 Guid)
 	// do not wipe an in-progress sell cart that drag-drop already filled.
 	if (Guid != 0 && Guid == OpenVendorGuid)
 	{
+		if (LastSelection.bValid && LastSelection.Guid == VendorSelectedGuid)
+		{
+			SelectedStackMax=GetVendorPurchaseLimit(VendorSelectedGuid);
+			SelectedStackAmount=SelectedStackMax>0 ? FMath::Clamp(SelectedStackAmount,1,SelectedStackMax) : 0;
+			RefreshSelectionOverlay();
+		}
 		RefreshVendorOverlays();
 	}
 	else

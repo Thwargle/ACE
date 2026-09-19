@@ -19,6 +19,7 @@
 #include "ACEPlayerController.h"
 #include "ACESession.h"
 #include "Dat/ACECellTransit.h"
+#include "Dat/ACEDatCursor.h"
 #include "Dat/ACEDatTextureResolver.h"
 #include "ProceduralMeshComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
@@ -302,6 +303,105 @@ bool FACERetailInteriorStreamingTest::RunTest(const FString& Parameters)
     HiddenRoom->Destroy(); Terrain->SpawnedEnvCells.Remove(Destination.CellId);
     Host->Destroy();
 
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEParticleFrameReuseTest, "ACE.Rendering.ParticleFrameReuse",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACEParticleFrameReuseTest::RunTest(const FString& Parameters)
+{
+    auto* Reuse = IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Particles.ReuseEmitterFrames"));
+    const int32 Previous = Reuse->GetInt();
+    ON_SCOPE_EXIT { Reuse->Set(Previous, ECVF_SetByCode); };
+    FInteriorTestWorld Fixture;
+    auto* View = Fixture.World->SpawnActor<ACameraActor>();
+    auto* PC = Fixture.World->SpawnActor<APlayerController>();
+    Fixture.World->AddController(PC);
+    if (!PC->PlayerCameraManager)
+    {
+        PC->PlayerCameraManager = Fixture.World->SpawnActor<APlayerCameraManager>();
+        PC->PlayerCameraManager->InitializeFor(PC);
+    }
+    PC->PlayerCameraManager->bUseClientSideCameraUpdates = false;
+    PC->SetViewTarget(View);
+    auto* Owner = Fixture.World->SpawnActor<AActor>();
+    auto* Root = NewObject<USceneComponent>(Owner);
+    Owner->SetRootComponent(Root); Root->RegisterComponent();
+    USceneComponent* Parents[2];
+    for (auto& Parent : Parents)
+    {
+        Parent = NewObject<USceneComponent>(Owner);
+        Parent->SetupAttachment(Root); Parent->RegisterComponent();
+    }
+    UACEScriptComponent* FX[2];
+    for (auto& Component : FX)
+    {
+        Component = NewObject<UACEScriptComponent>(Owner);
+        Owner->AddInstanceComponent(Component); Component->RegisterComponent();
+        for (int32 E = 0; E < 2; ++E)
+        {
+            UACEScriptComponent::FActiveEmitter Emitter;
+            Emitter.Parent = Parents[E]; Emitter.bVRHandFeedback = true; Emitter.bStopped = true;
+            Emitter.Batch = NewObject<UACEParticleBatchComponent>(Owner);
+            Owner->AddInstanceComponent(Emitter.Batch); Emitter.Batch->RegisterComponent();
+            Emitter.Batch->CreateMeshSection(0, {{0,0,0},{0,2,0},{0,0,3}}, {0,1,2}, {}, {}, {}, {}, false);
+            Emitter.Batch->InitializeParticles(128);
+            for (int32 I = 0; I < 128; ++I)
+            {
+                UACEScriptComponent::FActiveParticle Particle;
+                Particle.InstanceIndex = Emitter.Batch->AddParticle(FTransform::Identity, 1.f);
+                Particle.bParentLocal = I % 2 == 0;
+                Particle.DrawMode = I % 6;
+                Particle.Type = 1 + I % 12;
+                Particle.StartOrigin = FVector(400, E * 150, 200);
+                Particle.Position = Particle.StartOrigin;
+                Particle.Offset = FVector(I, I % 7, I % 11);
+                Particle.A = FVector(5,3,1); Particle.B = FVector(.3,.7,.4); Particle.C = FVector(.4,.2,.8);
+                Particle.Life = 10000.f; Particle.FinalTrans = .8f; Particle.FinalScale = .5f;
+                Emitter.Particles.Add(Particle);
+            }
+            Component->ActiveEmitters.Add(MoveTemp(Emitter));
+        }
+    }
+    // Move both attachments independently and change the camera without advancing
+    // GFrameCounter. Reuse must be scoped to this call, never a stale frame cache.
+    for (int32 Step = 0; Step < 4; ++Step)
+    {
+        View->SetActorLocation(FVector(-100 + Step * 31, 80 - Step * 43, 140));
+        PC->PlayerCameraManager->UpdateCamera(0.f);
+        for (int32 E = 0; E < 2; ++E)
+            Parents[E]->SetWorldTransform(FTransform(FRotator(Step * 7, E * 60 + Step * 21, 3), FVector(200 + Step * 12, E * 90, 170 + Step * 8)));
+        Reuse->Set(0, ECVF_SetByCode); FX[0]->TickEmitters(1.f / 30.f);
+        Reuse->Set(1, ECVF_SetByCode); FX[1]->TickEmitters(1.f / 30.f);
+        double MaxError = 0;
+        bool SameColors = true;
+        for (int32 E = 0; E < 2; ++E)
+        {
+            const auto& A = FX[0]->ActiveEmitters[E].Batch->GetProcMeshSection(0)->ProcVertexBuffer;
+            const auto& B = FX[1]->ActiveEmitters[E].Batch->GetProcMeshSection(0)->ProcVertexBuffer;
+            for (int32 I = 0; I < A.Num(); ++I)
+            {
+                MaxError = FMath::Max(MaxError, FVector::Distance(A[I].Position, B[I].Position));
+                MaxError = FMath::Max(MaxError, FVector::Distance(A[I].Normal, B[I].Normal));
+                SameColors &= A[I].Color == B[I].Color;
+            }
+        }
+        TestTrue(TEXT("All draw/motion modes retain the reference particle geometry"), MaxError < .0001);
+        TestTrue(TEXT("Reused frames retain reference fades"), SameColors);
+    }
+    for (int32 Mode : {0, 1})
+    {
+        Reuse->Set(Mode, ECVF_SetByCode);
+        double Seconds = 0;
+        for (int32 Sample = 0; Sample < 4; ++Sample)
+        {
+            FlushRenderingCommands();
+            const double Start = FPlatformTime::Seconds();
+            for (int32 Tick = 0; Tick < 100; ++Tick) FX[Mode]->TickEmitters(.001f);
+            Seconds += FPlatformTime::Seconds() - Start;
+        }
+        AddInfo(FString::Printf(TEXT("Particle frame reuse %d: %.4f ms/update, 256 particles, 400 updates (CPU microbenchmark)"), Mode, Seconds * 1000 / 400));
+    }
     return true;
 }
 
@@ -1187,6 +1287,141 @@ bool FACEInteractionEffectsTest::RunTest(const FString&)
         TestEqual(TEXT("Reused comfort cover still obscures the scene"),VisiblePixels(Behind,TEXT("Comfort covered again"),CoverRig->ComfortCurtain),0);
     }
     }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEDoorwayGeometryCacheTest, "ACE.Rendering.DoorwayGeometryCache",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACEDoorwayGeometryCacheTest::RunTest(const FString& Parameters)
+{
+    FInteriorTestWorld Fixture;
+    auto* Dat = Fixture.GI->GetSubsystem<UACEDatSubsystem>();
+    if (!TestTrue(TEXT("Retail data loads"), Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+    auto* Cache = IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Render.CacheDoorwayGeometry"));
+    const int32 Previous = Cache->GetInt();
+    ON_SCOPE_EXIT { Cache->Set(Previous, ECVF_SetByCode); };
+    using FAperture = ACEOutdoorPortalPlan::FAdmittedAperture;
+    auto Same = [&](const TArray<FAperture>& A, const TArray<FAperture>& B)
+    {
+        if (A.Num() != B.Num()) return false;
+        for (int32 I=0; I<A.Num(); ++I)
+            if (A[I].DestEnvCellId != B[I].DestEnvCellId || A[I].OtherPortalId != B[I].OtherPortalId
+                || A[I].WorldNormal != B[I].WorldNormal || A[I].WorldVerts != B[I].WorldVerts) return false;
+        return true;
+    };
+    Cache->Set(1, ECVF_SetByCode);
+    TArray<FAperture> Partial;
+    Dat->LoadBuildingDoorwayApertures(0x7D640000, 100, Partial);
+    TestEqual(TEXT("Unstreamed building geometry is never cached as a sealed doorway"), Dat->DoorwayGeometryCache.Num(), 0);
+    int32 DoorCount = 0;
+    for (uint32 Key : {0x7D640000u, 0x7D630000u, 0xC88C0000u, 0x09050000u})
+    {
+        FACEDatLandblockInfo Info;
+        if (!Dat->LoadLandblockInfo(Key, Info)) continue;
+        for (float Scale : {100.f, 50.f})
+        {
+            for (const auto& Building : Info.Buildings) Dat->GetOrBuildSetupMesh(Building.ModelId, Scale);
+            TArray<FAperture> Reference, First, Hit;
+            Cache->Set(0, ECVF_SetByCode); Dat->LoadBuildingDoorwayApertures(Key, Scale, Reference);
+            Cache->Set(1, ECVF_SetByCode); Dat->LoadBuildingDoorwayApertures(Key, Scale, First);
+            Dat->LoadBuildingDoorwayApertures(Key, Scale, Hit);
+            TestTrue(TEXT("Cold/hit geometry preserves every portal vertex, side and destination"), Same(Reference, First) && Same(Reference, Hit));
+            DoorCount += Hit.Num();
+            if (!Hit.IsEmpty()) Hit[0].WorldVerts.Reset(); // Caller clips may not modify cached originals.
+            Dat->LoadBuildingDoorwayApertures(Key, Scale, Hit);
+            TestTrue(TEXT("Clipping a returned aperture cannot mutate the cached geometry"), Same(Reference, Hit));
+        }
+    }
+    TestTrue(TEXT("Regression exercises actual doorways"), DoorCount>0);
+    const uint32 Key=0x7D640000;
+    TArray<FAperture> Doors;
+    Dat->LoadBuildingDoorwayApertures(Key,100,Doors);
+    if (!Doors.IsEmpty())
+    {
+        Dat->GetOrBuildEnvCellMesh(Doors[0].DestEnvCellId,100);
+        FVector Center=FVector::ZeroVector;
+        for (auto V : Doors[0].WorldVerts) Center+=V;
+        Center/=Doors[0].WorldVerts.Num();
+        for (float Side : {-1.f,1.f})
+        {
+            TArray<uint32> Keys{Key}; TSet<int32> Reference, Hit;
+            const FVector Eye=Center+Doors[0].WorldNormal*Side*150;
+            Cache->Set(0,ECVF_SetByCode);
+            ACEOutdoorPortalPlan::CollectOutdoorAdmittedEnvCells(*Dat,Eye,{},100,Keys,Reference);
+            Cache->Set(1,ECVF_SetByCode);
+            ACEOutdoorPortalPlan::CollectOutdoorAdmittedEnvCells(*Dat,Eye,{},100,Keys,Hit);
+            TestTrue(TEXT("Moving across a doorway still recomputes PView admission"),Reference.Includes(Hit) && Hit.Includes(Reference));
+        }
+    }
+    // Paired microbenchmark excludes DAT loading; no hardware-dependent speed assertion.
+    for (int32 Enabled : {0,1,0,1})
+    {
+        Cache->Set(Enabled,ECVF_SetByCode);
+        const double Start=FPlatformTime::Seconds();
+        for (int32 I=0; I<4000; ++I) Dat->LoadBuildingDoorwayApertures(Key,100,Doors);
+        AddInfo(FString::Printf(TEXT("Doorway geometry cached=%d: %.3f us/call (%d doors)"),
+            Enabled,(FPlatformTime::Seconds()-Start)*1000000/4000,Doors.Num()));
+    }
+    Dat->ClearLoadedState();
+    TestEqual(TEXT("DAT reload releases the complete geometry cache"),Dat->DoorwayGeometryCache.Num(),0);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACESetupMetadataCacheTest, "ACE.Rendering.SetupMetadataCache",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACESetupMetadataCacheTest::RunTest(const FString& Parameters)
+{
+    FInteriorTestWorld Fixture;
+    auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
+    if (!TestTrue(TEXT("Retail data loads"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+    auto* Cache=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Dat.CacheSetupMetadata"));
+    const int32 Previous=Cache->GetInt(); ON_SCOPE_EXIT { Cache->Set(Previous,ECVF_SetByCode); };
+    FACEDatDatabase Portal;
+    if (!Portal.Open(TEXT("C:/Turbine/Asheron's Call/client_portal.dat"))) return false;
+    for (uint32 Id : {0x02000001u,0x0200004Eu,0x02000306u})
+    {
+        TArray<uint8> Blob; FACEDatSetupModel Setup;
+        if (!TestTrue(TEXT("Reference Setup file exists"),Portal.ReadFile(Id,Blob))) continue;
+        FACEDatCursor Cursor(Blob);
+        if (!TestTrue(TEXT("Reference Setup unpacks"),ACEDatUnpack::UnpackSetupModel(Cursor,Setup))) continue;
+        for (int32 Enabled : {0,1,1})
+        {
+            Cache->Set(Enabled,ECVF_SetByCode);
+            float Up,Down,H,R,SR; uint32 Animation,Script,Table,Sound; FVector3f Origin;
+            TestTrue(TEXT("Physics metadata resolves"),Dat->TryGetSetupPhysics(Id,Up,H,R,Animation,&Down,&Origin,&SR));
+            TestEqual(TEXT("Authored step up"),Up,Setup.StepUpHeight>0?Setup.StepUpHeight:.5f);
+            TestEqual(TEXT("Authored step down"),Down,Setup.StepDownHeight>0?Setup.StepDownHeight:.5f);
+            TestEqual(TEXT("Authored height"),H,Setup.Height); TestEqual(TEXT("Authored radius"),R,Setup.Radius);
+            TestEqual(TEXT("Authored default animation"),Animation,Setup.DefaultAnimation);
+            TestTrue(TEXT("Selection sphere remains model-specific"),Origin==Setup.SelectionSphereOrigin && SR==Setup.SelectionSphereRadius);
+            TestTrue(TEXT("Effect metadata resolves"),Dat->TryGetSetupRuntimeMetadata(Id,Script,Table,Sound));
+            TestTrue(TEXT("Scripts, tables and sounds retain authored IDs"),Script==Setup.DefaultScript && Table==Setup.DefaultScriptTable && Sound==Setup.DefaultSoundTable);
+            TArray<FACEDatCollisionShape> Shapes; bool BSP;
+            TestTrue(TEXT("Collision metadata resolves"),Dat->GetSetupCollisionShapes(Id,Shapes,BSP));
+            const auto& Expected=Setup.CylSpheres.IsEmpty()?Setup.Spheres:Setup.CylSpheres;
+            TestEqual(TEXT("Collision shape count"),Shapes.Num(),Expected.Num());
+            TestEqual(TEXT("Physics BSP flag"),BSP,EnumHasAnyFlags(Setup.Flags,EACESetupFlags::HasPhysicsBSP));
+            for(int32 I=0;I<FMath::Min(Shapes.Num(),Expected.Num());++I)
+                TestTrue(TEXT("Collision origins and dimensions match DAT"),Shapes[I].Origin==Expected[I].Origin && Shapes[I].Radius==Expected[I].Radius && Shapes[I].Height==Expected[I].Height);
+        }
+    }
+    for (int32 Enabled : {0,1,0,1})
+    {
+        Cache->Set(Enabled,ECVF_SetByCode); float Up,H,R; uint32 Animation;
+        const double Start=FPlatformTime::Seconds();
+        for(int32 I=0;I<10000;++I) Dat->TryGetSetupPhysics(0x02000001,Up,H,R,Animation);
+        AddInfo(FString::Printf(TEXT("Setup metadata cached=%d: %.3f us/query"),Enabled,(FPlatformTime::Seconds()-Start)*1000000/10000));
+    }
+    Cache->Set(1,ECVF_SetByCode);
+    for (uint32 Id=0x02FF0000;Id<0x02FF0300;++Id)
+    {
+        float Up=999,H=999,R=999;uint32 Animation=999;
+        TestFalse(TEXT("Unknown setup fails safely"),Dat->TryGetSetupPhysics(Id,Up,H,R,Animation));
+        TestTrue(TEXT("Unknown setup restores defaults"),Up==.5f && H==2.f && R==.5f && Animation==0);
+    }
+    TestEqual(TEXT("Travel and unknown models cannot grow metadata cache without bound"),Dat->SetupRuntimeMetadataCache.Num(),512);
+    Dat->ClearLoadedState();
+    TestEqual(TEXT("DAT reload invalidates Setup metadata"),Dat->SetupRuntimeMetadataCache.Num(),0);
     return true;
 }
 #endif

@@ -9,6 +9,7 @@
 #include "Misc/ScopeExit.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/Material.h"
+#include "ACERuntimeOptions.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACETextureBudgetTest, "ACE.Packaging.TextureBudget",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -54,6 +55,19 @@ bool FACETextureBudgetTest::RunTest(const FString& Parameters)
 	TArray<FColor> LandPixels; LandPixels.Init(FColor::Green, 32 * 32);
 	TStrongObjectPtr<UMaterialInterface> Land(Owner->GetOrCreateLandMaterial(0x12345678, LandPixels, 32, 32));
 	if (!TestNotNull(TEXT("Terrain material builds"), Land.Get())) return false;
+	const FVector ClipEye(100,200,170);
+	Owner->SetLandLookOutClip(true,ClipEye,{});
+	FLinearColor ClipCamera;
+	auto* LandMid=Cast<UMaterialInstanceDynamic>(Land.Get());
+	LandMid->GetVectorParameterValue(TEXT("LookOutCam"),ClipCamera);
+	TestTrue(TEXT("An enabled portal mask follows the actual camera"),ClipCamera.Equals(FLinearColor(ClipEye)));
+	Owner->SetLandLookOutClip(false,ClipEye,{});
+	Owner->SetLandLookOutClip(false,ClipEye+FVector(10000,0,0),{});
+	LandMid->GetVectorParameterValue(TEXT("LookOutCam"),ClipCamera);
+	TestTrue(TEXT("Outdoor motion cannot dirty unused portal camera uniforms"),ClipCamera.Equals(FLinearColor(FVector::ZeroVector)));
+	Owner->SetLandLookOutClip(true,ClipEye,{});
+	LandMid->GetVectorParameterValue(TEXT("LookOutCam"),ClipCamera);
+	TestTrue(TEXT("Re-entering a doorway restores the current camera immediately"),ClipCamera.Equals(FLinearColor(ClipEye)));
 	TWeakObjectPtr<UMaterialInterface> OldLand = Land.Get();
 	CollectGarbage(RF_NoFlags);
 	TestTrue(TEXT("Visible terrain reuses the same material after collection"),
@@ -75,6 +89,16 @@ bool FACETextureBudgetTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Live variant still follows daylight after source collection"), Emission, .37f);
 	TWeakObjectPtr<UMaterialInstanceDynamic> OldLit = Lit.Get(); Lit.Reset(); CollectGarbage(RF_NoFlags);
 	TestFalse(TEXT("Lighting cache releases departed appearances"), OldLit.IsValid());
+	const float OldMaster=ACERuntimeOptions::Get(TEXT("MasterVolume")), OldEffects=ACERuntimeOptions::Get(TEXT("EffectsVolume"));
+	const float OldAmbient=ACERuntimeOptions::Get(TEXT("AmbientVolume")), OldFocus=ACERuntimeOptions::Get(TEXT("ActiveSoundOnly"));
+	ACERuntimeOptions::Set(TEXT("ActiveSoundOnly"),0);ACERuntimeOptions::Set(TEXT("MasterVolume"),.5f);
+	ACERuntimeOptions::Set(TEXT("EffectsVolume"),.8f);ACERuntimeOptions::Set(TEXT("AmbientVolume"),.2f);
+	TestEqual(TEXT("Cached sound settings preserve independent effects volume"),ACERuntimeOptions::SoundGain(false),.4f);
+	TestEqual(TEXT("Cached sound settings preserve independent ambient volume"),ACERuntimeOptions::SoundGain(true),.1f);
+	ACERuntimeOptions::Set(TEXT("MasterVolume"),.25f);
+	TestEqual(TEXT("Changing a slider invalidates sound gains within the same frame"),ACERuntimeOptions::SoundGain(false),.2f);
+	ACERuntimeOptions::Set(TEXT("MasterVolume"),OldMaster);ACERuntimeOptions::Set(TEXT("EffectsVolume"),OldEffects);
+	ACERuntimeOptions::Set(TEXT("AmbientVolume"),OldAmbient);ACERuntimeOptions::Set(TEXT("ActiveSoundOnly"),OldFocus);
 	return true;
 }
 #endif

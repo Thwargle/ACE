@@ -100,7 +100,8 @@ public:
 			- Lines.Num() * DatFont->MaxCharHeight * Scale.Y);
 		if (Element && Element->TextVerticalJustification == 1) Top += FMath::FloorToFloat(SpareHeight * .5f);
 		else if (Element && Element->TextVerticalJustification == 5) Top += SpareHeight;
-		const ESlateDrawEffect Effects = ShouldBeEnabled(bParentEnabled) ? ESlateDrawEffect::None : ESlateDrawEffect::DisabledEffect;
+		const ESlateDrawEffect Effects = (ShouldBeEnabled(bParentEnabled) ? ESlateDrawEffect::None : ESlateDrawEffect::DisabledEffect)
+			| (Scale.Equals(FVector2D(1,1)) ? ESlateDrawEffect::None : ESlateDrawEffect::NoPixelSnapping);
 		auto DrawPass = [&](bool bBackground, FVector2D Offset)
 		{
 			UTexture2D* Atlas = Label->GetGlyphAtlas(bBackground);

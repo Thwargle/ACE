@@ -306,6 +306,12 @@ namespace ACE.Server.WorldObjects
             var motion = new Motion(this, target, MovementType.MoveToObject);
             motion.MoveToParameters.MovementParameters |= MovementParams.CanCharge | MovementParams.FailWalk | MovementParams.UseFinalHeading | MovementParams.Sticky | MovementParams.MoveAway;
             motion.MoveToParameters.WalkRunThreshold = 1.0f;
+            if (target is Player vr && vr.HasActiveVRHands && !(this is Player))
+            {
+                motion.MoveToParameters.MovementParameters &= ~MovementParams.Sticky;
+                motion.MoveToParameters.DistanceToObject=.65f;
+                motion.MoveToParameters.MinDistance=.45f;
+            }
 
             if (runRate > 0)
                 motion.RunRate = runRate;

@@ -1,6 +1,7 @@
 #include "ACEPlayerController.h"
 #include "HAL/IConsoleManager.h"
 #include "VR/ACEVRComponent.h"
+#include "ACEClientBuild.h"
 #include "ACERuntimeOptions.h"
 #include "ACEInputBindings.h"
 #include "ACERetailPortalAnimation.h"
@@ -102,6 +103,7 @@ void AACEPlayerController::BeginPlay()
 {
 	ACERuntimeOptions::Apply();
 	Super::BeginPlay();
+	if (IsLocalController()) ACEClientBuild::UpdateWindowTitle(GetWorld(), IsVRActive());
 #if WITH_EDITOR
 	// Standalone/PIE is a network client even while the editor window lacks focus.
 	// UEditorEngine otherwise clamps it to 3 fps. Scope the exemption to this client
@@ -5738,6 +5740,15 @@ void AACEPlayerController::SoftReconcilePredictedTowardServer(const FACEPosition
 
 void AACEPlayerController::CalibratePredictionSpeedFromServer(const FACEPosition& ServerPose)
 {
+	if (IsVRActive())
+	{
+		// Analog movement already scales the retail Run/burden calculation. Packet
+		// distances also include partial stick input, collisions and arrival jitter;
+		// treating them as the maximum speed ratchets a later full-stick run down.
+		PredictionSpeedScale = 1.f;
+		bHaveServerSpeedSample = false;
+		return;
+	}
 	// Soft-reconcile while predicting used to shrink measured speed and pin PredictionSpeedScale
 	// near 0.35 (chronic slow run). Keep analytic GetLocomotionSpeed and only nudge gently upward
 	// when the server is clearly faster than we expect.

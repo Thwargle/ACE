@@ -331,7 +331,6 @@ bool UACEVRComponent::SelectSpell(int32 Spell)
 	if (!bActive || !Client || Client->GetSessionState() != EACESessionState::InWorld || Spell == 0) return false;
 	const auto Spells = SpellSlots();
 	if (!Spells.Contains(Spell) && !Client->GetKnownSpells().Contains(Spell)) return false;
-	if (GetCombatMode() != ACECombatMode::Magic) Client->SendChangeCombatMode(ACECombatMode::Magic);
 	SelectedSpell = Spell;
 	if (PC->DatGameplayBinder) PC->DatGameplayBinder->SelectVRSpell(Spell);
 	const int32 Index = Spells.IndexOfByKey(Spell);
@@ -418,7 +417,7 @@ void UACEVRComponent::ChangeSetting(FName Setting)
 	else if (Setting == TEXT("Run")) Settings->bRun = !Settings->bRun;
 	else if (Setting == TEXT("Angle")) Settings->SnapDegrees = Settings->SnapDegrees >= 60.f ? 15.f : Settings->SnapDegrees + 15.f;
 	else if (Setting == TEXT("Hand")) Settings->bLeftHanded = !Settings->bLeftHanded;
-	else if (Setting == TEXT("Movement")) Settings->bHeadRelativeMovement = !Settings->bHeadRelativeMovement;
+	else if (Setting == TEXT("Movement")) Settings->MovementDirection = (Settings->MovementDirection + 1) % 3;
 	else if (Setting == TEXT("Seated")) { Settings->bSeated = !Settings->bSeated; ResetTrackingOrigin(); }
 	else if (Setting == TEXT("CharacterHeight")) { Settings->bMatchCharacterHeight = !Settings->bMatchCharacterHeight; ResetTrackingOrigin(); }
 	else if (Setting == TEXT("Body")) Settings->bShowBody = !Settings->bShowBody;
@@ -457,6 +456,7 @@ float UACEVRComponent::GetSliderSetting(FName Setting) const
 	if (Setting == "TurnSpeed") return (Settings->SmoothTurnDegreesPerSecond - 15.f) / 345.f;
 	if (Setting == "HandPitch") return (Settings->HandPitch + 30.f) / 60.f;
 	if (Setting == "Draw") return (Settings->BowFullDraw - 30.f) / 60.f;
+	if (Setting == "BowAnchor") return Settings->BowAnchorOffset / 20.f;
 	if (Setting == "Height") return (Settings->EyeHeightOffset + 30.f) / 60.f;
 	if (Setting == "Panel") return (Settings->PanelScale - .05f) / .1f;
 	if (Setting == "Distance") return (Settings->PanelDistance - 70.f) / 110.f;
@@ -474,6 +474,7 @@ void UACEVRComponent::SetSliderSetting(FName Setting, float Value)
 	if (Setting == "TurnSpeed") Settings->SmoothTurnDegreesPerSecond = 15.f + Value * 345.f;
 	else if (Setting == "HandPitch") Settings->HandPitch = Value * 60.f - 30.f;
 	else if (Setting == "Draw") Settings->BowFullDraw = 30.f + Value * 60.f;
+	else if (Setting == "BowAnchor") Settings->BowAnchorOffset = Value * 20.f;
 	else if (Setting == "Panel") { Settings->PanelScale = .05f + Value * .1f; if (bSettingsOpen) PositionPanel(RetailPanel); }
 	else if (Setting == "Distance") { Settings->PanelDistance = 70.f + Value * 110.f; PositionPanel(RetailPanel); PositionPanel(SettingsPanel); }
 	else if (Setting == "Wrist") Settings->WristScale = .03f + Value * .055f;

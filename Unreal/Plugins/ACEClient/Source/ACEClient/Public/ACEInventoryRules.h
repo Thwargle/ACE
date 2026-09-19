@@ -12,6 +12,15 @@ enum class EACEOwnedItemUse : uint8
 
 namespace ACEInventoryRules
 {
+    // Vendor stock is a unit count, not a stack count. An unlimited supply does
+    // not make a non-stackable item stackable (armor and weapons stay at one).
+    inline int32 VendorPurchaseLimit(const FACEWorldObject& Stock)
+    {
+        const int32 StackLimit = FMath::Max(1, Stock.MaxStackSize);
+        return Stock.VendorQuantityAvailable < 0 ? StackLimit
+            : FMath::Clamp(Stock.VendorQuantityAvailable, 0, StackLimit);
+    }
+
     // Retail ItemHolder::IsMergeAttemptLegal: matching WCID, stack capacity,
     // and neither object being offered in trade (checked by the caller).
     inline int32 MergeAmount(const FACEWorldObject& Source, const FACEWorldObject& Target)

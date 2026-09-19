@@ -114,22 +114,43 @@ public:
   }
   Run->Camera=World->SpawnActor<ACameraActor>();
   const FVector Center=Spawn.ToUnrealLocation(100);
-  const FVector Eye=Center+FVector(0,0,170);
+  const FVector Forward=FACEPosition::AceVectorToUnreal(FVector(1,0,0),1);
+  // The standalone fixture has a full desktop avatar. An eye at its head clips
+  // through the model and hides much of the measured scene. Keep outdoor runs
+  // behind/above it, looking over the synthetic crowd. Indoor geometry needs
+  // the original eye position to remain inside its authored room.
+  FVector Eye=Scene==TEXT("indoor") ? Center+FVector(0,0,170)
+   : Center-Forward*900+FVector(0,0,600);
+  const FVector LookAt=Center+Forward*800+FVector(0,0,100);
+  if(Scene!=TEXT("indoor"))
+  {
+   // Caul is steep enough that a fixed backward offset can put the camera
+   // inside a hillside. Clear the sampled ground along the viewing segment.
+   for(int32 I=0;I<=8;++I)
+   {
+    const FVector P=FMath::Lerp(Eye,LookAt,I/8.f); float GroundZ=0;
+    if(Dat->SampleOutdoorGroundZ(P.X,P.Y,100,GroundZ)) Eye.Z=FMath::Max(Eye.Z,GroundZ+600.f);
+   }
+  }
   Run->Camera->SetActorLocation(Eye);
-  Run->Camera->SetActorRotation((FACEPosition::AceVectorToUnreal(FVector(1,0,0),1)).Rotation());
+  Run->CameraOrigin=Eye;
+  Run->Camera->SetActorRotation(Scene==TEXT("indoor") ? Forward.Rotation()
+   : (LookAt-Eye).Rotation());
   Run->Camera->GetCameraComponent()->SetFieldOfView(90);
   PC->SetViewTarget(Run->Camera.Get());
   Run->StartTime=Run->LastTime=FPlatformTime::Seconds();
   FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([Run](float){return Run->Tick();}));
-  UE_LOG(LogTemp,Display,TEXT("ACE PerfScene %s: %d synthetic NPCs, 30-second warmup, 30-second sample."),*Scene,Count);
+  UE_LOG(LogTemp,Display,TEXT("ACE PerfScene %s: %d synthetic NPCs, 45-second warmup, 30-second sample."),*Scene,Count);
  }
 private:
  TWeakObjectPtr<UWorld> World;
  TWeakObjectPtr<ACameraActor> Camera;
+ FVector CameraOrigin=FVector::ZeroVector;
  FString Scene,Directory;
  double StartTime=0,LastTime=0;
  double LastEffectTime=0;
- bool bSampling=false;
+ bool bSampling=false, bWarmupCapture=false;
+ double SampleStartTime=0;
  uint64 PreviousFrame=uint64(-1);
  TArray<double> Frames;
  bool Tick()
@@ -139,6 +160,8 @@ private:
   if(PreviousFrame==GFrameCounter)return true;
   PreviousFrame=GFrameCounter;
   const double Now=FPlatformTime::Seconds(),Elapsed=Now-StartTime,Ms=(Now-LastTime)*1000;LastTime=Now;
+  if(FParse::Param(FCommandLine::Get(),TEXT("ACEPerfCameraMotion")))
+   Camera->SetActorLocation(CameraOrigin+FVector(8*FMath::Sin(Elapsed),8*FMath::Cos(Elapsed),2*FMath::Sin(2*Elapsed)));
   auto* PC=World->GetFirstPlayerController();PC->SetViewTarget(Camera.Get());
   if(Scene==TEXT("effects") && Elapsed>20 && Now-LastEffectTime>2)
   {
@@ -148,18 +171,25 @@ private:
     { It->ScriptComponent->PlayScriptId(0x330000D5,1);++Played; }
    LastEffectTime=Now;
   }
-  if(!bSampling && Elapsed>=30)
+  if(!bWarmupCapture && Elapsed>=20)
   {
-   bSampling=true;Directory=FPaths::ProjectSavedDir()/TEXT("Performance")/Scene;
+   bWarmupCapture=true;Directory=FPaths::ProjectSavedDir()/TEXT("Performance")/Scene;
    IFileManager::Get().MakeDirectory(*Directory,true);
-   GEngine->Exec(World.Get(),*FString::Printf(TEXT("Trace.File %s cpu,gpu,frame,bookmark"),*(Directory/TEXT("scene.utrace"))));
+   // Screenshot readback/encoding is diagnostic work, not gameplay. It can
+   // stall for seconds on a first ES3.1 capture, so finish it before sampling.
    FACERenderAudit::Collect(World.Get()).Log();
    FScreenshotRequest::RequestScreenshot(Directory/TEXT("scene.png"),true,false);
+   return true;
+  }
+  if(!bSampling && Elapsed>=45)
+  {
+   bSampling=true;SampleStartTime=Now;
+   GEngine->Exec(World.Get(),*FString::Printf(TEXT("Trace.File %s cpu,gpu,frame,bookmark"),*(Directory/TEXT("scene.utrace"))));
    UE_LOG(LogTemp,Display,TEXT("ACE PerfScene sampling %s"),*Scene);
    return true;
   }
   if(bSampling)Frames.Add(Ms);
-  if(Elapsed<60)return true;
+  if(!bSampling || Now-SampleStartTime<30)return true;
   GEngine->Exec(World.Get(),TEXT("Trace.Stop"));
   FString CSV=TEXT("frame,wall_ms\n");double Total=0;
   for(int32 I=0;I<Frames.Num();++I){Total+=Frames[I];CSV+=FString::Printf(TEXT("%d,%.6f\n"),I,Frames[I]);}
@@ -176,6 +206,6 @@ private:
  }
 };
 static FAutoConsoleCommandWithWorldAndArgs GACEPerfScene(TEXT("ace.PerfScene"),
- TEXT("Disconnected development benchmark: outdoor, indoor, effects or caul. Writes Saved/Performance after 60 seconds."),
+ TEXT("Disconnected development benchmark: outdoor, indoor, effects or caul. Writes Saved/Performance after 75 seconds."),
  FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&FACEPerformanceScene::Start));
 #endif

@@ -20,7 +20,7 @@ Use `ace.Particles.ActivePrefix 0` to compare the original full-capacity path.
 `ACE.Rendering.ParticlePrefixRender` compares rendered translucent/additive output
 through growth, swap removal, clearing, refill and scene-proxy recreation.
 
-`Quest3Test/Sync-ClientSource.ps1` mirrors this source and plugin descriptor into
+`Quest/Sync-ClientSource.ps1` mirrors this source and plugin descriptor into
 the native project. Both projects already explicitly enable this plugin. Keep
 this override aligned with the engine version when upgrading Unreal.
 

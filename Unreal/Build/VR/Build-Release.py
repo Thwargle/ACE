@@ -21,32 +21,33 @@ parser.add_argument('--windows-version', required=True)
 parser.add_argument('--installer-revision', type=int, default=6)
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[3]
-quest = root / 'Quest3Test'
+quest = root / 'Quest'
 windows = root / 'Unreal/Saved/VRWindowsArchive/Windows'
 version = args.quest_version
-quest_zip = quest / f'Share/ACE-Quest-Test-v{version}-installer-r{args.installer_revision}.zip'
-apk = quest / 'Packaged/Android_ASTC/ACEViewer-arm64.apk'
+quest_zip = quest / f'Share/AC-VR-Quest-v{version}-installer-r{args.installer_revision}.zip'
+apk = quest / 'Packaged/Android_ASTC/ACUnreal-arm64.apk'
 release = root / f'Releases/{date.today():%Y.%m.%d}-v{version}'
 if release.exists():
     raise SystemExit(f'Release already exists; preserve it: {release}')
 with zipfile.ZipFile(quest_zip) as archive:
-    expected = {'ACEViewer-arm64.apk', 'Install-Quest.ps1', 'Install-Quest.cmd', 'Update-Quest.cmd',
-                'Repair-Quest.cmd', 'Quest-DataTransfer.ps1', 'README.txt', 'RELEASE-NOTES.md', 'LICENSE', 'manifest.json'}
+    expected = {'AC-VR-arm64.apk', 'Install-Quest.ps1', 'Install-Quest.cmd', 'Update-Quest.cmd',
+                'Repair-Quest.cmd', 'Quest-DataTransfer.ps1', 'Quest-ProfileMigration.ps1', 'README.txt', 'RELEASE-NOTES.md', 'LICENSE', 'manifest.json'}
     assert set(archive.namelist()) == expected, 'Unexpected Quest bundle contents'
     assert archive.testzip() is None, 'Quest ZIP checksum failure'
     manifest = json.loads(archive.read('manifest.json').decode('utf-8-sig'))
     assert manifest['versionCode'] == version and manifest['installerRevision'] == args.installer_revision
+    assert manifest['displayName'] == 'AC:VR', 'Rebuild the Quest bundle with current branding'
     assert manifest['apkSha256'] == sha(apk)
-    assert hashlib.sha256(archive.read('ACEViewer-arm64.apk')).hexdigest().upper() == manifest['apkSha256']
-exe = windows / 'ACEViewer/Binaries/Win64/ACEViewer.exe'
+    assert hashlib.sha256(archive.read('AC-VR-arm64.apk')).hexdigest().upper() == manifest['apkSha256']
+exe = windows / 'ACUnreal/Binaries/Win64/ACUnreal.exe'
 assert exe.is_file(), 'Package Windows first'
 # The source stamp is a consistency check, not a substitute for build validation.
 stamp = (root / 'Unreal/Plugins/ACEClient/Source/ACEClient/Public/ACEClientBuild.h').read_text()
 assert f'"{args.windows_version}"' in stamp, 'Windows version differs from source stamp'
 release.mkdir(parents=True)
 shutil.copy2(quest_zip, release / quest_zip.name)
-win_zip = release / f'ACE-Windows-Test-v{version}.zip'
-prefix = f'ACE-Windows-Test-v{version}/'
+win_zip = release / f'AC-Unreal-and-AC-VR-Windows-v{version}.zip'
+prefix = f'AC-Unreal-and-AC-VR-Windows-v{version}/'
 members = []
 with zipfile.ZipFile(win_zip, 'w', zipfile.ZIP_DEFLATED, compresslevel=1, allowZip64=True) as archive:
     for path in sorted(windows.rglob('*')):
@@ -57,13 +58,13 @@ with zipfile.ZipFile(win_zip, 'w', zipfile.ZIP_DEFLATED, compresslevel=1, allowZ
             continue
         if path.suffix.lower() in {'.pdb', '.log', '.dat', '.dmp'} or path.name.startswith('Manifest_'):
             continue
-        if rel.parts[0] not in {'ACEViewer', 'Engine', 'ACEViewer.exe', 'Launch-VR.ps1', 'Launch-VR.bat', 'NOTICES.txt'}:
+        if rel.parts[0] not in {'ACUnreal', 'Engine', 'ACUnreal.exe', 'Launch-VR.ps1', 'Launch-VR.bat', 'AC-Unreal.bat', 'AC-VR.bat', 'NOTICES.txt'}:
             continue
         assert path.name.lower() not in {'config.js', 'log4net.config'}, 'Local server config in runtime'
         archive.write(path, prefix + rel.as_posix())
         members.append(rel.as_posix())
     for source, name in [('Unreal/Build/VR/README-WINDOWS.txt', 'README-WINDOWS.txt'),
-                         ('Quest3Test/Sharing/RELEASE-NOTES.md', 'RELEASE-NOTES.md'), ('LICENSE', 'LICENSE')]:
+                         ('Quest/Sharing/RELEASE-NOTES.md', 'RELEASE-NOTES.md'), ('LICENSE', 'LICENSE')]:
         archive.write(root / source, prefix + name)
 with zipfile.ZipFile(win_zip) as archive:
     assert archive.testzip() is None, 'Windows ZIP checksum failure'
@@ -71,6 +72,7 @@ shutil.copy2(quest / 'Sharing/RELEASE-NOTES.md', release / 'RELEASE-NOTES.md')
 archives = [release / quest_zip.name, win_zip]
 (release / 'SHA256SUMS.txt').write_text(''.join(f'{sha(p)}  {p.name}\n' for p in archives))
 (release / 'release-manifest.json').write_text(json.dumps({
+    'desktopProduct': 'AC:Unreal', 'vrProduct': 'AC:VR',
     'createdUtc': datetime.now(timezone.utc).isoformat(), 'questVersion': manifest['version'],
     'questVersionCode': version, 'installerRevision': args.installer_revision,
     'windowsVersion': args.windows_version, 'apkSha256': sha(apk), 'windowsExeSha256': sha(exe),

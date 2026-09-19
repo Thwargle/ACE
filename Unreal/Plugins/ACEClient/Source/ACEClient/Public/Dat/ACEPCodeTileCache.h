@@ -5,7 +5,7 @@
 /** Shared TexMerge PCode bake tiles — many landblocks reuse the same palette codes. */
 namespace ACEPCodeTileCache
 {
-	static constexpr uint32 SchemaVersion = 1u;
+	static constexpr uint32 SchemaVersion = 2u; // Retail encoded-byte terrain blending.
 	static constexpr uint32 Magic = 0x58504341u; // 'ACPX'
 
 	FString MakeCacheFilePath(uint32 PCode, uint64 DatFingerprint);

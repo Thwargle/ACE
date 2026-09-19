@@ -15,6 +15,11 @@
 #include "Camera/PlayerCameraManager.h"
 #include "Engine/World.h"
 #include "Misc/App.h"
+#include "HAL/IConsoleManager.h"
+
+static TAutoConsoleVariable<int32> CVarACECachedActorDraws(
+	TEXT("ace.Render.CachedActorDraws"), PLATFORM_ANDROID ? 0 : 1,
+	TEXT("Reuse rigid actor draw commands. PC default on; Android opt-in pending native frame timings. Set before actor creation."));
 
 static bool ACEIsMagicCastCommand(uint32 Command)
 {
@@ -428,6 +433,10 @@ void UACECharacterAppearanceComponent::EnsurePartMeshes(int32 Count)
 	{
 		const FName Name = *FString::Printf(TEXT("ACEPart_%d"), PartMeshes.Num());
 		UProceduralMeshComponent* Proc = NewObject<UProceduralMeshComponent>(Owner, Name);
+		// These are rigid part meshes: animation updates their primitive transform,
+		// not their vertices. Cached draws retain that live uniform buffer, just as
+		// movable StaticMeshComponents do. Geometry/material edits invalidate it.
+		Proc->bPreferCachedDraws = CVarACECachedActorDraws.GetValueOnGameThread() != 0;
 		if (AttachParent)
 		{
 			Proc->SetupAttachment(AttachParent);

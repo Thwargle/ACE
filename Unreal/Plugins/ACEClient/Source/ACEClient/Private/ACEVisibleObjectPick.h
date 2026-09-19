@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ACEWorldEntityActor.h"
+#include "ACEEnvCellActor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
@@ -69,7 +70,10 @@ namespace ACEVisibleObjectPick
                 && (!Entity->bReceivedDeathMotion || Entity->IsCorpse())) Candidates.Add(Entity);
         }
         FHitResult Wall;
-        const bool bOccluded = World.LineTraceSingleByChannel(Wall, Start, End, ECC_Visibility, Params);
+        // Terrain, building shells and EnvCell walls deliberately ignore the
+        // object-picking channel. Camera collision includes their true surfaces
+        // without the movement-only doorway/ceiling helper slabs.
+        const bool bOccluded = World.LineTraceSingleByChannel(Wall, Start, End, ECC_Camera, Params);
         double Closest = bOccluded ? Wall.Distance : FVector::Distance(Start, End);
         AActor* Selected = nullptr;
         TArray<AActor*, TInlineAllocator<16>> Fallback;
@@ -91,6 +95,20 @@ namespace ACEVisibleObjectPick
             if (Actor->ActorLineTraceSingle(Hit, Start, End, ECC_Visibility, FCollisionQueryParams())
                 && Hit.Distance < Closest)
             { Closest = Hit.Distance; Selected = Actor; }
+        }
+        if (Selected)
+        {
+            // Visible rooms beyond the current movement neighborhood may not
+            // have cooked/active PhysicsBSP. Their drawn walls still occlude a
+            // click. Test only intersecting room bounds after finding a target;
+            // do not enable distant movement collision or cook extra meshes.
+            const FVector TargetPoint=Start+(End-Start).GetSafeNormal()*Closest;
+            for (TActorIterator<AACEEnvCellActor> It(&World);It;++It)
+            {
+                auto* Mesh=It->CellMesh.Get();
+                if (It->IsHidden() || !Mesh || !FMath::LineBoxIntersection(Mesh->Bounds.GetBox(),Start,TargetPoint,TargetPoint-Start)) continue;
+                if (TraceMesh(*Mesh,Start,TargetPoint,Closest)) Selected=nullptr;
+            }
         }
         if (Impact) *Impact = Start + (End-Start).GetSafeNormal() * Closest;
         return Selected;

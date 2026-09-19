@@ -1795,6 +1795,35 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         Stock.VendorQuantityAvailable=-1;Session.VendorMerchandise={Stock};Session.WorldObjects.Add(Stock.Guid,Stock);
         Session.VendorSellRate=1;Gameplay->OpenVendorGuid=99122;Gameplay->VendorBuyCart={{10,Stock.Guid}};
         {
+            const auto SavedSelection=Gameplay->LastSelection;
+            const auto SavedClientSelection=Session.SelectedObject;
+            const int32 SavedSelectedVendor=Gameplay->VendorSelectedGuid;
+            const int32 SavedSessionVendor=Session.OpenVendorGuid;
+            Session.OpenVendorGuid=99122;
+            FACEWorldObject Helmet=Stock;Helmet.Guid=99123;Helmet.ItemType=ACEItemType::Armor;Helmet.MaxStackSize=0;
+            Session.VendorMerchandise.Add(Helmet);Session.WorldObjects.Add(Helmet.Guid,Helmet);
+            FACESelectedObject Pick;Pick.bValid=true;Pick.Guid=Helmet.Guid;
+            Session.SelectedObject=Pick;Gameplay->VendorSelectedGuid=Helmet.Guid;Gameplay->HandleSelectionChanged(Pick);
+            TestEqual(TEXT("Unlimited helmets have no stack quantity slider"),Gameplay->SelectedStackMax,1);
+            Gameplay->SelectedStackAmount=100;Gameplay->VendorBuyCart.Reset();Gameplay->AddSelectedVendorItemToBuyCart();
+            TestEqual(TEXT("A helmet can only be added as one item"),Gameplay->VendorBuyCart[0].Key,1);
+            Gameplay->AddSelectedVendorItemToBuyCart();
+            TestEqual(TEXT("Repeated add does not turn helmets into a stack"),Gameplay->VendorBuyCart[0].Key,1);
+            Session.VendorMerchandise[0].MaxStackSize=250;Session.VendorMerchandise[0].VendorQuantityAvailable=17;
+            Pick.Guid=Stock.Guid;Session.SelectedObject=Pick;Gameplay->VendorSelectedGuid=Stock.Guid;Gameplay->HandleSelectionChanged(Pick);
+            TestEqual(TEXT("Quantity follows current vendor stock, not the stale object cache"),Gameplay->SelectedStackMax,17);
+            Session.VendorMerchandise[0].VendorQuantityAvailable=-1;Gameplay->HandleVendorOpened(99122);
+            TestEqual(TEXT("Unlimited ammunition is limited to its real stack size"),Gameplay->SelectedStackMax,250);
+            Session.VendorMerchandise[0].VendorQuantityAvailable=0;Gameplay->HandleVendorOpened(99122);
+            TestEqual(TEXT("Sold-out stack hides quantity control"),Gameplay->SelectedStackMax,0);
+            Session.CachedC2SPackets.Reset();Gameplay->BuySelectedVendorItem();
+            Session.SendBuyItems(99122,{{100,Stock.Guid}});
+            TestFalse(TEXT("Stale cart cannot buy exhausted vendor stock"),HasAction(ACEGameAction::Buy));
+            Session.VendorMerchandise={Stock};Session.WorldObjects.Remove(Helmet.Guid);
+            Gameplay->VendorBuyCart={{10,Stock.Guid}};Gameplay->VendorSelectedGuid=SavedSelectedVendor;
+            Session.SelectedObject=SavedClientSelection;Gameplay->HandleSelectionChanged(SavedSelection);Session.OpenVendorGuid=SavedSessionVendor;
+        }
+        {
             FACEWorldObject Pack;Pack.Guid=99130;Pack.ContainerId=Player.Guid;Pack.ItemType=ACEItemType::Container;Pack.ItemsCapacity=24;Pack.Attuned=1;
             FACEWorldObject Bread;Bread.Guid=99131;Bread.ContainerId=Pack.Guid;Bread.ItemType=ACEItemType::Food;Bread.StackSize=12;Bread.Value=120;
             FACEWorldObject Retained=Bread;Retained.Guid=99132;Retained.ObjectDescriptionFlags=ACEObjectDescFlag::Retained;
@@ -1878,7 +1907,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         FString Mirrored;FFileHelper::LoadFileToString(Mirrored,*MirrorPath);
         TestTrue(TEXT("Log appends instead of replacing an existing file"),Mirrored.StartsWith(TEXT("existing log line")));
         TestTrue(TEXT("Command files expand the retail date and weekday"),Mirrored.Contains(FDateTime::Now().ToFormattedString(TEXT("%Y-%m-%d-%a"))));
-        TestTrue(TEXT("Command files execute local commands"),Mirrored.Contains(TEXT("ACEViewer")));
+        TestTrue(TEXT("Command files execute local commands"),Mirrored.Contains(PLATFORM_ANDROID ? TEXT("AC:VR") : TEXT("AC:Unreal")));
         TestTrue(TEXT("Refill help explains the vendor buy list"),Mirrored.Contains(TEXT("choose Buy All")));
         TestFalse(TEXT("Local command files and help do not send public chat"),HasAction(ACEGameAction::Talk));
         Gameplay->bChatMirrorToFile=SavedLogging;Gameplay->ChatMirrorFilePath=SavedMirror;
@@ -1933,6 +1962,49 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         Client->Session->House=FACEHouseInfo();
 
         Gameplay->ShowPanelPage(TEXT("SocialPanel_Field"));
+		{
+			const auto SavedEnchantments=Session.ActiveEnchantments;
+			Session.ActiveEnchantments.Reset();
+			for (int32 Id : {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24})
+			{
+				FACEActiveEnchantment E; E.SpellId=Id; E.SpellCategory=Id; E.bBeneficial=true;
+				E.Duration=Id==1 ? -1 : 3661.9f; E.PowerLevel=100; Session.ActiveEnchantments.Add(E);
+			}
+			FACEActiveEnchantment Time; Time.Duration=3661.9f;
+			TestEqual(TEXT("Retail effect timer includes hours, minutes and seconds, truncating fractions"),Gameplay->FormatEnchantmentRemaining(Time),FString(TEXT("1:01:01")));
+			Time.Duration=61.9f; TestEqual(TEXT("Short timer uses m:ss"),Gameplay->FormatEnchantmentRemaining(Time),FString(TEXT("1:01")));
+			Time.ReceivedAt=FPlatformTime::Seconds()-10;
+			TestEqual(TEXT("Effect timer advances between server updates"),Gameplay->FormatEnchantmentRemaining(Time),FString(TEXT("0:51")));
+			Time.Duration=-1; TestTrue(TEXT("Permanent effect has no duration label"),Gameplay->FormatEnchantmentRemaining(Time).IsEmpty());
+			Gameplay->ShowPanelPage(TEXT("PositiveEffectsPanel_Field")); Gameplay->TickRefresh();
+			TestEqual(TEXT("Effect rows use the authored 32px template"),Gameplay->EffectsRowElements[0]->Height,32);
+			TestEqual(TEXT("Opening effects does not invent a selected spell"),Gameplay->SelectedEffectsSpellId,0);
+			Gameplay->SelectedEffectsSpellId=1;
+			for (int32 SpellId:Gameplay->EffectsListSpellIds)
+			{
+				FString ValidDescription;
+				if (Dat->TryGetSpellDescription(SpellId,ValidDescription) && !ValidDescription.IsEmpty())
+				{Gameplay->SelectedEffectsSpellId=SpellId;break;}
+			}
+			Gameplay->RefreshEffectsOverlays(true);
+			FString EffectDescription; Dat->TryGetSpellDescription(Gameplay->SelectedEffectsSpellId,EffectDescription);
+			TestTrue(TEXT("Selected effect shows the actual spell description"),!EffectDescription.IsEmpty() && Gameplay->EffectsInfoLabel->GetText().ToString().Contains(EffectDescription));
+			for (int32 EffectRow=0;EffectRow<Gameplay->EffectsListSpellIds.Num();++EffectRow)
+			{
+				auto* NameSlot=Cast<UCanvasPanelSlot>(Gameplay->EffectsListRows[EffectRow]->Slot);
+				auto* TimeSlot=Cast<UCanvasPanelSlot>(Gameplay->EffectsListDurations[EffectRow]->Slot);
+				TestTrue(TEXT("Effect name cannot overlap its separate duration column"),NameSlot && TimeSlot && NameSlot->GetPosition().X+NameSlot->GetSize().X<=TimeSlot->GetPosition().X+.01);
+				TestFalse(TEXT("Duration is not appended to the spell name"),Gameplay->EffectsListRows[EffectRow]->GetText().ToString().Contains(TEXT(":")));
+			}
+			CaptureScreen(TEXT("GameplayEffectsRetailColumns"));
+			Gameplay->EffectsScrollOffset=999; Gameplay->RefreshEffectsOverlays(true); CaptureScreen(TEXT("GameplayEffectsRetailScrolled"));
+			auto Stronger=Session.ActiveEnchantments[0]; Stronger.SpellId=30; Stronger.PowerLevel=200; Session.ActiveEnchantments.Add(Stronger);
+			Gameplay->RefreshEffectsOverlays(true); TestEqual(TEXT("Superseded enchantment is not a second active row"),Gameplay->EffectsContentCount,24);
+			for (auto& E:Session.ActiveEnchantments) E.bBeneficial=false;
+			Gameplay->ShowPanelPage(TEXT("NegativeEffectsPanel_Field")); Gameplay->TickRefresh(); CaptureScreen(TEXT("GameplayHarmfulEffectsRetailColumns"));
+			Session.ActiveEnchantments=SavedEnchantments;
+			Gameplay->ShowPanelPage(TEXT("SocialPanel_Field"));
+		}
         for (const TCHAR* AuditTab:{TEXT("AllegiancePage"),TEXT("FellowshipPage"),TEXT("FriendsPage"),TEXT("SquelchPage")})
         {
             Gameplay->SyncSocialPanelTab(AuditTab);Gameplay->TickRefresh();CaptureScreen(FString(TEXT("GameplayAudit"))+AuditTab);

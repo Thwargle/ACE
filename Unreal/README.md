@@ -1,6 +1,9 @@
-# ACEViewer — Unreal project
+# AC:Unreal / AC:VR — Unreal project
 
-Loadable Unreal Engine project for the **ACEClient** plugin (login, character appearance, terrain).
+**AC:Unreal** is the desktop client; **AC:VR** is the PC VR and native Quest client.
+Both use the **ACEClient** plugin and the shared `ACUnreal` project/module.
+Existing profiles migrate to the renamed save folder without replacing newer settings.
+Launcher artwork and reproducible icon exports are in [Build/Branding](Build/Branding/README.md).
 
 ## Quick start
 
@@ -16,7 +19,7 @@ acceptance testing is still required.
    - **Windows 10/11 SDK (10.0.19041 or newer)** — required or Unreal cannot compile
 3. Put retail DAT files in `C:\Turbine\Asheron's Call\` (`client_portal.dat`, `client_cell_1.dat`, optional `client_highres.dat`).
 4. Close any existing editor instance for this project, then run **`C:\dev\ACE\Unreal\Launch.bat`**.
-5. The launcher builds **ACEViewerEditor Win64 Development** with UE 5.8 before opening the project. If compilation fails, it stops instead of opening old binaries. Unchanged builds only need an incremental check.
+5. The launcher builds **ACUnrealEditor Win64 Development** with UE 5.8 before opening the project. If compilation fails, it stops instead of opening old binaries. Unchanged builds only need an incremental check.
 6. Press **Play** → login UI → account / Enter World → WASD.
 
 If compile fails with **“No available Windows SDKs”** / **Sdk: not found**, install SDK 10.0.19041 via Visual Studio Installer → Modify → Individual components → *Windows 10 SDK (10.0.19041.0)*, or:
@@ -29,12 +32,12 @@ winget install --id Microsoft.WindowsSDK.10.0.19041 --accept-package-agreements
 
 ```
 Unreal/
-  ACEViewer.uproject          ← open this
+  ACUnreal.uproject          ← open this
   Launch.bat                 ← build and open the current editor client
-  OpenACEViewer.bat           ← UE 5.8 build/launch implementation
+  OpenACUnreal.bat           ← UE 5.8 build/launch implementation
   GenerateProjectFiles.bat    ← optional .sln generation
   Config/
-  Source/ACEViewer/           ← game module (GameMode, Pawn)
+  Source/ACUnreal/           ← game module (GameMode, Pawn)
   Plugins/ACEClient/          ← ACE network + DAT client
   Content/                    ← add a map here if you want
 ```
@@ -43,17 +46,23 @@ Unreal/
 
 | Piece | Class |
 |-------|--------|
-| Game Mode | `ACEViewerGameMode` (world + terrain presenters) |
+| Game Mode | `ACUnrealGameMode` (world + terrain presenters) |
 | Controller | `ACEPlayerController` (login UI, WASD, local appearance) |
-| Pawn | `ACEViewerPawn` (capsule + `ACECharacterAppearanceComponent`) |
+| Pawn | `ACUnrealPawn` (capsule + `ACECharacterAppearanceComponent`) |
 
-On **Play**, a separate PIE window opens with the **ACE Viewer Login** panel (host/port/account/password). DAT files load when you enter the world, not at Play, so startup is immediate.
+On **Play**, a separate PIE window opens with the **AC:Unreal** login panel (host/port/account/password). DAT files load when you enter the world, not at Play, so startup is immediate.
 
-The Play window title includes the build version. `Saved/Logs/ACEViewer.log`
+The Play window title includes the build version. `Saved/Logs/ACUnreal.log`
 also records `ACEClient BUILD STAMP` from the compiled client module. The
 version in `Plugins/ACEClient/Source/ACEClient/Public/ACEClientBuild.h` and
 `ProjectVersion` / `ProjectDisplayedTitle` in `Config/DefaultGame.ini` must agree.
 Run `Launch.bat --build-only` to compile the same target without opening Unreal.
+
+For diagnosing a Windows DX12 shader-conversion crash, `Launch.bat --dx11`
+opens the editor with DirectX 11 for that launch only. It does not change the
+project renderer or the standalone Quest build. This is a compatibility
+workaround; a successful offline render test does not verify a particular server
+login. The flag can be combined with `--build-only`.
 
 ## Windows packaging
 
@@ -81,15 +90,15 @@ terrain and objects at runtime. If using a custom or baked map, add that map to
 
 The package still needs the retail DAT installation configured in
 `[/Script/ACEClient.ACEDatSubsystem] DatDirectory`. It does not contain those DAT
-files or saved login credentials. Run `Windows/ACEViewer.exe` from the output
-folder, keeping the adjacent `ACEViewer` and `Engine` folders with it.
+files or saved login credentials. Run `Windows/ACUnreal.exe` from the output
+folder, keeping the adjacent `ACUnreal` and `Engine` folders with it.
 
 If login succeeds but character selection stays black, first verify the retail
 DAT installation on that computer. By default it must contain
 `C:/Turbine/Asheron's Call/client_portal.dat` and `client_cell_1.dat` (and
 `client_highres.dat` when installed). The packaged client does not include them.
 Keep the complete extracted package, including
-`ACEViewer/Plugins/ACEClient/Docs/UI/Resolved/*.json`.
+`ACUnreal/Plugins/ACEClient/Docs/UI/Resolved/*.json`.
 
 Build 2026.09.11.6 keeps the login card visible until character selection is
 ready, displays missing DAT/layout errors, and stops retrying failed indexing
@@ -102,8 +111,8 @@ For a non-default DAT folder, set the following in the game's saved
 DatDirectory=D:/Games/Asheron's Call
 ```
 
-Collect `ACEViewer.log` from the package's `ACEViewer/Saved/Logs`, or
-`%LOCALAPPDATA%/ACEViewer/Saved/Logs`. The `background index starting` line
+Collect `ACUnreal.log` from the package's `ACUnreal/Saved/Logs`, or
+`%LOCALAPPDATA%/ACUnreal/Saved/Logs`. The `background index starting` line
 records the DAT folder actually used; `background index failed` and
 `UILayoutResolver: missing resolved layout` identify the two asset failures.
 
@@ -119,14 +128,14 @@ runtime mesh construction and actual collision traces.
 The repo ships **no `.umap` files** (binary assets). Config points at the engine **Open World** template, which loads automatically. For a project-owned map:
 
 1. **File → New Level → Empty Open World** (or Basic).
-2. **Edit → Project Settings → Maps & Modes** → set **Editor Startup Map** and **Game Default Map** to your saved map (e.g. `/Game/Maps/ACEViewer`).
-3. **Window → World Settings → GameMode Override → ACEViewerGameMode** (project default is already set in `Config/DefaultEngine.ini`).
-4. Save the level under `Content/Maps/` (e.g. `ACEViewer`).
+2. **Edit → Project Settings → Maps & Modes** → set **Editor Startup Map** and **Game Default Map** to your saved map (e.g. `/Game/Maps/ACUnreal`).
+3. **Window → World Settings → GameMode Override → ACUnrealGameMode** (project default is already set in `Config/DefaultEngine.ini`).
+4. Save the level under `Content/Maps/` (e.g. `ACUnreal`).
 
 ## Custom map (optional)
 
 1. Create **File → New Level → Empty Open World** (or Basic).
-2. **World Settings → GameMode Override → ACEViewerGameMode**.
+2. **World Settings → GameMode Override → ACUnrealGameMode**.
 3. Save as `Content/Maps/Main`, set it as Editor Startup / Game Default Map in Project Settings.
 
 ## Plugin docs

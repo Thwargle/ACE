@@ -8,6 +8,13 @@
 #include "Engine/World.h"
 #include "Engine/GameInstance.h"
 #include "ProceduralMeshComponent.h"
+#include "ACECombatStance.h"
+#include "Materials/MaterialInterface.h"
+#include "GameFramework/PlayerController.h"
+#include "Camera/PlayerCameraManager.h"
+#include "HAL/IConsoleManager.h"
+
+static TAutoConsoleVariable<int32> CVarRemoteBowStrings(TEXT("ace.VR.RemoteBowStrings"),1,TEXT("Render one lightweight bow string mesh for nearby VR archers."));
 
 UACEVRRemoteAvatarComponent::UACEVRRemoteAvatarComponent()
 {
@@ -18,6 +25,8 @@ UACEVRRemoteAvatarComponent::UACEVRRemoteAvatarComponent()
 void UACEVRRemoteAvatarComponent::TickComponent(float Dt, ELevelTick Type, FActorComponentTickFunction* Tick)
 {
 	Super::TickComponent(Dt, Type, Tick);
+	for(auto It=EquipmentRevisions.CreateIterator();It;++It) if(!It.Key().IsValid()) It.RemoveCurrent();
+	if (BowString) BowString->SetVisibility(false);
 	auto* Entity = Cast<AACEWorldEntityActor>(GetOwner());
 	auto* App = GetOwner()->FindComponentByClass<UACECharacterAppearanceComponent>();
 	auto* GI = GetWorld()->GetGameInstance();
@@ -45,7 +54,7 @@ void UACEVRRemoteAvatarComponent::TickComponent(float Dt, ELevelTick Type, FActo
 		return;
 	}
 	if (!bApplied) RetailRoot = App->GetMeshRoot()->GetRelativeTransform();
-	bApplied = true; PoseFlags = Pose.Flags; App->bVRPoseControlled = true;
+	bApplied = true; PoseFlags = Pose.Flags; App->bVRPoseControlled = true; VisualPose=Pose;
 	FTransform Tracked[3];
 	for (int32 I = 0; I < 3; ++I)
 		Tracked[I] = FTransform(Pose.Poses[I].GetRotation(), Entity->GetActorLocation() + Pose.Poses[I].GetLocation() * Scale);
@@ -110,6 +119,35 @@ void UACEVRRemoteAvatarComponent::TickComponent(float Dt, ELevelTick Type, FActo
 		if (auto* Part=App->GetPartMesh(Accessory); Part && App->GetPartBindTransform(Accessory, Bind))
 			Part->SetWorldTransform(Bind.GetRelativeTransform(Upper)*App->GetPartMesh(HandIndex-2)->GetComponentTransform());
 	}
+	FACEWorldObject Weapon;
+	auto* Viewer=GetWorld()->GetFirstPlayerController();
+	if (CVarRemoteBowStrings.GetValueOnGameThread() && Pose.Version==2 && Pose.Ammo && Viewer && Viewer->PlayerCameraManager
+		&& Client->GetWorldObject(Pose.Weapon,Weapon) && ACECombatStance::InferCombatStyle(Weapon)==0x10
+		&& FVector::DistSquared(Viewer->PlayerCameraManager->GetCameraLocation(),Entity->GetActorLocation())<FMath::Square(1500.f))
+	{
+		if (!BowString)
+		{
+			BowString=NewObject<UProceduralMeshComponent>(GetOwner());GetOwner()->AddInstanceComponent(BowString);
+			BowString->SetupAttachment(GetOwner()->GetRootComponent());BowString->SetUsingAbsoluteRotation(true);
+			BowString->SetCollisionEnabled(ECollisionEnabled::NoCollision);BowString->SetCastShadow(false);BowString->RegisterComponent();
+			BowString->SetMaterial(0,LoadObject<UMaterialInterface>(nullptr,TEXT("/Game/ACE/RuntimeMaterials/M_ACEVertexColor_v1.M_ACEVertexColor_v1")));
+		}
+		TArray<FVector> V,N;TArray<int32> Indices;TArray<FVector2D> UV;TArray<FLinearColor> Colors;TArray<FProcMeshTangent> Tangents;
+		const FVector Center=Pose.Poses[3].GetLocation()*Scale;
+		const FVector Nock=(Pose.Flags&16u) ? Pose.Poses[(Pose.Flags&8u) ? 1 : 2].GetLocation()*Scale
+			: Center+Pose.Poses[3].GetUnitAxis(EAxis::Z)*12.f;
+		const FVector View=Viewer->PlayerCameraManager->GetCameraLocation()-Entity->GetActorLocation();
+		for (float Sign:{-1.f,1.f})
+		{
+			const FVector Tip=Center+Pose.Poses[3].GetUnitAxis(EAxis::Y)*48.f*Sign;
+			const FVector Side=FVector::CrossProduct(Nock-Tip,View-Tip).GetSafeNormal()*.15f;
+			const int32 I=V.Num();V.Append({Tip-Side,Tip+Side,Nock+Side,Nock-Side});Indices.Append({I,I+1,I+2,I,I+2,I+3});
+			for(int32 J=0;J<4;++J){N.Add(FVector::UpVector);UV.Add(FVector2D::ZeroVector);Colors.Add(FLinearColor(.7f,.65f,.5f));}
+		}
+		if (!BowString->GetProcMeshSection(0)) BowString->CreateMeshSection_LinearColor(0,V,Indices,N,UV,Colors,Tangents,false);
+		else BowString->UpdateMeshSection_LinearColor(0,V,N,UV,Colors,Tangents);
+		BowString->SetVisibility(!Entity->IsHidden());
+	}
 }
 
 USceneComponent* UACEVRRemoteAvatarComponent::GetHeldAnchor(int32 ParentLocation, bool TwoHanded) const
@@ -121,4 +159,42 @@ USceneComponent* UACEVRRemoteAvatarComponent::GetHeldAnchor(int32 ParentLocation
 	else return nullptr;
 	auto* App = GetOwner()->FindComponentByClass<UACECharacterAppearanceComponent>();
 	return App ? App->GetPartMesh(Left ? 12 : 15) : nullptr;
+}
+
+bool UACEVRRemoteAvatarComponent::UpdateMissileAttachment(AACEWorldEntityActor* Item)
+{
+	if (!Item || !Item->Appearance) return false;
+	auto* Client=GetWorld()->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+	FACEWorldObject Object;
+	if (!Client || !Client->GetWorldObject(Item->GetACEGuid(),Object)) return false;
+	const bool Ammo=(Object.CurrentWieldedLocation & ACEEquipMask::MissileAmmo)!=0;
+	if (!bApplied || VisualPose.Version!=2)
+	{
+		if (EquipmentRevisions.Remove(Item)) { Item->Appearance->ApplyWorldObject(Object,Item->Appearance->WorldScale,false); Item->SetActorHiddenInGame(false); }
+		return false;
+	}
+	const int32 Slot=Item->GetACEGuid()==VisualPose.Weapon ? 3 : Item->GetACEGuid()==VisualPose.Ammo ? 4 : -1;
+	if (Slot<0)
+	{
+		if (Ammo) { Item->SetActorHiddenInGame(true); EquipmentRevisions.FindOrAdd(Item)=0; return true; }
+		if (EquipmentRevisions.Remove(Item)) Item->Appearance->ApplyWorldObject(Object,Item->Appearance->WorldScale,false);
+		return false;
+	}
+	const int32 Style=ACECombatStance::InferCombatStyle(Object);
+	if (!EquipmentRevisions.Contains(Item) || EquipmentRevisions[Item]!=Item->Appearance->GetAppearanceRevision())
+	{
+		FACEWorldObject Copy=Object;
+		if (Ammo || Style==0x10 || Style==0x20)
+		{
+			Copy.ParentGuid=Copy.ParentLocation=0;
+			Copy.PlacementId=Ammo ? 52 : Style==0x20 ? 3 : 0;
+			Copy.MotionTableId=Copy.DefaultAnimationId=0;
+		}
+		Item->Appearance->ApplyWorldObject(Copy,Item->Appearance->WorldScale,false);
+		EquipmentRevisions.FindOrAdd(Item)=Item->Appearance->GetAppearanceRevision();
+	}
+	const FTransform& T=VisualPose.Poses[Slot];
+	Item->SetActorLocationAndRotation(GetOwner()->GetActorLocation()+T.GetLocation()*Item->Appearance->WorldScale,T.GetRotation());
+	Item->SetActorHiddenInGame(GetOwner()->IsHidden());
+	return true;
 }

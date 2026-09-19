@@ -83,6 +83,8 @@ UACEUIResourceResolver* UACEDatSubsystem::GetUiResources()
 
 namespace
 {
+	TAutoConsoleVariable<int32> CVarSkipUnusedPortalCamera(TEXT("ace.Render.SkipUnusedPortalCamera"),1,
+		TEXT("Avoid terrain uniform updates for an unused outdoor portal camera. Set 0 for profiling."));
 	enum class EACEAceMaterialKind : uint8
 	{
 		Opaque,
@@ -938,7 +940,7 @@ void UACEDatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	// DAT files are deployed separately into this test application's sandbox.
 	// ProjectSavedDir resolves through Unreal's Android platform file layer.
 	DatDirectory = FPaths::ProjectSavedDir() / TEXT("DAT");
-	UE_LOG(LogTemp, Log, TEXT("ACE Quest DAT directory: %s"), *DatDirectory);
+	UE_LOG(LogTemp, Log, TEXT("AC:VR DAT directory: %s"), *DatDirectory);
 #endif
 	if (bAutoLoadOnInitialize)
 	{
@@ -1036,6 +1038,9 @@ void UACEDatSubsystem::ClearLoadedState()
 	SetupMeshCache.Reset();
 	LandblockCache.Reset();
 	LandblockInfoCache.Reset();
+	DoorwayGeometryCache.Reset();
+	SetupRuntimeMetadataCache.Reset();
+	UncachedSetupRuntimeMetadata = FSetupRuntimeMetadata();
 	BuildingInteriorFootprints.Reset();
 	EnvCellMeshCache.Reset();
 	SetupStaticMeshCache.Reset();
@@ -1409,6 +1414,9 @@ bool UACEDatSubsystem::EnsureLoaded()
 			RuntimeTextureKeep.Reset();
 			LandblockCache.Reset();
 			LandblockInfoCache.Reset();
+			DoorwayGeometryCache.Reset();
+			SetupRuntimeMetadataCache.Reset();
+			UncachedSetupRuntimeMetadata = FSetupRuntimeMetadata();
 			BuildingInteriorFootprints.Reset();
 			EnvCellMeshCache.Reset();
 			// Rebuild EnvCellBuilder so EnvironmentCache re-unpacks CellBSP nodes.
@@ -2498,9 +2506,12 @@ void UACEDatSubsystem::SetLandLookOutClip(bool bEnable, const FVector& CameraWor
 {
     FACEPortalViewMask Mask;
     if (bEnable) Mask = FACEPortalViewMask::Build(CameraWorld, Apertures);
+    // Outside any visible doorway the camera is unused by the terrain shader.
+    // HMD micro-movements must not dirty every terrain material's uniform buffer.
+    const FVector ClipCamera = bEnable || CVarSkipUnusedPortalCamera.GetValueOnGameThread()==0 ? CameraWorld : FVector::ZeroVector;
     const bool bParametersChanged = bLandLookOutClip != bEnable
         || bLandLookInClip != (bEnable && LookInExits)
-        || !LandLookOutCam.Equals(CameraWorld, 0.f);
+        || !LandLookOutCam.Equals(ClipCamera, 0.f);
     bLandLookInClip = bEnable && LookInExits;
     if (bLandLookInClip)
     {
@@ -2517,7 +2528,7 @@ void UACEDatSubsystem::SetLandLookOutClip(bool bEnable, const FVector& CameraWor
         || (Mask.Records.Num() > 0 && FMemory::Memcmp(Mask.Records.GetData(), LandPortalViewRecords.GetData(),
             Mask.Records.Num() * sizeof(FVector4f)) != 0);
     bLandLookOutClip = bEnable;
-    LandLookOutCam = CameraWorld;
+    LandLookOutCam = ClipCamera;
     LandPortalViewCount = Mask.ViewCount;
     if (bChanged)
     {
@@ -2935,7 +2946,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceSkyColorFillMaterialBase()
 
 UMaterialInterface* UACEDatSubsystem::EnsureAceWeatherTranslucentMaterialBase()
 {
-	static constexpr int32 WxTransMatVersion = 12;
+	static constexpr int32 WxTransMatVersion = 13;
 	static int32 AppliedWxTransMatVersion = 0;
 	if (AppliedWxTransMatVersion != WxTransMatVersion)
 	{
@@ -2949,9 +2960,12 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceWeatherTranslucentMaterialBase()
 
 	// One-sided: camera sits inside rain cylinders — two-sided faces z-fight as a
 	// flickering white sheet. Emissive×Opacity so DAT Translucency (rain 0.5) fades.
+	// Retail's after-sky pass disables depth in its ordered cell renderer. UE
+	// submits these curtains after the opaque world: use hardware depth testing
+	// so walls/terrain occlude rain, including MSAA samples in both VR eyes.
 	WeatherTranslucentMaterialBase = CreateAceOverlayMaterial(
-		TEXT("M_ACEWeatherTranslucent_v12"), EACEAceMaterialKind::Translucent,
-		/*bDisableFog*/ true, /*bDisableDepthTest*/ true, /*bForceUvWrap*/ true,
+		TEXT("M_ACEWeatherTranslucent_v13"), EACEAceMaterialKind::Translucent,
+		/*bDisableFog*/ true, /*bDisableDepthTest*/ false, /*bForceUvWrap*/ true,
 		/*bEmissiveTimesOpacity*/ true, /*bTwoSided*/ false);
 	if (WeatherTranslucentMaterialBase)
 	{
@@ -2963,7 +2977,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceWeatherTranslucentMaterialBase()
 
 UMaterialInterface* UACEDatSubsystem::EnsureAceWeatherAdditiveMaterialBase()
 {
-	static constexpr int32 WxAddMatVersion = 12;
+	static constexpr int32 WxAddMatVersion = 13;
 	static int32 AppliedWxAddMatVersion = 0;
 	if (AppliedWxAddMatVersion != WxAddMatVersion)
 	{
@@ -2976,8 +2990,8 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceWeatherAdditiveMaterialBase()
 	}
 
 	WeatherAdditiveMaterialBase = CreateAceOverlayMaterial(
-		TEXT("M_ACEWeatherAdditive_v12"), EACEAceMaterialKind::Additive,
-		/*bDisableFog*/ true, /*bDisableDepthTest*/ true, /*bForceUvWrap*/ true,
+		TEXT("M_ACEWeatherAdditive_v13"), EACEAceMaterialKind::Additive,
+		/*bDisableFog*/ true, /*bDisableDepthTest*/ false, /*bForceUvWrap*/ true,
 		/*bEmissiveTimesOpacity*/ true, /*bTwoSided*/ false);
 	if (WeatherAdditiveMaterialBase)
 	{
@@ -3680,8 +3694,13 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateLandMaterial(uint32 PCode, cons
 	}
 	if (!Tex)
 	{
+		// TexMerge already uses the retail landscape resolution (1024 in the DAT).
+		// The mobile object-texture cap must not halve the blended roads/terrain.
+		// Upload the baked pixels directly as BGRA8, retaining the full mip chain.
 		Tex = FACEDatTextureResolver::CreateTransientRgbaWithMips(
-			Width, Height, Pixels, /*bUsesAlpha*/ false, TA_Clamp, TA_Clamp);
+			Width, Height, Pixels, /*bUsesAlpha*/ false, TA_Clamp, TA_Clamp,
+			/*bPremultiplyAlpha*/ false, /*bDilateRgbIntoTransparent*/ false,
+			/*MaxMipLevels*/ 0, TF_Trilinear, /*bApplyWorldSizeLimit*/ false);
 		if (!Tex)
 		{
 			return nullptr;
@@ -5097,6 +5116,9 @@ bool UACEDatSubsystem::ConsumeLandMeshReloadRequest(bool* bOutClearEnvCells)
 		CachedDatFingerprint = 0;
 		LandblockCache.Reset();
 		LandblockInfoCache.Reset();
+		DoorwayGeometryCache.Reset();
+		SetupRuntimeMetadataCache.Reset();
+		UncachedSetupRuntimeMetadata = FSetupRuntimeMetadata();
 		EnvCellMeshCache.Reset();
 		SetupMeshCache.Reset();
 		BuildingInteriorFootprints.Reset();
@@ -7097,6 +7119,78 @@ bool UACEDatSubsystem::LoadLandblockInfo(uint32 LandblockId, FACEDatLandblockInf
 	return true;
 }
 
+static TAutoConsoleVariable<int32> CVarACECacheDoorwayGeometry(
+	TEXT("ace.Render.CacheDoorwayGeometry"), 1,
+	TEXT("Reuse immutable building doorway geometry. Camera/frustum admission remains live."));
+
+void UACEDatSubsystem::LoadBuildingDoorwayApertures(uint32 LandblockId, float WorldScale,
+	TArray<ACEOutdoorPortalPlan::FAdmittedAperture>& OutApertures)
+{
+	OutApertures.Reset();
+	// EnsureLoaded may invalidate DAT/mesh caches after a reload or format change.
+	if (!EnsureLoaded() || !CellDat) return;
+	const uint32 Key = LandblockId & 0xFFFF0000u;
+	uint32 ScaleBits;
+	FMemory::Memcpy(&ScaleBits, &WorldScale, sizeof(ScaleBits));
+	const uint64 CacheKey = (uint64(Key) << 32) | ScaleBits;
+	const bool bCache = CVarACECacheDoorwayGeometry.GetValueOnGameThread() != 0;
+	if (bCache)
+		if (auto* Cached = DoorwayGeometryCache.Find(CacheKey))
+		{
+			Cached->LastUse = ++DoorwayGeometryUse;
+			OutApertures = Cached->Apertures;
+			return;
+		}
+
+	FACEDatLandblockInfo Info;
+	if (!LoadLandblockInfo(Key, Info)) return;
+	const FVector Origin = FACEPosition::AceVectorToUnreal(
+		FVector(((Key >> 24) & 255) * 192.f, ((Key >> 16) & 255) * 192.f, 0), WorldScale);
+	bool bComplete = true;
+	for (const auto& Building : Info.Buildings)
+	{
+		const auto* Setup = FindSetupMesh(Building.ModelId, WorldScale);
+		if (!Setup)
+		{
+			RequestSetupMesh(Building.ModelId, WorldScale);
+			bComplete = false; // Never cache a partial result while streaming.
+			continue;
+		}
+		const FTransform Frame(FACEPosition::AceQuatToUnreal(FQuat(Building.Orientation)),
+			Origin + FACEPosition::AceVectorToUnreal(FVector(Building.Origin), WorldScale));
+		for (const auto& Part : Setup->Parts) for (const auto& Poly : Part.Portals)
+		{
+			if (!Building.Portals.IsValidIndex(Poly.PortalIndex) || Poly.Vertices.Num() < 3) continue;
+			const auto& Portal = Building.Portals[Poly.PortalIndex];
+			if (Portal.OtherCellId < 0x100 || Portal.OtherCellId == 0xFFFF) continue;
+			const FTransform Transform = Part.BindTransform * Frame;
+			auto& A = OutApertures.AddDefaulted_GetRef();
+			A.DestEnvCellId = Key | Portal.OtherCellId;
+			A.OtherPortalId = Portal.OtherPortalId;
+			// Retail PView uses the building PORT polygon and CBldPortal side.
+			A.WorldNormal = Transform.TransformVectorNoScale(Poly.Normal).GetSafeNormal()
+				* (Portal.IsPortalSide() ? -1.f : 1.f);
+			for (const auto& V : Poly.Vertices) A.WorldVerts.Add(Transform.TransformPosition(V));
+		}
+	}
+	if (bCache && bComplete)
+	{
+		// Only compact geometry is retained, never Setup meshes or streamed actors.
+		// Bound roaming/teleport memory independently of the world residency set.
+		if (DoorwayGeometryCache.Num() >= 256)
+		{
+			uint64 OldestKey = 0, OldestUse = MAX_uint64;
+			for (const auto& Entry : DoorwayGeometryCache)
+				if (Entry.Value.LastUse < OldestUse)
+				{ OldestKey = Entry.Key; OldestUse = Entry.Value.LastUse; }
+			DoorwayGeometryCache.Remove(OldestKey);
+		}
+		auto& Cached = DoorwayGeometryCache.Add(CacheKey);
+		Cached.Apertures = OutApertures;
+		Cached.LastUse = ++DoorwayGeometryUse;
+	}
+}
+
 bool UACEDatSubsystem::LoadEnvCell(uint32 EnvCellId, FACEDatEnvCell& OutCell)
 {
 	OutCell = FACEDatEnvCell();
@@ -7693,96 +7787,94 @@ bool UACEDatSubsystem::EvaluateAnimationLoop(uint32 AnimationId, float TimeSecon
 		PreviousTimeSeconds, OutCrossedHooks, Framerate, LowFrame);
 }
 
+static TAutoConsoleVariable<int32> CVarACECacheSetupMetadata(
+	TEXT("ace.Dat.CacheSetupMetadata"), 1,
+	TEXT("Cache immutable Setup movement, collision and script metadata; avoids repeated DAT unpacking."));
+
+const UACEDatSubsystem::FSetupRuntimeMetadata* UACEDatSubsystem::FindSetupRuntimeMetadata(uint32 SetupId)
+{
+	if (!bPortalLoaded || !PortalDat || SetupId == 0) return nullptr;
+	const bool bCache = CVarACECacheSetupMetadata.GetValueOnGameThread() != 0;
+	if (bCache)
+		if (auto* Cached = SetupRuntimeMetadataCache.Find(SetupId))
+		{
+			Cached->LastUse = ++SetupRuntimeMetadataUse;
+			return Cached->bValid ? Cached : nullptr;
+		}
+	FSetupRuntimeMetadata Value;
+	TArray<uint8> Blob;
+	if (PortalDat->ReadFile(SetupId, Blob))
+	{
+		FACEDatCursor Cursor(Blob);
+		FACEDatSetupModel Setup;
+		if (ACEDatUnpack::UnpackSetupModel(Cursor, Setup))
+		{
+			Value.bValid = true;
+			Value.StepUp = Setup.StepUpHeight > 0.f ? Setup.StepUpHeight : .5f;
+			Value.StepDown = Setup.StepDownHeight > 0.f ? Setup.StepDownHeight : .5f;
+			Value.Height = Setup.Height; Value.Radius = Setup.Radius;
+			Value.SelectionOrigin = Setup.SelectionSphereOrigin;
+			Value.SelectionRadius = Setup.SelectionSphereRadius;
+			Value.Animation = Setup.DefaultAnimation; Value.Script = Setup.DefaultScript;
+			Value.ScriptTable = Setup.DefaultScriptTable; Value.SoundTable = Setup.DefaultSoundTable;
+			Value.bPhysicsBSP = EnumHasAnyFlags(Setup.Flags, EACESetupFlags::HasPhysicsBSP);
+			// Retail prefers cylinder-spheres when available, otherwise spheres.
+			Value.Shapes = Setup.CylSpheres.IsEmpty() ? MoveTemp(Setup.Spheres) : MoveTemp(Setup.CylSpheres);
+		}
+	}
+	if (!bCache)
+	{
+		UncachedSetupRuntimeMetadata = MoveTemp(Value);
+		return UncachedSetupRuntimeMetadata.bValid ? &UncachedSetupRuntimeMetadata : nullptr;
+	}
+	if (SetupRuntimeMetadataCache.Num() >= 512)
+	{
+		uint32 OldestKey = 0; uint64 OldestUse = MAX_uint64;
+		for (const auto& Entry : SetupRuntimeMetadataCache)
+			if (Entry.Value.LastUse < OldestUse)
+			{ OldestKey = Entry.Key; OldestUse = Entry.Value.LastUse; }
+		SetupRuntimeMetadataCache.Remove(OldestKey);
+	}
+	Value.LastUse = ++SetupRuntimeMetadataUse;
+	auto& Cached = SetupRuntimeMetadataCache.Add(SetupId, MoveTemp(Value));
+	return Cached.bValid ? &Cached : nullptr;
+}
+
 bool UACEDatSubsystem::GetSetupCollisionShapes(uint32 SetupId, TArray<FACEDatCollisionShape>& OutShapes, bool& bHasPhysicsBSP)
 {
 	OutShapes.Reset(); bHasPhysicsBSP = false;
-	TArray<uint8> Blob;
-	if (!PortalDat || !PortalDat->ReadFile(SetupId, Blob)) return false;
-	FACEDatCursor Cur(Blob); FACEDatSetupModel Setup;
-	if (!ACEDatUnpack::UnpackSetupModel(Cur, Setup)) return false;
-	bHasPhysicsBSP = EnumHasAnyFlags(Setup.Flags, EACESetupFlags::HasPhysicsBSP);
-	// CPhysicsObj::FindObjCollisions prefers CCylSphere when present, otherwise CSphere.
-	OutShapes = Setup.CylSpheres.IsEmpty() ? Setup.Spheres : Setup.CylSpheres;
+	const auto* Data = FindSetupRuntimeMetadata(SetupId);
+	if (!Data) return false;
+	OutShapes = Data->Shapes; bHasPhysicsBSP = Data->bPhysicsBSP;
 	return true;
 }
 
 bool UACEDatSubsystem::TryGetSetupPhysics(uint32 SetupId, float& OutStepUpHeight, float& OutHeight, float& OutRadius, uint32& OutDefaultAnimationId, float* OutStepDownHeight,
 	FVector3f* OutSelectionOriginAc, float* OutSelectionRadiusAc)
 {
-	OutStepUpHeight = 0.5f;
-	OutHeight = 2.f;
-	OutRadius = 0.5f;
-	OutDefaultAnimationId = 0;
-	if (OutStepDownHeight)
-	{
-		*OutStepDownHeight = 0.5f;
-	}
-	if (OutSelectionOriginAc)
-	{
-		*OutSelectionOriginAc = FVector3f::ZeroVector;
-	}
-	if (OutSelectionRadiusAc)
-	{
-		*OutSelectionRadiusAc = 0.f;
-	}
-	if (!bPortalLoaded || !PortalDat || SetupId == 0)
-	{
-		return false;
-	}
-	TArray<uint8> Blob;
-	if (!PortalDat->ReadFile(SetupId, Blob))
-	{
-		return false;
-	}
-	FACEDatCursor Cur(Blob);
-	FACEDatSetupModel Setup;
-	if (!ACEDatUnpack::UnpackSetupModel(Cur, Setup))
-	{
-		return false;
-	}
-	OutStepUpHeight = Setup.StepUpHeight > 0.f ? Setup.StepUpHeight : 0.5f;
-	OutHeight = Setup.Height;
-	OutRadius = Setup.Radius;
-	OutDefaultAnimationId = Setup.DefaultAnimation;
-	if (OutStepDownHeight)
-	{
-		*OutStepDownHeight = Setup.StepDownHeight > 0.f ? Setup.StepDownHeight : 0.5f;
-	}
-	if (OutSelectionOriginAc)
-	{
-		*OutSelectionOriginAc = Setup.SelectionSphereOrigin;
-	}
-	if (OutSelectionRadiusAc)
-	{
-		*OutSelectionRadiusAc = Setup.SelectionSphereRadius;
-	}
+	OutStepUpHeight = .5f; OutHeight = 2.f; OutRadius = .5f; OutDefaultAnimationId = 0;
+	if (OutStepDownHeight) *OutStepDownHeight = .5f;
+	if (OutSelectionOriginAc) *OutSelectionOriginAc = FVector3f::ZeroVector;
+	if (OutSelectionRadiusAc) *OutSelectionRadiusAc = 0.f;
+	const auto* Data = FindSetupRuntimeMetadata(SetupId);
+	if (!Data) return false;
+	OutStepUpHeight = Data->StepUp; OutHeight = Data->Height; OutRadius = Data->Radius;
+	OutDefaultAnimationId = Data->Animation;
+	if (OutStepDownHeight) *OutStepDownHeight = Data->StepDown;
+	if (OutSelectionOriginAc) *OutSelectionOriginAc = Data->SelectionOrigin;
+	if (OutSelectionRadiusAc) *OutSelectionRadiusAc = Data->SelectionRadius;
 	return true;
 }
 
 bool UACEDatSubsystem::TryGetSetupRuntimeMetadata(
 	uint32 SetupId, uint32& OutDefaultScriptId, uint32& OutScriptTableId, uint32& OutSoundTableId)
 {
-	OutDefaultScriptId = 0;
-	OutScriptTableId = 0;
-	OutSoundTableId = 0;
-	if (!bPortalLoaded || !PortalDat || SetupId == 0)
-	{
-		return false;
-	}
-	TArray<uint8> Blob;
-	if (!PortalDat->ReadFile(SetupId, Blob))
-	{
-		return false;
-	}
-	FACEDatCursor Cur(Blob);
-	FACEDatSetupModel Setup;
-	if (!ACEDatUnpack::UnpackSetupModel(Cur, Setup))
-	{
-		return false;
-	}
-	OutDefaultScriptId = Setup.DefaultScript;
-	OutScriptTableId = Setup.DefaultScriptTable;
-	OutSoundTableId = Setup.DefaultSoundTable;
+	OutDefaultScriptId = OutScriptTableId = OutSoundTableId = 0;
+	const auto* Data = FindSetupRuntimeMetadata(SetupId);
+	if (!Data) return false;
+	OutDefaultScriptId = Data->Script;
+	OutScriptTableId = Data->ScriptTable;
+	OutSoundTableId = Data->SoundTable;
 	return true;
 }
 

@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-set "UPROJECT=%cd%\ACEViewer.uproject"
+set "UPROJECT=%cd%\ACUnreal.uproject"
 set "UE_ROOT="
 
 for %%V in (5.8 5.7 5.6 5.5) do (
@@ -29,6 +29,6 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-echo Done. Open ACEViewer.sln or run OpenACEViewer.bat
+echo Done. Open ACUnreal.sln or run OpenACUnreal.bat
 pause
 endlocal

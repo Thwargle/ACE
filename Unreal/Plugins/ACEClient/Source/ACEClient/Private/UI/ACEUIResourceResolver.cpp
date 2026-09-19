@@ -121,24 +121,70 @@ UTexture2D* UACEUIResourceResolver::ResolveFloatingHealthTexture(uint32 Resource
 	auto* Resolver=Dat->GetTextureResolver();
 	FACEDatTexture Raw; FACEDatDecodedSurface Image;
 	if (!Resolver->LoadTextureForUi(ResourceId,Raw) || !Resolver->DecodeTextureForUi(Raw,Image)) return nullptr;
+	// The RGB-only full/empty layers have the same silhouette. Derive coverage
+	// from the empty glass so a health change cannot reshape the rim.
+	FACEDatDecodedSurface Mask=Image;
+	if (ResourceId!=0x0600193Eu)
+	{
+		FACEDatTexture Empty;
+		if (!Resolver->LoadTextureForUi(0x0600193Eu,Empty) || !Resolver->DecodeTextureForUi(Empty,Mask)
+			|| Mask.Width!=Image.Width || Mask.Height!=Image.Height) return nullptr;
+	}
 	// The bottom four rows are the toolbar separator, not part of the vial.
 	// Flood only the near-black exterior so the dark glass/interior outline is
 	// preserved instead of chroma-keying every dark pixel in the health fill.
 	TArray<int32> Pending; TBitArray<> Seen(false,Image.Pixels.Num());
 	auto Visit=[&](int32 I) {
 		if (I<0 || I>=Image.Pixels.Num() || Seen[I]) return;
-		Seen[I]=true; const FColor P=Image.Pixels[I];
+		Seen[I]=true; const FColor P=Mask.Pixels[I];
 		if (FMath::Max3(P.R,P.G,P.B)<=16 || P.A==0) Pending.Add(I);
 	};
 	for (int32 Y=0;Y<Image.Height;++Y) { Visit(Y*Image.Width); Visit((Y+1)*Image.Width-1); }
 	for (int32 X=0;X<Image.Width;++X) { Visit(X); Visit((Image.Height-4)*Image.Width+X); }
 	for (int32 N=0;N<Pending.Num();++N)
 	{
-		const int32 I=Pending[N]; Image.Pixels[I]=FColor(0,0,0,0);
+		const int32 I=Pending[N]; Mask.Pixels[I]=FColor(0,0,0,0);
 		if (I%Image.Width) Visit(I-1); if (I%Image.Width<Image.Width-1) Visit(I+1);
 		Visit(I-Image.Width); Visit(I+Image.Width);
 	}
-	for (int32 I=FMath::Max(0,Image.Height-4)*Image.Width;I<Image.Pixels.Num();++I) Image.Pixels[I]=FColor(0,0,0,0);
+	for (int32 I=FMath::Max(0,Image.Height-4)*Image.Width;I<Image.Pixels.Num();++I) Mask.Pixels[I]=FColor(0,0,0,0);
+	// Remove isolated background speckles, then soften coverage by one source
+	// texel. Keep RGB straight-alpha with edge color dilation to avoid dark halos.
+	Seen.Init(false,Mask.Pixels.Num());
+	for (int32 I=0;I<Mask.Pixels.Num();++I)
+	{
+		if (Seen[I] || !Mask.Pixels[I].A) continue;
+		Pending.Reset(); Pending.Add(I); Seen[I]=true;
+		for (int32 N=0;N<Pending.Num();++N)
+		{
+			const int32 P=Pending[N];
+			for (int32 D:{-1,1,-Image.Width,Image.Width})
+			{
+				const int32 J=P+D;
+				if (J<0 || J>=Mask.Pixels.Num() || Seen[J] || !Mask.Pixels[J].A
+					|| (FMath::Abs(D)==1 && J/Image.Width!=P/Image.Width)) continue;
+				Seen[J]=true;Pending.Add(J);
+			}
+		}
+		if (Pending.Num()<12) for (int32 P:Pending) Mask.Pixels[P].A=0;
+	}
+	const auto Colors=Image.Pixels;
+	for (int32 Y=0;Y<Image.Height;++Y) for (int32 X=0;X<Image.Width;++X)
+	{
+		int32 Coverage=0; FVector Color=FVector::ZeroVector;
+		for (int32 DY=-1;DY<=1;++DY) for (int32 DX=-1;DX<=1;++DX)
+		{
+			const int32 NX=X+DX,NY=Y+DY;
+			if (NX<0 || NX>=Image.Width || NY<0 || NY>=Image.Height) continue;
+			const int32 J=NY*Image.Width+NX, Weight=(DX==0 ? 2 : 1)*(DY==0 ? 2 : 1);
+			if (!Mask.Pixels[J].A) continue;
+			Coverage+=Weight; Color+=FVector(Colors[J].R,Colors[J].G,Colors[J].B)*Weight;
+		}
+		auto& Pixel=Image.Pixels[Y*Image.Width+X];
+		if (!Coverage || Y>=Image.Height-4) Pixel=FColor(0,0,0,0);
+		else { if (!Mask.Pixels[Y*Image.Width+X].A) { Color/=Coverage;Pixel=FColor(Color.X,Color.Y,Color.Z); }
+			Pixel.A=FMath::RoundToInt(255.f*Coverage/16.f); }
+	}
 	auto* Texture=FACEDatTextureResolver::CreateTransientRgbaUi(Image.Width,Image.Height,Image.Pixels);
 	ItemCompositeCache.Add(Key,Texture); return Texture;
 }

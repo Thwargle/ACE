@@ -1,0 +1,33 @@
+AC:VR - INSTALLER HELPER UPDATE
+
+This small ZIP updates only the Windows installer. It does not contain the APK
+or game data, and it does not change the game version.
+
+1. Close the old installer window.
+2. Extract this ZIP INTO YOUR EXISTING AC:VR INSTALLER FOLDER. That folder
+   must already contain AC-VR-arm64.apk and manifest.json.
+3. Replace the installer files when asked; also extract the new
+   Quest-DataTransfer.ps1, Quest-ProfileMigration.ps1, Repair-Quest.cmd,
+   and Update-Quest.cmd files. This helper update requires a v48-or-newer bundle;
+   use the complete installer ZIP when upgrading an older release.
+   Keep the existing APK, manifest.json, platform-tools folder, and DAT files.
+4. Connect the Quest using a USB data cable and keep it awake.
+   If the APK already installed but a DAT file failed, run Repair-Quest.cmd.
+   Otherwise run Install-Quest.cmd.
+   The first verification message identifies the APK version from your manifest.
+
+DAT files now copy directly into app storage, without the shared-storage
+temporary directory that disappeared during the failed transfer. Each complete
+file is SHA256-verified before replacing the installed copy. Failed data copies
+retry up to three times on the same headset; verified files are skipped.
+Repair-Quest.cmd does not reinstall the APK. Do not open the game until repair
+says installation is complete. An incomplete cell DAT prevents world loading.
+
+If installation still fails, send Quest-Connection.txt, Quest-Install.txt, or Quest-Data.txt
+from this folder to the host. These contain diagnostics, not game passwords.
+Repeated offline errors may require a different USB data cable or PC USB port.
+Accepting Quest Link/file access alone does not authorize USB debugging; the
+USB debugging prompt shows the computer fingerprint.
+
+Optional connection-only check: Install-Quest.cmd -CheckConnection
+No uninstall or app-data clearing is needed to apply this installer update.

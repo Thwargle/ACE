@@ -81,41 +81,56 @@ bool FACESession::SendVRDrop(uint32 Cell, int32 Item, int32 SplitAmount, const F
 bool FACESession::SendVRPose(FACEVRPose Pose)
 {
 	if (State != EACESessionState::InWorld || !SupportsVRPoses()) return false;
-	FACEBinaryWriter W; W.WriteUInt32(1); W.WriteUInt32(++VRPoseSequence); W.WriteUInt32(Pose.Cell);
+	const uint32 Version=(VRCapabilities & 32768u) ? 2u : 1u;
+	FACEBinaryWriter W; W.WriteUInt32(Version); W.WriteUInt32(++VRPoseSequence); W.WriteUInt32(Pose.Cell);
 	W.WriteUInt32(TeleportSeq); W.WriteUInt32(Pose.Flags); W.WriteFloat(Pose.EyeHeight); W.WriteFloat(Pose.Draw);
-	for (const FTransform& T : Pose.Poses)
+	for (int32 I=0;I<(Version==2 ? 5 : 3);++I)
 	{
+		if (I==3) { W.WriteUInt32(Pose.Weapon); W.WriteUInt32(Pose.Ammo); }
+		const FTransform& T=Pose.Poses[I];
 		const FVector P = T.GetLocation(); const FQuat Q = T.GetRotation();
 		if (P.ContainsNaN() || Q.ContainsNaN()) return false;
 		for (double V : {P.X, P.Y, P.Z, Q.X, Q.Y, Q.Z, Q.W}) W.WriteFloat(V);
 	}
 	SendGameAction(0xF7D1, W.GetData(), ACEQueue::WeenieQueue);
+	LastVRPoseSent=FPlatformTime::Seconds();
 	if (VRPoseSequence == 1) Log(TEXT("VR pose stream started: head and both hands, 20 Hz"));
 	return true;
 }
 
 void FACESession::HandleVRPose(FACEBinaryReader& R)
 {
-	if (State != EACESessionState::InWorld || !SupportsVRPoses() || R.Remaining() != 116) return;
+	if (State != EACESessionState::InWorld || !SupportsVRPoses() || (R.Remaining() != 116 && R.Remaining()!=192)) return;
+	const int32 Size=R.Remaining();
 	const int32 Guid = static_cast<int32>(R.ReadUInt32());
 	const auto* Object = WorldObjects.Find(Guid);
-	if (!Object || !Object->bIsPlayer || Guid == PlayerGuid || R.ReadUInt32() != 1) return;
-	FACEVRPose P; P.Sequence = R.ReadUInt32(); P.Cell = R.ReadUInt32(); P.Teleport = R.ReadUInt32(); P.Flags = R.ReadUInt32();
+	const uint32 Version=R.ReadUInt32();
+	if (!Object || !Object->bIsPlayer || Guid == PlayerGuid || (Version!=1 && Version!=2)
+		|| Size!=(Version==2 ? 192 : 116)) return;
+	FACEVRPose P; P.Version=Version; P.Sequence = R.ReadUInt32(); P.Cell = R.ReadUInt32(); P.Teleport = R.ReadUInt32(); P.Flags = R.ReadUInt32();
 	P.EyeHeight = R.ReadFloat(); P.Draw = R.ReadFloat();
 	if ((P.Flags & ~31u) || !FMath::IsFinite(P.EyeHeight) || P.EyeHeight < 1 || P.EyeHeight > 2.1f || !FMath::IsFinite(P.Draw)) return;
-	for (FTransform& T : P.Poses)
+	for (int32 I=0;I<(Version==2 ? 5 : 3);++I)
 	{
+		if (I==3) { P.Weapon=R.ReadInt32(); P.Ammo=R.ReadInt32(); }
+		FTransform& T=P.Poses[I];
 		const float X = R.ReadFloat(), Y = R.ReadFloat(), Z = R.ReadFloat();
 		const float QX = R.ReadFloat(), QY = R.ReadFloat(), QZ = R.ReadFloat(), QW = R.ReadFloat();
 		FQuat Q(QX, QY, QZ, QW); FVector V(X, Y, Z);
 		if (V.ContainsNaN() || V.SizeSquared() > 25 || Q.ContainsNaN() || !FMath::IsWithinInclusive(Q.SizeSquared(), .8, 1.2)) return;
 		Q.Normalize(); T = FTransform(Q, V);
 	}
+	if (Version==2)
+	{
+		const float X=R.ReadFloat(),Y=R.ReadFloat(),Z=R.ReadFloat(); P.Root=FVector(X,Y,Z);
+		if (P.Root.ContainsNaN() || P.Root.GetAbsMax()>100000.f) return;
+	}
 	P.ReceivedAt = FPlatformTime::Seconds();
 	auto& Samples = VRPoses.FindOrAdd(Guid);
 	if (Samples.Current.ReceivedAt == 0) Log(FString::Printf(TEXT("VR pose stream received from 0x%08X"), Guid));
 	if (Samples.Current.ReceivedAt > 0 && int32(P.Sequence - Samples.Current.Sequence) <= 0) return;
-	Samples.Previous = P.Teleport == Samples.Current.Teleport && P.ReceivedAt - Samples.Current.ReceivedAt < .5 ? Samples.Current : P;
+	Samples.Previous = P.Version==Samples.Current.Version && P.Teleport == Samples.Current.Teleport
+		&& P.Weapon==Samples.Current.Weapon && P.Ammo==Samples.Current.Ammo && P.ReceivedAt - Samples.Current.ReceivedAt < .5 ? Samples.Current : P;
 	Samples.Current = P;
 }
 
@@ -128,7 +143,8 @@ bool FACESession::GetVRPose(int32 Guid, FACEVRPose& P) const
 	P = S->Current;
 	const double Span = S->Current.ReceivedAt - S->Previous.ReceivedAt;
 	const float Alpha = Span > .001 ? FMath::Clamp((Now - .075 - S->Previous.ReceivedAt) / Span, 0., 1.) : 1.f;
-	for (int32 I = 0; I < 3; ++I) P.Poses[I].Blend(S->Previous.Poses[I], S->Current.Poses[I], Alpha);
+	for (int32 I = 0; I < 5; ++I) P.Poses[I].Blend(S->Previous.Poses[I], S->Current.Poses[I], Alpha);
+	P.Root=FMath::Lerp(S->Previous.Root,S->Current.Root,Alpha);
 	P.Draw = FMath::Lerp(S->Previous.Draw, S->Current.Draw, Alpha); return true;
 }
 
@@ -152,6 +168,8 @@ void FACESession::ApplyVRWorldSnapshot(FACEBinaryReader& Reader)
 	for (const auto& Pair : WorldObjects) if (!Live.Contains(Pair.Key) && !Owned(Pair.Value)) Removed.Add(Pair.Key);
 	for (int32 Guid : Removed)
 	{
+		if (SelectedObject.Guid == Guid) SelectObject(0);
+		VRPoses.Remove(Guid);
 		WorldObjects.Remove(Guid); RemoveFromContainerLists(Guid); OnObjectDeleted.Broadcast(Guid);
 	}
 	Log(FString::Printf(TEXT("VR world snapshot: live=%d removed=%d epoch=%u"), Live.Num(), Removed.Num(), Epoch));
@@ -220,6 +238,7 @@ void FACESession::HandleHealthFeedback(FACEBinaryReader& R)
     const int32 Guid = R.ReadInt32(), Change = R.ReadInt32();
     const uint32 Flags = R.ReadUInt32();
     if (!Guid || !Change || Change == MIN_int32 || (Flags & ~3u) != 0) return;
+	if (!IsNearbyHealthObject(Guid)) return;
     // A stale packet after portal transition must not create a phantom target.
     const auto* Object = WorldObjects.Find(Guid);
     if (Guid != PlayerGuid && (!Object || (Object->ItemType & ACEItemType::Creature) == 0)) return;

@@ -1,8 +1,11 @@
 #include "UI/ACEUIElementManager.h"
 #include "HAL/IConsoleManager.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 static TAutoConsoleVariable<int32> CVarIndexedUILookups(TEXT("ace.UI.IndexedLookups"),1,
 	TEXT("Index element names once per HUD refresh; 0 keeps recursive lookups for profiling."));
+static TAutoConsoleVariable<int32> CVarReuseUILookupStorage(TEXT("ace.UI.ReuseLookupStorage"),1,
+	TEXT("Reuse name-index allocations between refreshes; membership is still rebuilt every pass."));
 #include "InputCoreTypes.h"
 #include "Misc/ConfigCacheIni.h"
 
@@ -473,13 +476,17 @@ void UACEUIElementManager::EndNameLookupPass()
 void UACEUIElementManager::InvalidateNameLookupIndex()
 {
 	bNameLookupIndexValid = false;
-	NameLookupIndex.Reset();
+	// Do not retain references to removed windows. Reuse only the allocations,
+	// never prior membership/visibility: menus can mutate children directly.
+	if (CVarReuseUILookupStorage.GetValueOnGameThread())
+		for (auto& Entry:NameLookupIndex) Entry.Value.Reset();
+	else NameLookupIndex.Reset();
 }
 
 void UACEUIElementManager::BuildNameLookupIndex() const
 {
 	if (bNameLookupIndexValid) return;
-	NameLookupIndex.Reset();
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_UINameIndex);
 	TFunction<void(const TSharedPtr<FACEUIElement>&)> Visit = [&](const auto& Node)
 	{
 		if (!Node) return;
@@ -487,6 +494,7 @@ void UACEUIElementManager::BuildNameLookupIndex() const
 		for (const auto& Child : Node->Children) Visit(Child);
 	};
 	Visit(SyntheticRoot);
+	for(auto It=NameLookupIndex.CreateIterator();It;++It) if(It.Value().IsEmpty()) It.RemoveCurrent();
 	bNameLookupIndexValid = true;
 }
 

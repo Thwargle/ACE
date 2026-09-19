@@ -1652,6 +1652,8 @@ struct ACECLIENT_API FACEActiveEnchantment
 	/** Seconds; -1 = permanent / item. Server StartTime is typically negative elapsed. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") float Duration = 0.f;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") float StartTime = 0.f;
+	/** Monotonic receipt time; server StartTime is an offset at receipt, not a ticking clock. */
+	double ReceivedAt = 0.0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 CasterGuid = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") bool bBeneficial = false;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") bool bVitae = false;

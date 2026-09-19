@@ -2,7 +2,7 @@
 
 Fixed in 2026.09.06.4. The saved reproduction is
 `Saved/Crashes/UECC-Windows-D57CB12941F05263DA672B8107253188_0000`.
-Its `ACEViewer.log`, `CrashContext.runtime-xml`, and `UEMinidump.dmp` are retained,
+Its `ACUnreal.log`, `CrashContext.runtime-xml`, and `UEMinidump.dmp` are retained,
 along with the matching .3 plugin DLL/PDB in `Symbols-2026.09.06.3`.
 
 ## Evidence

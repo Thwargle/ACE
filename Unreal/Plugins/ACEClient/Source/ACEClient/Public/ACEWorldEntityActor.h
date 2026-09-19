@@ -48,6 +48,7 @@ public:
 	float GetMeleeBodyHeight() const { return MeleeBodyHeight * GetActorScale3D().Z; }
 	bool FindMeleeContact(const FVector& A, const FVector& B, float& Along) const;
 	bool FindProjectileContact(const FVector& A, const FVector& B, float RadiusCm, float& Along) const;
+	FBox GetProjectileContactBounds(float RadiusCm) const;
 	void SetSelectionHighlight(float Strength);
 	float MeleeBodyHeight = 200.f;
 	FVector GetAcePhysicsOmega() const { return AcePhysicsOmega; }

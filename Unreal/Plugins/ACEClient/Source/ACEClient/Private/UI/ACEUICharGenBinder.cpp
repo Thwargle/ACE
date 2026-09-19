@@ -24,7 +24,7 @@
 
 namespace
 {
-const TCHAR* Pages[]={TEXT(""),TEXT("CGHeritagePage"),TEXT("CGProfessionPage"),TEXT("CGSkillsPage"),TEXT("CGAppearancePage"),TEXT("CGTownPage"),TEXT("CGSummaryPage")};
+const TCHAR* CharGenPages[]={TEXT(""),TEXT("CGHeritagePage"),TEXT("CGProfessionPage"),TEXT("CGSkillsPage"),TEXT("CGAppearancePage"),TEXT("CGTownPage"),TEXT("CGSummaryPage")};
 const TCHAR* Navigation[]={TEXT(""),TEXT("CGHeritageButton"),TEXT("CGProfessionButton"),TEXT("CGSkillsButton"),TEXT("CGAppearanceButton"),TEXT("CGTownButton"),TEXT("CGSummaryButton")};
 const TCHAR* HeritageButtons[]={TEXT(""),TEXT("AluvianRadio"),TEXT("RadioGhu"),TEXT("RadioSho"),TEXT("RadioViamont"),TEXT("RadioShadow"),TEXT("RadioGearKnight"),TEXT("RadioAunTumerok"),TEXT("RadioLugian"),TEXT("RadioEmpyrean"),TEXT("RadioPenumbraen"),TEXT("RadioUndead"),TEXT("RadioOlthoi"),TEXT("RadioOlthoiAcid")};
 const TCHAR* HeritageTexts[]={TEXT(""),TEXT("Aluvian"),TEXT("Garu"),TEXT("Sho"),TEXT("Via"),TEXT("Shad"),TEXT("Gear"),TEXT("AunT"),TEXT("Lug"),TEXT("Emp"),TEXT("Shad"),TEXT("Und"),TEXT("Olthoi"),TEXT("OlthoiAcid")};
@@ -102,7 +102,7 @@ void UACEUICharGenBinder::SetPage(int32 InPage)
     if(Page==6)Model.Selection.Name=FACECharacterCreation::FormatName(Model.Selection.Name);
     Page=InPage;if(Page==2||Page==6)Model.FitProfession();
     NameCaret=NameAnchor=Model.Selection.Name.Len();NameDisplayStart=0;bNameDrag=false;bPreviewDirty=true;Message.Reset();bConfirmCredits=false;bNameFocus=Page==6;bSelectName=false;bHelp=false;DescriptionScroll=0;bDirty=true;
-    for(int I=1;I<=6;++I)Show(Pages[I],I==Page);
+    for(int I=1;I<=6;++I)Show(CharGenPages[I],I==Page);
     if(auto E=Find(TEXT("CGPage")))E->DefaultState=0x10000024+Page;
 }
 void UACEUICharGenBinder::Tick(float Delta)
@@ -119,7 +119,7 @@ void UACEUICharGenBinder::Refresh()
     if(NameSelectionImage)NameSelectionImage->SetVisibility(ESlateVisibility::Collapsed);
     if(NameCaretImage)NameCaretImage->SetVisibility(ESlateVisibility::Collapsed);
     const bool Pending=Client->GetSession()&&Client->GetSession()->IsCharacterCreationPending();
-    for(int I=1;I<=6;++I){Show(Pages[I],Page==I);Selected(Navigation[I],Page==I);Show(Navigation[I],Model.Selection.Heritage<12||I==1||I==4||I==6);}
+    for(int I=1;I<=6;++I){Show(CharGenPages[I],Page==I);Selected(Navigation[I],Page==I);Show(Navigation[I],Model.Selection.Heritage<12||I==1||I==4||I==6);}
     Show(TEXT("CGLeftButton"),Page>1);Show(TEXT("CGRightButton"),Page<6);Show(TEXT("CGFinishButton"),Page==6);
     Show(TEXT("AdminButton"),false);Show(TEXT("EnvoyButton"),false);
     if(auto E=Find(TEXT("CGFinishButton")))E->bActivatable=!Pending;

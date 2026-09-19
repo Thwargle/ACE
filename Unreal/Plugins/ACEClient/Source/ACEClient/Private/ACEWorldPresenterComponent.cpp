@@ -326,6 +326,7 @@ bool UACEWorldPresenterComponent::ShouldStreamObject(const FACEWorldObject& Obje
 
 void UACEWorldPresenterComponent::DestroySpawnedGuid(int32 Guid)
 {
+	if (Client && Client->GetSelectedObject().Guid == Guid) Client->SelectObject(0);
 	TArray<int32> Children;
 	for (const auto& Pair : Spawned)
 	{

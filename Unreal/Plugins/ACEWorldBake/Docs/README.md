@@ -2,7 +2,7 @@
 
 Offline DAT export and UE import for **landscape tiles**, **building landblocks**, and **scenery** — ported from [ACUnreal](https://gitlab.com/landelare/acunreal).
 
-Use this to build a **World Composition** Dereth map with distance-based tile streaming (same workflow as acunreal), then play in ACEViewer on baked static meshes + landscape instead of runtime ProcMesh.
+Use this to build a **World Composition** Dereth map with distance-based tile streaming (same workflow as acunreal), then play in ACUnreal on baked static meshes + landscape instead of runtime ProcMesh.
 
 ## Requirements
 
@@ -23,8 +23,8 @@ Or in-editor: call `UACEWorldBakeEditorFunctionLibrary::SetDatFileDirectory`.
 
 ## Quick start (editor)
 
-1. **Regenerate project files** and build `ACEViewerEditor`.
-2. Open ACEViewer in the editor.
+1. **Regenerate project files** and build `ACUnrealEditor`.
+2. Open ACUnreal in the editor.
 3. Use **Editor Utility Widget** or **Blueprint** nodes on `UACEWorldBakeEditorFunctionLibrary`:
 
 | Step | Function |
@@ -41,7 +41,7 @@ Or in-editor: call `UACEWorldBakeEditorFunctionLibrary::SetDatFileDirectory`.
 4. **Headless export** (landblocks only):
 
 ```bat
-UnrealEditor-Cmd.exe ACEViewer.uproject -run=ACEWorldBakeExportResources -LANDBLOCKS
+UnrealEditor-Cmd.exe ACUnreal.uproject -run=ACEWorldBakeExportResources -LANDBLOCKS
 ```
 
 ## Automated full world build
@@ -55,7 +55,7 @@ Unreal\BuildDerethWorld.bat
 Or manually:
 
 ```bat
-UnrealEditor-Cmd.exe ACEViewer.uproject -run=ACEWorldBakeBuildWorld -DATPATH="C:/Turbine/Asheron's Call" -unattended
+UnrealEditor-Cmd.exe ACUnreal.uproject -run=ACEWorldBakeBuildWorld -DATPATH="C:/Turbine/Asheron's Call" -unattended
 ```
 
 In-editor: call `UACEWorldBakeEditorFunctionLibrary::BuildEntireWorld()`.
@@ -114,10 +114,10 @@ The bake creates **383** sub-levels (64 landscape + landblocks + scenes). Openin
 **Fix an already-built map without re-importing** (~seconds):
 
 ```bat
-UnrealEditor-Cmd.exe ACEViewer.uproject -run=ACEWorldBakeBuildWorld -unattended -RECONFIGUREWC -log
+UnrealEditor-Cmd.exe ACUnreal.uproject -run=ACEWorldBakeBuildWorld -unattended -RECONFIGUREWC -log
 ```
 
-## Using baked world in ACEViewer
+## Using baked world in ACUnreal
 
 After Dereth is built:
 

@@ -247,6 +247,7 @@ private:
 		TitleList,
 		StackSize,
 		Effects,
+		EffectsInfo,
 		Chat,
 		VendorItems,
 		VendorBuy,
@@ -603,12 +604,17 @@ private:
 	TObjectPtr<UTextBlock> InvTitleLabel;
 	UPROPERTY()
 	TArray<TObjectPtr<UTextBlock>> EffectsListRows;
+	UPROPERTY() TArray<TObjectPtr<UTextBlock>> EffectsListDurations;
+	TArray<TSharedPtr<FACEUIElement>> EffectsRowElements;
+	int32 EffectsContentCount = 0;
 	UPROPERTY()
 	TArray<TObjectPtr<UBorder>> EffectsListIcons;
 	UPROPERTY()
 	TArray<int32> EffectsListSpellIds;
 	UPROPERTY()
 	TObjectPtr<UTextBlock> EffectsInfoLabel;
+	UPROPERTY() TObjectPtr<UScrollBox> EffectsInfoScroll;
+	int32 EffectsInfoSpellId = 0;
 	UPROPERTY()
 	TObjectPtr<UTextBlock> EffectsTitleLabel;
 	UPROPERTY()
@@ -1199,6 +1205,7 @@ private:
 	void RefreshVendorFilterDropdown();
 	bool TryHandleVendorFilterDropdownClick(FVector2D Absolute);
 	void BuySelectedVendorItem();
+	int32 GetVendorPurchaseLimit(int32 ItemGuid) const;
 	void AddSelectedVendorItemToBuyCart();
 	void BuyVendorCartItem();
 	void SellVendorCart();

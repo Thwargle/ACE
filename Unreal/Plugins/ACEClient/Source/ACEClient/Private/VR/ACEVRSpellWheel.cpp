@@ -112,7 +112,7 @@ private:
 void UACEVRComponent::ToggleSpellWheel()
 {
     if (bSpellWheelOpen) { CloseSpellWheel(); return; }
-    if (!bActive || IsInputBlocked()) return;
+    if (!bActive || IsInputBlocked() || !HasEquippedCaster()) return;
     CancelGestures();
     bSpellWheelOpen=true; bWheelStickReady=TurnStick.Size()<.25f; WheelPage=0;
     WheelSpells.Reset();
@@ -175,7 +175,7 @@ void UACEVRComponent::ChangeWheelPage(int32 Direction)
 void UACEVRComponent::UpdateSpellWheel()
 {
     if (!bSpellWheelOpen) return;
-    if (IsInputBlocked()) { CloseSpellWheel(); return; }
+    if (IsInputBlocked() || !HasEquippedCaster()) { CloseSpellWheel(); return; }
     const float Length=TurnStick.Size();
     if (Length<.25f) bWheelStickReady=true;
     const int32 Count=FMath::Clamp(WheelSpells.Num()-WheelPage*WheelPageSize,0,WheelPageSize);
@@ -191,7 +191,7 @@ void UACEVRComponent::UpdateSpellWheel()
 
 void UACEVRComponent::ConfirmWheelSpell()
 {
-    if (!bSpellWheelOpen || IsInputBlocked() || !WheelSpells.IsValidIndex(WheelHover)) return;
+    if (!bSpellWheelOpen || IsInputBlocked() || !HasEquippedCaster() || !WheelSpells.IsValidIndex(WheelHover)) return;
     const int32 Spell=WheelSpells[WheelHover];
     CloseSpellWheel();
     // Confirmation selects only. A fresh trigger press is required to cast.

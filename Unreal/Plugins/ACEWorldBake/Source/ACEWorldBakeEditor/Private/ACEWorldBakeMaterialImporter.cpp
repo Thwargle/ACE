@@ -17,7 +17,7 @@
 
 #define LOCTEXT_NAMESPACE "ACEWorldBakeMaterialImporter"
 
-static bool ACEWorldBakeShouldShowSlowTaskDialog()
+static bool ACEWorldBakeMaterialShouldShowSlowTaskDialog()
 {
 	return !FApp::IsUnattended();
 }
@@ -240,7 +240,7 @@ bool FACEWorldBakeMaterialImporter::ImportLandscapeMaterials(UMaterialInterface*
 		{
 			const int32 WorkItems_ImportLandscapeMaterials = FileContents.Num();
 			FScopedSlowTask SlowTask_ImportLandscapeMaterials(static_cast<float>(WorkItems_ImportLandscapeMaterials), LOCTEXT("ImportLandscapeMaterials", "Import Landscape Materials"));
-			if (ACEWorldBakeShouldShowSlowTaskDialog())
+			if (ACEWorldBakeMaterialShouldShowSlowTaskDialog())
 			{
 				SlowTask_ImportLandscapeMaterials.MakeDialog();
 			}

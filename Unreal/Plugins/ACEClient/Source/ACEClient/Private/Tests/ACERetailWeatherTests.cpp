@@ -178,6 +178,42 @@ bool FACERetailWeatherTest::RunTest(const FString& Parameters)
         AddInfo(FString::Printf(TEXT("Rain GPU pixels: %d / %d"), LitPixels(RainPixels), RainPixels.Num()));
         TArray64<uint8> PNG; FImageUtils::PNGCompressImageArray(256,256,RainPixels,PNG);
         FFileHelper::SaveArrayToFile(PNG, *(FPaths::ProjectSavedDir()/TEXT("Automation/RetailParity/Weather.png")));
+
+        // A curtain is not a screen overlay: opaque world geometry must stop
+        // the rain behind it. Exercise actual DAT geometry, offset eye origins,
+        // a wall and downward views of sloping ground in desktop/mobile renderers.
+        auto* Occluder=NewObject<UProceduralMeshComponent>(Sky);
+        Occluder->RegisterComponent(); Occluder->SetWorldLocation(Sky->GetActorLocation());
+        Occluder->SetMaterial(0,UMaterial::GetDefaultMaterial(MD_Surface));
+        Capture->ShowOnlyComponents.Add(Occluder);
+        auto CompareOcclusion=[&](const TCHAR* Label)
+        {
+            for (float EyeOffset : {-3.2f,3.2f})
+            {
+                Capture->SetWorldLocation(Sky->GetActorLocation()+FVector(0,EyeOffset,0));
+                for (auto& Slot:Sky->Slots) Slot.Mesh->SetVisibility(false);
+                const auto Dry=Read();
+                for (auto& Slot:Sky->Slots) Slot.Mesh->SetVisibility(true);
+                const auto Wet=Read();
+                int32 Changed=0;
+                for (int32 P=0;P<Dry.Num();++P) if (Dry[P]!=Wet[P]) ++Changed;
+                TestEqual(FString::Printf(TEXT("%s occludes rain for eye %.1f"),Label,EyeOffset),Changed,0);
+            }
+        };
+        Occluder->CreateMeshSection_LinearColor(0,
+            {FVector(20,-10000,-10000),FVector(20,10000,-10000),FVector(20,10000,10000),FVector(20,-10000,10000)},
+            {0,2,1,0,3,2,0,1,2,0,2,3},{},{},{},{},false);
+        CompareOcclusion(TEXT("Opaque wall"));
+        Occluder->CreateMeshSection_LinearColor(0,
+            {FVector(-10000,-10000,-5020),FVector(10000,-10000,4980),FVector(10000,10000,4980),FVector(-10000,10000,-5020)},
+            {0,2,1,0,3,2,0,1,2,0,2,3},{},{},{},{},false);
+        Capture->SetWorldRotation(FRotator(-65,0,0));
+        CompareOcclusion(TEXT("Sloping terrain"));
+        Occluder->DestroyComponent(); Capture->ShowOnlyComponents.Remove(Occluder);
+        Capture->SetWorldLocation(Sky->GetActorLocation()); Capture->SetWorldRotation(FRotator::ZeroRotator);
+        TestTrue(TEXT("Occlusion does not disable unobstructed rain"),LitPixels(Read())>100);
+        for (auto* Material:{Dat->EnsureAceWeatherTranslucentMaterialBase(),Dat->EnsureAceWeatherAdditiveMaterialBase()})
+            TestTrue(TEXT("Both weather blend modes use per-sample hardware world depth"),Material && !Material->GetMaterial()->bDisableDepthTest);
         Sky->UpdateSky(.1f,.25f);
         const auto MovedPixels = Read();
         TestTrue(TEXT("DAT texture velocity animates rainfall"), RainPixels != MovedPixels);

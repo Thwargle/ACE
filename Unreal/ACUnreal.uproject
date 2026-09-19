@@ -1,0 +1,60 @@
+{
+  "FileVersion": 3,
+  "EngineAssociation": "5.8",
+  "Category": "Games",
+  "Description": "AC:Unreal and AC:VR - Asheron's Call desktop and virtual reality clients.",
+  "Modules": [
+    {
+      "Name": "ACUnreal",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ],
+  "Plugins": [
+    {
+      "Name": "OpenXR",
+      "Enabled": true
+    },
+    {
+      "Name": "ACEWorldBake",
+      "Enabled": true
+    },
+    {
+      "Name": "EditorScriptingUtilities",
+      "Enabled": true
+    },
+    {
+      "Name": "BlueprintMaterialTextureNodes",
+      "Enabled": true
+    },
+    {
+      "Name": "Interchange",
+      "Enabled": true,
+      "SupportedTargetPlatforms": [
+        "Win64",
+        "Linux",
+        "Mac"
+      ]
+    },
+    {
+      "Name": "ACEClient",
+      "Enabled": true
+    },
+    {
+      "Name": "ProceduralMeshComponent",
+      "Enabled": true
+    },
+    {
+      "Name": "ModelContextProtocol",
+      "Enabled": false
+    },
+    {
+      "Name": "Terminal",
+      "Enabled": false
+    },
+    {
+      "Name": "ResonanceAudio",
+      "Enabled": false
+    }
+  ]
+}

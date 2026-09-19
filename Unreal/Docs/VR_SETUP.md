@@ -1,4 +1,4 @@
-# ACE VR: Rift through SteamVR
+# AC:VR: Rift through SteamVR
 
 Build **2026.09.13.11** includes the OpenXR VR client and accompanying ACE server extension. This is a Development build for headset acceptance testing. Automated tests do not certify controller alignment, live combat, or headset performance.
 
@@ -103,7 +103,7 @@ See `VR_PORT_REVIEW.md` for the implementation review and automated validation e
 
 Close the game, make sure SteamVR detects the headset, then relaunch with `Launch-VR.bat`. The first live attempt started before SteamVR detected the headset: its OpenXR log reported `VRInitError_Init_HmdNotFound`, and Unreal disabled XR with `Instance is not viable`. Connecting the headset after that point does not convert the running desktop client into VR. Relaunching after detection successfully created both eye projection views and activated the ACE VR rig.
 
-The desktop mirror and world-space login/inventory panels are still flat surfaces in a successful VR session. Close the SteamVR desktop/dashboard overlay and return to the game to view the immersive scene. Launcher logs are saved under `%LOCALAPPDATA%/ACEViewer/Saved/Logs/VR-launch-*.log`.
+The desktop mirror and world-space login/inventory panels are still flat surfaces in a successful VR session. Close the SteamVR desktop/dashboard overlay and return to the game to view the immersive scene. Launcher logs are saved under `%LOCALAPPDATA%/ACUnreal/Saved/Logs/VR-launch-*.log`.
 
 ## Quest Link shows passthrough while the desktop mirror tracks the headset
 

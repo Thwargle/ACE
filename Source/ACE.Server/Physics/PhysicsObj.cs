@@ -3363,8 +3363,19 @@ namespace ACE.Server.Physics
             if (MovementManager != null) MovementManager.ReportExhaustion();
         }
 
+        public bool IsOwnVRProjectile(PhysicsObj body) =>
+            WeenieObj?.WorldObject?.IsVRFreeAimProjectile == true
+            && WeenieObj.WorldObject.ProjectileSource?.PhysicsObj == body;
+
         public bool report_object_collision(PhysicsObj obj, bool prev_has_contact)
         {
+            // A contact cached during placement / another moving body's tick can
+            // reach reporting after the transition filter. Reject it before any
+            // callbacks or Missile/AlignPath flags are cleared. The spell-level
+            // self-damage guard alone leaves a live shot with broken physics.
+            // Keep this source-only; terrain and other bodies still stop a shot.
+            if (IsOwnVRProjectile(obj) || obj.IsOwnVRProjectile(this)) return false;
+
             if (obj.State.HasFlag(PhysicsState.ReportCollisionsAsEnvironment))
                 return report_environment_collision(prev_has_contact);
 

@@ -15,12 +15,15 @@
 #include "Components/WidgetComponent.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/Texture2D.h"
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
 #include "Materials/MaterialInterface.h"
+#include "Materials/Material.h"
 #include "ProceduralMeshComponent.h"
 #include "StaticMeshResources.h"
 #include "RHIStats.h"
+#include "RHI.h"
 
 static TAutoConsoleVariable<int32> GACEMovementDebug(TEXT("ace.Movement.Debug"), 0,
 	TEXT("Log requested and collision-resolved player movement once per second."));
@@ -50,6 +53,7 @@ FACERenderAudit FACERenderAudit::Collect(UWorld* World)
 	FACERenderAudit Out;
 	if (!World) return Out;
 	TMap<FString, FString> Identities, StaticInstances;
+	TSet<UTexture2D*> LandscapeTextures;
 	auto Identity = [&](const FString& Key, AActor* A)
 	{
 		if (const auto* First = Identities.Find(Key))
@@ -102,6 +106,18 @@ FACERenderAudit FACERenderAudit::Collect(UWorld* World)
 				&& (bMain || P->bCastHiddenShadow);
 			auto Section = [&](UMaterialInterface* Material)
 			{
+				if (bMain && Material && Material->GetMaterial()->GetName().StartsWith(TEXT("M_ACELandLit")))
+				{
+					UTexture* Bound = nullptr;
+					Material->GetTextureParameterValue(TEXT("ACETexture"), Bound);
+					if (auto* Texture = Cast<UTexture2D>(Bound); Texture && !LandscapeTextures.Contains(Texture))
+					{
+						LandscapeTextures.Add(Texture);
+						++Out.LandscapeTextureFormats.FindOrAdd(FString::Printf(TEXT("%dx%d %s mips=%d"),
+							Texture->GetSizeX(), Texture->GetSizeY(), GPixelFormats[Texture->GetPixelFormat()].Name, Texture->GetNumMips()));
+						Out.LandscapeTextureBytes += Texture->CalcTextureMemorySizeEnum(TMC_AllMips);
+					}
+				}
 				if (bMain)
 				{
 					++G.Sections;
@@ -148,8 +164,18 @@ FACERenderAudit FACERenderAudit::Collect(UWorld* World)
 
 void FACERenderAudit::Log() const
 {
+	UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: GPU timestamp queries supported=%d (missing GPU trace data is not zero GPU cost)"),
+		GRHIGlobals.SupportsTimestampRenderQueries ? 1 : 0);
+	for (const TCHAR* Name : { TEXT("r.Android.SupportsTimestampQueries"), TEXT("r.CullInstances"),
+		TEXT("ace.Render.CachedActorDraws"), TEXT("ace.Render.CacheDoorwayGeometry"), TEXT("ace.Dat.CacheSetupMetadata") })
+		if (const auto* Variable = IConsoleManager::Get().FindConsoleVariable(Name))
+			UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: %s=%s"), Name, *Variable->GetString());
 	UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: particleEmitters=%d degraded=%d activeParticles=%d particleLights=%d"),
 		ParticleEmitters, DegradedEmitters, ActiveParticles, ParticleLights);
+	for (const auto& Format : LandscapeTextureFormats)
+		UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: landscapeTexture %s unique=%d"), *Format.Key, Format.Value);
+	UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: landscapeTexture allocatedEstimateMiB=%.2f (unique textures, including mipmaps)"),
+		double(LandscapeTextureBytes) / (1024.0 * 1024.0));
 	UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: most recent RHI frame draws=%d primitives=%d (all passes; asynchronous snapshot)"), GNumDrawCallsRHI[0], GNumPrimitivesDrawnRHI[0]);
 	UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: scene inventory BEFORE frustum/occlusion/distance culling; sections are NOT GPU draw calls. Stereo, depth and shadows add passes."));
 	TArray<FString> Keys; Groups.GetKeys(Keys); Keys.Sort();

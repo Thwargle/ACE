@@ -89,6 +89,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACERetailParticleTimingTest;
 	friend class FACERetailStatsTest;
 	friend class FACERetailInventoryOrderTest;
+	friend class FACEEquippedLookupTest;
 
 public:
 	FACESession();
@@ -146,6 +147,7 @@ public:
 	FACEOnCombatFeedback OnCombatFeedback;
 	FACEOnHealthFeedback OnHealthFeedback;
 	bool SupportsHealthFeedback() const { return (VRCapabilities & 64u) != 0; }
+	bool IsNearbyHealthObject(int32 Guid) const;
 	bool SupportsVRRecovery() const { return (VRCapabilities & 2048u) != 0; }
 	bool SupportsVRCasting() const { return (VRCapabilities & 4096u) != 0; }
 	uint32 GetVRCastPhase() const;
@@ -217,6 +219,8 @@ public:
 
 	/** Equipped items on the local player (CurrentWieldedLocation != 0 or ParentGuid == self). */
 	void GetEquippedItems(TArray<FACEWorldObject>& Out) const;
+	/** Read-only lookup for per-frame VR queries. Valid only until session objects mutate. */
+	const FACEWorldObject* FindEquippedItem(int64 LocationMask, int32 ItemTypeMask = 0, int32 AmmoTypeMask = 0) const;
 
 	/**
 	 * Pack inventory: prefers ViewContents order when known; otherwise falls back to
@@ -497,6 +501,7 @@ public:
 	void SendCastSpell(int32 SpellId, int32 TargetGuid = 0);
 	void RequestVRCapabilities();
 	bool SupportsVRPoses() const { return (VRCapabilities & 16u) != 0; }
+	double LastVRPoseSent = -100.;
 	bool SendVRPose(FACEVRPose Pose);
 	bool SupportsVRDrops() const { return (VRCapabilities & 1024u) != 0; }
 	bool SendVRDrop(uint32 Cell, int32 Item, int32 SplitAmount, const FVector& OriginAc);

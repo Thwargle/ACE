@@ -77,6 +77,11 @@ bool FACEVRInputLifecycleTest::RunTest(const FString&)
     auto Added=Make(TEXT("NewDynamicRow"),0,0,10,10);Other->AddChild(Added);Manager->InvalidateNameLookupIndex();
     TestTrue(TEXT("A dynamic row is queryable in the same refresh"),Manager->FindElementByName(TEXT("NewDynamicRow"))==Added);
     Manager->EndNameLookupPass();
+    Other->Children.Remove(Added);
+    Manager->BeginNameLookupPass();
+    TestFalse(TEXT("Reused lookup storage cannot resurrect a removed child"),Manager->FindElementByName(TEXT("NewDynamicRow")).IsValid());
+    TestTrue(TEXT("Duplicate labels remain visible in a subsequent pass"),Manager->FindElementByName(TEXT("RepeatedLabel"))==SecondName);
+    Manager->EndNameLookupPass();
     Manager->ClearRoots();
     TestFalse(TEXT("Reload cannot return a stale indexed element"),Manager->FindElementByName(TEXT("RepeatedLabel")).IsValid());
     Window->bVisible=true;Manager->AddRoot(Window);Manager->SetUiLocked(true);

@@ -3,6 +3,10 @@
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElement.h"
 #include "UI/ACEUIElementManager.h"
+#include "UI/ACEUILayoutResolver.h"
+#include "UI/ACEUIResourceResolver.h"
+#include "Dat/ACEDatTextLayout.h"
+#include "Components/ScrollBox.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "ACETypes.h"
@@ -18,7 +22,7 @@ namespace
 	static const FLinearColor StatusGold(0.95f, 0.82f, 0.35f, 1.f);
 	static const FLinearColor StatusWhite(0.92f, 0.92f, 0.88f, 1.f);
 
-	static constexpr float EffectsRowHeight = 24.f;
+	static constexpr float EffectsRowHeight = 32.f; // DAT 2100001B / 10000128.
 	/** Above DAT PaintZ (InOutZOrder + floaty ZLevel up to ~9k) so text is never buried. */
 	static constexpr int32 StatusOverlayZ = 100000;
 
@@ -95,17 +99,17 @@ FString UACEUIGameplayBinder::FormatEnchantmentRemaining(const FACEActiveEnchant
 {
 	if (E.Duration < 0.f)
 	{
-		return TEXT("Permanent");
+		return FString(); // EffectInfoRegion::Update leaves permanent values blank.
 	}
-	// ACE StartTime is typically negative elapsed seconds since apply.
-	const float Elapsed = (E.StartTime < 0.f) ? -E.StartTime : E.StartTime;
-	const float Remaining = FMath::Max(0.f, E.Duration - Elapsed);
-	const int32 TotalSec = FMath::RoundToInt(Remaining);
+	const double SinceReceipt = E.ReceivedAt > 0.0 ? FMath::Max(0.0, FPlatformTime::Seconds()-E.ReceivedAt) : 0.0;
+	const double Remaining = E.Duration + E.StartTime - SinceReceipt;
+	if (!FMath::IsFinite(Remaining) || Remaining < 0.0) return FString();
+	const int32 TotalSec = FMath::FloorToInt(FMath::Min(Remaining, double(MAX_int32)));
 	const int32 Min = TotalSec / 60;
 	const int32 Sec = TotalSec % 60;
 	if (Min >= 60)
 	{
-		return FString::Printf(TEXT("%dh %02dm"), Min / 60, Min % 60);
+		return FString::Printf(TEXT("%d:%02d:%02d"), Min / 60, Min % 60, Sec);
 	}
 	return FString::Printf(TEXT("%d:%02d"), Min, Sec);
 }
@@ -133,6 +137,9 @@ void UACEUIGameplayBinder::RefreshEffectsOverlays(bool bPositive)
 		{
 			if (I) { I->SetVisibility(ESlateVisibility::Collapsed); }
 		}
+		for (UTextBlock* R : EffectsListDurations) if (R) R->SetVisibility(ESlateVisibility::Collapsed);
+		for (const auto& Row : EffectsRowElements) Row->bVisible = false;
+		if (EffectsInfoScroll) EffectsInfoScroll->SetVisibility(ESlateVisibility::Collapsed);
 		if (EffectsInfoLabel) { EffectsInfoLabel->SetVisibility(ESlateVisibility::Collapsed); }
 		if (EffectsTitleLabel) { EffectsTitleLabel->SetVisibility(ESlateVisibility::Collapsed); }
 	};
@@ -148,7 +155,7 @@ void UACEUIGameplayBinder::RefreshEffectsOverlays(bool bPositive)
 	}
 
 	EnsureOverlays();
-	UACEDatSubsystem* Dat = nullptr;
+	UACEDatSubsystem* Dat = Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr;
 	if (PlayerController)
 	{
 		if (UGameInstance* GI = PlayerController->GetGameInstance())
@@ -158,20 +165,32 @@ void UACEUIGameplayBinder::RefreshEffectsOverlays(bool bPositive)
 	}
 
 	TArray<FACEActiveEnchantment> All = Client->GetActiveEnchantments();
-	TArray<FACEActiveEnchantment> Filtered;
-	Filtered.Reserve(All.Num());
+	// CEnchantmentRegistry::Duel: only the strongest effect per category is in
+	// effect; equal power prefers the more recently applied enchantment.
+	TMap<int32, FACEActiveEnchantment> Winners;
 	for (const FACEActiveEnchantment& E : All)
 	{
 		if (E.bVitae || E.SpellId == 666)
 		{
 			continue;
 		}
-		const bool bBen = E.bBeneficial;
-		if (bPositive == bBen)
-		{
-			Filtered.Add(E);
-		}
+		auto* Existing = Winners.Find(E.SpellCategory);
+		if (!Existing || E.PowerLevel > Existing->PowerLevel
+			|| (E.PowerLevel == Existing->PowerLevel && E.ReceivedAt+E.StartTime >= Existing->ReceivedAt+Existing->StartTime))
+			Winners.Add(E.SpellCategory,E);
 	}
+	TArray<FACEActiveEnchantment> Filtered;
+	TMap<int32,FString> Names;
+	for (const auto& Pair : Winners) if (Pair.Value.bBeneficial == bPositive)
+	{
+		const auto& E=Pair.Value;
+		FString Name=FString::Printf(TEXT("Spell %d"),E.SpellId); uint32 Icon=0;
+		if (Dat) Dat->TryGetSpellInfo(E.SpellId,Name,Icon);
+		if (Name.IsEmpty()) Name=FString::Printf(TEXT("Spell %d"),E.SpellId);
+		Names.Add(E.SpellId,Name); Filtered.Add(E);
+	}
+	Filtered.Sort([&](const auto& A,const auto& B){return Names[A.SpellId].Compare(Names[B.SpellId],ESearchCase::CaseSensitive)<0;});
+	EffectsContentCount=Filtered.Num();
 
 	if (!EffectsTitleLabel && Canvas->WidgetTree)
 	{
@@ -181,7 +200,7 @@ void UACEUIGameplayBinder::RefreshEffectsOverlays(bool bPositive)
 	}
 	PlaceTextUnder(EffectsTitleLabel, PageName, TEXT("Effects_TitleText"),
 		bPositive ? TEXT("Spells in Effect") : TEXT("Harmful Spells in Effect"),
-		10, StatusGold, StatusOverlayZ);
+		10, FLinearColor::White, StatusOverlayZ);
 	EffectsTitleLabel->SetJustification(ETextJustify::Center);
 
 	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(PageName, TEXT("Effects_SpellList"));
@@ -219,116 +238,112 @@ void UACEUIGameplayBinder::RefreshEffectsOverlays(bool bPositive)
 	}
 	if (!bHaveSelected)
 	{
-		SelectedEffectsSpellId = Filtered.Num() > 0 ? Filtered[0].SpellId : 0;
+		SelectedEffectsSpellId = 0;
 	}
 
-	FACEActiveEnchantment Selected;
-	bool bFoundSelected = false;
-
-	for (int32 Row = 0; Row < EffectsVisibleRows; ++Row)
+	for (int32 Row = 0; Row < FMath::Max(EffectsVisibleRows,EffectsRowElements.Num()); ++Row)
 	{
-		const int32 Idx = EffectsScrollOffset + Row;
-		UTextBlock* Label = nullptr;
-		if (EffectsListRows.IsValidIndex(Row))
+		if (Row >= EffectsRowElements.Num())
 		{
-			Label = EffectsListRows[Row];
+			auto Entry=UACEUILayoutResolver::LoadTemplate(0x2100001B,0x10000128);
+			if (!Entry) break;
+			Entry->ElementName=FString::Printf(TEXT("ActiveEffectRow_%d"),Row);
+			Entry->bUseExplicitState=true;
+			EffectsRowElements.Add(Entry);
+			EffectsListRows.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
+			EffectsListDurations.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
 		}
-		if (!Label && Canvas->WidgetTree)
+		const auto Entry=EffectsRowElements[Row];
+		if (Entry->Parent.Pin()!=ListEl)
 		{
-			Label = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
-			FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9);
-			Label->SetFont(Font);
-			if (EffectsListRows.Num() <= Row)
-			{
-				EffectsListRows.SetNum(Row + 1);
-			}
-			EffectsListRows[Row] = Label;
+			if (auto Old=Entry->Parent.Pin()) Old->Children.Remove(Entry);
+			ListEl->AddChild(Entry); Manager->InvalidateNameLookupIndex();
 		}
-		UBorder* Icon = EnsureIconBorder(EffectsListIcons, Row);
-		if (Idx >= Filtered.Num())
+		auto* Label=EffectsListRows[Row].Get();
+		auto* Duration=EffectsListDurations[Row].Get();
+		auto* Icon=EnsureIconBorder(EffectsListIcons,Row);
+		const int32 Idx=EffectsScrollOffset+Row;
+		Entry->bVisible=Row<EffectsVisibleRows && Filtered.IsValidIndex(Idx);
+		if (!Entry->bVisible)
 		{
-			EffectsListSpellIds[Row] = 0;
-			if (Label) { Label->SetVisibility(ESlateVisibility::Collapsed); }
-			if (Icon) { Icon->SetVisibility(ESlateVisibility::Collapsed); }
+			UWidget* Widgets[]={Label,Duration,Icon};
+			for (UWidget* W : Widgets)
+				if (W) W->SetVisibility(ESlateVisibility::Collapsed);
+			if (EffectsListSpellIds.IsValidIndex(Row)) EffectsListSpellIds[Row]=0;
 			continue;
 		}
+		const auto& E=Filtered[Idx];
+		EffectsListSpellIds[Row]=E.SpellId;
+		Entry->Y=Row*EffectsRowHeight; Entry->Width=ListEl->Width;
+		Entry->DefaultState=E.SpellId==SelectedEffectsSpellId ? 6 : 1;
+		for (const auto& Child : Entry->Children)
+		{
+			if (Child->ElementName==TEXT("InfoRegion_Label"))
+			{
+				Child->Width=FMath::Max(1,ListEl->Width-112); // 37px icon/name gap, 50px timer, 25px scrollbar.
+				FString Name=Names[E.SpellId];
+				PlaceTextOnElement(Label,Child,Name,10,FLinearColor::White,StatusOverlayZ+2);
+				// The DAT template requests one-line truncation, not wrapping into
+				// another row or painting under the duration/scrollbar.
+				if (const auto* Font=Cast<UACERetailTextBlock>(Label)->GetBitmapFont())
+				{
+					int32 Width=0; for (TCHAR C:Name) Width+=ACEDatText::Advance(*Font,C);
+					if (Width>Child->Width)
+					{
+						const int32 Dots=3*ACEDatText::Advance(*Font,'.');
+						while (!Name.IsEmpty() && Width+Dots>Child->Width)
+						{Width-=ACEDatText::Advance(*Font,Name[Name.Len()-1]);Name.LeftChopInline(1);}
+						Name+=TEXT("..."); Label->SetText(FText::FromString(Name));
+					}
+				}
+				SetRetailTooltip(Label,FText::FromString(Names[E.SpellId]));
+			}
+			else if (Child->ElementName==TEXT("InfoRegion_Value"))
+			{
+				Child->X=ListEl->Width-75;
+				PlaceTextOnElement(Duration,Child,Client->IsCharacterOptionSet(0x15) ? FormatEnchantmentRemaining(E) : FString(),
+					10,FLinearColor::White,StatusOverlayZ+2);
+			}
+			else if (Child->ElementName==TEXT("InfoRegion_Icon"))
+			{
+				SetSpellIcon(Icon,E.SpellId); Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
+				Canvas->PlaceWidgetAtElement(Icon,Child,StatusOverlayZ+1);
+			}
+		}
+	}
 
-		const FACEActiveEnchantment& E = Filtered[Idx];
-		EffectsListSpellIds[Row] = E.SpellId;
-		if (E.SpellId == SelectedEffectsSpellId)
-		{
-			Selected = E;
-			bFoundSelected = true;
-		}
-
-		FString SpellName = FString::Printf(TEXT("Spell %d"), E.SpellId);
-		uint32 IconDid = 0;
-		if (Dat)
-		{
-			Dat->TryGetSpellInfo(static_cast<uint32>(E.SpellId), SpellName, IconDid);
-		}
-		const FString Line = Client && Client->IsCharacterOptionSet(0x15)
-			? FString::Printf(TEXT("%s  %s"), *SpellName, *FormatEnchantmentRemaining(E))
-			: SpellName;
-		const bool bSel = (E.SpellId == SelectedEffectsSpellId);
-		const float RowTop = 2.f + Row * EffectsRowHeight;
-		const float RowBottom = FMath::Max(2.f,
-			static_cast<float>(ListEl->Height) - (RowTop + EffectsRowHeight));
-		if (Label)
-		{
-			Label->SetVisibility(ESlateVisibility::Visible);
-			Label->SetText(FText::FromString(Line));
-			Label->SetColorAndOpacity(FSlateColor(bSel ? StatusGold : StatusWhite));
-			Canvas->PlaceWidgetAtElement(Label, ListEl, StatusOverlayZ + Row,
-				FMargin(28.f, RowTop, 8.f, RowBottom));
-		}
-		if (Icon)
-		{
-			SetSpellIcon(Icon, E.SpellId);
-			Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
-			Canvas->PlaceWidgetAtElement(Icon, ListEl, StatusOverlayZ + 50 + Row,
-				FMargin(4.f, RowTop,
-					static_cast<float>(ListEl->Width) - 24.f,
-					RowBottom));
-		}
-	}
-
-	if (!EffectsInfoLabel && Canvas->WidgetTree)
+	if (!EffectsInfoLabel) EffectsInfoLabel=Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+	FString Info=Filtered.IsEmpty() ? TEXT("There are no spells in effect.") : TEXT("Select a spell to see its description.");
+	if (SelectedEffectsSpellId && Names.Contains(SelectedEffectsSpellId))
 	{
-		EffectsInfoLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
-		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 8);
-		EffectsInfoLabel->SetFont(Font);
+		FString Description;
+		if (Dat) Dat->TryGetSpellDescription(SelectedEffectsSpellId,Description);
+		Info=Names[SelectedEffectsSpellId]+TEXT("\n\n")+Description;
 	}
-	FString Info;
-	if (bFoundSelected)
+	const auto InfoEl=Manager->FindElementUnder(PageName,TEXT("Effects_InfoText"));
+	if (InfoEl)
 	{
-		FString SpellName = FString::Printf(TEXT("Spell %d"), Selected.SpellId);
-		uint32 IconDid = 0;
-		if (Dat)
+		if (!EffectsInfoScroll)
 		{
-			Dat->TryGetSpellInfo(static_cast<uint32>(Selected.SpellId), SpellName, IconDid);
+			EffectsInfoScroll=Canvas->WidgetTree->ConstructWidget<UScrollBox>();
+			EffectsInfoScroll->SetScrollBarVisibility(ESlateVisibility::Collapsed);
+			EffectsInfoScroll->SetClipping(EWidgetClipping::ClipToBounds);
+			EffectsInfoScroll->SetAnimateWheelScrolling(false);
+			EffectsInfoScroll->AddChild(EffectsInfoLabel);
 		}
-		if (Client && Client->IsCharacterOptionSet(0x15))
-		{
-			Info = FString::Printf(TEXT("%s\nTime remaining: %s"),
-				*SpellName, *FormatEnchantmentRemaining(Selected));
-		}
-		else
-		{
-			Info = SpellName;
-		}
-		if (Selected.StatModValue != 0.f)
-		{
-			Info += FString::Printf(TEXT("\nMagnitude: %.2f"), Selected.StatModValue);
-		}
+		if (EffectsInfoSpellId!=SelectedEffectsSpellId)
+		{EffectsInfoScroll->SetScrollOffset(0);EffectsInfoSpellId=SelectedEffectsSpellId;}
+		EffectsInfoLabel->SetText(FText::FromString(Info));
+		EffectsInfoLabel->SetJustification(ETextJustify::Center);
+		EffectsInfoLabel->SetColorAndOpacity(FSlateColor(FLinearColor::White));
+		EffectsInfoLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
+		Cast<UACERetailTextBlock>(EffectsInfoLabel)->SetRetailElement(Canvas->GetResourceResolver(),InfoEl,Canvas->GetLastScale2D(),InfoEl->Width,false);
+		EffectsInfoScroll->SetVisibility(ESlateVisibility::Visible);
+		Canvas->PlaceWidgetAtElement(EffectsInfoScroll,InfoEl,StatusOverlayZ+100);
+		const float Max=EffectsInfoScroll->GetScrollOffsetOfEnd(),Height=InfoEl->Height*Canvas->GetLastScale2D().Y;
+		SyncDatScrollbar(Manager->FindElementUnder(PageName,TEXT("Effects_InfoText_Scrollbar")),
+			Max>0 ? EffectsInfoScroll->GetScrollOffset()/Max : 0,Height/FMath::Max(1.f,Height+Max));
 	}
-	else if (Filtered.Num() == 0)
-	{
-		Info = bPositive
-			? TEXT("You have no positive enchantments.")
-			: TEXT("You have no negative enchantments.");
-	}
-	PlaceTextUnder(EffectsInfoLabel, PageName, TEXT("Effects_InfoText"), Info, 8, StatusWhite, StatusOverlayZ + 100);
 
 	if (TSharedPtr<FACEUIElement> Bar = Manager->FindElementUnder(PageName, TEXT("Effects_SpellList_Scrollbar")))
 	{
@@ -356,7 +371,9 @@ bool UACEUIGameplayBinder::TryHandleEffectsListClick(FVector2D Absolute)
 		{
 			continue;
 		}
-		if (Canvas->IsWidgetExposedAt(Label, Absolute))
+		if (Canvas->IsWidgetExposedAt(Label, Absolute)
+			|| (EffectsListDurations.IsValidIndex(i) && Canvas->IsWidgetExposedAt(EffectsListDurations[i],Absolute))
+			|| (EffectsListIcons.IsValidIndex(i) && Canvas->IsWidgetExposedAt(EffectsListIcons[i],Absolute)))
 		{
 			const int32 SpellId = EffectsListSpellIds[i];
 			if (SpellId != 0)

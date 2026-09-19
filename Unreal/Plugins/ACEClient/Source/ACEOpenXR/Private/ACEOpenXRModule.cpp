@@ -9,7 +9,7 @@ class FACEOpenXRModule final : public IModuleInterface, public IOpenXRExtensionP
 public:
     void StartupModule() override { RegisterOpenXRExtensionModularFeature(); }
     void ShutdownModule() override { UnregisterOpenXRExtensionModularFeature(); }
-    FString GetDisplayName() override { return TEXT("ACE Quest frame pacing"); }
+    FString GetDisplayName() override { return TEXT("AC:VR frame pacing"); }
     bool GetOptionalExtensions(TArray<const ANSICHAR*>& Out) override
     {
         Out.Add(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);

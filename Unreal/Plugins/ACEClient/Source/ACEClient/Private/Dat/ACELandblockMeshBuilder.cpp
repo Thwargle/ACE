@@ -648,19 +648,23 @@ void FACELandblockMeshBuilder::MergeOverlay(TArray<FColor>& Pixels, int32 Size, 
 			// mesh UVs that are U-mirrored for AceVectorToUnreal(-X).
 			const float U = (static_cast<float>(X) + 0.5f) / static_cast<float>(Size);
 			const FColor A = SampleAlpha(Alpha, U, V, Rot);
-			// CUSTOM_LSCAPE_ALPHA / A8 decode stores coverage in R (=G=B) with A forced to 255.
-			// Invert: prior mapping put overlays (road/sand) on the complementary region.
-			const float W = 1.f - FMath::Clamp(A.R / 255.f, 0.f, 1.f);
-			if (W <= KINDA_SMALL_NUMBER)
+			// ImgTex::MergeTexture blends the encoded RGB bytes, not linear-light
+			// colors. Linearizing first brightens road/grass transition bands.
+			// CUSTOM_LSCAPE_ALPHA stores the retained base weight in R; retail
+			// promotes weights above 128 by one for its 256-denominator blend.
+			if (A.R == 255)
 			{
 				continue;
 			}
 			const int32 Idx = Y * Size + (Size - 1 - X);
-			const FLinearColor Base(Pixels[Idx]);
-			const FLinearColor Over(SampleTiled(Overlay, U, V, OverlayTiling));
-			FLinearColor Out = FMath::Lerp(Base, Over, W);
-			Out.A = 1.f;
-			Pixels[Idx] = Out.ToFColor(true);
+			const FColor Base = Pixels[Idx];
+			const FColor Over = SampleTiled(Overlay, U, V, OverlayTiling);
+			const uint32 BaseWeight = A.R + (A.R > 128 ? 1u : 0u);
+			const uint32 OverlayWeight = 256u - BaseWeight;
+			Pixels[Idx] = FColor(
+				static_cast<uint8>((BaseWeight * Base.R + OverlayWeight * Over.R) >> 8),
+				static_cast<uint8>((BaseWeight * Base.G + OverlayWeight * Over.G) >> 8),
+				static_cast<uint8>((BaseWeight * Base.B + OverlayWeight * Over.B) >> 8), 255);
 		}
 	}
 }

@@ -125,15 +125,10 @@ bool FACEMobileShadowTest::RunTest(const FString&)
     Sky->UpdateWorldLighting(Key,Key,0,.5f);
     auto* Light=Sky->SunLightActor->FindComponentByClass<UDirectionalLightComponent>();
     const bool Mobile=World->GetFeatureLevel()==ERHIFeatureLevel::ES3_1;
-    TestTrue(TEXT("Startup permits both mobile shadow cascades"),IConsoleManager::Get().FindConsoleVariable(TEXT("r.Shadow.CSM.MaxCascades"))->GetInt()>=2);
+    TestTrue(TEXT("Startup permits the mobile shadow region"),IConsoleManager::Get().FindConsoleVariable(TEXT("r.Shadow.CSM.MaxCascades"))->GetInt()>=1);
     TestEqual(TEXT("Startup enables receivers beyond the engine octree"),IConsoleManager::Get().FindConsoleVariable(TEXT("r.Mobile.Shadow.CSMShaderCullingMethod"))->GetInt(),0);
-    TestEqual(TEXT("Live mobile lighting reserves a near cascade and a distant cascade"),Light->DynamicShadowCascades,Mobile?2:4);
-    TestEqual(TEXT("Live mobile shadows cover sixty metres"),Light->DynamicShadowDistanceMovableLight,Mobile?6000.f:60000.f);
-    if(Mobile)
-    {
-        const float FirstSplit=Light->DynamicShadowDistanceMovableLight/(1.f+Light->CascadeDistributionExponent);
-        TestTrue(TEXT("Detailed mobile shadows extend beyond the immediate interaction area"),FirstSplit>=1400.f);
-    }
+    TestEqual(TEXT("Mobile shadows have no internal quality split that can sweep with head pitch"),Light->DynamicShadowCascades,Mobile?1:4);
+    TestEqual(TEXT("Detailed mobile shadows cover forty metres"),Light->DynamicShadowDistanceMovableLight,Mobile?4000.f:60000.f);
     auto* Target=NewObject<UTextureRenderTarget2D>(ReceiverActor); Target->InitCustomFormat(320,240,PF_B8G8R8A8,false);
     auto* Capture=NewObject<USceneCaptureComponent2D>(ReceiverActor); Capture->TextureTarget=Target;
     Capture->CaptureSource=SCS_FinalColorLDR; Capture->bCaptureEveryFrame=false; Capture->bCaptureOnMovement=false;
@@ -150,6 +145,49 @@ bool FACEMobileShadowTest::RunTest(const FString&)
         const FString Path=FPaths::ProjectSavedDir()/TEXT("PerformanceShadowTests")/Name;
         FFileHelper::SaveArrayToFile(Png,*Path); return Pixels;
     };
+    // Compare real, multi-part animated geometry and its shadow without
+    // recreating cached commands between transform changes.
+    TArray<FTransform> OriginalParts;
+    for(int32 I=0;I<Player->Appearance->GetPartCount();++I)
+        OriginalParts.Add(Player->Appearance->GetPartMesh(I)->GetRelativeTransform());
+    TArray<TArray<FColor>> DynamicPoses;
+    for(bool CachedDraws : {false,true})
+    {
+        Player->SetActorLocationAndRotation(Center,FRotator::ZeroRotator);
+        for(int32 I=0;I<OriginalParts.Num();++I)
+        {
+            auto* Part=Cast<UProceduralMeshComponent>(Player->Appearance->GetPartMesh(I));
+            Part->bPreferCachedDraws=CachedDraws; Part->MarkRenderStateDirty();
+            Part->SetRelativeTransform(OriginalParts[I]);
+        }
+        for(int32 Pose=0;Pose<3;++Pose)
+        {
+            if(Pose==1) Player->SetActorLocationAndRotation(Center+FVector(35,20,0),FRotator(0,37,0));
+            if(Pose==2 && OriginalParts.Num()>15)
+            {
+                auto* Arm=Player->Appearance->GetPartMesh(15);
+                FTransform Raised=OriginalParts[15];
+                Raised.AddToTranslation(FVector(0,0,60));
+                Raised.SetRotation((FQuat(FVector::ForwardVector,.7)*Raised.GetRotation()).GetNormalized());
+                Arm->SetRelativeTransform(Raised);
+            }
+            const auto Pixels=Render(*FString::Printf(TEXT("Actor-Cache%d-Pose%d.png"),CachedDraws,Pose));
+            if(!CachedDraws) DynamicPoses.Add(Pixels);
+            else
+            {
+                int64 Error=0;
+                for(int32 I=0;I<Pixels.Num();++I)
+                    Error+=FMath::Abs(int32(Pixels[I].R)-DynamicPoses[Pose][I].R)
+                        +FMath::Abs(int32(Pixels[I].G)-DynamicPoses[Pose][I].G)
+                        +FMath::Abs(int32(Pixels[I].B)-DynamicPoses[Pose][I].B);
+                TestTrue(TEXT("Cached moving parts preserve visible model and shadow pixels"),Error<Pixels.Num());
+            }
+        }
+    }
+    TestTrue(TEXT("Moving the model actually changes the rendered fixture"),DynamicPoses[0]!=DynamicPoses[1]);
+    TestTrue(TEXT("Moving an individual arm actually changes the rendered fixture"),DynamicPoses[1]!=DynamicPoses[2]);
+    Player->SetActorLocationAndRotation(Center,FRotator::ZeroRotator);
+    for(int32 I=0;I<OriginalParts.Num();++I) Player->Appearance->GetPartMesh(I)->SetRelativeTransform(OriginalParts[I]);
     const auto With=Render(TEXT("Shadow-On.png"));
     Player->Appearance->SetPartsCastShadow(false,false); const auto Without=Render(TEXT("Shadow-Off.png"));
     int32 Darkened=0;

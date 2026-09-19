@@ -18,7 +18,7 @@ is **not yet a feature-complete retail replacement**.
   `Unreal/diag/UIInventory`. Resolved interface trees are in `Docs/UI/Resolved`.
 - Protocol counterpart: `Source/ACE.Server/Network` and server world objects.
   Do not alter server rules to compensate for a client discrepancy.
-- User reproduction: `Unreal/Saved/Logs/ACEViewer-user-20260906-afternoon.log` and
+- User reproduction: `Unreal/Saved/Logs/ACUnreal-user-20260906-afternoon.log` and
   the supplied screenshots. Reported Yaraq rooms include 7D64012C, 7D640131,
   and 7D640135. Preserve these fixtures when changing culling or streaming.
 
@@ -192,7 +192,7 @@ MeshApplication, MissingDatLogin, and Weather passed in
 its optional HTML report template; JSON and logs were written successfully.
 Weather retains the existing ScreenPercentage priority warning. Live roof-jump,
 full login duration, and the friend's installation still need user verification.
-Distributable: `Saved/Packages/2026.09.11.6/Windows/ACEViewer.exe`.
+Distributable: `Saved/Packages/2026.09.11.6/Windows/ACUnreal.exe`.
 
 ## Changes in 2026.09.11.5
 
@@ -207,7 +207,7 @@ WorldEntry emitted its three expected blocked-entry/recall warnings. Packaged
 Materials, MeshApplication and Weather passed in `2026.09.11.5-packaged`, with
 the existing ScreenPercentage priority warning in Weather. The package listing
 contains no `ACE/WorldCache` entries. Live performance has not been remeasured.
-Distributable: `Saved/Packages/2026.09.11.5/Windows/ACEViewer.exe`.
+Distributable: `Saved/Packages/2026.09.11.5/Windows/ACUnreal.exe`.
 
 ## Changes in 2026.09.11.3
 
@@ -224,7 +224,7 @@ passed. Editor build and BuildCookRun succeeded. All three packaged smoke checks
 (Materials, MeshApplication, Weather) passed in `2026.09.11.3-packaged`, one with
 the existing scalability warning. Generated runtime settings/logs were moved to
 `2026.09.11.3-packaged-runtime` under Automation.
-Distributable: `Saved/Packages/2026.09.11.3/Windows/ACEViewer.exe`.
+Distributable: `Saved/Packages/2026.09.11.3/Windows/ACUnreal.exe`.
 
 ## Changes in 2026.09.11.2
 
@@ -275,7 +275,7 @@ The final BuildCookRun succeeded without header-order diagnostics after moving
 each affected source's own header to its first include. Packaged Materials,
 MeshApplication and Weather all passed in `2026.09.11.2-packaged`. The packaged
 runner lacks Unreal's optional HTML report template; its JSON results are intact.
-Distributable: `Saved/Packages/2026.09.11.2/Windows/ACEViewer.exe`. Generated
+Distributable: `Saved/Packages/2026.09.11.2/Windows/ACUnreal.exe`. Generated
 smoke-test settings/logs were moved to `Saved/Automation/2026.09.11.2-packaged-runtime`.
 
 ## Changes in 2026.09.11.1
@@ -348,7 +348,7 @@ failures. The only packaged-test warning is the deliberate 100% screen-percentag
 fixture override taking priority over scalability. The prior missing vertex-color
 material warning is gone. Reports: `Saved/Automation/2026.09.11.1-final`,
 `2026.09.11.1-camera`, and `2026.09.11.1-package-final`. The distributable is
-`Saved/Packages/2026.09.11.1/Windows/ACEViewer.exe`; generated smoke-test Saved
+`Saved/Packages/2026.09.11.1/Windows/ACUnreal.exe`; generated smoke-test Saved
 files were moved outside that folder.
 The optional mouse-control reference is Blizzard's [WoW guide](https://media.battle.net/documents/wow/WoW-BradyGAMES-enUS-Guide.pdf)
 and [classic manual](https://us.media.blizzard.com/manuals/wow/wow-classic-manual-enUS.pdf).
@@ -410,7 +410,7 @@ automated regression coverage; the user's exact live incidents have not been
 reproduced in this pass. Live acceptance remains distinct from those checks.
 
 BuildCookRun succeeded, including cooking the version 7 additive parent and
-archiving `Saved/Packages/2026.09.10.5/Windows/ACEViewer.exe`. Packaged
+archiving `Saved/Packages/2026.09.10.5/Windows/ACUnreal.exe`. Packaged
 MeshApplication and Weather tests pass with their existing fixture warnings
 (`Saved/Automation/2026.09.10.5-packaged/index.json`). The separate
 `ACE.Packaging.Materials` check passes cleanly and verifies all 31 persistent,
@@ -474,7 +474,7 @@ existing fixture/scalability warnings) in
 succeeded. Packaged Materials, MeshApplication and Weather passed (one clean,
 two with the existing debug-material/scalability warnings) in
 `Saved/Automation/2026.09.10.3-packaged/index.json`. The archive is
-`Saved/Packages/2026.09.10.3/Windows/ACEViewer.exe`.
+`Saved/Packages/2026.09.10.3/Windows/ACUnreal.exe`.
 
 ## Changes in 2026.09.10.2
 
@@ -514,7 +514,7 @@ MeshApplication and Weather tests passed (one clean, two with the existing
 uncooked debug-material fallback/scalability warnings) in
 `Saved/Automation/2026.09.10.2-packaged/index.json`. Rendered baton frames are in
 `Saved/Automation/BatonFx`. Package:
-`Saved/Packages/2026.09.10.2/Windows/ACEViewer.exe`.
+`Saved/Packages/2026.09.10.2/Windows/ACUnreal.exe`.
 
 ## Changes in 2026.09.10.1
 
@@ -541,7 +541,7 @@ Validation: all 36 `ACE.RetailParity` tests passed (32 clean, four with warnings
 zero failed/skipped). The editor build and BuildCookRun succeeded. The packaged
 Materials, MeshApplication and Weather tests also passed (two with warnings).
 The archive is
-`Saved/Packages/2026.09.10.1/Windows/ACEViewer.exe`. See the review for the complete
+`Saved/Packages/2026.09.10.1/Windows/ACUnreal.exe`. See the review for the complete
 test-report paths and live acceptance limitations.
 
 ## Changes in 2026.09.09.13
@@ -587,7 +587,7 @@ deliberate world-entry failure fixtures, unresolved effects in the particle
 fixture, and saved console settings taking precedence over test scalability.
 The final rank-title and legend changes passed UIScreens again in
 `Saved/Automation/2026.09.09.13-rank/index.json`. BuildCookRun completed with
-exit code 0 and archived `Saved/Packages/2026.09.09.13/Windows/ACEViewer.exe`.
+exit code 0 and archived `Saved/Packages/2026.09.09.13/Windows/ACUnreal.exe`.
 The packaged executable passed Materials, MeshApplication and Weather (three
 tests, zero failures, two with warnings). MeshApplication could not load the
 optional engine debug VertexColorMaterial and used WorldGridMaterial; Weather
@@ -637,7 +637,7 @@ change also passed WorldEntry and CameraAndEdges in
 world-entry failure fixtures, unresolved effects in the particle fixture, and
 saved console settings taking precedence over test scalability settings.
 BuildCookRun completed with exit code 0 and archived
-`Saved/Packages/2026.09.09.12/Windows/ACEViewer.exe`. The packaged executable
+`Saved/Packages/2026.09.09.12/Windows/ACUnreal.exe`. The packaged executable
 passed Materials, MeshApplication and Weather (three tests, zero failures):
 `Saved/Automation/2026.09.09.12-packaged/index.json`. The packaged runner lacks
 the optional HTML report template; JSON results were exported successfully.
@@ -996,7 +996,7 @@ Live server mouse/viewport input has not been exercised in this pass.
   moving a favorite preserves the selected spell's identity. Favorites can grow
   beyond the previous arbitrary 56-entry limit. The innate slot displays the held
   caster and casts through `UseWithTarget`, with its item/spell name beneath it.
-- The preserved user log `Saved/Logs/ACEViewer-user-20260908-InventoryInspect.log`
+- The preserved user log `Saved/Logs/ACUnreal-user-20260908-InventoryInspect.log`
   shows PlayerDescription before PlayerCreate on both logins. The inventory footer
   was stored under player ID zero and the equipment footer was discarded. The
   pending profile now transfers to the actual player on PlayerCreate. Equipped
@@ -1180,7 +1180,7 @@ seat penetrations, one rise-to-descent reversal, and end at floor height.
 
 ## Changes in 2026.09.08.3
 
-- Khayyaban arrival: the preserved `ACEViewer-user-20260908-ParityReview.log`
+- Khayyaban arrival: the preserved `ACUnreal-user-20260908-ParityReview.log`
   identifies `9F44001A (90,24.553,31.890)`. The destination is below the DAT
   outdoor terrain (36.54606 m). Outdoor placement now begins its support sweep
   at or above the decoded terrain, retaining the server XY and requiring cooked
@@ -1251,7 +1251,7 @@ seat penetrations, one rise-to-descent reversal, and end at floor height.
   response matches retail. In particular, book/chess/support pages and some
   social layouts still need full content and interaction comparison.
 - Build version and configured window title both read `2026.09.08.3`.
-  `Launch.bat` continues to build `ACEViewerEditor` before launching and aborts
+  `Launch.bat` continues to build `ACUnrealEditor` before launching and aborts
   on compilation failure. Build evidence: `Saved/Logs/Build-2026.09.08.3.log`.
   Final regression evidence: `Saved/Automation/2026.09.08.3-Final/index.json`
   and `Saved/Logs/2026.09.08.3-Final.log`. The final Launch build succeeded in
@@ -1266,7 +1266,7 @@ seat penetrations, one rise-to-descent reversal, and end at floor height.
 
 ## Changes in 2026.09.08.2
 
-- Dungeon portal arrival: the preserved `ACEViewer-user-20260908-DungeonPortal.log`
+- Dungeon portal arrival: the preserved `ACUnreal-user-20260908-DungeonPortal.log`
   shows destination `0179010D` streaming successfully, then holding at
   `spawn-placement` for 45 seconds before the one-shot lifestone recovery. This
   cell has no room collision triangles; its floor is static setup `02000898`
@@ -1345,7 +1345,7 @@ seat penetrations, one rise-to-descent reversal, and end at floor height.
   opacity and lighting changes. It is not a separate server rain message.
   One Dereth day lasts 7,620 seconds (127 real minutes); servers with the same
   clock and DATs intentionally show the same weather.
-- Preserved user-log evidence in `Saved/Logs/ACEViewer-user-Parity9-network-weather.log`: the .9 connection supplied
+- Preserved user-log evidence in `Saved/Logs/ACUnreal-user-Parity9-network-weather.log`: the .9 connection supplied
   `302951982.695954`, selecting day 39757, group 7 (`Rainy`), phase about .951.
   This group rains at noon too. Earlier logs include Sunny, Clear, and Cloudy
   groups and advancing phases. The captured rainy night is consistent with
@@ -1482,7 +1482,7 @@ visible geometry, sweep both simple and complex queries against the statue, and
 check actual wall traces and movement sweeps for all eight Yaraq buildings.
 Rendered threshold comparisons confirm spatial blending while the day/night
 interior test retains uniform brightness. The player's `.7` log is preserved as
-`Saved/Logs/ACEViewer-user-Parity7-light-collision.log`.
+`Saved/Logs/ACUnreal-user-Parity7-light-collision.log`.
 
 Build: `Launch.bat --build-only`, recorded in `Saved/Logs/Build-Parity8.log`.
 `Saved/Automation/Parity8Verified/index.json` records all 28 parity tests passing
@@ -1766,20 +1766,20 @@ the reported Cooking increase and live title change still need user acceptance.
 
 ## Changes in 2026.09.07.3
 
-- `Launch.bat` / `OpenACEViewer.bat` now run an incremental ACEViewerEditor
+- `Launch.bat` / `OpenACUnreal.bat` now run an incremental ACUnrealEditor
   Win64 Development build before opening Unreal. Build errors stop the launch;
   the launcher no longer falls back to an older engine than the project's 5.8.
   `Launch.bat --build-only` validates the same path without opening the editor.
 - Update the compiled build stamp and ProjectVersion together. The Play window
   title also shows 2026.09.07.3 so the test build is visible without opening logs.
 - The user's launches at 06:48:34 and 06:53:05 UTC already loaded .2, as recorded
-  by the compiled module in ACEViewer.log and its 06:52:44 backup. Those reports
+  by the compiled module in ACUnreal.log and its 06:52:44 backup. Those reports
   cannot be attributed to stale binaries; unresolved visual behavior remains
   subject to the acceptance items below.
 
 Validation: `Launch.bat --build-only` compiled and linked successfully; a normal
 `Launch.bat` run then reported the target up to date and opened the same project.
-ACEViewer.log at 06:58:49 UTC confirms the loaded module's build stamp and the
+ACUnreal.log at 06:58:49 UTC confirms the loaded module's build stamp and the
 engine ProjectVersion are both 2026.09.07.3; engine initialization completed.
 The gameplay changes retain the .2 regression results below; .3 changes only
 launch/build identification.
@@ -1811,7 +1811,7 @@ launch/build identification.
   a flat authored quad; its reported apparent size still needs live comparison,
   and no wand-specific size multiplier has been introduced.
 
-Validation: ACEViewerEditor Win64 Development compiled successfully. Offscreen
+Validation: ACUnrealEditor Win64 Development compiled successfully. Offscreen
 GPU suite `ACE.RetailParity` completed all 25 groups (24 clean, one with three
 intentional blocked-spawn warnings, zero errors). Report:
 `Saved/Automation/RetailParity20260907-visibility2/index.json`.
@@ -1882,7 +1882,7 @@ interior lighting, doorway transitions, or the remaining movement/UI issues.
   still requires acceptance with a second account.
 - Move successful build stamps and portal/sky/head diagnostics to Log/Verbose.
   Keep actual failures and unsafe-spawn warnings visible. The user's latest
-  preserved session, `Saved/Logs/ACEViewer-user-20260907-dungeon-streaming.log`,
+  preserved session, `Saved/Logs/ACUnreal-user-20260907-dungeon-streaming.log`,
   ends with normal shutdown; it is not evidence of a new crash stack.
 
 Pedestal reference data is saved as `Tests/Fixtures/PedestalWeakSpot.sql`, from
@@ -1891,7 +1891,7 @@ This is reference data only; no database migration was run. Reproduce the motion
 inspection with `dotnet run --project Unreal/diag/UIInventory -- --pedestal-probe
 "C:/Turbine/Asheron's Call"`. The primary animation values come from the local DAT.
 
-Validation: ACEViewerEditor Win64 Development compiled successfully. Build
+Validation: ACUnrealEditor Win64 Development compiled successfully. Build
 **2026.09.07.1** passed all **25 D3D12 offscreen groups**: 24 clean, one with
 intentional unsafe-spawn warnings, zero failed/skipped/unfinished. The final
 RuntimeActors test forces GC while the pedestal is faded out, verifies the
@@ -1976,7 +1976,7 @@ The larger account/gameplay/interface checklist below remains open.
   physics messages to Log/Verbose. Keep actual missing assets/build failures as
   warnings; do not suppress engine or third-party warnings globally.
 
-Validation: ACEViewerEditor Win64 Development compiled successfully. The final
+Validation: ACUnrealEditor Win64 Development compiled successfully. The final
 D3D12 offscreen run loaded build **2026.09.06.8** and passed all **25 groups**:
 22 clean, three with warnings, zero failed/skipped/unfinished. Evidence:
 `Saved/Automation/RetailParity20260907-final/index.json` and
@@ -1989,7 +1989,7 @@ The larger-viewport native backpack test failed before the overlay cache correct
 (`RetailParity20260907g`) and passed afterward (`RetailParity20260907h`), including
 main-pack activation and displaced bindings. The portal-near reference renders
 failed before the frustum correction (`RetailParity20260907b`) and passed afterward.
-The preserved user crash log is `Saved/Logs/ACEViewer-user-20260906-inventory-crash.log`.
+The preserved user crash log is `Saved/Logs/ACUnreal-user-20260906-inventory-crash.log`.
 
 Ready to try through `Unreal/Launch.bat`. Live acceptance still needs the user's
 inventory/summon sequence, physical mouse capture/follow behavior, repeated
@@ -2050,9 +2050,9 @@ checklist remains open; these fixes do not certify every retail feature.
   projection instead of alternating sideways nudges. CameraAndEdges checks frame
   rate independence and repeated stable edge sliding.
 
-Preserved user log: `Saved/Logs/ACEViewer-user-20260906-ui-lighting.log`.
+Preserved user log: `Saved/Logs/ACUnreal-user-20260906-ui-lighting.log`.
 The revised UI, world-DAT and scene groups passed in `RetailParity20260906z`;
-build 2026.09.06.7 compiles as ACEViewerEditor Win64 Development. Final D3D12
+build 2026.09.06.7 compiles as ACUnrealEditor Win64 Development. Final D3D12
 offscreen validation passed all 25 groups: 14 clean, eleven with warnings, zero
 failed/skipped/unfinished (`Saved/Automation/RetailParity20260906aa-final/index.json`,
 `Saved/Logs/RetailParity20260906aa-final.log`). That process loaded build .7 and
@@ -2066,7 +2066,7 @@ world traversal or networking behavior as a complete retail replacement.
 ## Changes in 2026.09.06.6
 
 - Traversal investigation: preserved the user's session as
-  `Saved/Logs/ACEViewer-user-20260906-traversal-weather.log`. Initial appearance
+  `Saved/Logs/ACUnreal-user-20260906-traversal-weather.log`. Initial appearance
   application coincides with long frame gaps; warmer models cost less. The mesh
   builder decoded the same appearance-dependent texture and palette for every
   polygon side. Retail `D3DPolyRender::ConstructMesh` shares surfaces between
@@ -2120,7 +2120,7 @@ world traversal or networking behavior as a complete retail replacement.
   the x87 comparison in distance-based emission; that path, light strengths,
   long-hitch clocks and all particle equations are not yet certified 1:1.
 
-Build 2026.09.06.6 compiles as ACEViewerEditor Win64 Development. Full D3D12
+Build 2026.09.06.6 compiles as ACUnrealEditor Win64 Development. Full D3D12
 offscreen validation passed all 24 groups: 14 clean, ten with warnings, zero
 failed/skipped/unfinished (`Saved/Automation/RetailParity20260906r/index.json`,
 `Saved/Logs/RetailParity20260906r.log`). A subsequent test-only correction waits
@@ -2136,7 +2136,7 @@ paths remain. No live account or live traversal FPS test was used. Launch with
 ## Changes in 2026.09.06.5
 
 - Indoor login deadlock: the preserved log
-  `Saved/Logs/ACEViewer-user-20260906-blocked-entry.log` shows cell 7D630112
+  `Saved/Logs/ACUnreal-user-20260906-blocked-entry.log` shows cell 7D630112
   loaded, followed by more than 76 seconds waiting on `cell-collision`. Portal
   visibility returned before collision activation; readiness waited for that
   activation before releasing portal space. Destination physics now prepares
@@ -2177,7 +2177,7 @@ paths remain. No live account or live traversal FPS test was used. Launch with
   illumination and complete rendered comparison against a running retail client
   remain open; the camera/animation tests do not establish complete portal parity.
 
-Final validation: ACEViewerEditor Win64 Development rebuilt successfully as
+Final validation: ACUnrealEditor Win64 Development rebuilt successfully as
 2026.09.06.5. The complete D3D12 offscreen suite passed all 22 groups: 13 clean,
 nine with warnings, zero failures, skipped or unfinished tests. Final report:
 `Saved/Automation/RetailParity20260906j/index.json`; log:
@@ -2193,7 +2193,7 @@ and cold-cache landscape traversal in play; complete retail parity remains open.
 
 ## Changes in 2026.09.06.4
 
-Final validation: ACEViewerEditor Win64 Development compiled successfully. All
+Final validation: ACUnrealEditor Win64 Development compiled successfully. All
 20 groups passed with D3D12 offscreen rendering (13 clean, seven with warnings,
 zero failed/skipped) in `Saved/Automation/RetailParity20260906f/index.json`;
 log `Saved/Logs/RetailParity20260906f.log`. Warnings include transient static-mesh
@@ -2370,7 +2370,7 @@ uses the outgoing recipient; patron/monarch replies retain their own last sender
 Native Quest text callbacks and the PC VR keyboard share this behavior. Actual
 Slate input and isolated loopback packets cover history, reply recipient stability,
 tells, channel aliases, and unknown command forwarding. See
-`Quest3Test/Validation/v41-chat-parity.md` at the repository root for sources,
+`Quest/Validation/v41-chat-parity.md` at the repository root for sources,
 test results, and native-keyboard acceptance limits.
 
 NetworkTransport now covers real datagram parsing, CRC failures, ordering,

@@ -8,6 +8,38 @@ using ACE.Entity.Enum;
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 RetailLayoutResolver.RunTests();
 if (args.Contains("--self-test")) return;
+if (args.Length > 3 && args[0] == "--texture-probe")
+{
+    DatManager.Initialize(args[1], keepOpen: true, loadCell: false);
+    Directory.CreateDirectory(args[2]);
+    foreach(var text in args.Skip(3))
+    {
+        var id=Convert.ToUInt32(text.Replace("0x",""),16);
+        var texture=DatManager.PortalDat.ReadFromDat<Texture>(id);
+        Console.WriteLine($"TEXTURE {id:X8} {texture.Width}x{texture.Height} {texture.Format}");
+        File.WriteAllText(Path.Combine(args[2],$"{id:X8}.json"),JsonSerializer.Serialize(texture));
+    }
+    return;
+}
+if (args.Length > 2 && args[0] == "--attachment-probe")
+{
+    DatManager.Initialize(args[1], keepOpen: true, loadCell: false);
+    foreach (var text in args.Skip(2))
+    {
+        var id = Convert.ToUInt32(text.Replace("0x", ""), 16);
+        var setup = DatManager.PortalDat.ReadFromDat<SetupModel>(id);
+        Console.WriteLine($"SETUP {id:X8} parts={string.Join(',', setup.Parts.Select(p => p.ToString("X8")))}");
+        foreach (var placement in setup.PlacementFrames)
+            Console.WriteLine($" PLACEMENT {placement.Key} {JsonSerializer.Serialize(placement.Value.AnimFrame.Frames, new JsonSerializerOptions { IncludeFields = true })}");
+        foreach (var part in setup.Parts)
+        {
+            var gfx = DatManager.PortalDat.ReadFromDat<GfxObj>(part);
+            var points = gfx.VertexArray.Vertices.Values.Select(v => v.Origin).ToArray();
+            Console.WriteLine($" GFX {part:X8} bounds={points.Aggregate(System.Numerics.Vector3.Min)}..{points.Aggregate(System.Numerics.Vector3.Max)}");
+        }
+    }
+    return;
+}
 if (args.Length > 0 && args[0] == "--visual-probe")
 {
     DatManager.Initialize(args[1], keepOpen: true, loadCell: true);

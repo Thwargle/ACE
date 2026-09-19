@@ -199,6 +199,9 @@ bool FACEVRMathTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Shift supports capital letters"), ACEVRMath::KeyboardCharacter('a', true), FString(TEXT("A")));
 	auto* Settings = NewObject<UACEVRSettings>(); Settings->SnapDegrees = std::numeric_limits<float>::quiet_NaN(); Settings->BowFullDraw = 0;
 	Settings->Sanitize(); TestEqual(TEXT("Invalid snap resets safely"), Settings->SnapDegrees, 30.f); TestEqual(TEXT("Draw range bounded"), Settings->BowFullDraw, 30.f);
+	Settings->MovementDirection=-1;Settings->bHeadRelativeMovement=false;Settings->Sanitize();
+	TestEqual(TEXT("Existing hand-relative preference migrates"),Settings->MovementDirection,1);
+	Settings->MovementDirection=2;Settings->Sanitize();TestEqual(TEXT("Stick-only direction survives settings sanitation"),Settings->MovementDirection,2);
 	Settings->SettingsVersion = 0; Settings->WristScale = .045f; Settings->Sanitize();
 	TestEqual(TEXT("Existing default wrist size upgrades once"), Settings->WristScale, .06f);
 	Settings->SettingsVersion = 0; Settings->WristScale = .08f; Settings->Sanitize();
@@ -328,6 +331,7 @@ bool FACEVRProtocolTest::RunTest(const FString& Parameters)
 	FACEWorldObject Stock; Stock.Guid = 204; Stock.ContainerId = 900; Session.WorldObjects.Add(204, Stock);
 	FACEWorldObject Live; Live.Guid = 300; Session.WorldObjects.Add(300, Live);
 	FACEWorldObject Old; Old.Guid = 301; Session.WorldObjects.Add(301, Old);
+	Session.SelectObject(301);
 	TArray<int32> Deleted; Session.OnObjectDeleted.AddLambda([&](int32 Guid) { Deleted.Add(Guid); });
 	for (uint32 Epoch : {11u, 12u})
 	{
@@ -336,6 +340,14 @@ bool FACEVRProtocolTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Only the current teleport epoch can remove a stale NPC"), Session.WorldObjects.Contains(301), Epoch != 12u);
 	}
 	TestTrue(TEXT("Authoritative membership preserves the live NPC"), Session.WorldObjects.Contains(300));
+	TestEqual(TEXT("Snapshot removal clears an old area's selected enemy"),Session.GetSelectedObject().Guid,0);
+	const auto SavedPlayerPosition=Session.PlayerPosition;
+	Session.PlayerPosition.CellId=0x7D640001;Session.PlayerPosition.Location=FVector(44,94,12);
+	Session.WorldObjects[300].bHasPosition=true;Session.WorldObjects[300].Position=Session.PlayerPosition;
+	TestTrue(TEXT("A nearby creature can send health feedback"),Session.IsNearbyHealthObject(300));
+	Session.PlayerPosition.CellId=0x00640001;
+	TestFalse(TEXT("Retaining a cached creature after distant teleport cannot show its health"),Session.IsNearbyHealthObject(300));
+	Session.PlayerPosition=SavedPlayerPosition;
 	for (int32 Guid : {100, 201, 202, 203, 204}) TestTrue(TEXT("Snapshot preserves self, nested inventory, equipment, and vendor stock"), Session.WorldObjects.Contains(Guid));
 	TestEqual(TEXT("Stale NPC deletion reaches the world presenter once"), Deleted.Num(), 1);
 	FACEBinaryWriter Truncated; Truncated.WriteUInt32(12); Truncated.WriteUInt32(2); Truncated.WriteUInt32(100);
@@ -675,10 +687,10 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
             const uint32 OldCapabilities=VR->Client->Session->VRCapabilities;
             VR->Client->Session->VRCapabilities=127;
             VR->HealthFeedback(602,-42,1); auto& Magic=VR->WorldNotices.Last();
-            TestTrue(TEXT("Outgoing magic damage uses the target lane and gold"),Magic.Actor.Get()==Actor && Magic.NumberLane==1 && Magic.Text==TEXT("-42 DAMAGE") && Magic.Color.Equals(FLinearColor(1.f,.8f,.25f)));
+            TestTrue(TEXT("Outgoing magic damage uses the target lane and gold without a minus sign"),Magic.Actor.Get()==Actor && Magic.NumberLane==1 && Magic.Text==TEXT("42 DAMAGE") && Magic.Color.Equals(FLinearColor(1.f,.8f,.25f)));
             VR->HealthFeedback(602,21,1);TestTrue(TEXT("Healing uses green and a plus sign"),VR->WorldNotices.Last().Text==TEXT("+21 HEALTH") && VR->WorldNotices.Last().Color.Equals(FLinearColor(.5f,1.f,.498f)));
-            VR->HealthFeedback(602,-33,2);TestTrue(TEXT("Physical criticals use the same damage color with a marker"),VR->WorldNotices.Last().Text==TEXT("-33! DAMAGE") && VR->WorldNotices.Last().Color.Equals(FLinearColor(1.f,.8f,.25f)));
-            VR->HealthFeedback(VR->Client->GetPlayerGuid(),-17,1);TestTrue(TEXT("Incoming damage uses the YOU lane, red and signed even for magic"),VR->WorldNotices.Last().NumberLane==-1 && VR->WorldNotices.Last().Text==TEXT("-17 DAMAGE") && VR->WorldNotices.Last().Color.Equals(FLinearColor(1.f,.247f,.247f)));
+            VR->HealthFeedback(602,-33,2);TestTrue(TEXT("Critical marker precedes damage"),VR->WorldNotices.Last().Text==TEXT("Crit! 33 DAMAGE") && VR->WorldNotices.Last().Color.Equals(FLinearColor(1.f,.8f,.25f)));
+            VR->HealthFeedback(VR->Client->GetPlayerGuid(),-17,1);TestTrue(TEXT("Incoming damage uses the YOU lane and red, without a minus sign"),VR->WorldNotices.Last().NumberLane==-1 && VR->WorldNotices.Last().Text==TEXT("17 DAMAGE") && VR->WorldNotices.Last().Color.Equals(FLinearColor(1.f,.247f,.247f)));
             Actor->SetActorLocation(Actor->GetActorLocation()+FVector(10000,0,0)); VR->UpdateWorldNotices();
             for (const auto& N:VR->WorldNotices) if(N.Kind==2)
                 TestTrue(TEXT("Distant combat stays at a fixed readable distance"),FVector::Distance(N.Panel->GetComponentLocation(),VR->Head->GetComponentLocation())<170.f);
@@ -1122,10 +1134,10 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 				const FVector Eyes=VR->Head->GetComponentLocation();
 				VR->Head->SetWorldRotation(FRotator::ZeroRotator);
 				VR->LeftGrip->SetWorldLocation(Eyes+FVector(55,-20,-20));VR->RightGrip->SetWorldLocation(Eyes+FVector(55,20,-20));
-				FACEWorldObject Stone;Stone.Guid=75001;Stone.ItemType=ACEItemType::LifeStone;Stone.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
+				FACEWorldObject Stone;Stone.Guid=75001;Stone.SetupId=0x02000001;Stone.ItemType=ACEItemType::LifeStone;Stone.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
 				Stone.ItemUseable=32;Stone.UseRadius=3;Stone.bHasPosition=true;Stone.Position.CellId=1;
 				Stone.Position.SetLocationFromUnreal(Eyes+FVector(65,0,-100),100);Session.WorldObjects.Add(Stone.Guid,Stone);
-				auto* StoneActor=World->SpawnActor<AACEWorldEntityActor>();StoneActor->InitializeFromObject(Stone,100,false);
+				auto* StoneActor=World->SpawnActor<AACEWorldEntityActor>();StoneActor->InitializeFromObject(Stone,100,true);
 				auto* Surface=NewObject<UBoxComponent>(StoneActor);StoneActor->AddInstanceComponent(Surface);Surface->SetupAttachment(StoneActor->GetRootComponent());
 				Surface->SetBoxExtent(FVector(3,60,100));Surface->SetCollisionEnabled(ECollisionEnabled::QueryOnly);Surface->SetCollisionResponseToAllChannels(ECR_Block);Surface->RegisterComponent();
 				Surface->SetWorldLocation(Eyes+FVector(65,0,-40));
@@ -1134,14 +1146,17 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 				TestEqual(TEXT("B identifies the world object in peace with menus closed"),VR->Client->GetIdentifyRequestSerial(),BeforeID+1);
 				TestEqual(TEXT("World B identifies the pointed stone"),VR->Client->GetIdentifyRequestGuid(),Stone.Guid);
 				VR->bInventoryOpen=true;VR->PreviousSpell();TestEqual(TEXT("Open UI cannot identify through itself into the world"),VR->Client->GetIdentifyRequestSerial(),BeforeID+1);VR->bInventoryOpen=false;
-				Session.CachedC2SPackets.Reset();VR->ContactTriangles.Reset();VR->MoveStick=FVector2D::ZeroVector;VR->UpdateTwoHandUse(.02f);
+				Session.CachedC2SPackets.Reset();VR->ContactTriangles.Reset();VR->MoveStick=FVector2D::ZeroVector;
+				VR->LeftGrip->AddWorldOffset(FVector(-50,0,0));VR->RightGrip->AddWorldOffset(FVector(-50,0,0));VR->UpdateTwoHandUse(.02f);
+				VR->LeftGrip->AddWorldOffset(FVector(50,0,0));VR->RightGrip->AddWorldOffset(FVector(50,0,0));
 				FACEVRContactTriangle Touch;Touch.ObjectGuid=Stone.Guid;Touch.A=Eyes+FVector(65,-100,-100);Touch.B=Eyes+FVector(65,100,-100);Touch.C=Eyes+FVector(65,0,100);
-				Touch.Bounds=FBox(Touch.A,Touch.A);Touch.Bounds+=Touch.B;Touch.Bounds+=Touch.C;VR->ContactTriangles.Add(Touch);
+				Touch.Bounds=FBox(Touch.A,Touch.A);Touch.Bounds+=Touch.B;Touch.Bounds+=Touch.C;
+				StoneActor->AddActorWorldOffset(FVector(110,0,0));Stone.Position.SetLocationFromUnreal(StoneActor->GetActorLocation(),100);Session.WorldObjects[Stone.Guid]=Stone;
 				auto UseCount=[&](){int32 Count=0;for(const auto& Packet:Session.CachedC2SPackets){FACEBinaryReader Wire(Packet.Value.Payload);Wire.Skip(16);if(Wire.ReadUInt32()!=ACEOpcode::GameAction)continue;Wire.ReadUInt32();if(Wire.ReadUInt32()==ACEGameAction::Use)++Count;}return Count;};
 				VR->LeftGrip->AddWorldOffset(FVector(-50,0,0));for(int32 I=0;I<60;++I)VR->UpdateTwoHandUse(.02f);TestEqual(TEXT("One hand alone cannot use an object"),UseCount(),0);
 				VR->LeftGrip->AddWorldOffset(FVector(50,0,0));VR->MoveStick=FVector2D(0,1);for(int32 I=0;I<60;++I)VR->UpdateTwoHandUse(.02f);TestEqual(TEXT("Walking past with both hands cannot use an object"),UseCount(),0);VR->MoveStick=FVector2D::ZeroVector;
 				for(int32 I=0;I<10;++I)VR->UpdateTwoHandUse(.02f);TestEqual(TEXT("Brief two-hand brush does not use"),UseCount(),0);
-				for(int32 I=0;I<50;++I)VR->UpdateTwoHandUse(.02f);TestEqual(TEXT("Deliberate two-hand contact sends exactly one use"),UseCount(),1);
+				for(int32 I=0;I<50;++I)VR->UpdateTwoHandUse(.02f);TestEqual(TEXT("Deliberate two-hand reach within use range sends one use without mesh contact"),UseCount(),1);
 				for(int32 I=0;I<60;++I)VR->UpdateTwoHandUse(.02f);TestEqual(TEXT("Holding both hands cannot repeat use"),UseCount(),1);
 				VR->ContactTriangles.Reset();VR->UpdateTwoHandUse(.02f);Session.PlayerVitals.CombatMode=ACECombatMode::Melee;VR->ContactTriangles.Add(Touch);
 				for(int32 I=0;I<60;++I)VR->UpdateTwoHandUse(.02f);TestEqual(TEXT("Combat disables contact use"),UseCount(),1);
@@ -1181,6 +1196,10 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Looking back reveals the wrist hotbar"), VR->WristPanel->IsVisible());
 		{
 			auto& Session=*VR->Client->Session; const auto Bars=Session.SpellBars; const int32 Tab=Session.ActiveSpellBar;
+			const int32 Mode=Session.PlayerVitals.CombatMode;Session.PlayerVitals.CombatMode=ACECombatMode::NonCombat;
+			VR->ToggleSpellWheel();TestFalse(TEXT("No wand means no spell wheel"),VR->bSpellWheelOpen);
+			FACEWorldObject WheelWand;WheelWand.Guid=75002;WheelWand.WielderId=Session.PlayerGuid;
+			WheelWand.CurrentWieldedLocation=ACEEquipMask::Held;WheelWand.ItemType=ACEItemType::Caster;Session.WorldObjects.Add(WheelWand.Guid,WheelWand);
 			Session.SpellBars.SetNum(8); Session.SpellBars[0]={1,2,3}; Session.SpellBars[1].Reset(); Session.ActiveSpellBar=0;
 			VR->TurnStick=FVector2D::ZeroVector; VR->ToggleSpellWheel();
 			TestTrue(TEXT("Left-stick click opens the radial picker without blocking movement"),VR->bSpellWheelOpen && !VR->IsInputBlocked());
@@ -1200,10 +1219,12 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			VR->PreviousSpell();VR->TurnStick=FVector2D::ZeroVector;VR->UpdateSpellWheel();VR->TurnStick=FVector2D(0,1);VR->UpdateSpellWheel();
 			VR->Trigger(VR->Settings->bLeftHanded,true); VR->Trigger(VR->Settings->bLeftHanded,false);
 			TestTrue(TEXT("Trigger confirms selection without casting or leaving a held trigger"),!VR->bSpellWheelOpen && VR->SelectedSpell==1 && Session.VRSequence==Sequence);
+			TestEqual(TEXT("Selecting from the wheel leaves peace stance unchanged"),Session.PlayerVitals.CombatMode,ACECombatMode::NonCombat);
 			Session.SpellBars[0]={1,2,3,1,2,3,1,2,3,1,2,3,2}; VR->ToggleSpellWheel(); VR->ChangeWheelPage(1);
 			TestEqual(TEXT("Long hotbars have a second radial page"),VR->WheelPage,1);
 			VR->ToggleInventory();TestFalse(TEXT("X cancels the wheel without opening inventory"),VR->bSpellWheelOpen || VR->bInventoryOpen);
 			Session.SpellBars=Bars;Session.ActiveSpellBar=Tab;VR->SelectSpell(2);VR->TurnStick=FVector2D::ZeroVector;
+			Session.WorldObjects.Remove(WheelWand.Guid);Session.PlayerVitals.CombatMode=Mode;
 		}
 		for(int32 Mode:{ACECombatMode::Melee,ACECombatMode::Missile,ACECombatMode::NonCombat,ACECombatMode::Magic})
 		{
@@ -1566,6 +1587,7 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			for (bool LeftHanded : {false, true})
 			{
 				VR->Settings->bLeftHanded = LeftHanded; VR->CancelGestures(); PollHands();
+				VR->Settings->BowAnchorOffset=0; // Uncalibrated center-line reference.
 				VR->BowAim()->SetWorldRotation(FRotator(70, 20, 30)); VR->BowGrip()->SetWorldRotation(FRotator::ZeroRotator);
 				VR->Client->Session->PlayerVitals.CombatMode = ACECombatMode::NonCombat;
 				TestTrue(TEXT("Bow uses support hand immediately while peaceful"), VR->UpdateMissileAttachment(BowActor));
@@ -1603,6 +1625,14 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 					TestTrue(TEXT("Nocked bow paints its arc from partial through full draw"),VR->MissileTrajectory && VR->MissileTrajectory->IsVisible());
 				}
 				TestTrue(TEXT("Pulling equipped arrow behind the bow reaches full draw"), VR->BowFraction > .99f);
+				VR->Settings->BowAnchorOffset=10;
+				// The support hand is deliberately pitched/rolled above. A cheek-side
+				// anchor is lateral in that hand's aim frame, not in world-space Y.
+				const FVector CheekOffset=VR->GetPhysicalAim(!LeftHanded).GetUnitAxis(EAxis::Y)
+					* (LeftHanded ? -1.f : 1.f) * 10.f * VR->BowFraction;
+				VR->WeaponGrip()->AddWorldOffset(CheekOffset);
+				TestTrue(TEXT("Mirrored cheek-side draw offset retains forward aim"),VR->BowDrawDirection().Equals(FVector::ForwardVector,.001));
+				VR->WeaponGrip()->AddWorldOffset(-CheekOffset); VR->Settings->BowAnchorOffset=0;
 				CombatSession.CachedC2SPackets.Reset();
 				const uint32 Before = VR->Client->Session->VRSequence; VR->Grip(LeftHanded, false);
 				TestEqual(TEXT("Releasing drawn arrow sends one VR missile action"), VR->Client->Session->VRSequence, Before + 1);
@@ -1634,10 +1664,33 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 				VR->Settings->bLeftHanded=LeftHanded; VR->CancelGestures(); PollHands();
 				VR->BowAim()->SetWorldRotation(FRotator(10,35,0));
 				VR->UpdateMissileAttachment(BowActor); VR->UpdateCombat(.02f);
-				TestTrue(TEXT("Crossbow mesh barrel +Z follows offhand aim"),FVector::DotProduct(BowActor->Appearance->GetPartMesh(0)->GetUpVector(),VR->BowAim()->GetForwardVector())>.999);
-				TestTrue(TEXT("Crossbow mesh rail follows the support aim roll"),FVector::DotProduct(BowActor->Appearance->GetPartMesh(0)->GetRightVector(),VR->BowAim()->GetUpVector())>.999);
-				const auto* CrossPart=Cast<UPrimitiveComponent>(BowActor->Appearance->GetPartMesh(0));
-				TestTrue(TEXT("Crossbow bolt is centered between the limbs"),FMath::Abs(CrossPart->GetComponentTransform().InverseTransformPosition(VR->GetCrossbowMuzzle()).X-CrossPart->CalcLocalBounds().Origin.X)<.01);
+				for (int32 Setup:{0x0200012D,0x0200134C,0x0200134D,0x02001596})
+				{
+					Bow.SetupId=Setup;CombatSession.WorldObjects[Bow.Guid]=Bow;BowActor->InitializeFromObject(Bow,100,true);VR->UpdateMissileAttachment(BowActor);
+					AddInfo(FString::Printf(TEXT("Crossbow %08X grip=%s muzzle=%s"),Setup,*VR->CrossbowGripLocal.ToString(),*VR->CrossbowMuzzleLocal.ToString()));
+					TestTrue(TEXT("All crossbow families preserve held-frame barrel alignment"),FVector::DotProduct(-BowActor->GetActorRightVector(),VR->BowAim()->GetForwardVector())>.999);
+					TestTrue(TEXT("Crossbow limbs lie across the aim, not vertically"),FVector::DotProduct(-BowActor->GetActorForwardVector(),VR->BowAim()->GetUpVector())>.999);
+					TestTrue(TEXT("Crossbow is held beneath the rail, not by its top"),VR->CrossbowGripLocal.X>VR->CrossbowMuzzleLocal.X);
+					TestTrue(TEXT("Bolt lies on the stock centerline"),FMath::Abs(VR->CrossbowMuzzleLocal.Z-VR->CrossbowGripLocal.Z)<.01);
+					if (!LeftHanded)
+					{
+						BowActor->SetActorHiddenInGame(false);
+						for(int32 PartIndex=0;PartIndex<BowActor->Appearance->GetPartCount();++PartIndex)
+							if(auto* Part=Cast<UPrimitiveComponent>(BowActor->Appearance->GetPartMesh(PartIndex)))
+							{Part->SetVisibility(true);Part->SetHiddenInGame(false);Part->SetOwnerNoSee(false);Part->SetOnlyOwnerSee(false);}
+						auto* C=NewObject<USceneCaptureComponent2D>(BowActor);BowActor->AddInstanceComponent(C);C->RegisterComponent();
+						C->bCaptureEveryFrame=C->bCaptureOnMovement=false;C->PrimitiveRenderMode=ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
+						C->ShowOnlyActorComponents(BowActor);C->ShowFlags.SetLighting(false);C->ShowFlags.SetAtmosphere(false);C->ShowFlags.SetEyeAdaptation(false);C->CaptureSource=SCS_FinalColorLDR;
+						auto* T=NewObject<UTextureRenderTarget2D>(BowActor);T->InitCustomFormat(768,512,PF_B8G8R8A8,false);C->TextureTarget=T;
+						FBox B(ForceInit);BowActor->Appearance->GetVisualWorldBounds(B);const FVector CrossbowCenter=B.GetCenter();
+						const FVector CrossbowEye=CrossbowCenter-VR->BowAim()->GetForwardVector()*100+VR->BowAim()->GetRightVector()*90+VR->BowAim()->GetUpVector()*65;
+						C->SetWorldLocationAndRotation(CrossbowEye,(CrossbowCenter-CrossbowEye).Rotation());C->FOVAngle=65;
+						World->SendAllEndOfFrameUpdates();C->CaptureScene();FlushRenderingCommands();TArray<FColor> Pixels;T->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
+						TestTrue(TEXT("Crossbow fixture renders visible geometry"),Pixels.ContainsByPredicate([](FColor Color){return Color.R>30 || Color.G>30 || Color.B>30;}));
+						TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(768,512,Pixels,PNG);
+						FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/FString::Printf(TEXT("Automation/VR/Crossbow-%08X.png"),Setup)));C->DestroyComponent();
+					}
+				}
 				VR->Grip(LeftHanded,true);VR->Grip(LeftHanded,false);
 				TestFalse(TEXT("Crossbow never requires or starts a bow draw"),VR->bDrawing);
 				CombatSession.CachedC2SPackets.Reset();const uint32 Before=CombatSession.VRSequence;
@@ -1669,10 +1722,25 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 				FVector Origin,Direction;VR->GetThrownAim(Origin,Direction);
 				TestTrue(TEXT("Atlatl aims out the heel of the palm, independent of pointing ray"),Direction.Equals(-VR->WeaponGrip()->GetForwardVector(),.001));
 				TestTrue(TEXT("Atlatl path starts below the grasp"),Origin.Equals(VR->WeaponGrip()->GetComponentLocation()+Direction*8.f,.001));
+				Ammo.AmmoType=4;CombatSession.WorldObjects.Add(Ammo.Guid,Ammo);
+				const uint32 BeforeAtlatl=CombatSession.VRSequence;VR->Trigger(LeftHanded,true);VR->Trigger(LeftHanded,false);
+				TestEqual(TEXT("Atlatl fires on the click without a held draw"),CombatSession.VRSequence,BeforeAtlatl+1);
+				{
+					TGuardValue<uint32> RecoveryCapabilities(CombatSession.VRCapabilities,CombatSession.VRCapabilities|2048u);
+					CombatSession.VRRecoveryTeleport=CombatSession.TeleportSeq;CombatSession.VRRecoveryDuration=1;CombatSession.VRRecoveryReadyAt=FPlatformTime::Seconds()+1;
+					VR->Trigger(LeftHanded,true);VR->Trigger(LeftHanded,false);
+					TestEqual(TEXT("Click during missile recovery cannot send another shot"),CombatSession.VRSequence,BeforeAtlatl+1);
+					TestTrue(TEXT("Missile recovery uses next-shot HUD"),VR->GetCombatTimerText().StartsWith(TEXT("Next shot")));
+					CombatSession.VRRecoveryReadyAt=0;
+				}
 				Bow.DefaultCombatStyle=0;Bow.AmmoType=0;CombatSession.WorldObjects[Bow.Guid]=Bow;CombatSession.WorldObjects.Remove(Ammo.Guid);
 				TestEqual(TEXT("A missile with no ammo type is a thrown weapon"),VR->MissileStyle(),0x80);
-				VR->Grip(LeftHanded,true);TestTrue(TEXT("Thrown weapon is its own ammo"),VR->bDrawing);VR->BowHoldTime=.2f;
-				const uint32 Before=CombatSession.VRSequence;VR->Grip(LeftHanded,false);TestEqual(TEXT("Thrown release sends one shot without equipped arrows"),CombatSession.VRSequence,Before+1);
+				VR->Grip(LeftHanded,true);TestFalse(TEXT("Thrown weapon cannot start a bow draw"),VR->bDrawing);
+				VR->GetThrownAim(Origin,Direction);TestTrue(TEXT("Thrown item uses the same heel-of-palm direction as the atlatl"),Direction.Equals(-VR->WeaponGrip()->GetForwardVector(),.001));
+				CombatSession.WorldObjects.Add(Ammo.Guid,Ammo);TestEqual(TEXT("Unrelated equipped arrows are ignored by a thrown weapon"),VR->EquippedAmmo().Guid,0);
+				const uint32 Before=CombatSession.VRSequence;VR->Trigger(LeftHanded,true);TestEqual(TEXT("Thrown trigger fires immediately without hold time"),CombatSession.VRSequence,Before+1);
+				VR->Trigger(LeftHanded,false);TestEqual(TEXT("Releasing trigger cannot throw twice"),CombatSession.VRSequence,Before+1);
+				CombatSession.WorldObjects.Remove(Ammo.Guid);
 			}
 			VR->Settings->bLeftHanded = false; VR->CancelGestures(); VR->Client->Session->PlayerVitals.CombatMode = ACECombatMode::NonCombat;
 			VR->UpdateMissileAttachment(BowActor); BowActor->Destroy();
@@ -1697,6 +1765,18 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Starting locomotion ramps toward character Run speed"), F > 0 && F < .1f && Run);
 	for (int32 I = 0; I < 120; ++I) VR->PrepareMovement(1.f / 90.f);
 	VR->GetMovement(F, R, Run); TestTrue(TEXT("Movement settles at the configured scale"), FMath::IsNearlyEqual(F, VR->Settings->MovementScale, .001f));
+	VR->Settings->MovementScale = 1.f;
+	for (float Rate : {30.f,45.f,72.f,90.f,144.f})
+	{
+		VR->MoveStick=FVector2D(.04f,.93f); VR->SmoothedMoveStick=FVector2D::ZeroVector;
+		for (int32 I=0;I<FMath::CeilToInt(Rate*2.f);++I) VR->PrepareMovement(1.f/Rate);
+		VR->GetMovement(F,R,Run);
+		TestTrue(TEXT("Full forward Touch input reaches retail maximum independently of FPS"),FMath::IsNearlyEqual(F,1.f,.0001f) && FMath::IsNearlyZero(R));
+	}
+	PC->PredictionSpeedScale=.9f; PC->bHaveServerSpeedSample=true;
+	PC->CalibratePredictionSpeedFromServer(FACEPosition());
+	TestEqual(TEXT("VR never learns a slower run speed from analog input or delayed server positions"),PC->PredictionSpeedScale,1.f);
+	TestFalse(TEXT("VR clears the stale speed estimator"),PC->bHaveServerSpeedSample);
 	VR->Client->SetRunSkill(100); const float LowSkillSpeed = F * VR->Client->GetLocomotionSpeed(Run);
 	VR->Client->SetRunSkill(600); const float HighSkillSpeed = F * VR->Client->GetLocomotionSpeed(Run);
 	TestTrue(TEXT("VR speed increases with the character's Run skill"), HighSkillSpeed > LowSkillSpeed);

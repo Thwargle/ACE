@@ -415,6 +415,15 @@ namespace ACE.Server.WorldObjects
             if (!turnTo)
                 mvp.Flags |= MovementParamFlags.FailWalk | MovementParamFlags.UseFinalHeading | MovementParamFlags.Sticky | MovementParamFlags.MoveAway;
 
+            if (!turnTo && AttackTarget is Player vr && vr.HasActiveVRHands)
+            {
+                // Leave room for tracked arms while staying inside melee reach.
+                // Sticky otherwise pulls the attacker back onto the body cylinder.
+                mvp.Sticky=false;
+                mvp.DistanceToObject=.65f;
+                mvp.MinDistance=.45f;
+            }
+
             return mvp;
         }
 

@@ -32,6 +32,8 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "VR") FVector VitalsViewOffset = FVector(100, -24, -22);
 	UPROPERTY(Config) int32 SettingsVersion = 0;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bHeadRelativeMovement = true;
+	/** -1 imports the legacy preference; 0=head, 1=hand, 2=playspace/stick only. */
+	UPROPERTY(Config, EditAnywhere, Category = "VR") int32 MovementDirection = -1;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bSeated = false;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") float SeatedEyeHeight = 165.f;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bShowBody = true;
@@ -44,6 +46,8 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "VR") float ForwardAssistDegrees = 10.f;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") float MeleeMinSpeed = 250.f;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") float BowFullDraw = 60.f;
+	/** Natural cheek-side anchor, mirrored with handedness; centimeters. */
+	UPROPERTY(Config, EditAnywhere, Category = "VR") float BowAnchorOffset = 10.f;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") float HandPitch = 10.f;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") float RenderScale = 100.f;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") int32 MSAASamples = 4;

@@ -10,6 +10,7 @@
 #include "ProceduralMeshComponent.h"
 #include "Engine/World.h"
 #include "Engine/OverlapResult.h"
+#include "EngineUtils.h"
 
 FTransform UACEVRComponent::GetPhysicalGrip(bool Left) const
 {
@@ -201,7 +202,6 @@ void UACEVRComponent::UpdateTwoHandUse(float Dt)
 	{
 		TouchUseGuid=0; TouchUseHold=0; bTouchUseArmed=false; bTouchUsePrevious=false; return;
 	}
-	const FVector Hands[2]={GetPhysicalGrip(true).GetLocation(),GetPhysicalGrip(false).GetLocation()};
 	const FVector Raw[2]={LeftGrip->GetComponentLocation(),RightGrip->GetComponentLocation()};
 	const FVector Body=GetOwner()->GetActorLocation();
 	const bool Still=bTouchUsePrevious && Dt>0 && Dt<.15f && MoveStick.Size()<.2f
@@ -209,34 +209,24 @@ void UACEVRComponent::UpdateTwoHandUse(float Dt)
 		&& FVector::Distance(Raw[0],TouchUsePreviousHands[0])/Dt<45.f
 		&& FVector::Distance(Raw[1],TouchUsePreviousHands[1])/Dt<45.f;
 	TouchUsePreviousBody=Body; TouchUsePreviousHands[0]=Raw[0]; TouchUsePreviousHands[1]=Raw[1]; bTouchUsePrevious=true;
-	TMap<int32,FVector2D> Distances;
-	for (const auto& Triangle:ContactTriangles)
-	{
-		if (!Triangle.ObjectGuid) continue;
-		for (int32 Side=0;Side<2;++Side)
-		{
-			if (!Triangle.Bounds.ExpandBy(18).IsInsideOrOn(Hands[Side])) continue;
-			const FVector Point=FMath::ClosestPointOnTriangleToPoint(Hands[Side],Triangle.A,Triangle.B,Triangle.C);
-			const double Distance=FVector::Distance(Point,Hands[Side]);
-			if (Distance>18 || FVector::Distance(Point,Raw[Side])>25) continue;
-			auto& Pair=Distances.FindOrAdd(Triangle.ObjectGuid,FVector2D(1000,1000));
-			Pair[Side]=FMath::Min(Pair[Side],Distance);
-		}
-	}
-	// A full release rearms the gesture. One lingering hand cannot repeatedly
-	// toggle a door or rebind a lifestone while the other hand brushes past it.
-	if (Distances.IsEmpty()) bTouchUseArmed=true;
-	const FVector Mid=(Hands[0]+Hands[1])*.5f, View=Mid-Head->GetComponentLocation();
-	const bool InFront=View.Size()>20 && View.Size()<140
-		&& FVector::DotProduct(View.GetSafeNormal(),Head->GetForwardVector())>.45f
-		&& FVector::Distance(Hands[0],Hands[1])>12 && FVector::Distance(Hands[0],Hands[1])<90;
+	// Intent comes from the tracked hands, not their collision-constrained
+	// visual meshes. Hold both hands forward while looking at a usable object.
+	const FVector Mid=(Raw[0]+Raw[1])*.5f;
+	const FVector Forward=FVector(Head->GetForwardVector().X,Head->GetForwardVector().Y,0).GetSafeNormal();
+	auto Raised=[&](const FVector& P) { const FVector D=P-Head->GetComponentLocation();
+		return FVector::DotProduct(D,Forward)>25 && D.Z>-75 && D.Size()<140; };
+	const bool InFront=Raised(Raw[0]) && Raised(Raw[1])
+		&& FVector::Distance(Raw[0],Raw[1])>12 && FVector::Distance(Raw[0],Raw[1])<90;
+	// Withdraw both hands before a second use. Holding or brushing past cannot
+	// repeatedly toggle a door, even if its collision moves during opening.
+	if (!Raised(Raw[0]) && !Raised(Raw[1])) bTouchUseArmed=true;
 	int32 Candidate=0;
+	float Best=0.8f;
 	if (Still && InFront && bTouchUseArmed && !Client->IsUseBusy())
-		for (const auto& Pair:Distances)
+		for (TActorIterator<AACEWorldEntityActor> It(GetWorld());It;++It)
 		{
-			if (Pair.Value.X>12 || Pair.Value.Y>12) continue;
 			FACEWorldObject Object;
-			if (!Client->GetWorldObject(Pair.Key,Object) || Object.ContainerId || Object.WielderId || Object.ParentGuid
+			if (!Client->GetWorldObject(It->GetACEGuid(),Object) || Object.ContainerId || Object.WielderId || Object.ParentGuid
 				|| Object.bIsPlayer || Object.IsWorldLootable() || (Object.IsAttackable() && !Object.IsVendor())) continue;
 			if (!(Object.IsDoor() || Object.IsLifeStone() || Object.IsOpenable() || Object.IsVendor()
 				|| ACEItemUseable::IsSourceUsable(Object.ItemUseable))) continue;
@@ -244,14 +234,24 @@ void UACEVRComponent::UpdateTwoHandUse(float Dt)
 			const FVector Feet=Body-FVector(0,0,Capsule->GetScaledCapsuleHalfHeight());
 			if (PC->GetUseCylinderDistanceCm(Object,Feet,Object.Position.ToUnrealLocation(PC->WorldScale))
 				>Object.UseRadius*PC->WorldScale+5.f) continue;
-			Candidate=Pair.Key; break;
+			FBox Bounds(ForceInit);
+			if (!It->Appearance || !It->Appearance->GetVisualWorldBounds(Bounds)) continue;
+			const FVector Closest=Bounds.GetClosestPointTo(Mid);
+			const FVector Towards=(Bounds.GetCenter()-Head->GetComponentLocation()).GetSafeNormal();
+			const float Score=FVector::DotProduct(Towards,Head->GetForwardVector());
+			if (Score<=Best) continue;
+			FCollisionQueryParams Query(SCENE_QUERY_STAT(VRTwoHandUse),false,GetOwner()); Query.AddIgnoredActor(*It);
+			TArray<AActor*> Children;GetOwner()->GetAttachedActors(Children,true,true);for(auto* Child:Children)Query.AddIgnoredActor(Child);
+			FHitResult Block;
+			if (GetWorld()->LineTraceSingleByChannel(Block,Head->GetComponentLocation(),Closest,ECC_Camera,Query)) continue;
+			Candidate=Object.Guid; Best=Score;
 		}
 	if (!Candidate || Candidate!=TouchUseGuid) TouchUseHold=0;
 	TouchUseGuid=Candidate;
 	if (Candidate && (TouchUseHold+=Dt)>=.65f)
 	{
 		bTouchUseArmed=false; TouchUseHold=0;
-		// Send the ordinary use action at contact range. Do not start a desktop
+		// Send the ordinary use action within retail use range. Do not start a desktop
 		// automatic approach or change the player's selection/combat target.
 		Client->SendUseItem(Candidate); Pulse(true,.45f); Pulse(false,.45f);
 	}

@@ -10,6 +10,22 @@ namespace ACE.Server.Tests
     public class VRCombatTests
     {
         [TestMethod]
+        public void EquipmentPoseIsStrictlySizedAndCanBeDowngradedForLegacyObservers()
+        {
+            var p=new VRPose {Version=2,Sequence=1,Cell=0x7D64000C,Flags=7,EyeHeight=1.7f,Weapon=100,Ammo=200};
+            for(int i=0;i<5;++i) {p.Positions[i]=new Vector3(.2f,0,1.2f);p.Rotations[i]=Quaternion.Identity;}
+            byte[] Bytes(uint version) { using var s=new MemoryStream();using var w=new BinaryWriter(s);p.Write(w,version);return s.ToArray(); }
+            var data=Bytes(2);Assert.AreEqual(VRPose.EquipmentWireSize,data.Length);
+            Assert.IsTrue(VRPose.TryRead(new BinaryReader(new MemoryStream(data)),out var parsed));
+            Assert.AreEqual(100u,parsed.Weapon);Assert.AreEqual(p.Positions[4],parsed.Positions[4]);
+            var legacy=Bytes(1);Assert.AreEqual(VRPose.WireSize,legacy.Length);
+            Assert.IsTrue(VRPose.TryRead(new BinaryReader(new MemoryStream(legacy)),out parsed));Assert.AreEqual(0u,parsed.Ammo);
+            Array.Resize(ref data,data.Length-1);Assert.IsFalse(VRPose.TryRead(new BinaryReader(new MemoryStream(data)),out _));
+            p.Positions[4]=new Vector3(100,0,1);Assert.IsFalse(VRPose.TryRead(new BinaryReader(new MemoryStream(Bytes(2))),out _));
+            p.Positions[4]=new Vector3(0,0,1);p.Rotations[3]=new Quaternion(float.NaN,0,0,1);
+            Assert.IsFalse(VRPose.TryRead(new BinaryReader(new MemoryStream(Bytes(2))),out _));
+        }
+        [TestMethod]
         public void OutdoorCombatCellsAcceptOnlyImmediatePhysicalNeighbors()
         {
             Assert.IsTrue(VRCombatRequest.NeighboringOutdoorCells(0x7D64000C,0x7D64000D));
@@ -29,13 +45,13 @@ namespace ACE.Server.Tests
             var legacy = new ACE.Server.Network.GameEvent.Events.GameEventVRCapabilities(session);
             using var oldWire = new BinaryReader(new MemoryStream(legacy.Data.ToArray()));
             oldWire.BaseStream.Position = 16;
-            Assert.AreEqual(1u, oldWire.ReadUInt32()); Assert.AreEqual(32759u, oldWire.ReadUInt32());
+            Assert.AreEqual(1u, oldWire.ReadUInt32()); Assert.AreEqual(65527u, oldWire.ReadUInt32());
             Assert.AreEqual(0u, oldWire.ReadUInt32()); Assert.AreEqual(20.0f, oldWire.ReadSingle());
             Assert.AreEqual(oldWire.BaseStream.Length, oldWire.BaseStream.Position);
             var snapshot = new ACE.Server.Network.GameEvent.Events.GameEventVRCapabilities(session, 12, new uint[] { 100, 300, 400 });
             using var wire = new BinaryReader(new MemoryStream(snapshot.Data.ToArray()));
             wire.BaseStream.Position = 16;
-            Assert.AreEqual(1u, wire.ReadUInt32()); Assert.AreEqual(32767u, wire.ReadUInt32());
+            Assert.AreEqual(1u, wire.ReadUInt32()); Assert.AreEqual(65535u, wire.ReadUInt32());
             Assert.AreEqual(12u, wire.ReadUInt32()); Assert.AreEqual(3u, wire.ReadUInt32());
             foreach (var guid in new uint[] { 100, 300, 400 }) Assert.AreEqual(guid, wire.ReadUInt32());
             Assert.AreEqual(0u, wire.ReadUInt32()); Assert.AreEqual(20.0f, wire.ReadSingle());

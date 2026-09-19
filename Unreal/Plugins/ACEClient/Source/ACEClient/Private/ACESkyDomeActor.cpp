@@ -429,7 +429,7 @@ void AACESkyDomeActor::RebuildSlotMesh(FSkySlot& Slot, uint32 GfxId)
 	Mesh->SetBoundsScale(Slot.bWeather ? 4.f : 8.f);
 
 	// Before-pass: behind other translucents; depth test vs opaque world.
-	// After/weather: in front, depth-disabled mats (rain curtains).
+	// After/weather: composite last, but opaque walls and ground still occlude rain.
 	Mesh->SetTranslucentSortPriority(SlotDrawOrder(Slot));
 
 	if (Slot.bForceWeatherZ)
@@ -549,12 +549,11 @@ void AACESkyDomeActor::RebuildSlotMesh(FSkySlot& Slot, uint32 GfxId)
 				continue;
 			}
 
-			// Before-pass: depth-tested sky mats (world occludes cube). Weather: no depth.
+			// Weather keeps its own wrapping/blending; all sky passes test world depth.
 			UMaterialInterface* Base = nullptr;
-			const bool bDepthDisabled = Slot.bWeather;
 			const bool bDayCube = bSkyShell && GfxId != 0x010015EFu && !bAdditive;
 
-			if (bDepthDisabled && !bDayCube)
+			if (Slot.bWeather && !bDayCube)
 			{
 				Base = bAdditive
 					? DatSubsystem->EnsureAceWeatherAdditiveMaterialBase()
@@ -1231,7 +1230,7 @@ void AACESkyDomeActor::UpdateWorldLighting(const FACEDatSkyTimeOfDay& A, const F
 				AppliedDirColor = SunColor;
 			}
 			Dir->SetVisibility(true);
-			static constexpr int32 ShadowSettingsRev = 20;
+			static constexpr int32 ShadowSettingsRev = 21;
 			const bool bWantDirShadows = true;
 			const int8 DirShadowIndoor = 0;
 			if (!bDirShadowSettingsApplied || AppliedShadowSettingsRev != ShadowSettingsRev
@@ -1252,16 +1251,14 @@ void AACESkyDomeActor::UpdateWorldLighting(const FACEDatSkyTimeOfDay& A, const F
 					Dir->SetShadowBias(0.22f);
 					Dir->SetShadowSlopeBias(0.35f);
 					const bool Mobile=World->GetFeatureLevel()==ERHIFeatureLevel::ES3_1;
-					// Two bounded mobile cascades preserve body/weapon detail nearby
-					// and extend building/tree shadows beyond the old 40m cutoff.
-					Dir->DynamicShadowDistanceMovableLight = Mobile ? 6000.f : 60000.f;
-					// Mobile CSM switches maps without the desktop cascade blend.
-					// A 7x split put a severe quality boundary only ~7.5m away.
-					// 3x moves it to ~15m and reduces the texel-density jump, without
-					// increasing atlas memory or adding another shadow pass.
-					// Desktop retains its close-detail cascade and 600m coverage.
-					Dir->DynamicShadowCascades = Mobile ? 2 : 4;
-					Dir->CascadeDistributionExponent = Mobile ? 3.f : 4.f;
+					// Mobile switches cascades abruptly by view depth (no desktop
+					// blend), so pitching the headset swept a quality line across
+					// the world. One 2048 map over 40m retains nearby definition
+					// with no internal quality boundary and one shadow pass.
+					// Desktop retains four cascades and 600m coverage.
+					Dir->DynamicShadowDistanceMovableLight = Mobile ? 4000.f : 60000.f;
+					Dir->DynamicShadowCascades = Mobile ? 1 : 4;
+					Dir->CascadeDistributionExponent = Mobile ? 1.f : 4.f;
 					Dir->CascadeTransitionFraction = 0.1f;
 					Dir->ShadowDistanceFadeoutFraction = 0.12f;
 					Dir->ShadowAmount = 0.88f;

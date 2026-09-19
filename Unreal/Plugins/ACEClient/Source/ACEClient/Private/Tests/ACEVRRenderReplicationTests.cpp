@@ -21,6 +21,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "RenderingThread.h"
 #include "ShaderCompiler.h"
+#include "HAL/IConsoleManager.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEVRRenderReplicationTest, "ACE.VR.RenderingAndReplication",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -167,9 +168,76 @@ bool FACEVRRenderReplicationTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Revealing a friend's avatar keeps the held collision proxy invisible"),Proxy->IsVisible());
 	TestTrue(TEXT("Held collision proxy stays hidden in game"),Proxy->bHiddenInGame);
 	Held->Destroy();
+	// Equipment poses use the actual rendered root, including the authored
+	// placement; a remote observer must not need a first shot to correct it.
+	FACEWorldObject Crossbow;Crossbow.Guid=124;Crossbow.SetupId=0x0200134D;
+	Crossbow.ItemType=ACEItemType::MissileWeapon;Crossbow.CurrentWieldedLocation=ACEEquipMask::MissileWeapon;
+	Crossbow.DefaultCombatStyle=0x20;Crossbow.WielderId=Crossbow.ParentGuid=123;Crossbow.ParentLocation=2;
+	Session.WorldObjects.Add(124,Crossbow);
+	auto* CrossbowActor=World->SpawnActor<AACEWorldEntityActor>();CrossbowActor->InitializeFromObject(Crossbow,100,true);
+	FACEWorldObject Bolt=Crossbow;Bolt.Guid=125;Bolt.SetupId=0x02001A87;Bolt.CurrentWieldedLocation=ACEEquipMask::MissileAmmo;Bolt.AmmoType=2;
+	Session.WorldObjects.Add(125,Bolt);
+	auto* BoltActor=World->SpawnActor<AACEWorldEntityActor>();BoltActor->InitializeFromObject(Bolt,100,true);
+	FACEBinaryWriter V2;for(uint32 V:{123u,2u,2u,uint32(RemoteObject.Position.CellId),0u,7u})V2.WriteUInt32(V);
+	V2.WriteFloat(1.7575f);V2.WriteFloat(0);
+	const FTransform HeldPose(FRotator(13,45,70),FVector(.45,-.30,1.30)),AmmoPose(FRotator(0,90,0),FVector(.6,-.28,1.40));
+	for(int32 I=0;I<5;++I)
+	{
+		if(I==3){V2.WriteUInt32(124);V2.WriteUInt32(125);}
+		const FTransform T=I<3 ? FTransform(Rotations[I],Positions[I]) : I==3 ? HeldPose : AmmoPose;
+		const auto P=T.GetLocation();const auto Q=T.GetRotation();
+		for(double V:{P.X,P.Y,P.Z,Q.X,Q.Y,Q.Z,Q.W})V2.WriteFloat(V);
+	}
+	const FVector RootPosition=Entity->GetActorLocation()/100;
+	for(double V:{RootPosition.X,RootPosition.Y,RootPosition.Z})V2.WriteFloat(V);
+	TestEqual(TEXT("Equipment event wire size"),V2.GetData().Num(),192);
+	FACEBinaryReader EquipmentReader(V2.GetData());Session.HandleVRPose(EquipmentReader);Remote->TickComponent(.05f,LEVELTICK_All,nullptr);
+	TestTrue(TEXT("Remote crossbow accepts equipment pose before firing"),Remote->UpdateMissileAttachment(CrossbowActor));
+	TestTrue(TEXT("Remote crossbow keeps local render orientation"),CrossbowActor->GetActorQuat().Equals(HeldPose.GetRotation(),.001));
+	TestTrue(TEXT("Remote crossbow keeps local grip offset"),CrossbowActor->GetActorLocation().Equals(Entity->GetActorLocation()+HeldPose.GetLocation()*100,.001));
+	TestTrue(TEXT("Remote bolt is visible before the first shot"),Remote->UpdateMissileAttachment(BoltActor) && !BoltActor->IsHidden());
+	TestTrue(TEXT("Remote bolt is centered at the transmitted rail location"),BoltActor->GetActorLocation().Equals(Entity->GetActorLocation()+AmmoPose.GetLocation()*100,.001));
+	Session.VRPoses[123].Previous=Session.VRPoses[123].Current;
+	Session.VRPoses[123].Previous.ReceivedAt=FPlatformTime::Seconds()-.1;
+	Session.VRPoses[123].Current.ReceivedAt=FPlatformTime::Seconds()-.05;
+	Session.VRPoses[123].Current.Root+=FVector(1,0,-.5);
+	Session.GetVRPose(123,Pose);
+	TestTrue(TEXT("Body movement interpolates along slopes with tracked equipment"),Pose.Root.X>RootPosition.X+.3 && Pose.Root.X<RootPosition.X+.7 && Pose.Root.Z<RootPosition.Z);
 	Session.VRPoses[123].Current.ReceivedAt-=1;
 	Remote->TickComponent(.05f,LEVELTICK_All,nullptr);
 	TestFalse(TEXT("Stale tracking restores retail animation"),Entity->Appearance->bVRPoseControlled);
+	TestFalse(TEXT("Stale tracking restores retail held placement"),Remote->UpdateMissileAttachment(CrossbowActor));
+	CrossbowActor->Destroy();BoltActor->Destroy();
+	// Compare the exact first-contact result, not just an approximate count.
+	// Many arc segments miss all rigid parts in a dense candidate set.
+	Entity->SetActorScale3D(FVector(1.2,.8,1.1));Entity->SetActorRotation(FRotator(0,37,0));
+	struct FContactResult { bool Hit;float Along; };
+	TArray<FContactResult> ReferenceContacts;
+	double ContactMs[2]={};int32 Counts[2]={};
+	for(int32 Mode=0;Mode<2;++Mode)
+	{
+		const double Start=FPlatformTime::Seconds();
+		for(int32 Repeat=0;Repeat<40;++Repeat)
+		{
+			// Include the cost of preparing 32 bodies for 48 segments each.
+			FBox Prepared[32];if(Mode)for(auto& B:Prepared) B=Entity->GetProjectileContactBounds(5);
+			for(int32 I=0;I<1536;++I)
+			{
+			const FVector A=Entity->GetActorLocation()+FVector((I%48-24)*15,(I/48-16)*20,(I%7)*30);
+			const FVector B=A+FVector(40,12,-8);
+			float Along=0;const bool Hit=(!Mode || FBox(A.ComponentMin(B),A.ComponentMax(B)).Intersect(Prepared[I/48])) && Entity->FindProjectileContact(A,B,5,Along);Counts[Mode]+=Hit;
+			if(!Repeat)
+			{
+				if(!Mode) ReferenceContacts.Add({Hit,Along});
+				else {TestEqual(TEXT("Bounds rejection preserves contact"),Hit,ReferenceContacts[I].Hit);
+					if(Hit) TestTrue(TEXT("Bounds rejection preserves earliest contact time"),FMath::IsNearlyEqual(Along,ReferenceContacts[I].Along,.0001f));}
+			}
+			}
+		}
+		ContactMs[Mode]=(FPlatformTime::Seconds()-Start)*1000/40;
+	}
+	TestTrue(TEXT("Contact benchmark includes actual hits"),Counts[0]>0);
+	AddInfo(FString::Printf(TEXT("Projectile contact CPU benchmark, 1536 segments: reference %.3f ms, bounds rejection %.3f ms (not frame time)"),ContactMs[0],ContactMs[1]));
 	return true;
 }
 #endif

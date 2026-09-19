@@ -6,12 +6,15 @@ namespace ACE.Server.WorldObjects
 {
     partial class Creature
     {
+		internal bool IsNearbyVRFeedbackObserver(Player observer) => Location != null && observer.Location != null
+			&& !observer.Teleporting && Location.SquaredDistanceTo(observer.Location) <= 192f * 192f;
+
         private void ReportVRHealthBar()
         {
             if (PhysicsObj?.ObjMaint == null) return;
             var fraction = Health.MaxValue > 0 ? (float)Health.Current/Health.MaxValue : 0f;
             foreach (var observer in PhysicsObj.ObjMaint.GetKnownPlayersValuesAsPlayer())
-                if (observer != this && observer.Session != null && observer.VRHealthBarsSubscribed && !observer.Teleporting
+                if (observer != this && observer.Session != null && observer.VRHealthBarsSubscribed && IsNearbyVRFeedbackObserver(observer)
                     && (!Visibility || observer.Adminvision))
                     observer.Session.Network.EnqueueSend(new GameEventUpdateHealth(observer.Session, Guid.Full, fraction));
         }
@@ -20,7 +23,7 @@ namespace ACE.Server.WorldObjects
             if (change == 0) return;
             void Send(Player observer)
             {
-                if (observer.Session == null || !observer.VRHealthFeedbackSubscribed || observer.Teleporting
+                if (observer.Session == null || !observer.VRHealthFeedbackSubscribed || !IsNearbyVRFeedbackObserver(observer)
                     || Visibility && !observer.Adminvision) return;
                 observer.Session.Network.EnqueueSend(new GameEventVRHealthChange(observer.Session, Guid.Full, change, flags));
             }

@@ -31,13 +31,27 @@ namespace ACE.Server.Tests
         private const BindingFlags PrivateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
         private static uint nextGuid = 0x8ffff000;
 
+        [TestMethod]
+        public void VRHealthFeedbackStopsAfterObserverLeavesArea()
+        {
+            using var f = new Fixture();
+            bool Nearby() => (bool)typeof(Creature).GetMethod("IsNearbyVRFeedbackObserver", PrivateInstance)
+                .Invoke(f.Target, new object[] { f.Player });
+            Assert.IsTrue(Nearby());
+            f.Player.Location = new Position(0x00640001, 44, 94, 12, 0, 0, 0, 1);
+            Assert.IsFalse(Nearby(), "Stale known-player membership must not broadcast health across a portal.");
+            f.Player.Location = new Position(f.Target.Location);
+            f.Player.Location.Pos += new Vector3(193, 0, 0);
+            Assert.IsFalse(Nearby(), "Walking outside the health feedback radius also stops updates.");
+        }
+
         [ClassInitialize]
         public static void Initialize(TestContext context)
         {
-            var config = Environment.GetEnvironmentVariable("ACE_VR_TEST_CONFIG");
-            var dat = Environment.GetEnvironmentVariable("ACE_VR_TEST_DAT");
+            var config = Environment.GetEnvironmentVariable("ACE_TEST_CONFIG");
+            var dat = Environment.GetEnvironmentVariable("ACE_TEST_DAT");
             if (string.IsNullOrEmpty(config) || string.IsNullOrEmpty(dat))
-                Assert.Inconclusive("Set ACE_VR_TEST_CONFIG and ACE_VR_TEST_DAT to run retail combat integration tests.");
+                Assert.Inconclusive("Set ACE_TEST_CONFIG and ACE_TEST_DAT to run retail combat integration tests.");
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
             ConfigManager.Initialize(config);
             DatManager.Initialize(dat);
@@ -121,6 +135,22 @@ namespace ACE.Server.Tests
             Assert.IsFalse(movingShot.MissileIgnore(f.Target.PhysicsObj),"Another creature must still receive the projectile.");
             shot.OnCollideObject(f.Player);
             Assert.IsFalse(shot.IsDestroyed,"A late source overlap must not detonate the spell.");
+            var state=shot.PhysicsObj.State;
+            var velocity=shot.PhysicsObj.Velocity;
+            Assert.IsFalse(shot.PhysicsObj.report_object_collision(f.Player.PhysicsObj,false));
+            Assert.IsFalse(f.Player.PhysicsObj.report_object_collision(shot.PhysicsObj,false));
+            Assert.AreEqual(state,shot.PhysicsObj.State,"A late own-body contact must preserve missile/gravity/path physics.");
+            Assert.AreEqual(velocity,shot.PhysicsObj.Velocity);
+            var health=f.Target.Health.Current;
+            // Backpedal after releasing an overlapping shot; it must keep flying
+            // and resolve normal damage against the enemy ahead.
+            f.Player.PhysicsObj.Velocity=-Vector3.UnitY*4;
+            for (var step=0;step<100 && shot.PhysicsObj.is_active();++step)
+            {
+                f.Player.PhysicsObj.UpdateObjectInternal(.01);
+                shot.PhysicsObj.UpdateObjectInternal(.01);
+            }
+            Assert.IsTrue(f.Target.Health.Current<health,"Backpedaling cannot consume the shot before it reaches the enemy.");
         }
 
         [TestMethod]
@@ -683,6 +713,50 @@ namespace ACE.Server.Tests
             Assert.IsTrue(f.Player.CreateItemSpell(armor, spell.Id));
             Assert.IsNotNull(f.Player.EnchantmentManager.GetEnchantment(spell.Id, armor.Guid.Full));
             Assert.IsTrue(Effects() > before, "Equip buffs must send PlayEffect messages as well as changing stats.");
+        }
+
+        [TestMethod]
+        public void IndividuallyThrownWeaponAcquiresPhysicalTargetAndConsumesOneItem()
+        {
+            using var db=new ACE.Database.Models.World.WorldDbContext();
+            var id=db.WeeniePropertiesInt.Where(p=>p.Type==(ushort)PropertyInt.DefaultCombatStyle && p.Value==(int)CombatStyle.ThrownWeapon
+                && db.WeeniePropertiesInt.Any(s=>s.ObjectId==p.ObjectId && s.Type==(ushort)PropertyInt.MaxStackSize && s.Value>=5))
+                .Select(p=>p.ObjectId).OrderBy(i=>i).First();
+            using var f=new Fixture();var item=f.Equip(id,EquipMask.MissileWeapon); item.StackSize=5;
+            item.UnlimitedUse=false;
+            f.Mode(CombatMode.Missile); f.Player.AccuracyLevel=1;Assert.IsFalse(item.IsAmmoLauncher);
+            WorldObject Shot(bool hit)
+            {
+                var shot=WorldObjectFactory.CreateWorldObject(DatabaseManager.World.GetCachedWeenie(id),new ObjectGuid(nextGuid++));
+                f.Objects.Add(shot);shot.ProjectileSource=f.Player;shot.ProjectileAmmo=item;shot.IsVRFreeAimProjectile=true;
+                shot.VRMissileAttackSkill=f.Player.GetEffectiveAttackSkill();shot.VRMissileAccuracy=1.6f;
+                shot.Location=new Position(f.Player.Location);shot.Location.Pos+=new Vector3(0,.7f,1.5f);
+                f.Player.SetProjectilePhysicsState(shot,null,hit ? new Vector3(0,20,0) : new Vector3(20,0,0));Assert.IsTrue(shot.AddPhysicsObj());
+                for(int step=0;step<100 && shot.PhysicsObj.is_active();++step)shot.PhysicsObj.UpdateObjectInternal(.01);
+                return shot;
+            }
+            var before=f.Target.Health.Current;Shot(false);Assert.AreEqual(before,f.Target.Health.Current);
+            var hit=Shot(true);Assert.AreSame(f.Target,hit.ProjectileTarget);
+            Assert.IsTrue(f.Target.Health.Current<before,"A thrown item follows the same physical-hit damage pipeline as an arrow.");
+            Assert.IsFalse(hit.PhysicsObj.is_active());
+            f.Player.UpdateAmmoAfterLaunch(item);Assert.AreEqual(4,item.StackSize);
+            Assert.AreSame(item,f.Player.GetEquippedMissileWeapon(),"The remaining equipped stack stays usable.");
+            Assert.IsNull(f.Player.GetEquippedAmmo(),"An individually thrown item never requires arrows.");
+        }
+
+        [TestMethod]
+        public void MonstersKeepMeleeSpaceOnlyForAnActivelyTrackedVrTarget()
+        {
+            using var f=new Fixture();f.Target.AttackTarget=f.Player;
+            Assert.IsTrue(f.Target.GetMovementParameters().Sticky);
+            typeof(Player).GetField("vrLastTrackedPose",PrivateInstance).SetValue(f.Player,DateTime.UtcNow);
+            var p=f.Target.GetMovementParameters();Assert.IsFalse(p.Sticky);Assert.AreEqual(.65f,p.DistanceToObject);
+            Assert.IsTrue(p.DistanceToObject<Creature.MaxMeleeRange);
+            var motion=f.Target.GetMoveToMotion(f.Player,1);
+            Assert.AreEqual(p.DistanceToObject,motion.MoveToParameters.DistanceToObject);
+            Assert.AreEqual(p.MinDistance,motion.MoveToParameters.MinDistance);
+            typeof(Player).GetField("vrLastTrackedPose",PrivateInstance).SetValue(f.Player,DateTime.MinValue);
+            Assert.IsTrue(f.Target.GetMovementParameters().Sticky,"Retail or stale tracking retains ordinary movement.");
         }
 
         [TestMethod]

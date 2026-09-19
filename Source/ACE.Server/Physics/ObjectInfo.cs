@@ -76,8 +76,7 @@ namespace ACE.Server.Physics.Animation
             // shot's source, including at initial placement. Other players and
             // creatures retain their normal first-contact/PvP behavior.
             bool IsOwnVRShot(PhysicsObj shot, PhysicsObj body) =>
-                shot.WeenieObj?.WorldObject?.IsVRFreeAimProjectile == true
-                && shot.WeenieObj.WorldObject.ProjectileSource?.PhysicsObj == body
+                shot.IsOwnVRProjectile(body)
                 // IsProjectileVisible temporarily targets its own caster to
                 // prove that the muzzle is on this side of intervening walls.
                 && shot.ProjectileTarget != body;

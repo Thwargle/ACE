@@ -1,4 +1,5 @@
 #include "ACESession.h"
+#include "ACEInventoryRules.h"
 #include "ACEProfiling.h"
 #include "ACERetailChat.h"
 #include "ACECharacterOptions.h"
@@ -463,7 +464,9 @@ void FACESession::Tick(float DeltaSeconds)
 		// Retail acclient sends AutonomousPosition ~1 Hz while moving (ACE handler comment).
 		// ACE then applies the pose each world tick; observer F748 broadcasts are separately
 		// capped at MoveToState_UpdatePosition_Threshold (1 s) unless broadcast is forced.
-		if (AutoPosTimer >= AutonomousPositionInterval)
+		const float ReportInterval=(VRCapabilities & 32768u) && FPlatformTime::Seconds()-LastVRPoseSent<.5
+			? FMath::Min(AutonomousPositionInterval,.05f) : AutonomousPositionInterval;
+		if (AutoPosTimer >= ReportInterval)
 		{
 			SendAutonomousPosition(bAutoPosContact);
 			AutoPosTimer = 0.f;
@@ -1800,6 +1803,8 @@ void FACESession::HandleObjectDelete(FACEBinaryReader& Reader)
 	}
 	if (!bKeepInventoryRecord)
 	{
+		if (SelectedObject.Guid == Guid) SelectObject(0);
+		VRPoses.Remove(Guid);
 		WorldObjects.Remove(Guid);
 		RemoveFromContainerLists(Guid);
 	}
@@ -1830,6 +1835,7 @@ void FACESession::HandlePlayerTeleport(FACEBinaryReader& Reader)
 	const uint16 ObjectTeleportSeq = Reader.ReadUInt16();
 	Reader.Align();
 	Log(FString::Printf(TEXT("PlayerTeleport seq=%u"), ObjectTeleportSeq));
+	SelectObject(0);
 	// Retail SmartBox::HandlePlayerTeleport enters portal space on this message —
 	// before the destination UpdatePosition arrives. Mirror that so the tunnel is up
 	// instantly and the old world never flashes.
@@ -4013,10 +4019,24 @@ void FACESession::SendBuyItems(int32 VendorGuid, const TArray<TPair<int32, int32
 	{
 		return;
 	}
+	// Revalidate at send time: stock can change while a purchase is in the cart.
+	TArray<TPair<int32,int32>> Available;
+	if (VendorGuid != OpenVendorGuid) return;
+	for (const auto& Pair : AmountAndObjectId)
+	{
+		const auto* Stock=VendorMerchandise.FindByPredicate([&](const FACEWorldObject& Item){return Item.Guid==Pair.Value;});
+		if (!Stock || Pair.Key<=0) continue;
+		const int32 Limit=ACEInventoryRules::VendorPurchaseLimit(*Stock);
+		if (Limit<=0) continue;
+		if (auto* Existing=Available.FindByPredicate([&](const auto& Item){return Item.Value==Pair.Value;}))
+			Existing->Key=static_cast<int32>(FMath::Min<int64>(Limit,static_cast<int64>(Existing->Key)+Pair.Key));
+		else Available.Emplace(FMath::Min(Pair.Key,Limit),Pair.Value);
+	}
+	if (Available.IsEmpty()) return;
 	FACEBinaryWriter W;
 	W.WriteUInt32(static_cast<uint32>(VendorGuid));
-	W.WriteUInt32(static_cast<uint32>(AmountAndObjectId.Num()));
-	for (const TPair<int32, int32>& Pair : AmountAndObjectId)
+	W.WriteUInt32(static_cast<uint32>(Available.Num()));
+	for (const TPair<int32, int32>& Pair : Available)
 	{
 		W.WriteInt32(Pair.Key);   // amount
 		W.WriteUInt32(static_cast<uint32>(Pair.Value)); // objectID
@@ -4355,6 +4375,7 @@ bool FACESession::ReadEnchantmentRecord(FACEBinaryReader& Reader, FACEActiveEnch
 		return false;
 	}
 	Out = FACEActiveEnchantment();
+	Out.ReceivedAt = FPlatformTime::Seconds();
 	Out.SpellId = static_cast<int32>(Reader.ReadUInt16());
 	Out.Layer = static_cast<int32>(Reader.ReadUInt16());
 	Out.SpellCategory = static_cast<int32>(Reader.ReadUInt16());
@@ -4630,6 +4651,14 @@ void FACESession::HandleMagicDispelMultipleEnchantments(FACEBinaryReader& Reader
 	HandleMagicRemoveMultipleEnchantments(Reader);
 }
 
+bool FACESession::IsNearbyHealthObject(int32 Guid) const
+{
+	if (Guid == PlayerGuid) return true;
+	const auto* Object = WorldObjects.Find(Guid);
+	return Object && Object->bHasPosition && Object->Position.CellId && PlayerPosition.CellId
+		&& FVector::DistSquared(Object->Position.ToUnrealLocation(1.f),PlayerPosition.ToUnrealLocation(1.f)) <= FMath::Square(192.f);
+}
+
 void FACESession::HandleUpdateHealth(FACEBinaryReader& Reader)
 {
 	if (!Reader.CanRead(8))
@@ -4638,6 +4667,7 @@ void FACESession::HandleUpdateHealth(FACEBinaryReader& Reader)
 	}
 	const int32 Guid = static_cast<int32>(Reader.ReadUInt32());
 	const float Fraction = Reader.ReadFloat();
+	if (!FMath::IsFinite(Fraction) || !IsNearbyHealthObject(Guid)) return;
 	OnObjectHealth.Broadcast(Guid, Fraction);
 	if (SelectedObject.bValid && SelectedObject.Guid == Guid)
 	{
@@ -6194,6 +6224,21 @@ void FACESession::GetEquippedItems(TArray<FACEWorldObject>& Out) const
 	}
 }
 
+const FACEWorldObject* FACESession::FindEquippedItem(int64 LocationMask, int32 ItemTypeMask, int32 AmmoTypeMask) const
+{
+	if (PlayerGuid == 0 || LocationMask == 0) return nullptr;
+	for (const auto& Pair : WorldObjects)
+	{
+		const auto& Item = Pair.Value;
+		if ((Item.CurrentWieldedLocation & LocationMask) != 0
+			&& (Item.WielderId == PlayerGuid || Item.ParentGuid == PlayerGuid)
+			&& (ItemTypeMask == 0 || (Item.ItemType & ItemTypeMask) != 0)
+			&& (AmmoTypeMask == 0 || Item.AmmoType == 0 || (Item.AmmoType & AmmoTypeMask) != 0))
+			return &Item;
+	}
+	return nullptr;
+}
+
 void FACESession::GetPackItems(int32 ContainerGuid, TArray<FACEWorldObject>& Out) const
 {
 	Out.Reset();
@@ -6523,6 +6568,7 @@ void FACESession::HandleUpdatePosition(FACEBinaryReader& Reader)
 		if (Guid == PlayerGuid)
 		{
 			InstanceSeq = IncomingInstance;
+			if (TeleportSeq != IncomingTeleport) SelectObject(0);
 			TeleportSeq = IncomingTeleport;
 			ForcePositionSeq = IncomingForce;
 		}
@@ -6536,6 +6582,8 @@ void FACESession::HandleUpdatePosition(FACEBinaryReader& Reader)
 	if (Guid == PlayerGuid)
 	{
 		PlayerPosition = Pos;
+		if (const auto* Selected = WorldObjects.Find(SelectedObject.Guid);
+			Selected && Selected->bHasPosition && !IsNearbyHealthObject(SelectedObject.Guid)) SelectObject(0);
 		MaybeEnterWorldComplete();
 	}
 

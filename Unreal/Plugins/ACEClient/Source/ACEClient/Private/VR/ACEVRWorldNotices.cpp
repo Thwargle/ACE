@@ -50,7 +50,7 @@ void UACEVRComponent::CombatFeedback(const FString& Name, int32 Amount, bool Inc
 			if (Distance < Nearest) { Guid = Object.Guid; Nearest = Distance; }
 		}
 	}
-	const FString Text = Amount > 0 ? FString::Printf(TEXT("-%d%s DAMAGE"),Amount,Critical ? TEXT("!") : TEXT("")) : Incoming ? TEXT("EVADED") : TEXT("MISSED");
+	const FString Text = Amount > 0 ? FString::Printf(TEXT("%s%d DAMAGE"),Critical ? TEXT("Crit! ") : TEXT(""),Amount) : Incoming ? TEXT("EVADED") : TEXT("MISSED");
 	ShowWorldNotice(Text, Guid, 2, Amount == 0 ? FLinearColor(.824f,.824f,.784f) : Incoming ? FLinearColor(1.f,.247f,.247f) : FLinearColor(1.f,.8f,.25f));
 }
 
@@ -60,7 +60,7 @@ void UACEVRComponent::VitalsFeedback(const FACEPlayerVitals& Vitals)
 	const int32 Player = Client->GetPlayerGuid();
 	const int32 Difference = Vitals.Health - NoticeHealth;
 	if (!(Client->GetSession() && Client->GetSession()->SupportsHealthFeedback()) && Player && Player == NoticePlayerGuid && NoticeHealth >= 0 && Difference && !PC->bEnterWorldLoading && !PC->bWorldRevealActive)
-		ShowWorldNotice(FString::Printf(TEXT("%+d %s"), Difference, Difference>0 ? TEXT("HEALTH") : TEXT("DAMAGE")), 0, 2, Difference > 0 ? FLinearColor(.5f,1.f,.498f) : FLinearColor(1.f,.247f,.247f));
+		ShowWorldNotice(FString::Printf(TEXT("%s%d %s"), Difference>0 ? TEXT("+") : TEXT(""), FMath::Abs(Difference), Difference>0 ? TEXT("HEALTH") : TEXT("DAMAGE")), 0, 2, Difference > 0 ? FLinearColor(.5f,1.f,.498f) : FLinearColor(1.f,.247f,.247f));
 	NoticePlayerGuid = Player; NoticeHealth = Vitals.Health;
 }
 
@@ -73,8 +73,8 @@ void UACEVRComponent::HealthFeedback(int32 Guid, int32 Change, uint32 Flags)
     // heading and separate lanes make the recipient explicit without color.
     const FLinearColor Color = Change > 0 ? FLinearColor(.5f,1.f,.498f)
         : Self ? FLinearColor(1.f,.247f,.247f) : FLinearColor(1.f,.8f,.25f);
-    const FString Text = FString::Printf(TEXT("%+d%s %s"), Change,
-        Change < 0 && (Flags & 2u) ? TEXT("!") : TEXT(""),Change>0 ? TEXT("HEALTH") : TEXT("DAMAGE"));
+    const FString Text = FString::Printf(TEXT("%s%d %s"), Change>0 ? TEXT("+") : (Flags & 2u) ? TEXT("Crit! ") : TEXT(""),
+        FMath::Abs(Change), Change>0 ? TEXT("HEALTH") : TEXT("DAMAGE"));
     ShowWorldNotice(Text, Self ? 0 : Guid, 2, Color);
 }
 
@@ -167,7 +167,8 @@ void UACEVRComponent::ShowWorldNotice(const FString& Text, int32 Guid, int32 Kin
 		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle("Bold", 34);
 		Font.OutlineSettings.OutlineSize = 3;
 		Font.OutlineSettings.OutlineColor = FLinearColor::Black;
-		Panel->SetDrawSize(FVector2D(480,120));
+		Panel->SetDrawSize(FVector2D(560,132));
+        FSlateFontInfo Heading = Font; Heading.Size = 30; Heading.OutlineSettings.OutlineSize = 2;
         FACEWorldObject Recipient;
         FString Title=Guid==0 ? TEXT("YOU") : Client->GetWorldObject(Guid,Recipient) ? TEXT("TARGET: ")+Recipient.Name : TEXT("TARGET");
         if (Title.Len()>30) Title=Title.Left(27)+TEXT("...");
@@ -175,7 +176,8 @@ void UACEVRComponent::ShowWorldNotice(const FString& Text, int32 Guid, int32 Kin
 			.BorderImage(FCoreStyle::Get().GetBrush("NoBrush")).Padding(8.f).HAlign(HAlign_Center).VAlign(VAlign_Center)
 			[SNew(SVerticalBox)
                 + SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
-                    [ACEVRUIStyle::Text(Client,Title,25,460,ACEVRUIStyle::TextColor)]
+                    [SNew(STextBlock).Text(FText::FromString(Title)).Font(Heading).ColorAndOpacity(ACEVRUIStyle::TextColor)
+                        .ShadowOffset(FVector2D(2,2)).ShadowColorAndOpacity(FLinearColor::Black)]
                 + SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
                     [SNew(STextBlock).Text(FText::FromString(Notice->Text)).Font(Font).ColorAndOpacity(Color)
                         .ShadowOffset(FVector2D(2,2)).ShadowColorAndOpacity(FLinearColor::Black)]]);
@@ -221,7 +223,7 @@ void UACEVRComponent::UpdateWorldNotices()
 {
 	UpdateEnemyHealthBars();
 	const double Now = FPlatformTime::Seconds();
-	const bool InWorld = Client && Client->GetSessionState() == EACESessionState::InWorld;
+	const bool InWorld = Client && Client->GetSessionState() == EACESessionState::InWorld && !PC->IsWorldTransitionActive();
 	if (!InWorld) { NoticeHealth = -1; NoticePlayerGuid = 0; }
     const FRotator ViewRotation(FMath::Clamp(Head->GetComponentRotation().Pitch,-35.f,35.f),Head->GetComponentRotation().Yaw,0);
     if (LastCombatNoticeUpdate==0 || !InWorld) CombatNoticeRotation=ViewRotation;

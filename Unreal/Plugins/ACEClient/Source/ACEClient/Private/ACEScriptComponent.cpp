@@ -44,6 +44,8 @@ static TAutoConsoleVariable<int32> CVarParticleDistanceCulling(TEXT("ace.Particl
 	TEXT("Use retail GfxObj degrade distances to suspend distant particle simulation and lights. 0 is the unbounded reference path."));
 static TAutoConsoleVariable<float> CVarParticleIdleInterval(TEXT("ace.Particles.IdleTickInterval"), .1f,
 	TEXT("Seconds between range checks for components containing only suspended infinite ambient emitters. 0 keeps the per-frame reference path."));
+static TAutoConsoleVariable<int32> CVarParticleReuseFrames(TEXT("ace.Particles.ReuseEmitterFrames"), 1,
+	TEXT("Resolve the camera and each emitter's live parent frame once per simulation update. 0 is the per-particle reference path."));
 
 namespace
 {
@@ -1975,16 +1977,23 @@ FTransform UACEScriptComponent::GetEmitterTransform(const FActiveEmitter& Emitte
 	return Emitter.RelativeFrame * ParentWorld;
 }
 
-FQuat UACEScriptComponent::GetParticleDrawRotation(const FVector& Position, const FQuat& SimulationRotation, uint32 Mode) const
+FQuat UACEScriptComponent::GetParticleDrawRotation(const FVector& Position, const FQuat& SimulationRotation, uint32 Mode,
+	const FVector* ViewPosition) const
 {
 	if (Mode == 1) return SimulationRotation;
-	const UWorld* World = GetWorld();
-	const APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
-	const APlayerCameraManager* Camera = PC ? PC->PlayerCameraManager : nullptr;
-	if (!Camera) return SimulationRotation;
+	FVector CameraLocation;
+	if (!ViewPosition)
+	{
+		const UWorld* World = GetWorld();
+		const APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+		const APlayerCameraManager* Camera = PC ? PC->PlayerCameraManager : nullptr;
+		if (!Camera) return SimulationRotation;
+		CameraLocation = Camera->GetCameraLocation();
+		ViewPosition = &CameraLocation;
+	}
 	// CPhysicsPart::viewer_heading is the ray from the viewer to the particle.
 	// Using parallel camera forward makes off-center sprites tilt incorrectly.
-	const FVector Heading = (Position - Camera->GetCameraLocation()).GetSafeNormal();
+	const FVector Heading = (Position - *ViewPosition).GetSafeNormal();
 	if (Heading.IsNearlyZero()) return SimulationRotation;
 	switch (Mode)
 	{
@@ -2817,6 +2826,13 @@ void UACEScriptComponent::TickEmitters(float DeltaTime)
 	TGuardValue<bool> UpdatingVisuals(bUpdatingParticleVisuals, true);
 	FVector ViewLocation;
 	const bool bHasView = GetParticleViewLocation(ViewLocation);
+	const bool bReuseFrames = CVarParticleReuseFrames.GetValueOnGameThread() != 0;
+	TOptional<FVector> DrawViewPosition;
+	if (bReuseFrames)
+	{
+		const auto* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+		if (PC && PC->PlayerCameraManager) DrawViewPosition = PC->PlayerCameraManager->GetCameraLocation();
+	}
 	for (int32 EmitterIndex = ActiveEmitters.Num() - 1; EmitterIndex >= 0; --EmitterIndex)
 	{
 		FActiveEmitter& Emitter = ActiveEmitters[EmitterIndex];
@@ -2866,6 +2882,10 @@ void UACEScriptComponent::TickEmitters(float DeltaTime)
 			}
 		}
 
+		// Neither the parent nor camera changes inside this simulation loop. Keep
+		// the cache local: later emitters and same-frame hand/camera motion must
+		// resolve fresh frames, and world-space particles retain their birth frame.
+		TOptional<FTransform> LiveParentFrame;
 		for (int32 ParticleIndex = Emitter.Particles.Num() - 1; ParticleIndex >= 0; --ParticleIndex)
 		{
 			FActiveParticle& Particle = Emitter.Particles[ParticleIndex];
@@ -2895,7 +2915,8 @@ void UACEScriptComponent::TickEmitters(float DeltaTime)
 			FVector Off = Particle.Offset;
 			if (Particle.bParentLocal)
 			{
-				const FTransform Live = GetParticleStartFrame(Emitter);
+				if (!bReuseFrames || !LiveParentFrame.IsSet()) LiveParentFrame = GetParticleStartFrame(Emitter);
+				const FTransform& Live = LiveParentFrame.GetValue();
 				ParentOrigin = Live.GetLocation();
 				ParentRot = Live.GetRotation();
 				// Birth offset remains a world-space vector, even for parent-local emitters.
@@ -2960,7 +2981,8 @@ void UACEScriptComponent::TickEmitters(float DeltaTime)
 				if (Angle > SMALL_NUMBER)
 					Facing = (ParentRot * FQuat(Particle.C.GetSafeNormal(), Angle)).GetNormalized();
 			}
-			Facing = GetParticleDrawRotation(Particle.Position, Facing, Particle.DrawMode);
+			Facing = GetParticleDrawRotation(Particle.Position, Facing, Particle.DrawMode,
+				DrawViewPosition.IsSet() ? &DrawViewPosition.GetValue() : nullptr);
 			const float Opacity = FMath::Clamp(
 				(1.f - Trans) * (IsRetailPortalFxSetup(SetupId) ? 1.f - ObjectTranslucency : 1.f), 0.f, 1.f);
 			ApplyParticleVisual(Emitter, Particle, Facing, FVector(Scale), Opacity);

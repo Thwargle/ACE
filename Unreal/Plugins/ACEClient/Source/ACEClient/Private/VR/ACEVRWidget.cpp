@@ -1,4 +1,5 @@
 #include "VR/ACEVRWidget.h"
+#include "ACEClientBuild.h"
 #include "VR/ACEVRComponent.h"
 #include "VR/ACEVRSettings.h"
 #include "Widgets/Layout/SBorder.h"
@@ -97,7 +98,7 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 	}
 	else
 	{
-		List->AddSlot().AutoHeight()[SNew(STextBlock).Text(FText::FromString(TEXT("Asheron's Call - VR Options")))
+		List->AddSlot().AutoHeight()[SNew(STextBlock).Text(FText::FromString(FString(ACEClientBuild::VRProductName) + TEXT(" - Options")))
 			.Font(FCoreStyle::GetDefaultFontStyle("Bold", 30)).ColorAndOpacity(FLinearColor(.95f, .73f, .33f))
 			.ShadowOffset(FVector2D(1, 2)).ShadowColorAndOpacity(FLinearColor::Black)];
 		List->AddSlot().AutoHeight().Padding(0, 10)[Text(TAttribute<FText>::CreateLambda([Rig]()
@@ -114,7 +115,7 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 		Scroll->AddSlot().Padding(0, 6)[Button(TAttribute<FText>::CreateLambda([Rig]()
 			{ return FText::FromString(Rig.IsValid() && Rig->GetSettings()->bRun ? TEXT("Movement: Run") : TEXT("Movement: Walk")); }),
 			[Rig]() { if (Rig.IsValid()) Rig->ChangeSetting(TEXT("Run")); })];
-		for (FName Setting : {FName("Height"), FName("Panel"), FName("Distance"), FName("Vitals"), FName("Chat"), FName("Wrist"), FName("Speed"), FName("ForwardAssist"), FName("TurnSpeed"), FName("Stability"), FName("HandPitch"), FName("Draw")})
+		for (FName Setting : {FName("Height"), FName("Panel"), FName("Distance"), FName("Vitals"), FName("Chat"), FName("Wrist"), FName("Speed"), FName("ForwardAssist"), FName("TurnSpeed"), FName("Stability"), FName("HandPitch"), FName("Draw"), FName("BowAnchor")})
 		{
 			Scroll->AddSlot().Padding(10, 8)[SNew(SVerticalBox)
 				+ SVerticalBox::Slot().AutoHeight()[Text(TAttribute<FText>::CreateLambda([Rig, Setting]()
@@ -131,6 +132,7 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 					if (Setting == "TurnSpeed") return FText::FromString(FString::Printf(TEXT("Smooth turn speed: %.0f degrees/sec"), S->SmoothTurnDegreesPerSecond));
 					if (Setting == "HandPitch") return FText::FromString(FString::Printf(TEXT("Wrist pitch: %+.0f degrees"), S->HandPitch));
 					if (Setting == "Draw") return FText::FromString(FString::Printf(TEXT("Full bow draw: %.0f cm"), S->BowFullDraw));
+					if (Setting == "BowAnchor") return FText::FromString(FString::Printf(TEXT("Bow cheek-side offset: %.0f cm"), S->BowAnchorOffset));
 					return FText::FromString(FString::Printf(TEXT("Wrist stabilization: %.0f ms"), S->WristSmoothing * 1000));
 				}), 22)]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0, 10)[SNew(SBox).HeightOverride(36)
@@ -148,7 +150,7 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 				if (Setting == "Turn") Label = FString::Printf(TEXT("Turning: %s"), S->bSnapTurn ? TEXT("Snap") : TEXT("Smooth"));
 				else if (Setting == "Angle") Label = FString::Printf(TEXT("Snap angle: %.0f degrees"), S->SnapDegrees);
 				else if (Setting == "Hand") Label = FString::Printf(TEXT("Weapon hand: %s"), S->bLeftHanded ? TEXT("Left") : TEXT("Right"));
-				else if (Setting == "Movement") Label = FString::Printf(TEXT("Movement direction: %s"), S->bHeadRelativeMovement ? TEXT("Head") : TEXT("Left controller"));
+				else if (Setting == "Movement") Label = FString::Printf(TEXT("Movement direction: %s"), S->MovementDirection == 2 ? TEXT("None (stick only)") : S->MovementDirection == 1 ? TEXT("Left controller") : TEXT("Head"));
 				else if (Setting == "Seated") Label = FString::Printf(TEXT("Play posture: %s"), S->bSeated ? TEXT("Seated") : TEXT("Standing"));
 				else if (Setting == "Body") Label = FString::Printf(TEXT("Avatar: %s"), S->bShowBody ? TEXT("Body and arms") : TEXT("Arms only"));
 				else if (Setting == "PinMenu") Label = FString::Printf(TEXT("Main menus pinned to: %s"), S->bPinMenuToView ? TEXT("View") : TEXT("World"));
@@ -177,7 +179,7 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 		List->AddSlot().AutoHeight()[Button(Literal(TEXT("Keyboard")), [Rig]() { if (Rig.IsValid()) Rig->ToggleKeyboard(); })];
 #endif
 		List->AddSlot().AutoHeight().Padding(0, 6)[Button(Literal(TEXT("Return to game")), [Rig]() { if (Rig.IsValid()) Rig->ToggleSettings(); })];
-		List->AddSlot().AutoHeight()[Text(Literal(TEXT("X inventory / Y combat / B inspect pointed item\nLeft stick click settings / Right stick click: hold to charge jump")), 18)];
+		List->AddSlot().AutoHeight()[Text(Literal(TEXT("X inventory / Y combat / B inspect\nMenu: VR options / Left stick click: spell wheel with wand\nRight stick click: hold to charge jump")), 18)];
 	}
 	return SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 		.BorderBackgroundColor(MenuGold).Padding(2.f)

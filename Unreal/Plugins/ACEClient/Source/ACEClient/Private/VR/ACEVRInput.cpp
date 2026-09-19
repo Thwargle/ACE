@@ -127,7 +127,8 @@ void UACEVRComponent::Trigger(bool bLeft, bool bPressed)
 	if (GetCombatMode() == ACECombatMode::Missile)
 	{
 		if (MissileStyle() == 0x20) FireCrossbow();
-		else { Grip(bLeft, true); bTriggerDrawing = bDrawing; }
+		else if (MissileStyle() == 0x10) { Grip(bLeft, true); bTriggerDrawing = bDrawing; }
+		else FireThrownMissile();
 	}
 	else if (GetCombatMode() == ACECombatMode::NonCombat)
 	{
@@ -216,7 +217,7 @@ void UACEVRComponent::Grip(bool bLeft, bool bPressed)
 	}
 	if (IsInputBlocked() || GetCombatMode() != ACECombatMode::Missile || !WeaponGrip()->IsTracked()
 		|| (IsAmmoLauncher() && !BowGrip()->IsTracked())) return;
-	if (MissileStyle() == 0x20) return; // A crossbow is ready when bolts are equipped; no draw gesture.
+	if (MissileStyle() != 0x10) return; // Only bows require a draw gesture.
 	if (bDrawing) return;
 	const bool BowLike = IsAmmoLauncher();
 	if (BowLike && EquippedAmmo().Guid == 0) { SetCastFeedback(TEXT("Equip compatible arrows or bolts first.")); return; }

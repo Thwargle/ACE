@@ -1,0 +1,64 @@
+{
+  "FileVersion": 3,
+  "EngineAssociation": "5.8",
+  "Category": "Games",
+  "Description": "AC:VR - native Quest virtual reality client for Asheron's Call.",
+  "Modules": [
+    {
+      "Name": "ACUnreal",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ],
+  "Plugins": [
+    {
+      "Name": "OpenXR",
+      "Enabled": true
+    },
+    {
+      "Name": "ACEWorldBake",
+      "Enabled": false
+    },
+    {
+      "Name": "EditorScriptingUtilities",
+      "Enabled": false
+    },
+    {
+      "Name": "BlueprintMaterialTextureNodes",
+      "Enabled": false
+    },
+    {
+      "Name": "Interchange",
+      "Enabled": false,
+      "SupportedTargetPlatforms": [
+        "Win64",
+        "Linux",
+        "Mac"
+      ]
+    },
+    {
+      "Name": "ACEClient",
+      "Enabled": true
+    },
+    {
+      "Name": "ProceduralMeshComponent",
+      "Enabled": true
+    },
+    {
+      "Name": "ModelContextProtocol",
+      "Enabled": false
+    },
+    {
+      "Name": "Terminal",
+      "Enabled": false
+    },
+    {
+      "Name": "AndroidFileServer",
+      "Enabled": false
+    },
+    {
+      "Name": "ResonanceAudio",
+      "Enabled": false
+    }
+  ]
+}

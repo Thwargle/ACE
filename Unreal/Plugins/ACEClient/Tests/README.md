@@ -1,9 +1,9 @@
 # Retail parity regression tests
 
-Run from `C:/dev/ACE` in PowerShell after building `ACEViewerEditor`:
+Run from `C:/dev/ACE` in PowerShell after building `ACUnrealEditor`:
 
 ```powershell
-& 'C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe' 'C:/dev/ACE/Unreal/ACEViewer.uproject' -unattended -NullRHI -nosound -NoSplash '-ExecCmds=Automation RunTests ACE.RetailParity' '-TestExit=Automation Test Queue Empty' '-ReportExportPath=C:/dev/ACE/Unreal/Saved/Automation/RetailParity' '-abslog=C:/dev/ACE/Unreal/Saved/Logs/RetailParityTests.log'
+& 'C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe' 'C:/dev/ACE/Unreal/ACUnreal.uproject' -unattended -NullRHI -nosound -NoSplash '-ExecCmds=Automation RunTests ACE.RetailParity' '-TestExit=Automation Test Queue Empty' '-ReportExportPath=C:/dev/ACE/Unreal/Saved/Automation/RetailParity' '-abslog=C:/dev/ACE/Unreal/Saved/Logs/RetailParityTests.log'
 ```
 
 `-RetailDatDir="path"` overrides the test default `C:/Turbine/Asheron's Call`.
@@ -186,7 +186,7 @@ all inventory interactions or fix the remaining global stacking of custom overla
 text when floating panels overlap; editable controls and some popup styling also
 still need parity work.
 
-Validation: ACEViewerEditor Win64 Development compiled successfully. All 17 test
+Validation: ACUnrealEditor Win64 Development compiled successfully. All 17 test
 groups passed with D3D12 offscreen rendering on the final .2 binary (11 clean,
 6 with warnings, 0 failed). Warnings include transient static-mesh bounds during
 build/serialization and diagnostic material/cache messages; runtime visual and
@@ -236,7 +236,7 @@ characters and duplicate clicks/readiness, and permits retry after rejection.
 The first full .3 run caught the missing rejection rollback; that was corrected
 and verified before the final run below.
 
-Final validation: ACEViewerEditor Win64 Development compiled successfully. All
+Final validation: ACUnrealEditor Win64 Development compiled successfully. All
 18 groups passed on the final .3 DLL with D3D12 offscreen rendering: 12 clean,
 6 with warnings, 0 failed, 0 skipped. Report:
 `Saved/Automation/RetailParity20260906d/index.json`; log:
@@ -295,7 +295,7 @@ The independent DAT decoder can verify enum names and the two level headings wit
 `dotnet run --project Unreal/diag/UIInventory --no-restore -- --appraisal-resources
 "C:/Turbine/Asheron's Call"` from the repository root.
 
-Final validation: ACEViewerEditor Win64 Development built successfully. All 20
+Final validation: ACUnrealEditor Win64 Development built successfully. All 20
 groups passed with D3D12 offscreen rendering on the final .4 binary: 13 clean,
 seven with warnings, zero failed/skipped. Report:
 `Saved/Automation/RetailParity20260906f/index.json`; log:
@@ -308,7 +308,7 @@ long-walk performance and the broader retail replacement checklist remain open.
 ## Build 2026.09.06.5: world entry and portal space
 
 Preserved reproduction log:
-`Saved/Logs/ACEViewer-user-20260906-blocked-entry.log`. The destination EnvCell
+`Saved/Logs/ACUnreal-user-20260906-blocked-entry.log`. The destination EnvCell
 7D630112 loaded successfully, but login waited on cell-collision for over 76
 seconds. The presenter's portal-space visibility return skipped collision setup.
 WorldEntry now loads that exact DAT room at local (36.71,89.43,9.20) and exercises
@@ -334,7 +334,7 @@ captures are saved as `Saved/Automation/RetailParity/PortalSpace0.png` through
 `PortalSpace2.png`. Those checks establish camera/animation behavior, not complete
 retail lighting equivalence or measured loading frame rate.
 
-Final validation on build 2026.09.06.5: ACEViewerEditor Win64 Development compiles;
+Final validation on build 2026.09.06.5: ACUnrealEditor Win64 Development compiles;
 all 22 D3D12 offscreen groups pass (13 clean, nine with warnings, zero failed,
 skipped or unfinished). Report: `Saved/Automation/RetailParity20260906j/index.json`.
 Log: `Saved/Logs/RetailParity20260906j.log`. Engine mesh/material warnings remain;
@@ -350,7 +350,7 @@ and remaining client features in `Docs/RETAIL_PARITY.md`.
 
 ## Build 2026.09.06.7: camera cells, lighting, input and inventory
 
-Final ACEViewerEditor Win64 Development binary passed all 25 D3D12 offscreen
+Final ACUnrealEditor Win64 Development binary passed all 25 D3D12 offscreen
 groups (14 clean, eleven with diagnostic warnings, zero failed/skipped/unfinished).
 Report: `Saved/Automation/RetailParity20260906aa-final/index.json`.
 Log: `Saved/Logs/RetailParity20260906aa-final.log`.
@@ -403,7 +403,7 @@ Log: `Saved/Logs/RetailParity20260907-final.log` (confirms build 2026.09.06.8).
 
 ## Build 2026.09.07.1: dungeon residency, authored effects and pedestal visibility
 
-Final ACEViewerEditor Win64 Development compilation succeeded. The D3D12 offscreen
+Final ACUnrealEditor Win64 Development compilation succeeded. The D3D12 offscreen
 suite passed all 25 groups: 24 clean, one with intentional unsafe-spawn recovery
 warnings, zero failed/skipped/unfinished. No NaN-bounds or tangent warnings occurred.
 Report: `Saved/Automation/RetailParity20260907-dungeon5-final/index.json`.

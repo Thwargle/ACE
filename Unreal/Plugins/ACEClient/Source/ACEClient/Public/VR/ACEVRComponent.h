@@ -218,6 +218,9 @@ private:
 	void FireSpell();
 	void GetSpellAim(FVector& Origin, FVector& Direction);
 	void FireCrossbow();
+	void FireThrownMissile();
+	bool HasEquippedCaster() const;
+	FVector BowDrawDirection() const;
 	FVector GetCrossbowMuzzle() const;
 	void GetThrownAim(FVector& Origin, FVector& Direction) const;
 	void ReleaseArrow();
@@ -236,7 +239,7 @@ private:
 	int32 MissileStyle() const;
 	bool IsAmmoLauncher() const;
 	FACEWorldObject EquippedAmmo() const;
-	void UpdateAmmoVisual(const FACEWorldObject& Ammo, const FVector& Nock, const FVector& Direction);
+	void UpdateAmmoVisual(const FACEWorldObject& Ammo, const FVector& Nock, const FVector& Direction, bool bAtTip = false);
 	TArray<int32> SpellSlots() const;
 	FACEWorldObject EquippedWeapon() const;
 	FACEWorldObject EquippedMissileWeapon() const;
@@ -248,8 +251,10 @@ private:
 	UPROPERTY(Transient) TObjectPtr<AActor> PresentationActor;
 	UPROPERTY(Transient) TObjectPtr<AActor> AmmoActor;
 	int32 AmmoVisualGuid = 0;
+	FVector AmmoNockLocal=FVector::ZeroVector, AmmoTipLocal=FVector::ZeroVector;
 	TWeakObjectPtr<AACEWorldEntityActor> MissileVisualActor;
 	uint64 MissileVisualRevision = 0;
+	FVector CrossbowGripLocal = FVector::ZeroVector, CrossbowMuzzleLocal = FVector::ZeroVector;
 	UPROPERTY(Transient) TObjectPtr<UWidgetInteractionComponent> LeftPointer;
 	UPROPERTY(Transient) TObjectPtr<UWidgetInteractionComponent> RightPointer;
 	UPROPERTY(Transient) TObjectPtr<UACEVRWidget> MenuWidget;

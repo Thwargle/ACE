@@ -198,33 +198,7 @@ namespace ACEOutdoorPortalPlan
 	void CollectLandblockDoorwayApertures(UACEDatSubsystem& Dat, uint32 LandblockKey,
 		float WorldScale, TArray<FAdmittedAperture>& OutApertures)
 	{
-		OutApertures.Reset();
-		const uint32 Key=LandblockKey & 0xFFFF0000u;
-		FACEDatLandblockInfo Info;
-		if (!Dat.LoadLandblockInfo(Key,Info)) return;
-		const FVector Origin=FACEPosition::AceVectorToUnreal(
-			FVector(((Key>>24)&255)*192.f,((Key>>16)&255)*192.f,0),WorldScale);
-		for (const auto& Building : Info.Buildings)
-		{
-			const auto* Setup=Dat.FindSetupMesh(Building.ModelId,WorldScale);
-			if (!Setup) { Dat.RequestSetupMesh(Building.ModelId,WorldScale); continue; }
-			const FTransform Frame(FACEPosition::AceQuatToUnreal(FQuat(Building.Orientation)),
-				Origin+FACEPosition::AceVectorToUnreal(FVector(Building.Origin),WorldScale));
-			for (const auto& Part : Setup->Parts) for (const auto& Poly : Part.Portals)
-			{
-				if (!Building.Portals.IsValidIndex(Poly.PortalIndex) || Poly.Vertices.Num()<3) continue;
-				const auto& Portal=Building.Portals[Poly.PortalIndex];
-				if (Portal.OtherCellId<0x100 || Portal.OtherCellId==0xFFFF) continue;
-				const FTransform Transform=Part.BindTransform*Frame;
-				FAdmittedAperture& A=OutApertures.AddDefaulted_GetRef();
-				A.DestEnvCellId=Key|Portal.OtherCellId; A.OtherPortalId=Portal.OtherPortalId;
-				// PView::ConstructView(CBldPortal*, CPolygon*): use the building's
-				// PORT polygon and CBldPortal side, not the reverse interior polygon.
-				A.WorldNormal=Transform.TransformVectorNoScale(Poly.Normal).GetSafeNormal()
-					*(Portal.IsPortalSide() ? -1.f : 1.f);
-				for (const auto& V:Poly.Vertices) A.WorldVerts.Add(Transform.TransformPosition(V));
-			}
-		}
+		Dat.LoadBuildingDoorwayApertures(LandblockKey, WorldScale, OutApertures);
 	}
 
 	void CollectOutdoorAdmittedEnvCells(UACEDatSubsystem& Dat, const FVector& CameraWorldPos,

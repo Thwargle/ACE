@@ -667,7 +667,7 @@ namespace ACE.Server.WorldObjects
         public virtual void OnCollideObject(WorldObject target)
         {
             // thrown weapons
-            if (ProjectileTarget == null) return;
+            if (ProjectileTarget == null && !IsVRFreeAimProjectile) return;
 
             ProjectileCollisionHelper.OnCollideObject(this, target);
         }
@@ -680,7 +680,7 @@ namespace ACE.Server.WorldObjects
         public virtual void OnCollideEnvironment()
         {
             // thrown weapons
-            if (ProjectileTarget == null) return;
+            if (ProjectileTarget == null && !IsVRFreeAimProjectile) return;
 
             ProjectileCollisionHelper.OnCollideEnvironment(this);
         }

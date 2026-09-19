@@ -256,6 +256,15 @@ bool FACEVRStairCeilingTest::RunTest(const FString&)
     AddInfo(FString::Printf(TEXT("Water %08X depth %.1f feet %.1f expected %.1f"),WetBlock,Depth,FeetZ,Water.Z));
     TestTrue(TEXT("VR steps down through rendered water to retail wading height"),FMath::Abs(FeetZ-Water.Z)<2.f);
    }
+   // Deliberately submerge the tracked head: a water surface must not act
+   // like an opaque roof, while the river bed remains solid.
+   Mesh->ComponentTags.AddUnique(TEXT("ACEOutdoorTerrain"));
+   VR->bTracking=true;VR->bWasLoading=false;
+   Pawn->SetActorLocation(Water+FVector(0,0,Depth+30));
+   VR->Head->SetWorldLocation(Water+FVector(0,0,FMath::Max(16.f,Depth-10.f)));
+   VR->UpdateComfort(1.f);TestEqual(TEXT("Submerged head retains world view through water"),VR->Fade,0.f);
+   VR->Head->SetWorldLocation(Water-FVector(0,0,20));VR->UpdateComfort(1.f);
+   TestEqual(TEXT("Submerged terrain still blocks seeing below the river bed"),VR->Fade,1.f);
    Land->Destroy();
   }
  }
