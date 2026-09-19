@@ -445,7 +445,6 @@ bool FACEObjectCreateParser::ParseWeenieHeader(FACEBinaryReader& Reader, FACEDec
 			constexpr uint32 TwoHanded = 0x02000000;
 			constexpr uint32 Shield = 0x00200000;
 			constexpr uint32 MissileWeapon = 0x00400000;
-			constexpr uint32 MissileAmmo = 0x00800000;
 			if (WieldedLoc & (MeleeWeapon | Held | TwoHanded))
 			{
 				Out.ParentLocation = 1; // RightHand
@@ -459,11 +458,10 @@ bool FACEObjectCreateParser::ParseWeenieHeader(FACEBinaryReader& Reader, FACEDec
 				// Bow/crossbow → LeftHand; thrown → RightHand (approx; Physics Parent is authoritative).
 				Out.ParentLocation = 2; // LeftHand
 			}
-			else if (WieldedLoc & MissileAmmo)
-			{
-				Out.ParentLocation = 5; // Quiver
-			}
-			// else: clothing/armor/cloak/etc. — leave ParentLocation = None (0)
+			// Equipped ammunition is an inventory stack, not a quiver attachment.
+			// Only PhysicsDesc Parent or a later reload ParentEvent may make it visible.
+			// Otherwise it appears at the shoulder on login even with a wand equipped.
+			// Clothing/armor/cloak and unloaded ammo keep ParentLocation.None (0).
 		}
 	}
 	if (WeenieFlags & Priority) { if (!Need(4)) return false; Out.ClothingPriority = Reader.ReadUInt32(); }
