@@ -2,7 +2,7 @@ AC:VR - QUEST SIDELOAD PACKAGE
 
 This is a native Quest 3 test build. Once installed, the game runs on the headset;
 it does not require SteamVR, Meta Link, Unreal Editor, or a gaming PC to render it.
-A Windows PC is needed for this installer, and an ACE server must be reachable
+A Windows PC is needed for this installer, and a compatible game server must be reachable
 over the network while playing. Quest 3S is accepted by the installer but has not
 been tested on hardware. Check manifest.json for the exact build version.
 
@@ -54,8 +54,9 @@ INSTALL
    directory is needed. Interrupted or corrupt transfers retry up to three times.
 
 6. Put on the headset. Open AC:VR from the Unknown Sources section of
-   the app library. Enter the server address and YOUR account details supplied
-   by the server owner. The USB cable can then be disconnected.
+   the app library. Choose Browse servers or Custom server in the login lobby,
+   then select or add YOUR account and press Launch. Saved accounts are shared
+   across your server list. The USB cable can then be disconnected.
 
 The launcher allows this one PowerShell process to run the installer; it does
 not change your system-wide execution policy. Administrator rights are normally
@@ -122,20 +123,16 @@ UPDATES / TROUBLESHOOTING
 
 TEST BUILD STATUS
 
-Version 29 improves selected-target debuffs, precise object selection, wrist-menu
-stability while moving, independent vitals/chat scaling, and tall-NPC dialogue
-placement. Arc previews use server-provided projectile speed and gravity; spells
-no longer expire at the target-acquisition radius. Missed projectiles still have
-a lifetime limit. See RELEASE-NOTES.md for details and remaining live checks.
+See manifest.json for the exact installed build and RELEASE-NOTES.md for changes,
+validation, and remaining live checks. The lobby supports saved servers/accounts,
+the community server directory, custom ACE/GDLE entries, and a configurable DAT
+folder. Credentials are encrypted on the headset.
 Use the host's updated VR-enabled ACE server for arc previews and combat/pose
 extensions. No server installation is included in this client bundle.
 
-This APK is signature- and checksum-verified but version 29 has not yet been
-installed or tested on the host's Quest. Desktop, mobile-rendering, packaged
-Windows, and server regression suites pass; shared PC/Quest source and runtime
-materials match. The mobile-rendering tests ran on PC, not a physical Quest.
-Dense-area frame rate, intermittent spell misses, the reported Samsur slope
-clipping, and headset comfort still need live playtesting. Grass remains deferred.
+This is a test build. Packaging and automated checks do not replace headset
+playtesting. Dense-area frame rate, combat, movement, and headset comfort need
+continued testing; consistent 90 FPS is not yet established.
 
 This ZIP contains the APK, installer/update/repair helpers, instructions, release
 notes, license, and a checksum manifest. It contains no saved player logins,
