@@ -164,8 +164,10 @@ bool FACERetailTerrainTest::RunTest(const FString& Parameters)
         for (int32 Y = 0; Y <= 192; Y += 3)
         {
             float Height = 0;
-            if (!TestTrue(TEXT("Valid terrain height"), FACELandblockMeshBuilder::SampleHeightAc(Mesh, X, Y, Height))) return false;
+            FVector Normal;
+            if (!TestTrue(TEXT("Valid terrain height"), FACELandblockMeshBuilder::SampleHeightAc(Mesh, X, Y, Height, &Normal))) return false;
             if (!TestTrue(TEXT("Continuous terrain surface across cells"), FMath::IsNearlyEqual(Height, 3.f * X/24.f + 7.f * Y/24.f + 12.f, 0.001f))) return false;
+            if (!TestTrue(TEXT("Slope normal uses AC distances and points up"), Normal.Equals(FVector(-3.f/24, -7.f/24, 1).GetSafeNormal(), .0001))) return false;
         }
     Mesh.bHasHeights = false;
     float Height = 0;

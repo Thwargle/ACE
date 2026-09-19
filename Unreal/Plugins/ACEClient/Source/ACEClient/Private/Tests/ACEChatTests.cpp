@@ -193,6 +193,13 @@ bool FACEChatParityTest::RunTest(const FString&)
     TestEqual(TEXT("No teller leaves the draft unexpanded"),Binder->ExpandChatReply(TEXT("/r ")),FString(TEXT("/r ")));
     Session.CachedC2SPackets.Reset(); Binder->TryDispatchChatCommand(TEXT("/r hello"));
     TestEqual(TEXT("No teller cannot broadcast a private message as say"),Session.CachedC2SPackets.Num(),0);
+    Session.SendSoulEmoteMotion(0x13000084u);
+    { const auto Bytes=LastAction(); if(TestTrue(TEXT("Point emote packet serialized"),Bytes.Num()>=50))
+      { FACEBinaryReader R(Bytes);R.Skip(24);
+        TestEqual(TEXT("Point uses MoveToState"),R.ReadUInt32(),ACEGameAction::MoveToState);
+        const uint32 Flags=R.ReadUInt32();TestEqual(TEXT("Point contains one emote"),Flags>>11,1u);
+        R.ReadUInt32();R.ReadUInt32();
+        TestEqual(TEXT("Point sends accepted retail PointState rather than its transition"),R.ReadUInt16(),uint16(0xf0)); } }
     Slate.ClearUserFocus(VirtualUser); Slate.ClearUserFocus(0); Slate.RequestDestroyWindow(Window);
     if (OldFocus) Slate.SetUserFocus(0,OldFocus);
     Client->Session.Reset(); Receiver->Close(); Sockets->DestroySocket(Receiver);

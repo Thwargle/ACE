@@ -492,7 +492,7 @@ float FACELandblockMeshBuilder::GetWaterDepthAc(const FACEBuiltLandblockMesh& Me
 	return SurfChar[SurfIdx] != 0 ? 0.44999999f : 0.1f;
 }
 
-bool FACELandblockMeshBuilder::SampleHeightAc(const FACEBuiltLandblockMesh& Mesh, float LocalX, float LocalY, float& OutZAc)
+bool FACELandblockMeshBuilder::SampleHeightAc(const FACEBuiltLandblockMesh& Mesh, float LocalX, float LocalY, float& OutZAc, FVector* OutNormalAc)
 {
 	if (!Mesh.bHasHeights)
 	{
@@ -547,7 +547,15 @@ bool FACELandblockMeshBuilder::SampleHeightAc(const FACEBuiltLandblockMesh& Mesh
 	if (FMath::Abs(N.Z) <= KINDA_SMALL_NUMBER)
 	{
 		OutZAc = A.Z;
+		if (OutNormalAc) *OutNormalAc = FVector::UpVector;
 		return true;
+	}
+	if (OutNormalAc)
+	{
+		// U/V are normalized cell coordinates; convert their derivatives back
+		// to AC distance before testing slope against the walkable threshold.
+		*OutNormalAc = FVector(N.X / CellSize, N.Y / CellSize, N.Z).GetSafeNormal();
+		if (OutNormalAc->Z < 0) *OutNormalAc *= -1;
 	}
 	// Plane through A: N·(P-A)=0 → Z from U,V in cell space
 	OutZAc = A.Z - (N.X * (U - A.X) + N.Y * (V - A.Y)) / N.Z;

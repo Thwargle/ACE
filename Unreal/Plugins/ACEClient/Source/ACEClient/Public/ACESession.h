@@ -82,6 +82,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACELoginHandshakeTest;
 	friend class FACERetailNetworkWeatherTest;
 	friend class FACERetailWorldEntryTest;
+	friend class FACELoadingTransitionTest;
 	friend class FACELedgeStairsTest;
 	friend class FACERetailPkStatusTest;
 	friend class FACERetailScreenTest;

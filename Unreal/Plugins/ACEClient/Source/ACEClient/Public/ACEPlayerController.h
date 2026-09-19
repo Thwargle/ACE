@@ -35,6 +35,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACEVRStairCeilingTest;
 	friend class FACEVRInteriorNetworkTest;
 	friend class FACERetailWorldEntryTest;
+	friend class FACELoadingTransitionTest;
 	friend class FACELedgeStairsTest;
 	friend class FACEMissingDatLoginTest;
 	friend class FACECameraEdgeTest;
@@ -471,6 +472,7 @@ protected:
 	int32 PendingSelfAppearanceGuid = 0;
 
 	void BeginWorldTransition(const TCHAR* Reason);
+	void PreparePortalScreen();
 	void TickWorldTransition();
 	void BeginWorldReveal();
 	void FinishWorldTransition();
@@ -498,6 +500,9 @@ protected:
 	TObjectPtr<AACELoadingScreenActor> LoadingScreenActor = nullptr;
 
 	bool bEnterWorldLoading = false;
+	bool bPendingEnterWorldTransition = false;
+	bool bDestinationStreamingStarted = false;
+	uint64 PortalFirstVisibleFrame = MAX_uint64;
 	bool bWorldRevealActive = false;
 	float PortalWorldRevealElapsed = -1.f;
 	float EnterWorldLoadElapsed = 0.f;
@@ -521,6 +526,11 @@ protected:
 	FDelegateHandle EditorThrottleDelegate;
 	/** ClassicGameplay layout textures resolved while still in the portal tunnel. */
 	bool bGameplayUiAssetsReady = false;
+	TArray<uint32> GameplayUiPrefetchIds;
+	int32 GameplayUiPrefetchIndex = 0;
+	int32 GameplayUiLayoutTextureCount = 0;
+	int32 GameplayUiResolvedCount = 0;
+	bool bGameplayUiRequiredReady = true;
 	/**
 	 * CharacterList arrived but char-select DAT art is not ready yet — keep login up
 	 * until TryPrefetchCharacterSelectAssets succeeds.

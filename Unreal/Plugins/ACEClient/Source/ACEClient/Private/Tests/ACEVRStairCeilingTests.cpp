@@ -215,12 +215,50 @@ bool FACEVRStairCeilingTest::RunTest(const FString&)
     const FVector At=Pawn->GetActorLocation();float Ground;
     TestTrue(TEXT("Falling recovers above the DAT floor even after a missed terrain surface"),
      Dat->SampleOutdoorGroundZ(At.X,At.Y,100,Ground) && At.Z-90.75>=Ground-.1);
-    TestFalse(TEXT("Terrain fallback completes the airborne network state"),PC->bJumpAirborne || PC->bJumpAirborneSent);
-    TestEqual(TEXT("Terrain fallback resets the jump timer"),PC->JumpAirborneSeconds,0.f);
+    FVector GroundNormal;Dat->SampleOutdoorGroundZ(At.X,At.Y,100,Ground,&GroundNormal);
+    if(GroundNormal.Z < .6641741f)
+    {
+     TestTrue(TEXT("Recovery above a steep heightfield preserves falling state"),PC->bJumpAirborne);
+     TestTrue(TEXT("Recovery above a steep heightfield preserves gravity"),PC->JumpWorldAceVelocity.Z < -1.f);
+     TestTrue(TEXT("A steep contact does not reset the fall timer"),PC->JumpAirborneSeconds >= 5.f);
+    }
+    else
+    {
+     TestFalse(TEXT("Walkable terrain fallback completes the airborne network state"),PC->bJumpAirborne || PC->bJumpAirborneSent);
+     TestEqual(TEXT("Walkable terrain fallback resets the jump timer"),PC->JumpAirborneSeconds,0.f);
+    }
     VR->Head->SetWorldLocation(At+FVector(0,0,175-90.75));VR->UpdateComfort(1.f);
     TestEqual(TEXT("Recovered eyes restore the world view"),VR->Fade,0.f);
    }
   }
+ }
+ // A long cliff face must not become a fresh landing on every frame. Test
+ // the full controller in desktop and VR, at high and low render rates.
+ {
+  auto* Cliff=World->SpawnActor<AActor>();auto* Face=NewObject<UBoxComponent>(Cliff);
+  Cliff->SetRootComponent(Face);Cliff->AddInstanceComponent(Face);
+  Face->SetBoxExtent(FVector(10000,1000,10));Face->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+  Face->SetCollisionResponseToAllChannels(ECR_Block);Face->RegisterComponent();
+  Cliff->SetActorLocationAndRotation(Origin+FVector(5000,40000,50000),FRotator(65,0,0));
+  const FVector Normal=Cliff->GetActorQuat().RotateVector(FVector::UpVector);
+  const FVector Start=Cliff->GetActorLocation()+Normal*(10+48+1)+FVector(0,0,90.75-48);
+  for(bool Active:{false,true})for(float Dt:{1.f/90,1.f/20})
+  {
+   VR->bActive=Active;VR->MoveStick=FVector2D::ZeroVector;
+   FACEPosition Pose;Pose.CellId=0xC98C0001;Pose.SetLocationFromUnreal(Start-FVector(0,0,90.75),100);
+   Pose.NormalizeOutdoorLandblock();Session->SetLocalPosition(Pose);PC->PredictedPose=Pose;
+   PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;PC->bLocalPredicting=true;
+   PC->bJumpAirborne=true;PC->JumpWorldAceVelocity=FVector::ZeroVector;PC->JumpLocalAceVelocity=FVector::ZeroVector;
+   PC->StepHoldSeconds=0;PC->JumpAirborneSeconds=0;PC->bStandingJumpLocked=false;
+   Pawn->SetActorLocationAndRotation(Start,Pose.ToUnrealQuat());
+   for(int32 I=0;I<FMath::RoundToInt(1.f/Dt);++I)
+   {VR->Head->SetWorldLocation(Pawn->GetActorLocation()+FVector(0,0,84.25));PC->PlayerTick(Dt);}
+   AddInfo(FString::Printf(TEXT("Cliff VR=%d dt=%.4f fall=%.1f speed=%s air=%d"),Active,Dt,Start.Z-Pawn->GetActorLocation().Z,*PC->JumpWorldAceVelocity.ToString(),PC->bJumpAirborne));
+   TestTrue(TEXT("Cliff contact remains falling in desktop and VR"),PC->bJumpAirborne);
+   TestTrue(TEXT("Cliff descent gains speed rather than crawling"),Start.Z-Pawn->GetActorLocation().Z>200);
+   TestTrue(TEXT("Cliff contact retains downward momentum"),PC->JumpWorldAceVelocity.Z < -3);
+  }
+  VR->bActive=true;Cliff->Destroy();
  }
  // Real river cells near Rithwic: Chaos must not snap feet back to the
  // rendered water sheet after DAT has supplied the submerged walking height.

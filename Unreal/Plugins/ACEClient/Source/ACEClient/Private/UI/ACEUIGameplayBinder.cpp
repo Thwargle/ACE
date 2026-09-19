@@ -6443,6 +6443,7 @@ bool UACEUIGameplayBinder::TrySendChatFromEntry(const FString* OverrideText, int
 				}
 				if (MotionCmd != 0)
 				{
+					if (MotionCmd == 0x13000084u) MotionCmd = 0x430000f0u; // PointState
 					Client->SendSoulEmoteMotion(static_cast<int32>(MotionCmd));
 					APawn* Pawn = PlayerController ? PlayerController->GetPawn() : nullptr;
 					UACECharacterAppearanceComponent* App = Pawn

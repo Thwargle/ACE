@@ -42,7 +42,7 @@ namespace ACE.Server.Network.Structure
         public float TurnSpeed;                 // 0x400 - turn movement speed - somewhat static
 
         // commands: list of length commandListLength
-        public List<MotionItem> Commands;
+        public List<MotionItem> Commands = new List<MotionItem>();
 
         public RawMotionState() { }
 
@@ -93,6 +93,10 @@ namespace ACE.Server.Network.Structure
                         log.Error($"RawMotionState reader - received non-standard action {motionItem.MotionCommand}, Speed: {motionItem.Speed} for {moveToState.WorldObject?.Name}");
                 }
             }
+            // Rejected commands were consumed from the wire, but are not present
+            // in Commands. Never expose their original count to movement readers.
+            CommandListLength = (ushort)Commands.Count;
+            PackedFlags = (PackedFlags & 0x7FFu) | ((uint)CommandListLength << 11);
         }
 
         public string ToString(bool showFlags)
@@ -152,7 +156,7 @@ namespace ACE.Server.Network.Structure
             if (checkForward && (Flags & RawMotionFlags.ForwardCommand) != 0 && SoulEmote.SoulEmotes.Contains(ForwardCommand))
                 return true;
 
-            if (CommandListLength > 0 && SoulEmote.SoulEmotes.Contains(Commands[0].MotionCommand))
+            if (Commands.Count > 0 && SoulEmote.SoulEmotes.Contains(Commands[0].MotionCommand))
                 return true;
 
             return false;

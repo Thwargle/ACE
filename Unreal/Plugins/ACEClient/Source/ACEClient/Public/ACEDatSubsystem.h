@@ -213,7 +213,7 @@ public:
 	 * UnrealXY are world positions; OutUnrealZ is absolute world Z for feet on the terrain.
 	 * Indoor movement should ignore outdoor-terrain hits rather than refusing samples here.
 	 */
-	bool SampleOutdoorGroundZ(float UnrealX, float UnrealY, float WorldScale, float& OutUnrealZ);
+	bool SampleOutdoorGroundZ(float UnrealX, float UnrealY, float WorldScale, float& OutUnrealZ, FVector* OutUnrealNormal = nullptr);
 
 	/**
 	 * Retail water-depth sink in Unreal cm (0 if dry / mesh missing).

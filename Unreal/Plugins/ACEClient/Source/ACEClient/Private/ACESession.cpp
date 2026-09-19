@@ -3578,6 +3578,9 @@ void FACESession::SendSoulEmote(const FString& EmoteText)
 
 void FACESession::SendSoulEmoteMotion(uint32 MotionCommand)
 {
+	// Point is the animation transition; the client-requestable soul emote is
+	// PointState. Older hotkeys and DAT pose names can resolve to the transition.
+	if (MotionCommand == 0x13000084u) MotionCommand = 0x430000f0u;
 	if (State != EACESessionState::InWorld || MotionCommand == 0 || bLogOffPending)
 	{
 		return;

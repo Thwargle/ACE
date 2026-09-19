@@ -30,6 +30,7 @@ class ACECLIENT_API UACETerrainPresenterComponent : public UActorComponent
 	friend class FACERetailRuntimeRegressionTest;
 	friend class FACERetailNetworkWeatherTest;
 	friend class FACERetailWorldEntryTest;
+	friend class FACELoadingTransitionTest;
 
 public:
 	UACETerrainPresenterComponent();
@@ -156,6 +157,8 @@ public:
 	 * Prefer IsEnvCellSyncComplete for marketplace / full dungeon shells.
 	 */
 	bool IsPlayerIndoorNeighborhoodReady() const;
+	/** Surface interiors retain outdoor terrain; dungeon coordinate frames do not. */
+	bool NeedsExteriorTerrain(uint32 CellId) const;
 
 	/**
 	 * True when the indoor EnvCell set for the player landblock finished its first sync
@@ -372,6 +375,7 @@ protected:
 	bool bHasKnownCell = false;
 	/** Last outdoor landcell — dungeon interiors live on other LBs; keep this ring loaded. */
 	uint32 LastOutdoorCellId = 0;
+	uint64 LastPortalTerrainSyncFrame = MAX_uint64;
 	/** SmartBox viewer_cell — draw occupancy. 0 until RefreshViewerCellId runs. */
 	uint32 ViewerCellId = 0;
 

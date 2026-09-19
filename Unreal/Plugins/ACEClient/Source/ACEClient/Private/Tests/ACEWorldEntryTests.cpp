@@ -21,6 +21,7 @@
 #include "ProceduralMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
+#include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Components/SceneCaptureComponent2D.h"
@@ -53,14 +54,88 @@ namespace
             const auto Values = UWorld::InitializationValues().AllowAudioPlayback(false)
                 .RequiresHitProxies(false).CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false);
             World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Values);
-            GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
-            GI = NewObject<UGameInstance>(GEngine); World->SetGameInstance(GI); GI->Init();
+            auto& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
+            Context.SetCurrentWorld(World);
+            GI = NewObject<UGameInstance>(GEngine); World->SetGameInstance(GI);
+            Context.OwningGameInstance = GI; GI->Init();
         }
         ~FEntryWorld()
         {
             GI->Shutdown(); GEngine->DestroyWorldContext(World); World->DestroyWorld(false);
         }
     };
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACELoadingTransitionTest, "ACE.RetailParity.LoadingTransition",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACELoadingTransitionTest::RunTest(const FString&)
+{
+    FEntryWorld Fixture;
+    auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
+    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    Dat->EnsureLoaded();
+    auto* Client=Fixture.GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
+    auto* PC=Fixture.World->SpawnActor<AACEPlayerController>();PC->Client=Client;
+    PC->SetPlayer(NewObject<ULocalPlayer>(GEngine));Fixture.World->AddController(PC);
+    auto* Pawn=Fixture.World->SpawnActor<APawn>();auto* Capsule=NewObject<UCapsuleComponent>(Pawn);
+    Pawn->SetRootComponent(Capsule);Pawn->AddInstanceComponent(Capsule);Capsule->InitCapsuleSize(22,88);Capsule->RegisterComponent();
+    PC->Possess(Pawn);PC->PlayerInput=NewObject<UPlayerInput>(PC);PC->SetupInputComponent();
+    const double Deadline=FPlatformTime::Seconds()+15;
+    do
+    {
+        PC->PreparePortalScreen();FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
+        if(PC->LoadingScreenActor && PC->LoadingScreenActor->bMeshReady) break;
+        FPlatformProcess::Sleep(.002f);
+    } while(FPlatformTime::Seconds()<Deadline);
+    auto* Prepared=PC->LoadingScreenActor.Get();
+    if(!TestTrue(TEXT("Lobby prepares the actual portal DAT mesh"),Prepared && Prepared->bMeshReady)) return false;
+    TestTrue(TEXT("Prepared portal stays invisible in the lobby"),Prepared->IsHidden());
+    TestFalse(TEXT("Prepared portal does not animate in the lobby"),Prepared->IsActorTickEnabled());
+    Session->State=EACESessionState::EnteringWorld;PC->HandleSessionStateChanged(Session->State);
+    TestTrue(TEXT("Play queues its transition outside the Slate callback"),PC->bPendingEnterWorldTransition);
+    PC->PlayerTick(.016f);
+    TestTrue(TEXT("Portal starts before server world entry"),PC->bEnterWorldLoading);
+    TestTrue(TEXT("Play reuses the prepared tunnel"),PC->LoadingScreenActor==Prepared && Prepared->bMeshReady);
+    TestFalse(TEXT("Destination work cannot start before its server pose arrives"),PC->bDestinationStreamingStarted);
+    TestFalse(TEXT("Waiting for entry holds terrain installs"),Dat->IsWorldStreamingAllowed());
+    // Sanctuary recall, captured from the reported indoor/outdoor bridge.
+    FACEPosition Pose;Pose.CellId=0xF4180104;Pose.Location=FVector(36.90,48.70,169.805);
+    Session->SetLocalPosition(Pose);Session->State=EACESessionState::InWorld;
+    ++GFrameCounter;PC->TickWorldTransition();
+    TestTrue(TEXT("Destination work starts on a later portal frame"),PC->bDestinationStreamingStarted);
+    TestTrue(TEXT("Destination streaming is enabled"),Dat->IsWorldStreamingAllowed());
+    const double HudDeadline=FPlatformTime::Seconds()+15;
+    while(!PC->bGameplayUiAssetsReady && FPlatformTime::Seconds()<HudDeadline)
+    {
+        const int32 Before=PC->GameplayUiPrefetchIndex;
+        PC->TryPrefetchGameplayHudAssets();
+        TestTrue(TEXT("A HUD batch decodes at most eight textures"),PC->GameplayUiPrefetchIndex-Before<=8);
+        FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
+    }
+    TestTrue(TEXT("Bounded HUD warming eventually finishes"),PC->bGameplayUiAssetsReady);
+    auto* Terrain=NewObject<UACETerrainPresenterComponent>(PC);PC->AddInstanceComponent(Terrain);Terrain->RegisterComponent();
+    Terrain->Client=Client;Terrain->TerrainChunkSize=1;Terrain->LoadRadius=0;Terrain->UnloadRadius=0;
+    Terrain->LandblockClass=AACELandblockActor::StaticClass();
+    TestTrue(TEXT("Sanctuary needs its exterior before crossing the bridge exit"),Terrain->NeedsExteriorTerrain(Pose.CellId));
+    TestTrue(TEXT("Ordinary town interiors also retain exterior streaming"),Terrain->NeedsExteriorTerrain(0x7D630112));
+    TestFalse(TEXT("A dungeon does not stream an unrelated outdoor landscape"),Terrain->NeedsExteriorTerrain(0x0179010D));
+    Dat->GetOrBuildLandblockMesh(Pose.CellId & 0xFFFF0000u,100);
+    Terrain->KickLandblockLoginBurst();
+    TestTrue(TEXT("Login burst schedules work without spawning terrain inline"),Terrain->Spawned.IsEmpty());
+    const double TerrainDeadline=FPlatformTime::Seconds()+15;
+    while(Terrain->Spawned.IsEmpty() && FPlatformTime::Seconds()<TerrainDeadline)
+    {
+        ++GFrameCounter;Terrain->SyncAroundCell(Pose.CellId);
+        FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
+        FPlatformProcess::Sleep(.002f);
+    }
+    TestTrue(TEXT("Sanctuary terrain loads while the player remains on the indoor bridge"),Terrain->Spawned.Contains(0xF4180000));
+    TestEqual(TEXT("Loading the exterior does not move the player outdoors"),Client->GetPlayerPosition().CellId,Pose.CellId);
+    Session->State=EACESessionState::CharacterSelect;PC->HandleSessionStateChanged(Session->State);
+    TestFalse(TEXT("Rejected/cancelled world entry releases loading state"),PC->bEnterWorldLoading || PC->bPendingEnterWorldTransition);
+    TestFalse(TEXT("Returning to character selection releases movement input"),PC->IsMoveInputIgnored());
+    TestFalse(TEXT("Returning to character selection leaves portal space"),Dat->IsInPortalSpace());
+    return !HasAnyErrors();
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACETerrainArrivalTest, "ACE.RetailParity.TerrainArrival",
@@ -756,7 +831,11 @@ bool FACERetailPortalSpaceTest::RunTest(const FString& Parameters)
     auto* Tunnel = Fixture.World->SpawnActor<AACELoadingScreenActor>();
     Tunnel->BeginTunnel();
     const double Deadline = FPlatformTime::Seconds() + 20;
-    while (!Tunnel->TryBuildMesh() && FPlatformTime::Seconds() < Deadline) FPlatformProcess::Sleep(.002f);
+    while (!Tunnel->TryBuildMesh() && FPlatformTime::Seconds() < Deadline)
+    {
+        FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
+        FPlatformProcess::Sleep(.002f);
+    }
     if (!TestTrue(TEXT("Retail portal setup builds"), Tunnel->bMeshReady)) return false;
     TestEqual(TEXT("Portal uses the DAT animation DID"), Tunnel->AnimationId, 0x030005AC);
     TestEqual(TEXT("Portal setup contains two animated parts"), Tunnel->Appearance->PartMeshes.Num(), 2);

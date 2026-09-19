@@ -128,7 +128,7 @@ public:
 		float WorldScale, TArray<FACEBuiltLandblockSection>& OutSections);
 
 	/** Plane-sample the 9×9 heightfield at local landblock XY (AC units, 0..192). */
-	static bool SampleHeightAc(const FACEBuiltLandblockMesh& Mesh, float LocalX, float LocalY, float& OutZAc);
+	static bool SampleHeightAc(const FACEBuiltLandblockMesh& Mesh, float LocalX, float LocalY, float& OutZAc, FVector* OutNormalAc = nullptr);
 
 	/**
 	 * Retail CObjCell::get_water_depth / CLandBlockStruct::calc_water_depth (ACE LandblockStruct).

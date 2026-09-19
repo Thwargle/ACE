@@ -137,7 +137,9 @@ void AACELoadingScreenActor::BeginTunnel()
 	bTrackedView = false;
 	RevealElapsed = 0.f;
 	bPortalAmbientStarted = false;
-	bMeshReady = false;
+	// A lobby-prepared tunnel can become visible immediately; subsequent visits
+	// reuse its components instead of rebuilding them on the transition frame.
+	bMeshReady = Appearance && Appearance->HasAppearance();
 	TeleportYaw = 0.f;
 	PickNextTeleportYaw();
 	SetActorLocation(PortalSpaceWorldOrigin);
@@ -190,6 +192,8 @@ bool AACELoadingScreenActor::TryBuildMesh()
 		Dat->BeginBackgroundLoad();
 		return false;
 	}
+	if (Dat->RequestSetupMesh(static_cast<uint32>(SetupId), WorldScale)
+		!= UACEDatSubsystem::EACESetupMeshStatus::Ready) return false;
 	if (!Dat->PrefetchPortalSpaceSetup(SetupId, WorldScale))
 	{
 		return false;

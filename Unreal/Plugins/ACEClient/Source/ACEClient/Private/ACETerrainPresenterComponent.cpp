@@ -546,6 +546,15 @@ bool UACETerrainPresenterComponent::IsPlayerCellVisualReady() const
 	return Actor->HasPendingStaticObjects() == false;
 }
 
+bool UACETerrainPresenterComponent::NeedsExteriorTerrain(uint32 CellId) const
+{
+	if (!IsIndoorCell(CellId)) return CellId != 0;
+	const auto* World = GetWorld();
+	auto* Dat = World && World->GetGameInstance() ? World->GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr;
+	FACEDatLandblockInfo Info;
+	return Dat && Dat->LoadLandblockInfo(CellId & 0xFFFF0000u, Info) && !Info.Buildings.IsEmpty();
+}
+
 bool UACETerrainPresenterComponent::IsPlayerIndoorNeighborhoodReady() const
 {
 	if (!bHasKnownCell || !IsIndoorCell(LastKnownCellId))
@@ -1083,21 +1092,9 @@ void UACETerrainPresenterComponent::KickLandblockLoginBurst()
 				/*bForce*/ true);
 		}
 	}
-	if (bHasKnownCell)
-	{
-		SyncAroundCell(LastKnownCellId);
-	}
-	if (bEnableEnvCells)
-	{
-		LastEnvSyncFrame = MAX_uint64;
-		SyncEnvCells();
-	}
-	UpdateBuildingVisibility();
-	if (!IsIndoorCell(LastKnownCellId))
-	{
-		UpdateOutdoorEnvCollision();
-		UpdateOutdoorEnvCellDraw();
-	}
+	// This is also called from PlayerCreate's network dispatch. Schedule work,
+	// never build terrain/rooms synchronously before the loading view can render.
+	LastEnvSyncFrame = MAX_uint64;
 }
 
 bool UACETerrainPresenterComponent::ShouldHoldStagedLoadRadius() const
@@ -1209,6 +1206,9 @@ void UACETerrainPresenterComponent::TickComponent(
 			if (UACEDatSubsystem* Dat = GI->GetSubsystem<UACEDatSubsystem>())
 			{
 				UpdateCameraVisibility();
+				if (Dat->IsInPortalSpace() && Dat->IsWorldStreamingAllowed()
+					&& !Dat->IsLightweightStreaming() && bHasKnownCell && !bLastSyncComplete)
+					SyncAroundCell(LastKnownCellId);
 			}
 		}
 	}
@@ -1546,7 +1546,7 @@ void UACETerrainPresenterComponent::HandleEnteredWorld(int32 PlayerGuid, const F
 			}
 			if (Pos.IsValid())
 			{
-				ACEWcTerrainRuntime::RequestTerrainAroundBlocking(
+				ACEWcTerrainRuntime::RequestTerrainAround(
 					World, Pos.ToUnrealLocation(WorldScale), /*RingTiles*/ 3);
 			}
 		}
@@ -1903,6 +1903,14 @@ void UACETerrainPresenterComponent::SyncAroundCell(uint32 CellId)
 	if (!World || (!LandblockClass && TerrainChunkSize <= 1))
 	{
 		return;
+	}
+	const auto* StreamingDat = World->GetGameInstance() ? World->GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr;
+	const bool bPortalStreaming = StreamingDat && StreamingDat->IsInPortalSpace();
+	if (bPortalStreaming)
+	{
+		// Tick and the regular 10Hz retry timer share a single install budget.
+		if (LastPortalTerrainSyncFrame == GFrameCounter) return;
+		LastPortalTerrainSyncFrame = GFrameCounter;
 	}
 	if (TerrainChunkSize > 1 && !TerrainChunkClass)
 	{
@@ -2311,9 +2319,10 @@ void UACETerrainPresenterComponent::SyncAroundCell(uint32 CellId)
 	}
 	if (IsIndoorCell(CellId))
 	{
-		// Entering a shop while the 11×11 ring is still baking (TexMerge + scenery)
-		// locked frames at dt=333ms. Keep already-spawned LScape; resume on exit.
-		EffectiveMax = 0;
+		// A town interior can see outside (including open Sanctuary bridges).
+		// Dungeons returned above. Keep loading the exterior at a bounded rate
+		// instead of stopping forever until the player walks through the exit.
+		EffectiveMax = 1;
 	}
 	int32 LoadedThisCall = 0;
 	// Background work must not stop when this frame's mesh-install budget is
@@ -2340,7 +2349,8 @@ void UACETerrainPresenterComponent::SyncAroundCell(uint32 CellId)
 		{
 			continue;
 		}
-		if (LoadedThisCall >= EffectiveMax || (LoadedThisCall > 0 && FPlatformTime::Seconds()-ApplyStartSec >= .004))
+		if (LoadedThisCall >= EffectiveMax || (LoadedThisCall > 0
+			&& FPlatformTime::Seconds()-ApplyStartSec >= (bPortalStreaming ? .002 : .004)))
 		{
 			break;
 		}

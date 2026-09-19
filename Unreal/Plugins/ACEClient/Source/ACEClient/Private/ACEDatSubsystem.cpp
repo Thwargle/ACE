@@ -5156,7 +5156,7 @@ bool UACEDatSubsystem::ConsumeLandMeshReloadRequest(bool* bOutClearEnvCells)
 	return true;
 }
 
-bool UACEDatSubsystem::SampleOutdoorGroundZ(float UnrealX, float UnrealY, float WorldScale, float& OutUnrealZ)
+bool UACEDatSubsystem::SampleOutdoorGroundZ(float UnrealX, float UnrealY, float WorldScale, float& OutUnrealZ, FVector* OutUnrealNormal)
 {
 	if (WorldScale <= KINDA_SMALL_NUMBER)
 	{
@@ -5184,7 +5184,8 @@ bool UACEDatSubsystem::SampleOutdoorGroundZ(float UnrealX, float UnrealY, float 
 	const float LocalX = GlobalX - static_cast<float>(Lbx) * FACELandblockMeshBuilder::LandblockSize;
 	const float LocalY = GlobalY - static_cast<float>(Lby) * FACELandblockMeshBuilder::LandblockSize;
 	float ZAc = 0.f;
-	if (!FACELandblockMeshBuilder::SampleHeightAc(*Mesh, LocalX, LocalY, ZAc))
+	FVector NormalAc;
+	if (!FACELandblockMeshBuilder::SampleHeightAc(*Mesh, LocalX, LocalY, ZAc, OutUnrealNormal ? &NormalAc : nullptr))
 	{
 		return false;
 	}
@@ -5192,6 +5193,7 @@ bool UACEDatSubsystem::SampleOutdoorGroundZ(float UnrealX, float UnrealY, float 
 	// Retail ValidateWalkable: contact settles waterDepth below the land plane.
 	const float DepthAc = FACELandblockMeshBuilder::GetWaterDepthAc(*Mesh, LocalX, LocalY);
 	OutUnrealZ = (ZAc - DepthAc) * WorldScale;
+	if (OutUnrealNormal) *OutUnrealNormal = FACEPosition::AceVectorToUnreal(NormalAc, 1.f);
 	return true;
 }
 

@@ -112,7 +112,8 @@ void AACEPlayerController::BeginPlay()
 	{
 		auto Delegate = UEditorEngine::FShouldDisableCPUThrottling::CreateWeakLambda(this, [this]()
 		{
-			return Client && Client->GetSessionState() == EACESessionState::InWorld;
+			return IsVRActive() || (Client && (Client->GetSessionState() == EACESessionState::InWorld
+				|| Client->GetSessionState() == EACESessionState::EnteringWorld));
 		});
 		EditorThrottleDelegate = Delegate.GetHandle();
 		GEditor->ShouldDisableCPUThrottlingDelegates.Add(MoveTemp(Delegate));
@@ -689,6 +690,22 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				*DebugViewportSize.ToString()));
 	}
 
+	if (bPendingEnterWorldTransition)
+	{
+		bPendingEnterWorldTransition = false;
+		if (Client && Client->GetSessionState() == EACESessionState::EnteringWorld)
+		{
+			DestroyCharacterSelectUI();
+			BeginEnterWorldLoadScreen();
+		}
+	}
+	if ((bEnterWorldLoading || bWorldRevealActive) && Client
+		&& (Client->GetSessionState() == EACESessionState::EnteringWorld
+			|| Client->GetSessionState() == EACESessionState::InWorld))
+	{
+		TickWorldTransition();
+		return;
+	}
 	if (!Client || Client->GetSessionState() != EACESessionState::InWorld)
 	{
 		if (GameHUDWidget)
@@ -696,12 +713,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			DestroyGameHUD();
 		}
 		TickPendingCharacterSelect();
-		return;
-	}
-
-	if (bEnterWorldLoading || bWorldRevealActive)
-	{
-		TickWorldTransition();
+		if (Client && Client->GetSessionState() == EACESessionState::CharacterSelect && bUseEnterWorldLoadScreen)
+			PreparePortalScreen();
 		return;
 	}
 
@@ -882,7 +895,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		}
 		else if (ACEInputBindings::Pressed(this, EKeys::K))
 		{
-			DatGameplayBinder->PlayEmoteHotkey(0x13000084u, true); // Point
+			DatGameplayBinder->PlayEmoteHotkey(0x430000f0u, true); // PointState (retail held pose)
 		}
 		else if (ACEInputBindings::Pressed(this, EKeys::J))
 		{
@@ -1600,6 +1613,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				CapsuleRadius = Cap->GetScaledCapsuleRadius();
 			}
 
+			constexpr float FloorZ = 0.66417414618662751f;
 			auto FinishJumpLanding = [&]()
 			{
 				// Poses received before touchdown describe the old airborne height.
@@ -1635,7 +1649,6 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			{
 				constexpr float WallSkinCm = 2.f;
 				constexpr float LandingZ = 0.0871557f;
-				constexpr float FloorZ = 0.66417414618662751f;
 				const FCollisionShape Shape = FCollisionShape::MakeCapsule(
 					FMath::Max(8.f, CapsuleRadius),
 					FMath::Max(10.f, CapsuleHalfHeight));
@@ -1998,7 +2011,9 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					if (!bIndoorNow && WaterDat)
 					{
 						float DatFeetZ = NearFeetZ;
-						if (WaterDat->SampleOutdoorGroundZ(X, Y, WorldScale, DatFeetZ)
+						FVector DatNormal;
+						if (WaterDat->SampleOutdoorGroundZ(X, Y, WorldScale, DatFeetZ, &DatNormal)
+							&& DatNormal.Z >= FloorZ
 							&& DatFeetZ <= NearFeetZ + MaxUp
 							&& DatFeetZ >= NearFeetZ - MaxDown)
 						{
@@ -2475,7 +2490,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					// A steep contact redirects falling velocity; it is not a stable
 					// landing. Ending/restarting the fall each frame loses momentum
 					// and turns a roof slide into a long, slow crawl.
-					const auto AirMove = ACEBodySweep::MoveAirborne(*World,Start,End,Shape,SweepParams,JumpWorldAceVelocity.Z<=0.f,bVR ? FloorZ : LandingZ);
+					const auto AirMove = ACEBodySweep::MoveAirborne(*World,Start,End,Shape,SweepParams,JumpWorldAceVelocity.Z<=0.f,FloorZ);
 					Resolved=AirMove.Position; BounceNormalUe=AirMove.ContactNormal;
 					bHaveBounceNormal=!BounceNormalUe.IsNearlyZero();
 					if (AirMove.bLanded) FinishJumpLanding();
@@ -2857,7 +2872,9 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						// under building footprints. Raised walkables win via the step
 						// preference below when clearly above grade.
 						float DatZ = FeetZ;
-						if (SnapDat->SampleOutdoorGroundZ(Desired.X, Desired.Y, WorldScale, DatZ)
+						FVector DatNormal;
+						if (SnapDat->SampleOutdoorGroundZ(Desired.X, Desired.Y, WorldScale, DatZ, &DatNormal)
+							&& DatNormal.Z >= FloorZ
 							&& DatZ <= FeetZ + RampClimbCm
 							&& DatZ >= FeetZ - SnapStepDownCm)
 						{
@@ -2993,7 +3010,9 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					if (UACEDatSubsystem* Dat = GI->GetSubsystem<UACEDatSubsystem>())
 					{
 						float SampledZ = Desired.Z;
-						if (Dat->SampleOutdoorGroundZ(Desired.X, Desired.Y, WorldScale, SampledZ))
+						FVector DatNormal;
+						if (Dat->SampleOutdoorGroundZ(Desired.X, Desired.Y, WorldScale, SampledZ, &DatNormal)
+							&& DatNormal.Z >= FloorZ)
 						{
 							const bool bAcceptOutdoor = SampledZ <= FeetZ + RampClimbCm
 								&& SampledZ >= FeetZ - SnapStepDownCm;
@@ -3073,11 +3092,12 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				if (auto* Dat = GetGameInstance()->GetSubsystem<UACEDatSubsystem>())
 				{
 					float TerrainZ;
-					if (Dat->SampleOutdoorGroundZ(Desired.X, Desired.Y, WorldScale, TerrainZ) && GroundZ < TerrainZ)
+					FVector TerrainNormal;
+					if (Dat->SampleOutdoorGroundZ(Desired.X, Desired.Y, WorldScale, TerrainZ, &TerrainNormal) && GroundZ < TerrainZ)
 					{
 						GroundZ = TerrainZ;
 						bHaveGround = true;
-						if (bJumpAirborne) FinishJumpLanding();
+						if (bJumpAirborne && TerrainNormal.Z >= FloorZ) FinishJumpLanding();
 					}
 				}
 			}
@@ -4326,73 +4346,55 @@ bool AACEPlayerController::TryPrefetchGameplayHudAssets()
 		return false;
 	}
 
-	// Reusing the binder after a portal also requires preserving its DAT tree.
-	// Reloading ClassicGameplay here resets panel visibility while leaving the
-	// existing inventory overlays alive, producing contents without their frame.
-	if (!DatGameplayBinder && Client->GetUIFlow())
-	{
-		Client->GetUIFlow()->SetMode(ACEUI::EACEUIFlowMode::Gameplay);
-	}
-	if (UACEUILayoutResolver* Layout = Client->GetUILayoutResolver(); !DatGameplayBinder && Layout)
-	{
-		if (!Layout->LoadLayout(ACEUI::LayoutId::ClassicGameplay))
-		{
-			return false;
-		}
-	}
-
-	TArray<uint32> Ids;
-	if (UACEUIElementManager* UiMgr = Client->GetUIElementManager())
-	{
-		CollectLayoutTextureIds(UiMgr->GetSyntheticRoot(), Ids);
-	}
-	if (Ids.Num() == 0)
-	{
-		return false;
-	}
-
-	int32 Resolved = 0;
-	for (uint32 Did : Ids)
-	{
-		if (Res->ResolveTexture(Did))
-		{
-			++Resolved;
-		}
-	}
-
-	// Require the majority of layout textures (root chrome + panels). Sparse misses OK.
-	const int32 Need = FMath::Max(12, (Ids.Num() * 3) / 4);
-	if (Resolved < Need)
-	{
-		return false;
-	}
-
-	// Always-visible gameplay chrome DIDs (vitals / radar / panel edges).
 	static const uint32 MustHave[] = {
 		0x06004CC0u, 0x06004CC1u,
 		0x06001938u, 0x0600193Au, 0x0600193Cu,
 		0x060011FBu,
 	};
-	for (uint32 Did : MustHave)
-	{
-		if (!Res->ResolveTexture(Did))
-		{
-			return false;
-		}
-	}
-
-	// VividTargetIndicator_Selected_* corners (SmartBox 0x2100000F) — prefetch, non-blocking.
 	static const uint32 CornerDids[] = {
 		0x06004C40u, 0x06004C41u, 0x06004C42u, 0x06004C43u,
 	};
-	for (uint32 Did : CornerDids)
+	if (GameplayUiPrefetchIds.IsEmpty())
 	{
-		Res->ResolveTexture(Did);
+		// Preserve an existing gameplay tree across recalls. Load a new one only
+		// once at initial entry, then yield before decoding its texture queue.
+		if (!DatGameplayBinder && Client->GetUIFlow()) Client->GetUIFlow()->SetMode(ACEUI::EACEUIFlowMode::Gameplay);
+		if (auto* Layout = Client->GetUILayoutResolver(); !DatGameplayBinder && Layout)
+			if (!Layout->LoadLayout(ACEUI::LayoutId::ClassicGameplay)) return false;
+		if (auto* Manager = Client->GetUIElementManager())
+			CollectLayoutTextureIds(Manager->GetSyntheticRoot(), GameplayUiPrefetchIds);
+		GameplayUiLayoutTextureCount = GameplayUiPrefetchIds.Num();
+		if (GameplayUiLayoutTextureCount == 0) return false;
+		GameplayUiPrefetchIds.Append(MustHave, UE_ARRAY_COUNT(MustHave));
+		GameplayUiPrefetchIds.Append(CornerDids, UE_ARRAY_COUNT(CornerDids));
+		return false;
 	}
-
-	bGameplayUiAssetsReady = true;
-	UE_LOG(LogTemp, Log, TEXT("ACE: gameplay UI textures ready (%d/%d layout DIDs)"), Resolved, Ids.Num());
-	return true;
+	// ResolveTexture can decode and upload a DAT image. A cold gameplay layout
+	// contains hundreds: draining it in one tick freezes the VR view at Play.
+	const double Deadline = FPlatformTime::Seconds() + .002;
+	int32 ThisFrame = 0;
+	while (GameplayUiPrefetchIndex < GameplayUiPrefetchIds.Num()
+		&& ThisFrame < 8 && (ThisFrame == 0 || FPlatformTime::Seconds() < Deadline))
+	{
+		const int32 Index = GameplayUiPrefetchIndex++;
+		const bool bReady = Res->ResolveTexture(GameplayUiPrefetchIds[Index]) != nullptr;
+		if (Index < GameplayUiLayoutTextureCount) GameplayUiResolvedCount += bReady ? 1 : 0;
+		else if (Index < GameplayUiLayoutTextureCount + UE_ARRAY_COUNT(MustHave)) bGameplayUiRequiredReady &= bReady;
+		++ThisFrame;
+	}
+	if (GameplayUiPrefetchIndex < GameplayUiPrefetchIds.Num()) return false;
+	bGameplayUiAssetsReady = bGameplayUiRequiredReady
+		&& GameplayUiResolvedCount >= FMath::Max(12, GameplayUiLayoutTextureCount * 3 / 4);
+	if (bGameplayUiAssetsReady)
+	{
+		UE_LOG(LogTemp, Log, TEXT("ACE: gameplay UI textures ready (%d/%d layout DIDs)"), GameplayUiResolvedCount, GameplayUiLayoutTextureCount);
+	}
+	else
+	{
+		GameplayUiPrefetchIndex = GameplayUiResolvedCount = 0;
+		bGameplayUiRequiredReady = true;
+	}
+	return bGameplayUiAssetsReady;
 }
 
 void AACEPlayerController::ShowCharacterSelectUI(const TArray<FACECharacterInfo>& Characters, const FString& ServerName)
@@ -4561,7 +4563,8 @@ void AACEPlayerController::HandleEnteredWorld(int32 PlayerGuid, const FACEPositi
 
 	if (bUseEnterWorldLoadScreen)
 	{
-		BeginEnterWorldLoadScreen();
+		bPendingEnterWorldTransition = false;
+		if (!bEnterWorldLoading) BeginEnterWorldLoadScreen();
 	}
 	else if (UGameInstance* GI = GetGameInstance())
 	{
@@ -4582,6 +4585,23 @@ void AACEPlayerController::HandleEnteredWorld(int32 PlayerGuid, const FACEPositi
 	}
 }
 
+void AACEPlayerController::PreparePortalScreen()
+{
+	if (!GetWorld()) return;
+	if (!IsValid(LoadingScreenActor))
+	{
+		FActorSpawnParameters Params;
+		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		LoadingScreenActor = GetWorld()->SpawnActor<AACELoadingScreenActor>(
+			AACELoadingScreenActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, Params);
+	}
+	if (!LoadingScreenActor) return;
+	LoadingScreenActor->WorldScale = WorldScale;
+	LoadingScreenActor->TryBuildMesh();
+	LoadingScreenActor->HideAllVisuals();
+	LoadingScreenActor->SetActorTickEnabled(false);
+}
+
 void AACEPlayerController::BeginWorldTransition(const TCHAR* Reason)
 {
 	PortalWorldRevealElapsed = -1.f;
@@ -4593,6 +4613,11 @@ void AACEPlayerController::BeginWorldTransition(const TCHAR* Reason)
 	bEnterWorldLoading = true;
 	bWorldRevealActive = false;
 	bGameplayUiAssetsReady = false;
+	GameplayUiPrefetchIds.Reset();
+	GameplayUiPrefetchIndex = GameplayUiResolvedCount = GameplayUiLayoutTextureCount = 0;
+	bGameplayUiRequiredReady = true;
+	bDestinationStreamingStarted = false;
+	PortalFirstVisibleFrame = MAX_uint64;
 	EnterWorldLoadElapsed = 0.f;
 	TunnelVisibleElapsed = 0.f;
 	bLoggedTransitionTimeout = false;
@@ -4680,12 +4705,9 @@ void AACEPlayerController::BeginWorldTransition(const TCHAR* Reason)
 		{
 			Dat->SetInPortalSpace(true);
 			Dat->SetLightweightStreaming(true);
-			Dat->SetWorldStreamingAllowed(true);
-			if (Dat->IsDatReady())
-			{
-				Dat->PrefetchPortalSpaceSetup(0x02000306, WorldScale);
-			}
-			else
+			// Submit a tracked portal frame before installing destination meshes.
+			Dat->SetWorldStreamingAllowed(false);
+			if (!Dat->IsDatReady())
 			{
 				Dat->BeginBackgroundLoad();
 			}
@@ -4697,11 +4719,9 @@ void AACEPlayerController::BeginWorldTransition(const TCHAR* Reason)
 	{
 		if (UACETerrainPresenterComponent* Terrain = GM->FindComponentByClass<UACETerrainPresenterComponent>())
 		{
-			Terrain->ResetStreamingForTransition();
 			// Retail CellManager keeps prefetching destination landblocks while the
 			// portal viewport is showing. LoadRadius=0 made cell-collision wait 45s.
 			Terrain->RestoreProceduralStreamingAfterLogin(5, 6);
-			Terrain->KickLandblockLoginBurst();
 		}
 	}
 
@@ -4723,7 +4743,6 @@ void AACEPlayerController::BeginWorldTransition(const TCHAR* Reason)
 		LoadingScreenActor->WorldScale = WorldScale;
 		LoadingScreenActor->SetActorTickEnabled(true);
 		LoadingScreenActor->BeginTunnel();
-		LoadingScreenActor->TryBuildMesh();
 		if (!IsVRActive() && LoadingScreenActor->Camera)
 		{
 			SetViewTarget(LoadingScreenActor);
@@ -4906,26 +4925,12 @@ bool AACEPlayerController::IsWorldTransitionReady(FString* OutBlockingGate, bool
 		return false;
 	};
 	if (bAwaitingRecoveryDestination) return Block(TEXT("lifestone-recall"));
+	if (!Client || Client->GetSessionState() != EACESessionState::InWorld)
+		return Block(TEXT("server-entry"));
 
-	// Prefer textured tunnel. If the Setup never textures (DAT stall), allow the readiness
-	// clock / force-reveal path after a short wait so the player is not trapped forever.
+	// Prefer the textured tunnel, but permit destination loading if its art fails.
 	const bool bTunnelMeshReady = LoadingScreenActor && LoadingScreenActor->bMeshReady;
 	const bool bTunnelMeshTimedOut = EnterWorldLoadElapsed >= FMath::Min(WorldTransitionMaxSeconds, 4.f);
-	if (bTunnelMeshTimedOut)
-	{
-		if (UGameInstance* GI = GetGameInstance())
-		{
-			if (UACEDatSubsystem* Dat = GI->GetSubsystem<UACEDatSubsystem>())
-			{
-				if (Dat->IsLightweightStreaming())
-				{
-					Dat->SetLightweightStreaming(false);
-					Dat->SetWorldStreamingAllowed(true);
-					UE_LOG(LogTemp, Log, TEXT("ACE: portal tunnel timeout — full world streaming"));
-				}
-			}
-		}
-	}
 	if (!bTunnelMeshReady && !bTunnelMeshTimedOut)
 	{
 		return Block(TEXT("portal-tunnel-mesh"));
@@ -4970,7 +4975,7 @@ bool AACEPlayerController::IsWorldTransitionReady(FString* OutBlockingGate, bool
 				FVector Placement;
 				if (!FindWorldEntryPlacement(Placement)) return Block(TEXT("spawn-placement"));
 				const bool bIndoor = (static_cast<uint32>(AreaCenter.CellId) & 0xFFFFu) >= 0x0100u;
-				if (bIndoor)
+				if (bIndoor && !bIgnoreServerUnhide)
 				{
 					// Portal exit: current cell + portal/VisibleCells neighborhood only.
 					// Waiting on IsEnvCellSyncComplete loads every EnvCell in the 1-ring LB
@@ -4980,9 +4985,9 @@ bool AACEPlayerController::IsWorldTransitionReady(FString* OutBlockingGate, bool
 						return Block(TEXT("envcell-neighborhood"));
 					}
 				}
-				else
+				if (!bIgnoreServerUnhide && Terrain->NeedsExteriorTerrain(static_cast<uint32>(AreaCenter.CellId)))
 				{
-					// Cover every visible terrain ring before switching away from the tunnel.
+					// Surface interiors also need the landscape visible through their exits.
 					if (!Terrain->IsLoadRadiusTerrainReady()) return Block(TEXT("visible-terrain"));
 					if (!Terrain->IsLoadRadiusBuildingsReadyForRadius(Terrain->GetFullDetailRadius()))
 					{
@@ -5011,6 +5016,9 @@ bool AACEPlayerController::IsWorldTransitionReady(FString* OutBlockingGate, bool
 
 	FVector Placement;
 	if (!FindWorldEntryPlacement(Placement)) return Block(TEXT("spawn-placement"));
+	// Allow nearby objects to arrive while distant terrain and HUD textures warm.
+	// Physical support is mandatory; visual readiness still gates the reveal.
+	if (bIgnoreServerUnhide) return true;
 
 	// Deadlock guard: ACE only clears Hidden after LoginComplete (OnTeleportComplete).
 	// Callers that still need to wait for unhide leave bIgnoreServerUnhide=false; arrival
@@ -5039,8 +5047,8 @@ bool AACEPlayerController::IsWorldTransitionReady(FString* OutBlockingGate, bool
 			{
 				if (UACETerrainPresenterComponent* Terrain = GM->FindComponentByClass<UACETerrainPresenterComponent>())
 				{
-					const bool bIndoor = (static_cast<uint32>(AreaCenter.CellId) & 0xFFFFu) >= 0x0100u;
-					if (!bIndoor && !Terrain->IsLoadRadiusSceneryCompleteForRadius(1))
+					if (Terrain->NeedsExteriorTerrain(static_cast<uint32>(AreaCenter.CellId))
+						&& !Terrain->IsLoadRadiusSceneryCompleteForRadius(1))
 					{
 						return Block(TEXT("near-scenery"));
 					}
@@ -5095,6 +5103,12 @@ void AACEPlayerController::TickWorldTransition()
 	const float Dt = GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.016f;
 	EnterWorldLoadElapsed += Dt;
 	SetSkyWeatherEnabled(false);
+	if ((!Client || Client->GetSessionState() != EACESessionState::InWorld)
+		&& EnterWorldLoadElapsed >= WorldTransitionMaxSeconds)
+	{
+		FailWorldEntry(TEXT("The server did not finish entering the world. Please reconnect."));
+		return;
+	}
 
 	if (LoadingScreenActor)
 	{
@@ -5111,17 +5125,27 @@ void AACEPlayerController::TickWorldTransition()
 
 	// Start budgeted destination work once the tunnel is on-camera. Keeping lightweight
 	// mode until reveal would prevent the very appearances the readiness gate waits on.
-	if (LoadingScreenActor && LoadingScreenActor->bMeshReady)
+	const bool bTunnelMeshReady = LoadingScreenActor && LoadingScreenActor->bMeshReady;
+	const bool bTunnelMeshTimedOut = EnterWorldLoadElapsed >= FMath::Min(WorldTransitionMaxSeconds, 4.f);
+	if (bTunnelMeshReady || bTunnelMeshTimedOut)
 	{
-		TunnelVisibleElapsed += Dt;
+		if (PortalFirstVisibleFrame == MAX_uint64) PortalFirstVisibleFrame = GFrameCounter;
+		if (bTunnelMeshReady) TunnelVisibleElapsed += Dt;
+		// Submit a tracked portal frame before the first expensive destination batch.
+		if (GFrameCounter <= PortalFirstVisibleFrame) return;
+		if (!Client || Client->GetSessionState() != EACESessionState::InWorld)
+		{
+			return;
+		}
 		if (UGameInstance* GI = GetGameInstance())
 		{
 			if (UACEDatSubsystem* Dat = GI->GetSubsystem<UACEDatSubsystem>())
 			{
-				if (Dat->IsLightweightStreaming())
+				if (!bDestinationStreamingStarted)
 				{
 					// Destination scenery / weenie meshes cook under the tunnel so reveal
 					// isn't a pop-in. Keep the camera on the portal until those gates pass.
+					bDestinationStreamingStarted = true;
 					Dat->SetLightweightStreaming(false);
 					Dat->SetWorldStreamingAllowed(true);
 					if (AGameModeBase* GM = GetWorld() ? GetWorld()->GetAuthGameMode() : nullptr)
@@ -5134,10 +5158,12 @@ void AACEPlayerController::TickWorldTransition()
 						if (UACETerrainPresenterComponent* Terrain =
 							GM->FindComponentByClass<UACETerrainPresenterComponent>())
 						{
+							Terrain->ResetStreamingForTransition();
+							Terrain->RestoreProceduralStreamingAfterLogin(5, 6);
 							Terrain->KickLandblockLoginBurst();
 						}
 					}
-					UE_LOG(LogTemp, Log, TEXT("ACE: portal tunnel ready — full world streaming under camera"));
+					UE_LOG(LogTemp, Log, TEXT("ACE: portal destination streaming started (tunnel ready=%d)"), bTunnelMeshReady);
 				}
 			}
 		}
@@ -5150,7 +5176,7 @@ void AACEPlayerController::TickWorldTransition()
 				{
 					const FVector SpawnLoc = Pose.ToUnrealLocation(WorldScale);
 					ACEWcTerrainRuntime::ShowWcLandscapesAfterLogin(World);
-					ACEWcTerrainRuntime::RequestTerrainAroundBlocking(
+						ACEWcTerrainRuntime::RequestTerrainAround(
 						World, SpawnLoc, /*RingTiles*/ 4);
 				}
 			}
@@ -5160,18 +5186,15 @@ void AACEPlayerController::TickWorldTransition()
 	{
 		if (UACEDatSubsystem* Dat = GI->GetSubsystem<UACEDatSubsystem>())
 		{
-			if (Dat->IsDatReady())
-			{
-				Dat->PrefetchPortalSpaceSetup(0x02000306, WorldScale);
-			}
-			else
+			if (!Dat->IsDatReady())
 			{
 				Dat->BeginBackgroundLoad();
 			}
 		}
 	}
 
-	if (PendingSelfAppearanceGuid != 0 && LoadingScreenActor && LoadingScreenActor->bMeshReady)
+	if (!Client || Client->GetSessionState() != EACESessionState::InWorld) return;
+	if (PendingSelfAppearanceGuid != 0 && bDestinationStreamingStarted)
 	{
 		ApplyPendingSelfAppearance();
 	}
@@ -5562,6 +5585,9 @@ void AACEPlayerController::FinishWorldTransition()
 
 void AACEPlayerController::ApplyPendingSelfAppearance()
 {
+	// The PlayerCreate timer can run before a tracked portal frame is submitted.
+	// Leave appearance work queued for TickWorldTransition in that case.
+	if (bEnterWorldLoading && !bDestinationStreamingStarted) return;
 	if (!bApplyLocalAppearance || !Client || PendingSelfAppearanceGuid == 0)
 	{
 		return;
@@ -6061,12 +6087,26 @@ void AACEPlayerController::HandleCharacterList(const TArray<FACECharacterInfo>& 
 void AACEPlayerController::HandleSessionStateChanged(EACESessionState NewState)
 {
 	if (NewState == EACESessionState::Connecting) WorldEntryFailureReason.Reset();
+	if (NewState == EACESessionState::EnteringWorld && bUseEnterWorldLoadScreen)
+		bPendingEnterWorldTransition = true; // Outside the Play button's Slate callback.
 	if (NewState == EACESessionState::Disconnected || NewState == EACESessionState::Failed
 		|| NewState == EACESessionState::CharacterSelect
 		|| NewState == EACESessionState::AwaitCharacterList)
 	{
+		bPendingEnterWorldTransition = false;
+		bDestinationStreamingStarted = false;
+		if (bEnterWorldLoading || bWorldRevealActive)
+		{
+			bEnterWorldLoading = bWorldRevealActive = false;
+			if (LoadingScreenActor) { LoadingScreenActor->Destroy(); LoadingScreenActor = nullptr; }
+			ResetIgnoreMoveInput();
+			ResetIgnoreLookInput();
+			if (GetPawn()) SetViewTarget(GetPawn());
+		}
 		PendingSelfAppearanceGuid = 0;
 		PortalWorldRevealElapsed = -1.f;
+		if (GetGameInstance())
+			if (auto* Dat = GetGameInstance()->GetSubsystem<UACEDatSubsystem>()) Dat->SetInPortalSpace(false);
 		if (PlayerCameraManager) PlayerCameraManager->UnlockFOV();
 		if (APawn* P = GetPawn())
 		{
