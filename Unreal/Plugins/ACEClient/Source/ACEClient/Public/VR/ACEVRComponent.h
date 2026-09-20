@@ -221,6 +221,7 @@ private:
 	void JumpDown();
 	void JumpUp();
 	void FireSpell();
+	bool IsPointedBuffRecipient(const AACEWorldEntityActor* Target) const;
 	void GetSpellAim(FVector& Origin, FVector& Direction);
 	void FireCrossbow();
 	void FireThrownMissile();

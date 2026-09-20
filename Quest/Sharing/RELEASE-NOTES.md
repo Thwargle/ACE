@@ -1,9 +1,10 @@
-# AC:VR release 55
+# AC:VR release 56
 
-Native Quest: `2026.09.20.quest.55`, Android version code 55, installer revision 6.
-Windows desktop / PC VR: `2026.09.20.64`.
+Native Quest: `2026.09.20.quest.56`, Android version code 56, installer revision 6.
+Windows desktop / PC VR: `2026.09.20.65`.
 
-This is a fresh build of the v54 fixes with updated package versions.
+This update makes buffing another player a single trigger action in native Quest
+and PC VR.
 
 ## Install or update
 
@@ -18,6 +19,17 @@ the old runtime folder when necessary. See README.txt for setup and troubleshoot
 
 ## Included changes
 
+- With an "Other" buff selected in magic stance, close menus, aim at a visible
+  player, and pull the action trigger. That click selects the player and casts
+  the buff, even if a different object was previously selected.
+- The aiming highlight previews the buff recipient without changing selection
+  until the trigger is pressed. Both left- and right-handed controls work.
+- Spell classification uses retail spell data. Self spells, fellowship spells,
+  projectiles, and explicitly selected debuffs retain their targeting rules.
+  Open menus and world geometry still block pointing at a recipient.
+
+## Changes retained from earlier releases
+
 - Expanded dungeon corner recovery for overlapping room meshes and beveled
   stair/wall contacts, shared by desktop, PC VR, and native Quest.
 - Addressed the confirmed Android low-memory kill when loading Shoushi. Terrain
@@ -28,8 +40,6 @@ the old runtime folder when necessary. See README.txt for setup and troubleshoot
 - Hold X for about a second to open VR options on Quest controllers, including
   Quest 2 through Steam Link when the runtime consumes Menu. Tapping X continues
   to toggle inventory; the normal Menu binding remains available.
-
-## Changes retained from earlier releases
 
 - Fixed movement getting permanently stuck at beveled wall and stair corners,
   reproduced against the academy dungeon's actual collision geometry.
@@ -88,8 +98,16 @@ DAT files. Each recipient supplies their own data and Android platform-tools.
 
 ## Validation and remaining checks
 
-The refreshed v55 Windows package passed material loading and landscape texture
-fidelity checks. The gameplay fixes retain the v54 regression results below.
+The Other-buff regression checks passed in the editor: retail Strength Other,
+Heal Other, and Armor Other; both dominant hands; selecting and casting from
+an empty or different selection; preview/cast agreement; menu and wall blocking;
+and unchanged self, debuff, and projectile selection. The VR protocol suite also
+passed. Windows and Android ARM64 builds compiled successfully. The packaged
+Windows executable also passed VR rig/menu input, VR protocol, material loading,
+and landscape texture fidelity (four passed, zero failed).
+
+Earlier v55 Windows packaging passed material loading and landscape texture
+fidelity checks. The retained gameplay fixes have the v54 results below.
 
 For v54, the expanded academy test passed 2,417 blocked approach/retreat cases
 using both desktop and tracked VR movement, at 60 FPS and 15 FPS simulation

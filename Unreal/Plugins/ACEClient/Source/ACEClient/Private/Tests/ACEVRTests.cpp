@@ -1393,6 +1393,102 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			auto& CombatSession = *VR->Client->Session;
 			CombatSession.SocketC2S = Sockets->CreateSocket(NAME_DGram, TEXT("VR combat sender"), false);
 			CombatSession.ServerC2SAddr = CombatAddress;
+			{
+				TGuardValue<bool> InventoryClosed(VR->bInventoryOpen, false);
+				TGuardValue<bool> SettingsClosed(VR->bSettingsOpen, false);
+				TGuardValue<bool> Handedness(VR->Settings->bLeftHanded, false);
+				TGuardValue<int32> Spell(VR->SelectedSpell, 1);
+				const auto PreviousSelection = VR->Client->GetSelectedObject();
+				const auto KnownSpells = CombatSession.KnownSpells;
+				const auto Profiles = CombatSession.VRSpellProfiles;
+				CombatSession.KnownSpells.Append({1, 2, 3, 5, 23, 27});
+				for (int32 Id : {1, 2, 3, 5, 23}) CombatSession.VRSpellProfiles.Add(Id, FVector::ZeroVector);
+				FACEWorldObject Recipient; Recipient.Guid = 71001; Recipient.Name = TEXT("Buff recipient");
+				Recipient.ItemType = ACEItemType::Creature; Recipient.bIsPlayer = true;
+				Recipient.bHasPosition = true; Recipient.Position.CellId = 1;
+				CombatSession.WorldObjects.Add(Recipient.Guid, Recipient);
+				auto* Player = World->SpawnActor<AACEWorldEntityActor>(); Player->InitializeFromObject(Recipient, 100, false);
+				Player->ConfigureWorldCollision(true);
+				auto* Body = Player->FindComponentByClass<UCapsuleComponent>();
+				Body->SetCapsuleSize(30, 80);
+				FACEWorldObject Other = Recipient; Other.Guid = 71002;
+				CombatSession.WorldObjects.Add(Other.Guid, Other);
+				auto PointAtPlayer = [&]()
+				{
+					// Restore tracked poses and aim forward below eye height. A hand
+					// above the head points through its head-facing wrist panel.
+					PollHands();
+					VR->ResetHandContacts();
+					const FVector Hand = VR->Head->GetComponentLocation() + FVector(2000, 0, -60);
+					VR->WeaponGrip()->SetWorldLocationAndRotation(Hand, FRotator::ZeroRotator);
+					VR->WeaponAim()->SetWorldLocationAndRotation(Hand, FRotator::ZeroRotator);
+					FVector Origin, Direction; VR->GetSpellAim(Origin, Direction);
+					Player->SetActorLocation(Origin + Direction * 500 - FVector(0, 0, 80));
+					Body->SetWorldLocation(Origin + Direction * 500);
+					VR->UpdatePanels();
+					TestFalse(TEXT("Buff gesture points into the world, clear of wrist UI"), VR->IsPointerNearPanel(VR->Settings->bLeftHanded));
+				};
+				auto ClickSpell = [&](int32 ExpectedTarget, int32 ExpectedCount = 1)
+				{
+					CombatSession.CachedC2SPackets.Reset(); VR->LastCast = -100;
+					VR->Trigger(VR->Settings->bLeftHanded, true); VR->Trigger(VR->Settings->bLeftHanded, false);
+					int32 Casts = 0;
+					for (const auto& Packet : CombatSession.CachedC2SPackets)
+					{
+						FACEBinaryReader Wire(Packet.Value.Payload); Wire.Skip(16);
+						if (Wire.ReadUInt32() != ACEOpcode::GameAction) continue; Wire.ReadUInt32();
+						if (Wire.ReadUInt32() != 0xF7D0u) continue;
+						Wire.ReadUInt32(); if (Wire.ReadUInt32() != 1u) continue;
+						Wire.Skip(12); Wire.ReadUInt32();
+						TestEqual(TEXT("Trigger sends the selected spell"), Wire.ReadUInt32(), uint32(VR->SelectedSpell));
+						TestEqual(TEXT("Trigger sends the expected buff recipient"), Wire.ReadUInt32(), uint32(ExpectedTarget));
+						++Casts;
+					}
+					TestEqual(TEXT("One trigger click sends exactly one cast unless blocked"), Casts, ExpectedCount);
+				};
+				for (bool LeftHanded : {false, true})
+				{
+					VR->Settings->bLeftHanded = LeftHanded; PointAtPlayer();
+					for (int32 Buff : {1, 5, 23}) // Strength Other, Heal Other, Armor Other from retail DAT.
+					{
+						VR->SelectSpell(Buff); VR->Client->SelectObject(Other.Guid);
+						TestTrue(TEXT("Retail Other buff recognizes a live player recipient"), VR->IsPointedBuffRecipient(Player));
+						VR->UpdateCombat(.016f);
+						TestEqual(TEXT("Other buff preview highlights the pointed player over an old selection"), VR->PredictedCombatTarget.Get(), Player);
+						TestEqual(TEXT("Aiming does not change selection before the click"), VR->Client->GetSelectedObject().Guid, Other.Guid);
+						ClickSpell(Recipient.Guid);
+						TestEqual(TEXT("Trigger selects the player it buffs"), VR->Client->GetSelectedObject().Guid, Recipient.Guid);
+					}
+				}
+				VR->Client->SelectObject(0); ClickSpell(Recipient.Guid);
+				TestEqual(TEXT("Buff trigger also selects a player from no selection"), VR->Client->GetSelectedObject().Guid, Recipient.Guid);
+				for (int32 UnchangedSpell : {2, 3, 27}) // Self buff, harmful Other, projectile.
+				{
+					VR->SelectSpell(UnchangedSpell); VR->Client->SelectObject(Other.Guid);
+					TestFalse(TEXT("Other spell kinds retain their targeting rules"), VR->IsPointedBuffRecipient(Player));
+					ClickSpell(Other.Guid);
+					TestEqual(TEXT("Self, debuff and projectile clicks do not replace selection"), VR->Client->GetSelectedObject().Guid, Other.Guid);
+				}
+				VR->SelectSpell(1); Player->bIsPlayer = false;
+				ClickSpell(Other.Guid); Player->bIsPlayer = true;
+				VR->bInventoryOpen = true; VR->UpdatePanels(); ClickSpell(Other.Guid, 0);
+				TestEqual(TEXT("Open menus cannot select a buff target behind them"), VR->Client->GetSelectedObject().Guid, Other.Guid);
+				VR->bInventoryOpen = false; VR->UpdatePanels();
+				auto* Blocker = World->SpawnActor<AActor>();
+				auto* Wall = NewObject<UBoxComponent>(Blocker); Blocker->SetRootComponent(Wall);
+				Wall->SetBoxExtent(FVector(20, 100, 100)); Wall->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+				Wall->SetCollisionResponseToAllChannels(ECR_Ignore); Wall->SetCollisionResponseToChannel(ECC_Camera, ECR_Block);
+				Wall->RegisterComponent(); Blocker->SetActorLocation(Body->GetComponentLocation() - FVector(200, 0, 0));
+				VR->Client->SelectObject(0); VR->UpdateCombat(.016f);
+				TestNull(TEXT("A player behind a wall is not highlighted for a buff"), VR->PredictedCombatTarget.Get());
+				ClickSpell(0);
+				TestFalse(TEXT("Trigger cannot select a buff recipient through a wall"), VR->Client->GetSelectedObject().bValid);
+				Blocker->Destroy(); Player->Destroy();
+				CombatSession.WorldObjects.Remove(Recipient.Guid); CombatSession.WorldObjects.Remove(Other.Guid);
+				CombatSession.KnownSpells = KnownSpells; CombatSession.VRSpellProfiles = Profiles;
+				VR->Client->SelectObject(PreviousSelection.Guid); VR->LastCast = -100;
+				PollHands(); VR->ResetHandContacts();
+			}
 			auto* App = NewObject<UACECharacterAppearanceComponent>(Pawn); Pawn->AddInstanceComponent(App); App->RegisterComponent();
 			App->bAlignMeshToCapsuleBottom = true;
 			FACEWorldObject Self; Self.SetupId = 0x02000001; Self.bIsPlayer = true;

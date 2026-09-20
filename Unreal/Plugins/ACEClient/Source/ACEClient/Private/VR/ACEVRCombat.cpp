@@ -131,6 +131,19 @@ void UACEVRComponent::ToggleCombat()
 	SetCombat(ACECombatStance::ResolveEquippedMode(Client->GetEquippedItems()));
 }
 
+bool UACEVRComponent::IsPointedBuffRecipient(const AACEWorldEntityActor* Target) const
+{
+	if (!Target || !Target->bIsPlayer || Target->IsCorpse() || Target->bReceivedDeathMotion) return false;
+	auto* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
+	auto* Dat = GI ? GI->GetSubsystem<UACEDatSubsystem>() : nullptr;
+	uint32 Flags = 0, TargetType = 0;
+	// Use the retail spell metadata, not the localized "Other" name. Self,
+	// fellowship, and projectile spells retain their existing targeting rules.
+	return Dat && Dat->TryGetSpellTargeting(SelectedSpell, Flags, TargetType)
+		&& (Flags & 0x4u) && !(Flags & (0x8u | 0x100u | 0x2000u))
+		&& (TargetType & ACEItemType::Creature);
+}
+
 void UACEVRComponent::FireSpell()
 {
 	if (IsInputBlocked()) { SetCastFeedback(TEXT("Close the menu with X before casting.")); return; }
@@ -146,11 +159,16 @@ void UACEVRComponent::FireSpell()
 	GetSpellAim(Origin, Direction);
 	auto* Target = Cast<AACEWorldEntityActor>(ACEVisibleObjectPick::Trace(*GetWorld(), Origin,
 		Origin + Direction * 10000.f, Cast<APawn>(GetOwner()), nullptr, false));
+	// A deliberate trigger click on a visible player selects that recipient and
+	// casts an Other buff in one action, even after another object was selected.
+	const bool bPointedBuff = IsPointedBuffRecipient(Target);
+	if (bPointedBuff && Client->GetSelectedObject().Guid != Target->GetACEGuid())
+		Client->SelectObject(Target->GetACEGuid());
 	const auto Selected = Client->GetSelectedObject();
-	// Targeted debuffs/buffs use the player's explicit selection. A wand ray
-	// crossing a sign, corpse or held mesh must not silently replace that target.
+	// Otherwise retain explicit selection: crossing a sign, corpse or held mesh
+	// must not silently replace a targeted debuff or an inventory-item buff.
 	// Free-aim projectiles still use Origin/Direction, independently of selection.
-	const int32 TargetGuid = Selected.bValid ? Selected.Guid : Target ? Target->GetACEGuid() : 0;
+	const int32 TargetGuid = bPointedBuff ? Target->GetACEGuid() : Selected.bValid ? Selected.Guid : Target ? Target->GetACEGuid() : 0;
 	if (auto Session = Client->GetSession(); Session && Session->SendVRCombat(1, PC->GetEffectiveCellId(), Weapon.Guid,
 		SelectedSpell, TargetGuid, ToAceOffset(Origin),
 		FACEPosition::AceVectorToUnreal(Direction), 1.f, 0.f))
@@ -357,16 +375,17 @@ void UACEVRComponent::UpdateCombat(float Dt)
 				if (Speed > 0) UpdateMissileTrajectory(Origin,Direction,1.f,Speed,Gravity);
 				else
 				{
-					// Targeted buffs/debuffs use the same explicit-selection priority
-					// as FireSpell. Self spells must not imply an enemy will be hit.
+					// Preview the same recipient FireSpell will use, without changing
+					// selection until the trigger is pressed.
 					uint32 Flags=0, TargetType=0;
 					auto* Dat=GetWorld()->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
 					const bool Self=Dat && Dat->TryGetSpellTargeting(SelectedSpell,Flags,TargetType) && (Flags & 0x8u);
 					if (!Self)
 					{
-						auto* Target=Client->GetSelectedObject().bValid ? SelectedWorldTarget.Get()
-							: Cast<AACEWorldEntityActor>(ACEVisibleObjectPick::Trace(*GetWorld(),Origin,
-								Origin+Direction*10000.f,Cast<APawn>(GetOwner()),nullptr,false));
+						auto* Pointed=Cast<AACEWorldEntityActor>(ACEVisibleObjectPick::Trace(*GetWorld(),Origin,
+							Origin+Direction*10000.f,Cast<APawn>(GetOwner()),nullptr,false));
+						auto* Target=IsPointedBuffRecipient(Pointed) ? Pointed
+							: Client->GetSelectedObject().bValid ? SelectedWorldTarget.Get() : Pointed;
 						if (Target && Target->IsStandingCreatureOrPlayer() && !Target->bReceivedDeathMotion)
 							PredictedCombatTarget=Target;
 					}
