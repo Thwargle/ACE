@@ -23,7 +23,8 @@ void UACEVRComponent::BindInput()
 	I->BindAxis(TEXT("VRMoveY"), this, &UACEVRComponent::MoveY);
 	I->BindAxis(TEXT("VRTurnX"), this, &UACEVRComponent::TurnX);
 	I->BindAxis(TEXT("VRScrollY"), this, &UACEVRComponent::ScrollY);
-	I->BindAction(TEXT("VRInventory"), IE_Pressed, this, &UACEVRComponent::ToggleInventory);
+	I->BindAction(TEXT("VRInventory"), IE_Pressed, this, &UACEVRComponent::InventoryPressed);
+	I->BindAction(TEXT("VRInventory"), IE_Released, this, &UACEVRComponent::InventoryReleased);
 	I->BindAction(TEXT("VRCombat"), IE_Pressed, this, &UACEVRComponent::ToggleCombat);
 	I->BindAction(TEXT("VRSettings"), IE_Pressed, this, &UACEVRComponent::ToggleSettings);
 	I->BindAction(TEXT("VRSpellWheel"), IE_Pressed, this, &UACEVRComponent::ToggleSpellWheel);
@@ -40,6 +41,33 @@ void UACEVRComponent::BindInput()
 	I->BindAction(TEXT("VRJump"), IE_Pressed, this, &UACEVRComponent::JumpDown);
 	I->BindAction(TEXT("VRJump"), IE_Released, this, &UACEVRComponent::JumpUp);
 	bInputBound = true;
+}
+
+void UACEVRComponent::InventoryPressed()
+{
+	if (!bActive || !bTracking || !PC || PC->bEnterWorldLoading || PC->bWorldRevealActive) return;
+	// Preserve immediate tap-to-inventory. Steam Link can reserve Menu for its
+	// dashboard; holding X supplies an app-owned path to options on every runtime.
+	ToggleInventory();
+	bInventoryButtonHeld = true;
+	InventoryHoldSeconds = 0.f;
+}
+
+void UACEVRComponent::InventoryReleased()
+{
+	bInventoryButtonHeld = false;
+	InventoryHoldSeconds = 0.f;
+}
+
+void UACEVRComponent::UpdateInventoryHold(float Dt)
+{
+	if (!bActive || !bTracking || !PC || PC->bEnterWorldLoading || PC->bWorldRevealActive)
+	{ InventoryReleased(); return; }
+	if (!bInventoryButtonHeld) return;
+	InventoryHoldSeconds += FMath::Max(0.f, Dt);
+	if (InventoryHoldSeconds < .65f) return;
+	InventoryReleased(); // Fire once; release cannot also toggle the menu.
+	if (!bSettingsOpen) ToggleSettings();
 }
 
 void UACEVRComponent::Trigger(bool bLeft, bool bPressed)
@@ -108,7 +136,9 @@ void UACEVRComponent::Trigger(bool bLeft, bool bPressed)
 	if (bTextKeyboardOpen && Pointer->GetHoveredWidgetComponent() != KeyboardPanel)
 	{
 		DismissTextEntry(); UpdatePanels();
-		if (!UsesPlatformKeyboard()) return;
+		// Lobby controls stay visible beside the keyboard. One trigger click on
+		// Finish or navigation should both dismiss editing and operate the control.
+		if (!UsesPlatformKeyboard() && Client && Client->GetSessionState() == EACESessionState::InWorld) return;
 	}
 	if (Pointer->IsOverHitTestVisibleWidget())
 	{
@@ -256,6 +286,12 @@ void UACEVRComponent::CancelGestures()
 	CloseSpellWheel();
 	EndVitalsDrag();
 	if (PC && PC->DatGameplayBinder) PC->DatGameplayBinder->CancelPointerGestures();
+	if (PC && PC->DatCanvasWidget)
+	{
+		// Cancel before synthesizing releases: tracking loss must not click the
+		// hovered creator button or leave a slider held by the missing hand.
+		PC->DatCanvasWidget->CancelPointerGestures();
+	}
 	if (LeftPointer && bLeftPointerPressed) LeftPointer->ReleasePointerKey(EKeys::LeftMouseButton);
 	if (RightPointer && bRightPointerPressed) RightPointer->ReleasePointerKey(EKeys::LeftMouseButton);
 	bLeftPointerPressed = bRightPointerPressed = false;

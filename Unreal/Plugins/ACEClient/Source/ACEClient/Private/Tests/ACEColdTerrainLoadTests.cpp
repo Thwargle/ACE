@@ -3,6 +3,36 @@
 #include "Dat/ACELandblockMeshBuilder.h"
 #include "Async/ParallelFor.h"
 #include "HAL/PlatformMemory.h"
+#include "Dat/ACEStreamingBudget.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEShoushiTerrainBudgetTest, "ACE.RetailParity.ShoushiTerrainBudget",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FACEShoushiTerrainBudgetTest::RunTest(const FString&)
+{
+    FACEDatDatabase Portal, Cell;
+    if (!Portal.Open(TEXT("C:/Turbine/Asheron's Call/client_portal.dat"))
+        || !Cell.Open(TEXT("C:/Turbine/Asheron's Call/client_cell_1.dat"))) return false;
+    // Geometry-only builder measures all palette combinations without allocating
+    // gigabytes of textures just to count them. This is the actual crash arrival.
+    FACELandblockMeshBuilder Builder(&Portal,&Cell,nullptr);
+    TestEqual(TEXT("Desktop retains the full retail range"),ACEStreamingBudget::TerrainRadius(5,false),5);
+    TestEqual(TEXT("Native load and unload ranges share the memory cap"),ACEStreamingBudget::TerrainRadius(6,true),3);
+    for (int32 R : {1,2,3,4,5})
+    {
+        TSet<uint32> Codes;
+        for (int32 X=-R;X<=R;++X) for (int32 Y=-R;Y<=R;++Y)
+        {
+            FACEBuiltLandblockMesh Mesh;
+            TestTrue(TEXT("Shoushi terrain exists"),Builder.BuildLandblock((uint32(0xDA+X)<<24)|(uint32(0x55+Y)<<16),100,Mesh));
+            for (const auto& Section : Mesh.Sections) Codes.Add(Section.PCode);
+        }
+        AddInfo(FString::Printf(TEXT("Shoushi radius %d: %d unique blends, %.1f MiB BGRA8+mips, %.1f MiB CPU base pixels"),
+            R,Codes.Num(),Codes.Num()*16.0/3,Codes.Num()*4.0));
+        if (R==ACEStreamingBudget::TerrainRadius(5,true))
+            TestTrue(TEXT("Native Shoushi terrain keeps GPU and shared CPU pixels below 2.5 GiB"),Codes.Num()*(16.0/3+4.0)<2560);
+    }
+    return !HasAnyErrors();
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEColdTerrainLoadTest, "ACE.RetailParity.ColdTerrainLoad",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)

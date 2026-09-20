@@ -126,6 +126,7 @@ public:
 	 * which causes distant aliasing / shimmer on landblock and setup meshes).
 	 * MaxMipLevels=0 keeps the full chain; particle callers can match retail's cap/filter.
 	 */
+	static void BuildOpaqueMip(const TArray<FColor>& Pixels, int32 Width, int32 Height, TArray<FColor>& Out);
 	static UTexture2D* CreateTransientRgbaWithMips(
 		int32 Width, int32 Height, const TArray<FColor>& Pixels, bool bUsesAlpha,
 		TextureAddress AddressX = TA_Wrap, TextureAddress AddressY = TA_Wrap,

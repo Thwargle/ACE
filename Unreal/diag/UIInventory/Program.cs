@@ -8,6 +8,23 @@ using ACE.Entity.Enum;
 Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
 RetailLayoutResolver.RunTests();
 if (args.Contains("--self-test")) return;
+if (args.Length > 2 && args[0] == "--cell-block-probe")
+{
+    DatManager.Initialize(args[1], keepOpen: true, loadCell: true);
+    foreach (var area in DatManager.PortalDat.CharGen.StarterAreas)
+        Console.WriteLine($"START {area.Name} {string.Join(';', area.Locations.Select(p=>$"{p.ObjCellID:X8} {p.Frame.Origin}"))}");
+    var block = Convert.ToUInt32(args[2].Replace("0x", ""), 16) & 0xffff0000u;
+    foreach (var id in DatManager.CellDat.AllFiles.Keys.Where(id => (id & 0xffff0000u) == block && (id & 0xffff) >= 0x100 && (id & 0xffff) < 0xfffe).Order())
+    {
+        var cell = DatManager.CellDat.ReadFromDat<EnvCell>(id);
+        var shape = DatManager.PortalDat.ReadFromDat<ACE.DatLoader.FileTypes.Environment>(cell.EnvironmentId).Cells[cell.CellStructure];
+        Console.WriteLine($"CELL {id:X8} env={cell.EnvironmentId:X8} shape={cell.CellStructure} origin={cell.Position.Origin} rotation={cell.Position.Orientation} portals={string.Join(',',cell.CellPortals.Select(p=>p.OtherCellId.ToString("X4")))}");
+        if (args.Contains("--vertices"))
+            foreach (var p in shape.PhysicsPolygons)
+                Console.WriteLine($" FACE {p.Key} {string.Join(';',p.Value.VertexIds.Select(v=>shape.VertexArray.Vertices[(ushort)v].Origin))}");
+    }
+    return;
+}
 if (args.Length > 3 && args[0] == "--texture-probe")
 {
     DatManager.Initialize(args[1], keepOpen: true, loadCell: false);

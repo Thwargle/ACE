@@ -140,6 +140,11 @@ namespace
 	}
 }
 
+void FACEDatTextureResolver::BuildOpaqueMip(const TArray<FColor>& Pixels, int32 Width, int32 Height, TArray<FColor>& Out)
+{
+	BoxFilterMip(Pixels,Width,Height,Out,FMath::Max(1,Width/2),FMath::Max(1,Height/2));
+}
+
 UTexture2D* FACEDatTextureResolver::CreateTransientRgbaWithMips(
 	int32 Width, int32 Height, const TArray<FColor>& Pixels, bool bUsesAlpha,
 	TextureAddress AddressX, TextureAddress AddressY, bool bPremultiplyAlpha,

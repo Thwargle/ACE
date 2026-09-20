@@ -30,6 +30,7 @@ class ACECLIENT_API UACEVRComponent : public UActorComponent
 	friend class FACEVRInteriorTest;
 	friend class FACERunSpeedParityTest;
 	friend class FACEVRWallContactTest;
+	friend class FACEAcademyCornerTest;
 	friend class FACEVRStairCeilingTest;
 	friend class AACEPlayerController;
 public:
@@ -50,6 +51,9 @@ public:
 	void CompensateRoomScale(const FVector& ActualDelta);
 	void ResetTrackingOrigin();
 	void ToggleInventory();
+	void InventoryPressed();
+	void InventoryReleased();
+	void UpdateInventoryHold(float Dt);
 	bool TryDropInventoryItem(int32 Item, int32 SplitAmount = 0);
 	void ToggleSettings();
 	void ToggleSpellWheel();
@@ -322,6 +326,8 @@ private:
 	uint64 WeaponMeshRevision = 0;
 	bool bActive = false, bTracking = false, bInputBound = false, bTurnReady = true;
 	bool bInventoryOpen = false, bSettingsOpen = false, bDrawing = false;
+	bool bInventoryButtonHeld = false;
+	float InventoryHoldSeconds = 0.f;
 	bool bLeftGripHeld = false, bRightGripHeld = false;
 	bool bLeftPointerPressed = false, bRightPointerPressed = false;
 	bool bSelectPointerPressed = false;
@@ -331,7 +337,7 @@ private:
 	bool bKeyboardOpen = false;
 	bool bTextKeyboardOpen = false;
 	TWeakObjectPtr<UWidget> FocusedTextEntry;
-	TSharedPtr<class IVirtualKeyboardEntry> PlatformTextEntry;
+	TSharedPtr<class FACEVRPlatformTextEntry> PlatformTextEntry;
 	FTransform TextKeyboardTransform;
 	bool bWasLoading = false;
 	bool bPortalViewActive = false;

@@ -752,8 +752,15 @@ int32 UACEUICanvasWidget::NativePaint(const FPaintArgs& Args, const FGeometry& G
 void UACEUICanvasWidget::NativeOnMouseCaptureLost(const FCaptureLostEvent& Event)
 {
 	Super::NativeOnMouseCaptureLost(Event);
+	CancelPointerGestures();
+}
+
+void UACEUICanvasWidget::CancelPointerGestures()
+{
 	ResetPointerOwnership(); bVRPointerDown = false;
 	if (GameplayBinder) GameplayBinder->CancelPointerGestures();
+	if (CharGenBinder) CharGenBinder->MouseUp();
+	if (Manager) Manager->CancelPointerCapture();
 }
 
 FReply UACEUICanvasWidget::NativeOnMouseMove(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
@@ -1009,7 +1016,8 @@ FReply UACEUICanvasWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, c
 		GameplayBinder->HandleEscape();
 		return FReply::Handled();
 	}
-	if (GameplayBinder && InKeyEvent.GetKey() == EKeys::Enter && !InKeyEvent.IsRepeat()
+	if (GameplayBinder && (InKeyEvent.GetKey() == EKeys::Enter || InKeyEvent.GetKey() == EKeys::Slash)
+		&& !InKeyEvent.IsRepeat() && !InKeyEvent.IsAltDown() && !InKeyEvent.IsControlDown()
 		&& !GameplayBinder->IsChatEntryFocused() && !bEditingText && !ACEInputBindings::IsEditing())
 	{
 		GameplayBinder->FocusChatEntry();
@@ -1021,7 +1029,9 @@ FReply UACEUICanvasWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, c
 FReply UACEUICanvasWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
 	if(CharGenBinder && CharGenBinder->KeyDown(InKeyEvent)) return FReply::Handled();
-	if (GameplayBinder && InKeyEvent.GetKey() == EKeys::Enter)
+	if (GameplayBinder && (InKeyEvent.GetKey() == EKeys::Enter || InKeyEvent.GetKey() == EKeys::Slash)
+		&& !InKeyEvent.IsRepeat() && !InKeyEvent.IsAltDown() && !InKeyEvent.IsControlDown()
+		&& !ACEInputBindings::IsEditing())
 	{
 		// When the entry already has focus, EditableTextBox OnTextCommitted sends the line.
 		if (GameplayBinder->IsChatEntryFocused())

@@ -15,6 +15,7 @@
 #include "Dat/ACEDatFileTypes.h"
 #include "Dat/ACEEnvCellMeshBuilder.h"
 #include "Dat/ACECellTransit.h"
+#include "Dat/ACEStreamingBudget.h"
 #include "Dat/ACEOutdoorPortalPlan.h"
 #include "Dat/ACELandblockMeshBuilder.h"
 #include "Templates/Function.h"
@@ -481,8 +482,8 @@ UACETerrainPresenterComponent::UACETerrainPresenterComponent()
 	LandblockClass = AACELandblockActor::StaticClass();
 	TerrainChunkClass = AACETerrainChunkActor::StaticClass();
 	EnvCellClass = AACEEnvCellActor::StaticClass();
-	LoadRadius = 5;   // Retail LScape mid_radius default → 11×11 terrain.
-	UnloadRadius = 6;
+	LoadRadius = ACEStreamingBudget::TerrainRadius(5);
+	UnloadRadius = ACEStreamingBudget::TerrainRadius(6);
 	FullDetailRadius = 1; // get_block_orient Chebyshev ≤ 1 → side_cell_count 8.
 	StagedLoadRadius = 0;
 	StagedExpandAccum = 0.f;
@@ -1042,8 +1043,8 @@ void UACETerrainPresenterComponent::RestoreProceduralStreamingAfterLogin(int32 I
 		return;
 	}
 	bWcBakedTerrainMode = false;
-	LoadRadius = FMath::Max(0, InLoadRadius);
-	UnloadRadius = FMath::Max(LoadRadius, InUnloadRadius);
+	LoadRadius = ACEStreamingBudget::TerrainRadius(InLoadRadius);
+	UnloadRadius = FMath::Max(LoadRadius, ACEStreamingBudget::TerrainRadius(InUnloadRadius));
 	if (StagedLoadRadius > LoadRadius)
 	{
 		StagedLoadRadius = LoadRadius;

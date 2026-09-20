@@ -24,6 +24,12 @@ void UACEVRComponent::FocusTextEntry(UWidget* Entry)
 {
 	if (!bActive || !Entry || !RightPointer || !Head) return;
 	if (UsesPlatformKeyboard() && PlatformTextEntry && FocusedTextEntry == Entry && bTextKeyboardOpen) return;
+	if (auto* Canvas = Cast<UACEUICanvasWidget>(Entry))
+	{
+		if (!Canvas->GetCharGenBinder() || !Canvas->GetCharGenBinder()->CanEditName()) return;
+		Canvas->GetCharGenBinder()->FocusNameEntry();
+	}
+	if (PlatformTextEntry) PlatformTextEntry->Cancel();
 	const bool Opening = !bTextKeyboardOpen;
 	FocusedTextEntry = Entry;
 	// The VR pointer owns focus, and our session owns the native keyboard. Letting
@@ -33,7 +39,7 @@ void UACEVRComponent::FocusTextEntry(UWidget* Entry)
 	Slate.SetUserFocus(User, Entry->TakeWidget(), EFocusCause::SetDirectly);
 	if (UsesPlatformKeyboard())
 	{
-		if (Cast<UEditableTextBox>(Entry) || Cast<UACERetailTextEntry>(Entry))
+		if (Cast<UEditableTextBox>(Entry) || Cast<UACERetailTextEntry>(Entry) || Cast<UACEUICanvasWidget>(Entry))
 		{
 			auto TextSession = MakeShared<FACEVRPlatformTextEntry>(Entry, [WeakThis = TWeakObjectPtr<UACEVRComponent>(this)]
 			{ if (WeakThis.IsValid()) WeakThis->DismissTextEntry(); });
@@ -60,6 +66,8 @@ void UACEVRComponent::UpdateTextEntryFocus()
 	// A virtual window may restore its last text focus when its title bar,
 	// close button or background is clicked. Focus alone is not typing intent.
 	if (bTextKeyboardOpen && (!FocusedTextEntry.IsValid() || !FocusedTextEntry->IsVisible())) DismissTextEntry();
+	if (auto* Canvas = Cast<UACEUICanvasWidget>(FocusedTextEntry.Get()); bTextKeyboardOpen && Canvas)
+		if (!Canvas->GetCharGenBinder() || !Canvas->GetCharGenBinder()->CanEditName()) DismissTextEntry();
 	if (bTextKeyboardOpen && UsesPlatformKeyboard() && !PlatformTextEntry && FocusedTextEntry.IsValid())
 	{
 		const auto Widget = FocusedTextEntry->GetCachedWidget();
@@ -79,6 +87,9 @@ UWidget* UACEVRComponent::TextEntryUnderPointer(UWidgetInteractionComponent* Poi
 	FVector2D Point = Pointer->Get2DHitLocation();
 	if (Panel == ChatPanel) Point = ChatRetail->ToCanvas(Point);
 	const auto HitPath = RetailPanel->GetHitWidgetPath(Point, false);
+	if (auto* Canvas = Cast<UACEUICanvasWidget>(SurfaceWidget); Canvas && Canvas->GetCharGenBinder()
+		&& Canvas->GetCharGenBinder()->IsNameEntryAt(Canvas->ViewportToLayout(Point)))
+		return Canvas;
 	TArray<UWidget*> Widgets;
 	SurfaceWidget->WidgetTree->GetAllWidgets(Widgets);
 	for (auto* Widget : Widgets)
@@ -94,6 +105,9 @@ void UACEVRComponent::DismissTextEntry()
 {
 	if (PC && PC->DatGameplayBinder) PC->DatGameplayBinder->CancelPendingChatRefocus();
 	if (!bTextKeyboardOpen && !FocusedTextEntry.IsValid()) return;
+	// Hiding Android's keyboard can deliver a final callback after focus has
+	// moved. Invalidate this session before asking the platform to close it.
+	if (PlatformTextEntry) PlatformTextEntry->Cancel();
 	// Clear only our virtual user, without disturbing captured item drags or
 	// the physical viewport's input routing. Clearing focus never submits chat.
 	if (RightPointer && FSlateApplication::IsInitialized())
@@ -114,5 +128,7 @@ FString UACEVRComponent::GetTextInputPreview() const
 		return Entry->GetIsPassword() ? TEXT("Password entry / X closes keyboard") : Entry->GetText().ToString().Right(80) + TEXT("  |  X closes keyboard");
 	if (const auto* Entry = Cast<UACERetailTextEntry>(FocusedTextEntry.Get()))
 		return Entry->GetText().ToString().Right(80) + TEXT("  |  X closes keyboard");
+	if (const auto* Canvas = Cast<UACEUICanvasWidget>(FocusedTextEntry.Get()); Canvas && Canvas->GetCharGenBinder())
+		return Canvas->GetCharGenBinder()->Model.Selection.Name + TEXT("  |  Enter creates character / X closes keyboard");
 	return TEXT("Click a text field with a trigger, then select keys");
 }

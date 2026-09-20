@@ -1573,7 +1573,7 @@ inline int32 ACEPlacementFromParentLocation(int32 ParentLocation)
 	case 3: return 6; // Shield
 	case 4: return 4; // Belt
 	case 5: return 5; // Quiver
-	case 8: return 7; // LeftWeapon
+	case 8: return 2; // LeftWeapon: ACE sends RightHandNonCombat, not placement 7.
 	case 9: return 8; // LeftUnarmed
 	default: return 0;
 	}

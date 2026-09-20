@@ -14,6 +14,12 @@
 #include "Sockets.h"
 #include "SocketSubsystem.h"
 #include "IPAddress.h"
+#include "UI/ACERetailTextBlock.h"
+#include "UI/ACEUIResourceResolver.h"
+#include "ACEDatSubsystem.h"
+#include "HAL/PlatformApplicationMisc.h"
+#include "Misc/ScopeExit.h"
+#include "Dat/ACEDatTextLayout.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEChatParityTest, "ACE.RetailParity.ChatInputAndCommands",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -36,10 +42,17 @@ bool FACEChatParityTest::RunTest(const FString&)
     auto* Binder = NewObject<UACEUIGameplayBinder>(); Binder->Client = Client;
     auto* Main = NewObject<UACEChatEntry>(); Main->InitializeChat(Binder);
     auto* Other = NewObject<UACEChatEntry>(); Other->InitializeChat(Binder);
+    auto* Dat=NewObject<UACEDatSubsystem>(GI);
+    if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    auto* Resources=NewObject<UACEUIResourceResolver>(); Resources->Initialize(Dat);
+    auto* Output=NewObject<UACERetailTextBlock>(); Output->SetSelectable(true);
+    Output->SetText(FText::FromString(TEXT("Copy this chat message")));
+    Output->SetRetailElement(Resources,nullptr,FVector2D(1,1),200,false);
     Binder->ChatEntry = Main; Binder->FloatyChatEntries.SetNum(4); Binder->FloatyChatEntries[0] = Other;
     auto Window = SNew(SWindow).Title(FText::FromString(TEXT("Chat input regression"))).ClientSize(FVector2D(500,140))
         [SNew(SVerticalBox) + SVerticalBox::Slot().AutoHeight()[Main->TakeWidget()]
-            + SVerticalBox::Slot().AutoHeight()[Other->TakeWidget()]];
+            + SVerticalBox::Slot().AutoHeight()[Other->TakeWidget()]
+            + SVerticalBox::Slot().AutoHeight()[Output->TakeWidget()]];
     auto& Slate = FSlateApplication::Get(); Slate.AddWindow(Window, false);
     const auto OldFocus = Slate.GetUserFocusedWidget(0);
     auto Focus = [&](UACEChatEntry* Entry, uint32 User = 0) { Slate.SetUserFocus(User, Entry->TakeWidget()); };
@@ -50,6 +63,49 @@ bool FACEChatParityTest::RunTest(const FString&)
     };
     auto Type = [&](const FString& Text)
     { for (TCHAR C : Text) Slate.ProcessKeyCharEvent(FCharacterEvent(C,FModifierKeysState(),0,false)); };
+    {
+        FString PreviousClipboard; FPlatformApplicationMisc::ClipboardPaste(PreviousClipboard);
+        ON_SCOPE_EXIT { FPlatformApplicationMisc::ClipboardCopy(*PreviousClipboard); };
+        auto Ctrl=[&](FKey K)
+        {
+            const FModifierKeysState Mod(false,false,true,false,false,false,false,false,false);
+            Slate.ProcessKeyDownEvent(FKeyEvent(K,Mod,0,false,0,0));
+            Slate.ProcessKeyUpEvent(FKeyEvent(K,Mod,0,false,0,0));
+        };
+        auto ReadClipboard=[](FString& Value)
+        {
+            // Clipboard listeners can briefly own the Windows clipboard just
+            // after SetClipboardData. Model the delay between real key presses.
+            for (int32 Try=0; Try<20; ++Try)
+            {
+                FPlatformProcess::Sleep(.01f);
+                FPlatformApplicationMisc::ClipboardPaste(Value);
+                if (!Value.IsEmpty()) break;
+            }
+        };
+        Slate.SetUserFocus(0,Output->TakeWidget()); Ctrl(EKeys::A); Ctrl(EKeys::C);
+        FString Copied; ReadClipboard(Copied);
+        TestEqual(TEXT("Read-only retail chat output can be selected and copied"),Copied,Output->GetText().ToString());
+        if (const auto* GlyphFont=Output->GetBitmapFont())
+        {
+            auto TextWidget=Output->TakeWidget();
+            const auto Geometry=FGeometry::MakeRoot(FVector2D(200,60),FSlateLayoutTransform());
+            TextWidget->OnMouseButtonDown(Geometry,FPointerEvent(0,FVector2D(0,1),FVector2D(0,1),
+                {EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
+            float Width=0;
+            for (TCHAR C:FString(TEXT("Copy"))) Width+=ACEDatText::Advance(*GlyphFont,C);
+            TextWidget->OnMouseButtonDown(Geometry,FPointerEvent(0,FVector2D(Width,1),FVector2D(Width,1),
+                {EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState(true,false,false,false,false,false,false,false,false)));
+            Ctrl(EKeys::C); ReadClipboard(Copied);
+            TestEqual(TEXT("Mouse selection follows native glyph advances"),Copied,FString(TEXT("Copy")));
+        }
+        Main->SetChatText(TEXT("")); Focus(Main); Ctrl(EKeys::V);
+        TestEqual(TEXT("Copied chat pastes into the editable entry"),Main->GetText().ToString(),Copied);
+        Ctrl(EKeys::A); Ctrl(EKeys::C); Main->SetChatText(TEXT(""));
+        Ctrl(EKeys::V);
+        TestEqual(TEXT("The input field supports copy as well as paste"),Main->GetText().ToString(),Copied);
+        Main->SetChatText(TEXT(""));
+    }
     auto Submit = [&](const FString& Text, int32 W = 0)
     { Binder->TrySendChatFromEntry(&Text,W); };
     auto LastAction = [&]()

@@ -21,6 +21,7 @@ UACEUIResourceResolver* UACEDatSubsystem::GetUiResources()
 #include "Dat/ACESceneryTileCache.h"
 #include "Dat/ACEPCodeTileCache.h"
 #include "Dat/ACELandSurfaceAtlas.h"
+#include "Dat/ACELandTextureMipProvider.h"
 #include "ProceduralMeshComponent.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/Material.h"
@@ -3676,7 +3677,8 @@ UMaterialInterface* UACEDatSubsystem::GetUniformInteriorMaterial(UMaterialInterf
 	return Material;
 }
 
-UMaterialInterface* UACEDatSubsystem::GetOrCreateLandMaterial(uint32 PCode, const TArray<FColor>& Pixels, int32 Width, int32 Height)
+UMaterialInterface* UACEDatSubsystem::GetOrCreateLandMaterial(uint32 PCode, const TArray<FColor>& Pixels, int32 Width, int32 Height,
+	FACETerrainBlendCache::FBlendPtr SharedBlend)
 {
 	if (Width <= 0 || Height <= 0 || Pixels.Num() < Width * Height)
 	{
@@ -3701,10 +3703,13 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateLandMaterial(uint32 PCode, cons
 		// TexMerge already uses the retail landscape resolution (1024 in the DAT).
 		// The mobile object-texture cap must not halve the blended roads/terrain.
 		// Upload the baked pixels directly as BGRA8, retaining the full mip chain.
-		Tex = FACEDatTextureResolver::CreateTransientRgbaWithMips(
-			Width, Height, Pixels, /*bUsesAlpha*/ false, TA_Clamp, TA_Clamp,
-			/*bPremultiplyAlpha*/ false, /*bDilateRgbIntoTransparent*/ false,
-			/*MaxMipLevels*/ 0, TF_Trilinear, /*bApplyWorldSizeLimit*/ false);
+		if (!SharedBlend)
+		{
+			auto Copy=MakeShared<FACETerrainBlend,ESPMode::ThreadSafe>();
+			Copy->Width=Width; Copy->Height=Height; Copy->Pixels.Append(Pixels.GetData(),Width*Height);
+			SharedBlend=Copy;
+		}
+		Tex = UACELandTextureMipProvider::CreateTexture(this,MoveTemp(SharedBlend));
 		if (!Tex)
 		{
 			return nullptr;
@@ -6095,7 +6100,7 @@ bool UACEDatSubsystem::ApplyLandblockToProceduralMesh(UProceduralMeshComponent* 
 		}
 		else if (Sec.HasBakedTexture())
 		{
-			if (UMaterialInterface* LandMat = GetOrCreateLandMaterial(Sec.PCode, Sec.GetBakedPixels(), Sec.BakeWidth, Sec.BakeHeight))
+			if (UMaterialInterface* LandMat = GetOrCreateLandMaterial(Sec.PCode, Sec.GetBakedPixels(), Sec.BakeWidth, Sec.BakeHeight, Sec.SharedBake))
 			{
 				Mat = LandMat;
 			}
@@ -6354,7 +6359,7 @@ bool UACEDatSubsystem::ApplyLandblockChunkToProceduralMesh(UProceduralMeshCompon
 			UMaterialInterface* Mat = GetVertexColorMaterial();
 			if (Sec.HasBakedTexture())
 			{
-				if (UMaterialInterface* LandMat = GetOrCreateLandMaterial(Sec.PCode, Sec.GetBakedPixels(), Sec.BakeWidth, Sec.BakeHeight))
+				if (UMaterialInterface* LandMat = GetOrCreateLandMaterial(Sec.PCode, Sec.GetBakedPixels(), Sec.BakeWidth, Sec.BakeHeight, Sec.SharedBake))
 				{
 					Mat = LandMat;
 				}

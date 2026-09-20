@@ -130,6 +130,8 @@ public:
 	/** Clear Jumpup/Falling / other held one-shots and resume locomotion. */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
 	void ClearActionMotion();
+	/** Respawn keeps the pawn; release only its death pose, leaving other actions alone. */
+	void ClearDeathMotion();
 
 	/** Seed held door pose without replaying (ObjectCreate already On/Off). */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")

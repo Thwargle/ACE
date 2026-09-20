@@ -4,6 +4,7 @@
 #include "ACEWorldEntityActor.h"
 #include "ACEWorldPresenterComponent.h"
 #include "ACEClientSubsystem.h"
+#include "ACEPlayerController.h"
 #include "ACESession.h"
 #include "ACECharacterAppearanceComponent.h"
 #include "Dat/ACEEnvCellMeshBuilder.h"
@@ -28,10 +29,53 @@ bool FACEMovementReviewTest::RunTest(const FString&)
  Context.OwningGameInstance=GI;Context.SetCurrentWorld(World);GI->Init();
  auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
  if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+ // Academy Cestus (weenie 12753) has authored hand frames 1/2, but no frame 7.
+ // Verify the rendered pose, not just an enum mapping: a missing frame silently
+ // falls back to the setup's unrotated default and leaves the offhand hanging.
+ for(int32 Hand:{1,8})for(int32 SuppliedPlacement:{0,1,2,101})
+ {
+  if((Hand==1 && SuppliedPlacement==2) || (Hand==8 && SuppliedPlacement==1))continue;
+  FACEWorldObject Weapon;Weapon.SetupId=0x0200061D;Weapon.ParentGuid=12345;
+  Weapon.ParentLocation=Hand;Weapon.PlacementId=SuppliedPlacement;Weapon.ItemType=ACEItemType::MeleeWeapon;
+  auto* Owner=World->SpawnActor<AActor>();auto* Held=NewObject<UACECharacterAppearanceComponent>(Owner);
+  Owner->AddInstanceComponent(Held);Held->RegisterComponent();
+  TestTrue(TEXT("Academy Cestus builds as held equipment"),Held->ApplyWorldObject(Weapon,100,false));
+  const auto* Expected=Dat->GetOrBuildSetupMesh(Weapon.SetupId,100,Hand==1?1:2);
+  FTransform Actual;
+  TestTrue(TEXT("Academy Cestus uses the correct authored hand frame"),Expected && Held->GetPartCurrentTransform(0,Actual)
+   && Actual.Equals(Expected->Parts[0].BindTransform,.001f));
+  Owner->Destroy();
+ }
  FACEWorldObject Obj;Obj.Guid=12345;Obj.SetupId=0x02000001;Obj.MotionTableId=0x09000001;
  Obj.ItemType=ACEItemType::Creature;Obj.Name=TEXT("Missile animation fixture");
  auto* Actor=World->SpawnActor<AACEWorldEntityActor>();Actor->InitializeFromObject(Obj,100,true);
  auto* App=Actor->Appearance.Get();
+ // The local pawn survives the death teleport; it is not recreated like a corpse.
+ {
+  auto* Client=GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
+  auto* PC=World->SpawnActor<AACEPlayerController>();PC->Client=Client;
+  auto* Pawn=World->SpawnActor<APawn>();auto* Local=NewObject<UACECharacterAppearanceComponent>(Pawn);
+  Pawn->AddInstanceComponent(Local);Local->RegisterComponent();PC->Possess(Pawn);
+  FACEWorldObject Player=Obj;Player.bIsPlayer=true;Player.bIsSelf=true;
+  Local->ApplyWorldObject(Player,100,false);
+  Session->PlayerGuid=Player.Guid;Session->State=EACESessionState::InWorld;
+  PC->bUsePortalTransitionOnTeleport=false;
+  for(float Elapsed:{.1f,10.f})
+  {
+   Local->PlayActionMotion(ACEMotion::Dead,1,ACEMotion::StanceNonCombat);
+   Local->TickComponent(Elapsed,LEVELTICK_All,nullptr);
+   PC->HandlePlayerTeleportStarted();
+   TestTrue(TEXT("Respawn releases both playing and held death poses"),Local->AnimMode==UACECharacterAppearanceComponent::EACEAnimMode::Locomotion);
+   TestEqual(TEXT("Respawn discards the death command"),Local->ActionCommand,0u);
+  }
+  // Ordinary stance/motion echoes during death must not resurrect the local body.
+  Local->PlayActionMotion(ACEMotion::Dead,1,ACEMotion::StanceNonCombat);
+  FACEObjectMotionState Ready;Ready.CurrentStyle=ACEMotion::StanceNonCombat;Ready.ForwardCommand=ACEMotion::Ready;
+  PC->HandleMotionUpdate(Player.Guid,Ready);
+  TestEqual(TEXT("A late idle echo cannot stand the player up before respawn"),Local->ActionCommand,ACEMotion::Dead);
+  Session->State=EACESessionState::Disconnected;Session->PlayerGuid=0;
+  PC->UnPossess();Pawn->Destroy();PC->Destroy();
+ }
  for (uint32 Style : {0x8000003Fu,0x80000041u,0x80000047u})
  {
   for (uint32 Action : {0x40000016u,0x4000001Eu,0x40000020u,0x100000D0u})

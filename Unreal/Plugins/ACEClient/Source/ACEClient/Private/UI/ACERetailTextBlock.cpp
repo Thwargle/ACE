@@ -9,6 +9,10 @@
 #include "Engine/Texture2D.h"
 #include "Rendering/DrawElements.h"
 #include "Widgets/Text/STextBlock.h"
+#include "HAL/PlatformApplicationMisc.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
+#include "Styling/CoreStyle.h"
 
 class SACERetailTextBlock : public STextBlock
 {
@@ -19,6 +23,82 @@ public:
 		Owner = InOwner;
 		STextBlock::Construct(STextBlock::FArguments());
 		SetClipping(EWidgetClipping::ClipToBounds);
+	}
+
+	virtual bool SupportsKeyboardFocus() const override { return Owner.IsValid() && Owner->IsSelectable(); }
+	virtual FCursorReply OnCursorQuery(const FGeometry& G, const FPointerEvent& E) const override
+	{
+		return SupportsKeyboardFocus() ? FCursorReply::Cursor(EMouseCursor::TextEditBeam) : STextBlock::OnCursorQuery(G,E);
+	}
+	virtual FReply OnMouseButtonDown(const FGeometry& G, const FPointerEvent& E) override
+	{
+		if (!SupportsKeyboardFocus()) return FReply::Unhandled();
+		if (E.GetEffectingButton()==EKeys::LeftMouseButton)
+		{
+			const int32 At=CharacterAt(G,E.GetScreenSpacePosition());
+			if (!E.IsShiftDown()) Anchor=At;
+			Caret=At; PressPosition=E.GetScreenSpacePosition(); bDragged=E.IsShiftDown();
+			Invalidate(EInvalidateWidgetReason::Paint);
+			return FReply::Handled().SetUserFocus(SharedThis(this)).CaptureMouse(SharedThis(this));
+		}
+		if (E.GetEffectingButton()==EKeys::RightMouseButton)
+		{
+			FMenuBuilder Menu(true,nullptr);
+			auto AddCopy=[&](const TCHAR* Caption,const FString& Text)
+			{
+				Menu.AddMenuEntry(FText::FromString(Caption),FText::GetEmpty(),FSlateIcon(),
+					FUIAction(FExecuteAction::CreateLambda([Text]{FPlatformApplicationMisc::ClipboardCopy(*Text);})));
+			};
+			if (Anchor!=Caret) AddCopy(TEXT("Copy selection"),SelectedText());
+			AddCopy(TEXT("Copy message"),GetText().ToString());
+			if (Owner->GetCopyAllText) AddCopy(TEXT("Copy chat window"),Owner->GetCopyAllText());
+			FSlateApplication::Get().PushMenu(SharedThis(this),FWidgetPath(),Menu.MakeWidget(),
+				E.GetScreenSpacePosition(),FPopupTransitionEffect(FPopupTransitionEffect::ContextMenu));
+			return FReply::Handled();
+		}
+		return FReply::Unhandled();
+	}
+	virtual FReply OnMouseMove(const FGeometry& G,const FPointerEvent& E) override
+	{
+		if (!HasMouseCapture()) return FReply::Unhandled();
+		bDragged|=FVector2D::Distance(PressPosition,E.GetScreenSpacePosition())>3.f;
+		Caret=CharacterAt(G,E.GetScreenSpacePosition());
+		Invalidate(EInvalidateWidgetReason::Paint);
+		return FReply::Handled();
+	}
+	virtual FReply OnMouseButtonUp(const FGeometry&,const FPointerEvent& E) override
+	{
+		if (!HasMouseCapture() || E.GetEffectingButton()!=EKeys::LeftMouseButton) return FReply::Unhandled();
+		if (!bDragged && Owner.IsValid()) Owner->OnTextClicked.ExecuteIfBound();
+		return FReply::Handled().ReleaseMouseCapture();
+	}
+	virtual FReply OnMouseButtonDoubleClick(const FGeometry&,const FPointerEvent& E) override
+	{
+		if (!SupportsKeyboardFocus() || E.GetEffectingButton()!=EKeys::LeftMouseButton) return FReply::Unhandled();
+		Anchor=0; Caret=GetText().ToString().Len(); bDragged=true;
+		Invalidate(EInvalidateWidgetReason::Paint);
+		return FReply::Handled().SetUserFocus(SharedThis(this));
+	}
+	virtual FReply OnKeyDown(const FGeometry&,const FKeyEvent& E) override
+	{
+		if (!SupportsKeyboardFocus()) return FReply::Unhandled();
+		if (E.IsControlDown() && E.GetKey()==EKeys::A)
+		{
+			Anchor=0; Caret=GetText().ToString().Len(); Invalidate(EInvalidateWidgetReason::Paint);
+			return FReply::Handled();
+		}
+		if (E.IsControlDown() && E.GetKey()==EKeys::C)
+		{
+			FPlatformApplicationMisc::ClipboardCopy(*(Anchor==Caret ? GetText().ToString() : SelectedText()));
+			return FReply::Handled();
+		}
+		return FReply::Unhandled();
+	}
+	virtual void OnFocusLost(const FFocusEvent& E) override
+	{
+		STextBlock::OnFocusLost(E);
+		Anchor=Caret=0;
+		Invalidate(EInvalidateWidgetReason::Paint);
 	}
 
 	virtual void Tick(const FGeometry& Geometry, double Time, float DeltaTime) override
@@ -102,6 +182,27 @@ public:
 		else if (Element && Element->TextVerticalJustification == 5) Top += SpareHeight;
 		const ESlateDrawEffect Effects = (ShouldBeEnabled(bParentEnabled) ? ESlateDrawEffect::None : ESlateDrawEffect::DisabledEffect)
 			| (Scale.Equals(FVector2D(1,1)) ? ESlateDrawEffect::None : ESlateDrawEffect::NoPixelSnapping);
+		if (Label->IsSelectable() && Anchor!=Caret)
+		{
+			for (int32 L=0; L<Lines.Num(); ++L)
+			{
+				const auto& Line=Lines[L];
+				const int32 Begin=FMath::Max(Line.Begin,FMath::Min(Anchor,Caret));
+				const int32 End=FMath::Min(Line.End,FMath::Max(Anchor,Caret));
+				if (Begin>=End) continue;
+				float X=TextInsets.Left, SelectedWidth=0;
+				for (int32 I=Line.Begin; I<End; ++I)
+				{
+					const float Advance=ACEDatText::Advance(*DatFont,CachedText[I])*Scale.X;
+					if (I<Begin) X+=Advance; else SelectedWidth+=Advance;
+				}
+				FSlateDrawElement::MakeBox(Elements,Layer,Geometry.ToPaintGeometry(
+					FVector2D(SelectedWidth,DatFont->MaxCharHeight*Scale.Y),
+					FSlateLayoutTransform(FVector2D(X,Top+L*DatFont->MaxCharHeight*Scale.Y))),
+					FCoreStyle::Get().GetBrush(TEXT("WhiteBrush")),Effects,FLinearColor(.18f,.28f,.45f,.8f));
+			}
+			++Layer;
+		}
 		auto DrawPass = [&](bool bBackground, FVector2D Offset)
 		{
 			UTexture2D* Atlas = Label->GetGlyphAtlas(bBackground);
@@ -158,6 +259,34 @@ public:
 	}
 
 private:
+	FString SelectedText() const
+	{
+		return GetText().ToString().Mid(FMath::Min(Anchor,Caret),FMath::Abs(Anchor-Caret));
+	}
+	int32 CharacterAt(const FGeometry& G,FVector2D Absolute)
+	{
+		const auto* Label=Owner.Get();
+		const auto* GlyphFont=Label ? Label->GetBitmapFont() : nullptr;
+		if (!GlyphFont) return 0;
+		const auto Scale=Label->GetBitmapScale();
+		UpdateLines(*Label,*GlyphFont,G.GetLocalSize().X/Scale.X);
+		if (Lines.IsEmpty()) return 0;
+		const auto Local=G.AbsoluteToLocal(Absolute);
+		const auto Insets=GetMargin();
+		const int32 L=FMath::Clamp(FMath::FloorToInt((Local.Y-Insets.Top)/(GlyphFont->MaxCharHeight*Scale.Y)),0,Lines.Num()-1);
+		const auto& Line=Lines[L];
+		float X=Insets.Left;
+		for (int32 I=Line.Begin; I<Line.End; ++I)
+		{
+			const float Advance=ACEDatText::Advance(*GlyphFont,CachedText[I])*Scale.X;
+			if (Local.X<X+Advance*.5f) return I;
+			X+=Advance;
+		}
+		return Line.End;
+	}
+	int32 Anchor=0, Caret=0;
+	FVector2D PressPosition=FVector2D::ZeroVector;
+	bool bDragged=false;
 	void UpdateLines(const UACERetailTextBlock& Label, const FACEDatFont& DatFont, float AllocatedWidth = 0) const
 	{
 		const FString Text = GetText().ToString();

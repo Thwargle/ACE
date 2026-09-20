@@ -31,7 +31,7 @@ if release.exists():
     raise SystemExit(f'Release already exists; preserve it: {release}')
 with zipfile.ZipFile(quest_zip) as archive:
     expected = {'AC-VR-arm64.apk', 'Install-Quest.ps1', 'Install-Quest.cmd', 'Update-Quest.cmd',
-                'Repair-Quest.cmd', 'Quest-DataTransfer.ps1', 'Quest-ProfileMigration.ps1', 'README.txt', 'RELEASE-NOTES.md', 'LICENSE', 'manifest.json'}
+                'Repair-Quest.cmd', 'Quest-DataTransfer.ps1', 'Quest-ProfileMigration.ps1', 'README.txt', 'RELEASE-NOTES.md', 'LICENSE', 'manifest.json', 'START-HERE.html', 'AC-Icon.png'}
     assert set(archive.namelist()) == expected, 'Unexpected Quest bundle contents'
     assert archive.testzip() is None, 'Quest ZIP checksum failure'
     manifest = json.loads(archive.read('manifest.json').decode('utf-8-sig'))

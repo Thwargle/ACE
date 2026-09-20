@@ -6,6 +6,7 @@
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
 #include "UI/ACEUICharGenBinder.h"
+#include "VR/ACEVRPlatformTextEntry.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
 #include "UI/ACEUILayoutResolver.h"
@@ -15,6 +16,7 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Engine/TextureRenderTarget2D.h"
+#include "Components/SceneCaptureComponent2D.h"
 #include "Slate/WidgetRenderer.h"
 #include "Blueprint/WidgetTree.h"
 #include "ImageUtils.h"
@@ -146,8 +148,15 @@ bool FACERetailCharacterCreationTest::RunTest(const FString&)
     return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailCharacterCreationScreenTest,"ACE.RetailParity.CharacterCreationScreens",EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
-bool FACERetailCharacterCreationScreenTest::RunTest(const FString&)
+IMPLEMENT_COMPLEX_AUTOMATION_TEST(FACERetailCharacterCreationScreenTest,"ACE.RetailParity.CharacterCreationScreens",EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+void FACERetailCharacterCreationScreenTest::GetTests(TArray<FString>& Names,TArray<FString>& Commands) const
+{
+    Names.Add(TEXT("Preview"));Commands.Add(TEXT("Preview"));
+    // The keyboard fixture creates a desktop Slate window; the render-only
+    // fixture also runs under -game -FeatureLevelES31 for the Quest renderer.
+    if(GIsEditor){Names.Add(TEXT("Controls"));Commands.Add(TEXT("Controls"));}
+}
+bool FACERetailCharacterCreationScreenTest::RunTest(const FString& Parameters)
 {
     UWorld::InitializationValues Values;Values.AllowAudioPlayback(false).RequiresHitProxies(false).CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false);
     auto World=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
@@ -179,7 +188,59 @@ bool FACERetailCharacterCreationScreenTest::RunTest(const FString&)
     TestFalse(TEXT("Face examination stops at authored rest frame"),Appearance->IsComponentTickEnabled());
     Binder->PreviewAnimationId=0;
     Binder->bPreviewDirty=true;
-    auto Capture=[&](int Page){Binder->SetPage(Page);if(!FApp::CanEverRender())return;FWidgetRenderer Renderer(true,true);auto Target=FWidgetRenderer::CreateTargetFor(FVector2D(1600,1200),TF_Bilinear,true);for(int Pass=0;Pass<30;++Pass){Canvas->NativeTick(Canvas->GetCachedGeometry(),1.f/30);World->Tick(LEVELTICK_All,1.f/30);if(GShaderCompilingManager)GShaderCompilingManager->FinishAllCompilation();Renderer.DrawWidget(Target,Slate,FVector2D(1600,1200),1.f/30);FlushRenderingCommands();}TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(1600,1200,Pixels,PNG);FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/FString::Printf(TEXT("Automation/RetailParity/CharacterCreation%d.png"),Page)));};
+    auto Capture=[&](int Page)
+    {
+        Binder->SetPage(Page);
+        if(!FApp::CanEverRender())return;
+        FWidgetRenderer Renderer(true,true);
+        auto Target=FWidgetRenderer::CreateTargetFor(FVector2D(1600,1200),TF_Bilinear,true);
+        for(int Pass=0;Pass<30;++Pass)
+        {
+            Canvas->NativeTick(Canvas->GetCachedGeometry(),1.f/30);
+            World->Tick(LEVELTICK_All,1.f/30);
+            if(GShaderCompilingManager)GShaderCompilingManager->FinishAllCompilation();
+            Renderer.DrawWidget(Target,Slate,FVector2D(1600,1200),1.f/30);
+            FlushRenderingCommands();
+        }
+        TArray<FColor> Pixels;
+        Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
+        TArray64<uint8> PNG;
+        FImageUtils::PNGCompressImageArray(1600,1200,Pixels,PNG);
+        FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/FString::Printf(TEXT("Automation/RetailParity/CharacterCreation%d.png"),Page)));
+        if(Page==4||Page==6)
+        {
+            // Read the final Slate render target, just as the VR panel does. A
+            // correctly posed mesh is not sufficient if its capture is transparent.
+            TArray<UPrimitiveComponent*> Parts;
+            Binder->Preview->GetComponents(Parts);
+            TArray<UPrimitiveComponent*> VisibleParts;
+            for(auto* Part:Parts)if(Part->IsVisible()){VisibleParts.Add(Part);Part->SetVisibility(false);}
+            Binder->Capture->CaptureScene();
+            FlushRenderingCommands();
+            Renderer.DrawWidget(Target,Slate,FVector2D(1600,1200),0.f);
+            FlushRenderingCommands();
+            TArray<FColor> WithoutModel;
+            Target->GameThread_GetRenderTargetResource()->ReadPixels(WithoutModel);
+            int32 ModelPixels=0;
+            if(Pixels.Num()==WithoutModel.Num())for(int32 I=0;I<Pixels.Num();++I)
+            {
+                const FColor A=Pixels[I],B=WithoutModel[I];
+                if(FMath::Max3(FMath::Abs(int(A.R)-B.R),FMath::Abs(int(A.G)-B.G),FMath::Abs(int(A.B)-B.B))>24)++ModelPixels;
+            }
+            AddInfo(FString::Printf(TEXT("Page %d: %d visible model pixels in the composed UI"),Page,ModelPixels));
+            TestTrue(*FString::Printf(TEXT("Page %d shows the character in the final VR-compatible UI (%d model pixels)"),Page,ModelPixels),ModelPixels>500);
+            for(auto* Part:VisibleParts)Part->SetVisibility(true);
+            Binder->Capture->CaptureScene();
+            FlushRenderingCommands();
+        }
+    };
+    if(Parameters==TEXT("Preview"))
+    {
+        Capture(4);Capture(6);
+        Binder->Shutdown();Canvas->SetCharGenBinder(nullptr);GI->Shutdown();
+        GEngine->DestroyWorldContext(World);World->DestroyWorld(false);
+        return true;
+    }
     for(int Page=1;Page<=6;++Page)Capture(Page);
     auto NameField=Manager->FindElementByName(TEXT("NameTextBox"));
     TestEqual(TEXT("Native name prompt resolves bracket escapes"),Binder->Labels[NameField->InstanceId]->GetText().ToString(),FString(TEXT("[ Name ]")));
@@ -254,6 +315,26 @@ bool FACERetailCharacterCreationScreenTest::RunTest(const FString&)
     Client->Session->OnCharacterCreated.Broadcast(3,FACECharacterInfo());
     TestEqual(TEXT("Server name rejection opens native error dialog"),Binder->DialogAction,4);
     TestEqual(TEXT("Server rejection retains the complete name draft"),Binder->Model.Selection.Name,FString(TEXT("Reserved Name")));Binder->CloseDialog(false);
+    // Quest edits the canvas-backed name through the same session as login/chat.
+    int NativeCompleted=0;
+    Binder->SetNameFromKeyboard(TEXT("Original Name"));
+    auto NativeName=MakeShared<FACEVRPlatformTextEntry>(Canvas,[&]{++NativeCompleted;});
+    NativeName->SetTextFromVirtualKeyboard(FText::FromString(TEXT("New9 Name!")),ETextEntryType::TextEntryUpdated);
+    TestEqual(TEXT("Native keyboard updates the real name draft with retail filtering"),Binder->Model.Selection.Name,FString(TEXT("New Name")));
+    NativeName->SetTextFromVirtualKeyboard(FText::FromString(TEXT("discarded")),ETextEntryType::TextEntryCanceled);
+    TestEqual(TEXT("Native cancel restores the previous name"),Binder->Model.Selection.Name,FString(TEXT("Original Name")));
+    TestEqual(TEXT("Native cancel finishes once"),NativeCompleted,1);
+    auto ClosedName=MakeShared<FACEVRPlatformTextEntry>(Canvas,[&]{++NativeCompleted;});
+    ClosedName->Cancel();
+    ClosedName->SetTextFromVirtualKeyboard(FText::FromString(TEXT("Late Name")),ETextEntryType::TextEntryAccepted);
+    TestEqual(TEXT("Closed keyboard cannot submit or replace the name"),Binder->Model.Selection.Name,FString(TEXT("Original Name")));
+    auto HiddenName=MakeShared<FACEVRPlatformTextEntry>(Canvas,[&]{++NativeCompleted;});
+    Binder->SetPage(1);
+    HiddenName->SetTextFromVirtualKeyboard(FText::FromString(TEXT("Hidden Name")),ETextEntryType::TextEntryAccepted);
+    TestEqual(TEXT("Late native callback cannot edit a hidden name page"),Binder->Model.Selection.Name,FString(TEXT("Original Name")));
+    TestEqual(TEXT("Stale sessions do not close a later keyboard"),NativeCompleted,1);
+    Binder->SetPage(6);
+    TestFalse(TEXT("Name handler never swallows the controller trigger"),Binder->KeyDown(FKeyEvent(EKeys::Gamepad_RightTrigger,FModifierKeysState(),0,false,0,0)));
     Binder->Model.SelectHeritage(12);Binder->SetPage(1);Binder->SetPage(2);TestEqual(TEXT("Olthoi skips attributes and skills"),Binder->GetPage(),4);Binder->SetPage(5);TestEqual(TEXT("Olthoi skips towns"),Binder->GetPage(),6);
     // Finish must submit the actual edited draft, not a detached/default data model.
     auto Session=Client->Session;auto Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
@@ -281,7 +362,13 @@ bool FACERetailCharacterCreationScreenTest::RunTest(const FString&)
             FACEBinaryWriter Rejected;Rejected.WriteUInt32(3);FACEBinaryReader Reject(Rejected.GetData());Session->HandleCharacterCreated(Reject);
             TestEqual(TEXT("Wire rejection opens creation dialog"),Binder->DialogAction,4);Binder->CloseDialog(false);
             TestEqual(TEXT("Rejected Finish preserves appearance"),Binder->Model.Selection.Sex,2u);
-            Binder->Model.Selection.Name=TEXT("Retry Hero");Click(Manager->FindElementByName(TEXT("CGFinishButton")));
+            auto RetryName=MakeShared<FACEVRPlatformTextEntry>(Canvas,[&]{++NativeCompleted;});
+            RetryName->SetTextFromVirtualKeyboard(FText::FromString(TEXT("Retry Hero")),ETextEntryType::TextEntryAccepted);
+            TestTrue(TEXT("Native Done submits the corrected name to the server"),Session->IsCharacterCreationPending());
+            TestEqual(TEXT("Native Done supplies its final text before submission"),Binder->Model.Selection.Name,FString(TEXT("Retry Hero")));
+            const auto SubmittedSequence=Session->NextFragmentSequence;
+            RetryName->SetTextFromVirtualKeyboard(FText::FromString(TEXT("Duplicate")),ETextEntryType::TextEntryAccepted);
+            TestEqual(TEXT("Duplicate native Done cannot send a second creation request"),Session->NextFragmentSequence,SubmittedSequence);
             FACEBinaryWriter Accepted;Accepted.WriteUInt32(1);Accepted.WriteUInt32(0x50000001);Accepted.WriteString16L(TEXT("Retry Hero"));Accepted.WriteUInt32(0);
             FACEBinaryReader Success(Accepted.GetData());Session->HandleCharacterCreated(Success);
             TestTrue(TEXT("Accepted character returns UI to character selection"),Binder->bReturn);

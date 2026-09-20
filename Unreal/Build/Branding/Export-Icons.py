@@ -8,6 +8,12 @@ with Image.open(Path(__file__).with_name('AC-Icon.png')) as source:
     windows = root / 'Build/Windows/Application.ico'
     windows.parent.mkdir(parents=True, exist_ok=True)
     icon.save(windows, sizes=[(n, n) for n in (16, 20, 24, 32, 40, 48, 64, 128, 256)])
+    # Inno's welcome panel has a 164:314 aspect ratio. Compose the square
+    # monogram at its original aspect ratio rather than stretching it.
+    banner = Image.new('RGBA', (492, 942), (17, 27, 24, 255))
+    mark = icon.resize((380, 380), Image.Resampling.LANCZOS)
+    banner.alpha_composite(mark, (56, 240))
+    banner.convert('RGB').save(Path(__file__).with_name('Installer-Banner.png'))
     # UE's Android manifest uses @drawable/icon. Override every engine density
     # so Android never falls back to the engine logo on another screen density.
     for density, size in [('drawable', 192), ('drawable-ldpi', 36),

@@ -55,10 +55,12 @@ public:
 	void SetGameplayBinder(UACEUIGameplayBinder* InBinder);
 	void SetCharSelectBinder(UACEUICharSelectBinder* InBinder);
 	void SetCharGenBinder(UACEUICharGenBinder* InBinder) { CharGenBinder=InBinder; SetIsFocusable(InBinder != nullptr); }
+	UACEUICharGenBinder* GetCharGenBinder() const { return CharGenBinder; }
 	virtual FReply NativeOnKeyChar(const FGeometry& Geometry, const FCharacterEvent& Event) override;
 
 	UACEUIElementManager* GetManager() const { return Manager; }
 	void ResetPointerOwnership() { PressedPointer = PressedUser = INDEX_NONE; }
+	void CancelPointerGestures();
 	void SetVRPointerFeedback(FVector2D Point, bool Pressed);
 	void ClearVRPointerFeedback() { bVRPointerVisible = false; }
 	const FString& GetVRPointerLabel() const { return VRPointerLabel; }

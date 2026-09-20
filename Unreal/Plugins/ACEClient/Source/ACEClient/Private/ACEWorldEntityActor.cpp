@@ -1873,6 +1873,8 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 	// A late Ready/locomotion update cannot resurrect a slain creature. Players
 	// can revive without a replacement object, so their next state is allowed.
 	if (bReceivedDeathMotion && !bIsPlayer && !bDeath) return;
+	if (bReceivedDeathMotion && bIsPlayer && !bDeath && Appearance)
+		Appearance->ClearDeathMotion();
 	bReceivedDeathMotion = bDeath && !IsCorpse();
 	SetActorEnableCollision(bCellVisible && !bReceivedDeathMotion);
 	// A corpse is a separate object at the final death frame. Late Ready/locomotion

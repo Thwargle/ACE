@@ -1321,6 +1321,17 @@ void UACECharacterAppearanceComponent::ClearJumpMotionIfAny()
 	}
 }
 
+void UACECharacterAppearanceComponent::ClearDeathMotion()
+{
+	if (AnimMode != EACEAnimMode::ActionOneShot || ActionCommand != ACEMotion::Dead) return;
+	ClearActionMotion();
+	bHoldActionFinalAfterFinish = false;
+	PendingActionCommands.Reset();
+	PendingActionStyles.Reset();
+	PendingActionPlayRates.Reset();
+	PendingActionHolds.Reset();
+}
+
 void UACECharacterAppearanceComponent::ClearActionMotion()
 {
 	if (AnimMode != EACEAnimMode::ActionOneShot)

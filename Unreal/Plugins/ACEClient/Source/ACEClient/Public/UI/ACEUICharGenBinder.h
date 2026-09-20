@@ -29,6 +29,13 @@ public:
     bool MouseWheel(FVector2D Position,float Delta);
     bool KeyDown(const FKeyEvent& Event);
     bool KeyChar(const FCharacterEvent& Event);
+    // The retail name field is painted on the canvas, rather than an editable
+    // Slate child. Expose the same draft to the VR/native keyboard session.
+    bool CanEditName() const;
+    bool IsNameEntryAt(FVector2D Position) const;
+    void FocusNameEntry();
+    void SetNameFromKeyboard(const FString& Text);
+    void CommitNameFromKeyboard();
     void Activate(TSharedPtr<FACEUIElement> Element);
     void SetPage(int32 InPage);
     FACECharacterCreation Model;

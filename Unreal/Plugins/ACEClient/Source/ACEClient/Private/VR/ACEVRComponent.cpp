@@ -256,6 +256,7 @@ void UACEVRComponent::TickComponent(float Dt, ELevelTick TickType, FActorCompone
 		Head->SetRelativeLocationAndRotation(Position, Orientation);
 	}
 	UpdateTrackingState(Tracked);
+	UpdateInventoryHold(Dt);
 	if (Tracked && TrackingCalibrationFrames > 0 && --TrackingCalibrationFrames == 0) ResetTrackingOrigin();
 	const bool Loading = PC->bEnterWorldLoading || PC->bWorldRevealActive;
 	if (Loading != bWasLoading)
@@ -423,6 +424,7 @@ void UACEVRComponent::EndPlay(const EEndPlayReason::Type Reason)
 void UACEVRComponent::UpdateTrackingState(bool Tracked)
 {
 	if (Tracked == bTracking) return;
+	InventoryReleased();
 	CancelGestures(); bTracking = Tracked;
 	if (Tracked && Client && Client->GetSessionState() != EACESessionState::InWorld)
 	{

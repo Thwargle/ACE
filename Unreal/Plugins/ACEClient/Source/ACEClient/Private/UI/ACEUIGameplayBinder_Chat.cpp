@@ -519,7 +519,31 @@ void UACEUIGameplayBinder::AppendChatLineToLog(int32 Window, const FString& Line
 	{
 		return;
 	}
-	UTextBlock* Row = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
+	auto* Row = Canvas->WidgetTree->ConstructWidget<UACERetailTextBlock>();
+	Row->SetSelectable(true);
+	Row->SetVisibility(ESlateVisibility::Visible);
+	const TWeakObjectPtr<UScrollBox> WeakLog(Log);
+	Row->GetCopyAllText = [WeakLog]()
+	{
+		FString Text;
+		if (const auto* Chat=WeakLog.Get())
+			for (UWidget* Child:Chat->GetAllChildren())
+				if (const auto* Line=Cast<UTextBlock>(Child))
+				{
+					if (!Text.IsEmpty()) Text+=TEXT("\r\n");
+					Text+=Line->GetText().ToString();
+				}
+		return Text;
+	};
+	if (!ClickSender.IsEmpty())
+		Row->OnTextClicked.BindWeakLambda(this,[this,Window,ClickSender]()
+		{
+			if (auto* Entry=GetChatEntryWidget(Window))
+			{
+				Entry->SetText(FText::FromString(FString::Printf(TEXT("@tell %s, "),*ClickSender)));
+				FocusChatEntryWindow(Window);
+			}
+		});
 	Row->SetText(FText::FromString(Line));
 	Row->SetAutoWrapText(true);
 	Row->SetColorAndOpacity(FSlateColor(Color));
@@ -592,7 +616,7 @@ void UACEUIGameplayBinder::PlaceFloatyChatOverlays()
 		{
 			if (bOn && LogEl.IsValid())
 			{
-				Log->SetVisibility(ESlateVisibility::HitTestInvisible);
+				Log->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 				Canvas->PlaceWidgetAtElement(Log, LogEl, 100530, FMargin(2.f, 2.f, 2.f, 2.f));
 				RefreshChatRowLayout(W);
 				if (bFloatyChatStickToBottom[W-1])

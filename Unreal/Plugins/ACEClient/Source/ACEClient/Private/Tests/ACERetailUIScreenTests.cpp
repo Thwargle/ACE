@@ -1631,7 +1631,10 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
 			Gameplay->ShowPanelPage(TEXT("InventoryPanel_Field"));
 			const auto Frame=Manager->FindElementByName(TEXT("InventoryPanel_Field"));
 			Controller->bGameplayUiAssetsReady=false;
-			TestTrue(TEXT("Portal prefetch resolves existing HUD resources"),Controller->TryPrefetchGameplayHudAssets());
+			TestFalse(TEXT("Portal prefetch yields after building the texture queue"),Controller->TryPrefetchGameplayHudAssets());
+			for (int32 Tick=0; Tick<1000 && !Controller->bGameplayUiAssetsReady; ++Tick)
+				Controller->TryPrefetchGameplayHudAssets();
+			TestTrue(TEXT("Portal prefetch resolves existing HUD resources across ticks"),Controller->bGameplayUiAssetsReady);
 			TestTrue(TEXT("Portal prefetch preserves inventory frame identity and visibility"),Manager->FindElementByName(TEXT("InventoryPanel_Field"))==Frame && Frame->bVisible);
 			Controller->DatCanvasWidget=nullptr;Controller->DatGameplayBinder=nullptr;
 		}
@@ -1766,6 +1769,37 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             auto InputWindow=SNew(SVirtualWindow).Size(FVector2D(ScreenSize));
             InputWindow->SetIsFocusable(true);InputWindow->SetContent(Slate);
             FSlateApplication::Get().RegisterVirtualWindow(InputWindow);
+            {
+                TGuardValue<uint32> Options(Session.CharacterOptions1,Session.CharacterOptions1 & ~0x00000800u);
+                TGuardValue<TObjectPtr<UACEUIGameplayBinder>> ChatBinder(Controller->DatGameplayBinder,Gameplay);
+                TGuardValue<TObjectPtr<UACEUICanvasWidget>> ChatCanvas(Controller->DatCanvasWidget,Canvas);
+                auto& App=FSlateApplication::Get();
+                Gameplay->ChatEntry->SetText(FText::GetEmpty());
+                for (int32 Cycle=0; Cycle<4; ++Cycle)
+                {
+                    App.ClearKeyboardFocus();
+                    TestTrue(TEXT("Every fresh Enter press opens chat without a camera tick or key-up"),
+                        Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::Enter,IE_Pressed,1.f)));
+                    TestTrue(TEXT("Enter focuses the editable chat field"),Gameplay->IsChatEntryFocused());
+                    for (TCHAR C:FString(TEXT("focus regression")))
+                        App.ProcessKeyCharEvent(FCharacterEvent(C,FModifierKeysState(),0,false));
+                    App.ProcessKeyDownEvent(FKeyEvent(EKeys::Enter,FModifierKeysState(),0,false,0,0));
+                    TestTrue(TEXT("Enter sends and clears the current chat draft"),Gameplay->ChatEntry->GetText().IsEmpty());
+                    TestTrue(TEXT("Sending schedules restoration of gameplay keyboard focus"),Gameplay->bPendingChatRefocus);
+                    TestEqual(TEXT("Default chat mode returns to gameplay"),Gameplay->PendingChatRefocusWindow,INDEX_NONE);
+                    Gameplay->bPendingChatRefocus=false;
+                }
+                App.ClearKeyboardFocus();
+                TestTrue(TEXT("Slash opens chat from gameplay"),Controller->InputKey(
+                    FInputKeyEventArgs::CreateSimulated(EKeys::Slash,IE_Pressed,1.f)));
+                for (TCHAR C:FString(TEXT("/help")))
+                    App.ProcessKeyCharEvent(FCharacterEvent(C,FModifierKeysState(),0,false));
+                TestEqual(TEXT("Slash command contains exactly one prefix"),Gameplay->ChatEntry->GetText().ToString(),FString(TEXT("/help")));
+                Gameplay->ChatEntry->SetText(FText::GetEmpty()); App.ClearKeyboardFocus();
+                TestTrue(TEXT("Slash also opens chat from focused UI chrome"),Canvas->NativeOnPreviewKeyDown(
+                    Canvas->GetCachedGeometry(),FKeyEvent(EKeys::Slash,FModifierKeysState(),0,false,0,0)).IsEventHandled());
+                App.ClearKeyboardFocus();
+            }
             Session.CachedC2SPackets.Reset(); Entry->SetText(FText::GetEmpty());
             FSlateApplication::Get().SetKeyboardFocus(Entry->TakeWidget());
             for (TCHAR C:FString(TEXT("175"))) FSlateApplication::Get().ProcessKeyCharEvent(FCharacterEvent(C,FModifierKeysState(),0,false));

@@ -179,7 +179,7 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 		List->AddSlot().AutoHeight()[Button(Literal(TEXT("Keyboard")), [Rig]() { if (Rig.IsValid()) Rig->ToggleKeyboard(); })];
 #endif
 		List->AddSlot().AutoHeight().Padding(0, 6)[Button(Literal(TEXT("Return to game")), [Rig]() { if (Rig.IsValid()) Rig->ToggleSettings(); })];
-		List->AddSlot().AutoHeight()[Text(Literal(TEXT("X inventory / Y combat / B inspect\nMenu: VR options / Left stick click: spell wheel with wand\nRight stick click: hold to charge jump")), 18)];
+		List->AddSlot().AutoHeight()[Text(Literal(TEXT("X inventory / Hold X: VR options / Y combat / B inspect\nMenu: VR options / Left stick click: spell wheel with wand\nRight stick click: hold to charge jump")), 18)];
 	}
 	return SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 		.BorderBackgroundColor(MenuGold).Padding(2.f)

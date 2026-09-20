@@ -276,7 +276,23 @@ bool FACEVRStairCeilingTest::RunTest(const FString&)
     if(D>20 && Dat->SampleOutdoorGroundZ(At.X,At.Y,100,Ground)){Water=FVector(At.X,At.Y,Ground);Depth=D;WetBlock=Id;WetMesh=Mesh;}
    }
   }
-  TestTrue(TEXT("Retail river fixture has submerged walking support"),WetBlock!=0);
+  // User report: standing on the rendered water at DC56001F, 95.269531/147.908203/6.
+  // Retain the independently found Rithwic river and exercise this exact location too.
+  const FVector River=Water;const float RiverDepth=Depth;const uint32 RiverBlock=WetBlock;
+  for(bool Reported:{false,true})
+  {
+   Water=River;Depth=RiverDepth;WetBlock=RiverBlock;
+   if(Reported)
+   {
+    WetBlock=0xDC560000;
+    Dat->GetOrBuildLandblockMesh(WetBlock,100);
+    Water=FACEPosition::AceVectorToUnreal(FVector(220*192+95.269531,86*192+147.908203,6),100);
+    Depth=Dat->GetOutdoorWaterDepthCm(Water.X,Water.Y,100);
+    float Bed=0;TestTrue(TEXT("Reported water has DAT ground support"),Dat->SampleOutdoorGroundZ(Water.X,Water.Y,100,Bed));
+    Water.Z=Bed;
+   }
+   WetMesh=Dat->GetOrBuildLandblockMesh(WetBlock,100);
+  TestTrue(TEXT("Retail river fixture has submerged walking support"),WetBlock!=0 && Depth>20);
   if(WetMesh)
   {
    auto* Land=World->SpawnActor<AACELandblockActor>();auto* Mesh=Land->TerrainMesh.Get();
@@ -284,15 +300,16 @@ bool FACEVRStairCeilingTest::RunTest(const FString&)
    Land->SetActorLocation(FACEPosition::AceVectorToUnreal(FVector((WetBlock>>24)*192,((WetBlock>>16)&255)*192,0),100));
    Mesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);Mesh->SetCollisionResponseToAllChannels(ECR_Block);
    int32 SectionIndex=0;for(const auto& S:WetMesh->Sections)Mesh->CreateMeshSection(SectionIndex++,S.Vertices,S.Triangles,S.Normals,S.UVs,{},{},true);
-   for(float Dt:{1.f/90,1.f/20})
+   for(bool Active:{false,true})for(float Dt:{1.f/90,1.f/20})
    {
+    VR->bActive=Active;
     FACEPosition Pose;Pose.CellId=WetBlock|1;Pose.SetLocationFromUnreal(Water+FVector(0,0,Depth),100);Pose.NormalizeOutdoorLandblock();
     Session->SetLocalPosition(Pose);PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;PC->bJumpAirborne=false;PC->StepHoldSeconds=0;PC->bLocalPredicting=true;
     Pawn->SetActorLocation(Pose.ToUnrealLocation(100)+FVector(0,0,90.75));VR->MoveStick=FVector2D::ZeroVector;
     for(int32 I=0;I<FMath::CeilToInt(.5f/Dt);++I){VR->Head->SetWorldLocation(Pawn->GetActorLocation()+FVector(0,0,84.25));PC->PlayerTick(Dt);}
     const float FeetZ=Pawn->GetActorLocation().Z-90.75;
-    AddInfo(FString::Printf(TEXT("Water %08X depth %.1f feet %.1f expected %.1f"),WetBlock,Depth,FeetZ,Water.Z));
-    TestTrue(TEXT("VR steps down through rendered water to retail wading height"),FMath::Abs(FeetZ-Water.Z)<2.f);
+    AddInfo(FString::Printf(TEXT("Water vr=%d %08X depth %.1f feet %.1f expected %.1f"),Active,WetBlock,Depth,FeetZ,Water.Z));
+    TestTrue(TEXT("Desktop and VR step down through rendered water to retail wading height"),FMath::Abs(FeetZ-Water.Z)<2.f);
    }
    // Deliberately submerge the tracked head: a water surface must not act
    // like an opaque roof, while the river bed remains solid.
@@ -304,6 +321,7 @@ bool FACEVRStairCeilingTest::RunTest(const FString&)
    VR->Head->SetWorldLocation(Water-FVector(0,0,20));VR->UpdateComfort(1.f);
    TestEqual(TEXT("Submerged terrain still blocks seeing below the river bed"),VR->Fade,1.f);
    Land->Destroy();
+  }
   }
  }
  // Downhill recovery must still stop at a different obstruction.

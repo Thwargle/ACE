@@ -190,9 +190,14 @@ bool FACETerrainPortalRevealTest::RunTest(const FString&)
     return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACETerrainArrivalTest, "ACE.RetailParity.TerrainArrival",
+IMPLEMENT_COMPLEX_AUTOMATION_TEST(FACETerrainArrivalTest, "ACE.RetailParity.TerrainArrival",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
-bool FACETerrainArrivalTest::RunTest(const FString&)
+void FACETerrainArrivalTest::GetTests(TArray<FString>& Names,TArray<FString>& Commands) const
+{
+    Names.Add(TEXT("Desktop")); Commands.Add(TEXT("Desktop"));
+    Names.Add(TEXT("ShoushiQuestBudget")); Commands.Add(TEXT("Shoushi"));
+}
+bool FACETerrainArrivalTest::RunTest(const FString& Parameters)
 {
     FEntryWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
@@ -203,12 +208,14 @@ bool FACETerrainArrivalTest::RunTest(const FString&)
     // user's cache. No maintenance is run with this synthetic fingerprint.
     const uint64 Fingerprint=(uint64(GetTypeHash(FGuid::NewGuid()))<<32)|0x54455354;
     Dat->CachedDatFingerprint=Fingerprint;
+    const bool Shoushi=Parameters==TEXT("Shoushi");
+    const int32 Radius=Shoushi?3:5, CenterX=Shoushi?0xDA:0x7E, CenterY=Shoushi?0x55:0x65;
     TArray<uint32> Blocks;
-    for(int32 X=-5;X<=5;++X) for(int32 Y=-5;Y<=5;++Y)
-        Blocks.Add((uint32(0x7E + X)<<24)|(uint32(0x65 + Y)<<16));
-    Blocks.Sort([](uint32 A,uint32 B)
+    for(int32 X=-Radius;X<=Radius;++X) for(int32 Y=-Radius;Y<=Radius;++Y)
+        Blocks.Add((uint32(CenterX + X)<<24)|(uint32(CenterY + Y)<<16));
+    Blocks.Sort([CenterX,CenterY](uint32 A,uint32 B)
     {
-        auto Distance=[](uint32 V){return FMath::Square(int32(V>>24)-0x7E)+FMath::Square(int32((V>>16)&255)-0x65);};
+        auto Distance=[CenterX,CenterY](uint32 V){return FMath::Square(int32(V>>24)-CenterX)+FMath::Square(int32((V>>16)&255)-CenterY);};
         return Distance(A)<Distance(B);
     });
     TArray<AACELandblockActor*> Lands;
@@ -228,7 +235,7 @@ bool FACETerrainArrivalTest::RunTest(const FString&)
         FPlatformProcess::Sleep(.002f);
     }
     FlushRenderingCommands();
-    TestEqual(TEXT("All 121 visible blocks arrive without holes"),Lands.Num(),121);
+    TestEqual(TEXT("All visible blocks arrive without holes"),Lands.Num(),Blocks.Num());
     for(auto* Land:Lands) TestTrue(TEXT("Every arrival block has renderable terrain"),Land->IsOutdoorTerrainMeshReady());
     TSet<const FACETerrainBlend*> Unique;
     uint64 Bytes=0; int32 Sections=0;
@@ -241,6 +248,10 @@ bool FACETerrainArrivalTest::RunTest(const FString&)
     AddInfo(FString::Printf(TEXT("Cold terrain arrival including DAT indexing, disk writes, runtime mesh application and render flush: %.3fs, %d blocks, %d sections, %d shared blends, %.1f MiB blend storage"),
         FPlatformTime::Seconds()-Start,Lands.Num(),Sections,Unique.Num(),Bytes/(1024.0*1024.0)));
     TestTrue(TEXT("Neighbor sections share their blend storage"),Unique.Num()<Sections/2);
+    uint64 CpuMipBytes=0;
+    for(const auto& Pair:Dat->LandTextureCache) if(auto* Texture=Pair.Value.Get())
+        for(const auto& Mip:Texture->GetPlatformData()->Mips) CpuMipBytes+=Mip.BulkData.GetBulkDataSize();
+    TestEqual(TEXT("Loaded terrain retains no duplicate CPU mip chains"),CpuMipBytes,uint64(0));
     Dat->ClearLoadedState(); // joins any outstanding work before removing test-owned files
     for(const FString& Dir:{ACEDiskTileCache::GetLandblocksDir(),ACEDiskTileCache::GetPCodesDir()})
     {

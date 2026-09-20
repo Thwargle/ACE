@@ -4,6 +4,7 @@
 #include "UI/ACEUILayoutResolver.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "UI/ACERetailTextBlock.h"
+#include "UI/ACECaptureImage.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
@@ -54,6 +55,7 @@ bool UACEUICharGenBinder::Initialize(UACEClientSubsystem* InClient,UACEUICanvasW
 }
 void UACEUICharGenBinder::Shutdown()
 {
+    MouseUp(); bNameFocus=false;
     if(Manager)Manager->OnElementActivated.Remove(ActivatedHandle);
     if(Client&&Client->GetSession())Client->GetSession()->OnCharacterCreated.Remove(CreatedHandle);
     for(auto& P:Labels)if(P.Value)P.Value->RemoveFromParent();Labels.Reset();
@@ -65,6 +67,7 @@ void UACEUICharGenBinder::Shutdown()
     if(NameCaretImage)NameCaretImage->RemoveFromParent();NameCaretImage=nullptr;
     if(PreviewImage)PreviewImage->RemoveFromParent();PreviewImage=nullptr;
     if(Preview)Preview->Destroy();Preview=nullptr;Capture=nullptr;Target=nullptr;SkillRows.Reset();SummaryRows.Reset();
+    Canvas=nullptr;
 }
 TSharedPtr<FACEUIElement> UACEUICharGenBinder::Find(const TCHAR* Name) const{return Manager?Manager->FindElementByName(Name):nullptr;}
 TSharedPtr<FACEUIElement> UACEUICharGenBinder::Under(const TCHAR* Parent,const TCHAR* Name) const{return Manager?Manager->FindElementUnder(Parent,Name):nullptr;}
@@ -414,6 +417,9 @@ void UACEUICharGenBinder::InsertName(const FString& Text)
 }
 bool UACEUICharGenBinder::KeyDown(const FKeyEvent& E)
 {
+    // Motion-controller buttons belong to the VR input bindings, even if the
+    // canvas has keyboard focus. Only text/navigation keys belong here.
+    if(E.GetKey().IsGamepadKey())return false;
     if(Client&&Client->GetSession()&&Client->GetSession()->IsCharacterCreationPending())return true;
     if(DialogAction){if(E.GetKey()==EKeys::Escape)CloseDialog(false);else if(E.GetKey()==EKeys::Enter)CloseDialog(true);return true;}
     if(E.GetKey()==EKeys::Escape){ShowDialog(2,Model.Text(TEXT("ID_CharGen_ExitWarning")));return true;}
@@ -448,15 +454,25 @@ void UACEUICharGenBinder::RefreshPreview(float Delta)
         auto App=NewObject<UACECharacterAppearanceComponent>(Preview);App->RegisterComponent();
         // Examination materials reproduce CreatureMode's fixed vertex lighting.
         // World sun, fog and adaptive exposure do not belong in this viewport.
-        Target=NewObject<UTextureRenderTarget2D>(this);Target->InitAutoFormat(490,742);Target->ClearColor=FLinearColor::Black;Target->UpdateResourceImmediate(true);
-        Capture=NewObject<USceneCaptureComponent2D>(Preview);Capture->SetupAttachment(Root);Capture->RegisterComponent();Capture->TextureTarget=Target;Capture->CaptureSource=ESceneCaptureSource::SCS_FinalColorLDR;Capture->bCaptureEveryFrame=false;Capture->bCaptureOnMovement=false;Capture->ShowFlags.SetAtmosphere(false);Capture->ShowFlags.SetFog(false);Capture->PrimitiveRenderMode=ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
+        // Capture scene color and composite its inverse-opacity alpha explicitly,
+        // as in the inventory paperdoll. FinalColorLDR does not provide usable
+        // opacity on mobile LDR or when Slate draws into the VR panel texture.
+        Target=NewObject<UTextureRenderTarget2D>(this);
+        Target->ClearColor=FLinearColor(0,0,0,1);
+        Target->InitCustomFormat(490,742,PF_FloatRGBA,true);
+        Target->UpdateResourceImmediate(true);
+        Capture=NewObject<USceneCaptureComponent2D>(Preview);Capture->SetupAttachment(Root);Capture->RegisterComponent();Capture->TextureTarget=Target;Capture->CaptureSource=ESceneCaptureSource::SCS_SceneColorHDR;Capture->bCaptureEveryFrame=false;Capture->bCaptureOnMovement=false;Capture->ShowFlags.SetAtmosphere(false);Capture->ShowFlags.SetFog(false);Capture->PrimitiveRenderMode=ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
+        Capture->ShowFlags.SetMotionBlur(false);
+        Capture->ShowFlags.SetAntiAliasing(false);
+        Capture->ShowFlags.SetEyeAdaptation(false);
+        Capture->ShowFlags.SetBloom(false);
         Capture->PostProcessSettings.bOverride_AutoExposureMethod=true;Capture->PostProcessSettings.AutoExposureMethod=AEM_Manual;
         Capture->bAlwaysPersistRenderingState=true;
         Capture->PostProcessSettings.bOverride_AutoExposureApplyPhysicalCameraExposure=true;Capture->PostProcessSettings.AutoExposureApplyPhysicalCameraExposure=false;
         Capture->PostProcessSettings.bOverride_ToneCurveAmount=true;Capture->PostProcessSettings.ToneCurveAmount=0.f;
         Capture->PostProcessSettings.bOverride_BlueCorrection=true;Capture->PostProcessSettings.BlueCorrection=0.f;
         Capture->PostProcessSettings.bOverride_ExpandGamut=true;Capture->PostProcessSettings.ExpandGamut=0.f;
-        PreviewImage=Canvas->WidgetTree->ConstructWidget<UImage>();Canvas->GetElementLayer()->AddChild(PreviewImage);PreviewImage->SetBrushResourceObject(Target);bPreviewDirty=true;
+        PreviewImage=Canvas->WidgetTree->ConstructWidget<UACECaptureImage>();Canvas->GetElementLayer()->AddChild(PreviewImage);PreviewImage->SetBrushResourceObject(Target);bPreviewDirty=true;
     }
     auto App=Preview->FindComponentByClass<UACECharacterAppearanceComponent>();
     if(bPreviewDirty&&App)
@@ -534,6 +550,34 @@ void UACEUICharGenBinder::RefreshColors()
         auto& Texture=ColorTextures.FindOrAdd(Key);if(!Texture){FACEDatTexture Data;FACEDatDecodedSurface Surface;if(Resolver->LoadTextureForUi(Did,Data)&&Resolver->DecodeTextureForUi(Data,Surface)){for(auto& P:Surface.Pixels)if(Filled&&P.R==0&&P.G==0&&P.B==0){uint8 A=P.A;P=Color;P.A=A;}Texture=FACEDatTextureResolver::CreateTransientRgbaUi(Surface.Width,Surface.Height,Surface.Pixels);}}
         auto& Image=ColorImages.FindOrAdd(E->InstanceId);if(!Image){Image=Canvas->WidgetTree->ConstructWidget<UImage>();Canvas->GetElementLayer()->AddChild(Image);}Image->SetBrushResourceObject(Texture);Image->SetVisibility(ESlateVisibility::HitTestInvisible);Canvas->PlaceWidgetAtElement(Image,E,900);
     }
+}
+bool UACEUICharGenBinder::CanEditName() const
+{
+    return Canvas && Page==6 && !DialogAction && !bReturn
+        && !(Client && Client->GetSession() && Client->GetSession()->IsCharacterCreationPending());
+}
+bool UACEUICharGenBinder::IsNameEntryAt(FVector2D Position) const
+{
+    return CanEditName() && Contains(Find(TEXT("NameTextBox")),Position);
+}
+void UACEUICharGenBinder::FocusNameEntry()
+{
+    if(!CanEditName())return;
+    MouseUp(); bNameFocus=true;
+}
+void UACEUICharGenBinder::SetNameFromKeyboard(const FString& Text)
+{
+    if(!CanEditName())return;
+    FString Filtered;
+    for(TCHAR C:Text)
+        if(FACECharacterCreation::IsNameCharacter(C) && Filtered.Len()<32)Filtered.AppendChar(C);
+    Model.Selection.Name=MoveTemp(Filtered);
+    NameCaret=NameAnchor=Model.Selection.Name.Len();
+    bConfirmCredits=false;bDirty=true;
+}
+void UACEUICharGenBinder::CommitNameFromKeyboard()
+{
+    if(CanEditName())Submit();
 }
 
 void UACEUICharGenBinder::RefreshTooltip(float Delta)

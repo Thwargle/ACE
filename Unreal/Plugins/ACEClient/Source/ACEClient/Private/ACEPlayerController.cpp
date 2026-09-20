@@ -653,6 +653,33 @@ void AACEPlayerController::SetupInputComponent()
 	// WASD is polled in PlayerTick so no DefaultInput.ini mappings are required.
 }
 
+bool AACEPlayerController::InputKey(const FInputKeyEventArgs& Params)
+{
+	// Handle each press, independent of camera ticks and key-up events consumed
+	// by Slate after the chat entry takes focus.
+	if (Params.Event == IE_Pressed && (Params.Key == EKeys::Enter || Params.Key == EKeys::Slash)
+		&& Client && Client->GetSessionState() == EACESessionState::InWorld
+		&& !ACEInputBindings::IsEditing())
+	{
+		const auto Modifiers = FSlateApplication::Get().GetModifierKeys();
+		if (!Modifiers.IsAltDown() && !Modifiers.IsControlDown())
+		{
+			if (DatGameplayBinder && DatCanvasWidget && DatCanvasWidget->IsVisible()
+				&& !DatGameplayBinder->IsChatEntryFocused())
+			{
+				DatGameplayBinder->FocusChatEntry();
+				return true; // Slash's following character event inserts the command prefix.
+			}
+			if (GameHUDWidget && !GameHUDWidget->IsChatEntryFocused())
+			{
+				GameHUDWidget->FocusChatEntry();
+				return true;
+			}
+		}
+	}
+	return Super::InputKey(Params);
+}
+
 void AACEPlayerController::PlayerTick(float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
@@ -1843,7 +1870,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					MovementFilterCells = TransitEnvCells;
 					bMovementFilterOutdoor = bTransitHasOutdoorLand;
 				}
-				if (bVR && !bIndoorPred && bTransitHasOutdoorLand)
+				if (!bIndoorPred && bTransitHasOutdoorLand)
 					FilterWadingTerrain(*World,WaterDat,P->GetActorLocation(),Desired,WorldScale,SweepParams);
 
 				// OBJECTINFO::get_walkable_z / CTransition::step_up use the
@@ -2778,7 +2805,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						(void)bSnapHitsInterior;
 					}
 				}
-				if (bVR && !bIndoor)
+				if (!bIndoor)
 					FilterWadingTerrain(*World,GetGameInstance()->GetSubsystem<UACEDatSubsystem>(),
 						P->GetActorLocation(),Desired,WorldScale,Params);
 
@@ -3605,22 +3632,6 @@ void AACEPlayerController::UpdateOrbitCamera(float DeltaTime)
 	{
 		SyncUserCameraArmLength(Boom);
 	}
-
-	const bool bEnterDown = IsInputKeyDown(EKeys::Enter);
-	if (bEnterDown && !bEnterWasDown)
-	{
-		if (DatGameplayBinder && DatCanvasWidget
-			&& DatCanvasWidget->GetVisibility() != ESlateVisibility::Collapsed)
-		{
-			DatGameplayBinder->FocusChatEntry();
-		}
-		else if (GameHUDWidget && !GameHUDWidget->IsChatEntryFocused())
-		{
-			GameHUDWidget->FocusChatEntry();
-		}
-	}
-	bEnterWasDown = bEnterDown;
-
 
 	const bool bZeroDown = IsInputKeyDown(EKeys::NumPadZero);
 	if (bZeroDown && !bNumPadZeroWasDown)
@@ -5771,6 +5782,12 @@ void AACEPlayerController::SoftReconcilePredictedTowardServer(const FACEPosition
 
 void AACEPlayerController::HandlePlayerTeleportStarted()
 {
+	// Death respawns reuse this pawn. An ordinary Ready echo is not evidence
+	// of revival, but the server's teleport is: stop both the falling animation
+	// and its held final frame before presenting the lifestone arrival.
+	if (APawn* PlayerPawn = GetPawn())
+		if (auto* Appearance = PlayerPawn->FindComponentByClass<UACECharacterAppearanceComponent>())
+			Appearance->ClearDeathMotion();
 	// Retail: SmartBox::HandlePlayerTeleport raises waiting_for_teleport on 0xF751 and the
 	// tunnel goes up immediately — the destination UpdatePosition follows. Entering here
 	// (instead of on the TeleportSeq bump) means the old world never flashes at the new
@@ -5801,6 +5818,11 @@ void AACEPlayerController::HandlePositionUpdate(int32 ObjectGuid, const FACEPosi
 	const uint32 NewCell = static_cast<uint32>(Position.CellId);
 	const uint32 PredCell = bHavePredictedPose ? static_cast<uint32>(PredictedPose.CellId) : NewCell;
 	const bool bTeleportSeqChanged = (NewTeleportSeq != LastAppliedTeleportSeq);
+	// Some servers deliver the destination without a preceding teleport event.
+	if (bTeleportSeqChanged)
+		if (APawn* PlayerPawn = GetPawn())
+			if (auto* Appearance = PlayerPawn->FindComponentByClass<UACECharacterAppearanceComponent>())
+				Appearance->ClearDeathMotion();
 	const bool bCellChanged = (NewCell != PredCell);
 	// A delayed room/doorway cell is an ordinary movement acknowledgement.
 	// Treating it as an arrival ran the 4m placement search against adjacent
@@ -7328,5 +7350,8 @@ void AACEPlayerController::ShowCharacterCreationUI()
     if(!DatCharGenBinder->Initialize(Client,DatCanvasWidget,this))
     {DatCharGenBinder->Shutdown();DatCharGenBinder=nullptr;ShowCharacterSelectUI(Client->GetCharacters(),Client->GetSession()->GetServerName());return;}
     DatCanvasWidget->SetCharGenBinder(DatCharGenBinder);
+    // The existing canvas stays attached to the VR panel, so UpdatePanels will
+    // not perform another input-mode handoff when character creation opens.
+    if(IsVRActive()){ApplyInWorldInputMode();return;}
     FInputModeGameAndUI Mode;Mode.SetWidgetToFocus(DatCanvasWidget->TakeWidget());Mode.SetHideCursorDuringCapture(false);SetInputMode(Mode);bShowMouseCursor=true;
 }

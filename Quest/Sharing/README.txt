@@ -81,6 +81,8 @@ Use this project's VR-enabled server for its custom VR combat/pose extensions.
 
 UPDATES / TROUBLESHOOTING
 
+- Press Menu for VR options, or hold X for about a second. Tapping X still opens
+  inventory. The same hold-X shortcut works with Quest controllers in PC VR.
 - Install a newer bundle the same way. Do not uninstall first: an update keeps
   your DAT files, saved logins, and settings. Uninstalling removes app data.
   AC:VR updates your existing installation; its package ID stays stable.

@@ -29,6 +29,11 @@ public:
 	float GetNativeWidth() const { return NativeWidth; }
 	TSharedPtr<FACEUIElement> GetRetailElement() const { return RetailElement.Pin(); }
 	ETextJustify::Type GetTextJustification() const { return Justification; }
+	/** Chat-only selection; normal DAT labels remain noninteractive. */
+	void SetSelectable(bool Value) { bSelectable = Value; }
+	bool IsSelectable() const { return bSelectable; }
+	FSimpleDelegate OnTextClicked;
+	TFunction<FString()> GetCopyAllText;
 
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
@@ -42,6 +47,7 @@ private:
 	FVector2D BitmapScale = FVector2D(1, 1);
 	float NativeWidth = 0;
 	bool bTintForeground = true;
+	bool bSelectable = false;
 	bool bApplyDatAncestorClip = true;
 	bool bTintBackground = true;
 	int32 ModifierBegin = -1;

@@ -675,7 +675,8 @@ void UACEUIGameplayBinder::TickRefresh()
 	if (bPendingChatRefocus)
 	{
 		bPendingChatRefocus = false;
-		FocusChatEntryWindow(PendingChatRefocusWindow);
+		if (PendingChatRefocusWindow == INDEX_NONE) ClearChatEntryFocus();
+		else FocusChatEntryWindow(PendingChatRefocusWindow);
 	}
 	// Keep drag ghosts tracking the cursor even when MouseMove is sparse under capture.
 	if ((bInvDragPending || bSpellDragPending) && FSlateApplication::IsInitialized()
@@ -6375,6 +6376,13 @@ bool UACEUIGameplayBinder::TrySendChatFromEntry(const FString* OverrideText, int
 		bPendingChatRefocus = true;
 		PendingChatRefocusWindow = SourceWindow;
 	}
+	else if (!(PlayerController && PlayerController->IsVRActive()))
+	{
+		// EditableText clears focus after the commit callback. Restore gameplay
+		// next tick so another Enter/slash reaches the viewport immediately.
+		bPendingChatRefocus = true;
+		PendingChatRefocusWindow = INDEX_NONE;
+	}
 
 	// Retail pose emote: *bow* / *wave* → ChatPoseTable + SoulEmote (+ local motion).
 	if (Message.StartsWith(TEXT("*")))
@@ -9937,9 +9945,9 @@ void UACEUIGameplayBinder::EnsureOverlays()
 	if (!ChatLog)
 	{
 		ChatLog = Tree->ConstructWidget<UScrollBox>(UScrollBox::StaticClass());
-		// HitTestInvisible so DAT Maximize / floating-chat tabs still receive clicks;
+		// Only rows are interactive; empty log space leaves DAT chrome clickable.
 		// wheel scrolling is handled by the canvas when the pointer is over the log.
-		ChatLog->SetVisibility(ESlateVisibility::HitTestInvisible);
+		ChatLog->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 		ChatLog->SetScrollBarVisibility(ESlateVisibility::Collapsed);
 		ChatLog->SetConsumeMouseWheel(EConsumeMouseWheel::Never);
 		ChatLog->SetAnimateWheelScrolling(false);
@@ -12859,7 +12867,7 @@ void UACEUIGameplayBinder::RefreshInventoryOverlays()
 		const bool bChatOn = ChatRoot.IsValid() && ChatRoot->bVisible;
 		if (bChatOn && LogEl.IsValid())
 		{
-			ChatLog->SetVisibility(ESlateVisibility::HitTestInvisible);
+			ChatLog->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 			// Left 16px gutter for ChatLogNewNonVisibleTextIndicator (jump-to-bottom).
 			Canvas->PlaceWidgetAtElement(ChatLog, LogEl, 530, FMargin(16.f, 2.f, 2.f, 2.f));
 			RefreshChatRowLayout(0);

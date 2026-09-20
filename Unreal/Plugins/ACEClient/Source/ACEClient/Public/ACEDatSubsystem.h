@@ -486,7 +486,8 @@ public:
 	UMaterialInterface* GetWorldObjectMaterial(UMaterialInterface* Source);
 	void UpdateWorldObjectLighting(UMaterialInstanceDynamic* Material, bool bInterior);
 	/** Land cell TexMerge bake → MID (cached by PCode). */
-	UMaterialInterface* GetOrCreateLandMaterial(uint32 PCode, const TArray<FColor>& Pixels, int32 Width, int32 Height);
+	UMaterialInterface* GetOrCreateLandMaterial(uint32 PCode, const TArray<FColor>& Pixels, int32 Width, int32 Height,
+		FACETerrainBlendCache::FBlendPtr SharedBlend = nullptr);
 
 	/** Shared land Texture2DArray material (GPU TexMerge). Null until atlas is ready. */
 	UMaterialInterface* GetOrCreateLandGpuMaterial();

@@ -3,6 +3,7 @@
 #include "ACEDatSubsystem.h"
 #include "Dat/ACELandblockMeshBuilder.h"
 #include "Dat/ACEPCodeTileCache.h"
+#include "Dat/ACELandTextureMipProvider.h"
 #include "Engine/GameInstance.h"
 #include "Engine/Texture2D.h"
 #include "HAL/IConsoleManager.h"
@@ -11,6 +12,8 @@
 #include "Misc/FileHelper.h"
 #include "Misc/ScopeExit.h"
 #include "UObject/StrongObjectPtr.h"
+#include "RenderingThread.h"
+#include "TextureResource.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACELandscapeTextureFidelityTest, "ACE.Packaging.LandscapeTextureFidelity",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -58,12 +61,30 @@ bool FACELandscapeTextureFidelityTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Landscape GPU format is uncompressed BGRA8"), Texture->GetPixelFormat(), PF_B8G8R8A8);
 		TestEqual(TEXT("Full mip chain remains for stable distant terrain"), Texture->GetNumMips(), 11);
 		TestEqual(TEXT("Terrain retains trilinear filtering"), Texture->Filter.GetValue(), TF_Trilinear);
-		auto& Mip = Texture->GetPlatformData()->Mips[0];
-		const void* Data = Mip.BulkData.LockReadOnly();
-		TestTrue(TEXT("Uploaded terrain exactly preserves every baked texel"), Data &&
-			Mip.BulkData.GetBulkDataSize() == Pixels.Num() * sizeof(FColor) &&
-			FMemory::Memcmp(Data, Pixels.GetData(), Pixels.Num() * sizeof(FColor)) == 0);
-		Mip.BulkData.Unlock();
+		for (const auto& Mip : Texture->GetPlatformData()->Mips)
+			TestEqual(TEXT("GPU upload does not retain a duplicate CPU mip chain"),Mip.BulkData.GetBulkDataSize(),int64(0));
+		auto* Provider=Texture->GetAssetUserData<UACELandTextureMipProvider>();
+		if (!TestNotNull(TEXT("Terrain has a recreatable source provider"),Provider)) return false;
+		for(int32 Pass=0;Pass<2;++Pass)
+		{
+			TArray<void*> Uploads; Uploads.SetNumZeroed(Texture->GetNumMips());
+			TArray<int64> Sizes; Sizes.SetNumZeroed(Uploads.Num());
+			TestTrue(TEXT("All mips can be uploaded again after resource recreation"),Texture->GetInitialMipData(0,Uploads,Sizes));
+			TestTrue(TEXT("Uploaded terrain exactly preserves every baked texel"),Uploads[0] && Sizes[0]==Pixels.Num()*sizeof(FColor)
+				&& FMemory::Memcmp(Uploads[0],Pixels.GetData(),Sizes[0])==0);
+			TArray<FColor> Expected=Pixels;
+			int32 W=Width,H=Height;
+			for(int32 M=1;M<Uploads.Num();++M)
+			{
+				TArray<FColor> Next; FACEDatTextureResolver::BuildOpaqueMip(Expected,W,H,Next);
+				Expected=MoveTemp(Next); W=FMath::Max(1,W/2); H=FMath::Max(1,H/2);
+				TestTrue(TEXT("Provider preserves the existing mip filter"),Uploads[M] && Sizes[M]==Expected.Num()*sizeof(FColor)
+					&& FMemory::Memcmp(Uploads[M],Expected.GetData(),Sizes[M])==0);
+			}
+			for(void* Data:Uploads) FMemory::Free(Data);
+			Texture->UpdateResource(); FlushRenderingCommands();
+			TestTrue(TEXT("Recreated terrain has a live GPU resource"),Texture->GetResource() && Texture->GetResource()->TextureRHI.IsValid());
+		}
 	}
 
 	// Fixed results from retail ImgTex::MergeTexture's byte blend. A linear-light

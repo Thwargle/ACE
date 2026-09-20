@@ -433,3 +433,62 @@ The pedestal diagnostic uses the independent ACE.DatLoader implementation:
 "C:/Turbine/Asheron's Call"`. `Fixtures/PedestalWeakSpot.sql` is upstream reference
 data only and is never executed by the tests. See `Docs/RETAIL_PARITY.md` for its
 source and the remaining live multiplayer, appearance and traversal acceptance.
+
+### VR character creation
+
+Run `ACE.RetailParity.CharacterCreation`, `ACE.VR.InputLifecycle`, and
+`ACE.VR.RigAndMenus` with `-RenderOffscreen` (not `-NullRHI`). The VR fixture
+opens the actual creator and routes both controller rays through Slate to all
+six pages. It covers canceled captures, name-field detection, PC keyboard
+typing/reopening, non-overlapping keyboard placement, navigation during editing,
+and Enter validation. The creation screen test covers native keyboard updates,
+cancel/stale callbacks, corrected names after server rejection, and a single
+creation request over a loopback socket. No live server characters are created.
+
+`Quest/Tests/Test-NativeKeyboardSubmit.py` additionally checks the actual Android
+UPL Java Enter/Done callbacks with stubbed Android/JNI boundaries. Headset
+acceptance still needs PC VR and Quest: create a character with each hand,
+accept the name with Enter/Done, and test Finish and any unspent-points dialog.
+
+`ACE.RetailParity.CharacterCreationScreens.Preview` runs independently under
+`-game -FeatureLevelES31 -ini:Engine:[/Script/Engine.RendererSettings]:r.MobileHDR=False
+-RenderOffscreen`. It compares the composed UI with/without the character mesh,
+catching the mobile FinalColorLDR transparency failure rather than merely checking
+mesh transforms. `CharacterCreationScreens.Controls` retains the desktop Slate
+keyboard/window checks. Both preview pages also use the scene-color/inverse-alpha
+compositor used by the inventory model. Reports for this change are
+`Saved/Automation/CreatorPreviewMobileFixed` and `CreatorPreviewDesktopFixed`.
+
+### Desktop movement and chat recovery
+
+`ACE.RetailParity.AcademyCorners` loads the Shoushi academy's actual stair and
+arched-door cells (7F030133–140 and their connected cells), presses the player
+into obstacles, and verifies retreat with desktop and tracked VR inputs at 60
+and 15 FPS, Run 600, and 15-degree approach increments. It reproduced traps
+between overlapping room meshes and beveled stair corners before the shared
+recovery fix. The expanded fixture passed 2,417 blocked approaches in v54.
+`ACE.VR.StairCeiling` covers desktop and VR wading, including
+DC56001F [95.269531 147.908203 6.0]: the retail bed is 90 cm below the water.
+`MovementReview` checks Academy Cestus attachment frames and local death-pose
+release on respawn; `RuntimeActors` also covers remote revival and corpse holds.
+
+`ACE.RetailParity.ChatInputAndCommands` checks native-font chat copying and
+input copy/paste against the OS clipboard, restoring its previous contents.
+Its network traffic stays on loopback. `UIScreens` covers repeated Enter
+send/reopen cycles without intervening camera ticks or key-up events, slash
+opening from gameplay and UI, and existing chat wrapping/resizing.
+Chat output supports drag selection, Ctrl+A/C within a message, and a right-click
+menu for copying a message or the whole chat window; the input supports Ctrl+V.
+
+### Shoushi memory and Steam Link controls
+
+`ACE.RetailParity.ShoushiTerrainBudget` counts unique terrain blends from the
+actual DA55 destination at each loading radius and checks the native radius cap.
+`ACE.RetailParity.TerrainArrival` loads and renders the desktop 121-block area
+and Shoushi's 49-block native budget through the normal async worker and actor
+paths, checking that land textures keep no duplicate CPU bulk mip payloads.
+`ACE.Packaging.LandscapeTextureFidelity` compares the shared source and every
+generated upload mip byte-for-byte, then recreates the texture resource.
+`ACE.VR.RigAndMenus` checks hold-X options, tap inventory, and cancellation when
+tracking is lost. The packaged Windows executable passes the latter two suites,
+`TextureBudget`, and `AcademyCorners` in `Saved/Automation/v54Packaged`.

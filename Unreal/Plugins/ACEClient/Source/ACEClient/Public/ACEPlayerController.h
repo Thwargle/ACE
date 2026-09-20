@@ -32,6 +32,8 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACEVRRigTest;
 	friend class FACEVRInteriorTest;
 	friend class FACEVRWallContactTest;
+    friend class FACEMovementReviewTest;
+    friend class FACEAcademyCornerTest;
 	friend class FACEVRStairCeilingTest;
 	friend class FACEVRInteriorNetworkTest;
 	friend class FACERetailWorldEntryTest;
@@ -54,6 +56,7 @@ public:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void SetupInputComponent() override;
+	virtual bool InputKey(const FInputKeyEventArgs& Params) override;
 	virtual void PlayerTick(float DeltaTime) override;
 
 	/** Diagnostic: called immediately and one tick later (via zero-delay timer) so the widget shows even if
@@ -336,7 +339,6 @@ protected:
 	bool bNumPadZeroWasDown = false;
 	bool bNumPadFiveWasDown = false;
 	bool bNumPadThreeWasDown = false;
-	bool bEnterWasDown = false;
 	bool bCameraInHead = false;
 	bool bCameraLookDown = false;
 	bool bMouseLookActive = false;

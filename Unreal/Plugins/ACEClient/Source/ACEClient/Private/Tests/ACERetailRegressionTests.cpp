@@ -457,6 +457,15 @@ bool FACERetailRuntimeRegressionTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("Server-hidden player mesh is not rendered"),RemoteActor->Appearance->GetPartMesh(0)->IsVisible());
     RemoteActor->ApplyPhysicsState(0);
     TestTrue(TEXT("Server unhide restores player mesh"),RemoteActor->Appearance->GetPartMesh(0)->IsVisible());
+    FACEObjectMotionState PlayerDeath; PlayerDeath.ForwardCommand=ACEMotion::DeadCommandU16;
+    PlayerDeath.ActionSpeed=1.f; PlayerDeath.CurrentStyle=ACEMotion::StanceNonCombat;
+    RemoteActor->ApplyMotionState(PlayerDeath);
+    RemoteActor->Appearance->TickComponent(10.f,LEVELTICK_All,nullptr);
+    TestTrue(TEXT("Remote player holds the completed death pose"),RemoteActor->Appearance->bHoldActionFinal);
+    FACEObjectMotionState Respawn; Respawn.ForwardCommand=ACEMotion::Ready; Respawn.CurrentStyle=ACEMotion::StanceNonCombat;
+    RemoteActor->ApplyMotionState(Respawn);
+    TestFalse(TEXT("Remote player revival releases the death hold"),RemoteActor->Appearance->bHoldActionFinal);
+    TestTrue(TEXT("Remote player revival resumes locomotion"),RemoteActor->Appearance->AnimMode==UACECharacterAppearanceComponent::EACEAnimMode::Locomotion);
     RemoteActor->Destroy();
     // NoDraw survives immediate/deferred construction, descriptor refresh and
     // visual restoration. Clearing it from the server makes the same object visible.

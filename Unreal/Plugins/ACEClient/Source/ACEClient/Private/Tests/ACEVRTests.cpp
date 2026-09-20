@@ -8,6 +8,8 @@
 #include "VR/ACEVRWidget.h"
 #include "VR/ACEVRRetailSurface.h"
 #include "UI/ACEUICanvasWidget.h"
+#include "UI/ACEUICharGenBinder.h"
+#include "UI/ACEUIFlow.h"
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACEUIElementManager.h"
 #include "UI/ACEUILayoutResolver.h"
@@ -482,6 +484,15 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		VR->bTracking = false; VR->UpdatePanels();
 		TestTrue(TEXT("An unworn headset does not restart the login flow"), PC->IsLoginUIVisible());
 		VR->bTracking = true; VR->UpdatePanels();
+		VR->InventoryPressed(); VR->UpdateInventoryHold(.2f); VR->InventoryReleased();
+		TestFalse(TEXT("Short inventory tap does not open VR options"),VR->bSettingsOpen);
+		VR->InventoryPressed(); VR->UpdateInventoryHold(.7f);
+		TestTrue(TEXT("Holding X opens options without a runtime Menu event, including in lobby"),VR->bSettingsOpen && VR->SettingsPanel->IsVisible());
+		VR->UpdateInventoryHold(2.f); VR->InventoryReleased();
+		TestTrue(TEXT("Held X opens options only once and release keeps them open"),VR->bSettingsOpen);
+		VR->ToggleSettings();
+		VR->InventoryPressed(); VR->UpdateInventoryHold(.3f); VR->UpdateTrackingState(false); VR->UpdateTrackingState(true); VR->UpdateInventoryHold(1.f);
+		TestFalse(TEXT("Runtime focus loss cancels a pending menu hold"),VR->bSettingsOpen);
 		TestTrue(TEXT("Both controller poses work while the login pawn is hidden"), VR->LeftGrip->IsTracked() && VR->RightAim->IsTracked());
 		TestTrue(TEXT("Hand markers remain visible in the unlit lobby"), VR->FallbackArms[2]->IsVisible() && VR->FallbackArms[5]->IsVisible() && !VR->PresentationActor->IsHidden());
 		TestTrue(TEXT("Menu beams appear before a widget is hit"), VR->PointerBeams[0]->IsVisible() && VR->PointerBeams[1]->IsVisible());
@@ -546,6 +557,94 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			}
 			PollHands(); VR->RightPointer->TickComponent(.016f, LEVELTICK_All, nullptr);
 		}
+		// Character creation reuses the retail canvas after character selection.
+		// Exercise real controller rays, capture, keyboard keys and final submission.
+		if (FApp::CanEverRender())
+		{
+			VR->DismissTextEntry();
+			TestTrue(TEXT("Creator loads retail DAT"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
+			VR->Client->Session->State=EACESessionState::CharacterSelect;
+			auto* CreationCanvas=CreateWidget<UACEUICanvasWidget>(PC);
+			CreationCanvas->InitializeCanvas(VR->Client->GetUIElementManager());
+			CreationCanvas->SetResourceResolver(VR->Client->GetUIResourceResolver());
+			PC->DatCanvasWidget=CreationCanvas;
+			PC->ShowCharacterCreationUI();
+			auto* Creator=PC->DatCharGenBinder.Get();
+			if (TestNotNull(TEXT("VR opens the real character creator"),Creator))
+			{
+				TestFalse(TEXT("Opening creation keeps controller input in game mode"),PC->bShowMouseCursor);
+				auto PaintCreator=[&]
+				{
+					for(int Pass=0;Pass<3;++Pass)
+					{
+						VR->UpdatePanels();VR->RetailPanel->TickComponent(.016f,LEVELTICK_All,nullptr);
+						VR->KeyboardPanel->TickComponent(.016f,LEVELTICK_All,nullptr);FlushRenderingCommands();
+					}
+				};
+				auto AimControl=[&](bool Left,UWidgetComponent* Panel,FVector2D Pixel)
+				{
+					const FVector2D Size=Panel->GetDrawSize();
+					const FVector Control=Panel->GetComponentTransform().TransformPosition(FVector(0,Size.X*.5-Pixel.X,Size.Y*.5-Pixel.Y));
+					const FVector From=VR->Head->GetComponentLocation()+FVector(0,Left?-15:15,-20);
+					(Left?VR->LeftAim:VR->RightAim)->SetWorldLocationAndRotation(From,(Control-From).Rotation());
+					auto* Pointer=Left?VR->LeftPointer.Get():VR->RightPointer.Get();
+					Pointer->TickComponent(.016f,LEVELTICK_All,nullptr);
+					TestTrue(TEXT("Creator controller ray reaches its visible panel"),Pointer->GetHoveredWidgetComponent()==Panel);
+				};
+				auto AimElement=[&](bool Left,const TCHAR* Name)
+				{
+					auto Element=VR->Client->GetUIElementManager()->FindElementByName(Name);
+					if(!TestTrue(FString(TEXT("Creator control exists: "))+Name,Element.IsValid()))return;
+					AimControl(Left,VR->RetailPanel,CreationCanvas->LayoutToViewport(FVector2D(Element->GetScreenOrigin())+FVector2D(Element->Width*.5,Element->Height*.5)));
+				};
+				auto ClickElement=[&](bool Left,const TCHAR* Name)
+				{
+					AimElement(Left,Name);VR->Trigger(Left,true);PaintCreator();VR->Trigger(Left,false);PaintCreator();
+				};
+				PaintCreator();
+				TestFalse(TEXT("No keyboard covers creator navigation before name entry"),VR->KeyboardPanel->IsVisible());
+				Creator->Model.SelectHeritage(1);
+				ClickElement(true,TEXT("RadioSho"));TestEqual(TEXT("Left trigger changes heritage"),Creator->Model.Selection.Heritage,3u);
+				ClickElement(false,TEXT("CGProfessionButton"));TestEqual(TEXT("Right trigger navigates to profession"),Creator->GetPage(),2);
+				ClickElement(true,TEXT("WarButton"));TestEqual(TEXT("Left trigger chooses profession"),Creator->Model.Selection.Profession,4);
+				ClickElement(false,TEXT("CGSkillsButton"));TestEqual(TEXT("Controller opens skills"),Creator->GetPage(),3);
+				AimElement(true,TEXT("CGAppearanceButton"));VR->Trigger(true,true);
+				VR->CancelGestures();PaintCreator();
+				TestEqual(TEXT("Lost tracking cancels the pending navigation click"),Creator->GetPage(),3);
+				ClickElement(false,TEXT("CGAppearanceButton"));TestEqual(TEXT("Other hand works after capture cancellation"),Creator->GetPage(),4);
+				ClickElement(true,TEXT("CGTownButton"));TestEqual(TEXT("Controller opens starting town"),Creator->GetPage(),5);
+				ClickElement(false,TEXT("CGSummaryButton"));TestEqual(TEXT("Controller opens summary"),Creator->GetPage(),6);
+				ClickElement(true,TEXT("NameTextBox"));
+				TestTrue(TEXT("Creator name is an explicit VR text session"),VR->bTextKeyboardOpen && VR->FocusedTextEntry.Get()==CreationCanvas);
+				TestTrue(TEXT("Summary remains visible beside its keyboard"),VR->RetailPanel->bRenderInMainPass);
+				const FVector2D KeySize=VR->KeyboardPanel->GetDrawSize();
+				const FVector KeyboardTop=VR->KeyboardPanel->GetComponentTransform().TransformPosition(FVector(0,0,KeySize.Y*.5));
+				const FVector CreatorBottom=VR->RetailPanel->GetComponentTransform().TransformPosition(FVector(0,0,-VR->RetailPanel->GetDrawSize().Y*.5));
+				TestTrue(TEXT("Creator keyboard cannot overlap Finish/name controls"),KeyboardTop.Z<CreatorBottom.Z-3.f);
+				VR->TypeText(TEXT("VR Hero"));
+				TestEqual(TEXT("PC VR keyboard types into the actual name"),Creator->Model.Selection.Name,FString(TEXT("VR Hero")));
+				AimControl(false,VR->KeyboardPanel,FVector2D(50,120));VR->Trigger(false,true);VR->Trigger(false,false);PaintCreator();
+				TestTrue(TEXT("Clicking an actual keyboard key retains canvas focus"),Creator->Model.Selection.Name.StartsWith(TEXT("VR Hero")) && Creator->Model.Selection.Name.Len()==8);
+				ClickElement(false,TEXT("CGTownButton"));TestEqual(TEXT("One click dismisses keyboard and navigates"),Creator->GetPage(),5);
+				TestFalse(TEXT("Leaving name entry hides its keyboard"),VR->bTextKeyboardOpen || VR->KeyboardPanel->IsVisible());
+				ClickElement(true,TEXT("CGSummaryButton"));ClickElement(false,TEXT("NameTextBox"));
+				TestTrue(TEXT("Name keyboard reopens with the other hand"),VR->bTextKeyboardOpen);
+				Creator->SetNameFromKeyboard(TEXT(""));VR->TypeKey(EKeys::Enter);PaintCreator();
+				TestFalse(TEXT("Enter closes editing and displays retail name validation"),Creator->CanEditName());
+				TestFalse(TEXT("Validation never leaves an inert keyboard covering the dialog"),VR->KeyboardPanel->IsVisible());
+				Creator->KeyDown(FKeyEvent(EKeys::Enter,FModifierKeysState(),0,false,0,0));PaintCreator();
+				ClickElement(true,TEXT("NameTextBox"));VR->TypeText(TEXT("Creation Hero"));
+				VR->TypeKey(EKeys::Enter);PaintCreator();
+				// This fixture is deliberately not connected; reaching the normal
+				// submission/error dialog proves Enter was delivered, without creating
+				// an account character. The creation wire tests use a loopback socket.
+				TestFalse(TEXT("VR Enter reaches the existing submission path"),Creator->CanEditName());
+				VR->DismissTextEntry();Creator->Shutdown();CreationCanvas->SetCharGenBinder(nullptr);
+			}
+			PC->DatCharGenBinder=nullptr;PC->DatCanvasWidget=nullptr;
+			VR->Client->GetUIFlow()->SetMode(ACEUI::EACEUIFlowMode::CharacterManagement);
+			VR->UpdatePanels();
+		}
 		VR->Client->Session->State = EACESessionState::InWorld;
 		VR->ResetTrackingOrigin();
 		TestTrue(TEXT("World entry removes the separate lobby elevation"), VR->TrackingOrigin->GetComponentLocation().Z < 100.f);
@@ -563,7 +662,9 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		FACEWorldObject Wand; Wand.Guid = 200; Wand.WielderId = 100; Wand.CurrentWieldedLocation = ACEEquipMask::Held;
 		VR->Client->Session->WorldObjects.Add(Wand.Guid, Wand);
 		auto* Dat = GI->GetSubsystem<UACEDatSubsystem>();
-		TestTrue(TEXT("Retail UI and avatar fixture loads DAT"), Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
+		// The creator has already used the resolver's font/texture caches. Do not
+		// replace their underlying DAT database halfway through this fixture.
+		TestTrue(TEXT("Retail UI and avatar fixture loads DAT"), Dat->GetPortalDat() || Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
 		auto* Manager = NewObject<UACEUIElementManager>(PC); Manager->Initialize();
 		auto* Resources = NewObject<UACEUIResourceResolver>(PC); Resources->Initialize(Dat);
 		auto* Layout = NewObject<UACEUILayoutResolver>(PC); Layout->Initialize(Dat, Manager);

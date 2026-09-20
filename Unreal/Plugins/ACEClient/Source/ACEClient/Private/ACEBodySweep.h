@@ -11,7 +11,7 @@ namespace ACEBodySweep
     {
         TArray<FHitResult> Contacts;
         World.SweepMultiByChannel(Contacts,From,From+FVector(0,0,.001f),FQuat::Identity,ECC_Pawn,Capsule,Params);
-        Contacts.RemoveAll([](const FHitResult& H) { return !H.bStartPenetrating || FMath::Abs(H.Normal.Z)>.1f; });
+        Contacts.RemoveAll([](const FHitResult& H) { return !H.bStartPenetrating || H.Normal.Z<-.15f || H.Normal.Z>=.6641741f; });
         if (Contacts.Num()<2) return From;
         FVector Push=FVector::ZeroVector;
         // Simultaneous wall constraints must be solved together. Resolving one
@@ -19,7 +19,9 @@ namespace ACEBodySweep
         for (int32 Pass=0; Pass<8; ++Pass)
             for (const auto& Contact:Contacts)
             {
-                const FVector N=Contact.Normal.GetSafeNormal2D();
+                // Door arches and stair corners need the complete separation
+                // normal. Flattening it leaves the crown on a beveled triangle.
+                const FVector N=Contact.Normal.GetSafeNormal();
                 Push+=N*FMath::Max(0.,Contact.PenetrationDepth+.2-FVector::DotProduct(Push,N));
             }
         if (Push.Size()>Capsule.GetCapsuleRadius()*2.f) return From;
@@ -31,7 +33,9 @@ namespace ACEBodySweep
         {
             if (!H.bBlockingHit || H.ImpactNormal.Z>=.6641741f) continue;
             const bool Existing=Contacts.ContainsByPredicate([&](const FHitResult& C) {
-                return C.Component==H.Component && FVector::DotProduct(C.Normal,H.ImpactNormal)>.95f;
+                // Initial overlap normals are capsule separation vectors, not
+                // necessarily the face normal returned by the reverse sweep.
+                return C.Component==H.Component && FVector::DotProduct(H.ImpactNormal,Push)>0.f;
             });
             if (!Existing || H.bStartPenetrating || FVector::DotProduct(H.ImpactNormal,Push)<=0) return From;
         }
@@ -70,6 +74,16 @@ namespace ACEBodySweep
     {
         const FVector Direct=RecoverAlong(World,From,Push,Original,Capsule,Params);
         if (!Direct.Equals(From,.01f)) return Direct;
+        // Beveled door/stair corners can require a small vertical clearance.
+        // Flattening the contact normal leaves the capsule touching another
+        // triangle, so horizontal recovery fails even while backing away.
+        // Validate the actual separation vector against every solid as well.
+        if (FMath::IsNearlyZero(Push.Z) && Original.Normal.Z > 0.f && Original.Normal.Z < .6641741f)
+        {
+            const FVector AlongContact=RecoverAlong(World,From,Original.Normal.GetSafeNormal()
+                * FMath::Max(Push.Size(),double(Original.PenetrationDepth+.2f)),Original,Capsule,Params);
+            if (!AlongContact.Equals(From,.01f)) return AlongContact;
+        }
         const FVector Corner=RecoverCorner(World,From,Capsule,Params);
         if (!Corner.Equals(From,.01f)) return Corner;
         // Under a stairwell ceiling, moving out along a ramp's upward normal

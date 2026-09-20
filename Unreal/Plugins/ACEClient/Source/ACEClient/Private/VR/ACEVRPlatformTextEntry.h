@@ -2,6 +2,8 @@
 #include "Components/EditableTextBox.h"
 #include "UI/ACERetailTextEntry.h"
 #include "UI/ACEChatEntry.h"
+#include "UI/ACEUICanvasWidget.h"
+#include "UI/ACEUICharGenBinder.h"
 #include "Widgets/Input/IVirtualKeyboardEntry.h"
 
 void ACEVRUpdateNativeKeyboardText(const FString& Expected, const FString& Replacement);
@@ -13,15 +15,26 @@ class FACEVRPlatformTextEntry final : public IVirtualKeyboardEntry
 public:
     ~FACEVRPlatformTextEntry();
     void EnableNativeSubmit();
+    void Cancel() { bFinished = true; }
     FACEVRPlatformTextEntry(UWidget* InEntry, TFunction<void()> InFinished)
-        : Entry(InEntry), Finished(MoveTemp(InFinished)) { Original = GetText(); }
+        : Entry(InEntry), Finished(MoveTemp(InFinished))
+    {
+        if (auto* Canvas = Cast<UACEUICanvasWidget>(InEntry))
+        { bCharacterName = true; CharacterCreator = Canvas->GetCharGenBinder(); }
+        Original = GetText();
+    }
     void SetTextFromVirtualKeyboard(const FText& Text, ETextEntryType Type) override
     {
         if (bFinished || !Entry.IsValid()) return;
+        // A late IME callback must not edit a different creator on a reused
+        // canvas, a hidden page, or a draft already submitted to the server.
+        if (bCharacterName && (!CharacterCreator.IsValid() || !CharacterCreator->CanEditName()
+            || Cast<UACEUICanvasWidget>(Entry.Get())->GetCharGenBinder() != CharacterCreator.Get())) return;
         const FText Value = Type == ETextEntryType::TextEntryCanceled ? Original : Text;
         if (auto* Chat = Cast<UACEChatEntry>(Entry.Get())) Chat->ApplyNativeText(Value, Type == ETextEntryType::TextEntryCanceled);
         else if (auto* Box = Cast<UEditableTextBox>(Entry.Get())) Box->SetText(Value);
         if (auto* Retail = Cast<UACERetailTextEntry>(Entry.Get())) Retail->SetText(Value);
+        if (bCharacterName) CharacterCreator->SetNameFromKeyboard(Value.ToString());
         // Reply expansion must update the native edit buffer as well as Slate.
         // Do not reopen the keyboard: UE treats that as a request to hide it.
         if (Type == ETextEntryType::TextEntryUpdated && !GetText().EqualTo(Value))
@@ -32,6 +45,7 @@ public:
             const auto Commit = Type == ETextEntryType::TextEntryAccepted ? ETextCommit::OnEnter : ETextCommit::OnCleared;
             if (auto* Box = Cast<UEditableTextBox>(Entry.Get())) Box->OnTextCommitted.Broadcast(Box->GetText(), Commit);
             if (auto* Retail = Cast<UACERetailTextEntry>(Entry.Get())) Retail->Commit(Commit);
+            if (bCharacterName && Commit == ETextCommit::OnEnter) CharacterCreator->CommitNameFromKeyboard();
             if (Finished) Finished();
         }
     }
@@ -41,6 +55,7 @@ public:
     {
         if (auto* Box = Cast<UEditableTextBox>(Entry.Get())) return Box->GetText();
         if (auto* Retail = Cast<UACERetailTextEntry>(Entry.Get())) return Retail->GetText();
+        if (CharacterCreator.IsValid()) return FText::FromString(CharacterCreator->Model.Selection.Name);
         return FText::GetEmpty();
     }
     FText GetHintText() const override { return FText::GetEmpty(); }
@@ -55,6 +70,8 @@ public:
     { const auto* Retail = Cast<UACERetailTextEntry>(Entry.Get()); return Retail && Retail->bMultiline; }
 private:
     TWeakObjectPtr<UWidget> Entry;
+    TWeakObjectPtr<UACEUICharGenBinder> CharacterCreator;
+    bool bCharacterName = false;
     FText Original;
     TFunction<void()> Finished;
     bool bFinished = false;

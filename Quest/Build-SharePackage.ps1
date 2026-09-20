@@ -27,6 +27,8 @@ foreach ($file in @('Install-Quest.ps1', 'Install-Quest.cmd', 'Update-Quest.cmd'
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Sharing\$file") -Destination (Join-Path $folder $file)
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\LICENSE') -Destination (Join-Path $folder 'LICENSE')
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Sharing\START-HERE.html') -Destination $folder
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\Unreal\Build\Android\res\drawable\icon.png') -Destination (Join-Path $folder 'AC-Icon.png')
 $copiedApk = Join-Path $folder 'AC-VR-arm64.apk'
 [ordered]@{
     package = 'com.acecommunity.questtest'
@@ -43,7 +45,7 @@ $copiedApk = Join-Path $folder 'AC-VR-arm64.apk'
 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $folder 'manifest.json') -Encoding UTF8
 # APK is already compressed. The explicit file allowlist keeps Saved/configs,
 # credentials, DAT files, SDK tools, and future unrelated files out of the ZIP.
-$files = @('AC-VR-arm64.apk', 'Install-Quest.ps1', 'Install-Quest.cmd', 'Update-Quest.cmd', 'Repair-Quest.cmd', 'Quest-DataTransfer.ps1', 'Quest-ProfileMigration.ps1', 'README.txt', 'RELEASE-NOTES.md', 'LICENSE', 'manifest.json')
+$files = @('AC-VR-arm64.apk', 'Install-Quest.ps1', 'Install-Quest.cmd', 'Update-Quest.cmd', 'Repair-Quest.cmd', 'Quest-DataTransfer.ps1', 'Quest-ProfileMigration.ps1', 'README.txt', 'RELEASE-NOTES.md', 'LICENSE', 'manifest.json', 'START-HERE.html', 'AC-Icon.png')
 $paths = @($files | ForEach-Object { Join-Path $folder $_ })
 Compress-Archive -LiteralPath $paths -DestinationPath $zip -CompressionLevel NoCompression
 $patchPaths = @('Install-Quest.ps1', 'Install-Quest.cmd', 'Update-Quest.cmd', 'Repair-Quest.cmd', 'Quest-DataTransfer.ps1', 'Quest-ProfileMigration.ps1', 'README.txt') | ForEach-Object { Join-Path $folder $_ }
