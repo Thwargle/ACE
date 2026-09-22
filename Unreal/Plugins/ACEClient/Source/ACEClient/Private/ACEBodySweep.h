@@ -10,23 +10,50 @@ namespace ACEBodySweep
         const FCollisionShape& Capsule, const FCollisionQueryParams& Params)
     {
         TArray<FHitResult> Contacts;
-        World.SweepMultiByChannel(Contacts,From,From+FVector(0,0,.001f),FQuat::Identity,ECC_Pawn,Capsule,Params);
-        Contacts.RemoveAll([](const FHitResult& H) { return !H.bStartPenetrating || H.Normal.Z<-.15f || H.Normal.Z>=.6641741f; });
+        // Include touching neighbours before solving the escape. At outdoor
+        // coordinates Chaos can round a sub-centimetre contact out of the
+        // overlap query even though it blocks the proposed recovery move.
+        constexpr float Skin=1.f;
+        const auto Expanded=FCollisionShape::MakeCapsule(Capsule.GetCapsuleRadius()+Skin,
+            Capsule.GetCapsuleHalfHeight()+Skin);
+        World.SweepMultiByChannel(Contacts,From,From+FVector(0,0,.001f),FQuat::Identity,ECC_Pawn,Expanded,Params);
+        Contacts.RemoveAll([](const FHitResult& H) { return !H.bBlockingHit
+            || (!H.bStartPenetrating && H.Time>KINDA_SMALL_NUMBER); });
         if (Contacts.Num()<2) return From;
+        // The minimum separation in 3D lies on one, two or three contact planes.
+        // Repeated projections converge too slowly between nearly opposing
+        // curved bodies (Eiichi/lifestone); eight passes could never free them.
         FVector Push=FVector::ZeroVector;
-        // Simultaneous wall constraints must be solved together. Resolving one
-        // wall while rejecting the other initial overlap locks an inside corner.
-        for (int32 Pass=0; Pass<8; ++Pass)
-            for (const auto& Contact:Contacts)
+        double Best=FMath::Square(Capsule.GetCapsuleRadius()*2.);
+        bool Found=false;
+        auto Try=[&](const FVector& Candidate) {
+            if(Candidate.ContainsNaN() || Candidate.SizeSquared()>Best) return;
+            for(const auto& C:Contacts)
+                if(FVector::DotProduct(Candidate,C.Normal)<C.PenetrationDepth+.19) return;
+            Push=Candidate;Best=Candidate.SizeSquared();Found=true;
+        };
+        // Bound the rare overlap solver; all contacts still validate candidates.
+        const int32 Count=FMath::Min(Contacts.Num(),12);
+        for(int32 I=0;I<Count;++I)
+        {
+            const FVector A=Contacts[I].Normal.GetSafeNormal();const double DA=Contacts[I].PenetrationDepth+.2;
+            Try(A*DA);
+            for(int32 J=I+1;J<Count;++J)
             {
-                // Door arches and stair corners need the complete separation
-                // normal. Flattening it leaves the crown on a beveled triangle.
-                const FVector N=Contact.Normal.GetSafeNormal();
-                Push+=N*FMath::Max(0.,Contact.PenetrationDepth+.2-FVector::DotProduct(Push,N));
+                const FVector B=Contacts[J].Normal.GetSafeNormal();const double DB=Contacts[J].PenetrationDepth+.2;
+                const double Dot=FVector::DotProduct(A,B),Det=1.-Dot*Dot;
+                if(Det>1.e-8) Try(A*((DA-Dot*DB)/Det)+B*((DB-Dot*DA)/Det));
+                for(int32 K=J+1;K<Count;++K)
+                {
+                    const FVector C=Contacts[K].Normal.GetSafeNormal();const double DC=Contacts[K].PenetrationDepth+.2;
+                    const FVector BC=FVector::CrossProduct(B,C);
+                    const double Triple=FVector::DotProduct(A,BC);
+                    if(FMath::Abs(Triple)>1.e-8)
+                        Try((BC*DA+FVector::CrossProduct(C,A)*DB+FVector::CrossProduct(A,B)*DC)/Triple);
+                }
             }
-        if (Push.Size()>Capsule.GetCapsuleRadius()*2.f) return From;
-        for (const auto& Contact:Contacts)
-            if (FVector::DotProduct(Push,Contact.Normal)<Contact.PenetrationDepth+.1f) return From;
+        }
+        if(!Found) return From;
         TArray<FHitResult> Escape;
         World.SweepMultiByChannel(Escape,From+Push,From,FQuat::Identity,ECC_Pawn,Capsule,Params);
         for (const auto& H:Escape)

@@ -1168,6 +1168,10 @@ struct ACECLIENT_API FACEWorldObject
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 WielderId = 0;
 
+	/** PublicWeenieDesc allegiance identity used by retail radar shapes. */
+	UPROPERTY(BlueprintReadOnly, Category = "ACE")
+	int32 MonarchGuid = 0;
+
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 Value = 0;
 

@@ -1449,8 +1449,8 @@ void UACETerrainPresenterComponent::ClearLandblocks()
 void UACETerrainPresenterComponent::ResetStreamingForTransition()
 {
 	// Destroy actors so the portal tunnel isn't fighting 100+ landblocks ticking scenery.
-	// Keep DAT mesh caches + in-flight async builds — CancelOutside(empty) + TrimSetup
-	// forced a cold bake of the destination and crushed portal FPS vs retail.
+	// Keep destination DAT meshes and in-flight builds for fast nearby/relog portals,
+	// but release departed areas before the next scene starts allocating resources.
 	ClearLandblocks();
 	ClearEnvCells();
 	LastCenterLB = -1;
@@ -1473,7 +1473,25 @@ void UACETerrainPresenterComponent::ResetStreamingForTransition()
 		KeptLandblocks.Reset();
 		SyncWorldEntitiesToKeepRing(GetOwner(), KeptLandblocks);
 	}
-	UE_LOG(LogTemp, Warning, TEXT("ACE: TerrainPresenter ResetStreamingForTransition — actors cleared (mesh caches kept)"));
+	if (Client && GetWorld() && GetWorld()->GetGameInstance())
+	{
+		if (auto* Dat = GetWorld()->GetGameInstance()->GetSubsystem<UACEDatSubsystem>())
+		{
+			const FACEPosition Destination = Client->GetPlayerPosition();
+			if (Destination.IsValid())
+			{
+				TSet<int32> KeepMeshes;
+				const int32 X = (Destination.CellId >> 24) & 255, Y = (Destination.CellId >> 16) & 255;
+				const int32 Radius = NeedsExteriorTerrain(Destination.CellId) ? FMath::Max(LoadRadius, UnloadRadius) : 0;
+				for (int32 DX = -Radius; DX <= Radius; ++DX)
+					for (int32 DY = -Radius; DY <= Radius; ++DY)
+						if (X+DX >= 0 && X+DX <= 255 && Y+DY >= 0 && Y+DY <= 255)
+							KeepMeshes.Add(static_cast<int32>((uint32(X+DX) << 24) | (uint32(Y+DY) << 16)));
+				Dat->RetireWorldMeshesOutside(KeepMeshes, WorldScale);
+			}
+		}
+	}
+	UE_LOG(LogTemp, Log, TEXT("ACE: TerrainPresenter transition actors cleared; destination mesh caches retained"));
 }
 
 void UACETerrainPresenterComponent::HandleLogout(EACESessionState NewState)
@@ -1934,6 +1952,7 @@ void UACETerrainPresenterComponent::SyncAroundCell(uint32 CellId)
 				ClearLandblocks();
 				KeptLandblocks.Add(DungeonKey);
 				Dat->CancelLandblockMeshRequestsOutside({});
+				Dat->EvictLandblockMeshesOutside({});
 			}
 			LastCenterLB = static_cast<int32>(CellId >> 16);
 			bLastSyncComplete = true;
@@ -3706,11 +3725,13 @@ void UACETerrainPresenterComponent::UpdateOutdoorEnvCellDraw()
 	TArray<ACEOutdoorPortalPlan::FAdmittedAperture> LookInExits;
 	LastOutdoorApertures.Reset();
 	const uint32 PlayerLb = LastKnownCellId & 0xFFFF0000u;
-	TArray<uint32> AdmitKeys;
+	TArray<uint32>& AdmitKeys=OutdoorAdmitKeys;
+	const int32 FullR=GetFullDetailRadius();
+	if (OutdoorAdmitLandblock!=PlayerLb || OutdoorAdmitRadius!=FullR)
 	{
+		OutdoorAdmitLandblock=PlayerLb;OutdoorAdmitRadius=FullR;AdmitKeys.Reset();
 		const int32 Cx = static_cast<int32>((PlayerLb >> 24) & 0xFF);
 		const int32 Cy = static_cast<int32>((PlayerLb >> 16) & 0xFF);
-		const int32 FullR = GetFullDetailRadius();
 		for (int32 DX = -FullR; DX <= FullR; ++DX)
 		{
 			for (int32 DY = -FullR; DY <= FullR; ++DY)
@@ -4221,7 +4242,7 @@ void UACETerrainPresenterComponent::SyncEnvCells()
 
 	UGameInstance* GI = World->GetGameInstance();
 	UACEDatSubsystem* Dat = GI ? GI->GetSubsystem<UACEDatSubsystem>() : nullptr;
-	if (Dat && ToRemove.Num() > 0)
+	if (Dat)
 	{
 		TSet<int32> KeepMeshes = Needed;
 		for (const auto& Pair : SpawnedEnvCells)
@@ -4232,6 +4253,9 @@ void UACETerrainPresenterComponent::SyncEnvCells()
 			}
 		}
 		Dat->CancelEnvCellMeshRequestsOutside(KeepMeshes);
+		// Transition reset already removed the old actors, so ToRemove can be empty
+		// even while their CPU meshes are still resident. Retire against the plan.
+		Dat->EvictEnvCellMeshesOutside(KeepMeshes, WorldScale);
 	}
 	const bool bDatReady = Dat && Dat->IsDatReady();
 	const uint32 StreamNow = EnvStreamCellId != 0 ? EnvStreamCellId : LastKnownCellId;

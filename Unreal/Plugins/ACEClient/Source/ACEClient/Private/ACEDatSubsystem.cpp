@@ -1,4 +1,5 @@
 #include "ACEDatSubsystem.h"
+#include "Dat/ACEStreamingBudget.h"
 #include "ACELoginSettings.h"
 #include "UI/ACEUIResourceResolver.h"
 
@@ -1132,6 +1133,38 @@ void UACEDatSubsystem::TrimMemoryCaches()
 	}
 }
 
+void UACEDatSubsystem::RetireWorldMeshesOutside(const TSet<int32>& KeepLandblockIds, float WorldScale)
+{
+	CancelLandblockMeshRequestsOutside(KeepLandblockIds);
+	EvictLandblockMeshesOutside(KeepLandblockIds);
+	TSet<int32> KeepCells;
+	auto KeepCell = [&](uint64 Key)
+	{
+		const uint32 Cell = static_cast<uint32>(Key >> 32);
+		if (KeepLandblockIds.Contains(static_cast<int32>(Cell & 0xFFFF0000u))) KeepCells.Add(Cell);
+	};
+	for (const auto& Pair : EnvCellMeshCache) KeepCell(Pair.Key);
+	for (uint64 Key : PendingEnvCellKeys) KeepCell(Key);
+	CancelEnvCellMeshRequestsOutside(KeepCells);
+	EvictEnvCellMeshesOutside(KeepCells, WorldScale);
+}
+
+void UACEDatSubsystem::LogLandTextureMemory(const TCHAR* Phase) const
+{
+	int32 Count = 0;
+	uint64 Bytes = 0;
+	for (const auto& Pair : LandTextureCache)
+	{
+		if (const UTexture2D* Texture = Pair.Value.Get())
+		{
+			++Count;
+			Bytes += Texture->CalcTextureMemorySizeEnum(TMC_AllMips);
+		}
+	}
+	UE_LOG(LogTemp, Log, TEXT("ACE: portal resources %s: land textures=%d %.1f MiB; terrain meshes=%d room meshes=%d"),
+		Phase, Count, Bytes / 1048576.0, LandblockCache.Num(), EnvCellMeshCache.Num());
+}
+
 void UACEDatSubsystem::ClearLoadedState()
 {
 	bPendingDiskCacheMaintenance = false;
@@ -1139,6 +1172,7 @@ void UACEDatSubsystem::ClearLoadedState()
 	++LandblockBuildGeneration;
 	PendingLandblockBuilds.Reset();
 	PendingLandblockIds.Reset();
+    CancelledLandblockIds.Reset();
 	FailedLandblockMeshIds.Reset();
 	++SetupBuildGeneration;
 	PendingSetupBuilds.Reset();
@@ -1147,6 +1181,7 @@ void UACEDatSubsystem::ClearLoadedState()
 	++EnvCellBuildGeneration;
 	PendingEnvCellBuilds.Reset();
 	PendingEnvCellKeys.Reset();
+    CancelledEnvCellKeys.Reset();
 	FailedEnvCellKeys.Reset();
 	CachedDatFingerprint = 0;
 	const double WaitStart = FPlatformTime::Seconds();
@@ -4948,6 +4983,7 @@ const FACEBuiltLandblockMesh* UACEDatSubsystem::GetOrBuildLandblockMesh(uint32 L
 		return nullptr;
 	}
 	const uint32 Key = LandblockId & 0xFFFF0000;
+	CancelledLandblockIds.Remove(Key); // A return trip can reuse a still-running bake.
 	if (const TSharedPtr<FACEBuiltLandblockMesh>* Existing = LandblockCache.Find(Key))
 	{
 		// RegionDesc / ambient need Terrain[] — heights alone is not enough. Stale entries
@@ -5042,6 +5078,7 @@ UACEDatSubsystem::EACELandMeshStatus UACEDatSubsystem::RequestLandblockMesh(uint
 	}
 
 	const uint32 Key = LandblockId & 0xFFFF0000;
+	CancelledLandblockIds.Remove(Key);
 	if (FindLandblockMesh(Key))
 	{
 		return EACELandMeshStatus::Ready;
@@ -5066,12 +5103,15 @@ UACEDatSubsystem::EACELandMeshStatus UACEDatSubsystem::RequestLandblockMesh(uint
 
 void UACEDatSubsystem::CancelLandblockMeshRequestsOutside(const TSet<int32>& KeepLandblockIds)
 {
+	for (uint32 Id : PendingLandblockIds)
+		if (!KeepLandblockIds.Contains(static_cast<int32>(Id))) CancelledLandblockIds.Add(Id);
 	for (int32 i = PendingLandblockBuilds.Num() - 1; i >= 0; --i)
 	{
 		const uint32 Id = PendingLandblockBuilds[i].LandblockId;
 		if (!KeepLandblockIds.Contains(static_cast<int32>(Id)))
 		{
 			PendingLandblockIds.Remove(Id);
+			CancelledLandblockIds.Remove(Id); // Queued job has no completion to discard.
 			PendingLandblockBuilds.RemoveAt(i);
 		}
 	}
@@ -5192,14 +5232,18 @@ void UACEDatSubsystem::PumpLandblockBuildQueue()
 void UACEDatSubsystem::OnLandblockBuildComplete(uint32 LandblockId, float WorldScale, int32 Generation,
 	bool bOk, TSharedPtr<FACEBuiltLandblockMesh> Mesh)
 {
-	PendingLandblockIds.Remove(LandblockId);
-
 	if (Generation != LandblockBuildGeneration)
 	{
 		PumpLandblockBuildQueue();
 		return;
 	}
 
+	PendingLandblockIds.Remove(LandblockId);
+	if (CancelledLandblockIds.Remove(LandblockId) > 0)
+	{
+		PumpLandblockBuildQueue();
+		return;
+	}
 	if (bOk && Mesh && Mesh->bHasHeights && Mesh->bHasTerrain)
 	{
 		LandblockCache.FindOrAdd(LandblockId) = Mesh;
@@ -5236,9 +5280,11 @@ bool UACEDatSubsystem::ConsumeLandMeshReloadRequest(bool* bOutClearEnvCells)
 		++SetupBuildGeneration;
 		PendingLandblockBuilds.Reset();
 		PendingLandblockIds.Reset();
+    CancelledLandblockIds.Reset();
 		FailedLandblockMeshIds.Reset();
 		PendingEnvCellBuilds.Reset();
 		PendingEnvCellKeys.Reset();
+    CancelledEnvCellKeys.Reset();
 		FailedEnvCellKeys.Reset();
 		PendingSetupBuilds.Reset();
 		PendingSetupKeys.Reset();
@@ -7386,6 +7432,7 @@ UACEDatSubsystem::EACEEnvCellMeshStatus UACEDatSubsystem::RequestEnvCellMesh(uin
 		return EACEEnvCellMeshStatus::NotReady;
 	}
 	const uint64 CacheKey = MakeScaleCacheKey(EnvCellId, WorldScale);
+	CancelledEnvCellKeys.Remove(CacheKey);
 	if (EnvCellMeshCache.Contains(CacheKey))
 	{
 		return EACEEnvCellMeshStatus::Ready;
@@ -7406,12 +7453,15 @@ UACEDatSubsystem::EACEEnvCellMeshStatus UACEDatSubsystem::RequestEnvCellMesh(uin
 
 void UACEDatSubsystem::CancelEnvCellMeshRequestsOutside(const TSet<int32>& KeepEnvCellIds)
 {
+	for (uint64 Key : PendingEnvCellKeys)
+		if (!KeepEnvCellIds.Contains(static_cast<int32>(Key >> 32))) CancelledEnvCellKeys.Add(Key);
 	for (int32 i = PendingEnvCellBuilds.Num() - 1; i >= 0; --i)
 	{
 		const uint32 Id = PendingEnvCellBuilds[i].Id;
 		if (!KeepEnvCellIds.Contains(static_cast<int32>(Id)))
 		{
 			PendingEnvCellKeys.Remove(PendingEnvCellBuilds[i].CacheKey);
+			CancelledEnvCellKeys.Remove(PendingEnvCellBuilds[i].CacheKey);
 			PendingEnvCellBuilds.RemoveAt(i);
 		}
 	}
@@ -7568,8 +7618,7 @@ void UACEDatSubsystem::PumpEnvCellBuildQueue()
 	{
 		return;
 	}
-	// Marketplace / housing teleports queue dozens of VisibleCells at once.
-	const int32 MaxConcurrent = PendingEnvCellBuilds.Num() > 16 ? 16 : 8;
+	const int32 MaxConcurrent = ACEStreamingBudget::EnvCellWorkers();
 	while (PendingEnvCellBuilds.Num() > 0 && ActiveEnvCellBuilds.GetValue() < MaxConcurrent)
 	{
 		const FPendingScaledMeshBuild Job = PendingEnvCellBuilds[0];
@@ -7623,16 +7672,16 @@ void UACEDatSubsystem::PumpEnvCellBuildQueue()
 void UACEDatSubsystem::OnEnvCellBuildComplete(uint32 EnvCellId, float WorldScale, uint64 CacheKey, int32 Generation,
 	bool bOk, TSharedPtr<FACEBuiltEnvCellMesh> Mesh)
 {
-	PendingEnvCellKeys.Remove(CacheKey);
 	if (Generation != EnvCellBuildGeneration)
 	{
-		// Cache was flushed mid-build — re-queue so marketplace neighbors aren't dropped.
-		if (!EnvCellMeshCache.Contains(CacheKey) && !FailedEnvCellKeys.Contains(CacheKey)
-			&& !PendingEnvCellKeys.Contains(CacheKey))
-		{
-			PendingEnvCellKeys.Add(CacheKey);
-			PendingEnvCellBuilds.Add({ EnvCellId, WorldScale, CacheKey });
-		}
+		// The current visibility plan re-requests cells after a format reload. An old
+		// completion must neither resurrect the departed area nor cancel its new job.
+		PumpEnvCellBuildQueue();
+		return;
+	}
+	PendingEnvCellKeys.Remove(CacheKey);
+	if (CancelledEnvCellKeys.Remove(CacheKey) > 0)
+	{
 		PumpEnvCellBuildQueue();
 		return;
 	}

@@ -486,7 +486,7 @@ bool FACEObjectCreateParser::ParseWeenieHeader(FACEBinaryReader& Reader, FACEDec
 	if (WeenieFlags & HouseOwner) { if (!Need(4)) return false; Reader.ReadUInt32(); }
 	if (WeenieFlags & HouseRestrictions) { if (!SkipRestrictionDB(Reader)) return false; }
 	if (WeenieFlags & HookItemTypes) { if (!Need(4)) return false; Reader.ReadUInt32(); }
-	if (WeenieFlags & Monarch) { if (!Need(4)) return false; Reader.ReadUInt32(); }
+	if (WeenieFlags & Monarch) { if (!Need(4)) return false; Out.MonarchGuid = static_cast<int32>(Reader.ReadUInt32()); }
 	if (WeenieFlags & HookType) { if (!Need(2)) return false; Reader.ReadUInt16(); }
 	if (WeenieFlags & IconOverlay) { Out.IconOverlayId = static_cast<int32>(ReadPackedKnown(Reader, 0x06000000)); }
 	if (WeenieFlags2 & IconUnderlay) { Out.IconUnderlayId = static_cast<int32>(ReadPackedKnown(Reader, 0x06000000)); }

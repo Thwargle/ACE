@@ -1241,26 +1241,29 @@ UTexture2D* FACEDatTextureResolver::GetOrCreateSkyUTexture(uint32 SurfaceId, UOb
 
 UTexture2D* FACEDatTextureResolver::GetOrCreateUiTexture(uint32 TextureId)
 {
-	if (auto* Retained = TakeRetainedTexture(TextureId, RetainedWorldTextures))
-	{ BindRuntimeTexture(Retained); TextureObjects.Add(TextureId, Retained); }
+	// UI chrome uses one mip with bilinear filtering. Keep it separate from
+	// the same DAT image used on a world surface, which still needs its mips.
+	const uint32 CacheKey = TextureId | 0x80000000u;
+	if (auto* Retained = TakeRetainedTexture(CacheKey, RetainedWorldTextures))
+	{ BindRuntimeTexture(Retained); TextureObjects.Add(CacheKey, Retained); }
 	if (TextureId == 0)
 	{
 		return nullptr;
 	}
-	if (TObjectPtr<UTexture2D>* Found = TextureObjects.Find(TextureId))
+	if (TObjectPtr<UTexture2D>* Found = TextureObjects.Find(CacheKey))
 	{
 		UTexture2D* Existing = Found->Get();
 		if (!IsRuntimeDxtTexture(Existing))
 		{
-			TouchTexture(TextureId);
+			TouchTexture(CacheKey);
 			return Existing;
 		}
 		if (UACEDatSubsystem* Dat = Cast<UACEDatSubsystem>(GcOwner))
 		{
 			Dat->UntrackRuntimeTexture(Existing);
 		}
-		TextureObjects.Remove(TextureId);
-		TextureLastUsed.Remove(TextureId);
+		TextureObjects.Remove(CacheKey);
+		TextureLastUsed.Remove(CacheKey);
 	}
 
 	FACEDatTexture Raw;
@@ -1289,7 +1292,7 @@ UTexture2D* FACEDatTextureResolver::GetOrCreateUiTexture(uint32 TextureId)
 	// Wrap so Slate tiled brushes (status bar strip, panel smoke) repeat cleanly.
 	UTexture2D* Tex = CreateTransientRgbaWithMips(
 		Decoded.Width, Decoded.Height, Decoded.Pixels, bAlpha,
-		TA_Wrap, TA_Wrap, false, true, 0, TF_Trilinear, false);
+		TA_Wrap, TA_Wrap, false, true, 1, TF_Bilinear, false);
 	if (!Tex)
 	{
 		return nullptr;
@@ -1300,8 +1303,8 @@ UTexture2D* FACEDatTextureResolver::GetOrCreateUiTexture(uint32 TextureId)
 	Tex->UpdateResource();
 	BindRuntimeTexture(Tex);
 
-	TextureObjects.Add(TextureId, Tex);
-	TouchTexture(TextureId);
+	TextureObjects.Add(CacheKey, Tex);
+	TouchTexture(CacheKey);
 	UE_LOG(LogTemp, Log, TEXT("ACEDat: UI UTexture2D %ux%u for Texture 0x%08X (alpha=%d)"),
 		Decoded.Width, Decoded.Height, TextureId, bAlpha ? 1 : 0);
 	return Tex;

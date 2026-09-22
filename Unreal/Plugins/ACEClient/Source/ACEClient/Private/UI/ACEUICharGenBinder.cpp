@@ -203,7 +203,7 @@ void UACEUICharGenBinder::RefreshSkills()
     {
         int Id=DisplaySkills[SkillScroll+I];uint32 Template=Id<0?0x100002f4:0x100002ff;
         int Index=I*2+(Id<0?0:1);while(SkillRows.Num()<=Index)SkillRows.Add(nullptr);
-        auto& Row=SkillRows[Index];if(!Row){Row=UACEUILayoutResolver::LoadTemplate(0x2100004c,Template);if(!Row)continue;List->AddChild(Row);}Row->Y=I*26;Row->bVisible=true;Row->ElementName=FString::Printf(TEXT("CreationSkill%d"),Id);
+        auto& Row=SkillRows[Index];if(!Row){Row=UACEUILayoutResolver::LoadTemplate(0x2100004c,Template);if(!Row)continue;List->AddChild(Row);}Row->Y=I*26;Row->bVisible=true;Row->SetElementName(FString::Printf(TEXT("CreationSkill%d"),Id));
         if(Id<0){const TCHAR* Names[]={TEXT("Unusable Untrained"),TEXT("Usable Untrained"),TEXT("Trained"),TEXT("Specialized")};Label(Child(Row,0x100002f6),Names[-Id-1]);Label(Child(Row,0x100002f7),TEXT("Level"));continue;}
         auto& S=Model.Skills[Id];uint32 Level=Model.Selection.Skills[Id];auto Cost=Model.SkillCost(Id);int Up=Level==1?Cost.X:Cost.Y-Cost.X;
         Label(Child(Row,0x10000301),S.Name);Label(Child(Row,0x10000302),FString::FromInt(Model.SkillValue(Id)));Label(Child(Row,0x10000303),Level==3?TEXT("0"):Up>=0&&Up<999?FString::FromInt(Up):TEXT(""));Label(Child(Row,0x10000306),Level>=2?FString::FromInt(Level==3?Cost.Y-Cost.X:Cost.X):TEXT("0"));
@@ -598,7 +598,7 @@ void UACEUICharGenBinder::RefreshTooltip(float Delta)
     {
         Tooltip=UACEUILayoutResolver::LoadTemplate(0x21000041,0x10000487);
         if(!Tooltip)return;
-        Tooltip->ElementName=TEXT("RootCharGenTooltip");Tooltip->ZLevel=2000;
+        Tooltip->SetElementName(TEXT("RootCharGenTooltip"));Tooltip->ZLevel=2000;
         Tooltip->bActivatable=false;
         for(auto C:Tooltip->Children)C->bActivatable=false;
         Find(TEXT("RootCharGenMaster"))->AddChild(Tooltip);
@@ -621,7 +621,7 @@ void UACEUICharGenBinder::RefreshTooltip(float Delta)
 
 void UACEUICharGenBinder::ShowDialog(int32 Action,const FString& Text)
 {
-    if(!Dialog){Dialog=UACEUILayoutResolver::LoadTemplate(0x2100003c,0x15);if(!Dialog)return;Dialog->ElementName=TEXT("RootCharGenDialog");Dialog->ZLevel=1000;Find(TEXT("RootCharGenMaster"))->AddChild(Dialog);}
+    if(!Dialog){Dialog=UACEUILayoutResolver::LoadTemplate(0x2100003c,0x15);if(!Dialog)return;Dialog->SetElementName(TEXT("RootCharGenDialog"));Dialog->ZLevel=1000;Find(TEXT("RootCharGenMaster"))->AddChild(Dialog);}
     DialogAction=Action;DialogText=Text;Dialog->bVisible=true;
     auto Box=Child(Dialog,0x3d),Body=Child(Dialog,0x3e);if(!Box||!Body)return;
     FACEDatFont Font;int H=160;if(Client->GetUIResourceResolver()->ResolveFont(Body->FontId,Font))H=FMath::Clamp(int(ACEDatText::Layout(Font,Text,370,false).Num()*Font.MaxCharHeight+78),95,480);

@@ -31,6 +31,8 @@ class ACECLIENT_API UACETerrainPresenterComponent : public UActorComponent
 	friend class FACERetailNetworkWeatherTest;
 	friend class FACERetailWorldEntryTest;
 	friend class FACELoadingTransitionTest;
+	friend class FACEStreamingRetirementTest;
+	friend class FACEPortalRetirementTest;
 	friend class FACETerrainPortalRevealTest;
 
 public:
@@ -310,6 +312,9 @@ protected:
 	double LastOutdoorEnvSyncSec = 0.0;
 	/** Last outdoor PView apertures — depth-only doorway holes (retail DrawPortalPoly). */
 	TArray<ACEOutdoorPortalPlan::FAdmittedAperture> LastOutdoorApertures;
+	TArray<uint32> OutdoorAdmitKeys;
+	uint32 OutdoorAdmitLandblock=0;
+	int32 OutdoorAdmitRadius=-1;
 	uint32 LastDoorwayClipFingerprint = 0;
 	int32 LastDoorwayClipLandblock = 0;
 	uint32 EnvStreamCellId = 0;

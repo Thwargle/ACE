@@ -43,6 +43,13 @@
 #include "Async/TaskGraphInterfaces.h"
 #include "Dat/ACEDiskTileCache.h"
 #include "HAL/FileManager.h"
+#include "ACEWorldEntityActor.h"
+#include "../ACEBodySweep.h"
+#include "../UI/ACERadarVisuals.h"
+#include "UI/ACEUIResourceResolver.h"
+#include "Engine/Texture2D.h"
+#include "GameFramework/GameModeBase.h"
+#include "UObject/GarbageCollection.h"
 
 namespace
 {
@@ -65,6 +72,191 @@ namespace
             GI->Shutdown(); GEngine->DestroyWorldContext(World); World->DestroyWorld(false);
         }
     };
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEShoushiGapTest,"ACE.RetailParity.ShoushiGap",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACEShoushiGapTest::RunTest(const FString&)
+{
+    FEntryWorld Fixture;
+    auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
+    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    auto Spawn=[&](uint32 Guid,uint32 Setup,FVector Location,FQuat Rotation,uint32 Type) {
+        FACEWorldObject O;O.Guid=Guid;O.SetupId=Setup;O.ItemType=Type;
+        O.bHasPosition=true;O.Position.CellId=0xDA55001D;O.Position.Location=Location;
+        O.Position.RotationW=Rotation.W;O.Position.RotationXYZ=FVector(Rotation.X,Rotation.Y,Rotation.Z);
+        auto* A=Fixture.World->SpawnActor<AACEWorldEntityActor>();A->InitializeFromObject(O,100,false);
+        A->ConfigureWorldCollision(true);return A;
+    };
+    auto* NPC=Spawn(0x7DA55088,0x02000001,FVector(86.3401,104.57,20.005),FQuat(0,0,-.994055,-.108883),ACEItemType::Creature);
+    auto* Stone=Spawn(0x7DA5505A,0x020002EE,FVector(88.7966,103.088,20.005),FQuat(0,0,-.857553,.514396),0);
+    const FVector Across=(Stone->GetActorLocation()-NPC->GetActorLocation()).GetSafeNormal2D();
+    const FVector Through(-Across.Y,Across.X,0),Center=(Stone->GetActorLocation()+NPC->GetActorLocation())*.5;
+    auto* FloorActor=Fixture.World->SpawnActor<AActor>();auto* Floor=NewObject<UBoxComponent>(FloorActor);
+    FloorActor->SetRootComponent(Floor);FloorActor->AddInstanceComponent(Floor);Floor->SetBoxExtent(FVector(1200,1200,10));
+    Floor->SetWorldLocation(Center-FVector(0,0,10));Floor->SetCollisionResponseToAllChannels(ECR_Block);Floor->RegisterComponent();
+    const auto Body=FCollisionShape::MakeCapsule(48,90.75);FCollisionQueryParams Query(SCENE_QUERY_STAT(ShoushiGap),true);
+    int32 Contacts=0;
+    AddInfo(FString::Printf(TEXT("Gap geometry NPC=%s stone=%s floor=%s"),*NPC->GetActorLocation().ToString(),*Stone->GetActorLocation().ToString(),*Floor->GetComponentLocation().ToString()));
+    for(float Offset:{-90.f,-60.f,-30.f,0.f,30.f,60.f,90.f})for(float Sign:{-1.f,1.f})for(float Dt:{1.f/90,1.f/20})
+    {
+        FVector P=Center+Across*Offset-Through*Sign*300+FVector(0,0,90.75);
+        auto Move=[&](const FVector& D) {
+            FHitResult Hit;
+            if(ACEBodySweep::Sweep(*Fixture.World,Hit,P,P+D,Body,Query)) {
+                ++Contacts;P=ACEBodySweep::SlideGrounded(*Fixture.World,P,P+D,Hit,Body,Query);
+            } else P+=D;
+        };
+        for(int32 I=0;I<FMath::CeilToInt(1.2f/Dt);++I) Move(Through*Sign*400*Dt);
+        const FVector Blocked=P;
+        if(Offset==0 && Sign==1 && Dt<.02f) {
+            FHitResult H;ACEBodySweep::Sweep(*Fixture.World,H,P,P-Through*Sign*400*Dt,Body,Query);
+            AddInfo(FString::Printf(TEXT("Gap retreat P=%s component=%s normal=%s depth=%.4f initial=%d time=%.4f"),*P.ToString(),*GetNameSafe(H.GetComponent()),*H.Normal.ToString(),H.PenetrationDepth,H.bStartPenetrating,H.Time));
+            const FVector Push=H.Normal*(H.PenetrationDepth+.2f);
+            AddInfo(FString::Printf(TEXT("Recovery delta %s"),*(ACEBodySweep::Recover(*Fixture.World,P,Push,H,Body,Query)-P).ToString()));
+            TArray<FHitResult> Reverse;Fixture.World->SweepMultiByChannel(Reverse,P+Push,P,FQuat::Identity,ECC_Pawn,Body,Query);
+            for(const auto& R:Reverse) AddInfo(FString::Printf(TEXT("Reverse comp=%s N=%s impact=%s pen=%.5f initial=%d time=%.4f"),*GetNameSafe(R.GetComponent()),*R.Normal.ToString(),*R.ImpactNormal.ToString(),R.PenetrationDepth,R.bStartPenetrating,R.Time));
+        }
+        for(int32 I=0;I<FMath::CeilToInt(.8f/Dt);++I) Move(-Through*Sign*400*Dt);
+        TestTrue(FString::Printf(TEXT("Eiichi/lifestone retreat offset %.0f sign %.0f dt %.3f"),Offset,Sign,Dt),FVector::DotProduct(P-Blocked,-Through*Sign)>150);
+    }
+    TestTrue(TEXT("Actual Shoushi setup shapes block the gap probes"),Contacts>0);
+    return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERadarArtTest,"ACE.RetailParity.RadarArt",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACERadarArtTest::RunTest(const FString&)
+{
+    FEntryWorld Fixture;auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
+    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    auto* Resources=Dat->GetUiResources();
+    for(uint32 Image=5;Image<=12;++Image) {
+        const uint32 Id=Resources->ResolveTargetIndicatorId(Image);
+        TestTrue(TEXT("Retail enum mapper resolves directional art"),(Id>>24)==6);
+        auto* Texture=Resources->ResolveIconTexture(Id);
+        TestNotNull(TEXT("Original directional arrow decodes"),Texture);
+        AddInfo(FString::Printf(TEXT("Target indicator enum %u = %08X (%dx%d)"),Image,Id,Texture?Texture->GetSizeX():0,Texture?Texture->GetSizeY():0));
+    }
+    TestEqual(TEXT("Left arrow matches retail screenshot"),ACERadarVisuals::ArrowEnum(FVector2D(-1,0)),8u);
+    TestEqual(TEXT("Right arrow"),ACERadarVisuals::ArrowEnum(FVector2D(1,0)),9u);
+    TestFalse(TEXT("Selected square has open corners"),ACERadarVisuals::Pixel(4,true,3,3));
+    TestTrue(TEXT("Selected square has side edges"),ACERadarVisuals::Pixel(4,true,3,0));
+    auto* Blip=Resources->ResolveRadarBlip(4,false);
+    TestTrue(TEXT("Native minimap masks remain sharp single-mip pixels"),Blip && Blip->Filter==TF_Nearest && Blip->GetNumMips()==1);
+    auto* Resolver=Dat->GetTextureResolver();
+    auto* UI=Resolver->GetOrCreateUiTexture(0x06004C40);
+    TestTrue(TEXT("Actual DAT chrome retains original dimensions and a single bilinear mip"),UI && UI->GetNumMips()==1 && UI->Filter==TF_Bilinear && UI->GetSizeX()==12);
+    return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEStreamingRetirementTest, "ACE.RetailParity.StreamingRetirement",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACEStreamingRetirementTest::RunTest(const FString&)
+{
+    FEntryWorld Fixture;
+    auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
+    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    Dat->EnsureLoaded();
+    auto* Client=Fixture.GI->GetSubsystem<UACEClientSubsystem>();
+    auto Session=Client->GetSession();
+    auto* Owner=Fixture.World->SpawnActor<AActor>();
+    auto* Terrain=NewObject<UACETerrainPresenterComponent>(Owner);
+    Owner->AddInstanceComponent(Terrain);Terrain->RegisterComponent();Terrain->Client=Client;
+    Terrain->TerrainChunkSize=1;Terrain->LandblockClass=AACELandblockActor::StaticClass();
+    // ACE world portal 10796: Singularity Bore's actual destination.
+    FACEPosition Bore;Bore.CellId=0x02910388;Bore.Location=FVector(210,-120,6);
+    Session->SetLocalPosition(Bore);
+    TestFalse(TEXT("Singularity Bore is an enclosed dungeon"),Terrain->NeedsExteriorTerrain(Bore.CellId));
+    TSharedPtr<FACEBuiltLandblockMesh> Departed=MakeShared<FACEBuiltLandblockMesh>();Departed->bHasHeights=true;Departed->bHasTerrain=true;
+    TWeakPtr<FACEBuiltLandblockMesh> OldMesh=Departed;
+    Dat->LandblockCache.Add(0xDA550000,Departed);Departed.Reset();
+    Dat->GetOrBuildEnvCellMesh(0x7F030133,100);
+    Terrain->ResetStreamingForTransition();
+    Terrain->LastKnownCellId=Bore.CellId;Terrain->bHasKnownCell=true;
+    Terrain->SyncAroundCell(Bore.CellId);
+    TestFalse(TEXT("Dungeon arrival releases departed terrain even after actor reset"),OldMesh.IsValid());
+    Terrain->SyncEnvCells();
+    TestNull(TEXT("Arrival releases old dungeon CPU meshes with no old actors left"),Dat->FindEnvCellMesh(0x7F030133,100));
+    TArray<int32> Ordered;TSet<int32> Needed;Terrain->CollectNeededEnvCells(Ordered,Needed);
+    const double Start=FPlatformTime::Seconds(),Deadline=Start+45;
+    bool Ready=false;
+    do {
+        FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
+        Ready=true;
+        for(int32 Id:Ordered) Ready &= Dat->RequestEnvCellMesh(Id,100)==UACEDatSubsystem::EACEEnvCellMeshStatus::Ready;
+        if(!Ready) FPlatformProcess::Sleep(.002f);
+    } while(!Ready && FPlatformTime::Seconds()<Deadline);
+    TestTrue(TEXT("Singularity Bore's arrival cells finish with bounded workers"),Ready);
+    AddInfo(FString::Printf(TEXT("Singularity Bore arrival: %d cells, %.3fs"),Needed.Num(),FPlatformTime::Seconds()-Start));
+    Dat->CancelEnvCellMeshRequestsOutside({});Dat->EvictEnvCellMeshesOutside({},100);
+    // Model a worker finishing after the player has left; it must not resurrect
+    // either a successful result or a permanent failure for a cancelled request.
+    constexpr uint32 Land=0xDA550000, Cell=0x7F030133;
+    const uint64 Key=Dat->MakeScaleCacheKey(Cell,100);
+    Dat->PendingLandblockIds.Add(Land);Dat->CancelLandblockMeshRequestsOutside({});
+    auto LateLand=MakeShared<FACEBuiltLandblockMesh>();LateLand->bHasHeights=true;LateLand->bHasTerrain=true;
+    Dat->OnLandblockBuildComplete(Land,100,Dat->LandblockBuildGeneration,true,LateLand);
+    TestNull(TEXT("Late cancelled terrain is discarded"),Dat->FindLandblockMesh(Land));
+    Dat->PendingEnvCellKeys.Add(Key);Dat->CancelEnvCellMeshRequestsOutside({});
+    Dat->OnEnvCellBuildComplete(Cell,100,Key,Dat->EnvCellBuildGeneration,true,MakeShared<FACEBuiltEnvCellMesh>());
+    TestNull(TEXT("Late cancelled room is discarded"),Dat->FindEnvCellMesh(Cell,100));
+    Dat->PendingEnvCellKeys.Add(Key);
+    Dat->OnEnvCellBuildComplete(Cell,100,Key,Dat->EnvCellBuildGeneration-1,true,MakeShared<FACEBuiltEnvCellMesh>());
+    TestTrue(TEXT("Stale generation cannot remove the new request for the same cell"),Dat->PendingEnvCellKeys.Contains(Key));
+    Dat->PendingEnvCellKeys.Remove(Key);
+    return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPortalRetirementTest, "ACE.RetailParity.PortalResourceRetirement",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACEPortalRetirementTest::RunTest(const FString&)
+{
+    FEntryWorld Fixture;
+    auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
+    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    Dat->EnsureLoaded();Dat->SetWorldStreamingAllowed(false);
+    auto* Client=Fixture.GI->GetSubsystem<UACEClientSubsystem>();
+    Fixture.World->SetGameMode(FURL(nullptr,TEXT("/Game/Test?game=/Script/Engine.GameModeBase"),TRAVEL_Absolute));
+    auto* GM=Fixture.World->GetAuthGameMode();
+    if(!TestNotNull(TEXT("Retirement runs on the world's real game mode"),GM)) return false;
+    auto* Terrain=NewObject<UACETerrainPresenterComponent>(GM);
+    GM->AddInstanceComponent(Terrain);Terrain->RegisterComponent();Terrain->Client=Client;
+    auto* PC=Fixture.World->SpawnActor<AACEPlayerController>();PC->Client=Client;
+    // Actual v61 crash route: Caul -> Obsidian Rim -> town -> Caul -> Rim.
+    const uint32 Route[]={0x09040001,0x2E43000C,0x7D640018,0x09040001,0x2E43000C};
+    for(int32 Visit=0;Visit<UE_ARRAY_COUNT(Route)-1;++Visit)
+    {
+        const uint32 LandId=Route[Visit]&0xFFFF0000u;
+        Dat->GetOrBuildLandblockMesh(LandId,100);
+        auto* Land=Fixture.World->SpawnActor<AACELandblockActor>();
+        TestTrue(TEXT("Actual route landblock renders before departure"),Land->LoadLandblock(LandId,100,false,1,0));
+        Terrain->Spawned.Add(LandId,Land);
+        FlushRenderingCommands();
+        TArray<TWeakObjectPtr<UTexture2D>> DepartedTextures;
+        for(const auto& Pair:Dat->LandTextureCache) if(Pair.Value.IsValid()) DepartedTextures.Add(Pair.Value);
+        TestTrue(TEXT("Departure includes real GPU terrain textures"),!DepartedTextures.IsEmpty());
+        TWeakPtr<FACEBuiltLandblockMesh> DepartedMesh=Dat->LandblockCache.FindRef(LandId);
+        FACEPosition Destination;Destination.CellId=Route[Visit+1];Destination.Location=FVector(33,80,7.5);
+        Client->GetSession()->SetLocalPosition(Destination);
+        PC->PortalRetirement=AACEPlayerController::EPortalRetirement::ClearScene;
+        TestFalse(TEXT("Scene retirement yields before destination allocations"),PC->RetirePortalScene());
+        TestFalse(TEXT("Distant CPU terrain is retired before collection"),DepartedMesh.IsValid());
+        const double Deadline=FPlatformTime::Seconds()+15;
+        bool Ready=false;
+        do {
+            if(PC->PortalRetirement==AACEPlayerController::EPortalRetirement::WaitCollection
+                && GetLastGCTime()<=PC->PortalRetirementLastGC) CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS,false);
+            IncrementalPurgeGarbage(true,.002);
+            Ready=PC->RetirePortalScene();
+            FPlatformProcess::Sleep(.001f);
+        } while(!Ready && FPlatformTime::Seconds()<Deadline);
+        TestTrue(TEXT("Bounded destruction and render retirement finish"),Ready);
+        for(const auto& Texture:DepartedTextures)
+            TestFalse(TEXT("Previous area's terrain texture is gone before next allocation"),Texture.IsValid());
+        TestFalse(TEXT("Retirement alone cannot enable destination streaming"),Dat->IsWorldStreamingAllowed());
+    }
+    return !HasAnyErrors();
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACELoadingTransitionTest, "ACE.RetailParity.LoadingTransition",
@@ -103,6 +295,16 @@ bool FACELoadingTransitionTest::RunTest(const FString&)
     FACEPosition Pose;Pose.CellId=0xF4180104;Pose.Location=FVector(36.90,48.70,169.805);
     Session->SetLocalPosition(Pose);Session->State=EACESessionState::InWorld;
     ++GFrameCounter;PC->TickWorldTransition();
+    TestFalse(TEXT("Destination allocations wait for old scene retirement"),PC->bDestinationStreamingStarted);
+    const double RetirementDeadline=FPlatformTime::Seconds()+15;
+    while(!PC->bDestinationStreamingStarted && FPlatformTime::Seconds()<RetirementDeadline)
+    {
+        if(PC->PortalRetirement==AACEPlayerController::EPortalRetirement::WaitCollection
+            && GetLastGCTime()<=PC->PortalRetirementLastGC) CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS,false);
+        IncrementalPurgeGarbage(true,.002);
+        ++GFrameCounter;PC->TickWorldTransition();
+        FPlatformProcess::Sleep(.001f);
+    }
     TestTrue(TEXT("Destination work starts on a later portal frame"),PC->bDestinationStreamingStarted);
     TestTrue(TEXT("Destination streaming is enabled"),Dat->IsWorldStreamingAllowed());
     const double HudDeadline=FPlatformTime::Seconds()+15;

@@ -4,10 +4,11 @@
 #include "Dat/ACEDatFontRenderer.h"
 #include "Dat/ACEDatCursor.h"
 #include "Engine/Texture2D.h"
+#include "ACERadarVisuals.h"
 
 void UACEUIResourceResolver::Initialize(UACEDatSubsystem* InDat)
 {
-	SpellIconCache.Reset();
+	SpellIconCache.Reset(); RadarMasks.Reset();
 	Dat = InDat;
 	Cache.Reset();
 	IconCache.Reset();
@@ -26,7 +27,7 @@ void UACEUIResourceResolver::Initialize(UACEDatSubsystem* InDat)
 
 void UACEUIResourceResolver::Shutdown()
 {
-	SpellIconCache.Reset();
+	SpellIconCache.Reset(); RadarMasks.Reset();
 	PaperDollClickPixels.Reset();
 	PaperDollClickSize = FIntPoint::ZeroValue;
 	DidMaps.Reset();
@@ -452,4 +453,24 @@ bool UACEUIResourceResolver::TryGetCursor(uint32 CursorImageId, FCursorDesc& Out
 	Out.HotY = 0;
 	// Hotspots are in UIAssetManifest.json cursor entries — load when cursor table is imported.
 	return CursorImageId != 0;
+}
+
+uint32 UACEUIResourceResolver::ResolveTargetIndicatorId(uint32 ImageEnum)
+{
+    // DBObj::GetByEnum(image, 0x10000009, RenderSurface).
+    const uint32 Mapper=ResolveMappedDid(0x25000000,0x10000009,0x10000009);
+    return Mapper ? ResolveMappedDid(Mapper,ImageEnum,ImageEnum) : 0;
+}
+
+UTexture2D* UACEUIResourceResolver::ResolveRadarBlip(int32 Shape, bool bSelected)
+{
+    const int32 Key=Shape*2+int32(bSelected);
+    if (auto* Found=RadarMasks.Find(Key)) return Found->Get();
+    TArray<FColor> Pixels;Pixels.Init(FColor::Transparent,49);
+    for(int32 Y=-3;Y<=3;++Y) for(int32 X=-3;X<=3;++X)
+        if(ACERadarVisuals::Pixel(Shape,bSelected,X,Y)) Pixels[(Y+3)*7+X+3]=FColor::White;
+    UTexture2D* Texture=FACEDatTextureResolver::CreateTransientRgbaWithMips(7,7,Pixels,true,
+        TA_Clamp,TA_Clamp,false,false,1,TF_Nearest,false);
+    if(Texture){Texture->LODGroup=TEXTUREGROUP_UI;RadarMasks.Add(Key,Texture);}
+    return Texture;
 }

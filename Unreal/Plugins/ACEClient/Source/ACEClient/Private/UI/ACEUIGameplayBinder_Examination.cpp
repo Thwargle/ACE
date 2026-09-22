@@ -135,7 +135,7 @@ void UACEUIGameplayBinder::RefreshCreatureExamination()
         auto Row = UACEUILayoutResolver::LoadTemplate(0x2100006B, 0x10000166);
         if (!Row) return;
         Row->Y = ExamAttributeRows.Num() * Row->Height;
-        Row->ElementName = FString::Printf(TEXT("ExamAttribute_%d"), ExamAttributeRows.Num());
+        Row->SetElementName(FString::Printf(TEXT("ExamAttribute_%d"), ExamAttributeRows.Num()));
         List->AddChild(Row);
         ExamAttributeRows.Add(Row);
         ExamAttributeLabels.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));

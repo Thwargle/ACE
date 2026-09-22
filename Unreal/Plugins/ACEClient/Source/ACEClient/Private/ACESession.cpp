@@ -1668,6 +1668,7 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader)
 	Obj.UiEffects = static_cast<int32>(Decoded.UiEffects);
 	Obj.ContainerId = Decoded.ContainerId;
 	Obj.WielderId = Decoded.WielderId;
+	Obj.MonarchGuid = Decoded.MonarchGuid;
 	Obj.Value = Decoded.Value;
 	Obj.Burden = Decoded.Burden;
 	Obj.ContainersCapacity = Decoded.ContainersCapacity;
@@ -6262,6 +6263,10 @@ void FACESession::HandlePublicUpdateInstanceId(FACEBinaryReader& Reader)
 			{
 				Obj->ContainerId = 0;
 			}
+		}
+		else if (Prop == 26) // PropertyInstanceId.Monarch
+		{
+			Obj->MonarchGuid = Value;
 		}
 	}
 }

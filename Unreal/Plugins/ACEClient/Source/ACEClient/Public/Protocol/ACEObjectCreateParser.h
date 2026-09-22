@@ -18,6 +18,7 @@ struct ACECLIENT_API FACEDecodedObject
 	int32 ItemType = 0;
 	int32 ContainerId = 0;
 	int32 WielderId = 0;
+	int32 MonarchGuid = 0;
 	int32 Value = 0;
 	int32 Burden = 0;
 	int32 ContainersCapacity = 0;

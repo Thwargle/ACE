@@ -1,4 +1,5 @@
 #include "UI/ACEUIGameplayBinder.h"
+#include "ACERadarVisuals.h"
 #include "UI/ACEChatEntry.h"
 #include "ACEEquipmentRules.h"
 #include "UI/ACERetailTextEntry.h"
@@ -579,7 +580,7 @@ void UACEUIGameplayBinder::Shutdown()
 	for (UTextBlock* Text : ExamCreatureHeadings) if (Text) Text->RemoveFromParent();
 	ExamCreatureHeadings.Reset();
 	for (const auto& Row : ExamAttributeRows)
-		if (const auto Parent = Row->Parent.Pin()) Parent->Children.Remove(Row);
+		if (const auto Parent = Row->Parent.Pin()) Parent->RemoveChild(Row);
 	ExamAttributeLabels.Reset(); ExamAttributeValues.Reset(); ExamAttributeRows.Reset(); ExamLevel = nullptr;
 	if (Manager && ActivatedHandle.IsValid())
 	{
@@ -612,7 +613,7 @@ void UACEUIGameplayBinder::Shutdown()
 	Canvas = nullptr;
 	PlayerController = nullptr;
 	HideSelectionMarkers();
-	SelectionMarkerBox = nullptr;
+	SelectionMarkerBox = nullptr; SelectionDirectionArrow = nullptr;
 	SelectionMarkerCorners.Reset();
 }
 
@@ -3928,16 +3929,16 @@ void UACEUIGameplayBinder::ShowManaStoneConfirmation(int32 Source, const FACEWor
 	{
 		ManaStoneConfirmRoot = UACEUILayoutResolver::LoadTemplate(0x2100003C, 0x15);
 		if (!ManaStoneConfirmRoot) return;
-		ManaStoneConfirmRoot->ElementName = TEXT("RootGameplay_FloatyManaStoneConfirmation_Field");
+		ManaStoneConfirmRoot->SetElementName(TEXT("RootGameplay_FloatyManaStoneConfirmation_Field"));
 		TFunction<void(TSharedPtr<FACEUIElement>)> NameControls = [&](TSharedPtr<FACEUIElement> Node)
 		{
 			if (Node->ElementId == 0x3D)
 			{
 				Node->LeftEdge = Node->RightEdge = Node->TopEdge = Node->BottomEdge = 3;
 			}
-			if (Node->ElementId == 0x3E) Node->ElementName = TEXT("ManaStoneConfirmationBody");
-			if (Node->ElementId == 0x17) Node->ElementName = TEXT("ManaStoneConfirmationYes");
-			if (Node->ElementId == 0x19) Node->ElementName = TEXT("ManaStoneConfirmationNo");
+			if (Node->ElementId == 0x3E) Node->SetElementName(TEXT("ManaStoneConfirmationBody"));
+			if (Node->ElementId == 0x17) Node->SetElementName(TEXT("ManaStoneConfirmationYes"));
+			if (Node->ElementId == 0x19) Node->SetElementName(TEXT("ManaStoneConfirmationNo"));
 			for (const auto& Child : Node->Children) NameControls(Child);
 		};
 		NameControls(ManaStoneConfirmRoot);
@@ -5428,28 +5429,31 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 		}
 	}
 
-	// Radar blips: select (and identify on right-click).
-	for (int32 i = 0; i < RadarBlips.Num() && i < RadarBlipGuids.Num(); ++i)
-	{
-		UBorder* Blip = RadarBlips[i];
-		if (!Blip || Blip->GetVisibility() == ESlateVisibility::Collapsed)
-		{
-			continue;
-		}
-		if (Canvas->IsWidgetExposedAt(Blip, Absolute))
-		{
-			const int32 Guid = RadarBlipGuids[i];
-			if (Guid != 0 && Client)
-			{
-				Client->SelectObject(Guid);
-				if (bRightClick)
-				{
-					Client->SendIdentifyObject(Guid);
-				}
-			}
-			return true;
-		}
-	}
+    // Retail picks the nearest dot within six authored pixels, not the first
+    // rectangular widget encountered. Keep that usable tolerance as dots shrink.
+    if(Manager && Canvas && Client)
+    {
+        auto Radar=Manager->FindElementByName(TEXT("RadarImage"));
+        const FVector2D Local=Canvas->GetCachedGeometry().AbsoluteToLocal(Absolute);
+        const FVector2D Scale=Canvas->GetLastScale2D();
+        const FVector2D P=Local/Scale;
+        if(Radar && Canvas->IsElementExposedAt(Radar,Local))
+        {
+            const FIntPoint O=Radar->GetScreenOrigin();
+            if(P.X>=O.X && P.Y>=O.Y && P.X<O.X+Radar->Width && P.Y<O.Y+Radar->Height)
+            {
+                int32 BestGuid=0; double BestDistance=36.01;
+                for(int32 I=0;I<RadarBlips.Num() && I<RadarBlipGuids.Num();++I)
+                {
+                    const auto* Blip=RadarBlips[I].Get();if(!Blip || !Blip->IsVisible() || !RadarBlipGuids[I])continue;
+                    const auto& G=Blip->GetCachedGeometry();
+                    const FVector2D D=(G.AbsoluteToLocal(Absolute)-G.GetLocalSize()*.5)/Scale;
+                    if(D.SizeSquared()<BestDistance){BestDistance=D.SizeSquared();BestGuid=RadarBlipGuids[I];}
+                }
+                if(BestGuid){Client->SelectObject(BestGuid);if(bRightClick)Client->SendIdentifyObject(BestGuid);return true;}
+            }
+        }
+    }
 
 	if (!bRightClick && Manager && ActivePanelPage == TEXT("SkillManagementPanel_Field"))
 	{
@@ -8824,9 +8828,9 @@ void UACEUIGameplayBinder::RefreshTitleOverlays()
 	{
 		auto Entry = UACEUILayoutResolver::LoadTemplate(0x2100005E, 0x10000536);
 		if (!Entry || Entry->Children.IsEmpty()) break;
-		Entry->ElementName = FString::Printf(TEXT("LiveCharacterTitleRow%d"), TitleRows.Num());
+		Entry->SetElementName(FString::Printf(TEXT("LiveCharacterTitleRow%d"), TitleRows.Num()));
 		Entry->bVisible = true; Entry->bDefaultHidden = false;
-		Entry->Parent = ListEl; ListEl->Children.Add(Entry); TitleRowElements.Add(Entry);
+		ListEl->AddChild(Entry); TitleRowElements.Add(Entry);
 		Manager->InvalidateNameLookupIndex();
 		UTextBlock* Row = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
 		Row->SetAutoWrapText(false);
@@ -10220,28 +10224,30 @@ void UACEUIGameplayBinder::PlaceRadarWidget(UWidget* Widget, float ScreenX, floa
 		Slot->SetAnchors(FAnchors(0.f, 0.f));
 		Slot->SetAlignment(FVector2D(0.f, 0.f));
 		Slot->SetAutoSize(false);
-		Slot->SetPosition(FVector2D(ScreenX, ScreenY));
-		Slot->SetSize(FVector2D(Size, Size));
+		Slot->SetPosition(FVector2D(ScreenX, ScreenY)*Canvas->GetLastScale2D());
+		Slot->SetSize(FVector2D(Size, Size)*Canvas->GetLastScale2D());
 		Canvas->SetOverlayOrder(Widget, Manager->FindElementByName(TEXT("RootGameplay_Radar_Field")), ZOrder);
 	}
 }
 
 FLinearColor UACEUIGameplayBinder::ColorFromRadarBlip(uint8 RadarColor)
 {
-	switch (RadarColor)
-	{
-	case ACERadarColor::Blue: return FLinearColor(0.25f, 0.45f, 0.95f, 1.f);
-	case ACERadarColor::Gold: return FLinearColor(0.92f, 0.75f, 0.20f, 1.f);
-	case ACERadarColor::White: return FLinearColor(0.95f, 0.95f, 0.95f, 1.f);
-	case ACERadarColor::Purple: return FLinearColor(0.70f, 0.30f, 0.90f, 1.f);
-	case ACERadarColor::Red: return FLinearColor(0.90f, 0.18f, 0.15f, 1.f);
-	case ACERadarColor::Pink: return FLinearColor(0.95f, 0.45f, 0.70f, 1.f);
-	case ACERadarColor::Green: return FLinearColor(0.25f, 0.75f, 0.30f, 1.f);
-	case ACERadarColor::Yellow: return FLinearColor(0.95f, 0.88f, 0.20f, 1.f);
-	case ACERadarColor::Cyan: return FLinearColor(0.25f, 0.85f, 0.90f, 1.f);
-	case ACERadarColor::BrightGreen: return FLinearColor(0.35f, 0.95f, 0.40f, 1.f);
-	default: return FLinearColor(0.85f, 0.15f, 0.10f, 1.f);
-	}
+    // Retail RGBAColor_Radar constants are encoded display colors.
+    FColor Color(255,255,128);
+    switch(RadarColor)
+    {
+    case ACERadarColor::Blue: Color=FColor(64,168,255);break;
+    case ACERadarColor::Gold: Color=FColor(255,171,0);break;
+    case ACERadarColor::White: Color=FColor::White;break;
+    case ACERadarColor::Purple: Color=FColor(191,99,255);break;
+    case ACERadarColor::Red: Color=FColor(255,64,99);break;
+    case ACERadarColor::Pink: Color=FColor(255,168,191);break;
+    case ACERadarColor::Green: Color=FColor(0,128,64);break;
+    case ACERadarColor::Cyan: Color=FColor(0,255,255);break;
+    case ACERadarColor::BrightGreen: Color=FColor(0,255,0);break;
+    default:break;
+    }
+    return FLinearColor::FromSRGBColor(Color);
 }
 
 uint8 UACEUIGameplayBinder::ResolveRadarColor(const FACEWorldObject& Obj)
@@ -10374,7 +10380,15 @@ void UACEUIGameplayBinder::RefreshRadarOverlays()
 	const float CenterX = static_cast<float>(Origin.X) + RadarW * 0.5f;
 	const float CenterY = static_cast<float>(Origin.Y) + RadarH * 0.5f;
 	const float RadiusPx = FMath::Min(RadarW, RadarH) * 0.5f - 8.f;
-	constexpr float RadarRangeAc = 60.f;
+	const float RadarRangeAc = (uint32(PlayerPos.CellId)&0xFFFFu)>=0x100 ? 25.f : 75.f;
+	auto* Resources=Canvas->GetResourceResolver();
+	if(!Resources)return;
+	auto SetBlip=[&](UBorder* Blip,int32 Shape,bool Selected,FLinearColor Color)
+	{
+		FSlateBrush Brush;Brush.SetResourceObject(Resources->ResolveRadarBlip(Shape,Selected));
+		Brush.ImageSize=FVector2D(7,7);Brush.DrawAs=ESlateBrushDrawType::Image;
+		Blip->SetBrush(Brush);Blip->SetBrushColor(Color);
+	};
 
 	auto GlobalXY = [](const FACEPosition& Pos) -> FVector2D
 	{
@@ -10404,8 +10418,8 @@ void UACEUIGameplayBinder::RefreshRadarOverlays()
 	if (RadarPlayerDot)
 	{
 		RadarPlayerDot->SetVisibility(ESlateVisibility::HitTestInvisible);
-		RadarPlayerDot->SetBrush(MakeRoundBlipBrush(FLinearColor::White));
-		PlaceRadarWidget(RadarPlayerDot, CenterX - 2.f, CenterY - 2.f, 4.f, 525);
+		SetBlip(RadarPlayerDot,8,false,ColorFromRadarBlip(ACERadarColor::BrightGreen));
+		PlaceRadarWidget(RadarPlayerDot, CenterX - 3.f, CenterY - 3.f, 7.f, 525);
 	}
 
 	const FVector2D SelfXY = PlayerPos.IsValid() ? GlobalXY(PlayerPos) : FVector2D::ZeroVector;
@@ -10478,6 +10492,9 @@ void UACEUIGameplayBinder::RefreshRadarOverlays()
 
 	const auto RadarSession = Client->GetSession();
 	if (!RadarSession) return;
+	const auto& Fellowship=RadarSession->GetFellowship();
+	const auto* SelfObject=RadarSession->GetWorldObjects().Find(SelfGuid);
+	const int32 SelectedGuid=Client->GetSelectedObject().Guid;
 	int32 BlipIndex = 0;
 	for (const auto& Pair : RadarSession->GetWorldObjects())
 	{
@@ -10493,7 +10510,7 @@ void UACEUIGameplayBinder::RefreshRadarOverlays()
 			continue;
 		}
 		const FVector2D Delta = GlobalXY(Obj.Position) - SelfXY;
-		if (Delta.SizeSquared() > RadarRangeAc * RadarRangeAc)
+		if (Delta.SizeSquared() > FMath::Square(RadarRangeAc-1.f))
 		{
 			continue;
 		}
@@ -10504,10 +10521,22 @@ void UACEUIGameplayBinder::RefreshRadarOverlays()
 		const float ScreenY = CenterY - RelY / RadarRangeAc * RadiusPx;
 
 		UBorder* Blip = RadarBlips[BlipIndex];
-		const FLinearColor Color = ColorFromRadarBlip(ResolveRadarColor(Obj));
-		Blip->SetBrush(MakeRoundBlipBrush(Color));
+		int32 Shape=4;
+        uint8 RadarColor=ResolveRadarColor(Obj);
+        if(Fellowship.bValid && Fellowship.Members.ContainsByPredicate([&](const auto& M){return M.Guid==Obj.Guid;}))
+        { Shape=Fellowship.LeaderGuid==Obj.Guid ? 5:6;RadarColor=ACERadarColor::BrightGreen; }
+        else if(SelfObject && Obj.MonarchGuid!=0 && Obj.MonarchGuid==SelfObject->MonarchGuid) Shape=2;
+        else if(Obj.bIsPlayer && SelfObject && (Obj.ObjectDescriptionFlags & SelfObject->ObjectDescriptionFlags
+            & (ACEObjectDescFlag::PlayerKiller|ACEObjectDescFlag::PkLiteStatus))) Shape=3;
+        FLinearColor Color=ColorFromRadarBlip(RadarColor);
+        if(FMath::Abs(Obj.Position.Location.Z-PlayerPos.Location.Z)>=5.f)
+        {
+            const FColor Encoded=Color.ToFColorSRGB();
+            Color=FLinearColor::FromSRGBColor(FColor(Encoded.R*.65f,Encoded.G*.65f,Encoded.B*.65f));
+        }
+        SetBlip(Blip,Shape,Obj.Guid==SelectedGuid,Color);
 		Blip->SetVisibility(ESlateVisibility::Visible);
-		PlaceRadarWidget(Blip, ScreenX - 3.f, ScreenY - 3.f, 6.f, 530);
+		PlaceRadarWidget(Blip, FMath::FloorToFloat(ScreenX) - 3.f, FMath::FloorToFloat(ScreenY) - 3.f, 7.f, 530);
 		RadarBlipGuids[BlipIndex] = Obj.Guid;
 		++BlipIndex;
 	}
@@ -10848,11 +10877,35 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 		ScreenMax.Y = FMath::Max(ScreenMax.Y, WidgetPos.Y);
 		++Projected;
 	}
-	if (Projected < 2)
-	{
-		HideSelectionMarkers();
-		return;
-	}
+    const FVector2D ViewSize=Canvas->GetCachedGeometry().GetLocalSize();
+    if (Projected<2 || ScreenMax.X<0 || ScreenMax.Y<0 || ScreenMin.X>=ViewSize.X || ScreenMin.Y>=ViewSize.Y)
+    {
+        HideSelectionMarkers();
+        if(SelectionDirectionArrow && ViewSize.X>1 && ViewSize.Y>1 && Canvas->GetResourceResolver())
+        {
+            const FVector Relative=ViewRot.UnrotateVector(WorldOrigin-ViewLoc);
+            FVector2D Direction=Relative.X>0 && Projected>=2 ? (ScreenMin+ScreenMax)*.5-ViewSize*.5
+                : FVector2D(Relative.Y,-Relative.Z);
+            if(Direction.IsNearlyZero())Direction=FVector2D(0,1);
+            auto* Resources=Canvas->GetResourceResolver();
+            const uint32 Did=Resources->ResolveTargetIndicatorId(ACERadarVisuals::ArrowEnum(Direction));
+            if(UTexture2D* Texture=Resources->ResolveIconTexture(Did))
+            {
+                const FVector2D Size=FVector2D(Texture->GetSizeX(),Texture->GetSizeY())*Canvas->GetLastScale2D();
+                FSlateBrush Brush;Brush.SetResourceObject(Texture);Brush.ImageSize=Size;Brush.DrawAs=ESlateBrushDrawType::Image;
+                SelectionDirectionArrow->SetBrush(Brush);
+                SelectionDirectionArrow->SetBrushColor(ColorFromSelectionMarker(bHaveObj?ResolveRadarColor(SelObj):ACERadarColor::Yellow));
+                SelectionDirectionArrow->SetVisibility(ESlateVisibility::HitTestInvisible);
+                if(auto* Slot=Cast<UCanvasPanelSlot>(SelectionDirectionArrow->Slot))
+                {
+                    Slot->SetAutoSize(false);Slot->SetSize(Size);Slot->SetPosition(ACERadarVisuals::EdgePosition(Direction,ViewSize,Size));
+                    Canvas->SetOverlayOrder(SelectionDirectionArrow,nullptr,8500);
+                }
+            }
+        }
+        return;
+    }
+    if(SelectionDirectionArrow)SelectionDirectionArrow->SetVisibility(ESlateVisibility::Collapsed);
 
 	// Retail VividTargetIndicator: resize parent to projected bbox; 12×12 corners sit on the
 	// box edges (layout 0x2100000F — NW@0,0 NE@W-12,0 SW@0,H-12 SE@W-12,H-12). No extra pad.
@@ -10913,6 +10966,13 @@ void UACEUIGameplayBinder::EnsureSelectionMarkers()
 		return;
 	}
 	UCanvasPanel* Layer = Canvas->GetElementLayer();
+    if(!SelectionDirectionArrow)
+    {
+        SelectionDirectionArrow=Canvas->WidgetTree->ConstructWidget<UBorder>();
+        SelectionDirectionArrow->SetPadding(FMargin(0));SelectionDirectionArrow->SetVisibility(ESlateVisibility::Collapsed);
+        Layer->AddChild(SelectionDirectionArrow);
+    }
+    else if(SelectionDirectionArrow->GetParent()!=Layer) Layer->AddChild(SelectionDirectionArrow);
 	if (!SelectionMarkerBox)
 	{
 		SelectionMarkerBox = Canvas->WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass());
@@ -10943,6 +11003,7 @@ void UACEUIGameplayBinder::EnsureSelectionMarkers()
 
 void UACEUIGameplayBinder::HideSelectionMarkers()
 {
+	if (SelectionDirectionArrow) SelectionDirectionArrow->SetVisibility(ESlateVisibility::Collapsed);
 	if (SelectionMarkerBox)
 	{
 		SelectionMarkerBox->SetVisibility(ESlateVisibility::Collapsed);
@@ -11002,33 +11063,7 @@ void UACEUIGameplayBinder::PlaceSelectionCorner(UBorder* Corner, int32 TexDid, f
 
 FLinearColor UACEUIGameplayBinder::ColorFromSelectionMarker(uint8 RadarColor)
 {
-	// Retail VividTargetIndicator tints follow RadarColor:
-	// NPK player white, PK red, PK Lite pink, attackable creature orange,
-	// NPC/vendor/item yellow, lifestone blue, portal purple.
-	switch (RadarColor)
-	{
-	case ACERadarColor::Blue:
-		return FLinearColor(0.30f, 0.55f, 1.f, 1.f);
-	case ACERadarColor::Yellow:
-		return FLinearColor(1.f, 0.92f, 0.22f, 1.f);
-	case ACERadarColor::Gold:
-		return FLinearColor(0.95f, 0.55f, 0.12f, 1.f); // hostiles — orange
-	case ACERadarColor::White:
-		return FLinearColor(0.95f, 0.95f, 0.95f, 1.f);
-	case ACERadarColor::Red:
-		return FLinearColor(0.95f, 0.15f, 0.12f, 1.f);
-	case ACERadarColor::Pink:
-		return FLinearColor(0.95f, 0.45f, 0.70f, 1.f);
-	case ACERadarColor::Purple:
-		return FLinearColor(0.75f, 0.35f, 0.95f, 1.f);
-	case ACERadarColor::Green:
-	case ACERadarColor::BrightGreen:
-		return FLinearColor(0.30f, 0.90f, 0.35f, 1.f);
-	case ACERadarColor::Cyan:
-		return FLinearColor(0.25f, 0.85f, 0.90f, 1.f);
-	default:
-		return FLinearColor(1.f, 0.92f, 0.22f, 1.f);
-	}
+    return ColorFromRadarBlip(RadarColor);
 }
 
 void UACEUIGameplayBinder::RefreshExaminationOverlay()
@@ -15141,16 +15176,16 @@ void UACEUIGameplayBinder::RefreshServerConfirmation()
 	{
 		ServerConfirmRoot = UACEUILayoutResolver::LoadTemplate(0x2100003C, 0x15);
 		if (!ServerConfirmRoot) return;
-		ServerConfirmRoot->ElementName = TEXT("RootGameplay_FloatyServerConfirmation_Field");
+		ServerConfirmRoot->SetElementName(TEXT("RootGameplay_FloatyServerConfirmation_Field"));
 		TFunction<void(TSharedPtr<FACEUIElement>)> NameControls = [&](TSharedPtr<FACEUIElement> Node)
 		{
 			if (Node->ElementId == 0x3D)
 			{
 				Node->LeftEdge = Node->RightEdge = Node->TopEdge = Node->BottomEdge = 3;
 			}
-			if (Node->ElementId == 0x3E) Node->ElementName = TEXT("ServerConfirmationBody");
-			if (Node->ElementId == 0x17) Node->ElementName = TEXT("ServerConfirmationYes");
-			if (Node->ElementId == 0x19) Node->ElementName = TEXT("ServerConfirmationNo");
+			if (Node->ElementId == 0x3E) Node->SetElementName(TEXT("ServerConfirmationBody"));
+			if (Node->ElementId == 0x17) Node->SetElementName(TEXT("ServerConfirmationYes"));
+			if (Node->ElementId == 0x19) Node->SetElementName(TEXT("ServerConfirmationNo"));
 			for (const auto& Child : Node->Children) NameControls(Child);
 		};
 		NameControls(ServerConfirmRoot);

@@ -3,9 +3,9 @@
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
 static TAutoConsoleVariable<int32> CVarIndexedUILookups(TEXT("ace.UI.IndexedLookups"),1,
-	TEXT("Index element names once per HUD refresh; 0 keeps recursive lookups for profiling."));
+	TEXT("Cache element names until the UI tree changes; 0 uses recursive lookups for profiling."));
 static TAutoConsoleVariable<int32> CVarReuseUILookupStorage(TEXT("ace.UI.ReuseLookupStorage"),1,
-	TEXT("Reuse name-index allocations between refreshes; membership is still rebuilt every pass."));
+	TEXT("Reuse name-index allocations when the UI tree changes."));
 #include "InputCoreTypes.h"
 #include "Misc/ConfigCacheIni.h"
 
@@ -386,6 +386,17 @@ void UACEUIElementManager::ApplyEdgeAnchoredLayout(int32 ViewportWidth, int32 Vi
 				{
 					continue;
 				}
+				// A saved/resized floaty may exceed the logical viewport after a
+				// DPI increase or window shrink. Moving it to Y=0 cannot expose
+				// its bottom controls; reduce its height and reflow the content
+				// before clamping its position (also while the UI is locked).
+				if (Child->Height > Vh && Child->ElementName.StartsWith(TEXT("RootGameplay_Floaty"))
+					&& !IsFixedSizeVitalsFloaty(Child->ElementName))
+				{
+					if (Child->AuthoredHeight < 0) Child->AuthoredHeight = Child->Height;
+					Child->UserResizeH = Vh - Child->AuthoredHeight;
+					ApplyFloatyResizeLayout(Child);
+				}
 				const int32 DrawX = Child->GetDrawX();
 				const int32 DrawY = Child->GetDrawY();
 				int32 DeltaX = 0;
@@ -443,7 +454,7 @@ void UACEUIElementManager::ClearRoots()
 	Roots.Reset();
 	if (SyntheticRoot.IsValid())
 	{
-		SyntheticRoot->Children.Reset();
+		SyntheticRoot->ClearChildren();
 	}
 	DragFloaty.Reset();
 	ResizeFloaty.Reset();
@@ -464,13 +475,13 @@ void UACEUIElementManager::AddRoot(const TSharedPtr<FACEUIElement>& Root)
 
 void UACEUIElementManager::BeginNameLookupPass()
 {
-	if (NameLookupPassDepth++ == 0) InvalidateNameLookupIndex();
+	++NameLookupPassDepth;
 }
 
 void UACEUIElementManager::EndNameLookupPass()
 {
 	check(NameLookupPassDepth > 0);
-	if (--NameLookupPassDepth == 0) InvalidateNameLookupIndex();
+	--NameLookupPassDepth;
 }
 
 void UACEUIElementManager::InvalidateNameLookupIndex()
@@ -485,8 +496,10 @@ void UACEUIElementManager::InvalidateNameLookupIndex()
 
 void UACEUIElementManager::BuildNameLookupIndex() const
 {
-	if (bNameLookupIndexValid) return;
+	const uint64 Revision = SyntheticRoot ? SyntheticRoot->TreeRevision : 0;
+	if (bNameLookupIndexValid && NameLookupRevision == Revision) return;
 	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_UINameIndex);
+	for (auto& Entry : NameLookupIndex) Entry.Value.Reset();
 	TFunction<void(const TSharedPtr<FACEUIElement>&)> Visit = [&](const auto& Node)
 	{
 		if (!Node) return;
@@ -496,6 +509,7 @@ void UACEUIElementManager::BuildNameLookupIndex() const
 	Visit(SyntheticRoot);
 	for(auto It=NameLookupIndex.CreateIterator();It;++It) if(It.Value().IsEmpty()) It.RemoveCurrent();
 	bNameLookupIndexValid = true;
+	NameLookupRevision = Revision;
 }
 
 TSharedPtr<FACEUIElement> UACEUIElementManager::FindElementByName(const FString& ElementName) const

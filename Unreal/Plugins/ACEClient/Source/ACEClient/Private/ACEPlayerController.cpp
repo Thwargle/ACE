@@ -52,6 +52,8 @@
 #include "Engine/World.h"
 #include "Engine/GameInstance.h"
 #include "Engine/Engine.h"
+#include "UObject/GarbageCollection.h"
+#include "RenderCommandFence.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerInput.h"
 #include "GameFramework/InputSettings.h"
@@ -4676,6 +4678,7 @@ void AACEPlayerController::BeginWorldTransition(const TCHAR* Reason)
 	GameplayUiPrefetchIndex = GameplayUiResolvedCount = GameplayUiLayoutTextureCount = 0;
 	bGameplayUiRequiredReady = true;
 	bDestinationStreamingStarted = false;
+	PortalRetirement = EPortalRetirement::ClearScene;
 	PortalFirstVisibleFrame = MAX_uint64;
 	EnterWorldLoadElapsed = 0.f;
 	TunnelVisibleElapsed = 0.f;
@@ -5157,6 +5160,52 @@ void AACEPlayerController::NotifyPortalArrivalIfNeeded()
 	UE_LOG(LogTemp, Log, TEXT("ACE: LoginComplete sent (exited portal space)"));
 }
 
+bool AACEPlayerController::RetirePortalScene()
+{
+	auto* Dat = GetGameInstance() ? GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr;
+	if (PortalRetirement == EPortalRetirement::ClearScene)
+	{
+		PortalRetirementStarted = FPlatformTime::Seconds();
+		if (Dat) Dat->LogLandTextureMemory(TEXT("before retirement"));
+		if (auto* GM = GetWorld() ? GetWorld()->GetAuthGameMode() : nullptr)
+			if (auto* Terrain = GM->FindComponentByClass<UACETerrainPresenterComponent>())
+				Terrain->ResetStreamingForTransition();
+		if (Dat) Dat->TrimMemoryCaches();
+		PortalRetirement = EPortalRetirement::WaitPreviousGC;
+	}
+	if (PortalRetirement == EPortalRetirement::WaitPreviousGC)
+	{
+		// A collection already in progress may have marked the old scene reachable.
+		// Finish it before requesting a fresh pass over the now-destroyed actors.
+		if (IsIncrementalReachabilityAnalysisPending() || IsIncrementalPurgePending()) return false;
+		PortalRetirementLastGC = GetLastGCTime();
+		GEngine->ForceGarbageCollection(false);
+		PortalRetirement = EPortalRetirement::WaitCollection;
+		return false;
+	}
+	if (PortalRetirement == EPortalRetirement::WaitCollection)
+	{
+		// Engine-end-of-frame GC destroys unreachable resources with its normal time
+		// budget. Continue rendering tracked portal frames throughout the purge.
+		if (GetLastGCTime() <= PortalRetirementLastGC || IsIncrementalReachabilityAnalysisPending()
+			|| IsIncrementalPurgePending()) return false;
+		PortalRetirementFence = MakeShared<FRenderCommandFence>();
+		PortalRetirementFence->BeginFence(FRenderCommandFence::ESyncDepth::RHIThread);
+		PortalRetirement = EPortalRetirement::WaitRender;
+		return false;
+	}
+	if (PortalRetirement == EPortalRetirement::WaitRender)
+	{
+		if (!PortalRetirementFence->IsFenceComplete()) return false;
+		PortalRetirementFence.Reset();
+		PortalRetirement = EPortalRetirement::Complete;
+		if (Dat) Dat->LogLandTextureMemory(TEXT("after retirement"));
+		UE_LOG(LogTemp, Log, TEXT("ACE: portal resource retirement completed in %.3fs"),
+			FPlatformTime::Seconds() - PortalRetirementStarted);
+	}
+	return PortalRetirement == EPortalRetirement::Complete;
+}
+
 void AACEPlayerController::TickWorldTransition()
 {
 	const float Dt = GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.016f;
@@ -5204,6 +5253,7 @@ void AACEPlayerController::TickWorldTransition()
 				{
 					// Keep submitting tracked portal frames while cooked parents load.
 					if (!Dat->PrepareRuntimeMaterials()) return;
+					if (!RetirePortalScene()) return;
 					// Destination scenery / weenie meshes cook under the tunnel so reveal
 					// isn't a pop-in. Keep the camera on the portal until those gates pass.
 					bDestinationStreamingStarted = true;
@@ -5219,7 +5269,6 @@ void AACEPlayerController::TickWorldTransition()
 						if (UACETerrainPresenterComponent* Terrain =
 							GM->FindComponentByClass<UACETerrainPresenterComponent>())
 						{
-							Terrain->ResetStreamingForTransition();
 							Terrain->RestoreProceduralStreamingAfterLogin(5, 6);
 							Terrain->KickLandblockLoginBurst();
 						}

@@ -77,22 +77,27 @@ void FACEEnvCellMeshBuilder::BakeStaticLighting(const FACEDatEnvCell& Cell, floa
 
 bool FACEEnvCellMeshBuilder::LoadEnvironment(uint32 EnvironmentId, FACEDatEnvironment& Out)
 {
-	if (const FACEDatEnvironment* Cached = EnvironmentCache.Find(EnvironmentId))
+	if (const FACEDatEnvironment* Cached = GetEnvironment(EnvironmentId))
 	{
-		Out = *Cached; // still a copy for API compat; prefer GetEnvironment for hot path
+		Out = *Cached;
 		return true;
 	}
+	return false;
+}
 
+const FACEDatEnvironment* FACEEnvCellMeshBuilder::GetEnvironment(uint32 EnvironmentId)
+{
+	if (const FACEDatEnvironment* Cached = EnvironmentCache.Find(EnvironmentId)) return Cached;
 	if (!Portal)
 	{
-		return false;
+		return nullptr;
 	}
 
 	TArray<uint8> Blob;
 	if (!Portal->ReadFile(EnvironmentId, Blob))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("ACEDat: missing Environment 0x%08X"), EnvironmentId);
-		return false;
+		return nullptr;
 	}
 
 	FACEDatCursor Cur(Blob);
@@ -100,27 +105,12 @@ bool FACEEnvCellMeshBuilder::LoadEnvironment(uint32 EnvironmentId, FACEDatEnviro
 	if (!ACEDatUnpack::UnpackEnvironment(Cur, Parsed))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("ACEDat: failed to unpack Environment 0x%08X"), EnvironmentId);
-		return false;
-	}
-
-	FACEDatEnvironment& Stored = EnvironmentCache.Add(EnvironmentId, MoveTemp(Parsed));
-	Out = Stored;
-	return true;
-}
-
-const FACEDatEnvironment* FACEEnvCellMeshBuilder::GetEnvironment(uint32 EnvironmentId)
-{
-	if (const FACEDatEnvironment* Cached = EnvironmentCache.Find(EnvironmentId))
-	{
-		return Cached;
-	}
-
-	FACEDatEnvironment Parsed;
-	if (!LoadEnvironment(EnvironmentId, Parsed))
-	{
 		return nullptr;
 	}
-	return EnvironmentCache.Find(EnvironmentId);
+
+	// Workers only need a borrowed view. Copying the complete dungeon environment
+	// on each cache miss doubled its transient memory and copied every cell BSP.
+	return &EnvironmentCache.Add(EnvironmentId, MoveTemp(Parsed));
 }
 
 void FACEEnvCellMeshBuilder::AppendCellStructLocal(

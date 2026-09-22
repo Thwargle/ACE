@@ -444,6 +444,7 @@ private:
 	/** Retail VividTargetIndicator_Selected parent (resized to screen AABB). */
 	UPROPERTY()
 	TObjectPtr<UCanvasPanel> SelectionMarkerBox;
+	UPROPERTY(Transient) TObjectPtr<UBorder> SelectionDirectionArrow;
 	/** Retail VividTargetIndicator_Selected_* DAT corners (0x06004C40–43). */
 	UPROPERTY()
 	TArray<TObjectPtr<UBorder>> SelectionMarkerCorners;

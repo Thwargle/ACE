@@ -343,7 +343,7 @@ void AACEEnvCellActor::SetLookInDrawLift(bool bLift)
 
 void AACEEnvCellActor::SetCeilingDrawSuppressed(bool bSuppress)
 {
-	if (!CellMesh)
+	if (!CellMesh || bCeilingDrawSuppressed == bSuppress)
 	{
 		return;
 	}

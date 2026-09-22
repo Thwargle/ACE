@@ -247,7 +247,7 @@ void UACEUIGameplayBinder::RefreshEffectsOverlays(bool bPositive)
 		{
 			auto Entry=UACEUILayoutResolver::LoadTemplate(0x2100001B,0x10000128);
 			if (!Entry) break;
-			Entry->ElementName=FString::Printf(TEXT("ActiveEffectRow_%d"),Row);
+			Entry->SetElementName(FString::Printf(TEXT("ActiveEffectRow_%d"),Row));
 			Entry->bUseExplicitState=true;
 			EffectsRowElements.Add(Entry);
 			EffectsListRows.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
@@ -256,7 +256,7 @@ void UACEUIGameplayBinder::RefreshEffectsOverlays(bool bPositive)
 		const auto Entry=EffectsRowElements[Row];
 		if (Entry->Parent.Pin()!=ListEl)
 		{
-			if (auto Old=Entry->Parent.Pin()) Old->Children.Remove(Entry);
+			if (auto Old=Entry->Parent.Pin()) Old->RemoveChild(Entry);
 			ListEl->AddChild(Entry); Manager->InvalidateNameLookupIndex();
 		}
 		auto* Label=EffectsListRows[Row].Get();

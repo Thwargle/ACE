@@ -1362,6 +1362,8 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			FACEWorldObject Mob;Mob.Guid=200001;Mob.ItemType=ACEItemType::Creature;Mob.SetupId=0x0200003D;
 			auto* Enemy=World->SpawnActor<AACEWorldEntityActor>();Enemy->InitializeFromObject(Mob,100,true);
 			Enemy->SetActorLocation(VR->Head->GetComponentLocation()+FVector(200,0,-100));
+			VR->EnemyHealth(Mob.Guid,0.f);
+			TestTrue(TEXT("One-hit kills never allocate a black meter"),VR->EnemyHealthBars.IsEmpty());
 			VR->EnemyHealth(Mob.Guid,.75f);
 			TestEqual(TEXT("Confirmed damage creates one overhead meter"),VR->EnemyHealthBars.Num(),1);
 			if(!VR->EnemyHealthBars.IsEmpty())
@@ -1383,6 +1385,8 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 				VR->EnemyHealth(Mob.Guid,1.f);TestEqual(TEXT("Healing updates that bar"),Bar.Meter->GetFraction(),1.f);
 				Enemy->SetActorLocation(VR->Head->GetComponentLocation()+FVector(3000,0,-100));VR->UpdateEnemyHealthBars();
 				TestTrue(TEXT("Distant targets retain readable angular width"),Bar.Panel->GetComponentScale().X*Bar.Panel->GetDrawSize().X>=400.f);
+				TestEqual(TEXT("Health bar has a shorter profile"),Bar.Panel->GetDrawSize().Y,40.);
+				VR->EnemyHealth(Mob.Guid,0.f);TestFalse(TEXT("Death immediately hides an existing meter"),Bar.Panel->IsVisible());
 				Bar.Expires=0;VR->UpdateEnemyHealthBars();TestFalse(TEXT("Expired health bars hide"),Bar.Panel->IsVisible());
 			}
 			Enemy->Destroy();

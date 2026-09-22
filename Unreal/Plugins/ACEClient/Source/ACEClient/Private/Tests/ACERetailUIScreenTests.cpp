@@ -272,6 +272,33 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         return Pixels;
     };
     CaptureScreen(TEXT("GameplayCombat"));
+    {
+        const auto SavedPose=Client->Session->GetPlayerPosition();
+        const auto SavedSelection=Client->Session->SelectedObject;
+        FACEPosition Pose;Pose.CellId=0xDA55001D;Pose.Location=FVector(100,100,20);
+        Client->Session->SetLocalPosition(Pose);
+        FACEWorldObject RadarNPC;RadarNPC.Guid=24680;RadarNPC.ItemType=ACEItemType::Creature;
+        RadarNPC.bHasPosition=true;RadarNPC.Position=Pose;RadarNPC.Position.Location.Y+=20;
+        Client->Session->WorldObjects.Add(RadarNPC.Guid,RadarNPC);
+        Gameplay->RefreshRadarOverlays();CaptureScreen(TEXT("GameplayRetailRadar"));
+        const int32 Index=Gameplay->RadarBlipGuids.IndexOfByKey(RadarNPC.Guid);
+        if(TestTrue(TEXT("Nearby creature appears on the minimap"),Index!=INDEX_NONE))
+        {
+            auto* Blip=Gameplay->RadarBlips[Index].Get();
+            const auto& Geo=Blip->GetCachedGeometry();
+            // Just outside the small sprite, but inside retail's six-pixel tolerance.
+            const FVector2D Absolute=Geo.LocalToAbsolute(Geo.GetLocalSize()*.5+FVector2D(5,0));
+            TestTrue(TEXT("Radar click accepts the retail pick tolerance"),Gameplay->TryHandleOverlayClick(
+                Canvas->GetElementLayer()->GetCachedGeometry().AbsoluteToLocal(Absolute),false));
+            TestEqual(TEXT("Radar click selects the nearby creature"),Client->GetSelectedObject().Guid,RadarNPC.Guid);
+            Gameplay->RefreshRadarOverlays();CaptureScreen(TEXT("GameplayRetailRadarSelected"));
+            TestTrue(TEXT("Selected radar marker uses the retail square mask"),
+                Blip->Background.GetResourceObject()==Resources->ResolveRadarBlip(4,true));
+        }
+        Client->Session->WorldObjects.Remove(RadarNPC.Guid);
+        Client->Session->SetLocalPosition(SavedPose);Client->Session->SelectedObject=SavedSelection;
+        Gameplay->HandleSelectionChanged(SavedSelection);Gameplay->RefreshRadarOverlays();
+    }
     const FString LongChat = TEXT("A long incoming tell must wrap all of its words into several visible lines instead of hiding the rest of the message beneath the next row. This final sentence must also remain readable.");
     for (int32 W : {0, 1})
     {
@@ -812,6 +839,84 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 auto* Reopened=NewObject<UACEVideoSettingsWidget>();Reopened->Initialize();auto ReopenedSlate=Reopened->TakeWidget();
                 auto* ReloadedScale=Cast<UComboBoxString>(Reopened->WidgetTree->FindWidget(TEXT("DesktopUIScale")));
                 TestTrue(TEXT("Reopening configuration preserves scale"),ReloadedScale && ReloadedScale->GetSelectedOption()==TEXT("200%"));
+                // A player-sized settings window can be taller than the logical
+                // viewport after DPI changes, despite the 800x600 global limit.
+                const auto Floaty=Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field"));
+                const auto Apply=Manager->FindElementUnder(TEXT("ConfigPage"),TEXT("ApplyButton"));
+                if(TestTrue(TEXT("Settings frame and Apply button exist"),Floaty && Apply))
+                {
+                    const FIntPoint OriginalScreen=ScreenSize;
+                    const int32 OriginalHeight=Floaty->GetLayoutHeight();
+                    const int32 OriginalDragX=Floaty->UserDragX,OriginalDragY=Floaty->UserDragY;
+                    // Viewport clamping also moves the other visible windows.
+                    // Restore those positions before subsequent shortcut tests;
+                    // otherwise the resized inventory obscures the shortcut bar.
+                    TArray<TPair<TSharedPtr<FACEUIElement>,FIntPoint>> WindowPositions;
+                    if(const auto Root=Floaty->Parent.Pin())for(const auto& Window:Root->Children)
+                        if(Window)WindowPositions.Emplace(Window,FIntPoint(Window->UserDragX,Window->UserDragY));
+                    // Isolate the interface setting from ApplyVideo's OS display
+                    // changes; retain the actual canvas hit testing and activation.
+                    Manager->OnElementActivated.Remove(Gameplay->ActivatedHandle);
+                    UACEUIElementManager::ApplyFloatyResizeLayout(Floaty);
+                    for(const FIntPoint Size:{FIntPoint(1920,1080),FIntPoint(2560,1440),FIntPoint(3840,2160),FIntPoint(800,600)})
+                    {
+                        ScreenSize=Size;
+                        CaptureScreen(FString::Printf(TEXT("OptionsWindowResize_%d"),Size.X));
+                        // The existing resize handle permits 320 extra pixels.
+                        Floaty->UserResizeH=320;
+                        UACEUIElementManager::ApplyFloatyResizeLayout(Floaty);
+                        CaptureScreen(FString::Printf(TEXT("OptionsBeforeScale_%d"),Size.X));
+                        ACERuntimeOptions::Set(TEXT("DesktopUIScale"),3.f);
+                        const float Scale=ACERuntimeOptions::DesktopUIScale(Size,false);
+                        CaptureScreen(FString::Printf(TEXT("OptionsAfterScale_%d"),Size.X),Scale);
+                        const FVector2D LogicalSize=FVector2D(Size)/Scale;
+                        const FIntPoint Origin=Apply->GetScreenOrigin();
+                        AddInfo(FString::Printf(TEXT("Scaled options %dx%d at %.2f: frame=%s/%d Apply=%s/%d"),
+                            Size.X,Size.Y,Scale,*Floaty->GetScreenOrigin().ToString(),Floaty->Height,*Origin.ToString(),Apply->Height));
+                        TestTrue(TEXT("Scaled settings frame fits the visible viewport"),
+                            Floaty->GetScreenOrigin().Y>=0 && Floaty->GetScreenOrigin().Y+Floaty->Height<=LogicalSize.Y);
+                        TestTrue(TEXT("Apply remains entirely onscreen after enlarging the interface"),
+                            Origin.X>=0 && Origin.Y>=0 && Origin.X+Apply->Width<=LogicalSize.X && Origin.Y+Apply->Height<=LogicalSize.Y);
+                        const FVector2D ScaleOrigin=Canvas->GetCachedGeometry().AbsoluteToLocal(UIScale->GetCachedGeometry().GetAbsolutePosition());
+                        const FVector2D ScaleEnd=Canvas->GetCachedGeometry().AbsoluteToLocal(
+                            UIScale->GetCachedGeometry().LocalToAbsolute(UIScale->GetCachedGeometry().GetLocalSize()));
+                        TestTrue(TEXT("Scale selector remains visible for reducing the UI size"),
+                            ScaleOrigin.X>=0 && ScaleOrigin.Y>=0 && ScaleEnd.X<=LogicalSize.X && ScaleEnd.Y<=LogicalSize.Y);
+                        const FVector2D Center(Origin.X+Apply->Width/2,Origin.Y+Apply->Height/2);
+                        TestTrue(TEXT("Apply remains the pointer hit target after scaling"),Manager->HitTestCanvas(Center.X,Center.Y)==Apply);
+                        UIScale->SetSelectedIndex(0);
+                        bool Clicked=false;
+                        const auto ClickHandle=Manager->OnElementActivated.AddLambda([&](TSharedPtr<FACEUIElement> E){Clicked|=E==Apply;});
+                        const FGeometry& Geometry=Canvas->GetCachedGeometry();
+                        const FVector2D Absolute=Geometry.LocalToAbsolute(Center);
+                        const FPointerEvent Down(0,Absolute,Absolute,TSet<FKey>{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0.f,FModifierKeysState());
+                        const FPointerEvent Up(0,Absolute,Absolute,TSet<FKey>{},EKeys::LeftMouseButton,0.f,FModifierKeysState());
+                        // Exercise the scaled canvas input route without applying
+                        // OS resolution changes in this automated render fixture.
+                        const auto Handler=Manager->OnElementActivated.AddLambda([&](TSharedPtr<FACEUIElement> E)
+                        { if(E==Apply)Video->ApplyInterfaceOptions(); });
+                        Canvas->NativeOnMouseButtonDown(Geometry,Down);
+                        Canvas->NativeOnMouseButtonUp(Geometry,Up);
+                        Manager->OnElementActivated.Remove(Handler);
+                        Manager->OnElementActivated.Remove(ClickHandle);
+                        TestTrue(TEXT("Physical click on scaled Apply reaches the control"),Clicked);
+                        TestEqual(TEXT("Player can return to 100% using the visible Apply button"),ACERuntimeOptions::Get(TEXT("DesktopUIScale")),1.f);
+                    }
+                    ScreenSize=OriginalScreen;
+                    // Refresh cached Slate geometry before restoring sizes. A
+                    // tick with the old 800x600 geometry would clamp them again.
+                    CaptureScreen(TEXT("OptionsViewportRestored"));
+                    Floaty->UserResizeH=OriginalHeight-Floaty->AuthoredHeight;
+                    Floaty->UserDragX=OriginalDragX;Floaty->UserDragY=OriginalDragY;
+                    Floaty->RecomputeLayoutOffset();UACEUIElementManager::ApplyFloatyResizeLayout(Floaty);
+                    for(const auto& SavedPosition:WindowPositions) {
+                        SavedPosition.Key->UserDragX=SavedPosition.Value.X;
+                        SavedPosition.Key->UserDragY=SavedPosition.Value.Y;
+                        SavedPosition.Key->RecomputeLayoutOffset();
+                    }
+                    CaptureScreen(TEXT("OptionsScaleRestored"));
+                    Gameplay->ActivatedHandle=Manager->OnElementActivated.AddUObject(Gameplay,&UACEUIGameplayBinder::OnElementActivated);
+                }
                 Video->DefaultsVideo();Video->ApplyInterfaceOptions();
                 TestFalse(TEXT("Defaults restore normal mouse X"),ACECameraSettings::GetInvertMouseX());
                 TestFalse(TEXT("Defaults restore normal mouse Y"),ACECameraSettings::GetInvertMouseY());

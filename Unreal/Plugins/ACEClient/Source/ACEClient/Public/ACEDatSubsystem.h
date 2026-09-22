@@ -50,6 +50,9 @@ public:
 	void UntrackRuntimeTexture(UTexture2D* Tex);
 	/** Count + byte LRU trim for textures/setup caches. Safe to call often. */
 	void TrimMemoryCaches();
+	/** Keep reusable destination meshes, discard CPU mesh/mip sources belonging to departed areas. */
+	void RetireWorldMeshesOutside(const TSet<int32>& KeepLandblockIds, float WorldScale);
+	void LogLandTextureMemory(const TCHAR* Phase) const;
 
 	/** Blocking load — prefer BeginBackgroundLoad / EnsureLoaded (non-blocking). */
 	UFUNCTION(BlueprintCallable, Category = "ACE|DAT")
@@ -697,6 +700,8 @@ private:
 	friend class FACETerrainArrivalTest;
 	friend class FACEDoorwayGeometryCacheTest;
 	friend class FACESetupMetadataCacheTest;
+	friend class FACEStreamingRetirementTest;
+	friend class FACEPortalRetirementTest;
 	// Entries cannot move with TMap growth while a renderer is consuming their parts.
 	TMap<uint64, TSharedPtr<const FACEBuiltSetupMesh>> SetupMeshCache;
 	TMap<uint32, TSharedPtr<FACEBuiltLandblockMesh>> LandblockCache;
@@ -957,6 +962,7 @@ private:
 	FThreadSafeCounter ActiveLandblockBuilds;
 	TArray<FPendingLandblockBuild> PendingLandblockBuilds;
 	TSet<uint32> PendingLandblockIds;
+	TSet<uint32> CancelledLandblockIds;
 	TSet<uint32> FailedLandblockMeshIds;
 	uint64 CachedDatFingerprint = 0;
 
@@ -970,5 +976,6 @@ private:
 	FThreadSafeCounter ActiveEnvCellBuilds;
 	TArray<FPendingScaledMeshBuild> PendingEnvCellBuilds;
 	TSet<uint64> PendingEnvCellKeys;
+	TSet<uint64> CancelledEnvCellKeys;
 	TSet<uint64> FailedEnvCellKeys;
 };

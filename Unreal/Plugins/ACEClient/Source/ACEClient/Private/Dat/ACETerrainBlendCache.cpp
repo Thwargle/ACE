@@ -1,6 +1,7 @@
 #include "Dat/ACETerrainBlendCache.h"
 #include "Dat/ACEDatTextureResolver.h"
 #include "Misc/Compression.h"
+#include "Compression/lz4.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
 bool FACETerrainBlend::IsValid() const
@@ -30,8 +31,12 @@ bool FACETerrainBlend::PrepareUploadMips()
             for (int32 C = 0; C < 4; ++C) Planar[C*Count + I] = Interleaved[4*I + C];
         int32 PackedBytes = FCompression::CompressMemoryBound(NAME_LZ4, Mip.RawBytes);
         Mip.Data.SetNumUninitialized(PackedBytes);
-        Mip.bPacked = FCompression::CompressMemory(NAME_LZ4, Mip.Data.GetData(), PackedBytes,
-            Planar.GetData(), Mip.RawBytes) && PackedBytes < Mip.RawBytes;
+        // UE's NAME_LZ4 wrapper always uses the high-compression encoder,
+        // including BiasSpeed. Use the fast encoder for runtime terrain work;
+        // its lossless blocks use the same existing decoder and cache format.
+        PackedBytes = LZ4_compress_default(reinterpret_cast<const char*>(Planar.GetData()),
+            reinterpret_cast<char*>(Mip.Data.GetData()), Mip.RawBytes, PackedBytes);
+        Mip.bPacked = PackedBytes > 0 && PackedBytes < Mip.RawBytes;
         if (Mip.bPacked) Mip.Data.SetNum(PackedBytes);
         else
         {

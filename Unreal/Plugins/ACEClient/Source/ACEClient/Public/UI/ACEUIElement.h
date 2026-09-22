@@ -198,6 +198,7 @@ struct FACEUIElement : public TSharedFromThis<FACEUIElement>
 
 	void SortChildrenByZ()
 	{
+		MarkTreeChanged();
 		// Stable for equal ZLevel so LayoutDesc sibling order (paint / hit order) is preserved.
 		// Decorative underlays always paint first — LayoutDesc gives InvBackgroundImage z=100 and
 		// lists it last; without this it covers PaperDoll / packs / item grid.
@@ -234,9 +235,39 @@ struct FACEUIElement : public TSharedFromThis<FACEUIElement>
 		{
 			return;
 		}
+		if (auto Old = Child->Parent.Pin()) Old->RemoveChild(Child);
 		Child->Parent = AsShared();
 		Children.Add(Child);
 		SortChildrenByZ();
+	}
+
+	// Membership/name/order changes invalidate lookup caches; visibility is read
+	// at lookup time and must not rebuild the entire tree every HUD frame.
+	uint64 TreeRevision = 0;
+	void MarkTreeChanged()
+	{
+		++TreeRevision;
+		if (auto P = Parent.Pin()) P->MarkTreeChanged();
+	}
+	void SetElementName(const FString& Name)
+	{
+		if (ElementName == Name) return;
+		ElementName = Name;
+		MarkTreeChanged();
+	}
+	void RemoveChild(const TSharedPtr<FACEUIElement>& Child)
+	{
+		if (Children.Remove(Child))
+		{
+			Child->Parent.Reset();
+			MarkTreeChanged();
+		}
+	}
+	void ClearChildren()
+	{
+		for (auto& Child : Children) if (Child) Child->Parent.Reset();
+		Children.Reset();
+		MarkTreeChanged();
 	}
 
 	/** Full-bleed backdrop art listed after content in LayoutDesc — never a click target. */

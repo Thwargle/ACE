@@ -19,7 +19,7 @@ public:
     }
     float GetFraction() const { return Fraction; }
 private:
-    virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D(512,64); }
+    virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D(512,40); }
     virtual int32 OnPaint(const FPaintArgs&, const FGeometry& Geometry, const FSlateRect&,
         FSlateWindowElementList& Elements, int32 Layer, const FWidgetStyle& Style, bool) const override
     {

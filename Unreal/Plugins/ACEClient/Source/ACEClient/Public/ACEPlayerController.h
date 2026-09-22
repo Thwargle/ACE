@@ -20,6 +20,7 @@ class AACEWorldEntityActor;
 class USpringArmComponent;
 class UCapsuleComponent;
 class UCameraComponent;
+class FRenderCommandFence;
 
 /**
  * Sample controller: shows login UI, enters world, WASD → ACE movement, applies local character appearance to the pawn.
@@ -38,6 +39,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACEVRInteriorNetworkTest;
 	friend class FACERetailWorldEntryTest;
 	friend class FACELoadingTransitionTest;
+	friend class FACEPortalRetirementTest;
 	friend class FACELedgeStairsTest;
 	friend class FACERunSpeedParityTest;
 	friend class FACEMissingDatLoginTest;
@@ -495,6 +497,13 @@ protected:
 	bool bEnterWorldLoading = false;
 	bool bPendingEnterWorldTransition = false;
 	bool bDestinationStreamingStarted = false;
+	/** Retire the previous scene before allocating the destination; never block on a render fence. */
+	bool RetirePortalScene();
+	enum class EPortalRetirement : uint8 { ClearScene, WaitPreviousGC, WaitCollection, WaitRender, Complete };
+	EPortalRetirement PortalRetirement = EPortalRetirement::ClearScene;
+	double PortalRetirementLastGC = 0.0;
+	double PortalRetirementStarted = 0.0;
+	TSharedPtr<FRenderCommandFence> PortalRetirementFence;
 	uint64 PortalFirstVisibleFrame = MAX_uint64;
 	bool bWorldRevealActive = false;
 	float PortalWorldRevealElapsed = -1.f;

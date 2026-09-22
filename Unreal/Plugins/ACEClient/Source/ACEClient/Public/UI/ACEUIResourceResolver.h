@@ -27,6 +27,8 @@ public:
 	/** Item / spell icons — Clamp, no mips (Wrap+mip chrome fringes white on cutouts). */
 	UTexture2D* ResolveIconTexture(uint32 ResourceId);
 	uint32 ResolveItemBackgroundId(uint32 ItemType);
+	uint32 ResolveTargetIndicatorId(uint32 ImageEnum);
+	UTexture2D* ResolveRadarBlip(int32 Shape, bool bSelected);
 	/** Retail EnumMapper::GetString via the client enum-to-resource map. */
 	FString ResolveEnumString(uint32 EnumId, uint32 Value);
 	/** gmPaperDollUI's authored pixel selection mask, in DAT coordinates. */
@@ -66,6 +68,7 @@ private:
 
 	UPROPERTY()
 	TMap<uint32, TObjectPtr<UTexture2D>> IconCache;
+	UPROPERTY(Transient) TMap<int32, TObjectPtr<UTexture2D>> RadarMasks;
 
 	UPROPERTY()
 	TMap<uint64, TObjectPtr<UTexture2D>> CompositeCache;

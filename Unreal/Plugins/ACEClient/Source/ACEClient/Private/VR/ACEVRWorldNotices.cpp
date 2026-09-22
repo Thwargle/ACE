@@ -323,6 +323,13 @@ void UACEVRComponent::EnemyHealth(int32 Guid, float Fraction)
 	if (!Actor) return;
 	const double Now=FPlatformTime::Seconds();
 	auto* Bar=EnemyHealthBars.FindByPredicate([&](const auto& B) { return B.Actor==Actor; });
+	// Death can arrive before the corpse/create update, including a one-hit kill.
+	// Never allocate or briefly draw an empty black meter for that event.
+	if (Fraction<=0.f)
+	{
+		if (Bar) { Bar->Expires=0; Bar->Actor.Reset(); if (Bar->Panel.IsValid()) Bar->Panel->SetVisibility(false); }
+		return;
+	}
 	// Do not fill the landscape with health bars for unhurt creatures.
 	if (!Bar && Fraction>=1.f) return;
 	if (!Bar) Bar=EnemyHealthBars.FindByPredicate([&](const auto& B) { return B.Expires<=Now || !B.Actor.IsValid(); });
@@ -335,7 +342,7 @@ void UACEVRComponent::EnemyHealth(int32 Guid, float Fraction)
 		Bar->Meter=SNew(SACEEnemyHealthBar);
 		auto* Panel=NewObject<UWidgetComponent>(PresentationActor); PresentationActor->AddInstanceComponent(Panel);
 		Panel->SetupAttachment(PresentationActor->GetRootComponent()); Panel->SetWidgetSpace(EWidgetSpace::World);
-		Panel->SetDrawSize(FVector2D(512,64));
+		Panel->SetDrawSize(FVector2D(512,40));
 		Panel->SetSlateWidget(Bar->Meter); Panel->SetBlendMode(EWidgetBlendMode::Transparent); Panel->SetTwoSided(true);
 		Panel->SetBackgroundColor(FLinearColor::Transparent);
 		Panel->SetCollisionEnabled(ECollisionEnabled::NoCollision); Panel->SetCastShadow(false);
@@ -343,7 +350,7 @@ void UACEVRComponent::EnemyHealth(int32 Guid, float Fraction)
 		Panel->SetManuallyRedraw(true); Panel->RegisterComponent(); Bar->Panel=Panel;
 	}
 	Bar->Actor=Actor; Bar->Meter->SetFraction(Fraction);
-	Bar->Expires=Now+(Fraction<=0 ? 1.5 : 15.);
+	Bar->Expires=Now+15.;
 	Bar->RedrawsRemaining=1;
 	Bar->Panel->RequestRedraw(); UpdateEnemyHealthBars();
 }
@@ -357,7 +364,8 @@ void UACEVRComponent::UpdateEnemyHealthBars()
 		auto* Panel=Bar.Panel.Get(); if (!Panel) continue;
 		if (!InWorld) { Bar.Expires=0; Bar.Actor.Reset(); }
 		auto* Actor=Bar.Actor.Get();
-		const bool Visible=InWorld && bTracking && Actor && !Actor->IsHidden() && Actor->IsCellVisible() && Now<Bar.Expires
+		const bool Visible=InWorld && bTracking && Actor && !Actor->IsCorpse() && Bar.Meter && Bar.Meter->GetFraction()>0.f
+			&& !Actor->IsHidden() && Actor->IsCellVisible() && Now<Bar.Expires
 			&& FVector::DistSquared(Actor->GetActorLocation(),Head->GetComponentLocation())<FMath::Square(5000.f);
 		Panel->SetVisibility(Visible); if (!Visible) continue;
 		if (Bar.RedrawsRemaining>0) { --Bar.RedrawsRemaining; Panel->RequestRedraw(); }

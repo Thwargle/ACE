@@ -1,45 +1,32 @@
-# AC:Unreal / AC:VR release 60
+# AC:Unreal / AC:VR release 62
 
-Native Quest: `2026.09.21.quest.60`, Android version code 60, installer revision 6.
-Windows desktop / PC VR: `2026.09.21.66`.
+Native Quest: `2026.09.22.quest.62`, Android version code 62, installer revision 6.
+Windows desktop / PC VR: `2026.09.22.68`.
 
-This release improves first-login loading, reduces terrain CPU memory use, and
-adds movement, missile, interface, and VR interaction fixes since public v56.
+This release fixes repeated-portal memory growth, improves shared runtime
+performance, and updates movement and the retail interface since public v60.
 
-## Changes since v56
+## Changes since v60
 
-- Preload runtime materials asynchronously before world entry. Prepare gameplay
-  UI in bounded batches and reuse it when leaving portal space. DAT indexing and
-  cache work run on dedicated background workers to avoid blocking head tracking.
-- Store terrain restore data and prepared mip levels with lossless CPU compression.
-  Retail terrain resolution and GPU texture pixels are preserved. A captured
-  170-texture scene used about 147 MiB less CPU restore storage.
-- Update world fog through a shared material parameter collection instead of
-  rewriting parameters across every cached material and actor. Interior and
-  preview fog exclusions remain supported.
-- Improve sliding across successive wall triangles and bends, retaining all
-  contact constraints at corners. Shared movement covers desktop and both VR modes.
-- Prevent outdoor jumps from landing below the DAT terrain or submerged river bed,
-  including the reported Holtburg river bank. The visible water surface remains
-  non-blocking, and jumping keeps its arc until reaching the actual walking surface.
-- Correct missile release validation on the updated VR server: only bows require
-  a physical draw. Crossbows, atlatls, and thrown weapons accept trigger releases.
-  Bows honor the same recovery timer as other missiles; failed atlatl/thrown sends
-  now report connection failure. Weapon placement and aiming are unchanged.
-- Repair deliberate two-hand use in peace mode. The gesture checks usable range,
-  visible surfaces, gaze, and a short hold using tracked hands, allowing doors and
-  tall lifestones to work without forcing hands through collision. Withdraw hands
-  before repeating the gesture.
-- Add independent Invert Mouse X and Invert Mouse Y settings.
-- Add desktop UI scale in 25% steps, constrained to fit the current window. VR
-  keeps its own UI scaling controls.
-- Add a frame-rate overlay setting showing FPS and frame time in desktop and VR.
-- Replace the enemy health display with a clear rounded red bar, subtle dark
-  track, and gold frame. No numbers or extra labels; VR sizing remains readable
-  with distance and redraws occur only when health changes.
-- Keep vitals lookups within their active UI container and clear stale values.
-- Add Quit to the account launcher and the build version at the bottom of the
-  login screen. Quest builds verify the displayed version matches the APK.
+- Release the previous area's terrain textures before loading the next portal
+  destination. Resource destruction runs across portal frames; nearby destination
+  mesh caches remain reusable. Repeated Obsidian Rim trips passed on Quest 3.
+- Retire departed outdoor and dungeon meshes, discard cancelled worker results,
+  limit concurrent room builders, and remove redundant environment-data copies.
+- Reuse the UI name index until the element tree changes, with correct updates
+  after renaming, reparenting, removal, and reordering.
+- Avoid repeated outdoor visibility bookkeeping and unchanged ceiling updates.
+- Prepare terrain mip storage with a faster lossless encoder and cache the
+  complete prepared mip chain. Terrain resolution, pixels, and mipmaps remain
+  intact. Native UI panel textures use a single bilinear mip at their authored size.
+- Improve escape and sliding when multiple collision surfaces meet, including
+  the narrow Shoushi gap between Eiichi and the lifestone. Shared collision fixes
+  apply to desktop, PC VR, and native Quest.
+- Restore retail minimap marker masks, colors, ranges, selection squares, and
+  click selection. Offscreen selected objects use the original DAT direction arrows.
+- Keep the settings window and Apply button reachable after desktop UI scaling.
+- Make VR enemy health bars shorter and hide them immediately at zero health,
+  including enemies defeated in one hit.
 
 ## Install or update
 
@@ -48,7 +35,7 @@ Existing game data, accounts, and settings are retained. A portable ZIP is also
 available. The Windows installer is not digitally signed.
 
 Quest: extract the entire ZIP. Put Android platform-tools beside the installer,
-connect the headset with a reliable USB data cable, and accept USB debugging.
+connect the headset with a USB data cable, and accept USB debugging.
 Run **Update-Quest.cmd** if game data is already installed. For a first installation,
 run **Install-Quest.cmd** and provide your own Asheron's Call DAT files.
 
@@ -60,31 +47,26 @@ any old runtime folder when necessary. See the included instructions for setup.
 
 Choose a server in the lobby and use your own account. Custom VR combat and pose
 replication require this project's updated VR-enabled ACE server. Server owners
-must update for the instant atlatl/thrown release validation; updating only the
-client cannot change an older server's rejection behavior.
+must include the v60 instant atlatl/thrown release changes; a client update cannot
+change an older server's rejection behavior. This release adds no new server requirement.
 
 GDLE login has been verified through character selection; full in-world GDLE
-compatibility still needs testing. Use the directory entry or host/port supplied
-by your server owner. Bundles contain no server, credentials, saved settings,
-SDK tools, or retail DAT files.
+compatibility still needs testing. Bundles contain no server, credentials, saved
+settings, SDK tools, or retail DAT files.
 
-## Validation and remaining checks
+## Validation and performance
 
-- Server: 17 protocol/release unit checks and five projectile integration cases
-  passed, including bow, crossbow, atlatl, arrows, and thrown-item ammunition.
-- Mobile renderer: launcher, academy corners, ledges/stairs, VR protocol,
-  controller/menus, and stair/river movement suites passed. River coverage includes
-  80 desktop/VR jumping scenarios at 90 and 20 Hz, including a landblock crossing.
-- Loading preparation, terrain fidelity, and rendered weather/fog checks passed
-  during development on desktop and the mobile rendering path.
-- The packaged Windows game passed seven suites: responsive launcher, material
-  loading, landscape texture fidelity, academy corners, VR protocol, controller
-  and menu input, and stair/river movement.
-- Windows and Android ARM64 packaging succeeded. Installer contents exclude
-  private settings and game data; release artifacts carry SHA-256 checksums.
+- Windows and Android builds succeeded. Regression coverage includes portal
+  resource retirement, loading transitions, cancelled streaming work, terrain
+  fidelity, UI lookup lifetime, minimap interaction, VR menus/health bars,
+  Shoushi collision, and training-dungeon corners.
+- On Quest 3, one login and seven portal transitions completed successfully;
+  the tester confirmed repeated Obsidian Rim visits looked correct.
+- Sampled maximum memory accounting fell from 5.26 GiB in the failing v61 run
+  to 2.67 GiB in v62. Swap remained at 216 KiB instead of approximately 2.10 GiB.
+  These are five-second samples from the recorded routes, not instantaneous peaks.
+- Outdoor samples remained around 59–66 FPS. Sustained 90 FPS VR and 144 FPS
+  desktop are still targets, not established performance claims.
 
-This is a test release. First-login loading was smoother in the user's v58 test,
-but sustained 90 FPS VR and 144 FPS desktop have not been established. The shared
-fog optimization still needs a controlled headset frame-time comparison. Terrain
-GPU textures remain full-resolution and uncompressed. Headset gameplay,
-multiplayer behavior, and comfort still require playtesting.
+This is a community preview. Additional hardware, multiplayer, and comfort
+testing remains important. Download hashes are provided in SHA256SUMS.txt.

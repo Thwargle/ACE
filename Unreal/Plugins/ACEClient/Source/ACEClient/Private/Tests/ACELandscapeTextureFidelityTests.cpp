@@ -14,6 +14,47 @@
 #include "UObject/StrongObjectPtr.h"
 #include "RenderingThread.h"
 #include "TextureResource.h"
+#include "Misc/Compression.h"
+#include "Compression/lz4.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACETerrainCompressionCostTest,"ACE.Performance.TerrainCompression",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FACETerrainCompressionCostTest::RunTest(const FString&)
+{
+    TStrongObjectPtr<UGameInstance> GI(NewObject<UGameInstance>());
+    TStrongObjectPtr<UACEDatSubsystem> Dat(NewObject<UACEDatSubsystem>(GI.Get()));
+    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    const auto* Land=Dat->GetOrBuildLandblockMesh(0xDA550000,100);
+    if(!Land) return false;
+    TSet<const FACETerrainBlend*> Seen;
+    double DefaultMs=0,FastMs=0;int64 DefaultBytes=0,FastBytes=0;int32 Samples=0;
+    for(const auto& Section:Land->Sections)
+    {
+        if(!Section.SharedBake || Seen.Contains(Section.SharedBake.Get())) continue;
+        Seen.Add(Section.SharedBake.Get());
+        const auto Pixels=Section.SharedBake->CopyBasePixels();
+        TArray<uint8> Planar;Planar.SetNumUninitialized(Pixels.Num()*4);
+        const uint8* Source=reinterpret_cast<const uint8*>(Pixels.GetData());
+        for(int32 I=0;I<Pixels.Num();++I) for(int32 C=0;C<4;++C)Planar[C*Pixels.Num()+I]=Source[I*4+C];
+        for(int32 Pass=0;Pass<4;++Pass)for(bool Fast:{false,true})
+        {
+            TArray<uint8> Packed;int32 Size=FCompression::CompressMemoryBound(NAME_LZ4,Planar.Num());Packed.SetNumUninitialized(Size);
+            const double Start=FPlatformTime::Seconds();
+            const bool Ok=Fast ? (Size=LZ4_compress_default(reinterpret_cast<const char*>(Planar.GetData()),
+                reinterpret_cast<char*>(Packed.GetData()),Planar.Num(),Size))>0
+                : FCompression::CompressMemory(NAME_LZ4,Packed.GetData(),Size,Planar.GetData(),Planar.Num());
+            const double Ms=(FPlatformTime::Seconds()-Start)*1000;
+            TestTrue(TEXT("Terrain lossless compression succeeds"),Ok);
+            if(Fast){FastMs+=Ms;FastBytes+=Size;}else{DefaultMs+=Ms;DefaultBytes+=Size;}
+            if(Pass==0){TArray<uint8> Restored;Restored.SetNumUninitialized(Planar.Num());
+                TestTrue(TEXT("Both modes retain every original byte"),FCompression::UncompressMemory(NAME_LZ4,Restored.GetData(),Restored.Num(),Packed.GetData(),Size) && Restored==Planar);}
+        }
+        ++Samples;if(Samples==8)break;
+    }
+    TestTrue(TEXT("Benchmark uses actual Shoushi terrain blends"),Samples>0);
+    AddInfo(FString::Printf(TEXT("Shoushi LZ4 (%d blends x4): default %.2fms %.2fMiB; speed %.2fms %.2fMiB"),Samples,DefaultMs,DefaultBytes/1048576.,FastMs,FastBytes/1048576.));
+    return !HasAnyErrors();
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACELandscapeTextureFidelityTest, "ACE.Packaging.LandscapeTextureFidelity",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -128,9 +169,22 @@ bool FACELandscapeTextureFidelityTest::RunTest(const FString& Parameters)
 	TArray<FColor> Reloaded; int32 ReloadedWidth = 0, ReloadedHeight = 0;
 	TestTrue(TEXT("Full-resolution blend cache loads"), ACEPCodeTileCache::Load(0, Fingerprint, ReloadedWidth, ReloadedHeight, Reloaded));
 	TestTrue(TEXT("Cache retains exact dimensions and texels"), ReloadedWidth == Width && ReloadedHeight == Height && Reloaded == Pixels);
+    FACETerrainBlend CachedMips;
+    TestTrue(TEXT("Prepared mips load without filtering or compression"), ACEPCodeTileCache::LoadPrepared(0,Fingerprint,CachedMips));
+    TestTrue(TEXT("Disk cache retains no redundant base RGBA copy"), CachedMips.Pixels.IsEmpty());
+    TestEqual(TEXT("Disk cache preserves every mip"),CachedMips.UploadMips.Num(),Prepared->UploadMips.Num());
+    for(int32 I=0;I<CachedMips.UploadMips.Num();++I)
+    {
+        TArray<uint8> A,B; A.SetNumUninitialized(CachedMips.UploadMips[I].RawBytes);B.SetNumUninitialized(A.Num());
+        TestTrue(TEXT("All cached mip bytes are identical"),CachedMips.CopyMip(I,A.GetData(),A.Num()) && Prepared->CopyMip(I,B.GetData(),B.Num()) && A==B);
+    }
+    TestFalse(TEXT("Wrong DAT fingerprint cannot match a prepared tile"),ACEPCodeTileCache::LoadPrepared(0,Fingerprint+1,CachedMips));
 	TArray<uint8> OldCache;
 	if (FFileHelper::LoadFileToArray(OldCache, *CachePath) && OldCache.Num() >= 8)
 	{
+        TArray<uint8> Corrupt=OldCache; Corrupt[Corrupt.Num()/2]^=1;
+        FFileHelper::SaveArrayToFile(Corrupt,*CachePath);
+        TestFalse(TEXT("Corruption rejects prepared mips before upload"),ACEPCodeTileCache::LoadPrepared(0,Fingerprint,CachedMips));
 		const uint32 OldSchema = 1;
 		FMemory::Memcpy(OldCache.GetData() + 4, &OldSchema, sizeof(OldSchema));
 		FFileHelper::SaveArrayToFile(OldCache, *CachePath);

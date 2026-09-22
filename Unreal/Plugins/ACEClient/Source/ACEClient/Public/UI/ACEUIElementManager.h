@@ -114,6 +114,7 @@ public:
 private:
 	mutable TMap<FString, TArray<TSharedPtr<FACEUIElement>>> NameLookupIndex;
 	mutable bool bNameLookupIndexValid = false;
+	mutable uint64 NameLookupRevision = 0;
 	int32 NameLookupPassDepth = 0;
 	void BuildNameLookupIndex() const;
 	TSharedPtr<FACEUIElement> SyntheticRoot;
