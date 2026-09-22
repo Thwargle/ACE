@@ -66,6 +66,7 @@ bool FACESession::Connect(const FACELoginCredentials& Credentials)
 		return false;
 	}
 
+	PacketTimeOrigin = FPlatformTime::Seconds();
 	SendLoginRequest();
 	LoginRequestAt = FPlatformTime::Seconds();
 	SetState(EACESessionState::AwaitConnectRequest);
@@ -98,6 +99,7 @@ void FACESession::Disconnect()
 	LogOffTimeout = 0.f;
 	LogOffRetransmitTimer = 0.f;
 	CloseSockets();
+	PacketTimeOrigin = 0.0;
 	IssacClient.Reset();
 	IssacServer.Reset();
 	Characters.Reset();
@@ -966,7 +968,7 @@ void FACESession::HandleServerRequestRetransmit(const TArray<uint32>& Sequences)
 			Packet.SetNumZeroed(PacketHeaderSize);
 			Packet.Append(Cached->Payload);
 			const uint16 PayloadSize = static_cast<uint16>(Cached->Payload.Num());
-			const uint16 Time = static_cast<uint16>(FPlatformTime::Cycles());
+			const uint16 Time = PacketIntervalAt(FPlatformTime::Seconds());
 			constexpr uint16 Iteration = 1;
 			const uint32 HHash = HeaderHash32(Seq, Flags, ClientId, Time, PayloadSize, Iteration);
 			const uint32 PayloadHash = FACEHash32::Calculate(Cached->Payload);
@@ -1132,6 +1134,16 @@ void FACESession::SendConnectResponse()
 	Log(TEXT("ConnectResponse sent on port+1"));
 }
 
+uint16 FACESession::PacketIntervalAt(double Now) const
+{
+	// Retail FlowQueue advances interval_ once every 0.5 seconds. GDLE's
+	// speed-hack check compares this counter with elapsed wall time. CPU cycles
+	// are unrelated and can make ordinary bursts of item actions look accelerated.
+	if (PacketTimeOrigin <= 0.0) return 0;
+	const uint64 Intervals = static_cast<uint64>(FMath::Max(0.0, Now - PacketTimeOrigin) * 2.0);
+	return static_cast<uint16>(Intervals & 0xFFFFu);
+}
+
 void FACESession::SendRawPacket(
 	EACEPacketHeaderFlags Flags,
 	const TArray<uint8>& Body,
@@ -1184,7 +1196,7 @@ void FACESession::SendRawPacket(
 		Sequence = NextPacketSequence++;
 	}
 
-	const uint16 Time = static_cast<uint16>(FPlatformTime::Cycles());
+	const uint16 Time = PacketIntervalAt(FPlatformTime::Seconds());
 	constexpr uint16 Iteration = 1;
 
 	TArray<uint8> Packet;

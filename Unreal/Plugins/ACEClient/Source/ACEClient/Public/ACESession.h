@@ -81,6 +81,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACERetailCombatProtocolTest;
 	friend class FACERetailNetworkTest;
 	friend class FACELoginHandshakeTest;
+	friend class FACEGDLEInteractionTransportTest;
 	friend class FACERetailNetworkWeatherTest;
 	friend class FACERetailWorldEntryTest;
 	friend class FACELoadingTransitionTest;
@@ -746,6 +747,7 @@ private:
 	void SendGameMessage(uint32 Opcode, const TArray<uint8>& PayloadAfterOpcode, uint16 Queue, bool bEncrypted = true);
 	void SendGameAction(uint32 ActionType, const TArray<uint8>& ActionPayload, uint16 Queue);
 	void SendRawPacket(EACEPacketHeaderFlags Flags, const TArray<uint8>& Body, const TArray<TArray<uint8>>& Fragments, bool bToS2CPort, bool bEncrypted, uint16 HeaderId);
+	uint16 PacketIntervalAt(double Now) const;
 	void SendAckIfNeeded();
 	void SendEchoResponse(float ClientTime);
 	/** Cleartext C2S NAK — retail PacketHeaderFlags.RequestRetransmit (no EncryptedChecksum). */
@@ -783,6 +785,7 @@ private:
 	TArray<FACEConfirmation> Confirmations;
 	double LastServerPacketAt = 0.0;
 	double LoginRequestAt = 0.0;
+	double PacketTimeOrigin = 0.0;
 	bool HasConnectionTimedOut(double Now) const;
 	bool bRecoverLostConnection = false;
 	FString ConnectionError;

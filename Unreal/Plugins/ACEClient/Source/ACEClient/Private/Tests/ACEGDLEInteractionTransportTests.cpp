@@ -1,0 +1,127 @@
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+#include "ACESession.h"
+#include "Protocol/ACEHash32.h"
+#include "Sockets.h"
+#include "SocketSubsystem.h"
+#include "IPAddress.h"
+#include "Common/UdpSocketBuilder.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEGDLEInteractionTransportTest, "ACE.Network.GDLEInteractionTransport",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACEGDLEInteractionTransportTest::RunTest(const FString&)
+{
+    FACESession Clock;
+    Clock.PacketTimeOrigin = 1000.0;
+    TestEqual(TEXT("Packet intervals start at zero"), Clock.PacketIntervalAt(1000.0), uint16(0));
+    TestEqual(TEXT("Packets within one half second share an interval"), Clock.PacketIntervalAt(1000.499), uint16(0));
+    TestEqual(TEXT("Retail interval advances twice per second"), Clock.PacketIntervalAt(1000.5), uint16(1));
+    TestEqual(TEXT("Long sessions reach the final 16-bit interval"), Clock.PacketIntervalAt(33767.5), uint16(65535));
+    TestEqual(TEXT("Retail interval wraps without overflow"), Clock.PacketIntervalAt(33768.0), uint16(0));
+    TestEqual(TEXT("An earlier clock sample cannot underflow"), Clock.PacketIntervalAt(999.0), uint16(0));
+    Clock.Disconnect();
+    TestEqual(TEXT("Disconnect resets the connection clock"), Clock.PacketIntervalAt(2000.0), uint16(0));
+
+    auto* Sockets = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+    FSocket* Receiver = FUdpSocketBuilder(TEXT("GDLEItemCapture")).AsNonBlocking().BoundToPort(0).Build();
+    if (!TestNotNull(TEXT("Loopback receiver"), Receiver)) return false;
+    auto Address = Sockets->CreateInternetAddr(); Receiver->GetAddress(*Address);
+    bool Valid = false; Address->SetIp(TEXT("127.0.0.1"), Valid);
+    auto Receive = [&]()
+    {
+        TArray<uint8> Bytes; Bytes.SetNumUninitialized(512); int32 Read = 0;
+        if (!Receiver->Wait(ESocketWaitConditions::WaitForRead, FTimespan::FromSeconds(1))
+            || !Receiver->Recv(Bytes.GetData(), Bytes.Num(), Read)) Read = 0;
+        Bytes.SetNum(Read); return Bytes;
+    };
+    constexpr uint32 Item = 0x80000001, Player = 0x50000001, Seed = 0x12345678;
+    // Decode packets using the fields consumed by Seedsow/GDLE ProcessEvent,
+    // and apply its IncomingBlob timing check to repeated interaction bursts.
+    for (bool GDLE : {false, true})
+    {
+        FACESession Session; Session.Creds.bGDLE = GDLE;
+        Session.State = EACESessionState::InWorld; Session.ClientId = 0x1234;
+        Session.ServerC2SAddr = Address;
+        Session.SocketC2S = FUdpSocketBuilder(TEXT("GDLEItemSender")).AsNonBlocking().BoundToPort(0).Build();
+        Session.IssacClient = MakeUnique<FACEIsaac>(Seed);
+        Session.PlayerGuid = Player;
+        FACEIsaac Keys(Seed);
+        uint16 BaseInterval = 0; double BaseTime = 0; bool SpeedHackRejected = false;
+        uint32 ActionSequence = 1;
+        for (int32 Step = 0; Step < 80; ++Step)
+        {
+            const double Elapsed = 1.125 + Step * .5;
+            Session.PacketTimeOrigin = FPlatformTime::Seconds() - Elapsed;
+            for (uint32 Action : {uint32(0x0036), uint32(0x0019), uint32(0x001A)})
+            {
+                if (Action == 0x0036) Session.SendUseItem(Item);
+                else if (Action == 0x0019) Session.SendPutItemInContainer(Item, Player, 2);
+                else Session.SendGetAndWieldItem(Item, 0x100000);
+                const auto Bytes = Receive();
+                if (!TestTrue(TEXT("Item action reaches wire"), Bytes.Num() >= 52)) break;
+                FACEBinaryReader R(Bytes);
+                const uint32 Sequence = R.ReadUInt32(), Flags = R.ReadUInt32(), Checksum = R.ReadUInt32();
+                TestEqual(TEXT("Item recipient matches authenticated session"), R.ReadUInt16(), uint16(0x1234));
+                const uint16 Interval = R.ReadUInt16(), Size = R.ReadUInt16(), Iteration = R.ReadUInt16();
+                TestEqual(TEXT("Item timestamp is elapsed half seconds, independent of packet count"), Interval, uint16(2 + Step));
+                TestEqual(TEXT("Checksum covers the corrected timestamp"), Checksum,
+                    FACESession::HeaderHash32(Sequence, EACEPacketHeaderFlags(Flags), 0x1234, Interval, Size, Iteration)
+                    + (FACEHash32::Calculate(Bytes.GetData() + 20, Size) ^ Keys.Next()));
+                R.Skip(12); // fragment id, count, size
+                TestEqual(TEXT("Single fragment index"), R.ReadUInt16(), uint16(0));
+                TestEqual(TEXT("Retail item actions use weenie queue"), R.ReadUInt16(), ACEQueue::WeenieQueue);
+                TestEqual(TEXT("Item action is not a character logoff"), R.ReadUInt32(), uint32(0xF7B1));
+                TestEqual(TEXT("Action sequence remains ordered"), R.ReadUInt32(), ActionSequence++);
+                TestEqual(TEXT("GDLE receives expected action opcode"), R.ReadUInt32(), Action);
+                TestEqual(TEXT("Item identity retains unsigned wire bits"), R.ReadUInt32(), Item);
+                if (Action == 0x0019)
+                {
+                    TestEqual(TEXT("Move destination"), R.ReadUInt32(), Player);
+                    TestEqual(TEXT("Move placement"), R.ReadUInt32(), 2u);
+                }
+                else if (Action == 0x001A) TestEqual(TEXT("Wield location"), R.ReadUInt32(), 0x100000u);
+                TestEqual(TEXT("No extra action payload"), R.Remaining(), 0);
+                if (!BaseInterval) { BaseInterval = Interval; BaseTime = Elapsed; }
+                else
+                {
+                    const int16 Difference = int16(Interval - BaseInterval);
+                    if (Difference > 120 || Difference < 0) { BaseInterval = Interval; BaseTime = Elapsed; }
+                    else if (Difference > 30)
+                    {
+                        const uint32 Expected = uint32((Elapsed - BaseTime) * 2.0);
+                        if (!Expected || double(Difference) / Expected > 1.1) SpeedHackRejected = true;
+                    }
+                }
+            }
+        }
+        TestFalse(TEXT("Normal item bursts cannot trip GDLE's speed-hack check"), SpeedHackRejected);
+        // GDLE ObjectMsgs/NotifyUseDone replies retain the same event envelope as
+        // retail and ACE; successful inventory notifications must keep us in-world.
+        auto Reply = [&](uint32 Event, const TArray<uint32>& Values)
+        {
+            FACEBinaryWriter W; W.WriteUInt32(0xF7B0); W.WriteUInt32(Player);
+            W.WriteUInt32(1); W.WriteUInt32(Event);
+            for (uint32 Value : Values) W.WriteUInt32(Value);
+            Session.HandleGameMessage(W.GetData());
+            TestTrue(TEXT("GDLE inventory reply retains the world session"), Session.State == EACESessionState::InWorld);
+        };
+        Reply(0x01C7, {0});
+        TestFalse(TEXT("Successful use reply releases the action lock"), Session.bUseBusy);
+        Reply(0x0022, {Item, Player, 0, 0});
+        TestEqual(TEXT("GDLE move reply updates item ownership"), uint32(Session.WorldObjects[Item].ContainerId), Player);
+        Reply(0x0023, {Item, 0x100000});
+        TestEqual(TEXT("GDLE wield reply equips the item"), Session.WorldObjects[Item].CurrentWieldedLocation, int64(0x100000));
+        Session.PacketTimeOrigin = FPlatformTime::Seconds() - 60.125;
+        Session.HandleServerRequestRetransmit({2});
+        const auto Retry = Receive();
+        if (TestTrue(TEXT("Lost item action can be retransmitted"), Retry.Num() >= 52))
+        {
+            FACEBinaryReader R(Retry); R.Skip(14);
+            TestEqual(TEXT("Retransmission uses the same half-second clock"), R.ReadUInt16(), uint16(120));
+        }
+        Session.Disconnect(); Receive(); // discard clean disconnect before next fixture
+    }
+    Receiver->Close(); Sockets->DestroySocket(Receiver);
+    return true;
+}
+#endif
