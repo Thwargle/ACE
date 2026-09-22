@@ -22,6 +22,8 @@ class UMaterialInstanceConstant;
 class UStaticMesh;
 class UStaticMeshComponent;
 class UACEUIResourceResolver;
+class UMaterialParameterCollection;
+struct FStreamableHandle;
 
 UCLASS(Config=Engine)
 class ACECLIENT_API UACEDatSubsystem : public UGameInstanceSubsystem, public FTickableGameObject
@@ -37,9 +39,13 @@ public:
 	virtual bool IsTickableInEditor() const override { return false; }
 
 	void TrackRuntimeTexture(UTexture2D* Tex);
+	/** Start/poll asynchronous cooked material loading before destination streaming. */
+	bool PrepareRuntimeMaterials();
 	UACEUIResourceResolver* GetUiResources();
 private:
 	UPROPERTY(Transient) TObjectPtr<UACEUIResourceResolver> SharedUiResources;
+	TSharedPtr<FStreamableHandle> RuntimeMaterialPreload;
+	bool bRuntimeMaterialPreloadStarted = false;
 public:
 	void UntrackRuntimeTexture(UTexture2D* Tex);
 	/** Count + byte LRU trim for textures/setup caches. Safe to call often. */
@@ -456,6 +462,8 @@ public:
 	UMaterialInterface* GetVertexColorMaterial();
 	/** Complete shader parent set, generated in the editor and loaded from cooked assets in game builds. */
 	TArray<UMaterialInterface*> GetRuntimeMaterialParents();
+	/** Shared world fog; per-material FogAmount still opts interiors/previews out. */
+	UMaterialParameterCollection* GetRuntimeFogCollection() const;
 	UMaterialInterface* GetVRComfortMaterial();
 	/** PhysicsBSP sections must not use VertexColor/WorldGrid (lit → black with GI off). */
 	UMaterialInterface* EnsureInvisibleCollisionMaterial();

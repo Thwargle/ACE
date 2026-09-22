@@ -13,4 +13,7 @@ namespace ACECameraSettings
     ACECLIENT_API float GetMouseTurnSpeed();
     ACECLIENT_API void SetMouseTurnSpeed(float Speed);
     ACECLIENT_API float GetMouseDegreesPerPixel();
+    ACECLIENT_API bool GetInvertMouseX();
+    ACECLIENT_API bool GetInvertMouseY();
+    ACECLIENT_API void SetMouseInversion(bool InvertX, bool InvertY);
 }

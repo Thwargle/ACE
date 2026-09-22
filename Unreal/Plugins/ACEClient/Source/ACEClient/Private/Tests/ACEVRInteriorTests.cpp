@@ -76,6 +76,18 @@ bool FACEVRInteriorTest::RunTest(const FString&)
  const float Half=Capsule->GetScaledCapsuleHalfHeight(), Radius=Capsule->GetScaledCapsuleRadius();
  const auto Shape=FCollisionShape::MakeCapsule(Radius,Half);
  FCollisionQueryParams Query(SCENE_QUERY_STAT(VRInteriorRegression),true,Pawn);
+ // Wall slides can carry a path out through a real doorway. Include its
+ // exterior support before testing; an isolated room otherwise falls into void.
+ TArray<AACELandblockActor*> Lands;
+ for(uint32 Block:{0xC78C0000u,0xC88C0000u,0x7D640000u})
+ {
+  Dat->GetOrBuildLandblockMesh(Block,100);
+  auto* Land=World->SpawnActor<AACELandblockActor>();TestTrue(TEXT("Doorway exterior land loads"),Land->LoadLandblock(Block,100));
+  Lands.Add(Land);
+  for(int32 I=0;I<1500 && !Land->IsSceneryComplete();++I)
+  { ++GFrameCounter;Land->Tick(.016f);FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);FPlatformProcess::Sleep(.002f); }
+  TestTrue(TEXT("Doorway exterior scenery is ready"),Land->IsSceneryComplete());
+ }
  int32 Paths=0;
  for(const auto& Candidate:Candidates)
  {
@@ -127,16 +139,6 @@ bool FACEVRInteriorTest::RunTest(const FString&)
  {
   if(!Dat->GetOrBuildEnvCellMesh(Id,100))continue;
   auto* Room=World->SpawnActor<AACEEnvCellActor>();Room->LoadEnvCell(Id,YaraqOrigin,100);Room->SetEnvCellCollisionActive(true);
- }
- TArray<AACELandblockActor*> Lands;
- for(uint32 Block:{0xC78C0000u,0xC88C0000u,0x7D640000u})
- {
-  Dat->GetOrBuildLandblockMesh(Block,100);
-  auto* Land=World->SpawnActor<AACELandblockActor>();TestTrue(TEXT("Doorway exterior land loads"),Land->LoadLandblock(Block,100));
-  Lands.Add(Land);
-  for(int32 I=0;I<1500 && !Land->IsSceneryComplete();++I)
-  { ++GFrameCounter;Land->Tick(.016f);FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);FPlatformProcess::Sleep(.002f); }
-  TestTrue(TEXT("Doorway exterior scenery is ready"),Land->IsSceneryComplete());
  }
  int32 DoorPaths=0;
  for(uint32 Id:{0xC88C0145u,0xC88C0146u,0x7D640101u,0x7D64010Cu})

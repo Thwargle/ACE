@@ -28,7 +28,12 @@ UACEUIResourceResolver* UACEDatSubsystem::GetUiResources()
 #include "Materials/MaterialInstance.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInstanceConstant.h"
+#include "Materials/MaterialParameterCollection.h"
+#include "Materials/MaterialParameterCollectionInstance.h"
 #include "Engine/Texture2D.h"
+#include "Engine/AssetManager.h"
+#include "Engine/StreamableManager.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "Engine/StaticMesh.h"
 #include "Components/StaticMeshComponent.h"
 #include "LandscapeProxy.h"
@@ -39,14 +44,17 @@ UACEUIResourceResolver* UACEDatSubsystem::GetUiResources()
 #include "StaticMeshAttributes.h"
 #include "TextureResource.h"
 #include "Misc/Paths.h"
+#include "Misc/PackageName.h"
 #include "HAL/PlatformTime.h"
 #include "HAL/PlatformProcess.h"
 #include "Async/Async.h"
+#include "Async/InheritedContext.h"
 #include "Templates/Function.h"
 #include "Math/ConvexHull2d.h"
 
 #if WITH_EDITORONLY_DATA
 #include "Materials/MaterialExpressionTextureSampleParameter2D.h"
+#include "Materials/MaterialExpressionCollectionParameter.h"
 #include "Materials/MaterialExpressionTextureObjectParameter.h"
 #include "Materials/MaterialExpressionTextureSampleParameter2DArray.h"
 #include "Materials/MaterialExpressionCustom.h"
@@ -85,6 +93,21 @@ UACEUIResourceResolver* UACEDatSubsystem::GetUiResources()
 
 namespace
 {
+	// Long blocking file/index work must not be eligible for TaskGraph busy-wait
+	// execution by a game thread doing a synchronous package load. Preserve UE's
+	// time/memory context explicitly on the dedicated thread-pool path.
+	void RunDatBackgroundWork(TUniqueFunction<void()> Work)
+	{
+		auto Context = MakeShared<UE::FInheritedContextBase, ESPMode::ThreadSafe>();
+		Context->CaptureInheritedContext();
+		Async(EAsyncExecution::ThreadPool, [Context, Work = MoveTemp(Work)]() mutable
+		{
+			auto Scope = Context->RestoreInheritedContext();
+			check(!IsInGameThread());
+			TRACE_CPUPROFILER_EVENT_SCOPE(ACE_DatBackgroundWorker);
+			Work();
+		});
+	}
 	TAutoConsoleVariable<int32> CVarSkipUnusedPortalCamera(TEXT("ace.Render.SkipUnusedPortalCamera"),1,
 		TEXT("Avoid terrain uniform updates for an unused outdoor portal camera. Set 0 for profiling."));
 	enum class EACEAceMaterialKind : uint8
@@ -109,6 +132,39 @@ namespace
 		const FLinearColor& C = Decoded.SolidColor;
 		const bool bMagenta = Decoded.bIsSolid && C.R > 0.15f && C.B > 0.15f && C.G < 0.08f;
 		return bMagenta || (C.A < 0.08f && Decoded.Translucency > 0.85f);
+	}
+
+	UMaterialParameterCollection* RuntimeFogCollection()
+	{
+		static TWeakObjectPtr<UMaterialParameterCollection> Cached;
+		if (Cached.IsValid()) return Cached.Get();
+		constexpr const TCHAR* PackageName = TEXT("/Game/ACE/RuntimeMaterials/MPC_ACEWorldFog_v1");
+		constexpr const TCHAR* ObjectPath = TEXT("/Game/ACE/RuntimeMaterials/MPC_ACEWorldFog_v1.MPC_ACEWorldFog_v1");
+		UMaterialParameterCollection* Collection = nullptr;
+#if WITH_EDITORONLY_DATA
+		if (FPackageName::DoesPackageExist(PackageName))
+			Collection = LoadObject<UMaterialParameterCollection>(nullptr, ObjectPath);
+		if (!Collection)
+		{
+			Collection = NewObject<UMaterialParameterCollection>(CreatePackage(PackageName),
+				TEXT("MPC_ACEWorldFog_v1"), RF_Public | RF_Standalone);
+			for (const auto& Pair : { TPair<FName, float>(TEXT("FogStart"), 20000.f),
+				TPair<FName, float>(TEXT("FogEnd"), 90000.f), TPair<FName, float>(TEXT("FogAmount"), 1.f) })
+			{
+				auto& Parameter = Collection->ScalarParameters.AddDefaulted_GetRef();
+				Parameter.ParameterName = Pair.Key;
+				Parameter.DefaultValue = Pair.Value;
+			}
+			auto& Color = Collection->VectorParameters.AddDefaulted_GetRef();
+			Color.ParameterName = TEXT("FogColor");
+			Color.DefaultValue = FLinearColor(0.55f, 0.62f, 0.78f, 1.f);
+			Collection->PostEditChange();
+		}
+#else
+		Collection = LoadObject<UMaterialParameterCollection>(nullptr, ObjectPath);
+#endif
+		Cached = Collection;
+		return Collection;
 	}
 
 	UMaterial* LoadCookedAceMaterial(const TCHAR* Name)
@@ -149,15 +205,19 @@ namespace
 			Dist->MaterialExpressionEditorX = 280;
 			Dist->MaterialExpressionEditorY = 330;
 
-			UMaterialExpressionScalarParameter* FogStart = NewObject<UMaterialExpressionScalarParameter>(Mat);
-			FogStart->ParameterName = TEXT("FogStart");
-			FogStart->DefaultValue = 20000.f;
+			auto SharedFogParameter = [Mat](const TCHAR* Name)
+			{
+				auto* Parameter = NewObject<UMaterialExpressionCollectionParameter>(Mat);
+				Parameter->Collection = RuntimeFogCollection();
+				Parameter->ParameterName = Name;
+				Parameter->ParameterId = Parameter->Collection->GetParameterId(Name);
+				return Parameter;
+			};
+			auto* FogStart = SharedFogParameter(TEXT("FogStart"));
 			FogStart->MaterialExpressionEditorX = 80;
 			FogStart->MaterialExpressionEditorY = 480;
 
-			UMaterialExpressionScalarParameter* FogEnd = NewObject<UMaterialExpressionScalarParameter>(Mat);
-			FogEnd->ParameterName = TEXT("FogEnd");
-			FogEnd->DefaultValue = 90000.f;
+			auto* FogEnd = SharedFogParameter(TEXT("FogEnd"));
 			FogEnd->MaterialExpressionEditorX = 80;
 			FogEnd->MaterialExpressionEditorY = 540;
 
@@ -167,11 +227,13 @@ namespace
 			FogAmount->MaterialExpressionEditorX = 80;
 			FogAmount->MaterialExpressionEditorY = 600;
 
-			UMaterialExpressionVectorParameter* FogColor = NewObject<UMaterialExpressionVectorParameter>(Mat);
-			FogColor->ParameterName = TEXT("FogColor");
-			FogColor->DefaultValue = FLinearColor(0.55f, 0.62f, 0.78f, 1.f);
+			auto* FogColor = SharedFogParameter(TEXT("FogColor"));
 			FogColor->MaterialExpressionEditorX = 80;
 			FogColor->MaterialExpressionEditorY = 660;
+			auto* SharedAmount = SharedFogParameter(TEXT("FogAmount"));
+			auto* EffectiveAmount = NewObject<UMaterialExpressionMultiply>(Mat);
+			EffectiveAmount->A.Expression = FogAmount;
+			EffectiveAmount->B.Expression = SharedAmount;
 
 			UMaterialExpressionSubtract* DistMinusStart = NewObject<UMaterialExpressionSubtract>(Mat);
 			DistMinusStart->A.Expression = Dist;
@@ -199,7 +261,7 @@ namespace
 
 			UMaterialExpressionMultiply* Scaled = NewObject<UMaterialExpressionMultiply>(Mat);
 			Scaled->A.Expression = Linear;
-			Scaled->B.Expression = FogAmount;
+			Scaled->B.Expression = EffectiveAmount;
 			Scaled->MaterialExpressionEditorX = 1040;
 			Scaled->MaterialExpressionEditorY = 330;
 
@@ -219,6 +281,7 @@ namespace
 			EmisFog->A.Expression = EmissiveIn;
 			EmisFog->A.OutputIndex = EmissiveInOutput;
 			EmisFog->B.Expression = FogColor;
+			EmisFog->B.SetMask(1, 1, 1, 1, 0);
 			EmisFog->Alpha.Expression = Factor;
 			EmisFog->MaterialExpressionEditorX = 1580;
 			EmisFog->MaterialExpressionEditorY = 0;
@@ -230,6 +293,8 @@ namespace
 			EditorOnly->ExpressionCollection.AddExpression(FogEnd);
 			EditorOnly->ExpressionCollection.AddExpression(FogAmount);
 			EditorOnly->ExpressionCollection.AddExpression(FogColor);
+			EditorOnly->ExpressionCollection.AddExpression(SharedAmount);
+			EditorOnly->ExpressionCollection.AddExpression(EffectiveAmount);
 			EditorOnly->ExpressionCollection.AddExpression(DistMinusStart);
 			EditorOnly->ExpressionCollection.AddExpression(EndMinusStart);
 			EditorOnly->ExpressionCollection.AddExpression(Span);
@@ -905,6 +970,11 @@ UMaterialInterface* UACEDatSubsystem::GetVRComfortMaterial()
 #endif
 }
 
+UMaterialParameterCollection* UACEDatSubsystem::GetRuntimeFogCollection() const
+{
+	return RuntimeFogCollection();
+}
+
 TArray<UMaterialInterface*> UACEDatSubsystem::GetRuntimeMaterialParents()
 {
 	TArray<UMaterialInterface*> Parents = {
@@ -935,9 +1005,58 @@ TArray<UMaterialInterface*> UACEDatSubsystem::GetRuntimeMaterialParents()
 	return Parents;
 }
 
+bool UACEDatSubsystem::PrepareRuntimeMaterials()
+{
+#if WITH_EDITORONLY_DATA
+	// The editor constructs transient material graphs instead of using cooked parents.
+	return true;
+#else
+	check(IsInGameThread());
+	if (bRuntimeMaterialPreloadStarted)
+	{
+		return !RuntimeMaterialPreload || RuntimeMaterialPreload->HasLoadCompleted();
+	}
+	bRuntimeMaterialPreloadStarted = true;
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_PrepareRuntimeMaterials);
+	TArray<FAssetData> Assets;
+	FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get().GetAssetsByPath(
+		FName(TEXT("/Game/ACE/RuntimeMaterials")), Assets, false, true);
+	TArray<FSoftObjectPath> Paths;
+	for (const FAssetData& Asset : Assets)
+	{
+		Paths.Add(Asset.GetSoftObjectPath());
+	}
+	if (Paths.IsEmpty())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ACE: runtime material registry is empty; falling back to on-demand loading"));
+		return true;
+	}
+	// Keep this small, cooked material library resident for the session. First-use
+	// LoadObject calls during character/terrain creation can then resolve in memory,
+	// rather than flushing the loader while DAT indexing/cache maintenance is busy.
+	const int32 Count = Paths.Num();
+	const double Start = FPlatformTime::Seconds();
+	RuntimeMaterialPreload = UAssetManager::GetStreamableManager().RequestAsyncLoad(MoveTemp(Paths),
+		FStreamableDelegate::CreateWeakLambda(this, [this, Count, Start]()
+		{
+			TArray<UObject*> Loaded;
+			if (RuntimeMaterialPreload) RuntimeMaterialPreload->GetLoadedAssets(Loaded);
+			int32 LoadedCount = 0;
+			for (UObject* Asset : Loaded) if (Asset) ++LoadedCount;
+			UE_LOG(LogTemp, Log, TEXT("ACE: runtime material preload complete: %d/%d assets in %.1fms"),
+				LoadedCount, Count, (FPlatformTime::Seconds() - Start) * 1000.0);
+			if (LoadedCount != Count)
+				UE_LOG(LogTemp, Warning, TEXT("ACE: incomplete material preload; missing parents will report during appearance creation"));
+		}), FStreamableManager::DefaultAsyncLoadPriority, false, false, TEXT("ACE runtime materials"));
+	UE_LOG(LogTemp, Log, TEXT("ACE: asynchronously preparing %d runtime material assets"), Count);
+	return !RuntimeMaterialPreload || RuntimeMaterialPreload->HasLoadCompleted();
+#endif
+}
+
 void UACEDatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+	PrepareRuntimeMaterials();
 #if PLATFORM_ANDROID
 	// DAT files are deployed separately into this test application's sandbox.
 	// ProjectSavedDir resolves through Unreal's Android platform file layer.
@@ -955,6 +1074,9 @@ void UACEDatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void UACEDatSubsystem::Deinitialize()
 {
+	if (RuntimeMaterialPreload) RuntimeMaterialPreload->CancelHandle();
+	RuntimeMaterialPreload.Reset();
+	bRuntimeMaterialPreloadStarted = false;
 	++BackgroundLoadGeneration; // invalidate any in-flight worker callback
 	bBackgroundLoadInProgress = false;
 	ClearLoadedState();
@@ -1198,9 +1320,7 @@ void UACEDatSubsystem::BeginBackgroundLoad(bool bRetryFailed)
 	UE_LOG(LogTemp, Log, TEXT("ACEDat: background index starting (%s, highres=%s)"),
 		*Dir, bWantHighRes ? TEXT("yes") : TEXT("no"));
 
-	// TaskGraph background threads inherit FAppTime; ThreadPool workers do not and hit
-	// "Attempted to retrieve FAppTime on a thread where there is no inherited time context".
-	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [WeakThis, Dir, bWantHighRes, Generation]()
+	RunDatBackgroundWork([WeakThis, Dir, bWantHighRes, Generation]()
 	{
 		TSharedRef<UACEDatSubsystem::FBackgroundLoadResult> Result = MakeShared<UACEDatSubsystem::FBackgroundLoadResult>();
 		const double StartTime = FPlatformTime::Seconds();
@@ -1274,7 +1394,7 @@ void UACEDatSubsystem::BeginCellDatBackgroundLoad()
 
 	UE_LOG(LogTemp, Log, TEXT("ACEDat: cell dat background index starting (%s)"), *Dir);
 
-	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [WeakThis, Dir, Generation]()
+	RunDatBackgroundWork([WeakThis, Dir, Generation]()
 	{
 		const double StartTime = FPlatformTime::Seconds();
 		TUniquePtr<FACEDatDatabase> Cell;
@@ -1399,7 +1519,7 @@ void UACEDatSubsystem::TryStartDiskCacheMaintenance()
 	if (!bPendingDiskCacheMaintenance || !PortalDat || !CellDat || !bWorldStreamingAllowed) return;
 	bPendingDiskCacheMaintenance = false;
 	const uint64 Fp = ComputeDatFingerprint();
-	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [Fp]()
+	RunDatBackgroundWork([Fp]()
 	{
 		ACEDiskTileCache::MaintainAfterDatLoad(Fp);
 	});
@@ -3680,7 +3800,7 @@ UMaterialInterface* UACEDatSubsystem::GetUniformInteriorMaterial(UMaterialInterf
 UMaterialInterface* UACEDatSubsystem::GetOrCreateLandMaterial(uint32 PCode, const TArray<FColor>& Pixels, int32 Width, int32 Height,
 	FACETerrainBlendCache::FBlendPtr SharedBlend)
 {
-	if (Width <= 0 || Height <= 0 || Pixels.Num() < Width * Height)
+	if (Width <= 0 || Height <= 0 || (SharedBlend ? !SharedBlend->IsValid() : Pixels.Num() < int64(Width) * Height))
 	{
 		return nullptr;
 	}
@@ -3707,6 +3827,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateLandMaterial(uint32 PCode, cons
 		{
 			auto Copy=MakeShared<FACETerrainBlend,ESPMode::ThreadSafe>();
 			Copy->Width=Width; Copy->Height=Height; Copy->Pixels.Append(Pixels.GetData(),Width*Height);
+			if (!Copy->PrepareUploadMips()) return nullptr;
 			SharedBlend=Copy;
 		}
 		Tex = UACELandTextureMipProvider::CreateTexture(this,MoveTemp(SharedBlend));
@@ -6100,7 +6221,7 @@ bool UACEDatSubsystem::ApplyLandblockToProceduralMesh(UProceduralMeshComponent* 
 		}
 		else if (Sec.HasBakedTexture())
 		{
-			if (UMaterialInterface* LandMat = GetOrCreateLandMaterial(Sec.PCode, Sec.GetBakedPixels(), Sec.BakeWidth, Sec.BakeHeight, Sec.SharedBake))
+			if (UMaterialInterface* LandMat = GetOrCreateLandMaterial(Sec.PCode, Sec.BakedPixels, Sec.BakeWidth, Sec.BakeHeight, Sec.SharedBake))
 			{
 				Mat = LandMat;
 			}
@@ -6359,7 +6480,7 @@ bool UACEDatSubsystem::ApplyLandblockChunkToProceduralMesh(UProceduralMeshCompon
 			UMaterialInterface* Mat = GetVertexColorMaterial();
 			if (Sec.HasBakedTexture())
 			{
-				if (UMaterialInterface* LandMat = GetOrCreateLandMaterial(Sec.PCode, Sec.GetBakedPixels(), Sec.BakeWidth, Sec.BakeHeight, Sec.SharedBake))
+				if (UMaterialInterface* LandMat = GetOrCreateLandMaterial(Sec.PCode, Sec.BakedPixels, Sec.BakeWidth, Sec.BakeHeight, Sec.SharedBake))
 				{
 					Mat = LandMat;
 				}
@@ -6502,9 +6623,17 @@ void UACEDatSubsystem::ApplyDistanceFogToMaterialInstance(UMaterialInterface* In
 	{
 		return;
 	}
+	UMaterialParameterCollection* Collection = nullptr;
+	const bool bSharedFog = Inst->GetParameterCollectionParameterValue(TEXT("FogStart"), Collection)
+		&& Collection == GetRuntimeFogCollection();
 #if WITH_EDITOR
 	if (UMaterialInstanceConstant* Mic = Cast<UMaterialInstanceConstant>(Inst))
 	{
+		if (bSharedFog)
+		{
+			Mic->SetScalarParameterValueEditorOnly(TEXT("FogAmount"), 1.f);
+			return;
+		}
 		Mic->SetScalarParameterValueEditorOnly(TEXT("FogStart"), WorldFogStartCm);
 		Mic->SetScalarParameterValueEditorOnly(TEXT("FogEnd"), WorldFogEndCm);
 		Mic->SetScalarParameterValueEditorOnly(TEXT("FogAmount"), WorldFogAmount);
@@ -6514,6 +6643,11 @@ void UACEDatSubsystem::ApplyDistanceFogToMaterialInstance(UMaterialInterface* In
 #endif
 	if (UMaterialInstanceDynamic* Mid = Cast<UMaterialInstanceDynamic>(Inst))
 	{
+		if (bSharedFog)
+		{
+			Mid->SetScalarParameterValue(TEXT("FogAmount"), 1.f);
+			return;
+		}
 		Mid->SetScalarParameterValue(TEXT("FogStart"), WorldFogStartCm);
 		Mid->SetScalarParameterValue(TEXT("FogEnd"), WorldFogEndCm);
 		Mid->SetScalarParameterValue(TEXT("FogAmount"), WorldFogAmount);
@@ -6586,55 +6720,22 @@ void UACEDatSubsystem::SetWorldDistanceFog(float StartCm, float EndCm, const FLi
 	WorldFogEndCm = NewEnd;
 	WorldFogAmount = NewAmount;
 	WorldFogColor = Color;
-	for (auto& Pair : LandMaterialCache)
-	{
-		ApplyDistanceFogToMid(Pair.Value.Get());
-	}
-	ApplyDistanceFogToMid(LandGpuMaterialInstance);
-	for (auto& Pair : TexturedMaterialCache)
-	{
-		ApplyDistanceFogToMid(Pair.Value.Get());
-	}
-	for (auto& Pair : ResolvedMaterialCache)
-	{
-		ApplyDistanceFogToMid(Pair.Value.Get());
-	}
-	for (auto& Pair : WorldObjectMaterials) ApplyDistanceFogToMid(Pair.Value.Get());
-	for (const auto& Pair : WorldLightingInstances) if (auto* Material=Pair.Key.Get()) ApplyDistanceFogToMid(Material);
-	for (auto& Pair : StaticMeshMaterialCache)
-	{
-		ApplyDistanceFogToMid(Pair.Value.Get());
-	}
-	for (auto& Pair : OutdoorLitMaterialCache)
-	{
-		ApplyDistanceFogToMid(Pair.Value.Get());
-	}
-	for (auto& Pair : BuildingShellMaterialCache)
-	{
-		ApplyDistanceFogToMid(Pair.Value.Get());
-	}
-	for (auto& Pair : InteriorObjectMaterials)
-	{
-		ApplyDistanceFogToMid(Cast<UMaterialInstanceDynamic>(Pair.Value.Get()));
-	}
-	ApplyWorldDistanceFogToLandscapes();
 	if (UWorld* World = GetWorld())
 	{
-		for (TActorIterator<AACELandblockActor> It(World); It; ++It)
+		if (auto* Collection = GetRuntimeFogCollection())
 		{
-			if (AACELandblockActor* Lb = *It)
+			if (auto* Instance = World->GetParameterCollectionInstance(Collection))
 			{
-				Lb->ApplyWorldDistanceFog(this);
+				Instance->SetScalarParameterValue(TEXT("FogStart"), NewStart);
+				Instance->SetScalarParameterValue(TEXT("FogEnd"), NewEnd);
+				Instance->SetScalarParameterValue(TEXT("FogAmount"), NewAmount);
+				Instance->SetVectorParameterValue(TEXT("FogColor"), Color);
 			}
 		}
 	}
-	for (auto& Pair : ParticleMaterialCache)
-	{
-		if (UMaterialInstanceDynamic* Mid = Pair.Value.Get())
-		{
-			Mid->SetScalarParameterValue(TEXT("FogAmount"), 0.f);
-		}
-	}
+	// Optional landscapes baked with older shader parents retain their local
+	// parameter path. DAT terrain/scenery and actors use the shared collection.
+	ApplyWorldDistanceFogToLandscapes();
 }
 
 const FACEDatRegionSky* UACEDatSubsystem::GetRegionSkyInfo()

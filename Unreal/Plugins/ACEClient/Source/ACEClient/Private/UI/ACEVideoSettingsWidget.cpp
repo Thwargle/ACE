@@ -94,6 +94,12 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  Section(TEXT("Camera Options"));
  for (int32 I=4;I<7;++I) AddValue(ACERuntimeOptions::Values[I]);
  Section(TEXT("Graphics Options"));
+ DesktopScale=Combo(TEXT("Desktop UI scale"));
+ DesktopScale->Rename(TEXT("DesktopUIScale"));
+ for(int32 Percent=100;Percent<=300;Percent+=25) DesktopScale->AddOption(FString::Printf(TEXT("%d%%"),Percent));
+ DesktopScale->SetToolTipText(FText::FromString(TEXT("Scales the desktop interface in 25% steps. Limited to fit the window; VR uses its own panel scale. 200% and 300% give whole-pixel enlargement of native artwork.")));
+ ShowFrameRate=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("ShowFrameRate"));
+ ShowFrameRate->SetWidgetStyle(RoundToggle);ShowFrameRate->SetContent(Label(TEXT("Show FPS overlay")));Box->AddChild(Fixed(ShowFrameRate,272,20));
  Resolution=Combo(TEXT("Resolution"));
  FScreenResolutionArray Modes; RHIGetAvailableResolutions(Modes,true);
  for (const auto& M:Modes) if(M.Width>=800&&M.Height>=600)
@@ -119,6 +125,10 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  }
  Filtering=Combo(TEXT("Texture Filtering")); for (const TCHAR* V:{TEXT("1x"),TEXT("2x"),TEXT("4x"),TEXT("8x"),TEXT("16x")}) Filtering->AddOption(V);
  Section(TEXT("Input Options"));
+ InvertMouseX=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("InvertMouseX"));
+ InvertMouseY=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("InvertMouseY"));
+ InvertMouseX->SetWidgetStyle(RoundToggle);InvertMouseX->SetContent(Label(TEXT("Invert mouse X (horizontal look)")));Box->AddChild(Fixed(InvertMouseX,272,20));
+ InvertMouseY->SetWidgetStyle(RoundToggle);InvertMouseY->SetContent(Label(TEXT("Invert mouse Y (vertical look)")));Box->AddChild(Fixed(InvertMouseY,272,20));
  MouseTurnSpeed=WidgetTree->ConstructWidget<USlider>(USlider::StaticClass(),TEXT("MouseTurnSpeed"));
  FSliderStyle Slider;
  Slider.SetNormalBarImage(Brush(0x06001285,FVector2D(120,12))).SetHoveredBarImage(Slider.NormalBarImage).SetDisabledBarImage(Slider.NormalBarImage)
@@ -154,6 +164,9 @@ void UACEVideoSettingsWidget::ResetVideo()
  Filtering->SetSelectedIndex(FMath::Clamp(FMath::FloorLog2(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("Anisotropy")))),0,4));
  if(auto* GI=GetGameInstance()) if(auto* Client=GI->GetSubsystem<UACEClientSubsystem>()) for(auto& P:CharacterChecks)P.Value->SetIsChecked(Client->IsCharacterOptionSet(P.Key));
  if(MouseTurnSpeed)MouseTurnSpeed->SetValue(ACECameraSettings::GetMouseTurnSpeed());
+ InvertMouseX->SetIsChecked(ACECameraSettings::GetInvertMouseX());InvertMouseY->SetIsChecked(ACECameraSettings::GetInvertMouseY());
+ DesktopScale->SetSelectedIndex(FMath::RoundToInt((ACERuntimeOptions::Get(TEXT("DesktopUIScale"))-1.f)*4.f));
+ ShowFrameRate->SetIsChecked(ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f);
 }
 UWidget* UACEVideoSettingsWidget::GenerateOption(FString Option)
 {
@@ -175,14 +188,26 @@ void UACEVideoSettingsWidget::ApplyVideo()
   S->SetVisualEffectQuality(QualityLevels[3]->GetSelectedIndex()); S->SetPostProcessingQuality(QualityLevels[4]->GetSelectedIndex()); S->SetAntiAliasingQuality(QualityLevels[5]->GetSelectedIndex());
   S->SetFoliageQuality(QualityLevels[6]->GetSelectedIndex()); S->SetShadingQuality(QualityLevels[7]->GetSelectedIndex());
  }
+ // Validation can reload/reset the config on first launch or after an engine
+ // settings-version change. Save our preferences after that reload completes.
+ S->SetFrameRateLimit(FCString::Atof(*FrameLimit->GetSelectedOption()));S->SetVSyncEnabled(VSync->IsChecked());
+ S->ValidateSettings();S->ApplySettings(false);S->ConfirmVideoMode();S->SaveSettings();
  for(const auto& P:ValueSliders) ACERuntimeOptions::Set(*P.Key.ToString(),P.Value->GetValue());
+ ApplyInterfaceOptions();
  ACERuntimeOptions::Set(TEXT("ActiveSoundOnly"),ActiveSoundOnly->IsChecked()?1:0);
  ACERuntimeOptions::Set(TEXT("Anisotropy"),float(1<<FMath::Clamp(Filtering->GetSelectedIndex(),0,4)));
  if(auto* GI=GetGameInstance()) if(auto* Client=GI->GetSubsystem<UACEClientSubsystem>()) for(auto& P:CharacterChecks)Client->SendSetSingleCharacterOption(P.Key,P.Value->IsChecked());
- S->SetFrameRateLimit(FCString::Atof(*FrameLimit->GetSelectedOption()));S->SetVSyncEnabled(VSync->IsChecked());
- S->ValidateSettings();S->ApplySettings(false);S->ConfirmVideoMode();S->SaveSettings(); ACERuntimeOptions::Apply(); ResetVideo();
+ ACERuntimeOptions::Apply(); ResetVideo();
 }
 
+
+void UACEVideoSettingsWidget::ApplyInterfaceOptions()
+{
+ ACECameraSettings::SetMouseInversion(InvertMouseX->IsChecked(),InvertMouseY->IsChecked());
+ if(DesktopScale->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("DesktopUIScale"),1.f+DesktopScale->GetSelectedIndex()*.25f);
+ ACERuntimeOptions::Set(TEXT("ShowFrameRate"),ShowFrameRate->IsChecked()?1.f:0.f);
+ ACERuntimeOptions::Apply();
+}
 
 void UACEVideoSettingsWidget::ChangeMouseTurnSpeed(float Value)
 {
@@ -203,6 +228,8 @@ void UACEVideoSettingsWidget::DefaultsVideo()
  for(UComboBoxString* C:QualityLevels)C->SetSelectedIndex(2);
  for(auto& P:CharacterChecks) if(const auto* O=ACECharacterOptions::Find(P.Key)) P.Value->SetIsChecked(((O->bInOptions2?ACECharacterOptions::Options2Default:ACECharacterOptions::Options1Default)&O->Flag)!=0);
  ResetMouseTurnSpeed();
+ InvertMouseX->SetIsChecked(false);InvertMouseY->SetIsChecked(false);DesktopScale->SetSelectedIndex(0);
+ ShowFrameRate->SetIsChecked(false);
 }
 
 float UACEVideoSettingsWidget::GetScrollOffset() const { return Scroll?Scroll->GetScrollOffset():0; }

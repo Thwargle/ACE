@@ -18,6 +18,8 @@
 #include "Engine/GameInstance.h"
 #include "HAL/IConsoleManager.h"
 #include "ACEVisibleObjectPick.h"
+#include "ACERuntimeOptions.h"
+#include "UI/ACEFrameRateWidget.h"
 
 void UACEVRComponent::PositionPanel(UWidgetComponent* Panel)
 {
@@ -53,6 +55,23 @@ bool UACEVRComponent::IsLoginPanelReady() const
 
 void UACEVRComponent::UpdatePanels(float Dt)
 {
+	const bool ShowFPS=bTracking && ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f && PC->FrameRateWidget;
+	if(ShowFPS && !IsValid(FrameRatePanel))
+	{
+		FrameRatePanel=NewObject<UWidgetComponent>(PresentationActor,TEXT("VRFrameRate"));
+		PresentationActor->AddInstanceComponent(FrameRatePanel);FrameRatePanel->SetupAttachment(Head);
+		FrameRatePanel->SetWidgetSpace(EWidgetSpace::World);FrameRatePanel->SetDrawSize(FVector2D(400,64));
+		FrameRatePanel->SetWidget(PC->FrameRateWidget);FrameRatePanel->SetBlendMode(EWidgetBlendMode::Transparent);
+		FrameRatePanel->SetBackgroundColor(FLinearColor::Transparent);FrameRatePanel->SetTwoSided(true);
+		FrameRatePanel->SetWindowFocusable(false);FrameRatePanel->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		FrameRatePanel->SetCastShadow(false);FrameRatePanel->SetRedrawTime(.25f);
+		FrameRatePanel->SetRelativeLocationAndRotation(FVector(100,-32,24),FRotator(0,180,0));
+		FrameRatePanel->SetRelativeScale3D(FVector(.065f));FrameRatePanel->RegisterComponent();
+	}
+	if(IsValid(FrameRatePanel))
+	{
+		FrameRatePanel->SetVisibility(ShowFPS);FrameRatePanel->SetComponentTickEnabled(ShowFPS);
+	}
 	// Only enabled pinned surfaces refresh below. A full name index costs more
 	// than these few lookups on Quest; the gameplay binder retains its own index
 	// for its much larger batch of UI queries.

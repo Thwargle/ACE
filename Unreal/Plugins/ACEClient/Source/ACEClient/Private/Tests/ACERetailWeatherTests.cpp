@@ -20,6 +20,8 @@
 #include "ProceduralMeshComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/Material.h"
+#include "Materials/MaterialParameterCollection.h"
+#include "Materials/MaterialParameterCollectionInstance.h"
 #include "Misc/ScopeExit.h"
 #include "Scalability.h"
 #include "HAL/IConsoleManager.h"
@@ -40,8 +42,10 @@ bool FACERetailWeatherTest::RunTest(const FString& Parameters)
     const auto Values = UWorld::InitializationValues().AllowAudioPlayback(false)
         .RequiresHitProxies(false).CreatePhysicsScene(false).CreateNavigation(false).CreateAISystem(false);
     auto* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Values);
-    GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
-    auto* GI=NewObject<UGameInstance>(GEngine); World->SetGameInstance(GI); GI->Init();
+    auto* GI=NewObject<UGameInstance>(GEngine); GI->InitializeStandalone();
+    auto* InitialWorld=GI->GetWorld();
+    GI->GetWorldContext()->SetCurrentWorld(World); World->SetGameInstance(GI);
+    InitialWorld->DestroyWorld(false);
     ON_SCOPE_EXIT { GI->Shutdown(); GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
     auto* Dat = GI->GetSubsystem<UACEDatSubsystem>();
     if (!TestTrue(TEXT("Open retail weather DAT"), Dat->LoadDatDirectory(Directory))) return false;
@@ -271,6 +275,21 @@ bool FACERetailWeatherTest::RunTest(const FString& Parameters)
         };
         const auto ForegroundOnly=Read();
         TestTrue(TEXT("Foreground occluder produces a visible reference"),ForegroundOnly[270*640+320].R>.1f);
+        // Exercise the compiled shader, not just the parameter values: existing
+        // instances must see collection changes without receiving any MID edits.
+        ForegroundMaterial->SetScalarParameterValue(TEXT("FogAmount"),1.f);
+        Dat->SetWorldDistanceFog(0.f,400.f,FLinearColor::Red,1.f);
+        const auto RedFog=Read()[270*640+320];
+        TestTrue(TEXT("Shared fog reaches the rendered surface"),RedFog.R>.9f && RedFog.G<.01f && RedFog.B<.01f);
+        Dat->SetWorldDistanceFog(0.f,400.f,FLinearColor::Blue,1.f);
+        const auto BlueFog=Read()[270*640+320];
+        TestTrue(TEXT("A collection update changes an existing rendered material"),BlueFog.B>.9f && BlueFog.R<.01f && BlueFog.G<.01f);
+        Dat->SetWorldDistanceFog(0.f,400.f,FLinearColor::Blue,0.f);
+        TestTrue(TEXT("Shared fog can be disabled without changing local masks"),Read()[270*640+320].Equals(ForegroundOnly[270*640+320],.002f));
+        Dat->SetWorldDistanceFog(0.f,400.f,FLinearColor::Red,1.f);
+        ForegroundMaterial->SetScalarParameterValue(TEXT("FogAmount"),0.f);
+        TestTrue(TEXT("An interior or preview opt-out stays unfogged"),Read()[270*640+320].Equals(ForegroundOnly[270*640+320],.002f));
+        Dat->SetWorldDistanceFog(20000.f,90000.f,FLinearColor(.55f,.62f,.78f,1.f),1.f);
         {
             auto* Card=NewObject<UProceduralMeshComponent>(Sky);Card->RegisterComponent();Card->SetWorldLocation(View);
             Card->CreateMeshSection_LinearColor(0,{FVector(500,-500,-500),FVector(500,500,-500),FVector(500,500,500),FVector(500,-500,500)},
@@ -472,33 +491,49 @@ bool FACERetailWeatherTest::RunTest(const FString& Parameters)
     auto* Indoor = Cast<UMaterialInstanceDynamic>(Dat->GetOrCreateEnvCellMaterial(0x08000708));
     if (TestNotNull(TEXT("DAT outdoor fog material"), Outdoor) && TestNotNull(TEXT("DAT indoor material"), Indoor))
     {
+        auto* Collection = Dat->GetRuntimeFogCollection();
+        auto* Fog = World->GetParameterCollectionInstance(Collection);
+        if (!TestNotNull(TEXT("World owns its shared fog parameters"), Fog)) return false;
+        auto Scalar = [Fog](const TCHAR* Name) { float Value = -1.f; Fog->GetScalarParameterValue(Name, Value); return Value; };
+        UMaterialParameterCollection* Bound = nullptr;
+        TestTrue(TEXT("Existing outdoor shader uses the shared fog collection"),
+            Outdoor->GetParameterCollectionParameterValue(TEXT("FogStart"), Bound) && Bound == Collection);
         FACEDatSkyTimeOfDay A, B;
         A.MinWorldFog=0; A.MaxWorldFog=1000; A.WorldFogColor=0xFF204060;
         B.MinWorldFog=20; B.MaxWorldFog=1400; B.WorldFogColor=0xFF6080A0;
         Sky->FogClampLandblocks=0;
         Dat->SetIndoorEnvironment(true);
         Sky->UpdateFog(A,B,.5f);
-        TestEqual(TEXT("Retail fog preserves the interpolated near distance"), Outdoor->K2_GetScalarParameterValue(TEXT("FogStart")), 1000.f);
-        TestEqual(TEXT("Retail fog far distance is not silently capped at 900m"), Outdoor->K2_GetScalarParameterValue(TEXT("FogEnd")), 120000.f);
+        TestEqual(TEXT("Retail fog preserves the interpolated near distance"), Scalar(TEXT("FogStart")), 1000.f);
+        TestEqual(TEXT("Retail fog far distance is not silently capped at 900m"), Scalar(TEXT("FogEnd")), 120000.f);
         TestEqual(TEXT("Landscape seen from indoors retains distance fog"), Outdoor->K2_GetScalarParameterValue(TEXT("FogAmount")), 1.f);
         TestEqual(TEXT("Indoor material does not inherit outdoor distance fog"), Indoor->K2_GetScalarParameterValue(TEXT("FogAmount")), 0.f);
-        TestTrue(TEXT("Cached scenery receives the weather fog color"), Outdoor->K2_GetVectorParameterValue(TEXT("FogColor")).Equals(Sky->LastFillColor,.001f));
+        FLinearColor SharedColor;
+        TestTrue(TEXT("Cached scenery receives the weather fog color"), Fog->GetVectorParameterValue(TEXT("FogColor"), SharedColor) && SharedColor.Equals(Sky->LastFillColor,.001f));
         Dat->SetIndoorEnvironment(false);
         Sky->UpdateFog(A,A,0);
-        TestEqual(TEXT("Authored zero fog start is preserved"), Outdoor->K2_GetScalarParameterValue(TEXT("FogStart")), 0.f);
-        TestEqual(TEXT("Reused scenery receives the next weather interval"), Outdoor->K2_GetScalarParameterValue(TEXT("FogEnd")), 100000.f);
+        TestEqual(TEXT("Authored zero fog start is preserved"), Scalar(TEXT("FogStart")), 0.f);
+        TestEqual(TEXT("Reused scenery receives the next weather interval"), Scalar(TEXT("FogEnd")), 100000.f);
         auto* Shell = Cast<UMaterialInstanceDynamic>(Dat->GetOrCreateBuildingShellMaterial(0x08000708));
         if (TestNotNull(TEXT("DAT shell created after weather update"),Shell))
-            TestEqual(TEXT("New building material receives current fog"), Shell->K2_GetScalarParameterValue(TEXT("FogEnd")), 100000.f);
+            TestTrue(TEXT("New building material shares the current fog"), Shell->GetParameterCollectionParameterValue(TEXT("FogEnd"), Bound) && Bound == Collection);
+        // Weather changes must not resurrect per-object fog disabled by interior
+        // presentation or a preview material, or rewrite ordinary instance data.
+        Outdoor->SetScalarParameterValue(TEXT("FogAmount"), .37f);
+        const int32 LocalScalarCount = Outdoor->ScalarParameterValues.Num();
+        const int32 LocalVectorCount = Outdoor->VectorParameterValues.Num();
         A.Begin=0.f; B.Begin=.5f; Sky->ActiveGroup.TimesOfDay={A,B}; Sky->bDriveWorldFog=true;
         Sky->UpdateSky(.1f,1.f/90.f);
-        const float FirstFog=Outdoor->K2_GetScalarParameterValue(TEXT("FogEnd"));
+        const float FirstFog=Scalar(TEXT("FogEnd"));
         Sky->UpdateSky(.101f,1.f/90.f);
-        TestEqual(TEXT("Slow fog changes do not rewrite all world materials every VR frame"),Outdoor->K2_GetScalarParameterValue(TEXT("FogEnd")),FirstFog);
+        TestEqual(TEXT("Slow fog changes keep their bounded update interval"),Scalar(TEXT("FogEnd")),FirstFog);
         Sky->UpdateSky(.101f,.1f);
-        TestTrue(TEXT("Fog advances at its bounded update interval"),Outdoor->K2_GetScalarParameterValue(TEXT("FogEnd"))>FirstFog);
+        TestTrue(TEXT("Fog advances at its bounded update interval"),Scalar(TEXT("FogEnd"))>FirstFog);
         Sky->UpdateSky(.4f,1.f/90.f);
-        TestEqual(TEXT("A server clock jump applies fog immediately"),Outdoor->K2_GetScalarParameterValue(TEXT("FogEnd")),132000.f);
+        TestEqual(TEXT("A server clock jump applies fog immediately"),Scalar(TEXT("FogEnd")),132000.f);
+        TestEqual(TEXT("Weather preserves local fog masks"), Outdoor->K2_GetScalarParameterValue(TEXT("FogAmount")), .37f);
+        TestEqual(TEXT("Fog updates add no scalar overrides to objects"), Outdoor->ScalarParameterValues.Num(), LocalScalarCount);
+        TestEqual(TEXT("Fog updates add no vector overrides to objects"), Outdoor->VectorParameterValues.Num(), LocalVectorCount);
     }
     Sky->ClearSky();
     return true;

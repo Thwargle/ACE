@@ -1,6 +1,7 @@
 #include "Dat/ACELandTextureMipProvider.h"
 #include "Dat/ACEDatTextureResolver.h"
 #include "Engine/Texture2D.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 namespace
 {
@@ -14,8 +15,7 @@ namespace
 
 UTexture2D* UACELandTextureMipProvider::CreateTexture(UObject* Outer, FACETerrainBlendCache::FBlendPtr Source)
 {
-    if (!Source || Source->Width<=0 || Source->Height<=0
-        || Source->Pixels.Num()!=int64(Source->Width)*Source->Height) return nullptr;
+    if (!Source || !Source->IsValid()) return nullptr;
     auto* Texture=UTexture2D::CreateTransient(Source->Width,Source->Height,PF_B8G8R8A8);
     if (!Texture) return nullptr;
     Texture->Rename(nullptr,Outer);
@@ -47,10 +47,31 @@ FStreamableRenderResourceState UACELandTextureMipProvider::GetResourcePostInitSt
 bool UACELandTextureMipProvider::GetInitialMipData(int32 FirstMipToLoad, TArrayView<void*> OutMipData,
     TArrayView<int64> OutMipSize, FStringView)
 {
-    if (!Blend || FirstMipToLoad<0 || OutMipData.Num()!=LandMipCount(Blend->Width,Blend->Height)-FirstMipToLoad
+    TRACE_CPUPROFILER_EVENT_SCOPE(ACE_UploadLandMips);
+    if (!Blend || !Blend->IsValid() || FirstMipToLoad<0 || FirstMipToLoad>=LandMipCount(Blend->Width,Blend->Height)
+        || OutMipData.Num()!=LandMipCount(Blend->Width,Blend->Height)-FirstMipToLoad
         || (OutMipSize.Num()!=0 && OutMipSize.Num()!=OutMipData.Num())) return false;
-    // The provider remains usable after UpdateResource/device recreation. The
-    // RHI owns/frees only these temporary upload buffers, never our shared bake.
+    // Worker-prepared mips avoid filtering millions of texels on the game thread
+    // during portal entry. Decode directly into RHI-owned upload allocations.
+    if (!Blend->UploadMips.IsEmpty())
+    {
+        for (int32 M = 0; M < OutMipData.Num(); ++M)
+        {
+            const int64 Bytes = Blend->UploadMips[M + FirstMipToLoad].RawBytes;
+            void* Upload = FMemory::Malloc(Bytes);
+            if (!Blend->CopyMip(M + FirstMipToLoad, Upload, Bytes))
+            {
+                FMemory::Free(Upload);
+                for (int32 I = 0; I < M; ++I) { FMemory::Free(OutMipData[I]); OutMipData[I] = nullptr; if (OutMipSize.Num()) OutMipSize[I] = 0; }
+                return false;
+            }
+            OutMipData[M] = Upload;
+            if (OutMipSize.Num()) OutMipSize[M] = Bytes;
+        }
+        return true;
+    }
+    // Small synthetic/test sources may arrive unprepared. The provider remains
+    // usable after resource recreation; uploads never take ownership of Blend.
     const TArray<FColor>* Pixels=&Blend->Pixels;
     TArray<FColor> Current;
     int32 W=Blend->Width,H=Blend->Height;

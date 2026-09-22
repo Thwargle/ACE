@@ -73,6 +73,18 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     ACECameraSettings::SetMouseTurnSpeed(-1.f);
     TestEqual(TEXT("Mouse speed has a positive lower bound"),ACECameraSettings::GetMouseTurnSpeed(),0.1f);
     ACECameraSettings::SetMouseTurnSpeed(ACECameraSettings::DefaultMouseTurnSpeed);
+    for(bool X:{false,true}) for(bool Y:{false,true})
+    {
+        ACECameraSettings::SetMouseInversion(X,Y);
+        Boom->SetRelativeRotation(FRotator(-20,0,0));
+        Controller->ApplyMouseLookDelta(8,8,Boom);
+        TestTrue(TEXT("Mouse horizontal inversion is independent"),FMath::IsNearlyEqual(Boom->GetRelativeRotation().Yaw,X?-6.:6.,.01));
+        TestTrue(TEXT("Mouse vertical inversion is independent"),FMath::IsNearlyEqual(Boom->GetRelativeRotation().Pitch,Y?-14.:-26.,.01));
+        FConfigFile Reload;Reload.Read(GGameUserSettingsIni);bool SavedX=false,SavedY=false;
+        Reload.GetBool(TEXT("ACE.Camera"),TEXT("InvertMouseX"),SavedX);Reload.GetBool(TEXT("ACE.Camera"),TEXT("InvertMouseY"),SavedY);
+        TestTrue(TEXT("Both axis preferences persist independently"),SavedX==X && SavedY==Y);
+    }
+    ACECameraSettings::SetMouseInversion(false,false);
     Controller->ApplyMouseLookDelta(0,10000,Boom);
     TestTrue(TEXT("Orbit pitch remains clamped"),FMath::IsNearlyEqual(Boom->GetRelativeRotation().Pitch,-89.0,0.01));
     Controller->UpdateMouseButtons(true,true,false,false);

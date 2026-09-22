@@ -250,7 +250,7 @@ void UACEVRComponent::Grip(bool bLeft, bool bPressed)
 	if (MissileStyle() != 0x10) return; // Only bows require a draw gesture.
 	if (bDrawing) return;
 	const bool BowLike = IsAmmoLauncher();
-	if (BowLike && EquippedAmmo().Guid == 0) { SetCastFeedback(TEXT("Equip compatible arrows or bolts first.")); return; }
+	if (BowLike && EquippedAmmo().Guid == 0) { SetCastFeedback(TEXT("Equip compatible arrows first.")); return; }
 	const FVector Nock = GetPhysicalGrip(!Settings->bLeftHanded).GetLocation() - GetPhysicalAim(!Settings->bLeftHanded).GetUnitAxis(EAxis::X) * 12.f;
 	if (BowLike && FVector::Distance(GetPhysicalGrip(Settings->bLeftHanded).GetLocation(), Nock) <= 30.f)
 	{

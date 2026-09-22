@@ -5,6 +5,7 @@
 #include "ACEUILayoutResolver.generated.h"
 
 struct FACEUIElement;
+struct FACEPreparedUILayout;
 class UACEUIElementManager;
 class UACEDatSubsystem;
 
@@ -28,6 +29,8 @@ public:
 	 * Load resolved layout JSON (Docs/UI/Resolved) and attach root elements under the manager.
 	 */
 	bool LoadLayout(uint32 LayoutId);
+	/** Prepare a detached layout in bounded batches; true when LoadLayout can install it. */
+	bool PrepareLayout(uint32 LayoutId, double BudgetSeconds = 0.001);
 	/** Read a detached retail template for dynamically created list rows. */
 	static TSharedPtr<FACEUIElement> LoadTemplate(uint32 LayoutId, uint32 ElementId);
 
@@ -39,4 +42,5 @@ private:
 	TObjectPtr<UACEUIElementManager> Manager;
 
 	bool bReady = false;
+	TSharedPtr<FACEPreparedUILayout> PreparedLayout;
 };

@@ -441,13 +441,17 @@ void UACECharacterAppearanceComponent::EnsurePartMeshes(int32 Count)
 		{
 			Proc->SetupAttachment(AttachParent);
 		}
-		Proc->RegisterComponent();
 		Proc->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		// AC uses explicit movement/contact/selection traces, never overlap events
+		// on the individual animated body parts. Avoid overlap maintenance for
+		// every pose update (including parts later enabled for visibility queries).
+		Proc->SetGenerateOverlapEvents(false);
 		Proc->SetCastShadow(false);
 		Proc->bCastDynamicShadow = false;
 		Proc->bCastContactShadow = false;
 		Proc->bCastInsetShadow = false;
 		Proc->bCastFarShadow = false;
+		Proc->RegisterComponent();
 		PartMeshes.Add(Proc);
 	}
 	for (int32 i = 0; i < PartMeshes.Num(); ++i)

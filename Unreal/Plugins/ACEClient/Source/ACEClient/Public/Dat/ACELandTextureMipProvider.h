@@ -5,8 +5,8 @@
 
 class UTexture2D;
 
-/** Rebuild upload mips from the mesh's shared, full-resolution terrain pixels.
- * Avoid retaining another entire CPU mip chain beside every GPU texture. */
+/** Upload worker-prepared full-resolution mips from a shared lossless CPU backup.
+ * GPU textures remain uncompressed; resource recreation uses the same exact data. */
 UCLASS()
 class ACECLIENT_API UACELandTextureMipProvider : public UTextureAllMipDataProviderFactory
 {

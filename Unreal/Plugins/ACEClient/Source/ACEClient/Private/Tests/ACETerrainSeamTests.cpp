@@ -33,6 +33,7 @@ bool FACETerrainSeamTest::RunTest(const FString& Parameters)
         if (!TestTrue(TEXT("Yaraq terrain builds"), Builder.BuildLandblock(Block, 100, Mesh))) continue;
         for (const auto& Section : Mesh.Sections)
         {
+            const TArray<FColor> SectionPixels = Section.GetBakedPixels();
             for (int32 V = 0; V < Section.Vertices.Num(); ++V)
             {
                 const FVector P = Section.Vertices[V];
@@ -48,7 +49,7 @@ bool FACETerrainSeamTest::RunTest(const FString& Parameters)
             }
             TestTrue(TEXT("Terrain retains full-resolution composites"), Section.BakeWidth == 1024 && Section.BakeHeight == 1024);
             if (!TestTrue(TEXT("Every terrain vertex has a texture coordinate"), Section.UVs.Num() == Section.Vertices.Num()) ||
-                !TestTrue(TEXT("Composite has all authored texels"), Section.GetBakedPixels().Num() == 1024*1024)) return false;
+                !TestTrue(TEXT("Composite has all authored texels"), SectionPixels.Num() == 1024*1024)) return false;
             for (int32 V = 0; V + 3 < Section.Vertices.Num(); V += 4)
             {
                 const int32 CX = FMath::RoundToInt(-Section.Vertices[V].X / 2400);
@@ -64,7 +65,7 @@ bool FACETerrainSeamTest::RunTest(const FString& Parameters)
                     AddInfo(FString::Printf(TEXT("Road tile %d,%d PCode=%08X UVs=%s %s %s %s"), CX, CY, Section.PCode,
                         *Section.UVs[V].ToString(), *Section.UVs[V+1].ToString(), *Section.UVs[V+2].ToString(), *Section.UVs[V+3].ToString()));
                     for (int32 Y = 0; Y < 1024; ++Y) for (int32 X = 0; X < 1024; ++X)
-                        Detail[((4-CY)*1024+Y)*DetailSize+(CX-2)*1024+X] = Section.GetBakedPixels()[Y*1024+1023-X];
+                        Detail[((4-CY)*1024+Y)*DetailSize+(CX-2)*1024+X] = SectionPixels[Y*1024+1023-X];
                 }
                 for (int32 Y = 0; Y < TilePixels; ++Y) for (int32 X = 0; X < TilePixels; ++X)
                 {
@@ -72,7 +73,7 @@ bool FACETerrainSeamTest::RunTest(const FString& Parameters)
                     const int32 PY = (2*Y+1)*Section.BakeHeight/(2*TilePixels);
                     const int32 MX = (BX*8+CX)*TilePixels+X;
                     const int32 MY = (23-(BY*8+CY))*TilePixels+Y;
-                    Map[MY*MapSize+MX] = Section.GetBakedPixels()[PY*Section.BakeWidth+PX];
+                    Map[MY*MapSize+MX] = SectionPixels[PY*Section.BakeWidth+PX];
                 }
             }
         }

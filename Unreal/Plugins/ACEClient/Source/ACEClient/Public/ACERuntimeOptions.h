@@ -12,10 +12,14 @@ inline constexpr FOption Values[] = {
  {TEXT("CameraAdjustment"),TEXT("Camera Adjustment Speed"),1,.25f,3},
  {TEXT("FieldOfView"),TEXT("Field of View"),1,.75f,1.25f},
  {TEXT("Brightness"),TEXT("Screen Brightness"),2.2f,1.6f,2.8f},
- {TEXT("Anisotropy"),TEXT("Texture Filtering"),16,1,16}
+ {TEXT("Anisotropy"),TEXT("Texture Filtering"),16,1,16},
+ {TEXT("DesktopUIScale"),TEXT("Desktop UI Scale"),1,1,3},
+ {TEXT("ShowFrameRate"),TEXT("Show FPS overlay"),0,0,1}
 };
 ACECLIENT_API float Get(const TCHAR* Key);
 ACECLIENT_API void Set(const TCHAR* Key, float Value);
 ACECLIENT_API void Apply();
 ACECLIENT_API float SoundGain(bool bAmbient);
+ACECLIENT_API float DesktopUIScale(FIntPoint ViewportSize, bool bVR);
+ACECLIENT_API void ApplyDesktopUIScale(FIntPoint ViewportSize, bool bVR);
 }

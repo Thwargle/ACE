@@ -1050,11 +1050,14 @@ bool FACELandblockMeshBuilder::FillSectionBake(FACEBuiltLandblockSection& Sectio
     Section.SharedBake = BlendCache->GetOrBuild(Section.PCode, CacheFingerprint, [&]() -> FACETerrainBlendCache::FBlendPtr
     {
         auto Blend = MakeShared<FACETerrainBlend, ESPMode::ThreadSafe>();
-        if (CacheFingerprint != 0 && ACEPCodeTileCache::Load(Section.PCode, CacheFingerprint,
-            Blend->Width, Blend->Height, Blend->Pixels)) return Blend;
-        if (!BakePCode(Section.PCode, Blend->Pixels, Blend->Width, Blend->Height)) return nullptr;
-        if (CacheFingerprint != 0)
-            ACEPCodeTileCache::Save(Section.PCode, CacheFingerprint, Blend->Width, Blend->Height, Blend->Pixels);
+        if (!(CacheFingerprint != 0 && ACEPCodeTileCache::Load(Section.PCode, CacheFingerprint,
+            Blend->Width, Blend->Height, Blend->Pixels)))
+        {
+            if (!BakePCode(Section.PCode, Blend->Pixels, Blend->Width, Blend->Height)) return nullptr;
+            if (CacheFingerprint != 0)
+                ACEPCodeTileCache::Save(Section.PCode, CacheFingerprint, Blend->Width, Blend->Height, Blend->Pixels);
+        }
+        if (!Blend->PrepareUploadMips()) return nullptr;
         return Blend;
     });
     if (!Section.SharedBake) return false;

@@ -265,11 +265,10 @@ namespace ACE.Server.WorldObjects
             var weapon = GetEquippedMissileWeapon();
             if (weapon == null || weapon.Guid.Full != r.Weapon) { RejectVRCombat(r, "The missile weapon has changed. Try again with the equipped weapon."); return; }
             var crossbow = weapon.DefaultCombatStyle == CombatStyle.Crossbow;
-            var drawnBow = weapon.DefaultCombatStyle == CombatStyle.Bow;
             if (!VRCombatRequest.InReach(r.Origin, crossbow ? VRCombatRequest.MaxMissileMuzzleReach : 1.5f))
             { RejectVRCombat(r, "The shot origin is too far from the equipped weapon. Recenter your tracking."); return; }
-            if (CombatMode != CombatMode.Missile || r.Amount < .2f || (drawnBow && r.Duration < .15f))
-            { RejectVRCombat(r, crossbow ? "Enter missile stance before firing." : "Enter missile stance and draw the arrow before releasing."); return; }
+            var rejection = r.MissileReleaseRejection(CombatMode, weapon.DefaultCombatStyle);
+            if (rejection != null) { RejectVRCombat(r, rejection); return; }
             var ammo = weapon.IsAmmoLauncher ? GetEquippedAmmo() : weapon;
             if (ammo == null) { SendWeenieError(WeenieError.YouAreOutOfAmmunition); return; }
             AccuracyLevel = r.Amount;

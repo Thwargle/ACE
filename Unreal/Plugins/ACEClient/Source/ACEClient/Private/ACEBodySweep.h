@@ -167,22 +167,54 @@ namespace ACEBodySweep
         }
     }
 
-    // A contact at the start of a grounded move must preserve the unblocked
-    // tangential displacement. Recovery alone spends the frame pushing out and
-    // drops that input, producing sticky movement along triangulated interiors.
+    // Consume the remaining displacement across successive triangles. A single
+    // second sweep stops at each small bend even though a tangent remains free.
+    // Capsule separation normals round convex edges; face normals do not.
+    inline FVector SlideGrounded(UWorld& World, const FVector& From, const FVector& To,
+        const FHitResult& Contact, const FCollisionShape& Capsule, const FCollisionQueryParams& Params)
+    {
+        FVector Position=From,Remaining=To-From;
+        FHitResult Hit=Contact;
+        TArray<FVector,TInlineAllocator<6>> Planes;
+        for(int32 Pass=0;Pass<6 && !Remaining.IsNearlyZero(.01f);++Pass)
+        {
+            if(Hit.bStartPenetrating)
+            {
+                const FVector N=Hit.Normal.GetSafeNormal();
+                Position=Recover(World,Position,N*(Hit.PenetrationDepth+.2f),Hit,Capsule,Params);
+            }
+            else
+            {
+                Position=Hit.Location;
+                Remaining*=1.f-Hit.Time;
+            }
+            if(Hit.Normal.Z>=.6641741f)
+            {
+                // Grounded ramp following is vertical, not an uphill speed boost.
+                Remaining.Z=FMath::Max(Remaining.Z,
+                    -(Hit.Normal.X*Remaining.X+Hit.Normal.Y*Remaining.Y)/Hit.Normal.Z);
+            }
+            else
+            {
+                const FVector N=Hit.Normal.Z<-.15f ? Hit.Normal.GetSafeNormal() : Hit.Normal.GetSafeNormal2D();
+                if(N.IsNearlyZero())break;
+                Planes.Add(N);
+                // Keep earlier constraints too: projecting onto the second wall
+                // alone can send the capsule back into the first in a concave bend.
+                for(int32 Clip=0;Clip<6;++Clip)for(const FVector& Plane:Planes)
+                    Remaining-=Plane*FMath::Min(0.,FVector::DotProduct(Remaining,Plane));
+            }
+            if(Remaining.IsNearlyZero(.01f))break;
+            if(!Sweep(World,Hit,Position,Position+Remaining,Capsule,Params))
+                return Position+Remaining;
+        }
+        return Position;
+    }
+
     inline FVector SlideFromPenetration(UWorld& World, const FVector& From, const FVector& To,
         const FHitResult& Contact, const FCollisionShape& Capsule, const FCollisionQueryParams& Params)
     {
-        const FVector Normal=Contact.Normal.GetSafeNormal2D();
-        if (Normal.IsNearlyZero()) return From;
-        const FVector Start=Recover(World,From,Normal*(Contact.PenetrationDepth+2.f),Contact,Capsule,Params);
-        FVector Remaining(To.X-From.X,To.Y-From.Y,0);
-        const float Into=FVector::DotProduct(Remaining,Normal);
-        if (Into<0.f) Remaining-=Normal*Into;
-        if (Remaining.IsNearlyZero(.01f)) return Start;
-        FHitResult Hit;
-        if (!Sweep(World,Hit,Start,Start+Remaining,Capsule,Params)) return Start+Remaining;
-        return Hit.bStartPenetrating ? Start : Hit.Location;
+        return SlideGrounded(World,From,To,Contact,Capsule,Params);
     }
 
     struct FAirborneMove

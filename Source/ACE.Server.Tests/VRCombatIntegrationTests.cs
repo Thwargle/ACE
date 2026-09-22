@@ -716,6 +716,39 @@ namespace ACE.Server.Tests
         }
 
         [TestMethod]
+        [DataRow(CombatStyle.Bow, AmmoType.Arrow)]
+        [DataRow(CombatStyle.Crossbow, AmmoType.Bolt)]
+        [DataRow(CombatStyle.Atlatl, AmmoType.Atlatl)]
+        public void EachLauncherUsesItsOwnAmmoAndDamagesOnPhysicalContact(CombatStyle style, AmmoType type)
+        {
+            using var db = new ACE.Database.Models.World.WorldDbContext();
+            var weaponId = db.WeeniePropertiesInt.Where(p => p.Type == (ushort)PropertyInt.DefaultCombatStyle && p.Value == (int)style
+                && db.WeeniePropertiesInt.Any(a => a.ObjectId == p.ObjectId && a.Type == (ushort)PropertyInt.AmmoType && a.Value == (int)type))
+                .Select(p => p.ObjectId).OrderBy(id => id).First();
+            var ammoId = db.WeeniePropertiesInt.Where(p => p.Type == (ushort)PropertyInt.AmmoType && p.Value == (int)type
+                && db.WeeniePropertiesInt.Any(a => a.ObjectId == p.ObjectId && a.Type == (ushort)PropertyInt.MaxStackSize && a.Value >= 5)
+                && db.WeeniePropertiesInt.Any(a => a.ObjectId == p.ObjectId && a.Type == (ushort)PropertyInt.Damage && a.Value > 0))
+                .Select(p => p.ObjectId).OrderBy(id => id).First();
+            using var f = new Fixture();
+            var weapon = f.Equip(weaponId, EquipMask.MissileWeapon);
+            var ammo = f.Equip(ammoId, EquipMask.MissileAmmo); ammo.StackSize = 5; ammo.UnlimitedUse = false;
+            f.Mode(CombatMode.Missile); f.Player.AccuracyLevel = 1;
+            Assert.IsTrue(weapon.IsAmmoLauncher); Assert.AreEqual(weapon.AmmoType, ammo.AmmoType);
+            var request = new VRCombatRequest { Amount = 1, Duration = style == CombatStyle.Bow ? .2f : 0 };
+            Assert.IsNull(request.MissileReleaseRejection(f.Player.CombatMode, weapon.DefaultCombatStyle));
+            var shot = WorldObjectFactory.CreateWorldObject(DatabaseManager.World.GetCachedWeenie(ammoId), new ObjectGuid(nextGuid++));
+            f.Objects.Add(shot); shot.ProjectileSource = f.Player; shot.ProjectileLauncher = weapon; shot.ProjectileAmmo = ammo;
+            shot.IsVRFreeAimProjectile = true; shot.VRMissileAttackSkill = f.Player.GetEffectiveAttackSkill(); shot.VRMissileAccuracy = 1.6f;
+            shot.Location = new Position(f.Player.Location); shot.Location.Pos += new Vector3(0, .7f, 1.5f);
+            f.Player.SetProjectilePhysicsState(shot, null, new Vector3(0, 20, 0)); Assert.IsTrue(shot.AddPhysicsObj());
+            var health = f.Target.Health.Current;
+            for (int i = 0; i < 100 && shot.PhysicsObj.is_active(); ++i) shot.PhysicsObj.UpdateObjectInternal(.01);
+            Assert.AreSame(f.Target, shot.ProjectileTarget);
+            Assert.IsTrue(f.Target.Health.Current < health, $"{style} ammunition must deal damage.");
+            f.Player.UpdateAmmoAfterLaunch(ammo); Assert.AreEqual(4, ammo.StackSize);
+        }
+
+        [TestMethod]
         public void IndividuallyThrownWeaponAcquiresPhysicalTargetAndConsumesOneItem()
         {
             using var db=new ACE.Database.Models.World.WorldDbContext();

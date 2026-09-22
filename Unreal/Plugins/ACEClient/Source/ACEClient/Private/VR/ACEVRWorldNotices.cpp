@@ -1,5 +1,6 @@
 #include "VR/ACEVRComponent.h"
 #include "ACEVRUIStyle.h"
+#include "ACEEnemyHealthBar.h"
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
 #include "ACEPlayerController.h"
@@ -315,10 +316,7 @@ void UACEVRComponent::UpdateWorldNotices()
 void UACEVRComponent::EnemyHealth(int32 Guid, float Fraction)
 {
 	if (!bActive || !Client || Guid==Client->GetPlayerGuid() || !FMath::IsFinite(Fraction)
-		|| !PC || !PC->DatCanvasWidget || !PresentationActor || PC->IsWorldTransitionActive()) return;
-	auto* SourceManager=PC->DatCanvasWidget->GetManager();
-	const auto Source=SourceManager ? SourceManager->FindElementByName(TEXT("ToolbarHealthMeter")) : nullptr;
-	if (!Source) return;
+		|| !PC || !PresentationActor || PC->IsWorldTransitionActive()) return;
 	AACEWorldEntityActor* Actor=nullptr;
 	for (TActorIterator<AACEWorldEntityActor> It(GetWorld()); It; ++It)
 		if (It->GetACEGuid()==Guid && !It->IsCorpse() && (It->ItemType & ACEItemType::Creature)) { Actor=*It; break; }
@@ -332,34 +330,21 @@ void UACEVRComponent::EnemyHealth(int32 Guid, float Fraction)
 	if (!Bar) return;
 	if (!Bar->Panel.IsValid())
 	{
-		// Clone only the native toolbar meter and its heart artwork. Each enemy
-		// owns its fill value; selecting another target cannot change this bar.
-		TFunction<TSharedPtr<FACEUIElement>(TSharedPtr<FACEUIElement>)> Clone;
-		Clone=[&](TSharedPtr<FACEUIElement> S) {
-			auto N=MakeShared<FACEUIElement>(*S); N->Parent.Reset(); N->Children.Reset();
-			N->bFloatingHealthArtwork=true;
-			N->LayoutOffsetX=N->LayoutOffsetY=N->UserDragX=N->UserDragY=N->EdgeAnchorX=N->EdgeAnchorY=0;
-			for (const auto& Child:S->Children) if (Child) N->AddChild(Clone(Child));
-			return N;
-		};
-		Bar->Meter=Clone(Source); Bar->Meter->X=Bar->Meter->Y=0; Bar->Meter->bVisible=true;
-		auto* Manager=NewObject<UACEUIElementManager>(PresentationActor); Manager->Initialize(); Manager->AddRoot(Bar->Meter);
-		auto* Canvas=CreateWidget<UACEUICanvasWidget>(GetWorld(),UACEUICanvasWidget::StaticClass());
-		Canvas->InitializeCanvas(Manager); Canvas->SetResourceResolver(Client->GetUIResourceResolver());
+		// Each enemy owns a smooth vector bar, independent of selection and the
+		// low-resolution native toolbar. No per-frame canvas rebuild or font work.
+		Bar->Meter=SNew(SACEEnemyHealthBar);
 		auto* Panel=NewObject<UWidgetComponent>(PresentationActor); PresentationActor->AddInstanceComponent(Panel);
 		Panel->SetupAttachment(PresentationActor->GetRootComponent()); Panel->SetWidgetSpace(EWidgetSpace::World);
-		Panel->SetDrawSize(FVector2D(FMath::Max(1,Source->Width),FMath::Max(1,Source->Height)));
-		Panel->SetWidget(Canvas); Panel->SetBlendMode(EWidgetBlendMode::Transparent); Panel->SetTwoSided(true);
+		Panel->SetDrawSize(FVector2D(512,64));
+		Panel->SetSlateWidget(Bar->Meter); Panel->SetBlendMode(EWidgetBlendMode::Transparent); Panel->SetTwoSided(true);
 		Panel->SetBackgroundColor(FLinearColor::Transparent);
 		Panel->SetCollisionEnabled(ECollisionEnabled::NoCollision); Panel->SetCastShadow(false);
 		Panel->SetTickWhenOffscreen(true);
 		Panel->SetManuallyRedraw(true); Panel->RegisterComponent(); Bar->Panel=Panel;
 	}
-	Bar->Actor=Actor; Bar->Meter->MeterFillFraction=FMath::Clamp(Fraction,0.f,1.f);
+	Bar->Actor=Actor; Bar->Meter->SetFraction(Fraction);
 	Bar->Expires=Now+(Fraction<=0 ? 1.5 : 15.);
-	// The first world-widget paint establishes geometry; the next builds the
-	// native images from it. Keep static bars idle after this short warm-up.
-	Bar->RedrawsRemaining=3;
+	Bar->RedrawsRemaining=1;
 	Bar->Panel->RequestRedraw(); UpdateEnemyHealthBars();
 }
 
@@ -378,7 +363,9 @@ void UACEVRComponent::UpdateEnemyHealthBars()
 		if (Bar.RedrawsRemaining>0) { --Bar.RedrawsRemaining; Panel->RequestRedraw(); }
 		FVector Position=NoticeActorPosition(Actor);
 		const float Distance=FVector::Distance(Position,Head->GetComponentLocation());
-		const float Width=FMath::Clamp(Distance*.12f,45.f,160.f);
+		// Preserve roughly eight degrees of readable width, including distant
+		// targets; the old 160 cm cap made their bars shrink to a few pixels.
+		const float Width=FMath::Clamp(Distance*.14f,36.f,700.f);
 		const float Scale=Width/FMath::Max(1.f,float(Panel->GetDrawSize().X));
 		Position.Z+=12.f+Panel->GetDrawSize().Y*Scale*.5f;
 		Panel->SetWorldScale3D(FVector(Scale));

@@ -16,6 +16,7 @@
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/Texture2D.h"
+#include "Dat/ACELandTextureMipProvider.h"
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
 #include "Materials/MaterialInterface.h"
@@ -24,6 +25,11 @@
 #include "StaticMeshResources.h"
 #include "RHIStats.h"
 #include "RHI.h"
+#include "Engine/Engine.h"
+#include "Engine/GameViewportClient.h"
+#include "UnrealClient.h"
+#include "IXRTrackingSystem.h"
+#include "IHeadMountedDisplay.h"
 
 static TAutoConsoleVariable<int32> GACEMovementDebug(TEXT("ace.Movement.Debug"), 0,
 	TEXT("Log requested and collision-resolved player movement once per second."));
@@ -116,6 +122,11 @@ FACERenderAudit FACERenderAudit::Collect(UWorld* World)
 						++Out.LandscapeTextureFormats.FindOrAdd(FString::Printf(TEXT("%dx%d %s mips=%d"),
 							Texture->GetSizeX(), Texture->GetSizeY(), GPixelFormats[Texture->GetPixelFormat()].Name, Texture->GetNumMips()));
 						Out.LandscapeTextureBytes += Texture->CalcTextureMemorySizeEnum(TMC_AllMips);
+						if (const auto* Source = Texture->GetAssetUserData<UACELandTextureMipProvider>(); Source && Source->Blend)
+						{
+							Out.LandscapeSourceBytes += Source->Blend->GetAllocatedSize();
+							Out.LandscapeRawSourceBytes += int64(Source->Blend->Width)*Source->Blend->Height*sizeof(FColor);
+						}
 					}
 				}
 				if (bMain)
@@ -167,15 +178,28 @@ void FACERenderAudit::Log() const
 	UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: GPU timestamp queries supported=%d (missing GPU trace data is not zero GPU cost)"),
 		GRHIGlobals.SupportsTimestampRenderQueries ? 1 : 0);
 	for (const TCHAR* Name : { TEXT("r.Android.SupportsTimestampQueries"), TEXT("r.CullInstances"),
+		TEXT("r.MSAACount"), TEXT("r.ScreenPercentage"), TEXT("xr.SecondaryScreenPercentage.HMDRenderTarget"),
 		TEXT("ace.Render.CachedActorDraws"), TEXT("ace.Render.CacheDoorwayGeometry"), TEXT("ace.Dat.CacheSetupMetadata") })
 		if (const auto* Variable = IConsoleManager::Get().FindConsoleVariable(Name))
 			UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: %s=%s"), Name, *Variable->GetString());
+	if (GEngine && GEngine->GameViewport && GEngine->GameViewport->Viewport)
+	{
+		const FIntPoint Size = GEngine->GameViewport->Viewport->GetRenderTargetTextureSizeXY();
+		UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: viewport render target=%dx%d (stereo packing is runtime-dependent; scene scale logged separately)"), Size.X, Size.Y);
+	}
+	if (GEngine && GEngine->XRSystem && GEngine->XRSystem->GetHMDDevice())
+	{
+		const FIntPoint Ideal = GEngine->XRSystem->GetHMDDevice()->GetIdealRenderTargetSize();
+		UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: XR ideal render target=%dx%d (before user render-target and scene scaling)"), Ideal.X, Ideal.Y);
+	}
 	UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: particleEmitters=%d degraded=%d activeParticles=%d particleLights=%d"),
 		ParticleEmitters, DegradedEmitters, ActiveParticles, ParticleLights);
 	for (const auto& Format : LandscapeTextureFormats)
 		UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: landscapeTexture %s unique=%d"), *Format.Key, Format.Value);
 	UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: landscapeTexture allocatedEstimateMiB=%.2f (unique textures, including mipmaps)"),
 		double(LandscapeTextureBytes) / (1024.0 * 1024.0));
+	UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: landscape CPU restore storageMiB=%.2f rawBaseEquivalentMiB=%.2f (unique bound textures; GPU allocation reported separately)"),
+		double(LandscapeSourceBytes)/(1024.0*1024.0), double(LandscapeRawSourceBytes)/(1024.0*1024.0));
 	UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: most recent RHI frame draws=%d primitives=%d (all passes; asynchronous snapshot)"), GNumDrawCallsRHI[0], GNumPrimitivesDrawnRHI[0]);
 	UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: scene inventory BEFORE frustum/occlusion/distance culling; sections are NOT GPU draw calls. Stereo, depth and shadows add passes."));
 	TArray<FString> Keys; Groups.GetKeys(Keys); Keys.Sort();

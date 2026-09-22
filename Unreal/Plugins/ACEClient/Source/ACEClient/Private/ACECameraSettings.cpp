@@ -36,4 +36,20 @@ namespace ACECameraSettings
     {
         return DefaultMouseDegreesPerPixel * GetMouseTurnSpeed();
     }
+
+    bool GetInvertMouseX()
+    {
+        bool Value=false; if (GConfig) GConfig->GetBool(Section,TEXT("InvertMouseX"),Value,GGameUserSettingsIni); return Value;
+    }
+    bool GetInvertMouseY()
+    {
+        bool Value=false; if (GConfig) GConfig->GetBool(Section,TEXT("InvertMouseY"),Value,GGameUserSettingsIni); return Value;
+    }
+    void SetMouseInversion(bool InvertX, bool InvertY)
+    {
+        if (!GConfig) return;
+        GConfig->SetBool(Section,TEXT("InvertMouseX"),InvertX,GGameUserSettingsIni);
+        GConfig->SetBool(Section,TEXT("InvertMouseY"),InvertY,GGameUserSettingsIni);
+        GConfig->Flush(false,GGameUserSettingsIni);
+    }
 }

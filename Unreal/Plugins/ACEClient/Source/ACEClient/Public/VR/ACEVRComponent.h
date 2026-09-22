@@ -159,7 +159,7 @@ private:
 	{
 		TWeakObjectPtr<UWidgetComponent> Panel;
 		TWeakObjectPtr<AACEWorldEntityActor> Actor;
-		TSharedPtr<struct FACEUIElement> Meter;
+		TSharedPtr<class SACEEnemyHealthBar> Meter;
 		double Expires = 0;
 		int32 RedrawsRemaining = 0;
 	};
@@ -271,6 +271,7 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UACEVRRetailSurface> JumpRetail;
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> JumpPanel;
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> VitalsPanel;
+	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> FrameRatePanel;
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> ChatPanel;
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> FocusPanel;
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> FocusOutline;
@@ -309,7 +310,7 @@ private:
 	void UpdateTwoHandUse(float Dt);
 	int32 TouchUseGuid = 0;
 	float TouchUseHold = 0.f;
-	bool bTouchUseArmed = false, bTouchUsePrevious = false;
+	bool bTouchUseArmed = true, bTouchUsePrevious = false;
 	FVector TouchUsePreviousHands[2];
 	FVector TouchUsePreviousBody = FVector::ZeroVector;
 	void UpdateUnarmed(float Dt);

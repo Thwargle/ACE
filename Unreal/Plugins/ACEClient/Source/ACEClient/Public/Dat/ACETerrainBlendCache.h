@@ -1,11 +1,26 @@
 #pragma once
 #include "CoreMinimal.h"
 
-struct FACETerrainBlend
+struct ACECLIENT_API FACETerrainBlend
 {
     TArray<FColor> Pixels;
     int32 Width = 0;
     int32 Height = 0;
+
+    // Prepared on the terrain worker, before publishing this immutable blend.
+    // Lossless CPU backup only: the GPU still receives full-resolution BGRA8.
+    bool PrepareUploadMips();
+    bool IsValid() const;
+    bool CopyMip(int32 Index, void* Destination, int64 Bytes) const;
+    TArray<FColor> CopyBasePixels() const;
+    uint64 GetAllocatedSize() const;
+    struct FMip
+    {
+        TArray<uint8> Data;
+        int32 RawBytes = 0;
+        bool bPacked = false;
+    };
+    TArray<FMip> UploadMips;
 };
 
 /** Shared immutable pixels for the current DAT session, including background builders. */

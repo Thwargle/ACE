@@ -2,6 +2,7 @@
 #include "Misc/ConfigCacheIni.h"
 #include "HAL/IConsoleManager.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Engine/UserInterfaceSettings.h"
 namespace ACERuntimeOptions
 {
 namespace
@@ -19,6 +20,8 @@ float Get(const TCHAR* Key)
 }
 void Set(const TCHAR* Key,float Value)
 {
+ if (!FMath::IsFinite(Value)) return;
+ if (FCString::Strcmp(Key,TEXT("DesktopUIScale"))==0) Value=FMath::RoundToFloat(Value*4.f)/4.f;
  SoundSettingsFrame=MAX_uint64;
  for (const auto& O : Values) if (FCString::Strcmp(O.Key,Key)==0 && GConfig)
   GConfig->SetFloat(TEXT("ACE.Presentation"),Key,FMath::Clamp(Value,O.Min,O.Max),GGameUserSettingsIni);
@@ -42,5 +45,18 @@ float SoundGain(bool bAmbient)
   AmbientGain=Master*Get(TEXT("AmbientVolume"));EffectsGain=Master*Get(TEXT("EffectsVolume"));
  }
  return bAmbient?AmbientGain:EffectsGain;
+}
+float DesktopUIScale(FIntPoint Size,bool bVR)
+{
+ if (bVR || Size.X<=0 || Size.Y<=0) return 1.f;
+ // Whole quarter steps, with room for the complete native 800x600 interface.
+ const float Fit=FMath::Max(1.f,FMath::FloorToFloat(FMath::Min(Size.X/800.f,Size.Y/600.f)*4.f)/4.f);
+ return FMath::Min(FMath::RoundToFloat(Get(TEXT("DesktopUIScale"))*4.f)/4.f,Fit);
+}
+void ApplyDesktopUIScale(FIntPoint Size,bool bVR)
+{
+ // Slate applies this once to the whole viewport, including child controls,
+ // text rasterization and input coordinates. VR surfaces have their own scale.
+ GetMutableDefault<UUserInterfaceSettings>()->ApplicationScale=DesktopUIScale(Size,bVR);
 }
 }

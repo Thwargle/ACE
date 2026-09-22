@@ -52,6 +52,8 @@ public:
 	AACEPlayerController();
 	bool IsVRActive() const;
 	class UACEVRComponent* GetVRComponent() const;
+	UPROPERTY(Transient) TObjectPtr<class UACEFrameRateWidget> FrameRateWidget;
+	void UpdateFrameRateOverlay();
 
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

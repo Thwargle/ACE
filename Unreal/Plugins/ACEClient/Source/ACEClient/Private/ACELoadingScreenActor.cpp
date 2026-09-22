@@ -187,6 +187,7 @@ bool AACELoadingScreenActor::TryBuildMesh()
 	{
 		return false;
 	}
+	if (!Dat->PrepareRuntimeMaterials()) return false;
 	if (!Dat->IsDatReady())
 	{
 		Dat->BeginBackgroundLoad();

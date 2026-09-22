@@ -30,8 +30,9 @@ struct FACEBuiltLandblockSection
 	bool bGpuTexMerge = false;
 
 	bool IsEmpty() const { return Vertices.Num() == 0 || Triangles.Num() < 3; }
-	const TArray<FColor>& GetBakedPixels() const { return SharedBake ? SharedBake->Pixels : BakedPixels; }
-	bool HasBakedTexture() const { return BakeWidth > 0 && BakeHeight > 0 && GetBakedPixels().Num() == int64(BakeWidth) * BakeHeight; }
+	// Explicit diagnostic/export copy. Runtime uploads use SharedBake directly.
+	TArray<FColor> GetBakedPixels() const { return SharedBake ? SharedBake->CopyBasePixels() : BakedPixels; }
+	bool HasBakedTexture() const { return BakeWidth > 0 && BakeHeight > 0 && (SharedBake ? SharedBake->IsValid() : BakedPixels.Num() == int64(BakeWidth) * BakeHeight); }
 };
 
 struct FACEBuiltLandblockMesh

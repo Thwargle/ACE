@@ -63,6 +63,75 @@ bool FACEAcademyCornerTest::RunTest(const FString&)
  PC->InputComponent->AxisBindings.Reset();
  const auto Body=FCollisionShape::MakeCapsule(48,90.75);
  FCollisionQueryParams Query(SCENE_QUERY_STAT(AcademyCorner),true,Pawn);
+ // Test sustained wall contact in several actual hall sections, in addition to
+ // the reported stair-foot corner below. Admit only a clear tangent corridor;
+ // a real dead end must stop, whereas a bend with free space must keep sliding.
+ int32 Slides=0;TSet<uint32> SlideCells;
+ for(uint32 Id:Cells)
+ {
+  const auto* Mesh=Dat->GetOrBuildEnvCellMesh(Id,100);if(!Mesh || !Mesh->bHasLocalBounds)continue;
+  const FVector CellOrigin=Origin+FACEPosition::AceVectorToUnreal(FVector(Mesh->Origin),100);
+  for(float OffsetX:{-100.f,0.f,100.f})for(float OffsetY:{-100.f,0.f,100.f})
+  {
+   FVector Seed=CellOrigin+FVector(OffsetX,OffsetY,90.75);
+   float Floor=0;if(!ACEBodySweep::FindFootSupport(*World,Seed-FVector(0,0,90.75),48,100,Query,Floor,30))continue;
+   Seed.Z=Floor+90.75;
+   if(!ACECellTransit::SphereIntersectsEnvCell(*Dat,Id,Seed,0,100))continue;
+   for(float Yaw=0;Yaw<360;Yaw+=45)
+   {
+    FHitResult Wall;const FVector Into=FRotator(0,Yaw,0).Vector();
+    if(!ACEBodySweep::Sweep(*World,Wall,Seed,Seed+Into*400,Body,Query)
+     || Wall.bStartPenetrating || FMath::Abs(Wall.ImpactNormal.Z)>.15f)continue;
+    const FVector N=Wall.Normal.GetSafeNormal2D();
+    const FVector Start=Wall.Location+N*.2f;
+    for(float Sign:{-1.f,1.f})
+    {
+     const FVector Tangent=FVector(-N.Y,N.X,0)*Sign;
+     FHitResult Along;
+     if(ACEBodySweep::Sweep(*World,Along,Start,Start+Tangent*400,Body,Query))continue;
+     float EndFloor=0;if(!ACEBodySweep::FindFootSupport(*World,Start+Tangent*300-FVector(0,0,90.75),48,5,Query,EndFloor,5)
+      || FMath::Abs(EndFloor-Floor)>2)continue;
+     for(bool UseVR:{false,true})for(float Dt:{1.f/90,1.f/15})
+     {
+      VR->bActive=UseVR;
+      const FVector Direction=(Tangent-N*.35f).GetSafeNormal();
+      const FRotator Facing=Direction.Rotation();
+      FACEPosition Pose;Pose.CellId=Id;Pose.SetLocationFromUnreal(Start-FVector(0,0,90.75),100);
+      Pose.SetAceFacingFromUnrealDir2D(Direction);Session->SetLocalPosition(Pose);
+      PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;PC->bJumpAirborne=false;
+      PC->bStandingJumpLocked=false;PC->StepHoldSeconds=0;PC->bLocalPredicting=false;
+      Pawn->SetActorLocationAndRotation(Start,Pose.ToUnrealQuat());
+      PC->PlayerInput->FlushPressedKeys();PC->PlayerInput->ProcessInputStack({},Dt,false);
+      PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::Up,IE_Pressed,1.f));
+      PC->PlayerInput->ProcessInputStack({},Dt,false);
+      TestTrue(TEXT("The sustained slide has a held forward input"),PC->IsInputKeyDown(EKeys::Up));
+      double MinStep=1.e9;FString Frames;
+      for(int32 Frame=0;Frame<FMath::CeilToInt(.2f/Dt);++Frame)
+      {
+       const FVector Before=Pawn->GetActorLocation();
+       if(UseVR){VR->Head->SetWorldLocationAndRotation(Before+FVector(0,0,84.25),Facing);VR->MoveStick=FVector2D(0,1);}
+       PC->PlayerTick(Dt);
+       Frames+=FString::Printf(TEXT("\nframe=%d from=%s to=%s cell=%08X airborne=%d held=%.3f"),
+        Frame,*(Before-Origin).ToString(),*(Pawn->GetActorLocation()-Origin).ToString(),PC->PredictedPose.CellId,PC->bJumpAirborne,
+        PC->StepHoldSeconds);
+       if(Frame>0)MinStep=FMath::Min(MinStep,FVector::DotProduct(Pawn->GetActorLocation()-Before,Tangent));
+      }
+      ++Slides;SlideCells.Add(Id);
+      if(MinStep<.5f)
+       AddError(FString::Printf(TEXT("Training hall wall slide stalls: cell=%08X vr=%d dt=%.4f start=%s normal=%s tangent=%s min=%.3f %s"),
+        Id,UseVR,Dt,*(Start-Origin).ToString(),*N.ToString(),*Tangent.ToString(),MinStep,*Frames));
+     if(HasAnyErrors())goto SlideDone;
+     }
+     goto NextSlideCell;
+    }
+   }
+  }
+NextSlideCell:
+  if(SlideCells.Num()>=5)break;
+ }
+SlideDone:
+ AddInfo(FString::Printf(TEXT("Sustained training hall slides: %d across %d cells"),Slides,SlideCells.Num()));
+ TestTrue(TEXT("Sliding covers at least three training-hall interiors"),SlideCells.Num()>=3);
  int32 Cases=0,Failures=0;
  for(bool UseVR:{false,true})for(float X=126;X<=134;X+=2)for(float Y=-154;Y<=-132;Y+=2)
  {
@@ -87,8 +156,10 @@ bool FACEAcademyCornerTest::RunTest(const FString&)
    auto Walk=[&](FKey Key,float Duration)
    {
     PC->PlayerInput->FlushPressedKeys();
+    PC->PlayerInput->ProcessInputStack({},Dt,false);
     PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(Key,IE_Pressed,1.f));
     PC->PlayerInput->ProcessInputStack({},Dt,false);
+    TestTrue(TEXT("The corner path has its requested key held"),PC->IsInputKeyDown(Key));
     for(int32 I=0;I<FMath::CeilToInt(Duration/Dt);++I)
     {
      if(UseVR)

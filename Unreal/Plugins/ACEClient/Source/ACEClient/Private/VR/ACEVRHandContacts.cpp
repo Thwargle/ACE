@@ -197,10 +197,10 @@ void UACEVRComponent::UpdateHandContacts(float Dt)
 
 void UACEVRComponent::UpdateTwoHandUse(float Dt)
 {
-	if (!bActive || !bTracking || IsMenuOpen() || IsInputBlocked() || bSpellWheelOpen
+	if (!Client || !PC || !Head || !LeftGrip || !RightGrip || !bActive || !bTracking || IsMenuOpen() || IsInputBlocked() || bSpellWheelOpen
 		|| GetCombatMode()!=ACECombatMode::NonCombat || !LeftGrip->IsTracked() || !RightGrip->IsTracked())
 	{
-		TouchUseGuid=0; TouchUseHold=0; bTouchUseArmed=false; bTouchUsePrevious=false; return;
+		TouchUseGuid=0; TouchUseHold=0; bTouchUseArmed=true; bTouchUsePrevious=false; return;
 	}
 	const FVector Raw[2]={LeftGrip->GetComponentLocation(),RightGrip->GetComponentLocation()};
 	const FVector Body=GetOwner()->GetActorLocation();
@@ -231,15 +231,19 @@ void UACEVRComponent::UpdateTwoHandUse(float Dt)
 			if (!(Object.IsDoor() || Object.IsLifeStone() || Object.IsOpenable() || Object.IsVendor()
 				|| ACEItemUseable::IsSourceUsable(Object.ItemUseable))) continue;
 			const auto* Capsule=GetOwner()->FindComponentByClass<UCapsuleComponent>();
-			const FVector Feet=Body-FVector(0,0,Capsule->GetScaledCapsuleHalfHeight());
+			const FVector Feet=Body-FVector(0,0,Capsule ? Capsule->GetScaledCapsuleHalfHeight() : 0.f);
 			if (PC->GetUseCylinderDistanceCm(Object,Feet,Object.Position.ToUnrealLocation(PC->WorldScale))
 				>Object.UseRadius*PC->WorldScale+5.f) continue;
 			FBox Bounds(ForceInit);
 			if (!It->Appearance || !It->Appearance->GetVisualWorldBounds(Bounds)) continue;
+			// Aim at the visible surface at hand height. A lifestone's base or a
+			// tall door's center may be far outside the gaze cone at arm's length.
 			const FVector Closest=Bounds.GetClosestPointTo(Mid);
-			const FVector Towards=(Bounds.GetCenter()-Head->GetComponentLocation()).GetSafeNormal();
+			const FVector Towards=(Closest-Head->GetComponentLocation()).GetSafeNormal();
 			const float Score=FVector::DotProduct(Towards,Head->GetForwardVector());
 			if (Score<=Best) continue;
+			const FVector Reach=Mid-Head->GetComponentLocation();
+			if (FVector::DotProduct(Reach.GetSafeNormal(),Towards)<.75f) continue;
 			FCollisionQueryParams Query(SCENE_QUERY_STAT(VRTwoHandUse),false,GetOwner()); Query.AddIgnoredActor(*It);
 			TArray<AActor*> Children;GetOwner()->GetAttachedActors(Children,true,true);for(auto* Child:Children)Query.AddIgnoredActor(Child);
 			FHitResult Block;

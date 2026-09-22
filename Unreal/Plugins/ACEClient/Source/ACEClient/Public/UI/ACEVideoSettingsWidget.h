@@ -13,6 +13,7 @@ class ACECLIENT_API UACEVideoSettingsWidget : public UUserWidget
 public:
  virtual TSharedRef<SWidget> RebuildWidget() override;
  UFUNCTION() void ApplyVideo();
+ void ApplyInterfaceOptions();
  UFUNCTION() void ResetVideo();
  UFUNCTION() void DefaultsVideo();
  UFUNCTION() UWidget* GenerateOption(FString Option);
@@ -34,5 +35,9 @@ private:
  UPROPERTY() TObjectPtr<UComboBoxString> Quality;
  UPROPERTY() TObjectPtr<UComboBoxString> FrameLimit;
  UPROPERTY() TObjectPtr<UCheckBox> VSync;
+ UPROPERTY() TObjectPtr<UCheckBox> ShowFrameRate;
  UPROPERTY() TObjectPtr<USlider> MouseTurnSpeed;
+ UPROPERTY() TObjectPtr<UCheckBox> InvertMouseX;
+ UPROPERTY() TObjectPtr<UCheckBox> InvertMouseY;
+ UPROPERTY() TObjectPtr<UComboBoxString> DesktopScale;
 };

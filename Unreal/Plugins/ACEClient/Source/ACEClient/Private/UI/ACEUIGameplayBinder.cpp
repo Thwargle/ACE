@@ -10163,6 +10163,8 @@ void UACEUIGameplayBinder::RefreshVitalsOverlays()
 	LastVitals = Client->GetPlayerVitals();
 	if (!LastVitals.bValid)
 	{
+		for(UTextBlock* Label:{HealthLabel.Get(),StaminaLabel.Get(),ManaLabel.Get()})
+			if(Label)Label->SetText(FText::GetEmpty());
 		return;
 	}
 	const float HealthFrac = (LastVitals.MaxHealth > 0)
@@ -10196,9 +10198,10 @@ void UACEUIGameplayBinder::RefreshVitalsOverlays()
 		? FString::Printf(TEXT("%d / %d"), LastVitals.Stamina, LastVitals.MaxStamina) : FString();
 	const FString ManaText = (bShowVitalNumbers && LastVitals.bValid)
 		? FString::Printf(TEXT("%d / %d"), LastVitals.Mana, LastVitals.MaxMana) : FString();
-	PlaceTextOnElement(HealthLabel, TEXT("PlayerHealthLabel"), HealthText, 8, TextWhite, 510);
-	PlaceTextOnElement(StaminaLabel, TEXT("PlayerStaminaLabel"), StamText, 8, TextWhite, 510);
-	PlaceTextOnElement(ManaLabel, TEXT("PlayerManaLabel"), ManaText, 8, TextWhite, 510);
+	const TCHAR* ActiveRoot=bSideBySide?TEXT("RootGameplay_FloatySideVitals_Field"):TEXT("RootGameplay_FloatyVitals_Field");
+	PlaceTextOnElement(HealthLabel, Manager->FindElementUnder(ActiveRoot,TEXT("PlayerHealthLabel")), HealthText, 8, TextWhite, 510);
+	PlaceTextOnElement(StaminaLabel, Manager->FindElementUnder(ActiveRoot,TEXT("PlayerStaminaLabel")), StamText, 8, TextWhite, 510);
+	PlaceTextOnElement(ManaLabel, Manager->FindElementUnder(ActiveRoot,TEXT("PlayerManaLabel")), ManaText, 8, TextWhite, 510);
 }
 
 void UACEUIGameplayBinder::PlaceRadarWidget(UWidget* Widget, float ScreenX, float ScreenY, float Size, int32 ZOrder)

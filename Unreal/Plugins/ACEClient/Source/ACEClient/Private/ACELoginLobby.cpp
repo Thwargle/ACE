@@ -1,5 +1,6 @@
 #include "ACELoginWidget.h"
 #include "ACELoginSettings.h"
+#include "ACEClientBuild.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
@@ -23,6 +24,7 @@
 #include "Components/WrapBox.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
 #include "Engine/GameInstance.h"
+#include "Kismet/KismetSystemLibrary.h"
 #include "HeadMountedDisplayFunctionLibrary.h"
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"
@@ -135,7 +137,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	auto* Scroll = WidgetTree->ConstructWidget<UScrollBox>();
 	Scroll->SetConsumeMouseWheel(EConsumeMouseWheel::WhenScrollingPossible);
 	Scroll->SetScrollbarThickness(FVector2D(9,9));
-	auto* ScrollSlot = Canvas->AddChildToCanvas(Scroll); ScrollSlot->SetAnchors(FAnchors(0,0,1,1)); ScrollSlot->SetOffsets(FMargin(24,24,24,82));
+	auto* ScrollSlot = Canvas->AddChildToCanvas(Scroll); ScrollSlot->SetAnchors(FAnchors(0,0,1,1)); ScrollSlot->SetOffsets(FMargin(24,24,24,108));
 	DashboardSize = WidgetTree->ConstructWidget<USizeBox>(); DashboardSize->SetWidthOverride(1052);
 	auto* DashboardSlot = Cast<UScrollBoxSlot>(Scroll->AddChild(DashboardSize)); DashboardSlot->SetHorizontalAlignment(HAlign_Center);
 	auto* Root = WidgetTree->ConstructWidget<UVerticalBox>(); DashboardSize->SetContent(Root);
@@ -146,7 +148,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	auto* Brand = Label(TEXT("AC:Unreal"), 34);
 #endif
 	auto* BrandSize=WidgetTree->ConstructWidget<USizeBox>(); BrandSize->SetWidthOverride(245); BrandSize->SetContent(Brand); Header->AddChildToWrapBox(BrandSize);
-	for (const auto& Item : TArray<TPair<FString,FString>>{{TEXT("Play"),TEXT("play")},{TEXT("Browse servers"),TEXT("browser")},{TEXT("Game files"),TEXT("files")}})
+	for (const auto& Item : TArray<TPair<FString,FString>>{{TEXT("Play"),TEXT("play")},{TEXT("Browse servers"),TEXT("browser")},{TEXT("Game files"),TEXT("files")},{TEXT("Quit"),TEXT("quit")}})
 		Header->AddChildToWrapBox(ActionButton(Item.Key,Item.Value));
 	Pages = WidgetTree->ConstructWidget<UWidgetSwitcher>(); AddLine(Root, Pages, 16);
 	auto Card = [&](UVerticalBox*& Content) -> UBorder*
@@ -238,6 +240,8 @@ void UACELoginWidget::EnsureDefaultLayout()
 	Row(Confirmation,{{TEXT("Remove"),TEXT("confirmremove")},{TEXT("Keep"),TEXT("cancelremove")}}); ConfirmPanel->SetVisibility(ESlateVisibility::Collapsed);
 	auto* StatusBorder=WidgetTree->ConstructWidget<UBorder>(); StatusBorder->SetBrush(FSlateRoundedBoxBrush(Ink,7.f)); StatusBorder->SetPadding(FMargin(12,10));
 	StatusText=Label(TEXT("Ready"),18); StatusBorder->SetContent(StatusText); AddLine(Footer,StatusBorder,0);
+	auto* BuildLabel=Label(FString::Printf(TEXT("Version %s"),ACEClientBuild::Version),16);
+	BuildLabel->SetJustification(ETextJustify::Right); AddLine(Footer,BuildLabel,0);
 	// Retained for Blueprint/test compatibility; retail DAT owns character selection.
 	EnterWorldButton=ActionButton(TEXT("Enter world"),TEXT("enter")); EnterWorldButton->SetVisibility(ESlateVisibility::Collapsed);
 	CharacterListLabel=Label(TEXT("")); CharacterListBox=WidgetTree->ConstructWidget<UScrollBox>();
@@ -454,6 +458,12 @@ void UACELoginWidget::UpdateDatStatus()
 
 void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 {
+	if (Action==TEXT("quit"))
+	{
+		SaveLoginEntries();
+		UKismetSystemLibrary::QuitGame(this,GetOwningPlayer(),EQuitPreference::Quit,false);
+		return;
+	}
 	if (Action==TEXT("launch")) { DoLogin(); return; }
 	if (Action==TEXT("enter")) { DoEnterSelectedCharacter(); return; }
 	if (Action==TEXT("play")) { Pages->SetActiveWidgetIndex(0); SelectServer(Profile.SelectedServerId); }

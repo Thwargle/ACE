@@ -30,7 +30,7 @@ public class ACEClient : ModuleRules
 			"ImageWrapper",
 			"Landscape"
 		});
-		PrivateDependencyModuleNames.AddRange(new string[] { "RenderCore", "RHI", "HTTP", "XmlParser" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "RenderCore", "RHI", "HTTP", "XmlParser", "AssetRegistry" });
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
 			PublicSystemLibraries.Add("Crypt32.lib");

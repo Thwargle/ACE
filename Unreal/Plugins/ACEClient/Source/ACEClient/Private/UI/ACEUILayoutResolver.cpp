@@ -9,6 +9,25 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Interfaces/IPluginManager.h"
+#include "Async/Async.h"
+#include "Async/InheritedContext.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
+
+struct FACEPreparedUILayout
+{
+    struct FNode
+    {
+        TSharedPtr<FJsonObject> Json;
+        TSharedPtr<FACEUIElement> Parent;
+        TSharedPtr<FACEUIElement> Finalize;
+    };
+    uint32 Id = 0;
+    TFuture<TSharedPtr<FJsonObject>> Json;
+    TArray<FNode> Pending;
+    TArray<TSharedPtr<FACEUIElement>> Roots;
+    bool bStarted = false;
+    bool bFailed = false;
+};
 
 namespace
 {
@@ -29,8 +48,33 @@ namespace
 		return true;
 	}
 
+	void ApplyPanelTabs(const TSharedPtr<FJsonObject>& Obj, const TSharedPtr<FACEUIElement>& Out)
+	{
+		// UIElement_Panel registers the tab IDs from UICore_Panel_pages.
+		// Retail tabs can be Text elements: the normal label factory must not
+		// disable controls that the owning panel explicitly registers.
+		const TSharedPtr<FJsonObject>* PanelProps = nullptr;
+		const TArray<TSharedPtr<FJsonValue>>* Pages = nullptr;
+		if (Obj->TryGetObjectField(TEXT("properties"), PanelProps)
+			&& (*PanelProps)->TryGetArrayField(TEXT("UICore_Panel_pages"), Pages))
+		{
+			for (const auto& Page : *Pages)
+			{
+				const auto Entry = Page->AsObject();
+				double TabId = 0;
+				if (!Entry || !Entry->TryGetNumberField(TEXT("0x00000030"), TabId)) continue;
+				for (const auto& Child : Out->Children)
+					if (Child->ElementId == static_cast<uint32>(TabId))
+					{
+						Child->bPanelTab = true;
+						Child->bActivatable = true;
+					}
+			}
+		}
+	}
+
 	bool ParseElementNode(UACEUIElementManager* Manager, const TSharedPtr<FJsonObject>& Obj,
-		TSharedPtr<FACEUIElement>& Out)
+		TSharedPtr<FACEUIElement>& Out, bool bRecurseChildren = true)
 	{
 		if (!Obj.IsValid())
 		{
@@ -216,7 +260,7 @@ namespace
 
 		Out->ResolvePaintState(false, false, false);
 		const TArray<TSharedPtr<FJsonValue>>* ChildrenArr = nullptr;
-		if (Obj->TryGetArrayField(TEXT("children"), ChildrenArr))
+		if (bRecurseChildren && Obj->TryGetArrayField(TEXT("children"), ChildrenArr))
 		{
 			for (const TSharedPtr<FJsonValue>& Val : *ChildrenArr)
 			{
@@ -228,27 +272,7 @@ namespace
 				}
 			}
 		}
-		// UIElement_Panel registers the tab IDs from UICore_Panel_pages.
-		// Retail tabs can be Text elements: the normal label factory must not
-		// disable controls that the owning panel explicitly registers.
-		const TSharedPtr<FJsonObject>* PanelProps = nullptr;
-		const TArray<TSharedPtr<FJsonValue>>* Pages = nullptr;
-		if (Obj->TryGetObjectField(TEXT("properties"), PanelProps)
-			&& (*PanelProps)->TryGetArrayField(TEXT("UICore_Panel_pages"), Pages))
-		{
-			for (const auto& Page : *Pages)
-			{
-				const auto Entry = Page->AsObject();
-				double TabId = 0;
-				if (!Entry || !Entry->TryGetNumberField(TEXT("0x00000030"), TabId)) continue;
-				for (const auto& Child : Out->Children)
-					if (Child->ElementId == static_cast<uint32>(TabId))
-					{
-						Child->bPanelTab = true;
-						Child->bActivatable = true;
-					}
-			}
-		}
+		ApplyPanelTabs(Obj, Out);
 		return true;
 	}
 
@@ -428,6 +452,7 @@ void UACEUILayoutResolver::Initialize(UACEDatSubsystem* InDat, UACEUIElementMana
 
 void UACEUILayoutResolver::Shutdown()
 {
+	PreparedLayout.Reset();
 	Dat = nullptr;
 	Manager = nullptr;
 	bReady = false;
@@ -462,12 +487,93 @@ TSharedPtr<FACEUIElement> UACEUILayoutResolver::LoadTemplate(uint32 LayoutId, ui
 	return nullptr;
 }
 
+bool UACEUILayoutResolver::PrepareLayout(uint32 LayoutId, double BudgetSeconds)
+{
+    check(IsInGameThread());
+    TRACE_CPUPROFILER_EVENT_SCOPE(ACE_PrepareUILayout);
+    if (!Manager) return false;
+    if (!PreparedLayout || PreparedLayout->Id != LayoutId)
+    {
+        PreparedLayout = MakeShared<FACEPreparedUILayout>();
+        PreparedLayout->Id = LayoutId;
+        const FString Path = ResolvedLayoutPath(LayoutId);
+        auto Context = MakeShared<UE::FInheritedContextBase, ESPMode::ThreadSafe>();
+        Context->CaptureInheritedContext();
+        // File I/O and JSON parsing must not join a game-thread asset-load wait.
+        // This worker owns only detached JSON, never UI elements or UObjects.
+        PreparedLayout->Json = Async(EAsyncExecution::ThreadPool, [Path, Context]()
+        {
+            auto Scope = Context->RestoreInheritedContext();
+            TRACE_CPUPROFILER_EVENT_SCOPE(ACE_ReadUILayout);
+            FString Text;
+            TSharedPtr<FJsonObject> Root;
+            if (!FFileHelper::LoadFileToString(Text, *Path)
+                || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text), Root)) return TSharedPtr<FJsonObject>();
+            return Root;
+        });
+        return false;
+    }
+    auto& Prepared = *PreparedLayout;
+    if (!Prepared.bStarted)
+    {
+        if (!Prepared.Json.IsReady()) return false;
+        const auto Root = Prepared.Json.Get();
+        const TArray<TSharedPtr<FJsonValue>>* Roots = nullptr;
+        Prepared.bStarted = true;
+        Prepared.bFailed = !Root || !Root->TryGetArrayField(TEXT("roots"), Roots);
+        if (!Prepared.bFailed)
+            for (int32 I = Roots->Num()-1; I >= 0; --I)
+                Prepared.Pending.Add({(*Roots)[I]->AsObject(), nullptr, nullptr});
+    }
+    // A failed preload lets LoadLayout report the normal error; do not hold
+    // portal space indefinitely waiting for a task that has already failed.
+    if (Prepared.bFailed) return true;
+    const double Deadline = FPlatformTime::Seconds() + FMath::Max(0.0, BudgetSeconds);
+    int32 Count = 0;
+    while (!Prepared.Pending.IsEmpty() && Count < 128
+        && (Count == 0 || FPlatformTime::Seconds() < Deadline))
+    {
+        auto Node = Prepared.Pending.Pop(EAllowShrinking::No);
+        ++Count;
+        if (!Node.Json) continue;
+        if (Node.Finalize)
+        {
+            ApplyPanelTabs(Node.Json, Node.Finalize);
+            continue;
+        }
+        TSharedPtr<FACEUIElement> Element;
+        if (!ParseElementNode(Manager, Node.Json, Element, false)) continue;
+        if (Node.Parent) Node.Parent->AddChild(Element);
+        else Prepared.Roots.Add(Element);
+        Prepared.Pending.Add({Node.Json, nullptr, Element});
+        const TArray<TSharedPtr<FJsonValue>>* Children = nullptr;
+        if (Node.Json->TryGetArrayField(TEXT("children"), Children))
+            for (int32 I = Children->Num()-1; I >= 0; --I)
+                Prepared.Pending.Add({(*Children)[I]->AsObject(), Element, nullptr});
+    }
+    return Prepared.Pending.IsEmpty();
+}
+
 bool UACEUILayoutResolver::LoadLayout(uint32 LayoutId)
 {
 	if (!Manager)
 	{
 		return false;
 	}
+
+    if (PreparedLayout && PreparedLayout->Id == LayoutId && PreparedLayout->bStarted
+        && !PreparedLayout->bFailed && PreparedLayout->Pending.IsEmpty())
+    {
+        auto Roots = MoveTemp(PreparedLayout->Roots);
+        PreparedLayout.Reset();
+        Manager->ClearRoots();
+        for (const auto& Root : Roots) Manager->AddRoot(Root);
+        ApplyLayoutDefaultVisibility(LayoutId, Manager);
+        Manager->SyncLockedChromeVisibility();
+        Manager->LoadFloatyLayout();
+        UE_LOG(LogTemp, Log, TEXT("ACE UILayoutResolver: installed prepared 0x%08X (%d roots)"), LayoutId, Roots.Num());
+        return !Roots.IsEmpty();
+    }
 
 	const FString Path = ResolvedLayoutPath(LayoutId);
 	if (Path.IsEmpty() || !FPaths::FileExists(Path))

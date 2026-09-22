@@ -15,6 +15,16 @@ namespace ACE.Server.Entity
         public Vector3? ObservedBody;
         public float Amount, Duration;
 
+        public string MissileReleaseRejection(ACE.Entity.Enum.CombatMode mode, ACE.Entity.Enum.CombatStyle? style)
+        {
+            if (mode != ACE.Entity.Enum.CombatMode.Missile) return "Enter missile stance before firing.";
+            // Only a bow has a physical draw. Atlatls, crossbows and individual
+            // thrown items fire on trigger-down with zero hold duration.
+            if (style == ACE.Entity.Enum.CombatStyle.Bow && (Amount < .2f || Duration < .15f))
+                return "Pull the arrow back before releasing.";
+            return Amount < .2f ? "The shot was too weak. Try again." : null;
+        }
+
         public static bool TryRead(BinaryReader reader, out VRCombatRequest request)
         {
             request = null;

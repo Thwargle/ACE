@@ -279,10 +279,10 @@ bool FACEVRStairCeilingTest::RunTest(const FString&)
   // User report: standing on the rendered water at DC56001F, 95.269531/147.908203/6.
   // Retain the independently found Rithwic river and exercise this exact location too.
   const FVector River=Water;const float RiverDepth=Depth;const uint32 RiverBlock=WetBlock;
-  for(bool Reported:{false,true})
+  for(int32 Reported:{0,1,2,3})
   {
    Water=River;Depth=RiverDepth;WetBlock=RiverBlock;
-   if(Reported)
+   if(Reported==1)
    {
     WetBlock=0xDC560000;
     Dat->GetOrBuildLandblockMesh(WetBlock,100);
@@ -291,11 +291,40 @@ bool FACEVRStairCeilingTest::RunTest(const FString&)
     float Bed=0;TestTrue(TEXT("Reported water has DAT ground support"),Dat->SampleOutdoorGroundZ(Water.X,Water.Y,100,Bed));
     Water.Z=Bed;
    }
+   if(Reported>=2)
+   {
+    WetBlock=0xA8B40000;
+    // The scene streamer normally prepares neighboring blocks. This fixture
+    // drives movement without ticking a presenter or pumping its async loads.
+    // Include the west-bank landing when a running jump crosses A8B4/A7B4.
+    for(uint32 X=167;X<=169;++X)for(uint32 Y=179;Y<=181;++Y)
+     Dat->GetOrBuildLandblockMesh((X<<24)|(Y<<16),100);
+    Water=FACEPosition::AceVectorToUnreal(FVector(168*192+5.613281,180*192+169.753906,28),100);
+    Dat->GetOrBuildLandblockMesh(WetBlock,100);
+    Depth=Dat->GetOutdoorWaterDepthCm(Water.X,Water.Y,100);
+    float Bed=0;TestTrue(TEXT("Holtburg river has DAT ground support"),Dat->SampleOutdoorGroundZ(Water.X,Water.Y,100,Bed));
+    Water.Z=Bed;
+    if(Reported==3)
+    {
+     const FVector Bank=Water;double Nearest=DBL_MAX;
+     for(int32 X=-48;X<=48;X+=4)for(int32 Y=-48;Y<=48;Y+=4)
+     {
+      FACEPosition At;At.CellId=0xA8B40008;At.SetLocationFromUnreal(Bank+FVector(X*100,Y*100,0),100);At.NormalizeOutdoorLandblock();
+      const uint32 Block=uint32(At.CellId)&0xffff0000u;Dat->GetOrBuildLandblockMesh(Block,100);
+      const FVector P=At.ToUnrealLocation(100);const float D=Dat->GetOutdoorWaterDepthCm(P.X,P.Y,100);
+      const double Distance=double(X*X+Y*Y);float Z=0;
+      if(D>20 && Distance<Nearest && Dat->SampleOutdoorGroundZ(P.X,P.Y,100,Z))
+      {Nearest=Distance;Water=FVector(P.X,P.Y,Z);Depth=D;WetBlock=Block;}
+     }
+     TestTrue(TEXT("Holtburg river beside reported bank contains water"),Nearest<DBL_MAX);
+    }
+   }
    WetMesh=Dat->GetOrBuildLandblockMesh(WetBlock,100);
-  TestTrue(TEXT("Retail river fixture has submerged walking support"),WetBlock!=0 && Depth>20);
+  TestTrue(TEXT("Retail river fixture has known walking support"),WetBlock!=0 && (Reported==2 || Depth>20));
   if(WetMesh)
   {
    auto* Land=World->SpawnActor<AACELandblockActor>();auto* Mesh=Land->TerrainMesh.Get();
+   Mesh->ComponentTags.AddUnique(TEXT("ACEOutdoorTerrain"));
    Mesh->bUseAsyncCooking=false;Mesh->bUseComplexAsSimpleCollision=true;
    Land->SetActorLocation(FACEPosition::AceVectorToUnreal(FVector((WetBlock>>24)*192,((WetBlock>>16)&255)*192,0),100));
    Mesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);Mesh->SetCollisionResponseToAllChannels(ECR_Block);
@@ -310,6 +339,28 @@ bool FACEVRStairCeilingTest::RunTest(const FString&)
     const float FeetZ=Pawn->GetActorLocation().Z-90.75;
     AddInfo(FString::Printf(TEXT("Water vr=%d %08X depth %.1f feet %.1f expected %.1f"),Active,WetBlock,Depth,FeetZ,Water.Z));
     TestTrue(TEXT("Desktop and VR step down through rendered water to retail wading height"),FMath::Abs(FeetZ-Water.Z)<2.f);
+    // Jump from the wading plane. The visual water surface is intentionally
+    // ignored by body sweeps, but the descending feet must land on the DAT bed.
+    for(float Drift:{0.f,-2.f,2.f,-10.f,10.f})
+    {
+     Pose.SetLocationFromUnreal(Water,100);Pose.NormalizeOutdoorLandblock();Session->SetLocalPosition(Pose);
+     PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;PC->bLocalPredicting=true;
+     PC->bJumpAirborne=true;PC->bStandingJumpLocked=false;PC->StepHoldSeconds=0;PC->JumpAirborneSeconds=0;
+     PC->JumpWorldAceVelocity=FVector(Drift,0,5);PC->JumpLocalAceVelocity=FVector::ZeroVector;
+     Pawn->SetActorLocation(Pose.ToUnrealLocation(100)+FVector(0,0,90.75));
+     double MinClearance=0;bool bSupported=true;
+     for(int32 I=0;I<FMath::CeilToInt(2.f/Dt);++I)
+     {
+      VR->Head->SetWorldLocation(Pawn->GetActorLocation()+FVector(0,0,84.25));PC->PlayerTick(Dt);
+      const FVector At=Pawn->GetActorLocation();float Bed=0;
+      if(Dat->SampleOutdoorGroundZ(At.X,At.Y,100,Bed)) MinClearance=FMath::Min(MinClearance,At.Z-90.75-Bed);
+      else bSupported=false;
+     }
+     AddInfo(FString::Printf(TEXT("River jump %08X vr=%d dt=%.4f drift=%.1f clearance=%.1f air=%d"),WetBlock,Active,Dt,Drift,MinClearance,PC->bJumpAirborne));
+     TestTrue(TEXT("River jump remains over known terrain"),bSupported);
+     TestTrue(TEXT("Jumping in water cannot pass below the river bed"),MinClearance>=-2.);
+     TestFalse(TEXT("River jump finishes landing"),PC->bJumpAirborne);
+    }
    }
    // Deliberately submerge the tracked head: a water surface must not act
    // like an opaque roof, while the river bed remains solid.

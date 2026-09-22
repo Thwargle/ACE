@@ -2,8 +2,11 @@
 #include "Misc/AutomationTest.h"
 #include "VR/ACEVRMath.h"
 #include "ACEEquipmentRules.h"
+#include "ACERuntimeOptions.h"
+#include "UI/ACEFrameRateWidget.h"
 #include "Dat/ACEPortalViewMask.h"
 #include "VR/ACEVRComponent.h"
+#include "../VR/ACEEnemyHealthBar.h"
 #include "VR/ACEVRSettings.h"
 #include "VR/ACEVRWidget.h"
 #include "VR/ACEVRRetailSurface.h"
@@ -475,6 +478,17 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		const FVector StartupPanel = VR->RetailPanel->GetComponentLocation();
 		VR->Head->SetRelativeLocationAndRotation(FVector(35, -12, 165), FRotator(0, 35, 0));
 		PollHands(); VR->UpdateTrackingState(true); VR->UpdatePanels(); VR->UpdateArms();
+		const float SavedFPS=ACERuntimeOptions::Get(TEXT("ShowFrameRate"));
+		ACERuntimeOptions::Set(TEXT("ShowFrameRate"),1);PC->UpdateFrameRateOverlay();VR->UpdatePanels();
+		TestNotNull(TEXT("Enabling the FPS counter creates its VR surface"),VR->FrameRatePanel.Get());
+		if(VR->FrameRatePanel)
+		{
+			TestTrue(TEXT("FPS surface is visible and follows tracked head pose"),VR->FrameRatePanel->IsVisible() && VR->FrameRatePanel->GetAttachParent()==VR->Head);
+			TestEqual(TEXT("FPS surface cannot intercept a pointer"),VR->FrameRatePanel->GetCollisionEnabled(),ECollisionEnabled::NoCollision);
+			ACERuntimeOptions::Set(TEXT("ShowFrameRate"),0);PC->UpdateFrameRateOverlay();VR->UpdatePanels();
+			TestFalse(TEXT("Disabling FPS stops drawing and ticking its surface"),VR->FrameRatePanel->IsVisible() || VR->FrameRatePanel->IsComponentTickEnabled());
+		}
+		ACERuntimeOptions::Set(TEXT("ShowFrameRate"),SavedFPS);PC->UpdateFrameRateOverlay();VR->UpdatePanels();
 		TestFalse(TEXT("First tracked pose replaces the startup menu location"), StartupPanel.Equals(VR->RetailPanel->GetComponentLocation(), 1));
 		TestTrue(TEXT("Login card is near tracked eye height"), FMath::Abs(VR->RetailPanel->GetComponentLocation().Z - VR->Head->GetComponentLocation().Z) < 25);
 		const FVector AnchoredPanel = VR->RetailPanel->GetComponentLocation();
@@ -1255,11 +1269,16 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 				TestEqual(TEXT("World B identifies the pointed stone"),VR->Client->GetIdentifyRequestGuid(),Stone.Guid);
 				VR->bInventoryOpen=true;VR->PreviousSpell();TestEqual(TEXT("Open UI cannot identify through itself into the world"),VR->Client->GetIdentifyRequestSerial(),BeforeID+1);VR->bInventoryOpen=false;
 				Session.CachedC2SPackets.Reset();VR->ContactTriangles.Reset();VR->MoveStick=FVector2D::ZeroVector;
-				VR->LeftGrip->AddWorldOffset(FVector(-50,0,0));VR->RightGrip->AddWorldOffset(FVector(-50,0,0));VR->UpdateTwoHandUse(.02f);
-				VR->LeftGrip->AddWorldOffset(FVector(50,0,0));VR->RightGrip->AddWorldOffset(FVector(50,0,0));
+				// The first gesture after closing a menu must not require an unseen
+				// retract/rearm gesture. Use a tall visible model whose center is
+				// above the gaze cone, while its surface is directly ahead.
+				VR->bTouchUseArmed=true;VR->bTouchUsePrevious=false;
 				FACEVRContactTriangle Touch;Touch.ObjectGuid=Stone.Guid;Touch.A=Eyes+FVector(65,-100,-100);Touch.B=Eyes+FVector(65,100,-100);Touch.C=Eyes+FVector(65,0,100);
 				Touch.Bounds=FBox(Touch.A,Touch.A);Touch.Bounds+=Touch.B;Touch.Bounds+=Touch.C;
 				StoneActor->AddActorWorldOffset(FVector(110,0,0));Stone.Position.SetLocationFromUnreal(StoneActor->GetActorLocation(),100);Session.WorldObjects[Stone.Guid]=Stone;
+				StoneActor->SetActorScale3D(FVector(1,1,6));
+				FBox TallBounds(ForceInit);StoneActor->Appearance->GetVisualWorldBounds(TallBounds);
+				TestTrue(TEXT("Tall usable fixture has its center outside the gaze cone"),FVector::DotProduct((TallBounds.GetCenter()-Eyes).GetSafeNormal(),VR->Head->GetForwardVector())<.8f);
 				auto UseCount=[&](){int32 Count=0;for(const auto& Packet:Session.CachedC2SPackets){FACEBinaryReader Wire(Packet.Value.Payload);Wire.Skip(16);if(Wire.ReadUInt32()!=ACEOpcode::GameAction)continue;Wire.ReadUInt32();if(Wire.ReadUInt32()==ACEGameAction::Use)++Count;}return Count;};
 				VR->LeftGrip->AddWorldOffset(FVector(-50,0,0));for(int32 I=0;I<60;++I)VR->UpdateTwoHandUse(.02f);TestEqual(TEXT("One hand alone cannot use an object"),UseCount(),0);
 				VR->LeftGrip->AddWorldOffset(FVector(50,0,0));VR->MoveStick=FVector2D(0,1);for(int32 I=0;I<60;++I)VR->UpdateTwoHandUse(.02f);TestEqual(TEXT("Walking past with both hands cannot use an object"),UseCount(),0);VR->MoveStick=FVector2D::ZeroVector;
@@ -1348,22 +1367,22 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			if(!VR->EnemyHealthBars.IsEmpty())
 			{
 				auto& Bar=VR->EnemyHealthBars[0];
-				AddInfo(FString::Printf(TEXT("Enemy meter: origin=%s size=%dx%d image=%08X children=%d visible=%d"),*Bar.Meter->GetScreenOrigin().ToString(),Bar.Meter->Width,Bar.Meter->Height,Bar.Meter->ImageFileId,Bar.Meter->Children.Num(),bool(Bar.Meter->bVisible)));
-				for(const auto& C:Bar.Meter->Children) AddInfo(FString::Printf(TEXT("Enemy fill: origin=%s size=%dx%d image=%08X visible=%d"),*C->GetScreenOrigin().ToString(),C->Width,C->Height,C->ImageFileId,bool(C->bVisible)));
-				TestTrue(TEXT("Overhead health is visible and uses authoritative fraction"),Bar.Panel->IsVisible() && Bar.Meter->MeterFillFraction==.75f);
+				TestTrue(TEXT("Overhead health is visible and uses authoritative fraction"),Bar.Panel->IsVisible() && Bar.Meter->GetFraction()==.75f);
 				for(int32 Pass=0;Pass<5;++Pass){VR->UpdateEnemyHealthBars();Bar.Panel->TickComponent(.016f,LEVELTICK_All,nullptr);FlushRenderingCommands();}
 				if(auto* Target=Bar.Panel->GetRenderTarget())
 				{
 					TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
 					int32 VisiblePixels=0,RedPixels=0;for(const auto P:Pixels){VisiblePixels+=P.A>100;RedPixels+=P.R>80 && P.R>P.G*2;}
 					AddInfo(FString::Printf(TEXT("Enemy target %dx%d visible=%d red=%d"),Target->SizeX,Target->SizeY,VisiblePixels,RedPixels));
-					TestTrue(TEXT("Native overhead meter paints its red health and heart artwork"),Pixels.ContainsByPredicate([](FColor P){return P.R>80 && P.R>P.G*2 && P.A>100;}));
+					TestTrue(TEXT("Vector overhead bar paints a clear red health fill"),RedPixels>Target->SizeX*Target->SizeY*.4f);
 					TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(Target->SizeX,Target->SizeY,Pixels,PNG);
 					FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/TEXT("Automation/VR/EnemyHealth.png")));
 				}
-				else AddError(TEXT("Native overhead meter did not allocate a render target"));
-				VR->EnemyHealth(Mob.Guid,.25f);TestEqual(TEXT("Subsequent damage updates the same bar"),Bar.Meter->MeterFillFraction,.25f);
-				VR->EnemyHealth(Mob.Guid,1.f);TestEqual(TEXT("Healing updates that bar"),Bar.Meter->MeterFillFraction,1.f);
+				else AddError(TEXT("Overhead bar did not allocate a render target"));
+				VR->EnemyHealth(Mob.Guid,.25f);TestEqual(TEXT("Subsequent damage updates the same bar"),Bar.Meter->GetFraction(),.25f);
+				VR->EnemyHealth(Mob.Guid,1.f);TestEqual(TEXT("Healing updates that bar"),Bar.Meter->GetFraction(),1.f);
+				Enemy->SetActorLocation(VR->Head->GetComponentLocation()+FVector(3000,0,-100));VR->UpdateEnemyHealthBars();
+				TestTrue(TEXT("Distant targets retain readable angular width"),Bar.Panel->GetComponentScale().X*Bar.Panel->GetDrawSize().X>=400.f);
 				Bar.Expires=0;VR->UpdateEnemyHealthBars();TestFalse(TEXT("Expired health bars hide"),Bar.Panel->IsVisible());
 			}
 			Enemy->Destroy();
@@ -1855,6 +1874,15 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 					TestTrue(TEXT("Held draw duration reaches the server"), Wire.ReadFloat() >= .15f); SentArrow = true;
 				}
 				TestTrue(TEXT("Releasing the actual equipped arrow produces a reliable missile packet"), SentArrow);
+				{
+					TGuardValue<uint32> RecoveryCapabilities(CombatSession.VRCapabilities,CombatSession.VRCapabilities|2048u);
+					CombatSession.VRRecoveryTeleport=CombatSession.TeleportSeq;CombatSession.VRRecoveryDuration=1;CombatSession.VRRecoveryReadyAt=FPlatformTime::Seconds()+1;
+					VR->bDrawing=true;VR->BowHoldTime=.3f;
+					VR->ReleaseArrow();
+					TestEqual(TEXT("Bow release respects the same shot recovery as other missiles"),CombatSession.VRSequence,Before+1);
+					TestFalse(TEXT("Recovery cancels the released draw without a delayed shot"),VR->bDrawing);
+					CombatSession.VRRecoveryReadyAt=0;
+				}
 				VR->Client->Session->WorldObjects.Remove(Ammo.Guid);
 				VR->WeaponGrip()->SetWorldLocation(VR->BowGrip()->GetComponentLocation() - FVector(12, 0, 0)); VR->Grip(LeftHanded, true);
 				TestFalse(TEXT("Without equipped ammo a new arrow cannot be drawn"), VR->bDrawing);
@@ -1921,11 +1949,16 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			for(bool LeftHanded:{false,true})
 			{
 				VR->Settings->bLeftHanded=LeftHanded;VR->CancelGestures();PollHands();
-				Bow.DefaultCombatStyle=0x400;CombatSession.WorldObjects[Bow.Guid]=Bow;
+				Bow.DefaultCombatStyle=LeftHanded?0:0x400;Bow.AmmoType=4;CombatSession.WorldObjects[Bow.Guid]=Bow;
+				TestEqual(TEXT("Atlatl is recognized with explicit or public-only weapon metadata"),VR->MissileStyle(),0x400);
 				VR->WeaponGrip()->SetWorldRotation(FRotator(20,45,35));VR->WeaponAim()->SetWorldRotation(FRotator(-5,-60,0));VR->ResetHandContacts();
 				FVector Origin,Direction;VR->GetThrownAim(Origin,Direction);
 				TestTrue(TEXT("Atlatl aims out the heel of the palm, independent of pointing ray"),Direction.Equals(-VR->WeaponGrip()->GetForwardVector(),.001));
 				TestTrue(TEXT("Atlatl path starts below the grasp"),Origin.Equals(VR->WeaponGrip()->GetComponentLocation()+Direction*8.f,.001));
+				Ammo.AmmoType=2;CombatSession.WorldObjects.Add(Ammo.Guid,Ammo);
+				const uint32 WrongAmmo=CombatSession.VRSequence;VR->Trigger(LeftHanded,true);VR->Trigger(LeftHanded,false);
+				TestEqual(TEXT("Atlatl does not consume crossbow bolts"),CombatSession.VRSequence,WrongAmmo);
+				VR->Grip(LeftHanded,true);TestFalse(TEXT("Atlatl never asks for a bow draw"),VR->bDrawing);VR->Grip(LeftHanded,false);
 				Ammo.AmmoType=4;CombatSession.WorldObjects.Add(Ammo.Guid,Ammo);
 				const uint32 BeforeAtlatl=CombatSession.VRSequence;VR->Trigger(LeftHanded,true);VR->Trigger(LeftHanded,false);
 				TestEqual(TEXT("Atlatl fires on the click without a held draw"),CombatSession.VRSequence,BeforeAtlatl+1);

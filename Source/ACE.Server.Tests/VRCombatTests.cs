@@ -10,6 +10,26 @@ namespace ACE.Server.Tests
     public class VRCombatTests
     {
         [TestMethod]
+        public void MissileReleaseRequiresDrawOnlyForBows()
+        {
+            var shot = new VRCombatRequest { Amount = 1, Duration = 0 };
+            foreach (var style in new[] { ACE.Entity.Enum.CombatStyle.Crossbow,
+                ACE.Entity.Enum.CombatStyle.Atlatl, ACE.Entity.Enum.CombatStyle.ThrownWeapon,
+                ACE.Entity.Enum.CombatStyle.ThrownShield })
+            {
+                Assert.IsNull(shot.MissileReleaseRejection(ACE.Entity.Enum.CombatMode.Missile, style), $"{style} must fire on click.");
+                Assert.AreEqual("Enter missile stance before firing.",
+                    shot.MissileReleaseRejection(ACE.Entity.Enum.CombatMode.NonCombat, style));
+            }
+            Assert.AreEqual("Pull the arrow back before releasing.",
+                shot.MissileReleaseRejection(ACE.Entity.Enum.CombatMode.Missile, ACE.Entity.Enum.CombatStyle.Bow));
+            shot.Duration = .15f; shot.Amount = .2f;
+            Assert.IsNull(shot.MissileReleaseRejection(ACE.Entity.Enum.CombatMode.Missile, ACE.Entity.Enum.CombatStyle.Bow));
+            shot.Amount = .19f;
+            Assert.IsNotNull(shot.MissileReleaseRejection(ACE.Entity.Enum.CombatMode.Missile, ACE.Entity.Enum.CombatStyle.Bow));
+        }
+
+        [TestMethod]
         public void EquipmentPoseIsStrictlySizedAndCanBeDowngradedForLegacyObservers()
         {
             var p=new VRPose {Version=2,Sequence=1,Cell=0x7D64000C,Flags=7,EyeHeight=1.7f,Weapon=100,Ammo=200};

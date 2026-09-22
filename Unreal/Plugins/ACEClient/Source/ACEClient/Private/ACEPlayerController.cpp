@@ -19,6 +19,7 @@
 #include "ACEHoverTooltipWidget.h"
 #include "ACEMouseCursorWidget.h"
 #include "UI/ACEGameHUDWidget.h"
+#include "UI/ACEFrameRateWidget.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACEUICharSelectBinder.h"
@@ -232,6 +233,7 @@ void AACEPlayerController::EnsureDatIntroCanvas()
 
 void AACEPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (IsLocalController()) ACERuntimeOptions::ApplyDesktopUIScale(FIntPoint::ZeroValue,true);
 #if WITH_EDITOR
 	if (GEditor)
 	{
@@ -272,6 +274,7 @@ void AACEPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	}
 
 	DestroyGameHUD();
+	if(FrameRateWidget){FrameRateWidget->RemoveFromParent();FrameRateWidget=nullptr;}
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -680,11 +683,43 @@ bool AACEPlayerController::InputKey(const FInputKeyEventArgs& Params)
 	return Super::InputKey(Params);
 }
 
+
+void AACEPlayerController::UpdateFrameRateOverlay()
+{
+	const bool Enabled=ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f;
+	if(!Enabled)
+	{
+		if(FrameRateWidget && FrameRateWidget->GetVisibility()!=ESlateVisibility::Collapsed)
+		{
+			FrameRateWidget->SetVisibility(ESlateVisibility::Collapsed);
+			FrameRateWidget->RemoveFromParent();FrameRateWidget->ResetSample();
+		}
+		return;
+	}
+	if(!FrameRateWidget)FrameRateWidget=CreateWidget<UACEFrameRateWidget>(this);
+	if(!FrameRateWidget)return;
+	FrameRateWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
+	FrameRateWidget->Sample(FPlatformTime::Seconds());
+	if(IsVRActive()) { if(FrameRateWidget->IsInViewport())FrameRateWidget->RemoveFromParent(); }
+	else if(!FrameRateWidget->IsInViewport())
+	{
+		FrameRateWidget->AddToViewport(10000);FrameRateWidget->SetAlignmentInViewport(FVector2D(0,0));
+		FrameRateWidget->SetPositionInViewport(FVector2D(16,64),false);
+		FrameRateWidget->SetDesiredSizeInViewport(FVector2D(320,48));
+	}
+}
+
 void AACEPlayerController::PlayerTick(float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
 	auto* VR = GetPawn() ? GetPawn()->FindComponentByClass<UACEVRComponent>() : nullptr;
 	const bool bVR = VR && VR->IsActive();
+	if (IsLocalController())
+	{
+		int32 Width=0,Height=0; GetViewportSize(Width,Height);
+		ACERuntimeOptions::ApplyDesktopUIScale(FIntPoint(Width,Height),bVR);
+		UpdateFrameRateOverlay();
+	}
 	if (bVR) VR->PrepareMovement(DeltaTime);
 	if (bVR) PortalWorldRevealElapsed = -1.f;
 	if (PortalWorldRevealElapsed >= 0.f && PlayerCameraManager)
@@ -2503,7 +2538,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 							}
 							else
 							{
-								Start = RecoverPenetration(Start, PenHit.ImpactNormal.GetSafeNormal2D()
+								Start = RecoverPenetration(Start, PenHit.Normal.GetSafeNormal2D()
 									* (PenHit.PenetrationDepth + WallSkinCm), PenHit);
 								if (!bHaveRampGround)
 								{
@@ -2610,9 +2645,9 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						{
 							BounceNormalUe = Hit.ImpactNormal.GetSafeNormal();
 							bHaveBounceNormal = true;
-							const FVector Normal2D = Hit.ImpactNormal.GetSafeNormal2D();
+							const FVector Normal2D = Hit.Normal.GetSafeNormal2D();
 							const FVector HitLoc(Hit.Location.X, Hit.Location.Y, Hit.Location.Z);
-							FVector SlideOrigin = HitLoc + Normal2D * WallSkinCm;
+							FVector SlideOrigin = HitLoc;
 							FVector Remainder(End.X - SlideOrigin.X, End.Y - SlideOrigin.Y, 0.f);
 							const float IntoWall = FVector::DotProduct(Remainder, Normal2D);
 							if (IntoWall < 0.f)
@@ -2649,9 +2684,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 								}
 								else
 								{
-									Resolved = FVector(SlideHit.Location.X, SlideHit.Location.Y,
-										bJumpAirborne ? End.Z : SlideHit.Location.Z)
-										+ SlideHit.ImpactNormal.GetSafeNormal2D() * WallSkinCm;
+									Resolved = ACEBodySweep::SlideGrounded(*World, SlideOrigin, SlideEnd, SlideHit, Shape, SweepParams);
 									BounceNormalUe = SlideHit.ImpactNormal.GetSafeNormal();
 									bHaveBounceNormal = true;
 								}
@@ -3119,9 +3152,10 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 
 			// Falling bypasses the normal ground snap. A streamed terrain body or
 			// a one-sided triangle missed on a steep descent must not leave the
-			// VR feet underneath the known heightfield. This is a floor bound,
+			// feet underneath the known heightfield, including the submerged DAT
+			// support while the rendered water sheet is ignored. This is a floor bound,
 			// not a snap-down: jumps keep their arc until they reach the ground.
-			if (bVR && !bIndoor)
+			if (!bIndoor)
 			{
 				if (auto* Dat = GetGameInstance()->GetSubsystem<UACEDatSubsystem>())
 				{
@@ -3521,6 +3555,8 @@ void AACEPlayerController::ApplyMouseLookDelta(float DeltaX, float DeltaY, USpri
     MouseLookTravelPixels += FMath::Abs(DeltaX) + FMath::Abs(DeltaY);
     FRotator Rotation = Boom->GetRelativeRotation();
     const float DegreesPerPixel = ACECameraSettings::GetMouseDegreesPerPixel();
+    if (ACECameraSettings::GetInvertMouseX()) DeltaX=-DeltaX;
+    if (ACECameraSettings::GetInvertMouseY()) DeltaY=-DeltaY;
     Rotation.Yaw += DeltaX * DegreesPerPixel;
     Rotation.Pitch = FMath::Clamp(Rotation.Pitch - DeltaY * DegreesPerPixel,
         bCameraInHead ? -53.f : -89.f, bCameraInHead ? 53.f : 20.f);
@@ -3989,10 +4025,8 @@ void AACEPlayerController::ShowGameHUD()
 		if (DatCanvasWidget && Client->GetUIFlow())
 		{
 			Client->GetUIFlow()->SetMode(ACEUI::EACEUIFlowMode::Gameplay);
-			if (UACEUILayoutResolver* Resolver = Client->GetUILayoutResolver())
-			{
-				Resolver->LoadLayout(ACEUI::LayoutId::ClassicGameplay);
-			}
+			// SetMode loads on a mode change. When portal prefetch already loaded
+			// gameplay, reuse that tree rather than rebuilding it at reveal.
 			if (UACEUIElementManager* UiMgr = Client->GetUIElementManager())
 			{
 				const TSharedPtr<FACEUIElement> Root = UiMgr->GetSyntheticRoot();
@@ -4344,6 +4378,7 @@ void AACEPlayerController::TickPendingCharacterSelect()
 
 bool AACEPlayerController::TryPrefetchGameplayHudAssets()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_PrefetchGameplayHud);
 	if (bGameplayUiAssetsReady)
 	{
 		return true;
@@ -4377,9 +4412,16 @@ bool AACEPlayerController::TryPrefetchGameplayHudAssets()
 	{
 		// Preserve an existing gameplay tree across recalls. Load a new one only
 		// once at initial entry, then yield before decoding its texture queue.
-		if (!DatGameplayBinder && Client->GetUIFlow()) Client->GetUIFlow()->SetMode(ACEUI::EACEUIFlowMode::Gameplay);
-		if (auto* Layout = Client->GetUILayoutResolver(); !DatGameplayBinder && Layout)
-			if (!Layout->LoadLayout(ACEUI::LayoutId::ClassicGameplay)) return false;
+		if (!DatGameplayBinder)
+		{
+			if (auto* Layout = Client->GetUILayoutResolver())
+				if (!Layout->PrepareLayout(ACEUI::LayoutId::ClassicGameplay)) return false;
+			if (auto* Flow = Client->GetUIFlow()) Flow->SetMode(ACEUI::EACEUIFlowMode::Gameplay);
+			else if (auto* Layout = Client->GetUILayoutResolver())
+			{
+				if (!Layout->LoadLayout(ACEUI::LayoutId::ClassicGameplay)) return false;
+			}
+		}
 		if (auto* Manager = Client->GetUIElementManager())
 			CollectLayoutTextureIds(Manager->GetSyntheticRoot(), GameplayUiPrefetchIds);
 		GameplayUiLayoutTextureCount = GameplayUiPrefetchIds.Num();
@@ -5160,6 +5202,8 @@ void AACEPlayerController::TickWorldTransition()
 			{
 				if (!bDestinationStreamingStarted)
 				{
+					// Keep submitting tracked portal frames while cooked parents load.
+					if (!Dat->PrepareRuntimeMaterials()) return;
 					// Destination scenery / weenie meshes cook under the tunnel so reveal
 					// isn't a pop-in. Keep the camera on the portal until those gates pass.
 					bDestinationStreamingStarted = true;
@@ -5601,6 +5645,7 @@ void AACEPlayerController::FinishWorldTransition()
 
 void AACEPlayerController::ApplyPendingSelfAppearance()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_ApplySelfAppearance);
 	// The PlayerCreate timer can run before a tracked portal frame is submitted.
 	// Leave appearance work queued for TickWorldTransition in that case.
 	if (bEnterWorldLoading && !bDestinationStreamingStarted) return;

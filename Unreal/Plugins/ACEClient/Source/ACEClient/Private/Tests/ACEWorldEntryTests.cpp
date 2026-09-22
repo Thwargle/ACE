@@ -243,7 +243,7 @@ bool FACETerrainArrivalTest::RunTest(const FString& Parameters)
     {
         ++Sections;
         if(Sec.SharedBake && !Unique.Contains(Sec.SharedBake.Get()))
-        { Unique.Add(Sec.SharedBake.Get()); Bytes+=Sec.SharedBake->Pixels.Num()*sizeof(FColor); }
+        { Unique.Add(Sec.SharedBake.Get()); Bytes+=Sec.SharedBake->GetAllocatedSize(); }
     }
     AddInfo(FString::Printf(TEXT("Cold terrain arrival including DAT indexing, disk writes, runtime mesh application and render flush: %.3fs, %d blocks, %d sections, %d shared blends, %.1f MiB blend storage"),
         FPlatformTime::Seconds()-Start,Lands.Num(),Sections,Unique.Num(),Bytes/(1024.0*1024.0)));

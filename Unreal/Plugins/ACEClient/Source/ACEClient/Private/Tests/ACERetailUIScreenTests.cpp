@@ -1,5 +1,6 @@
 #include "UI/ACERetailTextEntry.h"
 #include "Widgets/SVirtualWindow.h"
+#include "Widgets/Layout/SDPIScaler.h"
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "Misc/App.h"
@@ -12,6 +13,9 @@
 #include "ACEInventoryRules.h"
 #include "ACEInputBindings.h"
 #include "ACECameraSettings.h"
+#include "ACERuntimeOptions.h"
+#include "UI/ACEFrameRateWidget.h"
+#include "Components/CheckBox.h"
 #include "UI/ACEVideoSettingsWidget.h"
 #include "Components/ComboBoxString.h"
 #include "Components/Slider.h"
@@ -251,15 +255,16 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Combat mode changes preserve the repeat preference"),Gameplay->bCombatAutoRepeat,RepeatSaved);
     TestFalse(TEXT("Entering melee does not attack just because repeat is enabled"),Gameplay->bCombatAttackRequestPending);
     FIntPoint ScreenSize(1600,900);
-    auto CaptureScreen=[&](const FString& Name) -> TArray<FColor>
+    auto CaptureScreen=[&](const FString& Name,float DPIScale=1.f) -> TArray<FColor>
     {
         if (!FApp::CanEverRender()) return {};
         FWidgetRenderer Renderer(true,true);
+        const TSharedRef<SWidget> Scaled=SNew(SDPIScaler).DPIScale(DPIScale)[Slate];
         auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(ScreenSize),TF_Bilinear,true);
         for (int32 Pass=0; Pass<4; ++Pass)
         {
             Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
-            Renderer.DrawWidget(Target,Slate,FVector2D(ScreenSize),0.f); FlushRenderingCommands();
+            Renderer.DrawWidget(Target,Scaled,FVector2D(ScreenSize),0.f); FlushRenderingCommands();
         }
         TArray<FColor> Pixels; Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
         TArray64<uint8> PNG; FImageUtils::PNGCompressImageArray(ScreenSize.X,ScreenSize.Y,Pixels,PNG);
@@ -419,6 +424,21 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     NativeClick(TEXT("ChatTarget"));
     TestTrue(TEXT("Actual canvas Say press/release opens the chat destinations"),Gameplay->bChatTargetPopupOpen);
     Gameplay->CloseChatTargetPopup();
+    {
+    TGuardValue<FACEPlayerVitals> SavedScaleVitals(Client->Session->PlayerVitals,Client->Session->PlayerVitals);
+    auto& V=Client->Session->PlayerVitals;
+    V.bValid=true;V.Health=50;V.MaxHealth=100;V.Stamina=60;V.MaxStamina=100;V.Mana=70;V.MaxMana=100;
+    for(float Scale:{1.25f,2.f,3.f})
+    {
+        const FIntPoint OriginalSize=ScreenSize;ScreenSize=FIntPoint(3840,2160);
+        CaptureScreen(FString::Printf(TEXT("DesktopUI_%dpercent"),FMath::RoundToInt(Scale*100)),Scale);
+        TestTrue(TEXT("Scaled viewport keeps the entire layout in bounds"),Canvas->GetCachedGeometry().GetLocalSize().Equals(FVector2D(ScreenSize)/Scale,1.f));
+        NativeClick(TEXT("ChatTarget"));
+        TestTrue(TEXT("Physical mouse coordinates still activate scaled UI controls"),Gameplay->bChatTargetPopupOpen);
+        Gameplay->CloseChatTargetPopup();ScreenSize=OriginalSize;
+    }
+    }
+    CaptureScreen(TEXT("DesktopUI_Restored"));
     Gameplay->ShowVendorPanel(9876);
     CaptureScreen(TEXT("GameplayVendorBefore"));
     NativeClick(TEXT("VendorBuyTab"));
@@ -764,6 +784,51 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Video->SetScrollOffset(0.f);
 
             auto* Speed=Cast<USlider>(Video->WidgetTree->FindWidget(TEXT("MouseTurnSpeed")));
+            auto* InvertX=Cast<UCheckBox>(Video->WidgetTree->FindWidget(TEXT("InvertMouseX")));
+            auto* InvertY=Cast<UCheckBox>(Video->WidgetTree->FindWidget(TEXT("InvertMouseY")));
+            auto* UIScale=Cast<UComboBoxString>(Video->WidgetTree->FindWidget(TEXT("DesktopUIScale")));
+            if (TestNotNull(TEXT("Horizontal mouse inversion control"),InvertX)
+                && TestNotNull(TEXT("Vertical mouse inversion control"),InvertY)
+                && TestNotNull(TEXT("Desktop UI scale control"),UIScale))
+            {
+                TestEqual(TEXT("UI scale offers nine clear quarter steps"),UIScale->GetOptionCount(),9);
+                InvertX->SetIsChecked(true);InvertY->SetIsChecked(false);UIScale->SetSelectedIndex(4);
+                Video->ApplyInterfaceOptions();
+                TestTrue(TEXT("Apply saves independent mouse axes"),ACECameraSettings::GetInvertMouseX() && !ACECameraSettings::GetInvertMouseY());
+                FConfigFile Saved;Saved.Read(GGameUserSettingsIni);float SavedScale=0;
+                Saved.GetFloat(TEXT("ACE.Presentation"),TEXT("DesktopUIScale"),SavedScale);
+                TestEqual(TEXT("UI scale persists to disk"),SavedScale,2.f);
+                TestEqual(TEXT("4K supports crisp double-sized UI"),ACERuntimeOptions::DesktopUIScale(FIntPoint(3840,2160),false),2.f);
+                TestEqual(TEXT("1080p scale is limited to keep the UI accessible"),ACERuntimeOptions::DesktopUIScale(FIntPoint(1920,1080),false),1.75f);
+                TestEqual(TEXT("Small windows keep the native layout accessible"),ACERuntimeOptions::DesktopUIScale(FIntPoint(800,600),false),1.f);
+                TestEqual(TEXT("VR surfaces retain their own scale"),ACERuntimeOptions::DesktopUIScale(FIntPoint(3840,2160),true),1.f);
+                {
+                    TGuardValue<float> RestoreScale(GetMutableDefault<UUserInterfaceSettings>()->ApplicationScale,1.f);
+                    ACERuntimeOptions::ApplyDesktopUIScale(FIntPoint(3840,2160),false);
+                    TestEqual(TEXT("The actual viewport DPI doubles all child widgets"),GetDefault<UUserInterfaceSettings>()->GetDPIScaleBasedOnSize(FIntPoint(3840,2160)),2.f);
+                    ACERuntimeOptions::ApplyDesktopUIScale(FIntPoint(3840,2160),true);
+                    TestEqual(TEXT("Entering VR removes desktop DPI scaling"),GetDefault<UUserInterfaceSettings>()->ApplicationScale,1.f);
+                }
+                auto* Reopened=NewObject<UACEVideoSettingsWidget>();Reopened->Initialize();auto ReopenedSlate=Reopened->TakeWidget();
+                auto* ReloadedScale=Cast<UComboBoxString>(Reopened->WidgetTree->FindWidget(TEXT("DesktopUIScale")));
+                TestTrue(TEXT("Reopening configuration preserves scale"),ReloadedScale && ReloadedScale->GetSelectedOption()==TEXT("200%"));
+                Video->DefaultsVideo();Video->ApplyInterfaceOptions();
+                TestFalse(TEXT("Defaults restore normal mouse X"),ACECameraSettings::GetInvertMouseX());
+                TestFalse(TEXT("Defaults restore normal mouse Y"),ACECameraSettings::GetInvertMouseY());
+                TestEqual(TEXT("Defaults restore native UI scale"),ACERuntimeOptions::Get(TEXT("DesktopUIScale")),1.f);
+                auto* FPS=Cast<UCheckBox>(Video->WidgetTree->FindWidget(TEXT("ShowFrameRate")));
+                if(TestNotNull(TEXT("FPS overlay is available in configuration"),FPS))
+                {
+                    FPS->SetIsChecked(true);Video->ApplyInterfaceOptions();
+                    TestEqual(TEXT("FPS toggle saves"),ACERuntimeOptions::Get(TEXT("ShowFrameRate")),1.f);
+                    auto* Counter=NewObject<UACEFrameRateWidget>();Counter->Initialize();auto CounterSlate=Counter->TakeWidget();
+                    Counter->Sample(0.);for(int32 I=1;I<=45;++I)Counter->Sample(I/90.);
+                    TestEqual(TEXT("FPS measures actual frames over elapsed time"),Counter->GetCounterText(),FString(TEXT("90 FPS  |  11.1 ms")));
+                    Counter->Sample(1.5);
+                    TestEqual(TEXT("A stall is included rather than using clamped simulation delta"),Counter->GetCounterText(),FString(TEXT("1 FPS  |  1000.0 ms")));
+                    FPS->SetIsChecked(false);Video->ApplyInterfaceOptions();
+                }
+            }
             if (TestNotNull(TEXT("Config exposes mouse turn speed"),Speed))
             {
                 TestEqual(TEXT("Config displays default speed"),Speed->GetValue(),1.f);

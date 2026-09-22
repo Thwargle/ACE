@@ -1,5 +1,6 @@
 #include "VR/ACEVRWidget.h"
 #include "ACEClientBuild.h"
+#include "ACERuntimeOptions.h"
 #include "VR/ACEVRComponent.h"
 #include "VR/ACEVRSettings.h"
 #include "Widgets/Layout/SBorder.h"
@@ -109,6 +110,9 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 		Pages->AddSlot().FillWidth(1.f)[Button(Literal(TEXT("Game options")), [Rig]() { if (Rig.IsValid()) Rig->OpenRetailPanel(TEXT("OptionsPanel_Field")); })];
 		List->AddSlot().AutoHeight().Padding(0, 6)[Pages];
 		auto Scroll = SNew(SScrollBox);
+		Scroll->AddSlot().Padding(0,6)[Button(TAttribute<FText>::CreateLambda([]()
+			{ return FText::FromString(ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f ? TEXT("FPS overlay: On") : TEXT("FPS overlay: Off")); }),
+			[](){ACERuntimeOptions::Set(TEXT("ShowFrameRate"),ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f ? 0.f : 1.f);ACERuntimeOptions::Apply();})];
 		Scroll->AddSlot().Padding(0, 6)[Button(TAttribute<FText>::CreateLambda([Rig]()
 			{ return FText::FromString(Rig.IsValid() && Rig->GetSettings()->bMatchCharacterHeight ? TEXT("Eye height: Character") : TEXT("Eye height: Physical")); }),
 			[Rig]() { if (Rig.IsValid()) Rig->ChangeSetting(TEXT("CharacterHeight")); })];

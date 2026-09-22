@@ -39,6 +39,15 @@ bool FACELandscapeTextureFidelityTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("First source texel is preserved with mirrored terrain UVs"), Pixels[1023], Surface.Pixels[0]);
 	TestEqual(TEXT("Two authored repeats retain full source texel density"), Pixels[511], Surface.Pixels[0]);
 	TestEqual(TEXT("Neighboring source texels are not averaged"), Pixels[1022], Surface.Pixels[1]);
+	auto Prepared = MakeShared<FACETerrainBlend, ESPMode::ThreadSafe>();
+	Prepared->Width = Width; Prepared->Height = Height; Prepared->Pixels = Pixels;
+	TestTrue(TEXT("Background preparation succeeds"), Prepared->PrepareUploadMips());
+	TestTrue(TEXT("CPU restore copy releases unneeded raw texels"), Prepared->Pixels.IsEmpty());
+	TestTrue(TEXT("Lossless backup reduces retained memory"), Prepared->GetAllocatedSize() < Pixels.GetAllocatedSize());
+	TestTrue(TEXT("Prepared backup restores every base texel"), Prepared->CopyBasePixels() == Pixels);
+	const uint64 PreparedBytes = Prepared->GetAllocatedSize();
+	TestTrue(TEXT("Repeated preparation is safe"), Prepared->PrepareUploadMips());
+	TestEqual(TEXT("Repeated preparation retains no duplicate data"), Prepared->GetAllocatedSize(), PreparedBytes);
 
 	auto* Limit = IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Texture.MaxWorldSize"));
 	if (!TestNotNull(TEXT("Object texture limit is available"), Limit)) return false;
@@ -49,7 +58,10 @@ bool FACELandscapeTextureFidelityTest::RunTest(const FString& Parameters)
 	for (int32 ObjectLimit : { 512, 0 })
 	{
 		Limit->Set(ObjectLimit, ECVF_SetByCode);
-		TStrongObjectPtr<UMaterialInterface> Material(Owner->GetOrCreateLandMaterial(ObjectLimit, Pixels, Width, Height));
+		// Exercise both the worker-prepared runtime path and the fallback source.
+		TStrongObjectPtr<UMaterialInterface> Material(ObjectLimit == 512
+			? Owner->GetOrCreateLandMaterial(ObjectLimit, {}, Width, Height, Prepared)
+			: Owner->GetOrCreateLandMaterial(ObjectLimit, Pixels, Width, Height));
 		auto* MID = Cast<UMaterialInstanceDynamic>(Material.Get());
 		if (!TestNotNull(TEXT("Landscape material builds"), MID)) return false;
 		UTexture* Bound = nullptr;
@@ -85,6 +97,11 @@ bool FACELandscapeTextureFidelityTest::RunTest(const FString& Parameters)
 			Texture->UpdateResource(); FlushRenderingCommands();
 			TestTrue(TEXT("Recreated terrain has a live GPU resource"),Texture->GetResource() && Texture->GetResource()->TextureRHI.IsValid());
 		}
+		TArray<void*> Tail; Tail.SetNumZeroed(3);
+		TArray<int64> TailSizes; TailSizes.SetNumZeroed(3);
+		TestTrue(TEXT("Resource recreation can request only the final mips"), Texture->GetInitialMipData(8, Tail, TailSizes));
+		TestEqual(TEXT("Partial mip request starts at the requested dimensions"), TailSizes[0], int64(4*4*sizeof(FColor)));
+		for (void* Data : Tail) FMemory::Free(Data);
 	}
 
 	// Fixed results from retail ImgTex::MergeTexture's byte blend. A linear-light

@@ -247,7 +247,13 @@ void UACEVRComponent::FireThrownMissile()
 	{ SetCastFeedback(TEXT("Equip compatible darts first.")); return; }
 	FVector Origin, Direction; GetThrownAim(Origin, Direction);
 	if (auto Session = Client->GetSession(); Session && Session->SendVRCombat(3, PC->GetEffectiveCellId(), Weapon.Guid,
-		0, 0, ToAceOffset(Origin), FACEPosition::AceVectorToUnreal(Direction), 1.f, 0.f)) Pulse(Settings->bLeftHanded, .6f);
+		0, 0, ToAceOffset(Origin), FACEPosition::AceVectorToUnreal(Direction), 1.f, 0.f))
+	{
+		Pulse(Settings->bLeftHanded, .6f);
+		UE_LOG(LogTemp, Log, TEXT("ACE VR missile sent: weapon=0x%08X ammo=0x%08X style=0x%X instant=1"),
+			Weapon.Guid,EquippedAmmo().Guid,MissileStyle());
+	}
+	else SetCastFeedback(TEXT("Missile could not be sent. Check the VR server connection."));
 }
 
 FVector UACEVRComponent::BowDrawDirection() const
@@ -269,6 +275,7 @@ void UACEVRComponent::ReleaseArrow()
 			BowAim()->GetForwardVector(), Settings->BowFullDraw, Fraction) ? Fraction : 0.f;
 	}
 	bDrawing = false;
+	if (GetCombatMode()!=ACECombatMode::Missile || GetMeleeRecoveryRemaining()>0) return;
 	const float Fraction = BowFraction;
 	if (!WasDrawn || IsInputBlocked() || !WeaponGrip()->IsTracked()
 		|| !BowGrip()->IsTracked() || !BowAim()->IsTracked() || Fraction < .2f || BowHoldTime < .15f)
