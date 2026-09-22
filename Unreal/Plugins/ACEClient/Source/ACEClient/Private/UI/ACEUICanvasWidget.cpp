@@ -99,6 +99,7 @@ void UACEUICanvasWidget::SetGameplayBinder(UACEUIGameplayBinder* InBinder)
 void UACEUICanvasWidget::SetCharSelectBinder(UACEUICharSelectBinder* InBinder)
 {
 	CharSelectBinder = InBinder;
+	SetIsFocusable(CharGenBinder != nullptr || CharSelectBinder != nullptr);
 }
 
 TSharedRef<SWidget> UACEUICanvasWidget::RebuildWidget()
@@ -146,7 +147,7 @@ void UACEUICanvasWidget::NativeConstruct()
 	SetVisibility(ESlateVisibility::Visible);
 	// Character creation handles name editing on this canvas. In the world, keep
 	// focus on the game viewport; chat focuses its EditableTextBox directly.
-	SetIsFocusable(CharGenBinder != nullptr);
+	SetIsFocusable(CharGenBinder != nullptr || CharSelectBinder != nullptr);
 	UpdateCanvasLayout();
 	SyncElementWidgets();
 }
@@ -162,7 +163,7 @@ void UACEUICanvasWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTi
 	}
 	if (CharSelectBinder)
 	{
-		CharSelectBinder->TickRefresh();
+		CharSelectBinder->TickRefresh(InDeltaTime);
 	}
 	SyncElementWidgets();
 	RefreshOverlayOrder();
@@ -443,6 +444,8 @@ void UACEUICanvasWidget::SyncElementRecursive(
 		Manager && Manager->GetFocusElement() == Element);
 	if (!Element->IsPaintVisible()) return;
     if(Element->ElementName==TEXT("RootCharGenDialog"))InOutZOrder=2000;
+    if(Element->ElementName==TEXT("CharacterDeleteConfirmation"))InOutZOrder=2000;
+    if(Element->ElementName==TEXT("CharacterCredits"))InOutZOrder=4000;
     if(Element->ElementName==TEXT("RootCharGenTooltip"))InOutZOrder=3000;
     if (const auto Window = RetailWindow(Element); Window == Element)
         InOutZOrder = WindowPaintBase(Window);
@@ -481,6 +484,8 @@ void UACEUICanvasWidget::SyncElementRecursive(
 		|| Element->ElementName.EndsWith(TEXT("ExamineUI"))
 		|| Element->ElementName == TEXT("ChatLogField")
 		|| Element->ElementName == TEXT("ChatEntryField")
+		|| Element->ElementName == TEXT("CharacterCredits")
+		|| (CharSelectBinder && (Element->ElementName == TEXT("TextField") || Element->ElementName == TEXT("PictureField")))
 		|| Element->ElementName == TEXT("ChatPanelTextEntry");
 	if (bTightenClip && Element->Width > 0 && Element->Height > 0)
 	{
@@ -798,7 +803,7 @@ FReply UACEUICanvasWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, 
 	{
 		if (GameplayBinder->TryBeginScrollbarDrag(Local))
 		{
-			return FReply::Handled().CaptureMouse(TakeWidget());
+			return FReply::Handled().SetUserFocus(TakeWidget()).CaptureMouse(TakeWidget());
 		}
 		if (GameplayBinder->TryBeginCombatPowerDrag(Local))
 		{
@@ -1028,6 +1033,7 @@ FReply UACEUICanvasWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, c
 
 FReply UACEUICanvasWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
+	if (CharSelectBinder && CharSelectBinder->KeyDown(InKeyEvent)) return FReply::Handled();
 	if(CharGenBinder && CharGenBinder->KeyDown(InKeyEvent)) return FReply::Handled();
 	if (GameplayBinder && (InKeyEvent.GetKey() == EKeys::Enter || InKeyEvent.GetKey() == EKeys::Slash)
 		&& !InKeyEvent.IsRepeat() && !InKeyEvent.IsAltDown() && !InKeyEvent.IsControlDown()

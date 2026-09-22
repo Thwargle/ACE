@@ -1,32 +1,32 @@
-# AC:Unreal / AC:VR release 62
+# AC:Unreal / AC:VR release 63
 
-Native Quest: `2026.09.22.quest.62`, Android version code 62, installer revision 6.
-Windows desktop / PC VR: `2026.09.22.68`.
+Native Quest: `2026.09.22.quest.63`, Android version code 63, installer revision 6.
+Windows desktop / PC VR: `2026.09.22.69`.
 
-This release fixes repeated-portal memory growth, improves shared runtime
-performance, and updates movement and the retail interface since public v60.
+## Changes since v62
 
-## Changes since v60
-
-- Release the previous area's terrain textures before loading the next portal
-  destination. Resource destruction runs across portal frames; nearby destination
-  mesh caches remain reusable. Repeated Obsidian Rim trips passed on Quest 3.
-- Retire departed outdoor and dungeon meshes, discard cancelled worker results,
-  limit concurrent room builders, and remove redundant environment-data copies.
-- Reuse the UI name index until the element tree changes, with correct updates
-  after renaming, reparenting, removal, and reordering.
-- Avoid repeated outdoor visibility bookkeeping and unchanged ceiling updates.
-- Prepare terrain mip storage with a faster lossless encoder and cache the
-  complete prepared mip chain. Terrain resolution, pixels, and mipmaps remain
-  intact. Native UI panel textures use a single bilinear mip at their authored size.
-- Improve escape and sliding when multiple collision surfaces meet, including
-  the narrow Shoushi gap between Eiichi and the lifestone. Shared collision fixes
-  apply to desktop, PC VR, and native Quest.
-- Restore retail minimap marker masks, colors, ranges, selection squares, and
-  click selection. Offscreen selected objects use the original DAT direction arrows.
-- Keep the settings window and Apply button reachable after desktop UI scaling.
-- Make VR enemy health bars shorter and hide them immediately at zero health,
-  including enemies defeated in one hit.
+- Preserve the player's current facing when delayed server position updates
+  arrive, including forced position corrections. This addresses mouse and
+  keyboard turning snapping backward under latency. Server position corrections,
+  teleport destinations, and explicit server turn commands remain authoritative.
+- Retain small mouse turns between frames, even below the movement packet threshold.
+- Enable mouse turning by default, with a saved local preference when disabled.
+- Keep physical numpad camera controls separate from player movement with Num Lock
+  both on and off. Dedicated arrow keys retain their movement controls.
+- Restore character deletion with the original retail warning and typed DELETE
+  confirmation. Pending deletions can be restored; roster updates retain selection.
+  Requests validate the current character slot and block conflicting operations.
+- Implement the Credits button using the original DAT credits text, artwork,
+  two-column layout, and scrolling presentation.
+- Return creatures, including drudges, from completed throwing/aiming poses to
+  their ready animation instead of leaving them frozen until their next action.
+- Keep options dropdown labels alive while their menus are displayed, preventing
+  selections from becoming blank after garbage collection.
+- Correct link latency measurement so valid readings no longer repeatedly reset
+  to 0 ms. Use a recent traffic window and time since the last packet for status.
+  Restore the Link panel's retail text, font, and layout.
+- Fit long inventory titles within the original retail header without text
+  overflow, retaining the full title in the tooltip.
 
 ## Install or update
 
@@ -54,19 +54,18 @@ GDLE login has been verified through character selection; full in-world GDLE
 compatibility still needs testing. Bundles contain no server, credentials, saved
 settings, SDK tools, or retail DAT files.
 
-## Validation and performance
+## Validation and limitations
 
-- Windows and Android builds succeeded. Regression coverage includes portal
-  resource retirement, loading transitions, cancelled streaming work, terrain
-  fidelity, UI lookup lifetime, minimap interaction, VR menus/health bars,
-  Shoushi collision, and training-dungeon corners.
-- On Quest 3, one login and seven portal transitions completed successfully;
-  the tester confirmed repeated Obsidian Rim visits looked correct.
-- Sampled maximum memory accounting fell from 5.26 GiB in the failing v61 run
-  to 2.67 GiB in v62. Swap remained at 216 KiB instead of approximately 2.10 GiB.
-  These are five-second samples from the recorded routes, not instantaneous peaks.
-- Outdoor samples remained around 59–66 FPS. Sustained 90 FPS VR and 144 FPS
-  desktop are still targets, not established performance claims.
+Six packaged Windows suites passed: CameraAndEdges, CharacterManagement,
+LinkTiming, MovementReview, UIScreens, and WorldEntry.
 
-This is a community preview. Additional hardware, multiplayer, and comfort
-testing remains important. Download hashes are provided in SHA256SUMS.txt.
+Regression coverage includes character-management packet handling and prompts,
+credits and retail UI presentation, dropdown lifetime through garbage collection,
+latency timing, delayed position updates, small mouse turns, and numpad controls
+in both Num Lock states. Creature motion coverage exercises 2,408 original DAT
+missile entries returning to Ready.
+
+This release has not received live headset acceptance or a physical-keyboard
+Num Lock check. No real character was deleted during automated validation.
+There is no new FPS benchmark in this release; sustained 90 FPS VR and 144 FPS
+desktop remain targets. Download hashes are provided in SHA256SUMS.txt.

@@ -16,6 +16,8 @@
 #include "Components/CapsuleComponent.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Protocol/ACEBinaryReader.h"
+#include "Protocol/ACEBinaryWriter.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEMovementReviewTest,"ACE.RetailParity.MovementReview",
  EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
@@ -76,6 +78,60 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   Session->State=EACESessionState::Disconnected;Session->PlayerGuid=0;
   PC->UnPossess();Pawn->Destroy();PC->Destroy();
  }
+ // Delayed movement acknowledgements arrive after mouse/keyboard turns, including
+ // after the player releases the controls and prediction relinquishes ownership.
+ {
+  auto* Client=GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
+  auto* PC=World->SpawnActor<AACEPlayerController>();PC->Client=Client;
+  auto* Pawn=World->SpawnActor<APawn>();auto* Root=NewObject<USceneComponent>(Pawn);
+  Pawn->SetRootComponent(Root);Root->RegisterComponent();PC->Possess(Pawn);
+  PC->bUsePortalTransitionOnTeleport=false;PC->bUseEnterWorldLoadScreen=false;
+  FACEWorldObject Self=Obj;Self.bIsPlayer=true;Self.bIsSelf=true;
+  Self.bHasPosition=true;Self.Position.CellId=0x7D640019;Self.Position.Location=FVector(50,100,50);
+  Session->WorldObjects.Add(Self.Guid,Self);Session->PlayerGuid=Self.Guid;Session->State=EACESessionState::InWorld;
+  uint16 Sequence=0;
+  const auto Handle=Session->OnPositionUpdate.AddLambda([PC](int32 Guid,const FACEPosition& Pose){PC->HandlePositionUpdate(Guid,Pose);});
+  auto Receive=[&](const FACEPosition& Pose,uint16 Teleport,uint16 Force)
+  {
+   FACEBinaryWriter Writer;
+   Writer.WriteUInt32(Self.Guid);Writer.WriteUInt32(4);Writer.WriteUInt32(Pose.CellId);
+   Writer.WriteFloat(Pose.Location.X);Writer.WriteFloat(Pose.Location.Y);Writer.WriteFloat(Pose.Location.Z);
+   Writer.WriteFloat(Pose.RotationW);Writer.WriteFloat(Pose.RotationXYZ.X);Writer.WriteFloat(Pose.RotationXYZ.Y);Writer.WriteFloat(Pose.RotationXYZ.Z);
+   Writer.WriteUInt16(0);Writer.WriteUInt16(++Sequence);Writer.WriteUInt16(Teleport);Writer.WriteUInt16(Force);
+   FACEBinaryReader Reader(Writer.GetData());Session->HandleUpdatePosition(Reader);
+  };
+  uint16 Force=0;
+  for(bool Predicting:{false,true})for(bool Forced:{false,true})for(float Heading:{45.f,179.f,-179.f})
+  {
+   FACEPosition Local=Self.Position;Local.SetAceFacingFromUnrealDir2D(FACEPosition::UnrealDirFromAceHeadingDegrees(Heading));
+   Pawn->SetActorLocation(Local.ToUnrealLocation(100)+FVector(0,0,88));Pawn->SetActorRotation(Local.ToUnrealQuat());
+   PC->PredictedPose=Local;PC->bHavePredictedPose=Predicting;PC->bLocalPredicting=Predicting;
+   Session->PlayerPosition=Local;
+   FACEPosition Delayed=Self.Position;Delayed.Location+=FVector(.3f,.2f,-.1f);
+   if(Forced)++Force;
+   Receive(Delayed,0,Force);
+   TestTrue(TEXT("Delayed position packet preserves current local facing after mouse or keyboard turning"),
+    Client->GetPlayerPosition().ToUnrealQuat().Equals(Local.ToUnrealQuat(),.00001f));
+   TestTrue(TEXT("Delayed packet does not rotate the camera's pawn"),Pawn->GetActorQuat().Equals(Local.ToUnrealQuat(),.00001f));
+   TestTrue(TEXT("Server anchor remains intact for positional reconciliation"),PC->LastServerPose.ToUnrealLocation(100).Equals(Delayed.ToUnrealLocation(100),.01));
+   if(Forced)
+   {
+    TestTrue(TEXT("Forced correction still applies authoritative XYZ"),PC->PredictedPose.ToUnrealLocation(100).Equals(Delayed.ToUnrealLocation(100),.01));
+    TestTrue(TEXT("Forced correction still moves the body"),Pawn->GetActorLocation().Equals(Delayed.ToUnrealLocation(100)+FVector(0,0,88),.01));
+   }
+  }
+  FACEPosition Arrival=Self.Position;Arrival.SetAceFacingFromUnrealDir2D(FVector(1,0,0));
+  Receive(Arrival,1,++Force);
+  TestTrue(TEXT("Teleport applies destination heading even when force sequence also changes"),
+   Pawn->GetActorQuat().Equals(Arrival.ToUnrealQuat(),.00001f) && Client->GetPlayerPosition().ToUnrealQuat().Equals(Arrival.ToUnrealQuat(),.00001f));
+  FACEObjectMotionState Turn;Turn.MovementType=9;Turn.MoveToDesiredHeading=123.f;
+  PC->HandleMotionUpdate(Self.Guid,Turn);
+  FACEPosition Expected=Arrival;Expected.SetAceFacingFromUnrealDir2D(FACEPosition::UnrealDirFromAceHeadingDegrees(123.f));
+  TestTrue(TEXT("Explicit server TurnToHeading still rotates the player"),Pawn->GetActorQuat().Equals(Expected.ToUnrealQuat(),.00001f));
+  Session->OnPositionUpdate.Remove(Handle);Session->WorldObjects.Remove(Self.Guid);
+  Session->State=EACESessionState::Disconnected;Session->PlayerGuid=0;Session->TeleportSeq=0;Session->ForcePositionSeq=0;
+  PC->UnPossess();Pawn->Destroy();PC->Destroy();
+ }
  for (uint32 Style : {0x8000003Fu,0x80000041u,0x80000047u})
  {
   for (uint32 Action : {0x40000016u,0x4000001Eu,0x40000020u,0x100000D0u})
@@ -100,6 +156,41 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   TestTrue(TEXT("Eating/drinking plays authored frames"),App->bActionEverEvaluated);
   TestTrue(TEXT("Eating/drinking finishes without movement input"),App->AnimMode!=UACECharacterAppearanceComponent::EACEAnimMode::ActionOneShot);
  }
+ // Exercise authored monster missile links without movement input masking a held pose.
+ int32 MissileFixtures=0;
+ for(uint32 TableId=0x09000001;TableId<0x09000200;++TableId)
+ {
+  TArray<uint8> Bytes;if(!Dat->GetPortalDat()->ReadFile(TableId,Bytes))continue;
+  FACEDatCursor Cursor(Bytes);FACEDatMotionTable Table;
+  if(!ACEDatUnpack::UnpackMotionTable(Cursor,Table))continue;
+  TSet<uint32> MissileKeys;
+  for(const auto& Cycle:Table.Cycles)
+   if((Cycle.Key&0xffff)==0x16 || ((Cycle.Key&0xffff)>=0x1e && (Cycle.Key&0xffff)<=0x2a)) MissileKeys.Add(Cycle.Key);
+  for(const auto& Links:Table.Links)
+  {
+   if((Links.Key&0xffff)!=3)continue;
+   for(const auto& Link:Links.Value)
+    if(Link.Key==0x40000016 || (Link.Key>=0x4000001e && Link.Key<=0x4000002a))
+     MissileKeys.Add((Links.Key&0xffff0000)|(Link.Key&0xffff));
+  }
+  for(uint32 Key:MissileKeys)
+   {
+    const uint32 Style=0x80000000u|(Key>>16), Action=0x40000000u|(Key&0xffff);
+    ++MissileFixtures;
+    App->AnimMode=UACECharacterAppearanceComponent::EACEAnimMode::Locomotion;App->ActionCommand=0;
+    App->MotionTableId=TableId;App->SetPreferredStyle(Style);App->SetLocomotionInput(0,0,false,1);
+    App->PlayActionMotion(Action,1,Style);
+    for(int32 Frame=0;Frame<450;++Frame)App->TickComponent(1.f/30,LEVELTICK_All,nullptr);
+    FACEObjectMotionState Ready;Ready.ForwardCommand=ACEMotion::Ready;Ready.CurrentStyle=Style;
+    Actor->ApplyMotionState(Ready);
+    App->TickComponent(.1f,LEVELTICK_All,nullptr);
+    TestTrue(FString::Printf(TEXT("Server Ready releases missile %08X table %08X stance %08X"),Action,TableId,Style),
+     App->AnimMode!=UACECharacterAppearanceComponent::EACEAnimMode::ActionOneShot);
+   }
+ }
+ AddInfo(FString::Printf(TEXT("Checked %d authored missile links"),MissileFixtures));
+ TestTrue(TEXT("Missile regression includes creature tables"),MissileFixtures>10);
+ App->AnimMode=UACECharacterAppearanceComponent::EACEAnimMode::Locomotion;App->ActionCommand=0;App->MotionTableId=Obj.MotionTableId;
  auto* Presenter=NewObject<UACEWorldPresenterComponent>(Actor);
  Presenter->Client=GI->GetSubsystem<UACEClientSubsystem>();Presenter->Spawned.Add(Obj.Guid,Actor);
  FACEObjectMotionState Eat;Eat.ActionCommand=0x4000001A;Eat.ActionSpeed=1;Eat.CurrentStyle=0x8000003D;

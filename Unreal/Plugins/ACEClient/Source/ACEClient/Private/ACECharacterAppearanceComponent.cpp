@@ -1242,7 +1242,12 @@ void UACECharacterAppearanceComponent::CancelHeldActionMotion()
 {
 	// Retail clears a held chat-pose when the player moves or jumps — the emote either
 	// froze on its last frame (bHoldActionFinal) or is still pending a hold.
-	if (AnimMode == EACEAnimMode::ActionOneShot && (bHoldActionFinal || bHoldActionFinalAfterFinish))
+	// Monster missile tables also contain zero-rate Aim/Reload endpoint cycles.
+	// A drudge has no Ready->Reload link, so that fallback never sets bFinished
+	// or bHoldActionFinal. The server's Ready must release it just like other holds.
+	const bool bMissileEndpoint = ActionCommand == 0x40000016u
+		|| (ActionCommand >= 0x4000001Eu && ActionCommand <= 0x4000002Au);
+	if (AnimMode == EACEAnimMode::ActionOneShot && (bHoldActionFinal || bHoldActionFinalAfterFinish || bMissileEndpoint))
 	{
 		bHoldActionFinal = false;
 		bHoldActionFinalAfterFinish = false;

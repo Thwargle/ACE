@@ -5,6 +5,7 @@
 #include "UI/ACEUIElement.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "ACEClientSubsystem.h"
+#include "ACEDatSubsystem.h"
 #include "ACESession.h"
 #include "ACEPlayerController.h"
 #include "Blueprint/WidgetTree.h"
@@ -78,12 +79,15 @@ void UACEUICharSelectBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEle
 	UACEUICanvasWidget* InCanvas, AACEPlayerController* InPC,
 	const TArray<FACECharacterInfo>& InCharacters, const FString& InServerName)
 {
+	const int32 PreviousSelection = SelectedCharacterId;
 	Shutdown();
 	Client = InClient;
 	Manager = InManager;
 	Canvas = InCanvas;
 	PlayerController = InPC;
 	Characters = InCharacters;
+	if (Canvas && Canvas->GetResourceResolver() && Canvas->GetResourceResolver()->GetDatSubsystem())
+		CharacterStrings.LoadStrings(Canvas->GetResourceResolver()->GetDatSubsystem()->GetDatDirectory());
 	ServerName = InServerName;
 	SelectedIndex = INDEX_NONE;
 	SelectedCharacterId = 0;
@@ -96,7 +100,8 @@ void UACEUICharSelectBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEle
 	bBound = true;
 	if (Characters.Num() > 0)
 	{
-		SelectCharacterIndex(0);
+		const int32 PreviousIndex = Characters.IndexOfByPredicate([PreviousSelection](const FACECharacterInfo& C) { return C.CharacterId == PreviousSelection; });
+		SelectCharacterIndex(PreviousIndex == INDEX_NONE ? 0 : PreviousIndex);
 	}
 	EnsureOverlays();
 	SyncButtonStates();
@@ -105,6 +110,7 @@ void UACEUICharSelectBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEle
 
 void UACEUICharSelectBinder::Shutdown()
 {
+	ShutdownActions();
 	if (Manager && ActivatedHandle.IsValid())
 	{
 		Manager->OnElementActivated.Remove(ActivatedHandle);
@@ -142,7 +148,7 @@ void UACEUICharSelectBinder::Shutdown()
 	bBound = false;
 }
 
-void UACEUICharSelectBinder::TickRefresh()
+void UACEUICharSelectBinder::TickRefresh(float DeltaSeconds)
 {
 	if (!bBound)
 	{
@@ -159,6 +165,8 @@ void UACEUICharSelectBinder::TickRefresh()
 	EnsureOverlays();
 	SyncButtonStates();
 	RefreshOverlays();
+	if (bCredits) TickCredits(DeltaSeconds);
+	else RefreshDialog();
 }
 
 void UACEUICharSelectBinder::SelectCharacterIndex(int32 Index)
@@ -185,6 +193,17 @@ void UACEUICharSelectBinder::EnterSelectedCharacter()
 
 void UACEUICharSelectBinder::OnElementActivated(TSharedPtr<FACEUIElement> Element)
 {
+	if (bCredits) { SetCreditsVisible(false); return; }
+	if (Dialog && Dialog->bVisible)
+	{
+		for (auto Cur = Element; Cur; Cur = Cur->Parent.Pin())
+		{
+			if (Cur->ElementId == 0x2E) { ConfirmDelete(); return; }
+			if (Cur->ElementId == 0x2F) { CloseDialog(); return; }
+		}
+		return;
+	}
+	if (Client && Client->GetSession() && Client->GetSession()->IsCharacterManagementPending()) return;
 	if (!Element.IsValid())
 	{
 		return;
@@ -206,13 +225,13 @@ void UACEUICharSelectBinder::OnElementActivated(TSharedPtr<FACEUIElement> Elemen
 			return;
 		}
 		if(Name==TEXT("CreateCharacterButton")){if(PlayerController)PlayerController->ShowCharacterCreationUI();return;}
-		if (Name == TEXT("DeleteCharacterButton")
-			|| Name == TEXT("RestoreCharacterButton")
-			|| Name == TEXT("CreditsButton"))
+		if (Name == TEXT("DeleteCharacterButton")) { ShowDeleteConfirmation(); return; }
+		if (Name == TEXT("RestoreCharacterButton"))
 		{
-			UE_LOG(LogTemp, Log, TEXT("ACE CharSelect: %s not implemented yet"), *Name);
+			if (Client && Client->GetSession()) Client->GetSession()->RestoreCharacter(SelectedCharacterId);
 			return;
 		}
+		if (Name == TEXT("CreditsButton")) { SetCreditsVisible(true); return; }
 	}
 }
 
@@ -233,6 +252,15 @@ int32 UACEUICharSelectBinder::GetCharacterRowHeight() const
 
 bool UACEUICharSelectBinder::TryHandleOverlayClick(FVector2D LayoutPos)
 {
+	if (bCredits) { SetCreditsVisible(false); return true; }
+	if (Dialog && Dialog->bVisible)
+	{
+		// Consume every click outside the modal as well as inside it. The original
+		// character-list hit targets must never change the pending delete target.
+		OnElementActivated(Manager->HitTestCanvas(LayoutPos.X, LayoutPos.Y));
+		return true;
+	}
+	if (Client && Client->GetSession() && Client->GetSession()->IsCharacterManagementPending()) return true;
 	if (!Manager)
 	{
 		return false;
@@ -379,10 +407,21 @@ void UACEUICharSelectBinder::SyncButtonStates()
 	const TSharedPtr<FACEUIElement> Hover = Manager->GetHoverElement();
 	const TSharedPtr<FACEUIElement> Active = Manager->GetActiveElement();
 	const TSharedPtr<FACEUIElement> Capture = Manager->GetCaptureElement();
+	const auto Session = Client ? Client->GetSession() : nullptr;
+	const bool bReady = !bCredits && !(Dialog && Dialog->bVisible) && (!Session || !Session->IsCharacterManagementPending());
+	const bool bSelected = Characters.IsValidIndex(SelectedIndex);
+	const bool bDeleted = bSelected && Characters[SelectedIndex].DeleteSeconds != 0;
+	for (const TCHAR* Name : {TEXT("EnterGameButton"), TEXT("DeleteCharacterButton"), TEXT("RestoreCharacterButton")})
+		if (auto Button = Manager->FindElementByName(Name))
+		{
+			const bool bRestore = FCString::Strcmp(Name, TEXT("RestoreCharacterButton")) == 0;
+			if (bRestore || FCString::Strcmp(Name, TEXT("DeleteCharacterButton")) == 0) Button->bVisible = bRestore == bDeleted;
+			Button->bActivatable = bReady && bSelected && bRestore == bDeleted;
+			Button->bGhosted = !Button->bActivatable;
+		}
 	if(auto Create=Manager->FindElementByName(TEXT("CreateCharacterButton")))
 	{
-		const auto Session=Client?Client->GetSession():nullptr;
-		Create->bActivatable=Session&&Session->GetState()==EACESessionState::CharacterSelect&&
+		Create->bActivatable=bReady&&Session&&Session->GetState()==EACESessionState::CharacterSelect&&
 			Client->GetCharacters().Num()<int32(Session->GetCharacterSlotCount());
 		Create->bGhosted=!Create->bActivatable;
 	}
@@ -546,6 +585,7 @@ void UACEUICharSelectBinder::EnsureOverlays()
 		TEXT("EnterGameButton"),
 		TEXT("CreateCharacterButton"),
 		TEXT("DeleteCharacterButton"),
+		TEXT("RestoreCharacterButton"),
 		TEXT("CreditsButton"),
 		TEXT("ExitButton"),
 	};
@@ -566,6 +606,14 @@ void UACEUICharSelectBinder::RefreshOverlays()
 {
 	if (!bBound || !Manager || !Canvas)
 	{
+		return;
+	}
+	if (bCredits)
+	{
+		if (WorldNameImage) WorldNameImage->SetVisibility(ESlateVisibility::Collapsed);
+		for (auto& Array : {&CharNameImages, &CharSlotTops, &CharSlotMiddles, &CharSlotBottoms, &ListFrameParts})
+			for (auto& Widget : *Array) if (Widget) Widget->SetVisibility(ESlateVisibility::Collapsed);
+		for (auto& Pair : ButtonTextImages) Pair.Value->SetVisibility(ESlateVisibility::Collapsed);
 		return;
 	}
 
@@ -636,6 +684,7 @@ void UACEUICharSelectBinder::RefreshOverlays()
 		{ TEXT("EnterGameButton"), TEXT("ENTER"), FontFancy40, FColor(0xFF, 0xF2, 0x7F, 0xFF), true, 0.f },
 		{ TEXT("CreateCharacterButton"), TEXT("Create Character"), FontSans22, FColor(0xFF, 0xB2, 0x19, 0xFF), true, 0.f },
 		{ TEXT("DeleteCharacterButton"), TEXT("DELETE"), FontSans20, FColor(0xFF, 0xB2, 0x19, 0xFF), true, -12.f },
+		{ TEXT("RestoreCharacterButton"), TEXT("RESTORE"), FontSans20, FColor(0xFF, 0xB2, 0x19, 0xFF), true, -12.f },
 		{ TEXT("CreditsButton"), TEXT("CREDITS"), FontSans20, FColor(0xFF, 0xB2, 0x19, 0xFF), true, -12.f },
 		{ TEXT("ExitButton"), TEXT("EXIT"), FontSans20, FColor(0xFF, 0xB2, 0x19, 0xFF), true, -12.f },
 	};

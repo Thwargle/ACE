@@ -467,21 +467,27 @@ void UACEUIGameplayBinder::RefreshLinkStatusPanelOverlays()
 		EffectsTitleLabel->SetFont(Font);
 	}
 	PlaceTextUnder(EffectsTitleLabel, TEXT("LinkStatusPanel_Field"), TEXT("TitleText"),
-		TEXT("Link Status"), 10, StatusGold, StatusOverlayZ);
+		TEXT("Link Status"), 10, StatusWhite, StatusOverlayZ);
 
 	LastLinkStatus = Client->GetLinkStatus();
 	FString PingStr = TEXT("????");
-	if (LastLinkStatus.bHasPing && LastLinkStatus.RoundTripSeconds >= 0.f)
+	if (LastLinkStatus.bHasPing && LastLinkStatus.RoundTripSeconds > 0.f)
 	{
 		PingStr = FString::Printf(TEXT("%.0f"), LastLinkStatus.RoundTripSeconds * 1000.f);
 	}
-	const FString Body = FString::Printf(
-		TEXT("Connection status\n\n"
-			"Green: good\nYellow: fair\nOrange: poor\nRed: critical\n\n"
-			"Packet loss: %.1f%%\n"
-			"Ping: %s ms"),
-		LastLinkStatus.PacketLossPercent,
-		*PingStr);
+	if (!bLoadedLinkStatusStrings)
+	{
+		bLoadedLinkStatusStrings = true;
+		if (const auto* Resources = Canvas->GetResourceResolver())
+			if (const auto* Dat = Resources->GetDatSubsystem())
+				LinkStatusStrings.LoadStrings(Dat->GetDatDirectory(), 0x23000001);
+	}
+	const FString Body = LinkStatusStrings.Text(TEXT("ID_LinkStatus_Info"))
+		+ LinkStatusStrings.Text(TEXT("ID_LinkStatus_Colors"))
+		+ LinkStatusStrings.Text(TEXT("ID_LinkStatus_Disconnect"))
+		+ LinkStatusStrings.FormatText(TEXT("ID_LinkStatus_PacketLoss"),
+			{{TEXT("PACKET_LOSS"), FString::Printf(TEXT("%.2f"), LastLinkStatus.PacketLossPercent)}})
+		+ LinkStatusStrings.FormatText(TEXT("ID_LinkStatus_Ping"), {{TEXT("PING"), PingStr}});
 	PlaceTextUnder(LinkStatusPanelLabel, TEXT("LinkStatusPanel_Field"), TEXT("LinkStatusText"),
 		Body, 10, StatusWhite, StatusOverlayZ + 1);
 }
@@ -538,16 +544,13 @@ void UACEUIGameplayBinder::RefreshStatusIndicators()
 	SetIndicatorLit(Manager, TEXT("MiniGameIndicator"), bChess, DidChessLit, DidChessDark);
 
 	LastLinkStatus = Client->GetLinkStatus();
-	const float RttMs = LastLinkStatus.bHasPing
-		? LastLinkStatus.RoundTripSeconds * 1000.f
-		: -1.f;
 	uint32 LinkDid = DidLinkGood;
-	if (!LastLinkStatus.bConnected || (RttMs >= 0.f && RttMs > 200.f)
-		|| LastLinkStatus.PacketLossPercent > 10.f)
+	// Retail colors reflect time without server packets, not internet latency.
+	if (!LastLinkStatus.bConnected || LastLinkStatus.SecondsSinceLastPacket >= 20.f)
 	{
 		LinkDid = DidLinkPoor;
 	}
-	else if ((RttMs >= 0.f && RttMs > 80.f) || LastLinkStatus.PacketLossPercent > 3.f)
+	else if (LastLinkStatus.SecondsSinceLastPacket >= 5.f)
 	{
 		LinkDid = DidLinkFair;
 	}

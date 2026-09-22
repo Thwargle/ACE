@@ -80,11 +80,35 @@ bool FACECharacterCreation::Load(const FACEDatDatabase& Dat,FString& Error)
     for(int32 I=0;I<N&&R.Ok;++I) { uint32 Id=R.U32(); FACECGSkill S; S.Description=R.String(true); S.Name=R.String(true); S.Icon=R.U32(); S.Trained=R.U32(); S.Specialized=R.U32(); S.Category=R.U32(); S.Chargen=R.U32(); S.MinLevel=R.U32(); for(auto& F:S.Formula)F=R.U32(); R.Skip(24); Skills.Add(Id,MoveTemp(S)); }
     if(!R.Ok) {Error=TEXT("Invalid retail skill table.");return false;} return SelectHeritage(1);
 }
-bool FACECharacterCreation::LoadStrings(const FString& Directory)
+bool FACECharacterCreation::LoadStrings(const FString& Directory, uint32 TableId)
 {
-    FACEDatDatabase Lang;TArray<uint8>B;if(!Lang.Open(FPaths::Combine(Directory,TEXT("client_local_English.dat")))||!Lang.ReadFile(0x23000002,B))return false;
+    FACEDatDatabase Lang;TArray<uint8>B;if(!Lang.Open(FPaths::Combine(Directory,TEXT("client_local_English.dat")))||!Lang.ReadFile(TableId,B))return false;
     FCGReader R(B);R.U32();R.U32();R.U8();uint32 N=R.Count();Strings.Reset();
-    for(uint32 I=0;I<N&&R.Ok;++I){uint32 Id=R.U32();for(int J=0;J<2;++J){uint16 C=R.U16();for(int K=0;K<C&&R.Ok;++K)R.Unicode();}uint32 C=R.Count(false);FString Text;for(uint32 K=0;K<C&&R.Ok;++K){auto S=R.Unicode();if(K==0)Text=S;}C=R.Count(false);R.Skip(C*4);R.U8();Text.ReplaceInline(TEXT("\\n"),TEXT("\n"));Text.ReplaceInline(TEXT("\\t"),TEXT("\t"));Strings.Add(Id,Text);}return R.Ok;
+    StringParts.Reset(); StringArguments.Reset();
+    for(uint32 I=0;I<N&&R.Ok;++I)
+    {
+        uint32 Id=R.U32();
+        for(int J=0;J<2;++J){uint16 C=R.U16();for(int K=0;K<C&&R.Ok;++K)R.Unicode();}
+        auto& Parts=StringParts.Add(Id); uint32 C=R.Count(false);
+        for(uint32 K=0;K<C&&R.Ok;++K){auto S=R.Unicode();S.ReplaceInline(TEXT("\\n"),TEXT("\n"));S.ReplaceInline(TEXT("\\t"),TEXT("\t"));Parts.Add(MoveTemp(S));}
+        C=R.Count(false); auto& Args=StringArguments.Add(Id);
+        for(uint32 K=0;K<C&&R.Ok;++K)Args.Add(R.U32());
+        R.U8(); Strings.Add(Id,Parts.IsEmpty()?FString():Parts[0]);
+    }
+    return R.Ok;
+}
+FString FACECharacterCreation::FormatText(const FString& Key, const TMap<FString,FString>& Variables) const
+{
+    auto Hash=[](const FString& S){uint32 H=0;for(TCHAR C:S){H=uint8(C)+(H<<4);if(H&0xf0000000)H=(H^((H&0xf0000000)>>24))&0x0fffffff;}return H;};
+    const uint32 Id=Hash(Key);const auto* Parts=StringParts.Find(Id);const auto* Args=StringArguments.Find(Id);
+    if(!Parts)return {};
+    FString Result;
+    for(int32 I=0;I<Parts->Num();++I)
+    {
+        Result+=(*Parts)[I];
+        if(Args&&Args->IsValidIndex(I))for(const auto& Var:Variables)if(Hash(Var.Key)==(*Args)[I]){Result+=Var.Value;break;}
+    }
+    return Result;
 }
 FString FACECharacterCreation::Text(const FString& Key) const
 {

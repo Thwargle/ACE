@@ -12079,8 +12079,18 @@ void UACEUIGameplayBinder::RefreshInventoryBurdenOverlays()
 	}
 	if (!SelfObj.Name.IsEmpty())
 	{
-		PlaceTextOnElement(InvTitleLabel, TEXT("InvTitleText"),
-			FString::Printf(TEXT("Inventory of %s"), *SelfObj.Name), 9, TextGold, 10023);
+		const auto Title = Manager->FindElementUnder(TEXT("InventoryPanel_Field"), TEXT("InvTitleText"));
+		const FString FullTitle = FString::Printf(TEXT("Inventory of %s"), *SelfObj.Name);
+		FString DisplayTitle = FullTitle;
+		FACEDatFont Font;
+		if (Title && Canvas->GetResourceResolver()->ResolveFont(Title->FontId,Font))
+			DisplayTitle=ACEDatText::Ellipsize(Font,FullTitle,
+				FMath::Max(1,Title->Width-int32(Title->TextMargins.Left+Title->TextMargins.Right)));
+		// Preserve the authored 18px white DAT title, 5px text insets, gold frame
+		// and separate close-button well. Long names truncate instead of clipping
+		// both ends of the centered title (UIElement_Text::SetTruncateTextToFit).
+		PlaceTextOnElement(InvTitleLabel, Title, DisplayTitle, 9, TextWhite, 10023);
+		SetRetailTooltip(InvTitleLabel,FText::FromString(FullTitle));
 	}
 	else
 	{

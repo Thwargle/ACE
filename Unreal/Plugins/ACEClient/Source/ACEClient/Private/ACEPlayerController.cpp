@@ -1,4 +1,5 @@
 #include "ACEPlayerController.h"
+#include "ACEKeyboardRouter.h"
 #include "HAL/IConsoleManager.h"
 #include "VR/ACEVRComponent.h"
 #include "ACEClientBuild.h"
@@ -107,6 +108,13 @@ void AACEPlayerController::BeginPlay()
 {
 	ACERuntimeOptions::Apply();
 	Super::BeginPlay();
+	if (IsLocalController()) KeyboardRouter=FACEKeyboardRouter::Create(this,[this]()
+	{
+		return Client && Client->GetSessionState()==EACESessionState::InWorld && !IsVRActive()
+			&& !ACEInputBindings::IsEditing()
+			&& !(DatGameplayBinder && DatGameplayBinder->IsChatEntryFocused())
+			&& !(GameHUDWidget && GameHUDWidget->IsChatEntryFocused());
+	});
 	if (IsLocalController()) ACEClientBuild::UpdateWindowTitle(GetWorld(), IsVRActive());
 #if WITH_EDITOR
 	// Standalone/PIE is a network client even while the editor window lacks focus.
@@ -235,6 +243,7 @@ void AACEPlayerController::EnsureDatIntroCanvas()
 
 void AACEPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	KeyboardRouter.Reset();
 	if (IsLocalController()) ACERuntimeOptions::ApplyDesktopUIScale(FIntPoint::ZeroValue,true);
 #if WITH_EDITOR
 	if (GEditor)
@@ -1393,7 +1402,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	const bool bMoving = !FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R) || !FMath::IsNearlyZero(T) || !VRRoomDelta.IsNearlyZero();
 	// Keep local prediction while Use approach is active, and for the full jump arc
 	// (otherwise SoftReconcile snaps idle airborne poses back to the ground).
-	bLocalPredicting = bMoving || bMouseTurnSend
+	// The network send threshold must not discard small local mouse turns.
+	bLocalPredicting = bMoving || !FMath::IsNearlyZero(PendingMouseTurnDegrees)
 		|| bServerMoveToActive || bJumpAirborne || bJumpCharging || (bVR && !VR->IsInputBlocked());
 	const bool bChanged =
 		bForceMovementResend ||
@@ -5976,13 +5986,34 @@ void AACEPlayerController::HandlePositionUpdate(int32 ObjectGuid, const FACEPosi
 	}
 	Target.Z += CapsuleHalfHeight;
 
+	FACEPosition Corrected = Position;
+	if (!bForceSnap)
+	{
+		// Retail SmartBox::HandleReceivedPosition retains the player's heading even
+		// for FORCE_POSITION_TS corrections. XYZ is authoritative, but the facing
+		// in an acknowledgement predates any input during the network roundtrip.
+		if (bHavePredictedPose && PredictedPose.IsValid())
+		{
+			Corrected.RotationW = PredictedPose.RotationW;
+			Corrected.RotationXYZ = PredictedPose.RotationXYZ;
+		}
+		else
+		{
+			// The packet parser has already replaced Client->GetPlayerPosition().
+			// After prediction settles, the pawn is the surviving local heading.
+			const FQuat LocalRotation = P->GetActorQuat();
+			Corrected.RotationW = LocalRotation.W;
+			Corrected.RotationXYZ = FVector(LocalRotation.X, -LocalRotation.Y, -LocalRotation.Z);
+		}
+	}
+
 	if (bServerForcedPosition && !bForceSnap)
 	{
 		// Forced corrections are authoritative, including vertical position. They
 		// are not portal arrivals and must not run recall placement searches.
 		P->SetActorLocation(Target);
-		PredictedPose = Position;
-		Client->SetReportedPosition(Position);
+		PredictedPose = Corrected;
+		Client->SetReportedPosition(Corrected);
 		bHavePredictedPose = true;
 		bJumpAirborne = false;
 		bJumpAirborneSent = false;
@@ -6098,23 +6129,7 @@ void AACEPlayerController::HandlePositionUpdate(int32 ObjectGuid, const FACEPosi
 	{
 		P->SetActorLocation(FMath::Lerp(Current, Target, Alpha));
 	}
-	// Keep local heading. F748 idle poses lag small turns and used to slerp facing back.
-	FACEPosition Merged = Position;
-	if (bHavePredictedPose)
-	{
-		Merged.RotationW = PredictedPose.RotationW;
-		Merged.RotationXYZ = PredictedPose.RotationXYZ;
-	}
-	else
-	{
-		const FACEPosition Keep = Client->GetPlayerPosition();
-		if (Keep.IsValid())
-		{
-			Merged.RotationW = Keep.RotationW;
-			Merged.RotationXYZ = Keep.RotationXYZ;
-		}
-	}
-	Client->SetReportedPosition(Merged);
+	Client->SetReportedPosition(Corrected);
 }
 
 void AACEPlayerController::HandleCharacterList(const TArray<FACECharacterInfo>& Characters, const FString& ServerName)

@@ -42,6 +42,18 @@ int32 ACEDatText::Advance(const FACEDatFont& Font, uint16 Code)
 	return Ch ? static_cast<uint8>(Ch->HorizontalOffsetBefore + Ch->Width + Ch->HorizontalOffsetAfter) : 0;
 }
 
+FString ACEDatText::Ellipsize(const FACEDatFont& Font, const FString& Text, int32 Width)
+{
+	int32 FullWidth=0;
+	for (TCHAR C:Text) FullWidth+=Advance(Font,C);
+	if (FullWidth<=Width) return Text;
+	const int32 Trailer=3*Advance(Font,'.');
+	if (Width<Trailer) return {};
+	int32 Used=0,End=0;
+	while (End<Text.Len() && Used+Advance(Font,Text[End])+Trailer<=Width) Used+=Advance(Font,Text[End++]);
+	return Text.Left(End)+TEXT("...");
+}
+
 TArray<FACEBitmapTextLine> ACEDatText::Layout(const FACEDatFont& Font,
 	const FString& Text, int32 MarginWidth, bool bOneLine)
 {

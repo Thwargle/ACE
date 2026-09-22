@@ -170,12 +170,22 @@ void UACEVideoSettingsWidget::ResetVideo()
 }
 UWidget* UACEVideoSettingsWidget::GenerateOption(FString Option)
 {
- auto* Label=WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
- Label->SetText(FText::FromString(Option));
- Label->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),8));
- Label->SetJustification(ETextJustify::Center);
- Label->SetColorAndOpacity(FSlateColor(FLinearColor(.95f,.91f,.78f,1)));
- return Label;
+ auto* Row=WidgetTree->ConstructWidget<UACERetailOptionWidget>();
+ Row->Option=MoveTemp(Option);
+ return Row;
+}
+TSharedRef<SWidget> UACERetailOptionWidget::RebuildWidget()
+{
+ if (!WidgetTree->RootWidget)
+ {
+  auto* Label=WidgetTree->ConstructWidget<UACERetailTextBlock>();
+  Label->SetText(FText::FromString(Option));
+  Label->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),8));
+  Label->SetJustification(ETextJustify::Center);
+  Label->SetColorAndOpacity(FSlateColor(FLinearColor(.95f,.91f,.78f,1)));
+  WidgetTree->RootWidget=Label;
+ }
+ return Super::RebuildWidget();
 }
 void UACEVideoSettingsWidget::ApplyVideo()
 {

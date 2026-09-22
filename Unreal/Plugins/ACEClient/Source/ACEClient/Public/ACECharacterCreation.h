@@ -52,7 +52,10 @@ public:
     TMap<uint32,FACECGSkill> Skills;
     TArray<FString> StartAreas;
     TMap<uint32,FString> Strings;
-    bool LoadStrings(const FString& DatDirectory);
+    bool LoadStrings(const FString& DatDirectory, uint32 TableId = 0x23000002);
+    FString FormatText(const FString& Key, const TMap<FString, FString>& Variables) const;
+    TMap<uint32, TArray<FString>> StringParts;
+    TMap<uint32, TArray<uint32>> StringArguments;
     FString Text(const FString& Key) const;
     FACECGSelection Selection;
     const FACECGHeritage* Heritage() const { return Heritages.Find(Selection.Heritage); }

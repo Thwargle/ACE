@@ -2,8 +2,11 @@
 #include "Misc/AutomationTest.h"
 #include "ACECameraRetail.h"
 #include "ACECameraSettings.h"
+#include "ACEKeyboardRouter.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "ACELedgeSlide.h"
 #include "ACEPlayerController.h"
 #include "ACEInputBindings.h"
@@ -15,7 +18,7 @@
 #include "Engine/World.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECameraEdgeTest,"ACE.RetailParity.CameraAndEdges",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACECameraEdgeTest::RunTest(const FString& Parameters)
 {
     // Use a separate settings file: this test must not change player preferences.
@@ -23,14 +26,36 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     FConfigFile FixtureConfig; FixtureConfig.NoSave=false; FixtureConfig.bCanSaveAllSections=true;
     GConfig->SetFile(GGameUserSettingsIni,&FixtureConfig);
     TestEqual(TEXT("Unset mouse speed uses the faster default"),ACECameraSettings::GetMouseDegreesPerPixel(),0.75f);
+    const uint32 Scans[]={0x52,0x4F,0x50,0x51,0x4B,0x4C,0x4D,0x47,0x48,0x49};
+    const uint32 Navigation[]={0x2D,0x23,0x28,0x22,0x25,0x0C,0x27,0x24,0x26,0x21};
+    for (int32 N=0;N<10;++N)
+    {
+        TestEqual(TEXT("Num Lock off still resolves the physical numpad key"),FACEKeyboardRouter::NumpadVirtualKey(Navigation[N],Scans[N],false),uint32(0x60+N));
+        TestEqual(TEXT("Dedicated navigation keys remain unchanged"),FACEKeyboardRouter::NumpadVirtualKey(Navigation[N],Scans[N],true),Navigation[N]);
+        TestEqual(TEXT("Num Lock on keeps the same numpad key"),FACEKeyboardRouter::NumpadVirtualKey(0x60+N,Scans[N],false),uint32(0x60+N));
+    }
     const auto Values=UWorld::InitializationValues().AllowAudioPlayback(false).RequiresHitProxies(false)
         .CreatePhysicsScene(false).CreateNavigation(false).CreateAISystem(false);
     auto* World=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);
     auto* Controller=World->SpawnActor<AACEPlayerController>();
+    if (FParse::Param(FCommandLine::Get(),TEXT("RenderOffScreen")))
+        TestFalse(TEXT("Offscreen clients do not install a native keyboard handler"),
+            FACEKeyboardRouter::Create(Controller,[]{return true;}).IsValid());
     auto* GI=NewObject<UGameInstance>();
     auto* Client=NewObject<UACEClientSubsystem>(GI);
     Client->Session=MakeShared<FACESession>(); Client->Session->State=EACESessionState::InWorld;
     Controller->Client=Client; Controller->bRetailCursorInstalled=true;
+    TestTrue(TEXT("Mouse turning defaults on with fresh local settings and retail's off bit"),Client->IsCharacterOptionSet(0x31));
+    const uint32 InitialOptions2=Client->GetCharacterOptions2();
+    Client->SendSetSingleCharacterOption(0x31,false);
+    FConfigFile SavedTurning;SavedTurning.Read(GGameUserSettingsIni);
+    bool SavedTurningValue=true;SavedTurning.GetBool(TEXT("ACE.Camera"),TEXT("UseMouseTurning"),SavedTurningValue);
+    TestFalse(TEXT("An explicit mouse-turning opt-out is saved"),SavedTurningValue);
+    GConfig->SetFile(GGameUserSettingsIni,&SavedTurning);
+    TestFalse(TEXT("The opt-out survives settings reload"),Client->IsCharacterOptionSet(0x31));
+    Client->SendCharacterOptions(Client->GetCharacterOptions1(),InitialOptions2);
+    TestTrue(TEXT("Resetting an options snapshot restores mouse turning too"),Client->IsCharacterOptionSet(0x31));
+    Client->SendSetSingleCharacterOption(0x31,false);
     auto* Pawn=World->SpawnActor<APawn>();
     auto* Boom=NewObject<USpringArmComponent>(Pawn);
     Pawn->SetRootComponent(Boom); Boom->RegisterComponent(); Controller->Possess(Pawn);

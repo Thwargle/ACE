@@ -335,15 +335,8 @@ void UACEUIElementManager::ApplyEdgeAnchoredLayout(int32 ViewportWidth, int32 Vi
 				{
 					continue;
 				}
-				if (Child->ElementName == TEXT("RestoreCharacterButton"))
-				{
-					Child->bVisible = false;
-					Child->EdgeAnchorX = 0;
-					Child->EdgeAnchorY = 0;
-					Child->RecomputeLayoutOffset();
-					continue;
-				}
-				Child->bVisible = true;
+				// The character binder owns Delete/Restore, modal and credits visibility.
+				// Re-anchoring must not reopen a dismissed dialog every frame.
 				Child->EdgeAnchorX = 0;
 				Child->EdgeAnchorY = 0;
 				Child->RecomputeLayoutOffset();

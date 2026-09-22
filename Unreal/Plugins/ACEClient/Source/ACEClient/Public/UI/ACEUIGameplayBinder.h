@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
 #include "ACETypes.h"
+#include "ACECharacterCreation.h"
 #include "ACEUIGameplayBinder.generated.h"
 
 class UACEClientSubsystem;
@@ -641,6 +642,8 @@ private:
 	int32 EffectsScrollOffset = 0;
 	bool bEffectsListPositive = true;
 	FACELinkStatus LastLinkStatus;
+	FACECharacterCreation LinkStatusStrings;
+	bool bLoadedLinkStatusStrings = false;
 	double LastLinkPingRequestAt = 0.0;
 	double LastStatusIndicatorRefreshAt = 0.0;
 	UPROPERTY()

@@ -1,4 +1,6 @@
 #include "ACEClientSubsystem.h"
+#include "ACECameraSettings.h"
+#include "ACECharacterOptions.h"
 #include "ACETerrainPresenterComponent.h"
 #include "GameFramework/GameModeBase.h"
 #include "ACESession.h"
@@ -631,11 +633,15 @@ void UACEClientSubsystem::SendSetTitle(int32 TitleId)
 
 bool UACEClientSubsystem::IsCharacterOptionSet(int32 Option) const
 {
+	// Retail sends this bit clear by default. Use the local camera preference so
+	// fresh characters get mouse turning and server echoes cannot undo an opt-out.
+	if (Option == 0x31) return ACECameraSettings::GetUseMouseTurning();
 	return Session ? Session->IsCharacterOptionSet(Option) : false;
 }
 
 void UACEClientSubsystem::SendSetSingleCharacterOption(int32 Option, bool bValue)
 {
+	if (Option == 0x31) ACECameraSettings::SetUseMouseTurning(bValue);
 	if (Session)
 	{
 		Session->SendSetSingleCharacterOption(Option, bValue);
@@ -644,6 +650,7 @@ void UACEClientSubsystem::SendSetSingleCharacterOption(int32 Option, bool bValue
 
 void UACEClientSubsystem::SendCharacterOptions(uint32 Options1, uint32 Options2)
 {
+	ACECameraSettings::SetUseMouseTurning((Options2 & ACECharacterOptions::MouseTurningFlag) != 0);
 	if (Session)
 	{
 		Session->SendCharacterOptions(Options1, Options2);
@@ -657,7 +664,8 @@ uint32 UACEClientSubsystem::GetCharacterOptions1() const
 
 uint32 UACEClientSubsystem::GetCharacterOptions2() const
 {
-	return Session ? Session->GetCharacterOptions2() : 0;
+	const uint32 Bits = Session ? Session->GetCharacterOptions2() : 0;
+	return ACECameraSettings::GetUseMouseTurning() ? Bits | ACECharacterOptions::MouseTurningFlag : Bits & ~ACECharacterOptions::MouseTurningFlag;
 }
 
 TArray<int32> UACEClientSubsystem::GetCharacterTitleIds() const

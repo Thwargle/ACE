@@ -141,8 +141,9 @@ void FACESession::Disconnect()
 	DeathLevel = 0;
 	LinkStatus = FACELinkStatus();
 	PingRequestSentAt = 0.0;
-	PacketsSentApprox = 0;
-	RetransmitRequestsApprox = 0;
+	EchoTimeOrigin = 0.0;
+	PendingEchoTimes.Reset();
+	for (auto& Bucket : LinkTraffic) Bucket = FLinkTrafficBucket();
 	PlayerGuid = 0;
 	bLocalPlayerIsAdmin = false;
 	CurrentStance = ACEMotion::StanceNonCombat;
@@ -160,6 +161,8 @@ void FACESession::Disconnect()
 	LastRequestForRetransmitTime = 0.0;
 	ConnectResponseRetryTimer = 0.f;
 	CharacterListWaitTimer = 0.f;
+	PendingCharacterMutation = 0;
+	CharacterManagementError.Reset();
 	ConnectResponseRetriesSent = 0;
 	SetState(EACESessionState::Disconnected);
 }
@@ -260,8 +263,9 @@ void FACESession::ClearWorldState()
 	DeathLevel = 0;
 	LinkStatus = FACELinkStatus();
 	PingRequestSentAt = 0.0;
-	PacketsSentApprox = 0;
-	RetransmitRequestsApprox = 0;
+	EchoTimeOrigin = 0.0;
+	PendingEchoTimes.Reset();
+	for (auto& Bucket : LinkTraffic) Bucket = FLinkTrafficBucket();
 	PlayerGuid = 0;
 	bLocalPlayerIsAdmin = false;
 	PlayerPosition = FACEPosition();
@@ -362,6 +366,14 @@ bool FACESession::HasConnectionTimedOut(double Now) const
 void FACESession::Tick(float DeltaSeconds)
 {
 	ACE_PROFILE_SCOPE(Network);
+	if (PendingCharacterMutation && FPlatformTime::Seconds() - CharacterMutationSentAt > 20.0)
+	{
+		// Refresh the authoritative roster after a lost reply. Never retry a
+		// destructive slot-based action against a potentially changed list.
+		const FACELoginCredentials RetryCredentials = Creds;
+		Connect(RetryCredentials);
+		return;
+	}
 	// Check wall time before draining queued packets: after headset suspension,
 	// old packets must not make a dead session appear alive again. Reauthenticate
 	// once and stop at character selection; never automatically enter a character.
@@ -452,7 +464,7 @@ void FACESession::Tick(float DeltaSeconds)
 	{
 		// Periodic EchoRequest helps keep session alive / RTT
 		FACEBinaryWriter Body;
-		Body.WriteFloat(FPlatformTime::Seconds());
+		Body.WriteFloat(RecordEchoRequest(FPlatformTime::Seconds()));
 		SendRawPacket(EACEPacketHeaderFlags::EchoRequest | EACEPacketHeaderFlags::EncryptedChecksum,
 			Body.GetData(), {}, false, true, ClientId);
 		EchoTimer = 0.f;
@@ -579,8 +591,6 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 			RetransmitSequences.Add(Payload.ReadUInt32());
 		}
 		OptionalBytes.Append(Payload.GetData() + Start, 4 + static_cast<int32>(Count * 4));
-		RetransmitRequestsApprox += Count;
-		PacketsSentApprox += FMath::Max(1u, Count);
 	}
 	if (EnumHasAnyFlags(Flags, EACEPacketHeaderFlags::RejectRetransmit))
 	{
@@ -753,6 +763,7 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 		return;
 	}
 	if (bEncrypted) LastServerPacketAt = ReceivedAt;
+	if (!RetransmitSequences.IsEmpty()) RecordLinkTraffic(ReceivedAt, 0, RetransmitSequences.Num());
 	if (bHasNetError && (NetErrorStringId || NetErrorTableId))
 	{
 		if (State == EACESessionState::Failed || State == EACESessionState::Disconnected) return;
@@ -847,7 +858,7 @@ void FACESession::ProcessOrderedS2CPacket(uint32 Sequence, EACEPacketHeaderFlags
 	}
 	if (EchoResponseClientTime >= 0.f)
 	{
-		UpdateLinkStatusFromEcho(EchoResponseClientTime);
+		UpdateLinkStatusFromEcho(EchoResponseClientTime, ReceivedAt);
 	}
 
 	if (Sequence != 0 && Flags != EACEPacketHeaderFlags::AckSequence)
@@ -1225,7 +1236,7 @@ void FACESession::SendRawPacket(
 
 	int32 Sent = 0;
 	Sock->SendTo(Packet.GetData(), Packet.Num(), Sent, *Dest);
-	++PacketsSentApprox;
+	if (Sent == Packet.Num()) RecordLinkTraffic(FPlatformTime::Seconds(), 1, 0);
 }
 
 void FACESession::SendGameMessage(uint32 Opcode, const TArray<uint8>& PayloadAfterOpcode, uint16 Queue, bool bEncrypted)
@@ -1302,7 +1313,11 @@ void FACESession::HandleGameMessage(const TArray<uint8>& MessageBytes)
 	switch (Opcode)
 	{
 	case 0xF643:
-		HandleCharacterCreated(Reader);
+		if (PendingCharacterMutation && bRestoringCharacter) HandleCharacterRestored(Reader);
+		else HandleCharacterCreated(Reader);
+		break;
+	case 0xF655:
+		// Delete acknowledgement has no roster. Wait for CharacterList.
 		break;
 	case ACEOpcode::CharacterList:
 		HandleCharacterList(Reader);
@@ -1315,6 +1330,13 @@ void FACESession::HandleGameMessage(const TArray<uint8>& MessageBytes)
 	{
 		if (Reader.Remaining() < 4) break;
 		const uint32 ErrorCode = Reader.ReadUInt32();
+		if (State == EACESessionState::CharacterSelect && PendingCharacterMutation)
+		{
+			CharacterManagementError = FString::Printf(TEXT("The server could not %s this character (error %u)."),
+				bRestoringCharacter ? TEXT("restore") : TEXT("delete"), ErrorCode);
+			PendingCharacterMutation = 0;
+			break;
+		}
 		ConnectionError = FString::Printf(TEXT("The server rejected this connection (error %u)."), ErrorCode);
 		Log(FString::Printf(TEXT("CharacterError code=%u - login rejected by server"), ErrorCode));
 		if (State == EACESessionState::EnteringWorld && PlayerGuid == 0)
@@ -1495,6 +1517,8 @@ void FACESession::HandleCharacterList(FACEBinaryReader& Reader)
 	}
 	Reader.ReadUInt32(); // 0
 	CharacterSlotCount = FMath::Clamp(static_cast<int32>(Reader.ReadUInt32()), 1, 100);
+	PendingCharacterMutation = 0;
+	CharacterManagementError.Reset();
 	bCharacterCreationPending = false;
 	AccountName = Reader.ReadString16L();
 
@@ -4518,7 +4542,7 @@ bool FACESession::TryGetVitaeMultiplier(float& OutMultiplier) const
 
 void FACESession::SendPingRequest()
 {
-	if (State != EACESessionState::InWorld)
+	if (State != EACESessionState::InWorld || (PingRequestSentAt > 0.0 && FPlatformTime::Seconds() - PingRequestSentAt < 120.0))
 	{
 		return;
 	}
@@ -4526,21 +4550,56 @@ void FACESession::SendPingRequest()
 	SendGameAction(ACEGameAction::PingRequest, {}, ACEQueue::UIQueue);
 }
 
-void FACESession::UpdateLinkStatusFromEcho(float ClientTimeSent)
+void FACESession::RecordLinkTraffic(double Now, uint32 Sent, uint32 Retransmits)
 {
-	const float Now = static_cast<float>(FPlatformTime::Seconds());
-	if (ClientTimeSent > 0.f && ClientTimeSent <= Now)
+	const int64 Second = FMath::FloorToInt64(Now);
+	auto& Bucket = LinkTraffic[Second % UE_ARRAY_COUNT(LinkTraffic)];
+	if (Bucket.Second != Second) { Bucket = FLinkTrafficBucket(); Bucket.Second = Second; }
+	Bucket.Sent += Sent;
+	Bucket.Retransmits += Retransmits;
+}
+
+FACELinkStatus FACESession::GetLinkStatus() const
+{
+	return GetLinkStatusAt(FPlatformTime::Seconds());
+}
+
+FACELinkStatus FACESession::GetLinkStatusAt(double Now) const
+{
+	FACELinkStatus Status = LinkStatus;
+	Status.bConnected = State >= EACESessionState::CharacterSelect && State < EACESessionState::Failed;
+	Status.SecondsSinceLastPacket = LastServerPacketAt > 0.0 ? FMath::Max(0.0, Now - LastServerPacketAt) : 0.f;
+	uint64 Sent = 0, Retransmits = 0;
+	const int64 Second = FMath::FloorToInt64(Now);
+	for (const auto& Bucket : LinkTraffic)
+		if (Bucket.Second >= 0 && Bucket.Second <= Second && Second - Bucket.Second < UE_ARRAY_COUNT(LinkTraffic))
+		{ Sent += Bucket.Sent; Retransmits += Bucket.Retransmits; }
+	Status.PacketLossPercent = Sent + Retransmits > 0 ? 100.f * Retransmits / (Sent + Retransmits) : 0.f;
+	return Status;
+}
+
+float FACESession::RecordEchoRequest(double SentAt)
+{
+	if (EchoTimeOrigin == 0.0) EchoTimeOrigin = SentAt - 1.0;
+	const float Token = static_cast<float>(SentAt - EchoTimeOrigin);
+	for (auto It = PendingEchoTimes.CreateIterator(); It; ++It)
+		if (SentAt - It.Value() > 30.0) It.RemoveCurrent();
+	PendingEchoTimes.Add(Token, SentAt);
+	return Token;
+}
+
+void FACESession::UpdateLinkStatusFromEcho(float ClientTimeSent, double ReceivedAt)
+{
+	// The wire timestamp is float. Never subtract two absolute float clock values:
+	// FPlatformTime's large origin can round a normal internet roundtrip to zero.
+	double SentAt = 0.0;
+	if (PendingEchoTimes.RemoveAndCopyValue(ClientTimeSent, SentAt)
+		&& ReceivedAt > SentAt && ReceivedAt - SentAt <= 30.0)
 	{
-		LinkStatus.RoundTripSeconds = FMath::Max(0.f, Now - ClientTimeSent);
+		LinkStatus.RoundTripSeconds = static_cast<float>(ReceivedAt - SentAt);
 		LinkStatus.bHasPing = true;
 	}
-	LinkStatus.bConnected = (State >= EACESessionState::CharacterSelect);
-	if (PacketsSentApprox > 0)
-	{
-		LinkStatus.PacketLossPercent = 100.f * static_cast<float>(RetransmitRequestsApprox)
-			/ static_cast<float>(PacketsSentApprox);
-	}
-	OnLinkStatusChanged.Broadcast(LinkStatus);
+	OnLinkStatusChanged.Broadcast(GetLinkStatus());
 }
 
 void FACESession::HandlePingResponse(FACEBinaryReader& /*Reader*/)
@@ -4551,8 +4610,7 @@ void FACESession::HandlePingResponse(FACEBinaryReader& /*Reader*/)
 		LinkStatus.bHasPing = true;
 		PingRequestSentAt = 0.0;
 	}
-	LinkStatus.bConnected = true;
-	OnLinkStatusChanged.Broadcast(LinkStatus);
+	OnLinkStatusChanged.Broadcast(GetLinkStatus());
 }
 
 void FACESession::RecomputeAttributeEnchantments(FACEPlayerVitals& OutVitals)
@@ -7177,7 +7235,7 @@ void FACESession::SendTargetedMissileAttack(int32 TargetGuid, uint32 AttackHeigh
 
 bool FACESession::CreateCharacter(const FACECGSelection& Selection)
 {
-    if (State != EACESessionState::CharacterSelect || !SocketC2S || !ServerC2SAddr.IsValid() || !IssacClient || bCharacterCreationPending || Characters.Num() >= CharacterSlotCount) return false;
+    if (State != EACESessionState::CharacterSelect || !SocketC2S || !ServerC2SAddr.IsValid() || !IssacClient || bCharacterCreationPending || PendingCharacterMutation != 0 || Characters.Num() >= CharacterSlotCount) return false;
     FACEBinaryWriter Payload; Payload.WriteString16L(AccountName); Selection.Write(Payload);
     bCharacterCreationPending = true;
     SendGameMessage(0xF656, Payload.GetData(), ACEQueue::UIQueue, true);
@@ -7205,9 +7263,67 @@ void FACESession::HandleCharacterCreated(FACEBinaryReader& Reader)
     OnCharacterCreated.Broadcast(Result, Info);
 }
 
+bool FACESession::BuildCharacterMutation(int32 CharacterId, bool bRestore, TArray<uint8>& Payload) const
+{
+	Payload.Reset();
+	if (State != EACESessionState::CharacterSelect || PendingCharacterMutation || bCharacterCreationPending) return false;
+	const int32 Slot = Characters.IndexOfByPredicate([CharacterId](const FACECharacterInfo& C) { return C.CharacterId == CharacterId; });
+	if (Slot == INDEX_NONE || (Characters[Slot].DeleteSeconds != 0) != bRestore || AccountName.IsEmpty()) return false;
+	FACEBinaryWriter Writer;
+	// CPlayerSystem::DeleteCharacter sends account + original server-list slot;
+	// RestoreCharacter sends the GUID. Never sort the backing roster.
+	if (bRestore) Writer.WriteUInt32(static_cast<uint32>(CharacterId));
+	else { Writer.WriteString16L(AccountName); Writer.WriteUInt32(static_cast<uint32>(Slot)); }
+	Payload = Writer.GetData();
+	return true;
+}
+
+bool FACESession::DeleteCharacter(int32 CharacterId)
+{
+	TArray<uint8> Payload;
+	if (!SocketC2S || !ServerC2SAddr.IsValid() || !IssacClient || !BuildCharacterMutation(CharacterId, false, Payload)) return false;
+	PendingCharacterMutation = CharacterId; bRestoringCharacter = false;
+	CharacterMutationSentAt = FPlatformTime::Seconds(); CharacterManagementError.Reset();
+	SendGameMessage(0xF655, Payload, ACEQueue::UIQueue, true);
+	return true;
+}
+
+bool FACESession::RestoreCharacter(int32 CharacterId)
+{
+	TArray<uint8> Payload;
+	if (!SocketC2S || !ServerC2SAddr.IsValid() || !IssacClient || !BuildCharacterMutation(CharacterId, true, Payload)) return false;
+	PendingCharacterMutation = CharacterId; bRestoringCharacter = true;
+	CharacterMutationSentAt = FPlatformTime::Seconds(); CharacterManagementError.Reset();
+	SendGameMessage(0xF7D9, Payload, ACEQueue::UIQueue, true);
+	return true;
+}
+
+void FACESession::HandleCharacterRestored(FACEBinaryReader& Reader)
+{
+	if (State != EACESessionState::CharacterSelect || !PendingCharacterMutation || !bRestoringCharacter || !Reader.CanRead(4)) return;
+	const uint32 Result = Reader.ReadUInt32();
+	if (Result == 2) return; // Verification still in progress.
+	if (Result != 1)
+	{
+		CharacterManagementError = Result == 3 ? TEXT("That character name is now in use. The character could not be restored.")
+			: TEXT("The server could not restore this character.");
+		PendingCharacterMutation = 0;
+		return;
+	}
+	if (!Reader.CanRead(6)) return;
+	FACECharacterInfo Info; Info.CharacterId = Reader.ReadUInt32();
+	const int32 Start = Reader.Tell(); const uint16 Length = Reader.ReadUInt16(); Reader.Seek(Start);
+	if (!Reader.CanRead(((Length + 2 + 3) & ~3) + 4)) return;
+	Info.Name = Reader.ReadString16L(); Info.DeleteSeconds = Reader.ReadUInt32();
+	if (Info.CharacterId != PendingCharacterMutation || Info.Name.IsEmpty()) return;
+	if (auto* Existing = Characters.FindByPredicate([&](const FACECharacterInfo& C) { return C.CharacterId == Info.CharacterId; })) *Existing = Info;
+	PendingCharacterMutation = 0; CharacterManagementError.Reset();
+	OnCharacterList.Broadcast(Characters, ServerName);
+}
+
 bool FACESession::EnterWorld(int32 CharacterId)
 {
-	if (State != EACESessionState::CharacterSelect) return false;
+	if (State != EACESessionState::CharacterSelect || PendingCharacterMutation) return false;
 	const auto* Character=Characters.FindByPredicate([CharacterId](const FACECharacterInfo& C)
 		{ return C.CharacterId==CharacterId; });
 	if (!Character || Character->DeleteSeconds!=0) return false;

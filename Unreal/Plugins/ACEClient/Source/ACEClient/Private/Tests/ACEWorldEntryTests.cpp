@@ -36,6 +36,7 @@
 #include "InputKeyEventArgs.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "ACEInputBindings.h"
+#include "ACEKeyboardRouter.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Sockets.h"
 #include "SocketSubsystem.h"
@@ -65,7 +66,11 @@ namespace
             auto& Context = GEngine->CreateNewWorldContext(EWorldType::Game);
             Context.SetCurrentWorld(World);
             GI = NewObject<UGameInstance>(GEngine); World->SetGameInstance(GI);
-            Context.OwningGameInstance = GI; GI->Init();
+            Context.OwningGameInstance = GI;
+            // Runtime Chaos cooking resolves its game world through the mesh's
+            // DAT subsystem. Setting the world's GI alone does not set GI->GetWorld().
+            GI->OnWorldChanged(nullptr,World);
+            GI->Init();
         }
         ~FEntryWorld()
         {
@@ -467,7 +472,7 @@ bool FACETerrainArrivalTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailWorldEntryTest, "ACE.RetailParity.WorldEntry",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
 {
     FEntryWorld Fixture;
@@ -765,6 +770,38 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
         }
         Controller->PlayerInput->FlushPressedKeys();
         Controller->PlayerInput->ProcessInputStack({},.016f,false);
+        // Feed the physical-key mapping into the real gameplay poll. Num Lock
+        // must never turn an orbit key into forward/backward/turn movement.
+        for (bool NumLockOn : {false,true}) for (int32 Direction=0;Direction<4;++Direction)
+        {
+            const uint32 Scans[]={0x4B,0x4D,0x48,0x50}, Navigation[]={0x25,0x27,0x26,0x28}, Numpad[]={0x64,0x66,0x68,0x62};
+            const uint32 Mapped=FACEKeyboardRouter::NumpadVirtualKey(NumLockOn?Numpad[Direction]:Navigation[Direction],Scans[Direction],false);
+            const FKey PhysicalKey=FInputKeyManager::Get().GetKeyFromCodes(Mapped,0);
+            Controller->PlayerInput->FlushPressedKeys();PressKey(PhysicalKey);
+            Controller->PlayerInput->ProcessInputStack({},.016f,false);
+            Pawn->SetActorTransform(StartTransform);Controller->PredictedPose=StartPose;Controller->bHavePredictedPose=true;
+            Controller->bCameraDefaultsCaptured=true;TestBoom->SetRelativeRotation(FRotator(-15,0,0));
+            Controller->PlayerTick(.016f);
+            TestTrue(TEXT("Numpad camera input never supplies player movement in either Num Lock state"),
+                Controller->ForwardAxis==0 && Controller->RightAxis==0 && Controller->TurnAxis==0);
+            TestFalse(TEXT("Numpad still moves the camera in either Num Lock state"),TestBoom->GetRelativeRotation().Equals(FRotator(-15,0,0),.001));
+        }
+        Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.016f,false);
+        // Tiny mouse turns are below the packet-send threshold but still belong
+        // to local prediction; otherwise the next idle tick restores the old yaw.
+        Client->SendSetSingleCharacterOption(0x31,true);
+        Controller->bHavePredictedPose=false;Controller->bHaveLastServerPose=false;
+        Session->SetLocalPosition(StartPose);Pawn->SetActorTransform(StartTransform);
+        PressKey(EKeys::RightMouseButton);
+        Controller->PlayerInput->ProcessInputStack({},.016f,false);
+        TestBoom->SetRelativeRotation(FRotator(-15,.1f,0));
+        Controller->PlayerTick(.016f);
+        const FQuat TinyTurn=Pawn->GetActorQuat();
+        TestTrue(TEXT("Sub-threshold mouse turn retains prediction"),Controller->bHavePredictedPose && Controller->bLocalPredicting);
+        TestFalse(TEXT("Sub-threshold mouse turn actually changes facing"),TinyTurn.Equals(StartTransform.GetRotation(),.000001f));
+        Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.016f,false);
+        Controller->PlayerTick(.016f);
+        TestTrue(TEXT("Sub-threshold mouse turn survives the next idle frame"),Pawn->GetActorQuat().Equals(TinyTurn,.00001f));
         // The double-click interaction path must arrive and send Use with any orbit offset.
         // Use the actual controller, collision, network writer and isolated loopback socket.
         auto* ApproachSockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);

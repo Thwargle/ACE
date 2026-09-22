@@ -1676,8 +1676,9 @@ struct ACECLIENT_API FACELinkStatus
 
 	/** Round-trip seconds from last PingResponse or EchoResponse. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") float RoundTripSeconds = -1.f;
-	/** Approximate packet loss 0..100 from retransmit requests. */
+	/** Approximate packet loss 0..100 from retransmit requests in the last ten seconds. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") float PacketLossPercent = 0.f;
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") float SecondsSinceLastPacket = 0.f;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") bool bConnected = false;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") bool bHasPing = false;
 };

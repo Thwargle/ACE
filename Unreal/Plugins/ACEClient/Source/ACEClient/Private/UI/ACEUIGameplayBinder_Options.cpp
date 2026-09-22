@@ -724,7 +724,7 @@ bool UACEUIGameplayBinder::HandleOptionsNamedClick(const FString& Name)
 		if (Client)
 		{
 			Client->SendCharacterOptions(ACECharacterOptions::Options1Default,
-				ACECharacterOptions::Options2Default);
+				ACECharacterOptions::Options2Default | ACECharacterOptions::MouseTurningFlag);
 			PostInventorySystemMessage(TEXT("Options restored to defaults."));
 		}
 		RefreshOptionsOverlays();

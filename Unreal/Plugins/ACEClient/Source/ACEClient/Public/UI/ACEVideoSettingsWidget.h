@@ -6,6 +6,15 @@ class UComboBoxString;
 class UCheckBox;
 class USlider;
 class UScrollBox;
+/** An option is a user widget so its Slate SObjectWidget keeps the DAT label alive during GC. */
+UCLASS()
+class ACECLIENT_API UACERetailOptionWidget : public UUserWidget
+{
+ GENERATED_BODY()
+public:
+ FString Option;
+ virtual TSharedRef<SWidget> RebuildWidget() override;
+};
 UCLASS()
 class ACECLIENT_API UACEVideoSettingsWidget : public UUserWidget
 {

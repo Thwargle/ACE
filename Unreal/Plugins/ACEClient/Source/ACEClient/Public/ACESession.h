@@ -103,6 +103,10 @@ public:
 	DECLARE_MULTICAST_DELEGATE_TwoParams(FOnCharacterCreated, uint32, const FACECharacterInfo&);
 	FOnCharacterCreated OnCharacterCreated;
 	bool CreateCharacter(const FACECGSelection& Selection);
+	bool DeleteCharacter(int32 CharacterId);
+	bool RestoreCharacter(int32 CharacterId);
+	bool IsCharacterManagementPending() const { return PendingCharacterMutation != 0; }
+	const FString& GetCharacterManagementError() const { return CharacterManagementError; }
 	bool IsCharacterCreationPending() const { return bCharacterCreationPending; }
 	int32 GetCharacterSlotCount() const { return CharacterSlotCount; }
 	FACEOnEnteredWorld OnEnteredWorld;
@@ -213,7 +217,7 @@ public:
 	bool TryGetVitaeMultiplier(float& OutMultiplier) const;
 	int32 GetVitaeCpPool() const { return VitaeCpPool; }
 	int32 GetDeathLevel() const { return DeathLevel; }
-	FACELinkStatus GetLinkStatus() const { return LinkStatus; }
+	FACELinkStatus GetLinkStatus() const;
 	/** GameAction PingRequest (0x01E9) — LinkStatus panel RTT. */
 	void SendPingRequest();
 
@@ -572,6 +576,13 @@ private:
 	void HandleConnectRequest(FACEBinaryReader& Body);
 	void HandleGameMessage(const TArray<uint8>& MessageBytes);
 	void HandleCharacterList(FACEBinaryReader& Reader);
+	friend class FACECharacterManagementTest;
+	bool BuildCharacterMutation(int32 CharacterId, bool bRestore, TArray<uint8>& Payload) const;
+	void HandleCharacterRestored(FACEBinaryReader& Reader);
+	int32 PendingCharacterMutation = 0;
+	bool bRestoringCharacter = false;
+	double CharacterMutationSentAt = 0;
+	FString CharacterManagementError;
 	void HandleCharacterCreated(FACEBinaryReader& Reader);
 	bool bCharacterCreationPending = false;
 	int32 CharacterSlotCount = 11;
@@ -718,7 +729,8 @@ private:
 	void UpsertEnchantment(const FACEActiveEnchantment& Entry);
 	void RemoveEnchantment(uint16 SpellId, uint16 Layer);
 	void NotifyEnchantmentsChanged();
-	void UpdateLinkStatusFromEcho(float ClientTimeSent);
+	float RecordEchoRequest(double SentAt);
+	void UpdateLinkStatusFromEcho(float ClientTimeSent, double ReceivedAt);
 	void UpsertWorldObject(const FACEWorldObject& Object);
 	void MaybeEnterWorldComplete();
 	void SetSelectedObjectInternal(const FACESelectedObject& Sel);
@@ -899,9 +911,18 @@ private:
 	int32 VitaeCpPool = 0;
 	int32 DeathLevel = 0;
 	FACELinkStatus LinkStatus;
+	friend class FACELinkTimingTest;
+	double EchoTimeOrigin = 0.0;
+	TMap<float, double> PendingEchoTimes;
 	double PingRequestSentAt = 0.0;
-	uint32 PacketsSentApprox = 0;
-	uint32 RetransmitRequestsApprox = 0;
+	struct FLinkTrafficBucket
+	{
+		int64 Second = -1;
+		uint32 Sent = 0, Retransmits = 0;
+	};
+	FLinkTrafficBucket LinkTraffic[10];
+	void RecordLinkTraffic(double Now, uint32 Sent, uint32 Retransmits);
+	FACELinkStatus GetLinkStatusAt(double Now) const;
 	/** Retail shortcut bar, zero-based slots. Value is an inventory object GUID. */
 	TArray<int32> ShortcutObjects;
 

@@ -23,6 +23,7 @@
 #include "Components/MultiLineEditableText.h"
 #include "Engine/UserInterfaceSettings.h"
 #include "UI/ACEUIFontStyles.h"
+#include "Dat/ACEDatTextLayout.h"
 #include "Components/Button.h"
 #include "Misc/ConfigCacheIni.h"
 #include "ACEPlayerController.h"
@@ -67,6 +68,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailScreenTest,"ACE.RetailParity.UIScreen
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACERetailScreenTest::RunTest(const FString& Parameters)
 {
+    TGuardValue<FString> ScreenSettingsPath(GGameUserSettingsIni,FPaths::ProjectSavedDir()/TEXT("Automation/ScreenPreferencesFixture.ini"));
+    FConfigFile ScreenPreferences;ScreenPreferences.NoSave=true;GConfig->SetFile(GGameUserSettingsIni,&ScreenPreferences);
     TestEqual(TEXT("Gameplay uses physical pixels at 1440p"),GetDefault<UUserInterfaceSettings>()->GetDPIScaleBasedOnSize(FIntPoint(2560,1440)),1.f);
     TestEqual(TEXT("Retail base font is distinct from sans"),ACEUIFontStyles::FontIdForStyleName(TEXT("basefont16")),0x40000000u);
     TestEqual(TEXT("Retail sans font retains its own atlas"),ACEUIFontStyles::FontIdForStyleName(TEXT("sansfont16")),0x40000009u);
@@ -2220,6 +2223,19 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Gameplay->ShowPanelPage(Page);Gameplay->TickRefresh();CaptureScreen(FString(TEXT("GameplayAudit"))+Page);
         }
         Gameplay->ShowPanelPage(TEXT("InventoryPanel_Field"));
+        {
+            const auto InventoryTitleElement=Manager->FindElementUnder(TEXT("InventoryPanel_Field"),TEXT("InvTitleText"));
+            TestTrue(TEXT("Inventory retains its retail title strip"),InventoryTitleElement && InventoryTitleElement->ImageFileId==0x06004CFA && InventoryTitleElement->Height==25);
+            if (InventoryTitleElement)
+            {
+                TestEqual(TEXT("Inventory retains the retail 18px font"),InventoryTitleElement->FontId,0x40000001u);
+                FACEDatFont TitleFont; Resources->ResolveFont(InventoryTitleElement->FontId,TitleFont);
+                const FString LongTitle=TEXT("Inventory of An Adventurer With A Very Long Character Name");
+                const FString Fitted=ACEDatText::Ellipsize(TitleFont,LongTitle,InventoryTitleElement->Width-10);
+                TestTrue(TEXT("Long inventory title ends with an ellipsis"),Fitted.EndsWith(TEXT("...")) && Fitted.Len()<LongTitle.Len());
+                TestTrue(TEXT("Inventory ellipsis fits inside native margins"),ACEDatText::Layout(TitleFont,Fitted,InventoryTitleElement->Width-10,true)[0].Width<=InventoryTitleElement->Width-10);
+            }
+        }
         Controller->MouseCursorWidget=NewObject<UACEMouseCursorWidget>(); Controller->MouseCursorWidget->Initialize();
         auto CursorSlate=Controller->MouseCursorWidget->TakeWidget();
         Controller->RetailCursorDefaultTex=Resources->ResolveIconTexture(0x06004D68);
@@ -2590,7 +2606,14 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         TArray<TWeakObjectPtr<UBorder>> Icons;
         for (UBorder* Icon : Gameplay->BuiltInSpellIconBorders) { Icon->RemoveFromParent(); Icons.Add(Icon); }
         Gameplay->CombatMode=1;
+        auto* Video=Cast<UACEVideoSettingsWidget>(Gameplay->VideoSettings);
+        UWidget* Generated=Video->GenerateOption(TEXT("High"));
+        TWeakObjectPtr<UWidget> OptionLifetime=Generated;
+        auto OptionSlate=Generated->TakeWidget();
         CollectGarbage(RF_NoFlags);
+        TestTrue(TEXT("Dropdown text retained by an open Slate menu survives GC"),OptionLifetime.IsValid());
+        if (auto* OptionRow=Cast<UACERetailOptionWidget>(OptionLifetime.Get()))
+            TestEqual(TEXT("Dropdown keeps the chosen value after GC"),Cast<UTextBlock>(OptionRow->WidgetTree->RootWidget)->GetText().ToString(),FString(TEXT("High")));
         bool Alive=true;
         for (const auto& Icon : Icons) Alive &= Icon.IsValid();
         TestTrue(TEXT("Innate spell widget cache survives garbage collection when unplaced"),Alive);

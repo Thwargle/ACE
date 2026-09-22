@@ -19,6 +19,7 @@ struct FACECharacterOptionDesc
 
 namespace ACECharacterOptions
 {
+	constexpr uint32 MouseTurningFlag = 0x00400000u;
 	enum EPage : uint8
 	{
 		PageCharacter = 0,
