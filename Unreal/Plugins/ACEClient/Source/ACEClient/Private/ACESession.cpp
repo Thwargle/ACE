@@ -120,6 +120,7 @@ void FACESession::Disconnect()
 	TradeSelfItems.Reset();
 	TradePartnerItems.Reset();
 	bUseBusy = false;
+	CancelEquipmentSwap();
 	CombatEventRevision = 0;
 	bServerAttackInProgress = false;
 	LastAttackError = 0;
@@ -242,6 +243,7 @@ void FACESession::ClearWorldState()
 	TradeSelfItems.Reset();
 	TradePartnerItems.Reset();
 	bUseBusy = false;
+	CancelEquipmentSwap();
 	CombatEventRevision = 0;
 	bServerAttackInProgress = false;
 	LastAttackError = 0;
@@ -369,6 +371,12 @@ bool FACESession::HasConnectionTimedOut(double Now) const
 void FACESession::Tick(float DeltaSeconds)
 {
 	ACE_PROFILE_SCOPE(Network);
+	if (PendingEquipmentGuid && FPlatformTime::Seconds() >= PendingEquipmentUntil)
+	{
+		CancelEquipmentSwap();
+		OnChatMessage.Broadcast(TEXT("Equipment change timed out. Please try again."), TEXT(""), ACEChatMessageType::TransientInfo);
+	}
+
 	if (PendingCharacterMutation && FPlatformTime::Seconds() - CharacterMutationSentAt > 20.0)
 	{
 		// Refresh the authoritative roster after a lost reply. Never retry a
@@ -1630,6 +1638,20 @@ void FACESession::UpsertWorldObject(const FACEWorldObject& Object)
 			Merged.Name = Existing->Name;
 		}
 	}
+	// ViewContents and CreateObject use separate ordered queues. The list can arrive
+	// before an item (or its containing bag); recover membership before publishing
+	// that item to inventory/appraisal consumers, including descriptions without Container.
+	if (!Merged.ContainerId && !Merged.WielderId && !Merged.CurrentWieldedLocation && !Merged.bHasPosition)
+	{
+		for (const auto& Contents : ContainerContents)
+		{
+			if (Contents.Value.ContainsByPredicate([&](const FACEContainerItemRef& Ref) { return Ref.ItemGuid == Merged.Guid; }))
+			{
+				Merged.ContainerId = Contents.Key;
+				break;
+			}
+		}
+	}
 	// CreateObject has no PropertyInt.PlacementPosition. Retail fills the pack from
 	// PlayerDescription ContentProfile order (ACE OrderBy PlacementPosition, densified
 	// 0..n-1 on load). Stamp that index when ObjectCreate arrives after the footer.
@@ -1895,6 +1917,12 @@ void FACESession::HandleObjectDelete(FACEBinaryReader& Reader)
 	}
 	if (!bKeepInventoryRecord)
 	{
+		if (OpenExternalContainerGuid == Guid)
+		{
+			OpenExternalContainerGuid = 0;
+			OnCloseGroundContainer.Broadcast(Guid);
+			ClearContainerContents(Guid);
+		}
 		if (SelectedObject.Guid == Guid) SelectObject(0);
 		VRPoses.Remove(Guid);
 		WorldObjects.Remove(Guid);
@@ -1928,6 +1956,15 @@ void FACESession::HandlePlayerTeleport(FACEBinaryReader& Reader)
 	Reader.Align();
 	Log(FString::Printf(TEXT("PlayerTeleport seq=%u"), ObjectTeleportSeq));
 	SelectObject(0);
+	if (OpenExternalContainerGuid != 0)
+	{
+		// Recall/portal entry revokes the old interaction immediately; a matching
+		// CloseGroundContainer packet is not guaranteed before the new world loads.
+		const int32 OldContainer = OpenExternalContainerGuid;
+		OpenExternalContainerGuid = 0;
+		OnCloseGroundContainer.Broadcast(OldContainer);
+		ClearContainerContents(OldContainer);
+	}
 	// Retail SmartBox::HandlePlayerTeleport enters portal space on this message —
 	// before the destination UpdatePosition arrives. Mirror that so the tunnel is up
 	// instantly and the old world never flashes.
@@ -4053,16 +4090,106 @@ void FACESession::SendCharacterOptions(uint32 Options1, uint32 Options2)
 	SendGameAction(ACEGameAction::SetCharacterOptions, W.GetData(), ACEQueue::WeenieQueue);
 }
 
-void FACESession::SendGetAndWieldItem(int32 ItemGuid, int64 WieldLocation)
+void FACESession::CancelEquipmentSwap()
 {
-	if (State != EACESessionState::InWorld || ItemGuid == 0 || WieldLocation == 0)
+	PendingEquipmentGuid = 0;
+	PendingEquipmentCombatMode = 0;
+	bPendingEquipmentWieldSent = false;
+	PendingEquipmentLocation = 0;
+	PendingEquipmentRemovals.Reset();
+	PendingEquipmentUntil = 0.0;
+}
+
+void FACESession::AdvanceEquipmentSwap()
+{
+	if (!PendingEquipmentGuid || bPendingEquipmentWieldSent || State != EACESessionState::InWorld) return;
+	PendingEquipmentUntil = FPlatformTime::Seconds() + 15.0;
+	if (!PendingEquipmentRemovals.IsEmpty())
 	{
+		SendPutItemInContainer(PendingEquipmentRemovals[0], PlayerGuid, 0);
 		return;
 	}
 	FACEBinaryWriter W;
-	W.WriteUInt32(static_cast<uint32>(ItemGuid));
-	W.WriteInt32(static_cast<int32>(WieldLocation));
+	W.WriteUInt32(static_cast<uint32>(PendingEquipmentGuid));
+	W.WriteInt32(static_cast<int32>(PendingEquipmentLocation));
+	bPendingEquipmentWieldSent = true;
 	SendGameAction(ACEGameAction::GetAndWieldItem, W.GetData(), ACEQueue::WeenieQueue);
+}
+
+void FACESession::SendGetAndWieldItem(int32 Guid, int64 Loc)
+{
+	if (State != EACESessionState::InWorld || !Guid || !Loc || PendingEquipmentGuid) return;
+	FACEWorldObject Obj;
+	GetWorldObject(Guid, Obj);
+	TArray<FACEWorldObject> Equipped;
+	GetEquippedItems(Equipped);
+	PendingEquipmentGuid = Guid;
+	PendingEquipmentLocation = Loc;
+	PendingEquipmentCombatMode = PlayerVitals.CombatMode;
+	if (PendingEquipmentCombatMode != 0 && PendingEquipmentCombatMode != ACECombatMode::NonCombat)
+	{
+		if (Loc & ACEEquipMask::Held) PendingEquipmentCombatMode = ACECombatMode::Magic;
+		else if (Loc & ACEEquipMask::MissileWeapon) PendingEquipmentCombatMode = ACECombatMode::Missile;
+		else if (Loc & (ACEEquipMask::MeleeWeapon | ACEEquipMask::TwoHanded)) PendingEquipmentCombatMode = ACECombatMode::Melee;
+	}
+	constexpr int64 WeaponHand = ACEEquipMask::MeleeWeapon | ACEEquipMask::TwoHanded
+		| ACEEquipMask::MissileWeapon | ACEEquipMask::Held;
+	constexpr int64 Jewelry = ACEEquipMask::NeckWear | ACEEquipMask::WristWearLeft
+		| ACEEquipMask::WristWearRight | ACEEquipMask::FingerWearLeft | ACEEquipMask::FingerWearRight
+		| ACEEquipMask::TrinketOne | ACEEquipMask::Cloak | ACEEquipMask::SigilOne
+		| ACEEquipMask::SigilTwo | ACEEquipMask::SigilThree;
+	const bool bWeaponHand = (Loc & WeaponHand) != 0;
+	const uint32 NewCov = ACEInferClothingPriority(Loc, Obj.ItemType);
+	const bool bClothingOrArmor = NewCov != 0;
+
+	for (const FACEWorldObject& Eq : Equipped)
+	{
+		if (Eq.Guid == Guid || Eq.CurrentWieldedLocation == 0)
+		{
+			continue;
+		}
+		const int64 EqLoc = Eq.CurrentWieldedLocation;
+		bool bConflict = false;
+		if ((Loc == ACEEquipMask::Shield && ((EqLoc & (ACEEquipMask::Held | ACEEquipMask::TwoHanded)) != 0
+			|| ((EqLoc & ACEEquipMask::MissileWeapon) != 0 && Eq.AmmoType != 0)))
+			|| ((EqLoc & ACEEquipMask::Shield) != 0 && ((Loc & (ACEEquipMask::Held | ACEEquipMask::TwoHanded)) != 0
+				|| ((Loc & ACEEquipMask::MissileWeapon) != 0 && Obj.AmmoType != 0))))
+		{
+			bConflict = true;
+		}
+		else if (bWeaponHand && (EqLoc & WeaponHand) != 0)
+		{
+			bConflict = true;
+		}
+		else if (bClothingOrArmor)
+		{
+			// Retail Creature_Equipment: Clothing conflicts use ClothingPriority, not EquipMask.
+			const uint32 EqCov = ACEInferClothingPriority(EqLoc, Eq.ItemType);
+			if (EqCov != 0)
+			{
+				bConflict = (NewCov & EqCov) != 0;
+			}
+			else if ((EqLoc & Loc) != 0)
+			{
+				bConflict = true;
+			}
+		}
+		else if ((Loc & Jewelry) != 0 && (EqLoc & Loc) != 0)
+		{
+			bConflict = true;
+		}
+		else if ((EqLoc & Loc) != 0 && ACEInferClothingPriority(EqLoc, Eq.ItemType) == 0)
+		{
+			bConflict = true;
+		}
+		if (bConflict)
+		{
+			PendingEquipmentRemovals.Add(Eq.Guid);
+		}
+	}
+	// PutItemInContainer can wait for a stance animation on the server. Sending
+	// Wield in the same burst races that dequip and leaves the new item unwielded.
+	AdvanceEquipmentSwap();
 }
 
 void FACESession::SendDropItem(int32 ItemGuid)
@@ -5123,7 +5250,27 @@ void FACESession::HandleViewContents(FACEBinaryReader& Reader)
 	ContainerContents.FindOrAdd(ContainerGuid) = MoveTemp(Items);
 	RestampContainerListPlacements(ContainerGuid);
 
-	bool bIsPlayerInventory = (ContainerGuid == PlayerGuid);
+	// Contents for a bag inside a corpse are metadata for the same open root,
+	// not a second container-open event. Resolve through lists as well as objects
+	// because ACE sends root/bag ViewContents before the corresponding creates.
+	int32 RootGuid = ContainerGuid;
+	TSet<int32> VisitedContainers;
+	while (RootGuid && !VisitedContainers.Contains(RootGuid))
+	{
+		VisitedContainers.Add(RootGuid);
+		int32 ParentGuid = 0;
+		if (const FACEWorldObject* Obj = WorldObjects.Find(RootGuid)) ParentGuid = Obj->ContainerId;
+		if (!ParentGuid)
+			for (const auto& Contents : ContainerContents)
+				if (Contents.Value.ContainsByPredicate([&](const FACEContainerItemRef& Ref) { return Ref.ItemGuid == RootGuid; }))
+				{
+					ParentGuid = Contents.Key;
+					break;
+				}
+		if (!ParentGuid) break;
+		RootGuid = ParentGuid;
+	}
+	bool bIsPlayerInventory = (RootGuid == PlayerGuid);
 	if (!bIsPlayerInventory)
 	{
 		TArray<FACEWorldObject> Packs;
@@ -5154,8 +5301,8 @@ void FACESession::HandleViewContents(FACEBinaryReader& Reader)
 
 	if (!bIsPlayerInventory || bExternalByType)
 	{
-		OpenExternalContainerGuid = ContainerGuid;
-		OnViewContentsExternal.Broadcast(ContainerGuid);
+		OpenExternalContainerGuid = RootGuid;
+		OnViewContentsExternal.Broadcast(RootGuid);
 	}
 }
 
@@ -5166,21 +5313,24 @@ void FACESession::HandleCloseGroundContainer(FACEBinaryReader& Reader)
 		return;
 	}
 	const int32 ContainerGuid = static_cast<int32>(Reader.ReadUInt32());
-	// Do not clear ContainerContents here — loot UI may still be open (PendingLootClose /
-	// range debounce). Clearing made GetPackItems fall back to an unstable TMap scan and
-	// the item list appeared to flip. Binder calls ClearContainerContents on hide.
+	// Close the presentation before discarding its list. Never leave clickable
+	// loot behind after the server has revoked access, even when still in range.
 	if (OpenExternalContainerGuid == ContainerGuid)
 	{
 		OpenExternalContainerGuid = 0;
 	}
 	OnCloseGroundContainer.Broadcast(ContainerGuid);
+	ClearContainerContents(ContainerGuid);
 }
 
 void FACESession::ClearContainerContents(int32 ContainerGuid)
 {
 	if (ContainerGuid != 0)
 	{
-		ContainerContents.Remove(ContainerGuid);
+		TArray<FACEContainerItemRef> Contents;
+		ContainerContents.RemoveAndCopyValue(ContainerGuid, Contents);
+		for (const auto& Ref : Contents)
+			if (Ref.ContainerType != 0 && Ref.ItemGuid != ContainerGuid) ClearContainerContents(Ref.ItemGuid);
 	}
 }
 
@@ -5801,6 +5951,16 @@ void FACESession::HandleInventoryPutObjInContainer(FACEBinaryReader& Reader)
 	}
     if (PrevContainer) RestampContainerListPlacements(PrevContainer);
     RestampContainerListPlacements(ContainerGuid);
+	if (!PendingEquipmentRemovals.IsEmpty() && ItemGuid == PendingEquipmentRemovals[0])
+	{
+		if (ContainerGuid == PlayerGuid)
+		{
+			PendingEquipmentRemovals.RemoveAt(0);
+			AdvanceEquipmentSwap();
+		}
+		else CancelEquipmentSwap();
+	}
+
 }
 
 void FACESession::HandleWieldItem(FACEBinaryReader& Reader)
@@ -5950,6 +6110,15 @@ void FACESession::HandleWieldItem(FACEBinaryReader& Reader)
 	{
 		RemoveFromContainerLists(ItemGuid);
 	}
+	if (ItemGuid == PendingEquipmentGuid && bPendingEquipmentWieldSent)
+	{
+		const uint32 RestoreMode = PendingEquipmentCombatMode;
+		CancelEquipmentSwap();
+		// A wand dequip legitimately passes through unarmed Melee. Restore the
+		// requested stance only after the replacement is authoritatively equipped.
+		if (RestoreMode != 0 && RestoreMode != static_cast<uint32>(PlayerVitals.CombatMode))
+			SendChangeCombatMode(RestoreMode);
+	}
 }
 
 void FACESession::HandleInventoryPutObjIn3D(FACEBinaryReader& Reader)
@@ -6018,6 +6187,8 @@ void FACESession::HandleInventoryServerSaveFailed(FACEBinaryReader& Reader)
 		return;
 	}
 	const int32 ItemGuid = static_cast<int32>(Reader.ReadUInt32());
+	if (ItemGuid == PendingEquipmentGuid || PendingEquipmentRemovals.Contains(ItemGuid)) CancelEquipmentSwap();
+
 	if (Reader.CanRead(4))
 	{
 		Reader.ReadUInt32(); // WeenieError (TransientString already notifies the player)
@@ -6878,7 +7049,7 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 		Reader.Align();
 		if ((MotionFlags & 0x01u) != 0 && Reader.CanRead(4))
 		{
-			Reader.ReadUInt32(); // sticky object
+			Motion.StickyTargetGuid = static_cast<int32>(Reader.ReadUInt32());
 		}
 
 		Motion.ForwardCommand = static_cast<int32>(ForwardCommand);
@@ -7181,6 +7352,8 @@ void FACESession::SendUseItem(int32 ObjectGuid)
 
 void FACESession::SendChangeCombatMode(uint32 CombatMode)
 {
+	// An explicit stance change during a pending swap supersedes its old intent.
+	if (PendingEquipmentGuid) PendingEquipmentCombatMode = CombatMode;
 	if (State != EACESessionState::InWorld)
 	{
 		return;

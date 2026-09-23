@@ -259,6 +259,8 @@ public:
 	float GroundClampBandAc = 2.5f;
 
 protected:
+	/** Local player position is live; its world-object network echo can be stale. */
+	bool ResolveFacingTarget(int32 TargetGuid, FVector& Location) const;
 	/** Collision-constrained extrapolation; authoritative F748 teleports stay authoritative. */
 	FVector ResolvePredictedMovement(const FVector& From, const FVector& Destination) const;
 	float MovementRadius = 25.f;

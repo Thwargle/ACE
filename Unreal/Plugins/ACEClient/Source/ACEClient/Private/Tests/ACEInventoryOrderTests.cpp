@@ -112,6 +112,124 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
     { RootContents.WriteUInt32(Ref.Key); RootContents.WriteUInt32(Ref.Value); }
     FACEBinaryReader RR(RootContents.GetData()); Session.HandleViewContents(RR);
     Check(100,{1,2}); Check(100,{10,20},true);
+
+    // ACE sends corpse contents (including bags) before CreateObject; GDLE can
+    // describe objects first. Both orders must expose the same root and ownership.
+    for (bool ObjectsFirst : {false,true})
+    {
+        Session.ClearWorldState(); Session.PlayerGuid=100;
+        auto CreateLoot=[&]()
+        {
+            Session.UpsertWorldObject(Item(702,0,-1));
+            Session.UpsertWorldObject(Item(701,0,-1,true));
+            Session.UpsertWorldObject(Item(703,0,-1));
+        };
+        auto View=[&](int32 Container,TArray<FACEContainerItemRef> Refs)
+        {
+            FACEBinaryWriter W; W.WriteUInt32(Container); W.WriteUInt32(Refs.Num());
+            for (const auto& Ref:Refs) {W.WriteUInt32(Ref.ItemGuid); W.WriteUInt32(Ref.ContainerType);}
+            FACEBinaryReader R(W.GetData()); Session.HandleViewContents(R);
+        };
+        if (ObjectsFirst) CreateLoot();
+        View(700,{{701,1},{703,0}});
+        View(701,{{702,0}});
+        if (!ObjectsFirst) CreateLoot();
+        TestEqual(TEXT("Nested corpse bag retains the root as open container"),Session.OpenExternalContainerGuid,700);
+        TestEqual(TEXT("Early/late bag create receives corpse membership"),Session.WorldObjects[701].ContainerId,700);
+        TestEqual(TEXT("Early/late item create receives nested bag membership"),Session.WorldObjects[702].ContainerId,701);
+        Check(701,{702}); Check(700,{703});
+        View(800,{});
+        FACEBinaryWriter Close; Close.WriteUInt32(700); FACEBinaryReader C(Close.GetData()); Session.HandleCloseGroundContainer(C);
+        TestEqual(TEXT("Old corpse close does not revoke the new corpse"),Session.OpenExternalContainerGuid,800);
+        TestFalse(TEXT("Closed corpse contents are retired"),Session.ContainerContents.Contains(700));
+        TestFalse(TEXT("Closed nested bag contents are retired"),Session.ContainerContents.Contains(701));
+        Close=FACEBinaryWriter(); Close.WriteUInt32(800); FACEBinaryReader C2(Close.GetData()); Session.HandleCloseGroundContainer(C2);
+        TestEqual(TEXT("Matching server close ends access immediately"),Session.OpenExternalContainerGuid,0);
+        View(700,{{701,1},{703,0}});View(701,{{702,0}});
+        Session.WorldObjects.Add(704,Item(704,100,0)); // already-picked-up inventory survives recall
+        bool ClosedBeforePortal=false;
+        const auto CloseHandle=Session.OnCloseGroundContainer.AddLambda([&](int32 Guid){if(Guid==700)ClosedBeforePortal=true;});
+        const auto PortalHandle=Session.OnPlayerTeleportStarted.AddLambda([&]()
+        {
+            TestTrue(TEXT("Loot closes before portal presentation starts"),ClosedBeforePortal);
+            TestEqual(TEXT("Recall revokes container access immediately"),Session.OpenExternalContainerGuid,0);
+        });
+        FACEBinaryWriter Teleport;Teleport.WriteUInt16(1);Teleport.Align();
+        FACEBinaryReader T(Teleport.GetData());Session.HandlePlayerTeleport(T);
+        TestFalse(TEXT("Recall clears nested loot lists"),Session.ContainerContents.Contains(700)||Session.ContainerContents.Contains(701));
+        TestEqual(TEXT("Recall preserves items already picked up"),Session.WorldObjects[704].ContainerId,100);
+        Session.OnCloseGroundContainer.Remove(CloseHandle);Session.OnPlayerTeleportStarted.Remove(PortalHandle);
+    }
+    // Stance changes delay dequipping on both ACE and GDLE. Only ContainID is the
+    // completion event; the earlier public property update must not release Wield.
+    for (int32 Conflicts : {1,2})
+    {
+        Session.ClearWorldState(); Session.PlayerGuid=100; Session.State=EACESessionState::InWorld;
+        auto New=Item(900,100,0); New.ItemType=ACEItemType::MeleeWeapon;
+        Session.UpsertWorldObject(New);
+        auto Old=Item(901,0,-1); Old.WielderId=100; Old.CurrentWieldedLocation=ACEEquipMask::MeleeWeapon;
+        Session.UpsertWorldObject(Old);
+        if (Conflicts==2)
+        {
+            auto Shield=Old; Shield.Guid=902; Shield.CurrentWieldedLocation=ACEEquipMask::Shield;
+            Session.UpsertWorldObject(Shield);
+        }
+        Session.CachedC2SPackets.Reset();
+        auto LastAction=[&](uint32 Action,int32 Guid)
+        {
+            uint32 Seq=0; for(const auto& P:Session.CachedC2SPackets)Seq=FMath::Max(Seq,P.Key);
+            if(!TestTrue(TEXT("Swap emitted a reliable action"),Seq!=0))return;
+            FACEBinaryReader R(Session.CachedC2SPackets[Seq].Payload);R.Skip(24);
+            TestEqual(TEXT("Swap action order"),R.ReadUInt32(),Action);
+            TestEqual(TEXT("Swap action item"),R.ReadUInt32(),uint32(Guid));
+        };
+        const int64 Location=Conflicts==2?ACEEquipMask::TwoHanded:ACEEquipMask::MeleeWeapon;
+        Session.SendGetAndWieldItem(900,Location);
+        TestEqual(TEXT("Swap removes all conflicting hands"),Session.PendingEquipmentRemovals.Num(),Conflicts);
+        TestTrue(TEXT("Swap keeps interaction busy while waiting for server"),Session.IsUseBusy());
+        for(int32 I=0;I<Conflicts;++I)
+        {
+            const int32 Removing=Session.PendingEquipmentRemovals[0];
+            LastAction(ACEGameAction::PutItemInContainer,Removing);
+            const int32 Sent=Session.CachedC2SPackets.Num();
+            FACEBinaryWriter Prop;Prop.WriteUInt8(1);Prop.WriteUInt32(Removing);Prop.WriteUInt32(2);Prop.WriteUInt32(100);
+            FACEBinaryReader PR(Prop.GetData());Session.HandlePublicUpdateInstanceId(PR);
+            TestEqual(TEXT("Early container property does not advance swap"),Session.CachedC2SPackets.Num(),Sent);
+            Session.SendGetAndWieldItem(900,Location);
+            TestEqual(TEXT("Repeated click does not duplicate pending swap"),Session.CachedC2SPackets.Num(),Sent);
+            Contains(Removing,100,0);
+        }
+        LastAction(ACEGameAction::GetAndWieldItem,900);
+        TestTrue(TEXT("All dequips complete before final equip"),Session.PendingEquipmentRemovals.IsEmpty());
+        FACEBinaryWriter Wield;Wield.WriteUInt32(900);Wield.WriteInt32(int32(Location));
+        FACEBinaryReader WR(Wield.GetData());Session.HandleWieldItem(WR);
+        TestEqual(TEXT("Wield acknowledgement completes the swap"),Session.PendingEquipmentGuid,0);
+        Session.WorldObjects[900].WielderId=0;Session.WorldObjects[900].CurrentWieldedLocation=0;Session.WorldObjects[900].ContainerId=100;
+        Old.CurrentWieldedLocation=ACEEquipMask::MeleeWeapon;Session.UpsertWorldObject(Old);
+        Session.SendGetAndWieldItem(900,Location);
+        const int32 Removing=Session.PendingEquipmentRemovals[0];
+        const int32 Sent=Session.CachedC2SPackets.Num();
+        FACEBinaryWriter Failure;Failure.WriteUInt32(Removing);FACEBinaryReader R(Failure.GetData());Session.HandleInventoryServerSaveFailed(R);
+        Contains(Removing,100,0);
+        TestEqual(TEXT("Failed removal cannot later equip the requested item"),Session.CachedC2SPackets.Num(),Sent);
+        TestEqual(TEXT("Failure cancels pending swap"),Session.PendingEquipmentGuid,0);
+    }
+    for(bool CancelCombat:{false,true})
+    {
+        Session.ClearWorldState();Session.PlayerGuid=100;Session.State=EACESessionState::InWorld;
+        Session.PlayerVitals.CombatMode=ACECombatMode::Magic;
+        auto Old=Item(910,0,-1);Old.WielderId=100;Old.CurrentWieldedLocation=ACEEquipMask::Held;
+        Session.UpsertWorldObject(Old);Session.UpsertWorldObject(Item(911,100,0));
+        Session.SendGetAndWieldItem(911,ACEEquipMask::Held);
+        Session.ApplyServerCombatMode(ACECombatMode::Melee);
+        TestEqual(TEXT("Wand removal accepts the temporary unarmed melee state"),Session.PlayerVitals.CombatMode,int32(ACECombatMode::Melee));
+        Contains(910,100,0);
+        if(CancelCombat)Session.SendChangeCombatMode(ACECombatMode::NonCombat);
+        FACEBinaryWriter W;W.WriteUInt32(911);W.WriteInt32(int32(ACEEquipMask::Held));
+        FACEBinaryReader R(W.GetData());Session.HandleWieldItem(R);
+        TestEqual(TEXT("Wand swap restores magic unless player explicitly leaves combat"),Session.PlayerVitals.CombatMode,
+            int32(CancelCombat?ACECombatMode::NonCombat:ACECombatMode::Magic));
+    }
     Session.SocketC2S->Close(); Sockets->DestroySocket(Session.SocketC2S); Session.SocketC2S=nullptr;
     Receiver->Close(); Sockets->DestroySocket(Receiver);
     return true;

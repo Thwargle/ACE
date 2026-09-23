@@ -3,6 +3,7 @@
 #include "ACESession.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
+#include "UI/ACEUILayoutResolver.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "ACEOpcodes.h"
@@ -29,6 +30,7 @@ namespace
 void UACEUIGameplayBinder::HandleFellowshipChanged()
 {
 	RefreshFellowshipOverlays();
+	RefreshSocialButtonLabels();
 }
 
 void UACEUIGameplayBinder::HandleAllegianceChanged()
@@ -110,6 +112,8 @@ void UACEUIGameplayBinder::EnsureSocialEntryBoxes()
 	MakeEntry(SquelchNameEntry, TEXT("Character name"));
 	if (FriendNameEntry && !bSocialEntriesBound)
 	{
+		FellowshipNameEntry->OnTextChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleFellowshipNameChanged);
+		FellowshipNameEntry->OnTextCommitted.AddDynamic(this, &UACEUIGameplayBinder::HandleFellowshipNameCommitted);
 		FriendNameEntry->OnTextCommitted.AddDynamic(this, &UACEUIGameplayBinder::HandleFriendNameCommitted);
 		if (SquelchNameEntry)
 		{
@@ -117,6 +121,46 @@ void UACEUIGameplayBinder::EnsureSocialEntryBoxes()
 		}
 		bSocialEntriesBound = true;
 	}
+}
+
+bool UACEUIGameplayBinder::ScrollFellowship(float WheelDelta,FVector2D CanvasLocalPos)
+{
+	if(ActivePanelPage!=TEXT("SocialPanel_Field") || ActiveSocialTab!=TEXT("FellowshipPage") || !Manager || !Canvas)return false;
+	const auto List=Manager->FindElementUnder(TEXT("FellowshipPage"),TEXT("FellowsListBox"));
+	if(!List || !Canvas->IsElementExposedAt(List,CanvasLocalPos))return false;
+	const FVector2D P=Canvas->ViewportToLayout(CanvasLocalPos);const FIntPoint O=List->GetScreenOrigin();
+	if(P.X<O.X||P.Y<O.Y||P.X>=O.X+List->Width||P.Y>=O.Y+List->Height)return false;
+	FellowScrollOffset+=WheelDelta>0?-1:1;RefreshFellowshipOverlays();return true;
+}
+
+void UACEUIGameplayBinder::HandleFellowshipNameChanged(const FText&)
+{
+	if (Manager) if (const auto Create=Manager->FindElementUnder(TEXT("FellowshipPage"),TEXT("CreateFellowshipButton")))
+	{Create->bActivatable=CanActivateFellowshipControl(Create->ElementName);Create->bGhosted=!Create->bActivatable;}
+}
+void UACEUIGameplayBinder::HandleFellowshipNameCommitted(const FText&, ETextCommit::Type Method)
+{
+	if(Method==ETextCommit::OnEnter)HandleNamedClick(TEXT("CreateFellowshipButton"));
+}
+bool UACEUIGameplayBinder::CanActivateFellowshipControl(const FString& Name) const
+{
+	if(!Client)return false;
+	const auto Info=Client->GetFellowship();const int32 Self=Client->GetPlayerGuid();
+	if(Name==TEXT("CreateFellowshipButton"))return !Info.bValid && FellowshipNameEntry && !FellowshipNameEntry->GetText().ToString().TrimStartAndEnd().IsEmpty();
+	if(!Info.bValid)return false;
+	const bool Leader=Info.LeaderGuid==Self;
+	if(Name==TEXT("FellowQuitButton"))return true;
+	if(Name==TEXT("FellowOpenButton")||Name==TEXT("FellowDisbandButton"))return Leader;
+	if(Name==TEXT("FellowLeaderButton")||Name==TEXT("FellowDismissButton"))
+		return Leader && SelectedFellowGuid!=Self && Info.Members.ContainsByPredicate([&](const auto& M){return M.Guid==SelectedFellowGuid;});
+	if(Name==TEXT("FellowRecruitButton"))
+	{
+		FACEWorldObject Target;
+		return (Leader||Info.bOpen) && Info.Members.Num()<9 && LastSelection.bValid && LastSelection.Guid!=Self
+			&& Client->GetWorldObject(LastSelection.Guid,Target) && Target.bIsPlayer
+			&& !Info.Members.ContainsByPredicate([&](const auto& M){return M.Guid==Target.Guid;});
+	}
+	return false;
 }
 
 void UACEUIGameplayBinder::HandleFriendNameCommitted(const FText& Text, ETextCommit::Type CommitMethod)
@@ -492,6 +536,7 @@ void UACEUIGameplayBinder::RefreshFellowshipOverlays()
 		|| !Client || !Manager || !Canvas)
 	{
 		for (UTextBlock* R : FellowRows) { if (R) R->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UTextBlock* R : FellowDetailLabels) { if (R) R->SetVisibility(ESlateVisibility::Collapsed); }
 		if (FellowshipNameEntry) { FellowshipNameEntry->SetVisibility(ESlateVisibility::Collapsed); }
 		if (FellowshipTitleLabel) { FellowshipTitleLabel->SetVisibility(ESlateVisibility::Collapsed); }
 		return;
@@ -500,6 +545,10 @@ void UACEUIGameplayBinder::RefreshFellowshipOverlays()
 	EnsureSocialEntryBoxes();
 	ReflowSocialPanelGeometry();
 	const FACEFellowshipInfo Info = Client->GetFellowship();
+	if(!Info.Members.ContainsByPredicate([&](const auto& M){return M.Guid==SelectedFellowGuid;}))SelectedFellowGuid=0;
+	for(const TCHAR* Name:{TEXT("CreateFellowshipButton"),TEXT("FellowQuitButton"),TEXT("FellowOpenButton"),TEXT("FellowDisbandButton"),TEXT("FellowLeaderButton"),TEXT("FellowDismissButton"),TEXT("FellowRecruitButton")})
+		if(const auto Button=Manager->FindElementUnder(TEXT("FellowshipPage"),Name))
+		{Button->bActivatable=CanActivateFellowshipControl(Name);Button->bGhosted=!Button->bActivatable;}
 
 	Manager->SetElementVisibleByName(TEXT("NotInAFellowshipFrame"), !Info.bValid);
 	Manager->SetElementVisibleByName(TEXT("FellowshipFrame"), Info.bValid);
@@ -529,6 +578,9 @@ void UACEUIGameplayBinder::RefreshFellowshipOverlays()
 
 	if (!Info.bValid)
 	{
+		FellowScrollOffset=0;
+		for(auto Entry:FellowRowElements)if(Entry)Entry->bVisible=false;
+		for(UTextBlock* Label:FellowDetailLabels)if(Label)Label->SetVisibility(ESlateVisibility::Collapsed);
 		PlaceSocialEntry(FellowshipNameEntry, TEXT("FellowshipNameEntryBox"));
 		if (!FellowshipTitleLabel && Canvas->WidgetTree)
 		{
@@ -565,48 +617,57 @@ void UACEUIGameplayBinder::RefreshFellowshipOverlays()
 
 	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(
 		TEXT("FellowshipPage"), TEXT("FellowsListBox"));
-	constexpr int32 MaxRows = 12;
-	constexpr int32 RowH = 16;
+	constexpr int32 MaxRows = 9;
+	constexpr int32 RowH = 32; // classic_fellowship: name/level, then H/S/M meters
 	while (FellowRows.Num() < MaxRows && Canvas->WidgetTree)
 	{
 		UTextBlock* Row = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
-		Row->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 8));
 		FellowRows.Add(Row);
+		FellowRowElements.Add(UACEUILayoutResolver::LoadTemplate(0x21000030,0x10000281));
+		for(int32 J=0;J<4;++J) FellowDetailLabels.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
 	}
 	FellowRowGuids.SetNum(MaxRows);
-	const int32 VisibleRows = ListEl.IsValid()
-		? FMath::Max(1, ListEl->Height / RowH) : MaxRows;
+	FellowVisibleRows=ListEl ? FMath::Max(1,ListEl->Height/RowH) : 1;
+	const int32 MaxOffset=FMath::Max(0,Info.Members.Num()-FellowVisibleRows);
+	FellowScrollOffset=FMath::Clamp(FellowScrollOffset,0,MaxOffset);
+	SyncDatScrollbar(Manager->FindElementUnder(TEXT("FellowshipPage"),TEXT("FellowsListBoxScrollbar")),MaxOffset?float(FellowScrollOffset)/MaxOffset:0);
 	for (int32 i = 0; i < FellowRows.Num(); ++i)
 	{
 		UTextBlock* Row = FellowRows[i];
-		if (!Row)
-		{
-			continue;
-		}
-		if (!ListEl.IsValid() || !Info.Members.IsValidIndex(i) || i >= VisibleRows)
+		const auto Entry=FellowRowElements[i];
+		const int32 Index=i+FellowScrollOffset;
+		if (!Row || !Entry) continue;
+		if(ListEl && Entry->Parent.Pin()!=ListEl)ListEl->AddChild(Entry);
+		Entry->bVisible=ListEl && Info.Members.IsValidIndex(Index) && i<FellowVisibleRows;
+		if (!Entry->bVisible)
 		{
 			Row->SetVisibility(ESlateVisibility::Collapsed);
+			for(int32 J=0;J<4;++J)FellowDetailLabels[i*4+J]->SetVisibility(ESlateVisibility::Collapsed);
 			FellowRowGuids[i] = 0;
 			continue;
 		}
-		const FACEFellowshipMember& M = Info.Members[i];
+		const FACEFellowshipMember& M = Info.Members[Index];
 		FellowRowGuids[i] = M.Guid;
-		const bool bLeader = (M.Guid == Info.LeaderGuid);
 		const bool bSel = (M.Guid == SelectedFellowGuid);
-		// Retail FellowsListBox shows name + level + H/S/M pools.
-		Row->SetText(FText::FromString(FString::Printf(
-			TEXT("%s%s  L%d  H%d/%d  S%d/%d  M%d/%d"),
-			bLeader ? TEXT("* ") : TEXT(""),
-			*M.Name, M.Level,
-			M.HealthCur, M.HealthMax,
-			M.StaminaCur, M.StaminaMax,
-			M.ManaCur, M.ManaMax)));
-		// HitTestInvisible so list clicks reach FellowsListBox / footer buttons underneath.
-		Row->SetVisibility(ESlateVisibility::HitTestInvisible);
-		Row->SetColorAndOpacity(FSlateColor(bSel ? SocialGold : SocialWhite));
-		Canvas->PlaceWidgetAtElement(Row, ListEl, SocialOverlayZ + 10 + i,
-			FMargin(4.f, static_cast<float>(2 + i * RowH), 4.f,
-				FMath::Max(0.f, static_cast<float>(ListEl->Height - (2 + i * RowH + RowH)))));
+		Entry->Y=i*RowH;Entry->Width=ListEl->Width;Entry->DefaultState=bSel?6:1;
+		TFunction<TSharedPtr<FACEUIElement>(TSharedPtr<FACEUIElement>,const TCHAR*)> Find;
+		Find=[&](TSharedPtr<FACEUIElement> N,const TCHAR* Name)->TSharedPtr<FACEUIElement>
+		{if(N->ElementName==Name)return N;for(const auto& C:N->Children)if(auto Found=Find(C,Name))return Found;return nullptr;};
+		auto NameEl=Find(Entry,TEXT("FellowName"));auto StatsEl=Find(Entry,TEXT("FellowStats"));
+		if(NameEl)NameEl->Width=FMath::Max(1,ListEl->Width-82);
+		if(StatsEl)StatsEl->X=FMath::Max(1,ListEl->Width-80);
+		PlaceTextOnElement(Row,NameEl,M.Name,10,bSel?SocialGold:SocialWhite,SocialOverlayZ+10);
+		Row->SetClipping(EWidgetClipping::ClipToBounds);
+		PlaceTextOnElement(FellowDetailLabels[i*4],StatsEl,FString::Printf(TEXT("Level %d"),M.Level),10,SocialWhite,SocialOverlayZ+10);
+		const TCHAR* Meters[]={TEXT("FellowHealth"),TEXT("FellowStamina"),TEXT("FellowMana")};
+		const TCHAR* Labels[]={TEXT("FellowHealthStats"),TEXT("FellowStaminaStats"),TEXT("FellowManaStats")};
+		const int32 Cur[]={M.HealthCur,M.StaminaCur,M.ManaCur},Max[]={M.HealthMax,M.StaminaMax,M.ManaMax};
+		for(int32 J=0;J<3;++J)
+		{
+			auto Meter=Find(Entry,Meters[J]);auto Label=Find(Entry,Labels[J]);
+			if(Meter){Meter->X=ListEl->Width*J/3;Meter->Width=ListEl->Width*(J+1)/3-Meter->X;Meter->MeterFillFraction=Max[J]>0?FMath::Clamp(float(Cur[J])/Max[J],0.f,1.f):0.f;for(auto C:Meter->Children)C->Width=Meter->Width;}
+			PlaceTextOnElement(FellowDetailLabels[i*4+J+1],Label,FString::Printf(TEXT("%d/%d"),Cur[J],Max[J]),9,SocialWhite,SocialOverlayZ+10);
+		}
 	}
 }
 
@@ -795,7 +856,8 @@ void UACEUIGameplayBinder::RefreshSocialButtonLabels()
 			{
 				El = Manager->FindElementByName(Labels[i].Element);
 			}
-			PlaceTextOnElement(L, El, Labels[i].Text, 8,
+			const FString Caption=FString(Labels[i].Element)==TEXT("FellowOpenButton") && Client && Client->GetFellowship().bOpen ? TEXT("Close") : Labels[i].Text;
+			PlaceTextOnElement(L, El, Caption, 8,
 				Labels[i].bCentered ? SocialWhite : SocialGold,
 				SocialOverlayZ + 20, Labels[i].bCentered);
 		}

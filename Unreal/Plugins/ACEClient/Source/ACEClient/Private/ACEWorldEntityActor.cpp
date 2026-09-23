@@ -934,6 +934,22 @@ FVector AACEWorldEntityActor::ResolvePredictedMovement(const FVector& From, cons
 	return Position - Offset;
 }
 
+bool AACEWorldEntityActor::ResolveFacingTarget(int32 TargetGuid, FVector& Location) const
+{
+	const auto* GI = GetGameInstance();
+	const auto* Client = GI ? GI->GetSubsystem<UACEClientSubsystem>() : nullptr;
+	if (!Client || TargetGuid == 0 || TargetGuid == ACEGuid) return false;
+	if (TargetGuid == Client->GetPlayerGuid() && Client->GetPlayerPosition().IsValid())
+	{
+		Location = Client->GetPlayerPosition().ToUnrealLocation(WorldScale);
+		return true;
+	}
+	FACEWorldObject Target;
+	if (!Client->GetWorldObject(TargetGuid, Target) || !Target.bHasPosition || !Target.Position.IsValid()) return false;
+	Location = Target.Position.ToUnrealLocation(WorldScale);
+	return true;
+}
+
 void AACEWorldEntityActor::Tick(float DeltaTime)
 {
 	ACE_PROFILE_SCOPE(Remote);
@@ -1065,6 +1081,16 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			// turn + locomotion — integrate those here so remotes rotate/run continuously
 			// instead of jumping once per position packet (~180° at default turn rate).
 			FVector Velocity = FVector::ZeroVector;
+			if (RemoteMotion.StickyTargetGuid != 0)
+			{
+				FVector Target;
+				if (ResolveFacingTarget(RemoteMotion.StickyTargetGuid, Target))
+				{
+					const FVector Direction = (Target - RemotePredictLocation).GetSafeNormal2D();
+					if (!Direction.IsNearlyZero()) RemotePredictRotation = FACEPosition::QuatFromUnrealTravelDir2D(Direction);
+				}
+				else RemoteMotion.StickyTargetGuid = 0;
+			}
 			const bool bMoveTo = RemoteMotion.MovementType == 6 || RemoteMotion.MovementType == 7;
 			const bool bTurnTo = RemoteMotion.MovementType == 8 || RemoteMotion.MovementType == 9;
 
@@ -1093,7 +1119,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 										TargetLoc = TargetObj.Position.ToUnrealLocation(WorldScale);
 										bHaveTarget = true;
 									}
-									else if (RemoteMotion.MoveToTargetGuid == Client->GetPlayerGuid())
+									if (RemoteMotion.MoveToTargetGuid == Client->GetPlayerGuid())
 									{
 										const FACEPosition PlayerPos = Client->GetPlayerPosition();
 										if (PlayerPos.IsValid())
@@ -1205,6 +1231,13 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 						GetMeleeBodyHeight(), TargetRadius, TargetHeight);
 					ToTarget.Z = 0.f;
 					const float DistCm = ToTarget.Size();
+					// Reaching the body-edge stopping distance ends translation, not
+					// facing. Melee MoveToObject can start with the target already
+					// beside/behind us, and must still follow that target's heading.
+					if (DistCm > SMALL_NUMBER)
+					{
+						RemotePredictRotation = FACEPosition::QuatFromUnrealTravelDir2D(ToTarget / DistCm);
+					}
 					RemoteMotion.UpdateMoveToGait(RangeCm / WorldScale);
 					RemoteMotion.ForwardUnitsPerSecond = (RemoteMotion.bRunning ? RemoteRunSpeedAc : RemoteWalkSpeedAc)
 						* RemoteMotion.AnimPlayRate;
@@ -1212,8 +1245,6 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 					if (RemainingCm > .01f && DistCm > SMALL_NUMBER)
 					{
 						const FVector Dir = ToTarget / DistCm;
-						// AC forward = +Y; use the same yaw path as Use-approach / F748.
-						RemotePredictRotation = FACEPosition::QuatFromUnrealTravelDir2D(Dir);
 						const float Speed = FMath::Max(RemoteMotion.ForwardUnitsPerSecond, 0.f);
 						Velocity = Dir * FMath::Min(Speed * WorldScale, RemainingCm / FMath::Max(Step, SMALL_NUMBER));
 						if (Appearance)
@@ -1766,7 +1797,7 @@ void AACEWorldEntityActor::RefreshActorTickEnabled()
 		(!GetActorLocation().Equals(RemotePredictLocation, 0.1f)
 		 || !GetActorQuat().Equals(RemotePredictRotation, 0.0001f));
 	const bool bDirectedMotion = RemoteMotion.MovementType >= 6 && RemoteMotion.MovementType <= 9;
-	const bool bNeed = bAttachedToParent || bHavePhysicsVelocity || bMissile || bSettling || bDirectedMotion
+	const bool bNeed = bAttachedToParent || bHavePhysicsVelocity || bMissile || bSettling || bDirectedMotion || RemoteMotion.StickyTargetGuid != 0
 		|| RemoteMotion.bMoving || bPendingGroundClamp
 		|| !FMath::IsNearlyZero(RemoteMotion.Turn)
 		|| !FMath::IsNearlyZero(RemoteMotion.StrafeUnitsPerSecond)
@@ -2012,6 +2043,7 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 	RemoteMotion = Motion;
 	if (bDeath)
 	{
+		RemoteMotion.StickyTargetGuid = 0;
 		RemoteMotion.bMoving = false;
 		RemoteMotion.Forward = RemoteMotion.Strafe = RemoteMotion.Turn = 0.f;
 		RemoteMotion.ForwardUnitsPerSecond = 0.f;
@@ -2059,7 +2091,7 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 							TargetLoc = TargetObj.Position.ToUnrealLocation(WorldScale);
 							bHaveTarget = true;
 						}
-						else if (Motion.MoveToTargetGuid == Client->GetPlayerGuid())
+						if (Motion.MoveToTargetGuid == Client->GetPlayerGuid())
 						{
 							const FACEPosition PlayerPos = Client->GetPlayerPosition();
 							if (PlayerPos.IsValid())

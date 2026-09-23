@@ -307,7 +307,10 @@ struct FACEUIElement : public TSharedFromThis<FACEUIElement>
 		{
 			return false;
 		}
-		if (bPanelTab || Type == ACEUI::ElementType::Menu
+		if (bPanelTab || bBooleanButton || Type == ACEUI::ElementType::OptionCheckbox
+			|| Type == ACEUI::ElementType::OptionCheckboxSlider
+			|| Type == ACEUI::ElementType::OptionCheckboxBitfield
+			|| Type == ACEUI::ElementType::OptionCheckboxBitfield64 || Type == ACEUI::ElementType::Menu
 			|| Type == ACEUI::ElementType::Button || Type == ACEUI::ElementType::Meter
 			|| Type == ACEUI::ElementType::Scrollbar || Type == ACEUI::ElementType::Resizebar
 			|| Type == ACEUI::ElementType::Dragbar)

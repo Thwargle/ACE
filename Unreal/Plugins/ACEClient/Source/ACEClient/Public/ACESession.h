@@ -86,6 +86,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACERetailWorldEntryTest;
 	friend class FACELoadingTransitionTest;
 	friend class FACELedgeStairsTest;
+	friend class FACEFortTethStairsTest;
 	friend class FACERunSpeedParityTest;
 	friend class FACERetailPkStatusTest;
 	friend class FACERetailScreenTest;
@@ -426,7 +427,7 @@ public:
 	void SendUseItem(int32 ObjectGuid);
 
 	/** True while a Use / UseWithTarget is outstanding (cleared by UseDone 0x01C7). */
-	bool IsUseBusy() const { return bUseBusy; }
+	bool IsUseBusy() const { return bUseBusy || PendingEquipmentGuid != 0; }
 	uint32 GetCombatEventRevision() const { return CombatEventRevision; }
 	bool IsServerAttackInProgress() const { return bServerAttackInProgress; }
 	uint32 GetLastAttackError() const { return LastAttackError; }
@@ -679,6 +680,15 @@ private:
 	void HandleInventoryPutObjIn3D(FACEBinaryReader& Reader);
 	void HandlePickupEvent(FACEBinaryReader& Reader);
 	void HandleInventoryServerSaveFailed(FACEBinaryReader& Reader);
+	void AdvanceEquipmentSwap();
+	void CancelEquipmentSwap();
+	int32 PendingEquipmentGuid = 0;
+	uint32 PendingEquipmentCombatMode = 0;
+	bool bPendingEquipmentWieldSent = false;
+	int64 PendingEquipmentLocation = 0;
+	TArray<int32> PendingEquipmentRemovals;
+	double PendingEquipmentUntil = 0.0;
+
 	void HandleParentEvent(FACEBinaryReader& Reader);
 	/** Clear world placement and despawn the 3D actor; keep WorldObjects for inventory. */
 	void RemoveObjectFromWorldVisual(int32 ObjectGuid);

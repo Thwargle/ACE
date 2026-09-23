@@ -669,29 +669,21 @@ void AACEPlayerController::SetupInputComponent()
 
 bool AACEPlayerController::InputKey(const FInputKeyEventArgs& Params)
 {
-	// Handle each press, independent of camera ticks and key-up events consumed
-	// by Slate after the chat entry takes focus.
-	if (Params.Event == IE_Pressed && (Params.Key == EKeys::Enter || Params.Key == EKeys::Slash)
-		&& Client && Client->GetSessionState() == EACESessionState::InWorld
-		&& !ACEInputBindings::IsEditing())
-	{
-		const auto Modifiers = FSlateApplication::Get().GetModifierKeys();
-		if (!Modifiers.IsAltDown() && !Modifiers.IsControlDown())
-		{
-			if (DatGameplayBinder && DatCanvasWidget && DatCanvasWidget->IsVisible()
-				&& !DatGameplayBinder->IsChatEntryFocused())
-			{
-				DatGameplayBinder->FocusChatEntry();
-				return true; // Slash's following character event inserts the command prefix.
-			}
-			if (GameHUDWidget && !GameHUDWidget->IsChatEntryFocused())
-			{
-				GameHUDWidget->FocusChatEntry();
-				return true;
-			}
-		}
-	}
-	return Super::InputKey(Params);
+ const auto Mods=FSlateApplication::Get().GetModifierKeys();
+ const FInputChord Chord(Params.Key,Mods.IsShiftDown(),Mods.IsControlDown(),Mods.IsAltDown(),Mods.IsCommandDown());
+ if(Params.Event==IE_Pressed && ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("Chat")),Chord)
+  && Client && Client->GetSessionState()==EACESessionState::InWorld)
+ {
+  if(DatGameplayBinder && DatCanvasWidget && DatCanvasWidget->IsVisible() && !DatGameplayBinder->IsChatEntryFocused())
+  {
+   DatGameplayBinder->FocusChatEntry();return true;
+  }
+  if(GameHUDWidget && !GameHUDWidget->IsChatEntryFocused())
+  {
+   GameHUDWidget->FocusChatEntry();return true;
+  }
+ }
+ return Super::InputKey(Params);
 }
 
 
@@ -862,28 +854,19 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	const bool bMouseFacing = IsUseMouseTurning() && bMouseLookActive && IsInputKeyDown(EKeys::RightMouseButton);
 	if (ACEInputBindings::Down(this, EKeys::D)) { if (bMouseFacing) R += 1.f; else T += 1.f; }
 	if (ACEInputBindings::Down(this, EKeys::A)) { if (bMouseFacing) R -= 1.f; else T -= 1.f; }
-	if (!bChatFocused)
-	{
-		if (IsInputKeyDown(EKeys::Up)) F += 1.f;
-		if (IsInputKeyDown(EKeys::Down)) F -= 1.f;
-		if (IsInputKeyDown(EKeys::Right)) T += 1.f;
-		if (IsInputKeyDown(EKeys::Left)) T -= 1.f;
-	}
 	F = FMath::Clamp(F, -1.f, 1.f);
 	R = FMath::Clamp(R, -1.f, 1.f);
 	T = FMath::Clamp(T, -1.f, 1.f);
 	bRunning = !ACEInputBindings::Down(this, EKeys::LeftShift);
 
-	// NumLock / Mouse4 (ThumbMouseButton) toggle auto-run; W/S cancel it.
+	// Poll the bound autorun action; directional movement cancels it.
 	{
 		const bool bNumLockDown = ACEInputBindings::Down(this, EKeys::NumLock);
-		const bool bMouse4Down = IsInputKeyDown(EKeys::ThumbMouseButton);
-		if ((bNumLockDown && !bNumLockWasDown) || (bMouse4Down && !bMouse4WasDown))
+		if (bNumLockDown && !bNumLockWasDown)
 		{
 			bAutoRun = !bAutoRun;
 		}
 		bNumLockWasDown = bNumLockDown;
-		bMouse4WasDown = bMouse4Down;
 		if (!FMath::IsNearlyZero(F))
 		{
 			bAutoRun = false;
@@ -924,33 +907,13 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 
 	if (!bChatFocused && Client && Client->GetSessionState() == EACESessionState::InWorld)
 	{
-		static const FKey NumberKeys[10] =
-		{
-			EKeys::One, EKeys::Two, EKeys::Three,
-			EKeys::Four, EKeys::Five, EKeys::Six,
-			EKeys::Seven, EKeys::Eight, EKeys::Nine,
-			EKeys::Zero
-		};
-		for (int32 SlotIndex = 0; SlotIndex < UE_ARRAY_COUNT(NumberKeys); ++SlotIndex)
-		{
-			if (!WasInputKeyJustPressed(NumberKeys[SlotIndex]))
-			{
-				continue;
-			}
-			if (DatGameplayBinder)
-			{
-				DatGameplayBinder->ActivateHotbarSlot(SlotIndex);
-			}
-			else if (GameHUDWidget)
-			{
-				GameHUDWidget->ActivateHotbarSlot(SlotIndex);
-			}
-			break;
-		}
+        if(DatGameplayBinder) DatGameplayBinder->PollKeyboardActions(this);
+        else if(GameHUDWidget)for(int32 Slot=0;Slot<9;++Slot)
+            if(ACEInputBindings::Pressed(this,ACEInputBindings::Shortcut(Slot)))GameHUDWidget->ActivateHotbarSlot(Slot);
 	}
 
 	// Retail: F uses / picks up the selected object (same as the hand toolbar button).
-	if (!bChatFocused && ACEInputBindings::Pressed(this, EKeys::F) && Client
+	if (!bChatFocused && ACEInputBindings::Pressed(this, ACEInputBindings::Action(TEXT("Pickup"))) && Client
 		&& Client->GetSessionState() == EACESessionState::InWorld)
 	{
 		InteractWithSelectedObject();
@@ -1015,7 +978,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				}
 			}
 		}
-		else if (WasInputKeyJustPressed(EKeys::Escape))
+		else if (ACEInputBindings::Pressed(this, EKeys::Escape))
 		{
 			DatGameplayBinder->HandleEscape();
 			if (APawn* P = GetPawn())
@@ -1027,12 +990,15 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			}
 			Client->SelectObject(0);
 		}
+		else if (ACEInputBindings::Pressed(this, ACEInputBindings::Action(TEXT("ClosestMonster")))) CycleNearbyTarget(true, 0);
+		else if (ACEInputBindings::Pressed(this, ACEInputBindings::Action(TEXT("ClosestItem")))) CycleNearbyTarget(false, 0);
 		else if (ACEInputBindings::Pressed(this, EKeys::LeftBracket)) CycleNearbyTarget(false, -1);
 		else if (ACEInputBindings::Pressed(this, EKeys::RightBracket)) CycleNearbyTarget(false, 1);
 		else if (ACEInputBindings::Pressed(this, EKeys::Semicolon)) CycleNearbyTarget(true, -1);
 		else if (ACEInputBindings::Pressed(this, EKeys::Apostrophe)) CycleNearbyTarget(true, 1);
 	}
 
+	if (!bChatFocused && ACEInputBindings::Down(this, ACEInputBindings::Action(TEXT("Stop")))) { F=R=T=0.f; bAutoRun=false; }
 	if (bVR) { VR->GetMovement(F, R, bRunning); T = 0.f; bAutoRun = false; if (bServerMoveToActive) ClearServerMoveTo(); }
 	const FVector VRRoomDelta = bVR ? VR->GetRoomScaleDelta() : FVector::ZeroVector;
 	// Manual input cancels server-directed MoveTo approach.
@@ -3681,21 +3647,21 @@ void AACEPlayerController::UpdateOrbitCamera(float DeltaTime)
 		SyncUserCameraArmLength(Boom);
 	}
 
-	const bool bZeroDown = IsInputKeyDown(EKeys::NumPadZero);
+	const bool bZeroDown = ACEInputBindings::Down(this, EKeys::NumPadZero);
 	if (bZeroDown && !bNumPadZeroWasDown)
 	{
 		ResetCameraToRetailDefaults(Boom);
 	}
 	bNumPadZeroWasDown = bZeroDown;
 
-	const bool bFiveDown = IsInputKeyDown(EKeys::NumPadFive);
+	const bool bFiveDown = ACEInputBindings::Down(this, EKeys::NumPadFive);
 	if (bFiveDown && !bNumPadFiveWasDown)
 	{
 		SetCameraInHead(Boom, !bCameraInHead);
 	}
 	bNumPadFiveWasDown = bFiveDown;
 
-	const bool bThreeDown = IsInputKeyDown(EKeys::NumPadThree);
+	const bool bThreeDown = ACEInputBindings::Down(this, EKeys::NumPadThree);
 	if (bThreeDown && !bNumPadThreeWasDown)
 	{
 		SetCameraLookDown(Boom, !bCameraLookDown);
@@ -3849,16 +3815,16 @@ void AACEPlayerController::JumpReleased()
 	{
 		// Live keys at release (standing charge zeros loco axes each tick).
 		float AimF = 0.f, AimR = 0.f;
-		if (ACEInputBindings::Down(this, EKeys::W) || IsInputKeyDown(EKeys::Up)) AimF += 1.f;
-		if (ACEInputBindings::Down(this, EKeys::S) || IsInputKeyDown(EKeys::Down)) AimF -= 1.f;
+		if (ACEInputBindings::Down(this, EKeys::W)) AimF += 1.f;
+		if (ACEInputBindings::Down(this, EKeys::S)) AimF -= 1.f;
 		if (ACEInputBindings::Down(this, EKeys::E)) AimR += 1.f;
 		if (ACEInputBindings::Down(this, EKeys::Q)) AimR -= 1.f;
 		if (bStandingJumpLocked)
 		{
 			AimF = StandingJumpAimF;
 			AimR = StandingJumpAimR;
-			if (ACEInputBindings::Down(this, EKeys::W) || IsInputKeyDown(EKeys::Up)) AimF = 1.f;
-			if (ACEInputBindings::Down(this, EKeys::S) || IsInputKeyDown(EKeys::Down)) AimF = -1.f;
+			if (ACEInputBindings::Down(this, EKeys::W)) AimF = 1.f;
+			if (ACEInputBindings::Down(this, EKeys::S)) AimF = -1.f;
 			if (ACEInputBindings::Down(this, EKeys::E)) AimR = 1.f;
 			if (ACEInputBindings::Down(this, EKeys::Q)) AimR = -1.f;
 		}
@@ -7250,7 +7216,7 @@ void AACEPlayerController::CycleNearbyTarget(bool bEnemies, int32 Direction)
 	});
 	if (Objects.IsEmpty()) return;
 	const int32 Current = Objects.IndexOfByPredicate([&](const FACEWorldObject& O) { return O.Guid == Client->GetSelectedObject().Guid; });
-	const int32 Next = Current == INDEX_NONE ? 0 : (Current + Direction + Objects.Num()) % Objects.Num();
+	const int32 Next = Current == INDEX_NONE || Direction == 0 ? 0 : (Current + Direction + Objects.Num()) % Objects.Num();
 	Client->SelectObject(Objects[Next].Guid);
 }
 

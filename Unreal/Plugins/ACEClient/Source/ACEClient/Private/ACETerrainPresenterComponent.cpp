@@ -3827,7 +3827,7 @@ void UACETerrainPresenterComponent::UpdateOutdoorEnvCollision()
 	bool bHavePlayerUe = false;
 	if (Client)
 	{
-		const FACEPosition Pos = Client->GetPlayerPosition();
+		const FACEPosition Pos = GetPresentationPosition();
 		if (Pos.IsValid())
 		{
 			PlayerUe = Pos.ToUnrealLocation(WorldScale);
@@ -3858,16 +3858,10 @@ void UACETerrainPresenterComponent::UpdateOutdoorEnvCollision()
 				continue;
 			}
 			const int32 Key = static_cast<int32>(CellId);
-			bool bOnRoof = false;
-			FBox Box;
-			if (TryGetEnvCellWorldBox(Dat, SpawnedEnvCells.FindRef(Key), Key, WorldScale, Box))
-			{
-				bOnRoof = PlayerUe.Z > Box.Min.Z + 280.f;
-			}
-			if (!bOnRoof)
-			{
-				OutdoorEnvCollide.Add(Key);
-			}
+			// The DAT sphere/BSP test already establishes contact with this cell.
+			// A fixed height above its floor cannot distinguish a roof from a tall
+			// stairwell: it disabled the steps when approaching them from above.
+			OutdoorEnvCollide.Add(Key);
 		}
 
 		for (const auto& Pair : SpawnedEnvCells)
@@ -3883,8 +3877,11 @@ void UACETerrainPresenterComponent::UpdateOutdoorEnvCollision()
 			}
 			const bool bOverCell = PlayerUe.X >= Box.Min.X && PlayerUe.X <= Box.Max.X
 				&& PlayerUe.Y >= Box.Min.Y && PlayerUe.Y <= Box.Max.Y;
-			const bool bOnRoof = bOverCell && PlayerUe.Z > Box.Min.Z + 280.f;
-			if (bOverCell && !bOnRoof)
+			// Keep support near the actual top of the cell, including a landing
+			// through a roof opening. Distant rooms on other storeys stay inactive.
+			const bool bNearCellHeight = PlayerUe.Z >= Box.Min.Z - 140.f
+				&& PlayerUe.Z <= Box.Max.Z + 140.f;
+			if (bOverCell && bNearCellHeight)
 			{
 				OutdoorEnvCollide.Add(Pair.Key);
 			}
@@ -3926,6 +3923,9 @@ void UACETerrainPresenterComponent::UpdateOutdoorEnvCollision()
 		if (bCollide)
 		{
 			Pair.Value->PrefetchCollisionCookAsync();
+			// Furniture includes the stair mesh itself. Collision residency must
+			// prepare it even when the entrance has not been visible yet.
+			Pair.Value->EnsureStaticObjectsQueued();
 		}
 		Pair.Value->SetEnvCellCollisionActive(bCollide, false, /*bAllowAsync*/ false);
 	}

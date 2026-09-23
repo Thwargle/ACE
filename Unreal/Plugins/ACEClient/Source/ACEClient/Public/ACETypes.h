@@ -493,6 +493,9 @@ struct ACECLIENT_API FACEObjectMotionState
 	UPROPERTY(BlueprintReadOnly, Category = "ACE|Movement")
 	uint8 MovementType = 0;
 
+	/** Authoritative facing target carried by interpreted combat motion (StickToObject). */
+	int32 StickyTargetGuid = 0;
+
 	/** MoveToObject target GUID when MovementType==6. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE|Movement")
 	int32 MoveToTargetGuid = 0;

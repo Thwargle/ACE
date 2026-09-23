@@ -17,9 +17,10 @@ namespace
 	/** Persisted floaty drag offsets are relative to the anchor scheme; bump to invalidate. */
 	constexpr int32 FloatyLayoutSchema = 2;
 
-	bool IsFixedSizeVitalsFloaty(const FString& Name)
+	bool IsFixedSizeFloaty(const FString& Name)
 	{
-		return Name == TEXT("RootGameplay_FloatySideVitals_Field")
+		return Name == TEXT("RootGameplay_FloatyToolbar_Field")
+			|| Name == TEXT("RootGameplay_FloatySideVitals_Field")
 			|| Name == TEXT("RootGameplay_FloatyVitals_Field")
 			|| Name == TEXT("RootGameplay_FloatyIndicators_Field");
 	}
@@ -384,7 +385,7 @@ void UACEUIElementManager::ApplyEdgeAnchoredLayout(int32 ViewportWidth, int32 Vi
 				// its bottom controls; reduce its height and reflow the content
 				// before clamping its position (also while the UI is locked).
 				if (Child->Height > Vh && Child->ElementName.StartsWith(TEXT("RootGameplay_Floaty"))
-					&& !IsFixedSizeVitalsFloaty(Child->ElementName))
+					&& !IsFixedSizeFloaty(Child->ElementName))
 				{
 					if (Child->AuthoredHeight < 0) Child->AuthoredHeight = Child->Height;
 					Child->UserResizeH = Vh - Child->AuthoredHeight;
@@ -614,6 +615,8 @@ bool UACEUIElementManager::IsFloatyDragHandle(const TSharedPtr<FACEUIElement>& E
 		return false;
 	}
 	const FString& Name = Element->ElementName;
+	if (Name == TEXT("InvTitleText") || Name == TEXT("TitleText") || Name == TEXT("TitleBackground")
+		|| Name == TEXT("TitleBar") || Name == TEXT("DisplayedBookNameText")) return true;
 	if (Name.EndsWith(TEXT("DragArea")) || Name.Contains(TEXT("TitleDrag")))
 	{
 		return true;
@@ -749,10 +752,14 @@ TSharedPtr<FACEUIElement> UACEUIElementManager::FindWindowAtCanvas(int32 CanvasX
         {
             const auto Window=Root->Children[I];
             if (!Window || !Window->IsPaintVisible() || Window->Width<=0 || Window->Height<=0
-                || Window->ElementName == TEXT("RootGameplay_SmartBox_Field")
-                || Window->ElementName == TEXT("RootGameplay_Keyboard_Field")) continue;
-            const FIntPoint O=Window->GetScreenOrigin();
-            if (CanvasX>=O.X && CanvasY>=O.Y && CanvasX<O.X+Window->Width && CanvasY<O.Y+Window->Height)
+                || Window->ElementName == TEXT("RootGameplay_SmartBox_Field")) continue;
+            // The keyboard root is a full-screen anchoring field; only its
+            // centered frame covers other windows or receives pointer input.
+            const auto Bounds=Window->ElementName==TEXT("RootGameplay_Keyboard_Field")
+                ? FindElementByNameRecursive(Window,TEXT("KeyboardFrame")) : Window;
+            if(!Bounds)continue;
+            const FIntPoint O=Bounds->GetScreenOrigin();
+            if (CanvasX>=O.X && CanvasY>=O.Y && CanvasX<O.X+Bounds->Width && CanvasY<O.Y+Bounds->Height)
                 return Window;
         }
     }
@@ -767,6 +774,26 @@ TSharedPtr<FACEUIElement> UACEUIElementManager::HitTestCanvas(int32 CanvasX, int
         const FIntPoint O=Parent ? Parent->GetScreenOrigin() : FIntPoint::ZeroValue;
         const auto Hit=Window->HitTestInParentSpace(CanvasX-O.X,CanvasY-O.Y);
         if (bUiLocked && (IsFloatyDragHandle(Hit) || IsFloatyResizeHandle(Hit))) return Window;
+        if (!bUiLocked && FindFloatyRoot(Window))
+        {
+            // Buttons, slots and resize grips keep priority over title/drag art.
+            const bool bControl = Hit && (Hit->Type == ACEUI::ElementType::Button
+                || Hit->Type == ACEUI::ElementType::Resizebar || Hit->bPanelTab
+                || Hit->ElementName.EndsWith(TEXT("Button")) || Hit->ElementName.EndsWith(TEXT("Slot")));
+            if (!bControl)
+            {
+                TFunction<TSharedPtr<FACEUIElement>(const TSharedPtr<FACEUIElement>&)> FindDrag = [&](const auto& Node) -> TSharedPtr<FACEUIElement>
+                {
+                    if (!Node || !Node->IsPaintVisible()) return nullptr;
+                    const FIntPoint P = Node->GetScreenOrigin();
+                    if (CanvasX < P.X || CanvasY < P.Y || CanvasX >= P.X + Node->Width || CanvasY >= P.Y + Node->Height) return nullptr;
+                    for (int32 I = Node->Children.Num()-1; I >= 0; --I)
+                        if (const auto Drag = FindDrag(Node->Children[I])) return Drag;
+                    return IsFloatyDragHandle(Node) ? Node : nullptr;
+                };
+                if (const auto Drag = FindDrag(Window)) return Drag;
+            }
+        }
         return Hit ? Hit : Window; // Empty panel bodies must not activate controls behind them.
     }
 
@@ -934,7 +961,7 @@ void UACEUIElementManager::NotifyMouseDown(FVector2D ViewportPos, FVector2D View
 			TSharedPtr<FACEUIElement> Floaty = FindFloatyRoot(Hit);
 			// Retail: the vitals bar (health/stamina/mana indicators) is fixed-size —
 			// its bottom border never acts as a resize grip.
-			if (Floaty.IsValid() && !IsFixedSizeVitalsFloaty(Floaty->ElementName))
+			if (Floaty.IsValid() && !IsFixedSizeFloaty(Floaty->ElementName))
 			{
 				if (Floaty->AuthoredHeight < 0)
 				{
@@ -1095,7 +1122,7 @@ void UACEUIElementManager::SaveFloatyLayout() const
 			GConfig->SetInt(Section, *(Key + TEXT("_DragX")), Child->UserDragX, GGameUserSettingsIni);
 			GConfig->SetInt(Section, *(Key + TEXT("_DragY")), Child->UserDragY, GGameUserSettingsIni);
 			// Vitals/indicators are fixed-size — do not persist a leftover resize height.
-			const int32 ResizeH = IsFixedSizeVitalsFloaty(Key) ? 0 : Child->UserResizeH;
+			const int32 ResizeH = IsFixedSizeFloaty(Key) ? 0 : Child->UserResizeH;
 			GConfig->SetInt(Section, *(Key + TEXT("_ResizeH")), ResizeH, GGameUserSettingsIni);
 			if (IsChatFloaty(Child)) GConfig->SetInt(Section, *(Key + TEXT("_ResizeW")), Child->UserResizeW, GGameUserSettingsIni);
 		}
@@ -1140,7 +1167,7 @@ void UACEUIElementManager::LoadFloatyLayout()
 			int32 DragX = 0, DragY = 0, ResizeH = 0;
 			GConfig->GetInt(Section, *(Key + TEXT("_DragX")), DragX, GGameUserSettingsIni);
 			GConfig->GetInt(Section, *(Key + TEXT("_DragY")), DragY, GGameUserSettingsIni);
-			if (!IsFixedSizeVitalsFloaty(Key))
+			if (!IsFixedSizeFloaty(Key))
 			{
 				GConfig->GetInt(Section, *(Key + TEXT("_ResizeH")), ResizeH, GGameUserSettingsIni);
 			}

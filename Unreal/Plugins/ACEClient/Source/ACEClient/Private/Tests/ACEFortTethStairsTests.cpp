@@ -1,0 +1,179 @@
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
+#include "ACEPlayerController.h"
+#include "ACEClientSubsystem.h"
+#include "ACESession.h"
+#include "ACEDatSubsystem.h"
+#include "ACEEnvCellActor.h"
+#include "ACELandblockActor.h"
+#include "ACETerrainPresenterComponent.h"
+#include "ACEHoverTooltipWidget.h"
+#include "Dat/ACECellTransit.h"
+#include "Dat/ACEEnvCellMeshBuilder.h"
+#include "Dat/ACEOutdoorPortalPlan.h"
+#include "VR/ACEVRComponent.h"
+#include "VR/ACEVRSettings.h"
+#include "Camera/CameraComponent.h"
+#include "GameFramework/PlayerInput.h"
+#include "Components/CapsuleComponent.h"
+#include "ProceduralMeshComponent.h"
+#include "Engine/Engine.h"
+#include "Engine/GameInstance.h"
+#include "Engine/LocalPlayer.h"
+#include "Engine/World.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEFortTethStairsTest,"ACE.RetailParity.FortTethStairs",
+ EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEFortTethStairsTest::RunTest(const FString&)
+{
+ const auto Values=UWorld::InitializationValues().AllowAudioPlayback(false).RequiresHitProxies(false)
+  .CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false);
+ auto* World=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);
+ auto& Context=GEngine->CreateNewWorldContext(EWorldType::Game);
+ auto* GI=NewObject<UGameInstance>(GEngine);World->SetGameInstance(GI);
+ Context.OwningGameInstance=GI;Context.SetCurrentWorld(World);GI->Init();
+ ON_SCOPE_EXIT { GI->Shutdown();GEngine->DestroyWorldContext(World);World->DestroyWorld(false); };
+ auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();auto* Client=GI->GetSubsystem<UACEClientSubsystem>();
+ auto Session=Client->GetSession();
+ if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+ auto* Host=World->SpawnActor<AActor>();auto* Terrain=NewObject<UACETerrainPresenterComponent>(Host);
+ Terrain->Client=Client;Terrain->bHasKnownCell=true;
+ TArray<AACEEnvCellActor*> Rooms;
+ for(uint32 Block:{0x26810000u,0x25810000u})
+ {
+  const FVector Origin=FACEPosition::AceVectorToUnreal(FVector((Block>>24)*192,((Block>>16)&255)*192,0),100);
+  FACEDatLandblockInfo Info;if(!Dat->LoadLandblockInfo(Block,Info))return false;
+  for(const auto& Building:Info.Buildings)Dat->GetOrBuildSetupMesh(Building.ModelId,100);
+  auto* Land=World->SpawnActor<AACELandblockActor>();Land->SetSkipNonBuildingScenery(true);
+  TestTrue(TEXT("Teth building shells load"),Land->LoadLandblockSceneryOnly(Block,100));Terrain->Spawned.Add(Block,Land);
+  for(int32 I=0;I<100;++I){++GFrameCounter;Land->Tick(.016f);FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);}
+  TestTrue(TEXT("Fixture includes solid exterior shells"),Land->GetDoorwayClipMeshCount()>0);
+  for(uint32 Index=0;Index<Info.NumCells;++Index)
+  {
+   const uint32 Id=Block| (0x100+Index);
+   const auto* Built=Dat->GetOrBuildEnvCellMesh(Id,100);if(!Built)return false;
+   const auto Stabs=Built->StaticObjects;
+   for(const auto& Stab:Stabs)Dat->GetOrBuildSetupMesh(Stab.Id,100,UACEDatSubsystem::ACEPlacementResting);
+   auto* Room=World->SpawnActor<AACEEnvCellActor>();Room->LoadEnvCell(Id,Origin,100);
+   Room->SetEnvCellCollisionActive(true);Room->EnsureStaticObjectsQueued();
+   for(int32 I=0;I<200 && Room->HasPendingStaticObjects();++I)
+   { ++GFrameCounter;Room->Tick(.016f);FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread); }
+   TestFalse(TEXT("Fort Teth stair geometry is loaded"),Room->HasPendingStaticObjects());
+   Terrain->SpawnedEnvCells.Add(Id,Room);Rooms.Add(Room);
+  }
+ }
+ auto* Controller=World->SpawnActor<AACEPlayerController>();Controller->Client=Client;
+ Controller->SetPlayer(NewObject<ULocalPlayer>(GEngine));World->AddController(Controller);
+ auto* Pawn=World->SpawnActor<APawn>();auto* Capsule=NewObject<UCapsuleComponent>(Pawn);
+ Capsule->InitCapsuleSize(48,88);Pawn->SetRootComponent(Capsule);Pawn->AddInstanceComponent(Capsule);Capsule->RegisterComponent();
+ Pawn->SetActorEnableCollision(false);Controller->Possess(Pawn);
+ Controller->PlayerInput=NewObject<UPlayerInput>(Controller);Controller->SetupInputComponent();
+ Controller->bRetailCursorInstalled=true;Controller->HoverTooltipWidget=CreateWidget<UACEHoverTooltipWidget>(GI,UACEHoverTooltipWidget::StaticClass());
+ Controller->bEnterWorldLoading=false;Controller->bWorldRevealActive=false;
+ Session->PlayerGuid=12345;Session->State=EACESessionState::InWorld;
+ FACEWorldObject Self;Self.Guid=12345;Self.SetupId=0x02000001;Self.bIsPlayer=true;Self.bIsSelf=true;
+ Session->WorldObjects.Add(Self.Guid,Self);Controller->ApplyPlayerCapsuleFromSetup(Self.SetupId);
+ const float Half=Capsule->GetScaledCapsuleHalfHeight();
+ auto* VR=NewObject<UACEVRComponent>(Pawn);Pawn->AddInstanceComponent(VR);VR->RegisterComponent();
+ VR->PC=Controller;VR->Client=Client;VR->Settings=NewObject<UACEVRSettings>();VR->ActivateRig();
+ if(!TestNotNull(TEXT("Tracked stair fixture has a headset camera"),VR->Head.Get()))return false;
+ VR->bTracking=true;VR->Settings->MovementSmoothing=0;VR->Settings->bRun=true;VR->Settings->MovementDirection=0;
+ // Hardware axis polling must not overwrite this fixture's simulated stick.
+ Controller->InputComponent->AxisBindings.Reset();
+ struct FEntrance { uint32 Cell;FVector Location;FVector Down; };
+ const FEntrance Entrances[]={
+  {0x2681000B,FVector(39.339844,61.687500,235.084335),FVector(0,-1,0)},
+  {0x2581003A,FVector(182.962891,37.648438,235.045807),FVector(0,-1,0)},
+  {0x25810019,FVector(85.721680,9.376953,235.110977),FVector(1,0,0)},
+  {0x25810012,FVector(61.653809,33.345703,235.052048),FVector(1,0,0)},
+  {0x25810015,FVector(56.484375,106.345703,235.053284),FVector(0,1,0)},
+  {0x2581003D,FVector(178.353516,110.949219,235.044220),FVector(-1,0,0)}
+ };
+ auto Place=[&](FACEPosition Pose)
+ {
+  Session->SetLocalPosition(Pose);Controller->PredictedPose=Pose;Controller->bHavePredictedPose=true;
+  Controller->bHaveLastServerPose=false;Controller->bLocalPredicting=false;
+  Controller->bJumpAirborne=false;Controller->bStandingJumpLocked=false;Controller->StepHoldSeconds=0;
+  Controller->JumpWorldAceVelocity=FVector::ZeroVector;Controller->JumpAirborneSeconds=0;
+  Pawn->SetActorLocationAndRotation(Pose.ToUnrealLocation(100)+FVector(0,0,Half),Pose.ToUnrealQuat());
+ };
+ auto Refresh=[&]()
+ {
+  Terrain->LastKnownCellId=Controller->PredictedPose.CellId;
+  if(ACECellTransit::IsIndoorCell(Terrain->LastKnownCellId))Terrain->UpdateBuildingVisibility();
+  else Terrain->UpdateOutdoorEnvCollision();
+ };
+ for(const auto& Entry:Entrances)for(bool Tracked:{false,true})for(float Dt:{1.f/90,1.f/30})
+ {
+  VR->bActive=Tracked;
+  FACEPosition Pose;Pose.CellId=Entry.Cell;Pose.Location=Entry.Location;
+  Pose.SetAceFacingFromUnrealDir2D(Entry.Down);Place(Pose);
+  const FVector Start=Pose.ToUnrealLocation(100);
+  Refresh();
+  FHitResult Flight;
+  const FVector FlightXY=Start+Entry.Down*125;
+  World->LineTraceSingleByChannel(Flight,FlightXY+FVector(0,0,100),FlightXY-FVector(0,0,400),ECC_Pawn,FCollisionQueryParams(NAME_None,true,Pawn));
+  const auto* FlightOwner=Cast<AACEEnvCellActor>(Flight.GetActor());
+  if(!TestNotNull(TEXT("Top flight has its authored stair collision"),FlightOwner))return false;
+  const int32 StairCell=FlightOwner->EnvCellId;
+  Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));
+  Controller->PlayerInput->ProcessInputStack({},Dt,false);
+  int32 AirFrames=0;
+  for(int32 Frame=0;Frame<FMath::CeilToInt(2.f/Dt);++Frame)
+  {
+   VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,175-Half),Entry.Down.Rotation());
+   VR->MoveStick=FVector2D(0,1);
+   Refresh();Controller->PlayerTick(Dt);AirFrames+=Controller->bJumpAirborne?1:0;
+   if(FVector::DotProduct(Pawn->GetActorLocation()-Start,Entry.Down)>325)break;
+  }
+  const FVector End=Pawn->GetActorLocation()-FVector(0,0,Half);
+  const float Travel=FVector::DotProduct(End-Start,Entry.Down);
+  TestTrue(*FString::Printf(TEXT("Top lip %08X tracked=%d dt=%.3f descends (travel %.1f, drop %.1f)"),Entry.Cell,Tracked,Dt,Travel,Start.Z-End.Z),Travel>300 && End.Z<Start.Z-175 && End.Z>Start.Z-400);
+  TestEqual(TEXT("Stair descent remains grounded"),AirFrames,0);
+  AddInfo(FString::Printf(TEXT("Teth %08X tracked=%d dt=%.3f travel=%.1f drop=%.1f endcell=%08X"),Entry.Cell,Tracked,Dt,Travel,Start.Z-End.Z,Controller->PredictedPose.CellId));
+  // Reverse immediately: the same passage must continue to work uphill.
+  Pose=Controller->PredictedPose;Pose.SetAceFacingFromUnrealDir2D(-Entry.Down);Place(Pose);
+  for(int32 Frame=0;Frame<FMath::CeilToInt(2.f/Dt);++Frame)
+  {
+   VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,175-Half),(-Entry.Down).Rotation());
+   Refresh();Controller->PlayerTick(Dt);
+   if(FVector::DotProduct(Pawn->GetActorLocation()-End,-Entry.Down)>Travel-10)break;
+  }
+  TestTrue(TEXT("The top lip remains traversable uphill"),Pawn->GetActorLocation().Z-Half>Start.Z-40);
+  Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},Dt,false);VR->MoveStick=FVector2D::ZeroVector;
+  // Fall from the jump apex over the top flight while still outdoor-resident.
+  Pose.CellId=Entry.Cell;Pose.SetLocationFromUnreal(Start+Entry.Down*125+FVector(0,0,400),100);Place(Pose);
+  Controller->bJumpAirborne=true;
+  for(int32 Frame=0;Frame<FMath::CeilToInt(3.f/Dt);++Frame)
+  {
+   VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,175-Half),Entry.Down.Rotation());
+   Refresh();Controller->PlayerTick(Dt);
+   if(!Controller->bJumpAirborne)break;
+  }
+  TestFalse(TEXT("A jump through the upper entrance lands on the stairs"),Controller->bJumpAirborne);
+  TestTrue(TEXT("Landing stays on the top flight instead of falling through the tower"),Pawn->GetActorLocation().Z-Half>Start.Z-200);
+  const uint32 Block=Entry.Cell&0xFFFF0000u;
+  TSet<int32> Visible;FConvexVolume DownView;
+  const FVector Eye=FlightXY+FVector(0,0,575);
+  for(const FVector Normal:{FVector(1,0,1),FVector(-1,0,1),FVector(0,1,1),FVector(0,-1,1),FVector(0,0,1)})
+   DownView.Planes.Add(FPlane(Eye,Normal.GetSafeNormal()));
+  DownView.Init();
+  ACEOutdoorPortalPlan::CollectOutdoorAdmittedEnvCells(*Dat,Eye,DownView,100,MakeArrayView(&Block,1),Visible);
+  TestTrue(TEXT("The actual stairwell remains drawable looking down through its roof opening"),Visible.Contains(StairCell));
+ }
+ // First approach from above: collision, not a previous camera peek, must
+ // request the deferred stair object. Do not eagerly build every unseen room.
+ VR->bActive=false;
+ auto* FreshRoom=Terrain->SpawnedEnvCells.FindRef(0x26810100).Get();
+ const FVector Origin=FACEPosition::AceVectorToUnreal(FVector(0x26*192,0x81*192,0),100);
+ FreshRoom->LoadEnvCell(0x26810100,Origin,100);
+ FACEPosition Arrival;Arrival.CellId=Entrances[0].Cell;Arrival.Location=Entrances[0].Location;Place(Arrival);
+ Refresh();
+ TestTrue(TEXT("Upper entrance collision queues its deferred stairs without a prior view"),FreshRoom->IsActorTickEnabled());
+ for(int32 I=0;I<100 && FreshRoom->HasPendingStaticObjects();++I)
+ { ++GFrameCounter;FreshRoom->Tick(.016f);FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread); }
+ TestFalse(TEXT("First-approach stair collision finishes loading"),FreshRoom->HasPendingStaticObjects());
+ return !HasAnyErrors();
+}
+#endif

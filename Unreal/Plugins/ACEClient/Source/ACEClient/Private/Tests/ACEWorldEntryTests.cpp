@@ -758,14 +758,14 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
                 TestTrue(TEXT("Keyboard turning changes predicted facing even with camera-follow movement"),Controller->PredictedPose.GetAcQuat().Equals(Expected,.001));
             }
         }
-        for (FKey Key : {EKeys::Q,EKeys::E})
+        for (FKey Key : {EKeys::Z,EKeys::C})
         {
             Controller->PlayerInput->FlushPressedKeys();PressKey(Key);
             Controller->PlayerInput->ProcessInputStack({},.016f,false);
             Pawn->SetActorTransform(StartTransform);Controller->PredictedPose=StartPose;
             TestBoom->SetRelativeRotation(FRotator(-15,90,0));
             Controller->PlayerTick(.016f);
-            TestEqual(TEXT("Q/E retain sidestep bindings"),Controller->RightAxis,Key==EKeys::Q?-1.f:1.f);
+            TestEqual(TEXT("Retail Z/C sidestep bindings"),Controller->RightAxis,Key==EKeys::Z?-1.f:1.f);
             TestEqual(TEXT("Sidestep does not supply keyboard turn input"),Controller->TurnAxis,0.f);
         }
         Controller->PlayerInput->FlushPressedKeys();

@@ -52,6 +52,7 @@
 #include "UI/ACEUILayoutResolver.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "UI/ACERetailTextBlock.h"
+#include "UI/ACERetailKeySelector.h"
 #include "Engine/GameInstance.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Slate/WidgetRenderer.h"
@@ -401,12 +402,13 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         TGuardValue<bool> SavedNumbers(Gameplay->bShowVitalNumbers, Gameplay->bShowVitalNumbers);
         auto& V = Client->Session->PlayerVitals;
         V.bValid=true; V.Health=50; V.MaxHealth=100; V.Stamina=60; V.MaxStamina=100; V.Mana=70; V.MaxMana=100;
-        for (bool Side : {false,true}) for (bool Numbers : {false,true})
+        for (int32 Percent : {0,50,100}) for (bool Side : {false,true}) for (bool Numbers : {false,true})
         {
+            V.Health=V.Stamina=V.Mana=Percent;
             if (Side) Client->Session->CharacterOptions1 |= 0x00200000u;
             else Client->Session->CharacterOptions1 &= ~0x00200000u;
             Gameplay->bShowVitalNumbers=Numbers; Gameplay->RefreshVitalsOverlays();
-            CaptureScreen(FString::Printf(TEXT("Vitals_%s_%s"),Side?TEXT("Side"):TEXT("Stacked"),Numbers?TEXT("Numbers"):TEXT("Textures")));
+            CaptureScreen(FString::Printf(TEXT("Vitals_%s_%s_%d"),Side?TEXT("Side"):TEXT("Stacked"),Numbers?TEXT("Numbers"):TEXT("Textures"),Percent));
             const TCHAR* Root=Side?TEXT("RootGameplay_FloatySideVitals_Field"):TEXT("RootGameplay_FloatyVitals_Field");
             for (const TCHAR* Name : {TEXT("HealthMeter"),TEXT("StaminaMeter"),TEXT("ManaMeter")})
             {
@@ -417,6 +419,18 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 while (!Nodes.IsEmpty())
                 {
                     const auto Node=Nodes.Pop(EAllowShrinking::No); Nodes.Append(Node->Children);
+                    if(const auto* Paint=Canvas->PaintStates.Find(Node->InstanceId))
+                    {
+                        const FIntPoint Origin=Meter->GetScreenOrigin();const auto Scale=Canvas->GetLastScale2D();
+                        TestTrue(TEXT("Vital artwork remains inside its meter vertically without stretching"),
+                            Paint->Y>=FMath::RoundToInt(Origin.Y*Scale.Y)
+                            && Paint->Y+Paint->H<=FMath::RoundToInt((Origin.Y+Meter->Height)*Scale.Y));
+                        if(Percent==0)
+                        {
+                            auto Layer=Node;while(Layer && Layer->Parent.Pin()!=Meter)Layer=Layer->Parent.Pin();
+                            TestFalse(TEXT("A zero vital paints no residual fill pixel"),Layer&&Layer->ElementName!=TEXT("meter_background")&&Layer->Type!=ACEUI::ElementType::Text);
+                        }
+                    }
                     if (Node->ElementName!=TEXT("detail")) continue;
                     ++Details;
                     const auto* State=Node->States.Find(Node->PaintState);
@@ -427,8 +441,25 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             }
             TestEqual(TEXT("Vital numeric overlay follows display preference"),Gameplay->HealthLabel->GetText().IsEmpty(),!Numbers);
         }
+        // Save a readable, directly rendered close-up at 3x UI scale. No source
+        // texture resize is involved: this also checks the actual scaled result.
+        Client->Session->CharacterOptions1&=~0x00200000u;Gameplay->bShowVitalNumbers=false;
+        for(float Scale:{1.f,3.f})
+        {
+            const auto Pixels=CaptureScreen(FString::Printf(TEXT("Vitals_Scale%d"),int32(Scale)),Scale);
+            const auto Root=Manager->FindElementByName(TEXT("RootGameplay_FloatyVitals_Field"));
+            const FIntPoint O=Root->GetScreenOrigin();const int32 W=Root->Width*Scale,H=Root->Height*Scale;
+            if(Pixels.Num()==ScreenSize.X*ScreenSize.Y)
+            {
+                TArray<FColor> Crop;Crop.Reserve(W*H);
+                for(int32 Y=0;Y<H;++Y)for(int32 X=0;X<W;++X)Crop.Add(Pixels[(int32(O.Y*Scale)+Y)*ScreenSize.X+int32(O.X*Scale)+X]);
+                TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(W,H,Crop,PNG);
+                FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/FString::Printf(TEXT("Automation/RetailParity/Vitals_Closeup%d.png"),int32(Scale))));
+            }
+        }
     }
     Gameplay->RefreshVitalsOverlays();
+    CaptureScreen(TEXT("Vitals_ScaleRestored"));
     Gameplay->SetFloatyVisible(TEXT("OptionsPanel_Field"),false);
     FSlateApplication::Get().ClearKeyboardFocus(EFocusCause::Cleared);
     const FKeyEvent Escape(EKeys::Escape,FModifierKeysState(),0,false,0,0);
@@ -997,7 +1028,66 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         ACEInputBindings::Reload(); ACEInputBindings::BeginEdit(); ACEInputBindings::Defaults(); ACEInputBindings::Commit();
         Gameplay->ToggleKeyboardMappingUI(); Gameplay->RefreshKeyboardOverlays();
         CaptureScreen(TEXT("GameplayKeyboardMovement"));
-        TestEqual(TEXT("Key editor exposes every implemented keyboard action"),Gameplay->KeyboardRows.Num(),ACEInputBindings::Actions().Num());
+        Gameplay->HandleKeyboardNamedClick(TEXT("KeyboardLoadKeymapButton"));
+        TestTrue(TEXT("Retail keymap importer opens inside the VR-compatible panel"),Gameplay->bKeymapImportOpen && Gameplay->KeymapImportPath);
+        CaptureScreen(TEXT("GameplayKeyboardImport"));
+        {
+            const auto Frame=Manager->FindElementByName(TEXT("KeyboardFrame"));
+            TestEqual(TEXT("Modal keeps the keyboard frame's origin after window reflow"),Gameplay->KeymapDialog->GetScreenOrigin(),Frame->GetScreenOrigin());
+            TestEqual(TEXT("Modal retains the keyboard frame's width instead of stretching again"),Gameplay->KeymapDialog->Width,Frame->Width);
+            int32 DialogChromeMin=MAX_int32;
+            TArray<TSharedPtr<FACEUIElement>> Nodes{Gameplay->KeymapDialog};
+            while(!Nodes.IsEmpty())
+            {
+                auto Node=Nodes.Pop(EAllowShrinking::No);Nodes.Append(Node->Children);
+                if(const auto* Paint=Canvas->PaintStates.Find(Node->InstanceId))DialogChromeMin=FMath::Min(DialogChromeMin,Paint->Z);
+            }
+            for(auto* Labels:{&Gameplay->KeyboardLabels,&Gameplay->KeyboardRowLabels,&Gameplay->KeyboardKeyLabels})
+                for(UTextBlock* Label:*Labels)if(Label&&Label->IsVisible())
+                    TestTrue(TEXT("File-dialog chrome covers all underlying keyboard labels"),CastChecked<UCanvasPanelSlot>(Label->Slot)->GetZOrder()<DialogChromeMin);
+            TestFalse(TEXT("Underlying mapping buttons cannot capture input through the file dialog"),Gameplay->KeyboardRows[0]->GetIsEnabled());
+            const auto Page=Gameplay->ActiveKeyboardPage;Gameplay->HandleKeyboardNamedClick(TEXT("CameraTab"));
+            TestEqual(TEXT("Modal file dialog blocks underlying tabs"),Gameplay->ActiveKeyboardPage,Page);
+        }
+        NativeClick(TEXT("KeymapFileCancel"));
+        TestFalse(TEXT("Actual dialog Cancel closes the modal"),Gameplay->bKeymapImportOpen);
+        TestEqual(TEXT("Key editor exposes three buttons for every keyboard action"),Gameplay->KeyboardRows.Num(),ACEInputBindings::Actions().Num()*3);
+        TestEqual(TEXT("Mapping rows use the retail DAT template"),Gameplay->KeyboardEntryElements[0]->ElementId,0x1000002fu);
+        TestTrue(TEXT("Load File retains the retail caption"),Gameplay->KeyboardLabels.ContainsByPredicate([](const UTextBlock* T){return T&&T->GetText().ToString()==TEXT("Load File...");}));
+        for(int32 K=0;K<3;++K)
+        {
+            const auto Button=Gameplay->KeyboardEntryElements[0]->Children[K];
+            TestEqual(TEXT("Mapping columns retain retail positions"),Button->X,270+K*100);
+            TestEqual(TEXT("Mapping button includes left, middle and right chrome"),Button->Children.Num(),3);
+            TestTrue(TEXT("Mapping button has a usable input target"),Gameplay->KeyboardRows[K]->IsVisible());
+        }
+        Gameplay->KeyboardScrollOffset=999;Gameplay->RefreshKeyboardOverlays();
+        TestEqual(TEXT("Native scrollbar clamps to the last mapping row"),Gameplay->KeyboardScrollOffset,Gameplay->KeyboardMaxOffset);
+        Gameplay->KeyboardScrollOffset=0;Gameplay->RefreshKeyboardOverlays();
+        {
+            const auto MappingList=Manager->FindElementUnder(TEXT("MovementPage"),TEXT("KeyboardMappingListBox"));
+            const auto Point=Canvas->LayoutToViewport(FVector2D(MappingList->GetScreenOrigin())+FVector2D(20,80));
+            TestTrue(TEXT("Mouse wheel recognizes the keyboard window over underlying panels"),Gameplay->ScrollKeyboard(-1,Point));
+            TestEqual(TEXT("Wheel advances one retail mapping row"),Gameplay->KeyboardScrollOffset,1);
+            Gameplay->KeyboardScrollOffset=0;Gameplay->RefreshKeyboardOverlays();
+        }
+        {
+            auto* Key=CastChecked<UACERetailKeySelector>(Gameplay->KeyboardRows[0]);
+            const auto CaptureSlate=Key->TakeWidget();
+            const auto SlateButton=CaptureSlate->GetChildren()->GetChildAt(0);
+            TestTrue(TEXT("Only the retail label paints; the capture control text is collapsed"),SlateButton->GetChildren()->GetChildAt(0)->GetVisibility()==EVisibility::Collapsed);
+            const FKeyEvent EnterKey(EKeys::Enter,FModifierKeysState(),0,false,0,0);
+            CaptureSlate->OnKeyDown(Key->GetCachedGeometry(),EnterKey);CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),EnterKey);
+            TestTrue(TEXT("Activating a mapping button starts key capture"),Key->GetIsSelectingKey());
+            CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),FKeyEvent(EKeys::F7,FModifierKeysState(),0,false,0,0));Key->RefreshBinding();
+            TestEqual(TEXT("Captured key updates the draft"),ACEInputBindings::Get(EKeys::W,0).Key,EKeys::F7);
+            TestEqual(TEXT("Retail label shows the captured binding"),Key->RetailLabel->GetText().ToString(),FString(TEXT("F7")));
+            ACEInputBindings::Revert();Gameplay->RefreshKeyboardOverlays();
+        }
+        Gameplay->HandleKeyboardNamedClick(TEXT("KeyboardSaveKeymapAsButton"));
+        TestTrue(TEXT("Save As opens the retail file dialog"),Gameplay->bKeymapSave&&Gameplay->bKeymapImportOpen&&Gameplay->KeymapDialog->ElementId==0x1fu);
+        CaptureScreen(TEXT("GameplayKeyboardSave"));
+        Gameplay->HandleKeyboardNamedClick(TEXT("KeymapFileCancel"));
         ACEInputBindings::Set(EKeys::W,0,FInputChord(EKeys::F10));
         Gameplay->HandleKeyboardNamedClick(TEXT("KeyboardCancelButton"));
         TestEqual(TEXT("Cancel does not change the active movement key"),ACEInputBindings::Get(EKeys::W,0).Key,EKeys::W);
@@ -1054,6 +1144,8 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                     Actions.Add(Wire.ReadUInt32());
                 }
             }
+            // Isolated activation cases do not run a server; retire their pending transaction.
+            Session.CancelEquipmentSwap();
             return Actions;
         };
         // F / hand sorts the selected item: server-confirmed merges, then front of main pack.
@@ -1478,6 +1570,86 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         Gameplay->CombatMode=static_cast<int32>(ACECombatMode::NonCombat);
         Gameplay->ActivateHotbarSlot(0);
         TestTrue(TEXT("Number key still uses an item immediately"),HasAction(ACEGameAction::Use));
+
+        const auto Toolbar=Manager->FindElementByName(TEXT("RootGameplay_FloatyToolbar_Field"));
+        TestEqual(TEXT("Full retail toolbar is tall enough for both rows"),Toolbar->Height,132);
+        FACEWorldObject SecondShortcut=ShortcutUse; SecondShortcut.Guid=98766; SecondShortcut.Name=TEXT("Second-row use fixture");
+        Session.WorldObjects.Add(SecondShortcut.Guid,SecondShortcut);
+        Session.ShortcutObjects[17]=SecondShortcut.Guid;
+        for (float UIScale : {1.f,2.f})
+        {
+            CaptureScreen(FString::Printf(TEXT("RetailTwoShortcutRows_%d"),int32(UIScale)),UIScale);
+            for (int32 Index=0;Index<18;++Index)
+            {
+                const auto El=Manager->FindElementByName(FString::Printf(TEXT("ShortcutBar%s_Shortcut%dButton"),Index<9?TEXT(""):TEXT("2"),Index%9+1));
+                const FIntPoint O=El->GetScreenOrigin();
+                const FVector2D Local=Canvas->LayoutToViewport(FVector2D(O)+FVector2D(16,16));
+                TestEqual(TEXT("Every displayed shortcut has an independent hit target"),Gameplay->HitTestShortcutSlot(Local),Index);
+                TestTrue(TEXT("Both rows lie within toolbar clipping bounds"),O.Y+El->Height<=Toolbar->GetScreenOrigin().Y+Toolbar->Height-5);
+                TestTrue(TEXT("Both rows paint icons/backgrounds"),Gameplay->ShortcutIcons[Index]->GetVisibility()!=ESlateVisibility::Collapsed);
+            }
+            Session.bUseBusy=false; Session.CachedC2SPackets.Reset(); Gameplay->LastInvClickGuid=0;
+            NativeClick(TEXT("ShortcutBar2_Shortcut9Button"));
+            TestEqual(TEXT("Second row selects its item"),Client->GetSelectedObject().Guid,SecondShortcut.Guid);
+            TestFalse(TEXT("Second row single click does not activate"),HasAction(ACEGameAction::Use));
+            NativeClick(TEXT("ShortcutBar2_Shortcut9Button"));
+            TestTrue(TEXT("Second row double click sends use"),HasAction(ACEGameAction::Use));
+        }
+        CaptureScreen(TEXT("RetailShortcutDrag"));
+        auto ShortcutPoint=[&](const TCHAR* Name)
+        {
+            const auto El=Manager->FindElementByName(Name);
+            return Canvas->LayoutToViewport(FVector2D(El->GetScreenOrigin())+FVector2D(16,16));
+        };
+        const FVector2D FirstPoint=ShortcutPoint(TEXT("ShortcutBar_Shortcut1Button"));
+        const FVector2D LastPoint=ShortcutPoint(TEXT("ShortcutBar2_Shortcut9Button"));
+        TestTrue(TEXT("Shortcut can be dragged from row one"),Gameplay->TryBeginInventoryDrag(FirstPoint));
+        Gameplay->UpdateInventoryDrag(LastPoint); Gameplay->TryFinishInventoryDrag(LastPoint);
+        TestEqual(TEXT("Shortcut drag moves into row two"),Client->GetShortcutObject(17),ShortcutUse.Guid);
+        TestEqual(TEXT("Occupied shortcut swaps back to source slot"),Client->GetShortcutObject(0),SecondShortcut.Guid);
+        Session.CachedC2SPackets.Reset();
+        TestTrue(TEXT("Second-row shortcut can be dragged out"),Gameplay->TryBeginInventoryDrag(LastPoint));
+        Gameplay->UpdateInventoryDrag(FVector2D(700,300)); Gameplay->TryFinishInventoryDrag(FVector2D(700,300));
+        TestEqual(TEXT("Dragging out removes the shortcut"),Client->GetShortcutObject(17),0);
+        TestTrue(TEXT("Removing a shortcut retains the owned item"),Session.WorldObjects.Contains(ShortcutUse.Guid));
+        TestTrue(TEXT("Shortcut removal is sent to server"),HasAction(ACEGameAction::RemoveShortCut));
+        TestFalse(TEXT("Wheel no longer remaps shortcut bindings"),Gameplay->ScrollShortcutBar(-1));
+        Session.ShortcutObjects[17]=0; Session.WorldObjects.Remove(SecondShortcut.Guid);
+
+        // The whole title and all retail Dragbar edges move an unlocked window.
+        const bool WasLocked=Manager->IsUiLocked(); Manager->SetUiLocked(false);
+        const auto Panel=Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field"));
+        const FIntPoint SavedPanelDrag(Panel->UserDragX,Panel->UserDragY);
+        for (const TCHAR* Handle : {TEXT("InvTitleText"),TEXT("PanelTopBorder"),TEXT("PanelLeftBorder"),TEXT("PanelRightBorder")})
+        {
+            Manager->BringFloatyToFront(Panel); CaptureScreen(TEXT("RetailWindowDrag"));
+            const auto El=Manager->FindElementByName(Handle);
+            const FVector2D Start=Canvas->LayoutToViewport(FVector2D(El->GetScreenOrigin())+FVector2D(El->Width,El->Height)*.5);
+            const int32 OldX=Panel->UserDragX,OldY=Panel->UserDragY;
+            Manager->NotifyMouseDown(Start,Canvas->GetCachedGeometry().GetLocalSize(),EKeys::LeftMouseButton);
+            Manager->NotifyMouseMove(Start+FVector2D(-20,12),Canvas->GetCachedGeometry().GetLocalSize());
+            Manager->NotifyMouseUp(Start+FVector2D(-20,12),Canvas->GetCachedGeometry().GetLocalSize(),EKeys::LeftMouseButton);
+            TestEqual(TEXT("Window follows the grabbed title or frame horizontally"),Panel->UserDragX,OldX-20);
+            TestEqual(TEXT("Window follows the grabbed title or frame vertically"),Panel->UserDragY,OldY+12);
+        }
+        Manager->SetUiLocked(true); CaptureScreen(TEXT("RetailWindowLocked"));
+        const auto DragTitle=Manager->FindElementByName(TEXT("InvTitleText"));
+        const FVector2D TitlePoint=Canvas->LayoutToViewport(FVector2D(DragTitle->GetScreenOrigin())+FVector2D(80,12));
+        const int32 LockedX=Panel->UserDragX;
+        Manager->NotifyMouseDown(TitlePoint,Canvas->GetCachedGeometry().GetLocalSize(),EKeys::LeftMouseButton);
+        Manager->NotifyMouseMove(TitlePoint+FVector2D(50,0),Canvas->GetCachedGeometry().GetLocalSize());
+        Manager->NotifyMouseUp(TitlePoint+FVector2D(50,0),Canvas->GetCachedGeometry().GetLocalSize(),EKeys::LeftMouseButton);
+        TestEqual(TEXT("UI lock prevents title dragging"),Panel->UserDragX,LockedX);
+        Panel->UserDragX=SavedPanelDrag.X; Panel->UserDragY=SavedPanelDrag.Y; Panel->RecomputeLayoutOffset(); Manager->SetUiLocked(WasLocked);
+
+        // A server close while nearby must retire the panel and pending drag.
+        Gameplay->ShowExternalContainer(700);
+        Gameplay->InvDragSourcePack=700; Gameplay->InvDragGuid=703; Gameplay->bInvDragPending=true;
+        Gameplay->HandleExternalContainerClosed(699);
+        TestEqual(TEXT("Unrelated container close preserves current loot panel"),Gameplay->OpenLootContainerGuid,700);
+        Gameplay->HandleExternalContainerClosed(700);
+        TestEqual(TEXT("Server close immediately retires nearby loot panel"),Gameplay->OpenLootContainerGuid,0);
+        TestFalse(TEXT("Server close cancels a drag of inaccessible loot"),Gameplay->bInvDragPending);
         Session.bUseBusy=false; Session.ShortcutObjects[0]=0; Session.WorldObjects.Remove(ShortcutUse.Guid);
         Gameplay->ShowExamination(true);
         Gameplay->HandleEscape();
@@ -2118,8 +2290,6 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Refill help explains the vendor buy list"),Mirrored.Contains(TEXT("choose Buy All")));
         TestFalse(TEXT("Local command files and help do not send public chat"),HasAction(ACEGameAction::Talk));
         Gameplay->bChatMirrorToFile=SavedLogging;Gameplay->ChatMirrorFilePath=SavedMirror;
-        Session.SocketC2S->Close();Sockets->DestroySocket(Session.SocketC2S);Session.SocketC2S=nullptr;
-        ComponentReceiver->Close();Sockets->DestroySocket(ComponentReceiver);
         const auto SavedVitals=Session.PlayerVitals;
         Session.PlayerVitals.bValid=true;Session.PlayerVitals.AgeSeconds=443581;Session.PlayerVitals.NumDeaths=6;
         Session.PlayerVitals.StatQualityInts.Add(98,1698189042);Session.PlayerVitals.StatQualityInts.Add(354,6);
@@ -2216,6 +2386,71 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         {
             Gameplay->SyncSocialPanelTab(AuditTab);Gameplay->TickRefresh();CaptureScreen(FString(TEXT("GameplayAudit"))+AuditTab);
         }
+        {
+            const auto SavedFellowship=Session.Fellowship;
+            const uint32 SavedOptions=Session.CharacterOptions1;
+            Session.Fellowship=FACEFellowshipInfo();
+            Gameplay->SyncSocialPanelTab(TEXT("FellowshipPage"));Gameplay->TickRefresh();
+            const TPair<const TCHAR*,int32> Checks[]={{TEXT("IgnoreFellowshipRequests"),2},{TEXT("FellowshipAutoAcceptRequests"),0x12},{TEXT("FellowshipShareXP"),0x0f},{TEXT("FellowshipShareLoot"),0x11}};
+            for(const auto& Check:Checks)
+            {
+                const auto El=Manager->FindElementUnder(TEXT("FellowshipPage"),Check.Key);
+                if(!TestTrue(TEXT("Retail fellowship checkbox exists"),El.IsValid()))continue;
+                const FIntPoint Origin=El->GetScreenOrigin();
+                const auto Hit=Manager->HitTestCanvas(Origin.X+El->Width/2,Origin.Y+El->Height/2);
+                TestTrue(FString::Printf(TEXT("%s label is a clickable retail checkbox"),Check.Key),Hit==El);
+                const bool Before=Client->IsCharacterOptionSet(Check.Value);
+                Session.CachedC2SPackets.Reset();
+                const FVector2D Point=FVector2D(Origin)+FVector2D(El->Width/2,El->Height/2);
+                Manager->NotifyMouseDown(Point,Canvas->GetCachedGeometry().GetLocalSize(),EKeys::LeftMouseButton);
+                Manager->NotifyMouseUp(Point,Canvas->GetCachedGeometry().GetLocalSize(),EKeys::LeftMouseButton,true);
+                TestEqual(TEXT("Actual pointer click toggles the server-backed option"),Client->IsCharacterOptionSet(Check.Value),!Before);
+                TestTrue(TEXT("Checkbox emits character option action"),HasAction(ACEGameAction::SetSingleCharacterOption));
+            }
+            Gameplay->FellowshipNameEntry->SetText(FText::GetEmpty());
+            TestFalse(TEXT("Empty name disables Create like retail"),Gameplay->CanActivateFellowshipControl(TEXT("CreateFellowshipButton")));
+            Session.CachedC2SPackets.Reset();Gameplay->HandleNamedClick(TEXT("CreateFellowshipButton"));
+            TestFalse(TEXT("Empty name cannot silently create a generic fellowship"),HasAction(ACEGameAction::FellowshipCreate));
+            Client->SendSetSingleCharacterOption(0x0f,false);
+            Gameplay->FellowshipNameEntry->SetText(FText::FromString(TEXT("Retail Test")));
+            Session.CachedC2SPackets.Reset();Gameplay->HandleNamedClick(TEXT("CreateFellowshipButton"));
+            TestTrue(TEXT("Named fellowship can be created"),HasAction(ACEGameAction::FellowshipCreate));
+            for(const auto& P:Session.CachedC2SPackets)
+            {
+                FACEBinaryReader R(P.Value.Payload);R.Skip(24);if(R.ReadUInt32()!=ACEGameAction::FellowshipCreate)continue;
+                TestEqual(TEXT("Create uses typed name"),R.ReadString16L(),FString(TEXT("Retail Test")));
+                TestEqual(TEXT("Create uses displayed XP preference rather than stale default"),R.ReadUInt32(),0u);
+            }
+            FACEFellowshipMember Self;Self.Guid=Player.Guid;Self.Name=TEXT("Leader");Self.Level=100;Self.HealthCur=250;Self.HealthMax=500;Self.StaminaCur=300;Self.StaminaMax=400;Self.ManaCur=50;Self.ManaMax=200;
+            FACEFellowshipMember Other=Self;Other.Guid=991122;Other.Name=TEXT("Fellow");
+            auto& F=Session.Fellowship;F.bValid=true;F.Name=TEXT("Retail Test");F.LeaderGuid=Self.Guid;F.Members={Self,Other};
+            Gameplay->SelectedFellowGuid=Other.Guid;Gameplay->RefreshFellowshipOverlays();Gameplay->RefreshSocialButtonLabels();
+            TestEqual(TEXT("Fellowship member uses the retail two-line height"),Gameplay->FellowRowElements[0]->Height,32);
+            const auto HealthMeter=Manager->FindElementUnder(TEXT("FellowsListBox"),TEXT("FellowHealth"));
+            TestTrue(TEXT("Fellowship health is a live meter"),HealthMeter&&FMath::IsNearlyEqual(HealthMeter->MeterFillFraction,.5f));
+            for(int32 I=2;I<9;++I){Other.Guid=991122+I;Other.Name=FString::Printf(TEXT("Fellow %d"),I+1);F.Members.Add(Other);}
+            Gameplay->FellowScrollOffset=999;Gameplay->RefreshFellowshipOverlays();
+            TestEqual(TEXT("Nine-member fellowship scrolls to its final member"),Gameplay->FellowRowGuids[Gameplay->FellowVisibleRows-1],F.Members.Last().Guid);
+            Gameplay->FellowScrollOffset=0;Gameplay->RefreshFellowshipOverlays();
+            TestTrue(TEXT("Leader can dismiss another member"),Gameplay->CanActivateFellowshipControl(TEXT("FellowDismissButton")));
+            TestTrue(TEXT("Leader can transfer leadership"),Gameplay->CanActivateFellowshipControl(TEXT("FellowLeaderButton")));
+            Gameplay->SelectedFellowGuid=Self.Guid;
+            TestFalse(TEXT("Leader cannot dismiss self"),Gameplay->CanActivateFellowshipControl(TEXT("FellowDismissButton")));
+            F.bOpen=true;Gameplay->RefreshSocialButtonLabels();
+            TestTrue(TEXT("Open fellowship button now says Close"),Gameplay->SocialButtonLabels.ContainsByPredicate([](const UTextBlock* T){return T&&T->GetText().ToString()==TEXT("Close");}));
+            F.LeaderGuid=Other.Guid;Gameplay->RefreshFellowshipOverlays();
+            for(const TCHAR* Name:{TEXT("FellowDismissButton"),TEXT("FellowLeaderButton"),TEXT("FellowOpenButton"),TEXT("FellowDisbandButton")})
+            {
+                Session.CachedC2SPackets.Reset();Gameplay->HandleNamedClick(Name);
+                TestTrue(TEXT("Leader-only controls cannot emit packets for ordinary members"),Session.CachedC2SPackets.IsEmpty());
+            }
+            CaptureScreen(TEXT("GameplayFellowshipMember"));
+            Session.Fellowship=SavedFellowship;Session.CharacterOptions1=SavedOptions;
+            Gameplay->FellowshipNameEntry->SetText(FText::GetEmpty());
+            Gameplay->RefreshFellowshipOverlays();Gameplay->RefreshSocialButtonLabels();
+        }
+        Session.SocketC2S->Close();Sockets->DestroySocket(Session.SocketC2S);Session.SocketC2S=nullptr;
+        ComponentReceiver->Close();Sockets->DestroySocket(ComponentReceiver);
         for (const TCHAR* Page:{TEXT("WorldPanel_Field"),TEXT("CharacterInfoPanel_Field"),TEXT("PositiveEffectsPanel_Field"),
             TEXT("NegativeEffectsPanel_Field"),TEXT("LinkStatusPanel_Field"),TEXT("VitaePanel_Field"),
             TEXT("BookPanel_Field"),TEXT("MiniGamePanel_Field"),TEXT("AbusePanel_Field"),TEXT("UrgentAssistancePanel_Field")})

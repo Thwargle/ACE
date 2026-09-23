@@ -536,6 +536,7 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	const bool bHeld = Object.ParentGuid != 0 && Object.ParentLocation != 0;
 	const bool bStaticProp = !Object.bIsPlayer
 		&& (Object.ItemType & ACEItemType::Creature) == 0
+		&& (Object.PhysicsState & ACEPhysicsState::Missile) == 0
 		&& Object.ParentGuid == 0
 		&& Object.WielderId == 0
 		&& Object.ContainerId == 0
@@ -554,6 +555,9 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	else if (PlacementId == 0 && (bStaticProp || bUsesOnOff)
 		&& NewSetupId != 0x02000306)
 	{
+		// Flying projectiles retain the network placement (including default 0).
+		// Retail applies PhysicsDesc.animframe_id after creating the part array;
+		// forcing Resting here reverses Spike Strafe's blade model in flight.
 		// Doors/chests skipped Resting because they use On/Off motion. Default (0) part
 		// frames are often a T-pose slab that does not sit in the Setup jamb.
 		// Portalspace_background (DIDMap 0x02000306) has placement 0 only — no Resting 101.

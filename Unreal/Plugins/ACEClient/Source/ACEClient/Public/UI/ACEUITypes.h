@@ -50,6 +50,10 @@ namespace ACEUI
 		constexpr uint32 PaperDoll = 0x10000024u;
 		constexpr uint32 Spellbook = 0x1000002Eu;
 		constexpr uint32 SmartBoxWrapper = 0x10000030u;
+		constexpr uint32 OptionCheckbox = 0x10000035u;
+		constexpr uint32 OptionCheckboxSlider = 0x10000036u;
+		constexpr uint32 OptionCheckboxBitfield = 0x10000043u;
+		constexpr uint32 OptionCheckboxBitfield64 = 0x10000044u;
 		constexpr uint32 MainChat = 0x10000041u;
 	}
 

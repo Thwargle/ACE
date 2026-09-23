@@ -388,10 +388,12 @@ namespace
 		OutCeiling = FACEBuiltMeshSection();
 		OutFloorWall.SurfaceId = Src.SurfaceId;
 		OutFloorWall.bClipMap = Src.bClipMap;
+		OutFloorWall.bWrapTexture = Src.bWrapTexture;
 		OutFloorWall.bFullyTransparent = Src.bFullyTransparent;
 		OutFloorWall.bCollisionOnly = Src.bCollisionOnly;
 		OutCeiling.SurfaceId = Src.SurfaceId;
 		OutCeiling.bClipMap = Src.bClipMap;
+		OutCeiling.bWrapTexture = Src.bWrapTexture;
 		OutCeiling.bFullyTransparent = Src.bFullyTransparent;
 		OutCeiling.bCollisionOnly = Src.bCollisionOnly;
 

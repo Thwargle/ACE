@@ -338,6 +338,15 @@ namespace
 				continue;
 			}
 			Child->bVisible = IsAlwaysOnChrome(Child->ElementName);
+			if (Child->ElementName == TEXT("RootGameplay_FloatyToolbar_Field"))
+			{
+				// The authored compact box clips the second row. Use the retail full
+				// 132px toolbar and preserve its bottom anchor at every UI scale.
+				Child->Y -= 32;
+				Child->Height = Child->AuthoredHeight = Child->MinHeight = Child->MaxHeight = 132;
+				UACEUIElementManager::ApplyFloatyResizeLayout(Child);
+			}
+
 		}
 
 		/**
@@ -360,6 +369,7 @@ namespace
 			else if (Child->ElementName == TEXT("RootGameplay_FloatyPanel_Field"))
 			{
 				Panel = Child;
+				Panel->Y -= 32; // Keep the inventory above the full two-row toolbar.
 			}
 		}
 		// MainChat is z=600; raise exam/panel so they are not buried under chat where they overlap.

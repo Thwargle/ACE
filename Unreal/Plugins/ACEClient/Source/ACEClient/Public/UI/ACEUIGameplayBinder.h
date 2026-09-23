@@ -19,6 +19,7 @@ class UCanvasPanel;
 class USizeBox;
 class UTextBlock;
 class UEditableTextBox;
+class UComboBoxString;
 class UScrollBox;
 class USlider;
 class UButton;
@@ -54,6 +55,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEChatParityTest;
 
 public:
+	bool ScrollFellowship(float WheelDelta, FVector2D CanvasLocalPos);
 	void Initialize(UACEClientSubsystem* InClient, UACEUIElementManager* InManager,
 		UACEUICanvasWidget* InCanvas, AACEPlayerController* InPC);
 	void Shutdown();
@@ -83,6 +85,9 @@ private:
 	bool bExaminationDismissed = false;
 public:
 	void ToggleKeyboardMappingUI();
+	void PollKeyboardActions(APlayerController* PC);
+	void HandleKeymapImport(const FString& Path);
+	bool ScrollKeyboard(float WheelDelta, FVector2D CanvasLocalPos);
 	void ToggleCombatModeHotkey();
 	void PlayEmoteHotkey(uint32 MotionCommand, bool bHoldPose);
 
@@ -110,7 +115,7 @@ public:
 	bool TryHandleOverlayClick(FVector2D CanvasLocalPos, bool bRightClick = false);
 	/** LMB press on inventory icon begins a pending drag (activate after small move). */
 	bool TryBeginInventoryDrag(FVector2D CanvasLocalPos);
-	void AssignInventoryShortcut(int32 Guid, int32 SlotIndex);
+	void AssignInventoryShortcut(int32 Guid, int32 SlotIndex, int32 SourceShortcut = INDEX_NONE);
 	void UpdateInventoryDrag(FVector2D CanvasLocalPos);
 	/** Completes drag (move/wield/drop) or click/double-click use when not dragged. */
 	bool TryFinishInventoryDrag(FVector2D CanvasLocalPos);
@@ -231,6 +236,8 @@ public:
 	void HandleLinkStatusChanged(const FACELinkStatus& Status);
 	UFUNCTION()
 	void HandleFriendNameCommitted(const FText& Text, ETextCommit::Type CommitMethod);
+	UFUNCTION() void HandleFellowshipNameChanged(const FText& Text);
+	UFUNCTION() void HandleFellowshipNameCommitted(const FText& Text, ETextCommit::Type CommitMethod);
 
 public:
 	bool TryHandleModalPopupClick(FVector2D Absolute);
@@ -248,6 +255,8 @@ private:
 		TitleList,
 		StackSize,
 		Effects,
+		Fellowship,
+		Keyboard,
 		EffectsInfo,
 		Chat,
 		VendorItems,
@@ -369,8 +378,6 @@ private:
 	UPROPERTY()
 	TObjectPtr<UTextBlock> AttrHeaderLuminanceValue;
 	int32 SpellHotbarScrollOffset = 0;
-	/** 0 = slots 1–9, 1 = slots 10–18 (single visible row; wheel scrolls). */
-	int32 ShortcutBarPage = 0;
 	bool bShowPaperdollSlots = false;
 	/** Retail vitals: icons (detail) by default; click meter → numeric "cur / max". */
 	bool bShowVitalNumbers = false;
@@ -385,7 +392,7 @@ private:
 	void RefreshChatRowLayout(int32 Window);
 	float ChatRowWidths[5] = {};
 	FVector2D ChatRowScales[5] = {};
-	/** Client-side loot range close debounce (mirrors PendingLootClose). */
+	/** Client-side loot range close debounce. */
 	double PendingLootRangeCloseAt = 0.0;
 
 	/** Melee / missile combat panel state (retail FloatyCombatPanel). */
@@ -416,9 +423,27 @@ private:
 	void SetRetailTooltip(UWidget* Widget, const FText& Text);
 	void TickSelectionFlash();
 	void RefreshKeyboardOverlays();
+	void ShowKeymapImport(const FString& Report = FString());
+	void RefreshKeymapDialog();
+	UFUNCTION() UWidget* GenerateKeymapFileLabel(FString Item);
 	bool HandleKeyboardNamedClick(const FString& Name);
 	FString ActiveKeyboardPage = TEXT("Movement");
 	UPROPERTY(Transient) TArray<TObjectPtr<UWidget>> KeyboardRows;
+	TArray<TSharedPtr<FACEUIElement>> KeyboardEntryElements;
+	TSharedPtr<FACEUIElement> KeyboardGroupElement;
+	UPROPERTY(Transient) TObjectPtr<UTextBlock> KeyboardGroupLabel;
+	UPROPERTY(Transient) TArray<TObjectPtr<UTextBlock>> KeyboardRowLabels;
+	UPROPERTY(Transient) TArray<TObjectPtr<UTextBlock>> KeyboardKeyLabels;
+	int32 KeyboardScrollOffset=0, KeyboardMaxOffset=0, KeyboardVisibleRows=1;
+	FString KeyboardFileName=TEXT("acclient.keymap");
+	TSharedPtr<FACEUIElement> KeymapDialog;
+	UPROPERTY(Transient) TArray<TObjectPtr<UTextBlock>> KeymapDialogLabels;
+	UPROPERTY(Transient) TObjectPtr<UComboBoxString> KeymapFileChoice;
+	TArray<FString> KeymapFiles;
+	FString KeymapDialogMessage, KeymapOverwritePath;
+	bool bKeymapSave=false;
+	UPROPERTY(Transient) TObjectPtr<UEditableTextBox> KeymapImportPath;
+	bool bKeymapImportOpen = false;
 	UPROPERTY(Transient) TArray<TObjectPtr<UTextBlock>> KeyboardLabels;
 	UPROPERTY(Transient) TObjectPtr<UUserWidget> VideoSettings;
 	TArray<TWeakObjectPtr<UPrimitiveComponent>> FlashMeshes;
@@ -714,8 +739,6 @@ private:
 	int32 OpenLootContainerGuid = 0;
 	int32 OpenLootSelectedPackGuid = 0;
 	/** Debounce CloseGroundContainer flicker at UseRadius edge. */
-	int32 PendingLootCloseGuid = 0;
-	double PendingLootCloseAt = 0.0;
 	int32 ExtItemScrollOffset = 0;
 	int32 ExtPackScrollOffset = 0;
 	int32 OpenVendorGuid = 0;
@@ -866,7 +889,7 @@ private:
 	FString ActiveSocialTab = TEXT("AllegiancePage");
 	int32 SelectedFellowGuid = 0;
 	int32 SelectedFriendGuid = 0;
-	bool bPendingFellowShareXP = true;
+	bool CanActivateFellowshipControl(const FString& Name) const;
 	bool bSocialEntriesBound = false;
 	UPROPERTY()
 	TObjectPtr<UEditableTextBox> FellowshipNameEntry;
@@ -876,6 +899,10 @@ private:
 	TArray<TObjectPtr<UTextBlock>> FellowRows;
 	UPROPERTY()
 	TArray<int32> FellowRowGuids;
+	TArray<TSharedPtr<FACEUIElement>> FellowRowElements;
+	UPROPERTY(Transient) TArray<TObjectPtr<UTextBlock>> FellowDetailLabels;
+	int32 FellowScrollOffset = 0;
+	int32 FellowVisibleRows = 1;
 	UPROPERTY()
 	TArray<TObjectPtr<UTextBlock>> FriendRows;
 	UPROPERTY()
@@ -1081,6 +1108,8 @@ private:
 
 	/** Inventory item drag (DAT overlays). */
 	int32 InvDragGuid = 0;
+	int32 InvDragShortcutSlot = INDEX_NONE;
+	int32 HitTestShortcutSlot(FVector2D CanvasLocalPos) const;
 	int32 InvDragIconDid = 0;
 	int32 InvDragSourcePack = 0;
 	int32 InvDragSourceSlot = INDEX_NONE;

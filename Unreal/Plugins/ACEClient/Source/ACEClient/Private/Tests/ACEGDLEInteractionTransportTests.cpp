@@ -81,6 +81,11 @@ bool FACEGDLEInteractionTransportTest::RunTest(const FString&)
                 }
                 else if (Action == 0x001A) TestEqual(TEXT("Wield location"), R.ReadUInt32(), 0x100000u);
                 TestEqual(TEXT("No extra action payload"), R.Remaining(), 0);
+                if(Action==0x001A)
+                {
+                    FACEBinaryWriter Ack;Ack.WriteUInt32(Item);Ack.WriteUInt32(0x100000);
+                    FACEBinaryReader AR(Ack.GetData());Session.HandleWieldItem(AR);
+                }
                 if (!BaseInterval) { BaseInterval = Interval; BaseTime = Elapsed; }
                 else
                 {

@@ -41,6 +41,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACELoadingTransitionTest;
 	friend class FACEPortalRetirementTest;
 	friend class FACELedgeStairsTest;
+	friend class FACEFortTethStairsTest;
 	friend class FACERunSpeedParityTest;
 	friend class FACEMissingDatLoginTest;
 	friend class FACELauncherViewportTest;

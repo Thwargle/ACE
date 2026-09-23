@@ -34,6 +34,18 @@ bool UACEUIGameplayBinder::GetVRPointerFeedback(FVector2D Point, FBox2D& Bounds,
 		|| Items(VendorItemSlots, VendorItemGuids, TEXT("Trigger: select / B: inspect / Double click: add to cart"))
 		|| Items(TradeSelfSlots, TradeSelfGuids, TEXT("Trigger: select / B: inspect / Hold trigger: drag"))
 		|| Items(TradeOtherSlots, TradeOtherGuids, TEXT("Trigger: select / B: inspect"))) return true;
+	if (Client)
+		if (const int32 Index = HitTestShortcutSlot(Point); Index != INDEX_NONE)
+		{
+			const auto El = Manager->FindElementByName(FString::Printf(TEXT("ShortcutBar%s_Shortcut%dButton"), Index < 9 ? TEXT("") : TEXT("2"), Index % 9 + 1));
+			const FIntPoint Origin = El->GetScreenOrigin();
+			Bounds = FBox2D(Canvas->LayoutToViewport(FVector2D(Origin)), Canvas->LayoutToViewport(FVector2D(Origin + FIntPoint(El->Width, El->Height))));
+			Guid = Client->GetShortcutObject(Index);
+			FACEWorldObject Item;
+			if (Client->GetWorldObject(Guid, Item)) Label = Item.Name;
+			Hint = TEXT("Trigger: select / A: use / B: inspect / Hold trigger: move shortcut");
+			return true;
+		}
 	const FVector2D Layout = Canvas->ViewportToLayout(Point);
 	const auto Element = Manager->HitTestCanvas(FMath::FloorToInt(Layout.X), FMath::FloorToInt(Layout.Y));
 	if (!Element) return false;

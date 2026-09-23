@@ -479,6 +479,7 @@ void UACEUICanvasWidget::SyncElementRecursive(
 	int32 NextClipX1 = ClipX1;
 	int32 NextClipY1 = ClipY1;
 	const bool bTightenClip = Element->ElementName.StartsWith(TEXT("RootGameplay_"))
+		|| Element->Type == ACEUI::ElementType::Meter
 		|| Element->ElementName == TEXT("PanelPages")
 		|| Element->ElementName.EndsWith(TEXT("Panel_Field"))
 		|| Element->ElementName.EndsWith(TEXT("ExamineUI"))
@@ -513,11 +514,11 @@ void UACEUICanvasWidget::SyncElementRecursive(
 		const bool bVertical = Element->Height > Element->Width * 1.5f;
 		if (bVertical)
 		{
-			FillClipH = FMath::Max(1, FMath::RoundToInt(static_cast<float>(Element->Height) * Frac));
+			FillClipH = FMath::FloorToInt(static_cast<float>(Element->Height) * Frac);
 		}
 		else
 		{
-			FillClipW = FMath::Max(1, FMath::RoundToInt(static_cast<float>(Element->Width) * Frac));
+			FillClipW = FMath::FloorToInt(static_cast<float>(Element->Width) * Frac);
 		}
 		// Empty vial (meter_background) and toolbar empty frames on the Meter node itself
 		// must stay full size. Only fill children receive FillClip.
@@ -530,12 +531,12 @@ void UACEUICanvasWidget::SyncElementRecursive(
 			const bool bVertical = Element->Height > Element->Width * 1.5f;
 			if (bVertical)
 			{
-				ChildClipH = FMath::Max(1, FMath::RoundToInt(static_cast<float>(Element->Height) * Frac));
+				ChildClipH = FMath::FloorToInt(static_cast<float>(Element->Height) * Frac);
 				ChildClipW = INDEX_NONE;
 			}
 			else
 			{
-				ChildClipW = FMath::Max(1, FMath::RoundToInt(static_cast<float>(Element->Width) * Frac));
+				ChildClipW = FMath::FloorToInt(static_cast<float>(Element->Width) * Frac);
 				ChildClipH = INDEX_NONE;
 			}
 			OwnClipW = ChildClipW;
@@ -935,6 +936,8 @@ FReply UACEUICanvasWidget::NativeOnMouseWheel(const FGeometry& InGeometry, const
 	{
 		const FVector2D Local = InGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition());
 		const int32 ChatWindow=GameplayBinder->ChatWindowAtPointer(Local);
+		if(GameplayBinder->ScrollKeyboard(InMouseEvent.GetWheelDelta(),Local))return FReply::Handled();
+		if(GameplayBinder->ScrollFellowship(InMouseEvent.GetWheelDelta(),Local))return FReply::Handled();
 		if (ChatWindow!=INDEX_NONE)
 		{
 			// Slate wheel delta: positive = scroll up content.
@@ -1015,14 +1018,14 @@ FReply UACEUICanvasWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, c
 	const auto Focused = FSlateApplication::Get().GetUserFocusedWidget(InKeyEvent.GetUserIndex());
 	const bool bEditingText = Focused && (Focused->GetTypeAsString().Contains(TEXT("EditableText"))
 		|| Focused->GetTypeAsString().Contains(TEXT("RetailTextEntry")));
-	if (GameplayBinder && InKeyEvent.GetKey() == EKeys::Escape && !InKeyEvent.IsRepeat()
+	if (GameplayBinder && ACEInputBindings::Matches(EKeys::Escape, FInputChord(InKeyEvent.GetKey(),InKeyEvent.IsShiftDown(),InKeyEvent.IsControlDown(),InKeyEvent.IsAltDown(),InKeyEvent.IsCommandDown())) && !InKeyEvent.IsRepeat()
 		&& !bEditingText && !ACEInputBindings::IsEditing())
 	{
 		GameplayBinder->HandleEscape();
 		return FReply::Handled();
 	}
-	if (GameplayBinder && (InKeyEvent.GetKey() == EKeys::Enter || InKeyEvent.GetKey() == EKeys::Slash)
-		&& !InKeyEvent.IsRepeat() && !InKeyEvent.IsAltDown() && !InKeyEvent.IsControlDown()
+	if (GameplayBinder && ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("Chat")), FInputChord(InKeyEvent.GetKey(),InKeyEvent.IsShiftDown(),InKeyEvent.IsControlDown(),InKeyEvent.IsAltDown(),InKeyEvent.IsCommandDown()))
+		&& !InKeyEvent.IsRepeat()
 		&& !GameplayBinder->IsChatEntryFocused() && !bEditingText && !ACEInputBindings::IsEditing())
 	{
 		GameplayBinder->FocusChatEntry();
@@ -1035,8 +1038,8 @@ FReply UACEUICanvasWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FK
 {
 	if (CharSelectBinder && CharSelectBinder->KeyDown(InKeyEvent)) return FReply::Handled();
 	if(CharGenBinder && CharGenBinder->KeyDown(InKeyEvent)) return FReply::Handled();
-	if (GameplayBinder && (InKeyEvent.GetKey() == EKeys::Enter || InKeyEvent.GetKey() == EKeys::Slash)
-		&& !InKeyEvent.IsRepeat() && !InKeyEvent.IsAltDown() && !InKeyEvent.IsControlDown()
+	if (GameplayBinder && ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("Chat")), FInputChord(InKeyEvent.GetKey(),InKeyEvent.IsShiftDown(),InKeyEvent.IsControlDown(),InKeyEvent.IsAltDown(),InKeyEvent.IsCommandDown()))
+		&& !InKeyEvent.IsRepeat()
 		&& !ACEInputBindings::IsEditing())
 	{
 		// When the entry already has focus, EditableTextBox OnTextCommitted sends the line.

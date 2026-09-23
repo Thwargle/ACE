@@ -1,4 +1,5 @@
 #include "UI/ACEUIGameplayBinder.h"
+#include "Components/ComboBoxString.h"
 #include "ACERadarVisuals.h"
 #include "UI/ACEChatEntry.h"
 #include "ACEEquipmentRules.h"
@@ -565,6 +566,14 @@ void UACEUIGameplayBinder::Shutdown()
 	for (UWidget* Row:KeyboardRows) if (Row) Row->RemoveFromParent();
 	for (UTextBlock* Label:KeyboardLabels) if (Label) Label->RemoveFromParent();
 	KeyboardRows.Reset(); KeyboardLabels.Reset();
+	for (UTextBlock* Label:KeyboardRowLabels) if(Label)Label->RemoveFromParent();
+	for (UTextBlock* Label:KeyboardKeyLabels) if(Label)Label->RemoveFromParent();
+	if(KeyboardGroupLabel)KeyboardGroupLabel->RemoveFromParent();
+	if(KeymapFileChoice)KeymapFileChoice->RemoveFromParent();
+	if(KeymapImportPath)KeymapImportPath->RemoveFromParent();
+	for(UTextBlock* Label:KeymapDialogLabels)if(Label)Label->RemoveFromParent();
+	KeyboardRowLabels.Reset();KeyboardKeyLabels.Reset();KeyboardEntryElements.Reset();
+	KeyboardGroupElement.Reset();KeyboardGroupLabel=nullptr;KeymapFileChoice=nullptr;KeymapImportPath=nullptr;KeymapDialog.Reset();KeymapDialogLabels.Reset();
 	if (VideoSettings) VideoSettings->RemoveFromParent();
 	VideoSettings=nullptr;
 	CancelInventoryDrag();
@@ -736,19 +745,7 @@ void UACEUIGameplayBinder::TickRefresh()
 	TickStatusPanels(FApp::GetDeltaTime());
 	TickCombatAutoAttack(FApp::GetDeltaTime());
 	TickEnvPanelRangeChecks();
-	if (PendingLootCloseGuid != 0 && FPlatformTime::Seconds() >= PendingLootCloseAt)
-	{
-		if (OpenLootContainerGuid == PendingLootCloseGuid)
-		{
-			// Spurious CloseGroundContainer while still in interact range — keep panel.
-			if (IsBeyondContainerUseRadius(PendingLootCloseGuid))
-			{
-				HideExternalContainer(false);
-			}
-		}
-		PendingLootCloseGuid = 0;
-		PendingLootCloseAt = 0.0;
-	}
+
 	{
 		const int32 EquipMode = ResolveEquippedCombatMode();
 		// Never force EquipMode over an explicit Melee/Missile/Magic choice every tick —
@@ -856,6 +853,10 @@ void UACEUIGameplayBinder::OnElementActivated(TSharedPtr<FACEUIElement> Element)
 		int32 FloatyChatIdx = 0;
 		for (TSharedPtr<FACEUIElement> A = Cur; A.IsValid(); A = A->Parent.Pin())
 		{
+			if(A->ElementName==TEXT("FellowsListBoxScrollbar"))
+			{FellowScrollOffset+=Dir;RefreshFellowshipOverlays();return;}
+			if(A->ElementName==TEXT("KeyboardMappingScrollbar"))
+			{KeyboardScrollOffset+=Dir;RefreshKeyboardOverlays();return;}
 			if (A->ElementName == TEXT("BookPanel_Field") && BookScroll)
 			{
 				BookScroll->SetScrollOffset(FMath::Clamp(BookScroll->GetScrollOffset()+Dir*28.f,0.f,BookScroll->GetScrollOffsetOfEnd()));
@@ -1271,30 +1272,34 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 	if (Name == TEXT("CreateFellowshipButton"))
 	{
 		EnsureSocialEntryBoxes();
+		if(!CanActivateFellowshipControl(Name))return true;
 		FString FellowName = FellowshipNameEntry
 			? FellowshipNameEntry->GetText().ToString().TrimStartAndEnd() : FString();
-		if (FellowName.IsEmpty())
-		{
-			FellowName = TEXT("Fellowship");
-		}
+		FellowName=FellowName.Left(32);
 		if (Client)
 		{
-			Client->SendFellowshipCreate(FellowName, bPendingFellowShareXP);
+			Client->SendFellowshipCreate(FellowName, Client->IsCharacterOptionSet(0x0F));
 		}
 		return true;
 	}
 	if (Name == TEXT("FellowQuitButton"))
 	{
+		if(!CanActivateFellowshipControl(Name))return true;
+		const auto Info=Client->GetFellowship();
+		if(Info.LeaderGuid==Client->GetPlayerGuid())for(const auto& M:Info.Members)
+			if(M.Guid!=Info.LeaderGuid){Client->SendFellowshipAssignNewLeader(M.Guid);break;}
 		if (Client) { Client->SendFellowshipQuit(false); }
 		return true;
 	}
 	if (Name == TEXT("FellowDisbandButton"))
 	{
+		if(!CanActivateFellowshipControl(Name))return true;
 		if (Client) { Client->SendFellowshipQuit(true); }
 		return true;
 	}
 	if (Name == TEXT("FellowRecruitButton"))
 	{
+		if(!CanActivateFellowshipControl(Name))return true;
 		if (Client && LastSelection.bValid && LastSelection.Guid != 0)
 		{
 			Client->SendFellowshipRecruit(LastSelection.Guid);
@@ -1307,6 +1312,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 	}
 	if (Name == TEXT("FellowDismissButton"))
 	{
+		if(!CanActivateFellowshipControl(Name))return true;
 		if (Client && SelectedFellowGuid != 0)
 		{
 			Client->SendFellowshipDismiss(SelectedFellowGuid);
@@ -1315,6 +1321,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 	}
 	if (Name == TEXT("FellowLeaderButton"))
 	{
+		if(!CanActivateFellowshipControl(Name))return true;
 		if (Client && SelectedFellowGuid != 0)
 		{
 			Client->SendFellowshipAssignNewLeader(SelectedFellowGuid);
@@ -1323,6 +1330,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 	}
 	if (Name == TEXT("FellowOpenButton"))
 	{
+		if(!CanActivateFellowshipControl(Name))return true;
 		if (Client)
 		{
 			const FACEFellowshipInfo Info = Client->GetFellowship();
@@ -1334,7 +1342,6 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 	{
 		// Retail ShareFellowshipExpAndLuminance (0x0F) — also the default for new fellowships.
 		ToggleCharacterOption(0x0F);
-		bPendingFellowShareXP = Client ? Client->IsCharacterOptionSet(0x0F) : !bPendingFellowShareXP;
 		RefreshSocialButtonLabels();
 		return true;
 	}
@@ -1822,29 +1829,27 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 		return true;
 	}
 
-	// ShortcutBar_ShortcutNButton — visible row maps through ShortcutBarPage.
-	if (Name.StartsWith(TEXT("ShortcutBar_Shortcut")) && Name.EndsWith(TEXT("Button")))
+	// Retail exposes two rows of nine persistent shortcut slots.
+	if ((Name.StartsWith(TEXT("ShortcutBar_Shortcut")) || Name.StartsWith(TEXT("ShortcutBar2_Shortcut")))
+		&& Name.EndsWith(TEXT("Button")))
 	{
+		const bool bSecondRow = Name.StartsWith(TEXT("ShortcutBar2_"));
 		FString Rest = Name;
-		Rest.RemoveFromStart(TEXT("ShortcutBar_Shortcut"));
+		Rest.RemoveFromStart(bSecondRow ? TEXT("ShortcutBar2_Shortcut") : TEXT("ShortcutBar_Shortcut"));
 		Rest.RemoveFromEnd(TEXT("Button"));
 		const int32 Slot = FCString::Atoi(*Rest);
 		if (Slot >= 1 && Slot <= 9)
 		{
-			const int32 Guid = Client ? Client->GetShortcutObject(Slot - 1 + ShortcutBarPage * 9) : 0;
+			const int32 Index = Slot - 1 + (bSecondRow ? 9 : 0);
+			const int32 Guid = Client ? Client->GetShortcutObject(Index) : 0;
 			const double Now = FPlatformTime::Seconds();
 			const bool bDouble = Guid != 0 && Guid == LastInvClickGuid && Now - LastInvClickTime < InventoryDoubleClickSeconds();
 			SelectInventoryGuid(Guid);
 			LastInvClickGuid = bDouble ? 0 : Guid;
 			LastInvClickTime = bDouble ? 0.0 : Now;
-			if (bDouble) UseShortcutSlot(Slot + ShortcutBarPage * 9);
+			if (bDouble) UseShortcutSlot(Index + 1);
 			return true;
 		}
-	}
-	if (Name.StartsWith(TEXT("ShortcutBar2_Shortcut")) && Name.EndsWith(TEXT("Button")))
-	{
-		// Row 2 hidden; ignore clicks on residual DAT nodes.
-		return true;
 	}
 
 	// Paper doll / inventory item click via ElementName when overlay not used
@@ -2207,9 +2212,8 @@ void UACEUIGameplayBinder::ToggleKeyboardMappingUI()
 	if (!El.IsValid())
 	{
 		PostInventorySystemMessage(
-			TEXT("Keyboard: W/S move, A/D turn, Q/E sidestep, Shift walk, Space jump, ")
-			TEXT("G sit, B lie down, C crouch, K point, J wave, I inventory, P skills, ")
-			TEXT("M magic, U quests, O options, ~ combat, Home last attacker, Enter chat."));
+			TEXT("Keyboard: W/X move, A/D turn, Z/C sidestep, Q autorun, Shift walk, Space jump, ")
+			TEXT("R use, E examine, F12 inventory, F5 spells, F11 options, ~ combat, Enter chat."));
 		return;
 	}
 	const bool bOn = !El->bVisible;
@@ -3382,7 +3386,7 @@ void UACEUIGameplayBinder::ActivateHotbarSlot(int32 SlotIndex)
 		}
 		return;
 	}
-	UseShortcutSlot(SlotIndex + 1 + ShortcutBarPage * 9);
+	UseShortcutSlot(SlotIndex + 1);
 }
 
 void UACEUIGameplayBinder::SelectInventoryGuid(int32 Guid)
@@ -3699,67 +3703,8 @@ int64 UACEUIGameplayBinder::ResolveWieldLocation(const FACEWorldObject& Obj, int
 
 void UACEUIGameplayBinder::UnequipConflictsAndWield(int32 Guid, const FACEWorldObject& Obj, int64 Loc)
 {
-	if (!Client || Guid == 0 || Loc == 0)
-	{
-		return;
-	}
-	const int32 Self = Client->GetPlayerGuid();
-	constexpr int64 WeaponHand = ACEEquipMask::MeleeWeapon | ACEEquipMask::TwoHanded
-		| ACEEquipMask::MissileWeapon | ACEEquipMask::Held;
-	constexpr int64 Jewelry = ACEEquipMask::NeckWear | ACEEquipMask::WristWearLeft
-		| ACEEquipMask::WristWearRight | ACEEquipMask::FingerWearLeft | ACEEquipMask::FingerWearRight
-		| ACEEquipMask::TrinketOne | ACEEquipMask::Cloak | ACEEquipMask::SigilOne
-		| ACEEquipMask::SigilTwo | ACEEquipMask::SigilThree;
-	const bool bWeaponHand = (Loc & WeaponHand) != 0;
-	const uint32 NewCov = ACEInferClothingPriority(Loc, Obj.ItemType);
-	const bool bClothingOrArmor = NewCov != 0;
-
-	for (const FACEWorldObject& Eq : Client->GetEquippedItems())
-	{
-		if (Eq.Guid == Guid || Eq.CurrentWieldedLocation == 0)
-		{
-			continue;
-		}
-		const int64 EqLoc = Eq.CurrentWieldedLocation;
-		bool bConflict = false;
-		if ((Loc == ACEEquipMask::Shield && ((EqLoc & (ACEEquipMask::Held | ACEEquipMask::TwoHanded)) != 0
-			|| ((EqLoc & ACEEquipMask::MissileWeapon) != 0 && Eq.AmmoType != 0)))
-			|| ((EqLoc & ACEEquipMask::Shield) != 0 && ((Loc & (ACEEquipMask::Held | ACEEquipMask::TwoHanded)) != 0
-				|| ((Loc & ACEEquipMask::MissileWeapon) != 0 && Obj.AmmoType != 0))))
-		{
-			bConflict = true;
-		}
-		else if (bWeaponHand && (EqLoc & WeaponHand) != 0)
-		{
-			bConflict = true;
-		}
-		else if (bClothingOrArmor)
-		{
-			// Retail Creature_Equipment: Clothing conflicts use ClothingPriority, not EquipMask.
-			const uint32 EqCov = ACEInferClothingPriority(EqLoc, Eq.ItemType);
-			if (EqCov != 0)
-			{
-				bConflict = (NewCov & EqCov) != 0;
-			}
-			else if ((EqLoc & Loc) != 0)
-			{
-				bConflict = true;
-			}
-		}
-		else if ((Loc & Jewelry) != 0 && (EqLoc & Loc) != 0)
-		{
-			bConflict = true;
-		}
-		else if ((EqLoc & Loc) != 0 && ACEInferClothingPriority(EqLoc, Eq.ItemType) == 0)
-		{
-			bConflict = true;
-		}
-		if (bConflict)
-		{
-			Client->SendPutItemInContainer(Eq.Guid, Self, 0);
-		}
-	}
-	Client->SendGetAndWieldItem(Guid, Loc);
+	// The session sequences the swap on server containment acknowledgements.
+	if (Client) Client->SendGetAndWieldItem(Guid, Loc);
 }
 
 void UACEUIGameplayBinder::UseInventoryItem(int32 Guid)
@@ -4085,6 +4030,7 @@ void UACEUIGameplayBinder::CancelInventoryDrag()
 {
 	if (PaperDollDragTargetIcon) PaperDollDragTargetIcon->SetVisibility(ESlateVisibility::Collapsed);
 	InvDragGuid = 0;
+	InvDragShortcutSlot = INDEX_NONE;
 	InvDragIconDid = 0;
 	InvDragSourcePack = 0;
 	InvDragSourceSlot = INDEX_NONE;
@@ -4251,6 +4197,26 @@ bool UACEUIGameplayBinder::TryBeginInventoryDrag(FVector2D CanvasLocalPos)
 		return false;
 	}
 	const FVector2D Absolute = Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos);
+
+	InvDragShortcutSlot = INDEX_NONE;
+	const int32 Index = HitTestShortcutSlot(CanvasLocalPos);
+	if (Client && Index != INDEX_NONE)
+	{
+		const int32 Guid = Client->GetShortcutObject(Index);
+		FACEWorldObject Obj;
+		if (!Guid || !Client->GetWorldObject(Guid, Obj)) return false;
+		InvDragGuid = Guid;
+		InvDragIconDid = Guid == Client->GetPlayerGuid() ? 0x06004CF7u : Obj.IconId;
+		InvDragShortcutSlot = Index;
+		InvDragSourcePack = 0;
+		InvDragSourceSlot = InvDragPackSlotIndex = INDEX_NONE;
+		InvDragStartLocal = CanvasLocalPos;
+		bInvDragPending = true;
+		bInvDragActive = false;
+		bInvDoubleClickPending = Guid == LastInvClickGuid && FPlatformTime::Seconds() - LastInvClickTime < InventoryDoubleClickSeconds();
+		SelectInventoryGuid(Guid);
+		return true;
+	}
 
 	// Loot panel items → drag into inventory (double-click picks up).
 	if (OpenLootContainerGuid != 0)
@@ -4485,7 +4451,7 @@ void UACEUIGameplayBinder::UpdateInventoryDrag(FVector2D CanvasLocalPos)
 	}
 }
 
-void UACEUIGameplayBinder::AssignInventoryShortcut(int32 Guid, int32 SlotIndex)
+void UACEUIGameplayBinder::AssignInventoryShortcut(int32 Guid, int32 SlotIndex, int32 SourceShortcut)
 {
 	if (!Client || !Guid || SlotIndex < 0 || SlotIndex >= 18) return;
 	// gmToolbarUI::OnUIElementMessage / CreateShortcutToItem: remove the
@@ -4495,7 +4461,11 @@ void UACEUIGameplayBinder::AssignInventoryShortcut(int32 Guid, int32 SlotIndex)
 	for (int32 Index = 0; Index < 18; ++Index)
 		if (Client->GetShortcutObject(Index) == Guid) Client->SendRemoveShortcut(Index);
 	Client->SendAddShortcut(SlotIndex, Guid);
-	if (Displaced && Displaced != Guid)
+	if (Displaced && Displaced != Guid && SourceShortcut != INDEX_NONE)
+	{
+		Client->SendAddShortcut(SourceShortcut, Displaced);
+	}
+	else if (Displaced && Displaced != Guid)
 	{
 		for (int32 Offset = 1; Offset < 18; ++Offset)
 		{
@@ -4521,6 +4491,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 	const int32 SourcePack = InvDragSourcePack;
 	const int32 SourceSlot = InvDragSourceSlot;
 	const int32 DragPackSlot = InvDragPackSlotIndex;
+	const int32 ShortcutSource = InvDragShortcutSlot;
 	const bool bWasDragging = bInvDragActive;
 	const bool bDoubleClick = bInvDoubleClickPending;
 	const bool bLootSource = OpenLootContainerGuid != 0
@@ -4586,36 +4557,20 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		return true;
 	}
 
-	// Toolbar shortcut slot → AddShortCut.
-	for (int32 i = 0; i < ShortcutIcons.Num() && i < 9; ++i)
+	// Both authored rows accept inventory items and shortcut-to-shortcut swaps.
+	if (const int32 Destination = HitTestShortcutSlot(CanvasLocalPos); Destination != INDEX_NONE)
 	{
-		UBorder* Border = ShortcutIcons[i];
-		if (!Border || Border->GetVisibility() == ESlateVisibility::Collapsed)
-		{
-			continue;
-		}
-		if (Canvas->IsWidgetExposedAt(Border, Absolute))
-		{
-			AssignInventoryShortcut(Guid, ShortcutBarPage * 9 + i);
-			return true;
-		}
+		AssignInventoryShortcut(Guid, Destination, ShortcutSource);
+		return true;
 	}
-	for (int32 Vis = 1; Vis <= 9; ++Vis)
+
+	if (ShortcutSource != INDEX_NONE)
 	{
-		TSharedPtr<FACEUIElement> El = Manager
-			? Manager->FindElementByName(FString::Printf(TEXT("ShortcutBar_Shortcut%dButton"), Vis))
-			: nullptr;
-		if (!El.IsValid() || !El->bVisible || !Canvas->IsElementExposedAt(El, CanvasLocalPos))
-		{
-			continue;
-		}
-		const FIntPoint O = El->GetScreenOrigin();
-		if (CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
-			&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height)
-		{
-			AssignInventoryShortcut(Guid, ShortcutBarPage * 9 + (Vis - 1));
-			return true;
-		}
+		// Dragging a shortcut out of the toolbar removes its binding, never the item.
+		Client->SendRemoveShortcut(ShortcutSource);
+		RefreshShortcutOverlays();
+		RefreshInventoryOverlays();
+		return true;
 	}
 
 	// Drop onto open vendor UI → stage the item or a pack's contents in the Sell cart.
@@ -5122,6 +5077,14 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 	const FGeometry LayerGeo = Canvas->GetElementLayer()->GetCachedGeometry();
 	const FVector2D Absolute = LayerGeo.LocalToAbsolute(CanvasLocalPos);
 	if (bRightClick && InspectSpellAt(CanvasLocalPos)) return true;
+	if (bRightClick && Client)
+		if (const int32 Index = HitTestShortcutSlot(CanvasLocalPos); Index != INDEX_NONE)
+		{
+			const int32 Guid = Client->GetShortcutObject(Index);
+			if (Guid) { SelectInventoryGuid(Guid); Client->SendIdentifyObject(Guid); }
+			return true;
+		}
+
 	if (bRightClick && Client && ActivePanelPage == TEXT("InventoryPanel_Field"))
 	{
 		FString SlotName;
@@ -5320,9 +5283,10 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 				{
 					continue;
 				}
-				if (Canvas->IsWidgetExposedAt(Row, Absolute))
+				if (FellowRowElements.IsValidIndex(i) && Canvas->IsElementExposedAt(FellowRowElements[i],CanvasLocalPos))
 				{
 					SelectedFellowGuid = FellowRowGuids[i];
+					if(Client)Client->SelectObject(SelectedFellowGuid);
 					RefreshFellowshipOverlays();
 					return true;
 				}
@@ -6075,6 +6039,7 @@ void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Sele
 	const bool SameStackSelection = LastSelection.Guid == Selection.Guid;
 	const int32 PreviousStackAmount = SelectedStackAmount;
 	LastSelection = Selection;
+	if(ActivePanelPage==TEXT("SocialPanel_Field") && ActiveSocialTab==TEXT("FellowshipPage"))RefreshFellowshipOverlays();
 	SelectedStackAmount = 1;
 	SelectedStackMax = 1;
 	if (Client && Selection.bValid && Selection.Guid != 0)
@@ -7634,50 +7599,30 @@ bool UACEUIGameplayBinder::IsChatEntryFocused() const
 	return false;
 }
 
+int32 UACEUIGameplayBinder::HitTestShortcutSlot(FVector2D CanvasLocalPos) const
+{
+	if (!Manager || !Canvas) return INDEX_NONE;
+	const FVector2D P = Canvas->ViewportToLayout(CanvasLocalPos);
+	for (int32 Index = 0; Index < 18; ++Index)
+	{
+		const auto El = Manager->FindElementByName(FString::Printf(
+			TEXT("ShortcutBar%s_Shortcut%dButton"), Index < 9 ? TEXT("") : TEXT("2"), Index % 9 + 1));
+		if (!El || !Canvas->IsElementExposedAt(El, CanvasLocalPos)) continue;
+		const FIntPoint O = El->GetScreenOrigin();
+		if (P.X >= O.X && P.Y >= O.Y && P.X < O.X + El->Width && P.Y < O.Y + El->Height) return Index;
+	}
+	return INDEX_NONE;
+}
+
 bool UACEUIGameplayBinder::IsPointerOverShortcutBar(FVector2D CanvasLocalPos) const
 {
-	if (!Manager)
-	{
-		return false;
-	}
-	for (int32 Vis = 1; Vis <= 9; ++Vis)
-	{
-		TSharedPtr<FACEUIElement> El = Manager->FindElementByName(
-			FString::Printf(TEXT("ShortcutBar_Shortcut%dButton"), Vis));
-		if (!El.IsValid() || !El->bVisible)
-		{
-			continue;
-		}
-		bool bAncestorsVisible = true;
-		for (TSharedPtr<FACEUIElement> P = El->Parent.Pin(); P.IsValid(); P = P->Parent.Pin())
-		{
-			if (!P->bVisible) { bAncestorsVisible = false; break; }
-		}
-		if (!bAncestorsVisible)
-		{
-			continue;
-		}
-		const FIntPoint O = El->GetScreenOrigin();
-		if (CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
-			&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height)
-		{
-			return true;
-		}
-	}
-	return false;
+	return HitTestShortcutSlot(CanvasLocalPos) != INDEX_NONE;
 }
 
 bool UACEUIGameplayBinder::ScrollShortcutBar(float WheelDelta)
 {
-	// Positive wheel = page toward slots 1–9.
-	const int32 Next = FMath::Clamp(ShortcutBarPage + (WheelDelta > 0.f ? -1 : 1), 0, 1);
-	if (Next == ShortcutBarPage)
-	{
-		return false;
-	}
-	ShortcutBarPage = Next;
-	RefreshShortcutOverlays();
-	return true;
+	// Both retail rows are visible; wheel input must not remap their bindings.
+	return false;
 }
 
 void UACEUIGameplayBinder::CastSelectedHotbarSpell()
@@ -7856,28 +7801,9 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 			Canvas->PlaceWidgetAtElement(Number, El, 531);
 		}
 	};
-	for (int32 i = 0; i < 9; ++i)
+	for (int32 i = 0; i < 18; ++i)
 	{
-		const int32 SlotIndex0 = ShortcutBarPage * 9 + i;
-		PlaceSlot(FString::Printf(TEXT("ShortcutBar_Shortcut%dButton"), i + 1), SlotIndex0, i);
-	}
-	// Second authored row stays hidden — one visible row; wheel flips ShortcutBarPage.
-	for (int32 i = 0; i < 9; ++i)
-	{
-		const FString Name = FString::Printf(TEXT("ShortcutBar2_Shortcut%dButton"), i + 1);
-		if (TSharedPtr<FACEUIElement> El = Manager->FindElementByName(Name))
-		{
-			El->bVisible = false;
-		}
-		const int32 ArrayIndex = i + 9;
-		if (ShortcutIcons.IsValidIndex(ArrayIndex) && ShortcutIcons[ArrayIndex])
-		{
-			ShortcutIcons[ArrayIndex]->SetVisibility(ESlateVisibility::Collapsed);
-		}
-		if (ShortcutSlotBgs.IsValidIndex(ArrayIndex) && ShortcutSlotBgs[ArrayIndex])
-		{
-			ShortcutSlotBgs[ArrayIndex]->SetVisibility(ESlateVisibility::Collapsed);
-		}
+		PlaceSlot(FString::Printf(TEXT("ShortcutBar%s_Shortcut%dButton"), i < 9 ? TEXT("") : TEXT("2"), i % 9 + 1), i, i);
 	}
 }
 
@@ -13046,6 +12972,12 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 		return true;
 	};
 
+	if (ActivePanelPage == TEXT("SocialPanel_Field") && ActiveSocialTab == TEXT("FellowshipPage") && Client)
+		if (TryBar(Manager->FindElementUnder(TEXT("FellowshipPage"),TEXT("FellowsListBoxScrollbar")),
+			EACEUIScrollTarget::Fellowship,FMath::Max(0,Client->GetFellowship().Members.Num()-FellowVisibleRows),false)) return true;
+	if (const auto KeyboardRoot=Manager->FindElementByName(TEXT("RootGameplay_Keyboard_Field"));KeyboardRoot && KeyboardRoot->bVisible && !bKeymapImportOpen)
+		if(TryBar(Manager->FindElementUnder(ActiveKeyboardPage+TEXT("Page"),TEXT("KeyboardMappingScrollbar")),
+			EACEUIScrollTarget::Keyboard,KeyboardMaxOffset,false))return true;
 	if (ActivePanelPage == TEXT("QuestManagementPanel_Field") && ActiveQuestTab == TEXT("PageListPage"))
 	{
 		auto List=Manager->FindElementUnder(ActiveQuestTab,TEXT("PageListBox"));
@@ -13273,6 +13205,10 @@ void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D CanvasLocalPos)
 	{
 	case EACEUIScrollTarget::Components:
 		ComponentScrollOffset = Off; RefreshComponentOverlays(); break;
+	case EACEUIScrollTarget::Fellowship:
+		FellowScrollOffset=Off;RefreshFellowshipOverlays();break;
+	case EACEUIScrollTarget::Keyboard:
+		KeyboardScrollOffset=Off;RefreshKeyboardOverlays();break;
 	case EACEUIScrollTarget::JournalList:
 		JournalScrollOffset=Off; RefreshQuestOverlays(); break;
 	case EACEUIScrollTarget::CharacterInfo:
@@ -13450,8 +13386,6 @@ void UACEUIGameplayBinder::TickEnvPanelRangeChecks()
 			}
 			else if (FPlatformTime::Seconds() >= PendingLootRangeCloseAt)
 			{
-				PendingLootCloseGuid = 0;
-				PendingLootCloseAt = 0.0;
 				PendingLootRangeCloseAt = 0.0;
 				HideExternalContainer(true);
 			}
@@ -13593,11 +13527,17 @@ void UACEUIGameplayBinder::ShowExternalContainer(int32 Guid)
 void UACEUIGameplayBinder::HideExternalContainer(bool bNotifyServer)
 {
 	const int32 Guid = OpenLootContainerGuid;
+	if (Guid && (InvDragSourcePack == Guid || InvDragSourcePack == OpenLootSelectedPackGuid)) CancelInventoryDrag();
+	if (Guid && Client && LastSelection.bValid)
+	{
+		FACEWorldObject Selected;
+		if (Client->GetWorldObject(LastSelection.Guid, Selected)
+			&& (Selected.ContainerId == Guid || (OpenLootSelectedPackGuid && Selected.ContainerId == OpenLootSelectedPackGuid)))
+			Client->SelectObject(0);
+	}
 	OpenLootContainerGuid = 0;
 	OpenLootSelectedPackGuid = 0;
 	ExtItemScrollOffset = 0;
-	PendingLootCloseGuid = 0;
-	PendingLootCloseAt = 0.0;
 	PendingLootRangeCloseAt = 0.0;
 	for (UBorder* B : ExtItemSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
 	for (UBorder* B : ExtItemSlotBgs) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
@@ -14380,16 +14320,7 @@ void UACEUIGameplayBinder::HideTradePanel(bool bNotifyServer)
 
 void UACEUIGameplayBinder::HandleExternalContainerOpened(int32 Guid)
 {
-	// Don't cancel a pending out-of-range close with a late ViewContents.
-	if (PendingLootCloseGuid != 0 && Guid == PendingLootCloseGuid
-		&& IsBeyondContainerUseRadius(Guid))
-	{
-		return;
-	}
-	PendingLootCloseGuid = 0;
-	PendingLootCloseAt = 0.0;
-	// Same corpse ViewContents again — refresh icons only; do not reset scroll/selection
-	// (that looked like a random reload every time the server re-sent contents).
+	// A repeated contents snapshot refreshes the existing root, preserving scroll.
 	if (Guid != 0 && Guid == OpenLootContainerGuid)
 	{
 		RefreshExternalContainerOverlays();
@@ -14400,23 +14331,10 @@ void UACEUIGameplayBinder::HandleExternalContainerOpened(int32 Guid)
 
 void UACEUIGameplayBinder::HandleExternalContainerClosed(int32 Guid)
 {
-	if (Guid != 0 && Guid == OpenLootContainerGuid)
-	{
-		// Out of UseRadius: close immediately. Debounce only when still near the corpse
-		// (server/client edge flicker at the radius boundary).
-		if (IsBeyondContainerUseRadius(Guid))
-		{
-			PendingLootCloseGuid = 0;
-			PendingLootCloseAt = 0.0;
-			HideExternalContainer(false);
-			return;
-		}
-		PendingLootCloseGuid = Guid;
-		PendingLootCloseAt = FPlatformTime::Seconds() + 0.35;
-		return;
-	}
-	(void)Guid;
-	HideExternalContainer(false);
+	// Closing is authoritative: the server stops permitting appraisal and pickup
+	// immediately. Proximity cannot keep that container's inventory accessible.
+	// A delayed close for the previous corpse must not close the new one.
+	if (Guid != 0 && Guid == OpenLootContainerGuid) HideExternalContainer(false);
 }
 
 void UACEUIGameplayBinder::HandleVendorOpened(int32 Guid)

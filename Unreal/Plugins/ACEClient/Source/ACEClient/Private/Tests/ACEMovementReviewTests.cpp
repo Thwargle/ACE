@@ -31,6 +31,41 @@ bool FACEMovementReviewTest::RunTest(const FString&)
  Context.OwningGameInstance=GI;Context.SetCurrentWorld(World);GI->Init();
  auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
  if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+ // Spike Strafe (1842, projectile weenie 7278) shares the sword gfx with
+ // ordinary equipment. Resting 101 points its blade backwards; retail applies
+ // PhysicsDesc placement 0 for flight. Other ring setups must retain their
+ // authored multi-part placement rather than receive a blanket 180-degree fix.
+ for(uint32 Setup:{0x0200087Du,0x02000885u,0x02000986u})
+ {
+  FACEWorldObject Spell;Spell.Guid=12880;Spell.SetupId=Setup;
+  Spell.PhysicsState=ACEPhysicsState::Missile|ACEPhysicsState::AlignPath;
+  Spell.bHasPosition=true;Spell.Position.CellId=0x7D640019;Spell.Position.Location=FVector(50,100,50);
+  auto* Projectile=World->SpawnActor<AACEWorldEntityActor>();Projectile->InitializeFromObject(Spell,100,true);
+  TestEqual(TEXT("Ring/wall projectile honors network default placement"),Projectile->Appearance->AppliedPlacementId,0);
+  const auto* Authored=Dat->GetOrBuildSetupMesh(Setup,100,0);
+  TestNotNull(TEXT("Real spell setup can be built"),Authored);
+  if(Authored)TestEqual(TEXT("Real projectile part meshes exist"),Projectile->Appearance->PartMeshes.Num(),Authored->Parts.Num());
+  if(Authored)for(int32 Part=0;Part<Projectile->Appearance->PartMeshes.Num();++Part)
+  {
+   FTransform Pose;Projectile->Appearance->GetPartCurrentTransform(Part,Pose);
+   TestTrue(TEXT("Every projectile part retains its authored default frame"),Authored->Parts.IsValidIndex(Part)&&Pose.Equals(Authored->Parts[Part].BindTransform,.001));
+  }
+  for(FVector Velocity:{FVector(0,4,0),FVector(4,0,0),FVector(-4,-4,1),FVector(3,2,-1)})
+  {
+   Projectile->ApplyPhysicsVelocity(Velocity);Projectile->Tick(1.f/90);
+   const FVector Direction=FACEPosition::AceVectorToUnreal(Velocity,1).GetSafeNormal();
+   TestTrue(TEXT("Projectile +Y aligns with travel, including pitch"),FVector::DotProduct(Projectile->GetActorQuat().RotateVector(FVector::YAxisVector),Direction)>.999);
+   if(Setup==0x0200087D)
+   {
+    auto* Part=Projectile->Appearance->GetPartMesh(0);
+    TestTrue(TEXT("Spike Strafe's actual blade points tip-first"),Part&&FVector::DotProduct(Part->GetComponentTransform().TransformVectorNoScale(FVector::UpVector),Direction)>.999);
+   }
+  }
+  const FQuat Before=Projectile->GetActorQuat();
+  Projectile->ApplyPhysicsVelocity(FVector(0,4,0),FVector(2,0,0));Projectile->Tick(.1f);
+  TestFalse(TEXT("Authored spinning projectile omega is preserved"),Projectile->GetActorQuat().Equals(Before,.001));
+  Projectile->Destroy();
+ }
  // Academy Cestus (weenie 12753) has authored hand frames 1/2, but no frame 7.
  // Verify the rendered pose, not just an enum mapping: a missing frame silently
  // falls back to the setup's unrotated default and leaves the offhand hanging.
@@ -292,10 +327,38 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   const FVector NewPlayerFeet=Session.PlayerPosition.ToUnrealLocation(100);
   for(int32 I=0;I<240;++I)RatActor->Tick(1.f/60);
   TestTrue(TEXT("Rat follows the live local player pose without walking inside it"),FMath::Abs(FVector::Dist2D(NewPlayerFeet,RatActor->GetActorLocation())-ExpectedSeparation)<.2f);
+  // Starting inside approach distance must still turn, without translating.
+  const FVector RatFeet=RatActor->GetActorLocation();
+  Session.PlayerPosition.SetLocationFromUnreal(RatFeet+FVector(30,0,0),100);
+  RatActor->RemoteMotion=Approach;
+  for(int32 I=0;I<60;++I)RatActor->Tick(1.f/60);
+  TestTrue(TEXT("Close MoveTo faces the attacker without stepping into them"),RatActor->GetActorQuat().RotateVector(FVector::YAxisVector).X>.99 && FVector::Dist2D(RatFeet,RatActor->GetActorLocation())<.1);
+  // A real interpreted swing carries StickToObject after the command list.
+  Session.WorldObjects.Add(Rat.Guid,Rat);
+  const auto MotionHandle=Session.OnMotionUpdate.AddLambda([&](int32 Guid,const FACEObjectMotionState& Motion){if(Guid==Rat.Guid)RatActor->ApplyMotionState(Motion);});
+  auto ReceiveSticky=[&](int32 Target)
+  {
+   FACEBinaryWriter W;W.WriteUInt32(Rat.Guid);W.WriteUInt16(0);W.WriteUInt16(1);W.WriteUInt16(0);W.WriteUInt8(0);W.Align();
+   W.WriteUInt8(0);W.WriteUInt8(Target?1:0);W.WriteUInt16(0x3c);W.WriteUInt32(0);W.Align();if(Target)W.WriteUInt32(Target);
+   FACEBinaryReader R(W.GetData());Session.HandleUpdateMotion(R);
+  };
+  ReceiveSticky(Self.Guid);
+  TestEqual(TEXT("Interpreted combat retains server facing target"),RatActor->RemoteMotion.StickyTargetGuid,Self.Guid);
+  for(FVector Offset:{FVector(-30,0,0),FVector(0,-30,0),FVector(0,30,0)})
+  {
+   Session.PlayerPosition.SetLocationFromUnreal(RatFeet+Offset,100);
+   for(int32 I=0;I<90;++I)RatActor->Tick(1.f/90);
+   TestTrue(TEXT("Stationary attack tracks nearby live player, not stale object echo"),FVector::DotProduct(RatActor->GetActorQuat().RotateVector(FVector::YAxisVector),Offset.GetSafeNormal())>.99);
+   TestTrue(TEXT("Combat facing does not pull monster inside player"),FVector::Dist2D(RatFeet,RatActor->GetActorLocation())<.1);
+  }
+  ReceiveSticky(0);TestEqual(TEXT("Next ordinary motion releases combat facing"),RatActor->RemoteMotion.StickyTargetGuid,0);
+  ReceiveSticky(Self.Guid);FACEObjectMotionState Dead;Dead.ActionCommand=ACEMotion::Dead;Dead.StickyTargetGuid=Self.Guid;RatActor->ApplyMotionState(Dead);
+  TestEqual(TEXT("Death stops target tracking"),RatActor->RemoteMotion.StickyTargetGuid,0);
+  Session.OnMotionUpdate.Remove(MotionHandle);Session.WorldObjects.Remove(Rat.Guid);
   RatActor->Destroy();Session.PlayerPosition=Self.Position;Session.WorldObjects[Self.Guid]=Self;
  }
  FACEObjectMotionState Range;Range.MoveToFlags=0x400;
- TestEqual(TEXT("Body overlap remains a signed distance"),Range.ApproachDistance(FVector(0,.3,0),.3,2,.3,1),-FMath::Sqrt(4.f+.09f));
+ TestEqual(TEXT("Body overlap remains a signed distance"),Range.ApproachDistance(FVector(0,.3,0),.3f,2,.3f,1),-FMath::Sqrt(4.f+.09f));
  TestEqual(TEXT("Raised targets include retail vertical separation"),Range.ApproachDistance(FVector(0,0,3),.5,2,.5,1),FMath::Sqrt(5.f));
  Range.MoveToFlags=0;
  TestEqual(TEXT("MoveTo without UseSpheres still measures point distance"),Range.ApproachDistance(FVector(0,0,3),.5,2,.5,1),3.f);
