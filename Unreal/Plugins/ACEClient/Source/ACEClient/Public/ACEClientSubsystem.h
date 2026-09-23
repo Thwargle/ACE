@@ -722,9 +722,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "ACE|UI")
 	class UACEUIResourceResolver* GetUIResourceResolver() const { return UIResourceResolver; }
 
+	/** True for items held by the player, including items inside nested packs. */
+	bool IsOwnedInventoryItem(const FACEWorldObject& Object) const;
 private:
 	void TickInventorySort(float DeltaTime);
-	bool IsOwnedInventoryItem(const FACEWorldObject& Object) const;
 	int32 SortSourceGuid=0, SortPlayerGuid=0, SortMergeTargetGuid=0;
 	int32 SortExpectedSource=0, SortExpectedTarget=0;
 	float SortWaitSeconds=0.f;

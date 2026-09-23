@@ -65,6 +65,15 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     Controller->ApplyMouseLookDelta(100,100,Boom);
     TestTrue(TEXT("Mouse turning OFF ignores orbit deltas"),Boom->GetRelativeRotation().IsZero());
     TestTrue(TEXT("Right click still identifies when mouse turning is OFF"),Controller->UpdateMouseButtons(false,false,false,false));
+    Controller->bInstantMouseLookHeld=true;
+    Controller->UpdateMouseButtons(true,false,false,false);
+    TestTrue(TEXT("Bound instant mouse look works with the ordinary mouse-turn option off"),Controller->bMouseLookActive);
+    Controller->ApplyMouseLookDelta(2,0,Boom);
+    TestTrue(TEXT("Instant mouse look applies camera motion"),FMath::Abs(Boom->GetRelativeRotation().Yaw)>1.f);
+    Controller->bInstantMouseLookHeld=false;
+    Controller->UpdateMouseButtons(false,false,false,false);
+    TestFalse(TEXT("Releasing instant mouse look releases capture"),Controller->bMouseLookActive);
+    Boom->SetRelativeRotation(FRotator::ZeroRotator);
     Client->SendSetSingleCharacterOption(0x31,true);
     Controller->UpdateMouseButtons(false,true,false,false);
     TestFalse(TEXT("Left mouse alone does not move the player or capture selection clicks"),Controller->bMouseForwardActive || Controller->bMouseLookActive);

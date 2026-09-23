@@ -7,6 +7,7 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerInput.h"
+#include "RetailCustomKeymap.inl"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEInputBindingsTest,"ACE.RetailParity.KeyboardBindings",
  EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
@@ -88,7 +89,8 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  const auto Imported=ACEInputBindings::ImportRetailKeymap(Retail);
  if(!Imported.bSuccess)AddError(Imported.Error);
  TestTrue(TEXT("Retail text keymap imports"),Imported.bSuccess);
- TestTrue(TEXT("Unsupported actions, devices and modifiers are reported"),Imported.Skipped.Num()>=5);
+ TestTrue(TEXT("Unsupported actions, devices and modifiers are reported"),Imported.Skipped.Num()>=3);
+ TestEqual(TEXT("Separate native contexts are reported separately"),Imported.UnchangedContexts.Num(),2);
  TestEqual(TEXT("Import is a draft and keeps retail S backward"),ACEInputBindings::Get(EKeys::S,0).Key,EKeys::S);
  TestEqual(TEXT("Mouse autorun imports using the declared device index"),ACEInputBindings::Get(EKeys::NumLock,0).Key,EKeys::ThumbMouseButton);
  TestTrue(TEXT("Retail file mask bit 2 names MetaKeys ordinal 3, preserving Alt-A"),ACEInputBindings::Get(EKeys::Q,1)==FInputChord(EKeys::A,false,false,true,false));
@@ -119,6 +121,42 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  TestTrue(TEXT("Save and load preserve modifier bindings"),ACEInputBindings::Get(EKeys::Q,1)==FInputChord(EKeys::A,false,false,true,false));
  TestFalse(TEXT("Save and load preserve unbound actions without invalid empty control records"),ACEInputBindings::Get(EKeys::W,0).Key.IsValid());
  TestEqual(TEXT("Save and load preserve mouse bindings"),ACEInputBindings::Get(EKeys::NumLock,0).Key,EKeys::ThumbMouseButton);
+ ACEInputBindings::Cancel();
+ ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();
+ const auto Custom=ACEInputBindings::ImportRetailKeymap(RetailCustomKeymap);
+ TestTrue(TEXT("User retail keymap imports"),Custom.bSuccess);
+ TestEqual(TEXT("All supported user-file action bindings import"),Custom.BindingCount,156);
+ TestEqual(TEXT("Remaining unsupported controls are reported individually"),Custom.Skipped.Num(),19);
+ TestEqual(TEXT("All explicit supported DoNothing overrides import"),ACEInputBindings::GetBlockedBindings().Num(),17);
+ TestEqual(TEXT("Native input contexts are accounted for separately"),Custom.UnchangedContexts.Num(),9);
+ AddInfo(FString::Printf(TEXT("Custom keymap: %d imported, %d diagnostics"),Custom.BindingCount,Custom.Skipped.Num()));
+ for(const auto& Entry:Custom.Skipped)AddInfo(Entry);
+ TestEqual(TEXT("Self binding from user file"),ACEInputBindings::Get(ACEInputBindings::Action(TEXT("SelectionSelf")),0).Key,EKeys::NumPadOne);
+ TestEqual(TEXT("Windows applications key imports for contracts"),ACEInputBindings::Get(EKeys::U,0).Key,ACEInputBindings::ApplicationsKey());
+ TestEqual(TEXT("Mouse wheel imports as directional zoom"),ACEInputBindings::Get(EKeys::Add,0).Key,EKeys::MouseScrollUp);
+ TestEqual(TEXT("Custom friend panel does not become allegiance"),ACEInputBindings::Get(ACEInputBindings::Action(TEXT("ToggleFriendsPanel")),0).Key,EKeys::F3);
+ ACEInputBindings::Commit();ACEInputBindings::SetCombatContext(1);
+ Hold({EKeys::LeftControl,EKeys::Up});TestFalse(TEXT("DoNothing Ctrl+Up blocks forward fallback"),ACEInputBindings::Down(PC,EKeys::W));
+ Hold({EKeys::LeftAlt,EKeys::A});TestFalse(TEXT("DoNothing Alt+A blocks turning"),ACEInputBindings::Down(PC,EKeys::A));
+ TestFalse(TEXT("DoNothing Alt+A blocks old strafe default"),ACEInputBindings::Down(PC,EKeys::Q));
+ Hold({EKeys::Up});TestTrue(TEXT("Plain Up still moves"),ACEInputBindings::Down(PC,EKeys::W));
+ Hold({EKeys::LeftAlt,EKeys::Up});TestTrue(TEXT("Alt+Up still autoruns"),ACEInputBindings::Down(PC,EKeys::NumLock));
+ TestFalse(TEXT("Alt+Up does not also move"),ACEInputBindings::Down(PC,EKeys::W));
+ Hold({EKeys::Slash});TestTrue(TEXT("Custom slash selects a player"),ACEInputBindings::Down(PC,ACEInputBindings::Action(TEXT("SelectionClosestPlayer"))));
+ TestFalse(TEXT("Custom slash no longer opens chat"),ACEInputBindings::Down(PC,ACEInputBindings::Action(TEXT("Chat"))));
+ Hold({EKeys::LeftControl,EKeys::LeftShift,EKeys::One});TestTrue(TEXT("Custom second-row shortcut survives"),ACEInputBindings::Down(PC,ACEInputBindings::Shortcut(9)));
+ Hold({EKeys::LeftAlt,EKeys::One});TestTrue(TEXT("Alt+1 opens floating chat from this file"),ACEInputBindings::Down(PC,ACEInputBindings::Action(TEXT("ToggleFloatingChatWindow1"))));
+ TestFalse(TEXT("Floating chat binding does not also use a shortcut"),ACEInputBindings::Down(PC,ACEInputBindings::Shortcut(9)));
+ ACEInputBindings::Reload();
+ Hold({EKeys::LeftControl,EKeys::Up});TestFalse(TEXT("DoNothing survives settings reload"),ACEInputBindings::Down(PC,EKeys::W));
+ ACEInputBindings::BeginEdit();
+ TestTrue(TEXT("Custom bindings export"),ACEInputBindings::ExportRetailKeymapFile(ExportPath,ExportError));
+ ACEInputBindings::Defaults();TestTrue(TEXT("Custom bindings reimport"),ACEInputBindings::ImportRetailKeymapFile(ExportPath).bSuccess);
+ ACEInputBindings::Commit();Hold({EKeys::LeftControl,EKeys::Up});
+ TestFalse(TEXT("DoNothing survives retail export/import"),ACEInputBindings::Down(PC,EKeys::W));
+ TestTrue(TEXT("Mouse wheel survives retail export/import"),ACEInputBindings::Matches(EKeys::Add,FInputChord(EKeys::MouseScrollUp)));
+ ACEInputBindings::BeginEdit();ACEInputBindings::Set(EKeys::W,2,FInputChord(EKeys::Up,false,true,false,false));ACEInputBindings::Commit();
+ TestTrue(TEXT("Explicit rebind can replace DoNothing"),ACEInputBindings::Down(PC,EKeys::W));
  ACEInputBindings::Cancel();
  return !HasAnyErrors();
 }

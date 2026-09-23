@@ -1,9 +1,17 @@
 #include "ACEInputBindings.h"
+#include "ACERetailInputActions.h"
 #include "GameFramework/PlayerController.h"
 #include "Misc/ConfigCacheIni.h"
 namespace ACEInputBindings
 {
 static TMap<FKey,TArray<FInputChord>> Live, Draft;
+static TArray<FBlockedBinding> LiveBlocked, DraftBlocked;
+FKey ApplicationsKey()
+{
+ static const FKey Key(TEXT("ACEApplications"));
+ if(!Key.IsValid())EKeys::AddKey(FKeyDetails(Key,NSLOCTEXT("ACEInput","Applications","Menu"),0));
+ return Key;
+}
 struct FCandidate {FKey ActionKey;FInputChord Chord;};
 static TMap<FKey,TArray<FCandidate>> PhysicalBindings;
 static void IndexBindings()
@@ -38,8 +46,8 @@ const TArray<FAction>& Actions()
    {EKeys::NumPadSix,TEXT("Rotate camera right"),TEXT("Camera"),{FInputChord(EKeys::NumPadSix)}},
    {EKeys::NumPadEight,TEXT("Rotate camera up"),TEXT("Camera"),{FInputChord(EKeys::NumPadEight)}},
    {EKeys::NumPadTwo,TEXT("Rotate camera down"),TEXT("Camera"),{FInputChord(EKeys::NumPadTwo)}},
-   {EKeys::Add,TEXT("Zoom camera in"),TEXT("Camera"),{FInputChord(EKeys::Subtract)}},
-   {EKeys::Subtract,TEXT("Zoom camera out"),TEXT("Camera"),{FInputChord(EKeys::Add)}},
+   {EKeys::Add,TEXT("Zoom camera in"),TEXT("Camera"),{FInputChord(EKeys::Subtract),FInputChord(EKeys::MouseScrollUp)}},
+   {EKeys::Subtract,TEXT("Zoom camera out"),TEXT("Camera"),{FInputChord(EKeys::Add),FInputChord(EKeys::MouseScrollDown)}},
    {EKeys::NumPadZero,TEXT("Reset camera"),TEXT("Camera"),{FInputChord(EKeys::NumPadZero)}},
    {EKeys::NumPadFive,TEXT("First person camera"),TEXT("Camera"),{FInputChord(EKeys::Decimal)}},
    {EKeys::NumPadThree,TEXT("Overhead camera"),TEXT("Camera"),{FInputChord(EKeys::NumPadFive)}},
@@ -107,6 +115,7 @@ const TArray<FAction>& Actions()
   }
   static const TCHAR* SpellLabels[]={TEXT("Magic: spell 1"),TEXT("Magic: spell 2"),TEXT("Magic: spell 3"),TEXT("Magic: spell 4"),TEXT("Magic: spell 5"),TEXT("Magic: spell 6"),TEXT("Magic: spell 7"),TEXT("Magic: spell 8"),TEXT("Magic: spell 9")};
   for(int32 I=0;I<9;++I)Result.Emplace(SpellSlot(I),SpellLabels[I],TEXT("Combat"),TArray<FInputChord>{FInputChord(Digits[I])},8);
+  Result.Append(ACERetailAdditionalActions());
   return Result;
  }();
  return List;
@@ -120,6 +129,7 @@ static bool Active(FKey Key){const int32 Mode=Context(Key);return !Mode||Mode==A
 static void Load()
 {
  if(bLoaded)return; bLoaded=true;
+ ApplicationsKey(); // Register imported physical keys before indexing saved chords.
  TSet<FKey> SavedActions;
  for(const auto& A:Actions())
  {
@@ -135,6 +145,12 @@ static void Load()
  for(auto& Pair:Live)if(!SavedActions.Contains(Pair.Key))for(auto& Chord:Pair.Value)
   for(FKey Saved:SavedActions)if(Context(Pair.Key)==Context(Saved) && Chord.Key.IsValid() && Live[Saved].Contains(Chord))Chord=FInputChord();
  IndexBindings();
+ TArray<FString> Blocks;GConfig->GetArray(TEXT("ACE.InputBindings"),TEXT("Blocked"),Blocks,GGameUserSettingsIni);
+ for(const auto& Text:Blocks)
+ {
+  TArray<FString> F;Text.ParseIntoArray(F,TEXT("|"),false);
+  if(F.Num()==7)LiveBlocked.Add({F[0],FInputChord(FKey(*F[1]),F[2]==TEXT("1"),F[3]==TEXT("1"),F[4]==TEXT("1"),F[5]==TEXT("1")),FCString::Atoi(*F[6])});
+ }
 }
 static int32 Specificity(const FInputChord& C){return C.bShift+C.bCtrl+C.bAlt+C.bCmd;}
 static bool Allows(const FInputChord& C,const FInputChord& Input)
@@ -149,6 +165,8 @@ bool Matches(FKey Key,const FInputChord& Input)
  for(const auto& C:*Bindings)if(Allows(C,Input))
  {
   bool MoreSpecific=false;
+  for(const auto& B:LiveBlocked)if((!B.Context||B.Context==ActiveContext)&&Allows(B.Chord,Input)
+   && (Specificity(B.Chord)>Specificity(C) || (Specificity(B.Chord)==Specificity(C) && (B.Context||!Context(Key)))))MoreSpecific=true;
   // Alt+A must strafe rather than also turn. Shift+W still moves while the
   // separate run/walk modifier is held; only an actual chord takes precedence.
   if(const auto* Candidates=PhysicalBindings.Find(Input.Key))for(const auto& Other:*Candidates)if(Active(Other.ActionKey))
@@ -169,33 +187,45 @@ static bool Check(const APlayerController* PC,FKey Key,bool bPressed)
  const bool Cmd=PC->IsInputKeyDown(EKeys::LeftCommand)||PC->IsInputKeyDown(EKeys::RightCommand);
  for(const auto& C:*Bindings)
   if(C.Key.IsValid() && (bPressed?PC->WasInputKeyJustPressed(C.Key):PC->IsInputKeyDown(C.Key))
+   && (bPressed || (C.Key!=EKeys::MouseScrollUp && C.Key!=EKeys::MouseScrollDown))
    && Matches(Key,FInputChord(C.Key,Shift,Ctrl,Alt,Cmd)))return true;
  return false;
 }
 bool Down(const APlayerController* PC,FKey Key){return Check(PC,Key,false);}
 bool Pressed(const APlayerController* PC,FKey Key){return Check(PC,Key,true);}
-void BeginEdit(){Load();Draft=Live;bEditing=true;}
-void Reload(){bLoaded=false;bEditing=false;ActiveContext=1;Live.Reset();Draft.Reset();Load();}
-void Defaults(){for(const auto& A:Actions()){auto& B=Draft.FindOrAdd(A.Key);B=A.DefaultBindings;B.SetNum(3);}}
-void Revert(){Draft=Live;}
-void Cancel(){Draft=Live;bEditing=false;}
+void BeginEdit(){Load();Draft=Live;DraftBlocked=LiveBlocked;bEditing=true;}
+void Reload(){bLoaded=false;bEditing=false;ActiveContext=1;Live.Reset();Draft.Reset();LiveBlocked.Reset();DraftBlocked.Reset();Load();}
+void Defaults(){DraftBlocked.Reset();for(const auto& A:Actions()){auto& B=Draft.FindOrAdd(A.Key);B=A.DefaultBindings;B.SetNum(3);}}
+void Revert(){Draft=Live;DraftBlocked=LiveBlocked;}
+void Cancel(){Revert();bEditing=false;}
+void ReplaceBlockedBindings(const TSet<FString>& Groups,const TArray<FBlockedBinding>& Bindings)
+{
+ if(!bEditing)return;
+ DraftBlocked.RemoveAll([&](const FBlockedBinding& B){return Groups.Contains(B.Group);});
+ DraftBlocked.Append(Bindings);
+}
+const TArray<FBlockedBinding>& GetBlockedBindings(){Load();return bEditing?DraftBlocked:LiveBlocked;}
 bool IsEditing(){return bEditing;}
 FInputChord Get(FKey Key,int32 Slot){Load();const auto* B=(bEditing?Draft:Live).Find(Key);return B&&B->IsValidIndex(Slot)?(*B)[Slot]:FInputChord();}
 void Set(FKey Key,int32 Slot,FInputChord Chord)
 {
  if(!bEditing||Slot<0||Slot>2)return;
+ if(Chord.Key.IsValid())DraftBlocked.RemoveAll([&](const FBlockedBinding& B){return B.Context==Context(Key)&&B.Chord==Chord;});
  if(Chord.Key.IsValid())for(auto& Pair:Draft)if(Context(Pair.Key)==Context(Key))for(auto& C:Pair.Value)if(C==Chord)C=FInputChord();
  auto& B=Draft.FindOrAdd(Key);B.SetNum(3);B[Slot]=Chord;
 }
 void Commit()
 {
- if(!bEditing)return; Live=Draft;bEditing=false;
+ if(!bEditing)return; Live=Draft;LiveBlocked=DraftBlocked;bEditing=false;
  IndexBindings();
  for(const auto& Pair:Live)for(int32 S=0;S<Pair.Value.Num();++S)
  {
   const auto& C=Pair.Value[S]; const FString Value=FString::Printf(TEXT("%s|%d|%d|%d|%d"),*C.Key.ToString(),C.bShift,C.bCtrl,C.bAlt,C.bCmd);
   GConfig->SetString(TEXT("ACE.InputBindings"),*FString::Printf(TEXT("%s.%d"),*Pair.Key.ToString(),S),*Value,GGameUserSettingsIni);
  }
+ TArray<FString> Blocks;
+ for(const auto& B:LiveBlocked){const auto& C=B.Chord;Blocks.Add(FString::Printf(TEXT("%s|%s|%d|%d|%d|%d|%d"),*B.Group,*C.Key.ToString(),C.bShift,C.bCtrl,C.bAlt,C.bCmd,B.Context));}
+ GConfig->SetArray(TEXT("ACE.InputBindings"),TEXT("Blocked"),Blocks,GGameUserSettingsIni);
  GConfig->Flush(false,GGameUserSettingsIni);
 }
 }

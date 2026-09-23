@@ -16,12 +16,18 @@ ACECLIENT_API FKey Action(const TCHAR* Name);
 ACECLIENT_API FKey Shortcut(int32 Slot);
 ACECLIENT_API FKey SpellSlot(int32 Slot);
 ACECLIENT_API void SetCombatContext(int32 Mode);
+// DoNothing is an explicit input override, not an absent binding.
+struct FBlockedBinding { FString Group; FInputChord Chord; int32 Context=0; };
+ACECLIENT_API void ReplaceBlockedBindings(const TSet<FString>& Groups, const TArray<FBlockedBinding>& Bindings);
+ACECLIENT_API const TArray<FBlockedBinding>& GetBlockedBindings();
+ACECLIENT_API FKey ApplicationsKey();
 struct FImportResult
 {
  bool bSuccess=false;
  int32 BindingCount=0;
  FString Error;
  TArray<FString> Skipped;
+ TArray<FString> UnchangedContexts;
 };
 // Import changes the edit draft only; OK/Save commits it and Cancel discards it.
 ACECLIENT_API FImportResult ImportRetailKeymap(const FString& Text);

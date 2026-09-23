@@ -1,4 +1,5 @@
 #include "ACEInputBindings.h"
+#include "ACERetailInputActions.h"
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -77,7 +78,8 @@ const TMap<FString,FKey>& PhysicalNames()
   {TEXT("NUMPAD6"),EKeys::NumPadSix},{TEXT("NUMPAD7"),EKeys::NumPadSeven},{TEXT("NUMPAD8"),EKeys::NumPadEight},{TEXT("NUMPAD9"),EKeys::NumPadNine},
   {TEXT("ADD"),EKeys::Add},{TEXT("NUMPADPLUS"),EKeys::Add},{TEXT("SUBTRACT"),EKeys::Subtract},{TEXT("NUMPADMINUS"),EKeys::Subtract},
   {TEXT("MULTIPLY"),EKeys::Multiply},{TEXT("NUMPADSTAR"),EKeys::Multiply},{TEXT("DIVIDE"),EKeys::Divide},{TEXT("NUMPADSLASH"),EKeys::Divide},
-  {TEXT("DECIMAL"),EKeys::Decimal},{TEXT("NUMPADPERIOD"),EKeys::Decimal}
+  {TEXT("DECIMAL"),EKeys::Decimal},{TEXT("NUMPADPERIOD"),EKeys::Decimal},
+  {TEXT("APPS"),ACEInputBindings::ApplicationsKey()}
  };
  return Keys;
 }
@@ -118,6 +120,7 @@ FKey ActionFor(const FString& Name)
 {
  using namespace ACEInputBindings;
  if(const FKey* Key=ActionNames().Find(Name))return *Key;
+ for(const auto& A:ACERetailAdditionalActions())if(A.Key.ToString()==TEXT("ACE.")+Name)return A.Key;
  for(int32 I=0;I<18;++I)if(Name==FString::Printf(TEXT("UseQuickSlot_%d"),I+1))return Shortcut(I);
  for(int32 I=0;I<9;++I)if(Name==FString::Printf(TEXT("UseSpellSlot_%d"),I+1))return SpellSlot(I);
  return FKey();
@@ -125,6 +128,7 @@ FKey ActionFor(const FString& Name)
 FString NameFor(FKey Key)
 {
  for(const auto& P:ActionNames())if(P.Value==Key)return P.Key;
+ for(const auto& A:ACERetailAdditionalActions())if(A.Key==Key)return Key.ToString().Mid(4);
  for(int32 I=0;I<18;++I)if(Key==ACEInputBindings::Shortcut(I))return FString::Printf(TEXT("UseQuickSlot_%d"),I+1);
  for(int32 I=0;I<9;++I)if(Key==ACEInputBindings::SpellSlot(I))return FString::Printf(TEXT("UseSpellSlot_%d"),I+1);
  return FString();
@@ -157,7 +161,13 @@ FImportResult ImportRetailKeymap(const FString& Text)
  if(!Devices||!Bindings){Result.Error=TEXT("This is not a retail keymap: Devices and Bindings are required.");return Result;}
  auto Control=[&](const FNode& N)->FKey
  {
-  uint32 Index=0;if(N.Children.Num()!=2||!Number(N.Children[0].Name,Index)||Index>=uint32(Devices->Children.Num()))return FKey();
+  uint32 Index=0;if(N.Children.Num()<2||N.Children.Num()>3||!Number(N.Children[0].Name,Index)||Index>=uint32(Devices->Children.Num()))return FKey();
+  if(N.Children.Num()==3)
+  {
+   if(Devices->Children[Index].Name==TEXT("Mouse") && N.Children[1].Name==TEXT("DIMOFS_Z"))
+   {if(N.Children[2].Name==TEXT("AxisPositive"))return EKeys::MouseScrollUp;if(N.Children[2].Name==TEXT("AxisNegative"))return EKeys::MouseScrollDown;}
+   return FKey();
+  }
   return Physical(Devices->Children[Index].Name,N.Children[1].Name);
  };
  TMap<uint32,int32> Modifiers;
@@ -174,20 +184,26 @@ FImportResult ImportRetailKeymap(const FString& Text)
  }
  TMap<FKey,TArray<FInputChord>> Imported;
  TSet<FString> GroupsSeen;TSet<FKey> UnsupportedKeys;
- struct FUnbind{FInputChord Chord;int32 Context;};TArray<FUnbind> Unbinds;
+ TArray<FBlockedBinding> Unbinds;
  for(const FNode& Group:Bindings->Children)
  {
   // A camera action in CameraAlternateControls must never replace a movement
   // arrow in the ordinary map. Only contexts implemented by our dispatcher apply.
   static const TSet<FString> SupportedGroups={TEXT("MovementCommands"),TEXT("ItemSelectionCommands"),TEXT("UICommands"),TEXT("QuickslotCommands"),TEXT("ChatCommands"),TEXT("Combat"),TEXT("MeleeCombat"),TEXT("MissileCombat"),TEXT("MagicCombat"),TEXT("Emotes"),TEXT("CameraControls")};
   if(!SupportedGroups.Contains(Group.Name))
-  {if(!Group.Children.IsEmpty())Result.Skipped.AddUnique(Group.Name+TEXT(": this input context is unchanged"));continue;}
+  {if(!Group.Children.IsEmpty())Result.UnchangedContexts.AddUnique(FString::Printf(TEXT("%s (%d entries): existing application controls remain in use"),*Group.Name,Group.Children.Num()));continue;}
   GroupsSeen.Add(Group.Name);
   const int32 Mode=Group.Name==TEXT("MeleeCombat")?2:Group.Name==TEXT("MissileCombat")?4:Group.Name==TEXT("MagicCombat")?8:0;
   for(const FNode& N:Group.Children)
   {
    const FKey Key=ActionFor(N.Name);const bool Nothing=N.Name==TEXT("DoNothing");
-   auto Skip=[&](const TCHAR* Why){Result.Skipped.AddUnique(N.Name+TEXT(": ")+Why);if(!Key.GetFName().IsNone())UnsupportedKeys.Add(Key);};
+   auto Skip=[&](const TCHAR* Why)
+   {
+    FString Details;
+    if(!N.Children.IsEmpty())for(const auto& Part:N.Children[0].Children)Details+=TEXT(" ")+Part.Name;
+    Result.Skipped.AddUnique(N.Name+TEXT(" [")+Details.TrimStartAndEnd()+TEXT("]: ")+Why);
+    if(!Key.GetFName().IsNone())UnsupportedKeys.Add(Key);
+   };
    // Logical action IDs are not registered physical FKeys; NAME_None is the sentinel.
    if(Key.GetFName().IsNone()&&!Nothing){Skip(TEXT("action not supported"));continue;}
    if(N.Children.IsEmpty()){if(!Nothing)Imported.FindOrAdd(Key);continue;}
@@ -202,7 +218,7 @@ FImportResult ImportRetailKeymap(const FString& Text)
    {const int32* Flag=Modifiers.Find(I+1);if(!Flag||!*Flag){Valid=false;break;}Flags|=*Flag;}
    if(!Valid){Skip(TEXT("custom modifier cannot be represented"));continue;}
    const FInputChord Chord(PhysicalKey,(Flags&1)!=0,(Flags&2)!=0,(Flags&4)!=0,(Flags&8)!=0);
-   if(Nothing){Unbinds.Add({Chord,Mode});continue;}
+   if(Nothing){Unbinds.Add({Group.Name,Chord,Mode});continue;}
    auto& Keys=Imported.FindOrAdd(Key);
    if(Keys.Contains(Chord))continue;
    if(Keys.Num()==3){Skip(TEXT("more than three bindings; first three retained"));continue;}
@@ -223,6 +239,7 @@ FImportResult ImportRetailKeymap(const FString& Text)
  for(const auto& Pair:Imported)for(int32 I=0;I<3;++I)Set(Pair.Key,I,FInputChord());
  // Catalog order makes conflicting bindings deterministic.
  for(const auto& A:Actions())if(const auto* Keys=Imported.Find(A.Key))for(int32 I=0;I<Keys->Num();++I)Set(A.Key,I,(*Keys)[I]);
+ ReplaceBlockedBindings(GroupsSeen,Unbinds);
  Result.bSuccess=true;return Result;
 }
 FImportResult ImportRetailKeymapFile(const FString& Path)
@@ -238,6 +255,7 @@ bool ExportRetailKeymapFile(const FString& Path,FString& Error)
  if(!FPaths::GetExtension(Path).Equals(TEXT("keymap"),ESearchCase::IgnoreCase))
  {Error=TEXT("Choose a filename ending in .keymap.");return false;}
  TMap<FKey,FString> Names;for(const auto& P:ActionNames())Names.Add(P.Value,P.Key);
+ for(const auto& A:ACERetailAdditionalActions())Names.Add(A.Key,A.Key.ToString().Mid(4));
  for(int32 I=0;I<18;++I)Names.Add(Shortcut(I),FString::Printf(TEXT("UseQuickSlot_%d"),I+1));
  for(int32 I=0;I<9;++I)Names.Add(SpellSlot(I),FString::Printf(TEXT("UseSpellSlot_%d"),I+1));
  // First entry is ControlNameMapper's canonical DirectInput spelling; later
@@ -249,6 +267,7 @@ bool ExportRetailKeymapFile(const FString& Path,FString& Error)
  for(int32 I=1;I<=12;++I){const FString Name=FString::Printf(TEXT("F%d"),I);Controls.Add(FKey(FName(*Name)),TEXT("DIK_")+Name);}
  const FKey Mouse[]={EKeys::LeftMouseButton,EKeys::RightMouseButton,EKeys::MiddleMouseButton,EKeys::ThumbMouseButton,EKeys::ThumbMouseButton2};
  for(int32 I=0;I<5;++I)Controls.Add(Mouse[I],FString::Printf(TEXT("DIMOFS_BUTTON%d"),I));
+ Controls.Add(EKeys::MouseScrollUp,TEXT("DIMOFS_Z AxisPositive"));Controls.Add(EKeys::MouseScrollDown,TEXT("DIMOFS_Z AxisNegative"));
  TMap<FString,FString> Groups;TArray<FString> Order;
  for(const auto& A:Actions())
  {
@@ -263,10 +282,15 @@ bool ExportRetailKeymapFile(const FString& Path,FString& Error)
    const FString* Control=Controls.Find(C.Key);
    if(!Control){Error=FString::Printf(TEXT("%s cannot be saved in a retail keymap."),*C.Key.GetDisplayName().ToString());return false;}
    const uint32 Mask=(C.bShift?1u:0u)|(C.bCtrl?2u:0u)|(C.bAlt?4u:0u)|(C.bCmd?8u:0u);
-   Body+=FString::Printf(TEXT("  %s [ \"\" [ %d %s ] 0x%X ]\n"),**Name,C.Key.IsMouseButton()?1:0,**Control,Mask);
+   Body+=FString::Printf(TEXT("  %s [ \"\" [ %d %s ] 0x%X ]\n"),**Name,Control->StartsWith(TEXT("DIMOFS_"))?1:0,**Control,Mask);
   }
   // Retail rejects Action [ ] as an invalid control specification. Unbound
   // actions are absent from the group, including completely empty groups.
+ }
+ for(const auto& B:GetBlockedBindings())if(const auto* Control=Controls.Find(B.Chord.Key))
+ {
+  const auto C=B.Chord;const uint32 Mask=(C.bShift?1u:0u)|(C.bCtrl?2u:0u)|(C.bAlt?4u:0u)|(C.bCmd?8u:0u);
+  Order.AddUnique(B.Group);Groups.FindOrAdd(B.Group)+=FString::Printf(TEXT("  DoNothing [ \"\" [ %d %s ] 0x%X ]\n"),Control->StartsWith(TEXT("DIMOFS_"))?1:0,**Control,Mask);
  }
  FString Text=TEXT("\"User Defined Keymap\" [ 00000000-0000-0000-0000-000000000000 ]\nDevices [ Keyboard [ GUID_SysKeyboard ] Mouse [ GUID_SysMouse ] ]\nMetaKeys [ 1 [ 0 DIK_LSHIFT ] 2 [ 0 DIK_LCONTROL ] 2 [ 0 DIK_RCONTROL ] 3 [ 0 DIK_LMENU ] 3 [ 0 DIK_RMENU ] 4 [ 0 DIK_LWIN ] 4 [ 0 DIK_RWIN ] ]\nBindings [\n");
  for(const auto& Group:Order)Text+=Group+TEXT(" [\n")+Groups[Group]+TEXT("]\n");Text+=TEXT("]\n");

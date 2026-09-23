@@ -560,6 +560,12 @@ void UACEUIGameplayBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEleme
 
 void UACEUIGameplayBinder::Shutdown()
 {
+	CancelPendingUseWith();
+	KeyboardOpenedCorpses.Reset();
+	if (StackAmountEntry) StackAmountEntry->RemoveFromParent();
+	StackAmountEntry=nullptr; StackAmountEntryGuid=0;
+	if (KeymapReportScroll) KeymapReportScroll->RemoveFromParent();
+	KeymapReportScroll=nullptr; KeymapReportText=nullptr; bKeymapReport=false;
 	SelectionFlashUntil=0;
 	TickSelectionFlash();
 	ACEInputBindings::Cancel();
@@ -3805,6 +3811,7 @@ void UACEUIGameplayBinder::UseInventoryItem(int32 Guid)
 	const bool bDualUseTargeting = ACEItemUseable::IsTargeted(Obj.ItemUseable);
 	if (bDualUseTargeting)
 	{
+		bPendingKeyboardGive = false;
 		PendingUseWithSourceGuid = Guid;
 		SyncPendingUseCursor();
 		if (bManaStone)
@@ -3842,8 +3849,7 @@ bool UACEUIGameplayBinder::TryCompletePendingUseWithTarget(int32 TargetGuid)
 	if (Client->IsUseBusy())
 	{
 		PostInventorySystemMessage(TEXT("You're too busy!"));
-		PendingUseWithSourceGuid = 0;
-		SyncPendingUseCursor();
+		CancelPendingUseWith();
 		return true;
 	}
 	FACEWorldObject Source, Target;
@@ -3851,6 +3857,16 @@ bool UACEUIGameplayBinder::TryCompletePendingUseWithTarget(int32 TargetGuid)
 	{
 		CancelPendingUseWith();
 		return true;
+	}
+	if (bPendingKeyboardGive)
+	{
+		if (!Client->IsOwnedInventoryItem(Source) || TargetGuid==Client->GetPlayerGuid()
+			|| !Target.IsGiveOrCreatureTarget())
+		{PostInventorySystemMessage(TEXT("Select another player or an NPC to give this item to."));return true;}
+		if(PlayerController)PlayerController->BeginUseApproach(TargetGuid,Target.UseRadius>0?Target.UseRadius:.6f,false,false);
+		PendingVendorSellGuid=0; VendorSellCart.Reset(); VendorSellSelectedGuid=0;
+		Client->SendGiveObjectRequest(TargetGuid,Source.Guid,FMath::Clamp(PendingKeyboardGiveAmount,1,FMath::Max(1,Source.StackSize)));
+		CancelPendingUseWith();return true;
 	}
 	// ItemHolder::TargetAcquired: empty mana stones destroy the selected item.
 	// Retail blocks Retained items and requires the authored Yes/No dialog first.
@@ -3955,6 +3971,7 @@ void UACEUIGameplayBinder::SyncPendingUseCursor()
 
 void UACEUIGameplayBinder::CancelPendingUseWith()
 {
+	bPendingKeyboardGive = false;
 	FinishManaStoneConfirmation(false);
 	if (PendingUseWithSourceGuid == 0)
 	{
@@ -3974,6 +3991,7 @@ bool UACEUIGameplayBinder::IsPendingUseTargetCompatible(int32 TargetGuid) const
 	if (!Client) return false;
 	FACEWorldObject Source, Target;
 	if (!Client->GetWorldObject(PendingUseWithSourceGuid,Source) || !Client->GetWorldObject(TargetGuid,Target)) return false;
+	if(bPendingKeyboardGive)return Client->IsOwnedInventoryItem(Source) && TargetGuid!=Client->GetPlayerGuid() && Target.IsGiveOrCreatureTarget();
 	auto Owned = [&](FACEWorldObject Object)
 	{
 		TSet<int32> Visited;
@@ -7574,6 +7592,7 @@ bool UACEUIGameplayBinder::ScrollStatList(float WheelDelta)
 
 bool UACEUIGameplayBinder::IsChatEntryFocused() const
 {
+	if (StackAmountEntry && StackAmountEntry->HasKeyboardFocus()) return true;
 	// This gate also suppresses movement keys while editing other HUD text.
 	if (EditingInscriptionGuid && ExamInscriptionEditor && ExamInscriptionEditor->HasKeyboardFocus()) return true;
 	for (const auto& Entry : ComponentDesiredEntries) if (Entry && Entry->HasKeyboardFocus()) return true;
@@ -10629,19 +10648,7 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 		}
 	}
 
-	if (bShowStack)
-	{
-		PlaceTextOnElement(SelectionStackAmountLabel, TEXT("StackSizeEntryBox"),
-			FormatXpNumber(SelectedStackAmount), 8, TextWhite, 525);
-		if (SelectionStackAmountLabel)
-		{
-			SelectionStackAmountLabel->SetJustification(ETextJustify::Center);
-		}
-	}
-	else if (SelectionStackAmountLabel)
-	{
-		SelectionStackAmountLabel->SetVisibility(ESlateVisibility::Collapsed);
-	}
+	RefreshStackAmountEntry(bShowStack);
 
 	EnsureSelectionMarkers();
 	if (SelectionMarkerCorners.Num() < 4 || !LastSelection.bValid || LastSelection.Guid == 0 || !PlayerController || !Canvas)
@@ -14358,6 +14365,11 @@ void UACEUIGameplayBinder::HideTradePanel(bool bNotifyServer)
 
 void UACEUIGameplayBinder::HandleExternalContainerOpened(int32 Guid)
 {
+	FACEWorldObject Opened;
+	if(Client && Client->GetWorldObject(Guid,Opened) && Opened.IsCorpse())KeyboardOpenedCorpses.Add(Guid);
+	// Retire entries for objects that have left the session's streamed object set.
+	if(Client)for(auto It=KeyboardOpenedCorpses.CreateIterator();It;++It)
+	{FACEWorldObject O;if(!Client->GetWorldObject(*It,O))It.RemoveCurrent();}
 	// A repeated contents snapshot refreshes the existing root, preserving scroll.
 	if (Guid != 0 && Guid == OpenLootContainerGuid)
 	{

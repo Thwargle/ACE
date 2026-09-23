@@ -349,6 +349,7 @@ protected:
 	bool bCameraInHead = false;
 	bool bCameraLookDown = false;
 	bool bMouseLookActive = false;
+	bool bInstantMouseLookHeld = false;
 	bool bMouseLookUsesCapture = false;
 	float MouseLookTravelPixels = 0.f;
 	bool bRightMouseWasDown = false;

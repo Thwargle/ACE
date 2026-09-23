@@ -12,6 +12,8 @@
 #include "Protocol/ACECharacterTitleNames.inl"
 #include "ACEInventoryRules.h"
 #include "ACEInputBindings.h"
+#include "RetailCustomKeymap.inl"
+#include "GameFramework/PlayerInput.h"
 #include "ACECameraSettings.h"
 #include "ACERuntimeOptions.h"
 #include "UI/ACEFrameRateWidget.h"
@@ -1051,6 +1053,18 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         }
         NativeClick(TEXT("KeymapFileCancel"));
         TestFalse(TEXT("Actual dialog Cancel closes the modal"),Gameplay->bKeymapImportOpen);
+        const FString CustomPath=FPaths::ProjectSavedDir()/TEXT("Automation/CustomFixture.keymap");
+        FFileHelper::SaveStringToFile(RetailCustomKeymap,*CustomPath);
+        Gameplay->HandleKeymapImport(CustomPath);
+        CaptureScreen(TEXT("GameplayKeyboardImportReport"));
+        TestTrue(TEXT("Custom import exposes a scrollable report"),Gameplay->bKeymapReport && Gameplay->KeymapReportScroll->IsVisible());
+        TestTrue(TEXT("Report distinguishes unchanged native contexts"),Gameplay->KeymapReportText->GetText().ToString().Contains(TEXT("Separate UI/system maps")));
+        const auto ReportGeometry=Gameplay->KeymapReportScroll->GetCachedGeometry();
+        const auto ReviewGeometry=Gameplay->KeymapDialogLabels[1]->GetCachedGeometry();
+        TestTrue(TEXT("Report scroll area ends above the dialog buttons"),ReportGeometry.LocalToAbsolute(ReportGeometry.GetLocalSize()).Y<=ReviewGeometry.GetAbsolutePosition().Y);
+        NativeClick(TEXT("KeymapFileOK"));
+        TestFalse(TEXT("Review returns to the mapping draft"),Gameplay->bKeymapImportOpen);
+        ACEInputBindings::Revert();Gameplay->RefreshKeyboardOverlays();
         TestEqual(TEXT("Key editor exposes three buttons for every keyboard action"),Gameplay->KeyboardRows.Num(),ACEInputBindings::Actions().Num()*3);
         TestEqual(TEXT("Mapping rows use the retail DAT template"),Gameplay->KeyboardEntryElements[0]->ElementId,0x1000002fu);
         TestTrue(TEXT("Load File retains the retail caption"),Gameplay->KeyboardLabels.ContainsByPredicate([](const UTextBlock* T){return T&&T->GetText().ToString()==TEXT("Load File...");}));
@@ -2043,6 +2057,59 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Preview world uses the real DAT subsystem"),PreviewDat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
         auto* Controller=World->SpawnActor<AACEPlayerController>();
         Controller->Client=Client; Gameplay->PlayerController=Controller;
+        {
+            auto& Session=*Client->Session;
+            const auto SavedObjects=Session.WorldObjects; const auto SavedSelection=Session.SelectedObject;
+            const auto SavedFellowship=Session.Fellowship; const auto SavedPosition=Session.PlayerPosition;
+            Session.WorldObjects.Reset();
+            FACEPosition Position;Position.CellId=0xDA55001D;Position.Location=FVector(100,100,20);Session.PlayerPosition=Position;
+            FACEWorldObject Self;Self.Guid=Session.PlayerGuid;Self.Name=TEXT("Self");Self.ItemType=ACEItemType::Creature;Self.bIsPlayer=true;Self.bHasPosition=true;Self.Position=Position;
+            Session.WorldObjects.Add(Self.Guid,Self);
+            auto AddObject=[&](int32 Guid,float Distance,bool Player)
+            {
+                auto Object=Self;Object.Guid=Guid;Object.Position.Location.X+=Distance;Object.bIsPlayer=Player;
+                Session.WorldObjects.Add(Guid,Object);
+            };
+            AddObject(80001,10,true);AddObject(80002,20,true);AddObject(80003,5,false);AddObject(80004,80,true);
+            Gameplay->CycleKeyboardSelection(TEXT("Player"),0);
+            TestEqual(TEXT("Closest player excludes nearer NPC and self"),Client->GetSelectedObject().Guid,80001);
+            Gameplay->CycleKeyboardSelection(TEXT("Player"),1);
+            TestEqual(TEXT("Next player follows retail distance ordering"),Client->GetSelectedObject().Guid,80002);
+            Gameplay->CycleKeyboardSelection(TEXT("Player"),1);
+            TestEqual(TEXT("Next player wraps and excludes distant objects"),Client->GetSelectedObject().Guid,80001);
+            Gameplay->CycleKeyboardSelection(TEXT("CompassItem"),0);
+            TestEqual(TEXT("Radar selection can choose the nearer NPC"),Client->GetSelectedObject().Guid,80003);
+            Session.Fellowship.Members.Reset();
+            for(int32 Guid:{80002,Self.Guid,80001}){FACEFellowshipMember Member;Member.Guid=Guid;Session.Fellowship.Members.Add(Member);}
+            Client->SelectObject(80002);Gameplay->CycleKeyboardSelection(TEXT("Fellow"),1);
+            TestEqual(TEXT("Fellowship selection follows member order and includes self"),Client->GetSelectedObject().Guid,Self.Guid);
+            FACEWorldObject Stack;Stack.Guid=81000;Stack.Name=TEXT("Stack");Stack.ItemType=ACEItemType::MissileWeapon;Stack.ContainerId=Self.Guid;Stack.StackSize=50;Stack.MaxStackSize=100;
+            Session.WorldObjects.Add(Stack.Guid,Stack);Client->SelectObject(Stack.Guid);Gameplay->HandleSelectionChanged(Client->GetSelectedObject());
+            Gameplay->ShowPanelPage(TEXT("InventoryPanel_Field"));Gameplay->RefreshSelectionOverlay();
+            TestTrue(TEXT("Selected stacks expose an editable quantity"),Gameplay->StackAmountEntry && Gameplay->StackAmountEntry->IsVisible());
+            Gameplay->HandleStackAmountCommitted(FText::FromString(TEXT("999")),ETextCommit::OnEnter);
+            TestEqual(TEXT("Stack quantity cannot exceed the actual stack"),Gameplay->SelectedStackAmount,50);
+            Gameplay->HandleStackAmountCommitted(FText::FromString(TEXT("7")),ETextCommit::OnEnter);
+            TestEqual(TEXT("Retail split-stack quantity is retained for transfer"),Gameplay->SelectedStackAmount,7);
+            CaptureScreen(TEXT("GameplayKeyboardStackQuantity"));
+            ACEInputBindings::Reload();ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();
+            ACEInputBindings::Set(ACEInputBindings::Action(TEXT("ToggleFriendsPanel")),0,FInputChord(EKeys::F3));ACEInputBindings::Commit();
+            Controller->PlayerInput=NewObject<UPlayerInput>(Controller);
+            auto Press=[&](FKey Key)
+            {
+                Controller->PlayerInput->FlushPressedKeys();
+                Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(Key,IE_Pressed,1.f));
+                Controller->PlayerInput->ProcessInputStack({},.016f,false);
+                Gameplay->PollAdditionalKeyboardActions(Controller);
+            };
+            Gameplay->ShowPanelPage(TEXT("SocialPanel_Field"));Gameplay->SyncSocialPanelTab(TEXT("AllegiancePage"));
+            Press(EKeys::F3);
+            TestEqual(TEXT("Friends shortcut changes social subtab instead of closing the panel"),Gameplay->ActiveSocialTab,FString(TEXT("FriendsPage")));
+            TestEqual(TEXT("Friends shortcut keeps the social panel open"),Gameplay->ActivePanelPage,FString(TEXT("SocialPanel_Field")));
+            Controller->PlayerInput->FlushPressedKeys();ACEInputBindings::Reload();
+            Session.WorldObjects=SavedObjects;Session.SelectedObject=SavedSelection;Session.Fellowship=SavedFellowship;Session.PlayerPosition=SavedPosition;
+            Gameplay->HandleSelectionChanged(SavedSelection);Gameplay->RefreshSelectionOverlay();
+        }
 		{
 			TGuardValue<TObjectPtr<UACEUIElementManager>> KeepManager(Client->UIElementManager,Manager);
 			TGuardValue<TObjectPtr<UACEUILayoutResolver>> KeepLayout(Client->UILayoutResolver,Layout);

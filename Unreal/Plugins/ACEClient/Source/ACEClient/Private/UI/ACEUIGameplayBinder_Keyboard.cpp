@@ -183,6 +183,7 @@ void UACEUIGameplayBinder::RefreshKeymapDialog()
  if(KeymapDialog)KeymapDialog->bVisible=bKeymapImportOpen;
  if(!bKeymapImportOpen)
  {
+  if(KeymapReportScroll)KeymapReportScroll->SetVisibility(ESlateVisibility::Collapsed);
   if(KeymapFileChoice)KeymapFileChoice->SetVisibility(ESlateVisibility::Collapsed);
   if(KeymapImportPath)KeymapImportPath->SetVisibility(ESlateVisibility::Collapsed);
   for(UTextBlock* L:KeymapDialogLabels)if(L)L->SetVisibility(ESlateVisibility::Collapsed);
@@ -202,7 +203,8 @@ void UACEUIGameplayBinder::RefreshKeymapDialog()
  }
  const auto Box=KeymapChild(KeymapDialog,0x3d),Body=KeymapChild(KeymapDialog,0x3e);
  const auto Choice=KeymapChild(KeymapDialog,0x21),OK=KeymapChild(KeymapDialog,0x22),Cancel=KeymapChild(KeymapDialog,0x23);
- const FString Captions[]={KeymapDialogMessage,KeymapOverwritePath.IsEmpty()?(bKeymapSave?TEXT("Save"):TEXT("Load")):TEXT("Overwrite"),TEXT("Cancel")};
+ Choice->bVisible=!bKeymapReport;
+ const FString Captions[]={KeymapDialogMessage,bKeymapReport?TEXT("Review"):KeymapOverwritePath.IsEmpty()?(bKeymapSave?TEXT("Save"):TEXT("Load")):TEXT("Overwrite"),TEXT("Cancel")};
  const TSharedPtr<FACEUIElement> Elements[]={Body,OK,Cancel};
  for(int32 I=0;I<3;++I)
  {
@@ -210,9 +212,24 @@ void UACEUIGameplayBinder::RefreshKeymapDialog()
   auto* Label=KeymapDialogLabels[I].Get();Label->SetText(FText::FromString(Captions[I]));Label->SetJustification(ETextJustify::Center);
   Label->SetAutoWrapText(I==0);
   Label->SetVisibility(ESlateVisibility::HitTestInvisible);Canvas->PlaceWidgetAtElement(Label,Elements[I],100501);
+  if(I==0 && bKeymapReport)Label->SetVisibility(ESlateVisibility::Collapsed);
  }
+ if(bKeymapReport)
+ {
+  if(!KeymapReportScroll)
+  {
+   KeymapReportScroll=Canvas->WidgetTree->ConstructWidget<UScrollBox>();
+   KeymapReportText=Canvas->WidgetTree->ConstructWidget<UACERetailTextBlock>();
+   KeymapReportText->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),10));
+   KeymapReportText->SetAutoWrapText(true);KeymapReportScroll->AddChild(KeymapReportText);
+  }
+  KeymapReportText->SetText(FText::FromString(KeymapDialogMessage));
+  KeymapReportScroll->SetVisibility(ESlateVisibility::Visible);Canvas->PlaceWidgetAtElement(KeymapReportScroll,Body,100502);
+ }
+ else if(KeymapReportScroll)KeymapReportScroll->SetVisibility(ESlateVisibility::Collapsed);
  if(KeymapFileChoice){KeymapFileChoice->SetVisibility(bKeymapSave?ESlateVisibility::Collapsed:ESlateVisibility::Visible);Canvas->PlaceWidgetAtElement(KeymapFileChoice,Choice,100502);}
  if(KeymapImportPath){KeymapImportPath->SetVisibility(bKeymapSave?ESlateVisibility::Visible:ESlateVisibility::Collapsed);Canvas->PlaceWidgetAtElement(KeymapImportPath,Choice,100502);}
+ if(bKeymapReport){KeymapFileChoice->SetVisibility(ESlateVisibility::Collapsed);KeymapImportPath->SetVisibility(ESlateVisibility::Collapsed);}
 }
 void UACEUIGameplayBinder::ShowKeymapImport(const FString& Report)
 {
@@ -245,6 +262,7 @@ void UACEUIGameplayBinder::ShowKeymapImport(const FString& Report)
  KeymapDialogMessage=Report.IsEmpty()?(bKeymapSave?TEXT("Save keymap as:"):TEXT("Load a keymap file:")):Report;
  if(Report.IsEmpty())
  {
+  bKeymapReport=false;
   KeymapOverwritePath.Reset();KeymapFiles.Reset();KeymapFileChoice->ClearOptions();
   TArray<FString> Folders={FPaths::Combine(FPlatformProcess::UserDir(),TEXT("Asheron's Call")),FPaths::ProjectSavedDir()/TEXT("Keymaps")};
   if(auto* GI=Canvas->GetGameInstance())if(auto* Dat=GI->GetSubsystem<UACEDatSubsystem>())Folders.AddUnique(Dat->GetDatDirectory());
@@ -263,14 +281,16 @@ void UACEUIGameplayBinder::ShowKeymapImport(const FString& Report)
  }
  // Keep the retail menu/OK/Cancel row, expanding only the message area for errors.
  const auto Box=KeymapChild(KeymapDialog,0x3d),Body=KeymapChild(KeymapDialog,0x3e);
- const int32 H=KeymapDialogMessage.Len()>50?167:95,Delta=H-Box->Height;
- for(auto C:Box->Children){if(C->Y>=Body->Y+Body->Height)C->Y+=Delta;else if(C!=Body&&C->Height>40)C->Height+=Delta;}
- Body->Height=H-77;Box->Height=H;Box->Y=(Frame->Height-H)/2;
+ const int32 H=bKeymapReport?FMath::Max(167,Frame->Height-20):KeymapDialogMessage.Len()>50?167:95,Delta=H-Box->Height;
+ for(auto C:Box->Children){if(C->TopEdge==2)C->Y+=Delta;else if(C!=Body&&C->BottomEdge==1)C->Height+=Delta;}
+ Body->Height=H-(bKeymapReport?65:77);Box->Height=H;Box->Y=(Frame->Height-H)/2;
+ if(bKeymapReport && KeymapReportScroll)KeymapReportScroll->ScrollToStart();
  Manager->BringFloatyToFront(KeymapDialog);
  RefreshKeyboardOverlays();
 }
 void UACEUIGameplayBinder::HandleKeymapImport(const FString& Path)
 {
+ if(bKeymapReport && Path.IsEmpty()){bKeymapImportOpen=false;bKeymapReport=false;RefreshKeyboardOverlays();return;}
  if(Path==TEXT("!back")){bKeymapImportOpen=false;RefreshKeyboardOverlays();return;}
  FString File=Path;
  if(bKeymapSave)
@@ -291,8 +311,15 @@ void UACEUIGameplayBinder::HandleKeymapImport(const FString& Path)
  const auto Result=ACEInputBindings::ImportRetailKeymapFile(File);
  if(!Result.bSuccess){ShowKeymapImport(Result.Error);return;}
  KeyboardFileName=FPaths::GetCleanFilename(File);
- if(!Result.Skipped.IsEmpty())
- {ShowKeymapImport(FString::Printf(TEXT("Loaded %d bindings. %d unsupported entries were kept unchanged. Choose Cancel to review, then OK to apply."),Result.BindingCount,Result.Skipped.Num()));return;}
+ if(!Result.Skipped.IsEmpty() || !Result.UnchangedContexts.IsEmpty())
+ {
+  bKeymapReport=true;
+  FString Report=FString::Printf(TEXT("Loaded %d bindings into the draft. Review returns to Keyboard: OK applies them; Cancel discards them."),Result.BindingCount);
+  if(!Result.Skipped.IsEmpty())Report+=TEXT("\n\nNot imported:\n")+FString::Join(Result.Skipped,TEXT("\n"));
+  if(!Result.UnchangedContexts.IsEmpty())Report+=TEXT("\n\nSeparate UI/system maps (not remapped):\n")+FString::Join(Result.UnchangedContexts,TEXT("\n"));
+  UE_LOG(LogTemp,Display,TEXT("Retail keymap import: %s"),*Report);
+  ShowKeymapImport(Report);return;
+ }
  bKeymapImportOpen=false;RefreshKeyboardOverlays();
 }
 
@@ -301,6 +328,8 @@ void UACEUIGameplayBinder::PollKeyboardActions(APlayerController* PC)
  ACEInputBindings::SetCombatContext(CombatMode);
  if(!Client||!PC||ACEInputBindings::IsEditing()||IsChatEntryFocused())return;
  auto Pressed=[&](const TCHAR* Name){return ACEInputBindings::Pressed(PC,ACEInputBindings::Action(Name));};
+ PollAdditionalKeyboardActions(PC);
+ if(ACEInputBindings::IsEditing() || IsChatEntryFocused())return;
  for(int32 I=0;I<18;++I)if(ACEInputBindings::Pressed(PC,ACEInputBindings::Shortcut(I)))
  {
   UseShortcutSlot(I+1);

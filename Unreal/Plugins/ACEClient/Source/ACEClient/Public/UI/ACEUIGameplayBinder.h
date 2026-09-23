@@ -437,6 +437,9 @@ private:
 	int32 KeyboardScrollOffset=0, KeyboardMaxOffset=0, KeyboardVisibleRows=1;
 	FString KeyboardFileName=TEXT("acclient.keymap");
 	TSharedPtr<FACEUIElement> KeymapDialog;
+	UPROPERTY(Transient) TObjectPtr<UScrollBox> KeymapReportScroll;
+	UPROPERTY(Transient) TObjectPtr<UTextBlock> KeymapReportText;
+	bool bKeymapReport = false;
 	UPROPERTY(Transient) TArray<TObjectPtr<UTextBlock>> KeymapDialogLabels;
 	UPROPERTY(Transient) TObjectPtr<UComboBoxString> KeymapFileChoice;
 	TArray<FString> KeymapFiles;
@@ -755,6 +758,15 @@ private:
 	int32 PendingVendorSellGuid = 0;
 	/** Dual-use: source item waiting for a target click (GameAction UseWithTarget). */
 	int32 PendingUseWithSourceGuid = 0;
+	bool bPendingKeyboardGive = false;
+	int32 PendingKeyboardGiveAmount = 1;
+	TSet<int32> KeyboardOpenedCorpses;
+	void PollAdditionalKeyboardActions(APlayerController* PC);
+	void CycleKeyboardSelection(const FString& Kind, int32 Direction);
+	UPROPERTY() TObjectPtr<UEditableTextBox> StackAmountEntry;
+	int32 StackAmountEntryGuid = 0;
+	UFUNCTION() void HandleStackAmountCommitted(const FText& Text, ETextCommit::Type Method);
+	void RefreshStackAmountEntry(bool bShow);
 	int32 ManaStoneConfirmSource = 0;
 	int32 ExaminedSpellId = 0;
 	UPROPERTY() TArray<TObjectPtr<UTextBlock>> ExamSpellLabels;

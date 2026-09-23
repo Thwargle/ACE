@@ -836,7 +836,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		}
 	}
 
-	if (!bVR) { PollObjectHover(); if (!(IsUseMouseTurning() && bMouseLookActive)) PollObjectClick(); }
+	if (!bVR) { PollObjectHover(); if (!bMouseLookActive) PollObjectClick(); }
 
 	// Direct key poll so WASDQE works without DefaultInput.ini mappings. Matches the retail AC
 	// client's scheme: W/S = forward/back, A/D = turn (yaw) left/right, Q/E = sidestep.
@@ -851,7 +851,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	if (ACEInputBindings::Down(this, EKeys::Q)) R -= 1.f;
 	if (bMouseForwardActive && !bChatFocused) F = 1.f;
 	// WoW: A/D turn normally, and sidestep while holding the facing button.
-	const bool bMouseFacing = IsUseMouseTurning() && bMouseLookActive && IsInputKeyDown(EKeys::RightMouseButton);
+	const bool bMouseFacing = bMouseLookActive && (bInstantMouseLookHeld || (IsUseMouseTurning() && IsInputKeyDown(EKeys::RightMouseButton)));
 	if (ACEInputBindings::Down(this, EKeys::D)) { if (bMouseFacing) R += 1.f; else T += 1.f; }
 	if (ACEInputBindings::Down(this, EKeys::A)) { if (bMouseFacing) R -= 1.f; else T -= 1.f; }
 	F = FMath::Clamp(F, -1.f, 1.f);
@@ -1363,7 +1363,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	RightAxis = R;
 	TurnAxis = T;
 
-	const bool bMouseTurnSend = IsUseMouseTurning()
+	const bool bMouseTurnSend = (IsUseMouseTurning() || bInstantMouseLookHeld)
 		&& FMath::Abs(PendingMouseTurnDegrees) > 0.25f;
 	const bool bMoving = !FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R) || !FMath::IsNearlyZero(T) || !VRRoomDelta.IsNearlyZero();
 	// Keep local prediction while Use approach is active, and for the full jump arc
@@ -1554,7 +1554,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				// Turn about AC +Z. Allowed mid-jump for visuals — arc uses JumpWorldAceVelocity.
 				constexpr float TurnRateDegPerSec = 180.f;
 				float TurnInput = T;
-                const bool bFollowCamera = IsUseMouseTurning() && !FMath::IsNearlyZero(PendingMouseTurnDegrees);
+                const bool bFollowCamera = (IsUseMouseTurning() || bInstantMouseLookHeld) && !FMath::IsNearlyZero(PendingMouseTurnDegrees);
                 if (bFollowCamera)
                 {
                     TurnInput = PendingMouseTurnDegrees / FMath::Max(TurnRateDegPerSec * DeltaTime, KINDA_SMALL_NUMBER);
@@ -3406,7 +3406,7 @@ void AACEPlayerController::ResetCameraToRetailDefaults(USpringArmComponent* Boom
 
 void AACEPlayerController::SetMouseLookActive(bool bActive)
 {
-	if (bActive && !IsUseMouseTurning()) return;
+	if (bActive && !IsUseMouseTurning() && !bInstantMouseLookHeld) return;
 	if (bMouseLookActive == bActive)
 	{
 		return;
@@ -3415,7 +3415,7 @@ void AACEPlayerController::SetMouseLookActive(bool bActive)
 	if (bActive)
 	{
 		MouseLookTravelPixels = 0.f;
-		bMouseLookUsesCapture = IsUseMouseTurning();
+		bMouseLookUsesCapture = IsUseMouseTurning() || bInstantMouseLookHeld;
 		if (bMouseLookUsesCapture)
 		{
 			// Relative input must remain with the viewport while orbiting; otherwise
@@ -3454,7 +3454,7 @@ bool AACEPlayerController::UpdateMouseButtons(bool bRightDown, bool bLeftDown,
 {
     // A focus/option change cancels the gesture. Re-enabling it while RMB is
     // still held must not recapture the viewport or turn the release into a click.
-    if (bMouseLookActive && (!IsUseMouseTurning() || bInputFocused))
+    if (bMouseLookActive && ((!IsUseMouseTurning() && !bInstantMouseLookHeld) || bInputFocused))
     {
         bRightClickEligible = false;
         bLeftOrbitEligible = false;
@@ -3467,7 +3467,7 @@ bool AACEPlayerController::UpdateMouseButtons(bool bRightDown, bool bLeftDown,
         bRightClickEligible = !bInputFocused && !bOverUI;
         bMouseLookMovedPlayer = false;
         MouseLookTravelPixels = 0.f;
-        if (bRightClickEligible && IsUseMouseTurning()) SetMouseLookActive(true);
+        if (bRightClickEligible && (IsUseMouseTurning() || bInstantMouseLookHeld)) SetMouseLookActive(true);
     }
     if (bInputFocused) bRightClickEligible = false;
     bMouseForwardActive = bMouseLookActive && bRightDown && bLeftDown;
@@ -3492,7 +3492,9 @@ void AACEPlayerController::UpdateMouseLook(float DeltaTime, USpringArmComponent*
     (void)DeltaTime;
     const bool bInputFocused = (DatGameplayBinder && DatGameplayBinder->IsChatEntryFocused())
         || (GameHUDWidget && GameHUDWidget->IsChatEntryFocused()) || ACEInputBindings::IsEditing();
-    const bool bRightDown = IsInputKeyDown(EKeys::RightMouseButton);
+    const bool bWasInstant = bInstantMouseLookHeld;
+    bInstantMouseLookHeld = !bInputFocused && ACEInputBindings::Down(this,ACEInputBindings::Action(TEXT("CameraInstantMouseLook")));
+    const bool bRightDown = IsInputKeyDown(EKeys::RightMouseButton) || bInstantMouseLookHeld;
     const bool bLeftDown = IsInputKeyDown(EKeys::LeftMouseButton);
     float MX = 0.f, MY = 0.f;
     const bool bHaveMouse = GetMousePosition(MX, MY);
@@ -3512,7 +3514,7 @@ void AACEPlayerController::UpdateMouseLook(float DeltaTime, USpringArmComponent*
             && (DatGameplayBinder->IsInventoryDragActive() || DatGameplayBinder->IsSpellDragActive()
                 || DatGameplayBinder->IsScrollbarDragActive()))))
     {
-        IdentifyAtScreenPosition(MouseLookPressX, MouseLookPressY);
+        if(!bWasInstant)IdentifyAtScreenPosition(MouseLookPressX, MouseLookPressY);
     }
     // Do not capture an ordinary left click: it still selects objects. Begin
     // free orbit only after a world press turns into a drag.
@@ -3529,7 +3531,7 @@ void AACEPlayerController::UpdateMouseLook(float DeltaTime, USpringArmComponent*
 
 void AACEPlayerController::ApplyMouseLookDelta(float DeltaX, float DeltaY, USpringArmComponent* Boom)
 {
-    if (!Boom || !IsUseMouseTurning() || !bMouseLookActive) return;
+    if (!Boom || (!IsUseMouseTurning() && !bInstantMouseLookHeld) || !bMouseLookActive) return;
     MouseLookTravelPixels += FMath::Abs(DeltaX) + FMath::Abs(DeltaY);
     FRotator Rotation = Boom->GetRelativeRotation();
     const float DegreesPerPixel = ACECameraSettings::GetMouseDegreesPerPixel();
@@ -3612,7 +3614,7 @@ void AACEPlayerController::UpdateOrbitCamera(float DeltaTime)
 	{
 		UserCameraArmLength = Boom->TargetArmLength;
 	}
-	if (ACEInputBindings::Down(this, EKeys::Add))
+	if (ACEInputBindings::Down(this, EKeys::Subtract))
 	{
 		if (bCameraLookDown)
 		{
@@ -3627,7 +3629,7 @@ void AACEPlayerController::UpdateOrbitCamera(float DeltaTime)
 			UserCameraArmLength *= (1.f + ZoomFactor);
 		}
 	}
-	if (ACEInputBindings::Down(this, EKeys::Subtract))
+	if (ACEInputBindings::Down(this, EKeys::Add))
 	{
 		if (bCameraLookDown)
 		{
@@ -3702,7 +3704,10 @@ void AACEPlayerController::ApplyCameraWheelZoom(float WheelDelta)
 	{
 		return;
 	}
-    AdjustMouseCameraDistance(WheelDelta);
+    const auto Mods=FSlateApplication::Get().GetModifierKeys();
+    const FInputChord Chord(WheelDelta>0?EKeys::MouseScrollUp:EKeys::MouseScrollDown,Mods.IsShiftDown(),Mods.IsControlDown(),Mods.IsAltDown(),Mods.IsCommandDown());
+    if(ACEInputBindings::Matches(EKeys::Add,Chord))AdjustMouseCameraDistance(FMath::Abs(WheelDelta));
+    else if(ACEInputBindings::Matches(EKeys::Subtract,Chord))AdjustMouseCameraDistance(-FMath::Abs(WheelDelta));
 }
 
 void AACEPlayerController::AdjustMouseCameraDistance(float WheelDelta)

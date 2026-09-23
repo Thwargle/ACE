@@ -1,4 +1,5 @@
 #include "ACEKeyboardRouter.h"
+#include "ACEInputBindings.h"
 
 uint32 FACEKeyboardRouter::NumpadVirtualKey(uint32 Key, uint32 Scan, bool Extended)
 {
@@ -54,7 +55,7 @@ public:
         const uint32 Mapped=FACEKeyboardRouter::NumpadVirtualKey(uint32(Key), (uint64(Data)>>16)&0xff, (uint64(Data)&0x01000000)!=0);
         // Keep unmapped navigation events in order too: arrows and numpad can be
         // held simultaneously and have the same VK when Num Lock is off.
-        if ((Key>=0x21 && Key<=0x28) || Key==0x0C || Key==0x2D || Key==0x2E)
+        if ((Key>=0x21 && Key<=0x28) || Key==0x0C || Key==0x2D || Key==0x2E || Key==0x5D)
         {
             if (Pending.Num()>=128) Pending.Reset();
             Pending.Add({uint32(Key),Mapped,Down});
@@ -68,11 +69,14 @@ public:
         const int32 Index=Pending.IndexOfByPredicate([&](const FPendingKey& P){return P.Key==Event.GetKeyCode() && P.Down==Down;});
         if (Index==INDEX_NONE) return false;
         const uint32 Mapped=Pending[Index].Mapped;Pending.RemoveAt(Index);
-        if (Mapped==Event.GetKeyCode() || !Controller.IsValid()) return false;
+        if ((Mapped==Event.GetKeyCode() && Mapped!=0x5D) || !Controller.IsValid()) return false;
         // Release a camera key even if chat took focus while it was held.
-        if (!CanRoute() && (Down || !RoutedKeys.Contains(Mapped))) return false;
+        const auto Focused=App.GetKeyboardFocusedWidget();
+        const bool CapturingBinding=ACEInputBindings::IsEditing() && Focused
+            && Focused->GetTypeAsString()==TEXT("SInputKeySelector");
+        if (!CanRoute() && !CapturingBinding && (Down || !RoutedKeys.Contains(Mapped))) return false;
         if (Down) RoutedKeys.Add(Mapped); else RoutedKeys.Remove(Mapped);
-        const FKey Key=FInputKeyManager::Get().GetKeyFromCodes(Mapped,0);
+        const FKey Key=Mapped==0x5D ? ACEInputBindings::ApplicationsKey() : FInputKeyManager::Get().GetKeyFromCodes(Mapped,0);
         const FKeyEvent Translated(Key,Event.GetModifierKeys(),Event.GetUserIndex(),Event.IsRepeat(),0,Mapped);
         TGuardValue<bool> Guard(bRouting,true);
         if (Down) App.ProcessKeyDownEvent(Translated); else App.ProcessKeyUpEvent(Translated);
