@@ -1,40 +1,22 @@
-# AC:Unreal / AC:VR release 66
+# AC:Unreal / AC:VR release 67
 
-Native Quest: `2026.09.23.quest.66`, Android version code 66, installer revision 6.
-Windows desktop / PC VR: `2026.09.23.72`.
+Native Quest: `2026.09.23.quest.67`, Android version code 67, installer revision 6.
+Windows desktop / PC VR: `2026.09.23.73`.
 
-## Changes since v65
+## Changes since v66
 
-- Restore repeating interior wall textures, including the Town Network, while
-  retaining the foliage texture-edge fix.
-- Keep building interiors and stair collision loaded across their full height.
-  This addresses stair lips blocking descent and stairs disappearing during jumps,
-  including the reported Fort Teth towers, without location-specific exceptions.
-- Handle corpse contents arriving before individual loot objects so newly created
-  loot can be selected, appraised, and picked up consistently. Clear stale loot
-  selections and close open loot windows when entering a portal or recalling.
-- Queue equipment swaps until the server acknowledges each removal and equip.
-  Inventory and hotbar swaps share this behavior. Swapping wands preserves combat
-  intent through the temporary unarmed stance; explicitly choosing Peace wins.
-- Restore both retail shortcut rows with 18 working slots, drag assignment,
-  swapping and removal, selection, use, and inspection.
-- Improve window dragging from native title/frame labels while respecting UI lock,
-  buttons, tabs, and resize controls. Raised windows and file dialogs now cover
-  underlying text and block clicks through them.
-- Restore retail keybind buttons, three mappings per action, tabs, default bindings,
-  and the existing Load File, Save As, Defaults, Revert, OK, and Cancel controls.
-  Import and export retail .keymap files with modifier chords and mouse bindings.
-  Keep unsupported imported bindings when saving and report unsupported entries.
-  Remove duplicated key labels and fix file-dialog placement and text layering.
-- Make fellowship controls reflect membership, leadership, recruitment, and sharing
-  state, and use the native member-row layout and vital bars.
-- Correct Spike Strafe sword orientation and preserve the intended placement for
-  ring and wall spell projectiles.
-- Keep creatures turning toward their server-designated target at close range,
-  including when the local VR player moves within melee reach.
-- Clip main-player vital fills to their native meter bounds and render empty meters
-  without a leftover fill pixel, retaining the retail textures.
-- Apply shared fixes to desktop, PC VR, and standalone Quest.
+- Show retail's original move and directional resize cursors over usable window
+  handles. Keep the appropriate cursor while dragging and respect the UI lock.
+- Restore the toolbar's retail height range. With the UI unlocked, drag its bottom
+  border up to show one shortcut row or down to show both rows. Its top stays in
+  place, and its width remains fixed.
+- Clip the second row cleanly as the toolbar shrinks, without stretching its icons
+  or leaving hidden shortcuts able to intercept world clicks. Bindings are retained.
+- Save the chosen toolbar height and restore it alongside the UI lock state.
+  Loading the layout no longer overwrites saved window geometry with defaults.
+- Share the toolbar behavior across desktop, PC VR, and standalone Quest. Cursor
+  artwork is cached, and the shortcut clipping panel avoids needless visibility
+  changes during steady gameplay.
 
 ## Install or update
 
@@ -65,16 +47,14 @@ credentials, saved settings, SDK tools, or retail DAT files.
 
 ## Validation and limitations
 
-Windows and Android compilation and the relevant automated development regressions
-passed. Checks cover equipment and loot packet ordering, GDLE interaction transport,
-keyboard mapping round trips, native UI screens, world entry, movement, projectile
-placement, interior texture sampling, and stair/corner collision. The Fort Teth
-regression exercises six reported positions in desktop and VR at 30 and 90 FPS.
-Native UI screenshots were also checked in desktop and ES3.1 mobile preview,
-including file dialogs and main-player vitals at multiple scales and fill levels.
+Windows and Android development compilation and the desktop and ES3.1 mobile
+native UI suites passed. Checks cover cursor artwork and drag capture, one and
+two shortcut rows at 100% and 200% scale, partial-row clipping, hidden-slot hit
+testing, resize limits, UI locking, and saved geometry. Rendered screenshots were
+reviewed. Retail behavior was checked against the original UI data and client code.
 
-The packaged Windows client also passed KeyboardBindings, UIScreens,
-InteriorSampling, and FortTethStairs. All 15 Quest installer regression cases passed.
+The packaged Windows client passed the native UI regression suite, and all 15
+Quest installer regression cases passed under Windows PowerShell.
 
 These checks do not replace live gameplay acceptance on public servers or headsets.
 There is no new FPS benchmark in this release; sustained 90 FPS VR and 144 FPS

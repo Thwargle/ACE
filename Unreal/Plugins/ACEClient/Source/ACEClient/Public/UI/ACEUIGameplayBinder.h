@@ -569,6 +569,9 @@ private:
 	TObjectPtr<UBorder> PaperdollSlotsCheckboxIcon;
 	UPROPERTY()
 	TObjectPtr<UTextBlock> PaperdollSlotsCheckboxLabel;
+	/** Clip shortcut overlays with the retail toolbar as its second row is revealed. */
+	UPROPERTY(Transient)
+	TObjectPtr<UCanvasPanel> ShortcutClipPanel;
 	UPROPERTY()
 	TArray<TObjectPtr<UBorder>> ShortcutIcons;
 	/** Retail ItemSlot_Shortcut_01..10 numbered empty backgrounds (0x060010FA–102 / 0x060074CF). */

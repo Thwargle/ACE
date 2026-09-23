@@ -19,8 +19,7 @@ namespace
 
 	bool IsFixedSizeFloaty(const FString& Name)
 	{
-		return Name == TEXT("RootGameplay_FloatyToolbar_Field")
-			|| Name == TEXT("RootGameplay_FloatySideVitals_Field")
+		return Name == TEXT("RootGameplay_FloatySideVitals_Field")
 			|| Name == TEXT("RootGameplay_FloatyVitals_Field")
 			|| Name == TEXT("RootGameplay_FloatyIndicators_Field");
 	}
@@ -635,8 +634,12 @@ bool UACEUIElementManager::IsFloatyResizeHandle(const TSharedPtr<FACEUIElement>&
 	{
 		return false;
 	}
-	if (IsChatFloaty(FindFloatyRoot(Element)))
+	const auto Floaty = FindFloatyRoot(Element);
+	if (!Floaty || IsFixedSizeFloaty(Floaty->ElementName)) return false;
+	if (IsChatFloaty(Floaty))
 		return Element->bResizeLeft || Element->bResizeRight || Element->bResizeTop || Element->bResizeBottom;
+	if (Floaty->ElementName == TEXT("RootGameplay_FloatyToolbar_Field"))
+		return Element->Type == ACEUI::ElementType::Resizebar && Element->bResizeBottom;
 	// Bottom border / Resizebar — works locked or unlocked (chrome variant may differ).
 	const FString& Name = Element->ElementName;
 	if (Element->Type == ACEUI::ElementType::Resizebar && Name.Contains(TEXT("BottomBorder")))
@@ -644,6 +647,27 @@ bool UACEUIElementManager::IsFloatyResizeHandle(const TSharedPtr<FACEUIElement>&
 		return true;
 	}
 	return Name.Contains(TEXT("BottomBorder"));
+}
+
+EMouseCursor::Type UACEUIElementManager::GetWindowCursor(FVector2D ViewportPos, FVector2D ViewportSize) const
+{
+	if (bUiLocked) return EMouseCursor::Default;
+	int32 X = 0, Y = 0;
+	if (!ViewportToCanvas(ViewportPos, ViewportSize, X, Y) && !CaptureElement) return EMouseCursor::Default;
+	const auto Hit = CaptureElement ? CaptureElement : HitTestCanvas(X, Y);
+	if (!Hit || !Hit->IsPaintVisible() || !FindFloatyRoot(Hit)) return EMouseCursor::Default;
+	if (IsFloatyResizeHandle(Hit))
+	{
+		// Non-chat panels currently expose their bottom grip only. Chat frames
+		// carry the actual retail edge flags, including diagonal corner handles.
+		if (!IsChatFloaty(FindFloatyRoot(Hit))) return EMouseCursor::ResizeUpDown;
+		const bool H = Hit->bResizeLeft || Hit->bResizeRight;
+		const bool V = Hit->bResizeTop || Hit->bResizeBottom;
+		if (H && V) return Hit->bResizeLeft == Hit->bResizeTop
+			? EMouseCursor::ResizeSouthEast : EMouseCursor::ResizeSouthWest;
+		return H ? EMouseCursor::ResizeLeftRight : EMouseCursor::ResizeUpDown;
+	}
+	return IsFloatyDragHandle(Hit) ? EMouseCursor::CardinalCross : EMouseCursor::Default;
 }
 
 void UACEUIElementManager::ApplyFloatyResizeLayout(const TSharedPtr<FACEUIElement>& Floaty)
@@ -656,6 +680,8 @@ void UACEUIElementManager::ApplyFloatyResizeLayout(const TSharedPtr<FACEUIElemen
 	{
 		Floaty->AuthoredHeight = Floaty->Height;
 	}
+	if (Floaty->ElementName == TEXT("RootGameplay_FloatyToolbar_Field"))
+		Floaty->UserResizeH = FMath::Clamp(Floaty->GetLayoutHeight(), Floaty->MinHeight, Floaty->MaxHeight) - Floaty->AuthoredHeight;
 	if (IsChatFloaty(Floaty))
 	{
 		if (Floaty->AuthoredWidth < 0) Floaty->AuthoredWidth=Floaty->Width;
@@ -687,6 +713,10 @@ void UACEUIElementManager::ApplyFloatyResizeLayout(const TSharedPtr<FACEUIElemen
 			|| Name.Contains(TEXT("BottomBorder")))
 		{
 			Child->Y = BottomY;
+		}
+		else if (Name == TEXT("ToolbarField"))
+		{
+			Child->Height = InnerH;
 		}
 		else if (Name == TEXT("PanelPages"))
 		{
@@ -856,12 +886,12 @@ void UACEUIElementManager::NotifyMouseMove(FVector2D ViewportPos, FVector2D View
 			bDragMoved = true;
 		}
 		// Panel grows downward; bottom-anchored chat grows upward (lift via UserDragY).
-		const int32 MinH = 80;
-		const int32 MaxExtra = 320;
+		const bool bToolbar = ResizeFloaty->ElementName == TEXT("RootGameplay_FloatyToolbar_Field");
+		const int32 MinH = bToolbar ? ResizeFloaty->MinHeight : 80;
 		const int32 AuthH = ResizeFloaty->AuthoredHeight >= 0
 			? ResizeFloaty->AuthoredHeight : ResizeFloaty->Height;
 		int32 NewExtra = ResizeStartUserH + (bResizeBottomAnchored ? -Dy : Dy);
-		NewExtra = FMath::Clamp(NewExtra, MinH - AuthH, MaxExtra);
+		NewExtra = FMath::Clamp(NewExtra, MinH - AuthH, bToolbar ? ResizeFloaty->MaxHeight - AuthH : 320);
 		ResizeFloaty->UserResizeH = NewExtra;
 		if (bResizeBottomAnchored)
 		{
@@ -1140,7 +1170,9 @@ void UACEUIElementManager::LoadFloatyLayout()
 	bool bLocked = bUiLocked;
 	if (GConfig->GetBool(Section, TEXT("UiLocked"), bLocked, GGameUserSettingsIni))
 	{
-		SetUiLocked(bLocked);
+		// Loading must not save the defaults over the persisted geometry first.
+		bUiLocked = bLocked;
+		SyncLockedChromeVisibility();
 	}
 	// Saved drags from an older anchor scheme compose against the wrong base position —
 	// discard them (fresh values are written on the next SaveFloatyLayout).

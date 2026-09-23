@@ -4122,6 +4122,26 @@ void AACEPlayerController::EnsureRetailMouseCursor()
 	DefaultMouseCursor = EMouseCursor::Default;
 	CurrentMouseCursor = EMouseCursor::Default;
 	SetMouseCursorWidget(EMouseCursor::Default, MouseCursorWidget);
+	// Let Slate's cursor query select the native window affordance independently
+	// of the world-selection cursor, including while a drag retains capture.
+	const TPair<EMouseCursor::Type, uint32> WindowCursors[] = {
+		{EMouseCursor::CardinalCross, UACEMouseCursorWidget::MoveCursorDid},
+		{EMouseCursor::ResizeUpDown, UACEMouseCursorWidget::ResizeVerticalCursorDid},
+		{EMouseCursor::ResizeLeftRight, UACEMouseCursorWidget::ResizeHorizontalCursorDid},
+		{EMouseCursor::ResizeSouthEast, UACEMouseCursorWidget::ResizeNWSECursorDid},
+		{EMouseCursor::ResizeSouthWest, UACEMouseCursorWidget::ResizeNESWCursorDid}
+	};
+	for (const auto& Cursor : WindowCursors)
+	{
+		if (auto* Texture = Resolver->GetOrCreateUiTexture(Cursor.Value))
+		{
+			auto* Widget = CreateWidget<UACEMouseCursorWidget>(this, UACEMouseCursorWidget::StaticClass());
+			if (!Widget) continue;
+			Widget->SetCursorTexture(Texture, UACEMouseCursorWidget::WindowHotspot, UACEMouseCursorWidget::WindowHotspot);
+			SetMouseCursorWidget(Cursor.Key, Widget);
+			RetailWindowCursorWidgets.Add(Widget);
+		}
+	}
 	bRetailCursorInstalled = true;
 	bRetailCursorInteractable = false;
 	ApplyRetailMouseCursor(false);

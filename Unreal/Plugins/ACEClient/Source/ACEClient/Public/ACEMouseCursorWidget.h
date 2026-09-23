@@ -28,6 +28,13 @@ public:
 	static constexpr uint32 TargetCursorDid = 0x06004D73u;
 	static constexpr uint32 TargetValidCursorDid = 0x06005E6Bu;
 	static constexpr uint32 TargetInvalidCursorDid = 0x06005E6Au;
+	// classic_gameplay's Dragbar/Resizebar MD_Data_Cursor records (hotspot 16,16).
+	static constexpr uint32 MoveCursorDid = 0x06006119u;
+	static constexpr uint32 ResizeVerticalCursorDid = 0x06005E66u;
+	static constexpr uint32 ResizeHorizontalCursorDid = 0x06006128u;
+	static constexpr uint32 ResizeNWSECursorDid = 0x06006126u;
+	static constexpr uint32 ResizeNESWCursorDid = 0x06006127u;
+	static constexpr int32 WindowHotspot = 16;
 	static constexpr int32 TargetHotspot = 14;
 	/** Hotspot = texture (0,0) so world picks match the visible tip. */
 	static constexpr int32 DefaultHotspotX = 0;

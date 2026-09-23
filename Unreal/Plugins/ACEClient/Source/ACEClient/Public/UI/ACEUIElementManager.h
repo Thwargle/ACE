@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "GenericPlatform/ICursor.h"
 #include "UObject/Object.h"
 #include "UI/ACEUITypes.h"
 #include "UI/ACEUIElement.h"
@@ -74,6 +75,8 @@ public:
 	void SyncLockedChromeVisibility();
 
 	TSharedPtr<FACEUIElement> HitTestCanvas(int32 CanvasX, int32 CanvasY) const;
+	/** Retail CheckCursor gives captured chrome priority over the hovered element. */
+	EMouseCursor::Type GetWindowCursor(FVector2D ViewportPos, FVector2D ViewportSize) const;
 	/** Top retail window at a point, including its non-interactive background. */
 	TSharedPtr<FACEUIElement> FindWindowAtCanvas(int32 CanvasX, int32 CanvasY) const;
 

@@ -481,6 +481,7 @@ void UACEUICanvasWidget::SyncElementRecursive(
 	const bool bTightenClip = Element->ElementName.StartsWith(TEXT("RootGameplay_"))
 		|| Element->Type == ACEUI::ElementType::Meter
 		|| Element->ElementName == TEXT("PanelPages")
+		|| Element->ElementName == TEXT("ToolbarField")
 		|| Element->ElementName.EndsWith(TEXT("Panel_Field"))
 		|| Element->ElementName.EndsWith(TEXT("ExamineUI"))
 		|| Element->ElementName == TEXT("ChatLogField")
@@ -788,6 +789,17 @@ FReply UACEUICanvasWidget::NativeOnMouseMove(const FGeometry& InGeometry, const 
 		Manager->NotifyMouseMove(Local, ViewportSize);
 	}
 	return FReply::Unhandled();
+}
+
+FCursorReply UACEUICanvasWidget::NativeOnCursorQuery(const FGeometry& Geometry, const FPointerEvent& Event)
+{
+	if (Manager)
+	{
+		const auto WindowCursor = Manager->GetWindowCursor(
+			Geometry.AbsoluteToLocal(Event.GetScreenSpacePosition()), Geometry.GetLocalSize());
+		if (WindowCursor != EMouseCursor::Default) return FCursorReply::Cursor(WindowCursor);
+	}
+	return Super::NativeOnCursorQuery(Geometry, Event);
 }
 
 FReply UACEUICanvasWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)

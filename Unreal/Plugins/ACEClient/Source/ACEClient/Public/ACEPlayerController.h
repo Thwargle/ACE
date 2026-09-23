@@ -185,6 +185,7 @@ protected:
 	bool bRetailCursorInteractable = false;
 	bool bPendingUseTargeting = false;
 	UPROPERTY(Transient) TObjectPtr<UTexture2D> RetailCursorDefaultTex = nullptr;
+	UPROPERTY(Transient) TArray<TObjectPtr<UACEMouseCursorWidget>> RetailWindowCursorWidgets;
 	UPROPERTY(Transient) TObjectPtr<UTexture2D> RetailCursorInteractableTex = nullptr;
 	UPROPERTY(Transient) TObjectPtr<UTexture2D> RetailCursorTargetTex = nullptr;
 	UPROPERTY(Transient) TObjectPtr<UTexture2D> RetailCursorTargetValidTex = nullptr;

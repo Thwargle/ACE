@@ -7603,6 +7603,11 @@ int32 UACEUIGameplayBinder::HitTestShortcutSlot(FVector2D CanvasLocalPos) const
 {
 	if (!Manager || !Canvas) return INDEX_NONE;
 	const FVector2D P = Canvas->ViewportToLayout(CanvasLocalPos);
+	const auto Body = Manager->FindElementByName(TEXT("ToolbarField"));
+	if (!Body) return INDEX_NONE;
+	const FIntPoint BodyOrigin = Body->GetScreenOrigin();
+	if (P.X < BodyOrigin.X || P.Y < BodyOrigin.Y
+		|| P.X >= BodyOrigin.X + Body->Width || P.Y >= BodyOrigin.Y + Body->Height) return INDEX_NONE;
 	for (int32 Index = 0; Index < 18; ++Index)
 	{
 		const auto El = Manager->FindElementByName(FString::Printf(
@@ -7621,7 +7626,7 @@ bool UACEUIGameplayBinder::IsPointerOverShortcutBar(FVector2D CanvasLocalPos) co
 
 bool UACEUIGameplayBinder::ScrollShortcutBar(float WheelDelta)
 {
-	// Both retail rows are visible; wheel input must not remap their bindings.
+	// Resizing reveals the second retail row; wheel input must not remap its bindings.
 	return false;
 }
 
@@ -7725,6 +7730,7 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 {
 	if (!Client || !Manager || !Canvas || !Canvas->WidgetTree)
 	{
+		if (ShortcutClipPanel) ShortcutClipPanel->SetVisibility(ESlateVisibility::Collapsed);
 		for (UBorder* B : ShortcutIcons)
 		{
 			if (B) { B->SetVisibility(ESlateVisibility::Collapsed); }
@@ -7741,6 +7747,36 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 		}
 		return;
 	}
+	const auto Body = Manager->FindElementByName(TEXT("ToolbarField"));
+	if (!Body || !Body->IsPaintVisible())
+	{
+		if (ShortcutClipPanel) ShortcutClipPanel->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+	if (!ShortcutClipPanel)
+	{
+		ShortcutClipPanel = Canvas->WidgetTree->ConstructWidget<UCanvasPanel>(UCanvasPanel::StaticClass());
+		ShortcutClipPanel->SetClipping(EWidgetClipping::ClipToBoundsAlways);
+	}
+	ShortcutClipPanel->SetVisibility(ESlateVisibility::HitTestInvisible);
+	Canvas->PlaceWidgetAtElement(ShortcutClipPanel, Body, 529);
+	const FVector2D Scale = Canvas->GetLastScale2D();
+	const FIntPoint BodyOrigin = Body->GetScreenOrigin();
+	auto PlaceShortcut = [&](UWidget* Widget, const TSharedPtr<FACEUIElement>& El, int32 ZOrder)
+	{
+		if (Widget->GetParent() != ShortcutClipPanel)
+		{
+			Widget->RemoveFromParent();
+			ShortcutClipPanel->AddChild(Widget);
+		}
+		const FIntPoint Origin = El->GetScreenOrigin() - BodyOrigin;
+		if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Widget->Slot))
+		{
+			Slot->SetPosition(FVector2D(Origin.X, Origin.Y) * Scale);
+			Slot->SetSize(FVector2D(El->Width, El->Height) * Scale);
+			Slot->SetZOrder(ZOrder);
+		}
+	};
 	auto PlaceSlot = [&](const FString& ElementName, int32 SlotIndex0, int32 ArrayIndex)
 	{
 		TSharedPtr<FACEUIElement> El = Manager->FindElementByName(ElementName);
@@ -7761,7 +7797,9 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 		{
 			if (!P->bVisible) { bAncestorsVisible = false; break; }
 		}
-		if (!bAncestorsVisible)
+		const FIntPoint SlotOrigin = El->GetScreenOrigin() - BodyOrigin;
+		if (!bAncestorsVisible || SlotOrigin.Y >= Body->Height || SlotOrigin.X >= Body->Width
+			|| SlotOrigin.Y + El->Height <= 0 || SlotOrigin.X + El->Width <= 0)
 		{
 			Icon->SetVisibility(ESlateVisibility::Collapsed);
 			Bg->SetVisibility(ESlateVisibility::Collapsed);
@@ -7786,19 +7824,19 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 			if (SlotIndex0 < 10) SetIconDid(Bg, SlotIndex0 < 9 ? 0x060010FA + SlotIndex0 : 0x060074CF);
 			else SetItemSlotBackground(Bg, nullptr);
 		}
-		Canvas->PlaceWidgetAtElement(Bg, El, 529);
+		PlaceShortcut(Bg, El, 0);
 		Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
 		SetItemSlotForeground(Icon,bHave ? &Obj : nullptr);
 		if (bHave && !Obj.Name.IsEmpty())
 		{
 			SetRetailTooltip(Icon, FText::FromString(Obj.Name));
 		}
-		Canvas->PlaceWidgetAtElement(Icon, El, 530);
+		PlaceShortcut(Icon, El, 1);
 		if (Number)
 		{
 			Number->SetVisibility(bHave && SlotIndex0 < 10 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 			SetIconDid(Number, SlotIndex0 < 9 ? 0x0600109E + SlotIndex0 : 0x060074D3);
-			Canvas->PlaceWidgetAtElement(Number, El, 531);
+			PlaceShortcut(Number, El, 2);
 		}
 	};
 	for (int32 i = 0; i < 18; ++i)

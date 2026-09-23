@@ -68,6 +68,7 @@ public:
 	virtual int32 NativePaint(const FPaintArgs& Args, const FGeometry& Geometry, const FSlateRect& Culling,
 		FSlateWindowElementList& Elements, int32 Layer, const FWidgetStyle& Style, bool Enabled) const override;
 	virtual void NativeOnMouseCaptureLost(const FCaptureLostEvent& Event) override;
+	virtual FCursorReply NativeOnCursorQuery(const FGeometry& Geometry, const FPointerEvent& Event) override;
 	UACEUIResourceResolver* GetResourceResolver() const { return ResourceResolver; }
 	UCanvasPanel* GetElementLayer() const { return ElementLayer; }
 	float GetLastCanvasScale() const { return FMath::Min(LastScaleX, LastScaleY); }

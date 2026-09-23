@@ -340,10 +340,10 @@ namespace
 			Child->bVisible = IsAlwaysOnChrome(Child->ElementName);
 			if (Child->ElementName == TEXT("RootGameplay_FloatyToolbar_Field"))
 			{
-				// The authored compact box clips the second row. Use the retail full
-				// 132px toolbar and preserve its bottom anchor at every UI scale.
+				// Start expanded, but retain retail's 100..132 height limits so the
+				// bottom resize grip can reveal or conceal the second shortcut row.
 				Child->Y -= 32;
-				Child->Height = Child->AuthoredHeight = Child->MinHeight = Child->MaxHeight = 132;
+				Child->Height = Child->AuthoredHeight = 132;
 				UACEUIElementManager::ApplyFloatyResizeLayout(Child);
 			}
 

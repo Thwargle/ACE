@@ -1596,6 +1596,78 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Second row double click sends use"),HasAction(ACEGameAction::Use));
         }
         CaptureScreen(TEXT("RetailShortcutDrag"));
+        {
+            TGuardValue<FString> SettingsPath(GGameUserSettingsIni,FPaths::ProjectSavedDir()/TEXT("Automation/ToolbarResizeFixture.ini"));
+            FConfigFile Config; Config.NoSave=false; Config.bCanSaveAllSections=true;
+            GConfig->SetFile(GGameUserSettingsIni,&Config);
+            const bool Locked=Manager->IsUiLocked(); Manager->SetUiLocked(false);
+            const FIntPoint SavedDrag(Toolbar->UserDragX,Toolbar->UserDragY);
+            TestEqual(TEXT("Retail toolbar minimum fits one row"),Toolbar->MinHeight,100);
+            TestEqual(TEXT("Retail toolbar maximum fits two rows"),Toolbar->MaxHeight,132);
+            for (uint32 Did : {UACEMouseCursorWidget::MoveCursorDid,UACEMouseCursorWidget::ResizeVerticalCursorDid,
+                UACEMouseCursorWidget::ResizeHorizontalCursorDid,UACEMouseCursorWidget::ResizeNWSECursorDid,
+                UACEMouseCursorWidget::ResizeNESWCursorDid})
+                TestNotNull(TEXT("Retail window cursor artwork resolves from DAT"),Resources->ResolveIconTexture(Did));
+            for (float UIScale : {1.f,2.f})
+            {
+                Manager->BringFloatyToFront(Toolbar);
+                CaptureScreen(TEXT("ToolbarResizeSetup"),UIScale);
+                Toolbar->UserDragX+=400-Toolbar->GetScreenOrigin().X;
+                Toolbar->UserDragY+=220-Toolbar->GetScreenOrigin().Y; Toolbar->RecomputeLayoutOffset();
+                CaptureScreen(TEXT("ToolbarResizeSetup"),UIScale);
+                auto GripPoint=[&](const TCHAR* Name)
+                {
+                    const auto El=Manager->FindElementByName(Name);
+                    return Canvas->LayoutToViewport(FVector2D(El->GetScreenOrigin())+FVector2D(El->Width,El->Height)*.5);
+                };
+                auto Resize=[&](int32 Delta)
+                {
+                    const FVector2D Start=GripPoint(TEXT("ToolbarBottomBorder"));
+                    const FVector2D Size=Canvas->GetCachedGeometry().GetLocalSize();
+                    TestTrue(TEXT("Toolbar bottom border advertises vertical resizing"),Manager->GetWindowCursor(Start,Size)==EMouseCursor::ResizeUpDown);
+                    Manager->NotifyMouseDown(Start,Size,EKeys::LeftMouseButton);
+                    TestTrue(TEXT("Resize cursor survives capture outside the viewport"),Manager->GetWindowCursor(FVector2D(-10,-10),Size)==EMouseCursor::ResizeUpDown);
+                    const FVector2D End=Start+FVector2D(0,Delta*Canvas->GetLastScale2D().Y);
+                    Manager->NotifyMouseMove(End,Size);
+                    Manager->NotifyMouseUp(End,Size,EKeys::LeftMouseButton);
+                };
+                for (const TCHAR* Corner : {TEXT("ToolbarBottomLeftCorner"),TEXT("ToolbarBottomRightCorner")})
+                    TestTrue(TEXT("Toolbar bottom corners also advertise vertical resizing"),Manager->GetWindowCursor(GripPoint(Corner),Canvas->GetCachedGeometry().GetLocalSize())==EMouseCursor::ResizeUpDown);
+                const int32 Top=Toolbar->GetScreenOrigin().Y;
+                Resize(-32);
+                CaptureScreen(FString::Printf(TEXT("RetailOneShortcutRow_%d"),int32(UIScale)),UIScale);
+                TestEqual(TEXT("Dragging up hides second shortcut row"),Toolbar->Height,100);
+                TestEqual(TEXT("Resizing bottom keeps toolbar top fixed"),Toolbar->GetScreenOrigin().Y,Top);
+                for (int32 Index=0;Index<18;++Index)
+                {
+                    const auto El=Manager->FindElementByName(FString::Printf(TEXT("ShortcutBar%s_Shortcut%dButton"),Index<9?TEXT(""):TEXT("2"),Index%9+1));
+                    const FVector2D Point=Canvas->LayoutToViewport(FVector2D(El->GetScreenOrigin())+FVector2D(16,16));
+                    TestEqual(TEXT("Collapsed row cannot select items through the world"),Gameplay->HitTestShortcutSlot(Point),Index<9?Index:INDEX_NONE);
+                    TestEqual(TEXT("Only the visible row paints shortcut overlays"),Gameplay->ShortcutIcons[Index]->GetVisibility()==ESlateVisibility::Collapsed,Index>=9);
+                }
+                TestEqual(TEXT("Collapsed border stays at the bottom after reflow"),Manager->FindElementByName(TEXT("ToolbarBottomBorder"))->GetScreenOrigin().Y,Top+95);
+                TestEqual(TEXT("Hidden row does not intercept bottom resize grip"),Gameplay->HitTestShortcutSlot(GripPoint(TEXT("ToolbarBottomBorder"))),INDEX_NONE);
+                Manager->SetUiLocked(true); Manager->SaveFloatyLayout();
+                TestTrue(TEXT("Locked toolbar has no resize cursor"),Manager->GetWindowCursor(GripPoint(TEXT("ToolbarBottomBorder")),Canvas->GetCachedGeometry().GetLocalSize())==EMouseCursor::Default);
+                // Simulate a fresh manager's defaults before restoring the saved layout.
+                Manager->SetUiLocked(false); GConfig->SetBool(TEXT("ACEClient.DatHUD"),TEXT("UiLocked"),true,GGameUserSettingsIni);
+                Toolbar->UserResizeH=0; UACEUIElementManager::ApplyFloatyResizeLayout(Toolbar);
+                Manager->LoadFloatyLayout();
+                TestTrue(TEXT("Layout reload restores the saved lock state"),Manager->IsUiLocked());
+                TestEqual(TEXT("Collapsed toolbar survives layout reload"),Toolbar->Height,100);
+                Manager->SetUiLocked(false); CaptureScreen(TEXT("ToolbarRestored"),UIScale);
+                Resize(16); CaptureScreen(FString::Printf(TEXT("RetailPartialShortcutRow_%d"),int32(UIScale)),UIScale);
+                TestEqual(TEXT("Retail toolbar can reveal part of second row"),Toolbar->Height,116);
+                TestTrue(TEXT("Shortcut art clips instead of stretching when partly revealed"),Gameplay->ShortcutClipPanel->GetClipping()==EWidgetClipping::ClipToBoundsAlways);
+                TestEqual(TEXT("Partial row keeps the original icon height"),Cast<UCanvasPanelSlot>(Gameplay->ShortcutIcons[17]->Slot)->GetSize().Y,32.*Canvas->GetLastScale2D().Y);
+                Resize(80); CaptureScreen(TEXT("ToolbarExpanded"),UIScale);
+                TestEqual(TEXT("Toolbar stops at exactly two rows"),Toolbar->Height,132);
+                TestEqual(TEXT("Toolbar retains the retail fixed width"),Toolbar->Width,310);
+                TestTrue(TEXT("Cursor outside viewport resets after release"),Manager->GetWindowCursor(FVector2D(-10,-10),Canvas->GetCachedGeometry().GetLocalSize())==EMouseCursor::Default);
+            }
+            Toolbar->UserDragX=SavedDrag.X; Toolbar->UserDragY=SavedDrag.Y; Toolbar->RecomputeLayoutOffset();
+            Manager->SetUiLocked(Locked); CaptureScreen(TEXT("RetailShortcutDrag"));
+        }
         auto ShortcutPoint=[&](const TCHAR* Name)
         {
             const auto El=Manager->FindElementByName(Name);
@@ -1626,7 +1698,9 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             const auto El=Manager->FindElementByName(Handle);
             const FVector2D Start=Canvas->LayoutToViewport(FVector2D(El->GetScreenOrigin())+FVector2D(El->Width,El->Height)*.5);
             const int32 OldX=Panel->UserDragX,OldY=Panel->UserDragY;
+            TestTrue(TEXT("Movable title and borders display the retail move cursor"),Manager->GetWindowCursor(Start,Canvas->GetCachedGeometry().GetLocalSize())==EMouseCursor::CardinalCross);
             Manager->NotifyMouseDown(Start,Canvas->GetCachedGeometry().GetLocalSize(),EKeys::LeftMouseButton);
+            TestTrue(TEXT("Move cursor persists while dragging away from the handle"),Manager->GetWindowCursor(FVector2D(1,1),Canvas->GetCachedGeometry().GetLocalSize())==EMouseCursor::CardinalCross);
             Manager->NotifyMouseMove(Start+FVector2D(-20,12),Canvas->GetCachedGeometry().GetLocalSize());
             Manager->NotifyMouseUp(Start+FVector2D(-20,12),Canvas->GetCachedGeometry().GetLocalSize(),EKeys::LeftMouseButton);
             TestEqual(TEXT("Window follows the grabbed title or frame horizontally"),Panel->UserDragX,OldX-20);
@@ -1636,6 +1710,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         const auto DragTitle=Manager->FindElementByName(TEXT("InvTitleText"));
         const FVector2D TitlePoint=Canvas->LayoutToViewport(FVector2D(DragTitle->GetScreenOrigin())+FVector2D(80,12));
         const int32 LockedX=Panel->UserDragX;
+        TestTrue(TEXT("Locked title does not advertise movement"),Manager->GetWindowCursor(TitlePoint,Canvas->GetCachedGeometry().GetLocalSize())==EMouseCursor::Default);
         Manager->NotifyMouseDown(TitlePoint,Canvas->GetCachedGeometry().GetLocalSize(),EKeys::LeftMouseButton);
         Manager->NotifyMouseMove(TitlePoint+FVector2D(50,0),Canvas->GetCachedGeometry().GetLocalSize());
         Manager->NotifyMouseUp(TitlePoint+FVector2D(50,0),Canvas->GetCachedGeometry().GetLocalSize(),EKeys::LeftMouseButton);
