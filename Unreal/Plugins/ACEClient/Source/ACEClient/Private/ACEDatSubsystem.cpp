@@ -2485,8 +2485,9 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceBuildingShellMaterialBase()
 #endif
 }
 
-UMaterialInterface* UACEDatSubsystem::GetOrCreateBuildingShellMaterial(uint32 SurfaceId)
+UMaterialInterface* UACEDatSubsystem::GetOrCreateBuildingShellMaterial(uint32 SurfaceId, bool bWrapTexture)
 {
+	const uint32 CacheKey = FACEDatTextureResolver::WorldTextureKey(SurfaceId, bWrapTexture);
 	static constexpr int32 BuildingShellMatVersion = 13;
 	static int32 AppliedBuildingShellMatVersion = 0;
 	if (AppliedBuildingShellMatVersion != BuildingShellMatVersion)
@@ -2506,23 +2507,23 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateBuildingShellMaterial(uint32 Su
 	if (bResolved && (Decoded.bFullyTransparent || Decoded.bAdditive))
 	{
 		// Windows / portal fills stay on the non-clip path (already holes or translucent).
-		return GetOrCreateStaticMeshMaterial(SurfaceId);
+		return GetOrCreateStaticMeshMaterial(SurfaceId, bWrapTexture);
 	}
 	if (bResolved && (Decoded.bClipMap || Decoded.bUsesAlpha))
 	{
-		return GetOrCreateOutdoorLitMaterial(SurfaceId);
+		return GetOrCreateOutdoorLitMaterial(SurfaceId, bWrapTexture);
 	}
 
-	if (const TObjectPtr<UMaterialInstanceDynamic>* Found = BuildingShellMaterialCache.Find(SurfaceId))
+	if (const TObjectPtr<UMaterialInstanceDynamic>* Found = BuildingShellMaterialCache.Find(CacheKey))
 	{
 		if (UMaterialInstanceDynamic* Cached = Found->Get())
 		{
 			return Cached;
 		}
-		BuildingShellMaterialCache.Remove(SurfaceId);
+		BuildingShellMaterialCache.Remove(CacheKey);
 	}
 
-	UTexture2D* Tex = TextureResolver->GetOrCreateUTexture(SurfaceId, this);
+	UTexture2D* Tex = TextureResolver->GetOrCreateUTexture(SurfaceId, this, bWrapTexture);
 	if (!Tex && bResolved && Decoded.bIsSolid && !Decoded.bFullyTransparent)
 	{
 		Tex = UTexture2D::CreateTransient(1, 1, PF_B8G8R8A8);
@@ -2546,19 +2547,19 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateBuildingShellMaterial(uint32 Su
 	}
 	if (!Tex)
 	{
-		return GetOrCreateStaticMeshMaterial(SurfaceId);
+		return GetOrCreateStaticMeshMaterial(SurfaceId, bWrapTexture);
 	}
 
 	UMaterialInterface* Base = EnsureAceBuildingShellMaterialBase();
 	if (!Base)
 	{
-		return GetOrCreateStaticMeshMaterial(SurfaceId);
+		return GetOrCreateStaticMeshMaterial(SurfaceId, bWrapTexture);
 	}
 
 	UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(Base, this);
 	if (!MID)
 	{
-		return GetOrCreateStaticMeshMaterial(SurfaceId);
+		return GetOrCreateStaticMeshMaterial(SurfaceId, bWrapTexture);
 	}
 	MID->SetTextureParameterValue(TEXT("ACETexture"), Tex);
 	MID->SetTextureParameterValue(TEXT("SlateUI"), Tex);
@@ -2566,7 +2567,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateBuildingShellMaterial(uint32 Su
 	MID->SetScalarParameterValue(TEXT("EmissiveStrength"), SceneryEmissiveScale);
 	MID->SetVectorParameterValue(TEXT("WorldAmbientTint"),WorldAmbientTint);
 	ApplyDistanceFogToMid(MID);
-	BuildingShellMaterialCache.Add(SurfaceId, MID);
+	BuildingShellMaterialCache.Add(CacheKey, MID);
 	return MID;
 }
 
@@ -3161,20 +3162,21 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceWeatherAdditiveMaterialBase()
 	return EnsureAceSkyAdditiveMaterialBase();
 }
 
-UMaterialInterface* UACEDatSubsystem::GetOrCreateTexturedMaterial(uint32 SurfaceId)
+UMaterialInterface* UACEDatSubsystem::GetOrCreateTexturedMaterial(uint32 SurfaceId, bool bWrapTexture)
 {
+	const uint32 CacheKey = FACEDatTextureResolver::WorldTextureKey(SurfaceId, bWrapTexture);
 	if (SurfaceId == 0 || !TextureResolver)
 	{
 		return nullptr;
 	}
 
-	if (const TObjectPtr<UMaterialInstanceDynamic>* Found = TexturedMaterialCache.Find(SurfaceId))
+	if (const TObjectPtr<UMaterialInstanceDynamic>* Found = TexturedMaterialCache.Find(CacheKey))
 	{
 		if (UMaterialInstanceDynamic* Cached = Found->Get())
 		{
 			return Cached;
 		}
-		TexturedMaterialCache.Remove(SurfaceId);
+		TexturedMaterialCache.Remove(CacheKey);
 	}
 
 	FACEDatDecodedSurface Decoded;
@@ -3186,7 +3188,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateTexturedMaterial(uint32 Surface
 		return nullptr;
 	}
 
-	UTexture2D* Tex = TextureResolver->GetOrCreateUTexture(SurfaceId, this);
+	UTexture2D* Tex = TextureResolver->GetOrCreateUTexture(SurfaceId, this, bWrapTexture);
 	if (!Tex && bResolved && Decoded.bIsSolid && !IsDatPortalFillSurface(Decoded))
 	{
 		// Solid ColorValue furniture/props (and soft alpha solids) — synthesize a 1×1 swatch so
@@ -3281,7 +3283,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateTexturedMaterial(uint32 Surface
 	MID->SetScalarParameterValue(TEXT("EmissiveStrength"), 1.f);
 	MID->SetVectorParameterValue(TEXT("UVOffset"), FLinearColor(0.f, 0.f, 0.f, 0.f));
 	ApplyDistanceFogToMid(MID);
-	TexturedMaterialCache.Add(SurfaceId, MID);
+	TexturedMaterialCache.Add(CacheKey, MID);
 	return MID;
 }
 
@@ -3306,15 +3308,16 @@ void UACEDatSubsystem::SetInteriorUsesOutdoorAmbient(bool bUseOutdoor)
 	SetInteriorAmbient(OutdoorInteriorAmbient);
 }
 
-UMaterialInterface* UACEDatSubsystem::GetOrCreateEnvCellMaterial(uint32 SurfaceId)
+UMaterialInterface* UACEDatSubsystem::GetOrCreateEnvCellMaterial(uint32 SurfaceId, bool bWrapTexture)
 {
-	if (const auto* Existing = EnvCellMaterialCache.Find(SurfaceId)) return Existing->Get();
+	const uint32 CacheKey = FACEDatTextureResolver::WorldTextureKey(SurfaceId, bWrapTexture);
+	if (const auto* Existing = EnvCellMaterialCache.Find(CacheKey)) return Existing->Get();
 	if (!TextureResolver) return nullptr;
 	FACEDatDecodedSurface Surface;
 	if (!TextureResolver->ResolveSurface(SurfaceId, Surface) || Surface.bFullyTransparent) return nullptr;
 	if (Surface.bAdditive || (Surface.bSurfaceTranslucent && Surface.Translucency > .2f && !Surface.bClipMap))
-		return GetOrCreateTexturedMaterial(SurfaceId);
-	auto* Source = Cast<UMaterialInstanceDynamic>(GetOrCreateOutdoorLitMaterial(SurfaceId));
+		return GetOrCreateTexturedMaterial(SurfaceId, bWrapTexture);
+	auto* Source = Cast<UMaterialInstanceDynamic>(GetOrCreateOutdoorLitMaterial(SurfaceId, bWrapTexture));
 	if (!Source) return nullptr;
 	auto* Base = CreateAceOverlayMaterial(Surface.bClipMap ? TEXT("M_ACEEnvCellMasked_v3") : TEXT("M_ACEEnvCell_v3"),
 		Surface.bClipMap ? EACEAceMaterialKind::Masked : EACEAceMaterialKind::Opaque,
@@ -3329,24 +3332,25 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateEnvCellMaterial(uint32 SurfaceI
 	// Indoor cells use their own lighting/fog state. Outdoor fog remains enabled
 	// on landscape and scenery visible through their portals.
 	MID->SetScalarParameterValue(TEXT("FogAmount"), 0.f);
-	EnvCellMaterialCache.Add(SurfaceId, MID);
+	EnvCellMaterialCache.Add(CacheKey, MID);
 	return MID;
 }
 
-UMaterialInterface* UACEDatSubsystem::GetOrCreateOutdoorLitMaterial(uint32 SurfaceId)
+UMaterialInterface* UACEDatSubsystem::GetOrCreateOutdoorLitMaterial(uint32 SurfaceId, bool bWrapTexture)
 {
+	const uint32 CacheKey = FACEDatTextureResolver::WorldTextureKey(SurfaceId, bWrapTexture);
 	if (SurfaceId == 0 || !TextureResolver)
 	{
 		return nullptr;
 	}
 
-	if (const TObjectPtr<UMaterialInstanceDynamic>* Found = OutdoorLitMaterialCache.Find(SurfaceId))
+	if (const TObjectPtr<UMaterialInstanceDynamic>* Found = OutdoorLitMaterialCache.Find(CacheKey))
 	{
 		if (UMaterialInstanceDynamic* Cached = Found->Get())
 		{
 			return Cached;
 		}
-		OutdoorLitMaterialCache.Remove(SurfaceId);
+		OutdoorLitMaterialCache.Remove(CacheKey);
 	}
 
 	FACEDatDecodedSurface Decoded;
@@ -3356,7 +3360,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateOutdoorLitMaterial(uint32 Surfa
 		return nullptr;
 	}
 
-	UTexture2D* Tex = TextureResolver->GetOrCreateUTexture(SurfaceId, this);
+	UTexture2D* Tex = TextureResolver->GetOrCreateUTexture(SurfaceId, this, bWrapTexture);
 	if (!Tex && bResolved && Decoded.bIsSolid && !IsDatPortalFillSurface(Decoded))
 	{
 		Tex = UTexture2D::CreateTransient(1, 1, PF_B8G8R8A8);
@@ -3434,11 +3438,11 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateOutdoorLitMaterial(uint32 Surfa
 	MID->SetVectorParameterValue(TEXT("WorldAmbientTint"),WorldAmbientTint);
 	MID->SetVectorParameterValue(TEXT("UVOffset"), FLinearColor(0.f, 0.f, 0.f, 0.f));
 	ApplyDistanceFogToMid(MID);
-	OutdoorLitMaterialCache.Add(SurfaceId, MID);
+	OutdoorLitMaterialCache.Add(CacheKey, MID);
 	return MID;
 }
 
-UMaterialInterface* UACEDatSubsystem::GetOrCreateStaticMeshMaterial(uint32 SurfaceId)
+UMaterialInterface* UACEDatSubsystem::GetOrCreateStaticMeshMaterial(uint32 SurfaceId, bool bWrapTexture)
 {
 	static constexpr int32 StaticMeshMatVersion = 10;
 	static int32 AppliedStaticMeshMatVersion = 0;
@@ -3451,7 +3455,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateStaticMeshMaterial(uint32 Surfa
 	}
 	// Same live MID as PMC scenery. Runtime MIC + Set*EditorOnly never bound ACETexture
 	// on HISM/SMC (black silhouettes, no distance fog).
-	return GetOrCreateTexturedMaterial(SurfaceId);
+	return GetOrCreateTexturedMaterial(SurfaceId, bWrapTexture);
 }
 
 UMaterialInterface* UACEDatSubsystem::GetOrCreateParticleMaterial(uint32 SurfaceId)
@@ -4155,10 +4159,10 @@ UStaticMesh* UACEDatSubsystem::GetOrCreateSetupStaticMesh(uint32 SetupId, float 
 				Mat = bParticleGfx
 					? GetOrCreateParticleMaterial(Sec.SurfaceId)
 					: (bStencilHoleClip
-						? GetOrCreateBuildingShellMaterial(Sec.SurfaceId)
+						? GetOrCreateBuildingShellMaterial(Sec.SurfaceId, Sec.bWrapTexture)
 						: (bOutdoorLit
-							? GetOrCreateOutdoorLitMaterial(Sec.SurfaceId)
-							: GetOrCreateStaticMeshMaterial(Sec.SurfaceId)));
+							? GetOrCreateOutdoorLitMaterial(Sec.SurfaceId, Sec.bWrapTexture)
+							: GetOrCreateStaticMeshMaterial(Sec.SurfaceId, Sec.bWrapTexture)));
 			}
 			if (!Mat)
 			{
@@ -4497,7 +4501,7 @@ bool UACEDatSubsystem::PrefetchPortalSpaceSetup(int32 SetupId, float WorldScale)
 		{
 			if (Sec.SurfaceId != 0 && !Sec.bFullyTransparent)
 			{
-				GetOrCreateTexturedMaterial(Sec.SurfaceId);
+				GetOrCreateTexturedMaterial(Sec.SurfaceId, Sec.bWrapTexture);
 			}
 		}
 	}
@@ -4685,15 +4689,15 @@ bool UACEDatSubsystem::ApplySetupToProceduralMeshInternal(UProceduralMeshCompone
 			}
 			else if (bReverseFaces)
 			{
-				Mat = GetOrCreateBuildingShellMaterial(Sec.SurfaceId);
+				Mat = GetOrCreateBuildingShellMaterial(Sec.SurfaceId, Sec.bWrapTexture);
 			}
 			else if (bOutdoorLit)
 			{
-				Mat = GetOrCreateOutdoorLitMaterial(Sec.SurfaceId);
+				Mat = GetOrCreateOutdoorLitMaterial(Sec.SurfaceId, Sec.bWrapTexture);
 			}
 			else
 			{
-				Mat = GetOrCreateTexturedMaterial(Sec.SurfaceId);
+				Mat = GetOrCreateTexturedMaterial(Sec.SurfaceId, Sec.bWrapTexture);
 			}
 			// Additive/alpha/ClipMap FX (Town Network swirls) must never fall back to opaque
 			// VertexColorMaterial — that paints bright white discs under the particles.

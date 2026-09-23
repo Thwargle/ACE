@@ -1142,24 +1142,25 @@ bool FACEDatTextureResolver::DecodeSurfaceTexture(uint32 SurfaceTextureId, FACED
 	return Out.bHasPixels;
 }
 
-UTexture2D* FACEDatTextureResolver::GetOrCreateUTexture(uint32 SurfaceId, UObject* Outer)
+UTexture2D* FACEDatTextureResolver::GetOrCreateUTexture(uint32 SurfaceId, UObject* Outer, bool bWrapTexture)
 {
-	if (auto* Retained = TakeRetainedTexture(SurfaceId, RetainedWorldTextures))
-	{ BindRuntimeTexture(Retained); TextureObjects.Add(SurfaceId, Retained); }
-	if (TObjectPtr<UTexture2D>* Found = TextureObjects.Find(SurfaceId))
+	const uint32 CacheKey = WorldTextureKey(SurfaceId, bWrapTexture);
+	if (auto* Retained = TakeRetainedTexture(CacheKey, RetainedWorldTextures))
+	{ BindRuntimeTexture(Retained); TextureObjects.Add(CacheKey, Retained); }
+	if (TObjectPtr<UTexture2D>* Found = TextureObjects.Find(CacheKey))
 	{
 		UTexture2D* Existing = Found->Get();
 		if (!IsRuntimeDxtTexture(Existing))
 		{
-			TouchTexture(SurfaceId);
+			TouchTexture(CacheKey);
 			return Existing;
 		}
 		if (UACEDatSubsystem* Dat = Cast<UACEDatSubsystem>(GcOwner))
 		{
 			Dat->UntrackRuntimeTexture(Existing);
 		}
-		TextureObjects.Remove(SurfaceId);
-		TextureLastUsed.Remove(SurfaceId);
+		TextureObjects.Remove(CacheKey);
+		TextureLastUsed.Remove(CacheKey);
 	}
 
 	FACEDatDecodedSurface Decoded;
@@ -1177,7 +1178,8 @@ UTexture2D* FACEDatTextureResolver::GetOrCreateUTexture(uint32 SurfaceId, UObjec
 	}
 
 	UTexture2D* Tex = CreateTransientRgbaWithMips(
-		Decoded.Width, Decoded.Height, Decoded.Pixels, Decoded.bUsesAlpha);
+		Decoded.Width, Decoded.Height, Decoded.Pixels, Decoded.bUsesAlpha,
+		bWrapTexture ? TA_Wrap : TA_Clamp, bWrapTexture ? TA_Wrap : TA_Clamp);
 	if (!Tex)
 	{
 		return nullptr;
@@ -1188,8 +1190,8 @@ UTexture2D* FACEDatTextureResolver::GetOrCreateUTexture(uint32 SurfaceId, UObjec
 	}
 	BindRuntimeTexture(Tex);
 
-	TextureObjects.Add(SurfaceId, Tex);
-	TouchTexture(SurfaceId);
+	TextureObjects.Add(CacheKey, Tex);
+	TouchTexture(CacheKey);
 	UE_LOG(LogTemp, Verbose, TEXT("ACEDat: UTexture2D %ux%u for Surface 0x%08X"), Decoded.Width, Decoded.Height, SurfaceId);
 	return Tex;
 }
@@ -1667,11 +1669,14 @@ void FACEDatTextureResolver::TrimCaches(int32 MaxTextures, int32 MaxDecodedSurfa
 	{
 		TArray<uint32> Keys;
 		SurfaceCache.GetKeys(Keys);
+		auto LastSurfaceUse = [&](uint32 Id)
+		{
+			return FMath::Max(TextureLastUsed.FindRef(WorldTextureKey(Id, false)),
+				TextureLastUsed.FindRef(WorldTextureKey(Id, true)));
+		};
 		Keys.Sort([&](uint32 A, uint32 B)
 		{
-			const double* Ta = TextureLastUsed.Find(A);
-			const double* Tb = TextureLastUsed.Find(B);
-			return (Ta ? *Ta : 0.0) < (Tb ? *Tb : 0.0);
+			return LastSurfaceUse(A) < LastSurfaceUse(B);
 		});
 		const int32 RemoveCount = FMath::Min(SurfOver, Keys.Num());
 		for (int32 i = 0; i < RemoveCount; ++i)

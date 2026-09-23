@@ -470,12 +470,12 @@ public:
 	UMaterialInterface* GetVRComfortMaterial();
 	/** PhysicsBSP sections must not use VertexColor/WorldGrid (lit → black with GI off). */
 	UMaterialInterface* EnsureInvisibleCollisionMaterial();
-	UMaterialInterface* GetOrCreateTexturedMaterial(uint32 SurfaceId);
+	UMaterialInterface* GetOrCreateTexturedMaterial(uint32 SurfaceId, bool bWrapTexture = false);
 	/** Live MID for UStaticMesh / HISM (same graph as PMC — runtime MIC never bound textures). */
-	UMaterialInterface* GetOrCreateStaticMeshMaterial(uint32 SurfaceId);
+	UMaterialInterface* GetOrCreateStaticMeshMaterial(uint32 SurfaceId, bool bWrapTexture = false);
 	/** Outdoor landblock scenery (plants / stabs) — DefaultLit so CSM casts onto and from them. */
-	UMaterialInterface* GetOrCreateOutdoorLitMaterial(uint32 SurfaceId);
-	UMaterialInterface* GetOrCreateEnvCellMaterial(uint32 SurfaceId);
+	UMaterialInterface* GetOrCreateOutdoorLitMaterial(uint32 SurfaceId, bool bWrapTexture = false);
+	UMaterialInterface* GetOrCreateEnvCellMaterial(uint32 SurfaceId, bool bWrapTexture = false);
 	void SetInteriorAmbient(const FLinearColor& Color);
 	void SetInteriorUsesOutdoorAmbient(bool bUseOutdoor);
 	/**
@@ -541,7 +541,7 @@ public:
 	 * receive/cast CSM; EnvCell interiors stay on the Unlit textured path.
 	 */
 	UMaterialInterface* EnsureAceBuildingShellMaterialBase();
-	UMaterialInterface* GetOrCreateBuildingShellMaterial(uint32 SurfaceId);
+	UMaterialInterface* GetOrCreateBuildingShellMaterial(uint32 SurfaceId, bool bWrapTexture = false);
 
 	/** True when EnvCell is in a LandblockInfo building's portal BFS (not a pure dungeon cell). */
 	bool IsBuildingInteriorEnvCell(uint32 EnvCellId, float WorldScale);

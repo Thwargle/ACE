@@ -9,6 +9,8 @@
 struct FACEBuiltMeshSection
 {
 	uint32 SurfaceId = 0;
+	/** Retail polygon stippling bits select Wrap; ordinary object faces use Clamp. */
+	bool bWrapTexture = false;
 	/** Foliage / keyed textures — masked materials. Door openings are solid portal planes, not this. */
 	bool bClipMap = false;
 	/** Solid ColorValue portal fills (Translucency≈1) — skip draw + collision. */

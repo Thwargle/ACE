@@ -97,6 +97,52 @@ bool FACELoginHandshakeTest::RunTest(const FString&)
             Fragment.GetData(), Hash, Keys.Next());
     };
     auto Deliver = [](FACESession& S, const TArray<uint8>& Bytes) { S.HandleDatagram(Bytes.GetData(), Bytes.Num(), false); };
+    // Exercise the wire handlers and the state-change notification consumed by
+    // desktop/PC VR/Quest launchers, not just the error-message lookup.
+    for(const auto& Case : TArray<TPair<uint32,FString>>{
+        {1,TEXT("already logged in")},{3,TEXT("account information")},{4,TEXT("server disconnected")},
+        {5,TEXT("log out")},{6,TEXT("delete")},{8,TEXT("server disconnected")},
+        {9,TEXT("account name or login method")},{10,TEXT("does not exist")},
+        {11,TEXT("enter the world")},{12,TEXT("test character")},{13,TEXT("still in the world")},
+        {14,TEXT("account for this character")},{15,TEXT("does not belong")},{16,TEXT("still in the world")},
+        {17,TEXT("enter the world")},{18,TEXT("saved data")},{19,TEXT("starting area")},
+        {20,TEXT("place this character")},{21,TEXT("server is full")},{23,TEXT("still saving")},
+        {24,TEXT("expired")},{0xDEAD,TEXT("without a recognized explanation")}})
+    {
+        FACEBinaryWriter Error; Error.WriteUInt32(ACEOpcode::CharacterError); Error.WriteUInt32(Case.Key);
+        for(bool Early : {false,true})
+        {
+            FACESession Session; Session.State=EACESessionState::AwaitConnectRequest;
+            FString Observed;
+            Session.OnStateChanged.AddLambda([&](EACESessionState State){if(State==EACESessionState::Failed) Observed=Session.GetConnectionError();});
+            if(Early) Deliver(Session,EncryptedMessage(Error.GetData()));
+            Deliver(Session,Handshake);
+            if(!Early) Deliver(Session,EncryptedMessage(Error.GetData()));
+            TestTrue(TEXT("Authenticated login rejection supplies the specific reason to the UI"),Observed.Contains(Case.Value));
+            TestTrue(TEXT("Login rejection retains its original numeric code"),Observed.Contains(FString::Printf(TEXT("error %u"),Case.Key)));
+            Session.OnStateChanged.Clear(); Session.Disconnect();
+            TestTrue(TEXT("Next login starts without the old rejection"),Session.GetConnectionError().IsEmpty());
+        }
+    }
+    for(const auto& Case : TArray<TPair<uint32,FString>>{
+        {0x0C559B1E,TEXT("already logged in")},{0x00F9982C,TEXT("server is full")},
+        {0x00A7E948,TEXT("client version")},{0x082E3779,TEXT("login method")},
+        {0x04DF9C54,TEXT("username, password")},{0x12345678,TEXT("unrecognized connection error")}})
+    for(auto Flag : {EACEPacketHeaderFlags::NetError,EACEPacketHeaderFlags::NetErrorDisconnect})
+    {
+        FACESession Session; Session.Creds.bGDLE=true; Session.State=EACESessionState::AwaitConnectRequest;
+        FACEBinaryWriter Error; Error.WriteUInt32(Case.Key);Error.WriteUInt32(8);
+        Deliver(Session,Packet(0,Flag,Error.GetData(),FACEHash32::Calculate(Error.GetData()),0));
+        TestTrue(TEXT("GDLE login rejection explains the actual server reason"),Session.GetConnectionError().Contains(Case.Value));
+        TestTrue(TEXT("GDLE errors preserve the original StringInfo ID"),Session.GetConnectionError().Contains(FString::Printf(TEXT("0x%08X"),Case.Key)));
+        TestTrue(TEXT("Specific GDLE reasons still terminate rejected logins"),Session.GetState()==EACESessionState::Failed);
+    }
+    {
+        FACESession Session; Session.State=EACESessionState::AwaitConnectRequest;
+        FACEBinaryWriter Error;Error.WriteUInt32(0x0C559B1E);Error.WriteUInt32(9);
+        Deliver(Session,Packet(0,EACEPacketHeaderFlags::NetError,Error.GetData(),FACEHash32::Calculate(Error.GetData()),0));
+        TestTrue(TEXT("Unknown string tables cannot invent an account-in-use reason"),Session.GetConnectionError().Contains(TEXT("unrecognized")));
+    }
     // Harvestbud sends this cleartext retail NetError before it supplies any keys.
     FACEBinaryWriter NetError;
     NetError.WriteUInt32(0x04DF9C54); NetError.WriteUInt32(8);

@@ -76,7 +76,10 @@ public:
 	/** Per-resolver diagnostic; worker resolvers own their counters. */
 	uint64 GetSurfaceResolveCount() const { return SurfaceResolveCount; }
 	bool ResolveSurfaceWithAppearance(uint32 SurfaceId, int32 PartIndex, const FACEObjDesc* Appearance, FACEDatDecodedSurface& Out);
-	UTexture2D* GetOrCreateUTexture(uint32 SurfaceId, UObject* Outer);
+	/** Surface DIDs are 0x08...; bit 30 distinguishes tiled geometry from clamped cards.
+	 * Bit 31 remains reserved for direct UI images in the same texture cache. */
+	static uint32 WorldTextureKey(uint32 SurfaceId, bool bWrapTexture) { return SurfaceId | (bWrapTexture ? 0x40000000u : 0u); }
+	UTexture2D* GetOrCreateUTexture(uint32 SurfaceId, UObject* Outer, bool bWrapTexture = false);
 	/** Outer used to Rename runtime textures so GC can collect them without AddToRoot. */
 	void SetGcOwner(UObject* Owner) { GcOwner = Owner; }
 	UObject* GetGcOwner() const { return GcOwner; }

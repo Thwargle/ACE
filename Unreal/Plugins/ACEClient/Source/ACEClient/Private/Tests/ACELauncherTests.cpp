@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Protocol/ACELoginErrors.h"
 #include "ACELoginProfile.h"
 #include "ACELoginSettings.h"
 #include "ACELoginWidget.h"
@@ -123,6 +124,12 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         Capture(TEXT("Window720p"),FIntPoint(1280,720));
         Capture(TEXT("Desktop4K"),FIntPoint(3840,2160));
         Capture(TEXT("Narrow"),FIntPoint(650,1000));
+        W->SetStatus(ACELoginErrors::Character(1));
+        Capture(TEXT("LoginRejectedVR"),FIntPoint(1100,900));
+        TestTrue(TEXT("Account-in-use guidance wraps within the VR panel"),W->StatusText->GetCachedGeometry().GetAbsoluteSize().X<1100);
+        TestTrue(TEXT("Full error guidance remains inside the headset panel"),W->StatusText->GetCachedGeometry().GetAbsolutePosition().Y+W->StatusText->GetCachedGeometry().GetAbsoluteSize().Y<900);
+        Capture(TEXT("LoginRejected720p"),FIntPoint(1280,720));
+        Capture(TEXT("LoginRejectedNarrow"),FIntPoint(650,1000));
         W->RunAction(TEXT("browser")); W->RunAction(TEXT("directoryselect"),HomeId); Capture(TEXT("Browser"),FIntPoint(1100,900));
         W->RunAction(TEXT("editserver")); Capture(TEXT("Editor"),FIntPoint(1100,900));
         W->RunAction(TEXT("files")); Capture(TEXT("Files"),FIntPoint(1100,900));

@@ -7,6 +7,7 @@
 #include "Protocol/ACEHash32.h"
 #include "Protocol/ACEObjectCreateParser.h"
 #include "Protocol/ACECombatChat.h"
+#include "Protocol/ACELoginErrors.h"
 #include "ACEOpcodes.h"
 #include "Sockets.h"
 #include "SocketSubsystem.h"
@@ -772,9 +773,7 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 		// Initial GDLE rejections have no ISAAC keys yet. Once authenticated,
 		// ignore delayed cleartext rejections from an earlier login attempt.
 		if (!bEncrypted && State != EACESessionState::AwaitConnectRequest) return;
-		const FString Reason = NetErrorStringId == 0x04DF9C54 && NetErrorTableId == 8
-			? TEXT("The server rejected the login. Check the account, password, and server address/port.")
-			: TEXT("The server reported a connection error.");
+		const FString Reason = ACELoginErrors::Network(NetErrorStringId, NetErrorTableId);
 		ConnectionError = FString::Printf(TEXT("%s (%s:%d; 0x%08X, table %u)"),
 			*Reason, *Creds.Host, Creds.Port, NetErrorStringId, NetErrorTableId);
 		Log(ConnectionError);
@@ -1349,7 +1348,7 @@ void FACESession::HandleGameMessage(const TArray<uint8>& MessageBytes)
 			PendingCharacterMutation = 0;
 			break;
 		}
-		ConnectionError = FString::Printf(TEXT("The server rejected this connection (error %u)."), ErrorCode);
+		ConnectionError = ACELoginErrors::Character(ErrorCode);
 		Log(FString::Printf(TEXT("CharacterError code=%u - login rejected by server"), ErrorCode));
 		if (State == EACESessionState::EnteringWorld && PlayerGuid == 0)
 		{

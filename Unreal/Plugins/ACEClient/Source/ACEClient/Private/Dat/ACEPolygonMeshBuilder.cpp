@@ -31,6 +31,9 @@ void ACEPolygonMeshBuilder::Append(const TMap<uint16, FACEDatPolygon>& Polygons,
             const int32 SurfaceIndex = bBack && bSeparateBack ? Poly.NegSurface : Poly.PosSurface;
             if (!Surfaces.IsValidIndex(SurfaceIndex)) continue;
             const uint32 SurfaceId = Surfaces[SurfaceIndex];
+            const bool bWrapTexture = EnumHasAnyFlags(Poly.Stippling,
+                bBack && bSeparateBack ? EACEStipplingType::Negative : EACEStipplingType::Positive);
+            const uint32 SectionKey = FACEDatTextureResolver::WorldTextureKey(SurfaceId, bWrapTexture);
             const TArray<uint8>& UVIndices = bBack && bSeparateBack ? Poly.NegUVIndices : Poly.PosUVIndices;
             const FACEDatDecodedSurface* Decoded = PartSurfaces.Find(SurfaceId);
             if (!Decoded && Textures && !FailedSurfaces.Contains(SurfaceId))
@@ -42,14 +45,15 @@ void ACEPolygonMeshBuilder::Append(const TMap<uint16, FACEDatPolygon>& Polygons,
             }
             if (Decoded && Decoded->bFullyTransparent) continue;
 
-            int32* SectionIndex = SurfaceSections.Find(SurfaceId);
+            int32* SectionIndex = SurfaceSections.Find(SectionKey);
             if (!SectionIndex)
             {
                 FACEBuiltMeshSection NewSection;
                 NewSection.SurfaceId = SurfaceId;
+                NewSection.bWrapTexture = bWrapTexture;
                 NewSection.bClipMap = Decoded && Decoded->bClipMap;
-                SurfaceSections.Add(SurfaceId, OutSections.Add(MoveTemp(NewSection)));
-                SectionIndex = SurfaceSections.Find(SurfaceId);
+                SurfaceSections.Add(SectionKey, OutSections.Add(MoveTemp(NewSection)));
+                SectionIndex = SurfaceSections.Find(SectionKey);
             }
             FACEBuiltMeshSection& Section = OutSections[*SectionIndex];
             const int32 Base = Section.Vertices.Num();

@@ -86,6 +86,7 @@ namespace ACEEnvCellTileCache
 			WritePod(Buf, static_cast<uint8>(Sec.bClipMap ? 1 : 0));
 			WritePod(Buf, static_cast<uint8>(Sec.bFullyTransparent ? 1 : 0));
 			WritePod(Buf, static_cast<uint8>(Sec.bCollisionOnly ? 1 : 0));
+			WritePod(Buf, static_cast<uint8>(Sec.bWrapTexture ? 1 : 0));
 			WritePod(Buf, static_cast<uint32>(Sec.Vertices.Num()));
 			for (const FVector& V : Sec.Vertices)
 			{
@@ -117,16 +118,17 @@ namespace ACEEnvCellTileCache
 		bool ReadMeshSection(FMemoryReader& Ar, FACEBuiltMeshSection& Sec)
 		{
 			Sec = FACEBuiltMeshSection();
-			uint8 Clip = 0, Trans = 0, Coll = 0;
+			uint8 Clip = 0, Trans = 0, Coll = 0, Wrap = 0;
 			uint32 N = 0;
 			if (!ReadPod(Ar, Sec.SurfaceId) || !ReadPod(Ar, Clip) || !ReadPod(Ar, Trans) || !ReadPod(Ar, Coll)
-				|| !ReadPod(Ar, N) || N > 200000u)
+				|| !ReadPod(Ar, Wrap) || !ReadPod(Ar, N) || N > 200000u)
 			{
 				return false;
 			}
 			Sec.bClipMap = Clip != 0;
 			Sec.bFullyTransparent = Trans != 0;
 			Sec.bCollisionOnly = Coll != 0;
+			Sec.bWrapTexture = Wrap != 0;
 			Sec.Vertices.SetNum(static_cast<int32>(N));
 			for (FVector& V : Sec.Vertices)
 			{

@@ -900,7 +900,7 @@ bool AACEEnvCellActor::LoadEnvCell(int32 InEnvCellId, const FVector& LandblockOr
 			/*bCreateCollision*/ false);
 		SectionIsCeiling.Add(bCeilingBucket);
 		++SectionIndex;
-		UMaterialInterface* SecMat = Dat->GetOrCreateEnvCellMaterial(Sec.SurfaceId);
+		UMaterialInterface* SecMat = Dat->GetOrCreateEnvCellMaterial(Sec.SurfaceId, Sec.bWrapTexture);
 		if (SecMat)
 		{
 			++MidCount;
