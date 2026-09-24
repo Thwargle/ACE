@@ -1,4 +1,5 @@
 #include "ACERetailChat.h"
+#include "ACERuntimeOptions.h"
 #include "UI/ACERetailTextBlock.h"
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACEChatEntry.h"
@@ -25,6 +26,56 @@
 #include "VR/ACEVRComponent.h"
 #include "ACESession.h"
 #include "Framework/Application/SlateApplication.h"
+
+void UACEUIGameplayBinder::SendPoseChat(const FString& Command, FString MyEmote, FString OtherEmote)
+{
+	if (!Client) return;
+	// Retail ChatPoseTable supplies fragments; HearSoulEmote prefixes You/name.
+	// Selected-target phrasing is an AC:Unreal extension, carried as ordinary
+	// SoulEmote text so ACE, GDLE and retail observers all see the same result.
+	FString Pose = Command.ToLower();
+	Pose.RemoveFromEnd(TEXT("state"));
+	const TCHAR* Join = nullptr;
+	if (Pose == TEXT("wave") || Pose == TEXT("wavehigh") || Pose == TEXT("wavelow")
+		|| Pose == TEXT("beseeingyou") || Pose == TEXT("shoo") || Pose == TEXT("nod")
+		|| Pose == TEXT("shakehead") || Pose == TEXT("shakefist") || Pose == TEXT("shrug")
+		|| Pose == TEXT("mock") || Pose == TEXT("point") || Pose == TEXT("pointleft")
+		|| Pose == TEXT("pointright") || Pose == TEXT("pointdown")) Join = TEXT(" at ");
+	else if (Pose == TEXT("bowdeep") || Pose == TEXT("curtsey") || Pose == TEXT("blowkiss")
+		|| Pose == TEXT("beckon")) Join = TEXT(" to ");
+	else if (Pose == TEXT("salute")) Join = TEXT(" ");
+
+	FACEWorldObject Self;
+	Client->GetWorldObject(Client->GetPlayerGuid(), Self);
+	auto Format = [&](FString& Fragment)
+	{
+		Fragment.ReplaceInline(TEXT("%s"), Self.Name.IsEmpty() ? TEXT("Someone") : *Self.Name);
+		Fragment.ReplaceInline(TEXT("%p"), LastVitals.bValid && LastVitals.Gender == 2 ? TEXT("her") : TEXT("his"));
+	};
+	Format(MyEmote); Format(OtherEmote);
+	const auto Selection = Client->GetSelectedObject();
+	FACEWorldObject Target;
+	if (Join && Selection.Guid && Selection.Guid != Client->GetPlayerGuid()
+		&& Client->GetWorldObject(Selection.Guid, Target) && !Target.Name.IsEmpty())
+	{
+		auto Address = [&](FString& Fragment)
+		{
+			if (Fragment.IsEmpty()) return;
+			// Keep quoted phrases after the addressed action, e.g.
+			// waves to Name, "Be seeing you!" and retain terminal punctuation.
+			int32 At = Fragment.Find(TEXT(","));
+			if (At == INDEX_NONE)
+			{
+				At = Fragment.Len();
+				if (At && (Fragment[At-1] == '.' || Fragment[At-1] == '!')) --At;
+			}
+			Fragment.InsertAt(At, FString(Join) + Target.Name);
+		};
+		Address(MyEmote); Address(OtherEmote);
+	}
+	if (!OtherEmote.IsEmpty()) Client->SendSoulEmote(OtherEmote);
+	if (!MyEmote.IsEmpty()) AppendLocalChatLine(TEXT("You ") + MyEmote, ACEChatMessageType::Emote);
+}
 
 namespace
 {
@@ -501,14 +552,19 @@ void UACEUIGameplayBinder::RefreshChatRowLayout(int32 Window)
 	if (!Log || !LogEl) return;
 	const float Width = FMath::Max(1.f, float(LogEl->Width) - (Window ? 4.f : 18.f));
 	const FVector2D Scale = Canvas->GetLastScale2D();
-	if (ChatRowWidths[Window] == Width && ChatRowScales[Window] == Scale) return;
+	const uint32 FontId = ACERuntimeOptions::ChatFontId();
+	if (ChatRowWidths[Window] == Width && ChatRowScales[Window] == Scale && ChatRowFontIds[Window] == FontId) return;
+	ChatRowFontIds[Window] = FontId;
 	ChatRowWidths[Window] = Width;
 	ChatRowScales[Window] = Scale;
 	// Offscreen ScrollBox children do not tick. Update their wrap constraint too,
 	// so total content height and the proportional thumb reflect the new width.
 	for (auto* Child : Log->GetAllChildren())
 		if (auto* Row = Cast<UACERetailTextBlock>(Child))
+		{
+			Row->SetFontOverride(FontId);
 			Row->SetRetailElement(Canvas->GetResourceResolver(), nullptr, Scale, Width, false);
+		}
 }
 
 void UACEUIGameplayBinder::AppendChatLineToLog(int32 Window, const FString& Line,
@@ -548,6 +604,7 @@ void UACEUIGameplayBinder::AppendChatLineToLog(int32 Window, const FString& Line
 	Row->SetAutoWrapText(true);
 	Row->SetColorAndOpacity(FSlateColor(Color));
 	Row->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9));
+	Row->SetFontOverride(ACERuntimeOptions::ChatFontId());
 	RefreshChatRowLayout(Window);
 	CastChecked<UACERetailTextBlock>(Row)->SetRetailElement(Canvas->GetResourceResolver(), nullptr,
 		ChatRowScales[Window], ChatRowWidths[Window], false);
@@ -1217,6 +1274,10 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 			return true;
 		}
 		Client->SendSoulEmote(Args);
+		FACEWorldObject Self;
+		Client->GetWorldObject(Client->GetPlayerGuid(), Self);
+		// Unlike DAT poses, raw @sm has no separate first-person phrase.
+		HandleChatMessage(Args, Self.Name.IsEmpty() ? TEXT("You") : Self.Name, ACEChatMessageType::Emote);
 		return true;
 	}
 

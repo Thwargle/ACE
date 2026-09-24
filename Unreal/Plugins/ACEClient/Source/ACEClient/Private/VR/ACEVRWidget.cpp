@@ -145,7 +145,7 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 				.OnValueChanged_Lambda([Rig, Setting](float Value) { if (Rig.IsValid()) Rig->SetSliderSetting(Setting, Value); })
 				.OnMouseCaptureEnd_Lambda([Rig]() { if (Rig.IsValid()) Rig->GetSettings()->Persist(); })]]];
 		}
-		for (FName Setting : {FName("PinMenu"), FName("PinHotbar"), FName("PinVitals"), FName("VitalsAnchor"), FName("VitalsLock"), FName("PinChat"), FName("Turn"), FName("Angle"), FName("Hand"), FName("Movement"), FName("Seated"), FName("Body"), FName("Haptics"), FName("Render")})
+		for (FName Setting : {FName("PinMenu"), FName("ShowWrist"), FName("PinHotbar"), FName("Compass"), FName("PinVitals"), FName("VitalsAnchor"), FName("VitalsLock"), FName("PinChat"), FName("Turn"), FName("Angle"), FName("Hand"), FName("Movement"), FName("Seated"), FName("Body"), FName("Haptics"), FName("Render")})
 		{
 			Scroll->AddSlot().Padding(0, 3)[Button(TAttribute<FText>::CreateLambda([Rig, Setting]()
 			{
@@ -159,6 +159,8 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 				else if (Setting == "Body") Label = FString::Printf(TEXT("Avatar: %s"), S->bShowBody ? TEXT("Body and arms") : TEXT("Arms only"));
 				else if (Setting == "PinMenu") Label = FString::Printf(TEXT("Main menus pinned to: %s"), S->bPinMenuToView ? TEXT("View") : TEXT("World"));
 				else if (Setting == "PinHotbar") Label = FString::Printf(TEXT("Retail hotbar pinned to: %s"), S->bPinHotbarToView ? TEXT("View") : TEXT("Left wrist"));
+				else if (Setting == "ShowWrist") Label = FString::Printf(TEXT("Wrist spell bar: %s"), S->bShowWristSpellBar ? TEXT("Shown") : TEXT("Hidden (use spell wheel)"));
+				else if (Setting == "Compass") Label = FString::Printf(TEXT("Compass and coordinates: %s"), S->bShowCompass ? TEXT("Shown") : TEXT("Hidden"));
 				else if (Setting == "PinVitals") Label = FString::Printf(TEXT("Show pinned vitals: %s"), S->bPinVitalsToView ? TEXT("On") : TEXT("Off"));
 				else if (Setting == "VitalsLock") Label = S->bVitalsLocked ? TEXT("Vitals placement: Locked") : TEXT("Vitals placement: Unlocked / drag bar to move");
                 else if (Setting == "PinChat") Label = FString::Printf(TEXT("Pin chat in view: %s"), S->bPinChatToView ? TEXT("On") : TEXT("Off"));

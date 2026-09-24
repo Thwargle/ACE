@@ -62,6 +62,40 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
             TestEqual(FString::Printf(TEXT("Server inventory position %d"),I),Actual[I].Guid,Expected[I]);
     };
     // Two drags outstanding at once; ACK order is authoritative, without duplicate shifts.
+    {
+        auto Pickup=Item(500,900,0); Pickup.WeenieClassId=42; Pickup.MaxStackSize=100; Pickup.StackSize=12;
+        auto Match=Item(501,10,0); Match.WeenieClassId=42; Match.MaxStackSize=100; Match.StackSize=50;
+        auto Wrong=Match; Wrong.Guid=499; Wrong.WeenieClassId=43;
+        Session.UpsertWorldObject(Pickup); Session.UpsertWorldObject(Match); Session.UpsertWorldObject(Wrong);
+        Session.CachedC2SPackets.Reset(); Session.SendPutItemInContainer(500,100,0);
+        uint32 Last=0; for(const auto& P:Session.CachedC2SPackets) Last=FMath::Max(Last,P.Key);
+        if(TestTrue(TEXT("Pickup sends an inventory action"),Last!=0))
+        {
+            FACEBinaryReader R(Session.CachedC2SPackets[Last].Payload); R.Skip(24);
+            TestEqual(TEXT("Pickup automatically merges into a nested pack"),R.ReadUInt32(),ACEGameAction::StackableMerge);
+            TestEqual(TEXT("Merge source"),R.ReadUInt32(),500u);
+            TestEqual(TEXT("Merge matches WCID"),R.ReadUInt32(),501u);
+            TestEqual(TEXT("Merge full pickup quantity"),R.ReadUInt32(),12u);
+        }
+        TestEqual(TEXT("Merge waits for authoritative stack update"),Session.WorldObjects[501].StackSize,50);
+        Session.WorldObjects[500].StackSize=0;
+        Session.CachedC2SPackets.Reset(); Session.SendPutItemInContainer(500,100,0);
+        Last=0; for(const auto& P:Session.CachedC2SPackets) Last=FMath::Max(Last,P.Key);
+        if(TestTrue(TEXT("Single pickup with omitted count emits an action"),Last!=0))
+        {
+            FACEBinaryReader R(Session.CachedC2SPackets[Last].Payload);R.Skip(24);
+            TestEqual(TEXT("Retail implicit single item still auto-merges"),R.ReadUInt32(),ACEGameAction::StackableMerge);
+            R.Skip(8); TestEqual(TEXT("Omitted stack count means one"),R.ReadInt32(),1);
+        }
+        Session.WorldObjects[500].StackSize=2; Session.WorldObjects[501].StackSize=0; Session.WorldObjects[501].MaxStackSize=2;
+        Send(500,100,3); // An implicit single item already occupies one of the two slots.
+        Session.WorldObjects[500].StackSize=12; Session.WorldObjects[501].StackSize=50; Session.WorldObjects[501].MaxStackSize=100;
+        Session.TradeSelfItems.Add(501); Send(500,100,3); Session.TradeSelfItems.Reset();
+        Session.WorldObjects[501].StackSize=95; Send(500,100,3);
+        Session.WorldObjects[501].StackSize=50; Session.WorldObjects[500].ContainerId=100;
+        Send(500,10,0); // Explicitly rearranging an owned stack must not merge it.
+        for(int Id:{499,500,501}) Session.WorldObjects.Remove(Id);
+    }
     Send(3,100,0); Send(2,100,0);
     Check(100,{1,2,3}); Contains(3,100,0); Contains(2,100,0); Check(100,{2,3,1});
     Send(3,20,0); Contains(3,20,0); Check(100,{2,1}); Check(20,{3});

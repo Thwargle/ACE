@@ -7,6 +7,7 @@
 #include "Dat/ACEPortalViewMask.h"
 #include "VR/ACEVRComponent.h"
 #include "../VR/ACEEnemyHealthBar.h"
+#include "../VR/ACEVRNativeHUD.h"
 #include "VR/ACEVRSettings.h"
 #include "VR/ACEVRWidget.h"
 #include "VR/ACEVRRetailSurface.h"
@@ -752,6 +753,10 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Selecting a spell preserves the open inventory menu"), VR->bInventoryOpen);
 		VR->UpdatePanels();
 		TestTrue(TEXT("Wrist spell menu is visible with a wand equipped"), VR->WristPanel->IsVisible());
+		VR->Settings->bShowWristSpellBar=false;VR->UpdatePanels();
+		TestFalse(TEXT("Wrist visibility setting hides its panel"),VR->WristPanel->IsVisible());
+		TestEqual(TEXT("Hiding the wrist bar preserves magic stance"),VR->GetCombatMode(),int32(ACECombatMode::Magic));
+		VR->Settings->bShowWristSpellBar=true;VR->UpdatePanels();
 		TestEqual(TEXT("Wrist uses the retail surface instead of a custom list"), VR->WristPanel->GetWidget(), static_cast<UUserWidget*>(VR->WristRetail.Get()));
 		{
 			const FTransform Rig=VR->TrackingOrigin->GetComponentTransform();
@@ -926,6 +931,13 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			PointAt(VR->RetailPanel, Destination); VR->Trigger(false, false);
 			TestTrue(TEXT("Spellbook drag still adds a spell on the central hotbar"), VR->Client->GetSpellBar(0).Contains(Spell));
 			TestTrue(TEXT("Dragging preserves the spellbook window"), VR->bInventoryOpen && Gameplay->ActivePanelPage == TEXT("SpellManagementPanel_Field"));
+			VR->Client->SendRemoveSpellFromBar(Spell,0); Gameplay->RefreshSpellHotbarOverlays(); PaintRetail();
+			const uint32 BeforeBookClick=VR->Client->Session->NextGameActionSequence;
+			PointAt(VR->RetailPanel,Start); VR->Trigger(false,true); VR->Trigger(false,false);
+			TestEqual(TEXT("VR spellbook single click does not cast"),VR->Client->Session->NextGameActionSequence,BeforeBookClick);
+			VR->Trigger(false,true); VR->Trigger(false,false);
+			TestTrue(TEXT("VR double-click adds the spell to the open bank"),VR->Client->GetSpellBar(0).Contains(Spell));
+			TestEqual(TEXT("VR double-click only sends the favorite action"),VR->Client->Session->NextGameActionSequence,BeforeBookClick+1);
 			PaintRetail();
 			PointAt(VR->WristPanel, LocalCenter(Gameplay->SpellBarSlotBgs[0]) - VR->WristRetail->ToCanvas(FVector2D::ZeroVector));
 			const auto BeforeWristDrag = VR->Client->GetSpellBar(0);
@@ -1588,6 +1600,19 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			// Render the actual retail meshes for visual inspection, not only joint axes.
 			Pawn->SetActorHiddenInGame(false);
 			PollHands(); VR->Head->SetRelativeLocation(FVector(0, 0, 165)); VR->UpdateArms();
+			VR->Head->SetRelativeRotation(FRotator(-55,0,10));
+			for (int32 Frame=0;Frame<90;++Frame) VR->UpdateArms(1.f/90);
+			FTransform ChestBind; App->GetPartBindTransform(9,ChestBind);
+			TestTrue(TEXT("Local headset tilt actually bends the rendered chest"),
+				App->GetPartMesh(9)->GetRelativeRotation().Quaternion().AngularDistance(ChestBind.GetRotation()) > FMath::DegreesToRadians(3.f));
+			TestTrue(TEXT("Bending the torso preserves the tracked eye position"),App->GetPartMesh(16)->GetComponentTransform()
+				.TransformPosition(FVector(0,-8,17)).Equals(VR->Head->GetComponentLocation(),.1));
+			for (int32 Side=0;Side<2;++Side)
+			{
+				int32 Hand;FTransform Hold;Dat->GetHoldingLocation(Self.SetupId,Side==0?8:1,Hand,Hold,100);
+				TestTrue(TEXT("Torso sway preserves controller grip alignment"),(Hold*App->GetPartMesh(Hand)->GetComponentTransform()).GetLocation()
+					.Equals((Side==0?VR->LeftGrip:VR->RightGrip)->GetComponentLocation(),.1));
+			}
 			auto* CaptureOwner = World->SpawnActor<AActor>();
 			auto* Capture = NewObject<USceneCaptureComponent2D>(CaptureOwner); CaptureOwner->AddInstanceComponent(Capture);
 			Capture->RegisterComponent(); Capture->bCaptureEveryFrame = Capture->bCaptureOnMovement = false;
@@ -1602,7 +1627,16 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			TArray<FColor> ArmPixels; ArmImage->GameThread_GetRenderTargetResource()->ReadPixels(ArmPixels);
 			TArray64<uint8> ArmPNG; FImageUtils::PNGCompressImageArray(1024, 1024, ArmPixels, ArmPNG);
 			FFileHelper::SaveArrayToFile(ArmPNG, *(FPaths::ProjectSavedDir() / TEXT("Automation/VR/ArmGeometry.png")));
+			const FVector BodyCenter=App->GetMeshRoot()->GetComponentLocation()+FVector(0,0,100);
+			const FVector BodyCaptureEye=BodyCenter+FVector(160,-160,25);
+			Capture->SetWorldLocationAndRotation(BodyCaptureEye,(BodyCenter-BodyCaptureEye).Rotation());
+			World->SendAllEndOfFrameUpdates();Capture->CaptureScene();FlushRenderingCommands();
+			ArmImage->GameThread_GetRenderTargetResource()->ReadPixels(ArmPixels);
+			FImageUtils::PNGCompressImageArray(1024,1024,ArmPixels,ArmPNG);
+			FFileHelper::SaveArrayToFile(ArmPNG,*(FPaths::ProjectSavedDir()/TEXT("Automation/VR/TorsoBend.png")));
 			CaptureOwner->Destroy();
+			VR->Head->SetRelativeRotation(FRotator::ZeroRotator);
+			for (int32 Frame=0;Frame<90;++Frame) VR->UpdateArms(1.f/90);
 			PollHands(); VR->UpdateArms();
 			Wand.SetupId = 0x0200017C; Wand.ParentGuid = 100; Wand.ParentLocation = 1;
 			VR->Client->Session->WorldObjects[Wand.Guid] = Wand;
@@ -2118,6 +2152,34 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		PortalWeapon->Destroy(); HiddenAmmo->Destroy(); LateWeapon->Destroy();
 		TestTrue(TEXT("Portal exit restores the player floor"), FVector::Distance(VR->TrackingOrigin->GetComponentLocation(), Pawn->GetActorLocation()) < 300);
 		PC->LoadingScreenActor = nullptr; Portal->Destroy();
+	}
+	{
+		VR->Settings->bShowCompass=true;VR->Settings->bPinVitalsToView=true;
+		VR->NextNativeHUDUpdate=0;VR->UpdateNativeHUD(true);
+		TestTrue(TEXT("Native compass is independent of the desktop canvas"),VR->CompassPanel->IsVisible() && VR->NativeCompass.IsValid());
+		TestTrue(TEXT("Native vitals use Slate instead of a desktop crop"),VR->VitalsPanel->IsVisible() && VR->NativeVitals.IsValid() && VR->VitalsPanel->GetWidget()==nullptr);
+		VR->Settings->bShowCompass=false;VR->Settings->bPinVitalsToView=false;VR->UpdateNativeHUD(true);
+		TestFalse(TEXT("Hidden compass stops ticking"),VR->CompassPanel->IsComponentTickEnabled());
+		TestFalse(TEXT("Hidden vitals cannot intercept controls"),VR->VitalsPanel->GetCollisionEnabled()!=ECollisionEnabled::NoCollision);
+		FACEPlayerVitals V;V.bValid=true;V.Health=275;V.MaxHealth=400;V.Stamina=310;V.MaxStamina=450;V.Mana=500;V.MaxMana=600;
+		VR->NativeVitals->Refresh(V);
+		VR->NativeCompass->Coordinates=TEXT("33.6S, 72.8E");
+		VR->NativeCompass->Markers={{{160,120},FLinearColor::Yellow,1,0,true},{{245,180},FLinearColor::Green,2,0,false},{{275,250},FLinearColor::Red,3,1,false}};
+		if(FApp::CanEverRender())
+		{
+			FWidgetRenderer Renderer(true,true);
+			const FString Directory=FPaths::ProjectSavedDir()/TEXT("Automation/VR");IFileManager::Get().MakeDirectory(*Directory,true);
+			for(int I=0;I<2;++I)
+			{
+				const TSharedRef<SWidget> Widget=I==0?StaticCastSharedRef<SWidget>(VR->NativeVitals.ToSharedRef()):StaticCastSharedRef<SWidget>(VR->NativeCompass.ToSharedRef());
+				const FIntPoint Size=I==0?FIntPoint(480,240):FIntPoint(400,460);
+				auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(Size),TF_Bilinear,true);
+				for(int Pass=0;Pass<3;++Pass){Renderer.DrawWidget(Target,Widget,FVector2D(Size),0);FlushRenderingCommands();}
+				TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
+				TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(Size.X,Size.Y,Pixels,PNG);
+				FFileHelper::SaveArrayToFile(PNG,*(Directory/(I==0?TEXT("NativeVitals.png"):TEXT("NativeCompass.png"))));
+			}
+		}
 	}
 	if (FApp::CanEverRender())
 	{

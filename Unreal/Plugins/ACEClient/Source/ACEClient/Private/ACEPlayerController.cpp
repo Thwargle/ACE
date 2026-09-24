@@ -1481,11 +1481,10 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			}
 			else if (bJumpCharging)
 			{
-				// Keep run/walk through the entire Space hold; JumpCharging only when standing.
+				// Retail keeps the current run/walk or Ready cycle while charging.
 				if (!bStandingJumpLocked && (!FMath::IsNearlyZero(RawF) || !FMath::IsNearlyZero(RawR)))
 				{
-					// Reversing axes passes through zero and temporarily installs a
-					// held charge pose. Release it before resuming locomotion.
+					// Discard an old airborne pose before continuing grounded movement.
 					App->ClearJumpMotionIfAny();
 					App->SetSuppressLocoIdleBlend(false);
 					App->SetLocomotionInput(RawF, RawR, bRunning,
@@ -1493,8 +1492,10 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				}
 				else
 				{
+					// Retail charge_jump keeps Ready while standing; JumpCharging has
+					// no player motion entry and must not latch an unevaluated held pose.
+					App->ClearJumpMotionIfAny();
 					App->SetLocomotionInput(0.f, 0.f, false, 1.f);
-					App->SetHeldActionMotion(static_cast<int32>(0x4000001d), 0);
 				}
 			}
 			else
@@ -1521,6 +1522,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	TOptional<FCollisionQueryParams> MovementFilterCache;
 	TSet<uint32> MovementFilterCells;
 	bool bMovementFilterOutdoor = false;
+	bool bMovementFilterIndoor = false;
 	for (int32 MovementStep = 0; MovementStep < MovementSteps; ++MovementStep)
 	{
 	if (bSyncPossessedPawn)
@@ -1850,6 +1852,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				// EnvCells outside the transit set (StabList peek stay draw-only).
 				FCollisionQueryParams SweepParams = Params;
 				const bool bReuseMovementFilter = bVR && MovementFilterCache.IsSet()
+					&& bMovementFilterIndoor == bIndoorPred
 					&& bMovementFilterOutdoor == bTransitHasOutdoorLand
 					&& MovementFilterCells.Num() == TransitEnvCells.Num()
 					&& MovementFilterCells.Includes(TransitEnvCells);
@@ -1873,7 +1876,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						}
 					}
 				}
-				if (!bReuseMovementFilter && (TransitEnvCells.Num() > 0 || WaterDat))
+				if (!bReuseMovementFilter && bIndoorPred && (TransitEnvCells.Num() > 0 || WaterDat))
 				{
 					ACECellTransit::RestrictRoomCollision(*World, TransitEnvCells, SweepParams);
 				}
@@ -1882,6 +1885,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					MovementFilterCache = SweepParams;
 					MovementFilterCells = TransitEnvCells;
 					bMovementFilterOutdoor = bTransitHasOutdoorLand;
+					bMovementFilterIndoor = bIndoorPred;
 				}
 				if (!bIndoorPred && bTransitHasOutdoorLand)
 					FilterWadingTerrain(*World,WaterDat,P->GetActorLocation(),Desired,WorldScale,SweepParams);
@@ -1892,6 +1896,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				const float BlockingNormalZ = bJumpAirborne ? LandingZ : FloorZ;
 				auto IsWallHit = [BlockingNormalZ](const FHitResult& Hit) -> bool
 				{
+					if (Hit.bBlockingHit && ACEBodySweep::IsCreatureBody(Hit)) return true;
 					if (!Hit.bBlockingHit || Hit.Normal.Z >= BlockingNormalZ)
 					{
 						return false;
@@ -1972,7 +1977,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					{
 						// Accept landable slopes (retail LandingZ). FloorZ gates ON_WALKABLE cling.
 						const float MinWalkZ = bJumpAirborne ? LandingZ : FloorZ;
-						if (!Hit.bBlockingHit || Hit.ImpactNormal.Z < MinWalkZ)
+						if (!Hit.bBlockingHit || ACEBodySweep::IsCreatureBody(Hit) || Hit.ImpactNormal.Z < MinWalkZ)
 						{
 							continue;
 						}
@@ -2507,7 +2512,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						else
 						{
 							FVector Stepped;
-							if (TryStepUp(Start, End, Stepped))
+							if (!ACEBodySweep::IsCreatureBody(PenHit) && TryStepUp(Start, End, Stepped))
 							{
 								Start = Stepped;
 								End = FVector(EndX, EndY, Stepped.Z);
@@ -2598,7 +2603,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 							}
 						}
 						FVector Stepped;
-						if (!bJumpAirborne && Hit.ImpactNormal.Z>=-.15f && !Hit.bStartPenetrating && TryStepUp(Start, End, Stepped))
+						if (!bJumpAirborne && !ACEBodySweep::IsCreatureBody(Hit) && Hit.ImpactNormal.Z>=-.15f && !Hit.bStartPenetrating && TryStepUp(Start, End, Stepped))
 						{
 							Resolved = Stepped;
 							StepHoldMinFeetZ = Stepped.Z - CapsuleHalfHeight;
@@ -2606,7 +2611,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						}
 						else if (Hit.bStartPenetrating)
 						{
-							if (!bJumpAirborne && Hit.ImpactNormal.Z>=-.15f && TryStepUp(Start, End, Stepped))
+							if (!bJumpAirborne && !ACEBodySweep::IsCreatureBody(Hit) && Hit.ImpactNormal.Z>=-.15f && TryStepUp(Start, End, Stepped))
 							{
 								Resolved = Stepped;
 								StepHoldMinFeetZ = Stepped.Z - CapsuleHalfHeight;
@@ -2647,7 +2652,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 							const bool bSlideContact=SweepCapsule(SlideHit, SlideOrigin, SlideEnd);
 							if (bSlideContact && IsWallHit(SlideHit))
 							{
-								if (!bJumpAirborne && SlideHit.ImpactNormal.Z>=-.15f && !SlideHit.bStartPenetrating
+								if (!bJumpAirborne && !ACEBodySweep::IsCreatureBody(SlideHit) && SlideHit.ImpactNormal.Z>=-.15f && !SlideHit.bStartPenetrating
 									&& TryStepUp(SlideOrigin, SlideEnd, Stepped))
 								{
 									Resolved = Stepped;
@@ -2812,7 +2817,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 								}
 							}
 						}
-						ACECellTransit::RestrictRoomCollision(*World, SnapEnv, Params);
+						if (bIndoor) ACECellTransit::RestrictRoomCollision(*World, SnapEnv, Params);
 						(void)bSnapHitsInterior;
 					}
 				}
@@ -2862,7 +2867,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					}
 					for (const FHitResult& Hit : Hits)
 					{
-						if (!Hit.bBlockingHit || Hit.ImpactNormal.Z < 0.6641741f)
+						if (!Hit.bBlockingHit || ACEBodySweep::IsCreatureBody(Hit) || Hit.ImpactNormal.Z < 0.6641741f)
 						{
 							continue;
 						}
@@ -2979,6 +2984,15 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                     bHaveGround = true;
                     Pred.Location.Z = GroundZ / WorldScale;
                 }
+				// Large-world contact precision can alternate the sphere/ray height
+				// by a few millimetres on slopes. A stationary tracked player should
+				// not feel that numerical correction as repeated camera bobbing.
+				if (bVR && !bJumpAirborne && !bMoving && VRRoomDelta.IsNearlyZero(.1f)
+					&& FVector::DistSquared2D(Desired,Current)<.01 && bHaveGround
+					&& FMath::Abs(GroundZ-FeetZ)<1.f)
+				{
+					GroundZ=FeetZ; Pred.Location.Z=FeetZ/WorldScale;
+				}
                 // Rays can see the next tread before the body clears the lip
                 // of this one. The final downward adjustment is movement too:
                 // stop at the full capsule's first contact instead of pulling
@@ -3025,7 +3039,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                         const FVector SupportCenter(Center.X,Center.Y,GroundZ+CapsuleHalfHeight);
                         const auto Snap = ACEBodySweep::MoveAirborne(*World, Center,
                             SupportCenter,
-                            FCollisionShape::MakeCapsule(CapsuleRadius,CapsuleHalfHeight),Params,true);
+                            FCollisionShape::MakeCapsule(CapsuleRadius,CapsuleHalfHeight),Params,true,FloorZ);
                         Desired.X=Snap.Position.X; Desired.Y=Snap.Position.Y;
                         GroundZ=Snap.Position.Z-CapsuleHalfHeight;
                         // An unobstructed sweep reaching the already validated
@@ -3967,10 +3981,12 @@ void AACEPlayerController::ReleaseJump(float Forward, float Right)
 	{
 		if (UACECharacterAppearanceComponent* App = P->FindComponentByClass<UACECharacterAppearanceComponent>())
 		{
-			// Jumpup → Falling without returning to Ready (run blends straight into Jumpup).
+			// CMotionInterp::LeaveGround removes old links and applies Falling.
+			// Jumpup is not a player takeoff link: queuing a held Falling after it
+			// skipped the authored airborne transition entirely, especially on re-jump.
+			App->ClearJumpMotionIfAny();
 			App->SetSuppressLocoIdleBlend(true);
-			App->QueueHeldActionAfterCurrent(static_cast<int32>(0x40000015), 0);
-			App->PlayActionMotion(static_cast<int32>(0x1000004b), 1.f, 0);
+			App->PlayActionMotion(static_cast<int32>(0x40000015), 1.f, 0);
 		}
 	}
 }

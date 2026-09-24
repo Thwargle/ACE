@@ -34,6 +34,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACEVRInteriorTest;
 	friend class FACEVRWallContactTest;
     friend class FACEMovementReviewTest;
+    friend class FACEAvatarMotionTest;
     friend class FACEAcademyCornerTest;
 	friend class FACEVRStairCeilingTest;
 	friend class FACEVRInteriorNetworkTest;

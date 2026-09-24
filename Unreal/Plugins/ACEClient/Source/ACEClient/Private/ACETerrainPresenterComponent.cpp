@@ -3875,8 +3875,13 @@ void UACETerrainPresenterComponent::UpdateOutdoorEnvCollision()
 			{
 				continue;
 			}
-			const bool bOverCell = PlayerUe.X >= Box.Min.X && PlayerUe.X <= Box.Max.X
-				&& PlayerUe.Y >= Box.Min.Y && PlayerUe.Y <= Box.Max.Y;
+			// An outside capsule hits a room's exterior walls before its center
+			// enters the cell BSP. Keep a small approach band resident, just as
+			// we already do for doorway apertures. Strict XY containment removed
+			// solid fort walls while their render geometry was still visible.
+			constexpr float CollisionApproachCm = 400.f;
+			const bool bOverCell = PlayerUe.X >= Box.Min.X - CollisionApproachCm && PlayerUe.X <= Box.Max.X + CollisionApproachCm
+				&& PlayerUe.Y >= Box.Min.Y - CollisionApproachCm && PlayerUe.Y <= Box.Max.Y + CollisionApproachCm;
 			// Keep support near the actual top of the cell, including a landing
 			// through a roof opening. Distant rooms on other storeys stay inactive.
 			const bool bNearCellHeight = PlayerUe.Z >= Box.Min.Z - 140.f

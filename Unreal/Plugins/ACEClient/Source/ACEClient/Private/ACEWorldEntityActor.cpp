@@ -473,6 +473,8 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 	const bool bMeshHasPawnCollision = bHavePartMesh && Appearance->HasAuthoredPhysicsGeometry();
 	for (UPrimitiveComponent* Body : AuthoredCollision)
 	{
+		if (bCreatureLike) Body->ComponentTags.AddUnique(TEXT("ACECreatureBody"));
+		else Body->ComponentTags.Remove(TEXT("ACECreatureBody"));
 		const bool bPkPlayer = bIsPlayer && IsPkOrPkLite();
 		Body->SetCollisionEnabled(bBlocking && (bCreatureLike || !bMeshHasPawnCollision)
 			? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
@@ -525,6 +527,8 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 	const bool bProxyBlocks = bBlocking && !bUseMeshPhysics && AuthoredCollision.IsEmpty();
 	if (CollisionProxy)
 	{
+		if (bCreatureLike) CollisionProxy->ComponentTags.AddUnique(TEXT("ACECreatureBody"));
+		else CollisionProxy->ComponentTags.Remove(TEXT("ACECreatureBody"));
 		CollisionProxy->SetRelativeLocation(CapsuleCenterRel);
 		CollisionProxy->SetCapsuleSize(Radius, HalfHeight);
 		CollisionProxy->SetGenerateOverlapEvents(false);
@@ -1863,11 +1867,8 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position)
 		AcePhysicsVelocity = FVector::ZeroVector;
 	}
 
-	// Movers (non-MoveTo): hard-sync facing on every F748 so walk don't keep a stale heading.
-	if (bMoving && !Position.bHasVelocity && !bMoveTo)
-	{
-		SetActorRotation(NewRotation);
-	}
+	// F748 corrects the prediction; Tick blends the displayed heading too. A hard
+	// rotation here made each sparse packet visibly snap a walking player's body.
 
 	if (bSnap)
 	{

@@ -138,11 +138,15 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  MouseTurnSpeed->OnValueChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeMouseTurnSpeed);
  Row(TEXT("Mouse Turn Speed"),MouseTurnSpeed);
  auto* Ends=Label(TEXT("Slow                         Fast"),7); Ends->SetJustification(ETextJustify::Right); Box->AddChild(Fixed(Ends,250,14));
- Section(TEXT("Display Options"));
  TArray<const FACECharacterOptionDesc*> Options; ACECharacterOptions::GetPageOptions(ACECharacterOptions::PageConfig,Options);
  for (const auto* O:Options) {
   auto* C=WidgetTree->ConstructWidget<UCheckBox>(); C->SetWidgetStyle(RoundToggle); C->SetContent(Label(O->Label)); Box->AddChild(Fixed(C,272,20)); CharacterChecks.Add(O->Option,C);
  }
+ Section(TEXT("User Interface Options"));
+ ChatFontFace=Combo(TEXT("Chat Font")); ChatFontFace->Rename(TEXT("ChatFontFace"));
+ for(const TCHAR* Name:{TEXT("Arial"),TEXT("Courier New"),TEXT("Palatino Linotype"),TEXT("Tahoma"),TEXT("Times New Roman")}) ChatFontFace->AddOption(Name);
+ ChatFontSize=Combo(TEXT("Chat Font Size")); ChatFontSize->Rename(TEXT("ChatFontSize"));
+ for(const TCHAR* Name:{TEXT("Tiny"),TEXT("Small"),TEXT("Medium"),TEXT("Large"),TEXT("Extra Large")}) ChatFontSize->AddOption(Name);
  ResetVideo();
  return Super::RebuildWidget();
 }
@@ -167,6 +171,8 @@ void UACEVideoSettingsWidget::ResetVideo()
  InvertMouseX->SetIsChecked(ACECameraSettings::GetInvertMouseX());InvertMouseY->SetIsChecked(ACECameraSettings::GetInvertMouseY());
  DesktopScale->SetSelectedIndex(FMath::RoundToInt((ACERuntimeOptions::Get(TEXT("DesktopUIScale"))-1.f)*4.f));
  ShowFrameRate->SetIsChecked(ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f);
+ ChatFontFace->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontFace"))));
+ ChatFontSize->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontSize"))));
 }
 UWidget* UACEVideoSettingsWidget::GenerateOption(FString Option)
 {
@@ -216,6 +222,8 @@ void UACEVideoSettingsWidget::ApplyInterfaceOptions()
  ACECameraSettings::SetMouseInversion(InvertMouseX->IsChecked(),InvertMouseY->IsChecked());
  if(DesktopScale->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("DesktopUIScale"),1.f+DesktopScale->GetSelectedIndex()*.25f);
  ACERuntimeOptions::Set(TEXT("ShowFrameRate"),ShowFrameRate->IsChecked()?1.f:0.f);
+ if(ChatFontFace->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("ChatFontFace"),ChatFontFace->GetSelectedIndex());
+ if(ChatFontSize->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("ChatFontSize"),ChatFontSize->GetSelectedIndex());
  ACERuntimeOptions::Apply();
 }
 
@@ -240,6 +248,7 @@ void UACEVideoSettingsWidget::DefaultsVideo()
  ResetMouseTurnSpeed();
  InvertMouseX->SetIsChecked(false);InvertMouseY->SetIsChecked(false);DesktopScale->SetSelectedIndex(0);
  ShowFrameRate->SetIsChecked(false);
+ ChatFontFace->SetSelectedIndex(2); ChatFontSize->SetSelectedIndex(1);
 }
 
 float UACEVideoSettingsWidget::GetScrollOffset() const { return Scroll?Scroll->GetScrollOffset():0; }

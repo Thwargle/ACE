@@ -14,6 +14,7 @@
 #include "Engine/World.h"
 #include "RenderingThread.h"
 #include "Components/CapsuleComponent.h"
+#include "Camera/PlayerCameraManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Protocol/ACEBinaryReader.h"
@@ -87,6 +88,50 @@ bool FACEMovementReviewTest::RunTest(const FString&)
  Obj.ItemType=ACEItemType::Creature;Obj.Name=TEXT("Missile animation fixture");
  auto* Actor=World->SpawnActor<AACEWorldEntityActor>();Actor->InitializeFromObject(Obj,100,true);
  auto* App=Actor->Appearance.Get();
+ // Real DAT poses must keep progressing at the old 40/80 m LOD boundaries,
+ // including low headset frame rates and sparse server position corrections.
+ {
+  auto* PC=World->SpawnActor<APlayerController>();
+  PC->PlayerCameraManager=World->SpawnActor<APlayerCameraManager>();
+  PC->PlayerCameraManager->InitializeFor(PC);
+  TestNotNull(TEXT("Animation LOD test has a camera"),PC->PlayerCameraManager.Get());
+  const FVector Eye=PC->PlayerCameraManager ? PC->PlayerCameraManager->GetCameraLocation() : FVector::ZeroVector;
+  Actor->bIsPlayer=true; App->SetLocomotionInput(1,0,true,1);
+  for(float Distance:{3900.f,4100.f,8100.f,15000.f})for(float Dt:{1.f/90,1.f/50,1.f/15})
+  {
+   Actor->SetActorLocation(Eye+FVector(Distance,0,0));
+   App->DeferredPoseDeltaTime=0;App->AnimTime=0;
+   int Updates=0;float Previous=0;
+   const int Frames=FMath::RoundToInt(1.f/Dt);
+   for(int I=0;I<Frames;++I)
+   {
+    App->TickComponent(Dt,LEVELTICK_All,nullptr);
+    if(App->AnimTime!=Previous)++Updates;
+    Previous=App->AnimTime;
+   }
+   TestTrue(TEXT("Distant walking players still receive frequent poses"),Updates>=FMath::Min(15,Frames));
+   TestTrue(TEXT("Animation clock advances a full second, independent of frame-number masks"),FMath::IsNearlyEqual(App->AnimTime,Frames*Dt,.04f));
+  }
+  PC->PlayerCameraManager->Destroy();PC->Destroy();Actor->bIsPlayer=false;Actor->SetActorLocation(FVector::ZeroVector);
+ }
+ {
+  auto* Walker=World->SpawnActor<AACEWorldEntityActor>();Walker->bIsPlayer=true;Walker->bClampToGround=false;
+  FACEPosition P;P.CellId=0x7D640019;P.Location=FVector(50,50,100);P.RotationW=1;P.RotationXYZ=FVector::ZeroVector;
+  Walker->ApplyACEPosition(P);Walker->RemoteMotion.bMoving=true;Walker->RemoteMotion.Forward=1;Walker->RemoteMotion.ForwardUnitsPerSecond=4;
+  const FVector Start=Walker->GetActorLocation();
+  for(int I=0;I<150;++I)Walker->Tick(.01f);
+  TestTrue(TEXT("A late 1 Hz packet does not stop a walking player after 1.15 seconds"),FVector::Dist2D(Walker->RemotePredictLocation,Start)>590);
+  const FQuat Before=Walker->GetActorQuat();P.RotationW=FMath::Cos(PI/4);P.RotationXYZ=FVector(0,0,FMath::Sin(PI/4));
+  Walker->ApplyACEPosition(P);
+  TestTrue(TEXT("Incoming walking heading does not snap the displayed actor"),Walker->GetActorQuat().Equals(Before,.001));
+  Walker->Tick(.01f);
+  TestTrue(TEXT("Heading starts blending on the following frame"),!Walker->GetActorQuat().Equals(Before,.001) && !Walker->GetActorQuat().Equals(P.ToUnrealQuat(),.001));
+  for(int I=0;I<1000;++I)Walker->Tick(.01f);
+  TestTrue(TEXT("A missing stop packet cannot extrapolate forever"),FVector::Dist(Walker->RemotePredictLocation,Walker->RemoteAnchorLocation)<=801);
+  P.Location.X+=100;Walker->ApplyACEPosition(P);
+  TestTrue(TEXT("Large teleport still snaps immediately"),Walker->GetActorLocation().Equals(P.ToUnrealLocation(100),.01));
+  Walker->Destroy();
+ }
  // The local pawn survives the death teleport; it is not recreated like a corpse.
  {
   auto* Client=GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();

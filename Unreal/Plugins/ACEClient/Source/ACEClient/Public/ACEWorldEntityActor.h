@@ -222,7 +222,7 @@ public:
 
 	/** Exponential correction rate toward the extrapolated remote pose. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "1.0", ClampMax = "40.0"))
-	float RemotePositionSmoothing = 22.f;
+	float RemotePositionSmoothing = 10.f;
 
 	/** Corrections larger than this many AC units snap (portals/teleports) instead of blending. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "5.0", ClampMax = "192.0"))
@@ -230,7 +230,7 @@ public:
 
 	/** Max seconds of free integration away from the last F748 before clamping drift. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "0.0", ClampMax = "2.0"))
-	float RemoteMaxExtrapolate = 1.15f;
+	float RemoteMaxExtrapolate = 2.f;
 
 	/** Degrees/sec at TurnSpeed=1 — matches local ACEPlayerController prediction. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "45.0", ClampMax = "360.0"))

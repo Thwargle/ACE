@@ -3,7 +3,7 @@
 namespace
 {
 	// Option index / flag pairs come from ACE.Entity CharacterOption + CharacterOptions1/2.
-	// Page assignment follows the retail Options panel tabs.
+	// gmCharacterSettingsUI owns player options (including chat channels/display).
 	const FACECharacterOptionDesc GTable[] = {
 		// Character
 		{ TEXT("Auto-repeat attacks"),                 0x00, false, 0x00000002u, ACECharacterOptions::PageCharacter },
@@ -36,33 +36,33 @@ namespace
 		{ TEXT("Others may see your deaths"),           0x20, true,  0x00000010u, ACECharacterOptions::PageCharacter },
 		{ TEXT("Others may see your titles"),           0x28, true,  0x00002000u, ACECharacterOptions::PageCharacter },
 
-		// Chat
-		{ TEXT("Listen to allegiance chat"),            0x1B, false, 0x40000000u, ACECharacterOptions::PageChat },
-		{ TEXT("Listen to general chat"),               0x23, true,  0x00000100u, ACECharacterOptions::PageChat },
-		{ TEXT("Listen to trade chat"),                 0x24, true,  0x00000200u, ACECharacterOptions::PageChat },
-		{ TEXT("Listen to LFG chat"),                   0x25, true,  0x00000400u, ACECharacterOptions::PageChat },
-		{ TEXT("Listen to roleplay chat"),              0x26, true,  0x00000800u, ACECharacterOptions::PageChat },
-		{ TEXT("Listen to society chat"),               0x2E, true,  0x00080000u, ACECharacterOptions::PageChat },
-		{ TEXT("Listen to PK death messages"),          0x34, true,  0x02000000u, ACECharacterOptions::PageChat },
-		{ TEXT("Display timestamps"),                   0x21, true,  0x00000040u, ACECharacterOptions::PageChat },
-		{ TEXT("Filter language"),                      0x2C, true,  0x00020000u, ACECharacterOptions::PageChat },
-		{ TEXT("Stay in chat mode after sending"),      0x0B, false, 0x00000800u, ACECharacterOptions::PageChat },
-		{ TEXT("Show allegiance logons"),               0x18, false, 0x08000000u, ACECharacterOptions::PageChat },
+		// Character: chat controls
+		{ TEXT("Listen to allegiance chat"),            0x1B, false, 0x40000000u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Listen to general chat"),               0x23, true,  0x00000100u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Listen to trade chat"),                 0x24, true,  0x00000200u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Listen to LFG chat"),                   0x25, true,  0x00000400u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Listen to roleplay chat"),              0x26, true,  0x00000800u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Listen to society chat"),               0x2E, true,  0x00080000u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Listen to PK death messages"),          0x34, true,  0x02000000u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Display timestamps"),                   0x21, true,  0x00000040u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Filter language"),                      0x2C, true,  0x00020000u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Stay in chat mode after sending"),      0x0B, false, 0x00000800u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Show allegiance logons"),               0x18, false, 0x08000000u, ACECharacterOptions::PageCharacter },
 
-		// Config (interface / display)
-		{ TEXT("Display 3D tooltips"),                  0x08, false, 0x00000100u, ACECharacterOptions::PageConfig },
-		{ TEXT("Side by side vitals"),                  0x13, false, 0x00200000u, ACECharacterOptions::PageConfig },
-		{ TEXT("Show coordinates by the radar"),        0x14, false, 0x00400000u, ACECharacterOptions::PageConfig },
-		{ TEXT("Display spell durations"),              0x15, false, 0x00800000u, ACECharacterOptions::PageConfig },
-		{ TEXT("Advanced combat interface"),            0x0C, false, 0x00001000u, ACECharacterOptions::PageConfig },
-		{ TEXT("Lock UI"),                              0x33, true,  0x01000000u, ACECharacterOptions::PageConfig },
+		// Character: interface/display; mouse turning alone lives in Config.
+		{ TEXT("Display 3D tooltips"),                  0x08, false, 0x00000100u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Side by side vitals"),                  0x13, false, 0x00200000u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Show coordinates by the radar"),        0x14, false, 0x00400000u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Display spell durations"),              0x15, false, 0x00800000u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Advanced combat interface"),            0x0C, false, 0x00001000u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Lock UI"),                              0x33, true,  0x01000000u, ACECharacterOptions::PageCharacter },
 		{ TEXT("Use mouse turning"),                    0x31, true,  0x00400000u, ACECharacterOptions::PageConfig },
-		{ TEXT("Disable most weather effects"),         0x04, false, 0x00010000u, ACECharacterOptions::PageConfig },
-		{ TEXT("Always daylight outdoors"),             0x05, true,  0x00000001u, ACECharacterOptions::PageConfig },
-		{ TEXT("Disable distance fog"),                 0x30, true,  0x00200000u, ACECharacterOptions::PageConfig },
-		{ TEXT("Disable house restriction effects"),    0x16, false, 0x02000000u, ACECharacterOptions::PageConfig },
-		{ TEXT("Show your helm or head gear"),          0x2F, true,  0x00100000u, ACECharacterOptions::PageConfig },
-		{ TEXT("Show your cloak"),                      0x32, true,  0x00800000u, ACECharacterOptions::PageConfig },
+		{ TEXT("Disable most weather effects"),         0x04, false, 0x00010000u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Always daylight outdoors"),             0x05, true,  0x00000001u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Disable distance fog"),                 0x30, true,  0x00200000u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Disable house restriction effects"),    0x16, false, 0x02000000u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Show your helm or head gear"),          0x2F, true,  0x00100000u, ACECharacterOptions::PageCharacter },
+		{ TEXT("Show your cloak"),                      0x32, true,  0x00800000u, ACECharacterOptions::PageCharacter },
 	};
 }
 

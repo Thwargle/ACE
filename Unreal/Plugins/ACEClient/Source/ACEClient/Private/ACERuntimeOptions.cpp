@@ -46,6 +46,20 @@ float SoundGain(bool bAmbient)
  }
  return bAmbient?AmbientGain:EffectsGain;
 }
+uint32 ChatFontId()
+{
+ // gmClient exposes these five faces/sizes; ChatInterface changes existing
+ // lines too. Do not substitute platform fonts (Quest has no Windows fonts).
+ static constexpr uint32 Fonts[5][5]={
+  {0x40000026,0x40000027,0x40000028,0x4000002E,0x4000002F}, // Arial
+  {0x4000001E,0x4000001A,0x4000001F,0x40000030,0x40000031}, // Courier New
+  {0x40000002,0x40000000,0x40000001,0x40000004,0x40000005}, // Palatino Linotype
+  {0x40000008,0x40000009,0x4000000A,0x4000000B,0x4000000C}, // Tahoma
+  {0x4000002A,0x4000002B,0x40000032,0x4000002C,0x4000002D}  // Times New Roman
+ };
+ return Fonts[FMath::Clamp(FMath::RoundToInt(Get(TEXT("ChatFontFace"))),0,4)]
+  [FMath::Clamp(FMath::RoundToInt(Get(TEXT("ChatFontSize"))),0,4)];
+}
 float DesktopUIScale(FIntPoint Size,bool bVR)
 {
  if (bVR || Size.X<=0 || Size.Y<=0) return 1.f;

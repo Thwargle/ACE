@@ -538,6 +538,8 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("Inspection does not graft obsolete item icon"),Manager->FindElementUnder(TEXT("ItemExamineUI"),TEXT("ItemIcon")).IsValid());
     CaptureScreen(TEXT("GameplayInspection"));
     TestTrue(TEXT("Long appraisal is scrollable instead of overflowing"),Gameplay->ExamScroll && Gameplay->ExamScroll->GetScrollOffsetOfEnd()>0.f);
+    const auto InscriptionBar=Manager->FindElementUnder(TEXT("ItemExamineUI"),TEXT("ItemInscriptionScrollbar"));
+    TestTrue(TEXT("Short inscriptions hide their unused arrow controls"),InscriptionBar && !InscriptionBar->bVisible);
     TestTrue(TEXT("Retail layout without value controls includes value and burden in body"),
         Gameplay->ExamBody->GetText().ToString().StartsWith(TEXT("Value: 150\nBurden: 200\n")));
     TestTrue(TEXT("Resolving spell names preserves formatted weapon info"),
@@ -563,6 +565,13 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 }
         TestTrue(TEXT("Bottom of a scrolled appraisal still paints visible glyphs"), WhitePixels>100);
     }
+    const FString ShortInscription=Gameplay->LastAppraisal.Inscription;
+    for(int I=0;I<20;++I)Gameplay->LastAppraisal.Inscription+=TEXT("\nA long inscription remains readable on its paper strip.");
+    CaptureScreen(TEXT("GameplayLongInscription"));
+    TestTrue(TEXT("Long inscription activates the retail scrollbar"),InscriptionBar->bVisible && Gameplay->ExamInscriptionScroll->GetScrollOffsetOfEnd()>0);
+    Gameplay->OnElementActivated(Manager->FindElementUnder(TEXT("ItemInscriptionScrollbar"),TEXT("ScrollBar_Down")));
+    TestTrue(TEXT("Inscription down arrow scrolls its own text"),Gameplay->ExamInscriptionScroll->GetScrollOffset()>0);
+    Gameplay->LastAppraisal.Inscription=ShortInscription;
     Gameplay->LastAppraisal.ObjectGuid=457; Gameplay->RefreshExaminationOverlay();
     TestEqual(TEXT("New appraisal starts at top as retail is_new requires"), Gameplay->ExamScroll->GetScrollOffset(), 0.f);
     const auto ItemAppraisal = Gameplay->LastAppraisal;

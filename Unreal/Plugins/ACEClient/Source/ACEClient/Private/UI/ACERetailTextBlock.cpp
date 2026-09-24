@@ -320,6 +320,7 @@ void UACERetailTextBlock::SetRetailElement(UACEUIResourceResolver* InResources,
 	uint32 FontId = State && State->FontId ? State->FontId : Element ? Element->FontId : 0;
 	if (!FontId) FontId = ACEUIFontStyles::ResolveForElement(Element, GetFont().Size).FontId;
 	if (!FontId) FontId = GetFont().Size <= 8 ? 0x40000002u : 0x40000000u;
+	if (FontOverride) FontId = FontOverride;
 	bool bChanged = Resources != InResources || BitmapFont.Id != FontId || !ForegroundAtlas;
 	if (bChanged)
 	{

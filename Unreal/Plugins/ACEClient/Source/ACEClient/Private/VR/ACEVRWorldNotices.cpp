@@ -165,16 +165,19 @@ void UACEVRComponent::ShowWorldNotice(const FString& Text, int32 Guid, int32 Kin
 	{
 		Notice->Expires = Now + 2.8;
 		Notice->NumberLane = Guid==0 ? -1.f : 1.f;
-		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle("Bold", 34);
+		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle("Bold", 38);
 		Font.OutlineSettings.OutlineSize = 3;
 		Font.OutlineSettings.OutlineColor = FLinearColor::Black;
-		Panel->SetDrawSize(FVector2D(560,132));
-        FSlateFontInfo Heading = Font; Heading.Size = 30; Heading.OutlineSettings.OutlineSize = 2;
+		Panel->SetDrawSize(FVector2D(620,124));
+        FSlateFontInfo Heading = Font; Heading.Size = 26; Heading.OutlineSettings.OutlineSize = 1;
         FACEWorldObject Recipient;
-        FString Title=Guid==0 ? TEXT("YOU") : Client->GetWorldObject(Guid,Recipient) ? TEXT("TARGET: ")+Recipient.Name : TEXT("TARGET");
-        if (Title.Len()>30) Title=Title.Left(27)+TEXT("...");
+		const bool Healing=Text.Contains(TEXT("HEALTH"));
+		FString Title=Guid==0 ? (Healing?TEXT("YOU ARE HEALED"):Text==TEXT("EVADED")?TEXT("YOU EVADED"):TEXT("DAMAGE TAKEN"))
+			: (Healing?TEXT("HEAL: "):Text==TEXT("MISSED")?TEXT("MISSED: "):TEXT("HIT: "))+(Client->GetWorldObject(Guid,Recipient)?Recipient.Name:TEXT("Enemy"));
+        if (Title.Len()>32) Title=Title.Left(29)+TEXT("...");
+		static const FSlateRoundedBoxBrush CombatBackground(FLinearColor(.012f,.016f,.024f,.82f),12.f);
 		Panel->SetSlateWidget(SNew(SBorder).Visibility(EVisibility::HitTestInvisible)
-			.BorderImage(FCoreStyle::Get().GetBrush("NoBrush")).Padding(8.f).HAlign(HAlign_Center).VAlign(VAlign_Center)
+			.BorderImage(&CombatBackground).Padding(8.f).HAlign(HAlign_Center).VAlign(VAlign_Center)
 			[SNew(SVerticalBox)
                 + SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
                     [SNew(STextBlock).Text(FText::FromString(Title)).Font(Heading).ColorAndOpacity(ACEVRUIStyle::TextColor)
@@ -261,7 +264,7 @@ void UACEVRComponent::UpdateWorldNotices()
                     && (N.Started>Notice.Started || (N.Started==Notice.Started && &N>&Notice))) ++Row;
             Panel->SetWorldScale3D(FVector(.09f));
             Position=FTransform(CombatNoticeRotation,Head->GetComponentLocation()).TransformPosition(
-                FVector(145,Notice.NumberLane*30.f,-20.f-Row*12.f));
+                FVector(145,Notice.NumberLane*38.f,20.f-Row*13.f));
 		}
 		else if (Notice.Kind == 1 && Notice.Actor.IsValid())
 		{

@@ -591,6 +591,8 @@ void UACEUIGameplayBinder::Shutdown()
 	VideoSettings=nullptr;
 	CancelInventoryDrag();
 	CancelSpellDrag();
+	LastSpellbookClickId = 0;
+	LastSpellbookClickTime = 0.0;
 	ReleasePaperDollPreview();
 	ReleaseExamPaperDollPreview();
 	if (ExamCreatureDetailsScroll) ExamCreatureDetailsScroll->RemoveFromParent();
@@ -882,6 +884,12 @@ void UACEUIGameplayBinder::OnElementActivated(TSharedPtr<FACEUIElement> Element)
 			{
 				ExamScroll->SetScrollOffset(FMath::Clamp(ExamScroll->GetScrollOffset() + Dir * 28.f,
 					0.f, ExamScroll->GetScrollOffsetOfEnd()));
+				return;
+			}
+			if (A->ElementName == TEXT("ItemInscriptionScrollbar") && ExamInscriptionScroll)
+			{
+				ExamInscriptionScroll->SetScrollOffset(FMath::Clamp(ExamInscriptionScroll->GetScrollOffset()+Dir*28.f,
+					0.f,ExamInscriptionScroll->GetScrollOffsetOfEnd()));
 				return;
 			}
 
@@ -2042,6 +2050,7 @@ void UACEUIGameplayBinder::ShowPanelPage(const FString& PageElementName)
 			// Snapshot for the Reset button before any checkbox edits.
 			OptionsSnapshot1 = Client->GetCharacterOptions1();
 			OptionsSnapshot2 = Client->GetCharacterOptions2();
+			OptionsDraft1 = OptionsSnapshot1; OptionsDraft2 = OptionsSnapshot2;
 			MainChatFilterSnapshot = MainChatTypeFilter;
 			FloatyChatFilterSnapshot = FloatyChatFilters;
 			ChatOpacitySnapshot = FVector2D(ChatInactiveOpacity,ChatActiveOpacity);
@@ -2260,6 +2269,31 @@ void UACEUIGameplayBinder::PlayEmoteHotkey(uint32 MotionCommand, bool bHoldPose)
 	if (!Client || MotionCommand == 0)
 	{
 		return;
+	}
+	// Keyboard poses use the same DAT text as typed *poses*. Resolve aliases to
+	// the actual motion, so different bindings cannot produce different wording.
+	if (auto* GI = PlayerController ? PlayerController->GetGameInstance() : nullptr)
+	if (auto* Dat = GI->GetSubsystem<UACEDatSubsystem>())
+	{
+		TArray<FString> Keys;
+		Dat->GetChatPoseKeys(Keys);
+		bool bFound = false;
+		for (bool bStateVariant : {false, true})
+		{
+			for (const FString& Key : Keys)
+			{
+				FString Command, My, Other; uint32 Motion = 0;
+				if (!Dat->TryGetChatPose(Key, Command, My, Other)) continue;
+				FString Name = Command.ToLower();
+				// Retail binds some one-shot commands (e.g. BowDeep), while its
+				// chat table names only their held-pose variants (BowDeepState).
+				// Prefer exact matches before falling back to the same gesture.
+				if (bStateVariant && !Name.RemoveFromEnd(TEXT("state"))) Name += TEXT("state");
+				ACEMotionName::TryResolve(Name, Motion);
+				if (Motion == MotionCommand) { SendPoseChat(Command, My, Other); bFound = true; break; }
+			}
+			if (bFound) break;
+		}
 	}
 	Client->SendSoulEmoteMotion(static_cast<int32>(MotionCommand));
 	APawn* Pawn = PlayerController ? PlayerController->GetPawn() : nullptr;
@@ -3097,6 +3131,7 @@ bool UACEUIGameplayBinder::TryBeginSpellDrag(FVector2D CanvasLocalPos)
 	// Detect on MouseDown — spell drag otherwise swallows the click before TryHandleOverlayClick.
 	if (SourceSlot != INDEX_NONE && SpellId != 0)
 	{
+		LastSpellbookClickId = 0;
 		SelectCombatSpellSlot(SourceSlot + SpellHotbarScrollOffset);
 		const double Now = FPlatformTime::Seconds();
 		constexpr double DoubleClickSeconds = 0.75;
@@ -3171,6 +3206,7 @@ void UACEUIGameplayBinder::UpdateSpellDrag(FVector2D CanvasLocalPos)
 			return;
 		}
 		bSpellDragActive = true;
+		LastSpellbookClickId = 0;
 	}
 	if (!SpellDragIcon)
 	{
@@ -3207,9 +3243,38 @@ bool UACEUIGameplayBinder::TryFinishSpellDrag(FVector2D CanvasLocalPos)
 	CancelSpellDrag();
 	if (!Client || !bWasDragging)
 	{
-		// Select only on release without a drag. Keep the retail windows open so
-		// the next gesture can rearrange a spell bank or continue shopping.
-		if (Client && PlayerController && PlayerController->IsVRActive()) Client->SendCastSpell(SpellId);
+		if (!Client) return true;
+		if (SourceSlot == INDEX_NONE)
+		{
+			// gmSpellbookUI -> RecvNotice_AddSpellShortcut -> AddFavorite(-1, false):
+			// append to the open tab, select/reveal the new shortcut, and leave
+			// duplicates where they are. A spellbook click is never a cast in VR.
+			const double Now = FPlatformTime::Seconds();
+			const int32 BarIndex = Client->GetActiveSpellBar();
+			if (LastSpellbookClickId == SpellId && LastSpellbookClickBar == BarIndex
+				&& Now - LastSpellbookClickTime < 0.75
+				&& FVector2D::Distance(CanvasLocalPos, LastSpellbookClickPosition) < 12.f)
+			{
+				LastSpellbookClickId = 0;
+				const TArray<int32> Bar = Client->GetSpellBar(BarIndex);
+				if (!Bar.Contains(SpellId))
+				{
+					const int32 Empty = Bar.Find(0);
+					const int32 AppendAt = Empty == INDEX_NONE ? Bar.Num() : Empty;
+					Client->SendAddSpellToBar(SpellId, AppendAt, BarIndex);
+					SelectCombatSpellSlot(AppendAt);
+					RefreshSpellHotbarOverlays();
+				}
+			}
+			else
+			{
+				LastSpellbookClickId = SpellId;
+				LastSpellbookClickBar = BarIndex;
+				LastSpellbookClickTime = Now;
+				LastSpellbookClickPosition = CanvasLocalPos;
+			}
+		}
+		else if (PlayerController && PlayerController->IsVRActive()) Client->SendCastSpell(SpellId);
 		return true;
 	}
 	const FVector2D Absolute = Canvas
@@ -6411,34 +6476,7 @@ bool UACEUIGameplayBinder::TrySendChatFromEntry(const FString* OverrideText, int
 			FString CmdName, MyEmote, OtherEmote;
 			if (Dat && Dat->TryGetChatPose(Emote, CmdName, MyEmote, OtherEmote))
 			{
-				FString PlayerName = TEXT("Someone");
-				FACEWorldObject SelfObj;
-				if (Client->GetWorldObject(Client->GetPlayerGuid(), SelfObj) && !SelfObj.Name.IsEmpty())
-				{
-					PlayerName = SelfObj.Name;
-				}
-				const TCHAR* Possessive = TEXT("his");
-				if (LastVitals.bValid && LastVitals.Gender == 2) // Female
-				{
-					Possessive = TEXT("her");
-				}
-				auto FormatEmote = [&](FString S) -> FString
-				{
-					S.ReplaceInline(TEXT("%s"), *PlayerName);
-					S.ReplaceInline(TEXT("%S"), *PlayerName);
-					S.ReplaceInline(TEXT("%p"), Possessive);
-					S.ReplaceInline(TEXT("%P"), Possessive);
-					return S;
-				};
-				// DAT strings are fragments: My="wave." Other="waves." Mag-nus prepends You/Name.
-				if (!OtherEmote.IsEmpty())
-				{
-					Client->SendSoulEmote(FormatEmote(OtherEmote));
-				}
-				if (!MyEmote.IsEmpty())
-				{
-					AppendLocalChatLine(FormatEmote(MyEmote), ACEChatMessageType::Emote);
-				}
+				SendPoseChat(CmdName, MyEmote, OtherEmote);
 				auto NormalizePoseKey = [](FString S) -> FString
 				{
 					S = S.ToLower();
@@ -6927,6 +6965,7 @@ void UACEUIGameplayBinder::ReflowSkillManagementPanelGeometry()
 	// Tabs occupy the top 25px; grow the active page to fill the floaty.
 	constexpr int32 TabH = 25;
 	Page->Y = TabH;
+	Page->EdgeAnchorY = 0; Page->RecomputeLayoutOffset();
 	Page->Height = FMath::Max(200, Panel->Height - TabH);
 
 	TSharedPtr<FACEUIElement> Field;
@@ -7006,6 +7045,7 @@ void UACEUIGameplayBinder::ReflowSpellbookPanelGeometry()
 	constexpr int32 TabH = 25;
 	constexpr int32 FilterH = 113;
 	Page->Y = TabH;
+	Page->EdgeAnchorY = 0; Page->RecomputeLayoutOffset();
 	Page->Width = Panel->Width;
 	Page->Height = FMath::Max(FilterH + 48, Panel->Height - TabH);
 	const int32 ListH = FMath::Max(48, Page->Height - FilterH);
@@ -7015,10 +7055,12 @@ void UACEUIGameplayBinder::ReflowSpellbookPanelGeometry()
 	{
 		if (TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(TEXT("SpellbookPage"), Name))
 		{
+			El->EdgeAnchorX = El->EdgeAnchorY = 0;
 			El->X = X;
 			El->Y = Y;
 			El->Width = W;
 			El->Height = H;
+			El->RecomputeLayoutOffset();
 		}
 	};
 	Stretch(TEXT("SpellBook_SpellList"), 0, 0, ListW, ListH);
@@ -11075,6 +11117,8 @@ void UACEUIGameplayBinder::RefreshExaminationOverlay()
 	}
 	TSharedPtr<FACEUIElement> ExamRoot = Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field"));
 	const bool bShow = ExamRoot.IsValid() && ExamRoot->bVisible;
+	if (ExamInscriptionScroll) ExamInscriptionScroll->SetVisibility(ESlateVisibility::Collapsed);
+	Manager->SetElementVisibleByName(TEXT("ItemInscriptionScrollbar"),false);
 	auto HideExamExtras = [this]()
 	{
 		for (UTextBlock* Label : ExamSpellLabels) if (Label) Label->SetVisibility(ESlateVisibility::Collapsed);
@@ -11195,7 +11239,9 @@ void UACEUIGameplayBinder::RefreshExaminationOverlay()
 	if (ExamScroll && BodyTarget)
 	{
 		const float MaxOffset = ExamScroll->GetScrollOffsetOfEnd();
-		SyncDatScrollbar(Manager->FindElementUnder(TEXT("ItemExamineUI"), TEXT("ItemDisplayTextScrollbar")),
+		const auto Bar=Manager->FindElementUnder(TEXT("ItemExamineUI"), TEXT("ItemDisplayTextScrollbar"));
+		if (Bar) Bar->bVisible=MaxOffset>.5f;
+		SyncDatScrollbar(Bar,
 			MaxOffset > 0.f ? ExamScroll->GetScrollOffset() / MaxOffset : 0.f,
 			BodyTarget->Height / FMath::Max(1.f, MaxOffset + BodyTarget->Height));
 	}
@@ -11249,8 +11295,35 @@ void UACEUIGameplayBinder::RefreshExaminationOverlay()
             InscriptionElement->TextHorizontalJustification=bPrompt ? 1 : 2;
             InscriptionElement->TextVerticalJustification=bPrompt ? 1 : 4;
             InscriptionElement->ResolvePaintState(false,false,false);
-            PlaceTextOnElement(ExamInscriptionLabel,InscriptionElement,bPrompt ? TEXT("<Inscribe here>") : LastAppraisal.Inscription,
-                8,FLinearColor::Black,ExamOverlayZ+4);
+            if(bPrompt)
+                PlaceTextOnElement(ExamInscriptionLabel,InscriptionElement,TEXT("<Inscribe here>"),8,FLinearColor::Black,ExamOverlayZ+4);
+            else
+            {
+                if(!ExamInscriptionScroll)
+                {
+                    ExamInscriptionScroll=Canvas->WidgetTree->ConstructWidget<UScrollBox>();
+                    ExamInscriptionScroll->SetScrollBarVisibility(ESlateVisibility::Collapsed);
+                    ExamInscriptionScroll->SetClipping(EWidgetClipping::ClipToBounds);
+                    ExamInscriptionScroll->SetAnimateWheelScrolling(false);
+                }
+                ExamInscriptionLabel->SetText(FText::FromString(LastAppraisal.Inscription));
+                ExamInscriptionLabel->SetJustification(ETextJustify::Left);
+                ExamInscriptionLabel->SetAutoWrapText(true);
+                ExamInscriptionLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
+                if(auto* Retail=Cast<UACERetailTextBlock>(ExamInscriptionLabel))
+                    Retail->SetRetailElement(Canvas->GetResourceResolver(),InscriptionElement,Canvas->GetLastScale2D(),InscriptionElement->Width,false);
+                if(ExamInscriptionLabel->GetParent()!=ExamInscriptionScroll) ExamInscriptionScroll->AddChild(ExamInscriptionLabel);
+                if(ExamInscriptionScrolledGuid!=LastAppraisal.ObjectGuid)
+                {ExamInscriptionScrolledGuid=LastAppraisal.ObjectGuid;ExamInscriptionScroll->SetScrollOffset(0);}
+                Canvas->PlaceWidgetAtElement(ExamInscriptionScroll,InscriptionElement,ExamOverlayZ+4);
+                const bool Editing=EditingInscriptionGuid==LastAppraisal.ObjectGuid;
+                ExamInscriptionScroll->SetVisibility(Editing?ESlateVisibility::Collapsed:ESlateVisibility::Visible);
+                const auto Bar=Manager->FindElementUnder(TEXT("ItemExamineUI"),TEXT("ItemInscriptionScrollbar"));
+                const float Max=ExamInscriptionScroll->GetScrollOffsetOfEnd();
+                if(Bar)Bar->bVisible=!Editing && Max>.5f;
+                SyncDatScrollbar(Bar,Max>0?ExamInscriptionScroll->GetScrollOffset()/Max:0,
+                    InscriptionElement->Height/FMath::Max(1.f,Max+InscriptionElement->Height));
+            }
             ExamInscriptionLabel->SetColorAndOpacity(FLinearColor::Black);
 			EnsureExamText(ExamInscriptionSignature);
 			const FString Scribe = LastAppraisal.StringProperties.FindRef(8);
@@ -13087,6 +13160,9 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 	{
 		if (TryBar(Manager->FindElementUnder(TEXT("ItemExamineUI"), TEXT("ItemDisplayTextScrollbar")),
 			EACEUIScrollTarget::Examination, FMath::CeilToInt(ExamScroll->GetScrollOffsetOfEnd()), false)) return true;
+	if (ExamInscriptionScroll && ExamInscriptionScroll->GetVisibility()!=ESlateVisibility::Collapsed)
+		if(TryBar(Manager->FindElementUnder(TEXT("ItemExamineUI"),TEXT("ItemInscriptionScrollbar")),
+			EACEUIScrollTarget::Inscription,FMath::CeilToInt(ExamInscriptionScroll->GetScrollOffsetOfEnd()),false))return true;
 	}
 
 	if (ActivePanelPage == TEXT("SpellManagementPanel_Field") && ActiveSpellPanelTab == TEXT("SpellbookPage"))
@@ -13300,6 +13376,9 @@ void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D CanvasLocalPos)
 		break;
 	case EACEUIScrollTarget::Examination:
 		if (ExamScroll) ExamScroll->SetScrollOffset(Off);
+		break;
+	case EACEUIScrollTarget::Inscription:
+		if (ExamInscriptionScroll) ExamInscriptionScroll->SetScrollOffset(Off);
 		break;
 
 	case EACEUIScrollTarget::Spellbook:

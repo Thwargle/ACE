@@ -42,6 +42,23 @@ namespace
 		TArray<FOptionsRow> Rows;
 		TArray<const FACECharacterOptionDesc*> Options;
 		ACECharacterOptions::GetPageOptions(static_cast<uint8>(Page), Options);
+		if (Page == ACECharacterOptions::PageCharacter)
+		{
+			// gmCharacterSettingsUI::InitOptions, in retail section/option order.
+			// Keep routing/opacity on Chat and machine preferences on Config.
+			auto Section = [&](const TCHAR* Title, std::initializer_list<int32> Ids)
+			{
+				Rows.Add({INDEX_NONE, Title});
+				for (int32 Id : Ids) if (const auto* O=ACECharacterOptions::Find(Id)) Rows.Add({Id,O->Label});
+			};
+			Section(TEXT("UI Behavior"), {0x07,0x22,0x29});
+			Section(TEXT("UI Display"), {0x0E,0x08,0x14,0x13,0x15,0x04,0x30,0x05,0x16,0x1A,0x2D,0x21,0x2C,0x2F,0x32,0x33});
+			Section(TEXT("Grouping"), {0x01,0x02,0x18,0x0F,0x11,0x12});
+			Section(TEXT("Other Players"), {0x10,0x09,0x06,0x03,0x17,0x1C,0x1D,0x1E,0x1F,0x20,0x28,0x27});
+			Section(TEXT("Character Behavior"), {0x0A,0x0C,0x0D,0x00,0x19,0x2A,0x2B});
+			Section(TEXT("Chat"), {0x0B,0x1B,0x23,0x24,0x25,0x26,0x2E,0x34});
+			return Rows;
+		}
 		if (Page == ACECharacterOptions::PageChat)
 		{
 			Rows.Add({INDEX_NONE, TEXT("General options")});
@@ -161,6 +178,7 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 		return;
 	}
 	Page->Y = OptionsTabHeight;
+	Page->EdgeAnchorY = 0; Page->RecomputeLayoutOffset();
 	Page->Width = FMath::Max(64, PanelW - Page->X);
 	Page->Height = FMath::Max(64, PanelH - OptionsTabHeight);
 
@@ -273,6 +291,7 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 	ListEl->Y = VideoHeight;
 	ListEl->Width = ListW;
 	ListEl->Height = ListH;
+	ListEl->EdgeAnchorX = ListEl->EdgeAnchorY = 0; ListEl->RecomputeLayoutOffset();
 	const TCHAR* BarName = (ActiveOptionsTab == TEXT("CharacterSettingsPage"))
 		? TEXT("CharacterOptionsListBoxScrollbar") : TEXT("OptionsListBoxScrollbar");
 	if (TSharedPtr<FACEUIElement> Bar = Manager->FindElementUnder(ActiveOptionsTab, BarName))
@@ -281,6 +300,7 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 		Bar->Y = VideoHeight;
 		Bar->Width = 16;
 		Bar->Height = ListH;
+		Bar->EdgeAnchorX = Bar->EdgeAnchorY = 0; Bar->RecomputeLayoutOffset();
 	}
 	static const TPair<const TCHAR*, const TCHAR*> Footer[] = {
 		{ TEXT("ApplyButton"), TEXT("Apply") },
@@ -293,6 +313,7 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 		{
 			Btn->Y = ListH + VideoHeight + 4;
 			Btn->X = 16 + i * 90;
+			Btn->EdgeAnchorX = Btn->EdgeAnchorY = 0; Btn->RecomputeLayoutOffset();
 		}
 	}
 	while (OptionsButtonLabels.Num() < 10)
@@ -367,7 +388,9 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 			const uint64 Group = ACERetailChat::FilterGroups[Filter % ChatGroupCount].Mask;
 			bChecked = (Mask & Group) == Group;
 		}
-		else if (!bHeader && !bOpacity) bChecked = Client->IsCharacterOptionSet(Desc.Option);
+		else if (!bHeader && !bOpacity)
+			if (const auto* O=ACECharacterOptions::Find(Desc.Option))
+				bChecked=((O->bInOptions2 ? OptionsDraft2 : OptionsDraft1) & O->Flag)!=0;
 		const float RowY = static_cast<float>(ListOrigin.Y + Row * OptionRowHeight);
 		if (bOpacity)
 		{
@@ -524,7 +547,13 @@ bool UACEUIGameplayBinder::TryHandleOptionsListClick(FVector2D CanvasLocalPos)
 	{
 		return true;
 	}
-	ToggleCharacterOption(OptionRowOptions[Row]);
+	if (ActiveOptionsTab == TEXT("CharacterSettingsPage"))
+	{
+		if (const auto* Option=ACECharacterOptions::Find(OptionRowOptions[Row]))
+			(Option->bInOptions2 ? OptionsDraft2 : OptionsDraft1)^=Option->Flag;
+		RefreshOptionsOverlays();
+	}
+	else ToggleCharacterOption(OptionRowOptions[Row]);
 	return true;
 }
 
@@ -680,10 +709,17 @@ bool UACEUIGameplayBinder::HandleOptionsNamedClick(const FString& Name)
 			if (auto* Video = Cast<UACEVideoSettingsWidget>(VideoSettings)) Video->ApplyVideo();
 		if (Client)
 		{
-			// Retail pushes both bitfields on Apply; per-checkbox updates already went out.
-			Client->SendCharacterOptions(Client->GetCharacterOptions1(), Client->GetCharacterOptions2());
-			OptionsSnapshot1 = Client->GetCharacterOptions1();
-			OptionsSnapshot2 = Client->GetCharacterOptions2();
+			if (ActiveOptionsTab == TEXT("CharacterSettingsPage"))
+			{
+				uint32 One=Client->GetCharacterOptions1(), Two=Client->GetCharacterOptions2();
+				for (const auto& O:ACECharacterOptions::GetTable()) if(O.Page==ACECharacterOptions::PageCharacter)
+				{
+					uint32& Bits=O.bInOptions2 ? Two : One;
+					Bits=(Bits & ~O.Flag) | ((O.bInOptions2 ? OptionsDraft2 : OptionsDraft1) & O.Flag);
+				}
+				Client->SendCharacterOptions(One,Two);
+				OptionsSnapshot1=OptionsDraft1=One; OptionsSnapshot2=OptionsDraft2=Two;
+			}
 			MainChatFilterSnapshot = MainChatTypeFilter;
 			FloatyChatFilterSnapshot = FloatyChatFilters;
 			ChatOpacitySnapshot = FVector2D(ChatInactiveOpacity,ChatActiveOpacity);
@@ -702,9 +738,9 @@ bool UACEUIGameplayBinder::HandleOptionsNamedClick(const FString& Name)
 		}
 		if (ActiveOptionsTab == TEXT("ConfigPage"))
 			if (auto* Video = Cast<UACEVideoSettingsWidget>(VideoSettings)) Video->ResetVideo();
-		if (Client)
+		if (Client && ActiveOptionsTab == TEXT("CharacterSettingsPage"))
 		{
-			Client->SendCharacterOptions(OptionsSnapshot1, OptionsSnapshot2);
+			OptionsDraft1=OptionsSnapshot1; OptionsDraft2=OptionsSnapshot2;
 			PostInventorySystemMessage(TEXT("Options reset."));
 		}
 		RefreshOptionsOverlays();
@@ -721,11 +757,11 @@ bool UACEUIGameplayBinder::HandleOptionsNamedClick(const FString& Name)
 		}
 		if (ActiveOptionsTab == TEXT("ConfigPage"))
 			if (auto* Video = Cast<UACEVideoSettingsWidget>(VideoSettings)) Video->DefaultsVideo();
-		if (Client)
+		if (Client && ActiveOptionsTab == TEXT("CharacterSettingsPage"))
 		{
-			Client->SendCharacterOptions(ACECharacterOptions::Options1Default,
-				ACECharacterOptions::Options2Default | ACECharacterOptions::MouseTurningFlag);
-			PostInventorySystemMessage(TEXT("Options restored to defaults."));
+			OptionsDraft1=ACECharacterOptions::Options1Default;
+			OptionsDraft2=ACECharacterOptions::Options2Default | ACECharacterOptions::MouseTurningFlag;
+			PostInventorySystemMessage(TEXT("Defaults selected. Choose Apply to save."));
 		}
 		RefreshOptionsOverlays();
 		return true;

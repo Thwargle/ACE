@@ -87,8 +87,11 @@ void UACEVRComponent::UpdateArms(float Dt)
 				}
 			}
 		}
+	FTransform ShoulderFrame = FTransform::Identity;
 	if (Human)
 	{
+		ShoulderFrame = App->UpdateVRUpperBody(Head->GetComponentTransform(), GetAvatarGrip(true), GetAvatarGrip(false),
+			Visible && LeftGrip->IsTracked(), Visible && RightGrip->IsTracked(), Dt);
 		// Hidden head/helmet parts still cast the complete, tracked body shadow.
 		FTransform HeadBind;
 		if (App->GetPartBindTransform(16, HeadBind))
@@ -134,7 +137,7 @@ void UACEVRComponent::UpdateArms(float Dt)
 		FTransform MeshFrame = FTransform::Identity;
 		if (HasArm)
 		{
-			MeshFrame = App->GetMeshRoot()->GetComponentTransform();
+			MeshFrame = ShoulderFrame;
 			Shoulder = MeshFrame.TransformPosition(UpperBind.GetLocation());
 			// OpenXR grip +X (Unreal) runs through the grasp from little finger
 			// to thumb. Align the held item's shaft (+Z), then invert the actual

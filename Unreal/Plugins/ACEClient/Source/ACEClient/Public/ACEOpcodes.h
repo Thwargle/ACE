@@ -939,6 +939,7 @@ enum class EACEPacketHeaderFlags : uint32
 	ConnectResponse   = 0x00080000,
 	NetError          = 0x00100000,
 	NetErrorDisconnect = 0x00200000,
+	CICMDCommand      = 0x00400000,
 	TimeSync          = 0x01000000,
 	EchoRequest       = 0x02000000,
 	EchoResponse      = 0x04000000,

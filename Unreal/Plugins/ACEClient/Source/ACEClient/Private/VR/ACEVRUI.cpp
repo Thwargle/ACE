@@ -146,9 +146,12 @@ void UACEVRComponent::UpdatePanels(float Dt)
 	// Magic stance owns visibility. Looking away must not destroy the wrist surface
 	// or invalidate an in-progress tab selection; retain its current placement.
 	RefreshRetail(WristRetail, WristPanel, TEXT("RootGameplay_FloatyCombatPanel_Field"),
-		GetCombatMode() == ACECombatMode::Magic);
-	RefreshRetail(VitalsRetail, VitalsPanel, TEXT("RootGameplay_FloatySideVitals_Field"), Settings->bPinVitalsToView);
-	if (!VitalsPanel->IsVisible()) RefreshRetail(VitalsRetail, VitalsPanel, TEXT("RootGameplay_FloatyVitals_Field"), Settings->bPinVitalsToView);
+		Settings->bShowWristSpellBar && GetCombatMode() == ACECombatMode::Magic);
+	UpdateNativeHUD(InWorld && Available);
+	// Open menus take visual and pointer priority over the ambient HUD.
+	// Keep the meters visible behind the menu without stealing its buttons.
+	VitalsPanel->SetTranslucentSortPriority(ShowMain ? -1 : 10);
+	CompassPanel->SetTranslucentSortPriority(ShowMain ? -1 : 10);
 	RefreshRetail(ChatRetail, ChatPanel, TEXT("RootGameplay_FloatyMainChat_Field"), Settings->bPinChatToView);
 	RefreshRetail(JumpRetail, JumpPanel, TEXT("RootGameplay_PowerBar_Field"), PC->bJumpCharging);
 	JumpPanel->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -452,6 +455,8 @@ void UACEVRComponent::ChangeSetting(FName Setting)
 	else if (Setting == TEXT("Body")) Settings->bShowBody = !Settings->bShowBody;
 	else if (Setting == TEXT("PinMenu")) { Settings->bPinMenuToView = !Settings->bPinMenuToView; PositionPanel(RetailPanel); }
 	else if (Setting == TEXT("PinHotbar")) { Settings->bPinHotbarToView = !Settings->bPinHotbarToView; bWristPoseReady = false; }
+	else if (Setting == TEXT("ShowWrist")) Settings->bShowWristSpellBar = !Settings->bShowWristSpellBar;
+	else if (Setting == TEXT("Compass")) Settings->bShowCompass = !Settings->bShowCompass;
 	else if (Setting == TEXT("PinVitals")) Settings->bPinVitalsToView = !Settings->bPinVitalsToView;
 	else if (Setting == TEXT("VitalsLock")) Settings->bVitalsLocked = !Settings->bVitalsLocked;
 	else if (Setting == TEXT("PinChat")) Settings->bPinChatToView = !Settings->bPinChatToView;

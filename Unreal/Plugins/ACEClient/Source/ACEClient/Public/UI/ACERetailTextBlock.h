@@ -17,6 +17,7 @@ class ACECLIENT_API UACERetailTextBlock : public UTextBlock
 public:
 	void SetRetailElement(UACEUIResourceResolver* Resources, const TSharedPtr<FACEUIElement>& Element,
 		FVector2D Scale, float NativeWidth, bool bFlattenedOnCanvas = true);
+	void SetFontOverride(uint32 FontId) { FontOverride = FontId; }
 	/** Color just the signed modifier in a stat footer, preserving bitmap advances. */
 	void SetModifierSuffix(int32 Begin, FLinearColor Color) { ModifierBegin=Begin; ModifierColor=Color; InvalidateLayoutAndVolatility(); }
 	int32 GetModifierBegin() const { return ModifierBegin; }
@@ -53,4 +54,5 @@ private:
 	int32 ModifierBegin = -1;
 	FLinearColor ModifierColor = FLinearColor::White;
 	uint32 LastPaintState = MAX_uint32;
+	uint32 FontOverride = 0;
 };

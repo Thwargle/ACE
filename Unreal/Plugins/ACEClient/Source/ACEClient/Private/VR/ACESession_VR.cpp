@@ -128,10 +128,7 @@ void FACESession::HandleVRPose(FACEBinaryReader& R)
 	P.ReceivedAt = FPlatformTime::Seconds();
 	auto& Samples = VRPoses.FindOrAdd(Guid);
 	if (Samples.Current.ReceivedAt == 0) Log(FString::Printf(TEXT("VR pose stream received from 0x%08X"), Guid));
-	if (Samples.Current.ReceivedAt > 0 && int32(P.Sequence - Samples.Current.Sequence) <= 0) return;
-	Samples.Previous = P.Version==Samples.Current.Version && P.Teleport == Samples.Current.Teleport
-		&& P.Weapon==Samples.Current.Weapon && P.Ammo==Samples.Current.Ammo && P.ReceivedAt - Samples.Current.ReceivedAt < .5 ? Samples.Current : P;
-	Samples.Current = P;
+	Samples.Add(P);
 }
 
 bool FACESession::GetVRPose(int32 Guid, FACEVRPose& P) const
@@ -140,12 +137,8 @@ bool FACESession::GetVRPose(int32 Guid, FACEVRPose& P) const
 	const double Now = FPlatformTime::Seconds();
 	if (!S || !Object || !Object->bHasPosition || !(S->Current.Flags & 4u) || Now - S->Current.ReceivedAt > .5) return false;
 	if (Object->bHasPhysicsTimestamps && Object->PhysicsTimestamps[ACEPhysicsTimeStamp::Teleport] != S->Current.Teleport) return false;
-	P = S->Current;
-	const double Span = S->Current.ReceivedAt - S->Previous.ReceivedAt;
-	const float Alpha = Span > .001 ? FMath::Clamp((Now - .075 - S->Previous.ReceivedAt) / Span, 0., 1.) : 1.f;
-	for (int32 I = 0; I < 5; ++I) P.Poses[I].Blend(S->Previous.Poses[I], S->Current.Poses[I], Alpha);
-	P.Root=FMath::Lerp(S->Previous.Root,S->Current.Root,Alpha);
-	P.Draw = FMath::Lerp(S->Previous.Draw, S->Current.Draw, Alpha); return true;
+	P = S->Sample(Now);
+	return true;
 }
 
 void FACESession::ApplyVRWorldSnapshot(FACEBinaryReader& Reader)

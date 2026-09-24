@@ -1049,11 +1049,13 @@ void UACECharacterAppearanceComponent::SetPreferredStyle(int32 Style)
 		}
 	}
 	StanceBlendAlpha = 0.f;
+	PoseBlendDuration = StanceBlendDuration;
 	PreferredStyle = Expanded;
 }
 
-void UACECharacterAppearanceComponent::BeginPoseBlendFromCurrent()
+void UACECharacterAppearanceComponent::BeginPoseBlendFromCurrent(float Duration)
 {
+	PoseBlendDuration = FMath::Max(.001f, Duration);
 	StanceBlendFrom.SetNum(PartMeshes.Num());
 	for (int32 i = 0; i < PartMeshes.Num(); ++i)
 	{
@@ -1082,7 +1084,7 @@ void UACECharacterAppearanceComponent::ApplyAnimatedPartsWithBlend(
 	{
 		Blended = Animated;
 		Pose = &Blended;
-		StanceBlendAlpha = FMath::Clamp(StanceBlendAlpha + DeltaTime / StanceBlendDuration, 0.f, 1.f);
+		StanceBlendAlpha = FMath::Clamp(StanceBlendAlpha + DeltaTime / PoseBlendDuration, 0.f, 1.f);
 		const float Alpha = StanceBlendAlpha;
 		const int32 N = FMath::Min(Blended.Num(), StanceBlendFrom.Num());
 		for (int32 i = 0; i < N; ++i)
@@ -1158,7 +1160,9 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	{
 		return;
 	}
-	BeginPoseBlendFromCurrent();
+	// Falling already contains retail's takeoff link (~0.2 s). A full stance
+	// cross-fade hid it behind the previous jump's frozen endpoint.
+	BeginPoseBlendFromCurrent(Cmd == 0x40000015u ? .06f : StanceBlendDuration);
 	AnimMode = EACEAnimMode::ActionOneShot;
 	ActionCommand = Cmd;
 	PendingActionCommands.Reset();
@@ -1209,7 +1213,7 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	}
 	if (bMagicPowerUp || bMagicCastGesture)
 	{
-		UE_LOG(LogTemp, Warning,
+		UE_LOG(LogTemp, Verbose,
 			TEXT("ACEAnim: PlayAction 0x%08X style=0x%08X rate=%.2f (PowerUp=%d Cast=%d)"),
 			Cmd, ActionStyle, ActionPlayRate, bMagicPowerUp ? 1 : 0, bMagicCastGesture ? 1 : 0);
 	}
@@ -1324,10 +1328,14 @@ void UACECharacterAppearanceComponent::ClearJumpMotionIfAny()
 		|| !FMath::IsNearlyZero(LocomotionStrafe);
 	if (AnimMode == EACEAnimMode::ActionOneShot && bJumpCmd)
 	{
-		BeginPoseBlendFromCurrent();
+		// Retail HitGround removes airborne links and immediately resumes current
+		// movement. Keep only a short visual handoff, interruptible by the next jump.
+		BeginPoseBlendFromCurrent(.08f);
 		AnimMode = EACEAnimMode::Locomotion;
 		ActionCommand = 0;
 		bHoldActionFinal = false;
+		bHoldActionFinalAfterFinish = false;
+		bActionEverEvaluated = false;
 		AnimTime = 0.f;
 		DeferredPoseDeltaTime = 0.f;
 		ResetHookTracking();
@@ -1642,12 +1650,14 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 					}
 					const float DistSq = static_cast<float>(
 						FVector::DistSquared(Owner->GetActorLocation(), Eye));
-					if (DistSq > FMath::Square(8000.f))
-					{
-						return;
-					}
-					if (DistSq > FMath::Square(4000.f)
-						&& ((GFrameCounter + Owner->GetUniqueID()) & 3u) != 0u)
+					// Distance reduces pose work, never stops a visible actor's motion.
+					// A frame-number mask dropped far animations to 12 FPS on Quest and
+					// the 80 m cutoff froze running players into a sliding pose entirely.
+					const auto* Entity = Cast<AACEWorldEntityActor>(Owner);
+					const float Interval = DistSq <= FMath::Square(4000.f) ? 0.f
+						: Entity && Entity->bIsPlayer ? 1.f / 30.f
+						: DistSq <= FMath::Square(8000.f) ? 1.f / 30.f : 1.f / 15.f;
+					if (DeferredPoseDeltaTime + KINDA_SMALL_NUMBER < Interval)
 					{
 						return;
 					}
@@ -2104,6 +2114,48 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 	// Stance / loco / action cross-fade toward the newly evaluated pose.
 	ApplyAnimatedPartsWithBlend(Animated, AnimatedCount, DeltaTime);
 	DispatchCrossedHooks(Hooks);
+}
+
+FTransform UACECharacterAppearanceComponent::UpdateVRUpperBody(const FTransform& Head,
+	const FTransform& LeftGrip, const FTransform& RightGrip, bool bLeftTracked, bool bRightTracked, float Dt)
+{
+	if (!MeshRoot) return FTransform::Identity;
+	FTransform Frame = MeshRoot->GetComponentTransform();
+	if (!bVRPoseControlled || !BindTransforms.IsValidIndex(16) || Dt <= 0.f) return Frame;
+	const FRotator HeadAngles = Head.Rotator();
+	const FQuat Yaw = FRotator(0, HeadAngles.Yaw, 0).Quaternion();
+	const float Units = FMath::Max(1.f, WorldScale * float(Frame.GetScale3D().Z));
+	// Infer only a small amount of chest motion. Untracked hands contribute
+	// nothing, and arm reach is measured relative to the head, not world motion.
+	const FVector Left = bLeftTracked ? Yaw.UnrotateVector(LeftGrip.GetLocation()-Head.GetLocation()) / Units : FVector::ZeroVector;
+	const FVector Right = bRightTracked ? Yaw.UnrotateVector(RightGrip.GetLocation()-Head.GetLocation()) / Units : FVector::ZeroVector;
+	const float Hands = float(bLeftTracked) + float(bRightTracked);
+	const FVector Average = Hands > 0 ? (Left+Right)/Hands : FVector::ZeroVector;
+	const FVector Target(
+		FMath::Clamp(float(HeadAngles.Pitch)*.16f - FMath::Max(0.f,float(Average.X)-.25f)*4.f,-8.f,6.f),
+		bLeftTracked && bRightTracked ? FMath::Clamp(float(Right.X-Left.X)*5.f,-4.f,4.f) : 0.f,
+		FMath::Clamp(float(HeadAngles.Roll)*.12f + float(Average.Y)*4.f,-4.f,4.f));
+	VRTorsoAngles = FMath::Lerp(VRTorsoAngles, Target, 1.f-FMath::Exp(-10.f*FMath::Min(Dt,.25f)));
+	const FQuat Axes = Frame.GetRotation().Inverse()*Yaw;
+	const FQuat Bend = Axes * FRotator(VRTorsoAngles.X,VRTorsoAngles.Y,VRTorsoAngles.Z).Quaternion() * Axes.Inverse();
+	// Human chest and girth overlap around the midpoint of their authored
+	// origins. Pivot there so bending cannot pull the waist seam apart.
+	const FVector Waist = (BindTransforms[0].GetLocation()+BindTransforms[9].GetLocation())*.5f;
+	const FTransform Delta(Bend, Waist-Bend.RotateVector(Waist));
+	// Keep the neck attached to the tracked head. Shift the visual pelvis/legs
+	// a few centimetres, never the pawn capsule or camera.
+	const FVector Neck = BindTransforms[16].GetLocation();
+	Frame.AddToTranslation(Frame.TransformVector(Neck-Delta.TransformPosition(Neck)));
+	MeshRoot->SetWorldTransform(Frame);
+	for (int32 I=9; I<PartMeshes.Num(); ++I)
+	{
+		if (!PartMeshes[I] || !BindTransforms.IsValidIndex(I) || I==16 || I==21 || I==22) continue;
+		const bool TrackedArm = (bLeftTracked && ((I>=10 && I<=12) || I==27))
+			|| (bRightTracked && ((I>=13 && I<=15) || I==28));
+		if (!TrackedArm && BindTransforms[I].GetLocation().Z >= Waist.Z)
+			PartMeshes[I]->SetRelativeTransform(BindTransforms[I]*Delta);
+	}
+	return Delta*Frame;
 }
 
 void UACECharacterAppearanceComponent::UpdateVRLowerBody(float Dt)

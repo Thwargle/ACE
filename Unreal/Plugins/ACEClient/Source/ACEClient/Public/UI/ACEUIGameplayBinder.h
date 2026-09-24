@@ -53,7 +53,9 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	GENERATED_BODY()
 	friend class FACERetailScreenTest;
 	friend class FACEVRRigTest;
+	friend class UACEVRComponent;
 	friend class FACEChatParityTest;
+	friend class FACEEmoteTest;
 	friend class FACEUILayoutCommandsTest;
 	friend class FACEUIInteractionParityTest;
 
@@ -272,6 +274,7 @@ private:
 		TradeOther,
 		OptionsList,
 		Examination,
+		Inscription,
 		CharacterInfo,
 		Book,
 		JournalList,
@@ -410,6 +413,7 @@ private:
 	int32 ScrollDragChatWindow = 0;
 	void RefreshChatRowLayout(int32 Window);
 	float ChatRowWidths[5] = {};
+	uint32 ChatRowFontIds[5] = {};
 	FVector2D ChatRowScales[5] = {};
 	/** Client-side loot range close debounce. */
 	double PendingLootRangeCloseAt = 0.0;
@@ -502,6 +506,8 @@ private:
 	TObjectPtr<UTextBlock> ExamBody;
 	UPROPERTY()
 	TObjectPtr<UScrollBox> ExamScroll;
+	UPROPERTY() TObjectPtr<UScrollBox> ExamInscriptionScroll;
+	int32 ExamInscriptionScrolledGuid = 0;
 	UPROPERTY() TArray<TObjectPtr<UTextBlock>> ExamAttributeLabels;
 	UPROPERTY() TArray<TObjectPtr<UTextBlock>> ExamAttributeValues;
 	UPROPERTY() TObjectPtr<UTextBlock> ExamLevel;
@@ -895,6 +901,7 @@ private:
 	/** Option bitfields as of panel open — restored by the Reset button. */
 	uint32 OptionsSnapshot1 = 0;
 	uint32 OptionsSnapshot2 = 0;
+	uint32 OptionsDraft1 = 0, OptionsDraft2 = 0;
 	uint64 MainChatFilterSnapshot = 0xFBFFFFFFull;
 	TArray<uint64> FloatyChatFilterSnapshot;
 	float ChatInactiveOpacity = .5f;
@@ -1176,6 +1183,11 @@ private:
 	int32 LastSpellClickSlot = INDEX_NONE;
 	int32 LastSpellClickId = 0;
 	double LastSpellClickTime = 0.0;
+	/** Spellbook double-click appends a favorite; it never casts a spell. */
+	int32 LastSpellbookClickId = 0;
+	int32 LastSpellbookClickBar = INDEX_NONE;
+	double LastSpellbookClickTime = 0.0;
+	FVector2D LastSpellbookClickPosition = FVector2D::ZeroVector;
 
 	bool bBound = false;
 
@@ -1251,6 +1263,7 @@ private:
 	static bool ChatSendIsTurbine(int32 ChannelIndex);
 	static uint32 ChatSendTurbineChatType(int32 ChannelIndex);
 	void AppendLocalChatLine(const FString& Line, int32 ChatType);
+	void SendPoseChat(const FString& Command, FString MyEmote, FString OtherEmote);
 	/** Position DAT scrollbar up/down/thumb; Frac 0=top .. 1=bottom. VisibleFrac sizes the thumb. */
 	void SyncDatScrollbar(const TSharedPtr<FACEUIElement>& Bar, float Frac, float VisibleFrac = -1.f);
 	void LoadVitalDisplayPreference();

@@ -743,7 +743,14 @@ void UACEUIElementManager::ApplyFloatyResizeLayout(const TSharedPtr<FACEUIElemen
 			{
 				if (Page.IsValid())
 				{
+					// Retail reanchors the whole subtree when the shared panel grows.
+					// Updating only the page height left effects descriptions midway
+					// up the window and gave the spell list none of the extra space.
+					if (Page->AuthoredHeight < 0) Page->AuthoredHeight = Page->Height;
+					if (Page->AuthoredWidth < 0) Page->AuthoredWidth = Page->Width;
 					Page->Height = InnerH;
+					for (const auto& Content : Page->Children)
+						FRetailReflow::Reflow(Content, Page->AuthoredWidth, Page->AuthoredHeight, Page->Width, InnerH);
 				}
 			}
 		}

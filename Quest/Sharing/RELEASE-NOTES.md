@@ -1,35 +1,62 @@
-# AC:Unreal / AC:VR release 69
+# AC:Unreal / AC:VR release 70
 
-Native Quest: `2026.09.23.quest.69`, Android version code 69, installer revision 6.
-Windows desktop / PC VR: `2026.09.23.75`.
+Native Quest: `2026.09.24.quest.70`, Android version code 70, installer revision 6.
+Windows desktop / PC VR: `2026.09.24.76`.
 
-## Changes since v68
+## Changes since v69
 
-- Add retail-style /saveui, /loadui, /saveautoui, /loadautoui, and /lockui
-  commands. Save named window layouts and explicitly save automatic layouts for
-  the current character, server, display size, and desktop/VR mode.
-- Save numbered PNG screenshots with numpad * by default. Chat confirms the
-  actual saved path or explains a failure. Rebind Capture screenshot through the
-  existing keyboard mapping window.
-- Respect the ItemUseable flag on quest/puzzle doors, including live property
-  changes, and explain when a door cannot be activated directly. Existing server
-  quest, lock, key, and switch requirements remain authoritative.
-- Make resized attribute lists work with the wheel, arrows, and scrollbar dragging.
-  Scrolled selection still refers to the correct attribute. Repeat the chain
-  scrollbar artwork instead of stretching it.
-- Remember each spell tab's selected spell for the session. Returning to a tab
-  restores its highlight and scroll position; first visits select the first spell.
-  Next/previous wraps at the ends and keeps selection visible.
-- Synchronize spell selection across desktop tabs, the VR wrist bar, and the VR
-  wheel without casting or changing combat stance. Portal travel retains tab
-  memory; logging out clears it.
+### Movement and networking
 
-## Layout files
+- Keep nearby exterior room collision active before the player crosses its cell
+  boundary. Fix wall clipping at Fort Teth and Mosswart Fort through shared
+  collision residency and filtering, rather than location-specific exceptions.
+- Prevent creature collision bodies from becoming walkable floors or step-up
+  targets. Improve falling and recovery beside walls in crowded dungeons.
+- Release narrow stair-edge contacts into a proper fall and suppress tiny
+  stationary slope corrections that made the VR camera shake.
+- Smooth remote heading corrections, maintain movement prediction between sparse
+  packets, and continue player animation beyond the previous distance cutoff.
+- Buffer VR tracking samples so body, hands, equipment, and weapon draw share
+  the same presentation time. Keep remote roots updating when ordinary actor
+  movement ticks are suspended; reject stale samples and reset across transitions.
+- Restore retail's periodic receive-socket keepalive on server port+1. This
+  addresses an idle NAT-mapping failure consistent with the reported Coldeve
+  disconnects; live confirmation on the affected user's connection is pending.
+  Improve timeout diagnostics without changing gameplay packet sequencing.
 
-Named layouts are stored in Saved/UILayouts. These are window geometry only;
-spells, inventory shortcuts, chat filters, and keybindings are not changed.
-The automatic layout is a snapshot saved by /saveautoui, not a continuous
-save of every window movement. /loadui without a name loads UI-Default.txt.
+### Inventory, chat, and retail interface
+
+- Automatically merge picked-up stackable items into a matching owned stack
+  when the entire pickup fits, including stacks in packs. Preserve intentional
+  rearrangement and wait for authoritative server inventory updates.
+- Append double-clicked spellbook spells to the end of the open spell tab.
+- Reflow resized spellbook/effects pages: grow the list and retain bottom-anchored
+  controls and descriptions. Remove faint underlying inspection scrollbar arrows.
+- Restore retail Character option grouping and Apply/Reset/Defaults behavior;
+  retain chat routing and opacity controls on Chat and local preferences on Config.
+- Add the five retail chat font faces and five sizes using their actual DAT
+  fonts on all platforms. Persist the selection and rewrap existing chat lines.
+- Use shared DAT emote text for typed poses and emote keybinds, including
+  one-shot/held gesture variants. Social gestures address the selected target,
+  e.g. "Thwargle waves at OtherName." Noninteractive poses stay untargeted.
+  Selected-target phrasing is an extension to retail's base emote table.
+
+### VR interface and animation
+
+- Add a native VR compass with nearby selectable markers, current coordinates,
+  evenly spaced cardinal labels, and a larger decorative frame. Toggle it in
+  VR settings without opening the desktop interface.
+- Add native VR vitals with clearer labels, health/stamina/mana values, stance,
+  combat timing, and existing placement/locking controls. HUD updates are bounded
+  and unchanged vitals do not redraw continuously.
+- Allow the wrist spellbar to be hidden while using the spell wheel.
+- Separate incoming and outgoing combat notices with clearer labels, larger
+  numbers, improved contrast, and distinct positions.
+- Add subtle, smoothed torso bend/twist from tracked head and hand motion for
+  local and remote VR avatars. Preserve neck, waist, and controller alignment.
+- Use the retail Falling transition at jump takeoff, keep Ready/run while
+  charging, and clear held jump state on landing. Shorter jump handoffs avoid
+  a frozen-looking pose on rapid successive jumps.
 
 ## Install or update
 
@@ -49,28 +76,24 @@ any old runtime folder when necessary. See the included instructions for setup.
 ## Server compatibility
 
 Choose a server in the lobby and use your own account. Custom VR combat and pose
-replication require this project's updated VR-enabled ACE server. Server owners
-must include the v60 instant atlatl/thrown release changes. This source update
-also adds a server-side direct-use guard for restricted doors; server owners
-must deploy the updated server to obtain that additional enforcement. Client
-packages cannot update a remote server. Keys, switches, and scripted activation
-retain their existing paths.
+replication require this project's VR-enabled ACE server. Existing v60 instant
+atlatl/thrown release and v69 restricted-door server changes remain required for
+those server-side behaviors. This release changes client code; publishing client
+packages does not update a game server.
 
 GDLE login has been verified through character selection. The v64 packet-timing
-correction is included. A live Seedsow item-interaction retest is still pending;
+correction is included. A live Seedsow item-interaction retest remains pending;
 automated protocol checks do not establish full in-world GDLE compatibility.
 Bundles contain no server, credentials, saved settings, SDK tools, or retail DAT files.
 
 ## Validation and limitations
 
-Windows and Android Development source builds and the ACE server Release build
-passed. UI regressions cover retail layout-file parsing, layout restoration,
-attribute scrolling, chain artwork, spell-tab memory/wrapping, screenshot writing
-and feedback, screenshot rebinding, and restricted-door action suppression.
-The VR rig tests cover wrist/wheel selection restoration without stance changes.
-The packaged Windows v69 client also passed UIInteractions, UILayoutCommands,
-UIScreens, and VR RigAndMenus (four suites).
-
-These checks do not replace live quest/puzzle or headset gameplay acceptance.
-There is no new FPS benchmark in this release; sustained 90 FPS VR and 144 FPS
-desktop remain targets. Download hashes are provided in SHA256SUMS.txt.
+Windows and Quest Development packages built successfully. The packaged Windows
+client passed 11 suites covering UI interactions/screens, chat, targeted emotes,
+Fort Teth stairs, movement, avatar animation, receive-port keepalives, VR rendering,
+VR rig/menus, and wall contact. Editor-only inventory-order and VR pose-buffer
+tests also passed (13 suites total).
+Live headset and multiplayer acceptance of these changes remains pending.
+This release does not claim complete Config-tab parity or a new FPS benchmark;
+sustained 90 FPS VR and 144 FPS desktop remain targets.
+Download hashes are provided in SHA256SUMS.txt.

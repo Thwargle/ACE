@@ -72,6 +72,8 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEUILayoutCommandsTest;
 	friend class FACEUIInteractionParityTest;
 	friend class FACEMovementReviewTest;
+	friend class FACEAvatarMotionTest;
+	friend class FACEEmoteTest;
 	friend class FACEVRInteriorTest;
 	friend class FACEVRWallContactTest;
     friend class FACEAcademyCornerTest;
@@ -796,6 +798,13 @@ private:
 	EACESessionState State = EACESessionState::Disconnected;
 	TArray<FACEConfirmation> Confirmations;
 	double LastServerPacketAt = 0.0;
+	double LastServerDatagramAt = 0.0;
+	double LastReceivePortKeepaliveAt = 0.0;
+	/** Retail ClientFlowQueue sends cmdNOP to port+1 every 220 half-second intervals. */
+	void MaintainReceivePort(double Now);
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FACEReceiveKeepaliveTest;
+#endif
 	double LoginRequestAt = 0.0;
 	double PacketTimeOrigin = 0.0;
 	bool HasConnectionTimedOut(double Now) const;

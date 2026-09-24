@@ -49,4 +49,6 @@ private:
  UPROPERTY() TObjectPtr<UCheckBox> InvertMouseX;
  UPROPERTY() TObjectPtr<UCheckBox> InvertMouseY;
  UPROPERTY() TObjectPtr<UComboBoxString> DesktopScale;
+ UPROPERTY() TObjectPtr<UComboBoxString> ChatFontFace;
+ UPROPERTY() TObjectPtr<UComboBoxString> ChatFontSize;
 };

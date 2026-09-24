@@ -3,9 +3,14 @@
 #include "Engine/World.h"
 #include "CollisionQueryParams.h"
 #include "CollisionShape.h"
+#include "Components/PrimitiveComponent.h"
 
 namespace ACEBodySweep
 {
+    inline bool IsCreatureBody(const FHitResult& Hit)
+    {
+        return Hit.Component.IsValid() && Hit.Component->ComponentTags.Contains(TEXT("ACECreatureBody"));
+    }
     inline FVector RecoverCorner(UWorld& World, const FVector& From,
         const FCollisionShape& Capsule, const FCollisionQueryParams& Params)
     {
@@ -141,9 +146,15 @@ namespace ACEBodySweep
         const float SupportRadius=FMath::Max(1.f,Radius-.1f);
         FHitResult Hit;
         const FVector Top=Feet+FVector(0,0,SupportRadius+MaxUp+Clearance);
-        if (!World.SweepSingleByChannel(Hit,Top,Top-FVector(0,0,MaxDown+MaxUp+Clearance),
-            FQuat::Identity,ECC_Pawn,FCollisionShape::MakeSphere(SupportRadius),Params)
-            || Hit.bStartPenetrating || Hit.Normal.Z<.6641741f) return false;
+        FCollisionQueryParams SupportParams=Params;
+        for(int32 Pass=0;Pass<16;++Pass)
+        {
+            if (!World.SweepSingleByChannel(Hit,Top,Top-FVector(0,0,MaxDown+MaxUp+Clearance),
+                FQuat::Identity,ECC_Pawn,FCollisionShape::MakeSphere(SupportRadius),SupportParams))return false;
+            if(!IsCreatureBody(Hit))break;
+            SupportParams.AddIgnoredActor(Hit.GetActor());
+        }
+        if (IsCreatureBody(Hit) || Hit.bStartPenetrating || Hit.Normal.Z<.6641741f) return false;
         const float Z=Hit.Location.Z-SupportRadius;
         if (Z>Feet.Z+MaxUp+Clearance || Z<Feet.Z-MaxDown) return false;
         SupportZ=Z;
@@ -215,7 +226,7 @@ namespace ACEBodySweep
                 Position=Hit.Location;
                 Remaining*=1.f-Hit.Time;
             }
-            if(Hit.Normal.Z>=.6641741f)
+            if(Hit.Normal.Z>=.6641741f && !IsCreatureBody(Hit))
             {
                 // Grounded ramp following is vertical, not an uphill speed boost.
                 Remaining.Z=FMath::Max(Remaining.Z,
@@ -258,18 +269,31 @@ namespace ACEBodySweep
     {
         FAirborneMove Result{From};
         FVector Remaining=To-From;
-        for (int32 Pass=0; Pass<4 && !Remaining.IsNearlyZero(.01f); ++Pass)
+        FCollisionQueryParams AirParams=Params;
+        for (int32 Pass=0; Pass<16 && !Remaining.IsNearlyZero(.01f); ++Pass)
         {
             const FVector Start=Result.Position;
             FHitResult Hit;
             // A tangent wall/ceiling skin must not mask the floor while falling.
             // Retain every floor contact here, including diagonal descents.
-            bool bHit=Sweep(World,Hit,Start,Start+Remaining,Capsule,Params,false);
+            bool bHit=Sweep(World,Hit,Start,Start+Remaining,Capsule,AirParams,false);
+            if (bHit && bFalling && IsCreatureBody(Hit))
+            {
+                // A moving creature can overlap a falling body at a wall. Its
+                // rounded top is not a floor and must not lift/trap the player.
+                // Stop horizontal travel, then sweep only the remaining fall
+                // past that creature. All architecture still blocks this path.
+                if(!Hit.bStartPenetrating){Result.Position=Hit.Location;Remaining*=1.f-Hit.Time;}
+                Remaining.X=Remaining.Y=0;
+                Result.ContactNormal=Hit.Normal.GetSafeNormal2D();
+                AirParams.AddIgnoredActor(Hit.GetActor());
+                continue;
+            }
             // A just-launched body may still touch its support. Only clear that
             // initial floor while leaving it, never while falling back into it.
             if (bHit && Hit.Time<=KINDA_SMALL_NUMBER && Hit.ImpactNormal.Z>=.6641741f
                 && Hit.PenetrationDepth<.5f && FVector::DotProduct(Remaining,Hit.ImpactNormal)>0.f)
-                bHit=Sweep(World,Hit,Start,Start+Remaining,Capsule,Params);
+                bHit=Sweep(World,Hit,Start,Start+Remaining,Capsule,AirParams);
             if (!bHit) { Result.Position=Start+Remaining; break; }
             const FVector Normal=Hit.Normal.GetSafeNormal();
             Result.ContactNormal=Hit.ImpactNormal.GetSafeNormal();
@@ -287,7 +311,7 @@ namespace ACEBodySweep
                 if (!Normal.IsNearlyZero())
                 {
                     const FVector Recovered = Recover(World, Start,
-                        Normal * (Hit.PenetrationDepth + .5f), Hit, Capsule, Params);
+                        Normal * (Hit.PenetrationDepth + .5f), Hit, Capsule, AirParams);
                     if (!Recovered.Equals(Start, .01f))
                     {
                         Result.Position = Recovered;
@@ -314,8 +338,8 @@ namespace ACEBodySweep
             // is only a contact-skin check, not a snap from above a ledge.
             const FVector Feet=Result.Position-FVector(0,0,Capsule.GetCapsuleHalfHeight());
             FHitResult Floor;
-            if (World.LineTraceSingleByChannel(Floor,Feet+FVector(0,0,.1f),Feet-FVector(0,0,.2f),ECC_Pawn,Params)
-                && !Floor.bStartPenetrating && Floor.ImpactNormal.Z>=.6641741f)
+            if (World.LineTraceSingleByChannel(Floor,Feet+FVector(0,0,.1f),Feet-FVector(0,0,.2f),ECC_Pawn,AirParams)
+                && !IsCreatureBody(Floor) && !Floor.bStartPenetrating && Floor.ImpactNormal.Z>=.6641741f)
             {
                 Result.Position.Z=Floor.ImpactPoint.Z+Capsule.GetCapsuleHalfHeight();
                 Result.ContactNormal=Floor.ImpactNormal;

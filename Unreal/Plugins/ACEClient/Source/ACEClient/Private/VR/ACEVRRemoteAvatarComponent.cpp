@@ -55,15 +55,19 @@ void UACEVRRemoteAvatarComponent::TickComponent(float Dt, ELevelTick Type, FActo
 	}
 	if (!bApplied) RetailRoot = App->GetMeshRoot()->GetRelativeTransform();
 	bApplied = true; PoseFlags = Pose.Flags; App->bVRPoseControlled = true; VisualPose=Pose;
+	// Settled world actors suspend their ordinary movement tick. Tracking still
+	// updates at render cadence, so apply the sampled root here with the limbs,
+	// including when no new retail motion packet has woken the actor yet.
+	if(Pose.Version==2 && !Entity->GetActorLocation().Equals(Pose.Root*Scale,.001f))
+		Entity->SetActorLocation(Pose.Root*Scale);
 	FTransform Tracked[3];
 	for (int32 I = 0; I < 3; ++I)
 		Tracked[I] = FTransform(Pose.Poses[I].GetRotation(), Entity->GetActorLocation() + Pose.Poses[I].GetLocation() * Scale);
 	const FTransform& Head = Tracked[0];
-	const FQuat Facing = FRotator(0, Head.Rotator().Yaw - 90.f, 0).Quaternion();
 	const FVector EyeLocal(0, -.08f * Scale, .17f * Scale);
 	const FVector EyeBind = HeadBind.TransformPosition(EyeLocal);
 	const float BodyScale = FMath::Clamp(Pose.EyeHeight * Scale / FMath::Max(50.f, float(EyeBind.Z)), .6f, 1.5f);
-	const FTransform Frame = ACEVRMath::BodyFromHead(Head, HeadBind, EyeLocal, BodyScale);
+	FTransform Frame = ACEVRMath::BodyFromHead(Head, HeadBind, EyeLocal, BodyScale);
 	App->GetMeshRoot()->SetWorldTransform(Frame);
 	App->UpdateVRLowerBody(Dt);
 	for (int32 I = 9; I < App->GetPartCount(); ++I)
@@ -74,6 +78,7 @@ void UACEVRRemoteAvatarComponent::TickComponent(float Dt, ELevelTick Type, FActo
 		if (!HeadPart && !TrackedArm)
 		{ FTransform Bind; if (auto* Part = App->GetPartMesh(I); Part && App->GetPartBindTransform(I, Bind)) Part->SetRelativeTransform(Bind); }
 	}
+	Frame = App->UpdateVRUpperBody(Head, Tracked[1], Tracked[2], (Pose.Flags & 1u)!=0, (Pose.Flags & 2u)!=0, Dt);
 	const FQuat HeadRotation = Head.GetRotation() * FRotator(0,-90,0).Quaternion() * HeadBind.GetRotation();
 	for (int32 I : {16, 21, 22})
 		if (auto* Part = App->GetPartMesh(I))
@@ -107,7 +112,7 @@ void UACEVRRemoteAvatarComponent::TickComponent(float Dt, ELevelTick Type, FActo
 		ACEVRMath::SolveArm(Shoulder, Hand, Pole, UpperLength, LowerLength, Elbow, Wrist);
 		const FVector Original = Frame.TransformVector(ElbowBind - Upper.GetLocation());
 		const FQuat Delta = FQuat::FindBetweenNormals(Original.GetSafeNormal(), (Elbow-Shoulder).GetSafeNormal());
-		App->GetPartMesh(HandIndex-2)->SetWorldTransform(FTransform(Delta * Facing * Upper.GetRotation(), Shoulder, FVector(BodyScale * Reach)));
+		App->GetPartMesh(HandIndex-2)->SetWorldTransform(FTransform(Delta * Frame.GetRotation() * Upper.GetRotation(), Shoulder, FVector(BodyScale * Reach)));
 		const FVector Axis = Lower.GetRotation().UnrotateVector(HandBind.GetLocation()-ElbowBind).GetSafeNormal();
 		const FQuat Roll = HandRot * HandBind.GetRotation().Inverse() * Lower.GetRotation();
 		const FQuat LowerRot = FRotationMatrix::MakeFromZY((Hand-Elbow).GetSafeNormal(), Roll.RotateVector(FVector::RightVector)).ToQuat()

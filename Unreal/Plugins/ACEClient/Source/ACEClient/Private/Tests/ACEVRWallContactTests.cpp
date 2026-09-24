@@ -191,6 +191,66 @@ bool FACEVRWallContactTest::RunTest(const FString&)
   TestTrue(TEXT("Contact does not repeatedly push the camera away from the wall"),MaxWobble<.5);
  }
  AddInfo(FString::Printf(TEXT("Wall integration: %d ticks in %.3f ms"),Ticks,(FPlatformTime::Seconds()-Begin)*1000));
+ // Falling beside a wall must make downward progress even when a moving
+ // creature has pushed the capsule slightly into that wall.
+ for(float Depth:{.1f,.3f,1.f})
+ {
+  FVector P=Contact+FVector(0,-Depth,20);bool Landed=false;
+  for(int I=0;I<90 && !Landed;++I)
+  {
+   const auto Move=ACEBodySweep::MoveAirborne(*World,P,P+FVector(0,0,-2),Shape,Query,true,.6641741f);
+   P=Move.Position;Landed=Move.bLanded;
+  }
+  TestTrue(*FString::Printf(TEXT("Wall-side fall lands after overlap %.2f (z %.2f)"),Depth,P.Z-Contact.Z),Landed);
+ }
+ {
+  TArray<AActor*> Creatures;
+  for(float X:{-72.f,72.f})
+  {
+   auto* A=World->SpawnActor<AActor>();auto* C=NewObject<UCapsuleComponent>(A);A->SetRootComponent(C);
+   C->InitCapsuleSize(40,90);C->ComponentTags.Add(TEXT("ACECreatureBody"));C->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+   C->SetCollisionResponseToAllChannels(ECR_Ignore);C->SetCollisionResponseToChannel(ECC_Pawn,ECR_Block);
+   C->RegisterComponent();A->SetActorLocation(Contact+FVector(X,1,0));Creatures.Add(A);
+  }
+  float Support=0;
+  TestTrue(TEXT("Crowded bodies cannot hide the real floor from the support sphere"),
+   ACEBodySweep::FindFootSupport(*World,Contact-FVector(0,0,90.75),48,30,Query,Support));
+  FVector P=Contact+FVector(0,0,25);bool Landed=false;
+  for(int I=0;I<90 && !Landed;++I)
+  {
+   const auto Move=ACEBodySweep::MoveAirborne(*World,P,P+FVector(3,-1,-2),Shape,Query,true,.6641741f);
+   P=Move.Position;Landed=Move.bLanded;
+  }
+  TestTrue(TEXT("Crowded wall-side fall reaches actual ground instead of holding jump"),Landed && FMath::Abs(P.Z-Contact.Z)<1);
+  TestTrue(TEXT("Crowded fall cannot bypass the static wall"),P.Y>=Contact.Y-.5);
+  TestTrue(TEXT("Crowded fall does not travel horizontally through monsters"),FMath::Abs(P.X-Contact.X)<48);
+  for(auto* A:Creatures)A->Destroy();
+ }
+ // A stationary tracked player must settle once on a tilted support rather
+ // than oscillating between the center ray and lower-sphere height.
+ {
+  auto* A=World->SpawnActor<AActor>();auto* Ramp=NewObject<UBoxComponent>(A);A->SetRootComponent(Ramp);
+  Ramp->SetBoxExtent(FVector(500,500,10));Ramp->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+  Ramp->SetCollisionResponseToAllChannels(ECR_Ignore);Ramp->SetCollisionResponseToChannel(ECC_Pawn,ECR_Block);
+  Ramp->RegisterComponent();A->SetActorLocationAndRotation(Contact+FVector(2000,0,400),FRotator(25,0,0));
+  FHitResult Ground;const FVector At=A->GetActorLocation();
+  World->LineTraceSingleByChannel(Ground,At+FVector(0,0,500),At-FVector(0,0,500),ECC_Pawn,Query);
+  FACEPosition Pose;Pose.CellId=0xC98C0129;Pose.SetLocationFromUnreal(Ground.ImpactPoint+FVector(0,0,10),100);
+  Session->SetLocalPosition(Pose);PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;
+  PC->bJumpAirborne=false;PC->bStandingJumpLocked=false;PC->StepHoldSeconds=0;
+  Pawn->SetActorLocation(Pose.ToUnrealLocation(100)+FVector(0,0,90.75));VR->MoveStick=FVector2D::ZeroVector;
+  double Low=1.e20,High=-1.e20;
+  for(int I=0;I<180;++I)
+  {
+   VR->Head->SetWorldLocation(Pawn->GetActorLocation()+FVector(0,0,175-90.75));
+   PC->PlayerTick(1.f/90);
+   if(I>30){Low=FMath::Min(Low,Pawn->GetActorLocation().Z);High=FMath::Max(High,Pawn->GetActorLocation().Z);}
+  }
+  TestFalse(TEXT("Stationary slope does not latch jumping"),PC->bJumpAirborne);
+  TestTrue(*FString::Printf(TEXT("Stationary slope stays stable (%.4f cm)"),High-Low),High-Low<.1);
+  TestTrue(TEXT("Stationary support remains on the ramp"),FMath::Abs(Pawn->GetActorLocation().Z-90.75-Ground.ImpactPoint.Z)<15);
+  A->Destroy();
+ }
  Session->State=EACESessionState::Disconnected;Session->PlayerGuid=0;
  World->DestroyWorld(false);GEngine->DestroyWorldContext(World);return true;
 }

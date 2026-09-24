@@ -19,6 +19,13 @@
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
 #include "ACEInputBindings.h"
+#include "ACERuntimeOptions.h"
+#include "ACECharacterOptions.h"
+#include "UI/ACERetailTextBlock.h"
+#include "UI/ACEVideoSettingsWidget.h"
+#include "Components/ComboBoxString.h"
+#include "Components/ScrollBox.h"
+#include "Blueprint/WidgetTree.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
 #include "UI/ACEUILayoutResolver.h"
@@ -36,6 +43,8 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     auto* GI=NewObject<UGameInstance>();
     auto* Dat=NewObject<UACEDatSubsystem>(GI);
     if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    const FString ArtDirectory=FPaths::ProjectSavedDir()/TEXT("Automation/UIInteractions");
+    IFileManager::Get().MakeDirectory(*ArtDirectory,true);
     auto* Resources=NewObject<UACEUIResourceResolver>(); Resources->Initialize(Dat);
     auto* Manager=NewObject<UACEUIElementManager>(); Manager->Initialize();
     auto* Layout=NewObject<UACEUILayoutResolver>(); Layout->Initialize(Dat,Manager);
@@ -97,6 +106,117 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     Session.SpellBars[1].Reset(); Binder->RefreshSpellHotbarOverlays();
     Binder->StepCombatSpellSelection(1,false,false);
     TestEqual(TEXT("Empty bar has a safe cursor"),Binder->SelectedCombatSpellSlot,0);
+
+    // Retail gmSpellbookUI double-click appends via AddFavorite(-1, false),
+    // rather than casting, replacing an occupied slot, or relocating a duplicate.
+    Session.KnownSpells={41,42};
+    Binder->ShowPanelPage(TEXT("SpellManagementPanel_Field")); Binder->HandleNamedClick(TEXT("SpellbookTab"));
+    Binder->SetCombatSpellBar(0); Binder->TickRefresh(); Draw(TEXT("SpellbookBeforeAppend"));
+    auto ClickBook=[&](int32 SpellId,bool bDoubleClick)
+    {
+        const int32 Row=Binder->SpellbookRowIds.Find(SpellId);
+        if (!TestTrue(TEXT("Known spell has a visible row"),Row!=INDEX_NONE)) return;
+        const auto& RowGeometry=Binder->SpellbookRowBackgrounds[Row]->GetCachedGeometry();
+        const FVector2D Position=RowGeometry.LocalToAbsolute(RowGeometry.GetLocalSize()*.5);
+        const FPointerEvent Press(0,Position,Position,TSet<FKey>{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState());
+        const FPointerEvent Release(0,Position,Position,TSet<FKey>{},EKeys::LeftMouseButton,0,FModifierKeysState());
+        if (bDoubleClick) Canvas->NativeOnMouseButtonDoubleClick(Canvas->GetCachedGeometry(),Press);
+        else Canvas->NativeOnMouseButtonDown(Canvas->GetCachedGeometry(),Press);
+        Canvas->NativeOnMouseButtonUp(Canvas->GetCachedGeometry(),Release);
+    };
+    const uint32 BeforeBook=Session.NextGameActionSequence;
+    ClickBook(41,false);
+    TestEqual(TEXT("Single spellbook click sends no cast or favorite action"),Session.NextGameActionSequence,BeforeBook);
+    ClickBook(41,true);
+    TestEqual(TEXT("Double-click appends after all twenty existing spells"),Session.SpellBars[0].Find(41),20);
+    TestEqual(TEXT("Double-click sends exactly one favorite action"),Session.NextGameActionSequence,BeforeBook+1);
+    TestEqual(TEXT("New shortcut is selected as in retail"),Binder->SelectedCombatSpellSlot,20);
+    TestTrue(TEXT("Appended shortcut scrolls into view"),20>=Binder->SpellHotbarScrollOffset && 20<Binder->SpellHotbarScrollOffset+13);
+    TestTrue(TEXT("Other tab is unchanged"),Session.SpellBars[1].IsEmpty());
+    const auto BeforeDuplicate=Session.SpellBars[0];
+    ClickBook(41,false); ClickBook(41,true);
+    TestTrue(TEXT("An existing shortcut is not duplicated or moved"),Session.SpellBars[0]==BeforeDuplicate);
+    TestEqual(TEXT("Duplicate sends no remove/add packets"),Session.NextGameActionSequence,BeforeBook+1);
+    Binder->SetCombatSpellBar(1); Draw(TEXT("SpellbookEmptyTab"));
+    ClickBook(41,false); ClickBook(41,true);
+    TestEqual(TEXT("Double-click uses the currently open tab"),Session.SpellBars[1].Find(41),0);
+    TestTrue(TEXT("Adding to another tab preserves the first tab"),Session.SpellBars[0]==BeforeDuplicate);
+    TestEqual(TEXT("Adding a favorite leaves combat stance unchanged"),Binder->CombatMode,int32(ACECombatMode::Magic));
+    const int32 DragRow=Binder->SpellbookRowIds.Find(42);
+    const auto& DragGeometry=Binder->SpellbookRowBackgrounds[DragRow]->GetCachedGeometry();
+    const FVector2D DragStart=Canvas->GetCachedGeometry().AbsoluteToLocal(DragGeometry.LocalToAbsolute(DragGeometry.GetLocalSize()*.5));
+    Binder->TryBeginSpellDrag(DragStart); Binder->UpdateSpellDrag(DragStart+FVector2D(-80,0));
+    Binder->TryFinishSpellDrag(DragStart+FVector2D(-80,0));
+    ClickBook(42,false);
+    TestFalse(TEXT("A completed drag cannot become the first half of a double-click"),Session.SpellBars[1].Contains(42));
+    ClickBook(42,true);
+    TestEqual(TEXT("Next double-click still appends at the end"),Session.SpellBars[1].Find(42),1);
+    Draw(TEXT("SpellbookAppended"));
+
+    // The original DAT edge anchors grow the list, not the fixed description.
+    const auto SharedPanel=Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field"));
+    UACEUIElementManager::ApplyFloatyResizeLayout(SharedPanel);
+    for(const TCHAR* PageName:{TEXT("PositiveEffectsPanel_Field"),TEXT("NegativeEffectsPanel_Field"),TEXT("SpellManagementPanel_Field")})
+    {
+        Binder->ShowPanelPage(PageName); if(FString(PageName)==TEXT("SpellManagementPanel_Field")) Binder->HandleNamedClick(TEXT("SpellbookTab"));
+        const bool Book=FString(PageName)==TEXT("SpellManagementPanel_Field");
+        const auto ListEl=Manager->FindElementUnder(PageName,Book?TEXT("SpellBook_SpellList"):TEXT("Effects_SpellList"));
+        const auto Footer=Manager->FindElementUnder(PageName,Book?TEXT("FilterBox"):TEXT("InfoBackground"));
+        int32 SmallHeight=0;
+        for(int32 H:{380,680,380})
+        {
+            SharedPanel->UserResizeH=H-SharedPanel->AuthoredHeight;
+            UACEUIElementManager::ApplyFloatyResizeLayout(SharedPanel);Binder->TickRefresh();
+            Draw(*(FString(PageName)+FString::FromInt(H)));
+            AddInfo(FString::Printf(TEXT("Resize %s H=%d frame=%d list=%d footerY=%d"),PageName,H,SharedPanel->Height,ListEl->Height,Footer->GetScreenOrigin().Y));
+            TestEqual(TEXT("Spell footer keeps its retail height"),Footer->Height,Book?113:88);
+            TestEqual(TEXT("Footer stays against the bottom frame"),Footer->GetScreenOrigin().Y+Footer->Height,
+                SharedPanel->GetScreenOrigin().Y+SharedPanel->Height-5);
+            TestTrue(TEXT("List never overlaps its bottom controls"),ListEl->GetScreenOrigin().Y+ListEl->Height<=Footer->GetScreenOrigin().Y);
+            if(H==380 && SmallHeight==0)SmallHeight=ListEl->Height;
+            else TestEqual(TEXT("Additional panel height goes entirely to the spell list"),ListEl->Height,SmallHeight+H-380);
+        }
+    }
+    // Character edits are staged; Chat and Config resets cannot change character options.
+    Binder->ShowPanelPage(TEXT("OptionsPanel_Field"));Binder->SyncOptionsPanelTab(TEXT("CharacterSettingsPage"));
+    Draw(TEXT("RetailCharacterOptions"));
+    TestTrue(TEXT("Character starts with UI behavior in retail order"),Binder->OptionRowOptions.Num()>1 && Binder->OptionRowOptions[1]==0x07);
+    TestEqual(TEXT("Retail display option belongs to Character"),ACECharacterOptions::Find(0x13)->Page,uint8(ACECharacterOptions::PageCharacter));
+    TestEqual(TEXT("Channel subscription belongs to Character, not Chat routing"),ACECharacterOptions::Find(0x23)->Page,uint8(ACECharacterOptions::PageCharacter));
+    const uint32 Original=Session.CharacterOptions1;
+    const auto CharacterList=Manager->FindElementUnder(TEXT("CharacterSettingsPage"),TEXT("CharacterOptionsListBox"));
+    Binder->TryHandleOptionsListClick(FVector2D(CharacterList->GetScreenOrigin())+FVector2D(12,24));
+    TestEqual(TEXT("Editing a Character checkbox does not prematurely send it"),Session.CharacterOptions1,Original);
+    TestTrue(TEXT("Checkbox toggles the draft bit"),Binder->OptionsDraft1!=(Original));
+    Binder->HandleOptionsNamedClick(TEXT("ResetButton"));TestEqual(TEXT("Reset restores saved checkbox state"),Binder->OptionsDraft1,Original);
+    Binder->TryHandleOptionsListClick(FVector2D(CharacterList->GetScreenOrigin())+FVector2D(12,24));
+    Binder->HandleOptionsNamedClick(TEXT("ApplyButton"));TestEqual(TEXT("Apply saves the chosen checkbox"),Session.CharacterOptions1,Original^0x80u);
+    Binder->SyncOptionsPanelTab(TEXT("ChatPage"));Binder->HandleOptionsNamedClick(TEXT("DefaultButton"));
+    TestEqual(TEXT("Chat defaults leave character options alone"),Session.CharacterOptions1,Original^0x80u);
+
+    Binder->SyncOptionsPanelTab(TEXT("ConfigPage"));Draw(TEXT("RetailConfigOptions"));
+    auto* Video=Cast<UACEVideoSettingsWidget>(Binder->VideoSettings);
+    auto* Face=Video?Cast<UComboBoxString>(Video->WidgetTree->FindWidget(TEXT("ChatFontFace"))):nullptr;
+    auto* FontSize=Video?Cast<UComboBoxString>(Video->WidgetTree->FindWidget(TEXT("ChatFontSize"))):nullptr;
+    if(TestNotNull(TEXT("Retail chat font face control"),Face) && TestNotNull(TEXT("Retail chat font size control"),FontSize))
+    {
+        TestEqual(TEXT("All five retail font faces"),Face->GetOptionCount(),5);TestEqual(TEXT("All five retail font sizes"),FontSize->GetOptionCount(),5);
+        Binder->AppendChatLineToLog(0,TEXT("Existing text changes font and wraps without losing its copy selection."),FLinearColor::White,FString());
+        auto* Log=Binder->GetChatLogWidget(0);auto* Row=Cast<UACERetailTextBlock>(Log->GetChildAt(Log->GetChildrenCount()-1));
+        for(int32 F=0;F<5;++F)for(int32 Size=0;Size<5;++Size)
+        {
+            Face->SetSelectedIndex(F);FontSize->SetSelectedIndex(Size);Video->ApplyInterfaceOptions();Binder->RefreshChatRowLayout(0);
+            const auto* Font=Row->GetBitmapFont();
+            TestTrue(TEXT("Every chosen face/size resolves a real retail atlas"),Font && Font->Id==ACERuntimeOptions::ChatFontId());
+            TestTrue(TEXT("Changing fonts preserves selectable chat"),Row->IsSelectable());
+        }
+        Face->SetSelectedIndex(3);FontSize->SetSelectedIndex(4);Video->ApplyInterfaceOptions();
+        Video->ResetVideo();TestEqual(TEXT("Reset retains applied Tahoma"),Face->GetSelectedIndex(),3);
+        TestEqual(TEXT("Reset retains applied extra large size"),FontSize->GetSelectedIndex(),4);
+        Draw(TEXT("ChatFontExtraLarge"));
+        Video->DefaultsVideo();Video->ApplyInterfaceOptions();Binder->RefreshChatRowLayout(0);
+        TestEqual(TEXT("Defaults restore original retail chat font"),Row->GetBitmapFont()->Id,0x40000000u);
+    }
 
     // Resizing, wheel, arrow buttons, thumb dragging and row identity use the real DAT tree.
     Binder->ShowPanelPage(TEXT("SkillManagementPanel_Field")); Binder->SyncSkillPanelTab(TEXT("AttributePage"));

@@ -24,6 +24,8 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "VR") float WristSmoothing = .07f;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bPinMenuToView = false;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bPinHotbarToView = false;
+	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bShowWristSpellBar = true;
+	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bShowCompass = true;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bPinVitalsToView = true;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bPinChatToView = false;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bVitalsLocked = true;

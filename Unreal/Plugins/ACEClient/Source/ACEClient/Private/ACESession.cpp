@@ -79,6 +79,7 @@ void FACESession::Disconnect()
 {
 	Confirmations.Reset();
 	LastServerPacketAt = 0.0;
+	LastServerDatagramAt = LastReceivePortKeepaliveAt = 0.0;
 	LoginRequestAt = 0.0;
 	bRecoverLostConnection = false;
 	PreHandshakeDatagrams.Reset();
@@ -391,7 +392,13 @@ void FACESession::Tick(float DeltaSeconds)
 	if (bRecoverLostConnection || HasConnectionTimedOut(FPlatformTime::Seconds()))
 	{
 		const FACELoginCredentials RetryCredentials = Creds;
-		Log(TEXT("Connection lost. Reconnecting to character selection."));
+		const double Now = FPlatformTime::Seconds();
+		Log(FString::Printf(TEXT("Connection lost (%s): authenticated silence=%.1fs, datagram silence=%.1fs, receive-port keepalive age=%.1fs, server sequence=%u, next client sequence=%u, reordered=%d, cached=%d. Reconnecting to character selection."),
+			bRecoverLostConnection ? *ConnectionError : TEXT("receive timeout"),
+			LastServerPacketAt > 0 ? Now-LastServerPacketAt : -1.0,
+			LastServerDatagramAt > 0 ? Now-LastServerDatagramAt : -1.0,
+			LastReceivePortKeepaliveAt > 0 ? Now-LastReceivePortKeepaliveAt : -1.0,
+			LastReceivedPacketSequence, NextPacketSequence, OutOfOrderS2CPackets.Num(), CachedC2SPackets.Num()));
 		Connect(RetryCredentials);
 		return;
 	}
@@ -428,6 +435,7 @@ void FACESession::Tick(float DeltaSeconds)
 	}
 
 	PollSockets();
+	MaintainReceivePort(FPlatformTime::Seconds());
 	if (State == EACESessionState::AwaitConnectRequest && LoginRequestAt > 0.0 && FPlatformTime::Seconds() - LoginRequestAt > 20.0)
 	{
 		ConnectionError = TEXT("The server did not respond. Check the server address and try connecting again.");
@@ -519,7 +527,10 @@ void FACESession::PollSockets()
 			// we contacted, not an unrelated sender on this ephemeral UDP socket.
 			if ((ServerC2SAddr.IsValid() && *FromAddr == *ServerC2SAddr)
 				|| (ServerS2CAddr.IsValid() && *FromAddr == *ServerS2CAddr))
+			{
+				LastServerDatagramAt = FPlatformTime::Seconds();
 				HandleDatagram(Buffer, BytesRead, bS2C);
+			}
 			// Leave the remainder queued in the socket in its original order.
 			// Continuous traffic must not monopolize an entire game frame.
 			if (++Packets >= MaxPackets || (Budget > 0 && FPlatformTime::Seconds() - Start >= Budget)) break;
@@ -1138,7 +1149,24 @@ void FACESession::SendConnectResponse()
 	// GDLE routes the acknowledgement by its assigned recipient ID. ACE instead
 	// resolves the cookie on port+1 and expects the existing zero-ID response.
 	SendRawPacket(EACEPacketHeaderFlags::ConnectResponse, Body.GetData(), {}, true, false, Creds.bGDLE ? ClientId : 0);
+	LastReceivePortKeepaliveAt = FPlatformTime::Seconds();
 	Log(TEXT("ConnectResponse sent on port+1"));
+}
+
+void FACESession::MaintainReceivePort(double Now)
+{
+	if (State < EACESessionState::CharacterSelect || State > EACESessionState::InWorld
+		|| !SocketS2C || !ServerS2CAddr.IsValid() || LastReceivePortKeepaliveAt <= 0.0
+		|| Now - LastReceivePortKeepaliveAt < 110.0) return;
+	// Retail ClientFlowQueue::IncrementLocalInterval sends CICMD cmdNOP=1,
+	// Param=0 from the receive socket to server port+1. Echo/ACK on port+0
+	// cannot refresh this separate NAT mapping. ACE accepts this header on
+	// listener 1 with ID zero; it must not consume gameplay sequence/ISAAC state.
+	FACEBinaryWriter Body;
+	Body.WriteUInt32(1); Body.WriteUInt32(0);
+	SendRawPacket(EACEPacketHeaderFlags::CICMDCommand, Body.GetData(), {}, true, false, 0);
+	LastReceivePortKeepaliveAt = Now;
+	UE_LOG(LogTemp, Verbose, TEXT("ACE: receive-port keepalive sent"));
 }
 
 uint16 FACESession::PacketIntervalAt(double Now) const
@@ -1190,7 +1218,7 @@ void FACESession::SendRawPacket(
 	// Mirror ACE.Server FlushPackets: only exact AckSequence (no other flags) or NAK
 	// reuse CurrentValue without consuming a sequence slot.
 	if (EnumHasAnyFlags(Flags, EACEPacketHeaderFlags::LoginRequest) ||
-		EnumHasAnyFlags(Flags, EACEPacketHeaderFlags::ConnectResponse))
+		EnumHasAnyFlags(Flags, EACEPacketHeaderFlags::ConnectResponse | EACEPacketHeaderFlags::CICMDCommand))
 	{
 		Sequence = 0;
 	}
@@ -1203,8 +1231,9 @@ void FACESession::SendRawPacket(
 		Sequence = NextPacketSequence++;
 	}
 
-	const uint16 Time = PacketIntervalAt(FPlatformTime::Seconds());
-	constexpr uint16 Iteration = 1;
+	const bool bConnectionless = Flags == EACEPacketHeaderFlags::CICMDCommand;
+	const uint16 Time = bConnectionless ? 0 : PacketIntervalAt(FPlatformTime::Seconds());
+	const uint16 Iteration = bConnectionless ? 0 : 1;
 
 	TArray<uint8> Packet;
 	Packet.SetNumZeroed(PacketHeaderSize);
@@ -3947,6 +3976,41 @@ void FACESession::SendPutItemInContainer(int32 ItemGuid, int32 ContainerGuid, in
 	// Placement is an insertion index, never a sparse grid address (IDList::AddAtNum).
 	if (const FACEWorldObject* Item = WorldObjects.Find(ItemGuid))
 	{
+		auto IsInContainer = [&](const FACEWorldObject& Object, int32 Root)
+		{
+			int32 Owner = Object.ContainerId;
+			for (int32 Depth = 0; Owner && Depth < 32; ++Depth)
+			{
+				if (Owner == Root) return true;
+				const auto* Parent = WorldObjects.Find(Owner);
+				Owner = Parent ? Parent->ContainerId : 0;
+			}
+			return false;
+		};
+		const auto* Destination = WorldObjects.Find(ContainerGuid);
+		const bool OwnedDestination = ContainerGuid == PlayerGuid || (Destination && IsInContainer(*Destination, PlayerGuid));
+		// ItemHolder::AttemptAutoMerge searches the destination and its packs for
+		// a same-WCID stack that can hold the entire pickup. Preserve deliberate
+		// rearrangement of already-owned stacks and wait for server inventory ACKs.
+		if (OwnedDestination && !IsInContainer(*Item, PlayerGuid) && Item->WielderId == 0
+			&& Item->CurrentWieldedLocation == 0 && Item->MaxStackSize > 1 && Item->StackSize >= 0
+			&& Item->WeenieClassId != 0 && !TradeSelfItems.Contains(ItemGuid) && !TradePartnerItems.Contains(ItemGuid))
+		{
+			// Retail GetObjectSplitSize treats an omitted/zero count as one item.
+			const int32 PickupCount = FMath::Max(1, Item->StackSize);
+			int32 MergeTo = 0;
+			for (const auto& Pair : WorldObjects)
+			{
+				const auto& Other = Pair.Value;
+				if (Other.Guid == ItemGuid || !IsInContainer(Other, ContainerGuid)
+					|| Other.WielderId || Other.ParentGuid || Other.CurrentWieldedLocation
+					|| Other.WeenieClassId != Item->WeenieClassId || Other.MaxStackSize <= 1
+					|| Other.StackSize < 0 || Other.MaxStackSize - FMath::Max(1, Other.StackSize) < PickupCount
+					|| TradeSelfItems.Contains(Other.Guid) || TradePartnerItems.Contains(Other.Guid)) continue;
+				if (!MergeTo || uint32(Other.Guid) < uint32(MergeTo)) MergeTo = Other.Guid;
+			}
+			if (MergeTo) { SendStackableMerge(ItemGuid, MergeTo, PickupCount); return; }
+		}
 		int32 Count = 0;
 		for (const auto& Pair : WorldObjects)
 		{

@@ -40,7 +40,7 @@ bool FACEFortTethStairsTest::RunTest(const FString&)
  auto* Host=World->SpawnActor<AActor>();auto* Terrain=NewObject<UACETerrainPresenterComponent>(Host);
  Terrain->Client=Client;Terrain->bHasKnownCell=true;
  TArray<AACEEnvCellActor*> Rooms;
- for(uint32 Block:{0x26810000u,0x25810000u})
+ for(uint32 Block:{0x26810000u,0x25810000u,0xE4540000u})
  {
   const FVector Origin=FACEPosition::AceVectorToUnreal(FVector((Block>>24)*192,((Block>>16)&255)*192,0),100);
   FACEDatLandblockInfo Info;if(!Dat->LoadLandblockInfo(Block,Info))return false;
@@ -104,6 +104,53 @@ bool FACEFortTethStairsTest::RunTest(const FString&)
   if(ACECellTransit::IsIndoorCell(Terrain->LastKnownCellId))Terrain->UpdateBuildingVisibility();
   else Terrain->UpdateOutdoorEnvCollision();
  };
+ // Compare the complete authored collision with runtime residency around the
+ // reported walls. A drawable wall must not become passable at a cell boundary.
+ for(const auto& Entry:TArray<TPair<uint32,FVector>>{
+  {0x25810019,FVector(85.270020,23.521484,220)},
+  {0xE454000E,FVector(40.824219,131.324219,6)},
+  {0xE454001E,FVector(83.945312,125.347656,6)},
+  {0xE454001E,FVector(79.019531,132.884766,14.8)}})
+ {
+  FACEPosition Pose;Pose.CellId=Entry.Key;Pose.Location=Entry.Value;Place(Pose);
+  const FVector Center=Pose.ToUnrealLocation(100)+FVector(0,0,Half);
+  FCollisionQueryParams Query(NAME_None,true,Pawn);
+  for(auto* Room:Rooms)Room->SetEnvCellCollisionActive(true);
+  for(const auto& Pair:Terrain->Spawned)if(Pair.Value)Pair.Value->SetBuildingShellsBlockPawn(true);
+  TArray<FHitResult> Reference;Reference.SetNum(24);
+  for(int I=0;I<24;++I)
+  {
+   const FVector D=FRotator(0,I*15,0).Vector()*400;
+   World->LineTraceSingleByChannel(Reference[I],Center,Center+D,ECC_Pawn,Query);
+  }
+  Refresh();int32 WallCount=0;
+  for(int I=0;I<24;++I)
+  {
+   const auto& Wall=Reference[I];if(!Wall.bBlockingHit || FMath::Abs(Wall.ImpactNormal.Z)>.3f)continue;
+   ++WallCount;FHitResult Actual;const FVector End=Center+FRotator(0,I*15,0).Vector()*400;
+   World->LineTraceSingleByChannel(Actual,Center,End,ECC_Pawn,Query);
+   TestTrue(*FString::Printf(TEXT("Wall remains resident %08X yaw=%d component=%s dist=%.1f actual=%.1f"),Entry.Key,I*15,*GetNameSafe(Wall.GetComponent()),Wall.Distance,Actual.Distance),Actual.bBlockingHit && Actual.Distance<=Wall.Distance+1);
+  }
+  AddInfo(FString::Printf(TEXT("Reported wall %08X %s exercised %d directions"),Entry.Key,*Entry.Value.ToString(),WallCount));
+  const FHitResult* Nearest=nullptr;
+  for(const auto& Wall:Reference)
+   if(Wall.bBlockingHit && FMath::Abs(Wall.ImpactNormal.Z)<.3f && (!Nearest || Wall.Distance<Nearest->Distance))Nearest=&Wall;
+  if(Nearest)for(bool Tracked:{false,true})
+  {
+   const FVector Direction=(Nearest->TraceEnd-Nearest->TraceStart).GetSafeNormal2D();
+   Pose.SetAceFacingFromUnrealDir2D(Direction);Place(Pose);VR->bActive=Tracked;
+   Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));
+   Controller->PlayerInput->ProcessInputStack({},1.f/30,false);
+   for(int Frame=0;Frame<20;++Frame)
+   {
+    VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,175-Half),Direction.Rotation());
+    VR->MoveStick=FVector2D(0,1);Refresh();Controller->PlayerTick(1.f/30);
+   }
+   const double WallSide=FVector::DotProduct(Pawn->GetActorLocation()-Nearest->ImpactPoint,Nearest->ImpactNormal);
+   TestTrue(*FString::Printf(TEXT("Actual movement cannot cross reported wall %08X tracked=%d side=%.1f"),Entry.Key,Tracked,WallSide),WallSide>=-.5);
+   Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},1.f/30,false);VR->MoveStick=FVector2D::ZeroVector;
+  }
+ }
  for(const auto& Entry:Entrances)for(bool Tracked:{false,true})for(float Dt:{1.f/90,1.f/30})
  {
   VR->bActive=Tracked;

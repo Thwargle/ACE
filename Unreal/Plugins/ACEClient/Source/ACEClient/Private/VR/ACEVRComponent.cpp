@@ -1,4 +1,5 @@
 #include "VR/ACEVRComponent.h"
+#include "ACEVRNativeHUD.h"
 #include "ACEClientBuild.h"
 #include "ACEVRUIStyle.h"
 #include "VR/ACEVRSettings.h"
@@ -132,7 +133,14 @@ void UACEVRComponent::ActivateRig()
 	SettingsPanel = Panel(TEXT("VRSettingsPanel"), VisualRoot, FVector2D(720, 1000));
 	// Smoothed UI has its own transform, outside controller render-thread late update.
 	WristPanel = Panel(TEXT("VRLeftWristSpells"), VisualRoot, FVector2D(500, 100));
-	VitalsPanel = Panel(TEXT("VRPinnedVitals"), VisualRoot, FVector2D(300, 100));
+	VitalsPanel = Panel(TEXT("VRPinnedVitals"), VisualRoot, FVector2D(480, 240));
+	CompassPanel = Panel(TEXT("VRCompass"), Head, FVector2D(400, 460));
+	CompassPanel->SetManuallyRedraw(true); CompassPanel->SetCastShadow(false);
+	CompassPanel->SetTranslucentSortPriority(10);
+	CompassPanel->SetRelativeLocationAndRotation(FVector(110,38,-16),FRotator(0,180,0));
+	CompassPanel->SetRelativeScale3D(FVector(.065f));
+	CompassPanel->SetSlateWidget(SAssignNew(NativeCompass,SACEVRCompass).OnSelect([Weak=TWeakObjectPtr<UACEClientSubsystem>(Client)](int32 Guid)
+		{if(Weak.IsValid())Weak->SelectObject(Guid);}));
 	ChatPanel = Panel(TEXT("VRPinnedChat"), VisualRoot, FVector2D(500, 200));
 	JumpPanel = Panel(TEXT("VRJumpCharge"), Head, FVector2D(300, 50));
 	KeyboardPanel = Panel(TEXT("VRKeyboard"), VisualRoot, FVector2D(1200, 400));
@@ -166,7 +174,8 @@ void UACEVRComponent::ActivateRig()
 	SettingsPanel->SetWidget(MenuWidget);
 	WristWidget = CreateWidget<UACEVRWidget>(PC); WristWidget->VR = this; WristWidget->bWrist = true;
 	WristRetail = CreateWidget<UACEVRRetailSurface>(PC); WristRetail->SetStatusSource(this); WristPanel->SetWidget(WristRetail);
-	VitalsRetail = CreateWidget<UACEVRRetailSurface>(PC); VitalsRetail->SetVitalsSource(this); VitalsPanel->SetWidget(VitalsRetail);
+	VitalsPanel->SetSlateWidget(SAssignNew(NativeVitals,SACEVRVitals).Rig(this));
+	VitalsPanel->SetManuallyRedraw(true); VitalsPanel->SetCastShadow(false);
 	ChatRetail = CreateWidget<UACEVRRetailSurface>(PC); ChatPanel->SetWidget(ChatRetail);
 	JumpRetail = CreateWidget<UACEVRRetailSurface>(PC); JumpPanel->SetWidget(JumpRetail);
 	if (!UsesPlatformKeyboard())

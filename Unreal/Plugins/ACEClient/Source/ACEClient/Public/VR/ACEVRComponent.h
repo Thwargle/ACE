@@ -184,6 +184,11 @@ private:
 	void UpdateTrackingState(bool Tracked);
 	void BindInput();
 	void UpdatePanels(float Dt = 1.f / 90.f);
+	void UpdateNativeHUD(bool Available);
+	TSharedPtr<class SACEVRVitals> NativeVitals;
+	TSharedPtr<class SACEVRCompass> NativeCompass;
+	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> CompassPanel;
+	double NextNativeHUDUpdate = 0.;
 	void UpdateTextEntryFocus();
 	UWidget* TextEntryUnderPointer(UWidgetInteractionComponent* Pointer) const;
 	void UpdateVitalsDrag();
