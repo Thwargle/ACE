@@ -4,6 +4,8 @@
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
 #include "UI/ACEUILayoutResolver.h"
+#include "UI/ACEUIResourceResolver.h"
+#include "Dat/ACEDatTextLayout.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "ACEOpcodes.h"
@@ -163,6 +165,55 @@ bool UACEUIGameplayBinder::CanActivateFellowshipControl(const FString& Name) con
 	return false;
 }
 
+bool UACEUIGameplayBinder::CanActivateAllegianceControl(const FString& Name, int32 TargetGuid) const
+{
+	if (!Client) return false;
+	const auto Info=Client->GetAllegiance();
+	if (Name==TEXT("BreakButton")) return Info.PatronGuid!=0 && (!TargetGuid || TargetGuid==Info.PatronGuid);
+	if (Name==TEXT("KickButton"))
+		return Info.Vassals.ContainsByPredicate([&](const auto& V){return V.Guid==(TargetGuid ? TargetGuid : SelectedVassalGuid);});
+	if (Name!=TEXT("SwearButton") || Info.PatronGuid) return false;
+	const int32 Target=TargetGuid ? TargetGuid : LastSelection.bValid ? LastSelection.Guid : 0;
+	FACEWorldObject Player;
+	return Target && Target!=Client->GetPlayerGuid() && Target!=Info.MonarchGuid
+		&& Client->GetWorldObject(Target,Player) && Player.bIsPlayer
+		&& !Info.Vassals.ContainsByPredicate([&](const auto& V){return V.Guid==Target;});
+}
+
+void UACEUIGameplayBinder::ShowAllegianceConfirmation(const FString& Action)
+{
+	if (!CanActivateAllegianceControl(Action)) return;
+	const auto Info=Client->GetAllegiance();
+	PendingAllegianceAction=Action;
+	if (Action==TEXT("SwearButton"))
+	{
+		PendingAllegianceGuid=LastSelection.Guid;
+		FACEWorldObject Player; Client->GetWorldObject(PendingAllegianceGuid,Player);
+		PendingAllegiancePrompt=FString::Printf(TEXT("Are you sure you want to swear allegiance to %s?"),*Player.Name);
+	}
+	else if (Action==TEXT("BreakButton"))
+	{
+		PendingAllegianceGuid=Info.PatronGuid;
+		PendingAllegiancePrompt=FString::Printf(TEXT("Are you sure you want to break your allegiance to %s?"),*Info.PatronName);
+	}
+	else
+	{
+		PendingAllegianceGuid=SelectedVassalGuid;
+		const auto* V=Info.Vassals.FindByPredicate([&](const auto& Member){return Member.Guid==PendingAllegianceGuid;});
+		PendingAllegiancePrompt=FString::Printf(TEXT("Are you sure you want to break %s's allegiance to you?"),*V->Name);
+	}
+	RefreshServerConfirmation();
+}
+
+bool UACEUIGameplayBinder::ScrollAllegiance(float WheelDelta,FVector2D CanvasLocalPos)
+{
+	if (ActivePanelPage!=TEXT("SocialPanel_Field") || ActiveSocialTab!=TEXT("AllegiancePage") || !Manager || !Canvas) return false;
+	const auto List=Manager->FindElementUnder(TEXT("AllegiancePage"),TEXT("VassalsListBox"));
+	if (!Canvas->IsElementExposedAt(List,CanvasLocalPos)) return false;
+	VassalScrollOffset+=WheelDelta>0 ? -1 : 1;
+	RefreshAllegianceOverlays(); return true;
+}
+
 void UACEUIGameplayBinder::HandleFriendNameCommitted(const FText& Text, ETextCommit::Type CommitMethod)
 {
 	if (CommitMethod != ETextCommit::OnEnter && CommitMethod != ETextCommit::OnUserMovedFocus)
@@ -181,112 +232,17 @@ void UACEUIGameplayBinder::HandleFriendNameCommitted(const FText& Text, ETextCom
 	}
 }
 
-void UACEUIGameplayBinder::ReflowSocialPanelGeometry()
-{
-	if (!Manager || ActivePanelPage != TEXT("SocialPanel_Field"))
-	{
-		return;
-	}
-	TSharedPtr<FACEUIElement> Panel = Manager->FindElementByName(TEXT("SocialPanel_Field"));
-	if (!Panel.IsValid() || Panel->Height <= 0)
-	{
-		return;
-	}
-	const FString PageName = ActiveSocialTab.IsEmpty() ? TEXT("AllegiancePage") : ActiveSocialTab;
-	TSharedPtr<FACEUIElement> Page = Manager->FindElementUnder(TEXT("SocialPanel_Field"), PageName);
-	if (!Page.IsValid())
-	{
-		return;
-	}
-	constexpr int32 TabH = 25;
-	const int32 NewHeight = FMath::Max(120, Panel->Height - TabH);
-	const int32 HeightDelta = NewHeight - Page->Height;
-	if (PageName != TEXT("FellowshipPage") && HeightDelta != 0)
-	{
-		// UIElement::UpdateForParentSizeChange: list bottoms grow with the
-		// page, while both edges of footer controls follow its bottom edge.
-		for (const auto& Child : Page->Children)
-		{
-			if (!Child) continue;
-			if (Child->TopEdge == 2) Child->Y += HeightDelta;
-			else if (Child->BottomEdge == 1) Child->Height = FMath::Max(1, Child->Height + HeightDelta);
-			if (Child->ElementName.Contains(TEXT("Scrollbar"))) SyncDatScrollbar(Child, 0.f, 1.f);
-		}
-	}
-	Page->Y = TabH;
-	Page->Width = Panel->Width;
-	Page->Height = NewHeight;
-
-	if (PageName != TEXT("FellowshipPage"))
-	{
-		return;
-	}
-
-	// Authored fellowship chrome is ~600px tall; the floaty is ~362. Pin the member list
-	// and footer buttons inside the live page so Disband/Leader/etc. receive clicks.
-	auto FitFrame = [&](const FString& FrameName)
-	{
-		if (TSharedPtr<FACEUIElement> Frame = Manager->FindElementUnder(PageName, FrameName))
-		{
-			Frame->X = 0;
-			Frame->Y = 0;
-			Frame->Width = Page->Width;
-			Frame->Height = Page->Height;
-		}
-	};
-	FitFrame(TEXT("NotInAFellowshipFrame"));
-	FitFrame(TEXT("FellowshipFrame"));
-
-	constexpr int32 BtnH = 30;
-	constexpr int32 BtnGap = 3;
-	constexpr int32 FooterH = BtnH + BtnGap + BtnH + 4;
-	constexpr int32 ListTop = 22;
-	const int32 ListH = FMath::Max(48, Page->Height - ListTop - FooterH);
-	const int32 Row1Y = ListTop + ListH + 2;
-	const int32 Row2Y = Row1Y + BtnH + BtnGap;
-	const int32 ListW = FMath::Max(32, Page->Width - 29);
-
-	auto Place = [&](const FString& Name, int32 X, int32 Y, int32 W, int32 H)
-	{
-		if (TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(PageName, Name))
-		{
-			El->X = X;
-			El->Y = Y;
-			El->Width = W;
-			El->Height = H;
-		}
-	};
-	Place(TEXT("FellowshipName"), 0, 2, Page->Width, 18);
-	Place(TEXT("FellowsListBox"), 8, ListTop, ListW, ListH);
-	Place(TEXT("FellowsListBoxScrollbar"), 8 + ListW, ListTop, 16, ListH);
-
-	// Retail 3×2 footer: Leader / Quit / Open ; Recruit / Dismiss / Disband
-	constexpr int32 BtnW = 79;
-	constexpr int32 Col0 = 18;
-	constexpr int32 Col1 = 108;
-	constexpr int32 Col2 = 198;
-	Place(TEXT("FellowLeaderButton"), Col0, Row1Y, BtnW, BtnH);
-	Place(TEXT("FellowQuitButton"), Col1, Row1Y, BtnW, BtnH);
-	Place(TEXT("FellowOpenButton"), Col2, Row1Y, BtnW, BtnH);
-	Place(TEXT("FellowRecruitButton"), Col0, Row2Y, BtnW, BtnH);
-	Place(TEXT("FellowDismissButton"), Col1, Row2Y, BtnW, BtnH);
-	Place(TEXT("FellowDisbandButton"), Col2, Row2Y, BtnW, BtnH);
-
-	// Create-fellowship form: keep name row + create button inside the shorter frame.
-	if (TSharedPtr<FACEUIElement> CreateBtn =
-		Manager->FindElementUnder(PageName, TEXT("CreateFellowshipButton")))
-	{
-		const int32 CreateY = FMath::Clamp(CreateBtn->Y, 200, FMath::Max(200, Page->Height - CreateBtn->Height - 8));
-		CreateBtn->Y = CreateY;
-		CreateBtn->X = FMath::Max(8, (Page->Width - CreateBtn->Width) / 2);
-	}
-}
 
 void UACEUIGameplayBinder::SyncSocialPanelTab(const FString& PageName)
 {
 	if (!Manager)
 	{
 		return;
+	}
+	if (Client && ActiveSocialTab!=PageName)
+	{
+		if (ActiveSocialTab==TEXT("AllegiancePage")) Client->SendAllegianceUpdateRequest(false);
+		if (ActiveSocialTab==TEXT("FellowshipPage")) Client->SendFellowshipUpdateRequest(false);
 	}
 	ActiveSocialTab = PageName;
 	static const TCHAR* Pages[] = {
@@ -312,7 +268,6 @@ void UACEUIGameplayBinder::SyncSocialPanelTab(const FString& PageName)
 			Client->SendFellowshipUpdateRequest(true);
 		}
 	}
-	ReflowSocialPanelGeometry();
 	RefreshSocialOverlays();
 }
 
@@ -332,7 +287,6 @@ void UACEUIGameplayBinder::RefreshSocialOverlays()
 		return;
 	}
 	EnsureSocialEntryBoxes();
-	ReflowSocialPanelGeometry();
 	static const TPair<const TCHAR*, const TCHAR*> Tabs[] = {
 		{ TEXT("AllegianceTab"), TEXT("Allegiance") },
 		{ TEXT("FellowshipTab"), TEXT("Fellowship") },
@@ -401,11 +355,16 @@ void UACEUIGameplayBinder::RefreshAllegianceOverlays()
 		Hide(AllegiancePatronXPLabel);
 		for (UTextBlock* L : AllegianceCaptionLabels) { Hide(L); }
 		for (UTextBlock* R : VassalRows) { Hide(R); }
+		for (UTextBlock* R : VassalXPRows) { Hide(R); }
 		return;
 	}
 	EnsureOverlays();
 	constexpr int32 AllegianceZ = 100000;
 	const FACEAllegianceInfo Info = Client->GetAllegiance();
+	if (!Info.Vassals.ContainsByPredicate([&](const auto& V){return V.Guid==SelectedVassalGuid;})) SelectedVassalGuid=0;
+	for (const TCHAR* Name:{TEXT("SwearButton"),TEXT("BreakButton"),TEXT("KickButton")})
+		if (auto Button=Manager->FindElementUnder(TEXT("AllegiancePage"),Name))
+		{ Button->bActivatable=CanActivateAllegianceControl(Name); Button->bGhosted=!Button->bActivatable; }
 	auto Place = [&](TObjectPtr<UTextBlock>& Label, const FString& ElementName, const FString& Text, int32 Z)
 	{
 		if (!Label && Canvas->WidgetTree)
@@ -436,11 +395,18 @@ void UACEUIGameplayBinder::RefreshAllegianceOverlays()
 	{
 		ListEl = Manager->FindElementByName(TEXT("VassalsListBox"));
 	}
-	constexpr int32 MaxRows = 16;
+	constexpr int32 RowH=18;
+	VassalVisibleRows=ListEl ? FMath::Max(1,ListEl->Height/RowH) : 1;
+	const int32 MaxOffset=FMath::Max(0,Info.Vassals.Num()-VassalVisibleRows);
+	VassalScrollOffset=FMath::Clamp(VassalScrollOffset,0,MaxOffset);
+	SyncDatScrollbar(Manager->FindElementUnder(TEXT("AllegiancePage"),TEXT("VassalsListBoxScrollbar")),
+		MaxOffset ? float(VassalScrollOffset)/MaxOffset : 0.f, Info.Vassals.IsEmpty() ? 1.f : FMath::Min(1.f,float(VassalVisibleRows)/Info.Vassals.Num()));
+	const int32 MaxRows=FMath::Min(VassalVisibleRows,Info.Vassals.Num());
 	while (VassalRows.Num() < MaxRows && Canvas->WidgetTree)
 	{
 		UTextBlock* Row = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
 		VassalRows.Add(Row);
+		VassalXPRows.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
 	}
 	VassalRowGuids.SetNum(VassalRows.Num());
 	for (int32 i = 0; i < VassalRows.Num(); ++i)
@@ -450,26 +416,27 @@ void UACEUIGameplayBinder::RefreshAllegianceOverlays()
 		{
 			continue;
 		}
-		if (!ListEl.IsValid() || !Info.Vassals.IsValidIndex(i))
+		if (!ListEl.IsValid() || !Info.Vassals.IsValidIndex(i+VassalScrollOffset) || i>=VassalVisibleRows)
 		{
 			Row->SetVisibility(ESlateVisibility::Collapsed);
 			VassalRowGuids[i] = 0;
+			VassalXPRows[i]->SetVisibility(ESlateVisibility::Collapsed);
 			continue;
 		}
-		const FACEAllegianceMember& V = Info.Vassals[i];
+		const FACEAllegianceMember& V = Info.Vassals[i+VassalScrollOffset];
 		VassalRowGuids[i] = V.Guid;
 		const bool bSel = (V.Guid != 0 && V.Guid == SelectedVassalGuid);
-		const FString Line = FString::Printf(TEXT("%s  (L%d)  %s XP%s"),
-			*V.Name, V.Level, *FText::AsNumber(V.CPTithed).ToString(),
-			V.bOnline ? TEXT("") : TEXT("  [offline]"));
-		PlaceTextOnElement(Row, ListEl, Line, 9,
-			bSel ? SocialGold : (V.bOnline ? SocialWhite : SocialDim), AllegianceZ + 10 + i);
-		// PlaceTextOnElement centers on the full list box — pin rows under the list origin.
-		if (Row->GetVisibility() != ESlateVisibility::Collapsed)
-		{
-			Canvas->PlaceWidgetAtElement(Row, ListEl, AllegianceZ + 10 + i,
-				FMargin(4.f, static_cast<float>(2 + i * 14), 4.f, 2.f));
-		}
+		FString Line=FString::Printf(TEXT("%s (L%d)"),*V.Name,V.Level);
+		FACEDatFont Font;
+		if (Canvas->GetResourceResolver()->ResolveFont(0x40000000,Font)) Line=ACEDatText::Ellipsize(Font,Line,171);
+		const FLinearColor Color=bSel ? SocialGold : V.bOnline ? SocialWhite : SocialDim;
+		PlaceTextOnElement(Row,ListEl,Line,9,Color,AllegianceZ+10+i);
+		Canvas->PlaceWidgetAtElement(Row,ListEl,AllegianceZ+10+i,FMargin(4,i*RowH,ListEl->Width-175,ListEl->Height-(i+1)*RowH));
+		UTextBlock* XP=VassalXPRows[i];
+		PlaceTextOnElement(XP,ListEl,FText::AsNumber(V.CPTithed).ToString(),9,Color,AllegianceZ+10+i);
+		XP->SetJustification(ETextJustify::Right);
+		Canvas->PlaceWidgetAtElement(XP,ListEl,AllegianceZ+10+i,FMargin(179,i*RowH,4,ListEl->Height-(i+1)*RowH));
+
 	}
 
 	if (!AllegianceXPLabel && Canvas->WidgetTree)
@@ -543,7 +510,6 @@ void UACEUIGameplayBinder::RefreshFellowshipOverlays()
 	}
 	EnsureOverlays();
 	EnsureSocialEntryBoxes();
-	ReflowSocialPanelGeometry();
 	const FACEFellowshipInfo Info = Client->GetFellowship();
 	if(!Info.Members.ContainsByPredicate([&](const auto& M){return M.Guid==SelectedFellowGuid;}))SelectedFellowGuid=0;
 	for(const TCHAR* Name:{TEXT("CreateFellowshipButton"),TEXT("FellowQuitButton"),TEXT("FellowOpenButton"),TEXT("FellowDisbandButton"),TEXT("FellowLeaderButton"),TEXT("FellowDismissButton"),TEXT("FellowRecruitButton")})
@@ -630,7 +596,7 @@ void UACEUIGameplayBinder::RefreshFellowshipOverlays()
 	FellowVisibleRows=ListEl ? FMath::Max(1,ListEl->Height/RowH) : 1;
 	const int32 MaxOffset=FMath::Max(0,Info.Members.Num()-FellowVisibleRows);
 	FellowScrollOffset=FMath::Clamp(FellowScrollOffset,0,MaxOffset);
-	SyncDatScrollbar(Manager->FindElementUnder(TEXT("FellowshipPage"),TEXT("FellowsListBoxScrollbar")),MaxOffset?float(FellowScrollOffset)/MaxOffset:0);
+	SyncDatScrollbar(Manager->FindElementUnder(TEXT("FellowshipPage"),TEXT("FellowsListBoxScrollbar")),MaxOffset?float(FellowScrollOffset)/MaxOffset:0, Info.Members.IsEmpty()?1.f:FMath::Min(1.f,float(FellowVisibleRows)/Info.Members.Num()));
 	for (int32 i = 0; i < FellowRows.Num(); ++i)
 	{
 		UTextBlock* Row = FellowRows[i];
@@ -818,6 +784,12 @@ void UACEUIGameplayBinder::RefreshSocialButtonLabels()
 	// Element name → caption. Only elements on the visible page resolve; the rest collapse.
 	// bCentered separates DAT buttons (centered caption) from static text labels.
 	struct FSocialCaption { const TCHAR* Element; const TCHAR* Text; bool bCentered; };
+	if (!bLoadedSocialStrings && Canvas->GetResourceResolver())
+		if (const auto* Dat=Canvas->GetResourceResolver()->GetDatSubsystem())
+		{
+			bLoadedSocialStrings = true;
+			SocialStrings.LoadStrings(Dat->GetDatDirectory(), 0x23000001);
+		}
 	static const FSocialCaption Labels[] = {
 		{ TEXT("SwearButton"), TEXT("Swear Allegiance"), true },
 		{ TEXT("BreakButton"), TEXT("Break Allegiance"), true },
@@ -837,6 +809,8 @@ void UACEUIGameplayBinder::RefreshSocialButtonLabels()
 		{ TEXT("SquelchAccountButton"), TEXT("Squelch Account"), true },
 		{ TEXT("SquelchLabel"), TEXT("Squelched Characters"), false },
 		{ TEXT("SquelchNameLabel"), TEXT("Name:"), false },
+		{ TEXT("FellowNameLabel"), TEXT("Name"), false },
+		{ TEXT("FellowStatsLabel"), TEXT("Stats"), false },
 		{ TEXT("MonarchLabel"), TEXT("Monarch:"), false },
 		{ TEXT("PatronLabel"), TEXT("Patron:"), false },
 	};
@@ -856,7 +830,9 @@ void UACEUIGameplayBinder::RefreshSocialButtonLabels()
 			{
 				El = Manager->FindElementByName(Labels[i].Element);
 			}
-			const FString Caption=FString(Labels[i].Element)==TEXT("FellowOpenButton") && Client && Client->GetFellowship().bOpen ? TEXT("Close") : Labels[i].Text;
+			FString Caption=El ? SocialStrings.Strings.FindRef(El->TextEntryId) : FString();
+			if (Caption.IsEmpty()) Caption=Labels[i].Text;
+			if (FString(Labels[i].Element)==TEXT("FellowOpenButton") && Client && Client->GetFellowship().bOpen) Caption=TEXT("Close");
 			PlaceTextOnElement(L, El, Caption, 8,
 				Labels[i].bCentered ? SocialWhite : SocialGold,
 				SocialOverlayZ + 20, Labels[i].bCentered);
@@ -916,8 +892,8 @@ void UACEUIGameplayBinder::RefreshSocialButtonLabels()
 		if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Icon->Slot))
 		{
 			Slot->SetAnchors(FAnchors(0.f, 0.f));
-			Slot->SetPosition(FVector2D(static_cast<float>(O.X), static_cast<float>(O.Y + 1)));
-			Slot->SetSize(FVector2D(13.f, 13.f));
+			Slot->SetPosition(Canvas->LayoutToViewport(FVector2D(O.X, O.Y + 1)));
+			Slot->SetSize(FVector2D(13.f, 13.f)*Canvas->GetLastScale2D());
 			Canvas->SetOverlayOrder(Icon, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), SocialOverlayZ + 21);
 		}
 		if (Text)
@@ -967,19 +943,7 @@ void UACEUIGameplayBinder::RefreshQuestOverlays()
 			for (UTextBlock* R:QuestDetailLabels) if (R) R->SetVisibility(ESlateVisibility::Collapsed);
 			RefreshJournalOverlays(); return;
 		}
-		if (const auto Page = Manager->FindElementUnder(TEXT("QuestManagementPanel_Field"), TEXT("ContractsPage")))
-		{
-			const int32 NewHeight = FMath::Max(337, Panel->Height - 25);
-			const int32 Delta = NewHeight - Page->Height;
-			for (const auto& Child : Page->Children)
-			{
-				if (!Child) continue;
-				if (Child->TopEdge == 2) Child->Y += Delta;
-				else if (Child->BottomEdge == 1) Child->Height = FMath::Max(1, Child->Height + Delta);
-			}
-			Page->Y = 25;
-			Page->Height = NewHeight;
-		}
+
 	}
 	UACEDatSubsystem* Dat = nullptr;
 	if (PlayerController)

@@ -830,13 +830,11 @@ void UACEUIGameplayBinder::TickRefresh()
 	SyncInventoryScrollbars();
 	if (ActivePanelPage == TEXT("SkillManagementPanel_Field"))
 	{
-		ReflowSkillManagementPanelGeometry();
 		SyncStatListScrollbar();
 	}
 	if (ActivePanelPage == TEXT("SpellManagementPanel_Field")
 		&& ActiveSpellPanelTab == TEXT("SpellbookPage"))
 	{
-		ReflowSpellbookPanelGeometry();
 		SyncSpellbookScrollbar();
 	}
 }
@@ -871,6 +869,8 @@ void UACEUIGameplayBinder::OnElementActivated(TSharedPtr<FACEUIElement> Element)
 		int32 FloatyChatIdx = 0;
 		for (TSharedPtr<FACEUIElement> A = Cur; A.IsValid(); A = A->Parent.Pin())
 		{
+			if(A->ElementName==TEXT("VassalsListBoxScrollbar"))
+			{VassalScrollOffset+=Dir;RefreshAllegianceOverlays();return;}
 			if(A->ElementName==TEXT("FellowsListBoxScrollbar"))
 			{FellowScrollOffset+=Dir;RefreshFellowshipOverlays();return;}
 			if(A->ElementName==TEXT("KeyboardMappingScrollbar"))
@@ -1218,15 +1218,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 	}
 	if (Name == TEXT("KickButton"))
 	{
-		// Retail: breaking a vassal's allegiance removes them from your tree.
-		if (Client && SelectedVassalGuid != 0)
-		{
-			Client->SendBreakAllegiance(SelectedVassalGuid);
-		}
-		else
-		{
-			PostInventorySystemMessage(TEXT("Select a vassal to remove."));
-		}
+		ShowAllegianceConfirmation(Name);
 		return true;
 	}
 	if (Name == TEXT("TellButton"))
@@ -1377,27 +1369,12 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 	}
 	if (Name == TEXT("SwearButton"))
 	{
-		if (Client && LastSelection.bValid && LastSelection.Guid != 0)
-		{
-			Client->SendSwearAllegiance(LastSelection.Guid);
-		}
-		else
-		{
-			PostInventorySystemMessage(TEXT("Select a player to swear allegiance to."));
-		}
+		ShowAllegianceConfirmation(Name);
 		return true;
 	}
 	if (Name == TEXT("BreakButton"))
 	{
-		if (Client)
-		{
-			const FACEAllegianceInfo Info = Client->GetAllegiance();
-			const int32 Target = Info.PatronGuid != 0 ? Info.PatronGuid : Info.MonarchGuid;
-			if (Target != 0)
-			{
-				Client->SendBreakAllegiance(Target);
-			}
-		}
+		ShowAllegianceConfirmation(Name);
 		return true;
 	}
 	if (Name == TEXT("CloseSalvagePanelButton"))
@@ -2504,7 +2481,6 @@ void UACEUIGameplayBinder::SyncSpellPanelTab(const FString& PageName)
 	ApplyPanelTabChrome(TEXT("SpellComponentTab"), PageName == TEXT("SpellComponentPage"));
 	if (PageName == TEXT("SpellbookPage"))
 	{
-		ReflowSpellbookPanelGeometry();
 	}
 	// Always sync so filter overlays collapse when leaving Spellbook (Components tab).
 	SyncSpellbookFilterCheckboxes();
@@ -5459,7 +5435,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 				{
 					continue;
 				}
-				if (Canvas->IsWidgetExposedAt(Row, Absolute))
+				if (Canvas->IsWidgetExposedAt(Row, Absolute) || (VassalXPRows.IsValidIndex(i) && Canvas->IsWidgetExposedAt(VassalXPRows[i],Absolute)))
 				{
 					SelectedVassalGuid = VassalRowGuids[i];
 					RefreshAllegianceOverlays();
@@ -6141,6 +6117,7 @@ void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Sele
 	const int32 PreviousStackAmount = SelectedStackAmount;
 	LastSelection = Selection;
 	if(ActivePanelPage==TEXT("SocialPanel_Field") && ActiveSocialTab==TEXT("FellowshipPage"))RefreshFellowshipOverlays();
+	if(ActivePanelPage==TEXT("SocialPanel_Field") && ActiveSocialTab==TEXT("AllegiancePage"))RefreshAllegianceOverlays();
 	SelectedStackAmount = 1;
 	SelectedStackMax = 1;
 	if (Client && Selection.bValid && Selection.Guid != 0)
@@ -6944,129 +6921,7 @@ void UACEUIGameplayBinder::ReflowInventoryPanelGeometry()
 	}
 }
 
-void UACEUIGameplayBinder::ReflowSkillManagementPanelGeometry()
-{
-	if (!Manager || ActivePanelPage != TEXT("SkillManagementPanel_Field"))
-	{
-		return;
-	}
-	TSharedPtr<FACEUIElement> Panel = Manager->FindElementByName(TEXT("SkillManagementPanel_Field"));
-	if (!Panel.IsValid() || Panel->Height <= 0)
-	{
-		return;
-	}
-	const FString PageName = ActiveSkillTab.IsEmpty() ? TEXT("AttributePage") : ActiveSkillTab;
-	TSharedPtr<FACEUIElement> Page = Manager->FindElementUnder(
-		TEXT("SkillManagementPanel_Field"), PageName);
-	if (!Page.IsValid())
-	{
-		return;
-	}
-	// Tabs occupy the top 25px; grow the active page to fill the floaty.
-	constexpr int32 TabH = 25;
-	Page->Y = TabH;
-	Page->EdgeAnchorY = 0; Page->RecomputeLayoutOffset();
-	Page->Height = FMath::Max(200, Panel->Height - TabH);
 
-	TSharedPtr<FACEUIElement> Field;
-	if (PageName == TEXT("AttributePage") || PageName == TEXT("SkillPage"))
-	{
-		Field = Manager->FindElementUnder(PageName, TEXT("SkillManagement_Attribute_Field"));
-		if (!Field.IsValid())
-		{
-			Field = Manager->FindElementUnder(PageName, TEXT("SkillManagement_Skill_Field"));
-		}
-	}
-	else if (PageName == TEXT("CharacterTitlePage"))
-	{
-		Field = Manager->FindElementUnder(PageName, TEXT("CharacterTitle_Field"));
-		if (!Field.IsValid())
-		{
-			Field = Page;
-		}
-	}
-	if (!Field.IsValid())
-	{
-		Field = Page;
-	}
-	Field->Height = Page->Height;
-	Field->Width = Page->Width;
-
-	constexpr int32 HeaderH = 110;
-	constexpr int32 DividerH = 7;
-	constexpr int32 FooterH = 55;
-	const int32 ListY = HeaderH + DividerH;
-	const int32 ListH = FMath::Max(48, Field->Height - ListY - DividerH - FooterH);
-	const int32 FooterY = ListY + ListH + DividerH;
-
-	auto StretchUnder = [&](const FString& Name, int32 X, int32 Y, int32 W, int32 H)
-	{
-		if (TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(PageName, Name))
-		{
-			El->X = X;
-			El->Y = Y;
-			El->Width = W;
-			El->Height = H;
-		}
-	};
-	StretchUnder(TEXT("StatManagement_List"), 0, ListY, Field->Width, ListH);
-	StretchUnder(TEXT("StatManagement_List_Scrollbar"), Field->Width - 19, ListY, 16, ListH);
-	StretchUnder(TEXT("StatManagement_Divider_Bottom"), 0, ListY + ListH, Field->Width, DividerH);
-	StretchUnder(TEXT("StatManagement_Footer_Default"), 0, FooterY, Field->Width, FooterH);
-	StretchUnder(TEXT("StatManagement_Footer_Text"), 0, FooterY, Field->Width, FooterH);
-	StretchUnder(TEXT("StatManagement_Footer_Meter"), 0, FooterY, Field->Width, FooterH);
-	if (PageName == TEXT("CharacterTitlePage"))
-	{
-		const int32 TitleListH = FMath::Max(32, Field->Height - 145);
-		StretchUnder(TEXT("CharacterTitle_CurrentDisplayLabel"), 8, 20, Field->Width - 30, 18);
-		StretchUnder(TEXT("CharacterTitle_CurrentDisplayText"), 8, 40, Field->Width - 30, 18);
-		StretchUnder(TEXT("CharacterTitle_Spacer1"), 0, 60, Field->Width, 9);
-		StretchUnder(TEXT("CharacterTitle_ListLabel"), 8, 70, Field->Width - 30, 18);
-		StretchUnder(TEXT("CharacterTitle_ListBox"), 8, 90, Field->Width - 30, TitleListH);
-		StretchUnder(TEXT("CharacterTitle_ListBox_Scrollbar"), Field->Width - 20, 90, 16, TitleListH);
-		StretchUnder(TEXT("CharacterTitle_Spacer2"), 0, 95 + TitleListH, Field->Width, 9);
-		StretchUnder(TEXT("CharacterTitle_SetAsDisplayButton"), (Field->Width - 200) / 2, 105 + TitleListH, 200, 32);
-	}
-}
-
-void UACEUIGameplayBinder::ReflowSpellbookPanelGeometry()
-{
-	if (!Manager || ActivePanelPage != TEXT("SpellManagementPanel_Field")
-		|| ActiveSpellPanelTab != TEXT("SpellbookPage"))
-	{
-		return;
-	}
-	TSharedPtr<FACEUIElement> Panel = Manager->FindElementByName(TEXT("SpellManagementPanel_Field"));
-	TSharedPtr<FACEUIElement> Page = Manager->FindElementByName(TEXT("SpellbookPage"));
-	if (!Panel.IsValid() || !Page.IsValid() || Panel->Height <= 0)
-	{
-		return;
-	}
-	constexpr int32 TabH = 25;
-	constexpr int32 FilterH = 113;
-	Page->Y = TabH;
-	Page->EdgeAnchorY = 0; Page->RecomputeLayoutOffset();
-	Page->Width = Panel->Width;
-	Page->Height = FMath::Max(FilterH + 48, Panel->Height - TabH);
-	const int32 ListH = FMath::Max(48, Page->Height - FilterH);
-	const int32 ListW = FMath::Max(32, Page->Width - 20);
-
-	auto Stretch = [&](const FString& Name, int32 X, int32 Y, int32 W, int32 H)
-	{
-		if (TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(TEXT("SpellbookPage"), Name))
-		{
-			El->EdgeAnchorX = El->EdgeAnchorY = 0;
-			El->X = X;
-			El->Y = Y;
-			El->Width = W;
-			El->Height = H;
-			El->RecomputeLayoutOffset();
-		}
-	};
-	Stretch(TEXT("SpellBook_SpellList"), 0, 0, ListW, ListH);
-	Stretch(TEXT("SpellBook_SpellList_Scrollbar"), ListW, 0, 16, ListH);
-	Stretch(TEXT("FilterBox"), 0, ListH, Page->Width, FilterH);
-}
 
 void UACEUIGameplayBinder::SyncSpellbookScrollbar()
 {
@@ -8054,7 +7909,6 @@ void UACEUIGameplayBinder::RefreshAttributeOverlays()
 		return;
 	}
 	EnsureOverlays();
-	ReflowSkillManagementPanelGeometry();
 	if (!LastVitals.bValid && Client)
 	{
 		LastVitals = Client->GetPlayerVitals();
@@ -8369,7 +8223,6 @@ void UACEUIGameplayBinder::RefreshSkillOverlays()
 		return;
 	}
 	EnsureOverlays();
-	ReflowSkillManagementPanelGeometry();
 	if (!LastVitals.bValid)
 	{
 		LastVitals = Client->GetPlayerVitals();
@@ -8811,7 +8664,6 @@ void UACEUIGameplayBinder::RefreshTitleOverlays()
 		return;
 	}
 	EnsureOverlays();
-	ReflowSkillManagementPanelGeometry();
 	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(
 		TEXT("CharacterTitlePage"), TEXT("CharacterTitle_ListBox"));
 	if (!ListEl.IsValid())
@@ -9726,7 +9578,6 @@ void UACEUIGameplayBinder::RefreshSpellbookOverlays()
 		SpellbookFilteredCount = 0;
 		return;
 	}
-	ReflowSpellbookPanelGeometry();
 	SyncSpellbookFilterCheckboxes();
 	UACEDatSubsystem* Dat = nullptr;
 	if (PlayerController)
@@ -12999,6 +12850,9 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 		return true;
 	};
 
+	if (ActivePanelPage==TEXT("SocialPanel_Field") && ActiveSocialTab==TEXT("AllegiancePage") && Client)
+		if (TryBar(Manager->FindElementUnder(TEXT("AllegiancePage"),TEXT("VassalsListBoxScrollbar")),
+			EACEUIScrollTarget::Allegiance,FMath::Max(0,Client->GetAllegiance().Vassals.Num()-VassalVisibleRows),false)) return true;
 	if (ActivePanelPage == TEXT("SocialPanel_Field") && ActiveSocialTab == TEXT("FellowshipPage") && Client)
 		if (TryBar(Manager->FindElementUnder(TEXT("FellowshipPage"),TEXT("FellowsListBoxScrollbar")),
 			EACEUIScrollTarget::Fellowship,FMath::Max(0,Client->GetFellowship().Members.Num()-FellowVisibleRows),false)) return true;
@@ -13241,6 +13095,8 @@ void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D CanvasLocalPos)
 	{
 	case EACEUIScrollTarget::Components:
 		ComponentScrollOffset = Off; RefreshComponentOverlays(); break;
+	case EACEUIScrollTarget::Allegiance:
+		VassalScrollOffset=Off; RefreshAllegianceOverlays(); break;
 	case EACEUIScrollTarget::Fellowship:
 		FellowScrollOffset=Off;RefreshFellowshipOverlays();break;
 	case EACEUIScrollTarget::Keyboard:
@@ -15141,7 +14997,9 @@ bool UACEUIGameplayBinder::ScrollExternalContainer(float WheelDelta)
 void UACEUIGameplayBinder::RefreshServerConfirmation()
 {
 	const auto Session = Client ? Client->GetSession() : nullptr;
-	if (!Session || Session->GetConfirmations().IsEmpty())
+	if (!Session || Session->GetState()!=EACESessionState::InWorld)
+	{ PendingAllegianceAction.Reset(); PendingAllegiancePrompt.Reset(); PendingAllegianceGuid=0; }
+	if (!Session || (Session->GetConfirmations().IsEmpty() && !PendingAllegianceGuid))
 	{
 		if (ServerConfirmRoot) ServerConfirmRoot->bVisible = false;
 		for (UTextBlock* Label : ServerConfirmLabels) if (Label) Label->SetVisibility(ESlateVisibility::Collapsed);
@@ -15172,10 +15030,13 @@ void UACEUIGameplayBinder::RefreshServerConfirmation()
 			ServerConfirmLabels.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
 	}
 
-	const auto& Pending = Session->GetConfirmations()[0];
-	if (!ServerConfirmRoot->bVisible || ServerConfirmType != Pending.Type || ServerConfirmContext != Pending.Context || ServerConfirmPrompt != Pending.Prompt)
+	const bool bLocal=PendingAllegianceGuid!=0;
+	const uint32 PendingType=bLocal ? 0 : Session->GetConfirmations()[0].Type;
+	const uint32 PendingContext=bLocal ? uint32(PendingAllegianceGuid) : Session->GetConfirmations()[0].Context;
+	const FString PendingPrompt=bLocal ? PendingAllegiancePrompt : Session->GetConfirmations()[0].Prompt;
+	if (!ServerConfirmRoot->bVisible || ServerConfirmType != PendingType || ServerConfirmContext != PendingContext || ServerConfirmPrompt != PendingPrompt)
 	{
-		ServerConfirmType = Pending.Type; ServerConfirmContext = Pending.Context; ServerConfirmPrompt = Pending.Prompt;
+		ServerConfirmType = PendingType; ServerConfirmContext = PendingContext; ServerConfirmPrompt = PendingPrompt;
 		ServerConfirmRoot->bVisible = true;
 		const auto Body = Manager->FindElementByName(TEXT("ServerConfirmationBody"));
 		FACEDatFont Font;
@@ -15207,6 +15068,15 @@ void UACEUIGameplayBinder::RefreshServerConfirmation()
 
 void UACEUIGameplayBinder::FinishServerConfirmation(bool bAccept)
 {
-	if (Client) if (auto Session = Client->GetSession()) Session->RespondToConfirmation(ServerConfirmType, ServerConfirmContext, bAccept);
+	if (PendingAllegianceGuid)
+	{
+		if (bAccept && CanActivateAllegianceControl(PendingAllegianceAction,PendingAllegianceGuid))
+		{
+			if (PendingAllegianceAction==TEXT("SwearButton")) Client->SendSwearAllegiance(PendingAllegianceGuid);
+			else Client->SendBreakAllegiance(PendingAllegianceGuid);
+		}
+		PendingAllegianceGuid=0; PendingAllegianceAction.Reset(); PendingAllegiancePrompt.Reset();
+	}
+	else if (Client) if (auto Session = Client->GetSession()) Session->RespondToConfirmation(ServerConfirmType, ServerConfirmContext, bAccept);
 	RefreshServerConfirmation();
 }

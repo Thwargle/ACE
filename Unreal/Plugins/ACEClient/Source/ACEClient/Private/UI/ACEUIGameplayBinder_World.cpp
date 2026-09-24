@@ -185,7 +185,6 @@ void UACEUIGameplayBinder::RefreshWorldOverlays()
 	}
 
 	const int32 PanelW = FMath::Max(160, Panel->Width);
-	const int32 PanelH = FMath::Max(160, Panel->Height);
 	if (TSharedPtr<FACEUIElement> Close = Manager->FindElementUnder(TEXT("WorldPanel_Field"),
 		TEXT("CloseWorldPanelButton")))
 	{
@@ -220,9 +219,6 @@ void UACEUIGameplayBinder::RefreshWorldOverlays()
 		HideWorldOverlays();
 		return;
 	}
-	Page->Y = WorldTabHeight;
-	Page->Width = PanelW;
-	Page->Height = FMath::Max(80, PanelH - WorldTabHeight);
 
 	if (ActiveWorldTab == TEXT("MapPage"))
 	{
@@ -237,68 +233,10 @@ void UACEUIGameplayBinder::RefreshWorldOverlays()
 
 void UACEUIGameplayBinder::RefreshWorldMapPage(const TSharedPtr<FACEUIElement>& Page)
 {
-	const int32 PageW = Page->Width;
-	const int32 PageH = Page->Height;
-
-	// Stretch the book-page chrome that the layout authored at a fixed 300x600.
-	if (TSharedPtr<FACEUIElement> Bg = Manager->FindElementUnder(TEXT("MapPage"), TEXT("Background")))
-	{
-		Bg->Width = PageW;
-		Bg->Height = PageH;
-	}
-	if (TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(TEXT("MapPage"), TEXT("BookPaper_Top")))
-	{
-		El->Width = PageW;
-	}
-	if (TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(TEXT("MapPage"), TEXT("BookPaper_Left")))
-	{
-		El->Height = FMath::Max(0, PageH - 65);
-	}
-	if (TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(TEXT("MapPage"), TEXT("BookPage_Background")))
-	{
-		El->Width = FMath::Max(0, PageW - 43);
-		El->Height = FMath::Max(0, PageH - 65);
-	}
-	if (TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(TEXT("MapPage"), TEXT("BookPaper_Right")))
-	{
-		El->X = FMath::Max(0, PageW - 21);
-		El->Height = FMath::Max(0, PageH - 65);
-	}
-	if (TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(TEXT("MapPage"), TEXT("BookPaper_Bottom")))
-	{
-		El->Y = FMath::Max(0, PageH - 32);
-		El->Width = PageW;
-	}
-
-	TSharedPtr<FACEUIElement> Area = Manager->FindElementUnder(TEXT("MapPage"), TEXT("MapArea"));
-	TSharedPtr<FACEUIElement> Map = Manager->FindElementUnder(TEXT("MapPage"), TEXT("Map"));
-	if (!Area.IsValid() || !Map.IsValid())
-	{
-		return;
-	}
-	// Preserve the authored map aspect ratio, with date and coordinate labels outside it.
-	const int32 MapSize = FMath::Clamp(FMath::Min(PageW - 60, PageH - 130), 96, 1024);
-	Area->X = 0;
-	Area->Width = PageW;
-	Area->Height = FMath::RoundToInt(MapSize * 267.f / 257.f) + 70;
-	Area->Y = FMath::Max(36, (PageH - Area->Height) / 2);
-	Map->X = FMath::Max(0, (PageW - MapSize) / 2);
-	Map->Y = 36;
-	Map->Width = MapSize;
-	Map->Height = FMath::RoundToInt(MapSize * 267.f / 257.f);
-	if (TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(TEXT("MapPage"), TEXT("Map_DateTimeLabel")))
-	{
-		El->X = Map->X;
-		El->Y = 2;
-		El->Width = MapSize;
-	}
-	if (TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(TEXT("MapPage"), TEXT("Map_CoordinateLabel")))
-	{
-		El->X = Map->X;
-		El->Y = Map->Y + Map->Height + 2;
-		El->Width = MapSize;
-	}
-
+	const auto Map = Manager->FindElementUnder(TEXT("MapPage"), TEXT("Map"));
+	if (!Map) return;
+	// Retail keeps the map at its native size and centers its complete area.
+	// The parent-size reflow also anchors the paper and labels.
 	const FACEPosition Self = Client->GetPlayerPosition();
 	// Player pin — retail hides it when the character is off the surface map.
 	if (TSharedPtr<FACEUIElement> Pin = Manager->FindElementUnder(TEXT("MapPage"),

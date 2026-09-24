@@ -13,8 +13,8 @@ namespace ACEClientBuild
 	}
 	ACECLIENT_API void UpdateWindowTitle(UWorld* World, bool bVR = false);
 #if PLATFORM_ANDROID
-	inline constexpr const TCHAR* Version = TEXT("2026.09.24.quest.71");
+	inline constexpr const TCHAR* Version = TEXT("2026.09.24.quest.72");
 #else
-	inline constexpr const TCHAR* Version = TEXT("2026.09.24.77");
+	inline constexpr const TCHAR* Version = TEXT("2026.09.24.78");
 #endif
 }

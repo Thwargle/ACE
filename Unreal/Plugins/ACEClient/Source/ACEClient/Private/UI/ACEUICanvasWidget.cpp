@@ -245,7 +245,7 @@ void UACEUICanvasWidget::SetOverlayOrder(UWidget* Widget,
         Text->SetRetailElement(ResourceResolver, nullptr, FVector2D(LastScaleX, LastScaleY), 0, false);
     FOverlayOrder& Order = OverlayOrders.FindOrAdd(Widget);
     const auto Window = RetailWindow(OwnerElement);
-    Order.Owner = Window ? Window : OwnerElement;
+    Order.Owner = OwnerElement;
     Order.bGlobal = !OwnerElement;
     Order.LocalOrder = LocalOrder;
     const int32 Base = WindowPaintBase(Window);
@@ -267,12 +267,16 @@ bool UACEUICanvasWidget::IsWidgetExposedAt(const UWidget* Widget, FVector2D Abso
 bool UACEUICanvasWidget::IsElementExposedAt(const TSharedPtr<FACEUIElement>& Element, FVector2D CanvasLocal) const
 {
     if (!Element || !Manager) return false;
+    const FVector2D P=ViewportToLayout(CanvasLocal);
     for (auto Node=Element; Node; Node=Node->Parent.Pin())
+    {
         if (!Node->bVisible) return false;
+        if (!Node->Parent.IsValid()) continue; // Ownership-only synthetic root.
+        const FIntPoint O=Node->GetScreenOrigin();
+        if (P.X<O.X || P.Y<O.Y || P.X>=O.X+Node->Width || P.Y>=O.Y+Node->Height) return false;
+    }
     const auto Window=RetailWindow(Element);
     if (!Window) return true;
-    const FVector2D Scale=Manager->GetCanvasScale(GetCachedGeometry().GetLocalSize());
-    const FVector2D P=CanvasLocal / Scale;
     return Manager->FindWindowAtCanvas(FMath::FloorToInt(P.X),FMath::FloorToInt(P.Y)) == Window;
 }
 
@@ -954,6 +958,7 @@ FReply UACEUICanvasWidget::NativeOnMouseWheel(const FGeometry& InGeometry, const
 		const int32 ChatWindow=GameplayBinder->ChatWindowAtPointer(Local);
 		if(GameplayBinder->ScrollKeyboard(InMouseEvent.GetWheelDelta(),Local))return FReply::Handled();
 		if(GameplayBinder->ScrollFellowship(InMouseEvent.GetWheelDelta(),Local))return FReply::Handled();
+		if(GameplayBinder->ScrollAllegiance(InMouseEvent.GetWheelDelta(),Local))return FReply::Handled();
 		if (ChatWindow!=INDEX_NONE)
 		{
 			// Slate wheel delta: positive = scroll up content.

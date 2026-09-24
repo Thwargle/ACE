@@ -58,9 +58,11 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEEmoteTest;
 	friend class FACEUILayoutCommandsTest;
 	friend class FACEUIInteractionParityTest;
+	friend class FACEPanelResizeSocialTest;
 
 public:
 	bool ScrollFellowship(float WheelDelta, FVector2D CanvasLocalPos);
+	bool ScrollAllegiance(float WheelDelta, FVector2D CanvasLocalPos);
 	void Initialize(UACEClientSubsystem* InClient, UACEUIElementManager* InManager,
 		UACEUICanvasWidget* InCanvas, AACEPlayerController* InPC);
 	void Shutdown();
@@ -264,6 +266,7 @@ private:
 		StackSize,
 		Effects,
 		Fellowship,
+		Allegiance,
 		Keyboard,
 		EffectsInfo,
 		Chat,
@@ -931,6 +934,11 @@ private:
 	int32 SelectedFellowGuid = 0;
 	int32 SelectedFriendGuid = 0;
 	bool CanActivateFellowshipControl(const FString& Name) const;
+	bool CanActivateAllegianceControl(const FString& Name, int32 TargetGuid = 0) const;
+	void ShowAllegianceConfirmation(const FString& Action);
+	FString PendingAllegianceAction, PendingAllegiancePrompt;
+	int32 PendingAllegianceGuid = 0;
+	int32 VassalScrollOffset = 0, VassalVisibleRows = 1;
 	bool bSocialEntriesBound = false;
 	UPROPERTY()
 	TObjectPtr<UEditableTextBox> FellowshipNameEntry;
@@ -950,6 +958,9 @@ private:
 	TArray<int32> FriendRowGuids;
 	UPROPERTY()
 	TArray<TObjectPtr<UTextBlock>> VassalRows;
+	UPROPERTY() TArray<TObjectPtr<UTextBlock>> VassalXPRows;
+	FACECharacterCreation SocialStrings;
+	bool bLoadedSocialStrings = false;
 	UPROPERTY()
 	TArray<int32> VassalRowGuids;
 	UPROPERTY()
@@ -1273,11 +1284,8 @@ private:
 	/** Grow ThreeDItemsField / item list / pack list when FloatyPanel is taller than authored. */
 	void ReflowInventoryPanelGeometry();
 	/** Stretch StatManagement list/footer to fill the floaty panel height. */
-	void ReflowSkillManagementPanelGeometry();
 	/** Fit Social fellowship chrome (authored ~600px) into the floaty (~362px). */
-	void ReflowSocialPanelGeometry();
 	/** Stretch spell list / filter box to fill SpellManagementPanel. */
-	void ReflowSpellbookPanelGeometry();
 	void SyncSpellbookScrollbar();
 	void SyncSpellbookFilterCheckboxes();
 	bool ToggleSpellbookFilter(const FString& Name);

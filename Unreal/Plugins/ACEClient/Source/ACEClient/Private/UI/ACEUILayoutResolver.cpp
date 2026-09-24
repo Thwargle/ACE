@@ -370,6 +370,7 @@ namespace
 			{
 				Panel = Child;
 				Panel->Y -= 32; // Keep the inventory above the full two-row toolbar.
+				UACEUIElementManager::ApplyFloatyResizeLayout(Panel);
 			}
 		}
 		// MainChat is z=600; raise exam/panel so they are not buried under chat where they overlap.

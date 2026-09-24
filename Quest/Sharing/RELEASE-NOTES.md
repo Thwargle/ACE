@@ -1,33 +1,37 @@
-# AC:Unreal / AC:VR release 71
+# AC:Unreal / AC:VR release 72
 
-Native Quest: `2026.09.24.quest.71`, Android version code 71, installer revision 6.
-Windows desktop / PC VR: `2026.09.24.77`.
+Native Quest: `2026.09.24.quest.72`, Android version code 72, installer revision 6.
+Windows desktop / PC VR: `2026.09.24.78`.
 
-## Changes since v70
+## Changes since v71
 
-### Remote movement in desktop and VR
+### Resizable retail windows
 
-- Smooth heading and position corrections for remote players and creatures,
-  including move-to actions and velocity updates. Preserve facing while strafing
-  or jumping instead of automatically pointing the character along its velocity.
-- Follow nearby terrain, stairs, and streamed interior floors during grounded
-  movement, reducing horizontal movement above slopes followed by downward snaps.
-  Preserve airborne movement and keep indoor actors off outdoor terrain support.
-- Apply tracked VR root movement through one presentation path so the body,
-  hands, and held equipment remain aligned while the root is smoothed.
-  Reset interpolation across teleports and large position changes.
-- Report the actual mouse turn rate instead of maximum turning speed, and send
-  the stop when mouse turning ends. Reject stale or duplicate velocity packets
-  while correctly handling sequence wraparound.
+- Fix the shared panel resize calculation for allegiance, fellowship, attributes,
+  journal, map, and options. Lists grow with the panel and bottom controls stay
+  inside the frame when it is enlarged or reduced repeatedly.
+- Use the resolved retail layout and its minimum panel height. Remove duplicate
+  per-tab positioning that moved controls beyond the window after resizing.
+- Clip text and pointer hit regions to their actual parent panels, including
+  offset list rows, hidden tabs, and overlapping windows.
+- Retain the native map size, aspect ratio, paper frame, and centered placement.
 
-### Retail selection indicators and jump meter
+### Fellowship and allegiance
 
-- Use retail's selection sphere and original corner-arrow artwork. Place the
-  arrows outside the projected object bounds, honor UI scaling and screen margins,
-  and keep their placement correct when the camera is pitched.
-- Allow the jump progress bar to be dragged by its fill, label, or border while
-  the UI is unlocked. Retain its position through normal layout saving and
-  saveui/loadui, and preserve its fixed height and existing appearance.
+- Fix fellowship rows intercepting clicks anywhere in the panel. Recruit,
+  Open/Close, Make Leader, Dismiss, Quit, and Disband now receive their own clicks.
+- Preserve retail leader/member permissions and live server-backed state.
+- Add confirmation prompts for swearing allegiance, breaking with a patron,
+  and removing a vassal. Confirmations retain the selected target and check that
+  the action is still valid before sending it.
+- Enable allegiance controls only for eligible players, an actual patron, or
+  a selected current vassal. Stop the old fallback of breaking with the monarch.
+- Make the vassal list scrollable with wheel, arrows, and scrollbar dragging;
+  keep names and XP in separate columns and prevent row text overflowing.
+- Use retail's original social button captions and column labels; correct
+  checkbox placement when the canvas is scaled.
+
+These shared UI changes apply to desktop, PC VR, and standalone Quest.
 
 ## Install or update
 
@@ -59,14 +63,10 @@ Bundles contain no server, credentials, saved settings, SDK tools, or retail DAT
 
 ## Validation and limitations
 
-The packaged Windows client passed movement, radar artwork, UI layout, and
-rendered UI suites. Windows and Quest source builds also passed before packaging.
+Rendered UI and interaction automation covers repeated panel resizing, footer
+visibility, real pointer clicks, fellowship packet decoding and outgoing actions,
+allegiance confirmations, list selection, scrolling, and saved layouts.
 
-Eight relevant automation suites passed, covering movement, actor runtime,
-interior streaming, idle actor cost, VR pose buffering, retail radar artwork,
-UI layout persistence, and rendered UI screens. Movement checks include slopes
-at 30, 90, and 144 FPS, indoor floors, airborne behavior, and packet ordering.
-
-Live headset and multiplayer acceptance of these changes remains pending.
-This release does not include a new FPS benchmark; sustained 90 FPS VR and
-144 FPS desktop remain targets. Download hashes are in SHA256SUMS.txt.
+Windows and Quest builds and packaged Windows checks are verified before publication.
+Live multiplayer and headset acceptance of this release remains pending.
+No new performance benchmark is claimed. Download hashes are in SHA256SUMS.txt.

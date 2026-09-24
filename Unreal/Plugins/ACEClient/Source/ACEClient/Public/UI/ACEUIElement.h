@@ -58,6 +58,8 @@ struct FACEUIElement : public TSharedFromThis<FACEUIElement>
 	uint8 RightEdge = 0;
 	uint8 BottomEdge = 0;
 	/** Authored size snapshot for edge reflow (-1 until first reflow). */
+	int32 LayoutAuthoredX = MIN_int32;
+	int32 LayoutAuthoredY = MIN_int32;
 	int32 LayoutAuthoredW = -1;
 	int32 LayoutAuthoredH = -1;
 	/** Last size written by edge reflow — size is only re-written when the reflow

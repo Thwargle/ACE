@@ -219,8 +219,8 @@ namespace
 				El->LastReflowW = El->Width;
 				El->LastReflowH = El->Height;
 			}
-			const int32 L = El->X;
-			const int32 T = El->Y;
+			const int32 L = El->LayoutAuthoredX != MIN_int32 ? El->LayoutAuthoredX : El->X;
+			const int32 T = El->LayoutAuthoredY != MIN_int32 ? El->LayoutAuthoredY : El->Y;
 			const int32 W = El->LayoutAuthoredW;
 			const int32 H = El->LayoutAuthoredH;
 			const int32 R = L + W;
@@ -263,8 +263,8 @@ namespace
 			default: break;
 			}
 
-			El->EdgeAnchorX = NewL - L;
-			El->EdgeAnchorY = NewT - T;
+			El->EdgeAnchorX = NewL - El->X;
+			El->EdgeAnchorY = NewT - El->Y;
 			El->RecomputeLayoutOffset();
 
 			// Only write size when the reflow result changes — elements with agreeing
@@ -696,6 +696,26 @@ void UACEUIElementManager::ApplyFloatyResizeLayout(const TSharedPtr<FACEUIElemen
 	{
 		Floaty->AuthoredHeight = Floaty->Height;
 	}
+	if (Floaty->ElementName == TEXT("RootGameplay_FloatyPanel_Field"))
+	{
+		// Snapshot the resolved retail tree before binders place dynamic content.
+		// Reflow every page from that same baseline, including currently hidden tabs.
+		TFunction<void(const TSharedPtr<FACEUIElement>&)> Capture = [&](const auto& Node)
+		{
+			if (Node->LayoutAuthoredX != MIN_int32) return;
+			Node->LayoutAuthoredX = Node->X; Node->LayoutAuthoredY = Node->Y;
+			Node->LayoutAuthoredW = Node->LastReflowW = Node->Width;
+			Node->LayoutAuthoredH = Node->LastReflowH = Node->Height;
+			for (const auto& Child : Node->Children) Capture(Child);
+		};
+		for (const auto& Child : Floaty->Children) Capture(Child);
+		if (Floaty->AuthoredWidth < 0) Floaty->AuthoredWidth = Floaty->Width;
+		Floaty->Height = FMath::Clamp(Floaty->GetLayoutHeight(), Floaty->MinHeight, Floaty->MaxHeight);
+		Floaty->UserResizeH = Floaty->Height - Floaty->AuthoredHeight;
+		for (const auto& Child : Floaty->Children)
+			FRetailReflow::Reflow(Child, Floaty->AuthoredWidth, Floaty->AuthoredHeight, Floaty->Width, Floaty->Height);
+		return;
+	}
 	if (!IsChatFloaty(Floaty) && Floaty->AuthoredWidth >= 0)
 	{
 		const int32 NewW = FMath::Clamp(Floaty->AuthoredWidth + Floaty->UserResizeW, Floaty->MinWidth, Floaty->MaxWidth);
@@ -919,12 +939,11 @@ void UACEUIElementManager::NotifyMouseMove(FVector2D ViewportPos, FVector2D View
 			bDragMoved = true;
 		}
 		// Panel grows downward; bottom-anchored chat grows upward (lift via UserDragY).
-		const bool bToolbar = ResizeFloaty->ElementName == TEXT("RootGameplay_FloatyToolbar_Field");
-		const int32 MinH = bToolbar ? ResizeFloaty->MinHeight : 80;
+		const int32 MinH = ResizeFloaty->MinHeight;
 		const int32 AuthH = ResizeFloaty->AuthoredHeight >= 0
 			? ResizeFloaty->AuthoredHeight : ResizeFloaty->Height;
 		int32 NewExtra = ResizeStartUserH + (bResizeBottomAnchored ? -Dy : Dy);
-		NewExtra = FMath::Clamp(NewExtra, MinH - AuthH, bToolbar ? ResizeFloaty->MaxHeight - AuthH : 320);
+		NewExtra = FMath::Clamp(NewExtra, MinH - AuthH, ResizeFloaty->MaxHeight - AuthH);
 		ResizeFloaty->UserResizeH = NewExtra;
 		if (bResizeBottomAnchored)
 		{

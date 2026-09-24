@@ -152,15 +152,17 @@ public:
 		FSlateRect Clip = Geometry.GetLayoutBoundingRect().IntersectionWith(CullingRect);
 		if (Element && Label->UsesDatAncestorClipping())
 		{
-			const FIntPoint Origin = Element->GetScreenOrigin();
+			const auto* Canvas = Label->GetTypedOuter<UACEUICanvasWidget>();
+			if (!Canvas) return Layer;
+			const FGeometry& CanvasGeometry = Canvas->GetCachedGeometry();
 			for (auto Parent = Element->Parent.Pin(); Parent; Parent = Parent->Parent.Pin())
 			{
 				// SyntheticRoot is an ownership node, not an authored clipping region.
 				if (!Parent->Parent.IsValid()) continue;
 				const FIntPoint P = Parent->GetScreenOrigin();
-				if (Parent->Width <= 0 || Parent->Height <= 0) continue;
-				const FVector2D Min = Geometry.LocalToAbsolute(FVector2D(P-Origin)*Label->GetBitmapScale());
-				const FVector2D Max = Geometry.LocalToAbsolute(FVector2D(P-Origin+FIntPoint(Parent->Width,Parent->Height))*Label->GetBitmapScale());
+				if (!Parent->bVisible || Parent->Width <= 0 || Parent->Height <= 0) return Layer;
+				const FVector2D Min = CanvasGeometry.LocalToAbsolute(Canvas->LayoutToViewport(FVector2D(P)));
+				const FVector2D Max = CanvasGeometry.LocalToAbsolute(Canvas->LayoutToViewport(FVector2D(P+FIntPoint(Parent->Width,Parent->Height))));
 				Clip = Clip.IntersectionWith(FSlateRect(Min.X,Min.Y,Max.X,Max.Y));
 			}
 		}
@@ -357,11 +359,11 @@ TSharedRef<SWidget> UACERetailTextBlock::RebuildWidget()
 	if (!ForegroundAtlas)
 	{
 		if (auto* Canvas = GetTypedOuter<UACEUICanvasWidget>())
-			SetRetailElement(Canvas->GetResourceResolver(), RetailElement.Pin(), BitmapScale, NativeWidth, false);
+			SetRetailElement(Canvas->GetResourceResolver(), RetailElement.Pin(), BitmapScale, NativeWidth, bApplyDatAncestorClip);
 		else if (const UWorld* World = GetWorld())
 			if (const UGameInstance* GI = World->GetGameInstance())
 				if (auto* Dat = GI->GetSubsystem<UACEDatSubsystem>())
-					SetRetailElement(Dat->GetUiResources(), RetailElement.Pin(), BitmapScale, NativeWidth, false);
+					SetRetailElement(Dat->GetUiResources(), RetailElement.Pin(), BitmapScale, NativeWidth, bApplyDatAncestorClip);
 	}
 	MyTextBlock = SNew(SACERetailTextBlock, this);
 	return MyTextBlock.ToSharedRef();
