@@ -409,6 +409,7 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 	float HalfHeight = FMath::Max(25.f, HeightAc * WorldScale * 0.5f);
 	float Radius = FMath::Max(25.f, RadiusAc * WorldScale);
 	MovementRadius = FMath::Max(1.f, RadiusAc * WorldScale);
+	MovementStepHeight = FMath::Max(0.f, StepAc * WorldScale);
 	MeleeBodyHeight = FMath::Max(0.f, HeightAc * WorldScale);
 	MovementHalfHeight = FMath::Max(MovementRadius, HeightAc * WorldScale * .5f);
 	// Doors/chests often author wide Setup cylinders that steal clicks from nearby objects.
@@ -962,12 +963,9 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 	const auto* VRClient=GetWorld()->GetGameInstance() ? GetWorld()->GetGameInstance()->GetSubsystem<UACEClientSubsystem>() : nullptr;
 	const bool HasVRRoot=bIsPlayer && !bIsSelf && VRClient && VRClient->GetSession()
 		&& VRClient->GetSession()->GetVRPose(ACEGuid,VRRoot) && VRRoot.Version==2;
-	if (HasVRRoot)
-	{
-		RemotePredictLocation=VRRoot.Root*WorldScale;
-		RemoteAnchorLocation=RemotePredictLocation;
-		SetActorLocation(RemotePredictLocation);
-	}
+	// PostPhysics applies the tracked root once, together with the hands. A
+	// second root writer here used to undo grounding/interpolation each frame.
+	if (!HasVRRoot) bHaveVRPresentation = false;
 
 	if (!HasVRRoot && bPendingGroundClamp && bRetryGroundClamp && !bAttachedToParent && ParentGuid == 0
 		&& !bHavePhysicsVelocity)
@@ -1020,30 +1018,15 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 				}
 			}
 			else if (AcePhysicsVelocity.SizeSquared() > 0.01f &&
-				((bMissile && (PhysicsState & ACEPhysicsState::AlignPath)) || (ItemType & ACEItemType::Creature)))
+				(bMissile && (PhysicsState & ACEPhysicsState::AlignPath)))
 			{
 				// AlignPath: face travel direction (AC forward = +Y → Unreal after X flip).
 				const FVector Dir = FACEPosition::AceVectorToUnreal(AcePhysicsVelocity, 1.f).GetSafeNormal();
 				if (!Dir.IsNearlyZero())
 				{
-					if (bMissile)
-					{
-						// Align the actual projectile shaft, including pitch and its
-						// setup placement. A yaw-only actor rotation leaves tilted
-						// arrows and bolts flying across their direction of travel.
-						// Ammunition's shaft needs its placement adjustment. Spell
-						// setups already use the authored +Y facing (rabbits/rocks
-						// included); cancelling their bind rotates the actual model.
-						RemotePredictRotation = FRotationMatrix::MakeFromYZ(Dir, FVector::UpVector).ToQuat();
-					}
-					else
-					{
-					const FVector Forward = FVector(Dir.X, Dir.Y, 0.f).GetSafeNormal();
-					if (!Forward.IsNearlyZero())
-					{
-						RemotePredictRotation = FACEPosition::QuatFromUnrealTravelDir2D(Forward);
-					}
-					}
+					// Only AlignPath projectiles face velocity. Creatures may
+					// strafe or jump without changing their networked heading.
+					RemotePredictRotation = FRotationMatrix::MakeFromYZ(Dir, FVector::UpVector).ToQuat();
 				}
 			}
 
@@ -1052,7 +1035,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			if (!bMissile)
 			{
 				float GroundZ = 0.f;
-				if (TraceGroundZ(RemotePredictLocation, GroundZ))
+				if (TraceGroundZ(RemotePredictLocation, GroundZ, bIsPlayer || (ItemType & ACEItemType::Creature)))
 				{
 					const float SkinCm = 1.f;
 					if (RemotePredictLocation.Z <= GroundZ + SkinCm)
@@ -1065,7 +1048,8 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 						}
 						// Released inventory retains its resting orientation and stops
 						// at contact while awaiting the authoritative settled position.
-						if (!(ItemType & ACEItemType::Creature)) AcePhysicsVelocity = FVector::ZeroVector;
+						// Contact ends ballistic ownership; locomotion resumes from UpdateMotion.
+						AcePhysicsVelocity = FVector::ZeroVector;
 						if (AcePhysicsVelocity.SizeSquared() < 0.01f)
 						{
 							bHavePhysicsVelocity = false;
@@ -1076,8 +1060,21 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			}
 
 			RemotePredictLocation = ResolvePredictedMovement(PredictionStart, RemotePredictLocation);
-			SetActorLocation(RemotePredictLocation);
-			SetActorRotation(RemotePredictRotation);
+			if (bIsPlayer || (ItemType & ACEItemType::Creature))
+			{
+				// F748 also corrects airborne actors. Do not bypass presentation
+				// smoothing just because a jump/velocity packet is active.
+				const float Alpha = 1.f-FMath::Exp(-RemotePositionSmoothing*Step);
+				FVector Display = FMath::Lerp(GetActorLocation(), RemotePredictLocation, Alpha);
+				if (!bHavePhysicsVelocity) ClampLocationToGround(Display);
+				SetActorLocation(Display);
+				SetActorRotation(FQuat::Slerp(GetActorQuat(),RemotePredictRotation,Alpha).GetNormalized());
+			}
+			else
+			{
+				SetActorLocation(RemotePredictLocation);
+				SetActorRotation(RemotePredictRotation);
+			}
 		}
 		else
 		{
@@ -1348,15 +1345,8 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			{
 				TargetRot = TargetRot * -1.f;
 			}
-			if (bMoveTo)
-			{
-				// Snap to travel Dir — slerping through 180° against a stale F748 looked like a flip.
-				SetActorRotation(TargetRot);
-			}
-			else
-			{
-				SetActorRotation(FQuat::Slerp(GetActorQuat(), TargetRot, Alpha));
-			}
+			// MoveTo owns the desired facing, but turns are still displayed over time.
+			SetActorRotation(FQuat::Slerp(GetActorQuat(), TargetRot, Alpha).GetNormalized());
 		}
 	}
 
@@ -1382,7 +1372,21 @@ bool AACEWorldEntityActor::ResolveIndoorOccupancy(const FVector& AtLocation, uin
 	return false;
 }
 
-bool AACEWorldEntityActor::TraceGroundZ(const FVector& AtLocation, float& OutGroundZ) const
+void AACEWorldEntityActor::ApplyRemoteVRRoot(const FACEVRPose& Pose, float DeltaTime)
+{
+	const FVector TrackedRoot = Pose.Root * WorldScale;
+	const bool Snap = !bHaveVRPresentation || Pose.Teleport != VRPresentationTeleport
+		|| FVector::DistSquared(GetActorLocation(),TrackedRoot) > FMath::Square(RemoteSnapDistance*WorldScale);
+	bHaveVRPresentation = true;
+	VRPresentationTeleport = Pose.Teleport;
+	RemotePredictLocation = RemoteAnchorLocation = TrackedRoot;
+	FVector Display = Snap ? TrackedRoot : FMath::Lerp(GetActorLocation(),TrackedRoot,
+		1.f-FMath::Exp(-RemotePositionSmoothing*FMath::Max(0.f,DeltaTime)));
+	if (!bHavePhysicsVelocity) ClampLocationToGround(Display);
+	SetActorLocation(Display);
+}
+
+bool AACEWorldEntityActor::TraceGroundZ(const FVector& AtLocation, float& OutGroundZ, bool bCreatureSupport) const
 {
 	UWorld* World = GetWorld();
 	if (!World)
@@ -1390,8 +1394,10 @@ bool AACEWorldEntityActor::TraceGroundZ(const FVector& AtLocation, float& OutGro
 		return false;
 	}
 
-	const float UpProbe = 4.0f * WorldScale;
-	const float DownProbe = 16.0f * WorldScale;
+	// Moving feet use a short support probe. A tall ray can choose a shop
+	// ceiling/roof instead of the floor under the actor.
+	const float UpProbe = bCreatureSupport ? MovementStepHeight*GetActorScale3D().GetAbsMax()+2.f : 4.f*WorldScale;
+	const float DownProbe = bCreatureSupport ? GroundClampBandAc*WorldScale : 16.f*WorldScale;
 	const FVector Start(AtLocation.X, AtLocation.Y, AtLocation.Z + UpProbe);
 	const FVector End(AtLocation.X, AtLocation.Y, AtLocation.Z - DownProbe);
 
@@ -1428,7 +1434,8 @@ bool AACEWorldEntityActor::TraceGroundZ(const FVector& AtLocation, float& OutGro
 				// Outdoor stabs (Yaraq town sign, flora) use forced draw collision — not walkable floors.
 				// Only the heightfield TerrainMesh is ground — and never under indoor cells
 				// (pulls dungeon pets/NPCs onto outdoor terrain Z through the floor).
-				if (bIndoorCell || Lb->TerrainMesh != Hit.Component.Get())
+				if ((bIndoorCell && Lb->TerrainMesh == Hit.Component.Get())
+					|| (!bCreatureSupport && Lb->TerrainMesh != Hit.Component.Get()))
 				{
 					continue;
 				}
@@ -1442,15 +1449,19 @@ bool AACEWorldEntityActor::TraceGroundZ(const FVector& AtLocation, float& OutGro
 			{
 				// Outdoor pets/NPCs must never seat on EnvCells — Yaraq dungeon lids under
 				// plaza footprints sit meters below grade and yanked summons under the world.
-				if (!bIndoorCell)
+				if (!bIndoorCell && !bCreatureSupport)
 				{
 					continue;
 				}
-				// Multi-story shops: only the EnvCell that contains the server pose.
-				if (OccupiedEnvCell != 0
-					&& static_cast<uint32>(Env->EnvCellId) != OccupiedEnvCell)
+				// Do not choose another story just because its mesh overlaps in XY.
+				if (static_cast<uint32>(Env->EnvCellId) != OccupiedEnvCell)
 				{
-					continue;
+					// A remote can cross cell portals before its next F748. Accept
+					// only a streamed cell whose actual volume contains these feet.
+					auto* GI = World->GetGameInstance();
+					auto* Dat = GI ? GI->GetSubsystem<UACEDatSubsystem>() : nullptr;
+					if (!bCreatureSupport || !Dat || !Dat->FindEnvCellMesh(Env->EnvCellId,WorldScale)
+						|| !Dat->IsPointInsideEnvCell(Env->EnvCellId,Hit.ImpactPoint+FVector(0,0,2),WorldScale)) continue;
 				}
 				// Prefer PhysicsPolygons floors when present — draw CellMesh includes ceilings/roofs.
 				if (Env->CellCollisionMesh && Env->CellCollisionMesh->GetNumSections() > 0
@@ -1698,33 +1709,19 @@ bool AACEWorldEntityActor::ClampLocationToGround(FVector& InOutLocation, const F
 	const bool bIndoorEnt = ResolveIndoorOccupancy(InOutLocation, OccupiedEnv);
 	const bool bCreatureLike = bIsPlayer || bIsSelf
 		|| (ItemType & ACEItemType::Creature) != 0;
-	// Retail weenie Z is Position.frame. Traces hit shop ceilings / Setup roofs and lift
-	// vendors into the air. Outdoor creatures still seat on the land heightfield so they
-	// are not buried when server Z is a few cm under the mesh.
 	if (bCreatureLike)
 	{
-		if (bIndoorEnt)
+		// Retail advances contact/step-down along with locomotion. Sampling the
+		// terrain only (or skipping indoor feet) leaves stair-step height changes
+		// until the next server position. Keep jumps/flying actors out of this path.
+		if (bHavePhysicsVelocity) return true;
+		if (TraceGroundZ(InOutLocation,GroundZ,true))
 		{
-			return true;
+			const float Delta = InOutLocation.Z-GroundZ;
+			if (Delta >= -MovementStepHeight*GetActorScale3D().GetAbsMax()-2.f
+				&& Delta < GroundClampBandAc*WorldScale) InOutLocation.Z=GroundZ+1.f;
 		}
-		if (UWorld* World = GetWorld())
-		{
-			if (UGameInstance* GI = World->GetGameInstance())
-			{
-				if (UACEDatSubsystem* Dat = GI->GetSubsystem<UACEDatSubsystem>())
-				{
-					if (Dat->SampleOutdoorGroundZ(InOutLocation.X, InOutLocation.Y, WorldScale, GroundZ))
-					{
-						const float BandCm = FMath::Max(0.5f, GroundClampBandAc) * WorldScale;
-						const float Delta = InOutLocation.Z - GroundZ;
-						if (Delta < -0.5f || FMath::Abs(Delta) < BandCm)
-						{
-							InOutLocation.Z = GroundZ + 1.f;
-						}
-					}
-				}
-			}
-		}
+		// Missing geometry must not make every idle NPC tick/retrace indefinitely.
 		return true;
 	}
 	bool bHaveGround = false;

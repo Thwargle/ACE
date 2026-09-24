@@ -10750,135 +10750,38 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 		Target = PlayerController->GetPawn();
 	}
 
-	FVector WorldOrigin = FVector::ZeroVector;
-	float HalfW = 40.f;
-	float HalfH = 80.f;
+	// SmartBox::GetObjectBoundingBox uses the setup selection sphere, rotated by
+	// the object's frame. Animated limbs, weapons and collision proxies do not
+	// enlarge the indicator. Retail's missing-setup fallback is a 0.1m sphere.
+	FVector WorldOrigin;
+	const float WorldScale = PlayerController->WorldScale;
+	float Radius = .1f * WorldScale;
+	FVector LocalCenter(0,0,Radius);
+	if (bHaveObj && SelObj.SetupId != 0)
+	{
+		if (auto* GI = PlayerController->GetGameInstance())
+		if (auto* Dat = GI->GetSubsystem<UACEDatSubsystem>())
+		{
+			float Step, Height, BodyRadius, SelectionRadius; uint32 Anim;
+			FVector3f SelectionCenter;
+			if (Dat->TryGetSetupPhysics(SelObj.SetupId, Step, Height, BodyRadius, Anim,
+				nullptr, &SelectionCenter, &SelectionRadius))
+			{
+				const float Scale = WorldScale * FMath::Max(.01f, SelObj.Scale);
+				LocalCenter = FACEPosition::AceVectorToUnreal(FVector(SelectionCenter), Scale);
+				Radius = FMath::Max(0.f, SelectionRadius) * Scale;
+			}
+		}
+	}
 	if (Target)
 	{
-		bool bHaveGfx = false;
-		bool bHaveFrame = false;
-		FVector VisualOrigin = FVector::ZeroVector;
-		FVector VisualExtent = FVector::ZeroVector;
-		if (const UACECharacterAppearanceComponent* App =
-			Target->FindComponentByClass<UACECharacterAppearanceComponent>())
-		{
-			FBox VisualBox(ForceInit);
-			if (App->GetVisualWorldBounds(VisualBox) && VisualBox.IsValid)
-			{
-				VisualOrigin = VisualBox.GetCenter();
-				VisualExtent = VisualBox.GetExtent();
-				bHaveGfx = true;
-			}
-		}
-
-		auto FeetOf = [&]() -> FVector
-		{
-			FVector Feet = Target->GetActorLocation();
-			if (UCapsuleComponent* Cap = Cast<UCapsuleComponent>(Target->GetRootComponent()))
-			{
-				Feet.Z -= Cap->GetScaledCapsuleHalfHeight();
-			}
-			else if (bHaveGfx)
-			{
-				Feet.Z = VisualOrigin.Z - VisualExtent.Z;
-			}
-			return Feet;
-		};
-
-		const bool bCreatureLike = SelObj.bIsSelf
-			|| (SelObj.ItemType & ACEItemType::Creature) != 0;
-		if (bHaveObj && SelObj.SetupId != 0)
-		{
-			if (UGameInstance* GI = PlayerController->GetGameInstance())
-			{
-				if (UACEDatSubsystem* Dat = GI->GetSubsystem<UACEDatSubsystem>())
-				{
-					float StepUp = 0.5f, HeightAc = 2.f, RadiusAc = 0.5f, SelRadiusAc = 0.f;
-					uint32 DefAnim = 0;
-					FVector3f SelOriginAc = FVector3f::ZeroVector;
-					if (Dat->TryGetSetupPhysics(static_cast<uint32>(SelObj.SetupId), StepUp, HeightAc, RadiusAc, DefAnim,
-						nullptr, &SelOriginAc, &SelRadiusAc))
-					{
-						const float Scale = PlayerController->WorldScale * FMath::Max(0.01f, SelObj.Scale);
-						const FVector Feet = FeetOf();
-						if (SelRadiusAc > 0.05f)
-						{
-							const FVector Local = FACEPosition::AceVectorToUnreal(
-								FVector(SelOriginAc.X, SelOriginAc.Y, SelOriginAc.Z), Scale);
-							WorldOrigin = Feet + Local;
-							const float R = SelRadiusAc * Scale;
-							HalfW = R;
-							HalfH = R;
-							bHaveFrame = true;
-						}
-						else if (bCreatureLike)
-						{
-							const float RadCm = FMath::Clamp(RadiusAc, 0.08f, 3.0f) * Scale;
-							const float HeightCm = FMath::Clamp(HeightAc, 0.2f, 8.0f) * Scale;
-							HalfW = RadCm;
-							HalfH = HeightCm * 0.5f;
-							WorldOrigin = FVector(Feet.X, Feet.Y, Feet.Z + HalfH);
-							bHaveFrame = true;
-						}
-						if (!bCreatureLike && bHaveGfx)
-						{
-							const float GfxW = FMath::Max(VisualExtent.X, VisualExtent.Y);
-							const float GfxH = FMath::Max(8.f, VisualExtent.Z);
-							if (!bHaveFrame || GfxW > HalfW * 1.15f || GfxH > HalfH * 1.15f)
-							{
-								WorldOrigin = VisualOrigin;
-								HalfW = GfxW;
-								HalfH = GfxH;
-								bHaveFrame = true;
-							}
-						}
-					}
-				}
-			}
-		}
-		if (!bHaveFrame && bHaveGfx)
-		{
-			WorldOrigin = VisualOrigin;
-			HalfW = FMath::Max(VisualExtent.X, VisualExtent.Y);
-			HalfH = FMath::Max(8.f, VisualExtent.Z);
-			bHaveFrame = true;
-		}
-		if (!bHaveFrame)
-		{
-			if (const AACEWorldEntityActor* Ent = Cast<AACEWorldEntityActor>(Target))
-			{
-				if (const UCapsuleComponent* Proxy = Ent->CollisionProxy)
-				{
-					WorldOrigin = Proxy->GetComponentLocation();
-					HalfW = Proxy->GetScaledCapsuleRadius();
-					HalfH = Proxy->GetScaledCapsuleHalfHeight();
-					bHaveFrame = true;
-				}
-			}
-		}
-		if (!bHaveFrame)
-		{
-			FVector Extent(ForceInit);
-			Target->GetActorBounds(true, WorldOrigin, Extent, false);
-			HalfW = FMath::Max(Extent.X, Extent.Y);
-			HalfH = Extent.Z;
-		}
-		if (HalfW < 1.f && HalfH < 1.f)
-		{
-			WorldOrigin = Target->GetActorLocation();
-			HalfW = 25.f;
-			HalfH = 45.f;
-		}
-		HalfW = FMath::Clamp(HalfW, 8.f, 800.f);
-		HalfH = FMath::Clamp(HalfH, 8.f, 900.f);
+		FVector Feet = Target->GetActorLocation();
+		if (const auto* Capsule = Cast<UCapsuleComponent>(Target->GetRootComponent()))
+			Feet.Z -= Capsule->GetScaledCapsuleHalfHeight();
+		WorldOrigin = Feet + Target->GetActorQuat().RotateVector(LocalCenter);
 	}
 	else if (bHaveObj && SelObj.bHasPosition && SelObj.Position.IsValid())
-	{
-		const float Scale = PlayerController->WorldScale;
-		WorldOrigin = SelObj.Position.ToUnrealLocation(Scale);
-		HalfW = 25.f;
-		HalfH = 45.f;
-	}
+		WorldOrigin = SelObj.Position.ToUnrealLocation(WorldScale) + SelObj.Position.ToUnrealQuat().RotateVector(LocalCenter);
 	else
 	{
 		HideSelectionMarkers();
@@ -10888,17 +10791,10 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 	FVector ViewLoc;
 	FRotator ViewRot;
 	PlayerController->GetPlayerViewPoint(ViewLoc, ViewRot);
-	FVector Right = FVector::CrossProduct(ViewRot.Vector(), FVector::UpVector);
-	if (!Right.Normalize())
-	{
-		Right = ViewRot.RotateVector(FVector::RightVector);
-	}
-	const FVector Corners[4] = {
-		WorldOrigin + Right * HalfW + FVector(0.f, 0.f, HalfH),
-		WorldOrigin + Right * HalfW - FVector(0.f, 0.f, HalfH),
-		WorldOrigin - Right * HalfW + FVector(0.f, 0.f, HalfH),
-		WorldOrigin - Right * HalfW - FVector(0.f, 0.f, HalfH),
-	};
+	// Render::GetViewerBBox builds a view-facing square, including camera pitch.
+	const FVector Right = ViewRot.RotateVector(FVector::RightVector) * Radius;
+	const FVector Up = ViewRot.RotateVector(FVector::UpVector) * Radius;
+	const FVector Corners[] = {WorldOrigin-Right+Up, WorldOrigin+Right-Up};
 
 	FVector2D ScreenMin(FLT_MAX, FLT_MAX);
 	FVector2D ScreenMax(-FLT_MAX, -FLT_MAX);
@@ -10950,35 +10846,18 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
     }
     if(SelectionDirectionArrow)SelectionDirectionArrow->SetVisibility(ESlateVisibility::Collapsed);
 
-	// Retail VividTargetIndicator: resize parent to projected bbox; 12×12 corners sit on the
-	// box edges (layout 0x2100000F — NW@0,0 NE@W-12,0 SW@0,H-12 SE@W-12,H-12). No extra pad.
-	const float BoxW = ScreenMax.X - ScreenMin.X;
-	const float BoxH = ScreenMax.Y - ScreenMin.Y;
-	if (BoxW < 4.f || BoxH < 4.f)
-	{
-		HideSelectionMarkers();
-		return;
-	}
-
 	const uint8 Radar = bHaveObj ? ResolveRadarColor(SelObj) : ACERadarColor::White;
 	const FLinearColor Tint = ColorFromSelectionMarker(Radar);
-	// portal.dat VividTargetIndicator_Selected_* (SmartBox 0x2100000F runtime art).
-	constexpr int32 DidNW = 0x06004C40;
-	constexpr int32 DidNE = 0x06004C41;
-	constexpr int32 DidSW = 0x06004C42;
-	constexpr int32 DidSE = 0x06004C43;
-	constexpr float Corner = 12.f;
-	// Above DAT chrome paint (~hundreds→thousands) but below modal inventory overlays (10000).
+	auto* Resources = Canvas->GetResourceResolver();
+	if (!Resources) { HideSelectionMarkers(); return; }
+	// Same image enumeration used by VividTargetIndicator::SetOnScreenColor.
+	const int32 DidNW = Resources->ResolveTargetIndicatorId(1), DidNE = Resources->ResolveTargetIndicatorId(2);
+	const int32 DidSW = Resources->ResolveTargetIndicatorId(3), DidSE = Resources->ResolveTargetIndicatorId(4);
 	constexpr int32 Z = 8500;
-
-	const float L = ScreenMin.X;
-	const float T = ScreenMin.Y;
-	const float R = ScreenMax.X;
-	const float B = ScreenMax.Y;
-	const float W = FMath::Max(Corner, R - L);
-	const float H = FMath::Max(Corner, B - T);
-	const float CenterX = (L + R) * 0.5f;
-	const float CenterY = (T + B) * 0.5f;
+	const FVector2D Corner = FVector2D(12,12) * Canvas->GetLastScale2D();
+	const FBox2D Frame = ACERadarVisuals::SelectionFrame(ScreenMin, ScreenMax, ViewSize, Canvas->GetLastScale2D());
+	const float W = Frame.GetSize().X, H = Frame.GetSize().Y;
+	const float CenterX = Frame.GetCenter().X, CenterY = Frame.GetCenter().Y;
 
 	// Anchor the parent on the projected model center (not top-left) so the frame stays
 	// centered on the mesh when size changes.
@@ -10997,9 +10876,9 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 	}
 
 	PlaceSelectionCorner(SelectionMarkerCorners[0], DidNW, 0.f, 0.f, Tint, 1);
-	PlaceSelectionCorner(SelectionMarkerCorners[1], DidNE, W - Corner, 0.f, Tint, 1);
-	PlaceSelectionCorner(SelectionMarkerCorners[2], DidSW, 0.f, H - Corner, Tint, 1);
-	PlaceSelectionCorner(SelectionMarkerCorners[3], DidSE, W - Corner, H - Corner, Tint, 1);
+	PlaceSelectionCorner(SelectionMarkerCorners[1], DidNE, W - Corner.X, 0.f, Tint, 1);
+	PlaceSelectionCorner(SelectionMarkerCorners[2], DidSW, 0.f, H - Corner.Y, Tint, 1);
+	PlaceSelectionCorner(SelectionMarkerCorners[3], DidSE, W - Corner.X, H - Corner.Y, Tint, 1);
 }
 
 void UACEUIGameplayBinder::EnsureSelectionMarkers()
@@ -11080,7 +10959,7 @@ void UACEUIGameplayBinder::PlaceSelectionCorner(UBorder* Corner, int32 TexDid, f
 			Brush.SetResourceObject(Tex);
 			Brush.DrawAs = ESlateBrushDrawType::Image;
 			Brush.Tiling = ESlateBrushTileType::NoTile;
-			Brush.ImageSize = FVector2D(12.f, 12.f);
+			Brush.ImageSize = FVector2D(12.f, 12.f) * Canvas->GetLastScale2D();
 			Corner->SetBrush(Brush);
 		}
 		else
@@ -11099,7 +10978,7 @@ void UACEUIGameplayBinder::PlaceSelectionCorner(UBorder* Corner, int32 TexDid, f
 		Slot->SetAlignment(FVector2D(0.f, 0.f));
 		Slot->SetAutoSize(false);
 		Slot->SetPosition(FVector2D(LocalX, LocalY));
-		Slot->SetSize(FVector2D(12.f, 12.f));
+		Slot->SetSize(FVector2D(12.f, 12.f) * Canvas->GetLastScale2D());
 		Slot->SetZOrder(ZOrder);
 	}
 }

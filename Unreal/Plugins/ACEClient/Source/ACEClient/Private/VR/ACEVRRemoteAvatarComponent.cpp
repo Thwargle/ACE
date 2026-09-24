@@ -58,8 +58,7 @@ void UACEVRRemoteAvatarComponent::TickComponent(float Dt, ELevelTick Type, FActo
 	// Settled world actors suspend their ordinary movement tick. Tracking still
 	// updates at render cadence, so apply the sampled root here with the limbs,
 	// including when no new retail motion packet has woken the actor yet.
-	if(Pose.Version==2 && !Entity->GetActorLocation().Equals(Pose.Root*Scale,.001f))
-		Entity->SetActorLocation(Pose.Root*Scale);
+	if (Pose.Version==2) Entity->ApplyRemoteVRRoot(Pose,Dt);
 	FTransform Tracked[3];
 	for (int32 I = 0; I < 3; ++I)
 		Tracked[I] = FTransform(Pose.Poses[I].GetRotation(), Entity->GetActorLocation() + Pose.Poses[I].GetLocation() * Scale);

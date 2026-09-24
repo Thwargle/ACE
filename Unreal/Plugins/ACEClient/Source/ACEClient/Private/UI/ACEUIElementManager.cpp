@@ -22,7 +22,8 @@ namespace
 	{
 		return Name == TEXT("RootGameplay_FloatySideVitals_Field")
 			|| Name == TEXT("RootGameplay_FloatyVitals_Field")
-			|| Name == TEXT("RootGameplay_FloatyIndicators_Field");
+			|| Name == TEXT("RootGameplay_FloatyIndicators_Field")
+			|| Name == TEXT("RootGameplay_PowerBar_Field") || Name == TEXT("RootFloatyPowerBar_Field");
 	}
 
 	bool IsSavedLayoutWindow(const FString& Name)
@@ -606,7 +607,9 @@ TSharedPtr<FACEUIElement> UACEUIElementManager::FindFloatyRoot(const TSharedPtr<
 {
 	for (TSharedPtr<FACEUIElement> Cur = Element; Cur.IsValid(); Cur = Cur->Parent.Pin())
 	{
-		if (Cur->ElementName.StartsWith(TEXT("RootGameplay_Floaty")))
+		if (Cur->ElementName.StartsWith(TEXT("RootGameplay_Floaty"))
+			|| Cur->ElementName == TEXT("RootGameplay_PowerBar_Field")
+			|| Cur->ElementName == TEXT("RootFloatyPowerBar_Field"))
 		{
 			return Cur;
 		}
@@ -621,6 +624,11 @@ bool UACEUIElementManager::IsFloatyDragHandle(const TSharedPtr<FACEUIElement>& E
 		return false;
 	}
 	const FString& Name = Element->ElementName;
+	// This meter has no clickable controls. Its fill/label are safe grab areas,
+	// so repositioning a charging jump does not require hitting a five-pixel rim.
+	if (const auto Window = FindFloatyRoot(Element); Window
+		&& (Window->ElementName == TEXT("RootGameplay_PowerBar_Field")
+			|| Window->ElementName == TEXT("RootFloatyPowerBar_Field"))) return true;
 	if (Name == TEXT("InvTitleText") || Name == TEXT("TitleText") || Name == TEXT("TitleBackground")
 		|| Name == TEXT("TitleBar") || Name == TEXT("DisplayedBookNameText")) return true;
 	if (Name.EndsWith(TEXT("DragArea")) || Name.Contains(TEXT("TitleDrag")))

@@ -3,6 +3,20 @@
 
 namespace ACERadarVisuals
 {
+    // VividTargetIndicator::OnDraw puts each 12px corner OUTSIDE the projected
+    // selection sphere. Clamp the corner origins, not the object's bounds.
+    inline FBox2D SelectionFrame(FVector2D Min, FVector2D Max, FVector2D View, FVector2D Scale)
+    {
+        const FVector2D Corner = FVector2D(12,12)*Scale, Margin = FVector2D(8,8)*Scale;
+        const FVector2D Limit = View-Corner-Margin;
+        FVector2D First = Min-Corner, Last = Max;
+        First.X = FMath::Clamp(First.X, Margin.X, FMath::Max(Margin.X, Limit.X-Corner.X));
+        First.Y = FMath::Clamp(First.Y, Margin.Y, FMath::Max(Margin.Y, Limit.Y-Corner.Y));
+        Last.X = FMath::Clamp(Last.X, Margin.X+Corner.X, FMath::Max(Margin.X+Corner.X, Limit.X));
+        Last.Y = FMath::Clamp(Last.Y, Margin.Y+Corner.Y, FMath::Max(Margin.Y+Corner.Y, Limit.Y));
+        return FBox2D(First, Last+Corner);
+    }
+
     // gmRadarUI::DrawPoint/DrawEdges/DrawCorners/DrawSelected paint pixels,
     // not DAT sprites. Retain those masks inside a common seven-pixel canvas.
     inline bool Pixel(int32 Shape, bool Selected, int32 X, int32 Y)

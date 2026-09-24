@@ -1,62 +1,33 @@
-# AC:Unreal / AC:VR release 70
+# AC:Unreal / AC:VR release 71
 
-Native Quest: `2026.09.24.quest.70`, Android version code 70, installer revision 6.
-Windows desktop / PC VR: `2026.09.24.76`.
+Native Quest: `2026.09.24.quest.71`, Android version code 71, installer revision 6.
+Windows desktop / PC VR: `2026.09.24.77`.
 
-## Changes since v69
+## Changes since v70
 
-### Movement and networking
+### Remote movement in desktop and VR
 
-- Keep nearby exterior room collision active before the player crosses its cell
-  boundary. Fix wall clipping at Fort Teth and Mosswart Fort through shared
-  collision residency and filtering, rather than location-specific exceptions.
-- Prevent creature collision bodies from becoming walkable floors or step-up
-  targets. Improve falling and recovery beside walls in crowded dungeons.
-- Release narrow stair-edge contacts into a proper fall and suppress tiny
-  stationary slope corrections that made the VR camera shake.
-- Smooth remote heading corrections, maintain movement prediction between sparse
-  packets, and continue player animation beyond the previous distance cutoff.
-- Buffer VR tracking samples so body, hands, equipment, and weapon draw share
-  the same presentation time. Keep remote roots updating when ordinary actor
-  movement ticks are suspended; reject stale samples and reset across transitions.
-- Restore retail's periodic receive-socket keepalive on server port+1. This
-  addresses an idle NAT-mapping failure consistent with the reported Coldeve
-  disconnects; live confirmation on the affected user's connection is pending.
-  Improve timeout diagnostics without changing gameplay packet sequencing.
+- Smooth heading and position corrections for remote players and creatures,
+  including move-to actions and velocity updates. Preserve facing while strafing
+  or jumping instead of automatically pointing the character along its velocity.
+- Follow nearby terrain, stairs, and streamed interior floors during grounded
+  movement, reducing horizontal movement above slopes followed by downward snaps.
+  Preserve airborne movement and keep indoor actors off outdoor terrain support.
+- Apply tracked VR root movement through one presentation path so the body,
+  hands, and held equipment remain aligned while the root is smoothed.
+  Reset interpolation across teleports and large position changes.
+- Report the actual mouse turn rate instead of maximum turning speed, and send
+  the stop when mouse turning ends. Reject stale or duplicate velocity packets
+  while correctly handling sequence wraparound.
 
-### Inventory, chat, and retail interface
+### Retail selection indicators and jump meter
 
-- Automatically merge picked-up stackable items into a matching owned stack
-  when the entire pickup fits, including stacks in packs. Preserve intentional
-  rearrangement and wait for authoritative server inventory updates.
-- Append double-clicked spellbook spells to the end of the open spell tab.
-- Reflow resized spellbook/effects pages: grow the list and retain bottom-anchored
-  controls and descriptions. Remove faint underlying inspection scrollbar arrows.
-- Restore retail Character option grouping and Apply/Reset/Defaults behavior;
-  retain chat routing and opacity controls on Chat and local preferences on Config.
-- Add the five retail chat font faces and five sizes using their actual DAT
-  fonts on all platforms. Persist the selection and rewrap existing chat lines.
-- Use shared DAT emote text for typed poses and emote keybinds, including
-  one-shot/held gesture variants. Social gestures address the selected target,
-  e.g. "Thwargle waves at OtherName." Noninteractive poses stay untargeted.
-  Selected-target phrasing is an extension to retail's base emote table.
-
-### VR interface and animation
-
-- Add a native VR compass with nearby selectable markers, current coordinates,
-  evenly spaced cardinal labels, and a larger decorative frame. Toggle it in
-  VR settings without opening the desktop interface.
-- Add native VR vitals with clearer labels, health/stamina/mana values, stance,
-  combat timing, and existing placement/locking controls. HUD updates are bounded
-  and unchanged vitals do not redraw continuously.
-- Allow the wrist spellbar to be hidden while using the spell wheel.
-- Separate incoming and outgoing combat notices with clearer labels, larger
-  numbers, improved contrast, and distinct positions.
-- Add subtle, smoothed torso bend/twist from tracked head and hand motion for
-  local and remote VR avatars. Preserve neck, waist, and controller alignment.
-- Use the retail Falling transition at jump takeoff, keep Ready/run while
-  charging, and clear held jump state on landing. Shorter jump handoffs avoid
-  a frozen-looking pose on rapid successive jumps.
+- Use retail's selection sphere and original corner-arrow artwork. Place the
+  arrows outside the projected object bounds, honor UI scaling and screen margins,
+  and keep their placement correct when the camera is pitched.
+- Allow the jump progress bar to be dragged by its fill, label, or border while
+  the UI is unlocked. Retain its position through normal layout saving and
+  saveui/loadui, and preserve its fixed height and existing appearance.
 
 ## Install or update
 
@@ -88,12 +59,14 @@ Bundles contain no server, credentials, saved settings, SDK tools, or retail DAT
 
 ## Validation and limitations
 
-Windows and Quest Development packages built successfully. The packaged Windows
-client passed 11 suites covering UI interactions/screens, chat, targeted emotes,
-Fort Teth stairs, movement, avatar animation, receive-port keepalives, VR rendering,
-VR rig/menus, and wall contact. Editor-only inventory-order and VR pose-buffer
-tests also passed (13 suites total).
+The packaged Windows client passed movement, radar artwork, UI layout, and
+rendered UI suites. Windows and Quest source builds also passed before packaging.
+
+Eight relevant automation suites passed, covering movement, actor runtime,
+interior streaming, idle actor cost, VR pose buffering, retail radar artwork,
+UI layout persistence, and rendered UI screens. Movement checks include slopes
+at 30, 90, and 144 FPS, indoor floors, airborne behavior, and packet ordering.
+
 Live headset and multiplayer acceptance of these changes remains pending.
-This release does not claim complete Config-tab parity or a new FPS benchmark;
-sustained 90 FPS VR and 144 FPS desktop remain targets.
-Download hashes are provided in SHA256SUMS.txt.
+This release does not include a new FPS benchmark; sustained 90 FPS VR and
+144 FPS desktop remain targets. Download hashes are in SHA256SUMS.txt.

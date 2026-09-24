@@ -136,12 +136,24 @@ bool FACERadarArtTest::RunTest(const FString&)
     FEntryWorld Fixture;auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
     if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
     auto* Resources=Dat->GetUiResources();
-    for(uint32 Image=5;Image<=12;++Image) {
+    for(uint32 Image=1;Image<=12;++Image) {
         const uint32 Id=Resources->ResolveTargetIndicatorId(Image);
         TestTrue(TEXT("Retail enum mapper resolves directional art"),(Id>>24)==6);
         auto* Texture=Resources->ResolveIconTexture(Id);
         TestNotNull(TEXT("Original directional arrow decodes"),Texture);
         AddInfo(FString::Printf(TEXT("Target indicator enum %u = %08X (%dx%d)"),Image,Id,Texture?Texture->GetSizeX():0,Texture?Texture->GetSizeY():0));
+    }
+    for (float Scale : {1.f,1.5f,2.f})
+    {
+        const FVector2D S(Scale,Scale);
+        const FBox2D Frame=ACERadarVisuals::SelectionFrame(FVector2D(100,200)*S,FVector2D(150,260)*S,FVector2D(800,600)*S,S);
+        TestTrue(TEXT("Retail arrows sit outside all four object edges"),Frame.Min.Equals(FVector2D(88,188)*S,.01)
+            && Frame.Max.Equals(FVector2D(162,272)*S,.01));
+        const FBox2D Edge=ACERadarVisuals::SelectionFrame(FVector2D(-50,-50),FVector2D(900,650)*S,FVector2D(800,600)*S,S);
+        TestTrue(TEXT("Partially offscreen corners retain retail eight-pixel margin"),Edge.Min.Equals(FVector2D(8,8)*S,.01)
+            && Edge.Max.Equals(FVector2D(792,592)*S,.01));
+        const FBox2D Tiny=ACERadarVisuals::SelectionFrame(FVector2D(100,100)*S,FVector2D(101,101)*S,FVector2D(800,600)*S,S);
+        TestTrue(TEXT("Distant selections retain full-sized outside corners"),Tiny.GetSize().Equals(FVector2D(25,25)*S,.01));
     }
     TestEqual(TEXT("Left arrow matches retail screenshot"),ACERadarVisuals::ArrowEnum(FVector2D(-1,0)),8u);
     TestEqual(TEXT("Right arrow"),ACERadarVisuals::ArrowEnum(FVector2D(1,0)),9u);

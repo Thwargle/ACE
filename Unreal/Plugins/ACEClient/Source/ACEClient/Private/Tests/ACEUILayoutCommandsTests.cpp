@@ -44,6 +44,36 @@ bool FACEUILayoutCommandsTest::RunTest(const FString&)
     const auto Vitals = Manager->FindElementByName(TEXT("RootGameplay_FloatyVitals_Field"));
     const auto Radar = Manager->FindElementByName(TEXT("RootGameplay_Radar_Field"));
     if (!Chat || !Toolbar || !Hidden || !Vitals || !Radar) return false;
+    // The jump meter is a retail floaty despite its different embedded root name.
+    const auto Jump=Manager->FindElementByName(TEXT("RootGameplay_PowerBar_Field"));
+    const auto Grip=Manager->FindElementUnder(TEXT("RootGameplay_PowerBar_Field"),TEXT("PowerbarTopBorder"));
+    TestTrue(TEXT("Jump meter has an authored drag strip"),Jump && Grip);
+    if (Jump && Grip)
+    {
+        Manager->SetUiLocked(false);Jump->bVisible=true;
+        const FVector2D View(1920,1080);
+        const FVector2D Start=FVector2D(Grip->GetScreenOrigin())+FVector2D(10,2);
+        TestEqual(TEXT("Jump strip shows the move cursor"),Manager->GetWindowCursor(Start,View),EMouseCursor::CardinalCross);
+        const FIntPoint Old(Jump->UserDragX,Jump->UserDragY);
+        Manager->NotifyMouseDown(Start,View,EKeys::LeftMouseButton);
+        Manager->NotifyMouseMove(Start+FVector2D(45,-70),View);
+        Manager->NotifyMouseUp(Start+FVector2D(45,-70),View,EKeys::LeftMouseButton);
+        TestEqual(TEXT("Dragging jump meter moves the entire window"),FIntPoint(Jump->UserDragX,Jump->UserDragY),Old+FIntPoint(45,-70));
+        const FVector2D Body = FVector2D(Jump->GetScreenOrigin())+FVector2D(Jump->Width*.5,12);
+        TestEqual(TEXT("Jump fill is also an easy drag target"),Manager->GetWindowCursor(Body,View),EMouseCursor::CardinalCross);
+        Manager->NotifyMouseDown(Body,View,EKeys::LeftMouseButton);
+        Manager->NotifyMouseMove(Body+FVector2D(20,30),View);
+        Manager->NotifyMouseUp(Body+FVector2D(20,30),View,EKeys::LeftMouseButton);
+        TestEqual(TEXT("Dragging the jump fill moves the complete window"),FIntPoint(Jump->UserDragX,Jump->UserDragY),Old+FIntPoint(65,-40));
+        const FString SavedJump=Manager->ExportScreenLayout();
+        Jump->UserDragX=Jump->UserDragY=0;Jump->RecomputeLayoutOffset();
+        Manager->ImportScreenLayout(SavedJump,Error);
+        TestEqual(TEXT("Jump position round-trips through retail saveui/loadui"),Manager->ExportScreenLayout(),SavedJump);
+        Manager->SetUiLocked(true);
+        const FVector2D LockedStart=FVector2D(Grip->GetScreenOrigin())+FVector2D(10,2);
+        TestEqual(TEXT("Locked jump meter has no drag cursor"),Manager->GetWindowCursor(LockedStart,View),EMouseCursor::Default);
+        Jump->bVisible=false;
+    }
     Manager->SetUiLocked(true); Hidden->bVisible = false;
     const FString Retail = TEXT("<CHAT> X:35 Y: 640 W: 520 H: 240\n<TBAR> X:1500 Y: 920 W: 310 H: 132\n")
         TEXT("<FCH1> X:5000 Y: -40 W: 450 H: 180\n<VITS> X:90 Y: 35 W: 160 H: 500\n<RADA> X:1600 Y: 25 W: 120 H: 140\n")

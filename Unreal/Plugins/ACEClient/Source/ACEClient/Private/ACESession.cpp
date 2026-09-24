@@ -7360,11 +7360,16 @@ void FACESession::HandleVectorUpdate(FACEBinaryReader& Reader)
 	AceOmega.X = Reader.ReadFloat();
 	AceOmega.Y = Reader.ReadFloat();
 	AceOmega.Z = Reader.ReadFloat();
-	Reader.ReadUInt16(); // instance sequence
-	Reader.ReadUInt16(); // vector sequence
+	const uint16 Instance = Reader.ReadUInt16();
+	const uint16 VectorSequence = Reader.ReadUInt16();
 
 	if (FACEWorldObject* Obj = WorldObjects.Find(Guid))
 	{
+		if (Obj->bHasPhysicsTimestamps && (Instance != Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]
+			|| !ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Vector],VectorSequence))) return;
+		Obj->bHasPhysicsTimestamps = true;
+		Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] = Instance;
+		Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Vector] = VectorSequence;
 		Obj->Velocity = AceVelocity;
 		Obj->bHasVelocity = !AceVelocity.IsNearlyZero();
 		Obj->Omega = AceOmega;

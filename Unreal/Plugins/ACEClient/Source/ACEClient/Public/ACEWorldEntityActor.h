@@ -223,6 +223,8 @@ public:
 	/** Exponential correction rate toward the extrapolated remote pose. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "1.0", ClampMax = "40.0"))
 	float RemotePositionSmoothing = 10.f;
+	/** Shared root presentation for tracked body, hands and equipment. */
+	void ApplyRemoteVRRoot(const struct FACEVRPose& Pose, float DeltaTime);
 
 	/** Corrections larger than this many AC units snap (portals/teleports) instead of blending. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "5.0", ClampMax = "192.0"))
@@ -265,9 +267,12 @@ protected:
 	FVector ResolvePredictedMovement(const FVector& From, const FVector& Destination) const;
 	float MovementRadius = 25.f;
 	float MovementHalfHeight = 90.f;
+	float MovementStepHeight = 50.f;
+	bool bHaveVRPresentation = false;
+	uint32 VRPresentationTeleport = 0;
 
 	/** Vertical trace (world static, then outdoor heightfield) for the ground Z under a point. */
-	bool TraceGroundZ(const FVector& AtLocation, float& OutGroundZ) const;
+	bool TraceGroundZ(const FVector& AtLocation, float& OutGroundZ, bool bCreatureSupport = false) const;
 
 	/** True when LastAceCellId is indoor, or the point sits inside a building EnvCell. */
 	bool ResolveIndoorOccupancy(const FVector& AtLocation, uint32& OutEnvCellId) const;

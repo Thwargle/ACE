@@ -1364,7 +1364,9 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	TurnAxis = T;
 
 	const bool bMouseTurnSend = (IsUseMouseTurning() || bInstantMouseLookHeld)
-		&& FMath::Abs(PendingMouseTurnDegrees) > 0.25f;
+		&& FMath::Abs(PendingMouseTurnDegrees) > 0.01f;
+	const float ReportedTurn = bMouseTurnSend
+		? FMath::Clamp(PendingMouseTurnDegrees / FMath::Max(180.f*DeltaTime, KINDA_SMALL_NUMBER),-1.f,1.f) : T;
 	const bool bMoving = !FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R) || !FMath::IsNearlyZero(T) || !VRRoomDelta.IsNearlyZero();
 	// Keep local prediction while Use approach is active, and for the full jump arc
 	// (otherwise SoftReconcile snaps idle airborne poses back to the ground).
@@ -1375,7 +1377,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		bForceMovementResend ||
 		!FMath::IsNearlyEqual(F, ForwardSent) ||
 		!FMath::IsNearlyEqual(R, RightSent) ||
-		!FMath::IsNearlyEqual(T, TurnSent) ||
+		!FMath::IsNearlyEqual(ReportedTurn, TurnSent) ||
 		(bMoving != bWasMoving) ||
 		(bRunning != bRunningSent) ||
 		(bJumpCharging != bJumpChargeSent) ||
@@ -1399,7 +1401,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			bForceMovementResend = false;
 			ForwardSent = F;
 			RightSent = R;
-			TurnSent = T;
+			TurnSent = ReportedTurn;
 			bRunningSent = bRunning;
 			bWasMoving = bMoving;
 			bJumpChargeSent = bJumpCharging;
@@ -1429,7 +1431,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			float SendT = T;
 			if (bMouseTurnSend)
 			{
-				SendT = FMath::Sign(PendingMouseTurnDegrees);
+				SendT = ReportedTurn;
 			}
 			Client->SendMovementEx(SendF, SendR, SendT, bRunning, bStandingLongJump, true);
 		}
@@ -1452,7 +1454,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		}
 		ForwardSent = F;
 		RightSent = R;
-		TurnSent = T;
+		TurnSent = ReportedTurn;
 		bRunningSent = bRunning;
 		bWasMoving = bMoving;
 		bJumpChargeSent = bJumpCharging;

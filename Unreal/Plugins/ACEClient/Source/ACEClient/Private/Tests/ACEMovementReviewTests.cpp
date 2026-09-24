@@ -6,6 +6,7 @@
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
 #include "ACESession.h"
+#include "VR/ACEVRPose.h"
 #include "ACECharacterAppearanceComponent.h"
 #include "Dat/ACEEnvCellMeshBuilder.h"
 #include "ProceduralMeshComponent.h"
@@ -131,6 +132,71 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   P.Location.X+=100;Walker->ApplyACEPosition(P);
   TestTrue(TEXT("Large teleport still snaps immediately"),Walker->GetActorLocation().Equals(P.ToUnrealLocation(100),.01));
   Walker->Destroy();
+ }
+ // Sparse server positions must not leave remote feet on a horizontal shelf.
+ // Exercise the actor presentation, collision and tracked-root path on a slope.
+ {
+  FACEPosition P; P.CellId=0x016C0101; P.Location=FVector(50,50,100);
+  const FVector Origin=P.ToUnrealLocation(100);
+  auto* FloorActor=World->SpawnActor<AActor>();
+  auto* Floor=NewObject<UProceduralMeshComponent>(FloorActor); FloorActor->SetRootComponent(Floor); Floor->RegisterComponent();
+  Floor->SetCollisionObjectType(ECC_WorldStatic); Floor->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+  Floor->SetCollisionResponseToAllChannels(ECR_Block);
+  Floor->CreateMeshSection_LinearColor(0,{FVector(-1000,-1000,400),FVector(1000,-1000,400),FVector(1000,1000,-400),FVector(-1000,1000,-400)},
+   {0,1,2,0,2,3},{},{},{},{},true);
+  FloorActor->SetActorLocation(Origin);
+  for(bool VR:{false,true})for(bool Player:{false,true})for(int Frames:{30,90,144})
+  {
+   auto* Walker=World->SpawnActor<AACEWorldEntityActor>();Walker->bIsPlayer=Player;Walker->ItemType=ACEItemType::Creature;
+   Walker->ApplyACEPosition(P);Walker->RemoteMotion.bMoving=true;Walker->RemoteMotion.Forward=1;Walker->RemoteMotion.ForwardUnitsPerSecond=4;
+   const float Dt=1.f/Frames;double MaxError=0;
+   for(int I=1;I<=Frames*2;++I)
+   {
+    if(VR)
+    {
+     FACEVRPose Pose;Pose.Version=2;Pose.Root=(Origin+FVector(0,I*Dt*400, -FMath::FloorToFloat(I*Dt)*160))/100;
+     Walker->ApplyRemoteVRRoot(Pose,Dt);
+    }
+    else Walker->Tick(Dt);
+    const FVector L=Walker->GetActorLocation()-Origin;
+    MaxError=FMath::Max(MaxError,FMath::Abs(L.Z-(-.4*L.Y+1)));
+   }
+   TestTrue(FString::Printf(TEXT("%s %s follows downhill ground every frame at %d FPS (max %.3fcm)"),
+    VR?TEXT("tracked"):TEXT("ordinary"),Player?TEXT("player"):TEXT("creature"),Frames,MaxError),MaxError<1.5);
+   TestTrue(TEXT("Remote keeps walking downhill between sparse packets"),Walker->GetActorLocation().Y-Origin.Y>650);
+   Walker->Destroy();
+  }
+  auto* Walker=World->SpawnActor<AACEWorldEntityActor>();Walker->bIsPlayer=true;Walker->bClampToGround=false;
+  Walker->ApplyACEPosition(P);
+  Walker->RemoteMotion.MovementType=7;Walker->RemoteMotion.bHaveMoveToTarget=true;
+  Walker->RemoteMotion.MoveToCellId=P.CellId;Walker->RemoteMotion.MoveToLocalAce=P.Location+FVector(-5,0,0);
+  const FQuat Before=Walker->GetActorQuat();Walker->Tick(1.f/90);
+  const double Turn=FMath::RadiansToDegrees(Before.AngularDistance(Walker->GetActorQuat()));
+  TestTrue(TEXT("MoveTo direction changes blend instead of snapping 90 degrees"),Turn>0 && Turn<20);
+  Walker->RemoteMotion=FACEObjectMotionState();Walker->ApplyACEPosition(P);
+  Walker->ApplyPhysicsVelocity(FVector(4,0,2));const FQuat JumpFacing=Walker->RemotePredictRotation;
+  FACEPosition Correction=P;Correction.Location.X+=1;Correction.bHasVelocity=true;Correction.Velocity=FVector(4,0,2);
+  const FVector BeforeJump=Walker->GetActorLocation();Walker->ApplyACEPosition(Correction);Walker->Tick(1.f/90);
+  TestTrue(TEXT("Velocity-bearing position correction is smoothed"),FVector::Distance(Walker->GetActorLocation(),BeforeJump)<30);
+  TestTrue(TEXT("Strafing/jumping velocity does not rotate the model to face sideways"),Walker->RemotePredictRotation.Equals(JumpFacing,.001));
+  Walker->bClampToGround=true;Walker->ApplyACEPosition(P);Walker->ApplyPhysicsVelocity(FVector(0,0,4));
+  FVector Airborne=Origin+FVector(0,0,100);Walker->ClampLocationToGround(Airborne);
+  TestTrue(TEXT("Ground following does not pull an airborne creature down"),Airborne.Equals(Origin+FVector(0,0,100),.01));
+  Walker->Destroy();FloorActor->Destroy();
+ }
+ {
+  auto Session=GI->GetSubsystem<UACEClientSubsystem>()->GetSession();
+  FACEWorldObject Remote;Remote.Guid=12899;Remote.bHasPhysicsTimestamps=true;
+  Remote.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]=2;Remote.PhysicsTimestamps[ACEPhysicsTimeStamp::Vector]=65534;
+  Session->WorldObjects.Add(Remote.Guid,Remote);int Updates=0;
+  const auto Handle=Session->OnVectorUpdate.AddLambda([&](int32,const FVector&,const FVector&){++Updates;});
+  auto Receive=[&](uint16 Instance,uint16 Sequence) {
+   FACEBinaryWriter W;W.WriteUInt32(Remote.Guid);for(float V:{1.f,2.f,3.f,0.f,0.f,0.f})W.WriteFloat(V);
+   W.WriteUInt16(Instance);W.WriteUInt16(Sequence);FACEBinaryReader R(W.GetData());Session->HandleVectorUpdate(R);
+  };
+  Receive(2,65535);Receive(2,0);Receive(2,65535);Receive(2,0);Receive(1,1);
+  TestEqual(TEXT("Vector wrap accepted; duplicate, stale and old-incarnation velocities rejected"),Updates,2);
+  Session->OnVectorUpdate.Remove(Handle);Session->WorldObjects.Remove(Remote.Guid);
  }
  // The local pawn survives the death teleport; it is not recreated like a corpse.
  {
