@@ -6,6 +6,14 @@ A Windows PC is needed for this installer, and a compatible game server must be 
 over the network while playing. Quest 3S is accepted by the installer but has not
 been tested on hardware. Check manifest.json for the exact build version.
 
+IN-HEADSET UPDATES (v73 AND LATER)
+
+At login, open Updates, download the new version, then choose Install. Confirm
+the update in the headset. If requested, allow AC:VR to install updates, return
+to the game, and choose Install again. Accounts, settings, and DAT files stay
+in place. The USB updater below is still available if the headset prevents
+installation. Older clients need one USB update to obtain this feature.
+
 ALREADY HAVE THE GAME INSTALLED?
 
 Extract this new ZIP, copy your existing platform-tools folder beside the

@@ -39,7 +39,9 @@ through Steam Link when the Menu button is reserved by the runtime. Tapping X
 still toggles inventory. Menu also opens VR options when available to the game.
 
 UPDATES AND HELP
-Close the client and install updates into the same location. Saved accounts and
+From v73 onward, use Updates in the login screen: Download update, then Install
+and restart. The client reopens in the same desktop or PC VR mode. Older builds
+need one manual update to enable this. Website installers remain available. Saved accounts and
 settings are stored separately; keep your DAT backup. The community Windows
 installer is unsigned; SHA256SUMS.txt contains file verification hashes.
 See RELEASE-NOTES.md for exact validation and remaining preview limitations.

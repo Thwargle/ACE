@@ -131,6 +131,16 @@ protected:
 	UPROPERTY() TObjectPtr<UButton> GDLETypeButton;
 	UPROPERTY() TObjectPtr<UButton> WebsiteButton;
 	UPROPERTY() TObjectPtr<UButton> DiscordButton;
+	UPROPERTY() TObjectPtr<class UACEUpdateSubsystem> Updater;
+	UPROPERTY() TObjectPtr<UTextBlock> UpdateText;
+	UPROPERTY() TObjectPtr<class UProgressBar> UpdateProgress;
+	UPROPERTY() TObjectPtr<UACELoginActionButton> UpdateNavButton;
+	UPROPERTY() TObjectPtr<UButton> CheckUpdateButton;
+	UPROPERTY() TObjectPtr<UButton> DownloadUpdateButton;
+	UPROPERTY() TObjectPtr<UButton> InstallUpdateButton;
+	UPROPERTY() TObjectPtr<UButton> CancelUpdateButton;
+	float UpdatePollTime = 0;
+	void RefreshUpdateControls();
 	void RefreshServers();
 	void RefreshAccounts();
 	void SelectServer(const FString& Id);

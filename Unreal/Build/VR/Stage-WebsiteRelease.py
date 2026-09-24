@@ -29,7 +29,7 @@ win=meta['windowsInstaller']
 quest=next(x for x in meta['archives'] if x['name'].startswith('AC-VR-Quest-'))
 portable=next(x for x in meta['archives'] if x['name'].startswith('AC-Unreal-and-AC-VR-'))
 items={}
-for key,entry in [('windows',win),('quest',quest),('portable',portable)]:
+for key,entry in [('windows',win),('quest',quest),('portable',portable),('questApk',meta['questApk'])]:
     name=entry.get('file',entry.get('name'))
     assert Path(name).name==name, 'Public filename must not contain directories'
     src=release/name
@@ -52,6 +52,7 @@ shutil.copy2(root/'Unreal/Build/Branding/AC-Icon.png',assets/'ac-icon.png')
 shutil.copy2(root/'Unreal/Build/Windows/Application.ico',assets/'ac-icon.ico')
 public={'version':version,'date':meta['createdUtc'][:10],'windowsVersion':meta['windowsVersion'],
         'questVersion':meta['questVersion'],'windowsSigned':False,'gameDataIncluded':False,**items}
+public['updates']={'schema':1,'windows':items['windows'],'quest':items['questApk']}
 (assets/'release.json').write_text(json.dumps(public,indent=2)+'\n',encoding='utf-8')
 subprocess.run([sys.executable,str(site/'_tools/build-ac-pages.py')],check=True)
 print(f'Staged public website downloads in {out}. No remote upload performed.')

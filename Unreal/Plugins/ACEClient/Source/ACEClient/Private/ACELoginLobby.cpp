@@ -1,6 +1,8 @@
 #include "ACELoginWidget.h"
 #include "ACELoginSettings.h"
 #include "ACEClientBuild.h"
+#include "ACEUpdateSubsystem.h"
+#include "Components/ProgressBar.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
@@ -150,6 +152,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	auto* BrandSize=WidgetTree->ConstructWidget<USizeBox>(); BrandSize->SetWidthOverride(245); BrandSize->SetContent(Brand); Header->AddChildToWrapBox(BrandSize);
 	for (const auto& Item : TArray<TPair<FString,FString>>{{TEXT("Play"),TEXT("play")},{TEXT("Browse servers"),TEXT("browser")},{TEXT("Game files"),TEXT("files")},{TEXT("Quit"),TEXT("quit")}})
 		Header->AddChildToWrapBox(ActionButton(Item.Key,Item.Value));
+	UpdateNavButton=ActionButton(TEXT("Updates"),TEXT("updates")); Header->AddChildToWrapBox(UpdateNavButton);
 	Pages = WidgetTree->ConstructWidget<UWidgetSwitcher>(); AddLine(Root, Pages, 16);
 	auto Card = [&](UVerticalBox*& Content) -> UBorder*
 	{
@@ -231,6 +234,19 @@ void UACELoginWidget::EnsureDefaultLayout()
 #endif
 	FileStatus=Label(TEXT(""),20); AddLine(Files,FileStatus,24);
 	AddLine(Files,Label(TEXT("Changing an already-loaded installation takes effect after restarting. No game files are moved or copied."),18,true));
+	UVerticalBox* Updates; Pages->AddChild(Card(Updates));
+	AddLine(Updates,Label(TEXT("Client updates"),28));
+	AddLine(Updates,Label(TEXT("New versions are checked automatically when the launcher opens. Updates are optional and keep your accounts, settings, and DAT files."),18,true));
+	UpdateText=Label(TEXT("Checking for updates..."),20); AddLine(Updates,UpdateText,20);
+	UpdateProgress=WidgetTree->ConstructWidget<UProgressBar>(); UpdateProgress->SetFillColorAndOpacity(Gold);
+	auto* ProgressSize=WidgetTree->ConstructWidget<USizeBox>(); ProgressSize->SetHeightOverride(16); ProgressSize->SetContent(UpdateProgress); AddLine(Updates,ProgressSize,20);
+	auto* UpdateActions=WidgetTree->ConstructWidget<UWrapBox>(); UpdateActions->SetInnerSlotPadding(FVector2D(10,10)); AddLine(Updates,UpdateActions,20);
+	CheckUpdateButton=ActionButton(TEXT("Check now"),TEXT("checkupdate")); UpdateActions->AddChildToWrapBox(CheckUpdateButton);
+	DownloadUpdateButton=ActionButton(TEXT("Download update"),TEXT("downloadupdate"),FString(),true); UpdateActions->AddChildToWrapBox(DownloadUpdateButton);
+	InstallUpdateButton=ActionButton(PLATFORM_ANDROID?TEXT("Install"):TEXT("Install and restart"),TEXT("installupdate"),FString(),true); UpdateActions->AddChildToWrapBox(InstallUpdateButton);
+	CancelUpdateButton=ActionButton(TEXT("Cancel download"),TEXT("cancelupdate")); UpdateActions->AddChildToWrapBox(CancelUpdateButton);
+	AddLine(Updates,Label(PLATFORM_ANDROID?TEXT("Installation asks for confirmation in the headset. If requested, allow AC:VR to install updates, return here, and choose Install again."):TEXT("Install and restart closes the game, updates this installation, and reopens it in the same desktop or VR mode."),18,true));
+	Row(Updates,{{TEXT("Release notes"),TEXT("updatenotes")},{TEXT("Back to play"),TEXT("play")}});
 	// Inline destructive-action confirmation is also fully usable with VR pointers.
 	FooterSize=WidgetTree->ConstructWidget<USizeBox>(); FooterSize->SetWidthOverride(1028);
 	auto* FooterSlot=Canvas->AddChildToCanvas(FooterSize); FooterSlot->SetAnchors(FAnchors(.5f,1)); FooterSlot->SetAlignment(FVector2D(.5f,1)); FooterSlot->SetPosition(FVector2D(0,-18)); FooterSlot->SetAutoSize(true);
@@ -252,6 +268,8 @@ void UACELoginWidget::NativeConstruct()
 	EnsureDefaultLayout(); Super::NativeConstruct();
 	if (auto* GI=GetGameInstance())
 	{
+		Updater=GI->GetSubsystem<UACEUpdateSubsystem>();
+		if (Updater) Updater->Check(true);
 		Client=GI->GetSubsystem<UACEClientSubsystem>();
 		if (Client)
 		{
@@ -292,6 +310,8 @@ void UACELoginWidget::NativeDestruct()
 void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 {
 	Super::NativeTick(Geometry,Dt);
+	UpdatePollTime-=Dt;
+	if (UpdatePollTime<=0) { UpdatePollTime=.25f; if (Updater) Updater->PollInstall(); RefreshUpdateControls(); }
 	// Scale text and pointer targets together. The same design fits a 720p window,
 	// a high-DPI/fullscreen desktop, and the dedicated 1100x900 headset surface.
 	const FVector2D View=Geometry.GetLocalSize();
@@ -305,6 +325,25 @@ void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 		const bool Narrow=Width<900.f;
 		SidebarSize->SetWidthOverride(Narrow?Width:280.f); DetailSize->SetWidthOverride(Narrow?Width:Width-301.f);
 	}
+}
+
+void UACELoginWidget::RefreshUpdateControls()
+{
+	if (!Updater || !UpdateText) return;
+	const auto State=Updater->State;
+	const bool Busy=Updater->IsBusy();
+	const bool Available=Updater->Release.Number>ACEClientBuild::ReleaseNumber;
+	FString Text=Updater->Message;
+	if (State==EACEUpdateState::Downloading) Text+=FString::Printf(TEXT(" %.0f%%"),Updater->Progress()*100);
+	if (UpdateText->GetText().ToString()!=Text) UpdateText->SetText(FText::FromString(Text));
+	UpdateProgress->SetPercent(State==EACEUpdateState::Ready?1.f:Updater->Progress());
+	CheckUpdateButton->SetIsEnabled(!Busy && State!=EACEUpdateState::Checking);
+	DownloadUpdateButton->SetVisibility(Available && !Busy && State!=EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
+	InstallUpdateButton->SetVisibility(State==EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
+	CancelUpdateButton->SetVisibility(State==EACEUpdateState::Downloading?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
+	LoginButton->SetIsEnabled(!Busy && Profile.SelectedServer()!=nullptr);
+	if (auto* Size=Cast<USizeBox>(UpdateNavButton->GetContent())) if(auto* Label=Cast<UTextBlock>(Size->GetContent()))
+	{ const FString Title=Available?TEXT("Update available"):TEXT("Updates"); if(Label->GetText().ToString()!=Title)Label->SetText(FText::FromString(Title)); }
 }
 
 void UACELoginWidget::OnLoginEntryChanged(const FText&) { bLoginEntriesDirty=true; }
@@ -389,6 +428,7 @@ void UACELoginWidget::EditServer(bool bNew)
 
 void UACELoginWidget::DoLogin()
 {
+	if (Updater && Updater->IsBusy()) { SetStatus(TEXT("Finish or cancel the update before logging in.")); return; }
 	if (!Profile.SelectedServer()) { SetStatus(TEXT("Choose a server first.")); return; }
 	if (!StoreAccount()) return;
 	const auto* S=Profile.SelectedServer();
@@ -463,6 +503,15 @@ void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 		SaveLoginEntries();
 		UKismetSystemLibrary::QuitGame(this,GetOwningPlayer(),EQuitPreference::Quit,false);
 		return;
+	}
+	if (Action==TEXT("updates")) { Pages->SetActiveWidgetIndex(4); RefreshUpdateControls(); return; }
+	if (Updater)
+	{
+		if (Action==TEXT("checkupdate")) { Updater->Check(); RefreshUpdateControls(); return; }
+		if (Action==TEXT("downloadupdate")) { Updater->Download(); RefreshUpdateControls(); return; }
+		if (Action==TEXT("cancelupdate")) { Updater->Cancel(); RefreshUpdateControls(); return; }
+		if (Action==TEXT("installupdate")) { SaveLoginEntries(); Updater->Install(UHeadMountedDisplayFunctionLibrary::IsHeadMountedDisplayEnabled()); RefreshUpdateControls(); return; }
+		if (Action==TEXT("updatenotes")) { FPlatformProcess::LaunchURL(*(Updater->Release.Number>0?FString::Printf(TEXT("https://thwargle.com/downloads/ac/v%d/RELEASE-NOTES.md"),Updater->Release.Number):FString(TEXT("https://thwargle.com/unreal/#download"))),nullptr,nullptr); return; }
 	}
 	if (Action==TEXT("launch")) { DoLogin(); return; }
 	if (Action==TEXT("enter")) { DoEnterSelectedCharacter(); return; }

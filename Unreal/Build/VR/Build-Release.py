@@ -44,6 +44,8 @@ assert exe.is_file(), 'Package Windows first'
 # The source stamp is a consistency check, not a substitute for build validation.
 stamp = (root / 'Unreal/Plugins/ACEClient/Source/ACEClient/Public/ACEClientBuild.h').read_text()
 assert f'"{args.windows_version}"' in stamp, 'Windows version differs from source stamp'
+assert f'ReleaseNumber = {version};' in stamp, 'Updater release number differs from package'
+assert (windows/'Update-Client.ps1').is_file(), 'Updater helper missing from Windows package'
 release.mkdir(parents=True)
 shutil.copy2(quest_zip, release / quest_zip.name)
 win_zip = release / f'AC-Unreal-and-AC-VR-Windows-v{version}.zip'
@@ -58,7 +60,7 @@ with zipfile.ZipFile(win_zip, 'w', zipfile.ZIP_DEFLATED, compresslevel=1, allowZ
             continue
         if path.suffix.lower() in {'.pdb', '.log', '.dat', '.dmp'} or path.name.startswith('Manifest_'):
             continue
-        if rel.parts[0] not in {'ACUnreal', 'Engine', 'ACUnreal.exe', 'Launch-VR.ps1', 'Launch-VR.bat', 'AC-Unreal.bat', 'AC-VR.bat', 'NOTICES.txt'}:
+        if rel.parts[0] not in {'ACUnreal', 'Engine', 'ACUnreal.exe', 'Launch-VR.ps1', 'Launch-VR.bat', 'AC-Unreal.bat', 'AC-VR.bat', 'Update-Client.ps1', 'NOTICES.txt'}:
             continue
         assert path.name.lower() not in {'config.js', 'log4net.config'}, 'Local server config in runtime'
         archive.write(path, prefix + rel.as_posix())
@@ -69,8 +71,10 @@ with zipfile.ZipFile(win_zip, 'w', zipfile.ZIP_DEFLATED, compresslevel=1, allowZ
 with zipfile.ZipFile(win_zip) as archive:
     assert archive.testzip() is None, 'Windows ZIP checksum failure'
 shutil.copy2(quest / 'Sharing/RELEASE-NOTES.md', release / 'RELEASE-NOTES.md')
+direct_apk = release / f'AC-VR-Quest-v{version}.apk'
+shutil.copy2(apk, direct_apk)
 archives = [release / quest_zip.name, win_zip]
-(release / 'SHA256SUMS.txt').write_text(''.join(f'{sha(p)}  {p.name}\n' for p in archives))
+(release / 'SHA256SUMS.txt').write_text(''.join(f'{sha(p)}  {p.name}\n' for p in archives + [direct_apk]))
 (release / 'release-manifest.json').write_text(json.dumps({
     'desktopProduct': 'AC:Unreal', 'vrProduct': 'AC:VR',
     'createdUtc': datetime.now(timezone.utc).isoformat(), 'questVersion': manifest['version'],
@@ -79,6 +83,7 @@ archives = [release / quest_zip.name, win_zip]
     'gameDataIncluded': False, 'serverIncluded': False, 'savedSettingsIncluded': False,
     'headsetAcceptance': 'See RELEASE-NOTES.md; packaging alone is not live acceptance.',
     'archives': [{'name': p.name, 'bytes': p.stat().st_size, 'sha256': sha(p)} for p in archives],
+    'questApk': {'file': direct_apk.name, 'bytes': direct_apk.stat().st_size, 'sha256': sha(direct_apk)},
     'windowsFiles': members,
 }, indent=2) + '\n')
 print(json.dumps({'release': str(release), 'archives': [{'name':p.name,'bytes':p.stat().st_size} for p in archives]}, indent=2))

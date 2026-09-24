@@ -4,6 +4,8 @@
 #include "ACELoginProfile.h"
 #include "ACELoginSettings.h"
 #include "ACELoginWidget.h"
+#include "ACEUpdateSubsystem.h"
+#include "ACEClientBuild.h"
 #include "ACEPlayerController.h"
 #include "Blueprint/GameViewportSubsystem.h"
 #include "Blueprint/WidgetLayoutLibrary.h"
@@ -133,6 +135,23 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         W->RunAction(TEXT("browser")); W->RunAction(TEXT("directoryselect"),HomeId); Capture(TEXT("Browser"),FIntPoint(1100,900));
         W->RunAction(TEXT("editserver")); Capture(TEXT("Editor"),FIntPoint(1100,900));
         W->RunAction(TEXT("files")); Capture(TEXT("Files"),FIntPoint(1100,900));
+        // This offscreen fixture does not mount the widget in a player screen.
+        W->Updater=GI->GetSubsystem<UACEUpdateSubsystem>();
+        if (!TestNotNull(TEXT("Game instance owns the updater"),W->Updater.Get())) return false;
+        W->Updater->Release.Number=ACEClientBuild::ReleaseNumber+1;
+        W->Updater->State=EACEUpdateState::Available;
+        W->Updater->Message=TEXT("A new version is available (320 MB).");
+        W->RunAction(TEXT("updates")); Capture(TEXT("UpdatesVR"),FIntPoint(1100,900));
+        Capture(TEXT("Updates720p"),FIntPoint(1280,720));
+        TestTrue(TEXT("Download update is available in the shared VR/desktop lobby"),W->DownloadUpdateButton->IsVisible());
+        TestFalse(TEXT("Install remains hidden until verification"),W->InstallUpdateButton->IsVisible());
+        W->Updater->State=EACEUpdateState::Downloading; W->RefreshUpdateControls();
+        TestFalse(TEXT("Cannot log in while replacing client files"),W->LoginButton->GetIsEnabled());
+        W->Updater->State=EACEUpdateState::Ready; W->Updater->Message=TEXT("Update verified. Install and restart to finish. Your accounts, settings, and game data are kept.");
+        W->RefreshUpdateControls(); Capture(TEXT("UpdateReadyVR"),FIntPoint(1100,900));
+        TestTrue(TEXT("Verified update presents install action"),W->InstallUpdateButton->IsVisible());
+        W->Updater->Cancel(); W->RefreshUpdateControls();
+
     }
     W->RunAction(TEXT("play")); W->RunAction(TEXT("removeaccount")); W->RunAction(TEXT("confirmremove"));
     TestEqual(TEXT("Confirmed removal deletes only selected account"),W->Profile.Accounts.Num(),1);
@@ -157,6 +176,7 @@ bool FACELauncherViewportTest::RunTest(const FString&)
     auto* W=PC->LoginWidget.Get();
     if (!TestNotNull(TEXT("Login lobby exists in the launched client"),W)) return false;
     TestTrue(TEXT("Login is attached to the player screen"),W->IsInViewport());
+    TestNotNull(TEXT("Live lobby is connected to updater"),W->Updater.Get());
     auto* Viewport=UGameViewportSubsystem::Get();
     if (!TestNotNull(TEXT("Viewport subsystem owns the login slot"),Viewport)) return false;
     auto CheckSlot=[&]()

@@ -1,5 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <root xmlns:android="http://schemas.android.com/apk/res/android">
+  <androidManifestUpdates>
+    <addPermission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <addElements tag="application">
+      <receiver android:name="com.acecommunity.updates.ACEUpdateReceiver" android:exported="false" />
+    </addElements>
+  </androidManifestUpdates>
+  <prebuildCopies>
+    <copyFile src="$S(PluginDir)/Android/ACEUpdater.java" dst="$S(BuildDir)/src/com/acecommunity/updates/ACEUpdater.java" />
+    <copyFile src="$S(PluginDir)/Android/ACEUpdateReceiver.java" dst="$S(BuildDir)/src/com/acecommunity/updates/ACEUpdateReceiver.java" />
+  </prebuildCopies>
   <gameActivityOnCreateAdditions>
     <insert><![CDATA[
     // Quest's overlay IME edits an offscreen field. UE otherwise discards
@@ -24,6 +34,15 @@
   </gameActivityOnCreateAdditions>
   <gameActivityClassAdditions>
     <insert><![CDATA[
+    public String AndroidThunkJava_ACEUpdateDirectory() {
+        return com.acecommunity.updates.ACEUpdater.directory(this).getAbsolutePath();
+    }
+    public String AndroidThunkJava_ACEInstallUpdate(String path, int version) {
+        return com.acecommunity.updates.ACEUpdater.install(this, path, version);
+    }
+    public String AndroidThunkJava_ACEUpdateStatus() {
+        return com.acecommunity.updates.ACEUpdater.status(this);
+    }
     // Complete the actual keyboard entry, not a key event for the hardware
     // Slate user. Read the full buffer before hiding, including pending edits.
     private void ACEAcceptKeyboardInput() {

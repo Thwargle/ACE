@@ -31,6 +31,7 @@ public class ACEClient : ModuleRules
 			"Landscape"
 		});
 		PrivateDependencyModuleNames.AddRange(new string[] { "RenderCore", "RHI", "HTTP", "XmlParser", "AssetRegistry" });
+		AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenSSL");
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
 			PublicSystemLibraries.Add("Crypt32.lib");

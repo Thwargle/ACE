@@ -11,5 +11,5 @@ $log = Join-Path $projectRoot ('Saved\VRWindowsBuild-' + (Get-Date -Format 'yyyy
 $code = $LASTEXITCODE
 Get-Content -LiteralPath $log -Tail 25
 if ($code -ne 0) { throw "Windows packaging failed (exit $code). See $log" }
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Launch-VR.ps1'), (Join-Path $PSScriptRoot 'Launch-VR.bat'), (Join-Path $PSScriptRoot 'AC-Unreal.bat'), (Join-Path $PSScriptRoot 'AC-VR.bat') -Destination (Join-Path $archive 'Windows') -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Launch-VR.ps1'), (Join-Path $PSScriptRoot 'Launch-VR.bat'), (Join-Path $PSScriptRoot 'AC-Unreal.bat'), (Join-Path $PSScriptRoot 'AC-VR.bat'), (Join-Path $PSScriptRoot 'Update-Client.ps1') -Destination (Join-Path $archive 'Windows') -Force
 Write-Host "AC:Unreal / AC:VR Windows build ready in $archive\Windows. Build log: $log"

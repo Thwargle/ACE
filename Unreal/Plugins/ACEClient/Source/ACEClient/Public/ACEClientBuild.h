@@ -5,6 +5,7 @@ class UWorld;
 
 namespace ACEClientBuild
 {
+	inline constexpr int32 ReleaseNumber = 73;
 	inline constexpr const TCHAR* DesktopProductName = TEXT("AC:Unreal");
 	inline constexpr const TCHAR* VRProductName = TEXT("AC:VR");
 	inline const TCHAR* ProductName(bool bVR = false)
@@ -13,8 +14,8 @@ namespace ACEClientBuild
 	}
 	ACECLIENT_API void UpdateWindowTitle(UWorld* World, bool bVR = false);
 #if PLATFORM_ANDROID
-	inline constexpr const TCHAR* Version = TEXT("2026.09.24.quest.72");
+	inline constexpr const TCHAR* Version = TEXT("2026.09.24.quest.73");
 #else
-	inline constexpr const TCHAR* Version = TEXT("2026.09.24.78");
+	inline constexpr const TCHAR* Version = TEXT("2026.09.24.79");
 #endif
 }
