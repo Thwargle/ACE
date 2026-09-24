@@ -360,6 +360,14 @@ bool UACEVRComponent::SelectSpell(int32 Spell)
 	return true;
 }
 
+void UACEVRComponent::RestoreSpellBarSelection(int32 Spell)
+{
+	if (!bActive || !Client) return;
+	SelectedSpell = Spell;
+	const int32 Index = SpellSlots().Find(Spell);
+	SpellPage = Index >= 0 ? Index / 8 : 0;
+}
+
 bool UACEVRComponent::IsWristSlotSelected(int32 Slot) const
 {
 	const auto Spells = SpellSlots(); const int32 Index = SpellPage * 8 + Slot;
@@ -394,8 +402,9 @@ FString UACEVRComponent::GetCastFeedback() const
 void UACEVRComponent::CycleSpellBar(int32 Direction)
 {
 	if (!Client) return;
-	Client->SetActiveSpellBar((Client->GetActiveSpellBar() + Direction + 8) % 8);
-	SpellPage = 0; SelectedSpell = 0; CycleSpell(1);
+	const int32 Tab = (Client->GetActiveSpellBar() + Direction + 8) % 8;
+	if (PC && PC->DatGameplayBinder) PC->DatGameplayBinder->SetCombatSpellBar(Tab);
+	else Client->SetActiveSpellBar(Tab);
 }
 
 FString UACEVRComponent::GetWristSlotText(int32 Slot) const

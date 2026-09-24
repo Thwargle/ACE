@@ -695,7 +695,11 @@ void UACEUICanvasWidget::SyncElementRecursive(
 		// tiles in retail. drawMode 3 stretches, which a plain Image brush already does.
 		ESlateBrushTileType::Type TileType = ESlateBrushTileType::NoTile;
 		FVector2D TileSize = FVector2D::ZeroVector;
-		if (PaintMode == 1 && Tex)
+		// DAT scrollbar templates stretch their track placeholder. Preserve the
+		// chain's native link pitch as a window grows, in either orientation.
+		const bool bChainTrack = Element->Type == ACEUI::ElementType::Scrollbar
+			&& (PaintImage == 0x06004C5Fu || PaintImage == 0x06004C7Fu);
+		if ((PaintMode == 1 || bChainTrack) && Tex)
 		{
 			const float TexW = FMath::Max(1.f, static_cast<float>(Tex->GetSizeX()) * LastScaleX);
 			const float TexH = FMath::Max(1.f, static_cast<float>(Tex->GetSizeY()) * LastScaleY);

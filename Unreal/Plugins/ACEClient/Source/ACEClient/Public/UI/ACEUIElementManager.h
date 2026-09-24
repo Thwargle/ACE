@@ -102,6 +102,10 @@ public:
 	/** Persist / restore floaty UserDrag + UserResizeH (+ lock) in GameUserSettings.ini. */
 	void SaveFloatyLayout() const;
 	void LoadFloatyLayout();
+	/** Retail geometry-only text snapshots; coordinates use the effective UI canvas. */
+	FIntPoint GetScreenLayoutSize() const;
+	FString ExportScreenLayout() const;
+	bool ImportScreenLayout(const FString& Text, FString& Error);
 
 	/** True if canvas coords hit any visible interactive (or solid floaty) UI. */
 	bool IsCanvasOverUI(int32 CanvasX, int32 CanvasY) const;

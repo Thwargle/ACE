@@ -158,10 +158,12 @@ void UACEVRComponent::RefreshSpellWheel()
 
 void UACEVRComponent::ChangeWheelTab(int32 Direction)
 {
-    Client->SetActiveSpellBar((Client->GetActiveSpellBar()+Direction+8)%8);
+	CycleSpellBar(Direction);
     WheelSpells.Reset();
     for (int32 Spell:Client->GetSpellBar(Client->GetActiveSpellBar())) if (Spell) WheelSpells.Add(Spell);
-    WheelPage=0; WheelHover=INDEX_NONE; bWheelStickReady=TurnStick.Size()<.25f;
+    WheelHover=WheelSpells.Find(SelectedSpell);
+    WheelPage=WheelHover>=0 ? WheelHover/WheelPageSize : 0;
+    bWheelStickReady=TurnStick.Size()<.25f;
     RefreshSpellWheel(); Pulse(false,.15f);
 }
 

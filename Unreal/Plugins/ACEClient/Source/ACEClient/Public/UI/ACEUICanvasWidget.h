@@ -48,6 +48,7 @@ class ACECLIENT_API UACEUICanvasWidget : public UUserWidget
 {
 	GENERATED_BODY()
 	friend class FACERetailScreenTest;
+	friend class FACEUIInteractionParityTest;
 
 public:
 	void InitializeCanvas(UACEUIElementManager* InManager);

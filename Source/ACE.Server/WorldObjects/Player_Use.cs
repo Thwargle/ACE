@@ -185,6 +185,8 @@ namespace ACE.Server.WorldObjects
 
             var item = FindObject(itemGuid, SearchLocations.MyInventory | SearchLocations.MyEquippedItems | SearchLocations.Landblock);
 
+            if (!VerifyDirectDoorUse(item)) return;
+
             if (IsTrading && item.IsBeingTradedOrContainsItemBeingTraded(ItemsInTradeWindow))
             {
                 SendUseDoneEvent(WeenieError.TradeItemBeingTraded);
@@ -217,11 +219,23 @@ namespace ACE.Server.WorldObjects
         public DateTime NextUseTime { get; set; }
         public float LastUseTime { get; set; }
 
+        private bool VerifyDirectDoorUse(WorldObject item)
+        {
+            // Retail suppresses direct Use for Usable.No doors. Quest switches,
+            // pressure plates and keys still use their own activation paths.
+            if (!(item is Door) || !(item.ItemUseable ?? Usable.Undef).HasFlag(Usable.No)) return true;
+            SendTransientError("This door cannot be activated from here.");
+            SendUseDoneEvent();
+            return false;
+        }
+
         /// <summary>
         /// Attempts to use an item - checks activation requirements
         /// </summary>
         public void TryUseItem(WorldObject item, bool success = true)
         {
+            // Recheck after approach: a puzzle may have changed the door meanwhile.
+            if (success && !VerifyDirectDoorUse(item)) return;
             //Console.WriteLine($"{Name}.TryUseItem({item.Name}, {success})");
             LastUseTime = 0.0f;
 

@@ -13,6 +13,7 @@
 bool UACEUIGameplayBinder::TryDispatchMiscCommand(const FString& Cmd, const FString& Args)
 {
     if (!Client) return false;
+    if (TryDispatchUILayoutCommand(Cmd, Args)) return true;
     auto Error=[this](const FString& Text) { AppendLocalChatLine(Text,ACEChatMessageType::ChatError); };
     auto Print=[this](const FString& Text) { AppendLocalChatLine(Text,ACEChatMessageType::System); };
     if (Cmd==TEXT("fillcomps")) { FillVendorComponents(Args); return true; }

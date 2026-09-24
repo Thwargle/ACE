@@ -1,4 +1,5 @@
 #include "UI/ACEUIElementManager.h"
+#include "UI/ACERetailUILayout.h"
 #include "HAL/IConsoleManager.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
@@ -22,6 +23,12 @@ namespace
 		return Name == TEXT("RootGameplay_FloatySideVitals_Field")
 			|| Name == TEXT("RootGameplay_FloatyVitals_Field")
 			|| Name == TEXT("RootGameplay_FloatyIndicators_Field");
+	}
+
+	bool IsSavedLayoutWindow(const FString& Name)
+	{
+		return Name.StartsWith(TEXT("RootGameplay_Floaty"))
+			|| Name == TEXT("RootGameplay_Radar_Field") || Name == TEXT("RootGameplay_PowerBar_Field");
 	}
 
 	bool IsAncestorVisible(const TSharedPtr<FACEUIElement>& Node)
@@ -667,6 +674,7 @@ EMouseCursor::Type UACEUIElementManager::GetWindowCursor(FVector2D ViewportPos, 
 			? EMouseCursor::ResizeSouthEast : EMouseCursor::ResizeSouthWest;
 		return H ? EMouseCursor::ResizeLeftRight : EMouseCursor::ResizeUpDown;
 	}
+
 	return IsFloatyDragHandle(Hit) ? EMouseCursor::CardinalCross : EMouseCursor::Default;
 }
 
@@ -679,6 +687,16 @@ void UACEUIElementManager::ApplyFloatyResizeLayout(const TSharedPtr<FACEUIElemen
 	if (Floaty->AuthoredHeight < 0)
 	{
 		Floaty->AuthoredHeight = Floaty->Height;
+	}
+	if (!IsChatFloaty(Floaty) && Floaty->AuthoredWidth >= 0)
+	{
+		const int32 NewW = FMath::Clamp(Floaty->AuthoredWidth + Floaty->UserResizeW, Floaty->MinWidth, Floaty->MaxWidth);
+		if (NewW != Floaty->Width)
+		{
+			Floaty->Width = NewW;
+			for (const auto& Child : Floaty->Children)
+				FRetailReflow::Reflow(Child, Floaty->AuthoredWidth, Floaty->AuthoredHeight, NewW, Floaty->Height);
+		}
 	}
 	if (Floaty->ElementName == TEXT("RootGameplay_FloatyToolbar_Field"))
 		Floaty->UserResizeH = FMath::Clamp(Floaty->GetLayoutHeight(), Floaty->MinHeight, Floaty->MaxHeight) - Floaty->AuthoredHeight;
@@ -1144,7 +1162,7 @@ void UACEUIElementManager::SaveFloatyLayout() const
 		}
 		for (const TSharedPtr<FACEUIElement>& Child : Root->Children)
 		{
-			if (!Child.IsValid() || !Child->ElementName.StartsWith(TEXT("RootGameplay_Floaty")))
+			if (!Child.IsValid() || !IsSavedLayoutWindow(Child->ElementName))
 			{
 				continue;
 			}
@@ -1154,7 +1172,7 @@ void UACEUIElementManager::SaveFloatyLayout() const
 			// Vitals/indicators are fixed-size — do not persist a leftover resize height.
 			const int32 ResizeH = IsFixedSizeFloaty(Key) ? 0 : Child->UserResizeH;
 			GConfig->SetInt(Section, *(Key + TEXT("_ResizeH")), ResizeH, GGameUserSettingsIni);
-			if (IsChatFloaty(Child)) GConfig->SetInt(Section, *(Key + TEXT("_ResizeW")), Child->UserResizeW, GGameUserSettingsIni);
+			GConfig->SetInt(Section, *(Key + TEXT("_ResizeW")), Child->UserResizeW, GGameUserSettingsIni);
 		}
 	}
 	GConfig->Flush(false, GGameUserSettingsIni);
@@ -1191,7 +1209,7 @@ void UACEUIElementManager::LoadFloatyLayout()
 		}
 		for (const TSharedPtr<FACEUIElement>& Child : Root->Children)
 		{
-			if (!Child.IsValid() || !Child->ElementName.StartsWith(TEXT("RootGameplay_Floaty")))
+			if (!Child.IsValid() || !IsSavedLayoutWindow(Child->ElementName))
 			{
 				continue;
 			}
@@ -1206,14 +1224,72 @@ void UACEUIElementManager::LoadFloatyLayout()
 			Child->UserDragX = DragX;
 			Child->UserDragY = DragY;
 			Child->UserResizeH = ResizeH;
-			if (IsChatFloaty(Child)) GConfig->GetInt(Section, *(Key + TEXT("_ResizeW")), Child->UserResizeW, GGameUserSettingsIni);
+			Child->UserResizeW = 0;
+			GConfig->GetInt(Section, *(Key + TEXT("_ResizeW")), Child->UserResizeW, GGameUserSettingsIni);
+			if (Child->UserResizeW != 0 && Child->AuthoredWidth < 0) Child->AuthoredWidth = Child->Width;
 			Child->RecomputeLayoutOffset();
-			if (ResizeH != 0 || Child->UserResizeW != 0)
+			if (ResizeH != 0 || Child->UserResizeW != 0 || Child->AuthoredHeight >= 0)
 			{
 				ApplyFloatyResizeLayout(Child);
 			}
 		}
 	}
+}
+
+FIntPoint UACEUIElementManager::GetScreenLayoutSize() const
+{
+	for (const auto& Root : Roots)
+		if (Root && Root->ElementName == TEXT("RootGameplay_Field")) return FIntPoint(Root->Width, Root->Height);
+	return FIntPoint::ZeroValue;
+}
+
+FString UACEUIElementManager::ExportScreenLayout() const
+{
+	FString Text = TEXT("# AC:Unreal / AC:VR UI geometry in logical canvas pixels.\n");
+	for (const auto& Window : ACERetailUILayout::Windows)
+		if (const auto Node = FindElementByName(Window.Element))
+			Text += FString::Printf(TEXT("<%s> X:%d Y: %d W: %d H: %d\n"), Window.Tag,
+				Node->GetDrawX(), Node->GetDrawY(), Node->Width, Node->Height);
+	return Text;
+}
+
+bool UACEUIElementManager::ImportScreenLayout(const FString& Text, FString& Error)
+{
+	TArray<ACERetailUILayout::FRect> Rects;
+	if (!ACERetailUILayout::Parse(Text, Rects, Error)) return false;
+	const FIntPoint Size = GetScreenLayoutSize();
+	if (Size.X <= 0 || Size.Y <= 0) { Error = TEXT("UI layouts can only be loaded while playing a character."); return false; }
+	CancelPointerCapture();
+	ApplyEdgeAnchoredLayout(Size.X, Size.Y);
+	for (const auto& Rect : Rects)
+	{
+		// Unreal always renders the world to the full viewport, particularly in VR.
+		// Accept retail's SBOX record without clipping/repositioning the 3D view.
+		if (Rect.Tag == TEXT("SBOX")) continue;
+		for (const auto& Window : ACERetailUILayout::Windows)
+		{
+			if (Rect.Tag != Window.Tag) continue;
+			const auto Node = FindElementByName(Window.Element);
+			if (!Node) break;
+			const int32 W = FMath::Clamp(Rect.W, Node->MinWidth, FMath::Max(Node->MinWidth, FMath::Min(Node->MaxWidth, Size.X)));
+			const int32 H = IsFixedSizeFloaty(Node->ElementName) ? Node->Height
+				: FMath::Clamp(Rect.H, Node->MinHeight, FMath::Max(Node->MinHeight, FMath::Min(Node->MaxHeight, Size.Y)));
+			if (Node->AuthoredWidth < 0) Node->AuthoredWidth = Node->LayoutAuthoredW >= 0 ? Node->LayoutAuthoredW : Node->Width;
+			if (Node->AuthoredHeight < 0) Node->AuthoredHeight = Node->LayoutAuthoredH >= 0 ? Node->LayoutAuthoredH : Node->Height;
+			Node->UserResizeW = W - Node->AuthoredWidth;
+			Node->UserResizeH = H - Node->AuthoredHeight;
+			ApplyFloatyResizeLayout(Node);
+			// Clamp hidden windows too, so opening one later cannot strand it offscreen.
+			const int32 X = FMath::Clamp(Rect.X, 0, FMath::Max(0, Size.X - Node->Width));
+			const int32 Y = FMath::Clamp(Rect.Y, 0, FMath::Max(0, Size.Y - Node->Height));
+			Node->UserDragX += X - Node->GetDrawX();
+			Node->UserDragY += Y - Node->GetDrawY();
+			Node->RecomputeLayoutOffset();
+			break;
+		}
+	}
+	SaveFloatyLayout();
+	return true;
 }
 
 void UACEUIElementManager::RegisterElementFactory(uint32 Type, FElementFactory Factory)

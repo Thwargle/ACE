@@ -359,11 +359,9 @@ void UACEUIGameplayBinder::PollKeyboardActions(APlayerController* PC)
   const bool Prev=Pressed(TEXT("SpellPrevious")),Next=Pressed(TEXT("SpellNext")),First=Pressed(TEXT("SpellFirst")),Last=Pressed(TEXT("SpellLast"));
   if(TabDelta||FirstTab||LastTab)
   {
-   Client->SetActiveSpellBar(FirstTab?0:LastTab?7:(Client->GetActiveSpellBar()+TabDelta+8)%8);
-   SelectedCombatSpellSlot=0;SpellHotbarScrollOffset=0;SyncSpellcastTabChrome();
+   SetCombatSpellBar(FirstTab?0:LastTab?7:(Client->GetActiveSpellBar()+TabDelta+8)%8);
   }
-  const auto Bar=Client->GetSpellBar(Client->GetActiveSpellBar());
-  if((Prev||Next||First||Last)&&!Bar.IsEmpty())SelectedCombatSpellSlot=First?0:Last?Bar.Num()-1:FMath::Clamp(SelectedCombatSpellSlot+(Next?1:-1),0,Bar.Num()-1);
+  if(Prev||Next||First||Last)StepCombatSpellSelection(Next?1:-1,First,Last);
   if(Pressed(TEXT("SpellCast")))CastSelectedHotbarSpell();
   if(TabDelta||FirstTab||LastTab||Prev||Next||First||Last)RefreshSpellHotbarOverlays();
  }

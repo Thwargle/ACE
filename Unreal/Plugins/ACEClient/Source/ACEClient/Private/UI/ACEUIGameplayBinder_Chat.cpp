@@ -1708,6 +1708,11 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 	{
 		const FString Topic = (Cmd == TEXT("help")) ? Args.ToLower() : Cmd;
 		static const TMap<FString,FString> MiscHelp = {
+			{TEXT("lockui"),TEXT("/lockui toggles whether UI windows can be moved and resized.")},
+			{TEXT("saveui"),TEXT("/saveui [name] saves window positions and sizes to Saved/UILayouts/<name>.txt. With no name, use UI-Default.txt. Names may have 1-16 characters; quote spaces. UI scale, keybinds, chat filters and VR comfort settings are not changed.")},
+			{TEXT("loadui"),TEXT("/loadui [name] restores a Saved/UILayouts text layout, including retail layout files copied there. With no name, load UI-Default.txt. Windows are clamped to the current UI canvas. The world view remains fullscreen.")},
+			{TEXT("saveautoui"),TEXT("/saveautoui saves a snapshot for this server, character, display mode and effective UI canvas size. It loads automatically at login and when returning to that size. Moving windows afterward does not overwrite the snapshot; run /saveautoui again to update it.")},
+			{TEXT("loadautoui"),TEXT("/loadautoui restores the snapshot for the current server, character, display mode and UI canvas size immediately.")},
 			{TEXT("fillcomps"),TEXT("Set desired counts in Spellbook > Components, then use a component vendor. /fillcomps adds missing components to the buy list; choose Buy All to purchase. Optional arguments: scarabs, herbs, powders, potions, talismans, tapers, or peas, followed by a maximum pyreal cost. /fillcomps clear resets all desired counts to zero.")},
 			{TEXT("age"),TEXT("/age displays your character's total time played.")},
 			{TEXT("birth"),TEXT("/birth displays when your character was created.")},
@@ -1735,6 +1740,7 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 				TEXT("Global: @cg/@general @ct/@trade @clfg/@lfg @crp/@roleplay @cs/@society @ca @co/@olthoi"),
 				TEXT("Channels: @join/@leave <general|trade|lfg|roleplay|society|allegiance>"),
 				TEXT("Recall: @ls @mp @house recall @house mansion_recall @ah"),
+				TEXT("UI layouts: @saveui [name] @loadui [name] @saveautoui @loadautoui @lockui"),
 				TEXT("Miscellaneous: @fillcomps @age @birth @day @endurance @framerate @loc @pklite (@pkl) @version @loadfile @log @title"),
 				TEXT("Other: @filter @unfilter @messagetypes @clear @title @log @emotes @afk @die @friends"),
 				TEXT("Help: @help commands | @house_help | @allegiance_help | @acehelp (server)"),

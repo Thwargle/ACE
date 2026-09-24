@@ -1350,6 +1350,18 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			Session.SpellBars[0]={1,2,3,1,2,3,1,2,3,1,2,3,2}; VR->ToggleSpellWheel(); VR->ChangeWheelPage(1);
 			TestEqual(TEXT("Long hotbars have a second radial page"),VR->WheelPage,1);
 			VR->ToggleInventory();TestFalse(TEXT("X cancels the wheel without opening inventory"),VR->bSpellWheelOpen || VR->bInventoryOpen);
+			Session.SpellBars[0]={1,2,3}; Session.SpellBars[1]={4,5,6};
+			Gameplay->SetCombatSpellBar(0); VR->SelectSpell(3); VR->CycleSpellBar(1);
+			TestEqual(TEXT("First VR visit selects the tab's first spell"),VR->SelectedSpell,4);
+			VR->SelectSpell(6); VR->CycleSpellBar(-1);
+			TestEqual(TEXT("Returning to a VR tab restores its cast spell"),VR->SelectedSpell,3);
+			TestEqual(TEXT("Wrist cursor matches restored VR cast spell"),Gameplay->SelectedCombatSpellSlot,2);
+			VR->ToggleSpellWheel(); VR->ChangeWheelTab(1);
+			TestEqual(TEXT("Wheel tab restores its remembered spell"),VR->SelectedSpell,6);
+			TestEqual(TEXT("Wheel highlight matches remembered spell"),VR->WheelHover,2);
+			TestEqual(TEXT("Restoring tabs does not change stance"),Session.PlayerVitals.CombatMode,ACECombatMode::NonCombat);
+			TestEqual(TEXT("Restoring tabs never casts"),Session.VRSequence,Sequence);
+			VR->CloseSpellWheel();
 			Session.SpellBars=Bars;Session.ActiveSpellBar=Tab;VR->SelectSpell(2);VR->TurnStick=FVector2D::ZeroVector;
 			Session.WorldObjects.Remove(WheelWand.Guid);Session.PlayerVitals.CombatMode=Mode;
 		}

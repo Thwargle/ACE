@@ -143,7 +143,7 @@ void UACEUIGameplayBinder::PollAdditionalKeyboardActions(APlayerController* PC)
  }
  for(int32 I=1;I<=4;++I)if(Pressed(*FString::Printf(TEXT("ToggleFloatingChatWindow%d"),I)))HandleNamedClick(FString::Printf(TEXT("FloatingChat%d"),I));
  if(Pressed(TEXT("LOGOUT")))Client->Logout();
- if(Pressed(TEXT("CaptureScreenshot")))FScreenshotRequest::RequestScreenshot(false);
+ if(Pressed(TEXT("CaptureScreenshot")))RequestGameplayScreenshot();
  struct FEmote {const TCHAR* Action;uint32 Motion;bool Hold;};
  static const FEmote Emotes[]={
   {TEXT("AFKState"),0x4300011bu,true},{TEXT("BlowKiss"),0x1300007cu,false},

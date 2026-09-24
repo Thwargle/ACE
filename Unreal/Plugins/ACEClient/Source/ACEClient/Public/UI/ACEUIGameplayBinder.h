@@ -7,6 +7,7 @@
 #include "ACEUIGameplayBinder.generated.h"
 
 class UACEClientSubsystem;
+class FACESession;
 class UACEUIElementManager;
 class UACEUICanvasWidget;
 class UMultiLineEditableText;
@@ -53,12 +54,16 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACERetailScreenTest;
 	friend class FACEVRRigTest;
 	friend class FACEChatParityTest;
+	friend class FACEUILayoutCommandsTest;
+	friend class FACEUIInteractionParityTest;
 
 public:
 	bool ScrollFellowship(float WheelDelta, FVector2D CanvasLocalPos);
 	void Initialize(UACEClientSubsystem* InClient, UACEUIElementManager* InManager,
 		UACEUICanvasWidget* InCanvas, AACEPlayerController* InPC);
 	void Shutdown();
+	void RequestGameplayScreenshot();
+	void SetCombatSpellBar(int32 Tab);
 
 	/** Called each canvas tick after layout sync. */
 	void TickRefresh();
@@ -252,6 +257,7 @@ private:
 		ExtItems,
 		ExtPacks,
 		StatList,
+		Attributes,
 		TitleList,
 		StackSize,
 		Effects,
@@ -304,6 +310,18 @@ private:
 	TMap<TWeakObjectPtr<UBorder>, FAceIconPaintCache> IconPaintCache;
 	/** Absolute favorite index, independent of the visible scroll offset; -1 selects innate. */
 	int32 SelectedCombatSpellSlot = 0;
+	struct FSpellTabSelection { int32 Slot = 0; int32 SpellId = 0; int32 Offset = 0; };
+	FSpellTabSelection SpellTabSelections[8];
+	int32 SelectionSpellTab = INDEX_NONE;
+	bool bRevealSelectedSpell = true;
+	void SyncSpellTabSelection();
+	void SelectCombatSpellSlot(int32 Slot);
+	void StepCombatSpellSelection(int32 Direction, bool bFirst, bool bLast);
+	FDelegateHandle ScreenshotProcessedHandle;
+	FString PendingScreenshotFilename;
+	double ScreenshotRequestTime = 0;
+	void FinishGameplayScreenshot();
+	void CancelGameplayScreenshot();
 	/** Equipped wand/orb SpellDID for BuiltInSpell; SelectedCombatSpellSlot < 0 selects it. */
 	int32 BuiltInSpellId = 0;
 	/** Guid of the wielded caster that owns BuiltInSpellId (UseWithTarget source). */
@@ -358,6 +376,7 @@ private:
 	FString ActiveSkillTab = TEXT("AttributePage");
 	FString ActiveSpellPanelTab = TEXT("SpellbookPage");
 	int32 SelectedAttributeRow = INDEX_NONE;
+	int32 AttributeScrollOffset = 0;
 	int32 SelectedSkillId = 0;
 	int32 SkillListScrollOffset = 0;
 	int32 SkillListContentCount = 0;
@@ -1191,6 +1210,13 @@ private:
 	void SyncChatJumpIndicator();
 	/** Parse @/ slash commands (@ls, @tell, @e, …). Returns true if handled (do not Talk). */
 	bool TryDispatchMiscCommand(const FString& Cmd, const FString& Args);
+	bool TryDispatchUILayoutCommand(const FString& Cmd, const FString& Args);
+	void UpdateAutoUILayout();
+	bool GetAutoUILayoutPath(FString& Path) const;
+	TWeakPtr<FACESession> AutoLayoutSession;
+	int32 AutoLayoutPlayer = 0;
+	FIntPoint AutoLayoutSize = FIntPoint::ZeroValue;
+	bool bAutoLayoutVR = false;
 	void FillVendorComponents(const FString& Args);
 	TSet<FString> ActiveChatFiles;
 	bool TryDispatchChatCommand(const FString& Message, UEditableTextBox* Entry = nullptr, bool* bClearEntry = nullptr);

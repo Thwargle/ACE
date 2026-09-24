@@ -1359,6 +1359,8 @@ struct ACECLIENT_API FACEWorldObject
 	FACEObjDesc Appearance;
 
 	bool IsDoor() const { return (ObjectDescriptionFlags & ACEObjectDescFlag::Door) != 0; }
+	/** Retail ItemUses::IsUseable: the No bit forbids direct activation, even on doors. */
+	bool IsDirectDoorUseBlocked() const { return IsDoor() && (ItemUseable & 1) != 0; }
 	bool IsOpenable() const { return (ObjectDescriptionFlags & ACEObjectDescFlag::Openable) != 0; }
 	/**
 	 * Doors / chests / switches — MotionTable On/Off, not locomotion.

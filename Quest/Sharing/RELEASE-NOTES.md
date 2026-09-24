@@ -1,35 +1,35 @@
-# AC:Unreal / AC:VR release 68
+# AC:Unreal / AC:VR release 69
 
-Native Quest: `2026.09.23.quest.68`, Android version code 68, installer revision 6.
-Windows desktop / PC VR: `2026.09.23.74`.
+Native Quest: `2026.09.23.quest.69`, Android version code 69, installer revision 6.
+Windows desktop / PC VR: `2026.09.23.75`.
 
-## Changes since v67
+## Changes since v68
 
-- Add 40 retail keyboard actions for player/fellowship/radar selection, opening
-  unopened corpses, inventory transfers, panels, chat windows, camera control,
-  screenshots, logout, and emotes.
-- Improve custom retail .keymap compatibility: the reported example now imports
-  156 action bindings and 17 explicit DoNothing overrides. Disabled chords no
-  longer accidentally trigger fallback movement. Mouse wheel zoom and the
-  keyboard Menu key import correctly.
-- Match keyboard zoom direction to its retail action and let imported wheel
-  bindings control zoom. Held mouse look also works when ordinary mouse turning
-  is disabled, without appraising an object on release.
-- Follow retail target ordering and preserve combat-specific binding priority.
-  Panel shortcuts select the intended tab, and split-stack focuses an editable
-  quantity that is clamped to the actual stack size.
-- Show a scrollable import report that identifies unsupported controls separately
-  from native UI/system contexts. Review the mapping draft, then press OK to apply
-  it or Cancel to discard it. Existing profiles are not reset by this update.
+- Add retail-style /saveui, /loadui, /saveautoui, /loadautoui, and /lockui
+  commands. Save named window layouts and explicitly save automatic layouts for
+  the current character, server, display size, and desktop/VR mode.
+- Save numbered PNG screenshots with numpad * by default. Chat confirms the
+  actual saved path or explains a failure. Rebind Capture screenshot through the
+  existing keyboard mapping window.
+- Respect the ItemUseable flag on quest/puzzle doors, including live property
+  changes, and explain when a door cannot be activated directly. Existing server
+  quest, lock, key, and switch requirements remain authoritative.
+- Make resized attribute lists work with the wheel, arrows, and scrollbar dragging.
+  Scrolled selection still refers to the correct attribute. Repeat the chain
+  scrollbar artwork instead of stretching it.
+- Remember each spell tab's selected spell for the session. Returning to a tab
+  restores its highlight and scroll position; first visits select the first spell.
+  Next/previous wraps at the ends and keeps selection visible.
+- Synchronize spell selection across desktop tabs, the VR wrist bar, and the VR
+  wheel without casting or changing combat stance. Portal travel retains tab
+  memory; logging out clears it.
 
-## Keymap compatibility limits
+## Layout files
 
-Legacy DirectInput joystick indices, browser Back, and retail's distant map-camera,
-Help and plugin-manager actions are not implemented. Separate system, text-editing,
-mouse/widget, targeted-use and alternate-camera maps retain the application's
-existing behavior rather than being remapped. Save As exports supported bindings;
-keep the original file if it is also used with retail. The import report lists
-exact controls that were not loaded instead of implying complete compatibility.
+Named layouts are stored in Saved/UILayouts. These are window geometry only;
+spells, inventory shortcuts, chat filters, and keybindings are not changed.
+The automatic layout is a snapshot saved by /saveautoui, not a continuous
+save of every window movement. /loadui without a name loads UI-Default.txt.
 
 ## Install or update
 
@@ -50,28 +50,27 @@ any old runtime folder when necessary. See the included instructions for setup.
 
 Choose a server in the lobby and use your own account. Custom VR combat and pose
 replication require this project's updated VR-enabled ACE server. Server owners
-must include the v60 instant atlatl/thrown release changes; a client update cannot
-change an older server's rejection behavior. This release adds no new server requirement.
+must include the v60 instant atlatl/thrown release changes. This source update
+also adds a server-side direct-use guard for restricted doors; server owners
+must deploy the updated server to obtain that additional enforcement. Client
+packages cannot update a remote server. Keys, switches, and scripted activation
+retain their existing paths.
 
 GDLE login has been verified through character selection. The v64 packet-timing
 correction is included. A live Seedsow item-interaction retest is still pending;
-automated protocol checks do not establish full in-world GDLE compatibility. Bundles contain no server,
-credentials, saved settings, SDK tools, or retail DAT files.
+automated protocol checks do not establish full in-world GDLE compatibility.
+Bundles contain no server, credentials, saved settings, SDK tools, or retail DAT files.
 
 ## Validation and limitations
 
-Windows and Android development builds passed. Automated input tests use the
-reported custom keymap and cover modifier priority, disabled chords, combat
-contexts, persistence and export/import. Desktop and ES3.1 mobile UI tests cover
-selection, stack quantity, panel shortcuts and the rendered import report. Camera
-regressions verify held mouse look and ordinary mouse controls.
+Windows and Android Development source builds and the ACE server Release build
+passed. UI regressions cover retail layout-file parsing, layout restoration,
+attribute scrolling, chain artwork, spell-tab memory/wrapping, screenshot writing
+and feedback, screenshot rebinding, and restricted-door action suppression.
+The VR rig tests cover wrist/wheel selection restoration without stance changes.
+The packaged Windows v69 client also passed UIInteractions, UILayoutCommands,
+UIScreens, and VR RigAndMenus (four suites).
 
-Both release packages built successfully. The packaged Windows client passed
-KeyboardBindings, CameraAndEdges and UIScreens. All 15 Quest installer regression
-cases passed under Windows PowerShell. Shared source and runtime materials were
-synchronized before Quest packaging.
-
-These checks do not replace live gameplay acceptance on public servers or headsets.
-No physical legacy joystick was tested. There is no new FPS benchmark in this
-release; sustained 90 FPS VR and 144 FPS desktop remain targets.
-Download hashes are provided in SHA256SUMS.txt.
+These checks do not replace live quest/puzzle or headset gameplay acceptance.
+There is no new FPS benchmark in this release; sustained 90 FPS VR and 144 FPS
+desktop remain targets. Download hashes are provided in SHA256SUMS.txt.

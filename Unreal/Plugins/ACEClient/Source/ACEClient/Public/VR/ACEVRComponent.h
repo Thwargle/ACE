@@ -64,6 +64,8 @@ public:
 	void CycleSpell(int32 Direction);
 	void SelectWristSlot(int32 Slot);
 	bool SelectSpell(int32 Spell);
+	/** Restore a retail tab cursor without casting, stance changes, feedback, or recursion. */
+	void RestoreSpellBarSelection(int32 Spell);
 	bool IsWristSlotSelected(int32 Slot) const;
 	FString GetCastFeedback() const;
 	void CycleSpellBar(int32 Direction);

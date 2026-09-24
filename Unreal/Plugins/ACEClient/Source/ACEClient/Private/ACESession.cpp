@@ -6393,6 +6393,10 @@ void FACESession::HandlePublicUpdatePropertyInt(FACEBinaryReader& Reader)
 		{
 			Obj->Bonded = Value;
 		}
+		else if (Prop == 16) // PropertyInt.ItemUseable: quest/switch state can change it live.
+		{
+			Obj->ItemUseable = Value;
+		}
 		else if (Prop == 114) // PropertyInt.Attuned
 		{
 			Obj->Attuned = Value;
@@ -7341,6 +7345,13 @@ void FACESession::SendUseItem(int32 ObjectGuid)
 {
 	if (State != EACESessionState::InWorld || ObjectGuid == 0)
 	{
+		return;
+	}
+	// Never turn a puzzle/quest door into a player-operated door. Switches and keys
+	// use their own server actions; only the server may grant/open the target door.
+	if (const FACEWorldObject* Object = WorldObjects.Find(ObjectGuid); Object && Object->IsDirectDoorUseBlocked())
+	{
+		OnChatMessage.Broadcast(TEXT("This door cannot be activated from here."), TEXT(""), ACEChatMessageType::TransientInfo);
 		return;
 	}
 	FACEBinaryWriter W;

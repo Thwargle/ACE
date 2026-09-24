@@ -560,6 +560,13 @@ void UACEUIGameplayBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEleme
 
 void UACEUIGameplayBinder::Shutdown()
 {
+	CancelGameplayScreenshot();
+	SelectionSpellTab = INDEX_NONE;
+	for (auto& Tab : SpellTabSelections) Tab = {};
+	SelectedCombatSpellSlot = SpellHotbarScrollOffset = 0;
+	AttributeScrollOffset = 0;
+	bRevealSelectedSpell = true;
+	AutoLayoutSession.Reset(); AutoLayoutPlayer = 0; AutoLayoutSize = FIntPoint::ZeroValue;
 	CancelPendingUseWith();
 	KeyboardOpenedCorpses.Reset();
 	if (StackAmountEntry) StackAmountEntry->RemoveFromParent();
@@ -679,11 +686,14 @@ void UACEUIGameplayBinder::SetRetailTooltip(UWidget* Widget, const FText& Text)
 
 void UACEUIGameplayBinder::TickRefresh()
 {
+	if (!PendingScreenshotFilename.IsEmpty() && FPlatformTime::Seconds() - ScreenshotRequestTime > 10.0)
+		FinishGameplayScreenshot();
 	ACE_PROFILE_SCOPE(HUD);
 	if (!bBound || !Canvas || !Manager)
 	{
 		return;
 	}
+	UpdateAutoUILayout();
 	EnsureOverlays();
 	// "Stay in chat mode after sending" — refocus after the commit's focus clear.
 	Manager->BeginNameLookupPass();
@@ -907,6 +917,12 @@ void UACEUIGameplayBinder::OnElementActivated(TSharedPtr<FACEUIElement> Element)
 			if (A->ElementName == TEXT("StatManagement_List_Scrollbar")
 				|| A->ElementName == TEXT("StatManagement_List"))
 			{
+				if (ActivePanelPage == TEXT("SkillManagementPanel_Field") && ActiveSkillTab == TEXT("AttributePage"))
+				{
+					AttributeScrollOffset += Dir;
+					RefreshAttributeOverlays();
+					return;
+				}
 				if (ActivePanelPage == TEXT("SkillManagementPanel_Field")
 					&& ActiveSkillTab == TEXT("SkillPage"))
 				{
@@ -1585,7 +1601,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 			constexpr double DoubleClickSeconds = 0.75;
 			const double Now = FPlatformTime::Seconds();
 			const bool bWasSelected = SelectedCombatSpellSlot < 0;
-			SelectedCombatSpellSlot = -1;
+			SelectCombatSpellSlot(-1);
 			if (bWasSelected && BuiltInSpellId == LastSpellClickId
 				&& (Now - LastSpellClickTime) < DoubleClickSeconds)
 			{
@@ -1614,9 +1630,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 		const int32 Tab = FCString::Atoi(*Rest);
 		if (Tab >= 1 && Tab <= 8 && Client)
 		{
-			Client->SetActiveSpellBar(Tab - 1);
-			SelectedCombatSpellSlot = 0;
-			SpellHotbarScrollOffset = 0;
+			SetCombatSpellBar(Tab - 1);
 			ApplyCombatMode(CombatMode);
 			SyncSpellcastTabChrome();
 			return true;
@@ -3083,7 +3097,7 @@ bool UACEUIGameplayBinder::TryBeginSpellDrag(FVector2D CanvasLocalPos)
 	// Detect on MouseDown — spell drag otherwise swallows the click before TryHandleOverlayClick.
 	if (SourceSlot != INDEX_NONE && SpellId != 0)
 	{
-		SelectedCombatSpellSlot = SourceSlot + SpellHotbarScrollOffset;
+		SelectCombatSpellSlot(SourceSlot + SpellHotbarScrollOffset);
 		const double Now = FPlatformTime::Seconds();
 		constexpr double DoubleClickSeconds = 0.75;
 		if (SourceSlot == LastSpellClickSlot && SpellId == LastSpellClickId
@@ -3129,7 +3143,9 @@ bool UACEUIGameplayBinder::TryBeginSpellDrag(FVector2D CanvasLocalPos)
 void UACEUIGameplayBinder::SelectVRSpell(int32 Spell)
 {
 	if (!Client) return;
-	SelectedCombatSpellSlot = Client->GetSpellBar(Client->GetActiveSpellBar()).Find(Spell);
+	const int32 Slot = Client->GetSpellBar(Client->GetActiveSpellBar()).Find(Spell);
+	if (Slot == INDEX_NONE) return;
+	SelectCombatSpellSlot(Slot);
 	RefreshSpellHotbarOverlays();
 }
 
@@ -3384,7 +3400,8 @@ void UACEUIGameplayBinder::ActivateHotbarSlot(int32 SlotIndex)
 		const int32 SpellId = Bar.IsValidIndex(SlotIndex) ? Bar[SlotIndex] : 0;
 		if (SpellId != 0)
 		{
-			SelectedCombatSpellSlot = SlotIndex;
+			SelectCombatSpellSlot(SlotIndex);
+			RefreshSpellHotbarOverlays();
 			if (!Client->SendCastSpell(SpellId))
 			{
 				PostInventorySystemMessage(TEXT("You must select a target for that spell."));
@@ -5505,7 +5522,8 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 				if (Canvas->IsWidgetExposedAt(Hi, Absolute))
 				{
 					// gmAttributeUI::SetSelection toggles an already-selected row off.
-					SelectedAttributeRow = SelectedAttributeRow == i ? INDEX_NONE : i;
+					const int32 Row = i + AttributeScrollOffset;
+					SelectedAttributeRow = SelectedAttributeRow == Row ? INDEX_NONE : Row;
 					RefreshAttributeOverlays();
 					return true;
 				}
@@ -5729,7 +5747,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 		{
 			if (!bRightClick)
 			{
-				SelectedCombatSpellSlot = i + SpellHotbarScrollOffset;
+				SelectCombatSpellSlot(i + SpellHotbarScrollOffset);
 				const int32 SpellId = SpellBarSpellIds[i];
 				if (SpellId != 0)
 				{
@@ -5739,7 +5757,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 					if (i == LastSpellClickSlot && SpellId == LastSpellClickId
 						&& (Now - LastSpellClickTime) < DoubleClickSeconds)
 					{
-						SelectedCombatSpellSlot = i + SpellHotbarScrollOffset;
+						SelectCombatSpellSlot(i + SpellHotbarScrollOffset);
 						if (!Client->SendCastSpell(SpellId))
 						{
 							PostInventorySystemMessage(TEXT("You must select a target for that spell."));
@@ -5771,7 +5789,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 				constexpr double DoubleClickSeconds = 0.75;
 				const double Now = FPlatformTime::Seconds();
 				const bool bWasSelected = SelectedCombatSpellSlot < 0;
-				SelectedCombatSpellSlot = -1;
+				SelectCombatSpellSlot(-1);
 				if (bWasSelected && BuiltInSpellId == LastSpellClickId
 					&& (Now - LastSpellClickTime) < DoubleClickSeconds)
 				{
@@ -7317,18 +7335,13 @@ void UACEUIGameplayBinder::SyncStatListScrollbar()
 	}
 	Bar->Height = ListEl->Height;
 	Bar->Y = ListEl->Y;
-	Bar->bVisible = true;
-	float Frac = 0.f;
-	if (PageName == TEXT("SkillPage"))
-	{
-		constexpr int32 RowH = 18;
-		const int32 PageSize = FMath::Max(1, ListEl->Height / RowH);
-		const int32 MaxOff = FMath::Max(0, SkillListContentCount - PageSize);
-		Frac = MaxOff > 0
-			? FMath::Clamp(static_cast<float>(SkillListScrollOffset) / static_cast<float>(MaxOff), 0.f, 1.f)
-			: 0.f;
-	}
-	SyncDatScrollbar(Bar, Frac);
+	const int32 Count = PageName == TEXT("SkillPage") ? SkillListContentCount : 9;
+	const int32 PageSize = FMath::Max(1, ListEl->Height / 18);
+	const int32 MaxOff = FMath::Max(0, Count - PageSize);
+	int32& Offset = PageName == TEXT("SkillPage") ? SkillListScrollOffset : AttributeScrollOffset;
+	Offset = FMath::Clamp(Offset, 0, MaxOff);
+	Bar->bVisible = MaxOff > 0;
+	SyncDatScrollbar(Bar, MaxOff ? float(Offset)/MaxOff : 0.f, Count ? FMath::Min(1.f, float(PageSize)/Count) : 1.f);
 }
 
 void UACEUIGameplayBinder::SyncInventoryScrollbars()
@@ -7574,6 +7587,12 @@ bool UACEUIGameplayBinder::ScrollStatList(float WheelDelta)
 		return false;
 	}
 	const int32 Dir = (WheelDelta > 0.f) ? -1 : 1;
+	if (ActiveSkillTab == TEXT("AttributePage"))
+	{
+		AttributeScrollOffset += Dir * 3;
+		RefreshAttributeOverlays();
+		return true;
+	}
 	if (ActiveSkillTab == TEXT("CharacterTitlePage"))
 	{
 		TitleListScrollOffset = FMath::Max(0, TitleListScrollOffset + Dir * 3);
@@ -8078,6 +8097,8 @@ void UACEUIGameplayBinder::RefreshAttributeOverlays()
 	const FIntPoint Origin = ListEl->GetScreenOrigin();
 	constexpr int32 RowH = 18;
 	const int32 MaxRows = FMath::Min(static_cast<int32>(UE_ARRAY_COUNT(Rows)), FMath::Max(1, ListEl->Height / RowH));
+	AttributeScrollOffset = FMath::Clamp(AttributeScrollOffset, 0, int32(UE_ARRAY_COUNT(Rows)) - MaxRows);
+	SyncStatListScrollbar();
 	if (SelectedAttributeRow < 0 || SelectedAttributeRow >= UE_ARRAY_COUNT(Rows))
 	{
 		SelectedAttributeRow = INDEX_NONE;
@@ -8114,20 +8135,20 @@ void UACEUIGameplayBinder::RefreshAttributeOverlays()
 		}
 		FString Value;
 		FLinearColor ValueColor = TextWhite;
-		if (Rows[i].AttrId != 0)
+		if (Rows[i + AttributeScrollOffset].AttrId != 0)
 		{
-			const int32 Current = LastVitals.GetAttributeCurrent(Rows[i].AttrId);
-			const int32 Base = LastVitals.GetAttributeBase(Rows[i].AttrId);
+			const int32 Current = LastVitals.GetAttributeCurrent(Rows[i + AttributeScrollOffset].AttrId);
+			const int32 Base = LastVitals.GetAttributeBase(Rows[i + AttributeScrollOffset].AttrId);
 			Value = FString::FromInt(Current);
 			ValueColor = Current > Base ? FLinearColor::Green : Current < Base ? FLinearColor::Red : TextWhite;
 			if (Val) Val->SetToolTipText(FText::FromString(FString::Printf(TEXT("Base: %d\nCurrent: %d"), Base, Current)));
 		}
-		else if (Rows[i].VitalId == 1)
+		else if (Rows[i + AttributeScrollOffset].VitalId == 1)
 		{
 			Value = FString::Printf(TEXT("%d/%d"), LastVitals.Health, LastVitals.MaxHealth);
 			ValueColor = FLinearColor::Green;
 		}
-		else if (Rows[i].VitalId == 3)
+		else if (Rows[i + AttributeScrollOffset].VitalId == 3)
 		{
 			Value = FString::Printf(TEXT("%d/%d"), LastVitals.Stamina, LastVitals.MaxStamina);
 			ValueColor = FLinearColor::Green;
@@ -8146,7 +8167,7 @@ void UACEUIGameplayBinder::RefreshAttributeOverlays()
 			// still has a hit target — Collapsed rows made the attributes list unclickable.
 			Hi->SetVisibility(ESlateVisibility::HitTestInvisible);
 			// Clear through the same cache as selection so reselecting restores the brush.
-			SetIconDid(Hi, SelectedAttributeRow == i ? DidListInfoBg : 0,
+			SetIconDid(Hi, SelectedAttributeRow == i + AttributeScrollOffset ? DidListInfoBg : 0,
 				FLinearColor(1.f, 1.f, 1.f, 0.85f));
 			if (Hi->GetParent() != Canvas->GetElementLayer())
 			{
@@ -8163,7 +8184,7 @@ void UACEUIGameplayBinder::RefreshAttributeOverlays()
 		if (Icon)
 		{
 			Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
-			SetIconDid(Icon, Rows[i].IconDid);
+			SetIconDid(Icon, Rows[i + AttributeScrollOffset].IconDid);
 			if (Icon->GetParent() != Canvas->GetElementLayer())
 			{
 				Canvas->GetElementLayer()->AddChild(Icon);
@@ -8178,9 +8199,9 @@ void UACEUIGameplayBinder::RefreshAttributeOverlays()
 		}
 		if (Name)
 		{
-			Name->SetText(FText::FromString(Rows[i].Name));
+			Name->SetText(FText::FromString(Rows[i + AttributeScrollOffset].Name));
 			Name->SetVisibility(ESlateVisibility::HitTestInvisible);
-			Name->SetColorAndOpacity(FSlateColor(i == SelectedAttributeRow ? TextGold : TextWhite));
+			Name->SetColorAndOpacity(FSlateColor(i + AttributeScrollOffset == SelectedAttributeRow ? TextGold : TextWhite));
 			if (Name->GetParent() != Canvas->GetElementLayer())
 			{
 				Canvas->GetElementLayer()->AddChild(Name);
@@ -9139,6 +9160,7 @@ void UACEUIGameplayBinder::RefreshSpellcastTabLabels()
 
 void UACEUIGameplayBinder::RefreshSpellHotbarOverlays()
 {
+	SyncSpellTabSelection();
 	RefreshSpellcastTabLabels();
 	auto CollapseSpellBarWidgets = [this]()
 	{
@@ -9378,6 +9400,14 @@ void UACEUIGameplayBinder::RefreshSpellHotbarOverlays()
 	int32 Filled = FilledEarly;
 	const int32 MaxOff = FMath::Max(0, Filled + 1 - VisibleSlots);
 	SpellHotbarScrollOffset = FMath::Clamp(SpellHotbarScrollOffset, 0, MaxOff);
+	if (bRevealSelectedSpell)
+	{
+		if (SelectedCombatSpellSlot >= 0)
+			SpellHotbarScrollOffset = FMath::Clamp(SpellHotbarScrollOffset,
+				FMath::Max(0, SelectedCombatSpellSlot - VisibleSlots + 1), SelectedCombatSpellSlot);
+		SpellHotbarScrollOffset = FMath::Clamp(SpellHotbarScrollOffset, 0, MaxOff);
+		bRevealSelectedSpell = false;
+	}
 	SpellBarSpellIds.SetNum(MaxSlots);
 	while (SpellBarIcons.Num() < MaxSlots)
 	{
@@ -13135,6 +13165,12 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 			return true;
 		}
 	}
+	if (ActivePanelPage == TEXT("SkillManagementPanel_Field") && ActiveSkillTab == TEXT("AttributePage"))
+	{
+		const auto List = Manager->FindElementUnder(ActiveSkillTab, TEXT("StatManagement_List"));
+		if (List && TryBar(Manager->FindElementUnder(ActiveSkillTab, TEXT("StatManagement_List_Scrollbar")),
+			EACEUIScrollTarget::Attributes, FMath::Max(0, 9-FMath::Max(1,List->Height/18)), false)) return true;
+	}
 	if (ActivePanelPage == TEXT("PositiveEffectsPanel_Field")
 		|| ActivePanelPage == TEXT("NegativeEffectsPanel_Field"))
 	{
@@ -13295,6 +13331,10 @@ void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D CanvasLocalPos)
 		SkillListScrollOffset = Off;
 		RefreshSkillOverlays();
 		SyncStatListScrollbar();
+		break;
+	case EACEUIScrollTarget::Attributes:
+		AttributeScrollOffset = Off;
+		RefreshAttributeOverlays();
 		break;
 	case EACEUIScrollTarget::TitleList:
 		TitleListScrollOffset = Off;

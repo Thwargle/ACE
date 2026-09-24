@@ -6681,6 +6681,12 @@ void AACEPlayerController::InteractWithObject(int32 ObjectGuid)
 		return;
 	}
 
+	if (Obj.IsDirectDoorUseBlocked())
+	{
+		// Shared session gate supplies the retail feedback without moving toward it.
+		Client->SendUseItem(ObjectGuid);
+		return;
+	}
 	// Authored UseRadius as-is (negative portals = overlap). Parser default is already 0.6.
 	const float DistAc = Obj.UseRadius;
 	const int32 PlayerGuid = Client->GetPlayerGuid();
