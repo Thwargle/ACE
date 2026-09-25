@@ -4,9 +4,11 @@
 #include "Misc/App.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 #include "ACEDatSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "Engine/Engine.h"
 #include "Engine/Texture2D.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Components/SceneCaptureComponent2D.h"
@@ -14,6 +16,7 @@
 #include "ProceduralMeshComponent.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialParameterCollectionInstance.h"
 #include "MaterialShared.h"
 #include "ShaderCompiler.h"
 #include "ImageUtils.h"
@@ -23,7 +26,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailPortalMaterialTest, "ACE.RetailParity
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACERetailPortalMaterialTest::RunTest(const FString& Parameters)
 {
-    auto* Dat = NewObject<UACEDatSubsystem>(NewObject<UGameInstance>());
+    const auto Values = UWorld::InitializationValues().AllowAudioPlayback(false)
+        .RequiresHitProxies(false).CreatePhysicsScene(false).CreateNavigation(false).CreateAISystem(false);
+    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Values);
+    auto* GI = NewObject<UGameInstance>(GEngine); GI->InitializeStandalone();
+    GI->GetWorldContext()->SetCurrentWorld(World); World->SetGameInstance(GI);
+    ON_SCOPE_EXIT { GI->Shutdown(); GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+    auto* Dat = GI->GetSubsystem<UACEDatSubsystem>();
     TArray<ACEOutdoorPortalPlan::FAdmittedAperture> Apertures;
     for (double Y : {-6.0, 0.0, 6.0})
     {
@@ -35,7 +44,10 @@ bool FACERetailPortalMaterialTest::RunTest(const FString& Parameters)
     auto* Material = Cast<UMaterialInstanceDynamic>(Dat->GetOrCreateLandMaterial(0, {FColor::White}, 1, 1));
     if (!TestNotNull(TEXT("Create land portal material"), Material)) return false;
     TestEqual(TEXT("Portal mask participates in depth rendering"), Material->GetBlendMode(), BLEND_Masked);
-    TestEqual(TEXT("Material receives every portal view"), Material->K2_GetScalarParameterValue(TEXT("PortalViewCount")), 3.f);
+    auto* SharedPortal = World->GetParameterCollectionInstance(Dat->GetRuntimePortalCollection());
+    float ViewCount = -1; SharedPortal->GetScalarParameterValue(TEXT("PortalViewCount"), ViewCount);
+    TestEqual(TEXT("Shared portal uniform receives every view"), ViewCount, 3.f);
+    TestEqual(TEXT("Terrain opts into shared portal uniforms"),Material->K2_GetScalarParameterValue(TEXT("UseSharedPortal")),1.f);
     auto* Texture = Cast<UTexture2D>(Material->K2_GetTextureParameterValue(TEXT("PortalViews")));
     if (!TestNotNull(TEXT("Material receives packed plane texture"), Texture)) return false;
     TestEqual(TEXT("Plane texture retains signed floating-point equations"), Texture->GetPixelFormat(), PF_A32B32G32R32F);
@@ -60,9 +72,6 @@ bool FACERetailPortalMaterialTest::RunTest(const FString& Parameters)
 #endif
     if (!TestNotNull(TEXT("Portal shader compiled"), Resource->GetGameThreadShaderMap())) return false;
 
-    const auto Values = UWorld::InitializationValues().AllowAudioPlayback(false)
-        .RequiresHitProxies(false).CreatePhysicsScene(false).CreateNavigation(false).CreateAISystem(false);
-    UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Values);
     AActor* Owner = World->SpawnActor<AActor>();
     auto* Card = NewObject<UProceduralMeshComponent>(Owner);
     Owner->SetRootComponent(Card); Card->RegisterComponent();
@@ -83,6 +92,7 @@ bool FACERetailPortalMaterialTest::RunTest(const FString& Parameters)
     auto* BackgroundMaterial = Cast<UMaterialInstanceDynamic>(Dat->GetOrCreateLandMaterial(1, {FColor::Red}, 1, 1));
     BackgroundMaterial->SetScalarParameterValue(TEXT("EmissiveStrength"), 1.f);
     BackgroundMaterial->SetScalarParameterValue(TEXT("LookOutEnable"), 0.f);
+    BackgroundMaterial->SetScalarParameterValue(TEXT("UseSharedPortal"), 0.f);
     Background->SetMaterial(0, BackgroundMaterial);
     auto* Target = NewObject<UTextureRenderTarget2D>(Owner);
     Target->ClearColor = FLinearColor::Black;
@@ -145,7 +155,6 @@ bool FACERetailPortalMaterialTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Courtyard exit restores land beyond the second door"),Lit(128,128));
         TestTrue(TEXT("A separate basement entrance remains clear"),Red(39,128));
     }
-    World->DestroyWorld(false);
     return true;
 }
 

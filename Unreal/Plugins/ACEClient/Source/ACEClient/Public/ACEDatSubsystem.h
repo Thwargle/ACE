@@ -472,6 +472,7 @@ public:
 	TArray<UMaterialInterface*> GetRuntimeMaterialParents();
 	/** Shared world fog; per-material FogAmount still opts interiors/previews out. */
 	UMaterialParameterCollection* GetRuntimeFogCollection() const;
+	UMaterialParameterCollection* GetRuntimePortalCollection() const;
 	UMaterialInterface* GetVRComfortMaterial();
 	/** PhysicsBSP sections must not use VertexColor/WorldGrid (lit → black with GI off). */
 	UMaterialInterface* EnsureInvisibleCollisionMaterial();

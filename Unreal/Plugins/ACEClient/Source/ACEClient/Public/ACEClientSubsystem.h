@@ -510,6 +510,9 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "ACE|Social")
 	void SendFellowshipUpdateRequest(bool bPanelOpen);
+	void SetVRFellowshipUpdates(bool bEnabled);
+	bool bRetailFellowshipUpdates = false;
+	bool bVRFellowshipUpdates = false;
 
 	UFUNCTION(BlueprintCallable, Category = "ACE|Social")
 	void SendFellowshipAssignNewLeader(int32 MemberGuid);

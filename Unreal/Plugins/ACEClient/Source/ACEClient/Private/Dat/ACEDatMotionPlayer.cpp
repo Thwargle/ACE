@@ -457,14 +457,13 @@ bool FACEDatMotionPlayer::EvaluateAnimData(
 	}
 	if (bLoop)
 	{
-		while (FrameF < Low)
-		{
-			FrameF += FrameCount;
-		}
-		while (FrameF > High + 0.999f)
-		{
-			FrameF -= FrameCount;
-		}
+		// TimeSeconds is the lifetime of the current motion, not a frame delta.
+		// Subtracting one cycle at a time made steady scenery/idle animations
+		// progressively more expensive the longer a player stayed in a region.
+		// Retail advances a bounded frame cursor; reduce to that same interval
+		// in constant time, preserving the unwrapped times above for hook edges.
+		FrameF = Low + FMath::Fmod(FrameF - Low, static_cast<float>(FrameCount));
+		if (FrameF < Low) FrameF += FrameCount;
 	}
 	else
 	{
@@ -567,14 +566,16 @@ bool FACEDatMotionPlayer::EvaluateMotion(uint32 MotionCommand, float TimeSeconds
 	{
 		return false;
 	}
-	TArray<FACEDatAnimData> Anims;
-	if (!FindCycleAnims(MotionCommand, Anims, PreferredStyle))
+	const FACEDatMotionData* Cycle = FindCycle(MotionCommand, PreferredStyle);
+	if (!Cycle)
 	{
 		// Let the caller choose a directional/reversed fallback. Returning an idle pose as
 		// success made SideStepLeft and WalkBackwards silently appear motionless.
 		return false;
 	}
-	return EvaluateAnimSequence(Anims, TimeSeconds, NumParts, OutPartTransforms, WorldScale, OutAnimatedPartCount,
+	// Evaluation only reads these records. Borrow the cached motion table
+	// instead of allocating/copying its animation list for every actor tick.
+	return EvaluateAnimSequence(Cycle->Anims, TimeSeconds, NumParts, OutPartTransforms, WorldScale, OutAnimatedPartCount,
 		bLoop, bOutFinished, PreviousTimeSeconds, OutCrossedHooks);
 }
 

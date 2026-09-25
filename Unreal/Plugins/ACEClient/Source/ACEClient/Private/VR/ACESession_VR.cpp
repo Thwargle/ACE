@@ -197,11 +197,12 @@ bool FACESession::GetVRSpellProfile(int32 Spell, float& Speed, bool& Gravity, fl
 }
 
 bool FACESession::SendVRCombat(uint32 Kind, uint32 Cell, int32 Weapon, int32 Subject, int32 Target,
-	const FVector& OriginAc, const FVector& DirectionOrEndAc, float Amount, float Duration)
+	const FVector& OriginAc, const FVector& DirectionOrEndAc, float Amount, float Duration, float RequestedPower)
 {
 	if (State != EACESessionState::InWorld || !SupportsVRCombat() || Kind < 1 || Kind > 3
 		|| (Weapon == 0 && (Kind != 2 || !SupportsVRUnarmed() || Subject < 0 || Subject > 1))
-		|| OriginAc.ContainsNaN() || DirectionOrEndAc.ContainsNaN() || !FMath::IsFinite(Amount) || !FMath::IsFinite(Duration))
+		|| OriginAc.ContainsNaN() || DirectionOrEndAc.ContainsNaN() || !FMath::IsFinite(Amount) || !FMath::IsFinite(Duration)
+		|| !FMath::IsFinite(RequestedPower) || RequestedPower < -1.f || RequestedPower > 1.f)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("ACE VR action rejected locally: kind=%u state=%d capabilities=0x%X weapon=0x%08X origin=%s vector=%s"),
 			Kind, int32(State), VRCapabilities, Weapon, *OriginAc.ToString(), *DirectionOrEndAc.ToString());
@@ -215,6 +216,9 @@ bool FACESession::SendVRCombat(uint32 Kind, uint32 Cell, int32 Weapon, int32 Sub
 	W.WriteFloat(FMath::Clamp(Amount, 0.f, 1.f)); W.WriteFloat(FMath::Clamp(Duration, 0.f, 2.f));
 	if (Kind==2 && (VRCapabilities & 16384u))
 	{ W.WriteFloat(VRMeleeBody.X); W.WriteFloat(VRMeleeBody.Y); W.WriteFloat(VRMeleeBody.Z); }
+	// Keep physical draw/swing samples separate from the retail slider. Older
+	// servers receive their original packet size and retain their gesture rules.
+	if ((Kind==2 || Kind==3) && RequestedPower>=0.f && SupportsVRCombatPower()) W.WriteFloat(RequestedPower);
 	if (Kind==1 && SupportsVRCasting())
 	{
 		VRAimCastSequence=VRSequence; VRAimSpell=Subject; VRAimWeapon=Weapon;

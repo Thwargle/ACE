@@ -138,6 +138,21 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     TestTrue(TEXT("Drop inserts at indicated index after source removal"),Session.SpellBars[1]==TArray<int32>({2,3,1,4}));
     TestTrue(TEXT("Drop hides destination marker"),Binder->SpellDropMarker->GetVisibility()==ESlateVisibility::Collapsed);
 
+    Session.SpellBars[2]={5,6};
+    Draw(TEXT("SpellCrossTabStart"));
+    Binder->TryBeginSpellDrag(SlotPoint(0));
+    const auto DestinationTab=Manager->FindElementByName(TEXT("Spellcast_Tab3"));
+    if(TestTrue(TEXT("Third spell tab exists"),DestinationTab.IsValid()))
+    {
+        const FVector2D TabPoint=(FVector2D(DestinationTab->GetScreenOrigin())+FVector2D(DestinationTab->Width,DestinationTab->Height)*.5)*FVector2D(Canvas->GetLastScaleX(),Canvas->GetLastScaleY());
+        Binder->UpdateSpellDrag(TabPoint);
+        TestEqual(TEXT("Hovering another tab during drag opens that bar"),Client->GetActiveSpellBar(),2);
+        Binder->TryFinishSpellDrag(TabPoint);
+        TestTrue(TEXT("Drop on a tab appends the lifted spell exactly once"),Session.SpellBars[2]==TArray<int32>({5,6,2}));
+        TestFalse(TEXT("Cross-tab move removes the original"),Session.SpellBars[1].Contains(2));
+        Binder->SetCombatSpellBar(1);Binder->RefreshSpellHotbarOverlays();Draw(TEXT("SpellCrossTabEnd"));
+    }
+
     const auto Combat=Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field"));
     Manager->SetUiLocked(false); Manager->BringFloatyToFront(Combat);
     Combat->UserDragX+=200-Combat->GetScreenOrigin().X; Combat->UserDragY+=200-Combat->GetScreenOrigin().Y; Combat->RecomputeLayoutOffset();

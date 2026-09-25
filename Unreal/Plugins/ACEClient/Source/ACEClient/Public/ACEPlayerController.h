@@ -349,6 +349,9 @@ protected:
 	bool bNumPadThreeWasDown = false;
 	bool bCameraInHead = false;
 	bool bCameraLookDown = false;
+	bool bCameraMapMode = false;
+	bool bCameraMapWasDown = false;
+	bool bMapSavedFog = true;
 	bool bMouseLookActive = false;
 	bool bInstantMouseLookHeld = false;
 	bool bMouseLookUsesCapture = false;
@@ -375,6 +378,7 @@ protected:
 	void ApplyCameraOffset(USpringArmComponent* Boom, float OffsetYAc, float OffsetZAc, float PitchDegrees, bool bKeepYaw);
 	void SetCameraInHead(USpringArmComponent* Boom, bool bInHead);
 	void SetCameraLookDown(USpringArmComponent* Boom, bool bLookDown);
+	void SetCameraMapMode(USpringArmComponent* Boom, bool bMapMode);
 	void ResetCameraToRetailDefaults(USpringArmComponent* Boom);
 	void UpdateMouseLook(float DeltaTime, USpringArmComponent* Boom);
 	bool UpdateMouseButtons(bool bRightDown, bool bLeftDown, bool bInputFocused, bool bOverUI);

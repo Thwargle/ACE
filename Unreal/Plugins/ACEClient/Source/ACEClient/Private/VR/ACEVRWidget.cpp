@@ -3,6 +3,8 @@
 #include "ACERuntimeOptions.h"
 #include "VR/ACEVRComponent.h"
 #include "VR/ACEVRSettings.h"
+#include "VR/ACEVRInputLayout.h"
+#include "Widgets/Input/SComboBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScaleBox.h"
@@ -110,6 +112,27 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 		Pages->AddSlot().FillWidth(1.f)[Button(Literal(TEXT("Game options")), [Rig]() { if (Rig.IsValid()) Rig->OpenRetailPanel(TEXT("OptionsPanel_Field")); })];
 		List->AddSlot().AutoHeight().Padding(0, 6)[Pages];
 		auto Scroll = SNew(SScrollBox);
+		Scroll->AddSlot().Padding(0,6)[Text(Literal(TEXT("Panel placement: unlock and hold Move. Move or turn your controller to position the panel; use the right stick to push it away or bring it closer. Hold Resize to change its size.")),18)];
+		for(FName Setting:{FName("Fellowship"),FName("FellowshipAnchor"),FName("FellowshipLock")})
+			Scroll->AddSlot().Padding(0,6)[Button(TAttribute<FText>::CreateLambda([Rig,Setting]()
+			{
+				if(!Rig.IsValid())return FText::GetEmpty();const auto* S=Rig->GetSettings();
+				if(Setting=="Fellowship")return FText::FromString(S->bShowFellowship?TEXT("Fellowship: Shown"):TEXT("Fellowship: Hidden"));
+				if(Setting=="FellowshipLock")return FText::FromString(S->bFellowshipLocked?TEXT("Fellowship placement: Locked"):TEXT("Fellowship placement: Unlocked"));
+				return FText::FromString(S->FellowshipAnchorMode==0?TEXT("Fellowship anchor: Head"):S->FellowshipAnchorMode==1?TEXT("Fellowship anchor: Body"):TEXT("Fellowship anchor: World"));
+			}),[Rig,Setting](){if(Rig.IsValid())Rig->ChangeSetting(Setting);})];
+		Scroll->AddSlot().Padding(0,12)[Text(Literal(TEXT("Controller button layout")),24)];
+		static TArray<TSharedPtr<FName>> BindingOptions=[](){TArray<TSharedPtr<FName>> R;for(const auto& B:ACEVRInputLayout::Buttons())R.Add(MakeShared<FName>(B.Input));return R;}();
+		for(const auto& B:ACEVRInputLayout::Buttons())
+		{
+			Scroll->AddSlot().Padding(0,5)[SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight()[Text(Literal(B.Physical),20)]
+				+ SVerticalBox::Slot().AutoHeight()[SNew(SComboBox<TSharedPtr<FName>>).OptionsSource(&BindingOptions)
+					.OnGenerateWidget_Lambda([](TSharedPtr<FName> Name){return SNew(STextBlock).Text(FText::FromString(ACEVRInputLayout::ActionLabel(*Name))).Font(FCoreStyle::GetDefaultFontStyle("Regular",22));})
+					.OnSelectionChanged_Lambda([Rig,Input=B.Input](TSharedPtr<FName> Name,ESelectInfo::Type){if(Rig.IsValid() && Name.IsValid())Rig->ConfigureButton(Input,*Name);})
+					[Text(TAttribute<FText>::CreateLambda([Rig,Input=B.Input](){return FText::FromString(Rig.IsValid()?ACEVRInputLayout::ActionLabel(Rig->GetSettings()->GetButtonAction(Input)):FString());}),22)]]];
+		}
+		Scroll->AddSlot().Padding(0,6)[Button(Literal(TEXT("Restore default controller buttons")),[Rig](){if(Rig.IsValid())Rig->ResetButtonBindings();})];
 		Scroll->AddSlot().Padding(0,6)[Button(TAttribute<FText>::CreateLambda([]()
 			{ return FText::FromString(ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f ? TEXT("FPS overlay: On") : TEXT("FPS overlay: Off")); }),
 			[](){ACERuntimeOptions::Set(TEXT("ShowFrameRate"),ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f ? 0.f : 1.f);ACERuntimeOptions::Apply();})];
@@ -119,7 +142,7 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 		Scroll->AddSlot().Padding(0, 6)[Button(TAttribute<FText>::CreateLambda([Rig]()
 			{ return FText::FromString(Rig.IsValid() && Rig->GetSettings()->bRun ? TEXT("Movement: Run") : TEXT("Movement: Walk")); }),
 			[Rig]() { if (Rig.IsValid()) Rig->ChangeSetting(TEXT("Run")); })];
-		for (FName Setting : {FName("Height"), FName("Panel"), FName("Distance"), FName("Vitals"), FName("Chat"), FName("Wrist"), FName("Speed"), FName("ForwardAssist"), FName("TurnSpeed"), FName("Stability"), FName("HandPitch"), FName("Draw"), FName("BowAnchor")})
+		for (FName Setting : {FName("Height"), FName("Panel"), FName("Distance"), FName("Vitals"), FName("CompassSize"), FName("OptionsSize"), FName("Chat"), FName("Wrist"), FName("Speed"), FName("ForwardAssist"), FName("TurnSpeed"), FName("Stability"), FName("HandPitch"), FName("Draw"), FName("BowAnchor")})
 		{
 			Scroll->AddSlot().Padding(10, 8)[SNew(SVerticalBox)
 				+ SVerticalBox::Slot().AutoHeight()[Text(TAttribute<FText>::CreateLambda([Rig, Setting]()
@@ -129,6 +152,8 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 					if (Setting == "Panel") return FText::FromString(FString::Printf(TEXT("Menu scale: %.0f%%"), S->PanelScale / .11f * 100));
 					if (Setting == "Distance") return FText::FromString(FString::Printf(TEXT("Menu distance: %.0f cm"), S->PanelDistance));
 					if (Setting == "Wrist") return FText::FromString(FString::Printf(TEXT("Hotbar scale: %.0f%%"), S->WristScale / .06f * 100));
+					if (Setting == "CompassSize") return FText::FromString(FString::Printf(TEXT("Compass scale: %.0f%%"), S->CompassScale / .065f * 100));
+					if (Setting == "OptionsSize") return FText::FromString(FString::Printf(TEXT("VR options scale: %.0f%%"), S->OptionsScale / .1f * 100));
 					if (Setting == "Vitals") return FText::FromString(FString::Printf(TEXT("Pinned vitals scale: %.0f%%"), S->VitalsScale / .0935f * 100));
 					if (Setting == "Chat") return FText::FromString(FString::Printf(TEXT("Pinned chat scale: %.0f%%"), S->ChatScale / .0715f * 100));
 					if (Setting == "ForwardAssist") return FText::FromString(FString::Printf(TEXT("Straight movement assistance: %.0f degrees"), S->ForwardAssistDegrees));
@@ -145,7 +170,7 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 				.OnValueChanged_Lambda([Rig, Setting](float Value) { if (Rig.IsValid()) Rig->SetSliderSetting(Setting, Value); })
 				.OnMouseCaptureEnd_Lambda([Rig]() { if (Rig.IsValid()) Rig->GetSettings()->Persist(); })]]];
 		}
-		for (FName Setting : {FName("PinMenu"), FName("ShowWrist"), FName("PinHotbar"), FName("Compass"), FName("PinVitals"), FName("VitalsAnchor"), FName("VitalsLock"), FName("PinChat"), FName("Turn"), FName("Angle"), FName("Hand"), FName("Movement"), FName("Seated"), FName("Body"), FName("Haptics"), FName("Render")})
+		for (FName Setting : {FName("PinMenu"), FName("ShowWrist"), FName("PinHotbar"), FName("Compass"), FName("CompassAnchor"), FName("CompassLock"), FName("MenuLock"), FName("OptionsLock"), FName("PinVitals"), FName("VitalsAnchor"), FName("VitalsLock"), FName("PinChat"), FName("Turn"), FName("Angle"), FName("Hand"), FName("Movement"), FName("Seated"), FName("Body"), FName("Haptics"), FName("Render")})
 		{
 			Scroll->AddSlot().Padding(0, 3)[Button(TAttribute<FText>::CreateLambda([Rig, Setting]()
 			{
@@ -161,6 +186,10 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 				else if (Setting == "PinHotbar") Label = FString::Printf(TEXT("Retail hotbar pinned to: %s"), S->bPinHotbarToView ? TEXT("View") : TEXT("Left wrist"));
 				else if (Setting == "ShowWrist") Label = FString::Printf(TEXT("Wrist spell bar: %s"), S->bShowWristSpellBar ? TEXT("Shown") : TEXT("Hidden (use spell wheel)"));
 				else if (Setting == "Compass") Label = FString::Printf(TEXT("Compass and coordinates: %s"), S->bShowCompass ? TEXT("Shown") : TEXT("Hidden"));
+				else if (Setting == "CompassAnchor") Label = S->CompassAnchorMode == 0 ? TEXT("Compass anchor: Head") : S->CompassAnchorMode == 1 ? TEXT("Compass anchor: Body (stable)") : TEXT("Compass anchor: World (Recenter to bring back)");
+				else if (Setting == "CompassLock") Label = S->bCompassLocked ? TEXT("Compass placement: Locked") : TEXT("Compass placement: Unlocked / Move or Resize below compass");
+				else if (Setting == "MenuLock") Label = S->bMenuLocked ? TEXT("Main menu placement: Locked") : TEXT("Main menu placement: Unlocked / Move or Resize below menu");
+				else if (Setting == "OptionsLock") Label = S->bOptionsLocked ? TEXT("VR options placement: Locked") : TEXT("VR options placement: Unlocked / Move or Resize below menu");
 				else if (Setting == "PinVitals") Label = FString::Printf(TEXT("Show pinned vitals: %s"), S->bPinVitalsToView ? TEXT("On") : TEXT("Off"));
 				else if (Setting == "VitalsLock") Label = S->bVitalsLocked ? TEXT("Vitals placement: Locked") : TEXT("Vitals placement: Unlocked / drag bar to move");
                 else if (Setting == "PinChat") Label = FString::Printf(TEXT("Pin chat in view: %s"), S->bPinChatToView ? TEXT("On") : TEXT("Off"));

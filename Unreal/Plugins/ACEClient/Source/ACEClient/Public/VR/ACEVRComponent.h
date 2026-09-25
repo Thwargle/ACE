@@ -88,9 +88,19 @@ public:
 	void DismissTextEntry();
 	FString GetTextInputPreview() const;
 	void ToggleVitalsLock();
+	bool IsPanelLocked(FName Panel) const;
+	bool ShouldShowPanelControls(FName Panel) const;
+	void TogglePanelLock(FName Panel);
+	void BeginPanelEdit(FName Panel, bool bLeft, bool bResize);
+	void ConfigureButton(FName Input,FName Action);
+	void ResetButtonBindings();
+	void RouteControllerButton(FName Input,bool bPressed);
+	void DispatchControllerAction(FName Action,bool bPressed);
+	TMap<FName,FName> HeldControllerActions;
+	void EndPanelEdit(bool bSave = true, int32 Pointer = INDEX_NONE);
 	bool ShouldShowVitalsControls() const;
 	void BeginVitalsDrag(bool bLeft);
-	void EndVitalsDrag(bool bSave = true);
+	void EndVitalsDrag(bool bSave = true, int32 Pointer = INDEX_NONE);
 	void TypeText(const FString& Text);
 	void TypeKey(FKey Key);
 	UACEVRSettings* GetSettings() const { return Settings; }
@@ -140,8 +150,29 @@ private:
 	void PlaceFocusPopup(const FVector& Point, bool ToLeft);
 	void PaintFocusPopup();
 	bool bVitalsAnchorReady = false;
+	bool bVitalsAnchorTurning = false;
 	FTransform GetVitalsAnchorTransform() const;
 	void UpdateVitalsAnchor(float Dt);
+	FTransform CompassAnchorFrame;
+	FVector CompassOwnerLocation = FVector::ZeroVector;
+	bool bCompassAnchorReady = false;
+	bool bCompassAnchorTurning = false;
+	FTransform GetCompassAnchorTransform() const;
+	void UpdateCompassAnchor(float Dt);
+	UWidgetComponent* GetEditablePanel(FName Panel) const;
+	float& GetPanelScale(FName Panel);
+	void UpdatePanelEdit(float Dt = 0.f);
+	void UpdatePanelControls(bool MainVisible, bool OptionsVisible);
+	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> MenuControlsPanel;
+	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> OptionsControlsPanel;
+	FName EditingPanel;
+	int32 PanelEditHand = INDEX_NONE;
+	bool bPanelResize = false;
+	FTransform PanelEditFrame;
+	FTransform PanelGrabInHand;
+	FVector2D PanelEditStart = FVector2D::ZeroVector;
+	FVector PanelEditLocation = FVector::ZeroVector;
+	float PanelEditScale = 1.f;
 	struct FWorldNotice
 	{
 		TWeakObjectPtr<UWidgetComponent> Panel;
@@ -184,9 +215,17 @@ private:
 	void UpdateTrackingState(bool Tracked);
 	void BindInput();
 	void UpdatePanels(float Dt = 1.f / 90.f);
-	void UpdateNativeHUD(bool Available);
+	void UpdateNativeHUD(bool Available, float Dt = 1.f / 90.f);
 	TSharedPtr<class SACEVRVitals> NativeVitals;
 	TSharedPtr<class SACEVRCompass> NativeCompass;
+	TSharedPtr<class SACEVRFellowship> NativeFellowship;
+	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> FellowshipPanel;
+	FTransform FellowshipAnchorFrame;
+	FVector FellowshipOwnerLocation = FVector::ZeroVector;
+	bool bFellowshipAnchorReady = false;
+	bool bFellowshipAnchorTurning = false;
+	FTransform GetFellowshipAnchorTransform() const;
+	void UpdateFellowshipAnchor(float Dt);
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> CompassPanel;
 	double NextNativeHUDUpdate = 0.;
 	void UpdateTextEntryFocus();
@@ -232,6 +271,7 @@ private:
 	bool IsPointedBuffRecipient(const AACEWorldEntityActor* Target) const;
 	void GetSpellAim(FVector& Origin, FVector& Direction);
 	void FireCrossbow();
+	float GetRequestedCombatPower() const;
 	void FireThrownMissile();
 	bool HasEquippedCaster() const;
 	FVector BowDrawDirection() const;

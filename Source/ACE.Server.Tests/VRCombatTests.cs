@@ -65,13 +65,13 @@ namespace ACE.Server.Tests
             var legacy = new ACE.Server.Network.GameEvent.Events.GameEventVRCapabilities(session);
             using var oldWire = new BinaryReader(new MemoryStream(legacy.Data.ToArray()));
             oldWire.BaseStream.Position = 16;
-            Assert.AreEqual(1u, oldWire.ReadUInt32()); Assert.AreEqual(65527u, oldWire.ReadUInt32());
+            Assert.AreEqual(1u, oldWire.ReadUInt32()); Assert.AreEqual(65527u | 65536u, oldWire.ReadUInt32());
             Assert.AreEqual(0u, oldWire.ReadUInt32()); Assert.AreEqual(20.0f, oldWire.ReadSingle());
             Assert.AreEqual(oldWire.BaseStream.Length, oldWire.BaseStream.Position);
             var snapshot = new ACE.Server.Network.GameEvent.Events.GameEventVRCapabilities(session, 12, new uint[] { 100, 300, 400 });
             using var wire = new BinaryReader(new MemoryStream(snapshot.Data.ToArray()));
             wire.BaseStream.Position = 16;
-            Assert.AreEqual(1u, wire.ReadUInt32()); Assert.AreEqual(65535u, wire.ReadUInt32());
+            Assert.AreEqual(1u, wire.ReadUInt32()); Assert.AreEqual(65535u | 65536u, wire.ReadUInt32());
             Assert.AreEqual(12u, wire.ReadUInt32()); Assert.AreEqual(3u, wire.ReadUInt32());
             foreach (var guid in new uint[] { 100, 300, 400 }) Assert.AreEqual(guid, wire.ReadUInt32());
             Assert.AreEqual(0u, wire.ReadUInt32()); Assert.AreEqual(20.0f, wire.ReadSingle());
@@ -107,10 +107,39 @@ namespace ACE.Server.Tests
             }
             var bytes=Swing(new Vector3(0,1,0));Assert.AreEqual(76,bytes.Length);
             Assert.IsTrue(Read(bytes,out var hit));Assert.AreEqual(new Vector3(0,1,0),hit.ObservedBody);
-            for(int n=65;n<76;++n)Assert.IsFalse(Read(bytes[..n],out _));
+            for(int n=65;n<76;++n)if(n!=68)Assert.IsFalse(Read(bytes[..n],out _));
             Assert.IsFalse(Read(Swing(new Vector3(float.NaN,0,0)),out _));
             Assert.IsFalse(Read(Swing(new Vector3(7,0,0)),out _));
             Assert.IsTrue(Read(bytes[..64],out hit));Assert.IsNull(hit.ObservedBody,"Legacy swings remain compatible.");
+        }
+
+        [TestMethod]
+        public void SelectedPowerIsIndependentOfPhysicalDrawAndStrictlyValidated()
+        {
+            byte[] WithPower(uint kind, float power, bool body = false)
+            {
+                using var s = new MemoryStream(); using var w = new BinaryWriter(s);
+                w.Write(Wire(kind, Vector3.UnitZ, kind == 2 ? new Vector3(.5f, 0, 1) : Vector3.UnitY, duration:.2f));
+                if (body) { w.Write(0f); w.Write(1f); w.Write(0f); }
+                w.Write(power); return s.ToArray();
+            }
+            foreach (var kind in new[] { 2u, 3u })
+            {
+                foreach (var power in new[] { 0f, .5f, 1f })
+                {
+                    Assert.IsTrue(Read(WithPower(kind,power),out var r));
+                    Assert.AreEqual(power,r.RequestedPower.Value); Assert.AreEqual(1f,r.Amount);
+                    if (kind == 3) Assert.IsNull(r.MissileReleaseRejection(ACE.Entity.Enum.CombatMode.Missile,ACE.Entity.Enum.CombatStyle.Bow));
+                }
+                foreach (var power in new[] { -.1f, 1.1f, float.NaN, float.PositiveInfinity })
+                    Assert.IsFalse(Read(WithPower(kind,power),out _));
+            }
+            Assert.IsTrue(Read(WithPower(2,.25f,true),out var swing));
+            Assert.AreEqual(new Vector3(0,1,0),swing.ObservedBody); Assert.AreEqual(.25f,swing.RequestedPower);
+            Assert.IsFalse(Read(WithPower(1,.5f),out _)); Assert.IsFalse(Read(WithPower(7,.5f),out _));
+            Assert.IsTrue(Read(Wire(3),out var legacy)); Assert.IsNull(legacy.RequestedPower);
+            legacy.RequestedPower = 0; legacy.Amount = .1f;
+            Assert.IsNotNull(legacy.MissileReleaseRejection(ACE.Entity.Enum.CombatMode.Missile,ACE.Entity.Enum.CombatStyle.Bow));
         }
 
         [TestMethod]

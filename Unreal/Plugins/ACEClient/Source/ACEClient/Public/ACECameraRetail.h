@@ -20,6 +20,8 @@ namespace ACECameraRetail
 	constexpr float LeaveHeadZAc = 0.5f;
 	constexpr float LookDownOffsetYAc = -2.0f;
 	constexpr float LookDownOffsetZAc = 0.75f;
+	/** CameraSet::SetMapMode uses -450 along the look-down camera frame. */
+	constexpr float MapOffsetYAc = -450.f;
 	/** CameraManager target direction while looking down: (0, 0.5, -1.8). */
 	constexpr float LookDownDirY = 0.5f;
 	constexpr float LookDownDirZ = -1.8f;

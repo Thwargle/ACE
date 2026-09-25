@@ -242,8 +242,8 @@ public:
 							+ (Offset - FVector2D(BorderX, BorderY)) * Scale;
 						FSlateDrawElement::MakeBox(Elements, Layer + (bBackground ? 0 : 1),
 							Geometry.ToPaintGeometry(PixelSize * Scale, FSlateLayoutTransform(Pos)), &Brush, Effects,
-								!bBackground && bTint && Label->GetModifierBegin() >= 0 && I >= Label->GetModifierBegin()
-								? Label->GetModifierColor() * Style.GetColorAndOpacityTint() : Tint);
+								!bBackground && bTint ? Label->GetGlyphColor(I, TextColor)
+								* Style.GetColorAndOpacityTint() : Tint);
 					}
 					X += (Ch->Width + static_cast<int8>(Ch->HorizontalOffsetAfter)) * Scale.X;
 				}

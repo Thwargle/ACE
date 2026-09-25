@@ -38,7 +38,7 @@ void UACEVRComponent::ClearConversationSelection(int32 Guid)
 
 void UACEVRComponent::CombatFeedback(const FString& Name, int32 Amount, bool Incoming, bool Critical)
 {
-    if (Amount > 0 && Client && Client->GetSession() && Client->GetSession()->SupportsHealthFeedback()) return;
+    if (Incoming && Amount > 0 && Client && Client->GetSession() && Client->GetSession()->SupportsHealthFeedback()) return;
 	int32 Guid = Incoming ? 0 : -1;
 	if (!Incoming)
 	{
@@ -70,6 +70,10 @@ void UACEVRComponent::HealthFeedback(int32 Guid, int32 Change, uint32 Flags)
 {
     if (!Client || !Change || !PC || PC->bEnterWorldLoading || PC->bWorldRevealActive) return;
     const bool Self = Guid == Client->GetPlayerGuid();
+    // This extension broadcasts nearby health changes without an attacker ID.
+    // Only self changes are attributable here; our own outgoing hits arrive in
+    // CombatFeedback. Showing all broadcasts attributed other players' hits to us.
+    if (!Self) return;
     // Color describes the outcome, never the damage school. The YOU/target
     // heading and separate lanes make the recipient explicit without color.
     const FLinearColor Color = Change > 0 ? FLinearColor(.5f,1.f,.498f)
@@ -168,23 +172,26 @@ void UACEVRComponent::ShowWorldNotice(const FString& Text, int32 Guid, int32 Kin
 		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle("Bold", 38);
 		Font.OutlineSettings.OutlineSize = 3;
 		Font.OutlineSettings.OutlineColor = FLinearColor::Black;
-		Panel->SetDrawSize(FVector2D(620,124));
         FSlateFontInfo Heading = Font; Heading.Size = 26; Heading.OutlineSettings.OutlineSize = 1;
         FACEWorldObject Recipient;
-		const bool Healing=Text.Contains(TEXT("HEALTH"));
-		FString Title=Guid==0 ? (Healing?TEXT("YOU ARE HEALED"):Text==TEXT("EVADED")?TEXT("YOU EVADED"):TEXT("DAMAGE TAKEN"))
-			: (Healing?TEXT("HEAL: "):Text==TEXT("MISSED")?TEXT("MISSED: "):TEXT("HIT: "))+(Client->GetWorldObject(Guid,Recipient)?Recipient.Name:TEXT("Enemy"));
-        if (Title.Len()>32) Title=Title.Left(29)+TEXT("...");
+        const FString Title=Guid==0 ? TEXT("You") : Client->GetWorldObject(Guid,Recipient)?Recipient.Name:TEXT("");
+        FString Number=Notice->Text.Replace(TEXT(" DAMAGE"),TEXT("")).Replace(TEXT(" HEALTH"),TEXT(""));
 		static const FSlateRoundedBoxBrush CombatBackground(FLinearColor(.012f,.016f,.024f,.82f),12.f);
-		Panel->SetSlateWidget(SNew(SBorder).Visibility(EVisibility::HitTestInvisible)
+		const auto Card = SNew(SBorder).Visibility(EVisibility::HitTestInvisible)
 			.BorderImage(&CombatBackground).Padding(8.f).HAlign(HAlign_Center).VAlign(VAlign_Center)
 			[SNew(SVerticalBox)
                 + SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
-                    [SNew(STextBlock).Text(FText::FromString(Title)).Font(Heading).ColorAndOpacity(ACEVRUIStyle::TextColor)
+                    [SNew(STextBlock).Text(FText::FromString(Title.Left(22))).Font(Heading).ColorAndOpacity(ACEVRUIStyle::TextColor)
                         .ShadowOffset(FVector2D(2,2)).ShadowColorAndOpacity(FLinearColor::Black)]
                 + SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
-                    [SNew(STextBlock).Text(FText::FromString(Notice->Text)).Font(Font).ColorAndOpacity(Color)
-                        .ShadowOffset(FVector2D(2,2)).ShadowColorAndOpacity(FLinearColor::Black)]]);
+                    [SNew(STextBlock).Text(FText::FromString(Number)).Font(Font).ColorAndOpacity(Color)
+                        .ShadowOffset(FVector2D(2,2)).ShadowColorAndOpacity(FLinearColor::Black)]];
+		// Font line height includes ascenders/descenders and outlines; 94 pixels
+		// clipped the second line even when the word itself was short (EVADED).
+		Card->SlatePrepass(1.f);
+		const FVector2D Required = Card->GetDesiredSize() + FVector2D(8,8);
+		Panel->SetDrawSize(FVector2D(FMath::Max(360.,FMath::CeilToDouble(Required.X)), FMath::CeilToDouble(Required.Y)));
+		Panel->SetSlateWidget(Card);
 	}
 	else
 	{

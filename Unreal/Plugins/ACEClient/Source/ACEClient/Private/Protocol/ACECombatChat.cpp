@@ -1,7 +1,23 @@
 #include "Protocol/ACECombatChat.h"
+#include "Internationalization/Regex.h"
 
 namespace ACECombatChat
 {
+	bool ParseOutgoingSpellDamage(const FString& Text, FString& Target, int32& Amount, bool& Critical)
+	{
+		// Only call for senderless Magic messages. Anchor the complete server
+		// sentence so someone else's hit, a tell, or a cast announcement cannot
+		// be attributed to this player. Physical hits already have their event.
+		static const FRegexPattern Pattern(TEXT("^(?:Critical hit! )?(?:Overpower! )?(?:Sneak Attack! )?You [A-Za-z]+ (.+) for ([0-9]+) points (?:with .+\\.|of (?:periodic )?[A-Za-z]+ damage!)(?: Your critical hit was avoided with their augmentation!)?$"));
+		FRegexMatcher Match(Pattern, Text);
+		if (!Match.FindNext()) return false;
+		const int64 Value = FCString::Atoi64(*Match.GetCaptureGroup(2));
+		if (Value <= 0 || Value > MAX_int32) return false;
+		Target = Match.GetCaptureGroup(1); Amount = int32(Value);
+		Critical = Text.StartsWith(TEXT("Critical hit! "));
+		return true;
+	}
+
 	namespace
 	{
 		constexpr uint32 CondCriticalProtection = 0x1;

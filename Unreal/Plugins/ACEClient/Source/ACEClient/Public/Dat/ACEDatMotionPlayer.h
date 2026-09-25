@@ -43,6 +43,7 @@ public:
 private:
 #if WITH_DEV_AUTOMATION_TESTS
     friend class FACERetailStreamingCostTest;
+    friend class FACEAnimationLifetimeTest;
 #endif
 	const FACEDatAnimation* LoadAnimation(uint32 AnimId) const;
 	const FACEDatMotionData* FindCycle(uint32 MotionCommand, uint32 PreferredStyle) const;

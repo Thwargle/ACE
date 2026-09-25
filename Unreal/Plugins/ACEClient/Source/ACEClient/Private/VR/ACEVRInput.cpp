@@ -1,5 +1,6 @@
 #include "VR/ACEVRComponent.h"
 #include "VR/ACEVRSettings.h"
+#include "VR/ACEVRInputLayout.h"
 #include "VR/ACEVRRetailSurface.h"
 #include "VR/ACEVRWidgetInteraction.h"
 #include "UI/ACEUIGameplayBinder.h"
@@ -23,23 +24,14 @@ void UACEVRComponent::BindInput()
 	I->BindAxis(TEXT("VRMoveY"), this, &UACEVRComponent::MoveY);
 	I->BindAxis(TEXT("VRTurnX"), this, &UACEVRComponent::TurnX);
 	I->BindAxis(TEXT("VRScrollY"), this, &UACEVRComponent::ScrollY);
-	I->BindAction(TEXT("VRInventory"), IE_Pressed, this, &UACEVRComponent::InventoryPressed);
-	I->BindAction(TEXT("VRInventory"), IE_Released, this, &UACEVRComponent::InventoryReleased);
-	I->BindAction(TEXT("VRCombat"), IE_Pressed, this, &UACEVRComponent::ToggleCombat);
-	I->BindAction(TEXT("VRSettings"), IE_Pressed, this, &UACEVRComponent::ToggleSettings);
-	I->BindAction(TEXT("VRSpellWheel"), IE_Pressed, this, &UACEVRComponent::ToggleSpellWheel);
-	I->BindAction(TEXT("VRSelect"), IE_Pressed, this, &UACEVRComponent::SelectPressed);
-	I->BindAction(TEXT("VRPrevious"), IE_Pressed, this, &UACEVRComponent::PreviousSpell);
-	I->BindAction(TEXT("VRLeftTrigger"), IE_Pressed, this, &UACEVRComponent::LeftTriggerDown);
-	I->BindAction(TEXT("VRLeftTrigger"), IE_Released, this, &UACEVRComponent::LeftTriggerUp);
-	I->BindAction(TEXT("VRRightTrigger"), IE_Pressed, this, &UACEVRComponent::RightTriggerDown);
-	I->BindAction(TEXT("VRRightTrigger"), IE_Released, this, &UACEVRComponent::RightTriggerUp);
-	I->BindAction(TEXT("VRLeftGrip"), IE_Pressed, this, &UACEVRComponent::LeftGripDown);
-	I->BindAction(TEXT("VRLeftGrip"), IE_Released, this, &UACEVRComponent::LeftGripUp);
-	I->BindAction(TEXT("VRRightGrip"), IE_Pressed, this, &UACEVRComponent::RightGripDown);
-	I->BindAction(TEXT("VRRightGrip"), IE_Released, this, &UACEVRComponent::RightGripUp);
-	I->BindAction(TEXT("VRJump"), IE_Pressed, this, &UACEVRComponent::JumpDown);
-	I->BindAction(TEXT("VRJump"), IE_Released, this, &UACEVRComponent::JumpUp);
+	// Keep OpenXR's physical action set stable. Remap dispatch in the client so
+	// changes work immediately on PC and Quest without restarting the XR session.
+	for(const auto& B:ACEVRInputLayout::Buttons())for(bool Pressed:{true,false})
+	{
+		FInputActionBinding Binding(B.Input,Pressed?IE_Pressed:IE_Released);
+		Binding.ActionDelegate.GetDelegateForManualSet().BindWeakLambda(this,[this,Name=B.Input,Pressed](){RouteControllerButton(Name,Pressed);});
+		I->AddActionBinding(Binding);
+	}
 	bInputBound = true;
 }
 
@@ -51,6 +43,49 @@ void UACEVRComponent::InventoryPressed()
 	ToggleInventory();
 	bInventoryButtonHeld = true;
 	InventoryHoldSeconds = 0.f;
+}
+
+void UACEVRComponent::RouteControllerButton(FName Input,bool Pressed)
+{
+	if(!Settings)return;
+	if(Pressed)
+	{
+		if(HeldControllerActions.Contains(Input))return;
+		const FName Action=Settings->GetButtonAction(Input);
+		HeldControllerActions.Add(Input,Action);DispatchControllerAction(Action,true);
+	}
+	else
+	{
+		FName Action;
+		if(HeldControllerActions.RemoveAndCopyValue(Input,Action))DispatchControllerAction(Action,false);
+	}
+}
+void UACEVRComponent::DispatchControllerAction(FName Action,bool Pressed)
+{
+	if(Action=="VRInventory"){if(Pressed)InventoryPressed();else InventoryReleased();}
+	else if(Action=="VRLeftTrigger")Trigger(true,Pressed);
+	else if(Action=="VRRightTrigger")Trigger(false,Pressed);
+	else if(Action=="VRLeftGrip")Grip(true,Pressed);
+	else if(Action=="VRRightGrip")Grip(false,Pressed);
+	else if(Action=="VRJump"){if(Pressed)JumpDown();else JumpUp();}
+	else if(Pressed)
+	{
+		if(Action=="VRCombat")ToggleCombat();
+		else if(Action=="VRSettings")ToggleSettings();
+		else if(Action=="VRSpellWheel")ToggleSpellWheel();
+		else if(Action=="VRSelect")SelectPressed();
+		else if(Action=="VRPrevious")PreviousSpell();
+	}
+}
+void UACEVRComponent::ConfigureButton(FName Input,FName Action)
+{
+	// Held inputs retain their original release route, so rebinding cannot leave
+	// a pointer pressed or turn an in-progress jump into a different action.
+	Settings->SetButtonAction(Input,Action);
+}
+void UACEVRComponent::ResetButtonBindings()
+{
+	Settings->ButtonBindings.Reset();Settings->Persist();
 }
 
 void UACEVRComponent::InventoryReleased()
@@ -90,6 +125,7 @@ void UACEVRComponent::Trigger(bool bLeft, bool bPressed)
 			bTriggerDrawing = false; Grip(bLeft, false);
 		}
 		if (VitalsDragHand == (bLeft ? 0 : 1)) EndVitalsDrag();
+		if (PanelEditHand == (bLeft ? 0 : 1)) EndPanelEdit();
 		UIAimOverride = bLeft ? LeftAim : RightAim;
 		if (Held && PC->DatGameplayBinder)
 		{
@@ -284,7 +320,7 @@ void UACEVRComponent::JumpUp()
 void UACEVRComponent::CancelGestures()
 {
 	CloseSpellWheel();
-	EndVitalsDrag();
+	EndVitalsDrag(); EndPanelEdit();
 	if (PC && PC->DatGameplayBinder) PC->DatGameplayBinder->CancelPointerGestures();
 	if (PC && PC->DatCanvasWidget)
 	{

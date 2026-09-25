@@ -36,6 +36,14 @@ void UACEMouseCursorWidget::EnsureLayout()
 	}
 }
 
+void UACEMouseCursorWidget::SetCursorScale(float Scale)
+{
+	Scale = FMath::IsFinite(Scale) ? FMath::Clamp(Scale, .5f, 3.f) : 1.f;
+	if (FMath::IsNearlyEqual(CursorScale, Scale)) return;
+	CursorScale = Scale;
+	if (CursorImage) SetCursorTexture(Cast<UTexture2D>(CursorImage->GetBrush().GetResourceObject()), HotspotX, HotspotY);
+}
+
 void UACEMouseCursorWidget::SetCursorTexture(UTexture2D* Texture, int32 HotX, int32 HotY)
 {
 	EnsureLayout();
@@ -49,7 +57,7 @@ void UACEMouseCursorWidget::SetCursorTexture(UTexture2D* Texture, int32 HotX, in
 	{
 		return;
 	}
-	const FVector2D Size(static_cast<float>(Texture->GetSizeX()), static_cast<float>(Texture->GetSizeY()));
+	const FVector2D Size = FVector2D(Texture->GetSizeX(), Texture->GetSizeY()) * CursorScale;
 	// Slate draws software cursor widgets CENTERED on the pointer (FSlateUser::DrawCursor
 	// subtracts DesiredSize * 0.5). Make the widget 2x the texture and park the art in the
 	// bottom-right quadrant: the widget center — which lands on the OS pointer — is then
@@ -57,7 +65,7 @@ void UACEMouseCursorWidget::SetCursorTexture(UTexture2D* Texture, int32 HotX, in
 	if (UCanvasPanelSlot* PanelSlot = Cast<UCanvasPanelSlot>(CursorImage->Slot))
 	{
 		PanelSlot->SetAutoSize(false);
-		PanelSlot->SetPosition(FVector2D(Size.X - static_cast<float>(HotspotX), Size.Y - static_cast<float>(HotspotY)));
+		PanelSlot->SetPosition(Size - FVector2D(HotspotX, HotspotY) * CursorScale);
 		PanelSlot->SetSize(Size);
 	}
 	FSlateBrush Brush;

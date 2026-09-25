@@ -119,6 +119,38 @@ inline TArray<FCreatureDetailLine> CreatureDetailLines(const FACEAppraisalInfo& 
     return Lines;
 }
 
+inline TArray<FLinearColor> ItemTextColors(const FACEAppraisalInfo& Info, const FString& Text)
+{
+    TArray<FLinearColor> Colors; Colors.Init(FLinearColor::White, Text.Len());
+    // AppraisalProfile::InqInt/FloatEnchantmentMod: low word = changed,
+    // high word = beneficial color. The server already reverses weapon time.
+    auto Stat = [&](const TCHAR* Label, uint32 Flags, uint32 Bit)
+    {
+        if (!(Flags & Bit)) return;
+        const bool Higher = (Flags & (Bit << 16)) != 0;
+        const FLinearColor Color = Higher ? FLinearColor(.45f,.85f,.05f) : FLinearColor(1.f,.2f,.15f);
+        int32 Start = 0;
+        while ((Start = Text.Find(Label, ESearchCase::CaseSensitive, ESearchDir::FromStart, Start)) != INDEX_NONE)
+        {
+            if (Start == 0 || Text[Start-1] == '\n')
+                for (int32 I = Start; I < Text.Len() && Text[I] != '\n'; ++I) Colors[I] = Color;
+            Start += FCString::Strlen(Label);
+        }
+    };
+    Stat(TEXT("Armor Level:"), Info.ArmorEnchantments, 1);
+    const TCHAR* Armor[] = {TEXT("Slashing:"),TEXT("Piercing:"),TEXT("Bludgeoning:"),TEXT("Cold:"),TEXT("Fire:"),TEXT("Acid:"),TEXT("Electric:"),TEXT("Nether:")};
+    for (int32 I=0; I<UE_ARRAY_COUNT(Armor); ++I) Stat(Armor[I], Info.ArmorEnchantments, 2u<<I);
+    Stat(TEXT("Damage:"), Info.WeaponEnchantments, 8);
+    Stat(TEXT("Damage Bonus:"), Info.WeaponEnchantments, 8);
+    Stat(TEXT("Damage Modifier:"), Info.WeaponEnchantments, 32);
+    Stat(TEXT("Speed:"), Info.WeaponEnchantments, 4);
+    Stat(TEXT("Bonus to Attack Skill:"), Info.WeaponEnchantments, 1);
+    Stat(TEXT("Bonus to Melee Defense:"), Info.WeaponEnchantments, 2);
+    Stat(TEXT("Bonus to Mana Conversion:"), Info.ResistanceEnchantments, 0x1000);
+    Stat(TEXT("Elemental Damage Bonus:"), Info.ResistanceEnchantments, 0x2000);
+    return Colors;
+}
+
 inline FString WeaponDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat)
 {
     if (!Info.bHasWeaponProfile)
@@ -195,7 +227,8 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
         const TCHAR* Quality = R >= 2.f ? TEXT("Unparalleled") : R >= 1.6f ? TEXT("Excellent")
             : R >= 1.2f ? TEXT("Above Average") : R > .8f ? TEXT("Average")
             : R > .4f ? TEXT("Below Average") : R > 0.f ? TEXT("Poor") : TEXT("None");
-        Text += FString::Printf(TEXT("  %s: %s (%.2f)\n"), DamageNames[I], Quality, R);
+        Text += FString::Printf(TEXT("%s: %s (%d)\n"), DamageNames[I], Quality,
+            FMath::TruncToInt(Info.IntProperties.FindRef(28) * FMath::Clamp(R, 0.f, 2.f)));
     }
     if (const auto* N = Info.IntProperties.Find(171))
         Text += FString::Printf(TEXT("This item has been tinkered %d time%s.\n"), *N, *N == 1 ? TEXT("") : TEXT("s"));

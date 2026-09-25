@@ -6,7 +6,7 @@ namespace ACE.Server.Network.GameEvent.Events
             : base(GameEventType.VRCapabilities, GameMessageGroup.UIQueue, session, 24)
         {
             Writer.Write(1u); // version
-            Writer.Write(objects == null ? 65527u : 65535u); // 32768: opt-in v2 pose with equipment and authoritative root
+            Writer.Write((objects == null ? 65527u : 65535u) | 65536u); // 32768: equipment pose; 65536: retail combat slider
             if (objects != null)
             {
                 Writer.Write((uint)teleport);

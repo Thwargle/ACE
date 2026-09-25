@@ -55,9 +55,9 @@ namespace
 	}
 }
 
-FString UACEUIGameplayBinder::FormatMapCoords(const FACEPosition& Pos)
+FString UACEUIGameplayBinder::FormatMapCoords(const FACEPosition& Pos, bool bIncludeInteriors)
 {
-	if (!IsOutdoorCell(Pos))
+	if (!Pos.IsValid() || (!bIncludeInteriors && !IsOutdoorCell(Pos)))
 	{
 		return FString();
 	}

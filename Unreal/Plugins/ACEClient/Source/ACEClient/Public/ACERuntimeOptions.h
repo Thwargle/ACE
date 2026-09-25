@@ -16,7 +16,8 @@ inline constexpr FOption Values[] = {
  {TEXT("DesktopUIScale"),TEXT("Desktop UI Scale"),1,1,3},
  {TEXT("ShowFrameRate"),TEXT("Show FPS overlay"),0,0,1},
  {TEXT("ChatFontFace"),TEXT("Chat Font"),2,0,4},
- {TEXT("ChatFontSize"),TEXT("Chat Font Size"),1,0,4}
+ {TEXT("ChatFontSize"),TEXT("Chat Font Size"),1,0,4},
+ {TEXT("CursorScale"),TEXT("Cursor size"),1,.5f,3}
 };
 ACECLIENT_API float Get(const TCHAR* Key);
 ACECLIENT_API void Set(const TCHAR* Key, float Value);

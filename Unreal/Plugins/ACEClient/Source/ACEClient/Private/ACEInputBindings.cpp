@@ -13,6 +13,12 @@ FKey ApplicationsKey()
  return Key;
 }
 struct FCandidate {FKey ActionKey;FInputChord Chord;};
+FKey NumpadEnterKey()
+{
+ static const FKey Key(TEXT("ACENumpadEnter"));
+ if(!Key.IsValid())EKeys::AddKey(FKeyDetails(Key,NSLOCTEXT("ACEInput","NumpadEnter","Num Enter"),0));
+ return Key;
+}
 static TMap<FKey,TArray<FCandidate>> PhysicalBindings;
 static void IndexBindings()
 {

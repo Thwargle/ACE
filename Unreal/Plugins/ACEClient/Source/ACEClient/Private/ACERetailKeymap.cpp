@@ -79,7 +79,8 @@ const TMap<FString,FKey>& PhysicalNames()
   {TEXT("ADD"),EKeys::Add},{TEXT("NUMPADPLUS"),EKeys::Add},{TEXT("SUBTRACT"),EKeys::Subtract},{TEXT("NUMPADMINUS"),EKeys::Subtract},
   {TEXT("MULTIPLY"),EKeys::Multiply},{TEXT("NUMPADSTAR"),EKeys::Multiply},{TEXT("DIVIDE"),EKeys::Divide},{TEXT("NUMPADSLASH"),EKeys::Divide},
   {TEXT("DECIMAL"),EKeys::Decimal},{TEXT("NUMPADPERIOD"),EKeys::Decimal},
-  {TEXT("APPS"),ACEInputBindings::ApplicationsKey()}
+  {TEXT("APPS"),ACEInputBindings::ApplicationsKey()},
+  {TEXT("NUMPADENTER"),ACEInputBindings::NumpadEnterKey()}
  };
  return Keys;
 }

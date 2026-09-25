@@ -21,6 +21,7 @@ struct FBlockedBinding { FString Group; FInputChord Chord; int32 Context=0; };
 ACECLIENT_API void ReplaceBlockedBindings(const TSet<FString>& Groups, const TArray<FBlockedBinding>& Bindings);
 ACECLIENT_API const TArray<FBlockedBinding>& GetBlockedBindings();
 ACECLIENT_API FKey ApplicationsKey();
+ACECLIENT_API FKey NumpadEnterKey();
 struct FImportResult
 {
  bool bSuccess=false;

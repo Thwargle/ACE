@@ -7,6 +7,7 @@ class UCheckBox;
 class USlider;
 class UScrollBox;
 class UEditableTextBox;
+class UTextBlock;
 /** An option is a user widget so its Slate SObjectWidget keeps the DAT label alive during GC. */
 UCLASS()
 class ACECLIENT_API UACERetailOptionWidget : public UUserWidget
@@ -29,6 +30,7 @@ public:
  UFUNCTION() UWidget* GenerateOption(FString Option);
  UFUNCTION() void ChangeMouseTurnSpeed(float Value);
  UFUNCTION() void ResetMouseTurnSpeed();
+ UFUNCTION() void ChangeCursorScale(float Value);
  float GetScrollOffset() const;
  float GetScrollEnd() const;
  void SetScrollOffset(float Offset);
@@ -50,6 +52,8 @@ private:
  UPROPERTY() TObjectPtr<UCheckBox> InvertMouseX;
  UPROPERTY() TObjectPtr<UCheckBox> InvertMouseY;
  UPROPERTY() TObjectPtr<UComboBoxString> DesktopScale;
+ UPROPERTY() TObjectPtr<USlider> CursorScale;
+ UPROPERTY() TObjectPtr<UTextBlock> CursorScaleLabel;
  UPROPERTY() TObjectPtr<UComboBoxString> ChatFontFace;
  UPROPERTY() TObjectPtr<UComboBoxString> ChatFontSize;
  UPROPERTY() TObjectPtr<UEditableTextBox> ScreenshotDirectory;

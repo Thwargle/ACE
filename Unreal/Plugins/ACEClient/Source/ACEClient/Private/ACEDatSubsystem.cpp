@@ -56,6 +56,7 @@ UACEUIResourceResolver* UACEDatSubsystem::GetUiResources()
 #if WITH_EDITORONLY_DATA
 #include "Materials/MaterialExpressionTextureSampleParameter2D.h"
 #include "Materials/MaterialExpressionCollectionParameter.h"
+#include "Materials/MaterialExpressionComponentMask.h"
 #include "Materials/MaterialExpressionTextureObjectParameter.h"
 #include "Materials/MaterialExpressionTextureSampleParameter2DArray.h"
 #include "Materials/MaterialExpressionCustom.h"
@@ -163,6 +164,34 @@ namespace
 		}
 #else
 		Collection = LoadObject<UMaterialParameterCollection>(nullptr, ObjectPath);
+#endif
+		Cached = Collection;
+		return Collection;
+	}
+
+	UMaterialParameterCollection* RuntimePortalCollection()
+	{
+		static TWeakObjectPtr<UMaterialParameterCollection> Cached;
+		if (Cached.IsValid()) return Cached.Get();
+		constexpr const TCHAR* Package = TEXT("/Game/ACE/RuntimeMaterials/MPC_ACEPortalView_v1");
+		constexpr const TCHAR* Path = TEXT("/Game/ACE/RuntimeMaterials/MPC_ACEPortalView_v1.MPC_ACEPortalView_v1");
+		UMaterialParameterCollection* Collection = nullptr;
+#if WITH_EDITORONLY_DATA
+		if (FPackageName::DoesPackageExist(Package)) Collection = LoadObject<UMaterialParameterCollection>(nullptr, Path);
+		if (!Collection)
+		{
+			Collection = NewObject<UMaterialParameterCollection>(CreatePackage(Package), TEXT("MPC_ACEPortalView_v1"), RF_Public | RF_Standalone);
+			for (FName Name : {FName("LookOutEnable"), FName("PortalViewCount")})
+			{
+				auto& Parameter = Collection->ScalarParameters.AddDefaulted_GetRef();
+				Parameter.ParameterName = Name; Parameter.DefaultValue = 0.f;
+			}
+			auto& Camera = Collection->VectorParameters.AddDefaulted_GetRef();
+			Camera.ParameterName = TEXT("LookOutCam"); Camera.DefaultValue = FLinearColor::Black;
+			Collection->PostEditChange();
+		}
+#else
+		Collection = LoadObject<UMaterialParameterCollection>(nullptr, Path);
 #endif
 		Cached = Collection;
 		return Collection;
@@ -974,6 +1003,11 @@ UMaterialInterface* UACEDatSubsystem::GetVRComfortMaterial()
 UMaterialParameterCollection* UACEDatSubsystem::GetRuntimeFogCollection() const
 {
 	return RuntimeFogCollection();
+}
+
+UMaterialParameterCollection* UACEDatSubsystem::GetRuntimePortalCollection() const
+{
+	return RuntimePortalCollection();
 }
 
 TArray<UMaterialInterface*> UACEDatSubsystem::GetRuntimeMaterialParents()
@@ -1941,7 +1975,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
 #if WITH_EDITORONLY_DATA
 	// The aperture mask must run in the depth pass too. Clipping only BaseColor
 	// on an opaque material leaves invisible terrain depth occluding interiors.
-	UMaterial* Mat = NewObject<UMaterial>(GetTransientPackage(), TEXT("M_ACELandLit_v37"), RF_Public | RF_Transient);
+	UMaterial* Mat = NewObject<UMaterial>(GetTransientPackage(), TEXT("M_ACELandLit_v38"), RF_Public | RF_Transient);
 	if (!Mat)
 	{
 		return nullptr;
@@ -2071,6 +2105,34 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
     UMaterialExpressionScalarParameter* LookOutViewCount = NewObject<UMaterialExpressionScalarParameter>(Mat);
     LookOutViewCount->ParameterName = TEXT("PortalViewCount");
     LookOutViewCount->DefaultValue = 0.f;
+	// One world uniform update replaces hundreds of per-texture MID updates on
+	// every tracked head movement. Isolated previews can retain local parameters.
+	auto* UseSharedPortal = NewObject<UMaterialExpressionScalarParameter>(Mat);
+	UseSharedPortal->ParameterName = TEXT("UseSharedPortal");
+	UseSharedPortal->DefaultValue = 0.f;
+	EditorOnly->ExpressionCollection.AddExpression(UseSharedPortal);
+	auto SharedPortal = [&](UMaterialExpression* Local, const TCHAR* Name, bool bVector = false)
+	{
+		auto* Shared = NewObject<UMaterialExpressionCollectionParameter>(Mat);
+		Shared->Collection = RuntimePortalCollection(); Shared->ParameterName = Name;
+		Shared->ParameterId = Shared->Collection->GetParameterId(Name);
+		auto* Select = NewObject<UMaterialExpressionLinearInterpolate>(Mat);
+		Select->A.Expression = Local; Select->B.Expression = Shared; Select->Alpha.Expression = UseSharedPortal;
+		if (bVector)
+		{
+			// Vector parameters expose RGB here; collection vectors expose RGBA.
+			auto* RGB = NewObject<UMaterialExpressionComponentMask>(Mat);
+			RGB->Input.Expression = Shared; RGB->R = RGB->G = RGB->B = true; RGB->A = false;
+			EditorOnly->ExpressionCollection.AddExpression(RGB);
+			Select->B.Expression = RGB;
+		}
+		EditorOnly->ExpressionCollection.AddExpression(Shared);
+		EditorOnly->ExpressionCollection.AddExpression(Select);
+		return Select;
+	};
+	auto* PortalEnable = SharedPortal(LookOutEnable, TEXT("LookOutEnable"));
+	auto* PortalCamera = SharedPortal(LookOutCam, TEXT("LookOutCam"), true);
+	auto* PortalCount = SharedPortal(LookOutViewCount, TEXT("PortalViewCount"));
 	UMaterialExpressionCustom* InteriorClip = NewObject<UMaterialExpressionCustom>(Mat);
 	auto* PortalEye = NewObject<UMaterialExpressionCameraPositionWS>(Mat);
 	EditorOnly->ExpressionCollection.AddExpression(PortalEye);
@@ -2131,11 +2193,11 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
 		InteriorClip->Inputs.Add(InMx);
 		FCustomInput InLo;
 		InLo.InputName = TEXT("LookOut");
-		InLo.Input.Expression = LookOutEnable;
+		InLo.Input.Expression = PortalEnable;
 		InteriorClip->Inputs.Add(InLo);
 		FCustomInput InCam;
 		InCam.InputName = TEXT("CamP");
-		InCam.Input.Expression = LookOutCam;
+		InCam.Input.Expression = PortalCamera;
 		InteriorClip->Inputs.Add(InCam);
         FCustomInput InViews;
         InViews.InputName = TEXT("Views");
@@ -2143,7 +2205,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
         InteriorClip->Inputs.Add(InViews);
         FCustomInput InCount;
         InCount.InputName = TEXT("ViewCount");
-        InCount.Input.Expression = LookOutViewCount;
+        InCount.Input.Expression = PortalCount;
         InteriorClip->Inputs.Add(InCount);
 	}
 	InteriorClip->MaterialExpressionEditorX = -100;
@@ -2199,7 +2261,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceLandMaterialBase()
 	UE_LOG(LogTemp, Log, TEXT("ACEDat: created Lit land material v35 (PortalList + indoor footprint clip)"));
 	return LandMaterialBase;
 #else
-	LandMaterialBase = LoadCookedAceMaterial(TEXT("M_ACELandLit_v37"));
+	LandMaterialBase = LoadCookedAceMaterial(TEXT("M_ACELandLit_v38"));
 	return LandMaterialBase;
 #endif
 }
@@ -2655,9 +2717,14 @@ UMaterialInterface* UACEDatSubsystem::RemapLandMaterialWithDepthBias(UMaterialIn
 void UACEDatSubsystem::ApplyOutdoorPortalLandClipToMid(UMaterialInstanceDynamic* Mid) const
 {
     if (!Mid) return;
-    Mid->SetScalarParameterValue(TEXT("LookOutEnable"), bLandLookOutClip ? (bLandLookInClip ? 2.f : 1.f) : 0.f);
-    Mid->SetVectorParameterValue(TEXT("LookOutCam"), FLinearColor(LandLookOutCam));
-    Mid->SetScalarParameterValue(TEXT("PortalViewCount"), LandPortalViewCount);
+    const bool Shared = GetWorld() != nullptr;
+    Mid->SetScalarParameterValue(TEXT("UseSharedPortal"), Shared ? 1.f : 0.f);
+    if (!Shared)
+    {
+        Mid->SetScalarParameterValue(TEXT("LookOutEnable"), bLandLookOutClip ? (bLandLookInClip ? 2.f : 1.f) : 0.f);
+        Mid->SetVectorParameterValue(TEXT("LookOutCam"), FLinearColor(LandLookOutCam));
+        Mid->SetScalarParameterValue(TEXT("PortalViewCount"), LandPortalViewCount);
+    }
     if (LandPortalViewTexture) Mid->SetTextureParameterValue(TEXT("PortalViews"), LandPortalViewTexture);
 }
 
@@ -2691,12 +2758,14 @@ void UACEDatSubsystem::SetLandLookOutClip(bool bEnable, const FVector& CameraWor
     bLandLookOutClip = bEnable;
     LandLookOutCam = ClipCamera;
     LandPortalViewCount = Mask.ViewCount;
+    bool bRebindTexture = false;
     if (bChanged)
     {
         LandPortalViewRecords = MoveTemp(Mask.Records);
         constexpr int32 Width = FACEPortalViewMask::TextureWidth;
         const int32 Height = FMath::RoundUpToPowerOfTwo(FMath::Max(1, FMath::DivideAndRoundUp(LandPortalViewRecords.Num(), Width)));
         const bool bNewTexture = !LandPortalViewTexture || LandPortalViewTexture->GetSizeY() < Height;
+        bRebindTexture = bNewTexture;
         if (bNewTexture)
         {
             LandPortalViewTexture = UTexture2D::CreateTransient(Width, Height, PF_A32B32G32R32F);
@@ -2723,9 +2792,19 @@ void UACEDatSubsystem::SetLandLookOutClip(bool bEnable, const FVector& CameraWor
                 [](uint8* Pixels, const FUpdateTextureRegion2D* Regions) { FMemory::Free(Pixels); delete Regions; });
         }
     }
-    // New materials receive these values at creation. A stationary camera need
-    // not reapply four parameters across every cached terrain material each tick.
-    if (bChanged || bParametersChanged)
+    if (auto* World = GetWorld(); World && (bChanged || bParametersChanged))
+    {
+        if (auto* Collection = RuntimePortalCollection())
+        {
+            auto* Instance = World->GetParameterCollectionInstance(Collection);
+            Instance->SetScalarParameterValue(TEXT("LookOutEnable"), bLandLookOutClip ? (bLandLookInClip ? 2.f : 1.f) : 0.f);
+            Instance->SetVectorParameterValue(TEXT("LookOutCam"), FLinearColor(LandLookOutCam));
+            Instance->SetScalarParameterValue(TEXT("PortalViewCount"), LandPortalViewCount);
+        }
+    }
+    // Texture content changes keep the same resource. Rebind cached materials
+    // only if the packed portal list needs a larger texture allocation.
+    if (bRebindTexture || (!GetWorld() && (bChanged || bParametersChanged)))
     {
         for (auto& Pair : LandMaterialCache) ApplyOutdoorPortalLandClipToMid(Pair.Value.Get());
         ApplyOutdoorPortalLandClipToMid(LandGpuMaterialInstance);

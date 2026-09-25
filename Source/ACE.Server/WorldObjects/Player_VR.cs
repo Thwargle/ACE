@@ -238,7 +238,7 @@ namespace ACE.Server.WorldObjects
             }
             var sampleHeight = Math.Clamp(Vector3.Lerp(r.Origin, r.Vector, contact).Z, offset.Z, offset.Z + target.Height);
             var speed = Vector3.Distance(r.Origin, r.Vector) / r.Duration;
-            PowerLevel = Math.Clamp((speed - .8f) / 5f, 0f, 1f);
+            PowerLevel = r.RequestedPower ?? Math.Clamp((speed - .8f) / 5f, 0f, 1f);
             AttackHeight = sampleHeight - offset.Z > target.Height * .7f ? ACE.Entity.Enum.AttackHeight.High
                 : sampleHeight - offset.Z < target.Height * .35f ? ACE.Entity.Enum.AttackHeight.Low : ACE.Entity.Enum.AttackHeight.Medium;
             MeleeTarget = target; AttackTarget = target;
@@ -246,7 +246,7 @@ namespace ACE.Server.WorldObjects
             // Desktop attacks retain the retail punch/kick choice.
             var motion = GetSwingAnimation(unarmed);
             var duration = MotionTable.GetAnimationLength(MotionTableId, CurrentMotionState.Stance, motion, GetAnimSpeed());
-            vrRecoveryDuration = Math.Max(.35f, duration + PowerLevel);
+            vrRecoveryDuration = Math.Max(.35f, duration + PowerLevel * (IsDualWieldAttack ? .8f : 1f));
             vrNextAttack = now.AddSeconds(vrRecoveryDuration);
             SendVRRecovery(r, now);
             // No sticky charge, rotate-to-target or repeat loop for physical swings.
@@ -271,7 +271,7 @@ namespace ACE.Server.WorldObjects
             if (rejection != null) { RejectVRCombat(r, rejection); return; }
             var ammo = weapon.IsAmmoLauncher ? GetEquippedAmmo() : weapon;
             if (ammo == null) { SendWeenieError(WeenieError.YouAreOutOfAmmunition); return; }
-            AccuracyLevel = r.Amount;
+            AccuracyLevel = r.RequestedPower ?? r.Amount;
             AttackHeight = ACE.Entity.Enum.AttackHeight.Medium;
             var origin = Location.Pos + r.Origin;
             var speed = GetProjectileSpeed() * (.35f + .65f * r.Amount);
@@ -298,7 +298,7 @@ namespace ACE.Server.WorldObjects
             }
             // Consume first: the last arrow must never be reattached by a queued reload.
             var reload = weapon.IsAmmoLauncher && GetEquippedMissileWeapon() != null && GetEquippedAmmo() != null ? ReloadMissileAmmo() : 0;
-            vrRecoveryDuration = (float)Math.Max(.5, reload + r.Amount);
+            vrRecoveryDuration = (float)Math.Max(.5, reload + AccuracyLevel);
             vrNextAttack = now.AddSeconds(vrRecoveryDuration);
             SendVRRecovery(r, now);
             if (GetEquippedMissileWeapon() == null || (weapon.IsAmmoLauncher && GetEquippedAmmo() == null))

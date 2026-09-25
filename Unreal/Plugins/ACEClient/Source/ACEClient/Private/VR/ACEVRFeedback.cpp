@@ -16,9 +16,7 @@
 
 bool UACEVRComponent::ShouldShowVitalsControls() const
 {
-	return IsMenuOpen() || VitalsDragHand != INDEX_NONE || (VitalsPanel &&
-		((LeftPointer && LeftPointer->GetHoveredWidgetComponent() == VitalsPanel) ||
-		 (RightPointer && RightPointer->GetHoveredWidgetComponent() == VitalsPanel)));
+	return ShouldShowPanelControls("Vitals") || VitalsDragHand != INDEX_NONE;
 }
 
 void UACEVRComponent::UpdateWorldSelectionHighlights(AACEWorldEntityActor* Selection, AACEWorldEntityActor* Hover)

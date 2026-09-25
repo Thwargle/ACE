@@ -27,6 +27,8 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     GConfig->SetFile(GGameUserSettingsIni,&FixtureConfig);
     TestEqual(TEXT("Unset mouse speed uses the faster default"),ACECameraSettings::GetMouseDegreesPerPixel(),0.75f);
     const uint32 Scans[]={0x52,0x4F,0x50,0x51,0x4B,0x4C,0x4D,0x47,0x48,0x49};
+    TestEqual(TEXT("Keypad Enter is distinct from chat Enter"),FACEKeyboardRouter::NumpadVirtualKey(0x0D,0x1C,true),uint32(0x1000D));
+    TestEqual(TEXT("Main Enter remains Enter"),FACEKeyboardRouter::NumpadVirtualKey(0x0D,0x1C,false),uint32(0x0D));
     const uint32 Navigation[]={0x2D,0x23,0x28,0x22,0x25,0x0C,0x27,0x24,0x26,0x21};
     for (int32 N=0;N<10;++N)
     {
@@ -170,6 +172,21 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Key binding focus still blocks zoom in both turning modes"),Boom->TargetArmLength,BeforeZero);
         ACEInputBindings::Cancel();
     }
+    Controller->ResetCameraToRetailDefaults(Boom);
+    const float SavedArm = Boom->TargetArmLength;
+    const FRotator SavedRotation = Boom->GetRelativeRotation();
+    Controller->SetCameraMapMode(Boom,true);
+    TestEqual(TEXT("Retail map camera is 450 game units away"),Boom->TargetArmLength,450.f*Controller->GetCameraScaleCm());
+    TestTrue(TEXT("Map camera looks down with retail's direction"),FMath::IsNearlyEqual(Boom->GetRelativeRotation().Pitch,ACECameraRetail::LookDownPitchDegrees(),.01));
+    TestFalse(TEXT("Map camera is not pulled into intervening roofs"),Boom->bDoCollisionTest);
+    Controller->SyncUserCameraArmLength(Boom);
+    TestEqual(TEXT("Following ticks cannot clamp map mode to ordinary zoom"),Boom->TargetArmLength,450.f*Controller->GetCameraScaleCm());
+    Controller->SetCameraMapMode(Boom,false);
+    TestEqual(TEXT("Exiting map mode restores manual camera distance"),Boom->TargetArmLength,SavedArm);
+    TestTrue(TEXT("Exiting map mode restores angle and collision"),Boom->GetRelativeRotation().Equals(SavedRotation,.01) && Boom->bDoCollisionTest);
+    Controller->SetCameraMapMode(Boom,true);
+    Controller->ResetCameraToRetailDefaults(Boom);
+    TestFalse(TEXT("Reset camera leaves map mode"),Controller->bCameraMapMode);
     Boom->bDoCollisionTest=false; Boom->bEnableCameraLag=true;
     Boom->bEnableCameraRotationLag=false; Boom->CameraLagSpeed=ACECameraRetail::TranslationLagSpeed;
     Boom->SetWorldRotation(FRotator::ZeroRotator); Boom->TargetArmLength=300.f;

@@ -138,7 +138,7 @@ bool FACEVRWallContactTest::RunTest(const FString&)
  Session->WorldObjects.Add(Self.Guid,Self);
  auto* VR=NewObject<UACEVRComponent>(Pawn);Pawn->AddInstanceComponent(VR);VR->RegisterComponent();
  VR->PC=PC;VR->Client=Client;VR->Settings=NewObject<UACEVRSettings>();VR->ActivateRig();
- VR->bTracking=true;VR->Settings->MovementSmoothing=0;VR->Settings->bRun=true;
+ VR->bTracking=true;VR->Settings->MovementSmoothing=0;VR->Settings->bRun=true;VR->Settings->MovementDirection=0;
  // This fixture measures collision, without the later-added forward-stick assist
  // deliberately reducing the input's sideways component.
  VR->Settings->ForwardAssistDegrees=0;
@@ -191,6 +191,45 @@ bool FACEVRWallContactTest::RunTest(const FString&)
   TestTrue(TEXT("Contact does not repeatedly push the camera away from the wall"),MaxWobble<.5);
  }
  AddInfo(FString::Printf(TEXT("Wall integration: %d ticks in %.3f ms"),Ticks,(FPlatformTime::Seconds()-Begin)*1000));
+ // Normal locomotion into a crowd must never become a jump. Moving remote
+ // bodies can overlap the local body between network updates, even at rest.
+ {
+  TArray<AActor*> Crowd;
+  for (int I=0; I<20; ++I)
+  {
+   auto* A=World->SpawnActor<AActor>(); auto* Body=NewObject<UCapsuleComponent>(A);
+   A->SetRootComponent(Body);Body->InitCapsuleSize(40,90);
+   Body->ComponentTags.Add(TEXT("ACECreatureBody"));Body->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+   Body->SetCollisionResponseToAllChannels(ECR_Ignore);Body->SetCollisionResponseToChannel(ECC_Pawn,ECR_Block);
+   Body->RegisterComponent(); Crowd.Add(A);
+  }
+  for (float Dt : {1.f/90,1.f/15}) for (bool Run : {false,true})
+  {
+   FACEPosition Pose;Pose.CellId=0xC98C0129;Pose.SetLocationFromUnreal(Contact-FVector(0,0,90.75),100);
+   Pose.SetAceFacingFromUnrealDir2D(FVector(0,-1,0));Session->SetLocalPosition(Pose);
+   PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;
+   PC->bJumpAirborne=false;PC->bStandingJumpLocked=false;PC->StepHoldSeconds=0;
+   Pawn->SetActorLocationAndRotation(Contact,Pose.ToUnrealQuat());VR->Settings->bRun=Run;
+   int32 AirborneFrames=0; double MaxHeight=0;
+   for (int Frame=0;Frame<60;++Frame)
+   {
+    for (int I=0;I<Crowd.Num();++I)
+    {
+     const float Angle=I*PI*2/Crowd.Num();
+     Crowd[I]->SetActorLocation(Contact+FVector(65*FMath::Cos(Angle),55+25*FMath::Sin(Angle),-15+I));
+    }
+    VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,175-90.75),FRotator(0,-90,0));
+    VR->MoveStick=FVector2D(Frame<30?.7f:-.7f,.7f);PC->PlayerTick(Dt);
+    AirborneFrames+=PC->bJumpAirborne?1:0;
+    MaxHeight=FMath::Max(MaxHeight,FMath::Abs(Pawn->GetActorLocation().Z-Contact.Z));
+   }
+   TestEqual(TEXT("Walking/running beside a swarming wall does not synthesize jumping"),AirborneFrames,0);
+   TestTrue(TEXT("Crowd separation does not lift the player's feet"),MaxHeight<2.);
+   AddInfo(FString::Printf(TEXT("Crowd dt=%.4f run=%d airborne=%d height=%.3f"),Dt,Run,AirborneFrames,MaxHeight));
+  }
+  VR->Settings->bRun=true;
+  for(auto* A:Crowd) A->Destroy();
+ }
  // Falling beside a wall must make downward progress even when a moving
  // creature has pushed the capsule slightly into that wall.
  for(float Depth:{.1f,.3f,1.f})
@@ -226,6 +265,28 @@ bool FACEVRWallContactTest::RunTest(const FString&)
   TestTrue(TEXT("Crowded fall does not travel horizontally through monsters"),FMath::Abs(P.X-Contact.X)<48);
   for(auto* A:Creatures)A->Destroy();
  }
+ // More than sixteen overlapping remote bodies still cannot occlude terrain
+ // queries. This catches both the old bounded sphere retry and post-filtered
+ // line trace, without requiring a hardware headset or network timing.
+ {
+  TArray<AActor*> Bodies;
+  const FVector Feet=Contact+FVector(0,120,-90.75);
+  for (int32 I=0;I<24;++I)
+  {
+   auto* A=World->SpawnActor<AActor>();auto* C=NewObject<UCapsuleComponent>(A);A->SetRootComponent(C);
+   C->InitCapsuleSize(40,90);C->ComponentTags.Add(TEXT("ACECreatureBody"));C->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+   C->SetCollisionResponseToAllChannels(ECR_Ignore);C->SetCollisionResponseToChannel(ECC_Pawn,ECR_Block);
+   C->RegisterComponent();A->SetActorLocation(Feet+FVector(0,0,-45+I*.25));Bodies.Add(A);
+  }
+  float Floor=0;
+  TestTrue(TEXT("Floor support survives more than sixteen overlapping creatures"),ACEBodySweep::FindFootSupport(*World,Feet,48,30,Query,Floor));
+  TArray<FHitResult> Ground;
+  TestTrue(TEXT("Ground ray sees the floor behind blocking creatures"),ACEBodySweep::TraceGround(*World,Ground,Feet+FVector(0,0,100),Feet-FVector(0,0,40),Query));
+  TestTrue(TEXT("Ground results contain no creature floor"),Ground.ContainsByPredicate([](const FHitResult& H){return H.bBlockingHit && !ACEBodySweep::IsCreatureBody(H) && H.ImpactNormal.Z>.66;}));
+  const auto Fall=ACEBodySweep::MoveAirborne(*World,Feet+FVector(0,0,160),Feet+FVector(0,0,50),FCollisionShape::MakeCapsule(30,90),Query,true);
+  TestTrue(TEXT("Falling through a dense overlapping crowd still reaches architecture"),Fall.bLanded && Fall.Position.Z<Feet.Z+100);
+  for(auto* A:Bodies)A->Destroy();
+ }
  // A stationary tracked player must settle once on a tilted support rather
  // than oscillating between the center ray and lower-sphere height.
  {
@@ -250,6 +311,49 @@ bool FACEVRWallContactTest::RunTest(const FString&)
   TestTrue(*FString::Printf(TEXT("Stationary slope stays stable (%.4f cm)"),High-Low),High-Low<.1);
   TestTrue(TEXT("Stationary support remains on the ramp"),FMath::Abs(Pawn->GetActorLocation().Z-90.75-Ground.ImpactPoint.Z)<15);
   A->Destroy();
+ }
+ // The reported crowded dungeon floor, using the retail cell at its actual
+ // coordinates. No jump input is sent, in either desktop or tracked mode.
+ {
+  FACEPosition Seed;Seed.CellId=0x0143015F;Seed.Location=FVector(43.304642,-68.413086,-.002981);
+  Seed.RotationW=.898748f;Seed.RotationXYZ=FVector(0,0,-.438466);
+  auto* ReportedRoom=World->SpawnActor<AACEEnvCellActor>();
+  const FVector RoomOrigin=FACEPosition::AceVectorToUnreal(FVector(192,67*192,0),100);
+  TestNotNull(TEXT("Reported swarm dungeon geometry exists in retail DAT"),Dat->GetOrBuildEnvCellMesh(0x0143015F,100));
+  TestTrue(TEXT("Reported swarm dungeon cell loads from retail DAT"),ReportedRoom->LoadEnvCell(0x0143015F,RoomOrigin,100));
+  ReportedRoom->SetEnvCellCollisionActive(true);
+  const FVector Center=Seed.ToUnrealLocation(100)+FVector(0,0,90.75);
+  TArray<AActor*> Bodies;
+  for(int I=0;I<8;++I)
+  {
+   auto* A=World->SpawnActor<AActor>();auto* Body=NewObject<UCapsuleComponent>(A);A->SetRootComponent(Body);
+   Body->InitCapsuleSize(35,85);Body->ComponentTags.Add(TEXT("ACECreatureBody"));Body->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+   Body->SetCollisionResponseToAllChannels(ECR_Ignore);Body->SetCollisionResponseToChannel(ECC_Pawn,ECR_Block);Body->RegisterComponent();
+   const float Angle=I*PI/4;A->SetActorLocation(Center+FVector(55*FMath::Cos(Angle),55*FMath::Sin(Angle),-10+I));Bodies.Add(A);
+  }
+  for(bool Tracked:{false,true})for(bool Run:{false,true})
+  {
+   VR->bActive=Tracked;VR->Settings->bRun=Run;Session->SetLocalPosition(Seed);PC->PredictedPose=Seed;
+   PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;PC->bJumpAirborne=false;PC->bStandingJumpLocked=false;PC->StepHoldSeconds=0;
+   Pawn->SetActorLocationAndRotation(Center,Seed.ToUnrealQuat());int32 Airborne=0;
+   if(!Tracked)
+   {
+    PC->PlayerInput->InputKey(FInputKeyParams(EKeys::W,IE_Pressed,1.,false));
+    if(!Run)PC->PlayerInput->InputKey(FInputKeyParams(EKeys::LeftShift,IE_Pressed,1.,false));
+   }
+   for(int Frame=0;Frame<45;++Frame)
+   {
+    VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,175-90.75),Seed.ToUnrealQuat());
+    VR->MoveStick=FVector2D(.4,1);PC->PlayerTick(1.f/30);Airborne+=PC->bJumpAirborne?1:0;
+   }
+   if(!Tracked)
+   {
+    PC->PlayerInput->InputKey(FInputKeyParams(EKeys::W,IE_Released,0.,false));
+    PC->PlayerInput->InputKey(FInputKeyParams(EKeys::LeftShift,IE_Released,0.,false));
+   }
+   TestEqual(*FString::Printf(TEXT("Reported swarm floor stays grounded: tracked=%d run=%d"),Tracked,Run),Airborne,0);
+  }
+  for(auto* A:Bodies)A->Destroy();
  }
  Session->State=EACESessionState::Disconnected;Session->PlayerGuid=0;
  World->DestroyWorld(false);GEngine->DestroyWorldContext(World);return true;

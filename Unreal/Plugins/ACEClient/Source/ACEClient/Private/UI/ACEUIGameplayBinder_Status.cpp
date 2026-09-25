@@ -170,7 +170,7 @@ void UACEUIGameplayBinder::RefreshEffectsOverlays(bool bPositive)
 	TMap<int32, FACEActiveEnchantment> Winners;
 	for (const FACEActiveEnchantment& E : All)
 	{
-		if (E.bVitae || E.SpellId == 666)
+		if (E.bVitae || E.SpellId == 666 || E.bCooldown || E.SpellId >= 0x8000)
 		{
 			continue;
 		}
@@ -529,7 +529,7 @@ void UACEUIGameplayBinder::RefreshStatusIndicators()
 	int32 NegCount = 0;
 	for (const FACEActiveEnchantment& E : Client->GetActiveEnchantments())
 	{
-		if (E.bVitae || E.SpellId == 666)
+		if (E.bVitae || E.SpellId == 666 || E.bCooldown || E.SpellId >= 0x8000)
 		{
 			continue;
 		}

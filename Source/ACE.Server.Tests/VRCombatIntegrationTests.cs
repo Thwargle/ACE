@@ -202,6 +202,30 @@ namespace ACE.Server.Tests
             Assert.AreEqual(warnings, Messages().Count(m => m is ACE.Server.Network.GameEvent.Events.GameEventCommunicationTransientString), "Recovery updates replace warning text.");
         }
 
+        [TestMethod]
+        public void SelectedMeleePowerChangesRetailDamageMultiplierAndRecovery()
+        {
+            using var f = new Fixture(); f.Mode(CombatMode.Melee);
+            f.Player.CurrentMotionState = new Motion(MotionStance.HandCombat, MotionCommand.Ready);
+            f.Target.Location.Pos = f.Player.Location.Pos + new Vector3(0,1,0);
+            f.Target.PhysicsObj.Position.Frame.Origin = f.Target.Location.Pos;
+            f.Player.HandleVRCombat(new VRCombatRequest());
+            var nextAttack = typeof(Player).GetField("vrNextAttack", PrivateInstance);
+            var slow = 0.0;
+            for (uint i = 1; i <= 2; ++i)
+            {
+                nextAttack.SetValue(f.Player, DateTime.MinValue);
+                var request = Swing(f,null,i,new Vector3(-.3f,1,1),new Vector3(.3f,1,1));
+                request.RequestedPower = i == 1 ? 1f : 0f;
+                var start = DateTime.UtcNow; f.Player.HandleVRCombat(request);
+                Assert.AreEqual(request.RequestedPower.Value, f.Player.PowerLevel);
+                Assert.AreEqual(request.RequestedPower.Value + .5f, f.Player.GetPowerMod(null));
+                var delay = ((DateTime)nextAttack.GetValue(f.Player) - start).TotalSeconds;
+                if (i == 1) slow = delay;
+                else Assert.IsTrue(slow > delay + .5, "The same tracked gesture recovers sooner at minimum power.");
+            }
+        }
+
         private static VRCombatRequest Swing(Fixture f, WorldObject weapon, uint sequence, Vector3 a, Vector3 b, uint hand = 0)
         {
             using var data = new MemoryStream();

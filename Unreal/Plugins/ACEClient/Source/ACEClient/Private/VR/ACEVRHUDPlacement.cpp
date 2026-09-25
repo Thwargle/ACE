@@ -2,6 +2,9 @@
 #include "VR/ACEVRSettings.h"
 #include "Camera/CameraComponent.h"
 #include "MotionControllerComponent.h"
+#include "Components/WidgetComponent.h"
+#include "Components/WidgetInteractionComponent.h"
+#include "ACEVRNativeHUD.h"
 
 namespace
 {
@@ -24,58 +27,225 @@ FTransform UACEVRComponent::GetVitalsAnchorTransform() const
 	return Settings->VitalsAnchorMode == 0 ? Head->GetComponentTransform() : VitalsAnchorFrame;
 }
 
+namespace
+{
+	void UpdateHUDAnchor(FTransform& Frame, FVector& PreviousOwner, bool& Ready, bool& Turning, const FTransform& Head,
+		const FVector& Owner, int32 Mode, bool Held, float Dt)
+	{
+		const FTransform Target(FRotator(0, Head.Rotator().Yaw, 0), Head.GetLocation());
+		const FVector Travel = Ready ? Owner - PreviousOwner : FVector::ZeroVector;
+		PreviousOwner = Owner;
+		if (!Ready) { Frame = Target; Ready = true; Turning = false; }
+		if (Mode != 1 || Held) { Turning = false; return; }
+		Dt = FMath::Clamp(Dt, 0.f, .1f);
+		// Transport locomotion exactly; smooth only room-scale/head motion.
+		const FVector Smoothed = FMath::VInterpTo(Frame.GetLocation() + Travel, Target.GetLocation(), Dt, 6.f);
+		Frame.SetLocation(Target.GetLocation() + (Smoothed - Target.GetLocation()).GetClampedToMaxSize(12.f));
+		const float Difference = FMath::FindDeltaAngleDegrees(Frame.Rotator().Yaw, Target.Rotator().Yaw);
+		// Separate start/stop thresholds prevent tracking noise at the edge of
+		// the viewing cone from repeatedly starting and stopping the follow.
+		if (!Turning && FMath::Abs(Difference) > 28.f) Turning = true;
+		if (Turning && FMath::Abs(Difference) < 18.f) Turning = false;
+		if (Turning)
+			Frame.SetRotation(FRotator(0, Frame.Rotator().Yaw + (Difference - FMath::Sign(Difference)*15.f)
+				* (1.f-FMath::Exp(-Dt*3.f)), 0).Quaternion());
+	}
+}
+
 void UACEVRComponent::UpdateVitalsAnchor(float Dt)
 {
-	const FTransform Target(FRotator(0, Head->GetComponentRotation().Yaw, 0), Head->GetComponentLocation());
-	const FVector OwnerLocation = GetOwner()->GetActorLocation();
-	const FVector OwnerDelta = bVitalsAnchorReady ? OwnerLocation - VitalsOwnerLocation : FVector::ZeroVector;
-	VitalsOwnerLocation = OwnerLocation;
-	if (!bVitalsAnchorReady) { VitalsAnchorFrame = Target; bVitalsAnchorReady = true; }
-	if (Settings->VitalsAnchorMode != 1 || VitalsDragHand != INDEX_NONE) return;
-	// Translate with locomotion exactly. Smooth only room-scale/head motion;
-	// smoothing world travel lets the HUD fall behind a running player.
-	const FVector Transported = VitalsAnchorFrame.GetLocation() + OwnerDelta;
-	const FVector Smoothed = FMath::VInterpTo(Transported, Target.GetLocation(), Dt, 6.f);
-	VitalsAnchorFrame.SetLocation(Target.GetLocation() + (Smoothed - Target.GetLocation()).GetClampedToMaxSize(12.f));
-	const float Difference = FMath::FindDeltaAngleDegrees(VitalsAnchorFrame.Rotator().Yaw, Target.Rotator().Yaw);
-	if (FMath::Abs(Difference) > 25.f)
-	{
-		const float Yaw = VitalsAnchorFrame.Rotator().Yaw + (Difference - FMath::Sign(Difference)*25.f) * (1.f-FMath::Exp(-Dt*3.f));
-		VitalsAnchorFrame.SetRotation(FRotator(0,Yaw,0).Quaternion());
-	}
+	UpdateHUDAnchor(VitalsAnchorFrame, VitalsOwnerLocation, bVitalsAnchorReady, bVitalsAnchorTurning, Head->GetComponentTransform(),
+		GetOwner()->GetActorLocation(), Settings->VitalsAnchorMode, VitalsDragHand != INDEX_NONE || EditingPanel == "Vitals", Dt);
+}
+
+FTransform UACEVRComponent::GetCompassAnchorTransform() const
+{
+	return Settings->CompassAnchorMode == 0 ? Head->GetComponentTransform() : CompassAnchorFrame;
+}
+
+void UACEVRComponent::UpdateCompassAnchor(float Dt)
+{
+	UpdateHUDAnchor(CompassAnchorFrame, CompassOwnerLocation, bCompassAnchorReady, bCompassAnchorTurning, Head->GetComponentTransform(),
+		GetOwner()->GetActorLocation(), Settings->CompassAnchorMode, EditingPanel == "Compass", Dt);
 }
 
 void UACEVRComponent::ToggleVitalsLock()
 {
-	EndVitalsDrag(false);
+	EndVitalsDrag(false); EndPanelEdit(false);
 	Settings->bVitalsLocked = !Settings->bVitalsLocked;
 	Settings->Persist();
 }
 
 void UACEVRComponent::BeginVitalsDrag(bool bLeft)
 {
-	if (!bTracking || Settings->bVitalsLocked || VitalsDragHand != INDEX_NONE) return;
-	FVector2D Hit;
-	if (!ProjectToViewPlane(GetVitalsAnchorTransform(), bLeft ? LeftAim.Get() : RightAim.Get(), Settings->VitalsViewOffset.X, Hit)) return;
-	VitalsGrabOffset = Hit - FVector2D(Settings->VitalsViewOffset.Y, Settings->VitalsViewOffset.Z);
-	VitalsDragHand = bLeft ? 0 : 1;
+	BeginPanelEdit("Vitals", bLeft, false);
+}
+
+FTransform UACEVRComponent::GetFellowshipAnchorTransform() const
+{
+	return Settings->FellowshipAnchorMode==0 ? Head->GetComponentTransform() : FellowshipAnchorFrame;
+}
+void UACEVRComponent::UpdateFellowshipAnchor(float Dt)
+{
+	UpdateHUDAnchor(FellowshipAnchorFrame,FellowshipOwnerLocation,bFellowshipAnchorReady,bFellowshipAnchorTurning,Head->GetComponentTransform(),
+		GetOwner()->GetActorLocation(),Settings->FellowshipAnchorMode,EditingPanel=="Fellowship",Dt);
 }
 
 void UACEVRComponent::UpdateVitalsDrag()
 {
-	if (VitalsDragHand == INDEX_NONE) return;
-	if (!bTracking || Settings->bVitalsLocked) { EndVitalsDrag(); return; }
+	if (EditingPanel == "Vitals") UpdatePanelEdit();
+}
+
+void UACEVRComponent::EndVitalsDrag(bool bSave, int32 Pointer)
+{
+	if (EditingPanel == "Vitals") EndPanelEdit(bSave, Pointer);
+	if (VitalsDragHand == INDEX_NONE || (Pointer != INDEX_NONE && Pointer != VitalsDragHand)) return;
+	VitalsDragHand = INDEX_NONE;
+	if (bSave) Settings->Persist();
+}
+
+UWidgetComponent* UACEVRComponent::GetEditablePanel(FName Panel) const
+{
+	if (Panel == "Vitals") return VitalsPanel;
+	if (Panel == "Compass") return CompassPanel;
+	if (Panel == "Fellowship") return FellowshipPanel;
+	if (Panel == "Menu") return RetailPanel;
+	if (Panel == "Options") return SettingsPanel;
+	return nullptr;
+}
+
+float& UACEVRComponent::GetPanelScale(FName Panel)
+{
+	if (Panel == "Vitals") return Settings->VitalsScale;
+	if (Panel == "Compass") return Settings->CompassScale;
+	if (Panel == "Fellowship") return Settings->FellowshipScale;
+	if (Panel == "Options") return Settings->OptionsScale;
+	return Settings->PanelScale;
+}
+
+bool UACEVRComponent::IsPanelLocked(FName Panel) const
+{
+	if (Panel == "Vitals") return Settings->bVitalsLocked;
+	if (Panel == "Compass") return Settings->bCompassLocked;
+	if (Panel == "Fellowship") return Settings->bFellowshipLocked;
+	if (Panel == "Menu") return Settings->bMenuLocked;
+	if (Panel == "Options") return Settings->bOptionsLocked;
+	return true;
+}
+
+bool UACEVRComponent::ShouldShowPanelControls(FName Panel) const
+{
+	const auto* Surface = GetEditablePanel(Panel);
+	return Surface && (!IsPanelLocked(Panel) || IsMenuOpen() || EditingPanel == Panel ||
+		(LeftPointer && LeftPointer->GetHoveredWidgetComponent() == Surface) ||
+		(RightPointer && RightPointer->GetHoveredWidgetComponent() == Surface));
+}
+
+void UACEVRComponent::TogglePanelLock(FName Panel)
+{
+	if (!GetEditablePanel(Panel)) return;
+	EndPanelEdit(false); EndVitalsDrag(false);
+	if (Panel == "Vitals") Settings->bVitalsLocked = !Settings->bVitalsLocked;
+	else if (Panel == "Compass") Settings->bCompassLocked = !Settings->bCompassLocked;
+	else if (Panel == "Fellowship") Settings->bFellowshipLocked = !Settings->bFellowshipLocked;
+	else if (Panel == "Menu") Settings->bMenuLocked = !Settings->bMenuLocked;
+	else if (Panel == "Options") Settings->bOptionsLocked = !Settings->bOptionsLocked;
+	Settings->Persist();
+}
+
+void UACEVRComponent::BeginPanelEdit(FName Panel, bool bLeft, bool bResize)
+{
+	auto* Surface = GetEditablePanel(Panel);
+	if (!bTracking || !Surface || !Surface->IsVisible() || Surface->GetCollisionEnabled() == ECollisionEnabled::NoCollision
+		|| IsPanelLocked(Panel) || PanelEditHand != INDEX_NONE || VitalsDragHand != INDEX_NONE) return;
+	const FTransform Plane(Surface->GetComponentQuat() * FRotator(0,180,0).Quaternion(), Surface->GetComponentLocation());
 	FVector2D Hit;
-	if (!ProjectToViewPlane(GetVitalsAnchorTransform(), VitalsDragHand == 0 ? LeftAim.Get() : RightAim.Get(), Settings->VitalsViewOffset.X, Hit)) return;
-	Hit -= VitalsGrabOffset;
-	Settings->VitalsViewOffset.Y = Hit.X;
-	Settings->VitalsViewOffset.Z = Hit.Y;
+	if (!ProjectToViewPlane(Plane, bLeft ? LeftAim.Get() : RightAim.Get(), 0, Hit) || (bResize && Hit.SizeSquared() < 4.)) return;
+	EditingPanel = Panel; PanelEditHand = bLeft ? 0 : 1; bPanelResize = bResize;
+	PanelEditFrame = Plane; PanelEditStart = Hit; PanelEditLocation = Surface->GetComponentLocation();
+	PanelEditScale = GetPanelScale(Panel);
+	FTransform Pose=Surface->GetComponentTransform();Pose.SetScale3D(FVector::OneVector);
+	FTransform Hand=(bLeft ? LeftAim.Get() : RightAim.Get())->GetComponentTransform();Hand.SetScale3D(FVector::OneVector);
+	PanelGrabInHand=Pose.GetRelativeTransform(Hand);
+}
+
+void UACEVRComponent::UpdatePanelEdit(float Dt)
+{
+	if (PanelEditHand == INDEX_NONE) return;
+	auto* Surface = GetEditablePanel(EditingPanel);
+	const auto* Aim = PanelEditHand == 0 ? LeftAim.Get() : RightAim.Get();
+	if (!bTracking || !Aim || !Aim->IsTracked() || !Surface || !Surface->IsVisible()
+		|| Surface->GetCollisionEnabled() == ECollisionEnabled::NoCollision || IsPanelLocked(EditingPanel)) { EndPanelEdit(); return; }
+	if (bPanelResize)
+	{
+		FVector2D Hit;
+		if (!ProjectToViewPlane(PanelEditFrame, Aim, 0, Hit)) return;
+		// Use the original ray plane and grab radius, never the rescaled widget geometry.
+		// This preserves the center and prevents recursive scale drift while holding still.
+		GetPanelScale(EditingPanel) = PanelEditScale * float(FVector2D::DotProduct(Hit, PanelEditStart) / PanelEditStart.SizeSquared());
+	}
+	else
+	{
+		// Right stick forward/back controls distance while either hand holds Move.
+		// Keep the grab rotation and lateral offset, without scrolling the panel
+		// or turning the player. Apply once per frame, independent of frame rate.
+		const float Depth = FMath::Abs(TurnStick.Y) > Settings->StickDeadZone
+			? FMath::Sign(TurnStick.Y) * (FMath::Abs(TurnStick.Y)-Settings->StickDeadZone)/(1.f-Settings->StickDeadZone) : 0.f;
+		FVector Grab = PanelGrabInHand.GetLocation();
+		if (Depth != 0.f) Grab.X = FMath::Clamp(Grab.X + Depth * 90.f * FMath::Clamp(Dt,0.f,.1f),20.,350.);
+		PanelGrabInHand.SetLocation(Grab);
+		// Keep the initial grip-to-panel transform. Translation moves the surface
+		// in all three axes; turning the wrist sets pitch, yaw and roll without a snap.
+		FTransform Hand=Aim->GetComponentTransform();Hand.SetScale3D(FVector::OneVector);
+		const FTransform Pose=PanelGrabInHand*Hand;
+		auto SaveAnchored=[&](const FTransform& Anchor,FVector& Offset,FRotator& Rotation)
+		{
+			Offset=Anchor.InverseTransformPosition(Pose.GetLocation());
+			Rotation=(Anchor.GetRotation().Inverse()*Pose.GetRotation()*FRotator(0,180,0).Quaternion().Inverse()).Rotator();
+		};
+		if (EditingPanel == "Compass") SaveAnchored(GetCompassAnchorTransform(),Settings->CompassViewOffset,Settings->CompassViewRotation);
+		else if (EditingPanel == "Fellowship") SaveAnchored(GetFellowshipAnchorTransform(),Settings->FellowshipViewOffset,Settings->FellowshipViewRotation);
+		else if (EditingPanel == "Vitals") SaveAnchored(GetVitalsAnchorTransform(),Settings->VitalsViewOffset,Settings->VitalsViewRotation);
+		else if (EditingPanel == "Menu" && Settings->bPinMenuToView && !bSettingsOpen)
+		{
+			SaveAnchored(Head->GetComponentTransform(),Settings->MenuViewOffset,Settings->MenuViewRotation);
+			Settings->PanelDistance=Settings->MenuViewOffset.X;
+		}
+		else Surface->SetWorldLocationAndRotation(Pose.GetLocation(),Pose.GetRotation());
+	}
 	Settings->Sanitize();
 }
 
-void UACEVRComponent::EndVitalsDrag(bool bSave)
+void UACEVRComponent::EndPanelEdit(bool bSave, int32 Pointer)
 {
-	if (VitalsDragHand == INDEX_NONE) return;
-	VitalsDragHand = INDEX_NONE;
+	if (PanelEditHand == INDEX_NONE || (Pointer != INDEX_NONE && Pointer != PanelEditHand)) return;
+	if (bSave && !bPanelResize && (EditingPanel=="Options" || (EditingPanel=="Menu" && (!Settings->bPinMenuToView || bSettingsOpen))))
+	{
+		const FTransform Frame=bSettingsOpen ? SettingsLayoutFrame : FTransform(FRotator(0,Head->GetComponentRotation().Yaw,0),Head->GetComponentLocation());
+		FTransform Pose=GetEditablePanel(EditingPanel)->GetComponentTransform();Pose.SetScale3D(FVector::OneVector);
+		Settings->PanelLayouts.Add(EditingPanel=="Menu" && bSettingsOpen ? FName("MenuPreview") : EditingPanel,Pose.GetRelativeTransform(Frame));
+	}
+	PanelEditHand = INDEX_NONE; EditingPanel = NAME_None;
+	bWheelTurnNeutral = true;
 	if (bSave) Settings->Persist();
+}
+
+void UACEVRComponent::UpdatePanelControls(bool MainVisible, bool OptionsVisible)
+{
+	for (FName Name : {FName("Menu"), FName("Options")})
+	{
+		auto* Controls = Name == "Menu" ? MenuControlsPanel.Get() : OptionsControlsPanel.Get();
+		auto* Surface = GetEditablePanel(Name);
+		const bool Visible = Name == "Menu" ? MainVisible : OptionsVisible;
+		const bool WasVisible = Controls->IsVisible();
+		Controls->SetVisibility(Visible); Controls->SetComponentTickEnabled(Visible);
+		Controls->SetCollisionEnabled(Visible ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
+		// Separate hit surface below the menu, so no retail button or text field is covered.
+		Controls->SetRelativeLocationAndRotation(FVector(.1, 0, -Surface->GetDrawSize().Y*.5 - 30), FRotator::ZeroRotator);
+		if (Visible)
+		{
+			const auto Widget = StaticCastSharedPtr<SACEVRPanelControls>(Controls->GetSlateWidget());
+			if (Widget->Refresh() || !WasVisible) Controls->RequestRedraw();
+		}
+	}
 }

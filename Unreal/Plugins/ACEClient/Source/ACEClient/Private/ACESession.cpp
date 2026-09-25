@@ -5243,9 +5243,9 @@ void FACESession::HandleIdentifyObjectResponse(FACEBinaryReader& Reader)
 	{
 		if (Reader.CanRead(12)) { Reader.Skip(12); }
 	}
-	if (Flags & FlagArmorEnc) { if (Reader.CanRead(4)) Reader.Skip(4); }
-	if (Flags & FlagWeaponEnc) { if (Reader.CanRead(4)) Reader.Skip(4); }
-	if (Flags & FlagResistEnc) { if (Reader.CanRead(4)) Reader.Skip(4); }
+	if (Flags & FlagArmorEnc) { if (Reader.CanRead(4)) Info.ArmorEnchantments = Reader.ReadUInt32(); }
+	if (Flags & FlagWeaponEnc) { if (Reader.CanRead(4)) Info.WeaponEnchantments = Reader.ReadUInt32(); }
+	if (Flags & FlagResistEnc) { if (Reader.CanRead(4)) Info.ResistanceEnchantments = Reader.ReadUInt32(); }
 	if (Flags & FlagArmorLevels)
 	{
 		if (Reader.CanRead(36))
@@ -5437,15 +5437,16 @@ void FACESession::HandleApproachVendor(FACEBinaryReader& Reader)
 		VendorSellRate = Reader.ReadFloat();
 		Reader.ReadUInt32(); // AlternateCurrency WCID
 	}
+	VendorCurrencyName.Reset(); VendorCurrencyCount = 0;
 	// altCurrencyCount
 	if (Reader.CanRead(4))
 	{
-		Reader.ReadUInt32();
+		VendorCurrencyCount = Reader.ReadUInt32();
 	}
 	// altCurrency plural name (String16L)
 	if (Reader.CanRead(4))
 	{
-		Reader.ReadString16L();
+		VendorCurrencyName = Reader.ReadString16L();
 	}
 
 	if (!Reader.CanRead(4))

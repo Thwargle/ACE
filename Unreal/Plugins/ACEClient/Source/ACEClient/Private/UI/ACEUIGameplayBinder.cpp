@@ -1759,7 +1759,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 	if (Name == TEXT("VendorSellSellItem_Button") || Name == TEXT("VendorSellButton")
 		|| Name == TEXT("VendorSellButtonSmall") || Name == TEXT("VendorSellSellAll_Button"))
 	{
-		SellVendorCart();
+		SellVendorCart(Name == TEXT("VendorSellSellItem_Button"));
 		return true;
 	}
 	if (Name == TEXT("VendorSellClearItem_Button") || Name == TEXT("VendorBuyClearItem_Button"))
@@ -3196,6 +3196,15 @@ void UACEUIGameplayBinder::UpdateSpellDrag(FVector2D CanvasLocalPos)
 			RefreshSpellHotbarOverlays();
 		}
 	}
+	// Retail keeps tab targets live during an ItemList drag. Hovering a tab
+	// opens it without releasing the lifted spell, then drop inserts there.
+	for (int32 Tab = 1; Tab <= 8; ++Tab)
+		if (auto El = Manager->FindElementByName(FString::Printf(TEXT("Spellcast_Tab%d"), Tab));
+			El && Canvas->IsElementExposedAt(El, CanvasLocalPos) && Client->GetActiveSpellBar() != Tab - 1)
+		{
+			SetCombatSpellBar(Tab - 1); SyncSpellcastTabChrome(); RefreshSpellHotbarOverlays();
+			break;
+		}
 	if (!SpellDragIcon)
 	{
 		SpellDragIcon = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
@@ -3297,6 +3306,17 @@ bool UACEUIGameplayBinder::TryFinishSpellDrag(FVector2D CanvasLocalPos)
 		: CanvasLocalPos;
 
 	int32 DestSlot = INDEX_NONE;
+	for (int32 Tab = 1; Tab <= 8; ++Tab)
+		if (auto El = Manager->FindElementByName(FString::Printf(TEXT("Spellcast_Tab%d"), Tab));
+			El && Canvas->IsElementExposedAt(El, CanvasLocalPos))
+		{
+			SetCombatSpellBar(Tab - 1);
+			const auto Bar = Client->GetSpellBar(Tab - 1);
+			const int32 Empty = Bar.Find(0);
+			Client->SendAddSpellToBar(SpellId, Empty == INDEX_NONE ? Bar.Num() : Empty, Tab - 1);
+			SyncSpellcastTabChrome(); RefreshSpellHotbarOverlays();
+			return true;
+		}
 	if (HitTestSpellBarSlot(Absolute, DestSlot))
 	{
 		const int32 BarIndex = Client->GetActiveSpellBar();
@@ -5762,7 +5782,11 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 			{
 				if (bRightClick)
 				{
+					if (ActiveVendorPage == 2) VendorSellSelectedGuid = Guid;
+					else VendorSelectedGuid = Guid;
+					SelectInventoryGuid(Guid);
 					Client->SendIdentifyObject(Guid);
+					RefreshVendorOverlays();
 				}
 				else if (ActiveVendorPage == 2)
 				{
@@ -5778,7 +5802,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 					constexpr double DoubleClickSeconds = 0.75;
 					if (Guid == LastInvClickGuid && (Now - LastInvClickTime) < DoubleClickSeconds)
 					{
-						BuySelectedVendorItem();
+						if (ActiveVendorPage == 1) BuyVendorCartItem(); else BuySelectedVendorItem();
 						LastInvClickGuid = 0;
 						LastInvClickTime = 0.0;
 					}
@@ -6175,7 +6199,7 @@ void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Sele
 				[&](const FACEWorldObject& Item) { return Item.Guid==Obj.Guid; });
 			if (VendorStock)
 			{
-				SelectedStackMax=GetVendorPurchaseLimit(Obj.Guid);
+				SelectedStackMax=GetVendorSelectionLimit(Obj.Guid);
 			}
 			SelectedStackAmount=SelectedStackMax<=0 ? 0 : SameStackSelection ? FMath::Clamp(PreviousStackAmount,1,SelectedStackMax)
 				: SelectedStackMax;
@@ -10539,7 +10563,7 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 			if (OpenVendorGuid && Client->GetVendorMerchandise().ContainsByPredicate(
 				[&](const FACEWorldObject& Stock){return Stock.Guid==SelObj.Guid;}))
 			{
-				SelectedStackMax=GetVendorPurchaseLimit(SelObj.Guid);
+				SelectedStackMax=GetVendorSelectionLimit(SelObj.Guid);
 				SelectedStackAmount=SelectedStackMax>0 ? FMath::Clamp(SelectedStackAmount,1,SelectedStackMax) : 0;
 			}
 			const bool bStackable = SelObj.MaxStackSize > 1 || SelObj.StackSize > 1;
@@ -11011,7 +11035,10 @@ void UACEUIGameplayBinder::RefreshExaminationOverlay()
 		ExamBody->SetJustification(ETextJustify::Left);
 		ExamBody->SetVisibility(ESlateVisibility::HitTestInvisible);
 		if (auto* Retail = Cast<UACERetailTextBlock>(ExamBody))
+		{
 			Retail->SetRetailElement(Canvas->GetResourceResolver(), BodyTarget, Canvas->GetLastScale2D(), BodyTarget->Width, false);
+			Retail->SetTextColors(ACEAppraisalFormatting::ItemTextColors(LastAppraisal, Body));
+		}
 		ExamBody->SetAutoWrapText(true);
 		ExamBody->SetClipping(EWidgetClipping::Inherit);
 		if (!ExamScroll && Canvas->WidgetTree)
@@ -12067,6 +12094,7 @@ uint64 UACEUIGameplayBinder::HashVendorOverlayState() const
 	H = HashCombine(H, GetTypeHash(VendorSellScrollOffset));
 	H = HashCombine(H, GetTypeHash(VendorSelectedGuid));
 	H = HashCombine(H, GetTypeHash(VendorSellSelectedGuid));
+	H = HashCombine(H, GetTypeHash(SelectedStackAmount));
 	H = HashCombine(H, GetTypeHash(VendorBuyCart.Num()));
 	H = HashCombine(H, GetTypeHash(VendorSellCart.Num()));
 	for (const TPair<int32, int32>& Pair : VendorBuyCart)
@@ -13248,6 +13276,7 @@ void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D CanvasLocalPos)
 				1, FMath::Max(1, SelectedStackMax));
 			SelectedStackAmount = Amt;
 			RefreshSelectionOverlay();
+			RefreshVendorOverlays();
 			break;
 		}
     case EACEUIScrollTarget::Chat:
@@ -13629,7 +13658,7 @@ void UACEUIGameplayBinder::RefreshVendorTabLabels()
 		TEXT("VendorItemsTab"), TEXT("VendorBuyTab"), TEXT("VendorSellTab")
 	};
 	// Retail-facing labels for the three vendor pages (DAT tabs are image-only).
-	static const TCHAR* TabLabels[] = { TEXT("Items"), TEXT("Buy"), TEXT("Sell") };
+	static const TCHAR* TabLabels[] = { TEXT("Items"), TEXT("Buying"), TEXT("Selling") };
 	while (VendorTabLabels.Num() < 3)
 	{
 		UTextBlock* L = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
@@ -13664,7 +13693,7 @@ void UACEUIGameplayBinder::RefreshVendorButtonLabels()
 	};
 	static const FVendorBtn Specs[] = {
 		{ TEXT("VendorItemBuy_Button"), TEXT("Buy"), -1 },
-		{ TEXT("VendorItemAdd_Button"), TEXT("Add"), -1 },
+		{ TEXT("VendorItemAdd_Button"), TEXT("Add to List"), -1 },
 		{ TEXT("VendorBuyBuyItem_Button"), TEXT("Buy"), 1 },
 		{ TEXT("VendorBuyBuyAll_Button"), TEXT("Buy All"), 1 },
 		{ TEXT("VendorBuyClearItem_Button"), TEXT("Clear"), 1 },
@@ -13950,6 +13979,14 @@ int32 UACEUIGameplayBinder::GetVendorPurchaseLimit(int32 ItemGuid) const
 	return 0;
 }
 
+int32 UACEUIGameplayBinder::GetVendorSelectionLimit(int32 ItemGuid) const
+{
+	const int32 Limit=GetVendorPurchaseLimit(ItemGuid);
+	if (ActiveVendorPage==1)
+		if(const auto* P=VendorBuyCart.FindByPredicate([&](const auto& Entry){return Entry.Value==ItemGuid;}))return FMath::Min(Limit,P->Key);
+	return Limit;
+}
+
 void UACEUIGameplayBinder::BuySelectedVendorItem()
 {
 	if (!Client || OpenVendorGuid == 0 || VendorSelectedGuid == 0)
@@ -13959,7 +13996,7 @@ void UACEUIGameplayBinder::BuySelectedVendorItem()
 	TArray<TPair<int32, int32>> One;
 	const int32 Limit=GetVendorPurchaseLimit(VendorSelectedGuid);
 	if (Limit<=0) return;
-	One.Emplace(LastSelection.Guid==VendorSelectedGuid ? FMath::Clamp(SelectedStackAmount,1,Limit) : 1, VendorSelectedGuid);
+	One.Emplace(LastSelection.Guid==VendorSelectedGuid ? FMath::Clamp(SelectedStackAmount,1,Limit) : Limit, VendorSelectedGuid);
 	Client->SendBuyItems(OpenVendorGuid, One);
 }
 
@@ -13971,7 +14008,7 @@ void UACEUIGameplayBinder::AddSelectedVendorItemToBuyCart()
 	}
 	const int32 Limit=GetVendorPurchaseLimit(VendorSelectedGuid);
 	if (Limit<=0) return;
-	const int32 Quantity=LastSelection.Guid==VendorSelectedGuid ? FMath::Clamp(SelectedStackAmount,1,Limit) : 1;
+	const int32 Quantity=LastSelection.Guid==VendorSelectedGuid ? FMath::Clamp(SelectedStackAmount,1,Limit) : Limit;
 	for (TPair<int32, int32>& P : VendorBuyCart)
 	{
 		if (P.Value == VendorSelectedGuid)
@@ -14004,7 +14041,7 @@ void UACEUIGameplayBinder::BuyVendorCartItem()
 	{
 		return;
 	}
-	int32 Amt = 1;
+	int32 Amt = 0;
 	for (const TPair<int32, int32>& P : VendorBuyCart)
 	{
 		if (P.Value == Guid)
@@ -14015,10 +14052,12 @@ void UACEUIGameplayBinder::BuyVendorCartItem()
 	}
 	TArray<TPair<int32, int32>> One;
 	const int32 Limit=GetVendorPurchaseLimit(Guid);
-	if (Limit<=0) return;
-	One.Emplace(FMath::Clamp(Amt,1,Limit), Guid);
+	if (Limit<=0 || Amt<=0) return;
+	const int32 Quantity=FMath::Clamp(LastSelection.Guid==Guid?SelectedStackAmount:Amt,1,FMath::Min(Amt,Limit));
+	One.Emplace(Quantity, Guid);
 	Client->SendBuyItems(OpenVendorGuid, One);
-	VendorBuyCart.RemoveAll([Guid](const TPair<int32, int32>& P) { return P.Value == Guid; });
+	for(auto& P:VendorBuyCart)if(P.Value==Guid)P.Key-=Quantity;
+	VendorBuyCart.RemoveAll([](const auto& P){return P.Key<=0;});
 	RefreshVendorOverlays();
 }
 
@@ -14089,7 +14128,10 @@ void UACEUIGameplayBinder::RefreshVendorInfoTexts()
 	};
 	auto Hide = [](UTextBlock* T) { if (T) { T->SetVisibility(ESlateVisibility::Collapsed); } };
 
-	const int32 Purse = CountPlayerPyreals();
+	const auto VendorSession = Client->GetSession();
+	const FString Currency = VendorSession ? VendorSession->GetVendorCurrencyName() : FString();
+	const bool AlternateCurrency = !Currency.IsEmpty();
+	const int32 Purse = AlternateCurrency ? VendorSession->GetVendorCurrencyCount() : CountPlayerPyreals();
 	const float SellRate = Client->GetVendorSellRate();
 	const float BuyRate = Client->GetVendorBuyRate();
 
@@ -14115,15 +14157,16 @@ void UACEUIGameplayBinder::RefreshVendorInfoTexts()
 
 	if (ActiveVendorPage == 0)
 	{
-		const FString ItemName = bHaveFocus ? FormatItemStackName(Focus) : FString();
+		const int32 Quantity = bHaveFocus ? (LastSelection.Guid == Focus.Guid ? SelectedStackAmount : GetVendorPurchaseLimit(Focus.Guid)) : 0;
+		const FString ItemName = bHaveFocus ? FormatItemStackName(Focus, Quantity) : FString();
 		PlaceTextOnElement(EnsureLabel(VendorItemNameLabel), TEXT("VendorItemName_Text"),
 			ItemName, 9, TextWhite, 10040);
 		FString CostText;
 		if (bHaveFocus)
 		{
-			const uint32 Cost = VendorSellCost(Focus.Value, SellRate);
-			CostText = FString::Printf(TEXT("costs %sp (you have %sp)"),
-				*FormatXpNumber(Cost), *FormatXpNumber(Purse));
+			const uint32 Cost = VendorSellCost(FMath::RoundToInt(double(Focus.Value)*Quantity/FMath::Max(1,Focus.StackSize)), SellRate);
+			CostText = FString::Printf(TEXT("This item costs %s %s. You have %s"),
+				*FormatXpNumber(Cost), AlternateCurrency ? *Currency : TEXT("pyreals"), *FormatXpNumber(Purse));
 		}
 		PlaceTextOnElement(EnsureLabel(VendorItemCostLabel), TEXT("VendorItemCost_Text"),
 			CostText, 8, TextGold, 10040);
@@ -14138,14 +14181,14 @@ void UACEUIGameplayBinder::RefreshVendorInfoTexts()
 			FACEWorldObject Obj;
 			if (Client->GetWorldObject(P.Value, Obj))
 			{
-				Worth += static_cast<int32>(VendorSellCost(Obj.Value, SellRate)) * P.Key;
+				Worth += static_cast<int32>(VendorSellCost(FMath::RoundToInt(double(Obj.Value)*P.Key/FMath::Max(1,Obj.StackSize)), SellRate));
 			}
 		}
 		PlaceTextOnElement(EnsureLabel(VendorBuyCostLabel), TEXT("VendorBuyCost_Text"),
-			FString::Printf(TEXT("Buying %d items worth %sp"), ItemCount, *FormatXpNumber(Worth)),
+			FString::Printf(TEXT("Buying %d items worth %s %s"), ItemCount, *FormatXpNumber(Worth), AlternateCurrency ? *Currency : TEXT("pyreals")),
 			8, TextWhite, 10040);
 		PlaceTextOnElement(EnsureLabel(VendorBuyPurseLabel), TEXT("VendorBuyPurse_Text"),
-			FString::Printf(TEXT("You have %sp"), *FormatXpNumber(Purse)),
+			FString::Printf(TEXT("You have %s %s"), *FormatXpNumber(Purse), AlternateCurrency ? *Currency : TEXT("pyreals")),
 			8, TextWhite, 10040);
 	}
 	else if (ActiveVendorPage == 2)
@@ -14157,14 +14200,14 @@ void UACEUIGameplayBinder::RefreshVendorInfoTexts()
 			FACEWorldObject Obj;
 			if (Client->GetWorldObject(P.Value, Obj))
 			{
-				Worth += VendorBuyPayout(Obj.Value, BuyRate);
+				Worth += VendorBuyPayout(FMath::RoundToInt(double(Obj.Value) * P.Key / FMath::Max(1, Obj.StackSize)), BuyRate);
 			}
 		}
 		PlaceTextOnElement(EnsureLabel(VendorSellCostLabel), TEXT("VendorSellCost_Text"),
 			FString::Printf(TEXT("Selling %d items worth %sp"), ItemCount, *FormatXpNumber(Worth)),
 			8, TextWhite, 10040);
 		PlaceTextOnElement(EnsureLabel(VendorSellPurseLabel), TEXT("VendorSellPurse_Text"),
-			FString::Printf(TEXT("You have %sp"), *FormatXpNumber(Purse)),
+			FString::Printf(TEXT("You have %sp"), *FormatXpNumber(CountPlayerPyreals())),
 			8, TextWhite, 10040);
 	}
 }
@@ -14207,10 +14250,11 @@ void UACEUIGameplayBinder::AddInventoryGuidToVendorSellCart(int32 Guid)
 		PostInventorySystemMessage(TEXT("That item cannot be sold."));
 		return;
 	}
-	for (const TPair<int32, int32>& P : VendorSellCart)
+	for (TPair<int32, int32>& P : VendorSellCart)
 	{
 		if (P.Value == Guid)
 		{
+			P.Key=FMath::Clamp(LastSelection.Guid==Guid?SelectedStackAmount:FMath::Max(1,Obj.StackSize),1,FMath::Max(1,Obj.StackSize));
 			VendorSellSelectedGuid = Guid;
 			ActiveVendorPage = 2;
 			SyncVendorPageVisibility();
@@ -14228,7 +14272,7 @@ void UACEUIGameplayBinder::AddInventoryGuidToVendorSellCart(int32 Guid)
 	RefreshVendorOverlays();
 }
 
-void UACEUIGameplayBinder::SellVendorCart()
+void UACEUIGameplayBinder::SellVendorCart(bool bSelectedOnly)
 {
 	if (!Client || OpenVendorGuid == 0)
 	{
@@ -14247,6 +14291,17 @@ void UACEUIGameplayBinder::SellVendorCart()
 	}
 	if (VendorSellCart.Num() == 0)
 	{
+		return;
+	}
+	if (bSelectedOnly)
+	{
+		auto* Entry = VendorSellCart.FindByPredicate([&](const auto& P){return P.Value==VendorSellSelectedGuid;});
+		if (!Entry) return;
+		const int32 Quantity=FMath::Clamp(LastSelection.Guid==Entry->Value ? SelectedStackAmount : Entry->Key,1,Entry->Key);
+		Client->SendSellItems(OpenVendorGuid, {{Quantity,Entry->Value}});
+		Entry->Key-=Quantity;
+		VendorSellCart.RemoveAll([](const auto& P){return P.Key<=0;});
+		RefreshVendorOverlays();
 		return;
 	}
 	Client->SendSellItems(OpenVendorGuid, VendorSellCart);
@@ -14315,9 +14370,12 @@ void UACEUIGameplayBinder::HandleVendorOpened(int32 Guid)
 	// do not wipe an in-progress sell cart that drag-drop already filled.
 	if (Guid != 0 && Guid == OpenVendorGuid)
 	{
+		// An approach reply can update currency balances, prices, or stock limits
+		// without changing the merchandise icons. Refresh the captions as well.
+		LastVendorOverlayHash = ~uint64(0);
 		if (LastSelection.bValid && LastSelection.Guid == VendorSelectedGuid)
 		{
-			SelectedStackMax=GetVendorPurchaseLimit(VendorSelectedGuid);
+			SelectedStackMax=GetVendorSelectionLimit(VendorSelectedGuid);
 			SelectedStackAmount=SelectedStackMax>0 ? FMath::Clamp(SelectedStackAmount,1,SelectedStackMax) : 0;
 			RefreshSelectionOverlay();
 		}
@@ -14648,6 +14706,7 @@ void UACEUIGameplayBinder::RefreshVendorOverlays()
 		LastVendorOverlayHash = ~uint64(0);
 		for (UBorder* B : VendorItemSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
 		for (UBorder* B : VendorItemSlotBgs) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UBorder* B : VendorItemSelections) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
 		HideVendorTextOverlays();
 		return;
 	}
@@ -14707,6 +14766,7 @@ void UACEUIGameplayBinder::RefreshVendorOverlays()
 			FACEWorldObject Obj;
 			if (Client->GetWorldObject(P.Value, Obj))
 			{
+				Obj.StackSize=P.Key;
 				Items.Add(Obj);
 			}
 		}
@@ -14719,6 +14779,7 @@ void UACEUIGameplayBinder::RefreshVendorOverlays()
 			FACEWorldObject Obj;
 			if (Client->GetWorldObject(P.Value, Obj))
 			{
+				Obj.StackSize=P.Key;
 				Items.Add(Obj);
 			}
 		}
@@ -14782,6 +14843,8 @@ void UACEUIGameplayBinder::RefreshVendorOverlays()
 	{
 		UBorder* Bg = EnsureIconBorder(VendorItemSlotBgs, i);
 		UBorder* Icon = EnsureIconBorder(VendorItemSlots, i);
+		UBorder* Selection = EnsureIconBorder(VendorItemSelections, i);
+		Selection->SetVisibility(ESlateVisibility::Collapsed);
 		if (!Bg || !Icon) { continue; }
 		const int32 Idx = i + *ScrollOffset;
 		const int32 Col = i % Cols;
@@ -14806,7 +14869,15 @@ void UACEUIGameplayBinder::RefreshVendorOverlays()
 		SetRetailTooltip(Icon, FText::FromString(Items[Idx].Name));
 		Icon->SetRenderOpacity(Items[Idx].Guid == FocusGuid ? 1.f : 0.85f);
 		PlaceCell(Icon, CellX, CellY, OverlayZ + 1);
+		if (Items[Idx].Guid == FocusGuid)
+		{
+			SetIconDid(Selection, DidInvSlotSelected);
+			Selection->SetVisibility(ESlateVisibility::HitTestInvisible);
+			PlaceCell(Selection, CellX, CellY, OverlayZ + 2);
+		}
 	}
+	for (int32 i = PageSize; i < VendorItemSelections.Num(); ++i)
+		if (VendorItemSelections[i]) VendorItemSelections[i]->SetVisibility(ESlateVisibility::Collapsed);
 	for (int32 i = PageSize; i < VendorItemSlots.Num(); ++i)
 	{
 		if (VendorItemSlots[i]) { VendorItemSlots[i]->SetVisibility(ESlateVisibility::Collapsed); }

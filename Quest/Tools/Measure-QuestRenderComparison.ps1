@@ -1,7 +1,7 @@
 #requires -Version 7.0
 <#
 Capture a stationary A/B/A comparison without restarting the game. This is for
-live console variables only (not CachedActorDraws, which requires actor creation).
+live console variables only. CachedActorDraws supports live changes from v76.
 Keep the headset on, game visible, and view/menus unchanged. Screenshots and
 heavy render audits must be taken outside these intervals.
 
@@ -32,8 +32,14 @@ if (!$Serial) {
     if ($devices.Count -ne 1) { throw 'Specify one authorized Quest using -Serial.' }
     $Serial = $devices[0]
 }
-if ($Variable -eq 'ace.Render.CachedActorDraws' -or $Variable -eq 'r.Android.SupportsTimestampQueries') {
-    throw 'This setting is not a live toggle. Compare separate launches instead.'
+if ($Variable -in @('r.Android.SupportsTimestampQueries','r.Mobile.Forward.LocalLightsSinglePermutation')) {
+    throw 'Compare this setting in separate launches; existing cached shader/draw state is not refreshed by this live-toggle harness.'
+}
+if ($Variable -eq 'ace.Render.CachedActorDraws') {
+    $packageInfo = Invoke-Adb @('shell', 'dumpsys', 'package', $package)
+    if ($packageInfo -notmatch 'versionCode=(\d+)' -or [int]$Matches[1] -lt 76) {
+        throw 'Live actor-cache comparisons require Quest v76 or newer.'
+    }
 }
 function Get-GameProcessId {
     # Unreal's detached crash handler inherits the process name, so pidof

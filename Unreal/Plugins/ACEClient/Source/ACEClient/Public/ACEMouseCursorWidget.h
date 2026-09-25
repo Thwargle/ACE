@@ -19,6 +19,7 @@ public:
 
 	/** Tip / click point is the top-left of the 15x28 retail pointer texture. */
 	void SetCursorTexture(UTexture2D* Texture, int32 HotX, int32 HotY);
+	void SetCursorScale(float Scale);
 
 	/** Default silver/bronze metal pointer (portal.dat). */
 	static constexpr uint32 DefaultCursorDid = 0x06004D68u;
@@ -50,4 +51,5 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UImage> CursorImage;
 	int32 HotspotX = DefaultHotspotX;
 	int32 HotspotY = DefaultHotspotY;
+	float CursorScale = 1.f;
 };

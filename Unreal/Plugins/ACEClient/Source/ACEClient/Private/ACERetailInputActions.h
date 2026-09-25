@@ -40,6 +40,7 @@ inline TArray<ACEInputBindings::FAction> ACERetailAdditionalActions()
   {Action(TEXT("LOGOUT")),TEXT("Log out"),TEXT("UI"),{FInputChord(EKeys::Escape,true,false,false,false)}},
   {Action(TEXT("CaptureScreenshot")),TEXT("Capture screenshot"),TEXT("UI"),{FInputChord(EKeys::Multiply)}},
   {Action(TEXT("CameraInstantMouseLook")),TEXT("Hold mouse look"),TEXT("Camera"),{FInputChord(EKeys::MiddleMouseButton)}},
+  {Action(TEXT("CameraViewMapMode")),TEXT("Bird's-eye camera"),TEXT("Camera"),{FInputChord(NumpadEnterKey())}},
   {Action(TEXT("AFKState")),TEXT("AFK pose"),TEXT("Emotes"),{}},
   {Action(TEXT("BlowKiss")),TEXT("Blow a kiss"),TEXT("Emotes"),{}},
   {Action(TEXT("BeSeeingYou")),TEXT("Be seeing you"),TEXT("Emotes"),{}},

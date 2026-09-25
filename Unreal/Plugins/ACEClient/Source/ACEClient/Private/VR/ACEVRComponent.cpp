@@ -134,12 +134,25 @@ void UACEVRComponent::ActivateRig()
 	// Smoothed UI has its own transform, outside controller render-thread late update.
 	WristPanel = Panel(TEXT("VRLeftWristSpells"), VisualRoot, FVector2D(500, 100));
 	VitalsPanel = Panel(TEXT("VRPinnedVitals"), VisualRoot, FVector2D(480, 240));
-	CompassPanel = Panel(TEXT("VRCompass"), Head, FVector2D(400, 460));
+	CompassPanel = Panel(TEXT("VRCompass"), VisualRoot, FVector2D(400, 500));
+	FellowshipPanel = Panel(TEXT("VRFellowship"),VisualRoot,FVector2D(480,760));
+	FellowshipPanel->SetManuallyRedraw(true);FellowshipPanel->SetCastShadow(false);
+	FellowshipPanel->SetSlateWidget(SAssignNew(NativeFellowship,SACEVRFellowship).Rig(this).OnSelect([Weak=TWeakObjectPtr<UACEClientSubsystem>(Client)](int32 Guid)
+		{if(Weak.IsValid())Weak->SelectObject(Guid);}));
+	MenuControlsPanel = Panel(TEXT("VRMenuControls"), RetailPanel, FVector2D(480, 48));
+	OptionsControlsPanel = Panel(TEXT("VROptionsControls"), SettingsPanel, FVector2D(480, 48));
+	MenuControlsPanel->SetSlateWidget(SNew(SACEVRPanelControls).Rig(this).Panel("Menu"));
+	OptionsControlsPanel->SetSlateWidget(SNew(SACEVRPanelControls).Rig(this).Panel("Options"));
+	for (auto* Controls : {MenuControlsPanel.Get(), OptionsControlsPanel.Get()})
+	{
+		Controls->SetManuallyRedraw(true); Controls->SetCastShadow(false);
+		Controls->SetTranslucentSortPriority(45);
+	}
 	CompassPanel->SetManuallyRedraw(true); CompassPanel->SetCastShadow(false);
 	CompassPanel->SetTranslucentSortPriority(10);
 	CompassPanel->SetRelativeLocationAndRotation(FVector(110,38,-16),FRotator(0,180,0));
 	CompassPanel->SetRelativeScale3D(FVector(.065f));
-	CompassPanel->SetSlateWidget(SAssignNew(NativeCompass,SACEVRCompass).OnSelect([Weak=TWeakObjectPtr<UACEClientSubsystem>(Client)](int32 Guid)
+	CompassPanel->SetSlateWidget(SAssignNew(NativeCompass,SACEVRCompass).Rig(this).OnSelect([Weak=TWeakObjectPtr<UACEClientSubsystem>(Client)](int32 Guid)
 		{if(Weak.IsValid())Weak->SelectObject(Guid);}));
 	ChatPanel = Panel(TEXT("VRPinnedChat"), VisualRoot, FVector2D(500, 200));
 	JumpPanel = Panel(TEXT("VRJumpCharge"), Head, FVector2D(300, 50));
@@ -320,7 +333,7 @@ void UACEVRComponent::TickComponent(float Dt, ELevelTick TickType, FActorCompone
 		}
 		else if (FMath::Abs(X) > 0.f) RotateTracking(X * Settings->SmoothTurnDegreesPerSecond * FMath::Min(Dt, .05f));
 	}
-	else if (FMath::Abs(TurnStick.Y) > .45f && GetWorld()->GetTimeSeconds() - LastScroll > .08f)
+	else if (PanelEditHand == INDEX_NONE && FMath::Abs(TurnStick.Y) > .45f && GetWorld()->GetTimeSeconds() - LastScroll > .08f)
 	{
 		auto* P = RightPointer->IsOverHitTestVisibleWidget() ? RightPointer.Get() : LeftPointer.Get();
 		P->ScrollWheel(TurnStick.Y > 0.f ? 1.f : -1.f); LastScroll = GetWorld()->GetTimeSeconds();
@@ -416,6 +429,7 @@ void UACEVRComponent::EndPlay(const EEndPlayReason::Type Reason)
 	if (bActive && PC && PC->PlayerCameraManager) PC->PlayerCameraManager->StopCameraFade();
 	if (Client)
 	{
+		Client->SetVRFellowshipUpdates(false);
 		if (auto Session = Client->GetSession())
 		{
 			Session->OnNPCSpeech.RemoveAll(this); Session->OnCombatFeedback.RemoveAll(this); Session->OnHealthFeedback.RemoveAll(this); Session->OnVitalsUpdated.RemoveAll(this); Session->OnObjectHealth.RemoveAll(this);
@@ -433,6 +447,7 @@ void UACEVRComponent::EndPlay(const EEndPlayReason::Type Reason)
 void UACEVRComponent::UpdateTrackingState(bool Tracked)
 {
 	if (Tracked == bTracking) return;
+	HeldControllerActions.Reset();
 	InventoryReleased();
 	CancelGestures(); bTracking = Tracked;
 	if (Tracked && Client && Client->GetSessionState() != EACESessionState::InWorld)
@@ -448,7 +463,7 @@ void UACEVRComponent::UpdateTrackingState(bool Tracked)
 bool UACEVRComponent::IsInputBlocked() const
 {
 	return !bTracking || !PC || !Client || Client->GetSessionState() != EACESessionState::InWorld
-		|| PC->bEnterWorldLoading || PC->bWorldRevealActive || IsMenuOpen() || bTextKeyboardOpen || VitalsDragHand != INDEX_NONE
+		|| PC->bEnterWorldLoading || PC->bWorldRevealActive || IsMenuOpen() || bTextKeyboardOpen || VitalsDragHand != INDEX_NONE || PanelEditHand != INDEX_NONE
 		|| (Client->GetPlayerVitals().bValid && Client->GetPlayerVitals().Health <= 0);
 }
 
@@ -529,6 +544,16 @@ void UACEVRComponent::RotateTracking(float Degrees)
 		VitalsAnchorFrame.SetLocation(Pivot + Rotation.RotateVector(VitalsAnchorFrame.GetLocation() - Pivot));
 		VitalsAnchorFrame.SetRotation(Rotation * VitalsAnchorFrame.GetRotation());
 	}
+	if (bCompassAnchorReady && Settings->CompassAnchorMode == 1)
+	{
+		CompassAnchorFrame.SetLocation(Pivot + Rotation.RotateVector(CompassAnchorFrame.GetLocation() - Pivot));
+		CompassAnchorFrame.SetRotation(Rotation * CompassAnchorFrame.GetRotation());
+	}
+	if (bFellowshipAnchorReady && Settings->FellowshipAnchorMode==1)
+	{
+		FellowshipAnchorFrame.SetLocation(Pivot+Rotation.RotateVector(FellowshipAnchorFrame.GetLocation()-Pivot));
+		FellowshipAnchorFrame.SetRotation(Rotation*FellowshipAnchorFrame.GetRotation());
+	}
 	Swing.Reset(); bPreviousContactBlade = false;
 	for (auto& Punch : Punches) Punch.Gesture.Reset();
 }
@@ -537,7 +562,8 @@ void UACEVRComponent::ResetTrackingOrigin()
 {
 	if (!bActive) return;
 	ResetHandContacts();
-	bVitalsAnchorReady = false;
+	EndPanelEdit(); EndVitalsDrag();
+	bVitalsAnchorReady = false; bCompassAnchorReady = false; bFellowshipAnchorReady=false;
 	DismissTextEntry();
 	FRotator Orientation; FVector Position;
 	UHeadMountedDisplayFunctionLibrary::GetOrientationAndPosition(Orientation, Position);

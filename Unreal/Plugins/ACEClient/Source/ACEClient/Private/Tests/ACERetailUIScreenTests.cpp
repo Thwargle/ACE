@@ -584,10 +584,17 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     Gameplay->LastAppraisal.IntProperties={{28,120},{105,7},{171,2},{106,100},{107,300},{108,400},{109,85},{158,7},{160,50}};
     Gameplay->LastAppraisal.FloatProperties={{144,.31},{29,1.15}};
     Gameplay->LastAppraisal.ArmorResistances={1.6f,1.2f,1.f,.4f,.8f,.5f,0.f,2.f};
+    Gameplay->LastAppraisal.ArmorEnchantments=0x00030007; // armor/slash raised, pierce lowered
     Gameplay->LastAppraisal.Summary=TEXT("Spells (1)\n  Spell 1\n"); Gameplay->LastAppraisal.SpellIds={1};
     Gameplay->RefreshExaminationOverlay();
     const FString ItemDetails=Gameplay->ExamBody->GetText().ToString();
-    TestTrue(TEXT("Item appraisal includes exact armor quality and mana"),ItemDetails.Contains(TEXT("Slashing: Excellent (1.60)")) && ItemDetails.Contains(TEXT("Mana: 300 / 400.")));
+    TestTrue(TEXT("Item appraisal includes effective armor and mana"),ItemDetails.Contains(TEXT("Slashing: Excellent (192)")) && ItemDetails.Contains(TEXT("Mana: 300 / 400.")));
+    if(auto* Colored=Cast<UACERetailTextBlock>(Gameplay->ExamBody))
+    {
+        TestEqual(TEXT("Buffed armor uses green retail stat text"),Colored->GetGlyphColor(ItemDetails.Find(TEXT("Slashing:")),FLinearColor::White),FLinearColor(.45f,.85f,.05f));
+        TestEqual(TEXT("Debuffed armor uses red retail stat text"),Colored->GetGlyphColor(ItemDetails.Find(TEXT("Piercing:")),FLinearColor::White),FLinearColor(1.f,.2f,.15f));
+        TestEqual(TEXT("Unenchanted armor stays neutral"),Colored->GetGlyphColor(ItemDetails.Find(TEXT("Bludgeoning:")),FLinearColor::White),FLinearColor::White);
+    }
     TestTrue(TEXT("Mana conversion is a zero-based bonus; defense is a multiplier"),ItemDetails.Contains(TEXT("Mana Conversion: +31%.")) && ItemDetails.Contains(TEXT("Melee Defense: +15.0%.")));
     TestTrue(TEXT("Item appraisal displays wield requirements and workmanship"),ItemDetails.Contains(TEXT("Wield requires Level 50")) && ItemDetails.Contains(TEXT("Workmanship: Flawless (7)")));
     CaptureScreen(TEXT("GameplayDetailedItemInspection"));
@@ -596,9 +603,12 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     Melee.ObjectGuid=462; Melee.Name=TEXT("Cleave Sword"); Melee.bSuccess=true; Melee.bHasWeaponProfile=true;
     Melee.ItemType=ACEItemType::MeleeWeapon; Melee.Damage=40; Melee.DamageVariance=.3f; Melee.DamageType=3;
     Melee.WeaponSkill=44; Melee.WeaponTime=30; Melee.WeaponOffense=1.15f;
+    Melee.WeaponEnchantments=0x00040004;
     Melee.IntProperties={{353,2},{292,3},{158,2},{159,44},{160,350}}; Melee.FloatProperties={{29,1.2}}; Melee.SpellIds={1};
     Gameplay->RefreshExaminationOverlay();
     const FString MeleeText=Gameplay->ExamBody->GetText().ToString();
+    if(auto* Colored=Cast<UACERetailTextBlock>(Gameplay->ExamBody))
+        TestEqual(TEXT("Faster enchanted weapons use the server's beneficial color bit"),Colored->GetGlyphColor(MeleeText.Find(TEXT("Speed:")),FLinearColor::White),FLinearColor(.45f,.85f,.05f));
     TestTrue(TEXT("Melee inspection shows skill, type, range and speed"),MeleeText.Contains(TEXT("Heavy Weapons (Sword)")) && MeleeText.Contains(TEXT("Damage: 28 - 40, Slashing/Piercing")) && MeleeText.Contains(TEXT("Speed: Fast (30)")));
     TestTrue(TEXT("Melee inspection shows attack, defense and exact cleave count"),MeleeText.Contains(TEXT("Attack Skill: +15%")) && MeleeText.Contains(TEXT("Melee Defense: +20.0%")) && MeleeText.Contains(TEXT("Cleave: 3 enemies")));
     TestTrue(TEXT("Damage is visible before long spell descriptions"),MeleeText.Find(TEXT("Damage:")) < MeleeText.Find(TEXT("Spells:")));
@@ -933,6 +943,17 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             auto* InvertX=Cast<UCheckBox>(Video->WidgetTree->FindWidget(TEXT("InvertMouseX")));
             auto* InvertY=Cast<UCheckBox>(Video->WidgetTree->FindWidget(TEXT("InvertMouseY")));
             auto* UIScale=Cast<UComboBoxString>(Video->WidgetTree->FindWidget(TEXT("DesktopUIScale")));
+            auto* CursorScale=Cast<USlider>(Video->WidgetTree->FindWidget(TEXT("CursorScale")));
+            if(TestNotNull(TEXT("Options has a cursor size slider"),CursorScale))
+            {
+                Video->ChangeCursorScale(1.74f);
+                TestEqual(TEXT("Cursor uses readable quarter steps"),CursorScale->GetValue(),1.75f);
+                FConfigFile CursorConfig;CursorConfig.Read(GGameUserSettingsIni);float SavedCursor=0;
+                CursorConfig.GetFloat(TEXT("ACE.Presentation"),TEXT("CursorScale"),SavedCursor);
+                TestEqual(TEXT("Cursor preview is saved immediately"),SavedCursor,1.75f);
+                Video->ChangeCursorScale(.1f);TestEqual(TEXT("Cursor cannot become too small to find"),CursorScale->GetValue(),.5f);
+                Video->ChangeCursorScale(1.f);
+            }
             if (TestNotNull(TEXT("Horizontal mouse inversion control"),InvertX)
                 && TestNotNull(TEXT("Vertical mouse inversion control"),InvertY)
                 && TestNotNull(TEXT("Desktop UI scale control"),UIScale))
@@ -2467,16 +2488,29 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("A helmet can only be added as one item"),Gameplay->VendorBuyCart[0].Key,1);
             Gameplay->AddSelectedVendorItemToBuyCart();
             TestEqual(TEXT("Repeated add does not turn helmets into a stack"),Gameplay->VendorBuyCart[0].Key,1);
+            Gameplay->SetVendorPage(0);
             Session.VendorMerchandise[0].MaxStackSize=250;Session.VendorMerchandise[0].VendorQuantityAvailable=17;
             Pick.Guid=Stock.Guid;Session.SelectedObject=Pick;Gameplay->VendorSelectedGuid=Stock.Guid;Gameplay->HandleSelectionChanged(Pick);
             TestEqual(TEXT("Quantity follows current vendor stock, not the stale object cache"),Gameplay->SelectedStackMax,17);
             TestEqual(TEXT("Selecting vendor stock defaults to the whole available stack"),Gameplay->SelectedStackAmount,17);
+            const FString SavedCurrency=Session.VendorCurrencyName;
+            const int32 SavedCurrencyCount=Session.VendorCurrencyCount;
+            Session.VendorCurrencyName=TEXT("Stipends");Session.VendorCurrencyCount=10;
+            Gameplay->HandleVendorOpened(99122);
+            if(TestNotNull(TEXT("Vendor currency caption exists"),Gameplay->VendorItemCostLabel.Get()))
+            {
+                TestTrue(TEXT("Vendor displays its alternate currency"),Gameplay->VendorItemCostLabel->GetText().ToString().Contains(TEXT("Stipends. You have 10")));
+                Session.VendorCurrencyCount=9;Gameplay->HandleVendorOpened(99122);
+                TestTrue(TEXT("A balance-only vendor reply refreshes the caption"),Gameplay->VendorItemCostLabel->GetText().ToString().Contains(TEXT("Stipends. You have 9")));
+            }
+            Session.VendorCurrencyName=SavedCurrency;Session.VendorCurrencyCount=SavedCurrencyCount;
             Gameplay->VendorBuyCart.Reset();Gameplay->AddSelectedVendorItemToBuyCart();
             TestEqual(TEXT("Vendor Add transfers the full selected stack"),Gameplay->VendorBuyCart[0].Key,17);
             Gameplay->SelectedStackAmount=5;Gameplay->HandleSelectionChanged(Pick);
             TestEqual(TEXT("Selection refresh preserves an explicitly split quantity"),Gameplay->SelectedStackAmount,5);
             Gameplay->VendorBuyCart.Reset();Gameplay->AddSelectedVendorItemToBuyCart();
             TestEqual(TEXT("Vendor Add respects the user's quantity adjustment"),Gameplay->VendorBuyCart[0].Key,5);
+            Gameplay->SetVendorPage(0);
             Session.VendorMerchandise[0].VendorQuantityAvailable=-1;Gameplay->HandleVendorOpened(99122);
             TestEqual(TEXT("Unlimited ammunition is limited to its real stack size"),Gameplay->SelectedStackMax,250);
             Session.VendorMerchandise[0].VendorQuantityAvailable=0;Gameplay->HandleVendorOpened(99122);
@@ -2628,9 +2662,10 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
 		{
 			const auto SavedEnchantments=Session.ActiveEnchantments;
 			Session.ActiveEnchantments.Reset();
-			for (int32 Id : {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24})
+			for (int32 Id=1;Id<1000 && Session.ActiveEnchantments.Num()<24;++Id)
 			{
-				FACEActiveEnchantment E; E.SpellId=Id; E.SpellCategory=Id; E.bBeneficial=true;
+				uint32 Flags=0,Target=0;if(!Dat->TryGetSpellTargeting(Id,Flags,Target) || !(Flags&4))continue;
+				FACEActiveEnchantment E; E.SpellId=Id; E.SpellCategory=Id; E.bBeneficial=false;
 				E.Duration=Id==1 ? -1 : 3661.9f; E.PowerLevel=100; Session.ActiveEnchantments.Add(E);
 			}
 			FACEActiveEnchantment Time; Time.Duration=3661.9f;
@@ -2661,10 +2696,18 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
 			}
 			CaptureScreen(TEXT("GameplayEffectsRetailColumns"));
 			Gameplay->EffectsScrollOffset=999; Gameplay->RefreshEffectsOverlays(true); CaptureScreen(TEXT("GameplayEffectsRetailScrolled"));
-			auto Stronger=Session.ActiveEnchantments[0]; Stronger.SpellId=30; Stronger.PowerLevel=200; Session.ActiveEnchantments.Add(Stronger);
+			TestEqual(TEXT("Retail spell flags override missing server beneficial flags"),Gameplay->EffectsContentCount,24);
+			auto Stronger=Session.ActiveEnchantments[0]; Stronger.PowerLevel=200; Session.ActiveEnchantments.Add(Stronger);
 			Gameplay->RefreshEffectsOverlays(true); TestEqual(TEXT("Superseded enchantment is not a second active row"),Gameplay->EffectsContentCount,24);
-			for (auto& E:Session.ActiveEnchantments) E.bBeneficial=false;
+			Session.ActiveEnchantments.Reset();
+			for(int32 Id=1;Id<1000 && Session.ActiveEnchantments.Num()<24;++Id)
+			{
+				uint32 Flags=0,Target=0;if(!Dat->TryGetSpellTargeting(Id,Flags,Target) || (Flags&4))continue;
+				FACEActiveEnchantment E;E.SpellId=Id;E.SpellCategory=Id;E.bBeneficial=true;E.Duration=180;Session.ActiveEnchantments.Add(E);
+			}
+			FACEActiveEnchantment Cooldown;Cooldown.SpellId=0x8001;Cooldown.SpellCategory=0x8001;Cooldown.bCooldown=true;Session.ActiveEnchantments.Add(Cooldown);
 			Gameplay->ShowPanelPage(TEXT("NegativeEffectsPanel_Field")); Gameplay->TickRefresh(); CaptureScreen(TEXT("GameplayHarmfulEffectsRetailColumns"));
+			TestEqual(TEXT("Debuff list follows spell flags and excludes cooldowns"),Gameplay->EffectsContentCount,24);
 			Session.ActiveEnchantments=SavedEnchantments;
 			Gameplay->ShowPanelPage(TEXT("SocialPanel_Field"));
 		}
@@ -2774,6 +2817,14 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Software cursor has explicit centered desired size"),CursorSlate->GetDesiredSize().Equals(FVector2f(Size*2),.01f));
             const auto* Slot=Cast<UCanvasPanelSlot>(CursorArt->Slot);
             TestTrue(TEXT("Retail target hotspot remains at the pointer"),Slot && (Slot->GetPosition()-Size).Equals(FVector2D(-14,-14),.01));
+            for(float Scale:{.5f,1.5f,3.f})
+            {
+                Controller->MouseCursorWidget->SetCursorScale(Scale);CursorSlate->SlatePrepass(1.f);
+                TestTrue(TEXT("Cursor artwork scales independently of the UI"),CursorArt->GetBrush().ImageSize.Equals(FVector2f(Size*Scale),.01));
+                TestTrue(TEXT("Scaling preserves the precise cursor hotspot"),Slot && (Slot->GetPosition()-Size*Scale).Equals(FVector2D(-14,-14)*Scale,.01));
+                TestTrue(TEXT("Scaled software cursor retains centered bounds"),CursorSlate->GetDesiredSize().Equals(FVector2f(Size*Scale*2),.01));
+            }
+            Controller->MouseCursorWidget->SetCursorScale(1.f);
             Controller->ApplyRetailMouseCursor(true,true);
             TestTrue(TEXT("Compatible target selects green retail target art"),CursorArt->GetBrush().GetResourceObject()==Controller->RetailCursorTargetValidTex);
             Controller->ApplyRetailMouseCursor(true,false);

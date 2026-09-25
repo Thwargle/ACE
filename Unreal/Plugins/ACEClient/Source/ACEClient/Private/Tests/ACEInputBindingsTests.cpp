@@ -125,8 +125,9 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();
  const auto Custom=ACEInputBindings::ImportRetailKeymap(RetailCustomKeymap);
  TestTrue(TEXT("User retail keymap imports"),Custom.bSuccess);
- TestEqual(TEXT("All supported user-file action bindings import"),Custom.BindingCount,156);
- TestEqual(TEXT("Remaining unsupported controls are reported individually"),Custom.Skipped.Num(),19);
+ TestEqual(TEXT("All supported user-file action bindings import"),Custom.BindingCount,157);
+ TestEqual(TEXT("Remaining unsupported controls are reported individually"),Custom.Skipped.Num(),18);
+ TestEqual(TEXT("Retail map view imports its keypad Enter"),ACEInputBindings::Get(ACEInputBindings::Action(TEXT("CameraViewMapMode")),0).Key,ACEInputBindings::NumpadEnterKey());
  TestEqual(TEXT("All explicit supported DoNothing overrides import"),ACEInputBindings::GetBlockedBindings().Num(),17);
  TestEqual(TEXT("Native input contexts are accounted for separately"),Custom.UnchangedContexts.Num(),9);
  AddInfo(FString::Printf(TEXT("Custom keymap: %d imported, %d diagnostics"),Custom.BindingCount,Custom.Skipped.Num()));

@@ -22,6 +22,13 @@ public:
 	void SetModifierSuffix(int32 Begin, FLinearColor Color) { ModifierBegin=Begin; ModifierColor=Color; InvalidateLayoutAndVolatility(); }
 	int32 GetModifierBegin() const { return ModifierBegin; }
 	FLinearColor GetModifierColor() const { return ModifierColor; }
+	// Character offsets survive bitmap wrapping; inspection can color individual stats.
+	void SetTextColors(const TArray<FLinearColor>& Colors) { TextColors = Colors; InvalidateLayoutAndVolatility(); }
+	FLinearColor GetGlyphColor(int32 Index, FLinearColor Default) const
+	{
+		if (TextColors.IsValidIndex(Index)) return TextColors[Index];
+		return ModifierBegin >= 0 && Index >= ModifierBegin ? ModifierColor : Default;
+	}
 	bool UsesDatAncestorClipping() const { return bApplyDatAncestorClip; }
 	const FACEDatFont* GetBitmapFont() const { return ForegroundAtlas ? &BitmapFont : nullptr; }
 	UTexture2D* GetGlyphAtlas(bool bBackground) const;
@@ -55,4 +62,5 @@ private:
 	FLinearColor ModifierColor = FLinearColor::White;
 	uint32 LastPaintState = MAX_uint32;
 	uint32 FontOverride = 0;
+	TArray<FLinearColor> TextColors;
 };

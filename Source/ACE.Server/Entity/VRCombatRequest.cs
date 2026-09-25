@@ -14,6 +14,9 @@ namespace ACE.Server.Entity
         public Vector3 Origin, Vector;
         public Vector3? ObservedBody;
         public float Amount, Duration;
+        // Optional retail power/accuracy slider. Amount remains the physical
+        // bow draw, so speed selection cannot bypass the bow's release checks.
+        public float? RequestedPower;
 
         public string MissileReleaseRejection(ACE.Entity.Enum.CombatMode mode, ACE.Entity.Enum.CombatStyle? style)
         {
@@ -58,18 +61,25 @@ namespace ACE.Server.Entity
                 return true;
             }
             // version/kind + 6 uint32 fields + 8 floats = 64 bytes, excluding the action envelope.
-            if ((remaining != 64 && !(kind == 2 && remaining == 76)) || (kind != 7 && (kind < 1 || kind > 3))) return false;
+            var hasPower = (kind == 2 || kind == 3) && (remaining == 68 || (kind == 2 && remaining == 80));
+            if ((remaining != 64 && !(kind == 2 && remaining == 76) && !hasPower) || (kind != 7 && (kind < 1 || kind > 3))) return false;
             var r = new VRCombatRequest { Kind = kind, Sequence = reader.ReadUInt32(), Cell = reader.ReadUInt32(),
                 Teleport = reader.ReadUInt32(), Weapon = reader.ReadUInt32(), Subject = reader.ReadUInt32(),
                 Target = reader.ReadUInt32() };
             r.Origin = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
             r.Vector = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
             r.Amount = reader.ReadSingle(); r.Duration = reader.ReadSingle();
-            if (remaining == 76)
+            if (kind == 2 && (remaining == 76 || remaining == 80))
             {
                 var body = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
                 if (!IsFinite(body) || body.LengthSquared() > 36f) return false;
                 r.ObservedBody = body;
+            }
+            if (hasPower)
+            {
+                var power = reader.ReadSingle();
+                if (!float.IsFinite(power) || power < 0 || power > 1) return false;
+                r.RequestedPower = power;
             }
             if (!IsFinite(r.Origin) || !IsFinite(r.Vector) || !float.IsFinite(r.Amount) || !float.IsFinite(r.Duration)) return false;
             if (r.Amount < 0 || r.Amount > 1 || r.Duration < 0 || r.Duration > 2) return false;

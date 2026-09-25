@@ -15,11 +15,33 @@
 #include "Camera/PlayerCameraManager.h"
 #include "Engine/World.h"
 #include "Misc/App.h"
+#include "Misc/ScopeExit.h"
 #include "HAL/IConsoleManager.h"
+#include "UObject/UObjectIterator.h"
+
+static TAutoConsoleVariable<int32> CVarACEReusePoseBuffers(TEXT("ace.Animation.ReusePoseBuffers"), 1,
+	TEXT("Reuse per-actor pose storage across animation ticks without changing sampling or hooks."));
 
 static TAutoConsoleVariable<int32> CVarACECachedActorDraws(
 	TEXT("ace.Render.CachedActorDraws"), PLATFORM_ANDROID ? 0 : 1,
-	TEXT("Reuse rigid actor draw commands. PC default on; Android opt-in pending native frame timings. Set before actor creation."));
+	TEXT("Reuse rigid actor draw commands. PC default on; Android opt-in pending native frame timings. Live changes refresh existing actors."),
+	FConsoleVariableDelegate::CreateLambda([](IConsoleVariable* Variable)
+	{
+		// A reversible native A/B capture should not need a logout, different
+		// camera placement, or newly streamed actors for the switch to take effect.
+		if (!GIsRunning || !IsInGameThread()) return;
+		const bool bCached = Variable->GetInt() != 0;
+		for (TObjectIterator<UACECharacterAppearanceComponent> It; It; ++It)
+		{
+			if (It->IsTemplate() || !It->IsRegistered()) continue;
+			for (int32 Index=0; Index<It->GetPartCount(); ++Index)
+				if (auto* Part=Cast<UProceduralMeshComponent>(It->GetPartMesh(Index)); Part && Part->bPreferCachedDraws!=bCached)
+				{
+					Part->bPreferCachedDraws=bCached;
+					Part->MarkRenderStateDirty();
+				}
+		}
+	}));
 
 static bool ACEIsMagicCastCommand(uint32 Command)
 {
@@ -230,6 +252,11 @@ void UACECharacterAppearanceComponent::ApplyPartTransform(int32 PartIndex, const
 	{
 		return;
 	}
+	// Portal visibility can hide whole creatures/props while their motion clocks
+	// and animation hooks still need to advance. Do not dirty render transforms
+	// for those hidden, non-colliding parts. Doors/query geometry keep updating.
+	if (GetOwner()->IsHidden() && PartMeshes[PartIndex]->GetCollisionEnabled() == ECollisionEnabled::NoCollision
+		&& !bPreviewCapture && !bPreviewAnimation) return;
 	// Facing is on MeshRoot only — parts keep raw Setup/Anim transforms so head/body stay coherent.
 	const FTransform& Previous = PartMeshes[PartIndex]->GetRelativeTransform();
 	// Centimeter translation tolerance is not a quaternion tolerance: .04 skipped
@@ -1678,6 +1705,10 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 	{
 		return;
 	}
+	TArray<FTransform> Animated;
+	const bool bReusePose = CVarACEReusePoseBuffers.GetValueOnGameThread() != 0;
+	if (bReusePose) Swap(Animated, TickPoseScratch);
+	ON_SCOPE_EXIT { if (bReusePose) Swap(Animated, TickPoseScratch); };
 
 	if (!(AnimMode == EACEAnimMode::DoorTransition && bDoorHoldFinal)
 		&& !(AnimMode == EACEAnimMode::ActionOneShot && bHoldActionFinal))
@@ -1699,7 +1730,6 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 	if (AnimMode == EACEAnimMode::DefaultAnimLoop)
 	{
 		TickObjectAnimFrame(DeltaTime);
-		TArray<FTransform> Animated;
 		TArray<FACEDatAnimationHook> Hooks;
 		int32 AnimatedCount = 0;
 		const uint64 TrackKey = (1ull << 60) | static_cast<uint32>(DefaultAnimationId);
@@ -1718,7 +1748,6 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 
 	if (AnimMode == EACEAnimMode::ActionOneShot)
 	{
-		TArray<FTransform> Animated;
 		TArray<FACEDatAnimationHook> Hooks;
 		int32 AnimatedCount = 0;
 		bool bFinished = false;
@@ -1910,7 +1939,6 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 
 	if (AnimMode == EACEAnimMode::DoorTransition)
 	{
-		TArray<FTransform> Animated;
 		TArray<FACEDatAnimationHook> Hooks;
 		int32 AnimatedCount = 0;
 		bool bFinished = false;
@@ -2019,7 +2047,6 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 	constexpr uint32 SideStepLeft = 0x65000010u;
 	constexpr uint32 Ready = 0x41000003u;
 
-	TArray<FTransform> Animated;
 	TArray<FACEDatAnimationHook> Hooks;
 	int32 AnimatedCount = 0;
 	bool bOk = false;

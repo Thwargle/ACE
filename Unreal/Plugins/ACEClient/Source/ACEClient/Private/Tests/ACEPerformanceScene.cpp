@@ -117,9 +117,9 @@ public:
   const FVector Forward=FACEPosition::AceVectorToUnreal(FVector(1,0,0),1);
   // The standalone fixture has a full desktop avatar. An eye at its head clips
   // through the model and hides much of the measured scene. Keep outdoor runs
-  // behind/above it, looking over the synthetic crowd. Indoor geometry needs
-  // the original eye position to remain inside its authored room.
-  FVector Eye=Scene==TEXT("indoor") ? Center+FVector(0,0,170)
+  // behind/above it, looking over the synthetic crowd. The indoor eye sits
+  // just in front of the avatar, still inside the same authored room.
+  FVector Eye=Scene==TEXT("indoor") ? Center+Forward*100+FVector(0,0,170)
    : Center-Forward*900+FVector(0,0,600);
   const FVector LookAt=Center+Forward*800+FVector(0,0,100);
   if(Scene!=TEXT("indoor"))

@@ -12,6 +12,16 @@ $buildHeader = Get-Content (Join-Path $PSScriptRoot '../Unreal/Plugins/ACEClient
 if ($buildHeader -notmatch ('(?s)#if PLATFORM_ANDROID\s+inline constexpr const TCHAR\* Version = TEXT\("' + [regex]::Escape($displayVersion) + '"\);')) {
     throw 'Quest package version and the login-screen version differ. Update ACEClientBuild.h before packaging.'
 }
+# Quest disables the editor-only ACEWorldBake plugin. Generate shader parents
+# with the freshly built shared editor BEFORE copying them into the Quest project.
+# Otherwise new C++ material names ship with yesterday's assets (green terrain).
+$sharedProject = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../Unreal/ACUnreal.uproject'))
+$prepareLog = Join-Path $PSScriptRoot 'Logs/Prepare-RuntimeMaterials.log'
+New-Item -ItemType Directory -Force -Path (Split-Path $prepareLog) | Out-Null
+& (Join-Path $EngineRoot 'Engine/Build/BatchFiles/Build.bat') ACUnrealEditor Win64 Development $sharedProject -WaitMutex -NoHotReloadFromIDE *> $prepareLog
+if ($LASTEXITCODE -ne 0) { throw "Shared editor build failed. See $prepareLog" }
+& (Join-Path $EngineRoot 'Engine/Binaries/Win64/UnrealEditor-Cmd.exe') $sharedProject -run=ACEPrepareRuntimeMaterials -unattended -nosplash -nosound -stdout '-FullStdOutLogOutput' *>> $prepareLog
+if ($LASTEXITCODE -ne 0) { throw "Runtime material generation failed. See $prepareLog" }
 & (Join-Path $PSScriptRoot 'Sync-ClientSource.ps1')
 $env:ANDROID_HOME = [IO.Path]::GetFullPath($AndroidSdkRoot)
 $env:ANDROID_SDK_ROOT = $env:ANDROID_HOME
@@ -31,6 +41,15 @@ Write-Host "AC:VR Quest packaging log: $log"
 $code = $LASTEXITCODE
 Get-Content -LiteralPath $log -Tail 35
 if ($code -ne 0) { throw "Quest packaging failed (exit $code). See $log" }
+# Verify every shared generated material/collection made it into the cook.
+# This is independent of stale assets already present in the Quest checkout.
+$materialRoot = Join-Path $PSScriptRoot '../Unreal/Content/ACE/RuntimeMaterials'
+$cookedRoot = Join-Path $PSScriptRoot 'Project/Saved/Cooked/Android_ASTC/ACUnreal/Content/ACE/RuntimeMaterials'
+foreach ($asset in Get-ChildItem -LiteralPath $materialRoot -Filter '*.uasset') {
+    if (!(Test-Path -LiteralPath (Join-Path $cookedRoot $asset.Name))) {
+        throw "Quest cook omitted runtime material dependency $($asset.Name). Do not install this package."
+    }
+}
 # Android platform INIs can override the intended release version silently.
 # Verify the exported APK against the one authoritative version declaration.
 $versionConfig = Get-Content (Join-Path $PSScriptRoot 'Project/Config/DefaultEngine.ini') -Raw

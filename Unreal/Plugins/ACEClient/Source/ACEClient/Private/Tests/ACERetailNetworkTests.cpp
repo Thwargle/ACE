@@ -174,15 +174,19 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Appraisal float retained"), Appraisal.FloatProperties.FindRef(29), 1.25);
     TestEqual(TEXT("Birth date retains its property identity"), Appraisal.StringProperties.FindRef(43), FString(TEXT("29 March 2019")));
     FACEBinaryWriter Weapon;
-    Weapon.WriteUInt32(124); Weapon.WriteUInt32(0x21); Weapon.WriteUInt32(1);
+    Weapon.WriteUInt32(124); Weapon.WriteUInt32(0xE21); Weapon.WriteUInt32(1);
     Weapon.WriteUInt16(1); Weapon.WriteUInt16(8); Weapon.WriteUInt32(1); Weapon.WriteUInt32(ACEItemType::MeleeWeapon);
     for (uint32 V : {3u,30u,44u,40u}) Weapon.WriteUInt32(V);
     for (double V : {.3,1.,.8,20.,1.15}) Weapon.WriteDouble(V);
     Weapon.WriteUInt32(1);
+    Weapon.WriteUInt32(0x00010001);Weapon.WriteUInt32(0x00080008);Weapon.WriteUInt32(0x10001000);
     FACEBinaryReader WeaponReader(Weapon.GetData()); AppraisalSession.HandleIdentifyObjectResponse(WeaponReader);
     TestTrue(TEXT("Weapon appraisal marks the decoded profile and estimated range"), Appraisal.bHasWeaponProfile && Appraisal.bWeaponMaxVelocityEstimated);
     TestEqual(TEXT("Weapon item type survives appraisal decoding"), Appraisal.ItemType, int32(ACEItemType::MeleeWeapon));
     TestEqual(TEXT("Enchanted maximum damage is preserved"), Appraisal.Damage, 40);
+    TestEqual(TEXT("Armor highlight mask retained in wire order"),Appraisal.ArmorEnchantments,0x00010001);
+    TestEqual(TEXT("Weapon highlight mask retained in wire order"),Appraisal.WeaponEnchantments,0x00080008);
+    TestEqual(TEXT("Resistance highlight mask retained in wire order"),Appraisal.ResistanceEnchantments,0x10001000);
     TestTrue(TEXT("Damage variance and offense survive the double wire fields"), FMath::IsNearlyEqual(Appraisal.DamageVariance,.3f) && FMath::IsNearlyEqual(Appraisal.WeaponOffense,1.15f));
     FACEBinaryWriter Profile;
     Profile.WriteUInt32(123); Profile.WriteUInt32(0x101); Profile.WriteUInt32(1);
@@ -201,6 +205,7 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Attribute highlight mask is decoded"), Appraisal.AttributeHighlights, 9);
     TestEqual(TEXT("Attribute buff/debuff color mask is decoded"), Appraisal.AttributeColors, 1);
     TestFalse(TEXT("Non-weapon appraisal cannot reuse the preceding weapon stats"), Appraisal.bHasWeaponProfile);
+    TestEqual(TEXT("A subsequent unbuffed item clears highlight masks"),Appraisal.WeaponEnchantments|Appraisal.ArmorEnchantments|Appraisal.ResistanceEnchantments,0);
     // Wire fixtures exercise the actual datagram parser, checksum, reorder buffer,
     // message assembler and dispatch. No live server or account is involved.
     auto Fragment=[](uint32 Seq, uint16 Count, uint16 Index, const TArray<uint8>& Bytes)

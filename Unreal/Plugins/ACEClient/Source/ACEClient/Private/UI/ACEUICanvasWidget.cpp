@@ -153,12 +153,19 @@ void UACEUICanvasWidget::NativeConstruct()
 	SyncElementWidgets();
 }
 
+void UACEUICanvasWidget::TickVRGameplayState()
+{
+	if (!GameplayBinder || LastVRGameplayTickFrame == GFrameCounter) return;
+	LastVRGameplayTickFrame = GFrameCounter;
+	GameplayBinder->TickRefresh();
+}
+
 void UACEUICanvasWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
 	UpdateCanvasLayout();
     if(CharGenBinder) CharGenBinder->Tick(InDeltaTime);
-	if (GameplayBinder)
+	if (GameplayBinder && LastVRGameplayTickFrame != GFrameCounter)
 	{
 		GameplayBinder->TickRefresh();
 	}

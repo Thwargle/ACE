@@ -320,6 +320,9 @@ protected:
 	TArray<uint32> PendingActionStyles;
 	TArray<float> PendingActionPlayRates;
 	TArray<bool> PendingActionHolds;
+	// Reused only while evaluating a tick; nested evaluation borrows a separate
+	// array. Avoid allocating a full part-pose array for every actor every frame.
+	TArray<FTransform> TickPoseScratch;
 	/** While true, idle↔walk pose blends are skipped (jump arc). */
 	bool bSuppressLocoIdleBlend = false;
 

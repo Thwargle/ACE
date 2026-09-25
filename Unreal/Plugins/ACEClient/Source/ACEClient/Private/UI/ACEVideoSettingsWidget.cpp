@@ -24,6 +24,7 @@
 #include "GameFramework/GameUserSettings.h"
 #include "RHI.h"
 #include "Styling/CoreStyle.h"
+#include "Misc/ConfigCacheIni.h"
 
 TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
 {
@@ -100,6 +101,12 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  DesktopScale->Rename(TEXT("DesktopUIScale"));
  for(int32 Percent=100;Percent<=300;Percent+=25) DesktopScale->AddOption(FString::Printf(TEXT("%d%%"),Percent));
  DesktopScale->SetToolTipText(FText::FromString(TEXT("Scales the desktop interface in 25% steps. Limited to fit the window; VR uses its own panel scale. 200% and 300% give whole-pixel enlargement of native artwork.")));
+ CursorScale=WidgetTree->ConstructWidget<USlider>(USlider::StaticClass(),TEXT("CursorScale"));
+ CursorScale->SetWidgetStyle(RuntimeSlider); CursorScale->SetMinValue(.5f); CursorScale->SetMaxValue(3.f); CursorScale->SetStepSize(.25f); CursorScale->MouseUsesStep=true;
+ CursorScale->OnValueChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeCursorScale);
+ Row(TEXT("Cursor size"),CursorScale);
+ CursorScaleLabel=Label(TEXT("100%")); CursorScaleLabel->SetJustification(ETextJustify::Right); Box->AddChild(Fixed(CursorScaleLabel,250,14));
+ CursorScale->SetToolTipText(FText::FromString(TEXT("50% to 300% in 25% steps. Previews and saves immediately, including move, resize, and targeting pointers.")));
  ShowFrameRate=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("ShowFrameRate"));
  ShowFrameRate->SetWidgetStyle(RoundToggle);ShowFrameRate->SetContent(Label(TEXT("Show FPS overlay")));Box->AddChild(Fixed(ShowFrameRate,272,20));
  Resolution=Combo(TEXT("Resolution"));
@@ -181,6 +188,8 @@ void UACEVideoSettingsWidget::ResetVideo()
  if(MouseTurnSpeed)MouseTurnSpeed->SetValue(ACECameraSettings::GetMouseTurnSpeed());
  InvertMouseX->SetIsChecked(ACECameraSettings::GetInvertMouseX());InvertMouseY->SetIsChecked(ACECameraSettings::GetInvertMouseY());
  DesktopScale->SetSelectedIndex(FMath::RoundToInt((ACERuntimeOptions::Get(TEXT("DesktopUIScale"))-1.f)*4.f));
+ CursorScale->SetValue(ACERuntimeOptions::Get(TEXT("CursorScale")));
+ CursorScaleLabel->SetText(FText::FromString(FString::Printf(TEXT("%d%%"),FMath::RoundToInt(CursorScale->GetValue()*100.f))));
  ShowFrameRate->SetIsChecked(ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f);
  ChatFontFace->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontFace"))));
  ChatFontSize->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontSize"))));
@@ -234,10 +243,23 @@ void UACEVideoSettingsWidget::ApplyInterfaceOptions()
  if(ScreenshotDirectory) ACEScreenshotSettings::SetDirectory(ScreenshotDirectory->GetText().ToString());
  ACECameraSettings::SetMouseInversion(InvertMouseX->IsChecked(),InvertMouseY->IsChecked());
  if(DesktopScale->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("DesktopUIScale"),1.f+DesktopScale->GetSelectedIndex()*.25f);
+ if(CursorScale) ACERuntimeOptions::Set(TEXT("CursorScale"),CursorScale->GetValue());
  ACERuntimeOptions::Set(TEXT("ShowFrameRate"),ShowFrameRate->IsChecked()?1.f:0.f);
  if(ChatFontFace->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("ChatFontFace"),ChatFontFace->GetSelectedIndex());
  if(ChatFontSize->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("ChatFontSize"),ChatFontSize->GetSelectedIndex());
  ACERuntimeOptions::Apply();
+}
+
+void UACEVideoSettingsWidget::ChangeCursorScale(float Value)
+{
+ Value=FMath::Clamp(FMath::RoundToFloat(Value*4.f)/4.f,.5f,3.f);
+ CursorScale->SetValue(Value);
+ if(CursorScaleLabel) CursorScaleLabel->SetText(FText::FromString(FString::Printf(TEXT("%d%%"),FMath::RoundToInt(Value*100.f))));
+ if(!FMath::IsNearlyEqual(Value,ACERuntimeOptions::Get(TEXT("CursorScale"))))
+ {
+  ACERuntimeOptions::Set(TEXT("CursorScale"),Value);
+  if(GConfig)GConfig->Flush(false,GGameUserSettingsIni);
+ }
 }
 
 void UACEVideoSettingsWidget::ChangeMouseTurnSpeed(float Value)
@@ -260,6 +282,7 @@ void UACEVideoSettingsWidget::DefaultsVideo()
  for(auto& P:CharacterChecks) if(const auto* O=ACECharacterOptions::Find(P.Key)) P.Value->SetIsChecked(((O->bInOptions2?ACECharacterOptions::Options2Default:ACECharacterOptions::Options1Default)&O->Flag)!=0);
  ResetMouseTurnSpeed();
  InvertMouseX->SetIsChecked(false);InvertMouseY->SetIsChecked(false);DesktopScale->SetSelectedIndex(0);
+ CursorScale->SetValue(1.f); ChangeCursorScale(1.f);
  ShowFrameRate->SetIsChecked(false);
  ChatFontFace->SetSelectedIndex(2); ChatFontSize->SetSelectedIndex(1);
  ScreenshotDirectory->SetText(FText::FromString(ACEScreenshotSettings::DefaultDirectory()));

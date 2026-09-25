@@ -24,6 +24,7 @@
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/Pawn.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialParameterCollectionInstance.h"
 #include "Materials/Material.h"
 #include "ProceduralMeshComponent.h"
 #include "Misc/App.h"
@@ -150,8 +151,8 @@ bool FACERetailRuntimeRegressionTest::RunTest(const FString& Parameters)
     const auto Values = UWorld::InitializationValues().AllowAudioPlayback(false)
         .RequiresHitProxies(false).CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false);
     auto* World=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);
-    GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
-    auto* GI=NewObject<UGameInstance>(GEngine); World->SetGameInstance(GI); GI->Init();
+    auto* GI=NewObject<UGameInstance>(GEngine); GI->InitializeStandalone();
+    GI->GetWorldContext()->SetCurrentWorld(World); World->SetGameInstance(GI);
     auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
     if (!Dat || !Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))
     {
@@ -675,9 +676,12 @@ bool FACERetailRuntimeRegressionTest::RunTest(const FString& Parameters)
         }
         Dat->SetLandLookOutClip(true,Frame.TransformPosition(FVector(0,0,100)),Exits);
         auto* MID=Cast<UMaterialInstanceDynamic>(Land->TerrainMesh->GetMaterial(0));
-        TestTrue(TEXT("Attached terrain receives the live indoor portal mask"),MID && MID->K2_GetScalarParameterValue(TEXT("PortalViewCount"))==Exits.Num());
+        auto* PortalUniforms=World->GetParameterCollectionInstance(Dat->GetRuntimePortalCollection());
+        float PortalCount=0;PortalUniforms->GetScalarParameterValue(TEXT("PortalViewCount"),PortalCount);
+        TestTrue(TEXT("Attached terrain receives the live indoor portal mask"),MID && MID->K2_GetScalarParameterValue(TEXT("UseSharedPortal"))==1 && PortalCount==Exits.Num());
         Dat->SetLandLookOutClip(false,FVector::ZeroVector,{});
-        TestTrue(TEXT("Attached terrain leaves the indoor mask when stepping out"),MID && MID->K2_GetScalarParameterValue(TEXT("LookOutEnable"))==0);
+        float PortalEnabled=1;PortalUniforms->GetScalarParameterValue(TEXT("LookOutEnable"),PortalEnabled);
+        TestTrue(TEXT("Attached terrain leaves the indoor mask when stepping out"),MID && PortalEnabled==0);
 
         if (FApp::CanEverRender())
         {
@@ -1033,11 +1037,12 @@ bool FACERetailRuntimeRegressionTest::RunTest(const FString& Parameters)
                     Pawn->SetActorLocation(Eye); Camera->SetActorLocation(Eye);
                     Camera->SetActorRotation(Exits[0].WorldNormal.Rotation()); PC->PlayerCameraManager->UpdateCamera(.016f);
                     Presenter->UpdateCameraVisibility();
+                    FLinearColor PortalEye;PortalUniforms->GetVectorParameterValue(TEXT("LookOutCam"),PortalEye);
                     AddInfo(FString::Printf(TEXT("Camera fixture first=%d viewer=%08X eye=%s actual=%s"),
                         World->GetFirstPlayerController()==PC, Presenter->ViewerCellId, *Eye.ToString(),
-                        *MID->K2_GetVectorParameterValue(TEXT("LookOutCam")).ToString()));
+                        *PortalEye.ToString()));
                     TestTrue(TEXT("Every camera move updates the attached terrain portal eye"),
-                        MID->K2_GetVectorParameterValue(TEXT("LookOutCam")).Equals(FLinearColor(Eye),.1f));
+                        PortalEye.Equals(FLinearColor(Eye),.1f));
                     TestEqual(TEXT("Camera movement does not unload room actors"),Presenter->SpawnedEnvCells.Num(),ResidentBefore);
                     Capture->SetWorldLocationAndRotation(Eye,Exits[0].WorldNormal.Rotation());
                     Render(FString::Printf(TEXT("YaraqCameraDoorway_%d"),I));

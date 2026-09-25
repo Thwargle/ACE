@@ -26,12 +26,31 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bPinHotbarToView = false;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bShowWristSpellBar = true;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bShowCompass = true;
+	UPROPERTY(Config) bool bShowFellowship = false;
+	UPROPERTY(Config) bool bFellowshipLocked = true;
+	UPROPERTY(Config) int32 FellowshipAnchorMode = 1;
+	UPROPERTY(Config) FVector FellowshipViewOffset = FVector(120,-55,-5);
+	UPROPERTY(Config) FRotator FellowshipViewRotation = FRotator::ZeroRotator;
+	UPROPERTY(Config) float FellowshipScale = .07f;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bPinVitalsToView = true;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bPinChatToView = false;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bVitalsLocked = true;
 	/** 0: view, 1: stable body frame, 2: world position until recentered. */
 	UPROPERTY(Config, EditAnywhere, Category = "VR") int32 VitalsAnchorMode = 1;
+	UPROPERTY(Config, EditAnywhere, Category = "VR") int32 CompassAnchorMode = 1;
+	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bCompassLocked = true;
+	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bMenuLocked = true;
+	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bOptionsLocked = true;
+	UPROPERTY(Config, EditAnywhere, Category = "VR") FVector CompassViewOffset = FVector(110, 38, -16);
+	UPROPERTY(Config, EditAnywhere, Category = "VR") FVector MenuViewOffset = FVector(90, 0, -10);
 	UPROPERTY(Config, EditAnywhere, Category = "VR") FVector VitalsViewOffset = FVector(100, -24, -22);
+	UPROPERTY(Config) FRotator VitalsViewRotation = FRotator::ZeroRotator;
+	UPROPERTY(Config) FRotator CompassViewRotation = FRotator::ZeroRotator;
+	UPROPERTY(Config) FRotator MenuViewRotation = FRotator::ZeroRotator;
+	UPROPERTY(Config) TMap<FName,FTransform> PanelLayouts;
+	UPROPERTY(Config) TMap<FName,FName> ButtonBindings;
+	FName GetButtonAction(FName Input) const;
+	void SetButtonAction(FName Input,FName Action);
 	UPROPERTY(Config) int32 SettingsVersion = 0;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bHeadRelativeMovement = true;
 	/** -1 imports the legacy preference; 0=head, 1=hand, 2=playspace/stick only. */
@@ -44,6 +63,8 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "VR") float PanelScale = .11f;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") float WristScale = .06f;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") float VitalsScale = .0935f;
+	UPROPERTY(Config, EditAnywhere, Category = "VR") float CompassScale = .065f;
+	UPROPERTY(Config, EditAnywhere, Category = "VR") float OptionsScale = .1f;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") float ChatScale = .0715f;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") float ForwardAssistDegrees = 10.f;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") float MeleeMinSpeed = 250.f;

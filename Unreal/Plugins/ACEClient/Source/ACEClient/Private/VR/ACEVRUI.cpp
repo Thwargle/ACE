@@ -5,6 +5,7 @@
 #include "ACEPlayerController.h"
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
+#include "Protocol/ACECombatChat.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIGameplayBinder.h"
 #include "ACELoginWidget.h"
@@ -24,6 +25,16 @@
 void UACEVRComponent::PositionPanel(UWidgetComponent* Panel)
 {
 	if (!Panel || !Head) return;
+	if (Client && Client->GetSessionState()==EACESessionState::InWorld)
+	{
+		const FName Key=Panel==SettingsPanel ? FName("Options") : bSettingsOpen ? FName("MenuPreview") : FName("Menu");
+		if (const auto* Saved=Settings->PanelLayouts.Find(Key))
+		{
+			const FTransform Frame=bSettingsOpen ? SettingsLayoutFrame : FTransform(FRotator(0,Head->GetComponentRotation().Yaw,0),Head->GetComponentLocation());
+			const FTransform Pose=*Saved*Frame;
+			Panel->SetWorldLocationAndRotation(Pose.GetLocation(),Pose.GetRotation());return;
+		}
+	}
 	if (bSettingsOpen && Client && Client->GetSessionState() == EACESessionState::InWorld
 		&& (Panel == SettingsPanel || Panel == RetailPanel))
 	{
@@ -95,13 +106,25 @@ void UACEVRComponent::UpdatePanels(float Dt)
 	const bool Available = bTracking && !PC->bEnterWorldLoading && !PC->bWorldRevealActive;
 	auto PinToHead = [&](UWidgetComponent* Panel, bool Pinned)
 	{
-		auto* Parent = Pinned ? static_cast<USceneComponent*>(Head.Get()) : PresentationActor->GetRootComponent();
-		if (Panel->GetAttachParent() != Parent) Panel->AttachToComponent(Parent, FAttachmentTransformRules::KeepWorldTransform);
+		if (Pinned)
+		{
+			if (Panel->GetAttachParent() != Head.Get()) Panel->AttachToComponent(Head, FAttachmentTransformRules::KeepWorldTransform);
+		}
+		else if (Panel->GetAttachParent())
+		{
+			// Body/world anchors are positioned explicitly. Parenting them to the
+			// tracking origin first moved them with floor correction/locomotion,
+			// then moved them back during this tick. Keep the world pose independent
+			// throughout the frame, including camera and controller late updates.
+			Panel->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+		}
 	};
 	// Camera descendants participate in HMD late update, so viewport-pinned
 	// text remains fixed during head motion between simulation and rendering.
 	PinToHead(RetailPanel, InWorld && Settings->bPinMenuToView && !bSettingsOpen);
 	PinToHead(WristPanel, InWorld && Settings->bPinHotbarToView);
+	PinToHead(CompassPanel, Settings->CompassAnchorMode == 0);
+	PinToHead(FellowshipPanel,Settings->FellowshipAnchorMode==0);
 	PinToHead(VitalsPanel, Settings->VitalsAnchorMode == 0); PinToHead(ChatPanel, true);
 	auto Show = [](UWidgetComponent* P, bool Visible)
 	{
@@ -110,15 +133,20 @@ void UACEVRComponent::UpdatePanels(float Dt)
 	};
 	UpdateTextEntryFocus();
 	const bool ShowMain = Available && Widget && (!InWorld || bInventoryOpen || bSettingsOpen) && (!bTextKeyboardOpen || UsesPlatformKeyboard() || !InWorld);
-	// Keep one retail canvas painting for the pinned windows, even when its main
-	// world quad is closed. Only the visible quad participates in pointer traces.
-	RetailPanel->SetVisibility(Available && Widget);
+	// Gameplay state must continue to process vendor/trade/attack events while
+	// menus are closed, but a native-only HUD consumes no desktop render target.
+	if (InWorld && PC->DatCanvasWidget) PC->DatCanvasWidget->TickVRGameplayState();
+	const bool NeedsRetailDraw = ShowMain || (InWorld &&
+		((Settings->bShowWristSpellBar && GetCombatMode() == ACECombatMode::Magic)
+		|| Settings->bPinChatToView || PC->bJumpCharging));
+	RetailPanel->SetVisibility(Available && Widget && NeedsRetailDraw);
+	RetailPanel->SetComponentTickEnabled(Available && Widget && NeedsRetailDraw);
 	RetailPanel->SetRenderInMainPass(ShowMain);
 	RetailPanel->SetCollisionEnabled(ShowMain ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
 	if (InWorld && Settings->bPinMenuToView && !bSettingsOpen)
 	{
-		RetailPanel->SetWorldLocationAndRotation(Head->GetComponentTransform().TransformPosition(FVector(Settings->PanelDistance, 0, -10)),
-			Head->GetComponentQuat() * FRotator(0, 180, 0).Quaternion());
+		RetailPanel->SetWorldLocationAndRotation(Head->GetComponentTransform().TransformPosition(Settings->MenuViewOffset),
+			Head->GetComponentQuat() * Settings->MenuViewRotation.Quaternion() * FRotator(0, 180, 0).Quaternion());
 	}
 	Show(SettingsPanel, Available && bSettingsOpen);
 	Show(KeyboardPanel, !UsesPlatformKeyboard() && Available && bKeyboardOpen);
@@ -147,11 +175,12 @@ void UACEVRComponent::UpdatePanels(float Dt)
 	// or invalidate an in-progress tab selection; retain its current placement.
 	RefreshRetail(WristRetail, WristPanel, TEXT("RootGameplay_FloatyCombatPanel_Field"),
 		Settings->bShowWristSpellBar && GetCombatMode() == ACECombatMode::Magic);
-	UpdateNativeHUD(InWorld && Available);
+	UpdateNativeHUD(InWorld && Available, Dt);
 	// Open menus take visual and pointer priority over the ambient HUD.
 	// Keep the meters visible behind the menu without stealing its buttons.
 	VitalsPanel->SetTranslucentSortPriority(ShowMain ? -1 : 10);
 	CompassPanel->SetTranslucentSortPriority(ShowMain ? -1 : 10);
+	FellowshipPanel->SetTranslucentSortPriority(ShowMain ? -1 : 10);
 	RefreshRetail(ChatRetail, ChatPanel, TEXT("RootGameplay_FloatyMainChat_Field"), Settings->bPinChatToView);
 	RefreshRetail(JumpRetail, JumpPanel, TEXT("RootGameplay_PowerBar_Field"), PC->bJumpCharging);
 	JumpPanel->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -173,16 +202,25 @@ void UACEVRComponent::UpdatePanels(float Dt)
 	const FTransform WristWorld = WristLocalPose * TrackingOrigin->GetComponentTransform();
 	WristPanel->SetWorldLocationAndRotation(WristWorld.GetLocation(), WristWorld.GetRotation());
 	bWristPoseReady = WristPanel->IsVisible();
-	UpdateVitalsAnchor(Dt); UpdateVitalsDrag();
+	UpdateVitalsAnchor(Dt); UpdateCompassAnchor(Dt); UpdateFellowshipAnchor(Dt); UpdatePanelEdit(Dt);
+	const auto FellowFrame=GetFellowshipAnchorTransform();
+	FellowshipPanel->SetWorldLocationAndRotation(FellowFrame.TransformPosition(Settings->FellowshipViewOffset),
+		FellowFrame.GetRotation()*Settings->FellowshipViewRotation.Quaternion()*FRotator(0,180,0).Quaternion());
+	FellowshipPanel->SetWorldScale3D(FVector(Settings->FellowshipScale));
 	const FTransform VitalsFrame = GetVitalsAnchorTransform();
 	VitalsPanel->SetWorldLocationAndRotation(VitalsFrame.TransformPosition(Settings->VitalsViewOffset),
-		VitalsFrame.GetRotation() * FRotator(0, 180, 0).Quaternion());
+		VitalsFrame.GetRotation() * Settings->VitalsViewRotation.Quaternion() * FRotator(0, 180, 0).Quaternion());
+	const FTransform CompassFrame = GetCompassAnchorTransform();
+	CompassPanel->SetWorldLocationAndRotation(CompassFrame.TransformPosition(Settings->CompassViewOffset),
+		CompassFrame.GetRotation() * Settings->CompassViewRotation.Quaternion() * FRotator(0, 180, 0).Quaternion());
+	CompassPanel->SetWorldScale3D(FVector(Settings->CompassScale));
 	ChatPanel->SetWorldLocationAndRotation(Head->GetComponentTransform().TransformPosition(FVector(110, -38, -25)),
 		Head->GetComponentQuat() * FRotator(0, 180, 0).Quaternion());
 	VitalsPanel->SetWorldScale3D(FVector(Settings->VitalsScale));
 	ChatPanel->SetWorldScale3D(FVector(Settings->ChatScale));
-	RetailPanel->SetWorldScale3D(FVector(PanelScale));
-	SettingsPanel->SetWorldScale3D(FVector(.1f));
+	RetailPanel->SetWorldScale3D(FVector(Login ? PanelScale : Settings->PanelScale));
+	SettingsPanel->SetWorldScale3D(FVector(Settings->OptionsScale));
+	UpdatePanelControls(InWorld && ShowMain, Available && bSettingsOpen);
 	WristPanel->SetRelativeScale3D(FVector(Settings->WristScale));
 	UpdatePointerVisuals(Available, !InWorld || bInventoryOpen || bSettingsOpen || bKeyboardOpen);
 	UpdateInteractionFeedback(Available && InWorld && !bKeyboardOpen && !bSettingsOpen);
@@ -193,7 +231,7 @@ bool UACEVRComponent::IsPointerNearPanel(bool Left, FVector* Impact) const
 	const auto* Aim = Left ? LeftAim.Get() : RightAim.Get();
 	if (!Aim || !Aim->IsTracked()) return false;
 	const FVector Origin = Aim->GetComponentLocation(), Direction = Aim->GetForwardVector();
-	for (auto* Panel : {WristPanel.Get(), RetailPanel.Get(), SettingsPanel.Get()})
+	for (auto* Panel : {WristPanel.Get(), RetailPanel.Get(), SettingsPanel.Get(), MenuControlsPanel.Get(), OptionsControlsPanel.Get()})
 	{
 		if (!Panel || !Panel->IsVisible() || Panel->GetCollisionEnabled() == ECollisionEnabled::NoCollision) continue;
 		const FVector Normal = Panel->GetForwardVector();
@@ -385,6 +423,13 @@ void UACEVRComponent::SetCastFeedback(const FString& Text)
 
 void UACEVRComponent::CombatMessage(const FString& Text, const FString& Sender, int32 ChatType)
 {
+	if (Sender.IsEmpty() && (ChatType == ACEChatMessageType::Magic ||
+		(ChatType == ACEChatMessageType::CombatSelf && Text.Contains(TEXT(" points of periodic ")))))
+	{
+		FString Target; int32 Damage = 0; bool Critical = false;
+		if (ACECombatChat::ParseOutgoingSpellDamage(Text, Target, Damage, Critical))
+			CombatFeedback(Target, Damage, false, Critical);
+	}
 	if (Sender.IsEmpty() && ChatType == ACEChatMessageType::TransientInfo)
 		ShowWorldNotice(Text, 0, 3, FLinearColor(FColor(255,225,75)));
 	if (Sender.IsEmpty() && ChatType == ACEChatMessageType::Broadcast && Text.Contains(TEXT(" gives you ")))
@@ -439,9 +484,19 @@ FString UACEVRComponent::GetStatusText() const
 
 void UACEVRComponent::ChangeSetting(FName Setting)
 {
+	if (Setting=="FellowshipAnchor")
+	{
+		EndPanelEdit();Settings->FellowshipAnchorMode=(Settings->FellowshipAnchorMode+1)%3;
+		bFellowshipAnchorReady=false;Settings->Persist();UpdatePanels();return;
+	}
+	if (Setting == TEXT("CompassAnchor"))
+	{
+		EndPanelEdit(); Settings->CompassAnchorMode = (Settings->CompassAnchorMode + 1) % 3;
+		bCompassAnchorReady = false; Settings->Persist(); UpdatePanels(); return;
+	}
 	if (Setting == TEXT("VitalsAnchor"))
 	{
-		EndVitalsDrag(); Settings->VitalsAnchorMode = (Settings->VitalsAnchorMode + 1) % 3;
+		EndPanelEdit(); EndVitalsDrag(); Settings->VitalsAnchorMode = (Settings->VitalsAnchorMode + 1) % 3;
 		bVitalsAnchorReady = false; Settings->Persist(); UpdatePanels(); return;
 	}
 	CancelGestures();
@@ -457,12 +512,17 @@ void UACEVRComponent::ChangeSetting(FName Setting)
 	else if (Setting == TEXT("PinHotbar")) { Settings->bPinHotbarToView = !Settings->bPinHotbarToView; bWristPoseReady = false; }
 	else if (Setting == TEXT("ShowWrist")) Settings->bShowWristSpellBar = !Settings->bShowWristSpellBar;
 	else if (Setting == TEXT("Compass")) Settings->bShowCompass = !Settings->bShowCompass;
+	else if (Setting == "Fellowship") Settings->bShowFellowship=!Settings->bShowFellowship;
+	else if (Setting == "FellowshipLock") Settings->bFellowshipLocked=!Settings->bFellowshipLocked;
 	else if (Setting == TEXT("PinVitals")) Settings->bPinVitalsToView = !Settings->bPinVitalsToView;
+	else if (Setting == TEXT("CompassLock")) Settings->bCompassLocked = !Settings->bCompassLocked;
+	else if (Setting == TEXT("MenuLock")) Settings->bMenuLocked = !Settings->bMenuLocked;
+	else if (Setting == TEXT("OptionsLock")) Settings->bOptionsLocked = !Settings->bOptionsLocked;
 	else if (Setting == TEXT("VitalsLock")) Settings->bVitalsLocked = !Settings->bVitalsLocked;
 	else if (Setting == TEXT("PinChat")) Settings->bPinChatToView = !Settings->bPinChatToView;
 	else if (Setting == TEXT("Haptics")) Settings->bHaptics = !Settings->bHaptics;
 	else if (Setting == TEXT("Panel")) Settings->PanelScale = Settings->PanelScale >= .14f ? .08f : Settings->PanelScale + .01f;
-	else if (Setting == TEXT("Distance")) { Settings->PanelDistance = Settings->PanelDistance >= 130.f ? 70.f : Settings->PanelDistance + 10.f; PositionPanel(RetailPanel); PositionPanel(SettingsPanel); }
+	else if (Setting == TEXT("Distance")) { Settings->PanelDistance = Settings->PanelDistance >= 130.f ? 70.f : Settings->PanelDistance + 10.f; Settings->MenuViewOffset.X=Settings->PanelDistance; Settings->PanelLayouts.Reset(); PositionPanel(RetailPanel); PositionPanel(SettingsPanel); }
 	else if (Setting == TEXT("Wrist")) Settings->WristScale = Settings->WristScale >= .085f ? .03f : Settings->WristScale + .005f;
 	else if (Setting == TEXT("Draw")) Settings->BowFullDraw = Settings->BowFullDraw >= 80.f ? 30.f : Settings->BowFullDraw + 10.f;
 	else if (Setting == TEXT("Render"))
@@ -495,6 +555,8 @@ float UACEVRComponent::GetSliderSetting(FName Setting) const
 	if (Setting == "Panel") return (Settings->PanelScale - .05f) / .1f;
 	if (Setting == "Distance") return (Settings->PanelDistance - 70.f) / 110.f;
 	if (Setting == "Wrist") return (Settings->WristScale - .03f) / .055f;
+	if (Setting == "CompassSize") return (Settings->CompassScale - .04f) / .11f;
+	if (Setting == "OptionsSize") return (Settings->OptionsScale - .06f) / .09f;
 	if (Setting == "Vitals") return (Settings->VitalsScale - .05f) / .13f;
 	if (Setting == "Chat") return (Settings->ChatScale - .04f) / .11f;
 	if (Setting == "ForwardAssist") return Settings->ForwardAssistDegrees / 20.f;
@@ -510,8 +572,10 @@ void UACEVRComponent::SetSliderSetting(FName Setting, float Value)
 	else if (Setting == "Draw") Settings->BowFullDraw = 30.f + Value * 60.f;
 	else if (Setting == "BowAnchor") Settings->BowAnchorOffset = Value * 20.f;
 	else if (Setting == "Panel") { Settings->PanelScale = .05f + Value * .1f; if (bSettingsOpen) PositionPanel(RetailPanel); }
-	else if (Setting == "Distance") { Settings->PanelDistance = 70.f + Value * 110.f; PositionPanel(RetailPanel); PositionPanel(SettingsPanel); }
+	else if (Setting == "Distance") { Settings->PanelDistance = 70.f + Value * 110.f; Settings->MenuViewOffset.X=Settings->PanelDistance; Settings->PanelLayouts.Reset(); PositionPanel(RetailPanel); PositionPanel(SettingsPanel); }
 	else if (Setting == "Wrist") Settings->WristScale = .03f + Value * .055f;
+	else if (Setting == "CompassSize") Settings->CompassScale = .04f + Value * .11f;
+	else if (Setting == "OptionsSize") Settings->OptionsScale = .06f + Value * .09f;
 	else if (Setting == "Vitals") Settings->VitalsScale = .05f + Value * .13f;
 	else if (Setting == "Chat") Settings->ChatScale = .04f + Value * .11f;
 	else if (Setting == "ForwardAssist") Settings->ForwardAssistDegrees = Value * 20.f;

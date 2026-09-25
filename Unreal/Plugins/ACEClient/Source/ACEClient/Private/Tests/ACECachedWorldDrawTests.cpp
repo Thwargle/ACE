@@ -151,13 +151,17 @@ bool FACEMobileShadowTest::RunTest(const FString&)
     for(int32 I=0;I<Player->Appearance->GetPartCount();++I)
         OriginalParts.Add(Player->Appearance->GetPartMesh(I)->GetRelativeTransform());
     TArray<TArray<FColor>> DynamicPoses;
+    auto* ActorCache=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Render.CachedActorDraws"));
+    const int32 SavedActorCache=ActorCache->GetInt();
+    ON_SCOPE_EXIT { ActorCache->Set(SavedActorCache,ECVF_SetByCode); };
     for(bool CachedDraws : {false,true})
     {
+        ActorCache->Set(CachedDraws?1:0,ECVF_SetByCode);
         Player->SetActorLocationAndRotation(Center,FRotator::ZeroRotator);
         for(int32 I=0;I<OriginalParts.Num();++I)
         {
             auto* Part=Cast<UProceduralMeshComponent>(Player->Appearance->GetPartMesh(I));
-            Part->bPreferCachedDraws=CachedDraws; Part->MarkRenderStateDirty();
+            TestEqual(TEXT("Live draw-cache toggle updates existing body parts"),Part->bPreferCachedDraws,CachedDraws);
             Part->SetRelativeTransform(OriginalParts[I]);
         }
         for(int32 Pose=0;Pose<3;++Pose)

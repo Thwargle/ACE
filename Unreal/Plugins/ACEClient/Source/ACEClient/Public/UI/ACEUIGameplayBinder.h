@@ -53,6 +53,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	GENERATED_BODY()
 	friend class FACERetailScreenTest;
 	friend class FACEVRRigTest;
+	friend class FACEVRProtocolTest;
 	friend class UACEVRComponent;
 	friend class FACEChatParityTest;
 	friend class FACEEmoteTest;
@@ -878,6 +879,7 @@ private:
 	TArray<TObjectPtr<UBorder>> VendorItemSlots;
 	UPROPERTY()
 	TArray<TObjectPtr<UBorder>> VendorItemSlotBgs;
+	UPROPERTY(Transient) TArray<TObjectPtr<UBorder>> VendorItemSelections;
 	UPROPERTY()
 	TArray<int32> VendorItemGuids;
 	UPROPERTY()
@@ -1304,9 +1306,10 @@ private:
 	bool TryHandleVendorFilterDropdownClick(FVector2D Absolute);
 	void BuySelectedVendorItem();
 	int32 GetVendorPurchaseLimit(int32 ItemGuid) const;
+	int32 GetVendorSelectionLimit(int32 ItemGuid) const;
 	void AddSelectedVendorItemToBuyCart();
 	void BuyVendorCartItem();
-	void SellVendorCart();
+	void SellVendorCart(bool bSelectedOnly = false);
 	void AddInventoryGuidToVendorSellCart(int32 Guid);
 	void SyncVendorPageVisibility();
 	void RefreshVendorTabLabels();
@@ -1380,7 +1383,7 @@ private:
 	void EnsureDialogEntryBoxes();
 	void RequestBookPageIfNeeded(int32 PageIndex);
 	/** Retail map coords for a position: "12.3N, 45.6W", or empty when indoors. */
-	static FString FormatMapCoords(const FACEPosition& Pos);
+	static FString FormatMapCoords(const FACEPosition& Pos, bool bIncludeInteriors = false);
 	/** Derethian calendar string from raw PortalYearTicks (hour phased via SkyDesc). */
 	FString FormatDerethDateTime(double GameTicks) const;
 	void EnsureSocialEntryBoxes();

@@ -2,6 +2,7 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 #include "ACEPlayerController.h"
+#include "ACEBodySweep.h"
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
 #include "ACEDatSubsystem.h"
@@ -40,7 +41,7 @@ bool FACEFortTethStairsTest::RunTest(const FString&)
  auto* Host=World->SpawnActor<AActor>();auto* Terrain=NewObject<UACETerrainPresenterComponent>(Host);
  Terrain->Client=Client;Terrain->bHasKnownCell=true;
  TArray<AACEEnvCellActor*> Rooms;
- for(uint32 Block:{0x26810000u,0x25810000u,0xE4540000u})
+ for(uint32 Block:{0x26810000u,0x25810000u,0xE4540000u,0xC6A90000u})
  {
   const FVector Origin=FACEPosition::AceVectorToUnreal(FVector((Block>>24)*192,((Block>>16)&255)*192,0),100);
   FACEDatLandblockInfo Info;if(!Dat->LoadLandblockInfo(Block,Info))return false;
@@ -110,6 +111,8 @@ bool FACEFortTethStairsTest::RunTest(const FString&)
   {0x25810019,FVector(85.270020,23.521484,220)},
   {0xE454000E,FVector(40.824219,131.324219,6)},
   {0xE454001E,FVector(83.945312,125.347656,6)},
+  {0xE454000E,FVector(41.695312,130.730469,6)},
+  {0xE454001E,FVector(79.648438,134.835938,20.869003)},
   {0xE454001E,FVector(79.019531,132.884766,14.8)}})
  {
   FACEPosition Pose;Pose.CellId=Entry.Key;Pose.Location=Entry.Value;Place(Pose);
@@ -141,9 +144,15 @@ bool FACEFortTethStairsTest::RunTest(const FString&)
    Pose.SetAceFacingFromUnrealDir2D(Direction);Place(Pose);VR->bActive=Tracked;
    Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));
    Controller->PlayerInput->ProcessInputStack({},1.f/30,false);
-   for(int Frame=0;Frame<20;++Frame)
+   for(int Frame=0;Frame<120;++Frame)
    {
-    VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,175-Half),Direction.Rotation());
+    // Alternate along and into the wall; straight-on contact missed the
+    // reported repeated corner escape through a neighboring triangle.
+    const FVector Across=FVector::CrossProduct(Direction,FVector::UpVector);
+    const FVector Travel=(Direction+Across*((Frame/15)%2 ? -.8f : .8f)).GetSafeNormal();
+    Controller->PredictedPose.SetAceFacingFromUnrealDir2D(Travel);
+    Pawn->SetActorRotation(Controller->PredictedPose.ToUnrealQuat());
+    VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,175-Half),Travel.Rotation());
     VR->MoveStick=FVector2D(0,1);Refresh();Controller->PlayerTick(1.f/30);
    }
    const double WallSide=FVector::DotProduct(Pawn->GetActorLocation()-Nearest->ImpactPoint,Nearest->ImpactNormal);
@@ -151,12 +160,40 @@ bool FACEFortTethStairsTest::RunTest(const FString&)
    Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},1.f/30,false);VR->MoveStick=FVector2D::ZeroVector;
   }
  }
- for(const auto& Entry:Entrances)for(bool Tracked:{false,true})for(float Dt:{1.f/90,1.f/30})
+ // Reported center-post/stairwell wedge: ordinary directional movement must
+ // offer a way back out, without jumping or crossing the post/stair geometry.
+ for(bool Tracked:{false,true})for(float Dt:{1.f/90,1.f/30})
+ {
+  VR->bActive=Tracked;int32 Escapes=0;
+  for(int32 Yaw=0;Yaw<360;Yaw+=30)
+  {
+   const FVector Travel=FRotator(0,Yaw,0).Vector();
+   FACEPosition Pose;Pose.CellId=0xC6A901AE;Pose.Location=FVector(19.925781,21.117188,42.084137);
+   Pose.SetAceFacingFromUnrealDir2D(Travel);Place(Pose);Refresh();
+   const FVector Start=Pawn->GetActorLocation();
+   Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));
+   Controller->PlayerInput->ProcessInputStack({},Dt,false);
+   int32 AirFrames=0;
+   for(int32 Frame=0;Frame<FMath::CeilToInt(1.5f/Dt);++Frame)
+   {
+    VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,175-Half),Travel.Rotation());
+    VR->MoveStick=FVector2D(0,1);Refresh();Controller->PlayerTick(Dt);
+    AirFrames+=Controller->bJumpAirborne?1:0;
+    if(FVector::Dist2D(Start,Pawn->GetActorLocation())>150)break;
+   }
+   const double Distance=FVector::Dist2D(Start,Pawn->GetActorLocation());
+   if(Distance>100 && AirFrames==0)++Escapes;
+   AddInfo(FString::Printf(TEXT("Center post C6A901AE tracked=%d hz=%.0f yaw=%d travel=%.1f air=%d"),Tracked,1.f/Dt,Yaw,Distance,AirFrames));
+   Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},Dt,false);VR->MoveStick=FVector2D::ZeroVector;
+  }
+  TestTrue(*FString::Printf(TEXT("Center post allows ordinary escape without a jump tracked=%d hz=%.0f exits=%d"),Tracked,1.f/Dt,Escapes),Escapes>=4);
+ }
+ for(const auto& Entry:Entrances)for(bool Tracked:{false,true})for(float Dt:{1.f/90,1.f/30})for(int32 Lane:{-1,0,1})
  {
   VR->bActive=Tracked;
   FACEPosition Pose;Pose.CellId=Entry.Cell;Pose.Location=Entry.Location;
   Pose.SetAceFacingFromUnrealDir2D(Entry.Down);Place(Pose);
-  const FVector Start=Pose.ToUnrealLocation(100);
+  FVector Start=Pose.ToUnrealLocation(100);
   Refresh();
   FHitResult Flight;
   const FVector FlightXY=Start+Entry.Down*125;
@@ -164,6 +201,34 @@ bool FACEFortTethStairsTest::RunTest(const FString&)
   const auto* FlightOwner=Cast<AACEEnvCellActor>(Flight.GetActor());
   if(!TestNotNull(TEXT("Top flight has its authored stair collision"),FlightOwner))return false;
   const int32 StairCell=FlightOwner->EnvCellId;
+  const FVector Side=FVector::CrossProduct(Entry.Down,FVector::UpVector)*Lane;
+  FCollisionQueryParams StairQuery(NAME_None,true,Pawn);
+  const float Radius=Capsule->GetScaledCapsuleRadius();
+  const auto Shape=FCollisionShape::MakeCapsule(Radius,Half);
+  float LaneOffset=0;
+  if(Lane!=0)
+  {
+   float MidFeetZ=Flight.ImpactPoint.Z;
+   ACEBodySweep::FindFootSupport(*World,Flight.ImpactPoint,Radius,100,StairQuery,MidFeetZ,60);
+   const FVector Mid(FlightXY.X,FlightXY.Y,MidFeetZ+Half);
+   FHitResult SideHit;
+   if(ACEBodySweep::Sweep(*World,SideHit,Mid,Mid+Side*160,Shape,StairQuery))
+    LaneOffset=FMath::Max(0.,FVector::DotProduct(SideHit.Location-Mid,Side)-1.);
+   else
+   {
+    // Open-sided flight: find the authored tread edge rather than inventing
+    // a fixture-specific width. Keep the feet just inside that edge.
+    for(float Offset=5;Offset<=160;Offset+=5)
+    {
+     FHitResult Edge;const FVector At=Flight.ImpactPoint+Side*Offset;
+     if(!World->LineTraceSingleByChannel(Edge,At+FVector(0,0,40),At-FVector(0,0,40),ECC_Pawn,StairQuery)
+       || Edge.ImpactNormal.Z<.6641741f || FMath::Abs(Edge.ImpactPoint.Z-Flight.ImpactPoint.Z)>10)break;
+     LaneOffset=Offset-1;
+    }
+   }
+   Start+=Side*LaneOffset;Pose.SetLocationFromUnreal(Start,100);Place(Pose);Refresh();
+   AddInfo(FString::Printf(TEXT("Stair edge %08X lane=%d offset=%.1f"),Entry.Cell,Lane,LaneOffset));
+  }
   Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));
   Controller->PlayerInput->ProcessInputStack({},Dt,false);
   int32 AirFrames=0;
@@ -176,7 +241,7 @@ bool FACEFortTethStairsTest::RunTest(const FString&)
   }
   const FVector End=Pawn->GetActorLocation()-FVector(0,0,Half);
   const float Travel=FVector::DotProduct(End-Start,Entry.Down);
-  TestTrue(*FString::Printf(TEXT("Top lip %08X tracked=%d dt=%.3f descends (travel %.1f, drop %.1f)"),Entry.Cell,Tracked,Dt,Travel,Start.Z-End.Z),Travel>300 && End.Z<Start.Z-175 && End.Z>Start.Z-400);
+  TestTrue(*FString::Printf(TEXT("Top lip %08X tracked=%d dt=%.3f lane=%d descends (travel %.1f, drop %.1f)"),Entry.Cell,Tracked,Dt,Lane,Travel,Start.Z-End.Z),Travel>300 && End.Z<Start.Z-175 && End.Z>Start.Z-400);
   TestEqual(TEXT("Stair descent remains grounded"),AirFrames,0);
   AddInfo(FString::Printf(TEXT("Teth %08X tracked=%d dt=%.3f travel=%.1f drop=%.1f endcell=%08X"),Entry.Cell,Tracked,Dt,Travel,Start.Z-End.Z,Controller->PredictedPose.CellId));
   // Reverse immediately: the same passage must continue to work uphill.
@@ -187,7 +252,7 @@ bool FACEFortTethStairsTest::RunTest(const FString&)
    Refresh();Controller->PlayerTick(Dt);
    if(FVector::DotProduct(Pawn->GetActorLocation()-End,-Entry.Down)>Travel-10)break;
   }
-  TestTrue(TEXT("The top lip remains traversable uphill"),Pawn->GetActorLocation().Z-Half>Start.Z-40);
+  TestTrue(*FString::Printf(TEXT("Top lip uphill %08X tracked=%d dt=%.3f lane=%d"),Entry.Cell,Tracked,Dt,Lane),Pawn->GetActorLocation().Z-Half>Start.Z-40);
   Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},Dt,false);VR->MoveStick=FVector2D::ZeroVector;
   // Fall from the jump apex over the top flight while still outdoor-resident.
   Pose.CellId=Entry.Cell;Pose.SetLocationFromUnreal(Start+Entry.Down*125+FVector(0,0,400),100);Place(Pose);
@@ -200,6 +265,24 @@ bool FACEFortTethStairsTest::RunTest(const FString&)
   }
   TestFalse(TEXT("A jump through the upper entrance lands on the stairs"),Controller->bJumpAirborne);
   TestTrue(TEXT("Landing stays on the top flight instead of falling through the tower"),Pawn->GetActorLocation().Z-Half>Start.Z-200);
+  if(Lane!=0)
+  {
+   // Fall beside the flight with the lower sphere straddling its edge. This
+   // exercises side/riser/soffit contact, not just a clean vertical landing.
+   const FVector Drop=Flight.ImpactPoint+Side*(LaneOffset+Radius*.5f)+FVector(0,0,5);
+   Pose.CellId=Entry.Cell;Pose.SetLocationFromUnreal(Drop,100);Place(Pose);
+   Controller->bJumpAirborne=true;
+   int32 FallingFrames=0;
+   for(;FallingFrames<FMath::CeilToInt(3.f/Dt);++FallingFrames)
+   {
+    VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,175-Half),Entry.Down.Rotation());
+    Refresh();Controller->PlayerTick(Dt);
+    if(!Controller->bJumpAirborne)break;
+   }
+   AddInfo(FString::Printf(TEXT("Stair side fall %08X tracked=%d hz=%.0f lane=%d seconds=%.3f drop=%.1f"),Entry.Cell,Tracked,1.f/Dt,Lane,FallingFrames*Dt,Drop.Z-(Pawn->GetActorLocation().Z-Half)));
+   TestFalse(TEXT("Stair side fall settles without remaining airborne"),Controller->bJumpAirborne);
+   TestTrue(TEXT("Stair side fall does not tunnel below the tower floor"),Pawn->GetActorLocation().Z-Half>Start.Z-1600);
+  }
   const uint32 Block=Entry.Cell&0xFFFF0000u;
   TSet<int32> Visible;FConvexVolume DownView;
   const FVector Eye=FlightXY+FVector(0,0,575);

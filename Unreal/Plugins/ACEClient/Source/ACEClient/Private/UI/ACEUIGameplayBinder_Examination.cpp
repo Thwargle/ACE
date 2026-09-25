@@ -58,7 +58,10 @@ void UACEUIGameplayBinder::RefreshSpellExamination()
     ExamBody->SetColorAndOpacity(FLinearColor::White); ExamBody->SetAutoWrapText(true);
     ExamBody->SetVisibility(ESlateVisibility::HitTestInvisible);
     if (auto* Retail=Cast<UACERetailTextBlock>(ExamBody))
+	{
         Retail->SetRetailElement(Canvas->GetResourceResolver(), Body, Canvas->GetLastScale2D(), Body->Width, false);
+		Retail->SetTextColors({});
+	}
     if (!ExamScroll) ExamScroll=Canvas->WidgetTree->ConstructWidget<UScrollBox>();
     ExamScroll->SetClipping(EWidgetClipping::ClipToBounds);
     ExamScroll->SetScrollBarVisibility(ESlateVisibility::Visible);

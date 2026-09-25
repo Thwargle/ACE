@@ -1615,6 +1615,9 @@ struct ACECLIENT_API FACEAppraisalInfo
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") bool bHasBurden = false;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 AttributeHighlights = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 AttributeColors = 0;
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 ArmorEnchantments = 0;
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 WeaponEnchantments = 0;
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 ResistanceEnchantments = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Value = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Burden = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Health = 0;

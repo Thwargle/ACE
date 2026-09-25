@@ -6,6 +6,7 @@
 #include "ACECharacterAppearanceComponent.h"
 #include "ACECombatStance.h"
 #include "ACESession.h"
+#include "UI/ACEUIGameplayBinder.h"
 #include "ACEDatSubsystem.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -22,6 +23,11 @@
 
 static TAutoConsoleVariable<int32> CVarProjectileBodyBounds(TEXT("ace.VR.ProjectileBodyBounds"),1,
 	TEXT("Prepare creature contact bounds once per trajectory before detailed part checks."));
+
+float UACEVRComponent::GetRequestedCombatPower() const
+{
+	return PC && PC->DatGameplayBinder ? FMath::Clamp(PC->DatGameplayBinder->RequestedAttackPower,0.f,1.f) : .5f;
+}
 
 bool UACEVRComponent::TryDropInventoryItem(int32 Item, int32 SplitAmount)
 {
@@ -225,7 +231,7 @@ void UACEVRComponent::FireCrossbow()
 	if (!Ammo.Guid) { SetCastFeedback(TEXT("Equip compatible bolts first.")); return; }
 	if (auto* Item = MissileVisualActor.Get()) UpdateMissileAttachment(Item);
 	if (auto Session = Client->GetSession(); Session && Session->SendVRCombat(3, PC->GetEffectiveCellId(), Weapon.Guid,
-		0, 0, ToAceOffset(GetCrossbowMuzzle()), FACEPosition::AceVectorToUnreal(GetPhysicalAim(!Settings->bLeftHanded).GetUnitAxis(EAxis::X)), 1.f, 0.f))
+		0, 0, ToAceOffset(GetCrossbowMuzzle()), FACEPosition::AceVectorToUnreal(GetPhysicalAim(!Settings->bLeftHanded).GetUnitAxis(EAxis::X)), 1.f, 0.f, GetRequestedCombatPower()))
 	{
 		Pulse(Settings->bLeftHanded, .6f);
 		UE_LOG(LogTemp, Log, TEXT("ACE VR crossbow sent: weapon=0x%08X ammo=0x%08X"), Weapon.Guid, Ammo.Guid);
@@ -253,7 +259,7 @@ void UACEVRComponent::FireThrownMissile()
 	{ SetCastFeedback(TEXT("Equip compatible darts first.")); return; }
 	FVector Origin, Direction; GetThrownAim(Origin, Direction);
 	if (auto Session = Client->GetSession(); Session && Session->SendVRCombat(3, PC->GetEffectiveCellId(), Weapon.Guid,
-		0, 0, ToAceOffset(Origin), FACEPosition::AceVectorToUnreal(Direction), 1.f, 0.f))
+		0, 0, ToAceOffset(Origin), FACEPosition::AceVectorToUnreal(Direction), 1.f, 0.f, GetRequestedCombatPower()))
 	{
 		Pulse(Settings->bLeftHanded, .6f);
 		UE_LOG(LogTemp, Log, TEXT("ACE VR missile sent: weapon=0x%08X ammo=0x%08X style=0x%X instant=1"),
@@ -295,7 +301,7 @@ void UACEVRComponent::ReleaseArrow()
 	const FVector Origin = GetPhysicalGrip(!Settings->bLeftHanded).GetLocation();
 	const FVector Direction = BowDrawDirection();
 	if (auto Session = Client->GetSession(); Session && Session->SendVRCombat(3, PC->GetEffectiveCellId(), Weapon.Guid,
-		0, 0, ToAceOffset(Origin), FACEPosition::AceVectorToUnreal(Direction), Fraction, FMath::Min(BowHoldTime, 2.f)))
+		0, 0, ToAceOffset(Origin), FACEPosition::AceVectorToUnreal(Direction), Fraction, FMath::Min(BowHoldTime, 2.f), GetRequestedCombatPower()))
 	{
 		Pulse(Settings->bLeftHanded, .6f); SetCastFeedback(TEXT("Missile released."));
 		UE_LOG(LogTemp, Log, TEXT("ACE VR missile sent: weapon=0x%08X ammo=0x%08X draw=%.2f hold=%.2f"), Weapon.Guid, EquippedAmmo().Guid, Fraction, BowHoldTime);
@@ -535,7 +541,7 @@ bool UACEVRComponent::TryTrackedStrike(int32 Weapon, bool Left, ACEVRMath::FSwin
 	{
 		if (auto Session=Client->GetSession()) Session->SetVRMeleeBody(ToAceOffset(Best->GetActorLocation()));
 		if (auto Session = Client->GetSession(); Session && Session->SendVRCombat(2, PC->GetEffectiveCellId(), Weapon, Weapon == 0 && Left != Settings->bLeftHanded ? 1 : 0,
-			Best->GetACEGuid(), ToAceOffset(BestA), ToAceOffset(BestB), FMath::Clamp(float(FVector::Distance(BestA,BestB)) / Gesture.Elapsed / 600.f, 0.f, 1.f), Gesture.Elapsed))
+			Best->GetACEGuid(), ToAceOffset(BestA), ToAceOffset(BestB), FMath::Clamp(float(FVector::Distance(BestA,BestB)) / Gesture.Elapsed / 600.f, 0.f, 1.f), Gesture.Elapsed, GetRequestedCombatPower()))
 		{
 			Gesture.Commit(); Client->SelectObject(Best->GetACEGuid()); Pulse(Left, .55f);
 			UE_LOG(LogTemp, Log, TEXT("ACE VR melee sent: weapon=0x%08X target=0x%08X speed=%.1f duration=%.3f"), Weapon, Best->GetACEGuid(), FVector::Distance(BestA,BestB)/Gesture.Elapsed, Gesture.Elapsed);

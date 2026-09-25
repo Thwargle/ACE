@@ -4,7 +4,7 @@ param(
  [string]$OutputRoot = (Join-Path $PSScriptRoot '../../Saved/PCPerformance/Review'),
  [string[]]$Scenes = @('outdoor','indoor','effects'),
  [ValidateSet('baseline','optimized')][string[]]$Variants = @('baseline','optimized'),
- [ValidateSet('scene','particles','cached-world','particle-distance','particle-idle','cached-actors','doorway-geometry','setup-metadata','cpu-render')][string]$Comparison = 'scene',
+ [ValidateSet('scene','particles','cached-world','particle-distance','particle-idle','cached-actors','doorway-geometry','setup-metadata','cpu-render','animation-buffers','mobile-light-permutation')][string]$Comparison = 'scene',
  [switch]$Editor,
  [switch]$MobilePreview,
  [switch]$CameraMotion,
@@ -12,6 +12,7 @@ param(
  [int]$Height = 1440
 )
 $ErrorActionPreference='Stop'
+if($Comparison -eq 'mobile-light-permutation' -and !$MobilePreview){throw 'The local-light permutation comparison requires MobilePreview.'}
 foreach ($scene in $Scenes) {
  if ($scene -notin @('outdoor','indoor','effects','caul')) { throw "Unknown scene $scene" }
  foreach ($variant in $Variants) {
@@ -20,6 +21,10 @@ foreach ($scene in $Scenes) {
   New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
   $enabled=if($variant -eq 'optimized'){1}else{0}
   $settings=switch($Comparison) {
+   # Keep actor caching enabled in both phases; isolate the mobile light shader
+   # policy that can rebuild cached draws whenever animated parts move near lights.
+   'mobile-light-permutation' { "ace.Render.CachedActorDraws 1,r.Mobile.Forward.LocalLightsSinglePermutation $enabled" }
+   'animation-buffers' { "ace.Animation.ReusePoseBuffers $enabled" }
    'cached-actors' { "ace.Render.CachedActorDraws $enabled" }
    'doorway-geometry' { "ace.Render.CacheDoorwayGeometry $enabled" }
    'setup-metadata' { "ace.Dat.CacheSetupMetadata $enabled" }

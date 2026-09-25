@@ -1,5 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
+#include "UObject/StrongObjectPtr.h"
 #include "VR/ACEVRMath.h"
 #include "ACEEquipmentRules.h"
 #include "ACERuntimeOptions.h"
@@ -93,6 +95,8 @@ namespace
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEVRMathTest, "ACE.VR.GesturesAndSettings", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEVRMathTest::RunTest(const FString& Parameters)
 {
+	TStrongObjectPtr<UACEVRSettings> SavedPreferences(NewObject<UACEVRSettings>());
+	ON_SCOPE_EXIT { SavedPreferences->Persist(); };
 	if (auto* Scale=IConsoleManager::Get().FindConsoleVariable(TEXT("xr.SecondaryScreenPercentage.HMDRenderTarget")))
 	{
 		const float Saved=Scale->GetFloat(); const uint32 Priority=Scale->GetFlags() & ECVF_SetByMask;
@@ -219,7 +223,16 @@ bool FACEVRMathTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Customized comfort speed survives migration"), Settings->MovementScale, .4f);
 	Settings->VitalsViewOffset = FVector(std::numeric_limits<double>::infinity(), 0, 0); Settings->Sanitize();
 	TestFalse(TEXT("Invalid saved vitals placement cannot break the view transform"), Settings->VitalsViewOffset.ContainsNaN());
+	Settings->CompassViewOffset=FVector(std::numeric_limits<double>::infinity(),0,0); Settings->CompassScale=std::numeric_limits<float>::quiet_NaN();
+	Settings->MenuViewOffset=Settings->CompassViewOffset; Settings->OptionsScale=100; Settings->CompassAnchorMode=99; Settings->Sanitize();
+	TestTrue(TEXT("Invalid compass/menu preferences recover safely"),!Settings->CompassViewOffset.ContainsNaN() && !Settings->MenuViewOffset.ContainsNaN() && Settings->CompassScale==.065f && Settings->OptionsScale==.15f && Settings->CompassAnchorMode==2);
 	const auto* Inputs = GetDefault<UInputSettings>();
+	Settings->ButtonBindings.Reset();Settings->SetButtonAction("VRSelect","VRJump");
+	TestEqual(TEXT("VR actions can move to another button"),Settings->GetButtonAction("VRSelect"),FName("VRJump"));
+	TestEqual(TEXT("Rebinding preserves the displaced action on the old button"),Settings->GetButtonAction("VRJump"),FName("VRSelect"));
+	Settings->SetButtonAction("VRSelect","Invalid");
+	TestEqual(TEXT("Unknown bindings cannot discard an action"),Settings->GetButtonAction("VRSelect"),FName("VRJump"));
+	Settings->ButtonBindings.Reset();Settings->Persist();
 	const FVector Half=ACEVRMath::BallisticOffset(FVector::ForwardVector,24.f,.5f,1.f,100.f);
 	const FVector Full=ACEVRMath::BallisticOffset(FVector::ForwardVector,24.f,1.f,1.f,100.f);
 	TestTrue(TEXT("A full draw extends the trajectory with the server launch-speed curve"),FMath::IsNearlyEqual(Half.X,1620.,.01) && FMath::IsNearlyEqual(Full.X,2400.,.01));
@@ -328,6 +341,25 @@ bool FACEVRProtocolTest::RunTest(const FString& Parameters)
 	PunchAck.WriteUInt32(1); PunchAck.WriteUInt32(135);
 	FACEBinaryReader PunchAR(PunchAck.GetData()); Session.HandleGameEvent(PunchAR);
 	TestTrue(TEXT("Optional unarmed capability enables empty-hand strikes"), Session.SupportsVRUnarmed());
+	const uint32 BeforePowerCaps=Session.VRCapabilities;
+	for (bool Supported : {false,true})
+	{
+		Session.VRCapabilities=BeforePowerCaps | (Supported ? 65536u : 0u);
+		TestTrue(TEXT("Tracked missile accepts a separate accuracy setting"),Session.SendVRCombat(3,0x12340001,200,0,300,FVector(0,0,1),FVector(0,1,0),1,0,.25f));
+		uint32 Last=0;for(const auto& Pair:Session.CachedC2SPackets)Last=FMath::Max(Last,Pair.Key);
+		FACEBinaryReader Packet(Session.CachedC2SPackets[Last].Payload);Packet.Skip(28);
+		TestEqual(TEXT("Power trailer is sent only to capable servers"),Packet.Remaining(),Supported?68:64);
+		Packet.Skip(56);TestEqual(TEXT("Physical release strength remains independent"),Packet.ReadFloat(),1.f);Packet.ReadFloat();
+		if(Supported)TestEqual(TEXT("Selected accuracy arrives in the trailer"),Packet.ReadFloat(),.25f);
+	}
+	Session.VRCapabilities=BeforePowerCaps;
+	FACEPosition InteriorCoords;InteriorCoords.CellId=0xDA740102;InteriorCoords.Location=FVector(179,59,6);
+	FACEPosition ExteriorCoords=InteriorCoords;ExteriorCoords.CellId=0xDA740001;
+	TestEqual(TEXT("A building doorway keeps geographic coordinates"),UACEUIGameplayBinder::FormatMapCoords(InteriorCoords,true),UACEUIGameplayBinder::FormatMapCoords(ExteriorCoords));
+	TestFalse(TEXT("VR indoor coordinates are not a cell identifier"),UACEUIGameplayBinder::FormatMapCoords(InteriorCoords,true).Contains(TEXT("Cell")));
+	InteriorCoords.Location.X+=24;
+	TestNotEqual(TEXT("Indoor coordinates track movement within a cell"),UACEUIGameplayBinder::FormatMapCoords(InteriorCoords,true),UACEUIGameplayBinder::FormatMapCoords(ExteriorCoords));
+	TestTrue(TEXT("Invalid position has no fabricated coordinates"),UACEUIGameplayBinder::FormatMapCoords(FACEPosition(),true).IsEmpty());
 	TestTrue(TEXT("Empty offhand can send a tracked punch"),Session.SendVRCombat(2,0x12340001,0,1,300,FVector(0,0,1),FVector(.3,0,1),1,.1));
 	TestFalse(TEXT("Unarmed capability never permits a weaponless spell"),Session.SendVRCombat(1,0x12340001,0,1,300,FVector(0,0,1),FVector(0,1,0),1,0));
 	TestFalse(TEXT("Unknown punch hand is rejected"),Session.SendVRCombat(2,0x12340001,0,2,300,FVector(0,0,1),FVector(.3,0,1),1,.1));
@@ -420,6 +452,8 @@ bool FACEVRProtocolTest::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEVRRigTest, "ACE.VR.RigAndMenus", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEVRRigTest::RunTest(const FString& Parameters)
 {
+	TStrongObjectPtr<UACEVRSettings> SavedPreferences(NewObject<UACEVRSettings>());
+	ON_SCOPE_EXIT { SavedPreferences->Persist(); };
 	const auto Values = UWorld::InitializationValues().AllowAudioPlayback(false).RequiresHitProxies(false)
 		.CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false);
 	auto* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Values);
@@ -479,6 +513,16 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		const FVector StartupPanel = VR->RetailPanel->GetComponentLocation();
 		VR->Head->SetRelativeLocationAndRotation(FVector(35, -12, 165), FRotator(0, 35, 0));
 		PollHands(); VR->UpdateTrackingState(true); VR->UpdatePanels(); VR->UpdateArms();
+		VR->Settings->ButtonBindings.Reset();
+		VR->RouteControllerButton("VRLeftGrip",true);
+		TestTrue(TEXT("Physical button dispatch reaches its held action"),VR->bLeftGripHeld);
+		VR->ConfigureButton("VRLeftGrip","VRRightGrip");VR->RouteControllerButton("VRLeftGrip",false);
+		TestFalse(TEXT("Rebinding while held still releases the original action"),VR->bLeftGripHeld || VR->bRightGripHeld);
+		VR->RouteControllerButton("VRLeftGrip",true);
+		TestTrue(TEXT("The next press uses the new action immediately"),VR->bRightGripHeld && !VR->bLeftGripHeld);
+		VR->UpdateTrackingState(false);
+		TestTrue(TEXT("Tracking loss clears held button routes"),VR->HeldControllerActions.IsEmpty());
+		VR->ResetButtonBindings();VR->UpdateTrackingState(true);VR->UpdatePanels();
 		const float SavedFPS=ACERuntimeOptions::Get(TEXT("ShowFrameRate"));
 		ACERuntimeOptions::Set(TEXT("ShowFrameRate"),1);PC->UpdateFrameRateOverlay();VR->UpdatePanels();
 		TestNotNull(TEXT("Enabling the FPS counter creates its VR surface"),VR->FrameRatePanel.Get());
@@ -813,20 +857,35 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			Actor->SetActorLocation(VR->Head->GetComponentLocation()+VR->Head->GetForwardVector()*220.f-FVector(0,0,180));
             const uint32 OldCapabilities=VR->Client->Session->VRCapabilities;
             VR->Client->Session->VRCapabilities=127;
-            VR->HealthFeedback(602,-42,1); auto& Magic=VR->WorldNotices.Last();
+            const int32 BeforeUnattributed=VR->WorldNotices.Num();
+            VR->HealthFeedback(602,-42,1);VR->HealthFeedback(602,21,1);
+            TestEqual(TEXT("Other players' unattributed damage and healing do not create popups"),VR->WorldNotices.Num(),BeforeUnattributed);
+            VR->CombatMessage(TEXT("You scorch Bookie for 42 points with Flame Bolt VII."),TEXT(""),ACEChatMessageType::Magic); auto& Magic=VR->WorldNotices.Last();
             TestTrue(TEXT("Outgoing magic damage uses the target lane and gold without a minus sign"),Magic.Actor.Get()==Actor && Magic.NumberLane==1 && Magic.Text==TEXT("42 DAMAGE") && Magic.Color.Equals(FLinearColor(1.f,.8f,.25f)));
-            VR->HealthFeedback(602,21,1);TestTrue(TEXT("Healing uses green and a plus sign"),VR->WorldNotices.Last().Text==TEXT("+21 HEALTH") && VR->WorldNotices.Last().Color.Equals(FLinearColor(.5f,1.f,.498f)));
-            VR->HealthFeedback(602,-33,2);TestTrue(TEXT("Critical marker precedes damage"),VR->WorldNotices.Last().Text==TEXT("Crit! 33 DAMAGE") && VR->WorldNotices.Last().Color.Equals(FLinearColor(1.f,.8f,.25f)));
+            VR->HealthFeedback(VR->Client->GetPlayerGuid(),21,1);TestTrue(TEXT("Self healing uses green and a plus sign"),VR->WorldNotices.Last().Text==TEXT("+21 HEALTH") && VR->WorldNotices.Last().Color.Equals(FLinearColor(.5f,1.f,.498f)));
+            VR->CombatFeedback(TEXT("Bookie"),33,false,true);TestTrue(TEXT("Critical marker precedes our damage"),VR->WorldNotices.Last().Text==TEXT("Crit! 33 DAMAGE") && VR->WorldNotices.Last().Color.Equals(FLinearColor(1.f,.8f,.25f)));
             VR->HealthFeedback(VR->Client->GetPlayerGuid(),-17,1);TestTrue(TEXT("Incoming damage uses the YOU lane and red, without a minus sign"),VR->WorldNotices.Last().NumberLane==-1 && VR->WorldNotices.Last().Text==TEXT("17 DAMAGE") && VR->WorldNotices.Last().Color.Equals(FLinearColor(1.f,.247f,.247f)));
             Actor->SetActorLocation(Actor->GetActorLocation()+FVector(10000,0,0)); VR->UpdateWorldNotices();
             for (const auto& N:VR->WorldNotices) if(N.Kind==2)
                 TestTrue(TEXT("Distant combat stays at a fixed readable distance"),FVector::Distance(N.Panel->GetComponentLocation(),VR->Head->GetComponentLocation())<170.f);
             Actor->SetActorLocation(VR->Head->GetComponentLocation()+VR->Head->GetForwardVector()*220.f-FVector(0,0,180));
-            const int32 Count=VR->WorldNotices.Num();VR->CombatFeedback(TEXT("Bookie"),42,false,false);
+            const int32 Count=VR->WorldNotices.Num();VR->CombatFeedback(TEXT("Bookie"),17,true,false);
             FACEPlayerVitals V;V.bValid=true;V.Health=10;VR->VitalsFeedback(V);V.Health=5;VR->VitalsFeedback(V);
             TestEqual(TEXT("Retail combat and vital packets cannot duplicate confirmed numbers"),VR->WorldNotices.Num(),Count);
             VR->Client->Session->VRCapabilities=OldCapabilities;
             for(auto& N:VR->WorldNotices) N.Panel->DestroyComponent(); VR->WorldNotices.Empty();
+			VR->CombatMessage(TEXT("Other Player scorches you for 42 points with Flame Bolt VII."),TEXT(""),ACEChatMessageType::Magic);
+			VR->CombatMessage(TEXT("You scorch Bookie for 42 points with Flame Bolt VII."),TEXT("Someone"),ACEChatMessageType::Magic);
+			VR->CombatMessage(TEXT("You scorch Bookie for 42 points of fire damage!"),TEXT(""),ACEChatMessageType::CombatSelf);
+			TestTrue(TEXT("Other casters, user chat and physical-hit chat cannot duplicate outgoing spell popups"),VR->WorldNotices.IsEmpty());
+			VR->CombatMessage(TEXT("Critical hit! Sneak Attack! You scorch Bookie for 1234 points with Flame Bolt VII."),TEXT(""),ACEChatMessageType::Magic);
+			TestEqual(TEXT("Critical spell chat preserves the amount"),VR->WorldNotices.Last().Text,FString(TEXT("Crit! 1234 DAMAGE")));
+			VR->CombatFeedback(TEXT("Bookie"),0,true,false);
+			const auto& Evaded=VR->WorldNotices.Last();
+			Evaded.Panel->GetSlateWidget()->SlatePrepass(1.f);
+			const FVector2D Required=Evaded.Panel->GetSlateWidget()->GetDesiredSize();
+			TestTrue(TEXT("Evaded card fits both font lines and outlines"),Evaded.Panel->GetDrawSize().X>=Required.X && Evaded.Panel->GetDrawSize().Y>=Required.Y);
+			for(auto& N:VR->WorldNotices) N.Panel->DestroyComponent(); VR->WorldNotices.Empty();
 			VR->Client->SelectObject(602);
 			VR->NPCSpeech(602,TEXT("Welcome to the monster fight."));
 			TestEqual(TEXT("Speaking NPC is deselected"),VR->Client->GetSelectedObject().Guid,0);
@@ -1027,6 +1086,10 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		const FTransform OldHead=VR->Head->GetComponentTransform();
 		VR->Settings->VitalsAnchorMode=2;VR->bVitalsAnchorReady=false;VR->UpdatePanels();
 		const FTransform WorldVitals=VR->VitalsPanel->GetComponentTransform();
+		const FTransform TrackingForWorldVitals=VR->TrackingOrigin->GetComponentTransform();
+		VR->TrackingOrigin->AddWorldOffset(FVector(1,2,3));VR->TrackingOrigin->AddWorldRotation(FRotator(0,30,0));
+		TestTrue(TEXT("World vitals stay fixed between tracking and panel ticks"),VR->VitalsPanel->GetComponentTransform().Equals(WorldVitals,.001));
+		VR->TrackingOrigin->SetWorldTransform(TrackingForWorldVitals);
 		VR->Head->AddWorldOffset(FVector(20,5,3));VR->Head->AddWorldRotation(FRotator(15,10,7));VR->UpdatePanels();
 		TestTrue(TEXT("World-pinned vitals stay still during head movement"),VR->VitalsPanel->GetComponentTransform().Equals(WorldVitals,.01));
 		VR->Head->SetWorldTransform(OldHead);VR->Settings->VitalsAnchorMode=1;VR->bVitalsAnchorReady=false;VR->UpdatePanels();
@@ -1046,6 +1109,134 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Repeated stick turns keep stabilized vitals in front of the player"),
 			VR->Head->GetComponentTransform().InverseTransformPosition(VR->VitalsPanel->GetComponentLocation()).Equals(BeforeTurn,.1));
 		VR->TrackingOrigin->SetWorldTransform(TrackingBeforeRun);VR->bVitalsAnchorReady=false;VR->UpdatePanels();
+		// Head tracking noise straddling the follow threshold must never pull the
+		// anchor back toward its original heading on alternating frames.
+		for(float Direction:{-1.f,1.f})
+		{
+			VR->Head->SetWorldTransform(OldHead);VR->bVitalsAnchorReady=false;VR->UpdatePanels();
+			const float StartYaw=VR->VitalsAnchorFrame.Rotator().Yaw;
+			float Previous=0;
+			for(int32 I=0;I<90;++I)
+			{
+				VR->Head->SetWorldRotation(FRotator(0,StartYaw+Direction*(28.f+(I%2==0?.4f:-.4f)),0));
+				VR->UpdatePanels(1.f/30.f);
+				const float Progress=Direction*FMath::FindDeltaAngleDegrees(StartYaw,VR->VitalsAnchorFrame.Rotator().Yaw);
+				TestTrue(TEXT("Follow boundary cannot snap backward or jump ahead"),Progress>=Previous-.001f && Progress-Previous<1.5f);
+				Previous=Progress;
+			}
+			TestTrue(TEXT("Follow settles inside the viewing cone"),Previous>9.f && Previous<13.f);
+		}
+		VR->Head->SetWorldTransform(OldHead);VR->bVitalsAnchorReady=false;VR->UpdatePanels();
+		// Compass anchors share the same locomotion transport and late-update rules as vitals.
+		const bool MenuBeforePlacement=VR->bInventoryOpen; VR->bInventoryOpen=false;
+		VR->Settings->bShowCompass=true; VR->Settings->CompassAnchorMode=2; VR->bCompassAnchorReady=false; VR->UpdatePanels();
+		const FTransform WorldCompass=VR->CompassPanel->GetComponentTransform();
+		const FTransform TrackingForWorldCompass=VR->TrackingOrigin->GetComponentTransform();
+		VR->TrackingOrigin->AddWorldOffset(FVector(1,2,3));VR->TrackingOrigin->AddWorldRotation(FRotator(0,-30,0));
+		TestTrue(TEXT("World compass stays fixed between tracking and panel ticks"),VR->CompassPanel->GetComponentTransform().Equals(WorldCompass,.001));
+		VR->TrackingOrigin->SetWorldTransform(TrackingForWorldCompass);
+		VR->Head->AddWorldOffset(FVector(20,5,3)); VR->Head->AddWorldRotation(FRotator(15,10,7)); VR->UpdatePanels();
+		TestTrue(TEXT("World compass ignores physical head movement"),VR->CompassPanel->GetComponentTransform().Equals(WorldCompass,.01));
+		VR->Head->SetWorldTransform(OldHead); VR->Settings->CompassAnchorMode=0; VR->UpdatePanels();
+		TestEqual(TEXT("Head compass participates in HMD late update"),VR->CompassPanel->GetAttachParent(),static_cast<USceneComponent*>(VR->Head.Get()));
+		VR->Settings->CompassAnchorMode=1; VR->bCompassAnchorReady=false; VR->UpdatePanels();
+		const FVector CompassBeforeWalk=VR->CompassPanel->GetComponentLocation();
+		for(int32 I=0;I<90;++I)
+		{
+			const FVector Step=VR->Head->GetForwardVector()*12.f;
+			Pawn->AddActorWorldOffset(Step); VR->TrackingOrigin->AddWorldOffset(Step); VR->UpdatePanels(1.f/90.f);
+		}
+		TestTrue(TEXT("Body compass follows running without trailing"),(VR->CompassPanel->GetComponentLocation()-CompassBeforeWalk).Equals(Pawn->GetActorLocation()-OwnerBeforeRun,.1));
+		Pawn->SetActorLocation(OwnerBeforeRun); VR->TrackingOrigin->SetWorldTransform(TrackingBeforeRun); VR->bCompassAnchorReady=false; VR->UpdatePanels();
+		const FVector CompassBeforeTurn=VR->Head->GetComponentTransform().InverseTransformPosition(VR->CompassPanel->GetComponentLocation());
+		for(int32 I=0;I<4;++I){VR->RotateTracking(45.f);VR->UpdatePanels();}
+		TestTrue(TEXT("Body compass follows stick turns"),VR->Head->GetComponentTransform().InverseTransformPosition(VR->CompassPanel->GetComponentLocation()).Equals(CompassBeforeTurn,.1));
+		VR->TrackingOrigin->SetWorldTransform(TrackingBeforeRun); VR->bCompassAnchorReady=false; VR->UpdatePanels();
+		VR->Settings->bCompassLocked=false;
+		const FVector OriginalCompass=VR->Settings->CompassViewOffset;
+		VR->NativeCompass->UpdateHeading(VR->Head->GetComponentRotation().Yaw,.016f);
+		VR->CompassPanel->SetRedrawTime(0); VR->CompassPanel->RequestRedraw();
+		VR->CompassPanel->TickComponent(.016f,LEVELTICK_All,nullptr); FlushRenderingCommands();
+		PointAt(VR->CompassPanel,FVector2D(60,474)); VR->Trigger(false,true); VR->UpdatePanelEdit();
+		TestEqual(TEXT("Compass move captures the initiating hand"),VR->PanelEditHand,1);
+		TestTrue(TEXT("Compass grab does not jump"),VR->Settings->CompassViewOffset.Equals(OriginalCompass,.01));
+		VR->RightAim->AddWorldOffset(VR->Head->GetRightVector()*10.f); VR->UpdatePanels();
+		TestTrue(TEXT("Compass can be moved with a controller"),VR->Settings->CompassViewOffset.Y>OriginalCompass.Y+9.f);
+		const FTransform Before3D=VR->CompassPanel->GetComponentTransform();
+		VR->RightAim->AddWorldOffset(VR->Head->GetForwardVector()*25.f);VR->RightAim->AddWorldRotation(FRotator(12,15,8));VR->UpdatePanels();
+		TestFalse(TEXT("Compass placement supports depth and wrist rotation"),VR->CompassPanel->GetComponentQuat().Equals(Before3D.GetRotation(),.01));
+		TestTrue(TEXT("Full 3D placement changes depth"),FMath::Abs(VR->Settings->CompassViewOffset.X-OriginalCompass.X)>5);
+		const FVector GrabBefore=VR->PanelGrabInHand.GetLocation();
+		const FQuat RotationBefore=VR->CompassPanel->GetComponentQuat();
+		VR->TurnStick=FVector2D(0,1);
+		for(int32 I=0;I<30;++I) VR->UpdatePanels(1.f/30.f);
+		TestTrue(TEXT("Right thumbstick pushes held panel away at a frame independent rate"),FMath::IsNearlyEqual(VR->PanelGrabInHand.GetLocation().X-GrabBefore.X,90.,.01));
+		TestTrue(TEXT("Depth control preserves panel angle"),VR->CompassPanel->GetComponentQuat().Equals(RotationBefore,.001));
+		VR->TurnStick=FVector2D(0,-1);
+		for(int32 I=0;I<90;++I) VR->UpdatePanels(1.f/90.f);
+		TestTrue(TEXT("Pulling panel back restores grab distance"),VR->PanelGrabInHand.GetLocation().Equals(GrabBefore,.01));
+		VR->TurnStick=FVector2D::ZeroVector;
+		VR->EndPanelEdit(false,0); TestEqual(TEXT("Other hand cannot end placement"),VR->PanelEditHand,1); VR->EndPanelEdit(false,1); VR->Trigger(false,false);
+		VR->Settings->CompassViewOffset=OriginalCompass;VR->Settings->CompassViewRotation=FRotator::ZeroRotator; VR->UpdatePanels();
+		// Resize every editable surface on its initial plane, preserving center and aspect ratio.
+		VR->Settings->bVitalsLocked=false; VR->Settings->bMenuLocked=false; VR->Settings->bOptionsLocked=false;
+		VR->SettingsPanel->SetVisibility(true);
+		for(FName Name:{FName("Compass"),FName("Vitals"),FName("Menu"),FName("Options")})
+		{
+			auto* Surface=VR->GetEditablePanel(Name);
+			// Isolate each ray-plane fixture; menu/HUD visual overlap has separate priority coverage below.
+			for(FName Other:{FName("Compass"),FName("Vitals"),FName("Menu"),FName("Options")})
+				VR->GetEditablePanel(Other)->SetCollisionEnabled(Other==Name?ECollisionEnabled::QueryOnly:ECollisionEnabled::NoCollision);
+			const FVector Center=Surface->GetComponentLocation(); const float OriginalScale=VR->GetPanelScale(Name);
+			const FVector2D Pixel=Surface->GetDrawSize()*FVector2D(.85,.85);
+			PointAt(Surface,Pixel); VR->BeginPanelEdit(Name,false,true);
+			TestEqual(*FString::Printf(TEXT("%s resize captures"),*Name.ToString()),VR->PanelEditHand,1);
+			const FVector2D Start=VR->PanelEditStart;
+			const FVector Target=VR->PanelEditFrame.TransformPosition(FVector(0,Start.X*1.2,Start.Y*1.2));
+			VR->RightAim->SetWorldRotation((Target-VR->RightAim->GetComponentLocation()).Rotation()); VR->UpdatePanelEdit();
+			const float ExpectedScale=FMath::Min(OriginalScale*1.2f,Name=="Vitals"?.18f:.15f);
+			TestTrue(*FString::Printf(TEXT("%s grows proportionally within supported limits"),*Name.ToString()),FMath::IsNearlyEqual(VR->GetPanelScale(Name),ExpectedScale,.001f));
+			for(int32 I=0;I<10;++I)VR->UpdatePanelEdit();
+			TestTrue(TEXT("Holding still cannot accumulate resize drift"),FMath::IsNearlyEqual(VR->GetPanelScale(Name),ExpectedScale,.001f));
+			TestTrue(TEXT("Resizing preserves panel center"),Surface->GetComponentLocation().Equals(Center,.01));
+			VR->EndPanelEdit(false); VR->GetPanelScale(Name)=OriginalScale;
+		}
+		VR->Settings->bCompassLocked=true; VR->BeginPanelEdit("Compass",false,true);
+		TestEqual(TEXT("Locked compass rejects resize"),VR->PanelEditHand,INDEX_NONE);
+		VR->Settings->bVitalsLocked=true; VR->Settings->bMenuLocked=true; VR->Settings->bOptionsLocked=true;
+		VR->bInventoryOpen=MenuBeforePlacement; VR->UpdatePanels();
+		// The menu toolbar is clickable independently of the retail canvas.
+		VR->MenuControlsPanel->SetRedrawTime(0); VR->MenuControlsPanel->RequestRedraw();
+		VR->MenuControlsPanel->TickComponent(.016f,LEVELTICK_All,nullptr); FlushRenderingCommands();
+		PointAt(VR->MenuControlsPanel,FVector2D(240,24)); VR->Trigger(false,true); VR->Trigger(false,false);
+		TestFalse(TEXT("Menu toolbar unlock works through the controller"),VR->Settings->bMenuLocked);
+		PointAt(VR->MenuControlsPanel,FVector2D(400,24)); VR->Trigger(false,true);
+		TestTrue(TEXT("Unlocked menu resize button begins placement"),VR->EditingPanel=="Menu" && VR->bPanelResize);
+		VR->Trigger(false,false); TestEqual(TEXT("Trigger release ends resizing"),VR->PanelEditHand,INDEX_NONE);
+		VR->Settings->bPinMenuToView=true; VR->UpdatePanels();
+		const FVector OriginalMenuOffset=VR->Settings->MenuViewOffset;
+		PointAt(VR->MenuControlsPanel,FVector2D(60,24)); VR->Trigger(false,true);
+		VR->RightAim->AddWorldOffset(VR->Head->GetRightVector()*8); VR->UpdatePanels();
+		TestTrue(TEXT("Head anchored menu can be repositioned"),VR->Settings->MenuViewOffset.Y>OriginalMenuOffset.Y+7);
+		VR->Trigger(false,false); VR->Settings->MenuViewOffset=OriginalMenuOffset;
+		VR->Settings->bPinMenuToView=false; VR->PositionPanel(VR->RetailPanel); VR->UpdatePanels();
+		PointAt(VR->MenuControlsPanel,FVector2D(400,24)); VR->Trigger(false,true);
+		VR->bInventoryOpen=false; VR->UpdatePanels();
+		TestEqual(TEXT("Hiding a menu ends its active resize"),VR->PanelEditHand,INDEX_NONE);
+		VR->Trigger(false,false); VR->bInventoryOpen=MenuBeforePlacement; VR->UpdatePanels();
+		PointAt(VR->MenuControlsPanel,FVector2D(240,24)); VR->Trigger(false,true); VR->Trigger(false,false);
+		TestTrue(TEXT("Menu toolbar relocks placement"),VR->Settings->bMenuLocked);
+		VR->NativeCompass->UpdateHeading(179,1.f,true);
+		const float OldAngle=VR->NativeCompass->NorthAngle;
+		VR->NativeCompass->UpdateHeading(-179,1.f/90.f);
+		TestTrue(TEXT("Compass crosses north using shortest rotation"),FMath::Abs(FMath::FindDeltaAngleRadians(OldAngle,VR->NativeCompass->NorthAngle))<FMath::DegreesToRadians(2.f));
+		VR->NextNativeHUDUpdate=FPlatformTime::Seconds()+60.;
+		const float BeforeHeading=VR->NativeCompass->NorthAngle; VR->Head->AddWorldRotation(FRotator(0,20,0)); VR->UpdateNativeHUD(true);
+		TestFalse(TEXT("Compass heading updates between object scans"),FMath::IsNearlyEqual(BeforeHeading,VR->NativeCompass->NorthAngle));
+		FACEVRRadarMarker NorthMarker; NorthMarker.Point=FVector2f(300,200);
+		VR->NativeCompass->UpdateHeading(90,1.f,true);
+		TestTrue(TEXT("North radar blip rotates with labels and click targets"),VR->NativeCompass->MarkerPoint(NorthMarker).Equals(FVector2f(200,100),.01f));
+		VR->Head->SetWorldTransform(OldHead); VR->NextNativeHUDUpdate=0; VR->bCompassAnchorReady=false; VR->bVitalsAnchorReady=false; VR->UpdatePanels();
 		// Put settings directly behind the retail inventory and verify the top
 		// visual layer also receives the controller, independent of distance.
 		const FTransform SettingsBefore = VR->SettingsPanel->GetComponentTransform();
@@ -2160,29 +2351,47 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 	}
 	{
 		VR->Settings->bShowCompass=true;VR->Settings->bPinVitalsToView=true;
+		VR->bInventoryOpen=false;VR->bSettingsOpen=false;VR->bKeyboardOpen=false;
+		VR->Settings->bPinChatToView=false;VR->Settings->bShowWristSpellBar=false;PC->bJumpCharging=false;
+		++GFrameCounter;VR->UpdatePanels();
+		TestFalse(TEXT("Native-only HUD does not redraw the closed desktop canvas"),VR->RetailPanel->IsVisible() || VR->RetailPanel->IsComponentTickEnabled());
+		VR->bInventoryOpen=true;VR->UpdatePanels();
+		TestTrue(TEXT("Opening inventory restores desktop rendering and interactions"),VR->RetailPanel->IsVisible() && VR->RetailPanel->IsComponentTickEnabled() && VR->RetailPanel->GetCollisionEnabled()==ECollisionEnabled::QueryOnly);
+		VR->bInventoryOpen=false;VR->Settings->bPinChatToView=true;VR->UpdatePanels();
+		TestTrue(TEXT("Pinned chat retains its retail render source"),VR->RetailPanel->IsVisible() && VR->RetailPanel->IsComponentTickEnabled());
+		VR->Settings->bPinChatToView=false;VR->UpdatePanels();
+		VR->Settings->bShowFellowship=true;
 		VR->NextNativeHUDUpdate=0;VR->UpdateNativeHUD(true);
 		TestTrue(TEXT("Native compass is independent of the desktop canvas"),VR->CompassPanel->IsVisible() && VR->NativeCompass.IsValid());
 		TestTrue(TEXT("Native vitals use Slate instead of a desktop crop"),VR->VitalsPanel->IsVisible() && VR->NativeVitals.IsValid() && VR->VitalsPanel->GetWidget()==nullptr);
+		TestTrue(TEXT("Native fellowship subscribes while visible"),VR->FellowshipPanel->IsVisible() && VR->NativeFellowship.IsValid() && VR->Client->bVRFellowshipUpdates);
+		VR->Settings->bShowFellowship=false;VR->UpdateNativeHUD(true);
+		TestFalse(TEXT("Hidden fellowship releases updates and ticking"),VR->Client->bVRFellowshipUpdates || VR->FellowshipPanel->IsComponentTickEnabled());
 		VR->Settings->bShowCompass=false;VR->Settings->bPinVitalsToView=false;VR->UpdateNativeHUD(true);
 		TestFalse(TEXT("Hidden compass stops ticking"),VR->CompassPanel->IsComponentTickEnabled());
 		TestFalse(TEXT("Hidden vitals cannot intercept controls"),VR->VitalsPanel->GetCollisionEnabled()!=ECollisionEnabled::NoCollision);
 		FACEPlayerVitals V;V.bValid=true;V.Health=275;V.MaxHealth=400;V.Stamina=310;V.MaxStamina=450;V.Mana=500;V.MaxMana=600;
-		VR->NativeVitals->Refresh(V);
+		VR->Settings->bVitalsLocked=false; VR->Settings->bCompassLocked=false;
+		VR->NativeVitals->Refresh(V); VR->NativeCompass->UpdateHeading(30,.016f,true);
 		VR->NativeCompass->Coordinates=TEXT("33.6S, 72.8E");
 		VR->NativeCompass->Markers={{{160,120},FLinearColor::Yellow,1,0,true},{{245,180},FLinearColor::Green,2,0,false},{{275,250},FLinearColor::Red,3,1,false}};
+		FACEFellowshipInfo Fellow;Fellow.bValid=true;Fellow.Name=TEXT("Adventurers of Dereth");Fellow.bOpen=true;Fellow.bEvenShare=true;Fellow.LeaderGuid=100;
+		for(int32 I=0;I<9;++I){FACEFellowshipMember M;M.Guid=100+I;M.Name=FString::Printf(TEXT("Adventurer %d"),I+1);M.Level=275;M.HealthCur=275-I*20;M.HealthMax=400;M.StaminaCur=310;M.StaminaMax=450;M.ManaCur=500;M.ManaMax=600;Fellow.Members.Add(M);}
+		TestTrue(TEXT("Fellowship roster updates native HUD"),VR->NativeFellowship->Refresh(Fellow,101));
+		TestFalse(TEXT("Unchanged fellowship data avoids repainting"),VR->NativeFellowship->Refresh(Fellow,101));
 		if(FApp::CanEverRender())
 		{
 			FWidgetRenderer Renderer(true,true);
 			const FString Directory=FPaths::ProjectSavedDir()/TEXT("Automation/VR");IFileManager::Get().MakeDirectory(*Directory,true);
-			for(int I=0;I<2;++I)
+			for(int I=0;I<3;++I)
 			{
-				const TSharedRef<SWidget> Widget=I==0?StaticCastSharedRef<SWidget>(VR->NativeVitals.ToSharedRef()):StaticCastSharedRef<SWidget>(VR->NativeCompass.ToSharedRef());
-				const FIntPoint Size=I==0?FIntPoint(480,240):FIntPoint(400,460);
+				const TSharedRef<SWidget> Widget=I==0?StaticCastSharedRef<SWidget>(VR->NativeVitals.ToSharedRef()):I==1?StaticCastSharedRef<SWidget>(VR->NativeCompass.ToSharedRef()):StaticCastSharedRef<SWidget>(VR->NativeFellowship.ToSharedRef());
+				const FIntPoint Size=I==0?FIntPoint(480,240):I==1?FIntPoint(400,500):FIntPoint(480,760);
 				auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(Size),TF_Bilinear,true);
 				for(int Pass=0;Pass<3;++Pass){Renderer.DrawWidget(Target,Widget,FVector2D(Size),0);FlushRenderingCommands();}
 				TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
 				TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(Size.X,Size.Y,Pixels,PNG);
-				FFileHelper::SaveArrayToFile(PNG,*(Directory/(I==0?TEXT("NativeVitals.png"):TEXT("NativeCompass.png"))));
+				FFileHelper::SaveArrayToFile(PNG,*(Directory/(I==0?TEXT("NativeVitals.png"):I==1?TEXT("NativeCompass.png"):TEXT("NativeFellowship.png"))));
 			}
 		}
 	}

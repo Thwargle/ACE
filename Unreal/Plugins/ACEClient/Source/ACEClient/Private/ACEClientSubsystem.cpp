@@ -897,7 +897,15 @@ void UACEClientSubsystem::SendFellowshipRecruit(int32 PlayerGuid)
 
 void UACEClientSubsystem::SendFellowshipUpdateRequest(bool bPanelOpen)
 {
-	if (Session) { Session->SendFellowshipUpdateRequest(bPanelOpen); }
+	bRetailFellowshipUpdates=bPanelOpen;
+	if (Session) { Session->SendFellowshipUpdateRequest(bPanelOpen || bVRFellowshipUpdates); }
+}
+
+void UACEClientSubsystem::SetVRFellowshipUpdates(bool bEnabled)
+{
+	if (bVRFellowshipUpdates==bEnabled) return;
+	bVRFellowshipUpdates=bEnabled;
+	if (Session) Session->SendFellowshipUpdateRequest(bEnabled || bRetailFellowshipUpdates);
 }
 
 void UACEClientSubsystem::SendFellowshipAssignNewLeader(int32 MemberGuid)
@@ -1175,6 +1183,16 @@ TArray<FACEActiveEnchantment> UACEClientSubsystem::GetActiveEnchantments() const
 	{
 		Session->GetActiveEnchantments(Out);
 	}
+	// Retail CEnchantmentRegistry::UpdateSpellTotals classifies by SpellBase's
+	// beneficial bit (4), not the optional server StatModType annotation.
+	if (auto* GI = GetGameInstance())
+		if (auto* Dat = GI->GetSubsystem<UACEDatSubsystem>())
+			for (auto& Effect : Out)
+			{
+				uint32 Flags = 0, Target = 0;
+				if (Effect.SpellId < 0x8000 && Dat->TryGetSpellTargeting(Effect.SpellId, Flags, Target))
+					Effect.bBeneficial = (Flags & 4u) != 0;
+			}
 	return Out;
 }
 

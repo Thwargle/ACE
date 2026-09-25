@@ -391,6 +391,8 @@ public:
 	const TArray<FACEWorldObject>& GetVendorMerchandise() const { return VendorMerchandise; }
 	float GetVendorBuyRate() const { return VendorBuyRate; }
 	float GetVendorSellRate() const { return VendorSellRate; }
+	FString GetVendorCurrencyName() const { return VendorCurrencyName; }
+	int32 GetVendorCurrencyCount() const { return VendorCurrencyCount; }
 	bool CanVendorBuyItem(const FACEWorldObject& Item) const;
 
 	/** GameAction AddSpellFavorite (0x01E3) — place SpellId at BarIndex slot SlotIndex. Local bars update immediately. */
@@ -522,12 +524,13 @@ public:
 	bool GetVRPose(int32 Guid, FACEVRPose& Pose) const;
 	void SendCancelAttack();
 	bool SupportsVRCombat() const { return (VRCapabilities & 7u) == 7u; }
+	bool SupportsVRCombatPower() const { return (VRCapabilities & 65536u) != 0; }
 	bool SupportsVRUnarmed() const { return SupportsVRCombat() && (VRCapabilities & 128u) != 0; }
 	float GetVRMissileSpeed(int32 Weapon) const { return Weapon == VRMissileWeapon ? VRMissileSpeed : 0.f; }
 	bool GetVRSpellProfile(int32 Spell, float& Speed, bool& Gravity, float* Radius = nullptr) const;
 	void RequestVRSpellProfile(int32 Spell);
 	bool SendVRCombat(uint32 Kind, uint32 Cell, int32 Weapon, int32 Subject, int32 Target,
-		const FVector& OriginAc, const FVector& DirectionOrEndAc, float Amount, float Duration);
+		const FVector& OriginAc, const FVector& DirectionOrEndAc, float Amount, float Duration, float RequestedPower = -1.f);
 
 	const TArray<int32>& GetKnownSpells() const { return KnownSpells; }
 	const TArray<int32>& GetSpellBar(int32 BarIndex) const;
@@ -896,6 +899,8 @@ private:
 	/** Vendor BuyPrice (what vendor pays you) / SellPrice (what you pay vendor). */
 	float VendorBuyRate = 1.f;
 	float VendorSellRate = 1.f;
+	FString VendorCurrencyName;
+	int32 VendorCurrencyCount = 0;
 	uint32 VendorItemTypes = MAX_uint32;
 	int32 VendorMinValue = -1;
 	int32 VendorMaxValue = -1;

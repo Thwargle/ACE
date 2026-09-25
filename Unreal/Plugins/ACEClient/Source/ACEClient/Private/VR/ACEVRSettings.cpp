@@ -1,4 +1,5 @@
 #include "VR/ACEVRSettings.h"
+#include "VR/ACEVRInputLayout.h"
 #include "Misc/Paths.h"
 #include "Misc/ConfigCacheIni.h"
 #include "HAL/IConsoleManager.h"
@@ -8,6 +9,20 @@
 bool UACEVRSettings::SupportsMSAASettings()
 {
 	return GetDefaultAntiAliasingMethod(GMaxRHIFeatureLevel) == AAM_MSAA;
+}
+
+FName UACEVRSettings::GetButtonAction(FName Input) const
+{
+	const auto* Bound=ButtonBindings.Find(Input);
+	return Bound && ACEVRInputLayout::IsAction(*Bound) ? *Bound : Input;
+}
+void UACEVRSettings::SetButtonAction(FName Input,FName Action)
+{
+	if (!ACEVRInputLayout::IsAction(Input) || !ACEVRInputLayout::IsAction(Action)) return;
+	const FName Previous=GetButtonAction(Input);
+	for(const auto& B:ACEVRInputLayout::Buttons())
+		if(B.Input!=Input && GetButtonAction(B.Input)==Action){ButtonBindings.Add(B.Input,Previous);break;}
+	ButtonBindings.Add(Input,Action);Persist();
 }
 
 void UACEVRSettings::ApplyEdgeSmoothing() const
@@ -57,13 +72,26 @@ void UACEVRSettings::Sanitize()
 	Clamp(PanelScale, .11f, .05f, .15f);
 	Clamp(WristScale, .06f, .03f, .085f);
 	Clamp(VitalsScale, .0935f, .05f, .18f);
+	Clamp(CompassScale, .065f, .04f, .15f);
+	Clamp(OptionsScale, .1f, .06f, .15f);
 	Clamp(ChatScale, .0715f, .04f, .15f);
 	Clamp(ForwardAssistDegrees, 10.f, 0.f, 20.f);
-	if (VitalsViewOffset.ContainsNaN()) VitalsViewOffset = FVector(100, -24, -22);
-	VitalsAnchorMode = FMath::Clamp(VitalsAnchorMode, 0, 2);
-	VitalsViewOffset.X = FMath::Clamp(VitalsViewOffset.X, 60., 160.);
-	VitalsViewOffset.Y = FMath::Clamp(VitalsViewOffset.Y, -VitalsViewOffset.X * .8, VitalsViewOffset.X * .8);
-	VitalsViewOffset.Z = FMath::Clamp(VitalsViewOffset.Z, -VitalsViewOffset.X * .65, VitalsViewOffset.X * .65);
+	// Placement is a full 3D offset, not a rectangle projected at fixed depth.
+	auto Placement=[](FVector& V, FRotator& R, const FVector& Default)
+	{
+		if (V.ContainsNaN()) V=Default;
+		V=V.GetClampedToSize(35.,350.);
+		if (R.ContainsNaN()) R=FRotator::ZeroRotator;
+		R.Normalize();
+	};
+	Placement(MenuViewOffset,MenuViewRotation,FVector(PanelDistance,0,-10));
+	Placement(CompassViewOffset,CompassViewRotation,FVector(110,38,-16));
+	Placement(VitalsViewOffset,VitalsViewRotation,FVector(100,-24,-22));
+	Placement(FellowshipViewOffset,FellowshipViewRotation,FVector(120,-55,-5));
+	Clamp(FellowshipScale,.07f,.04f,.15f);
+	FellowshipAnchorMode=FMath::Clamp(FellowshipAnchorMode,0,2);
+	CompassAnchorMode=FMath::Clamp(CompassAnchorMode,0,2);
+	VitalsAnchorMode=FMath::Clamp(VitalsAnchorMode,0,2);
 	Clamp(MeleeMinSpeed, 250.f, 250.f, 400.f);
 	Clamp(BowFullDraw, 60.f, 30.f, 90.f);
 	Clamp(BowAnchorOffset, 10.f, 0.f, 20.f);

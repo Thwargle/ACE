@@ -1971,7 +1971,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					const FVector TraceStart(X, Y, TraceTop);
 					const FVector TraceEnd(X, Y, NearFeetZ - MaxDown - 20.f);
 					TArray<FHitResult> Hits;
-					if (!World->LineTraceMultiByChannel(Hits, TraceStart, TraceEnd, MoveChannel, Params))
+					if (!ACEBodySweep::TraceGround(*World, Hits, TraceStart, TraceEnd, Params))
 					{
 						return;
 					}
@@ -2841,7 +2841,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					// caused cliff blink-to-ground.
 					const FVector E(X, Y, FeetZ - SnapStepDownCm - 40.f);
 					TArray<FHitResult> LocalHits;
-					if (!World->LineTraceMultiByChannel(LocalHits, S, E, ECC_Pawn, Params))
+					if (!ACEBodySweep::TraceGround(*World, LocalHits, S, E, Params))
 					{
 						return;
 					}
@@ -3022,6 +3022,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                         // hide its simultaneous ramp contact in a body sweep.
                         if (World->SweepSingleByChannel(Contact,FootCenter,FootCenter-FVector(0,0,.1f),
                             FQuat::Identity,ECC_Pawn,FCollisionShape::MakeSphere(CapsuleRadius),Params)
+                            && !ACEBodySweep::IsCreatureBody(Contact)
                             && Contact.bStartPenetrating && Contact.PenetrationDepth>.05f && Contact.Normal.Z>=.6641741f)
                         {
                             Clamped=ACEBodySweep::Recover(*World,Clamped,Contact.Normal*(Contact.PenetrationDepth+.5f),Contact,BodyShape,Params);
@@ -3032,9 +3033,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                 }
                 if (bHaveGround && GroundZ < FeetZ)
                 {
-                    FHitResult SnapHit;
                     const FVector Center(Desired.X, Desired.Y, FeetZ + CapsuleHalfHeight);
-                    if (bVR)
                     {
                         // A side contact is not a floor. The old single sweep
                         // treated any initial wall overlap as support forever.
@@ -3049,14 +3048,6 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                         // toggled falling on exact end-of-sweep stair contacts.
                         bHaveGround=Snap.bLanded || Snap.Position.Equals(SupportCenter,.01f);
                         Pred.SetLocationFromUnreal(FVector(Desired.X,Desired.Y,GroundZ),WorldScale);
-                    }
-                    else if (World->SweepSingleByChannel(SnapHit, Center,
-                        FVector(Center.X, Center.Y, GroundZ + CapsuleHalfHeight),
-                        FQuat::Identity, ECC_Pawn,
-                        FCollisionShape::MakeCapsule(CapsuleRadius, CapsuleHalfHeight), Params))
-                    {
-                        GroundZ = SnapHit.bStartPenetrating ? FeetZ : SnapHit.Location.Z - CapsuleHalfHeight;
-                        Pred.Location.Z = GroundZ / WorldScale;
                     }
                 }
 			}
@@ -3341,6 +3332,13 @@ void AACEPlayerController::SetCameraInHead(USpringArmComponent* Boom, bool bInHe
 
 void AACEPlayerController::SetCameraLookDown(USpringArmComponent* Boom, bool bLookDown)
 {
+	if (!bLookDown && bCameraMapMode)
+	{
+		bCameraMapMode = false;
+		if (Boom) Boom->bDoCollisionTest = true;
+		if (auto* LP = GetLocalPlayer(); LP && LP->ViewportClient)
+			LP->ViewportClient->EngineShowFlags.SetFog(bMapSavedFog);
+	}
 	if (!Boom)
 	{
 		return;
@@ -3383,12 +3381,32 @@ void AACEPlayerController::SetCameraLookDown(USpringArmComponent* Boom, bool bLo
 	}
 }
 
+void AACEPlayerController::SetCameraMapMode(USpringArmComponent* Boom, bool bMapMode)
+{
+	if (!Boom || bMapMode == bCameraMapMode) return;
+	if (!bMapMode) { SetCameraLookDown(Boom, false); return; }
+	SetCameraLookDown(Boom, true);
+	bCameraMapMode = true;
+	ApplyCameraOffset(Boom, ACECameraRetail::MapOffsetYAc,
+		ACECameraRetail::LookDownOffsetZAc, ACECameraRetail::LookDownPitchDegrees(), true);
+	UserCameraArmLength = Boom->TargetArmLength = -ACECameraRetail::MapOffsetYAc * GetCameraScaleCm();
+	Boom->SocketOffset.Z = ACECameraRetail::LookDownOffsetZAc * GetCameraScaleCm();
+	// Retail's map camera is above the scene and does not retract against trees/roofs.
+	Boom->bDoCollisionTest = false;
+	if (auto* LP = GetLocalPlayer(); LP && LP->ViewportClient)
+	{
+		bMapSavedFog = LP->ViewportClient->EngineShowFlags.Fog;
+		LP->ViewportClient->EngineShowFlags.SetFog(false);
+	}
+}
+
 void AACEPlayerController::ResetCameraToRetailDefaults(USpringArmComponent* Boom)
 {
 	if (!Boom)
 	{
 		return;
 	}
+	if (bCameraMapMode) SetCameraMapMode(Boom, false);
 	if (bCameraLookDown)
 	{
 		bCameraLookDown = false;
@@ -3685,13 +3703,16 @@ void AACEPlayerController::UpdateOrbitCamera(float DeltaTime)
 		SetCameraLookDown(Boom, !bCameraLookDown);
 	}
 	bNumPadThreeWasDown = bThreeDown;
+	const bool bMapDown = ACEInputBindings::Down(this, ACEInputBindings::Action(TEXT("CameraViewMapMode")));
+	if (bMapDown && !bCameraMapWasDown) SetCameraMapMode(Boom, !bCameraMapMode);
+	bCameraMapWasDown = bMapDown;
 
 	UpdateCombatTargetCameraAssist(DeltaTime, Boom);
 }
 
 void AACEPlayerController::SyncUserCameraArmLength(USpringArmComponent* Boom)
 {
-	if (!Boom || bCameraInHead)
+	if (!Boom || bCameraInHead || bCameraMapMode)
 	{
 		return;
 	}
@@ -4101,6 +4122,9 @@ void AACEPlayerController::EnableGameplayViewportShadows()
 void AACEPlayerController::EnsureRetailMouseCursor()
 {
 	if (IsVRActive()) { bShowMouseCursor = false; return; }
+	const float CursorScale = ACERuntimeOptions::Get(TEXT("CursorScale"));
+	if (MouseCursorWidget) MouseCursorWidget->SetCursorScale(CursorScale);
+	for (const auto& Cursor : RetailWindowCursorWidgets) if (Cursor) Cursor->SetCursorScale(CursorScale);
 	if (!IsLocalController() || bRetailCursorInstalled)
 	{
 		return;
@@ -4143,6 +4167,7 @@ void AACEPlayerController::EnsureRetailMouseCursor()
 
 	bShowMouseCursor = true;
 	DefaultMouseCursor = EMouseCursor::Default;
+	MouseCursorWidget->SetCursorScale(CursorScale);
 	CurrentMouseCursor = EMouseCursor::Default;
 	SetMouseCursorWidget(EMouseCursor::Default, MouseCursorWidget);
 	// Let Slate's cursor query select the native window affordance independently
@@ -4160,6 +4185,7 @@ void AACEPlayerController::EnsureRetailMouseCursor()
 		{
 			auto* Widget = CreateWidget<UACEMouseCursorWidget>(this, UACEMouseCursorWidget::StaticClass());
 			if (!Widget) continue;
+			Widget->SetCursorScale(CursorScale);
 			Widget->SetCursorTexture(Texture, UACEMouseCursorWidget::WindowHotspot, UACEMouseCursorWidget::WindowHotspot);
 			SetMouseCursorWidget(Cursor.Key, Widget);
 			RetailWindowCursorWidgets.Add(Widget);

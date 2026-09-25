@@ -6,17 +6,23 @@
 #include "Components/WidgetComponent.h"
 #include "Camera/CameraComponent.h"
 
-void UACEVRComponent::UpdateNativeHUD(bool Available)
+void UACEVRComponent::UpdateNativeHUD(bool Available, float Dt)
 {
 	const auto Show=[](UWidgetComponent* Panel,bool Visible){Panel->SetVisibility(Visible);Panel->SetCollisionEnabled(Visible?ECollisionEnabled::QueryOnly:ECollisionEnabled::NoCollision);};
  const bool VitalsVisible=Available && Settings->bPinVitalsToView;
  const bool CompassVisible=Available && Settings->bShowCompass;
- const bool NewlyVisible=(VitalsVisible && !VitalsPanel->IsVisible()) || (CompassVisible && !CompassPanel->IsVisible());
+ const bool FellowVisible=Available && Settings->bShowFellowship;
+ Client->SetVRFellowshipUpdates(FellowVisible);
+ const bool NewlyVisible=(VitalsVisible && !VitalsPanel->IsVisible()) || (CompassVisible && !CompassPanel->IsVisible()) || (FellowVisible && !FellowshipPanel->IsVisible());
+ Show(FellowshipPanel,FellowVisible);FellowshipPanel->SetComponentTickEnabled(FellowVisible);
  Show(VitalsPanel,VitalsVisible);Show(CompassPanel,CompassVisible);
  VitalsPanel->SetComponentTickEnabled(VitalsVisible);CompassPanel->SetComponentTickEnabled(CompassVisible);
+ // Heading follows the render cadence; only object scanning is throttled to 10Hz.
+ if(CompassVisible && NativeCompass && NativeCompass->UpdateHeading(Head->GetComponentRotation().Yaw,Dt,NewlyVisible))CompassPanel->RequestRedraw();
  const double Now=FPlatformTime::Seconds();
- if((!VitalsVisible && !CompassVisible) || (!NewlyVisible && Now<NextNativeHUDUpdate))return;
+ if((!VitalsVisible && !CompassVisible && !FellowVisible) || (!NewlyVisible && Now<NextNativeHUDUpdate))return;
  NextNativeHUDUpdate=Now+.1;
+ if(FellowVisible && NativeFellowship && (NativeFellowship->Refresh(Client->GetFellowship(),Client->GetSelectedObject().Guid) || NewlyVisible))FellowshipPanel->RequestRedraw();
  if(VitalsVisible && NativeVitals && (NativeVitals->Refresh(Client->GetPlayerVitals()) || NewlyVisible))VitalsPanel->RequestRedraw();
  if(!CompassVisible || !NativeCompass || !Client->GetSession())return;
  // Read the live object map without allocating/copying every world object.
@@ -24,11 +30,9 @@ void UACEVRComponent::UpdateNativeHUD(bool Available)
  const auto Session=Client->GetSession();
  const FACEPosition Self=PC->bHavePredictedPose?PC->PredictedPose:Session->GetPlayerPosition();
  const FVector Feet=Self.ToUnrealLocation(PC->WorldScale);
- const FQuat Facing=FRotator(0,Head->GetComponentRotation().Yaw,0).Quaternion();
- const FVector North=Facing.UnrotateVector(FVector(0,1,0));
- NativeCompass->NorthAngle=FMath::Atan2(North.Y,North.X);
- NativeCompass->Coordinates=UACEUIGameplayBinder::FormatMapCoords(Self);
- if(NativeCompass->Coordinates.IsEmpty())NativeCompass->Coordinates=FString::Printf(TEXT("Cell %08X  %.0f, %.0f"),uint32(Self.CellId),Self.Location.X,Self.Location.Y);
+ // Indoor cells retain their landblock-relative position. Changing cell at a
+ // doorway must not replace geographic coordinates with a debug cell address.
+ NativeCompass->Coordinates=UACEUIGameplayBinder::FormatMapCoords(Self,true);
  NativeCompass->Markers.Reset();
  struct FCandidate {const FACEWorldObject* Object;FVector Delta;double Distance;};
  TArray<FCandidate,TInlineAllocator<64>> Nearby;
@@ -49,7 +53,7 @@ void UACEVRComponent::UpdateNativeHUD(bool Available)
  }
  for(const auto& C:Nearby)
  {
-  const FVector Local=Facing.UnrotateVector(C.Delta);
+  const FVector Local=C.Delta; // Store world bearing; heading rotates cached blips during painting/picking.
   FACEVRRadarMarker M;M.Point={200+float(Local.Y)*2.6f,200-float(Local.X)*2.6f};M.Guid=C.Object->Guid;
   M.Color=UACEUIGameplayBinder::ColorFromRadarBlip(UACEUIGameplayBinder::ResolveRadarColor(*C.Object));
   M.Selected=M.Guid==Selected;M.Height=C.Delta.Z>3?1:C.Delta.Z<-3?-1:0;

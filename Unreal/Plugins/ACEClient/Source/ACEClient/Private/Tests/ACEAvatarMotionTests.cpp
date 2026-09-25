@@ -12,6 +12,7 @@
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
+#include "HAL/IConsoleManager.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEAvatarMotionTest,"ACE.RetailParity.AvatarMotion",
  EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
@@ -30,6 +31,47 @@ bool FACEAvatarMotionTest::RunTest(const FString&)
  auto* Actor=World->SpawnActor<AACEWorldEntityActor>();Actor->InitializeFromObject(Obj,100,false);
  auto* App=Actor->Appearance.Get();
  if(!TestTrue(TEXT("Retail avatar geometry builds"),App->ApplyWorldObject(Obj,100,false)))return false;
+ {
+  auto* Reuse=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Animation.ReusePoseBuffers"));
+  const int32 OldReuse=Reuse->GetInt();ON_SCOPE_EXIT{Reuse->Set(OldReuse,ECVF_SetByCode);};
+  TArray<FTransform> Reference;
+  for(int32 Variant:{0,1})
+  {
+   Reuse->Set(Variant,ECVF_SetByCode);
+   auto* Sample=World->SpawnActor<AACEWorldEntityActor>();Sample->InitializeFromObject(Obj,100,false);
+   auto* Animation=Sample->Appearance.Get();
+   if(!TestTrue(TEXT("Pose allocation comparison uses a real loaded avatar"),Animation->ApplyWorldObject(Obj,100,false) && Animation->GetPartCount()>0))return false;
+   Animation->SetLocomotionInput(1,0,true,1);
+   for(int32 Frame=0;Frame<90;++Frame)
+   {
+    Animation->TickComponent(1.f/90.f,LEVELTICK_All,nullptr);
+    for(int32 Part=0;Part<Animation->GetPartCount();++Part)
+    {
+     const FTransform Pose=Animation->GetPartMesh(Part)->GetRelativeTransform();
+     if(Variant==0) Reference.Add(Pose);
+     else TestTrue(TEXT("Reused pose storage preserves each rendered part on every frame"),Pose.Equals(Reference[Frame*Animation->GetPartCount()+Part],.00001));
+    }
+   }
+   if(Variant==1)
+   {
+    const auto* Storage=Animation->TickPoseScratch.GetData();
+    for(int32 Frame=0;Frame<90;++Frame) Animation->TickComponent(1.f/90.f,LEVELTICK_All,nullptr);
+    TestNotNull(TEXT("Warm animation retains its pose allocation"),Storage);
+    TestTrue(TEXT("Steady animation reuses the same allocation across frames"),Storage==Animation->TickPoseScratch.GetData());
+   }
+   Sample->Destroy();
+  }
+ }
+ {
+  auto* Part=Cast<UProceduralMeshComponent>(App->GetPartMesh(9));Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+  const auto Original=Part->GetRelativeTransform();auto Moved=Original;Moved.AddToTranslation(FVector(0,0,5));
+  Actor->SetActorHiddenInGame(true);App->ApplyPartTransform(9,Moved);
+  TestTrue(TEXT("Hidden non-colliding parts avoid render transform updates"),Part->GetRelativeTransform().Equals(Original));
+  Part->SetCollisionEnabled(ECollisionEnabled::QueryOnly);App->ApplyPartTransform(9,Moved);
+  TestTrue(TEXT("Hidden collision geometry continues to follow its animation"),Part->GetRelativeTransform().Equals(Moved));
+  Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);Actor->SetActorHiddenInGame(false);App->ApplyPartTransform(9,Original);
+  TestTrue(TEXT("Visible parts immediately accept the current pose"),Part->GetRelativeTransform().Equals(Original));
+ }
  for(uint32 Setup:{0x02000001u,0x0200004eu})for(float Dt:{1.f/90,1.f/30})
  {
   Obj.SetupId=Setup;App->bVRPoseControlled=false;
