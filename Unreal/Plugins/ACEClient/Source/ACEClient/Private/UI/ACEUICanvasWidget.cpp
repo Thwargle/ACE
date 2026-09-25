@@ -135,6 +135,7 @@ TSharedRef<SWidget> UACEUICanvasWidget::RebuildWidget()
 	}
 
 	ImageWidgets.Reset();
+	WindowInputShields.Reset();
 	PaintStates.Reset();
 	return Super::RebuildWidget();
 }
@@ -310,6 +311,7 @@ void UACEUICanvasWidget::SyncElementWidgets()
 	{
 		return;
 	}
+	SyncWindowInputShields();
 
 	TSet<uint32>& UsedIds = UsedIdsScratch;
 	UsedIds.Reset();
@@ -797,6 +799,46 @@ FReply UACEUICanvasWidget::NativeOnMouseMove(const FGeometry& InGeometry, const 
 		Manager->NotifyMouseMove(Local, ViewportSize);
 	}
 	return FReply::Unhandled();
+}
+
+void UACEUICanvasWidget::SyncWindowInputShields()
+{
+	// DAT art is HitTestInvisible, whereas chat uses native selectable text.
+	// A model-only occlusion check cannot stop Slate focusing that text before
+	// the click bubbles to this canvas. Give every visible window its own surface.
+	TSet<uint32, DefaultKeyFuncs<uint32>, TInlineSetAllocator<32>> Used;
+	const auto Synthetic = Manager->GetSyntheticRoot();
+	if (Synthetic) for (const auto& Root : Synthetic->Children)
+	{
+		if (!Root || !Root->IsPaintVisible() || Root->ElementName != TEXT("RootGameplay_Field")) continue;
+		for (const auto& Window : Root->Children)
+		{
+			if (!Window || !Window->IsPaintVisible() || WindowPaintBase(Window)==0) continue;
+			const auto Bounds = Window->ElementName==TEXT("RootGameplay_Keyboard_Field")
+				? Manager->FindElementUnder(Window->ElementName,TEXT("KeyboardFrame")) : Window;
+			if (!Bounds || Bounds->Width<=0 || Bounds->Height<=0) continue;
+			Used.Add(Window->InstanceId);
+			auto& Shield = WindowInputShields.FindOrAdd(Window->InstanceId);
+			if (!Shield)
+			{
+				Shield=WidgetTree->ConstructWidget<UBorder>();
+				FSlateBrush Brush; Brush.DrawAs=ESlateBrushDrawType::NoDrawType;
+				Shield->SetBrush(Brush);
+				Shield->SetVisibility(ESlateVisibility::Visible);
+				ElementLayer->AddChild(Shield);
+			}
+			const FIntPoint Origin=Bounds->GetScreenOrigin();
+			auto* ShieldSlot=CastChecked<UCanvasPanelSlot>(Shield->Slot);
+			const FVector2D Position(Origin.X*LastScaleX,Origin.Y*LastScaleY);
+			const FVector2D Size(Bounds->Width*LastScaleX,Bounds->Height*LastScaleY);
+			if (ShieldSlot->GetPosition()!=Position) ShieldSlot->SetPosition(Position);
+			if (ShieldSlot->GetSize()!=Size) ShieldSlot->SetSize(Size);
+			const int32 Order=WindowPaintBase(Window);
+			if (ShieldSlot->GetZOrder()!=Order) ShieldSlot->SetZOrder(Order);
+		}
+	}
+	for (auto It=WindowInputShields.CreateIterator(); It; ++It)
+		if (!Used.Contains(It.Key())) { It.Value()->RemoveFromParent(); It.RemoveCurrent(); }
 }
 
 FCursorReply UACEUICanvasWidget::NativeOnCursorQuery(const FGeometry& Geometry, const FPointerEvent& Event)

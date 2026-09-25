@@ -45,10 +45,12 @@ bool FACESetupMeshBuilder::LoadGfxObj(uint32 GfxObjId, FACEDatGfxObj& Out)
 		if (Ok && Id == Parsed.DIDDegrade && Count > 0 && Count <= static_cast<uint32>(Degrade.Remaining() / 20))
 		{
 			float MaxDistance = 0.f;
+			uint32 CloseModel = GfxObjId;
 			for (uint32 Index = 0; Index < Count; ++Index)
 			{
 				const uint32 Model = Degrade.ReadU32(Ok);
 				const uint32 Mode = Degrade.ReadU32(Ok);
+				if (Index == 0) CloseModel = Model;
 				if (Index == 0 && Mode >= 1 && Mode <= 5) Parsed.DrawMode = Mode;
 				Degrade.ReadF32(Ok); Degrade.ReadF32(Ok); // minimum / ideal
 				const float Max = Degrade.ReadF32(Ok);
@@ -57,6 +59,28 @@ bool FACESetupMeshBuilder::LoadGfxObj(uint32 GfxObjId, FACEDatGfxObj& Out)
 				if (Index == (Count <= 2 ? 0u : Count - 2) && FMath::IsFinite(Max))
 					Parsed.MaxDegradeDistance = FMath::Max(0.f, Max);
 				if (Model) MaxDistance = FMath::Max(MaxDistance, Max);
+			}
+			// CPhysicsPart::LoadGfxObjArray uses entry zero for the close-up
+			// model AND physics. The root DID can name a coarser mesh (e.g.
+			// scale armor 0100120D -> 01001868), not the highest-detail mesh.
+			// Read that entry directly: its own degrade table may point back
+			// to this same table, so resolving recursively would loop.
+			if (Ok && CloseModel && CloseModel != GfxObjId)
+			{
+				TArray<uint8> CloseBlob;
+				if ((Portal && Portal->ReadFile(CloseModel, CloseBlob))
+					|| (HighRes && HighRes->ReadFile(CloseModel, CloseBlob)))
+				{
+					FACEDatCursor CloseCursor(CloseBlob);
+					FACEDatGfxObj Close;
+					if (ACEDatUnpack::UnpackGfxObj(CloseCursor, Close))
+					{
+						Close.DIDDegrade = Parsed.DIDDegrade;
+						Close.DrawMode = Parsed.DrawMode;
+						Close.MaxDegradeDistance = Parsed.MaxDegradeDistance;
+						Parsed = MoveTemp(Close);
+					}
+				}
 			}
 			if (Ok && MaxDistance <= 0.f) Parsed.Polygons.Reset();
 		}

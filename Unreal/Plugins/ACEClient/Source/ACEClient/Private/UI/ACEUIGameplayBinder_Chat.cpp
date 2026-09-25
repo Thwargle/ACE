@@ -836,7 +836,7 @@ void UACEUIGameplayBinder::RefreshChatTargetPopup()
 	const auto Selection=Client ? Client->GetSelectedObject() : FACESelectedObject();
 	FACEWorldObject Selected;
 	const bool bTalkable=Client && Selection.bValid && Client->GetWorldObject(Selection.Guid,Selected)
-		&& Selected.bIsPlayer && Selected.Guid!=Client->GetPlayerGuid();
+		&& Selected.ItemType==ACEItemType::Creature && Selected.Guid!=Client->GetPlayerGuid();
 	bool bSquelched=false;
 	if (bTalkable) for (const auto& Entry : Client->GetSquelches()) if (Entry.Guid==Selected.Guid) bSquelched=true;
 	while (ChatTargetPopupRows.Num()<ChatMenuCount)
@@ -931,7 +931,8 @@ bool UACEUIGameplayBinder::TryHandleChatTargetPopupClick(FVector2D Absolute)
 			if (Channel==-1 && Client)
 			{
 				const auto Selection=Client->GetSelectedObject(); FACEWorldObject Selected;
-				if (Selection.bValid && Client->GetWorldObject(Selection.Guid,Selected) && Selected.bIsPlayer)
+				if (Selection.bValid && Client->GetWorldObject(Selection.Guid,Selected)
+					&& Selected.ItemType==ACEItemType::Creature && Selected.Guid!=Client->GetPlayerGuid())
 				{
 					bool bSquelched=false;
 					for (const auto& Entry : Client->GetSquelches()) if (Entry.Guid==Selected.Guid) bSquelched=true;

@@ -1847,9 +1847,11 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 		{
 			const int32 Index = Slot - 1 + (bSecondRow ? 9 : 0);
 			const int32 Guid = Client ? Client->GetShortcutObject(Index) : 0;
+			// Retail executes the target cursor before normal shortcut selection.
+			if (TryCompletePendingUseWithTarget(Guid)) return true;
 			const double Now = FPlatformTime::Seconds();
 			const bool bDouble = Guid != 0 && Guid == LastInvClickGuid && Now - LastInvClickTime < InventoryDoubleClickSeconds();
-			SelectInventoryGuid(Guid);
+			if (!bDouble && !ShouldPreserveShortcutSelection(Guid)) SelectInventoryGuid(Guid);
 			LastInvClickGuid = bDouble ? 0 : Guid;
 			LastInvClickTime = bDouble ? 0.0 : Now;
 			if (bDouble) UseShortcutSlot(Index + 1);
@@ -3145,6 +3147,7 @@ bool UACEUIGameplayBinder::TryBeginSpellDrag(FVector2D CanvasLocalPos)
 	SpellDragId = SpellId;
 	SpellDragIconDid = static_cast<int32>(IconDid);
 	SpellDragSourceBarSlot = SourceSlot;
+	SpellDragSourceBar = Client->GetActiveSpellBar();
 	SpellDragStartLocal = CanvasLocalPos;
 	bSpellDragPending = true;
 	bSpellDragActive = false;
@@ -3183,6 +3186,15 @@ void UACEUIGameplayBinder::UpdateSpellDrag(FVector2D CanvasLocalPos)
 		}
 		bSpellDragActive = true;
 		LastSpellbookClickId = 0;
+		LastSpellClickId = 0;
+		LastSpellClickSlot = INDEX_NONE;
+		// gmSpellcastingUI::RecvNotice_ItemListBeginDrag removes the favorite
+		// immediately. The remaining spells slide left; dropping inserts anew.
+		if (SpellDragSourceBarSlot != INDEX_NONE)
+		{
+			Client->SendRemoveSpellFromBar(SpellDragId, SpellDragSourceBar);
+			RefreshSpellHotbarOverlays();
+		}
 	}
 	if (!SpellDragIcon)
 	{
@@ -3204,6 +3216,33 @@ void UACEUIGameplayBinder::UpdateSpellDrag(FVector2D CanvasLocalPos)
 		Slot->SetPosition(CanvasLocalPos - FVector2D(16.f, 16.f));
 		Slot->SetSize(FVector2D(32.f, 32.f));
 		Canvas->SetOverlayOrder(SpellDragIcon, nullptr, 250000);
+	}
+	if (!SpellDropMarker)
+	{
+		SpellDropMarker = Canvas->WidgetTree->ConstructWidget<UBorder>();
+		SpellDropMarker->SetPadding(FMargin(0));
+		Canvas->GetElementLayer()->AddChild(SpellDropMarker);
+		SetIconDid(SpellDropMarker, 0x060011F9); // ItemSlot_DragOver_Accept
+	}
+	SpellDropMarker->SetVisibility(ESlateVisibility::Collapsed);
+	int32 HoverSlot = INDEX_NONE;
+	const FVector2D Absolute = Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos);
+	if (HitTestSpellBarSlot(Absolute, HoverSlot))
+	{
+		const auto Bar = Client->GetSpellBar(Client->GetActiveSpellBar());
+		const int32 Empty = Bar.Find(0);
+		const int32 Count = Empty == INDEX_NONE ? Bar.Num() : Empty;
+		const int32 InsertSlot = FMath::Min(HoverSlot + SpellHotbarScrollOffset, Count) - SpellHotbarScrollOffset;
+		if (SpellBarSlotBgs.IsValidIndex(InsertSlot))
+		{
+			const auto* TargetSlot = Cast<UCanvasPanelSlot>(SpellBarSlotBgs[InsertSlot]->Slot);
+			if (auto* Slot = Cast<UCanvasPanelSlot>(SpellDropMarker->Slot); Slot && TargetSlot)
+			{
+				Slot->SetPosition(TargetSlot->GetPosition()); Slot->SetSize(TargetSlot->GetSize());
+				Canvas->SetOverlayOrder(SpellDropMarker, Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field")), 590);
+				SpellDropMarker->SetVisibility(ESlateVisibility::HitTestInvisible);
+			}
+		}
 	}
 }
 
@@ -3282,28 +3321,7 @@ bool UACEUIGameplayBinder::TryFinishSpellDrag(FVector2D CanvasLocalPos)
 		return true;
 	}
 
-	// Dropped off the bar (or back onto spellbook) while dragging from the bar → remove.
-	if (SourceSlot != INDEX_NONE)
-	{
-		const bool bOverSpellbook = ActivePanelPage == TEXT("SpellManagementPanel_Field")
-			&& ActiveSpellPanelTab == TEXT("SpellbookPage");
-		TSharedPtr<FACEUIElement> CombatRoot = Manager
-			? Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field"))
-			: nullptr;
-		bool bOverCombatBar = false;
-		if (CombatRoot.IsValid() && CombatRoot->bVisible)
-		{
-			const FIntPoint O = CombatRoot->GetScreenOrigin();
-			bOverCombatBar = CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
-				&& CanvasLocalPos.X < O.X + CombatRoot->Width
-				&& CanvasLocalPos.Y < O.Y + CombatRoot->Height;
-		}
-		if (bOverSpellbook || !bOverCombatBar)
-		{
-			Client->SendRemoveSpellFromBar(SpellId, Client->GetActiveSpellBar());
-			RefreshSpellHotbarOverlays();
-		}
-	}
+	// A favorite was removed at drag start, matching retail's off-bar drop.
 	return true;
 }
 
@@ -3421,6 +3439,21 @@ void UACEUIGameplayBinder::UseShortcutSlot(int32 SlotIndex1Based)
 		// Same as inventory double-click: wield weapons/armor, Use gems/food/etc.
 		UseInventoryItem(Guid);
 	}
+}
+
+bool UACEUIGameplayBinder::ShouldPreserveShortcutSelection(int32 Guid) const
+{
+	if (PendingUseWithSourceGuid) return true;
+	if (!Client || CombatMode == int32(ACECombatMode::NonCombat)) return false;
+	const auto Session = Client->GetSession();
+	if (!Session) return false;
+	const auto* Target = Session->GetWorldObjects().Find(Client->GetSelectedObject().Guid);
+	const auto* Item = Session->GetWorldObjects().Find(Guid);
+	// The first click of a mouse/controller double-click must also keep the
+	// monster selected while preparing a targeted consumable during combat.
+	// Ordinary selection and right-click inspection retain their normal behavior.
+	return Target && Target->Guid != Client->GetPlayerGuid() && Target->IsAttackable()
+		&& Item && ACEItemUseable::IsTargeted(Item->ItemUseable);
 }
 
 void UACEUIGameplayBinder::ActivateHotbarSlot(int32 SlotIndex)
@@ -3783,9 +3816,10 @@ void UACEUIGameplayBinder::UseInventoryItem(int32 Guid)
 		Client->SendUseItem(Guid);
 		return;
 	}
-	Client->SelectObject(Guid);
-
 	const bool bManaStone = (Obj.ItemType & ACEItemType::ManaStone) != 0;
+	// Use and selection are separate in gmToolbarUI::UseShortcut. In particular,
+	// a kit shortcut followed by the main backpack targets self without replacing
+	// the combat target. Inventory clicks select explicitly before activation.
 	// Completing a pending dual-use: second click on another inventory item.
 	if (PendingUseWithSourceGuid != 0 && PendingUseWithSourceGuid != Guid)
 	{
@@ -4126,8 +4160,10 @@ void UACEUIGameplayBinder::CancelSpellDrag()
 	SpellDragId = 0;
 	SpellDragIconDid = 0;
 	SpellDragSourceBarSlot = INDEX_NONE;
+	SpellDragSourceBar = INDEX_NONE;
 	bSpellDragPending = false;
 	bSpellDragActive = false;
+	if (SpellDropMarker) SpellDropMarker->SetVisibility(ESlateVisibility::Collapsed);
 	if (SpellDragIcon)
 	{
 		SpellDragIcon->SetVisibility(ESlateVisibility::Collapsed);
@@ -4290,7 +4326,7 @@ bool UACEUIGameplayBinder::TryBeginInventoryDrag(FVector2D CanvasLocalPos)
 		bInvDragPending = true;
 		bInvDragActive = false;
 		bInvDoubleClickPending = Guid == LastInvClickGuid && FPlatformTime::Seconds() - LastInvClickTime < InventoryDoubleClickSeconds();
-		SelectInventoryGuid(Guid);
+		if (!bInvDoubleClickPending && !ShouldPreserveShortcutSelection(Guid)) SelectInventoryGuid(Guid);
 		return true;
 	}
 
@@ -4585,20 +4621,28 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 	}
 	const FVector2D Absolute = Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos);
 
-	auto RecordClick = [this, Guid]()
+	auto RecordClick = [this, Guid, ShortcutSource]()
 	{
 		const double Now = FPlatformTime::Seconds();
 		LastInvClickGuid = Guid;
 		LastInvClickTime = Now;
-		SelectInventoryGuid(Guid);
+		if (ShortcutSource == INDEX_NONE || !ShouldPreserveShortcutSelection(Guid)) SelectInventoryGuid(Guid);
 	};
 
 	if (!bWasDragging)
 	{
+		// A shortcut target click (including the main backpack) must not select
+		// the target as a side effect, even if this happens to be a double-click.
+		if (ShortcutSource != INDEX_NONE && TryCompletePendingUseWithTarget(Guid))
+		{
+			LastInvClickGuid = 0;
+			LastInvClickTime = 0.0;
+			return true;
+		}
 		// True double-click (second press released without drag) → Use / wield / arm dual-use.
 		if (bDoubleClick && Guid != 0)
 		{
-			SelectInventoryGuid(Guid);
+			if (ShortcutSource == INDEX_NONE) SelectInventoryGuid(Guid);
 			if (bLootSource)
 			{
 				Client->SendPutItemInContainer(Guid, Client->GetPlayerGuid(), 0);
@@ -6134,7 +6178,7 @@ void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Sele
 				SelectedStackMax=GetVendorPurchaseLimit(Obj.Guid);
 			}
 			SelectedStackAmount=SelectedStackMax<=0 ? 0 : SameStackSelection ? FMath::Clamp(PreviousStackAmount,1,SelectedStackMax)
-				: VendorStock ? 1 : SelectedStackMax;
+				: SelectedStackMax;
 		}
 		// Keep an open examine/inspect panel in sync with the current selection.
 		if (Manager)
@@ -6558,11 +6602,12 @@ bool UACEUIGameplayBinder::TrySendChatFromEntry(const FString* OverrideText, int
 	else if (ChatSendChannel==12)
 	{
 		const auto Selection=Client->GetSelectedObject(); FACEWorldObject Target;
-		if (Selection.bValid && Client->GetWorldObject(Selection.Guid,Target) && Target.bIsPlayer)
+		if (Selection.bValid && Client->GetWorldObject(Selection.Guid,Target)
+			&& Target.ItemType==ACEItemType::Creature && Target.Guid!=Client->GetPlayerGuid())
 		{
 			Client->SendTalkDirect(Target.Guid,Message); LastOutgoingTellName=Target.Name;
 		}
-		else { AppendLocalChatLine(TEXT("Select a player to tell."),ACEChatMessageType::ChatError); return true; }
+		else { AppendLocalChatLine(TEXT("Select a character to tell."),ACEChatMessageType::ChatError); return true; }
 	}
 	else
 	{
@@ -7458,6 +7503,12 @@ bool UACEUIGameplayBinder::IsPointerOverStatList(FVector2D CanvasLocalPos) const
 bool UACEUIGameplayBinder::GetStatTooltipAt(FVector2D Absolute, FString& OutText) const
 {
 	if (GetMapTooltipAt(Absolute, OutText)) return true;
+	if (Canvas && CastSpellLabel && CastSpellLabel->GetVisibility() != ESlateVisibility::Collapsed
+		&& Canvas->IsWidgetExposedAt(CastSpellLabel, Absolute))
+	{
+		OutText = CastSpellLabel->GetToolTipText().ToString();
+		return !OutText.IsEmpty();
+	}
 	if (!Canvas || ActivePanelPage != TEXT("SkillManagementPanel_Field")) return false;
 	const bool Attributes = ActiveSkillTab == TEXT("AttributePage");
 	if (!Attributes && ActiveSkillTab != TEXT("SkillPage")) return false;
@@ -9110,7 +9161,6 @@ void UACEUIGameplayBinder::RefreshSpellHotbarOverlays()
 	constexpr int32 BuiltInW = 32;
 	constexpr int32 BuiltInX = 4;
 	constexpr int32 BankX = 40;
-	constexpr int32 VisibleSlots = 13;
 	
 	constexpr int32 CastW = 75;
 	constexpr int32 GapAfterScroll = 8;
@@ -9123,15 +9173,22 @@ void UACEUIGameplayBinder::RefreshSpellHotbarOverlays()
 		if (BarEarly[i] == 0) { break; }
 		++FilledEarly;
 	}
-	const int32 ListW = VisibleSlots * (Cell + SlotGap) - SlotGap;
+	// Keep a stable frame while arrows appear/disappear, and honor the saved
+	// horizontal drag size. Whole icons fit inside a continuously resized frame.
+	constexpr int32 DefaultWidth = 625;
+	CombatRoot->AuthoredWidth = DefaultWidth;
+	CombatRoot->MinWidth = 400;
+	CombatRoot->MaxWidth = Manager->GetCanvasWidth();
+	const int32 Width = FMath::Clamp(DefaultWidth + CombatRoot->UserResizeW, CombatRoot->MinWidth, CombatRoot->MaxWidth);
+	const int32 ContentW = Width - 10;
+	const int32 ScrollW = ContentW - BankX - GapAfterScroll - CastW - FramePadRight;
+	const int32 ListW = ScrollW - 2 * ArrowW;
+	const int32 VisibleSlots = FMath::Max(1, (ListW + SlotGap) / (Cell + SlotGap));
 	const bool bScrollable = FilledEarly + 1 > VisibleSlots;
     const int32 ScrollArrowW = bScrollable ? ArrowW : 0;
     // The retail item list tiles its entire viewport, independently of its entries.
     // Only favorites plus the end insertion entry contribute to scrolling.
     const int32 MaxSlots = VisibleSlots;
-    const int32 ScrollW = ScrollArrowW * 2 + ListW;
-	// Hug content: BuiltIn | bank/scroll | gap | Cast | pad — not a forced 800-wide void.
-	const int32 ContentW = BankX + ScrollW + GapAfterScroll + CastW + FramePadRight;
 	FitCombatFloatyContentWidth(ContentW);
 	if (TSharedPtr<FACEUIElement> Cast = Manager->FindElementByName(TEXT("CastSpellButton")))
 	{
@@ -9452,6 +9509,13 @@ void UACEUIGameplayBinder::RefreshSpellHotbarOverlays()
 	// Explicit "Cast" label — DAT StripButton has no text layer in UMG.
 	if (TSharedPtr<FACEUIElement> CastEl = Manager->FindElementByName(TEXT("CastSpellButton")))
 	{
+		const int32 SelectedSpell = SelectedCombatSpellSlot < 0 ? BuiltInSpellId
+			: Bar.IsValidIndex(SelectedCombatSpellSlot) ? Bar[SelectedCombatSpellSlot] : 0;
+		const auto Target = Client->GetSelectedObject();
+		int32 ResolvedTarget = 0;
+		const bool bCanCast = Client->ResolveSpellCastTarget(SelectedSpell, Target.bValid ? Target.Guid : 0, ResolvedTarget);
+		CastEl->bActivatable = bCanCast;
+		CastEl->bGhosted = !bCanCast;
 		if (!CastSpellLabel && Canvas->WidgetTree)
 		{
 			CastSpellLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
@@ -9461,7 +9525,11 @@ void UACEUIGameplayBinder::RefreshSpellHotbarOverlays()
 		if (CastSpellLabel)
 		{
 			CastSpellLabel->SetText(FText::FromString(TEXT("Cast")));
-			CastSpellLabel->SetColorAndOpacity(FSlateColor(FLinearColor(0.95f, 0.92f, 0.75f, 1.f)));
+			CastSpellLabel->SetColorAndOpacity(FSlateColor(bCanCast ? FLinearColor(0.95f, 0.92f, 0.75f, 1.f) : FLinearColor(.45f,.45f,.42f,1)));
+			FString Name; uint32 Icon = 0;
+			if (Dat) Dat->TryGetSpellInfo(SelectedSpell, Name, Icon);
+			SetRetailTooltip(CastSpellLabel, FText::FromString(!SelectedSpell ? TEXT("Select a spell to cast")
+				: bCanCast ? TEXT("CAST ") + Name : TEXT("You must select an appropriate target for ") + Name));
 			FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 11);
 			CastSpellLabel->SetFont(Font);
 			CastSpellLabel->SetVisibility(ESlateVisibility::HitTestInvisible);

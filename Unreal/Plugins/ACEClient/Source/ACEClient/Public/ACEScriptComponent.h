@@ -121,6 +121,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ACE|Effects")
 	void PlayAmbientSoundFromTable(int32 SoundTableId, int32 SoundType, float Volume, const FVector& WorldLocation, bool bLoop = false);
 
+	/** Additional gain for this environmental source, including already-playing loops. */
+	void SetEnvironmentSoundGain(float Gain) { EnvironmentSoundGain=FMath::Clamp(Gain,0.f,1.f); }
+
 	/**
 	 * Play a Wave DID directly (e.g. portal-space ambient 0x0A000316). Optional loop for tunnel hold.
 	 */
@@ -390,4 +393,5 @@ private:
 
 	UPROPERTY(Transient)
 	TArray<FActiveAceSound> ActiveSounds;
+	float EnvironmentSoundGain = 1.f;
 };

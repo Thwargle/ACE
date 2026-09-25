@@ -40,7 +40,14 @@ void UACEUIGameplayBinder::SyncSpellTabSelection()
 			bRevealSelectedSpell = true;
 		}
 	}
-	const int32 Clamped = FMath::Clamp(SelectedCombatSpellSlot, -1, FMath::Max(0, Bar.Num()-1));
+	int32 Clamped = FMath::Clamp(SelectedCombatSpellSlot, -1, FMath::Max(0, Bar.Num()-1));
+	if (Clamped >= 0 && (!Bar.IsValidIndex(Clamped) || Bar[Clamped] == 0))
+	{
+		// PlayerModule can pad favorites to 56 entries. Empty storage is not
+		// a selectable spell (including after deleting the selected favorite).
+		Clamped = Bar.IndexOfByPredicate([](int32 Spell) { return Spell != 0; });
+		if (Clamped == INDEX_NONE) Clamped = 0;
+	}
 	if (Clamped != Saved.Slot) bRevealSelectedSpell = true;
 	SelectedCombatSpellSlot = Clamped;
 	const int32 Spell = Bar.IsValidIndex(Clamped) ? Bar[Clamped] : 0;
@@ -84,8 +91,11 @@ void UACEUIGameplayBinder::StepCombatSpellSelection(int32 Direction, bool bFirst
 	if (!Client) return;
 	SyncSpellTabSelection();
 	const auto Bar = Client->GetSpellBar(Client->GetActiveSpellBar());
-	if (Bar.IsEmpty()) return;
-	const int32 Next = bFirst ? 0 : bLast ? Bar.Num()-1 : SelectedCombatSpellSlot < 0
-		? (Direction > 0 ? 0 : Bar.Num()-1) : (SelectedCombatSpellSlot + Direction + Bar.Num()) % Bar.Num();
-	SelectCombatSpellSlot(Next);
+	TArray<int32, TInlineAllocator<64>> Spells;
+	for (int32 I = 0; I < Bar.Num(); ++I) if (Bar[I] != 0) Spells.Add(I);
+	if (Spells.IsEmpty()) return;
+	const int32 Current = Spells.Find(SelectedCombatSpellSlot);
+	const int32 Next = bFirst ? 0 : bLast ? Spells.Num()-1 : Current == INDEX_NONE
+		? (Direction > 0 ? 0 : Spells.Num()-1) : (Current + Direction + Spells.Num()) % Spells.Num();
+	SelectCombatSpellSlot(Spells[Next]);
 }

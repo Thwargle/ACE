@@ -1182,11 +1182,14 @@ private:
 	int32 SpellDragId = 0;
 	int32 SpellDragIconDid = 0;
 	int32 SpellDragSourceBarSlot = INDEX_NONE;
+	int32 SpellDragSourceBar = INDEX_NONE;
 	FVector2D SpellDragStartLocal = FVector2D::ZeroVector;
 	bool bSpellDragPending = false;
 	bool bSpellDragActive = false;
 	UPROPERTY()
 	TObjectPtr<UBorder> SpellDragIcon;
+	UPROPERTY(Transient)
+	TObjectPtr<UBorder> SpellDropMarker;
 
 	int32 LastInvClickGuid = 0;
 	double LastInvClickTime = 0.0;
@@ -1469,6 +1472,7 @@ private:
 	bool HitTestSpellBarSlot(FVector2D Absolute, int32& OutSlotIndex) const;
 	bool HitTestSpellbookRow(FVector2D Absolute, int32& OutSpellId) const;
 	void UseInventoryItem(int32 Guid);
+	bool ShouldPreserveShortcutSelection(int32 Guid) const;
 	/** Prefer empty dual jewelry slots; armor uses full ValidLocations. */
 	int64 ResolveWieldLocation(const FACEWorldObject& Obj, int64 PreferredSlotMask = 0) const;
 	/** Retail client unequips conflicts, then GetAndWield (server does not auto-swap). */

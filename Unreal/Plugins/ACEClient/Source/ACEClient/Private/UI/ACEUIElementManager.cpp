@@ -651,6 +651,18 @@ bool UACEUIElementManager::IsFloatyResizeHandle(const TSharedPtr<FACEUIElement>&
 	}
 	const auto Floaty = FindFloatyRoot(Element);
 	if (!Floaty || IsFixedSizeFloaty(Floaty->ElementName)) return false;
+	if (Floaty->ElementName == TEXT("RootGameplay_FloatyCombatPanel_Field"))
+	{
+		TFunction<bool(const TSharedPtr<FACEUIElement>&)> HasSpells = [&](const auto& Node) -> bool
+		{
+			if (Node->ElementName == TEXT("Spellcasting")) return Node->bVisible;
+			for (const auto& Child : Node->Children) if (HasSpells(Child)) return true;
+			return false;
+		};
+		if (HasSpells(Floaty))
+			return Element->ElementName.Contains(TEXT("LeftBorder")) || Element->ElementName.Contains(TEXT("RightBorder"))
+				|| Element->ElementName.Contains(TEXT("LeftCorner")) || Element->ElementName.Contains(TEXT("RightCorner"));
+	}
 	if (IsChatFloaty(Floaty))
 		return Element->bResizeLeft || Element->bResizeRight || Element->bResizeTop || Element->bResizeBottom;
 	if (Floaty->ElementName == TEXT("RootGameplay_FloatyToolbar_Field"))
@@ -673,6 +685,8 @@ EMouseCursor::Type UACEUIElementManager::GetWindowCursor(FVector2D ViewportPos, 
 	if (!Hit || !Hit->IsPaintVisible() || !FindFloatyRoot(Hit)) return EMouseCursor::Default;
 	if (IsFloatyResizeHandle(Hit))
 	{
+		if (FindFloatyRoot(Hit)->ElementName == TEXT("RootGameplay_FloatyCombatPanel_Field"))
+			return EMouseCursor::ResizeLeftRight;
 		// Non-chat panels currently expose their bottom grip only. Chat frames
 		// carry the actual retail edge flags, including diagonal corner handles.
 		if (!IsChatFloaty(FindFloatyRoot(Hit))) return EMouseCursor::ResizeUpDown;
@@ -695,6 +709,15 @@ void UACEUIElementManager::ApplyFloatyResizeLayout(const TSharedPtr<FACEUIElemen
 	if (Floaty->AuthoredHeight < 0)
 	{
 		Floaty->AuthoredHeight = Floaty->Height;
+	}
+	if (Floaty->ElementName == TEXT("RootGameplay_FloatyCombatPanel_Field"))
+	{
+		// The combat binder lays out the frame and controls for each stance.
+		// Reflowing its children here adds edge offsets a second time to the
+		// binder's explicit positions (Cast and the right border drift inward).
+		if (Floaty->AuthoredWidth >= 0)
+			Floaty->Width = FMath::Clamp(Floaty->AuthoredWidth + Floaty->UserResizeW, Floaty->MinWidth, Floaty->MaxWidth);
+		return;
 	}
 	if (Floaty->ElementName == TEXT("RootGameplay_FloatyPanel_Field"))
 	{
@@ -872,7 +895,7 @@ TSharedPtr<FACEUIElement> UACEUIElementManager::HitTestCanvas(int32 CanvasX, int
                     if (CanvasX < P.X || CanvasY < P.Y || CanvasX >= P.X + Node->Width || CanvasY >= P.Y + Node->Height) return nullptr;
                     for (int32 I = Node->Children.Num()-1; I >= 0; --I)
                         if (const auto Drag = FindDrag(Node->Children[I])) return Drag;
-                    return IsFloatyDragHandle(Node) ? Node : nullptr;
+                    return IsFloatyResizeHandle(Node) || IsFloatyDragHandle(Node) ? Node : nullptr;
                 };
                 if (const auto Drag = FindDrag(Window)) return Drag;
             }
@@ -1051,10 +1074,18 @@ void UACEUIElementManager::NotifyMouseDown(FVector2D ViewportPos, FVector2D View
 				}
 				ResizeFloaty = Floaty;
 				bResizeChat=IsChatFloaty(Floaty);
+				const bool bSpellResize = Floaty->ElementName == TEXT("RootGameplay_FloatyCombatPanel_Field")
+					&& (Hit->ElementName.Contains(TEXT("Left")) || Hit->ElementName.Contains(TEXT("Right")));
+				bResizeChat |= bSpellResize;
 				if (Floaty->AuthoredWidth<0) Floaty->AuthoredWidth=Floaty->Width;
 				ResizeGrabCanvasX=Cx; ResizeStartUserW=Floaty->UserResizeW; ResizeStartUserDragX=Floaty->UserDragX;
 				bResizeLeft=Hit->bResizeLeft; bResizeRight=Hit->bResizeRight;
 				bResizeTop=Hit->bResizeTop; bResizeBottom=Hit->bResizeBottom;
+				if (bSpellResize)
+				{
+					bResizeLeft=Hit->ElementName.Contains(TEXT("Left")); bResizeRight=!bResizeLeft;
+					bResizeTop=bResizeBottom=false;
+				}
 				ResizeGrabCanvasY = Cy;
 				ResizeStartUserH = Floaty->UserResizeH;
 				ResizeStartUserDragY = Floaty->UserDragY;

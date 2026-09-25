@@ -6,6 +6,7 @@ class UComboBoxString;
 class UCheckBox;
 class USlider;
 class UScrollBox;
+class UEditableTextBox;
 /** An option is a user widget so its Slate SObjectWidget keeps the DAT label alive during GC. */
 UCLASS()
 class ACECLIENT_API UACERetailOptionWidget : public UUserWidget
@@ -51,4 +52,5 @@ private:
  UPROPERTY() TObjectPtr<UComboBoxString> DesktopScale;
  UPROPERTY() TObjectPtr<UComboBoxString> ChatFontFace;
  UPROPERTY() TObjectPtr<UComboBoxString> ChatFontSize;
+ UPROPERTY() TObjectPtr<UEditableTextBox> ScreenshotDirectory;
 };

@@ -1,4 +1,5 @@
 #include "UI/ACEUIGameplayBinder.h"
+#include "ACEScreenshotSettings.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
 #include "HAL/FileManager.h"
@@ -17,7 +18,7 @@ void UACEUIGameplayBinder::RequestGameplayScreenshot()
 		PostInventorySystemMessage(TEXT("Unable to take a screenshot: the game view is not available."));
 		return;
 	}
-	const FString Folder = FPaths::ConvertRelativePathToFull(FPaths::ScreenShotDir());
+	const FString Folder = ACEScreenshotSettings::GetDirectory();
 	if (!IFileManager::Get().MakeDirectory(*Folder, true))
 	{
 		PostInventorySystemMessage(FString::Printf(TEXT("Unable to create screenshot folder: %s"), *Folder));

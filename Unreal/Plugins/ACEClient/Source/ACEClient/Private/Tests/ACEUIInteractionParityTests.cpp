@@ -20,6 +20,10 @@
 #include "ACESession.h"
 #include "ACEInputBindings.h"
 #include "ACERuntimeOptions.h"
+#include "ACEScreenshotSettings.h"
+#include "ACESpellTargeting.h"
+#include "HAL/PlatformProcess.h"
+#include "Components/EditableTextBox.h"
 #include "ACECharacterOptions.h"
 #include "UI/ACERetailTextBlock.h"
 #include "UI/ACEVideoSettingsWidget.h"
@@ -32,6 +36,7 @@
 #include "UI/ACEUIResourceResolver.h"
 #include "UI/ACEUIGameplayBinder.h"
 #include "UnrealClient.h"
+#include "Framework/Application/SlateApplication.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUIInteractionParityTest, "ACE.RetailParity.UIInteractions",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -41,7 +46,8 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     TGuardValue<FString> SettingsPath(GGameUserSettingsIni,FPaths::ProjectSavedDir()/TEXT("Automation/InteractionPreferences.ini"));
     FConfigFile Preferences; Preferences.NoSave=true; GConfig->SetFile(GGameUserSettingsIni,&Preferences);
     auto* GI=NewObject<UGameInstance>();
-    auto* Dat=NewObject<UACEDatSubsystem>(GI);
+    GI->Init();
+    auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
     if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
     const FString ArtDirectory=FPaths::ProjectSavedDir()/TEXT("Automation/UIInteractions");
     IFileManager::Get().MakeDirectory(*ArtDirectory,true);
@@ -54,7 +60,7 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     const auto Slate=Canvas->TakeWidget();
     auto* Client=NewObject<UACEClientSubsystem>(GI); Client->Session=MakeShared<FACESession>();
     auto& Session=*Client->Session; Session.State=EACESessionState::InWorld; Session.PlayerGuid=1234;
-    FACEWorldObject Self; Self.Guid=1234; Self.Name=TEXT("UI regression"); Session.WorldObjects.Add(Self.Guid,Self);
+    FACEWorldObject Self; Self.Guid=1234; Self.Name=TEXT("UI regression"); Self.bIsPlayer=true; Self.ItemType=ACEItemType::Creature; Session.WorldObjects.Add(Self.Guid,Self);
     auto* Binder=NewObject<UACEUIGameplayBinder>(); Binder->Initialize(Client,Manager,Canvas,nullptr);
     Canvas->SetGameplayBinder(Binder);
     ON_SCOPE_EXIT { Binder->Shutdown(); Canvas->SetGameplayBinder(nullptr); Manager->Shutdown(); Dat->Deinitialize(); TGuardValue<FString> Restore(GGameUserSettingsIni,OriginalSettings); ACEInputBindings::Reload(); };
@@ -93,6 +99,11 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     TestEqual(TEXT("Wrapping scrolls left to first"),Binder->SpellHotbarScrollOffset,0);
     Binder->StepCombatSpellSelection(-1,false,false); Binder->RefreshSpellHotbarOverlays();
     TestEqual(TEXT("Previous wraps first to last"),Binder->SelectedCombatSpellSlot,19);
+    Session.SpellBars[1].SetNumZeroed(56);
+    Binder->StepCombatSpellSelection(1,false,false); Binder->RefreshSpellHotbarOverlays();
+    TestEqual(TEXT("Padded 56-entry bar wraps directly to its first spell"),Binder->SelectedCombatSpellSlot,0);
+    Binder->StepCombatSpellSelection(-1,false,false); Binder->RefreshSpellHotbarOverlays();
+    TestEqual(TEXT("Reverse navigation skips every trailing empty entry"),Binder->SelectedCombatSpellSlot,19);
     Binder->SetCombatSpellBar(0); Binder->SetCombatSpellBar(1);
     TestEqual(TEXT("Returning restores scrolled selection"),Binder->SelectedCombatSpellSlot,19);
     TestTrue(TEXT("Restored cursor is visible"),19<Binder->SpellHotbarScrollOffset+13);
@@ -106,6 +117,85 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     Session.SpellBars[1].Reset(); Binder->RefreshSpellHotbarOverlays();
     Binder->StepCombatSpellSelection(1,false,false);
     TestEqual(TEXT("Empty bar has a safe cursor"),Binder->SelectedCombatSpellSlot,0);
+
+    // Actual drag gesture: lift immediately, move the destination marker, then
+    // insert exactly where shown, without a second removal on release.
+    Binder->SetCombatSpellBar(1); Session.SpellBars[1]={1,2,3,4};
+    Binder->RefreshSpellHotbarOverlays(); Draw(TEXT("SpellDragBefore"));
+    auto SlotPoint=[&](int32 Index) { const auto& G=Binder->SpellBarSlotBgs[Index]->GetCachedGeometry();
+        return Canvas->GetCachedGeometry().AbsoluteToLocal(G.LocalToAbsolute(G.GetLocalSize()*.5)); };
+    TestTrue(TEXT("Spell press begins gesture"),Binder->TryBeginSpellDrag(SlotPoint(0)));
+    Binder->UpdateSpellDrag(SlotPoint(2));
+    TestFalse(TEXT("Dragged spell immediately leaves favorites"),Session.SpellBars[1].Contains(1));
+    TestEqual(TEXT("Remaining spells close the source gap"),Session.SpellBars[1][0],2);
+    TestTrue(TEXT("Insertion marker uses original retail green accept art"),Binder->SpellDropMarker
+        && Binder->SpellDropMarker->Background.GetResourceObject()==Resources->ResolveIconTexture(0x060011F9)
+        && Binder->SpellDropMarker->GetVisibility()!=ESlateVisibility::Collapsed);
+    const auto PreviousCursor=FSlateApplication::Get().GetCursorPos();
+    FSlateApplication::Get().SetCursorPos(Canvas->GetCachedGeometry().LocalToAbsolute(SlotPoint(2)));
+    Draw(TEXT("SpellDragging")); Binder->TryFinishSpellDrag(SlotPoint(2));
+    FSlateApplication::Get().SetCursorPos(PreviousCursor);
+    TestTrue(TEXT("Drop inserts at indicated index after source removal"),Session.SpellBars[1]==TArray<int32>({2,3,1,4}));
+    TestTrue(TEXT("Drop hides destination marker"),Binder->SpellDropMarker->GetVisibility()==ESlateVisibility::Collapsed);
+
+    const auto Combat=Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field"));
+    Manager->SetUiLocked(false); Manager->BringFloatyToFront(Combat);
+    Combat->UserDragX+=200-Combat->GetScreenOrigin().X; Combat->UserDragY+=200-Combat->GetScreenOrigin().Y; Combat->RecomputeLayoutOffset();
+    Binder->RefreshSpellHotbarOverlays(); Draw(TEXT("SpellResizeBefore"));
+    const auto Edge=Manager->FindElementByName(TEXT("CombatPanelRightBorder"));
+    const FVector2D Start=Canvas->LayoutToViewport(FVector2D(Edge->GetScreenOrigin())+FVector2D(Edge->Width,Edge->Height)*.5);
+    const auto ResizeCanvasSize=Canvas->GetCachedGeometry().GetLocalSize();
+    TestTrue(TEXT("Spellbar right border advertises horizontal resize"),Manager->GetWindowCursor(Start,ResizeCanvasSize)==EMouseCursor::ResizeLeftRight);
+    Manager->NotifyMouseDown(Start,ResizeCanvasSize,EKeys::LeftMouseButton);
+    const int32 BeforeWidth=Combat->Width;
+    Manager->NotifyMouseMove(Start+FVector2D(17*Canvas->GetLastScaleX(),0),ResizeCanvasSize); Binder->RefreshSpellHotbarOverlays();
+    TestEqual(TEXT("Spellbar frame follows a 17-pixel drag without snapping"),Combat->Width,BeforeWidth+17);
+    Manager->NotifyMouseMove(Start+FVector2D(-170*Canvas->GetLastScaleX(),0),ResizeCanvasSize); Binder->RefreshSpellHotbarOverlays();
+    Manager->NotifyMouseUp(Start+FVector2D(-170*Canvas->GetLastScaleX(),0),ResizeCanvasSize,EKeys::LeftMouseButton);
+    TestTrue(TEXT("Narrowing frame reduces visible spell slots"),Binder->SpellBarSpellIds.Num()<13);
+    const auto CastButton=Manager->FindElementByName(TEXT("CastSpellButton"));
+    TestTrue(TEXT("Cast stays inside narrowed frame"),CastButton->GetScreenOrigin().X+CastButton->Width<=Combat->GetScreenOrigin().X+Combat->Width);
+    Draw(TEXT("SpellResizeNarrow"));
+    TestEqual(TEXT("Right frame edge stays aligned after ticks"),Edge->GetScreenOrigin().X+Edge->Width,Combat->GetScreenOrigin().X+Combat->Width);
+    for (auto SlotBackground : Binder->SpellBarSlotBgs)
+        if (SlotBackground->GetVisibility()!=ESlateVisibility::Collapsed)
+            TestTrue(TEXT("Cast does not overlap a visible slot after reflow"),CastButton->GetScreenOrigin().X>=SlotBackground->GetCachedGeometry().GetAbsolutePosition().X+32);
+    Combat->UserResizeW=0; Binder->RefreshSpellHotbarOverlays(); Manager->SetUiLocked(true);
+
+    // DAT-backed retail compatibility, not spell-name heuristics. Buffs,
+    // debuffs and heals use the same formula target rules in every school.
+    auto Other=Self; Other.Guid=1235; Other.Name=TEXT("Other player"); Session.WorldObjects.Add(Other.Guid,Other);
+    int32 Resolved=0;
+    uint32 SpellFlags=0, RetailType=0; bool Projectile=false;
+    TestTrue(TEXT("DAT exposes retail formula targeting"),Dat->TryGetRetailSpellTargeting(37,SpellFlags,RetailType,Projectile));
+    TestEqual(TEXT("Blade Bane uses retail equipment mask instead of narrow server target type"),RetailType,560015u);
+    for (int32 Spell : {1,3,5,7,15,1237,27,5387})
+    {
+        TestFalse(TEXT("Other creature spell rejects caster"),Client->ResolveSpellCastTarget(Spell,Self.Guid,Resolved));
+        TestTrue(TEXT("Other creature spell accepts another player"),Client->ResolveSpellCastTarget(Spell,Other.Guid,Resolved));
+        TestEqual(TEXT("Accepted recipient is unchanged"),Resolved,Other.Guid);
+    }
+    TestTrue(TEXT("Self healing ignores selected enemy"),Client->ResolveSpellCastTarget(6,Other.Guid,Resolved) && Resolved==Self.Guid);
+    TestTrue(TEXT("Item bane may target caster's worn equipment"),Client->ResolveSpellCastTarget(37,Self.Guid,Resolved));
+    TestTrue(TEXT("Self portal recall remains valid without selection"),Client->ResolveSpellCastTarget(2645,0,Resolved));
+    TestTrue(TEXT("VR Flame Bolt retains free aiming even without Projectile flag"),Client->ResolveSpellCastTarget(27,0,Resolved,true));
+    TestFalse(TEXT("VR Other healing cannot fall back to self"),Client->ResolveSpellCastTarget(5,Self.Guid,Resolved,true));
+    auto Npc=Other; Npc.Guid=1236; Npc.bIsPlayer=false; Session.WorldObjects.Add(Npc.Guid,Npc);
+    TestFalse(TEXT("Protected NPC is not a spell target"),Client->ResolveSpellCastTarget(5,Npc.Guid,Resolved));
+    Npc.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable; Session.WorldObjects.Add(Npc.Guid,Npc);
+    TestTrue(TEXT("Attackable creature follows retail eligibility"),Client->ResolveSpellCastTarget(7,Npc.Guid,Resolved));
+    Npc.PetOwnerId=Other.Guid; Session.WorldObjects.Add(Npc.Guid,Npc);
+    TestFalse(TEXT("Combat pet is excluded like retail"),Client->ResolveSpellCastTarget(7,Npc.Guid,Resolved));
+    auto Stack=Other; Stack.Guid=1237; Stack.bIsPlayer=false; Stack.ItemType=ACEItemType::MeleeWeapon;
+    Stack.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable; Stack.StackSize=2; Session.WorldObjects.Add(Stack.Guid,Stack);
+    TestFalse(TEXT("Stacked item cannot be enchanted"),Client->ResolveSpellCastTarget(37,Stack.Guid,Resolved));
+    Session.SpellBars[1]={5}; Binder->SelectCombatSpellSlot(0); Client->SelectObject(Self.Guid); Binder->RefreshSpellHotbarOverlays();
+    TestFalse(TEXT("Heal Other Cast button disabled for self"),CastButton->bActivatable);
+    Session.CachedC2SPackets.Reset(); TestFalse(TEXT("Cast API cannot bypass disabled button"),Client->SendCastSpell(5));
+    TestTrue(TEXT("Rejected cast sends no action"),Session.CachedC2SPackets.IsEmpty()); Draw(TEXT("HealOtherSelfDisabled"));
+    Client->SelectObject(Other.Guid); Binder->RefreshSpellHotbarOverlays();
+    TestTrue(TEXT("Heal Other Cast button enables for another player"),CastButton->bActivatable); Draw(TEXT("HealOtherPlayerEnabled"));
+    Session.SpellBars[1].Reset();
 
     // Retail gmSpellbookUI double-click appends via AddFavorite(-1, false),
     // rather than casting, replacing an occupied slot, or relocating a duplicate.
@@ -196,6 +286,15 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
 
     Binder->SyncOptionsPanelTab(TEXT("ConfigPage"));Draw(TEXT("RetailConfigOptions"));
     auto* Video=Cast<UACEVideoSettingsWidget>(Binder->VideoSettings);
+    auto* ScreenshotFolder=Video?Cast<UEditableTextBox>(Video->WidgetTree->FindWidget(TEXT("ScreenshotDirectory"))):nullptr;
+    if(TestNotNull(TEXT("Config exposes screenshot save folder"),ScreenshotFolder))
+    {
+        const FString CustomFolder=FPaths::ConvertRelativePathToFull(ArtDirectory/TEXT("Custom Screenshots"));
+        ScreenshotFolder->SetText(FText::FromString(CustomFolder)); Video->ApplyInterfaceOptions(); Video->ResetVideo();
+        TestEqual(TEXT("Screenshot folder applies and reloads"),ScreenshotFolder->GetText().ToString(),CustomFolder);
+        ScreenshotFolder->SetText(FText::GetEmpty()); Video->ApplyInterfaceOptions();
+        TestEqual(TEXT("Empty setting restores default folder"),ACEScreenshotSettings::GetDirectory(),ACEScreenshotSettings::DefaultDirectory());
+    }
     auto* Face=Video?Cast<UComboBoxString>(Video->WidgetTree->FindWidget(TEXT("ChatFontFace"))):nullptr;
     auto* FontSize=Video?Cast<UComboBoxString>(Video->WidgetTree->FindWidget(TEXT("ChatFontSize"))):nullptr;
     if(TestNotNull(TEXT("Retail chat font face control"),Face) && TestNotNull(TEXT("Retail chat font size control"),FontSize))
@@ -281,9 +380,17 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     ACEInputBindings::Set(Screenshot,0,FInputChord(EKeys::F12)); ACEInputBindings::Commit();
     TestTrue(TEXT("Rebound screenshot key is recognized"),ACEInputBindings::Matches(Screenshot,FInputChord(EKeys::F12)));
     TestFalse(TEXT("Old key is no longer active"),ACEInputBindings::Matches(Screenshot,FInputChord(EKeys::Multiply)));
+#if PLATFORM_WINDOWS
+    TestEqual(TEXT("Windows default is the redirected Documents/Asheron's Call folder"),ACEScreenshotSettings::DefaultDirectory(),FString(FPlatformProcess::UserDir())/TEXT("Asheron's Call"));
+#endif
+    const FString CaptureFolder=FPaths::ConvertRelativePathToFull(ArtDirectory/TEXT("Screenshot Output"));
+    ACEScreenshotSettings::SetDirectory(CaptureFolder);
+    if (GEngine && GEngine->GameViewport && GEngine->GameViewport->Viewport)
+    {
     Binder->RequestGameplayScreenshot();
     const FString Saved=Binder->PendingScreenshotFilename;
     TestFalse(TEXT("Screenshot request has a destination"),Saved.IsEmpty());
+    TestTrue(TEXT("Capture uses configured path with spaces"),Saved.StartsWith(CaptureFolder));
     Binder->RequestGameplayScreenshot();
     TestEqual(TEXT("Repeated request cannot replace in-flight capture"),Binder->PendingScreenshotFilename,Saved);
     if (GEngine && GEngine->GameViewport && GEngine->GameViewport->Viewport)
@@ -296,6 +403,8 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     Binder->FinishGameplayScreenshot();
     TestTrue(TEXT("Failed save is reported as failure"),Binder->TransientInfoText->GetText().ToString().StartsWith(TEXT("Unable to save screenshot")));
     if (!Saved.IsEmpty()) IFileManager::Get().Delete(*Saved);
+    }
+    else AddInfo(TEXT("Screenshot capture needs -game; editor-only run verifies folder settings."));
     Binder->Shutdown();
     TestEqual(TEXT("A new session starts tab memory from scratch"),Binder->SelectionSpellTab,INDEX_NONE);
     for (const auto& Tab:Binder->SpellTabSelections) TestEqual(TEXT("New tab default is first spell"),Tab.Slot,0);

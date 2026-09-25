@@ -1104,7 +1104,7 @@ void UACEScriptComponent::ExecuteSound(
 	}
 
 	const float BaseVolume = EffectiveVolume;
-	EffectiveVolume *= ACERuntimeOptions::SoundGain(bAmbient2D || bForceAmbientSound);
+	EffectiveVolume *= ACERuntimeOptions::SoundGain(bAmbient2D || bForceAmbientSound) * EnvironmentSoundGain;
 	UAudioComponent* Audio = nullptr;
 	if (bHasSoundWorldLocation || !bAmbient2D)
 	{
@@ -1215,7 +1215,7 @@ void UACEScriptComponent::CleanupFinishedAudio()
 		FActiveAceSound& Sound = ActiveSounds[Index];
 		if (Sound.Component)
         {
-            const float Gain=Sound.BaseVolume * ACERuntimeOptions::SoundGain(Sound.bAmbient);
+            const float Gain=Sound.BaseVolume * ACERuntimeOptions::SoundGain(Sound.bAmbient) * EnvironmentSoundGain;
             if (!FMath::IsNearlyEqual(Sound.Component->VolumeMultiplier,Gain)) Sound.Component->SetVolumeMultiplier(Gain);
         }
 		if (Sound.bLooping)

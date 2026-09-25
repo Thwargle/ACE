@@ -19,6 +19,8 @@
 #include "ACEPlayerController.h"
 #include "ACESession.h"
 #include "Dat/ACECellTransit.h"
+#include "Dat/ACEAmbientReach.h"
+#include "Dat/ACEEnvCellMeshBuilder.h"
 #include "Dat/ACEDatCursor.h"
 #include "Dat/ACEDatTextureResolver.h"
 #include "ProceduralMeshComponent.h"
@@ -68,6 +70,78 @@ namespace
             World->DestroyWorld(false);
         }
     };
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEAmbientEntranceTest, "ACE.Audio.OutdoorEntrances",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACEAmbientEntranceTest::RunTest(const FString& Parameters)
+{
+    // A bent corridor. Euclidean proximity through a wall must not bypass the
+    // path through connected rooms, and a nearby but disconnected exit is silent.
+    TMap<uint32,FACEBuiltEnvCellMesh> Rooms;
+    auto AddPortal=[&](uint32 Cell,uint16 Other,uint16 OtherPortal,FVector Center)
+    {
+        auto& Room=Rooms.FindOrAdd(Cell);
+        FACEDatCellPortal Portal;Portal.OtherCellId=Other;Portal.OtherPortalId=OtherPortal;
+        Room.CellPortals.Add(Portal);
+        Room.PortalApertureLocalVerts.Add({Center+FVector(-100,0,-100),Center+FVector(100,0,-100),
+            Center+FVector(100,0,100),Center+FVector(-100,0,100)});
+    };
+    AddPortal(0x100,0x101,0,FVector(0,2000,0));
+    AddPortal(0x101,0x100,0,FVector(0,2000,0));
+    AddPortal(0x101,0xFFFF,0,FVector(3000,2000,0));
+    AddPortal(0x102,0xFFFF,0,FVector(0,0,0));
+    Rooms.Add(0x103,{});
+    auto Find=[&](uint32 Cell) { return Rooms.Find(Cell); };
+    const auto AroundCorner=ACEAmbientReach::FindOutdoor(0x100,FVector::ZeroVector,100,Find);
+    TestTrue(TEXT("Sound reaches an entrance through neighboring cells"),AroundCorner.OutdoorCell!=0);
+    TestTrue(TEXT("Attenuation follows the connected corridor, not the nearest wall"),AroundCorner.DistanceAc>48.f);
+    TestTrue(TEXT("Outdoor sound fades deeper inside"),AroundCorner.Gain>0 && AroundCorner.Gain<.18f);
+    const auto Near=ACEAmbientReach::FindOutdoor(0x101,FVector(3000,1950,0),100,Find);
+    TestEqual(TEXT("No hard cutoff just inside the doorway"),Near.Gain,1.f);
+    TestEqual(TEXT("Outdoor terrain has full ambience"),ACEAmbientReach::FindOutdoor(1,FVector::ZeroVector,100,Find).Gain,1.f);
+    TestEqual(TEXT("Sealed rooms do not hear a disconnected entrance"),ACEAmbientReach::FindOutdoor(0x103,FVector::ZeroVector,100,Find).Gain,0.f);
+    TestEqual(TEXT("Unknown cells do not create ambient sound"),ACEAmbientReach::FindOutdoor(0,FVector::ZeroVector,100,Find).Gain,0.f);
+    TestEqual(TEXT("Missing streamed cells fail without loading geometry"),ACEAmbientReach::FindOutdoor(0x104,FVector::ZeroVector,100,Find).Gain,0.f);
+    TestEqual(TEXT("Deep interiors stop scheduling outdoor sound"),ACEAmbientReach::FindOutdoor(0x100,FVector(0,-15000,0),100,Find).Gain,0.f);
+    TestTrue(TEXT("Retail inverse-square weighting at 40m"),FMath::IsNearlyEqual(ACEAmbientReach::DistanceGain(40),.25f));
+
+    FInteriorTestWorld Fixture;
+    auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
+    if (!TestTrue(TEXT("Retail DAT loads"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+    int32 Exits=0;
+    for(uint32 Key:{0x7D640000u,0xC88C0000u,0x09050000u})
+    {
+        FACEDatLandblockInfo Info;
+        if (!Dat->LoadLandblockInfo(Key,Info)) continue;
+        for(uint32 I=0;I<Info.NumCells;++I) Dat->GetOrBuildEnvCellMesh(Key|(0x100+I),100);
+        for(uint32 I=0;I<Info.NumCells;++I)
+        {
+            const uint32 Id=Key|(0x100+I);const auto* Mesh=Dat->FindEnvCellMesh(Id,100);
+            if(!Mesh)continue;
+            const FVector Origin=FACEPosition::AceVectorToUnreal(FVector((Id>>24)*192.f,((Id>>16)&255)*192.f,0),100);
+            const auto Transform=Mesh->GetCellLocalToLandblock(100)*FTransform(Origin);
+            for(int32 P=0;P<Mesh->CellPortals.Num();++P)
+            {
+                if(!Mesh->CellPortals[P].IsOutsidePortal() || !Mesh->PortalApertureLocalVerts.IsValidIndex(P)
+                    || Mesh->PortalApertureLocalVerts[P].Num()<3)continue;
+                FVector Center=FVector::ZeroVector;
+                for(auto V:Mesh->PortalApertureLocalVerts[P])Center+=V;
+                Center/=Mesh->PortalApertureLocalVerts[P].Num();
+                const auto Result=ACEAmbientReach::FindOutdoor(Id,Transform.TransformPosition(Center),100,
+                    [&](uint32 Cell){return Dat->FindEnvCellMesh(Cell,100);});
+                TestTrue(TEXT("Actual retail exterior portal remains audible at its threshold"),Result.OutdoorCell!=0 && Result.Gain==1);
+                TestTrue(TEXT("Entrance resolves a valid one-based landcell"),(Result.OutdoorCell&0xFFFF)>=1 && (Result.OutdoorCell&0xFFFF)<=64);
+                ++Exits;
+            }
+        }
+    }
+    TestTrue(TEXT("Fixture tests real building entrances"),Exits>0);
+    AddInfo(FString::Printf(TEXT("Validated %d real exterior portals"),Exits));
+    const FACEDatAmbientSTBDesc* Stb=nullptr;
+    TestFalse(TEXT("Ambient rejects landcell zero"),Dat->TryResolveAmbientSTBForCell(0x7D640000,Stb));
+    TestFalse(TEXT("Ambient rejects landcells above 64"),Dat->TryResolveAmbientSTBForCell(0x7D640041,Stb));
+    return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailInteriorStreamingTest, "ACE.RetailParity.InteriorStreaming",
@@ -1330,6 +1404,9 @@ bool FACEDoorwayGeometryCacheTest::RunTest(const FString& Parameters)
             if (!Hit.IsEmpty()) Hit[0].WorldVerts.Reset(); // Caller clips may not modify cached originals.
             Dat->LoadBuildingDoorwayApertures(Key, Scale, Hit);
             TestTrue(TEXT("Clipping a returned aperture cannot mutate the cached geometry"), Same(Reference, Hit));
+            const auto Shared=Dat->GetBuildingDoorwayApertures(Key,Scale);
+            TestTrue(TEXT("Traversal obtains immutable geometry identical to the copy API"),Shared && Same(Reference,*Shared));
+            TestTrue(TEXT("Cache hits reuse the aperture allocation"),Shared==Dat->GetBuildingDoorwayApertures(Key,Scale));
         }
     }
     TestTrue(TEXT("Regression exercises actual doorways"), DoorCount>0);
@@ -1362,8 +1439,79 @@ bool FACEDoorwayGeometryCacheTest::RunTest(const FString& Parameters)
         AddInfo(FString::Printf(TEXT("Doorway geometry cached=%d: %.3f us/call (%d doors)"),
             Enabled,(FPlatformTime::Seconds()-Start)*1000000/4000,Doors.Num()));
     }
+    // Warm all cells before measuring the complete per-frame traversal, not
+    // asynchronous data preparation. Keep camera admission active each call.
+    Cache->Set(1,ECVF_SetByCode);
+    FACEDatLandblockInfo BenchInfo; Dat->LoadLandblockInfo(Key,BenchInfo);
+    for (uint32 I=0; I<BenchInfo.NumCells; ++I) Dat->GetOrBuildEnvCellMesh(Key|(0x100+I),100);
+    Dat->LoadBuildingDoorwayApertures(Key,100,Doors);
+    if (!Doors.IsEmpty())
+    {
+        const FVector Eye=Doors[0].WorldVerts[0]+Doors[0].WorldNormal*200;
+        TArray<uint32> Keys{Key}; TSet<int32> Visible;
+        TArray<FAperture> Entrances, Exits;
+        for (int32 Phase=0; Phase<4; ++Phase)
+        {
+            const double Start=FPlatformTime::Seconds();
+            for (int32 I=0; I<1000; ++I)
+                ACEOutdoorPortalPlan::CollectOutdoorAdmittedEnvCells(*Dat,Eye,{},100,Keys,Visible,&Entrances,&Exits);
+            AddInfo(FString::Printf(TEXT("PView warm traversal: %.3f us/call (%d cells, %d entries, %d exits)"),
+                (FPlatformTime::Seconds()-Start)*1000,Visible.Num(),Entrances.Num(),Exits.Num()));
+        }
+    }
+    auto HeldGeometry=Dat->GetBuildingDoorwayApertures(Key,100);
+    TWeakPtr<const TArray<FAperture>> WeakGeometry=HeldGeometry;
     Dat->ClearLoadedState();
     TestEqual(TEXT("DAT reload releases the complete geometry cache"),Dat->DoorwayGeometryCache.Num(),0);
+    TestTrue(TEXT("An active traversal remains valid across cache eviction/reload"),HeldGeometry && Same(*HeldGeometry,Doors));
+    HeldGeometry.Reset();
+    TestFalse(TEXT("Evicted geometry releases after the active traversal ends"),WeakGeometry.IsValid());
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPortalClipScratchTest,"ACE.RetailParity.PortalClipScratch",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACEPortalClipScratchTest::RunTest(const FString&)
+{
+    // Preserve the old clipper as an independent buffer-lifetime reference:
+    // plane math/order and partial clipping must not change with scratch reuse.
+    auto Reference=[](const TArray<FVector>& Verts,const FConvexVolume& Frustum,TArray<FVector>& Out)
+    {
+        TArray<FVector> Current=Verts,Next;
+        for(const FPlane& P:Frustum.Planes)
+        {
+            if(!ACEOutdoorPortalPlan::ClipPolygonAgainstPlane(Current,FVector(-P.X,-P.Y,-P.Z),P.W,Next))
+            {Out.Reset();return false;}
+            Current=MoveTemp(Next);Next.Reset();
+        }
+        Out=MoveTemp(Current);return Out.Num()>=3;
+    };
+    const TArray<FVector> Polygon={{-100,-100,0},{100,-100,0},{100,100,0},{-100,100,0}};
+    FConvexVolume Frustum;
+    for(const FVector& Normal:{FVector(1,0,0),FVector(-1,0,0),FVector(0,1,0),FVector(0,-1,0),
+        FVector(1,1,0).GetSafeNormal(),FVector(-1,-1,0).GetSafeNormal()})
+        Frustum.Planes.Add(FPlane(Normal*75,Normal));
+    Frustum.Init();
+    for(int32 Offset=0;Offset<300;Offset+=17)
+    {
+        TArray<FVector> Input=Polygon,A,B;
+        for(auto& V:Input)V+=FVector(Offset,Offset*.3,0);
+        const bool Expected=Reference(Input,Frustum,A);
+        TestEqual(TEXT("Scratch reuse preserves visible/rejected apertures"),ACEOutdoorPortalPlan::ClipPolygonAgainstFrustum(Input,Frustum,B),Expected);
+        TestTrue(TEXT("Scratch reuse preserves every clipped vertex and order"),A==B);
+        TestEqual(TEXT("In-place caller remains supported"),ACEOutdoorPortalPlan::ClipPolygonAgainstFrustum(Input,Frustum,Input),Expected);
+        TestTrue(TEXT("In-place output matches reference"),Input==A);
+    }
+    TArray<FVector> Output;
+    for(int32 Phase=0;Phase<4;++Phase)
+    {
+        const double Start=FPlatformTime::Seconds();
+        for(int32 I=0;I<20000;++I)
+            if(Phase%2) ACEOutdoorPortalPlan::ClipPolygonAgainstFrustum(Polygon,Frustum,Output);
+            else Reference(Polygon,Frustum,Output);
+        AddInfo(FString::Printf(TEXT("Portal clip scratch reuse=%d: %.3f us/call"),Phase%2,
+            (FPlatformTime::Seconds()-Start)*1000000/20000));
+    }
     return true;
 }
 

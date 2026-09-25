@@ -6850,7 +6850,7 @@ bool UACEDatSubsystem::TryResolveAmbientSTBForCell(uint32 CellId, const FACEDatA
 {
 	OutStb = nullptr;
 	// Cell 0 = pre-enter-world. Indoor EnvCells have no terrain scene type.
-	if (CellId == 0 || (CellId & 0xFFFFu) >= 0x0100u)
+	if ((CellId & 0xFFFFu) < 1 || (CellId & 0xFFFFu) > 64)
 	{
 		return false;
 	}
@@ -6884,14 +6884,10 @@ bool UACEDatSubsystem::TryResolveAmbientSTBForCell(uint32 CellId, const FACEDatA
 		return false;
 	}
 
-	const uint32 CellXY = CellId & 0xFFFFu;
-	int32 CellX = 0;
-	int32 CellY = 0;
-	if (CellXY < 0x0100u)
-	{
-		CellX = static_cast<int32>(CellXY >> 3) & 7;
-		CellY = static_cast<int32>(CellXY) & 7;
-	}
+	// Landcell IDs are one-based (1 + X*8 + Y), not zero-based vertices.
+	const uint32 CellXY = (CellId & 0xFFFFu) - 1;
+	const int32 CellX = static_cast<int32>(CellXY >> 3);
+	const int32 CellY = static_cast<int32>(CellXY & 7);
 
 	constexpr int32 VertexDim = 9;
 	const int32 TerrainIdx = CellX * VertexDim + CellY;
@@ -7289,8 +7285,15 @@ void UACEDatSubsystem::LoadBuildingDoorwayApertures(uint32 LandblockId, float Wo
 	TArray<ACEOutdoorPortalPlan::FAdmittedAperture>& OutApertures)
 {
 	OutApertures.Reset();
+	if (const auto Geometry = GetBuildingDoorwayApertures(LandblockId, WorldScale))
+		OutApertures = *Geometry;
+}
+
+TSharedPtr<const TArray<ACEOutdoorPortalPlan::FAdmittedAperture>> UACEDatSubsystem::GetBuildingDoorwayApertures(
+	uint32 LandblockId, float WorldScale)
+{
 	// EnsureLoaded may invalidate DAT/mesh caches after a reload or format change.
-	if (!EnsureLoaded() || !CellDat) return;
+	if (!EnsureLoaded() || !CellDat) return nullptr;
 	const uint32 Key = LandblockId & 0xFFFF0000u;
 	uint32 ScaleBits;
 	FMemory::Memcpy(&ScaleBits, &WorldScale, sizeof(ScaleBits));
@@ -7300,12 +7303,13 @@ void UACEDatSubsystem::LoadBuildingDoorwayApertures(uint32 LandblockId, float Wo
 		if (auto* Cached = DoorwayGeometryCache.Find(CacheKey))
 		{
 			Cached->LastUse = ++DoorwayGeometryUse;
-			OutApertures = Cached->Apertures;
-			return;
+			return Cached->Apertures;
 		}
 
 	FACEDatLandblockInfo Info;
-	if (!LoadLandblockInfo(Key, Info)) return;
+	if (!LoadLandblockInfo(Key, Info)) return nullptr;
+	auto Geometry = MakeShared<TArray<ACEOutdoorPortalPlan::FAdmittedAperture>>();
+	auto& OutApertures = *Geometry;
 	const FVector Origin = FACEPosition::AceVectorToUnreal(
 		FVector(((Key >> 24) & 255) * 192.f, ((Key >> 16) & 255) * 192.f, 0), WorldScale);
 	bool bComplete = true;
@@ -7348,9 +7352,10 @@ void UACEDatSubsystem::LoadBuildingDoorwayApertures(uint32 LandblockId, float Wo
 			DoorwayGeometryCache.Remove(OldestKey);
 		}
 		auto& Cached = DoorwayGeometryCache.Add(CacheKey);
-		Cached.Apertures = OutApertures;
+		Cached.Apertures = Geometry;
 		Cached.LastUse = ++DoorwayGeometryUse;
 	}
+	return Geometry;
 }
 
 bool UACEDatSubsystem::LoadEnvCell(uint32 EnvCellId, FACEDatEnvCell& OutCell)
@@ -8244,6 +8249,7 @@ bool UACEDatSubsystem::EnsureSpellTableLoaded()
 		Cur.ReadU32(bOk);
 		Cur.ReadF32(bOk);
 		const uint32 MetaSpellType = Cur.ReadU32(bOk);
+		Entry.bProjectile = MetaSpellType == 2 || MetaSpellType == 10 || MetaSpellType == 15;
 		Cur.ReadU32(bOk);
 		if (MetaSpellType == 1u || MetaSpellType == 12u) // Enchantment / FellowEnchantment
 		{
@@ -8258,8 +8264,8 @@ bool UACEDatSubsystem::EnsureSpellTableLoaded()
 			double PortalLifetime = 0.0;
 			bOk = bOk && Cur.Read(PortalLifetime);
 		}
-		const uint32 RawPowerComponent = Cur.ReadU32(bOk);
-		Cur.Skip(7 * 4);
+		uint32 Formula[8];
+		for (auto& Component : Formula) Component = Cur.ReadU32(bOk);
 		// CompositeSpellIcon uses the formula's first component, not spell
 		// difficulty (item and special spells can have unrelated difficulty).
 		auto FormulaHash = [](const FString& Text)
@@ -8274,11 +8280,24 @@ bool UACEDatSubsystem::EnsureSpellTableLoaded()
 			}
 			return Hash;
 		};
-		if (RawPowerComponent)
+		const uint32 FormulaKey = FormulaHash(Entry.Name) % 0x12107680u + FormulaHash(Entry.Description) % 0xBEADCF45u;
+		for (auto& Component : Formula)
+			if (Component) { Component -= FormulaKey; if (Component > 198) Component &= 0xFF; }
+		if (Formula[0])
 		{
-			uint32 Component = RawPowerComponent - (FormulaHash(Entry.Name) % 0x12107680u + FormulaHash(Entry.Description) % 0xBEADCF45u);
-			if (Component > 198) Component &= 0xFF;
+			const uint32 Component = Formula[0];
 			Entry.IconPowerLevel = Component <= 6 ? Component : Component == 110 ? 7 : Component == 112 ? 8 : Component == 192 ? 9 : Component == 193 ? 10 : 0;
+		}
+		// SpellFormula::Complete / GetTargetingType and SpellComponentTable's
+		// talisman mapping, not the narrower server NonComponentTargetType.
+		if (Formula[0] && Formula[1] && Formula[2] && Formula[3] && Formula[4])
+		{
+			int32 Last = 4;
+			while (Last < 7 && Formula[Last + 1]) ++Last;
+			const uint32 Talisman = Formula[Last];
+			Entry.RetailTargetType = (Talisman >= 0x31 && Talisman <= 0x38)
+				|| (Talisman >= 0x3C && Talisman <= 0x3E) || Talisman == 0xBE ? 16u
+				: Talisman == 0x39 ? 560015u : Talisman == 0x3B ? 268500992u : 0u;
 		}
 		Cur.ReadU32(bOk); // CasterEffect
 		Cur.ReadU32(bOk); // TargetEffect
@@ -8408,6 +8427,18 @@ bool UACEDatSubsystem::TryGetSpellTargeting(uint32 SpellId, uint32& OutBitfield,
 	{
 		OutBitfield = Found->Bitfield;
 		OutNonComponentTargetType = Found->NonComponentTargetType;
+		return true;
+	}
+	return false;
+}
+
+bool UACEDatSubsystem::TryGetRetailSpellTargeting(uint32 SpellId, uint32& OutBitfield, uint32& OutTargetType, bool& OutProjectile)
+{
+	OutBitfield = OutTargetType = 0; OutProjectile = false;
+	EnsureSpellTableLoaded();
+	if (const auto* Spell = SpellInfoCache.Find(SpellId))
+	{
+		OutBitfield = Spell->Bitfield; OutTargetType = Spell->RetailTargetType; OutProjectile = Spell->bProjectile;
 		return true;
 	}
 	return false;

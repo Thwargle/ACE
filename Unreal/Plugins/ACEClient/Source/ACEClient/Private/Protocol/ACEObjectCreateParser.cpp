@@ -497,7 +497,7 @@ bool FACEObjectCreateParser::ParseWeenieHeader(FACEBinaryReader& Reader, FACEDec
 	}
 	if (WeenieFlags2 & Cooldown) { if (!Need(4)) return false; Reader.ReadUInt32(); }
 	if (WeenieFlags2 & CooldownDuration) { if (!Need(8)) return false; Reader.ReadDouble(); }
-	if (WeenieFlags2 & PetOwner) { if (!Need(4)) return false; Reader.ReadUInt32(); }
+	if (WeenieFlags2 & PetOwner) { if (!Need(4)) return false; Out.PetOwnerId = Reader.ReadInt32(); }
 
 	Reader.Align();
 	return true;

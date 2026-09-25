@@ -104,3 +104,31 @@ checks, and measured cold-start cost before enabling it.
   was asleep, so the game was left closed for the user's next test.
 - v59 steady-scene FPS and CPU cost remain unmeasured. Do not substitute the
   shader tests or removed material loops for an actual device comparison.
+
+## September 24: portal traversal allocation reduction
+
+The shared portal visibility path now retains immutable cached doorway
+geometry instead of copying every doorway's vertex array into each traversal.
+Active traversals keep their own shared reference across cache eviction or DAT
+reload. Partially streamed geometry is still not cached. Each queued view moves
+its frustum and path into the traversal, and polygon clipping reuses its two
+scratch buffers between planes. Camera clipping still runs every frame.
+
+A warmed desktop PView fixture (landblock `7D64`, four phases of 1,000 calls)
+measured 44.33 microseconds per call before and 29.34 after, about 34% less CPU
+time for this routine. Both versions produced 18 visible cells, 9 entry
+apertures, and 6 exits. The isolated scratch-buffer benchmark did not show a
+meaningful timing gain; the combined traversal result includes the removed
+geometry and queued-view copies.
+
+This is not a full-frame benchmark or a Quest FPS measurement. The connected
+Quest reported unauthorized USB debugging during this pass, so native CPU,
+memory, GPU, and FPS comparisons remain pending. Resolution, texture quality,
+culling settings, network update rates, and visible-cell results are unchanged.
+
+Validation passed for doorway cache lifetime/invalidation, portal clipping,
+interior streaming, terrain reveal, and mesh application. The mesh, doorway
+cache, and clipping scratch tests also passed with the ES3.1 mobile renderer.
+The Windows editor and Android Development builds passed. Private benchmark
+logs and reports are under ignored `Unreal/Saved/ArmorHealingAudit/`, including
+`perf-before.log`, `perf-after.log`, and `mobile-game.log`.

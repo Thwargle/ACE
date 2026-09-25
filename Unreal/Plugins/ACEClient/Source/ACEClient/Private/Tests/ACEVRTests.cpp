@@ -1513,7 +1513,7 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 				{
 					VR->SelectSpell(UnchangedSpell); VR->Client->SelectObject(Other.Guid);
 					TestFalse(TEXT("Other spell kinds retain their targeting rules"), VR->IsPointedBuffRecipient(Player));
-					ClickSpell(Other.Guid);
+					ClickSpell(UnchangedSpell == 2 ? CombatSession.GetPlayerGuid() : Other.Guid);
 					TestEqual(TEXT("Self, debuff and projectile clicks do not replace selection"), VR->Client->GetSelectedObject().Guid, Other.Guid);
 				}
 				VR->SelectSpell(1); Player->bIsPlayer = false;
@@ -1528,8 +1528,13 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 				Wall->RegisterComponent(); Blocker->SetActorLocation(Body->GetComponentLocation() - FVector(200, 0, 0));
 				VR->Client->SelectObject(0); VR->UpdateCombat(.016f);
 				TestNull(TEXT("A player behind a wall is not highlighted for a buff"), VR->PredictedCombatTarget.Get());
-				ClickSpell(0);
+				ClickSpell(0, 0); // A targeted Other spell cannot fire without a recipient.
 				TestFalse(TEXT("Trigger cannot select a buff recipient through a wall"), VR->Client->GetSelectedObject().bValid);
+				VR->SelectSpell(5); VR->Client->SelectObject(CombatSession.GetPlayerGuid());
+				ClickSpell(0, 0);
+				TestTrue(TEXT("Other healing gives feedback instead of self-casting"), VR->GetCastFeedback().Contains(TEXT("appropriate target")));
+				VR->SelectSpell(27); VR->Client->SelectObject(0);
+				ClickSpell(0); // Projectile gestures retain free aim without a selected object.
 				Blocker->Destroy(); Player->Destroy();
 				CombatSession.WorldObjects.Remove(Recipient.Guid); CombatSession.WorldObjects.Remove(Other.Guid);
 				CombatSession.KnownSpells = KnownSpells; CombatSession.VRSpellProfiles = Profiles;

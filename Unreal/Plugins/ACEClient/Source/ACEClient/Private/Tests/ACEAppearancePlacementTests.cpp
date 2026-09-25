@@ -18,6 +18,7 @@
 #include "ImageUtils.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Dat/ACEDatCursor.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEAppearancePlacementTest,"ACE.RetailParity.AppearancePlacement",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -79,6 +80,49 @@ bool FACEAppearancePlacementTest::RunTest(const FString&)
     TArray<FColor> Pixels; Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
     TArray64<uint8> PNG; FImageUtils::PNGCompressImageArray(800,600,Pixels,PNG);
     FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/TEXT("Automation/MukkirWings.png")));
+
+    // Pathwarden Scale Hauberk: retail clothing references intermediate models,
+    // and CPhysicsPart resolves the first degrade entry for close-up rendering.
+    Self.Appearance=FACEObjDesc(); Self.Appearance.PaletteBaseId=0x0400007E;
+    TestTrue(TEXT("Actual Pathwarden Scale Hauberk resolves"),Creation.ApplyClothing(0x100000A6,Self.SetupId,0,0,Self.Appearance));
+    FACESetupMeshBuilder Builder(Dat->GetPortalDat(),nullptr,nullptr);
+    struct FArmorPart { int32 Part; uint32 Root; uint32 Close; };
+    const FArmorPart ArmorParts[]={{9,0x0100120D,0x01001868},{0,0x01001212,0x01001841},
+        {10,0x01001230,0x01001870},{13,0x0100122F,0x0100186F},
+        {11,0x0100121E,0x0100186C},{14,0x01001219,0x0100186D}};
+    for (const auto& Fixture:ArmorParts)
+    {
+        FACEDatGfxObj Actual;
+        TestTrue(TEXT("Root armor model resolves"),Builder.LoadGfxObj(Fixture.Root,Actual));
+        TestEqual(TEXT("Root resolves retail close-up armor model"),Actual.Id,Fixture.Close);
+        TArray<uint8> Bytes; Dat->GetPortalDat()->ReadFile(Fixture.Close,Bytes);
+        FACEDatCursor Cursor(Bytes); FACEDatGfxObj Expected;
+        TestTrue(TEXT("Read independent close-up geometry"),ACEDatUnpack::UnpackGfxObj(Cursor,Expected));
+        TestEqual(TEXT("Close-up vertices preserved"),Actual.Vertices.Num(),Expected.Vertices.Num());
+        TestEqual(TEXT("Close-up polygons preserved"),Actual.Polygons.Num(),Expected.Polygons.Num());
+        for (const auto& V:Expected.Vertices)
+            TestTrue(TEXT("Armor shape matches retail vertex coordinates"),Actual.Vertices.Contains(V.Key)
+                && Actual.Vertices[V.Key].Origin.Equals(V.Value.Origin));
+        FACEDatGfxObj Cached; Builder.LoadGfxObj(Fixture.Root,Cached);
+        TestEqual(TEXT("Cached armor retains resolved model"),Cached.Id,Fixture.Close);
+        Builder.LoadGfxObj(Fixture.Close,Cached);
+        TestEqual(TEXT("Direct close-up lookup does not recurse through same degrade table"),Cached.Id,Fixture.Close);
+    }
+    TestTrue(TEXT("Dressed hauberk applies through the shared appearance component"),App->ApplyWorldObject(Self,100,false));
+    App->TickComponent(.5f,LEVELTICK_All,nullptr);
+    FACEDatGfxObj Chest; Builder.LoadGfxObj(0x0100120D,Chest);
+    TestEqual(TEXT("Hauberk chest uses 64 close-up faces rather than 43 coarse faces"),Chest.Polygons.Num(),64);
+    // Save front and side views for comparison with the supplied retail images.
+    Capture->FOVAngle=32;
+    for (int32 View=0; View<2; ++View)
+    {
+        const FVector ArmorEye=View==0?FVector(220,360,135):FVector(370,100,135);
+        Capture->SetWorldLocationAndRotation(ArmorEye,(FVector(0,0,110)-ArmorEye).Rotation());
+        World->SendAllEndOfFrameUpdates(); Capture->CaptureScene(); FlushRenderingCommands();
+        Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
+        FImageUtils::PNGCompressImageArray(800,600,Pixels,PNG);
+        FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/FString::Printf(TEXT("Automation/PathwardenArmor%d.png"),View)));
+    }
     GI->Shutdown(); GEngine->DestroyWorldContext(World); World->DestroyWorld(false);
     return true;
 }

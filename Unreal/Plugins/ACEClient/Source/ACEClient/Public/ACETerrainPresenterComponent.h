@@ -277,6 +277,12 @@ protected:
 	};
 	TArray<FAmbientSlot> AmbientSlots;
 	uint32 AmbientStbKey = 0;
+	uint32 AmbientListenerCell = 0;
+	uint32 AmbientOutdoorCell = 0;
+	FVector AmbientSourcePosition = FVector::ZeroVector;
+	float AmbientReachCountdown = 0.f;
+	float AmbientTargetGain = 0.f;
+	float AmbientCurrentGain = 0.f;
 	FRandomStream AmbientRandom;
 
 	UPROPERTY()

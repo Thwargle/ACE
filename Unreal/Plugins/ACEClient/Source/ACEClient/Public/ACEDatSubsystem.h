@@ -318,6 +318,9 @@ public:
 	/** Static world-space doors only; camera clipping is evaluated every frame. */
 	void LoadBuildingDoorwayApertures(uint32 LandblockId, float WorldScale,
 		TArray<ACEOutdoorPortalPlan::FAdmittedAperture>& OutApertures);
+	/** Immutable snapshot; traversal retains it safely across cache eviction/reload. */
+	TSharedPtr<const TArray<ACEOutdoorPortalPlan::FAdmittedAperture>> GetBuildingDoorwayApertures(
+		uint32 LandblockId, float WorldScale);
 
 	/** Raw EnvCell unpack (Flags / CellPortals) without building draw geometry. */
 	bool LoadEnvCell(uint32 EnvCellId, FACEDatEnvCell& OutCell);
@@ -411,6 +414,8 @@ public:
 	 * ItemType.None (untargeted); otherwise a world target is required.
 	 */
 	bool TryGetSpellTargeting(uint32 SpellId, uint32& OutBitfield, uint32& OutNonComponentTargetType);
+	/** Retail CSpellBase::InqTargetType derives the client mask from the formula. */
+	bool TryGetRetailSpellTargeting(uint32 SpellId, uint32& OutBitfield, uint32& OutTargetType, bool& OutProjectile);
 
 	/**
 	 * SpellComponentTable (0x0E00000F) joined with the SpellComponents DualDidMapper
@@ -708,7 +713,7 @@ private:
 	TMap<uint32, FACEDatLandblockInfo> LandblockInfoCache;
 	struct FCachedDoorwayGeometry
 	{
-		TArray<ACEOutdoorPortalPlan::FAdmittedAperture> Apertures;
+		TSharedPtr<const TArray<ACEOutdoorPortalPlan::FAdmittedAperture>> Apertures;
 		uint64 LastUse = 0;
 	};
 	struct FSetupRuntimeMetadata
@@ -756,6 +761,8 @@ private:
 		uint32 IconDid = 0;
 		uint32 Bitfield = 0;
 		uint32 NonComponentTargetType = 0;
+		uint32 RetailTargetType = 0;
+		bool bProjectile = false;
 		uint32 DisplayOrder = 0;
 		uint32 School = 0;
 		uint32 Power = 0;

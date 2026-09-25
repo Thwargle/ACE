@@ -116,6 +116,8 @@ namespace ACEOutdoorPortalPlan
 		{
 			return false;
 		}
+		// A convex polygon gains at most one vertex per clipping plane.
+		OutVerts.Reserve(N + 1);
 
 		auto Dist = [&](const FVector& P) -> double
 		{
@@ -167,7 +169,9 @@ namespace ACEOutdoorPortalPlan
 				OutVerts.Reset();
 				return false;
 			}
-			Cur = MoveTemp(Next);
+			// Keep both scratch allocations across planes; moving Next discarded
+			// Cur's buffer and allocated again for every plane of every portal.
+			Swap(Cur, Next);
 			Next.Reset();
 		}
 		OutVerts = MoveTemp(Cur);
@@ -212,20 +216,26 @@ namespace ACEOutdoorPortalPlan
 		if (OutExitApertures) OutExitApertures->Reset();
 		for (uint32 Key:LandblockKeys)
 		{
-			TArray<FAdmittedAperture> Doors;
-			CollectLandblockDoorwayApertures(Dat,Key,WorldScale,Doors);
-			for (auto& Door:Doors)
+			const auto Doors = Dat.GetBuildingDoorwayApertures(Key, WorldScale);
+			if (!Doors) continue;
+			for (const auto& Door:*Doors)
 			{
 				// PView uses the portal side and clipped view. The supplied resident
 				// landblocks bound work; a second 80m cutoff left distant shells hollow.
 				if (FVector::DotProduct(Door.WorldNormal,CameraWorldPos-Door.WorldVerts[0]) < -0.0002f*WorldScale) continue;
 				TArray<FVector> Clipped;
 				if (!ClipPolygonAgainstFrustum(Door.WorldVerts,PortalFrustum,Clipped)) continue;
-				Door.WorldVerts=MoveTemp(Clipped);
-				if (OutApertures) OutApertures->Add(Door);
+				if (OutApertures)
+				{
+					auto& Aperture = OutApertures->AddDefaulted_GetRef();
+					Aperture.DestEnvCellId = Door.DestEnvCellId;
+					Aperture.OtherPortalId = Door.OtherPortalId;
+					Aperture.WorldNormal = Door.WorldNormal;
+					Aperture.WorldVerts = Clipped;
+				}
 				TSet<int32> ThroughDoor; bool Outside=false; TArray<FAdmittedAperture> Exits;
 				CollectIndoorPViewCells(Dat,Door.DestEnvCellId,CameraWorldPos,
-					MakePortalFrustum(CameraWorldPos,Door.WorldVerts,PortalFrustum),WorldScale,
+					MakePortalFrustum(CameraWorldPos,Clipped,PortalFrustum),WorldScale,
 					ThroughDoor,Outside,128,OutExitApertures ? &Exits : nullptr);
 				OutAdmittedEnvCells.Append(ThroughDoor);
 				if (OutExitApertures) OutExitApertures->Append(Exits);
@@ -256,7 +266,7 @@ namespace ACEOutdoorPortalPlan
 			TArray<uint32> Path;
 		};
 		TArray<FView> Queue;
-		TArray<FAdmittedAperture> LandscapeDoors;
+		TArray<TSharedPtr<const TArray<FAdmittedAperture>>, TInlineAllocator<9>> LandscapeDoors;
 		bool bHaveLandscapeDoors = false;
 		Queue.Add({ViewerEnvCellId, MakeCameraPortalFrustum(CameraWorldPos, ViewFrustum), {ViewerEnvCellId}});
 		OutDrawCells.Add(static_cast<int32>(ViewerEnvCellId));
@@ -265,7 +275,9 @@ namespace ACEOutdoorPortalPlan
 		constexpr int32 MaxViews = 512;
 		for (int32 Qi = 0; Qi < Queue.Num() && Qi < MaxViews; ++Qi)
 		{
-			const FView View = Queue[Qi]; // Queue growth invalidates references.
+			// Each view is consumed once. Own it while queue growth invalidates
+			// references, without copying its complete frustum and traversal path.
+			const FView View = MoveTemp(Queue[Qi]);
 			if (View.Cell == 0)
 			{
 				// PView::DrawCells calls LScape::draw with the outside portal view.
@@ -278,13 +290,13 @@ namespace ACEOutdoorPortalPlan
 					for (int32 DY = -1; DY <= 1; ++DY)
 					{
 						if (X+DX < 0 || X+DX > 254 || Y+DY < 0 || Y+DY > 254) continue;
-						TArray<FAdmittedAperture> Doors;
-						CollectLandblockDoorwayApertures(Dat, ((X+DX)<<24)|((Y+DY)<<16), WorldScale, Doors);
-						LandscapeDoors.Append(Doors);
+						if (auto Doors = Dat.GetBuildingDoorwayApertures(((X+DX)<<24)|((Y+DY)<<16), WorldScale))
+							LandscapeDoors.Add(MoveTemp(Doors));
 					}
 					bHaveLandscapeDoors = true;
 				}
-				for (const FAdmittedAperture& Door : LandscapeDoors)
+				for (const auto& Block : LandscapeDoors)
+				for (const FAdmittedAperture& Door : *Block)
 				{
 					if (View.Path.Contains(Door.DestEnvCellId) || Queue.Num() >= MaxViews) continue;
 					if (FVector::DotProduct(Door.WorldNormal, CameraWorldPos-Door.WorldVerts[0]) < -0.0002*WorldScale) continue;

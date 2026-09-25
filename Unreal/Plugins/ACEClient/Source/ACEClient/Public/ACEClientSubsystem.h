@@ -561,6 +561,8 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Magic")
 	bool SendCastSpell(int32 SpellId, int32 CasterItemGuid = 0);
+	/** Shared retail target eligibility, used by UI, keyboard and VR trigger casting. */
+	bool ResolveSpellCastTarget(int32 SpellId, int32 SelectedGuid, int32& OutTarget, bool bAllowFreeAim = false) const;
 
 	UFUNCTION(BlueprintPure, Category = "ACE|Magic")
 	TArray<int32> GetKnownSpells() const;

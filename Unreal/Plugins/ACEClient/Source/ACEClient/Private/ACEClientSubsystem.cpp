@@ -5,6 +5,7 @@
 #include "GameFramework/GameModeBase.h"
 #include "ACESession.h"
 #include "ACEInventoryRules.h"
+#include "ACESpellTargeting.h"
 #include "ACEDatSubsystem.h"
 #include "Dat/ACERetailGameTime.h"
 #include "ACEPlayerController.h"
@@ -1065,67 +1066,38 @@ void UACEClientSubsystem::SendRemoveShortcut(int32 SlotIndex)
 	}
 }
 
+bool UACEClientSubsystem::ResolveSpellCastTarget(int32 SpellId, int32 SelectedGuid, int32& OutTarget, bool bAllowFreeAim) const
+{
+	OutTarget = 0;
+	if (!Session || !SpellId) return false;
+	auto* Dat = GetGameInstance() ? GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr;
+	uint32 Flags = 0, Type = 0;
+	bool bProjectile = false;
+	if (!Dat || !Dat->TryGetRetailSpellTargeting(SpellId, Flags, Type, bProjectile)) return false;
+	if (Flags & 8u) { OutTarget = Session->GetPlayerGuid(); return OutTarget != 0; }
+	if (!Type) return true;
+	const auto* Object = Session->GetWorldObjects().Find(SelectedGuid);
+	if (ACESpellTargeting::IsCompatible(Type, Session->GetPlayerGuid(), SelectedGuid, Object))
+	{
+		OutTarget = SelectedGuid;
+		return true;
+	}
+	// VR projectile aim is independent of selection. Invalid selections cannot
+	// turn an Other buff/heal into a self cast, but bolts may still fire freely.
+	return bAllowFreeAim && bProjectile;
+}
+
 bool UACEClientSubsystem::SendCastSpell(int32 SpellId, int32 CasterItemGuid)
 {
-	if (!Session || SpellId == 0)
-	{
-		return false;
-	}
+	if (!Session || !SpellId) return false;
 	if (auto* VRController = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
 		if (APawn* Pawn = VRController->GetPawn())
 			if (auto* VR = Pawn->FindComponentByClass<UACEVRComponent>(); VR && VR->IsActive())
-				return VR->SelectSpell(SpellId);
-
-	// Match portal.dat SpellTable + ACE CreatePlayerSpell targeting:
-	// NonComponentTargetType == ItemType.None → untargeted; SelfTargeted → self;
-	// otherwise require a selected world target (no cast-into-air projectiles).
-	constexpr uint32 SpellFlagSelfTargeted = 0x8u;
-	uint32 Bitfield = 0;
-	uint32 NonComponentTargetType = 0;
-	FString SpellName;
-	bool bHaveTargeting = false;
-	if (UGameInstance* GI = GetGameInstance())
-	{
-		if (UACEDatSubsystem* Dat = GI->GetSubsystem<UACEDatSubsystem>())
-		{
-			bHaveTargeting = Dat->TryGetSpellTargeting(
-				static_cast<uint32>(SpellId), Bitfield, NonComponentTargetType);
-			uint32 IconDid = 0;
-			Dat->TryGetSpellInfo(static_cast<uint32>(SpellId), SpellName, IconDid);
-		}
-	}
-
-	const bool bNameLooksSelf = SpellName.EndsWith(TEXT(" Self"), ESearchCase::IgnoreCase);
-	const bool bSelfTargeted = (Bitfield & SpellFlagSelfTargeted) != 0 || bNameLooksSelf;
-	// Untargeted only when the DAT says ItemType.None and the spell is not self-targeted.
-	const bool bUntargeted = bHaveTargeting && NonComponentTargetType == 0 && !bSelfTargeted;
-
-	const FACESelectedObject Sel = Session->GetSelectedObject();
+				return VR->SelectSpell(SpellId); // selection only; FireSpell validates the actual target
+	const auto Sel = Session->GetSelectedObject();
 	const int32 PlayerGuid = Session->GetPlayerGuid();
-
 	int32 Target = 0;
-	if (bUntargeted)
-	{
-		Target = 0;
-	}
-	else if (bSelfTargeted)
-	{
-		// Self spells never require clicking yourself first.
-		Target = PlayerGuid;
-		if (Target == 0)
-		{
-			return false;
-		}
-	}
-	else if (Sel.bValid && Sel.Guid != 0)
-	{
-		Target = Sel.Guid;
-	}
-	else
-	{
-		// Other / bolt spells need an explicit selection.
-		return false;
-	}
+	if (!ResolveSpellCastTarget(SpellId, Sel.bValid ? Sel.Guid : 0, Target)) return false;
 
 	if (Target != 0 && Target != PlayerGuid)
 	{

@@ -168,7 +168,13 @@ void UACEVRComponent::FireSpell()
 	// Otherwise retain explicit selection: crossing a sign, corpse or held mesh
 	// must not silently replace a targeted debuff or an inventory-item buff.
 	// Free-aim projectiles still use Origin/Direction, independently of selection.
-	const int32 TargetGuid = bPointedBuff ? Target->GetACEGuid() : Selected.bValid ? Selected.Guid : Target ? Target->GetACEGuid() : 0;
+	const int32 RequestedTarget = bPointedBuff ? Target->GetACEGuid() : Selected.bValid ? Selected.Guid : Target ? Target->GetACEGuid() : 0;
+	int32 TargetGuid = 0;
+	if (!Client->ResolveSpellCastTarget(SelectedSpell, RequestedTarget, TargetGuid, true))
+	{
+		SetCastFeedback(TEXT("Select an appropriate target for this spell."));
+		return;
+	}
 	if (auto Session = Client->GetSession(); Session && Session->SendVRCombat(1, PC->GetEffectiveCellId(), Weapon.Guid,
 		SelectedSpell, TargetGuid, ToAceOffset(Origin),
 		FACEPosition::AceVectorToUnreal(Direction), 1.f, 0.f))

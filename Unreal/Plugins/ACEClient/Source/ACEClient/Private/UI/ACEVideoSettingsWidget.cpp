@@ -1,5 +1,7 @@
 #include "UI/ACEVideoSettingsWidget.h"
 #include "ACECameraSettings.h"
+#include "ACEScreenshotSettings.h"
+#include "Components/EditableTextBox.h"
 #include "ACERuntimeOptions.h"
 #include "ACEClientSubsystem.h"
 #include "ACECharacterOptions.h"
@@ -147,6 +149,15 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  for(const TCHAR* Name:{TEXT("Arial"),TEXT("Courier New"),TEXT("Palatino Linotype"),TEXT("Tahoma"),TEXT("Times New Roman")}) ChatFontFace->AddOption(Name);
  ChatFontSize=Combo(TEXT("Chat Font Size")); ChatFontSize->Rename(TEXT("ChatFontSize"));
  for(const TCHAR* Name:{TEXT("Tiny"),TEXT("Small"),TEXT("Medium"),TEXT("Large"),TEXT("Extra Large")}) ChatFontSize->AddOption(Name);
+ Section(TEXT("Screenshots"));
+ Box->AddChild(Fixed(Label(TEXT("Save screenshots to:")),272,18));
+ ScreenshotDirectory=WidgetTree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass(),TEXT("ScreenshotDirectory"));
+ auto ScreenshotStyle=ScreenshotDirectory->GetWidgetStyle();
+ ScreenshotStyle.SetTextStyle(FTextBlockStyle(ScreenshotStyle.TextStyle).SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),9)));
+ ScreenshotDirectory->SetWidgetStyle(ScreenshotStyle);
+ ScreenshotDirectory->SetHintText(FText::FromString(ACEScreenshotSettings::DefaultDirectory()));
+ ScreenshotDirectory->SetToolTipText(FText::FromString(TEXT("Screenshot folder. Leave blank to use the default. Use Apply to save changes.")));
+ Box->AddChild(Fixed(ScreenshotDirectory,272,26));
  ResetVideo();
  return Super::RebuildWidget();
 }
@@ -173,6 +184,7 @@ void UACEVideoSettingsWidget::ResetVideo()
  ShowFrameRate->SetIsChecked(ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f);
  ChatFontFace->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontFace"))));
  ChatFontSize->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontSize"))));
+ ScreenshotDirectory->SetText(FText::FromString(ACEScreenshotSettings::GetDirectory()));
 }
 UWidget* UACEVideoSettingsWidget::GenerateOption(FString Option)
 {
@@ -219,6 +231,7 @@ void UACEVideoSettingsWidget::ApplyVideo()
 
 void UACEVideoSettingsWidget::ApplyInterfaceOptions()
 {
+ if(ScreenshotDirectory) ACEScreenshotSettings::SetDirectory(ScreenshotDirectory->GetText().ToString());
  ACECameraSettings::SetMouseInversion(InvertMouseX->IsChecked(),InvertMouseY->IsChecked());
  if(DesktopScale->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("DesktopUIScale"),1.f+DesktopScale->GetSelectedIndex()*.25f);
  ACERuntimeOptions::Set(TEXT("ShowFrameRate"),ShowFrameRate->IsChecked()?1.f:0.f);
@@ -249,6 +262,7 @@ void UACEVideoSettingsWidget::DefaultsVideo()
  InvertMouseX->SetIsChecked(false);InvertMouseY->SetIsChecked(false);DesktopScale->SetSelectedIndex(0);
  ShowFrameRate->SetIsChecked(false);
  ChatFontFace->SetSelectedIndex(2); ChatFontSize->SetSelectedIndex(1);
+ ScreenshotDirectory->SetText(FText::FromString(ACEScreenshotSettings::DefaultDirectory()));
 }
 
 float UACEVideoSettingsWidget::GetScrollOffset() const { return Scroll?Scroll->GetScrollOffset():0; }

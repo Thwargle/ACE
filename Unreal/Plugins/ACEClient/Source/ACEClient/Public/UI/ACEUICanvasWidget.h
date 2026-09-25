@@ -131,6 +131,9 @@ private:
 	TObjectPtr<UCanvasPanel> ElementLayer;
 
 	UPROPERTY() TMap<uint32, TObjectPtr<UBorder>> ImageWidgets;
+	/** Hit-testable window bounds below its own content, above all lower windows. */
+	UPROPERTY() TMap<uint32, TObjectPtr<UBorder>> WindowInputShields;
+	void SyncWindowInputShields();
 	/** Parallel to ImageWidgets — see FACEUIPaintState. */
 	TMap<uint32, FACEUIPaintState> PaintStates;
 	/** Reused across ticks so the sync doesn't reallocate a set every frame. */

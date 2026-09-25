@@ -17,6 +17,7 @@
 #include "Dat/ACECellTransit.h"
 #include "Dat/ACEStreamingBudget.h"
 #include "Dat/ACEOutdoorPortalPlan.h"
+#include "Dat/ACEAmbientReach.h"
 #include "Dat/ACELandblockMeshBuilder.h"
 #include "Templates/Function.h"
 #include "Engine/World.h"
@@ -1276,17 +1277,18 @@ void UACETerrainPresenterComponent::RebuildAmbientSchedule(uint32 CellId)
 
 void UACETerrainPresenterComponent::TickAmbientSounds(float DeltaTime)
 {
-	(void)DeltaTime;
 	UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
 	UACEDatSubsystem* Dat = GI ? GI->GetSubsystem<UACEDatSubsystem>() : nullptr;
 	const bool bPortalSpace = Dat && Dat->IsInPortalSpace();
-	// Login / unknown cell / portal / indoor: silence. Do not schedule cell=0 STB.
+	// Login / portal space have no outdoor source. An indoor cell alone does not
+	// silence nearby landscape sounds: retail gathers ambient from nearby landcells.
 	const bool bMuteAmbient = !bHasKnownCell
 		|| LastKnownCellId == 0
-		|| bPortalSpace
-		|| IsIndoorCell(LastKnownCellId);
+		|| bPortalSpace;
 	if (bMuteAmbient)
 	{
+		AmbientListenerCell=AmbientOutdoorCell=0;
+		AmbientReachCountdown=AmbientTargetGain=AmbientCurrentGain=0;
 		if (AmbientSlots.Num() > 0 || (AmbientScripts && AmbientScripts->IsComponentTickEnabled()))
 		{
 			AmbientSlots.Reset();
@@ -1299,31 +1301,6 @@ void UACETerrainPresenterComponent::TickAmbientSounds(float DeltaTime)
 		}
 		return;
 	}
-	EnsureAmbientScripts();
-	if (!AmbientScripts)
-	{
-		return;
-	}
-	if (!AmbientScripts->IsComponentTickEnabled())
-	{
-		AmbientScripts->SetComponentTickEnabled(true);
-	}
-
-	const FACEDatAmbientSTBDesc* Stb = nullptr;
-	uint32 NewKey = AmbientStbKey;
-	if (Dat && Dat->TryResolveAmbientSTBForCell(LastKnownCellId, Stb) && Stb)
-	{
-		NewKey = (Stb->SoundTableId << 8) ^ static_cast<uint32>(Stb->Sounds.Num());
-	}
-	if (NewKey != AmbientStbKey || AmbientSlots.Num() == 0)
-	{
-		if (AmbientScripts)
-		{
-			AmbientScripts->StopAllSounds(.75f);
-		}
-		RebuildAmbientSchedule(LastKnownCellId);
-	}
-
 	const double Now = FPlatformTime::Seconds();
 	FVector PlayerUe = FVector::ZeroVector;
 	bool bHavePlayer = false;
@@ -1351,6 +1328,48 @@ void UACETerrainPresenterComponent::TickAmbientSounds(float DeltaTime)
 	{
 		return;
 	}
+	// Use the local pawn when available; network position can lag behind the ears.
+	if (const auto* PC=GetWorld()->GetFirstPlayerController(); PC && PC->GetPawn())
+		PlayerUe=PC->GetPawn()->GetActorLocation();
+	AmbientReachCountdown-=DeltaTime;
+	if (Dat && (AmbientListenerCell!=LastKnownCellId || AmbientReachCountdown<=0))
+	{
+		AmbientReachCountdown=.2f;
+		AmbientListenerCell=LastKnownCellId;
+		const auto Reach=ACEAmbientReach::FindOutdoor(LastKnownCellId,PlayerUe,WorldScale,
+			[&](uint32 Cell) { return Dat->FindEnvCellMesh(Cell,WorldScale); });
+		AmbientOutdoorCell=Reach.OutdoorCell;
+		AmbientSourcePosition=Reach.Entrance;
+		AmbientTargetGain=Reach.Gain;
+	}
+	AmbientCurrentGain=FMath::FInterpTo(AmbientCurrentGain,AmbientTargetGain,DeltaTime,4.f);
+	if (AmbientCurrentGain<.001f && AmbientTargetGain==0)
+	{
+		if (AmbientScripts && AmbientScripts->IsComponentTickEnabled())
+		{
+			AmbientScripts->StopAllSounds(); AmbientScripts->SetComponentTickEnabled(false);
+			for (auto& Slot:AmbientSlots) Slot.bContinuousPlaying=false;
+		}
+		return;
+	}
+	EnsureAmbientScripts();
+	if (!AmbientScripts) return;
+	AmbientScripts->SetEnvironmentSoundGain(AmbientCurrentGain);
+	AmbientScripts->SetComponentTickEnabled(true);
+	const FACEDatAmbientSTBDesc* Stb=nullptr;
+	if (AmbientOutdoorCell && Dat && Dat->TryResolveAmbientSTBForCell(AmbientOutdoorCell,Stb) && Stb)
+	{
+		const uint32 NewKey=(Stb->SoundTableId<<8)^uint32(Stb->Sounds.Num());
+		if (NewKey!=AmbientStbKey || AmbientSlots.IsEmpty())
+		{
+			AmbientScripts->StopAllSounds(.75f);
+			RebuildAmbientSchedule(AmbientOutdoorCell);
+		}
+	}
+	// Keep existing voices alive through the doorway. New voices originate near
+	// the outside entrance, not deeper inside the room with the listener.
+	if (!AmbientOutdoorCell) return;
+	const FVector Source=IsIndoorCell(LastKnownCellId) ? AmbientSourcePosition : PlayerUe;
 
 	for (FAmbientSlot& Slot : AmbientSlots)
 	{
@@ -1363,7 +1382,7 @@ void UACETerrainPresenterComponent::TickAmbientSounds(float DeltaTime)
 			}
 			const float DistAc = AmbientRandom.FRandRange(2.f, 10.f);
 			const float Yaw = AmbientRandom.FRandRange(0.f, 2.f * PI);
-			const FVector PlayAt = PlayerUe + FVector(
+			const FVector PlayAt = Source + FVector(
 				-FMath::Sin(Yaw) * DistAc * WorldScale,
 				FMath::Cos(Yaw) * DistAc * WorldScale,
 				AmbientRandom.FRandRange(-1.f, 3.f) * WorldScale);
@@ -1390,7 +1409,7 @@ void UACETerrainPresenterComponent::TickAmbientSounds(float DeltaTime)
 		// Intermittent outdoor cues scatter around the avatar (distance + stereo pan).
 		const float DistAc = AmbientRandom.FRandRange(8.f, 36.f);
 		const float Yaw = AmbientRandom.FRandRange(0.f, 2.f * PI);
-		const FVector PlayAt = PlayerUe + FVector(
+		const FVector PlayAt = Source + FVector(
 			-FMath::Sin(Yaw) * DistAc * WorldScale,
 			FMath::Cos(Yaw) * DistAc * WorldScale,
 			AmbientRandom.FRandRange(-1.f, 3.f) * WorldScale);

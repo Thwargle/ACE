@@ -58,6 +58,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Slate/WidgetRenderer.h"
+#include "Input/HittestGrid.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/CanvasPanel.h"
@@ -78,7 +79,8 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Retail sans font retains its own atlas"),ACEUIFontStyles::FontIdForStyleName(TEXT("sansfont16")),0x40000009u);
     TestEqual(TEXT("Named medium field font resolves without numeric suffix"),ACEUIFontStyles::FontIdForStyleName(TEXT("fieldvaluemedium")),0x40000000u);
     auto* GI=NewObject<UGameInstance>();
-    auto* Dat=NewObject<UACEDatSubsystem>(GI);
+    GI->Init();
+    auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
     if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
     auto* Resources=NewObject<UACEUIResourceResolver>(); Resources->Initialize(Dat);
     FACEDatFont BaseFont; Resources->ResolveFont(0x40000000u,BaseFont);
@@ -763,6 +765,66 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     const auto Title=Manager->FindElementByName(TEXT("InvTitleText"));
     if (Title) Gameplay->TryFinishInventoryDrag(FVector2D(Title->GetScreenOrigin())+FVector2D(8,8));
     TestEqual(TEXT("Cancelled item drag cannot arm double-click use"),Gameplay->LastInvClickGuid,0);
+    if (FApp::CanEverRender())
+    {
+        // Exercise Slate's actual input path, not only our model hit-test helpers.
+        // Visible native chat text used to win through HitTestInvisible DAT art.
+        const auto ChatWindow=Manager->FindElementByName(TEXT("RootGameplay_FloatyMainChat_Field"));
+        const auto CombatWindow=Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field"));
+        const auto VendorWindow=Manager->FindElementByName(TEXT("RootGameplay_FloatyEnvPanel_Field"));
+        const auto PreviousMode=Gameplay->CombatMode;
+        Gameplay->ApplyCombatMode(static_cast<int32>(ACECombatMode::Magic));
+        Gameplay->ShowVendorPanel(9876);
+        FWidgetRenderer Renderer(true,true); FHittestGrid Grid;
+        const auto Window=SNew(SVirtualWindow).Size(FVector2D(ScreenSize)); Window->SetContent(Slate);
+        auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(ScreenSize),TF_Bilinear,true);
+        auto Draw=[&]()
+        {
+            for(int32 Pass=0;Pass<3;++Pass)
+            {
+                Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
+                Renderer.DrawWindow(Target,Grid,Window,1.f,FVector2D(ScreenSize),0.f);
+                FlushRenderingCommands();
+            }
+        };
+        Manager->BringFloatyToFront(ChatWindow); Draw();
+        for (UWidget* Chat : {static_cast<UWidget*>(Gameplay->ChatEntry.Get()),static_cast<UWidget*>(Gameplay->ChatLog.Get())})
+        {
+            const auto Geometry=Chat->GetCachedGeometry();
+            FVector2D Point=Geometry.LocalToAbsolute(Chat==Gameplay->ChatEntry
+                ? Geometry.GetLocalSize()*.5 : FVector2D(40,Geometry.GetLocalSize().Y-8));
+            auto HitsChat=[&]()
+            {
+                for(const auto& Hit:Grid.GetBubblePath(Point,0,false))
+                    if(Hit.Widget==Chat->TakeWidget()) return true;
+                return false;
+            };
+            // Empty space in the log intentionally bubbles to DAT chrome. Find
+            // an actual visible text row rather than assuming the last line fills it.
+            if(Chat==Gameplay->ChatLog && !HitsChat())
+                for(float Y=2;Y<Geometry.GetLocalSize().Y;++Y)
+                {
+                    Point=Geometry.LocalToAbsolute(FVector2D(40,Y));
+                    if(HitsChat())break;
+                }
+            TestTrue(TEXT("Uncovered chat retains native editing/selection hit path"),HitsChat());
+            for(const auto& Front:{CombatWindow,VendorWindow})
+            {
+                const FIntPoint Drag(Front->UserDragX,Front->UserDragY);
+                const FIntPoint Origin=Front->GetScreenOrigin();
+                const FVector2D Local=Canvas->ViewportToLayout(Canvas->GetCachedGeometry().AbsoluteToLocal(Point));
+                Front->UserDragX+=FMath::RoundToInt(Local.X)-Origin.X-Front->Width/2;
+                Front->UserDragY+=FMath::RoundToInt(Local.Y)-Origin.Y-Front->Height/2;
+                Manager->BringFloatyToFront(Front); Draw();
+                TestFalse(TEXT("Front spell/vendor window blocks native chat focus through its art"),HitsChat());
+                TestTrue(TEXT("Front window owns the overlapping mouse point"),Manager->FindWindowAtCanvas(Local.X,Local.Y)==Front);
+                Manager->BringFloatyToFront(ChatWindow); Draw();
+                TestTrue(TEXT("Raising chat restores native input without rebuilding its text"),HitsChat());
+                Front->UserDragX=Drag.X; Front->UserDragY=Drag.Y; Draw();
+            }
+        }
+        Gameplay->HideVendorPanel(); Gameplay->ApplyCombatMode(PreviousMode);
+    }
     Gameplay->bChatTargetPopupOpen=true; Gameplay->RefreshChatTargetPopup();
     CaptureScreen(TEXT("GameplayChatMenu"));
     TestTrue(TEXT("Say menu background is below its channel options"),
@@ -770,6 +832,18 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         <Cast<UCanvasPanelSlot>(Gameplay->ChatTargetPopupRows[0]->Slot)->GetZOrder());
     TestEqual(TEXT("Chat menu uses all fourteen retail entries"),Gameplay->ChatTargetPopupRows.Num(),14);
     TestTrue(TEXT("Chat menu text uses the authored DAT font"),CastChecked<UACERetailTextBlock>(Gameplay->ChatTargetPopupRows[0])->GetBitmapFont()!=nullptr);
+    {
+        const auto Saved=Client->Session->SelectedObject;
+        FACEWorldObject NPC;NPC.Guid=0x123455;NPC.Name=TEXT("Eiichi");NPC.ItemType=ACEItemType::Creature;
+        Client->Session->WorldObjects.Add(NPC.Guid,NPC);
+        FACESelectedObject Selected;Selected.Guid=NPC.Guid;Selected.bValid=true;
+        Client->Session->SelectedObject=Selected;Gameplay->RefreshChatTargetPopup();
+        TestEqual(TEXT("Retail Tell selection includes NPC names"),Gameplay->ChatTargetPopupRows[2]->GetText().ToString(),FString(TEXT("Tell to Eiichi")));
+        TestTrue(TEXT("NPC Tell option is enabled"),Gameplay->ChatTargetPopupElements[2]->PaintState!=13);
+        NPC.ItemType=ACEItemType::Container;Client->Session->WorldObjects[NPC.Guid]=NPC;Gameplay->RefreshChatTargetPopup();
+        TestEqual(TEXT("Objects cannot receive selected tells"),Gameplay->ChatTargetPopupElements[2]->PaintState,13u);
+        Client->Session->WorldObjects.Remove(NPC.Guid);Client->Session->SelectedObject=Saved;Gameplay->RefreshChatTargetPopup();
+    }
     const auto Row=Gameplay->ChatTargetPopupRows[8];
     const FVector2D RowCenter=Row->GetCachedGeometry().LocalToAbsolute(Row->GetCachedGeometry().GetLocalSize()*.5);
     TestTrue(TEXT("Say menu accepts channel click"),Gameplay->TryHandleModalPopupClick(RowCenter));
@@ -1410,7 +1484,9 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         Canvas->NativeOnMouseButtonUp(G,FPointerEvent(0,ArrowAbsolute,ArrowAbsolute,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
         TestEqual(TEXT("Right arrow scrolls one entry"),Gameplay->SpellHotbarScrollOffset,1);
         TestEqual(TEXT("Scrolling preserves absolute selected favorite"),Gameplay->SelectedCombatSpellSlot,0);
-        Session.SelectedObject.bValid=true; Session.SelectedObject.Guid=Player.Guid;
+        FACEWorldObject SpellRecipient; SpellRecipient.Guid=1235; SpellRecipient.bIsPlayer=true; SpellRecipient.ItemType=ACEItemType::Creature;
+        Session.WorldObjects.Add(SpellRecipient.Guid,SpellRecipient);
+        Session.SelectedObject.bValid=true; Session.SelectedObject.Guid=SpellRecipient.Guid;
         Session.CachedC2SPackets.Reset(); Gameplay->CastSelectedHotbarSpell();
         bool CastOriginal=false;
         for(const auto& P:Session.CachedC2SPackets)
@@ -1923,6 +1999,58 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         Gameplay->SelectedPackGuid=Device.Guid; Session.CachedC2SPackets.Reset(); Gameplay->UseShortcutSlot(8);
         TestEqual(TEXT("Main backpack shortcut opens the player's inventory"),Gameplay->SelectedPackGuid,Player.Guid);
         TestFalse(TEXT("Main backpack shortcut never sends Use on the player"),HasAction(ACEGameAction::Use));
+        // gmToolbarUI::UseShortcut: using a kit and acquiring self are not
+        // selection changes. Exercise keyboard activation and native pointer
+        // press/release on the backpack (the latter also arms inventory drags).
+        {
+            const auto SavedSelection=Session.SelectedObject;
+            const auto SavedShortcuts=Session.ShortcutObjects;
+            const int32 SavedCombatMode=Gameplay->CombatMode;
+            FACEWorldObject Kit; Kit.Guid=98801; Kit.Name=TEXT("Healing Kit");
+            Kit.ContainerId=Player.Guid; Kit.ItemType=ACEItemType::Misc;
+            Kit.ItemUseable=0x400008; // Contained source, creature target.
+            FACEWorldObject Monster; Monster.Guid=98802; Monster.Name=TEXT("Combat target");
+            Monster.ItemType=ACEItemType::Creature; Monster.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
+            Monster.Position=Player.Position;
+            Session.WorldObjects.Add(Kit.Guid,Kit); Session.WorldObjects.Add(Monster.Guid,Monster);
+            Session.ShortcutObjects[8]=Kit.Guid; Session.ShortcutObjects[7]=Player.Guid;
+            for (int32 Mode : {int32(ACECombatMode::Melee),int32(ACECombatMode::Magic)})
+            for (int32 Input=0; Input<3; ++Input)
+            {
+                Gameplay->CombatMode=Mode; Session.bUseBusy=false;
+                Gameplay->CancelPendingUseWith(); Session.CachedC2SPackets.Reset();
+                Gameplay->LastInvClickGuid=0; Gameplay->LastInvClickTime=0;
+                Session.SelectedObject.bValid=true; Session.SelectedObject.Guid=Monster.Guid;
+                const auto Serial=Session.SelectedObject.SelectionSerial;
+                if (Input==0) Gameplay->UseShortcutSlot(9);
+                else if (Input==1)
+                {
+                    NativeClick(TEXT("ShortcutBar_Shortcut9Button"));
+                    TestEqual(TEXT("First kit click keeps the monster selected"),Client->GetSelectedObject().Guid,Monster.Guid);
+                    NativeClick(TEXT("ShortcutBar_Shortcut9Button"));
+                }
+                else
+                {
+                    Gameplay->HandleNamedClick(TEXT("ShortcutBar_Shortcut9Button"));
+                    Gameplay->HandleNamedClick(TEXT("ShortcutBar_Shortcut9Button"));
+                }
+                TestEqual(TEXT("Kit activation retains combat target"),Client->GetSelectedObject().Guid,Monster.Guid);
+                TestEqual(TEXT("Kit arms targeted use"),Gameplay->PendingUseWithSourceGuid,Kit.Guid);
+                if (Input==0) Gameplay->UseShortcutSlot(8);
+                else if (Input==1) NativeClick(TEXT("ShortcutBar_Shortcut8Button"));
+                else Gameplay->HandleNamedClick(TEXT("ShortcutBar_Shortcut8Button"));
+                TestEqual(TEXT("Self healing retains combat target"),Client->GetSelectedObject().Guid,Monster.Guid);
+                TestEqual(TEXT("No transient selection change during self healing"),Session.SelectedObject.SelectionSerial,Serial);
+                TestEqual(TEXT("Self healing does not change stance"),Gameplay->CombatMode,Mode);
+                TestEqual(TEXT("Self healing retires use cursor"),Gameplay->PendingUseWithSourceGuid,0);
+                TestTrue(TEXT("Self healing emits UseWithTarget"),HasAction(ACEGameAction::UseWithTarget));
+                TestFalse(TEXT("Self healing never sends Use on the backpack/player"),HasAction(ACEGameAction::Use));
+                LastWire(ACEGameAction::UseWithTarget,{uint32(Kit.Guid),uint32(Player.Guid)});
+            }
+            Session.bUseBusy=false; Session.ShortcutObjects=SavedShortcuts;
+            Session.WorldObjects.Remove(Kit.Guid); Session.WorldObjects.Remove(Monster.Guid);
+            Session.SelectedObject=SavedSelection; Gameplay->CombatMode=SavedCombatMode;
+        }
         // Native inventory drags and server acknowledgements exercise the cached UI.
         const auto SavedObjects=Session.WorldObjects;
         const auto SavedContents=Session.ContainerContents;
@@ -2342,6 +2470,13 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Session.VendorMerchandise[0].MaxStackSize=250;Session.VendorMerchandise[0].VendorQuantityAvailable=17;
             Pick.Guid=Stock.Guid;Session.SelectedObject=Pick;Gameplay->VendorSelectedGuid=Stock.Guid;Gameplay->HandleSelectionChanged(Pick);
             TestEqual(TEXT("Quantity follows current vendor stock, not the stale object cache"),Gameplay->SelectedStackMax,17);
+            TestEqual(TEXT("Selecting vendor stock defaults to the whole available stack"),Gameplay->SelectedStackAmount,17);
+            Gameplay->VendorBuyCart.Reset();Gameplay->AddSelectedVendorItemToBuyCart();
+            TestEqual(TEXT("Vendor Add transfers the full selected stack"),Gameplay->VendorBuyCart[0].Key,17);
+            Gameplay->SelectedStackAmount=5;Gameplay->HandleSelectionChanged(Pick);
+            TestEqual(TEXT("Selection refresh preserves an explicitly split quantity"),Gameplay->SelectedStackAmount,5);
+            Gameplay->VendorBuyCart.Reset();Gameplay->AddSelectedVendorItemToBuyCart();
+            TestEqual(TEXT("Vendor Add respects the user's quantity adjustment"),Gameplay->VendorBuyCart[0].Key,5);
             Session.VendorMerchandise[0].VendorQuantityAvailable=-1;Gameplay->HandleVendorOpened(99122);
             TestEqual(TEXT("Unlimited ammunition is limited to its real stack size"),Gameplay->SelectedStackMax,250);
             Session.VendorMerchandise[0].VendorQuantityAvailable=0;Gameplay->HandleVendorOpened(99122);

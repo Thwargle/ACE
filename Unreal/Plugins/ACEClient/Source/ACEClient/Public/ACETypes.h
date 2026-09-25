@@ -1298,6 +1298,8 @@ struct ACECLIENT_API FACEWorldObject
 
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 ObjectDescriptionFlags = 0;
+	/** Retail excludes summoned combat pets from spell targets. */
+	int32 PetOwnerId = 0;
 
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 PhysicsState = 0;

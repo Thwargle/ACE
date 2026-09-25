@@ -1798,6 +1798,7 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader)
 	Obj.CurrentWieldedLocation = static_cast<int64>(Decoded.CurrentWieldedLocation);
 	Obj.ValidLocations = static_cast<int64>(Decoded.ValidLocations);
 	Obj.ObjectDescriptionFlags = Decoded.ObjectDescriptionFlags;
+	Obj.PetOwnerId = Decoded.PetOwnerId;
 	Obj.PhysicsState = Decoded.PhysicsState;
 	Obj.UseRadius = Decoded.UseRadius;
 	Obj.AmmoType = Decoded.AmmoType;
@@ -5485,6 +5486,7 @@ void FACESession::HandleApproachVendor(FACEBinaryReader& Reader)
 		Obj.MaterialType = Decoded.MaterialType;
 		Obj.ValidLocations = static_cast<int64>(Decoded.ValidLocations);
 		Obj.ObjectDescriptionFlags = Decoded.ObjectDescriptionFlags;
+		Obj.PetOwnerId = Decoded.PetOwnerId;
 		Obj.ContainerId = VendorGuid;
 		WorldObjects.Add(Obj.Guid, Obj);
 		VendorMerchandise.Add(Obj);
