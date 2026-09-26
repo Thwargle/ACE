@@ -47,6 +47,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACEMissingDatLoginTest;
 	friend class FACELauncherViewportTest;
 	friend class FACECameraEdgeTest;
+	friend class FACEInputBindingsTest;
 	friend class FACERetailScreenTest;
     friend class UACEUICharSelectBinder;
     friend class UACEUICharGenBinder;
@@ -248,6 +249,8 @@ protected:
 	/** Retail-style auto-run (NumLock / Mouse4). Cleared by W/S. */
 	bool bAutoRun = false;
 	bool bNumLockWasDown = false;
+	float PreviousManualForward = 0.f;
+	void UpdateKeyboardAutoRun(float& Forward, bool bToggleDown);
 	bool bMouse4WasDown = false;
 	bool bWasMoving = false;
 	/** ControlRotation frozen for portal tunnel so exit view isn't tilted. */
@@ -383,6 +386,7 @@ protected:
 	void UpdateMouseLook(float DeltaTime, USpringArmComponent* Boom);
 	bool UpdateMouseButtons(bool bRightDown, bool bLeftDown, bool bInputFocused, bool bOverUI);
 	void ApplyMouseLookDelta(float DeltaX, float DeltaY, USpringArmComponent* Boom);
+	void ApplyCameraOrbitDelta(USpringArmComponent* Boom, float YawDegrees, float PitchDegrees);
 	void UpdateCombatTargetCameraAssist(float DeltaTime, USpringArmComponent* Boom);
 	void SyncUserCameraArmLength(USpringArmComponent* Boom);
 	void AdjustMouseCameraDistance(float WheelDelta);

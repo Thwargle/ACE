@@ -363,7 +363,7 @@ bool FACEObjectCreateParser::ParseWeenieHeader(FACEBinaryReader& Reader, FACEDec
 
 	auto Need = [&](int32 N) { return Reader.CanRead(N); };
 
-	if (WeenieFlags & PluralName) Reader.ReadString16L();
+	if (WeenieFlags & PluralName) Out.PluralName=Reader.ReadString16L();
 	// NOTE: ItemsCapacity/ContainersCapacity/CombatUse are single bytes on the wire (per the
 	// real CreateObject/PublicWeenieDesc layout), NOT 4-byte ints — the underlying ACE server
 	// fields are nullable byte/sbyte, but only 1 byte is actually serialized when present.

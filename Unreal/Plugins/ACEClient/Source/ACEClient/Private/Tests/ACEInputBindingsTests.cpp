@@ -4,6 +4,7 @@
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
 #include "ACEInputBindings.h"
+#include "ACEPlayerController.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerInput.h"
@@ -21,6 +22,16 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  auto* World=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);
  auto* PC=World->SpawnActor<APlayerController>();PC->PlayerInput=NewObject<UPlayerInput>(PC);
  ON_SCOPE_EXIT{World->DestroyWorld(false);GGameUserSettingsIni=Original;ACEInputBindings::Reload();};
+ auto* Movement=World->SpawnActor<AACEPlayerController>();
+ auto Forward=[&](float Value,bool Toggle){Movement->UpdateKeyboardAutoRun(Value,Toggle);return Value;};
+ Forward(1,false); Forward(1,true); Forward(1,true); Forward(1,false);
+ TestTrue(TEXT("Autorun takes over while forward is already held"),Movement->bAutoRun);
+ TestEqual(TEXT("Releasing forward keeps autorun moving"),Forward(0,false),1.f);
+ Forward(1,false);TestFalse(TEXT("A new forward press cancels autorun"),Movement->bAutoRun);
+ Forward(0,false);Forward(0,true);Forward(0,false);Forward(-1,false);
+ TestFalse(TEXT("A new backward press cancels autorun"),Movement->bAutoRun);
+ Forward(0,true);Forward(0,false);Forward(0,true);
+ TestFalse(TEXT("Second autorun press toggles it off"),Movement->bAutoRun);
  auto Hold=[&](TArray<FKey> Keys)
  {
   PC->PlayerInput->FlushPressedKeys();

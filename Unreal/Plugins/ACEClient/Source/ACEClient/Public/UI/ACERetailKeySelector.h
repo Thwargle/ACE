@@ -5,6 +5,7 @@
 class UTextBlock;
 class UACEUICanvasWidget;
 struct FACEUIElement;
+class IInputProcessor;
 UCLASS()
 class ACECLIENT_API UACERetailKeySelector : public UInputKeySelector
 {
@@ -18,6 +19,11 @@ public:
  TSharedPtr<FACEUIElement> RetailElement;
  bool bSyncing=false;
  UFUNCTION() void AcceptBinding(FInputChord Chord);
+ UFUNCTION() void CaptureStateChanged();
+ bool FilterCaptureKey(const FKeyEvent& Event,bool Down);
+ virtual void ReleaseSlateResources(bool ReleaseChildren) override;
 protected:
  virtual TSharedRef<SWidget> RebuildWidget() override;
+ TSharedPtr<IInputProcessor> CaptureFilter;
+ TSet<FKey> CapturePressedKeys;
 };

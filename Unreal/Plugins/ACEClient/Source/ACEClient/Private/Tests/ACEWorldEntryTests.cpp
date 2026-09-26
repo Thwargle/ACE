@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Framework/Application/SlateApplication.h"
 #include "ACEPlayerController.h"
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
@@ -799,11 +800,32 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             TestFalse(TEXT("Numpad still moves the camera in either Num Lock state"),TestBoom->GetRelativeRotation().Equals(FRotator(-15,0,0),.001));
         }
         Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.016f,false);
+        TestBoom->TargetArmLength=600;Controller->UserCameraArmLength=600;
+        Controller->bCameraDefaultsCaptured=true;
+        for(const FKey& Key:{EKeys::Subtract,EKeys::Add})
+        {
+            PressKey(Key);Controller->PlayerInput->ProcessInputStack({},.1f,false);
+            const float Before=TestBoom->TargetArmLength;
+            Controller->PlayerTick(.1f);
+            TestTrue(TEXT("Physical keypad +/- zoom the camera with retail direction"),Key==EKeys::Subtract ? TestBoom->TargetArmLength<Before : TestBoom->TargetArmLength>Before);
+            Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.1f,false);
+        }
+        PressKey(ACEInputBindings::NumpadEnterKey());Controller->PlayerInput->ProcessInputStack({},.016f,false);
+        Controller->PlayerTick(.016f);
+        TestTrue(TEXT("Physical keypad Enter toggles overhead mode"),Controller->bCameraMapMode);
+        Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.016f,false);Controller->PlayerTick(.016f);
+        PressKey(ACEInputBindings::NumpadEnterKey());Controller->PlayerInput->ProcessInputStack({},.016f,false);Controller->PlayerTick(.016f);
+        TestFalse(TEXT("Second physical keypad Enter returns to normal view"),Controller->bCameraMapMode);
+        Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.016f,false);
         // Tiny mouse turns are below the packet-send threshold but still belong
         // to local prediction; otherwise the next idle tick restores the old yaw.
         Client->SendSetSingleCharacterOption(0x31,true);
         Controller->bHavePredictedPose=false;Controller->bHaveLastServerPose=false;
         Session->SetLocalPosition(StartPose);Pawn->SetActorTransform(StartTransform);
+        // The offscreen fixture must not inherit a cursor over another test's
+        // Slate controls: this checks turning, not UI gesture interception.
+        const FVector2D SavedCursor=FSlateApplication::Get().GetCursorPos();
+        FSlateApplication::Get().SetCursorPos(FVector2D(-100000,-100000));
         PressKey(EKeys::RightMouseButton);
         Controller->PlayerInput->ProcessInputStack({},.016f,false);
         TestBoom->SetRelativeRotation(FRotator(-15,.1f,0));
@@ -814,6 +836,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
         Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.016f,false);
         Controller->PlayerTick(.016f);
         TestTrue(TEXT("Sub-threshold mouse turn survives the next idle frame"),Pawn->GetActorQuat().Equals(TinyTurn,.00001f));
+        FSlateApplication::Get().SetCursorPos(SavedCursor);
         // The double-click interaction path must arrive and send Use with any orbit offset.
         // Use the actual controller, collision, network writer and isolated loopback socket.
         auto* ApproachSockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);

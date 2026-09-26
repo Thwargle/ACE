@@ -1146,6 +1146,10 @@ struct ACECLIENT_API FACEWorldObject
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	FString Name;
 
+	/** Optional server-authored name for stacks larger than one. */
+	UPROPERTY(BlueprintReadOnly, Category = "ACE")
+	FString PluralName;
+
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 WeenieClassId = 0;
 

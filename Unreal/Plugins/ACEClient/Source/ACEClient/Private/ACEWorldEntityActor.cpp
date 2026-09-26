@@ -285,7 +285,9 @@ void AACEWorldEntityActor::InitializeFromObject(const FACEWorldObject& Object, f
 		SetActorHiddenInGame(true);
 	}
 
-	if (Object.bHasVelocity && ApplyPlacement)
+	// ApplyACEPosition already consumes descriptor velocity and resolves the
+	// grounded flag. Reapplying it here made grounded runners ballistic again.
+	if (Object.bHasVelocity && ApplyPlacement && !Object.bHasPosition && ParentGuid == 0)
 	{
 		ApplyPhysicsVelocity(Object.Velocity, Object.Omega);
 	}
@@ -1870,7 +1872,7 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position)
 	if (bSnap)
 	{
 		// Projectiles integrate their own arc (with gravity) — don't pin them to the floor.
-		if (!Position.bHasVelocity && !bHavePhysicsVelocity && !bMissile)
+		if (!bHavePhysicsVelocity && !bMissile)
 		{
 			// Indoor: TraceGroundZ hits EnvCell physics mesh when streamed; never outdoor heightfield.
 			if (ClampLocationToGround(NewLocation, &NewRotation))

@@ -1666,6 +1666,7 @@ void FACESession::UpsertWorldObject(const FACEWorldObject& Object)
 		{
 			Merged.Name = Existing->Name;
 		}
+		if (Merged.PluralName.IsEmpty()) Merged.PluralName=Existing->PluralName;
 	}
 	// ViewContents and CreateObject use separate ordered queues. The list can arrive
 	// before an item (or its containing bag); recover membership before publishing
@@ -1747,6 +1748,7 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader)
 	FACEWorldObject Obj;
 	Obj.Guid = Decoded.Guid;
 	Obj.Name = Decoded.Name;
+	Obj.PluralName = Decoded.PluralName;
 	Obj.WeenieClassId = Decoded.WeenieClassId;
 	Obj.IconId = Decoded.IconId;
 	Obj.IconOverlayId = Decoded.IconOverlayId;
@@ -5469,6 +5471,7 @@ void FACESession::HandleApproachVendor(FACEBinaryReader& Reader)
 		FACEWorldObject Obj;
 		Obj.Guid = Decoded.Guid;
 		Obj.Name = Decoded.Name;
+		Obj.PluralName = Decoded.PluralName;
 		Obj.WeenieClassId = Decoded.WeenieClassId;
 		Obj.IconId = Decoded.IconId;
 		Obj.IconOverlayId = Decoded.IconOverlayId;

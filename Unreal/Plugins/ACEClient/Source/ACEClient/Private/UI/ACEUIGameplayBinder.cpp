@@ -224,12 +224,13 @@ namespace
 			return Obj.Name;
 		}
 		const int32 Amt = (AmountOverride > 0) ? FMath::Clamp(AmountOverride, 1, Total) : Total;
+		const FString& Name=Amt!=1 && !Obj.PluralName.IsEmpty() ? Obj.PluralName : Obj.Name;
 		if (Amt < Total)
 		{
 			return FString::Printf(TEXT("%s %s (of %s)"),
-				*FormatXpNumber(Amt), *Obj.Name, *FormatXpNumber(Total));
+				*FormatXpNumber(Amt), *Name, *FormatXpNumber(Total));
 		}
-		return FString::Printf(TEXT("%s %s"), *FormatXpNumber(Amt), *Obj.Name);
+		return FString::Printf(TEXT("%s %s"), *FormatXpNumber(Amt), *Name);
 	}
 	/** Retail MotionCommand.Pickup — play locally when looting (server also broadcasts). */
 	void PlayLocalPickupMotion(AACEPlayerController* PC)
@@ -261,13 +262,19 @@ namespace
 			OutSlotObjs[I] = Items[I];
 		}
 	}
-	uint32 VendorSellCost(int32 Value, float SellRate)
+	uint32 VendorSellCost(const FACEWorldObject& Item, int32 Quantity, float SellRate)
 	{
-		return static_cast<uint32>(FMath::Max(1, FMath::CeilToInt(SellRate * static_cast<float>(FMath::Max(0, Value)) - 0.1f)));
+		// Retail VendorProfile divides the stack value first; ShopSystem gives
+		// trade notes a fixed 15% purchase premium, independent of this vendor.
+		const double Rate=Item.ItemType==ACEItemType::PromissoryNote ? 1.15 : double(SellRate);
+		const int32 UnitValue=FMath::Max(0,Item.Value)/FMath::Max(1,Item.StackSize);
+		return static_cast<uint32>(FMath::Max(1,FMath::CeilToInt(FMath::Min(double(MAX_int32),Rate*UnitValue*Quantity-.1))));
 	}
-	int32 VendorBuyPayout(int32 Value, float BuyRate)
+	int32 VendorBuyPayout(const FACEWorldObject& Item, int32 Quantity, float BuyRate)
 	{
-		return FMath::Max(1, FMath::FloorToInt(BuyRate * static_cast<float>(FMath::Max(0, Value)) + 0.1f));
+		const double Rate=Item.ItemType==ACEItemType::PromissoryNote ? 1.0 : double(BuyRate);
+		const int32 UnitValue=FMath::Max(0,Item.Value)/FMath::Max(1,Item.StackSize);
+		return FMath::Max(1,FMath::FloorToInt(FMath::Min(double(MAX_int32),Rate*UnitValue*Quantity+.1)));
 	}
 	/** Retail ItemSlot_Generic empty cell / selected overlay (LayoutDesc 0x21000037). */
 	constexpr int32 DidInvSlotBg = 0x06004D20;
@@ -6202,7 +6209,7 @@ void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Sele
 				SelectedStackMax=GetVendorSelectionLimit(Obj.Guid);
 			}
 			SelectedStackAmount=SelectedStackMax<=0 ? 0 : SameStackSelection ? FMath::Clamp(PreviousStackAmount,1,SelectedStackMax)
-				: SelectedStackMax;
+				: VendorStock ? ACEInventoryRules::VendorInitialQuantity(Obj,SelectedStackMax) : SelectedStackMax;
 		}
 		// Keep an open examine/inspect panel in sync with the current selection.
 		if (Manager)
@@ -9202,7 +9209,8 @@ void UACEUIGameplayBinder::RefreshSpellHotbarOverlays()
 	constexpr int32 DefaultWidth = 625;
 	CombatRoot->AuthoredWidth = DefaultWidth;
 	CombatRoot->MinWidth = 400;
-	CombatRoot->MaxWidth = Manager->GetCanvasWidth();
+	CombatRoot->MaxWidth = FMath::Max(CombatRoot->MinWidth,
+		FMath::FloorToInt(Canvas->ViewportToLayout(Canvas->GetCachedGeometry().GetLocalSize()).X));
 	const int32 Width = FMath::Clamp(DefaultWidth + CombatRoot->UserResizeW, CombatRoot->MinWidth, CombatRoot->MaxWidth);
 	const int32 ContentW = Width - 10;
 	const int32 ScrollW = ContentW - BankX - GapAfterScroll - CastW - FramePadRight;
@@ -10560,16 +10568,22 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 		bHaveObj = Client->GetWorldObject(LastSelection.Guid, SelObj);
 		if (bHaveObj)
 		{
-			if (OpenVendorGuid && Client->GetVendorMerchandise().ContainsByPredicate(
-				[&](const FACEWorldObject& Stock){return Stock.Guid==SelObj.Guid;}))
+			const auto Merchandise=OpenVendorGuid ? Client->GetVendorMerchandise() : TArray<FACEWorldObject>();
+			const FACEWorldObject* Stock=Merchandise.FindByPredicate(
+				[&](const FACEWorldObject& Item){return Item.Guid==SelObj.Guid;});
+			if (Stock)
 			{
+				SelObj=*Stock;
 				SelectedStackMax=GetVendorSelectionLimit(SelObj.Guid);
 				SelectedStackAmount=SelectedStackMax>0 ? FMath::Clamp(SelectedStackAmount,1,SelectedStackMax) : 0;
+				// Retail describes the stock here, independently of the split slider.
+				SelObj.StackSize=FMath::Max(1,SelectedStackMax);
 			}
 			const bool bStackable = SelObj.MaxStackSize > 1 || SelObj.StackSize > 1;
 			if (bStackable)
 			{
-				Name = FormatItemStackName(SelObj, SelectedStackAmount);
+				const bool VendorStock=OpenVendorGuid && GetVendorPurchaseLimit(SelObj.Guid)>0;
+				Name = FormatItemStackName(SelObj, VendorStock ? INDEX_NONE : SelectedStackAmount);
 			}
 			else if (Name.IsEmpty())
 			{
@@ -13996,7 +14010,7 @@ void UACEUIGameplayBinder::BuySelectedVendorItem()
 	TArray<TPair<int32, int32>> One;
 	const int32 Limit=GetVendorPurchaseLimit(VendorSelectedGuid);
 	if (Limit<=0) return;
-	One.Emplace(LastSelection.Guid==VendorSelectedGuid ? FMath::Clamp(SelectedStackAmount,1,Limit) : Limit, VendorSelectedGuid);
+	One.Emplace(LastSelection.Guid==VendorSelectedGuid ? FMath::Clamp(SelectedStackAmount,1,Limit) : 1, VendorSelectedGuid);
 	Client->SendBuyItems(OpenVendorGuid, One);
 }
 
@@ -14008,7 +14022,7 @@ void UACEUIGameplayBinder::AddSelectedVendorItemToBuyCart()
 	}
 	const int32 Limit=GetVendorPurchaseLimit(VendorSelectedGuid);
 	if (Limit<=0) return;
-	const int32 Quantity=LastSelection.Guid==VendorSelectedGuid ? FMath::Clamp(SelectedStackAmount,1,Limit) : Limit;
+	const int32 Quantity=LastSelection.Guid==VendorSelectedGuid ? FMath::Clamp(SelectedStackAmount,1,Limit) : 1;
 	for (TPair<int32, int32>& P : VendorBuyCart)
 	{
 		if (P.Value == VendorSelectedGuid)
@@ -14157,16 +14171,17 @@ void UACEUIGameplayBinder::RefreshVendorInfoTexts()
 
 	if (ActiveVendorPage == 0)
 	{
-		const int32 Quantity = bHaveFocus ? (LastSelection.Guid == Focus.Guid ? SelectedStackAmount : GetVendorPurchaseLimit(Focus.Guid)) : 0;
-		const FString ItemName = bHaveFocus ? FormatItemStackName(Focus, Quantity) : FString();
+		const int32 Quantity = bHaveFocus ? (LastSelection.Guid == Focus.Guid ? SelectedStackAmount : 1) : 0;
+		const FString ItemName = bHaveFocus ? Focus.Name : FString();
 		PlaceTextOnElement(EnsureLabel(VendorItemNameLabel), TEXT("VendorItemName_Text"),
 			ItemName, 9, TextWhite, 10040);
 		FString CostText;
 		if (bHaveFocus)
 		{
-			const uint32 Cost = VendorSellCost(FMath::RoundToInt(double(Focus.Value)*Quantity/FMath::Max(1,Focus.StackSize)), SellRate);
-			CostText = FString::Printf(TEXT("This item costs %s %s. You have %s"),
-				*FormatXpNumber(Cost), AlternateCurrency ? *Currency : TEXT("pyreals"), *FormatXpNumber(Purse));
+			const uint32 Cost = VendorSellCost(Focus, Quantity, SellRate);
+			CostText = AlternateCurrency
+				? FString::Printf(TEXT("This item costs %s %s. You have %s"),*FormatXpNumber(Cost),*Currency,*FormatXpNumber(Purse))
+				: FString::Printf(TEXT("costs %sp (you have %sp)"),*FormatXpNumber(Cost),*FormatXpNumber(Purse));
 		}
 		PlaceTextOnElement(EnsureLabel(VendorItemCostLabel), TEXT("VendorItemCost_Text"),
 			CostText, 8, TextGold, 10040);
@@ -14181,7 +14196,7 @@ void UACEUIGameplayBinder::RefreshVendorInfoTexts()
 			FACEWorldObject Obj;
 			if (Client->GetWorldObject(P.Value, Obj))
 			{
-				Worth += static_cast<int32>(VendorSellCost(FMath::RoundToInt(double(Obj.Value)*P.Key/FMath::Max(1,Obj.StackSize)), SellRate));
+				Worth += static_cast<int32>(VendorSellCost(Obj, P.Key, SellRate));
 			}
 		}
 		PlaceTextOnElement(EnsureLabel(VendorBuyCostLabel), TEXT("VendorBuyCost_Text"),
@@ -14200,7 +14215,7 @@ void UACEUIGameplayBinder::RefreshVendorInfoTexts()
 			FACEWorldObject Obj;
 			if (Client->GetWorldObject(P.Value, Obj))
 			{
-				Worth += VendorBuyPayout(FMath::RoundToInt(double(Obj.Value) * P.Key / FMath::Max(1, Obj.StackSize)), BuyRate);
+				Worth += VendorBuyPayout(Obj, P.Key, BuyRate);
 			}
 		}
 		PlaceTextOnElement(EnsureLabel(VendorSellCostLabel), TEXT("VendorSellCost_Text"),

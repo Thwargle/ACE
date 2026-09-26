@@ -154,7 +154,9 @@ public:
 		{
 			const auto* Canvas = Label->GetTypedOuter<UACEUICanvasWidget>();
 			if (!Canvas) return Layer;
-			const FGeometry& CanvasGeometry = Canvas->GetCachedGeometry();
+			// OnPaint uses window space. Cached/tick geometry includes the desktop
+			// window offset, which clipped static labels away in windowed mode.
+			const FGeometry& CanvasGeometry = Canvas->GetPaintSpaceGeometry();
 			for (auto Parent = Element->Parent.Pin(); Parent; Parent = Parent->Parent.Pin())
 			{
 				// SyntheticRoot is an ownership node, not an authored clipping region.

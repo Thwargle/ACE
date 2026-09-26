@@ -7,6 +7,8 @@
 #include "ACEUpdateSubsystem.h"
 #include "ACEClientBuild.h"
 #include "ACEPlayerController.h"
+#include "ACEDatSubsystem.h"
+#include "TimerManager.h"
 #include "Blueprint/GameViewportSubsystem.h"
 #include "Blueprint/WidgetLayoutLibrary.h"
 #include "Engine/GameViewportClient.h"
@@ -200,6 +202,14 @@ bool FACELauncherViewportTest::RunTest(const FString&)
         TestTrue(TEXT("Login controls have usable dimensions"),Size.X>50 && Size.Y>15);
         TestTrue(TEXT("Login controls are fully within the live viewport"),First.X>=0 && First.Y>=0 && Last.X<=Screen.GetLocalSize().X+1 && Last.Y<=Screen.GetLocalSize().Y+1);
     }
+    auto* Dat=World->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
+    TestTrue(TEXT("Character-list handoff has retail UI data"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
+    PC->ShowCharacterSelectUI({},TEXT("Regression fixture"));
+    TestNotNull(TEXT("Successful login creates character selection"),PC->DatCharSelectBinder.Get());
+    TestNull(TEXT("Successful login removes the account launcher"),PC->LoginWidget.Get());
+    TestFalse(TEXT("Character selection clears the startup retry timer"),World->GetTimerManager().IsTimerActive(PC->ShowLoginUIRetryTimerHandle));
+    PC->ShowLoginUI(); // A next-tick callback can already have been queued.
+    TestNull(TEXT("A late startup callback cannot cover character selection"),PC->LoginWidget.Get());
     return true;
 }
 #endif

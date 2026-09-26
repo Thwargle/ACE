@@ -100,6 +100,36 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
   TestFalse(TEXT("Flat-ground run remains grounded"),PC->bJumpAirborne);
   PC->PlayerInput->FlushPressedKeys();PC->PlayerInput->ProcessInputStack({},1.f/Rate,false);
  }
+ // Retail CMotionInterp::get_state_velocity / CACQualities::InqJumpVelocity:
+ // the airborne velocity is not scaled by creature size like grounded root motion.
+ for(bool Tracked:{false,true})for(int Rate:{30,90,144})for(float Size:{1.f,1.1f})for(float Extent:{.25f,1.f})
+ {
+  VR->bActive=Tracked;VR->MoveStick=FVector2D(0,1);VR->Settings->bRun=true;
+  Session->WorldObjects[Self.Guid].Scale=Size;Session->bHasPlayerEncumbrance=false;Client->SetBurden(0);
+  Session->PlayerVitals.RunSkillCurrent=593;Session->PlayerVitals.JumpSkillCurrent=400;
+  Session->PlayerVitals.Stamina=500;Session->OnVitalsUpdated.Broadcast(Session->PlayerVitals);
+  FACEPosition Pose;Pose.CellId=0x01010001;Pose.SetLocationFromUnreal(StartFeet,100);
+  Pose.SetAceFacingFromUnrealDir2D(FVector::XAxisVector);Session->SetLocalPosition(Pose);
+  PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;
+  PC->bStandingJumpLocked=false;PC->StepHoldSeconds=0;PC->bRunning=true;
+  Pawn->SetActorLocationAndRotation(StartFeet+FVector(0,0,88),Pose.ToUnrealQuat());
+  PC->bJumpCharging=true;PC->JumpChargeExtent=Extent;PC->ReleaseJump(1,0);
+  const double Height=(400./1700.*22.2+.05)*Extent;
+  const double Flight=2*FMath::Sqrt(Height*19.6)/9.8;
+  double Peak=0;int Frames=0;
+  for(;Frames<Rate*5 && PC->bJumpAirborne;++Frames)
+  {
+   VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,77),FRotator::ZeroRotator);
+   PC->PlayerTick(1.f/Rate);
+   Peak=FMath::Max(Peak,(Pawn->GetActorLocation().Z-88-StartFeet.Z)/100.);
+  }
+  const double Distance=FVector::Dist2D(StartFeet,Pawn->GetActorLocation())/100.;
+  TestTrue(TEXT("Jump apex agrees with retail skill/charge formula"),FMath::Abs(Peak-Height)<.02);
+  TestTrue(TEXT("Jump duration is frame-rate independent"),FMath::Abs(double(Frames)/Rate-Flight)<2./Rate);
+  TestTrue(TEXT("Jump range agrees with retail leave-ground run speed"),FMath::Abs(Distance-12.2257250946*Flight)<12.2257250946*2./Rate+.02);
+  TestFalse(TEXT("Completed jump releases airborne animation and input"),PC->bJumpAirborne);
+  AddInfo(FString::Printf(TEXT("Jump tracked=%d rate=%d scale=%.1f charge=%.2f apex=%.3fm range=%.3fm time=%.3fs"),Tracked,Rate,Size,Extent,Peak,Distance,double(Frames)/Rate));
+ }
  Session->PlayerVitals.Strength=100;Session->PlayerVitals.CarryingCapacityAugs=0;
  Session->PlayerVitals.Stamina=500;Client->SetRunSkill(593);
  Session->bHasPlayerEncumbrance=true;Session->PlayerEncumbranceVal=22500;

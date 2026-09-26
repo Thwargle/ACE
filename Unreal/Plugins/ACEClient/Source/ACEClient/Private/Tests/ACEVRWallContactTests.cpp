@@ -313,14 +313,16 @@ bool FACEVRWallContactTest::RunTest(const FString&)
   A->Destroy();
  }
  // The reported crowded dungeon floor, using the retail cell at its actual
- // coordinates. No jump input is sent, in either desktop or tracked mode.
+ // coordinates. Exercise normal movement and a real charged jump while crowded.
+ for(uint32 ReportedCell:{0x0143015Fu,0x0143014Fu})
  {
-  FACEPosition Seed;Seed.CellId=0x0143015F;Seed.Location=FVector(43.304642,-68.413086,-.002981);
+  FACEPosition Seed;Seed.CellId=ReportedCell;Seed.Location=ReportedCell==0x0143015F
+   ? FVector(43.304642,-68.413086,-.002981) : FVector(36.702820,-30.505859,.031020);
   Seed.RotationW=.898748f;Seed.RotationXYZ=FVector(0,0,-.438466);
   auto* ReportedRoom=World->SpawnActor<AACEEnvCellActor>();
   const FVector RoomOrigin=FACEPosition::AceVectorToUnreal(FVector(192,67*192,0),100);
-  TestNotNull(TEXT("Reported swarm dungeon geometry exists in retail DAT"),Dat->GetOrBuildEnvCellMesh(0x0143015F,100));
-  TestTrue(TEXT("Reported swarm dungeon cell loads from retail DAT"),ReportedRoom->LoadEnvCell(0x0143015F,RoomOrigin,100));
+  TestNotNull(TEXT("Reported swarm dungeon geometry exists in retail DAT"),Dat->GetOrBuildEnvCellMesh(ReportedCell,100));
+  TestTrue(TEXT("Reported swarm dungeon cell loads from retail DAT"),ReportedRoom->LoadEnvCell(ReportedCell,RoomOrigin,100));
   ReportedRoom->SetEnvCellCollisionActive(true);
   const FVector Center=Seed.ToUnrealLocation(100)+FVector(0,0,90.75);
   TArray<AActor*> Bodies;
@@ -331,17 +333,22 @@ bool FACEVRWallContactTest::RunTest(const FString&)
    Body->SetCollisionResponseToAllChannels(ECR_Ignore);Body->SetCollisionResponseToChannel(ECC_Pawn,ECR_Block);Body->RegisterComponent();
    const float Angle=I*PI/4;A->SetActorLocation(Center+FVector(55*FMath::Cos(Angle),55*FMath::Sin(Angle),-10+I));Bodies.Add(A);
   }
-  for(bool Tracked:{false,true})for(bool Run:{false,true})
+  for(bool Tracked:{false,true})for(bool Run:{false,true})for(bool Jump:{false,true})
   {
    VR->bActive=Tracked;VR->Settings->bRun=Run;Session->SetLocalPosition(Seed);PC->PredictedPose=Seed;
    PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;PC->bJumpAirborne=false;PC->bStandingJumpLocked=false;PC->StepHoldSeconds=0;
    Pawn->SetActorLocationAndRotation(Center,Seed.ToUnrealQuat());int32 Airborne=0;
+   if(Jump)
+   {
+    PC->bRunning=Run;PC->bJumpCharging=true;PC->JumpChargeExtent=1;
+    PC->ReleaseJump(1,.4f);
+   }
    if(!Tracked)
    {
     PC->PlayerInput->InputKey(FInputKeyParams(EKeys::W,IE_Pressed,1.,false));
     if(!Run)PC->PlayerInput->InputKey(FInputKeyParams(EKeys::LeftShift,IE_Pressed,1.,false));
    }
-   for(int Frame=0;Frame<45;++Frame)
+   for(int Frame=0;Frame<(Jump?150:45);++Frame)
    {
     VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,175-90.75),Seed.ToUnrealQuat());
     VR->MoveStick=FVector2D(.4,1);PC->PlayerTick(1.f/30);Airborne+=PC->bJumpAirborne?1:0;
@@ -351,9 +358,15 @@ bool FACEVRWallContactTest::RunTest(const FString&)
     PC->PlayerInput->InputKey(FInputKeyParams(EKeys::W,IE_Released,0.,false));
     PC->PlayerInput->InputKey(FInputKeyParams(EKeys::LeftShift,IE_Released,0.,false));
    }
-   TestEqual(*FString::Printf(TEXT("Reported swarm floor stays grounded: tracked=%d run=%d"),Tracked,Run),Airborne,0);
+   if(!Jump)TestEqual(*FString::Printf(TEXT("Reported swarm floor stays grounded: cell=%08X tracked=%d run=%d"),ReportedCell,Tracked,Run),Airborne,0);
+   else
+   {
+    TestTrue(TEXT("Crowd test actually launches a jump"),Airborne>0);
+    TestFalse(*FString::Printf(TEXT("Swarm jump settles and releases input: cell=%08X tracked=%d run=%d feet=%s"),ReportedCell,Tracked,Run,*PC->PredictedPose.Location.ToString()),PC->bJumpAirborne || PC->bStandingJumpLocked);
+   }
   }
   for(auto* A:Bodies)A->Destroy();
+  ReportedRoom->Destroy();
  }
  Session->State=EACESessionState::Disconnected;Session->PlayerGuid=0;
  World->DestroyWorld(false);GEngine->DestroyWorldContext(World);return true;

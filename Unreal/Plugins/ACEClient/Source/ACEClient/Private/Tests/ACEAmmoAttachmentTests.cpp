@@ -27,13 +27,14 @@ TArray<uint8> MakeEquipmentCreate(uint32 Slot, uint16 AmmoType, bool bLoaded, bo
 		for (int32 I = 0; I < 9; ++I) Wire.WriteUInt16(1);
 		Wire.Align();
 	}
-	Wire.WriteUInt32(0x00003100u | (bPublicChild ? 0u : 0x00028000u)); // AmmoType, stack counts, optional Wielder + wield slot
+	Wire.WriteUInt32(0x00003100u | (AmmoType==2 ? 1u : 0u) | (bPublicChild ? 0u : 0x00028000u)); // Optional plural, AmmoType, stack counts, Wielder + wield slot
 	Wire.WriteString16L(TEXT("Login equipment"));
 	Wire.WriteUInt16(1); // Packed weenie class ID
 	Wire.WriteUInt16(1); // Packed icon ID
 	Wire.WriteUInt32(static_cast<uint32>(Slot == ACEEquipMask::Held ? ACEItemType::Caster : ACEItemType::MissileWeapon));
 	Wire.WriteUInt32(0); // ObjectDescriptionFlags
 	Wire.Align();
+	if(AmmoType==2) Wire.WriteString16L(TEXT("Login bolts"));
 	Wire.WriteUInt16(AmmoType);
 	Wire.WriteUInt16(37); Wire.WriteUInt16(2500); // StackSize / MaxStackSize
 	if (!bPublicChild)
@@ -64,6 +65,8 @@ bool FACEAmmoAttachmentTest::RunTest(const FString&)
 			TestEqual(TEXT("Ammunition stays owned by the player"), Item.WielderId, 0x50000001);
 			TestEqual(TEXT("Ammunition stays in its equipment slot"), Item.CurrentWieldedLocation, static_cast<uint32>(ACEEquipMask::MissileAmmo));
 			TestEqual(TEXT("Equipped stack count is preserved"), Item.StackSize, 37);
+			TestEqual(TEXT("Optional server-authored plural survives both description formats"),Item.PluralName,
+				AmmoType==2 ? FString(TEXT("Login bolts")) : FString());
 			TestEqual(TEXT("Ammunition kind is preserved"), Item.AmmoType, static_cast<int32>(AmmoType));
 		}
 		for (bool bPublicChild : {false, true})

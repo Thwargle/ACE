@@ -8,6 +8,7 @@ from datetime import date, datetime, timezone
 import argparse
 import hashlib
 import json
+import mmap
 import shutil
 import zipfile
 
@@ -36,6 +37,8 @@ with zipfile.ZipFile(quest_zip) as archive:
     assert archive.testzip() is None, 'Quest ZIP checksum failure'
     manifest = json.loads(archive.read('manifest.json').decode('utf-8-sig'))
     assert manifest['versionCode'] == version and manifest['installerRevision'] == args.installer_revision
+    assert manifest['version'] == args.windows_version, 'Windows and Quest must display the same version'
+    assert int(args.windows_version.rsplit('.', 1)[1]) == version, 'Display version must end in the release number'
     assert manifest['displayName'] == 'AC:VR', 'Rebuild the Quest bundle with current branding'
     assert manifest['apkSha256'] == sha(apk)
     assert hashlib.sha256(archive.read('AC-VR-arm64.apk')).hexdigest().upper() == manifest['apkSha256']
@@ -45,6 +48,8 @@ assert exe.is_file(), 'Package Windows first'
 stamp = (root / 'Unreal/Plugins/ACEClient/Source/ACEClient/Public/ACEClientBuild.h').read_text()
 assert f'"{args.windows_version}"' in stamp, 'Windows version differs from source stamp'
 assert f'ReleaseNumber = {version};' in stamp, 'Updater release number differs from package'
+with exe.open('rb') as stream, mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as binary:
+    assert binary.find(args.windows_version.encode('utf-16-le')) >= 0, 'Packaged Windows executable has a stale display version'
 assert (windows/'Update-Client.ps1').is_file(), 'Updater helper missing from Windows package'
 release.mkdir(parents=True)
 shutil.copy2(quest_zip, release / quest_zip.name)

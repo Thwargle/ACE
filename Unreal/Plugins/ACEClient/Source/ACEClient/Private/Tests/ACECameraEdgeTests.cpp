@@ -7,6 +7,7 @@
 #include "Misc/Paths.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
+#include "Misc/ScopeExit.h"
 #include "ACELedgeSlide.h"
 #include "ACEPlayerController.h"
 #include "ACEInputBindings.h"
@@ -15,6 +16,8 @@
 #include "GameFramework/Pawn.h"
 #include "Engine/GameInstance.h"
 #include "GameFramework/SpringArmComponent.h"
+#include "GameFramework/PlayerInput.h"
+#include "InputKeyEventArgs.h"
 #include "Engine/World.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECameraEdgeTest,"ACE.RetailParity.CameraAndEdges",
@@ -22,9 +25,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECameraEdgeTest,"ACE.RetailParity.CameraAndE
 bool FACECameraEdgeTest::RunTest(const FString& Parameters)
 {
     // Use a separate settings file: this test must not change player preferences.
+    ON_SCOPE_EXIT { ACEInputBindings::Reload(); };
     TGuardValue<FString> SettingsPath(GGameUserSettingsIni,FPaths::ProjectSavedDir()/TEXT("Automation/CameraFixture.ini"));
     FConfigFile FixtureConfig; FixtureConfig.NoSave=false; FixtureConfig.bCanSaveAllSections=true;
     GConfig->SetFile(GGameUserSettingsIni,&FixtureConfig);
+    ACEInputBindings::Reload();
     TestEqual(TEXT("Unset mouse speed uses the faster default"),ACECameraSettings::GetMouseDegreesPerPixel(),0.75f);
     const uint32 Scans[]={0x52,0x4F,0x50,0x51,0x4B,0x4C,0x4D,0x47,0x48,0x49};
     TestEqual(TEXT("Keypad Enter is distinct from chat Enter"),FACEKeyboardRouter::NumpadVirtualKey(0x0D,0x1C,true),uint32(0x1000D));
@@ -187,6 +192,102 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     Controller->SetCameraMapMode(Boom,true);
     Controller->ResetCameraToRetailDefaults(Boom);
     TestFalse(TEXT("Reset camera leaves map mode"),Controller->bCameraMapMode);
+
+    // Exercise the actual keyboard polling and spring-arm socket, rather than
+    // checking a pitch constant alone. Holding Lower used to orbit the map
+    // camera thousands of units below the player with collision disabled.
+    Controller->PlayerInput=NewObject<UPlayerInput>(Controller);
+    for (const int32 FPS : {30,90})
+    {
+        Controller->ResetCameraToRetailDefaults(Boom);
+        Boom->SetWorldLocation(FVector(0,0,1200));
+        Controller->SetCameraMapMode(Boom,true);
+        const float MapArm=Boom->TargetArmLength;
+        Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::NumPadTwo,IE_Pressed,1.f));
+        double MinimumHeight=TNumericLimits<double>::Max();
+        for (int32 Frame=0;Frame<FPS*50;++Frame)
+        {
+            Controller->PlayerInput->ProcessInputStack({},1.f/FPS,false);
+            Controller->UpdateOrbitCamera(1.f/FPS);
+            Boom->TickComponent(1.f/FPS,LEVELTICK_All,nullptr);
+            MinimumHeight=FMath::Min(MinimumHeight,
+                Boom->GetSocketLocation(USpringArmComponent::SocketName).Z-Boom->GetComponentLocation().Z);
+        }
+        TestTrue(TEXT("Holding keypad Lower keeps the overhead camera above its pivot at 30/90 FPS"),MinimumHeight>0.0);
+        TestTrue(TEXT("Lower translates the overhead camera while retaining its downward angle"),
+            Controller->bCameraMapMode && Boom->TargetArmLength<MapArm
+            && FMath::IsNearlyEqual(Boom->GetRelativeRotation().Pitch,ACECameraRetail::LookDownPitchDegrees(),.01));
+        TestTrue(TEXT("Lower stops before crossing the player"),
+            FMath::IsNearlyEqual(Boom->TargetArmLength,ACECameraRetail::CloserMinLengthAc*Controller->GetCameraScaleCm(),.01));
+        Controller->PlayerInput->FlushPressedKeys();
+        Controller->PlayerInput->ProcessInputStack({},1.f/FPS,false);
+        Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::NumPadEight,IE_Pressed,1.f));
+        for (int32 Frame=0;Frame<FPS;++Frame)
+        {
+            Controller->PlayerInput->ProcessInputStack({},1.f/FPS,false);
+            Controller->UpdateOrbitCamera(1.f/FPS);
+        }
+        TestTrue(TEXT("Raise translates back out without inverting or losing overhead mode"),
+            Controller->bCameraMapMode && Boom->TargetArmLength>ACECameraRetail::CloserMinLengthAc*Controller->GetCameraScaleCm()
+            && FMath::IsNearlyEqual(Boom->GetRelativeRotation().Pitch,ACECameraRetail::LookDownPitchDegrees(),.01));
+        Controller->PlayerInput->FlushPressedKeys();
+        Controller->PlayerInput->ProcessInputStack({},1.f/FPS,false);
+        Controller->SetCameraMapMode(Boom,false);
+        TestTrue(TEXT("Leaving an adjusted map view restores the saved ordinary view"),
+            FMath::IsNearlyEqual(Boom->TargetArmLength,SavedArm,.01)
+            && Boom->GetRelativeRotation().Equals(SavedRotation,.01) && Boom->bDoCollisionTest);
+    }
+    for (const FKey& Key : {EKeys::NumPadFour,EKeys::NumPadSix})
+    {
+        Controller->SetCameraMapMode(Boom,true);
+        Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(Key,IE_Pressed,1.f));
+        Controller->PlayerInput->ProcessInputStack({},.016f,false);
+        Controller->UpdateOrbitCamera(.016f);
+        TestTrue(TEXT("Horizontal keyboard rotation restores ordinary distance and collision before turning"),
+            !Controller->bCameraMapMode && !Controller->bCameraLookDown && Boom->bDoCollisionTest
+            && FMath::IsNearlyEqual(Boom->TargetArmLength,SavedArm,.01));
+        Controller->PlayerInput->FlushPressedKeys();
+        Controller->PlayerInput->ProcessInputStack({},.016f,false);
+        Controller->ResetCameraToRetailDefaults(Boom);
+    }
+    Client->SendSetSingleCharacterOption(0x31,true);
+    Controller->UpdateMouseButtons(true,false,false,false);
+    for (const bool bMap : {false,true}) for (const bool bInvertY : {false,true})
+    {
+        ACECameraSettings::SetMouseInversion(false,bInvertY);
+        if (bMap) Controller->SetCameraMapMode(Boom,true);
+        else Controller->SetCameraLookDown(Boom,true);
+        for (const float MouseY : {-100000.f,100000.f,0.f})
+        {
+            Controller->ApplyMouseLookDelta(0,MouseY,Boom);
+            // No physics scene in this fixture. Retain and assert the mode's
+            // collision setting, but tick the socket without world sweeps.
+            const bool bCollision=Boom->bDoCollisionTest;
+            Boom->bDoCollisionTest=false;
+            Boom->TickComponent(.016f,LEVELTICK_All,nullptr);
+            Boom->bDoCollisionTest=bCollision;
+            TestTrue(TEXT("Extreme/inverted vertical mouse input cannot swing either overhead view below the pivot"),
+                Controller->bCameraLookDown && Controller->bCameraMapMode==bMap
+                && Boom->GetSocketLocation(USpringArmComponent::SocketName).Z>Boom->GetComponentLocation().Z
+                && FMath::IsNearlyEqual(Boom->GetRelativeRotation().Pitch,ACECameraRetail::LookDownPitchDegrees(),.01));
+        }
+        Controller->ApplyMouseLookDelta(10,1,Boom);
+        TestTrue(TEXT("Diagonal mouse motion restores the ordinary arm before applying tilt"),
+            !Controller->bCameraLookDown && !Controller->bCameraMapMode && Boom->bDoCollisionTest
+            && FMath::IsNearlyEqual(Boom->TargetArmLength,SavedArm,.01));
+        Controller->ResetCameraToRetailDefaults(Boom);
+    }
+    ACECameraSettings::SetMouseInversion(false,false);
+    Controller->UpdateMouseButtons(false,false,false,false);
+    for (const float Wheel : {-1.f,1.f})
+    {
+        Controller->SetCameraMapMode(Boom,true);
+        Controller->AdjustMouseCameraDistance(Wheel);
+        TestTrue(TEXT("Wheel zoom exits map mode with ordinary distance and collision restored"),
+            !Controller->bCameraMapMode && Boom->bDoCollisionTest
+            && Boom->TargetArmLength<=ACECameraRetail::FartherMaxXYAc*Controller->GetCameraScaleCm());
+        Controller->ResetCameraToRetailDefaults(Boom);
+    }
     Boom->bDoCollisionTest=false; Boom->bEnableCameraLag=true;
     Boom->bEnableCameraRotationLag=false; Boom->CameraLagSpeed=ACECameraRetail::TranslationLagSpeed;
     Boom->SetWorldRotation(FRotator::ZeroRotator); Boom->TargetArmLength=300.f;

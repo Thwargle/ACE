@@ -1,6 +1,7 @@
 #requires -Version 7.0
 param([string]$EngineRoot = 'C:\Program Files\Epic Games\UE_5.8')
 $ErrorActionPreference = 'Stop'
+& (Join-Path $PSScriptRoot 'Test-ReleaseVersion.ps1')
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $project = Join-Path $projectRoot 'ACUnreal.uproject'
 $archive = Join-Path $projectRoot 'Saved\VRWindowsArchive'

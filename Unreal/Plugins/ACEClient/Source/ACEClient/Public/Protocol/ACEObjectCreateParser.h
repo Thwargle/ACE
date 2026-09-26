@@ -9,6 +9,7 @@ struct ACECLIENT_API FACEDecodedObject
 {
 	int32 Guid = 0;
 	FString Name;
+	FString PluralName;
 	int32 WeenieClassId = 0;
 	int32 IconId = 0;
 	int32 IconOverlayId = 0;

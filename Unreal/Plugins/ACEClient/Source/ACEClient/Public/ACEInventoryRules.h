@@ -21,6 +21,13 @@ namespace ACEInventoryRules
             : FMath::Clamp(Stock.VendorQuantityAvailable, 0, StackLimit);
     }
 
+    // gmToolbarUI::UpdateSelectedObject: consumables/trade notes in vendor
+    // stock start at one; ammunition retains the displayed stack.
+    inline int32 VendorInitialQuantity(const FACEWorldObject& Stock, int32 Limit)
+    {
+        return Limit <= 0 ? 0 : (uint32(Stock.ItemType) & 0x0DC41CB0u) ? 1 : Limit;
+    }
+
     // Retail ItemHolder::IsMergeAttemptLegal: matching WCID, stack capacity,
     // and neither object being offered in trade (checked by the caller).
     inline int32 MergeAmount(const FACEWorldObject& Source, const FACEWorldObject& Target)

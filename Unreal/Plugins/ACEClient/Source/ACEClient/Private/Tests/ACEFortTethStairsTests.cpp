@@ -111,6 +111,9 @@ bool FACEFortTethStairsTest::RunTest(const FString&)
   {0x25810019,FVector(85.270020,23.521484,220)},
   {0xE454000E,FVector(40.824219,131.324219,6)},
   {0xE454001E,FVector(83.945312,125.347656,6)},
+  {0xE454001E,FVector(81.769531,126.235352,6)},
+  {0xE454001E,FVector(82.730469,125.933594,6)},
+  {0xE454001E,FVector(79.656250,134.094727,20.654081)},
   {0xE454000E,FVector(41.695312,130.730469,6)},
   {0xE454001E,FVector(79.648438,134.835938,20.869003)},
   {0xE454001E,FVector(79.019531,132.884766,14.8)}})
@@ -138,37 +141,63 @@ bool FACEFortTethStairsTest::RunTest(const FString&)
   const FHitResult* Nearest=nullptr;
   for(const auto& Wall:Reference)
    if(Wall.bBlockingHit && FMath::Abs(Wall.ImpactNormal.Z)<.3f && (!Nearest || Wall.Distance<Nearest->Distance))Nearest=&Wall;
-  if(Nearest)for(bool Tracked:{false,true})
+  if(Nearest)for(bool Tracked:{false,true})for(float Dt:{1.f/90,1.f/30})for(int32 Skill:{100,593})
   {
+   Session->PlayerVitals.bValid=true;Session->PlayerVitals.RunSkillCurrent=Skill;
+   Session->PlayerVitals.Health=Session->PlayerVitals.Stamina=500;
+   Session->PlayerVitals.MaxHealth=Session->PlayerVitals.MaxStamina=500;
+   Session->OnVitalsUpdated.Broadcast(Session->PlayerVitals);
    const FVector Direction=(Nearest->TraceEnd-Nearest->TraceStart).GetSafeNormal2D();
    Pose.SetAceFacingFromUnrealDir2D(Direction);Place(Pose);VR->bActive=Tracked;
    Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));
    Controller->PlayerInput->ProcessInputStack({},1.f/30,false);
-   for(int Frame=0;Frame<120;++Frame)
+   bool CrossedSolid=false;
+   for(int Frame=0;Frame<FMath::RoundToInt(4.f/Dt);++Frame)
    {
     // Alternate along and into the wall; straight-on contact missed the
     // reported repeated corner escape through a neighboring triangle.
     const FVector Across=FVector::CrossProduct(Direction,FVector::UpVector);
-    const FVector Travel=(Direction+Across*((Frame/15)%2 ? -.8f : .8f)).GetSafeNormal();
+    const FVector Travel=(Direction+Across*((int32(Frame*Dt*2))%2 ? -.8f : .8f)).GetSafeNormal();
     Controller->PredictedPose.SetAceFacingFromUnrealDir2D(Travel);
     Pawn->SetActorRotation(Controller->PredictedPose.ToUnrealQuat());
     VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,175-Half),Travel.Rotation());
-    VR->MoveStick=FVector2D(0,1);Refresh();Controller->PlayerTick(1.f/30);
+    const FVector Before=Pawn->GetActorLocation();
+    VR->MoveStick=FVector2D(0,1);Refresh();Controller->PlayerTick(Dt);
+    const FVector After=Pawn->GetActorLocation();
+    const double BeforeSide=FVector::DotProduct(Before-Nearest->ImpactPoint,Nearest->ImpactNormal);
+    const double AfterSide=FVector::DotProduct(After-Nearest->ImpactPoint,Nearest->ImpactNormal);
+    if(BeforeSide>=0 && AfterSide<0)
+    {
+     // A fast runner can legitimately reach the end of this finite wall or
+     // descend beneath a stair rail. Test the authored face at the crossing,
+     // not an infinite plane extending across the whole landblock.
+     for(auto* Room:Rooms)Room->SetEnvCellCollisionActive(true);
+     for(const auto& Pair:Terrain->Spawned)if(Pair.Value)Pair.Value->SetBuildingShellsBlockPawn(true);
+     const FVector Crossing=FMath::Lerp(Before,After,BeforeSide/(BeforeSide-AfterSide));
+     FHitResult Face;
+     World->LineTraceSingleByChannel(Face,Crossing+Nearest->ImpactNormal*20,Crossing-Nearest->ImpactNormal*20,ECC_Pawn,Query);
+     const bool Solid=Face.bBlockingHit && FVector::DotProduct(Face.ImpactNormal,Nearest->ImpactNormal)>.9;
+     CrossedSolid|=Solid;
+     FACEPosition At=Pose;At.SetLocationFromUnreal(Crossing-FVector(0,0,Half),100);
+     AddInfo(FString::Printf(TEXT("Wall plane crossing seed=%s tracked=%d hz=%.0f skill=%d frame=%d at=%s solid=%d component=%s delta=%s"),*Entry.Value.ToString(),Tracked,1.f/Dt,Skill,Frame,*At.Location.ToString(),Solid,*GetNameSafe(Face.GetComponent()),*(After-Before).ToString()));
+    }
    }
    const double WallSide=FVector::DotProduct(Pawn->GetActorLocation()-Nearest->ImpactPoint,Nearest->ImpactNormal);
-   TestTrue(*FString::Printf(TEXT("Actual movement cannot cross reported wall %08X tracked=%d side=%.1f"),Entry.Key,Tracked,WallSide),WallSide>=-.5);
+   TestFalse(*FString::Printf(TEXT("Actual movement cannot cross solid reported wall %08X tracked=%d hz=%.0f skill=%d side=%.1f"),Entry.Key,Tracked,1.f/Dt,Skill,WallSide),CrossedSolid);
    Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},1.f/30,false);VR->MoveStick=FVector2D::ZeroVector;
   }
  }
+ Session->PlayerVitals.bValid=false;Session->OnVitalsUpdated.Broadcast(Session->PlayerVitals);
  // Reported center-post/stairwell wedge: ordinary directional movement must
  // offer a way back out, without jumping or crossing the post/stair geometry.
+ for(const FVector Reported:{FVector(19.925781,21.117188,42.084137),FVector(19.773438,20.980469,43.302933)})
  for(bool Tracked:{false,true})for(float Dt:{1.f/90,1.f/30})
  {
   VR->bActive=Tracked;int32 Escapes=0;
   for(int32 Yaw=0;Yaw<360;Yaw+=30)
   {
    const FVector Travel=FRotator(0,Yaw,0).Vector();
-   FACEPosition Pose;Pose.CellId=0xC6A901AE;Pose.Location=FVector(19.925781,21.117188,42.084137);
+   FACEPosition Pose;Pose.CellId=0xC6A901AE;Pose.Location=Reported;
    Pose.SetAceFacingFromUnrealDir2D(Travel);Place(Pose);Refresh();
    const FVector Start=Pawn->GetActorLocation();
    Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));

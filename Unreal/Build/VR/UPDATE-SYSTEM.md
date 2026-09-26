@@ -19,7 +19,11 @@ for headset OS versions that do not expose that permission or confirmation UI.
 ## Publishing a newer version
 
 1. Increment `ACEClientBuild::ReleaseNumber` and the Quest Android StoreVersion
-   together, and update the Windows and Quest display version strings.
+   together. Use one `YYYY.MM.DD.ReleaseNumber` display version in
+   `ACEClientBuild::Version`, both ProjectVersion settings, and the Quest
+   VersionDisplayName. Windows desktop, PC VR, Quest, and the Windows installer
+   must show the same version. Both build scripts run `Test-ReleaseVersion.ps1`
+   to reject mismatches before compiling; release assembly also checks the APK.
 2. Build and test Windows and Quest. Keep the Quest package ID and signing key.
 3. Run `Quest/Build-SharePackage.ps1`, `Build-Release.py`, and
    `Build-WindowsInstaller.ps1` with the new release number.

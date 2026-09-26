@@ -1,58 +1,31 @@
-# AC:Unreal / AC:VR release 78
+# AC:Unreal / AC:VR release 79
 
-Native Quest: 2026.09.25.quest.78, Android version code 78, installer revision 6.
-Windows desktop / PC VR: 2026.09.25.84.
+Windows desktop, PC VR, and native Quest: 2026.09.26.79.
+Release number / Android version code: 79. Quest installer revision: 6.
 
-## Changes since public release v75
+## Changes since public release v78
 
-### Movement and collision
-
-- Improve shared wall and corner recovery without pushing players through a
-  second wall on the same mesh. Add coverage for the reported center-post trap.
-- Improve grounding around creatures so running through crowds does not lift
-  the player into an unintended airborne state.
-- Extend stair coverage to both edges, ascending, descending, and stepping off
-  the side, using actual training, Fort Teth, and Mosswart Fort geometry.
-
-### VR interface and combat feedback
-
-- Move and angle panels in full 3D. While holding Move, use the right thumbstick
-  up/down to push the panel farther away or bring it closer. Resize remains a
-  separate handle, and editing does not turn the player or scroll a menu.
-- Improve Body-anchor following with separate start/stop thresholds and detach
-  Body/World panels from head-tracking updates. Head-pinned panels retain headset
-  late updates. These changes address jitter near the follow boundary.
-- Add an optional native fellowship panel with placement and size controls.
-- Add configurable VR action-button assignments in VR Options.
-- Show position-based compass coordinates inside buildings and remove redundant
-  marker chevrons.
-- Filter floating combat notices to the local player's events, restore outgoing
-  spell-damage notices, and size the cards to avoid clipping text such as Evaded.
-- Send the chosen melee power/missile accuracy to servers that advertise support.
-  This requires the matching server update; existing servers retain their prior
-  combat behavior. Physical bow draw continues to control launch velocity.
-
-### Retail interface
-
-- Highlight selected vendor items, honor selected stack quantities, and improve
-  cart quantities, individual buy/sell actions, prices, and alternate currency.
-- Allow moving spells between hotbar tabs by hovering over or dropping onto a tab.
-- Use appraisal enchantment flags for beneficial/harmful stat colors and display
-  effective armor resistance values.
-- Separate buffs and debuffs using the spell's flags.
-- Add a cursor scale slider and restore a higher bird's-eye camera view.
-
-### Performance and packaging
-
-- Reuse animation pose buffers and avoid copying motion arrays on every tick.
-- Replace animation loop wrapping whose CPU cost grew with session length with
-  bounded work, while preserving motion hooks and one-shot behavior.
-- Share portal-view material parameters instead of updating every material
-  instance, avoid redundant mask bindings, and skip hidden-part transform work.
-- Reduce hidden retail-interface work when only native VR panels are visible.
-- Generate and verify runtime materials before the Quest cook. This fixes the
-  missing terrain material and repeated loading attempts in the v76 test build
-  that caused the green floor. Test builds v76 and v77 were not public releases.
+- Use the same displayed version across Windows desktop, PC VR, and Quest, and
+  reject release builds if the platform version declarations disagree.
+- Fix overhead camera controls moving the camera below the world. Raising and
+  lowering retain the downward angle; sideways rotation restores the normal
+  camera distance and collision before turning, following retail behavior.
+- Allow a smooth handoff from held forward movement to autorun when releasing
+  the movement key.
+- Fix missing tab and button text at scaled/windowed resolutions, including
+  2048x1536 at 125% UI scale.
+- Allow the spell hotbar to expand to the available viewport width.
+- Improve key-binding capture for left/right Shift, Control, and Alt, and ignore
+  orphan key-release events that could assign the wrong modifier.
+- Prevent a delayed account-launcher refresh from covering character selection.
+- Restore retail vendor quantity defaults, preserve manually chosen stack
+  quantities, and correct trade-note pricing and item-name/plural captions.
+- Fix duplicate application of remote-player velocity after grounded position
+  updates, which could make players move above slopes before snapping down.
+- Improve support at convex stair and ramp edges, including the center-post
+  stairwell, while retaining full step and headroom checks at steep risers.
+- Extend regression coverage for keypad camera controls, retail run/jump
+  formulas, crowded movement, Fort Teth, Mosswart Fort, and stair-edge traversal.
 
 ## Updating
 
@@ -66,14 +39,15 @@ Accounts, settings, and retail DAT files are retained. No retail DATs are bundle
 
 ## Validation and limitations
 
-Automated mobile-preview and packaged Windows tests cover animation lifetime,
-motion parity, VR panels and notices, runtime materials, portal masking, and
-stair/corner regressions. Release checks also exercise the launcher/updater,
-installer preservation, and Quest signing compatibility.
+Regression coverage exercises camera socket positions at 30/90 FPS, UI clipping,
+key bindings, autorun, vendor transactions, launcher state, remote grounding, and
+collision against actual retail DAT geometry. The reported higher center-post
+trap reproduced and passes with the support fix. Other reported wall-clipping
+cases did not reproduce in the automated routes and still need live confirmation.
 
-90 FPS on Quest is still a target, not a measured result for this release. Native
-headset performance, panel comfort, and the latest visual fixes need further
-in-headset confirmation. Experimental mobile actor caching and local-light shader
-policy changes remain disabled by default on Quest pending native GPU/stereo tests.
+Remote animation and hardware-specific keyboard behavior also need confirmation
+from affected players. This release does not change retail jump height or speed;
+the tested arcs match the existing retail formulas. New in-headset performance
+and installation-confirmation acceptance have not been performed for v79.
 
 This download updates clients only. It does not deploy or restart game servers.

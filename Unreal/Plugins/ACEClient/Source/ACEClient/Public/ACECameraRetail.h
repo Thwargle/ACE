@@ -34,6 +34,9 @@ namespace ACECameraRetail
 	/** SpringArm defaults along −X; AC facing is pawn +Y, so boom yaw +90. */
 	constexpr float BoomYawToFaceAcForward = 90.f;
 	constexpr float NumpadOrbitDegreesPerSecond = 75.f;
+	/** CameraSet::Raise/Lower translate by 0.2 units per call in look-down mode.
+	 * Normalize the 60 Hz step to our shared keyboard/mouse orbit delta. */
+	constexpr float LookDownUnitsPerOrbitDegree = 0.2f * 60.f / NumpadOrbitDegreesPerSecond;
 	/** Optional camera controls requested by the player: orbit at rest, follow on movement. */
 	inline float FollowTurnDegrees(float BoomYaw, float DeltaSeconds, bool bMoving, bool bFaceCamera = false)
 	{

@@ -104,6 +104,18 @@ AACEPlayerController::AACEPlayerController()
 	bShowMouseCursor = true;
 }
 
+void AACEPlayerController::UpdateKeyboardAutoRun(float& Forward, bool bToggleDown)
+{
+	// Retail cancels autorun on a NEW forward/backward command. Releasing the
+	// key that was already held when autorun started must not stop the player.
+	const bool bTogglePressed = bToggleDown && !bNumLockWasDown;
+	if (bTogglePressed) bAutoRun = !bAutoRun;
+	else if (!FMath::IsNearlyZero(Forward) && !FMath::IsNearlyEqual(Forward, PreviousManualForward)) bAutoRun = false;
+	PreviousManualForward = Forward;
+	bNumLockWasDown = bToggleDown;
+	if (bAutoRun) Forward = 1.f;
+}
+
 void AACEPlayerController::BeginPlay()
 {
 	ACERuntimeOptions::Apply();
@@ -330,6 +342,10 @@ bool AACEPlayerController::IsSessionDisconnected() const
 
 void AACEPlayerController::ShowLoginUI()
 {
+	// Deferred viewport retries can arrive after the character list. They must
+	// not put the account launcher back over the screen that replaced it.
+	if (DatCharSelectBinder || DatCharGenBinder || (Client &&
+		(Client->GetSessionState()==EACESessionState::EnteringWorld || Client->GetSessionState()==EACESessionState::InWorld))) return;
 	UWorld* World = GetWorld();
 	const bool bHasGameViewport = World && World->GetGameViewport() != nullptr;
 
@@ -859,23 +875,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	T = FMath::Clamp(T, -1.f, 1.f);
 	bRunning = !ACEInputBindings::Down(this, EKeys::LeftShift);
 
-	// Poll the bound autorun action; directional movement cancels it.
-	{
-		const bool bNumLockDown = ACEInputBindings::Down(this, EKeys::NumLock);
-		if (bNumLockDown && !bNumLockWasDown)
-		{
-			bAutoRun = !bAutoRun;
-		}
-		bNumLockWasDown = bNumLockDown;
-		if (!FMath::IsNearlyZero(F))
-		{
-			bAutoRun = false;
-		}
-		else if (bAutoRun)
-		{
-			F = 1.f;
-		}
-	}
+	UpdateKeyboardAutoRun(F, ACEInputBindings::Down(this, EKeys::NumLock));
 
 	// Retail number row: magic = spell bank slots; peace = inventory shortcuts.
 	// DAT HUD owns this when GameHUDWidget is inactive.
@@ -3567,12 +3567,39 @@ void AACEPlayerController::ApplyMouseLookDelta(float DeltaX, float DeltaY, USpri
 {
     if (!Boom || (!IsUseMouseTurning() && !bInstantMouseLookHeld) || !bMouseLookActive) return;
     MouseLookTravelPixels += FMath::Abs(DeltaX) + FMath::Abs(DeltaY);
-    FRotator Rotation = Boom->GetRelativeRotation();
     const float DegreesPerPixel = ACECameraSettings::GetMouseDegreesPerPixel();
     if (ACECameraSettings::GetInvertMouseX()) DeltaX=-DeltaX;
     if (ACECameraSettings::GetInvertMouseY()) DeltaY=-DeltaY;
-    Rotation.Yaw += DeltaX * DegreesPerPixel;
-    Rotation.Pitch = FMath::Clamp(Rotation.Pitch - DeltaY * DegreesPerPixel,
+    ApplyCameraOrbitDelta(Boom, DeltaX * DegreesPerPixel, -DeltaY * DegreesPerPixel);
+}
+
+void AACEPlayerController::ApplyCameraOrbitDelta(USpringArmComponent* Boom, float YawDegrees, float PitchDegrees)
+{
+    if (!Boom || !FMath::IsFinite(YawDegrees) || !FMath::IsFinite(PitchDegrees)) return;
+    // Retail CameraSet::Rotate leaves LookDown (including MapMode) before
+    // rotating. Restore the ordinary arm and collision before applying input.
+    if (bCameraLookDown && !FMath::IsNearlyZero(YawDegrees)) SetCameraLookDown(Boom, false);
+    FRotator Rotation = Boom->GetRelativeRotation();
+    if (bCameraLookDown)
+    {
+        // CameraSet::Raise/Lower translate the viewer offset without changing
+        // its downward direction. Pitching the 450-unit map boom instead swings
+        // the camera below the world with collision disabled.
+        const float ScaleCm = GetCameraScaleCm();
+        const float DistanceDelta = -PitchDegrees * ACECameraRetail::LookDownUnitsPerOrbitDegree * ScaleCm;
+        const float RaiseLimit = ACECameraRetail::FartherMaxXYAc * ScaleCm;
+        if (DistanceDelta < 0.f)
+            Boom->TargetArmLength = FMath::Max(ACECameraRetail::CloserMinLengthAc * ScaleCm, Boom->TargetArmLength + DistanceDelta);
+        else if (Boom->TargetArmLength < RaiseLimit)
+            Boom->TargetArmLength = FMath::Min(RaiseLimit, Boom->TargetArmLength + DistanceDelta);
+        UserCameraArmLength = Boom->TargetArmLength;
+        Rotation.Pitch = ACECameraRetail::LookDownPitchDegrees();
+        Rotation.Roll = 0.f;
+        Boom->SetRelativeRotation(Rotation);
+        return;
+    }
+    Rotation.Yaw += YawDegrees;
+    Rotation.Pitch = FMath::Clamp(Rotation.Pitch + PitchDegrees,
         bCameraInHead ? -53.f : -89.f, bCameraInHead ? 53.f : 20.f);
     Rotation.Roll = 0.f;
     Boom->SetRelativeRotation(Rotation);
@@ -3601,44 +3628,13 @@ void AACEPlayerController::UpdateOrbitCamera(float DeltaTime)
 
 	UpdateMouseLook(DeltaTime, Boom);
 
-	FRotator Rotation = Boom->GetRelativeRotation();
 	const bool bOrbitLeft = ACEInputBindings::Down(this, EKeys::NumPadFour);
 	const bool bOrbitRight = ACEInputBindings::Down(this, EKeys::NumPadSix);
 	const bool bOrbitUp = ACEInputBindings::Down(this, EKeys::NumPadEight);
 	const bool bOrbitDown = ACEInputBindings::Down(this, EKeys::NumPadTwo);
-	if (bOrbitLeft)
-	{
-		Rotation.Yaw += ACECameraRetail::NumpadOrbitDegreesPerSecond * DeltaTime;
-	}
-	if (bOrbitRight)
-	{
-		Rotation.Yaw -= ACECameraRetail::NumpadOrbitDegreesPerSecond * DeltaTime;
-	}
-	if (!bCameraInHead)
-	{
-		if (bOrbitUp)
-		{
-			Rotation.Pitch -= ACECameraRetail::NumpadOrbitDegreesPerSecond * DeltaTime;
-		}
-		if (bOrbitDown)
-		{
-			Rotation.Pitch += ACECameraRetail::NumpadOrbitDegreesPerSecond * DeltaTime;
-		}
-		Rotation.Pitch = FMath::ClampAngle(Rotation.Pitch, -89.f, 20.f);
-	}
-	else
-	{
-		if (bOrbitUp)
-		{
-			Rotation.Pitch = FMath::Clamp(Rotation.Pitch - ACECameraRetail::NumpadOrbitDegreesPerSecond * DeltaTime, -53.f, 53.f);
-		}
-		if (bOrbitDown)
-		{
-			Rotation.Pitch = FMath::Clamp(Rotation.Pitch + ACECameraRetail::NumpadOrbitDegreesPerSecond * DeltaTime, -53.f, 53.f);
-		}
-	}
-	Rotation.Roll = 0.f;
-	Boom->SetRelativeRotation(Rotation);
+	const float OrbitStep = ACECameraRetail::NumpadOrbitDegreesPerSecond * DeltaTime;
+	ApplyCameraOrbitDelta(Boom, (int32(bOrbitLeft) - int32(bOrbitRight)) * OrbitStep,
+		(int32(bOrbitDown) - int32(bOrbitUp)) * OrbitStep);
 
 	const float ScaleCm = GetCameraScaleCm();
 	const float MinThirdPerson = ACECameraRetail::CloserMinLengthAc * ScaleCm;
@@ -4524,6 +4520,11 @@ void AACEPlayerController::ShowCharacterSelectUI(const TArray<FACECharacterInfo>
 	}
 
 	// Credentials UI hands off to retail character select — remove so its text can't leak.
+	if (UWorld* World=GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(ShowLoginUIRetryTimerHandle);
+		World->GetTimerManager().ClearTimer(DesiredSizeRetryTimerHandle);
+	}
 	if (LoginWidget)
 	{
 		LoginWidget->SetVisibility(ESlateVisibility::Collapsed);

@@ -59,6 +59,7 @@
 #include "Engine/TextureRenderTarget2D.h"
 #include "Slate/WidgetRenderer.h"
 #include "Input/HittestGrid.h"
+#include "Types/PaintArgs.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/CanvasPanel.h"
@@ -263,16 +264,21 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Combat mode changes preserve the repeat preference"),Gameplay->bCombatAutoRepeat,RepeatSaved);
     TestFalse(TEXT("Entering melee does not attack just because repeat is enabled"),Gameplay->bCombatAttackRequestPending);
     FIntPoint ScreenSize(1600,900);
-    auto CaptureScreen=[&](const FString& Name,float DPIScale=1.f) -> TArray<FColor>
+    auto CaptureScreen=[&](const FString& Name,float DPIScale=1.f,FVector2D DesktopOffset=FVector2D::ZeroVector) -> TArray<FColor>
     {
         if (!FApp::CanEverRender()) return {};
         FWidgetRenderer Renderer(true,true);
         const TSharedRef<SWidget> Scaled=SNew(SDPIScaler).DPIScale(DPIScale)[Slate];
         auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(ScreenSize),TF_Bilinear,true);
+        const auto Window=SNew(SVirtualWindow).Size(FVector2D(ScreenSize));
+        Window->SetContent(Scaled);
+        FHittestGrid Grid;
+        const FGeometry Geometry=FGeometry::MakeRoot(FVector2D(ScreenSize),FSlateLayoutTransform());
+        const FPaintArgs PaintArgs(nullptr,Grid,DesktopOffset,FApp::GetCurrentTime(),0.f);
         for (int32 Pass=0; Pass<4; ++Pass)
         {
             Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
-            Renderer.DrawWidget(Target,Scaled,FVector2D(ScreenSize),0.f); FlushRenderingCommands();
+            Renderer.DrawWindow(PaintArgs,Target,Window,Geometry,Geometry.GetLayoutBoundingRect(),0.f); FlushRenderingCommands();
         }
         TArray<FColor> Pixels; Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
         TArray64<uint8> PNG; FImageUtils::PNGCompressImageArray(ScreenSize.X,ScreenSize.Y,Pixels,PNG);
@@ -916,6 +922,18 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     Gameplay->SyncOptionsPanelTab(TEXT("CharacterSettingsPage"));
     Gameplay->RefreshOptionsOverlays();
     CaptureScreen(TEXT("GameplayCharacterOptions"));
+    {
+        const auto OriginalSize=ScreenSize;ScreenSize=FIntPoint(2048,1536);
+        const auto AtOrigin=CaptureScreen(TEXT("GameplayOptions2048x1536Scale125"),1.25f);
+        for (const FVector2D Offset : {FVector2D(240,160),FVector2D(-1920,320)})
+        {
+            const auto Moved=CaptureScreen(FString::Printf(TEXT("GameplayOptionsWindowOffset_%.0f"),Offset.X),1.25f,Offset);
+            int32 Differences=0;
+            if (Moved.Num()==AtOrigin.Num()) for (int32 I=0;I<Moved.Num();++I) Differences+=Moved[I]!=AtOrigin[I];
+            TestTrue(TEXT("Moving a scaled window to either monitor preserves every static label"),Moved.Num()==AtOrigin.Num() && Differences==0);
+        }
+        ScreenSize=OriginalSize;
+    }
     TestTrue(TEXT("Character settings page has live option rows"),
         Gameplay->OptionRowOptions.ContainsByPredicate([](int32 Option){return Option!=INDEX_NONE;}));
     {
@@ -1197,9 +1215,23 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             const FKeyEvent EnterKey(EKeys::Enter,FModifierKeysState(),0,false,0,0);
             CaptureSlate->OnKeyDown(Key->GetCachedGeometry(),EnterKey);CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),EnterKey);
             TestTrue(TEXT("Activating a mapping button starts key capture"),Key->GetIsSelectingKey());
+            TestTrue(TEXT("Synthetic right Shift release is filtered"),Key->FilterCaptureKey(FKeyEvent(EKeys::RightShift,FModifierKeysState(),0,false,0,0),false));
+            TestTrue(TEXT("An orphan modifier release cannot finish key capture"),Key->GetIsSelectingKey());
+            Key->FilterCaptureKey(FKeyEvent(EKeys::F7,FModifierKeysState(),0,false,0,0),true);
+            TestFalse(TEXT("Matching key release is delivered"),Key->FilterCaptureKey(FKeyEvent(EKeys::F7,FModifierKeysState(),0,false,0,0),false));
             CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),FKeyEvent(EKeys::F7,FModifierKeysState(),0,false,0,0));Key->RefreshBinding();
             TestEqual(TEXT("Captured key updates the draft"),ACEInputBindings::Get(EKeys::W,0).Key,EKeys::F7);
             TestEqual(TEXT("Retail label shows the captured binding"),Key->RetailLabel->GetText().ToString(),FString(TEXT("F7")));
+            for(const FKey& Modifier:{EKeys::LeftShift,EKeys::RightShift,EKeys::LeftControl,EKeys::RightControl,EKeys::LeftAlt,EKeys::RightAlt})
+            {
+                CaptureSlate->OnKeyDown(Key->GetCachedGeometry(),EnterKey);CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),EnterKey);
+                const FKeyEvent Event(Modifier,FModifierKeysState(),0,false,0,0);
+                Key->FilterCaptureKey(Event,true);
+                TestTrue(TEXT("Unpressed key cannot replace the pressed modifier"),Key->FilterCaptureKey(FKeyEvent(EKeys::F8,FModifierKeysState(),0,false,0,0),false));
+                TestFalse(TEXT("Physical modifier release reaches capture"),Key->FilterCaptureKey(Event,false));
+                CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),Event);Key->RefreshBinding();
+                TestEqual(TEXT("Capture preserves each modifier's physical left/right identity"),ACEInputBindings::Get(EKeys::W,0).Key,Modifier);
+            }
             ACEInputBindings::Revert();Gameplay->RefreshKeyboardOverlays();
         }
         Gameplay->HandleKeyboardNamedClick(TEXT("KeyboardSaveKeymapAsButton"));
@@ -1534,6 +1566,22 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         Gameplay->SelectedCombatSpellSlot=-1; Gameplay->RefreshSpellHotbarOverlays();
         Session.CachedC2SPackets.Reset(); Gameplay->CastSelectedHotbarSpell();
         TestTrue(TEXT("Innate selection casts through item UseWithTarget"),HasAction(ACEGameAction::UseWithTarget));
+        const auto CombatFrame=Manager->FindElementByName(TEXT("RootGameplay_FloatyCombatPanel_Field"));
+        if(CombatFrame)
+        {
+            const int32 OriginalW=CombatFrame->UserResizeW;
+            for(int32 Width:{901,902,1200,1201})
+            {
+                CombatFrame->UserResizeW=Width-625;
+                UACEUIElementManager::ApplyFloatyResizeLayout(CombatFrame);
+                Gameplay->RefreshSpellHotbarOverlays();CaptureScreen(FString::Printf(TEXT("WideSpellBar%d"),Width));
+                TestEqual(TEXT("Spellbar resizes continuously beyond the old 800-pixel cap"),CombatFrame->Width,Width);
+                const auto Cast=Manager->FindElementByName(TEXT("CastSpellButton"));
+                TestTrue(TEXT("Cast button stays within the widened spellbar"),Cast && Cast->GetScreenOrigin().X+Cast->Width<=CombatFrame->GetScreenOrigin().X+Width);
+            }
+            CombatFrame->UserResizeW=OriginalW;UACEUIElementManager::ApplyFloatyResizeLayout(CombatFrame);
+            Gameplay->RefreshSpellHotbarOverlays();CaptureScreen(TEXT("SpellBarWidthRestored"));
+        }
 
 
         // The actual stat widgets must consume recomputed server values and retain
@@ -2492,7 +2540,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Session.VendorMerchandise[0].MaxStackSize=250;Session.VendorMerchandise[0].VendorQuantityAvailable=17;
             Pick.Guid=Stock.Guid;Session.SelectedObject=Pick;Gameplay->VendorSelectedGuid=Stock.Guid;Gameplay->HandleSelectionChanged(Pick);
             TestEqual(TEXT("Quantity follows current vendor stock, not the stale object cache"),Gameplay->SelectedStackMax,17);
-            TestEqual(TEXT("Selecting vendor stock defaults to the whole available stack"),Gameplay->SelectedStackAmount,17);
+            TestEqual(TEXT("Retail consumable stock starts at one unit"),Gameplay->SelectedStackAmount,1);
             const FString SavedCurrency=Session.VendorCurrencyName;
             const int32 SavedCurrencyCount=Session.VendorCurrencyCount;
             Session.VendorCurrencyName=TEXT("Stipends");Session.VendorCurrencyCount=10;
@@ -2505,7 +2553,8 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             }
             Session.VendorCurrencyName=SavedCurrency;Session.VendorCurrencyCount=SavedCurrencyCount;
             Gameplay->VendorBuyCart.Reset();Gameplay->AddSelectedVendorItemToBuyCart();
-            TestEqual(TEXT("Vendor Add transfers the full selected stack"),Gameplay->VendorBuyCart[0].Key,17);
+            TestEqual(TEXT("Vendor Add transfers the default one unit"),Gameplay->VendorBuyCart[0].Key,1);
+            Gameplay->SetVendorPage(0);
             Gameplay->SelectedStackAmount=5;Gameplay->HandleSelectionChanged(Pick);
             TestEqual(TEXT("Selection refresh preserves an explicitly split quantity"),Gameplay->SelectedStackAmount,5);
             Gameplay->VendorBuyCart.Reset();Gameplay->AddSelectedVendorItemToBuyCart();
@@ -2518,6 +2567,29 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Session.CachedC2SPackets.Reset();Gameplay->BuySelectedVendorItem();
             Session.SendBuyItems(99122,{{100,Stock.Guid}});
             TestFalse(TEXT("Stale cart cannot buy exhausted vendor stock"),HasAction(ACEGameAction::Buy));
+            // Retail trade notes use fixed rates and a one-unit initial split,
+            // even where the vendor's ordinary markup is much higher.
+            FACEWorldObject Note=Stock;Note.Name=TEXT("Trade Note (250,000)");Note.PluralName=TEXT("Trade Notes (250,000)");
+            Note.ItemType=ACEItemType::PromissoryNote;Note.Value=250000;Note.StackSize=1;Note.MaxStackSize=250;
+            Session.VendorMerchandise={Note};Session.WorldObjects[Note.Guid]=Note;Session.VendorSellRate=1.55f;
+            Session.VendorCurrencyName.Empty();Gameplay->LastSelection={};
+            Gameplay->HandleVendorOpened(99122);Gameplay->HandleSelectionChanged(Pick);Gameplay->SetVendorPage(0);
+            TestEqual(TEXT("Trade notes start at one, not the 250-unit stock limit"),Gameplay->SelectedStackAmount,1);
+            TestEqual(TEXT("Toolbar describes stock independently of the chosen split"),Gameplay->SelectionText->GetText().ToString(),FString(TEXT("250 Trade Notes (250,000)")));
+            TestEqual(TEXT("Vendor uses the singular stock name without a quantity prefix"),Gameplay->VendorItemNameLabel->GetText().ToString(),Note.Name);
+            TestTrue(TEXT("Trade note purchase uses retail fixed 15-percent markup"),Gameplay->VendorItemCostLabel->GetText().ToString().Contains(TEXT("287,500p")));
+            Gameplay->VendorBuyCart.Reset();Gameplay->AddSelectedVendorItemToBuyCart();
+            TestTrue(TEXT("Buy cart uses the same trade note price"),Gameplay->VendorBuyCostLabel->GetText().ToString().Contains(TEXT("287,500")));
+            Gameplay->VendorSellCart={{1,Note.Guid}};Gameplay->SetVendorPage(2);
+            TestTrue(TEXT("Trade note sells for its full face value"),Gameplay->VendorSellCostLabel->GetText().ToString().Contains(TEXT("250,000p")));
+            FACEWorldObject Ammo=Stock;Ammo.ItemType=ACEItemType::MissileWeapon;Ammo.MaxStackSize=250;Ammo.VendorQuantityAvailable=17;
+            Session.VendorMerchandise={Ammo};Session.WorldObjects[Ammo.Guid]=Ammo;Gameplay->LastSelection={};
+            Gameplay->HandleVendorOpened(99122);Gameplay->HandleSelectionChanged(Pick);Gameplay->SetVendorPage(0);
+            TestEqual(TEXT("Retail ammunition selects the available stack instead"),Gameplay->SelectedStackAmount,17);
+            Gameplay->SelectedStackAmount=5;Gameplay->VendorBuyCart.Reset();Gameplay->AddSelectedVendorItemToBuyCart();
+            TestEqual(TEXT("Ammo Add honors an explicit split"),Gameplay->VendorBuyCart[0].Key,5);
+            Gameplay->VendorSellCart.Reset();Session.VendorSellRate=1;
+            Session.VendorCurrencyName=SavedCurrency;Session.WorldObjects[Stock.Guid]=Stock;
             Session.VendorMerchandise={Stock};Session.WorldObjects.Remove(Helmet.Guid);
             Gameplay->VendorBuyCart={{10,Stock.Guid}};Gameplay->VendorSelectedGuid=SavedSelectedVendor;
             Session.SelectedObject=SavedClientSelection;Gameplay->HandleSelectionChanged(SavedSelection);Session.OpenVendorGuid=SavedSessionVendor;

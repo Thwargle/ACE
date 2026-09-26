@@ -145,6 +145,20 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   Floor->CreateMeshSection_LinearColor(0,{FVector(-1000,-1000,400),FVector(1000,-1000,400),FVector(1000,1000,-400),FVector(-1000,1000,-400)},
    {0,1,2,0,2,3},{},{},{},{},true);
   FloorActor->SetActorLocation(Origin);
+  for(bool Grounded:{false,true})
+  {
+   FACEWorldObject Spawn;Spawn.Guid=12344;Spawn.SetupId=0x02000001;Spawn.ItemType=ACEItemType::Creature;Spawn.bIsPlayer=true;
+   Spawn.bHasPosition=true;Spawn.Position=P;Spawn.Position.bIsGrounded=Grounded;
+   Spawn.bHasVelocity=true;Spawn.Velocity=FVector(0,4,Grounded?0:3);
+   auto* Walker=World->SpawnActor<AACEWorldEntityActor>();Walker->InitializeFromObject(Spawn,100,false);
+   TestEqual(TEXT("Grounded position wins over the descriptor velocity exactly once"),Walker->bHavePhysicsVelocity,!Grounded);
+   Walker->RemoteMotion.bMoving=true;Walker->RemoteMotion.Forward=1;Walker->RemoteMotion.ForwardUnitsPerSecond=4;
+   for(int I=0;I<90;++I)Walker->Tick(1.f/90);
+   const FVector L=Walker->GetActorLocation()-Origin;
+   TestTrue(TEXT("A grounded velocity-bearing spawn follows the slope; a real jump stays airborne"),
+    Grounded ? FMath::Abs(L.Z+.4*L.Y-1)<1.5 : L.Z>200);
+   Walker->Destroy();
+  }
   for(bool VR:{false,true})for(bool Player:{false,true})for(int Frames:{30,90,144})
   {
    auto* Walker=World->SpawnActor<AACEWorldEntityActor>();Walker->bIsPlayer=Player;Walker->ItemType=ACEItemType::Creature;

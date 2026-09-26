@@ -226,9 +226,18 @@ namespace ACEBodySweep
             if (!Component || Ignored.Contains(Component)) return false;
             Ignored.Add(Component);SupportParams.AddIgnoredComponent(Component);
         }
-        if (IsCreatureBody(Hit) || Hit.bStartPenetrating || Hit.Normal.Z<.6641741f) return false;
+        // Classify the authored floor plane, as landing does. At a tread's
+        // convex edge the sphere separation normal tilts toward its side;
+        // treating that as the floor slope loses an otherwise valid support
+        // immediately after landing and repeatedly restarts the falling state.
+        if (IsCreatureBody(Hit) || Hit.bStartPenetrating
+            || Hit.ImpactNormal.Z<.6641741f || Hit.Normal.Z<=.0871557f) return false;
         const float Z=Hit.Location.Z-SupportRadius;
         if (Z>Feet.Z+MaxUp+Clearance || Z<Feet.Z-MaxDown) return false;
+        // Retain edge contact when descending and on sloped ramp planes, but
+        // do not roll upward around a flat tread's vertical riser. That ascent
+        // needs the full step/headroom checks instead of partial sphere lifts.
+        if (Z>Feet.Z+Clearance && Hit.ImpactNormal.Z>.99f && Hit.Normal.Z<.6641741f) return false;
         SupportZ=Z;
         return true;
     }

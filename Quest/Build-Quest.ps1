@@ -5,13 +5,7 @@ param(
     [string]$AndroidSdkRoot = (Join-Path $PSScriptRoot 'AndroidSDK')
 )
 $ErrorActionPreference = 'Stop'
-$versionConfig = Get-Content (Join-Path $PSScriptRoot 'Project/Config/DefaultEngine.ini') -Raw
-if ($versionConfig -notmatch '(?m)^VersionDisplayName=([^\r\n]+)') { throw 'Missing Quest VersionDisplayName.' }
-$displayVersion = $Matches[1].Trim()
-$buildHeader = Get-Content (Join-Path $PSScriptRoot '../Unreal/Plugins/ACEClient/Source/ACEClient/Public/ACEClientBuild.h') -Raw
-if ($buildHeader -notmatch ('(?s)#if PLATFORM_ANDROID\s+inline constexpr const TCHAR\* Version = TEXT\("' + [regex]::Escape($displayVersion) + '"\);')) {
-    throw 'Quest package version and the login-screen version differ. Update ACEClientBuild.h before packaging.'
-}
+& (Join-Path $PSScriptRoot '../Unreal/Build/VR/Test-ReleaseVersion.ps1')
 # Quest disables the editor-only ACEWorldBake plugin. Generate shader parents
 # with the freshly built shared editor BEFORE copying them into the Quest project.
 # Otherwise new C++ material names ship with yesterday's assets (green terrain).
