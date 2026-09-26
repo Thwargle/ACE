@@ -1615,7 +1615,7 @@ void UACEGameHUDWidget::RefreshRadar()
 		}
 		const FACEWorldObject& Obj = Pair.Value;
 		if (Obj.Guid == SelfGuid || !Obj.bHasPosition || Obj.ParentGuid != 0
-			|| Obj.bDying || !Client->IsWorldObjectVisible(Obj))
+			|| Obj.bDying)
 		{
 			continue;
 		}

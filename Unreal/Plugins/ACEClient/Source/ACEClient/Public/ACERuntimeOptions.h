@@ -10,7 +10,7 @@ inline constexpr FOption Values[] = {
  {TEXT("ActiveSoundOnly"),TEXT("Play Sounds Only When Active"),1,0,1},
  {TEXT("CameraStiffness"),TEXT("Camera Stiffness"),1,.25f,3},
  {TEXT("CameraAdjustment"),TEXT("Camera Adjustment Speed"),1,.25f,3},
- {TEXT("FieldOfView"),TEXT("Field of View"),1,.75f,1.25f},
+ {TEXT("FieldOfViewDegrees"),TEXT("Field of View"),90,10,160},
  {TEXT("Brightness"),TEXT("Screen Brightness"),2.2f,1.6f,2.8f},
  {TEXT("Anisotropy"),TEXT("Texture Filtering"),16,1,16},
  {TEXT("DesktopUIScale"),TEXT("Desktop UI Scale"),1,1,3},

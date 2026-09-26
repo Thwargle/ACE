@@ -3181,6 +3181,25 @@ bool UACETerrainPresenterComponent::IsWorldCellVisible(int32 CellId) const
 	return Cell && !Cell->IsHidden();
 }
 
+bool UACETerrainPresenterComponent::IsWorldObjectVisible(int32 CellId, const FBox& Bounds) const
+{
+	if (IsWorldCellVisible(CellId)) return true;
+	if (!Bounds.IsValid) return false;
+	auto* Dat = GetWorld() && GetWorld()->GetGameInstance()
+		? GetWorld()->GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr;
+	if (!Dat) return false;
+	// Retail places an object in every intersected cell. A moving trap's F74B
+	// vectors need not include a new CellId. Use the current rendered bounds
+	// against resident PView cells, without loading additional rooms per object.
+	for (const auto& Pair : SpawnedEnvCells)
+	{
+		if (!Pair.Value || Pair.Value->IsHidden() || !Dat->FindEnvCellMesh(Pair.Key, WorldScale)) continue;
+		if (ACECellTransit::SphereIntersectsEnvCell(*Dat, Pair.Key, Bounds.GetCenter(),
+			Bounds.GetExtent().Size(), WorldScale)) return true;
+	}
+	return false;
+}
+
 void UACETerrainPresenterComponent::UpdateCameraVisibility()
 {
 	ACE_PROFILE_SCOPE(Visibility);

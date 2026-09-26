@@ -15,6 +15,7 @@
 #include "Engine/World.h"
 #include "RenderingThread.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/BoxComponent.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -133,6 +134,35 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   TestTrue(TEXT("Large teleport still snaps immediately"),Walker->GetActorLocation().Equals(P.ToUnrealLocation(100),.01));
   Walker->Destroy();
  }
+ // Dynamic solid scenery must support feet regardless of PView or NoDraw.
+ // Use authored stair geometry, not a permissive proxy capsule/box.
+ {
+  FACEWorldObject Platform;Platform.Guid=12349;Platform.SetupId=0x02000623;Platform.ItemType=ACEItemType::Misc;
+  Platform.PhysicsState=ACEPhysicsState::Static;Platform.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
+  Platform.bHasPosition=true;Platform.Position.CellId=0x016C0101;Platform.Position.Location=FVector(50,50,100);
+  auto* Solid=World->SpawnActor<AACEWorldEntityActor>();Solid->InitializeFromObject(Platform,100,true);
+  FBox Bounds;TestTrue(TEXT("Authored solid platform mesh exists"),Solid->Appearance->GetVisualWorldBounds(Bounds));
+  auto* Supported=World->SpawnActor<AACEWorldEntityActor>();Supported->bIsPlayer=true;Supported->LastAceCellId=Platform.Position.CellId;
+  TArray<FVector> Samples;
+  for(double X=Bounds.Min.X+10;X<Bounds.Max.X;X+=30)for(double Y=Bounds.Min.Y+10;Y<Bounds.Max.Y;Y+=30)
+  {
+   FHitResult Hit;
+   if(World->LineTraceSingleByChannel(Hit,FVector(X,Y,Bounds.Max.Z+5),FVector(X,Y,Bounds.Min.Z-5),ECC_Pawn,FCollisionQueryParams(NAME_None,true))
+    && Hit.GetActor()==Solid && Hit.ImpactNormal.Z>.66)Samples.Add(Hit.ImpactPoint);
+  }
+  TestTrue(TEXT("Platform fixture contains walkable physics faces"),Samples.Num()>4);
+  for(bool Visible:{true,false})
+  {
+   Solid->SetCellVisible(Visible);
+   if(!Visible)Solid->ApplyPhysicsState(Platform.PhysicsState|ACEPhysicsState::NoDraw);
+   for(const FVector& Feet:Samples)
+   {
+    FHitResult Hit;TestTrue(TEXT("Local foot ray retains solid support when rendering is suppressed"),World->LineTraceSingleByChannel(Hit,Feet+FVector(0,0,5),Feet-FVector(0,0,5),ECC_Pawn,FCollisionQueryParams(NAME_None,true)) && Hit.GetActor()==Solid);
+    float Z=0;TestTrue(TEXT("Remote feet can stand on authored dynamic scenery"),Supported->TraceGroundZ(Feet,Z,true) && FMath::Abs(Z-Feet.Z)<1);
+   }
+  }
+  Supported->Destroy();Solid->Destroy();
+ }
  // Sparse server positions must not leave remote feet on a horizontal shelf.
  // Exercise the actor presentation, collision and tracked-root path on a slope.
  {
@@ -159,9 +189,39 @@ bool FACEMovementReviewTest::RunTest(const FString&)
     Grounded ? FMath::Abs(L.Z+.4*L.Y-1)<1.5 : L.Z>200);
    Walker->Destroy();
   }
+  // ObjectCreate has no PositionPack contact bit. A horizontal vector is also
+  // sent independently of position; neither means the runner has jumped.
+  for(bool Gravity:{false,true})for(float Heading:{-45.f,0.f,45.f})
+  {
+   FACEWorldObject Spawn; Spawn.Guid=12344; Spawn.SetupId=0x02000001;
+   Spawn.ItemType=ACEItemType::Creature; Spawn.bIsPlayer=true;
+   Spawn.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck|ACEObjectDescFlag::Attackable;
+   Spawn.PhysicsState=Gravity?ACEPhysicsState::Gravity:0;
+   Spawn.bHasPosition=true; Spawn.Position=P;
+   const FVector Direction=FACEPosition::UnrealDirFromAceHeadingDegrees(Heading);
+   Spawn.Position.SetAceFacingFromUnrealDir2D(Direction);
+   Spawn.bHasVelocity=true; Spawn.Velocity=Spawn.Position.GetAceForwardInAcSpace()*4;
+   auto* Walker=World->SpawnActor<AACEWorldEntityActor>(); Walker->InitializeFromObject(Spawn,100,false);
+   Walker->RemoteMotion.bMoving=true; Walker->RemoteMotion.Forward=1; Walker->RemoteMotion.ForwardUnitsPerSecond=4;
+   double MaxError=0, MaxLateral=0;
+   for(int I=1; I<=180; ++I)
+   {
+    if(I%45==0) Walker->ApplyPhysicsVelocity(Spawn.Velocity);
+    Walker->Tick(1.f/90);
+    const FVector L=Walker->GetActorLocation()-Origin;
+    MaxError=FMath::Max(MaxError,FMath::Abs(L.Z+.4*L.Y-1));
+    MaxLateral=FMath::Max(MaxLateral,FMath::Abs(L.X*Direction.Y-L.Y*Direction.X));
+   }
+   TestTrue(FString::Printf(TEXT("Velocity packets preserve slope contact, gravity=%d error=%.2f"),Gravity,MaxError),MaxError<2);
+   TestTrue(TEXT("Straight remote runner does not wander sideways"),MaxLateral<.1);
+   TestTrue(TEXT("Full DAT body keeps progressing downhill"),FVector::DotProduct(Walker->GetActorLocation()-Origin,Direction)>650);
+   AddInfo(FString::Printf(TEXT("Remote slope gravity=%d heading=%.0f height error=%.3fcm lateral drift=%.3fcm"),Gravity,Heading,MaxError,MaxLateral));
+   Walker->Destroy();
+  }
   for(bool VR:{false,true})for(bool Player:{false,true})for(int Frames:{30,90,144})
   {
    auto* Walker=World->SpawnActor<AACEWorldEntityActor>();Walker->bIsPlayer=Player;Walker->ItemType=ACEItemType::Creature;
+   Walker->ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
    Walker->ApplyACEPosition(P);Walker->RemoteMotion.bMoving=true;Walker->RemoteMotion.Forward=1;Walker->RemoteMotion.ForwardUnitsPerSecond=4;
    const float Dt=1.f/Frames;double MaxError=0;
    for(int I=1;I<=Frames*2;++I)
@@ -243,8 +303,8 @@ bool FACEMovementReviewTest::RunTest(const FString&)
  {
   auto* Client=GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
   auto* PC=World->SpawnActor<AACEPlayerController>();PC->Client=Client;
-  auto* Pawn=World->SpawnActor<APawn>();auto* Root=NewObject<USceneComponent>(Pawn);
-  Pawn->SetRootComponent(Root);Root->RegisterComponent();PC->Possess(Pawn);
+  auto* Pawn=World->SpawnActor<APawn>();auto* Root=NewObject<UCapsuleComponent>(Pawn);Root->InitCapsuleSize(22,88);
+  Pawn->SetRootComponent(Root);Root->RegisterComponent();Pawn->SetActorEnableCollision(false);PC->Possess(Pawn);
   PC->bUsePortalTransitionOnTeleport=false;PC->bUseEnterWorldLoadScreen=false;
   FACEWorldObject Self=Obj;Self.bIsPlayer=true;Self.bIsSelf=true;
   Self.bHasPosition=true;Self.Position.CellId=0x7D640019;Self.Position.Location=FVector(50,100,50);
@@ -280,6 +340,18 @@ bool FACEMovementReviewTest::RunTest(const FString&)
     TestTrue(TEXT("Forced correction still moves the body"),Pawn->GetActorLocation().Equals(Delayed.ToUnrealLocation(100)+FVector(0,0,88),.01));
    }
   }
+  auto* WallActor=World->SpawnActor<AActor>();auto* Wall=NewObject<UBoxComponent>(WallActor);
+  WallActor->SetRootComponent(Wall);Wall->SetBoxExtent(FVector(5,300,300));Wall->SetCollisionResponseToAllChannels(ECR_Block);Wall->RegisterComponent();
+  const FVector IdleStart=Self.Position.ToUnrealLocation(100)+FVector(0,0,88);
+  WallActor->SetActorLocation(IdleStart+FVector(100,0,0));Pawn->SetActorLocation(IdleStart);
+  PC->bHavePredictedPose=PC->bLocalPredicting=false;PC->ServerSnapErrorCm=100;
+  FACEPosition ThroughWall=Self.Position;ThroughWall.SetLocationFromUnreal(IdleStart+FVector(300,0,-88),100);
+  Receive(ThroughWall,0,Force);
+  TestTrue(TEXT("An idle position acknowledgement cannot snap through a wall"),Pawn->GetActorLocation().X<IdleStart.X+80);
+  TestTrue(TEXT("Reported position matches collision-limited idle correction within the wire float precision"),Client->GetPlayerPosition().ToUnrealLocation(100).Equals(Pawn->GetActorLocation()-FVector(0,0,88),.3));
+  Receive(ThroughWall,0,++Force);
+  TestTrue(TEXT("Explicit server forced placement still crosses the wall"),Pawn->GetActorLocation().Equals(IdleStart+FVector(300,0,0),.01));
+  WallActor->Destroy();
   FACEPosition Arrival=Self.Position;Arrival.SetAceFacingFromUnrealDir2D(FVector(1,0,0));
   Receive(Arrival,1,++Force);
   TestTrue(TEXT("Teleport applies destination heading even when force sequence also changes"),

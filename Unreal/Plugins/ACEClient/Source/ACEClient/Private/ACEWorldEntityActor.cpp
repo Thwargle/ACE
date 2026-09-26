@@ -316,7 +316,7 @@ void AACEWorldEntityActor::ConfigureAttachedPickCollision()
 {
 	// Wielded weapons stay ethereal to the player but remain Visibility-queryable for
 	// select / right-click identify (retail allows targeting held items).
-	SetActorEnableCollision(bCellVisible && !bReceivedDeathMotion);
+	SetActorEnableCollision(!bReceivedDeathMotion);
 	DisableAllCollision();
 	if (Mesh)
 	{
@@ -390,7 +390,7 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 		return;
 	}
 
-	SetActorEnableCollision(bCellVisible && !bReceivedDeathMotion);
+	SetActorEnableCollision(!bReceivedDeathMotion);
 	if (Mesh)
 	{
 		Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -922,6 +922,15 @@ FVector AACEWorldEntityActor::ResolvePredictedMovement(const FVector& From, cons
 	const FVector Offset(0, 0, Half + 1.f);
 	FVector Position = From + Offset;
 	FVector Remaining = Destination - From;
+	if (!bHavePhysicsVelocity)
+	{
+		FHitResult Hit;
+		if (!ACEBodySweep::Sweep(*GetWorld(), Hit, Position, Position+Remaining, Shape, Query)) return Destination;
+		// Grounded contact changes support height, not the horizontal heading.
+		// Projecting onto a sloping floor in 3D deflected straight runners sideways
+		// and each F748 then pulled them back onto their original track.
+		return ACEBodySweep::SlideGrounded(*GetWorld(), Position, Position+Remaining, Hit, Shape, Query)-Offset;
+	}
 	for (int32 Pass = 0; Pass < 3 && !Remaining.IsNearlyZero(.01f); ++Pass)
 	{
 		FHitResult Hit;
@@ -1249,7 +1258,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 					{
 						const FVector Dir = ToTarget / DistCm;
 						const float Speed = FMath::Max(RemoteMotion.ForwardUnitsPerSecond, 0.f);
-						Velocity = Dir * FMath::Min(Speed * WorldScale, RemainingCm / FMath::Max(Step, SMALL_NUMBER));
+						Velocity = Dir * FMath::Min(Speed * WorldScale * GetActorScale3D().GetAbsMax(), RemainingCm / FMath::Max(Step, SMALL_NUMBER));
 						if (Appearance)
 						{
 							Appearance->SetLocomotionInput(
@@ -1287,7 +1296,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 					const FVector Right = RemotePredictRotation.RotateVector(FVector(-1.f, 0.f, 0.f));
 					Velocity = (
 						Forward * RemoteMotion.ForwardUnitsPerSecond
-						+ Right * RemoteMotion.StrafeUnitsPerSecond) * WorldScale;
+						+ Right * RemoteMotion.StrafeUnitsPerSecond) * WorldScale * GetActorScale3D().GetAbsMax();
 					if (Appearance)
 					{
 						const float F = FMath::Clamp(RemoteMotion.Forward, -1.f, 1.f);
@@ -1309,7 +1318,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 				FMath::Abs(RemoteMotion.ForwardUnitsPerSecond),
 				FMath::Abs(RemoteMotion.StrafeUnitsPerSecond) > KINDA_SMALL_NUMBER
 					? FMath::Abs(RemoteMotion.StrafeUnitsPerSecond)
-					: 4.f) * WorldScale;
+					: 4.f) * WorldScale * GetActorScale3D().GetAbsMax();
 			const FVector Drift = RemotePredictLocation - RemoteAnchorLocation;
 			if (Drift.SizeSquared() > FMath::Square(FMath::Max(MaxDriftCm, 50.f)))
 			{
@@ -1334,7 +1343,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			// used to leave feet floating between sparse F748s.
 			// Match initial placement: Stuck signs/wall props retain the server's Z
 			// even while a small network correction keeps their actor ticking.
-			if (bClampToGround && (ObjectDescriptionFlags & ACEObjectDescFlag::Stuck) == 0)
+			if (bClampToGround)
 			{
 				// The displayed point lags prediction. Never copy its terrain Z
 				// into a prediction at different XY on a hill.
@@ -1426,10 +1435,13 @@ bool AACEWorldEntityActor::TraceGroundZ(const FVector& AtLocation, float& OutGro
 			{
 				continue;
 			}
-			if (Cast<AACEWorldEntityActor>(Hit.GetActor()) != nullptr)
+			if (const auto* Other = Cast<AACEWorldEntityActor>(Hit.GetActor()))
 			{
-				// Other weenies (signs, chests, NPCs) are never floor for ground-clamp.
-				continue;
+				// Creature bodies and selection proxies are not floors. Authored
+				// solid object meshes (bridges/platforms) are valid support.
+				if (!bCreatureSupport || Other->bIsPlayer || (Other->ItemType & ACEItemType::Creature)
+					|| Hit.Component->GetCollisionResponseToChannel(ECC_Pawn) != ECR_Block
+					|| !Cast<UProceduralMeshComponent>(Hit.Component.Get())) continue;
 			}
 			if (const AACELandblockActor* Lb = Cast<AACELandblockActor>(Hit.GetActor()))
 			{
@@ -1699,9 +1711,12 @@ bool AACEWorldEntityActor::ClampLocationToGround(FVector& InOutLocation, const F
 	{
 		return true;
 	}
-	// Stuck scenery (town signs, wall props) must keep authored server Z — clamping pulls
-	// "The Eagle's Blade" etc. down onto the street grade.
-	if ((ObjectDescriptionFlags & ACEObjectDescFlag::Stuck) != 0)
+	const bool bCreatureLike = bIsPlayer || bIsSelf
+		|| (ItemType & ACEItemType::Creature) != 0;
+	// Stuck means the object cannot be picked up; creatures commonly carry it
+	// too. Only anchored scenery keeps authored Z. Applying this exemption to
+	// players/monsters left them running over slopes until the next position.
+	if (!bCreatureLike && (ObjectDescriptionFlags & ACEObjectDescFlag::Stuck) != 0)
 	{
 		return true;
 	}
@@ -1709,8 +1724,6 @@ bool AACEWorldEntityActor::ClampLocationToGround(FVector& InOutLocation, const F
 	float GroundZ = 0.f;
 	uint32 OccupiedEnv = 0;
 	const bool bIndoorEnt = ResolveIndoorOccupancy(InOutLocation, OccupiedEnv);
-	const bool bCreatureLike = bIsPlayer || bIsSelf
-		|| (ItemType & ACEItemType::Creature) != 0;
 	if (bCreatureLike)
 	{
 		// Retail advances contact/step-down along with locomotion. Sampling the
@@ -1907,7 +1920,7 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 	if (bReceivedDeathMotion && bIsPlayer && !bDeath && Appearance)
 		Appearance->ClearDeathMotion();
 	bReceivedDeathMotion = bDeath && !IsCorpse();
-	SetActorEnableCollision(bCellVisible && !bReceivedDeathMotion);
+	SetActorEnableCollision(!bReceivedDeathMotion);
 	// A corpse is a separate object at the final death frame. Late Ready/locomotion
 	// updates must not turn it back into an idle creature.
 	if (IsCorpse())
@@ -2059,6 +2072,18 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 				? Velocity.Size2D() : 3.1199999f;
 			RemoteRunSpeedAc = Dat->GetMotionVelocity(MotionTableId, 0x44000007, Motion.CurrentStyle, Velocity)
 				? Velocity.Size2D() : 4.f;
+			// Interpreted motion speed multiplies the actor's DAT cycle velocity.
+			// Human constants alone overshoot slow creatures and underpredict large
+			// players, forcing a visible correction on every sparse position packet.
+			if (Motion.MovementType == 0)
+			{
+				const uint16 Command = uint16(Motion.ForwardCommand);
+				if (Command == 5 || Command == 6)
+					RemoteMotion.ForwardUnitsPerSecond *= RemoteWalkSpeedAc / 3.1199999f;
+				else if (Command == 7) RemoteMotion.ForwardUnitsPerSecond *= RemoteRunSpeedAc / 4.f;
+				if (Dat->GetMotionVelocity(MotionTableId, ACEMotion::SideStepRight, Motion.CurrentStyle, Velocity))
+					RemoteMotion.StrafeUnitsPerSecond *= Velocity.Size2D() / 1.25f;
+			}
 		}
 	}
 
@@ -2142,6 +2167,21 @@ void AACEWorldEntityActor::ApplyPhysicsVelocity(const FVector& AceVelocity, cons
 	AcePhysicsVelocity = bAnchoredProp ? FVector::ZeroVector : AceVelocity;
 	AcePhysicsOmega = AceOmega;
 	bHavePhysicsVelocity = !AcePhysicsVelocity.IsNearlyZero();
+	// VectorUpdate describes velocity, not loss of contact. Retail retains its
+	// contact plane while running down a slope; treating every horizontal vector
+	// as a jump leaves the body on a shelf until gravity/the next F748 catches up.
+	// Upward impulses and bodies genuinely above their support remain ballistic.
+	if (bHavePhysicsVelocity && bClampToGround && !(PhysicsState & ACEPhysicsState::Missile)
+		&& (bIsPlayer || (ItemType & ACEItemType::Creature)) && AceVelocity.Z <= .01f)
+	{
+		float GroundZ;
+		const FVector Feet = bHaveRemotePredict ? RemotePredictLocation : GetActorLocation();
+		if (TraceGroundZ(Feet, GroundZ, true) && FMath::Abs(Feet.Z-GroundZ) <= 3.f)
+		{
+			bHavePhysicsVelocity = false;
+			AcePhysicsVelocity = FVector::ZeroVector;
+		}
+	}
 	if (!bHaveRemotePredict && ParentGuid == 0)
 	{
 		RemotePredictLocation = GetActorLocation();
@@ -2157,6 +2197,8 @@ void AACEWorldEntityActor::SetCellVisible(bool bVisible)
 	if (bCellVisible == bVisible) return;
 	bCellVisible = bVisible;
 	SetActorHiddenInGame(!bVisible);
+	// PView is a drawing decision, not a physics transition. A solid bridge
+	// still supports feet when its origin cell leaves the camera's portal view.
 	ApplyPhysicsState(PhysicsState);
 }
 
@@ -2178,7 +2220,7 @@ void AACEWorldEntityActor::ApplyPhysicsState(int32 InPhysicsState)
 	// PhysicsDesc's Hidden flag suppresses the object regardless of item type.
 	// It is independent of animation NoDraw and must survive deferred mesh creation.
 	const bool bNoDraw = IsMeshSuppressed();
-	SetActorEnableCollision(bCellVisible && !bReceivedDeathMotion);
+	SetActorEnableCollision(!bReceivedDeathMotion);
 
 	if (Appearance)
 	{

@@ -141,7 +141,10 @@ bool FACELedgeStairsTest::RunTest(const FString&)
  // Testing a jump while already falling must not replace the ballistic arc.
  TestTrue(TEXT("Unsupported loaded indoor space begins a fall"),Controller->bJumpAirborne);
  Controller->BeginJumpCharge();
- TestFalse(TEXT("Jump cannot charge on unsupported indoor air"),Controller->bJumpCharging);
+ TestTrue(TEXT("A falling player can charge the next jump"),Controller->bJumpCharging);
+ const FVector FallVelocity=Controller->JumpWorldAceVelocity;
+ Controller->ReleaseJump(1,0);
+ TestTrue(TEXT("Releasing in midair cannot replace the current fall"),Controller->bJumpAirborne && Controller->JumpWorldAceVelocity.Equals(FallVelocity));
  for(int32 I=0;I<180;++I)Controller->PlayerTick(.016f);
  TestFalse(TEXT("Indoor fall finishes instead of holding the player in midair"),Controller->bJumpAirborne);
  AddInfo(FString::Printf(TEXT("Indoor stairwell fall feet=%s"),*(Pawn->GetActorLocation()-Origin-FVector(0,0,Half)).ToString()));

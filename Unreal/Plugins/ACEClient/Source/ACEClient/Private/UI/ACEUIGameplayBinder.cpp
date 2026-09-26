@@ -703,6 +703,7 @@ void UACEUIGameplayBinder::TickRefresh()
 		return;
 	}
 	UpdateAutoUILayout();
+	UpdateVendorSellSplit();
 	EnsureOverlays();
 	// "Stay in chat mode after sending" — refocus after the commit's focus clear.
 	Manager->BeginNameLookupPass();
@@ -1785,6 +1786,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 		}
 		else if (VendorSellSelectedGuid != 0)
 		{
+			if (VendorSellSelectedGuid == VendorSellSplit.SourceGuid) VendorSellSplit = {};
 			VendorSellCart.RemoveAll([this](const TPair<int32, int32>& P)
 			{
 				return P.Value == VendorSellSelectedGuid;
@@ -1803,11 +1805,13 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 		}
 		else if (ActiveVendorPage == 2)
 		{
+			VendorSellSplit = {};
 			VendorSellCart.Reset();
 			VendorSellSelectedGuid = 0;
 		}
 		else
 		{
+			VendorSellSplit = {};
 			VendorBuyCart.Reset();
 			VendorSellCart.Reset();
 			VendorSellSelectedGuid = 0;
@@ -2181,9 +2185,23 @@ void UACEUIGameplayBinder::TogglePanelPage(const FString& PageElementName)
 	}
 }
 
-void UACEUIGameplayBinder::ToggleGameplayPanel(const FString& PageElementName)
+void UACEUIGameplayBinder::ToggleGameplayPanel(const FString& PageElementName, const FString& TabName)
 {
-	TogglePanelPage(PageElementName);
+	if (TabName.IsEmpty()) { TogglePanelPage(PageElementName); return; }
+	const FString CurrentTab = PageElementName == TEXT("SkillManagementPanel_Field") ? ActiveSkillTab
+		: PageElementName == TEXT("SpellManagementPanel_Field") ? ActiveSpellPanelTab
+		: PageElementName == TEXT("SocialPanel_Field") ? ActiveSocialTab
+		: PageElementName == TEXT("WorldPanel_Field") ? ActiveWorldTab
+		: PageElementName == TEXT("OptionsPanel_Field") ? ActiveOptionsTab : ActiveQuestTab;
+	if (ActivePanelPage == PageElementName && CurrentTab == TabName) { HidePanel(); return; }
+	ShowPanelPage(PageElementName);
+	if (PageElementName == TEXT("SkillManagementPanel_Field")) SyncSkillPanelTab(TabName);
+	else if (PageElementName == TEXT("SpellManagementPanel_Field")) SyncSpellPanelTab(TabName);
+	else if (PageElementName == TEXT("SocialPanel_Field")) SyncSocialPanelTab(TabName);
+	else if (PageElementName == TEXT("WorldPanel_Field")) SyncWorldPanelTab(TabName);
+	else if (PageElementName == TEXT("OptionsPanel_Field")) SyncOptionsPanelTab(TabName);
+	else if (PageElementName == TEXT("QuestManagementPanel_Field"))
+	{ ActiveQuestTab = TabName; bJournalFieldsDirty = true; RefreshQuestOverlays(); }
 }
 
 void UACEUIGameplayBinder::HandleEscape()
@@ -5117,6 +5135,8 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 						return true;
 					}
 					PendingVendorSellGuid = Guid;
+					PendingVendorSellAmount = LastSelection.Guid == Guid
+						? SelectedStackAmount : FMath::Max(1, Obj.StackSize);
 					PlayerController->InteractWithObject(TargetGuid);
 					return true;
 				}
@@ -6150,15 +6170,20 @@ void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Sele
 	TickSelectionFlash(); // restore the previous selection before changing it
 	SelectionFlashUntil = FPlatformTime::Seconds() + .4;
 	TArray<UPrimitiveComponent*> Meshes;
+	auto AddAppearanceParts = [&Meshes](AActor* Actor)
+	{
+		if (auto* App = Actor ? Actor->FindComponentByClass<UACECharacterAppearanceComponent>() : nullptr)
+			for (int32 Part=0; Part<App->GetPartCount(); ++Part)
+				if (auto* Mesh=Cast<UPrimitiveComponent>(App->GetPartMesh(Part))) Meshes.AddUnique(Mesh);
+	};
 	if (Selection.bValid && PlayerController)
 		for (TActorIterator<AACEWorldEntityActor> It(PlayerController->GetWorld()); It; ++It)
-			if (It->GetACEGuid() == Selection.Guid) { It->GetComponents(Meshes); break; }
+			if (It->GetACEGuid() == Selection.Guid) { AddAppearanceParts(*It); break; }
 	if (Selection.bValid && Client && PaperDollPreviewActor)
 	{
 		if (Selection.Guid == Client->GetPlayerGuid())
 		{
-			TArray<UPrimitiveComponent*> DollMeshes; PaperDollPreviewActor->GetComponents(DollMeshes);
-			for (auto* Mesh : DollMeshes) Meshes.AddUnique(Mesh);
+			AddAppearanceParts(PaperDollPreviewActor);
 		}
 		else if (auto* App = PaperDollPreviewActor->FindComponentByClass<UACECharacterAppearanceComponent>())
 		{
@@ -6175,6 +6200,9 @@ void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Sele
 					if (auto* Mesh = Cast<UPrimitiveComponent>(App->GetPartMesh(Part))) Meshes.AddUnique(Mesh);
 		}
 	}
+	// Retail selection lighting belongs to the object's parts. Particle meshes
+	// have a separate material owner; flashing pooled glow materials let their
+	// next reuse copy the temporary brightness and accumulate it on each click.
 	for (UPrimitiveComponent* Mesh : Meshes)
 		for (int32 Index = 0; Index < Mesh->GetNumMaterials(); ++Index)
 			if (auto* Original = Mesh->GetMaterial(Index))
@@ -10256,8 +10284,13 @@ FLinearColor UACEUIGameplayBinder::ColorFromRadarBlip(uint8 RadarColor)
     return FLinearColor::FromSRGBColor(Color);
 }
 
-uint8 UACEUIGameplayBinder::ResolveRadarColor(const FACEWorldObject& Obj)
+uint8 UACEUIGameplayBinder::ResolveRadarColor(const FACEWorldObject& Obj, const FACEFellowshipInfo* Fellowship)
 {
+	// gmRadarUI::GetBlipColor applies fellowship membership last, overriding
+	// the ordinary player/PK color. VividTargetIndicator uses that same result.
+	if (Fellowship && Fellowship->bValid && Fellowship->Members.ContainsByPredicate(
+		[&](const FACEFellowshipMember& Member) { return Member.Guid == Obj.Guid; }))
+		return ACERadarColor::BrightGreen;
 	if (Obj.bIsPlayer)
 	{
 		if ((Obj.ObjectDescriptionFlags & ACEObjectDescFlag::PkLiteStatus) != 0)
@@ -10511,7 +10544,9 @@ void UACEUIGameplayBinder::RefreshRadarOverlays()
 		{
 			break;
 		}
-		if (!ShouldShowOnRadar(Obj, SelfGuid) || !PlayerPos.IsValid() || !Client->IsWorldObjectVisible(Obj))
+		// Radar uses server-known positions and distance, not the rooms admitted
+		// for rendering by the current camera/portal view.
+		if (!ShouldShowOnRadar(Obj, SelfGuid) || !PlayerPos.IsValid())
 		{
 			continue;
 		}
@@ -10528,7 +10563,7 @@ void UACEUIGameplayBinder::RefreshRadarOverlays()
 
 		UBorder* Blip = RadarBlips[BlipIndex];
 		int32 Shape=4;
-        uint8 RadarColor=ResolveRadarColor(Obj);
+        uint8 RadarColor=ResolveRadarColor(Obj,&Fellowship);
         if(Fellowship.bValid && Fellowship.Members.ContainsByPredicate([&](const auto& M){return M.Guid==Obj.Guid;}))
         { Shape=Fellowship.LeaderGuid==Obj.Guid ? 5:6;RadarColor=ACERadarColor::BrightGreen; }
         else if(SelfObject && Obj.MonarchGuid!=0 && Obj.MonarchGuid==SelfObject->MonarchGuid) Shape=2;
@@ -10790,7 +10825,8 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
                 const FVector2D Size=FVector2D(Texture->GetSizeX(),Texture->GetSizeY())*Canvas->GetLastScale2D();
                 FSlateBrush Brush;Brush.SetResourceObject(Texture);Brush.ImageSize=Size;Brush.DrawAs=ESlateBrushDrawType::Image;
                 SelectionDirectionArrow->SetBrush(Brush);
-                SelectionDirectionArrow->SetBrushColor(ColorFromSelectionMarker(bHaveObj?ResolveRadarColor(SelObj):ACERadarColor::Yellow));
+                const auto Fellowship=Client->GetFellowship();
+                SelectionDirectionArrow->SetBrushColor(ColorFromSelectionMarker(bHaveObj?ResolveRadarColor(SelObj,&Fellowship):ACERadarColor::Yellow));
                 SelectionDirectionArrow->SetVisibility(ESlateVisibility::HitTestInvisible);
                 if(auto* Slot=Cast<UCanvasPanelSlot>(SelectionDirectionArrow->Slot))
                 {
@@ -10803,7 +10839,8 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
     }
     if(SelectionDirectionArrow)SelectionDirectionArrow->SetVisibility(ESlateVisibility::Collapsed);
 
-	const uint8 Radar = bHaveObj ? ResolveRadarColor(SelObj) : ACERadarColor::White;
+	const auto Fellowship=Client->GetFellowship();
+	const uint8 Radar = bHaveObj ? ResolveRadarColor(SelObj,&Fellowship) : ACERadarColor::White;
 	const FLinearColor Tint = ColorFromSelectionMarker(Radar);
 	auto* Resources = Canvas->GetResourceResolver();
 	if (!Resources) { HideSelectionMarkers(); return; }
@@ -11029,6 +11066,8 @@ void UACEUIGameplayBinder::RefreshExaminationOverlay()
 		Prefix += LastAppraisal.bHasBurden
 			? TEXT("Burden: ") + FText::AsNumber(LastAppraisal.Burden).ToString() + TEXT("\n") : TEXT("Burden: Unknown\n");
 	Body = Prefix + ACEAppraisalFormatting::ItemDetails(LastAppraisal, Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr) + Body;
+	const FString ManaDetails = ACEAppraisalFormatting::ManaStoneDetails(LastAppraisal);
+	if (!ManaDetails.IsEmpty()) Body += TEXT("\n") + ManaDetails;
 	const FString BodyEl = LastAppraisal.bIsCreature
 		? TEXT("BasicCreatureExam_Attributes")
 		: TEXT("ItemDisplayText");
@@ -13578,6 +13617,7 @@ void UACEUIGameplayBinder::ShowVendorPanel(int32 Guid)
 	SalvageQueueGuids.Reset();
 	if (!bSameVendor)
 	{
+		VendorSellSplit = {};
 		ActiveVendorPage = 0;
 		VendorItemsScrollOffset = 0;
 		VendorBuyScrollOffset = 0;
@@ -13599,6 +13639,7 @@ void UACEUIGameplayBinder::ShowVendorPanel(int32 Guid)
 
 void UACEUIGameplayBinder::HideVendorPanel()
 {
+	VendorSellSplit = {};
 	const int32 Guid = OpenVendorGuid;
 	OpenVendorGuid = 0;
 	VendorSelectedGuid = 0;
@@ -14227,10 +14268,15 @@ void UACEUIGameplayBinder::RefreshVendorInfoTexts()
 	}
 }
 
-void UACEUIGameplayBinder::AddInventoryGuidToVendorSellCart(int32 Guid)
+void UACEUIGameplayBinder::AddInventoryGuidToVendorSellCart(int32 Guid, int32 Amount)
 {
 	if (!Client || Guid == 0 || OpenVendorGuid == 0)
 	{
+		return;
+	}
+	if (VendorSellSplit.SourceGuid != 0)
+	{
+		PostInventorySystemMessage(TEXT("Please wait for the stack to finish splitting."));
 		return;
 	}
 	FACEWorldObject Obj;
@@ -14250,9 +14296,9 @@ void UACEUIGameplayBinder::AddInventoryGuidToVendorSellCart(int32 Guid)
 				|| !Client->GetSession() || !Client->GetSession()->CanVendorBuyItem(Item)) continue;
 			TPair<int32, int32>* Existing = VendorSellCart.FindByPredicate(
 				[&Item](const TPair<int32, int32>& Entry) { return Entry.Value == Item.Guid; });
-			const int32 Amount = FMath::Max(1, Item.StackSize);
-			if (Existing) Existing->Key = Amount;
-			else VendorSellCart.Emplace(Amount, Item.Guid);
+			const int32 FullStackAmount = FMath::Max(1, Item.StackSize);
+			if (Existing) Existing->Key = FullStackAmount;
+			else VendorSellCart.Emplace(FullStackAmount, Item.Guid);
 			VendorSellSelectedGuid = Item.Guid;
 		}
 		ActiveVendorPage = 2;
@@ -14265,11 +14311,43 @@ void UACEUIGameplayBinder::AddInventoryGuidToVendorSellCart(int32 Guid)
 		PostInventorySystemMessage(TEXT("That item cannot be sold."));
 		return;
 	}
+	const int32 StackSize = FMath::Max(1, Obj.StackSize);
+	if (Amount == INDEX_NONE) Amount = LastSelection.Guid == Guid ? SelectedStackAmount : StackSize;
+	Amount = FMath::Clamp(Amount, 1, StackSize);
+	if (Amount < StackSize)
+	{
+		// VendorSellUI::AcceptDragObject splits into the item's own container and
+		// waits for ItemAttributesChanged to replace the offered source with the new GUID.
+		// ACE/GDLE sale processing operates on whole objects, even with a smaller amount.
+		if (!Client->IsOwnedInventoryItem(Obj) || !Obj.ContainerId || Obj.WielderId
+			|| Obj.CurrentWieldedLocation || !Client->GetSession()
+			|| !Client->GetSession()->CanVendorBuyItem(Obj))
+		{
+			PostInventorySystemMessage(TEXT("That item cannot be split for sale."));
+			return;
+		}
+		VendorSellSplit.VendorGuid = OpenVendorGuid;
+		VendorSellSplit.SourceGuid = Guid;
+		VendorSellSplit.ContainerGuid = Obj.ContainerId;
+		VendorSellSplit.Wcid = Obj.WeenieClassId;
+		VendorSellSplit.Amount = Amount;
+		VendorSellSplit.OriginalSize = StackSize;
+		VendorSellSplit.Deadline = FPlatformTime::Seconds() + 15.0;
+		for (const auto& Existing : Client->GetWorldObjects()) VendorSellSplit.ExistingGuids.Add(Existing.Guid);
+		VendorSellCart.RemoveAll([Guid](const auto& Entry) { return Entry.Value == Guid; });
+		VendorSellSelectedGuid = Guid;
+		Client->SendStackableSplitToContainer(Guid, Obj.ContainerId, 0, Amount);
+		ActiveVendorPage = 2;
+		SyncVendorPageVisibility();
+		RefreshVendorOverlays();
+		PostInventorySystemMessage(TEXT("Splitting the selected amount before selling it."));
+		return;
+	}
 	for (TPair<int32, int32>& P : VendorSellCart)
 	{
 		if (P.Value == Guid)
 		{
-			P.Key=FMath::Clamp(LastSelection.Guid==Guid?SelectedStackAmount:FMath::Max(1,Obj.StackSize),1,FMath::Max(1,Obj.StackSize));
+			P.Key = Amount;
 			VendorSellSelectedGuid = Guid;
 			ActiveVendorPage = 2;
 			SyncVendorPageVisibility();
@@ -14277,10 +14355,7 @@ void UACEUIGameplayBinder::AddInventoryGuidToVendorSellCart(int32 Guid)
 			return;
 		}
 	}
-	const int32 Amt = (LastSelection.Guid == Guid && SelectedStackAmount > 0)
-		? SelectedStackAmount
-		: FMath::Max(1, Obj.StackSize > 0 ? Obj.StackSize : 1);
-	VendorSellCart.Emplace(Amt, Guid);
+	VendorSellCart.Emplace(Amount, Guid);
 	VendorSellSelectedGuid = Guid;
 	ActiveVendorPage = 2;
 	SyncVendorPageVisibility();
@@ -14291,6 +14366,11 @@ void UACEUIGameplayBinder::SellVendorCart(bool bSelectedOnly)
 {
 	if (!Client || OpenVendorGuid == 0)
 	{
+		return;
+	}
+	if (VendorSellSplit.SourceGuid != 0)
+	{
+		PostInventorySystemMessage(TEXT("Please wait for the stack to finish splitting."));
 		return;
 	}
 	if (VendorSellCart.Num() == 0)
@@ -14313,11 +14393,33 @@ void UACEUIGameplayBinder::SellVendorCart(bool bSelectedOnly)
 		auto* Entry = VendorSellCart.FindByPredicate([&](const auto& P){return P.Value==VendorSellSelectedGuid;});
 		if (!Entry) return;
 		const int32 Quantity=FMath::Clamp(LastSelection.Guid==Entry->Value ? SelectedStackAmount : Entry->Key,1,Entry->Key);
+		FACEWorldObject Item;
+		if (!Client->GetWorldObject(Entry->Value, Item)) return;
+		if (Quantity > FMath::Max(1, Item.StackSize))
+		{
+			PostInventorySystemMessage(TEXT("A stack has changed. Clear it from the sell list and add it again."));
+			return;
+		}
+		if (Quantity < FMath::Max(1, Item.StackSize))
+		{
+			AddInventoryGuidToVendorSellCart(Entry->Value, Quantity);
+			if (VendorSellSplit.SourceGuid) VendorSellSplit.bSellWhenReady = true;
+			return;
+		}
 		Client->SendSellItems(OpenVendorGuid, {{Quantity,Entry->Value}});
 		Entry->Key-=Quantity;
 		VendorSellCart.RemoveAll([](const auto& P){return P.Key<=0;});
 		RefreshVendorOverlays();
 		return;
+	}
+	for (const auto& Entry : VendorSellCart)
+	{
+		FACEWorldObject Item;
+		if (!Client->GetWorldObject(Entry.Value, Item) || Entry.Key != FMath::Max(1, Item.StackSize))
+		{
+			PostInventorySystemMessage(TEXT("A stack has changed. Clear it from the sell list and add it again."));
+			return;
+		}
 	}
 	Client->SendSellItems(OpenVendorGuid, VendorSellCart);
 	VendorSellCart.Reset();
@@ -14403,8 +14505,10 @@ void UACEUIGameplayBinder::HandleVendorOpened(int32 Guid)
 	if (PendingVendorSellGuid != 0)
 	{
 		const int32 SellGuid = PendingVendorSellGuid;
+		const int32 SellAmount = PendingVendorSellAmount;
 		PendingVendorSellGuid = 0;
-		AddInventoryGuidToVendorSellCart(SellGuid);
+		PendingVendorSellAmount = INDEX_NONE;
+		AddInventoryGuidToVendorSellCart(SellGuid, SellAmount);
 	}
 }
 

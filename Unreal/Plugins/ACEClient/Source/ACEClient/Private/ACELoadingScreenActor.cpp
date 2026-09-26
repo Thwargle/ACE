@@ -1,5 +1,6 @@
 #include "ACELoadingScreenActor.h"
 #include "ACECameraRetail.h"
+#include "ACERuntimeOptions.h"
 #include "ACERetailPortalAnimation.h"
 #include "ACECharacterAppearanceComponent.h"
 #include "ACEDatSubsystem.h"
@@ -95,10 +96,9 @@ void AACELoadingScreenActor::ApplyPortalCamera()
 				PC->GetViewportSize(SizeX, SizeY);
 			}
 		}
-		ACECameraRetail::ApplyFovToCamera(Camera, SizeX, SizeY);
-		// gmSmartBoxUI changes SmartBox's world projection on exit, not the
-		// separate CreatureMode portal camera. Widening this view exposes the
-		// finite tunnel rim as a disk surrounded by black.
+		// gmSmartBoxUI::PostInit selects CreatureMode::UseSmartboxFOV,
+		// so the tunnel uses the same configured lens as the world view.
+		ACECameraRetail::ApplyFovToCamera(Camera, SizeX, SizeY, ACERuntimeOptions::Get(TEXT("FieldOfViewDegrees")));
 		Camera->PostProcessSettings.bOverride_AutoExposureMinBrightness = true;
 		Camera->PostProcessSettings.AutoExposureMinBrightness = 1.f;
 		Camera->PostProcessSettings.bOverride_AutoExposureMaxBrightness = true;

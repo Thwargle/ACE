@@ -747,7 +747,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		int32 W = 1280, H = 720; GetViewportSize(W, H);
 		const float Aspect = static_cast<float>(W) / FMath::Max(1, H);
 		PlayerCameraManager->SetFOV(ACERetailPortalAnimation::StretchFov(
-			ACECameraRetail::HorizontalFovDegrees(Aspect), Aspect, PortalWorldRevealElapsed, true));
+			ACECameraRetail::HorizontalFovDegrees(Aspect, GetCameraFieldOfViewDegrees()), Aspect, PortalWorldRevealElapsed, true));
 		if (PortalWorldRevealElapsed < 1.f) return;
 		PortalWorldRevealElapsed = -1.f;
 		PlayerCameraManager->UnlockFOV();
@@ -882,7 +882,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 
 	// Retail Space: hold to charge jump bar, release to Jump (0xF61B).
 	const bool bSpaceDown = bVR ? VR->IsJumpHeld() : ACEInputBindings::Down(this, EKeys::SpaceBar) && !bChatFocused;
-	if (!bVR && bSpaceDown && !bSpaceWasDown && !bJumpAirborne)
+	if (!bVR && bSpaceDown && !bSpaceWasDown)
 	{
 		BeginJumpCharge();
 	}
@@ -942,26 +942,6 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		else if (ACEInputBindings::Pressed(this, EKeys::J))
 		{
 			DatGameplayBinder->PlayEmoteHotkey(0x13000087u, false); // Wave
-		}
-		else if (ACEInputBindings::Pressed(this, EKeys::I))
-		{
-			DatGameplayBinder->ToggleGameplayPanel(TEXT("InventoryPanel_Field"));
-		}
-		else if (ACEInputBindings::Pressed(this, EKeys::P))
-		{
-			DatGameplayBinder->ToggleGameplayPanel(TEXT("SkillManagementPanel_Field"));
-		}
-		else if (ACEInputBindings::Pressed(this, EKeys::M))
-		{
-			DatGameplayBinder->ToggleGameplayPanel(TEXT("SpellManagementPanel_Field"));
-		}
-		else if (ACEInputBindings::Pressed(this, EKeys::U))
-		{
-			DatGameplayBinder->ToggleGameplayPanel(TEXT("QuestManagementPanel_Field"));
-		}
-		else if (ACEInputBindings::Pressed(this, EKeys::O))
-		{
-			DatGameplayBinder->ToggleGameplayPanel(TEXT("OptionsPanel_Field"));
 		}
 		else if (ACEInputBindings::Pressed(this, EKeys::Tilde))
 		{
@@ -3047,6 +3027,33 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                         // support is grounded too. Requiring an earlier impact
                         // toggled falling on exact end-of-sweep stair contacts.
                         bHaveGround=Snap.bLanded || Snap.Position.Equals(SupportCenter,.01f);
+                        for (int32 Retry=0; !bHaveGround && Retry<3; ++Retry)
+                        {
+                            // A side contact can shift XY while descending off
+                            // a tread. Re-evaluate its floor, then sweep to it;
+                            // the original support point is no longer beneath us.
+                            // Keep the original step-down budget so a recovery
+                            // cannot attach the feet to a floor across a drop.
+                            float ResolvedSupportZ=GroundZ;
+                            const float RemainingDown=FMath::Max(0.f,GroundZ-(FeetZ-SnapStepDownCm));
+                            if (!ACEBodySweep::FindFootSupport(*World,
+                                FVector(Desired.X,Desired.Y,GroundZ),CapsuleRadius,RemainingDown,
+                                Params,ResolvedSupportZ,CapsuleRadius)) break;
+                            if (FMath::Abs(ResolvedSupportZ-GroundZ)<1.f)
+                            {
+                                bHaveGround=true;
+                                break;
+                            }
+                            if (ResolvedSupportZ>GroundZ) break;
+                            const FVector ResolvedCenter(Desired.X,Desired.Y,GroundZ+CapsuleHalfHeight);
+                            const FVector ResolvedTarget(Desired.X,Desired.Y,ResolvedSupportZ+CapsuleHalfHeight);
+                            const auto Contact=ACEBodySweep::MoveAirborne(*World,ResolvedCenter,ResolvedTarget,
+                                FCollisionShape::MakeCapsule(CapsuleRadius,CapsuleHalfHeight),Params,true,FloorZ);
+                            Desired.X=Contact.Position.X; Desired.Y=Contact.Position.Y;
+                            GroundZ=Contact.Position.Z-CapsuleHalfHeight;
+                            bHaveGround=Contact.bLanded || Contact.Position.Equals(ResolvedTarget,.01f);
+                            if (Contact.Position.Equals(ResolvedCenter,.01f)) break;
+                        }
                         Pred.SetLocationFromUnreal(FVector(Desired.X,Desired.Y,GroundZ),WorldScale);
                     }
                 }
@@ -3237,14 +3244,19 @@ float AACEPlayerController::GetCameraScaleCm() const
 	return WorldScale * GetLocalCreatureScale();
 }
 
+float AACEPlayerController::GetCameraFieldOfViewDegrees() const
+{
+	return DatGameplayBinder ? DatGameplayBinder->GetCameraFieldOfViewDegrees()
+		: ACERuntimeOptions::Get(TEXT("FieldOfViewDegrees"));
+}
+
 void AACEPlayerController::ApplyRetailCameraFov()
 {
 	APawn* P = GetPawn();
 	UCameraComponent* Cam = P ? P->FindComponentByClass<UCameraComponent>() : nullptr;
 	int32 SizeX = 0, SizeY = 0;
 	GetViewportSize(SizeX, SizeY);
-	ACECameraRetail::ApplyFovToCamera(Cam, SizeX, SizeY);
-	if (Cam) Cam->SetFieldOfView(FMath::Clamp(Cam->FieldOfView * ACERuntimeOptions::Get(TEXT("FieldOfView")), 45.f, 140.f));
+	ACECameraRetail::ApplyFovToCamera(Cam, SizeX, SizeY, GetCameraFieldOfViewDegrees());
 }
 
 void AACEPlayerController::ApplyRetailCameraPivot(USpringArmComponent* Boom, UCapsuleComponent* Capsule) const
@@ -3607,6 +3619,7 @@ void AACEPlayerController::ApplyCameraOrbitDelta(USpringArmComponent* Boom, floa
 
 void AACEPlayerController::UpdateOrbitCamera(float DeltaTime)
 {
+	CameraInputFrameSeconds = FMath::Max(0.f, DeltaTime);
 	APawn* P = GetPawn();
 	USpringArmComponent* Boom = P ? P->FindComponentByClass<USpringArmComponent>() : nullptr;
 	if (!Boom)
@@ -3636,47 +3649,11 @@ void AACEPlayerController::UpdateOrbitCamera(float DeltaTime)
 	ApplyCameraOrbitDelta(Boom, (int32(bOrbitLeft) - int32(bOrbitRight)) * OrbitStep,
 		(int32(bOrbitDown) - int32(bOrbitUp)) * OrbitStep);
 
-	const float ScaleCm = GetCameraScaleCm();
-	const float MinThirdPerson = ACECameraRetail::CloserMinLengthAc * ScaleCm;
-	const float MaxArm = ACECameraRetail::FartherMaxXYAc * ScaleCm;
-	const float ZoomFactor = ACECameraRetail::AdjustmentSpeed * ACERuntimeOptions::Get(TEXT("CameraAdjustment")) * ACECameraRetail::ZoomRate * DeltaTime;
-	if (UserCameraArmLength < 0.f)
-	{
-		UserCameraArmLength = Boom->TargetArmLength;
-	}
-	if (ACEInputBindings::Down(this, EKeys::Subtract))
-	{
-		if (bCameraLookDown)
-		{
-			SetCameraLookDown(Boom, false);
-		}
-		if (bCameraInHead)
-		{
-			SetCameraInHead(Boom, false);
-		}
-		else
-		{
-			UserCameraArmLength *= (1.f + ZoomFactor);
-		}
-	}
-	if (ACEInputBindings::Down(this, EKeys::Add))
-	{
-		if (bCameraLookDown)
-		{
-			SetCameraLookDown(Boom, false);
-		}
-		if (!bCameraInHead)
-		{
-			UserCameraArmLength *= (1.f - ZoomFactor);
-			if (UserCameraArmLength < MinThirdPerson)
-			{
-				SetCameraInHead(Boom, true);
-			}
-		}
-	}
+	if (ACEInputBindings::Down(this, EKeys::Add)) StepCameraZoom(Boom, true, DeltaTime);
+	else if (ACEInputBindings::Down(this, EKeys::Subtract)) StepCameraZoom(Boom, false, DeltaTime);
 	if (!bCameraInHead)
 	{
-		SyncUserCameraArmLength(Boom);
+		SyncUserCameraArmLength(Boom, DeltaTime);
 	}
 
 	const bool bZeroDown = ACEInputBindings::Down(this, EKeys::NumPadZero);
@@ -3706,7 +3683,7 @@ void AACEPlayerController::UpdateOrbitCamera(float DeltaTime)
 	UpdateCombatTargetCameraAssist(DeltaTime, Boom);
 }
 
-void AACEPlayerController::SyncUserCameraArmLength(USpringArmComponent* Boom)
+void AACEPlayerController::SyncUserCameraArmLength(USpringArmComponent* Boom, float DeltaSeconds)
 {
 	if (!Boom || bCameraInHead || bCameraMapMode)
 	{
@@ -3718,9 +3695,39 @@ void AACEPlayerController::SyncUserCameraArmLength(USpringArmComponent* Boom)
 	}
 	const float ScaleCm = GetCameraScaleCm();
 	const float MinThirdPerson = ACECameraRetail::CloserMinLengthAc * ScaleCm;
-	const float MaxArm = ACECameraRetail::FartherMaxXYAc * ScaleCm;
+	const float MaxArm = ACECameraRetail::MaximumArmLength(Boom->GetRelativeRotation(), ScaleCm);
 	UserCameraArmLength = FMath::Clamp(UserCameraArmLength, MinThirdPerson, MaxArm);
-	Boom->TargetArmLength = UserCameraArmLength;
+	// SpringArm camera lag smooths the pivot, but not changes in arm length.
+	// Retail CameraManager interpolates the viewer origin too, so blend zoom
+	// with its translation stiffness before SpringArm performs obstruction tests.
+	const float Alpha = DeltaSeconds < 0.f ? 1.f
+		: ACECameraRetail::TranslationAlpha(DeltaSeconds, ACERuntimeOptions::Get(TEXT("CameraStiffness")));
+	Boom->TargetArmLength = FMath::Lerp(Boom->TargetArmLength, UserCameraArmLength, Alpha);
+}
+
+void AACEPlayerController::StepCameraZoom(USpringArmComponent* Boom, bool bCloser, float DeltaSeconds, float Steps)
+{
+	if (!Boom || DeltaSeconds < .0002f || Steps <= 0.f) return;
+	if (bCameraLookDown) SetCameraLookDown(Boom, false);
+	if (bCameraInHead)
+	{
+		if (!bCloser) SetCameraInHead(Boom, false);
+		return;
+	}
+	if (UserCameraArmLength < 0.f) UserCameraArmLength = Boom->TargetArmLength;
+	const float ScaleCm = GetCameraScaleCm();
+	// Wheel detents take the same elapsed-frame step as retail's Closer/Farther
+	// input events. Preserve individual steps when the platform coalesces them.
+	for (float Left=FMath::Min(Steps,120.f); Left>0.f; Left-=1.f)
+	{
+		const float Next = UserCameraArmLength * ACECameraRetail::ZoomMultiplier(bCloser, DeltaSeconds,
+			ACERuntimeOptions::Get(TEXT("CameraAdjustment")), FMath::Min(Left,1.f));
+		// Retail rejects offsets outside the bounds instead of changing modes or
+		// flattening the camera pitch to make them fit. Numpad 5 owns first person.
+		if (Next < ACECameraRetail::CloserMinLengthAc*ScaleCm
+			|| Next > ACECameraRetail::MaximumArmLength(Boom->GetRelativeRotation(),ScaleCm)) break;
+		UserCameraArmLength=Next;
+	}
 }
 
 bool AACEPlayerController::IsUseMouseTurning() const
@@ -3752,46 +3759,7 @@ void AACEPlayerController::AdjustMouseCameraDistance(float WheelDelta)
 	{
 		return;
 	}
-	const float ScaleCm = GetCameraScaleCm();
-	const float MinThirdPerson = ACECameraRetail::CloserMinLengthAc * ScaleCm;
-	const float MaxArm = ACECameraRetail::FartherMaxXYAc * ScaleCm;
-	const float ZoomFactor = ACECameraRetail::AdjustmentSpeed * ACERuntimeOptions::Get(TEXT("CameraAdjustment")) * ACECameraRetail::ZoomRate * (1.f / 60.f)
-		* FMath::Clamp(FMath::Abs(WheelDelta), 0.25f, 4.f);
-	if (UserCameraArmLength < 0.f)
-	{
-		UserCameraArmLength = Boom->TargetArmLength;
-	}
-	if (WheelDelta > 0.f)
-	{
-		if (bCameraLookDown)
-		{
-			SetCameraLookDown(Boom, false);
-		}
-		if (bCameraInHead)
-		{
-			SetCameraInHead(Boom, false);
-		}
-		else
-		{
-			UserCameraArmLength *= (1.f - ZoomFactor);
-			if (UserCameraArmLength < MinThirdPerson)
-			{
-				SetCameraInHead(Boom, true);
-			}
-		}
-	}
-	else
-	{
-		if (bCameraLookDown)
-		{
-			SetCameraLookDown(Boom, false);
-		}
-		if (!bCameraInHead)
-		{
-			UserCameraArmLength *= (1.f + ZoomFactor);
-		}
-	}
-	SyncUserCameraArmLength(Boom);
+	StepCameraZoom(Boom, WheelDelta>0.f, CameraInputFrameSeconds, FMath::Abs(WheelDelta));
 }
 
 void AACEPlayerController::UpdateCombatTargetCameraAssist(float DeltaTime, USpringArmComponent* Boom)
@@ -3874,7 +3842,7 @@ void AACEPlayerController::SprintReleased() { bRunning = true; }
 
 void AACEPlayerController::BeginJumpCharge()
 {
-	if (!Client || Client->GetSessionState() != EACESessionState::InWorld || bJumpAirborne || bJumpCharging)
+	if (!Client || Client->GetSessionState() != EACESessionState::InWorld || bJumpCharging)
 	{
 		return;
 	}
@@ -3893,7 +3861,10 @@ void AACEPlayerController::BeginJumpCharge()
 	StandingJumpAimR = 0.f;
 	// Capture at charge start — pressing WASD mid-charge must not convert a standing jump
 	// into a run jump (retail StandingLongJump ignores loco until leave-ground).
-	bStandingJumpLocked = FMath::IsNearlyZero(ForwardAxis) && FMath::IsNearlyZero(RightAxis);
+	// Retail charge_jump allows charging in flight; standing_longjump is only
+	// entered on walkable contact. Never change the current ballistic arc.
+	if (!bJumpAirborne)
+		bStandingJumpLocked = FMath::IsNearlyZero(ForwardAxis) && FMath::IsNearlyZero(RightAxis);
 	if (DatGameplayBinder)
 	{
 		DatGameplayBinder->SetJumpChargeFraction(0.f);
@@ -3902,6 +3873,15 @@ void AACEPlayerController::BeginJumpCharge()
 
 void AACEPlayerController::ReleaseJump(float Forward, float Right)
 {
+	if (bJumpAirborne)
+	{
+		// jump_is_allowed requires contact. Holding through touchdown retains
+		// the charge; releasing before touchdown cannot launch a second arc.
+		bJumpCharging = false;
+		JumpChargeExtent = 0.f;
+		if (DatGameplayBinder) DatGameplayBinder->SetJumpChargeFraction(0.f);
+		return;
+	}
 	if (!Client || !bJumpCharging)
 	{
 		bJumpCharging = false;
@@ -6157,14 +6137,20 @@ void AACEPlayerController::HandlePositionUpdate(int32 ObjectGuid, const FACEPosi
 	const FVector Current = P->GetActorLocation();
 	const float ErrCm = FVector::Dist(Current, Target);
 	const float Alpha = 1.f - FMath::Exp(-ServerReconcileRate * (GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.016f));
-	if (ErrCm >= ServerSnapErrorCm)
+	FVector Adjusted = ErrCm >= ServerSnapErrorCm ? Target : FMath::Lerp(Current, Target, Alpha);
+	// A normal position acknowledgement is still movement through the world.
+	// Only the explicit teleport/force branches above may bypass solids. This
+	// also covers the frame after releasing movement, when prediction goes idle.
+	if (auto* Cap = P->FindComponentByClass<UCapsuleComponent>(); Cap && GetWorld())
 	{
-		P->SetActorLocation(Target);
+		const auto Shape = FCollisionShape::MakeCapsule(Cap->GetScaledCapsuleRadius(), Cap->GetScaledCapsuleHalfHeight());
+		const FCollisionQueryParams Query(SCENE_QUERY_STAT(ACEIdleCorrection), true, P);
+		FHitResult Hit;
+		if (ACEBodySweep::Sweep(*GetWorld(), Hit, Current, Adjusted, Shape, Query))
+			Adjusted = ACEBodySweep::SlideGrounded(*GetWorld(), Current, Adjusted, Hit, Shape, Query);
 	}
-	else
-	{
-		P->SetActorLocation(FMath::Lerp(Current, Target, Alpha));
-	}
+	P->SetActorLocation(Adjusted);
+	Corrected.SetLocationFromUnreal(Adjusted-FVector(0,0,CapsuleHalfHeight), WorldScale);
 	Client->SetReportedPosition(Corrected);
 }
 
@@ -7281,7 +7267,8 @@ void AACEPlayerController::CycleNearbyTarget(bool bEnemies, int32 Direction)
 	{
 		return !Obj.IsSelectableWorldObject() || !Client->IsWorldObjectVisible(Obj)
 			|| Obj.Guid == Client->GetPlayerGuid() || Obj.bIsPlayer
-			|| (bEnemies ? !Obj.IsAttackable() : (Obj.ItemType & ACEItemType::Creature) != 0)
+			|| (bEnemies ? ((Obj.ItemType & ACEItemType::Creature) == 0 || !Obj.IsAttackable())
+				: (Obj.ItemType & ACEItemType::Creature) != 0)
 			|| FVector::DistSquared(Origin, Obj.Position.ToUnrealLocation(WorldScale)) > FMath::Square(60.f * WorldScale);
 	});
 	Objects.Sort([&](const FACEWorldObject& A, const FACEWorldObject& B)

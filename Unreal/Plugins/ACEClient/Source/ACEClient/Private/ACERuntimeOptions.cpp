@@ -13,7 +13,15 @@ namespace
 float Get(const TCHAR* Key)
 {
  for (const auto& O : Values) if (FCString::Strcmp(O.Key,Key)==0) {
-  float V=O.Default; if (GConfig) GConfig->GetFloat(TEXT("ACE.Presentation"),Key,V,GGameUserSettingsIni);
+  float V=O.Default;
+  if (GConfig && !GConfig->GetFloat(TEXT("ACE.Presentation"),Key,V,GGameUserSettingsIni)
+   && FCString::Strcmp(Key,TEXT("FieldOfViewDegrees"))==0)
+  {
+   // Older builds stored a multiplier. Keep the preference without silently
+   // interpreting an existing value of 1 as a one-degree field of view.
+   float Legacy=1.f;
+   if(GConfig->GetFloat(TEXT("ACE.Presentation"),TEXT("FieldOfView"),Legacy,GGameUserSettingsIni)) V=90.f*Legacy;
+  }
   return FMath::IsFinite(V)?FMath::Clamp(V,O.Min,O.Max):O.Default;
  }
  return 1;

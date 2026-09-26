@@ -46,22 +46,49 @@ namespace ACECameraRetail
 		return bFaceCamera ? Angle : Angle * (1.f - FMath::Exp(-8.f * FMath::Max(0.f, DeltaSeconds)));
 	}
 
-	inline float HorizontalFovDegrees(float AspectWH)
+	inline float HorizontalFovDegrees(float AspectWH, float GameFovDegrees = 90.f)
 	{
 		const float Aspect = FMath::Max(AspectWH, 0.2f);
 		const float Denom = FMath::Max(Aspect - 0.1f, 0.2f);
-		const float VRad = GameFovRadians / Denom;
+		// Apply the preference before converting retail's vertical projection
+		// to Unreal's horizontal FOV. Scaling the result changes the lens curve.
+		const float VRad = FMath::DegreesToRadians(FMath::Clamp(GameFovDegrees / Denom, 1.f, 179.f));
 		return FMath::RadiansToDegrees(2.f * FMath::Atan(FMath::Tan(VRad * 0.5f) * Aspect));
 	}
 
-	inline void ApplyFovToCamera(UCameraComponent* Camera, int32 SizeX, int32 SizeY)
+	inline void ApplyFovToCamera(UCameraComponent* Camera, int32 SizeX, int32 SizeY, float GameFovDegrees = 90.f)
 	{
 		if (!Camera || SizeY <= 0 || SizeX <= 0)
 		{
 			return;
 		}
 		Camera->SetConstraintAspectRatio(false);
-		Camera->SetFieldOfView(HorizontalFovDegrees(static_cast<float>(SizeX) / static_cast<float>(SizeY)));
+		// The angle below already includes retail's viewport conversion. Do not
+		// let LocalPlayer's MaintainYFOV policy apply another aspect conversion.
+		Camera->bOverrideAspectRatioAxisConstraint = true;
+		Camera->AspectRatioAxisConstraint = AspectRatio_MaintainXFOV;
+		Camera->SetFieldOfView(HorizontalFovDegrees(static_cast<float>(SizeX) / static_cast<float>(SizeY), GameFovDegrees));
+	}
+
+	inline float ZoomMultiplier(bool bCloser, float DeltaSeconds, float AdjustmentMultiplier, float Steps = 1.f)
+	{
+		const float Change = AdjustmentSpeed * AdjustmentMultiplier * ZoomRate * FMath::Max(0.f, DeltaSeconds);
+		return FMath::Pow(FMath::Max(0.f, 1.f + (bCloser ? -Change : Change)), Steps);
+	}
+
+	inline float MaximumArmLength(const FRotator& Rotation, float ScaleCm)
+	{
+		// CameraSet::Farther bounds each offset axis, not the vector's length.
+		const FVector OffsetDirection = -Rotation.Vector();
+		const float Horizontal = FMath::Max(FMath::Abs(OffsetDirection.X), FMath::Abs(OffsetDirection.Y));
+		return FMath::Min(FartherMaxXYAc * ScaleCm / FMath::Max(Horizontal, .0001f),
+			OffsetDirection.Z > 0.f ? 450.f * ScaleCm / OffsetDirection.Z : MAX_flt);
+	}
+
+	inline float TranslationAlpha(float DeltaSeconds, float StiffnessMultiplier)
+	{
+		const float Stiffness = FMath::Clamp(TranslationalStiffness * StiffnessMultiplier, 0.f, 1.f);
+		return Stiffness >= .9998f ? 1.f : FMath::Clamp(Stiffness * DeltaSeconds * 10.f, 0.f, 1.f);
 	}
 
 	inline float OffsetLengthCm(float OffsetYAc, float OffsetZAc, float ScaleCm)

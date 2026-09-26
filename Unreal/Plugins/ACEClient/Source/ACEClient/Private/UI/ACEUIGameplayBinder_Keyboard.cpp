@@ -343,11 +343,16 @@ void UACEUIGameplayBinder::PollKeyboardActions(APlayerController* PC)
  }
  if(Pressed(TEXT("Examine")))Client->SendIdentifyObject(Client->GetSelectedObject().Guid);
  if(ACEInputBindings::Pressed(PC,EKeys::F))UseInventoryItem(Client->GetSelectedObject().Guid);
- if(Pressed(TEXT("Skills"))){ToggleGameplayPanel(TEXT("SkillManagementPanel_Field"));SyncSkillPanelTab(TEXT("SkillPage"));}
- if(Pressed(TEXT("Components"))){ToggleGameplayPanel(TEXT("SpellManagementPanel_Field"));SyncSpellPanelTab(TEXT("SpellComponentPage"));}
+ if(ACEInputBindings::Pressed(PC,EKeys::I))ToggleGameplayPanel(TEXT("InventoryPanel_Field"));
+ if(ACEInputBindings::Pressed(PC,EKeys::P))ToggleGameplayPanel(TEXT("SkillManagementPanel_Field"),TEXT("AttributePage"));
+ if(ACEInputBindings::Pressed(PC,EKeys::M))ToggleGameplayPanel(TEXT("SpellManagementPanel_Field"),TEXT("SpellbookPage"));
+ if(ACEInputBindings::Pressed(PC,EKeys::U))ToggleGameplayPanel(TEXT("QuestManagementPanel_Field"));
+ if(ACEInputBindings::Pressed(PC,EKeys::O))ToggleGameplayPanel(TEXT("OptionsPanel_Field"));
+ if(Pressed(TEXT("Skills")))ToggleGameplayPanel(TEXT("SkillManagementPanel_Field"),TEXT("SkillPage"));
+ if(Pressed(TEXT("Components")))ToggleGameplayPanel(TEXT("SpellManagementPanel_Field"),TEXT("SpellComponentPage"));
  if(Pressed(TEXT("World")))ToggleGameplayPanel(TEXT("WorldPanel_Field"));
- if(Pressed(TEXT("Allegiance"))){ToggleGameplayPanel(TEXT("SocialPanel_Field"));SyncSocialPanelTab(TEXT("AllegiancePage"));}
- if(Pressed(TEXT("Fellowship"))){ToggleGameplayPanel(TEXT("SocialPanel_Field"));SyncSocialPanelTab(TEXT("FellowshipPage"));}
+ if(Pressed(TEXT("Allegiance")))ToggleGameplayPanel(TEXT("SocialPanel_Field"),TEXT("AllegiancePage"));
+ if(Pressed(TEXT("Fellowship")))ToggleGameplayPanel(TEXT("SocialPanel_Field"),TEXT("FellowshipPage"));
  if(Pressed(TEXT("Ready")))PlayEmoteHotkey(ACEMotion::Ready,true);
  if(Pressed(TEXT("Laugh")))PlayEmoteHotkey(0x13000080u,false);
  if(Pressed(TEXT("Cheer")))PlayEmoteHotkey(0x1300004cu,false);

@@ -130,6 +130,29 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
   TestFalse(TEXT("Completed jump releases airborne animation and input"),PC->bJumpAirborne);
   AddInfo(FString::Printf(TEXT("Jump tracked=%d rate=%d scale=%.1f charge=%.2f apex=%.3fm range=%.3fm time=%.3fs"),Tracked,Rate,Size,Extent,Peak,Distance,double(Frames)/Rate));
  }
+ // Retail permits charging during flight but checks contact when executing.
+ for(bool Tracked:{false,true})
+ {
+  VR->bActive=Tracked;PC->bJumpAirborne=true;PC->bJumpCharging=false;
+  PC->bStandingJumpLocked=false;PC->JumpWorldAceVelocity=FVector(0,4,-2);
+  PC->BeginJumpCharge();
+  TestTrue(TEXT("Airborne player can charge the next jump"),PC->bJumpCharging);
+  PC->JumpChargeExtent=.6f;PC->ReleaseJump(1,0);
+  TestTrue(TEXT("Early release does not double-jump or replace flight velocity"),
+   PC->bJumpAirborne && PC->JumpWorldAceVelocity.Equals(FVector(0,4,-2)) && !PC->bJumpCharging);
+  FACEPosition Landing;Landing.CellId=0x01010001;Landing.SetLocationFromUnreal(StartFeet+FVector(0,0,20),100);
+  Session->SetLocalPosition(Landing);PC->PredictedPose=Landing;PC->bHavePredictedPose=true;
+  Pawn->SetActorLocation(StartFeet+FVector(0,0,108));VR->MoveStick=FVector2D::ZeroVector;
+  PC->BeginJumpCharge();PC->JumpChargeExtent=.6f;
+  for(int I=0;I<90 && PC->bJumpAirborne;++I)
+  {
+   VR->Head->SetWorldLocation(Pawn->GetActorLocation()+FVector(0,0,77));PC->PlayerTick(1.f/90);
+  }
+  TestTrue(TEXT("Holding through touchdown retains the accumulated charge"),!PC->bJumpAirborne && PC->bJumpCharging && PC->JumpChargeExtent>=.6f);
+  PC->ReleaseJump(1,0);
+  TestTrue(TEXT("Release after contact launches the charged follow-up jump"),PC->bJumpAirborne && PC->JumpWorldAceVelocity.Z>1.f);
+  PC->bJumpAirborne=false;PC->bStandingJumpLocked=false;
+ }
  Session->PlayerVitals.Strength=100;Session->PlayerVitals.CarryingCapacityAugs=0;
  Session->PlayerVitals.Stamina=500;Client->SetRunSkill(593);
  Session->bHasPlayerEncumbrance=true;Session->PlayerEncumbranceVal=22500;

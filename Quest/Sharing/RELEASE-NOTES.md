@@ -1,31 +1,44 @@
-# AC:Unreal / AC:VR release 79
+# AC:Unreal / AC:VR release 81
 
-Windows desktop, PC VR, and native Quest: 2026.09.26.79.
-Release number / Android version code: 79. Quest installer revision: 6.
+Windows desktop, PC VR, and native Quest: 2026.09.26.81.
+Release number / Android version code: 81. Quest installer revision: 6.
 
-## Changes since public release v78
+## Changes since public release v80
 
-- Use the same displayed version across Windows desktop, PC VR, and Quest, and
-  reject release builds if the platform version declarations disagree.
-- Fix overhead camera controls moving the camera below the world. Raising and
-  lowering retain the downward angle; sideways rotation restores the normal
-  camera distance and collision before turning, following retail behavior.
-- Allow a smooth handoff from held forward movement to autorun when releasing
-  the movement key.
-- Fix missing tab and button text at scaled/windowed resolutions, including
-  2048x1536 at 125% UI scale.
-- Allow the spell hotbar to expand to the available viewport width.
-- Improve key-binding capture for left/right Shift, Control, and Alt, and ignore
-  orphan key-release events that could assign the wrong modifier.
-- Prevent a delayed account-launcher refresh from covering character selection.
-- Restore retail vendor quantity defaults, preserve manually chosen stack
-  quantities, and correct trade-note pricing and item-name/plural captions.
-- Fix duplicate application of remote-player velocity after grounded position
-  updates, which could make players move above slopes before snapping down.
-- Improve support at convex stair and ramp edges, including the center-post
-  stairwell, while retaining full step and headroom checks at steep risers.
-- Extend regression coverage for keypad camera controls, retail run/jump
-  formulas, crowded movement, Fort Teth, Mosswart Fort, and stair-edge traversal.
+### Camera and field of view
+
+- Preview desktop FOV immediately while moving the Config slider. Apply saves
+  the value; Reset restores it. Leaving Config ends an unapplied preview.
+- Use retail's 10–160 degree FOV preference range and aspect-ratio conversion.
+  Existing FOV preferences migrate automatically.
+- Correct keyboard and mouse-wheel zoom timing, near/far limits, first-person
+  behavior, and distance smoothing using the retail camera calculations.
+- Preserve the configured FOV in portal space and the return-to-world blend.
+
+### Movement and collision
+
+- Improve remote players' and creatures' ground following on slopes. Remove
+  unwanted sideways drift from grounded slope collision and use authored motion
+  speeds and model scale when predicting movement between network updates.
+- Keep supported creatures grounded when horizontal velocity updates arrive.
+  The Stuck pickup flag no longer prevents creatures from following terrain.
+- Sweep ordinary position corrections against solids instead of allowing them
+  to move the local player through walls.
+- Improve stair-edge support and descent recovery when a side contact moves the
+  player away from the original tread. Keep recovery bounded by nearby support.
+- Keep solid world-object collision active when rendering culls the object,
+  including authored invisible platforms. Moving objects can remain visible
+  when their current bounds overlap a visible room despite an older cell ID.
+- Allow charging the next jump while airborne. Hold through landing and release
+  to jump again; releasing in the air does not launch an extra jump.
+
+### Effects and interface
+
+- Prevent repeated selection of a weapon's world model from accumulating glow
+  brightness on its particle effects.
+- Display Stored Mana, Efficiency, and Chance of Destruction for applicable
+  mana charges and stones, including Titan Mana Charge.
+- Disable Apply and Reset when the current options page has no pending changes.
 
 ## Updating
 
@@ -36,18 +49,16 @@ prompted, allow AC:VR to install updates and press Install again. Do not uninsta
 first. Older clients need the website installer or Quest USB bundle once.
 
 Accounts, settings, and retail DAT files are retained. No retail DATs are bundled.
+Headset projection remains controlled by the VR runtime; FOV options affect the
+desktop camera.
 
 ## Validation and limitations
 
-Regression coverage exercises camera socket positions at 30/90 FPS, UI clipping,
-key bindings, autorun, vendor transactions, launcher state, remote grounding, and
-collision against actual retail DAT geometry. The reported higher center-post
-trap reproduced and passes with the support fix. Other reported wall-clipping
-cases did not reproduce in the automated routes and still need live confirmation.
+Automated development validation covers remote movement, real DAT stair and
+interior fixtures, world-object collision and visibility, repeated weapon
+selection, mana appraisal, options, camera input, FOV, and portal transitions.
+Release packaging and updater verification are recorded with the check-in notes.
 
-Remote animation and hardware-specific keyboard behavior also need confirmation
-from affected players. This release does not change retail jump height or speed;
-the tested arcs match the existing retail formulas. New in-headset performance
-and installation-confirmation acceptance have not been performed for v79.
-
-This download updates clients only. It does not deploy or restart game servers.
+The exact Empyrean Rescue bridge and flying-pyramid route still need a live
+playtest. No new headset acceptance, 90 FPS result, or live side-by-side retail
+camera comparison is claimed. This release updates clients only.

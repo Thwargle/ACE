@@ -50,6 +50,7 @@ class ACECLIENT_API UACEScriptComponent : public UActorComponent
 	GENERATED_BODY()
 	friend class FACERetailParticleLightingTest;
 	friend class FACERetailParticleTimingTest;
+	friend class FACERetailScreenTest;
 	friend class FACEParticleDistanceTest;
 	friend class FACEParticleFrameReuseTest;
 	friend class FACEEntranceParticleTest;

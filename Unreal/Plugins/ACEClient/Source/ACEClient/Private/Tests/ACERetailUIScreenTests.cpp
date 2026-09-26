@@ -33,6 +33,7 @@
 #include "ACECharacterAppearanceComponent.h"
 #include "ACEWorldEntityActor.h"
 #include "Materials/MaterialInstanceDynamic.h"
+#include "ACEScriptComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Components/Image.h"
@@ -68,6 +69,36 @@
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/GarbageCollection.h"
 #include "Framework/Application/SlateApplication.h"
+
+// Kept separate from the large screenshot suite to stay within MSVC optimizer limits.
+static FORCENOINLINE void CheckCameraPreview(FAutomationTestBase& Test, UACEUIGameplayBinder* Gameplay,
+    UACEVideoSettingsWidget* Video, TFunctionRef<void(const TCHAR*)> ChangePage)
+{
+    if (auto* Fov=Cast<USlider>(Video->WidgetTree->FindWidget(TEXT("FieldOfViewDegrees"))))
+    {
+        Test.TestTrue(TEXT("FOV exposes retail's full preference range"),Fov->GetMinValue()==10.f && Fov->GetMaxValue()==160.f);
+        Fov->SetValue(120.f); Fov->OnValueChanged.Broadcast(120.f);
+        Test.TestEqual(TEXT("Visible options preview the FOV before Apply"),Gameplay->GetCameraFieldOfViewDegrees(),120.f);
+        Test.TestEqual(TEXT("Preview does not save the preference"),ACERuntimeOptions::Get(TEXT("FieldOfViewDegrees")),90.f);
+        Test.TestTrue(TEXT("Preview still has pending changes"),Video->HasPendingChanges());
+        ChangePage(TEXT("ChatPage"));
+        Test.TestEqual(TEXT("Leaving the FOV page restores the applied lens"),Gameplay->GetCameraFieldOfViewDegrees(),90.f);
+        ChangePage(TEXT("ConfigPage"));
+        Video->ResetVideo();
+        Test.TestEqual(TEXT("Reset restores the preview immediately"),Gameplay->GetCameraFieldOfViewDegrees(),90.f);
+        // Exercise Apply's preference path without resizing the engine
+        // window or reloading its global config branch in a UI fixture.
+        Fov->SetValue(110.f);Video->ApplyRuntimeOptions();Video->ResetVideo();
+        Test.TestEqual(TEXT("Apply saves the previewed lens"),ACERuntimeOptions::Get(TEXT("FieldOfViewDegrees")),110.f);
+        FConfigFile SavedFov;SavedFov.Read(GGameUserSettingsIni);float SavedDegrees=0;
+        SavedFov.GetFloat(TEXT("ACE.Presentation"),TEXT("FieldOfViewDegrees"),SavedDegrees);
+        Test.TestEqual(TEXT("Applied FOV survives settings-file reload"),SavedDegrees,110.f);
+        Fov->SetValue(130.f);Video->ResetVideo();
+        Test.TestEqual(TEXT("Reset uses the most recently applied lens"),Gameplay->GetCameraFieldOfViewDegrees(),110.f);
+        ACERuntimeOptions::Set(TEXT("FieldOfViewDegrees"),90.f);Video->ResetVideo();
+    }
+    else Test.AddError(TEXT("FOV slider is missing"));
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailScreenTest,"ACE.RetailParity.UIScreens",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -294,7 +325,18 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         FACEWorldObject RadarNPC;RadarNPC.Guid=24680;RadarNPC.ItemType=ACEItemType::Creature;
         RadarNPC.bHasPosition=true;RadarNPC.Position=Pose;RadarNPC.Position.Location.Y+=20;
         Client->Session->WorldObjects.Add(RadarNPC.Guid,RadarNPC);
+        // A behind-camera object and an adjacent indoor cell stay on radar;
+        // neither requires a spawned/rendered actor.
+        auto Behind=RadarNPC;Behind.Guid=24681;Behind.Position.Location.Y-=40;
+        auto Adjacent=RadarNPC;Adjacent.Guid=24682;Adjacent.Position.CellId=0xDA550101;
+        auto Distant=RadarNPC;Distant.Guid=24683;Distant.Position.Location.Y+=100;
+        Client->Session->WorldObjects.Add(Behind.Guid,Behind);
+        Client->Session->WorldObjects.Add(Adjacent.Guid,Adjacent);
+        Client->Session->WorldObjects.Add(Distant.Guid,Distant);
         Gameplay->RefreshRadarOverlays();CaptureScreen(TEXT("GameplayRetailRadar"));
+        TestTrue(TEXT("Radar includes objects behind the player"),Gameplay->RadarBlipGuids.Contains(Behind.Guid));
+        TestTrue(TEXT("Radar includes nearby objects in another cell without a rendered actor"),Gameplay->RadarBlipGuids.Contains(Adjacent.Guid));
+        TestFalse(TEXT("Radar excludes out-of-range objects"),Gameplay->RadarBlipGuids.Contains(Distant.Guid));
         const int32 Index=Gameplay->RadarBlipGuids.IndexOfByKey(RadarNPC.Guid);
         if(TestTrue(TEXT("Nearby creature appears on the minimap"),Index!=INDEX_NONE))
         {
@@ -309,7 +351,26 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Selected radar marker uses the retail square mask"),
                 Blip->Background.GetResourceObject()==Resources->ResolveRadarBlip(4,true));
         }
-        Client->Session->WorldObjects.Remove(RadarNPC.Guid);
+        {
+            TGuardValue<FACEFellowshipInfo> SavedFellow(Client->Session->Fellowship,Client->Session->Fellowship);
+            auto& Fellow=Client->Session->Fellowship;Fellow.bValid=true;Fellow.Members.Reset();
+            FACEFellowshipMember Member;Member.Guid=RadarNPC.Guid;Fellow.Members.Add(Member);
+            RadarNPC.bIsPlayer=true;RadarNPC.ObjectDescriptionFlags=ACEObjectDescFlag::PlayerKiller;
+            Client->Session->WorldObjects[RadarNPC.Guid]=RadarNPC;
+            for (int32 Leader : {RadarNPC.Guid,0})
+            {
+                Fellow.LeaderGuid=Leader;Gameplay->RefreshRadarOverlays();
+                TestEqual(TEXT("Fellowship leader and member markers override PK red with retail green"),
+                    Gameplay->ResolveRadarColor(RadarNPC,&Fellow),ACERadarColor::BrightGreen);
+                if (Index!=INDEX_NONE)TestTrue(TEXT("Selected fellowship radar blip is bright green"),
+                    Gameplay->RadarBlips[Index]->BrushColor==FLinearColor::Green);
+                TestTrue(TEXT("Selection arrows use the same bright green fellowship color"),
+                    Gameplay->ColorFromSelectionMarker(Gameplay->ResolveRadarColor(RadarNPC,&Fellow))==FLinearColor::Green);
+            }
+            Fellow.Members.Reset();
+            TestEqual(TEXT("Leaving fellowship restores PK selection color"),Gameplay->ResolveRadarColor(RadarNPC,&Fellow),ACERadarColor::PlayerKiller);
+        }
+        for (int32 Guid : {RadarNPC.Guid,Behind.Guid,Adjacent.Guid,Distant.Guid})Client->Session->WorldObjects.Remove(Guid);
         Client->Session->SetLocalPosition(SavedPose);Client->Session->SelectedObject=SavedSelection;
         Gameplay->HandleSelectionChanged(SavedSelection);Gameplay->RefreshRadarOverlays();
     }
@@ -412,6 +473,71 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         TGuardValue<bool> SavedNumbers(Gameplay->bShowVitalNumbers, Gameplay->bShowVitalNumbers);
         auto& V = Client->Session->PlayerVitals;
         V.bValid=true; V.Health=50; V.MaxHealth=100; V.Stamina=60; V.MaxStamina=100; V.Mana=70; V.MaxMana=100;
+        Manager->CancelPointerCapture();
+        const bool SavedLock=Manager->IsUiLocked();Manager->SetUiLocked(false);
+        for(bool Side:{false,true})
+        {
+            if(Side)Client->Session->CharacterOptions1|=0x00200000u;
+            else Client->Session->CharacterOptions1&=~0x00200000u;
+            Gameplay->RefreshVitalsOverlays();
+            const FString RootName=Side?TEXT("RootGameplay_FloatySideVitals_Field"):TEXT("RootGameplay_FloatyVitals_Field");
+            auto Root=Manager->FindElementByName(RootName);
+            const int32 SavedW=Root->UserResizeW,SavedH=Root->UserResizeH;
+            const FIntPoint SavedDrag(Root->UserDragX,Root->UserDragY);
+            Root->UserDragX+=200-Root->GetScreenOrigin().X;Root->UserDragY+=100-Root->GetScreenOrigin().Y;
+            Root->RecomputeLayoutOffset();Manager->BringFloatyToFront(Root);
+            const FString Prefix=Side?TEXT("SideVitals"):TEXT("Vitals");
+            for(float UIScale:{1.f,1.25f})
+            {
+                CaptureScreen(TEXT("VitalsResizeViewport"),UIScale);
+                // DPI re-anchoring can move the centered frame. Keep this drag
+                // inside the viewport so its left edge has room to expand.
+                Root->UserDragX+=200-Root->GetScreenOrigin().X;
+                Root->UserDragY+=100-Root->GetScreenOrigin().Y;
+                Root->RecomputeLayoutOffset();
+                CaptureScreen(TEXT("VitalsResizeSetup"),UIScale);
+                auto Drag=[&](const TCHAR* Edge,int32 Amount)
+                {
+                    const auto Grip=Manager->FindElementUnder(RootName,Prefix+Edge);
+                    const FVector2D Start=Canvas->LayoutToViewport(FVector2D(Grip->GetScreenOrigin())+FVector2D(2,2));
+                    const FVector2D Size=Canvas->GetCachedGeometry().GetLocalSize();
+                    TestTrue(TEXT("Vital side grips display the horizontal resize cursor"),Manager->GetWindowCursor(Start,Size)==EMouseCursor::ResizeLeftRight);
+                    const FVector2D End=Start+FVector2D(Amount*Canvas->GetLastScale2D().X,25);
+                    Manager->NotifyMouseDown(Start,Size,EKeys::LeftMouseButton);
+                    const auto Captured=Manager->GetCaptureElement();
+                    TestTrue(*FString::Printf(TEXT("%s at %.2fx captures its own resize grip (%s)"),*Prefix,UIScale,Captured?*Captured->ElementName:TEXT("none")),Captured==Grip);
+                    Manager->NotifyMouseMove(End,Size);Manager->NotifyMouseUp(End,Size,EKeys::LeftMouseButton);
+                };
+                const int32 StartWidth=Root->Width,Height=Root->Height;
+                const int32 StartRight=Root->GetScreenOrigin().X+Root->Width;
+                Drag(TEXT("LeftBorder"),-80);
+                TestEqual(TEXT("Left vital grip widens the frame"),Root->Width,StartWidth+80);
+                TestEqual(TEXT("Left vital grip keeps the right edge anchored"),Root->GetScreenOrigin().X+Root->Width,StartRight);
+                Drag(TEXT("RightBorder"),80);
+                TestEqual(TEXT("Right vital grip widens the frame"),Root->Width,StartWidth+160);
+                TestEqual(TEXT("Vital bars keep their retail height"),Root->Height,Height);
+                CaptureScreen(FString::Printf(TEXT("VitalsResized_%s_%d"),*Prefix,int32(UIScale*100)),UIScale);
+                const auto Health=Manager->FindElementUnder(RootName,TEXT("HealthMeter"));
+                const auto Stamina=Manager->FindElementUnder(RootName,TEXT("StaminaMeter"));
+                const auto Mana=Manager->FindElementUnder(RootName,TEXT("ManaMeter"));
+                for(const auto& Meter:{Health,Stamina,Mana})
+                {
+                    TestEqual(TEXT("Resizing preserves the 16px meter height"),Meter->Height,16);
+                    TestTrue(TEXT("Vital meters stay inside the resized frame"),Meter->GetDrawX()>=5 && Meter->GetDrawX()+Meter->Width<=Root->Width-5);
+                }
+                if(Side)
+                {
+                    TestEqual(TEXT("Horizontal vitals meet without gaps"),Health->GetDrawX()+Health->Width,Stamina->GetDrawX());
+                    TestEqual(TEXT("Horizontal stamina and mana meet without gaps"),Stamina->GetDrawX()+Stamina->Width,Mana->GetDrawX());
+                }
+                else TestEqual(TEXT("Stacked meters fill the resized width"),Health->Width,Root->Width-10);
+                Drag(TEXT("RightBorder"),-160);
+            }
+            Root->UserResizeW=SavedW;Root->UserResizeH=SavedH;
+            Root->UserDragX=SavedDrag.X;Root->UserDragY=SavedDrag.Y;
+            Root->RecomputeLayoutOffset();UACEUIElementManager::ApplyFloatyResizeLayout(Root);
+        }
+        Manager->SetUiLocked(SavedLock);CaptureScreen(TEXT("VitalsResizeRestored"));
         for (int32 Percent : {0,50,100}) for (bool Side : {false,true}) for (bool Numbers : {false,true})
         {
             V.Health=V.Stamina=V.Mana=Percent;
@@ -449,7 +575,8 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 }
                 TestEqual(TEXT("Each vital retains both background and fill texture layers"),Details,2);
             }
-            TestEqual(TEXT("Vital numeric overlay follows display preference"),Gameplay->HealthLabel->GetText().IsEmpty(),!Numbers);
+            TestEqual(TEXT("Vital numeric overlay follows display preference"),
+                Gameplay->HealthLabel->GetVisibility()==ESlateVisibility::Collapsed || Gameplay->HealthLabel->GetText().IsEmpty(),!Numbers);
         }
         // Save a readable, directly rendered close-up at 3x UI scale. No source
         // texture resize is involved: this also checks the actual scaled result.
@@ -637,6 +764,22 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Inspect includes the actual DAT spell description"),!Description.IsEmpty() && CasterDetails.Contains(Description));
     CaptureScreen(TEXT("GameplayCasterInspection"));
     TestTrue(TEXT("Real caster details overflow into scrollable content"),Gameplay->ExamScroll->GetScrollOffsetOfEnd()>0.f);
+
+    TestFalse(TEXT("Spell-bearing equipment does not display stone stored-mana fields"),CasterDetails.Contains(TEXT("Stored Mana:")));
+    Gameplay->LastAppraisal=FACEAppraisalInfo();
+    auto& Charge=Gameplay->LastAppraisal;
+    Charge.ObjectGuid=9060; Charge.Name=TEXT("Titan Mana Charge"); Charge.bSuccess=true;
+    Charge.Summary=TEXT("Use on a magic item to give the stone's stored Mana to that item.");
+    Charge.IntProperties.Add(107,5000); Charge.FloatProperties={{87,1.0},{137,1.0}};
+    Gameplay->RefreshExaminationOverlay();
+    FString ChargeText=Gameplay->ExamBody->GetText().ToString();
+    TestTrue(TEXT("Titan Mana Charge displays all retail mana fields after its usage"),
+        ChargeText.Contains(TEXT("Stored Mana: 5000\nEfficiency: 100%\nChance of Destruction: 100%")));
+    CaptureScreen(TEXT("GameplayTitanManaChargeInspection"));
+    Charge.IntProperties[107]=0;Charge.FloatProperties[87]=.75;Charge.FloatProperties[137]=.25;
+    Gameplay->RefreshExaminationOverlay();ChargeText=Gameplay->ExamBody->GetText().ToString();
+    TestTrue(TEXT("Empty reusable stones retain zero mana and fractional percentages"),
+        ChargeText.Contains(TEXT("Stored Mana: 0\nEfficiency: 75%\nChance of Destruction: 25%")));
 
     Gameplay->LastAppraisal = FACEAppraisalInfo();
     Gameplay->LastAppraisal.ObjectGuid=458; Gameplay->LastAppraisal.Name=TEXT("Creature appraisal");
@@ -945,6 +1088,21 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         auto* Video=Cast<UACEVideoSettingsWidget>(Gameplay->VideoSettings);
         if (TestNotNull(TEXT("Config contains engine and camera controls"),Video))
         {
+            Video->ResetVideo(); Gameplay->RefreshOptionsOverlays();
+            const auto PendingApply=Manager->FindElementUnder(TEXT("ConfigPage"),TEXT("ApplyButton"));
+            const auto PendingReset=Manager->FindElementUnder(TEXT("ConfigPage"),TEXT("ResetButton"));
+            TestFalse(TEXT("Unchanged configuration has no pending changes"),Video->HasPendingChanges());
+            CheckCameraPreview(*this,Gameplay,Video,[&](const TCHAR* Page){Gameplay->SyncOptionsPanelTab(Page);});
+            Gameplay->RefreshOptionsOverlays();
+            TestTrue(TEXT("Unchanged PendingApply and PendingReset use retail disabled state"),PendingApply && PendingReset && !PendingApply->bActivatable && !PendingReset->bActivatable);
+            auto* Toggle=Cast<UCheckBox>(Video->WidgetTree->FindWidget(TEXT("InvertMouseX")));
+            if(Toggle)
+            {
+                Toggle->SetIsChecked(!Toggle->IsChecked());Gameplay->RefreshOptionsOverlays();
+                TestTrue(TEXT("Changing an option enables Apply and Reset"),Video->HasPendingChanges() && PendingApply && PendingReset && PendingApply->bActivatable && PendingReset->bActivatable);
+                Toggle->SetIsChecked(!Toggle->IsChecked());Gameplay->RefreshOptionsOverlays();
+                TestTrue(TEXT("Restoring the original value disables both buttons"),!Video->HasPendingChanges() && PendingApply && PendingReset && !PendingApply->bActivatable && !PendingReset->bActivatable);
+            }
             int32 Collapses=0;
             const auto VisibilityHandle=Video->OnNativeVisibilityChanged.AddLambda([&](ESlateVisibility V)
             { if (V==ESlateVisibility::Collapsed || V==ESlateVisibility::Hidden) ++Collapses; });
@@ -2285,6 +2443,31 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("Next player wraps and excludes distant objects"),Client->GetSelectedObject().Guid,80001);
             Gameplay->CycleKeyboardSelection(TEXT("CompassItem"),0);
             TestEqual(TEXT("Radar selection can choose the nearer NPC"),Client->GetSelectedObject().Guid,80003);
+            // Attackable also occurs on non-creatures; it is not a monster type.
+            AddObject(80010,12,false);AddObject(80011,15,false);
+            Session.WorldObjects[80010].ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
+            Session.WorldObjects[80011].ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
+            const int32 ItemTypes[]={ACEItemType::Misc,ACEItemType::Portal,ACEItemType::Container,ACEItemType::Misc};
+            for(int32 I=0;I<4;++I)
+            {
+                auto NearbyItem=Self;NearbyItem.Guid=80100+I;NearbyItem.bIsPlayer=false;NearbyItem.ItemType=ItemTypes[I];
+                NearbyItem.Position.Location.X+=I+1;NearbyItem.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
+                if(I==0)NearbyItem.ObjectDescriptionFlags|=ACEObjectDescFlag::Door;
+                Session.WorldObjects.Add(NearbyItem.Guid,NearbyItem);
+            }
+            Controller->CycleNearbyTarget(true,0);
+            TestEqual(TEXT("Closest monster excludes attackable doors, portals, containers and loose items"),Client->GetSelectedObject().Guid,80010);
+            Controller->CycleNearbyTarget(true,1);
+            TestEqual(TEXT("Next monster selects another creature"),Client->GetSelectedObject().Guid,80011);
+            Controller->CycleNearbyTarget(true,1);
+            TestEqual(TEXT("Monster traversal wraps without visiting items"),Client->GetSelectedObject().Guid,80010);
+            Controller->CycleNearbyTarget(true,-1);
+            TestEqual(TEXT("Previous monster also excludes items"),Client->GetSelectedObject().Guid,80011);
+            Controller->CycleNearbyTarget(false,0);
+            TestEqual(TEXT("Item traversal still includes doors"),Client->GetSelectedObject().Guid,80100);
+            Controller->CycleNearbyTarget(false,1);
+            TestEqual(TEXT("Item traversal still includes portals"),Client->GetSelectedObject().Guid,80101);
+            for(int32 Guid:{80010,80011,80100,80101,80102,80103})Session.WorldObjects.Remove(Guid);
             Session.Fellowship.Members.Reset();
             for(int32 Guid:{80002,Self.Guid,80001}){FACEFellowshipMember Member;Member.Guid=Guid;Session.Fellowship.Members.Add(Member);}
             Client->SelectObject(80002);Gameplay->CycleKeyboardSelection(TEXT("Fellow"),1);
@@ -2306,12 +2489,39 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 Controller->PlayerInput->FlushPressedKeys();
                 Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(Key,IE_Pressed,1.f));
                 Controller->PlayerInput->ProcessInputStack({},.016f,false);
-                Gameplay->PollAdditionalKeyboardActions(Controller);
+                Gameplay->PollKeyboardActions(Controller);
             };
             Gameplay->ShowPanelPage(TEXT("SocialPanel_Field"));Gameplay->SyncSocialPanelTab(TEXT("AllegiancePage"));
             Press(EKeys::F3);
             TestEqual(TEXT("Friends shortcut changes social subtab instead of closing the panel"),Gameplay->ActiveSocialTab,FString(TEXT("FriendsPage")));
             TestEqual(TEXT("Friends shortcut keeps the social panel open"),Gameplay->ActivePanelPage,FString(TEXT("SocialPanel_Field")));
+            ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();ACEInputBindings::Commit();
+            struct FPanelKeyCase {FKey Key;const TCHAR* Page;const TCHAR* Tab;};
+            const FPanelKeyCase PanelCases[]={
+                {EKeys::F9,TEXT("SkillManagementPanel_Field"),TEXT("SkillPage")},
+                {EKeys::F8,TEXT("SkillManagementPanel_Field"),TEXT("AttributePage")},
+                {EKeys::F9,TEXT("SkillManagementPanel_Field"),TEXT("SkillPage")},
+                {EKeys::F6,TEXT("SpellManagementPanel_Field"),TEXT("SpellComponentPage")},
+                {EKeys::F5,TEXT("SpellManagementPanel_Field"),TEXT("SpellbookPage")},
+                {EKeys::F6,TEXT("SpellManagementPanel_Field"),TEXT("SpellComponentPage")},
+                {EKeys::F3,TEXT("SocialPanel_Field"),TEXT("AllegiancePage")},
+                {EKeys::F4,TEXT("SocialPanel_Field"),TEXT("FellowshipPage")},
+                {EKeys::F3,TEXT("SocialPanel_Field"),TEXT("AllegiancePage")},
+                {EKeys::F12,TEXT("InventoryPanel_Field"),nullptr},
+                {EKeys::F10,TEXT("WorldPanel_Field"),nullptr},
+                {EKeys::F11,TEXT("OptionsPanel_Field"),nullptr}};
+            for(const auto& Case:PanelCases)
+            {
+                Press(Case.Key);
+                TestEqual(*FString::Printf(TEXT("%s opens its intended panel"),*Case.Key.ToString()),Gameplay->ActivePanelPage,FString(Case.Page));
+                if(Case.Tab)TestTrue(*FString::Printf(TEXT("%s selects its intended retail tab"),*Case.Key.ToString()),Manager->FindElementByName(Case.Tab)->bVisible);
+            }
+            Press(EKeys::F8);Press(EKeys::F8);
+            TestTrue(TEXT("Repeating the same Attributes shortcut closes the panel"),Gameplay->ActivePanelPage.IsEmpty());
+            ACEInputBindings::BeginEdit();ACEInputBindings::Set(EKeys::P,0,FInputChord(EKeys::F7));ACEInputBindings::Commit();
+            Press(EKeys::F7);
+            TestTrue(TEXT("Rebound Attributes action selects the Attributes tab"),Manager->FindElementByName(TEXT("AttributePage"))->bVisible);
+            TestEqual(TEXT("Rebound Attributes keeps the panel open"),Gameplay->ActivePanelPage,FString(TEXT("SkillManagementPanel_Field")));
             Controller->PlayerInput->FlushPressedKeys();ACEInputBindings::Reload();
             Session.WorldObjects=SavedObjects;Session.SelectedObject=SavedSelection;Session.Fellowship=SavedFellowship;Session.PlayerPosition=SavedPosition;
             Gameplay->HandleSelectionChanged(SavedSelection);Gameplay->RefreshSelectionOverlay();
@@ -2351,6 +2561,28 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         ++FlashSelection.SelectionSerial;Client->Session->SelectedObject=FlashSelection;Gameplay->HandleSelectionChanged(FlashSelection);
         TestTrue(TEXT("Clicking the same target again starts a fresh flash"),Gameplay->SelectionFlashUntil>0);
         Gameplay->SelectionFlashUntil=0;Gameplay->TickSelectionFlash();ClickActor->Destroy();
+        // World-model selection flashes must never replace a live or pooled
+        // particle's material. Its renderer copies/reuses that material between
+        // clicks, which used to retain the flash's extra emissive strength.
+        for(uint32 Setup : {0x02000F1Cu,0x02000896u})
+        {
+            FACEWorldObject Weapon;Weapon.Guid=int32(Setup);Weapon.SetupId=Setup;Weapon.ItemType=ACEItemType::Caster;
+            auto* WeaponActor=World->SpawnActor<AACEWorldEntityActor>();WeaponActor->InitializeFromObject(Weapon,100,true);
+            auto* Script=WeaponActor->ScriptComponent.Get();
+            for(int Frame=0;Frame<20;++Frame)Script->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+            const int32 Emitters=Script->ActiveEmitters.Num();
+            TestTrue(TEXT("Selection regression uses live authored weapon glows"),Emitters>0);
+            FlashSelection.Guid=Weapon.Guid;
+            for(int FlashClick=0;FlashClick<20;++FlashClick)
+            {
+                ++FlashSelection.SelectionSerial;Gameplay->HandleSelectionChanged(FlashSelection);
+                for(auto Mesh:Gameplay->FlashMeshes)
+                    TestTrue(TEXT("World selection only flashes model parts, never glow meshes"),WeaponActor->Appearance->PartMeshes.Contains(Cast<UProceduralMeshComponent>(Mesh.Get())));
+                for(int Frame=0;Frame<3;++Frame)Script->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+            }
+            TestEqual(TEXT("Repeated world selection retains exactly the authored emitter count"),Script->ActiveEmitters.Num(),Emitters);
+            Gameplay->SelectionFlashUntil=0;Gameplay->TickSelectionFlash();WeaponActor->Destroy();
+        }
         Client->Session->Contracts.Reset();
         for (int32 Id=1;Id<1000 && Client->Session->Contracts.Num()<2;++Id)
         {
@@ -2513,6 +2745,120 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Entry->SetText(FText::FromString(TEXT("2")));Entry->Commit(ETextCommit::OnCleared);
             TestEqual(TEXT("Cancel does not alter the saved target"),Session.DesiredComponents.FindRef(Component.Wcid),5000);
         }
+        // VendorSellUI splits a partial stack before sending a sale: the amount
+        // field alone does not stop ACE/GDLE selling the source's entire object.
+        [&]()
+        {
+            const int32 OldVendor=Gameplay->OpenVendorGuid, OldSessionVendor=Session.OpenVendorGuid;
+            const auto OldSellCart=Gameplay->VendorSellCart;
+            const auto OldSelection=Session.SelectedObject;
+            FACEWorldObject Notes;Notes.Guid=99301;Notes.WeenieClassId=20630;
+            Notes.Name=TEXT("Trade Note (250,000)");Notes.ItemType=ACEItemType::PromissoryNote;
+            Notes.StackSize=250;Notes.MaxStackSize=250;Notes.Value=62500000;Notes.ContainerId=Player.Guid;
+            FACEWorldObject Existing=Notes;Existing.Guid=99302;Existing.StackSize=1;Existing.Value=250000;
+            Session.WorldObjects.Add(Notes.Guid,Notes);Session.WorldObjects.Add(Existing.Guid,Existing);
+            Session.OpenVendorGuid=99300;Gameplay->ShowVendorPanel(99300);
+            Gameplay->VendorSellCart.Reset();Gameplay->SelectInventoryGuid(Notes.Guid);
+            Gameplay->StackAmountEntryGuid=Notes.Guid;
+            Gameplay->HandleStackAmountCommitted(FText::FromString(TEXT("1")),ETextCommit::OnEnter);
+            Gameplay->SelectInventoryGuid(Notes.Guid);
+            TestEqual(TEXT("Grabbing the selected MMD preserves the one-unit split"),Gameplay->SelectedStackAmount,1);
+            Gameplay->SetVendorPage(2);CaptureScreen(TEXT("VendorPartialStack"));
+            const auto SellList=Manager->FindElementUnder(TEXT("VendorSellPage"),TEXT("VendorSellList"));
+            if(TestTrue(TEXT("MMD sell drop target exists"),SellList.IsValid()))
+            {
+                Session.CachedC2SPackets.Reset();
+                Gameplay->InvDragGuid=Notes.Guid;Gameplay->InvDragSourcePack=Player.Guid;
+                Gameplay->InvDragShortcutSlot=INDEX_NONE;Gameplay->bInvDragPending=true;Gameplay->bInvDragActive=true;
+                Gameplay->TryFinishInventoryDrag(FVector2D(SellList->GetScreenOrigin())+FVector2D(15,15));
+                TestTrue(TEXT("Dropping one MMD requests a real stack split"),HasAction(ACEGameAction::StackableSplitToContainer));
+                TestTrue(TEXT("Original 250-MMD stack is not offered while splitting"),Gameplay->VendorSellCart.IsEmpty());
+                TestEqual(TEXT("Pending split records exactly one MMD"),Gameplay->VendorSellSplit.Amount,1);
+                for(const auto& Packet:Session.CachedC2SPackets)
+                {
+                    FACEBinaryReader Wire(Packet.Value.Payload);Wire.Skip(16);
+                    if(Wire.ReadUInt32()!=ACEOpcode::GameAction)continue;
+                    Wire.ReadUInt32();if(Wire.ReadUInt32()!=ACEGameAction::StackableSplitToContainer)continue;
+                    TestEqual(TEXT("Split packet names original stack"),Wire.ReadUInt32(),uint32(Notes.Guid));
+                    TestEqual(TEXT("Split stays in the source's backpack"),Wire.ReadUInt32(),uint32(Player.Guid));
+                    Wire.ReadInt32();TestEqual(TEXT("Split packet requests one MMD"),Wire.ReadInt32(),1);
+                }
+                const int32 Requests=Session.CachedC2SPackets.Num();
+                Gameplay->AddInventoryGuidToVendorSellCart(Notes.Guid);Gameplay->SellVendorCart(false);
+                TestEqual(TEXT("Repeated drop/sell while waiting sends no duplicate action"),Session.CachedC2SPackets.Num(),Requests);
+                FACEWorldObject Created=Existing;Created.Guid=99303;
+                Session.WorldObjects.Add(Created.Guid,Created);Gameplay->UpdateVendorSellSplit();
+                TestTrue(TEXT("New object alone cannot complete split before source update"),Gameplay->VendorSellCart.IsEmpty());
+                Session.WorldObjects[Notes.Guid].StackSize=249;Gameplay->UpdateVendorSellSplit();
+                TestEqual(TEXT("Confirmed split creates one sell row"),Gameplay->VendorSellCart.Num(),1);
+                if(Gameplay->VendorSellCart.Num()==1)
+                {
+                    TestEqual(TEXT("Sell row uses new object, not source or pre-existing MMD"),Gameplay->VendorSellCart[0].Value,Created.Guid);
+                    TestEqual(TEXT("Sell row contains exactly one MMD"),Gameplay->VendorSellCart[0].Key,1);
+                }
+                TestFalse(TEXT("Dropping a split never sells automatically"),HasAction(ACEGameAction::Sell));
+                Session.CachedC2SPackets.Reset();Gameplay->SellVendorCart(true);
+                TestTrue(TEXT("Sell sends the confirmed MMD"),HasAction(ACEGameAction::Sell));
+                for(const auto& Packet:Session.CachedC2SPackets)
+                {
+                    FACEBinaryReader Wire(Packet.Value.Payload);Wire.Skip(16);
+                    if(Wire.ReadUInt32()!=ACEOpcode::GameAction)continue;
+                    Wire.ReadUInt32();if(Wire.ReadUInt32()!=ACEGameAction::Sell)continue;
+                    TestEqual(TEXT("Sale addresses current vendor"),Wire.ReadUInt32(),99300u);
+                    TestEqual(TEXT("Sale contains one object"),Wire.ReadUInt32(),1u);
+                    TestEqual(TEXT("Sale contains one MMD"),Wire.ReadInt32(),1);
+                    TestEqual(TEXT("Sale uses the new split GUID"),Wire.ReadUInt32(),uint32(Created.Guid));
+                }
+                TestEqual(TEXT("Original stack retains the other 249 MMDs"),Session.WorldObjects[Notes.Guid].StackSize,249);
+                Session.CachedC2SPackets.Reset();Session.SendSellItems(99300,{{1,Notes.Guid}});
+                TestFalse(TEXT("Protocol guard rejects partial quantity with unsplit source GUID"),HasAction(ACEGameAction::Sell));
+                Gameplay->AddInventoryGuidToVendorSellCart(Notes.Guid,249);
+                TestFalse(TEXT("Whole stack needs no split"),HasAction(ACEGameAction::StackableSplitToContainer));
+                Gameplay->SellVendorCart(false);
+                TestTrue(TEXT("Whole-stack Sell All remains supported"),HasAction(ACEGameAction::Sell));
+
+                // Reverse the reply order; unrelated matches must not be selected.
+                Session.WorldObjects[Notes.Guid]=Notes;Gameplay->VendorSellCart.Reset();
+                Gameplay->AddInventoryGuidToVendorSellCart(Notes.Guid,2);
+                Session.WorldObjects[Notes.Guid].StackSize=248;Gameplay->UpdateVendorSellSplit();
+                TestTrue(TEXT("Source-only reply waits for the new stack"),Gameplay->VendorSellCart.IsEmpty());
+                Created.Guid=99304;Created.StackSize=2;Created.Value=500000;Created.ContainerId=0;
+                Session.WorldObjects.Add(Created.Guid,Created);Gameplay->UpdateVendorSellSplit();
+                TestTrue(TEXT("Uncontained new object waits for containment"),Gameplay->VendorSellCart.IsEmpty());
+                Session.WorldObjects[Created.Guid].ContainerId=Player.Guid;Gameplay->UpdateVendorSellSplit();
+                TestTrue(TEXT("Containment completes source-first split"),Gameplay->VendorSellCart.ContainsByPredicate([&](auto& P){return P.Value==Created.Guid&&P.Key==2;}));
+
+                // Adjusting the quantity after adding a whole stack uses the same
+                // split handshake before honoring the explicit Sell button press.
+                Gameplay->VendorSellCart.Reset();Session.WorldObjects[Notes.Guid]=Notes;
+                Gameplay->AddInventoryGuidToVendorSellCart(Notes.Guid,250);
+                Gameplay->SelectInventoryGuid(Notes.Guid);Gameplay->SelectedStackAmount=3;
+                Session.CachedC2SPackets.Reset();Gameplay->SellVendorCart(true);
+                TestTrue(TEXT("Selected partial sale waits for its split"),Gameplay->VendorSellSplit.bSellWhenReady);
+                TestFalse(TEXT("Selected partial sale cannot send the original stack"),HasAction(ACEGameAction::Sell));
+                Session.WorldObjects[Notes.Guid].StackSize=247;
+                Created.Guid=99305;Created.StackSize=3;Created.ContainerId=Player.Guid;
+                Session.WorldObjects.Add(Created.Guid,Created);Gameplay->UpdateVendorSellSplit();
+                TestTrue(TEXT("Confirmed selected sale resumes once"),HasAction(ACEGameAction::Sell));
+                const int32 SentSaleCount=Session.CachedC2SPackets.Num();Gameplay->UpdateVendorSellSplit();
+                TestEqual(TEXT("Repeated refresh cannot repeat sale"),Session.CachedC2SPackets.Num(),SentSaleCount);
+                TestTrue(TEXT("Completed selected sale removes its cart entry"),Gameplay->VendorSellCart.IsEmpty());
+
+                Session.WorldObjects[Notes.Guid]=Notes;Gameplay->AddInventoryGuidToVendorSellCart(Notes.Guid,1);
+                Gameplay->HandleNamedClick(TEXT("VendorSellClearAll_Button"));
+                TestEqual(TEXT("Clear All cancels pending staging"),Gameplay->VendorSellSplit.SourceGuid,0);
+                Gameplay->VendorSellCart.Reset();Session.WorldObjects[Notes.Guid]=Notes;
+                Gameplay->AddInventoryGuidToVendorSellCart(Notes.Guid,1);
+                Gameplay->VendorSellSplit.Deadline=0;Gameplay->UpdateVendorSellSplit();
+                TestEqual(TEXT("Unconfirmed split expires safely"),Gameplay->VendorSellSplit.SourceGuid,0);
+                TestTrue(TEXT("Failed split never offers original stack"),Gameplay->VendorSellCart.IsEmpty());
+                Gameplay->AddInventoryGuidToVendorSellCart(Notes.Guid,1);Gameplay->HideVendorPanel();
+                TestEqual(TEXT("Closing vendor cancels pending split staging"),Gameplay->VendorSellSplit.SourceGuid,0);
+            }
+            Gameplay->VendorSellSplit={};Gameplay->OpenVendorGuid=OldVendor;Session.OpenVendorGuid=OldSessionVendor;
+            Gameplay->VendorSellCart=OldSellCart;Session.SelectedObject=OldSelection;Gameplay->HandleSelectionChanged(OldSelection);
+            for(int32 Guid:{99301,99302,99303,99304,99305})Session.WorldObjects.Remove(Guid);
+        }();
         Session.DesiredComponents[Component.Wcid]=100;
         const auto SavedStock=Session.VendorMerchandise;
         const int32 SavedVendor=Gameplay->OpenVendorGuid;

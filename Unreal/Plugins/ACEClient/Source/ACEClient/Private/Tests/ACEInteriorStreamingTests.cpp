@@ -59,9 +59,13 @@ namespace
             const auto Values = UWorld::InitializationValues().AllowAudioPlayback(false)
                 .RequiresHitProxies(false).CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false);
             World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Values);
-            GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
+            auto& Context=GEngine->CreateNewWorldContext(EWorldType::Game);
+            Context.SetCurrentWorld(World);
             GI = NewObject<UGameInstance>(GEngine);
-            World->SetGameInstance(GI); GI->Init();
+            World->SetGameInstance(GI); Context.OwningGameInstance=GI;
+            // Runtime Chaos cooking needs the mesh owner's actual game world;
+            // editor cooking also worked when this fixture omitted the binding.
+            GI->OnWorldChanged(nullptr,World); GI->Init();
         }
         ~FInteriorTestWorld()
         {
@@ -145,7 +149,7 @@ bool FACEAmbientEntranceTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailInteriorStreamingTest, "ACE.RetailParity.InteriorStreaming",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACERetailInteriorStreamingTest::RunTest(const FString& Parameters)
 {
     FInteriorTestWorld Fixture;
@@ -355,15 +359,17 @@ bool FACERetailInteriorStreamingTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Occupant of admitted room stays visible"),!RemoteActor->IsHidden());
         HiddenRoom->SetEnvCellHiddenInGame(true);
         Entities->RefreshCellVisibility();
-        TestFalse(TEXT("Radar visibility predicate excludes hidden dungeon cell"),Terrain->IsWorldCellVisible(Destination.CellId));
+        TestFalse(TEXT("Rendering visibility excludes hidden dungeon cell"),Terrain->IsWorldCellVisible(Destination.CellId));
         TestTrue(TEXT("Hidden dungeon hides its occupant"),RemoteActor->IsHidden());
         TestTrue(TEXT("Hidden dungeon hides held weapons too"),HeldActor->IsHidden());
-        TestFalse(TEXT("Hidden occupant cannot be mouse-picked or block movement"),RemoteActor->GetActorEnableCollision());
-        TestEqual(TEXT("Leaving admitted rooms clears the target"),Client->GetSelectedObject().Guid,0);
+        TestTrue(TEXT("Hidden occupant retains physical collision independently of rendering"),RemoteActor->GetActorEnableCollision());
+        TestEqual(TEXT("Camera culling preserves radar/fellowship selection"),Client->GetSelectedObject().Guid,Remote.Guid);
+        Client->SelectObject(0);Client->SelectObject(Remote.Guid);
+        TestEqual(TEXT("Radar may select a known occupant in a culled room"),Client->GetSelectedObject().Guid,Remote.Guid);
         RemoteActor->InitializeFromObject(Remote,100,true);
         HeldActor->AttachToParentActor(RemoteActor,Weapon.ParentLocation);
         TestTrue(TEXT("Appearance refresh cannot expose hidden occupant"),RemoteActor->IsHidden());
-        TestFalse(TEXT("Physics refresh cannot restore hidden occupant collision"),RemoteActor->GetActorEnableCollision());
+        TestTrue(TEXT("Physics refresh retains hidden occupant collision"),RemoteActor->GetActorEnableCollision());
         TestTrue(TEXT("Attachment refresh cannot expose hidden weapon"),HeldActor->IsHidden());
         HiddenRoom->SetEnvCellHiddenInGame(false);
         Entities->RefreshCellVisibility();
@@ -373,6 +379,15 @@ bool FACERetailInteriorStreamingTest::RunTest(const FString& Parameters)
         TestFalse(TEXT("Closed dungeon does not show outdoor occupants"),Terrain->IsWorldCellVisible(0x7D640001));
         Terrain->bShowOutdoorEntities=true;
         TestTrue(TEXT("Outdoor portal view admits outdoor occupants"),Terrain->IsWorldCellVisible(0x7D640001));
+        // Moving traps can leave their packet's origin cell without receiving
+        // another position packet. Rendering follows their actual occupied room.
+        TestNotNull(TEXT("Trap visibility fixture has cached cell BSP"),Dat->GetOrBuildEnvCellMesh(Destination.CellId,100));
+        const FVector InRoom=Destination.ToUnrealLocation(100)+FVector(0,0,75);
+        const FBox TrapBounds(InRoom-FVector(15),InRoom+FVector(15));
+        TestTrue(TEXT("Trap crossing into a visible room is drawn despite stale origin cell"),Terrain->IsWorldObjectVisible(0x0007FFFF,TrapBounds));
+        TestFalse(TEXT("Trap outside resident visible rooms stays culled"),Terrain->IsWorldObjectVisible(0x0007FFFF,TrapBounds.ShiftBy(FVector(100000,0,0))));
+        HiddenRoom->SetEnvCellHiddenInGame(true);
+        TestFalse(TEXT("Trap in an unadmitted room stays culled"),Terrain->IsWorldObjectVisible(0x0007FFFF,TrapBounds));
     }
     HiddenRoom->Destroy(); Terrain->SpawnedEnvCells.Remove(Destination.CellId);
     Host->Destroy();
@@ -815,7 +830,7 @@ bool FACERetailParticleTimingTest::RunTest(const FString& Parameters)
         TestFalse(TEXT("Server deletion releases the projectile"),Presenter->Spawned.Contains(Bolt.Guid));
         Client->GetSession()->WorldObjects.Remove(Bolt.Guid);
     }
-    for (uint32 Setup : {0x02000F1Cu,0x020019E4u,0x02000EC3u,0x020012BCu,0x020012BFu,0x020012BBu,0x0200184Au,0x020012C0u,0x0200184Du,0x02001491u})
+    for (uint32 Setup : {0x02000F1Cu,0x02000896u,0x020019E4u,0x02000EC3u,0x020012BCu,0x020012BFu,0x020012BBu,0x0200184Au,0x020012C0u,0x0200184Du,0x02001491u})
     {
         FACEWorldObject Reported; Reported.Guid=Setup; Reported.SetupId=Setup; Reported.ItemType=ACEItemType::Misc;
         auto* Actor=Fixture.World->SpawnActor<AACEWorldEntityActor>();
@@ -858,6 +873,20 @@ bool FACERetailParticleTimingTest::RunTest(const FString& Parameters)
             }
         }
         TestTrue(TEXT("Reported default script actually creates particle geometry"),Born>0);
+        if(Setup==0x02000F1C || Setup==0x02000896)
+        {
+            const int32 Count=Script->ActiveEmitters.Num();
+            for(int Refresh=0;Refresh<20;++Refresh)
+            {
+                Reported.bAppearanceOnlyUpdate=true;
+                Actor->InitializeFromObject(Reported,100,true);
+                Actor->SetSelectionHighlight(Refresh%2 ? 1.f : 0.f);
+                Script->NotifyAppearanceReady(false);
+                Script->TickComponent(1.f/60.f,LEVELTICK_All,nullptr);
+            }
+            TestEqual(TEXT("Repeated selected-weapon descriptor refresh does not layer ambient emitters"),Script->ActiveEmitters.Num(),Count);
+            AddInfo(FString::Printf(TEXT("Repeated weapon refresh setup=%08X default=%08X emitters=%d"),Setup,Script->SetupDefaultScript,Count));
+        }
         if (Setup==0x02001491 && FApp::CanEverRender())
         {
             // Exact setup and hooks from the reported Slashing Baton, rendered

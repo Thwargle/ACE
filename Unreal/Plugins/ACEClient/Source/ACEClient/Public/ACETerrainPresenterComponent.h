@@ -42,6 +42,8 @@ public:
 	void UpdateCameraVisibility();
 	/** Network occupants use the same PView room admission as their geometry. */
 	bool IsWorldCellVisible(int32 CellId) const;
+	/** Moving/large objects can overlap an admitted room beyond their spawn cell. */
+	bool IsWorldObjectVisible(int32 CellId, const FBox& WorldBounds) const;
 	bool bShowOutdoorEntities = true;
 
 	virtual void BeginPlay() override;

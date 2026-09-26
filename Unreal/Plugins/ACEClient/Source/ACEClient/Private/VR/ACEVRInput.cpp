@@ -299,7 +299,7 @@ void UACEVRComponent::Grip(bool bLeft, bool bPressed)
 
 void UACEVRComponent::JumpDown()
 {
-	if (!bActive || IsInputBlocked() || bSpellWheelOpen || bJumpHeld || PC->bJumpAirborne) return;
+	if (!bActive || IsInputBlocked() || bSpellWheelOpen || bJumpHeld) return;
 	bJumpHeld = true; JumpHoldSeconds = 0.f; PC->BeginJumpCharge();
 }
 

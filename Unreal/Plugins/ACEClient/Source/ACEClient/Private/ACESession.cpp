@@ -4339,6 +4339,13 @@ void FACESession::SendSellItems(int32 VendorGuid, const TArray<TPair<int32, int3
 	{
 		return;
 	}
+	// Sell transfers whole objects on retail-compatible servers. A partial amount
+	// paired with the source GUID can sell its entire stack; the UI must split first.
+	for (const auto& Pair : AmountAndObjectId)
+	{
+		const FACEWorldObject* Item = WorldObjects.Find(Pair.Value);
+		if (!Item || Pair.Key != FMath::Max(1, Item->StackSize)) return;
+	}
 	FACEBinaryWriter W;
 	W.WriteUInt32(static_cast<uint32>(VendorGuid));
 	W.WriteUInt32(static_cast<uint32>(AmountAndObjectId.Num()));
@@ -7133,16 +7140,9 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 			Motion.Forward = FMath::Clamp(ForwardSpeed, -1.f, 1.f);
 			Motion.ForwardUnitsPerSecond = 3.1199999f * ForwardSpeed;
 			Motion.AnimPlayRate = FMath::Max(0.05f, FMath::Abs(ForwardSpeed));
-			// Interpreted run is usually ForwardCommand=RunForward. When the server still
-			// sends WalkForward, speed is GetRunRate() (>1). Also treat >=1 with high
-			// units/sec as run so remotes don't stay on the walk cycle.
-			Motion.bRunning = FMath::Abs(ForwardSpeed) > 1.05f;
-			if (Motion.bRunning)
-			{
-				Motion.ForwardUnitsPerSecond = 4.f * ForwardSpeed;
-				Motion.AnimPlayRate = FMath::Max(0.05f, FMath::Abs(ForwardSpeed));
-				Motion.Forward = ForwardSpeed >= 0.f ? 1.f : -1.f;
-			}
+			// This is already an interpreted command. Speed is the animation
+			// multiplier, not permission to reinterpret WalkForward as RunForward.
+			Motion.bRunning = false;
 			break;
 		case 0x0006: // WalkBackwards
 			Motion.Forward = -FMath::Clamp(FMath::Abs(ForwardSpeed), 0.f, 1.f);

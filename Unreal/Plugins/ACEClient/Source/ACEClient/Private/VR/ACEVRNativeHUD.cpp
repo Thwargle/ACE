@@ -37,12 +37,11 @@ void UACEVRComponent::UpdateNativeHUD(bool Available, float Dt)
  struct FCandidate {const FACEWorldObject* Object;FVector Delta;double Distance;};
  TArray<FCandidate,TInlineAllocator<64>> Nearby;
  const int32 Selected=Client->GetSelectedObject().Guid;
+ const auto& Fellowship=Session->GetFellowship();
  for(const auto& Pair:Session->GetWorldObjects())
  {
   const auto& O=Pair.Value;
   if(!UACEUIGameplayBinder::ShouldShowOnRadar(O,Client->GetPlayerGuid()))continue;
-  const bool Indoor=(uint32(Self.CellId)&0xffff)>=0x100;
-  if(Indoor && (uint32(O.Position.CellId)&0xffff0000)!=(uint32(Self.CellId)&0xffff0000))continue;
   const FVector Delta=(O.Position.ToUnrealLocation(PC->WorldScale)-Feet)/PC->WorldScale;
   const double D=Delta.SizeSquared2D();if(D>3600 || FMath::Abs(Delta.Z)>60)continue;
   const double Priority=O.Guid==Selected?-1:D;
@@ -55,7 +54,7 @@ void UACEVRComponent::UpdateNativeHUD(bool Available, float Dt)
  {
   const FVector Local=C.Delta; // Store world bearing; heading rotates cached blips during painting/picking.
   FACEVRRadarMarker M;M.Point={200+float(Local.Y)*2.6f,200-float(Local.X)*2.6f};M.Guid=C.Object->Guid;
-  M.Color=UACEUIGameplayBinder::ColorFromRadarBlip(UACEUIGameplayBinder::ResolveRadarColor(*C.Object));
+  M.Color=UACEUIGameplayBinder::ColorFromRadarBlip(UACEUIGameplayBinder::ResolveRadarColor(*C.Object,&Fellowship));
   M.Selected=M.Guid==Selected;M.Height=C.Delta.Z>3?1:C.Delta.Z<-3?-1:0;
   NativeCompass->Markers.Add(M);
  }

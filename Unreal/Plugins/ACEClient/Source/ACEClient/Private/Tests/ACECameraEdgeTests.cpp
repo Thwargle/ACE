@@ -2,6 +2,9 @@
 #include "Misc/AutomationTest.h"
 #include "ACECameraRetail.h"
 #include "ACECameraSettings.h"
+#include "ACERuntimeOptions.h"
+#include "ACERetailPortalAnimation.h"
+#include "ACELoadingScreenActor.h"
 #include "ACEKeyboardRouter.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
@@ -30,6 +33,20 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     FConfigFile FixtureConfig; FixtureConfig.NoSave=false; FixtureConfig.bCanSaveAllSections=true;
     GConfig->SetFile(GGameUserSettingsIni,&FixtureConfig);
     ACEInputBindings::Reload();
+    // Numeric reference projections from SmartBox::GetOverrideFovDistance
+    // and Render's vertical perspective, before Unreal's horizontal conversion.
+    TestTrue(TEXT("Retail 4:3 60-degree preference"),FMath::IsNearlyEqual(ACECameraRetail::HorizontalFovDegrees(4.f/3,60),62.15513f,.0001f));
+    TestTrue(TEXT("Retail 16:9 default projection"),FMath::IsNearlyEqual(ACECameraRetail::HorizontalFovDegrees(16.f/9,90),83.90130f,.0001f));
+    TestTrue(TEXT("Retail ultrawide 120-degree preference"),FMath::IsNearlyEqual(ACECameraRetail::HorizontalFovDegrees(21.f/9,120),99.53647f,.0001f));
+    for(float Aspect : {4.f/3,16.f/9,21.f/9}) for(float Degrees : {10.f,60.f,90.f,120.f,160.f})
+    {
+        const float Lens=ACECameraRetail::HorizontalFovDegrees(Aspect,Degrees);
+        TestTrue(TEXT("Portal lens blend ends at the configured FOV"),FMath::IsNearlyEqual(ACERetailPortalAnimation::StretchFov(Lens,Aspect,1.f,true),Lens,.001f));
+        TestTrue(TEXT("Portal lens blend is monotonic"),ACERetailPortalAnimation::StretchFov(Lens,Aspect,.25f,true)>=ACERetailPortalAnimation::StretchFov(Lens,Aspect,.75f,true));
+    }
+    GConfig->SetFloat(TEXT("ACE.Presentation"),TEXT("FieldOfView"),1.2f,GGameUserSettingsIni);
+    TestEqual(TEXT("Old FOV multiplier migrates to degrees"),ACERuntimeOptions::Get(TEXT("FieldOfViewDegrees")),108.f,.001f);
+    ACERuntimeOptions::Set(TEXT("FieldOfViewDegrees"),90.f);
     TestEqual(TEXT("Unset mouse speed uses the faster default"),ACECameraSettings::GetMouseDegreesPerPixel(),0.75f);
     const uint32 Scans[]={0x52,0x4F,0x50,0x51,0x4B,0x4C,0x4D,0x47,0x48,0x49};
     TestEqual(TEXT("Keypad Enter is distinct from chat Enter"),FACEKeyboardRouter::NumpadVirtualKey(0x0D,0x1C,true),uint32(0x1000D));
@@ -44,6 +61,20 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     const auto Values=UWorld::InitializationValues().AllowAudioPlayback(false).RequiresHitProxies(false)
         .CreatePhysicsScene(false).CreateNavigation(false).CreateAISystem(false);
     auto* World=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);
+    {
+        auto* Camera=NewObject<UCameraComponent>();
+        ACECameraRetail::ApplyFovToCamera(Camera,1920,1080,120.f);
+        TestEqual(TEXT("Camera component uses the converted preference"),Camera->FieldOfView,
+            ACECameraRetail::HorizontalFovDegrees(16.f/9,120.f));
+        TestTrue(TEXT("Projection keeps the calculated horizontal FOV"),Camera->bOverrideAspectRatioAxisConstraint
+            && Camera->AspectRatioAxisConstraint==AspectRatio_MaintainXFOV && !Camera->bConstrainAspectRatio);
+        ACERuntimeOptions::Set(TEXT("FieldOfViewDegrees"),110.f);
+        auto* Portal=World->SpawnActor<AACELoadingScreenActor>();
+        TestEqual(TEXT("Portal tunnel uses the configured world lens"),Portal->Camera->FieldOfView,
+            ACECameraRetail::HorizontalFovDegrees(16.f/9,110.f));
+        Portal->Destroy();
+        ACERuntimeOptions::Set(TEXT("FieldOfViewDegrees"),90.f);
+    }
     auto* Controller=World->SpawnActor<AACEPlayerController>();
     if (FParse::Param(FCommandLine::Get(),TEXT("RenderOffScreen")))
         TestFalse(TEXT("Offscreen clients do not install a native keyboard handler"),
@@ -165,10 +196,10 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     {
         Client->SendSetSingleCharacterOption(0x31,bMouseTurning);
         Controller->AdjustMouseCameraDistance(1);
-        const float ZoomedIn=Boom->TargetArmLength;
+        const float ZoomedIn=Controller->UserCameraArmLength;
         TestTrue(TEXT("Wheel zooms in with mouse turning either OFF or ON"),ZoomedIn<300.f);
         Controller->AdjustMouseCameraDistance(-1);
-        TestTrue(TEXT("Wheel zooms out with mouse turning either OFF or ON"),Boom->TargetArmLength>ZoomedIn);
+        TestTrue(TEXT("Wheel zooms out with mouse turning either OFF or ON"),Controller->UserCameraArmLength>ZoomedIn);
         const float BeforeZero=Boom->TargetArmLength;
         Controller->AdjustMouseCameraDistance(0);
         TestEqual(TEXT("Zero wheel input does not move the camera"),Boom->TargetArmLength,BeforeZero);
@@ -237,6 +268,39 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
             FMath::IsNearlyEqual(Boom->TargetArmLength,SavedArm,.01)
             && Boom->GetRelativeRotation().Equals(SavedRotation,.01) && Boom->bDoCollisionTest);
     }
+    // A wheel event and one held-key frame use identical CameraSet factors.
+    for(float Dt : {1.f/30,1.f/60,1.f/144}) for(bool Closer : {true,false})
+    {
+        Controller->ResetCameraToRetailDefaults(Boom);
+        Boom->SetRelativeRotation(FRotator(-20,90,0));
+        Boom->TargetArmLength=Controller->UserCameraArmLength=300.f;
+        Controller->CameraInputFrameSeconds=Dt;
+        Controller->AdjustMouseCameraDistance(Closer?1.f:-1.f);
+        const float Expected=300.f*(1.f+(Closer?-1.f:1.f)*8.f*Dt);
+        TestTrue(TEXT("Wheel follows retail's elapsed-frame step"),FMath::IsNearlyEqual(Controller->UserCameraArmLength,Expected,.001f));
+        TestEqual(TEXT("Zoom changes the goal without snapping the viewer"),Boom->TargetArmLength,300.f);
+        Controller->SyncUserCameraArmLength(Boom,Dt);
+        TestTrue(TEXT("Viewer distance blends with retail translation stiffness"),FMath::IsNearlyEqual(Boom->TargetArmLength,FMath::Lerp(300.f,Expected,.45f*Dt*10),.001f));
+        Controller->UserCameraArmLength=300.f;Controller->StepCameraZoom(Boom,Closer,Dt);
+        TestTrue(TEXT("Keyboard and wheel share the same target step"),FMath::IsNearlyEqual(Controller->UserCameraArmLength,Expected,.001f));
+    }
+    Controller->ResetCameraToRetailDefaults(Boom);
+    Controller->UserCameraArmLength=51.f;
+    Controller->StepCameraZoom(Boom,true,1.f/60);
+    TestTrue(TEXT("Minimum zoom rejects the step without entering first person"),Controller->UserCameraArmLength==51.f && !Controller->bCameraInHead);
+    Controller->SetCameraInHead(Boom,true);
+    Controller->AdjustMouseCameraDistance(1);
+    TestTrue(TEXT("Closer in first person keeps first person"),Controller->bCameraInHead);
+    Controller->AdjustMouseCameraDistance(-1);
+    TestTrue(TEXT("Farther exits first person at the retail offset"),!Controller->bCameraInHead && FMath::IsNearlyEqual(Controller->UserCameraArmLength,ACECameraRetail::OffsetLengthCm(-.6f,.5f,Controller->GetCameraScaleCm()),.001f));
+    Boom->SetRelativeRotation(FRotator(-20,90,0));
+    Controller->UserCameraArmLength=1000.f;
+    Controller->StepCameraZoom(Boom,false,1.f/144);
+    TestTrue(TEXT("Tilted view may zoom beyond ten units of arm length while each horizontal axis remains below ten"),Controller->UserCameraArmLength>1000.f);
+    const float AtLimit=Controller->UserCameraArmLength;
+    Controller->StepCameraZoom(Boom,false,.05f);
+    TestEqual(TEXT("Out-of-bounds zoom step leaves the previous offset intact"),Controller->UserCameraArmLength,AtLimit);
+    Controller->ResetCameraToRetailDefaults(Boom);
     for (const FKey& Key : {EKeys::NumPadFour,EKeys::NumPadSix})
     {
         Controller->SetCameraMapMode(Boom,true);

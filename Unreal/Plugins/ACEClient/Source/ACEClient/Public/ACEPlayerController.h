@@ -388,7 +388,10 @@ protected:
 	void ApplyMouseLookDelta(float DeltaX, float DeltaY, USpringArmComponent* Boom);
 	void ApplyCameraOrbitDelta(USpringArmComponent* Boom, float YawDegrees, float PitchDegrees);
 	void UpdateCombatTargetCameraAssist(float DeltaTime, USpringArmComponent* Boom);
-	void SyncUserCameraArmLength(USpringArmComponent* Boom);
+	void SyncUserCameraArmLength(USpringArmComponent* Boom, float DeltaSeconds = -1.f);
+	void StepCameraZoom(USpringArmComponent* Boom, bool bCloser, float DeltaSeconds, float Steps = 1.f);
+	float GetCameraFieldOfViewDegrees() const;
+	float CameraInputFrameSeconds = 1.f / 60.f;
 	void AdjustMouseCameraDistance(float WheelDelta);
 	void SetMouseLookActive(bool bActive);
 	bool IsUseMouseTurning() const;

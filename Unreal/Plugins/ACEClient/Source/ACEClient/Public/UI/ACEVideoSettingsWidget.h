@@ -25,8 +25,12 @@ public:
  virtual TSharedRef<SWidget> RebuildWidget() override;
  UFUNCTION() void ApplyVideo();
  void ApplyInterfaceOptions();
+ void ApplyRuntimeOptions();
  UFUNCTION() void ResetVideo();
  UFUNCTION() void DefaultsVideo();
+ bool HasPendingChanges() const;
+ float GetPreviewFieldOfView() const;
+ UFUNCTION() void ChangeFieldOfView(float Value);
  UFUNCTION() UWidget* GenerateOption(FString Option);
  UFUNCTION() void ChangeMouseTurnSpeed(float Value);
  UFUNCTION() void ResetMouseTurnSpeed();
@@ -54,6 +58,7 @@ private:
  UPROPERTY() TObjectPtr<UComboBoxString> DesktopScale;
  UPROPERTY() TObjectPtr<USlider> CursorScale;
  UPROPERTY() TObjectPtr<UTextBlock> CursorScaleLabel;
+ UPROPERTY() TObjectPtr<UTextBlock> FieldOfViewLabel;
  UPROPERTY() TObjectPtr<UComboBoxString> ChatFontFace;
  UPROPERTY() TObjectPtr<UComboBoxString> ChatFontSize;
  UPROPERTY() TObjectPtr<UEditableTextBox> ScreenshotDirectory;

@@ -18,11 +18,15 @@ namespace
 	/** Persisted floaty drag offsets are relative to the anchor scheme; bump to invalidate. */
 	constexpr int32 FloatyLayoutSchema = 2;
 
+	bool IsVitalsFloaty(const TSharedPtr<FACEUIElement>& Floaty)
+	{
+		return Floaty && (Floaty->ElementName == TEXT("RootGameplay_FloatySideVitals_Field")
+			|| Floaty->ElementName == TEXT("RootGameplay_FloatyVitals_Field"));
+	}
+
 	bool IsFixedSizeFloaty(const FString& Name)
 	{
-		return Name == TEXT("RootGameplay_FloatySideVitals_Field")
-			|| Name == TEXT("RootGameplay_FloatyVitals_Field")
-			|| Name == TEXT("RootGameplay_FloatyIndicators_Field")
+		return Name == TEXT("RootGameplay_FloatyIndicators_Field")
 			|| Name == TEXT("RootGameplay_PowerBar_Field") || Name == TEXT("RootFloatyPowerBar_Field");
 	}
 
@@ -663,7 +667,7 @@ bool UACEUIElementManager::IsFloatyResizeHandle(const TSharedPtr<FACEUIElement>&
 			return Element->ElementName.Contains(TEXT("LeftBorder")) || Element->ElementName.Contains(TEXT("RightBorder"))
 				|| Element->ElementName.Contains(TEXT("LeftCorner")) || Element->ElementName.Contains(TEXT("RightCorner"));
 	}
-	if (IsChatFloaty(Floaty))
+	if (IsChatFloaty(Floaty) || IsVitalsFloaty(Floaty))
 		return Element->bResizeLeft || Element->bResizeRight || Element->bResizeTop || Element->bResizeBottom;
 	if (Floaty->ElementName == TEXT("RootGameplay_FloatyToolbar_Field"))
 		return Element->Type == ACEUI::ElementType::Resizebar && Element->bResizeBottom;
@@ -687,9 +691,9 @@ EMouseCursor::Type UACEUIElementManager::GetWindowCursor(FVector2D ViewportPos, 
 	{
 		if (FindFloatyRoot(Hit)->ElementName == TEXT("RootGameplay_FloatyCombatPanel_Field"))
 			return EMouseCursor::ResizeLeftRight;
-		// Non-chat panels currently expose their bottom grip only. Chat frames
-		// carry the actual retail edge flags, including diagonal corner handles.
-		if (!IsChatFloaty(FindFloatyRoot(Hit))) return EMouseCursor::ResizeUpDown;
+		// Panel stacks expose their bottom grip. Chat and vitals frames use
+		// their authored retail edge flags, including chat corner handles.
+		if (!IsChatFloaty(FindFloatyRoot(Hit)) && !IsVitalsFloaty(FindFloatyRoot(Hit))) return EMouseCursor::ResizeUpDown;
 		const bool H = Hit->bResizeLeft || Hit->bResizeRight;
 		const bool V = Hit->bResizeTop || Hit->bResizeBottom;
 		if (H && V) return Hit->bResizeLeft == Hit->bResizeTop
@@ -739,7 +743,7 @@ void UACEUIElementManager::ApplyFloatyResizeLayout(const TSharedPtr<FACEUIElemen
 			FRetailReflow::Reflow(Child, Floaty->AuthoredWidth, Floaty->AuthoredHeight, Floaty->Width, Floaty->Height);
 		return;
 	}
-	if (!IsChatFloaty(Floaty) && Floaty->AuthoredWidth >= 0)
+	if (!IsChatFloaty(Floaty) && !IsVitalsFloaty(Floaty) && Floaty->AuthoredWidth >= 0)
 	{
 		const int32 NewW = FMath::Clamp(Floaty->AuthoredWidth + Floaty->UserResizeW, Floaty->MinWidth, Floaty->MaxWidth);
 		if (NewW != Floaty->Width)
@@ -751,8 +755,10 @@ void UACEUIElementManager::ApplyFloatyResizeLayout(const TSharedPtr<FACEUIElemen
 	}
 	if (Floaty->ElementName == TEXT("RootGameplay_FloatyToolbar_Field"))
 		Floaty->UserResizeH = FMath::Clamp(Floaty->GetLayoutHeight(), Floaty->MinHeight, Floaty->MaxHeight) - Floaty->AuthoredHeight;
-	if (IsChatFloaty(Floaty))
+	if (IsChatFloaty(Floaty) || IsVitalsFloaty(Floaty))
 	{
+		// Retail vitals carry horizontal resize flags and fixed min/max heights.
+		// Reflow their authored anchors so meters, caps and labels follow width.
 		if (Floaty->AuthoredWidth < 0) Floaty->AuthoredWidth=Floaty->Width;
 		Floaty->Width=FMath::Clamp(Floaty->AuthoredWidth+Floaty->UserResizeW,Floaty->MinWidth,Floaty->MaxWidth);
 		Floaty->Height=FMath::Clamp(Floaty->GetLayoutHeight(),Floaty->MinHeight,Floaty->MaxHeight);
@@ -1064,8 +1070,6 @@ void UACEUIElementManager::NotifyMouseDown(FVector2D ViewportPos, FVector2D View
 		if (!bUiLocked && Button == EKeys::LeftMouseButton && IsFloatyResizeHandle(Hit))
 		{
 			TSharedPtr<FACEUIElement> Floaty = FindFloatyRoot(Hit);
-			// Retail: the vitals bar (health/stamina/mana indicators) is fixed-size —
-			// its bottom border never acts as a resize grip.
 			if (Floaty.IsValid() && !IsFixedSizeFloaty(Floaty->ElementName))
 			{
 				if (Floaty->AuthoredHeight < 0)
@@ -1073,7 +1077,7 @@ void UACEUIElementManager::NotifyMouseDown(FVector2D ViewportPos, FVector2D View
 					Floaty->AuthoredHeight = Floaty->Height;
 				}
 				ResizeFloaty = Floaty;
-				bResizeChat=IsChatFloaty(Floaty);
+				bResizeChat=IsChatFloaty(Floaty) || IsVitalsFloaty(Floaty);
 				const bool bSpellResize = Floaty->ElementName == TEXT("RootGameplay_FloatyCombatPanel_Field")
 					&& (Hit->ElementName.Contains(TEXT("Left")) || Hit->ElementName.Contains(TEXT("Right")));
 				bResizeChat |= bSpellResize;
@@ -1234,7 +1238,7 @@ void UACEUIElementManager::SaveFloatyLayout() const
 			const FString Key = Child->ElementName;
 			GConfig->SetInt(Section, *(Key + TEXT("_DragX")), Child->UserDragX, GGameUserSettingsIni);
 			GConfig->SetInt(Section, *(Key + TEXT("_DragY")), Child->UserDragY, GGameUserSettingsIni);
-			// Vitals/indicators are fixed-size — do not persist a leftover resize height.
+			// Fixed-size indicators must not persist a leftover resize height.
 			const int32 ResizeH = IsFixedSizeFloaty(Key) ? 0 : Child->UserResizeH;
 			GConfig->SetInt(Section, *(Key + TEXT("_ResizeH")), ResizeH, GGameUserSettingsIni);
 			GConfig->SetInt(Section, *(Key + TEXT("_ResizeW")), Child->UserResizeW, GGameUserSettingsIni);

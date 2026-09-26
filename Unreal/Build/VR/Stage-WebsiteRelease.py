@@ -50,8 +50,16 @@ assets=site/'assets/ac'
 assets.mkdir(parents=True,exist_ok=True)
 shutil.copy2(root/'Unreal/Build/Branding/AC-Icon.png',assets/'ac-icon.png')
 shutil.copy2(root/'Unreal/Build/Windows/Application.ico',assets/'ac-icon.ico')
+# Existing Quest updaters validate a .quest.<release> suffix in this wire field.
+# Keep that protocol value compatible even though the APK/login display version
+# is now the same as Windows. Do not derive the installed version from this alias.
+quest_installed_version=meta['questVersion']
+assert quest_installed_version.endswith(f'.{version}'), 'Quest version does not match the release'
+quest_update_version=(quest_installed_version if quest_installed_version.endswith(f'.quest.{version}')
+                      else quest_installed_version.rsplit('.',1)[0]+f'.quest.{version}')
 public={'version':version,'date':meta['createdUtc'][:10],'windowsVersion':meta['windowsVersion'],
-        'questVersion':meta['questVersion'],'windowsSigned':False,'gameDataIncluded':False,**items}
+        'questVersion':quest_update_version,'questInstalledVersion':quest_installed_version,
+        'windowsSigned':False,'gameDataIncluded':False,**items}
 public['updates']={'schema':1,'windows':items['windows'],'quest':items['questApk']}
 (assets/'release.json').write_text(json.dumps(public,indent=2)+'\n',encoding='utf-8')
 subprocess.run([sys.executable,str(site/'_tools/build-ac-pages.py')],check=True)

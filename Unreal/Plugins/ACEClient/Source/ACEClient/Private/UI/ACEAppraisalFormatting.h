@@ -5,6 +5,20 @@
 
 namespace ACEAppraisalFormatting
 {
+inline FString ManaStoneDetails(const FACEAppraisalInfo& Info)
+{
+    // ItemExamineUI::Appraisal_ShowManaStoneInfo: property presence (including
+    // zero), and no spell book. Charges use the same fields as reusable stones.
+    if (!Info.SpellIds.IsEmpty()) return FString();
+    FString Text;
+    if (const auto* Mana = Info.IntProperties.Find(0x6B))
+        Text += FString::Printf(TEXT("Stored Mana: %d\n"), *Mana);
+    for (const auto& Entry : {TPair<uint32,const TCHAR*>(0x57,TEXT("Efficiency")), {0x89,TEXT("Chance of Destruction")}})
+        if (const auto* Value = Info.FloatProperties.Find(Entry.Key); Value && FMath::IsFinite(*Value))
+            Text += FString::Printf(TEXT("%s: %d%%\n"), Entry.Value, FMath::TruncToInt(*Value * 100.0));
+    return Text;
+}
+
 inline bool UsesCharacterExamination(const FACEAppraisalInfo& Info)
 {
     // gmExaminationUI::RecvNotice_AppraisalInfo uses profession/title presence,

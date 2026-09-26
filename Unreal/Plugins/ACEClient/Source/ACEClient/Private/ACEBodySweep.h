@@ -226,12 +226,15 @@ namespace ACEBodySweep
             if (!Component || Ignored.Contains(Component)) return false;
             Ignored.Add(Component);SupportParams.AddIgnoredComponent(Component);
         }
-        // Classify the authored floor plane, as landing does. At a tread's
-        // convex edge the sphere separation normal tilts toward its side;
-        // treating that as the floor slope loses an otherwise valid support
-        // immediately after landing and repeatedly restarts the falling state.
-        if (IsCreatureBody(Hit) || Hit.bStartPenetrating
-            || Hit.ImpactNormal.Z<.6641741f || Hit.Normal.Z<=.0871557f) return false;
+        // Contact at a convex tread belongs to the lower sphere. Chaos can
+        // report the riser's vertical triangle as ImpactNormal while the sphere
+        // rests on its upper edge. Conversely a horizontal face can still be
+        // too far behind the foot to support it. Sloped authored floor planes
+        // retain support at their edges while the sphere still contacts above
+        // the landing threshold; flat treads require a walkable sphere contact.
+        const bool bWalkableContact=Hit.Normal.Z>=.6641741f
+            || (Hit.ImpactNormal.Z>=.6641741f && Hit.ImpactNormal.Z<.99f && Hit.Normal.Z>.0871557f);
+        if (IsCreatureBody(Hit) || Hit.bStartPenetrating || !bWalkableContact) return false;
         const float Z=Hit.Location.Z-SupportRadius;
         if (Z>Feet.Z+MaxUp+Clearance || Z<Feet.Z-MaxDown) return false;
         // Retain edge contact when descending and on sloped ramp planes, but
@@ -409,7 +412,7 @@ namespace ACEBodySweep
                 break;
             }
             Result.Position=Hit.Location+Normal*.1f;
-            if (bFalling && Hit.ImpactNormal.Z>=LandingZ && Remaining.Z<0.f)
+            if (bFalling && Normal.Z>=LandingZ && Remaining.Z<0.f)
             { Result.bLanded=true; break; }
             Remaining*=1.f-Hit.Time;
             const float Into=FVector::DotProduct(Remaining,Normal);

@@ -68,6 +68,7 @@ public:
 		UACEUICanvasWidget* InCanvas, AACEPlayerController* InPC);
 	void Shutdown();
 	void RequestGameplayScreenshot();
+	float GetCameraFieldOfViewDegrees() const;
 	void SetCombatSpellBar(int32 Tab);
 
 	/** Called each canvas tick after layout sync. */
@@ -86,7 +87,7 @@ public:
 	UFUNCTION()
 	void HandleVitalsUpdated(const FACEPlayerVitals& Vitals);
 
-	void ToggleGameplayPanel(const FString& PageElementName);
+	void ToggleGameplayPanel(const FString& PageElementName, const FString& TabName = FString());
 	/** Idempotent panel selection for world-space VR menus. */
 	void OpenGameplayPanel(const FString& PageElementName) { ShowPanelPage(PageElementName); }
 	void HandleEscape();
@@ -785,6 +786,17 @@ private:
 	int32 VendorSellScrollOffset = 0;
 	/** After Use-on-vendor, add this inventory guid to the sell cart when ApproachVendor arrives. */
 	int32 PendingVendorSellGuid = 0;
+	int32 PendingVendorSellAmount = INDEX_NONE;
+	/** Retail offers a new server-created stack, never a partial quantity of the source GUID. */
+	struct FVendorSellSplit
+	{
+		int32 VendorGuid = 0, SourceGuid = 0, ContainerGuid = 0, Wcid = 0;
+		int32 Amount = 0, OriginalSize = 0;
+		double Deadline = 0;
+		bool bSellWhenReady = false;
+		TSet<int32> ExistingGuids;
+	};
+	FVendorSellSplit VendorSellSplit;
 	/** Dual-use: source item waiting for a target click (GameAction UseWithTarget). */
 	int32 PendingUseWithSourceGuid = 0;
 	bool bPendingKeyboardGive = false;
@@ -1310,7 +1322,8 @@ private:
 	void AddSelectedVendorItemToBuyCart();
 	void BuyVendorCartItem();
 	void SellVendorCart(bool bSelectedOnly = false);
-	void AddInventoryGuidToVendorSellCart(int32 Guid);
+	void AddInventoryGuidToVendorSellCart(int32 Guid, int32 Amount = INDEX_NONE);
+	void UpdateVendorSellSplit();
 	void SyncVendorPageVisibility();
 	void RefreshVendorTabLabels();
 	void RefreshVendorButtonLabels();
@@ -1462,7 +1475,7 @@ private:
 	void PlaceRadarWidget(UWidget* Widget, float ScreenX, float ScreenY, float Size, int32 ZOrder);
 	static FLinearColor ColorFromRadarBlip(uint8 RadarColor);
 	static bool ShouldShowOnRadar(const FACEWorldObject& Obj, int32 SelfGuid);
-	static uint8 ResolveRadarColor(const FACEWorldObject& Obj);
+	static uint8 ResolveRadarColor(const FACEWorldObject& Obj, const FACEFellowshipInfo* Fellowship = nullptr);
 	UBorder* EnsureIconBorder(TArray<TObjectPtr<UBorder>>& Array, int32 Index);
 	void SetIconDid(UBorder* Border, int32 IconDid, FLinearColor Tint = FLinearColor::White);
 	void SetSpellIcon(UBorder* Border, int32 SpellId);

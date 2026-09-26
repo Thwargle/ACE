@@ -88,8 +88,14 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  RoundToggle.SetUncheckedImage(Brush(0x06004D15,FVector2D(13,13))).SetUncheckedHoveredImage(RoundToggle.UncheckedImage).SetUncheckedPressedImage(Brush(0x06004D16,FVector2D(13,13)))
   .SetCheckedImage(Brush(0x06004D17,FVector2D(13,13))).SetCheckedHoveredImage(RoundToggle.CheckedImage).SetCheckedPressedImage(Brush(0x06004D18,FVector2D(13,13)));
  auto AddValue = [&](const ACERuntimeOptions::FOption& O) {
-  auto* V=WidgetTree->ConstructWidget<USlider>(); V->SetWidgetStyle(RuntimeSlider); V->SetMinValue(O.Min); V->SetMaxValue(O.Max); V->SetStepSize(.01f);
+  auto* V=WidgetTree->ConstructWidget<USlider>(USlider::StaticClass(),O.Key); V->SetWidgetStyle(RuntimeSlider); V->SetMinValue(O.Min); V->SetMaxValue(O.Max); V->SetStepSize(.01f);
   V->SetValue(ACERuntimeOptions::Get(O.Key)); ValueSliders.Add(O.Key,V); Row(O.Label,V);
+  if (FCString::Strcmp(O.Key,TEXT("FieldOfViewDegrees"))==0)
+  {
+   V->SetStepSize(1.f); V->OnValueChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeFieldOfView);
+   FieldOfViewLabel=Label(TEXT(""),7); FieldOfViewLabel->SetJustification(ETextJustify::Right);
+   Box->AddChild(Fixed(FieldOfViewLabel,250,14)); ChangeFieldOfView(V->GetValue());
+  }
  };
  Section(TEXT("Sound Options"));
  for (int32 I=0;I<3;++I) AddValue(ACERuntimeOptions::Values[I]);
@@ -182,6 +188,7 @@ void UACEVideoSettingsWidget::ResetVideo()
  const int32 Levels[]={S->GetTextureQuality(),S->GetViewDistanceQuality(),S->GetShadowQuality(),S->GetVisualEffectQuality(),S->GetPostProcessingQuality(),S->GetAntiAliasingQuality(),S->GetFoliageQuality(),S->GetShadingQuality()};
  for(int32 I=0;I<QualityLevels.Num();++I)QualityLevels[I]->SetSelectedIndex(Levels[I]);
  for(auto& P:ValueSliders)P.Value->SetValue(ACERuntimeOptions::Get(*P.Key.ToString()));
+ ChangeFieldOfView(GetPreviewFieldOfView());
  ActiveSoundOnly->SetIsChecked(ACERuntimeOptions::Get(TEXT("ActiveSoundOnly"))>.5f);
  Filtering->SetSelectedIndex(FMath::Clamp(FMath::FloorLog2(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("Anisotropy")))),0,4));
  if(auto* GI=GetGameInstance()) if(auto* Client=GI->GetSubsystem<UACEClientSubsystem>()) for(auto& P:CharacterChecks)P.Value->SetIsChecked(Client->IsCharacterOptionSet(P.Key));
@@ -214,6 +221,40 @@ TSharedRef<SWidget> UACERetailOptionWidget::RebuildWidget()
  }
  return Super::RebuildWidget();
 }
+float UACEVideoSettingsWidget::GetPreviewFieldOfView() const
+{
+ const auto* Slider=ValueSliders.Find(TEXT("FieldOfViewDegrees"));
+ return Slider ? (*Slider)->GetValue() : ACERuntimeOptions::Get(TEXT("FieldOfViewDegrees"));
+}
+void UACEVideoSettingsWidget::ChangeFieldOfView(float Value)
+{
+ if(FieldOfViewLabel) FieldOfViewLabel->SetText(FText::FromString(FString::Printf(TEXT("%.0f degrees (live preview)"),Value)));
+}
+bool UACEVideoSettingsWidget::HasPendingChanges() const
+{
+ const auto* S=UGameUserSettings::GetGameUserSettings(); if(!S || !Resolution) return false;
+ const auto R=S->GetScreenResolution();
+ if(Resolution->GetSelectedOption()!=FString::Printf(TEXT("%d x %d"),R.X,R.Y)
+  || WindowMode->GetSelectedIndex()!=int32(S->GetFullscreenMode())
+  || Quality->GetSelectedIndex()!=InitialQuality
+  || !FMath::IsNearlyEqual(FCString::Atof(*FrameLimit->GetSelectedOption()),S->GetFrameRateLimit())
+  || VSync->IsChecked()!=S->IsVSyncEnabled()) return true;
+ const int32 Levels[]={S->GetTextureQuality(),S->GetViewDistanceQuality(),S->GetShadowQuality(),S->GetVisualEffectQuality(),S->GetPostProcessingQuality(),S->GetAntiAliasingQuality(),S->GetFoliageQuality(),S->GetShadingQuality()};
+ for(int32 I=0;I<QualityLevels.Num();++I) if(QualityLevels[I]->GetSelectedIndex()!=Levels[I]) return true;
+ for(const auto& P:ValueSliders) if(!FMath::IsNearlyEqual(P.Value->GetValue(),ACERuntimeOptions::Get(*P.Key.ToString()))) return true;
+ if(ActiveSoundOnly->IsChecked()!=(ACERuntimeOptions::Get(TEXT("ActiveSoundOnly"))>.5f)
+  || Filtering->GetSelectedIndex()!=FMath::Clamp(FMath::FloorLog2(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("Anisotropy")))),0,4)) return true;
+ if(auto* GI=GetGameInstance()) if(auto* Client=GI->GetSubsystem<UACEClientSubsystem>())
+  for(const auto& P:CharacterChecks) if(P.Value->IsChecked()!=Client->IsCharacterOptionSet(P.Key)) return true;
+ return InvertMouseX->IsChecked()!=ACECameraSettings::GetInvertMouseX()
+  || InvertMouseY->IsChecked()!=ACECameraSettings::GetInvertMouseY()
+  || DesktopScale->GetSelectedIndex()!=FMath::RoundToInt((ACERuntimeOptions::Get(TEXT("DesktopUIScale"))-1.f)*4.f)
+  || ShowFrameRate->IsChecked()!=(ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f)
+  || ChatFontFace->GetSelectedIndex()!=FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontFace")))
+  || ChatFontSize->GetSelectedIndex()!=FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontSize")))
+  || ScreenshotDirectory->GetText().ToString()!=ACEScreenshotSettings::GetDirectory();
+}
+
 void UACEVideoSettingsWidget::ApplyVideo()
 {
  auto* S=UGameUserSettings::GetGameUserSettings();if(!S||!Resolution)return;
@@ -229,12 +270,17 @@ void UACEVideoSettingsWidget::ApplyVideo()
  // settings-version change. Save our preferences after that reload completes.
  S->SetFrameRateLimit(FCString::Atof(*FrameLimit->GetSelectedOption()));S->SetVSyncEnabled(VSync->IsChecked());
  S->ValidateSettings();S->ApplySettings(false);S->ConfirmVideoMode();S->SaveSettings();
+ ApplyRuntimeOptions(); ResetVideo();
+}
+
+void UACEVideoSettingsWidget::ApplyRuntimeOptions()
+{
  for(const auto& P:ValueSliders) ACERuntimeOptions::Set(*P.Key.ToString(),P.Value->GetValue());
  ApplyInterfaceOptions();
  ACERuntimeOptions::Set(TEXT("ActiveSoundOnly"),ActiveSoundOnly->IsChecked()?1:0);
  ACERuntimeOptions::Set(TEXT("Anisotropy"),float(1<<FMath::Clamp(Filtering->GetSelectedIndex(),0,4)));
  if(auto* GI=GetGameInstance()) if(auto* Client=GI->GetSubsystem<UACEClientSubsystem>()) for(auto& P:CharacterChecks)Client->SendSetSingleCharacterOption(P.Key,P.Value->IsChecked());
- ACERuntimeOptions::Apply(); ResetVideo();
+ ACERuntimeOptions::Apply();
 }
 
 
@@ -277,6 +323,7 @@ void UACEVideoSettingsWidget::DefaultsVideo()
  if(!Resolution)return;
  WindowMode->SetSelectedIndex(0); Quality->SetSelectedIndex(2); FrameLimit->SetSelectedIndex(0); VSync->SetIsChecked(false);
  for(const auto& O:ACERuntimeOptions::Values) if(auto* V=ValueSliders.Find(O.Key))(*V)->SetValue(O.Default);
+ ChangeFieldOfView(GetPreviewFieldOfView());
  ActiveSoundOnly->SetIsChecked(true); Filtering->SetSelectedIndex(4);
  for(UComboBoxString* C:QualityLevels)C->SetSelectedIndex(2);
  for(auto& P:CharacterChecks) if(const auto* O=ACECharacterOptions::Find(P.Key)) P.Value->SetIsChecked(((O->bInOptions2?ACECharacterOptions::Options2Default:ACECharacterOptions::Options1Default)&O->Flag)!=0);

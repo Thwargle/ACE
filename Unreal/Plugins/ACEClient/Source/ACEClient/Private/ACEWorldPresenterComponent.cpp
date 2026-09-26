@@ -208,9 +208,17 @@ void UACEWorldPresenterComponent::RefreshCellVisibility()
 		}
 		const bool bSelfAttachment = Client && Client->GetPlayerGuid()!=0
 			&& Occupant->GetParentGuid()==Client->GetPlayerGuid();
-		Actor->SetCellVisible(bSelfAttachment || Terrain->IsWorldCellVisible(Occupant->GetLastAceCellId()));
-		if (!Actor->IsCellVisible() && Client && Client->GetSelectedObject().Guid==Pair.Key)
-			Client->SelectObject(0);
+		bool bVisible = bSelfAttachment || Terrain->IsWorldCellVisible(Occupant->GetLastAceCellId());
+		if (!bVisible)
+		{
+			FBox Bounds(ForceInit);
+			if (Occupant->Appearance) Occupant->Appearance->GetVisualWorldBounds(Bounds);
+			if (!Bounds.IsValid) Bounds = FBox::BuildAABB(Occupant->GetActorLocation(), FVector(1));
+			bVisible = Terrain->IsWorldObjectVisible(Occupant->GetLastAceCellId(), Bounds);
+		}
+		Actor->SetCellVisible(bVisible);
+		// Camera/portal culling only controls presentation. A radar or fellowship
+		// selection must survive turning away from the target's room.
 	}
 }
 

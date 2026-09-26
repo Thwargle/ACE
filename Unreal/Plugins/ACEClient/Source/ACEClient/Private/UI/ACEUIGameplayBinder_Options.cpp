@@ -12,6 +12,7 @@
 #include "UI/ACEUIElementManager.h"
 #include "UI/ACEUIElement.h"
 #include "ACECharacterOptions.h"
+#include "ACERuntimeOptions.h"
 #include "ACEClientSubsystem.h"
 #include "Components/Border.h"
 #include "Components/CanvasPanel.h"
@@ -77,6 +78,20 @@ namespace
 		}
 		return Rows;
 	}
+}
+
+float UACEUIGameplayBinder::GetCameraFieldOfViewDegrees() const
+{
+	// The draft is a live preview only while this page is displayed. Closing
+	// options or switching tabs restores the saved lens without changing it.
+	if (ActivePanelPage == TEXT("OptionsPanel_Field") && ActiveOptionsTab == TEXT("ConfigPage")
+		&& Manager && VideoSettings && VideoSettings->IsVisible())
+	{
+		const auto Panel = Manager->FindElementByName(TEXT("OptionsPanel_Field"));
+		if (Panel && Panel->bVisible)
+			if (const auto* Video = Cast<UACEVideoSettingsWidget>(VideoSettings)) return Video->GetPreviewFieldOfView();
+	}
+	return ACERuntimeOptions::Get(TEXT("FieldOfViewDegrees"));
 }
 
 int32 UACEUIGameplayBinder::GetOptionsRowCount() const
@@ -307,10 +322,25 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 		{ TEXT("ResetButton"), TEXT("Reset") },
 		{ TEXT("DefaultButton"), TEXT("Defaults") },
 	};
+	bool bPending = false;
+	if (ActiveOptionsTab == TEXT("ConfigPage"))
+	{
+		if (const auto* Video = Cast<UACEVideoSettingsWidget>(VideoSettings)) bPending = Video->HasPendingChanges();
+	}
+	else if (ActiveOptionsTab == TEXT("CharacterSettingsPage"))
+	{
+		for (const auto& O : ACECharacterOptions::GetTable()) if (O.Page == ACECharacterOptions::PageCharacter)
+			bPending |= (((O.bInOptions2 ? OptionsDraft2 ^ OptionsSnapshot2 : OptionsDraft1 ^ OptionsSnapshot1) & O.Flag) != 0);
+	}
+	else if (ActiveOptionsTab == TEXT("ChatPage"))
+		bPending = MainChatTypeFilter != MainChatFilterSnapshot || FloatyChatFilters != FloatyChatFilterSnapshot
+			|| !ChatOpacitySnapshot.Equals(FVector2D(ChatInactiveOpacity, ChatActiveOpacity), .0001);
 	for (int32 i = 0; i < UE_ARRAY_COUNT(Footer); ++i)
 	{
 		if (TSharedPtr<FACEUIElement> Btn = Manager->FindElementUnder(ActiveOptionsTab, Footer[i].Key))
 		{
+			Btn->bActivatable = i == 2 || bPending;
+			Btn->bGhosted = !Btn->bActivatable;
 			Btn->Y = ListH + VideoHeight + 4;
 			Btn->X = 16 + i * 90;
 			Btn->EdgeAnchorX = Btn->EdgeAnchorY = 0; Btn->RecomputeLayoutOffset();
@@ -338,7 +368,7 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 		}
 		// Keep the full button box: the DAT font is 18 pixels high and the
 		// authored text layout supplies its margins and vertical centering.
-		PlaceTextOnElement(Label, Btn, Footer[i].Value, 9, OptWhite, 100011, true);
+		PlaceTextOnElement(Label, Btn, Footer[i].Value, 9, Btn->bActivatable ? OptWhite : FLinearColor(.45f,.45f,.45f), 100011, true);
 	}
 
 	if (bConfig)
@@ -705,6 +735,7 @@ bool UACEUIGameplayBinder::HandleOptionsNamedClick(const FString& Name)
 	}
 	if (Name == TEXT("ApplyButton"))
 	{
+		if (auto Button = Manager->FindElementUnder(ActiveOptionsTab, Name); Button && !Button->bActivatable) return true;
 		if (ActiveOptionsTab == TEXT("ConfigPage"))
 			if (auto* Video = Cast<UACEVideoSettingsWidget>(VideoSettings)) Video->ApplyVideo();
 		if (Client)
@@ -725,10 +756,12 @@ bool UACEUIGameplayBinder::HandleOptionsNamedClick(const FString& Name)
 			ChatOpacitySnapshot = FVector2D(ChatInactiveOpacity,ChatActiveOpacity);
 			PostInventorySystemMessage(TEXT("Options applied."));
 		}
+		RefreshOptionsOverlays();
 		return true;
 	}
 	if (Name == TEXT("ResetButton"))
 	{
+		if (auto Button = Manager->FindElementUnder(ActiveOptionsTab, Name); Button && !Button->bActivatable) return true;
 		if (ActiveOptionsTab == TEXT("ChatPage"))
 		{
 			MainChatTypeFilter = MainChatFilterSnapshot;

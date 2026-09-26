@@ -425,9 +425,11 @@ bool UACEClientSubsystem::IsWorldObjectVisible(const FACEWorldObject& Object) co
 
 void UACEClientSubsystem::SelectObject(int32 ObjectGuid)
 {
+	// Radar and fellowship selection use server-known objects even when their
+	// actors are culled. World picking applies visibility at the hit-test source.
 	FACEWorldObject Object;
 	if (ObjectGuid && GetWorldObject(ObjectGuid, Object)
-		&& ((Object.bDying && !Object.IsCorpse()) || !IsWorldObjectVisible(Object)
+		&& ((Object.bDying && !Object.IsCorpse())
 			|| (Object.PhysicsState & (ACEPhysicsState::Missile | ACEPhysicsState::ParticleEmitter)) != 0)) ObjectGuid=0;
 	if (Session)
 	{

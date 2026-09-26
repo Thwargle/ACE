@@ -804,6 +804,9 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
         Controller->bCameraDefaultsCaptured=true;
         for(const FKey& Key:{EKeys::Subtract,EKeys::Add})
         {
+            // Test each direction from a settled view. Reversing an unfinished
+            // zoom can still travel toward the nearer target during its blend.
+            Controller->SyncUserCameraArmLength(TestBoom);
             PressKey(Key);Controller->PlayerInput->ProcessInputStack({},.1f,false);
             const float Before=TestBoom->TargetArmLength;
             Controller->PlayerTick(.1f);

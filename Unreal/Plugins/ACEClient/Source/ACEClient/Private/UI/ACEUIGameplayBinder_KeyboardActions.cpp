@@ -20,7 +20,7 @@ void UACEUIGameplayBinder::CycleKeyboardSelection(const FString& Kind,int32 Dire
  TArray<FACEWorldObject> Objects=Client->GetWorldObjects();
  Objects.RemoveAll([&](const FACEWorldObject& O)
  {
-  if(!O.IsSelectableWorldObject() || !Client->IsWorldObjectVisible(O))return true;
+  if(!O.IsSelectableWorldObject() || (Kind!=TEXT("CompassItem") && !Client->IsWorldObjectVisible(O)))return true;
   const auto Delta=O.Position.ToUnrealLocation(1.f)-Origin;
   if(Kind==TEXT("Fellow"))return !Fellow.Members.ContainsByPredicate([&](const FACEFellowshipMember& M){return M.Guid==O.Guid;});
   if(Delta.SizeSquared2D()>FMath::Square(60.f))return true;
@@ -128,18 +128,7 @@ void UACEUIGameplayBinder::PollAdditionalKeyboardActions(APlayerController* PC)
   {TEXT("ToggleQuestManagementPanel"),TEXT("QuestManagementPanel_Field"),nullptr}};
  for(const auto& P:Panels)if(Pressed(P.Action))
  {
-  const bool SameTab=!P.Tab || (FString(P.Page)==TEXT("SocialPanel_Field")?ActiveSocialTab==P.Tab:
-   FString(P.Page)==TEXT("QuestManagementPanel_Field")?ActiveQuestTab==P.Tab:
-   FString(P.Page)==TEXT("OptionsPanel_Field")?ActiveOptionsTab==P.Tab:ActiveWorldTab==P.Tab);
-  if(ActivePanelPage==P.Page && SameTab)HidePanel();
-  else
-  {
-   ShowPanelPage(P.Page);
-   if(FString(P.Page)==TEXT("SocialPanel_Field"))SyncSocialPanelTab(P.Tab);
-   else if(FString(P.Page)==TEXT("QuestManagementPanel_Field") && P.Tab){ActiveQuestTab=P.Tab;bJournalFieldsDirty=true;RefreshQuestOverlays();}
-   else if(FString(P.Page)==TEXT("OptionsPanel_Field"))SyncOptionsPanelTab(P.Tab);
-   else if(FString(P.Page)==TEXT("WorldPanel_Field"))SyncWorldPanelTab(P.Tab);
-  }
+  ToggleGameplayPanel(P.Page,P.Tab ? P.Tab : TEXT(""));
  }
  for(int32 I=1;I<=4;++I)if(Pressed(*FString::Printf(TEXT("ToggleFloatingChatWindow%d"),I)))HandleNamedClick(FString::Printf(TEXT("FloatingChat%d"),I));
  if(Pressed(TEXT("LOGOUT")))Client->Logout();
