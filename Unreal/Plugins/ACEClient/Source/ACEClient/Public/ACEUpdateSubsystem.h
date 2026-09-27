@@ -18,9 +18,11 @@ namespace ACEUpdates
     // Only the fixed publisher and versioned filenames are accepted. JSON cannot supply a command or URL.
     ACECLIENT_API bool ParseManifest(const FString& Json, bool bQuest, FACEUpdateRelease& Out, FString& Error);
     ACECLIENT_API bool VerifyFile(const FString& Path, const FACEUpdateRelease& Release);
+    ACECLIENT_API const TCHAR* InstallationNotice(bool bQuest);
 }
 
-enum class EACEUpdateState : uint8 { Idle, Checking, Current, Available, Downloading, Verifying, Ready, Installing, Error };
+enum class EACEUpdateState : uint8 { Idle, Checking, Current, Available, Downloading, Verifying, Ready, InstallNotice, Installing, Error };
+enum class EACEAutoUpdateAction : uint8 { None, Check, Download, Install };
 class FACEUpdateStream;
 
 /** Shared, optional lobby updater. It never starts an installation from gameplay. */
@@ -35,6 +37,10 @@ public:
     void Cancel();
     void Install(bool bVR);
     void PollInstall();
+    void SetAutoUpdateEnabled(bool bEnabled);
+    bool IsAutoUpdateEnabled() const { return bAutoUpdateEnabled; }
+    /** Called only by the launcher. Never downloads or installs during a game session. */
+    EACEAutoUpdateAction PollAutoUpdate(bool bVR);
     bool IsBusy() const;
     bool CanUseLobby() const;
     EACEUpdateState State = EACEUpdateState::Idle;
@@ -43,11 +49,24 @@ public:
     float Progress() const;
 private:
     friend class FACEUpdateManifestTest;
+    friend class FACEAutoUpdateTest;
+    friend class FACEUpdateNoticeTest;
+    bool AdvanceInstallNotice(double Now);
+    void LaunchInstaller();
+    EACEAutoUpdateAction TakeAutomaticAction(double Now, bool bInLobby);
+    void ResetRequest();
     void Fail(const FString& Reason);
     void VerifyDownload(const FString& Path, bool bCached);
     FString CacheDirectory() const;
     FString PayloadPath() const;
     bool bChecked = false;
+    bool bAutoUpdateEnabled = false;
+    bool bAutoUpdatePaused = false;
+    bool bAutoDownloadStarted = false;
+    bool bAutoInstallStarted = false;
+    double NextAutomaticCheck = 0;
+    double InstallAt = 0;
+    bool bInstallVR = false;
     uint32 Generation = 0;
     TSharedPtr<class IHttpRequest, ESPMode::ThreadSafe> Request;
     TSharedPtr<FACEUpdateStream, ESPMode::ThreadSafe> Stream;

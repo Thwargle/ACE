@@ -35,6 +35,7 @@ void FACESession::SetState(EACESessionState NewState)
 	{
 		return;
 	}
+	if (NewState != EACESessionState::InWorld) CancelPendingUse(TEXT("left world"));
 	if (NewState == EACESessionState::Disconnected || NewState == EACESessionState::Failed)
 	{
 		bCharacterCreationPending = false;
@@ -85,6 +86,7 @@ void FACESession::Disconnect()
 	PreHandshakeDatagrams.Reset();
 	ConnectionError.Reset();
 	VRCapabilities = VRSequence = VRPoseSequence = 0; VRPoses.Reset(); VRSpellProfiles.Reset();
+	bLocalVRFeedback = false; LastVRPoseSent = -100.;
 	VRRecoverySequence = VRRecoveryTeleport = 0; VRRecoveryReadyAt = 0; VRRecoveryDuration = 0;
 	VRCastSequence=VRCastEpoch=VRCastPhase=VRAimCastSequence=0; VRAimUntil=VRCastReadyAt=VRNextAim=0; VRCastDuration=0;
 	VRMissileWeapon = 0; VRMissileSpeed = 0.f;
@@ -220,6 +222,7 @@ void FACESession::RequestLogOff()
 void FACESession::ClearWorldState()
 {
 	VRCapabilities = VRSequence = VRPoseSequence = 0; VRPoses.Reset(); VRSpellProfiles.Reset();
+	bLocalVRFeedback = false; LastVRPoseSent = -100.;
 	VRRecoverySequence = VRRecoveryTeleport = 0; VRRecoveryReadyAt = 0; VRRecoveryDuration = 0;
 	VRCastSequence=VRCastEpoch=VRCastPhase=VRAimCastSequence=0; VRAimUntil=VRCastReadyAt=VRNextAim=0; VRCastDuration=0;
 	VRMissileWeapon = 0; VRMissileSpeed = 0.f;
@@ -435,6 +438,8 @@ void FACESession::Tick(float DeltaSeconds)
 	}
 
 	PollSockets();
+	// Let a queued completion win over the fallback timeout.
+	CheckPendingUseTimeout(FPlatformTime::Seconds());
 	MaintainReceivePort(FPlatformTime::Seconds());
 	if (State == EACESessionState::AwaitConnectRequest && LoginRequestAt > 0.0 && FPlatformTime::Seconds() - LoginRequestAt > 20.0)
 	{
@@ -495,9 +500,11 @@ void FACESession::Tick(float DeltaSeconds)
 		// Retail acclient sends AutonomousPosition ~1 Hz while moving (ACE handler comment).
 		// ACE then applies the pose each world tick; observer F748 broadcasts are separately
 		// capped at MoveToState_UpdatePosition_Threshold (1 s) unless broadcast is forced.
-		const float ReportInterval=(VRCapabilities & 32768u) && FPlatformTime::Seconds()-LastVRPoseSent<.5
-			? FMath::Min(AutonomousPositionInterval,.05f) : AutonomousPositionInterval;
-		if (AutoPosTimer >= ReportInterval)
+		// SendVRPose now pairs each tracked sample with its feet. Do not send a
+		// second timed report in the same frame; retain normal reporting if the
+		// tracking stream pauses or the headset is disabled.
+		const bool PoseReportsFeet=SupportsVRPoses() && FPlatformTime::Seconds()-LastVRPoseSent<.5;
+		if (!PoseReportsFeet && AutoPosTimer >= AutonomousPositionInterval)
 		{
 			SendAutonomousPosition(bAutoPosContact);
 			AutoPosTimer = 0.f;
@@ -1720,6 +1727,9 @@ void FACESession::MaybeEnterWorldComplete()
 		return;
 	}
 	SetState(EACESessionState::InWorld);
+	// Avatar playback is shared by desktop and VR. Negotiate once per world
+	// entry even when no local headset/VR component exists.
+	RequestVRCapabilities(false);
 
 	{
 		constexpr float WorldScale = 100.f;
@@ -1987,6 +1997,8 @@ void FACESession::HandlePlayerTeleport(FACEBinaryReader& Reader)
 	const uint16 ObjectTeleportSeq = Reader.ReadUInt16();
 	Reader.Align();
 	Log(FString::Printf(TEXT("PlayerTeleport seq=%u"), ObjectTeleportSeq));
+	// A pending interaction in the old location cannot survive portal entry.
+	CancelPendingUse(TEXT("portal entry"));
 	SelectObject(0);
 	if (OpenExternalContainerGuid != 0)
 	{
@@ -2245,14 +2257,8 @@ void FACESession::HandleGameEvent(FACEBinaryReader& Reader)
 		{
 			const uint32 Version = Reader.ReadUInt32();
 			const uint32 Flags = Reader.ReadUInt32();
-			VRCapabilities = Version == 1 ? Flags & 32767u : 0u;
-			if (SupportsHealthFeedback() || SupportsVRRecovery())
-            {
-                FACEBinaryWriter Subscribe; Subscribe.WriteUInt32(1); Subscribe.WriteUInt32(4);
-                Subscribe.WriteUInt32((SupportsHealthFeedback() ? 1u : 0u) | (SupportsVRRecovery() ? 2u : 0u)
-                    | (SupportsVRCasting() ? 4u : 0u) | ((VRCapabilities & 8192u) ? 8u : 0u));
-                SendGameAction(0xF7D0, Subscribe.GetData(), ACEQueue::WeenieQueue);
-            }
+			VRCapabilities = Version == 1 ? Flags & 262143u : 0u;
+			SendVRSubscriptions();
             if ((VRCapabilities & 8u) != 0) ApplyVRWorldSnapshot(Reader);
 			VRMissileWeapon = 0; VRMissileSpeed = 0.f;
 			if ((VRCapabilities & 32u) && Reader.CanRead(8))
@@ -2616,6 +2622,8 @@ void FACESession::HandleWeenieError(FACEBinaryReader& Reader)
 void FACESession::ReportMoveToFailure(uint32 Error)
 {
 	OnMoveToFailed.Broadcast(Error);
+	// Stop the controller's active approach before OnUseDone clears its state.
+	CancelPendingUse(TEXT("approach failed"));
 	const FString Message = ACECombatChat::LookupWeenieError(Error);
 	if (!Message.IsEmpty()) OnChatMessage.Broadcast(Message, TEXT(""), ACEChatMessageType::TransientInfo);
 }
@@ -4096,7 +4104,7 @@ void FACESession::SendUseWithTarget(int32 SourceGuid, int32 TargetGuid)
 	W.WriteUInt32(static_cast<uint32>(SourceGuid));
 	W.WriteUInt32(static_cast<uint32>(TargetGuid));
 	SendGameAction(ACEGameAction::UseWithTarget, W.GetData(), ACEQueue::WeenieQueue);
-	bUseBusy = true;
+	BeginPendingUse(SourceGuid, TargetGuid);
 	Log(FString::Printf(TEXT("UseWithTarget src=0x%08X tgt=0x%08X"), SourceGuid, TargetGuid));
 }
 
@@ -5684,14 +5692,46 @@ void FACESession::HandleUpdateTitle(FACEBinaryReader& Reader)
 	OnCharacterTitlesChanged.Broadcast();
 }
 
+void FACESession::BeginPendingUse(int32 Source, int32 Target)
+{
+	bUseBusy = true;
+	UseStartedAt = FPlatformTime::Seconds();
+	UseSourceGuid = Source;
+	UseTargetGuid = Target;
+}
+
+void FACESession::ClearPendingUse()
+{
+	bUseBusy = false;
+	UseStartedAt = 0.0;
+	UseSourceGuid = UseTargetGuid = 0;
+}
+
+void FACESession::CancelPendingUse(const TCHAR* Reason)
+{
+	if (!bUseBusy) return;
+	Log(FString::Printf(TEXT("Release pending use (%s) source=0x%08X target=0x%08X age=%.1fs"),
+		Reason, UseSourceGuid, UseTargetGuid, FPlatformTime::Seconds()-UseStartedAt));
+	ClearPendingUse();
+	// Release controller approach/freeze state too, without fabricating a server error.
+	OnUseDone.Broadcast(0);
+}
+
+void FACESession::CheckPendingUseTimeout(double Now)
+{
+	// A missing UseDone must not lock every later door/NPC interaction until
+	// relog. Do not replay the use: quests, consumables and gifts have side effects.
+	// This releases only our UI gate; the server still validates each new action.
+	if (!bUseBusy || Now-UseStartedAt < 30.0) return;
+	CancelPendingUse(TEXT("completion timeout"));
+	OnChatMessage.Broadcast(TEXT("The interaction did not finish. Please try again."), TEXT(""), ACEChatMessageType::TransientInfo);
+}
+
 void FACESession::HandleUseDone(FACEBinaryReader& Reader)
 {
-	uint32 Err = 0;
-	if (Reader.CanRead(4))
-	{
-		Err = Reader.ReadUInt32();
-	}
-	bUseBusy = false;
+	if (!Reader.CanRead(4)) return;
+	const uint32 Err = Reader.ReadUInt32();
+	ClearPendingUse();
 	OnUseDone.Broadcast(Err);
 	if (Err != 0)
 	{
@@ -7432,7 +7472,7 @@ void FACESession::SendUseItem(int32 ObjectGuid)
 	FACEBinaryWriter W;
 	W.WriteUInt32(static_cast<uint32>(ObjectGuid));
 	SendGameAction(ACEGameAction::Use, W.GetData(), ACEQueue::WeenieQueue);
-	bUseBusy = true;
+	BeginPendingUse(ObjectGuid, 0);
 	Log(FString::Printf(TEXT("Use item guid=0x%08X"), ObjectGuid));
 }
 

@@ -18,6 +18,7 @@
 #include "Components/SizeBox.h"
 #include "Components/ScrollBox.h"
 #include "Components/Border.h"
+#include "Components/CheckBox.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -69,6 +70,16 @@ bool FACELauncherDirectoryTest::RunTest(const FString&)
     TestEqual(TEXT("Alternate accounts persist"),Restored.Accounts.Num(),2);
     TestEqual(TEXT("DAT folder persists"),Restored.DatDirectory,P.DatDirectory);
     TestTrue(TEXT("Active account and password survive restart"),Restored.SelectedAccountId==P.SelectedAccountId && Restored.Accounts[0].Password==P.Password);
+    TestFalse(TEXT("New launcher profiles do not opt into automatic updates"),Restored.bAutoUpdate);
+    P.bAutoUpdate=true;
+    TestTrue(TEXT("Automatic update preference saves with the device profile"),ACELoginSettings::Save(P,Path));
+    TestTrue(TEXT("Automatic update preference reloads"),ACELoginSettings::Load(Restored,Path) && Restored.bAutoUpdate);
+    P.bAutoUpdate=false; ACELoginSettings::Save(P,Path);
+    TestTrue(TEXT("Opting out survives restart too"),ACELoginSettings::Load(Restored,Path) && !Restored.bAutoUpdate);
+    FACELoginSettings Legacy; Legacy.bAutoUpdate=true; // Legacy format has no autoUpdate field.
+    ACELoginSettings::Save(Legacy,Path);
+    FACELoginSettings Migrated; Migrated.bAutoUpdate=true;
+    TestTrue(TEXT("Existing profiles without the new field always default off"),ACELoginSettings::Load(Migrated,Path) && !Migrated.bAutoUpdate);
     const FString Removed=Restored.SelectedServerId; Restored.RemoveServer(Removed);
     TestEqual(TEXT("Removing a server retains shared accounts"),Restored.Accounts.Num(),2);
     TestTrue(TEXT("Removing a server preserves selected login"),Restored.SelectedAccountId==P.SelectedAccountId && Restored.Password==P.Password);
@@ -108,6 +119,26 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     TestEqual(TEXT("Cancelled removal keeps accounts"),W->Profile.Accounts.Num(),2);
     W->Profile.Servers[0].Description.Reset(); W->SelectServer(HomeId);
     W->Directory=W->Profile.Servers;
+    W->Updater=GI->GetSubsystem<UACEUpdateSubsystem>();
+    if (!TestNotNull(TEXT("Game instance owns the updater"),W->Updater.Get())) return false;
+    TestNotNull(TEXT("Updates page provides a real checkbox"),W->AutoUpdateCheckBox.Get());
+    TestFalse(TEXT("Checkbox starts unchecked"),W->AutoUpdateCheckBox->IsChecked());
+    W->AutoUpdateCheckBox->SetIsChecked(true);
+    W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(true);
+    FACELoginSettings UpdatePreference;
+    TestTrue(TEXT("Checking enables and persists automatic updates"),W->Updater->IsAutoUpdateEnabled()
+        && ACELoginSettings::Load(UpdatePreference,W->ProfilePath) && UpdatePreference.bAutoUpdate);
+    {
+        TStrongObjectPtr<UACELoginWidget> Reloaded(CreateWidget<UACELoginWidget>(GI,UACELoginWidget::StaticClass()));
+        Reloaded->ProfilePath=W->ProfilePath;
+        auto ReloadedSlate=Reloaded->TakeWidget();
+        TestTrue(TEXT("Reopened launcher restores the checked checkbox"),Reloaded->AutoUpdateCheckBox->IsChecked());
+        Reloaded->NativeDestruct();
+    }
+    W->AutoUpdateCheckBox->SetIsChecked(false);
+    W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(false);
+    TestTrue(TEXT("Unchecking disables and persists automatic updates"),!W->Updater->IsAutoUpdateEnabled()
+        && ACELoginSettings::Load(UpdatePreference,W->ProfilePath) && !UpdatePreference.bAutoUpdate);
     if (FApp::CanEverRender())
     {
         FWidgetRenderer Renderer(false,true);
@@ -144,14 +175,32 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         W->Updater->State=EACEUpdateState::Available;
         W->Updater->Message=TEXT("A new version is available (320 MB).");
         W->RunAction(TEXT("updates")); Capture(TEXT("UpdatesVR"),FIntPoint(1100,900));
+        TestTrue(TEXT("Auto-update checkbox has a usable headset hit target"),W->AutoUpdateCheckBox->GetCachedGeometry().GetLocalSize().Y>=26);
+        W->AutoUpdateCheckBox->SetIsChecked(true);
+        W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(true);
+        Capture(TEXT("AutoUpdateEnabledVR"),FIntPoint(1100,900));
+        W->AutoUpdateCheckBox->SetIsChecked(false);
+        W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(false);
         Capture(TEXT("Updates720p"),FIntPoint(1280,720));
         TestTrue(TEXT("Download update is available in the shared VR/desktop lobby"),W->DownloadUpdateButton->IsVisible());
         TestFalse(TEXT("Install remains hidden until verification"),W->InstallUpdateButton->IsVisible());
         W->Updater->State=EACEUpdateState::Downloading; W->RefreshUpdateControls();
         TestFalse(TEXT("Cannot log in while replacing client files"),W->LoginButton->GetIsEnabled());
-        W->Updater->State=EACEUpdateState::Ready; W->Updater->Message=TEXT("Update verified. Install and restart to finish. Your accounts, settings, and game data are kept.");
+        W->Updater->State=EACEUpdateState::Ready; W->Updater->Message=FString(TEXT("Update ready. "))+ACEUpdates::InstallationNotice(PLATFORM_ANDROID);
         W->RefreshUpdateControls(); Capture(TEXT("UpdateReadyVR"),FIntPoint(1100,900));
         TestTrue(TEXT("Verified update presents install action"),W->InstallUpdateButton->IsVisible());
+        W->RunAction(TEXT("installupdate")); W->RefreshUpdateControls();
+        TestEqual(TEXT("Manual installation opens the closure notice"),W->Updater->State,EACEUpdateState::InstallNotice);
+        TestTrue(TEXT("Notice offers cancellation before the game closes"),W->CancelUpdateButton->IsVisible());
+        TestFalse(TEXT("Notice prevents launching into a server"),W->LoginButton->GetIsEnabled());
+        Capture(TEXT("UpdateClosureNoticeVR"),FIntPoint(1100,900));
+        Capture(TEXT("UpdateClosureNotice720p"),FIntPoint(1280,720));
+        W->RunAction(TEXT("cancelupdate"));
+        TestEqual(TEXT("Cancel button dismisses the scheduled install"),W->Updater->State,EACEUpdateState::Ready);
+        // Render the longer Quest instructions on the shared headset surface.
+        W->Updater->State=EACEUpdateState::Installing;
+        W->Updater->Message=ACEUpdates::InstallationNotice(true);
+        W->RefreshUpdateControls(); Capture(TEXT("QuestUpdateClosureNotice"),FIntPoint(1100,900));
         W->Updater->Cancel(); W->RefreshUpdateControls();
 
     }

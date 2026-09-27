@@ -1645,8 +1645,10 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			}
 
 			constexpr float FloorZ = 0.66417414618662751f;
+			bool bLandedThisStep = false;
 			auto FinishJumpLanding = [&]()
 			{
+				bLandedThisStep = true;
 				// Poses received before touchdown describe the old airborne height.
 				// Wait for a fresh server anchor rather than reconciling back up.
 				bHaveLastServerPose = false;
@@ -1668,7 +1670,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				if (Client)
 				{
 					Client->SetForcePositionReporting(false);
-					Client->FlushAutonomousPosition(true);
+					// Send contact only after the resolved feet/cell are committed below.
+					// The previous pose can still be above the floor at this point.
 					bForceMovementResend = true;
 				}
 			};
@@ -1878,6 +1881,9 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				const float BlockingNormalZ = bJumpAirborne ? LandingZ : FloorZ;
 				auto IsWallHit = [BlockingNormalZ](const FHitResult& Hit) -> bool
 				{
+					// An upward contact against the upper body is a roof/ledge,
+					// never foot support. Treating it as a floor let steps enter walls.
+					if (Hit.bBlockingHit && ACEBodySweep::IsUpperBodyContact(Hit)) return true;
 					if (Hit.bBlockingHit && ACEBodySweep::IsCreatureBody(Hit)) return true;
 					if (!Hit.bBlockingHit || Hit.Normal.Z >= BlockingNormalZ)
 					{
@@ -3200,6 +3206,12 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			Pred.SetLocationFromUnreal(
 				FVector(Desired.X, Desired.Y, Desired.Z - CapsuleHalfHeight - GroundSkinCm),
 				WorldScale);
+			if (auto Session = Client->GetSession()) Session->SetReportedContact(!bJumpAirborne);
+			if (bLandedThisStep)
+			{
+				Client->SetReportedPosition(Pred);
+				Client->FlushAutonomousPosition(true);
+			}
 			if (bLocalPredicting || bHavePredictedPose)
 			{
 				PredictedPose = Pred;
@@ -3695,8 +3707,10 @@ void AACEPlayerController::SyncUserCameraArmLength(USpringArmComponent* Boom, fl
 	}
 	const float ScaleCm = GetCameraScaleCm();
 	const float MinThirdPerson = ACECameraRetail::CloserMinLengthAc * ScaleCm;
-	const float MaxArm = ACECameraRetail::MaximumArmLength(Boom->GetRelativeRotation(), ScaleCm);
-	UserCameraArmLength = FMath::Clamp(UserCameraArmLength, MinThirdPerson, MaxArm);
+	// CameraSet::Raise/Lower rotate the existing offset without changing its
+	// length. The per-axis Farther limits apply only to a requested zoom step;
+	// reapplying them here silently zoomed in when lowering a distant camera.
+	UserCameraArmLength = FMath::Max(UserCameraArmLength, MinThirdPerson);
 	// SpringArm camera lag smooths the pivot, but not changes in arm length.
 	// Retail CameraManager interpolates the viewer origin too, so blend zoom
 	// with its translation stiffness before SpringArm performs obstruction tests.
@@ -3725,7 +3739,7 @@ void AACEPlayerController::StepCameraZoom(USpringArmComponent* Boom, bool bClose
 		// Retail rejects offsets outside the bounds instead of changing modes or
 		// flattening the camera pitch to make them fit. Numpad 5 owns first person.
 		if (Next < ACECameraRetail::CloserMinLengthAc*ScaleCm
-			|| Next > ACECameraRetail::MaximumArmLength(Boom->GetRelativeRotation(),ScaleCm)) break;
+			|| (!bCloser && Next > ACECameraRetail::MaximumArmLength(Boom->GetRelativeRotation(),ScaleCm))) break;
 		UserCameraArmLength=Next;
 	}
 }
@@ -4897,7 +4911,7 @@ bool AACEPlayerController::FindWorldEntryPlacement(FVector& OutCapsuleCenter) co
 			|| Floor.bStartPenetrating || Floor.ImpactNormal.Z < .5f) return false;
 		CandidateFeet.Z = Floor.Location.Z - FloorRadius + .5f;
 		const FVector Center = CandidateFeet + FVector(0, 0, HalfHeight);
-		if (GetWorld()->OverlapBlockingTestByChannel(Center, FQuat::Identity, ECC_Pawn, Shape, Params)) return false;
+		if (ACEBodySweep::OverlapsBody(*GetWorld(),Center,Shape,Params)) return false;
 		// Keep a local placement in the server's destination cell. Adjacent room
 		// physics may not be active yet, so its apparent free space cannot qualify.
 		if (ACECellTransit::IsIndoorCell(Pose.CellId) && (!Dat

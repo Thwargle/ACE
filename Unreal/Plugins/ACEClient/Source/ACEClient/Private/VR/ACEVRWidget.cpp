@@ -9,6 +9,7 @@
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScaleBox.h"
 #include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Layout/SWidgetSwitcher.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SSlider.h"
@@ -31,6 +32,29 @@ namespace
 			.SetNormalPadding(FMargin(0)).SetPressedPadding(FMargin(1.f, 2.f, -1.f, -2.f));
 		return Style;
 	}
+	const FSliderStyle& MenuSliderStyle()
+	{
+		static const FSliderStyle Style=FSliderStyle()
+			.SetNormalBarImage(FSlateRoundedBoxBrush(FLinearColor(.10f,.08f,.04f),3.f,MenuGold,1.f))
+			.SetHoveredBarImage(FSlateRoundedBoxBrush(FLinearColor(.17f,.13f,.06f),3.f,MenuGold,1.f))
+			.SetDisabledBarImage(FSlateRoundedBoxBrush(FLinearColor(.06f,.05f,.04f),3.f))
+			.SetNormalThumbImage(FSlateRoundedBoxBrush(MenuGold,4.f,FLinearColor(.95f,.82f,.53f),1.f,FVector2D(24,32)))
+			.SetHoveredThumbImage(FSlateRoundedBoxBrush(FLinearColor(.95f,.72f,.31f),4.f,MenuText,1.f,FVector2D(24,32)))
+			.SetDisabledThumbImage(FSlateRoundedBoxBrush(FLinearColor(.22f,.18f,.10f),4.f,FVector2D(24,32)))
+			.SetBarThickness(10.f);
+		return Style;
+	}
+	const FComboBoxStyle& MenuComboStyle()
+	{
+		static const FComboBoxStyle Style=[]()
+		{
+			auto S=FCoreStyle::Get().GetWidgetStyle<FComboBoxStyle>("ComboBox");
+			auto B=S.ComboButtonStyle;B.SetButtonStyle(RetailButtonStyle()).SetContentPadding(FMargin(12,8));
+			S.SetComboButtonStyle(B);return S;
+		}();
+		return Style;
+	}
+
 }
 
 TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
@@ -41,9 +65,9 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 		return SNew(STextBlock).Text(Label).Font(FCoreStyle::GetDefaultFontStyle("Regular", Size))
 			.ColorAndOpacity(MenuText).ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor::Black).AutoWrapText(true);
 	};
-	auto Button = [&](TAttribute<FText> Label, TFunction<void()> Click)
+	auto Button = [&](TAttribute<FText> Label, TFunction<void()> Click, int32 Size=22)
 	{
-		TSharedRef<SWidget> Caption = Text(Label, bKeyboard ? 24 : 22);
+		TSharedRef<SWidget> Caption = Text(Label, bKeyboard ? 24 : Size);
 		if (bWrist)
 			Caption = SNew(SBox).HeightOverride(28.f)[SNew(SScaleBox).Stretch(EStretch::ScaleToFit)
 				.StretchDirection(EStretchDirection::DownOnly).HAlign(HAlign_Left)
@@ -111,7 +135,20 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 		Pages->AddSlot().FillWidth(1.f)[Button(Literal(TEXT("Spellbook")), [Rig]() { if (Rig.IsValid()) Rig->OpenRetailPanel(TEXT("SpellManagementPanel_Field")); })];
 		Pages->AddSlot().FillWidth(1.f)[Button(Literal(TEXT("Game options")), [Rig]() { if (Rig.IsValid()) Rig->OpenRetailPanel(TEXT("OptionsPanel_Field")); })];
 		List->AddSlot().AutoHeight().Padding(0, 6)[Pages];
-		auto Scroll = SNew(SScrollBox);
+		auto Categories=SNew(SHorizontalBox);
+		auto Switcher=SNew(SWidgetSwitcher).WidgetIndex_Lambda([this](){return SettingsCategory;});
+		TArray<TSharedRef<SScrollBox>> Sections;
+		const TCHAR* CategoryNames[]={TEXT("Movement"),TEXT("Panels"),TEXT("Combat"),TEXT("Controls"),TEXT("Graphics")};
+		for(int32 I=0;I<UE_ARRAY_COUNT(CategoryNames);++I)
+		{
+			Categories->AddSlot().FillWidth(1).Padding(2,0)
+			[SNew(SBorder).Padding(0,0,0,3).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+			.BorderBackgroundColor_Lambda([this,I](){return SettingsCategory==I?MenuGold:FLinearColor::Transparent;})
+			[Button(Literal(CategoryNames[I]),[this,I](){SettingsCategory=I;},16)]];
+			auto Page=SNew(SScrollBox);Sections.Add(Page);Switcher->AddSlot()[Page];
+		}
+		List->AddSlot().AutoHeight().Padding(0,8)[Categories];
+		auto Scroll=Sections[1];
 		Scroll->AddSlot().Padding(0,6)[Text(Literal(TEXT("Panel placement: unlock and hold Move. Move or turn your controller to position the panel; use the right stick to push it away or bring it closer. Hold Resize to change its size.")),18)];
 		for(FName Setting:{FName("Fellowship"),FName("FellowshipAnchor"),FName("FellowshipLock")})
 			Scroll->AddSlot().Padding(0,6)[Button(TAttribute<FText>::CreateLambda([Rig,Setting]()
@@ -121,21 +158,26 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 				if(Setting=="FellowshipLock")return FText::FromString(S->bFellowshipLocked?TEXT("Fellowship placement: Locked"):TEXT("Fellowship placement: Unlocked"));
 				return FText::FromString(S->FellowshipAnchorMode==0?TEXT("Fellowship anchor: Head"):S->FellowshipAnchorMode==1?TEXT("Fellowship anchor: Body"):TEXT("Fellowship anchor: World"));
 			}),[Rig,Setting](){if(Rig.IsValid())Rig->ChangeSetting(Setting);})];
+		Scroll=Sections[3];
 		Scroll->AddSlot().Padding(0,12)[Text(Literal(TEXT("Controller button layout")),24)];
 		static TArray<TSharedPtr<FName>> BindingOptions=[](){TArray<TSharedPtr<FName>> R;for(const auto& B:ACEVRInputLayout::Buttons())R.Add(MakeShared<FName>(B.Input));return R;}();
 		for(const auto& B:ACEVRInputLayout::Buttons())
 		{
 			Scroll->AddSlot().Padding(0,5)[SNew(SVerticalBox)
 				+ SVerticalBox::Slot().AutoHeight()[Text(Literal(B.Physical),20)]
-				+ SVerticalBox::Slot().AutoHeight()[SNew(SComboBox<TSharedPtr<FName>>).OptionsSource(&BindingOptions)
+				+ SVerticalBox::Slot().AutoHeight()[SNew(SComboBox<TSharedPtr<FName>>).ComboBoxStyle(&MenuComboStyle()).HasDownArrow(false).ForegroundColor(MenuText).ContentPadding(FMargin(12,8)).OptionsSource(&BindingOptions)
 					.OnGenerateWidget_Lambda([](TSharedPtr<FName> Name){return SNew(STextBlock).Text(FText::FromString(ACEVRInputLayout::ActionLabel(*Name))).Font(FCoreStyle::GetDefaultFontStyle("Regular",22));})
 					.OnSelectionChanged_Lambda([Rig,Input=B.Input](TSharedPtr<FName> Name,ESelectInfo::Type){if(Rig.IsValid() && Name.IsValid())Rig->ConfigureButton(Input,*Name);})
-					[Text(TAttribute<FText>::CreateLambda([Rig,Input=B.Input](){return FText::FromString(Rig.IsValid()?ACEVRInputLayout::ActionLabel(Rig->GetSettings()->GetButtonAction(Input)):FString());}),22)]]];
+					[SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().FillWidth(1)[Text(TAttribute<FText>::CreateLambda([Rig,Input=B.Input](){return FText::FromString(Rig.IsValid()?ACEVRInputLayout::ActionLabel(Rig->GetSettings()->GetButtonAction(Input)):FString());}),22)]
+						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[Text(Literal(TEXT("\u25BC")),16)]]]];
 		}
 		Scroll->AddSlot().Padding(0,6)[Button(Literal(TEXT("Restore default controller buttons")),[Rig](){if(Rig.IsValid())Rig->ResetButtonBindings();})];
+		Scroll=Sections[4];
 		Scroll->AddSlot().Padding(0,6)[Button(TAttribute<FText>::CreateLambda([]()
 			{ return FText::FromString(ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f ? TEXT("FPS overlay: On") : TEXT("FPS overlay: Off")); }),
 			[](){ACERuntimeOptions::Set(TEXT("ShowFrameRate"),ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f ? 0.f : 1.f);ACERuntimeOptions::Apply();})];
+		Scroll=Sections[0];
 		Scroll->AddSlot().Padding(0, 6)[Button(TAttribute<FText>::CreateLambda([Rig]()
 			{ return FText::FromString(Rig.IsValid() && Rig->GetSettings()->bMatchCharacterHeight ? TEXT("Eye height: Character") : TEXT("Eye height: Physical")); }),
 			[Rig]() { if (Rig.IsValid()) Rig->ChangeSetting(TEXT("CharacterHeight")); })];
@@ -144,6 +186,8 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 			[Rig]() { if (Rig.IsValid()) Rig->ChangeSetting(TEXT("Run")); })];
 		for (FName Setting : {FName("Height"), FName("Panel"), FName("Distance"), FName("Vitals"), FName("CompassSize"), FName("OptionsSize"), FName("Chat"), FName("Wrist"), FName("Speed"), FName("ForwardAssist"), FName("TurnSpeed"), FName("Stability"), FName("HandPitch"), FName("Draw"), FName("BowAnchor")})
 		{
+			Scroll=Sections[(Setting=="Height" || Setting=="Speed" || Setting=="ForwardAssist" || Setting=="TurnSpeed")?0:
+				(Setting=="HandPitch" || Setting=="Draw" || Setting=="BowAnchor" || Setting=="Stability")?2:1];
 			Scroll->AddSlot().Padding(10, 8)[SNew(SVerticalBox)
 				+ SVerticalBox::Slot().AutoHeight()[Text(TAttribute<FText>::CreateLambda([Rig, Setting]()
 				{
@@ -165,13 +209,15 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 					return FText::FromString(FString::Printf(TEXT("Wrist stabilization: %.0f ms"), S->WristSmoothing * 1000));
 				}), 22)]
 				+ SVerticalBox::Slot().AutoHeight().Padding(0, 10)[SNew(SBox).HeightOverride(36)
-				[SNew(SSlider).SliderBarColor(FLinearColor(.25f, .17f, .075f)).SliderHandleColor(MenuGold)
+				[SNew(SSlider).Style(&MenuSliderStyle()).SliderBarColor(FLinearColor::White).SliderHandleColor(FLinearColor::White)
 				.Value_Lambda([Rig, Setting]() { return Rig.IsValid() ? Rig->GetSliderSetting(Setting) : 0.f; })
 				.OnValueChanged_Lambda([Rig, Setting](float Value) { if (Rig.IsValid()) Rig->SetSliderSetting(Setting, Value); })
 				.OnMouseCaptureEnd_Lambda([Rig]() { if (Rig.IsValid()) Rig->GetSettings()->Persist(); })]]];
 		}
 		for (FName Setting : {FName("PinMenu"), FName("ShowWrist"), FName("PinHotbar"), FName("Compass"), FName("CompassAnchor"), FName("CompassLock"), FName("MenuLock"), FName("OptionsLock"), FName("PinVitals"), FName("VitalsAnchor"), FName("VitalsLock"), FName("PinChat"), FName("Turn"), FName("Angle"), FName("Hand"), FName("Movement"), FName("Seated"), FName("Body"), FName("Haptics"), FName("Render")})
 		{
+			Scroll=Sections[(Setting=="Turn" || Setting=="Angle" || Setting=="Movement" || Setting=="Seated" || Setting=="Body")?0:
+				(Setting=="Hand" || Setting=="Haptics")?2:Setting=="Render"?4:1];
 			Scroll->AddSlot().Padding(0, 3)[Button(TAttribute<FText>::CreateLambda([Rig, Setting]()
 			{
 				if (!Rig.IsValid()) return FText::GetEmpty(); const auto* S = Rig->GetSettings();
@@ -202,19 +248,20 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 				return FText::FromString(Label);
 			}), [Rig, Setting]() { if (Rig.IsValid()) Rig->ChangeSetting(Setting); })];
 		}
+		Scroll=Sections[4];
 		if (UACEVRSettings::SupportsMSAASettings())
 			Scroll->AddSlot().Padding(0, 3)[Button(TAttribute<FText>::CreateLambda([Rig]()
 			{
 				return FText::FromString(Rig.IsValid() ? FString::Printf(TEXT("Edge smoothing: %dx MSAA (%s)"),
 					Rig->GetSettings()->MSAASamples, Rig->GetSettings()->MSAASamples == 4 ? TEXT("Quality") : TEXT("Performance")) : FString());
 			}), [Rig]() { if (Rig.IsValid()) Rig->ChangeSetting(TEXT("EdgeSmoothing")); })];
-		List->AddSlot().FillHeight(1.f)[Scroll];
+		List->AddSlot().FillHeight(1.f)[Switcher];
 		List->AddSlot().AutoHeight().Padding(0, 6)[Button(Literal(TEXT("Recenter / Calibrate height")), [Rig]() { if (Rig.IsValid()) Rig->ResetTrackingOrigin(); })];
 #if !PLATFORM_ANDROID
 		List->AddSlot().AutoHeight()[Button(Literal(TEXT("Keyboard")), [Rig]() { if (Rig.IsValid()) Rig->ToggleKeyboard(); })];
 #endif
 		List->AddSlot().AutoHeight().Padding(0, 6)[Button(Literal(TEXT("Return to game")), [Rig]() { if (Rig.IsValid()) Rig->ToggleSettings(); })];
-		List->AddSlot().AutoHeight()[Text(Literal(TEXT("X inventory / Hold X: VR options / Y combat / B inspect\nMenu: VR options / Left stick click: spell wheel with wand\nRight stick click: hold to charge jump")), 18)];
+		List->AddSlot().AutoHeight()[Text(Literal(TEXT("Settings save automatically. Customize controller actions in Controls.")), 18)];
 	}
 	return SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
 		.BorderBackgroundColor(MenuGold).Padding(2.f)

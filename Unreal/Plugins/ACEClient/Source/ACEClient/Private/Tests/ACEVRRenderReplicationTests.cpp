@@ -7,6 +7,7 @@
 #include "ACEWorldEntityActor.h"
 #include "ACEScriptComponent.h"
 #include "ACESession.h"
+#include "ACEOpcodes.h"
 #include "VR/ACEVRRemoteAvatarComponent.h"
 #include "VR/ACEVRSettings.h"
 #include "Dat/ACEDatTextureResolver.h"
@@ -132,7 +133,11 @@ bool FACEVRRenderReplicationTest::RunTest(const FString& Parameters)
 
 	// Receive a real wire payload and exercise the remote avatar component.
 	auto* Client=GI->GetSubsystem<UACEClientSubsystem>(); Client->Session=MakeShared<FACESession>();
-	auto& Session=*Client->Session; Session.State=EACESessionState::InWorld; Session.VRCapabilities=31;
+	auto& Session=*Client->Session; Session.State=EACESessionState::InWorld;
+	// No local VR rig or outgoing pose: a desktop observer negotiates playback.
+	FACEBinaryWriter Capabilities; for(uint32 V:{0u,1u,0xF7D0u,1u,16u|32768u|131072u}) Capabilities.WriteUInt32(V);
+	FACEBinaryReader CapabilitiesReader(Capabilities.GetData()); Session.HandleGameEvent(CapabilitiesReader);
+	TestEqual(TEXT("Desktop playback does not transmit tracking"),Session.VRPoseSequence,0u);
 	FACEWorldObject RemoteObject; RemoteObject.Guid=123; RemoteObject.Name=TEXT("VR pose fixture"); RemoteObject.bIsPlayer=true;
 	RemoteObject.SetupId=0x02000001; RemoteObject.MotionTableId=0x09000001; RemoteObject.bHasPosition=true; RemoteObject.Position.CellId=0x7D640019;
 	Session.WorldObjects.Add(123,RemoteObject);
@@ -144,7 +149,13 @@ bool FACEVRRenderReplicationTest::RunTest(const FString& Parameters)
 	const FVector Positions[]={FVector(0,0,1.7575),FVector(.35,-.4,2.1),FVector(.4,.35,1.2)};
 	const FQuat Rotations[]={FRotator(20,30,10).Quaternion(),FRotator(0,0,20).Quaternion(),FQuat::Identity};
 	for(int32 I=0;I<3;++I) for(double V:{Positions[I].X,Positions[I].Y,Positions[I].Z,Rotations[I].X,Rotations[I].Y,Rotations[I].Z,Rotations[I].W}) W.WriteFloat(V);
-	FACEBinaryReader Reader(W.GetData()); Session.HandleVRPose(Reader);
+	auto ReceivePose=[&](const TArray<uint8>& Payload)
+	{
+		FACEBinaryWriter Event;
+		for(uint32 V:{ACEOpcode::GameEvent,100u,1u,0xF7D1u}) Event.WriteUInt32(V);
+		Event.WriteBytes(Payload); Session.HandleGameMessage(Event.GetData());
+	};
+	ReceivePose(W.GetData());
 	FACEVRPose Pose; TestTrue(TEXT("Received pose is available to the renderer"),Session.GetVRPose(123,Pose));
 	const FTransform LegBefore=Entity->Appearance->GetPartMesh(2)->GetRelativeTransform();
 	Remote->TickComponent(.05f,LEVELTICK_All,nullptr);
@@ -191,12 +202,50 @@ bool FACEVRRenderReplicationTest::RunTest(const FString& Parameters)
 	const FVector RootPosition=Entity->GetActorLocation()/100;
 	for(double V:{RootPosition.X,RootPosition.Y,RootPosition.Z})V2.WriteFloat(V);
 	TestEqual(TEXT("Equipment event wire size"),V2.GetData().Num(),192);
-	FACEBinaryReader EquipmentReader(V2.GetData());Session.HandleVRPose(EquipmentReader);Remote->TickComponent(.05f,LEVELTICK_All,nullptr);
+	ReceivePose(V2.GetData());Remote->TickComponent(.05f,LEVELTICK_All,nullptr);
 	TestTrue(TEXT("Remote crossbow accepts equipment pose before firing"),Remote->UpdateMissileAttachment(CrossbowActor));
 	TestTrue(TEXT("Remote crossbow keeps local render orientation"),CrossbowActor->GetActorQuat().Equals(HeldPose.GetRotation(),.001));
 	TestTrue(TEXT("Remote crossbow keeps local grip offset"),CrossbowActor->GetActorLocation().Equals(Entity->GetActorLocation()+HeldPose.GetLocation()*100,.001));
 	TestTrue(TEXT("Remote bolt is visible before the first shot"),Remote->UpdateMissileAttachment(BoltActor) && !BoltActor->IsHidden());
 	TestTrue(TEXT("Remote bolt is centered at the transmitted rail location"),BoltActor->GetActorLocation().Equals(Entity->GetActorLocation()+AmmoPose.GetLocation()*100,.001));
+	Session.RequestVRCapabilities(true);
+	Remote->TickComponent(.05f,LEVELTICK_All,nullptr);
+	TestTrue(TEXT("Enabling the viewer's headset keeps the same remote tracked hand"),
+		Entity->Appearance->GetPartMesh(12)->GetComponentLocation().Z > Entity->Appearance->GetPartMesh(16)->GetComponentLocation().Z);
+	// Standard movement packets must reach a desktop avatar even when its
+	// observer has negotiated tracked hands. Exercise the actual opcode router.
+	FACEWorldObject DesktopObject=RemoteObject; DesktopObject.Guid=126;
+	DesktopObject.Position.Location=FVector(50,50,100);
+	Session.WorldObjects.Add(126,DesktopObject);
+	auto* Desktop=World->SpawnActor<AACEWorldEntityActor>();Desktop->InitializeFromObject(DesktopObject,100,true);
+	Desktop->bClampToGround=false;Desktop->bRetryGroundClamp=false;
+	auto* DesktopRemote=Desktop->FindComponentByClass<UACEVRRemoteAvatarComponent>();
+	const auto MotionHandle=Session.OnMotionUpdate.AddLambda([&](int32 Guid,const FACEObjectMotionState& Motion)
+		{if(Guid==126)Desktop->ApplyMotionState(Motion);});
+	auto ReceiveMotion=[&](uint16 Sequence,uint16 Command)
+	{
+		FACEBinaryWriter Motion;Motion.WriteUInt32(ACEOpcode::UpdateMotion);Motion.WriteUInt32(126);
+		Motion.WriteUInt16(0);Motion.WriteUInt16(Sequence);Motion.WriteUInt16(0);Motion.WriteUInt8(1);Motion.Align();
+		Motion.WriteUInt8(0);Motion.WriteUInt8(0);Motion.WriteUInt16(0x3D);
+		Motion.WriteUInt32(6);Motion.WriteUInt16(Command);Motion.WriteFloat(1);Motion.Align();
+		Session.HandleGameMessage(Motion.GetData());
+	};
+	ReceiveMotion(1,7);
+	const FVector DesktopStart=Desktop->GetActorLocation();
+	const FTransform DesktopLeg=Desktop->Appearance->GetPartMesh(2)->GetRelativeTransform();
+	for(int32 Frame=0;Frame<18;++Frame)
+	{
+		Desktop->Tick(1.f/90);Desktop->Appearance->TickComponent(1.f/90,LEVELTICK_All,nullptr);
+		DesktopRemote->TickComponent(1.f/90,LEVELTICK_All,nullptr);
+	}
+	TestTrue(TEXT("VR viewer sees standard desktop movement at the interpreted run speed"),
+		FMath::IsNearlyEqual(FVector::Distance(DesktopStart,Desktop->GetActorLocation()),80.,.5));
+	TestFalse(TEXT("VR viewer sees desktop running animation"),Desktop->Appearance->GetPartMesh(2)->GetRelativeTransform().Equals(DesktopLeg,.01));
+	TestFalse(TEXT("Desktop avatar never inherits the observer's tracked animation mode"),Desktop->Appearance->bVRPoseControlled);
+	ReceiveMotion(2,3);const FVector DesktopStopped=Desktop->GetActorLocation();
+	Desktop->Tick(.1f);
+	TestTrue(TEXT("Desktop stop packet stops movement for a VR viewer"),Desktop->GetActorLocation().Equals(DesktopStopped,.1));
+	Session.OnMotionUpdate.Remove(MotionHandle);Session.WorldObjects.Remove(126);Desktop->Destroy();
 	const double Received=FPlatformTime::Seconds();
 	auto First=Session.VRPoses[123].Current;First.ReceivedAt=Received-.1;
 	Session.VRPoses[123]=FACERemoteVRPose();Session.VRPoses[123].Add(First);
@@ -205,12 +254,34 @@ bool FACEVRRenderReplicationTest::RunTest(const FString& Parameters)
 	Session.GetVRPose(123,Pose);
 	TestTrue(TEXT("Body movement interpolates along slopes with tracked equipment"),Pose.Root.X>RootPosition.X+.3 && Pose.Root.X<RootPosition.X+.7 && Pose.Root.Z<RootPosition.Z);
 	Entity->SetActorTickEnabled(false);
+	const FVector BeforeTrackedMove=Entity->GetActorLocation();
 	Remote->TickComponent(1.f/90,LEVELTICK_All,nullptr);
-	TestTrue(TEXT("Tracked root updates even while ordinary actor movement sleeps"),Entity->GetActorLocation().Equals(Pose.Root*100,.1));
+	const FVector AfterTrackedMove=Entity->GetActorLocation();
+	TestTrue(TEXT("Tracked root advances smoothly even while ordinary actor movement sleeps"),
+		AfterTrackedMove.X>BeforeTrackedMove.X && AfterTrackedMove.X<=Next.Root.X*100
+		&& AfterTrackedMove.Z<BeforeTrackedMove.Z && AfterTrackedMove.Z>=Next.Root.Z*100);
+	// A standard position can arrive while the final tracked pose is still
+	// buffered. Rendering that old pose must not erase this newer correction.
+	FACEPosition Resume=RemoteObject.Position;Resume.bIsGrounded=true;
+	Resume.Location+=FVector(-2,0,0);
+	Entity->bClampToGround=false;Entity->bRetryGroundClamp=false;
+	const auto PositionHandle=Session.OnPositionUpdate.AddLambda([&](int32 Guid,const FACEPosition& Position)
+		{if(Guid==123)Entity->ApplyACEPosition(Position);});
+	FACEBinaryWriter PositionEvent;
+	for(uint32 V:{ACEOpcode::UpdatePosition,123u,0x74u,uint32(Resume.CellId)})PositionEvent.WriteUInt32(V);
+	for(double V:{Resume.Location.X,Resume.Location.Y,Resume.Location.Z,double(Resume.RotationW)})PositionEvent.WriteFloat(V);
+	for(uint16 V:{uint16(0),uint16(1),uint16(0),uint16(0)})PositionEvent.WriteUInt16(V);
+	Session.HandleGameMessage(PositionEvent.GetData());
+	Session.OnPositionUpdate.Remove(PositionHandle);
+	Remote->TickComponent(.01f,LEVELTICK_All,nullptr);
+	Entity->SetActorTickEnabled(false);
 	Session.VRPoses[123].Current.ReceivedAt-=1;
 	Remote->TickComponent(.05f,LEVELTICK_All,nullptr);
+	TestTrue(TEXT("Tracking expiry wakes the ordinary movement/correction tick"),Entity->IsActorTickEnabled());
 	TestFalse(TEXT("Stale tracking restores retail animation"),Entity->Appearance->bVRPoseControlled);
 	TestFalse(TEXT("Stale tracking restores retail held placement"),Remote->UpdateMissileAttachment(CrossbowActor));
+	for(int32 Frame=0;Frame<180;++Frame)if(Entity->IsActorTickEnabled())Entity->Tick(1.f/90);
+	TestTrue(TEXT("Leaving tracking preserves the newest ordinary position update"),Entity->GetActorLocation().Equals(Resume.ToUnrealLocation(100),.2));
 	CrossbowActor->Destroy();BoltActor->Destroy();
 	// Compare the exact first-contact result, not just an approximate count.
 	// Many arc segments miss all rigid parts in a dense candidate set.

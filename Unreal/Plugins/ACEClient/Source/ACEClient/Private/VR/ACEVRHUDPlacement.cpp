@@ -39,7 +39,13 @@ namespace
 		if (Mode != 1 || Held) { Turning = false; return; }
 		Dt = FMath::Clamp(Dt, 0.f, .1f);
 		// Transport locomotion exactly; smooth only room-scale/head motion.
-		const FVector Smoothed = FMath::VInterpTo(Frame.GetLocation() + Travel, Target.GetLocation(), Dt, 6.f);
+		const FVector Transported = Frame.GetLocation() + Travel;
+		const FVector Error = Target.GetLocation() - Transported;
+		// A resting head has sub-centimetre tracking noise. A soft positional
+		// dead band keeps that out of body-follow panels without accumulating
+		// drift; deliberate room-scale motion still follows exponentially.
+		const FVector Correction = Error.GetSafeNormal() * FMath::Max(0., Error.Size() - .75);
+		const FVector Smoothed = Transported + Correction * (1.f-FMath::Exp(-Dt*6.f));
 		Frame.SetLocation(Target.GetLocation() + (Smoothed - Target.GetLocation()).GetClampedToMaxSize(12.f));
 		const float Difference = FMath::FindDeltaAngleDegrees(Frame.Rotator().Yaw, Target.Rotator().Yaw);
 		// Separate start/stop thresholds prevent tracking noise at the edge of

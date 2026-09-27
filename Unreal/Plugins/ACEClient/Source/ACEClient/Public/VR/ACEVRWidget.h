@@ -14,5 +14,6 @@ public:
 	bool bWrist = false;
 	bool bKeyboard = false;
 	bool bShift = false;
+	int32 SettingsCategory = 0;
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 };

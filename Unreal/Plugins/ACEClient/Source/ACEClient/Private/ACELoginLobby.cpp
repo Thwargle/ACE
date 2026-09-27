@@ -3,6 +3,7 @@
 #include "ACEClientBuild.h"
 #include "ACEUpdateSubsystem.h"
 #include "Components/ProgressBar.h"
+#include "Components/CheckBox.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
@@ -25,6 +26,7 @@
 #include "Components/WidgetSwitcher.h"
 #include "Components/WrapBox.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
+#include "Brushes/SlateNoResource.h"
 #include "Engine/GameInstance.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "HeadMountedDisplayFunctionLibrary.h"
@@ -237,6 +239,31 @@ void UACELoginWidget::EnsureDefaultLayout()
 	UVerticalBox* Updates; Pages->AddChild(Card(Updates));
 	AddLine(Updates,Label(TEXT("Client updates"),28));
 	AddLine(Updates,Label(TEXT("New versions are checked automatically when the launcher opens. Updates are optional and keep your accounts, settings, and DAT files."),18,true));
+	AutoUpdateCheckBox=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("AutoUpdateCheckBox"));
+	// Draw the indicator with Slate primitives and text so it stays legible in
+	// packaged clients without relying on the editor's checkbox image resources.
+	FCheckBoxStyle AutoUpdateStyle;
+	AutoUpdateStyle.SetCheckBoxType(ESlateCheckBoxType::ToggleButton)
+		.SetUncheckedImage(FSlateNoResource()).SetCheckedImage(FSlateNoResource())
+		.SetUncheckedHoveredImage(FSlateRoundedBoxBrush(Tile,4.f)).SetCheckedHoveredImage(FSlateRoundedBoxBrush(Tile,4.f))
+		.SetUncheckedPressedImage(FSlateRoundedBoxBrush(Ink,4.f)).SetCheckedPressedImage(FSlateRoundedBoxBrush(Ink,4.f));
+	AutoUpdateStyle.SetForegroundColor(LobbyTextColor).SetHoveredForegroundColor(Gold).SetPressedForegroundColor(Gold)
+		.SetCheckedForegroundColor(Gold).SetCheckedHoveredForegroundColor(LobbyTextColor).SetCheckedPressedForegroundColor(Gold);
+	AutoUpdateStyle.SetPadding(FMargin(0,6)); AutoUpdateCheckBox->SetWidgetStyle(AutoUpdateStyle);
+	auto* AutoUpdateRow=WidgetTree->ConstructWidget<UHorizontalBox>(); AutoUpdateCheckBox->SetContent(AutoUpdateRow);
+	auto* IndicatorSize=WidgetTree->ConstructWidget<USizeBox>(); IndicatorSize->SetWidthOverride(28); IndicatorSize->SetHeightOverride(28);
+	AutoUpdateRow->AddChildToHorizontalBox(IndicatorSize)->SetVerticalAlignment(VAlign_Center);
+	auto* Indicator=WidgetTree->ConstructWidget<UBorder>(); Indicator->SetBrush(FSlateRoundedBoxBrush(Ink,3.f,Gold,2.f));
+	Indicator->SetPadding(FMargin(0)); Indicator->SetVerticalAlignment(VAlign_Center); IndicatorSize->SetContent(Indicator);
+	AutoUpdateMark=Label(TEXT("\u2713"),22); AutoUpdateMark->SetAutoWrapText(false); AutoUpdateMark->SetJustification(ETextJustify::Center);
+	AutoUpdateMark->SetColorAndOpacity(Gold); AutoUpdateMark->SetRenderOpacity(0); Indicator->SetContent(AutoUpdateMark);
+	auto* AutoUpdateCaption=AutoUpdateRow->AddChildToHorizontalBox(Label(TEXT("Automatically download and install updates"),18));
+	AutoUpdateCaption->SetPadding(FMargin(10,0,0,0)); AutoUpdateCaption->SetVerticalAlignment(VAlign_Center);
+	AutoUpdateCaption->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+	AutoUpdateCheckBox->SetIsChecked(false);
+	AutoUpdateCheckBox->OnCheckStateChanged.AddDynamic(this,&UACELoginWidget::OnAutoUpdateChanged);
+	AddLine(Updates,AutoUpdateCheckBox,8);
+	AddLine(Updates,Label(TEXT("Off by default. When enabled, checks every 15 minutes in the launcher and updates before you log in. Never interrupts gameplay. Cancel pauses automatic updates until the next app launch or Check now."),16,true));
 	UpdateText=Label(TEXT("Checking for updates..."),20); AddLine(Updates,UpdateText,20);
 	UpdateProgress=WidgetTree->ConstructWidget<UProgressBar>(); UpdateProgress->SetFillColorAndOpacity(Gold);
 	auto* ProgressSize=WidgetTree->ConstructWidget<USizeBox>(); ProgressSize->SetHeightOverride(16); ProgressSize->SetContent(UpdateProgress); AddLine(Updates,ProgressSize,20);
@@ -244,8 +271,8 @@ void UACELoginWidget::EnsureDefaultLayout()
 	CheckUpdateButton=ActionButton(TEXT("Check now"),TEXT("checkupdate")); UpdateActions->AddChildToWrapBox(CheckUpdateButton);
 	DownloadUpdateButton=ActionButton(TEXT("Download update"),TEXT("downloadupdate"),FString(),true); UpdateActions->AddChildToWrapBox(DownloadUpdateButton);
 	InstallUpdateButton=ActionButton(PLATFORM_ANDROID?TEXT("Install"):TEXT("Install and restart"),TEXT("installupdate"),FString(),true); UpdateActions->AddChildToWrapBox(InstallUpdateButton);
-	CancelUpdateButton=ActionButton(TEXT("Cancel download"),TEXT("cancelupdate")); UpdateActions->AddChildToWrapBox(CancelUpdateButton);
-	AddLine(Updates,Label(PLATFORM_ANDROID?TEXT("Installation asks for confirmation in the headset. If requested, allow AC:VR to install updates, return here, and choose Install again."):TEXT("Install and restart closes the game, updates this installation, and reopens it in the same desktop or VR mode."),18,true));
+	CancelUpdateButton=ActionButton(TEXT("Cancel update"),TEXT("cancelupdate")); UpdateActions->AddChildToWrapBox(CancelUpdateButton);
+	UpdateInstallHelp=Label(ACEUpdates::InstallationNotice(PLATFORM_ANDROID),18,true); AddLine(Updates,UpdateInstallHelp);
 	Row(Updates,{{TEXT("Release notes"),TEXT("updatenotes")},{TEXT("Back to play"),TEXT("play")}});
 	// Inline destructive-action confirmation is also fully usable with VR pointers.
 	FooterSize=WidgetTree->ConstructWidget<USizeBox>(); FooterSize->SetWidthOverride(1028);
@@ -269,7 +296,6 @@ void UACELoginWidget::NativeConstruct()
 	if (auto* GI=GetGameInstance())
 	{
 		Updater=GI->GetSubsystem<UACEUpdateSubsystem>();
-		if (Updater) Updater->Check(true);
 		Client=GI->GetSubsystem<UACEClientSubsystem>();
 		if (Client)
 		{
@@ -291,6 +317,9 @@ void UACELoginWidget::NativeConstruct()
 			&& FFileHelper::LoadFileToString(Cached,*ACELoginProfile::DirectoryCachePath())) ACELoginProfile::ParseDirectory(Cached,Directory,Error);
 		SetStatus(TEXT("Select a server and account, then launch."));
 	}
+	AutoUpdateCheckBox->SetIsChecked(Profile.bAutoUpdate);
+	if (Updater) { Updater->SetAutoUpdateEnabled(Profile.bAutoUpdate); Updater->Check(true); }
+	RefreshUpdateControls();
 	ForceLayoutPrepass();
 }
 
@@ -311,7 +340,19 @@ void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 {
 	Super::NativeTick(Geometry,Dt);
 	UpdatePollTime-=Dt;
-	if (UpdatePollTime<=0) { UpdatePollTime=.25f; if (Updater) Updater->PollInstall(); RefreshUpdateControls(); }
+	if (UpdatePollTime<=0)
+	{
+		UpdatePollTime=.25f;
+		if (Updater)
+		{
+			Updater->PollInstall();
+			if (Updater->IsAutoUpdateEnabled()) SaveLoginEntries(); // Persist edits before an automatic restart.
+			const auto Action=Updater->PollAutoUpdate(UHeadMountedDisplayFunctionLibrary::IsHeadMountedDisplayEnabled());
+			if (Action==EACEAutoUpdateAction::Download || Action==EACEAutoUpdateAction::Install
+				|| Updater->State==EACEUpdateState::InstallNotice) Pages->SetActiveWidgetIndex(4);
+		}
+		RefreshUpdateControls();
+	}
 	// Scale text and pointer targets together. The same design fits a 720p window,
 	// a high-DPI/fullscreen desktop, and the dedicated 1100x900 headset surface.
 	const FVector2D View=Geometry.GetLocalSize();
@@ -327,8 +368,18 @@ void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 	}
 }
 
+void UACELoginWidget::OnAutoUpdateChanged(bool bChecked)
+{
+	Profile.bAutoUpdate=bChecked;
+	bLoginEntriesDirty=true;
+	SaveLoginEntries();
+	if (Updater) Updater->SetAutoUpdateEnabled(bChecked);
+	RefreshUpdateControls();
+}
+
 void UACELoginWidget::RefreshUpdateControls()
 {
+	if (AutoUpdateMark) AutoUpdateMark->SetRenderOpacity(Profile.bAutoUpdate?1.f:0.f);
 	if (!Updater || !UpdateText) return;
 	const auto State=Updater->State;
 	const bool Busy=Updater->IsBusy();
@@ -336,11 +387,14 @@ void UACELoginWidget::RefreshUpdateControls()
 	FString Text=Updater->Message;
 	if (State==EACEUpdateState::Downloading) Text+=FString::Printf(TEXT(" %.0f%%"),Updater->Progress()*100);
 	if (UpdateText->GetText().ToString()!=Text) UpdateText->SetText(FText::FromString(Text));
-	UpdateProgress->SetPercent(State==EACEUpdateState::Ready?1.f:Updater->Progress());
+	UpdateText->SetColorAndOpacity(State==EACEUpdateState::InstallNotice?Gold:LobbyTextColor);
+	UpdateInstallHelp->SetVisibility(State==EACEUpdateState::Ready || State==EACEUpdateState::InstallNotice || State==EACEUpdateState::Installing?ESlateVisibility::Collapsed:ESlateVisibility::HitTestInvisible);
+	UpdateProgress->SetPercent(State==EACEUpdateState::Ready || State==EACEUpdateState::InstallNotice || State==EACEUpdateState::Installing?1.f:Updater->Progress());
 	CheckUpdateButton->SetIsEnabled(!Busy && State!=EACEUpdateState::Checking);
 	DownloadUpdateButton->SetVisibility(Available && !Busy && State!=EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
 	InstallUpdateButton->SetVisibility(State==EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
-	CancelUpdateButton->SetVisibility(State==EACEUpdateState::Downloading?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
+	CancelUpdateButton->SetVisibility(State==EACEUpdateState::Downloading || State==EACEUpdateState::Verifying || State==EACEUpdateState::InstallNotice?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
+	AutoUpdateCheckBox->SetIsEnabled(State!=EACEUpdateState::Installing);
 	LoginButton->SetIsEnabled(!Busy && Profile.SelectedServer()!=nullptr);
 	if (auto* Size=Cast<USizeBox>(UpdateNavButton->GetContent())) if(auto* Label=Cast<UTextBlock>(Size->GetContent()))
 	{ const FString Title=Available?TEXT("Update available"):TEXT("Updates"); if(Label->GetText().ToString()!=Title)Label->SetText(FText::FromString(Title)); }

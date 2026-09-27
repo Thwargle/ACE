@@ -12,6 +12,9 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/InputComponent.h"
+#include "Sockets.h"
+#include "SocketSubsystem.h"
+#include "IPAddress.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/PlayerInput.h"
 #include "ACEEnvCellActor.h"
@@ -57,6 +60,11 @@ bool FACEVRStairCeilingTest::RunTest(const FString&)
  PC->bRetailCursorInstalled=true;PC->HoverTooltipWidget=CreateWidget<UACEHoverTooltipWidget>(GI,UACEHoverTooltipWidget::StaticClass());
  PC->bEnterWorldLoading=false;PC->bWorldRevealActive=false;
  Session->PlayerGuid=12345;Session->State=EACESessionState::InWorld;
+ auto* Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+ auto Address=Sockets->CreateInternetAddr();bool AddressValid=false;
+ Address->SetIp(TEXT("127.0.0.1"),AddressValid);Address->SetPort(9);
+ Session->SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("Landing packet fixture"),false);
+ Session->ServerC2SAddr=Address;Session->IssacClient=MakeUnique<FACEIsaac>(123);
  FACEWorldObject Self;Self.Guid=12345;Self.SetupId=0x02000001;Self.bIsPlayer=true;Self.bIsSelf=true;
  Session->WorldObjects.Add(Self.Guid,Self);
  auto* VR=NewObject<UACEVRComponent>(Pawn);Pawn->AddInstanceComponent(VR);VR->RegisterComponent();
@@ -351,7 +359,25 @@ bool FACEVRStairCeilingTest::RunTest(const FString&)
      double MinClearance=0;bool bSupported=true;
      for(int32 I=0;I<FMath::CeilToInt(2.f/Dt);++I)
      {
+      const bool WasAirborne=PC->bJumpAirborne;
+      Session->CachedC2SPackets.Reset();
       VR->Head->SetWorldLocation(Pawn->GetActorLocation()+FVector(0,0,84.25));PC->PlayerTick(Dt);
+      if(WasAirborne && !PC->bJumpAirborne && Drift==0)
+      {
+       bool FoundLanding=false;
+       for(const auto& Packet:Session->CachedC2SPackets)
+       {
+        FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);
+        if(R.ReadUInt32()!=ACEGameAction::AutonomousPosition)continue;
+        FACEPosition LandingPose;LandingPose.CellId=R.ReadUInt32();
+        const float X=R.ReadFloat(),Y=R.ReadFloat(),Z=R.ReadFloat();LandingPose.Location=FVector(X,Y,Z);
+        R.Skip(24);if(R.ReadUInt8()!=1)continue;
+        FoundLanding=true;
+        TestTrue(TEXT("Landing packet reports resolved feet, never the previous airborne pose"),
+         LandingPose.ToUnrealLocation(100).Equals(Pawn->GetActorLocation()-FVector(0,0,90.75),1.f));
+       }
+       TestTrue(TEXT("Touchdown sends contact during the landing frame"),FoundLanding);
+      }
       const FVector At=Pawn->GetActorLocation();float Bed=0;
       if(Dat->SampleOutdoorGroundZ(At.X,At.Y,100,Bed)) MinClearance=FMath::Min(MinClearance,At.Z-90.75-Bed);
       else bSupported=false;
@@ -389,7 +415,7 @@ bool FACEVRStairCeilingTest::RunTest(const FString&)
  Box->SetCollisionEnabled(ECollisionEnabled::QueryOnly);Box->SetCollisionResponseToAllChannels(ECR_Block);Box->RegisterComponent();
  Blocker->SetActorLocation(Center+FVector(0,51,0));
  TestTrue(TEXT("Downhill recovery cannot cross a second wall"),ACEBodySweep::Recover(*World,Center,Push,Contact,Shape,Query).Equals(Center,.01));
- Session->State=EACESessionState::Disconnected;Session->PlayerGuid=0;
+ Session->Disconnect();Session->PlayerGuid=0;
  World->DestroyWorld(false);GEngine->DestroyWorldContext(World);return true;
 }
 #endif

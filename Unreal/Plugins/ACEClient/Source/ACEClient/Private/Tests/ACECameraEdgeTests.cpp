@@ -301,6 +301,18 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     Controller->StepCameraZoom(Boom,false,.05f);
     TestEqual(TEXT("Out-of-bounds zoom step leaves the previous offset intact"),Controller->UserCameraArmLength,AtLimit);
     Controller->ResetCameraToRetailDefaults(Boom);
+    Boom->SetRelativeRotation(FRotator(-89,90,0));
+    Controller->UserCameraArmLength=Boom->TargetArmLength=10000.f;
+    for(int32 Frame=0;Frame<120;++Frame)
+    {
+        Controller->ApplyCameraOrbitDelta(Boom,0,.5f);
+        Controller->SyncUserCameraArmLength(Boom,1.f/60);
+    }
+    TestEqual(TEXT("Lowering a far, raised camera preserves the requested zoom"),Controller->UserCameraArmLength,10000.f);
+    TestEqual(TEXT("Lowering blends only angle, not zoom distance"),Boom->TargetArmLength,10000.f);
+    Controller->StepCameraZoom(Boom,true,1.f/60);
+    TestTrue(TEXT("A rotated far offset can always zoom closer"),Controller->UserCameraArmLength<10000.f);
+    Controller->ResetCameraToRetailDefaults(Boom);
     for (const FKey& Key : {EKeys::NumPadFour,EKeys::NumPadSix})
     {
         Controller->SetCameraMapMode(Boom,true);

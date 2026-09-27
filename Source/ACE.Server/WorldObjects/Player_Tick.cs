@@ -309,10 +309,13 @@ namespace ACE.Server.WorldObjects
                 if (FastTick && PhysicsObj.IsMovingOrAnimating || PhysicsObj.Velocity != Vector3.Zero)
                 {
                     UpdatePlayerPhysics();
-
-                    if (MoveToParams?.Callback != null && !PhysicsObj.IsMovingOrAnimating)
-                        HandleMoveToCallback();
                 }
+
+                // A cancelled turn/approach can already be stationary before
+                // this tick. Its completion still has to release the client's
+                // pending Use; it must not depend on another physics animation.
+                if (MoveToParams?.Callback != null && !PhysicsObj.IsMovingOrAnimating)
+                    HandleMoveToCallback();
 
                 InUpdate = false;
 

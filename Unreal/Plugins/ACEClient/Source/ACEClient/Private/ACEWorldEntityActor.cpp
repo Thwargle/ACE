@@ -24,6 +24,7 @@
 #include "Camera/PlayerCameraManager.h"
 #include "GameFramework/Pawn.h"
 #include "ACEBodySweep.h"
+#include "ACELedgeSlide.h"
 
 namespace
 {
@@ -396,7 +397,7 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 		Mesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
 
-	float StepAc = 0.5f, HeightAc = 2.f, RadiusAc = 0.75f;
+	float StepAc = 0.5f, StepDownAc = .5f, HeightAc = 2.f, RadiusAc = 0.75f;
 	uint32 IgnoredAnim = 0;
 	UACEDatSubsystem* Dat = nullptr;
 	if (UGameInstance* GI = GetGameInstance())
@@ -404,7 +405,7 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 		Dat = GI->GetSubsystem<UACEDatSubsystem>();
 		if (Dat)
 		{
-			Dat->TryGetSetupPhysics(static_cast<uint32>(SetupId), StepAc, HeightAc, RadiusAc, IgnoredAnim);
+			Dat->TryGetSetupPhysics(static_cast<uint32>(SetupId), StepAc, HeightAc, RadiusAc, IgnoredAnim, &StepDownAc);
 		}
 	}
 	// Ground loot / tiny props often author near-zero cylinders — keep a usable pick volume.
@@ -414,6 +415,28 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 	MovementStepHeight = FMath::Max(0.f, StepAc * WorldScale);
 	MeleeBodyHeight = FMath::Max(0.f, HeightAc * WorldScale);
 	MovementHalfHeight = FMath::Max(MovementRadius, HeightAc * WorldScale * .5f);
+	MovementSweepRadius=MovementRadius;MovementBodyOffsetZ=MovementHalfHeight;
+	MovementStepDownHeight=FMath::Max(0.f,StepDownAc*WorldScale);
+	// Setup.Radius is an enclosing/sorting bound (human: .6788, walking
+	// sphere: .48). Keep that bound for retail interaction range, but never
+	// use it to widen a remote character's movement collision.
+	TArray<FACEDatCollisionShape> MovementShapes;bool HasBsp=false;
+	if(Dat && Dat->GetSetupCollisionShapes(SetupId,MovementShapes,HasBsp) && !MovementShapes.IsEmpty())
+	{
+		float R=0,Bottom=MAX_flt,Top=-MAX_flt;
+		for(const auto& S:MovementShapes)
+		{
+			R=FMath::Max(R,S.Radius+FVector2f(S.Origin.X,S.Origin.Y).Size());
+			Bottom=FMath::Min(Bottom,S.Origin.Z-(S.Height>0?0:S.Radius));
+			Top=FMath::Max(Top,S.Origin.Z+(S.Height>0?S.Height:S.Radius));
+		}
+		if(R>0 && Top>Bottom)
+		{
+			MovementSweepRadius=R*WorldScale;
+			MovementHalfHeight=FMath::Max(R,(Top-Bottom)*.5f)*WorldScale;
+			MovementBodyOffsetZ=(Top+Bottom)*.5f*WorldScale;
+		}
+	}
 	// Doors/chests often author wide Setup cylinders that steal clicks from nearby objects.
 	if (IsDoor() || IsOpenable())
 	{
@@ -917,19 +940,47 @@ FVector AACEWorldEntityActor::ResolvePredictedMovement(const FVector& From, cons
 		|| (!bIsPlayer && !(ItemType & ACEItemType::Creature))) return Destination;
 	const float Scale = GetActorScale3D().GetAbsMax();
 	const float Half = MovementHalfHeight * Scale;
-	const auto Shape = FCollisionShape::MakeCapsule(MovementRadius * Scale, Half);
+	const auto Shape = FCollisionShape::MakeCapsule(MovementSweepRadius * Scale, Half);
 	FCollisionQueryParams Query(SCENE_QUERY_STAT(ACERemoteBody), true, this);
-	const FVector Offset(0, 0, Half + 1.f);
+	const FVector Offset(0, 0, MovementBodyOffsetZ * Scale);
 	FVector Position = From + Offset;
 	FVector Remaining = Destination - From;
 	if (!bHavePhysicsVelocity)
 	{
-		FHitResult Hit;
-		if (!ACEBodySweep::Sweep(*GetWorld(), Hit, Position, Position+Remaining, Shape, Query)) return Destination;
-		// Grounded contact changes support height, not the horizontal heading.
-		// Projecting onto a sloping floor in 3D deflected straight runners sideways
-		// and each F748 then pulled them back onto their original track.
-		return ACEBodySweep::SlideGrounded(*GetWorld(), Position, Position+Remaining, Hit, Shape, Query)-Offset;
+		// Retail CTransition::step_down/edge_slide constrains predicted walking
+		// to supported terrain. A failed ground ray is not permission to run
+		// over a cliff until the next position packet pulls the avatar back.
+		const float Up=MovementStepHeight*Scale+2.f,Down=MovementStepDownHeight*Scale+2.f;
+		float Ground=0;
+		// Server feet can sit above the center ray on an incline (retail's
+		// supporting sphere) or differ slightly after quantization. Use the
+		// authored step range, rather than dropping support after a 2 cm error.
+		const bool FollowGround=bClampToGround && TraceGroundZ(From,Ground,true)
+			&& From.Z-Ground<=Down && Ground-From.Z<=Up;
+		const int32 Steps=FMath::Clamp(FMath::CeilToInt(Remaining.Size2D()/FMath::Max(10.f,MovementSweepRadius*Scale*.5f)),1,32);
+		const FVector Step=Remaining/Steps;
+		for(int32 I=0;I<Steps;++I)
+		{
+			const FVector Feet=Position-Offset;
+			auto Support=[&](const FVector2D& XY)
+			{
+				float Z=0;return TraceGroundZ(FVector(XY,Feet.Z),Z,true) && Z-Feet.Z<=Up && Feet.Z-Z<=Down;
+			};
+			FVector Next=Feet+Step;
+			if(FollowGround)
+			{
+				const FVector2D XY=ACELedgeSlide::Resolve(FVector2D(Feet),FVector2D(Step),Support);
+				Next.X=XY.X;Next.Y=XY.Y;
+				if(TraceGroundZ(FVector(XY,Feet.Z),Ground,true))Next.Z=Ground+1.f;
+			}
+			FHitResult Hit;
+			FVector Resolved=ACEBodySweep::Sweep(*GetWorld(),Hit,Position,Next+Offset,Shape,Query)
+				? ACEBodySweep::SlideGrounded(*GetWorld(),Position,Next+Offset,Hit,Shape,Query)-Offset : Next;
+			if(FollowGround && !Support(FVector2D(Resolved)))break;
+			if(FollowGround && TraceGroundZ(Resolved,Ground,true))Resolved.Z=Ground+1.f;
+			Position=Resolved+Offset;
+		}
+		return Position-Offset;
 	}
 	for (int32 Pass = 0; Pass < 3 && !Remaining.IsNearlyZero(.01f); ++Pass)
 	{
@@ -976,7 +1027,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 		&& VRClient->GetSession()->GetVRPose(ACEGuid,VRRoot) && VRRoot.Version==2;
 	// PostPhysics applies the tracked root once, together with the hands. A
 	// second root writer here used to undo grounding/interpolation each frame.
-	if (!HasVRRoot) bHaveVRPresentation = false;
+	if (!HasVRRoot) EndRemoteVRRoot();
 
 	if (!HasVRRoot && bPendingGroundClamp && bRetryGroundClamp && !bAttachedToParent && ParentGuid == 0
 		&& !bHavePhysicsVelocity)
@@ -1076,7 +1127,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 				// F748 also corrects airborne actors. Do not bypass presentation
 				// smoothing just because a jump/velocity packet is active.
 				const float Alpha = 1.f-FMath::Exp(-RemotePositionSmoothing*Step);
-				FVector Display = FMath::Lerp(GetActorLocation(), RemotePredictLocation, Alpha);
+				FVector Display = InterpolateRemoteLocation(RemotePredictLocation, Step, RemotePredictLocation-PredictionStart);
 				if (!bHavePhysicsVelocity) ClampLocationToGround(Display);
 				SetActorLocation(Display);
 				SetActorRotation(FQuat::Slerp(GetActorQuat(),RemotePredictRotation,Alpha).GetNormalized());
@@ -1332,13 +1383,18 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			// Ground at the prediction's own XY before sweeping, otherwise an
 			// uphill horizontal sweep repeatedly collides with the rising floor.
 			const bool Creature=bIsPlayer || (ItemType & ACEItemType::Creature);
-			if (Creature) ClampLocationToGround(RemotePredictLocation,&RemotePredictRotation);
+			// ResolvePredictedMovement seats supported walking steps before the body sweep.
 			const FVector Resolved=ResolvePredictedMovement(PredictionStart, RemotePredictLocation);
 			const bool XYChanged=FVector::DistSquared2D(Resolved,RemotePredictLocation)>.0001;
 			RemotePredictLocation=Resolved;
 			if (Creature && XYChanged) ClampLocationToGround(RemotePredictLocation,&RemotePredictRotation);
 			const float Alpha = 1.f - FMath::Exp(-RemotePositionSmoothing * DeltaTime);
-			FVector NextLoc = FMath::Lerp(GetActorLocation(), RemotePredictLocation, Alpha);
+			FVector DisplayMovement = RemotePredictLocation-PredictionStart;
+			// Ground seating already corrects the displayed feet at their own XY.
+			// Reapplying a predictor's vertical contact correction to those feet can
+			// drive them below a platform after a slightly elevated server packet.
+			if (bClampToGround) DisplayMovement.Z = 0;
+			FVector NextLoc = InterpolateRemoteLocation(RemotePredictLocation,DeltaTime,DisplayMovement);
 			// Always seat Z for grounded remotes within the band — continuous XY integrate
 			// used to leave feet floating between sparse F748s.
 			// Match initial placement: Stuck signs/wall props retain the server's Z
@@ -1383,6 +1439,33 @@ bool AACEWorldEntityActor::ResolveIndoorOccupancy(const FVector& AtLocation, uin
 	return false;
 }
 
+FVector AACEWorldEntityActor::InterpolateRemoteLocation(const FVector& Target, float DeltaTime, const FVector& Movement) const
+{
+	const float Dt=FMath::Max(0.f,DeltaTime);
+	// Transport the simulated step directly; only smooth the network error.
+	// Filtering ordinary locomotion added a speed-dependent trailing offset and
+	// made every start/stop and sparse correction accelerate the visible body again.
+	FVector Transport=Movement;
+	if (!Transport.IsNearlyZero())
+	{
+		// A server correction can move the predictor just behind the displayed
+		// body. Never carry the body beyond that collision-constrained predictor
+		// at a ledge/wall, then spend subsequent frames smoothing it back.
+		const double Available=FVector::DotProduct(Target-GetActorLocation(),Transport)/Transport.SizeSquared();
+		Transport*=FMath::Clamp(Available,0.,1.);
+	}
+	const FVector Current=GetActorLocation()+Transport;
+	FVector Delta=(Target-Current)*(1.f-FMath::Exp(-RemotePositionSmoothing*Dt));
+	// Retail CInterpolationManager::adjust_offset limits correction to twice
+	// adjusted locomotion speed (7.5 AC/s when no speed is available). An
+	// exponential blend alone can move metres in one frame after a late packet.
+	// True teleports bypass this function at their explicit snap call sites.
+	const float Speed=2.f*FMath::Max(RemoteWalkSpeedAc,RemoteRunSpeedAc)
+		*FMath::Max(.05f,RemoteMotion.AnimPlayRate);
+	const float Limit=(Speed>KINDA_SMALL_NUMBER?Speed:7.5f)*WorldScale*GetActorScale3D().GetAbsMax()*Dt;
+	return Current+Delta.GetClampedToMaxSize(Limit);
+}
+
 void AACEWorldEntityActor::ApplyRemoteVRRoot(const FACEVRPose& Pose, float DeltaTime)
 {
 	const FVector TrackedRoot = Pose.Root * WorldScale;
@@ -1390,11 +1473,23 @@ void AACEWorldEntityActor::ApplyRemoteVRRoot(const FACEVRPose& Pose, float Delta
 		|| FVector::DistSquared(GetActorLocation(),TrackedRoot) > FMath::Square(RemoteSnapDistance*WorldScale);
 	bHaveVRPresentation = true;
 	VRPresentationTeleport = Pose.Teleport;
-	RemotePredictLocation = RemoteAnchorLocation = TrackedRoot;
-	FVector Display = Snap ? TrackedRoot : FMath::Lerp(GetActorLocation(),TrackedRoot,
-		1.f-FMath::Exp(-RemotePositionSmoothing*FMath::Max(0.f,DeltaTime)));
+	// The pose buffer intentionally renders older samples. Keep a newer F748
+	// correction intact so tracking loss/mode changes resume ordinary movement
+	// at the latest server position, rather than discarding it every render frame.
+	if (LastRemotePositionAt <= Pose.ReceivedAt)
+		RemotePredictLocation = RemoteAnchorLocation = TrackedRoot;
+	FVector Display = Snap ? TrackedRoot : InterpolateRemoteLocation(TrackedRoot,DeltaTime);
 	if (!bHavePhysicsVelocity) ClampLocationToGround(Display);
 	SetActorLocation(Display);
+}
+
+void AACEWorldEntityActor::EndRemoteVRRoot()
+{
+	if (!bHaveVRPresentation) return;
+	bHaveVRPresentation = false;
+	// Pose components keep ticking while a settled actor sleeps. Restore its
+	// movement/correction tick even when no additional packet arrives on expiry.
+	RefreshActorTickEnabled();
 }
 
 bool AACEWorldEntityActor::TraceGroundZ(const FVector& AtLocation, float& OutGroundZ, bool bCreatureSupport) const
@@ -1833,6 +1928,7 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position)
 	}
 	FVector NewLocation = Position.ToUnrealLocation(WorldScale);
 	FQuat NewRotation = Position.ToUnrealQuat();
+	LastRemotePositionAt = FPlatformTime::Seconds();
 	LastAceCellId = Position.CellId;
 	if (Appearance) Appearance->UpdateCellLighting(Position.CellId);
 	if (bHaveRemotePredict && (NewRotation | RemotePredictRotation) < 0.f)
@@ -1849,9 +1945,13 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position)
 			> FMath::Square(RemoteSnapDistance * WorldScale);
 
 	RemoteAnchorLocation = NewLocation;
-	// Every accepted F748 replaces the simulation anchor. Render interpolation
-	// smooths this correction; a two-metre dead zone cannot be used in melee combat.
-	RemotePredictLocation = NewLocation;
+	// Retail InterpolationManager completes position corrections within 0.05 AC.
+	// Keep sub-tolerance noise out of the predictor (especially sideways drift
+	// when running alongside someone). Larger corrections remain authoritative.
+	if (bSnap || !(bIsPlayer || (ItemType & ACEItemType::Creature))
+		|| !Position.bIsGrounded
+		|| FVector::DistSquared(RemotePredictLocation,NewLocation) >= FMath::Square(.05f*WorldScale))
+		RemotePredictLocation = NewLocation;
 	// MoveTo facing comes from travel direction each tick. Applying sparse F748 orientation
 	// here fought that Dir and flipped enemies ~1 Hz (looked like a ping-pong anim).
 	if (!bMoveTo || !bMoving)

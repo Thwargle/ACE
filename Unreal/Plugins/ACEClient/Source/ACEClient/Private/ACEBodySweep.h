@@ -7,6 +7,57 @@
 
 namespace ACEBodySweep
 {
+    inline bool IsUpperBodyContact(const FHitResult& Hit)
+    {
+        // These are explicit world shape queries, so the query-side bone name
+        // is otherwise unused. Preserve Item/FaceIndex for instanced geometry.
+        return Hit.MyBoneName==FName(TEXT("ACEUpperBodySphere"));
+    }
+    // Retail SPHEREPATH sweeps the lower and upper body spheres, not the
+    // cylinder connecting them. Filling that waist blocked otherwise clear
+    // passages beside creatures and caught the body on stair/pillar corners.
+    // Keep results in body-center space so all contact/step solvers agree.
+    inline bool SweepBody(UWorld& World, FHitResult& Hit, const FVector& From, const FVector& To,
+        const FCollisionShape& Body, const FCollisionQueryParams& Params)
+    {
+        const float Radius=Body.GetCapsuleRadius();
+        const double Offset=FMath::Max(0.f,Body.GetCapsuleHalfHeight()-Radius);
+        bool Found=false;Hit=FHitResult();
+        for(int32 I=0;I<(Offset>.001?2:1);++I)
+        {
+            const FVector Shift(0,0,I==0?-Offset:Offset);FHitResult Part;
+            if(!World.SweepSingleByChannel(Part,From+Shift,To+Shift,FQuat::Identity,ECC_Pawn,
+                FCollisionShape::MakeSphere(Radius),Params))continue;
+            Part.Location-=Shift;Part.TraceStart=From;Part.TraceEnd=To;
+            Part.MyBoneName=I==1?FName(TEXT("ACEUpperBodySphere")):NAME_None;
+            if(!Found || (Part.bStartPenetrating && !Hit.bStartPenetrating)
+                || (Part.bStartPenetrating==Hit.bStartPenetrating &&
+                    (Part.Time<Hit.Time || (Part.Time==Hit.Time && Part.PenetrationDepth>Hit.PenetrationDepth))))
+                Hit=Part;
+            Found=true;
+        }
+        return Found;
+    }
+    inline void SweepBodyContacts(UWorld& World,TArray<FHitResult>& Hits,const FVector& From,const FVector& To,
+        const FCollisionShape& Body,const FCollisionQueryParams& Params)
+    {
+        Hits.Reset();const float Radius=Body.GetCapsuleRadius();
+        const double Offset=FMath::Max(0.f,Body.GetCapsuleHalfHeight()-Radius);
+        for(int32 I=0;I<(Offset>.001?2:1);++I)
+        {
+            const FVector Shift(0,0,I==0?-Offset:Offset);TArray<FHitResult> Parts;
+            World.SweepMultiByChannel(Parts,From+Shift,To+Shift,FQuat::Identity,ECC_Pawn,FCollisionShape::MakeSphere(Radius),Params);
+            for(auto& Part:Parts){Part.Location-=Shift;Part.TraceStart=From;Part.TraceEnd=To;
+                Part.MyBoneName=I==1?FName(TEXT("ACEUpperBodySphere")):NAME_None;Hits.Add(Part);}
+        }
+    }
+    inline bool OverlapsBody(UWorld& World,const FVector& Center,const FCollisionShape& Body,const FCollisionQueryParams& Params)
+    {
+        const float R=Body.GetCapsuleRadius(),Offset=FMath::Max(0.f,Body.GetCapsuleHalfHeight()-R);
+        for(float Z:{-Offset,Offset})
+            if(World.OverlapBlockingTestByChannel(Center+FVector(0,0,Z),FQuat::Identity,ECC_Pawn,FCollisionShape::MakeSphere(R),Params))return true;
+        return false;
+    }
     inline bool IsCreatureBody(const FHitResult& Hit)
     {
         return Hit.Component.IsValid() && Hit.Component->ComponentTags.Contains(TEXT("ACECreatureBody"));
@@ -40,7 +91,7 @@ namespace ACEBodySweep
         constexpr float Skin=1.f;
         const auto Expanded=FCollisionShape::MakeCapsule(Capsule.GetCapsuleRadius()+Skin,
             Capsule.GetCapsuleHalfHeight()+Skin);
-        World.SweepMultiByChannel(Contacts,From,From+FVector(0,0,.001f),FQuat::Identity,ECC_Pawn,Expanded,Params);
+        SweepBodyContacts(World,Contacts,From,From+FVector(0,0,.001f),Expanded,Params);
         Contacts.RemoveAll([](const FHitResult& H) { return !H.bBlockingHit
             || (!H.bStartPenetrating && H.Time>KINDA_SMALL_NUMBER); });
         if (Contacts.IsEmpty()) return From;
@@ -55,7 +106,7 @@ namespace ACEBodySweep
         }
         // The expanded probe also touches the supporting floor. Its artificial
         // skin must not lift a grounded body while resolving lateral contacts.
-        Contacts.RemoveAll([](const FHitResult& C){return !IsCreatureBody(C)
+        Contacts.RemoveAll([](const FHitResult& C){return !IsCreatureBody(C) && !IsUpperBodyContact(C)
             && C.Normal.Z>=.6641741f && C.PenetrationDepth<=Skin+0.05f;});
         // The minimum separation in 3D lies on one, two or three contact planes.
         // Repeated projections converge too slowly between nearly opposing
@@ -101,7 +152,7 @@ namespace ACEBodySweep
             }
             if(!Found) return From;
             TArray<FHitResult> More;
-            World.SweepMultiByChannel(More,From+Push,From+Push+FVector(0,0,.001f),FQuat::Identity,ECC_Pawn,Expanded,Params);
+            SweepBodyContacts(World,More,From+Push,From+Push+FVector(0,0,.001f),Expanded,Params);
             bool bAdded=false;
             for(auto C:More)
             {
@@ -113,7 +164,7 @@ namespace ACEBodySweep
                     if(Horizontal<KINDA_SMALL_NUMBER)return From;
                     C.Normal/=Horizontal;C.Normal.Z=0;C.PenetrationDepth/=Horizontal;
                 }
-                if(!IsCreatureBody(C) && C.Normal.Z>=.6641741f
+                if(!IsCreatureBody(C) && !IsUpperBodyContact(C) && C.Normal.Z>=.6641741f
                     && C.PenetrationDepth<=Skin+.05f)continue;
                 C.PenetrationDepth+=FVector::DotProduct(Push,C.Normal);
                 auto* Existing=Contacts.FindByPredicate([&](const FHitResult& H){return H.Component==C.Component
@@ -127,10 +178,10 @@ namespace ACEBodySweep
         }
         if(!bClear)return From;
         TArray<FHitResult> Escape;
-        World.SweepMultiByChannel(Escape,From+Push,From,FQuat::Identity,ECC_Pawn,Capsule,Params);
+        SweepBodyContacts(World,Escape,From+Push,From,Capsule,Params);
         for (const auto& H:Escape)
         {
-            if (!H.bBlockingHit || H.ImpactNormal.Z>=.6641741f) continue;
+            if (!H.bBlockingHit || (!IsUpperBodyContact(H) && H.ImpactNormal.Z>=.6641741f)) continue;
             const bool Existing=Contacts.ContainsByPredicate([&](const FHitResult& C) {
                 // Initial overlap normals are capsule separation vectors, not
                 // necessarily the face normal returned by the reverse sweep.
@@ -147,10 +198,10 @@ namespace ACEBodySweep
         const FVector Delta = Push.GetClampedToMaxSize(Capsule.GetCapsuleRadius()*2.f);
         const FVector Candidate = From + Delta;
         TArray<FHitResult> Hits;
-        World.SweepMultiByChannel(Hits,Candidate,From,FQuat::Identity,ECC_Pawn,Capsule,Params);
+        SweepBodyContacts(World,Hits,Candidate,From,Capsule,Params);
         for (const auto& Hit : Hits)
         {
-            if (!Hit.bBlockingHit || Hit.ImpactNormal.Z >= .6641741f) continue;
+            if (!Hit.bBlockingHit || (!IsUpperBodyContact(Hit) && Hit.ImpactNormal.Z >= .6641741f)) continue;
             // Contact skin on a neighboring wall must not prevent recovery
             // parallel to that wall (for example, down a stair beside it).
             // Only waive a time-zero, shallow contact that is not worsening;
@@ -166,6 +217,77 @@ namespace ACEBodySweep
                 return From;
         }
         return Candidate;
+    }
+
+    // A body already inside a thin wall can overlap both opposing faces. Chaos
+    // then supplies mutually incompatible per-triangle MTD planes. Retail's
+    // placement insertion searches for a clear sphere position instead of
+    // keeping an impossible contact set forever. Search along existing contact
+    // directions, within one body diameter, and reverse-sweep each clear candidate
+    // to reject any newly crossed solid. This is never used for ordinary travel.
+    inline FVector RecoverEmbedded(UWorld& World, const FVector& From,
+        const FCollisionShape& Body, const FCollisionQueryParams& Params)
+    {
+        TArray<FHitResult> Initial;
+        SweepBodyContacts(World,Initial,From,From+FVector(0,0,.001),Body,Params);
+        Initial.RemoveAll([](const FHitResult& H){return !H.bStartPenetrating || H.PenetrationDepth<=.05f;});
+        if(Initial.IsEmpty() || Initial.ContainsByPredicate([](const FHitResult& H){return IsCreatureBody(H);}))return From;
+        TArray<FVector,TInlineAllocator<8>> Directions;
+        for(const auto& H:Initial)
+        {
+            const FVector N=H.Normal.GetSafeNormal();
+            if(!N.IsNearlyZero())Directions.AddUnique(N);
+            const FVector Horizontal=N.GetSafeNormal2D();
+            if(!Horizontal.IsNearlyZero())Directions.AddUnique(Horizontal);
+        }
+        // Deep overlaps on both spheres can put their centers inside a wall;
+        // its nearest triangle normal may point toward the opposite wall face.
+        // Consider the other side only for that embedded state, never for the
+        // shallow contact/precision skin encountered by an ordinary sweep.
+        if(Initial.ContainsByPredicate([&](const FHitResult& H){return !IsUpperBodyContact(H) && H.PenetrationDepth>Body.GetCapsuleRadius()*.25f;})
+            && Initial.ContainsByPredicate([&](const FHitResult& H){return IsUpperBodyContact(H) && H.PenetrationDepth>Body.GetCapsuleRadius()*.25f;}))
+        {
+            const int32 Count=Directions.Num();
+            for(int32 I=0;I<Count;++I)Directions.AddUnique(-Directions[I]);
+        }
+        const int32 DirectionCount=Directions.Num();
+        for(int32 I=0;I<DirectionCount;++I)for(int32 J=I+1;J<DirectionCount;++J)
+        {
+            const FVector Diagonal=(Directions[I]+Directions[J]).GetSafeNormal();
+            if(!Diagonal.IsNearlyZero())Directions.AddUnique(Diagonal);
+        }
+        const double Radius=Body.GetCapsuleRadius();
+        double Best=Radius*2.+1.;FVector Result=From;
+        auto Clear=[&](const FVector& At)
+        {
+            TArray<FHitResult> Contacts;
+            SweepBodyContacts(World,Contacts,At,At+FVector(0,0,.001),Body,Params);
+            return !Contacts.ContainsByPredicate([](const FHitResult& H){return H.bBlockingHit && H.PenetrationDepth>.05f;});
+        };
+        for(const FVector& N:Directions)
+        {
+            double Previous=0.;
+            for(double Distance=Radius*.25;Distance<=Radius*2. && Distance<Best+Radius*.25;Distance+=Radius*.25)
+            {
+                if(!Clear(From+N*Distance)){Previous=Distance;continue;}
+                double Low=Previous,High=Distance;
+                for(int32 I=0;I<8;++I){const double Mid=(Low+High)*.5;if(Clear(From+N*Mid))High=Mid;else Low=Mid;}
+                const FVector Delta=N*(High+.2),Candidate=From+Delta;
+                TArray<FHitResult> Reverse;SweepBodyContacts(World,Reverse,Candidate,From,Body,Params);
+                bool Valid=Clear(Candidate);
+                for(const auto& H:Reverse)
+                {
+                    if(!H.bBlockingHit)continue;
+                    if(H.Time<=KINDA_SMALL_NUMBER && H.PenetrationDepth<=.05f
+                        && FVector::DotProduct(H.Normal,Delta)>=-.001)continue;
+                    if(H.bStartPenetrating || FVector::DotProduct(H.ImpactNormal,Delta)<=0.
+                        || !Initial.ContainsByPredicate([&](const FHitResult& C){return C.Component==H.Component;}))Valid=false;
+                }
+                if(Valid && Delta.Size()<Best){Best=Delta.Size();Result=Candidate;}
+                break;
+            }
+        }
+        return Result;
     }
 
     inline FVector Recover(UWorld& World, const FVector& From, const FVector& Push,
@@ -198,7 +320,7 @@ namespace ACEBodySweep
             const float Clearance=FMath::Max(Original.PenetrationDepth+.5f,FVector::DotProduct(Push,Normal));
             return RecoverAlong(World,From,FVector(Normal.X,Normal.Y,0)*(Clearance/HorizontalSq),Original,Capsule,Params);
         }
-        return From;
+        return RecoverEmbedded(World,From,Capsule,Params);
     }
 
     // CTransition::step_down tests the lower sphere, not just the center ray.
@@ -259,8 +381,7 @@ namespace ACEBodySweep
             const FVector Lift(0,0,FloorClearance*.5f);
             const float Radius=Capsule.GetCapsuleRadius()-SideClearance;
             const float Half=Capsule.GetCapsuleHalfHeight()-SideClearance-FloorClearance*.5f;
-            const bool bHit=World.SweepSingleByChannel(Hit,From+Lift,To+Lift,FQuat::Identity,ECC_Pawn,
-                FCollisionShape::MakeCapsule(Radius,Half),Params);
+            const bool bHit=SweepBody(World,Hit,From+Lift,To+Lift,FCollisionShape::MakeCapsule(Radius,Half),Params);
             // The caller resolves the original full-height capsule center.
             if (bHit) Hit.Location-=Lift;
             if (!bHit || Hit.Time>KINDA_SMALL_NUMBER) return bHit;
@@ -275,7 +396,7 @@ namespace ACEBodySweep
                 SideClearance=.1f;
                 continue;
             }
-            if (bMayClearFloor && !IsCreatureBody(Hit) && Hit.Normal.Z>=.6641741f && FloorRetries<3)
+            if (bMayClearFloor && !IsUpperBodyContact(Hit) && !IsCreatureBody(Hit) && Hit.Normal.Z>=.6641741f && FloorRetries<3)
             {
                 const float Next=FloorClearance+FMath::Max(0.f,Hit.PenetrationDepth)/Hit.Normal.Z+1.f;
                 if (Capsule.GetCapsuleHalfHeight()-SideClearance-Next*.5f>=Radius)
@@ -310,7 +431,7 @@ namespace ACEBodySweep
                 Position=Hit.Location;
                 Remaining*=1.f-Hit.Time;
             }
-            if(Hit.Normal.Z>=.6641741f && !IsCreatureBody(Hit))
+            if(Hit.Normal.Z>=.6641741f && !IsUpperBodyContact(Hit) && !IsCreatureBody(Hit))
             {
                 // Grounded ramp following is vertical, not an uphill speed boost.
                 Remaining.Z=FMath::Max(Remaining.Z,
@@ -380,7 +501,7 @@ namespace ACEBodySweep
             ++SolidContacts;
             // A just-launched body may still touch its support. Only clear that
             // initial floor while leaving it, never while falling back into it.
-            if (bHit && Hit.Time<=KINDA_SMALL_NUMBER && Hit.ImpactNormal.Z>=.6641741f
+            if (bHit && !IsUpperBodyContact(Hit) && Hit.Time<=KINDA_SMALL_NUMBER && Hit.ImpactNormal.Z>=.6641741f
                 && Hit.PenetrationDepth<.5f && FVector::DotProduct(Remaining,Hit.ImpactNormal)>0.f)
                 bHit=Sweep(World,Hit,Start,Start+Remaining,Capsule,AirParams);
             if (!bHit) { Result.Position=Start+Remaining; break; }
@@ -412,7 +533,7 @@ namespace ACEBodySweep
                 break;
             }
             Result.Position=Hit.Location+Normal*.1f;
-            if (bFalling && Normal.Z>=LandingZ && Remaining.Z<0.f)
+            if (bFalling && !IsUpperBodyContact(Hit) && Normal.Z>=LandingZ && Remaining.Z<0.f)
             { Result.bLanded=true; break; }
             Remaining*=1.f-Hit.Time;
             const float Into=FVector::DotProduct(Remaining,Normal);
@@ -448,7 +569,7 @@ namespace ACEBodySweep
         if (Sweep(World,Hit,Lifted,Reach,Capsule,Params)) return false;
         if (Sweep(World,Hit,Reach,Landed,Capsule,Params))
         {
-            if (Hit.bStartPenetrating || Hit.Normal.Z<WalkableNormalZ
+            if (Hit.bStartPenetrating || IsUpperBodyContact(Hit) || Hit.Normal.Z<WalkableNormalZ
                 || Hit.Location.Z>Landed.Z+Capsule.GetCapsuleRadius()+1.f) return false;
             // At a tread's edge the sphere touches before its center reaches
             // the ray's floor height. Keep that contact, never embed the foot.

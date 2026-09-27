@@ -141,13 +141,24 @@ bool FACEFortTethStairsTest::RunTest(const FString&)
   const FHitResult* Nearest=nullptr;
   for(const auto& Wall:Reference)
    if(Wall.bBlockingHit && FMath::Abs(Wall.ImpactNormal.Z)<.3f && (!Nearest || Wall.Distance<Nearest->Distance))Nearest=&Wall;
+  // Some reported /loc points are already inside a solid parapet. Start the
+  // no-tunnelling walk on its clear exterior side; leaving an initially solid
+  // position is tested separately below and necessarily crosses its boundary.
+  FHitResult Exterior;TArray<FHitResult> Initial;
+  ACEBodySweep::SweepBodyContacts(*World,Initial,Center,Center+FVector(0,0,.001),FCollisionShape::MakeCapsule(Capsule->GetScaledCapsuleRadius(),Half),Query);
+  if(Nearest && Initial.ContainsByPredicate([](const FHitResult& H){return H.bStartPenetrating && H.PenetrationDepth>1.f && FMath::Abs(H.Normal.Z)<.5f;})
+   && World->LineTraceSingleByChannel(Exterior,Nearest->TraceEnd,Center,ECC_Pawn,Query))
+  {
+   const FVector ClearCenter=Exterior.ImpactPoint+Exterior.ImpactNormal*(Capsule->GetScaledCapsuleRadius()+1.f);
+   Pose.SetLocationFromUnreal(ClearCenter-FVector(0,0,Half),100);Nearest=&Exterior;
+  }
   if(Nearest)for(bool Tracked:{false,true})for(float Dt:{1.f/90,1.f/30})for(int32 Skill:{100,593})
   {
    Session->PlayerVitals.bValid=true;Session->PlayerVitals.RunSkillCurrent=Skill;
    Session->PlayerVitals.Health=Session->PlayerVitals.Stamina=500;
    Session->PlayerVitals.MaxHealth=Session->PlayerVitals.MaxStamina=500;
    Session->OnVitalsUpdated.Broadcast(Session->PlayerVitals);
-   const FVector Direction=(Nearest->TraceEnd-Nearest->TraceStart).GetSafeNormal2D();
+   const FVector Direction=-Nearest->ImpactNormal.GetSafeNormal2D();
    Pose.SetAceFacingFromUnrealDir2D(Direction);Place(Pose);VR->bActive=Tracked;
    Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));
    Controller->PlayerInput->ProcessInputStack({},1.f/30,false);
@@ -190,29 +201,32 @@ bool FACEFortTethStairsTest::RunTest(const FString&)
  Session->PlayerVitals.bValid=false;Session->OnVitalsUpdated.Broadcast(Session->PlayerVitals);
  // Reported center-post/stairwell wedge: ordinary directional movement must
  // offer a way back out, without jumping or crossing the post/stair geometry.
- for(const FVector Reported:{FVector(19.925781,21.117188,42.084137),FVector(19.773438,20.980469,43.302933)})
+ for(const auto& Entry:TArray<TPair<uint32,FVector>>{{0xC6A901AE,FVector(19.925781,21.117188,42.084137)},{0xC6A901AE,FVector(19.773438,20.980469,43.302933)},{0xE454001E,FVector(79.808594,133.745117,20.761185)},{0xE454001E,FVector(79.648438,134.835938,20.869003)}})
  for(bool Tracked:{false,true})for(float Dt:{1.f/90,1.f/30})
  {
   VR->bActive=Tracked;int32 Escapes=0;
   for(int32 Yaw=0;Yaw<360;Yaw+=30)
   {
    const FVector Travel=FRotator(0,Yaw,0).Vector();
-   FACEPosition Pose;Pose.CellId=0xC6A901AE;Pose.Location=Reported;
+   FACEPosition Pose;Pose.CellId=Entry.Key;Pose.Location=Entry.Value;
    Pose.SetAceFacingFromUnrealDir2D(Travel);Place(Pose);Refresh();
    const FVector Start=Pawn->GetActorLocation();
    Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));
    Controller->PlayerInput->ProcessInputStack({},Dt,false);
    int32 AirFrames=0;
-   for(int32 Frame=0;Frame<FMath::CeilToInt(1.5f/Dt);++Frame)
+   for(int32 Frame=0;Frame<FMath::CeilToInt((Entry.Key==0xE454001E?3.f:1.5f)/Dt);++Frame)
    {
     VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,175-Half),Travel.Rotation());
     VR->MoveStick=FVector2D(0,1);Refresh();Controller->PlayerTick(Dt);
     AirFrames+=Controller->bJumpAirborne?1:0;
-    if(FVector::Dist2D(Start,Pawn->GetActorLocation())>150)break;
+    if(FVector::Dist2D(Start,Pawn->GetActorLocation())>150 && !Controller->bJumpAirborne)break;
    }
    const double Distance=FVector::Dist2D(Start,Pawn->GetActorLocation());
-   if(Distance>100 && AirFrames==0)++Escapes;
-   AddInfo(FString::Printf(TEXT("Center post C6A901AE tracked=%d hz=%.0f yaw=%d travel=%.1f air=%d"),Tracked,1.f/Dt,Yaw,Distance,AirFrames));
+   // These Mosswart reports are already embedded in the parapet (confirmed
+   // against retail's BSP). Recovery may drop to a lower tread, but it must
+   // finish grounded and controllable. Valid center-post starts stay grounded.
+   if(Distance>100 && !Controller->bJumpAirborne && (Entry.Key==0xE454001E || AirFrames==0))++Escapes;
+   AddInfo(FString::Printf(TEXT("Stair/post %08X tracked=%d hz=%.0f yaw=%d travel=%.1f air=%d"),Entry.Key,Tracked,1.f/Dt,Yaw,Distance,AirFrames));
    Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},Dt,false);VR->MoveStick=FVector2D::ZeroVector;
   }
   TestTrue(*FString::Printf(TEXT("Center post allows ordinary escape without a jump tracked=%d hz=%.0f exits=%d"),Tracked,1.f/Dt,Escapes),Escapes>=4);

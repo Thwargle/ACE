@@ -21,6 +21,17 @@ bool FACEVRSceneryCollisionTest::RunTest(const FString&)
  Context.OwningGameInstance=GI;Context.SetCurrentWorld(World);GI->Init();
  auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
  if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+ // Retail suppresses the entire occupied outdoor sort cell, including the
+ // open Mosswart courtyard at E4540015; neighboring unoccupied cells retain flora.
+ for(uint32 Block:{0xE4540000u,0x7D640000u})
+ {
+  FACEDatLandblockInfo Info;Dat->LoadLandblockInfo(Block,Info);
+  TSet<int32> Occupied;for(const auto& B:Info.Buildings)Occupied.Add(FMath::FloorToInt(B.Origin.X/24)*8+FMath::FloorToInt(B.Origin.Y/24));
+  TArray<FACEDatRegionSceneryItem> Items;Dat->CollectRegionScenery(Block,100,Items);
+  for(const auto& Item:Items)
+   TestFalse(TEXT("Generated scenery never occupies a retail building sort cell"),Occupied.Contains(FMath::FloorToInt(Item.OriginAc.X/24)*8+FMath::FloorToInt(Item.OriginAc.Y/24)));
+  TestTrue(TEXT("Scenery outside the fort/building cells is retained"),Items.Num()>0);
+ }
  TArray<FACEDatRegionSceneryItem> Objects;
  for(uint32 Landblock : {0xA9B40000u, 0x7D640000u})
  {

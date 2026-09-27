@@ -2,7 +2,7 @@
 #include "Misc/AutomationTest.h"
 #include "VR/ACEVRPose.h"
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEVRPoseBufferTest,"ACE.VR.PoseBuffer",
- EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+ EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACEVRPoseBufferTest::RunTest(const FString&)
 {
  FACERemoteVRPose Buffer;
@@ -22,6 +22,16 @@ bool FACEVRPoseBufferTest::RunTest(const FString&)
   }
  }
  TestEqual(TEXT("History bounded"),Buffer.History.Num(),8);
+ auto Equip=Buffer.Current;++Equip.Sequence;Equip.ReceivedAt+=.05;Equip.Root=FVector(10,0,2);
+ Equip.Weapon=10;Equip.Ammo=20;
+ Equip.Poses[0].SetLocation(FVector(.1,0,1.7));
+ Equip.Poses[3].SetLocation(FVector(0,1,1));Equip.Poses[4].SetLocation(FVector(0,2,1));
+ Buffer.Add(Equip);
+ const auto MidEquip=Buffer.Sample(Equip.ReceivedAt+.05); // halfway between old and new equipment
+ TestTrue(TEXT("Equipping preserves walking interpolation rather than teleporting to latest root"),MidEquip.Root.Equals(FVector(9.75,0,1.95),.001));
+ TestTrue(TEXT("Head tracking stays continuous across equipment changes"),MidEquip.Poses[0].GetLocation().Equals(FVector(.05,0,1.7),.001));
+ TestTrue(TEXT("New equipment uses its own pose instead of blending from an unrelated item"),
+  MidEquip.Poses[3].Equals(Equip.Poses[3],.001) && MidEquip.Poses[4].Equals(Equip.Poses[4],.001));
  auto Old=Buffer.Current;--Old.Sequence;TestFalse(TEXT("Reordered pose rejected"),Buffer.Add(Old));
  auto Portal=Buffer.Current;++Portal.Sequence;++Portal.Teleport;Portal.Root=FVector(500,500,500);Portal.ReceivedAt+=.05;
  Buffer.Add(Portal);TestEqual(TEXT("Teleport clears interpolation history"),Buffer.History.Num(),1);

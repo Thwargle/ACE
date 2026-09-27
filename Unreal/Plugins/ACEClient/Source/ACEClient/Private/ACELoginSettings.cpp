@@ -56,6 +56,7 @@ namespace ACELoginSettings
 			Json->SetStringField(TEXT("selectedServer"), Settings.SelectedServerId);
 			Json->SetStringField(TEXT("selectedAccount"), Settings.SelectedAccountId);
 			Json->SetStringField(TEXT("datDirectory"), Settings.DatDirectory);
+			Json->SetBoolField(TEXT("autoUpdate"), Settings.bAutoUpdate);
 			TArray<TSharedPtr<FJsonValue>> Servers, Accounts;
 			for (const auto& S : Settings.Servers)
 			{
@@ -145,6 +146,8 @@ namespace ACELoginSettings
 			Json->TryGetStringField(TEXT("selectedServer"), Loaded.SelectedServerId);
 			Json->TryGetStringField(TEXT("selectedAccount"), Loaded.SelectedAccountId);
 			Json->TryGetStringField(TEXT("datDirectory"), Loaded.DatDirectory);
+			// Missing on existing installations: automatic installation is opt-in.
+			Json->TryGetBoolField(TEXT("autoUpdate"), Loaded.bAutoUpdate);
 			const TArray<TSharedPtr<FJsonValue>> *Servers = nullptr, *Accounts = nullptr;
 			if (!Json->TryGetArrayField(TEXT("servers"), Servers) || !Json->TryGetArrayField(TEXT("accounts"), Accounts)
 				|| Servers->Num() > 128 || Accounts->Num() > 512) return false;

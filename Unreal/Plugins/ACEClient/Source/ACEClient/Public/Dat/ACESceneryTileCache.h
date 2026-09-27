@@ -6,7 +6,7 @@
 /** On-disk RegionDesc scenery placement list per landblock. */
 namespace ACESceneryTileCache
 {
-	static constexpr uint32 SchemaVersion = 1u;
+	static constexpr uint32 SchemaVersion = 2u;
 	static constexpr uint32 Magic = 0x43534341u; // 'ACSC'
 
 	FString MakeCacheFilePath(uint32 LandblockId, float WorldScale, uint64 DatFingerprint);

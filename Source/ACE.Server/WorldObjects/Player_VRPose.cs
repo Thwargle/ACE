@@ -25,11 +25,30 @@ namespace ACE.Server.WorldObjects
             var now = DateTime.UtcNow;
             if (now < vrNextPose) return;
             vrNextPose = now.AddMilliseconds(40); // max 25 Hz; client normally sends 20 Hz
+            // AutoPos can already be queued when the tracked pose is dispatched,
+            // but the landblock physics tick has not consumed it yet. Run the
+            // normal validation/collision path before publishing the root. Never
+            // substitute an unchecked client position or reorder cell crossings.
+            if (RequestedLocation != null && RequestedLocation.Cell == Location.Cell)
+            {
+                var requested = RequestedLocation;
+                RequestedLocation = null;
+                var wasUpdating = InUpdate;
+                try
+                {
+                    InUpdate = true; // Same cell, no landblock relocation.
+                    UpdatePlayerPosition(requested);
+                }
+                finally { InUpdate = wasUpdating; }
+                // Collision can trigger a portal/death; do not relay the old epoch.
+                if (Teleporting || !IsAlive || pose.Cell != Location.Cell
+                    || pose.Teleport != BitConverter.ToUInt16(Sequences.GetCurrentSequence(SequenceType.ObjectTeleport), 0)) return;
+            }
             vrLastTrackedPose = (pose.Flags & 4u) != 0 ? now : DateTime.MinValue;
-            // Sending this new, validated opcode is explicit opt-in. A retail
-            // client or an older VR client never receives an unfamiliar event.
+            // Preserve implicit opt-in for older VR clients. New desktop/VR
+            // clients may instead subscribe without sending any tracked poses.
             vrPoseSubscribed = true;
-            vrPoseVersion=pose.Version;
+            vrPoseVersion=Math.Max(vrPoseVersion,pose.Version);
             var weapon=GetEquippedMissileWeapon();
             var ammo=weapon?.IsAmmoLauncher==true ? GetEquippedAmmo() : null;
             if (pose.Weapon!=weapon?.Guid.Full) pose.Weapon=0;

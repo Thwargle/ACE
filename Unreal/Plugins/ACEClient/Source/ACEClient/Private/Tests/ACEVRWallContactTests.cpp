@@ -63,6 +63,18 @@ bool FACEVRWallContactTest::RunTest(const FString&)
  }
  const auto Shape=FCollisionShape::MakeCapsule(48,90.75);
  FCollisionQueryParams Query(SCENE_QUERY_STAT(VRWallContactRegression),true);
+ // A ledge intersecting only the upper sphere is an obstruction even when
+ // its separating normal points upward. It must never receive foot clearance.
+ {
+  const FVector Base=Contact+FVector(-5000,5000,1000);
+  auto* A=World->SpawnActor<AActor>();auto* Ledge=NewObject<UBoxComponent>(A);A->SetRootComponent(Ledge);
+  Ledge->SetBoxExtent(FVector(200,200,2));Ledge->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+  Ledge->SetCollisionResponseToAllChannels(ECR_Block);Ledge->RegisterComponent();A->SetActorLocation(Base+FVector(0,0,150));
+  FHitResult Upper;const FVector Center=Base+FVector(0,0,130);
+  TestTrue(TEXT("Upper-sphere ledge survives floor-clearance retries"),ACEBodySweep::Sweep(*World,Upper,Center,Center+FVector(0,20,0),Shape,Query));
+  TestTrue(TEXT("Upward upper contact is distinguishable from foot support"),ACEBodySweep::IsUpperBodyContact(Upper) && Upper.Normal.Z>.66);
+  A->Destroy();
+ }
  // Two initially overlapping walls must be recovered together. Exercise the
  // large coordinates used in the world and verify the opposite wall still blocks.
  {

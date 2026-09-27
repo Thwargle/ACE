@@ -73,7 +73,7 @@ bool FACESession::SendVRDrop(uint32 Cell, int32 Item, int32 SplitAmount, const F
 	W.WriteUInt32(1); W.WriteUInt32(6); W.WriteUInt32(++VRSequence); W.WriteUInt32(Cell);
 	W.WriteUInt32(TeleportSeq); W.WriteUInt32(Item); W.WriteUInt32(SplitAmount);
 	W.WriteFloat(OriginAc.X); W.WriteFloat(OriginAc.Y); W.WriteFloat(OriginAc.Z);
-	FlushAutonomousPosition(true);
+	FlushAutonomousPosition(bAutoPosContact);
 	SendGameAction(0xF7D0, W.GetData(), ACEQueue::WeenieQueue);
 	return true;
 }
@@ -92,6 +92,9 @@ bool FACESession::SendVRPose(FACEVRPose Pose)
 		if (P.ContainsNaN() || Q.ContainsNaN()) return false;
 		for (double V : {P.X, P.Y, P.Z, Q.X, Q.Y, Q.Z, Q.W}) W.WriteFloat(V);
 	}
+	// Keep the authoritative feet report on the pose cadence. Independent
+	// timers can otherwise attach fresh hands to the previous position.
+	FlushAutonomousPosition(bAutoPosContact);
 	SendGameAction(0xF7D1, W.GetData(), ACEQueue::WeenieQueue);
 	LastVRPoseSent=FPlatformTime::Seconds();
 	if (VRPoseSequence == 1) Log(TEXT("VR pose stream started: head and both hands, 20 Hz"));
@@ -174,9 +177,30 @@ void FACESession::SendCancelAttack()
 	if (State == EACESessionState::InWorld) SendGameAction(ACEGameAction::CancelAttack, {}, ACEQueue::WeenieQueue);
 }
 
-void FACESession::RequestVRCapabilities()
+void FACESession::SendVRSubscriptions()
 {
 	if (State != EACESessionState::InWorld) return;
+	uint32 Features = 0;
+	if (bLocalVRFeedback)
+		Features = (SupportsHealthFeedback() ? 1u : 0u) | (SupportsVRRecovery() ? 2u : 0u)
+			| (SupportsVRCasting() ? 4u : 0u) | ((VRCapabilities & 8192u) ? 8u : 0u);
+	if (SupportsVRPoses() && (VRCapabilities & 131072u))
+		Features |= 16u | ((VRCapabilities & 32768u) ? 32u : 0u);
+	if (!Features) return;
+	FACEBinaryWriter W; W.WriteUInt32(1); W.WriteUInt32(4); W.WriteUInt32(Features);
+	SendGameAction(0xF7D0, W.GetData(), ACEQueue::WeenieQueue);
+}
+
+void FACESession::RequestVRCapabilities(bool bLocalVR)
+{
+	if (State != EACESessionState::InWorld) return;
+	if (bLocalVR && !bLocalVRFeedback)
+	{
+		// A headset can activate after the shared receive-only handshake. Enable
+		// its UI feedback immediately, even if the server rate-limits this hello.
+		bLocalVRFeedback = true;
+		SendVRSubscriptions();
+	}
 	FACEBinaryWriter W; W.WriteUInt32(1); W.WriteUInt32(0);
 	SendGameAction(0xF7D0, W.GetData(), ACEQueue::WeenieQueue);
 }
@@ -224,7 +248,9 @@ bool FACESession::SendVRCombat(uint32 Kind, uint32 Cell, int32 Weapon, int32 Sub
 		VRAimCastSequence=VRSequence; VRAimSpell=Subject; VRAimWeapon=Weapon;
 		VRCastEpoch=TeleportSeq; VRAimUntil=FPlatformTime::Seconds()+3.; VRNextAim=0.;
 	}
-	FlushAutonomousPosition(true);
+	// Casting must report actual collision contact, not claim a midair player
+	// has landed. The controller refreshes this after resolving each movement step.
+	FlushAutonomousPosition(bAutoPosContact);
 	SendGameAction(0xF7D0, W.GetData(), ACEQueue::WeenieQueue);
 	return true;
 }

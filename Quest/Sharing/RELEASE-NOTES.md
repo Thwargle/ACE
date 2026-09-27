@@ -1,64 +1,70 @@
-# AC:Unreal / AC:VR release 81
+# AC:Unreal / AC:VR release 82
 
-Windows desktop, PC VR, and native Quest: 2026.09.26.81.
-Release number / Android version code: 81. Quest installer revision: 6.
+Windows desktop, PC VR, and native Quest: 2026.09.27.82.
+Release number / Android version code: 82. Quest installer revision: 6.
 
-## Changes since public release v80
+## Changes since public release v81
 
-### Camera and field of view
+### Network movement and mixed desktop/VR play
 
-- Preview desktop FOV immediately while moving the Config slider. Apply saves
-  the value; Reset restores it. Leaving Config ends an unapplied preview.
-- Use retail's 10–160 degree FOV preference range and aspect-ratio conversion.
-  Existing FOV preferences migrate automatically.
-- Correct keyboard and mouse-wheel zoom timing, near/far limits, first-person
-  behavior, and distance smoothing using the retail camera calculations.
-- Preserve the configured FOV in portal space and the return-to-world blend.
+- Desktop clients can receive and display VR head, hand, body, and equipment
+  movement without having a headset. Standard movement and animation updates
+  continue to work in both directions.
+- Smooth network corrections without smoothing away normal running speed.
+  Reduce sideways correction noise, follow slopes, and stop predicted movement
+  at unsupported edges instead of running into empty space and snapping back.
+- Send current feet positions with tracked poses; retain head/hand movement
+  history when equipment changes. Restore ordinary movement after tracking loss
+  without overwriting newer position corrections with older buffered poses.
+- The receive-only VR pose protocol and server-side landing/interaction changes
+  require the accompanying ACE server changes. They do not update third-party
+  servers or add tracked hand animations to the original retail executable.
 
-### Movement and collision
+### Collision and interactions
 
-- Improve remote players' and creatures' ground following on slopes. Remove
-  unwanted sideways drift from grounded slope collision and use authored motion
-  speeds and model scale when predicting movement between network updates.
-- Keep supported creatures grounded when horizontal velocity updates arrive.
-  The Stuck pickup flag no longer prevents creatures from following terrain.
-- Sweep ordinary position corrections against solids instead of allowing them
-  to move the local player through walls.
-- Improve stair-edge support and descent recovery when a side contact moves the
-  player away from the original tread. Keep recovery bounded by nearby support.
-- Keep solid world-object collision active when rendering culls the object,
-  including authored invisible platforms. Moving objects can remain visible
-  when their current bounds overlap a visible room despite an older cell ID.
-- Allow charging the next jump while airborne. Hold through landing and release
-  to jump again; releasing in the air does not launch an extra jump.
+- Use authored creature collision spheres for passage and remote prediction
+  instead of oversized model bounds, including Phyntos Wasps, Tuskers, and Virindi.
+- Improve wall sliding, stair-edge contacts, and bounded recovery from embedded
+  positions. Upper-body contacts no longer become false floor support.
+- Suppress generated scenery in building-occupied outdoor cells, including the
+  unwanted Mosswart Fort courtyard tree; rebuild outdated scenery caches.
+- Release stale door/NPC interactions after failed approaches, portals, or a
+  missing completion timeout. Timed-out actions are not automatically repeated.
+- Send the actual touchdown position before VR actions. The updated ACE server
+  verifies pending landings before rejecting a grounded player as airborne.
+- Changing overhead camera angle preserves the chosen zoom distance.
 
-### Effects and interface
+### VR interface
 
-- Prevent repeated selection of a weapon's world model from accumulating glow
-  brightness on its particle effects.
-- Display Stored Mana, Efficiency, and Chance of Destruction for applicable
-  mana charges and stones, including Titan Mana Charge.
-- Disable Apply and Reset when the current options page has no pending changes.
+- Show only other fellowship members' names and vitals in the optional VR
+  fellowship panel, without the full grey background or duplicate self vitals.
+- Organize VR settings into Movement, Panels, Combat, Controls, and Graphics,
+  with consistent controls and separate scrolling for each section.
+- Filter compass, vitals, and fellowship panel textures to reduce shimmer during
+  small head movements. Keep World panels fixed and reduce tiny Body-anchor motion.
 
-## Updating
+### Updating
 
-Clients running v73 or later check for this release at the account launcher.
-Open Updates, choose Download update, then Install. Windows restarts in the same
-desktop or PC VR mode. Quest asks for Android installation confirmation; if
-prompted, allow AC:VR to install updates and press Install again. Do not uninstall
-first. Older clients need the website installer or Quest USB bundle once.
+- Add an optional automatic-update checkbox, off by default. When enabled, the
+  launcher checks periodically and downloads verified updates while idle.
+  Login/gameplay prevents automatic installation; cancelling pauses automation
+  for the current app session.
+- Show an eight-second cancellable notice explaining that installation closes
+  the game. Windows reopens in the same desktop/VR mode. On Quest, confirm the
+  Android prompt, wait for installation, then reopen AC:VR from the library.
+- Keep manual updating available. Existing v73+ clients detect v82 in Updates;
+  earlier clients need the website installer or Quest USB bundle once.
 
-Accounts, settings, and retail DAT files are retained. No retail DATs are bundled.
-Headset projection remains controlled by the VR runtime; FOV options affect the
-desktop camera.
+Accounts, settings, and retail DAT files are retained. Do not uninstall first.
+No retail DATs, saved accounts, or server configuration are bundled.
 
 ## Validation and limitations
 
-Automated development validation covers remote movement, real DAT stair and
-interior fixtures, world-object collision and visibility, repeated weapon
-selection, mana appraisal, options, camera input, FOV, and portal transitions.
-Release packaging and updater verification are recorded with the check-in notes.
+Automated validation covers decoded movement/pose packets, actual DAT avatar
+rendering, slopes and ledges, creature passage widths, reported stair/wall
+fixtures, interaction recovery, updater state, and VR panels. Release package,
+installer-upgrade, and public-download checks are recorded in the check-in notes.
 
-The exact Empyrean Rescue bridge and flying-pyramid route still need a live
-playtest. No new headset acceptance, 90 FPS result, or live side-by-side retail
-camera comparison is claimed. This release updates clients only.
+A live mixed-client playtest and standalone headset panel comparison remain
+necessary. This release does not claim a measured 90 FPS result or complete
+resolution of every reported collision case.

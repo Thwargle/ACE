@@ -85,6 +85,13 @@ namespace ACE.Server.WorldObjects
                 vrRecoverySubscribed = vrNegotiated && (r.FeedbackFeatures & 2u) != 0;
                 vrCastingSubscribed = vrNegotiated && (r.FeedbackFeatures & 4u) != 0;
                 VRHealthBarsSubscribed = vrNegotiated && (r.FeedbackFeatures & 8u) != 0;
+                if (vrNegotiated && (r.FeedbackFeatures & VRCombatRequest.ReceivePoses) != 0)
+                {
+                    // Receiving tracked avatars does not imply this player has
+                    // tracked hands. Desktop observers keep normal combat rules.
+                    vrPoseSubscribed = true;
+                    vrPoseVersion = (r.FeedbackFeatures & VRCombatRequest.ReceiveEquipmentPoses) != 0 ? 2u : 1u;
+                }
                 return;
             }
             if (r.Kind == 5)
@@ -126,6 +133,7 @@ namespace ACE.Server.WorldObjects
                 else HandleActionStackableSplitTo3D(r.Weapon, (int)r.Subject, r);
                 return;
             }
+            RefreshVRPendingLanding();
             if (r.Kind == 1 && IsBusy && CombatMode == CombatMode.Magic)
             {
                 // Match retail's single recoil queue without a face-level alert
@@ -147,6 +155,30 @@ namespace ACE.Server.WorldObjects
             }
             if (r.Kind == 2) SwingVRWeapon(r, now);
             else if (r.Kind == 3) FireVRMissile(r, now);
+        }
+
+        private void RefreshVRPendingLanding()
+        {
+            // AutoPos and an immediately following trigger can be dispatched
+            // before the next physics tick. Test the queued landing through
+            // normal server collision before consulting the old airborne state.
+            // Contact alone never grants permission to cast, and cell/portal
+            // transitions retain their normal world-update ordering.
+            if (!IsJumping || !LastContact || Teleporting || RequestedLocation == null
+                || RequestedLocation.Cell != Location.Cell) return;
+            var landing = RequestedLocation;
+            RequestedLocation = null;
+            var wasUpdating = InUpdate;
+            try
+            {
+                InUpdate = true; // Same cell; no landblock relocation is required.
+                UpdatePlayerPosition(landing);
+                if (IsJumping && !Teleporting && Location.Cell == landing.Cell
+                    && PhysicsObj.Position.ObjCellID == landing.Cell
+                    && Vector3.DistanceSquared(PhysicsObj.Position.Frame.Origin, landing.Pos) <= PhysicsGlobals.EpsilonSq)
+                    PhysicsObj.RefreshWalkableContact();
+            }
+            finally { InUpdate = wasUpdating; }
         }
 
         private void SendVRRecovery(VRCombatRequest r, DateTime now)

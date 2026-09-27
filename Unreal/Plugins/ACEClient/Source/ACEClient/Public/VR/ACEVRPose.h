@@ -22,7 +22,6 @@ struct FACERemoteVRPose
 	{
 		if (Current.ReceivedAt > 0 && int32(Pose.Sequence - Current.Sequence) <= 0) return false;
 		if (Pose.Version != Current.Version || Pose.Teleport != Current.Teleport
-			|| Pose.Weapon != Current.Weapon || Pose.Ammo != Current.Ammo
 			|| Pose.ReceivedAt - Current.ReceivedAt >= .5) History.Reset();
 		Previous = History.IsEmpty() ? Pose : Current;
 		Current = Pose;
@@ -42,7 +41,11 @@ struct FACERemoteVRPose
 			const double Span = B.ReceivedAt - A.ReceivedAt;
 			const float Alpha = Span > .0001 ? float(FMath::Clamp((RenderTime-A.ReceivedAt)/Span,0.,1.)) : 1.f;
 			FACEVRPose Result = B;
-			for (int32 J = 0; J < 5; ++J) Result.Poses[J].Blend(A.Poses[J], B.Poses[J], Alpha);
+			// Equipment changes must not discard the walking/head/hand timeline.
+			// Only the newly equipped object's transform starts at its new pose.
+			for (int32 J = 0; J < 5; ++J)
+				if (!((J==3 && A.Weapon!=B.Weapon) || (J==4 && A.Ammo!=B.Ammo)))
+					Result.Poses[J].Blend(A.Poses[J], B.Poses[J], Alpha);
 			Result.Root = FMath::Lerp(A.Root, B.Root, Alpha);
 			Result.Draw = FMath::Lerp(A.Draw, B.Draw, Alpha);
 			return Result;

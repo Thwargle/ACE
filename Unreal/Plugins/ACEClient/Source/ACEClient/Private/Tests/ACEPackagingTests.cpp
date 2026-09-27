@@ -15,7 +15,7 @@ bool FACEPackagingMaterialsTest::RunTest(const FString& Parameters)
 	TStrongObjectPtr<UGameInstance> Instance(NewObject<UGameInstance>());
 	TStrongObjectPtr<UACEDatSubsystem> Dat(NewObject<UACEDatSubsystem>(Instance.Get()));
 	const auto Parents = Dat->GetRuntimeMaterialParents();
-	TestEqual(TEXT("Complete world/UI/particle/sky/comfort shader set"), Parents.Num(), 35);
+	TestEqual(TEXT("Complete world/UI/filtered VR widget/particle/sky/comfort shader set"), Parents.Num(), 36);
 	if (GShaderCompilingManager) GShaderCompilingManager->FinishAllCompilation();
 	for (UMaterialInterface* Parent : Parents)
 	{

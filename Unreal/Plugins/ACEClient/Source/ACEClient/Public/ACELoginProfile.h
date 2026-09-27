@@ -26,6 +26,7 @@ struct FACELoginSettings
 	TArray<FACELoginAccount> Accounts;
 	FString SelectedServerId, SelectedAccountId, DatDirectory;
 	bool bProfileFormat = false;
+	bool bAutoUpdate = false;
 	void MigrateLegacy();
 	const FACELoginServer* SelectedServer() const;
 	void RemoveServer(const FString& Id);

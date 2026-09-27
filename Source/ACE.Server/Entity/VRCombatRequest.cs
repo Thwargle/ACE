@@ -8,6 +8,9 @@ namespace ACE.Server.Entity
     public sealed class VRCombatRequest
     {
         public const uint Version = 1;
+        public const uint PoseObserverCapability = 131072u;
+        public const uint ReceivePoses = 16u;
+        public const uint ReceiveEquipmentPoses = 32u;
         public const float MaxMissileMuzzleReach = 2.3f;
         public uint FeedbackFeatures;
         public uint Kind, Sequence, Cell, Teleport, Weapon, Subject, Target;
@@ -39,7 +42,7 @@ namespace ACE.Server.Entity
             // compatible with servers and clients that do not implement feedback.
             if (kind == 4 && remaining == 12)
             {
-                request = new VRCombatRequest { Kind = 4, FeedbackFeatures = reader.ReadUInt32() & 15u };
+                request = new VRCombatRequest { Kind = 4, FeedbackFeatures = reader.ReadUInt32() & 63u };
                 return true;
             }
             if (kind == 5 && (remaining == 12 || remaining == 16))

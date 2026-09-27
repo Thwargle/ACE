@@ -1,4 +1,5 @@
 #include "VR/ACEVRComponent.h"
+#include "VR/ACEVRWidgetComponent.h"
 #include "ACEVRNativeHUD.h"
 #include "ACEClientBuild.h"
 #include "ACEVRUIStyle.h"
@@ -118,9 +119,10 @@ void UACEVRComponent::ActivateRig()
 	};
 	LeftPointer = Pointer(TEXT("VRLeftPointer"), LeftAim, 0);
 	RightPointer = Pointer(TEXT("VRRightPointer"), RightAim, 1);
-	auto Panel = [&](const TCHAR* Name, USceneComponent* Parent, FVector2D Size)
+	auto Panel = [&](const TCHAR* Name, USceneComponent* Parent, FVector2D Size, bool Filtered = false)
 	{
-		auto* P = NewObject<UWidgetComponent>(PresentationActor, Name);
+		UWidgetComponent* P = Filtered ? NewObject<UACEVRWidgetComponent>(PresentationActor, Name)
+			: NewObject<UWidgetComponent>(PresentationActor, Name);
 		P->SetWidgetSpace(EWidgetSpace::World); P->SetDrawSize(Size); P->SetTwoSided(true);
 		P->SetBlendMode(EWidgetBlendMode::Transparent); P->SetTickWhenOffscreen(true);
 		// Redraw UI content independently of tracked panel/pointer motion.
@@ -133,9 +135,9 @@ void UACEVRComponent::ActivateRig()
 	SettingsPanel = Panel(TEXT("VRSettingsPanel"), VisualRoot, FVector2D(720, 1000));
 	// Smoothed UI has its own transform, outside controller render-thread late update.
 	WristPanel = Panel(TEXT("VRLeftWristSpells"), VisualRoot, FVector2D(500, 100));
-	VitalsPanel = Panel(TEXT("VRPinnedVitals"), VisualRoot, FVector2D(480, 240));
-	CompassPanel = Panel(TEXT("VRCompass"), VisualRoot, FVector2D(400, 500));
-	FellowshipPanel = Panel(TEXT("VRFellowship"),VisualRoot,FVector2D(480,760));
+	VitalsPanel = Panel(TEXT("VRPinnedVitals"), VisualRoot, FVector2D(480, 240), true);
+	CompassPanel = Panel(TEXT("VRCompass"), VisualRoot, FVector2D(400, 500), true);
+	FellowshipPanel = Panel(TEXT("VRFellowship"),VisualRoot,FVector2D(480,760), true);
 	FellowshipPanel->SetManuallyRedraw(true);FellowshipPanel->SetCastShadow(false);
 	FellowshipPanel->SetSlateWidget(SAssignNew(NativeFellowship,SACEVRFellowship).Rig(this).OnSelect([Weak=TWeakObjectPtr<UACEClientSubsystem>(Client)](int32 Guid)
 		{if(Weak.IsValid())Weak->SelectObject(Guid);}));

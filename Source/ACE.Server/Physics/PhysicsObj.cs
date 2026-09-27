@@ -4416,6 +4416,27 @@ namespace ACE.Server.Physics
             return success;
         }
 
+        /// <summary>
+        /// Recheck support at the current feet after an authoritative position update.
+        /// A zero-length transition skips collision insertion, so probe half a cm
+        /// downward. Apply normal landing hooks only for a nearby, walkable contact.
+        /// </summary>
+        public bool RefreshWalkableContact()
+        {
+            if (Parent != null || CurCell == null || State.HasFlag(PhysicsState.Frozen)) return false;
+            const float probeDepth = 0.005f;
+            var probe = new Position(Position);
+            probe.Frame.Origin.Z -= probeDepth;
+            var transit = transition(Position, probe, false);
+            if (transit == null || transit.SpherePath.CurCell?.ID != CurCell.ID
+                || !transit.CollisionInfo.ContactPlaneValid
+                || transit.CollisionInfo.ContactPlane.Normal.Z < PhysicsGlobals.FloorZ
+                || Vector3.DistanceSquared(Position.Frame.Origin, transit.SpherePath.CurPos.Frame.Origin)
+                    > (probeDepth + PhysicsGlobals.EPSILON) * (probeDepth + PhysicsGlobals.EPSILON)) return false;
+            SetPositionInternal(transit);
+            return TransientState.HasFlag(TransientStateFlags.OnWalkable);
+        }
+
         public void update_position()
         {
             if (Parent != null) return;

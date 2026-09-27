@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "ACEBodySweep.h"
 #include "ACEDatSubsystem.h"
 #include "ACEWorldEntityActor.h"
 #include "ACEWorldPresenterComponent.h"
@@ -34,6 +35,39 @@ bool FACEMovementReviewTest::RunTest(const FString&)
  Context.OwningGameInstance=GI;Context.SetCurrentWorld(World);GI->Init();
  auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
  if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+ // Compare actual creature components with retail SPHEREPATH sphere pairs.
+ // Setup.Radius deliberately differs from the physical radius on these models.
+ for(const auto& Model:TArray<TPair<uint32,float>>{{0x02001121,1.2f},{0x02000964,1.f},{0x02000041,1.f}})
+ {
+  FACEWorldObject Mob;Mob.Guid=9821;Mob.SetupId=Model.Key;Mob.Scale=Model.Value;Mob.ItemType=ACEItemType::Creature;
+  Mob.PhysicsState=ACEPhysicsState::Gravity;Mob.bHasPosition=true;Mob.Position.CellId=0x016C0101;
+  Mob.Position.Location=FVector(50,50,100);const FVector Base=Mob.Position.ToUnrealLocation(100);
+  auto* Body=World->SpawnActor<AACEWorldEntityActor>();Body->InitializeFromObject(Mob,100,true);
+  Body->SetActorLocation(Base);
+  TArray<FACEDatCollisionShape> Spheres;bool BSP=false;Dat->GetSetupCollisionShapes(Model.Key,Spheres,BSP);
+  TestFalse(TEXT("Reported creatures use spheres rather than limb mesh collision"),BSP);
+  double Width=0;float MaxRadius=0;
+  for(const auto& S:Spheres)
+  {
+   MaxRadius=FMath::Max(MaxRadius,S.Radius*100);
+   for(double Z:{47.5,135.0})
+   {
+    const double DZ=Z-S.Origin.Z*100*Model.Value;
+    Width=FMath::Max(Width,FMath::Sqrt(FMath::Max(0.,FMath::Square(48.+S.Radius*100*Model.Value)-DZ*DZ)));
+   }
+  }
+  TestTrue(TEXT("Remote prediction uses authored sphere width, not Setup bounding radius"),FMath::IsNearlyEqual(Body->MovementSweepRadius,MaxRadius,.01f));
+  const auto PlayerBody=FCollisionShape::MakeCapsule(48,91.75);
+  FCollisionQueryParams Q(SCENE_QUERY_STAT(RetailCreaturePass),true);
+  for(double Margin:{-2.,2.})
+  {
+   const FVector Start=Base+FVector(Width+Margin,-300,91.25),End=Start+FVector(0,600,0);FHitResult Hit;
+   const bool Blocked=ACEBodySweep::Sweep(*World,Hit,Start,End,PlayerBody,Q);
+   TestEqual(FString::Printf(TEXT("Authored %08X passage margin %.1f follows sphere-pair envelope"),Model.Key,Margin),Blocked,Margin<0);
+  }
+  AddInfo(FString::Printf(TEXT("Creature %08X physical radius %.2fcm vs bound %.2fcm, player passing offset %.2fcm"),Model.Key,MaxRadius*Model.Value,Body->MovementRadius*Model.Value,Width));
+  Body->Destroy();
+ }
  // Spike Strafe (1842, projectile weenie 7278) shares the sword gfx with
  // ordinary equipment. Resting 101 points its blade backwards; retail applies
  // PhysicsDesc placement 0 for flight. Other ring setups must retain their
@@ -134,6 +168,35 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   TestTrue(TEXT("Large teleport still snaps immediately"),Walker->GetActorLocation().Equals(P.ToUnrealLocation(100),.01));
   Walker->Destroy();
  }
+ // A running actor must travel at its simulated speed from the first frame,
+ // with only network error filtered. Small grounded correction noise must not
+ // create a side-to-side weave when two players run in a straight line.
+ for(int FPS:{30,90,144})
+ {
+  auto* Walker=World->SpawnActor<AACEWorldEntityActor>();Walker->bIsPlayer=true;Walker->bClampToGround=false;
+  FACEPosition P;P.CellId=0x7D640019;P.Location=FVector(50,50,100);P.bIsGrounded=true;
+  Walker->ApplyACEPosition(P);const FVector Origin=Walker->GetActorLocation();
+  Walker->RemoteMotion.bMoving=true;Walker->RemoteMotion.Forward=1;Walker->RemoteMotion.ForwardUnitsPerSecond=4;
+  double WorstSpeedError=0,WorstSideError=0;FVector Last=Origin;
+  for(int I=0;I<FPS*3;++I)
+  {
+   if(I && I%FPS==0)
+   {
+    FACEPosition Packet=P;Packet.Location.Y+=I*4./FPS;Packet.Location.X+=(I/FPS)%2?.02:-.02;
+    Walker->ApplyACEPosition(Packet);
+   }
+   Walker->Tick(1.f/FPS);const FVector Now=Walker->GetActorLocation();
+   WorstSpeedError=FMath::Max(WorstSpeedError,FMath::Abs((Now.Y-Last.Y)*FPS-400.));
+   WorstSideError=FMath::Max(WorstSideError,FMath::Abs(Now.X-Origin.X));Last=Now;
+  }
+  TestTrue(TEXT("Ordinary locomotion has no filter-induced acceleration/deceleration"),WorstSpeedError<.1);
+  TestTrue(TEXT("Sub-5cm grounded corrections do not introduce lateral weaving"),WorstSideError<.01);
+  Walker->RemoteMotion.bMoving=false;Walker->RemoteMotion.Forward=0;Walker->RemoteMotion.ForwardUnitsPerSecond=0;
+  Walker->Tick(1.f/FPS);
+  TestTrue(TEXT("Stopping does not leave a trailing body sliding to its predictor"),Walker->GetActorLocation().Equals(Last,.01));
+  AddInfo(FString::Printf(TEXT("Remote %dfps: peak speed error %.4fcm/s, lateral noise %.4fcm"),FPS,WorstSpeedError,WorstSideError));
+  Walker->Destroy();
+ }
  // Dynamic solid scenery must support feet regardless of PView or NoDraw.
  // Use authored stair geometry, not a permissive proxy capsule/box.
  {
@@ -162,6 +225,62 @@ bool FACEMovementReviewTest::RunTest(const FString&)
    }
   }
   Supported->Destroy();Solid->Destroy();
+ }
+ // A grounded remote cannot extrapolate over an unsupported cliff. Test
+ // sparse F748 updates, different frame rates and ordinary vs VR viewing.
+ {
+  FACEPosition P;P.CellId=0x016C0101;P.Location=FVector(50,50,100);
+  const FVector Origin=P.ToUnrealLocation(100);
+  auto* A=World->SpawnActor<AActor>();auto* Floor=NewObject<UBoxComponent>(A);A->SetRootComponent(Floor);
+  Floor->SetBoxExtent(FVector(1000,400,10));Floor->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+  Floor->SetCollisionResponseToAllChannels(ECR_Block);Floor->SetCollisionObjectType(ECC_WorldStatic);Floor->RegisterComponent();A->SetActorLocation(Origin+FVector(0,-200,-10));
+  for(int FPS:{30,90,144})
+  {
+   FACEWorldObject O;O.SetupId=0x02000001;O.bIsPlayer=true;O.ItemType=ACEItemType::Creature;O.bHasPosition=true;O.Position=P;
+   auto* Walker=World->SpawnActor<AACEWorldEntityActor>();Walker->InitializeFromObject(O,100,false);
+   Walker->RemoteMotion.bMoving=true;Walker->RemoteMotion.ForwardUnitsPerSecond=4;Walker->RemoteMotion.Forward=1;
+   double MaxFrameMove=0,MaxBeyondEdge=0,MaxGroundError=0;FVector Last=Walker->GetActorLocation();
+   for(int I=0;I<FPS*3;++I)
+   {
+    if(I==FPS || I==FPS*2){FACEPosition Correction=P;Correction.Location+=FVector(0,1.99,.2);Correction.bIsGrounded=true;Walker->ApplyACEPosition(Correction);}
+    Walker->Tick(1.f/FPS);const FVector Drawn=Walker->GetActorLocation();
+    MaxFrameMove=FMath::Max(MaxFrameMove,FVector::Dist(Drawn,Last));Last=Drawn;
+    TestTrue(TEXT("Predicted walking stops at the supported edge"),Walker->RemotePredictLocation.Y<=Origin.Y+200.2);
+    if(MaxBeyondEdge==0 && MaxGroundError<2 && (Drawn.Y>Origin.Y+200.2 || FMath::Abs(Drawn.Z-Origin.Z-1)>=2))
+     AddInfo(FString::Printf(TEXT("First edge error %dfps frame %d drawn %s predictor %s"),FPS,I,*(Drawn-Origin).ToString(),*(Walker->RemotePredictLocation-Origin).ToString()));
+    MaxBeyondEdge=FMath::Max(MaxBeyondEdge,Drawn.Y-Origin.Y-200.2);
+    MaxGroundError=FMath::Max(MaxGroundError,FMath::Abs(Drawn.Z-Origin.Z-1));
+   }
+   TestTrue(TEXT("Sparse edge corrections do not create a teleport"),MaxFrameMove<20);
+   TestTrue(TEXT("Rendered feet do not float beyond the edge"),MaxBeyondEdge<=0 && MaxGroundError<2);
+   AddInfo(FString::Printf(TEXT("Edge %dfps: overshoot %.4fcm height error %.4fcm max frame %.4fcm"),FPS,MaxBeyondEdge,MaxGroundError,MaxFrameMove));
+   Walker->Destroy();
+  }
+  A->Destroy();
+ }
+ // A delayed packet may correct several metres, but it must not cause a
+ // one-frame teleport for either F748 or tracked roots. Explicit VR teleports
+ // still arrive immediately, without dragging the body through the old route.
+ for(bool Tracked:{false,true})for(int FPS:{30,90,144})
+ {
+  FACEPosition P;P.CellId=0x016C0101;P.Location=FVector(50,50,100);
+  const FVector Origin=P.ToUnrealLocation(100),Target=Origin+FVector(0,400,0);
+  auto* Walker=World->SpawnActor<AACEWorldEntityActor>();Walker->bIsPlayer=true;Walker->bClampToGround=false;
+  Walker->ApplyACEPosition(P);FACEVRPose Pose;Pose.Version=2;Pose.Root=Origin/100;
+  if(Tracked)Walker->ApplyRemoteVRRoot(Pose,1.f/FPS);
+  else {P.Location.Y+=4;Walker->ApplyACEPosition(P);}
+  Pose.Root=Target/100;
+  double MaxStep=0;FVector Previous=Origin;
+  for(int I=0;I<FPS*2;++I)
+  {
+   if(Tracked)Walker->ApplyRemoteVRRoot(Pose,1.f/FPS);else Walker->Tick(1.f/FPS);
+   MaxStep=FMath::Max(MaxStep,FVector::Distance(Previous,Walker->GetActorLocation()));Previous=Walker->GetActorLocation();
+  }
+  TestTrue(TEXT("Late update never displaces a standing remote by more than one correction-speed frame"),MaxStep<=800./FPS+.1);
+  TestTrue(TEXT("Limited correction converges to the actual server destination"),Previous.Equals(Target,.1));
+  if(Tracked){Pose.Teleport++;Pose.Root+=FVector(0,10,0);Walker->ApplyRemoteVRRoot(Pose,1.f/FPS);
+   TestTrue(TEXT("Explicit tracked teleport bypasses correction walking"),Walker->GetActorLocation().Equals(Pose.Root*100,.1));}
+  Walker->Destroy();
  }
  // Sparse server positions must not leave remote feet on a horizontal shelf.
  // Exercise the actor presentation, collision and tracked-root path on a slope.

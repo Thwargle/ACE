@@ -32,6 +32,59 @@ namespace ACE.Server.Tests
         private static uint nextGuid = 0x8ffff000;
 
         [TestMethod]
+        public void StationaryCancelledApproachStillCompletesUse()
+        {
+            using var f = new Fixture();
+            f.Player.PhysicsObj.StopCompletely(true);
+            f.Player.PhysicsObj.Velocity = Vector3.Zero;
+            Assert.IsFalse(f.Player.PhysicsObj.IsMovingOrAnimating);
+            int completions = 0;
+            f.Player.MoveToParams = new MoveToParams(_ => ++completions, f.Target);
+            f.Player.UpdateObjectPhysics();
+            Assert.AreEqual(1, completions, "An already stationary approach must still release its pending use.");
+            Assert.IsNull(f.Player.MoveToParams);
+            f.Player.UpdateObjectPhysics();
+            Assert.AreEqual(1, completions, "The completion may not repeat on idle ticks.");
+        }
+
+        [TestMethod]
+        [DataRow(PlayerKillerStatus.PK)]
+        [DataRow(PlayerKillerStatus.NPK)]
+        public void VRTriggerProcessesPendingLandingButDoesNotGrantAirCasting(PlayerKillerStatus status)
+        {
+            using var f = new Fixture();
+            f.Player.HandleVRCombat(new VRCombatRequest());
+            f.Player.PlayerKillerStatus = status;
+            var floor = new Position(f.Player.Location);
+            void Airborne(float height)
+            {
+                f.Player.Location = new Position(floor);
+                f.Player.Location.Pos += new Vector3(0,0,height);
+                f.Player.PhysicsObj.Position.Frame.Origin = f.Player.Location.Pos;
+                f.Player.PhysicsObj.TransientState &= ~(ACE.Server.Physics.TransientStateFlags.OnWalkable | ACE.Server.Physics.TransientStateFlags.Contact);
+                f.Player.PhysicsObj.Velocity = new Vector3(0,0,-1);
+                Assert.IsTrue(f.Player.IsJumping);
+            }
+            Airborne(.4f);
+            f.Player.LastContact = true;
+            f.Player.SetRequestedLocation(new Position(floor));
+            f.Player.HandleVRCombat(new VRCombatRequest { Kind=1,Sequence=1,Cell=floor.Cell });
+            Assert.IsNull(f.Player.RequestedLocation, "The queued landing is checked before the trigger's airborne precheck.");
+            Assert.IsFalse(f.Player.IsJumping, "Server collision must recognize the actual floor contact.");
+            Airborne(0);
+            f.Player.LastContact = true;
+            f.Player.SetRequestedLocation(new Position(floor));
+            f.Player.HandleVRCombat(new VRCombatRequest { Kind=1,Sequence=2,Cell=floor.Cell });
+            Assert.IsFalse(f.Player.IsJumping, "An unchanged floor position must still refresh stale airborne contact.");
+            Airborne(2);
+            f.Player.LastContact = true; // A client assertion cannot create support.
+            var inAir = new Position(f.Player.Location);inAir.Pos += new Vector3(.01f,0,0);
+            f.Player.SetRequestedLocation(inAir);
+            f.Player.HandleVRCombat(new VRCombatRequest { Kind=1,Sequence=3,Cell=floor.Cell });
+            Assert.IsTrue(f.Player.IsJumping, "An unsupported position must remain unable to cast.");
+        }
+
+        [TestMethod]
         public void VRHealthFeedbackStopsAfterObserverLeavesArea()
         {
             using var f = new Fixture();
@@ -454,7 +507,7 @@ namespace ACE.Server.Tests
         }
 
         [TestMethod]
-        public void PosesRelayOnlyToVrObserversAndRejectStaleTeleportEpochs()
+        public void PosesRelayToSubscribedDesktopAndVrObserversButNeverRetail()
         {
             using var f = new Fixture();
             Player Observer(uint guid, bool vr)
@@ -463,18 +516,31 @@ namespace ACE.Server.Tests
                 player.Location = new Position(f.Player.Location); player.InitPhysicsObj(); f.Objects.Add(player);
                 var session = new Session(null, new IPEndPoint(IPAddress.Loopback, 0), 0, 1);
                 typeof(Player).GetField("<Session>k__BackingField", PrivateInstance).SetValue(player, session);
-                typeof(Player).GetField("vrPoseSubscribed", PrivateInstance).SetValue(player, vr);
+                if (vr)
+                {
+                    player.HandleVRCombat(new VRCombatRequest());
+                    player.HandleVRPose(new VRPose { Sequence=1, Cell=player.Location.Cell, Flags=7 });
+                }
                 return player;
             }
-            int Messages(Player player)
+            object[] MessagesFor(Player player)
             {
                 var bundles = (IEnumerable)typeof(NetworkSession).GetField("currentBundles", PrivateInstance).GetValue(player.Session.Network);
-                return bundles.Cast<object>().Where(b => b != null).Sum(b =>
-                    ((IEnumerable)b.GetType().GetField("messages", PrivateInstance).GetValue(b)).Cast<object>()
-                    .Count(m => m is ACE.Server.Network.GameEvent.Events.GameEventVRPose));
+                return bundles.Cast<object>().Where(b => b != null).SelectMany(b =>
+                    ((IEnumerable)b.GetType().GetField("messages", PrivateInstance).GetValue(b)).Cast<object>()).ToArray();
             }
+            int Messages(Player player) => MessagesFor(player).OfType<ACE.Server.Network.GameEvent.Events.GameEventVRPose>().Count();
             var vr = Observer(0x5ffffffd, true); var retail = Observer(0x5ffffffe, false);
-            f.Player.PhysicsObj.ObjMaint.AddKnownPlayers(new[] { vr.PhysicsObj, retail.PhysicsObj });
+            var desktop = Observer(0x5ffffffc, false);
+            var subscribe = new VRCombatRequest { Kind=4,
+                FeedbackFeatures=VRCombatRequest.ReceivePoses | VRCombatRequest.ReceiveEquipmentPoses };
+            desktop.HandleVRCombat(subscribe);
+            Assert.IsFalse((bool)typeof(Player).GetField("vrPoseSubscribed",PrivateInstance).GetValue(desktop),
+                "An unnegotiated subscription cannot receive extension events.");
+            desktop.HandleVRCombat(new VRCombatRequest()); desktop.HandleVRCombat(subscribe);
+            Assert.IsFalse((bool)typeof(Player).GetProperty("HasActiveVRHands",PrivateInstance).GetValue(desktop),
+                "Receiving tracking must not switch desktop combat to tracked-hand rules.");
+            f.Player.PhysicsObj.ObjMaint.AddKnownPlayers(new[] { vr.PhysicsObj, retail.PhysicsObj, desktop.PhysicsObj });
             f.Player.HandleVRCombat(new VRCombatRequest());
             var pose = new VRPose { Sequence=1, Cell=f.Player.Location.Cell, Flags=7, EyeHeight=1.7575f,
                 Positions=new[] { new Vector3(0,0,1.7575f),new Vector3(.35f,-.4f,2.1f),new Vector3(.4f,.35f,1.2f) },
@@ -486,11 +552,84 @@ namespace ACE.Server.Tests
             var before=Messages(vr); var retailBefore=Messages(retail);
             pose.Teleport=1; f.Player.HandleVRPose(pose);
             Assert.AreEqual(before,Messages(vr),"A stale location epoch cannot animate an observer's avatar.");
+            Assert.AreEqual(0,Messages(desktop));
             pose.Teleport=0; f.Player.HandleVRPose(pose);
             Assert.AreEqual(before+1,Messages(vr),"Validated poses reach a nearby VR observer.");
             Assert.AreEqual(retailBefore,Messages(retail),"Retail clients receive no custom pose opcode.");
+            Assert.AreEqual(1,Messages(desktop),"A desktop observer receives tracking without ever transmitting a pose.");
             f.Player.HandleVRPose(pose);
             Assert.AreEqual(before+1,Messages(vr),"Replayed poses are discarded.");
+            Assert.AreEqual(1,Messages(desktop));
+            // Both the legacy headset and the receive-only desktop can observe
+            // a current headset; the former still receives the v1 wire layout.
+            pose.Version=2; pose.Sequence=2;
+            pose.Rotations[3]=pose.Rotations[4]=Quaternion.Identity;
+            typeof(Player).GetField("vrNextPose",PrivateInstance).SetValue(f.Player,DateTime.MinValue);
+            f.Player.HandleVRPose(pose);
+            Assert.AreEqual(2,Messages(desktop)); Assert.AreEqual(before+2,Messages(vr));
+            foreach (var observer in new[] { desktop,vr })
+            {
+                var bundles=(IEnumerable)typeof(NetworkSession).GetField("currentBundles",PrivateInstance).GetValue(observer.Session.Network);
+                var message=bundles.Cast<object>().Where(b=>b!=null).SelectMany(b=>
+                    ((IEnumerable)b.GetType().GetField("messages",PrivateInstance).GetValue(b)).Cast<object>())
+                    .OfType<ACE.Server.Network.GameEvent.Events.GameEventVRPose>().Last();
+                using var payload=new BinaryReader(new MemoryStream(message.Data.ToArray())); payload.BaseStream.Position=20;
+                Assert.AreEqual(observer==desktop ? 2u : 1u,payload.ReadUInt32());
+            }
+            Assert.AreEqual(retailBefore,Messages(retail));
+
+            // VR supplements the normal movement stream; it must never replace
+            // or filter it. Verify both kinds of sender against all client types.
+            Assert.IsTrue((bool)typeof(Player).GetProperty("HasActiveVRHands",PrivateInstance).GetValue(f.Player));
+            foreach (var sender in new[] { f.Player, desktop })
+            {
+                var observers = new[] { f.Player, desktop, vr, retail }.Where(p => p != sender).ToArray();
+                sender.PhysicsObj.ObjMaint.AddKnownPlayers(observers.Select(p => p.PhysicsObj));
+                var beforePosition = observers.Select(p => MessagesFor(p).OfType<GameMessageUpdatePosition>().Count()).ToArray();
+                var beforeMotion = observers.Select(p => MessagesFor(p).OfType<GameMessageUpdateMotion>().Count()).ToArray();
+                sender.SendUpdatePosition();
+                sender.EnqueueBroadcastMotion(new Motion(MotionStance.NonCombat, MotionCommand.RunForward), applyPhysics:false);
+                byte[] positionBytes = null, motionBytes = null;
+                for (var i = 0; i < observers.Length; ++i)
+                {
+                    var positions = MessagesFor(observers[i]).OfType<GameMessageUpdatePosition>().ToArray();
+                    var motions = MessagesFor(observers[i]).OfType<GameMessageUpdateMotion>().ToArray();
+                    Assert.AreEqual(beforePosition[i]+1, positions.Length, "Each mode receives ordinary position updates.");
+                    Assert.AreEqual(beforeMotion[i]+1, motions.Length, "Each mode receives ordinary animation/movement updates.");
+                    positionBytes ??= positions.Last().Data.ToArray(); motionBytes ??= motions.Last().Data.ToArray();
+                    CollectionAssert.AreEqual(positionBytes, positions.Last().Data.ToArray());
+                    CollectionAssert.AreEqual(motionBytes, motions.Last().Data.ToArray());
+                }
+            }
+            Assert.AreEqual(retailBefore,Messages(retail),"Ordinary compatibility never sends a custom opcode to retail.");
+        }
+
+        [TestMethod]
+        public void TrackedPoseConsumesValidatedSameCellMovementBeforeRelayingRoot()
+        {
+            using var f = new Fixture();
+            f.Player.HandleVRCombat(new VRCombatRequest());
+            var expected = new Position(f.Player.Location);
+            expected.Pos += new Vector3(.1f, 0, 0);
+            f.Player.SetRequestedLocation(expected);
+            var pose = new VRPose { Version=2, Sequence=1, Cell=expected.Cell, Teleport=1, Flags=7 };
+            f.Player.HandleVRPose(pose);
+            Assert.IsNotNull(f.Player.RequestedLocation, "An old-epoch pose must not consume pending movement.");
+            pose.Teleport=0;
+            f.Player.HandleVRPose(pose);
+            Assert.IsNull(f.Player.RequestedLocation, "Same-cell AutoPos is consumed before publishing tracked feet.");
+            Assert.AreEqual(expected.Pos, f.Player.Location.Pos);
+            var global=expected.ToGlobal(false);
+            Assert.AreEqual(new Vector3(-global.X,global.Y,global.Z),pose.Root,
+                "Current hands must not be attached to the previous physics tick's root.");
+            Assert.IsFalse(f.Player.InUpdate, "Early physics processing restores its caller's update state.");
+
+            var crossing=new Position(expected);crossing.LandblockId=new LandblockId(expected.Cell+1);
+            f.Player.SetRequestedLocation(crossing);
+            typeof(Player).GetField("vrNextPose",PrivateInstance).SetValue(f.Player,DateTime.MinValue);
+            pose.Sequence++;
+            f.Player.HandleVRPose(pose);
+            Assert.AreSame(crossing,f.Player.RequestedLocation,"Cell transitions keep the ordinary landblock update ordering.");
         }
 
         [TestMethod]

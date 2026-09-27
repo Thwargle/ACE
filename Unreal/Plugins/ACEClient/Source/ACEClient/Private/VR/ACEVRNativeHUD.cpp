@@ -11,8 +11,11 @@ void UACEVRComponent::UpdateNativeHUD(bool Available, float Dt)
 	const auto Show=[](UWidgetComponent* Panel,bool Visible){Panel->SetVisibility(Visible);Panel->SetCollisionEnabled(Visible?ECollisionEnabled::QueryOnly:ECollisionEnabled::NoCollision);};
  const bool VitalsVisible=Available && Settings->bPinVitalsToView;
  const bool CompassVisible=Available && Settings->bShowCompass;
- const bool FellowVisible=Available && Settings->bShowFellowship;
- Client->SetVRFellowshipUpdates(FellowVisible);
+ const bool FellowEnabled=Available && Settings->bShowFellowship;
+ Client->SetVRFellowshipUpdates(FellowEnabled);
+ const auto& Fellow=Client->GetFellowship();
+ const int32 SelfGuid=Client->GetPlayerGuid();
+ const bool FellowVisible=FellowEnabled && ((Fellow.bValid && Fellow.Members.ContainsByPredicate([SelfGuid](const FACEFellowshipMember& M){return M.Guid!=SelfGuid;})) || ShouldShowPanelControls("Fellowship"));
  const bool NewlyVisible=(VitalsVisible && !VitalsPanel->IsVisible()) || (CompassVisible && !CompassPanel->IsVisible()) || (FellowVisible && !FellowshipPanel->IsVisible());
  Show(FellowshipPanel,FellowVisible);FellowshipPanel->SetComponentTickEnabled(FellowVisible);
  Show(VitalsPanel,VitalsVisible);Show(CompassPanel,CompassVisible);
@@ -22,7 +25,11 @@ void UACEVRComponent::UpdateNativeHUD(bool Available, float Dt)
  const double Now=FPlatformTime::Seconds();
  if((!VitalsVisible && !CompassVisible && !FellowVisible) || (!NewlyVisible && Now<NextNativeHUDUpdate))return;
  NextNativeHUDUpdate=Now+.1;
- if(FellowVisible && NativeFellowship && (NativeFellowship->Refresh(Client->GetFellowship(),Client->GetSelectedObject().Guid) || NewlyVisible))FellowshipPanel->RequestRedraw();
+ if(FellowVisible && NativeFellowship && (NativeFellowship->Refresh(Fellow,Client->GetSelectedObject().Guid,SelfGuid) || NewlyVisible))
+ {
+  FellowshipPanel->SetDrawSize(NativeFellowship->ComputeDesiredSize(1));
+  FellowshipPanel->RequestRedraw();
+ }
  if(VitalsVisible && NativeVitals && (NativeVitals->Refresh(Client->GetPlayerVitals()) || NewlyVisible))VitalsPanel->RequestRedraw();
  if(!CompassVisible || !NativeCompass || !Client->GetSession())return;
  // Read the live object map without allocating/copying every world object.

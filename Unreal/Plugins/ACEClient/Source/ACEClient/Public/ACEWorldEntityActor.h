@@ -225,6 +225,8 @@ public:
 	float RemotePositionSmoothing = 10.f;
 	/** Shared root presentation for tracked body, hands and equipment. */
 	void ApplyRemoteVRRoot(const struct FACEVRPose& Pose, float DeltaTime);
+	void EndRemoteVRRoot();
+	FVector InterpolateRemoteLocation(const FVector& Target, float DeltaTime, const FVector& Movement = FVector::ZeroVector) const;
 
 	/** Corrections larger than this many AC units snap (portals/teleports) instead of blending. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "5.0", ClampMax = "192.0"))
@@ -267,9 +269,13 @@ protected:
 	FVector ResolvePredictedMovement(const FVector& From, const FVector& Destination) const;
 	float MovementRadius = 25.f;
 	float MovementHalfHeight = 90.f;
+	float MovementSweepRadius = 25.f;
+	float MovementBodyOffsetZ = 90.f;
+	float MovementStepDownHeight = 50.f;
 	float MovementStepHeight = 50.f;
 	bool bHaveVRPresentation = false;
 	uint32 VRPresentationTeleport = 0;
+	double LastRemotePositionAt = -100.;
 
 	/** Vertical trace (world static, then outdoor heightfield) for the ground Z under a point. */
 	bool TraceGroundZ(const FVector& AtLocation, float& OutGroundZ, bool bCreatureSupport = false) const;

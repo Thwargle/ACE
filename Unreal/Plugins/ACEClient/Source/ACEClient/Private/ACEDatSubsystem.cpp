@@ -2,6 +2,7 @@
 #include "Dat/ACEStreamingBudget.h"
 #include "ACELoginSettings.h"
 #include "UI/ACEUIResourceResolver.h"
+#include "VR/ACEVRWidgetComponent.h"
 
 UACEUIResourceResolver* UACEDatSubsystem::GetUiResources()
 {
@@ -1021,7 +1022,8 @@ TArray<UMaterialInterface*> UACEDatSubsystem::GetRuntimeMaterialParents()
 		EnsureAceBatchedParticleMaterialBase(false), EnsureAceBatchedParticleMaterialBase(true),
 		EnsureAceSkyTranslucentMaterialBase(), EnsureAceSkyTranslucentWrapMaterialBase(), EnsureAceSkyOpaqueMaterialBase(),
 		EnsureAceSkyAdditiveMaterialBase(), EnsureAceSkyVertexColorMaterialBase(), EnsureAceSkyColorFillMaterialBase(),
-		EnsureAceWeatherTranslucentMaterialBase(), EnsureAceWeatherAdditiveMaterialBase(), GetVRComfortMaterial()
+		EnsureAceWeatherTranslucentMaterialBase(), EnsureAceWeatherAdditiveMaterialBase(), GetVRComfortMaterial(),
+		UACEVRWidgetComponent::GetFilteredMaterial()
 	};
 	for (bool bMasked : { false, true })
 	{
@@ -7053,6 +7055,19 @@ bool UACEDatSubsystem::CollectRegionScenery(uint32 LandblockId, float WorldScale
 	const uint32 BlockX = (LB >> 24) * 8u;
 	const uint32 BlockY = ((LB >> 16) & 0xFFu) * 8u;
 
+	// Retail CLandBlock::init_buildings assigns each building to the outdoor
+	// sort cell containing its origin. get_land_scenes rejects that whole cell,
+	// including open courtyards that have no shell/floor triangle below them.
+	TSet<int32> BuildingCells;
+	FACEDatLandblockInfo BuildingInfo;
+	if (LoadLandblockInfo(LB, BuildingInfo))
+		for (const auto& Building : BuildingInfo.Buildings)
+		{
+			const int32 X=FMath::FloorToInt(Building.Origin.X/CellSize);
+			const int32 Y=FMath::FloorToInt(Building.Origin.Y/CellSize);
+			if (X>=0 && X<CellDim && Y>=0 && Y<CellDim) BuildingCells.Add(X*CellDim+Y);
+		}
+
 	int32 CandCount = 0;
 	int32 FreqSkip = 0;
 	int32 BoundsOrRoadSkip = 0;
@@ -7230,28 +7245,10 @@ bool UACEDatSubsystem::CollectRegionScenery(uint32 LandblockId, float WorldScale
 					continue;
 				}
 
-				const FVector LocalUe = FACEPosition::AceVectorToUnreal(FVector(Lx, Ly, 0.f), WorldScale);
-				// Flora skip uses Setup shell hull (not FloorTris-only land-ignore).
+				if (BuildingCells.Contains(FMath::FloorToInt(Lx/CellSize)*CellDim+FMath::FloorToInt(Ly/CellSize)))
 				{
-					const FBuildingInteriorMask& FloraMask =
-						GetOrBuildBuildingInteriorFootprints(LB, WorldScale);
-					const FVector2D FloraPt(LocalUe.X, LocalUe.Y);
-					bool bInShell = false;
-					for (const FBuildingHoleMask& Bld : FloraMask.Buildings)
-					{
-						if ((Bld.InsetShellTris.Num() > 0 && PointInTriList(FloraPt, Bld.InsetShellTris))
-							|| (Bld.ShellTris.Num() > 0 && PointInTriList(FloraPt, Bld.ShellTris))
-							|| (Bld.FloorTris.Num() > 0 && PointInTriList(FloraPt, Bld.FloorTris)))
-						{
-							bInShell = true;
-							break;
-						}
-					}
-					if (bInShell)
-					{
-						++BuildingSkip;
-						continue;
-					}
+					++BuildingSkip;
+					continue;
 				}
 
 				float ZAc = 0.f;

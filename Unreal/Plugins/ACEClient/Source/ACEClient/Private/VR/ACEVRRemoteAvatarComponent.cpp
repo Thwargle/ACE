@@ -43,6 +43,7 @@ void UACEVRRemoteAvatarComponent::TickComponent(float Dt, ELevelTick Type, FActo
 		&& Left == 12 && Right == 15 && App->GetPartBindTransform(16, HeadBind);
 	if (!Valid)
 	{
+		Entity->EndRemoteVRRoot();
 		if (bApplied)
 		{
 			App->bVRPoseControlled = false; App->ResetVRLowerBody();

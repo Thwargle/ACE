@@ -133,12 +133,16 @@ protected:
 	UPROPERTY() TObjectPtr<UButton> DiscordButton;
 	UPROPERTY() TObjectPtr<class UACEUpdateSubsystem> Updater;
 	UPROPERTY() TObjectPtr<UTextBlock> UpdateText;
+	UPROPERTY() TObjectPtr<UTextBlock> UpdateInstallHelp;
 	UPROPERTY() TObjectPtr<class UProgressBar> UpdateProgress;
 	UPROPERTY() TObjectPtr<UACELoginActionButton> UpdateNavButton;
 	UPROPERTY() TObjectPtr<UButton> CheckUpdateButton;
 	UPROPERTY() TObjectPtr<UButton> DownloadUpdateButton;
 	UPROPERTY() TObjectPtr<UButton> InstallUpdateButton;
 	UPROPERTY() TObjectPtr<UButton> CancelUpdateButton;
+	UPROPERTY() TObjectPtr<class UCheckBox> AutoUpdateCheckBox;
+	UPROPERTY() TObjectPtr<UTextBlock> AutoUpdateMark;
+	UFUNCTION() void OnAutoUpdateChanged(bool bChecked);
 	float UpdatePollTime = 0;
 	void RefreshUpdateControls();
 	void RefreshServers();

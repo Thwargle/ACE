@@ -338,6 +338,25 @@ bool FACEVRProtocolTest::RunTest(const FString& Parameters)
 		for (float Expected : {.2f, .3f, 1.5f, 0.f, 1.f, 0.f, 1.f, .25f}) TestEqual(TEXT("Aim/cost payload float"), Wire.ReadFloat(), Expected);
 	}
 	FACEBinaryWriter PunchAck; PunchAck.WriteUInt32(100); PunchAck.WriteUInt32(4); PunchAck.WriteUInt32(0xF7D0);
+	for (bool Contact : {false,true})
+	{
+		Session.SetReportedContact(Contact);Session.CachedC2SPackets.Reset();
+		Session.PlayerPosition.CellId=0x12340001;Session.PlayerPosition.Location=FVector(10,20,Contact?0:2);
+		Session.SendVRCombat(1,0x12340001,200,42,300,FVector(0,0,1),FVector(0,1,0),1,0);
+		bool FoundPosition=false;uint32 PositionSequence=0,ActionSequence=0;
+		for(const auto& Packet:Session.CachedC2SPackets)
+		{
+			FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);const uint32 Action=R.ReadUInt32();
+			if(Action==ACEGameAction::AutonomousPosition)
+			{
+				FoundPosition=true;PositionSequence=Packet.Key;R.Skip(12);
+				TestEqual(TEXT("Cast carries current feet height"),R.ReadFloat(),Contact?0.f:2.f);
+				R.Skip(24);TestEqual(TEXT("Cast preserves real grounded/airborne contact"),R.ReadUInt8(),uint8(Contact?1:0));
+			}
+			else if(Action==0xF7D0)ActionSequence=Packet.Key;
+		}
+		TestTrue(TEXT("Position is sent before the trigger action"),FoundPosition && PositionSequence<ActionSequence);
+	}
 	PunchAck.WriteUInt32(1); PunchAck.WriteUInt32(135);
 	FACEBinaryReader PunchAR(PunchAck.GetData()); Session.HandleGameEvent(PunchAR);
 	TestTrue(TEXT("Optional unarmed capability enables empty-hand strikes"), Session.SupportsVRUnarmed());
@@ -1137,6 +1156,26 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		VR->TrackingOrigin->SetWorldTransform(TrackingForWorldCompass);
 		VR->Head->AddWorldOffset(FVector(20,5,3)); VR->Head->AddWorldRotation(FRotator(15,10,7)); VR->UpdatePanels();
 		TestTrue(TEXT("World compass ignores physical head movement"),VR->CompassPanel->GetComponentTransform().Equals(WorldCompass,.01));
+		VR->Head->SetWorldTransform(OldHead);
+		VR->Settings->VitalsAnchorMode=2;VR->bVitalsAnchorReady=false;VR->UpdatePanels();
+		const FTransform FixedVitals=VR->VitalsPanel->GetComponentTransform();
+		for(int32 I=0;I<180;++I)
+		{
+			VR->Head->SetWorldLocation(OldHead.GetLocation()+FVector(.2*FMath::Sin(double(I)),.2*FMath::Cos(double(I)),.1*FMath::Sin(I*2.)));
+			VR->Head->SetWorldRotation(OldHead.Rotator()+FRotator(.2*FMath::Cos(double(I)),.3*FMath::Sin(double(I)),.1*FMath::Sin(double(I))));
+			VR->UpdatePanels(1.f/90.f);
+			TestTrue(TEXT("World HUD has no transform jitter under tiny tracking noise"),
+				VR->VitalsPanel->GetComponentTransform().Equals(FixedVitals,.0001)
+				&& VR->CompassPanel->GetComponentTransform().Equals(WorldCompass,.0001));
+		}
+		VR->Head->SetWorldTransform(OldHead);VR->Settings->VitalsAnchorMode=1;VR->bVitalsAnchorReady=false;VR->UpdatePanels();
+		const FVector StillBody=VR->VitalsPanel->GetComponentLocation();
+		for(int32 I=0;I<180;++I)
+		{
+			VR->Head->SetWorldLocation(OldHead.GetLocation()+FVector(.2*FMath::Sin(double(I)),.2*FMath::Cos(double(I)),.1*FMath::Sin(I*2.)));
+			VR->UpdatePanels(1.f/90.f);
+			TestTrue(TEXT("Body HUD rejects sub-centimetre resting-head noise"),VR->VitalsPanel->GetComponentLocation().Equals(StillBody,.001));
+		}
 		VR->Head->SetWorldTransform(OldHead); VR->Settings->CompassAnchorMode=0; VR->UpdatePanels();
 		TestEqual(TEXT("Head compass participates in HMD late update"),VR->CompassPanel->GetAttachParent(),static_cast<USceneComponent*>(VR->Head.Get()));
 		VR->Settings->CompassAnchorMode=1; VR->bCompassAnchorReady=false; VR->UpdatePanels();
@@ -2364,7 +2403,7 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		VR->NextNativeHUDUpdate=0;VR->UpdateNativeHUD(true);
 		TestTrue(TEXT("Native compass is independent of the desktop canvas"),VR->CompassPanel->IsVisible() && VR->NativeCompass.IsValid());
 		TestTrue(TEXT("Native vitals use Slate instead of a desktop crop"),VR->VitalsPanel->IsVisible() && VR->NativeVitals.IsValid() && VR->VitalsPanel->GetWidget()==nullptr);
-		TestTrue(TEXT("Native fellowship subscribes while visible"),VR->FellowshipPanel->IsVisible() && VR->NativeFellowship.IsValid() && VR->Client->bVRFellowshipUpdates);
+		TestTrue(TEXT("Native fellowship subscribes while visible"),VR->NativeFellowship.IsValid() && VR->Client->bVRFellowshipUpdates);
 		VR->Settings->bShowFellowship=false;VR->UpdateNativeHUD(true);
 		TestFalse(TEXT("Hidden fellowship releases updates and ticking"),VR->Client->bVRFellowshipUpdates || VR->FellowshipPanel->IsComponentTickEnabled());
 		VR->Settings->bShowCompass=false;VR->Settings->bPinVitalsToView=false;VR->UpdateNativeHUD(true);
@@ -2377,8 +2416,13 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		VR->NativeCompass->Markers={{{160,120},FLinearColor::Yellow,1,0,true},{{245,180},FLinearColor::Green,2,0,false},{{275,250},FLinearColor::Red,3,1,false}};
 		FACEFellowshipInfo Fellow;Fellow.bValid=true;Fellow.Name=TEXT("Adventurers of Dereth");Fellow.bOpen=true;Fellow.bEvenShare=true;Fellow.LeaderGuid=100;
 		for(int32 I=0;I<9;++I){FACEFellowshipMember M;M.Guid=100+I;M.Name=FString::Printf(TEXT("Adventurer %d"),I+1);M.Level=275;M.HealthCur=275-I*20;M.HealthMax=400;M.StaminaCur=310;M.StaminaMax=450;M.ManaCur=500;M.ManaMax=600;Fellow.Members.Add(M);}
-		TestTrue(TEXT("Fellowship roster updates native HUD"),VR->NativeFellowship->Refresh(Fellow,101));
-		TestFalse(TEXT("Unchanged fellowship data avoids repainting"),VR->NativeFellowship->Refresh(Fellow,101));
+		TestTrue(TEXT("Fellowship roster updates native HUD"),VR->NativeFellowship->Refresh(Fellow,101,100));
+		TestFalse(TEXT("Unchanged fellowship data avoids repainting"),VR->NativeFellowship->Refresh(Fellow,101,100));
+		TestEqual(TEXT("First fellowship row skips self"),VR->NativeFellowship->MemberGuidAt(10),101);
+		TestEqual(TEXT("Last fellowship row remains selectable"),VR->NativeFellowship->MemberGuidAt(8+7*69),108);
+		TestTrue(TEXT("Fellowship removes title/status and empty rows"),VR->NativeFellowship->ComputeDesiredSize(1).Y<=608);
+		Fellow.Name=TEXT("Renamed");Fellow.Members[0].HealthCur=1;
+		TestFalse(TEXT("Hidden fellowship title and self-vitals do not redraw"),VR->NativeFellowship->Refresh(Fellow,101,100));
 		if(FApp::CanEverRender())
 		{
 			FWidgetRenderer Renderer(true,true);
@@ -2386,7 +2430,7 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			for(int I=0;I<3;++I)
 			{
 				const TSharedRef<SWidget> Widget=I==0?StaticCastSharedRef<SWidget>(VR->NativeVitals.ToSharedRef()):I==1?StaticCastSharedRef<SWidget>(VR->NativeCompass.ToSharedRef()):StaticCastSharedRef<SWidget>(VR->NativeFellowship.ToSharedRef());
-				const FIntPoint Size=I==0?FIntPoint(480,240):I==1?FIntPoint(400,500):FIntPoint(480,760);
+				const FIntPoint Size=I==0?FIntPoint(480,240):I==1?FIntPoint(400,500):FIntPoint(VR->NativeFellowship->ComputeDesiredSize(1).X,VR->NativeFellowship->ComputeDesiredSize(1).Y);
 				auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(Size),TF_Bilinear,true);
 				for(int Pass=0;Pass<3;++Pass){Renderer.DrawWidget(Target,Widget,FVector2D(Size),0);FlushRenderingCommands();}
 				TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
@@ -2399,10 +2443,11 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 	{
 		FWidgetRenderer Renderer(true, true);
 		const FString Directory = FPaths::ProjectSavedDir() / TEXT("Automation/VR"); IFileManager::Get().MakeDirectory(*Directory, true);
-		for (int32 I = 0; I < 3; ++I)
+		for (int32 I = 0; I < 7; ++I)
 		{
-			auto* Widget = I == 0 ? VR->MenuWidget.Get() : I == 1 ? VR->WristWidget.Get() : VR->KeyboardWidget.Get();
-			const FIntPoint Size = I == 0 ? FIntPoint(720, 1000) : I == 1 ? FIntPoint(480, 800) : FIntPoint(1200, 400);
+			if(I>=3)VR->MenuWidget->SettingsCategory=I-2;
+			auto* Widget = (I == 0 || I>=3) ? VR->MenuWidget.Get() : I == 1 ? VR->WristWidget.Get() : VR->KeyboardWidget.Get();
+			const FIntPoint Size = (I == 0 || I>=3) ? FIntPoint(720, 1000) : I == 1 ? FIntPoint(480, 800) : FIntPoint(1200, 400);
 			auto* Target = FWidgetRenderer::CreateTargetFor(FVector2D(Size), TF_Bilinear, true);
 			for (int32 Pass = 0; Pass < 3; ++Pass) { Renderer.DrawWidget(Target, Widget->TakeWidget(), FVector2D(Size), 0); FlushRenderingCommands(); }
 			TArray<FColor> Pixels; Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);

@@ -65,6 +65,7 @@ DECLARE_MULTICAST_DELEGATE_FourParams(FACEOnCombatFeedback, const FString&, int3
 class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 {
 	friend class FACEVRProtocolTest;
+	friend class FACEVRObserverProtocolTest;
 	friend class FACEInteractionRecoveryTest;
 	friend class FACEVRRenderReplicationTest;
 	friend class FACEVRRigTest;
@@ -515,7 +516,7 @@ public:
 
 	/** Cast a known spell — targeted if TargetGuid != 0, else untargeted. */
 	void SendCastSpell(int32 SpellId, int32 TargetGuid = 0);
-	void RequestVRCapabilities();
+	void RequestVRCapabilities(bool bLocalVR = true);
 	bool SupportsVRPoses() const { return (VRCapabilities & 16u) != 0; }
 	double LastVRPoseSent = -100.;
 	bool SendVRPose(FACEVRPose Pose);
@@ -557,6 +558,8 @@ public:
 	void SetForcePositionReporting(bool bForce) { bForcePositionReporting = bForce; }
 	/** Flush one AutonomousPosition immediately (before a follow-up Use at range). */
 	void FlushAutonomousPosition(bool bContact = true);
+	/** Update contact after local collision, before a same-frame VR action. */
+	void SetReportedContact(bool bContact) { bAutoPosContact = bContact; }
 
 private:
 	struct FReceivedFragment
@@ -610,6 +613,7 @@ private:
 	void HandlePlayerTeleport(FACEBinaryReader& Reader);
 	void ApplyVRWorldSnapshot(FACEBinaryReader& Reader);
 	void HandleVRPose(FACEBinaryReader& Reader);
+	void SendVRSubscriptions();
 	void HandleHealthFeedback(FACEBinaryReader& Reader);
 	void HandleVRRecovery(FACEBinaryReader& Reader);
 	void HandleVRCasting(FACEBinaryReader& Reader);
@@ -817,6 +821,7 @@ private:
 	/** Encrypted replies can arrive before ConnectRequest supplies ISAAC seeds. */
 	TArray<TArray<uint8>> PreHandshakeDatagrams;
 	uint32 VRCapabilities = 0;
+	bool bLocalVRFeedback = false;
 	int32 VRMissileWeapon = 0;
 	float VRMissileSpeed = 0.f;
 	TMap<int32, FVector> VRSpellProfiles; // speed (AC m/s), gravity enabled, projectile radius (m)
@@ -910,6 +915,12 @@ private:
 	TArray<int32> TradeSelfItems;
 	TArray<int32> TradePartnerItems;
 	bool bUseBusy = false;
+	double UseStartedAt = 0.0;
+	int32 UseSourceGuid = 0, UseTargetGuid = 0;
+	void BeginPendingUse(int32 Source, int32 Target);
+	void ClearPendingUse();
+	void CancelPendingUse(const TCHAR* Reason);
+	void CheckPendingUseTimeout(double Now);
 	uint32 CombatEventRevision = 0;
 	bool bServerAttackInProgress = false;
 	uint32 LastAttackError = 0;

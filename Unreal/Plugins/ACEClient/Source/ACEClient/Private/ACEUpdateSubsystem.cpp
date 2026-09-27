@@ -115,9 +115,17 @@ bool ACEUpdates::VerifyFile(const FString& Path, const FACEUpdateRelease& Releas
     return Valid && BytesToHex(Digest, Length).Equals(Release.Sha256, ESearchCase::IgnoreCase);
 }
 
+const TCHAR* ACEUpdates::InstallationNotice(bool bQuest)
+{
+    return bQuest
+        ? TEXT("AC:VR will close while the update installs. This is expected. Confirm the headset prompt, wait for installation to finish, then reopen AC:VR from your library. Your saved data is kept.")
+        : TEXT("The game will close while the update installs, then reopen automatically in the same desktop or VR mode. Your saved data is kept.");
+}
+
 bool UACEUpdateSubsystem::IsBusy() const
 {
-    return State == EACEUpdateState::Downloading || State == EACEUpdateState::Verifying || State == EACEUpdateState::Installing;
+    return State == EACEUpdateState::Downloading || State == EACEUpdateState::Verifying
+        || State == EACEUpdateState::InstallNotice || State == EACEUpdateState::Installing;
 }
 bool UACEUpdateSubsystem::CanUseLobby() const
 {
@@ -126,17 +134,69 @@ bool UACEUpdateSubsystem::CanUseLobby() const
     return !Session || Session->GetState() == EACESessionState::Disconnected || Session->GetState() == EACESessionState::Failed;
 }
 float UACEUpdateSubsystem::Progress() const { return Stream && Release.Bytes > 0 ? FMath::Clamp(float(double(Stream->Received()) / Release.Bytes), 0.f, 1.f) : 0.f; }
-void UACEUpdateSubsystem::Fail(const FString& Reason) { State = EACEUpdateState::Error; Message = Reason; }
-void UACEUpdateSubsystem::Cancel()
+void UACEUpdateSubsystem::Fail(const FString& Reason) { bAutoUpdatePaused = true; State = EACEUpdateState::Error; Message = Reason; }
+void UACEUpdateSubsystem::ResetRequest()
 {
     ++Generation;
     if (Request) { Request->OnProcessRequestComplete().Unbind(); Request->CancelRequest(); Request.Reset(); }
     if (Stream) { Stream->Close(); Stream.Reset(); }
+}
+void UACEUpdateSubsystem::Cancel()
+{
+    const bool bVerified = State == EACEUpdateState::InstallNotice;
+    ResetRequest();
+    InstallAt = 0;
+    bAutoUpdatePaused = true;
     // Keep an already verified payload for another install attempt; partial downloads never install.
-    State = Release.Number > ACEClientBuild::ReleaseNumber ? EACEUpdateState::Available : EACEUpdateState::Idle;
-    Message = TEXT("Update cancelled. You can keep playing or try again.");
+    State = bVerified ? EACEUpdateState::Ready : Release.Number > ACEClientBuild::ReleaseNumber ? EACEUpdateState::Available : EACEUpdateState::Idle;
+    Message = bAutoUpdateEnabled ? TEXT("Update cancelled. Automatic updates are paused until you restart the app or choose Check now. You can keep playing.") : TEXT("Update cancelled. You can keep playing or try again.");
 }
 void UACEUpdateSubsystem::Deinitialize() { Cancel(); Super::Deinitialize(); }
+
+void UACEUpdateSubsystem::SetAutoUpdateEnabled(bool bEnabled)
+{
+    if (bAutoUpdateEnabled == bEnabled) return;
+    bAutoUpdateEnabled = bEnabled;
+    if (!bEnabled && (State == EACEUpdateState::InstallNotice
+        || (bAutoDownloadStarted && (State == EACEUpdateState::Downloading || State == EACEUpdateState::Verifying)))) Cancel();
+    bAutoUpdatePaused = false;
+    bAutoDownloadStarted = bAutoInstallStarted = false;
+    NextAutomaticCheck = 0;
+}
+
+EACEAutoUpdateAction UACEUpdateSubsystem::TakeAutomaticAction(double Now, bool bInLobby)
+{
+    if (!bAutoUpdateEnabled || bAutoUpdatePaused || !bInLobby) return EACEAutoUpdateAction::None;
+    if (State == EACEUpdateState::Available && Release.Number > ACEClientBuild::ReleaseNumber && !bAutoDownloadStarted)
+    {
+        bAutoDownloadStarted = true;
+        return EACEAutoUpdateAction::Download;
+    }
+    if (State == EACEUpdateState::Ready && Release.Number > ACEClientBuild::ReleaseNumber && !bAutoInstallStarted)
+    {
+        // Consume before opening the OS installer. Permission prompts/cancellation
+        // can leave Ready intact; neither may reopen the installer on every tick.
+        bAutoInstallStarted = true;
+        return EACEAutoUpdateAction::Install;
+    }
+    if ((State == EACEUpdateState::Idle || State == EACEUpdateState::Current || State == EACEUpdateState::Error) && Now >= NextAutomaticCheck)
+        return EACEAutoUpdateAction::Check;
+    return EACEAutoUpdateAction::None;
+}
+
+EACEAutoUpdateAction UACEUpdateSubsystem::PollAutoUpdate(bool bVR)
+{
+    if (GIsEditor || FApp::IsUnattended()) return EACEAutoUpdateAction::None;
+    const auto Action = TakeAutomaticAction(FPlatformTime::Seconds(), CanUseLobby());
+    switch (Action)
+    {
+    case EACEAutoUpdateAction::Check: Check(true); break;
+    case EACEAutoUpdateAction::Download: Download(); break;
+    case EACEAutoUpdateAction::Install: Install(bVR); break;
+    default: break;
+    }
+    return Action;
+}
 
 FString UACEUpdateSubsystem::CacheDirectory() const
 {
@@ -154,8 +214,13 @@ FString UACEUpdateSubsystem::PayloadPath() const { return CacheDirectory() / (PL
 void UACEUpdateSubsystem::Check(bool bAutomatic)
 {
     if (IsBusy() || State == EACEUpdateState::Checking || !CanUseLobby()) return;
-    if (bAutomatic && (bChecked || GIsEditor || FApp::IsUnattended())) return;
-    Cancel(); bChecked = true; Release = {}; State = EACEUpdateState::Checking; Message = TEXT("Checking for updates...");
+    const double Now = FPlatformTime::Seconds();
+    if (bAutomatic && (GIsEditor || FApp::IsUnattended() || bAutoUpdatePaused
+        || (bChecked && (!bAutoUpdateEnabled || Now < NextAutomaticCheck)))) return;
+    ResetRequest(); bChecked = true; bAutoUpdatePaused = false;
+    bAutoDownloadStarted = bAutoInstallStarted = false;
+    NextAutomaticCheck = Now + 15 * 60;
+    Release = {}; State = EACEUpdateState::Checking; Message = TEXT("Checking for updates...");
     const uint32 Ticket = Generation;
     auto Body = MakeShared<FACEUpdateStream, ESPMode::ThreadSafe>(65536); Stream = Body;
     Request = FHttpModule::Get().CreateRequest(); Request->SetURL(ACEUpdates::ManifestURL); Request->SetVerb(TEXT("GET"));
@@ -179,7 +244,7 @@ void UACEUpdateSubsystem::Check(bool bAutomatic)
 void UACEUpdateSubsystem::Download()
 {
     if (IsBusy() || !CanUseLobby() || Release.Number <= ACEClientBuild::ReleaseNumber) return;
-    Cancel(); State = EACEUpdateState::Downloading; Message = TEXT("Downloading update...");
+    ResetRequest(); State = EACEUpdateState::Downloading; Message = TEXT("Downloading update...");
     IFileManager::Get().MakeDirectory(*CacheDirectory(), true);
     uint64 Total = 0, Free = 0;
     if (FPlatformMisc::GetDiskTotalAndFreeSpace(CacheDirectory(), Total, Free) && Free < uint64(Release.Bytes) * 2 + 1073741824ull)
@@ -223,7 +288,7 @@ void UACEUpdateSubsystem::VerifyDownload(const FString& Path, bool bCached)
             if (!bCached && !IFileManager::Get().Move(*Self->PayloadPath(), *Path, true, true))
             { Self->Fail(TEXT("Could not save the update. Check storage and try again.")); return; }
             Self->State = EACEUpdateState::Ready;
-            Self->Message = PLATFORM_ANDROID ? TEXT("Update ready. Choose Install, then confirm in the headset. Your game data is kept.") : TEXT("Update ready. Install and restart keeps your accounts, settings, and game data.");
+            Self->Message = FString(TEXT("Update ready. ")) + ACEUpdates::InstallationNotice(PLATFORM_ANDROID);
         });
     });
 }
@@ -231,19 +296,39 @@ void UACEUpdateSubsystem::VerifyDownload(const FString& Path, bool bCached)
 void UACEUpdateSubsystem::Install(bool bVR)
 {
     if (State != EACEUpdateState::Ready || !CanUseLobby()) return;
+    bAutoInstallStarted = true; // Manual attempts must not be repeated by the automatic poll either.
+    bInstallVR = bVR;
+    State = EACEUpdateState::InstallNotice;
+    const double Now = FPlatformTime::Seconds();
+    InstallAt = Now + 8.;
+    AdvanceInstallNotice(Now); // Give the message time to render and be read before closing the game.
+}
+
+bool UACEUpdateSubsystem::AdvanceInstallNotice(double Now)
+{
+    if (State != EACEUpdateState::InstallNotice) return false;
+    const int32 Seconds = FMath::Max(0, FMath::CeilToInt(InstallAt - Now));
+    Message = FString::Printf(TEXT("Update starting in %d seconds.\n%s"), Seconds, ACEUpdates::InstallationNotice(PLATFORM_ANDROID));
+    return Now >= InstallAt;
+}
+
+void UACEUpdateSubsystem::LaunchInstaller()
+{
+    if (State != EACEUpdateState::InstallNotice || !CanUseLobby()) return;
+    State = EACEUpdateState::Ready; // A permission prompt may require another explicit attempt.
+    if (GIsEditor || FApp::IsUnattended()) { Fail(TEXT("Install updates from the packaged game, not the editor or a test run.")); return; }
 #if PLATFORM_ANDROID
     if (JNIEnv* Env = FAndroidApplication::GetJavaEnv())
     {
         static jmethodID Method = FJavaWrapper::FindMethod(Env, FJavaWrapper::GameActivityClassID, "AndroidThunkJava_ACEInstallUpdate", "(Ljava/lang/String;I)Ljava/lang/String;", false);
         const auto Path = FJavaHelper::ToJavaString(Env, PayloadPath());
         const FString Result = FJavaHelper::FStringFromLocalRef(Env, static_cast<jstring>(FJavaWrapper::CallObjectMethod(Env, FJavaWrapper::GameActivityThis, Method, *Path, Release.Number)));
-        if (Result == TEXT("started")) { State = EACEUpdateState::Installing; Message = TEXT("Preparing installation. Confirm the update in the headset when asked."); }
+        if (Result == TEXT("started")) { State = EACEUpdateState::Installing; Message = FString(TEXT("Installing update. ")) + ACEUpdates::InstallationNotice(true); }
         else if (Result == TEXT("permission")) Message = TEXT("Allow AC:VR to install updates in the headset settings, return here, then choose Install again.");
         else Message = TEXT("The headset could not open the installer. Try again, or use the USB updater from thwargle.com.");
         return;
     }
 #elif PLATFORM_WINDOWS
-    if (GIsEditor || FApp::IsUnattended()) { Fail(TEXT("Install updates from the packaged game, not the editor or a test run.")); return; }
     const FString Root = FPaths::ConvertRelativePathToFull(FString(FPlatformProcess::BaseDir()) / TEXT("../../.."));
     const FString Script = Root / TEXT("Update-Client.ps1");
     const FString Helper = CacheDirectory() / TEXT("Update-Client.ps1");
@@ -251,7 +336,7 @@ void UACEUpdateSubsystem::Install(bool bVR)
     { Fail(TEXT("The update helper is missing. Please use the installer from thwargle.com.")); return; }
     FString Shell = FPlatformMisc::GetEnvironmentVariable(TEXT("SystemRoot")) / TEXT("System32/WindowsPowerShell/v1.0/powershell.exe");
     const FString Args = FString::Printf(TEXT("-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"%s\" -Installer \"%s\" -ExpectedSha256 %s -InstallDirectory \"%s\" -GameProcessId %u -Mode %s"),
-        *Helper, *PayloadPath(), *Release.Sha256, *Root, FPlatformProcess::GetCurrentProcessId(), bVR ? TEXT("VR") : TEXT("Desktop"));
+        *Helper, *PayloadPath(), *Release.Sha256, *Root, FPlatformProcess::GetCurrentProcessId(), bInstallVR ? TEXT("VR") : TEXT("Desktop"));
     auto Handle = FPlatformProcess::CreateProc(*Shell, *Args, true, true, true, nullptr, 0, *CacheDirectory(), nullptr);
     if (!Handle.IsValid()) { Fail(TEXT("Could not start the updater. Please try again.")); return; }
     FPlatformProcess::CloseProc(Handle); State = EACEUpdateState::Installing;
@@ -264,13 +349,19 @@ void UACEUpdateSubsystem::Install(bool bVR)
 
 void UACEUpdateSubsystem::PollInstall()
 {
+    if (State == EACEUpdateState::InstallNotice)
+    {
+        if (!CanUseLobby()) { Cancel(); return; }
+        if (!AdvanceInstallNotice(FPlatformTime::Seconds())) return;
+        LaunchInstaller();
+    }
 #if PLATFORM_ANDROID
     if (State != EACEUpdateState::Installing) return;
     if (JNIEnv* Env = FAndroidApplication::GetJavaEnv())
     {
         static jmethodID Method = FJavaWrapper::FindMethod(Env, FJavaWrapper::GameActivityClassID, "AndroidThunkJava_ACEUpdateStatus", "()Ljava/lang/String;", false);
         const FString Result = FJavaHelper::FStringFromLocalRef(Env, static_cast<jstring>(FJavaWrapper::CallObjectMethod(Env, FJavaWrapper::GameActivityThis, Method)));
-        if (Result == TEXT("confirm")) Message = TEXT("Confirm the update in the headset's installation window.");
+        if (Result == TEXT("confirm")) Message = FString(TEXT("Confirm the update in the headset's installation window. ")) + ACEUpdates::InstallationNotice(true);
         else if (Result.StartsWith(TEXT("failed"))) { State = EACEUpdateState::Ready; Message = TEXT("Installation was cancelled or failed. Your current version is unchanged. You can try Install again."); }
     }
 #endif
@@ -280,6 +371,95 @@ void UACEUpdateSubsystem::PollInstall()
 #include "Misc/AutomationTest.h"
 #include "Misc/FileHelper.h"
 #include "Misc/ScopeExit.h"
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUpdateNoticeTest, "ACE.Updates.InstallationNotice",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACEUpdateNoticeTest::RunTest(const FString&)
+{
+    auto* Updater=NewObject<UACEUpdateSubsystem>(NewObject<UGameInstance>());
+    Updater->Release.Number=ACEClientBuild::ReleaseNumber+1;
+    Updater->State=EACEUpdateState::Verifying;
+    Updater->Install(false);
+    TestEqual(TEXT("An unverified download cannot start the notice or installation"),Updater->State,EACEUpdateState::Verifying);
+    Updater->State=EACEUpdateState::Ready;
+    const double Before=FPlatformTime::Seconds();
+    Updater->Install(true);
+    TestEqual(TEXT("Manual install first shows the notice without launching the OS installer"),Updater->State,EACEUpdateState::InstallNotice);
+    TestTrue(TEXT("The notice allows eight seconds to read"),Updater->InstallAt>=Before+8.);
+    TestTrue(TEXT("Login is blocked during the notice"),Updater->IsBusy());
+    TestTrue(TEXT("VR restart mode survives deferred installation"),Updater->bInstallVR);
+    const double Deadline=Updater->InstallAt;
+    Updater->Install(false);
+    TestTrue(TEXT("Duplicate presses do not reset the countdown or change VR mode"),Updater->InstallAt==Deadline && Updater->bInstallVR);
+    TestFalse(TEXT("Installer cannot start before the notice deadline"),Updater->AdvanceInstallNotice(Deadline-.01));
+    TestTrue(TEXT("Installer may start once the entire notice has elapsed"),Updater->AdvanceInstallNotice(Deadline));
+    Updater->Cancel();
+    TestEqual(TEXT("Cancelling the notice retains the verified payload"),Updater->State,EACEUpdateState::Ready);
+    TestFalse(TEXT("A cancelled notice cannot launch later"),Updater->AdvanceInstallNotice(Deadline+60));
+    TestFalse(TEXT("Cancelling allows the user to keep playing"),Updater->IsBusy());
+    Updater->SetAutoUpdateEnabled(true);
+    TestEqual(TEXT("Automatic installation uses the same entry point"),Updater->TakeAutomaticAction(Deadline,true),EACEAutoUpdateAction::Install);
+    Updater->Install(false);
+    TestEqual(TEXT("Automatic install also shows the notice"),Updater->State,EACEUpdateState::InstallNotice);
+    TestFalse(TEXT("Desktop restart mode survives deferred installation"),Updater->bInstallVR);
+    Updater->SetAutoUpdateEnabled(false);
+    TestEqual(TEXT("Opting out cancels a pending automatic install"),Updater->State,EACEUpdateState::Ready);
+    TestFalse(TEXT("Opt-out cannot leave a queued installation"),Updater->AdvanceInstallNotice(Deadline+60));
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEAutoUpdateTest, "ACE.Updates.AutomaticLobbyPolicy",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACEAutoUpdateTest::RunTest(const FString&)
+{
+    auto* Updater=NewObject<UACEUpdateSubsystem>(NewObject<UGameInstance>());
+    Updater->Release.Number=ACEClientBuild::ReleaseNumber+1;
+    Updater->State=EACEUpdateState::Available;
+    TestFalse(TEXT("Automatic updates default off"),Updater->IsAutoUpdateEnabled());
+    TestEqual(TEXT("Available releases wait for consent by default"),Updater->TakeAutomaticAction(100,true),EACEAutoUpdateAction::None);
+    Updater->SetAutoUpdateEnabled(true);
+    TestEqual(TEXT("An available update cannot download after login begins"),Updater->TakeAutomaticAction(100,false),EACEAutoUpdateAction::None);
+    TestEqual(TEXT("Opt-in downloads from the launcher"),Updater->TakeAutomaticAction(100,true),EACEAutoUpdateAction::Download);
+    TestEqual(TEXT("A download is only started once"),Updater->TakeAutomaticAction(100,true),EACEAutoUpdateAction::None);
+    Updater->State=EACEUpdateState::Verifying;
+    TestEqual(TEXT("Unverified payloads never auto-install"),Updater->TakeAutomaticAction(100,true),EACEAutoUpdateAction::None);
+    Updater->State=EACEUpdateState::Ready;
+    TestEqual(TEXT("A ready update cannot install during gameplay"),Updater->TakeAutomaticAction(100,false),EACEAutoUpdateAction::None);
+    TestEqual(TEXT("Verified updates install in the launcher"),Updater->TakeAutomaticAction(100,true),EACEAutoUpdateAction::Install);
+    TestEqual(TEXT("Quest permission dialog does not repeat while Ready"),Updater->TakeAutomaticAction(101,true),EACEAutoUpdateAction::None);
+    Updater->State=EACEUpdateState::Installing;
+    TestEqual(TEXT("An active installer is not interrupted"),Updater->TakeAutomaticAction(102,true),EACEAutoUpdateAction::None);
+    Updater->State=EACEUpdateState::Ready; // Android returns here on OS cancellation/failure.
+    TestEqual(TEXT("Cancelling the OS installer does not open it again"),Updater->TakeAutomaticAction(103,true),EACEAutoUpdateAction::None);
+    Updater->Cancel();
+    TestTrue(TEXT("Cancel retains the saved opt-in for next launch"),Updater->IsAutoUpdateEnabled());
+    Updater->SetAutoUpdateEnabled(true); // Recreating the launcher must preserve this session's pause.
+    TestEqual(TEXT("Cancel remains paused when the launcher is rebuilt"),Updater->TakeAutomaticAction(2000,true),EACEAutoUpdateAction::None);
+    Updater->SetAutoUpdateEnabled(false); Updater->SetAutoUpdateEnabled(true);
+    TestEqual(TEXT("Explicit re-enable permits another attempt"),Updater->TakeAutomaticAction(2000,true),EACEAutoUpdateAction::Download);
+    Updater->State=EACEUpdateState::Verifying;
+    const uint32 Ticket=Updater->Generation;
+    Updater->SetAutoUpdateEnabled(false);
+    TestTrue(TEXT("Opt-out cancels automatic verification and invalidates its callback"),!Updater->IsBusy() && Updater->Generation>Ticket);
+    Updater->SetAutoUpdateEnabled(true);
+    Updater->Fail(TEXT("Fixture: invalid download"));
+    TestEqual(TEXT("Failures cannot trigger an automatic retry loop"),Updater->TakeAutomaticAction(4000,true),EACEAutoUpdateAction::None);
+    Updater->SetAutoUpdateEnabled(false); Updater->SetAutoUpdateEnabled(true);
+    TestEqual(TEXT("Explicit re-enable after failure starts a fresh check"),Updater->TakeAutomaticAction(4000,true),EACEAutoUpdateAction::Check);
+    Updater->Release.Number=ACEClientBuild::ReleaseNumber;
+    Updater->State=EACEUpdateState::Ready;
+    TestEqual(TEXT("The installed version is never reinstalled"),Updater->TakeAutomaticAction(4000,true),EACEAutoUpdateAction::None);
+    Updater->State=EACEUpdateState::Current; Updater->NextAutomaticCheck=4900;
+    TestEqual(TEXT("Current versions wait for the polling interval"),Updater->TakeAutomaticAction(4899,true),EACEAutoUpdateAction::None);
+    TestEqual(TEXT("Current versions recheck without user intervention"),Updater->TakeAutomaticAction(4900,true),EACEAutoUpdateAction::Check);
+    TestEqual(TEXT("Periodic checks do not run during gameplay"),Updater->TakeAutomaticAction(4900,false),EACEAutoUpdateAction::None);
+    Updater->State=EACEUpdateState::Checking;
+    TestEqual(TEXT("A manifest request cannot overlap another check"),Updater->TakeAutomaticAction(5000,true),EACEAutoUpdateAction::None);
+    Updater->SetAutoUpdateEnabled(false); Updater->State=EACEUpdateState::Ready;
+    Updater->Release.Number=ACEClientBuild::ReleaseNumber+1;
+    TestEqual(TEXT("Turning the checkbox off leaves installation manual"),Updater->TakeAutomaticAction(5000,true),EACEAutoUpdateAction::None);
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUpdateManifestTest, "ACE.Updates.ManifestIntegrityAndCancellation",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEUpdateManifestTest::RunTest(const FString&)
