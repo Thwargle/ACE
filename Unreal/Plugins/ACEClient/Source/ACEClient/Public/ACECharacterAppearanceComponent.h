@@ -25,6 +25,7 @@ class ACECLIENT_API UACECharacterAppearanceComponent : public UActorComponent
 	friend class FACERetailRuntimeRegressionTest;
 	friend class FACEMovementReviewTest;
 	friend class FACEAvatarMotionTest;
+	friend class FACEMultipartUpdateTest;
 	friend class FACERetailScreenTest;
     friend class FACERetailWorldEntryTest;
 	friend class FACERetailPortalSpaceTest;
@@ -78,8 +79,8 @@ public:
 	bool GetPartCurrentTransform(int32 PartIndex, FTransform& OutTransform) const;
 	void StabilizeVRPelvis();
 	void UpdateVRLowerBody(float Dt);
-	/** Cosmetic chest bend, shared by the owner and replicated tracked avatars. Returns the shoulder frame. */
-	FTransform UpdateVRUpperBody(const FTransform& Head, const FTransform& LeftGrip, const FTransform& RightGrip,
+	/** Apply the final root/chest pose once from the unbent body frame. Returns the shoulder frame. */
+	FTransform UpdateVRUpperBody(const FTransform& BodyFrame, const FTransform& Head, const FTransform& LeftGrip, const FTransform& RightGrip,
 		bool bLeftTracked, bool bRightTracked, float Dt);
 	void ResetVRLowerBody() { bVRLowerBodyReady = false; VRGaitTime = VRGaitBlend = 0.f; VRTorsoAngles = FVector::ZeroVector; }
 private:
@@ -87,6 +88,7 @@ private:
 	bool bVRLowerBodyReady = false;
 	FVector VRPreviousBodyLocation = FVector::ZeroVector;
 	float VRGaitTime = 0.f, VRGaitBlend = 0.f;
+	TArray<FTransform> VRGaitPoseScratch;
 public:
 
 	/** Part mesh component used as an attach parent for held items (hand / shield / etc.). */

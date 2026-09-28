@@ -20,6 +20,10 @@
 #include "StaticMeshResources.h"
 #include "RayTracingInstance.h"
 #include "HAL/IConsoleManager.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
+
+static TAutoConsoleVariable<int32> GACETraceProxyRebuilds(TEXT("ace.Render.TraceProxyRebuilds"), 0,
+	TEXT("Add procedural-mesh component paths to CPU traces when their render proxies are rebuilt."));
 
 static TAutoConsoleVariable<int32> GACEReusePrimitiveBuffers(TEXT("ace.Render.ReusePrimitiveBuffers"), 1,
 	TEXT("Reuse scene-owned primitive uniforms across procedural mesh sections, views and frames."), ECVF_RenderThreadSafe);
@@ -114,6 +118,10 @@ public:
 		, MaterialRelevance(Component->GetMaterialRelevance(GetScene().GetShaderPlatform()))
 		, bCachedDraws(Component->bPreferCachedDraws && GACECachedWorldDraws.GetValueOnGameThread() != 0)
 	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(ACE_ProcMeshCreateProxy);
+		const bool bTracePath = GACETraceProxyRebuilds.GetValueOnGameThread() != 0;
+		TRACE_CPUPROFILER_EVENT_SCOPE_TEXT_CONDITIONAL(
+			bTracePath ? *Component->GetPathName() : TEXT(""), bTracePath);
 		bStaticElementsAlwaysUseProxyPrimitiveUniformBuffer = true;
 		// Copy each section
 		const int32 NumSections = Component->ProcMeshSections.Num();
@@ -365,6 +373,7 @@ public:
 	virtual void GetDynamicMeshElements(const TArray<const FSceneView*>& Views, const FSceneViewFamily& ViewFamily, uint32 VisibilityMap, FMeshElementCollector& Collector) const override
 	{
 		SCOPE_CYCLE_COUNTER(STAT_ProcMesh_GetMeshElements);
+		TRACE_CPUPROFILER_EVENT_SCOPE(ACE_ProcMeshGather);
 
 
 		// Set up wireframe material (if needed)

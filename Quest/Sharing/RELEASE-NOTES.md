@@ -1,70 +1,59 @@
-# AC:Unreal / AC:VR release 82
+# AC:Unreal / AC:VR release 83
 
-Windows desktop, PC VR, and native Quest: 2026.09.27.82.
-Release number / Android version code: 82. Quest installer revision: 6.
+Windows desktop, PC VR, and native Quest: **2026.09.27.83**.
+Release number / Android version code: 83. Quest installer revision: 6.
 
-## Changes since public release v81
+## Changes since public release v82
 
-### Network movement and mixed desktop/VR play
+### Movement and portals
 
-- Desktop clients can receive and display VR head, hand, body, and equipment
-  movement without having a headset. Standard movement and animation updates
-  continue to work in both directions.
-- Smooth network corrections without smoothing away normal running speed.
-  Reduce sideways correction noise, follow slopes, and stop predicted movement
-  at unsupported edges instead of running into empty space and snapping back.
-- Send current feet positions with tracked poses; retain head/hand movement
-  history when equipment changes. Restore ordinary movement after tracking loss
-  without overwriting newer position corrections with older buffered poses.
-- The receive-only VR pose protocol and server-side landing/interaction changes
-  require the accompanying ACE server changes. They do not update third-party
-  servers or add tracked hand animations to the original retail executable.
+- Improve escape from overlapping creatures, including Tuskers and Virindi.
+  Walking away or along a contact can free the player while walls, other
+  creatures, and movement deeper into a creature remain blocked.
+- Improve remote players' stair ascent and descent using the shared player-body
+  sweeps, reducing stops at risers and feet intersecting descending treads.
+- Prevent crowded portal arrivals from being rejected just because creatures
+  occupy the destination. Architecture must still be clear and loaded.
+- Preserve intentional airborne portal destinations and let the player fall to
+  the landing. Only confirmed obstruction with no valid nearby placement can
+  trigger automatic lifestone recovery; unfinished loading is not treated as
+  proof that the player is trapped.
 
-### Collision and interactions
+### Shared performance improvements
 
-- Use authored creature collision spheres for passage and remote prediction
-  instead of oversized model bounds, including Phyntos Wasps, Tuskers, and Virindi.
-- Improve wall sliding, stair-edge contacts, and bounded recovery from embedded
-  positions. Upper-body contacts no longer become false floor support.
-- Suppress generated scenery in building-occupied outdoor cells, including the
-  unwanted Mosswart Fort courtyard tree; rebuild outdated scenery caches.
-- Release stale door/NPC interactions after failed approaches, portals, or a
-  missing completion timeout. Timed-out actions are not automatically repeated.
-- Send the actual touchdown position before VR actions. The updated ACE server
-  verifies pending landings before rejecting a grounded player as airborne.
-- Changing overhead camera angle preserves the chosen zoom distance.
+- Run gameplay UI refresh once per frame across desktop and VR render paths.
+- Reduce repeated inventory scans, item copies, sorting, vendor filtering and
+  equipment checks. Skip radar brush changes when its appearance is unchanged.
+- Reuse immutable landblock metadata instead of copying nested building and
+  portal data during movement, visibility and scenery queries.
+- Reuse identical ground-support queries within a remote movement substep and
+  use existing entity lookups for selection markers and flashes.
+- Reuse VR gait pose storage and blend animation poses directly into body parts.
+- Apply the final VR body placement once per update, avoiding duplicate updates
+  to body parts and attachments. This also benefits desktop observers of VR users.
+- Add rendering diagnostics for recurring mesh recreation. Quest actor draw
+  caching stays disabled because the native comparison did not show an advantage.
 
-### VR interface
+## Updating
 
-- Show only other fellowship members' names and vitals in the optional VR
-  fellowship panel, without the full grey background or duplicate self vitals.
-- Organize VR settings into Movement, Panels, Combat, Controls, and Graphics,
-  with consistent controls and separate scrolling for each section.
-- Filter compass, vitals, and fellowship panel textures to reduce shimmer during
-  small head movements. Keep World panels fixed and reduce tiny Body-anchor motion.
+Use **Updates** in the launcher or download the current installer from the site.
+Existing supported updaters detect release 83. Accounts, settings and retail DAT
+files are retained; do not uninstall first. Installation closes the game.
+On Quest, confirm Android's installation prompt, wait for completion, then reopen
+AC:VR from the library. Optional automatic updating remains off by default.
 
-### Updating
+No retail DAT files, saved accounts or game-server configuration are bundled.
+This release updates the clients; no new game-server deployment is required.
 
-- Add an optional automatic-update checkbox, off by default. When enabled, the
-  launcher checks periodically and downloads verified updates while idle.
-  Login/gameplay prevents automatic installation; cancelling pauses automation
-  for the current app session.
-- Show an eight-second cancellable notice explaining that installation closes
-  the game. Windows reopens in the same desktop/VR mode. On Quest, confirm the
-  Android prompt, wait for installation, then reopen AC:VR from the library.
-- Keep manual updating available. Existing v73+ clients detect v82 in Updates;
-  earlier clients need the website installer or Quest USB bundle once.
+## Performance and validation notes
 
-Accounts, settings, and retail DAT files are retained. Do not uninstall first.
-No retail DATs, saved accounts, or server configuration are bundled.
+The prior Yaraq headset captures confirmed one gameplay UI refresh per frame and
+less CPU work in inventory/radar/hotbar refresh. The latest actor-cache comparison
+was approximately 46–50 FPS with menus closed and changing clocks/head views.
+This release does **not** claim 90 FPS or a measured headset FPS gain from the
+newest multipart changes. Those still need an installed-build comparison.
 
-## Validation and limitations
-
-Automated validation covers decoded movement/pose packets, actual DAT avatar
-rendering, slopes and ledges, creature passage widths, reported stair/wall
-fixtures, interaction recovery, updater state, and VR panels. Release package,
-installer-upgrade, and public-download checks are recorded in the check-in notes.
-
-A live mixed-client playtest and standalone headset panel comparison remain
-necessary. This release does not claim a measured 90 FPS result or complete
-resolution of every reported collision case.
+Automated checks cover actual DAT bodies and portal geometry, crowded arrivals,
+intentional drops, remote stairs, animation/attachment equivalence, UI refresh,
+inventory queries, rendering and updater compatibility. They do not establish
+that every live server route or collision report is resolved.

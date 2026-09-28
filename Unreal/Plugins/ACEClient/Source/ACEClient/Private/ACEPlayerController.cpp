@@ -2478,7 +2478,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						}
 						// Ceiling / soffit penetration: never TryStepUp — that shoves the
 						// capsule through the floor above. Push along the 3D normal instead.
-						if (PenHit.ImpactNormal.Z < -0.15f)
+						if (PenHit.ImpactNormal.Z < -0.15f && !ACEBodySweep::IsCreatureBody(PenHit))
 						{
 							FVector Push = PenHit.ImpactNormal.GetSafeNormal();
 							if (Push.IsNearlyZero())
@@ -4876,8 +4876,21 @@ void AACEPlayerController::BeginWorldTransition(const TCHAR* Reason)
 	UE_LOG(LogTemp, Log, TEXT("ACE: portal-space transition started (%s)"), Reason ? Reason : TEXT("unknown"));
 }
 
-bool AACEPlayerController::FindWorldEntryPlacement(FVector& OutCapsuleCenter) const
+bool AACEPlayerController::IsWorldEntryGeometryReady(uint32 CandidateCell) const
 {
+	UWorld* World = GetWorld();
+	if (!World || !Client || !Client->GetPlayerPosition().IsValid()) return false;
+	if (World->WorldComposition && World->WorldComposition->GetTilesList().Num() > 0)
+		return ACEWcTerrainRuntime::IsTerrainReadyAround(World, Client->GetPlayerPosition().ToUnrealLocation(WorldScale), 4);
+	const auto* GM = World->GetAuthGameMode();
+	const auto* Terrain = GM ? GM->FindComponentByClass<UACETerrainPresenterComponent>() : nullptr;
+	return Terrain && Terrain->IsPortalPlacementGeometryReady(Client->GetPlayerPosition().CellId, CandidateCell);
+}
+
+bool AACEPlayerController::FindWorldEntryPlacement(FVector& OutCapsuleCenter, EWorldEntryPlacement* OutState, uint32* OutCellId) const
+{
+	if (OutState) *OutState = EWorldEntryPlacement::Unavailable;
+	if (OutCellId) *OutCellId = 0;
 	const APawn* EntryPawn = GetPawn();
 	const UCapsuleComponent* Capsule = EntryPawn ? EntryPawn->FindComponentByClass<UCapsuleComponent>() : nullptr;
 	if (!Client || !GetWorld() || !Capsule || !Client->GetPlayerPosition().IsValid()) return false;
@@ -4890,40 +4903,84 @@ bool AACEPlayerController::FindWorldEntryPlacement(FVector& OutCapsuleCenter) co
 	// body inside sloping ground even when its center foot point is supported.
 	const float FloorRadius = Radius;
 	const float StepUp = FMath::Max(2.f, GetStepUpHeightCm());
-	FCollisionQueryParams Params(SCENE_QUERY_STAT(ACEWorldEntryPlacement), false, EntryPawn);
+	const float StepDown = GetStepDownHeightCm();
+	const bool bGeometryReady = IsWorldEntryGeometryReady();
+	bool bSawSolidBlocker = false;
+	bool bUnresolvedClearSpace = false;
+	const FCollisionQueryParams BaseParams(SCENE_QUERY_STAT(ACEWorldEntryPlacement), false, EntryPawn);
+	// Portal/login coordinates are authoritative, and the server suppresses
+	// creature contacts while materializing. A mob at the exit must neither
+	// become our floor nor make valid architecture look like an unsafe landing.
+	// Exclude only nearby creature bodies for this placement query; normal
+	// movement immediately resumes their authored collision and escape rules.
+	const float Limit = 4.f * WorldScale;
+	TArray<FOverlapResult> Nearby;
 	const auto Shape = FCollisionShape::MakeCapsule(FMath::Max(1.f, Radius - .5f), FMath::Max(Radius, HalfHeight - .5f));
 	auto TryPosition = [&](FVector CandidateFeet)
 	{
 		// Outdoor portal coordinates can predate the current land height (the
 		// Khayyaban arrival is below its DAT terrain). Seed from that height,
-		// then still require cooked floor support and a clear full body.
+		// then still require cooked geometry and a clear full body.
 		float TerrainZ = 0.f;
 		if (!ACECellTransit::IsIndoorCell(Pose.CellId) && Dat
 			&& Dat->SampleOutdoorGroundZ(CandidateFeet.X, CandidateFeet.Y, WorldScale, TerrainZ))
 			CandidateFeet.Z = FMath::Max(CandidateFeet.Z, double(TerrainZ));
+		FCollisionQueryParams Params=BaseParams;
+		Nearby.Reset();
+		// Query at the corrected candidate height as well as its XY: old outdoor
+		// portal coordinates can lie below today's terrain and its creatures.
+		GetWorld()->OverlapMultiByChannel(Nearby, CandidateFeet + FVector(0,0,HalfHeight-Limit*.5f),
+			FQuat::Identity, ECC_Pawn, FCollisionShape::MakeBox(FVector(Radius,Radius,
+				HalfHeight+Limit*.5f+StepUp)), Params);
+		for (const FOverlapResult& Overlap : Nearby)
+		{
+			const UPrimitiveComponent* Component=Overlap.GetComponent();
+			if (Component && Component->ComponentTags.Contains(TEXT("ACECreatureBody")))
+				Params.AddIgnoredComponent(Component);
+		}
 		FHitResult Floor;
-		// A free capsule over missing terrain is not a valid placement. Search at most
-		// retail's four-unit placement radius down, and only accept walkable support.
-		if (!GetWorld()->SweepSingleByChannel(Floor,
+		// Retail CTransition::find_placement_position keeps the placement and clears
+		// contact when its normal step-down finds no floor. Four units is the lateral
+		// escape search, not a mandatory floor search or a license to skip a portal drop.
+		const bool bSupported = GetWorld()->SweepSingleByChannel(Floor,
 			CandidateFeet + FVector(0, 0, StepUp + FloorRadius),
-			CandidateFeet + FVector(0, 0, FloorRadius - 4.f * WorldScale), FQuat::Identity,
+			CandidateFeet + FVector(0, 0, FloorRadius - StepDown), FQuat::Identity,
 			ECC_Pawn, FCollisionShape::MakeSphere(FloorRadius), Params)
-			|| Floor.bStartPenetrating || Floor.ImpactNormal.Z < .5f) return false;
-		CandidateFeet.Z = Floor.Location.Z - FloorRadius + .5f;
+			&& !Floor.bStartPenetrating && Floor.ImpactNormal.Z >= .5f;
+		if (bSupported) CandidateFeet.Z = Floor.Location.Z - FloorRadius + .5f;
 		const FVector Center = CandidateFeet + FVector(0, 0, HalfHeight);
-		if (ACEBodySweep::OverlapsBody(*GetWorld(),Center,Shape,Params)) return false;
-		// Keep a local placement in the server's destination cell. Adjacent room
-		// physics may not be active yet, so its apparent free space cannot qualify.
+		if (ACEBodySweep::OverlapsBody(*GetWorld(),Center,Shape,Params))
+		{
+			bSawSolidBlocker = true;
+			return false;
+		}
+		uint32 CandidateCell = Pose.CellId;
+		const FVector FootCenter = CandidateFeet + FVector(0, 0, Radius);
 		if (ACECellTransit::IsIndoorCell(Pose.CellId) && (!Dat
-			|| !ACECellTransit::SphereIntersectsEnvCell(*Dat, Pose.CellId,
-				CandidateFeet + FVector(0, 0, Radius), 0.f, WorldScale))) return false;
+			|| !ACECellTransit::SphereIntersectsEnvCell(*Dat, CandidateCell, FootCenter, 0.f, WorldScale)))
+		{
+			// Retail resolves placement through the cell's transit/visible neighbors.
+			// The portal's cell is a hint, not proof that the authored point is inside it.
+			if (!Dat || !ACECellTransit::ResolveTransitCellId(*Dat, Pose.CellId, FootCenter, Radius, WorldScale, CandidateCell)
+				|| !ACECellTransit::IsIndoorCell(CandidateCell)
+				|| !ACECellTransit::SphereIntersectsEnvCell(*Dat, CandidateCell, FootCenter, 0.f, WorldScale)
+				|| !IsWorldEntryGeometryReady(CandidateCell))
+			{
+				bUnresolvedClearSpace = true;
+				return false;
+			}
+		}
+		// Empty space qualifies only after the destination collision is resident.
+		// A delayed cook or missing room must not look like an intentional drop.
+		if (!bSupported && !bGeometryReady) return false;
 		OutCapsuleCenter = Center;
+		if (OutCellId) *OutCellId = CandidateCell;
+		if (OutState) *OutState = bSupported ? EWorldEntryPlacement::Grounded : EWorldEntryPlacement::Airborne;
 		return true;
 	};
 	if (TryPosition(Feet)) return true;
 	// Transition::FindPlacementPos searches outward up to four AC units. Validate
-	// floor and full body for each alternative instead of accepting empty space.
-	const float Limit = 4.f * WorldScale;
+	// cell and full body for each alternative, allowing valid airborne placements.
 	const float RingStep = FMath::Max(Radius, 48.f);
 	const int32 Rings = FMath::Max(1, FMath::CeilToInt(Limit / RingStep));
 	for (int32 Ring = 1; Ring <= Rings; ++Ring)
@@ -4936,6 +4993,7 @@ bool AACEPlayerController::FindWorldEntryPlacement(FVector& OutCapsuleCenter) co
 			if (TryPosition(Feet + FVector(FMath::Sin(Angle) * Distance, FMath::Cos(Angle) * Distance, 0))) return true;
 		}
 	}
+	if (OutState && bGeometryReady && bSawSolidBlocker && !bUnresolvedClearSpace) *OutState = EWorldEntryPlacement::Blocked;
 	return false;
 }
 
@@ -5000,6 +5058,14 @@ bool AACEPlayerController::TickWorldEntryRecovery(float DeltaTime, const FString
 	const bool bUnsafe = BlockingGate == TEXT("cell-collision") || BlockingGate == TEXT("wc-terrain")
 		|| BlockingGate == TEXT("spawn-placement");
 	if (!bUnsafe || EnterWorldLoadElapsed < WorldTransitionMaxSeconds) return false;
+	FVector Placement;
+	EWorldEntryPlacement PlacementState;
+	if (FindWorldEntryPlacement(Placement, &PlacementState) && IsWorldEntryGeometryReady()) return false;
+	if (PlacementState != EWorldEntryPlacement::Blocked)
+	{
+		FailWorldEntry(TEXT("The destination geometry could not finish loading. Please reconnect and check the client DAT files. No lifestone recall was requested."));
+		return true;
+	}
 	if (bWorldEntryRecoveryAttempted)
 	{
 		FailWorldEntry(TEXT("The lifestone destination could not load a safe spawn. Reconnect after checking the client DAT files. The character was not placed in missing or blocked terrain."));
@@ -5069,7 +5135,7 @@ bool AACEPlayerController::IsWorldTransitionReady(FString* OutBlockingGate, bool
 		{
 			if (UACETerrainPresenterComponent* Terrain = GM->FindComponentByClass<UACETerrainPresenterComponent>())
 			{
-				// Walkable center cell required; outdoor also waits on LoadRadius ring below.
+				// Resident center collision required; the arrival itself may be airborne.
 				if (!Terrain->IsPlayerCellCollisionReady())
 				{
 					return Block(TEXT("cell-collision"));
@@ -5119,7 +5185,7 @@ bool AACEPlayerController::IsWorldTransitionReady(FString* OutBlockingGate, bool
 	FVector Placement;
 	if (!FindWorldEntryPlacement(Placement)) return Block(TEXT("spawn-placement"));
 	// Allow nearby objects to arrive while distant terrain and HUD textures warm.
-	// Physical support is mandatory; visual readiness still gates the reveal.
+	// A clear placement is mandatory; a valid portal drop need not have floor contact.
 	if (bIgnoreServerUnhide) return true;
 
 	// Deadlock guard: ACE only clears Hidden after LoginComplete (OnTeleportComplete).
@@ -5509,7 +5575,7 @@ void AACEPlayerController::BeginWorldReveal()
 	}
 }
 
-void AACEPlayerController::InvalidateMovementAfterTeleport()
+void AACEPlayerController::InvalidateMovementAfterTeleport(bool bAirborneArrival)
 {
 	// Re-seed MotionStance from CombatMode before StopMovement so MoveToState does not
 	// echo NonCombat and wipe HandCombat/Magic after portal arrival.
@@ -5532,7 +5598,9 @@ void AACEPlayerController::InvalidateMovementAfterTeleport()
 	}
 	if (Client)
 	{
-		Client->StopMovement();
+		if (bAirborneArrival) Client->SendMovementEx(0.f, 0.f, 0.f, bRunning, false, false);
+		else Client->StopMovement();
+		if (auto Session = Client->GetSession()) Session->SetReportedContact(!bAirborneArrival);
 		Client->SetForcePositionReporting(true);
 	}
 	ForwardSent = -999.f;
@@ -5541,19 +5609,34 @@ void AACEPlayerController::InvalidateMovementAfterTeleport()
 	bWasMoving = false;
 	bRunningSent = !bRunning;
 	bForceMovementResend = true;
-	bLocalPredicting = false;
+	bLocalPredicting = bAirborneArrival;
 	bJumpCharging = false;
-	bJumpAirborne = false;
+	bJumpAirborne = bAirborneArrival;
+	bJumpAirborneSent = bAirborneArrival;
 	bStandingJumpLocked = false;
+	bHaveJumpLaunchFacing = false;
+	JumpAirborneSeconds = 0.f;
+	StepHoldSeconds = 0.f;
 	JumpWorldAceVelocity = FVector::ZeroVector;
 	JumpLocalAceVelocity = FVector::ZeroVector;
 	ClearServerMoveTo();
+	// Clearing an old approach disables forced reports; a falling arrival needs
+	// them immediately, including the interval before the next movement tick.
+	if (Client) Client->SetForcePositionReporting(true);
+	if (bAirborneArrival && GetPawn())
+		if (auto* App = GetPawn()->FindComponentByClass<UACECharacterAppearanceComponent>())
+		{
+			App->SetSuppressLocoIdleBlend(true);
+			App->SetHeldActionMotion(0x40000015); // Falling, without a Jump action/impulse.
+		}
 }
 
 void AACEPlayerController::FinishWorldTransition()
 {
 	FVector SafePlacement;
-	if (!FindWorldEntryPlacement(SafePlacement))
+	EWorldEntryPlacement PlacementState;
+	uint32 PlacementCell = 0;
+	if (!FindWorldEntryPlacement(SafePlacement, &PlacementState, &PlacementCell))
 	{
 		bEnterWorldLoading = true;
 		bWorldRevealActive = false;
@@ -5601,6 +5684,7 @@ void AACEPlayerController::FinishWorldTransition()
 				P->SetActorLocation(Feet);
 				P->SetActorRotation(Pose.ToUnrealQuat());
 				PredictedPose = Pose;
+				PredictedPose.CellId = PlacementCell;
 				PredictedPose.SetLocationFromUnreal(Feet - FVector(0, 0, CapsuleHalfHeight), WorldScale);
 				Client->SetReportedPosition(PredictedPose);
 				bHavePredictedPose = true;
@@ -5708,14 +5792,16 @@ void AACEPlayerController::FinishWorldTransition()
 	// Re-seed prediction from the post-teleport server pose and force a fresh MoveToState
 	// so held WASD keys don't silently reuse pre-portal movement sequences.
 	NotifyPortalArrivalIfNeeded();
-	if (Client && bHaveLastServerPose)
+	if (Client && bHavePredictedPose)
 	{
-		PredictedPose = LastServerPose;
-		bHavePredictedPose = true;
-		Client->SetReportedPosition(LastServerPose);
-		Client->FlushAutonomousPosition(true);
+		// Keep the validated placement; an earlier server anchor may be buried in
+		// terrain or predate the new destination. Airborne arrivals keep their height.
+		LastServerPose = PredictedPose;
+		Client->SetReportedPosition(PredictedPose);
 	}
-	InvalidateMovementAfterTeleport();
+	const bool bAirborneArrival = PlacementState == EWorldEntryPlacement::Airborne;
+	InvalidateMovementAfterTeleport(bAirborneArrival);
+	if (Client) Client->FlushAutonomousPosition(!bAirborneArrival);
 	if (DatGameplayBinder && Client && Client->GetPlayerVitals().bValid)
 	{
 		// Stance alone is not enough — CombatMode drives spell hotbar visibility / 1–9 cast.

@@ -54,8 +54,8 @@ public:
 	void InitializeCanvas(UACEUIElementManager* InManager);
 	void SetResourceResolver(UACEUIResourceResolver* InResolver);
 	void SetGameplayBinder(UACEUIGameplayBinder* InBinder);
-	/** Keep gameplay state current without rendering an unused VR desktop canvas. */
-	void TickVRGameplayState();
+	/** Refresh once per engine frame, from either Slate or VR with the canvas hidden. */
+	void TickGameplayState();
 	void SetCharSelectBinder(UACEUICharSelectBinder* InBinder);
 	void SetCharGenBinder(UACEUICharGenBinder* InBinder) { CharGenBinder=InBinder; SetIsFocusable(InBinder != nullptr); }
 	UACEUICharGenBinder* GetCharGenBinder() const { return CharGenBinder; }
@@ -104,7 +104,7 @@ protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
 
 private:
-	uint64 LastVRGameplayTickFrame = MAX_uint64;
+	uint64 LastGameplayTickFrame = MAX_uint64;
 	int32 PressedPointer = INDEX_NONE;
 	bool bVRPointerVisible = false, bVRPointerDown = false;
 	FBox2D VRPointerBounds;

@@ -42,6 +42,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUIInteractionParityTest, "ACE.RetailParity.
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEUIInteractionParityTest::RunTest(const FString&)
 {
+    // Offscreen passes represent separate frames; the HUD now coalesces same-frame callbacks.
+    TGuardValue<uint64> FrameGuard(GFrameCounter, GFrameCounter);
     const FString OriginalSettings=GGameUserSettingsIni;
     TGuardValue<FString> SettingsPath(GGameUserSettingsIni,FPaths::ProjectSavedDir()/TEXT("Automation/InteractionPreferences.ini"));
     FConfigFile Preferences; Preferences.NoSave=true; GConfig->SetFile(GGameUserSettingsIni,&Preferences);
@@ -70,7 +72,7 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     {
         for (int32 Pass=0;Pass<4;++Pass)
         {
-            Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
+            ++GFrameCounter; Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
             Renderer.DrawWidget(Target,Slate,FVector2D(1600,900),0.f); FlushRenderingCommands();
         }
         TArray<FColor> Pixels; Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);

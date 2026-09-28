@@ -17,6 +17,7 @@ class ACECLIENT_API AACEWorldEntityActor : public AActor
 {
 	GENERATED_BODY()
 	friend class FACEMovementReviewTest;
+	friend class FACERemoteSupportTest;
 
 public:
 	AACEWorldEntityActor();

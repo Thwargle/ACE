@@ -27,6 +27,8 @@
 #include "ACEPlayerController.h"
 #include "VR/ACEVRComponent.h"
 #include "ACEWorldEntityActor.h"
+#include "ACEWorldPresenterComponent.h"
+#include "GameFramework/GameModeBase.h"
 #include "ACECharacterAppearanceComponent.h"
 #include "ACECombatStance.h"
 #include "ACEOpcodes.h"
@@ -70,6 +72,19 @@
 
 namespace
 {
+	AACEWorldEntityActor* FindSelectionActor(UWorld* World, int32 Guid)
+	{
+		if (!World || !Guid) return nullptr;
+		if (auto* Mode = World->GetAuthGameMode())
+			if (auto* Presenter = Mode->FindComponentByClass<UACEWorldPresenterComponent>())
+				return Presenter->FindEntityActor(Guid);
+		// Standalone preview/automation worlds can construct entities without
+		// the game's presenter. Normal gameplay always uses its lifetime index.
+		for (TActorIterator<AACEWorldEntityActor> It(World); It; ++It)
+			if (It->GetACEGuid() == Guid) return *It;
+		return nullptr;
+	}
+
 	struct FSpellbookRowTemplate
 	{
 		TSharedPtr<FACEUIElement> Root, Icon, Text, Selected;
@@ -3397,44 +3412,22 @@ void UACEUIGameplayBinder::SyncCombatModeButtons()
 
 int32 UACEUIGameplayBinder::ResolveEquippedCombatMode() const
 {
-	return Client ? static_cast<int32>(ACECombatStance::ResolveEquippedMode(Client->GetEquippedItems()))
+	const auto Session = Client ? Client->GetSession() : nullptr;
+	return Session ? static_cast<int32>(ACECombatStance::ResolveEquippedMode(*Session))
 		: static_cast<int32>(ACECombatMode::Melee);
 }
 
 bool UACEUIGameplayBinder::HasEquippedCaster() const
 {
-	if (!Client)
-	{
-		return false;
-	}
-	for (const FACEWorldObject& Obj : Client->GetEquippedItems())
-	{
-		const int64 Loc = Obj.CurrentWieldedLocation;
-		if ((Loc & ACEEquipMask::Held) != 0)
-		{
-			return true;
-		}
-	}
-	return false;
+	const auto Session = Client ? Client->GetSession() : nullptr;
+	return Session && Session->FindEquippedItem(ACEEquipMask::Held);
 }
 
 bool UACEUIGameplayBinder::HasEquippedMissileWeapon() const
 {
-	if (!Client)
-	{
-		return false;
-	}
-	for (const FACEWorldObject& Obj : Client->GetEquippedItems())
-	{
-		const int64 Loc = Obj.CurrentWieldedLocation;
-		if ((Loc & ACEEquipMask::MissileWeapon) != 0
-			|| ((Loc & (ACEEquipMask::MeleeWeapon | ACEEquipMask::TwoHanded)) != 0
-				&& (Obj.ItemType & ACEItemType::MissileWeapon) != 0))
-		{
-			return true;
-		}
-	}
-	return false;
+	const auto Session = Client ? Client->GetSession() : nullptr;
+	return Session && (Session->FindEquippedItem(ACEEquipMask::MissileWeapon)
+		|| Session->FindEquippedItem(ACEEquipMask::MeleeWeapon | ACEEquipMask::TwoHanded, ACEItemType::MissileWeapon));
 }
 
 void UACEUIGameplayBinder::UseSelectedObject()
@@ -6177,8 +6170,7 @@ void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Sele
 				if (auto* Mesh=Cast<UPrimitiveComponent>(App->GetPartMesh(Part))) Meshes.AddUnique(Mesh);
 	};
 	if (Selection.bValid && PlayerController)
-		for (TActorIterator<AACEWorldEntityActor> It(PlayerController->GetWorld()); It; ++It)
-			if (It->GetACEGuid() == Selection.Guid) { AddAppearanceParts(*It); break; }
+		AddAppearanceParts(FindSelectionActor(PlayerController->GetWorld(), Selection.Guid));
 	if (Selection.bValid && Client && PaperDollPreviewActor)
 	{
 		if (Selection.Guid == Client->GetPlayerGuid())
@@ -7807,6 +7799,7 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 	Canvas->PlaceWidgetAtElement(ShortcutClipPanel, Body, 529);
 	const FVector2D Scale = Canvas->GetLastScale2D();
 	const FIntPoint BodyOrigin = Body->GetScreenOrigin();
+	const auto ShortcutSession = Client->GetSession();
 	auto PlaceShortcut = [&](UWidget* Widget, const TSharedPtr<FACEUIElement>& El, int32 ZOrder)
 	{
 		if (Widget->GetParent() != ShortcutClipPanel)
@@ -7855,14 +7848,21 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 		// Occupied slots also carry IconUnderlay / UiEffects like the inventory grid.
 
 		const int32 Guid = Client->GetShortcutObject(SlotIndex0);
-		FACEWorldObject Obj;
-		const bool bHave = Guid != 0 && Client->GetWorldObject(Guid, Obj);
-		if (bHave && Guid == Client->GetPlayerGuid()) Obj.IconId = 0x06004CF7u;
+		const FACEWorldObject* Obj = Guid != 0 && ShortcutSession
+			? ShortcutSession->GetWorldObjects().Find(Guid) : nullptr;
+		// The main-pack shortcut has a presentation-only icon. Ordinary shortcuts
+		// read current item state without copying model/property arrays each frame.
+		FACEWorldObject MainPackIcon;
+		if (Obj && Guid == Client->GetPlayerGuid())
+		{
+			MainPackIcon = *Obj; MainPackIcon.IconId = 0x06004CF7u; Obj = &MainPackIcon;
+		}
+		const bool bHave = Obj != nullptr;
 		
 		Bg->SetVisibility(ESlateVisibility::HitTestInvisible);
 		if (bHave)
 		{
-			SetItemSlotBackground(Bg, &Obj);
+			SetItemSlotBackground(Bg, Obj);
 		}
 		else
 		{
@@ -7871,11 +7871,8 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 		}
 		PlaceShortcut(Bg, El, 0);
 		Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
-		SetItemSlotForeground(Icon,bHave ? &Obj : nullptr);
-		if (bHave && !Obj.Name.IsEmpty())
-		{
-			SetRetailTooltip(Icon, FText::FromString(Obj.Name));
-		}
+		SetItemSlotForeground(Icon, Obj);
+		SetRetailTooltip(Icon, Obj ? FText::FromString(Obj->Name) : FText());
 		PlaceShortcut(Icon, El, 1);
 		if (Number)
 		{
@@ -10424,9 +10421,15 @@ void UACEUIGameplayBinder::RefreshRadarOverlays()
 	if(!Resources)return;
 	auto SetBlip=[&](UBorder* Blip,int32 Shape,bool Selected,FLinearColor Color)
 	{
-		FSlateBrush Brush;Brush.SetResourceObject(Resources->ResolveRadarBlip(Shape,Selected));
-		Brush.ImageSize=FVector2D(7,7);Brush.DrawAs=ESlateBrushDrawType::Image;
-		Blip->SetBrush(Brush);Blip->SetBrushColor(Color);
+		UTexture2D* Texture = Resources->ResolveRadarBlip(Shape, Selected);
+		if (Blip->Background.GetResourceObject() != Texture
+			|| Blip->Background.DrawAs != ESlateBrushDrawType::Image)
+		{
+			FSlateBrush Brush; Brush.SetResourceObject(Texture);
+			Brush.ImageSize = FVector2D(7,7); Brush.DrawAs = ESlateBrushDrawType::Image;
+			Blip->SetBrush(Brush);
+		}
+		if (Blip->GetBrushColor() != Color) Blip->SetBrushColor(Color);
 	};
 
 	auto GlobalXY = [](const FACEPosition& Pos) -> FVector2D
@@ -10603,7 +10606,9 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 		bHaveObj = Client->GetWorldObject(LastSelection.Guid, SelObj);
 		if (bHaveObj)
 		{
-			const auto Merchandise=OpenVendorGuid ? Client->GetVendorMerchandise() : TArray<FACEWorldObject>();
+			const auto Session = Client->GetSession();
+			const TConstArrayView<FACEWorldObject> Merchandise = OpenVendorGuid && Session
+				? TConstArrayView<FACEWorldObject>(Session->GetVendorMerchandise()) : TConstArrayView<FACEWorldObject>();
 			const FACEWorldObject* Stock=Merchandise.FindByPredicate(
 				[&](const FACEWorldObject& Item){return Item.Guid==SelObj.Guid;});
 			if (Stock)
@@ -10728,15 +10733,7 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 		return;
 	}
 
-	AActor* Target = nullptr;
-	for (TActorIterator<AACEWorldEntityActor> It(World); It; ++It)
-	{
-		if (It->GetACEGuid() == LastSelection.Guid)
-		{
-			Target = *It;
-			break;
-		}
-	}
+	AActor* Target = FindSelectionActor(World, LastSelection.Guid);
 	if (!Target && Client && LastSelection.Guid == Client->GetPlayerGuid())
 	{
 		Target = PlayerController->GetPawn();
@@ -12093,11 +12090,18 @@ uint64 UACEUIGameplayBinder::HashInventoryOverlayState() const
 			H = HashCombine(H, HashCombine(GetTypeHash(Page->Width), GetTypeHash(Page->Height)));
 		}
 	}
-	TArray<FACEWorldObject> Items = Client->GetPackItems(SelectedPackGuid);
+	const auto Session = Client->GetSession();
+	if (!Session) return H;
+	const auto& Objects = Session->GetWorldObjects();
+	TArray<int32> Items;
+	Session->GetPackItemGuids(SelectedPackGuid, Items);
 	H = HashCombine(H, GetTypeHash(Items.Num()));
-	for (const FACEWorldObject& O : Items)
+	const FACEWorldObject PendingItem;
+	for (int32 Guid : Items)
 	{
-		H = HashCombine(H, GetTypeHash(O.Guid));
+		const auto* Item = Objects.Find(Guid);
+		const auto& O = Item ? *Item : PendingItem;
+		H = HashCombine(H, GetTypeHash(Guid));
 		H = HashCombine(H, GetTypeHash(O.IconId));
 		H = HashCombine(H, GetTypeHash(O.IconOverlayId));
 		H = HashCombine(H, GetTypeHash(O.IconUnderlayId));
@@ -12105,23 +12109,36 @@ uint64 UACEUIGameplayBinder::HashInventoryOverlayState() const
 		H = HashCombine(H, GetTypeHash(O.UiEffects));
 		H = HashCombine(H, GetTypeHash(O.PlacementPosition));
 	}
-	TArray<FACEWorldObject> Equipped = Client->GetEquippedItems();
-	H = HashCombine(H, GetTypeHash(Equipped.Num()));
-	for (const FACEWorldObject& O : Equipped)
+	TArray<const FACEWorldObject*, TInlineAllocator<32>> Equipped;
+	for (const auto& Pair : Objects)
 	{
+		const auto& O = Pair.Value;
+		if (O.CurrentWieldedLocation != 0
+			&& (O.WielderId == Client->GetPlayerGuid() || O.ParentGuid == Client->GetPlayerGuid()))
+			Equipped.Add(&O);
+	}
+	H = HashCombine(H, GetTypeHash(Equipped.Num()));
+	for (const auto* Item : Equipped)
+	{
+		const auto& O = *Item;
 		H = HashCombine(H, GetTypeHash(O.Guid));
 		H = HashCombine(H, GetTypeHash(O.CurrentWieldedLocation));
 		H = HashCombine(H, GetTypeHash(O.IconId));
 		H = HashCombine(H, GetTypeHash(O.IconOverlayId));
 	}
-    H = HashCombine(H, GetTypeHash(Client->GetPackItems(Client->GetPlayerGuid()).Num()));
-    if (const auto Session = Client->GetSession())
-        if (const auto* Player = Session->GetWorldObjects().Find(Client->GetPlayerGuid()))
-            H = HashCombine(H, GetTypeHash(Player->ContainersCapacity));
-    const auto Packs = Client->GetPlayerPacks();
+    TArray<int32> Packs;
+    Session->GetPlayerPackGuids(Packs);
+    TMap<int32, int32> PackCounts;
+    PackCounts.Add(Client->GetPlayerGuid(), 0);
+    for (int32 Guid : Packs) PackCounts.Add(Guid, 0);
+    Session->GetPackItemCounts(PackCounts);
+    H = HashCombine(H, GetTypeHash(PackCounts.FindRef(Client->GetPlayerGuid())));
+    if (const auto* Player = Objects.Find(Client->GetPlayerGuid()))
+        H = HashCombine(H, GetTypeHash(Player->ContainersCapacity));
     H = HashCombine(H, GetTypeHash(Packs.Num()));
-    for (const auto& Pack : Packs)
+    for (int32 Guid : Packs)
     {
+        const auto& Pack = Objects.FindChecked(Guid);
         H = HashCombine(H, GetTypeHash(Pack.Guid));
         H = HashCombine(H, GetTypeHash(Pack.IconId));
         H = HashCombine(H, GetTypeHash(Pack.IconOverlayId));
@@ -12130,7 +12147,7 @@ uint64 UACEUIGameplayBinder::HashInventoryOverlayState() const
         H = HashCombine(H, GetTypeHash(Pack.UiEffects));
         H = HashCombine(H, GetTypeHash(Pack.ItemsCapacity));
         H = HashCombine(H, GetTypeHash(Pack.PlacementPosition));
-        H = HashCombine(H, GetTypeHash(Client->GetPackItems(Pack.Guid).Num()));
+        H = HashCombine(H, GetTypeHash(PackCounts.FindRef(Pack.Guid)));
     }
 
 	return H;
@@ -12162,7 +12179,9 @@ uint64 UACEUIGameplayBinder::HashVendorOverlayState() const
 	{
 		return H;
 	}
-	TArray<FACEWorldObject> Merch = Client->GetVendorMerchandise();
+	const auto Session = Client->GetSession();
+	const TConstArrayView<FACEWorldObject> Merch = Session
+		? TConstArrayView<FACEWorldObject>(Session->GetVendorMerchandise()) : TConstArrayView<FACEWorldObject>();
 	H = HashCombine(H, GetTypeHash(Merch.Num()));
 	for (const FACEWorldObject& O : Merch)
 	{
@@ -12447,6 +12466,10 @@ void UACEUIGameplayBinder::RefreshInventoryOverlays()
 
 		// Pack tabs in Inv_ContainerList — retail: main pack + ContainersCapacity side slots (usually 7).
 		TArray<FACEWorldObject> Packs = Client->GetPlayerPacks();
+		TMap<int32, int32> PackCounts;
+		PackCounts.Add(Self, 0);
+		for (const auto& Pack : Packs) PackCounts.Add(Pack.Guid, 0);
+		if (const auto Session = Client->GetSession()) Session->GetPackItemCounts(PackCounts);
 		FACEWorldObject SelfObj;
 		Client->GetWorldObject(Self, SelfObj);
 		// Retail: ContainersCapacity side-pack slots (augs can raise this above 7).
@@ -12477,7 +12500,7 @@ void UACEUIGameplayBinder::RefreshInventoryOverlays()
 		if (MainPackEl.IsValid())
 		{
             if (!MainPackCapacityMeter) MainPackCapacityMeter=MakeCapacityMeter();
-            const int32 MainCount=Client->GetPackItems(Self).Num();
+            const int32 MainCount=PackCounts.FindRef(Self);
             const int32 MainCapacity=SelfObj.ItemsCapacity > 0 ? SelfObj.ItemsCapacity : 102;
             MainPackCapacityMeter->SetVisibility(MainCount > 0 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
             MainPackCapacityMeter->SetPercent(FMath::Clamp(float(MainCount)/MainCapacity,0.f,1.f));
@@ -12570,7 +12593,7 @@ void UACEUIGameplayBinder::RefreshInventoryOverlays()
 					SetItemSlotBackground(Bg, &Packs[PackIndex]);
 					if (Bg) { Bg->SetVisibility(ESlateVisibility::HitTestInvisible); }
 					SetRetailTooltip(Icon, FText::FromString(FString::Printf(
-						TEXT("%s (%d/%d items)"), *Packs[PackIndex].Name, Client->GetPackItems(Packs[PackIndex].Guid).Num(), Packs[PackIndex].ItemsCapacity)));
+						TEXT("%s (%d/%d items)"), *Packs[PackIndex].Name, PackCounts.FindRef(Packs[PackIndex].Guid), Packs[PackIndex].ItemsCapacity)));
 					Icon->SetRenderOpacity(1.f);
 				}
 				else
@@ -12613,7 +12636,7 @@ void UACEUIGameplayBinder::RefreshInventoryOverlays()
                 }
                 auto* Meter = PackCapacityMeters[i].Get();
                 const int32 Capacity = Packs.IsValidIndex(PackIndex) ? Packs[PackIndex].ItemsCapacity : 0;
-                const int32 Count = Capacity > 0 ? Client->GetPackItems(Packs[PackIndex].Guid).Num() : 0;
+                const int32 Count = Capacity > 0 ? PackCounts.FindRef(Packs[PackIndex].Guid) : 0;
                 Meter->SetVisibility(Count > 0 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
                 Meter->SetPercent(Capacity > 0 ? FMath::Clamp(float(Count)/Capacity,0.f,1.f) : 0.f);
                 PlacePack(Meter,OverlayZ+4,28,3,5,30);
@@ -13815,26 +13838,24 @@ bool UACEUIGameplayBinder::VendorItemMatchesFilter(const FACEWorldObject& O, int
 	}
 }
 
-void UACEUIGameplayBinder::GetVendorFilterSourceItems(TArray<FACEWorldObject>& Out) const
-{
-	Out.Reset();
-	if (!Client || OpenVendorGuid == 0)
-	{
-		return;
-	}
-	Out = Client->GetVendorMerchandise();
-	if (Out.Num() == 0)
-	{
-		Out = Client->GetPackItems(OpenVendorGuid);
-	}
-}
-
 void UACEUIGameplayBinder::RebuildVendorVisibleFilters()
 {
 	VendorVisibleFilterIndices.Reset();
 	VendorVisibleFilterIndices.Add(0);
-	TArray<FACEWorldObject> Items;
-	GetVendorFilterSourceItems(Items);
+	// Use the live profiles during this query; do not duplicate names and appearance
+	// arrays whenever an open dropdown checks which categories are available.
+	const auto Session = Client && OpenVendorGuid != 0 ? Client->GetSession() : nullptr;
+	TConstArrayView<FACEWorldObject> Items;
+	TArray<FACEWorldObject> Fallback;
+	if (Session)
+	{
+		Items = Session->GetVendorMerchandise();
+		if (Items.IsEmpty())
+		{
+			Session->GetPackItems(OpenVendorGuid, Fallback);
+			Items = Fallback;
+		}
+	}
 	for (int32 FilterId = 1; FilterId < VendorFilterCount; ++FilterId)
 	{
 		for (const FACEWorldObject& O : Items)

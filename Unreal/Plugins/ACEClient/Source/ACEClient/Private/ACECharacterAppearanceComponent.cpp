@@ -1105,32 +1105,20 @@ void UACECharacterAppearanceComponent::BeginPoseBlendFromCurrent(float Duration)
 void UACECharacterAppearanceComponent::ApplyAnimatedPartsWithBlend(
 	const TArray<FTransform>& Animated, int32 AnimatedCount, float DeltaTime)
 {
-	TArray<FTransform> Blended;
-	const TArray<FTransform>* Pose = &Animated;
-	if (StanceBlendAlpha < 1.f - KINDA_SMALL_NUMBER && StanceBlendFrom.Num() == PartMeshes.Num())
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_ApplyAnimatedParts);
+	const bool bBlend = StanceBlendAlpha < 1.f - KINDA_SMALL_NUMBER && StanceBlendFrom.Num() == PartMeshes.Num();
+	if (bBlend)
 	{
-		Blended = Animated;
-		Pose = &Blended;
 		StanceBlendAlpha = FMath::Clamp(StanceBlendAlpha + DeltaTime / PoseBlendDuration, 0.f, 1.f);
-		const float Alpha = StanceBlendAlpha;
-		const int32 N = FMath::Min(Blended.Num(), StanceBlendFrom.Num());
-		for (int32 i = 0; i < N; ++i)
-		{
-			FTransform Out;
-			Out.Blend(StanceBlendFrom[i], Blended[i], Alpha);
-			Blended[i] = Out;
-		}
-		if (StanceBlendAlpha >= 1.f - KINDA_SMALL_NUMBER)
-		{
-			StanceBlendFrom.Reset();
-			StanceBlendAlpha = 1.f;
-		}
 	}
 	for (int32 i = 0; i < PartMeshes.Num(); ++i)
 	{
-		if (i < AnimatedCount && Pose->IsValidIndex(i))
+		if (i < AnimatedCount && Animated.IsValidIndex(i))
 		{
-			FTransform PartXform = (*Pose)[i];
+			// Blend directly into the part being applied. The source pose remains
+			// immutable; no full-pose allocation/copy is needed during transitions.
+			FTransform PartXform = Animated[i];
+			if (bBlend) PartXform.Blend(StanceBlendFrom[i], Animated[i], StanceBlendAlpha);
 			if (BindTransforms.IsValidIndex(i))
 			{
 				PartXform.SetScale3D(BindTransforms[i].GetScale3D());
@@ -1141,6 +1129,11 @@ void UACECharacterAppearanceComponent::ApplyAnimatedPartsWithBlend(
 		{
 			ApplyPartTransform(i, BindTransforms[i]);
 		}
+	}
+	if (bBlend && StanceBlendAlpha >= 1.f - KINDA_SMALL_NUMBER)
+	{
+		StanceBlendFrom.Reset();
+		StanceBlendAlpha = 1.f;
 	}
 }
 
@@ -2143,12 +2136,26 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 	DispatchCrossedHooks(Hooks);
 }
 
-FTransform UACECharacterAppearanceComponent::UpdateVRUpperBody(const FTransform& Head,
+FTransform UACECharacterAppearanceComponent::UpdateVRUpperBody(const FTransform& BodyFrame, const FTransform& Head,
 	const FTransform& LeftGrip, const FTransform& RightGrip, bool bLeftTracked, bool bRightTracked, float Dt)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_TrackedBodyPose);
 	if (!MeshRoot) return FTransform::Identity;
-	FTransform Frame = MeshRoot->GetComponentTransform();
-	if (!bVRPoseControlled || !BindTransforms.IsValidIndex(16) || Dt <= 0.f) return Frame;
+	FTransform Frame = BodyFrame;
+	if (!bVRPoseControlled || !BindTransforms.IsValidIndex(16) || Dt <= 0.f)
+	{
+		MeshRoot->SetWorldTransform(Frame);
+		// The former caller restored untracked upper parts even on a paused
+		// frame. Keep that fallback when no torso bend can be evaluated.
+		for (int32 I=9; I<PartMeshes.Num(); ++I)
+		{
+			if (!PartMeshes[I] || !BindTransforms.IsValidIndex(I) || I==16 || I==21 || I==22) continue;
+			const bool TrackedArm = (bLeftTracked && ((I>=10 && I<=12) || I==27))
+				|| (bRightTracked && ((I>=13 && I<=15) || I==28));
+			if (!TrackedArm) PartMeshes[I]->SetRelativeTransform(BindTransforms[I]);
+		}
+		return Frame;
+	}
 	const FRotator HeadAngles = Head.Rotator();
 	const FQuat Yaw = FRotator(0, HeadAngles.Yaw, 0).Quaternion();
 	const float Units = FMath::Max(1.f, WorldScale * float(Frame.GetScale3D().Z));
@@ -2179,8 +2186,9 @@ FTransform UACECharacterAppearanceComponent::UpdateVRUpperBody(const FTransform&
 		if (!PartMeshes[I] || !BindTransforms.IsValidIndex(I) || I==16 || I==21 || I==22) continue;
 		const bool TrackedArm = (bLeftTracked && ((I>=10 && I<=12) || I==27))
 			|| (bRightTracked && ((I>=13 && I<=15) || I==28));
-		if (!TrackedArm && BindTransforms[I].GetLocation().Z >= Waist.Z)
-			PartMeshes[I]->SetRelativeTransform(BindTransforms[I]*Delta);
+		if (!TrackedArm)
+			PartMeshes[I]->SetRelativeTransform(BindTransforms[I].GetLocation().Z >= Waist.Z
+				? BindTransforms[I]*Delta : BindTransforms[I]);
 	}
 	return Delta*Frame;
 }
@@ -2205,6 +2213,9 @@ void UACECharacterAppearanceComponent::UpdateVRLowerBody(float Dt)
 	const bool Reverse = Sideways ? Local.X > 0.f : Local.Y < 0.f;
 	if (Moving) VRGaitTime += (Reverse ? -1.f : 1.f) * Distance / (WorldScale * (Run ? 4.f : 3.12f));
 	TArray<FTransform> Animated; int32 Count = 0;
+	const bool bReusePose = CVarACEReusePoseBuffers.GetValueOnGameThread() != 0;
+	if (bReusePose) Swap(Animated, VRGaitPoseScratch);
+	ON_SCOPE_EXIT { if (bReusePose) Swap(Animated, VRGaitPoseScratch); };
 	auto* Dat = GetWorld()->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
 	const uint32 Command = Sideways ? 0x6500000fu : Run ? 0x44000007u : 0x45000005u;
 	const bool Evaluated = VRGaitBlend > 0.f && Dat && Dat->EvaluateMotionCommand(

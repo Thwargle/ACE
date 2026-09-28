@@ -3,11 +3,15 @@
 #include "CoreMinimal.h"
 #include "ACETypes.h"
 
+class FACESession;
+
 /** Mirrors ACE.Server Creature_Combat.GetCombatStance / GetWeaponStance for client animation. */
 namespace ACECombatStance
 {
 	/** Choose the active weapon's mode; equipped ammunition and offhand items do not choose it. */
 	uint32 ResolveEquippedMode(const TArray<FACEWorldObject>& Equipped);
+	/** Same selection rules using live session items, without copying equipped models. */
+	uint32 ResolveEquippedMode(const FACESession& Session);
 
 	/** PropertyInt.DefaultCombatStyle / ACE.Entity.Enum.CombatStyle → MotionStance. */
 	uint32 StanceFromCombatStyle(int32 CombatStyle);

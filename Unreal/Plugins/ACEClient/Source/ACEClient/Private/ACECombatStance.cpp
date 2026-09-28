@@ -1,5 +1,6 @@
 #include "ACECombatStance.h"
 #include "ACEOpcodes.h"
+#include "ACESession.h"
 
 namespace ACECombatStyle
 {
@@ -135,6 +136,30 @@ uint32 ACECombatStance::ResolveEquippedMode(const TArray<FACEWorldObject>& Equip
 	// Retail arrows also have ItemType::MissileWeapon. Their ammunition slot
 	// must not switch a sword (or empty hands) into the missile attack path.
 	return ACECombatMode::Melee;
+}
+
+uint32 ACECombatStance::ResolveEquippedMode(const FACESession& Session)
+{
+	const int32 Self = Session.GetPlayerGuid();
+	if (Self == 0) return ACECombatMode::Melee;
+	const FACEWorldObject* Melee = nullptr;
+	const FACEWorldObject* RightHandMelee = nullptr;
+	const FACEWorldObject* Missile = nullptr;
+	for (const auto& Pair : Session.GetWorldObjects())
+	{
+		const auto& O = Pair.Value;
+		if (O.CurrentWieldedLocation == 0 || (O.WielderId != Self && O.ParentGuid != Self)) continue;
+		if (O.CurrentWieldedLocation & ACEEquipMask::Held) return ACECombatMode::Magic;
+		if (O.CurrentWieldedLocation & (ACEEquipMask::MeleeWeapon | ACEEquipMask::TwoHanded))
+		{
+			if (!Melee) Melee = &O;
+			if (!RightHandMelee && O.ParentLocation == ParentLocationRightHand) RightHandMelee = &O;
+		}
+		if (!Missile && (O.CurrentWieldedLocation & ACEEquipMask::MissileWeapon)) Missile = &O;
+	}
+	const auto* Weapon = RightHandMelee ? RightHandMelee : (Melee ? Melee : Missile);
+	return Weapon && ((Weapon->CurrentWieldedLocation & ACEEquipMask::MissileWeapon)
+		|| (Weapon->ItemType & ACEItemType::MissileWeapon)) ? ACECombatMode::Missile : ACECombatMode::Melee;
 }
 
 uint32 ACECombatStance::StanceFromCombatStyle(int32 Style)

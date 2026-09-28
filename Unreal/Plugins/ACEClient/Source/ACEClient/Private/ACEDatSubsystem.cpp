@@ -5560,11 +5560,12 @@ const UACEDatSubsystem::FBuildingInteriorMask& UACEDatSubsystem::GetOrBuildBuild
 
 	FBuildingInteriorMask& Out = BuildingInteriorFootprints.Add(Key);
 	Out.bComplete = true;
-	FACEDatLandblockInfo Info;
-	if (!LoadLandblockInfo(Key, Info) || Info.Buildings.Num() == 0)
+	const auto Snapshot = GetLandblockInfo(Key);
+	if (!Snapshot || Snapshot->Buildings.Num() == 0)
 	{
 		return Out;
 	}
+	const auto& Info = *Snapshot;
 
 	auto AppendFloorTri = [](TArray<FInteriorHoleTri>& Dest, FVector2D A, FVector2D B, FVector2D C, float Z)
 	{
@@ -6077,9 +6078,9 @@ int32 UACEDatSubsystem::FindBuildingInfoIndexForIndoorCell(uint32 LandblockId, u
 	const uint32 Key = LandblockId & 0xFFFF0000u;
 
 	// Prefer LandblockInfo portals/stabs — does not depend on EnvCell mesh / footprint cache.
-	FACEDatLandblockInfo Info;
-	if (LoadLandblockInfo(Key, Info))
+	if (const auto Snapshot = GetLandblockInfo(Key))
 	{
+		const auto& Info = *Snapshot;
 		for (int32 Bi = 0; Bi < Info.Buildings.Num(); ++Bi)
 		{
 			const FACEDatLandblockBuilding& Building = Info.Buildings[Bi];
@@ -7059,9 +7060,8 @@ bool UACEDatSubsystem::CollectRegionScenery(uint32 LandblockId, float WorldScale
 	// sort cell containing its origin. get_land_scenes rejects that whole cell,
 	// including open courtyards that have no shell/floor triangle below them.
 	TSet<int32> BuildingCells;
-	FACEDatLandblockInfo BuildingInfo;
-	if (LoadLandblockInfo(LB, BuildingInfo))
-		for (const auto& Building : BuildingInfo.Buildings)
+	if (const auto BuildingInfo = GetLandblockInfo(LB))
+		for (const auto& Building : BuildingInfo->Buildings)
 		{
 			const int32 X=FMath::FloorToInt(Building.Origin.X/CellSize);
 			const int32 Y=FMath::FloorToInt(Building.Origin.Y/CellSize);
@@ -7322,35 +7322,45 @@ bool UACEDatSubsystem::CollectRegionScenery(uint32 LandblockId, float WorldScale
 bool UACEDatSubsystem::LoadLandblockInfo(uint32 LandblockId, FACEDatLandblockInfo& OutInfo)
 {
 	OutInfo = FACEDatLandblockInfo();
+	if (const auto Info = GetLandblockInfo(LandblockId))
+	{
+		OutInfo = *Info;
+		return true;
+	}
+	return false;
+}
+
+TSharedPtr<const FACEDatLandblockInfo> UACEDatSubsystem::GetLandblockInfo(uint32 LandblockId)
+{
+	// EnsureLoaded can invalidate the cache after DAT replacement. Return an owned
+	// immutable snapshot so nested mesh requests cannot invalidate a reader.
 	if (!EnsureLoaded() || !CellDat)
 	{
-		return false;
+		return nullptr;
 	}
 
 	// LandblockInfo file id = (LB << 16) | 0xFFFE where LB is the high 16 bits of the cell.
 	const uint32 LbKey = LandblockId & 0xFFFF0000u;
-	if (const FACEDatLandblockInfo* Cached = LandblockInfoCache.Find(LbKey))
+	if (const auto* Cached = LandblockInfoCache.Find(LbKey))
 	{
-		OutInfo = *Cached;
-		return true;
+		return *Cached;
 	}
 
 	const uint32 FileId = LbKey | 0x0000FFFEu;
 	TArray<uint8> Blob;
 	if (!CellDat->ReadFile(FileId, Blob))
 	{
-		return false;
+		return nullptr;
 	}
 	FACEDatCursor Cur(Blob);
-	FACEDatLandblockInfo Parsed;
-	if (!ACEDatUnpack::UnpackLandblockInfo(Cur, Parsed))
+	auto Parsed = MakeShared<FACEDatLandblockInfo>();
+	if (!ACEDatUnpack::UnpackLandblockInfo(Cur, *Parsed))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("ACEDat: failed to unpack LandblockInfo 0x%08X"), FileId);
-		return false;
+		return nullptr;
 	}
 	LandblockInfoCache.Add(LbKey, Parsed);
-	OutInfo = MoveTemp(Parsed);
-	return true;
+	return Parsed;
 }
 
 static TAutoConsoleVariable<int32> CVarACECacheDoorwayGeometry(
@@ -7382,14 +7392,14 @@ TSharedPtr<const TArray<ACEOutdoorPortalPlan::FAdmittedAperture>> UACEDatSubsyst
 			return Cached->Apertures;
 		}
 
-	FACEDatLandblockInfo Info;
-	if (!LoadLandblockInfo(Key, Info)) return nullptr;
+	const auto Info = GetLandblockInfo(Key);
+	if (!Info) return nullptr;
 	auto Geometry = MakeShared<TArray<ACEOutdoorPortalPlan::FAdmittedAperture>>();
 	auto& OutApertures = *Geometry;
 	const FVector Origin = FACEPosition::AceVectorToUnreal(
 		FVector(((Key >> 24) & 255) * 192.f, ((Key >> 16) & 255) * 192.f, 0), WorldScale);
 	bool bComplete = true;
-	for (const auto& Building : Info.Buildings)
+	for (const auto& Building : Info->Buildings)
 	{
 		const auto* Setup = FindSetupMesh(Building.ModelId, WorldScale);
 		if (!Setup)
@@ -7894,12 +7904,12 @@ bool UACEDatSubsystem::ResolveContainingEnvCell(uint32 HintCellId, const FVector
 	}
 	else
 	{
-		FACEDatLandblockInfo Info;
-		if (!LoadLandblockInfo(LandblockKey, Info) || Info.NumCells == 0)
+		const auto Info = GetLandblockInfo(LandblockKey);
+		if (!Info || Info->NumCells == 0)
 		{
 			return false;
 		}
-		for (const FACEDatLandblockBuilding& Building : Info.Buildings)
+		for (const FACEDatLandblockBuilding& Building : Info->Buildings)
 		{
 			for (uint16 ShortId : Building.PortalCellIds)
 			{

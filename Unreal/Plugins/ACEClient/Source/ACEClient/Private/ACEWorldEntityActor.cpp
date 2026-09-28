@@ -962,22 +962,49 @@ FVector AACEWorldEntityActor::ResolvePredictedMovement(const FVector& From, cons
 		for(int32 I=0;I<Steps;++I)
 		{
 			const FVector Feet=Position-Offset;
+			// Ledge search, seating and validation often ask for the same XY.
+			// Reuse only within this substep: moving doors/platforms and streamed
+			// collision must be observed again on the next invocation.
+			struct FSupport { FVector2D XY; float Z; bool Found; };
+			TArray<FSupport,TInlineAllocator<4>> Samples;
+			auto Sample=[&](const FVector2D& XY, float& Z)
+			{
+				for(const auto& S:Samples)if(S.XY==XY){Z=S.Z;return S.Found;}
+				Z=0;const bool Found=TraceGroundZ(FVector(XY,Feet.Z),Z,true);
+				Samples.Add({XY,Z,Found});return Found;
+			};
 			auto Support=[&](const FVector2D& XY)
 			{
-				float Z=0;return TraceGroundZ(FVector(XY,Feet.Z),Z,true) && Z-Feet.Z<=Up && Feet.Z-Z<=Down;
+				float Z=0;return Sample(XY,Z) && Z-Feet.Z<=Up && Feet.Z-Z<=Down;
 			};
 			FVector Next=Feet+Step;
 			if(FollowGround)
 			{
 				const FVector2D XY=ACELedgeSlide::Resolve(FVector2D(Feet),FVector2D(Step),Support);
 				Next.X=XY.X;Next.Y=XY.Y;
-				if(TraceGroundZ(FVector(XY,Feet.Z),Ground,true))Next.Z=Ground+1.f;
+				if(Sample(XY,Ground))Next.Z=Ground+1.f;
 			}
 			FHitResult Hit;
-			FVector Resolved=ACEBodySweep::Sweep(*GetWorld(),Hit,Position,Next+Offset,Shape,Query)
-				? ACEBodySweep::SlideGrounded(*GetWorld(),Position,Next+Offset,Hit,Shape,Query)-Offset : Next;
+			const bool Blocked=ACEBodySweep::Sweep(*GetWorld(),Hit,Position,Next+Offset,Shape,Query);
+			FVector Resolved=Next;
+			bool Stepped=false;
+			if(Blocked && FollowGround && !Hit.bStartPenetrating && !ACEBodySweep::IsCreatureBody(Hit)
+				&& !ACEBodySweep::IsUpperBodyContact(Hit))
+			{
+				// CTransition validates rise, lateral reach and step-down. A ray
+				// cannot see the next tread until the center crosses the riser,
+				// although the lower sphere contacts it much earlier.
+				const FVector Lifted=Position+FVector(0,0,Up);
+				const FVector Reach(Next.X+Offset.X,Next.Y+Offset.Y,Lifted.Z);
+				FVector Landed=Next+Offset;FHitResult RiseHit;
+				Stepped=!ACEBodySweep::Sweep(*GetWorld(),RiseHit,Position,Lifted,Shape,Query)
+					&& ACEBodySweep::CanTraverseStep(*GetWorld(),Lifted,Reach,Landed,Shape,Query,.6641741f,&Landed)
+					&& Landed.Z>Position.Z+.1f && Landed.Z<=Position.Z+Up+.1f;
+				if(Stepped)Resolved=Landed-Offset+FVector(0,0,1.f);
+			}
+			if(Blocked && !Stepped)Resolved=ACEBodySweep::SlideGrounded(*GetWorld(),Position,Next+Offset,Hit,Shape,Query)-Offset;
 			if(FollowGround && !Support(FVector2D(Resolved)))break;
-			if(FollowGround && TraceGroundZ(Resolved,Ground,true))Resolved.Z=Ground+1.f;
+			if(FollowGround && !Stepped && Sample(FVector2D(Resolved),Ground))Resolved.Z=Ground+1.f;
 			Position=Resolved+Offset;
 		}
 		return Position-Offset;
@@ -1393,7 +1420,10 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			// Ground seating already corrects the displayed feet at their own XY.
 			// Reapplying a predictor's vertical contact correction to those feet can
 			// drive them below a platform after a slightly elevated server packet.
-			if (bClampToGround) DisplayMovement.Z = 0;
+			// Preserve a collision-validated step-up. Ground seating can remove
+			// a downward correction, but cannot lift a body already embedded in
+			// the riser after transporting only XY past its rounded edge.
+			if (bClampToGround && DisplayMovement.Z < 0) DisplayMovement.Z = 0;
 			FVector NextLoc = InterpolateRemoteLocation(RemotePredictLocation,DeltaTime,DisplayMovement);
 			// Always seat Z for grounded remotes within the band — continuous XY integrate
 			// used to leave feet floating between sparse F748s.
@@ -1521,6 +1551,7 @@ bool AACEWorldEntityActor::TraceGroundZ(const FVector& AtLocation, float& OutGro
 	TArray<FHitResult> Hits;
 	float BestAbsDelta = TNumericLimits<float>::Max();
 	float BestZ = AtLocation.Z;
+	float BestNormalZ = 0.f;
 	bool bFound = false;
 	if (World->LineTraceMultiByObjectType(Hits, Start, End, ObjParams, Params))
 	{
@@ -1620,12 +1651,25 @@ bool AACEWorldEntityActor::TraceGroundZ(const FVector& AtLocation, float& OutGro
 			{
 				BestAbsDelta = AbsDelta;
 				BestZ = HitZ;
+				BestNormalZ = Hit.ImpactNormal.Z;
 				bFound = true;
 			}
 		}
 	}
 	if (bFound)
 	{
+		// Keep the lower body sphere clear of the old tread while stepping
+		// down. The center ray already verified a reachable lower floor; it
+		// must not pull the body straight through the riser behind the feet.
+		const float Scale=GetActorScale3D().GetAbsMax();
+		const float Drop=AtLocation.Z-BestZ;
+		if(bCreatureSupport && BestNormalZ>.99f && Drop>1.1f && Drop<=MovementStepDownHeight*Scale+2.f)
+		{
+			float Contact=BestZ;
+			FCollisionQueryParams SupportParams(SCENE_QUERY_STAT(ACERemoteTread),true,this);
+			if(ACEBodySweep::FindFootSupport(*World,AtLocation,MovementSweepRadius*Scale,
+				Drop+1.f,SupportParams,Contact,0.f,true)) BestZ=FMath::Max(BestZ,Contact);
+		}
 		OutGroundZ = BestZ;
 		return true;
 	}

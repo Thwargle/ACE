@@ -4,9 +4,48 @@
 #include "CollisionQueryParams.h"
 #include "CollisionShape.h"
 #include "Components/PrimitiveComponent.h"
+#include "Components/SphereComponent.h"
 
 namespace ACEBodySweep
 {
+    inline bool IsCreatureBody(const FHitResult& Hit)
+    {
+        return Hit.Component.IsValid() && Hit.Component->ComponentTags.Contains(TEXT("ACECreatureBody"));
+    }
+    // Retail CSphere::slide_sphere projects travel onto the contact tangent;
+    // it does not require a complete depenetration before allowing that slide.
+    // Moving creatures can overlap the player while a wall prevents an MTD
+    // push-out. Permit gradual escape only when distance to this authored
+    // sphere never decreases, and neither player sphere creates a new contact.
+    // This exemption is per component and per sweep, never a collision toggle.
+    inline bool CanEscapeCreature(const FHitResult& Hit, const FVector& From, const FVector& To,
+        const FCollisionShape& Body)
+    {
+        if(!Hit.bStartPenetrating || !IsCreatureBody(Hit))return false;
+        const auto* Sphere=Cast<USphereComponent>(Hit.GetComponent());
+        const FVector Delta=To-From;
+        const double LengthSq=Delta.SizeSquared();
+        if(!Sphere || LengthSq<.0001)return false;
+        const double Radius=Body.GetCapsuleRadius()+Sphere->GetScaledSphereRadius();
+        const double RadiusSq=Radius*Radius;
+        const double Offset=FMath::Max(0.f,Body.GetCapsuleHalfHeight()-Body.GetCapsuleRadius());
+        for(double Z:{-Offset,Offset})
+        {
+            const FVector Relative=From+FVector(0,0,Z)-Sphere->GetComponentLocation();
+            const double Dot=FVector::DotProduct(Relative,Delta);
+            if(Relative.SizeSquared()<=RadiusSq)
+            {
+                // Allow only numerical roundoff in a computed tangent.
+                if(Dot < -1.e-6*Radius*FMath::Sqrt(LengthSq))return false;
+            }
+            else
+            {
+                const double T=FMath::Clamp(-Dot/LengthSq,0.,1.);
+                if((Relative+Delta*T).SizeSquared()<RadiusSq)return false;
+            }
+        }
+        return true;
+    }
     inline bool IsUpperBodyContact(const FHitResult& Hit)
     {
         // These are explicit world shape queries, so the query-side bone name
@@ -23,11 +62,22 @@ namespace ACEBodySweep
         const float Radius=Body.GetCapsuleRadius();
         const double Offset=FMath::Max(0.f,Body.GetCapsuleHalfHeight()-Radius);
         bool Found=false;Hit=FHitResult();
+        TOptional<FCollisionQueryParams> EscapeParams;
         for(int32 I=0;I<(Offset>.001?2:1);++I)
         {
             const FVector Shift(0,0,I==0?-Offset:Offset);FHitResult Part;
-            if(!World.SweepSingleByChannel(Part,From+Shift,To+Shift,FQuat::Identity,ECC_Pawn,
-                FCollisionShape::MakeSphere(Radius),Params))continue;
+            bool Blocked=false;
+            for(;;)
+            {
+                Blocked=World.SweepSingleByChannel(Part,From+Shift,To+Shift,FQuat::Identity,ECC_Pawn,
+                    FCollisionShape::MakeSphere(Radius),EscapeParams.IsSet()?EscapeParams.GetValue():Params);
+                if(!Blocked || !CanEscapeCreature(Part,From,To,Body))break;
+                if(!EscapeParams.IsSet())EscapeParams.Emplace(Params);
+                EscapeParams->AddIgnoredComponent(Part.GetComponent());
+                // A single channel sweep stops at the first blocker. Repeat
+                // to expose walls, other mobs, and later contacts behind it.
+            }
+            if(!Blocked)continue;
             Part.Location-=Shift;Part.TraceStart=From;Part.TraceEnd=To;
             Part.MyBoneName=I==1?FName(TEXT("ACEUpperBodySphere")):NAME_None;
             if(!Found || (Part.bStartPenetrating && !Hit.bStartPenetrating)
@@ -57,10 +107,6 @@ namespace ACEBodySweep
         for(float Z:{-Offset,Offset})
             if(World.OverlapBlockingTestByChannel(Center+FVector(0,0,Z),FQuat::Identity,ECC_Pawn,FCollisionShape::MakeSphere(R),Params))return true;
         return false;
-    }
-    inline bool IsCreatureBody(const FHitResult& Hit)
-    {
-        return Hit.Component.IsValid() && Hit.Component->ComponentTags.Contains(TEXT("ACECreatureBody"));
     }
     // Multi channel traces stop at the first blocking component. Discarding a
     // creature hit afterward does not reveal the floor behind it. Retry with
@@ -329,7 +375,8 @@ namespace ACEBodySweep
     // A grounded body's contact must satisfy retail FloorZ. LandingZ is only
     // for airborne landings: using it here lets feet roll off a precipice.
     inline bool FindFootSupport(UWorld& World, const FVector& Feet, float Radius,
-        float MaxDown, const FCollisionQueryParams& Params, float& SupportZ, float MaxUp = 0.f)
+        float MaxDown, const FCollisionQueryParams& Params, float& SupportZ, float MaxUp = 0.f,
+        bool bHasLowerTread = false)
     {
         constexpr float Clearance=.5f;
         // A wall touching the body's side must not hide the floor from a
@@ -355,7 +402,11 @@ namespace ACEBodySweep
         // retain support at their edges while the sphere still contacts above
         // the landing threshold; flat treads require a walkable sphere contact.
         const bool bWalkableContact=Hit.Normal.Z>=.6641741f
-            || (Hit.ImpactNormal.Z>=.6641741f && Hit.ImpactNormal.Z<.99f && Hit.Normal.Z>.0871557f);
+            || (Hit.ImpactNormal.Z>=.6641741f && Hit.ImpactNormal.Z<.99f && Hit.Normal.Z>.0871557f)
+            // A verified lower tread within StepDown permits descent around
+            // the old tread's convex edge. This is clearance along a bounded
+            // step, not permission to stand on a wall or roll over a cliff.
+            || (bHasLowerTread && Hit.Normal.Z>.0871557f);
         if (IsCreatureBody(Hit) || Hit.bStartPenetrating || !bWalkableContact) return false;
         const float Z=Hit.Location.Z-SupportRadius;
         if (Z>Feet.Z+MaxUp+Clearance || Z<Feet.Z-MaxDown) return false;
@@ -439,7 +490,8 @@ namespace ACEBodySweep
             }
             else
             {
-                const FVector N=Hit.Normal.Z<-.15f ? Hit.Normal.GetSafeNormal() : Hit.Normal.GetSafeNormal2D();
+                const FVector N=Hit.Normal.Z<-.15f && !IsCreatureBody(Hit)
+                    ? Hit.Normal.GetSafeNormal() : Hit.Normal.GetSafeNormal2D();
                 if(N.IsNearlyZero())break;
                 Planes.Add(N);
                 // Keep earlier constraints too: projecting onto the second wall

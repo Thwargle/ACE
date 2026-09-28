@@ -39,6 +39,8 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACEVRStairCeilingTest;
 	friend class FACEVRInteriorNetworkTest;
 	friend class FACERetailWorldEntryTest;
+	friend class FACEPortalPlacementTest;
+	friend class FACEPortalDropTest;
 	friend class FACELoadingTransitionTest;
 	friend class FACEPortalRetirementTest;
 	friend class FACELedgeStairsTest;
@@ -488,8 +490,10 @@ protected:
 	void BeginWorldReveal();
 	void FinishWorldTransition();
 	bool IsWorldTransitionReady(FString* OutBlockingGate = nullptr, bool bIgnoreServerUnhide = false) const;
-	/** Validate real blocking collision and supporting ground before enabling the pawn. */
-	bool FindWorldEntryPlacement(FVector& OutCapsuleCenter) const;
+	enum class EWorldEntryPlacement : uint8 { Unavailable, Blocked, Grounded, Airborne };
+	/** Clear placement may be airborne; missing streamed geometry is not a blocked spawn. */
+	bool FindWorldEntryPlacement(FVector& OutCapsuleCenter, EWorldEntryPlacement* OutState = nullptr, uint32* OutCellId = nullptr) const;
+	bool IsWorldEntryGeometryReady(uint32 CandidateCell = 0) const;
 	/** One server-authoritative recall per failed arrival; never reveal an unsafe spawn. */
 	bool TickWorldEntryRecovery(float DeltaTime, const FString& BlockingGate);
 	void ResetWorldEntryDestination();
@@ -497,7 +501,7 @@ protected:
 	/** Send LoginComplete once per transition so the server clears Teleporting. */
 	void NotifyPortalArrivalIfNeeded();
 	/** Reset cached MoveToState axes and require a fresh send after TeleportSeq changes. */
-	void InvalidateMovementAfterTeleport();
+	void InvalidateMovementAfterTeleport(bool bAirborneArrival = false);
 	/** Rain/weather PES must not composite over the portal tunnel camera. */
 	void SetSkyWeatherEnabled(bool bEnabled);
 

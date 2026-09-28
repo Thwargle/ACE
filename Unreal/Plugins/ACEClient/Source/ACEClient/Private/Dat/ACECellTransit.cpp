@@ -142,13 +142,13 @@ namespace ACECellTransit
 			TSet<uint32>& Seen,
 			bool& bHitsInterior)
 		{
-			FACEDatLandblockInfo Info;
 			const uint32 Lb = LandblockKey(LandCellId);
-			if (!Dat.LoadLandblockInfo(Lb, Info))
+			const auto Info = Dat.GetLandblockInfo(Lb);
+			if (!Info)
 			{
 				return;
 			}
-			for (const FACEDatLandblockBuilding& Building : Info.Buildings)
+			for (const FACEDatLandblockBuilding& Building : Info->Buildings)
 			{
 				for (const FACEDatBuildingPortal& Portal : Building.Portals)
 				{

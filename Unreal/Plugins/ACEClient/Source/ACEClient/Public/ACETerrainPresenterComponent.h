@@ -31,6 +31,8 @@ class ACECLIENT_API UACETerrainPresenterComponent : public UActorComponent
 	friend class FACERetailRuntimeRegressionTest;
 	friend class FACERetailNetworkWeatherTest;
 	friend class FACERetailWorldEntryTest;
+	friend class FACEPortalPlacementTest;
+	friend class FACEPortalDropTest;
 	friend class FACELoadingTransitionTest;
 	friend class FACEStreamingRetirementTest;
 	friend class FACEPortalRetirementTest;
@@ -155,6 +157,8 @@ public:
 	 */
 	UFUNCTION(BlueprintPure, Category = "ACE")
 	bool IsPlayerCellCollisionReady() const;
+	/** Confirms the requested destination (not the previous cell) and its placement geometry. */
+	bool IsPortalPlacementGeometryReady(uint32 DestinationCell, uint32 CandidateCell = 0) const;
 	/** Current indoor cell draw + stab scenery (portal reveal / enter-world). */
 	bool IsPlayerCellVisualReady() const;
 

@@ -93,6 +93,7 @@ void UACEUICanvasWidget::SetResourceResolver(UACEUIResourceResolver* InResolver)
 
 void UACEUICanvasWidget::SetGameplayBinder(UACEUIGameplayBinder* InBinder)
 {
+	if (GameplayBinder != InBinder) LastGameplayTickFrame = MAX_uint64;
 	GameplayBinder = InBinder;
 }
 
@@ -153,10 +154,11 @@ void UACEUICanvasWidget::NativeConstruct()
 	SyncElementWidgets();
 }
 
-void UACEUICanvasWidget::TickVRGameplayState()
+void UACEUICanvasWidget::TickGameplayState()
 {
-	if (!GameplayBinder || LastVRGameplayTickFrame == GFrameCounter) return;
-	LastVRGameplayTickFrame = GFrameCounter;
+	if (!GameplayBinder || LastGameplayTickFrame == GFrameCounter) return;
+	// Either callback may run first. Mark before refreshing to cover reentry as well.
+	LastGameplayTickFrame = GFrameCounter;
 	GameplayBinder->TickRefresh();
 }
 
@@ -165,10 +167,7 @@ void UACEUICanvasWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTi
 	Super::NativeTick(MyGeometry, InDeltaTime);
 	UpdateCanvasLayout();
     if(CharGenBinder) CharGenBinder->Tick(InDeltaTime);
-	if (GameplayBinder && LastVRGameplayTickFrame != GFrameCounter)
-	{
-		GameplayBinder->TickRefresh();
-	}
+	TickGameplayState();
 	if (CharSelectBinder)
 	{
 		CharSelectBinder->TickRefresh(InDeltaTime);

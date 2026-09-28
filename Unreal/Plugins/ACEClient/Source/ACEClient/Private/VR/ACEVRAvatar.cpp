@@ -36,6 +36,7 @@ void UACEVRComponent::UpdateArms(float Dt)
 	const bool Visible = bTracking && !PC->bEnterWorldLoading && !PC->bWorldRevealActive;
 	const FRotator BodyYaw(0.f, Head->GetComponentRotation().Yaw, 0.f);
 	const FTransform BodyFrame(BodyYaw, Head->GetComponentLocation());
+	FTransform AvatarFrame = App && App->GetMeshRoot() ? App->GetMeshRoot()->GetComponentTransform() : FTransform::Identity;
 	for (UStaticMeshComponent* M : FallbackArms) M->SetVisibility(false);
 	// Validate the retail human hand sockets: chest=9, arms=10..15, head=16.
 	// The setup also has accessory parts after 16, which must obey body visibility.
@@ -47,7 +48,6 @@ void UACEVRComponent::UpdateArms(float Dt)
 	if (App) { App->bVRPoseControlled = Human; App->SetPartsCastShadow(true, false); }
 	if (Human)
 	{
-		App->UpdateVRLowerBody(Dt);
 		FTransform HeadBind;
 		if (App->GetMeshRoot() && App->GetPartBindTransform(16, HeadBind))
 		{
@@ -58,8 +58,8 @@ void UACEVRComponent::UpdateArms(float Dt)
 			// An 8cm world-Z offset put the viewpoint below the face in armor.
 			const FVector EyeBind = HeadBind.TransformPosition(FVector(0, -.08f, .17f) * PC->WorldScale);
 			const float Scale = FMath::Clamp(AvatarEyeHeight / FMath::Max(50.f, float(EyeBind.Z)), .6f, 1.5f);
-			App->GetMeshRoot()->SetWorldTransform(ACEVRMath::BodyFromHead(Head->GetComponentTransform(),
-				HeadBind, FVector(0,-.08f,.17f)*PC->WorldScale, Scale));
+			AvatarFrame = ACEVRMath::BodyFromHead(Head->GetComponentTransform(),
+				HeadBind, FVector(0,-.08f,.17f)*PC->WorldScale, Scale);
 		}
 	}
 	if (App)
@@ -73,25 +73,14 @@ void UACEVRComponent::UpdateArms(float Dt)
 				Part->SetOwnerNoSee(HeadPart || (!Settings->bShowBody && !Arm));
 				Part->SetVisibility(Visible && Human, false);
 				Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-				if (Human && I >= 9)
-				{
-					// Tracked parts receive their final transform below. Resetting them to
-					// bind first also moves every attached weapon/light twice per frame.
-					const bool LeftArm = (I >= 10 && I <= 12) || I == 27;
-					const bool RightArm = (I >= 13 && I <= 15) || I == 28;
-					const bool TrackedArm = Visible && ((LeftArm && LeftGrip->IsTracked()) || (RightArm && RightGrip->IsTracked()));
-					if (!HeadPart && !TrackedArm)
-					{
-						FTransform Bind; if (App->GetPartBindTransform(I, Bind)) Part->SetRelativeTransform(Bind);
-					}
-				}
 			}
 		}
 	FTransform ShoulderFrame = FTransform::Identity;
 	if (Human)
 	{
-		ShoulderFrame = App->UpdateVRUpperBody(Head->GetComponentTransform(), GetAvatarGrip(true), GetAvatarGrip(false),
+		ShoulderFrame = App->UpdateVRUpperBody(AvatarFrame, Head->GetComponentTransform(), GetAvatarGrip(true), GetAvatarGrip(false),
 			Visible && LeftGrip->IsTracked(), Visible && RightGrip->IsTracked(), Dt);
+		App->UpdateVRLowerBody(Dt);
 		// Hidden head/helmet parts still cast the complete, tracked body shadow.
 		FTransform HeadBind;
 		if (App->GetPartBindTransform(16, HeadBind))

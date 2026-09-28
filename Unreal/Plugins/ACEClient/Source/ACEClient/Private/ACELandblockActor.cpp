@@ -1305,10 +1305,9 @@ void AACELandblockActor::QueueScenery(UACEDatSubsystem* Dat)
 	}
 
 	bSceneryQueued = true;
-	FACEDatLandblockInfo Info;
-	const bool bHaveInfo = Dat->LoadLandblockInfo(static_cast<uint32>(LandblockId), Info);
-	if (bHaveInfo)
+	if (const auto Snapshot = Dat->GetLandblockInfo(static_cast<uint32>(LandblockId)))
 	{
+		const auto& Info = *Snapshot;
 		PendingScenery.Reserve(Info.Objects.Num() + Info.Buildings.Num());
 		for (int32 Bi = 0; Bi < Info.Buildings.Num(); ++Bi)
 		{

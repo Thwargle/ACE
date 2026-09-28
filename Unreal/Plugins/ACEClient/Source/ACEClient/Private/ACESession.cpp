@@ -6664,7 +6664,90 @@ const FACEWorldObject* FACESession::FindEquippedItem(int64 LocationMask, int32 I
 	return nullptr;
 }
 
+void FACESession::GetPackItemCounts(TMap<int32, int32>& InOutCounts) const
+{
+	auto IsPack = [](const FACEWorldObject& O)
+	{
+		return O.ItemsCapacity > 0 || O.ContainersCapacity > 0
+			|| (O.ItemType & ACEItemType::Container) != 0
+			|| (O.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot) != 0;
+	};
+	TSet<int32> MainSeen;
+	TSet<int32> ScanContainers;
+	for (auto& Count : InOutCounts)
+	{
+		Count.Value = 0;
+		const bool bMain = Count.Key == PlayerGuid;
+		const auto* Contents = ContainerContents.Find(Count.Key);
+		if (bMain || !Contents) ScanContainers.Add(Count.Key);
+		if (!Contents) continue;
+		for (const auto& Ref : *Contents)
+		{
+			if (Ref.ContainerType != 0) continue;
+			const auto* O = WorldObjects.Find(Ref.ItemGuid);
+			if (O)
+			{
+				if (bMain) MainSeen.Add(Ref.ItemGuid);
+				if (!IsPack(*O)) ++Count.Value;
+			}
+			// Side packs reserve a slot before ObjectCreate; main pack waits for it.
+			else if (!bMain) ++Count.Value;
+		}
+	}
+	if (ScanContainers.IsEmpty()) return;
+	// One world scan for every unopened pack, instead of one scan per pack.
+	for (const auto& Pair : WorldObjects)
+	{
+		const auto& O = Pair.Value;
+		if (!ScanContainers.Contains(O.ContainerId) || O.CurrentWieldedLocation != 0
+			|| O.WielderId != 0 || O.ParentGuid != 0) continue;
+		if (O.ContainerId == PlayerGuid && (MainSeen.Contains(O.Guid) || IsPack(O))) continue;
+		++InOutCounts.FindChecked(O.ContainerId);
+	}
+}
+
+namespace
+{
+    void SortInventoryGuidsByPlacement(TArray<int32>& Guids, const TMap<int32, FACEWorldObject>& Objects)
+    {
+        Guids.Sort([&Objects](int32 GuidA, int32 GuidB)
+        {
+            const auto* A = Objects.Find(GuidA);
+            const auto* B = Objects.Find(GuidB);
+            const int32 Pa = A && A->PlacementPosition >= 0 ? A->PlacementPosition : MAX_int32;
+            const int32 Pb = B && B->PlacementPosition >= 0 ? B->PlacementPosition : MAX_int32;
+            return Pa != Pb ? Pa < Pb : GuidA < GuidB;
+        });
+    }
+}
+
 void FACESession::GetPackItems(int32 ContainerGuid, TArray<FACEWorldObject>& Out) const
+{
+    TArray<int32> Guids;
+    GetPackItemGuids(ContainerGuid, Guids);
+    Out.Reset(Guids.Num());
+    for (int32 Guid : Guids)
+    {
+        if (const auto* Item = WorldObjects.Find(Guid)) Out.Add(*Item);
+        else
+        {
+            auto& Stub = Out.AddDefaulted_GetRef();
+            Stub.Guid = Guid;
+            Stub.ContainerId = ContainerGuid;
+            Stub.Name = FString::Printf(TEXT("Item 0x%08X"), Guid);
+        }
+    }
+}
+
+void FACESession::GetPlayerPacks(TArray<FACEWorldObject>& Out) const
+{
+    TArray<int32> Guids;
+    GetPlayerPackGuids(Guids);
+    Out.Reset(Guids.Num());
+    for (int32 Guid : Guids) Out.Add(WorldObjects.FindChecked(Guid));
+}
+
+void FACESession::GetPackItemGuids(int32 ContainerGuid, TArray<int32>& Out) const
 {
 	Out.Reset();
 	TSet<int32> Seen;
@@ -6687,31 +6770,21 @@ void FACESession::GetPackItems(int32 ContainerGuid, TArray<FACEWorldObject>& Out
 				{
 					continue;
 				}
-				FACEWorldObject Obj;
-				if (!GetWorldObject(Ref.ItemGuid, Obj))
+				const FACEWorldObject* Obj = WorldObjects.Find(Ref.ItemGuid);
+				if (!Obj)
 				{
 					continue;
 				}
-				if (IsPackObject(Obj))
+				if (IsPackObject(*Obj))
 				{
 					Seen.Add(Ref.ItemGuid);
 					continue;
 				}
-				Out.Add(Obj);
+				Out.Add(Obj->Guid);
 				Seen.Add(Ref.ItemGuid);
 			}
-			Out.Sort([](const FACEWorldObject& A, const FACEWorldObject& B)
-			{
-				const int32 Pa = A.PlacementPosition >= 0 ? A.PlacementPosition : MAX_int32;
-				const int32 Pb = B.PlacementPosition >= 0 ? B.PlacementPosition : MAX_int32;
-				if (Pa != Pb)
-				{
-					return Pa < Pb;
-				}
-				return A.Guid < B.Guid;
-			});
 		}
-		TArray<FACEWorldObject> Late;
+		// Append late creates directly, then sort the combined list only once.
 		for (const TPair<int32, FACEWorldObject>& Pair : WorldObjects)
 		{
 			const FACEWorldObject& Obj = Pair.Value;
@@ -6722,26 +6795,10 @@ void FACESession::GetPackItems(int32 ContainerGuid, TArray<FACEWorldObject>& Out
 			if (Obj.ContainerId == PlayerGuid && Obj.CurrentWieldedLocation == 0 && Obj.WielderId == 0
 				&& Obj.ParentGuid == 0 && !IsPackObject(Obj))
 			{
-				Late.Add(Obj);
+				Out.Add(Obj.Guid);
 			}
 		}
-		if (Late.Num() > 0)
-		{
-			for (const FACEWorldObject& Obj : Late)
-			{
-				Out.Add(Obj);
-			}
-		}
-		Out.Sort([](const FACEWorldObject& A, const FACEWorldObject& B)
-		{
-			const int32 Pa = A.PlacementPosition >= 0 ? A.PlacementPosition : MAX_int32;
-			const int32 Pb = B.PlacementPosition >= 0 ? B.PlacementPosition : MAX_int32;
-			if (Pa != Pb)
-			{
-				return Pa < Pb;
-			}
-			return A.Guid < B.Guid;
-		});
+		SortInventoryGuidsByPlacement(Out, WorldObjects);
 		return;
 	}
 
@@ -6750,42 +6807,25 @@ void FACESession::GetPackItems(int32 ContainerGuid, TArray<FACEWorldObject>& Out
 	{
 		for (const FACEContainerItemRef& Ref : *Contents)
 		{
-			FACEWorldObject Obj;
-			if (GetWorldObject(Ref.ItemGuid, Obj))
+			if (const FACEWorldObject* Obj = WorldObjects.Find(Ref.ItemGuid))
 			{
-				const bool bIsPack = Obj.ItemsCapacity > 0 || Obj.ContainersCapacity > 0
-					|| (Obj.ItemType & ACEItemType::Container) != 0
-					|| (Obj.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot) != 0
-					|| Ref.ContainerType != 0;
+				const bool bIsPack = IsPackObject(*Obj) || Ref.ContainerType != 0;
 				if (bIsPack)
 				{
 					Seen.Add(Ref.ItemGuid);
 					continue;
 				}
-				Out.Add(Obj);
+				Out.Add(Obj->Guid);
 			}
 			else if (Ref.ContainerType == 0)
 			{
-				FACEWorldObject Stub;
-				Stub.Guid = Ref.ItemGuid;
-				Stub.ContainerId = ContainerGuid;
-				Stub.Name = FString::Printf(TEXT("Item 0x%08X"), Ref.ItemGuid);
-				Out.Add(Stub);
+				Out.Add(Ref.ItemGuid);
 			}
 			Seen.Add(Ref.ItemGuid);
 		}
 		// ViewContents encounter order can drift from PlacementPosition after local
 		// Put/ContainId shifts — grid cells key off PP (BuildSparsePackSlotGuids).
-		Out.Sort([](const FACEWorldObject& A, const FACEWorldObject& B)
-		{
-			const int32 Pa = A.PlacementPosition >= 0 ? A.PlacementPosition : MAX_int32;
-			const int32 Pb = B.PlacementPosition >= 0 ? B.PlacementPosition : MAX_int32;
-			if (Pa != Pb)
-			{
-				return Pa < Pb;
-			}
-			return A.Guid < B.Guid;
-		});
+		SortInventoryGuidsByPlacement(Out, WorldObjects);
 		return;
 	}
 
@@ -6807,30 +6847,21 @@ void FACESession::GetPackItems(int32 ContainerGuid, TArray<FACEWorldObject>& Out
 			{
 				continue;
 			}
-			Out.Add(Obj);
+			Out.Add(Obj.Guid);
 		}
 	}
 
 	// Stable-sort ObjectCreate fallback (TMap iteration order is unstable).
-	Out.Sort([](const FACEWorldObject& A, const FACEWorldObject& B)
-	{
-		const int32 Pa = A.PlacementPosition >= 0 ? A.PlacementPosition : MAX_int32;
-		const int32 Pb = B.PlacementPosition >= 0 ? B.PlacementPosition : MAX_int32;
-		if (Pa != Pb)
-		{
-			return Pa < Pb;
-		}
-		return A.Guid < B.Guid;
-	});
+	SortInventoryGuidsByPlacement(Out, WorldObjects);
 }
 
-void FACESession::GetPlayerPacks(TArray<FACEWorldObject>& Out) const
+void FACESession::GetPlayerPackGuids(TArray<int32>& Out) const
 {
 	Out.Reset();
 	TSet<int32> Seen;
 	// Retail side slots = UseBackpackSlot items (Container + Foci) ordered by PlacementPosition.
-	// GameEventViewContents tags those with ContainerType 1/2; keep encounter order among them
-	// (server OrderBy PlacementPosition) and do not re-sort by possibly-stale ObjectCreate PP.
+	// GameEventViewContents tags them with ContainerType 1/2. The inventory handlers
+	// reconcile PlacementPosition before these IDs are sorted for presentation.
 	constexpr int32 ContainerType_Container = 1;
 	constexpr int32 ContainerType_Foci = 2;
 	if (const TArray<FACEContainerItemRef>* Contents = ContainerContents.Find(PlayerGuid))
@@ -6841,17 +6872,17 @@ void FACESession::GetPlayerPacks(TArray<FACEWorldObject>& Out) const
 			{
 				continue;
 			}
-			FACEWorldObject Obj;
-			if (!GetWorldObject(Ref.ItemGuid, Obj))
+			const auto* Obj = WorldObjects.Find(Ref.ItemGuid);
+			if (!Obj)
 			{
 				continue;
 			}
-			if (Obj.CurrentWieldedLocation != 0)
+			if (Obj->CurrentWieldedLocation != 0)
 			{
 				continue;
 			}
-			Out.Add(Obj);
-			Seen.Add(Obj.Guid);
+			Out.Add(Obj->Guid);
+			Seen.Add(Obj->Guid);
 		}
 	}
 	for (const TPair<int32, FACEWorldObject>& Pair : WorldObjects)
@@ -6867,19 +6898,10 @@ void FACESession::GetPlayerPacks(TArray<FACEWorldObject>& Out) const
 			|| (Obj.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot) != 0;
 		if (bOnPlayer && bIsPack && Obj.CurrentWieldedLocation == 0 && Obj.Guid != PlayerGuid)
 		{
-			Out.Add(Obj);
+			Out.Add(Obj.Guid);
 		}
 	}
-	Out.Sort([](const FACEWorldObject& A, const FACEWorldObject& B)
-	{
-		const int32 Pa = A.PlacementPosition >= 0 ? A.PlacementPosition : MAX_int32;
-		const int32 Pb = B.PlacementPosition >= 0 ? B.PlacementPosition : MAX_int32;
-		if (Pa != Pb)
-		{
-			return Pa < Pb;
-		}
-		return A.Guid < B.Guid;
-	});
+	SortInventoryGuidsByPlacement(Out, WorldObjects);
 }
 
 void FACESession::ApplyServerTime(double ServerTicks, double ReceivedAt, const TCHAR* Source)

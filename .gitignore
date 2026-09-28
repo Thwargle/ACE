@@ -349,3 +349,10 @@ log4net.config
 *.ucache
 *.trx
 /Testing/
+
+# Local test, parity, trace and performance reports; keep test code and product docs.
+/Unreal/Build/VR/REVIEW-*.md
+/Unreal/Build/VR/PERFORMANCE-REVIEW-*.md
+/Unreal/Build/VR/TRACE-REVIEW-*.md
+/Unreal/Build/VR/*-PARITY-*.md
+/Unreal/Plugins/ACEClient/Docs/PERFORMANCE_REVIEW_*.md

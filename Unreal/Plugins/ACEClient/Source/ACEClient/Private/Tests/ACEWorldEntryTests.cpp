@@ -16,6 +16,7 @@
 #include "ACECharacterCreation.h"
 #include "ACEHoverTooltipWidget.h"
 #include "Components/BoxComponent.h"
+#include "Components/SphereComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Components/CapsuleComponent.h"
@@ -47,6 +48,7 @@
 #include "HAL/FileManager.h"
 #include "ACEWorldEntityActor.h"
 #include "../ACEBodySweep.h"
+#include "Dat/ACECellTransit.h"
 #include "../UI/ACERadarVisuals.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "Engine/Texture2D.h"
@@ -78,6 +80,263 @@ namespace
             GI->Shutdown(); GEngine->DestroyWorldContext(World); World->DestroyWorld(false);
         }
     };
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECreatureEscapeTest,"ACE.RetailParity.CreatureEscape",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACECreatureEscapeTest::RunTest(const FString&)
+{
+    FEntryWorld F;
+    auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
+    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+    const auto Player=FCollisionShape::MakeCapsule(48,91.75);
+    FCollisionQueryParams Q(SCENE_QUERY_STAT(CreatureEscape),true);
+    for(uint32 Setup:{0x02000964u,0x02000041u})
+    {
+        FACEWorldObject Obj;Obj.Guid=9821;Obj.SetupId=Setup;Obj.ItemType=ACEItemType::Creature;
+        Obj.PhysicsState=ACEPhysicsState::Gravity;Obj.bHasPosition=true;
+        Obj.Position.CellId=0x016C0101;Obj.Position.Location=FVector(50,50,100);
+        const FVector Base=Obj.Position.ToUnrealLocation(100);
+        auto* Mob=F.World->SpawnActor<AACEWorldEntityActor>();Mob->InitializeFromObject(Obj,100,true);
+        Mob->SetActorLocation(Base);
+        TArray<FACEDatCollisionShape> Spheres;bool BSP=false;Dat->GetSetupCollisionShapes(Setup,Spheres,BSP);
+        double Width=0;
+        for(const auto& S:Spheres)for(double Z:{48.,135.5})
+            Width=FMath::Max(Width,FMath::Sqrt(FMath::Max(0.,FMath::Square(48.+S.Radius*100)-FMath::Square(Z-S.Origin.Z*100))));
+        const FVector Start=Base+FVector(Width-20,0,91.75);
+        FHitResult Hit;
+        TestTrue(TEXT("A moving mob can initially overlap the player"),ACEBodySweep::OverlapsBody(*F.World,Start,Player,Q));
+        TestFalse(TEXT("Backing out of an overlapping creature remains possible"),ACEBodySweep::Sweep(*F.World,Hit,Start,Start+FVector(5,0,0),Player,Q));
+        TestTrue(TEXT("Moving deeper into the creature is still blocked"),ACEBodySweep::Sweep(*F.World,Hit,Start,Start-FVector(5,0,0),Player,Q));
+        auto* Wall=F.World->SpawnActor<AActor>();auto* Box=NewObject<UBoxComponent>(Wall);
+        Wall->SetRootComponent(Box);Wall->AddInstanceComponent(Box);Box->SetBoxExtent(FVector(10,1000,200));
+        Box->SetCollisionEnabled(ECollisionEnabled::QueryOnly);Box->SetCollisionResponseToAllChannels(ECR_Block);Box->RegisterComponent();
+        Wall->SetActorLocation(Start+FVector(58.1,0,0));
+        for(int32 FPS:{30,90,144})for(double Sign:{-1.,1.})
+        {
+            FVector Position=Start;
+            for(int32 Frame=0;Frame<FPS;++Frame)
+            {
+                const FVector End=Position+FVector(0,Sign*300./FPS,0);
+                if(ACEBodySweep::Sweep(*F.World,Hit,Position,End,Player,Q))
+                    Position=ACEBodySweep::SlideGrounded(*F.World,Position,End,Hit,Player,Q);
+                else Position=End;
+            }
+            TestTrue(FString::Printf(TEXT("%08X tangent escape beside wall at %d fps (%+.0f)"),Setup,FPS,Sign),Sign*(Position.Y-Start.Y)>290);
+            TestTrue(TEXT("Creature escape never lifts or lowers a grounded player"),FMath::IsNearlyEqual(Position.Z,Start.Z,.01));
+            TestTrue(TEXT("Escape retains the adjacent wall"),Position.X<=Start.X+.2);
+        }
+        // The initial creature hit must not conceal a different solid farther along the escape.
+        Wall->SetActorLocation(Start+FVector(0,110,0));Box->SetBoxExtent(FVector(1000,10,200));
+        TestTrue(TEXT("An escape still sweeps the wall behind the creature"),ACEBodySweep::Sweep(*F.World,Hit,Start,Start+FVector(0,300,0),Player,Q));
+        TestEqual(TEXT("Architecture, not the initial mob overlap, blocks the escape"),Hit.GetActor(),Wall);
+        Wall->Destroy();
+        auto* Other=F.World->SpawnActor<AACEWorldEntityActor>();Other->InitializeFromObject(Obj,100,true);
+        Other->SetActorLocation(Base+FVector(Width-20,320,0));
+        TestTrue(TEXT("Escaping one mob cannot pass through the next mob"),ACEBodySweep::Sweep(*F.World,Hit,Start,Start+FVector(0,400,0),Player,Q));
+        TestEqual(TEXT("The next creature still blocks"),Hit.GetActor(),static_cast<AActor*>(Other));
+        Other->Destroy();Mob->Destroy();
+    }
+    return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPortalPlacementTest,"ACE.RetailParity.PortalPlacement",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEPortalPlacementTest::RunTest(const FString&)
+{
+    FEntryWorld F;auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
+    if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+    auto* Client=F.GI->GetSubsystem<UACEClientSubsystem>();
+    auto* PC=F.World->SpawnActor<AACEPlayerController>();PC->Client=Client;F.World->AddController(PC);
+    auto* Pawn=F.World->SpawnActor<APawn>();auto* Capsule=NewObject<UCapsuleComponent>(Pawn);
+    Capsule->InitCapsuleSize(48,91.75);Pawn->SetRootComponent(Capsule);Pawn->AddInstanceComponent(Capsule);
+    Capsule->RegisterComponent();PC->Possess(Pawn);Pawn->SetActorEnableCollision(false);
+    auto* Terrain=NewObject<UACETerrainPresenterComponent>(PC);PC->AddInstanceComponent(Terrain);
+    Terrain->RegisterComponent();Terrain->Client=Client;
+    FACEPosition Pose;Pose.CellId=0x02910388;Pose.Location=FVector(210,-120,6);
+    Pawn->SetActorLocation(Pose.ToUnrealLocation(100)+FVector(0,0,91.75));
+    Client->GetSession()->SetLocalPosition(Pose);
+    Terrain->LastKnownCellId=Pose.CellId;Terrain->bHasKnownCell=true;
+    Dat->SetWorldStreamingAllowed(true);Dat->SetInPortalSpace(true);
+    TArray<int32> Ordered;TSet<int32> Needed;Terrain->CollectNeededEnvCells(Ordered,Needed);
+    const FVector Origin=FACEPosition::AceVectorToUnreal(FVector(2*192,145*192,0),100);
+    for(int32 Id:Ordered)
+    {
+        Dat->GetOrBuildEnvCellMesh(Id,100);
+        auto* Room=F.World->SpawnActor<AACEEnvCellActor>();
+        if(Room->LoadEnvCell(Id,Origin,100))Terrain->SpawnedEnvCells.Add(Id,Room);
+        else AddError(FString::Printf(TEXT("Cannot load Bore cell %08X"),Id));
+    }
+    const double Deadline=FPlatformTime::Seconds()+30;
+    bool Pending=true;
+    while(Pending && FPlatformTime::Seconds()<Deadline)
+    {
+        ++GFrameCounter;
+        FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
+        Terrain->UpdateBuildingVisibility();Pending=false;
+        for(const auto& Pair:Terrain->SpawnedEnvCells)
+        {
+            Pair.Value->Tick(.016f);
+            if(Pair.Value->GetActorEnableCollision())Pending|=!Pair.Value->IsCollisionCooked()||Pair.Value->HasPendingStaticObjects();
+        }
+        if(Pending)FPlatformProcess::Sleep(.002f);
+    }
+    TestFalse(TEXT("Bore arrival physics and static objects finish streaming"),Pending);
+    const FVector Feet=Pose.ToUnrealLocation(100);FHitResult Hit;
+    FCollisionQueryParams Q(SCENE_QUERY_STAT(BorePlacement),false,Pawn);
+    const bool HasFloor=F.World->LineTraceSingleByChannel(Hit,Feet+FVector(0,0,80),Feet-FVector(0,0,3000),ECC_Pawn,Q);
+    AddInfo(FString::Printf(TEXT("Bore cells=%d floor=%d deltaZ=%.3f component=%s"),Ordered.Num(),HasFloor,Hit.Location.Z-Feet.Z,*GetNameSafe(Hit.GetComponent())));
+    AddInfo(FString::Printf(TEXT("Bore foot point inside arrival cell=%d"),ACECellTransit::SphereIntersectsEnvCell(*Dat,Pose.CellId,Feet+FVector(0,0,48),0,100)));
+    FVector Placement;
+    TestTrue(TEXT("Singularity Bore's authored portal destination can enter the world"),PC->FindWorldEntryPlacement(Placement));
+    AddInfo(FString::Printf(TEXT("Bore placement=%s arrival=%s"),*Placement.ToString(),*Feet.ToString()));
+    // Portal entry temporarily ignores dynamic contacts on the server. A crowd
+    // at an authoritative destination is not a missing floor or an invalid cell.
+    TArray<AActor*> Crowd;
+    for(int32 X=-2;X<=2;++X)for(int32 Y=-2;Y<=2;++Y)
+    {
+        auto* Mob=F.World->SpawnActor<AActor>();auto* Sphere=NewObject<USphereComponent>(Mob);
+        Mob->SetRootComponent(Sphere);Mob->AddInstanceComponent(Sphere);Sphere->InitSphereRadius(99.6f);
+        Sphere->ComponentTags.Add(TEXT("ACECreatureBody"));Sphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+        Sphere->SetCollisionResponseToAllChannels(ECR_Ignore);Sphere->SetCollisionResponseToChannel(ECC_Pawn,ECR_Block);
+        Sphere->RegisterComponent();Mob->SetActorLocation(Feet+FVector(X*190,Y*190,99.6));Crowd.Add(Mob);
+    }
+    TestTrue(TEXT("Creatures at the Bore exit cannot trigger invalid-landing recovery"),PC->FindWorldEntryPlacement(Placement));
+    TestTrue(TEXT("Crowded portal arrival retains the server destination"),Placement.Equals(Feet+FVector(0,0,92.25),1.));
+    for(auto* Mob:Crowd)Mob->Destroy();
+    Pose.CellId=0x01010001;Pose.Location=FVector(40,40,1000);Client->GetSession()->SetLocalPosition(Pose);
+    auto* Body=F.World->SpawnActor<AActor>();auto* Sphere=NewObject<USphereComponent>(Body);
+    Body->SetRootComponent(Sphere);Body->AddInstanceComponent(Sphere);Sphere->InitSphereRadius(99.6f);
+    Sphere->ComponentTags.Add(TEXT("ACECreatureBody"));Sphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    Sphere->SetCollisionResponseToAllChannels(ECR_Block);Sphere->RegisterComponent();
+    Body->SetActorLocation(Pose.ToUnrealLocation(100)-FVector(0,0,99.6));
+    TestFalse(TEXT("A creature alone cannot make missing portal terrain safe"),PC->FindWorldEntryPlacement(Placement));
+    Body->Destroy();
+    return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPortalDropTest,"ACE.RetailParity.PortalDrops",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEPortalDropTest::RunTest(const FString&)
+{
+    // ACE-World-16PY-Patches portal weenies 43001, 7289 and 7508. Exercise their
+    // real DAT geometry, not portal-name exceptions or a fabricated floor check.
+    struct FArrival { const TCHAR* Name; uint32 Cell; FVector Location; bool Airborne; };
+    const FArrival Arrivals[] = {
+        {TEXT("Fort Tethana town-network arrival"),0x2681001D,FVector(77.7,108.1,240),false},
+        // Same real outdoor geometry, with a server-authored drop above it.
+        {TEXT("Fort Tethana elevated arrival"),0x2681001D,FVector(77.7,108.1,260),true},
+        {TEXT("Aerlinthe Reservoir"),0x02EE03D2,FVector(80,-110,6),true},
+        {TEXT("Aerlinthe Lower Reservoir"),0x02ED01B5,FVector(70,-30,-72),true}
+    };
+    for (const auto& Arrival : Arrivals)
+    {
+        FEntryWorld F;
+        auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
+        if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+        auto* Client=F.GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
+        F.World->SetGameMode(FURL(nullptr,TEXT("/Game/Test?game=/Script/Engine.GameModeBase"),TRAVEL_Absolute));
+        auto* GM=F.World->GetAuthGameMode();
+        if(!TestNotNull(TEXT("Portal drop game mode"),GM)) return false;
+        auto* Terrain=NewObject<UACETerrainPresenterComponent>(GM);
+        GM->AddInstanceComponent(Terrain);Terrain->RegisterComponent();Terrain->Client=Client;
+        auto* PC=F.World->SpawnActor<AACEPlayerController>();PC->Client=Client;F.World->AddController(PC);
+        auto* Pawn=F.World->SpawnActor<APawn>();auto* Capsule=NewObject<UCapsuleComponent>(Pawn);
+        Capsule->InitCapsuleSize(48,91.75);Pawn->SetRootComponent(Capsule);Pawn->AddInstanceComponent(Capsule);
+        Capsule->RegisterComponent();PC->Possess(Pawn);Pawn->SetActorEnableCollision(false);
+        FACEPosition Pose;Pose.CellId=Arrival.Cell;Pose.Location=Arrival.Location;
+        Session->SetLocalPosition(Pose);
+        Terrain->LastKnownCellId=Pose.CellId;Terrain->bHasKnownCell=true;
+        Dat->SetWorldStreamingAllowed(true);Dat->SetInPortalSpace(true);
+        const bool Indoor=ACECellTransit::IsIndoorCell(Pose.CellId);
+        if(Indoor)
+        {
+            TArray<int32> Ordered;TSet<int32> Needed;Terrain->CollectNeededEnvCells(Ordered,Needed);
+            const FVector Origin=FACEPosition::AceVectorToUnreal(FVector((Arrival.Cell>>24)*192,((Arrival.Cell>>16)&255)*192,0),100);
+            for(int32 Id:Ordered)
+            {
+                Dat->GetOrBuildEnvCellMesh(Id,100);
+                auto* Room=F.World->SpawnActor<AACEEnvCellActor>();
+                if(Room->LoadEnvCell(Id,Origin,100)) Terrain->SpawnedEnvCells.Add(Id,Room);
+                else AddError(FString::Printf(TEXT("Cannot load %s cell %08X"),Arrival.Name,Id));
+            }
+        }
+        else
+        {
+            const uint32 Id=Arrival.Cell&0xFFFF0000u;Dat->GetOrBuildLandblockMesh(Id,100);
+            auto* Land=F.World->SpawnActor<AACELandblockActor>();
+            TestTrue(TEXT("Outdoor portal landblock loads"),Land->LoadLandblock(Id,100,true,1,0));
+            Terrain->Spawned.Add(Id,Land);
+        }
+        const double Deadline=FPlatformTime::Seconds()+30;
+        do
+        {
+            ++GFrameCounter;FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
+            Terrain->UpdateBuildingVisibility();
+            for(const auto& Pair:Terrain->SpawnedEnvCells) Pair.Value->Tick(.016f);
+            for(const auto& Pair:Terrain->Spawned) Pair.Value->Tick(.016f);
+            if(PC->IsWorldEntryGeometryReady()) break;
+            FPlatformProcess::Sleep(.002f);
+        } while(FPlatformTime::Seconds()<Deadline);
+        TestTrue(FString::Printf(TEXT("%s destination collision finishes loading"),Arrival.Name),PC->IsWorldEntryGeometryReady());
+        const FVector Feet=Pose.ToUnrealLocation(100);
+        FHitResult Floor;FCollisionQueryParams Q(SCENE_QUERY_STAT(PortalDropFloor),false,Pawn);
+        const bool HasFloor=F.World->LineTraceSingleByChannel(Floor,Feet,Feet-FVector(0,0,20000),ECC_Pawn,Q);
+        AddInfo(FString::Printf(TEXT("%s floor=%d drop=%.2f AC cells=%d"),Arrival.Name,HasFloor,(Feet.Z-Floor.Location.Z)/100,Terrain->SpawnedEnvCells.Num()));
+        FVector Placement;AACEPlayerController::EWorldEntryPlacement State;
+        uint32 PlacementCell=0;
+        TestTrue(FString::Printf(TEXT("%s has a valid placement"),Arrival.Name),PC->FindWorldEntryPlacement(Placement,&State,&PlacementCell));
+        if(Indoor)
+            TestTrue(TEXT("Resolved arrival belongs to a real resident room"),PC->IsWorldEntryGeometryReady(PlacementCell)
+                && ACECellTransit::SphereIntersectsEnvCell(*Dat,PlacementCell,Feet+FVector(0,0,48),0,100));
+        TestTrue(TEXT("Arrival contact matches the actual destination"),
+            State==(Arrival.Airborne?AACEPlayerController::EWorldEntryPlacement::Airborne:AACEPlayerController::EWorldEntryPlacement::Grounded));
+        TestTrue(TEXT("Portal retains the authored height and XY"),Placement.Equals(Feet+FVector(0,0,91.75),Arrival.Airborne?.1:1.));
+        PC->EnterWorldLoadElapsed=46;Session->State=EACESessionState::InWorld;
+        TestFalse(TEXT("A long portal animation cannot recall a valid drop"),PC->TickWorldEntryRecovery(.016f,TEXT("spawn-placement")));
+        TestFalse(TEXT("A valid drop never attempts lifestone recovery"),PC->bWorldEntryRecoveryAttempted);
+
+        // Use the real reveal cut and movement tick with no held keys. It must
+        // neither reapply an old grounded anchor nor send a grounded StopMovement.
+        PC->PlayerInput=NewObject<UPlayerInput>(PC);PC->bRetailCursorInstalled=true;
+        PC->HoverTooltipWidget=CreateWidget<UACEHoverTooltipWidget>(F.GI,UACEHoverTooltipWidget::StaticClass());
+        PC->bHaveLastServerPose=true;PC->LastServerPose=Pose;PC->LastServerPose.Location.Z-=20;
+        PC->bPortalExitNotified=true;PC->bWorldRevealActive=true;
+        PC->FinishWorldTransition();
+        TestFalse(TEXT("Drop leaves the loading tunnel"),PC->bEnterWorldLoading||PC->bWorldRevealActive);
+        TestEqual(TEXT("Transition initializes the correct falling state"),PC->bJumpAirborne,Arrival.Airborne);
+        TestEqual(TEXT("First arrival packet reports correct ground contact"),Session->bAutoPosContact,!Arrival.Airborne);
+        TestTrue(TEXT("Arrival keeps autonomous reporting active"),Session->bForcePositionReporting);
+        TestTrue(TEXT("Stale server anchor cannot overwrite validated arrival"),PC->PredictedPose.ToUnrealLocation(100).Equals(Placement-FVector(0,0,91.75),.01));
+        TestEqual(TEXT("Arrival reports the resolved room to the server"),uint32(Session->GetPlayerPosition().CellId),PlacementCell);
+        if(!Arrival.Airborne) continue;
+        TestTrue(TEXT("Drop predicts its fall immediately"),PC->bLocalPredicting);
+        for(int32 Frame=0;Frame<15;++Frame) PC->PlayerTick(1.f/90.f);
+        TestTrue(TEXT("Gravity advances without a movement or Jump input"),Pawn->GetActorLocation().Z<Placement.Z-5);
+        TestTrue(TEXT("Portal drop accelerates downward"),PC->JumpWorldAceVelocity.Z<0);
+        for(int32 Frame=0;Frame<900 && PC->bJumpAirborne;++Frame) PC->PlayerTick(1.f/90.f);
+        TestFalse(TEXT("Portal fall reaches real destination support"),PC->bJumpAirborne);
+        TestTrue(TEXT("Landing restores network ground contact"),Session->bAutoPosContact);
+        TestFalse(TEXT("Normal falling/landing never recalls"),PC->bWorldEntryRecoveryAttempted);
+
+        if(!Indoor)
+        {
+            // Short drops used to be silently snapped to the floor by the four-unit
+            // probe. Use the proven landing, then arrive two metres above it.
+            FACEPosition ShortDrop=PC->PredictedPose;ShortDrop.Location.Z+=2;
+            Session->SetLocalPosition(ShortDrop);
+            TestTrue(TEXT("Two-metre portal drop is valid"),PC->FindWorldEntryPlacement(Placement,&State));
+            TestTrue(TEXT("Two-metre drop remains airborne"),State==AACEPlayerController::EWorldEntryPlacement::Airborne);
+            TestTrue(TEXT("Short drop does not skip its fall"),FMath::IsNearlyEqual(Placement.Z,ShortDrop.ToUnrealLocation(100).Z+91.75,.1));
+            Terrain->bHasKnownCell=false;
+            TestFalse(TEXT("Unloaded collision cannot qualify as open air"),PC->FindWorldEntryPlacement(Placement,&State));
+            TestTrue(TEXT("Missing geometry is not a trapped character"),State==AACEPlayerController::EWorldEntryPlacement::Unavailable);
+            PC->EnterWorldLoadElapsed=46;
+            TestTrue(TEXT("Missing collision has a bounded load failure"),PC->TickWorldEntryRecovery(.016f,TEXT("cell-collision")));
+            TestFalse(TEXT("Missing collision never sends a lifestone recall"),PC->bWorldEntryRecoveryAttempted);
+        }
+    }
+    return !HasAnyErrors();
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEShoushiGapTest,"ACE.RetailParity.ShoushiGap",
@@ -596,6 +855,16 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Khayyaban correction preserves the server XY"),FVector::Dist2D(Placement,Arrival)<1.f);
     TestTrue(TEXT("Khayyaban correction places the player above the surface"),Placement.Z>=TerrainHit.ImpactPoint.Z);
     AddInfo(FString::Printf(TEXT("Khayyaban placement: %s"), *Placement.ToString()));
+    auto* ArrivalMob=Fixture.World->SpawnActor<AActor>();
+    auto* ArrivalBody=NewObject<USphereComponent>(ArrivalMob);ArrivalMob->SetRootComponent(ArrivalBody);
+    ArrivalMob->AddInstanceComponent(ArrivalBody);ArrivalBody->InitSphereRadius(99.6f);
+    ArrivalBody->ComponentTags.Add(TEXT("ACECreatureBody"));ArrivalBody->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+    ArrivalBody->SetCollisionResponseToAllChannels(ECR_Block);ArrivalBody->RegisterComponent();
+    ArrivalMob->SetActorLocation(TerrainHit.Location+FVector(0,0,99.6));
+    FVector CrowdedPlacement;
+    TestTrue(TEXT("Crowded outdoor arrival still corrects old portal terrain height"),Controller->FindWorldEntryPlacement(CrowdedPlacement));
+    TestTrue(TEXT("Creature filtering uses corrected outdoor height, not the buried server point"),CrowdedPlacement.Equals(Placement,.01));
+    ArrivalMob->Destroy();
     Presenter->LastKnownCellId=Pose.CellId; Presenter->TerrainChunkSize=1;
     Presenter->Spawned.Add(0x9F440000,Khayyaban);
     TestTrue(TEXT("Arrival terrain alone satisfies center readiness"),Presenter->IsLoadRadiusTerrainReadyForRadius(0));
@@ -1100,6 +1369,24 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
     auto* Solid = MakeBox(Feet + FVector(0,0,200), FVector(600,600,200));
     TestFalse(TEXT("No valid placement within retail radius stays hidden"), Controller->FindWorldEntryPlacement(Placement));
 
+    // A recovery is allowed only with proven resident destination collision.
+    Fixture.World->SetGameMode(FURL(nullptr,TEXT("/Game/Test?game=/Script/Engine.GameModeBase"),TRAVEL_Absolute));
+    auto* RecoveryGM=Fixture.World->GetAuthGameMode();
+    auto* RecoveryTerrain=NewObject<UACETerrainPresenterComponent>(RecoveryGM);
+    RecoveryGM->AddInstanceComponent(RecoveryTerrain);RecoveryTerrain->RegisterComponent();RecoveryTerrain->Client=Client;
+    RecoveryTerrain->LastKnownCellId=Pose.CellId;RecoveryTerrain->bHasKnownCell=true;
+    const uint32 RecoveryLandId=uint32(Pose.CellId)&0xFFFF0000u;
+    Dat->GetOrBuildLandblockMesh(RecoveryLandId,100);
+    auto* RecoveryLand=Fixture.World->SpawnActor<AACELandblockActor>();
+    TestTrue(TEXT("Blocked arrival landblock loads"),RecoveryLand->LoadLandblock(RecoveryLandId,100,true,1,0));
+    RecoveryTerrain->Spawned.Add(RecoveryLandId,RecoveryLand);
+    const double RecoveryDeadline=FPlatformTime::Seconds()+10;
+    while(!Controller->IsWorldEntryGeometryReady() && FPlatformTime::Seconds()<RecoveryDeadline)
+    {
+        ++GFrameCounter;FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
+        RecoveryLand->Tick(.016f);FPlatformProcess::Sleep(.002f);
+    }
+    TestTrue(TEXT("Blocked arrival has resident collision before considering recall"),Controller->IsWorldEntryGeometryReady());
     // Only loopback traffic. Assert the recovery uses the real retail GameAction,
     // sends once, and cannot reuse the original destination's LoginComplete.
     auto* Sockets = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);

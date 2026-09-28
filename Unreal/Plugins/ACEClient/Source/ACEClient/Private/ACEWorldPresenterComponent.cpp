@@ -191,6 +191,13 @@ void UACEWorldPresenterComponent::TickComponent(float DeltaTime, ELevelTick Tick
 	}
 }
 
+AACEWorldEntityActor* UACEWorldPresenterComponent::FindEntityActor(int32 Guid) const
+{
+	const auto* Entry = Spawned.Find(Guid);
+	auto* Actor = Entry ? Entry->Get() : nullptr;
+	return IsValid(Actor) && !Actor->IsActorBeingDestroyed() ? Actor : nullptr;
+}
+
 void UACEWorldPresenterComponent::RefreshCellVisibility()
 {
 	const auto* Terrain = GetOwner() ? GetOwner()->FindComponentByClass<UACETerrainPresenterComponent>() : nullptr;

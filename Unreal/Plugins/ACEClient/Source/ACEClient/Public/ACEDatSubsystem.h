@@ -314,6 +314,9 @@ public:
 	 * landblock key; cleared with other DAT caches on reload.
 	 */
 	bool LoadLandblockInfo(uint32 LandblockId, FACEDatLandblockInfo& OutInfo);
+	/** Immutable read without copying nested building/portal arrays. Retained snapshots
+	 * remain valid across cache eviction or DAT reload; missing records return null. */
+	TSharedPtr<const FACEDatLandblockInfo> GetLandblockInfo(uint32 LandblockId);
 
 	/** Static world-space doors only; camera clipping is evaluated every frame. */
 	void LoadBuildingDoorwayApertures(uint32 LandblockId, float WorldScale,
@@ -708,10 +711,11 @@ private:
 	friend class FACESetupMetadataCacheTest;
 	friend class FACEStreamingRetirementTest;
 	friend class FACEPortalRetirementTest;
+	friend class FACELandblockInfoTest;
 	// Entries cannot move with TMap growth while a renderer is consuming their parts.
 	TMap<uint64, TSharedPtr<const FACEBuiltSetupMesh>> SetupMeshCache;
 	TMap<uint32, TSharedPtr<FACEBuiltLandblockMesh>> LandblockCache;
-	TMap<uint32, FACEDatLandblockInfo> LandblockInfoCache;
+	TMap<uint32, TSharedPtr<const FACEDatLandblockInfo>> LandblockInfoCache;
 	struct FCachedDoorwayGeometry
 	{
 		TSharedPtr<const TArray<ACEOutdoorPortalPlan::FAdmittedAperture>> Apertures;

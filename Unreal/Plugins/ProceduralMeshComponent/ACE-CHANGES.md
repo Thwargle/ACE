@@ -28,7 +28,18 @@ Terrain and interior components opt into `bPreferCachedDraws`. Their stable
 sections use `DrawStaticElements` so Unreal can cache mesh draw commands rather
 than rebuilding every section per eye every frame. Transforms use the proxy
 uniform buffer; geometry/section-visibility edits recreate the proxy. Wireframe
-uses the dynamic path. Animated parts and particles retain dynamic submission.
+uses the dynamic path. Particles retain dynamic submission; actor policy is
+controlled separately below.
 Use `ace.Render.CachedWorldDraws 0` before loading a scene for a reference run.
 `ACE.Rendering.CachedWorldDraws` compares real rendered pixels after transforms,
 material changes, hide/show, vertex edits, and clearing geometry.
+
+Actor parts can independently opt into cached submission with
+`ace.Render.CachedActorDraws` (desktop default on, Android default off). The native
+September 27 comparison did not justify enabling it on Android: command setup
+decreased but repeated cached-command construction increased.
+
+`ACE_ProcMeshCreateProxy` and `ACE_ProcMeshGather` CPU trace scopes distinguish
+buffer/proxy creation from normal submission. `ace.Render.TraceProxyRebuilds 1`
+adds component-path scopes during proxy construction to identify recurring
+rebuilds. It defaults to zero and does not generate path strings when disabled.

@@ -26,10 +26,13 @@ class ACECLIENT_API UACEWorldPresenterComponent : public UActorComponent
 	friend class FACERetailParticleTimingTest;
 	friend class FACEMovementReviewTest;
 	friend class FACEProjectileLifetimeTest;
+	friend class FACEEntityLookupTest;
 
 public:
 	UACEWorldPresenterComponent();
 	void RefreshCellVisibility();
+	/** Live presentation only; pending, removed and destroyed GUIDs return null. */
+	AACEWorldEntityActor* FindEntityActor(int32 Guid) const;
 
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;

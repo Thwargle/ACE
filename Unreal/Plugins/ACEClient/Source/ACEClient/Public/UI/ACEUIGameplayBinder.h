@@ -60,6 +60,8 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEUILayoutCommandsTest;
 	friend class FACEUIInteractionParityTest;
 	friend class FACEPanelResizeSocialTest;
+	friend class FACEInventoryUICostTest;
+	friend class FACEGameplayRefreshTest;
 
 public:
 	bool ScrollFellowship(float WheelDelta, FVector2D CanvasLocalPos);
@@ -1334,7 +1336,6 @@ private:
 	void SyncVendorScrollbars();
 	FString VendorFilterLabel() const;
 	bool VendorItemMatchesFilter(const FACEWorldObject& O, int32 FilterIndex) const;
-	void GetVendorFilterSourceItems(TArray<FACEWorldObject>& Out) const;
 	void RebuildVendorVisibleFilters();
 	static constexpr int32 VendorFilterCount = 6;
 	void ShowTradePanel(int32 PartnerGuid);

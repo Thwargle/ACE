@@ -104,6 +104,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailScreenTest,"ACE.RetailParity.UIScreen
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACERetailScreenTest::RunTest(const FString& Parameters)
 {
+    // Offscreen passes represent separate frames; the HUD now coalesces same-frame callbacks.
+    TGuardValue<uint64> FrameGuard(GFrameCounter, GFrameCounter);
     TGuardValue<FString> ScreenSettingsPath(GGameUserSettingsIni,FPaths::ProjectSavedDir()/TEXT("Automation/ScreenPreferencesFixture.ini"));
     FConfigFile ScreenPreferences;ScreenPreferences.NoSave=true;GConfig->SetFile(GGameUserSettingsIni,&ScreenPreferences);
     TestEqual(TEXT("Gameplay uses physical pixels at 1440p"),GetDefault<UUserInterfaceSettings>()->GetDPIScaleBasedOnSize(FIntPoint(2560,1440)),1.f);
@@ -163,7 +165,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             for (int32 Pass=0; Pass<4; ++Pass)
             {
                 Renderer.DrawWidget(Target,Slate,FVector2D(Size),0.f); FlushRenderingCommands();
-                Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
+                ++GFrameCounter; Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
             }
             TArray<FColor> Pixels;
             Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
@@ -308,7 +310,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         const FPaintArgs PaintArgs(nullptr,Grid,DesktopOffset,FApp::GetCurrentTime(),0.f);
         for (int32 Pass=0; Pass<4; ++Pass)
         {
-            Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
+            ++GFrameCounter; Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
             Renderer.DrawWindow(PaintArgs,Target,Window,Geometry,Geometry.GetLayoutBoundingRect(),0.f); FlushRenderingCommands();
         }
         TArray<FColor> Pixels; Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
@@ -941,7 +943,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         {
             for(int32 Pass=0;Pass<3;++Pass)
             {
-                Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
+                ++GFrameCounter; Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
                 Renderer.DrawWindow(Target,Grid,Window,1.f,FVector2D(ScreenSize),0.f);
                 FlushRenderingCommands();
             }
@@ -3614,7 +3616,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         const double Start=FPlatformTime::Seconds();
         for (int32 I=0; I<Frames; ++I) Gameplay->TickRefresh();
         const double BindEnd=FPlatformTime::Seconds();
-        for (int32 I=0; I<Frames; ++I) Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
+        for (int32 I=0; I<Frames; ++I) { ++GFrameCounter; Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f); }
         AddInfo(FString::Printf(TEXT("HUD CPU fixture: binder %.3f ms/frame; total HUD tick %.3f ms/frame"),
             (BindEnd-Start)*1000/Frames,(FPlatformTime::Seconds()-BindEnd)*1000/Frames));
     }

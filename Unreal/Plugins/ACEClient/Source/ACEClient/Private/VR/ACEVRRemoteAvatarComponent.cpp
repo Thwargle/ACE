@@ -68,17 +68,8 @@ void UACEVRRemoteAvatarComponent::TickComponent(float Dt, ELevelTick Type, FActo
 	const FVector EyeBind = HeadBind.TransformPosition(EyeLocal);
 	const float BodyScale = FMath::Clamp(Pose.EyeHeight * Scale / FMath::Max(50.f, float(EyeBind.Z)), .6f, 1.5f);
 	FTransform Frame = ACEVRMath::BodyFromHead(Head, HeadBind, EyeLocal, BodyScale);
-	App->GetMeshRoot()->SetWorldTransform(Frame);
+	Frame = App->UpdateVRUpperBody(Frame, Head, Tracked[1], Tracked[2], (Pose.Flags & 1u)!=0, (Pose.Flags & 2u)!=0, Dt);
 	App->UpdateVRLowerBody(Dt);
-	for (int32 I = 9; I < App->GetPartCount(); ++I)
-	{
-		const bool HeadPart = I == 16 || I == 21 || I == 22;
-		const bool TrackedArm = (((I >= 10 && I <= 12) || I == 27) && (Pose.Flags & 1u))
-			|| (((I >= 13 && I <= 15) || I == 28) && (Pose.Flags & 2u));
-		if (!HeadPart && !TrackedArm)
-		{ FTransform Bind; if (auto* Part = App->GetPartMesh(I); Part && App->GetPartBindTransform(I, Bind)) Part->SetRelativeTransform(Bind); }
-	}
-	Frame = App->UpdateVRUpperBody(Head, Tracked[1], Tracked[2], (Pose.Flags & 1u)!=0, (Pose.Flags & 2u)!=0, Dt);
 	const FQuat HeadRotation = Head.GetRotation() * FRotator(0,-90,0).Quaternion() * HeadBind.GetRotation();
 	for (int32 I : {16, 21, 22})
 		if (auto* Part = App->GetPartMesh(I))

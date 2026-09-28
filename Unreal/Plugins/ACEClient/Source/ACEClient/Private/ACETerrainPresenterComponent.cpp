@@ -204,11 +204,12 @@ namespace
 			return;
 		}
 		const uint32 Key = CellId & 0xFFFF0000u;
-		FACEDatLandblockInfo Info;
-		if (!Dat->LoadLandblockInfo(Key, Info) || Info.Buildings.Num() == 0)
+		const auto Snapshot = Dat->GetLandblockInfo(Key);
+		if (!Snapshot || Snapshot->Buildings.Num() == 0)
 		{
 			return;
 		}
+		const auto& Info = *Snapshot;
 		const int32 Bi = Dat->FindBuildingInfoIndexForIndoorCell(Key, CellId, WorldScale);
 		auto AddBuilding = [&](const FACEDatLandblockBuilding& Building)
 		{
@@ -325,12 +326,13 @@ namespace
 		{
 			return;
 		}
-		FACEDatLandblockInfo Info;
 		const uint32 Key = LandblockKey & 0xFFFF0000u;
-		if (!Dat->LoadLandblockInfo(Key, Info) || Info.Buildings.Num() == 0)
+		const auto Snapshot = Dat->GetLandblockInfo(Key);
+		if (!Snapshot || Snapshot->Buildings.Num() == 0)
 		{
 			return;
 		}
+		const auto& Info = *Snapshot;
 		for (const FACEDatLandblockBuilding& Building : Info.Buildings)
 		{
 			for (const FACEDatBuildingPortal& Portal : Building.Portals)
@@ -364,12 +366,13 @@ namespace
 		{
 			return;
 		}
-		FACEDatLandblockInfo Info;
 		const uint32 Key = LandblockKey & 0xFFFF0000u;
-		if (!Dat->LoadLandblockInfo(Key, Info) || Info.Buildings.Num() == 0)
+		const auto Snapshot = Dat->GetLandblockInfo(Key);
+		if (!Snapshot || Snapshot->Buildings.Num() == 0)
 		{
 			return;
 		}
+		const auto& Info = *Snapshot;
 		TSet<uint32> AdmittedDests;
 		for (const ACEOutdoorPortalPlan::FAdmittedAperture& A : Apertures)
 		{
@@ -534,6 +537,20 @@ bool UACETerrainPresenterComponent::IsPlayerCellCollisionReady() const
 
 }
 
+bool UACETerrainPresenterComponent::IsPortalPlacementGeometryReady(uint32 DestinationCell, uint32 CandidateCell) const
+{
+	if (!bHasKnownCell || LastKnownCellId != DestinationCell || !IsPlayerCellCollisionReady()) return false;
+	if (CandidateCell && CandidateCell != DestinationCell)
+	{
+		// Placement can resolve a neighboring room from a stale portal cell hint.
+		// Do not let its apparent free space pass before its physics is resident.
+		const AACEEnvCellActor* Candidate = SpawnedEnvCells.FindRef(static_cast<int32>(CandidateCell));
+		if (!Candidate || !Candidate->IsCollisionCooked() || Candidate->HasPendingStaticObjects()) return false;
+	}
+	if (IsIndoorCell(DestinationCell)) return IsPlayerIndoorNeighborhoodReady();
+	return IsLoadRadiusBuildingsReadyForRadius(0);
+}
+
 bool UACETerrainPresenterComponent::IsPlayerCellVisualReady() const
 {
 	if (!bHasKnownCell || !IsIndoorCell(LastKnownCellId))
@@ -553,8 +570,8 @@ bool UACETerrainPresenterComponent::NeedsExteriorTerrain(uint32 CellId) const
 	if (!IsIndoorCell(CellId)) return CellId != 0;
 	const auto* World = GetWorld();
 	auto* Dat = World && World->GetGameInstance() ? World->GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr;
-	FACEDatLandblockInfo Info;
-	return Dat && Dat->LoadLandblockInfo(CellId & 0xFFFF0000u, Info) && !Info.Buildings.IsEmpty();
+	const auto Info = Dat ? Dat->GetLandblockInfo(CellId) : nullptr;
+	return Info && !Info->Buildings.IsEmpty();
 }
 
 bool UACETerrainPresenterComponent::IsPlayerIndoorNeighborhoodReady() const
@@ -1962,8 +1979,8 @@ void UACETerrainPresenterComponent::SyncAroundCell(uint32 CellId)
 	{
 		UACEDatSubsystem* Dat = World->GetGameInstance()
 			? World->GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr;
-		FACEDatLandblockInfo Info;
-		if (Dat && Dat->LoadLandblockInfo(CellId & 0xFFFF0000u, Info) && Info.Buildings.IsEmpty())
+		const auto Info = Dat ? Dat->GetLandblockInfo(CellId) : nullptr;
+		if (Info && Info->Buildings.IsEmpty())
 		{
 			const int32 DungeonKey = static_cast<int32>(CellId & 0xFFFF0000u);
 			if (KeptLandblocks.Num() != 1 || !KeptLandblocks.Contains(DungeonKey))
@@ -2662,9 +2679,8 @@ void UACETerrainPresenterComponent::CollectNeededEnvCells(TArray<int32>& OutOrde
 			AddIndoorPvsFromDat(Dat, ViewerCellId, WorldScale, Pvs, nullptr);
 		}
 		{
-			FACEDatLandblockInfo Info;
-			const bool bDungeon = !Dat->LoadLandblockInfo(StreamCell & 0xFFFF0000u, Info)
-				|| Info.Buildings.Num() == 0;
+			const auto Info = Dat->GetLandblockInfo(StreamCell);
+			const bool bDungeon = !Info || Info->Buildings.Num() == 0;
 			if (bDungeon)
 			{
 				ExpandIndoorPvsHops(Dat, StreamCell, WorldScale, 3, Pvs, nullptr, 48);
@@ -3430,13 +3446,13 @@ void UACETerrainPresenterComponent::UpdateBuildingVisibility()
 	{
 		auto AddDoorways = [&](int32 LbKey)
 		{
-			FACEDatLandblockInfo Info;
-			if (!Dat->LoadLandblockInfo(static_cast<uint32>(LbKey) & 0xFFFF0000u, Info))
+			const auto Info = Dat->GetLandblockInfo(static_cast<uint32>(LbKey));
+			if (!Info)
 			{
 				return;
 			}
 			const uint32 Key = static_cast<uint32>(LbKey) & 0xFFFF0000u;
-			for (const FACEDatLandblockBuilding& Building : Info.Buildings)
+			for (const FACEDatLandblockBuilding& Building : Info->Buildings)
 			{
 				for (const FACEDatBuildingPortal& Portal : Building.Portals)
 				{
@@ -3527,8 +3543,8 @@ void UACETerrainPresenterComponent::UpdateBuildingVisibility()
 	bool bTownLandblock = false;
 	if (Dat)
 	{
-		FACEDatLandblockInfo LbInfo;
-		bTownLandblock = Dat->LoadLandblockInfo(PlayerLbKey, LbInfo) && LbInfo.Buildings.Num() > 0;
+		const auto LbInfo = Dat->GetLandblockInfo(PlayerLbKey);
+		bTownLandblock = LbInfo && LbInfo->Buildings.Num() > 0;
 		if (bIndoorCollide)
 		{
 			const int32 OccupiedBuilding=Dat->FindBuildingInfoIndexForIndoorCell(PlayerLbKey, CollideCell, WorldScale);
@@ -3649,9 +3665,8 @@ void UACETerrainPresenterComponent::UpdateBuildingVisibility()
 				{
 					return false;
 				}
-				FACEDatLandblockInfo Info;
-				return Dat->LoadLandblockInfo(static_cast<uint32>(Pair.Key) & 0xFFFF0000u, Info)
-					&& Info.Buildings.Num() > 0;
+				const auto Info = Dat->GetLandblockInfo(static_cast<uint32>(Pair.Key));
+				return Info && Info->Buildings.Num() > 0;
 			}();
 			const bool bLbEnvFloorPriority = bLbHasBuildings
 				|| LandblockHasDoorwayPeek(Pair.Key)
@@ -3680,9 +3695,8 @@ void UACETerrainPresenterComponent::UpdateBuildingVisibility()
 				{
 					return false;
 				}
-				FACEDatLandblockInfo Info;
-				return Dat->LoadLandblockInfo(static_cast<uint32>(Pair.Key) & 0xFFFF0000u, Info)
-					&& Info.Buildings.Num() > 0;
+				const auto Info = Dat->GetLandblockInfo(static_cast<uint32>(Pair.Key));
+				return Info && Info->Buildings.Num() > 0;
 			}();
 			const bool bChunkEnvFloorPriority = bChunkHasBuildings
 				|| LandblockHasDoorwayPeek(Pair.Key)

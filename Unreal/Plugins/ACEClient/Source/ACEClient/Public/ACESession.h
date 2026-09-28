@@ -90,6 +90,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEGDLEInteractionTransportTest;
 	friend class FACERetailNetworkWeatherTest;
 	friend class FACERetailWorldEntryTest;
+	friend class FACEPortalDropTest;
 	friend class FACELoadingTransitionTest;
 	friend class FACELedgeStairsTest;
 	friend class FACEFortTethStairsTest;
@@ -101,6 +102,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACERetailStatsTest;
 	friend class FACERetailInventoryOrderTest;
 	friend class FACEEquippedLookupTest;
+	friend class FACEInventoryUICostTest;
 
 public:
 	FACESession();
@@ -242,12 +244,20 @@ public:
 	 * ObjectCreate items whose ContainerId matches. PlayerGuid = main pack.
 	 */
 	void GetPackItems(int32 ContainerGuid, TArray<FACEWorldObject>& Out) const;
+	/** Same ordered slots as GetPackItems, including unresolved side-pack item IDs.
+	 * Query-local IDs let readers avoid copying appearance/property arrays. */
+	void GetPackItemGuids(int32 ContainerGuid, TArray<int32>& Out) const;
+	/** Count requested containers (map keys) together, without copying or sorting item models.
+	 * Matches GetPackItems, including pending ViewContents entries and late main-pack items. */
+	void GetPackItemCounts(TMap<int32, int32>& InOutCounts) const;
 
 	/** Drop ViewContents cache after loot UI actually closes (CloseGroundContainer defers this). */
 	void ClearContainerContents(int32 ContainerGuid);
 
 	/** Top-level packs on the player (ContainerType packs / ItemsCapacity containers). */
 	void GetPlayerPacks(TArray<FACEWorldObject>& Out) const;
+	/** Same ordered pack IDs as GetPlayerPacks; query afresh after session changes. */
+	void GetPlayerPackGuids(TArray<int32>& Out) const;
 
 	/** GameAction Talk (0x0015) — local chat / @commands. */
 	void SendTalk(const FString& Message);
