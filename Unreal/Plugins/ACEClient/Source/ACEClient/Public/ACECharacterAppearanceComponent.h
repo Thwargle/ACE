@@ -25,6 +25,7 @@ class ACECLIENT_API UACECharacterAppearanceComponent : public UActorComponent
 	friend class FACERetailRuntimeRegressionTest;
 	friend class FACEMovementReviewTest;
 	friend class FACEAvatarMotionTest;
+	friend class FACEEmoteTransitionTest;
 	friend class FACEMultipartUpdateTest;
 	friend class FACERetailScreenTest;
     friend class FACERetailWorldEntryTest;
@@ -306,6 +307,9 @@ protected:
 
 	/** Active combat/emote one-shot (full MotionCommand). */
 	uint32 ActionCommand = 0;
+	/** Source substate for authored emote transitions, including their multi-clip exits. */
+	uint32 ActionFromCommand = ACEMotion::Ready;
+	bool bActionUsesStateTransition = false;
 	uint32 ActionStyle = 0;
 	float ActionPlayRate = 1.f;
 	/** Dead (and similar) stay on the final action frame instead of returning to idle. */

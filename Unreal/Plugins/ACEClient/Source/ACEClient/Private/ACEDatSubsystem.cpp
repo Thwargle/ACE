@@ -8011,6 +8011,15 @@ bool UACEDatSubsystem::EvaluateMotionCommand(uint32 MotionTableId, uint32 Motion
 		PreviousTimeSeconds, OutCrossedHooks, PreferredStyle, bLoop, bOutFinished);
 }
 
+bool UACEDatSubsystem::EvaluateMotionTransition(uint32 Table, uint32 From, uint32 To, float Time, int32 Parts,
+	TArray<FTransform>& Out, float Scale, int32& Count, bool& Finished,
+	const float* Previous, TArray<FACEDatAnimationHook>* Hooks, uint32 Style) const
+{
+	Count = 0; Finished = false;
+	return bPortalLoaded && MotionPlayer && Table != 0 && MotionPlayer->SetMotionTable(Table)
+		&& MotionPlayer->EvaluateTransition(From, To, Time, Parts, Out, Scale, Count, Finished, Previous, Hooks, Style);
+}
+
 bool UACEDatSubsystem::EvaluateMotionLink(uint32 MotionTableId, uint32 FromCommand, uint32 ToCommand, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount, bool& bOutFinished,
 	const float* PreviousTimeSeconds, TArray<FACEDatAnimationHook>* OutCrossedHooks, uint32 PreferredStyle) const
 {

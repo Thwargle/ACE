@@ -277,7 +277,7 @@ bool FACEMovementReviewTest::RunTest(const FString&)
    MaxStep=FMath::Max(MaxStep,FVector::Distance(Previous,Walker->GetActorLocation()));Previous=Walker->GetActorLocation();
   }
   TestTrue(TEXT("Late update never displaces a standing remote by more than one correction-speed frame"),MaxStep<=800./FPS+.1);
-  TestTrue(TEXT("Limited correction converges to the actual server destination"),Previous.Equals(Target,.1));
+  TestTrue(FString::Printf(TEXT("Limited correction converges to the actual server destination (tracked=%d FPS=%d delta=%s)"),Tracked,FPS,*(Previous-Target).ToString()),Previous.Equals(Target,.1));
   if(Tracked){Pose.Teleport++;Pose.Root+=FVector(0,10,0);Walker->ApplyRemoteVRRoot(Pose,1.f/FPS);
    TestTrue(TEXT("Explicit tracked teleport bypasses correction walking"),Walker->GetActorLocation().Equals(Pose.Root*100,.1));}
   Walker->Destroy();
@@ -347,7 +347,9 @@ bool FACEMovementReviewTest::RunTest(const FString&)
    {
     if(VR)
     {
-     FACEVRPose Pose;Pose.Version=2;Pose.Root=(Origin+FVector(0,I*Dt*400, -FMath::FloorToFloat(I*Dt)*160))/100;
+     // Tracked root samples carry current authoritative Z at 20 Hz. A
+     // one-second stale Z is not a grounded pose and resembles a real jump.
+     FACEVRPose Pose;Pose.Version=2;Pose.Root=(Origin+FVector(0,I*Dt*400, -I*Dt*160+1))/100;
      Walker->ApplyRemoteVRRoot(Pose,Dt);
     }
     else Walker->Tick(Dt);

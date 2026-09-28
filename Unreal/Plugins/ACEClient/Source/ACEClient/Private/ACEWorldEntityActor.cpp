@@ -270,6 +270,11 @@ void AACEWorldEntityActor::InitializeFromObject(const FACEWorldObject& Object, f
 		// initializes prediction at the old actor position and suppresses spawn snap.
 		AcePhysicsOmega = Object.Omega;
 		FACEPosition SpawnPosition = Object.Position;
+		if (Object.bHasPhysicsTimestamps)
+		{
+			SpawnPosition.bHasTeleportSequence = true;
+			SpawnPosition.TeleportSequence = Object.PhysicsTimestamps[ACEPhysicsTimeStamp::Teleport];
+		}
 		if (Object.bHasVelocity)
 		{
 			SpawnPosition.bHasVelocity = true;
@@ -932,7 +937,7 @@ void AACEWorldEntityActor::UpdateHeldAttachmentPose()
 	ConfigureAttachedPickCollision();
 }
 
-FVector AACEWorldEntityActor::ResolvePredictedMovement(const FVector& From, const FVector& Destination) const
+FVector AACEWorldEntityActor::ResolvePredictedMovement(const FVector& From, const FVector& Destination, TOptional<bool> Grounded) const
 {
 	if (!GetWorld() || IsCorpse() || (PhysicsState & ACEPhysicsState::Missile)
 		|| (!bIsPlayer && !(ItemType & ACEItemType::Creature))) return Destination;
@@ -943,7 +948,7 @@ FVector AACEWorldEntityActor::ResolvePredictedMovement(const FVector& From, cons
 	const FVector Offset(0, 0, MovementBodyOffsetZ * Scale);
 	FVector Position = From + Offset;
 	FVector Remaining = Destination - From;
-	if (!bHavePhysicsVelocity)
+	if (Grounded.Get(!bHavePhysicsVelocity))
 	{
 		// Retail CTransition::step_down/edge_slide constrains predicted walking
 		// to supported terrain. A failed ground ray is not permission to run
@@ -1007,7 +1012,7 @@ FVector AACEWorldEntityActor::ResolvePredictedMovement(const FVector& From, cons
 		}
 		return Position-Offset;
 	}
-	for (int32 Pass = 0; Pass < 3 && !Remaining.IsNearlyZero(.01f); ++Pass)
+	for (int32 Pass = 0; Pass < 3 && !Remaining.IsNearlyZero(KINDA_SMALL_NUMBER); ++Pass)
 	{
 		FHitResult Hit;
 		if (!ACEBodySweep::Sweep(*GetWorld(), Hit, Position, Position + Remaining, Shape, Query))
@@ -1053,6 +1058,12 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 	// PostPhysics applies the tracked root once, together with the hands. A
 	// second root writer here used to undo grounding/interpolation each frame.
 	if (!HasVRRoot) EndRemoteVRRoot();
+	if (!HasVRRoot && !bHavePhysicsVelocity && PendingRemoteLanding.IsSet())
+	{
+		const FACEPosition Landing = PendingRemoteLanding.GetValue();
+		PendingRemoteLanding.Reset();
+		ApplyACEPosition(Landing);
+	}
 
 	if (!HasVRRoot && bPendingGroundClamp && bRetryGroundClamp && !bAttachedToParent && ParentGuid == 0
 		&& !bHavePhysicsVelocity)
@@ -1153,7 +1164,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 				// smoothing just because a jump/velocity packet is active.
 				const float Alpha = 1.f-FMath::Exp(-RemotePositionSmoothing*Step);
 				FVector Display = InterpolateRemoteLocation(RemotePredictLocation, Step, RemotePredictLocation-PredictionStart);
-				if (!bHavePhysicsVelocity) ClampLocationToGround(Display);
+				Display = ResolvePredictedMovement(GetActorLocation(), Display);
 				SetActorLocation(Display);
 				SetActorRotation(FQuat::Slerp(GetActorQuat(),RemotePredictRotation,Alpha).GetNormalized());
 			}
@@ -1402,9 +1413,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 					+ Drift.GetSafeNormal() * FMath::Max(MaxDriftCm, 50.f);
 			}
 
-			// Collision constrains extrapolated motion, not correction to a server pose.
-			// Sweeping from the displayed (lagging) actor here stranded enemies behind
-			// local obstacles while targeting/projectiles/corpses used the server position.
+			// Predict from the simulated body; reconcile the displayed body separately.
 			// Ground at the prediction's own XY before sweeping, otherwise an
 			// uphill horizontal sweep repeatedly collides with the rising floor.
 			const bool Creature=bIsPlayer || (ItemType & ACEItemType::Creature);
@@ -1427,7 +1436,15 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			// used to leave feet floating between sparse F748s.
 			// Match initial placement: Stuck signs/wall props retain the server's Z
 			// even while a small network correction keeps their actor ticking.
-			if (bClampToGround)
+			if (Creature)
+			{
+				// Retail applies interpolation offset before CTransition collision.
+				// A ground ray alone allowed correction to cut through walls/risers.
+				// Reuse the simulated sweep when both timelines already coincide.
+				if (!GetActorLocation().Equals(PredictionStart,.001) || !NextLoc.Equals(Resolved,.001))
+					NextLoc = ResolvePredictedMovement(GetActorLocation(),NextLoc);
+			}
+			else if (bClampToGround)
 			{
 				// The displayed point lags prediction. Never copy its terrain Z
 				// into a prediction at different XY on a hill.
@@ -1473,16 +1490,10 @@ FVector AACEWorldEntityActor::InterpolateRemoteLocation(const FVector& Target, f
 	// Transport the simulated step directly; only smooth the network error.
 	// Filtering ordinary locomotion added a speed-dependent trailing offset and
 	// made every start/stop and sparse correction accelerate the visible body again.
-	FVector Transport=Movement;
-	if (!Transport.IsNearlyZero())
-	{
-		// A server correction can move the predictor just behind the displayed
-		// body. Never carry the body beyond that collision-constrained predictor
-		// at a ledge/wall, then spend subsequent frames smoothing it back.
-		const double Available=FVector::DotProduct(Target-GetActorLocation(),Transport)/Transport.SizeSquared();
-		Transport*=FMath::Clamp(Available,0.,1.);
-	}
-	const FVector Current=GetActorLocation()+Transport;
+	// A late packet may put the predictor just behind the displayed body. Do
+	// not cancel its forward step: that turned a small timing error into a
+	// backwards step. The final collision sweep now enforces walls and ledges.
+	const FVector Current=GetActorLocation()+Movement;
 	FVector Delta=(Target-Current)*(1.f-FMath::Exp(-RemotePositionSmoothing*Dt));
 	// Retail CInterpolationManager::adjust_offset limits correction to twice
 	// adjusted locomotion speed (7.5 AC/s when no speed is available). An
@@ -1497,17 +1508,36 @@ FVector AACEWorldEntityActor::InterpolateRemoteLocation(const FVector& Target, f
 void AACEWorldEntityActor::ApplyRemoteVRRoot(const FACEVRPose& Pose, float DeltaTime)
 {
 	const FVector TrackedRoot = Pose.Root * WorldScale;
-	const bool Snap = !bHaveVRPresentation || Pose.Teleport != VRPresentationTeleport
+	const bool NewEpoch = (bHaveVRPresentation && Pose.Teleport != VRPresentationTeleport)
+		|| (bHaveRemoteTeleport && Pose.Teleport != RemoteTeleportSequence);
+	const bool Snap = !bHaveRemotePredict || NewEpoch
 		|| FVector::DistSquared(GetActorLocation(),TrackedRoot) > FMath::Square(RemoteSnapDistance*WorldScale);
+	// Root and limbs have already been sampled on the same buffered timeline.
+	// Transport that step directly; blend only a handover/correction offset.
+	FVector Movement = bHaveVRPresentation && !Snap ? TrackedRoot-LastVRPresentationRoot : FVector::ZeroVector;
+	const float MaxStep=2.f*FMath::Max(RemoteWalkSpeedAc,RemoteRunSpeedAc)
+		*FMath::Max(.05f,RemoteMotion.AnimPlayRate)*WorldScale*GetActorScale3D().GetAbsMax()*FMath::Max(0.f,DeltaTime);
+	// A buffer underrun or server correction is not a single locomotion step.
+	if (Movement.SizeSquared()>FMath::Square(MaxStep)) Movement=FVector::ZeroVector;
 	bHaveVRPresentation = true;
 	VRPresentationTeleport = Pose.Teleport;
+	bHaveRemoteTeleport = true;
+	RemoteTeleportSequence = uint16(Pose.Teleport);
+	LastVRPresentationRoot = TrackedRoot;
 	// The pose buffer intentionally renders older samples. Keep a newer F748
 	// correction intact so tracking loss/mode changes resume ordinary movement
 	// at the latest server position, rather than discarding it every render frame.
 	if (LastRemotePositionAt <= Pose.ReceivedAt)
 		RemotePredictLocation = RemoteAnchorLocation = TrackedRoot;
-	FVector Display = Snap ? TrackedRoot : InterpolateRemoteLocation(TrackedRoot,DeltaTime);
-	if (!bHavePhysicsVelocity) ClampLocationToGround(Display);
+	FVector Display = Snap ? TrackedRoot : InterpolateRemoteLocation(TrackedRoot,DeltaTime,Movement);
+	// The latest VectorUpdate can describe a different instant from the buffered
+	// pose. Establish support at this sample, never pull an older jump down merely
+	// because a newer landing packet has arrived.
+	float GroundZ=0;
+	const bool Grounded=bClampToGround && TraceGroundZ(TrackedRoot,GroundZ,true)
+		&& FMath::Abs(TrackedRoot.Z-GroundZ)<=.05f*WorldScale;
+	if (!Snap) Display=ResolvePredictedMovement(GetActorLocation(),Display,Grounded);
+	else if (Grounded) Display.Z=GroundZ+1.f;
 	SetActorLocation(Display);
 }
 
@@ -1951,7 +1981,7 @@ void AACEWorldEntityActor::RefreshActorTickEnabled()
 		 || !GetActorQuat().Equals(RemotePredictRotation, 0.0001f));
 	const bool bDirectedMotion = RemoteMotion.MovementType >= 6 && RemoteMotion.MovementType <= 9;
 	const bool bNeed = bAttachedToParent || bHavePhysicsVelocity || bMissile || bSettling || bDirectedMotion || RemoteMotion.StickyTargetGuid != 0
-		|| RemoteMotion.bMoving || bPendingGroundClamp
+		|| RemoteMotion.bMoving || bPendingGroundClamp || PendingRemoteLanding.IsSet()
 		|| !FMath::IsNearlyZero(RemoteMotion.Turn)
 		|| !FMath::IsNearlyZero(RemoteMotion.StrafeUnitsPerSecond)
 		|| !FMath::IsNearlyZero(RemoteMotion.ForwardUnitsPerSecond);
@@ -1970,9 +2000,37 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position)
 	}
 	FVector NewLocation = Position.ToUnrealLocation(WorldScale);
 	FQuat NewRotation = Position.ToUnrealQuat();
-	LastRemotePositionAt = FPlatformTime::Seconds();
+	const bool NewTeleport=Position.bHasTeleportSequence && bHaveRemoteTeleport
+		&& Position.TeleportSequence!=RemoteTeleportSequence;
+	if (Position.bHasTeleportSequence)
+	{
+		bHaveRemoteTeleport=true;
+		RemoteTeleportSequence=Position.TeleportSequence;
+	}
+	const bool Creature=bIsPlayer || (ItemType & ACEItemType::Creature);
+	const bool bSnap = !bHaveRemotePredict || NewTeleport
+		|| FVector::DistSquared(GetActorLocation(),NewLocation)>FMath::Square(RemoteSnapDistance*WorldScale);
+	if (bSnap) PendingRemoteLanding.Reset();
+	// Cell notifications still update the collision context during a jump across
+	// a building entrance; delaying the transform must not retain an old floor.
 	LastAceCellId = Position.CellId;
 	if (Appearance) Appearance->UpdateCellLighting(Position.CellId);
+	if (Creature && !bSnap && Position.bHasContactState)
+	{
+		// CPhysicsObj::MoveOrTeleport ignores non-contact F748s. Jump velocity
+		// has its own VectorUpdate sequence: replaying the velocity/position from
+		// a delayed F748 rewound an in-flight avatar on every correction.
+		if (!Position.bIsGrounded) return;
+		// Retail only applies the queued interpolation offset after local contact.
+		// A landing packet must not terminate the arc ahead of the rendered body.
+		if (bHavePhysicsVelocity)
+		{
+			PendingRemoteLanding=Position;
+			return;
+		}
+		PendingRemoteLanding.Reset();
+	}
+	LastRemotePositionAt = FPlatformTime::Seconds();
 	if (bHaveRemotePredict && (NewRotation | RemotePredictRotation) < 0.f)
 	{
 		NewRotation = NewRotation * -1.f;
@@ -1982,10 +2040,10 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position)
 	const bool bMoving = RemoteMotion.bMoving
 		|| !FMath::IsNearlyZero(RemoteMotion.ForwardUnitsPerSecond)
 		|| bMoveTo;
-	const bool bSnap = !bHaveRemotePredict
-		|| FVector::DistSquared(GetActorLocation(), NewLocation)
-			> FMath::Square(RemoteSnapDistance * WorldScale);
-
+	// Network feet use retail sphere support; do not let a vertical seating
+	// difference defeat the horizontal 5 cm tolerance and reintroduce weaving.
+	if (Creature && Position.bIsGrounded && !bHavePhysicsVelocity && bClampToGround)
+		ClampLocationToGround(NewLocation);
 	RemoteAnchorLocation = NewLocation;
 	// Retail InterpolationManager completes position corrections within 0.05 AC.
 	// Keep sub-tolerance noise out of the predictor (especially sideways drift
@@ -2198,6 +2256,7 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 	RemoteMotion = Motion;
 	if (bDeath)
 	{
+		PendingRemoteLanding.Reset();
 		RemoteMotion.StickyTargetGuid = 0;
 		RemoteMotion.bMoving = false;
 		RemoteMotion.Forward = RemoteMotion.Strafe = RemoteMotion.Turn = 0.f;
@@ -2309,6 +2368,7 @@ void AACEWorldEntityActor::ApplyPhysicsVelocity(const FVector& AceVelocity, cons
 	AcePhysicsVelocity = bAnchoredProp ? FVector::ZeroVector : AceVelocity;
 	AcePhysicsOmega = AceOmega;
 	bHavePhysicsVelocity = !AcePhysicsVelocity.IsNearlyZero();
+	if (AcePhysicsVelocity.Z > .01f) PendingRemoteLanding.Reset();
 	// VectorUpdate describes velocity, not loss of contact. Retail retains its
 	// contact plane while running down a slope; treating every horizontal vector
 	// as a jump leaves the body on a shelf until gravity/the next F748 catches up.

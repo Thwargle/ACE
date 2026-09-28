@@ -26,6 +26,7 @@ class ACECLIENT_API UACETerrainPresenterComponent : public UActorComponent
 	GENERATED_BODY()
 	friend class FACERetailInteriorStreamingTest;
 	friend class FACEFortTethStairsTest;
+	friend class FACEEntranceTransitionTest;
 	friend class FACEVRInteriorNetworkTest;
 
 	friend class FACERetailRuntimeRegressionTest;
@@ -233,12 +234,9 @@ protected:
 	void RefreshViewerCellId(UACEDatSubsystem* Dat);
 	/**
 	 * Retail occupancy is the physics object's one CellId (find_cell_list / server).
-	 * Doorway prediction flickers indoor↔outdoor every tick; debounce that so we do not
-	 * hide/show EnvCells and recook collision on the same frames.
-	 * bServerAuthoritative indoor commits immediately.
-	 * bForce commits indoor↔outdoor without doorway debounce (portal reveal).
+	 * Follow the accepted movement cell immediately; camera visibility is independent.
 	 */
-	void CommitOccupancyCellId(uint32 Candidate, bool bServerAuthoritative, bool bForce = false);
+	void CommitOccupancyCellId(uint32 Candidate);
 
 	/** Streams portal / VisibleCells EnvCells and applies outdoor↔indoor actor visibility. */
 	void SyncEnvCells();
@@ -332,8 +330,6 @@ protected:
 	int32 LastDoorwayClipLandblock = 0;
 	uint32 EnvStreamCellId = 0;
 	double IndoorStreamHoldUntil = 0.0;
-	double OccupancyFlipUntil = 0.0;
-	uint32 PendingOccupancyCellId = 0;
 	/** Indoor EnvCells that have been shown this occupancy — do not hide stairs/halls on PVS hop. */
 	TSet<int32> HeldIndoorVisible;
 	/** Occupied + 1–2 portal hops kept colliding across a stair/landing CellId flip. */

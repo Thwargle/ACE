@@ -51,6 +51,14 @@ static bool ACEIsMagicCastCommand(uint32 Command)
 		|| Command == 0x400000E1u;
 }
 
+static bool ACEIsEmoteSubstate(uint32 Command)
+{
+	// Action gestures (0x1300...) already contain their return motion. Held
+	// substates have separate entry/exit links in CMotionTable::GetObjectSequence.
+	return Command != ACEMotion::Dead && (Command & 0x40000000u) != 0
+		&& ACEMotion::IsHeldRestCommand(Command);
+}
+
 static void ACEStopCastGestureIfLeaving(AActor* Owner, bool bLeavingCast, bool bStayingInCast)
 {
 	if (!bLeavingCast || bStayingInCast || !Owner)
@@ -556,6 +564,9 @@ void UACECharacterAppearanceComponent::ClearAppearance()
 	LocomotionPlayRate = 1.f;
 	RunBlend = 0.f;
 	AnimMode = EACEAnimMode::Locomotion;
+	ActionCommand = 0;
+	ActionFromCommand = ACEMotion::Ready;
+	bActionUsesStateTransition = false;
 	bDoorHoldFinal = false;
 	bHoldActionFinal = false;
 	bHoldActionFinalAfterFinish = false;
@@ -641,6 +652,9 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	Appearance = Object.Appearance;
 	if (!PreserveAnimation)
 	{
+		ActionCommand = 0;
+		ActionFromCommand = ACEMotion::Ready;
+		bActionUsesStateTransition = false;
 		AnimTime = 0.f;
 		DeferredPoseDeltaTime = 0.f;
 		bHasMesh = false;
@@ -1021,8 +1035,7 @@ void UACECharacterAppearanceComponent::SetLocomotionInput(float Forward, float S
 	{
 		RunBlend = 0.f;
 	}
-	// Retail chat emotes hold the last frame until the player moves — movement also
-	// cancels a still-playing chat pose (hold-pending), like retail's forward-command rewrite.
+	// Moving removes the held cycle; authored entry/exit links still finish.
 	// Jump/Falling must NOT cancel: airborne + W still feeds locomotion axes for land resume,
 	// and clearing Falling mid-air made the run cycle play instead of the jump.
 	// Ignore analog/camera noise: IsNearlyZero cancelled *point* / *playpossum* on the next tick.
@@ -1037,14 +1050,8 @@ void UACECharacterAppearanceComponent::SetLocomotionInput(float Forward, float S
 		&& ActionCommand != ACEMotion::Dead
 		&& bMoving)
 	{
-		bHoldActionFinal = false;
-		bHoldActionFinalAfterFinish = false;
-		BeginPoseBlendFromCurrent();
-		AnimMode = EACEAnimMode::Locomotion;
-		ActionCommand = 0;
-		AnimTime = 0.f;
-		DeferredPoseDeltaTime = 0.f;
-		ResetHookTracking();
+		if (bIdleTwitch) ClearActionMotion();
+		else CancelHeldActionMotion();
 	}
 }
 
@@ -1193,9 +1200,23 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	{
 		return;
 	}
+	const bool bFromEmote = AnimMode == EACEAnimMode::ActionOneShot && ACEIsEmoteSubstate(ActionCommand);
+	const bool bToEmoteOrReady = (ACEMotion::IsHeldRestCommand(Cmd) && Cmd != ACEMotion::Dead) || Cmd == ACEMotion::Ready;
+	if (AnimMode == EACEAnimMode::ActionOneShot && !bHoldActionFinal && bToEmoteOrReady
+		&& (bFromEmote || bActionUsesStateTransition))
+	{
+		// Retail removes only the cyclic tail, not an unfinished entry/exit.
+		// Repeated movement/Ready echoes must not append another stand-up sequence.
+		if (PendingActionCommands.IsEmpty() || PendingActionCommands.Last() != Cmd)
+			QueueActionMotion(Cmd, PlayRate, Style, bHoldFinalPose || ACEMotion::IsHeldRestCommand(Cmd));
+		bHoldActionFinalAfterFinish = false;
+		return;
+	}
+	ActionFromCommand = bFromEmote ? ActionCommand : ACEMotion::Ready;
+	bActionUsesStateTransition = bFromEmote;
 	// Falling already contains retail's takeoff link (~0.2 s). A full stance
 	// cross-fade hid it behind the previous jump's frozen endpoint.
-	BeginPoseBlendFromCurrent(Cmd == 0x40000015u ? .06f : StanceBlendDuration);
+	BeginPoseBlendFromCurrent(bFromEmote || Cmd == 0x40000015u ? .06f : StanceBlendDuration);
 	AnimMode = EACEAnimMode::ActionOneShot;
 	ActionCommand = Cmd;
 	PendingActionCommands.Reset();
@@ -1288,6 +1309,11 @@ void UACECharacterAppearanceComponent::CancelHeldActionMotion()
 	// or bHoldActionFinal. The server's Ready must release it just like other holds.
 	const bool bMissileEndpoint = ActionCommand == 0x40000016u
 		|| (ActionCommand >= 0x4000001Eu && ActionCommand <= 0x4000002Au);
+	if (AnimMode == EACEAnimMode::ActionOneShot && ACEIsEmoteSubstate(ActionCommand))
+	{
+		PlayActionMotion(ACEMotion::Ready, 1.f, ActionStyle, false);
+		return;
+	}
 	if (AnimMode == EACEAnimMode::ActionOneShot && (bHoldActionFinal || bHoldActionFinalAfterFinish || bMissileEndpoint))
 	{
 		bHoldActionFinal = false;
@@ -1295,6 +1321,8 @@ void UACECharacterAppearanceComponent::CancelHeldActionMotion()
 		BeginPoseBlendFromCurrent();
 		AnimMode = EACEAnimMode::Locomotion;
 		ActionCommand = 0;
+		ActionFromCommand = ACEMotion::Ready;
+		bActionUsesStateTransition = false;
 		AnimTime = 0.f;
 		DeferredPoseDeltaTime = 0.f;
 		ResetHookTracking();
@@ -1366,6 +1394,8 @@ void UACECharacterAppearanceComponent::ClearJumpMotionIfAny()
 		BeginPoseBlendFromCurrent(.08f);
 		AnimMode = EACEAnimMode::Locomotion;
 		ActionCommand = 0;
+		ActionFromCommand = ACEMotion::Ready;
+		bActionUsesStateTransition = false;
 		bHoldActionFinal = false;
 		bHoldActionFinalAfterFinish = false;
 		bActionEverEvaluated = false;
@@ -1398,7 +1428,14 @@ void UACECharacterAppearanceComponent::ClearActionMotion()
 	BeginPoseBlendFromCurrent();
 	AnimMode = EACEAnimMode::Locomotion;
 	ActionCommand = 0;
+	ActionFromCommand = ACEMotion::Ready;
+	bActionUsesStateTransition = false;
 	bHoldActionFinal = false;
+	bHoldActionFinalAfterFinish = false;
+	PendingActionCommands.Reset();
+	PendingActionStyles.Reset();
+	PendingActionPlayRates.Reset();
+	PendingActionHolds.Reset();
 	AnimTime = 0.f;
 	DeferredPoseDeltaTime = 0.f;
 	ResetHookTracking();
@@ -1427,7 +1464,10 @@ void UACECharacterAppearanceComponent::SetHeldActionMotion(int32 InActionCommand
 	bPlayIdleMotion = true;
 	SetComponentTickEnabled(true);
 	ActionCommand = Cmd;
+	ActionFromCommand = ACEMotion::Ready;
+	bActionUsesStateTransition = false;
 	bHoldActionFinal = true;
+	bHoldActionFinalAfterFinish = false;
 	ActionStyle = static_cast<uint32>(Style);
 	if (ActionStyle != 0 && ActionStyle <= 0xFFFFu)
 	{
@@ -1759,7 +1799,7 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 		int32 AnimatedCount = 0;
 		bool bFinished = false;
 		const uint64 TrackKey = (5ull << 60)
-			| static_cast<uint64>(HashCombine(GetTypeHash(ActionCommand), GetTypeHash(ActionStyle)));
+			| static_cast<uint64>(HashCombine(GetTypeHash(ActionFromCommand), HashCombine(GetTypeHash(ActionCommand), GetTypeHash(ActionStyle))));
 		const float* PreviousTime = bSuppressNextHookDispatch ? nullptr : GetPreviousHookTime(TrackKey, AnimTime);
 		// Dead must play Ready→Dead fall (Link) then hold; Dead cycle alone is the resting pose.
 		// Pickup (drop / loot) also uses Ready→Pickup Links — Cycles finish too quickly vs ACE
@@ -1791,7 +1831,7 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 		// ChatPose / soul emotes (Point, PossumState, …) must play Ready→action Links then
 		// hang. Preferring Cycles for 0x4300 made *playpossum* a 1-frame snap that never held.
 		// Sleeping/Sitting/Crouch also hold — but spawn uses SetHeldActionMotion (final frame).
-		const bool bPreferCycle = bHoldActionFinal || (!bIsDead && !bIsPickup && !bIsMagicCast && !bIsMissileGesture && !bIsConsumable && !bIsChatPose && !bIsRestHold && !bIsJump
+		const bool bPreferCycle = bHoldActionFinal || (!bActionUsesStateTransition && !bIsDead && !bIsPickup && !bIsMagicCast && !bIsMissileGesture && !bIsConsumable && !bIsChatPose && !bIsRestHold && !bIsJump
 			&& (Family == 0x40000000u || Family == 0x41000000u));
 		bool bOk = false;
 		if (bPreferCycle)
@@ -1803,10 +1843,16 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 		}
 		if (!bOk)
 		{
-			bOk = Dat->EvaluateMotionLink(
-				static_cast<uint32>(MotionTableId), ACEMotion::Ready, ActionCommand, AnimTime,
-				PartMeshes.Num(), Animated, WorldScale, AnimatedCount, bFinished,
-				PreviousTime, &Hooks, ActionStyle);
+			if (bActionUsesStateTransition)
+				bOk = Dat->EvaluateMotionTransition(
+					static_cast<uint32>(MotionTableId), ActionFromCommand, ActionCommand, AnimTime,
+					PartMeshes.Num(), Animated, WorldScale, AnimatedCount, bFinished,
+					PreviousTime, &Hooks, ActionStyle);
+			else
+				bOk = Dat->EvaluateMotionLink(
+					static_cast<uint32>(MotionTableId), ACEMotion::Ready, ActionCommand, AnimTime,
+					PartMeshes.Num(), Animated, WorldScale, AnimatedCount, bFinished,
+					PreviousTime, &Hooks, ActionStyle);
 		}
 		if (!bOk && bIsDead && ActionStyle != ACEMotion::StanceNonCombat)
 		{
@@ -1815,7 +1861,9 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 				PartMeshes.Num(), Animated, WorldScale, AnimatedCount, bFinished,
 				PreviousTime, &Hooks, ACEMotion::StanceNonCombat);
 		}
-		if (!bOk && !bPreferCycle)
+		// A table without an exit link may resume locomotion immediately. Do not
+		// strand it in Ready's zero-rate cycle while movement input is active.
+		if (!bOk && !bPreferCycle && !(bActionUsesStateTransition && ActionCommand == ACEMotion::Ready))
 		{
 			bOk = Dat->EvaluateMotionCommand(
 				static_cast<uint32>(MotionTableId), ActionCommand, AnimTime,
@@ -1829,6 +1877,9 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 				PartMeshes.Num(), Animated, WorldScale, AnimatedCount,
 				PreviousTime, &Hooks, ACEMotion::StanceNonCombat, /*bLoop*/ false, &bFinished);
 		}
+		// A one-shot gesture can end at Ready before a queued Ready request. Its
+		// idle cycle is not another non-cyclic action that should block locomotion.
+		if (ActionCommand == ACEMotion::Ready && !bActionUsesStateTransition) bFinished = true;
 		if (bOk)
 		{
 			bActionEverEvaluated = true;
@@ -1881,11 +1932,13 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 				if (PendingActionPlayRates.Num() > 0) { PendingActionPlayRates.RemoveAt(0); }
 				if (PendingActionHolds.Num() > 0) { PendingActionHolds.RemoveAt(0); }
 				// Start next without wiping the rest of the scarab/cast queue.
-				BeginPoseBlendFromCurrent();
+				ActionFromCommand = ACEIsEmoteSubstate(ActionCommand) ? ActionCommand : ACEMotion::Ready;
+				bActionUsesStateTransition = ActionFromCommand != ACEMotion::Ready;
+				BeginPoseBlendFromCurrent(bActionUsesStateTransition ? .06f : StanceBlendDuration);
 				AnimMode = EACEAnimMode::ActionOneShot;
 				ActionCommand = Next;
 				bHoldActionFinal = false;
-				bHoldActionFinalAfterFinish = bNextHold;
+				bHoldActionFinalAfterFinish = bNextHold && PendingActionCommands.IsEmpty();
 				ActionStyle = NextStyle;
 				if (ActionStyle != 0 && ActionStyle <= 0xFFFFu)
 				{
@@ -1923,8 +1976,10 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 			}
 			else
 			{
-				BeginPoseBlendFromCurrent();
+				BeginPoseBlendFromCurrent(bActionUsesStateTransition ? .06f : StanceBlendDuration);
 				ActionCommand = 0;
+				ActionFromCommand = ACEMotion::Ready;
+				bActionUsesStateTransition = false;
 				AnimTime = 0.f;
 				DeferredPoseDeltaTime = 0.f;
 				ResetHookTracking();

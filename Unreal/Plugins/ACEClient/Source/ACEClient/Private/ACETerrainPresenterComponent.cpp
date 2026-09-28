@@ -1107,8 +1107,7 @@ void UACETerrainPresenterComponent::KickLandblockLoginBurst()
 		const FACEPosition Pos = Client->GetPlayerPosition();
 		if (Pos.IsValid())
 		{
-			CommitOccupancyCellId(static_cast<uint32>(Pos.CellId), /*bServerAuthoritative*/ true,
-				/*bForce*/ true);
+			CommitOccupancyCellId(static_cast<uint32>(Pos.CellId));
 		}
 	}
 	// This is also called from PlayerCreate's network dispatch. Schedule work,
@@ -1629,11 +1628,10 @@ void UACETerrainPresenterComponent::HandlePositionUpdate(int32 ObjectGuid, const
 	const uint32 PrevOcc = LastKnownCellId;
 	const bool bWasIndoor = IsIndoorCell(LastKnownCellId);
 	FACEPosition Presentation = Position;
-	bool bLocal = false;
 	if (UWorld* World = GetWorld())
 		if (const auto* PC = Cast<AACEPlayerController>(World->GetFirstPlayerController()))
-			bLocal = PC->TryGetLocallyPredictedPosition(Presentation);
-	CommitOccupancyCellId(static_cast<uint32>(Presentation.CellId), /*bServerAuthoritative*/ !bLocal);
+			PC->TryGetLocallyPredictedPosition(Presentation);
+	CommitOccupancyCellId(static_cast<uint32>(Presentation.CellId));
 	const uint32 NewCell = LastKnownCellId;
 	const int32 NewCenterX = static_cast<int32>((NewCell >> 24) & 0xFF);
 	const int32 NewCenterY = static_cast<int32>((NewCell >> 16) & 0xFF);
@@ -1793,8 +1791,7 @@ void UACETerrainPresenterComponent::RetrySyncIfNeeded()
 			}
 			const uint32 PrevOcc = LastKnownCellId;
 			const bool bWasIndoor = IsIndoorCell(LastKnownCellId);
-			const uint32 SessionCell = static_cast<uint32>(Pos.CellId);
-			CommitOccupancyCellId(NewCell, NewCell == SessionCell && IsIndoorCell(NewCell));
+			CommitOccupancyCellId(NewCell);
 			const bool bNowIndoor = IsIndoorCell(LastKnownCellId);
 			const bool bCellChanged = (LastKnownCellId != PrevOcc);
 			if (bCellChanged && (bNowIndoor || bWasIndoor))
@@ -2553,8 +2550,6 @@ void UACETerrainPresenterComponent::ClearEnvCells()
 	LastOutdoorEnvSyncSec = 0.0;
 	EnvStreamCellId = 0;
 	IndoorStreamHoldUntil = 0.0;
-	OccupancyFlipUntil = 0.0;
-	PendingOccupancyCellId = 0;
 	HeldIndoorVisible.Reset();
 	bLastEnvSyncComplete = false;
 }
@@ -3111,83 +3106,24 @@ void UACETerrainPresenterComponent::RefreshViewerCellId(UACEDatSubsystem* Dat)
 	}
 }
 
-void UACETerrainPresenterComponent::CommitOccupancyCellId(uint32 Candidate, bool bServerAuthoritative, bool bForce)
+void UACETerrainPresenterComponent::CommitOccupancyCellId(uint32 Candidate)
 {
 	if (Candidate == 0)
 	{
 		return;
 	}
 	bHasKnownCell = true;
-	const bool bCandIndoor = IsIndoorCell(Candidate);
-	const bool bCurIndoor = IsIndoorCell(LastKnownCellId);
-	const double Now = FPlatformTime::Seconds();
-
-	if (bForce)
-	{
-		OccupancyFlipUntil = 0.0;
-		PendingOccupancyCellId = 0;
-		LastKnownCellId = Candidate;
-		if (!bCandIndoor)
-		{
-			LastOutdoorCellId = Candidate;
-		}
-		return;
-	}
-
-	if (Candidate == LastKnownCellId)
-	{
-		OccupancyFlipUntil = 0.0;
-		PendingOccupancyCellId = 0;
-		if (!bCandIndoor)
-		{
-			LastOutdoorCellId = Candidate;
-		}
-		return;
-	}
-
-	// Room-to-room or landcell: follow immediately. Occupancy *mode* (in/out) is what strobes.
-	if (bCandIndoor == bCurIndoor || LastKnownCellId == 0)
-	{
-		OccupancyFlipUntil = 0.0;
-		PendingOccupancyCellId = 0;
-		LastKnownCellId = Candidate;
-		if (!bCandIndoor)
-		{
-			LastOutdoorCellId = Candidate;
-		}
-		return;
-	}
-
-	// Server indoor CellId is the physics object's cell — commit now (retail CTransition).
-	if (bServerAuthoritative && bCandIndoor)
-	{
-		OccupancyFlipUntil = 0.0;
-		PendingOccupancyCellId = 0;
-		LastKnownCellId = Candidate;
-		UE_LOG(LogTemp, Warning, TEXT("ACE: occupancy indoor cell=0x%08X (server)"), Candidate);
-		return;
-	}
-
-	if (PendingOccupancyCellId != Candidate)
-	{
-		PendingOccupancyCellId = Candidate;
-		OccupancyFlipUntil = Now + 0.28;
-		return;
-	}
-	if (Now < OccupancyFlipUntil)
-	{
-		return;
-	}
-
-	OccupancyFlipUntil = 0.0;
-	PendingOccupancyCellId = 0;
+	// CPhysicsObj::change_cell follows the accepted CTransition immediately.
+	// Callers prefer the local collision solver's pose (except pending teleport /
+	// force-position), so a stale server sample cannot undo this transition.
+	// Delaying an outdoor commit left land collision disabled after the player
+	// crossed the doorway: ledge safety then stopped walking until the hold expired.
+	// Camera PView has its own viewer cell and must never debounce physics occupancy.
 	LastKnownCellId = Candidate;
-	if (!bCandIndoor)
+	if (!IsIndoorCell(Candidate))
 	{
 		LastOutdoorCellId = Candidate;
 	}
-	UE_LOG(LogTemp, Warning, TEXT("ACE: occupancy %s cell=0x%08X"),
-		bCandIndoor ? TEXT("indoor") : TEXT("outdoor"), Candidate);
 }
 
 bool UACETerrainPresenterComponent::IsWorldCellVisible(int32 CellId) const
@@ -3223,6 +3159,25 @@ void UACETerrainPresenterComponent::UpdateCameraVisibility()
 	UACEDatSubsystem* Dat = World && World->GetGameInstance()
 		? World->GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr;
 	if (!Dat || !bHasKnownCell || Dat->IsInPortalSpace()) return;
+	// This component ticks after player movement. Transfer collision residency
+	// on that frame, not on the 100 ms streaming timer or the next server packet.
+	// Only a cell change needs the full residency refresh; ordinary camera motion
+	// continues through the lightweight PView path below.
+	FACEPosition LocalPosition;
+	if (const auto* PC = Cast<AACEPlayerController>(World->GetFirstPlayerController());
+		PC && PC->TryGetLocallyPredictedPosition(LocalPosition)
+		&& uint32(LocalPosition.CellId) != LastKnownCellId)
+	{
+		const bool bWasIndoor = IsIndoorCell(LastKnownCellId);
+		CommitOccupancyCellId(uint32(LocalPosition.CellId));
+		const bool bNowIndoor = IsIndoorCell(LastKnownCellId);
+		if (bWasIndoor || bNowIndoor)
+		{
+			bLastEnvSyncComplete = false;
+			UpdateBuildingVisibility();
+		}
+		if (!bNowIndoor) UpdateOutdoorEnvCollision();
+	}
 	if (bWorldHiddenForPortal)
 	{
 		// Loading can finish every actor before portal exit. The deferred login

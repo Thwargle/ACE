@@ -62,6 +62,12 @@ struct ACECLIENT_API FACEPosition
 	UPROPERTY(BlueprintReadWrite, Category = "ACE")
 	bool bIsGrounded = false;
 
+	// Local metadata from F748, not additional wire fields. CreateObject positions
+	// have no contact bit; distinguish them from an explicitly airborne update.
+	bool bHasContactState = false;
+	bool bHasTeleportSequence = false;
+	uint16 TeleportSequence = 0;
+
 	bool IsValid() const { return CellId != 0; }
 
 	/**

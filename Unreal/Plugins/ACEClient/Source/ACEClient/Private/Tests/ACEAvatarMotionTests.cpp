@@ -246,7 +246,8 @@ bool FACEAvatarMotionTest::RunTest(const FString&)
  // Grounded jump charging must still cancel a held retail emote.
  VR->bActive=false;PC->bJumpAirborne=false;PC->bJumpCharging=false;
  App->SetHeldActionMotion(ACEMotion::Sleeping);PC->JumpPressed();
- TestTrue(TEXT("Grounded jump still releases a held emote"),App->ActionCommand==0 && PC->bJumpCharging);
+ TestTrue(TEXT("Grounded jump charging starts the authored emote exit"),App->ActionCommand==ACEMotion::Ready
+  && App->ActionFromCommand==ACEMotion::Sleeping && !App->bHoldActionFinal && PC->bJumpCharging);
  PC->UnPossess();Pawn->Destroy();PC->Destroy();Session->State=EACESessionState::Disconnected;
  return !HasAnyErrors();
 }

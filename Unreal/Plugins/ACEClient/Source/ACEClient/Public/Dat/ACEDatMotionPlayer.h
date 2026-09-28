@@ -32,6 +32,10 @@ public:
 	bool EvaluateLink(uint32 FromCommand, uint32 ToCommand, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount, bool& bOutFinished,
 		const float* PreviousTimeSeconds = nullptr, TArray<FACEDatAnimationHook>* OutCrossedHooks = nullptr, uint32 PreferredStyle = 0) const;
 
+	/** Retail GetObjectSequence: direct state link, otherwise leave through the style's default before entering the target. */
+	bool EvaluateTransition(uint32 FromCommand, uint32 ToCommand, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount, bool& bOutFinished,
+		const float* PreviousTimeSeconds = nullptr, TArray<FACEDatAnimationHook>* OutCrossedHooks = nullptr, uint32 PreferredStyle = 0) const;
+
 	/** Direct Animation DID playback (looping). Portalspace uses Framerate=40, LowFrame=1. */
 	bool EvaluateAnimation(uint32 AnimationId, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount, bool bLoop = true,
 		const float* PreviousTimeSeconds = nullptr, TArray<FACEDatAnimationHook>* OutCrossedHooks = nullptr,
@@ -44,11 +48,13 @@ private:
 #if WITH_DEV_AUTOMATION_TESTS
     friend class FACERetailStreamingCostTest;
     friend class FACEAnimationLifetimeTest;
+    friend class FACEEmoteTransitionTest;
 #endif
 	const FACEDatAnimation* LoadAnimation(uint32 AnimId) const;
 	const FACEDatMotionData* FindCycle(uint32 MotionCommand, uint32 PreferredStyle) const;
 	bool FindCycleAnims(uint32 MotionCommand, TArray<FACEDatAnimData>& OutAnims, uint32 PreferredStyle = 0) const;
 	bool FindLinkAnims(uint32 FromCommand, uint32 ToCommand, TArray<FACEDatAnimData>& OutAnims, uint32 PreferredStyle = 0) const;
+	bool FindTransitionAnims(uint32 FromCommand, uint32 ToCommand, TArray<FACEDatAnimData>& OutAnims, uint32 PreferredStyle) const;
 	float GetAnimDataDuration(const FACEDatAnimData& AnimData) const;
 	bool EvaluateAnimSequence(const TArray<FACEDatAnimData>& Anims, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount,
 		bool bLoop = true, bool* bOutFinished = nullptr, const float* PreviousTimeSeconds = nullptr,

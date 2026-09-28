@@ -34,10 +34,7 @@ void AACETerrainChunkActor::SetOutdoorTerrainCollisionEnabled(bool bEnabled)
 void AACETerrainChunkActor::SetOutdoorTerrainHiddenInGame(bool bHideTerrain)
 {
 	bWantTerrainHidden = bHideTerrain;
-	if (bHideTerrain)
-	{
-		bWantTerrainCollision = false;
-	}
+	// A camera visibility change must not change the pawn's collision residency.
 	ApplyDesiredOutdoorTerrainState();
 }
 

@@ -77,6 +77,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEAvatarMotionTest;
 	friend class FACEEmoteTest;
 	friend class FACEVRInteriorTest;
+	friend class FACEEntranceTransitionTest;
 	friend class FACEVRWallContactTest;
     friend class FACEAcademyCornerTest;
 	friend class FACEVRStairCeilingTest;

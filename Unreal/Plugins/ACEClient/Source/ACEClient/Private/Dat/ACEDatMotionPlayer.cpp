@@ -211,6 +211,44 @@ bool FACEDatMotionPlayer::FindLinkAnims(uint32 FromCommand, uint32 ToCommand, TA
 	return false;
 }
 
+bool FACEDatMotionPlayer::FindTransitionAnims(uint32 From, uint32 To, TArray<FACEDatAnimData>& Out, uint32 PreferredStyle) const
+{
+	Out.Reset();
+	if (From == To) return false;
+	// CMotionTable::get_link checks the actual source and then the style-wide
+	// link. A Ready->target fallback alone discards the source pose's exit clips.
+	for (uint32 Style : {PreferredStyle != 0 ? PreferredStyle : MotionTable->DefaultStyle, MotionTable->DefaultStyle})
+	{
+		auto Link = [&](uint32 Source, uint32 Target) -> const FACEDatMotionData*
+		{
+			if (Source == Target) return nullptr;
+			for (uint32 Key : {(Style << 16) | (Source & 0xFFFFFFu), Style << 16})
+				if (const auto* Links = MotionTable->Links.Find(Key))
+					if (const auto* Data = Links->Find(Target); Data && !Data->Anims.IsEmpty()) return Data;
+			return nullptr;
+		};
+		if (const auto* Direct = Link(From, To)) { Out = Direct->Anims; return true; }
+		if (const uint32* Ready = MotionTable->StyleDefaults.Find(Style))
+		{
+			if (const auto* Exit = Link(From, *Ready)) Out.Append(Exit->Anims);
+			if (const auto* Enter = Link(*Ready, To)) Out.Append(Enter->Anims);
+			if (!Out.IsEmpty()) return true;
+		}
+		if (Style == MotionTable->DefaultStyle) break;
+	}
+	return false;
+}
+
+bool FACEDatMotionPlayer::EvaluateTransition(uint32 From, uint32 To, float TimeSeconds, int32 NumParts,
+	TArray<FTransform>& Out, float WorldScale, int32& Count, bool& Finished,
+	const float* PreviousTime, TArray<FACEDatAnimationHook>* Hooks, uint32 Style) const
+{
+	TArray<FACEDatAnimData> Anims;
+	Count = 0; Finished = false;
+	return FindTransitionAnims(From, To, Anims, Style)
+		&& EvaluateAnimSequence(Anims, TimeSeconds, NumParts, Out, WorldScale, Count, false, &Finished, PreviousTime, Hooks);
+}
+
 float FACEDatMotionPlayer::GetAnimDataDuration(const FACEDatAnimData& AnimData) const
 {
 	if (AnimData.AnimId == 0)

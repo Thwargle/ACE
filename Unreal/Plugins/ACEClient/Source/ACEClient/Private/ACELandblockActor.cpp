@@ -64,10 +64,8 @@ void AACELandblockActor::SetOutdoorTerrainCollisionEnabled(bool bEnabled)
 void AACELandblockActor::SetOutdoorTerrainHiddenInGame(bool bHideTerrain)
 {
 	bWantTerrainHidden = bHideTerrain;
-	if (bHideTerrain)
-	{
-		bWantTerrainCollision = false;
-	}
+	// PView follows the camera, collision follows the player's occupied cell.
+	// Looking into a doorway must not remove the ground under outdoor feet.
 	ApplyDesiredOutdoorTerrainState();
 }
 
@@ -250,7 +248,9 @@ void AACELandblockActor::SetBuildingShellsBlockPawn(bool bBlockPawn, const TArra
 		const bool bIgnore = !bBlockPawn
 			|| (InfoIndex != INDEX_NONE && IgnoreSet.Contains(InfoIndex));
 		Mesh->SetCollisionResponseToChannel(ECC_Pawn, bIgnore ? ECR_Ignore : ECR_Block);
-		Mesh->RecreatePhysicsState();
+		// SetCollisionResponseToChannel updates the live physics filter itself.
+		// Recreating all scenery bodies here made every doorway crossing a hitch,
+		// including bodies whose response had not changed at all.
 	};
 
 	for (int32 i = 0; i < SceneryMeshes.Num(); ++i)

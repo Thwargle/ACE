@@ -2756,20 +2756,17 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					const FVector TestPos(Desired.X, Desired.Y, Desired.Z + CapsuleHalfHeight);
 					const FVector PathStart = Current; // already the capsule center
 					uint32 ResolvedCell = static_cast<uint32>(Pred.CellId);
-					const uint32 CellBeforeTransit = ResolvedCell;
 					if (ACECellTransit::ResolvePathCellId(
 							*Dat, ResolvedCell, PathStart, TestPos,
 							FMath::Max(8.f, CapsuleRadius), WorldScale, ResolvedCell))
 					{
-						const bool bWasIndoorCell = (CellBeforeTransit & 0xFFFFu) >= 0x0100u;
-						const bool bNowIndoorCell = (ResolvedCell & 0xFFFFu) >= 0x0100u;
-						// Jumping into a shop: indoor CellId while airborne dropped land
-						// collision before EnvCell PhysicsBSP was cooked → stuck in the floor.
-						if (!(bJumpAirborne && !bWasIndoorCell && bNowIndoorCell))
-						{
-							Pred.CellId = static_cast<int32>(ResolvedCell);
-							Pred.SetLocationFromUnreal(Desired, WorldScale);
-						}
+						// Retail CTransition::validate_transition commits the accepted cell
+						// in the air too. Deferring until landing loses thin window/door
+						// entry cells, leaving a player deep inside a room outdoor-resident.
+						// The terrain presenter prepares occupied PhysicsBSP on the same
+						// frame; collision readiness must not discard a valid transit.
+						Pred.CellId = static_cast<int32>(ResolvedCell);
+						Pred.SetLocationFromUnreal(Desired, WorldScale);
 					}
 				}
 			}

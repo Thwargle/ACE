@@ -68,10 +68,11 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     Remote.PhysicsTimestamps[ACEPhysicsTimeStamp::Position]=10;
     PositionSession.WorldObjects.Add(Remote.Guid,Remote);
     int32 Corrections=0;
-    PositionSession.OnPositionUpdate.AddLambda([&](int32,const FACEPosition&){++Corrections;});
-    auto Position=[&](uint16 Instance,uint16 Sequence,uint16 Teleport,float X)
+    FACEPosition LastPosition;
+    PositionSession.OnPositionUpdate.AddLambda([&](int32,const FACEPosition& P){++Corrections;LastPosition=P;});
+    auto Position=[&](uint16 Instance,uint16 Sequence,uint16 Teleport,float X,uint32 Flags=0x74)
     {
-        FACEBinaryWriter W; W.WriteUInt32(123); W.WriteUInt32(0x74); W.WriteUInt32(0x2B120021);
+        FACEBinaryWriter W; W.WriteUInt32(123); W.WriteUInt32(Flags); W.WriteUInt32(0x2B120021);
         W.WriteFloat(X); W.WriteFloat(90); W.WriteFloat(20); W.WriteFloat(1);
         W.WriteUInt16(Instance); W.WriteUInt16(Sequence); W.WriteUInt16(Teleport); W.WriteUInt16(0);
         FACEBinaryReader R(W.GetData()); PositionSession.HandleUpdatePosition(R);
@@ -84,6 +85,11 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     PositionSession.WorldObjects[123].PhysicsTimestamps[ACEPhysicsTimeStamp::Position]=65535;
     Position(3,0,2,47);
     TestEqual(TEXT("Remote sequence wraparound accepts the next position"),Corrections,3);
+    TestTrue(TEXT("Position event retains explicit grounded contact for presentation"),LastPosition.bHasContactState && LastPosition.bIsGrounded);
+    TestTrue(TEXT("Position event forwards teleport epoch without changing wire format"),LastPosition.bHasTeleportSequence && LastPosition.TeleportSequence==2);
+    Position(3,1,3,48,0x70);
+    TestTrue(TEXT("Airborne and descriptor positions remain distinguishable"),LastPosition.bHasContactState && !LastPosition.bIsGrounded);
+    TestEqual(TEXT("A genuine new teleport epoch reaches presentation"),LastPosition.TeleportSequence,uint16(3));
     FString LastChat; int32 ChatType = -1;
     ChatSession.OnChatMessage.AddLambda([&](const FString& Message, const FString&, int32 Type) { LastChat = Message; ChatType = Type; });
     FACEBinaryWriter Closed; Closed.WriteUInt32(0x0451);

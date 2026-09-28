@@ -28,6 +28,7 @@ class ACECLIENT_API UACEVRComponent : public UActorComponent
 	friend class FACEVRRigTest;
 	friend class FACEInteractionEffectsTest;
 	friend class FACEVRInteriorTest;
+	friend class FACEEntranceTransitionTest;
 	friend class FACERunSpeedParityTest;
 	friend class FACEVRWallContactTest;
 	friend class FACEFortTethStairsTest;

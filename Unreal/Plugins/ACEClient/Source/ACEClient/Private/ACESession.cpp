@@ -6972,6 +6972,7 @@ void FACESession::HandleUpdatePosition(FACEBinaryReader& Reader)
 	Pos.RotationXYZ.Z = (PosFlags & OrientationHasNoZ) ? 0.f : Reader.ReadFloat();
 	Pos.ReconstructOmittedRotation(PosFlags);
 	Pos.bIsGrounded = (PosFlags & IsGrounded) != 0;
+	Pos.bHasContactState = true;
 
 	if (PosFlags & HasVelocity)
 	{
@@ -6990,6 +6991,8 @@ void FACESession::HandleUpdatePosition(FACEBinaryReader& Reader)
 		const uint16 IncomingPosition = Reader.ReadUInt16();
 		const uint16 IncomingTeleport = Reader.ReadUInt16();
 		const uint16 IncomingForce = Reader.ReadUInt16();
+		Pos.bHasTeleportSequence = true;
+		Pos.TeleportSequence = IncomingTeleport;
 
 		if (FACEWorldObject* Obj = WorldObjects.Find(Guid))
 		{

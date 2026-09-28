@@ -1,56 +1,63 @@
-# AC:Unreal / AC:VR release 84
+# AC:Unreal / AC:VR release 85
 
-Windows desktop, PC VR, and native Quest: **2026.09.28.84**.
-Release number / Android version code: 84. Quest installer revision: 6.
+Windows desktop, PC VR, and native Quest: **2026.09.28.85**.
+Release number / Android version code: 85. Quest installer revision: 6.
 
-## Changes since public release v83
+## Changes since public release v84
 
-### Movement, camera and world loading
+### Networked player movement
 
-- Strengthen grounded ledge detection while preserving valid stairs, slopes,
-  deliberate jumps and airborne portal arrivals.
-- Prevent repeated jump presses in midair from restarting the jump animation.
-- Stabilize mouse camera orbit near the overhead pole to prevent inversions.
-- Build bridge and platform collision independently of initial cell visibility,
-  fixing the missing collision after portal entry seen in Empyrean Rescue.
-- Initialize animated scenery's first pose and visibility before its first
-  rendered frame. Hidden parts such as the Bind Stone spikes no longer flash
-  into view during initial loading, and activation animations can still reveal them.
+- Keep ordinary forward movement continuous when late position packets correct
+  the predicted position, reducing backward steps while running beside friends.
+- Apply visual position corrections through collision so remote players respect
+  walls, stair risers, slopes and ledges. Selection follows the displayed body.
+- Ignore stale airborne position corrections instead of replaying old jump
+  velocity. Queue landing corrections until the simulated body reaches ground.
+- Distinguish genuine portal teleports using the server's teleport sequence,
+  including nearby destinations, while blending normal position corrections.
+- Keep VR body movement on the same buffered timeline as tracked head and hands,
+  removing an additional speed-dependent body delay.
+- Blend tracking recovery into an existing avatar instead of snapping it into
+  place. Newer landing information cannot pull a buffered VR jump to the floor.
+- Prevent ground seating differences from turning small position noise into
+  visible lateral correction.
 
-### Inventory and interface
+### Building entrances and visibility
 
-- Support selected stack quantities when splitting, moving, giving and selling
-  items, including dragging a partial stack into the vendor sell list.
-- Honor the selected destination bag when picking up items unless
-  "Pick up items into main pack" is enabled.
-- Apply mana stones to the player when dropped on the paper doll's body view;
-  target the specific equipment item when dropped on a visible equipment slot.
-- Restore main player vitals resizing and use the retail fill textures at their
-  intended height instead of stretching or cropping them vertically.
-- Cover all 480 known server failure codes with an explicit display policy.
-  Full-health healing kit use now reports the readable full-health message.
-  Internal failures retain a generic user message and detailed diagnostic logging.
-- Expand regression coverage for monster-only versus item-only target cycling.
+- Update movement cell ownership and collision residency promptly at building
+  entrances to reduce the movement hitch when crossing between inside and outside.
+- Keep terrain collision independent of camera visibility and avoid recreating
+  physics bodies when only collision filters change.
+- Allow airborne transitions into building interiors, including window jumps,
+  so interior geometry remains visible after landing inside.
 
-### Installation and updating
+### Emote transitions
 
-- Skip Visual C++ x64 and GameInput installation when a compatible or newer
-  runtime is already present, avoiding unnecessary prerequisite prompts.
-- Keep the same release version across Windows, PC VR, Quest and the installers.
+- Use retail's authored transitions from the actual current pose when leaving
+  lying, sitting and other held emotes, including intermediate ready transitions.
+- Finish queued pose transitions before starting subsequent gestures or movement,
+  preventing the body from appearing to levitate upright.
+- Preserve casting, jumping, death and locomotion behavior when an emote ends.
+
+## Updating
 
 Use **Updates** in the launcher or download the current installer from the site.
-Existing supported updaters detect release 84. Accounts, settings and retail DAT
-files are retained; do not uninstall first. Installation closes the game.
+Existing supported updaters detect release 85. Accounts, settings and retail DAT
+files are retained; do not uninstall first. **Installation closes the game.**
 On Quest, confirm Android's installation prompt, wait for completion, then reopen
 AC:VR from the library. Optional automatic updating remains off by default.
 
 No retail DAT files, saved accounts or game-server configuration are bundled.
-This release updates the clients; no new game-server deployment is required.
+No new game-server deployment is required. Standard movement stays compatible
+with retail servers; extended VR tracking requires a compatible server and client.
 
 ## Validation scope
 
-Regression checks cover real DAT bridge geometry and animated scenery, ledge
-and stair movement, repeated jumps, camera limits, inventory stack operations,
-paper doll targets, pickup destinations, vitals layout, error messages and updates.
-Live gameplay remains useful for confirming reported routes on different servers.
+Regression coverage includes delayed and jittered movement updates at 30, 90 and
+144 FPS, jumps and landings, slopes, stairs, cliffs, selection alignment, VR
+tracking recovery, desktop/VR observer compatibility, actual DAT building
+entrances and authored emote transitions. Server integration checks verify
+validated root positions and VR pose delivery to subscribed desktop and VR
+observers, without sending extended tracking packets to retail clients.
+These automated checks do not replace live multiplayer or headset acceptance.
 No new measured headset FPS improvement is claimed by this release.

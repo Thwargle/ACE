@@ -18,6 +18,7 @@ class ACECLIENT_API AACEWorldEntityActor : public AActor
 	GENERATED_BODY()
 	friend class FACEMovementReviewTest;
 	friend class FACERemoteSupportTest;
+	friend class FACERemoteMovementReplayTest;
 
 public:
 	AACEWorldEntityActor();
@@ -267,7 +268,7 @@ protected:
 	/** Local player position is live; its world-object network echo can be stale. */
 	bool ResolveFacingTarget(int32 TargetGuid, FVector& Location) const;
 	/** Collision-constrained extrapolation; authoritative F748 teleports stay authoritative. */
-	FVector ResolvePredictedMovement(const FVector& From, const FVector& Destination) const;
+	FVector ResolvePredictedMovement(const FVector& From, const FVector& Destination, TOptional<bool> Grounded = {}) const;
 	float MovementRadius = 25.f;
 	float MovementHalfHeight = 90.f;
 	float MovementSweepRadius = 25.f;
@@ -275,6 +276,10 @@ protected:
 	float MovementStepDownHeight = 50.f;
 	float MovementStepHeight = 50.f;
 	bool bHaveVRPresentation = false;
+	FVector LastVRPresentationRoot = FVector::ZeroVector;
+	bool bHaveRemoteTeleport = false;
+	uint16 RemoteTeleportSequence = 0;
+	TOptional<FACEPosition> PendingRemoteLanding;
 	uint32 VRPresentationTeleport = 0;
 	double LastRemotePositionAt = -100.;
 
