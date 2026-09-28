@@ -8,6 +8,8 @@
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
 #include "VR/ACEVRMath.h"
+#include "VR/ACEVRComponent.h"
+#include "VR/ACEVRSettings.h"
 #include "ProceduralMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
@@ -164,6 +166,8 @@ bool FACEAvatarMotionTest::RunTest(const FString&)
  Pawn->AddInstanceComponent(App);App->RegisterComponent();PC->Possess(Pawn);
  Obj.SetupId=0x02000001;App->ApplyWorldObject(Obj,100,false);
  PC->PredictedPose.CellId=0x7D640019;PC->PredictedPose.Location=FVector(50,100,50);PC->bHavePredictedPose=true;
+ auto* VR=NewObject<UACEVRComponent>(Pawn);Pawn->AddInstanceComponent(VR);VR->RegisterComponent();
+ VR->PC=PC;VR->Client=Client;VR->Settings=NewObject<UACEVRSettings>();VR->bTracking=true;
  // CMotionInterp::LeaveGround applies Falling; HitGround removes old links.
  // Reproduce immediate land/re-jump through the real controller, not only a
  // transform helper, using the DAT transitions for each common stance.
@@ -189,6 +193,60 @@ bool FACEAvatarMotionTest::RunTest(const FString&)
    TestTrue(TEXT("Landing releases both unfinished and held airborne motion"),App->ActionCommand==0 && !App->bHoldActionFinal && !App->bHoldActionFinalAfterFinish && !App->QueuedHoldAction);
   }
  }
+ // charge_jump does not replace the active Falling link/hold. Exercise the
+ // desktop and VR input entry points, including key-repeat and early releases,
+ // against the same DAT pose with no input as the animation reference.
+ for(bool Tracked:{false,true})for(uint32 Style:{ACEMotion::StanceNonCombat,0x8000003fu,ACEMotion::StanceMagic})
+ for(float Dt:{1.f/90,1.f/30})for(float Age:{.03f,.5f})
+ {
+  auto* ReferenceActor=World->SpawnActor<AACEWorldEntityActor>();ReferenceActor->InitializeFromObject(Obj,100,false);
+  auto* Reference=ReferenceActor->Appearance.Get();
+  TestTrue(TEXT("Jump spam reference avatar builds"),Reference->ApplyWorldObject(Obj,100,false));
+  VR->bActive=Tracked;VR->bJumpHeld=false;
+  App->ClearJumpMotionIfAny();App->SetPreferredStyle(Style);App->SetLocomotionInput(1,0,true,1);
+  Reference->SetPreferredStyle(Style);Reference->SetLocomotionInput(1,0,true,1);
+  PC->bJumpAirborne=false;PC->bJumpCharging=true;PC->JumpChargeExtent=.8f;PC->bStandingJumpLocked=false;
+  PC->ReleaseJump(1,0);Reference->PlayActionMotion(0x40000015u,1,Style);
+  for(int Frame=0;Frame<FMath::CeilToInt(Age/Dt);++Frame)
+  {
+   App->TickComponent(Dt,LEVELTICK_All,nullptr);Reference->TickComponent(Dt,LEVELTICK_All,nullptr);
+  }
+  const auto Velocity=PC->JumpWorldAceVelocity;
+  PC->JumpAirborneSeconds=Age;
+  bool Continuous=true,SamePose=true,SameFlight=true;
+  auto Press=[&](){if(Tracked)VR->JumpDown();else PC->JumpPressed();};
+  auto Release=[&](){if(Tracked)VR->JumpUp();else PC->JumpReleased();};
+  for(int Tap=0;Tap<16;++Tap)
+  {
+   const float Time=App->AnimTime,Blend=App->StanceBlendAlpha;
+   const bool Held=App->bHoldActionFinal,HoldPending=App->bHoldActionFinalAfterFinish;
+   Press();PC->JumpChargeExtent=.2f;Press(); // OS/controller duplicate press.
+   Continuous &= App->ActionCommand==0x40000015u && App->AnimTime==Time && App->StanceBlendAlpha==Blend
+    && App->bHoldActionFinal==Held && App->bHoldActionFinalAfterFinish==HoldPending && PC->JumpChargeExtent==.2f;
+   Release();Release();
+   SameFlight &= PC->bJumpAirborne && PC->JumpWorldAceVelocity.Equals(Velocity) && PC->JumpAirborneSeconds==Age;
+   App->TickComponent(Dt,LEVELTICK_All,nullptr);Reference->TickComponent(Dt,LEVELTICK_All,nullptr);
+   Continuous &= App->ActionCommand==0x40000015u && App->AnimTime==Reference->AnimTime;
+   // Once the takeoff blend has finished, every rendered part must match the
+   // uninterrupted reference, including the held final frame before landing.
+   if(Tap>=6)for(int Part=0;Part<App->GetPartCount();++Part)
+    SamePose &= App->GetPartMesh(Part)->GetRelativeTransform().Equals(Reference->GetPartMesh(Part)->GetRelativeTransform(),.001);
+  }
+  const FString Case=FString::Printf(TEXT("vr=%d stance=%08X dt=%.3f age=%.2f"),Tracked,Style,Dt,Age);
+  TestTrue(*FString::Printf(TEXT("Midair jump spam preserves the animation clock and hold (%s)"),*Case),Continuous);
+  TestTrue(*FString::Printf(TEXT("Midair jump spam matches uninterrupted rendered poses (%s)"),*Case),SamePose);
+  TestTrue(*FString::Printf(TEXT("Midair jump spam never replaces the current flight (%s)"),*Case),SameFlight);
+  Press();PC->JumpChargeExtent=.6f;
+  PC->bJumpAirborne=false;App->ClearJumpMotionIfAny(); // HitGround animation handoff.
+  TestTrue(TEXT("Landing keeps a held follow-up charge"),PC->bJumpCharging && PC->JumpChargeExtent==.6f);
+  Release();
+  TestTrue(TEXT("Release after landing starts a fresh airborne animation"),PC->bJumpAirborne && App->ActionCommand==0x40000015u && App->AnimTime==0.f && !App->bHoldActionFinal);
+  App->ClearJumpMotionIfAny();ReferenceActor->Destroy();
+ }
+ // Grounded jump charging must still cancel a held retail emote.
+ VR->bActive=false;PC->bJumpAirborne=false;PC->bJumpCharging=false;
+ App->SetHeldActionMotion(ACEMotion::Sleeping);PC->JumpPressed();
+ TestTrue(TEXT("Grounded jump still releases a held emote"),App->ActionCommand==0 && PC->bJumpCharging);
  PC->UnPossess();Pawn->Destroy();PC->Destroy();Session->State=EACESessionState::Disconnected;
  return !HasAnyErrors();
 }

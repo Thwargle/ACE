@@ -26,7 +26,9 @@ $mark = Join-Path $repoRoot 'Unreal/Build/Branding/AC-Icon.png'
 $prereq = Join-Path $EngineRoot 'Engine/Extras/Redist/en-us/vc_redist.x64.exe'
 $gameInput = Join-Path $EngineRoot 'Engine/Extras/Redist/en-us/GameInputRedist.msi'
 foreach ($required in @($Compiler,$icon,$banner,$mark,$prereq,$gameInput)) { if (!(Test-Path -LiteralPath $required)) { throw "Missing installer input: $required" } }
-& $Compiler "/DPayloadDir=$payload" "/DBrandIcon=$icon" "/DBrandWizard=$banner" "/DBrandMark=$mark" "/DPrerequisites=$prereq" "/DGameInput=$gameInput" "/DReleaseDir=$releaseRoot" "/DReleaseNumber=$version" "/DProductVersion=$($manifest.windowsVersion)" (Join-Path $PSScriptRoot 'Windows-Installer.iss')
+$runtimeVersions = & (Join-Path $PSScriptRoot 'Get-WindowsPrerequisiteVersions.ps1') -VisualCppRedist $prereq -GameInputMsi $gameInput
+Write-Host "Bundled prerequisites: Visual C++ x64 $($runtimeVersions.VisualCppRuntimeVersion), GameInput $($runtimeVersions.GameInputRuntimeVersion)"
+& $Compiler "/DPayloadDir=$payload" "/DBrandIcon=$icon" "/DBrandWizard=$banner" "/DBrandMark=$mark" "/DPrerequisites=$prereq" "/DGameInput=$gameInput" "/DVisualCppRuntimeVersion=$($runtimeVersions.VisualCppRuntimeVersion)" "/DGameInputRuntimeVersion=$($runtimeVersions.GameInputRuntimeVersion)" "/DReleaseDir=$releaseRoot" "/DReleaseNumber=$version" "/DProductVersion=$($manifest.windowsVersion)" (Join-Path $PSScriptRoot 'Windows-Installer.iss')
 if ($LASTEXITCODE -ne 0) { throw 'Windows setup compiler failed.' }
 $setup = Join-Path $releaseRoot "AC-Unreal-Setup-v$version.exe"
 $checksum = (Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash

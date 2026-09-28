@@ -53,14 +53,16 @@ Name: "{autodesktop}\AC Unreal"; Filename: "{app}\ACUnreal.exe"; Parameters: "-n
 Name: "{autodesktop}\AC VR (SteamVR)"; Filename: "{app}\AC-VR.bat"; Check: not IsPortableUpdate; WorkingDir: "{app}"; IconFilename: "{app}\AC-Icon.ico"; Tasks: vrdesktopicon
 
 [Run]
-Filename: "{app}\Prerequisites\vc_redist.x64.exe"; Description: "Install or repair Microsoft Visual C++ runtime (recommended on first install)"; Flags: postinstall shellexec skipifsilent waituntilterminated
-Filename: "{app}\Prerequisites\GameInputRedist.msi"; Description: "Install Microsoft GameInput (recommended on first install)"; Flags: postinstall shellexec skipifsilent waituntilterminated
+Filename: "{app}\Prerequisites\vc_redist.x64.exe"; Parameters: "/install /norestart"; Description: "Install or update Microsoft Visual C++ runtime (required)"; Check: NeedsVisualCppRuntime; Flags: postinstall shellexec skipifsilent waituntilterminated
+Filename: "{app}\Prerequisites\GameInputRedist.msi"; Description: "Install or update Microsoft GameInput (required)"; Check: NeedsGameInputRuntime; Flags: postinstall shellexec skipifsilent waituntilterminated
 Filename: "{app}\ACUnreal.exe"; Parameters: "-nohmd"; Description: "Open AC:Unreal"; WorkingDir: "{app}"; Flags: postinstall nowait skipifsilent unchecked
 
 [Messages]
 WelcomeLabel2=This installs the AC:Unreal desktop client and AC:VR for SteamVR.%n%nYou will need your own updated Asheron's Call DAT files and a community server account. The setup guide is available at thwargle.com/unreal.%n%nFor native Quest installation, use the separate AC:VR Quest installer.
 
 [Code]
+#include "Windows-Prerequisites.iss"
+
 function IsPortableUpdate(): Boolean;
 begin
   Result := ExpandConstant('{param:ACPORTABLE|0}') = '1';

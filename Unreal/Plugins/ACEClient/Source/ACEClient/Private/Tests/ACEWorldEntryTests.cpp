@@ -1196,7 +1196,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
         {
             if (Message==TEXT("You charged too far!"))
             {
-                ++ChargeErrors;TestEqual(TEXT("Charge failure uses retail transient notification"),Type,ACEChatMessageType::TransientInfo);
+                ++ChargeErrors;TestEqual(TEXT("Charge failure uses retail error chat"),Type,ACEChatMessageType::ChatError);
             }
         });
         for (float Displacement : {1499.f,1500.f,1501.f})

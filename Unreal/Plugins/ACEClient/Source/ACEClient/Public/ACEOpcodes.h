@@ -186,8 +186,8 @@ namespace ACEChatMessageType
 		return (Type >= General && Type <= Roleplay) || Type == Society;
 	}
 	/**
-	 * Client-internal (not a retail LogTextType): WeenieError / CommunicationTransientString
-	 * messages — retail shows these as a yellow center-top banner that fades, not chat text.
+	 * Client-internal (not a retail LogTextType): CommunicationTransientString
+	 * messages use a fading banner. WeenieErrors use their retail chat destination.
 	 */
 	constexpr int32 TransientInfo = 0x30;
 }

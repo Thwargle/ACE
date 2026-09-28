@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "ACECameraRetail.h"
+#include "ACEOrbitCameraBoom.h"
 #include "ACECameraSettings.h"
 #include "ACERuntimeOptions.h"
 #include "ACERetailPortalAnimation.h"
@@ -95,7 +96,7 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Resetting an options snapshot restores mouse turning too"),Client->IsCharacterOptionSet(0x31));
     Client->SendSetSingleCharacterOption(0x31,false);
     auto* Pawn=World->SpawnActor<APawn>();
-    auto* Boom=NewObject<USpringArmComponent>(Pawn);
+    auto* Boom=NewObject<UACEOrbitCameraBoom>(Pawn);
     Pawn->SetRootComponent(Boom); Boom->RegisterComponent(); Controller->Possess(Pawn);
     Boom->TargetArmLength=300.f;
     Controller->UpdateMouseButtons(true,false,false,false);
@@ -375,6 +376,62 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     for(int32 I=0;I<120;++I) Boom->TickComponent(1.f/60,LEVELTICK_All,nullptr);
     TestTrue(TEXT("Stopping restores the chosen camera distance"),FMath::Abs(1200.f-Boom->GetSocketLocation(USpringArmComponent::SocketName).X-300.f)<.1f);
     TestEqual(TEXT("Movement lag does not change manual zoom"),Boom->TargetArmLength,300.f);
+    // Measure the rendered socket, not just the clamped requested pitch.
+    // The camera's smoothing can introduce roll even when both endpoints are upright.
+    {
+        auto* OrbitPawn=World->SpawnActor<APawn>();
+        auto* Root=NewObject<USceneComponent>(OrbitPawn); OrbitPawn->SetRootComponent(Root); Root->RegisterComponent();
+        auto* Orbit=NewObject<UACEOrbitCameraBoom>(OrbitPawn); Orbit->SetupAttachment(Root); Orbit->RegisterComponent();
+        Orbit->bDoCollisionTest=false; Orbit->TargetArmLength=300.f;
+        Orbit->bInheritPitch=false; Orbit->bInheritRoll=false;
+        Orbit->CameraRotationLagSpeed=10.f;
+        Client->SendSetSingleCharacterOption(0x31,true);
+        Controller->UpdateMouseButtons(true,false,false,false);
+        double MaxRoll=0, MaxPitch=0;
+        for(float Dt:{1.f/30,1.f/60,1.f/144}) for(bool Invert:{false,true})
+        {
+            ACECameraSettings::SetMouseInversion(Invert,Invert);
+            Orbit->bEnableCameraRotationLag=false;
+            Orbit->SetRelativeRotation(FRotator(-70,170,0)); Orbit->TickComponent(Dt,LEVELTICK_All,nullptr);
+            Orbit->bEnableCameraRotationLag=true;
+            for(int32 Frame=0;Frame<180;++Frame)
+            {
+                // Diagonal drags into the pole, then away; cross the yaw wrap
+                // and rotate the parent as happens when mouse turning the player.
+                Root->SetWorldRotation(FRotator(0,Frame*.5,0));
+                const float Direction=Invert?-1.f:1.f;
+                Controller->ApplyMouseLookDelta(Direction*12.f,Direction*(Frame%40<20?8.f:-1.f),Orbit);
+                Orbit->TickComponent(Dt,LEVELTICK_All,nullptr);
+                const FRotator Eye=Orbit->GetSocketRotation(USpringArmComponent::SocketName);
+                MaxRoll=FMath::Max(MaxRoll,FMath::Abs(Eye.Roll));
+                MaxPitch=FMath::Max(MaxPitch,FMath::Abs(Eye.Pitch));
+            }
+        }
+        AddInfo(FString::Printf(TEXT("Near-pole camera maximum rendered roll %.3f degrees; pitch %.3f degrees"),MaxRoll,MaxPitch));
+        TestTrue(TEXT("Diagonal mouse orbit keeps the rendered view upright near straight down"),MaxRoll<.01);
+        TestTrue(TEXT("Rotation smoothing stays within the requested pitch limit"),MaxPitch<=89.01);
+        TestTrue(TEXT("Camera smoothing preserves configured inheritance"),!Orbit->bInheritPitch && Orbit->bInheritYaw && !Orbit->bInheritRoll);
+        TestTrue(TEXT("Reading the rotation target still returns the unsmoothed player request"),
+            FMath::IsNearlyEqual(Orbit->GetTargetRotation().Pitch,Orbit->GetRelativeRotation().Pitch,.001));
+        TArray<FRotator> SettledViews;
+        for(float Dt:{1.f/30,1.f/60,1.f/144})
+        {
+            Root->SetWorldRotation(FRotator::ZeroRotator);
+            Orbit->bEnableCameraRotationLag=false;
+            Orbit->SetRelativeRotation(FRotator(-70,170,0)); Orbit->TickComponent(Dt,LEVELTICK_All,nullptr);
+            Orbit->bEnableCameraRotationLag=true;
+            Orbit->SetRelativeRotation(FRotator(-89,-170,0));
+            for(int32 Frame=0;Frame<FMath::RoundToInt(.5f/Dt);++Frame) Orbit->TickComponent(Dt,LEVELTICK_All,nullptr);
+            const auto Eye=Orbit->GetSocketRotation(USpringArmComponent::SocketName);
+            TestTrue(TEXT("Crossing the yaw wrap takes the short upright path"),Eye.Yaw< -170 && Eye.Yaw> -171 && FMath::Abs(Eye.Roll)<.01);
+            SettledViews.Add(Eye);
+        }
+        TestTrue(TEXT("Orbit smoothing is consistent at 30, 60 and 144 FPS"),
+            SettledViews[0].Equals(SettledViews[1],.001) && SettledViews[0].Equals(SettledViews[2],.001));
+        ACECameraSettings::SetMouseInversion(false,false);
+        Controller->UpdateMouseButtons(false,false,false,false);
+        OrbitPawn->Destroy();
+    }
     Controller->Client=nullptr;
     World->DestroyWorld(false);
     for (float Yaw : {0.f, 45.f, 180.f, 270.f, 450.f})

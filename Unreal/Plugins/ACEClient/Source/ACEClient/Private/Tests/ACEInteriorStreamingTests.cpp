@@ -148,6 +148,94 @@ bool FACEAmbientEntranceTest::RunTest(const FString& Parameters)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEBridgeEntryCollisionTest, "ACE.RetailParity.BridgeEntryCollision",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACEBridgeEntryCollisionTest::RunTest(const FString& Parameters)
+{
+    FInteriorTestWorld Fixture;
+    auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
+    if(!Dat || !Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+    // Empyrean Rescue's three scripted bridge spans, plus a non-scripted platform.
+    // Compare login (occupied before scenery builds) with portal approach (scenery
+    // builds while its room is outside the collision neighborhood).
+    for(uint32 CellId:{0xF93B037Bu,0xF93B037Cu,0xF93B037Du,0xF93B0119u})
+    {
+        const auto* Cell=Dat->GetOrBuildEnvCellMesh(CellId,100);
+        if(!TestNotNull(TEXT("Empyrean Rescue room decodes"),Cell))continue;
+        const uint32 SetupId=CellId==0xF93B0119?0x02000C2D:0x02000225;
+        const auto* Found=Cell->StaticObjects.FindByPredicate([&](const auto& S){return S.Id==SetupId;});
+        if(!TestNotNull(TEXT("Actual dungeon support object exists"),Found))continue;
+        const FACEDatStab Stab=*Found;
+        TestNotNull(TEXT("Support mesh decodes"),Dat->GetOrBuildSetupMesh(SetupId,100,UACEDatSubsystem::ACEPlacementResting));
+        TArray<FVector> SupportedPoints;
+        for(bool PortalApproach:{false,true})
+        {
+            auto* Room=Fixture.World->SpawnActor<AACEEnvCellActor>();
+            Room->LoadEnvCell(CellId,FVector::ZeroVector,100);
+            Room->SetEnvCellCollisionActive(!PortalApproach);
+            Room->SetEnvCellHiddenInGame(true);
+            TestTrue(TEXT("Support object spawns in both entry orders"),Room->TrySpawnOneStaticObject(Dat,Stab));
+            FCollisionQueryParams Query(SCENE_QUERY_STAT(ACEBridgeEntry),true);
+            Query.AddIgnoredComponent(Room->CellCollisionMesh.Get());
+            if(!PortalApproach)
+            {
+                FBox Bounds(ForceInit);
+                for(AACERegionSceneryActor* Scenery:Room->AnimatedStabs)Bounds+=Scenery->GetComponentsBoundingBox(true);
+                for(const auto& Pair:Room->StaticObjectHisms)
+                    for(int32 I=0;I<Pair.Value->GetInstanceCount();++I)
+                    {
+                        FTransform Transform;Pair.Value->GetInstanceTransform(I,Transform,true);
+                        Bounds+=Pair.Value->GetStaticMesh()->GetBoundingBox().TransformBy(Transform);
+                    }
+                for(UProceduralMeshComponent* Proc:Room->StaticObjectMeshes)Bounds+=Proc->Bounds.GetBox();
+                TestTrue(TEXT("Bridge has finite non-empty bounds"),Bounds.IsValid && !Bounds.GetSize().IsNearlyZero());
+                for(double X=Bounds.Min.X+25;X<Bounds.Max.X;X+=50)
+                    for(double Y=Bounds.Min.Y+25;Y<Bounds.Max.Y;Y+=50)
+                    {
+                        FHitResult Hit;
+                        if(Fixture.World->LineTraceSingleByChannel(Hit,FVector(X,Y,Bounds.Max.Z+10),
+                            FVector(X,Y,Bounds.Min.Z-10),ECC_Pawn,Query) && Hit.ImpactNormal.Z>.664)
+                            SupportedPoints.Add(Hit.ImpactPoint);
+                    }
+                TestTrue(TEXT("Login provides walkable bridge samples"),SupportedPoints.Num()>10);
+            }
+            else
+            {
+                // Resident but inactive scenery must not block another overlapping room.
+                int32 InactiveHits=0;
+                for(const FVector& P:SupportedPoints)
+                {
+                    FHitResult Hit;
+                    if(Fixture.World->LineTraceSingleByChannel(Hit,P+FVector(0,0,10),P-FVector(0,0,10),ECC_Pawn,Query))++InactiveHits;
+                }
+                TestEqual(TEXT("Unoccupied bridge collision stays disabled"),InactiveHits,0);
+                for(int32 Visit=0;Visit<3;++Visit)
+                {
+                    Room->SetEnvCellCollisionActive(true);
+                    Room->SetEnvCellHiddenInGame(Visit!=1);
+                    int32 Supported=0,CapsuleSupport=0;
+                    for(const FVector& P:SupportedPoints)
+                    {
+                        FHitResult Hit;
+                        if(Fixture.World->LineTraceSingleByChannel(Hit,P+FVector(0,0,10),P-FVector(0,0,10),ECC_Pawn,Query)
+                            && Hit.ImpactNormal.Z>.664 && Hit.ImpactPoint.Equals(P,.1))++Supported;
+                        // The movement solver uses a capsule, not just a ray.
+                        if(Fixture.World->SweepSingleByChannel(Hit,P+FVector(0,0,188),P+FVector(0,0,78),
+                            FQuat::Identity,ECC_Pawn,FCollisionShape::MakeCapsule(48,88),Query)
+                            && Hit.ImpactNormal.Z>.664)++CapsuleSupport;
+                    }
+                    TestEqual(*FString::Printf(TEXT("%08X portal bridge support matches login on visit %d"),CellId,Visit),Supported,SupportedPoints.Num());
+                    TestTrue(TEXT("A player capsule finds walkable support after portal entry"),CapsuleSupport>10);
+                    AddInfo(FString::Printf(TEXT("Bridge %08X visit %d support %d/%d"),CellId,Visit,Supported,SupportedPoints.Num()));
+                    Room->SetEnvCellCollisionActive(false);
+                }
+            }
+            Room->Destroy();
+        }
+    }
+    return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailInteriorStreamingTest, "ACE.RetailParity.InteriorStreaming",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACERetailInteriorStreamingTest::RunTest(const FString& Parameters)

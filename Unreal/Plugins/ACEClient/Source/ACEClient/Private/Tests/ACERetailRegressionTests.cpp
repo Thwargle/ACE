@@ -76,8 +76,9 @@ bool FACERetailCombatProtocolTest::RunTest(const FString& Parameters)
         ACECombatChat::LookupWeenieErrorWithString(0x04CB,TEXT("Summoning")), FString(TEXT("You must have Summoning specialized to use that item's magic.")));
     TestEqual(TEXT("Known free-text errors retain the server text"),
         ACECombatChat::LookupWeenieErrorWithString(0x055E,TEXT("Away")), FString(TEXT("Away")));
-    TestTrue(TEXT("Unknown string errors retain the identifier and argument"),
-        ACECombatChat::LookupWeenieErrorWithString(0xFFFF,TEXT("Summoning")).Contains(TEXT("0xFFFF")));
+    TestEqual(TEXT("Unknown errors explain failure without hex or guessing from the argument"),
+        ACECombatChat::LookupWeenieErrorWithString(0xFFFF,TEXT("Summoning")),
+        FString(TEXT("The server could not complete that action. Please try again.")));
     return true;
 }
 
@@ -340,8 +341,12 @@ bool FACERetailRuntimeRegressionTest::RunTest(const FString& Parameters)
     Second->SetBoxExtent(FVector(5,200,200));Second->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
     Second->SetCollisionResponseToAllChannels(ECR_Block);Second->RegisterComponent();
     Second->SetWorldLocation(FVector(3965,4000,200));
-    TestTrue(TEXT("Penetration recovery cannot enter a second wall"),
-        ACEBodySweep::Recover(*World,Embedded,FVector(-10,0,0),EmbeddedHit,StepBody,StepQuery).Equals(Embedded));
+    TestTrue(TEXT("Direct recovery into a second wall is rejected"),
+        ACEBodySweep::RecoverAlong(*World,Embedded,FVector(-10,0,0),EmbeddedHit,StepBody,StepQuery).Equals(Embedded));
+    const FVector AlternateRecovery=ACEBodySweep::Recover(*World,Embedded,FVector(-10,0,0),EmbeddedHit,StepBody,StepQuery);
+    // The embedded-body solver may escape the original wall in the opposite
+    // direction. Assert the second wall's boundary, not that recovery must fail.
+    TestTrue(TEXT("Alternate recovery cannot enter or cross the second wall"),AlternateRecovery.X>=Embedded.X-.05);
     CornerActor->Destroy();
     // Floors and walls share one cell PMC. Retrying must not ignore that component.
     auto* RoomActor=World->SpawnActor<AActor>();
@@ -528,6 +533,9 @@ bool FACERetailRuntimeRegressionTest::RunTest(const FString& Parameters)
         Walker->ApplyACEPosition(Correction);
         Walker->ApplyMotionState(FACEObjectMotionState());
         Walker->Tick(.1f);
+        // Corrections have a retail speed limit independent of the smoothing
+        // coefficient. A large correction must converge, not snap in 100 ms.
+        for(int32 I=0; I<Frames; ++I) Walker->Tick(1.f/Frames);
         TestTrue(TEXT("Stop and authoritative correction settle on the remote wire position"),
             FVector::Dist2D(Walker->GetActorLocation(),Correction.ToUnrealLocation(100))<.1);
         Walker->Destroy();

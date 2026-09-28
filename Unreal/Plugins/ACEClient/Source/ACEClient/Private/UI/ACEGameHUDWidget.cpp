@@ -2592,7 +2592,7 @@ void UACEGameHUDWidget::OnUseSelectedClicked()
 	FACEWorldObject Obj;
 	if (Client->GetWorldObject(Sel.Guid, Obj) && Obj.IsWorldLootable())
 	{
-		Client->SendPutItemInContainer(Sel.Guid, Client->GetPlayerGuid(), 0);
+		Client->SendPutItemInContainer(Sel.Guid, Client->ResolvePickupContainer(Sel.Guid, SelectedPackGuid), 0);
 	}
 	else
 	{

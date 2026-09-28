@@ -20,6 +20,7 @@ class ACECLIENT_API AACEEnvCellActor : public AActor
 {
 	GENERATED_BODY()
 	friend class FACERetailInteriorStreamingTest;
+	friend class FACEBridgeEntryCollisionTest;
 	friend class FACERetailRuntimeRegressionTest;
 
 public:

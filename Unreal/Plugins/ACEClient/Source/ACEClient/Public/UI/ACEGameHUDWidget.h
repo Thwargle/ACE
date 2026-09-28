@@ -73,6 +73,8 @@ public:
 	/** Number-key behavior: cast in combat, use the inventory shortcut in peace mode. */
 	void ActivateHotbarSlot(int32 SlotIndex);
 
+	int32 GetOpenPackGuid() const { return SelectedPackGuid; }
+
 private:
 	struct FHudPiece
 	{

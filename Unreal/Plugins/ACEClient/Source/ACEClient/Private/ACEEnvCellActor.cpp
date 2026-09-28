@@ -708,7 +708,13 @@ bool AACEEnvCellActor::TrySpawnOneStaticObject(UACEDatSubsystem* Dat, const FACE
 			return true;
 		}
 		Scenery->AttachToActor(this, FAttachmentTransformRules::KeepRelativeTransform);
-		if (!Scenery->InitializeFromSetup(static_cast<int32>(Stab.Id), 1.f, WorldScale, /*bEnableCollision*/ bAppliedCollisionActive))
+		// Residency can create scripted stabs before their room becomes occupied.
+		// Retain the authored PhysicsBSP at creation, just as for static ISMs:
+		// ConfigurePartCollision can toggle existing sections, but cannot restore
+		// sections omitted by ApplySetupParts(false). Empyrean Rescue's scripted
+		// bridge spans otherwise have a floor on login but none after portal entry.
+		// Occupancy still gates the actor's collision below (retail CEnvCell objects).
+		if (!Scenery->InitializeFromSetup(static_cast<int32>(Stab.Id), 1.f, WorldScale, /*bEnableCollision*/ true))
 		{
 			Scenery->Destroy();
 			return false;

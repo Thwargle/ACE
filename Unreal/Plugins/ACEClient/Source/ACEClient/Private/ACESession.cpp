@@ -2614,8 +2614,8 @@ void FACESession::HandleWeenieError(FACEBinaryReader& Reader)
 	const FString Msg = ACECombatChat::LookupWeenieError(Code);
 	if (!Msg.IsEmpty())
 	{
-		// Retail shows WeenieErrors as the yellow center-top transient banner, not chat.
-		OnChatMessage.Broadcast(Msg, TEXT(""), ACEChatMessageType::TransientInfo);
+		// Retail HandleFailureEvent uses each message's chat destination.
+		OnChatMessage.Broadcast(Msg, TEXT(""), ACECombatChat::WeenieErrorChatType(Code));
 	}
 }
 
@@ -2625,22 +2625,25 @@ void FACESession::ReportMoveToFailure(uint32 Error)
 	// Stop the controller's active approach before OnUseDone clears its state.
 	CancelPendingUse(TEXT("approach failed"));
 	const FString Message = ACECombatChat::LookupWeenieError(Error);
-	if (!Message.IsEmpty()) OnChatMessage.Broadcast(Message, TEXT(""), ACEChatMessageType::TransientInfo);
+	if (!Message.IsEmpty()) OnChatMessage.Broadcast(Message, TEXT(""), ACECombatChat::WeenieErrorChatType(Error));
 }
 
 void FACESession::HandleWeenieErrorWithString(FACEBinaryReader& Reader)
 {
-	if (!Reader.CanRead(4))
+	if (!Reader.CanRead(6))
 	{
 		return;
 	}
 	const uint32 Code = Reader.ReadUInt32();
+	const int32 ArgumentPosition = Reader.Tell();
+	const uint16 ArgumentBytes = Reader.ReadUInt16();
+	if (!Reader.CanRead(ArgumentBytes)) return;
+	Reader.Seek(ArgumentPosition);
 	const FString Arg = Reader.ReadString16L();
 	const FString Msg = ACECombatChat::LookupWeenieErrorWithString(Code, Arg);
 	if (!Msg.IsEmpty())
 	{
-		OnChatMessage.Broadcast(Msg, TEXT(""), (Code == 0x051B || Code == 0x051C)
-			? ACEChatMessageType::System : ACEChatMessageType::TransientInfo);
+		OnChatMessage.Broadcast(Msg, TEXT(""), ACECombatChat::WeenieErrorChatType(Code));
 	}
 }
 
@@ -5738,7 +5741,7 @@ void FACESession::HandleUseDone(FACEBinaryReader& Reader)
 		const FString Msg = ACECombatChat::LookupWeenieError(Err);
 		if (!Msg.IsEmpty())
 		{
-			OnChatMessage.Broadcast(Msg, TEXT(""), ACEChatMessageType::TransientInfo);
+			OnChatMessage.Broadcast(Msg, TEXT(""), ACECombatChat::WeenieErrorChatType(Err));
 		}
 	}
 }

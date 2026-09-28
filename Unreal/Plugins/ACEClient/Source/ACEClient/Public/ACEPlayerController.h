@@ -44,6 +44,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACELoadingTransitionTest;
 	friend class FACEPortalRetirementTest;
 	friend class FACELedgeStairsTest;
+	friend class FACELedgeSafetyTest;
 	friend class FACEFortTethStairsTest;
 	friend class FACERunSpeedParityTest;
 	friend class FACEMissingDatLoginTest;
@@ -150,7 +151,7 @@ public:
 	 * do not SendUseItem (that interrupts NPC hand-offs).
 	 */
 	void BeginUseApproach(int32 TargetGuid, float DistanceAc, bool bPickupIntoInventory = false,
-		bool bFireActionWhenInRange = true);
+		bool bFireActionWhenInRange = true, int32 PickupAmount = 0);
 	/** Retail F / hand icon: Use selected, or PutItemInContainer for ground loot. */
 	void InteractWithSelectedObject();
 	void InteractWithObject(int32 ObjectGuid);
@@ -304,6 +305,9 @@ protected:
 	double LastApproachUseTime = 0.0;
 	/** True when approach should PutItemInContainer into the player (ground loot). */
 	bool bApproachPickupIntoInventory = false;
+	/** Freeze the stack selection while walking to the item. Zero means the full stack. */
+	int32 ApproachPickupAmount = 0;
+	void SendInventoryPickup(int32 Guid, int32 Amount = 0);
 	/** True when this approach must never send Use (give / server MoveOnly hand-off). */
 	bool bApproachMoveOnly = false;
 	/** Sent Use then local-walk; keep AutoPos until UseDone (idle StopMovement cancels CreateMoveToChain). */

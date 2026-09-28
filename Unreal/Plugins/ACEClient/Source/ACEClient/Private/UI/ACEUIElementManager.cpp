@@ -440,17 +440,15 @@ bool UACEUIElementManager::ViewportToCanvas(
 	{
 		return false;
 	}
-	if (ViewportPos.X < 0.f || ViewportPos.Y < 0.f
-		|| ViewportPos.X >= ViewportSize.X || ViewportPos.Y >= ViewportSize.Y)
-	{
-		return false;
-	}
 	const FVector2D Scale = GetCanvasScale(ViewportSize);
 	const float SX = FMath::Max(KINDA_SMALL_NUMBER, Scale.X);
 	const float SY = FMath::Max(KINDA_SMALL_NUMBER, Scale.Y);
 	OutCanvasX = FMath::FloorToInt(ViewportPos.X / SX);
 	OutCanvasY = FMath::FloorToInt(ViewportPos.Y / SY);
-	return true;
+	// Captured drags still need coordinates beyond the viewport. Ordinary hit
+	// testing continues to reject those points through the return value.
+	return ViewportPos.X >= 0.f && ViewportPos.Y >= 0.f
+		&& ViewportPos.X < ViewportSize.X && ViewportPos.Y < ViewportSize.Y;
 }
 
 void UACEUIElementManager::ClearRoots()
@@ -942,7 +940,9 @@ void UACEUIElementManager::SetActiveElement(const TSharedPtr<FACEUIElement>& Ele
 void UACEUIElementManager::NotifyMouseMove(FVector2D ViewportPos, FVector2D ViewportSize)
 {
 	int32 Cx = 0, Cy = 0;
-	if (!ViewportToCanvas(ViewportPos, ViewportSize, Cx, Cy))
+	if (!ViewportToCanvas(ViewportPos, ViewportSize, Cx, Cy)
+		&& !(ViewportSize.X >= 1.f && ViewportSize.Y >= 1.f && CaptureElement.IsValid()
+			&& (ResizeFloaty.IsValid() || DragFloaty.IsValid())))
 	{
 		return;
 	}

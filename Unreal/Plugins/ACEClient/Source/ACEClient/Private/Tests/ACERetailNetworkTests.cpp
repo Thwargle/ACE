@@ -92,6 +92,35 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     FACEBinaryWriter Missing; Missing.WriteUInt32(0x042C);
     FACEBinaryReader MissingReader(Missing.GetData()); ChatSession.HandleWeenieError(MissingReader);
     TestEqual(TEXT("Missing combat target has readable text"),LastChat,FString(TEXT("Target not acquired.")));
+    // Full wire event: healing at full health must substitute the target name,
+    // then UseDone(success) must release the interaction without a second message.
+    int32 FailureMessages = 0;
+    ChatSession.OnChatMessage.AddLambda([&](const FString&, const FString&, int32) { ++FailureMessages; });
+    auto FailureEvent = [&](uint32 Event, uint32 Code, const TCHAR* Argument)
+    {
+        FACEBinaryWriter W; W.WriteUInt32(0); W.WriteUInt32(1); W.WriteUInt32(Event); W.WriteUInt32(Code);
+        if (Argument) W.WriteString16L(Argument);
+        FACEBinaryReader R(W.GetData()); ChatSession.HandleGameEvent(R);
+    };
+    FailureEvent(ACEGameEvent::WeenieErrorWithString, 0x04FF, TEXT("PlayerName"));
+    TestEqual(TEXT("Full-health packet has the retail healing message"), LastChat, FString(TEXT("PlayerName is already at full health!")));
+    TestEqual(TEXT("Healing failure uses error chat"), ChatType, ACEChatMessageType::ChatError);
+    FailureEvent(ACEGameEvent::UseDone, 0, nullptr);
+    TestEqual(TEXT("Successful completion does not add another error"), FailureMessages, 1);
+    FailureEvent(ACEGameEvent::UseDone, 0x0500, nullptr);
+    TestEqual(TEXT("UseDone also uses the shared failure catalog"), LastChat, FString(TEXT("You aren't ready to heal!")));
+    TestEqual(TEXT("UseDone failure has the retail chat destination"), ChatType, ACEChatMessageType::ChatError);
+    const int32 BeforeSilent = FailureMessages;
+    for (uint32 Code : {0u, 0x003Bu, 0x003Cu, 0x0436u, 0x0511u}) FailureEvent(ACEGameEvent::WeenieError, Code, nullptr);
+    TestEqual(TEXT("Portal and explicitly silent statuses produce no errors"), FailureMessages, BeforeSilent);
+    FACEBinaryWriter Truncated; Truncated.WriteUInt32(0x04FF); Truncated.WriteUInt16(20); Truncated.WriteUInt8('P');
+    FACEBinaryReader TruncatedReader(Truncated.GetData()); ChatSession.HandleWeenieErrorWithString(TruncatedReader);
+    FACEBinaryWriter MissingName; MissingName.WriteUInt32(0x04FF);
+    FACEBinaryReader MissingNameReader(MissingName.GetData()); ChatSession.HandleWeenieErrorWithString(MissingNameReader);
+    TestEqual(TEXT("Truncated string payloads cannot display partial names"), FailureMessages, BeforeSilent);
+    FACEBinaryWriter Banner; Banner.WriteString16L(TEXT("Still a banner"));
+    FACEBinaryReader BannerReader(Banner.GetData()); ChatSession.HandleTransientString(BannerReader);
+    TestEqual(TEXT("Explicit transient messages still use the banner"), ChatType, ACEChatMessageType::TransientInfo);
     for (const auto Channel : {TPair<uint32,int32>(ACETurbineChat::General,ACEChatMessageType::General),
         {ACETurbineChat::Trade,ACEChatMessageType::Trade},{ACETurbineChat::LFG,ACEChatMessageType::LFG},
         {ACETurbineChat::Roleplay,ACEChatMessageType::Roleplay},{ACETurbineChat::Society,ACEChatMessageType::Society}})

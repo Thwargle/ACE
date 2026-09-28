@@ -1,4 +1,5 @@
 #include "Protocol/ACECombatChat.h"
+#include "ACEOpcodes.h"
 #include "Internationalization/Regex.h"
 
 namespace ACECombatChat
@@ -26,7 +27,56 @@ namespace ACECombatChat
 		constexpr uint32 CondOverpower = 0x8;
 	}
 
+	namespace
+	{
+		struct FWeenieErrorEntry
+		{
+			uint32 Code;
+			const TCHAR* Text;
+			int32 ChatType;
+		};
+
 #include "Protocol/ACEWeenieErrorStrings.inl"
+
+		const FWeenieErrorEntry* FindWeenieError(uint32 Code)
+		{
+			static const TMap<uint32, const FWeenieErrorEntry*> Entries = []
+			{
+				TMap<uint32, const FWeenieErrorEntry*> Result;
+				Result.Reserve(UE_ARRAY_COUNT(WeenieErrorEntries));
+				for (const FWeenieErrorEntry& Entry : WeenieErrorEntries) Result.Add(Entry.Code, &Entry);
+				return Result;
+			}();
+			const auto* Found = Entries.Find(Code);
+			return Found ? *Found : nullptr;
+		}
+
+		FString FormatWeenieError(uint32 Code, const FString& Argument)
+		{
+			if (const FWeenieErrorEntry* Entry = FindWeenieError(Code); Entry && Entry->Text)
+			{
+				const FString Template(Entry->Text);
+				if (!Template.Contains(TEXT("%s"))) return Template;
+				// These identifiers carry complete server text, including an empty message.
+				if (Template == TEXT("%s")) return Argument;
+				if (!Argument.IsEmpty())
+				{
+					// A single, non-recursive substitution preserves literal '%' / braces in
+					// names and also handles templates which use the same name more than once.
+					return Template.Replace(TEXT("%s"), *Argument, ESearchCase::CaseSensitive);
+				}
+				// Retail supplies "item" when the salvage name is empty.
+				if (Code == 0x04BF || Code == 0x04C0)
+					return Template.Replace(TEXT("%s"), TEXT("item"));
+			}
+			// Keep diagnostic identifiers out of player-facing chat. Internal failures,
+			// malformed/missing arguments and private-server additions have no safe
+			// specific explanation; do not guess from the supplied name or item string.
+			UE_LOG(LogTemp, Log, TEXT("ACE: Unformatted server failure 0x%04X (%s)"), Code,
+				FindWeenieError(Code) ? TEXT("internal code or missing argument") : TEXT("unknown code"));
+			return TEXT("The server could not complete that action. Please try again.");
+		}
+	}
 
 	FString DamageTypeName(uint32 DamageType)
 	{
@@ -192,75 +242,17 @@ namespace ACECombatChat
 
 	FString LookupWeenieError(uint32 ErrorCode)
 	{
-		if (ErrorCode == 0)
-		{
-			return FString();
-		}
-		if (const FString* Found = GetWeenieErrorStrings().Find(ErrorCode))
-		{
-			return *Found;
-		}
-		return FString::Printf(TEXT("Error 0x%04X"), ErrorCode);
+		return FormatWeenieError(ErrorCode, FString());
 	}
 
 	FString LookupWeenieErrorWithString(uint32 ErrorCode, const FString& Arg)
 	{
-		// 028B carries an error identifier and a substitution argument, not a complete
-		// message. In particular pet-device requirement errors carry just "Summoning".
-		// These templates are the last-retail-client messages in WeenieErrorWithString.
-		const TCHAR* Template = nullptr;
-		switch (ErrorCode)
-		{
-		case 0x0051: Template = TEXT("You fail to affect %s because you are not a player killer!"); break;
-		case 0x0052: Template = TEXT("You fail to affect %s because they are not a player killer!"); break;
-		case 0x0053: Template = TEXT("You fail to affect %s because you have different player killer types!"); break;
-		case 0x04F6: Template = TEXT("%s fails to affect you because they are not a player killer!"); break;
-		case 0x04F7: Template = TEXT("%s fails to affect you because you are not a player killer!"); break;
-		case 0x04F8: Template = TEXT("%s fails to affect you because you have different player killer types!"); break;
-		case 0x001E: case 0x04CE: Template = TEXT("%s is too busy to accept gifts right now."); break;
-		case 0x002B: Template = TEXT("%s cannot carry anymore."); break;
-		case 0x03EF: Template = TEXT("%s is not accepting gifts right now."); break;
-		case 0x04C6: Template = TEXT("You must be %s to use that item's magic."); break;
-		case 0x04C9: Template = TEXT("Your %s is too low to use that item's magic."); break;
-		case 0x04CA: Template = TEXT("Only %s may use that item's magic."); break;
-		case 0x04CB: Template = TEXT("You must have %s specialized to use that item's magic."); break;
-		case 0x04CF: Template = TEXT("%s cannot accept stacked objects. Try giving one at a time."); break;
-		case 0x04D1: Template = TEXT("Your %s skill must be trained, not untrained or specialized, in order to be altered in this way!"); break;
-		case 0x04D2: Template = TEXT("You do not have enough skill credits to specialize your %s skill."); break;
-		case 0x04D4: Template = TEXT("Your %s skill is already untrained!"); break;
-		case 0x04D5: Template = TEXT("You are currently wielding items which require a certain level of %s.  Your %s skill cannot be lowered while you are wielding these items.  Please remove these items and try again."); break;
-		case 0x04D6: Template = TEXT("You have succeeded in specializing your %s skill!"); break;
-		case 0x04D7: Template = TEXT("You have succeeded in lowering your %s skill from specialized to trained!"); break;
-		case 0x04D8: Template = TEXT("You have succeeded in untraining your %s skill!"); break;
-		case 0x04D9: Template = TEXT("Although you cannot untrain your %s skill, you have succeeded in recovering all the experience you had invested in it."); break;
-		case 0x051B: Template = TEXT("You have entered the %s channel."); break;
-		case 0x051C: Template = TEXT("You have left the %s channel."); break;
-		}
-		if (Template) { return FString(Template).Replace(TEXT("%s"), *Arg); }
-		// Only the documented free-text identifiers accept the argument verbatim.
-		if (ErrorCode == 0 || ErrorCode == 0x04DE || ErrorCode == 0x04DF || ErrorCode == 0x055A || ErrorCode == 0x055E)
-		{
-			return Arg;
-		}
-		const FString Base = LookupWeenieError(ErrorCode);
-		if (Arg.IsEmpty())
-		{
-			return Base;
-		}
-		if (Base.Contains(TEXT("%s")) || Base.Contains(TEXT("{0}")))
-		{
-			return Base.Replace(TEXT("%s"), *Arg).Replace(TEXT("{0}"), *Arg);
-		}
-		// Retail string tables use a bare '_' as the name placeholder, e.g.
-		// "_ doesn't know what to do with that." for TradeAiDoesntWant.
-		if (Base.StartsWith(TEXT("_")))
-		{
-			return Arg + Base.Mid(1);
-		}
-		if (Base.Contains(TEXT(" _ ")))
-		{
-			return Base.Replace(TEXT(" _ "), *FString::Printf(TEXT(" %s "), *Arg));
-		}
-		return FString::Printf(TEXT("%s (%s)"), *Base, *Arg);
+		return ErrorCode == 0 ? Arg : FormatWeenieError(ErrorCode, Arg);
+	}
+
+	int32 WeenieErrorChatType(uint32 ErrorCode)
+	{
+		const FWeenieErrorEntry* Entry = FindWeenieError(ErrorCode);
+		return Entry ? Entry->ChatType : ACEChatMessageType::ChatError;
 	}
 }

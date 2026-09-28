@@ -718,7 +718,9 @@ void UACEUIGameplayBinder::TickRefresh()
 		return;
 	}
 	UpdateAutoUILayout();
+	UpdateInventorySplitSelection();
 	UpdateVendorSellSplit();
+	UpdateTradeStackSplit();
 	EnsureOverlays();
 	// "Stay in chat mode after sending" — refocus after the commit's focus clear.
 	Manager->BeginNameLookupPass();
@@ -1841,6 +1843,11 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 	}
 	if (Name == TEXT("TradeSelfTradeButton") || Name == TEXT("AcceptTradeButton"))
 	{
+		if (TradeStackSplit.SourceGuid)
+		{
+			PostInventorySystemMessage(TEXT("Please wait for the stack to finish splitting."));
+			return true;
+		}
 		if (Client && bTradeOpen)
 		{
 			if (Client->GetTradeAcceptedGuid() == Client->GetPlayerGuid()) Client->SendDeclineTrade();
@@ -1856,6 +1863,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 	if (Name == TEXT("TradeResetButton") || Name == TEXT("ResetTradeButton")
 		|| Name == TEXT("TradeClearButton") || Name == TEXT("Trade_ClearAllButon"))
 	{
+		TradeStackSplit = {};
 		if (Client) { Client->SendResetTrade(); }
 		return true;
 	}
@@ -1891,6 +1899,11 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 		if (Name == Slot.Name)
 		{
 			if (!Client) { return true; }
+			if (PendingUseWithSourceGuid)
+			{
+				TryCompletePendingUseWithTarget(ResolvePaperDollUseTarget(Name, Slot.Mask));
+				return true;
+			}
 			for (const FACEWorldObject& Obj : Client->GetEquippedItems())
 			{
 				if (ItemMatchesDollSlot(Obj, Slot.Mask))
@@ -3447,7 +3460,7 @@ void UACEUIGameplayBinder::UseSelectedObject()
 		FACEWorldObject Loot;
 		if (Client->GetWorldObject(LastSelection.Guid, Loot) && Loot.IsWorldLootable())
 		{
-			Client->SendPutItemInContainer(LastSelection.Guid, Client->GetPlayerGuid(), 0);
+			PickupInventoryAmount(LastSelection.Guid);
 		}
 		else
 		{
@@ -4118,10 +4131,18 @@ int32 UACEUIGameplayBinder::GetPendingUseWithSourceGuid() const
 
 bool UACEUIGameplayBinder::IsPendingUseTargetCompatible(int32 TargetGuid) const
 {
+	if (!bPendingKeyboardGive) return IsUseTargetCompatible(PendingUseWithSourceGuid, TargetGuid);
 	if (!Client) return false;
 	FACEWorldObject Source, Target;
 	if (!Client->GetWorldObject(PendingUseWithSourceGuid,Source) || !Client->GetWorldObject(TargetGuid,Target)) return false;
-	if(bPendingKeyboardGive)return Client->IsOwnedInventoryItem(Source) && TargetGuid!=Client->GetPlayerGuid() && Target.IsGiveOrCreatureTarget();
+	return Client->IsOwnedInventoryItem(Source) && TargetGuid!=Client->GetPlayerGuid() && Target.IsGiveOrCreatureTarget();
+}
+
+bool UACEUIGameplayBinder::IsUseTargetCompatible(int32 SourceGuid, int32 TargetGuid) const
+{
+	if (!Client) return false;
+	FACEWorldObject Source, Target;
+	if (!Client->GetWorldObject(SourceGuid, Source) || !Client->GetWorldObject(TargetGuid, Target)) return false;
 	auto Owned = [&](FACEWorldObject Object)
 	{
 		TSet<int32> Visited;
@@ -4152,6 +4173,17 @@ int32 UACEUIGameplayBinder::FindUpperEquippedItem(int64 Mask) const
 	return Guid;
 }
 
+int32 UACEUIGameplayBinder::ResolvePaperDollUseTarget(const FString& SlotName, int64 Mask) const
+{
+	if (!Client) return 0;
+	// gmPaperDollUI::ListenToElementMessage targets GetPlayerID() in target mode,
+	// even when the silhouette's body mask identifies a worn item. This lets the
+	// server distribute a charged mana stone across equipped items just like a
+	// world-model click. Visible slots still target only the item in that slot.
+	if (!bShowPaperdollSlots && SlotName == TEXT("PaperDoll")) return Client->GetPlayerGuid();
+	return FindUpperEquippedItem(Mask);
+}
+
 int32 UACEUIGameplayBinder::GetInventoryTargetAt(FVector2D Absolute) const
 {
 	if (!Client || !Canvas || !Manager || ActivePanelPage != TEXT("InventoryPanel_Field")) return 0;
@@ -4161,12 +4193,11 @@ int32 UACEUIGameplayBinder::GetInventoryTargetAt(FVector2D Absolute) const
 	FString SlotName; int64 Mask=0;
 	if (HitTestDollSlot(Absolute,SlotName,Mask))
 	{
-		if (const int32 Worn = FindUpperEquippedItem(Mask)) return Worn;
-		return Client->GetPlayerGuid();
+		return ResolvePaperDollUseTarget(SlotName, Mask);
 	}
 	const auto Doll=Manager->FindElementUnder(TEXT("InventoryPanel_Field"),TEXT("PaperDoll"));
 	const FVector2D Local=Canvas->GetCachedGeometry().AbsoluteToLocal(Absolute);
-	if (Doll && Canvas->IsElementExposedAt(Doll,Local))
+	if (!bShowPaperdollSlots && Doll && Canvas->IsElementExposedAt(Doll,Local))
 	{
 		const FVector2D P=Local/Canvas->GetLastScale2D()-FVector2D(Doll->GetScreenOrigin());
 		if (P.X>=0 && P.Y>=0 && P.X<Doll->Width && P.Y<Doll->Height) return Client->GetPlayerGuid();
@@ -4178,6 +4209,7 @@ void UACEUIGameplayBinder::CancelInventoryDrag()
 {
 	if (PaperDollDragTargetIcon) PaperDollDragTargetIcon->SetVisibility(ESlateVisibility::Collapsed);
 	InvDragGuid = 0;
+	InvDragAmount = 0;
 	InvDragShortcutSlot = INDEX_NONE;
 	InvDragIconDid = 0;
 	InvDragSourcePack = 0;
@@ -4347,6 +4379,14 @@ bool UACEUIGameplayBinder::TryBeginInventoryDrag(FVector2D CanvasLocalPos)
 		return false;
 	}
 	const FVector2D Absolute = Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos);
+	// Commit a typed quantity before selection refresh repaints the toolbar.
+	// Slate can deliver focus loss only after this mouse-down handler.
+	if (StackAmountEntry && StackAmountEntry->HasKeyboardFocus())
+		HandleStackAmountCommitted(StackAmountEntry->GetText(), ETextCommit::OnUserMovedFocus);
+	ON_SCOPE_EXIT
+	{
+		if (bInvDragPending && InvDragGuid) InvDragAmount = GetSelectedItemAmount(InvDragGuid);
+	};
 
 	InvDragShortcutSlot = INDEX_NONE;
 	const int32 Index = HitTestShortcutSlot(CanvasLocalPos);
@@ -4513,6 +4553,12 @@ bool UACEUIGameplayBinder::TryBeginInventoryDrag(FVector2D CanvasLocalPos)
 	int64 DollMask = 0;
 	if (HitTestDollSlot(Absolute, DollName, DollMask) && Client)
 	{
+		// Target-mode clicks take precedence over starting a worn-item drag.
+		if (PendingUseWithSourceGuid)
+		{
+			TryCompletePendingUseWithTarget(ResolvePaperDollUseTarget(DollName, DollMask));
+			return true;
+		}
 		for (const FACEWorldObject& Obj : Client->GetEquippedItems())
 		{
 			if (Obj.Guid == FindUpperEquippedItem(DollMask))
@@ -4578,7 +4624,12 @@ void UACEUIGameplayBinder::UpdateInventoryDrag(FVector2D CanvasLocalPos)
 				PaperDollDragTargetIcon = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
 				PaperDollDragTargetIcon->SetPadding(FMargin(0));
 			}
-			const bool bAccept = ACEEquipmentRules::CanWieldInSlot(Item, TargetMask);
+			bool bAccept = ACEEquipmentRules::CanWieldInSlot(Item, TargetMask);
+			if ((Item.ItemType & ACEItemType::ManaStone) || ACEItemUseable::IsTargeted(Item.ItemUseable))
+			{
+				const int32 TargetGuid = ResolvePaperDollUseTarget(TargetName, TargetMask);
+				bAccept = IsUseTargetCompatible(InvDragGuid, TargetGuid);
+			}
 			SetIconDid(PaperDollDragTargetIcon, bAccept ? 0x060011F9 : 0x060011F8);
 			PaperDollDragTargetIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
 			Canvas->PlaceWidgetAtElement(PaperDollDragTargetIcon, TargetElement, 120004);
@@ -4638,6 +4689,10 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		return false;
 	}
 	const int32 Guid = InvDragGuid;
+	FACEWorldObject DraggedItem;
+	const bool bHaveDraggedItem = Client && Client->GetWorldObject(Guid, DraggedItem);
+	const int32 Amount = bHaveDraggedItem ? FMath::Clamp(InvDragAmount > 0 ? InvDragAmount : GetSelectedItemAmount(Guid),
+		1, FMath::Max(1, DraggedItem.StackSize)) : 0;
 	const int32 SourcePack = InvDragSourcePack;
 	const int32 SourceSlot = InvDragSourceSlot;
 	const int32 DragPackSlot = InvDragPackSlotIndex;
@@ -4683,7 +4738,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 			if (ShortcutSource == INDEX_NONE) SelectInventoryGuid(Guid);
 			if (bLootSource)
 			{
-				Client->SendPutItemInContainer(Guid, Client->GetPlayerGuid(), 0);
+				PickupInventoryAmount(Guid, Amount);
 				PlayLocalPickupMotion(PlayerController);
 			}
 			else UseInventoryItem(Guid);
@@ -4721,6 +4776,12 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		AssignInventoryShortcut(Guid, Destination, ShortcutSource);
 		return true;
 	}
+	if (!bHaveDraggedItem) return true;
+	if (Client->GetTradeSelfItems().Contains(Guid))
+	{
+		PostInventorySystemMessage(TEXT("Remove that item from the trade before moving it."));
+		return true;
+	}
 
 	if (ShortcutSource != INDEX_NONE)
 	{
@@ -4748,7 +4809,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		if (HitVendorUi(TEXT("Vendor")) || HitVendorUi(TEXT("VendorPanel"))
 			|| HitVendorUi(TEXT("RootGameplay_FloatyEnvPanel_Field")))
 		{
-			AddInventoryGuidToVendorSellCart(Guid);
+			AddInventoryGuidToVendorSellCart(Guid, Amount);
 			return true;
 		}
 	}
@@ -4770,8 +4831,8 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		if (PendingUseWithSourceGuid != 0 || (Obj.ItemType & ACEItemType::ManaStone) != 0
 			|| ACEItemUseable::IsTargeted(Obj.ItemUseable))
 		{
-			int32 Target = Client->GetPlayerGuid();
-			if (const int32 Worn = FindUpperEquippedItem(DollMask)) Target = Worn;
+			const int32 Target = ResolvePaperDollUseTarget(DollName, DollMask);
+			if (!Target) return true; // An empty equipment slot is not a request to refill everything.
 			if (!PendingUseWithSourceGuid) PendingUseWithSourceGuid = Guid;
 			TryCompletePendingUseWithTarget(Target);
 			return true;
@@ -4821,14 +4882,11 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		if (Loc != 0)
 		{
 			const int32 Stack = Obj.StackSize > 0 ? Obj.StackSize : 1;
-			int32 Amt = SelectedStackAmount;
-			if (LastSelection.Guid != Guid || Amt <= 0)
-			{
-				Amt = Stack;
-			}
-			Amt = FMath::Clamp(Amt, 1, Stack);
+			const int32 Amt = Amount;
 			if (Stack > 1 && Amt < Stack)
 			{
+				TrackInventoryStackSplit(InventorySelectionSplit, Obj, Amt);
+				InventorySelectionSplit.WieldLocation = Loc;
 				Client->SendStackableSplitToWield(Guid, Loc, Amt);
 			}
 			else
@@ -4883,7 +4941,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 			|| HitTradeUi(TEXT("TradeSelfItemsList")) || HitTradeUi(TEXT("TradeOtherItemsList"))
 			|| HitTradeUi(TEXT("RootGameplay_FloatyEnvPanel_Field")))
 		{
-			Client->SendAddToTrade(Guid, 0);
+			AddInventoryGuidToTrade(Guid, Amount);
 			return true;
 		}
 	}
@@ -4917,7 +4975,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		}
 		if (PackGuid != 0)
 		{
-			Client->SendPutItemInContainer(Guid, PackGuid, 0);
+			MoveInventoryAmount(Guid, PackGuid, 0, Amount);
 			if (bLootSource)
 			{
 				PlayLocalPickupMotion(PlayerController);
@@ -4941,7 +4999,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		const int32 Container = SelectedPackGuid != 0 ? SelectedPackGuid
 			: (SourcePack != 0 ? SourcePack : Client->GetPlayerGuid());
 		// Removing the source shifts a later occupied destination one place left.
-		const int32 InsertSlot = DestSlot - ((SourcePack == Container && SourceSlot >= 0
+		const int32 InsertSlot = DestSlot - ((Amount == FMath::Max(1, DraggedItem.StackSize) && SourcePack == Container && SourceSlot >= 0
 			&& SourceSlot < DestSlot && DestGuid != 0) ? 1 : 0);
 		const auto FinishLootPut = [&]()
 		{
@@ -4950,57 +5008,13 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 				PlayLocalPickupMotion(PlayerController);
 			}
 		};
-		if (DestGuid != 0 && DestGuid != Guid)
-		{
-			FACEWorldObject SrcObj, DestObj;
-			const bool bHaveSrc = Client->GetWorldObject(Guid, SrcObj);
-			const bool bHaveDest = Client->GetWorldObject(DestGuid, DestObj);
-			if (bHaveSrc && bHaveDest
-				&& SrcObj.WeenieClassId != 0 && SrcObj.WeenieClassId == DestObj.WeenieClassId
-				&& (SrcObj.MaxStackSize > 1 || DestObj.MaxStackSize > 1))
-			{
-				const int32 DestSize = DestObj.StackSize > 0 ? DestObj.StackSize : 1;
-				const int32 Max = DestObj.MaxStackSize > 0 ? DestObj.MaxStackSize
-					: (SrcObj.MaxStackSize > 0 ? SrcObj.MaxStackSize : 0);
-				const int32 SrcSize = SrcObj.StackSize > 0 ? SrcObj.StackSize : 1;
-				const int32 Room = Max > 1 ? (Max - DestSize) : 0;
-				if (Room > 0)
-				{
-					Client->SendStackableMerge(Guid, DestGuid, FMath::Min(SrcSize, Room));
-					FinishLootPut();
-					return true;
-				}
-				// Same WCID but no stack room → place at this slot (server shifts inventory).
-				Client->SendPutItemInContainer(Guid, Container, FMath::Max(0, InsertSlot));
-				FinishLootPut();
-				return true;
-			}
-			// Inventory→inventory drag is always reorder (retail PutItemInContainer).
-			// UseWithTarget (key on chest, dye on armor, etc.) is double-click → arm dual-use
-			// → click target, or drag onto a world object — never drop-on-grid-cell.
-			Client->SendPutItemInContainer(Guid, Container, FMath::Max(0, InsertSlot));
-			FinishLootPut();
-			return true;
-		}
-		FACEWorldObject SrcForSplit;
-		const int32 SrcStack = (Client->GetWorldObject(Guid, SrcForSplit) && SrcForSplit.StackSize > 0)
-			? SrcForSplit.StackSize : 1;
-		int32 SplitAmt = SelectedStackAmount;
-		if (LastSelection.Guid != Guid || SplitAmt <= 0)
-		{
-			SplitAmt = SrcStack;
-		}
-		SplitAmt = FMath::Clamp(SplitAmt, 1, SrcStack);
-		if (DestGuid == 0 && SrcStack > 1 && SplitAmt < SrcStack)
-		{
-			Client->SendStackableSplitToContainer(Guid, Container, FMath::Max(0, DestSlot), SplitAmt);
-			FinishLootPut();
-			return true;
-		}
-		Client->SendPutItemInContainer(Guid, Container, FMath::Max(0, InsertSlot));
+		if (!MergeInventoryAmount(Guid, DestGuid, Amount))
+			MoveInventoryAmount(Guid, Container, FMath::Max(0, InsertSlot), Amount);
 		FinishLootPut();
 		return true;
 	}
+
+	if (TryDropInExternalContainer(Guid, Amount, Absolute)) return true;
 
 	// Outside inventory panel → give to world target, vendor sell cart, or drop.
 	if (!IsPointerOverInventoryPanel(CanvasLocalPos))
@@ -5107,6 +5121,16 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 					: (Target ? Target->GetACEGuid() : 0);
 				const bool bHaveTarget = TargetGuid != 0
 					&& (bGiveTarget || Client->GetWorldObject(TargetGuid, TargetObj));
+				if (bHaveTarget && TargetGuid == Client->GetPlayerGuid())
+				{
+					if ((Obj.ItemType & ACEItemType::ManaStone) || ACEItemUseable::IsTargeted(Obj.ItemUseable))
+					{
+						if (!PendingUseWithSourceGuid) PendingUseWithSourceGuid = Guid;
+						TryCompletePendingUseWithTarget(TargetGuid);
+					}
+					else MoveInventoryAmount(Guid, TargetGuid, 0, Amount);
+					return true;
+				}
 				if (bHaveTarget && PlayerController->IsVRActive())
 				{
 					const APawn* Pawn = PlayerController->GetPawn();
@@ -5124,23 +5148,26 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 				{
 					if (OpenVendorGuid == TargetGuid)
 					{
-						AddInventoryGuidToVendorSellCart(Guid);
+						AddInventoryGuidToVendorSellCart(Guid, Amount);
 						return true;
 					}
 					PendingVendorSellGuid = Guid;
-					PendingVendorSellAmount = LastSelection.Guid == Guid
-						? SelectedStackAmount : FMath::Max(1, Obj.StackSize);
+					PendingVendorSellAmount = Amount;
 					PlayerController->InteractWithObject(TargetGuid);
+					return true;
+				}
+				if (bHaveTarget && TryOpenTradeForDraggedItem(TargetObj, Guid, Amount)) return true;
+				if (bHaveTarget && MergeInventoryAmount(Guid, TargetGuid, Amount)) return true;
+				if (bHaveTarget && !bGiveTarget && (TargetObj.ItemType & ACEItemType::Container))
+				{
+					if (TargetGuid == OpenLootContainerGuid || TargetGuid == OpenLootSelectedPackGuid)
+						MoveInventoryAmount(Guid, TargetGuid, 0, Amount);
+					else PostInventorySystemMessage(TEXT("You must open the container first."));
 					return true;
 				}
 				if (bGiveTarget)
 				{
-					int32 Amt = SelectedStackAmount;
-					if (LastSelection.Guid != Guid || Amt <= 0)
-					{
-						Amt = FMath::Max(1, Obj.StackSize > 0 ? Obj.StackSize : 1);
-					}
-					Amt = FMath::Max(1, FMath::Clamp(Amt, 1, FMath::Max(1, Obj.StackSize > 0 ? Obj.StackSize : 1)));
+					const int32 Amt = Amount;
 					// Give is not a vendor sell — clear any leftover sell cart / pending drag-sell.
 					PendingVendorSellGuid = 0;
 					VendorSellCart.Reset();
@@ -5173,12 +5200,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 					&& ((TargetObj.ItemType & ACEItemType::Creature) != 0
 						|| TargetObj.bIsPlayer || TargetObj.IsVendor()))
 				{
-					int32 Amt = SelectedStackAmount;
-					if (LastSelection.Guid != Guid || Amt <= 0)
-					{
-						Amt = FMath::Max(1, Obj.StackSize > 0 ? Obj.StackSize : 1);
-					}
-					Amt = FMath::Max(1, FMath::Clamp(Amt, 1, FMath::Max(1, Obj.StackSize > 0 ? Obj.StackSize : 1)));
+					const int32 Amt = Amount;
 					PendingVendorSellGuid = 0;
 					VendorSellCart.Reset();
 					VendorSellSelectedGuid = 0;
@@ -5204,14 +5226,11 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		}
 		{
 			const int32 Stack = Obj.StackSize > 0 ? Obj.StackSize : 1;
-			int32 Amt = SelectedStackAmount;
-			if (LastSelection.Guid != Guid || Amt <= 0)
-			{
-				Amt = Stack;
-			}
-			Amt = FMath::Clamp(Amt, 1, Stack);
+			const int32 Amt = Amount;
 			if (Stack > 1 && Amt < Stack)
 			{
+				TrackInventoryStackSplit(InventorySelectionSplit, Obj, Amt);
+				InventorySelectionSplit.bToWorld = true;
 				Client->SendStackableSplitTo3D(Guid, Amt);
 			}
 			else
@@ -5315,15 +5334,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 		int64 DollMask = 0;
 		if (HitTestDollSlot(Absolute, DollName, DollMask))
 		{
-			for (const FACEWorldObject& Eq : Client->GetEquippedItems())
-			{
-				if (ItemMatchesDollSlot(Eq, DollMask))
-				{
-					TryCompletePendingUseWithTarget(Eq.Guid);
-					return true;
-				}
-			}
-			TryCompletePendingUseWithTarget(Client->GetPlayerGuid());
+			TryCompletePendingUseWithTarget(ResolvePaperDollUseTarget(DollName, DollMask));
 			return true;
 		}
 	}
@@ -5773,7 +5784,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 					constexpr double DoubleClickSeconds = 0.75;
 					if (Guid == LastInvClickGuid && (Now - LastInvClickTime) < DoubleClickSeconds)
 					{
-						Client->SendPutItemInContainer(Guid, Client->GetPlayerGuid(), 0);
+						PickupInventoryAmount(Guid);
 						PlayLocalPickupMotion(PlayerController);
 						LastInvClickGuid = 0;
 						LastInvClickTime = 0.0;
@@ -5977,8 +5988,8 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 
 void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString& Sender, int32 ChatType)
 {
-	// Retail: WeenieError / TransientString messages are the yellow center-top banner that
-	// fades out — they never enter the chat log.
+	// CommunicationTransientString uses the fading center-top banner.
+	// Failure events instead enter chat with their retail message type.
 	if (ChatType == ACEChatMessageType::TransientInfo)
 	{
 		ShowTransientInfo(Text);
@@ -10619,6 +10630,11 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 				// Retail describes the stock here, independently of the split slider.
 				SelObj.StackSize=FMath::Max(1,SelectedStackMax);
 			}
+			else
+			{
+				SelectedStackMax = FMath::Max(1, SelObj.StackSize);
+				SelectedStackAmount = FMath::Clamp(SelectedStackAmount, 1, SelectedStackMax);
+			}
 			const bool bStackable = SelObj.MaxStackSize > 1 || SelObj.StackSize > 1;
 			if (bStackable)
 			{
@@ -14295,7 +14311,7 @@ void UACEUIGameplayBinder::AddInventoryGuidToVendorSellCart(int32 Guid, int32 Am
 	{
 		return;
 	}
-	if (VendorSellSplit.SourceGuid != 0)
+	if (VendorSellSplit.SourceGuid != 0 || TradeStackSplit.SourceGuid != 0)
 	{
 		PostInventorySystemMessage(TEXT("Please wait for the stack to finish splitting."));
 		return;
@@ -14348,16 +14364,10 @@ void UACEUIGameplayBinder::AddInventoryGuidToVendorSellCart(int32 Guid, int32 Am
 			return;
 		}
 		VendorSellSplit.VendorGuid = OpenVendorGuid;
-		VendorSellSplit.SourceGuid = Guid;
-		VendorSellSplit.ContainerGuid = Obj.ContainerId;
-		VendorSellSplit.Wcid = Obj.WeenieClassId;
-		VendorSellSplit.Amount = Amount;
-		VendorSellSplit.OriginalSize = StackSize;
-		VendorSellSplit.Deadline = FPlatformTime::Seconds() + 15.0;
-		for (const auto& Existing : Client->GetWorldObjects()) VendorSellSplit.ExistingGuids.Add(Existing.Guid);
+		TrackInventoryStackSplit(VendorSellSplit, Obj, Amount);
+		Client->SendStackableSplitToContainer(Guid, Obj.ContainerId, 0, Amount);
 		VendorSellCart.RemoveAll([Guid](const auto& Entry) { return Entry.Value == Guid; });
 		VendorSellSelectedGuid = Guid;
-		Client->SendStackableSplitToContainer(Guid, Obj.ContainerId, 0, Amount);
 		ActiveVendorPage = 2;
 		SyncVendorPageVisibility();
 		RefreshVendorOverlays();
@@ -14389,7 +14399,7 @@ void UACEUIGameplayBinder::SellVendorCart(bool bSelectedOnly)
 	{
 		return;
 	}
-	if (VendorSellSplit.SourceGuid != 0)
+	if (VendorSellSplit.SourceGuid != 0 || TradeStackSplit.SourceGuid != 0)
 	{
 		PostInventorySystemMessage(TEXT("Please wait for the stack to finish splitting."));
 		return;
@@ -14450,6 +14460,8 @@ void UACEUIGameplayBinder::SellVendorCart(bool bSelectedOnly)
 
 void UACEUIGameplayBinder::ShowTradePanel(int32 PartnerGuid)
 {
+	if (TradePartnerGuid != PartnerGuid) TradeStackSplit = {};
+	VendorSellSplit = {};
 	TradeSelfOffset = TradeOtherOffset = 0;
 	TradePartnerGuid = PartnerGuid;
 	bTradeOpen = true;
@@ -14462,10 +14474,19 @@ void UACEUIGameplayBinder::ShowTradePanel(int32 PartnerGuid)
 	VendorBuyCart.Reset();
 	SyncEnvPanelMode();
 	RefreshTradeOverlays();
+	if (PendingTradeItemGuid)
+	{
+		const int32 Item = PendingTradeItemGuid, Amount = PendingTradeItemAmount, Partner = PendingTradeItemPartner;
+		PendingTradeItemGuid = PendingTradeItemAmount = PendingTradeItemPartner = 0;
+		if (Partner == PartnerGuid && FPlatformTime::Seconds() < PendingTradeItemDeadline)
+			AddInventoryGuidToTrade(Item, Amount);
+	}
 }
 
 void UACEUIGameplayBinder::HideTradePanel(bool bNotifyServer)
 {
+	TradeStackSplit = {};
+	PendingTradeItemGuid = PendingTradeItemAmount = PendingTradeItemPartner = 0;
 	bTradeOpen = false;
 	RefreshTradeOverlays();
 	TradePartnerGuid = 0;
@@ -14544,6 +14565,11 @@ void UACEUIGameplayBinder::HandleTradeStateChanged(int32 EventType)
 	else if (EventType == CloseTrade)
 	{
 		HideTradePanel(false);
+	}
+	else if (EventType == ResetTrade)
+	{
+		TradeStackSplit = {};
+		RefreshTradeOverlays();
 	}
 	else
 	{

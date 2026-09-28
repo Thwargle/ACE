@@ -19,27 +19,12 @@ void UACEUIGameplayBinder::UpdateVendorSellSplit()
 		return;
 	}
 
-	// Creation, containment and the source's size change can arrive separately.
-	// Require both sides of the split, ignoring pre-existing identical stacks.
-	FACEWorldObject Source;
-	if (!Client->GetWorldObject(VendorSellSplit.SourceGuid, Source)
-		|| Source.ContainerId != VendorSellSplit.ContainerGuid
-		|| Source.StackSize != VendorSellSplit.OriginalSize - VendorSellSplit.Amount) return;
-	int32 NewGuid = 0;
-	for (const auto& Item : Client->GetPackItems(VendorSellSplit.ContainerGuid))
+	const int32 NewGuid = FindCompletedInventoryStackSplit(VendorSellSplit);
+	if (NewGuid == INDEX_NONE)
 	{
-		if (VendorSellSplit.ExistingGuids.Contains(Item.Guid) || Item.WeenieClassId != VendorSellSplit.Wcid
-			|| FMath::Max(1, Item.StackSize) != VendorSellSplit.Amount
-			|| !Client->IsOwnedInventoryItem(Item) || Item.WielderId || Item.CurrentWieldedLocation) continue;
-		if (NewGuid)
-		{
-			// The wire protocol has no split correlation ID. Never guess between two
-			// matching new objects (e.g. simultaneous inventory activity).
-			VendorSellSplit = {};
-			PostInventorySystemMessage(TEXT("The stack split completed. Select the new stack and add it to the sell list."));
-			return;
-		}
-		NewGuid = Item.Guid;
+		VendorSellSplit = {};
+		PostInventorySystemMessage(TEXT("The stack split completed. Select the new stack and add it to the sell list."));
+		return;
 	}
 	if (!NewGuid) return;
 	const int32 Amount = VendorSellSplit.Amount;

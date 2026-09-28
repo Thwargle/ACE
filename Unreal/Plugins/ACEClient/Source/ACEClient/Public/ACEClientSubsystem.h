@@ -681,6 +681,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "ACE|Inventory")
 	TArray<FACEWorldObject> GetPlayerPacks() const;
 
+	/** Retail pickup preference/fallback; explicit inventory drops do not use this.
+	 * Amount == 0 means the whole stack. An existing mergeable stack takes priority. */
+	int32 ResolvePickupContainer(int32 ItemGuid, int32 OpenPackGuid, int32 Amount = 0) const;
+
 	/** F/hand on owned inventory: merge compatible stacks, then place survivors at the front. */
 	bool SortInventoryItem(int32 Guid);
 

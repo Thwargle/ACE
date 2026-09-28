@@ -55,6 +55,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEVRRigTest;
 	friend class FACEVRProtocolTest;
 	friend class UACEVRComponent;
+	friend class AACEPlayerController;
 	friend class FACEChatParityTest;
 	friend class FACEEmoteTest;
 	friend class FACEUILayoutCommandsTest;
@@ -790,15 +791,37 @@ private:
 	int32 PendingVendorSellGuid = 0;
 	int32 PendingVendorSellAmount = INDEX_NONE;
 	/** Retail offers a new server-created stack, never a partial quantity of the source GUID. */
-	struct FVendorSellSplit
+	struct FInventoryStackSplit
 	{
-		int32 VendorGuid = 0, SourceGuid = 0, ContainerGuid = 0, Wcid = 0;
+		int32 SourceGuid = 0, SourceContainerGuid = 0, ContainerGuid = 0, Wcid = 0;
 		int32 Amount = 0, OriginalSize = 0;
+		int64 WieldLocation = 0;
+		bool bToWorld = false;
 		double Deadline = 0;
-		bool bSellWhenReady = false;
 		TSet<int32> ExistingGuids;
 	};
+	struct FVendorSellSplit : FInventoryStackSplit
+	{
+		int32 VendorGuid = 0;
+		bool bSellWhenReady = false;
+	};
 	FVendorSellSplit VendorSellSplit;
+	struct FTradeStackSplit : FInventoryStackSplit { int32 PartnerGuid = 0; };
+	FTradeStackSplit TradeStackSplit;
+	FInventoryStackSplit InventorySelectionSplit;
+	void TrackInventoryStackSplit(FInventoryStackSplit& Split, const FACEWorldObject& Source, int32 Amount);
+	int32 FindCompletedInventoryStackSplit(const FInventoryStackSplit& Split, bool bRequireOwned = true) const;
+	void UpdateInventorySplitSelection();
+	void AddInventoryGuidToTrade(int32 Guid, int32 Amount);
+	void UpdateTradeStackSplit();
+	int32 PendingTradeItemGuid = 0, PendingTradeItemAmount = 0, PendingTradeItemPartner = 0;
+	double PendingTradeItemDeadline = 0;
+	bool TryOpenTradeForDraggedItem(const FACEWorldObject& Target, int32 Guid, int32 Amount);
+	int32 GetSelectedItemAmount(int32 Guid) const;
+	void PickupInventoryAmount(int32 Guid, int32 Amount = 0);
+	void MoveInventoryAmount(int32 Guid, int32 Container, int32 Placement, int32 Amount);
+	bool MergeInventoryAmount(int32 Guid, int32 TargetGuid, int32 Amount);
+	bool TryDropInExternalContainer(int32 Guid, int32 Amount, FVector2D Absolute);
 	/** Dual-use: source item waiting for a target click (GameAction UseWithTarget). */
 	int32 PendingUseWithSourceGuid = 0;
 	bool bPendingKeyboardGive = false;
@@ -1176,6 +1199,8 @@ private:
 
 	/** Inventory item drag (DAT overlays). */
 	int32 InvDragGuid = 0;
+	/** Freeze the selected quantity at pickup; hovering/selection changes cannot change it. */
+	int32 InvDragAmount = 0;
 	int32 InvDragShortcutSlot = INDEX_NONE;
 	int32 HitTestShortcutSlot(FVector2D CanvasLocalPos) const;
 	int32 InvDragIconDid = 0;
@@ -1405,6 +1430,8 @@ private:
 	void RefreshAttributeOverlays();
 	void RefreshSkillOverlays();
 	int32 FindUpperEquippedItem(int64 Mask) const;
+	int32 ResolvePaperDollUseTarget(const FString& SlotName, int64 Mask) const;
+	bool IsUseTargetCompatible(int32 SourceGuid, int32 TargetGuid) const;
 	void RefreshTitleOverlays();
 	void RaiseSelectedStat(int32 Multiplier);
 	void PlaceTextUnder(UTextBlock* Text, const FString& AncestorName, const FString& ElementName,

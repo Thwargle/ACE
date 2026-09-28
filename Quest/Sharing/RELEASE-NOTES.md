@@ -1,43 +1,45 @@
-# AC:Unreal / AC:VR release 83
+# AC:Unreal / AC:VR release 84
 
-Windows desktop, PC VR, and native Quest: **2026.09.27.83**.
-Release number / Android version code: 83. Quest installer revision: 6.
+Windows desktop, PC VR, and native Quest: **2026.09.28.84**.
+Release number / Android version code: 84. Quest installer revision: 6.
 
-## Changes since public release v82
+## Changes since public release v83
 
-### Movement and portals
+### Movement, camera and world loading
 
-- Improve escape from overlapping creatures, including Tuskers and Virindi.
-  Walking away or along a contact can free the player while walls, other
-  creatures, and movement deeper into a creature remain blocked.
-- Improve remote players' stair ascent and descent using the shared player-body
-  sweeps, reducing stops at risers and feet intersecting descending treads.
-- Prevent crowded portal arrivals from being rejected just because creatures
-  occupy the destination. Architecture must still be clear and loaded.
-- Preserve intentional airborne portal destinations and let the player fall to
-  the landing. Only confirmed obstruction with no valid nearby placement can
-  trigger automatic lifestone recovery; unfinished loading is not treated as
-  proof that the player is trapped.
+- Strengthen grounded ledge detection while preserving valid stairs, slopes,
+  deliberate jumps and airborne portal arrivals.
+- Prevent repeated jump presses in midair from restarting the jump animation.
+- Stabilize mouse camera orbit near the overhead pole to prevent inversions.
+- Build bridge and platform collision independently of initial cell visibility,
+  fixing the missing collision after portal entry seen in Empyrean Rescue.
+- Initialize animated scenery's first pose and visibility before its first
+  rendered frame. Hidden parts such as the Bind Stone spikes no longer flash
+  into view during initial loading, and activation animations can still reveal them.
 
-### Shared performance improvements
+### Inventory and interface
 
-- Run gameplay UI refresh once per frame across desktop and VR render paths.
-- Reduce repeated inventory scans, item copies, sorting, vendor filtering and
-  equipment checks. Skip radar brush changes when its appearance is unchanged.
-- Reuse immutable landblock metadata instead of copying nested building and
-  portal data during movement, visibility and scenery queries.
-- Reuse identical ground-support queries within a remote movement substep and
-  use existing entity lookups for selection markers and flashes.
-- Reuse VR gait pose storage and blend animation poses directly into body parts.
-- Apply the final VR body placement once per update, avoiding duplicate updates
-  to body parts and attachments. This also benefits desktop observers of VR users.
-- Add rendering diagnostics for recurring mesh recreation. Quest actor draw
-  caching stays disabled because the native comparison did not show an advantage.
+- Support selected stack quantities when splitting, moving, giving and selling
+  items, including dragging a partial stack into the vendor sell list.
+- Honor the selected destination bag when picking up items unless
+  "Pick up items into main pack" is enabled.
+- Apply mana stones to the player when dropped on the paper doll's body view;
+  target the specific equipment item when dropped on a visible equipment slot.
+- Restore main player vitals resizing and use the retail fill textures at their
+  intended height instead of stretching or cropping them vertically.
+- Cover all 480 known server failure codes with an explicit display policy.
+  Full-health healing kit use now reports the readable full-health message.
+  Internal failures retain a generic user message and detailed diagnostic logging.
+- Expand regression coverage for monster-only versus item-only target cycling.
 
-## Updating
+### Installation and updating
+
+- Skip Visual C++ x64 and GameInput installation when a compatible or newer
+  runtime is already present, avoiding unnecessary prerequisite prompts.
+- Keep the same release version across Windows, PC VR, Quest and the installers.
 
 Use **Updates** in the launcher or download the current installer from the site.
-Existing supported updaters detect release 83. Accounts, settings and retail DAT
+Existing supported updaters detect release 84. Accounts, settings and retail DAT
 files are retained; do not uninstall first. Installation closes the game.
 On Quest, confirm Android's installation prompt, wait for completion, then reopen
 AC:VR from the library. Optional automatic updating remains off by default.
@@ -45,15 +47,10 @@ AC:VR from the library. Optional automatic updating remains off by default.
 No retail DAT files, saved accounts or game-server configuration are bundled.
 This release updates the clients; no new game-server deployment is required.
 
-## Performance and validation notes
+## Validation scope
 
-The prior Yaraq headset captures confirmed one gameplay UI refresh per frame and
-less CPU work in inventory/radar/hotbar refresh. The latest actor-cache comparison
-was approximately 46–50 FPS with menus closed and changing clocks/head views.
-This release does **not** claim 90 FPS or a measured headset FPS gain from the
-newest multipart changes. Those still need an installed-build comparison.
-
-Automated checks cover actual DAT bodies and portal geometry, crowded arrivals,
-intentional drops, remote stairs, animation/attachment equivalence, UI refresh,
-inventory queries, rendering and updater compatibility. They do not establish
-that every live server route or collision report is resolved.
+Regression checks cover real DAT bridge geometry and animated scenery, ledge
+and stair movement, repeated jumps, camera limits, inventory stack operations,
+paper doll targets, pickup destinations, vitals layout, error messages and updates.
+Live gameplay remains useful for confirming reported routes on different servers.
+No new measured headset FPS improvement is claimed by this release.

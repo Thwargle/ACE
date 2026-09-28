@@ -83,6 +83,28 @@
 
 namespace
 {
+// CTransition::transitional_insert/edge_slide retains the previous supported
+// position when a grounded step loses contact. A sloping face alone is not
+// support: its convex edge can touch the side of the foot over an open drop.
+// Center support within StepDown still permits normal stair/ramp descent.
+bool HasLedgeSupport(UWorld& World, UACEDatSubsystem* Dat, const FVector& Feet,
+    float Radius, float StepDown, float Scale, bool bOutdoor, const FCollisionQueryParams& Params)
+{
+    float SupportZ;
+    if (ACEBodySweep::FindFootSupport(World, Feet, Radius, StepDown, Params,
+        SupportZ, 1.f, false, true)) return true;
+    TArray<FHitResult> Hits;
+    ACEBodySweep::TraceGround(World, Hits, Feet + FVector(0,0,1.f),
+        Feet - FVector(0,0,StepDown + .5f), Params);
+    for (const FHitResult& Hit : Hits)
+        if (Hit.bBlockingHit && !ACEBodySweep::IsCreatureBody(Hit)
+            && Hit.ImpactNormal.Z >= .6641741f && Hit.ImpactPoint.Z >= Feet.Z-StepDown)
+            return true;
+    FVector Normal;
+    return bOutdoor && Dat && Dat->SampleOutdoorGroundZ(Feet.X,Feet.Y,Scale,SupportZ,&Normal)
+        && Normal.Z >= .6641741f && SupportZ <= Feet.Z+1.f && SupportZ >= Feet.Z-StepDown;
+}
+
 // The rendered water sheet remains at the heightfield plane. Retail body
 // support is below it by DAT waterDepth; a Chaos sphere/capsule against that
 // sheet would undo the already depth-correct ground sample. While wading,
@@ -1168,7 +1190,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				Client->SetForcePositionReporting(true);
 				if (bApproachPickupIntoInventory)
 				{
-					Client->SendPutItemInContainer(ServerMoveToTargetGuid, Client->GetPlayerGuid(), 0);
+					SendInventoryPickup(ServerMoveToTargetGuid, ApproachPickupAmount);
 					if (APawn* Possessed = GetPawn())
 					{
 						if (UACECharacterAppearanceComponent* App =
@@ -1527,6 +1549,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				}
 			}
 
+			const uint32 SupportedStartCell = Pred.CellId;
 			if (bVR && !VR->IsInputBlocked())
 			{
 				Pred.SetAceFacingFromUnrealDir2D(VR->GetBodyForward());
@@ -1635,6 +1658,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			FVector MovementContactNormal = FVector::ZeroVector;
 			float MovementPenetration = 0.f;
 			bool bMovementLedge = false;
+			TOptional<FCollisionQueryParams> LedgeSupportParams;
 
 			float CapsuleHalfHeight = 88.f;
 			float CapsuleRadius = 34.f;
@@ -1936,8 +1960,11 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				const float StepDownCm = GetStepDownHeightCm();
 				const float WaterDepthDestCm = WaterDat
 					? WaterDat->GetOutdoorWaterDepthCm(Desired.X, Desired.Y, WorldScale) : 0.f;
-				const float RampDropCm = FMath::Clamp(StepDownCm + 8.f, 20.f, StepDownCm + 20.f)
-					+ WaterDepthDestCm;
+				const float RampDropCm = StepDownCm + WaterDepthDestCm;
+				if (!bJumpAirborne && HasLedgeSupport(*World, WaterDat,
+					Current-FVector(0,0,CapsuleHalfHeight), CapsuleRadius,
+					StepDownCm, WorldScale, (SupportedStartCell & 0xFFFFu)<0x100u, SweepParams))
+					LedgeSupportParams = SweepParams;
 
 				// Desktop's step grace can hold feet on a nonexistent floor for
 				// almost a second after sliding off furniture. Tracked locomotion
@@ -2015,7 +2042,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					}
 				};
 
-				auto SampleFeetZ = [&](float X, float Y, float NearFeetZ, float MaxUp, float MaxDown, float& OutFeetZ) -> bool
+				auto SampleFeetZ = [&](float X, float Y, float NearFeetZ, float MaxUp, float MaxDown, float& OutFeetZ,
+					bool bUseRing = true) -> bool
 				{
 					float BestIndoorZ = -TNumericLimits<float>::Max();
 					float BestOutdoorZ = -TNumericLimits<float>::Max();
@@ -2028,7 +2056,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						? !bHaveIndoorHit
 						: (!bHaveIndoorHit && (!bHaveOutdoorHit
 							|| BestOutdoorZ < NearFeetZ + 2.f));
-					if (bNeedRing)
+					if (bUseRing && bNeedRing)
 					{
 						const float Ring = FMath::Max(6.f, CapsuleRadius * 0.45f);
 						const FVector2D Offs[] = {
@@ -2101,6 +2129,23 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						return true;
 					}
 					return false;
+				};
+
+				// Use one support predicate for the destination and ledge tangent.
+				// Offset rays alone can see floor behind an unsupported foot; the
+				// lower sphere validates edge contact without blocking narrow treads.
+				auto SampleWalkingFeet = [&](float X, float Y, float& OutFeetZ)
+				{
+					bool bFound = SampleFeetZ(X,Y,FeetNow,RampClimbCm,RampDropCm,OutFeetZ,false);
+					float SphereZ = FeetNow;
+					if (ACEBodySweep::FindFootSupport(*World,FVector(X,Y,FeetNow),CapsuleRadius,
+						RampDropCm,SweepParams,SphereZ,RampClimbCm,bFound && OutFeetZ<=FeetNow,true)
+						&& (!bFound || SphereZ>OutFeetZ))
+					{
+						OutFeetZ=SphereZ;
+						bFound=true;
+					}
+					return bFound;
 				};
 
 				auto TryStepUp = [&](const FVector& From, const FVector& DesiredEnd, FVector& OutLanded) -> bool
@@ -2401,19 +2446,9 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				};
 
 				float DestFeetZ = FeetNow;
-				bool bHaveRampGround = SampleFeetZ(
-					Desired.X, Desired.Y, FeetNow, RampClimbCm, RampDropCm, DestFeetZ);
-
-                if (!bJumpAirborne)
-                {
-                    float SphereFeetZ=FeetNow;
-                    if (ACEBodySweep::FindFootSupport(*World,FVector(Desired.X,Desired.Y,FeetNow),
-                        CapsuleRadius,RampDropCm,SweepParams,SphereFeetZ,RampClimbCm)
-                        && (!bHaveRampGround || SphereFeetZ>DestFeetZ))
-                    {
-                        DestFeetZ=SphereFeetZ; bHaveRampGround=true;
-                    }
-                }
+				bool bHaveRampGround = bJumpAirborne
+					? SampleFeetZ(Desired.X,Desired.Y,FeetNow,RampClimbCm,RampDropCm,DestFeetZ)
+					: SampleWalkingFeet(Desired.X,Desired.Y,DestFeetZ);
 				FVector Start = Current;
 				// ACE Position / Pred.Location is the cylinder bottom (feet). The pawn actor
 				// is at the capsule center — always add CapsuleHalfHeight when placing End.Z.
@@ -2421,7 +2456,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				const float DesiredCenterZ = DesiredFeetZ + CapsuleHalfHeight;
 				// Retail EdgeSlide / precipice: if destination has no support within StepDown,
 				// try sliding along the ledge tangent instead of hard XY freeze.
-				// Skip while ServerMoveTo outdoors — SampleFeetZ can miss briefly.
+				// All grounded input paths share this check, including Use-approach
+				// and sub-centimeter room-scale corrections.
 				float EndX = Desired.X;
 				float EndY = Desired.Y;
 				// Retail CLandCell::find_env_collisions → Collided on EntirelyWater *landblocks*.
@@ -2432,18 +2468,17 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					bHaveRampGround = SampleFeetZ(
 						EndX, EndY, FeetNow, RampClimbCm, RampDropCm, DestFeetZ);
 				}
-				else if (!bJumpAirborne && !bHaveRampGround && MoveDist2D > 0.5f
-					&& !(bServerMoveToActive && !bIndoorNow))
+				else if (!bJumpAirborne && !bHaveRampGround && MoveDist2D > UE_SMALL_NUMBER)
 				{
 					bMovementLedge = true;
                     const FVector2D Slide = ACELedgeSlide::Resolve(FVector2D(Current.X,Current.Y),
                         FVector2D(Desired.X-Current.X,Desired.Y-Current.Y), [&](const FVector2D& At)
                         {
                             float Z=FeetNow;
-                            return SampleFeetZ(At.X,At.Y,FeetNow,RampClimbCm,RampDropCm,Z);
-                        });
+                            return SampleWalkingFeet(At.X,At.Y,Z);
+                        }, true);
                     EndX=Slide.X; EndY=Slide.Y;
-                    bHaveRampGround=SampleFeetZ(EndX,EndY,FeetNow,RampClimbCm,RampDropCm,DestFeetZ);
+                    bHaveRampGround=SampleWalkingFeet(EndX,EndY,DestFeetZ);
 				}
 				FVector End(EndX, EndY,
 					bJumpAirborne
@@ -2462,8 +2497,12 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				if (!bJumpAirborne)
 				{
 					FHitResult PenHit;
-					if (SweepCapsule(PenHit, Start, Start + FVector(0.f, 0.f, 0.1f))
-						&& PenHit.bStartPenetrating && IsWallHit(PenHit))
+					const bool bStartHit = SweepCapsule(PenHit, Start, Start + FVector(0.f, 0.f, 0.1f));
+					// A server/streaming correction can start inside terrain, including
+					// a walkable floor. Do not roll a successful recovery back into it.
+					if (bStartHit && PenHit.bStartPenetrating && PenHit.PenetrationDepth > .5f
+						&& !ACEBodySweep::IsCreatureBody(PenHit)) LedgeSupportParams.Reset();
+					if (bStartHit && PenHit.bStartPenetrating && IsWallHit(PenHit))
 					{
 						if (bVR)
 						{
@@ -2736,7 +2775,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			}
 
 			Pred.NormalizeOutdoorLandblock();
-			const bool bIndoor = (static_cast<uint32>(Pred.CellId) & 0xFFFFu) >= 0x0100u;
+			bool bIndoor = (static_cast<uint32>(Pred.CellId) & 0xFFFFu) >= 0x0100u;
 
 			// Snap feet to walkable mesh — skipped while airborne so jump arcs aren't crushed.
 			float GroundZ = Desired.Z;
@@ -3090,6 +3129,26 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						}
 					}
 				}
+			}
+
+			// Wall sliding, penetration recovery and the downward sweep can all
+			// change XY after the first ledge test. Commit only a supported result,
+			// as retail edge_slide does, instead of beginning an accidental fall.
+			// Unsupported portal drops and explicit jumps never enter this guard.
+			if (LedgeSupportParams.IsSet() && !bJumpAirborne
+				&& (!bHaveGround || !HasLedgeSupport(*GetWorld(),
+					GetGameInstance()->GetSubsystem<UACEDatSubsystem>(),
+					FVector(Desired.X,Desired.Y,GroundZ), CapsuleRadius, SnapStepDownCm,
+					WorldScale, !bIndoor, LedgeSupportParams.GetValue())))
+			{
+				Desired = Current-FVector(0,0,CapsuleHalfHeight);
+				GroundZ = Desired.Z;
+				Pred.CellId = SupportedStartCell;
+				bIndoor = (SupportedStartCell & 0xFFFFu) >= 0x100u;
+				Pred.SetLocationFromUnreal(Desired,WorldScale);
+				StepHoldSeconds = 0.f;
+				bHaveGround = true;
+				bMovementLedge = true;
 			}
 
 			if (bJumpAirborne)
@@ -3862,8 +3921,10 @@ void AACEPlayerController::BeginJumpCharge()
 	}
 	bJumpCharging = true;
 	bJumpChargeSent = false; // force MoveToState with StandingLongJump
-	// Retail: jumping releases a held chat-pose emote just like directional movement.
-	if (APawn* P = GetPawn())
+	// Retail charge_jump may accumulate the next charge in flight without
+	// replacing Falling. The shared held-action cancellation also clears its
+	// pending/final pose, so only release an emote when charging on the ground.
+	if (APawn* P = GetPawn(); P && !bJumpAirborne)
 	{
 		if (UACECharacterAppearanceComponent* App = P->FindComponentByClass<UACECharacterAppearanceComponent>())
 		{
@@ -6625,6 +6686,7 @@ void AACEPlayerController::ClearServerMoveTo()
 	bResendUseWhenInRange = false;
 	LastApproachUseTime = 0.0;
 	bApproachPickupIntoInventory = false;
+	ApproachPickupAmount = 0;
 	bApproachMoveOnly = false;
 	bAwaitingUseDone = false;
 	ApproachUseSendCount = 0;
@@ -6661,9 +6723,20 @@ void AACEPlayerController::HandleMoveToFailed(uint32 /*Error*/)
 	if (Client) Client->StopMovement();
 }
 
-void AACEPlayerController::BeginUseApproach(int32 TargetGuid, float DistanceAc, bool bPickupIntoInventory,
-	bool bFireActionWhenInRange)
+void AACEPlayerController::SendInventoryPickup(int32 Guid, int32 Amount)
 {
+	if (!Client) return;
+	if (DatGameplayBinder)
+		DatGameplayBinder->PickupInventoryAmount(Guid, Amount);
+	else Client->SendPutItemInContainer(Guid,
+		Client->ResolvePickupContainer(Guid, GameHUDWidget ? GameHUDWidget->GetOpenPackGuid() : 0), 0);
+}
+
+void AACEPlayerController::BeginUseApproach(int32 TargetGuid, float DistanceAc, bool bPickupIntoInventory,
+	bool bFireActionWhenInRange, int32 PickupAmount)
+{
+	ApproachPickupAmount = bPickupIntoInventory
+		? (PickupAmount > 0 ? PickupAmount : (DatGameplayBinder ? DatGameplayBinder->GetSelectedItemAmount(TargetGuid) : 0)) : 0;
 	if (IsVRActive())
 	{
 		FACEWorldObject Target;
@@ -6672,7 +6745,7 @@ void AACEPlayerController::BeginUseApproach(int32 TargetGuid, float DistanceAc, 
 		const FVector Feet = GetPawn()->GetActorLocation() - FVector(0, 0, Capsule->GetScaledCapsuleHalfHeight());
 		if (GetUseCylinderDistanceCm(Target, Feet, Target.Position.ToUnrealLocation(WorldScale)) > DistanceAc * WorldScale + 5.f) return;
 		Client->FlushAutonomousPosition(true);
-		if (bPickupIntoInventory) Client->SendPutItemInContainer(TargetGuid, Client->GetPlayerGuid(), 0);
+		if (bPickupIntoInventory) SendInventoryPickup(TargetGuid, ApproachPickupAmount);
 		else if (bFireActionWhenInRange) Client->SendUseItem(TargetGuid);
 		return;
 	}
@@ -6753,7 +6826,7 @@ void AACEPlayerController::BeginUseApproach(int32 TargetGuid, float DistanceAc, 
 				{
 					if (bPickupIntoInventory)
 					{
-						Client->SendPutItemInContainer(TargetGuid, Client->GetPlayerGuid(), 0);
+						SendInventoryPickup(TargetGuid, ApproachPickupAmount);
 					}
 					else
 					{
@@ -6833,13 +6906,12 @@ void AACEPlayerController::InteractWithObject(int32 ObjectGuid)
 	// F and the hand toolbar share the same server-confirmed inventory operation.
 	if (Client->SortInventoryItem(ObjectGuid)) return;
 
-	// Retail F/hand on an item in an external pack/chest: PutItemInContainer → player main pack
-	// at placement 0 (server merges matching stacks, then places leftovers in the first free slot).
+	// F/hand on external loot shares retail pickup preference and stack handling.
 	if (Obj.ContainerId != 0 && Obj.CurrentWieldedLocation == 0 && Obj.WielderId == 0
 		&& Obj.ParentGuid == 0 && Obj.ContainerId != PlayerGuid)
 	{
-		Client->SendPutItemInContainer(ObjectGuid, PlayerGuid, 0);
-		UE_LOG(LogTemp, Log, TEXT("ACE: Pack→main PutInContainer guid=0x%08X from=0x%08X"),
+		SendInventoryPickup(ObjectGuid);
+		UE_LOG(LogTemp, Log, TEXT("ACE: Loot pickup guid=0x%08X from=0x%08X"),
 			ObjectGuid, Obj.ContainerId);
 		return;
 	}
@@ -6945,7 +7017,7 @@ void AACEPlayerController::BeginServerMoveTo(const FACEObjectMotionState& Motion
 	const bool bKeepMoveOnly = bApproachMoveOnly && !bKeepPickup;
 	const bool bFire = bKeepMoveOnly ? false : (bResendUseWhenInRange || bKeepPickup);
 	// MoveToDistance can be negative (portal overlap UseRadius) — pass through unchanged.
-	BeginUseApproach(Motion.MoveToTargetGuid, Motion.MoveToDistance, bKeepPickup, bFire);
+	BeginUseApproach(Motion.MoveToTargetGuid, Motion.MoveToDistance, bKeepPickup, bFire, ApproachPickupAmount);
 	ServerMoveToFailDistance = Motion.MoveToFailDistance;
 }
 

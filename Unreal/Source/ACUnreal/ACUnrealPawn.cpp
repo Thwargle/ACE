@@ -1,5 +1,6 @@
 #include "ACUnrealPawn.h"
 #include "ACECameraRetail.h"
+#include "ACEOrbitCameraBoom.h"
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Camera/CameraComponent.h"
@@ -48,7 +49,7 @@ AACUnrealPawn::AACUnrealPawn()
 	constexpr float DefaultWorldScale = 100.f;
 	const float CapsuleHalf = 96.f;
 	const float PivotZ = ACECameraRetail::DefaultPivotZAc * DefaultWorldScale;
-	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
+	CameraBoom = CreateDefaultSubobject<UACEOrbitCameraBoom>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(Capsule);
 	CameraBoom->SetRelativeLocation(FVector(0.f, 0.f, PivotZ - CapsuleHalf));
 	CameraBoom->SetRelativeRotation(FRotator(

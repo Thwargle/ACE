@@ -105,7 +105,11 @@ void UACEUIGameplayBinder::PollAdditionalKeyboardActions(APlayerController* PC)
  {
   const int32 Amount=FMath::Clamp(SelectedStackAmount,1,FMath::Max(1,Item.StackSize));
   if(!Item.CanDropToWorld())PostInventorySystemMessage(TEXT("You cannot drop that item."));
-  else if(Amount<Item.StackSize)Client->SendStackableSplitTo3D(Item.Guid,Amount);
+  else if(Amount<Item.StackSize)
+  {
+   TrackInventoryStackSplit(InventorySelectionSplit,Item,Amount);InventorySelectionSplit.bToWorld=true;
+   Client->SendStackableSplitTo3D(Item.Guid,Amount);
+  }
   else Client->SendDropItem(Item.Guid);
  }
  if(Pressed(TEXT("SelectionGive")) && Owned)

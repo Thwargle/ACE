@@ -7,7 +7,8 @@ namespace ACELedgeSlide
     // A perpendicular-to-input nudge alternated sides and moved even when the
     // player was pushing straight into an edge. Never generate reverse motion.
     template<class FSupported>
-    FVector2D Resolve(const FVector2D& Start, const FVector2D& Move, FSupported Supported)
+    FVector2D Resolve(const FVector2D& Start, const FVector2D& Move, FSupported Supported,
+        bool bSlideFromCurrent = false)
     {
         if (Move.IsNearlyZero() || !Supported(Start)) return Start;
         if (Supported(Start+Move)) return Start+Move;
@@ -27,12 +28,17 @@ namespace ACELedgeSlide
             if (!Supported(Edge+Direction*Radius)) Outward+=Direction;
         }
         Outward.Normalize();
-        const FVector2D Remaining=Move*(1-Low);
+        // A capsule still has to resolve its vertical edge contact afterward.
+        // For local movement, project from the current contact (as retail's
+        // precipice_slide/slide_sphere does), not onto the last sliver of floor
+        // where the subsequent downward sweep could push it over the edge.
+        const FVector2D SlideStart=bSlideFromCurrent ? Start : Edge;
+        const FVector2D Remaining=bSlideFromCurrent ? Move : Move*(1-Low);
         const FVector2D Tangent=Remaining-Outward*FMath::Max(0.0,FVector2D::DotProduct(Remaining,Outward));
         if (FVector2D::DotProduct(Tangent,Move)<=0) return Edge;
         for (double Amount : {1.0,0.5,0.25})
         {
-            const FVector2D End=Edge+Tangent*Amount;
+            const FVector2D End=SlideStart+Tangent*Amount;
             if (Supported(End)) return End;
         }
         return Edge;

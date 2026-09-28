@@ -640,8 +640,7 @@ bool AACEWorldEntityActor::ApplyDatAppearanceFromObject(const FACEWorldObject& O
 	const bool bWantCollision = !Object.bIsSelf && !bCreatureLike;
 	// Always cook complex collision for freestanding objects so ethereal doors stay pickable
 	// (QueryOnly Visibility) after open — response channels are set in ApplyPhysicsState.
-	const uint64 HashBefore = Appearance->GetAppliedAppearanceHash();
-	const bool bHadMesh = Appearance->HasAppearance();
+	const uint64 RevisionBefore = Appearance->GetAppearanceRevision();
 	if (Appearance->ApplyWorldObject(Object, WorldScale, bWantCollision))
 	{
 		bUsingDatMesh = true;
@@ -675,10 +674,9 @@ bool AACEWorldEntityActor::ApplyDatAppearanceFromObject(const FACEWorldObject& O
 		{
 			Mesh->SetVisibility(false);
 		}
-		// Only (re)arm default scripts on a real mesh cook — hash-skip ObjDesc spam was
-		// restarting NoDraw/Transparent loops and blinking other players.
-		const bool bMeshRebuilt = !bHadMesh
-			|| Appearance->GetAppliedAppearanceHash() != HashBefore;
+		// Reinitialize visuals on any real mesh cook, including setup/material changes
+		// with the same ObjDesc hash. Duplicate descriptors must not restart effects.
+		const bool bMeshRebuilt = Appearance->GetAppearanceRevision() != RevisionBefore;
 		const bool bNeedScripts = ScriptComponent
 			&& (!ScriptComponent->IsEffectReady() || !ScriptComponent->HasStartedDefaultScripts());
 		if (ScriptComponent && (bMeshRebuilt || bNeedScripts))

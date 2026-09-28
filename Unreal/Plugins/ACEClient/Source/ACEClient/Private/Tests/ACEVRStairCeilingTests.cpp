@@ -193,7 +193,11 @@ bool FACEVRStairCeilingTest::RunTest(const FString&)
     {
      FHitResult Pen;FCollisionQueryParams Q(SCENE_QUERY_STAT(SamsurBody),true,Pawn);
      if(World->SweepSingleByChannel(Pen,At,At+FVector(0,0,.01),FQuat::Identity,ECC_Pawn,FCollisionShape::MakeCapsule(48,90.75),Q) && Pen.bStartPenetrating)
+     {
+      if(Pen.PenetrationDepth>WorstOverlap && Pen.PenetrationDepth>1.f)
+       AddInfo(FString::Printf(TEXT("Samsur overlap slope=%d dt=%.4f turn=%.0f frame=%d position=%s normal=%s depth=%.3f"),S,Dt,Turn,I,*At.ToString(),*Pen.ImpactNormal.ToString(),Pen.PenetrationDepth));
       WorstOverlap=FMath::Max(WorstOverlap,double(Pen.PenetrationDepth));
+     }
     }
    }
   }

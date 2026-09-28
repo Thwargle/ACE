@@ -469,6 +469,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         }
         Manager->SetUiLocked(Locked);
     }
+    TFunction<void()> CheckVitals=[&]()
     {
         TGuardValue<FACEPlayerVitals> SavedVitals(Client->Session->PlayerVitals, Client->Session->PlayerVitals);
         TGuardValue<uint32> SavedOptions(Client->Session->CharacterOptions1, Client->Session->CharacterOptions1);
@@ -484,6 +485,11 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Gameplay->RefreshVitalsOverlays();
             const FString RootName=Side?TEXT("RootGameplay_FloatySideVitals_Field"):TEXT("RootGameplay_FloatyVitals_Field");
             auto Root=Manager->FindElementByName(RootName);
+            // Retail classic_floatyvitals (2100006C) / classic_floatysidevitals (21000075).
+            TestEqual(TEXT("Vital minimum width follows the retail DAT"),Root->MinWidth,Side?360:160);
+            TestEqual(TEXT("Vital maximum width follows the retail DAT"),Root->MaxWidth,Side?3000:610);
+            TestEqual(TEXT("Vital minimum height follows the retail DAT"),Root->MinHeight,Side?26:58);
+            TestEqual(TEXT("Vital maximum height follows the retail DAT"),Root->MaxHeight,Side?26:58);
             const int32 SavedW=Root->UserResizeW,SavedH=Root->UserResizeH;
             const FIntPoint SavedDrag(Root->UserDragX,Root->UserDragY);
             Root->UserDragX+=200-Root->GetScreenOrigin().X;Root->UserDragY+=100-Root->GetScreenOrigin().Y;
@@ -505,10 +511,13 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                     const FVector2D Size=Canvas->GetCachedGeometry().GetLocalSize();
                     TestTrue(TEXT("Vital side grips display the horizontal resize cursor"),Manager->GetWindowCursor(Start,Size)==EMouseCursor::ResizeLeftRight);
                     const FVector2D End=Start+FVector2D(Amount*Canvas->GetLastScale2D().X,25);
-                    Manager->NotifyMouseDown(Start,Size,EKeys::LeftMouseButton);
+                    const FGeometry Geo=Canvas->GetCachedGeometry();
+                    const FVector2D From=Geo.LocalToAbsolute(Start),To=Geo.LocalToAbsolute(End);
+                    Canvas->NativeOnMouseButtonDown(Geo,FPointerEvent(0,From,From,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
                     const auto Captured=Manager->GetCaptureElement();
                     TestTrue(*FString::Printf(TEXT("%s at %.2fx captures its own resize grip (%s)"),*Prefix,UIScale,Captured?*Captured->ElementName:TEXT("none")),Captured==Grip);
-                    Manager->NotifyMouseMove(End,Size);Manager->NotifyMouseUp(End,Size,EKeys::LeftMouseButton);
+                    Canvas->NativeOnMouseMove(Geo,FPointerEvent(0,To,From,{EKeys::LeftMouseButton},EKeys::Invalid,0,FModifierKeysState()));
+                    Canvas->NativeOnMouseButtonUp(Geo,FPointerEvent(0,To,To,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
                 };
                 const int32 StartWidth=Root->Width,Height=Root->Height;
                 const int32 StartRight=Root->GetScreenOrigin().X+Root->Width;
@@ -534,6 +543,23 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 }
                 else TestEqual(TEXT("Stacked meters fill the resized width"),Health->Width,Root->Width-10);
                 Drag(TEXT("RightBorder"),-160);
+                const int32 BeforeBoundsW=Root->UserResizeW;
+                const auto Grip=Manager->FindElementUnder(RootName,Prefix+TEXT("RightBorder"));
+                const FGeometry Geo=Canvas->GetCachedGeometry();
+                const FVector2D From=Geo.LocalToAbsolute(Canvas->LayoutToViewport(FVector2D(Grip->GetScreenOrigin())+FVector2D(2,2)));
+                Canvas->NativeOnMouseButtonDown(Geo,FPointerEvent(0,From,From,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
+                for(int32 Delta:{4000,-4000})
+                {
+                    const FVector2D To=From+FVector2D(Delta*Canvas->GetLastScale2D().X,0);
+                    Canvas->NativeOnMouseMove(Geo,FPointerEvent(0,To,From,{EKeys::LeftMouseButton},EKeys::Invalid,0,FModifierKeysState()));
+                    TestEqual(TEXT("Captured resize reaches retail bounds even outside the viewport"),Root->Width,Delta>0?Root->MaxWidth:Root->MinWidth);
+                    TestEqual(TEXT("Bounded resize cannot change the fixed vital height"),Root->Height,Height);
+                    TestTrue(TEXT("Resize capture survives leaving the viewport"),Manager->GetCaptureElement()==Grip);
+                }
+                const FVector2D Outside=From-FVector2D(4000*Canvas->GetLastScale2D().X,0);
+                Canvas->NativeOnMouseButtonUp(Geo,FPointerEvent(0,Outside,Outside,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
+                TestFalse(TEXT("Releasing outside clears the vital resize capture"),Manager->GetCaptureElement().IsValid());
+                Root->UserResizeW=BeforeBoundsW;UACEUIElementManager::ApplyFloatyResizeLayout(Root);
             }
             Root->UserResizeW=SavedW;Root->UserResizeH=SavedH;
             Root->UserDragX=SavedDrag.X;Root->UserDragY=SavedDrag.Y;
@@ -563,6 +589,13 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                         TestTrue(TEXT("Vital artwork remains inside its meter vertically without stretching"),
                             Paint->Y>=FMath::RoundToInt(Origin.Y*Scale.Y)
                             && Paint->Y+Paint->H<=FMath::RoundToInt((Origin.Y+Meter->Height)*Scale.Y));
+                        if(const auto Border=Canvas->ImageWidgets.FindRef(Node->InstanceId);Border && Paint->Texture.IsValid())
+                        {
+                            const auto Texture=Paint->Texture.Get();
+                            const FVector2D NativeSize(Texture->GetSizeX()*Scale.X,Texture->GetSizeY()*Scale.Y);
+                            TestTrue(TEXT("Vital artwork keeps native DAT pixels for opaque and alpha images"),
+                                FVector2D(Border->Background.ImageSize).Equals(NativeSize,.01));
+                        }
                         if(Percent==0)
                         {
                             auto Layer=Node;while(Layer && Layer->Parent.Pin()!=Meter)Layer=Layer->Parent.Pin();
@@ -596,7 +629,8 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/FString::Printf(TEXT("Automation/RetailParity/Vitals_Closeup%d.png"),int32(Scale))));
             }
         }
-    }
+    };
+    CheckVitals();
     Gameplay->RefreshVitalsOverlays();
     CaptureScreen(TEXT("Vitals_ScaleRestored"));
     Gameplay->SetFloatyVisible(TEXT("OptionsPanel_Field"),false);
@@ -2449,12 +2483,15 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             AddObject(80010,12,false);AddObject(80011,15,false);
             Session.WorldObjects[80010].ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
             Session.WorldObjects[80011].ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
-            const int32 ItemTypes[]={ACEItemType::Misc,ACEItemType::Portal,ACEItemType::Container,ACEItemType::Misc};
-            for(int32 I=0;I<4;++I)
+            const int32 ItemTypes[]={ACEItemType::Misc,ACEItemType::Portal,ACEItemType::Container,ACEItemType::Misc,ACEItemType::Misc};
+            const TCHAR* ItemNames[]={TEXT("Door"),TEXT("Portal"),TEXT("Corpse"),TEXT("Sign"),TEXT("Ground loot")};
+            for(int32 I=0;I<UE_ARRAY_COUNT(ItemTypes);++I)
             {
                 auto NearbyItem=Self;NearbyItem.Guid=80100+I;NearbyItem.bIsPlayer=false;NearbyItem.ItemType=ItemTypes[I];
+                NearbyItem.Name=ItemNames[I];
                 NearbyItem.Position.Location.X+=I+1;NearbyItem.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
                 if(I==0)NearbyItem.ObjectDescriptionFlags|=ACEObjectDescFlag::Door;
+                if(I==2)NearbyItem.ObjectDescriptionFlags|=ACEObjectDescFlag::Corpse;
                 Session.WorldObjects.Add(NearbyItem.Guid,NearbyItem);
             }
             Controller->CycleNearbyTarget(true,0);
@@ -2469,7 +2506,67 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("Item traversal still includes doors"),Client->GetSelectedObject().Guid,80100);
             Controller->CycleNearbyTarget(false,1);
             TestEqual(TEXT("Item traversal still includes portals"),Client->GetSelectedObject().Guid,80101);
-            for(int32 Guid:{80010,80011,80100,80101,80102,80103})Session.WorldObjects.Remove(Guid);
+            // Keep the input sequence out of the already-large screen test's optimizer unit.
+            TFunction<void()> CheckTargetKeys=[&]()
+            {
+                // Exercise the complete physical-key -> action -> PlayerTick -> target path.
+                // Retail CPlayerSystem::SelectNext calls ObjectIsAttackable, which checks
+                // InqType & 0x10 before attackability. v78 omitted that creature check.
+                // Legacy action IDs Semicolon/Apostrophe are NOT their physical bindings:
+                // retail ItemSelectionCommands maps closest=', next=;, previous=L.
+                TGuardValue<TObjectPtr<UACEUIGameplayBinder>> BinderGuard(Controller->DatGameplayBinder,Gameplay);
+                TGuardValue<int32> CombatGuard(Gameplay->CombatMode,1);
+                // This world has no viewport; skip hover-tooltip creation while polling keys.
+                TGuardValue<bool> MouseLookGuard(Controller->bMouseLookActive,true);
+                Controller->PlayerInput=NewObject<UPlayerInput>(Controller);
+                Gameplay->ClearChatEntryFocus();
+                ACEInputBindings::Reload();ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();ACEInputBindings::Commit();
+                auto PressTarget=[&](FKey Key,int32 Expected,const TCHAR* Reason)
+                {
+                    Controller->PlayerInput->FlushPressedKeys();
+                    Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(Key,IE_Pressed,1.f));
+                    // PlayerTick processes input once; pre-processing it would consume JustPressed.
+                    Controller->PlayerTick(.016f);
+                    TestEqual(*FString::Printf(TEXT("%s: key=%s combat=%d"),Reason,*Key.ToString(),Gameplay->CombatMode),
+                        Client->GetSelectedObject().Guid,Expected);
+                };
+                for(int32 Mode:{1,2,4,8}) // peace, melee, missile, magic
+                {
+                    Gameplay->CombatMode=Mode;Client->SelectObject(80104);
+                    PressTarget(EKeys::Apostrophe,80010,TEXT("Closest monster skips all five nearer item types and a peaceful NPC"));
+                    PressTarget(EKeys::Semicolon,80011,TEXT("Next monster moves forward"));
+                    PressTarget(EKeys::Semicolon,80010,TEXT("Next monster wraps without visiting an item"));
+                    PressTarget(EKeys::L,80011,TEXT("Previous monster wraps backwards"));
+                    PressTarget(EKeys::Apostrophe,80010,TEXT("Closest always returns to nearest monster"));
+                    PressTarget(EKeys::Backslash,80100,TEXT("Closest item selects the door"));
+                    for(int32 I=1;I<UE_ARRAY_COUNT(ItemTypes);++I)
+                        PressTarget(EKeys::RightBracket,80100+I,ItemNames[I]);
+                    PressTarget(EKeys::RightBracket,80100,TEXT("Next item wraps without visiting creatures or players"));
+                    PressTarget(EKeys::LeftBracket,80104,TEXT("Previous item wraps backwards"));
+                }
+                // A stale attackable flag cannot turn a dead creature back into a target.
+                Session.WorldObjects[80010].bDying=true;
+                PressTarget(EKeys::Apostrophe,80011,TEXT("Dying creature is excluded"));
+                Session.WorldObjects[80011].bDying=true;Client->SelectObject(80104);
+                PressTarget(EKeys::Apostrophe,80104,TEXT("No monster leaves the selection unchanged"));
+                PressTarget(EKeys::Semicolon,80104,TEXT("No monster never falls back to an item"));
+                Session.WorldObjects[80010].bDying=false;Session.WorldObjects[80011].bDying=false;
+                ACEInputBindings::BeginEdit();
+                ACEInputBindings::Set(ACEInputBindings::Action(TEXT("ClosestMonster")),0,FInputChord(EKeys::F7));
+                ACEInputBindings::Commit();
+                PressTarget(EKeys::Apostrophe,80104,TEXT("Rebinding removes the former closest-monster key"));
+                PressTarget(EKeys::F7,80010,TEXT("Rebound closest-monster key retains its type filter"));
+                ACEInputBindings::BeginEdit();
+                TestTrue(TEXT("Retail target-selection keymap imports"),ACEInputBindings::ImportRetailKeymap(RetailCustomKeymap).bSuccess);
+                ACEInputBindings::Commit();
+                PressTarget(EKeys::Semicolon,80011,TEXT("Imported retail next-monster binding retains its type filter"));
+                PressTarget(EKeys::L,80010,TEXT("Imported retail previous-monster binding retains its direction"));
+                PressTarget(EKeys::Backslash,80100,TEXT("Imported retail item binding remains separate"));
+                Controller->PlayerInput->FlushPressedKeys();
+                ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();ACEInputBindings::Commit();
+            };
+            CheckTargetKeys();
+            for(int32 Guid:{80010,80011,80100,80101,80102,80103,80104})Session.WorldObjects.Remove(Guid);
             Session.Fellowship.Members.Reset();
             for(int32 Guid:{80002,Self.Guid,80001}){FACEFellowshipMember Member;Member.Guid=Guid;Session.Fellowship.Members.Add(Member);}
             Client->SelectObject(80002);Gameplay->CycleKeyboardSelection(TEXT("Fellow"),1);
@@ -2747,6 +2844,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Entry->SetText(FText::FromString(TEXT("2")));Entry->Commit(ETextCommit::OnCleared);
             TestEqual(TEXT("Cancel does not alter the saved target"),Session.DesiredComponents.FindRef(Component.Wcid),5000);
         }
+        #include "ACERetailStackUIFixture.inl"
         // VendorSellUI splits a partial stack before sending a sale: the amount
         // field alone does not stop ACE/GDLE selling the source's entire object.
         [&]()
@@ -3569,6 +3667,85 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Chest armor can be dragged from the 3D model"),Gameplay->TryBeginInventoryDrag(Local));
             TestEqual(TEXT("Drag chooses the outermost equipped item"),Gameplay->InvDragGuid,Armor.Guid);
             Gameplay->CancelInventoryDrag();
+
+            // Keep this fixture out of the already-large screen test's optimized body.
+            TFunction<void()> CheckManaStoneTargets = [&]()
+            {
+            FACEWorldObject ManaStone; ManaStone.Guid=9903; ManaStone.Name=TEXT("Charged mana stone");
+            ManaStone.ItemType=ACEItemType::ManaStone; ManaStone.ItemUseable=0x0A0008;
+            ManaStone.TargetType=ACEItemType::Creature|ACEItemType::Armor|ACEItemType::Clothing;
+            ManaStone.ContainerId=Player.Guid; ManaStone.UiEffects=1;
+            Session.WorldObjects.Add(ManaStone.Guid,ManaStone);
+            auto UseManaAt = [&](const FVector2D& Point, int32 ExpectedTarget, bool bDrop)
+            {
+                Session.ClearPendingUse(); Session.CachedC2SPackets.Reset();
+                Gameplay->CancelPendingUseWith(); Gameplay->CancelInventoryDrag();
+                const FVector2D DropLocal=Canvas->GetCachedGeometry().AbsoluteToLocal(Point);
+                if (bDrop)
+                {
+                    Gameplay->InvDragGuid=ManaStone.Guid;
+                    Gameplay->bInvDragPending=true; Gameplay->bInvDragActive=true;
+                    Gameplay->UpdateInventoryDrag(DropLocal);
+                    if (Gameplay->bShowPaperdollSlots)
+                    {
+                        TestNotNull(TEXT("Mana-stone slot drag shows accept/reject feedback"),Gameplay->PaperDollDragTargetIcon.Get());
+                        if (Gameplay->PaperDollDragTargetIcon)
+                            TestTrue(TEXT("Drop artwork reflects targeted use rather than trying to equip the stone"),
+                                Gameplay->PaperDollDragTargetIcon->Background.GetResourceObject()==Resources->ResolveIconTexture(ExpectedTarget?0x060011F9:0x060011F8));
+                    }
+                    TestTrue(TEXT("Paperdoll consumes the mana-stone drop"),Gameplay->TryFinishInventoryDrag(DropLocal));
+                }
+                else
+                {
+                    Gameplay->UseInventoryItem(ManaStone.Guid);
+                    TestEqual(TEXT("Target cursor agrees with the actual paperdoll use target"),Gameplay->GetInventoryTargetAt(Point),ExpectedTarget);
+                    FPointerEvent Down(0,Point,Point,TSet<FKey>{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState());
+                    FPointerEvent Up(0,Point,Point,TSet<FKey>{},EKeys::LeftMouseButton,0,FModifierKeysState());
+                    Canvas->NativeOnMouseButtonDown(Canvas->GetCachedGeometry(),Down);
+                    Canvas->NativeOnMouseButtonUp(Canvas->GetCachedGeometry(),Up);
+                }
+                int32 Uses=0;
+                for (const auto& Pair:Session.CachedC2SPackets)
+                {
+                    FACEBinaryReader Wire(Pair.Value.Payload); Wire.Skip(16);
+                    if (Wire.ReadUInt32()!=ACEOpcode::GameAction) continue;
+                    Wire.ReadUInt32(); if (Wire.ReadUInt32()!=ACEGameAction::UseWithTarget) continue;
+                    ++Uses;
+                    TestEqual(TEXT("Use packet contains the mana stone"),Wire.ReadUInt32(),uint32(ManaStone.Guid));
+                    TestEqual(TEXT("Model targets self for server distribution; slots target exactly their item"),Wire.ReadUInt32(),uint32(ExpectedTarget));
+                }
+                TestEqual(TEXT("An empty slot cannot accidentally discharge the stone across all gear"),Uses,ExpectedTarget?1:0);
+            };
+            UseManaAt(Absolute,Player.Guid,false);
+            UseManaAt(Absolute,Player.Guid,true);
+            // An empty stone on the model must never pick worn armor to destroy.
+            Session.ClearPendingUse(); Session.CachedC2SPackets.Reset();
+            ManaStone.UiEffects=0; Session.WorldObjects.Add(ManaStone.Guid,ManaStone);
+            Gameplay->UseInventoryItem(ManaStone.Guid);
+            TestTrue(TEXT("Empty stone model click is handled"),Gameplay->TryHandleOverlayClick(
+                Canvas->GetElementLayer()->GetCachedGeometry().AbsoluteToLocal(Absolute),false));
+            TestEqual(TEXT("Empty stone model click never opens armor destruction confirmation"),Gameplay->ManaStoneConfirmSource,0);
+            TestEqual(TEXT("Empty stone model click sends no use request"),Session.CachedC2SPackets.Num(),0);
+            ManaStone.UiEffects=1; Session.WorldObjects.Add(ManaStone.Guid,ManaStone);
+
+            Gameplay->bShowPaperdollSlots=true; Gameplay->RefreshInventoryOverlays();
+            CaptureScreen(TEXT("GameplayManaStoneSlotTargets"));
+            for (const auto& TargetSlot : {TPair<FString,int32>(TEXT("Inv_ChestSlot"),Armor.Guid),
+                {TEXT("Inv_ClothesShirtSlot"),Shirt.Guid},{TEXT("Inv_AbdomenSlot"),0}})
+            {
+                const auto SlotElement=Manager->FindElementUnder(TEXT("InventoryPanel_Field"),TargetSlot.Key);
+                if (!TestTrue(TEXT("Equipment slot has authored geometry"),SlotElement.IsValid())) continue;
+                const FVector2D SlotAbsolute=Canvas->GetElementLayer()->GetCachedGeometry().LocalToAbsolute(
+                    FVector2D(SlotElement->GetScreenOrigin())+FVector2D(SlotElement->Width,SlotElement->Height)*.5);
+                UseManaAt(SlotAbsolute,TargetSlot.Value,false);
+                UseManaAt(SlotAbsolute,TargetSlot.Value,true);
+            }
+            Session.ClearPendingUse(); Gameplay->CancelPendingUseWith();
+            Session.WorldObjects.Remove(ManaStone.Guid);
+            Gameplay->bShowPaperdollSlots=false; Gameplay->RefreshInventoryOverlays();
+            CaptureScreen(TEXT("GameplayEquipmentModelAfterMana"));
+            };
+            CheckManaStoneTargets();
             Armor.WielderId=0; Armor.ContainerId=Player.Guid; Armor.CurrentWieldedLocation=0;
             Session.WorldObjects.Add(Armor.Guid,Armor); Session.CachedC2SPackets.Reset();
             Gameplay->InvDragGuid=Armor.Guid; Gameplay->bInvDragPending=true; Gameplay->bInvDragActive=true;

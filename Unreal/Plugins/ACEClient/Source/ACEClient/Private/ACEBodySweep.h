@@ -376,7 +376,7 @@ namespace ACEBodySweep
     // for airborne landings: using it here lets feet roll off a precipice.
     inline bool FindFootSupport(UWorld& World, const FVector& Feet, float Radius,
         float MaxDown, const FCollisionQueryParams& Params, float& SupportZ, float MaxUp = 0.f,
-        bool bHasLowerTread = false)
+        bool bHasLowerTread = false, bool bRequireWalkableNormal = false)
     {
         constexpr float Clearance=.5f;
         // A wall touching the body's side must not hide the floor from a
@@ -402,7 +402,7 @@ namespace ACEBodySweep
         // retain support at their edges while the sphere still contacts above
         // the landing threshold; flat treads require a walkable sphere contact.
         const bool bWalkableContact=Hit.Normal.Z>=.6641741f
-            || (Hit.ImpactNormal.Z>=.6641741f && Hit.ImpactNormal.Z<.99f && Hit.Normal.Z>.0871557f)
+            || (!bRequireWalkableNormal && Hit.ImpactNormal.Z>=.6641741f && Hit.ImpactNormal.Z<.99f && Hit.Normal.Z>.0871557f)
             // A verified lower tread within StepDown permits descent around
             // the old tread's convex edge. This is clearance along a bounded
             // step, not permission to stand on a wall or roll over a cliff.

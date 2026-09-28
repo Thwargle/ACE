@@ -240,16 +240,15 @@ void UACEScriptComponent::StartDefaultScripts(bool bIsDoor)
 	// leaving SetupDefaultScript=0. Latched empty then skips Claude-style ambient FX forever.
 	if (SetupId != 0)
 	{
-		if (UACEDatSubsystem* Dat = GetDat())
+		UACEDatSubsystem* Dat = GetDat();
+		if (!Dat || !Dat->TryGetSetupRuntimeMetadata(SetupId, SetupDefaultScript, SetupScriptTableId, SetupSoundTableId))
 		{
-			Dat->TryGetSetupRuntimeMetadata(SetupId, SetupDefaultScript, SetupScriptTableId, SetupSoundTableId);
+			// DAT still cold — retry on a later NotifyAppearanceReady.
+			return;
 		}
 	}
-	if (SetupId != 0 && SetupDefaultScript == 0)
-	{
-		// DAT still cold — retry on a later NotifyAppearanceReady.
-		return;
-	}
+	// A loaded setup with no default script is ready too. Treating zero as a
+	// failed load made duplicate descriptors clear animation-driven visibility.
 	bDefaultStarted = true;
 	(void)bIsDoor;
 	// ObjectCreate DefaultScript is a PlayScript enum (e.g. ProjectileCollision=0x5A) for
@@ -295,6 +294,7 @@ void UACEScriptComponent::NotifyAppearanceReady(bool bIsDoor)
 		// Keep LastOrigin too: property refresh is not a reset of distance emission.
 	}
 	StartDefaultScripts(bIsDoor);
+	if (auto* Appearance = GetAppearance()) Appearance->InitializePropAnimationPose();
 	SetPhysicsHidden(bPhysicsHidden);
 	if (ActiveEmitters.Num() == 0 && ActiveScripts.Num() == 0 && ScheduledScripts.Num() == 0 && ActiveSounds.Num() == 0
 		&& Tweens.Num() == 0 && UvScrolls.Num() == 0 && Omega.IsNearlyZero())

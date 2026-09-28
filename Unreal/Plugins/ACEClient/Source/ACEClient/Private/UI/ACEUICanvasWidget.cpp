@@ -465,7 +465,6 @@ void UACEUICanvasWidget::SyncElementRecursive(
 	const bool bStateMedia = RetailState && RetailState->bHasMedia;
 	const uint32 PaintImage = bStateMedia ? RetailState->ImageFileId : Element->ImageFileId;
 	const uint32 PaintAlpha = bStateMedia ? RetailState->AlphaFileId : Element->AlphaFileId;
-	const uint32 PaintMode = bStateMedia ? RetailState->DrawMode : Element->DrawMode;
 
 	const FIntPoint OriginLogical = Element->GetScreenOrigin();
 	const int32 ElX0 = FMath::RoundToInt(static_cast<float>(OriginLogical.X) * LastScaleX);
@@ -702,21 +701,20 @@ void UACEUICanvasWidget::SyncElementRecursive(
 		// Sibling ZLevel is already sorted; adding it again breaks parent/child paint order.
 		const int32 PaintZ = InOutZOrder;
 
-		// LayoutDesc drawMode 1 repeats the source art across the element — panel slabs
-		// (0x06004CC2 over 300x600), window borders, bevels and edge strips are all small
-		// tiles in retail. drawMode 3 stretches, which a plain Image brush already does.
+		// UIRegion::SetImageByDID maps drawMode 1/2/3 to normal/3-alpha/4-alpha
+		// blending, not stretch modes. Graphic::Draw repeats native-size pixels
+		// and clips partial tiles in every mode. This also matters when the image
+		// is LARGER than its region (e.g. a narrow vital's 100px middle strip).
 		ESlateBrushTileType::Type TileType = ESlateBrushTileType::NoTile;
 		FVector2D TileSize = FVector2D::ZeroVector;
-		// DAT scrollbar templates stretch their track placeholder. Preserve the
-		// chain's native link pitch as a window grows, in either orientation.
-		const bool bChainTrack = Element->Type == ACEUI::ElementType::Scrollbar
-			&& (PaintImage == 0x06004C5Fu || PaintImage == 0x06004C7Fu);
-		if ((PaintMode == 1 || bChainTrack) && Tex)
+		// The optional floating health image is replacement artwork sized by its
+		// own presenter; the ordinary DAT canvas follows retail's image semantics.
+		if (Tex && !Element->bFloatingHealthArtwork)
 		{
 			const float TexW = FMath::Max(1.f, static_cast<float>(Tex->GetSizeX()) * LastScaleX);
 			const float TexH = FMath::Max(1.f, static_cast<float>(Tex->GetSizeY()) * LastScaleY);
-			const bool bTileX = static_cast<float>(ElX1 - ElX0) > TexW;
-			const bool bTileY = static_cast<float>(ElY1 - ElY0) > TexH;
+			const bool bTileX = !FMath::IsNearlyEqual(static_cast<float>(ElX1 - ElX0), TexW);
+			const bool bTileY = !FMath::IsNearlyEqual(static_cast<float>(ElY1 - ElY0), TexH);
 			if (bTileX && bTileY)
 			{
 				TileType = ESlateBrushTileType::Both;

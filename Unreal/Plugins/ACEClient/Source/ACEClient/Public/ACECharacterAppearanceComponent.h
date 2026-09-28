@@ -44,6 +44,9 @@ public:
 	/** Reset DefaultAnimLoop clock (portal tunnel re-entry). */
 	void ResetDefaultAnimClock();
 
+	/** Evaluate a newly built prop before rendering, after its setup scripts are ready. */
+	void InitializePropAnimationPose();
+
 	/** Retail examination viewport sequence: independent of world distance/placement. */
 	void SetPreviewAnimation(uint32 AnimationId, bool bAnimate, int32 StartFrame = 0);
 	/** UI captures animate relative to their own camera, outside the playable scene. */
@@ -251,6 +254,7 @@ protected:
 	bool bPreviewCapture = false;
 	int32 PreviewStartFrame = 0;
 	bool bHasMesh = false;
+	bool bNeedsInitialPropPose = false;
 	float LocomotionForward = 0.f;
 	float LocomotionStrafe = 0.f;
 	bool bLocomotionRunning = false;

@@ -390,6 +390,17 @@ void UACECharacterAppearanceComponent::ResetDefaultAnimClock()
 	ResetHookTracking();
 }
 
+void UACECharacterAppearanceComponent::InitializePropAnimationPose()
+{
+	if (!bNeedsInitialPropPose) return;
+	// Retail initializes the motion table's default state before drawing. Its
+	// first-frame hooks can hide parts (e.g. the Bind Stone's four spikes).
+	// Use the normal evaluation path so frame-zero hooks run exactly once and
+	// later use animations can reveal those parts again.
+	TickComponent(0.f, LEVELTICK_All, nullptr);
+	if (bHookTrackValid) bNeedsInitialPropPose = false;
+}
+
 void UACECharacterAppearanceComponent::DispatchCrossedHooks(const TArray<FACEDatAnimationHook>& Hooks)
 {
 	if (Hooks.Num() == 0)
@@ -528,6 +539,7 @@ void UACECharacterAppearanceComponent::ClearAppearance()
 		}
 	}
 	bHasMesh = false;
+	bNeedsInitialPropPose = false;
 	SetupId = 0;
 	MotionTableId = 0;
 	DefaultAnimationId = 0;
@@ -803,6 +815,7 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 
 	HideOwnerPrimitiveMeshes();
 	bHasMesh = true;
+	bNeedsInitialPropPose = bStaticProp && !bIsCorpse && bPlayIdleMotion;
 	AppliedPlacementId = PlacementId;
 	AppliedAppearanceHash = AppearanceHash;
 	++AppearanceRevision;
@@ -1677,7 +1690,8 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 					const float Interval = DistSq <= FMath::Square(4000.f) ? 0.f
 						: Entity && Entity->bIsPlayer ? 1.f / 30.f
 						: DistSq <= FMath::Square(8000.f) ? 1.f / 30.f : 1.f / 15.f;
-					if (DeferredPoseDeltaTime + KINDA_SMALL_NUMBER < Interval)
+					// Never defer the first pose/visibility hooks behind distance throttling.
+					if (bHookTrackValid && DeferredPoseDeltaTime + KINDA_SMALL_NUMBER < Interval)
 					{
 						return;
 					}

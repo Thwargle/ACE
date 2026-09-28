@@ -237,6 +237,63 @@ bool UACEClientSubsystem::IsOwnedInventoryItem(const FACEWorldObject& Object) co
 	return false;
 }
 
+int32 UACEClientSubsystem::ResolvePickupContainer(int32 ItemGuid, int32 OpenPackGuid, int32 Amount) const
+{
+	const int32 Self = GetPlayerGuid();
+	if (!Session || !Self) return 0;
+	const auto& Objects = Session->GetWorldObjects();
+	const auto* Item = Objects.Find(ItemGuid);
+	if (!Item) return Self;
+	Amount = Amount > 0 ? FMath::Min(Amount, FMath::Max(1, Item->StackSize)) : FMath::Max(1, Item->StackSize);
+	const auto Offered = GetTradeSelfItems();
+	const auto OtherOffers = GetTradePartnerItems();
+	TArray<int32> Containers{Self};
+	for (const auto& Pack : GetPlayerPacks())
+		if (Pack.Guid != ItemGuid && ACEInventoryRules::IsContainer(Pack) && !Offered.Contains(Pack.Guid))
+			Containers.Add(Pack.Guid);
+
+	// CPlayerSystem::PlaceInBackpack reads MainPackPreferred (option 0x29).
+	// Only our own open pack is a preference; a corpse/chest is never a destination.
+	const int32 Preferred = !IsCharacterOptionSet(0x29) && Containers.Contains(OpenPackGuid) ? OpenPackGuid : Self;
+	auto UsesPackSlot = [](const FACEWorldObject& Object)
+	{
+		return ACEInventoryRules::IsContainer(Object) || (Object.ItemType & ACEItemType::Container)
+			|| (Object.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot);
+	};
+	const bool bPackItem = UsesPackSlot(*Item);
+	TMap<int32, int32> Counts;
+	TSet<int32> MergeContainers;
+	const bool bCanAutoMerge = !Item->WielderId && !Item->CurrentWieldedLocation
+		&& !IsOwnedInventoryItem(*Item) && !Offered.Contains(ItemGuid) && !OtherOffers.Contains(ItemGuid);
+	for (const auto& Pair : Objects)
+	{
+		const auto& Other = Pair.Value;
+		if (!Containers.Contains(Other.ContainerId) || Other.WielderId || Other.ParentGuid || Other.CurrentWieldedLocation) continue;
+		if (UsesPackSlot(Other) == bPackItem
+			&& (Other.Guid != ItemGuid || Amount < Item->StackSize)) ++Counts.FindOrAdd(Other.ContainerId);
+		if (bCanAutoMerge && !Offered.Contains(Other.Guid) && !OtherOffers.Contains(Other.Guid)
+			&& ACEInventoryRules::MergeAmount(*Item, Other) >= Amount)
+			MergeContainers.Add(Other.ContainerId);
+	}
+	// ItemHolder::AttemptToPlaceInContainer auto-merges across owned packs before
+	// looking for a free slot. This also permits pickup into an otherwise full bag.
+	for (int32 Container : Containers)
+		if (MergeContainers.Contains(Container)) return Container;
+
+	auto HasRoom = [&](int32 Container)
+	{
+		const auto* Object = Objects.Find(Container);
+		if (!Object) return false;
+		const int32 Capacity = bPackItem ? Object->ContainersCapacity : Object->ItemsCapacity;
+		return Capacity == -1 || Counts.FindRef(Container) < Capacity;
+	};
+	if (HasRoom(Preferred)) return Preferred;
+	for (int32 Container : Containers)
+		if (HasRoom(Container)) return Container;
+	// Let the server report the authoritative capacity error if no pack fits.
+	return Self;
+}
+
 bool UACEClientSubsystem::SortInventoryItem(int32 Guid)
 {
 	FACEWorldObject Source;

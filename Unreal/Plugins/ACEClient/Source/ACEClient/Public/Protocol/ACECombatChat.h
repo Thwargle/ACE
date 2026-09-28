@@ -19,6 +19,8 @@ namespace ACECombatChat
 	// Magic damage is sent as system chat rather than the physical-hit event.
 	bool ParseOutgoingSpellDamage(const FString& Text, FString& Target, int32& Amount, bool& Critical);
 
+	// Shared retail failure catalog for 028A, 028B and UseDone.
+	int32 WeenieErrorChatType(uint32 ErrorCode);
 	FString LookupWeenieError(uint32 ErrorCode);
 	FString LookupWeenieErrorWithString(uint32 ErrorCode, const FString& Arg);
 }

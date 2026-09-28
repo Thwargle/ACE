@@ -1434,8 +1434,11 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			{
 				Session.VRCapabilities = VRRelease ? DropCapabilities | 1024u : DropCapabilities & ~1024u;
 				Session.CachedC2SPackets.Reset(); Gameplay->LastInvClickGuid = 0;
-				PointAt(VR->RetailPanel, LocalCenter(Gameplay->InventorySlots[BreadIndex])); VR->Trigger(false, true);
+				Gameplay->SelectInventoryGuid(Bread.Guid);
 				Gameplay->SelectedStackAmount = Amount;
+				PointAt(VR->RetailPanel, LocalCenter(Gameplay->InventorySlots[BreadIndex])); VR->Trigger(false, true);
+				TestEqual(TEXT("VR drag freezes quantity when grabbed"), Gameplay->InvDragAmount, Amount);
+				Gameplay->SelectedStackAmount = 3; // Later toolbar changes cannot alter the release.
 				VR->RightAim->SetWorldLocationAndRotation(FVector(0, 0, 200), FRotator(-45, 180, 0));
 				VR->Trigger(false, false);
 				int32 Drops = 0;
