@@ -1,63 +1,44 @@
-# AC:Unreal / AC:VR release 85
+# AC:Unreal / AC:VR release 86
 
-Windows desktop, PC VR, and native Quest: **2026.09.28.85**.
-Release number / Android version code: 85. Quest installer revision: 6.
+Windows desktop, PC VR, and native Quest: **2026.09.29.86**.
+Release number / Android version code: 86. Quest installer revision: 6.
 
-## Changes since public release v84
+## Changes since public release v85
 
-### Networked player movement
+### Expired portals and stale creatures
 
-- Keep ordinary forward movement continuous when late position packets correct
-  the predicted position, reducing backward steps while running beside friends.
-- Apply visual position corrections through collision so remote players respect
-  walls, stair risers, slopes and ledges. Selection follows the displayed body.
-- Ignore stale airborne position corrections instead of replaying old jump
-  velocity. Queue landing corrections until the simulated body reaches ground.
-- Distinguish genuine portal teleports using the server's teleport sequence,
-  including nearby destinations, while blending normal position corrections.
-- Keep VR body movement on the same buffered timeline as tracked head and hands,
-  removing an additional speed-dependent body delay.
-- Blend tracking recovery into an existing avatar instead of snapping it into
-  place. Newer landing information cannot pull a buffered VR jump to the floor.
-- Prevent ground seating differences from turning small position noise into
-  visible lateral correction.
+- Match retail's 25-second retention of world objects outside the server's
+  interest area, preventing expired summoned portals and old creatures from
+  reappearing when returning to an area.
+- Retire attached visuals, effects, collision and selection state together.
+  Fresh server object descriptions restore valid objects normally.
+- Use cell visibility data and neighboring outdoor landblocks for retention,
+  independent of camera direction. Preserve the player, inventory and equipment.
 
-### Building entrances and visibility
+### Movement through creature swarms
 
-- Update movement cell ownership and collision residency promptly at building
-  entrances to reduce the movement hitch when crossing between inside and outside.
-- Keep terrain collision independent of camera visibility and avoid recreating
-  physics bodies when only collision filters change.
-- Allow airborne transitions into building interiors, including window jumps,
-  so interior geometry remains visible after landing inside.
-
-### Emote transitions
-
-- Use retail's authored transitions from the actual current pose when leaving
-  lying, sitting and other held emotes, including intermediate ready transitions.
-- Finish queued pose transitions before starting subsequent gestures or movement,
-  preventing the body from appearing to levitate upright.
-- Preserve casting, jumping, death and locomotion behavior when an emote ends.
+- Prevent overlapping creature spheres from forcing unrequested sideways
+  movement during walking, running and jumping on desktop and in VR.
+- Allow outward and tangential movement out of overlaps while continuing to
+  check walls, other creatures, stairs and scenery.
+- Apply the correction through shared collision handling, without special
+  behavior tied to one dungeon or location.
 
 ## Updating
 
 Use **Updates** in the launcher or download the current installer from the site.
-Existing supported updaters detect release 85. Accounts, settings and retail DAT
+Existing supported updaters detect release 86. Accounts, settings and retail DAT
 files are retained; do not uninstall first. **Installation closes the game.**
 On Quest, confirm Android's installation prompt, wait for completion, then reopen
 AC:VR from the library. Optional automatic updating remains off by default.
 
 No retail DAT files, saved accounts or game-server configuration are bundled.
-No new game-server deployment is required. Standard movement stays compatible
-with retail servers; extended VR tracking requires a compatible server and client.
+No new game-server deployment is required.
 
 ## Validation scope
 
-Regression coverage includes delayed and jittered movement updates at 30, 90 and
-144 FPS, jumps and landings, slopes, stairs, cliffs, selection alignment, VR
-tracking recovery, desktop/VR observer compatibility, actual DAT building
-entrances and authored emote transitions. Server integration checks verify
-validated root positions and VR pose delivery to subscribed desktop and VR
-observers, without sending extended tracking packets to retail clients.
-These automated checks do not replace live multiplayer or headset acceptance.
+Automated coverage includes portal and creature retirement, server object
+refreshes, inventory preservation, 2,761 deterministic swarm cases, and shared
+desktop/VR wall, stair, ledge and crowded landing regressions using actual DAT
+geometry. These checks do not replace live swarm or headset acceptance.
 No new measured headset FPS improvement is claimed by this release.

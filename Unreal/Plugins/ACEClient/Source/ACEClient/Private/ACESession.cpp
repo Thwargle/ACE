@@ -109,6 +109,7 @@ void FACESession::Disconnect()
 	Characters.Reset();
 	PartialFragments.Reset();
 	WorldObjects.Reset();
+	ObjectVisibilityDeadlines.Reset();
 	ContainerContents.Reset();
 	LoginEquipment.Reset();
 	OpenExternalContainerGuid = 0;
@@ -221,6 +222,7 @@ void FACESession::RequestLogOff()
 
 void FACESession::ClearWorldState()
 {
+	ObjectVisibilityDeadlines.Reset();
 	VRCapabilities = VRSequence = VRPoseSequence = 0; VRPoses.Reset(); VRSpellProfiles.Reset();
 	bLocalVRFeedback = false; LastVRPoseSent = -100.;
 	VRRecoverySequence = VRRecoveryTeleport = 0; VRRecoveryReadyAt = 0; VRRecoveryDuration = 0;
@@ -1610,6 +1612,8 @@ void FACESession::HandlePlayerCreate(FACEBinaryReader& Reader)
 
 void FACESession::UpsertWorldObject(const FACEWorldObject& Object)
 {
+	// A fresh server description re-establishes interest in this incarnation.
+	ObjectVisibilityDeadlines.Remove(Object.Guid);
 	FACEWorldObject Merged = Object;
 	if (const FACEWorldObject* Existing = WorldObjects.Find(Object.Guid))
 	{
@@ -1918,6 +1922,12 @@ void FACESession::HandleObjectDelete(FACEBinaryReader& Reader)
 		return;
 	}
 	const int32 Guid = static_cast<int32>(Reader.ReadUInt32());
+	DeleteWorldObject(Guid);
+}
+
+void FACESession::DeleteWorldObject(int32 Guid)
+{
+	ObjectVisibilityDeadlines.Remove(Guid);
 	// ObjectDelete = leave the 3D world. Keep WorldObjects only for items the player still
 	// owns (main pack / side pack / wielded). Do NOT keep corpse/chest ViewContents rows or
 	// arbitrary ContainerId — that hid lifestones/chests after false inventory parses.
@@ -1948,7 +1958,7 @@ void FACESession::HandleObjectDelete(FACEBinaryReader& Reader)
 				}
 			}
 		}
-		if (bInPlayerPack || Obj->WielderId == PlayerGuid
+		if (bInPlayerPack || (PlayerGuid != 0 && Obj->WielderId == PlayerGuid)
 			|| (PlayerGuid != 0 && Obj->ParentGuid == PlayerGuid))
 		{
 			bKeepInventoryRecord = true;
@@ -1971,6 +1981,43 @@ void FACESession::HandleObjectDelete(FACEBinaryReader& Reader)
 		RemoveFromContainerLists(Guid);
 	}
 	OnObjectDeleted.Broadcast(Guid);
+}
+
+void FACESession::MaintainWorldObjectVisibility(double Now, TFunctionRef<bool(int32)> IsCellInPVS)
+{
+	if (PlayerGuid == 0) return;
+	// Retail CPhysicsObj::prepare_to_leave_visibility and CObjectMaint::UseTime
+	// retain lost objects for 25 seconds. Servers then forget the observer without
+	// sending ObjectDelete. Keeping the descriptor forever resurrects expired
+	// summoned portals (and other removed objects) when terrain streams back in.
+	constexpr double DestructionTime = 25.0;
+	TSet<int32> Expired;
+	for (const auto& Pair : WorldObjects)
+	{
+		const FACEWorldObject& Object = Pair.Value;
+		if (Object.Guid == PlayerGuid || Object.bIsSelf || !Object.bHasPosition
+			|| !Object.Position.IsValid() || Object.ContainerId || Object.ParentGuid || Object.WielderId)
+		{
+			ObjectVisibilityDeadlines.Remove(Pair.Key);
+			continue;
+		}
+		// Expire before considering re-entry: a late return requires a fresh
+		// ObjectCreate, not the descriptor from an earlier visit.
+		if (const double* Deadline = ObjectVisibilityDeadlines.Find(Pair.Key); Deadline && Now >= *Deadline)
+			Expired.Add(Pair.Key);
+		else if (IsCellInPVS(Object.Position.CellId))
+			ObjectVisibilityDeadlines.Remove(Pair.Key);
+		else if (!ObjectVisibilityDeadlines.Contains(Pair.Key))
+			ObjectVisibilityDeadlines.Add(Pair.Key, Now + DestructionTime);
+	}
+	// Wielded visuals follow their remote owner, just as retail's child list does.
+	if (Expired.IsEmpty()) return;
+	TArray<int32> Children;
+	for (const auto& Pair : WorldObjects)
+		if (Expired.Contains(Pair.Value.ParentGuid) || Expired.Contains(Pair.Value.WielderId))
+			Children.Add(Pair.Key);
+	for (int32 Guid : Children) Expired.Add(Guid);
+	for (int32 Guid : Expired) DeleteWorldObject(Guid);
 }
 
 void FACESession::HandleSound(FACEBinaryReader& Reader)
@@ -6436,6 +6483,7 @@ void FACESession::HandleInventoryRemoveObject(FACEBinaryReader& Reader)
 		ShiftContainerPlacementsAfterRemove(PrevContainer, PrevPlacement, bPackSlots);
 	}
 	WorldObjects.Remove(ItemGuid);
+	ObjectVisibilityDeadlines.Remove(ItemGuid);
 	OnObjectDeleted.Broadcast(ItemGuid);
 }
 

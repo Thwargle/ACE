@@ -50,6 +50,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FACELinkStatusChangedDyn, const FACE
 UCLASS()
 class ACECLIENT_API UACEClientSubsystem : public UGameInstanceSubsystem, public FTickableGameObject
 {
+	friend class FACEPortalLifetimeTest;
 	GENERATED_BODY()
 	friend class FACEVRRenderReplicationTest;
 	friend class FACEVRRigTest;
@@ -738,6 +739,12 @@ public:
 	bool IsOwnedInventoryItem(const FACEWorldObject& Object) const;
 private:
 	void TickInventorySort(float DeltaTime);
+	void TickWorldObjectVisibility(float DeltaTime);
+	float VisibilityUpdateSeconds = 0.f;
+	uint32 VisibilityPlayerCell = 0;
+	bool bVisibilitySeesOutside = false;
+	TSet<int32> VisibilityIndoorCells;
+	TMap<uint32, bool> VisibilityCellSeenOutside;
 	int32 SortSourceGuid=0, SortPlayerGuid=0, SortMergeTargetGuid=0;
 	int32 SortExpectedSource=0, SortExpectedTarget=0;
 	float SortWaitSeconds=0.f;

@@ -46,6 +46,7 @@ struct FActiveAceSound
 UCLASS(ClassGroup = (ACE), meta = (BlueprintSpawnableComponent))
 class ACECLIENT_API UACEScriptComponent : public UActorComponent
 {
+	friend class FACEPortalLifetimeTest;
 	friend class FACEInteractionEffectsTest;
 	GENERATED_BODY()
 	friend class FACERetailParticleLightingTest;

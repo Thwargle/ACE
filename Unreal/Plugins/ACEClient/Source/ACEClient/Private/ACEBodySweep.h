@@ -339,7 +339,16 @@ namespace ACEBodySweep
     inline FVector Recover(UWorld& World, const FVector& From, const FVector& Push,
         const FHitResult& Original, const FCollisionShape& Capsule, const FCollisionQueryParams& Params)
     {
+        // Retail CSphere::slide_sphere adjusts requested travel, rather than
+        // displacing the player by the full overlap with a moving creature.
+        // Successive crowd MTDs could shove a stationary/jumping body sideways
+        // by nearly a body diameter. CanEscapeCreature permits tangential or
+        // outward travel from that overlap; the slide solver still blocks
+        // inward movement, and every resulting segment still sweeps walls.
+        // This uses the authored sphere escape proof above. Keep the existing
+        // recovery for fallback/convex bodies that do not implement that proof.
         const bool bCreature=IsCreatureBody(Original);
+        if (bCreature && Cast<USphereComponent>(Original.GetComponent())) return From;
         const FVector Separation=bCreature ? Original.Normal.GetSafeNormal2D()*Push.Size() : Push;
         const FVector Direct=RecoverAlong(World,From,Separation,Original,Capsule,Params);
         if (!Direct.Equals(From,.01f)) return Direct;

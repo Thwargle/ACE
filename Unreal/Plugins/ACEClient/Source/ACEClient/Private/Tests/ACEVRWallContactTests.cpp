@@ -11,6 +11,7 @@
 #include "VR/ACEVRHandCollision.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/SphereComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/InputComponent.h"
 #include "Engine/LocalPlayer.h"
@@ -326,11 +327,13 @@ bool FACEVRWallContactTest::RunTest(const FString&)
  }
  // The reported crowded dungeon floor, using the retail cell at its actual
  // coordinates. Exercise normal movement and a real charged jump while crowded.
- for(uint32 ReportedCell:{0x0143015Fu,0x0143014Fu})
+ for(uint32 ReportedCell:{0x0143015Fu,0x0143014Fu,0x01430171u})
  {
   FACEPosition Seed;Seed.CellId=ReportedCell;Seed.Location=ReportedCell==0x0143015F
-   ? FVector(43.304642,-68.413086,-.002981) : FVector(36.702820,-30.505859,.031020);
+   ? FVector(43.304642,-68.413086,-.002981) : ReportedCell==0x0143014F
+   ? FVector(36.702820,-30.505859,.031020) : FVector(49.011993,-74.999023,0);
   Seed.RotationW=.898748f;Seed.RotationXYZ=FVector(0,0,-.438466);
+  if(ReportedCell==0x01430171){Seed.RotationW=.932723f;Seed.RotationXYZ.Z=-.360594f;}
   auto* ReportedRoom=World->SpawnActor<AACEEnvCellActor>();
   const FVector RoomOrigin=FACEPosition::AceVectorToUnreal(FVector(192,67*192,0),100);
   TestNotNull(TEXT("Reported swarm dungeon geometry exists in retail DAT"),Dat->GetOrBuildEnvCellMesh(ReportedCell,100));
@@ -338,22 +341,34 @@ bool FACEVRWallContactTest::RunTest(const FString&)
   ReportedRoom->SetEnvCellCollisionActive(true);
   const FVector Center=Seed.ToUnrealLocation(100)+FVector(0,0,90.75);
   TArray<AActor*> Bodies;
+  FCollisionQueryParams Environment=Query;
   for(int I=0;I<8;++I)
   {
-   auto* A=World->SpawnActor<AActor>();auto* Body=NewObject<UCapsuleComponent>(A);A->SetRootComponent(Body);
-   Body->InitCapsuleSize(35,85);Body->ComponentTags.Add(TEXT("ACECreatureBody"));Body->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+   auto* A=World->SpawnActor<AActor>();UPrimitiveComponent* Body;
+   if(ReportedCell==0x01430171)
+   {
+    auto* Sphere=NewObject<USphereComponent>(A);Sphere->InitSphereRadius(40);Body=Sphere;
+   }
+   else
+   {
+    auto* CapsuleBody=NewObject<UCapsuleComponent>(A);CapsuleBody->InitCapsuleSize(35,85);Body=CapsuleBody;
+   }
+   A->SetRootComponent(Body);
+   Body->ComponentTags.Add(TEXT("ACECreatureBody"));Body->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
    Body->SetCollisionResponseToAllChannels(ECR_Ignore);Body->SetCollisionResponseToChannel(ECC_Pawn,ECR_Block);Body->RegisterComponent();
    const float Angle=I*PI/4;A->SetActorLocation(Center+FVector(55*FMath::Cos(Angle),55*FMath::Sin(Angle),-10+I));Bodies.Add(A);
+   Environment.AddIgnoredActor(A);
   }
   for(bool Tracked:{false,true})for(bool Run:{false,true})for(bool Jump:{false,true})
   {
    VR->bActive=Tracked;VR->Settings->bRun=Run;Session->SetLocalPosition(Seed);PC->PredictedPose=Seed;
    PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;PC->bJumpAirborne=false;PC->bStandingJumpLocked=false;PC->StepHoldSeconds=0;
-   Pawn->SetActorLocationAndRotation(Center,Seed.ToUnrealQuat());int32 Airborne=0;
+   Pawn->SetActorLocationAndRotation(Center,Seed.ToUnrealQuat());int32 Airborne=0,WallOverlaps=0;
    if(Jump)
    {
     PC->bRunning=Run;PC->bJumpCharging=true;PC->JumpChargeExtent=1;
     PC->ReleaseJump(1,.4f);
+    TestTrue(TEXT("Crowd test submits a real charged jump"),PC->bJumpAirborne);
    }
    if(!Tracked)
    {
@@ -364,6 +379,12 @@ bool FACEVRWallContactTest::RunTest(const FString&)
    {
     VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,175-90.75),Seed.ToUnrealQuat());
     VR->MoveStick=FVector2D(.4,1);PC->PlayerTick(1.f/30);Airborne+=PC->bJumpAirborne?1:0;
+    if(ReportedCell==0x01430171)
+    {
+     const FVector At=Pawn->GetActorLocation();TArray<FHitResult> Contacts;
+     ACEBodySweep::SweepBodyContacts(*World,Contacts,At,At+FVector(0,0,.001),Shape,Environment);
+     WallOverlaps+=Contacts.ContainsByPredicate([](const FHitResult& H){return H.bStartPenetrating && H.PenetrationDepth>.5;});
+    }
    }
    if(!Tracked)
    {
@@ -373,9 +394,13 @@ bool FACEVRWallContactTest::RunTest(const FString&)
    if(!Jump)TestEqual(*FString::Printf(TEXT("Reported swarm floor stays grounded: cell=%08X tracked=%d run=%d"),ReportedCell,Tracked,Run),Airborne,0);
    else
    {
-    TestTrue(TEXT("Crowd test actually launches a jump"),Airborne>0);
+    // At the new location an overlapping sphere can block ascent on the very
+    // first frame. That must settle at the floor, not force a sideways shove
+    // just to manufacture airtime. Preserve the older fixtures' ascent checks.
+    if(ReportedCell!=0x01430171)TestTrue(TEXT("Crowd test actually launches a jump"),Airborne>0);
     TestFalse(*FString::Printf(TEXT("Swarm jump settles and releases input: cell=%08X tracked=%d run=%d feet=%s"),ReportedCell,Tracked,Run,*PC->PredictedPose.Location.ToString()),PC->bJumpAirborne || PC->bStandingJumpLocked);
    }
+   if(ReportedCell==0x01430171)TestEqual(*FString::Printf(TEXT("Hallway swarm never embeds the player: tracked=%d run=%d jump=%d"),Tracked,Run,Jump),WallOverlaps,0);
   }
   for(auto* A:Bodies)A->Destroy();
   ReportedRoom->Destroy();

@@ -65,6 +65,7 @@ DECLARE_MULTICAST_DELEGATE_FourParams(FACEOnCombatFeedback, const FString&, int3
 class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 {
 	friend class FACEVRProtocolTest;
+	friend class FACEPortalLifetimeTest;
 	friend class FACEVRObserverProtocolTest;
 	friend class FACEInteractionRecoveryTest;
 	friend class FACEVRRenderReplicationTest;
@@ -188,6 +189,8 @@ public:
 	/** True while waiting for CharacterList after CharacterLogOff. */
 	bool IsLogOffPending() const { return bLogOffPending; }
 	void Tick(float DeltaSeconds);
+	/** Retail CObjectMaint grace period outside cell/PVS interest, independent of the camera. */
+	void MaintainWorldObjectVisibility(double Now, TFunctionRef<bool(int32)> IsCellInPVS);
 	const TArray<FACEConfirmation>& GetConfirmations() const { return Confirmations; }
 	bool RespondToConfirmation(uint32 Type, uint32 Context, bool Accept);
 
@@ -621,6 +624,8 @@ private:
 	void HandleObjectCreate(FACEBinaryReader& Reader);
 	void HandleObjDescEvent(FACEBinaryReader& Reader);
 	void HandleObjectDelete(FACEBinaryReader& Reader);
+	void DeleteWorldObject(int32 Guid);
+	TMap<int32, double> ObjectVisibilityDeadlines;
 	void HandleSound(FACEBinaryReader& Reader);
 	void HandlePlayerTeleport(FACEBinaryReader& Reader);
 	void ApplyVRWorldSnapshot(FACEBinaryReader& Reader);

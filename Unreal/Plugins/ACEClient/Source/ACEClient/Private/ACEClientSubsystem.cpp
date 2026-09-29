@@ -225,8 +225,60 @@ void UACEClientSubsystem::Tick(float DeltaTime)
 	if (Session)
 	{
 		Session->Tick(DeltaTime);
+		TickWorldObjectVisibility(DeltaTime);
 		TickInventorySort(DeltaTime);
 	}
+}
+
+void UACEClientSubsystem::TickWorldObjectVisibility(float DeltaTime)
+{
+	if (Session->GetState() != EACESessionState::InWorld)
+	{
+		VisibilityPlayerCell = 0;
+		VisibilityCellSeenOutside.Reset();
+		VisibilityUpdateSeconds = 0.f;
+		return;
+	}
+	VisibilityUpdateSeconds += DeltaTime;
+	const uint32 PlayerCell = uint32(Session->GetPlayerPosition().CellId);
+	if (!PlayerCell || (PlayerCell == VisibilityPlayerCell && VisibilityUpdateSeconds < .5f)) return;
+	VisibilityUpdateSeconds = 0.f;
+	auto* Dat = GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
+	if (!Dat || !Dat->IsCellReady()) return;
+	if (PlayerCell != VisibilityPlayerCell)
+	{
+		VisibilityIndoorCells.Reset();
+		bVisibilitySeesOutside = (PlayerCell & 0xFFFFu) < 0x100u;
+		if (!bVisibilitySeesOutside)
+		{
+			FACEDatEnvCell Cell;
+			if (!Dat->LoadEnvCell(PlayerCell, Cell)) return; // Unknown data must not expire live objects.
+			bVisibilitySeesOutside = Cell.SeesOutside();
+			VisibilityIndoorCells.Add(int32(PlayerCell));
+			for (uint16 Visible : Cell.VisibleCells)
+				VisibilityIndoorCells.Add(int32((PlayerCell & 0xFFFF0000u) | Visible));
+		}
+		VisibilityPlayerCell = PlayerCell;
+		if (VisibilityCellSeenOutside.Num() > 256) VisibilityCellSeenOutside.Reset();
+	}
+	// This is server interest (current cell's PVS / neighboring landblocks),
+	// not render visibility, camera direction, occlusion, or graphics draw distance.
+	Session->MaintainWorldObjectVisibility(FPlatformTime::Seconds(), [&](int32 InCell)
+	{
+		const uint32 CellId = uint32(InCell);
+		if (VisibilityIndoorCells.Contains(InCell)) return true;
+		if (!bVisibilitySeesOutside) return false;
+		const int32 DX = int32(CellId >> 24) - int32(PlayerCell >> 24);
+		const int32 DY = int32((CellId >> 16) & 0xFF) - int32((PlayerCell >> 16) & 0xFF);
+		if (FMath::Abs(DX) > 1 || FMath::Abs(DY) > 1) return false;
+		if ((CellId & 0xFFFFu) < 0x100u) return true;
+		if (const bool* SeenOutside = VisibilityCellSeenOutside.Find(CellId)) return *SeenOutside;
+		FACEDatEnvCell Cell;
+		if (!Dat->LoadEnvCell(CellId, Cell)) return true;
+		const bool SeenOutside = Cell.SeesOutside();
+		VisibilityCellSeenOutside.Add(CellId, SeenOutside);
+		return SeenOutside;
+	});
 }
 
 bool UACEClientSubsystem::IsOwnedInventoryItem(const FACEWorldObject& Object) const

@@ -91,7 +91,7 @@ bool FACECreatureEscapeTest::RunTest(const FString&)
     if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
     const auto Player=FCollisionShape::MakeCapsule(48,91.75);
     FCollisionQueryParams Q(SCENE_QUERY_STAT(CreatureEscape),true);
-    for(uint32 Setup:{0x02000964u,0x02000041u})
+    for(uint32 Setup:{0x02000964u,0x02000041u,0x02001121u})
     {
         FACEWorldObject Obj;Obj.Guid=9821;Obj.SetupId=Setup;Obj.ItemType=ACEItemType::Creature;
         Obj.PhysicsState=ACEPhysicsState::Gravity;Obj.bHasPosition=true;
@@ -108,6 +108,8 @@ bool FACECreatureEscapeTest::RunTest(const FString&)
         TestTrue(TEXT("A moving mob can initially overlap the player"),ACEBodySweep::OverlapsBody(*F.World,Start,Player,Q));
         TestFalse(TEXT("Backing out of an overlapping creature remains possible"),ACEBodySweep::Sweep(*F.World,Hit,Start,Start+FVector(5,0,0),Player,Q));
         TestTrue(TEXT("Moving deeper into the creature is still blocked"),ACEBodySweep::Sweep(*F.World,Hit,Start,Start-FVector(5,0,0),Player,Q));
+        TestTrue(TEXT("Authored creature overlap cannot forcibly shove the player"),
+            ACEBodySweep::Recover(*F.World,Start,Hit.Normal*(Hit.PenetrationDepth+.2f),Hit,Player,Q).Equals(Start,.01));
         auto* Wall=F.World->SpawnActor<AActor>();auto* Box=NewObject<UBoxComponent>(Wall);
         Wall->SetRootComponent(Box);Wall->AddInstanceComponent(Box);Box->SetBoxExtent(FVector(10,1000,200));
         Box->SetCollisionEnabled(ECollisionEnabled::QueryOnly);Box->SetCollisionResponseToAllChannels(ECR_Block);Box->RegisterComponent();
