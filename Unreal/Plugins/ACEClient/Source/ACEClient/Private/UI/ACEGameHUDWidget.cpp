@@ -1,4 +1,5 @@
 #include "UI/ACEGameHUDWidget.h"
+#include "ACEHoverTooltipWidget.h"
 #include "UI/ACERetailTextBlock.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
@@ -854,7 +855,7 @@ void UACEGameHUDWidget::BuildRightPanel()
 	// Bottom-edge resize grip: drag to make the panel shorter/taller.
 	PanelResizeGrip = AddArt(OX, OY + 422, 300, 8, DidPanelSideBar, SideBarColor, EACEHudArtTile::Horizontal);
 	MarkLastPiece(false, true);
-	PanelResizeGrip->SetToolTipText(FText::FromString(TEXT("Drag to resize the panel")));
+	UACEHoverTooltipWidget::SetWidgetTooltip(PanelResizeGrip, FText::FromString(TEXT("Drag to resize the panel")));
 	if (UCanvasPanelSlot* GripSlot = Cast<UCanvasPanelSlot>(PanelResizeGrip->Slot))
 	{
 		GripSlot->SetZOrder(50);
@@ -926,7 +927,7 @@ void UACEGameHUDWidget::BuildInventoryWidgets(int32 PanelOX, int32 PanelOY)
 	{
 		UBorder* Cell = AddPanel(S.X, S.Y, 32, 32, BarBackColor);
 		Cell->SetVisibility(ESlateVisibility::Collapsed);
-		Cell->SetToolTipText(FText::FromString(S.Tip));
+		UACEHoverTooltipWidget::SetWidgetTooltip(Cell, FText::FromString(S.Tip));
 		PaperDollSlots.Add(Cell);
 		PaperDollGuids.Add(0);
 	}
@@ -1144,7 +1145,7 @@ void UACEGameHUDWidget::RefreshInventoryUI()
 		{
 			if (Item && !Item->Name.IsEmpty())
 			{
-				Cell->SetToolTipText(FText::FromString(Item->Name));
+				UACEHoverTooltipWidget::SetWidgetTooltip(Cell, FText::FromString(Item->Name));
 			}
 		}
 	}
@@ -1192,7 +1193,7 @@ void UACEGameHUDWidget::RefreshInventoryUI()
 				}
 			}
 		}
-		Tab->SetToolTipText(FText::FromString(TabName));
+		UACEHoverTooltipWidget::SetWidgetTooltip(Tab, FText::FromString(TabName));
 		if (UTexture2D* Tex = UiTex(IconDid))
 		{
 			FButtonStyle Style = Tab->GetStyle();
@@ -1234,13 +1235,13 @@ void UACEGameHUDWidget::RefreshInventoryUI()
 		if (i < PackItems.Num())
 		{
 			SetInventorySlotIcon(IconCell, PackItems[i].IconId, BarBackColor);
-			IconCell->SetToolTipText(FText::FromString(PackItems[i].Name));
+			UACEHoverTooltipWidget::SetWidgetTooltip(IconCell, FText::FromString(PackItems[i].Name));
 			InventoryCellGuids[i] = PackItems[i].Guid;
 		}
 		else
 		{
 			SetInventorySlotIcon(IconCell, 0, BarBackColor);
-			IconCell->SetToolTipText(FText::GetEmpty());
+			UACEHoverTooltipWidget::SetWidgetTooltip(IconCell, FText::GetEmpty());
 			InventoryCellGuids[i] = 0;
 		}
 	}
@@ -1459,7 +1460,7 @@ void UACEGameHUDWidget::BuildChat()
 	// Top-edge resize grip (drag up to grow history).
 	ChatResizeGrip = AddArt(0, 500, 490, 8, DidChatTopBorder, SideBarColor, EACEHudArtTile::Horizontal);
 	MarkLastChatPiece(false, true);
-	ChatResizeGrip->SetToolTipText(FText::FromString(TEXT("Drag up/down to resize chat")));
+	UACEHoverTooltipWidget::SetWidgetTooltip(ChatResizeGrip, FText::FromString(TEXT("Drag up/down to resize chat")));
 	if (UCanvasPanelSlot* GripSlot = Cast<UCanvasPanelSlot>(ChatResizeGrip->Slot))
 	{
 		GripSlot->SetZOrder(50);
@@ -1469,7 +1470,7 @@ void UACEGameHUDWidget::BuildChat()
 	AddArt(0, 583, 490, 17, DidChatEntryField, SideBarColor);
 	ChatTargetButton = AddToolButton(0, 583, 46, 17, TEXT("All"), 7, DidChatTarget);
 	ChatTargetButton->OnClicked.AddDynamic(this, &UACEGameHUDWidget::OnChatTargetClicked);
-	ChatTargetButton->SetToolTipText(FText::FromString(TEXT("Cycle chat filter: All / Speech / Combat / System")));
+	UACEHoverTooltipWidget::SetWidgetTooltip(ChatTargetButton, FText::FromString(TEXT("Cycle chat filter: All / Speech / Combat / System")));
 	UpdateChatTargetButton();
 
 	ChatEntry = WidgetTree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass());
@@ -2014,7 +2015,7 @@ void UACEGameHUDWidget::EnsureAttributeWidgets()
 		const int32 RY = TY + 112 + i * 20;
 		UButton* RowBtn = AddToolButton(TX, RY, 282, 20, TEXT(""), 8, DidAttrRowBg, DidAttrRowBg);
 		RowBtn->SetVisibility(ESlateVisibility::Collapsed);
-		RowBtn->SetToolTipText(FText::FromString(AttrRows[i].Hover));
+		UACEHoverTooltipWidget::SetWidgetTooltip(RowBtn, FText::FromString(AttrRows[i].Hover));
 		switch (i)
 		{
 		case 0: RowBtn->OnClicked.AddDynamic(this, &UACEGameHUDWidget::OnAttrRow0); break;
@@ -2069,18 +2070,18 @@ void UACEGameHUDWidget::EnsureAttributeWidgets()
 
 	AttrRaise10Button = AddToolButton(TX + 260, TY + 282, 30, 26, TEXT(""), 8, DidAttrRaise10, DidAttrRaise10Down);
 	AttrRaise10Button->OnClicked.AddDynamic(this, &UACEGameHUDWidget::OnAttrRaise10);
-	AttrRaise10Button->SetToolTipText(FText::FromString(TEXT("Spend XP to raise ten times.")));
+	UACEHoverTooltipWidget::SetWidgetTooltip(AttrRaise10Button, FText::FromString(TEXT("Spend XP to raise ten times.")));
 	AttrRaise10Button->SetVisibility(ESlateVisibility::Collapsed);
 	MarkLastPiece(false, true);
 	AttrRaise1Button = AddToolButton(TX + 260, TY + 308, 30, 26, TEXT(""), 8, DidAttrRaise1, DidAttrRaise1Down);
 	AttrRaise1Button->OnClicked.AddDynamic(this, &UACEGameHUDWidget::OnAttrRaise1);
-	AttrRaise1Button->SetToolTipText(FText::FromString(TEXT("Spend XP to raise once.")));
+	UACEHoverTooltipWidget::SetWidgetTooltip(AttrRaise1Button, FText::FromString(TEXT("Spend XP to raise once.")));
 	AttrRaise1Button->SetVisibility(ESlateVisibility::Collapsed);
 	MarkLastPiece(false, true);
 	// Extra "Max" control (not in retail footer art) — keep for power users, tucked under raise10.
 	AttrRaiseAllButton = AddToolButton(TX + 260, TY + 334, 30, 16, TEXT("Max"), 7);
 	AttrRaiseAllButton->OnClicked.AddDynamic(this, &UACEGameHUDWidget::OnAttrRaiseAll);
-	AttrRaiseAllButton->SetToolTipText(FText::FromString(TEXT("Spend as much unassigned XP as possible.")));
+	UACEHoverTooltipWidget::SetWidgetTooltip(AttrRaiseAllButton, FText::FromString(TEXT("Spend as much unassigned XP as possible.")));
 	AttrRaiseAllButton->SetVisibility(ESlateVisibility::Collapsed);
 	MarkLastPiece(false, true);
 }
@@ -2381,7 +2382,7 @@ void UACEGameHUDWidget::EnsureWorldMapWidgets()
 		const int32 TX = OX + 14 + static_cast<int32>(U * 257.f) - 6;
 		const int32 TY = OY + 56 + static_cast<int32>(V * 267.f) - 6;
 		UButton* TownBtn = AddToolButton(TX, TY, 12, 12, TEXT(""), 7);
-		TownBtn->SetToolTipText(FText::FromString(Town.Name));
+		UACEHoverTooltipWidget::SetWidgetTooltip(TownBtn, FText::FromString(Town.Name));
 		TownBtn->SetVisibility(ESlateVisibility::Collapsed);
 		WorldMapTownButtons.Add(TownBtn);
 	}
@@ -3051,7 +3052,7 @@ void UACEGameHUDWidget::RefreshSkillsUI()
 			ValueSlot->SetPadding(FMargin(6.f, 0.f, 6.f, 0.f));
 		}
 
-		RowBtn->SetToolTipText(FText::FromString(FString::Printf(
+		UACEHoverTooltipWidget::SetWidgetTooltip(RowBtn, FText::FromString(FString::Printf(
 			TEXT("%s — base %d, %d ranks, %d XP spent\nClick to select, then raise with unassigned XP."),
 			!Sk.Name.IsEmpty() ? *Sk.Name : *DatName, Sk.InitLevel, Sk.Ranks, Sk.XpSpent)));
 		if (UScrollBoxSlot* RowSlot = Cast<UScrollBoxSlot>(SkillsScroll->AddChild(RowBtn)))
@@ -3421,7 +3422,7 @@ void UACEGameHUDWidget::RefreshSpellbookUI()
 			NameSlot->SetVerticalAlignment(VAlign_Center);
 		}
 
-		Row->SetToolTipText(FText::FromString(FString::Printf(TEXT("%s\nDrag onto the combat spell bar to memorize."), *SpellName)));
+		UACEHoverTooltipWidget::SetWidgetTooltip(Row, FText::FromString(FString::Printf(TEXT("%s\nDrag onto the combat spell bar to memorize."), *SpellName)));
 		if (UScrollBoxSlot* RowSlot = Cast<UScrollBoxSlot>(SpellbookScroll->AddChild(Row)))
 		{
 			RowSlot->SetPadding(FMargin(0.f, 1.f));

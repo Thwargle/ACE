@@ -14,6 +14,7 @@
 #include "Framework/Application/SlateUser.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "VR/ACEVRPlatformTextEntry.h"
+#include "VR/ACEVRMenu.h"
 
 bool UACEVRComponent::UsesPlatformKeyboard()
 {
@@ -79,6 +80,13 @@ UWidget* UACEVRComponent::TextEntryUnderPointer(UWidgetInteractionComponent* Poi
 {
 	if (!PC || !Pointer || !RetailPanel) return nullptr;
 	auto* Panel = Pointer->GetHoveredWidgetComponent();
+	if(Panel==GameplayMenuPanel && GameplayMenu && GameplayMenu->TextEntry)
+	{
+		const auto Path=Panel->GetHitWidgetPath(Pointer->Get2DHitLocation(),false);
+		const auto Widget=GameplayMenu->TextEntry->GetCachedWidget();
+		if(Widget.IsValid() && Path.ContainsByPredicate([&](const FWidgetAndPointer& Hit){return Hit.Widget==Widget;}))return GameplayMenu->TextEntry;
+		return nullptr;
+	}
 	if (Panel != RetailPanel && Panel != ChatPanel) return nullptr;
 	// Login/server/account fields use the same explicit native keyboard session
 	// as chat. Otherwise Android's permanent Slate entry can reopen then hide it.

@@ -5,7 +5,7 @@
 #include "Engine/GameInstance.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailStatsTest, "ACE.RetailParity.CharacterStats",
-    EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACERetailStatsTest::RunTest(const FString& Parameters)
 {
     auto* GI = NewObject<UGameInstance>();
@@ -49,6 +49,23 @@ bool FACERetailStatsTest::RunTest(const FString& Parameters)
     FACEActiveEnchantment Debuff=Cook; Debuff.StatModValue=-20;
     Session.ActiveEnchantments={Debuff}; Session.NotifyVitalsChanged();
     TestEqual(TEXT("Skill debuff lowers current, preserves base"), V.Skills[0].Current, V.Skills[0].Base-20);
+
+    Session.ActiveEnchantments.Reset();
+    V.HealthStart=9000; V.HealthRanks=1000;
+    V.StaminaStart=12000; V.StaminaRanks=2000;
+    V.ManaStart=18000; V.ManaRanks=3000;
+    FACEBinaryWriter Gear; Gear.WriteUInt8(1); Gear.WriteUInt32(379); Gear.WriteInt32(750);
+    FACEBinaryReader GearReader(Gear.GetData()); Session.HandlePrivateUpdatePropertyInt(GearReader);
+    TestEqual(TEXT("Large health uses server starts, ranks and gear quality"),V.MaxHealth,10800);
+    TestEqual(TEXT("Large stamina has no retail character cap"),V.MaxStamina,14100);
+    TestEqual(TEXT("Large mana has no retail character cap"),V.MaxMana,21100);
+    End.StatModValue=60; Session.ActiveEnchantments={End}; Session.NotifyVitalsChanged();
+    TestEqual(TEXT("Large pool still follows Endurance buff"),V.MaxHealth,10830);
+    Session.ActiveEnchantments.Reset(); Session.NotifyVitalsChanged();
+    TestEqual(TEXT("Large pool still falls after buff expiry"),V.MaxHealth,10800);
+    FACEBinaryWriter RemoveGear; RemoveGear.WriteUInt8(2); RemoveGear.WriteUInt32(379); RemoveGear.WriteInt32(0);
+    FACEBinaryReader RemoveGearReader(RemoveGear.GetData()); Session.HandlePrivateUpdatePropertyInt(RemoveGearReader);
+    TestEqual(TEXT("Unequipping health rating refreshes immediately"),V.MaxHealth,10050);
 
     for (int32 Kind=0; Kind<4; ++Kind)
     {

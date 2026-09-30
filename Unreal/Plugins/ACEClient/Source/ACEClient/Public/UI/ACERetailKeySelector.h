@@ -21,6 +21,7 @@ public:
  UFUNCTION() void AcceptBinding(FInputChord Chord);
  UFUNCTION() void CaptureStateChanged();
  bool FilterCaptureKey(const FKeyEvent& Event,bool Down);
+ bool FilterCaptureWheel(const FPointerEvent& Event);
  virtual void ReleaseSlateResources(bool ReleaseChildren) override;
 protected:
  virtual TSharedRef<SWidget> RebuildWidget() override;

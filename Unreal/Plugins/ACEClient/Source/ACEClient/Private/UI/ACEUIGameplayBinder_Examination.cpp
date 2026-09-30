@@ -1,3 +1,4 @@
+#include "ACEHoverTooltipWidget.h"
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
@@ -64,11 +65,16 @@ void UACEUIGameplayBinder::RefreshSpellExamination()
 	}
     if (!ExamScroll) ExamScroll=Canvas->WidgetTree->ConstructWidget<UScrollBox>();
     ExamScroll->SetClipping(EWidgetClipping::ClipToBounds);
-    ExamScroll->SetScrollBarVisibility(ESlateVisibility::Visible);
+    ExamScroll->SetScrollBarVisibility(ESlateVisibility::Collapsed);
+    ExamScroll->SetAnimateWheelScrolling(false);
     if (ExamBody->GetParent()!=ExamScroll) ExamScroll->AddChild(ExamBody);
     ExamScroll->SetVisibility(ESlateVisibility::Visible);
     Canvas->PlaceWidgetAtElement(ExamScroll, Body, 100001);
-    if (auto Bar=Manager->FindElementUnder(TEXT("SpellExamineUI"),TEXT("SpellDisplayTextScrollbar"))) Bar->bVisible=false;
+    const float MaxOffset = ExamScroll->GetScrollOffsetOfEnd();
+    const auto Bar = Manager->FindElementUnder(TEXT("SpellExamineUI"),TEXT("SpellDisplayTextScrollbar"));
+    if (Bar) Bar->bVisible = MaxOffset > .5f;
+    SyncDatScrollbar(Bar, MaxOffset > 0.f ? ExamScroll->GetScrollOffset()/MaxOffset : 0.f,
+        Body->Height/FMath::Max(1.f, MaxOffset+Body->Height));
 }
 
 void UACEUIGameplayBinder::RefreshCreatureExamination()
@@ -228,7 +234,7 @@ void UACEUIGameplayBinder::RefreshCreatureExamination()
             Text->SetMargin(FMargin(Cell->TextMargins.Left * Scale.X, Cell->TextMargins.Top * Scale.Y,
                 Cell->TextMargins.Right * Scale.X, Cell->TextMargins.Bottom * Scale.Y));
             Text->SetAutoWrapText(false);
-            Text->SetToolTipText(Text->GetText());
+            UACEHoverTooltipWidget::SetWidgetTooltip(Text, Text->GetText());
             Text->SetVisibility(ESlateVisibility::Visible);
             auto* Slot = CastChecked<UCanvasPanelSlot>(Text->Slot);
             Slot->SetPosition(FVector2D(Cell->X * Scale.X, (I * 20 + Cell->Y) * Scale.Y));

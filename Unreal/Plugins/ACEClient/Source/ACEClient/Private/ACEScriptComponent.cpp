@@ -118,7 +118,7 @@ UACEScriptComponent::UACEScriptComponent()
 void UACEScriptComponent::InitializeFromObject(const FACEWorldObject& Object, float InWorldScale)
 {
 	WorldScale = FMath::Max(0.01f, InWorldScale);
-	ObjectScale = FMath::Clamp(Object.Scale, 0.01f, 100.f);
+	ObjectScale = Object.GetValidObjectScale();
 	const uint32 NewSetupId = static_cast<uint32>(Object.SetupId);
 	const bool bSameObject = bHasRandomObject && RandomObjectGuid == Object.Guid;
 	const bool bSameSetup = bSameObject && SetupId == NewSetupId && bDefaultStarted;

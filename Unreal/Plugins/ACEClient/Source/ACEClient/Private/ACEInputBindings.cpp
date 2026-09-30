@@ -2,10 +2,12 @@
 #include "ACERetailInputActions.h"
 #include "GameFramework/PlayerController.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Misc/Paths.h"
 namespace ACEInputBindings
 {
 static TMap<FKey,TArray<FInputChord>> Live, Draft;
 static TArray<FBlockedBinding> LiveBlocked, DraftBlocked;
+static FString LiveFileName, DraftFileName;
 FKey ApplicationsKey()
 {
  static const FKey Key(TEXT("ACEApplications"));
@@ -96,6 +98,7 @@ const TArray<FAction>& Actions()
    {Action(TEXT("Components")),TEXT("Spell components"),TEXT("UI"),{FInputChord(EKeys::F6)}},
    {EKeys::U,TEXT("Contract journal"),TEXT("UI"),{}},
    {EKeys::O,TEXT("Options"),TEXT("UI"),{FInputChord(EKeys::F11)}},
+   {Action(TEXT("ToggleInterface")),TEXT("Show / hide interface"),TEXT("UI"),{FInputChord(EKeys::Z,false,false,true,false)}},
    {Action(TEXT("World")),TEXT("World panel"),TEXT("UI"),{FInputChord(EKeys::F10)}},
    {Action(TEXT("Allegiance")),TEXT("Allegiance"),TEXT("CharacterSettings"),{FInputChord(EKeys::F3)}},
    {Action(TEXT("Fellowship")),TEXT("Fellowship"),TEXT("CharacterSettings"),{FInputChord(EKeys::F4)}},
@@ -135,6 +138,10 @@ static bool Active(FKey Key){const int32 Mode=Context(Key);return !Mode||Mode==A
 static void Load()
 {
  if(bLoaded)return; bLoaded=true;
+ LiveFileName=TEXT("acclient.keymap");
+ FString SavedFileName;
+ if(GConfig->GetString(TEXT("ACE.InputBindings"),TEXT("KeymapFileName"),SavedFileName,GGameUserSettingsIni)
+    && !SavedFileName.IsEmpty())LiveFileName=FPaths::GetCleanFilename(SavedFileName);
  ApplicationsKey(); // Register imported physical keys before indexing saved chords.
  TSet<FKey> SavedActions;
  for(const auto& A:Actions())
@@ -192,17 +199,43 @@ static bool Check(const APlayerController* PC,FKey Key,bool bPressed)
  const bool Alt=PC->IsInputKeyDown(EKeys::LeftAlt)||PC->IsInputKeyDown(EKeys::RightAlt);
  const bool Cmd=PC->IsInputKeyDown(EKeys::LeftCommand)||PC->IsInputKeyDown(EKeys::RightCommand);
  for(const auto& C:*Bindings)
-  if(C.Key.IsValid() && (bPressed?PC->WasInputKeyJustPressed(C.Key):PC->IsInputKeyDown(C.Key))
-   && (bPressed || (C.Key!=EKeys::MouseScrollUp && C.Key!=EKeys::MouseScrollDown))
+  if(C.Key.IsValid() && ((bPressed||C.Key==EKeys::MouseScrollUp||C.Key==EKeys::MouseScrollDown)?PC->WasInputKeyJustPressed(C.Key):PC->IsInputKeyDown(C.Key))
+   // Wheel zoom is applied once by the axis handler, with fractional deltas.
+   // Other actions use the wheel as a one-frame pulse, including held actions.
+   && (bPressed || (Key!=EKeys::Add && Key!=EKeys::Subtract) || (C.Key!=EKeys::MouseScrollUp && C.Key!=EKeys::MouseScrollDown))
    && Matches(Key,FInputChord(C.Key,Shift,Ctrl,Alt,Cmd)))return true;
  return false;
 }
 bool Down(const APlayerController* PC,FKey Key){return Check(PC,Key,false);}
 bool Pressed(const APlayerController* PC,FKey Key){return Check(PC,Key,true);}
-void BeginEdit(){Load();Draft=Live;DraftBlocked=LiveBlocked;bEditing=true;}
+float MovementAxis(const APlayerController* PC,FKey Positive,FKey Negative,const TMap<FKey,uint64>& PressOrder,
+ FKey AdditionalPositive,FKey AdditionalNegative)
+{
+ const bool P=Down(PC,Positive)||(AdditionalPositive.IsValid()&&Down(PC,AdditionalPositive));
+ const bool N=Down(PC,Negative)||(AdditionalNegative.IsValid()&&Down(PC,AdditionalNegative));
+ if(!P||!N)return float(P)-float(N);
+ const FInputChord Modifiers(EKeys::Invalid,
+  PC->IsInputKeyDown(EKeys::LeftShift)||PC->IsInputKeyDown(EKeys::RightShift),
+  PC->IsInputKeyDown(EKeys::LeftControl)||PC->IsInputKeyDown(EKeys::RightControl),
+  PC->IsInputKeyDown(EKeys::LeftAlt)||PC->IsInputKeyDown(EKeys::RightAlt),
+  PC->IsInputKeyDown(EKeys::LeftCommand)||PC->IsInputKeyDown(EKeys::RightCommand));
+ auto Latest=[&](FKey ActionKey)
+ {
+  uint64 Order=0;
+  if(const auto* Bindings=Live.Find(ActionKey))for(const auto& Binding:*Bindings)
+  {
+   FInputChord Input=Modifiers;Input.Key=Binding.Key;
+   if(PC->IsInputKeyDown(Binding.Key)&&Matches(ActionKey,Input))
+    Order=FMath::Max(Order,PressOrder.FindRef(Binding.Key));
+  }
+  return Order;
+ };
+ return FMath::Max(Latest(Positive),Latest(AdditionalPositive))>=FMath::Max(Latest(Negative),Latest(AdditionalNegative))?1.f:-1.f;
+}
+void BeginEdit(){Load();Draft=Live;DraftBlocked=LiveBlocked;DraftFileName=LiveFileName;bEditing=true;}
 void Reload(){bLoaded=false;bEditing=false;ActiveContext=1;Live.Reset();Draft.Reset();LiveBlocked.Reset();DraftBlocked.Reset();Load();}
-void Defaults(){DraftBlocked.Reset();for(const auto& A:Actions()){auto& B=Draft.FindOrAdd(A.Key);B=A.DefaultBindings;B.SetNum(3);}}
-void Revert(){Draft=Live;DraftBlocked=LiveBlocked;}
+void Defaults(){DraftFileName=TEXT("acclient.keymap");DraftBlocked.Reset();for(const auto& A:Actions()){auto& B=Draft.FindOrAdd(A.Key);B=A.DefaultBindings;B.SetNum(3);}}
+void Revert(){Draft=Live;DraftBlocked=LiveBlocked;DraftFileName=LiveFileName;}
 void Cancel(){Revert();bEditing=false;}
 void ReplaceBlockedBindings(const TSet<FString>& Groups,const TArray<FBlockedBinding>& Bindings)
 {
@@ -212,6 +245,8 @@ void ReplaceBlockedBindings(const TSet<FString>& Groups,const TArray<FBlockedBin
 }
 const TArray<FBlockedBinding>& GetBlockedBindings(){Load();return bEditing?DraftBlocked:LiveBlocked;}
 bool IsEditing(){return bEditing;}
+FString GetKeymapFileName(){Load();return bEditing?DraftFileName:LiveFileName;}
+void SetKeymapFileName(const FString& Name){if(bEditing&&!Name.IsEmpty())DraftFileName=FPaths::GetCleanFilename(Name);}
 FInputChord Get(FKey Key,int32 Slot){Load();const auto* B=(bEditing?Draft:Live).Find(Key);return B&&B->IsValidIndex(Slot)?(*B)[Slot]:FInputChord();}
 void Set(FKey Key,int32 Slot,FInputChord Chord)
 {
@@ -222,7 +257,8 @@ void Set(FKey Key,int32 Slot,FInputChord Chord)
 }
 void Commit()
 {
- if(!bEditing)return; Live=Draft;LiveBlocked=DraftBlocked;bEditing=false;
+ if(!bEditing)return; Live=Draft;LiveBlocked=DraftBlocked;LiveFileName=DraftFileName;bEditing=false;
+ GConfig->SetString(TEXT("ACE.InputBindings"),TEXT("KeymapFileName"),*LiveFileName,GGameUserSettingsIni);
  IndexBindings();
  for(const auto& Pair:Live)for(int32 S=0;S<Pair.Value.Num();++S)
  {

@@ -64,7 +64,7 @@ void UACEUIGameplayBinder::RefreshKeyboardOverlays()
  };
  for(const TCHAR* P:Pages)Caption(Manager->FindElementUnder(TEXT("KeyboardMappingPages"),FString(P)+TEXT("Tab")),P);
  const TCHAR* Names[]={TEXT("KeyboardLoadKeymapButton"),TEXT("KeyboardSaveKeymapAsButton"),TEXT("KeyboardDefaultsButton"),TEXT("KeyboardRevertButton"),TEXT("KeyboardOKButton"),TEXT("KeyboardCancelButton"),TEXT("KeyboardCurrentKeymapLabel")};
- const FString Labels[]={TEXT("Load File..."),TEXT("Save As..."),TEXT("Defaults"),TEXT("Revert"),TEXT("OK"),TEXT("Cancel"),KeyboardFileName};
+ const FString Labels[]={TEXT("Load File..."),TEXT("Save As..."),TEXT("Defaults"),TEXT("Revert"),TEXT("OK"),TEXT("Cancel"),ACEInputBindings::GetKeymapFileName()};
  for(int32 I=0;I<7;++I)Caption(Manager->FindElementUnder(TEXT("KeyboardFrame"),Names[I]),Labels[I]);
  const FString PageName=ActiveKeyboardPage+TEXT("Page");
  const auto List=Manager->FindElementUnder(PageName,TEXT("KeyboardMappingListBox"));
@@ -277,7 +277,7 @@ void UACEUIGameplayBinder::ShowKeymapImport(const FString& Report)
   }
   if(!KeymapFiles.IsEmpty())KeymapFileChoice->SetSelectedIndex(0);
   else if(!bKeymapSave)KeymapDialogMessage=TEXT("No .keymap files found. Copy one to Documents/Asheron's Call, Saved/Keymaps, or beside the DAT files.");
-  KeymapImportPath->SetText(FText::FromString(KeyboardFileName));
+  KeymapImportPath->SetText(FText::FromString(ACEInputBindings::GetKeymapFileName()));
  }
  // Keep the retail menu/OK/Cancel row, expanding only the message area for errors.
  const auto Box=KeymapChild(KeymapDialog,0x3d),Body=KeymapChild(KeymapDialog,0x3e);
@@ -302,7 +302,7 @@ void UACEUIGameplayBinder::HandleKeymapImport(const FString& Path)
   if(IFileManager::Get().FileExists(*File)&&KeymapOverwritePath!=File)
   {KeymapOverwritePath=File;ShowKeymapImport(TEXT("This file exists. Overwrite it?"));return;}
   FString Error;if(!ACEInputBindings::ExportRetailKeymapFile(File,Error)){ShowKeymapImport(Error);return;}
-  KeyboardFileName=FPaths::GetCleanFilename(File);bKeymapImportOpen=false;RefreshKeyboardOverlays();return;
+  bKeymapImportOpen=false;RefreshKeyboardOverlays();return;
  }
  if(File.IsEmpty()&&KeymapFileChoice)
  {
@@ -310,7 +310,6 @@ void UACEUIGameplayBinder::HandleKeymapImport(const FString& Path)
  }
  const auto Result=ACEInputBindings::ImportRetailKeymapFile(File);
  if(!Result.bSuccess){ShowKeymapImport(Result.Error);return;}
- KeyboardFileName=FPaths::GetCleanFilename(File);
  if(!Result.Skipped.IsEmpty() || !Result.UnchangedContexts.IsEmpty())
  {
   bKeymapReport=true;

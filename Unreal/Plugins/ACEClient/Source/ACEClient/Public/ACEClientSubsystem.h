@@ -611,6 +611,8 @@ public:
 	UFUNCTION(BlueprintPure, Category = "ACE")
 	FACESelectedObject GetSelectedObject() const;
 
+	int32 GetPreviousSelectedObjectGuid() const;
+
 	/** Send LoginComplete (0x00A1) — tell the server we exited portal space / arrived. */
 	UFUNCTION(BlueprintCallable, Category = "ACE")
 	void NotifyExitedPortalSpace();

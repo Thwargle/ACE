@@ -6,6 +6,9 @@
 #include "ACEDatSubsystem.h"
 #include "ACEEnvCellActor.h"
 #include "ACEHoverTooltipWidget.h"
+#include "ACEBodySweep.h"
+#include "ACEWorldEntityActor.h"
+#include "ACECreatureFixtures.h"
 #include "Dat/ACEEnvCellMeshBuilder.h"
 #include "GameFramework/PlayerInput.h"
 #include "GameFramework/InputSettings.h"
@@ -92,10 +95,31 @@ bool FACELedgeStairsTest::RunTest(const FString&)
  const FVector Final=Pawn->GetActorLocation()-Origin-FVector(0,0,Half);
  TestTrue(TEXT("Walk all the way from Arcanum basement up onto the main floor"),Final.X>-8620 && Final.Z>1195);
  Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.016f,false);
+ for(int32 CreatureProfile : {-1,0,1,2,3})
+ for(bool Walking : {false,true})
  for(float FrameTime : {.016f,.033f,.05f})
  for(float Offset : {-30.f,0.f,30.f})
  {
   Place(FVector(-8540,2924+Offset,1200),0x7D64014B);
+  // Real creatures beside both stair edges, with only 6 cm beyond the
+  // authored sphere-pair envelope. The path is clear at all player heights;
+  // a capsule/bounding-radius substitute incorrectly blocks these runs.
+  TArray<AACEWorldEntityActor*> StairCreatures;
+  if(CreatureProfile>=0)for(int32 I=0;I<6;++I)
+  {
+   FACEWorldObject Mob;ACECreatureFixtures::Apply(Mob,CreatureProfile==3?I:CreatureProfile);
+   Mob.Guid=0x72010000+I;Mob.bHasPosition=true;Mob.Position.CellId=0x7D64014B;
+   TArray<FACEDatCollisionShape> Spheres;bool BSP=false;Dat->GetSetupCollisionShapes(Mob.SetupId,Spheres,BSP);
+   float Radius=0;for(const auto& Sphere:Spheres)Radius=FMath::Max(Radius,Sphere.Radius*100*Mob.Scale);
+   FVector At=Origin+FVector(-8700-(I/2)*150,2924+Offset,0);
+   TArray<FHitResult> Floors;ACEBodySweep::TraceGround(*World,Floors,At+FVector(0,0,1300),At+FVector(0,0,700),
+    FCollisionQueryParams(SCENE_QUERY_STAT(CreatureStairFixture),true,Pawn));
+   if(!TestTrue(TEXT("Creature stair fixture has authored tread support"),Floors.Num()>0))continue;
+   At.Z=Floors.Last().ImpactPoint.Z;
+   At.Y+=(I%2?1:-1)*(Radius+48+6);
+   auto* Creature=World->SpawnActor<AACEWorldEntityActor>();Creature->InitializeFromObject(Mob,100,true);
+   Creature->SetActorLocation(At);StairCreatures.Add(Creature);
+  }
   auto Face=[&](float Direction)
   {
    auto Pose=Controller->PredictedPose;Pose.SetAceFacingFromUnrealDir2D(FVector(Direction,0,0));
@@ -104,11 +128,12 @@ bool FACELedgeStairsTest::RunTest(const FString&)
   for(float Direction : {-1.f,1.f})
   {
    Face(Direction);
+   if(Walking)Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::LeftShift,IE_Pressed,1.f));
    Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));
    Controller->PlayerInput->ProcessInputStack({},.016f,false);
    int32 AirFrames=0;
    float WorstPenetration=0.f;
-   for(int32 Frame=0;Frame<120;++Frame)
+   for(int32 Frame=0;Frame<200;++Frame)
    {
     Controller->PlayerTick(FrameTime);
     AirFrames+=Controller->bJumpAirborne ? 1 : 0;
@@ -128,12 +153,13 @@ bool FACELedgeStairsTest::RunTest(const FString&)
     if(Direction<0 ? Feet.X<-9180 : Feet.X>-8540)break;
    }
    const FVector Feet=Pawn->GetActorLocation()-Origin-FVector(0,0,Half);
-   TestTrue(*FString::Printf(TEXT("Stair traversal offset=%.0f direction=%.0f dt=%.3f"),Offset,Direction,FrameTime),Direction<0 ? Feet.X<-9150 && Feet.Z<850 : Feet.X>-8580 && Feet.Z>1195);
+   TestTrue(*FString::Printf(TEXT("Stair traversal creatures=%d walk=%d offset=%.0f direction=%.0f dt=%.3f"),CreatureProfile,Walking,Offset,Direction,FrameTime),Direction<0 ? Feet.X<-9150 && Feet.Z<850 : Feet.X>-8580 && Feet.Z>1195);
    TestFalse(TEXT("Stairs do not latch airborne"),Controller->bJumpAirborne);
    TestEqual(TEXT("Stair traversal remains grounded on every frame"),AirFrames,0);
    TestTrue(*FString::Printf(TEXT("Stair body does not enter a wall or tread (max overlap %.3f cm)"),WorstPenetration),WorstPenetration<1.f);
    Controller->PlayerInput->FlushPressedKeys();Controller->PlayerInput->ProcessInputStack({},.016f,false);
   }
+  for(auto* Creature:StairCreatures)Creature->Destroy();
  }
  // The indoor cell is loaded, but this point is above its open stairwell.
  Place(FVector(-8950,2924,1165),0x7D64014E);

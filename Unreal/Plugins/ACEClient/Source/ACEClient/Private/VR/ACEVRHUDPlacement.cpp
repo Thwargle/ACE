@@ -162,7 +162,8 @@ void UACEVRComponent::TogglePanelLock(FName Panel)
 void UACEVRComponent::BeginPanelEdit(FName Panel, bool bLeft, bool bResize)
 {
 	auto* Surface = GetEditablePanel(Panel);
-	if (!bTracking || !Surface || !Surface->IsVisible() || Surface->GetCollisionEnabled() == ECollisionEnabled::NoCollision
+	const auto* HitSurface = Panel == "Menu" && GameplayMenuPanel && GameplayMenuPanel->IsVisible() ? GameplayMenuPanel.Get() : Surface;
+	if (!bTracking || !HitSurface || !HitSurface->IsVisible() || HitSurface->GetCollisionEnabled() == ECollisionEnabled::NoCollision
 		|| IsPanelLocked(Panel) || PanelEditHand != INDEX_NONE || VitalsDragHand != INDEX_NONE) return;
 	const FTransform Plane(Surface->GetComponentQuat() * FRotator(0,180,0).Quaternion(), Surface->GetComponentLocation());
 	FVector2D Hit;
@@ -180,8 +181,9 @@ void UACEVRComponent::UpdatePanelEdit(float Dt)
 	if (PanelEditHand == INDEX_NONE) return;
 	auto* Surface = GetEditablePanel(EditingPanel);
 	const auto* Aim = PanelEditHand == 0 ? LeftAim.Get() : RightAim.Get();
-	if (!bTracking || !Aim || !Aim->IsTracked() || !Surface || !Surface->IsVisible()
-		|| Surface->GetCollisionEnabled() == ECollisionEnabled::NoCollision || IsPanelLocked(EditingPanel)) { EndPanelEdit(); return; }
+	const auto* HitSurface = EditingPanel == "Menu" && GameplayMenuPanel && GameplayMenuPanel->IsVisible() ? GameplayMenuPanel.Get() : Surface;
+	if (!bTracking || !Aim || !Aim->IsTracked() || !HitSurface || !HitSurface->IsVisible()
+		|| HitSurface->GetCollisionEnabled() == ECollisionEnabled::NoCollision || IsPanelLocked(EditingPanel)) { EndPanelEdit(); return; }
 	if (bPanelResize)
 	{
 		FVector2D Hit;

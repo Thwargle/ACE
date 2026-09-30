@@ -20,6 +20,10 @@
 #include "Slate/WidgetRenderer.h"
 #include "RenderingThread.h"
 #include "ImageUtils.h"
+#include "ACEHoverTooltipWidget.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/Image.h"
+#include "Widgets/IToolTip.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailFontDataTest, "ACE.RetailParity.FontDat",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -176,6 +180,80 @@ bool FACERetailFontWidgetTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Live label update recalculates native width"), Slate->GetDesiredSize().X,
         float(Measure.MeasureWidth(*Label->GetBitmapFont(), TEXT("Wi"))));
     TestEqual(TEXT("Live label update reuses atlas"), Label->GetGlyphAtlas(false), Atlas);
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailTooltipTest, "ACE.RetailParity.TooltipWidget",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACERetailTooltipTest::RunTest(const FString& Parameters)
+{
+    auto* Dat = NewObject<UACEDatSubsystem>(NewObject<UGameInstance>());
+    if (!TestTrue(TEXT("Load tooltip DAT assets"), Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+    auto* Resources = NewObject<UACEUIResourceResolver>(); Resources->Initialize(Dat);
+    auto* Tip = NewObject<UACEHoverTooltipWidget>(); Tip->Initialize(); Tip->SetResources(Resources);
+    auto Slate = Tip->TakeWidget();
+    auto* Label = Cast<UACERetailTextBlock>(Tip->WidgetTree->FindWidget(TEXT("HoverLabel")));
+    if (!TestNotNull(TEXT("Tooltip uses bitmap text"), Label)) return false;
+    auto* Fill = Cast<UImage>(Tip->WidgetTree->FindWidget(TEXT("HoverFill")));
+    TestTrue(TEXT("Tooltip fill is the original DAT texture without tint"), Fill &&
+        Fill->GetBrush().GetResourceObject() == Resources->ResolveTexture(0x06004CC2)
+        && Fill->GetBrush().TintColor.GetSpecifiedColor() == FLinearColor::White);
+    for (uint32 TemplateId : {UACEHoverTooltipWidget::ObjectTemplate, UACEHoverTooltipWidget::OptionsTemplate, UACEHoverTooltipWidget::MapTemplate})
+    {
+        Tip->SetTooltipText(TEXT("Boxed Augmentation Gem"), TemplateId);
+        Slate->SlatePrepass();
+        TestTrue(TEXT("Tooltip font matches retail's per-template font"), Label->GetBitmapFont()
+            && Label->GetBitmapFont()->Id == (TemplateId == UACEHoverTooltipWidget::MapTemplate ? 0x40000015u : 0x40000002u));
+        TestEqual(TEXT("Retail tooltip text is white"), Label->GetColorAndOpacity().GetSpecifiedColor(), FLinearColor::White);
+        TestFalse(TEXT("Tooltip is independent of the hovered window's clip"), Label->UsesDatAncestorClipping());
+        if (!FApp::CanEverRender()) continue;
+        const FIntPoint Size(FMath::CeilToInt(Slate->GetDesiredSize().X), FMath::CeilToInt(Slate->GetDesiredSize().Y));
+        TestTrue(TEXT("Object-name tooltip has compact text bounds"), Size.X > 100 && Size.X <= 260 && Size.Y > 14 && Size.Y < 32);
+        // Compare source artwork before display-gamma transforms.
+        FWidgetRenderer Renderer(false, true);
+        auto* Target = FWidgetRenderer::CreateTargetFor(FVector2D(Size), TF_Nearest, false);
+        Renderer.DrawWidget(Target, Slate, FVector2D(Size), 0.f); FlushRenderingCommands();
+        TArray<FColor> Pixels;
+        // Preserve the same raw color space during readback.
+        FReadSurfaceDataFlags ReadFlags; ReadFlags.SetLinearToGamma(false);
+        if (!TestTrue(TEXT("Read rendered tooltip"), Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels, ReadFlags))) return false;
+        TArray<FColor> DisplayPixels = Pixels;
+        for (auto& Pixel : DisplayPixels) Pixel = Pixel.ReinterpretAsLinear().ToFColor(true);
+        TArray64<uint8> PNG; FImageUtils::PNGCompressImageArray(Size.X, Size.Y, DisplayPixels, PNG);
+        FFileHelper::SaveArrayToFile(PNG, *(FPaths::ProjectSavedDir() / FString::Printf(TEXT("Automation/RetailParity/Tooltip_%08X.png"), TemplateId)));
+        // Compare the one-pixel clipped edges to the native two-pixel tile,
+        // rather than an approximate gold or a rescaled version of the texture.
+        auto* Edge = Resources->ResolveTexture(0x06004CC8);
+        auto& Mip = Edge->GetPlatformData()->Mips[0];
+        TestEqual(TEXT("Retail frame tile is two pixels wide"), Mip.SizeX, 2);
+        TestEqual(TEXT("Retail frame tile is two pixels high"), Mip.SizeY, 2);
+        const auto* Source = static_cast<const FColor*>(Mip.BulkData.LockReadOnly());
+        TArray<FColor> SourcePixels; SourcePixels.Append(Source, Mip.SizeX*Mip.SizeY); Mip.BulkData.Unlock();
+        int32 BadEdgePixels = 0, WhiteGlyphPixels = 0;
+        for (int32 Y=0; Y<Size.Y; ++Y) for (int32 X=0; X<Size.X; ++X)
+        {
+            const FColor P = Pixels[Y*Size.X+X];
+            // Texture samples decode sRGB DAT bytes into the linear target.
+            const FColor Expected = FLinearColor(SourcePixels[Y==Size.Y-1 ? X%2 : X==0 || X==Size.X-1 ? (Y%2)*2 : X%2]).ToFColor(false);
+            if (X==0 || Y==0 || X==Size.X-1 || Y==Size.Y-1)
+                BadEdgePixels += FMath::Abs(int32(P.R)-Expected.R)>2 || FMath::Abs(int32(P.G)-Expected.G)>2 || FMath::Abs(int32(P.B)-Expected.B)>2;
+            else if (P.R>240 && P.G>240 && P.B>240) ++WhiteGlyphPixels;
+        }
+        TestEqual(TEXT("Every edge pixel matches the DAT frame color"), BadEdgePixels, 0);
+        TestTrue(TEXT("Tooltip paints readable white glyphs, without the former cream tint"), WhiteGlyphPixels>20);
+    }
+    Tip->SetTooltipText(TEXT("You must select an appropriate target for Heal Other I.\nChoose another player before casting this spell."), UACEHoverTooltipWidget::OptionsTemplate);
+    Slate->SlatePrepass();
+    TestTrue(TEXT("Help text wraps within retail's maximum width"), Slate->GetDesiredSize().X<=260 && Slate->GetDesiredSize().Y>40);
+    UACEHoverTooltipWidget::SetWidgetTooltip(Label, FText::FromString(TEXT("First")));
+    auto* Attached = Label->GetToolTip();
+    TestNotNull(TEXT("A UI control receives the shared tooltip"), Cast<UACEHoverTooltipWidget>(Attached));
+    UACEHoverTooltipWidget::SetWidgetTooltip(Label, FText::FromString(TEXT("Changed")));
+    TestEqual(TEXT("Changing hover text reuses the same widget"), Label->GetToolTip(), Attached);
+    const auto SlateTooltip = Label->TakeWidget()->GetToolTip();
+    TestTrue(TEXT("Changed hover text keeps the custom Slate content instead of the default tooltip"),
+        SlateTooltip.IsValid() && SlateTooltip->GetContentWidget() == Attached->TakeWidget());
+    UACEHoverTooltipWidget::SetWidgetTooltip(Label, FText::GetEmpty());
+    TestNull(TEXT("Empty inventory slots remove their tooltip"), Label->GetToolTip());
     return true;
 }
 #endif

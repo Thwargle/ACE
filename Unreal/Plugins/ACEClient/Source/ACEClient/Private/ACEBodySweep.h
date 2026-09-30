@@ -3,11 +3,14 @@
 #include "Engine/World.h"
 #include "CollisionQueryParams.h"
 #include "CollisionShape.h"
+#include "Engine/OverlapResult.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SphereComponent.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 namespace ACEBodySweep
 {
+    bool BatchCrowdQueries();
     inline bool IsCreatureBody(const FHitResult& Hit)
     {
         return Hit.Component.IsValid() && Hit.Component->ComponentTags.Contains(TEXT("ACECreatureBody"));
@@ -59,10 +62,12 @@ namespace ACEBodySweep
     inline bool SweepBody(UWorld& World, FHitResult& Hit, const FVector& From, const FVector& To,
         const FCollisionShape& Body, const FCollisionQueryParams& Params)
     {
+        TRACE_CPUPROFILER_EVENT_SCOPE(ACE_BodySweep);
         const float Radius=Body.GetCapsuleRadius();
         const double Offset=FMath::Max(0.f,Body.GetCapsuleHalfHeight()-Radius);
         bool Found=false;Hit=FHitResult();
         TOptional<FCollisionQueryParams> EscapeParams;
+        int32 EscapeCount=0;
         for(int32 I=0;I<(Offset>.001?2:1);++I)
         {
             const FVector Shift(0,0,I==0?-Offset:Offset);FHitResult Part;
@@ -74,8 +79,33 @@ namespace ACEBodySweep
                 if(!Blocked || !CanEscapeCreature(Part,From,To,Body))break;
                 if(!EscapeParams.IsSet())EscapeParams.Emplace(Params);
                 EscapeParams->AddIgnoredComponent(Part.GetComponent());
-                // A single channel sweep stops at the first blocker. Repeat
-                // to expose walls, other mobs, and later contacts behind it.
+                // A few overlapping creatures are cheaper with the original
+                // retries. Gather only after more than four overlapping bodies.
+                if(++EscapeCount!=5 || !BatchCrowdQueries())continue;
+                TRACE_CPUPROFILER_EVENT_SCOPE(ACE_CrowdEscapeGather);
+                // Gather the other initial overlaps together. Retrying the
+                // entire scene query once per overlapping mob made escaping
+                // a swarm quadratic in the number of nearby bodies. Only
+                // waive spheres for which BOTH player spheres can escape
+                // along the entire segment; architecture remains blocking.
+                TArray<FOverlapResult> Overlaps;
+                // The capsule is only a broad-phase envelope here. The test
+                // below still checks BOTH retail spheres over the full path,
+                // including any waist-only candidates returned by this query.
+                World.OverlapMultiByChannel(Overlaps,From,FQuat::Identity,ECC_Pawn,Body,EscapeParams.GetValue());
+                for(const auto& Overlap:Overlaps)
+                {
+                    const auto* Sphere=Cast<USphereComponent>(Overlap.GetComponent());
+                    if(!Sphere)continue;
+                    const FVector Relative=From-Sphere->GetComponentLocation();
+                    FHitResult Contact;Contact.Component=Overlap.Component;
+                    Contact.bStartPenetrating=Relative.SizeSquared2D()+FMath::Square(FMath::Abs(Relative.Z)-Offset)
+                        <=FMath::Square(double(Radius+Sphere->GetScaledSphereRadius()));
+                    if(CanEscapeCreature(Contact,From,To,Body))
+                        EscapeParams->AddIgnoredComponent(Contact.GetComponent());
+                }
+                // The next sweep exposes walls and new creature contacts
+                // behind the escaped overlaps, without weakening collision.
             }
             if(!Blocked)continue;
             Part.Location-=Shift;Part.TraceStart=From;Part.TraceEnd=To;
@@ -114,6 +144,7 @@ namespace ACEBodySweep
     inline bool TraceGround(UWorld& World, TArray<FHitResult>& Hits, const FVector& From,
         const FVector& To, const FCollisionQueryParams& Params)
     {
+        TRACE_CPUPROFILER_EVENT_SCOPE(ACE_TraceGround);
         FCollisionQueryParams GroundParams=Params;
         TSet<const UPrimitiveComponent*> Ignored;
         for (;;)
@@ -125,6 +156,19 @@ namespace ACEBodySweep
             const auto* Component=Body->GetComponent();
             if (!Component || Ignored.Contains(Component)) return false;
             Ignored.Add(Component);GroundParams.AddIgnoredComponent(Component);
+            if(Ignored.Num()==5 && BatchCrowdQueries())
+            {
+                TRACE_CPUPROFILER_EVENT_SCOPE(ACE_CrowdFloorGather);
+                // Floor queries never use creatures as support. Collect the
+                // remaining bodies along the ray together instead of tracing
+                // the same floor once per mob stacked above it.
+                TArray<FOverlapResult> Overlaps;
+                World.OverlapMultiByChannel(Overlaps,(From+To)*.5,FQuat::Identity,ECC_Pawn,
+                    FCollisionShape::MakeBox((To-From).GetAbs()*.5+FVector(.1)),GroundParams);
+                for(const auto& Overlap:Overlaps)
+                    if(auto* C=Overlap.GetComponent();C && C->ComponentTags.Contains(TEXT("ACECreatureBody")))
+                        GroundParams.AddIgnoredComponent(C);
+            }
         }
     }
     inline FVector RecoverCorner(UWorld& World, const FVector& From,

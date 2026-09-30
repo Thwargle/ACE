@@ -100,6 +100,12 @@ public:
   const FLinearColor Colors[]={FLinearColor(.32f,.006f,.004f),FLinearColor(.25f,.11f,.003f),FLinearColor(.003f,.065f,.3f)};
   const TCHAR* Stance=Values[6]==ACECombatMode::Magic?TEXT("MAGIC"):Values[6]==ACECombatMode::Missile?TEXT("MISSILE"):Values[6]==ACECombatMode::Melee?TEXT("MELEE"):TEXT("PEACE");
   Text(Out,L,G,{8,0},Stance,20,FLinearColor(.95f,.82f,.53f));
+  // A vector backpack stays crisp at any panel scale and needs no texture load.
+  Box(Out,L,G,{354,0},{122,30},FLinearColor(.035f,.025f,.012f),5);
+  Box(Out,L+1,G,{367,2},{14,10},FLinearColor(.85f,.64f,.24f),4);
+  Box(Out,L+2,G,{362,7},{24,22},FLinearColor(.56f,.31f,.09f),5);
+  Box(Out,L+3,G,{367,17},{14,9},FLinearColor(.95f,.74f,.31f),2);
+  Text(Out,L+3,G,{394,15},TEXT("Pack"),20,FLinearColor::White,false,true);
   for(int I=0;I<3;++I)
   {
    const float Y=32+I*46,Ratio=Values[I*2+1]>0?FMath::Clamp(float(Values[I*2])/Values[I*2+1],0.f,1.f):0.f;
@@ -122,6 +128,7 @@ public:
  {
   if(!Rig.IsValid())return FReply::Unhandled();
   const auto P=G.AbsoluteToLocal(E.GetScreenSpacePosition());
+  if(P.X>=354 && P.Y<32){Rig->ToggleInventory();return FReply::Handled();}
   if(P.Y>=210 && bControls)ACEVRHUDArt::PressControl(Rig.Get(),"Vitals",P.X,480,E.GetPointerIndex()==0);
   else Rig->BeginVitalsDrag(E.GetPointerIndex()==0);
   return FReply::Handled().CaptureMouse(SharedThis(this));

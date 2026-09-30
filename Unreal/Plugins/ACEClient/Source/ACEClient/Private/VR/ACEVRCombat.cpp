@@ -33,6 +33,11 @@ bool UACEVRComponent::TryDropInventoryItem(int32 Item, int32 SplitAmount)
 {
 	const auto Session = Client ? Client->GetSession() : nullptr;
 	if (!bActive || !PC || !Session || !Session->SupportsVRDrops()) return false;
+	FACEWorldObject Object;
+	if (!Client->GetWorldObject(Item,Object) || !Client->IsOwnedInventoryItem(Object) || !Object.CanDropToWorld()) return false;
+	// VRDrop uses zero for a whole object. A positive quantity is explicitly a
+	// split and the server rejects splitting a stack into its entire count.
+	if (SplitAmount >= FMath::Max(1,Object.StackSize)) SplitAmount=0;
 	// The controller releasing the inventory drag is the release point, including
 	// offhand drags. Contact-constrained grips keep it on our side of a wall.
 	FVector Origin = ToAceOffset(GetAvatarGrip(FeedbackHand == 0).GetLocation());
@@ -163,23 +168,29 @@ void UACEVRComponent::FireSpell()
 	if (!Client->GetSession() || !Client->GetSession()->SupportsVRCombat()) { SetCastFeedback(TEXT("Waiting for the server to enable VR combat.")); return; }
 	FVector Origin, Direction;
 	GetSpellAim(Origin, Direction);
-	auto* Target = Cast<AACEWorldEntityActor>(ACEVisibleObjectPick::Trace(*GetWorld(), Origin,
-		Origin + Direction * 10000.f, Cast<APawn>(GetOwner()), nullptr, false));
-	// A deliberate trigger click on a visible player selects that recipient and
-	// casts an Other buff in one action, even after another object was selected.
-	const bool bPointedBuff = IsPointedBuffRecipient(Target);
-	if (bPointedBuff && Client->GetSelectedObject().Guid != Target->GetACEGuid())
-		Client->SelectObject(Target->GetACEGuid());
-	const auto Selected = Client->GetSelectedObject();
-	// Otherwise retain explicit selection: crossing a sign, corpse or held mesh
-	// must not silently replace a targeted debuff or an inventory-item buff.
-	// Free-aim projectiles still use Origin/Direction, independently of selection.
-	const int32 RequestedTarget = bPointedBuff ? Target->GetACEGuid() : Selected.bValid ? Selected.Guid : Target ? Target->GetACEGuid() : 0;
 	int32 TargetGuid = 0;
-	if (!Client->ResolveSpellCastTarget(SelectedSpell, RequestedTarget, TargetGuid, true))
+	// ClientMagicSystem::CastSpell resolves SelfTargeted and untargeted spells
+	// before consulting selection. Do the same before even tracing the pointer:
+	// a self buff needs neither a visible body nor a selected world object.
+	if (!Client->ResolveSpellCastTarget(SelectedSpell, 0, TargetGuid))
 	{
-		SetCastFeedback(TEXT("Select an appropriate target for this spell."));
-		return;
+		auto* Target = Cast<AACEWorldEntityActor>(ACEVisibleObjectPick::Trace(*GetWorld(), Origin,
+			Origin + Direction * 10000.f, Cast<APawn>(GetOwner()), nullptr, false));
+		// A deliberate trigger click on a visible player selects that recipient and
+		// casts an Other buff in one action, even after another object was selected.
+		const bool bPointedBuff = IsPointedBuffRecipient(Target);
+		if (bPointedBuff && Client->GetSelectedObject().Guid != Target->GetACEGuid())
+			Client->SelectObject(Target->GetACEGuid());
+		const auto Selected = Client->GetSelectedObject();
+		// Otherwise retain explicit selection: crossing a sign, corpse or held mesh
+		// must not silently replace a targeted debuff or an inventory-item buff.
+		// Free-aim projectiles still use Origin/Direction, independently of selection.
+		const int32 RequestedTarget = bPointedBuff ? Target->GetACEGuid() : Selected.bValid ? Selected.Guid : Target ? Target->GetACEGuid() : 0;
+		if (!Client->ResolveSpellCastTarget(SelectedSpell, RequestedTarget, TargetGuid, true))
+		{
+			SetCastFeedback(TEXT("Select an appropriate target for this spell."));
+			return;
+		}
 	}
 	if (auto Session = Client->GetSession(); Session && Session->SendVRCombat(1, PC->GetEffectiveCellId(), Weapon.Guid,
 		SelectedSpell, TargetGuid, ToAceOffset(Origin),

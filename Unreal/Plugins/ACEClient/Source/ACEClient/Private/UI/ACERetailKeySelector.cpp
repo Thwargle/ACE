@@ -1,4 +1,5 @@
 #include "UI/ACERetailKeySelector.h"
+#include "ACEHoverTooltipWidget.h"
 #include "ACEInputBindings.h"
 #include "Styling/CoreStyle.h"
 #include "Brushes/SlateColorBrush.h"
@@ -18,7 +19,21 @@ public:
  { return Owner.IsValid() && Owner->FilterCaptureKey(Event,true); }
  virtual bool HandleKeyUpEvent(FSlateApplication&,const FKeyEvent& Event) override
  { return Owner.IsValid() && Owner->FilterCaptureKey(Event,false); }
+ virtual bool HandleMouseWheelOrGestureEvent(FSlateApplication&,const FPointerEvent& Event,const FPointerEvent*) override
+ { return Owner.IsValid() && Owner->FilterCaptureWheel(Event); }
 };
+
+bool UACERetailKeySelector::FilterCaptureWheel(const FPointerEvent& Event)
+{
+ const auto Selector=GetCachedWidget();
+ if(!GetIsSelectingKey() || !Selector || FMath::IsNearlyZero(Event.GetWheelDelta()))return false;
+ // SInputKeySelector handles mouse buttons but has no wheel capture. Complete
+ // its normal key-up path so capture ends and the same binding delegate runs.
+ const FKey Key=Event.GetWheelDelta()>0?EKeys::MouseScrollUp:EKeys::MouseScrollDown;
+ Selector->OnKeyUp(Selector->GetCachedGeometry(),
+  FKeyEvent(Key,Event.GetModifierKeys(),Event.GetUserIndex(),false,0,0));
+ return true;
+}
 
 bool UACERetailKeySelector::FilterCaptureKey(const FKeyEvent& Event,bool Down)
 {
@@ -76,7 +91,7 @@ void UACERetailKeySelector::InitializeBinding(FKey Key,int32 InSlot)
  SetMargin(FMargin(0));
  SetNoKeySpecifiedText(FText::GetEmpty());
  SetKeySelectionText(FText::FromString(TEXT("Press a key")));
- SetToolTipText(FText::FromString(TEXT("Click, then press a key or mouse button. Backspace clears this binding; Escape cancels.")));
+ UACEHoverTooltipWidget::SetWidgetTooltip(this, FText::FromString(TEXT("Click, then press a key, mouse button, or scroll the wheel. Backspace clears this binding; Escape cancels.")));
  SetSelectedKey(ACEInputBindings::Get(Key,InSlot));
  OnKeySelected.AddDynamic(this,&UACERetailKeySelector::AcceptBinding);
  OnIsSelectingKeyChanged.AddDynamic(this,&UACERetailKeySelector::CaptureStateChanged);

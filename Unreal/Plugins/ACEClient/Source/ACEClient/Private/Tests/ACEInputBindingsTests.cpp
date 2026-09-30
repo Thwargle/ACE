@@ -42,6 +42,20 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  // rather than the later WASD bindings that were invented by this client.
  Hold({EKeys::X});TestTrue(TEXT("Retail X moves backward"),ACEInputBindings::Down(PC,EKeys::S));
  Hold({EKeys::Z});TestTrue(TEXT("Retail Z strafes left"),ACEInputBindings::Down(PC,EKeys::Q));
+ const auto ToggleInterface=ACEInputBindings::Action(TEXT("ToggleInterface"));
+ TestFalse(TEXT("Plain Z does not hide the interface"),ACEInputBindings::Down(PC,ToggleInterface));
+ for(FKey Alt:{EKeys::LeftAlt,EKeys::RightAlt})
+ {
+  Hold({Alt,EKeys::Z});
+  TestTrue(TEXT("Either Alt+Z toggles the interface"),ACEInputBindings::Pressed(PC,ToggleInterface));
+  TestFalse(TEXT("Alt+Z does not also strafe"),ACEInputBindings::Down(PC,EKeys::Q));
+ }
+ ACEInputBindings::BeginEdit();ACEInputBindings::Set(ToggleInterface,0,FInputChord(EKeys::F10,false,true,false,false));ACEInputBindings::Commit();
+ ACEInputBindings::Reload();Hold({EKeys::LeftControl,EKeys::F10});
+ TestTrue(TEXT("Interface toggle rebind persists across reload"),ACEInputBindings::Pressed(PC,ToggleInterface));
+ Hold({EKeys::LeftAlt,EKeys::Z});
+ TestFalse(TEXT("Old interface shortcut is released after rebinding"),ACEInputBindings::Down(PC,ToggleInterface));
+ ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();ACEInputBindings::Commit();
  Hold({EKeys::C});TestTrue(TEXT("Retail C strafes right"),ACEInputBindings::Down(PC,EKeys::E));
  TestFalse(TEXT("Retail C no longer crouches"),ACEInputBindings::Down(PC,EKeys::C));
  Hold({EKeys::Q});TestTrue(TEXT("Retail Q autoruns"),ACEInputBindings::Down(PC,EKeys::NumLock));
@@ -129,6 +143,7 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  ACEInputBindings::Defaults();
  const auto RoundTrip=ACEInputBindings::ImportRetailKeymapFile(ExportPath);
  TestTrue(TEXT("Exported file reloads"),RoundTrip.bSuccess);
+ TestTrue(TEXT("Retail keymap import retains the local interface shortcut"),ACEInputBindings::Get(ToggleInterface,0)==FInputChord(EKeys::Z,false,false,true,false));
  TestTrue(TEXT("Save and load preserve modifier bindings"),ACEInputBindings::Get(EKeys::Q,1)==FInputChord(EKeys::A,false,false,true,false));
  TestFalse(TEXT("Save and load preserve unbound actions without invalid empty control records"),ACEInputBindings::Get(EKeys::W,0).Key.IsValid());
  TestEqual(TEXT("Save and load preserve mouse bindings"),ACEInputBindings::Get(EKeys::NumLock,0).Key,EKeys::ThumbMouseButton);
@@ -170,6 +185,39 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  ACEInputBindings::BeginEdit();ACEInputBindings::Set(EKeys::W,2,FInputChord(EKeys::Up,false,true,false,false));ACEInputBindings::Commit();
  TestTrue(TEXT("Explicit rebind can replace DoNothing"),ACEInputBindings::Down(PC,EKeys::W));
  ACEInputBindings::Cancel();
+ // The active file's identity is part of the same draft/commit transaction as
+ // its chords, not transient keyboard-window state.
+ ACEInputBindings::BeginEdit();
+ TestTrue(TEXT("Import records a draft filename"),ACEInputBindings::ImportRetailKeymapFile(ExportPath).bSuccess);
+ const FString ImportedName=FPaths::GetCleanFilename(ExportPath);
+ TestEqual(TEXT("Imported filename excludes the host path"),ACEInputBindings::GetKeymapFileName(),ImportedName);
+ ACEInputBindings::Commit();
+ FConfigFile Reloaded;Reloaded.Read(GGameUserSettingsIni);GConfig->SetFile(GGameUserSettingsIni,&Reloaded);ACEInputBindings::Reload();
+ TestEqual(TEXT("Loaded keymap name survives a process-style settings reload"),ACEInputBindings::GetKeymapFileName(),ImportedName);
+ ACEInputBindings::BeginEdit();ACEInputBindings::SetKeymapFileName(TEXT("Cancelled.keymap"));ACEInputBindings::Cancel();
+ TestEqual(TEXT("Cancel restores the applied filename"),ACEInputBindings::GetKeymapFileName(),ImportedName);
+ ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();
+ TestEqual(TEXT("Defaults names the default mapping"),ACEInputBindings::GetKeymapFileName(),FString(TEXT("acclient.keymap")));
+ ACEInputBindings::Revert();TestEqual(TEXT("Revert restores the applied filename"),ACEInputBindings::GetKeymapFileName(),ImportedName);
+ TestFalse(TEXT("Failed import cannot replace the filename"),ACEInputBindings::ImportRetailKeymapFile(ExportPath+TEXT(".missing")).bSuccess);
+ TestEqual(TEXT("Failed import retains the filename"),ACEInputBindings::GetKeymapFileName(),ImportedName);
+ ACEInputBindings::Defaults();
+ const auto NextSpell=ACEInputBindings::Action(TEXT("SpellNext"));
+ ACEInputBindings::Set(NextSpell,0,FInputChord(EKeys::MouseScrollDown));ACEInputBindings::Commit();ACEInputBindings::SetCombatContext(8);
+ Hold({EKeys::MouseScrollDown});
+ TestTrue(TEXT("Wheel can select the next spell in magic mode"),ACEInputBindings::Pressed(PC,NextSpell));
+ TestFalse(TEXT("Combat wheel action overrides general zoom"),ACEInputBindings::Matches(EKeys::Subtract,FInputChord(EKeys::MouseScrollDown)));
+ ACEInputBindings::SetCombatContext(1);
+ TestTrue(TEXT("Outside magic mode the same wheel still uses its general binding"),ACEInputBindings::Matches(EKeys::Subtract,FInputChord(EKeys::MouseScrollDown)));
+ ACEInputBindings::BeginEdit();ACEInputBindings::Set(EKeys::NumLock,0,FInputChord(EKeys::MouseScrollUp));ACEInputBindings::Commit();
+ Hold({EKeys::MouseScrollUp});
+ TestTrue(TEXT("Wheel pulses also reach held-input actions such as autorun"),ACEInputBindings::Down(PC,EKeys::NumLock));
+ TestFalse(TEXT("Rebinding wheel removes default zoom"),ACEInputBindings::Matches(EKeys::Add,FInputChord(EKeys::MouseScrollUp)));
+ PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::MouseScrollUp,IE_Released,0.f));
+ PC->PlayerInput->ProcessInputStack({},.016f,false);PC->PlayerInput->ProcessInputStack({},.016f,false);
+ TestFalse(TEXT("Wheel action cannot remain held"),ACEInputBindings::Down(PC,EKeys::NumLock));
+ ACEInputBindings::BeginEdit();ACEInputBindings::Set(EKeys::Add,0,FInputChord(EKeys::F6));ACEInputBindings::Commit();
+ Hold({EKeys::F6});TestTrue(TEXT("Zoom can be bound to an ordinary key"),ACEInputBindings::Down(PC,EKeys::Add));
  return !HasAnyErrors();
 }
 #endif

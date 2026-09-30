@@ -240,7 +240,8 @@ public:
 
 	/** Degrees/sec at TurnSpeed=1 — matches local ACEPlayerController prediction. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|Movement", meta = (ClampMin = "45.0", ClampMax = "360.0"))
-	float RemoteTurnRateDegrees = 180.f;
+	// UpdateMotion supplies the interpreted multiplier, including Run's 1.5.
+	float RemoteTurnRateDegrees = FMath::RadiansToDegrees(1.5f);
 	float RemoteWalkSpeedAc = 3.1199999f;
 	float RemoteRunSpeedAc = 4.f;
 	uint32 ApproachTargetSetup = 0;

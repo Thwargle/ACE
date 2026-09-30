@@ -25,6 +25,7 @@ class ACECLIENT_API UACECharacterAppearanceComponent : public UActorComponent
 	friend class FACERetailRuntimeRegressionTest;
 	friend class FACEMovementReviewTest;
 	friend class FACEAvatarMotionTest;
+	friend class FACERunSpeedParityTest;
 	friend class FACEEmoteTransitionTest;
 	friend class FACEMultipartUpdateTest;
 	friend class FACERetailScreenTest;
@@ -160,6 +161,8 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
 	void PlayActionMotion(int32 ActionCommand, float PlayRate = 1.f, int32 Style = 0, bool bHoldFinalPose = false);
+	/** A new local forward command replaces a casting substate, but not queued windup actions. */
+	void InterruptCastWithMovement();
 
 	/** Queue a one-shot to run after the current ActionOneShot finishes (cast after PowerUp). */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")

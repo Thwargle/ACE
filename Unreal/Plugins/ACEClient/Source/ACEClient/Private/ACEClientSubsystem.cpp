@@ -1218,16 +1218,10 @@ bool UACEClientSubsystem::SendCastSpell(int32 SpellId, int32 CasterItemGuid)
 	int32 Target = 0;
 	if (!ResolveSpellCastTarget(SpellId, Sel.bValid ? Sel.Guid : 0, Target)) return false;
 
-	if (Target != 0 && Target != PlayerGuid)
-	{
-		if (UWorld* World = GetWorld())
-		{
-			if (AACEPlayerController* PC = Cast<AACEPlayerController>(World->GetFirstPlayerController()))
-			{
-				PC->FaceWorldTarget(Target);
-			}
-		}
-	}
+	// Retail ClientMagicSystem sends the cast request without teleporting the
+	// player's heading. The server's TurnTo motion handles facing, and manual
+	// movement can interrupt it. Snapping here redirected slide-casting travel
+	// and sent an unsolicited AutoPos before every cast.
 
 	// Wand/orb BuiltInSpell: retail UseWithTarget(caster, target) so ACE VerifySpell
 	// sees the weapon (CastTargetedSpell alone → MagicInvalidSpellType 0x03FC).
@@ -1338,6 +1332,11 @@ void UACEClientSubsystem::SendPingRequest()
 FACESelectedObject UACEClientSubsystem::GetSelectedObject() const
 {
 	return Session ? Session->GetSelectedObject() : FACESelectedObject();
+}
+
+int32 UACEClientSubsystem::GetPreviousSelectedObjectGuid() const
+{
+	return Session ? Session->GetPreviousSelectedObjectGuid() : 0;
 }
 
 void UACEClientSubsystem::NotifyExitedPortalSpace()

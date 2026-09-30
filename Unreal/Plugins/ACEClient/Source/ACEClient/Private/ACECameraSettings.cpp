@@ -57,6 +57,18 @@ namespace ACECameraSettings
     {
         bool Value=false; if (GConfig) GConfig->GetBool(Section,TEXT("InvertMouseY"),Value,GGameUserSettingsIni); return Value;
     }
+    bool GetToggleMouseLook()
+    {
+        bool Enabled=false;
+        if (GConfig) GConfig->GetBool(Section,TEXT("ToggleMouseLook"),Enabled,GGameUserSettingsIni);
+        return Enabled;
+    }
+    void SetToggleMouseLook(bool Enabled)
+    {
+        if (!GConfig) return;
+        GConfig->SetBool(Section,TEXT("ToggleMouseLook"),Enabled,GGameUserSettingsIni);
+        GConfig->Flush(false,GGameUserSettingsIni);
+    }
     void SetMouseInversion(bool InvertX, bool InvertY)
     {
         if (!GConfig) return;

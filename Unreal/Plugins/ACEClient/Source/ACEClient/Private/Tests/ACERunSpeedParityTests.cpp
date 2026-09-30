@@ -4,6 +4,8 @@
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
 #include "ACEDatSubsystem.h"
+#include "ACEInputBindings.h"
+#include "ACECharacterAppearanceComponent.h"
 #include "ACEHoverTooltipWidget.h"
 #include "Dat/ACEDatCursor.h"
 #include "Dat/ACEDatFileTypes.h"
@@ -17,12 +19,20 @@
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
+#include "Misc/ConfigCacheIni.h"
+#include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERunSpeedParityTest,"ACE.RetailParity.RunSpeed",
  EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 
 bool FACERunSpeedParityTest::RunTest(const FString&)
 {
+ const FString OriginalSettings=GGameUserSettingsIni;
+ GGameUserSettingsIni=FPaths::ProjectSavedDir()/TEXT("Automation/RunSpeedFixture.ini");
+ FConfigFile Config;Config.NoSave=false;Config.bCanSaveAllSections=true;
+ GConfig->SetFile(GGameUserSettingsIni,&Config);ACEInputBindings::Reload();
+ ON_SCOPE_EXIT{GGameUserSettingsIni=OriginalSettings;ACEInputBindings::Reload();};
  const auto Values=UWorld::InitializationValues().AllowAudioPlayback(false).RequiresHitProxies(false)
   .CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false);
  auto* World=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);
@@ -66,6 +76,50 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
  VR->bTracking=true;VR->Settings->MovementSmoothing=0;VR->Settings->bRun=true;VR->Settings->MovementScale=1;
  VR->Settings->ForwardAssistDegrees=10;VR->Settings->MovementDirection=0;
  PC->InputComponent->AxisBindings.Reset();
+ // Retail CommandList::AddCommand/NukeCommand stack opposing directions,
+ // instead of summing them to zero. Use the actual controller event path.
+ ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();ACEInputBindings::Commit();
+ auto Key=[&](FKey K,bool Down)
+ {PC->InputKey(FInputKeyEventArgs::CreateSimulated(K,Down?IE_Pressed:IE_Released,Down?1.f:0.f));
+  // This isolated world has no viewport input routing; feed its PlayerInput
+  // as well, while retaining the controller's physical event-order capture.
+  PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(K,Down?IE_Pressed:IE_Released,Down?1.f:0.f));
+  PC->PlayerInput->ProcessInputStack({},1.f/90,false);};
+ struct FAxisCase {FKey Positive,Negative,PositiveKey,NegativeKey;};
+ for(const auto& Pair:{FAxisCase{EKeys::W,EKeys::S,EKeys::W,EKeys::X},
+  {EKeys::E,EKeys::Q,EKeys::C,EKeys::Z},{EKeys::D,EKeys::A,EKeys::D,EKeys::A}})
+ {
+  Key(Pair.PositiveKey,true);Key(Pair.NegativeKey,true);
+  TestEqual(TEXT("Newest opposing movement command takes priority"),ACEInputBindings::MovementAxis(PC,Pair.Positive,Pair.Negative,PC->MovementKeyPressOrder),-1.f);
+  Key(Pair.NegativeKey,false);
+  TestEqual(TEXT("Releasing it restores the previously held command"),ACEInputBindings::MovementAxis(PC,Pair.Positive,Pair.Negative,PC->MovementKeyPressOrder),1.f);
+  Key(Pair.PositiveKey,false);
+ }
+ Key(EKeys::C,true);Key(EKeys::A,true);
+ TestEqual(TEXT("Mouse-facing turn and strafe keys share newest-command priority"),
+  ACEInputBindings::MovementAxis(PC,EKeys::E,EKeys::Q,PC->MovementKeyPressOrder,EKeys::D,EKeys::A),-1.f);
+ Key(EKeys::A,false);
+ TestEqual(TEXT("Mouse-facing release restores the held strafe"),
+  ACEInputBindings::MovementAxis(PC,EKeys::E,EKeys::Q,PC->MovementKeyPressOrder,EKeys::D,EKeys::A),1.f);
+ Key(EKeys::C,false);
+ ACEInputBindings::BeginEdit();ACEInputBindings::Set(EKeys::S,0,FInputChord(EKeys::F2));ACEInputBindings::Commit();
+ Key(EKeys::W,true);Key(EKeys::F2,true);
+ TestEqual(TEXT("Command order follows a rebound physical backward key"),
+  ACEInputBindings::MovementAxis(PC,EKeys::W,EKeys::S,PC->MovementKeyPressOrder),-1.f);
+ Key(EKeys::F2,false);Key(EKeys::W,false);
+ ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();ACEInputBindings::Commit();
+ auto* App=NewObject<UACECharacterAppearanceComponent>(Pawn);Pawn->AddInstanceComponent(App);App->RegisterComponent();
+ App->PlayActionMotion(0x40000034,2.f,ACEMotion::StanceMagic);
+ App->SetLocomotionInput(0,1,true,1);
+ TestEqual(TEXT("Strafe retains the active casting gesture"),App->ActionCommand,0x40000034u);
+ // SetLocomotionInput is deliberately shared with remote presentation;
+ // only the local command edge may interrupt a server casting substate.
+ App->InterruptCastWithMovement();
+ TestEqual(TEXT("New local forward command replaces casting substate"),App->ActionCommand,0u);
+ App->PlayActionMotion(0x1000006F,2.f,ACEMotion::StanceMagic);
+ App->InterruptCastWithMovement();
+ TestEqual(TEXT("Movement does not truncate a queued scarab windup action"),App->ActionCommand,0x1000006Fu);
+ App->ClearActionMotion();
  struct FCase { int32 Skill; float Scale,Burden; int32 Stamina; double Speed; };
  const FCase Cases[]={
   {593,1,0,500,12.2257250946},{593,1.1f,0,500,13.4482976041},
@@ -99,6 +153,31 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
   AddInfo(Label);TestTrue(*Label,FMath::Abs(Actual-C.Speed)<.006);
   TestFalse(TEXT("Flat-ground run remains grounded"),PC->bJumpAirborne);
   PC->PlayerInput->FlushPressedKeys();PC->PlayerInput->ProcessInputStack({},1.f/Rate,false);
+ }
+ for(bool Run:{false,true})
+ {
+  VR->bActive=false;Session->WorldObjects[Self.Guid].Scale=1;
+  Session->PlayerVitals.RunSkillCurrent=593;Session->PlayerVitals.Stamina=500;
+  Session->OnVitalsUpdated.Broadcast(Session->PlayerVitals);Client->SetBurden(0);
+  FACEPosition Pose;Pose.CellId=0x01010001;Pose.SetLocationFromUnreal(StartFeet,100);
+  Pose.SetAceFacingFromUnrealDir2D(FVector::XAxisVector);Session->SetLocalPosition(Pose);
+  PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;
+  PC->bJumpAirborne=false;PC->bStandingJumpLocked=false;PC->StepHoldSeconds=0;
+  Pawn->SetActorLocationAndRotation(StartFeet+FVector(0,0,88),Pose.ToUnrealQuat());
+  Key(EKeys::X,true);if(!Run)Key(EKeys::LeftShift,true);
+  for(int Frame=0;Frame<90;++Frame)PC->PlayerTick(1.f/90);
+  const double Expected=3.12*.65*(Run?12.2257250946/4.:1.);
+  AddInfo(FString::Printf(TEXT("Backpedal run=%d actual=%.6f expected=%.6f"),Run,FVector::Dist2D(StartFeet,Pawn->GetActorLocation())/100.,Expected));
+  TestTrue(TEXT("Backward movement uses negative WalkForward, including Run hold rate"),
+   FMath::Abs(FVector::Dist2D(StartFeet,Pawn->GetActorLocation())/100.-Expected)<.006);
+  Key(EKeys::X,false);
+  PC->PredictedPose=Pose;Session->SetLocalPosition(Pose);PC->bHaveLastServerPose=false;
+  Key(EKeys::D,true);
+  for(int Frame=0;Frame<90;++Frame)PC->PlayerTick(1.f/90);
+  const float Yaw=FMath::RadiansToDegrees(Pose.GetAcQuat().AngularDistance(PC->PredictedPose.GetAcQuat()));
+  TestTrue(TEXT("Local turning agrees with retail turn modifier and Run multiplier"),
+   FMath::Abs(Yaw-FMath::RadiansToDegrees(1.5f)*(Run?1.5f:1.f))<.02f);
+  Key(EKeys::D,false);if(!Run)Key(EKeys::LeftShift,false);
  }
  // Retail CMotionInterp::get_state_velocity / CACQualities::InqJumpVelocity:
  // the airborne velocity is not scaled by creature size like grounded root motion.

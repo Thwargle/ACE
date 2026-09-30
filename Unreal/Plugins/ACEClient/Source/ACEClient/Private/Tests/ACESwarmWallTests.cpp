@@ -4,7 +4,11 @@
 #include "ACEDatSubsystem.h"
 #include "ACEEnvCellActor.h"
 #include "ACETypes.h"
+#include "ACEWorldEntityActor.h"
+#include "ACECreatureFixtures.h"
 #include "Components/SphereComponent.h"
+#include "HAL/IConsoleManager.h"
+#include "Misc/ScopeExit.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 
@@ -30,6 +34,10 @@ bool FACESwarmWallTest::RunTest(const FString&)
  FCollisionQueryParams Query(SCENE_QUERY_STAT(SwarmWallRegression),true);
  const FVector Center=Seed.ToUnrealLocation(100)+FVector(0,0,90.75);
  int32 Cases=0,ForcedMoves=0,ExcessTravel=0,WallOverlaps=0;
+ int32 AuthoredCases[4]={},AuthoredOverlaps[4]={};
+ auto* Batch=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Collision.BatchCrowdQueries"));
+ const int OriginalBatch=Batch->GetInt();ON_SCOPE_EXIT{Batch->Set(OriginalBatch,ECVF_SetByCode);};
+ Batch->Set(1,ECVF_SetByCode);
  auto SpawnBody=[&](float Radius,const FVector& At)
  {
   auto* Mob=World->SpawnActor<AActor>();auto* Body=NewObject<USphereComponent>(Mob);Mob->SetRootComponent(Body);
@@ -74,18 +82,66 @@ bool FACESwarmWallTest::RunTest(const FString&)
    }
    Mob->Destroy();
   }
+  for(int32 Profile=0;Profile<3;++Profile)
+  {
+   FACEWorldObject Object;Object.Guid=0x72020000+Profile;Object.bHasPosition=true;Object.Position=Seed;
+   ACECreatureFixtures::Apply(Object,Profile);
+   TArray<FACEDatCollisionShape> Spheres;bool BSP=false;Dat->GetSetupCollisionShapes(Object.SetupId,Spheres,BSP);
+   double Envelope=0;
+   for(const auto& Sphere:Spheres)for(double Z:{48.,133.5})
+    Envelope=FMath::Max(Envelope,FMath::Sqrt(FMath::Max(0.,
+     FMath::Square(48.+Sphere.Radius*100*Object.Scale)-FMath::Square(Z-Sphere.Origin.Z*100*Object.Scale))));
+   auto* Creature=World->SpawnActor<AACEWorldEntityActor>();Creature->InitializeFromObject(Object,100,true);
+   // Isolate the creature's permission to escape; the full-room swarm cases
+   // below independently verify that those escapes still stop at architecture.
+   FCollisionQueryParams CreatureOnly=Query;CreatureOnly.AddIgnoredActor(Room);
+   for(double Depth:{2.,20.})
+   {
+    Creature->SetActorLocation(Standing-FVector(0,0,90.75)+Normal*(Envelope-Depth));
+    FHitResult Contact;
+    TestTrue(*FString::Printf(TEXT("%s fixture actually overlaps the standing player"),*Object.Name),
+     ACEBodySweep::SweepBody(*World,Contact,Standing,Standing+Normal*.001,Shape,Query)
+      && Contact.bStartPenetrating && ACEBodySweep::IsCreatureBody(Contact));
+    const FVector Still=ACEBodySweep::Recover(*World,Standing,Normal*20,Contact,Shape,Query);
+    TestTrue(TEXT("An authored creature cannot move the player without input"),Still.Equals(Standing,.01));
+    FHitResult Hit;
+    TestFalse(*FString::Printf(TEXT("%s allows a tangential escape from overlap"),*Object.Name),
+     ACEBodySweep::SweepBody(*World,Hit,Standing,Standing+Tangent*10,Shape,CreatureOnly));
+    TestFalse(*FString::Printf(TEXT("%s allows moving away from overlap"),*Object.Name),
+     ACEBodySweep::SweepBody(*World,Hit,Standing,Standing-Normal*10,Shape,CreatureOnly));
+    TestTrue(*FString::Printf(TEXT("%s blocks moving deeper into its body"),*Object.Name),
+     ACEBodySweep::SweepBody(*World,Hit,Standing,Standing+Normal*5,Shape,CreatureOnly)&&ACEBodySweep::IsCreatureBody(Hit));
+    ++Cases;
+   }
+   Creature->Destroy();
+  }
   FRandomStream Random(Seed.CellId+Angle);
   // Fixed seed: exercise grounded slides and ascent through dense moving
   // sphere contacts at both straight walls and rounded doorway edges.
-  for(int32 Trial=0;Trial<80;++Trial)
+  for(int32 Trial=0;Trial<88;++Trial)
   {
    TArray<AActor*> Swarm;
    FCollisionQueryParams Environment=Query;
+   const int32 Profile=Trial<80?-1:(Trial-80)/2; // each archetype, then mixed
    for(int32 I=0;I<12;++I)
    {
     const float Radius=Random.FRandRange(20,60);
-    auto* Mob=SpawnBody(Radius,Touch+Normal*Random.FRandRange(20,90)+Tangent*Random.FRandRange(-90,90)+FVector(0,0,Random.FRandRange(-70,70)));
+    const FVector At=Touch+Normal*Random.FRandRange(20,90)+Tangent*Random.FRandRange(-90,90);
+    AActor* Mob;
+    if(Profile<0)Mob=SpawnBody(Radius,At+FVector(0,0,Random.FRandRange(-70,70)));
+    else
+    {
+     FACEWorldObject Object;Object.Guid=0x72000000+I;Object.bHasPosition=true;Object.Position=Seed;
+     ACECreatureFixtures::Apply(Object,Profile==3?I:Profile);
+     auto* Creature=World->SpawnActor<AACEWorldEntityActor>();Creature->InitializeFromObject(Object,100,true);
+     Creature->SetActorLocation(At-FVector(0,0,90.75));Mob=Creature;
+    }
     Environment.AddIgnoredActor(Mob);Swarm.Add(Mob);
+   }
+   if(Profile>=0)
+   {
+    TArray<FHitResult> Contacts;ACEBodySweep::SweepBodyContacts(*World,Contacts,Touch,Touch+FVector(0,0,.001),Shape,Query);
+    AuthoredOverlaps[Profile]+=Contacts.ContainsByPredicate([](const FHitResult& H){return H.bStartPenetrating&&ACEBodySweep::IsCreatureBody(H);});
    }
    for(int32 Mode=0;Mode<3;++Mode)
    {
@@ -93,6 +149,16 @@ bool FACESwarmWallTest::RunTest(const FString&)
     FVector Recovered=Touch;
     FVector To=Touch-Normal*Random.FRandRange(0,30)+Tangent*Random.FRandRange(-30,30);
     if(Mode==2)To.Z+=25;
+    if(Profile>=0)
+    {
+     FHitResult Reference,Optimized;Batch->Set(0,ECVF_SetByCode);
+     const bool A=ACEBodySweep::SweepBody(*World,Reference,Touch,To,Shape,Query);
+     Batch->Set(1,ECVF_SetByCode);
+     const bool B=ACEBodySweep::SweepBody(*World,Optimized,Touch,To,Shape,Query);
+     TestEqual(TEXT("Batched queries preserve real-creature obstruction"),B,A);
+     if(A&&B)TestTrue(TEXT("Batched queries preserve real-creature contact position"),
+      Reference.Location.Equals(Optimized.Location,.01)&&FMath::IsNearlyEqual(Reference.Time,Optimized.Time,.0001f));
+    }
     if(Mode==0 && ACEBodySweep::Sweep(*World,Contact,Touch,Touch+FVector(0,0,.1),Shape,Query) && Contact.bStartPenetrating)
     {
      Recovered=ACEBodySweep::Recover(*World,Touch,Contact.Normal.GetSafeNormal2D()*(Contact.PenetrationDepth+.2),Contact,Shape,Query);
@@ -103,6 +169,7 @@ bool FACESwarmWallTest::RunTest(const FString&)
     else if(Mode==2)
      Recovered=ACEBodySweep::MoveAirborne(*World,Touch,To,Shape,Query,false).Position;
     ++Cases;
+    if(Profile>=0)++AuthoredCases[Profile];
     if(Mode>0 && FVector::Dist(Recovered,Touch)>FVector::Dist(To,Touch)+.5)
     {
      ++ExcessTravel;
@@ -119,6 +186,12 @@ bool FACESwarmWallTest::RunTest(const FString&)
  TestEqual(TEXT("Crowded movement cannot add a body-sized shove to player travel"),ExcessTravel,0);
  TestEqual(TEXT("Crowded movement stays out of hallway walls and floors"),WallOverlaps,0);
  AddInfo(FString::Printf(TEXT("Checked %d crowd recovery cases at 0x01430171"),Cases));
+ for(int32 Profile=0;Profile<4;++Profile)
+ {
+  const FString Name=Profile==3?TEXT("Mixed swarm"):ACECreatureFixtures::Models[Profile].Name;
+  TestTrue(*FString::Printf(TEXT("%s exercises real authored contacts"),*Name),AuthoredOverlaps[Profile]>0);
+  AddInfo(FString::Printf(TEXT("%s: %d wall/strafe/jump cases; %d initially overlapping swarms"),*Name,AuthoredCases[Profile],AuthoredOverlaps[Profile]));
+ }
  World->DestroyWorld(false);GEngine->DestroyWorldContext(World);return true;
 }
 #endif

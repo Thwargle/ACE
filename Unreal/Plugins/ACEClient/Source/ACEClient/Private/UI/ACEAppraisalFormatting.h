@@ -331,4 +331,17 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
         if (const auto* Value = Info.StringProperties.Find(Entry.Key); Value && !Value->IsEmpty()) Text += FString(Entry.Value) + *Value + TEXT("\n");
     return Text;
 }
+inline FString ItemExaminationText(const FACEAppraisalInfo& Info,UACEDatSubsystem* Dat,bool IncludeValue=true,bool IncludeBurden=true)
+{
+    FString Body=Info.Summary.IsEmpty()?(Info.bSuccess?FString():TEXT("You fail to appraise the item.")):Info.Summary;
+    TArray<FString> Lines;Body.ParseIntoArrayLines(Lines,false);
+    Lines.RemoveAll([](const FString& Line){return Line.StartsWith(TEXT("Spells (")) || Line.StartsWith(TEXT("  Spell "))
+        || (Line.StartsWith(TEXT("Damage ")) && Line.Contains(TEXT("  Speed ")) && Line.Contains(TEXT("  Offense ")));});
+    FString Prefix;
+    if(IncludeValue)Prefix+=Info.bHasValue?TEXT("Value: ")+FText::AsNumber(Info.Value).ToString()+TEXT("\n"):TEXT("Value: ???\n");
+    if(IncludeBurden)Prefix+=Info.bHasBurden?TEXT("Burden: ")+FText::AsNumber(Info.Burden).ToString()+TEXT("\n"):TEXT("Burden: Unknown\n");
+    Body=Prefix+ItemDetails(Info,Dat)+FString::Join(Lines,TEXT("\n"));
+    const FString Mana=ManaStoneDetails(Info);if(!Mana.IsEmpty())Body+=TEXT("\n")+Mana;
+    return Body;
+}
 }

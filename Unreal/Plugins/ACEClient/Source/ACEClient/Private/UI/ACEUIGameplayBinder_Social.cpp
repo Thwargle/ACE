@@ -1,3 +1,4 @@
+#include "ACEHoverTooltipWidget.h"
 #include "UI/ACERetailTextBlock.h"
 #include "UI/ACEUIGameplayBinder.h"
 #include "ACESession.h"
@@ -1293,7 +1294,7 @@ void UACEUIGameplayBinder::RefreshSalvageOverlays()
 		SalvageItemSlotGuids[i] = Guid;
 		SetIconDid(Icon, Obj.IconId);
 		Icon->SetVisibility(ESlateVisibility::Visible);
-		Icon->SetToolTipText(FText::FromString(Obj.Name));
+		UACEHoverTooltipWidget::SetWidgetTooltip(Icon, FText::FromString(Obj.Name));
 		const int32 Col = i % Cols;
 		const int32 Row = i / Cols;
 		if (Icon->GetParent() != Canvas->GetElementLayer())

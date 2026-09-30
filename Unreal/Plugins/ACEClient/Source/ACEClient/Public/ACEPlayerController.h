@@ -55,6 +55,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACERetailScreenTest;
     friend class UACEUICharSelectBinder;
     friend class UACEUICharGenBinder;
+    friend class UACEVideoSettingsWidget;
     friend class FACERetailCharacterCreationScreenTest;
 
 public:
@@ -63,6 +64,9 @@ public:
 	class UACEVRComponent* GetVRComponent() const;
 	UPROPERTY(Transient) TObjectPtr<class UACEFrameRateWidget> FrameRateWidget;
 	void UpdateFrameRateOverlay();
+	/** Session-only desktop presentation toggle; gameplay and window state remain intact. */
+	void SetDesktopInterfaceHidden(bool bHideInterface);
+	bool IsDesktopInterfaceHidden() const { return bDesktopInterfaceHidden && !IsVRActive(); }
 	TSharedPtr<class FACEKeyboardRouter> KeyboardRouter;
 
 	virtual void BeginPlay() override;
@@ -137,8 +141,8 @@ public:
 	UFUNCTION(BlueprintPure, Category = "ACE|UI")
 	bool GetHoverTooltip(FString& OutText, FVector2D& OutCursorPixels) const;
 
-	/** Retail NumPad +/- / mouse wheel — zoom third-person camera in or out. */
-	void ApplyCameraWheelZoom(float WheelDelta);
+	/** Route gameplay wheel input to zoom or the player's rebound action. */
+	void ApplyCameraWheelZoom(float WheelDelta, bool bForwardHotkeys = false);
 
 	/** Predicted CellId when local prediction is active; otherwise session CellId. */
 	UFUNCTION(BlueprintPure, Category = "ACE")
@@ -180,6 +184,7 @@ public:
 	void SetPendingUseTargeting(bool bPending);
 
 protected:
+	bool bDesktopInterfaceHidden = false;
 	UPROPERTY()
 	TObjectPtr<UACELoginWidget> LoginWidget = nullptr;
 
@@ -243,6 +248,8 @@ protected:
 	TObjectPtr<UACEClientSubsystem> Client = nullptr;
 
 	float ForwardAxis = 0.f;
+	TMap<FKey,uint64> MovementKeyPressOrder;
+	uint64 MovementKeySequence = 0;
 	float RightAxis = 0.f;
 	float TurnAxis = 0.f;
 	float ForwardSent = 0.f;
@@ -363,6 +370,7 @@ protected:
 	bool bCameraMapWasDown = false;
 	bool bMapSavedFog = true;
 	bool bMouseLookActive = false;
+	bool bMouseLookToggled = false;
 	bool bInstantMouseLookHeld = false;
 	bool bMouseLookUsesCapture = false;
 	float MouseLookTravelPixels = 0.f;

@@ -37,6 +37,10 @@ ACECLIENT_API bool ExportRetailKeymapFile(const FString& Path, FString& Error);
 ACECLIENT_API const TArray<FAction>& Actions();
 ACECLIENT_API bool Down(const APlayerController* PC, FKey DefaultKey);
 ACECLIENT_API bool Pressed(const APlayerController* PC, FKey DefaultKey);
+// Retail CommandList: newest held direction wins; releasing it restores the
+// previously held direction. Preserve physical event order across remaps.
+ACECLIENT_API float MovementAxis(const APlayerController* PC, FKey Positive, FKey Negative,
+ const TMap<FKey,uint64>& PressOrder,FKey AdditionalPositive=FKey(),FKey AdditionalNegative=FKey());
 ACECLIENT_API bool Matches(FKey ActionKey, const FInputChord& Input);
 ACECLIENT_API void BeginEdit();
 ACECLIENT_API void Defaults();
@@ -47,4 +51,6 @@ ACECLIENT_API void Reload();
 ACECLIENT_API FInputChord Get(FKey DefaultKey, int32 Slot);
 ACECLIENT_API void Set(FKey DefaultKey, int32 Slot, FInputChord Chord);
 ACECLIENT_API bool IsEditing();
+ACECLIENT_API FString GetKeymapFileName();
+ACECLIENT_API void SetKeymapFileName(const FString& Name);
 }

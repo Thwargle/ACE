@@ -12,6 +12,8 @@ namespace ACECameraRetail
 	/** SmartBox::m_fGameFOV — stored as 90° in radians, then divided by (aspect − 0.1). */
 	constexpr float GameFovRadians = 1.5707964f;
 	constexpr float DefaultPivotZAc = 1.5f;
+	/** SmartBox::viewer_sphere used for the camera's cell/wall transition. */
+	constexpr float ViewerRadiusAc = 0.3f;
 	constexpr float DefaultOffsetYAc = -2.5f;
 	constexpr float DefaultOffsetZAc = 0.75f;
 	constexpr float InHeadOffsetYAc = 0.18000001f;
@@ -37,6 +39,12 @@ namespace ACECameraRetail
 	/** CameraSet::Raise/Lower translate by 0.2 units per call in look-down mode.
 	 * Normalize the 60 Hz step to our shared keyboard/mouse orbit delta. */
 	constexpr float LookDownUnitsPerOrbitDegree = 0.2f * 60.f / NumpadOrbitDegreesPerSecond;
+	inline bool CanUseMapView(int32 CellId)
+	{
+		// A 450-unit exterior view cannot represent an interior cell's PVS.
+		const uint32 Cell = uint32(CellId) & 0xffffu;
+		return Cell > 0 && Cell < 0x100u;
+	}
 	/** Optional camera controls requested by the player: orbit at rest, follow on movement. */
 	inline float FollowTurnDegrees(float BoomYaw, float DeltaSeconds, bool bMoving, bool bFaceCamera = false)
 	{

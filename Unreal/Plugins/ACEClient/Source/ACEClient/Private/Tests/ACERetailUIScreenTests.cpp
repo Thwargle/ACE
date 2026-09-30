@@ -100,6 +100,41 @@ static FORCENOINLINE void CheckCameraPreview(FAutomationTestBase& Test, UACEUIGa
     else Test.AddError(TEXT("FOV slider is missing"));
 }
 
+static FORCENOINLINE void CheckKeyboardCapture(FAutomationTestBase& Test, UACERetailKeySelector* Key)
+{
+            const auto CaptureSlate=Key->TakeWidget();
+            const auto SlateButton=CaptureSlate->GetChildren()->GetChildAt(0);
+            Test.TestTrue(TEXT("Only the retail label paints; the capture control text is collapsed"),SlateButton->GetChildren()->GetChildAt(0)->GetVisibility()==EVisibility::Collapsed);
+            const FKeyEvent EnterKey(EKeys::Enter,FModifierKeysState(),0,false,0,0);
+            CaptureSlate->OnKeyDown(Key->GetCachedGeometry(),EnterKey);CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),EnterKey);
+            Test.TestTrue(TEXT("Activating a mapping button starts key capture"),Key->GetIsSelectingKey());
+            Test.TestTrue(TEXT("Synthetic right Shift release is filtered"),Key->FilterCaptureKey(FKeyEvent(EKeys::RightShift,FModifierKeysState(),0,false,0,0),false));
+            Test.TestTrue(TEXT("An orphan modifier release cannot finish key capture"),Key->GetIsSelectingKey());
+            Key->FilterCaptureKey(FKeyEvent(EKeys::F7,FModifierKeysState(),0,false,0,0),true);
+            Test.TestFalse(TEXT("Matching key release is delivered"),Key->FilterCaptureKey(FKeyEvent(EKeys::F7,FModifierKeysState(),0,false,0,0),false));
+            CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),FKeyEvent(EKeys::F7,FModifierKeysState(),0,false,0,0));Key->RefreshBinding();
+            Test.TestEqual(TEXT("Captured key updates the draft"),ACEInputBindings::Get(EKeys::W,0).Key,EKeys::F7);
+            Test.TestEqual(TEXT("Retail label shows the captured binding"),Key->RetailLabel->GetText().ToString(),FString(TEXT("F7")));
+            for(float Delta:{1.f,-1.f})
+            {
+                CaptureSlate->OnKeyDown(Key->GetCachedGeometry(),EnterKey);CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),EnterKey);
+                const FPointerEvent Wheel(0,FVector2D::ZeroVector,FVector2D::ZeroVector,TSet<FKey>(),EKeys::Invalid,Delta,FModifierKeysState());
+                Test.TestTrue(TEXT("Wheel capture consumes the event instead of scrolling the key list"),Key->FilterCaptureWheel(Wheel));
+                Test.TestFalse(TEXT("Wheel completes binding capture"),Key->GetIsSelectingKey());
+                Test.TestEqual(TEXT("Wheel direction becomes the selected hotkey"),ACEInputBindings::Get(EKeys::W,0).Key,Delta>0?EKeys::MouseScrollUp:EKeys::MouseScrollDown);
+            }
+            for(const FKey& Modifier:{EKeys::LeftShift,EKeys::RightShift,EKeys::LeftControl,EKeys::RightControl,EKeys::LeftAlt,EKeys::RightAlt})
+            {
+                CaptureSlate->OnKeyDown(Key->GetCachedGeometry(),EnterKey);CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),EnterKey);
+                const FKeyEvent Event(Modifier,FModifierKeysState(),0,false,0,0);
+                Key->FilterCaptureKey(Event,true);
+                Test.TestTrue(TEXT("Unpressed key cannot replace the pressed modifier"),Key->FilterCaptureKey(FKeyEvent(EKeys::F8,FModifierKeysState(),0,false,0,0),false));
+                Test.TestFalse(TEXT("Physical modifier release reaches capture"),Key->FilterCaptureKey(Event,false));
+                CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),Event);Key->RefreshBinding();
+                Test.TestEqual(TEXT("Capture preserves each modifier's physical left/right identity"),ACEInputBindings::Get(EKeys::W,0).Key,Modifier);
+            }
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailScreenTest,"ACE.RetailParity.UIScreens",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACERetailScreenTest::RunTest(const FString& Parameters)
@@ -1403,29 +1438,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         }
         {
             auto* Key=CastChecked<UACERetailKeySelector>(Gameplay->KeyboardRows[0]);
-            const auto CaptureSlate=Key->TakeWidget();
-            const auto SlateButton=CaptureSlate->GetChildren()->GetChildAt(0);
-            TestTrue(TEXT("Only the retail label paints; the capture control text is collapsed"),SlateButton->GetChildren()->GetChildAt(0)->GetVisibility()==EVisibility::Collapsed);
-            const FKeyEvent EnterKey(EKeys::Enter,FModifierKeysState(),0,false,0,0);
-            CaptureSlate->OnKeyDown(Key->GetCachedGeometry(),EnterKey);CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),EnterKey);
-            TestTrue(TEXT("Activating a mapping button starts key capture"),Key->GetIsSelectingKey());
-            TestTrue(TEXT("Synthetic right Shift release is filtered"),Key->FilterCaptureKey(FKeyEvent(EKeys::RightShift,FModifierKeysState(),0,false,0,0),false));
-            TestTrue(TEXT("An orphan modifier release cannot finish key capture"),Key->GetIsSelectingKey());
-            Key->FilterCaptureKey(FKeyEvent(EKeys::F7,FModifierKeysState(),0,false,0,0),true);
-            TestFalse(TEXT("Matching key release is delivered"),Key->FilterCaptureKey(FKeyEvent(EKeys::F7,FModifierKeysState(),0,false,0,0),false));
-            CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),FKeyEvent(EKeys::F7,FModifierKeysState(),0,false,0,0));Key->RefreshBinding();
-            TestEqual(TEXT("Captured key updates the draft"),ACEInputBindings::Get(EKeys::W,0).Key,EKeys::F7);
-            TestEqual(TEXT("Retail label shows the captured binding"),Key->RetailLabel->GetText().ToString(),FString(TEXT("F7")));
-            for(const FKey& Modifier:{EKeys::LeftShift,EKeys::RightShift,EKeys::LeftControl,EKeys::RightControl,EKeys::LeftAlt,EKeys::RightAlt})
-            {
-                CaptureSlate->OnKeyDown(Key->GetCachedGeometry(),EnterKey);CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),EnterKey);
-                const FKeyEvent Event(Modifier,FModifierKeysState(),0,false,0,0);
-                Key->FilterCaptureKey(Event,true);
-                TestTrue(TEXT("Unpressed key cannot replace the pressed modifier"),Key->FilterCaptureKey(FKeyEvent(EKeys::F8,FModifierKeysState(),0,false,0,0),false));
-                TestFalse(TEXT("Physical modifier release reaches capture"),Key->FilterCaptureKey(Event,false));
-                CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),Event);Key->RefreshBinding();
-                TestEqual(TEXT("Capture preserves each modifier's physical left/right identity"),ACEInputBindings::Get(EKeys::W,0).Key,Modifier);
-            }
+            CheckKeyboardCapture(*this,Key);
             ACEInputBindings::Revert();Gameplay->RefreshKeyboardOverlays();
         }
         Gameplay->HandleKeyboardNamedClick(TEXT("KeyboardSaveKeymapAsButton"));
@@ -1438,6 +1451,9 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         Gameplay->ToggleKeyboardMappingUI();
         Gameplay->HandleKeyboardNamedClick(TEXT("CharacterSettingsTab"));
         CaptureScreen(TEXT("GameplayKeyboardCharacter"));
+        Gameplay->bKeymapSave=false;Gameplay->HandleKeymapImport(CustomPath);
+        Gameplay->HandleKeyboardNamedClick(TEXT("KeymapFileOK"));
+        TestEqual(TEXT("Review displays the loaded filename"),ACEInputBindings::GetKeymapFileName(),FString(TEXT("CustomFixture.keymap")));
         ACEInputBindings::Set(EKeys::W,0,FInputChord(EKeys::F10));
         Gameplay->HandleKeyboardNamedClick(TEXT("KeyboardOKButton"));
         FConfigFile SavedBindings; SavedBindings.Read(GGameUserSettingsIni);
@@ -1447,6 +1463,10 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         ACEInputBindings::Reload();
         TestEqual(TEXT("Saved movement key survives a settings reload"),ACEInputBindings::Get(EKeys::W,0).Key,EKeys::F10);
         TestFalse(TEXT("Closing key editor releases game input"),ACEInputBindings::IsEditing());
+        Gameplay->ToggleKeyboardMappingUI();Gameplay->RefreshKeyboardOverlays();
+        TestTrue(TEXT("Reopened key editor displays the persisted custom filename"),Gameplay->KeyboardLabels.ContainsByPredicate(
+            [](const auto& Label){return Label && Label->GetText().ToString()==TEXT("CustomFixture.keymap");}));
+        Gameplay->HandleKeyboardNamedClick(TEXT("KeyboardCancelButton"));
     }
     ACEInputBindings::Reload();
     if (auto Toolbar=Manager->FindElementByName(TEXT("PanelButton_SkillManagementButton")))
@@ -2483,6 +2503,9 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             AddObject(80010,12,false);AddObject(80011,15,false);
             Session.WorldObjects[80010].ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
             Session.WorldObjects[80011].ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
+            AddObject(80012,2,false);
+            Session.WorldObjects[80012].ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
+            Session.WorldObjects[80012].PetOwnerId=80001;
             const int32 ItemTypes[]={ACEItemType::Misc,ACEItemType::Portal,ACEItemType::Container,ACEItemType::Misc,ACEItemType::Misc};
             const TCHAR* ItemNames[]={TEXT("Door"),TEXT("Portal"),TEXT("Corpse"),TEXT("Sign"),TEXT("Ground loot")};
             for(int32 I=0;I<UE_ARRAY_COUNT(ItemTypes);++I)
@@ -2590,6 +2613,34 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 Controller->PlayerInput->ProcessInputStack({},.016f,false);
                 Gameplay->PollKeyboardActions(Controller);
             };
+            {
+                TGuardValue<int32> KeepCombat(Gameplay->CombatMode,Gameplay->CombatMode);
+                TGuardValue<int32> KeepServerCombat(Session.PlayerVitals.CombatMode,Session.PlayerVitals.CombatMode);
+                Session.ClearPendingUse();
+                FACEWorldObject UseTarget;UseTarget.Guid=81001;UseTarget.bHasPosition=true;
+                UseTarget.Position=Position;UseTarget.Position.Location.X+=10;UseTarget.ItemUseable=32;UseTarget.UseRadius=.6f;
+                for(int32 Mode:{1,2,4,8}) for(int32 Kind=0;Kind<3;++Kind)
+                {
+                    Gameplay->CombatMode=Session.PlayerVitals.CombatMode=Mode;
+                    UseTarget.ItemType=Kind==0?ACEItemType::Creature:Kind==1?ACEItemType::Portal:0;
+                    UseTarget.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck|(Kind==2?ACEObjectDescFlag::Door:0);
+                    Session.WorldObjects.Add(UseTarget.Guid,UseTarget);Client->SelectObject(UseTarget.Guid);
+                    Controller->ClearServerMoveTo();
+                    const uint32 BeforeUse=Session.NextGameActionSequence;
+                    Press(EKeys::R);
+                    TestTrue(TEXT("R approaches NPCs, portals and doors in every combat stance"),Controller->bServerMoveToActive);
+                    TestEqual(TEXT("R approaches the selected object"),Controller->ServerMoveToTargetGuid,UseTarget.Guid);
+                    TestFalse(TEXT("Approaching does not prematurely lock item use"),Session.IsUseBusy());
+                    Press(EKeys::R);
+                    TestEqual(TEXT("Repeated R during approach does not send duplicate Use or change stance"),Session.NextGameActionSequence,BeforeUse);
+                    TestEqual(TEXT("World use preserves combat stance"),Session.PlayerVitals.CombatMode,Mode);
+                }
+                Controller->ClearServerMoveTo();Session.PendingEquipmentGuid=81002;
+                Press(EKeys::R);
+                TestFalse(TEXT("R still waits for an actual equipment transaction"),Controller->bServerMoveToActive);
+                Session.CancelEquipmentSwap();Session.WorldObjects.Remove(UseTarget.Guid);
+                Client->SelectObject(Stack.Guid);
+            }
             Gameplay->ShowPanelPage(TEXT("SocialPanel_Field"));Gameplay->SyncSocialPanelTab(TEXT("AllegiancePage"));
             Press(EKeys::F3);
             TestEqual(TEXT("Friends shortcut changes social subtab instead of closing the panel"),Gameplay->ActiveSocialTab,FString(TEXT("FriendsPage")));
@@ -2638,6 +2689,17 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
 				Controller->TryPrefetchGameplayHudAssets();
 			TestTrue(TEXT("Portal prefetch resolves existing HUD resources across ticks"),Controller->bGameplayUiAssetsReady);
 			TestTrue(TEXT("Portal prefetch preserves inventory frame identity and visibility"),Manager->FindElementByName(TEXT("InventoryPanel_Field"))==Frame && Frame->bVisible);
+			Controller->SetDesktopInterfaceHidden(true);
+			TestTrue(TEXT("Desktop interface can be hidden"),Controller->IsDesktopInterfaceHidden());
+			TestEqual(TEXT("Hidden interface collapses the whole canvas"),Canvas->GetVisibility(),ESlateVisibility::Collapsed);
+			TestTrue(TEXT("Hiding keeps the open inventory state intact"),Frame->bVisible && Gameplay->ActivePanelPage==TEXT("InventoryPanel_Field"));
+			Controller->SetDesktopInterfaceHidden(false);
+			TestEqual(TEXT("Showing restores the existing canvas"),Canvas->GetVisibility(),ESlateVisibility::Visible);
+			TestTrue(TEXT("Showing preserves window identity"),Manager->FindElementByName(TEXT("InventoryPanel_Field"))==Frame);
+			Controller->SetDesktopInterfaceHidden(true);
+			Gameplay->ToggleKeyboardMappingUI();
+			TestFalse(TEXT("Opening keybind capture reveals the hidden interface"),Controller->IsDesktopInterfaceHidden());
+			Gameplay->ToggleKeyboardMappingUI();
 			Controller->DatCanvasWidget=nullptr;Controller->DatGameplayBinder=nullptr;
 		}
         FACEWorldObject Clicked;Clicked.Guid=456;Clicked.SetupId=0x02000001;Clicked.ItemType=ACEItemType::Creature;
@@ -2778,6 +2840,93 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             }
             return false;
         };
+        // Retail Give (CPlayerSystem action 0x10000040) uses the selection
+        // preceding the inventory item, not an extra Use-target click.
+        {
+            TGuardValue<int32> KeepPrevious(Session.PreviousSelectedObjectGuid,Session.PreviousSelectedObjectGuid);
+            TGuardValue<uint32> KeepOptions(Session.CharacterOptions1,Session.CharacterOptions1 & ~0x04000000u);
+            const auto SavedSelection=Session.SelectedObject;
+            FACEWorldObject Gift;Gift.Guid=99110;Gift.Name=TEXT("Give stack");Gift.ItemType=ACEItemType::Misc;
+            Gift.ContainerId=Session.PlayerGuid;Gift.StackSize=50;Gift.MaxStackSize=100;
+            FACEWorldObject Recipient;Recipient.Guid=99111;Recipient.Name=TEXT("Quest collector");
+            Recipient.ItemType=ACEItemType::Creature;Recipient.bHasPosition=true;
+            Recipient.Position=Session.PlayerPosition;Recipient.Position.Location.X+=10;
+            Session.WorldObjects.Add(Gift.Guid,Gift);Session.WorldObjects.Add(Recipient.Guid,Recipient);
+            Session.ClearPendingUse();Gameplay->CancelPendingUseWith();
+            ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();
+            ACEInputBindings::Set(ACEInputBindings::Action(TEXT("SelectionGive")),0,FInputChord(EKeys::F7));ACEInputBindings::Commit();
+            Controller->PlayerInput=NewObject<UPlayerInput>(Controller);
+            auto Select=[&](int32 Guid)
+            {
+                Client->SelectObject(Guid);Gameplay->HandleSelectionChanged(Client->GetSelectedObject());
+            };
+            auto Give=[&]()
+            {
+                Controller->ClearServerMoveTo();Session.CachedC2SPackets.Reset();
+                Controller->PlayerInput->FlushPressedKeys();
+                Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::F7,IE_Pressed,1.f));
+                Controller->PlayerInput->ProcessInputStack({},.016f,false);
+                Gameplay->PollAdditionalKeyboardActions(Controller);
+                TestEqual(TEXT("Give never leaves an item awaiting a Use target"),Gameplay->GetPendingUseWithSourceGuid(),0);
+                TestFalse(TEXT("Give leaves the mouse out of Use-target mode"),Controller->bPendingUseTargeting);
+                TestFalse(TEXT("Give never sends Use or UseWithTarget"),HasAction(ACEGameAction::Use)||HasAction(ACEGameAction::UseWithTarget));
+            };
+            Select(Recipient.Guid);Select(Gift.Guid);Gameplay->SelectedStackAmount=7;
+            Select(Gift.Guid);
+            TestEqual(TEXT("Reselecting an item preserves its recipient"),Client->GetPreviousSelectedObjectGuid(),Recipient.Guid);
+            Give();
+            TestTrue(TEXT("Rebound Give sends directly to the existing recipient"),HasAction(ACEGameAction::GiveObjectRequest));
+            int32 GiveCount=0;
+            for(const auto& Packet:Session.CachedC2SPackets)
+            {
+                FACEBinaryReader Wire(Packet.Value.Payload);Wire.Skip(16);
+                if(Wire.ReadUInt32()!=ACEOpcode::GameAction)continue;
+                Wire.ReadUInt32();if(Wire.ReadUInt32()!=ACEGameAction::GiveObjectRequest)continue;
+                ++GiveCount;
+                TestEqual(TEXT("Give wire recipient is the previous selection"),int32(Wire.ReadUInt32()),Recipient.Guid);
+                TestEqual(TEXT("Give wire source is the inventory item"),int32(Wire.ReadUInt32()),Gift.Guid);
+                TestEqual(TEXT("Give wire preserves the chosen partial stack"),Wire.ReadInt32(),7);
+            }
+            TestEqual(TEXT("One Give press emits one handoff"),GiveCount,1);
+            TestEqual(TEXT("Give returns selection to the recipient like retail"),Client->GetSelectedObject().Guid,Recipient.Guid);
+            Select(Gift.Guid);Give();
+            TestTrue(TEXT("Selecting another gift reuses the returned recipient"),HasAction(ACEGameAction::GiveObjectRequest));
+
+            Select(0);Select(Gift.Guid);Give();
+            TestFalse(TEXT("Missing recipient sends no Give"),HasAction(ACEGameAction::GiveObjectRequest));
+            TestEqual(TEXT("Missing recipient keeps the item selected"),Client->GetSelectedObject().Guid,Gift.Guid);
+            TestTrue(TEXT("Missing recipient shows a target prompt"),Gameplay->TransientInfoText &&
+                Gameplay->TransientInfoText->GetText().ToString().Contains(TEXT("select a creature or a character")));
+            for(int32 TargetGuid:{0,Session.PlayerGuid,99112})
+            {
+                Select(TargetGuid);Select(Gift.Guid);Give();
+                TestFalse(TEXT("Cleared, self or vanished recipients cannot receive a Give"),HasAction(ACEGameAction::GiveObjectRequest));
+            }
+            Recipient.ItemType=0;Recipient.ObjectDescriptionFlags=ACEObjectDescFlag::Door;
+            Session.WorldObjects.Add(Recipient.Guid,Recipient);Select(Recipient.Guid);Select(Gift.Guid);Give();
+            TestFalse(TEXT("Door selection cannot become a Give recipient"),HasAction(ACEGameAction::GiveObjectRequest));
+            Recipient.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;Recipient.RadarBlipColor=1;
+            Session.WorldObjects.Add(Recipient.Guid,Recipient);Select(Recipient.Guid);Select(Gift.Guid);Give();
+            TestTrue(TEXT("Custom collector properties support Give without a hardcoded model/type"),HasAction(ACEGameAction::GiveObjectRequest));
+            Select(Gift.Guid);Session.PendingEquipmentGuid=Gift.Guid;Give();
+            TestFalse(TEXT("Give still respects an active inventory transaction"),HasAction(ACEGameAction::GiveObjectRequest));
+            Session.CancelEquipmentSwap();
+            Session.TradeSelfItems.Add(Gift.Guid);Give();
+            TestFalse(TEXT("Items already in trade cannot also be given"),HasAction(ACEGameAction::GiveObjectRequest));
+            Session.TradeSelfItems.Remove(Gift.Guid);
+            Recipient.bIsPlayer=true;Session.WorldObjects.Add(Recipient.Guid,Recipient);
+            Select(Recipient.Guid);Select(Gift.Guid);Give();
+            TestTrue(TEXT("Direct player gifts use the same Give path"),HasAction(ACEGameAction::GiveObjectRequest));
+            Session.CharacterOptions1|=0x04000000u;Select(Gift.Guid);Gameplay->SelectedStackAmount=3;Give();
+            TestTrue(TEXT("Give respects the player's secure-trade option"),HasAction(ACEGameAction::OpenTradeNegotiations));
+            TestFalse(TEXT("Secure-trade preference prevents an immediate gift"),HasAction(ACEGameAction::GiveObjectRequest));
+            TestEqual(TEXT("Secure trade retains the chosen stack quantity"),Gameplay->PendingTradeItemAmount,3);
+            Gameplay->PendingTradeItemGuid=Gameplay->PendingTradeItemPartner=0;
+            Controller->ClearServerMoveTo();Controller->PlayerInput->FlushPressedKeys();
+            Session.WorldObjects.Remove(Gift.Guid);Session.WorldObjects.Remove(Recipient.Guid);
+            Session.SelectedObject=SavedSelection;Gameplay->HandleSelectionChanged(SavedSelection);
+            ACEInputBindings::Reload();Session.CachedC2SPackets.Reset();
+        }
         Gameplay->bComponentsShowCarriedOnly=true;
         const auto& Component=Dat->GetSpellComponents()[0];
         const auto SavedDesired=Session.DesiredComponents;
@@ -3028,6 +3177,23 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Buy cart uses the same trade note price"),Gameplay->VendorBuyCostLabel->GetText().ToString().Contains(TEXT("287,500")));
             Gameplay->VendorSellCart={{1,Note.Guid}};Gameplay->SetVendorPage(2);
             TestTrue(TEXT("Trade note sells for its full face value"),Gameplay->VendorSellCostLabel->GetText().ToString().Contains(TEXT("250,000p")));
+            {
+                const uint32 Before=Session.NextGameActionSequence;
+                Gameplay->InvDragGuid=Note.Guid;Gameplay->bInvDragPending=true;Gameplay->bInvDragActive=true;
+                Gameplay->bInvDragFromVendorSell=true;
+                Gameplay->TryFinishInventoryDrag(FVector2D(-1000,-1000));
+                TestTrue(TEXT("Dragging a sell row out removes that offer"),Gameplay->VendorSellCart.IsEmpty());
+                TestEqual(TEXT("Removing a sell offer does not drop or move the actual item"),Session.NextGameActionSequence,Before);
+                auto OtherNote=Note;OtherNote.Guid=99129;Session.WorldObjects.Add(OtherNote.Guid,OtherNote);
+                Gameplay->VendorSellCart={{1,Note.Guid},{1,OtherNote.Guid}};
+                Gameplay->InvDragGuid=Note.Guid;Gameplay->bInvDragPending=true;Gameplay->bInvDoubleClickPending=true;
+                Gameplay->bInvDragFromVendorSell=true;
+                Gameplay->TryFinishInventoryDrag(FVector2D(-1000,-1000));
+                TestEqual(TEXT("Double-click removes only the selected sell offer"),Gameplay->VendorSellCart.Num(),1);
+                if(Gameplay->VendorSellCart.Num()==1)TestEqual(TEXT("Other sell offers remain in place"),Gameplay->VendorSellCart[0].Value,OtherNote.Guid);
+                Session.WorldObjects.Remove(OtherNote.Guid);
+                Gameplay->VendorSellCart={{1,Note.Guid}};
+            }
             FACEWorldObject Ammo=Stock;Ammo.ItemType=ACEItemType::MissileWeapon;Ammo.MaxStackSize=250;Ammo.VendorQuantityAvailable=17;
             Session.VendorMerchandise={Ammo};Session.WorldObjects[Ammo.Guid]=Ammo;Gameplay->LastSelection={};
             Gameplay->HandleVendorOpened(99122);Gameplay->HandleSelectionChanged(Pick);Gameplay->SetVendorPage(0);

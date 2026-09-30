@@ -66,7 +66,7 @@ AACUnrealPawn::AACUnrealPawn()
 	// Retract against terrain/architecture so low orbit angles can never put the camera
 	// beneath the environment.
 	CameraBoom->bDoCollisionTest = true;
-	CameraBoom->ProbeSize = 22.f;
+	CameraBoom->ProbeSize = ACECameraRetail::ViewerRadiusAc * DefaultWorldScale;
 	CameraBoom->ProbeChannel = ECC_Camera;
 	// Retail translation stiffness lets the view fall behind while running,
 	// then catch up when stopped. Keep manual zoom independent of this offset.

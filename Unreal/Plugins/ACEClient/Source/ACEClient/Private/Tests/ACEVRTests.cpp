@@ -12,6 +12,7 @@
 #include "../VR/ACEVRNativeHUD.h"
 #include "VR/ACEVRSettings.h"
 #include "VR/ACEVRWidget.h"
+#include "VR/ACEVRMenu.h"
 #include "VR/ACEVRRetailSurface.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUICharGenBinder.h"
@@ -70,6 +71,14 @@
 
 namespace
 {
+	TSharedPtr<SWidget> FindVRMenuControl(const TSharedRef<SWidget>& Widget,FName Tag)
+	{
+		if(Widget->GetTag()==Tag)return Widget;
+		FChildren* Children=Widget->GetChildren();
+		for(int32 I=0;I<Children->Num();++I)
+			if(auto Found=FindVRMenuControl(Children->GetChildAt(I),Tag))return Found;
+		return nullptr;
+	}
 	class FVRTestControllers : public FXRMotionControllerBase
 	{
 	public:
@@ -95,6 +104,16 @@ namespace
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEVRMathTest, "ACE.VR.GesturesAndSettings", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEVRMathTest::RunTest(const FString& Parameters)
 {
+	for(float Yaw:{-70.f,0.f,70.f})for(float Pitch:{-35.f,0.f,40.f})
+	{
+		const FTransform Pose(FRotator(Pitch,Yaw,23),FVector(25,-18,150),FVector(.7,.8,.9));
+		const FTransform Mirror=ACEVRMath::MirrorPartPose(Pose);
+		for(FVector Vertex:{FVector::ZeroVector,FVector(7,0,0),FVector(0,9,0),FVector(0,0,11)})
+		{
+			FVector Expected=Pose.TransformPosition(Vertex);Expected.X=-Expected.X;
+			TestTrue(TEXT("Mirror reflects face/limb vertices, preserving side and height at every angle"),Mirror.TransformPosition(Vertex).Equals(Expected,.001));
+		}
+	}
 	TStrongObjectPtr<UACEVRSettings> SavedPreferences(NewObject<UACEVRSettings>());
 	ON_SCOPE_EXIT { SavedPreferences->Persist(); };
 	if (auto* Scale=IConsoleManager::Get().FindConsoleVariable(TEXT("xr.SecondaryScreenPercentage.HMDRenderTarget")))
@@ -759,6 +778,8 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		VR->Head->SetWorldRotation((VR->LeftGrip->GetComponentLocation() + FVector(0, 0, 12) - VR->Head->GetComponentLocation()).Rotation());
 		auto PaintRetail = [&]()
 		{
+			// These assertions exercise the retained retail surface explicitly.
+			VR->bUseDesktopMenu=true;
 			for (int32 Pass = 0; Pass < 5; ++Pass)
 			{
 				VR->UpdatePanels(); VR->RetailPanel->TickComponent(.016f, LEVELTICK_All, nullptr);
@@ -1681,8 +1702,8 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 				const auto PreviousSelection = VR->Client->GetSelectedObject();
 				const auto KnownSpells = CombatSession.KnownSpells;
 				const auto Profiles = CombatSession.VRSpellProfiles;
-				CombatSession.KnownSpells.Append({1, 2, 3, 5, 23, 27});
-				for (int32 Id : {1, 2, 3, 5, 23}) CombatSession.VRSpellProfiles.Add(Id, FVector::ZeroVector);
+				CombatSession.KnownSpells.Append({1, 2, 3, 5, 6, 23, 24, 27, 2645});
+				for (int32 Id : {1, 2, 3, 5, 6, 23, 24, 2645}) CombatSession.VRSpellProfiles.Add(Id, FVector::ZeroVector);
 				FACEWorldObject Recipient; Recipient.Guid = 71001; Recipient.Name = TEXT("Buff recipient");
 				Recipient.ItemType = ACEItemType::Creature; Recipient.bIsPlayer = true;
 				Recipient.bHasPosition = true; Recipient.Position.CellId = 1;
@@ -1766,8 +1787,35 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 				VR->SelectSpell(5); VR->Client->SelectObject(CombatSession.GetPlayerGuid());
 				ClickSpell(0, 0);
 				TestTrue(TEXT("Other healing gives feedback instead of self-casting"), VR->GetCastFeedback().Contains(TEXT("appropriate target")));
+				for (bool LeftHanded : {false,true})
+				{
+					VR->Settings->bLeftHanded=LeftHanded; PointAtPlayer();
+					Blocker->SetActorLocation(Body->GetComponentLocation()-FVector(200,0,0));
+					for (int32 SelfSpell : {2,6,24,2645}) // Strength, Heal, Armor Self and recall.
+					for (int32 Selection : {0,Other.Guid})
+					{
+						VR->Client->SelectObject(Selection); VR->SelectSpell(SelfSpell);
+						TestTrue(TEXT("Caster-only spell prompt requires no aiming or self selection"),VR->GetCastFeedback().Contains(TEXT("cast on yourself")));
+						ClickSpell(CombatSession.GetPlayerGuid());
+						TestEqual(TEXT("Caster-only VR cast preserves the previous combat selection"),VR->Client->GetSelectedObject().Guid,Selection);
+					}
+				}
 				VR->SelectSpell(27); VR->Client->SelectObject(0);
 				ClickSpell(0); // Projectile gestures retain free aim without a selected object.
+				{
+					// The older cast fixture supplies a generic held object; the
+					// wheel correctly requires its explicit caster item type.
+					TGuardValue<int32> CasterType(CombatSession.WorldObjects[Wand.Guid].ItemType,ACEItemType::Caster);
+					const auto Bars=CombatSession.SpellBars;
+					const int32 ActiveTab=CombatSession.ActiveSpellBar;
+					CombatSession.SpellBars.SetNum(8); CombatSession.SpellBars[0]={2}; CombatSession.ActiveSpellBar=0;
+					VR->TurnStick=FVector2D::ZeroVector; VR->ToggleSpellWheel(); VR->WheelHover=0;
+					const uint32 BeforeConfirm=CombatSession.VRSequence;
+					VR->ConfirmWheelSpell();
+					TestTrue(TEXT("Spell wheel retains self-cast guidance"),!VR->bSpellWheelOpen && VR->SelectedSpell==2 && VR->GetCastFeedback().Contains(TEXT("cast on yourself")));
+					TestEqual(TEXT("Self spell wheel confirmation does not cast prematurely"),CombatSession.VRSequence,BeforeConfirm);
+					CombatSession.SpellBars=Bars; CombatSession.ActiveSpellBar=ActiveTab;
+				}
 				Blocker->Destroy(); Player->Destroy();
 				CombatSession.WorldObjects.Remove(Recipient.Guid); CombatSession.WorldObjects.Remove(Other.Guid);
 				CombatSession.KnownSpells = KnownSpells; CombatSession.VRSpellProfiles = Profiles;
@@ -2397,7 +2445,7 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		VR->Settings->bPinChatToView=false;VR->Settings->bShowWristSpellBar=false;PC->bJumpCharging=false;
 		++GFrameCounter;VR->UpdatePanels();
 		TestFalse(TEXT("Native-only HUD does not redraw the closed desktop canvas"),VR->RetailPanel->IsVisible() || VR->RetailPanel->IsComponentTickEnabled());
-		VR->bInventoryOpen=true;VR->UpdatePanels();
+		VR->bInventoryOpen=true;VR->bUseDesktopMenu=true;VR->UpdatePanels();
 		TestTrue(TEXT("Opening inventory restores desktop rendering and interactions"),VR->RetailPanel->IsVisible() && VR->RetailPanel->IsComponentTickEnabled() && VR->RetailPanel->GetCollisionEnabled()==ECollisionEnabled::QueryOnly);
 		VR->bInventoryOpen=false;VR->Settings->bPinChatToView=true;VR->UpdatePanels();
 		TestTrue(TEXT("Pinned chat retains its retail render source"),VR->RetailPanel->IsVisible() && VR->RetailPanel->IsComponentTickEnabled());
@@ -2441,6 +2489,345 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 				FFileHelper::SaveArrayToFile(PNG,*(Directory/(I==0?TEXT("NativeVitals.png"):I==1?TEXT("NativeCompass.png"):TEXT("NativeFellowship.png"))));
 			}
 		}
+	}
+	{
+		VR->bInventoryOpen=true;VR->bUseDesktopMenu=false;VR->bSettingsOpen=false;
+		VR->Settings->bPinChatToView=false;VR->Settings->bShowWristSpellBar=false;
+		VR->UpdatePanels();
+		TestNotNull(TEXT("Inventory creates the native VR menu"),VR->GameplayMenu.Get());
+		TestTrue(TEXT("Native inventory owns interactions"),VR->GameplayMenuPanel && VR->GameplayMenuPanel->IsVisible() && VR->GameplayMenuPanel->GetCollisionEnabled()==ECollisionEnabled::QueryOnly);
+		TestFalse(TEXT("Native inventory does not render a second desktop menu"),VR->RetailPanel->IsVisible());
+		for(auto* HUD:{VR->VitalsPanel.Get(),VR->CompassPanel.Get(),VR->FellowshipPanel.Get(),VR->WristPanel.Get(),VR->ChatPanel.Get()})
+			TestTrue(TEXT("Native menu paints and receives clicks above floating HUD panels"),VR->GameplayMenuPanel->TranslucencySortPriority>HUD->TranslucencySortPriority);
+		auto* Menu=VR->GameplayMenu.Get();Menu->TakeWidget();Menu->OpenPage("Inventory");Menu->RefreshIfDirty();
+		const int32 Refreshes=Menu->GetRefreshCount();
+		const double MenuStart=FPlatformTime::Seconds();
+		for(int I=0;I<90;++I)VR->UpdateGameplayMenu(true,1.f/90.f);
+		AddInfo(FString::Printf(TEXT("Unchanged native menu update: %.3f ms/frame"),(FPlatformTime::Seconds()-MenuStart)*1000./90.));
+		TestEqual(TEXT("Unchanged native inventory avoids widget rebuilding at 90 Hz"),Menu->GetRefreshCount(),Refreshes);
+		VR->Client->OnTradeStateChanged.Broadcast(ACEGameEvent::ResetTrade);Menu->RefreshIfDirty();
+		TestEqual(TEXT("Trade updates refresh native data without replacing the current page"),Menu->GetPage(),FName("Inventory"));
+		TestEqual(TEXT("Server trade events invalidate the native view"),Menu->GetRefreshCount(),Refreshes+1);
+		FACEWorldObject Item;Item.Guid=99210;Item.Name=TEXT("Treated Healing Kit");Item.ContainerId=VR->Client->GetPlayerGuid();Item.StackSize=10;Item.MaxStackSize=250;Item.IconId=0x060013B8;
+		VR->Client->Session->WorldObjects.Add(Item.Guid,Item);
+		Menu->SelectItem(Item.Guid);PC->DatGameplayBinder->SelectedStackAmount=3;
+		Menu->RefreshIfDirty();
+		TestTrue(TEXT("Native icons use the same mask and overlay composition as desktop inventory"),Menu->IconTextures.Contains(VR->Client->GetUIResourceResolver()->ResolveItemForeground(Item.IconId,Item.IconOverlayId,Item.UiEffects)));
+		if(FApp::CanEverRender())
+		{
+			FVRTestControllers MenuControllers;
+			auto PollMenuHands=[&]()
+			{for(auto* Hand:{VR->LeftGrip.Get(),VR->RightGrip.Get(),VR->LeftAim.Get(),VR->RightAim.Get()})Hand->TickComponent(.016f,LEVELTICK_All,nullptr);};
+			PollMenuHands();VR->CancelGestures();VR->UpdatePanels();
+			auto PaintMenu=[&]()
+			{
+				VR->UpdateGameplayMenu(true,.016f);VR->GameplayMenuPanel->SetRedrawTime(0);
+				for(int Pass=0;Pass<3;++Pass){VR->GameplayMenuPanel->RequestRedraw();VR->GameplayMenuPanel->TickComponent(.016f,LEVELTICK_All,nullptr);FlushRenderingCommands();}
+			};
+			auto ClickMenu=[&](bool Left,FName Tag)
+			{
+				PaintMenu();const auto Control=FindVRMenuControl(Menu->TakeWidget(),Tag);
+				if(!TestTrue(TEXT("Native menu control exists"),Control.IsValid()))return;
+				const FGeometry G=Control->GetCachedGeometry();
+				const FVector2D Pixel=Menu->GetCachedGeometry().AbsoluteToLocal(G.LocalToAbsolute(G.GetLocalSize()*.5));
+				const FVector2D Size=VR->GameplayMenuPanel->GetDrawSize();
+				const FVector Point=VR->GameplayMenuPanel->GetComponentTransform().TransformPosition(FVector(0,Size.X*.5-Pixel.X,Size.Y*.5-Pixel.Y));
+				const FVector From=Point+VR->GameplayMenuPanel->GetForwardVector()*90;
+				(Left?VR->LeftAim:VR->RightAim)->SetWorldLocationAndRotation(From,(Point-From).Rotation());
+				auto* Pointer=Left?VR->LeftPointer.Get():VR->RightPointer.Get();Pointer->TickComponent(.016f,LEVELTICK_All,nullptr);
+				TestTrue(TEXT("Controller reaches native menu through overlapping HUD"),Pointer->GetHoveredWidgetComponent()==VR->GameplayMenuPanel);
+				TestTrue(TEXT("Rendered button participates in the controller hit grid"),Pointer->IsOverInteractableWidget());
+				VR->Trigger(Left,true);PaintMenu();VR->Trigger(Left,false);PaintMenu();
+			};
+			// Deliberately cover the item/nav area with a nearer HUD plane.
+			const FTransform VitalsPose=VR->VitalsPanel->GetComponentTransform();
+			const bool VitalsVisible=VR->VitalsPanel->IsVisible();
+			VR->VitalsPanel->SetWorldTransform(VR->GameplayMenuPanel->GetComponentTransform());
+			VR->VitalsPanel->AddWorldOffset(VR->GameplayMenuPanel->GetForwardVector()*5);
+			VR->VitalsPanel->SetVisibility(true);VR->VitalsPanel->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+			VR->Client->SelectObject(0);
+			ClickMenu(false,FName(*FString::Printf(TEXT("Item_%d"),Item.Guid)));
+			TestEqual(TEXT("Right trigger selects a native inventory item"),Menu->Selected,Item.Guid);
+			ClickMenu(true,"Equipment");TestEqual(TEXT("Left trigger opens equipment"),Menu->GetPage(),FName("Equipment"));
+			ClickMenu(false,"Inventory");TestEqual(TEXT("Right trigger returns to inventory"),Menu->GetPage(),FName("Inventory"));
+			VR->VitalsPanel->SetWorldTransform(VitalsPose);VR->VitalsPanel->SetVisibility(VitalsVisible);
+			TestEqual(TEXT("Switching pages clears invisible inventory context"),Menu->Selected,0);
+            TestEqual(TEXT("Switching pages also clears the shared hidden-item target"),VR->Client->GetSelectedObject().Guid,0);
+            TestEqual(TEXT("Full main pack includes all occupied and empty destinations"),Menu->ItemDestinations.FilterByPredicate([&](const auto& D){return D.Container==VR->Client->GetPlayerGuid() && D.Widget.Pin()->GetTag().ToString().StartsWith(TEXT("PackSlot_"));}).Num(),102);
+            TestFalse(TEXT("Inventory no longer has page navigation"),FindVRMenuControl(Menu->TakeWidget(),"Next").IsValid() || FindVRMenuControl(Menu->TakeWidget(),"Previous").IsValid());
+            Menu->SelectItem(Item.Guid);PaintMenu();
+            TestFalse(TEXT("Inventory has no duplicate self-use action"),FindVRMenuControl(Menu->TakeWidget(),"Use selected on yourself").IsValid());
+            // Drive native controls and inspect real loopback packets, not just local state.
+            auto* NativeSockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+            auto NativeAddress=NativeSockets->CreateInternetAddr();bool AddressValid=false;
+            NativeAddress->SetIp(TEXT("127.0.0.1"),AddressValid);NativeAddress->SetPort(0);
+            auto* NativeReceiver=NativeSockets->CreateSocket(NAME_DGram,TEXT("Native menu receiver"),false);
+            auto& NativeSession=*VR->Client->Session;
+            if(NativeReceiver && NativeReceiver->Bind(*NativeAddress))
+            {
+                NativeReceiver->GetAddress(*NativeAddress);
+                NativeSession.SocketC2S=NativeSockets->CreateSocket(NAME_DGram,TEXT("Native menu sender"),false);
+                NativeSession.ServerC2SAddr=NativeAddress;NativeSession.IssacClient=MakeUnique<FACEIsaac>(123);
+                auto ActionPayload=[&](uint32 Wanted)
+                {
+                    TArray<uint8> Result;int32 Count=0;
+                    for(const auto& P:NativeSession.CachedC2SPackets)
+                    {
+                        FACEBinaryReader NativeReader(P.Value.Payload);NativeReader.Skip(16);
+                        if(NativeReader.ReadUInt32()!=ACEOpcode::GameAction)continue;NativeReader.ReadUInt32();
+                        if(NativeReader.ReadUInt32()!=Wanted)continue;
+                        Result.Reset();Result.Append(P.Value.Payload.GetData()+28,P.Value.Payload.Num()-28);++Count;
+                    }
+                    TestEqual(FString::Printf(TEXT("Exactly one native action %x"),Wanted),Count,1);
+                    return Result;
+                };
+                const uint32 OldCaps=NativeSession.VRCapabilities;
+                for(bool VRDrop:{false,true})for(int32 Amount:{3,10})
+                {
+                    NativeSession.VRCapabilities=VRDrop?OldCaps|1024u:OldCaps&~1024u;
+                    NativeSession.CachedC2SPackets.Reset();Menu->DropItem(Item.Guid,Amount);
+                    const auto Bytes=ActionPayload(VRDrop?0xF7D0u:Amount==10?ACEGameAction::DropItem:ACEGameAction::StackableSplitTo3D);
+                    FACEBinaryReader NativeReader(Bytes);
+                    if(VRDrop)NativeReader.Skip(20);
+                    TestEqual(TEXT("Native drop uses selected inventory GUID"),NativeReader.ReadUInt32(),uint32(Item.Guid));
+                    if(VRDrop || Amount!=10)TestEqual(TEXT("Only partial native drops request a split"),NativeReader.ReadUInt32(),VRDrop && Amount==10?0u:uint32(Amount));
+                }
+                NativeSession.VRCapabilities=OldCaps;
+                Menu->OpenPage("Inventory");Menu->SelectItem(Item.Guid);PaintMenu();
+                // A real trigger drag leaves the quad, shows the held icon, then sends one drop.
+                PC->DatGameplayBinder->SelectedStackAmount=3;
+                const auto DragControl=FindVRMenuControl(Menu->TakeWidget(),FName(*FString::Printf(TEXT("Item_%d"),Item.Guid)));
+                if(TestTrue(TEXT("Native drag source is rendered"),DragControl.IsValid()))
+                {
+                    const auto G=DragControl->GetCachedGeometry();
+                    const FVector2D Pixel=Menu->GetCachedGeometry().AbsoluteToLocal(G.LocalToAbsolute(G.GetLocalSize()*.5));
+                    const FVector2D Draw=VR->GameplayMenuPanel->GetDrawSize();
+                    const FVector Hit=VR->GameplayMenuPanel->GetComponentTransform().TransformPosition(FVector(0,Draw.X*.5-Pixel.X,Draw.Y*.5-Pixel.Y));
+                    VR->RightAim->SetWorldLocationAndRotation(Hit+VR->GameplayMenuPanel->GetForwardVector()*90,(-VR->GameplayMenuPanel->GetForwardVector()).Rotation());
+                    VR->RightPointer->TickComponent(.016f,LEVELTICK_All,nullptr);VR->Trigger(false,true);
+                    TestEqual(TEXT("Native trigger freezes the selected split amount"),Menu->DragAmount,3);
+                    VR->RightAim->SetWorldLocationAndRotation(FVector(0,0,200),FRotator(-45,180,0));
+                    VR->RightPointer->TickComponent(.016f,LEVELTICK_All,nullptr);VR->UpdateGameplayMenu(true,.016f);
+                    TestTrue(TEXT("Dragging into the world shows the held item icon"),Menu->bItemDragging && VR->MenuDragPanel && VR->MenuDragPanel->IsVisible());
+                    NativeSession.CachedC2SPackets.Reset();VR->Trigger(false,false);VR->UpdateGameplayMenu(true,.016f);
+                    ActionPayload((OldCaps&1024u)?0xF7D0u:ACEGameAction::StackableSplitTo3D);
+                    TestFalse(TEXT("Release clears the native drag preview"),Menu->DragItem || VR->MenuDragPanel->IsVisible());
+                }
+                // Empty-slot drops split or reorder using the same packet as retail.
+                Menu->OpenPage("Inventory");Menu->SelectItem(Item.Guid);PaintMenu();
+                for(int32 Amount:{3,10})
+                {
+                    PC->DatGameplayBinder->SelectedStackAmount=Amount;Menu->BeginItemPointer(Item.Guid);
+                    const auto Empty=Menu->ItemDestinations.FindByPredicate([](const auto& D){return D.Container && !D.Item && D.Slot==4;});
+                    if(TestTrue(TEXT("Native full pack has a usable empty destination"),Empty!=nullptr))
+                    {
+                        const auto G=Empty->Widget.Pin()->GetCachedGeometry();
+                        const FVector2D Pixel=Menu->GetCachedGeometry().AbsoluteToLocal(G.LocalToAbsolute(G.GetLocalSize()*.5));
+                        NativeSession.CachedC2SPackets.Reset();Menu->bItemDragging=true;
+                        Menu->FinishItemPointer(true,Pixel,false);
+                        const auto Bytes=ActionPayload(Amount==10?ACEGameAction::PutItemInContainer:ACEGameAction::StackableSplitToContainer);
+                        FACEBinaryReader NativeReader(Bytes);
+                        TestEqual(TEXT("Native slot move/split preserves source GUID"),NativeReader.ReadUInt32(),uint32(Item.Guid));
+                        TestEqual(TEXT("Native slot move/split preserves destination pack"),NativeReader.ReadUInt32(),uint32(Menu->Pack));
+                    }
+                }
+                // Use-on-item keeps the source, validates target descriptors and sends both GUIDs.
+                auto& Kit=NativeSession.WorldObjects[Item.Guid];Kit.ItemUseable=0x000C0008;Kit.TargetType=ACEItemType::Armor;
+                FACEWorldObject Armor;Armor.Guid=99211;Armor.Name=TEXT("Test chest armor");Armor.ItemType=ACEItemType::Armor;Armor.ContainerId=100;
+                NativeSession.WorldObjects.Add(Armor.Guid,Armor);
+                Menu->UseSource=Item.Guid;NativeSession.CachedC2SPackets.Reset();Menu->SelectItem(Armor.Guid);
+                {
+                    const auto Bytes=ActionPayload(ACEGameAction::UseWithTarget);FACEBinaryReader NativeReader(Bytes);
+                    TestEqual(TEXT("Native targeted item use preserves source"),NativeReader.ReadUInt32(),uint32(Item.Guid));
+                    TestEqual(TEXT("Native targeted item use preserves receiving item"),NativeReader.ReadUInt32(),uint32(Armor.Guid));
+                }
+                NativeSession.WorldObjects.Remove(Armor.Guid);
+                // Creation reads the edited name and subsequent membership drives management.
+                NativeSession.Fellowship={};Menu->OpenPage("Fellowship");PaintMenu();
+                Menu->TextEntry->SetText(FText::FromString(TEXT("VR Companions")));
+                NativeSession.CachedC2SPackets.Reset();ClickMenu(false,"Create fellowship");
+                {
+                    const auto Bytes=ActionPayload(ACEGameAction::FellowshipCreate);FACEBinaryReader NativeReader(Bytes);
+                    TestEqual(TEXT("Create sends the entered fellowship name"),NativeReader.ReadString16L(),FString("VR Companions"));
+                    TestEqual(TEXT("Create sends the share-XP choice"),NativeReader.ReadUInt32(),1u);
+                }
+                FACEFellowshipMember Self;Self.Guid=100;Self.Name=TEXT("You");Self.Level=100;
+                NativeSession.Fellowship.bValid=true;NativeSession.Fellowship.Name=TEXT("VR Companions");
+                NativeSession.Fellowship.LeaderGuid=100;NativeSession.Fellowship.Members={Self};
+                FACEWorldObject Recruit;Recruit.Guid=99212;Recruit.Name=TEXT("Nearby friend");Recruit.bIsPlayer=true;
+                Recruit.ItemType=ACEItemType::Creature;Recruit.bHasPosition=true;Recruit.Position.CellId=1;
+                NativeSession.WorldObjects.Add(Recruit.Guid,Recruit);Menu->Changed();
+                NativeSession.CachedC2SPackets.Reset();ClickMenu(false,"Recruit Nearby friend");
+                {
+                    const auto Bytes=ActionPayload(ACEGameAction::FellowshipRecruit);FACEBinaryReader NativeReader(Bytes);
+                    TestEqual(TEXT("Recruit targets the chosen nearby player"),NativeReader.ReadUInt32(),uint32(Recruit.Guid));
+                }
+                NativeSession.CachedC2SPackets.Reset();ClickMenu(false,"Open fellowship");
+                {
+                    const auto Bytes=ActionPayload(ACEGameAction::FellowshipChangeOpenness);FACEBinaryReader NativeReader(Bytes);
+                    TestEqual(TEXT("Open sends retail openness request"),NativeReader.ReadUInt32(),1u);
+                }
+                FACEFellowshipMember Other;Other.Guid=Recruit.Guid;Other.Name=Recruit.Name;
+                NativeSession.Fellowship.Members.Add(Other);Menu->FellowSelection=Other.Guid;Menu->Changed();
+                NativeSession.CachedC2SPackets.Reset();ClickMenu(false,"Make leader");
+                {const auto Bytes=ActionPayload(ACEGameAction::FellowshipAssignNewLeader);FACEBinaryReader NativeReader(Bytes);TestEqual(TEXT("Leadership targets the selected roster member"),NativeReader.ReadUInt32(),uint32(Other.Guid));}
+                NativeSession.CachedC2SPackets.Reset();ClickMenu(false,"Dismiss member");
+                {const auto Bytes=ActionPayload(ACEGameAction::FellowshipDismiss);FACEBinaryReader NativeReader(Bytes);TestEqual(TEXT("Dismiss targets the selected roster member"),NativeReader.ReadUInt32(),uint32(Other.Guid));}
+                NativeSession.CachedC2SPackets.Reset();ClickMenu(false,"Leave fellowship");
+                {const auto Bytes=ActionPayload(ACEGameAction::FellowshipQuit);FACEBinaryReader NativeReader(Bytes);TestEqual(TEXT("Leave does not disband"),NativeReader.ReadUInt32(),0u);}
+                NativeSession.WorldObjects.Remove(Recruit.Guid);NativeSession.Fellowship={};
+                NativeSession.KnownSpells={1,2};NativeSession.SpellBars.SetNum(8);NativeSession.SpellBars[7]={1,0,0};NativeSession.ActiveSpellBar=7;
+                Menu->OpenPage("Spellbook");Menu->Spell=2;Menu->bDirty=true;
+                NativeSession.CachedC2SPackets.Reset();ClickMenu(false,"Add to hotbar 8");
+                {
+                    const auto Bytes=ActionPayload(ACEGameAction::AddToSpellBar);FACEBinaryReader NativeReader(Bytes);
+                    TestEqual(TEXT("Spellbook adds the inspected spell"),NativeReader.ReadUInt32(),2u);
+                    TestEqual(TEXT("Spellbook appends past existing spells, before empty padding"),NativeReader.ReadUInt32(),1u);
+                    TestEqual(TEXT("Spellbook targets the displayed hotbar"),NativeReader.ReadUInt32(),7u);
+                }
+                TestEqual(TEXT("Appended spell remains after the existing first spell"),NativeSession.SpellBars[7][0],1);
+                const auto SavedVitals=NativeSession.PlayerVitals;
+                NativeSession.PlayerVitals.bValid=true;NativeSession.PlayerVitals.AvailableExperience=10000000;
+                NativeSession.PlayerVitals.StrengthXpSpent=0;
+                Menu->OpenPage("Character");Menu->bSkillsPage=false;
+                auto* NativeDat=GI->GetSubsystem<UACEDatSubsystem>();
+                for(int32 Count:{1,10})
+                {
+                    int64 ExpectedXP=0;NativeDat->TryGetAttributeXpToNextRank(0,ExpectedXP,nullptr,Count);
+                    NativeSession.CachedC2SPackets.Reset();
+                    ClickMenu(false,FName(*FString::Printf(TEXT("+%d\n%lld XP"),Count,ExpectedXP)));
+                    const auto Bytes=ActionPayload(ACEGameAction::RaiseAttribute);FACEBinaryReader NativeReader(Bytes);
+                    if(TestTrue(TEXT("Attribute action contains stat and XP amount"),NativeReader.CanRead(8)))
+                    {
+                        TestEqual(TEXT("Attribute button raises selected Strength"),NativeReader.ReadUInt32(),1u);
+                        TestEqual(TEXT("Attribute button spends the displayed retail XP cost"),NativeReader.ReadUInt32(),uint32(ExpectedXP));
+                    }
+                }
+                NativeSession.PlayerVitals=SavedVitals;
+
+                Menu->OpenPage("Inventory");Menu->SelectItem(Item.Guid);
+                NativeSession.SocketC2S->Close();NativeSockets->DestroySocket(NativeSession.SocketC2S);NativeSession.SocketC2S=nullptr;
+            }
+            else AddError(TEXT("Native menu loopback socket could not bind"));
+            if(NativeReceiver)NativeSockets->DestroySocket(NativeReceiver);
+            // Placement uses the visible native surface while retaining the common saved transform.
+            VR->Settings->bMenuLocked=false;
+            auto PointNative=[&](FVector2D Pixel)
+            {
+                const FVector2D Size=VR->GameplayMenuPanel->GetDrawSize();
+                const FVector Point=VR->GameplayMenuPanel->GetComponentTransform().TransformPosition(FVector(0,Size.X*.5-Pixel.X,Size.Y*.5-Pixel.Y));
+                const FVector From=Point+VR->GameplayMenuPanel->GetForwardVector()*90;
+                VR->RightAim->SetWorldLocationAndRotation(From,(Point-From).Rotation());VR->RightPointer->TickComponent(.016f,LEVELTICK_All,nullptr);
+            };
+            PointNative(FVector2D(1000,800));VR->BeginPanelEdit("Menu",false,false);
+            TestEqual(TEXT("Hidden classic canvas does not block native menu movement"),VR->EditingPanel,FName("Menu"));
+            const FVector BeforeMove=VR->RetailPanel->GetComponentLocation();VR->RightAim->AddWorldOffset(FVector(0,12,0));VR->UpdatePanelEdit(.016f);VR->UpdateGameplayMenu(true,.016f);
+            TestTrue(TEXT("Native menu follows controller translation"),FVector::Dist(VR->GameplayMenuPanel->GetComponentLocation(),BeforeMove)>10);
+            VR->EndPanelEdit(false);
+            PointNative(FVector2D(1000,800));VR->BeginPanelEdit("Menu",false,true);
+            TestTrue(TEXT("Native menu can resize"),VR->EditingPanel=="Menu" && VR->bPanelResize);
+            VR->EndPanelEdit(false);VR->Settings->bMenuLocked=true;
+            // Use-on-item remains armed across equipment/pack navigation.
+            Menu->UseSource=Item.Guid;Menu->OpenPage("Equipment");
+            TestEqual(TEXT("Use-on-item source survives equipment tab selection"),Menu->UseSource,Item.Guid);
+            Menu->OpenPage("Character");TestEqual(TEXT("Leaving item pages cancels use-on-item"),Menu->UseSource,0);
+            Menu->OpenPage("Inventory");Menu->SelectItem(Item.Guid);
+            MenuControllers.Connected=false;PollMenuHands();FlushRenderingCommands();PC->DatGameplayBinder->SelectedStackAmount=3;
+		}
+		TestEqual(TEXT("Native quantity uses the retail stack-selection model"),PC->DatGameplayBinder->GetSelectedItemAmount(Item.Guid),3);
+		const auto Count=VR->Client->Session->NextGameActionSequence;
+		Menu->Execute("Drop");TestEqual(TEXT("Native drop requires confirmation"),VR->Client->Session->NextGameActionSequence,Count);
+		Menu->Execute("Drop");TestTrue(TEXT("Native drop confirms selected quantity through inventory actions"),VR->Client->Session->NextGameActionSequence>Count);
+		Menu->OpenPage("Spellbook");Menu->RefreshIfDirty();
+		TestNotNull(TEXT("Native search provides a platform keyboard entry"),Menu->TextEntry.Get());
+		VR->FocusTextEntry(Menu->TextEntry);TestTrue(TEXT("Native search activates the existing VR keyboard"),VR->bTextKeyboardOpen);
+		Menu->OpenPage("Inventory");TestFalse(TEXT("Changing native page dismisses its keyboard"),VR->bTextKeyboardOpen);
+		if(auto* Source=Pawn->FindComponentByClass<UACECharacterAppearanceComponent>();Source && Source->HasAppearance())
+		{
+			auto& Record=VR->Client->Session->WorldObjects.FindOrAdd(VR->Client->GetPlayerGuid());Record.SetupId=Source->GetSetupId();Record.bIsPlayer=true;
+			VR->UpdateGameplayMenu(true,.016f);
+			TestTrue(TEXT("Inventory mirror builds a live 3D character"),VR->MenuMirrorAppearance && VR->MenuMirrorAppearance->HasAppearance());
+			if(VR->MenuMirrorAppearance && VR->MenuMirrorAppearance->HasAppearance())
+			{
+				FTransform Pose;Source->GetPartCurrentTransform(16,Pose);const FTransform Original=Pose;
+				for(float Yaw:{-40.f,0.f,40.f})
+				{
+					Pose=Original;Pose.AddToTranslation(FVector(3,5,2));Pose.SetRotation(FRotator(25,Yaw,10).Quaternion()*Original.GetRotation());Source->GetPartMesh(16)->SetRelativeTransform(Pose);
+					VR->UpdateGameplayMenu(true,.016f);
+					const FTransform SourceFrame(VR->MenuMirrorActor->GetActorQuat(),Source->GetMeshRoot()->GetComponentLocation());
+					for(FVector Vertex:{FVector::ZeroVector,FVector(0,-8,17),FVector(10,0,0)})
+					{
+						FVector Expected=SourceFrame.InverseTransformPosition(Source->GetPartMesh(16)->GetComponentTransform().TransformPosition(Vertex));Expected.X=-Expected.X;
+						Expected=VR->MenuMirrorActor->GetActorTransform().TransformPosition(Expected);
+						TestTrue(TEXT("Tracked face reflects correctly through the full component hierarchy"),VR->MenuMirrorAppearance->GetPartMesh(16)->GetComponentTransform().TransformPosition(Vertex).Equals(Expected,.01));
+					}
+				}
+				Source->GetPartMesh(16)->SetRelativeTransform(Original);
+                const FVector LookAt=VR->MenuMirrorActor->GetActorLocation()+FVector(0,0,75);
+                VR->Head->SetWorldRotation((LookAt-VR->Head->GetComponentLocation()).Rotation());
+                VR->UpdateArms(.016f);VR->UpdateGameplayMenu(true,.016f);
+                const FVector ReflectedFace=VR->MenuMirrorAppearance->GetPartMesh(16)->GetComponentTransform().TransformVector(FVector(0,-1,0)).GetSafeNormal2D();
+                const FVector ToViewer=(VR->Head->GetComponentLocation()-VR->MenuMirrorActor->GetActorLocation()).GetSafeNormal2D();
+                TestTrue(TEXT("Looking at the off-center mirror makes its face look back at the viewer"),FVector::DotProduct(ReflectedFace,ToViewer)>.97);
+
+				if(FApp::CanEverRender())
+				{
+					VR->UpdateGameplayMenu(true,.016f);VR->GameplayMenuPanel->SetRedrawTime(0);
+					for(int I=0;I<3;++I){VR->GameplayMenuPanel->RequestRedraw();VR->GameplayMenuPanel->TickComponent(.016f,LEVELTICK_All,nullptr);FlushRenderingCommands();}
+					TestNotNull(TEXT("Native panel has a rendered world-space texture"),VR->GameplayMenuPanel->GetRenderTarget());
+					// This fixture runs within one frame; publish the widget's new
+					// render-target scene proxy before taking the combined capture.
+					if(GShaderCompilingManager)GShaderCompilingManager->FinishAllCompilation();
+					VR->GameplayMenuPanel->MarkRenderStateDirty();
+					World->SendAllEndOfFrameUpdates();FlushRenderingCommands();
+					if(auto* Surface=VR->GameplayMenuPanel->GetRenderTarget())
+					{
+						TArray<FColor> UI;Surface->GameThread_GetRenderTargetResource()->ReadPixels(UI);
+						TestTrue(TEXT("Native world panel draws visible content"),UI.ContainsByPredicate([](FColor C){return C.A>128 && (C.R>64 || C.G>64 || C.B>64);}));
+						TArray64<uint8> SurfacePNG;FImageUtils::PNGCompressImageArray(Surface->SizeX,Surface->SizeY,UI,SurfacePNG);
+						FFileHelper::SaveArrayToFile(SurfacePNG,*(FPaths::ProjectSavedDir()/TEXT("Automation/VR/GameplaySurface.png")));
+					}
+					auto* CaptureActor=World->SpawnActor<AActor>();auto* Capture=NewObject<USceneCaptureComponent2D>(CaptureActor);CaptureActor->SetRootComponent(Capture);Capture->RegisterComponent();
+					Capture->bCaptureEveryFrame=false;Capture->bCaptureOnMovement=false;Capture->PrimitiveRenderMode=ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
+					Capture->ShowOnlyActorComponents(VR->MenuMirrorActor);Capture->ShowOnlyComponent(VR->GameplayMenuPanel);
+					Capture->ShowFlags.SetLighting(false);Capture->ShowFlags.SetAtmosphere(false);Capture->ShowFlags.SetEyeAdaptation(false);Capture->ShowFlags.SetWidgetComponents(true);Capture->CaptureSource=SCS_FinalColorLDR;
+					const auto Frame=VR->GameplayMenuPanel->GetComponentTransform();const FVector Aim=Frame.GetLocation()+Frame.GetRotation().RotateVector(FVector(0,22,0));
+					Capture->SetWorldLocationAndRotation(VR->Head->GetComponentLocation(),(LookAt-VR->Head->GetComponentLocation()).Rotation());Capture->FOVAngle=85;
+					auto* Target=NewObject<UTextureRenderTarget2D>();Target->RenderTargetFormat=RTF_RGBA8_SRGB;Target->InitAutoFormat(1600,1000);Capture->TextureTarget=Target;Capture->CaptureScene();FlushRenderingCommands();
+					TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(1600,1000,Pixels,PNG);
+					FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/TEXT("Automation/VR/GameplayMirror.png")));CaptureActor->Destroy();
+				}
+			}
+		}
+		if(FApp::CanEverRender())
+		{
+			FWidgetRenderer Renderer(true,true);const FString Directory=FPaths::ProjectSavedDir()/TEXT("Automation/VR");
+			for(const TCHAR* Page:{TEXT("Inventory"),TEXT("Equipment"),TEXT("Spellbook"),TEXT("Character"),TEXT("Fellowship"),TEXT("Vendor")})
+			{
+				Menu->OpenPage(Page);
+                auto& VisualSession=*VR->Client->Session;
+                if(Menu->GetPage()=="Inventory")
+                {
+                    for(int32 Index=0;Index<35;++Index){auto Visual=Item;Visual.Guid=99500+Index;Visual.Name=FString::Printf(TEXT("Inventory item %d"),Index+1);Visual.PlacementPosition=Index+2;Visual.StackSize=Index%3==0?1:Index+2;VisualSession.WorldObjects.Add(Visual.Guid,Visual);}
+                    Menu->SelectItem(Item.Guid);PC->DatGameplayBinder->SelectedStackAmount=3;
+                }
+                if(Menu->GetPage()=="Character"){VisualSession.PlayerVitals.bValid=true;VisualSession.PlayerVitals.Level=150;VisualSession.PlayerVitals.AvailableExperience=1000000;VisualSession.PlayerVitals.AvailableSkillCredits=12;}
+                if(Menu->GetPage()=="Vendor")
+                {
+                    VisualSession.OpenVendorGuid=500;PC->DatGameplayBinder->OpenVendorGuid=500;Menu->bVendorSelling=true;
+                    PC->DatGameplayBinder->VendorSellCart={{10,Item.Guid}};Menu->SelectItem(Item.Guid);
+                }
+                Menu->bDirty=true;Menu->RefreshIfDirty();const FVector2D Size(1200,960);
+				auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
+				for(int I=0;I<3;++I){Renderer.DrawWidget(Target,Menu->TakeWidget(),Size,0);FlushRenderingCommands();}
+				TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);TArray64<uint8> PNG;
+				FImageUtils::PNGCompressImageArray(1200,960,Pixels,PNG);FFileHelper::SaveArrayToFile(PNG,*(Directory/FString::Printf(TEXT("Gameplay%s.png"),Page)));
+			}
+		}
+		VR->bInventoryOpen=false;VR->UpdatePanels();
+		TestFalse(TEXT("Hidden native menu stops rendering and hit testing"),VR->GameplayMenuPanel->IsComponentTickEnabled() || VR->GameplayMenuPanel->IsVisible() || VR->GameplayMenuPanel->GetCollisionEnabled()!=ECollisionEnabled::NoCollision);
+		TestTrue(TEXT("Closing inventory hides the 3D mirror"),!VR->MenuMirrorActor || VR->MenuMirrorActor->IsHidden());
+		VR->OpenRetailPanel(NAME_None);TestTrue(TEXT("Server confirmation dialogs retain a visible input surface"),VR->bUseDesktopMenu && VR->RetailPanel->IsVisible());
 	}
 	if (FApp::CanEverRender())
 	{

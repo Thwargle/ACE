@@ -112,11 +112,41 @@ void UACEUIGameplayBinder::PollAdditionalKeyboardActions(APlayerController* PC)
   }
   else Client->SendDropItem(Item.Guid);
  }
- if(Pressed(TEXT("SelectionGive")) && Owned)
+ if(Pressed(TEXT("SelectionGive")))
  {
-  CancelPendingUseWith();PendingUseWithSourceGuid=Item.Guid;bPendingKeyboardGive=true;
-  PendingKeyboardGiveAmount=FMath::Clamp(SelectedStackAmount,1,FMath::Max(1,Item.StackSize));
-  SyncPendingUseCursor();PostInventorySystemMessage(TEXT("Select who to give this item to."));
+  // CPlayerSystem::OnAction(SelectionGive): select a recipient, then an item.
+  // ItemHolder::AttemptPlaceIn3D uses that preceding selection directly and
+  // returns selection to the recipient; Give never enters Use targeting mode.
+  CancelPendingUseWith();
+  const int32 TargetGuid=Client->GetPreviousSelectedObjectGuid();
+  FACEWorldObject Target;
+  if(!Owned) PostInventorySystemMessage(TEXT("Select an item in your inventory to give."));
+  else if(!TargetGuid || TargetGuid==Item.Guid || TargetGuid==Client->GetPlayerGuid()
+      || !Client->GetWorldObject(TargetGuid,Target) || Target.bDying || !Target.IsGiveOrCreatureTarget())
+   PostInventorySystemMessage(TEXT("You must select a creature or a character to give that to."));
+  else if(Client->IsUseBusy()) PostInventorySystemMessage(TEXT("You're too busy!"));
+  else if(Client->GetTradeSelfItems().Contains(Item.Guid))
+   PostInventorySystemMessage(TEXT("That item is already being traded."));
+  else
+  {
+   const int32 Amount=FMath::Clamp(SelectedStackAmount,1,FMath::Max(1,Item.StackSize));
+   if(Target.IsVendor())
+   {
+    if(OpenVendorGuid==TargetGuid) AddInventoryGuidToVendorSellCart(Item.Guid,Amount);
+    else if(PlayerController)
+    {
+     PendingVendorSellGuid=Item.Guid;PendingVendorSellAmount=Amount;
+     PlayerController->InteractWithObject(TargetGuid);
+    }
+   }
+   else if(!TryOpenTradeForDraggedItem(Target,Item.Guid,Amount))
+   {
+    if(PlayerController)PlayerController->BeginUseApproach(TargetGuid,Target.UseRadius>0?Target.UseRadius:.6f,false,false);
+    PendingVendorSellGuid=0;VendorSellCart.Reset();VendorSellSelectedGuid=0;
+    Client->SendGiveObjectRequest(TargetGuid,Item.Guid,Amount);
+   }
+   Client->SelectObject(TargetGuid);
+  }
  }
  struct FPanel {const TCHAR* Action;const TCHAR* Page;const TCHAR* Tab;};
  static const FPanel Panels[]={

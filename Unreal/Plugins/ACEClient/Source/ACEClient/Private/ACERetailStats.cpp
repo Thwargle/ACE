@@ -1,7 +1,25 @@
 #include "ACEDatSubsystem.h"
+#include "Dat/ACEDatCursor.h"
+#include "Dat/ACEDatDatabase.h"
 
 void UACEDatSubsystem::RecomputePlayerStats(FACEPlayerVitals& V, const TArray<FACEActiveEnchantment>& Enchantments)
 {
+	if (!bVitalFormulasLoaded && EnsureLoaded() && PortalDat)
+	{
+		TArray<uint8> Bytes;
+		if (PortalDat->ReadFile(0x0E000003u, Bytes) && Bytes.Num() >= 76)
+		{
+			FACEDatCursor Cursor(Bytes); bool Ok = true;
+			Cursor.ReadU32(Ok);
+			for (auto& Formula : VitalFormulas)
+			{
+				uint32 Values[6]; for (auto& Value : Values) Value = Cursor.ReadU32(Ok);
+				if (Ok && Values[3] && Values[4] <= 6 && Values[5] <= 6)
+					FMemory::Memcpy(Formula, Values, sizeof(Values));
+			}
+		}
+		bVitalFormulasLoaded = true;
+	}
 	// CEnchantmentRegistry::CullEnchantmentsFromList / Duel: only the winning
 	// enchantment in each category affects a quality. Suppressed item buffs still
 	// exist in the registry, so summing every row overstates attributes and skills.
@@ -73,7 +91,16 @@ void UACEDatSubsystem::RecomputePlayerStats(FACEPlayerVitals& V, const TArray<FA
 		float Mul, Add; Modifiers(2, Key, Mul, Add);
 		return FMath::Max(Base < 5 ? 1 : 5, FMath::RoundToInt(Base * Vitae * Mul + Add));
 	};
-	V.MaxHealth = Vital(1, V.HealthStart + V.HealthRanks + FMath::RoundToInt(V.GetBuffedEndurance() / 2.f));
-	V.MaxStamina = Vital(3, V.StaminaStart + V.StaminaRanks + V.GetBuffedEndurance());
-	V.MaxMana = Vital(5, V.ManaStart + V.ManaRanks + V.GetBuffedSelf());
+	auto Formula = [&](int32 Index)
+	{
+		const auto& F = VitalFormulas[Index];
+		return FMath::RoundToInt((double(F[0]) + double(F[1])*V.GetAttributeCurrent(F[4])
+			+ double(F[2])*V.GetAttributeCurrent(F[5])) / F[3]);
+	};
+	// CACQualities::InqAttribute2nd adds GearMaxHealth before enchantments.
+	// ACE also publishes Enlightenment; its health bonus is two per level.
+	const int32 HealthBonus = V.StatQualityInts.FindRef(379) + 2*V.StatQualityInts.FindRef(390);
+	V.MaxHealth = Vital(1, V.HealthStart + V.HealthRanks + Formula(0) + HealthBonus);
+	V.MaxStamina = Vital(3, V.StaminaStart + V.StaminaRanks + Formula(1));
+	V.MaxMana = Vital(5, V.ManaStart + V.ManaRanks + Formula(2));
 }

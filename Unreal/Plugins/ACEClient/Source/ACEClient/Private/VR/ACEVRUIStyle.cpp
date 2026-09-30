@@ -39,10 +39,12 @@ TSharedRef<SWidget> ACEVRUIStyle::Text(UACEClientSubsystem* Client, const FStrin
  return SNew(SNoticeText, Client, Value, Height, Width, Color);
 }
 
-TSharedRef<SWidget> ACEVRUIStyle::Frame(TSharedRef<SWidget> Body, float Padding)
+TSharedRef<SWidget> ACEVRUIStyle::Frame(TSharedRef<SWidget> Body, float Padding, bool bInteractive)
 {
  const auto* Brush = FCoreStyle::Get().GetBrush("WhiteBrush");
- return SNew(SBorder).Visibility(EVisibility::HitTestInvisible).BorderImage(Brush).BorderBackgroundColor(Gold).Padding(2.f)
+ // Decorative notices exclude their children too; menus must keep buttons in
+ // the widget-component hit grid for both controller pointers.
+ return SNew(SBorder).Visibility(bInteractive ? EVisibility::SelfHitTestInvisible : EVisibility::HitTestInvisible).BorderImage(Brush).BorderBackgroundColor(Gold).Padding(2.f)
   [SNew(SBorder).BorderImage(Brush).BorderBackgroundColor(FLinearColor::Black).Padding(2.f)
    [SNew(SBorder).BorderImage(Brush).BorderBackgroundColor(FLinearColor(FColor(90,70,33))).Padding(1.f)
     [SNew(SBorder).BorderImage(Brush).BorderBackgroundColor(Background).Padding(Padding)[Body]]]];

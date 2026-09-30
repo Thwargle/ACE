@@ -1,9 +1,11 @@
 #include "UI/ACEVideoSettingsWidget.h"
+#include "ACEHoverTooltipWidget.h"
 #include "ACECameraSettings.h"
 #include "ACEScreenshotSettings.h"
 #include "Components/EditableTextBox.h"
 #include "ACERuntimeOptions.h"
 #include "ACEClientSubsystem.h"
+#include "ACEPlayerController.h"
 #include "ACECharacterOptions.h"
 #include "Components/ScrollBox.h"
 #include "Engine/GameInstance.h"
@@ -106,13 +108,13 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  DesktopScale=Combo(TEXT("Desktop UI scale"));
  DesktopScale->Rename(TEXT("DesktopUIScale"));
  for(int32 Percent=100;Percent<=300;Percent+=25) DesktopScale->AddOption(FString::Printf(TEXT("%d%%"),Percent));
- DesktopScale->SetToolTipText(FText::FromString(TEXT("Scales the desktop interface in 25% steps. Limited to fit the window; VR uses its own panel scale. 200% and 300% give whole-pixel enlargement of native artwork.")));
+ UACEHoverTooltipWidget::SetWidgetTooltip(DesktopScale, FText::FromString(TEXT("Scales the desktop interface in 25% steps. Limited to fit the window; VR uses its own panel scale. 200% and 300% give whole-pixel enlargement of native artwork.")));
  CursorScale=WidgetTree->ConstructWidget<USlider>(USlider::StaticClass(),TEXT("CursorScale"));
  CursorScale->SetWidgetStyle(RuntimeSlider); CursorScale->SetMinValue(.5f); CursorScale->SetMaxValue(3.f); CursorScale->SetStepSize(.25f); CursorScale->MouseUsesStep=true;
  CursorScale->OnValueChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeCursorScale);
  Row(TEXT("Cursor size"),CursorScale);
  CursorScaleLabel=Label(TEXT("100%")); CursorScaleLabel->SetJustification(ETextJustify::Right); Box->AddChild(Fixed(CursorScaleLabel,250,14));
- CursorScale->SetToolTipText(FText::FromString(TEXT("50% to 300% in 25% steps. Previews and saves immediately, including move, resize, and targeting pointers.")));
+ UACEHoverTooltipWidget::SetWidgetTooltip(CursorScale, FText::FromString(TEXT("50% to 300% in 25% steps. Previews and saves immediately, including move, resize, and targeting pointers.")));
  ShowFrameRate=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("ShowFrameRate"));
  ShowFrameRate->SetWidgetStyle(RoundToggle);ShowFrameRate->SetContent(Label(TEXT("Show FPS overlay")));Box->AddChild(Fixed(ShowFrameRate,272,20));
  Resolution=Combo(TEXT("Resolution"));
@@ -144,6 +146,8 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  InvertMouseY=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("InvertMouseY"));
  InvertMouseX->SetWidgetStyle(RoundToggle);InvertMouseX->SetContent(Label(TEXT("Invert mouse X (horizontal look)")));Box->AddChild(Fixed(InvertMouseX,272,20));
  InvertMouseY->SetWidgetStyle(RoundToggle);InvertMouseY->SetContent(Label(TEXT("Invert mouse Y (vertical look)")));Box->AddChild(Fixed(InvertMouseY,272,20));
+ ToggleMouseLook=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("ToggleMouseLook"));
+ ToggleMouseLook->SetWidgetStyle(RoundToggle);ToggleMouseLook->SetContent(Label(TEXT("Toggle mouse look with right-click")));Box->AddChild(Fixed(ToggleMouseLook,272,20));
  MouseTurnSpeed=WidgetTree->ConstructWidget<USlider>(USlider::StaticClass(),TEXT("MouseTurnSpeed"));
  FSliderStyle Slider;
  Slider.SetNormalBarImage(Brush(0x06001285,FVector2D(120,12))).SetHoveredBarImage(Slider.NormalBarImage).SetDisabledBarImage(Slider.NormalBarImage)
@@ -169,7 +173,7 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  ScreenshotStyle.SetTextStyle(FTextBlockStyle(ScreenshotStyle.TextStyle).SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),9)));
  ScreenshotDirectory->SetWidgetStyle(ScreenshotStyle);
  ScreenshotDirectory->SetHintText(FText::FromString(ACEScreenshotSettings::DefaultDirectory()));
- ScreenshotDirectory->SetToolTipText(FText::FromString(TEXT("Screenshot folder. Leave blank to use the default. Use Apply to save changes.")));
+ UACEHoverTooltipWidget::SetWidgetTooltip(ScreenshotDirectory, FText::FromString(TEXT("Screenshot folder. Leave blank to use the default. Use Apply to save changes.")));
  Box->AddChild(Fixed(ScreenshotDirectory,272,26));
  ResetVideo();
  return Super::RebuildWidget();
@@ -194,6 +198,7 @@ void UACEVideoSettingsWidget::ResetVideo()
  if(auto* GI=GetGameInstance()) if(auto* Client=GI->GetSubsystem<UACEClientSubsystem>()) for(auto& P:CharacterChecks)P.Value->SetIsChecked(Client->IsCharacterOptionSet(P.Key));
  if(MouseTurnSpeed)MouseTurnSpeed->SetValue(ACECameraSettings::GetMouseTurnSpeed());
  InvertMouseX->SetIsChecked(ACECameraSettings::GetInvertMouseX());InvertMouseY->SetIsChecked(ACECameraSettings::GetInvertMouseY());
+ ToggleMouseLook->SetIsChecked(ACECameraSettings::GetToggleMouseLook());
  DesktopScale->SetSelectedIndex(FMath::RoundToInt((ACERuntimeOptions::Get(TEXT("DesktopUIScale"))-1.f)*4.f));
  CursorScale->SetValue(ACERuntimeOptions::Get(TEXT("CursorScale")));
  CursorScaleLabel->SetText(FText::FromString(FString::Printf(TEXT("%d%%"),FMath::RoundToInt(CursorScale->GetValue()*100.f))));
@@ -247,6 +252,7 @@ bool UACEVideoSettingsWidget::HasPendingChanges() const
  if(auto* GI=GetGameInstance()) if(auto* Client=GI->GetSubsystem<UACEClientSubsystem>())
   for(const auto& P:CharacterChecks) if(P.Value->IsChecked()!=Client->IsCharacterOptionSet(P.Key)) return true;
  return InvertMouseX->IsChecked()!=ACECameraSettings::GetInvertMouseX()
+  || ToggleMouseLook->IsChecked()!=ACECameraSettings::GetToggleMouseLook()
   || InvertMouseY->IsChecked()!=ACECameraSettings::GetInvertMouseY()
   || DesktopScale->GetSelectedIndex()!=FMath::RoundToInt((ACERuntimeOptions::Get(TEXT("DesktopUIScale"))-1.f)*4.f)
   || ShowFrameRate->IsChecked()!=(ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f)
@@ -271,6 +277,7 @@ void UACEVideoSettingsWidget::ApplyVideo()
  S->SetFrameRateLimit(FCString::Atof(*FrameLimit->GetSelectedOption()));S->SetVSyncEnabled(VSync->IsChecked());
  S->ValidateSettings();S->ApplySettings(false);S->ConfirmVideoMode();S->SaveSettings();
  ApplyRuntimeOptions(); ResetVideo();
+ if(auto* PC=Cast<AACEPlayerController>(GetOwningPlayer()))PC->ApplyInWorldInputMode();
 }
 
 void UACEVideoSettingsWidget::ApplyRuntimeOptions()
@@ -288,6 +295,7 @@ void UACEVideoSettingsWidget::ApplyInterfaceOptions()
 {
  if(ScreenshotDirectory) ACEScreenshotSettings::SetDirectory(ScreenshotDirectory->GetText().ToString());
  ACECameraSettings::SetMouseInversion(InvertMouseX->IsChecked(),InvertMouseY->IsChecked());
+ ACECameraSettings::SetToggleMouseLook(ToggleMouseLook->IsChecked());
  if(DesktopScale->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("DesktopUIScale"),1.f+DesktopScale->GetSelectedIndex()*.25f);
  if(CursorScale) ACERuntimeOptions::Set(TEXT("CursorScale"),CursorScale->GetValue());
  ACERuntimeOptions::Set(TEXT("ShowFrameRate"),ShowFrameRate->IsChecked()?1.f:0.f);
@@ -311,7 +319,7 @@ void UACEVideoSettingsWidget::ChangeCursorScale(float Value)
 void UACEVideoSettingsWidget::ChangeMouseTurnSpeed(float Value)
 {
  ACECameraSettings::SetMouseTurnSpeed(Value);
- MouseTurnSpeed->SetToolTipText(FText::FromString(FString::Printf(TEXT("Mouse turn speed: %d%%"),FMath::RoundToInt(Value*100.f))));
+ UACEHoverTooltipWidget::SetWidgetTooltip(MouseTurnSpeed, FText::FromString(FString::Printf(TEXT("Mouse turn speed: %d%%"),FMath::RoundToInt(Value*100.f))));
 }
 void UACEVideoSettingsWidget::ResetMouseTurnSpeed()
 {
@@ -329,6 +337,7 @@ void UACEVideoSettingsWidget::DefaultsVideo()
  for(auto& P:CharacterChecks) if(const auto* O=ACECharacterOptions::Find(P.Key)) P.Value->SetIsChecked(((O->bInOptions2?ACECharacterOptions::Options2Default:ACECharacterOptions::Options1Default)&O->Flag)!=0);
  ResetMouseTurnSpeed();
  InvertMouseX->SetIsChecked(false);InvertMouseY->SetIsChecked(false);DesktopScale->SetSelectedIndex(0);
+ ToggleMouseLook->SetIsChecked(false);
  CursorScale->SetValue(1.f); ChangeCursorScale(1.f);
  ShowFrameRate->SetIsChecked(false);
  ChatFontFace->SetSelectedIndex(2); ChatFontSize->SetSelectedIndex(1);

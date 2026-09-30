@@ -1,6 +1,7 @@
 #include "VR/ACEVRComponent.h"
 #include "VR/ACEVRSettings.h"
 #include "VR/ACEVRRetailSurface.h"
+#include "VR/ACEVRMenu.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
 #include "ACEDatSubsystem.h"
@@ -21,6 +22,7 @@
 #include "ACEVisibleObjectPick.h"
 #include "ACERuntimeOptions.h"
 #include "UI/ACEFrameRateWidget.h"
+#include "ProceduralMeshComponent.h"
 
 void UACEVRComponent::PositionPanel(UWidgetComponent* Panel)
 {
@@ -132,7 +134,8 @@ void UACEVRComponent::UpdatePanels(float Dt)
 		// Hidden gameplay panels still tick the binder, which handles incoming vendor/trade updates.
 	};
 	UpdateTextEntryFocus();
-	const bool ShowMain = Available && Widget && (!InWorld || bInventoryOpen || bSettingsOpen) && (!bTextKeyboardOpen || UsesPlatformKeyboard() || !InWorld);
+	const bool ShowNative = InWorld && Available && bInventoryOpen && !bSettingsOpen && !bUseDesktopMenu;
+	const bool ShowMain = Available && Widget && (!InWorld || (bInventoryOpen && bUseDesktopMenu) || bSettingsOpen) && (!bTextKeyboardOpen || UsesPlatformKeyboard() || !InWorld);
 	// Gameplay state must continue to process vendor/trade/attack events while
 	// menus are closed, but a native-only HUD consumes no desktop render target.
 	if (InWorld && PC->DatCanvasWidget) PC->DatCanvasWidget->TickGameplayState();
@@ -178,9 +181,11 @@ void UACEVRComponent::UpdatePanels(float Dt)
 	UpdateNativeHUD(InWorld && Available, Dt);
 	// Open menus take visual and pointer priority over the ambient HUD.
 	// Keep the meters visible behind the menu without stealing its buttons.
-	VitalsPanel->SetTranslucentSortPriority(ShowMain ? -1 : 10);
-	CompassPanel->SetTranslucentSortPriority(ShowMain ? -1 : 10);
-	FellowshipPanel->SetTranslucentSortPriority(ShowMain ? -1 : 10);
+	const bool MenuInFront=ShowMain || ShowNative;
+	RetailPanel->SetTranslucentSortPriority(ShowMain ? 30 : 0);
+	VitalsPanel->SetTranslucentSortPriority(MenuInFront ? -1 : 10);
+	CompassPanel->SetTranslucentSortPriority(MenuInFront ? -1 : 10);
+	FellowshipPanel->SetTranslucentSortPriority(MenuInFront ? -1 : 10);
 	RefreshRetail(ChatRetail, ChatPanel, TEXT("RootGameplay_FloatyMainChat_Field"), Settings->bPinChatToView);
 	RefreshRetail(JumpRetail, JumpPanel, TEXT("RootGameplay_PowerBar_Field"), PC->bJumpCharging);
 	JumpPanel->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -219,8 +224,9 @@ void UACEVRComponent::UpdatePanels(float Dt)
 	VitalsPanel->SetWorldScale3D(FVector(Settings->VitalsScale));
 	ChatPanel->SetWorldScale3D(FVector(Settings->ChatScale));
 	RetailPanel->SetWorldScale3D(FVector(Login ? PanelScale : Settings->PanelScale));
+	UpdateGameplayMenu(ShowNative,Dt);
 	SettingsPanel->SetWorldScale3D(FVector(Settings->OptionsScale));
-	UpdatePanelControls(InWorld && ShowMain, Available && bSettingsOpen);
+	UpdatePanelControls(InWorld && (ShowMain || ShowNative), Available && bSettingsOpen);
 	WristPanel->SetRelativeScale3D(FVector(Settings->WristScale));
 	UpdatePointerVisuals(Available, !InWorld || bInventoryOpen || bSettingsOpen || bKeyboardOpen);
 	UpdateInteractionFeedback(Available && InWorld && !bKeyboardOpen && !bSettingsOpen);
@@ -231,7 +237,7 @@ bool UACEVRComponent::IsPointerNearPanel(bool Left, FVector* Impact) const
 	const auto* Aim = Left ? LeftAim.Get() : RightAim.Get();
 	if (!Aim || !Aim->IsTracked()) return false;
 	const FVector Origin = Aim->GetComponentLocation(), Direction = Aim->GetForwardVector();
-	for (auto* Panel : {WristPanel.Get(), RetailPanel.Get(), SettingsPanel.Get(), MenuControlsPanel.Get(), OptionsControlsPanel.Get()})
+	for (auto* Panel : {WristPanel.Get(), RetailPanel.Get(), GameplayMenuPanel.Get(), SettingsPanel.Get(), MenuControlsPanel.Get(), OptionsControlsPanel.Get()})
 	{
 		if (!Panel || !Panel->IsVisible() || Panel->GetCollisionEnabled() == ECollisionEnabled::NoCollision) continue;
 		const FVector Normal = Panel->GetForwardVector();
@@ -280,6 +286,23 @@ void UACEVRComponent::UpdatePointerVisuals(bool Available, bool MenuVisible)
 		auto* Tip = PointerTips[I].Get(); Tip->SetVisibility(ShowPointer);
 		if (ShowPointer)
 		{
+			const int32 Mode=(MenuVisible || OverUI || NearUI)?0:SpellPointing?1:CrossbowPointing?2:0;
+			if(PointerBeamModes[I]!=Mode)
+			{
+				// Eight-sided unlit beam, rebuilt only on a mode transition. Vertex
+				// colors work in cooked mobile builds without another material variant.
+				TArray<FVector> Vertices,Normals;TArray<int32> Indices;TArray<FVector2D> UV;
+				TArray<FLinearColor> Colors;TArray<FProcMeshTangent> Tangents;
+				const FLinearColor Color=Mode==1?FLinearColor(.08f,.8f,1.f):Mode==2?FLinearColor(1.f,.45f,.035f):FLinearColor::White;
+				for(int32 Side=0;Side<8;++Side)
+				{
+					const float Angle=Side*PI/4;const FVector Normal(FMath::Cos(Angle),FMath::Sin(Angle),0);
+					for(float Z:{-50.f,50.f}){Vertices.Add(Normal*50+FVector(0,0,Z));Normals.Add(Normal);UV.Add(FVector2D::ZeroVector);Colors.Add(Color);}
+					const int32 A=Side*2,B=((Side+1)%8)*2;Indices.Append({A,B,A+1,B,B+1,A+1});
+				}
+				Beam->CreateMeshSection_LinearColor(0,Vertices,Indices,Normals,UV,Colors,Tangents,false);
+				PointerBeamModes[I]=Mode;
+			}
 			FVector A = Aim->GetComponentLocation();
 			FVector B = Pointer->GetHoveredWidgetComponent() ? FVector(Pointer->GetLastHitResult().ImpactPoint) : A + Aim->GetForwardVector() * 200.f;
 			if (NearUI && !OverUI) B = PanelImpact;
@@ -300,7 +323,8 @@ void UACEVRComponent::UpdatePointerVisuals(bool Available, bool MenuVisible)
 				ACEVisibleObjectPick::Trace(*GetWorld(), CastOrigin, B, Cast<APawn>(GetOwner()), &B, false);
 			}
 			Beam->SetWorldLocation((A + B) * .5f); Beam->SetWorldRotation(FRotationMatrix::MakeFromZ(B - A).Rotator());
-			Beam->SetWorldScale3D(FVector(.0025f, .0025f, FVector::Dist(A, B) / 100.f));
+			const float Width=Mode==0?.0025f:.005f;
+			Beam->SetWorldScale3D(FVector(Width,Width,FVector::Dist(A,B)/100.f));
 			const bool Pressed = I == 0 ? bLeftPointerPressed : bRightPointerPressed;
 			const float AimTipScale = FMath::Clamp(float(FVector::Dist(A, B)) * .00003f, .012f, .12f);
 			Tip->SetWorldLocation(B); Tip->SetWorldScale3D(FVector(Pressed ? .027f : OverUI ? .02f : (SpellPointing || CrossbowPointing) ? AimTipScale : .012f));
@@ -314,8 +338,11 @@ void UACEVRComponent::ToggleInventory()
 	if (!bActive || !bTracking || !Client || Client->GetSessionState() != EACESessionState::InWorld) return;
 	if (bTextKeyboardOpen) { CancelGestures(); DismissTextEntry(); UpdatePanels(); return; }
 	CancelGestures(); bInventoryOpen = !bInventoryOpen; bSettingsOpen = false;
+	if(!bInventoryOpen && GameplayMenu)GameplayMenu->UseSource=0;
 	if (bInventoryOpen)
 	{
+		bUseDesktopMenu=false;
+		if(GameplayMenu)GameplayMenu->OpenPage("Inventory");
 		PC->EndUseApproach(); if (auto Session = Client->GetSession()) Session->SendCancelAttack();
 		if (PC->DatGameplayBinder) PC->DatGameplayBinder->OpenGameplayPanel(TEXT("InventoryPanel_Field"));
 		PositionPanel(RetailPanel);
@@ -327,6 +354,9 @@ void UACEVRComponent::RevealRetailDialog(int32 Guid)
 {
 	if (!bActive || Guid == 0) return;
 	ClearConversationSelection(Guid);
+	bUseDesktopMenu=false;
+	PendingGameplayPage=Client->GetOpenVendorGuid()?FName("Vendor"):Client->GetTradePartnerGuid()?FName("Trade"):FName("Loot");
+	if(GameplayMenu){GameplayMenu->OpenPage(PendingGameplayPage);PendingGameplayPage=NAME_None;}
 	// Inventory/vendor packets also refresh an already open dialog after a
 	// purchase. Only opening the surface may capture a new viewing position.
 	if (bInventoryOpen && !bSettingsOpen) return;
@@ -337,7 +367,8 @@ void UACEVRComponent::RevealRetailDialog(int32 Guid)
 
 void UACEVRComponent::TradeChanged(int32 EventType)
 {
-	if (Client) RevealRetailDialog(Client->GetTradePartnerGuid());
+	if (Client && (EventType==ACEGameEvent::OpenTrade || EventType==ACEGameEvent::RegisterTrade))
+		RevealRetailDialog(Client->GetTradePartnerGuid());
 }
 
 void UACEVRComponent::ToggleSettings()
@@ -355,6 +386,7 @@ void UACEVRComponent::ToggleSettings()
 void UACEVRComponent::OpenRetailPanel(FName Name)
 {
 	DismissTextEntry();
+	bUseDesktopMenu=true;
 	CancelGestures(); bSettingsOpen = false; bInventoryOpen = true;
 	// A server dialog already exists on the retail canvas. Reveal it without
 	// switching the underlying inventory/spellbook page.
@@ -396,7 +428,12 @@ bool UACEVRComponent::SelectSpell(int32 Spell)
 	if (PC->DatGameplayBinder) PC->DatGameplayBinder->SelectVRSpell(Spell);
 	const int32 Index = Spells.IndexOfByKey(Spell);
 	if (Index != INDEX_NONE) SpellPage = Index / 8;
-	SetCastFeedback(TEXT("Selected. X closes menus. Aim and pull trigger to cast."));
+	int32 AutomaticTarget = 0;
+	const bool bAutomatic = Client->ResolveSpellCastTarget(Spell, 0, AutomaticTarget);
+	SetCastFeedback(bAutomatic && AutomaticTarget == Client->GetPlayerGuid()
+		? TEXT("Self spell selected. X closes menus. Pull trigger to cast on yourself.")
+		: bAutomatic ? TEXT("Selected. X closes menus. Pull trigger to cast.")
+		: TEXT("Selected. X closes menus. Aim and pull trigger to cast."));
 	Pulse(false);
 	return true;
 }

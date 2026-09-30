@@ -1,4 +1,6 @@
 #include "UI/ACEUIGameplayBinder.h"
+#include "ACEHoverTooltipWidget.h"
+#include "ACEVendorPricing.h"
 #include "Components/ComboBoxString.h"
 #include "ACERadarVisuals.h"
 #include "UI/ACEChatEntry.h"
@@ -277,20 +279,8 @@ namespace
 			OutSlotObjs[I] = Items[I];
 		}
 	}
-	uint32 VendorSellCost(const FACEWorldObject& Item, int32 Quantity, float SellRate)
-	{
-		// Retail VendorProfile divides the stack value first; ShopSystem gives
-		// trade notes a fixed 15% purchase premium, independent of this vendor.
-		const double Rate=Item.ItemType==ACEItemType::PromissoryNote ? 1.15 : double(SellRate);
-		const int32 UnitValue=FMath::Max(0,Item.Value)/FMath::Max(1,Item.StackSize);
-		return static_cast<uint32>(FMath::Max(1,FMath::CeilToInt(FMath::Min(double(MAX_int32),Rate*UnitValue*Quantity-.1))));
-	}
-	int32 VendorBuyPayout(const FACEWorldObject& Item, int32 Quantity, float BuyRate)
-	{
-		const double Rate=Item.ItemType==ACEItemType::PromissoryNote ? 1.0 : double(BuyRate);
-		const int32 UnitValue=FMath::Max(0,Item.Value)/FMath::Max(1,Item.StackSize);
-		return FMath::Max(1,FMath::FloorToInt(FMath::Min(double(MAX_int32),Rate*UnitValue*Quantity+.1)));
-	}
+	using ACEVendorPricing::VendorSellCost;
+	using ACEVendorPricing::VendorBuyPayout;
 	/** Retail ItemSlot_Generic empty cell / selected overlay (LayoutDesc 0x21000037). */
 	constexpr int32 DidInvSlotBg = 0x06004D20;
 	constexpr int32 DidInvSlotSelected = 0x06004D09;
@@ -688,24 +678,7 @@ void UACEUIGameplayBinder::TickSelectionFlash()
 
 void UACEUIGameplayBinder::SetRetailTooltip(UWidget* Widget, const FText& Text)
 {
-	if (!Widget || !Canvas || !Canvas->WidgetTree) return;
-	if (Widget->GetToolTipText().EqualTo(Text) && Widget->GetToolTip()) return;
-	Widget->SetToolTipText(Text);
-	if (Text.IsEmpty()) { Widget->SetToolTip(nullptr); return; }
-	auto* Frame = Cast<UBorder>(Widget->GetToolTip());
-	if (!Frame)
-	{
-		Frame = Canvas->WidgetTree->ConstructWidget<UBorder>();
-		Frame->SetBrushColor(FLinearColor(.48f, .36f, .13f, 1)); Frame->SetPadding(FMargin(1));
-		auto* Body = Canvas->WidgetTree->ConstructWidget<UBorder>();
-		Body->SetBrushColor(FLinearColor(.025f, .025f, .025f, .98f)); Body->SetPadding(FMargin(5, 3));
-		auto* Label = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
-		Label->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 10));
-		Label->SetColorAndOpacity(FLinearColor(.94f, .9f, .74f, 1));
-		Body->SetContent(Label); Frame->SetContent(Body); Widget->SetToolTip(Frame);
-	}
-	if (auto* Body = Cast<UBorder>(Frame->GetContent()))
-		if (auto* Label = Cast<UTextBlock>(Body->GetContent())) Label->SetText(Text);
+	UACEHoverTooltipWidget::SetWidgetTooltip(Widget, Text, UACEHoverTooltipWidget::ObjectTemplate);
 }
 
 void UACEUIGameplayBinder::TickRefresh()
@@ -905,7 +878,7 @@ void UACEUIGameplayBinder::OnElementActivated(TSharedPtr<FACEUIElement> Element)
 				BookScroll->SetScrollOffset(FMath::Clamp(BookScroll->GetScrollOffset()+Dir*28.f,0.f,BookScroll->GetScrollOffsetOfEnd()));
 				RefreshBookOverlays(); return;
 			}
-			if (A->ElementName == TEXT("ItemDisplayTextScrollbar") && ExamScroll)
+			if ((A->ElementName == TEXT("ItemDisplayTextScrollbar") || A->ElementName == TEXT("SpellDisplayTextScrollbar")) && ExamScroll)
 			{
 				ExamScroll->SetScrollOffset(FMath::Clamp(ExamScroll->GetScrollOffset() + Dir * 28.f,
 					0.f, ExamScroll->GetScrollOffsetOfEnd()));
@@ -2278,6 +2251,9 @@ void UACEUIGameplayBinder::ToggleKeyboardMappingUI()
 		return;
 	}
 	const bool bOn = !El->bVisible;
+	// Binding capture consumes gameplay shortcuts, including the UI toggle.
+	// Always reveal the editor before entering that mode.
+	if (bOn && PlayerController) PlayerController->SetDesktopInterfaceHidden(false);
 	if (bOn) ACEInputBindings::BeginEdit(); else ACEInputBindings::Cancel();
 	El->bVisible = bOn;
 	Manager->SetElementVisibleByName(El->ElementName, bOn);
@@ -3890,11 +3866,6 @@ void UACEUIGameplayBinder::UseInventoryItem(int32 Guid)
 		return;
 	}
 
-	if (Client->IsUseBusy())
-	{
-		PostInventorySystemMessage(TEXT("You're too busy!"));
-		return;
-	}
 	// Inventory activation follows the retail decision tree. Neither item charges
 	// nor a guessed list of wearable item types changes the advertised useability.
 	const int32 Self = Client->GetPlayerGuid();
@@ -3908,6 +3879,20 @@ void UACEUIGameplayBinder::UseInventoryItem(int32 Guid)
 		if (!Client->GetWorldObject(Owner, Container)) break;
 		bOwned = Container.ContainerId == Self || Container.WielderId == Self;
 		Owner = Container.ContainerId;
+	}
+	// R, shortcuts and double-clicks may refer to world objects too. Use the
+	// controller's approach/arrival path so Use is sent once at the destination,
+	// rather than starting a second server move/use while our player is moving.
+	// Combat stance itself is not a busy condition in retail ItemHolder::UseObject.
+	if (!bOwned && Obj.bHasPosition && PlayerController)
+	{
+		PlayerController->InteractWithObject(Guid);
+		return;
+	}
+	if (Client->IsUseBusy())
+	{
+		PostInventorySystemMessage(TEXT("You're too busy!"));
+		return;
 	}
 	if (bOwned)
 	{
@@ -3954,7 +3939,6 @@ void UACEUIGameplayBinder::UseInventoryItem(int32 Guid)
 	const bool bDualUseTargeting = ACEItemUseable::IsTargeted(Obj.ItemUseable);
 	if (bDualUseTargeting)
 	{
-		bPendingKeyboardGive = false;
 		PendingUseWithSourceGuid = Guid;
 		SyncPendingUseCursor();
 		if (bManaStone)
@@ -4000,16 +3984,6 @@ bool UACEUIGameplayBinder::TryCompletePendingUseWithTarget(int32 TargetGuid)
 	{
 		CancelPendingUseWith();
 		return true;
-	}
-	if (bPendingKeyboardGive)
-	{
-		if (!Client->IsOwnedInventoryItem(Source) || TargetGuid==Client->GetPlayerGuid()
-			|| !Target.IsGiveOrCreatureTarget())
-		{PostInventorySystemMessage(TEXT("Select another player or an NPC to give this item to."));return true;}
-		if(PlayerController)PlayerController->BeginUseApproach(TargetGuid,Target.UseRadius>0?Target.UseRadius:.6f,false,false);
-		PendingVendorSellGuid=0; VendorSellCart.Reset(); VendorSellSelectedGuid=0;
-		Client->SendGiveObjectRequest(TargetGuid,Source.Guid,FMath::Clamp(PendingKeyboardGiveAmount,1,FMath::Max(1,Source.StackSize)));
-		CancelPendingUseWith();return true;
 	}
 	// ItemHolder::TargetAcquired: empty mana stones destroy the selected item.
 	// Retail blocks Retained items and requires the authored Yes/No dialog first.
@@ -4114,7 +4088,6 @@ void UACEUIGameplayBinder::SyncPendingUseCursor()
 
 void UACEUIGameplayBinder::CancelPendingUseWith()
 {
-	bPendingKeyboardGive = false;
 	FinishManaStoneConfirmation(false);
 	if (PendingUseWithSourceGuid == 0)
 	{
@@ -4131,11 +4104,7 @@ int32 UACEUIGameplayBinder::GetPendingUseWithSourceGuid() const
 
 bool UACEUIGameplayBinder::IsPendingUseTargetCompatible(int32 TargetGuid) const
 {
-	if (!bPendingKeyboardGive) return IsUseTargetCompatible(PendingUseWithSourceGuid, TargetGuid);
-	if (!Client) return false;
-	FACEWorldObject Source, Target;
-	if (!Client->GetWorldObject(PendingUseWithSourceGuid,Source) || !Client->GetWorldObject(TargetGuid,Target)) return false;
-	return Client->IsOwnedInventoryItem(Source) && TargetGuid!=Client->GetPlayerGuid() && Target.IsGiveOrCreatureTarget();
+	return IsUseTargetCompatible(PendingUseWithSourceGuid, TargetGuid);
 }
 
 bool UACEUIGameplayBinder::IsUseTargetCompatible(int32 SourceGuid, int32 TargetGuid) const
@@ -4207,6 +4176,7 @@ int32 UACEUIGameplayBinder::GetInventoryTargetAt(FVector2D Absolute) const
 
 void UACEUIGameplayBinder::CancelInventoryDrag()
 {
+	bInvDragFromVendorSell = false;
 	if (PaperDollDragTargetIcon) PaperDollDragTargetIcon->SetVisibility(ESlateVisibility::Collapsed);
 	InvDragGuid = 0;
 	InvDragAmount = 0;
@@ -4406,6 +4376,24 @@ bool UACEUIGameplayBinder::TryBeginInventoryDrag(FVector2D CanvasLocalPos)
 		bInvDoubleClickPending = Guid == LastInvClickGuid && FPlatformTime::Seconds() - LastInvClickTime < InventoryDoubleClickSeconds();
 		if (!bInvDoubleClickPending && !ShouldPreserveShortcutSelection(Guid)) SelectInventoryGuid(Guid);
 		return true;
+	}
+
+	// Selling entries are references to owned inventory. Dragging one back out
+	// cancels the offer locally; it must never drop, use, or move the real item.
+	if (OpenVendorGuid && ActiveVendorPage == 2)
+	{
+		for (int32 I=0; I<VendorItemSlots.Num() && I<VendorItemGuids.Num(); ++I)
+		{
+			if (!VendorItemSlots[I] || !Canvas->IsWidgetExposedAt(VendorItemSlots[I],Absolute)) continue;
+			FACEWorldObject Item;
+			if (!Client || !Client->GetWorldObject(VendorItemGuids[I],Item)) return false;
+			InvDragGuid=Item.Guid; InvDragIconDid=Item.IconId; InvDragStartLocal=CanvasLocalPos;
+			InvDragSourcePack=0; InvDragSourceSlot=InvDragPackSlotIndex=INDEX_NONE;
+			bInvDragPending=true; bInvDragActive=false; bInvDragFromVendorSell=true;
+			bInvDoubleClickPending=Item.Guid==LastInvClickGuid && FPlatformTime::Seconds()-LastInvClickTime<InventoryDoubleClickSeconds();
+			VendorSellSelectedGuid=Item.Guid; SelectInventoryGuid(Item.Guid);
+			return true;
+		}
 	}
 
 	// Loot panel items → drag into inventory (double-click picks up).
@@ -4699,6 +4687,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 	const int32 ShortcutSource = InvDragShortcutSlot;
 	const bool bWasDragging = bInvDragActive;
 	const bool bDoubleClick = bInvDoubleClickPending;
+	const bool bVendorSellSource = bInvDragFromVendorSell;
 	const bool bLootSource = OpenLootContainerGuid != 0
 		&& (SourcePack == OpenLootContainerGuid || SourcePack == OpenLootSelectedPackGuid);
 	CancelInventoryDrag();
@@ -4713,6 +4702,21 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		return true;
 	}
 	const FVector2D Absolute = Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos);
+
+	if (bVendorSellSource)
+	{
+		const auto SellPanel=Manager ? Manager->FindElementByName(TEXT("RootGameplay_FloatyEnvPanel_Field")) : nullptr;
+		const bool bInVendor=SellPanel && FBox2D(FVector2D(SellPanel->GetScreenOrigin()),
+			FVector2D(SellPanel->GetScreenOrigin())+FVector2D(SellPanel->Width,SellPanel->Height)).IsInside(CanvasLocalPos);
+		if (bDoubleClick || (bWasDragging && !bInVendor))
+		{
+			VendorSellCart.RemoveAll([Guid](const auto& Entry){return Entry.Value==Guid;});
+			if (VendorSellSelectedGuid==Guid) VendorSellSelectedGuid=0;
+			LastInvClickGuid=0; LastInvClickTime=0;
+		}
+		else if (!bWasDragging) { LastInvClickGuid=Guid; LastInvClickTime=FPlatformTime::Seconds(); }
+		RefreshVendorOverlays(); RefreshInventoryOverlays(); return true;
+	}
 
 	auto RecordClick = [this, Guid, ShortcutSource]()
 	{
@@ -5219,25 +5223,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 
 		// Releasing a tracked inventory drag over empty world uses the same
 		// server-authoritative drop/split action as the desktop client.
-		if (!Obj.CanDropToWorld())
-		{
-			PostInventorySystemMessage(TEXT("You cannot drop that item."));
-			return true;
-		}
-		{
-			const int32 Stack = Obj.StackSize > 0 ? Obj.StackSize : 1;
-			const int32 Amt = Amount;
-			if (Stack > 1 && Amt < Stack)
-			{
-				TrackInventoryStackSplit(InventorySelectionSplit, Obj, Amt);
-				InventorySelectionSplit.bToWorld = true;
-				Client->SendStackableSplitTo3D(Guid, Amt);
-			}
-			else
-			{
-				Client->SendDropItem(Guid);
-			}
-		}
+		DropInventoryAmount(Guid,Amount);
 		return true;
 	}
 
@@ -7562,9 +7548,14 @@ bool UACEUIGameplayBinder::IsPointerOverStatList(FVector2D CanvasLocalPos) const
 	return Contains(ListEl) || Contains(BarEl);
 }
 
-bool UACEUIGameplayBinder::GetStatTooltipAt(FVector2D Absolute, FString& OutText) const
+bool UACEUIGameplayBinder::GetStatTooltipAt(FVector2D Absolute, FString& OutText, uint32* OutTemplateId) const
 {
-	if (GetMapTooltipAt(Absolute, OutText)) return true;
+	if (OutTemplateId) *OutTemplateId = UACEHoverTooltipWidget::OptionsTemplate;
+	if (GetMapTooltipAt(Absolute, OutText))
+	{
+		if (OutTemplateId) *OutTemplateId = UACEHoverTooltipWidget::MapTemplate;
+		return true;
+	}
 	if (Canvas && CastSpellLabel && CastSpellLabel->GetVisibility() != ESlateVisibility::Collapsed
 		&& Canvas->IsWidgetExposedAt(CastSpellLabel, Absolute))
 	{
@@ -8155,7 +8146,7 @@ void UACEUIGameplayBinder::RefreshAttributeOverlays()
 			const int32 Base = LastVitals.GetAttributeBase(Rows[i + AttributeScrollOffset].AttrId);
 			Value = FString::FromInt(Current);
 			ValueColor = Current > Base ? FLinearColor::Green : Current < Base ? FLinearColor::Red : TextWhite;
-			if (Val) Val->SetToolTipText(FText::FromString(FString::Printf(TEXT("Base: %d\nCurrent: %d"), Base, Current)));
+			if (Val) UACEHoverTooltipWidget::SetWidgetTooltip(Val, FText::FromString(FString::Printf(TEXT("Base: %d\nCurrent: %d"), Base, Current)));
 		}
 		else if (Rows[i + AttributeScrollOffset].VitalId == 1)
 		{
@@ -8636,7 +8627,7 @@ void UACEUIGameplayBinder::RefreshSkillOverlays()
 			Val->SetVisibility(ESlateVisibility::HitTestInvisible);
 			Val->SetJustification(ETextJustify::Right);
 			Val->SetColorAndOpacity(FSlateColor(Sk.Current > Sk.Base ? FLinearColor::Green : Sk.Current < Sk.Base ? FLinearColor::Red : TextWhite));
-			Val->SetToolTipText(FText::FromString(FString::Printf(TEXT("Base: %d\nCurrent: %d"), Sk.Base, Sk.Current)));
+			UACEHoverTooltipWidget::SetWidgetTooltip(Val, FText::FromString(FString::Printf(TEXT("Base: %d\nCurrent: %d"), Sk.Base, Sk.Current)));
 			if (Val->GetParent() != Canvas->GetElementLayer())
 			{
 				Canvas->GetElementLayer()->AddChild(Val);
@@ -8905,6 +8896,20 @@ void UACEUIGameplayBinder::RefreshTitleOverlays()
 		Row->SetColorAndOpacity(FSlateColor(TextWhite));
 		Canvas->PlaceWidgetAtElement(Row, TextElement, 571 + i);
 	}
+}
+
+void UACEUIGameplayBinder::DropInventoryAmount(int32 Guid,int32 Amount)
+{
+    FACEWorldObject Item;
+    if(!Client || !Client->GetWorldObject(Guid,Item) || !Client->IsOwnedInventoryItem(Item))return;
+    if(!Item.CanDropToWorld()){PostInventorySystemMessage(TEXT("You cannot drop that item."));return;}
+    const int32 Stack=FMath::Max(1,Item.StackSize),Quantity=FMath::Clamp(Amount,1,Stack);
+    if(Quantity<Stack)
+    {
+        TrackInventoryStackSplit(InventorySelectionSplit,Item,Quantity);InventorySelectionSplit.bToWorld=true;
+        Client->SendStackableSplitTo3D(Guid,Quantity);
+    }
+    else Client->SendDropItem(Guid);
 }
 
 void UACEUIGameplayBinder::RaiseSelectedStat(int32 Multiplier)
@@ -9596,7 +9601,7 @@ void UACEUIGameplayBinder::RefreshSpellHotbarOverlays()
 			CastSpellLabel->SetColorAndOpacity(FSlateColor(bCanCast ? FLinearColor(0.95f, 0.92f, 0.75f, 1.f) : FLinearColor(.45f,.45f,.42f,1)));
 			FString Name; uint32 Icon = 0;
 			if (Dat) Dat->TryGetSpellInfo(SelectedSpell, Name, Icon);
-			SetRetailTooltip(CastSpellLabel, FText::FromString(!SelectedSpell ? TEXT("Select a spell to cast")
+			UACEHoverTooltipWidget::SetWidgetTooltip(CastSpellLabel, FText::FromString(!SelectedSpell ? TEXT("Select a spell to cast")
 				: bCanCast ? TEXT("CAST ") + Name : TEXT("You must select an appropriate target for ") + Name));
 			FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 11);
 			CastSpellLabel->SetFont(Font);
@@ -11056,31 +11061,10 @@ void UACEUIGameplayBinder::RefreshExaminationOverlay()
 	for (UTextBlock* Text : ExamCreatureHeadings) if (Text) Text->SetVisibility(ESlateVisibility::Collapsed);
 	for (UTextBlock* Text : ExamAttributeLabels) if (Text) Text->SetVisibility(ESlateVisibility::Collapsed);
 	for (UTextBlock* Text : ExamAttributeValues) if (Text) Text->SetVisibility(ESlateVisibility::Collapsed);
-	FString Body = LastAppraisal.Summary.IsEmpty()
-		? (LastAppraisal.bSuccess ? FString() : TEXT("You fail to appraise the item."))
-		: LastAppraisal.Summary;
-    // The network summary contains placeholder spell names for non-DAT consumers.
-    // ItemExamineUI formats the complete spell list and descriptions below.
-    TArray<FString> SummaryLines;
-    Body.ParseIntoArrayLines(SummaryLines, false);
-    SummaryLines.RemoveAll([](const FString& Line)
-    {
-        return Line.StartsWith(TEXT("Spells (")) || Line.StartsWith(TEXT("  Spell "))
-            || (Line.StartsWith(TEXT("Damage ")) && Line.Contains(TEXT("  Speed ")) && Line.Contains(TEXT("  Offense ")));
-    });
-    Body = FString::Join(SummaryLines, TEXT("\n"));
-	// 2100006B has no ItemValueText/ItemBurdenText. Retail explicitly inserts
-	// these lines into ItemDisplayText when those optional controls are absent.
-	FString Prefix;
-	if (!Manager->FindElementUnder(TEXT("ItemExamineUI"), TEXT("ItemValueText")))
-		Prefix += LastAppraisal.bHasValue
-			? TEXT("Value: ") + FText::AsNumber(LastAppraisal.Value).ToString() + TEXT("\n") : TEXT("Value: ???\n");
-	if (!Manager->FindElementUnder(TEXT("ItemExamineUI"), TEXT("ItemBurdenText")))
-		Prefix += LastAppraisal.bHasBurden
-			? TEXT("Burden: ") + FText::AsNumber(LastAppraisal.Burden).ToString() + TEXT("\n") : TEXT("Burden: Unknown\n");
-	Body = Prefix + ACEAppraisalFormatting::ItemDetails(LastAppraisal, Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr) + Body;
-	const FString ManaDetails = ACEAppraisalFormatting::ManaStoneDetails(LastAppraisal);
-	if (!ManaDetails.IsEmpty()) Body += TEXT("\n") + ManaDetails;
+	const FString Body = ACEAppraisalFormatting::ItemExaminationText(LastAppraisal,
+        Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr,
+        !Manager->FindElementUnder(TEXT("ItemExamineUI"), TEXT("ItemValueText")),
+        !Manager->FindElementUnder(TEXT("ItemExamineUI"), TEXT("ItemBurdenText")));
 	const FString BodyEl = LastAppraisal.bIsCreature
 		? TEXT("BasicCreatureExam_Attributes")
 		: TEXT("ItemDisplayText");
@@ -11116,6 +11100,9 @@ void UACEUIGameplayBinder::RefreshExaminationOverlay()
 		}
 		if (ExamScroll)
 		{
+			// Spell and item examinations reuse this widget. Never retain a
+			// Slate scrollbar beside the retail chain/thumb from an earlier view.
+			ExamScroll->SetScrollBarVisibility(ESlateVisibility::Collapsed);
 			if (ExamBody->GetParent() != ExamScroll) ExamScroll->AddChild(ExamBody);
 			if (ExamScrolledObjectGuid != LastAppraisal.ObjectGuid)
 			{
@@ -13079,7 +13066,8 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 			EACEUIScrollTarget::CharacterInfo,FMath::CeilToInt(CharacterInfoScroll->GetScrollOffsetOfEnd()),false)) return true;
 	if (ExamScroll && ExamScroll->GetVisibility() != ESlateVisibility::Collapsed)
 	{
-		if (TryBar(Manager->FindElementUnder(TEXT("ItemExamineUI"), TEXT("ItemDisplayTextScrollbar")),
+		if (TryBar(Manager->FindElementUnder(ExaminedSpellId ? TEXT("SpellExamineUI") : TEXT("ItemExamineUI"),
+			ExaminedSpellId ? TEXT("SpellDisplayTextScrollbar") : TEXT("ItemDisplayTextScrollbar")),
 			EACEUIScrollTarget::Examination, FMath::CeilToInt(ExamScroll->GetScrollOffsetOfEnd()), false)) return true;
 	if (ExamInscriptionScroll && ExamInscriptionScroll->GetVisibility()!=ESlateVisibility::Collapsed)
 		if(TryBar(Manager->FindElementUnder(TEXT("ItemExamineUI"),TEXT("ItemInscriptionScrollbar")),

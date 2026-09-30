@@ -841,6 +841,8 @@ void UACEUIElementManager::ApplyFloatyResizeLayout(const TSharedPtr<FACEUIElemen
 				const FString& N = Sub->ElementName;
 				if (N == TEXT("ItemDisplayText") || N.StartsWith(TEXT("ItemDisplayTextScrollbar")))
 					Sub->Height = FMath::Max(32, Child->Height - 79);
+				else if (N == TEXT("SpellDisplayText") || N == TEXT("SpellDisplayTextScrollbar"))
+					Sub->Height = FMath::Max(32, Child->Height - Sub->Y - 4);
 				else if (N == TEXT("ItemExamBackground_Divider_Lower")) Sub->Y = Child->Height - 79;
 				else if (N == TEXT("ItemExamBackground_Paper") || N == TEXT("ItemInscriptionText")) Sub->Y = Child->Height - 74;
 				else if (N == TEXT("ItemSignatureText")) Sub->Y = Child->Height - 17;

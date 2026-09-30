@@ -217,7 +217,10 @@ void UACEVRComponent::ActivateRig()
 	for (int32 I = 0; I < 2; ++I)
 	{
 		BowStrings.Add(Mesh(*FString::Printf(TEXT("VRBowString%d"), I), Cylinder));
-		PointerBeams.Add(Mesh(*FString::Printf(TEXT("VRPointerBeam%d"), I), Cylinder));
+		auto* PointerBeam=NewObject<UProceduralMeshComponent>(PresentationActor,*FString::Printf(TEXT("VRPointerBeam%d"),I));
+		if(Unlit)PointerBeam->SetMaterial(0,Unlit);
+		PointerBeam->SetCollisionEnabled(ECollisionEnabled::NoCollision);PointerBeam->SetCastShadow(false);
+		Scene(PointerBeam,VisualRoot);PointerBeam->SetVisibility(false);PointerBeams.Add(PointerBeam);
 		PointerTips.Add(Mesh(*FString::Printf(TEXT("VRPointerTip%d"), I), Sphere));
 	}
 	if (auto* App = GetOwner()->FindComponentByClass<UACECharacterAppearanceComponent>())
@@ -339,6 +342,7 @@ void UACEVRComponent::TickComponent(float Dt, ELevelTick TickType, FActorCompone
 	{
 		auto* P = RightPointer->IsOverHitTestVisibleWidget() ? RightPointer.Get() : LeftPointer.Get();
 		P->ScrollWheel(TurnStick.Y > 0.f ? 1.f : -1.f); LastScroll = GetWorld()->GetTimeSeconds();
+		if(GameplayMenuPanel && P->GetHoveredWidgetComponent()==GameplayMenuPanel)GameplayMenuPanel->RequestRedraw();
 	}
 	UpdatePortalView();
 	UpdateHandContacts(Dt); UpdateTwoHandUse(Dt); UpdatePanels(Dt); UpdateArms(Dt); UpdateCombat(Dt); UpdatePortalEquipmentVisibility(); UpdateComfort(Dt);
@@ -442,6 +446,7 @@ void UACEVRComponent::EndPlay(const EEndPlayReason::Type Reason)
 		Client->OnChatMessage.RemoveDynamic(this, &UACEVRComponent::CombatMessage);
 	}
 	if (PresentationActor) PresentationActor->Destroy();
+	if (MenuMirrorActor) MenuMirrorActor->Destroy();
 	if (AmmoActor) AmmoActor->Destroy();
 	Super::EndPlay(Reason);
 }

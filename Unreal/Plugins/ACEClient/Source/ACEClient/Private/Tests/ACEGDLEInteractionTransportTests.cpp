@@ -124,6 +124,38 @@ bool FACEGDLEInteractionTransportTest::RunTest(const FString&)
             FACEBinaryReader R(Retry); R.Skip(14);
             TestEqual(TEXT("Retransmission uses the same half-second clock"), R.ReadUInt16(), uint16(120));
         }
+        // Casting must retain the normal retail movement transport on both
+        // ACE and GDLE, including independent strafe/turn and magic stance.
+        Session.CurrentStance=ACEMotion::StanceMagic;Session.bUseBusy=true;
+        Session.PlayerPosition.CellId=0x01430171;Session.PlayerPosition.Location=FVector(49,-75,0);
+        for(float Forward:{1.f,-1.f,0.f})
+        {
+            const uint32 BeforeSequence=Session.NextGameActionSequence;
+            Session.SendMoveToState(Forward,1.f,-1.f,true,true,false);
+            const auto Bytes=Receive();
+            if(!TestTrue(TEXT("Movement during casting reaches the server"),Bytes.Num()>=100))continue;
+            FACEBinaryReader R(Bytes);R.Skip(34);
+            TestEqual(TEXT("Slide uses the retail weenie queue"),R.ReadUInt16(),ACEQueue::WeenieQueue);
+            TestEqual(TEXT("Slide uses the game-action envelope"),R.ReadUInt32(),uint32(0xF7B1));
+            TestEqual(TEXT("Command sequence advances once per movement update"),R.ReadUInt32(),BeforeSequence);
+            TestEqual(TEXT("Slide remains standard MoveToState"),R.ReadUInt32(),ACEGameAction::MoveToState);
+            const uint32 Flags=R.ReadUInt32();
+            TestEqual(TEXT("Run hold is retained during casting"),R.ReadUInt32(),ACEMotion::HoldKeyRun);
+            TestEqual(TEXT("Movement never changes the magic stance"),R.ReadUInt32(),ACEMotion::StanceMagic);
+            if(Forward!=0)
+            {
+                TestTrue(TEXT("Active forward command is present"),(Flags&ACERawMotionFlags::ForwardCommand)!=0);
+                TestEqual(TEXT("Raw forward/back is preserved for server interpretation"),R.ReadUInt32(),Forward>0?ACEMotion::WalkForward:ACEMotion::WalkBackwards);
+                R.ReadUInt32();TestEqual(TEXT("Raw forward speed is not pre-scaled"),R.ReadFloat(),1.f);
+            }
+            else TestFalse(TEXT("Forward release does not erase strafe or turn"),(Flags&ACERawMotionFlags::ForwardCommand)!=0);
+            TestEqual(TEXT("Independent strafe command"),R.ReadUInt32(),ACEMotion::SideStepRight);
+            R.ReadUInt32();TestEqual(TEXT("Strafe speed"),R.ReadFloat(),1.f);
+            TestEqual(TEXT("Independent turn command"),R.ReadUInt32(),ACEMotion::TurnRight);
+            R.ReadUInt32();TestEqual(TEXT("Turn direction"),R.ReadFloat(),-1.f);
+            TestEqual(TEXT("Position and collision stay in the reported dungeon"),R.ReadUInt32(),0x01430171u);
+            R.Skip(28+8);TestEqual(TEXT("Casting slide retains grounded contact"),R.ReadUInt8(),uint8(1));
+        }
         Session.Disconnect(); Receive(); // discard clean disconnect before next fixture
     }
     Receiver->Close(); Sockets->DestroySocket(Receiver);

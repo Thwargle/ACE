@@ -55,6 +55,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEVRRigTest;
 	friend class FACEVRProtocolTest;
 	friend class UACEVRComponent;
+	friend class UACEVRMenu;
 	friend class AACEPlayerController;
 	friend class FACEChatParityTest;
 	friend class FACEEmoteTest;
@@ -161,7 +162,7 @@ public:
 	/** Skills / Attributes list under SkillManagementPanel. */
 	bool IsPointerOverStatList(FVector2D CanvasLocalPos) const;
 	bool ScrollStatList(float WheelDelta);
-	bool GetStatTooltipAt(FVector2D Absolute, FString& OutText) const;
+	bool GetStatTooltipAt(FVector2D Absolute, FString& OutText, uint32* OutTemplateId = nullptr) const;
 	bool GetMapTooltipAt(FVector2D Absolute, FString& OutText) const;
 	/** Spellbook spell list + scrollbar. */
 	bool IsPointerOverSpellbookList(FVector2D CanvasLocalPos) const;
@@ -466,7 +467,6 @@ private:
 	UPROPERTY(Transient) TArray<TObjectPtr<UTextBlock>> KeyboardRowLabels;
 	UPROPERTY(Transient) TArray<TObjectPtr<UTextBlock>> KeyboardKeyLabels;
 	int32 KeyboardScrollOffset=0, KeyboardMaxOffset=0, KeyboardVisibleRows=1;
-	FString KeyboardFileName=TEXT("acclient.keymap");
 	TSharedPtr<FACEUIElement> KeymapDialog;
 	UPROPERTY(Transient) TObjectPtr<UScrollBox> KeymapReportScroll;
 	UPROPERTY(Transient) TObjectPtr<UTextBlock> KeymapReportText;
@@ -824,8 +824,6 @@ private:
 	bool TryDropInExternalContainer(int32 Guid, int32 Amount, FVector2D Absolute);
 	/** Dual-use: source item waiting for a target click (GameAction UseWithTarget). */
 	int32 PendingUseWithSourceGuid = 0;
-	bool bPendingKeyboardGive = false;
-	int32 PendingKeyboardGiveAmount = 1;
 	TSet<int32> KeyboardOpenedCorpses;
 	void PollAdditionalKeyboardActions(APlayerController* PC);
 	void CycleKeyboardSelection(const FString& Kind, int32 Direction);
@@ -1202,6 +1200,7 @@ private:
 	/** Freeze the selected quantity at pickup; hovering/selection changes cannot change it. */
 	int32 InvDragAmount = 0;
 	int32 InvDragShortcutSlot = INDEX_NONE;
+	bool bInvDragFromVendorSell = false;
 	int32 HitTestShortcutSlot(FVector2D CanvasLocalPos) const;
 	int32 InvDragIconDid = 0;
 	int32 InvDragSourcePack = 0;
@@ -1434,6 +1433,7 @@ private:
 	bool IsUseTargetCompatible(int32 SourceGuid, int32 TargetGuid) const;
 	void RefreshTitleOverlays();
 	void RaiseSelectedStat(int32 Multiplier);
+	void DropInventoryAmount(int32 Guid,int32 Amount);
 	void PlaceTextUnder(UTextBlock* Text, const FString& AncestorName, const FString& ElementName,
 		const FString& Contents, int32 FontSize, const FLinearColor& Color, int32 ZOrder);
 	void RefreshSpellHotbarOverlays();

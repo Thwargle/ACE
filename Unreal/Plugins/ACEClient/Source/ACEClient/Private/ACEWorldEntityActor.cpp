@@ -224,7 +224,7 @@ void AACEWorldEntityActor::InitializeFromObject(const FACEWorldObject& Object, f
 
 	HideCollisionVisuals(CollisionProxy, NameLabel);
 
-	const float S = FMath::Clamp(Object.Scale, 0.25f, 4.f);
+	const float S = Object.GetValidObjectScale();
 	HeldWeenieScale = S;
 	SetActorScale3D(FVector(S));
 

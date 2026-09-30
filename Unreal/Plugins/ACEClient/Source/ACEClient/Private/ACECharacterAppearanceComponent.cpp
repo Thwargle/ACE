@@ -614,6 +614,24 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 		PlacementId = UACEDatSubsystem::ACEPlacementResting;
 	}
 
+	// Retail CPhysicsObj::SetScale changes transforms independently of ObjDesc.
+	// Apply scale before the mesh-cache fast path, including preview actors.
+	if (!bHeld)
+	{
+		const float S = Object.GetValidObjectScale();
+		if (AActor* Owner = GetOwner())
+		{
+			UCapsuleComponent* Capsule = bAlignMeshToCapsuleBottom ? Owner->FindComponentByClass<UCapsuleComponent>() : nullptr;
+			const FVector Feet = Capsule ? Capsule->GetComponentLocation() - Capsule->GetUpVector() * Capsule->GetScaledCapsuleHalfHeight() : FVector::ZeroVector;
+			Owner->SetActorScale3D(FVector(S));
+			if (Capsule)
+			{
+				const FVector NewFeet = Capsule->GetComponentLocation() - Capsule->GetUpVector() * Capsule->GetScaledCapsuleHalfHeight();
+				Owner->AddActorWorldOffset(Feet - NewFeet, false);
+			}
+		}
+	}
+
 	// ObjDescEvent / WieldItem re-broadcast OnObjectCreated frequently. Skip the expensive
 	// ClearAllMeshSections + DAT rebuild when Setup + clothing fingerprint are unchanged.
 	const uint64 AppearanceHash = Object.Appearance.GetContentHash();
@@ -803,22 +821,6 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	SetComponentTickEnabled(true);
 	}
 
-	if (!bHeld)
-	{
-		const float S = FMath::Clamp(Object.Scale, 0.25f, 4.f);
-		if (AActor* Owner = GetOwner())
-		{
-			UCapsuleComponent* Capsule = bAlignMeshToCapsuleBottom ? Owner->FindComponentByClass<UCapsuleComponent>() : nullptr;
-			const FVector Feet = Capsule ? Capsule->GetComponentLocation() - Capsule->GetUpVector() * Capsule->GetScaledCapsuleHalfHeight() : FVector::ZeroVector;
-			Owner->SetActorScale3D(FVector(S));
-			if (Capsule)
-			{
-				const FVector NewFeet = Capsule->GetComponentLocation() - Capsule->GetUpVector() * Capsule->GetScaledCapsuleHalfHeight();
-				Owner->AddActorWorldOffset(Feet - NewFeet, false);
-			}
-		}
-	}
-
 	EnsureMeshRoot();
 	for (int32 i = 0; i < BindTransforms.Num(); ++i)
 	{
@@ -1001,6 +1003,18 @@ void UACECharacterAppearanceComponent::ConfigurePartCollision(bool bBlocking, bo
 		{
 			Proc->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		}
+	}
+}
+
+void UACECharacterAppearanceComponent::InterruptCastWithMovement()
+{
+	// CMotionTable::GetObjectSequence replaces cyclic substates on a new
+	// forward/back command. Sidestep/turn are modifiers and leave the gesture
+	// playing. PowerUp is an Action, whose authored link must finish normally.
+	if(AnimMode==EACEAnimMode::ActionOneShot && ACEIsMagicCastCommand(ActionCommand))
+	{
+		ACEStopCastGestureIfLeaving(GetOwner(),true,false);
+		ClearActionMotion();
 	}
 }
 

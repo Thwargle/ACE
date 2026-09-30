@@ -197,5 +197,5 @@ void UACEVRComponent::ConfirmWheelSpell()
     const int32 Spell=WheelSpells[WheelHover];
     CloseSpellWheel();
     // Confirmation selects only. A fresh trigger press is required to cast.
-    if (SelectSpell(Spell)) SetCastFeedback(TEXT("Spell selected. Pull trigger to cast."));
+    SelectSpell(Spell); // Keep the caster/target guidance supplied by SelectSpell.
 }

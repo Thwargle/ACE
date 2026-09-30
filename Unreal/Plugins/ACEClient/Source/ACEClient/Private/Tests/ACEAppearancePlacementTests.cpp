@@ -3,6 +3,7 @@
 #include "ACEDatSubsystem.h"
 #include "ACECharacterCreation.h"
 #include "ACECharacterAppearanceComponent.h"
+#include "ACEWorldEntityActor.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -123,6 +124,35 @@ bool FACEAppearancePlacementTest::RunTest(const FString&)
         FImageUtils::PNGCompressImageArray(800,600,Pixels,PNG);
         FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/FString::Printf(TEXT("Automation/PathwardenArmor%d.png"),View)));
     }
+    // An arbitrary custom WCID uses the supplied retail setup/ObjDesc, without
+    // restricting its authored scale to the sizes of known retail creatures.
+    FACEWorldObject Custom=Self;Custom.Guid=0x70001234;Custom.WeenieClassId=200001;
+    Custom.bIsPlayer=false;Custom.ItemType=ACEItemType::Misc;Custom.Name=TEXT("Custom retail-art object");
+    Custom.bHasPosition=true;Custom.Position.CellId=0xA9B40001;Custom.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
+    Custom.ItemUseable=32;Custom.Scale=1;
+    auto* Entity=World->SpawnActor<AACEWorldEntityActor>();Entity->InitializeFromObject(Custom,100,true);
+    auto* CustomAppearance=Entity->FindComponentByClass<UACECharacterAppearanceComponent>();
+    TestTrue(TEXT("Unknown weenie class builds the server-specified retail appearance"),CustomAppearance->HasAppearance());
+    FBox BaseBounds;TestTrue(TEXT("Custom object has complete visual bounds"),CustomAppearance->GetVisualWorldBounds(BaseBounds));
+    const uint64 MeshRevision=CustomAppearance->GetAppearanceRevision();
+    for(float Scale:{.1f,8.f,1.f})
+    {
+        Custom.Scale=Scale;Entity->InitializeFromObject(Custom,100,true);
+        TestTrue(TEXT("World entity honors small and large server scales"),Entity->GetActorScale3D().Equals(FVector(Scale),.001));
+        FBox ScaledBounds;CustomAppearance->GetVisualWorldBounds(ScaledBounds);
+        TestTrue(TEXT("All custom model parts scale together"),ScaledBounds.GetSize().Equals(BaseBounds.GetSize()*Scale,.1));
+        TestEqual(TEXT("Scale-only updates reuse geometry"),CustomAppearance->GetAppearanceRevision(),MeshRevision);
+        TestTrue(TEXT("Custom world object remains selectable using server properties"),Custom.IsSelectableWorldObject());
+    }
+    // Inspection/paperdoll actors call ApplyWorldObject without InitializeFromObject.
+    App->SetPreviewCapture(true);Self.Scale=.1f;App->ApplyWorldObject(Self,100,false);
+    const uint64 PreviewRevision=App->GetAppearanceRevision();
+    Self.Scale=8.f;App->ApplyWorldObject(Self,100,false);
+    TestTrue(TEXT("Cached preview honors a scale-only update"),Pawn->GetActorScale3D().Equals(FVector(8),.001));
+    TestEqual(TEXT("Preview scale update does not rebuild parts"),App->GetAppearanceRevision(),PreviewRevision);
+    Self.Scale=0;App->ApplyWorldObject(Self,100,false);
+    TestTrue(TEXT("Invalid server scale falls back safely"),Pawn->GetActorScale3D().Equals(FVector(1),.001));
+    Entity->Destroy();
     GI->Shutdown(); GEngine->DestroyWorldContext(World); World->DestroyWorld(false);
     return true;
 }

@@ -282,6 +282,7 @@ void FACESession::ClearWorldState()
 	PlayerPosition = FACEPosition();
 	PlayerVitals = FACEPlayerVitals();
 	SelectedObject = FACESelectedObject();
+	PreviousSelectedObjectGuid = 0;
 	CurrentStance = ACEMotion::StanceNonCombat;
 	bEnteredWorldSent = false;
 	PendingEnterCharacterId = 0;
@@ -1629,7 +1630,14 @@ void FACESession::UpsertWorldObject(const FACEWorldObject& Object)
 		// A repeated description of the same dead creature is not a respawn.
 		const bool bSameInstance = !Merged.bHasPhysicsTimestamps || !Existing->bHasPhysicsTimestamps
 			|| Merged.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] == Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance];
-		if (Existing->bDying && !Merged.bIsPlayer && bSameInstance)
+		// A server may replace a defeated monster with a quest NPC while keeping
+		// its GUID/instance. Preserve death only for the same weenie and role;
+		// otherwise the replacement inherits unselectable, non-colliding state.
+		const bool bSameWeenieRole = Merged.WeenieClassId == Existing->WeenieClassId
+			&& Merged.ItemType == Existing->ItemType
+			&& ((Merged.ObjectDescriptionFlags ^ Existing->ObjectDescriptionFlags)
+				& (ACEObjectDescFlag::Attackable | ACEObjectDescFlag::Vendor | ACEObjectDescFlag::Corpse)) == 0;
+		if (Existing->bDying && !Merged.bIsPlayer && bSameInstance && bSameWeenieRole)
 		{
 			Merged.bDying = true;
 			Merged.InitialMotionCommand = ACEMotion::Dead;
@@ -2648,6 +2656,22 @@ void FACESession::HandleWeenieError(FACEBinaryReader& Reader)
 		return;
 	}
 	const uint32 Code = Reader.ReadUInt32();
+	// Some servers reject a world Use with WeenieError alone, without UseDone.
+	// Do not retain its local busy gate until timeout after that terminal reply.
+	// Keep unrelated inventory/targeted-use transactions locked: a combat error
+	// received while drinking or healing must not permit a duplicate consumption.
+	if (bUseBusy && UseTargetGuid == 0 && (Code == 0x001Du || Code == 0x0036u))
+	{
+		const FACEWorldObject* Source = WorldObjects.Find(UseSourceGuid);
+		if (Source && Source->bHasPosition && Source->ContainerId == 0 && Source->WielderId == 0
+			&& Source->Guid != PlayerGuid)
+		{
+			Log(FString::Printf(TEXT("World use rejected: error=0x%04X source=0x%08X combat=%d age=%.2fs"),
+				Code, UseSourceGuid, PlayerVitals.CombatMode, FPlatformTime::Seconds()-UseStartedAt));
+			ClearPendingUse();
+			OnUseDone.Broadcast(Code);
+		}
+	}
 	if (Code == 0x003D) // A server failure must also release local approach prediction.
 	{
 		ReportMoveToFailure(Code);
@@ -3580,6 +3604,12 @@ void FACESession::HandlePrivateUpdatePropertyInt(FACEBinaryReader& Reader)
 		DeathLevel = Value;
 		OnEnchantmentsChanged.Broadcast();
 	}
+	else
+	{
+		// Equipment ratings and custom stat qualities can change without an
+		// attribute packet. Re-evaluate the shared desktop/VR vitals immediately.
+		NotifyVitalsChanged();
+	}
 }
 
 void FACESession::ApplyServerCombatMode(int32 Mode)
@@ -3672,6 +3702,9 @@ void FACESession::SendChatChannel(uint32 ChannelId, const FString& Message)
 
 void FACESession::SetSelectedObjectInternal(const FACESelectedObject& Sel)
 {
+	// ACCWeenieObject::SetSelectedObject retains the immediately preceding
+	// selection for Give. Reselecting or refreshing the same object preserves it.
+	if (SelectedObject.Guid != Sel.Guid) PreviousSelectedObjectGuid = SelectedObject.Guid;
 	const uint32 Serial = SelectedObject.SelectionSerial + 1;
 	SelectedObject = Sel;
 	SelectedObject.SelectionSerial = Serial;
@@ -6059,6 +6092,7 @@ void FACESession::ApplyPropertyDataID(int32 ObjectGuid, uint32 PropertyId, uint3
 
 void FACESession::HandleInventoryPutObjInContainer(FACEBinaryReader& Reader)
 {
+	++InventoryDataRevision;
 	// GameEventItemServerSaysContainId: itemGuid, containerGuid, placement, containerType.
 	if (!Reader.CanRead(16))
 	{
@@ -6132,6 +6166,7 @@ void FACESession::HandleInventoryPutObjInContainer(FACEBinaryReader& Reader)
 
 void FACESession::HandleWieldItem(FACEBinaryReader& Reader)
 {
+	++InventoryDataRevision;
 	// GameEventWieldItem: itemGuid, wield location (EquipMask).
 	if (!Reader.CanRead(8))
 	{
@@ -6489,6 +6524,7 @@ void FACESession::HandleInventoryRemoveObject(FACEBinaryReader& Reader)
 
 void FACESession::HandleSetStackSize(FACEBinaryReader& Reader)
 {
+	++InventoryDataRevision;
 	// GameMessageSetStackSize 0x0197: u8 seq, u32 guid, u32 stackSize, u32 value
 	if (!Reader.CanRead(13))
 	{
@@ -6549,6 +6585,7 @@ void FACESession::HandlePublicUpdatePropertyInt(FACEBinaryReader& Reader)
 	}
 	if (FACEWorldObject* Obj = WorldObjects.Find(Guid))
 	{
+		if(Obj->ContainerId || Obj->WielderId==PlayerGuid)++InventoryDataRevision;
 		if (Prop == 4) // PropertyInt.ClothingPriority
 		{
 			Obj->ClothingPriority = Value;
@@ -6679,6 +6716,10 @@ void FACESession::HandlePublicUpdateInstanceId(FACEBinaryReader& Reader)
 		else if (Prop == 26) // PropertyInstanceId.Monarch
 		{
 			Obj->MonarchGuid = Value;
+		}
+		else if (Prop == 44) // PropertyInstanceId.PetOwner
+		{
+			Obj->PetOwnerId = Value;
 		}
 	}
 }

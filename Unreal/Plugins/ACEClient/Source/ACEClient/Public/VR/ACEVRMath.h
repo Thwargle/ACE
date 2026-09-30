@@ -3,6 +3,15 @@
 
 namespace ACEVRMath
 {
+	/** Reflect a complete part pose in the menu's YZ plane, including handedness.
+	 * Apply to individual meshes, not a negative-scale parent: rotated child
+	 * transforms otherwise lose the reflection during scene attachment updates. */
+	inline FTransform MirrorPartPose(const FTransform& Pose)
+	{
+		FMatrix Matrix=Pose.ToMatrixWithScale();
+		for(int32 Row=0;Row<4;++Row)Matrix.M[Row][0]*=-1;
+		return FTransform(Matrix);
+	}
 	// Same launch-speed scaling and gravity as Player.FireVRMissile.
 	inline FVector BallisticOffset(const FVector& Direction, float Speed, float Power, float Seconds, float WorldScale)
 	{

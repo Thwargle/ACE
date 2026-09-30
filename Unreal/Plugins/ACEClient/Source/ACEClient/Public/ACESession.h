@@ -214,6 +214,7 @@ public:
 	bool GetWorldObject(int32 Guid, FACEWorldObject& Out) const;
 	const FACEPlayerVitals& GetPlayerVitals() const { return PlayerVitals; }
 	const FACESelectedObject& GetSelectedObject() const { return SelectedObject; }
+	int32 GetPreviousSelectedObjectGuid() const { return PreviousSelectedObjectGuid; }
 
 	/** PropertyInt.EncumbranceVal (key 5). False until the server has sent it this session. */
 	bool TryGetPlayerEncumbrance(int32& OutEncumbrance) const
@@ -452,6 +453,7 @@ public:
 	/** True while a Use / UseWithTarget is outstanding (cleared by UseDone 0x01C7). */
 	bool IsUseBusy() const { return bUseBusy || PendingEquipmentGuid != 0; }
 	uint32 GetCombatEventRevision() const { return CombatEventRevision; }
+	uint64 GetInventoryDataRevision() const { return InventoryDataRevision; }
 	bool IsServerAttackInProgress() const { return bServerAttackInProgress; }
 	uint32 GetLastAttackError() const { return LastAttackError; }
 
@@ -906,6 +908,7 @@ private:
 	FACEPosition PlayerPosition;
 	FACEPlayerVitals PlayerVitals;
 	FACESelectedObject SelectedObject;
+	int32 PreviousSelectedObjectGuid = 0;
 	TMap<int32, FACEWorldObject> WorldObjects;
 	/** containerGuid → ordered item refs from GameEvent ViewContents (0x0196). */
 	TMap<int32, TArray<FACEContainerItemRef>> ContainerContents;
@@ -939,6 +942,7 @@ private:
 	void CancelPendingUse(const TCHAR* Reason);
 	void CheckPendingUseTimeout(double Now);
 	uint32 CombatEventRevision = 0;
+	uint64 InventoryDataRevision = 0;
 	bool bServerAttackInProgress = false;
 	uint32 LastAttackError = 0;
 	int32 LastTellSenderGuid = 0;

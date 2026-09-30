@@ -195,6 +195,20 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     TestTrue(TEXT("Self healing ignores selected enemy"),Client->ResolveSpellCastTarget(6,Other.Guid,Resolved) && Resolved==Self.Guid);
     TestTrue(TEXT("Item bane may target caster's worn equipment"),Client->ResolveSpellCastTarget(37,Self.Guid,Resolved));
     TestTrue(TEXT("Self portal recall remains valid without selection"),Client->ResolveSpellCastTarget(2645,0,Resolved));
+    int32 CasterSpellCount=0, LongInspectionSpell=2, LongestInspection=0;
+    for (int32 Spell=1;Spell<=65535;++Spell)
+    {
+        if (!Dat->TryGetRetailSpellTargeting(Spell,SpellFlags,RetailType,Projectile) || !(SpellFlags&8u)) continue;
+        ++CasterSpellCount;
+        FString Details;
+        if (Dat->TryGetSpellExamination(Spell,Details) && Details.Len()>LongestInspection)
+        { LongInspectionSpell=Spell; LongestInspection=Details.Len(); }
+        for (int32 Selected : {0,Other.Guid,0x7654321})
+            TestTrue(FString::Printf(TEXT("Caster-only DAT spell %d ignores selection %d"),Spell,Selected),
+                Client->ResolveSpellCastTarget(Spell,Selected,Resolved) && Resolved==Self.Guid);
+    }
+    TestTrue(TEXT("Caster targeting audit covers the retail spell table"),CasterSpellCount>100);
+    AddInfo(FString::Printf(TEXT("Verified %d caster-only spells against retail DAT targeting flags."),CasterSpellCount));
     TestTrue(TEXT("VR Flame Bolt retains free aiming even without Projectile flag"),Client->ResolveSpellCastTarget(27,0,Resolved,true));
     TestFalse(TEXT("VR Other healing cannot fall back to self"),Client->ResolveSpellCastTarget(5,Self.Guid,Resolved,true));
     auto Npc=Other; Npc.Guid=1236; Npc.bIsPlayer=false; Session.WorldObjects.Add(Npc.Guid,Npc);
@@ -389,6 +403,76 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     }
     Door.ItemUseable=0; TestFalse(TEXT("Missing Undef property is not an explicit prohibition"),Door.IsDirectDoorUseBlocked());
     Session.OnChatMessage.Remove(Chat);
+
+    FACEWorldObject Defeated; Defeated.Guid=90010; Defeated.WeenieClassId=900001;
+    Defeated.ItemType=ACEItemType::Creature; Defeated.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
+    Defeated.bHasPosition=true; Defeated.bDying=true;
+    Session.WorldObjects.Add(Defeated.Guid,Defeated);
+    auto Refresh=Defeated; Refresh.bDying=false;
+    Session.UpsertWorldObject(Refresh);
+    TestTrue(TEXT("Stale same-creature description cannot resurrect a defeated creature"),Session.WorldObjects[Defeated.Guid].bDying);
+    auto Reward=Refresh; Reward.WeenieClassId=900002; Reward.ObjectDescriptionFlags=0;
+    Reward.ItemUseable=32; Reward.Name=TEXT("Custom reward NPC");
+    Session.UpsertWorldObject(Reward);
+    TestFalse(TEXT("Replacement weenie does not inherit the defeated creature's death state"),Session.WorldObjects[Reward.Guid].bDying);
+    TestTrue(TEXT("Custom reward NPC can be selected without a name whitelist"),Session.WorldObjects[Reward.Guid].IsSelectableWorldObject());
+    Session.bUseBusy=false; const auto BeforeRewardUse=Session.NextGameActionSequence;
+    Session.SendUseItem(Reward.Guid);
+    TestEqual(TEXT("Custom reward NPC use reaches the server"),Session.NextGameActionSequence,BeforeRewardUse+1);
+    Session.bUseBusy=false;
+
+    // Spell and item inspections share a scroll box. Opening a spell used to
+    // leave its Slate scrollbar visible alongside the next item's DAT bar.
+    Binder->ExaminedSpellId=LongInspectionSpell; Binder->bExaminationDismissed=false;
+    Binder->ShowExamination(true); Binder->RefreshExaminationOverlay();
+    Draw(TEXT("SpellExamination")); Binder->RefreshExaminationOverlay();
+    TestTrue(TEXT("Spell inspection creates the shared scroll box"),Binder->ExamScroll!=nullptr);
+    if (Binder->ExamScroll)
+    {
+        TestEqual(TEXT("Spell inspection uses only the retail scrollbar"),Binder->ExamScroll->GetScrollBarVisibility(),ESlateVisibility::Collapsed);
+        const auto ExamWindow=Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field"));
+        const auto SpellBody=Manager->FindElementUnder(TEXT("SpellExamineUI"),TEXT("SpellDisplayText"));
+        const int32 SmallHeight=SpellBody->Height;
+        ExamWindow->UserResizeH+=180; UACEUIElementManager::ApplyFloatyResizeLayout(ExamWindow);
+        TestEqual(TEXT("Spell description grows with the examination window"),SpellBody->Height,SmallHeight+180);
+        ExamWindow->UserResizeH-=180; UACEUIElementManager::ApplyFloatyResizeLayout(ExamWindow);
+        const auto SpellBar=Manager->FindElementUnder(TEXT("SpellExamineUI"),TEXT("SpellDisplayTextScrollbar"));
+        TestTrue(TEXT("Spell inspection scrollbar follows actual overflow after resizing"),SpellBar && SpellBar->bVisible==(Binder->ExamScroll->GetScrollOffsetOfEnd()>.5f));
+        if (SpellBar && Binder->ExamScroll->GetScrollOffsetOfEnd()>.5f)
+        {
+            Binder->OnElementActivated(Manager->FindElementUnder(TEXT("SpellDisplayTextScrollbar"),TEXT("ScrollBar_Down")));
+            TestTrue(TEXT("Spell inspection retail arrow scrolls the text"),Binder->ExamScroll->GetScrollOffset()>0);
+            const FVector2D Track=FVector2D(SpellBar->GetScreenOrigin())+FVector2D(6,SpellBar->Height-18);
+            TestTrue(TEXT("Spell inspection retail thumb can be dragged"),Binder->TryBeginScrollbarDrag(Track));
+            Binder->UpdateScrollbarDrag(Track+FVector2D(0,1000)); Binder->TryFinishScrollbarDrag();
+            TestTrue(TEXT("Spell inspection thumb reaches the end"),FMath::IsNearlyEqual(Binder->ExamScroll->GetScrollOffset(),Binder->ExamScroll->GetScrollOffsetOfEnd(),1.f));
+        }
+        Binder->ExaminedSpellId=0;
+        Binder->LastAppraisal={}; Binder->LastAppraisal.ObjectGuid=90001;
+        Binder->LastAppraisal.bSuccess=true; Binder->LastAppraisal.Name=TEXT("Long item inspection");
+        Binder->LastAppraisal.bHasValue=Binder->LastAppraisal.bHasBurden=true;
+        for (int32 I=0;I<70;++I) Binder->LastAppraisal.Summary+=FString::Printf(TEXT("Inspection detail %d\n"),I);
+        Binder->ShowExamination(true); Binder->RefreshExaminationOverlay();
+        Draw(TEXT("ItemAfterSpellExamination")); Binder->RefreshExaminationOverlay();
+        const auto ItemBar=Manager->FindElementUnder(TEXT("ItemExamineUI"),TEXT("ItemDisplayTextScrollbar"));
+        TestEqual(TEXT("Returning to an item does not expose a second scrollbar"),Binder->ExamScroll->GetScrollBarVisibility(),ESlateVisibility::Collapsed);
+        TestTrue(TEXT("Long item inspection shows the DAT scrollbar"),ItemBar && ItemBar->bVisible && Binder->ExamScroll->GetScrollOffsetOfEnd()>0);
+        const auto ItemDown=Manager->FindElementUnder(TEXT("ItemDisplayTextScrollbar"),TEXT("ScrollBar_Down"));
+        Binder->OnElementActivated(ItemDown);
+        TestTrue(TEXT("Retail inspection arrow scrolls the shared text"),Binder->ExamScroll->GetScrollOffset()>0);
+        if (ItemBar)
+        {
+            const FVector2D Track=FVector2D(ItemBar->GetScreenOrigin())+FVector2D(6,ItemBar->Height-18);
+            TestTrue(TEXT("Retail inspection thumb can be dragged"),Binder->TryBeginScrollbarDrag(Track));
+            Binder->UpdateScrollbarDrag(Track+FVector2D(0,1000)); Binder->TryFinishScrollbarDrag();
+            TestTrue(TEXT("Inspection thumb reaches the end"),FMath::IsNearlyEqual(Binder->ExamScroll->GetScrollOffset(),Binder->ExamScroll->GetScrollOffsetOfEnd(),1.f));
+        }
+        Draw(TEXT("ItemExaminationScrolled"));
+        Binder->ExaminedSpellId=2; Binder->ShowExamination(true); Binder->RefreshExaminationOverlay();
+        Draw(TEXT("SpellAfterItemExamination"));
+        TestEqual(TEXT("Repeated inspection switches retain one scrollbar"),Binder->ExamScroll->GetScrollBarVisibility(),ESlateVisibility::Collapsed);
+        Binder->ShowExamination(false);
+    }
 
     // Existing keymap UI can rebind screenshot; exercise the actual engine save path.
     ACEInputBindings::Reload(); ACEInputBindings::BeginEdit(); ACEInputBindings::Defaults();

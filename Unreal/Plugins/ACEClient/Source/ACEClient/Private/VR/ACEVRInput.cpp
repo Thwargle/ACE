@@ -1,4 +1,5 @@
 #include "VR/ACEVRComponent.h"
+#include "VR/ACEVRMenu.h"
 #include "VR/ACEVRSettings.h"
 #include "VR/ACEVRInputLayout.h"
 #include "VR/ACEVRRetailSurface.h"
@@ -127,6 +128,9 @@ void UACEVRComponent::Trigger(bool bLeft, bool bPressed)
 		if (VitalsDragHand == (bLeft ? 0 : 1)) EndVitalsDrag();
 		if (PanelEditHand == (bLeft ? 0 : 1)) EndPanelEdit();
 		UIAimOverride = bLeft ? LeftAim : RightAim;
+		if(Held && GameplayMenu)
+			GameplayMenu->FinishItemPointer(Pointer->GetHoveredWidgetComponent()==GameplayMenuPanel,Pointer->Get2DHitLocation(),
+				!Pointer->GetHoveredWidgetComponent() && bTracking && (bLeft?LeftAim:RightAim)->IsTracked());
 		if (Held && PC->DatGameplayBinder)
 		{
 			auto* Binder = PC->DatGameplayBinder.Get();
@@ -319,6 +323,7 @@ void UACEVRComponent::JumpUp()
 
 void UACEVRComponent::CancelGestures()
 {
+	if(GameplayMenu)GameplayMenu->CancelItemPointer();
 	CloseSpellWheel();
 	EndVitalsDrag(); EndPanelEdit();
 	if (PC && PC->DatGameplayBinder) PC->DatGameplayBinder->CancelPointerGestures();

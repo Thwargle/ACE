@@ -803,6 +803,9 @@ private:
 	bool bChatPoseTableLoaded = false;
 	TMap<uint32, FSpellInfoCacheEntry> SkillInfoCache;
 	bool bSkillTableLoaded = false;
+	bool bVitalFormulasLoaded = false;
+	// W + X*attribute1 + Y*attribute2, divided by Z (SecondaryAttributeTable).
+	uint32 VitalFormulas[3][6] = {{0,1,0,2,2,0},{0,1,0,1,2,0},{0,1,0,1,6,0}};
 	bool bXpTableLoaded = false;
 	TArray<uint32> AttributeXpList;
 	TArray<uint32> VitalXpList;

@@ -9,6 +9,7 @@
 #include "ACELandblockActor.h"
 #include "ACEWorldEntityActor.h"
 #include "ACEScriptComponent.h"
+#include "ACECreatureFixtures.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Containers/Ticker.h"
@@ -52,7 +53,7 @@ public:
    return;
   }
   const FString Scene=Args.Num()?Args[0]:TEXT("outdoor");
-  if(Scene!=TEXT("outdoor") && Scene!=TEXT("indoor") && Scene!=TEXT("effects") && Scene!=TEXT("caul"))return;
+  if(Scene!=TEXT("outdoor") && Scene!=TEXT("indoor") && Scene!=TEXT("effects") && Scene!=TEXT("caul") && Scene!=TEXT("swarm"))return;
   UE_LOG(LogTemp,Display,TEXT("ACE PerfScene preparing %s"),*Scene);
   // The login path intentionally defers cell DAT indexing. This offline setup
   // phase is outside the timed sample and needs both databases immediately.
@@ -61,7 +62,13 @@ public:
   FACEPosition Spawn;Spawn.CellId=0x7D640001;Spawn.Location=FVector(100,100,0);
   // Dense authored ambient particles at the landblock captured on Quest.
   if(Scene==TEXT("caul"))Spawn.CellId=0x09050001;
-  if(Scene==TEXT("indoor"))
+  if(Scene==TEXT("swarm"))
+  {
+   Spawn.CellId=0x01430171;Spawn.Location=FVector(49.011993,-74.999023,0);
+   Spawn.RotationW=.932723f;Spawn.RotationXYZ=FVector(0,0,-.360594);
+   if(!Dat->GetOrBuildEnvCellMesh(Spawn.CellId,100))return;
+  }
+  else if(Scene==TEXT("indoor"))
   {
    Spawn.CellId=0xC88C0143;
    const auto* Built=Dat->GetOrBuildEnvCellMesh(Spawn.CellId,100);
@@ -99,12 +106,17 @@ public:
   ACEPlaySessionRedirect::GPendingWcTravelMapAfterLogin.Empty();
   PC->bUseEnterWorldLoadScreen=false;
   Client->OnEnteredWorld.Broadcast(Self.Guid,Spawn);
-  const int32 Count=Scene==TEXT("indoor")?8:32;
+  const int32 Count=Scene==TEXT("swarm")?64:Scene==TEXT("indoor")?8:32;
   for(int32 I=0;I<Count;++I)
   {
    FACEWorldObject NPC=Self;NPC.Guid+=I+1;NPC.bIsSelf=false;NPC.bIsPlayer=false;
    NPC.Position.Location+=FVector(3+(I%8)*1.4,(I/8-1.5)*1.4,0);
-   if(Scene!=TEXT("indoor"))
+   if(Scene==TEXT("swarm"))
+   {
+    ACECreatureFixtures::Apply(NPC,I);
+    NPC.Position.Location=Spawn.Location+FVector((I%8-3.5)*.45,(I/8-3.5)*.45,0);
+   }
+   if(Scene!=TEXT("indoor") && Scene!=TEXT("swarm"))
    {
     const FVector P=NPC.Position.ToUnrealLocation(100);float Z=0;
     if(Dat->SampleOutdoorGroundZ(P.X,P.Y,100,Z))NPC.Position.Location.Z=Z/100;
@@ -119,10 +131,11 @@ public:
   // through the model and hides much of the measured scene. Keep outdoor runs
   // behind/above it, looking over the synthetic crowd. The indoor eye sits
   // just in front of the avatar, still inside the same authored room.
-  FVector Eye=Scene==TEXT("indoor") ? Center+Forward*100+FVector(0,0,170)
+  const bool Interior=Scene==TEXT("indoor") || Scene==TEXT("swarm");
+  FVector Eye=Interior ? Center+Forward*100+FVector(0,0,170)
    : Center-Forward*900+FVector(0,0,600);
   const FVector LookAt=Center+Forward*800+FVector(0,0,100);
-  if(Scene!=TEXT("indoor"))
+  if(!Interior)
   {
    // Caul is steep enough that a fixed backward offset can put the camera
    // inside a hillside. Clear the sampled ground along the viewing segment.
@@ -134,7 +147,7 @@ public:
   }
   Run->Camera->SetActorLocation(Eye);
   Run->CameraOrigin=Eye;
-  Run->Camera->SetActorRotation(Scene==TEXT("indoor") ? Forward.Rotation()
+  Run->Camera->SetActorRotation(Interior ? Forward.Rotation()
    : (LookAt-Eye).Rotation());
   Run->Camera->GetCameraComponent()->SetFieldOfView(90);
   PC->SetViewTarget(Run->Camera.Get());
@@ -153,6 +166,10 @@ private:
  double SampleStartTime=0;
  uint64 PreviousFrame=uint64(-1);
  TArray<double> Frames;
+ // Alternate inside one process to reduce startup/GPU-clock/background noise.
+ // This mode is opt-in and applies only to the disconnected swarm fixture.
+ int32 CrowdMode=-1;
+ TArray<double> CrowdFrames[6];
  bool Tick()
  {
   if(!World.IsValid() || !Camera.IsValid())return false;
@@ -188,7 +205,22 @@ private:
    UE_LOG(LogTemp,Display,TEXT("ACE PerfScene sampling %s"),*Scene);
    return true;
   }
-  if(bSampling)Frames.Add(Ms);
+  if(bSampling)
+  {
+   if(Scene==TEXT("swarm") && FParse::Param(FCommandLine::Get(),TEXT("ACEPerfCompareCrowd")))
+   {
+    const int32 Block=FMath::Clamp(int32((Now-SampleStartTime)/5),0,5);
+    if(CrowdMode!=Block)
+    {
+     CrowdMode=Block;
+     IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Collision.BatchCrowdQueries"))->Set(Block%2,ECVF_SetByCode);
+     UE_LOG(LogTemp,Display,TEXT("ACE PerfScene crowd comparison block=%d batch=%d"),Block,Block%2);
+     return true; // discard the frame spanning the change
+    }
+    CrowdFrames[Block].Add(Ms);
+   }
+   Frames.Add(Ms);
+  }
   if(!bSampling || Now-SampleStartTime<30)return true;
   GEngine->Exec(World.Get(),TEXT("Trace.Stop"));
   FString CSV=TEXT("frame,wall_ms\n");double Total=0;
@@ -200,12 +232,23 @@ private:
   const FString Summary=FString::Printf(TEXT("{\"scene\":\"%s\",\"synthetic\":true,\"width\":%.0f,\"height\":%.0f,\"frames\":%d,\"mean_ms\":%.3f,\"p50_ms\":%.3f,\"p95_ms\":%.3f,\"p99_ms\":%.3f,\"mean_fps\":%.2f}"),
    *Scene,Size.X,Size.Y,Frames.Num(),Total/Frames.Num(),Percentile(.5),Percentile(.95),Percentile(.99),1000*Frames.Num()/Total);
   FFileHelper::SaveStringToFile(Summary,*(Directory/TEXT("summary.json")));
+  if(CrowdMode>=0)
+  {
+   FString Comparison=TEXT("[");
+   for(int32 Block=0;Block<6;++Block)
+   {
+    const auto& Samples=CrowdFrames[Block];double Sum=0;for(double Sample:Samples)Sum+=Sample;
+    Comparison+=FString::Printf(TEXT("%s{\"block\":%d,\"batch\":%d,\"frames\":%d,\"mean_ms\":%.6f}"),
+     Block?TEXT(","):TEXT(""),Block,Block%2,Samples.Num(),Samples.IsEmpty()?0:Sum/Samples.Num());
+   }
+   Comparison+=TEXT("]");FFileHelper::SaveStringToFile(Comparison,*(Directory/TEXT("crowd-comparison.json")));
+  }
   UE_LOG(LogTemp,Display,TEXT("ACE PerfScene result %s"),*Summary);
   if(FParse::Param(FCommandLine::Get(),TEXT("ACEPerfQuit")))GEngine->Exec(World.Get(),TEXT("Quit"));
   return false;
  }
 };
 static FAutoConsoleCommandWithWorldAndArgs GACEPerfScene(TEXT("ace.PerfScene"),
- TEXT("Disconnected development benchmark: outdoor, indoor, effects or caul. Writes Saved/Performance after 75 seconds."),
+ TEXT("Disconnected development benchmark: outdoor, indoor, effects, caul or swarm. Writes Saved/Performance after 75 seconds."),
  FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&FACEPerformanceScene::Start));
 #endif

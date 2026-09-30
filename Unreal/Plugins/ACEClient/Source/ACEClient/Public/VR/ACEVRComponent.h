@@ -19,6 +19,8 @@ class UACEVRRetailSurface;
 class UACEClientSubsystem;
 class AACEPlayerController;
 class AACEWorldEntityActor;
+class UACEVRMenu;
+class UACECharacterAppearanceComponent;
 
 /** OpenXR rig layered over ACE's existing collision, prediction and authenticated session. */
 UCLASS(ClassGroup = ACE, meta = (BlueprintSpawnableComponent))
@@ -37,6 +39,7 @@ class ACECLIENT_API UACEVRComponent : public UActorComponent
 	friend class FACELedgeSafetyTest;
 	friend class FACEAvatarMotionTest;
 	friend class AACEPlayerController;
+	friend class UACEVRMenu;
 public:
 	UACEVRComponent();
 	virtual void BeginPlay() override;
@@ -119,8 +122,20 @@ public:
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> SettingsPanel;
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> WristPanel;
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> KeyboardPanel;
+	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> GameplayMenuPanel;
+	UPROPERTY(Transient) TObjectPtr<UACEVRMenu> GameplayMenu;
+	bool bUseDesktopMenu = false;
 
 private:
+	void UpdateGameplayMenu(bool Visible, float Dt);
+	FName PendingGameplayPage;
+	UPROPERTY(Transient) TObjectPtr<AActor> MenuMirrorActor;
+	UPROPERTY(Transient) TObjectPtr<UACECharacterAppearanceComponent> MenuMirrorAppearance;
+	uint64 MenuMirrorRevision = 0;
+	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> MenuDragPanel;
+	int32 MenuDragGuid=0;
+	FVector2D MenuPointerPositions[2] = {FVector2D(-1,-1),FVector2D(-1,-1)};
+	uint8 MenuPointerState = 0;
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> SpellWheelPanel;
 	bool bSpellWheelOpen = false, bWheelStickReady = false, bWheelTurnNeutral = false;
 	bool bWheelTriggerConsumed[2] = {false, false};
@@ -345,7 +360,8 @@ private:
 	UPROPERTY(Transient) TArray<TObjectPtr<UStaticMeshComponent>> FallbackArms;
 	UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> Arrow;
 	UPROPERTY(Transient) TArray<TObjectPtr<UStaticMeshComponent>> BowStrings;
-	UPROPERTY(Transient) TArray<TObjectPtr<UStaticMeshComponent>> PointerBeams;
+	UPROPERTY(Transient) TArray<TObjectPtr<class UProceduralMeshComponent>> PointerBeams;
+	int32 PointerBeamModes[2] = {-1,-1};
 	UPROPERTY(Transient) TArray<TObjectPtr<UStaticMeshComponent>> PointerTips;
 	int32 LastTrackingStatus = INDEX_NONE;
 	FVector2D MoveStick = FVector2D::ZeroVector, TurnStick = FVector2D::ZeroVector;

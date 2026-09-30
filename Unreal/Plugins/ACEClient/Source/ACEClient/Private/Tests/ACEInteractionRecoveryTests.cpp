@@ -67,6 +67,26 @@ bool FACEInteractionRecoveryTest::RunTest(const FString&)
     Session.SendUseItem(200);Session.SetState(EACESessionState::CharacterSelect);
     TestFalse(TEXT("Leaving a character clears its use lock"),Session.IsUseBusy());
     Session.State=EACESessionState::InWorld;
+    FACEWorldObject Door;Door.Guid=210;Door.bHasPosition=true;Door.ItemUseable=32;
+    Door.ObjectDescriptionFlags=ACEObjectDescFlag::Door;Session.WorldObjects.Add(Door.Guid,Door);
+    for(int32 Mode:{1,2,4,8}) for(uint32 Error:{0x001Du,0x0036u})
+    {
+        Session.PlayerVitals.CombatMode=Mode;
+        Session.SendUseItem(Door.Guid);
+        FACEBinaryWriter W;W.WriteUInt32(Error);FACEBinaryReader R(W.GetData());Session.HandleWeenieError(R);
+        TestFalse(TEXT("A rejected world Use cannot leave R locally busy in any combat stance"),Session.IsUseBusy());
+        TestEqual(TEXT("Use rejection does not force a stance change"),Session.PlayerVitals.CombatMode,Mode);
+        Session.SendUseItem(Door.Guid);TestTrue(TEXT("The next explicit use can start"),Session.IsUseBusy());
+        Session.ClearPendingUse();
+    }
+    FACEWorldObject Drink;Drink.Guid=211;Drink.ContainerId=Session.PlayerGuid;Session.WorldObjects.Add(Drink.Guid,Drink);
+    Session.SendUseItem(Drink.Guid);
+    FACEBinaryWriter Busy;Busy.WriteUInt32(0x001D);FACEBinaryReader BusyReader(Busy.GetData());Session.HandleWeenieError(BusyReader);
+    TestTrue(TEXT("Unrelated combat errors retain an inventory consumption lock"),Session.IsUseBusy());
+    Session.ClearPendingUse();Session.SendUseWithTarget(Drink.Guid,Door.Guid);
+    FACEBinaryReader TargetBusyReader(Busy.GetData());Session.HandleWeenieError(TargetBusyReader);
+    TestTrue(TEXT("Unrelated combat errors retain a targeted-use lock"),Session.IsUseBusy());
+    Session.ClearPendingUse();Session.WorldObjects.Remove(Door.Guid);Session.WorldObjects.Remove(Drink.Guid);
     int32 Speech=0,Chat=0,Damage=0;
     Session.OnNPCSpeech.AddLambda([&](int32 Guid,const FString& Text){if(Guid==200 && Text==TEXT("Welcome")) ++Speech;});
     Session.OnChatMessage.AddLambda([&](const FString&,const FString&,int32){++Chat;});

@@ -37,7 +37,11 @@ bool FACEMovementReviewTest::RunTest(const FString&)
  if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
  // Compare actual creature components with retail SPHEREPATH sphere pairs.
  // Setup.Radius deliberately differs from the physical radius on these models.
- for(const auto& Model:TArray<TPair<uint32,float>>{{0x02001121,1.2f},{0x02000964,1.f},{0x02000041,1.f}})
+ // Low carenzi, mid-body gromnies, both wasp spheres, and the reported
+ // tusker/virindi models. Include server scale variation independently.
+ for(const auto& Model:TArray<TPair<uint32,float>>{{0x02000A95,1.75f},{0x02000A95,.875f},
+  {0x02000037,.9f},{0x02000037,1.35f},{0x02001121,1.2f},{0x02001121,.6f},
+  {0x02000964,1.f},{0x02000041,1.f}})
  {
   FACEWorldObject Mob;Mob.Guid=9821;Mob.SetupId=Model.Key;Mob.Scale=Model.Value;Mob.ItemType=ACEItemType::Creature;
   Mob.PhysicsState=ACEPhysicsState::Gravity;Mob.bHasPosition=true;Mob.Position.CellId=0x016C0101;

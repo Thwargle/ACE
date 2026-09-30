@@ -1071,7 +1071,7 @@ FReply UACEUICanvasWidget::NativeOnMouseWheel(const FGeometry& InGeometry, const
 	{
 		if (AACEPlayerController* AcePc = Cast<AACEPlayerController>(PC))
 		{
-			AcePc->ApplyCameraWheelZoom(InMouseEvent.GetWheelDelta());
+			AcePc->ApplyCameraWheelZoom(InMouseEvent.GetWheelDelta(), true);
 			return FReply::Handled();
 		}
 	}

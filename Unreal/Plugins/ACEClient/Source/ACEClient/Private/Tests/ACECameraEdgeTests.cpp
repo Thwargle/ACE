@@ -23,6 +23,7 @@
 #include "GameFramework/PlayerInput.h"
 #include "InputKeyEventArgs.h"
 #include "Engine/World.h"
+#include "Framework/Application/SlateApplication.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECameraEdgeTest,"ACE.RetailParity.CameraAndEdges",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -123,6 +124,15 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("Releasing a UI gesture does not identify a world object"),Controller->UpdateMouseButtons(false,false,false,false));
     Controller->UpdateMouseButtons(true,false,false,false);
     TestTrue(TEXT("Enabled right mouse starts captured orbit"),Controller->bMouseLookActive && Controller->bMouseLookUsesCapture);
+    Controller->PlayerInput=NewObject<UPlayerInput>(Controller);
+    ACEInputBindings::BeginEdit();ACEInputBindings::Set(ACEInputBindings::Action(TEXT("ClosestMonster")),0,FInputChord(EKeys::Tab));ACEInputBindings::Commit();
+    Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));
+    Controller->PlayerInput->ProcessInputStack({},1.f/60,false);
+    TestTrue(TEXT("A rebound Tab targeting key is consumed before Slate focus navigation"),Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::Tab,IE_Pressed,1.f)));
+    Controller->PlayerInput->ProcessInputStack({},1.f/60,false);
+    TestTrue(TEXT("Targeting preserves held movement and mouse look"),Controller->IsInputKeyDown(EKeys::W) && Controller->bMouseLookActive && !Controller->bShowMouseCursor);
+    Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::Tab,IE_Released,0.f));Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Released,0.f));
+    ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();ACEInputBindings::Commit();
     Boom->SetRelativeRotation(FRotator(-15,90,0));
     Controller->ApplyMouseLookDelta(2,0,Boom);
     TestTrue(TEXT("Default mouse speed turns 1.5 degrees for two pixels"),FMath::IsNearlyEqual(Boom->GetRelativeRotation().Yaw,91.5,0.001));
@@ -185,7 +195,12 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("Chat/keybind focus cancels mouse controls"),Controller->bMouseLookActive || Controller->bMouseForwardActive);
     Controller->UpdateMouseButtons(false,false,false,false);
     Controller->UpdateMouseButtons(true,false,false,false);
+    Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));
+    Controller->PlayerInput->ProcessInputStack({},1.f/60,false);
     TestTrue(TEXT("An ordinary enabled RMB click still identifies"),Controller->UpdateMouseButtons(false,false,false,false));
+    TestTrue(TEXT("Releasing an inspect click preserves held keyboard movement"),Controller->IsInputKeyDown(EKeys::W));
+    Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Released,0.f));
+    Controller->PlayerInput->ProcessInputStack({},1.f/60,false);
     // Exercise wheel math without depending on the physical desktop cursor:
     // headless automation can run with that cursor over the editor's own UI.
     if (Controller->IsMouseOverBlockingUI())
@@ -209,7 +224,60 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Key binding focus still blocks zoom in both turning modes"),Boom->TargetArmLength,BeforeZero);
         ACEInputBindings::Cancel();
     }
+    // With Alt+Z the canvas no longer receives wheel events. Reproduce the
+    // viewport's pressed/released/axis sequence, including fractional wheels.
+    // Keep the physical cursor clear of the test host's separate launcher UI.
+    const FVector2D SavedWheelCursor=FSlateApplication::Get().GetCursorPos();
+    FSlateApplication::Get().SetCursorPos(FVector2D(-100000,-100000));
+    Controller->SetDesktopInterfaceHidden(true);
+    TestFalse(TEXT("Hidden HUD wheel fixture has no blocking UI under the cursor"),Controller->IsMouseOverBlockingUI());
+    TestTrue(TEXT("Wheel regression runs with the desktop interface hidden"),Controller->IsDesktopInterfaceHidden());
+    Controller->CameraInputFrameSeconds=1.f/60;
+    for (float Delta : {1.f,-1.f,.5f,-.5f})
+    {
+        Boom->TargetArmLength=Controller->UserCameraArmLength=300.f;
+        const FKey WheelKey=Delta>0.f?EKeys::MouseScrollUp:EKeys::MouseScrollDown;
+        Controller->InputKey(FInputKeyEventArgs::CreateSimulated(WheelKey,IE_Pressed,1.f));
+        Controller->InputKey(FInputKeyEventArgs::CreateSimulated(WheelKey,IE_Released,1.f));
+        TestEqual(TEXT("Wheel key events do not apply a second zoom step"),Controller->UserCameraArmLength,300.f);
+        TestTrue(TEXT("Hidden HUD viewport wheel event is handled"),Controller->InputKey(
+            FInputKeyEventArgs::CreateSimulated(EKeys::MouseWheelAxis,IE_Axis,Delta)));
+        TestTrue(TEXT("Hidden HUD wheel zoom preserves direction and fractional distance"),
+            FMath::IsNearlyEqual(Controller->UserCameraArmLength,
+                300.f*FMath::Pow(1.f+(Delta>0.f?-1.f:1.f)*8.f/60,FMath::Abs(Delta)),.001f));
+    }
+    const float BeforeEditing=Controller->UserCameraArmLength;
+    ACEInputBindings::BeginEdit();
+    Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::MouseWheelAxis,IE_Axis,1.f));
+    TestEqual(TEXT("Viewport wheel does not zoom while editing bindings"),Controller->UserCameraArmLength,BeforeEditing);
+    ACEInputBindings::Set(EKeys::Add,1,FInputChord(EKeys::MouseScrollDown));
+    ACEInputBindings::Set(EKeys::Subtract,1,FInputChord(EKeys::MouseScrollUp));
+    ACEInputBindings::Commit();
+    Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::MouseWheelAxis,IE_Axis,1.f));
+    TestTrue(TEXT("Hidden HUD wheel respects rebound zoom direction"),Controller->UserCameraArmLength>BeforeEditing);
+    ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();
+    const FKey WheelAction=ACEInputBindings::Action(TEXT("ClosestMonster"));
+    ACEInputBindings::Set(WheelAction,0,FInputChord(EKeys::MouseScrollUp));ACEInputBindings::Commit();
+    const float BeforeHotkey=Controller->UserCameraArmLength;
+    Controller->SetDesktopInterfaceHidden(false);
+    Controller->PlayerInput->FlushPressedKeys();
+    Controller->ApplyCameraWheelZoom(1.f,true);
+    Controller->PlayerInput->ProcessInputStack({},.016f,false);
+    TestTrue(TEXT("Visible canvas wheel is forwarded to gameplay hotkeys"),ACEInputBindings::Pressed(Controller,WheelAction));
+    TestEqual(TEXT("Rebound visible wheel does not zoom"),Controller->UserCameraArmLength,BeforeHotkey);
+    Controller->SetDesktopInterfaceHidden(true);Controller->PlayerInput->FlushPressedKeys();
+    Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::MouseScrollUp,IE_Pressed,1.f));
+    Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::MouseScrollUp,IE_Released,0.f));
+    Controller->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::MouseWheelAxis,IE_Axis,1.f));
+    Controller->PlayerInput->ProcessInputStack({},.016f,false);
+    TestTrue(TEXT("Hidden HUD wheel still reaches gameplay hotkeys"),ACEInputBindings::Pressed(Controller,WheelAction));
+    TestEqual(TEXT("Rebound hidden wheel does not zoom"),Controller->UserCameraArmLength,BeforeHotkey);
+    ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();ACEInputBindings::Commit();
+    Controller->SetDesktopInterfaceHidden(false);
+    FSlateApplication::Get().SetCursorPos(SavedWheelCursor);
     Controller->ResetCameraToRetailDefaults(Boom);
+    Controller->bHavePredictedPose=true;
+    Controller->PredictedPose.CellId=0x7D640014;
     const float SavedArm = Boom->TargetArmLength;
     const FRotator SavedRotation = Boom->GetRelativeRotation();
     Controller->SetCameraMapMode(Boom,true);
@@ -229,6 +297,29 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     // checking a pitch constant alone. Holding Lower used to orbit the map
     // camera thousands of units below the player with collision disabled.
     Controller->PlayerInput=NewObject<UPlayerInput>(Controller);
+    const FKey MapKey=ACEInputBindings::Get(ACEInputBindings::Action(TEXT("CameraViewMapMode")),0).Key;
+    for (uint32 Cell : {0u,0x7D640100u,0x01430171u})
+    {
+        Controller->PredictedPose.CellId=Cell;
+        Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(MapKey,IE_Pressed,1.f));
+        Controller->PlayerInput->ProcessInputStack({},1.f/60,false);
+        Controller->UpdateOrbitCamera(1.f/60);
+        TestFalse(TEXT("Keypad Enter cannot put an indoor or unknown cell into exterior map mode"),Controller->bCameraMapMode);
+        TestTrue(TEXT("Rejected indoor map request preserves ordinary distance and collision"),
+            FMath::IsNearlyEqual(Boom->TargetArmLength,SavedArm,.01f) && Boom->bDoCollisionTest);
+        Controller->PlayerInput->FlushPressedKeys();
+        Controller->PlayerInput->ProcessInputStack({},1.f/60,false);
+        Controller->UpdateOrbitCamera(1.f/60);
+    }
+    Controller->PredictedPose.CellId=0x7D640014;
+    Controller->SetCameraMapMode(Boom,true);
+    Controller->PredictedPose.CellId=0x7D640100;
+    Controller->UpdateOrbitCamera(1.f/60);
+    TestFalse(TEXT("Entering a building immediately exits the exterior camera view"),Controller->bCameraMapMode);
+    TestTrue(TEXT("Indoor transition restores the saved ordinary camera"),
+        FMath::IsNearlyEqual(Boom->TargetArmLength,SavedArm,.01f)
+        && Boom->GetRelativeRotation().Equals(SavedRotation,.01) && Boom->bDoCollisionTest);
+    Controller->PredictedPose.CellId=0x7D640014;
     for (const int32 FPS : {30,90})
     {
         Controller->ResetCameraToRetailDefaults(Boom);
@@ -269,6 +360,26 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
             FMath::IsNearlyEqual(Boom->TargetArmLength,SavedArm,.01)
             && Boom->GetRelativeRotation().Equals(SavedRotation,.01) && Boom->bDoCollisionTest);
     }
+    // Physical +/- must retain CameraSet distances at both 4:3 windowed and
+    // widescreen viewport sizes. FOV changes the lens, never the zoom goal.
+    auto* Lens=NewObject<UCameraComponent>(Pawn);
+    Lens->SetupAttachment(Boom); Lens->RegisterComponent();
+    for (FIntPoint View : {FIntPoint(2048,1536),FIntPoint(1920,1080),FIntPoint(3440,1440)})
+    for (float Fov : {60.f,90.f,120.f}) for (bool Closer : {true,false})
+    {
+        Controller->ResetCameraToRetailDefaults(Boom);
+        Boom->TargetArmLength=Controller->UserCameraArmLength=300.f;
+        ACERuntimeOptions::Set(TEXT("FieldOfViewDegrees"),Fov);
+        ACECameraRetail::ApplyFovToCamera(Lens,View.X,View.Y,Fov);
+        Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(Closer?EKeys::Subtract:EKeys::Add,IE_Pressed,1.f));
+        Controller->PlayerInput->ProcessInputStack({},1.f/60,false);
+        Controller->UpdateOrbitCamera(1.f/60);
+        TestTrue(TEXT("Physical numpad minus moves closer and plus farther independently of FOV/aspect"),
+            FMath::IsNearlyEqual(Controller->UserCameraArmLength,300.f*(1.f+(Closer?-1.f:1.f)*8.f/60),.001f));
+        Controller->PlayerInput->FlushPressedKeys();
+        Controller->PlayerInput->ProcessInputStack({},1.f/60,false);
+    }
+    ACERuntimeOptions::Set(TEXT("FieldOfViewDegrees"),90.f);
     // A wheel event and one held-key frame use identical CameraSet factors.
     for(float Dt : {1.f/30,1.f/60,1.f/144}) for(bool Closer : {true,false})
     {
@@ -432,6 +543,15 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
         Controller->UpdateMouseButtons(false,false,false,false);
         OrbitPawn->Destroy();
     }
+    Controller->UpdateMouseButtons(false,false,false,false);
+    ACECameraSettings::SetToggleMouseLook(true);
+    Controller->UpdateMouseButtons(true,false,false,false);
+    Controller->UpdateMouseButtons(false,false,false,false);
+    TestTrue(TEXT("Toggle mouse look survives right-button release"),Controller->bMouseLookActive && Controller->bMouseLookToggled);
+    Controller->UpdateMouseButtons(true,false,false,false);
+    Controller->UpdateMouseButtons(false,false,false,false);
+    TestFalse(TEXT("Second right-button press releases toggle mouse look"),Controller->bMouseLookActive);
+    ACECameraSettings::SetToggleMouseLook(false);
     Controller->Client=nullptr;
     World->DestroyWorld(false);
     for (float Yaw : {0.f, 45.f, 180.f, 270.f, 450.f})
