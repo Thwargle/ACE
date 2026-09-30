@@ -343,6 +343,7 @@ void UACEVRComponent::TickComponent(float Dt, ELevelTick TickType, FActorCompone
 		auto* P = RightPointer->IsOverHitTestVisibleWidget() ? RightPointer.Get() : LeftPointer.Get();
 		P->ScrollWheel(TurnStick.Y > 0.f ? 1.f : -1.f); LastScroll = GetWorld()->GetTimeSeconds();
 		if(GameplayMenuPanel && P->GetHoveredWidgetComponent()==GameplayMenuPanel)GameplayMenuPanel->RequestRedraw();
+		if(MenuInspectionPanel && P->GetHoveredWidgetComponent()==MenuInspectionPanel)MenuInspectionPanel->RequestRedraw();
 	}
 	UpdatePortalView();
 	UpdateHandContacts(Dt); UpdateTwoHandUse(Dt); UpdatePanels(Dt); UpdateArms(Dt); UpdateCombat(Dt); UpdatePortalEquipmentVisibility(); UpdateComfort(Dt);

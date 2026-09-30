@@ -43,6 +43,8 @@ bool FACEParticleBatchTest::RunTest(const FString&)
  Prefix->Set(0,ECVF_SetByCode);Batch->SetParticleVisual(0,FTransform(FVector(300,0,0)),1);Batch->FlushParticles();
  TestEqual(TEXT("Fallback restores full index range"),Section->GetRenderIndexCount(),96);
  TestTrue(TEXT("Fallback clears all inactive slots"),Section->ProcVertexBuffer[3].Position.IsNearlyZero() && Section->ProcVertexBuffer[3].Color.A==0);
+ Prefix->Set(1,ECVF_SetByCode);Batch->FlushParticles();
+ TestEqual(TEXT("Unchanged particles resume active-prefix rendering when the mode changes"),Section->GetRenderIndexCount(),3);
  return true;
 }
 

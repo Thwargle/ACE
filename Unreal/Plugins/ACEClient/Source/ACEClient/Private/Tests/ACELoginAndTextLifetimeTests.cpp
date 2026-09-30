@@ -33,7 +33,11 @@ bool FACELocalLoginSettingsTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Address round trips"),Loaded.Host,Entered.Host);
     TestEqual(TEXT("Port round trips"),Loaded.Port,Entered.Port);
     TestEqual(TEXT("Account round trips"),Loaded.Account,Entered.Account);
+#if PLATFORM_LINUX
+    TestTrue(TEXT("Linux restores account metadata without a saved password"),Loaded.Password.IsEmpty());
+#else
     TestTrue(TEXT("Unicode password round trips without printing it"),Loaded.Password==Entered.Password);
+#endif
     TArray<uint8> Bytes; FFileHelper::LoadFileToArray(Bytes,*Path);
     const FTCHARToUTF8 Secret(*Entered.Password);
     bool ContainsSecret=false;
@@ -42,8 +46,12 @@ bool FACELocalLoginSettingsTest::RunTest(const FString& Parameters)
     TestFalse(TEXT("Local file does not contain the plaintext password"),ContainsSecret);
     TArray<uint8> Tampered = Bytes; Tampered.Last() ^= 1;
     FFileHelper::SaveArrayToFile(Tampered,*Path);
-    TestFalse(TEXT("Authenticated encryption rejects modified ciphertext"),ACELoginSettings::Load(Loaded,Path));
+    TestFalse(TEXT("Damaged profile data is rejected"),ACELoginSettings::Load(Loaded,Path));
+#if PLATFORM_LINUX
+    TestTrue(TEXT("Damaged Linux profile leaves account metadata unchanged"),Loaded.Account==Entered.Account && Loaded.Password.IsEmpty());
+#else
     TestTrue(TEXT("Invalid ciphertext cannot replace previously loaded credentials"),Loaded.Password==Entered.Password);
+#endif
     Entered.Host.Empty(); Entered.Account.Empty(); Entered.Password.Empty(); Entered.Port.Empty();
     TestTrue(TEXT("Clearing fields replaces previously saved values"),ACELoginSettings::Save(Entered,Path));
     TestTrue(TEXT("Cleared fields restore"),ACELoginSettings::Load(Loaded,Path));

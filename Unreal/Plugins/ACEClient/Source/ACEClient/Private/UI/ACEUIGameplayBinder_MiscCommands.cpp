@@ -43,7 +43,7 @@ bool UACEUIGameplayBinder::TryDispatchMiscCommand(const FString& Cmd, const FStr
     {
         Print(FString::Printf(TEXT("%s %s (%s, Unreal Engine %s)"),
             ACEClientBuild::ProductName(PlayerController && PlayerController->IsVRActive()), ACEClientBuild::Version,
-            PLATFORM_ANDROID ? TEXT("Quest") : TEXT("Windows"), *FEngineVersion::Current().ToString()));
+            PLATFORM_ANDROID ? TEXT("Quest") : PLATFORM_LINUX ? TEXT("Linux") : TEXT("Windows"), *FEngineVersion::Current().ToString()));
         return true;
     }
     if (Cmd==TEXT("loc"))

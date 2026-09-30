@@ -303,13 +303,19 @@ bool FACERetailRuntimeRegressionTest::RunTest(const FString& Parameters)
     MovingActor->Tick(1.f);
     TestTrue(TEXT("Network velocity prediction cannot cross another creature"),MovingActor->GetActorLocation().X < -30.f);
     TestTrue(TEXT("Network velocity prediction advances up to the creature"),MovingActor->GetActorLocation().X > -400.f);
-    // Local prediction may hit a creature, but a new F748 is authoritative even
-    // when its correction crosses that collider (the server has already moved).
+    // Retail applies interpolation before collision (CPhysicsObj::UpdatePositionInternal
+    // then transition). An ordinary F748 must not tunnel through a creature that
+    // is still present in the client collision scene.
     FACEPosition Corrected=Moving.Position; Corrected.Location.X=-2.f;
     MovingActor->ApplyACEPosition(Corrected);
-    // A velocity correction now blends too; allow it to settle below 2cm.
     for (int32 I=0; I<60; ++I) MovingActor->Tick(1.f/60);
-    TestTrue(TEXT("Server position correction is not trapped behind a client collider"),
+    TestTrue(TEXT("Server position interpolation respects the creature still blocking its path"),
+        MovingActor->GetActorLocation().X < -30.f);
+    // Once the blocking creature's own position update clears the path, the
+    // saved correction must converge without requiring another F748.
+    NPCActor->SetActorLocation(FVector(0,2000,2000));
+    for (int32 I=0; I<60; ++I) MovingActor->Tick(1.f/60);
+    TestTrue(TEXT("Server position correction converges after the blocking creature moves away"),
         FVector::Dist2D(MovingActor->GetActorLocation(),Corrected.ToUnrealLocation(100))<2.f);
     FACEObjectMotionState CorrectionWalk; CorrectionWalk.bMoving=true; CorrectionWalk.ForwardUnitsPerSecond=.001f;
     MovingActor->ApplyMotionState(CorrectionWalk);

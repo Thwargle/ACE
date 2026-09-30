@@ -52,7 +52,12 @@ void UACEVRComponent::RouteControllerButton(FName Input,bool Pressed)
 	if(Pressed)
 	{
 		if(HeldControllerActions.Contains(Input))return;
-		const FName Action=Settings->GetButtonAction(Input);
+		FName Action=Settings->GetButtonAction(Input);
+		if(GameplayMenuPanel && GameplayMenuPanel->IsVisible() && !bSettingsOpen && !bTextKeyboardOpen && !bSpellWheelOpen)
+		{
+			const FName MenuAction=Settings->GetMenuButtonAction(Input);
+			if(!MenuAction.IsNone())Action=MenuAction;
+		}
 		HeldControllerActions.Add(Input,Action);DispatchControllerAction(Action,true);
 	}
 	else
@@ -63,6 +68,21 @@ void UACEVRComponent::RouteControllerButton(FName Input,bool Pressed)
 }
 void UACEVRComponent::DispatchControllerAction(FName Action,bool Pressed)
 {
+	if(Action=="VRMenuUse" || Action=="VRMenuInspect")
+	{
+		if(!Pressed || !bActive || !bTracking || !PC || PC->bEnterWorldLoading || PC->bWorldRevealActive
+			|| !GameplayMenu || !GameplayMenuPanel || !GameplayMenuPanel->IsVisible() || bLeftPointerPressed || bRightPointerPressed)return;
+		for(bool Left:{FeedbackHand==0,FeedbackHand!=0})
+		{
+			auto* Pointer=Left?LeftPointer.Get():RightPointer.Get();
+			auto* Aim=Left?LeftAim.Get():RightAim.Get();
+			if(!Pointer || !Aim || !Aim->IsTracked())continue;
+			if(auto* VRPointer=Cast<UACEVRWidgetInteraction>(Pointer))VRPointer->RefreshHit();
+			if(Pointer->GetHoveredWidgetComponent()!=GameplayMenuPanel)continue;
+			GameplayMenu->QuickAction(Action=="VRMenuInspect",true,Pointer->Get2DHitLocation());Pulse(Left,.25f);return;
+		}
+		GameplayMenu->QuickAction(Action=="VRMenuInspect");return;
+	}
 	if(Action=="VRInventory"){if(Pressed)InventoryPressed();else InventoryReleased();}
 	else if(Action=="VRLeftTrigger")Trigger(true,Pressed);
 	else if(Action=="VRRightTrigger")Trigger(false,Pressed);
@@ -86,7 +106,7 @@ void UACEVRComponent::ConfigureButton(FName Input,FName Action)
 }
 void UACEVRComponent::ResetButtonBindings()
 {
-	Settings->ButtonBindings.Reset();Settings->Persist();
+	Settings->ButtonBindings.Reset();Settings->MenuButtonBindings.Reset();Settings->Persist();
 }
 
 void UACEVRComponent::InventoryReleased()

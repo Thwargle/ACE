@@ -62,13 +62,14 @@ TSharedRef<SWidget> UACEVRMenu::ItemIcon(const FACEWorldObject& Item,float Size)
         return SNew(SImage).Image_Lambda([Brush](){return &Brush.Get();}).Visibility(EVisibility::HitTestInvisible);
     };
     auto* Resources=Client->GetUIResourceResolver();
-    const bool ForSale=Binder->VendorSellCart.ContainsByPredicate([&Item](const auto& O){return O.Value==Item.Guid;});
+    const bool Offered=Binder->SalvageQueueGuids.Contains(Item.Guid)
+        || Binder->VendorSellCart.ContainsByPredicate([&Item](const auto& O){return O.Value==Item.Guid;});
     return SNew(SBox).WidthOverride(Size).HeightOverride(Size)
         [SNew(SOverlay)
             +SOverlay::Slot()[Layer(Resources?Resources->ResolveItemBackground(Item.ItemType,Item.IconUnderlayId):nullptr)]
-            +SOverlay::Slot()[Layer(Resources?Resources->ResolveItemForeground(Item.IconId,Item.IconOverlayId,Item.UiEffects,ForSale):nullptr)]];
+            +SOverlay::Slot()[Layer(Resources?Resources->ResolveItemForeground(Item.IconId,Item.IconOverlayId,Item.UiEffects,Offered):nullptr)]];
 }
-TSharedRef<SWidget> UACEVRMenu::ItemButton(const FACEWorldObject& Item,float Size)
+TSharedRef<SWidget> UACEVRMenu::ItemButton(const FACEWorldObject& Item,float Size,bool SalvageOffer)
 {
     auto Content=SNew(SOverlay)
         +SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)[ItemIcon(Item)]
@@ -76,13 +77,15 @@ TSharedRef<SWidget> UACEVRMenu::ItemButton(const FACEWorldObject& Item,float Siz
         [SNew(STextBlock).Text(FText::FromString(Item.StackSize>1?FString::FromInt(Item.StackSize):TEXT("")))
             .Font(FCoreStyle::GetDefaultFontStyle("Bold",18)).ColorAndOpacity(FLinearColor::White)
             .ShadowOffset(FVector2D(1,1)).ShadowColorAndOpacity(FLinearColor::Black).Visibility(EVisibility::HitTestInvisible)];
-    return SNew(SBox).WidthOverride(Size).HeightOverride(Size)
+    auto Control=SNew(SBox).WidthOverride(Size).HeightOverride(Size)
         [SNew(SButton).Tag(FName(*FString::Printf(TEXT("Item_%d"),Item.Guid))).ButtonStyle(&SlotStyle()).IsFocusable(false)
             .HAlign(HAlign_Center).VAlign(VAlign_Center).ContentPadding(2)
             .ButtonColorAndOpacity_Lambda([this,Id=Item.Guid](){return bItemDragging && DragItem==Id?FLinearColor(.25f,.25f,.25f):Id==Selected?FLinearColor(.2f,.65f,.4f):FLinearColor::White;})
             .OnHovered_Lambda([this,Name=Item.Name](){if(HoverLabel && !bItemDragging)HoverLabel->SetText(FText::FromString(Name));})
-            .OnPressed_Lambda([this,Guid=Item.Guid](){BeginItemPointer(Guid);})
+            .OnPressed_Lambda([this,Guid=Item.Guid,SalvageOffer](){BeginItemPointer(Guid);bDragFromSalvage=SalvageOffer && DragItem!=0;})
             .OnClicked_Lambda([this,Guid=Item.Guid](){if(!bSuppressItemClick)SelectItem(Guid);bSuppressItemClick=false;return FReply::Handled();})[Content]];
+    MenuTargets.Add({Control,Item.Guid});
+    return Control;
 }
 void UACEVRMenu::ClearItemSelection()
 {
@@ -99,7 +102,7 @@ void UACEVRMenu::SelectPack(int32 Guid)
     if(Page=="Equipment")OpenPage("Inventory");
     ClearItemSelection();Pack=Guid;Binder->SelectedPackGuid=Guid;bDirty=true;
 }
-TSharedRef<SWidget> UACEVRMenu::PackGrid(int32 Container)
+TSharedRef<SWidget> UACEVRMenu::PackGrid(int32 Container,float Height)
 {
     const auto Items=Client->GetPackItems(Container);
     FACEWorldObject Bag;Client->GetWorldObject(Container,Bag);
@@ -116,7 +119,7 @@ TSharedRef<SWidget> UACEVRMenu::PackGrid(int32 Container)
         ItemDestinations.Add({Cell,Container,I,Item?Item->Guid:0});
     }
     // Both full and nearly empty bags retain the same panel footprint.
-    return SNew(SBox).HeightOverride(540).HAlign(HAlign_Center).VAlign(VAlign_Center)
+    return SNew(SBox).HeightOverride(Height).HAlign(HAlign_Center).VAlign(VAlign_Center)
         [SNew(SScaleBox).Stretch(EStretch::ScaleToFit).StretchDirection(EStretchDirection::DownOnly)[Grid]];
 }
 void UACEVRMenu::BeginItemPointer(int32 Guid)
@@ -129,15 +132,17 @@ void UACEVRMenu::BeginItemPointer(int32 Guid)
 }
 void UACEVRMenu::UpdateItemPointer(bool OverMenu,FVector2D Pixel)
 {
-    if(!DragItem)return;
+    if(!DragItem && !DragSpell)return;
     if(!OverMenu || FVector2D::DistSquared(Pixel,DragStart)>100.f)bItemDragging=true;
     if(bItemDragging && HoverLabel)
     {
-        FACEWorldObject Item;Client->GetWorldObject(DragItem,Item);
-        HoverLabel->SetText(FText::FromString(FString::Printf(TEXT("Moving %d × %s — release on a slot, pack, or in the world"),DragAmount,*Item.Name)));
+        if(DragSpell)HoverLabel->SetText(FText::FromString(TEXT("Drop on a hotbar slot to add/move; drop on the book to remove from the bar.")));
+        else if(bDragFromSalvage)HoverLabel->SetText(FText::FromString(TEXT("Release outside the salvage list to remove this offer. The item stays in your inventory.")));
+        else {FACEWorldObject Item;Client->GetWorldObject(DragItem,Item);
+        HoverLabel->SetText(FText::FromString(FString::Printf(TEXT("Moving %d × %s — release on a slot, pack, or in the world"),DragAmount,*Item.Name)));}
     }
 }
-void UACEVRMenu::CancelItemPointer(){DragItem=DragAmount=0;bItemDragging=false;}
+void UACEVRMenu::CancelItemPointer(){DragItem=DragAmount=DragSpell=0;DragSpellBar=INDEX_NONE;bItemDragging=bDragFromSalvage=false;}
 void UACEVRMenu::DropItem(int32 Guid,int32 Amount)
 {
     FACEWorldObject Item;
@@ -147,19 +152,31 @@ void UACEVRMenu::DropItem(int32 Guid,int32 Amount)
 }
 void UACEVRMenu::FinishItemPointer(bool OverMenu,FVector2D Pixel,bool OverWorld)
 {
+    if(DragSpell){FinishSpellPointer(OverMenu,Pixel,OverWorld);return;}
     UpdateItemPointer(OverMenu,Pixel);
     const int32 Guid=DragItem,Amount=DragAmount;const bool Dragged=bItemDragging;
+    const bool SalvageSource=bDragFromSalvage;
     CancelItemPointer();bSuppressItemClick=Dragged;
     if(!Guid || !Dragged)return;
     bDirty=true;
+    const FVector2D Absolute=GetCachedGeometry().LocalToAbsolute(Pixel);
+    if(SalvageSource)
+    {
+        const bool OverQueue=OverMenu && ItemDestinations.ContainsByPredicate([&](const auto& D)
+            {const auto W=D.Widget.Pin();return D.Salvage && W && W->GetCachedGeometry().IsUnderLocation(Absolute);});
+        if(!OverQueue && (OverMenu || OverWorld))Binder->RemoveItemFromSalvageQueue(Guid);
+        return; // An offer is not a physical inventory move/drop.
+    }
     if(OverMenu)
     {
-        const FVector2D Absolute=GetCachedGeometry().LocalToAbsolute(Pixel);
         for(const auto& Destination:ItemDestinations)
         {
             const auto Widget=Destination.Widget.Pin();
+            const auto Clip=Destination.ClipWidget.Pin();
+            if(Clip && !Clip->GetCachedGeometry().IsUnderLocation(Absolute))continue;
             if(!Widget || !Widget->GetCachedGeometry().IsUnderLocation(Absolute))continue;
             if(Destination.Item==Guid)return;
+            if(Destination.Salvage){Binder->AddItemToSalvageQueue(Guid);return;}
             FACEWorldObject Item;if(!Client->GetWorldObject(Guid,Item))return;
             if(Destination.Sell){Binder->AddInventoryGuidToVendorSellCart(Guid,Amount);return;}
             if(Destination.EquipMask)
@@ -219,16 +236,21 @@ void UACEVRMenu::BuildInventory()
     else Layout->AddSlot().FillWidth(1)[PackGrid(Pack)];
     Layout->AddSlot().AutoWidth().Padding(8,0)[PackIcons()];
     Body->AddSlot().AutoHeight()[Layout];
-    if(UseSource)Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Choose an item or equipment slot — Cancel"),[this](){UseSource=0;Confirmation.Reset();bDirty=true;})];
-    FACEWorldObject Item;if(!Selected || !Client->GetWorldObject(Selected,Item))return;
-    Body->AddSlot().AutoHeight().Padding(4)[Text(Item.Name,28)];
-    if(!Client->IsOwnedInventoryItem(Item))return;
-    AddQuantity(Item.StackSize);
+    // Reserve the same footer geometry before and after selection, including
+    // single items versus stacks. Auto-height rows used to change the scrollbar
+    // and shrink the pack grid as soon as the player clicked an item.
+    FACEWorldObject Item;const bool Valid=Selected && Client->GetWorldObject(Selected,Item) && Client->IsOwnedInventoryItem(Item);
+    Body->AddSlot().AutoHeight().Padding(4)[SNew(SBox).HeightOverride(64).Clipping(EWidgetClipping::ClipToBoundsAlways)
+        [Text(Valid?Item.Name:TEXT("Select an item to use, equip, or inspect."),28)]];
+    auto Quantity=SNew(SVerticalBox);const auto MainBody=Body;Body=Quantity;
+    if(Valid)AddQuantity(Item.StackSize);
+    Body=MainBody;
+    Body->AddSlot().AutoHeight()[SNew(SBox).HeightOverride(76)[Quantity]];
     auto Actions=SNew(SWrapBox).UseAllottedSize(true);
     for(const TCHAR* Name:{TEXT("Use / Equip"),TEXT("Inspect"),TEXT("Give"),TEXT("Drop")})
-        Actions->AddSlot().Padding(2)[Button(Name,[this,Name](){Execute(Name);})];
-    Body->AddSlot().AutoHeight().Padding(2)[Actions];
-    Body->AddSlot().AutoHeight().Padding(2)[Button(UseSource?TEXT("Cancel use on item"):TEXT("Use selected on an item..."),[this](){UseSource=UseSource?0:Selected;Confirmation=UseSource?TEXT("Choose the receiving item or equipment slot."):TEXT("");bDirty=true;})];
+        Actions->AddSlot().Padding(2)[Button(Name,[this,Name](){Execute(Name);},Valid)];
+    Body->AddSlot().AutoHeight().Padding(2)[SNew(SBox).HeightOverride(60)[Actions]];
+    Body->AddSlot().AutoHeight().Padding(2)[SNew(SBox).HeightOverride(60)[Button(UseSource?TEXT("Choose receiving item / Cancel"):TEXT("Use selected on an item..."),[this](){UseSource=UseSource?0:Selected;Confirmation.Reset();bDirty=true;},Valid || UseSource!=0)]];
     if(Client->GetOpenVendorGuid())Body->AddSlot().AutoHeight()[Button(TEXT("Add selected quantity to sell list"),[this](){Execute("Sell");})];
     if(Client->GetTradePartnerGuid())Body->AddSlot().AutoHeight()[Button(TEXT("Add selected quantity to trade"),[this](){Execute("Trade");})];
 }

@@ -8,7 +8,6 @@
 
 class UACECharacterAppearanceComponent;
 class UACEDatSubsystem;
-class UPointLightComponent;
 class UACEParticleBatchComponent;
 class UProceduralMeshComponent;
 class UMeshComponent;
@@ -54,6 +53,9 @@ class ACECLIENT_API UACEScriptComponent : public UActorComponent
 	friend class FACERetailScreenTest;
 	friend class FACEParticleDistanceTest;
 	friend class FACEParticleFrameReuseTest;
+	friend class FACEParticlePresentationTest;
+	friend class FACESceneryParticleLightingTest;
+	friend class FACECrowdWeaponLightingTest;
 	friend class FACEEntranceParticleTest;
 	friend class FACERetailWeatherTest;
 	friend class FACEVRRenderReplicationTest;
@@ -284,13 +286,16 @@ private:
 	void StopEmitter(uint32 InstanceId, bool bDestroy);
 	void TickScripts(float DeltaTime);
 	void TickParticleSimulation(float DeltaTime);
+	void TickParticlePresentation(float RenderAhead);
+	void ApplyParticlePose(FActiveEmitter& Emitter, FActiveParticle& Particle, float MotionAge,
+		const FTransform* LiveParentFrame, const FVector* ViewPosition, const FVector& ParentDelta);
 	void WakeEffectTick();
 	void UpdateEffectTickInterval();
 	void TickEmitters(float DeltaTime);
 	bool GetParticleViewLocation(FVector& OutLocation) const;
 	bool ShouldDegradeEmitter(const FActiveEmitter& Emitter, const FVector& ViewLocation) const;
 	void SetEmitterDegraded(FActiveEmitter& Emitter, bool bDegraded);
-	void TickParticleLights();
+	void TickParticleLights(bool bPresentationOnly = false);
 	void TickTweens(float DeltaTime);
 	void TickUvScrolls(float DeltaTime);
 	void SetUvVelocity(int32 PartIndex, float USpeed, float VSpeed);
@@ -357,6 +362,9 @@ private:
 	bool bSuppressRootOmega = false;
 	/** Sky rain/lightning PES — particles sort in front of world geometry (2D SFX). */
 	bool bEnvironmentWeather = false;
+	/** Terrain scenery surface luminosity is self-brightness, not a local light.
+	 * Gameplay FX and placed props retain their inferred fill lighting. */
+	bool bAllowInferredParticleLights = true;
 	TMap<uint32, int32> EnvironmentScriptDrawOrder;
 	FLinearColor EnvironmentAmbient = FLinearColor::Black;
 	FLinearColor EnvironmentSunColor = FLinearColor::Black;
@@ -386,12 +394,6 @@ private:
 	TArray<FUvScroll> UvScrolls;
 	TArray<TWeakObjectPtr<UProceduralMeshComponent>> ParticlePool;
 	bool bUpdatingParticleVisuals = false;
-
-	UPROPERTY(Transient)
-	TObjectPtr<UPointLightComponent> ScriptLight;
-
-	UPROPERTY(Transient)
-	TArray<TObjectPtr<UPointLightComponent>> ParticleLights;
 
 	UPROPERTY(Transient)
 	TArray<FActiveAceSound> ActiveSounds;

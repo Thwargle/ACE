@@ -164,6 +164,11 @@ public:
 	UPROPERTY()
 	bool bPreferCachedDraws = false;
 
+	/** Authored draw mode: 1 rigid, 2 viewer-facing, 3..5 axis-constrained.
+	 * Applied per view by the renderer; component/collision transforms stay intact. */
+	UE_API void SetViewFacing(uint32 Mode, const FVector& SortCenter);
+	uint32 GetViewFacingMode() const { return ViewFacingMode; }
+
 	/** Update a packed prefix of a non-colliding section without re-uploading immutable
 	 * UVs or unused capacity. The index prefix must reference only the supplied vertices.
 	 * Existing full-section APIs retain their original behavior. */
@@ -363,6 +368,8 @@ private:
 	TArray<TObjectPtr<UBodySetup>> AsyncBodySetupQueue;
 
 	friend class FProceduralMeshSceneProxy;
+	uint32 ViewFacingMode = 1;
+	FVector ViewFacingSortCenter = FVector::ZeroVector;
 };
 
 #undef UE_API

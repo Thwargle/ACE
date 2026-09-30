@@ -1003,6 +1003,7 @@ FReply UACEUICanvasWidget::NativeOnMouseWheel(const FGeometry& InGeometry, const
 		const FVector2D Local = InGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition());
 		const int32 ChatWindow=GameplayBinder->ChatWindowAtPointer(Local);
 		if(GameplayBinder->ScrollKeyboard(InMouseEvent.GetWheelDelta(),Local))return FReply::Handled();
+		if(GameplayBinder->ScrollSalvage(InMouseEvent.GetWheelDelta(),Local))return FReply::Handled();
 		if(GameplayBinder->ScrollFellowship(InMouseEvent.GetWheelDelta(),Local))return FReply::Handled();
 		if(GameplayBinder->ScrollAllegiance(InMouseEvent.GetWheelDelta(),Local))return FReply::Handled();
 		if (ChatWindow!=INDEX_NONE)

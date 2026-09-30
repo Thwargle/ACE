@@ -7,12 +7,12 @@
 #include "ACELoadingScreenActor.h"
 #include "ACECharacterAppearanceComponent.h"
 #include "ACEWorldEntityActor.h"
+#include "ACERegionSceneryActor.h"
+#include "ACEEffectLightSubsystem.h"
 #include "ACEPlayerController.h"
 #include "ACELandblockActor.h"
 #include "ACETypes.h"
 #include "Components/MeshComponent.h"
-#include "Components/PointLightComponent.h"
-#include "Components/LocalLightComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/AudioComponent.h"
 #include "Engine/GameInstance.h"
@@ -155,6 +155,13 @@ void UACEScriptComponent::InitializeFromObject(const FACEWorldObject& Object, fl
 	bSuppressRootOmega = (Object.ItemType & ACEItemType::Creature) != 0
 		|| Object.bIsPlayer || Object.bIsSelf;
 	bEnvironmentWeather = false;
+	// Region snow, insects, smoke and other scenery run ordinary Setup scripts,
+	// not SkyDesc weather. Retail CPartArray::InitLights uses Setup::lights;
+	// a particle surface's Luminosity only describes its own brightness. Treating
+	// that as a moving light creates hundreds of scene light interactions in snow.
+	// Keep scenery's world-space parenting, distance culling and batching intact.
+	const AACERegionSceneryActor* Scenery = Cast<AACERegionSceneryActor>(GetOwner());
+	bAllowInferredParticleLights = !Scenery || !Scenery->IsRegionTerrainScenery();
 
 	SetupDefaultScript = 0;
 	SetupScriptTableId = 0;
@@ -200,6 +207,7 @@ void UACEScriptComponent::InitializeForEnvironment(float InWorldScale)
 	Omega = FVector::ZeroVector;
 	bSuppressRootOmega = true;
 	bEnvironmentWeather = true;
+	bAllowInferredParticleLights = false;
 	bDefaultStarted = true; // do not auto-start Setup defaults
 	bAppearanceReady = true;
 	Random.Initialize(0xACE5E7);
@@ -455,19 +463,8 @@ void UACEScriptComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		}
 	}
 	ActiveSounds.Reset();
-	for (UPointLightComponent* Light : ParticleLights)
-	{
-		if (IsValid(Light))
-		{
-			Light->DestroyComponent();
-		}
-	}
-	ParticleLights.Reset();
-	if (IsValid(ScriptLight))
-	{
-		ScriptLight->DestroyComponent();
-		ScriptLight = nullptr;
-	}
+	if (auto* Lights = GetWorld() ? GetWorld()->GetSubsystem<UACEEffectLightSubsystem>() : nullptr)
+		Lights->RemoveSource(this);
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -1509,28 +1506,16 @@ void UACEScriptComponent::ExecuteHook(
 		break;
 	case EACEAnimationHookType::SetLight:
 		if (IsBloodSplatter(SourcePlayScript)) break;
-		if (AActor* Owner = GetOwner())
+		if (auto* Lights = GetWorld() ? GetWorld()->GetSubsystem<UACEEffectLightSubsystem>() : nullptr)
 		{
-			if (!ScriptLight)
-			{
-				ScriptLight = NewObject<UPointLightComponent>(Owner, TEXT("ACEScriptLight"));
-				Owner->AddInstanceComponent(ScriptLight);
-				ScriptLight->RegisterComponent();
-				ScriptLight->AttachToComponent(Owner->GetRootComponent(), FAttachmentTransformRules::KeepRelativeTransform);
-				ScriptLight->SetMobility(EComponentMobility::Movable);
-				ScriptLight->SetCastShadows(false);
-			}
-			// Fill light, not a bulb: inverse-square + candelas made a white disc on the floor.
-			ScriptLight->SetUseInverseSquaredFalloff(false);
-			ScriptLight->SetIntensityUnits(ELightUnits::Unitless);
-			ScriptLight->SetLightFalloffExponent(2.f);
-			ScriptLight->SetSourceRadius(32.f);
-			ScriptLight->SetSoftSourceRadius(56.f);
-			ScriptLight->SetAttenuationRadius(720.f);
-			ScriptLight->SetIntensity(6.4f);
-			ScriptLight->SetSpecularScale(0.f);
-			ScriptLight->SetLightColor(FLinearColor(1.f, 0.82f, 0.55f));
-			ScriptLight->SetVisibility(Hook.State != 0);
+			FACEEffectLightRequest Request;
+			Request.Position = GetOwner() ? GetOwner()->GetActorLocation() : FVector::ZeroVector;
+			Request.Color = FLinearColor(1.f, .82f, .55f);
+			Request.Radius = IsWieldedItemFx() ? 320.f : 480.f;
+			Request.Intensity = 6.4f;
+			// Authored hook lights persist even when this component finishes its
+			// script and stops ticking, but share the same world budget as particles.
+			Lights->SetScriptLight(this, Hook.State != 0, Request);
 		}
 		break;
 	case EACEAnimationHookType::Scale:
@@ -2269,7 +2254,7 @@ void UACEScriptComponent::CreateEmitter(
 	// Do not rewrite Birthrate/particle A,B,C: those are authored for the intensity-selected script.
 	Emitter.Intensity = FMath::Clamp(SafeFloat(Intensity, 1.f), 0.01f, 100.f);
 	Emitter.EmissiveBoost = 1.f;
-	if (Dat)
+	if (Dat && bAllowInferredParticleLights && !bEnvironmentWeather && !IsBloodSplatter(SourcePlayScript))
 	{
 		Dat->TryEstimateGfxLight(DrawId, Emitter.LightColor, Emitter.LightLum);
 	}
@@ -2760,7 +2745,8 @@ void UACEScriptComponent::TickParticleSimulation(float DeltaTime)
 		ParticleTimeSinceUpdate = 0.0;
 		// DestroyParticle can remove the last emitter during TickScripts. Retire
 		// its light before the idle component disables ticking.
-		for (UPointLightComponent* Light : ParticleLights) if (Light) Light->SetVisibility(false);
+		if (auto* Lights = GetWorld() ? GetWorld()->GetSubsystem<UACEEffectLightSubsystem>() : nullptr)
+			Lights->RemoveParticles(this);
 		return;
 	}
 	// CPhysicsObj::animate_static_object/update_position advance ParticleManager
@@ -2773,6 +2759,14 @@ void UACEScriptComponent::TickParticleSimulation(float DeltaTime)
 		TickEmitters(static_cast<float>(ParticleTimeSinceUpdate));
 		TickParticleLights();
 		ParticleTimeSinceUpdate = 0.0;
+	}
+	else
+	{
+		// Retail refreshes calc_draw_frame during rendering. UE's body/camera
+		// advance every frame too, so neither facing nor attachment may wait for
+		// the next emission/lifetime update (especially visible on slopes).
+		TickParticlePresentation(static_cast<float>(ParticleTimeSinceUpdate));
+		TickParticleLights(true);
 	}
 }
 
@@ -2818,7 +2812,121 @@ void UACEScriptComponent::AccumulateParticleAudit(int32& Emitters, int32& Degrad
 		Degraded += Emitter.bDegraded ? 1 : 0;
 		if (!Emitter.bDegraded) Particles += Emitter.Particles.Num();
 	}
-	for (const UPointLightComponent* Light : ParticleLights) if (Light && Light->IsVisible()) ++Lights;
+	if (auto* Budget = GetWorld() ? GetWorld()->GetSubsystem<UACEEffectLightSubsystem>() : nullptr)
+		Lights += Budget->GetVisibleLightCount(this);
+}
+
+void UACEScriptComponent::ApplyParticlePose(FActiveEmitter& Emitter, FActiveParticle& Particle,
+	float MotionAge, const FTransform* LiveParentFrame, const FVector* ViewPosition, const FVector& ParentDelta)
+{
+	const float T = MotionAge;
+	// Retail: is_parent_local → current part/object Origin; else birth StartFrame.
+	FVector ParentOrigin = Particle.StartOrigin;
+	FQuat ParentRot = Particle.StartRotation;
+	FVector Off = Particle.Offset;
+	if (Particle.bParentLocal)
+	{
+		const FTransform Live = LiveParentFrame ? *LiveParentFrame : GetParticleStartFrame(Emitter);
+		ParentOrigin = Live.GetLocation();
+		ParentRot = Live.GetRotation();
+		// Birth offset remains a world-space vector, even for parent-local emitters.
+	}
+
+	switch (Particle.Type)
+	{
+	case 1:
+		Particle.Position = ParentOrigin + Off;
+		break;
+	case 2:
+	case 12:
+		Particle.Position = ParentOrigin + Off + T * Particle.A;
+		break;
+	case 3: case 8: case 10:
+		Particle.Position = ParentOrigin + Off
+			+ T * Particle.A + 0.5f * T * T * Particle.B;
+		break;
+	case 4: case 9: case 11:
+		Particle.Position = ParentOrigin + Off
+			+ T * Particle.A + 0.5f * T * T * Particle.B;
+		break;
+	case 5:
+		// Swarm: DAT C is ellipse radii (Font 0x320002B5 C=(1,1,0); buff rings C=(1,1,0.2)).
+		// ACE.Server adds C as a translation and uses Cos/Sin ±1 — that offsets the
+		// whole Font 1 AC off-center. Oscillation is in AC axes, then AceVectorToUnreal
+		// (negate X). Do not extra-negate Sin; that double-flips UE Y.
+		{
+			const FVector Swarm = ParentOrigin + Off + T * Particle.A;
+			const FVector AcOsc(
+				Particle.C.X * FMath::Cos(Particle.B.X * T),
+				Particle.C.Y * FMath::Sin(Particle.B.Y * T),
+				Particle.C.Z * FMath::Cos(Particle.B.Z * T));
+			Particle.Position = Swarm + FACEPosition::AceVectorToUnreal(AcOsc, WorldScale);
+		}
+		break;
+	case 6:
+		// ACE Particle.Update Explode: (T*B + C*A.X)*T + Offset + parent
+		Particle.Position = ParentOrigin + Off + FVector(
+			(T * Particle.B.X + Particle.C.X * Particle.A.X) * T,
+			(T * Particle.B.Y + Particle.C.Y * Particle.A.X) * T,
+			(T * Particle.B.Z + Particle.C.Z * Particle.A.X + Particle.A.Z) * T);
+		break;
+	case 7:
+		Particle.Position = ParentOrigin + Off
+			+ FMath::Cos(Particle.A.X * T) * Particle.C + (T * T) * Particle.B;
+		break;
+	default:
+		Particle.Position += ParentDelta;
+		break;
+	}
+
+	const float Alpha = Particle.bHoldStill
+		? 0.f
+		: FMath::Clamp(Particle.Age / Particle.Life, 0.f, 1.f);
+	const float Scale = FMath::Lerp(Particle.StartScale, Particle.FinalScale, Alpha);
+	const float Trans = FMath::Lerp(Particle.StartTrans, Particle.FinalTrans, Alpha);
+	FQuat Facing = Particle.bParentLocal ? ParentRot : Particle.StartRotation;
+	if (Particle.Type == 4 || Particle.Type == 9 || Particle.Type == 11)
+	{
+		const double Angle = Particle.C.Size() * T;
+		if (Angle > SMALL_NUMBER)
+			Facing = (ParentRot * FQuat(Particle.C.GetSafeNormal(), Angle)).GetNormalized();
+	}
+	Facing = GetParticleDrawRotation(Particle.Position, Facing, Particle.DrawMode,
+		ViewPosition);
+	const float Opacity = FMath::Clamp(
+		(1.f - Trans) * (IsRetailPortalFxSetup(SetupId) ? 1.f - ObjectTranslucency : 1.f), 0.f, 1.f);
+	ApplyParticleVisual(Emitter, Particle, Facing, FVector(Scale), Opacity);
+}
+
+void UACEScriptComponent::TickParticlePresentation(float RenderAhead)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_ParticlePresentation);
+	TGuardValue<bool> UpdatingVisuals(bUpdatingParticleVisuals, true);
+	const bool bReuseFrames = CVarParticleReuseFrames.GetValueOnGameThread() != 0;
+	TOptional<FVector> ViewPosition;
+	if (bReuseFrames)
+	{
+		const auto* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+		if (PC && PC->PlayerCameraManager) ViewPosition = PC->PlayerCameraManager->GetCameraLocation();
+	}
+	for (FActiveEmitter& Emitter : ActiveEmitters)
+	{
+		if (Emitter.bDegraded) continue;
+		TOptional<FTransform> LiveParentFrame;
+		for (FActiveParticle& Particle : Emitter.Particles)
+		{
+			if (Particle.InstanceIndex < 0 && !Particle.Mesh.IsValid()) continue;
+			if (bReuseFrames && Particle.bParentLocal && !LiveParentFrame.IsSet())
+				LiveParentFrame = GetParticleStartFrame(Emitter);
+			// Evaluate the authored trajectory between physics updates, without
+			// consuming births, random values, or lifetime. Keep scale/translucency
+			// at the lifecycle sample: sub-quantum repeating glows must not strobe.
+			ApplyParticlePose(Emitter, Particle, FMath::Min(Particle.Age + RenderAhead, Particle.Life),
+				LiveParentFrame.IsSet() ? &LiveParentFrame.GetValue() : nullptr,
+				ViewPosition.IsSet() ? &ViewPosition.GetValue() : nullptr, FVector::ZeroVector);
+		}
+		if (Emitter.Batch) Emitter.Batch->FlushParticles();
+	}
 }
 
 void UACEScriptComponent::TickEmitters(float DeltaTime)
@@ -2908,84 +3016,11 @@ void UACEScriptComponent::TickEmitters(float DeltaTime)
 					continue;
 				}
 			}
-			const float T = Particle.Age;
-			// Retail: is_parent_local → current part/object Origin; else birth StartFrame.
-			FVector ParentOrigin = Particle.StartOrigin;
-			FQuat ParentRot = Particle.StartRotation;
-			FVector Off = Particle.Offset;
-			if (Particle.bParentLocal)
-			{
-				if (!bReuseFrames || !LiveParentFrame.IsSet()) LiveParentFrame = GetParticleStartFrame(Emitter);
-				const FTransform& Live = LiveParentFrame.GetValue();
-				ParentOrigin = Live.GetLocation();
-				ParentRot = Live.GetRotation();
-				// Birth offset remains a world-space vector, even for parent-local emitters.
-			}
-
-			switch (Particle.Type)
-			{
-			case 1:
-				Particle.Position = ParentOrigin + Off;
-				break;
-			case 2:
-			case 12:
-				Particle.Position = ParentOrigin + Off + T * Particle.A;
-				break;
-			case 3: case 8: case 10:
-				Particle.Position = ParentOrigin + Off
-					+ T * Particle.A + 0.5f * T * T * Particle.B;
-				break;
-			case 4: case 9: case 11:
-				Particle.Position = ParentOrigin + Off
-					+ T * Particle.A + 0.5f * T * T * Particle.B;
-				break;
-			case 5:
-				// Swarm: DAT C is ellipse radii (Font 0x320002B5 C=(1,1,0); buff rings C=(1,1,0.2)).
-				// ACE.Server adds C as a translation and uses Cos/Sin ±1 — that offsets the
-				// whole Font 1 AC off-center. Oscillation is in AC axes, then AceVectorToUnreal
-				// (negate X). Do not extra-negate Sin; that double-flips UE Y.
-				{
-					const FVector Swarm = ParentOrigin + Off + T * Particle.A;
-					const FVector AcOsc(
-						Particle.C.X * FMath::Cos(Particle.B.X * T),
-						Particle.C.Y * FMath::Sin(Particle.B.Y * T),
-						Particle.C.Z * FMath::Cos(Particle.B.Z * T));
-					Particle.Position = Swarm + FACEPosition::AceVectorToUnreal(AcOsc, WorldScale);
-				}
-				break;
-			case 6:
-				// ACE Particle.Update Explode: (T*B + C*A.X)*T + Offset + parent
-				Particle.Position = ParentOrigin + Off + FVector(
-					(T * Particle.B.X + Particle.C.X * Particle.A.X) * T,
-					(T * Particle.B.Y + Particle.C.Y * Particle.A.X) * T,
-					(T * Particle.B.Z + Particle.C.Z * Particle.A.X + Particle.A.Z) * T);
-				break;
-			case 7:
-				Particle.Position = ParentOrigin + Off
-					+ FMath::Cos(Particle.A.X * T) * Particle.C + (T * T) * Particle.B;
-				break;
-			default:
-				Particle.Position += ParentDelta;
-				break;
-			}
-
-			const float Alpha = Particle.bHoldStill
-				? 0.f
-				: FMath::Clamp(Particle.Age / Particle.Life, 0.f, 1.f);
-			const float Scale = FMath::Lerp(Particle.StartScale, Particle.FinalScale, Alpha);
-			const float Trans = FMath::Lerp(Particle.StartTrans, Particle.FinalTrans, Alpha);
-			FQuat Facing = Particle.bParentLocal ? ParentRot : Particle.StartRotation;
-			if (Particle.Type == 4 || Particle.Type == 9 || Particle.Type == 11)
-			{
-				const double Angle = Particle.C.Size() * T;
-				if (Angle > SMALL_NUMBER)
-					Facing = (ParentRot * FQuat(Particle.C.GetSafeNormal(), Angle)).GetNormalized();
-			}
-			Facing = GetParticleDrawRotation(Particle.Position, Facing, Particle.DrawMode,
-				DrawViewPosition.IsSet() ? &DrawViewPosition.GetValue() : nullptr);
-			const float Opacity = FMath::Clamp(
-				(1.f - Trans) * (IsRetailPortalFxSetup(SetupId) ? 1.f - ObjectTranslucency : 1.f), 0.f, 1.f);
-			ApplyParticleVisual(Emitter, Particle, Facing, FVector(Scale), Opacity);
+			if (bReuseFrames && Particle.bParentLocal && !LiveParentFrame.IsSet())
+				LiveParentFrame = GetParticleStartFrame(Emitter);
+			ApplyParticlePose(Emitter, Particle, Particle.Age,
+				LiveParentFrame.IsSet() ? &LiveParentFrame.GetValue() : nullptr,
+				DrawViewPosition.IsSet() ? &DrawViewPosition.GetValue() : nullptr, ParentDelta);
 		}
 		// ParticleEmitter::UpdateParticles updates existing particles before emitting.
 		// EmitParticle records the current time, so a hitch produces one new birth,
@@ -3034,147 +3069,79 @@ void UACEScriptComponent::TickEmitters(float DeltaTime)
 	}
 }
 
-void UACEScriptComponent::TickParticleLights()
+void UACEScriptComponent::TickParticleLights(bool bPresentationOnly)
 {
-	if (bEnvironmentWeather)
+	auto* Lights = GetWorld() ? GetWorld()->GetSubsystem<UACEEffectLightSubsystem>() : nullptr;
+	if (!Lights) return;
+	if (!bAllowInferredParticleLights || bEnvironmentWeather)
 	{
-		for (UPointLightComponent* Light : ParticleLights)
-		{
-			if (Light)
-			{
-				Light->SetVisibility(false);
-			}
-		}
+		Lights->RemoveParticles(this);
 		return;
 	}
 
-	struct FCand
-	{
-		FVector Pos = FVector::ZeroVector;
-		FLinearColor Color = FLinearColor::White;
-		float Score = 0.f;
-		float Radius = 320.f;
-	};
-	TArray<FCand, TInlineAllocator<8>> Cands;
+	TArray<FACEEffectLightRequest, TInlineAllocator<8>> Requests;
 	const bool bPortal = IsRetailPortalFxSetup(SetupId);
+	const bool bWielded = IsWieldedItemFx();
+	const auto* Entity = Cast<AACEWorldEntityActor>(GetOwner());
+	const bool bMissile = Entity && (Entity->PhysicsState & ACEPhysicsState::Missile) != 0;
 	for (const FActiveEmitter& Emitter : ActiveEmitters)
 	{
-		if (Emitter.bDegraded || IsBloodSplatter(Emitter.SourcePlayScript) || Emitter.LightLum < 0.05f || Emitter.Particles.Num() == 0)
+		if (Emitter.bDegraded || IsBloodSplatter(Emitter.SourcePlayScript)
+			|| Emitter.LightLum < .05f || Emitter.Particles.IsEmpty()) continue;
+		const bool bSelected = Lights->IsParticleSelected(this, Emitter.InstanceId);
+		// Rejected effects retain their authored particle rendering. Only the
+		// bounded set of lights needs per-frame centroid walks and transforms.
+		if (bPresentationOnly && !bSelected) continue;
+		auto ParticleWeight = [](const FActiveParticle& Particle)
 		{
-			continue;
-		}
-		FVector Acc = FVector::ZeroVector;
-		float Weight = 0.f;
-		for (const FActiveParticle& Particle : Emitter.Particles)
+			const float Alpha = FMath::Clamp(Particle.Age / FMath::Max(Particle.Life, .01f), 0.f, 1.f);
+			const float Opacity = FMath::Clamp(1.f - FMath::Lerp(Particle.StartTrans, Particle.FinalTrans, Alpha), 0.f, 1.f);
+			return Opacity * FMath::Max(.15f, FMath::Lerp(Particle.StartScale, Particle.FinalScale, Alpha));
+		};
+		// Admission uses a representative particle in O(1), instead of walking
+		// every spark of every rejected weapon just to decide whether to light it.
+		FVector Position = Emitter.Particles[0].Position;
+		float Weight = ParticleWeight(Emitter.Particles[0]) * Emitter.Particles.Num();
+		if (bSelected)
 		{
-			const float Alpha = FMath::Clamp(Particle.Age / FMath::Max(Particle.Life, 0.01f), 0.f, 1.f);
-			const float Trans = FMath::Lerp(Particle.StartTrans, Particle.FinalTrans, Alpha);
-			const float Op = FMath::Clamp(1.f - Trans, 0.f, 1.f);
-			const float Sc = FMath::Lerp(Particle.StartScale, Particle.FinalScale, Alpha);
-			const float Wt = Op * FMath::Max(0.15f, Sc);
-			Acc += Particle.Position * Wt;
-			Weight += Wt;
-		}
-		if (Weight < 0.01f)
-		{
-			continue;
-		}
-		FCand Cand;
-		Cand.Pos = Acc / Weight;
-		// A projectile light travels with its head, not the centroid of its fading trail.
-		if (const auto* Entity=Cast<AACEWorldEntityActor>(GetOwner()); Entity && (Entity->PhysicsState & ACEPhysicsState::Missile) != 0)
-			Cand.Pos=Entity->GetActorLocation();
-		Cand.Color = Emitter.LightColor;
-		Cand.Score = Emitter.LightLum * Weight;
-		// Wide, even fill. Inverse-square + candelas punched a hard disc around every FX.
-		Cand.Radius = bPortal ? 480.f : 720.f;
-		Cands.Add(Cand);
-	}
-	Cands.Sort([](const FCand& A, const FCand& B) { return A.Score > B.Score; });
-
-	AActor* Owner = GetOwner();
-	if (!Owner)
-	{
-		return;
-	}
-	constexpr int32 MaxLights = 3;
-	const int32 Want = FMath::Min(MaxLights, Cands.Num());
-	while (ParticleLights.Num() < Want)
-	{
-		UPointLightComponent* Light = NewObject<UPointLightComponent>(Owner);
-		if (!Light)
-		{
-			break;
-		}
-		Light->SetCastShadows(false);
-		Light->SetMobility(EComponentMobility::Movable);
-		Light->SetUseInverseSquaredFalloff(false);
-		Light->SetIntensityUnits(ELightUnits::Unitless);
-		Light->SetLightFalloffExponent(2.f);
-		Light->SetSourceRadius(36.f);
-		Light->SetSoftSourceRadius(64.f);
-		Light->SetSpecularScale(0.f);
-		Light->SetAffectTranslucentLighting(false);
-		Light->SetLightingChannels(true, true, false);
-		Light->SetVolumetricScatteringIntensity(0.f);
-		Owner->AddInstanceComponent(Light);
-		Light->RegisterComponent();
-		if (USceneComponent* Root = Owner->GetRootComponent())
-		{
-			Light->AttachToComponent(Root, FAttachmentTransformRules::KeepWorldTransform);
-		}
-		Light->SetUsingAbsoluteLocation(true);
-		ParticleLights.Add(Light);
-	}
-
-	for (int32 i = 0; i < ParticleLights.Num(); ++i)
-	{
-		UPointLightComponent* Light = ParticleLights[i];
-		if (!Light)
-		{
-			continue;
-		}
-		if (i >= Want)
-		{
-			Light->SetVisibility(false);
-			continue;
-		}
-		const FCand& Cand = Cands[i];
-		FVector LightPos = Cand.Pos;
-		if (UWorld* World = bPortal ? Owner->GetWorld() : nullptr)
-		{
-			// Buried under outdoor LScape: a portal in the dungeon below must not light the grass.
-			FCollisionQueryParams TraceParams(SCENE_QUERY_STAT(ACEPortalLightOcclude), false, Owner);
-			FHitResult Hit;
-			const FVector TraceStart = LightPos + FVector(0.f, 0.f, 900.f);
-			const FVector TraceEnd = LightPos + FVector(0.f, 0.f, 20.f);
-			if (World->LineTraceSingleByChannel(Hit, TraceStart, TraceEnd, ECC_WorldStatic, TraceParams))
+			FVector Acc = FVector::ZeroVector;
+			Weight = 0.f;
+			for (const FActiveParticle& Particle : Emitter.Particles)
 			{
-				if (Cast<AACELandblockActor>(Hit.GetActor()) && Hit.ImpactPoint.Z > LightPos.Z + 40.f)
-				{
-					Light->SetVisibility(false);
-					continue;
-				}
+				const float W = ParticleWeight(Particle);
+				Acc += Particle.Position * W;
+				Weight += W;
 			}
+			if (Weight > KINDA_SMALL_NUMBER) Position = Acc / Weight;
 		}
-		Light->SetUseInverseSquaredFalloff(false);
-		Light->SetIntensityUnits(ELightUnits::Unitless);
-		Light->SetLightFalloffExponent(2.f);
-		Light->SetSourceRadius(36.f);
-		Light->SetSoftSourceRadius(64.f);
-		Light->SetSpecularScale(0.f);
-		Light->SetWorldLocation(LightPos);
-		Light->SetLightColor(Cand.Color);
-		Light->SetAttenuationRadius(Cand.Radius);
-		// Unitless brightness (inverse-square is off). Sqrt so busy emitters don't blow out.
-		Light->SetIntensity(FMath::Clamp(10.f + FMath::Sqrt(FMath::Max(0.f, Cand.Score)) * 1.4f, 10.f, 20.f));
-		Light->SetVisibility(true);
+		if (Weight < .01f) continue;
+		if (bMissile) Position = Entity->GetActorLocation();
+		if (bPresentationOnly)
+		{
+			Lights->UpdateParticlePosition(this, Emitter.InstanceId, Position);
+			continue;
+		}
+		FACEEffectLightRequest& Request = Requests.AddDefaulted_GetRef();
+		Request.EmitterId = Emitter.InstanceId;
+		Request.Position = Position;
+		Request.Color = Emitter.LightColor;
+		Request.Radius = bWielded ? 320.f : 480.f;
+		Request.bPortal = bPortal;
+		const float Strength = Emitter.LightLum * Weight;
+		// Keep isolated effects readable, but allow fading effects to reach zero.
+		// The world budget additionally limits summed overlap in crowded rooms.
+		Request.Intensity = FMath::Min(12.f, 10.f + FMath::Sqrt(Strength) * 1.4f)
+			* FMath::Clamp(Strength / .2f, 0.f, 1.f);
 	}
+	if (!bPresentationOnly) Lights->SubmitParticles(this, Requests);
 }
 
 void UACEScriptComponent::StopEmitter(uint32 InstanceId, bool bDestroy)
 {
 	if (InstanceId == 0) return;
+	if (bDestroy)
+		if (auto* Lights = GetWorld() ? GetWorld()->GetSubsystem<UACEEffectLightSubsystem>() : nullptr)
+			Lights->RemoveEmitter(this, InstanceId);
 	for (int32 Index = ActiveEmitters.Num() - 1; Index >= 0; --Index)
 	{
 		FActiveEmitter& Emitter = ActiveEmitters[Index];
@@ -3200,8 +3167,8 @@ void UACEScriptComponent::StopEmitter(uint32 InstanceId, bool bDestroy)
 		}
 	}
 	if (ActiveEmitters.IsEmpty())
-		for (UPointLightComponent* Light : ParticleLights)
-			if (Light) Light->SetVisibility(false);
+		if (auto* Lights = GetWorld() ? GetWorld()->GetSubsystem<UACEEffectLightSubsystem>() : nullptr)
+			Lights->RemoveParticles(this);
 }
 
 void UACEScriptComponent::StopAllEffects()
@@ -3227,13 +3194,8 @@ void UACEScriptComponent::StopAllEffects()
 	ActiveEmitters.Reset();
 	Tweens.Reset();
 	ObjectTranslucency = 0.f;
-	for (UPointLightComponent* Light : ParticleLights)
-	{
-		if (Light)
-		{
-			Light->SetVisibility(false);
-		}
-	}
+	if (auto* Lights = GetWorld() ? GetWorld()->GetSubsystem<UACEEffectLightSubsystem>() : nullptr)
+		Lights->RemoveSource(this);
 	// Environment scripts own their particles, not the sky host's slot materials.
 	// Cloning those MIDs disconnects GameSky UV animation after an indoor stop.
 	if (!bEnvironmentWeather) RestoreMeshVisuals();

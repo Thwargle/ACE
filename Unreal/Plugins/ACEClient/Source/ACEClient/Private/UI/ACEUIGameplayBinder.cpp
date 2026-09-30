@@ -15,6 +15,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "UI/ACECaptureImage.h"
 #include "ACERetailPaperDoll.h"
+#include "ACERetailObjectNames.h"
 #include "ACEInventoryRules.h"
 #include "ACECharacterOptions.h"
 #include "UI/ACEUICanvasWidget.h"
@@ -235,13 +236,12 @@ namespace
 	{
 		const int32 TotalRaw = Obj.StackSize > 0 ? Obj.StackSize : 1;
 		const int32 Total = (Obj.MaxStackSize > 0) ? FMath::Min(TotalRaw, Obj.MaxStackSize) : TotalRaw;
-		const bool bStackable = Obj.MaxStackSize > 1 || Obj.StackSize > 1;
-		if (!bStackable)
+		if (Total <= 1)
 		{
-			return Obj.Name;
+			return ACERetailObjectNames::Name(Obj);
 		}
 		const int32 Amt = (AmountOverride > 0) ? FMath::Clamp(AmountOverride, 1, Total) : Total;
-		const FString& Name=Amt!=1 && !Obj.PluralName.IsEmpty() ? Obj.PluralName : Obj.Name;
+		const FString Name = ACERetailObjectNames::Name(Obj, Amt != 1);
 		if (Amt < Total)
 		{
 			return FString::Printf(TEXT("%s %s (of %s)"),
@@ -839,6 +839,10 @@ void UACEUIGameplayBinder::TickRefresh()
 
 void UACEUIGameplayBinder::OnElementActivated(TSharedPtr<FACEUIElement> Element)
 {
+	if(OpenSalvageToolGuid && Element && (Element->ElementName==TEXT("ScrollBar_Left") || Element->ElementName==TEXT("ScrollBar_Right")))
+		for(auto Parent=Element->Parent.Pin();Parent;Parent=Parent->Parent.Pin())
+			if(Parent->ElementName==TEXT("Salvage_ItemListScroll"))
+			{SetSalvageScrollOffset(SalvageScrollOffset+(Element->ElementName==TEXT("ScrollBar_Left")?-1:1));return;}
 	if (bTradeOpen && Element && (Element->ElementName == TEXT("ScrollBar_Left") || Element->ElementName == TEXT("ScrollBar_Right")))
 	{
 		for (auto Parent=Element->Parent.Pin(); Parent; Parent=Parent->Parent.Pin())
@@ -2608,7 +2612,7 @@ void UACEUIGameplayBinder::ApplyCombatModeInternal(int32 Mode, bool bSendToServe
 			TryAutoTargetOnCombatEnter();
 		}
 		SetFloatyVisible(TEXT("RootGameplay_FloatyEnvPanel_Field"),
-			OpenLootContainerGuid != 0 || OpenVendorGuid != 0 || bTradeOpen);
+			OpenLootContainerGuid != 0 || OpenVendorGuid != 0 || bTradeOpen || OpenSalvageToolGuid != 0);
 		const bool bMagic = CombatMode == static_cast<int32>(ACECombatMode::Magic);
 		if (Manager)
 		{
@@ -3425,7 +3429,9 @@ void UACEUIGameplayBinder::UseSelectedObject()
 	{
 		return;
 	}
-	if (Client->SortInventoryItem(LastSelection.Guid)) return;
+	FACEWorldObject Owned;
+	if(Client->GetWorldObject(LastSelection.Guid,Owned) && Client->IsOwnedInventoryItem(Owned))
+	{UseInventoryItem(Owned.Guid);return;}
 
 	if (PlayerController)
 	{
@@ -4177,6 +4183,7 @@ int32 UACEUIGameplayBinder::GetInventoryTargetAt(FVector2D Absolute) const
 void UACEUIGameplayBinder::CancelInventoryDrag()
 {
 	bInvDragFromVendorSell = false;
+	bInvDragFromSalvage = false;
 	if (PaperDollDragTargetIcon) PaperDollDragTargetIcon->SetVisibility(ESlateVisibility::Collapsed);
 	InvDragGuid = 0;
 	InvDragAmount = 0;
@@ -4378,6 +4385,18 @@ bool UACEUIGameplayBinder::TryBeginInventoryDrag(FVector2D CanvasLocalPos)
 		return true;
 	}
 
+	// Salvage entries reference inventory; dragging out only removes the offer.
+	if(OpenSalvageToolGuid)
+		for(int32 I=0;I<SalvageItemSlots.Num() && I<SalvageItemSlotGuids.Num();++I)
+		{
+			if(!SalvageItemSlots[I] || !Canvas->IsWidgetExposedAt(SalvageItemSlots[I],Absolute))continue;
+			FACEWorldObject Item;if(!Client || !Client->GetWorldObject(SalvageItemSlotGuids[I],Item))return false;
+			InvDragGuid=Item.Guid;InvDragIconDid=Item.IconId;InvDragStartLocal=CanvasLocalPos;
+			InvDragSourcePack=0;InvDragSourceSlot=InvDragPackSlotIndex=INDEX_NONE;
+			bInvDragPending=true;bInvDragActive=false;bInvDragFromSalvage=true;
+			bInvDoubleClickPending=Item.Guid==LastInvClickGuid && FPlatformTime::Seconds()-LastInvClickTime<InventoryDoubleClickSeconds();
+			SelectInventoryGuid(Item.Guid);RefreshSalvageOverlays();return true;
+		}
 	// Selling entries are references to owned inventory. Dragging one back out
 	// cancels the offer locally; it must never drop, use, or move the real item.
 	if (OpenVendorGuid && ActiveVendorPage == 2)
@@ -4688,6 +4707,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 	const bool bWasDragging = bInvDragActive;
 	const bool bDoubleClick = bInvDoubleClickPending;
 	const bool bVendorSellSource = bInvDragFromVendorSell;
+	const bool bSalvageSource = bInvDragFromSalvage;
 	const bool bLootSource = OpenLootContainerGuid != 0
 		&& (SourcePack == OpenLootContainerGuid || SourcePack == OpenLootSelectedPackGuid);
 	CancelInventoryDrag();
@@ -4703,6 +4723,15 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 	}
 	const FVector2D Absolute = Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos);
 
+	if(bSalvageSource)
+	{
+		const auto List=Manager?Manager->FindElementByName(TEXT("SalvageItemsList")):nullptr;
+		const bool InList=List && Canvas->IsElementExposedAt(List,CanvasLocalPos);
+		if(bDoubleClick || (bWasDragging && !InList))
+		{RemoveItemFromSalvageQueue(Guid);LastInvClickGuid=0;LastInvClickTime=0;}
+		else if(!bWasDragging){LastInvClickGuid=Guid;LastInvClickTime=FPlatformTime::Seconds();}
+		RefreshSalvageOverlays();return true;
+	}
 	if (bVendorSellSource)
 	{
 		const auto SellPanel=Manager ? Manager->FindElementByName(TEXT("RootGameplay_FloatyEnvPanel_Field")) : nullptr;
@@ -4911,16 +4940,9 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		auto HitSalvageUi = [&](const TCHAR* Name) -> bool
 		{
 			TSharedPtr<FACEUIElement> El = Manager->FindElementByName(Name);
-			if (!El.IsValid() || !El->bVisible || !Canvas->IsElementExposedAt(El, CanvasLocalPos))
-			{
-				return false;
-			}
-			const FIntPoint O = El->GetScreenOrigin();
-			return CanvasLocalPos.X >= O.X && CanvasLocalPos.Y >= O.Y
-				&& CanvasLocalPos.X < O.X + El->Width && CanvasLocalPos.Y < O.Y + El->Height;
+			return El && Canvas->IsElementExposedAt(El, CanvasLocalPos);
 		};
-		if (HitSalvageUi(TEXT("SalvagePanel")) || HitSalvageUi(TEXT("SalvageItemsList"))
-			|| HitSalvageUi(TEXT("RootGameplay_FloatyEnvPanel_Field")))
+		if (HitSalvageUi(TEXT("SalvageItemsList")))
 		{
 			AddItemToSalvageQueue(Guid);
 			return true;
@@ -5398,7 +5420,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 		}
 	}
 
-	// Salvage queue: left = select, right = remove.
+	// Retail item-list right click appraises; double-click/drag removes an offer.
 	if (OpenSalvageToolGuid != 0)
 	{
 		for (int32 i = 0; i < SalvageItemSlots.Num() && i < SalvageItemSlotGuids.Num(); ++i)
@@ -5417,7 +5439,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 				}
 				if (bRightClick)
 				{
-					RemoveItemFromSalvageQueue(Guid);
+					SelectInventoryGuid(Guid);Client->SendIdentifyObject(Guid);
 				}
 				else
 				{
@@ -6946,13 +6968,15 @@ void UACEUIGameplayBinder::ReflowInventoryPanelGeometry()
 	}
 	const int32 PanelH = Page->Height;
 
-	// Stretch InvBackground / Blackness to the live panel height; keep underlay art visible.
+	// Retail keeps the 362px gradient at the top (bottomEdge=2) and grows
+	// Blackness from y=361 (bottomEdge=1). Repeating the gradient over the
+	// whole panel repeats its transparent edge, exposing strips of the world.
 	if (TSharedPtr<FACEUIElement> Bg = Manager->FindElementUnder(TEXT("InventoryPanel_Field"), TEXT("InvBackgroundImage")))
 	{
 		Bg->X = 0;
 		Bg->Y = 0;
 		Bg->Width = Page->Width;
-		Bg->Height = PanelH;
+		Bg->Height = FMath::Min(362, PanelH);
 		Bg->bVisible = true;
 		Bg->ImageFileId = 0x06004D0A;
 		Bg->DrawMode = 3;
@@ -6960,9 +6984,9 @@ void UACEUIGameplayBinder::ReflowInventoryPanelGeometry()
 	}
 	if (TSharedPtr<FACEUIElement> Black = Manager->FindElementUnder(TEXT("InventoryPanel_Field"), TEXT("Blackness")))
 	{
-		Black->Y = FMath::Max(0, PanelH - 1);
+		Black->Y = FMath::Min(361, FMath::Max(0, PanelH - 1));
 		Black->Width = Page->Width;
-		Black->Height = 1;
+		Black->Height = FMath::Max(1, PanelH - Black->Y);
 		Black->bVisible = true;
 		if (Black->ImageFileId == 0)
 		{
@@ -9945,7 +9969,7 @@ void UACEUIGameplayBinder::EnsureOverlays()
 		SelectionText->SetAutoWrapText(true);
 		FSlateFontInfo Font = FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 8);
 		SelectionText->SetFont(Font);
-		SelectionText->SetColorAndOpacity(FSlateColor(TextGold));
+		SelectionText->SetColorAndOpacity(FSlateColor(TextWhite));
 	}
 	if (!SelectionStackAmountLabel)
 	{
@@ -10611,7 +10635,7 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 {
 	if (Client)
 	{
-		// Keep HealthFraction in sync — UpdateHealth may arrive without a binder-visible path.
+		// Meter replies can arrive independently of a new selection action.
 		LastSelection = Client->GetSelectedObject();
 	}
 	FString Name = LastSelection.bValid ? LastSelection.Name : FString();
@@ -10646,21 +10670,20 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 				const bool VendorStock=OpenVendorGuid && GetVendorPurchaseLimit(SelObj.Guid)>0;
 				Name = FormatItemStackName(SelObj, VendorStock ? INDEX_NONE : SelectedStackAmount);
 			}
-			else if (Name.IsEmpty())
+			else
 			{
-				Name = SelObj.Name;
+				Name = ACERetailObjectNames::Name(SelObj);
 			}
 		}
 	}
 
-	const bool bShowHealth = LastSelection.bValid && LastSelection.bShowHealth;
-	const bool bShowMana = !bShowHealth && bHaveObj && SelObj.MaxStructure > 0;
-	const bool bShowStack = !bShowHealth && !bShowMana && bHaveObj
-		&& SelectedStackMax > 1;
+	// gmToolbarUI gives split controls priority; only a server mana reply can
+	// expose the item mana vial. Structure is durability/salvage units, not mana.
+	const bool bShowStack = LastSelection.bValid && bHaveObj && SelectedStackMax > 1;
+	const bool bShowHealth = LastSelection.bValid && !bShowStack && LastSelection.bShowHealth;
+	const bool bShowMana = LastSelection.bValid && !bShowStack && !bShowHealth && LastSelection.bShowMana;
 	const float HealthFrac = FMath::Clamp(LastSelection.HealthFraction, 0.f, 1.f);
-	const float ManaFrac = (SelObj.MaxStructure > 0)
-		? FMath::Clamp(static_cast<float>(SelObj.Structure) / static_cast<float>(SelObj.MaxStructure), 0.f, 1.f)
-		: 0.f;
+	const float ManaFrac = FMath::Clamp(LastSelection.ManaFraction, 0.f, 1.f);
 	const float StackFrac = (SelectedStackMax > 0)
 		? FMath::Clamp(static_cast<float>(SelectedStackAmount) / static_cast<float>(SelectedStackMax), 0.f, 1.f)
 		: 0.f;
@@ -10670,6 +10693,12 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 	// Retail DAT meters only — MeterFillFraction clips the fill art (do not invent UMG bars).
 	if (Manager)
 	{
+		if (const auto Field = Manager->FindElementByName(TEXT("SelectedObjectField")))
+		{
+			Field->bUseExplicitState = true;
+			Field->DefaultState = !LastSelection.bValid ? 0u : bShowStack ? 0x1000000Cu : 0x1000000Bu;
+			Field->ResolvePaintState(false, false, false);
+		}
 		auto SetMeter = [this](const FString& MeterName, bool bVisible, float Frac)
 		{
 			if (TSharedPtr<FACEUIElement> Meter = Manager->FindElementByName(MeterName))
@@ -10708,33 +10737,22 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 		}
 	}
 
-	// Name in SelectedObjectText — center / wrap so it fits the field.
+	// SelectedObjectText uses the DAT's native white bitmap font and 140x31
+	// field. The stacked state is left-aligned and one line above the controls.
 	if (SelectionText && Manager && Canvas)
 	{
 		TSharedPtr<FACEUIElement> TextEl = Manager->FindElementByName(TEXT("SelectedObjectText"));
-		bool bAncestorsVisible = TextEl.IsValid() && TextEl->bVisible;
-		for (TSharedPtr<FACEUIElement> P = TextEl.IsValid() ? TextEl->Parent.Pin() : nullptr;
-			P.IsValid(); P = P->Parent.Pin())
-		{
-			if (!P->bVisible) { bAncestorsVisible = false; break; }
-		}
-		if (!LastSelection.bValid || !bAncestorsVisible || !TextEl.IsValid())
+		if (!LastSelection.bValid || !TextEl)
 		{
 			SelectionText->SetVisibility(ESlateVisibility::Collapsed);
 		}
 		else
 		{
-			SelectionText->SetVisibility(ESlateVisibility::HitTestInvisible);
-			SelectionText->SetText(FText::FromString(Name));
-			SelectionText->SetJustification(ETextJustify::Center);
-			SelectionText->SetAutoWrapText(true);
-			const int32 FontSize = (Name.Len() > 22) ? 7 : 8;
-			SelectionText->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), FontSize));
-			SelectionText->SetColorAndOpacity(FSlateColor(TextGold));
-			const float TopH = bShowStack ? 13.f : static_cast<float>(TextEl->Height);
-			const FMargin Inset(2.f, 1.f, 2.f,
-				FMath::Max(0.f, static_cast<float>(TextEl->Height) - TopH));
-			Canvas->PlaceWidgetAtElement(SelectionText, TextEl, 520, Inset);
+			TextEl->ResolvePaintState(false, false, false);
+			TextEl->bTextOneLine = bShowStack;
+			TextEl->TextHorizontalJustification = bShowStack ? 2 : 1;
+			SelectionText->SetAutoWrapText(!bShowStack);
+			PlaceTextOnElement(SelectionText, TextEl, Name, 8, TextWhite, 520);
 		}
 	}
 
@@ -11464,9 +11482,11 @@ void UACEUIGameplayBinder::SetItemSlotForeground(UBorder* Border, const FACEWorl
 {
     if (!Border || !Canvas || !Canvas->GetResourceResolver()) return;
     if (!Item) { SetIconDid(Border,0); return; }
-    const bool bForSale = OpenVendorGuid != 0 && VendorSellCart.ContainsByPredicate(
-        [Item](const TPair<int32,int32>& Entry) { return Entry.Value == Item->Guid; });
-    UTexture2D* Texture = Canvas->GetResourceResolver()->ResolveItemForeground(Item->IconId,Item->IconOverlayId,Item->UiEffects,bForSale);
+    // Retail marks salvage offers with the same trade-state overlay as sale offers.
+    const bool bOffered = SalvageQueueGuids.Contains(Item->Guid)
+        || (OpenVendorGuid != 0 && VendorSellCart.ContainsByPredicate(
+            [Item](const TPair<int32,int32>& Entry) { return Entry.Value == Item->Guid; }));
+    UTexture2D* Texture = Canvas->GetResourceResolver()->ResolveItemForeground(Item->IconId,Item->IconOverlayId,Item->UiEffects,bOffered);
     const float Flash = LastSelection.bValid && Item->Guid == LastSelection.Guid
         ? FMath::Clamp(float((SelectionFlashUntil - FPlatformTime::Seconds()) / .4),0.f,1.f) : 0.f;
     Border->SetBrushColor(FLinearColor(1.f+Flash,1.f+Flash,1.f+Flash,1));
@@ -12073,6 +12093,8 @@ uint64 UACEUIGameplayBinder::HashInventoryOverlayState() const
 	H = HashCombine(H, GetTypeHash(PackScrollOffset));
 	H = HashCombine(H, GetTypeHash(LastSelection.bValid ? LastSelection.Guid : 0));
 	H = HashCombine(H, GetTypeHash(bShowPaperdollSlots));
+	H = HashCombine(H, GetTypeHash(SalvageQueueGuids.Num()));
+	for (int32 Guid : SalvageQueueGuids) H = HashCombine(H, GetTypeHash(Guid));
 	if (!Client)
 	{
 		return H;
@@ -13025,6 +13047,8 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 		return true;
 	};
 
+	if(OpenSalvageToolGuid && TryBar(Manager->FindElementByName(TEXT("Salvage_ItemListScroll")),EACEUIScrollTarget::Salvage,
+		FMath::Max(0,SalvageQueueGuids.Num()+1-SalvageVisibleSlots),true))return true;
 	if (ActivePanelPage==TEXT("SocialPanel_Field") && ActiveSocialTab==TEXT("AllegiancePage") && Client)
 		if (TryBar(Manager->FindElementUnder(TEXT("AllegiancePage"),TEXT("VassalsListBoxScrollbar")),
 			EACEUIScrollTarget::Allegiance,FMath::Max(0,Client->GetAllegiance().Vassals.Num()-VassalVisibleRows),false)) return true;
@@ -13282,6 +13306,9 @@ void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D CanvasLocalPos)
 	case EACEUIScrollTarget::CharacterInfo:
 		if (CharacterInfoScroll) CharacterInfoScroll->SetScrollOffset(Off);
 		break;
+	case EACEUIScrollTarget::Salvage:
+		SetSalvageScrollOffset(Off);
+		break;
 	case EACEUIScrollTarget::Book:
 		if (BookScroll) BookScroll->SetScrollOffset(Off);
 		break;
@@ -13536,13 +13563,16 @@ void UACEUIGameplayBinder::SyncEnvPanelMode()
 	if (!bSalvage)
 	{
 		for (UBorder* B : SalvageItemSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UBorder* B : SalvageItemBackgrounds) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UBorder* B : SalvageItemSelections) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UTextBlock* L : SalvageLabels) { if (L) L->SetVisibility(ESlateVisibility::Collapsed); }
 		if (SalvageWarningLabel) { SalvageWarningLabel->SetVisibility(ESlateVisibility::Collapsed); }
 	}
 	if (bSalvage)
 	{
 		ExpandEnvFloatyForWideContent();
 		Manager->SetElementVisibleByName(TEXT("CloseSalvagePanelButton"), true);
-		Manager->SetElementVisibleByName(TEXT("Salvage_Button"), SalvageQueueGuids.Num() > 0);
+		Manager->SetElementVisibleByName(TEXT("Salvage_Button"), true);
 	}
 	if (bVendor)
 	{

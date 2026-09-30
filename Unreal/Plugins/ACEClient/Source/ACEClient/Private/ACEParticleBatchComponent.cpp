@@ -43,7 +43,11 @@ void UACEParticleBatchComponent::RemoveParticle(int32 Index)
 void UACEParticleBatchComponent::SetParticleVisual(int32 Index, const FTransform& WorldTransform, float Opacity)
 {
 	if(!Transforms.IsValidIndex(Index)) return;
-	Transforms[Index]=WorldTransform.GetRelativeTransform(GetComponentTransform()); Opacities[Index]=Opacity; bDirty=true;
+	const FTransform Local = WorldTransform.GetRelativeTransform(GetComponentTransform());
+	// Presentation can refresh at display cadence while a stationary glow's
+	// lifecycle is unchanged. Do not upload identical vertex buffers each frame.
+	if (Transforms[Index].Equals(Local, 1.e-8) && Opacities[Index] == Opacity) return;
+	Transforms[Index]=Local; Opacities[Index]=Opacity; bDirty=true;
 }
 void UACEParticleBatchComponent::ClearParticles()
 {
@@ -52,7 +56,10 @@ void UACEParticleBatchComponent::ClearParticles()
 void UACEParticleBatchComponent::FlushParticles()
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_ParticleBatchFlush);
-	if(!bDirty) return; bDirty=false;
+	const bool bUseActivePrefix = CVarActiveParticlePrefix.GetValueOnGameThread() != 0;
+	if(!bDirty && bLastFlushedUseActivePrefix == bUseActivePrefix) return;
+	bDirty=false;
+	bLastFlushedUseActivePrefix = bUseActivePrefix;
 	// Inactive slots start degenerate. Only slots that were active in the last
 	// upload need clearing; a sparse emitter need not transform its full capacity.
 	const int32 UpdateCount=FMath::Max(Transforms.Num(),LastFlushedParticleCount);
@@ -78,7 +85,7 @@ void UACEParticleBatchComponent::FlushParticles()
 		}
 		// UVs and tangents never change after initialization.
 		const int32 ActiveVertices = Transforms.Num() * N;
-		if (CVarActiveParticlePrefix.GetValueOnGameThread() == 0 ||
+		if (!bUseActivePrefix ||
 			!UpdateMeshSectionActivePrefix(S,
 				MakeArrayView(Out.Positions.GetData(), ActiveVertices),
 				MakeArrayView(Out.Normals.GetData(), ActiveVertices),

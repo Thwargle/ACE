@@ -26,6 +26,9 @@ public:
     void UpdateItemPointer(bool OverMenu, FVector2D Pixel);
     void FinishItemPointer(bool OverMenu, FVector2D Pixel, bool OverWorld);
     void CancelItemPointer();
+    void QuickAction(bool Inspect, bool Pointed=false, FVector2D Pixel=FVector2D::ZeroVector);
+    bool IsInspectionOpen() const { return bInspectionOpen; }
+    TSharedRef<SWidget> GetInspectionWidget();
     FName GetPage() const { return Page; }
     int32 GetRefreshCount() const { return RefreshCount; }
     virtual TSharedRef<SWidget> RebuildWidget() override;
@@ -42,6 +45,11 @@ private:
     TSharedPtr<SVerticalBox> Body;
     TSharedPtr<STextBlock> HoverLabel;
     TSharedPtr<SScrollBox> ContentScroll;
+    TSharedPtr<SVerticalBox> InspectionBody;
+    TSharedPtr<SWidget> InspectionWidget;
+    bool bInspectionOpen=false;
+    int32 InspectItem=0, InspectSpell=0;
+    FACEAppraisalInfo InspectionAppraisal;
     FName Page="Inventory";
     int32 Pack=0, Selected=0, Spell=0, PageIndex=0, RefreshCount=0;
     int32 MenuOwnerGuid=0;
@@ -54,9 +62,14 @@ private:
     bool bSkillsPage=false, bVendorSelling=false;
     int32 FellowSelection=0;
     int32 DragItem=0, DragAmount=0;
-    bool bItemDragging=false, bSuppressItemClick=false;
+    bool bItemDragging=false, bSuppressItemClick=false, bDragFromSalvage=false;
     FVector2D DragStart=FVector2D::ZeroVector;
-    struct FItemDestination { TWeakPtr<SWidget> Widget; int32 Container=0, Slot=0, Item=0; int64 EquipMask=0; bool Sell=false; };
+    int32 DragSpell=0, DragSpellBar=INDEX_NONE;
+    struct FMenuTarget { TWeakPtr<SWidget> Widget; int32 Item=0, SpellId=0, Bar=INDEX_NONE, Index=0; };
+    TArray<FMenuTarget> MenuTargets;
+    struct FSpellDestination { TWeakPtr<SWidget> Widget; int32 Bar=INDEX_NONE, Index=0; bool Remove=false; };
+    TArray<FSpellDestination> SpellDestinations;
+    struct FItemDestination { TWeakPtr<SWidget> Widget; int32 Container=0, Slot=0, Item=0; int64 EquipMask=0; bool Sell=false, Salvage=false; TWeakPtr<SWidget> ClipWidget; };
     TArray<FItemDestination> ItemDestinations;
     FString Search, FellowName;
     UPROPERTY(Transient) TObjectPtr<UEditableTextBox> TextEntry;
@@ -72,17 +85,24 @@ private:
     UFUNCTION() void Changed();
     UFUNCTION() void ContextChanged(int32 EventOrGuid);
     TSharedRef<SWidget> Button(const FString& Text, TFunction<void()> Click, bool Enabled=true);
-    TSharedRef<SWidget> ItemButton(const FACEWorldObject& Item, float Size=64.f);
+    TSharedRef<SWidget> ItemButton(const FACEWorldObject& Item, float Size=64.f, bool SalvageOffer=false);
     TSharedRef<SWidget> Icon(uint32 Did, float Size=48.f);
     TSharedRef<SWidget> ItemIcon(const FACEWorldObject& Item, float Size=48.f);
-    TSharedRef<SWidget> PackGrid(int32 Container);
+    TSharedRef<SWidget> PackGrid(int32 Container,float Height=540.f);
     TSharedRef<SWidget> PackIcons();
     TSharedRef<SWidget> Tab(const FString& Text, bool Active, TFunction<void()> Click);
     void ClearItemSelection();
     void SelectPack(int32 Guid);
     void BeginItemPointer(int32 Guid);
     void DropItem(int32 Guid,int32 Amount);
+    void InspectSelection();
+    void SelectMenuSpell(int32 Id);
+    TSharedRef<SWidget> SpellButton(int32 Id, int32 Bar=INDEX_NONE, int32 Index=0, bool WithName=false);
+    void BeginSpellPointer(int32 Id,int32 Bar);
+    void FinishSpellPointer(bool OverMenu,FVector2D Pixel,bool OverWorld);
+    void PlaceSpell(int32 Id,int32 SourceBar,int32 TargetBar,int32 Index);
     void BuildInventory();
+    void BuildSalvage();
     void BuildSpells();
     void BuildFellowship();
     void BuildCharacter();

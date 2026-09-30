@@ -1,0 +1,2 @@
+# Native launchers must remain executable by /bin/sh after a Windows checkout.
+*.sh text eol=lf

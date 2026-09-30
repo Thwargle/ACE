@@ -5,7 +5,7 @@ class UWorld;
 
 namespace ACEClientBuild
 {
-	inline constexpr int32 ReleaseNumber = 87;
+	inline constexpr int32 ReleaseNumber = 88;
 	inline constexpr const TCHAR* DesktopProductName = TEXT("AC:Unreal");
 	inline constexpr const TCHAR* VRProductName = TEXT("AC:VR");
 	inline const TCHAR* ProductName(bool bVR = false)
@@ -14,5 +14,5 @@ namespace ACEClientBuild
 	}
 	ACECLIENT_API void UpdateWindowTitle(UWorld* World, bool bVR = false);
 	// One display version for desktop, PC VR, and standalone Quest.
-	inline constexpr const TCHAR* Version = TEXT("2026.09.30.87");
+	inline constexpr const TCHAR* Version = TEXT("2026.09.30.88");
 }

@@ -110,6 +110,9 @@ void FACESession::Disconnect()
 	PartialFragments.Reset();
 	WorldObjects.Reset();
 	ObjectVisibilityDeadlines.Reset();
+	PendingObjectPhysicsEvents.Reset();
+	PendingObjectPhysicsBytes = 0;
+	LastObjectPhysicsExpiryAt = 0.;
 	ContainerContents.Reset();
 	LoginEquipment.Reset();
 	OpenExternalContainerGuid = 0;
@@ -223,6 +226,9 @@ void FACESession::RequestLogOff()
 void FACESession::ClearWorldState()
 {
 	ObjectVisibilityDeadlines.Reset();
+	PendingObjectPhysicsEvents.Reset();
+	PendingObjectPhysicsBytes = 0;
+	LastObjectPhysicsExpiryAt = 0.;
 	VRCapabilities = VRSequence = VRPoseSequence = 0; VRPoses.Reset(); VRSpellProfiles.Reset();
 	bLocalVRFeedback = false; LastVRPoseSent = -100.;
 	VRRecoverySequence = VRRecoveryTeleport = 0; VRRecoveryReadyAt = 0; VRRecoveryDuration = 0;
@@ -282,6 +288,7 @@ void FACESession::ClearWorldState()
 	PlayerPosition = FACEPosition();
 	PlayerVitals = FACEPlayerVitals();
 	SelectedObject = FACESelectedObject();
+	SelectedManaQueryGuid = 0;
 	PreviousSelectedObjectGuid = 0;
 	CurrentStance = ACEMotion::StanceNonCombat;
 	bEnteredWorldSent = false;
@@ -1449,7 +1456,7 @@ void FACESession::HandleGameMessage(const TArray<uint8>& MessageBytes)
 	case ACEOpcode::UpdateObject:
 		// Same payload as ObjectCreate (SerializeUpdateObject). Required for house hooks
 		// morphing into hooked items (Font of Jojii Setup/DefaultScript swap).
-		HandleObjectCreate(Reader);
+		HandleObjectCreate(Reader, true);
 		break;
 	case ACEOpcode::ObjDescEvent:
 		HandleObjDescEvent(Reader);
@@ -1611,25 +1618,27 @@ void FACESession::HandlePlayerCreate(FACEBinaryReader& Reader)
 	MaybeEnterWorldComplete();
 }
 
-void FACESession::UpsertWorldObject(const FACEWorldObject& Object)
+void FACESession::UpsertWorldObject(const FACEWorldObject& Object, bool bForceRecreate)
 {
 	// A fresh server description re-establishes interest in this incarnation.
 	ObjectVisibilityDeadlines.Remove(Object.Guid);
 	FACEWorldObject Merged = Object;
-	if (const FACEWorldObject* Existing = WorldObjects.Find(Object.Guid))
+	const FACEWorldObject* Existing = WorldObjects.Find(Object.Guid);
+	const bool bSameInstance = Existing && (Existing->bPhysicsDescriptionPending
+		|| !Object.bHasPhysicsTimestamps || !Existing->bHasPhysicsTimestamps
+		|| Object.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] == Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]);
+	if (Existing && bSameInstance && !bForceRecreate)
 	{
 		// CreateObject (SmartboxQueue) and ContainId (UIQueue) can reorder. If ContainId
 		// homed an item first, a later CreateObject that omits Container must not wipe it
 		// — that dropped newly created salvage bags out of GetPackItems.
-		if (Merged.ContainerId == 0 && Existing->ContainerId != 0
+		if (!Merged.bHasPosition && Merged.ContainerId == 0 && Existing->ContainerId != 0
 			&& Merged.ParentGuid == 0 && Merged.WielderId == 0
 			&& Merged.CurrentWieldedLocation == 0)
 		{
 			Merged.ContainerId = Existing->ContainerId;
 		}
 		// A repeated description of the same dead creature is not a respawn.
-		const bool bSameInstance = !Merged.bHasPhysicsTimestamps || !Existing->bHasPhysicsTimestamps
-			|| Merged.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] == Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance];
 		// A server may replace a defeated monster with a quest NPC while keeping
 		// its GUID/instance. Preserve death only for the same weenie and role;
 		// otherwise the replacement inherits unselectable, non-colliding state.
@@ -1757,7 +1766,7 @@ void FACESession::MaybeEnterWorldComplete()
 	OnEnteredWorld.Broadcast(PlayerGuid, PlayerPosition);
 }
 
-void FACESession::HandleObjectCreate(FACEBinaryReader& Reader)
+void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecreate)
 {
 	FACEDecodedObject Decoded;
 	if (!FACEObjectCreateParser::Parse(Reader, Decoded) || !Decoded.bParseOk)
@@ -1765,6 +1774,18 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader)
 		Log(FString::Printf(TEXT("ObjectCreate parse failed guid=0x%08X isSelf=%d"),
 			Decoded.Guid, (PlayerGuid != 0 && Decoded.Guid == PlayerGuid) ? 1 : 0));
 		return;
+	}
+
+	const FACEWorldObject* Existing = WorldObjects.Find(Decoded.Guid);
+	const bool bComparableInstance = Existing && !Existing->bPhysicsDescriptionPending
+		&& Existing->bHasPhysicsTimestamps && Decoded.bHasPhysicsTimestamps;
+	const bool bSameInstance = bComparableInstance
+		&& Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] == Decoded.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance];
+	if (!bForceRecreate && bComparableInstance && !bSameInstance
+		&& !ACEPhysicsTimeStamp::IsNewer(Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance],
+			Decoded.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]))
+	{
+		return; // SmartBox::HandleCreateObject ignores descriptions of an older incarnation.
 	}
 
 	FACEWorldObject Obj;
@@ -1845,20 +1866,149 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader)
 		Obj.bHasPhysicsTimestamps = true;
 	}
 
+	if (bSameInstance && !bForceRecreate)
+	{
+		// A repeated CreateObject is a collection of timestamped physics updates,
+		// not a replacement. Only UpdateObject (house hooks, etc.) rebuilds the setup.
+		Obj.SetupId = Existing->SetupId;
+		Obj.MotionTableId = Existing->MotionTableId;
+		Obj.SoundTableId = Existing->SoundTableId;
+		Obj.PhysicsEffectTableId = Existing->PhysicsEffectTableId;
+		Obj.Scale = Existing->Scale;
+		Obj.Translucency = Existing->Translucency;
+		Obj.DefaultScriptId = Existing->DefaultScriptId;
+		Obj.DefaultScriptIntensity = Existing->DefaultScriptIntensity;
+		Obj.DefaultAnimationId = Existing->DefaultAnimationId;
+		const auto IsNewer = [&](int32 Index)
+		{
+			return ACEPhysicsTimeStamp::IsNewer(Existing->PhysicsTimestamps[Index], Obj.PhysicsTimestamps[Index]);
+		};
+		if (!IsNewer(ACEPhysicsTimeStamp::ObjDesc)) Obj.Appearance = Existing->Appearance;
+		if (!IsNewer(ACEPhysicsTimeStamp::State)) Obj.PhysicsState = Existing->PhysicsState;
+		if (!IsNewer(ACEPhysicsTimeStamp::Vector))
+		{
+			Obj.Velocity = Existing->Velocity;
+			Obj.bHasVelocity = Existing->bHasVelocity;
+			Obj.Omega = Existing->Omega;
+		}
+		const bool bSameWeenieRole = Obj.WeenieClassId == Existing->WeenieClassId && Obj.ItemType == Existing->ItemType
+			&& ((Obj.ObjectDescriptionFlags ^ Existing->ObjectDescriptionFlags)
+				& (ACEObjectDescFlag::Attackable | ACEObjectDescFlag::Vendor | ACEObjectDescFlag::Corpse)) == 0;
+		if (bSameWeenieRole && !IsNewer(ACEPhysicsTimeStamp::Movement) && !IsNewer(ACEPhysicsTimeStamp::ServerControl))
+		{
+			Obj.InitialMotionCommand = Existing->InitialMotionCommand;
+			Obj.InitialMotionStyle = Existing->InitialMotionStyle;
+			Obj.bDying = Existing->bDying;
+		}
+		const bool bStaleTeleport = Obj.bHasPosition && ACEPhysicsTimeStamp::IsNewer(
+			Obj.PhysicsTimestamps[ACEPhysicsTimeStamp::Teleport], Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Teleport]);
+		if (bStaleTeleport || (!IsNewer(ACEPhysicsTimeStamp::Position)
+			&& !(Obj.bIsSelf && IsNewer(ACEPhysicsTimeStamp::ForcePosition))))
+		{
+			Obj.Position = Existing->Position;
+			Obj.bHasPosition = Existing->bHasPosition;
+			Obj.ParentGuid = Existing->ParentGuid;
+			Obj.ParentLocation = Existing->ParentLocation;
+			Obj.PlacementId = Existing->PlacementId;
+			Obj.PhysicsTimestamps[ACEPhysicsTimeStamp::Position] = Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Position];
+			Obj.PhysicsTimestamps[ACEPhysicsTimeStamp::Teleport] = Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Teleport];
+			Obj.PhysicsTimestamps[ACEPhysicsTimeStamp::ForcePosition] = Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::ForcePosition];
+		}
+		for (int32 Index = 0; Index < ACEPhysicsTimeStamp::Instance; ++Index)
+		{
+			if (!IsNewer(Index)) Obj.PhysicsTimestamps[Index] = Existing->PhysicsTimestamps[Index];
+		}
+	}
+	if (Existing && (bForceRecreate || (bComparableInstance && !bSameInstance)))
+	{
+		// Retail destroys the prior physics object before publishing the replacement.
+		VRPoses.Remove(Obj.Guid);
+		OnObjectDeleted.Broadcast(Obj.Guid);
+	}
 	if (Obj.bIsSelf && Obj.bHasPosition)
 	{
 		PlayerPosition = Obj.Position;
 	}
 
-	UpsertWorldObject(Obj);
+	UpsertWorldObject(Obj, bForceRecreate);
+	ReplayObjectPhysicsEvents(Obj.Guid);
 	Log(FString::Printf(TEXT("ObjectCreate '%s' guid=0x%08X setup=0x%08X parent=0x%08X loc=%d animParts=%d"),
 		*Obj.Name, Obj.Guid, Obj.SetupId, Obj.ParentGuid, Obj.ParentLocation,
 		Obj.Appearance.AnimPartChanges.Num()));
 	MaybeEnterWorldComplete();
 }
 
+void FACESession::ExpireObjectPhysicsEvents(double Now)
+{
+	if (Now >= LastObjectPhysicsExpiryAt && Now - LastObjectPhysicsExpiryAt < 1.) return;
+	LastObjectPhysicsExpiryAt = Now;
+	for (auto It = PendingObjectPhysicsEvents.CreateIterator(); It; ++It)
+	{
+		It.Value().RemoveAll([this, Now](const FPendingObjectPhysicsEvent& Event)
+		{
+			if (Now - Event.QueuedAt <= 25.) return false;
+			PendingObjectPhysicsBytes -= Event.Payload.Num();
+			return true;
+		});
+		if (It.Value().IsEmpty()) It.RemoveCurrent();
+	}
+}
+
+bool FACESession::DeferObjectPhysicsEvent(int32 Guid, uint16 Instance, uint32 Opcode,
+	const FACEBinaryReader& Reader, int32 PayloadStart)
+{
+	if (const FACEWorldObject* Existing = WorldObjects.Find(Guid); Existing && !Existing->bPhysicsDescriptionPending)
+	{
+		if (!Existing->bHasPhysicsTimestamps || Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] == Instance)
+			return false;
+		if (!ACEPhysicsTimeStamp::IsNewer(Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance], Instance))
+			return true; // An older incarnation cannot change this object, regardless of its category sequence.
+	}
+	// SmartBox queues packets that precede their object's CreateObject. Keep their
+	// original ordering, bound abandoned GUIDs, and expire them with retail's lost-object grace.
+	const double Now = FPlatformTime::Seconds();
+	ExpireObjectPhysicsEvents(Now);
+	const int32 PayloadSize = Reader.GetLength() - PayloadStart;
+	if (PayloadStart < 0 || PayloadSize <= 0 || PayloadSize > 65536
+		|| PendingObjectPhysicsBytes + PayloadSize > 4 * 1024 * 1024
+		|| (PendingObjectPhysicsEvents.Num() >= 1024 && !PendingObjectPhysicsEvents.Contains(Guid))) return true;
+	TArray<FPendingObjectPhysicsEvent>& Pending = PendingObjectPhysicsEvents.FindOrAdd(Guid);
+	if (Pending.Num() >= 64) return true;
+	FPendingObjectPhysicsEvent& Event = Pending.AddDefaulted_GetRef();
+	Event.Opcode = Opcode;
+	Event.QueuedAt = Now;
+	Event.Payload.Append(Reader.GetData() + PayloadStart, PayloadSize);
+	PendingObjectPhysicsBytes += PayloadSize;
+	return true;
+}
+
+void FACESession::ReplayObjectPhysicsEvents(int32 Guid)
+{
+	TArray<FPendingObjectPhysicsEvent> Pending;
+	if (!PendingObjectPhysicsEvents.RemoveAndCopyValue(Guid, Pending)) return;
+	for (const FPendingObjectPhysicsEvent& Event : Pending) PendingObjectPhysicsBytes -= Event.Payload.Num();
+	const double Now = FPlatformTime::Seconds();
+	for (const FPendingObjectPhysicsEvent& Event : Pending)
+	{
+		if (Now - Event.QueuedAt > 25.) continue;
+		FACEBinaryReader Reader(Event.Payload);
+		switch (Event.Opcode)
+		{
+		case ACEOpcode::ObjDescEvent: HandleObjDescEvent(Reader); break;
+		case ACEOpcode::ObjectDelete: HandleObjectDelete(Reader); break;
+		case ACEOpcode::SetState: HandleSetState(Reader); break;
+		case ACEOpcode::ParentEvent: HandleParentEvent(Reader); break;
+		case ACEOpcode::PickupEvent: HandlePickupEvent(Reader); break;
+		case ACEOpcode::UpdatePosition: HandleUpdatePosition(Reader); break;
+		case ACEOpcode::VectorUpdate: HandleVectorUpdate(Reader); break;
+		default: break;
+		}
+	}
+}
+
 void FACESession::HandleObjDescEvent(FACEBinaryReader& Reader)
 {
+	const int32 PayloadStart = Reader.Tell();
 	if (!Reader.CanRead(4))
 	{
 		return;
@@ -1870,51 +2020,19 @@ void FACESession::HandleObjDescEvent(FACEBinaryReader& Reader)
 		Log(TEXT("ObjDescEvent parse failed"));
 		return;
 	}
-	uint16 IncomingInstance = 0;
-	uint16 IncomingVisual = 0;
-	if (Reader.CanRead(4))
-	{
-		IncomingInstance = Reader.ReadUInt16();
-		IncomingVisual = Reader.ReadUInt16();
-	}
+	if (!Reader.CanRead(4)) return;
+	const uint16 IncomingInstance = Reader.ReadUInt16();
+	const uint16 IncomingVisual = Reader.ReadUInt16();
 	if (Reader.CanRead(4))
 	{
 		Reader.ReadUInt32(); // optional pad / unused
 	}
 
+	if (DeferObjectPhysicsEvent(Guid, IncomingInstance, ACEOpcode::ObjDescEvent, Reader, PayloadStart)) return;
 	FACEWorldObject* Existing = WorldObjects.Find(Guid);
-	if (!Existing)
-	{
-		FACEWorldObject Stub;
-		Stub.Guid = Guid;
-		Stub.Appearance = Appearance;
-		Stub.bIsSelf = (PlayerGuid != 0 && Guid == PlayerGuid);
-		if (IncomingVisual != 0 || IncomingInstance != 0)
-		{
-			Stub.PhysicsTimestamps[ACEPhysicsTimeStamp::ObjDesc] = IncomingVisual;
-			Stub.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] = IncomingInstance;
-			Stub.bHasPhysicsTimestamps = true;
-		}
-		UpsertWorldObject(Stub);
-		return;
-	}
-
-	if (Existing->bHasPhysicsTimestamps)
-	{
-		if (!ACEPhysicsTimeStamp::IsNewer(Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::ObjDesc], IncomingVisual)
-			&& !ACEPhysicsTimeStamp::IsNewer(Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance], IncomingInstance))
-		{
-			return;
-		}
-		if (ACEPhysicsTimeStamp::IsNewer(Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::ObjDesc], IncomingVisual))
-		{
-			Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::ObjDesc] = IncomingVisual;
-		}
-		if (ACEPhysicsTimeStamp::IsNewer(Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance], IncomingInstance))
-		{
-			Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] = IncomingInstance;
-		}
-	}
+	if (Existing->bHasPhysicsTimestamps
+		&& !ACEPhysicsTimeStamp::IsNewer(Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::ObjDesc], IncomingVisual)) return;
+	Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::ObjDesc] = IncomingVisual;
 
 	Existing->Appearance = Appearance;
 	Existing->bIsSelf = (PlayerGuid != 0 && Guid == PlayerGuid);
@@ -1925,11 +2043,18 @@ void FACESession::HandleObjDescEvent(FACEBinaryReader& Reader)
 
 void FACESession::HandleObjectDelete(FACEBinaryReader& Reader)
 {
+	const int32 PayloadStart = Reader.Tell();
 	if (!Reader.CanRead(4))
 	{
 		return;
 	}
 	const int32 Guid = static_cast<int32>(Reader.ReadUInt32());
+	if (Guid == PlayerGuid && PlayerGuid != 0) return;
+	if (Reader.CanRead(2))
+	{
+		const uint16 IncomingInstance = Reader.ReadUInt16();
+		if (DeferObjectPhysicsEvent(Guid, IncomingInstance, ACEOpcode::ObjectDelete, Reader, PayloadStart)) return;
+	}
 	DeleteWorldObject(Guid);
 }
 
@@ -1970,6 +2095,12 @@ void FACESession::DeleteWorldObject(int32 Guid)
 			|| (PlayerGuid != 0 && Obj->ParentGuid == PlayerGuid))
 		{
 			bKeepInventoryRecord = true;
+			// Inventory retains the weenie snapshot, not the deleted CPhysicsObj.
+			// A later full Create must rebuild its setup even if the instance is unchanged.
+			Obj->bPhysicsDescriptionPending = true;
+			Obj->bHasPhysicsTimestamps = false;
+			FMemory::Memzero(Obj->PhysicsTimestamps, sizeof(Obj->PhysicsTimestamps));
+			Obj->bDying = false;
 			Obj->bHasPosition = false;
 			Obj->ParentGuid = 0;
 			Obj->ParentLocation = 0;
@@ -1993,6 +2124,7 @@ void FACESession::DeleteWorldObject(int32 Guid)
 
 void FACESession::MaintainWorldObjectVisibility(double Now, TFunctionRef<bool(int32)> IsCellInPVS)
 {
+	ExpireObjectPhysicsEvents(Now);
 	if (PlayerGuid == 0) return;
 	// Retail CPhysicsObj::prepare_to_leave_visibility and CObjectMaint::UseTime
 	// retain lost objects for 25 seconds. Servers then forget the observer without
@@ -2339,6 +2471,9 @@ void FACESession::HandleGameEvent(FACEBinaryReader& Reader)
 		break;
 	case ACEGameEvent::UpdateHealth:
 		HandleUpdateHealth(Reader);
+		break;
+	case ACEGameEvent::QueryItemManaResponse:
+		HandleQueryItemManaResponse(Reader);
 		break;
 	case ACEGameEvent::IdentifyObjectResponse:
 		HandleIdentifyObjectResponse(Reader);
@@ -3711,6 +3846,34 @@ void FACESession::SetSelectedObjectInternal(const FACESelectedObject& Sel)
 	OnSelectionChanged.Broadcast(SelectedObject);
 }
 
+bool FACESession::CanQueryObjectHealth(int32 Guid) const
+{
+	const FACEWorldObject* Object = WorldObjects.Find(Guid);
+	if (!Object || Object->StackSize > 1) return false;
+	if (Guid == PlayerGuid || Object->bIsPlayer || Object->PetOwnerId) return true;
+	if (!(Object->ItemType & ACEItemType::Creature)) return false;
+	const auto* Player = WorldObjects.Find(PlayerGuid);
+	return Object->IsAttackable() || (Object->ObjectDescriptionFlags & ACEObjectDescFlag::FreePkStatus)
+		|| (Player && (Player->ObjectDescriptionFlags & ACEObjectDescFlag::FreePkStatus));
+}
+
+bool FACESession::CanQueryItemMana(int32 Guid) const
+{
+	const FACEWorldObject* Item = WorldObjects.Find(Guid);
+	if (!Item || Guid == PlayerGuid || Item->StackSize > 1 || CanQueryObjectHealth(Guid)) return false;
+	// IsOwnedByPlayer includes equipped items and items inside owned packs.
+	TSet<int32> Seen;
+	while (Item && !Seen.Contains(Item->Guid))
+	{
+		Seen.Add(Item->Guid);
+		const int32 Owner = Item->WielderId ? Item->WielderId : Item->ContainerId ? Item->ContainerId : Item->ParentGuid;
+		if (!Owner) return false;
+		if (Owner == PlayerGuid) return true;
+		Item = WorldObjects.Find(Owner);
+	}
+	return false;
+}
+
 void FACESession::SelectObject(int32 ObjectGuid)
 {
 	if (State != EACESessionState::InWorld)
@@ -3719,6 +3882,7 @@ void FACESession::SelectObject(int32 ObjectGuid)
 	}
 
 	FACESelectedObject Sel;
+	int32 HealthTarget = 0;
 	if (ObjectGuid != 0)
 	{
 		FACEWorldObject Obj;
@@ -3727,9 +3891,16 @@ void FACESession::SelectObject(int32 ObjectGuid)
 			Sel.Guid = ObjectGuid;
 			Sel.Name = Obj.Name;
 			Sel.bValid = true;
-			const bool bCreature = (Obj.ItemType & ACEItemType::Creature) != 0 || Obj.bIsPlayer;
-			Sel.bShowHealth = bCreature;
-			Sel.HealthFraction = 1.f;
+			// gmToolbarUI: stacks take priority, then player/pet/attackable
+			// health, then owned-item mana. Meters appear only after a reply.
+			if (CanQueryObjectHealth(ObjectGuid)) HealthTarget = ObjectGuid;
+			if (SelectedObject.Guid == ObjectGuid)
+			{
+				Sel.HealthFraction = SelectedObject.HealthFraction;
+				Sel.bShowHealth = HealthTarget && SelectedObject.bShowHealth;
+				Sel.ManaFraction = SelectedObject.ManaFraction;
+				Sel.bShowMana = CanQueryItemMana(ObjectGuid) && SelectedObject.bShowMana;
+			}
 		}
 		else
 		{
@@ -3741,8 +3912,16 @@ void FACESession::SelectObject(int32 ObjectGuid)
 	SetSelectedObjectInternal(Sel);
 
 	FACEBinaryWriter W;
-	W.WriteUInt32(static_cast<uint32>(ObjectGuid));
+	W.WriteUInt32(static_cast<uint32>(HealthTarget));
 	SendGameAction(ACEGameAction::QueryHealth, W.GetData(), ACEQueue::WeenieQueue);
+	const int32 ManaTarget = CanQueryItemMana(ObjectGuid) ? ObjectGuid : 0;
+	if (ManaTarget || SelectedManaQueryGuid)
+	{
+		SelectedManaQueryGuid = ManaTarget;
+		FACEBinaryWriter Mana;
+		Mana.WriteUInt32(static_cast<uint32>(ManaTarget));
+		SendGameAction(ACEGameAction::QueryItemMana, Mana.GetData(), ACEQueue::WeenieQueue);
+	}
 }
 
 void FACESession::SendIdentifyObject(int32 ObjectGuid)
@@ -5092,10 +5271,33 @@ void FACESession::HandleUpdateHealth(FACEBinaryReader& Reader)
 	OnObjectHealth.Broadcast(Guid, Fraction);
 	if (SelectedObject.bValid && SelectedObject.Guid == Guid)
 	{
+		if (!CanQueryObjectHealth(Guid)) return;
 		SelectedObject.HealthFraction = FMath::Clamp(Fraction, 0.f, 1.f);
 		SelectedObject.bShowHealth = true;
+		SelectedObject.bShowMana = false;
 		OnSelectionChanged.Broadcast(SelectedObject);
 	}
+}
+
+void FACESession::HandleQueryItemManaResponse(FACEBinaryReader& Reader)
+{
+	if (!Reader.CanRead(12)) return;
+	const int32 Guid = int32(Reader.ReadUInt32());
+	const float Fraction = Reader.ReadFloat();
+	const bool Success = Reader.ReadUInt32() != 0;
+	if (!SelectedObject.bValid || Guid != SelectedObject.Guid || Guid != SelectedManaQueryGuid) return;
+	const bool Show = Success && FMath::IsFinite(Fraction) && CanQueryItemMana(Guid);
+	SelectedObject.bShowMana = Show;
+	SelectedObject.ManaFraction = Show ? FMath::Clamp(Fraction, 0.f, 1.f) : 0.f;
+	if (!Show)
+	{
+		// Retail stops polling non-magical items after the unsuccessful reply.
+		SelectedManaQueryGuid = 0;
+		FACEBinaryWriter Cancel;
+		Cancel.WriteUInt32(0);
+		SendGameAction(ACEGameAction::QueryItemMana, Cancel.GetData(), ACEQueue::WeenieQueue);
+	}
+	OnSelectionChanged.Broadcast(SelectedObject);
 }
 
 void FACESession::HandleIdentifyObjectResponse(FACEBinaryReader& Reader)
@@ -5567,6 +5769,7 @@ void FACESession::HandleApproachVendor(FACEBinaryReader& Reader)
 			break;
 		}
 		FACEWorldObject Obj;
+		Obj.bPhysicsDescriptionPending = true; // PublicWeenieDesc has no physics/model payload.
 		Obj.Guid = Decoded.Guid;
 		Obj.Name = Decoded.Name;
 		Obj.PluralName = Decoded.PluralName;
@@ -6026,7 +6229,9 @@ void FACESession::ApplyPlayerInventoryProfile()
     RestampContainerListPlacements(PlayerGuid);
     for (const auto& Entry : LoginEquipment)
     {
+        const bool bNewStub = !WorldObjects.Contains(Entry.Key);
         FACEWorldObject& Obj = WorldObjects.FindOrAdd(Entry.Key);
+        if (bNewStub) Obj.bPhysicsDescriptionPending = true;
         Obj.Guid = Entry.Key;
         Obj.ContainerId = 0;
         Obj.WielderId = PlayerGuid;
@@ -6119,6 +6324,7 @@ void FACESession::HandleInventoryPutObjInContainer(FACEBinaryReader& Reader)
 		// ContainId can arrive after we forgot a foreign object's world entry; keep a stub for UI.
 		FACEWorldObject Stub;
 		Stub.Guid = ItemGuid;
+		Stub.bPhysicsDescriptionPending = true;
 		WorldObjects.Add(ItemGuid, Stub);
 		Obj = WorldObjects.Find(ItemGuid);
 	}
@@ -6400,14 +6606,19 @@ void FACESession::HandleInventoryServerSaveFailed(FACEBinaryReader& Reader)
 
 void FACESession::HandlePickupEvent(FACEBinaryReader& Reader)
 {
+	const int32 PayloadStart = Reader.Tell();
 	// Physics PickupEvent (0xF74A) removes a held/world visual. A missile
 	// launch sends it for the equipped STACK before SetStackSize + reload.
 	if (!Reader.CanRead(8)) return;
 	const int32 ItemGuid = static_cast<int32>(Reader.ReadUInt32());
-	Reader.ReadUInt16(); // instance seq
-	Reader.ReadUInt16(); // position seq
+	const uint16 IncomingInstance = Reader.ReadUInt16();
+	const uint16 IncomingPosition = Reader.ReadUInt16();
+	if (DeferObjectPhysicsEvent(ItemGuid, IncomingInstance, ACEOpcode::PickupEvent, Reader, PayloadStart)) return;
 	if (FACEWorldObject* Obj = WorldObjects.Find(ItemGuid))
 	{
+		if (Obj->bHasPhysicsTimestamps
+			&& !ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Position], IncomingPosition)) return;
+		Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Position] = IncomingPosition;
 		const bool bWasEquipped = Obj->CurrentWieldedLocation != 0
 			&& (Obj->WielderId == PlayerGuid || Obj->ParentGuid == PlayerGuid);
 		const bool bHeldAmmo = bWasEquipped && (Obj->CurrentWieldedLocation & (ACEEquipMask::MissileAmmo | ACEEquipMask::MissileWeapon)) != 0;
@@ -6432,6 +6643,7 @@ void FACESession::HandlePickupEvent(FACEBinaryReader& Reader)
 }
 void FACESession::HandleParentEvent(FACEBinaryReader& Reader)
 {
+	const int32 PayloadStart = Reader.Tell();
 	// Physics ParentEvent (0xF749): parentGuid, childGuid, parentLocation, placement, seqs.
 	if (!Reader.CanRead(20))
 	{
@@ -6443,24 +6655,12 @@ void FACESession::HandleParentEvent(FACEBinaryReader& Reader)
 	const int32 Placement = static_cast<int32>(Reader.ReadInt32());
 	const uint16 IncomingInstance = Reader.ReadUInt16();
 	const uint16 IncomingPosOrParent = Reader.ReadUInt16();
+	if (DeferObjectPhysicsEvent(ChildGuid, IncomingInstance, ACEOpcode::ParentEvent, Reader, PayloadStart)) return;
 	if (FACEWorldObject* Obj = WorldObjects.Find(ChildGuid))
 	{
-		if (Obj->bHasPhysicsTimestamps)
-		{
-			if (!ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Position], IncomingPosOrParent)
-				&& !ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance], IncomingInstance))
-			{
-				return;
-			}
-			if (ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Position], IncomingPosOrParent))
-			{
-				Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Position] = IncomingPosOrParent;
-			}
-			if (ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance], IncomingInstance))
-			{
-				Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] = IncomingInstance;
-			}
-		}
+		if (Obj->bHasPhysicsTimestamps
+			&& !ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Position], IncomingPosOrParent)) return;
+		Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Position] = IncomingPosOrParent;
 		if (ParentGuid == 0 || ParentLocation == 0)
 		{
 			// Detach held mesh — do not clear ContainerId (ContainId / PickupEvent own that).
@@ -7039,6 +7239,7 @@ bool FACESession::GetWorldObject(int32 Guid, FACEWorldObject& Out) const
 
 void FACESession::HandleUpdatePosition(FACEBinaryReader& Reader)
 {
+	const int32 PayloadStart = Reader.Tell();
 	const int32 Guid = static_cast<int32>(Reader.ReadUInt32());
 	const uint32 PosFlags = Reader.ReadUInt32();
 	FACEPosition Pos;
@@ -7080,6 +7281,7 @@ void FACESession::HandleUpdatePosition(FACEBinaryReader& Reader)
 		const uint16 IncomingPosition = Reader.ReadUInt16();
 		const uint16 IncomingTeleport = Reader.ReadUInt16();
 		const uint16 IncomingForce = Reader.ReadUInt16();
+		if (DeferObjectPhysicsEvent(Guid, IncomingInstance, ACEOpcode::UpdatePosition, Reader, PayloadStart)) return;
 		Pos.bHasTeleportSequence = true;
 		Pos.TeleportSequence = IncomingTeleport;
 
@@ -7509,6 +7711,7 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 
 void FACESession::HandleVectorUpdate(FACEBinaryReader& Reader)
 {
+	const int32 PayloadStart = Reader.Tell();
 	// GameMessageVectorUpdate: guid, velocity xyz, omega xyz, instance seq, vector seq.
 	if (!Reader.CanRead(4 + 12 + 12 + 4))
 	{
@@ -7525,6 +7728,7 @@ void FACESession::HandleVectorUpdate(FACEBinaryReader& Reader)
 	AceOmega.Z = Reader.ReadFloat();
 	const uint16 Instance = Reader.ReadUInt16();
 	const uint16 VectorSequence = Reader.ReadUInt16();
+	if (DeferObjectPhysicsEvent(Guid, Instance, ACEOpcode::VectorUpdate, Reader, PayloadStart)) return;
 
 	if (FACEWorldObject* Obj = WorldObjects.Find(Guid))
 	{
@@ -7542,6 +7746,7 @@ void FACESession::HandleVectorUpdate(FACEBinaryReader& Reader)
 
 void FACESession::HandleSetState(FACEBinaryReader& Reader)
 {
+	const int32 PayloadStart = Reader.Tell();
 	if (!Reader.CanRead(12))
 	{
 		return;
@@ -7550,24 +7755,12 @@ void FACESession::HandleSetState(FACEBinaryReader& Reader)
 	const int32 PhysicsState = static_cast<int32>(Reader.ReadUInt32());
 	const uint16 IncomingInstance = Reader.ReadUInt16();
 	const uint16 IncomingState = Reader.ReadUInt16();
+	if (DeferObjectPhysicsEvent(Guid, IncomingInstance, ACEOpcode::SetState, Reader, PayloadStart)) return;
 	if (FACEWorldObject* Obj = WorldObjects.Find(Guid))
 	{
-		if (Obj->bHasPhysicsTimestamps)
-		{
-			if (!ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::State], IncomingState)
-				&& !ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance], IncomingInstance))
-			{
-				return;
-			}
-			if (ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::State], IncomingState))
-			{
-				Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::State] = IncomingState;
-			}
-			if (ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance], IncomingInstance))
-			{
-				Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] = IncomingInstance;
-			}
-		}
+		if (Obj->bHasPhysicsTimestamps
+			&& !ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::State], IncomingState)) return;
+		Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::State] = IncomingState;
 		Obj->PhysicsState = PhysicsState;
 	}
 	OnPhysicsStateUpdate.Broadcast(Guid, PhysicsState);

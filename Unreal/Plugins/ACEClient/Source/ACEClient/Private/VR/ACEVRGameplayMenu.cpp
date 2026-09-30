@@ -5,6 +5,8 @@
 #include "VR/ACEVRMath.h"
 #include "ACECharacterAppearanceComponent.h"
 #include "ACEClientSubsystem.h"
+#include "ACEDatSubsystem.h"
+#include "Engine/GameInstance.h"
 #include "ACEPlayerController.h"
 #include "Components/WidgetComponent.h"
 #include "Components/SceneComponent.h"
@@ -35,6 +37,7 @@ void UACEVRComponent::UpdateGameplayMenu(bool Visible,float Dt)
         GameplayMenuPanel->RegisterComponent();
         GameplayMenuPanel->SetWidget(GameplayMenu);
     }
+    bool InspectionRedraw=false;
     if(GameplayMenuPanel)
     {
 		bool Redraw=Visible && !GameplayMenuPanel->IsVisible();
@@ -69,8 +72,43 @@ void UACEVRComponent::UpdateGameplayMenu(bool Visible,float Dt)
 			Redraw|=MenuPointerState!=PointerState;MenuPointerState=PointerState;
 		}
 		if(Redraw)GameplayMenuPanel->RequestRedraw();
+        InspectionRedraw=Redraw;
     }
-    const int32 DragGuid=Visible && GameplayMenu && GameplayMenu->bItemDragging?GameplayMenu->DragItem:0;
+    const bool ShowInspection=Visible && GameplayMenu && GameplayMenu->IsInspectionOpen();
+    if(ShowInspection && !MenuInspectionPanel)
+    {
+        MenuInspectionPanel=NewObject<UACEVRWidgetComponent>(PresentationActor,TEXT("VRMenuInspection"));
+        PresentationActor->AddInstanceComponent(MenuInspectionPanel);
+        MenuInspectionPanel->SetWidgetSpace(EWidgetSpace::World);MenuInspectionPanel->SetDrawSize(FVector2D(460,960));
+        MenuInspectionPanel->SetBlendMode(EWidgetBlendMode::Transparent);MenuInspectionPanel->SetBackgroundColor(FLinearColor::Transparent);
+        MenuInspectionPanel->SetTwoSided(true);MenuInspectionPanel->SetCastShadow(false);MenuInspectionPanel->SetTranslucentSortPriority(30);
+        MenuInspectionPanel->SetWindowFocusable(false);MenuInspectionPanel->SetTickWhenOffscreen(true);
+        MenuInspectionPanel->SetManuallyRedraw(true);MenuInspectionPanel->SetRedrawTime(1.f/60.f);MenuInspectionPanel->SetCollisionProfileName(TEXT("UI"));
+        MenuInspectionPanel->RegisterComponent();MenuInspectionPanel->AttachToComponent(GameplayMenuPanel,FAttachmentTransformRules::SnapToTargetIncludingScale);
+        MenuInspectionPanel->SetRelativeLocation(FVector(0,-850,0));
+        MenuInspectionPanel->SetSlateWidget(GameplayMenu->GetInspectionWidget());InspectionRedraw=true;
+    }
+    if(MenuInspectionPanel)
+    {
+        InspectionRedraw|=ShowInspection && !MenuInspectionPanel->IsVisible();
+        MenuInspectionPanel->SetVisibility(ShowInspection);MenuInspectionPanel->SetComponentTickEnabled(ShowInspection);
+        MenuInspectionPanel->SetCollisionEnabled(ShowInspection?ECollisionEnabled::QueryOnly:ECollisionEnabled::NoCollision);
+        if(ShowInspection)
+        {
+            uint8 PointerState=(bLeftPointerPressed?1:0)|(bRightPointerPressed?2:0);
+            for(int32 I=0;I<2;++I)
+            {
+                auto* Pointer=I==0?LeftPointer.Get():RightPointer.Get();
+                if(!Pointer || Pointer->GetHoveredWidgetComponent()!=MenuInspectionPanel)continue;
+                PointerState|=uint8(4<<I);
+                const FVector2D P=Pointer->Get2DHitLocation();
+                if(!P.Equals(InspectionPointerPositions[I],.5f)){InspectionRedraw=true;InspectionPointerPositions[I]=P;}
+            }
+            InspectionRedraw|=InspectionPointerState!=PointerState;InspectionPointerState=PointerState;
+            if(InspectionRedraw)MenuInspectionPanel->RequestRedraw();
+        }
+    }
+    const int32 DragGuid=Visible && GameplayMenu && GameplayMenu->bItemDragging?(GameplayMenu->DragSpell?-GameplayMenu->DragSpell:GameplayMenu->DragItem):0;
     if(DragGuid && !MenuDragPanel)
     {
         MenuDragPanel=NewObject<UACEVRWidgetComponent>(PresentationActor,TEXT("NativeInventoryDrag"));
@@ -85,8 +123,14 @@ void UACEVRComponent::UpdateGameplayMenu(bool Visible,float Dt)
     {
         if(DragGuid && MenuDragGuid!=DragGuid)
         {
-            FACEWorldObject Item;Client->GetWorldObject(DragGuid,Item);
-            MenuDragPanel->SetSlateWidget(SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Center)[GameplayMenu->ItemIcon(Item)]);
+            if(DragGuid<0)
+            {
+                auto* Dat=Client->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();FString Name;uint32 Icon=0;
+                if(Dat)Dat->TryGetSpellInfo(-DragGuid,Name,Icon);
+                MenuDragPanel->SetSlateWidget(SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Center)[GameplayMenu->Icon(Icon)]);
+            }
+            else {FACEWorldObject Item;Client->GetWorldObject(DragGuid,Item);
+                MenuDragPanel->SetSlateWidget(SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Center)[GameplayMenu->ItemIcon(Item)]);}
             MenuDragPanel->RequestRedraw();
         }
         MenuDragGuid=DragGuid;MenuDragPanel->SetVisibility(DragGuid!=0);MenuDragPanel->SetComponentTickEnabled(DragGuid!=0);

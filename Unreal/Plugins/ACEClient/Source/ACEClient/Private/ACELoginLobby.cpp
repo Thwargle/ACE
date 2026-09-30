@@ -195,7 +195,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	AccountBox=Field(UserColumn,TEXT("Username"),TEXT("AccountBox")); PasswordBox=Field(PasswordColumn,TEXT("Password"),TEXT("PasswordBox"),true);
 	Row(Details,{{TEXT("Save account"),TEXT("saveaccount")},{TEXT("New account"),TEXT("newaccount")},{TEXT("Remove account"),TEXT("removeaccount")}});
 	LoginButton=ActionButton(TEXT("Launch"),TEXT("launch"),FString(),true); AddLine(Details,LoginButton,8);
-	AddLine(Details,Label(TEXT("Accounts are saved securely on this device."),14,true),0);
+	AddLine(Details,Label(PLATFORM_LINUX ? TEXT("Account names are saved. Enter your password again after restarting.") : TEXT("Accounts are saved securely on this device."),14,true),0);
 	// Server editor: explicit save/cancel avoids sending credentials to an edited endpoint by accident.
 	UVerticalBox* Edit; Pages->AddChild(Card(Edit));
 	AddLine(Edit,Label(TEXT("Server details"),30),18);
@@ -232,7 +232,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	Row(Files,{{TEXT("Save location"),TEXT("savedat")},{TEXT("Use default"),TEXT("defaultdat")}});
 #else
 	Row(Files,{{TEXT("Save location"),TEXT("savedat")},{TEXT("Use app DAT folder"),TEXT("defaultdat")}});
-	AddLine(Files,Label(TEXT("On Quest, the folder must be accessible to this app. The installer uses the app's DAT folder."),18,true),20);
+	AddLine(Files,Label(PLATFORM_LINUX ? TEXT("Enter an absolute Linux folder path. DAT filenames are case sensitive.") : TEXT("On Quest, the folder must be accessible to this app. The installer uses the app's DAT folder."),18,true),20);
 #endif
 	FileStatus=Label(TEXT(""),20); AddLine(Files,FileStatus,24);
 	AddLine(Files,Label(TEXT("Changing an already-loaded installation takes effect after restarting. No game files are moved or copied."),18,true));
@@ -263,16 +263,21 @@ void UACELoginWidget::EnsureDefaultLayout()
 	AutoUpdateCheckBox->SetIsChecked(false);
 	AutoUpdateCheckBox->OnCheckStateChanged.AddDynamic(this,&UACELoginWidget::OnAutoUpdateChanged);
 	AddLine(Updates,AutoUpdateCheckBox,8);
+#if PLATFORM_LINUX
+	AutoUpdateCheckBox->SetVisibility(ESlateVisibility::Collapsed);
+	AddLine(Updates,Label(TEXT("Linux updates are downloaded in your browser. Close the game and extract the new archive before launching it."),16,true));
+#else
 	AddLine(Updates,Label(TEXT("Off by default. When enabled, checks every 15 minutes in the launcher and updates before you log in. Never interrupts gameplay. Cancel pauses automatic updates until the next app launch or Check now."),16,true));
+#endif
 	UpdateText=Label(TEXT("Checking for updates..."),20); AddLine(Updates,UpdateText,20);
 	UpdateProgress=WidgetTree->ConstructWidget<UProgressBar>(); UpdateProgress->SetFillColorAndOpacity(Gold);
 	auto* ProgressSize=WidgetTree->ConstructWidget<USizeBox>(); ProgressSize->SetHeightOverride(16); ProgressSize->SetContent(UpdateProgress); AddLine(Updates,ProgressSize,20);
 	auto* UpdateActions=WidgetTree->ConstructWidget<UWrapBox>(); UpdateActions->SetInnerSlotPadding(FVector2D(10,10)); AddLine(Updates,UpdateActions,20);
 	CheckUpdateButton=ActionButton(TEXT("Check now"),TEXT("checkupdate")); UpdateActions->AddChildToWrapBox(CheckUpdateButton);
-	DownloadUpdateButton=ActionButton(TEXT("Download update"),TEXT("downloadupdate"),FString(),true); UpdateActions->AddChildToWrapBox(DownloadUpdateButton);
+	DownloadUpdateButton=ActionButton(PLATFORM_LINUX?TEXT("Open Linux download"):TEXT("Download update"),TEXT("downloadupdate"),FString(),true); UpdateActions->AddChildToWrapBox(DownloadUpdateButton);
 	InstallUpdateButton=ActionButton(PLATFORM_ANDROID?TEXT("Install"):TEXT("Install and restart"),TEXT("installupdate"),FString(),true); UpdateActions->AddChildToWrapBox(InstallUpdateButton);
 	CancelUpdateButton=ActionButton(TEXT("Cancel update"),TEXT("cancelupdate")); UpdateActions->AddChildToWrapBox(CancelUpdateButton);
-	UpdateInstallHelp=Label(ACEUpdates::InstallationNotice(PLATFORM_ANDROID),18,true); AddLine(Updates,UpdateInstallHelp);
+	UpdateInstallHelp=Label(PLATFORM_LINUX?TEXT("Extract each release into a new folder. Saved settings and DAT files are kept separately."):ACEUpdates::InstallationNotice(PLATFORM_ANDROID),18,true); AddLine(Updates,UpdateInstallHelp);
 	Row(Updates,{{TEXT("Release notes"),TEXT("updatenotes")},{TEXT("Back to play"),TEXT("play")}});
 	// Inline destructive-action confirmation is also fully usable with VR pointers.
 	FooterSize=WidgetTree->ConstructWidget<USizeBox>(); FooterSize->SetWidthOverride(1028);
@@ -317,6 +322,9 @@ void UACELoginWidget::NativeConstruct()
 			&& FFileHelper::LoadFileToString(Cached,*ACELoginProfile::DirectoryCachePath())) ACELoginProfile::ParseDirectory(Cached,Directory,Error);
 		SetStatus(TEXT("Select a server and account, then launch."));
 	}
+#if PLATFORM_LINUX
+	Profile.bAutoUpdate=false;
+#endif
 	AutoUpdateCheckBox->SetIsChecked(Profile.bAutoUpdate);
 	if (Updater) { Updater->SetAutoUpdateEnabled(Profile.bAutoUpdate); Updater->Check(true); }
 	RefreshUpdateControls();
@@ -392,7 +400,7 @@ void UACELoginWidget::RefreshUpdateControls()
 	UpdateProgress->SetPercent(State==EACEUpdateState::Ready || State==EACEUpdateState::InstallNotice || State==EACEUpdateState::Installing?1.f:Updater->Progress());
 	CheckUpdateButton->SetIsEnabled(!Busy && State!=EACEUpdateState::Checking);
 	DownloadUpdateButton->SetVisibility(Available && !Busy && State!=EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
-	InstallUpdateButton->SetVisibility(State==EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
+	InstallUpdateButton->SetVisibility(!PLATFORM_LINUX && State==EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
 	CancelUpdateButton->SetVisibility(State==EACEUpdateState::Downloading || State==EACEUpdateState::Verifying || State==EACEUpdateState::InstallNotice?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
 	AutoUpdateCheckBox->SetIsEnabled(State!=EACEUpdateState::Installing);
 	LoginButton->SetIsEnabled(!Busy && Profile.SelectedServer()!=nullptr);
@@ -636,7 +644,7 @@ void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 	else if (Action==TEXT("files")) { Pages->SetActiveWidgetIndex(3); UpdateDatStatus(); }
 	else if (Action==TEXT("defaultdat"))
 	{
-#if PLATFORM_ANDROID
+#if PLATFORM_ANDROID || PLATFORM_LINUX
 		DatBox->SetText(FText::FromString(FPaths::ProjectSavedDir()/TEXT("DAT")));
 #else
 		DatBox->SetText(FText::FromString(TEXT("C:/Turbine/Asheron's Call")));

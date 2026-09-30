@@ -237,7 +237,7 @@ bool UACEVRComponent::IsPointerNearPanel(bool Left, FVector* Impact) const
 	const auto* Aim = Left ? LeftAim.Get() : RightAim.Get();
 	if (!Aim || !Aim->IsTracked()) return false;
 	const FVector Origin = Aim->GetComponentLocation(), Direction = Aim->GetForwardVector();
-	for (auto* Panel : {WristPanel.Get(), RetailPanel.Get(), GameplayMenuPanel.Get(), SettingsPanel.Get(), MenuControlsPanel.Get(), OptionsControlsPanel.Get()})
+	for (auto* Panel : {WristPanel.Get(), RetailPanel.Get(), GameplayMenuPanel.Get(), MenuInspectionPanel.Get(), SettingsPanel.Get(), MenuControlsPanel.Get(), OptionsControlsPanel.Get()})
 	{
 		if (!Panel || !Panel->IsVisible() || Panel->GetCollisionEnabled() == ECollisionEnabled::NoCollision) continue;
 		const FVector Normal = Panel->GetForwardVector();
@@ -348,6 +348,15 @@ void UACEVRComponent::ToggleInventory()
 		PositionPanel(RetailPanel);
 	}
 	UpdatePanels();
+}
+
+void UACEVRComponent::RevealSalvagePanel()
+{
+	if(!bActive)return;
+	bUseDesktopMenu=false;PendingGameplayPage="Salvage";
+	if(GameplayMenu){GameplayMenu->OpenPage(PendingGameplayPage);PendingGameplayPage=NAME_None;}
+	if(bInventoryOpen && !bSettingsOpen)return;
+	DismissTextEntry();CancelGestures();bSettingsOpen=false;bInventoryOpen=true;PositionPanel(RetailPanel);
 }
 
 void UACEVRComponent::RevealRetailDialog(int32 Guid)

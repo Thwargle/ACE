@@ -64,10 +64,13 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEPanelResizeSocialTest;
 	friend class FACEInventoryUICostTest;
 	friend class FACEGameplayRefreshTest;
+	friend class FACESalvageTest;
+	friend class FACESelectionToolbarTest;
 
 public:
 	bool ScrollFellowship(float WheelDelta, FVector2D CanvasLocalPos);
 	bool ScrollAllegiance(float WheelDelta, FVector2D CanvasLocalPos);
+	bool ScrollSalvage(float WheelDelta, FVector2D CanvasLocalPos);
 	void Initialize(UACEClientSubsystem* InClient, UACEUIElementManager* InManager,
 		UACEUICanvasWidget* InCanvas, AACEPlayerController* InPC);
 	void Shutdown();
@@ -281,6 +284,7 @@ private:
 		VendorSell,
 		TradeSelf,
 		TradeOther,
+		Salvage,
 		OptionsList,
 		Examination,
 		Inscription,
@@ -929,6 +933,10 @@ private:
 	int32 OpenSalvageToolGuid = 0;
 	int32 SalvageMaterialType = 0;
 	TArray<int32> SalvageQueueGuids;
+	int32 SalvageScrollOffset = 0, SalvageVisibleSlots = 1;
+	UPROPERTY(Transient) TArray<TObjectPtr<UTextBlock>> SalvageLabels;
+	UPROPERTY(Transient) TArray<TObjectPtr<UBorder>> SalvageItemSelections;
+	UPROPERTY(Transient) TArray<TObjectPtr<UBorder>> SalvageItemBackgrounds;
 	UPROPERTY()
 	TArray<TObjectPtr<UBorder>> SalvageItemSlots;
 	UPROPERTY()
@@ -1201,6 +1209,7 @@ private:
 	int32 InvDragAmount = 0;
 	int32 InvDragShortcutSlot = INDEX_NONE;
 	bool bInvDragFromVendorSell = false;
+	bool bInvDragFromSalvage = false;
 	int32 HitTestShortcutSlot(FVector2D CanvasLocalPos) const;
 	int32 InvDragIconDid = 0;
 	int32 InvDragSourcePack = 0;
@@ -1375,6 +1384,8 @@ private:
 	void HideSalvagePanel();
 	void RefreshSalvageOverlays();
 	bool AddItemToSalvageQueue(int32 Guid);
+	bool CanAddItemToSalvageQueue(int32 Guid) const;
+	void SetSalvageScrollOffset(int32 Offset);
 	void RemoveItemFromSalvageQueue(int32 Guid);
 	void SubmitSalvageQueue();
 	/** Options panel (0x2100002B pages inlined under OptionsPanel_Field). */

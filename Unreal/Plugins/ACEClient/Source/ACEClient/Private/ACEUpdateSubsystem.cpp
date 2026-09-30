@@ -67,7 +67,7 @@ FString FACEUpdateRelease::DownloadURL() const
     return FString::Printf(TEXT("https://thwargle.com/downloads/ac/v%d/%s"), Number, *File);
 }
 
-bool ACEUpdates::ParseManifest(const FString& Json, bool bQuest, FACEUpdateRelease& Out, FString& Error)
+bool ACEUpdates::ParseManifest(const FString& Json, bool bQuest, FACEUpdateRelease& Out, FString& Error, bool bLinux)
 {
     Error = TEXT("The update information is invalid. Please try again later.");
     if (Json.Len() > 65536) return false;
@@ -79,15 +79,18 @@ bool ACEUpdates::ParseManifest(const FString& Json, bool bQuest, FACEUpdateRelea
     if (!Root->TryGetNumberField(TEXT("version"), Number) || !FMath::IsFinite(Number) || Number < 1 || Number > 100000 || Number != FMath::FloorToDouble(Number)) return false;
     if (!Root->TryGetObjectField(TEXT("updates"), Updates) || !(*Updates)->TryGetNumberField(TEXT("schema"), Schema) || Schema != 1)
     { Error = TEXT("This release does not offer in-game updates yet. Downloads are available on thwargle.com."); return false; }
-    if (!(*Updates)->TryGetObjectField(bQuest ? TEXT("quest") : TEXT("windows"), Artifact)) return false;
+    if (bQuest && bLinux) return false;
+    if (!(*Updates)->TryGetObjectField(bQuest ? TEXT("quest") : bLinux ? TEXT("linux") : TEXT("windows"), Artifact))
+    { if (bLinux) Error = TEXT("No Linux release is listed yet. Downloads are available on thwargle.com."); return false; }
     FACEUpdateRelease Parsed; Parsed.Number = int32(Number);
-    if (!Root->TryGetStringField(bQuest ? TEXT("questVersion") : TEXT("windowsVersion"), Parsed.Version)
+    if (!Root->TryGetStringField(bQuest ? TEXT("questVersion") : bLinux ? TEXT("linuxVersion") : TEXT("windowsVersion"), Parsed.Version)
         || !(*Artifact)->TryGetStringField(TEXT("file"), Parsed.File)
         || !(*Artifact)->TryGetStringField(TEXT("sha256"), Parsed.Sha256)
         || !(*Artifact)->TryGetNumberField(TEXT("bytes"), Bytes)) return false;
     if (!FMath::IsFinite(Bytes) || Bytes < 1 || Bytes > 2147483648. || Bytes != FMath::FloorToDouble(Bytes)) return false;
     Parsed.Bytes = int64(Bytes);
-    const FString Expected = (bQuest ? FString::Printf(TEXT("AC-VR-Quest-v%d.apk"), Parsed.Number) : FString::Printf(TEXT("AC-Unreal-Setup-v%d.exe"), Parsed.Number));
+    const FString Expected = bQuest ? FString::Printf(TEXT("AC-VR-Quest-v%d.apk"), Parsed.Number)
+        : bLinux ? FString::Printf(TEXT("AC-Unreal-Linux-v%d.tar.gz"), Parsed.Number) : FString::Printf(TEXT("AC-Unreal-Setup-v%d.exe"), Parsed.Number);
     if (Parsed.File != Expected || Parsed.Sha256.Len() != 64 || Parsed.Version.IsEmpty() || Parsed.Version.Len() > 48) return false;
     for (TCHAR C : Parsed.Sha256) if (!FChar::IsHexDigit(C)) return false;
     for (TCHAR C : Parsed.Version) if (!FChar::IsDigit(C) && C != '.' && !(bQuest && FString(TEXT("quest")).Contains(FString::Chr(C)))) return false;
@@ -155,6 +158,10 @@ void UACEUpdateSubsystem::Deinitialize() { Cancel(); Super::Deinitialize(); }
 
 void UACEUpdateSubsystem::SetAutoUpdateEnabled(bool bEnabled)
 {
+#if PLATFORM_LINUX
+    // Linux archives are replaced by the player after exiting the client.
+    bEnabled = false;
+#endif
     if (bAutoUpdateEnabled == bEnabled) return;
     bAutoUpdateEnabled = bEnabled;
     if (!bEnabled && (State == EACEUpdateState::InstallNotice
@@ -209,7 +216,7 @@ FString UACEUpdateSubsystem::CacheDirectory() const
 #endif
     return FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("Updates"));
 }
-FString UACEUpdateSubsystem::PayloadPath() const { return CacheDirectory() / (PLATFORM_ANDROID ? TEXT("update.apk") : TEXT("update.exe")); }
+FString UACEUpdateSubsystem::PayloadPath() const { return CacheDirectory() / (PLATFORM_ANDROID ? TEXT("update.apk") : PLATFORM_LINUX ? TEXT("update.tar.gz") : TEXT("update.exe")); }
 
 void UACEUpdateSubsystem::Check(bool bAutomatic)
 {
@@ -234,7 +241,7 @@ void UACEUpdateSubsystem::Check(bool bAutomatic)
         if (!Success || !Closed || !Response || Response->GetResponseCode() != 200 || Response->GetEffectiveURL() != ACEUpdates::ManifestURL)
         { Fail(TEXT("Could not check for updates. You can still log in; try again later.")); return; }
         FString Error;
-        if (!ACEUpdates::ParseManifest(Body->Text(), PLATFORM_ANDROID, Release, Error)) { Fail(Error); return; }
+        if (!ACEUpdates::ParseManifest(Body->Text(), PLATFORM_ANDROID, Release, Error, PLATFORM_LINUX)) { Fail(Error); return; }
         State = Release.Number > ACEClientBuild::ReleaseNumber ? EACEUpdateState::Available : EACEUpdateState::Current;
         Message = State == EACEUpdateState::Available ? FString::Printf(TEXT("Version %s is available (%.0f MB)."), *Release.Version, Release.Bytes / 1048576.) : TEXT("You have the latest version.");
     });
@@ -244,6 +251,11 @@ void UACEUpdateSubsystem::Check(bool bAutomatic)
 void UACEUpdateSubsystem::Download()
 {
     if (IsBusy() || !CanUseLobby() || Release.Number <= ACEClientBuild::ReleaseNumber) return;
+#if PLATFORM_LINUX
+    if (GIsEditor || FApp::IsUnattended()) return;
+    FPlatformProcess::LaunchURL(*Release.DownloadURL(), nullptr, nullptr);
+    Message = TEXT("Linux download opened in your browser. Close the game, extract the new archive, and run AC-Unreal.sh. Saved settings are kept.");
+#else
     ResetRequest(); State = EACEUpdateState::Downloading; Message = TEXT("Downloading update...");
     IFileManager::Get().MakeDirectory(*CacheDirectory(), true);
     uint64 Total = 0, Free = 0;
@@ -265,6 +277,7 @@ void UACEUpdateSubsystem::Download()
         VerifyDownload(PayloadPath() + TEXT(".part"), false);
     });
     if (!Request->ProcessRequest()) { Body->Close(); Request.Reset(); Fail(TEXT("Could not start the download. Please try again.")); }
+#endif
 }
 
 void UACEUpdateSubsystem::VerifyDownload(const FString& Path, bool bCached)
@@ -295,6 +308,9 @@ void UACEUpdateSubsystem::VerifyDownload(const FString& Path, bool bCached)
 
 void UACEUpdateSubsystem::Install(bool bVR)
 {
+#if PLATFORM_LINUX
+    Message = TEXT("On Linux, close the game and extract the new archive, then run AC-Unreal.sh. Saved settings are kept.");
+#else
     if (State != EACEUpdateState::Ready || !CanUseLobby()) return;
     bAutoInstallStarted = true; // Manual attempts must not be repeated by the automatic poll either.
     bInstallVR = bVR;
@@ -302,6 +318,7 @@ void UACEUpdateSubsystem::Install(bool bVR)
     const double Now = FPlatformTime::Seconds();
     InstallAt = Now + 8.;
     AdvanceInstallNotice(Now); // Give the message time to render and be read before closing the game.
+#endif
 }
 
 bool UACEUpdateSubsystem::AdvanceInstallNotice(double Now)
@@ -376,6 +393,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUpdateNoticeTest, "ACE.Updates.Installation
 bool FACEUpdateNoticeTest::RunTest(const FString&)
 {
     auto* Updater=NewObject<UACEUpdateSubsystem>(NewObject<UGameInstance>());
+#if PLATFORM_LINUX
+    Updater->State=EACEUpdateState::Ready;
+    Updater->Install(false);
+    TestEqual(TEXT("Linux does not schedule an in-game installer"),Updater->State,EACEUpdateState::Ready);
+    TestTrue(TEXT("Linux explains manual archive replacement"),Updater->Message.Contains(TEXT("extract the new archive")));
+    TestFalse(TEXT("Linux manual update guidance does not block login"),Updater->IsBusy());
+    return true;
+#else
     Updater->Release.Number=ACEClientBuild::ReleaseNumber+1;
     Updater->State=EACEUpdateState::Verifying;
     Updater->Install(false);
@@ -405,6 +430,7 @@ bool FACEUpdateNoticeTest::RunTest(const FString&)
     TestEqual(TEXT("Opting out cancels a pending automatic install"),Updater->State,EACEUpdateState::Ready);
     TestFalse(TEXT("Opt-out cannot leave a queued installation"),Updater->AdvanceInstallNotice(Deadline+60));
     return true;
+#endif
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEAutoUpdateTest, "ACE.Updates.AutomaticLobbyPolicy",
@@ -412,6 +438,16 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEAutoUpdateTest, "ACE.Updates.AutomaticLobby
 bool FACEAutoUpdateTest::RunTest(const FString&)
 {
     auto* Updater=NewObject<UACEUpdateSubsystem>(NewObject<UGameInstance>());
+#if PLATFORM_LINUX
+    Updater->SetAutoUpdateEnabled(true);
+    TestFalse(TEXT("Linux does not enable unsupported automatic installation"),Updater->IsAutoUpdateEnabled());
+    Updater->Release.Number=ACEClientBuild::ReleaseNumber+1;
+    Updater->State=EACEUpdateState::Available;
+    TestEqual(TEXT("Linux never downloads without a browser action"),Updater->TakeAutomaticAction(100,true),EACEAutoUpdateAction::None);
+    Updater->State=EACEUpdateState::Ready;
+    TestEqual(TEXT("Linux never starts an OS installer"),Updater->TakeAutomaticAction(100,true),EACEAutoUpdateAction::None);
+    return true;
+#else
     Updater->Release.Number=ACEClientBuild::ReleaseNumber+1;
     Updater->State=EACEUpdateState::Available;
     TestFalse(TEXT("Automatic updates default off"),Updater->IsAutoUpdateEnabled());
@@ -458,6 +494,7 @@ bool FACEAutoUpdateTest::RunTest(const FString&)
     Updater->Release.Number=ACEClientBuild::ReleaseNumber+1;
     TestEqual(TEXT("Turning the checkbox off leaves installation manual"),Updater->TakeAutomaticAction(5000,true),EACEAutoUpdateAction::None);
     return true;
+#endif
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUpdateManifestTest, "ACE.Updates.ManifestIntegrityAndCancellation",
@@ -469,6 +506,15 @@ bool FACEUpdateManifestTest::RunTest(const FString&)
     FACEUpdateRelease Win, Quest; FString Error;
     TestTrue(TEXT("Windows release parses"),ACEUpdates::ParseManifest(Json,false,Win,Error));
     TestTrue(TEXT("Quest direct APK parses"),ACEUpdates::ParseManifest(Json,true,Quest,Error));
+    const FString LinuxJson=Json.Replace(TEXT("windowsVersion"),TEXT("linuxVersion"))
+        .Replace(TEXT("\"windows\":"),TEXT("\"linux\":"))
+        .Replace(TEXT("AC-Unreal-Setup-v74.exe"),TEXT("AC-Unreal-Linux-v74.tar.gz"));
+    FACEUpdateRelease Linux;
+    TestTrue(TEXT("Linux selects the native archive"),ACEUpdates::ParseManifest(LinuxJson,false,Linux,Error,true));
+    TestEqual(TEXT("Linux download stays on the fixed publisher"),Linux.DownloadURL(),FString(TEXT("https://thwargle.com/downloads/ac/v74/AC-Unreal-Linux-v74.tar.gz")));
+    TestFalse(TEXT("Linux cannot select a Windows installer"),ACEUpdates::ParseManifest(Json,false,Linux,Error,true));
+    TestFalse(TEXT("Windows cannot select a Linux archive"),ACEUpdates::ParseManifest(LinuxJson,false,Linux,Error));
+    TestFalse(TEXT("Linux rejects a renamed Windows payload"),ACEUpdates::ParseManifest(LinuxJson.Replace(TEXT("AC-Unreal-Linux-v74.tar.gz"),TEXT("AC-Unreal-Setup-v74.exe")),false,Linux,Error,true));
     TestEqual(TEXT("APK uses the fixed HTTPS publisher"),Quest.DownloadURL(),FString(TEXT("https://thwargle.com/downloads/ac/v74/AC-VR-Quest-v74.apk")));
     for(const FString& Bad:TArray<FString>{Json.Replace(TEXT("AC-Unreal-Setup-v74.exe"),TEXT("../evil.exe")),
         Json.Replace(TEXT("AC-Unreal-Setup-v74.exe"),TEXT("https://other.invalid/a.exe")),

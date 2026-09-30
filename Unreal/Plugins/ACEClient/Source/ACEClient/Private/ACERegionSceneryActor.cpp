@@ -20,8 +20,9 @@ AACERegionSceneryActor::AACERegionSceneryActor()
 	ScriptComponent = CreateDefaultSubobject<UACEScriptComponent>(TEXT("ScriptComponent"));
 }
 
-bool AACERegionSceneryActor::InitializeFromSetup(int32 SetupId, float Scale, float InWorldScale, bool bEnableCollision)
+bool AACERegionSceneryActor::InitializeFromSetup(int32 SetupId, float Scale, float InWorldScale, bool bEnableCollision, bool bFromRegionDesc)
 {
+	bRegionTerrainScenery = bFromRegionDesc;
 	WorldScale = InWorldScale;
 	if (!Appearance || SetupId == 0)
 	{

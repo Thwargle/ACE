@@ -31,5 +31,6 @@ private:
 	TArray<float> Opacities;
 	int32 MaxParticles = 0;
 	int32 LastFlushedParticleCount = 0;
+	bool bLastFlushedUseActivePrefix = true;
 	bool bDirty = false;
 };

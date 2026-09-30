@@ -29,6 +29,7 @@ UCLASS(Config=Engine)
 class ACECLIENT_API UACEDatSubsystem : public UGameInstanceSubsystem, public FTickableGameObject
 {
 	GENERATED_BODY()
+	friend class FACEDeferredWorldAppearanceTest;
 
 public:
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
@@ -757,6 +758,14 @@ private:
 	FACEDatRegionSoundInfo RegionSoundInfo;
 	TMap<uint32, FACEDatScene> SceneCache;
 	TMap<uint32, FACEDatParticleEmitterInfo> ParticleEmitterInfoCache;
+	struct FGfxLightEstimate
+	{
+		FLinearColor Color = FLinearColor::White;
+		float Luminosity = 0.f;
+		bool bEstimated = false;
+	};
+	// Only resolved DAT assets are cached, so entries are bounded by the current DAT.
+	TMap<uint32, FGfxLightEstimate> GfxLightEstimateCache;
 	TMap<uint32, FACEDatPhysicsScript> PhysicsScriptCache;
 	TMap<uint32, FACEDatPhysicsScriptTable> PhysicsScriptTableCache;
 	TMap<uint32, FACEDatWave> WaveCache;

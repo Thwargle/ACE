@@ -86,11 +86,11 @@ void UACEVRMenu::SelectionChanged(const FACESelectedObject& S)
     FACEWorldObject Item;
     const bool Found=Client && Client->GetWorldObject(S.Guid,Item);
     Selected=Found && ((Page=="Inventory" && Item.ContainerId==Pack) || (Page=="Equipment" && Item.WielderId==Client->GetPlayerGuid())
-        || Page=="Inspect" || Page=="Loot" || Page=="Vendor" || Page=="Trade" || (Page=="Hotbars" && Client->IsOwnedInventoryItem(Item)))?S.Guid:0;
+        || Page=="Salvage" || Page=="Loot" || Page=="Vendor" || Page=="Trade" || (Page=="Hotbars" && Client->IsOwnedInventoryItem(Item)))?S.Guid:0;
     Confirmation.Reset();bDirty=true;
 }
 void UACEVRMenu::VitalsChanged(const FACEPlayerVitals&){if(Page=="Character")bDirty=true;}
-void UACEVRMenu::Appraised(const FACEAppraisalInfo& A){if(A.ObjectGuid==Selected)bDirty=true;}
+void UACEVRMenu::Appraised(const FACEAppraisalInfo& A){if(A.ObjectGuid==InspectItem)InspectionAppraisal=A;if(A.ObjectGuid==Selected || A.ObjectGuid==InspectItem)bDirty=true;}
 void UACEVRMenu::Changed(){Confirmation.Reset();bDirty=true;}
 void UACEVRMenu::ContextChanged(int32){bDirty=true;}
 void UACEVRMenu::OpenPage(FName InPage)
@@ -131,7 +131,7 @@ TSharedRef<SWidget> UACEVRMenu::Button(const FString& Text,TFunction<void()> Cli
 TSharedRef<SWidget> UACEVRMenu::RebuildWidget()
 {
     auto Nav=SNew(SVerticalBox);
-    const TCHAR* Names[]={TEXT("Inventory"),TEXT("Equipment"),TEXT("Spellbook"),TEXT("Fellowship"),TEXT("Character"),TEXT("Vendor"),TEXT("Loot"),TEXT("Trade"),TEXT("Inspect"),TEXT("More")};
+    const TCHAR* Names[]={TEXT("Inventory"),TEXT("Equipment"),TEXT("Spellbook"),TEXT("Fellowship"),TEXT("Character"),TEXT("Vendor"),TEXT("Loot"),TEXT("Trade"),TEXT("Salvage"),TEXT("More")};
     for(const auto* Name:Names)Nav->AddSlot().AutoHeight().Padding(2)[Button(Name,[this,Name](){OpenPage(Name);})];
     Nav->AddSlot().AutoHeight().Padding(2)[Button(TEXT("Close"),[this](){if(Rig)Rig->ToggleInventory();})];
     auto Content=SNew(SVerticalBox)
@@ -144,25 +144,25 @@ TSharedRef<SWidget> UACEVRMenu::RebuildWidget()
         +SHorizontalBox::Slot().FillWidth(1).Padding(12,0)[Content],12.f,true);
 }
 void UACEVRMenu::ReleaseSlateResources(bool Children)
-{ Super::ReleaseSlateResources(Children);Body.Reset();HoverLabel.Reset();ContentScroll.Reset();IconBrushes.Reset();IconTextures.Reset(); }
+{ Super::ReleaseSlateResources(Children);Body.Reset();HoverLabel.Reset();ContentScroll.Reset();InspectionWidget.Reset();InspectionBody.Reset();IconBrushes.Reset();IconTextures.Reset(); }
 void UACEVRMenu::RefreshIfDirty()
 {
     if(Client && MenuOwnerGuid!=Client->GetPlayerGuid())
     {
         MenuOwnerGuid=Pack=Client->GetPlayerGuid();Selected=Spell=UseSource=PageIndex=0;
-        Confirmation.Reset();Search.Reset();bAssignShortcut=false;bDirty=true;
+        Confirmation.Reset();Search.Reset();bAssignShortcut=false;bInspectionOpen=false;InspectItem=InspectSpell=0;bDirty=true;
     }
 	if(Client && Client->GetSession() && InventoryRevision!=Client->GetSession()->GetInventoryDataRevision())
 	{InventoryRevision=Client->GetSession()->GetInventoryDataRevision();bDirty=true;}
-    if(!bDirty || !Body || !Client || !Binder || DragItem)return;
+    if(!bDirty || !Body || !Client || !Binder || DragItem || DragSpell)return;
     bDirty=false;++RefreshCount;
-    Body->ClearChildren();ItemDestinations.Reset();IconBrushes.Reset();IconTextures.Reset();
+    Body->ClearChildren();ItemDestinations.Reset();MenuTargets.Reset();SpellDestinations.Reset();IconBrushes.Reset();IconTextures.Reset();
     if(HoverLabel)HoverLabel->SetText(FText::FromString(Page.ToString()));
     if(Page=="Inventory" || Page=="Equipment")BuildInventory();
+    else if(Page=="Salvage")BuildSalvage();
     else if(Page=="Spellbook")BuildSpells();
     else if(Page=="Fellowship")BuildFellowship();
     else if(Page=="Character")BuildCharacter();
-    else if(Page=="Inspect")BuildInspection();
     else if(Page=="Vendor")BuildVendor();
     else if(Page=="Loot")BuildLoot();
     else if(Page=="Trade")BuildTrade();
@@ -178,6 +178,7 @@ void UACEVRMenu::RefreshIfDirty()
     else if(Page=="Hotbars")BuildShortcuts();
     else BuildMore();
     if(!Confirmation.IsEmpty())Body->AddSlot().AutoHeight().Padding(4)[Label(Confirmation)];
+    if(bInspectionOpen)BuildInspection();
 }
 void UACEVRMenu::SelectItem(int32 Guid)
 {
@@ -209,7 +210,7 @@ void UACEVRMenu::Execute(FName Action)
     FACEWorldObject Item;const bool Valid=Client->GetWorldObject(Selected,Item);
     const int32 Amount=Valid?Binder->GetSelectedItemAmount(Selected):0;
     if(Action=="Use / Equip" && Valid)Binder->UseInventoryItem(Selected);
-    else if(Action=="Inspect"){Page="Inspect";if(Valid)Client->SendIdentifyObject(Selected);}
+    else if(Action=="Inspect")InspectSelection();
     else if(Action=="Move here" && Valid)Binder->MoveInventoryAmount(Selected,Pack,Client->GetPackItems(Pack).Num(),Amount);
     else if(Action=="Sell" && Valid)Binder->AddInventoryGuidToVendorSellCart(Selected,Amount);
     else if(Action=="Trade" && Valid)Binder->AddInventoryGuidToTrade(Selected,Amount);

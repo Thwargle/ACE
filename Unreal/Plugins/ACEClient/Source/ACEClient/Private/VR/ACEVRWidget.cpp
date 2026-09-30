@@ -172,6 +172,19 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 						+ SHorizontalBox::Slot().FillWidth(1)[Text(TAttribute<FText>::CreateLambda([Rig,Input=B.Input](){return FText::FromString(Rig.IsValid()?ACEVRInputLayout::ActionLabel(Rig->GetSettings()->GetButtonAction(Input)):FString());}),22)]
 						+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[Text(Literal(TEXT("\u25BC")),16)]]]];
 		}
+		Scroll->AddSlot().Padding(0,12)[Text(Literal(TEXT("Inventory and spellbook shortcuts")),24)];
+		Scroll->AddSlot().Padding(0,6)[Text(Literal(TEXT("These actions apply while the native menu is open. Point at an item or spell, or use the current selection.")),18)];
+		static TArray<TSharedPtr<FName>> MenuOptions={MakeShared<FName>(NAME_None),MakeShared<FName>("VRMenuUse"),MakeShared<FName>("VRMenuInspect")};
+		auto MenuLabel=[](FName Action){return Action=="VRMenuUse"?TEXT("Use / equip item"):Action=="VRMenuInspect"?TEXT("Inspect item / spell"):TEXT("Normal controller action");};
+		for(const auto& B:ACEVRInputLayout::Buttons())
+		{
+			Scroll->AddSlot().Padding(0,5)[SNew(SVerticalBox)
+				+SVerticalBox::Slot().AutoHeight()[Text(Literal(B.Physical),20)]
+				+SVerticalBox::Slot().AutoHeight()[SNew(SComboBox<TSharedPtr<FName>>).ComboBoxStyle(&MenuComboStyle()).ForegroundColor(MenuText).ContentPadding(FMargin(12,8)).OptionsSource(&MenuOptions)
+					.OnGenerateWidget_Lambda([MenuLabel](TSharedPtr<FName> Action){return SNew(STextBlock).Text(FText::FromString(MenuLabel(*Action))).Font(FCoreStyle::GetDefaultFontStyle("Regular",22));})
+					.OnSelectionChanged_Lambda([Rig,Input=B.Input](TSharedPtr<FName> Action,ESelectInfo::Type){if(Rig.IsValid() && Action)Rig->GetSettings()->SetMenuButtonAction(Input,*Action);})
+					[Text(TAttribute<FText>::CreateLambda([Rig,Input=B.Input,MenuLabel](){return FText::FromString(MenuLabel(Rig.IsValid()?Rig->GetSettings()->GetMenuButtonAction(Input):NAME_None));}),22)]]];
+		}
 		Scroll->AddSlot().Padding(0,6)[Button(Literal(TEXT("Restore default controller buttons")),[Rig](){if(Rig.IsValid())Rig->ResetButtonBindings();})];
 		Scroll=Sections[4];
 		Scroll->AddSlot().Padding(0,6)[Button(TAttribute<FText>::CreateLambda([]()

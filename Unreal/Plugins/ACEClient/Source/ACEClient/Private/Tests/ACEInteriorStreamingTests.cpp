@@ -4,6 +4,7 @@
 #include "HAL/IConsoleManager.h"
 #include "ACEParticleBatchComponent.h"
 #include "ACEDatSubsystem.h"
+#include "ACEEffectLightSubsystem.h"
 #include "ACEEnvCellActor.h"
 #include "ACEScriptComponent.h"
 #include "VR/ACEVRComponent.h"
@@ -50,6 +51,25 @@
 
 namespace
 {
+    struct FScopedEffectLightSettings
+    {
+        IConsoleVariable* Budget = IConsoleManager::Get().FindConsoleVariable(TEXT("ace.FXLightBudget"));
+        IConsoleVariable* MobileBudget = IConsoleManager::Get().FindConsoleVariable(TEXT("ace.FXLightBudgetMobile"));
+        IConsoleVariable* Distance = IConsoleManager::Get().FindConsoleVariable(TEXT("ace.FXLightMaxDistance"));
+        int32 SavedBudget = Budget->GetInt(), SavedMobileBudget = MobileBudget->GetInt();
+        float SavedDistance = Distance->GetFloat();
+        FScopedEffectLightSettings()
+        {
+            Budget->Set(8, ECVF_SetByCode); MobileBudget->Set(8, ECVF_SetByCode);
+            Distance->Set(3500.f, ECVF_SetByCode);
+        }
+        ~FScopedEffectLightSettings()
+        {
+            Budget->Set(SavedBudget, ECVF_SetByCode); MobileBudget->Set(SavedMobileBudget, ECVF_SetByCode);
+            Distance->Set(SavedDistance, ECVF_SetByCode);
+        }
+    };
+
     struct FInteriorTestWorld
     {
         UWorld* World;
@@ -586,12 +606,15 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEParticleDistanceTest, "ACE.RetailParity.Par
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEParticleDistanceTest::RunTest(const FString& Parameters)
 {
+    FScopedEffectLightSettings LightSettings;
     auto* Culling=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Particles.DistanceCulling"));
     auto* IdleInterval=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Particles.IdleTickInterval"));
     const float PreviousIdle=IdleInterval->GetFloat(); IdleInterval->Set(.1f,ECVF_SetByCode);
     const int32 Previous=Culling->GetInt(); Culling->Set(1,ECVF_SetByCode);
     ON_SCOPE_EXIT { Culling->Set(Previous,ECVF_SetByCode); IdleInterval->Set(PreviousIdle,ECVF_SetByCode); };
     FInteriorTestWorld Fixture;
+    auto* Lights=Fixture.World->GetSubsystem<UACEEffectLightSubsystem>();
+    if (!TestNotNull(TEXT("Particle distance fixture has a world light budget"),Lights)) return false;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
     if (!Dat || !Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
     auto* View=Fixture.World->SpawnActor<ACameraActor>();
@@ -629,13 +652,15 @@ bool FACEParticleDistanceTest::RunTest(const FString& Parameters)
     FX->TickEmitters(60.f);
     TestTrue(TEXT("Infinite ambient survives time spent distant"),!FX->ActiveEmitters.IsEmpty());
     Owner->SetActorLocation(Camera+FVector(100,0,0)); FX->TickEmitters(1.f/30.f); FX->TickParticleLights();
+    Lights->RefreshLights(.05f);
     auto& Near=FX->ActiveEmitters[0];
     FX->UpdateEffectTickInterval();
     TestEqual(TEXT("Visible ambient effects resume normal tick cadence"),FX->GetComponentTickInterval(),0.f);
     TestTrue(TEXT("Approaching a deferred emitter restores its authored initial population"),!Near.bDegraded && !Near.Particles.IsEmpty());
-    TestTrue(TEXT("Near luminous effect has a light"),!FX->ParticleLights.IsEmpty() && FX->ParticleLights[0]->IsVisible());
+    TestTrue(TEXT("Near luminous effect has a light"),Lights->GetVisibleLightCount(FX)>0);
     Owner->SetActorLocation(Camera+FVector(1000000,0,0)); FX->TickEmitters(1.f/30.f); FX->TickParticleLights();
-    TestTrue(TEXT("Leaving draw range hides batch and lights"),Near.bDegraded && (!Near.Batch || !Near.Batch->IsVisible()) && !FX->ParticleLights[0]->IsVisible());
+    Lights->RefreshLights(.05f);
+    TestTrue(TEXT("Leaving draw range hides batch and lights"),Near.bDegraded && (!Near.Batch || !Near.Batch->IsVisible()) && Lights->GetVisibleLightCount(FX)==0);
     const int32 Births=Near.TotalBorn; FX->TickEmitters(10.f);
     TestEqual(TEXT("Infinite ambient does not accumulate births while degraded"),Near.TotalBorn,Births);
     Culling->Set(0,ECVF_SetByCode); FX->TickEmitters(1.f/30.f);
@@ -673,6 +698,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailParticleLightingTest, "ACE.RetailPari
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACERetailParticleLightingTest::RunTest(const FString& Parameters)
 {
+    FScopedEffectLightSettings LightSettings;
     // These fixtures inspect the reference renderer's individual meshes.
     // RenderingAndReplication compares its pixels against the instanced path.
     auto* Batches=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Particles.Batched"));
@@ -680,6 +706,8 @@ bool FACERetailParticleLightingTest::RunTest(const FString& Parameters)
     ON_SCOPE_EXIT { Batches->Set(PreviousBatchMode,ECVF_SetByCode); };
 
     FInteriorTestWorld Fixture;
+    auto* Lights=Fixture.World->GetSubsystem<UACEEffectLightSubsystem>();
+    if (!TestNotNull(TEXT("Particle lighting fixture has a world light budget"),Lights)) return false;
     for (int32 Kind = 0; Kind < 3; ++Kind)
     {
         AActor* Owner = Kind == 0 ? Fixture.World->SpawnActor<APawn>()
@@ -690,9 +718,7 @@ bool FACERetailParticleLightingTest::RunTest(const FString& Parameters)
         Owner->AddInstanceComponent(FX); FX->RegisterComponent();
         auto CountLights = [&]()
         {
-            int32 Count = 0;
-            for (UPointLightComponent* Light : FX->ParticleLights) if (Light && Light->IsVisible() && Light->Intensity > 0) ++Count;
-            return Count;
+            return Lights->GetVisibleLightCount(FX);
         };
         auto& Emitter = FX->ActiveEmitters.AddDefaulted_GetRef();
         Emitter.LightLum = .8f;
@@ -704,6 +730,7 @@ bool FACERetailParticleLightingTest::RunTest(const FString& Parameters)
             for (uint32 Script = 0x5B; Script <= 0x66; ++Script)
             {
                 Emitter.SourcePlayScript = Script; FX->TickParticleLights();
+                Lights->RefreshLights(.05f);
                 TestEqual(TEXT("Directional blood splatter never lights the scene"), CountLights(), 0);
             }
         }
@@ -713,6 +740,7 @@ bool FACERetailParticleLightingTest::RunTest(const FString& Parameters)
         for (uint32 Script : {0u, 0x5Au, 0x67u, 0x8Du})
         {
             Emitter.SourcePlayScript = Script; FX->TickParticleLights();
+            Lights->RefreshLights(.05f);
             TestEqual(TEXT("Red non-blood effects retain their light on every owner type"), CountLights(), 1);
         }
         if (auto* Entity=Cast<AACEWorldEntityActor>(Owner))
@@ -721,13 +749,20 @@ bool FACERetailParticleLightingTest::RunTest(const FString& Parameters)
             Entity->SetActorLocation(FVector(900,400,200));
             Emitter.Particles[0].Position=FVector(-900,-400,0);
             Emitter.SourcePlayScript=4; FX->TickParticleLights();
-            TestTrue(TEXT("Projectile light travels with its head, not the fading trail centroid"),
-                FX->ParticleLights[0]->GetComponentLocation().Equals(Entity->GetActorLocation(),.01));
-            TestTrue(TEXT("Projectile illumination is bright enough to reach nearby surfaces"),FX->ParticleLights[0]->Intensity>=10.f);
+            Lights->RefreshLights(.05f);
+            auto* Light=Lights->FindParticleLight(FX,Emitter.InstanceId);
+            if (TestNotNull(TEXT("Projectile receives a shared scene light"),Light))
+            {
+                TestTrue(TEXT("Projectile light travels with its head, not the fading trail centroid"),
+                    Light->GetComponentLocation().Equals(Entity->GetActorLocation(),.01));
+                TestTrue(TEXT("Projectile illumination remains readable within the intensity cap"),Light->Intensity>=10.f && Light->Intensity<=12.f);
+            }
         }
         Emitter.SourcePlayScript = 0x60; FX->TickParticleLights();
+        Lights->RefreshLights(.05f);
         TestEqual(TEXT("Reused light is hidden for blood"), CountLights(), 0);
         FX->bEnvironmentWeather = true; Emitter.SourcePlayScript = 0; FX->TickParticleLights();
+        Lights->RefreshLights(.05f);
         TestEqual(TEXT("Weather remains non-luminous"), CountLights(), 0);
         FX->StopAllEffects();
         Owner->Destroy();

@@ -94,6 +94,7 @@ void FACESetupMeshBuilder::AppendGfxObjLocal(const FACEDatGfxObj& Gfx, int32 Par
     const FACEObjDesc* Appearance, float WorldScale, FACEBuiltSetupPart& OutPart)
 {
     OutPart.DrawMode = Gfx.DrawMode;
+    OutPart.SortCenter = FACEPosition::AceVectorToUnreal(FVector(Gfx.SortCenter), WorldScale);
     OutPart.MaxDegradeDistance = Gfx.MaxDegradeDistance;
     // BSP PORT stores (CBldPortal index, polygon id). The exterior polygon can
     // differ from the reverse EnvCell aperture, especially for open courtyards.

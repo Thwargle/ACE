@@ -66,10 +66,13 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 {
 	friend class FACEVRProtocolTest;
 	friend class FACEPortalLifetimeTest;
+	friend class FACEDeferredWorldAppearanceTest;
 	friend class FACEVRObserverProtocolTest;
 	friend class FACEInteractionRecoveryTest;
 	friend class FACEVRRenderReplicationTest;
 	friend class FACEVRRigTest;
+	friend class FACESalvageTest;
+	friend class FACESelectionToolbarTest;
 	friend class FACEChatParityTest;
 	friend class FACEUILayoutCommandsTest;
 	friend class FACEUIInteractionParityTest;
@@ -88,6 +91,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACERetailInteriorStreamingTest;
 	friend class FACERetailCombatProtocolTest;
 	friend class FACERetailNetworkTest;
+	friend class FACECustomObjectReplicationTest;
 	friend class FACELoginHandshakeTest;
 	friend class FACEGDLEInteractionTransportTest;
 	friend class FACERetailNetworkWeatherTest;
@@ -309,7 +313,7 @@ public:
 	const FString& GetLastPatronTellSenderName() const { return LastPatronTellSenderName; }
 	const FString& GetLastMonarchTellSenderName() const { return LastMonarchTellSenderName; }
 
-	/** Client-side selection + GameAction QueryHealth (0x01BF). Guid 0 clears. */
+	/** Client selection and retail health/item-mana subscription. Guid 0 clears. */
 	void SelectObject(int32 ObjectGuid);
 
 	/** GameAction IdentifyObject (0x00C8) — opens appraisal. */
@@ -623,11 +627,23 @@ private:
 	void HandleVectorUpdate(FACEBinaryReader& Reader);
 	void HandleSetState(FACEBinaryReader& Reader);
 	void HandlePlayerCreate(FACEBinaryReader& Reader);
-	void HandleObjectCreate(FACEBinaryReader& Reader);
+	void HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecreate = false);
 	void HandleObjDescEvent(FACEBinaryReader& Reader);
 	void HandleObjectDelete(FACEBinaryReader& Reader);
 	void DeleteWorldObject(int32 Guid);
 	TMap<int32, double> ObjectVisibilityDeadlines;
+	struct FPendingObjectPhysicsEvent
+	{
+		uint32 Opcode = 0;
+		double QueuedAt = 0.;
+		TArray<uint8> Payload;
+	};
+	TMap<int32, TArray<FPendingObjectPhysicsEvent>> PendingObjectPhysicsEvents;
+	int32 PendingObjectPhysicsBytes = 0;
+	double LastObjectPhysicsExpiryAt = 0.;
+	void ExpireObjectPhysicsEvents(double Now);
+	bool DeferObjectPhysicsEvent(int32 Guid, uint16 Instance, uint32 Opcode, const FACEBinaryReader& Reader, int32 PayloadStart);
+	void ReplayObjectPhysicsEvents(int32 Guid);
 	void HandleSound(FACEBinaryReader& Reader);
 	void HandlePlayerTeleport(FACEBinaryReader& Reader);
 	void ApplyVRWorldSnapshot(FACEBinaryReader& Reader);
@@ -663,6 +679,9 @@ private:
 	void HandlePrivateUpdatePropertyInt(FACEBinaryReader& Reader);
 	void HandlePrivateUpdatePropertyInt64(FACEBinaryReader& Reader);
 	void HandleUpdateHealth(FACEBinaryReader& Reader);
+	void HandleQueryItemManaResponse(FACEBinaryReader& Reader);
+	bool CanQueryItemMana(int32 Guid) const;
+	bool CanQueryObjectHealth(int32 Guid) const;
 	void HandleIdentifyObjectResponse(FACEBinaryReader& Reader);
 	void HandleViewContents(FACEBinaryReader& Reader);
 	void HandleCloseGroundContainer(FACEBinaryReader& Reader);
@@ -773,7 +792,7 @@ private:
 	void NotifyEnchantmentsChanged();
 	float RecordEchoRequest(double SentAt);
 	void UpdateLinkStatusFromEcho(float ClientTimeSent, double ReceivedAt);
-	void UpsertWorldObject(const FACEWorldObject& Object);
+	void UpsertWorldObject(const FACEWorldObject& Object, bool bForceRecreate = false);
 	void MaybeEnterWorldComplete();
 	void SetSelectedObjectInternal(const FACESelectedObject& Sel);
 	/** Drop in-world state after a successful logoff (keep sockets / account session). */
@@ -908,6 +927,8 @@ private:
 	FACEPosition PlayerPosition;
 	FACEPlayerVitals PlayerVitals;
 	FACESelectedObject SelectedObject;
+	int32 SelectedManaQueryGuid = 0;
+	friend class FACESelectionManaTest;
 	int32 PreviousSelectedObjectGuid = 0;
 	TMap<int32, FACEWorldObject> WorldObjects;
 	/** containerGuid → ordered item refs from GameEvent ViewContents (0x0196). */

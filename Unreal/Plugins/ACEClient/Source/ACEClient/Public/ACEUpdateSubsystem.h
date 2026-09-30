@@ -16,7 +16,7 @@ namespace ACEUpdates
 {
     inline constexpr const TCHAR* ManifestURL = TEXT("https://thwargle.com/assets/ac/release.json");
     // Only the fixed publisher and versioned filenames are accepted. JSON cannot supply a command or URL.
-    ACECLIENT_API bool ParseManifest(const FString& Json, bool bQuest, FACEUpdateRelease& Out, FString& Error);
+    ACECLIENT_API bool ParseManifest(const FString& Json, bool bQuest, FACEUpdateRelease& Out, FString& Error, bool bLinux = false);
     ACECLIENT_API bool VerifyFile(const FString& Path, const FACEUpdateRelease& Release);
     ACECLIENT_API const TCHAR* InstallationNotice(bool bQuest);
 }

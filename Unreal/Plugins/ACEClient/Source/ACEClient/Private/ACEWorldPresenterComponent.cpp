@@ -39,7 +39,7 @@ namespace
 		{
 			return false;
 		}
-		if (Object.IsHiddenAdmin() || Object.IsLikelyAdminWorldMarker())
+		if (Object.IsHiddenAdmin())
 		{
 			return true;
 		}
@@ -1009,11 +1009,23 @@ void UACEWorldPresenterComponent::SpawnOrUpdateEntity(const FACEWorldObject& Obj
 	// left ScriptComponent with StopAllEffects + bDefaultStarted=false forever.
 	// PrevSetupId was sampled at the top of this function, before InitializeFromObject.
 	const bool bSetupChanged = PrevSetupId != 0 && PrevSetupId != Object.SetupId;
+	// A fresh server description starts a new attempt, including a replacement
+	// object using the same GUID after an earlier setup failed.
+	AppearanceRetryCounts.Remove(Object.Guid);
 
-	if (bImmediateDatAppearance && bApplyDatAppearance)
+	UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
+	UACEDatSubsystem* Dat = GI ? GI->GetSubsystem<UACEDatSubsystem>() : nullptr;
+	if (bImmediateDatAppearance && bApplyDatAppearance && Dat && Dat->IsDatReady())
 	{
 		const uint64 Revision = Actor->Appearance ? Actor->Appearance->GetAppearanceRevision() : 0;
-		Actor->ApplyDatAppearanceFromObject(Object);
+		if (Actor->ApplyDatAppearanceFromObject(Object))
+		{
+			PendingDatAppearance.Remove(Object.Guid);
+		}
+		else
+		{
+			PendingDatAppearance.AddUnique(Object.Guid);
+		}
 		if (bSetupChanged && Actor->ScriptComponent && !Actor->ScriptComponent->HasStartedDefaultScripts())
 		{
 			Actor->ScriptComponent->NotifyAppearanceReady(Object.UsesOnOffMotion());
@@ -1042,31 +1054,10 @@ void UACEWorldPresenterComponent::SpawnOrUpdateEntity(const FACEWorldObject& Obj
 	}
 	else if (bApplyDatAppearance)
 	{
-		const bool bNeedRebuild = bSetupChanged
-			|| !Actor->bUsingDatMesh
-			|| !Actor->Appearance
-			|| !Actor->Appearance->HasAppearance()
-			|| Actor->Appearance->GetAppliedAppearanceHash() != Object.Appearance.GetContentHash();
-		if (bNeedRebuild)
-		{
-			PendingDatAppearance.AddUnique(Object.Guid);
-			// Setup morph (empty pedestal → Font) clears defaults in InitializeFromObject.
-			// Rearm immediately so ambient Swarm isn't stuck waiting on a drain skip.
-			if (bSetupChanged && Actor->ScriptComponent)
-			{
-				Actor->ScriptComponent->NotifyAppearanceReady(Object.UsesOnOffMotion());
-			}
-		}
-		else if (Actor->ScriptComponent && !Actor->ScriptComponent->HasStartedDefaultScripts())
-		{
-			// InitializeFromObject cleared default scripts (setup/script change) but the mesh
-			// hash matched so appearance was skipped — rearm emitters (Font of Jojii hooks).
-			Actor->ScriptComponent->NotifyAppearanceReady(Object.UsesOnOffMotion());
-		}
-		else if (bSetupChanged && Actor->ScriptComponent)
-		{
-			Actor->ScriptComponent->NotifyAppearanceReady(Object.UsesOnOffMotion());
-		}
+		// ApplyWorldObject owns the complete cache key (setup, ObjDesc, placement,
+		// translucency and collision). Even an existing mesh needs that check:
+		// UpdateObject/ObjDesc may change its parts without changing the setup.
+		PendingDatAppearance.AddUnique(Object.Guid);
 	}
 
 	FlushPendingEffectsFor(Object.Guid);
@@ -1165,7 +1156,7 @@ void UACEWorldPresenterComponent::BeginPostPortalAppearanceBoost(int32 ExtraPerT
 
 void UACEWorldPresenterComponent::DrainPendingDatAppearance()
 {
-	if (!bApplyDatAppearance || DatAppearancesPerTick <= 0 || !Client)
+	if (!bApplyDatAppearance || DatAppearancesPerTick <= 0 || !Client || PendingDatAppearance.IsEmpty())
 	{
 		return;
 	}
@@ -1187,6 +1178,13 @@ void UACEWorldPresenterComponent::DrainPendingDatAppearance()
 		{
 			if (UACEDatSubsystem* Dat = GI->GetSubsystem<UACEDatSubsystem>())
 			{
+				// EnsureLoaded starts an asynchronous index. Pending work must survive
+				// that wait without spending its finite malformed-asset retry budget.
+				if (!Dat->IsDatReady())
+				{
+					Dat->BeginBackgroundLoad();
+					return;
+				}
 				bPortalVisible = Dat->IsInPortalSpace();
 				if (Dat->IsLightweightStreaming())
 				{
@@ -1227,7 +1225,10 @@ void UACEWorldPresenterComponent::DrainPendingDatAppearance()
 			return Ka.Key != Kb.Key ? Ka.Key < Kb.Key : Ka.Value < Kb.Value;
 		});
 	}
-	while (PendingDatAppearance.Num() > 0 && Done < EffectiveAppearanceBudget
+	// A failed GUID is requeued for another frame, not retried repeatedly in
+	// this drain. Otherwise one missing setup can consume the entire budget.
+	int32 Remaining = PendingDatAppearance.Num();
+	while (PendingDatAppearance.Num() > 0 && Remaining-- > 0 && Done < EffectiveAppearanceBudget
 		&& (Done == 0 || FPlatformTime::Seconds() < Deadline))
 	{
 		const int32 Guid = PendingDatAppearance[0];
@@ -1240,24 +1241,12 @@ void UACEWorldPresenterComponent::DrainPendingDatAppearance()
 		{
 			continue;
 		}
-		// Font of Jojii / hook morphs clear ScriptComponent defaults then re-queue here.
-		// Skipping solely on bUsingDatMesh left emitters disarmed forever (mesh already up).
-		const bool bNeedScripts = Actor->ScriptComponent
-			&& !Actor->ScriptComponent->HasStartedDefaultScripts();
-		const bool bSetupMismatch = bHaveObj && Actor->Appearance
-			&& Actor->Appearance->HasAppearance()
-			&& static_cast<uint32>(Actor->Appearance->GetSetupId()) != static_cast<uint32>(Obj.SetupId);
-		if (Actor->bUsingDatMesh && !bNeedScripts && !bSetupMismatch)
-		{
-			continue;
-		}
 		if (!bHaveObj)
 		{
 			continue;
 		}
 
-		// DAT may still be indexing when the first appearance pass runs — retry later so
-		// props like statues aren't left as nameplates forever after a one-shot failure.
+		// Use the live descriptor, including changes received after this was queued.
 		const bool RestoreMotion = !Actor->Appearance || !Actor->Appearance->HasAppearance()
 			|| Actor->Appearance->GetSetupId() != Obj.SetupId;
 		if (!Actor->ApplyDatAppearanceFromObject(Obj))
@@ -1333,6 +1322,7 @@ void UACEWorldPresenterComponent::HandleObjectDeleted(int32 ObjectGuid)
     ProjectileFlights.Remove(ObjectGuid);
 	PendingSpawns.RemoveAll([ObjectGuid](const FACEWorldObject& O) { return O.Guid == ObjectGuid; });
 	PendingDatAppearance.Remove(ObjectGuid);
+	AppearanceRetryCounts.Remove(ObjectGuid);
 	PendingAttachments.Remove(ObjectGuid);
 	PendingEffects.RemoveAll([ObjectGuid](const FPendingPlayEffect& E) { return E.ObjectGuid == ObjectGuid; });
 	PendingScriptIds.RemoveAll([ObjectGuid](const FPendingPlayScriptId& E) { return E.ObjectGuid == ObjectGuid; });

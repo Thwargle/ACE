@@ -24,7 +24,10 @@ public:
 
 	/** Build DAT Setup parts and loop DefaultAnimation when present. */
 	UFUNCTION(BlueprintCallable, Category = "ACE")
-	bool InitializeFromSetup(int32 SetupId, float Scale = 1.f, float InWorldScale = 100.f, bool bEnableCollision = false);
+	bool InitializeFromSetup(int32 SetupId, float Scale = 1.f, float InWorldScale = 100.f, bool bEnableCollision = false, bool bFromRegionDesc = false);
+
+	/** Distinguishes terrain effects from scripted building props using this actor. */
+	bool IsRegionTerrainScenery() const { return bRegionTerrainScenery; }
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ACE")
 	TObjectPtr<USceneComponent> Root;
@@ -38,4 +41,7 @@ public:
 
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	float WorldScale = 100.f;
+
+private:
+	bool bRegionTerrainScenery = false;
 };

@@ -87,6 +87,7 @@ namespace ACEGameEvent
 	constexpr uint32 MagicRemoveSpell          = 0x01A8;
 	constexpr uint32 InventoryServerSaveFailed = 0x00A0;
 	constexpr uint32 UpdateHealth              = 0x01C0;
+	constexpr uint32 QueryItemManaResponse     = 0x0264;
 	constexpr uint32 UseDone                   = 0x01C7;
 	constexpr uint32 AttackDone                = 0x01A7;
 	constexpr uint32 CombatCommenceAttack      = 0x01B8;
@@ -305,6 +306,7 @@ namespace ACEGameAction
 	constexpr uint32 AddShortCut           = 0x019C;
 	constexpr uint32 RemoveShortCut        = 0x019D;
 	constexpr uint32 QueryHealth           = 0x01BF;
+	constexpr uint32 QueryItemMana         = 0x0263;
 	constexpr uint32 OpenTradeNegotiations = 0x01F6;
 	constexpr uint32 CloseTradeNegotiations = 0x01F7;
 	constexpr uint32 AddToTrade            = 0x01F8;

@@ -26,76 +26,6 @@ namespace
     TSharedRef<SWidget> Text(const FString& Value,int Size=24)
     {return SNew(STextBlock).Text(FText::FromString(Value)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size)).ColorAndOpacity(FLinearColor::White).AutoWrapText(true);}
 }
-void UACEVRMenu::BuildSpells()
-{
-    auto* Dat=Client->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();if(!Dat)return;
-    const int32 BarIndex=Client->GetActiveSpellBar();
-    const auto Bar=Client->GetSpellBar(BarIndex).FilterByPredicate([](int32 Id){return Id!=0;});
-    Body->AddSlot().AutoHeight().Padding(4)[Text(TEXT("Choose a hotbar, then add spells from the book below."),24)];
-    auto Tabs=SNew(SHorizontalBox);
-    for(int32 I=0;I<8;++I)Tabs->AddSlot().FillWidth(1).Padding(2)[Tab(FString::FromInt(I+1),I==BarIndex,[this,I](){Binder->SetCombatSpellBar(I);bDirty=true;})];
-    Body->AddSlot().AutoHeight()[Tabs];
-    auto BarIcons=SNew(SHorizontalBox);
-    for(int32 Id:Bar)
-    {
-        FString Name;uint32 Did=0;if(!Id || !Dat->TryGetSpellInfo(Id,Name,Did))continue;
-        auto Cell=SNew(SVerticalBox)
-            +SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)[Icon(Did)]
-            +SVerticalBox::Slot().AutoHeight()[Button(TEXT("Inspect"),[this,Id](){Spell=Id;bDirty=true;})];
-        BarIcons->AddSlot().AutoWidth().Padding(4)[Cell];
-    }
-    Body->AddSlot().AutoHeight().Padding(4)[Text(FString::Printf(TEXT("Hotbar %d — %d spells"),BarIndex+1,Bar.Num()),28)];
-    Body->AddSlot().AutoHeight()[SNew(SScrollBox).Orientation(Orient_Horizontal)+SScrollBox::Slot()[BarIcons]];
-    Body->AddSlot().AutoHeight().Padding(4)[Entry(TEXT("Search known spells"),Search)];
-    auto Filters=SNew(SWrapBox).UseAllottedSize(true);
-    Filters->AddSlot().Padding(2)[Button(TEXT("Search"),[this](){if(Rig)Rig->DismissTextEntry();PageIndex=0;bDirty=true;})];
-    const TCHAR* Schools[]={TEXT("All schools"),TEXT("War"),TEXT("Life"),TEXT("Item"),TEXT("Creature"),TEXT("Void")};
-    Filters->AddSlot().Padding(2)[Button(Schools[SpellSchool],[this](){SpellSchool=(SpellSchool+1)%6;PageIndex=0;bDirty=true;})];
-    Filters->AddSlot().Padding(2)[Button(SpellLevel?FString::Printf(TEXT("Level %d"),SpellLevel):TEXT("All levels"),[this](){SpellLevel=(SpellLevel+1)%9;PageIndex=0;bDirty=true;})];
-    Body->AddSlot().AutoHeight()[Filters];
-    if(Spell)
-    {
-        FString Name,Details;uint32 Did=0;Dat->TryGetSpellInfo(Spell,Name,Did);Dat->TryGetSpellExamination(Spell,Details);
-        auto Description=SNew(SVerticalBox)
-            +SVerticalBox::Slot().AutoHeight()[Text(Name,28)]
-            +SVerticalBox::Slot().AutoHeight()[Text(Details,24)];
-        Body->AddSlot().AutoHeight().Padding(4)[SNew(SHorizontalBox)
-            +SHorizontalBox::Slot().AutoWidth().Padding(8)[Icon(Did)]
-            +SHorizontalBox::Slot().FillWidth(1)[Description]];
-        auto Actions=SNew(SWrapBox).UseAllottedSize(true);
-        const bool OnBar=Bar.Contains(Spell);const int32 Index=Bar.Find(Spell);
-        Actions->AddSlot().Padding(2)[Button(TEXT("Select for casting"),[this](){if(Rig)Rig->SelectSpell(Spell);bDirty=true;})];
-        Actions->AddSlot().Padding(2)[Button(FString::Printf(TEXT("Add to hotbar %d"),BarIndex+1),[this,BarIndex](){Client->SendAddSpellToBar(Spell,MAX_int32,BarIndex);bDirty=true;},!OnBar)];
-        Actions->AddSlot().Padding(2)[Button(TEXT("Remove from hotbar"),[this,BarIndex](){Client->SendRemoveSpellFromBar(Spell,BarIndex);bDirty=true;},OnBar)];
-        for(int32 Direction:{-1,1})Actions->AddSlot().Padding(2)[Button(Direction<0?TEXT("Move left"):TEXT("Move right"),[this,Direction,Index,BarIndex]()
-        {Client->SendRemoveSpellFromBar(Spell,BarIndex);Client->SendAddSpellToBar(Spell,Index+Direction,BarIndex);bDirty=true;},OnBar && Index+Direction>=0 && Index+Direction<Bar.Num())];
-        Body->AddSlot().AutoHeight()[Actions];
-    }
-    TArray<int32> Spells;
-    for(int32 Id:Client->GetKnownSpells())
-    {
-        FString Name;uint32 Did=0,School=0,Level=0;
-        if(!Id || !Dat->TryGetSpellInfo(Id,Name,Did))continue;
-        Dat->TryGetSpellSchoolAndLevel(Id,School,Level);
-        if((!Search.IsEmpty() && !Name.Contains(Search)) || (SpellSchool && School!=SpellSchool) || (SpellLevel && Level!=SpellLevel))continue;
-        Spells.Add(Id);
-    }
-    const int32 Pages=FMath::Max(1,FMath::DivideAndRoundUp(Spells.Num(),12));PageIndex=FMath::Clamp(PageIndex,0,Pages-1);
-    Body->AddSlot().AutoHeight().Padding(4)[SNew(SHorizontalBox)
-        +SHorizontalBox::Slot().AutoWidth()[Button(TEXT("Previous"),[this](){--PageIndex;bDirty=true;},PageIndex>0)]
-        +SHorizontalBox::Slot().FillWidth(1).Padding(12)[Text(FString::Printf(TEXT("Spellbook: %d / %d"),PageIndex+1,Pages))]
-        +SHorizontalBox::Slot().AutoWidth()[Button(TEXT("Next"),[this](){++PageIndex;bDirty=true;},PageIndex+1<Pages)]];
-    for(int32 I=PageIndex*12;I<FMath::Min(Spells.Num(),(PageIndex+1)*12);++I)
-    {
-        const int32 Id=Spells[I];FString Name;uint32 Did=0;Dat->TryGetSpellInfo(Id,Name,Did);
-        Body->AddSlot().AutoHeight().Padding(3)[SNew(SHorizontalBox)
-            +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(6)[Icon(Did)]
-            +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[Text(Name)]
-            +SHorizontalBox::Slot().AutoWidth().Padding(2)[Button(TEXT("Inspect"),[this,Id](){Spell=Id;bDirty=true;ContentScroll->ScrollToStart();})]
-            +SHorizontalBox::Slot().AutoWidth().Padding(2)[Button(Bar.Contains(Id)?TEXT("Added"):FString::Printf(TEXT("+ Bar %d"),BarIndex+1),
-                [this,Id,BarIndex](){Client->SendAddSpellToBar(Id,MAX_int32,BarIndex);bDirty=true;},!Bar.Contains(Id))]];
-    }
-}
 void UACEVRMenu::BuildFellowship()
 {
     const auto Fellow=Client->GetFellowship();
@@ -158,9 +88,10 @@ void UACEVRMenu::BuildCharacter()
     Body->AddSlot().AutoHeight().Padding(4)[SNew(SHorizontalBox)
         +SHorizontalBox::Slot().FillWidth(1)[Tab(TEXT("Attributes"),!bSkillsPage,[this](){bSkillsPage=false;bDirty=true;})]
         +SHorizontalBox::Slot().FillWidth(1)[Tab(TEXT("Skills"),bSkillsPage,[this](){bSkillsPage=true;bDirty=true;})]];
-    auto Row=[&](const FString& Name,int32 Value,const FString& Status,int64 One,int64 Ten,TFunction<void(int32)> Raise)
+    auto Row=[&](const FString& Name,uint32 Did,int32 Value,const FString& Status,int64 One,int64 Ten,TFunction<void(int32)> Raise)
     {
         Body->AddSlot().AutoHeight().Padding(4,7)[SNew(SHorizontalBox)
+            +SHorizontalBox::Slot().AutoWidth().Padding(4).VAlign(VAlign_Center)[Icon(Did)]
             +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[Text(FString::Printf(TEXT("%s: %d\n%s"),*Name,Value,*Status))]
             +SHorizontalBox::Slot().AutoWidth().Padding(3)[Button(FString::Printf(TEXT("+1\n%lld XP"),One),[Raise](){Raise(1);},One>0 && V.AvailableExperience>=One)]
             +SHorizontalBox::Slot().AutoWidth().Padding(3)[Button(FString::Printf(TEXT("+10\n%lld XP"),Ten),[Raise](){Raise(10);},Ten>0 && V.AvailableExperience>=Ten)]];
@@ -169,48 +100,56 @@ void UACEVRMenu::BuildCharacter()
     {
         const TCHAR* Names[]={TEXT("Strength"),TEXT("Endurance"),TEXT("Coordination"),TEXT("Quickness"),TEXT("Focus"),TEXT("Self"),TEXT("Health"),TEXT("Stamina"),TEXT("Mana")};
         const int32 Ids[]={1,2,4,3,5,6};
+        const uint32 Icons[]={0x060002C8,0x060002C4,0x060002C9,0x060002C6,0x060002C5,0x060002C7,0x06004C3B,0x06004C3C,0x06004C3D};
         for(int32 I=0;I<9;++I)
         {
             int64 One=0,Ten=0;
             if(I<6){Dat->TryGetAttributeXpToNextRank(V.GetAttributeXpSpent(Ids[I]),One);Dat->TryGetAttributeXpToNextRank(V.GetAttributeXpSpent(Ids[I]),Ten,nullptr,10);}
             else{const int32 Spent=I==6?V.HealthXpSpent:I==7?V.StaminaXpSpent:V.ManaXpSpent;Dat->TryGetVitalXpToNextRank(Spent,One);Dat->TryGetVitalXpToNextRank(Spent,Ten,nullptr,10);}
-            Row(Names[I],I<6?V.GetAttributeCurrent(Ids[I]):I==6?V.MaxHealth:I==7?V.MaxStamina:V.MaxMana,
+            Row(Names[I],Icons[I],I<6?V.GetAttributeCurrent(Ids[I]):I==6?V.MaxHealth:I==7?V.MaxStamina:V.MaxMana,
                 I<6?TEXT("Attribute"):TEXT("Maximum vital"),One,Ten,[this,I](int32 Count){Binder->SelectedAttributeRow=I;Binder->ActiveSkillTab="AttributePage";Binder->RaiseSelectedStat(Count);});
         }
     }
     else
     {
+        // gmSkillUI::AddSortedSkill sorts names *within* advancement sections.
+        // DAT min_level distinguishes untrained-but-usable from unusable.
         auto Skills=V.Skills;Skills.Sort([](const auto& A,const auto& B){return A.Name<B.Name;});
-        for(const auto& Skill:Skills)
+        const TCHAR* Groups[]={TEXT("Specialized"),TEXT("Trained"),TEXT("Untrained"),TEXT("Unusable")};
+        auto GroupFor=[Dat](const FACESkillInfo& S) -> int32
         {
+            if(S.SkillId<=0 || S.AdvancementClass==0)return INDEX_NONE;
+            if(S.AdvancementClass>=3)return 0;
+            if(S.AdvancementClass==2)return 1;
+            uint32 Minimum=0;Dat->TryGetSkillMinLevel(S.SkillId,Minimum);return Minimum<=1?2:3;
+        };
+        for(int32 Group=0;Group<4;++Group)
+        {
+          if(!Skills.ContainsByPredicate([&](const auto& S){return GroupFor(S)==Group;}))continue;
+          auto Heading=SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+              .BorderBackgroundColor(FLinearColor(.12f,.085f,.025f)).Padding(8)[Text(Groups[Group],28)];
+          Heading->SetTag(FName(Groups[Group]));Body->AddSlot().AutoHeight().Padding(4,8)[Heading];
+          for(const auto& Skill:Skills)
+          {
+            if(GroupFor(Skill)!=Group)continue;
+            FString Name;uint32 Did=0;Dat->TryGetSkillInfo(Skill.SkillId,Name,Did);
             if(Skill.AdvancementClass>=2)
             {
                 int64 One=0,Ten=0;Dat->TryGetSkillXpToNextRank(Skill.AdvancementClass,Skill.XpSpent,One);Dat->TryGetSkillXpToNextRank(Skill.AdvancementClass,Skill.XpSpent,Ten,nullptr,10);
-                Row(Skill.Name,Skill.Current,Skill.AdvancementClass==3?TEXT("Specialized"):TEXT("Trained"),One,Ten,
+                Row(Skill.Name,Did,Skill.Current,Groups[Group],One,Ten,
                     [this,Id=Skill.SkillId](int32 Count){Binder->SelectedSkillId=Id;Binder->ActiveSkillTab="SkillPage";Binder->RaiseSelectedStat(Count);});
             }
             else
             {
                 int32 Credits=0;const bool CanTrain=Skill.AdvancementClass==1 && Dat->TryGetSkillTrainedCost(Skill.SkillId,Credits);
                 Body->AddSlot().AutoHeight().Padding(4,7)[SNew(SHorizontalBox)
-                    +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[Text(Skill.Name+TEXT("\nUntrained"))]
+                    +SHorizontalBox::Slot().AutoWidth().Padding(4).VAlign(VAlign_Center)[Icon(Did)]
+                    +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[Text(Skill.Name+TEXT("\n")+Groups[Group])]
                     +SHorizontalBox::Slot().AutoWidth()[Button(FString::Printf(TEXT("Train\n%d credits"),Credits),[this,Id=Skill.SkillId](){Binder->SelectedSkillId=Id;Binder->ActiveSkillTab="SkillPage";Binder->RaiseSelectedStat(1);},CanTrain && V.AvailableSkillCredits>=Credits)]];
             }
+          }
         }
     }
-}
-void UACEVRMenu::BuildInspection()
-{
-    const auto& A=Binder->LastAppraisal;
-    FACEWorldObject Object;Client->GetWorldObject(Selected,Object);
-    Body->AddSlot().AutoHeight().Padding(4)[Text(Object.Name,30)];
-    if(A.ObjectGuid!=Selected){Body->AddSlot().AutoHeight()[Text(TEXT("Waiting for the server's appraisal..."))];return;}
-    auto* Dat=Client->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
-    const FString Details=A.bIsCreature?A.Summary:ACEAppraisalFormatting::ItemExaminationText(A,Dat);
-    TArray<FString> Lines;Details.ParseIntoArrayLines(Lines,false);
-    const auto Colors=ACEAppraisalFormatting::ItemTextColors(A,Details);
-    for(int32 I=0;I<Lines.Num();++I)Body->AddSlot().AutoHeight()[SNew(STextBlock).Text(FText::FromString(Lines[I])).Font(FCoreStyle::GetDefaultFontStyle("Regular",24)).AutoWrapText(true).ColorAndOpacity(Colors.IsValidIndex(I)?Colors[I]:FLinearColor::White)];
-    if(A.bIsCreature)Body->AddSlot().AutoHeight().Padding(4)[Text(FString::Printf(TEXT("Health %d / %d\nStamina %d / %d\nMana %d / %d"),A.Health,A.MaxHealth,A.Stamina,A.MaxStamina,A.Mana,A.MaxMana))];
 }
 void UACEVRMenu::BuildLoot()
 {

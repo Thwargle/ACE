@@ -16,6 +16,17 @@ FName UACEVRSettings::GetButtonAction(FName Input) const
 	const auto* Bound=ButtonBindings.Find(Input);
 	return Bound && ACEVRInputLayout::IsAction(*Bound) ? *Bound : Input;
 }
+FName UACEVRSettings::GetMenuButtonAction(FName Input) const
+{
+	if(const auto* Bound=MenuButtonBindings.Find(Input))
+		if(Bound->IsNone() || *Bound=="VRMenuUse" || *Bound=="VRMenuInspect")return *Bound;
+	return Input=="VRSelect"?FName("VRMenuUse"):Input=="VRPrevious"?FName("VRMenuInspect"):NAME_None;
+}
+void UACEVRSettings::SetMenuButtonAction(FName Input,FName Action)
+{
+	if(!ACEVRInputLayout::IsAction(Input) || (!Action.IsNone() && Action!="VRMenuUse" && Action!="VRMenuInspect"))return;
+	MenuButtonBindings.Add(Input,Action);Persist();
+}
 void UACEVRSettings::SetButtonAction(FName Input,FName Action)
 {
 	if (!ACEVRInputLayout::IsAction(Input) || !ACEVRInputLayout::IsAction(Action)) return;

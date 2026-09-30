@@ -1320,6 +1320,8 @@ struct ACECLIENT_API FACEWorldObject
 	/** PhysicsDesc 9×uint16 timestamps (ACEPhysicsTimeStamp). */
 	uint16 PhysicsTimestamps[ACEPhysicsTimeStamp::Count] = {};
 	bool bHasPhysicsTimestamps = false;
+	/** UI-only record awaiting CreateObject's full physics description. Events cannot complete it. */
+	bool bPhysicsDescriptionPending = false;
 
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	float UseRadius = 0.6f;
@@ -1551,38 +1553,6 @@ struct ACECLIENT_API FACEWorldObject
 	/** PhysicsState.Cloaked — admin-cloak / invisible unless Adminvision. */
 	bool IsCloaked() const { return (PhysicsState & ACEPhysicsState::Cloaked) != 0; }
 	bool IsAdminOnlyVisible() const { return IsHiddenAdmin() || IsCloaked(); }
-	/**
-	 * Destination / generator diamonds (bind stone stack, town-network drop). Retail draws
-	 * these only with /adminvision — HiddenAdmin is not always set on ACE world weenies.
-	 * ParticleEmitter objects keep their FX (mesh is already hidden).
-	 */
-	bool IsLikelyAdminWorldMarker() const
-	{
-		if (bIsPlayer || IsVendor() || IsLifeStone() || IsDoor() || IsCorpse() || IsOpenable())
-		{
-			return false;
-		}
-		if ((ItemType & (ACEItemType::Creature | ACEItemType::Portal | ACEItemType::LifeStone
-			| ACEItemType::Container)) != 0)
-		{
-			return false;
-		}
-		if ((ObjectDescriptionFlags & (ACEObjectDescFlag::Portal | ACEObjectDescFlag::BindStone
-			| ACEObjectDescFlag::LifeStone)) != 0)
-		{
-			return false;
-		}
-		if ((PhysicsState & ACEPhysicsState::ParticleEmitter) != 0)
-		{
-			return false;
-		}
-		const bool bNoRadar = RadarBehavior == ACERadarBehavior::ShowNever
-			|| RadarBehavior == ACERadarBehavior::Undefined;
-		const bool bNoCollide = (PhysicsState & ACEPhysicsState::ReportCollisions) == 0;
-		const bool bStuck = (ObjectDescriptionFlags & ACEObjectDescFlag::Stuck) != 0;
-		return IsEthereal() && bNoRadar && bNoCollide && bStuck && UseRadius <= 0.01f
-			&& !ACEItemUseable::IsSourceUsable(ItemUseable);
-	}
 	/** PK or PK Lite — the only player statuses that collide with other players. */
 	bool IsPkOrPkLite() const { return ACEPlayerKillerStatus::FlagsBlockPlayers(ObjectDescriptionFlags); }
 };
@@ -1718,6 +1688,9 @@ struct ACECLIENT_API FACESelectedObject
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") FString Name;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") float HealthFraction = 1.f;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") bool bShowHealth = false;
+	/** Item mana is supplied by QueryItemMana, independently of structure/durability. */
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") float ManaFraction = 0.f;
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") bool bShowMana = false;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") bool bValid = false;
 };
 

@@ -1094,11 +1094,10 @@ void UACEDatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 	PrepareRuntimeMaterials();
-#if PLATFORM_ANDROID
-	// DAT files are deployed separately into this test application's sandbox.
-	// ProjectSavedDir resolves through Unreal's Android platform file layer.
+#if PLATFORM_ANDROID || PLATFORM_LINUX
+    // DAT files are supplied separately in the app's writable saved-data folder.
 	DatDirectory = FPaths::ProjectSavedDir() / TEXT("DAT");
-	UE_LOG(LogTemp, Log, TEXT("AC:VR DAT directory: %s"), *DatDirectory);
+    UE_LOG(LogTemp, Log, TEXT("AC DAT directory: %s"), *DatDirectory);
 #endif
 	FACELoginSettings LoginSettings;
 	if (ACELoginSettings::Load(LoginSettings) && !LoginSettings.DatDirectory.IsEmpty())
@@ -1246,6 +1245,7 @@ void UACEDatSubsystem::ClearLoadedState()
 	InvisibleCollisionMaterial = nullptr;
 	RuntimeTextureKeep.Reset();
 	ParticleEmitterInfoCache.Reset();
+	GfxLightEstimateCache.Reset();
 	PhysicsScriptCache.Reset();
 	PhysicsScriptTableCache.Reset();
 	WaveCache.Reset();
@@ -1653,6 +1653,7 @@ bool UACEDatSubsystem::EnsureLoaded()
 			SkyColorFillMaterialBase = nullptr;
 			WeatherTranslucentMaterialBase = nullptr;
 			WeatherAdditiveMaterialBase = nullptr;
+			GfxLightEstimateCache.Reset();
 			if (TextureResolver)
 			{
 				TextureResolver->InvalidateSurfaceCache();
@@ -4939,6 +4940,7 @@ bool UACEDatSubsystem::ApplySetupParts(const TArray<UProceduralMeshComponent*>& 
 			continue;
 		}
 		Proc->ClearAllMeshSections();
+		Proc->SetViewFacing(Part.DrawMode, Part.SortCenter);
 		Proc->ComponentTags.RemoveAll([](FName Tag) { return Tag.ToString().StartsWith(TEXT("ACEPhysicsSection_")); });
 		Proc->bUseComplexAsSimpleCollision = bEnableCollision;
 		Proc->bUseAsyncCooking = false;
@@ -8194,6 +8196,12 @@ bool UACEDatSubsystem::TryEstimateGfxLight(uint32 GfxObjId, FLinearColor& OutCol
 	{
 		return false;
 	}
+	if (const FGfxLightEstimate* Cached = GfxLightEstimateCache.Find(GfxObjId))
+	{
+		OutColor = Cached->Color;
+		OutLuminosity = Cached->Luminosity;
+		return Cached->bEstimated;
+	}
 	FACEDatGfxObj Gfx;
 	if (!Builder->LoadGfxObj(GfxObjId, Gfx) || Gfx.Surfaces.Num() == 0)
 	{
@@ -8204,6 +8212,13 @@ bool UACEDatSubsystem::TryEstimateGfxLight(uint32 GfxObjId, FLinearColor& OutCol
 	{
 		return false;
 	}
+	// ResolveSurface uses the DAT's default palette, with no per-object overrides.
+	// Cache only completed decodes; unavailable assets must remain retryable.
+	const auto CacheEstimate = [this, GfxObjId, &OutColor, &OutLuminosity](bool bEstimated)
+	{
+		GfxLightEstimateCache.Add(GfxObjId, FGfxLightEstimate{OutColor, OutLuminosity, bEstimated});
+		return bEstimated;
+	};
 	OutLuminosity = Decoded.Luminosity;
 	if (Decoded.bIsSolid)
 	{
@@ -8228,7 +8243,7 @@ bool UACEDatSubsystem::TryEstimateGfxLight(uint32 GfxObjId, FLinearColor& OutCol
 		}
 		if (W <= KINDA_SMALL_NUMBER)
 		{
-			return false;
+			return CacheEstimate(false);
 		}
 		OutColor = FLinearColor(
 			static_cast<float>(R / (W * 255.0)),
@@ -8238,13 +8253,13 @@ bool UACEDatSubsystem::TryEstimateGfxLight(uint32 GfxObjId, FLinearColor& OutCol
 	}
 	else
 	{
-		return false;
+		return CacheEstimate(false);
 	}
 	OutColor.A = 1.f;
 	const float Lum = OutColor.GetLuminance();
 	if (Lum < 0.08f && OutLuminosity < 0.2f)
 	{
-		return false;
+		return CacheEstimate(false);
 	}
 	if (Lum > 0.02f)
 	{
@@ -8254,7 +8269,7 @@ bool UACEDatSubsystem::TryEstimateGfxLight(uint32 GfxObjId, FLinearColor& OutCol
 		OutColor.A = 1.f;
 	}
 	// Effect semantics belong to the caller: red fire/buffs can share this color.
-	return true;
+	return CacheEstimate(true);
 }
 
 const FACEDatPhysicsScript* UACEDatSubsystem::GetPhysicsScript(uint32 Id)

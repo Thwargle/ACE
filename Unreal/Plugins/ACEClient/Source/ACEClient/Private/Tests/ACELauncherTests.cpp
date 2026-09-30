@@ -63,13 +63,20 @@ bool FACELauncherDirectoryTest::RunTest(const FString&)
     P.DatDirectory=TEXT("C:/Fixture game data"); P.Servers.Append(Servers);
     P.Accounts.Add({TEXT("alternate"),TEXT("other"),TEXT("other-secret")});
     const FString Path=FPaths::ProjectSavedDir()/TEXT("Automation/Launcher/Profile-")+FGuid::NewGuid().ToString()+TEXT(".dat");
-    TestTrue(TEXT("Multiple profiles save encrypted"),ACELoginSettings::Save(P,Path));
+    TestTrue(TEXT("Multiple profiles save"),ACELoginSettings::Save(P,Path));
     FACELoginSettings Restored; TestTrue(TEXT("Multiple profiles load"),ACELoginSettings::Load(Restored,Path));
     TestEqual(TEXT("Server list persists"),Restored.Servers.Num(),3);
     TestTrue(TEXT("Published ports survive profile save and reload"),Restored.Servers[1].Port==9010 && Restored.Servers[2].Port==9047);
     TestEqual(TEXT("Alternate accounts persist"),Restored.Accounts.Num(),2);
     TestEqual(TEXT("DAT folder persists"),Restored.DatDirectory,P.DatDirectory);
+#if PLATFORM_LINUX
+    TestTrue(TEXT("Linux retains account selection without saving passwords"),Restored.SelectedAccountId==P.SelectedAccountId && Restored.Password.IsEmpty() && Restored.Accounts[0].Password.IsEmpty() && Restored.Accounts[1].Password.IsEmpty());
+    FString SavedProfile; FFileHelper::LoadFileToString(SavedProfile,*Path);
+    TestFalse(TEXT("Linux profile contains no primary password"),SavedProfile.Contains(TEXT("fixture-only")));
+    TestFalse(TEXT("Linux profile contains no alternate password"),SavedProfile.Contains(TEXT("other-secret")));
+#else
     TestTrue(TEXT("Active account and password survive restart"),Restored.SelectedAccountId==P.SelectedAccountId && Restored.Accounts[0].Password==P.Password);
+#endif
     TestFalse(TEXT("New launcher profiles do not opt into automatic updates"),Restored.bAutoUpdate);
     P.bAutoUpdate=true;
     TestTrue(TEXT("Automatic update preference saves with the device profile"),ACELoginSettings::Save(P,Path));
@@ -82,7 +89,7 @@ bool FACELauncherDirectoryTest::RunTest(const FString&)
     TestTrue(TEXT("Existing profiles without the new field always default off"),ACELoginSettings::Load(Migrated,Path) && !Migrated.bAutoUpdate);
     const FString Removed=Restored.SelectedServerId; Restored.RemoveServer(Removed);
     TestEqual(TEXT("Removing a server retains shared accounts"),Restored.Accounts.Num(),2);
-    TestTrue(TEXT("Removing a server preserves selected login"),Restored.SelectedAccountId==P.SelectedAccountId && Restored.Password==P.Password);
+    TestTrue(TEXT("Removing a server preserves selected login"),Restored.SelectedAccountId==P.SelectedAccountId && (PLATFORM_LINUX ? Restored.Password.IsEmpty() : Restored.Password==P.Password));
     IFileManager::Get().Delete(*Path,false,true);
     return true;
 }
@@ -123,6 +130,10 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     if (!TestNotNull(TEXT("Game instance owns the updater"),W->Updater.Get())) return false;
     TestNotNull(TEXT("Updates page provides a real checkbox"),W->AutoUpdateCheckBox.Get());
     TestFalse(TEXT("Checkbox starts unchecked"),W->AutoUpdateCheckBox->IsChecked());
+#if PLATFORM_LINUX
+    TestFalse(TEXT("Linux hides unsupported automatic installation"),W->AutoUpdateCheckBox->IsVisible());
+    TestFalse(TEXT("Linux launcher keeps installation manual"),W->Updater->IsAutoUpdateEnabled());
+#else
     W->AutoUpdateCheckBox->SetIsChecked(true);
     W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(true);
     FACELoginSettings UpdatePreference;
@@ -139,6 +150,7 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(false);
     TestTrue(TEXT("Unchecking disables and persists automatic updates"),!W->Updater->IsAutoUpdateEnabled()
         && ACELoginSettings::Load(UpdatePreference,W->ProfilePath) && !UpdatePreference.bAutoUpdate);
+#endif
     if (FApp::CanEverRender())
     {
         FWidgetRenderer Renderer(false,true);
@@ -175,12 +187,14 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         W->Updater->State=EACEUpdateState::Available;
         W->Updater->Message=TEXT("A new version is available (320 MB).");
         W->RunAction(TEXT("updates")); Capture(TEXT("UpdatesVR"),FIntPoint(1100,900));
+#if !PLATFORM_LINUX
         TestTrue(TEXT("Auto-update checkbox has a usable headset hit target"),W->AutoUpdateCheckBox->GetCachedGeometry().GetLocalSize().Y>=26);
         W->AutoUpdateCheckBox->SetIsChecked(true);
         W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(true);
         Capture(TEXT("AutoUpdateEnabledVR"),FIntPoint(1100,900));
         W->AutoUpdateCheckBox->SetIsChecked(false);
         W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(false);
+#endif
         Capture(TEXT("Updates720p"),FIntPoint(1280,720));
         TestTrue(TEXT("Download update is available in the shared VR/desktop lobby"),W->DownloadUpdateButton->IsVisible());
         TestFalse(TEXT("Install remains hidden until verification"),W->InstallUpdateButton->IsVisible());
@@ -188,6 +202,11 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         TestFalse(TEXT("Cannot log in while replacing client files"),W->LoginButton->GetIsEnabled());
         W->Updater->State=EACEUpdateState::Ready; W->Updater->Message=FString(TEXT("Update ready. "))+ACEUpdates::InstallationNotice(PLATFORM_ANDROID);
         W->RefreshUpdateControls(); Capture(TEXT("UpdateReadyVR"),FIntPoint(1100,900));
+#if PLATFORM_LINUX
+        TestFalse(TEXT("Linux never displays an install action"),W->InstallUpdateButton->IsVisible());
+        W->RunAction(TEXT("installupdate")); W->RefreshUpdateControls();
+        TestEqual(TEXT("Linux cannot schedule an installation through the action router"),W->Updater->State,EACEUpdateState::Ready);
+#else
         TestTrue(TEXT("Verified update presents install action"),W->InstallUpdateButton->IsVisible());
         W->RunAction(TEXT("installupdate")); W->RefreshUpdateControls();
         TestEqual(TEXT("Manual installation opens the closure notice"),W->Updater->State,EACEUpdateState::InstallNotice);
@@ -201,6 +220,7 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         W->Updater->State=EACEUpdateState::Installing;
         W->Updater->Message=ACEUpdates::InstallationNotice(true);
         W->RefreshUpdateControls(); Capture(TEXT("QuestUpdateClosureNotice"),FIntPoint(1100,900));
+#endif
         W->Updater->Cancel(); W->RefreshUpdateControls();
 
     }

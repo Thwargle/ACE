@@ -958,6 +958,20 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     Gameplay->ShowExamination(false); Gameplay->RefreshExaminationOverlay();
     Gameplay->ShowPanelPage(TEXT("InventoryPanel_Field")); Gameplay->RefreshInventoryOverlays();
     CaptureScreen(TEXT("GameplayInventory"));
+    {
+        const auto Page=Manager->FindElementByName(TEXT("InventoryPanel_Field"));
+        const auto Background=Manager->FindElementUnder(TEXT("InventoryPanel_Field"),TEXT("InvBackgroundImage"));
+        const auto Black=Manager->FindElementUnder(TEXT("InventoryPanel_Field"),TEXT("Blackness"));
+        const int32 OldHeight=Page->Height;
+        for(int32 Height:{362,600,900})
+        {
+            Page->Height=Height;Gameplay->ReflowInventoryPanelGeometry();
+            TestEqual(TEXT("Inventory gradient retains retail authored height instead of repeating"),Background->Height,362);
+            TestEqual(TEXT("Inventory black extension starts at retail gradient bottom"),Black->Y,361);
+            TestEqual(TEXT("Inventory black extension covers the entire resized panel"),Black->Y+Black->Height,Height);
+        }
+        Page->Height=OldHeight;Gameplay->ReflowInventoryPanelGeometry();
+    }
     TestTrue(TEXT("Inventory draws bound shortcut number overlay"),Gameplay->InventorySlotOverlays.Num()>0
         && Gameplay->InventorySlotOverlays[0]->GetVisibility()!=ESlateVisibility::Collapsed);
     auto* ShortcutArt=Cast<UTexture2D>(Gameplay->InventorySlotOverlays[0]->Background.GetResourceObject());

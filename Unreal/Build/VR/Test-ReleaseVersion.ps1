@@ -1,10 +1,10 @@
 #requires -Version 7.0
-# Read-only preflight shared by both platform builds.
+# Read-only preflight shared by Windows, Linux, and Quest platform builds.
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
 $header = Get-Content -LiteralPath (Join-Path $repoRoot 'Unreal/Plugins/ACEClient/Source/ACEClient/Public/ACEClientBuild.h') -Raw
 $versions = [regex]::Matches($header, 'inline constexpr const TCHAR\* Version = TEXT\("([^"]+)"\);')
-if ($versions.Count -ne 1) { throw 'Declare one shared client Version for Windows and Quest.' }
+if ($versions.Count -ne 1) { throw 'Declare one shared client Version for Windows, Linux, and Quest.' }
 $version = $versions[0].Groups[1].Value
 if ($header -notmatch 'ReleaseNumber = (\d+);') { throw 'Missing client ReleaseNumber.' }
 $release = [int]$Matches[1]
@@ -24,4 +24,4 @@ if ($android -notmatch '(?m)^VersionDisplayName=([^\r\n]+)' -or $Matches[1].Trim
 if ($android -notmatch '(?m)^StoreVersion=(\d+)\s*$' -or [int]$Matches[1] -ne $release) {
     throw "Quest StoreVersion differs from shared ReleaseNumber $release."
 }
-Write-Host "Verified unified Windows/PC VR/Quest version $version (release $release)."
+Write-Host "Verified unified Windows/Linux/PC VR/Quest version $version (release $release)."

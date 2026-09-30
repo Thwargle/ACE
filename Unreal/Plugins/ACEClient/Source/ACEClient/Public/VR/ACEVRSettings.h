@@ -49,6 +49,9 @@ public:
 	UPROPERTY(Config) FRotator MenuViewRotation = FRotator::ZeroRotator;
 	UPROPERTY(Config) TMap<FName,FTransform> PanelLayouts;
 	UPROPERTY(Config) TMap<FName,FName> ButtonBindings;
+	UPROPERTY(Config) TMap<FName,FName> MenuButtonBindings;
+	FName GetMenuButtonAction(FName Input) const;
+	void SetMenuButtonAction(FName Input,FName Action);
 	FName GetButtonAction(FName Input) const;
 	void SetButtonAction(FName Input,FName Action);
 	UPROPERTY(Config) int32 SettingsVersion = 0;

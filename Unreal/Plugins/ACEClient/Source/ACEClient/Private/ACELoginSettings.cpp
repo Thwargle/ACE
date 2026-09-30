@@ -12,6 +12,8 @@
 #elif PLATFORM_ANDROID
 #include "Android/AndroidApplication.h"
 #include "Android/AndroidJNI.h"
+#elif PLATFORM_LINUX
+#include <sys/stat.h>
 #endif
 
 namespace ACELoginSettings
@@ -49,7 +51,7 @@ namespace ACELoginSettings
 		Json->SetStringField(TEXT("host"), Settings.Host);
 		Json->SetStringField(TEXT("port"), Settings.Port);
 		Json->SetStringField(TEXT("account"), Settings.Account);
-		Json->SetStringField(TEXT("password"), Settings.Password);
+        Json->SetStringField(TEXT("password"), PLATFORM_LINUX ? FString() : Settings.Password);
 		if (Settings.bProfileFormat)
 		{
 			Json->SetNumberField(TEXT("version"), 3);
@@ -71,7 +73,7 @@ namespace ACELoginSettings
 			{
 				auto J = MakeShared<FJsonObject>();
 				J->SetStringField(TEXT("id"), A.Id);
-				J->SetStringField(TEXT("username"), A.Username); J->SetStringField(TEXT("password"), A.Password);
+                J->SetStringField(TEXT("username"), A.Username); J->SetStringField(TEXT("password"), PLATFORM_LINUX ? FString() : A.Password);
 				Accounts.Add(MakeShared<FJsonValueObject>(J));
 			}
 			Json->SetArrayField(TEXT("servers"), Servers); Json->SetArrayField(TEXT("accounts"), Accounts);
@@ -89,14 +91,20 @@ namespace ACELoginSettings
 		LocalFree(Protected.pbData);
 #elif PLATFORM_ANDROID
 		if (!AndroidCrypt(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length(), true, Bytes)) return false;
+#elif PLATFORM_LINUX
+        // Persist nonsecret profile data only; passwords remain in memory for this session.
+        Bytes.Append(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length());
 #else
 		return false;
 #endif
 		const FString Directory = FPaths::GetPath(Path);
 		if (!IFileManager::Get().MakeDirectory(*Directory, true)) return false;
 		const FString TemporaryPath = Path + TEXT(".tmp");
-		const bool Saved = FFileHelper::SaveArrayToFile(Bytes, *TemporaryPath)
-			&& IFileManager::Get().Move(*Path, *TemporaryPath, true, false);
+        bool Saved = FFileHelper::SaveArrayToFile(Bytes, *TemporaryPath);
+#if PLATFORM_LINUX
+        Saved = Saved && chmod(TCHAR_TO_UTF8(*FPaths::ConvertRelativePathToFull(TemporaryPath)), S_IRUSR | S_IWUSR) == 0;
+#endif
+        Saved = Saved && IFileManager::Get().Move(*Path, *TemporaryPath, true, false);
 		if (!Saved) IFileManager::Get().Delete(*TemporaryPath, false, true);
 		return Saved;
 	}
@@ -128,6 +136,10 @@ namespace ACELoginSettings
 			Text = FString(Utf8.Length(), Utf8.Get());
 		}
 		FMemory::Memzero(Plain.GetData(), Plain.Num());
+#elif PLATFORM_LINUX
+        if (Bytes.Num() > 524288) return false;
+        const FUTF8ToTCHAR Utf8(reinterpret_cast<const ANSICHAR*>(Bytes.GetData()), Bytes.Num());
+        Text = FString(Utf8.Length(), Utf8.Get());
 #else
 		return false;
 #endif
@@ -138,6 +150,9 @@ namespace ACELoginSettings
 			|| !Json->TryGetStringField(TEXT("port"), Loaded.Port)
 			|| !Json->TryGetStringField(TEXT("account"), Loaded.Account)
 			|| !Json->TryGetStringField(TEXT("password"), Loaded.Password)) return false;
+#if PLATFORM_LINUX
+        Loaded.Password.Reset();
+#endif
 		double Version = 0;
 		if (Json->TryGetNumberField(TEXT("version"), Version))
 		{
@@ -168,6 +183,9 @@ namespace ACELoginSettings
 				const TSharedPtr<FJsonObject>* J = nullptr; FACELoginAccount A;
 				if (!V->TryGetObject(J) || !(*J)->TryGetStringField(TEXT("id"), A.Id) || A.Id.IsEmpty() || AccountIds.Contains(A.Id)
 					|| !(*J)->TryGetStringField(TEXT("username"), A.Username) || !(*J)->TryGetStringField(TEXT("password"), A.Password)) return false;
+#if PLATFORM_LINUX
+                A.Password.Reset();
+#endif
 				AccountIds.Add(A.Id);
 				// Upgrade any early server-scoped profile without losing alternate
 				// passwords. Only exact duplicates can safely be combined.

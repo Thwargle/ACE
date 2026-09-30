@@ -11,7 +11,9 @@
 #include "ACEDatSubsystem.h"
 #include "ACEOpcodes.h"
 #include "ACEPlayerController.h"
+#include "VR/ACEVRComponent.h"
 #include "ACETypes.h"
+#include "ACEInventoryRules.h"
 #include "Components/Border.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
@@ -21,6 +23,11 @@
 #include "Blueprint/WidgetTree.h"
 #include "Styling/CoreStyle.h"
 
+namespace ACESalvageMaterialNames
+{
+#include "Protocol/ACEMaterialTypeNames.inl"
+}
+
 namespace
 {
 	static const FLinearColor SocialGold(0.95f, 0.82f, 0.35f, 1.f);
@@ -28,6 +35,64 @@ namespace
 	static const FLinearColor SocialDim(0.65f, 0.65f, 0.6f, 1.f);
 	/** DAT paint climbs past 20k — overlays must sit above tab/frame chrome. */
 	constexpr int32 SocialOverlayZ = 100000;
+
+	// Retail TinkeringSystem::IsValidMaterialType excludes the material category
+	// headings. ACE's salvage table likewise has no output weenie for those IDs.
+	bool IsSalvageMaterial(int32 Material)
+	{
+		return Material >= 1 && Material <= 77 && Material != 3 && Material != 9
+			&& Material != 56 && Material != 65 && Material != 72;
+	}
+
+	bool IsOwnedSalvageObject(const FACESession& Session, int32 Guid)
+	{
+		TSet<int32> Seen;
+		while (Guid && Guid != Session.GetPlayerGuid())
+		{
+			if (Seen.Contains(Guid) || Session.GetTradeSelfItems().Contains(Guid)) return false;
+			Seen.Add(Guid);
+			const FACEWorldObject* Item = Session.GetWorldObjects().Find(Guid);
+			if (!Item || Item->WielderId || Item->ParentGuid || Item->CurrentWieldedLocation) return false;
+			Guid = Item->ContainerId;
+		}
+		return Guid != 0 && Guid == Session.GetPlayerGuid();
+	}
+
+	bool IsSalvageCandidate(const FACESession& Session, const FACEWorldObject& Item, int32 ToolGuid)
+	{
+		return Item.Guid != ToolGuid && Item.Guid != Session.GetPlayerGuid() && IsOwnedSalvageObject(Session, Item.Guid)
+			&& IsSalvageMaterial(Item.MaterialType) && Item.Structure < 100
+			&& !(Item.ObjectDescriptionFlags & ACEObjectDescFlag::Retained);
+	}
+
+	// Pack item queries intentionally omit nested packs. Salvage recursively adds
+	// their contents, so retain container entries here and guard cycles in callers.
+	bool GetSalvageChildren(const FACESession& Session, const FACEWorldObject& Item, TArray<int32>& Out)
+	{
+		Out.Reset();
+		bool bKnownNonempty = false;
+		if (const auto* Contents = Session.GetContainerContents(Item.Guid))
+		{
+			// Unresolved child records still make the container nonempty. An older
+			// empty ViewContents also must not hide a newly replicated child below.
+			bKnownNonempty = !Contents->IsEmpty();
+			for (const auto& Ref : *Contents)
+			{
+				const FACEWorldObject* Child = Session.GetWorldObjects().Find(Ref.ItemGuid);
+				if (Child && Child->ContainerId == Item.Guid) Out.AddUnique(Ref.ItemGuid);
+			}
+		}
+		if (!ACEInventoryRules::IsContainer(Item)) return bKnownNonempty;
+		for (const auto& Pair : Session.GetWorldObjects())
+			if (Pair.Value.ContainerId == Item.Guid) Out.AddUnique(Pair.Key);
+		Out.Sort([&](int32 A, int32 B)
+		{
+			const int32 PA = Session.GetWorldObjects().FindChecked(A).PlacementPosition;
+			const int32 PB = Session.GetWorldObjects().FindChecked(B).PlacementPosition;
+			return PA != PB ? PA < PB : A < B;
+		});
+		return bKnownNonempty || !Out.IsEmpty();
+	}
 }
 
 void UACEUIGameplayBinder::HandleFellowshipChanged()
@@ -1152,13 +1217,17 @@ void UACEUIGameplayBinder::RefreshQuestOverlays()
 
 void UACEUIGameplayBinder::ShowSalvagePanel(int32 ToolGuid)
 {
-	if (ToolGuid == 0)
+	const auto Session = Client ? Client->GetSession() : nullptr;
+	FACEWorldObject Tool;
+	if (!Session || !Client->GetWorldObject(ToolGuid, Tool)
+		|| !(uint32(Tool.ItemType) & 0x20000000u) || !IsOwnedSalvageObject(*Session, ToolGuid))
 	{
 		return;
 	}
 	OpenSalvageToolGuid = ToolGuid;
 	SalvageMaterialType = 0;
 	SalvageQueueGuids.Reset();
+	SalvageScrollOffset = 0;
 	OpenLootContainerGuid = 0;
 	OpenVendorGuid = 0;
 	bTradeOpen = false;
@@ -1173,6 +1242,8 @@ void UACEUIGameplayBinder::ShowSalvagePanel(int32 ToolGuid)
 		Manager->SetElementVisibleByName(TEXT("SalvagePanel"), true);
 	}
 	RefreshSalvageOverlays();
+	if (PlayerController && PlayerController->IsVRActive())
+		if (auto* Rig = PlayerController->GetVRComponent()) Rig->RevealSalvagePanel();
 	PostInventorySystemMessage(TEXT("Drag salvageable items onto the Ust panel, then click Salvage."));
 }
 
@@ -1181,49 +1252,72 @@ void UACEUIGameplayBinder::HideSalvagePanel()
 	OpenSalvageToolGuid = 0;
 	SalvageMaterialType = 0;
 	SalvageQueueGuids.Reset();
+	SalvageScrollOffset = 0;
+	SalvageItemSlotGuids.Reset();
 	for (UBorder* B : SalvageItemSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+	for (UBorder* B : SalvageItemBackgrounds) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+	for (UBorder* B : SalvageItemSelections) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+	for (UTextBlock* L : SalvageLabels) { if (L) L->SetVisibility(ESlateVisibility::Collapsed); }
 	if (SalvageWarningLabel) { SalvageWarningLabel->SetVisibility(ESlateVisibility::Collapsed); }
 	SyncEnvPanelMode();
 }
 
+bool UACEUIGameplayBinder::CanAddItemToSalvageQueue(int32 Guid) const
+{
+	const auto Session = Client ? Client->GetSession() : nullptr;
+	if (!Session || !OpenSalvageToolGuid || !IsOwnedSalvageObject(*Session, OpenSalvageToolGuid)) return false;
+	TSet<int32> Seen;
+	TFunction<bool(int32)> CanAdd = [&](int32 ItemGuid)
+	{
+		if (!ItemGuid || ItemGuid == OpenSalvageToolGuid || Seen.Contains(ItemGuid)
+			|| SalvageQueueGuids.Contains(ItemGuid) || !IsOwnedSalvageObject(*Session, ItemGuid)) return false;
+		Seen.Add(ItemGuid);
+		const FACEWorldObject* Item = Session->GetWorldObjects().Find(ItemGuid);
+		if (!Item) return false;
+		TArray<int32> Children;
+		if (GetSalvageChildren(*Session, *Item, Children))
+		{
+			for (int32 Child : Children) if (CanAdd(Child)) return true;
+			return false;
+		}
+		return IsSalvageCandidate(*Session, *Item, OpenSalvageToolGuid)
+			&& (Client->IsCharacterOptionSet(0x22) || !SalvageMaterialType || Item->MaterialType == SalvageMaterialType);
+	};
+	return CanAdd(Guid);
+}
+
 bool UACEUIGameplayBinder::AddItemToSalvageQueue(int32 Guid)
 {
-	if (!Client || Guid == 0 || OpenSalvageToolGuid == 0 || Guid == OpenSalvageToolGuid)
+	const auto Session = Client ? Client->GetSession() : nullptr;
+	if (!Session || !CanAddItemToSalvageQueue(Guid))
 	{
+		PostInventorySystemMessage(TEXT("That item cannot be added to salvage. Check its material, retained status, and ownership."));
 		return false;
 	}
-	if (SalvageQueueGuids.Contains(Guid))
+	TSet<int32> Seen;
+	const int32 Before = SalvageQueueGuids.Num();
+	TFunction<void(int32)> Add = [&](int32 ItemGuid)
 	{
-		return true;
-	}
-	FACEWorldObject Obj;
-	if (!Client->GetWorldObject(Guid, Obj))
-	{
-		PostInventorySystemMessage(TEXT("That item cannot be salvaged."));
-		return false;
-	}
-	if (Obj.MaterialType == 0)
-	{
-		PostInventorySystemMessage(TEXT("That item has no salvageable material."));
-		return false;
-	}
-	if (Obj.Structure >= 100)
-	{
-		PostInventorySystemMessage(TEXT("That item is already fully salvaged."));
-		return false;
-	}
-	if (SalvageMaterialType != 0 && Obj.MaterialType != SalvageMaterialType)
-	{
-		PostInventorySystemMessage(TEXT("You can only salvage one material type at a time."));
-		return false;
-	}
-	if (SalvageMaterialType == 0)
-	{
-		SalvageMaterialType = Obj.MaterialType;
-	}
-	SalvageQueueGuids.Add(Guid);
+		if (Seen.Contains(ItemGuid) || ItemGuid == OpenSalvageToolGuid
+			|| SalvageQueueGuids.Contains(ItemGuid) || !IsOwnedSalvageObject(*Session, ItemGuid)) return;
+		Seen.Add(ItemGuid);
+		const FACEWorldObject* Item = Session->GetWorldObjects().Find(ItemGuid);
+		if (!Item) return;
+		TArray<int32> Children;
+		if (GetSalvageChildren(*Session, *Item, Children))
+		{
+			PostInventorySystemMessage(FString::Printf(TEXT("Adding contents of %s."), *Item->Name));
+			for (int32 Child : Children) Add(Child);
+			return;
+		}
+		if (!IsSalvageCandidate(*Session, *Item, OpenSalvageToolGuid)
+			|| (!Client->IsCharacterOptionSet(0x22) && SalvageMaterialType && Item->MaterialType != SalvageMaterialType)) return;
+		if (!SalvageMaterialType) SalvageMaterialType = Item->MaterialType;
+		SalvageQueueGuids.Add(ItemGuid);
+	};
+	Add(Guid);
 	RefreshSalvageOverlays();
-	return true;
+	return SalvageQueueGuids.Num() > Before;
 }
 
 void UACEUIGameplayBinder::RemoveItemFromSalvageQueue(int32 Guid)
@@ -1238,52 +1332,119 @@ void UACEUIGameplayBinder::RemoveItemFromSalvageQueue(int32 Guid)
 
 void UACEUIGameplayBinder::SubmitSalvageQueue()
 {
-	if (!Client || OpenSalvageToolGuid == 0 || SalvageQueueGuids.Num() == 0)
+	const auto Session = Client ? Client->GetSession() : nullptr;
+	FACEWorldObject Tool;
+	if (!Session || !Client->GetWorldObject(OpenSalvageToolGuid, Tool)
+		|| !(uint32(Tool.ItemType) & 0x20000000u) || !IsOwnedSalvageObject(*Session, OpenSalvageToolGuid))
 	{
+		HideSalvagePanel();
 		return;
 	}
-	Client->SendCreateTinkeringTool(OpenSalvageToolGuid, SalvageQueueGuids);
+	// Retail submits last-to-first, then clears immediately. Item creation/removal
+	// is authoritative inventory replication; SalvageOperationsResult is chat only.
+	TArray<int32> Items;
+	for (int32 I = SalvageQueueGuids.Num() - 1; I >= 0; --I)
+	{
+		const FACEWorldObject* Item = Session->GetWorldObjects().Find(SalvageQueueGuids[I]);
+		TArray<int32> Children;
+		if (Item && IsSalvageCandidate(*Session, *Item, OpenSalvageToolGuid)
+			&& !GetSalvageChildren(*Session, *Item, Children)) Items.AddUnique(Item->Guid);
+	}
+	if (!Items.IsEmpty()) Client->SendCreateTinkeringTool(OpenSalvageToolGuid, Items);
 	SalvageQueueGuids.Reset();
 	SalvageMaterialType = 0;
+	SalvageScrollOffset = 0;
+	RefreshSalvageOverlays();
+}
+
+bool UACEUIGameplayBinder::ScrollSalvage(float WheelDelta, FVector2D CanvasLocalPos)
+{
+	if (!OpenSalvageToolGuid || !Manager || !Canvas || FMath::IsNearlyZero(WheelDelta)) return false;
+	const auto List = Manager->FindElementUnder(TEXT("SalvagePanel"), TEXT("SalvageItemsList"));
+	if (!Canvas->IsElementExposedAt(List, CanvasLocalPos)) return false;
+	SetSalvageScrollOffset(SalvageScrollOffset + (WheelDelta > 0 ? -1 : 1));
+	return true;
+}
+
+void UACEUIGameplayBinder::SetSalvageScrollOffset(int32 Offset)
+{
+	SalvageScrollOffset = FMath::Clamp(Offset, 0, FMath::Max(0, SalvageQueueGuids.Num() + 1 - SalvageVisibleSlots));
 	RefreshSalvageOverlays();
 }
 
 void UACEUIGameplayBinder::RefreshSalvageOverlays()
 {
+	// Queued items can be sold, moved, retained, or removed by inventory updates.
+	// Never leave stale invisible entries for a later destructive submit.
+	if (Client && OpenSalvageToolGuid)
+	{
+		const auto Session = Client->GetSession();
+		if (!Session || !IsOwnedSalvageObject(*Session, OpenSalvageToolGuid))
+		{
+			HideSalvagePanel();
+			return;
+		}
+		SalvageQueueGuids.RemoveAll([&](int32 Guid)
+		{
+			const FACEWorldObject* Item = Session->GetWorldObjects().Find(Guid);
+			TArray<int32> Children;
+			return !Item || !IsSalvageCandidate(*Session, *Item, OpenSalvageToolGuid)
+				|| GetSalvageChildren(*Session, *Item, Children);
+		});
+		if (SalvageQueueGuids.IsEmpty()) SalvageMaterialType = 0;
+	}
 	if (!Client || !Manager || !Canvas || OpenSalvageToolGuid == 0)
 	{
 		for (UBorder* B : SalvageItemSlots) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UBorder* B : SalvageItemBackgrounds) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UBorder* B : SalvageItemSelections) { if (B) B->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UTextBlock* L : SalvageLabels) { if (L) L->SetVisibility(ESlateVisibility::Collapsed); }
 		if (SalvageWarningLabel) { SalvageWarningLabel->SetVisibility(ESlateVisibility::Collapsed); }
 		return;
 	}
 	SyncEnvPanelMode();
 	EnsureOverlays();
-	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementByName(TEXT("SalvageItemsList"));
+	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(TEXT("SalvagePanel"), TEXT("SalvageItemsList"));
 	if (!ListEl.IsValid())
 	{
 		return;
 	}
 	constexpr int32 Cell = 32;
 	constexpr int32 OverlayZ = 120000;
-	const int32 Cols = FMath::Max(1, ListEl->Width / Cell);
-	const int32 Rows = FMath::Max(1, ListEl->Height / Cell);
-	const int32 PageSize = Cols * Rows;
-	const FIntPoint Origin = ListEl->GetScreenOrigin();
-	SalvageItemSlotGuids.SetNum(PageSize);
-	for (int32 i = 0; i < PageSize; ++i)
+	// The authored salvage list is a single horizontal row, with its own scrollbar.
+	SalvageVisibleSlots = FMath::Max(1, ListEl->Width / Cell);
+	// UI_ItemList_AtLeastOneEmptySlot reserves a drop slot after the final item,
+	// including when the last item exactly fills the visible row.
+	const int32 Capacity = SalvageQueueGuids.Num() + 1;
+	const int32 MaxOffset = FMath::Max(0, Capacity - SalvageVisibleSlots);
+	SalvageScrollOffset = FMath::Clamp(SalvageScrollOffset, 0, MaxOffset);
+	if (const auto Bar = Manager->FindElementUnder(TEXT("SalvagePanel"), TEXT("Salvage_ItemListScroll")))
+	{
+		// DAT UICore_Scrollbar_hide_when_disabled: no track, arrows, or thumb
+		// while the complete list and trailing drop slot fit in the row.
+		Bar->bVisible = MaxOffset > 0;
+		SyncDatScrollbar(Bar, MaxOffset ? float(SalvageScrollOffset) / MaxOffset : 0.f,
+			FMath::Min(1.f, float(SalvageVisibleSlots) / Capacity));
+	}
+	for (UBorder* B : SalvageItemSlots) if (B) B->SetVisibility(ESlateVisibility::Collapsed);
+	for (UBorder* B : SalvageItemBackgrounds) if (B) B->SetVisibility(ESlateVisibility::Collapsed);
+	for (UBorder* B : SalvageItemSelections) if (B) B->SetVisibility(ESlateVisibility::Collapsed);
+	for (UTextBlock* L : SalvageLabels) if (L) L->SetVisibility(ESlateVisibility::Collapsed);
+	SalvageItemSlotGuids.SetNumZeroed(SalvageVisibleSlots);
+	for (int32 i = 0; i < SalvageVisibleSlots; ++i)
 	{
 		UBorder* Icon = EnsureIconBorder(SalvageItemSlots, i);
 		if (!Icon)
 		{
 			continue;
 		}
-		if (!SalvageQueueGuids.IsValidIndex(i))
+		if (!SalvageQueueGuids.IsValidIndex(i + SalvageScrollOffset))
 		{
 			Icon->SetVisibility(ESlateVisibility::Collapsed);
 			SalvageItemSlotGuids[i] = 0;
 			continue;
 		}
-		const int32 Guid = SalvageQueueGuids[i];
+		const int32 Guid = SalvageQueueGuids[i + SalvageScrollOffset];
 		FACEWorldObject Obj;
 		if (!Client->GetWorldObject(Guid, Obj))
 		{
@@ -1292,23 +1453,25 @@ void UACEUIGameplayBinder::RefreshSalvageOverlays()
 			continue;
 		}
 		SalvageItemSlotGuids[i] = Guid;
-		SetIconDid(Icon, Obj.IconId);
+		SetItemSlotForeground(Icon, &Obj);
 		Icon->SetVisibility(ESlateVisibility::Visible);
-		UACEHoverTooltipWidget::SetWidgetTooltip(Icon, FText::FromString(Obj.Name));
-		const int32 Col = i % Cols;
-		const int32 Row = i / Cols;
-		if (Icon->GetParent() != Canvas->GetElementLayer())
+		UACEHoverTooltipWidget::SetWidgetTooltip(Icon, FText::FromString(FString::Printf(TEXT("%s (%s)"),
+			*Obj.Name, ACESalvageMaterialNames::GetMaterialTypeName(Obj.MaterialType))));
+		const FMargin Insets(i * Cell, 0, ListEl->Width - (i + 1) * Cell, ListEl->Height - Cell);
+		Canvas->PlaceWidgetAtElement(Icon, ListEl, OverlayZ + 1, Insets);
+		if (UBorder* Bg = EnsureIconBorder(SalvageItemBackgrounds, i))
 		{
-			Canvas->GetElementLayer()->AddChild(Icon);
+			SetItemSlotBackground(Bg, &Obj);
+			Bg->SetVisibility(ESlateVisibility::HitTestInvisible);
+			Canvas->PlaceWidgetAtElement(Bg, ListEl, OverlayZ, Insets);
 		}
-		if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Icon->Slot))
-		{
-			Slot->SetAnchors(FAnchors(0.f, 0.f));
-			Slot->SetPosition(FVector2D(static_cast<float>(Origin.X + Col * Cell),
-				static_cast<float>(Origin.Y + Row * Cell)));
-			Slot->SetSize(FVector2D(static_cast<float>(Cell), static_cast<float>(Cell)));
-			Canvas->SetOverlayOrder(Icon, Manager->FindElementByName(TEXT("RootGameplay_FloatyEnvPanel_Field")), OverlayZ);
-		}
+		if (Guid == LastSelection.Guid)
+			if (UBorder* Selection = EnsureIconBorder(SalvageItemSelections, i))
+			{
+				SetIconDid(Selection, 0x06004D09);
+				Selection->SetVisibility(ESlateVisibility::HitTestInvisible);
+				Canvas->PlaceWidgetAtElement(Selection, ListEl, OverlayZ + 2, Insets);
+			}
 	}
 	if (!SalvageWarningLabel && Canvas->WidgetTree)
 	{
@@ -1318,13 +1481,24 @@ void UACEUIGameplayBinder::RefreshSalvageOverlays()
 	}
 	if (SalvageWarningLabel)
 	{
-		const FString Warn = SalvageQueueGuids.Num() == 0
-			? TEXT("Add items to salvage.")
-			: FString::Printf(TEXT("%d item(s) ready"), SalvageQueueGuids.Num());
+		// client_local_English.dat 0x23000001:0x0A96DC87. The retail action
+		// is immediate; keep this warning visible even while the queue is empty.
+		const FString Warn = TEXT("WARNING: Items in this panel will be destroyed!");
 		SalvageWarningLabel->SetText(FText::FromString(Warn));
 		SalvageWarningLabel->SetVisibility(ESlateVisibility::HitTestInvisible);
 		SalvageWarningLabel->SetColorAndOpacity(FSlateColor(SocialGold));
-		PlaceTextOnElement(SalvageWarningLabel, TEXT("SalvageWarning_Text"), Warn, 9, SocialGold, 10010);
+		PlaceTextOnElement(SalvageWarningLabel, TEXT("SalvageWarning_Text"), Warn, 9, SocialWhite, OverlayZ);
 	}
-	Manager->SetElementVisibleByName(TEXT("Salvage_Button"), SalvageQueueGuids.Num() > 0);
+	if (auto Button = Manager->FindElementUnder(TEXT("SalvagePanel"), TEXT("Salvage_Button")))
+	{
+		Button->bVisible = true;
+		Button->bActivatable = !SalvageQueueGuids.IsEmpty();
+		Button->bGhosted = !Button->bActivatable;
+		if (SalvageLabels.IsEmpty() && Canvas->WidgetTree)
+			SalvageLabels.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
+		if (!SalvageLabels.IsEmpty()) PlaceTextOnElement(SalvageLabels[0], Button, TEXT("Salvage"), 9,
+			Button->bActivatable ? SocialWhite : SocialDim, OverlayZ, true);
+		if (!SalvageLabels.IsEmpty() && !Button->bActivatable)
+			SalvageLabels[0]->SetColorAndOpacity(FSlateColor(SocialDim));
+	}
 }

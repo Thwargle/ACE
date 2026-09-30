@@ -1,88 +1,74 @@
-# AC:Unreal / AC:VR release 87
+# AC:Unreal / AC:VR release 88
 
-Windows desktop, PC VR, and native Quest: **2026.09.30.87**.
-Release number / Android version code: 87. Quest installer revision: 6.
+Windows desktop, PC VR, native Linux desktop, and standalone Quest:
+**2026.09.30.88**. Android version code: 88. Quest installer revision: 6.
 
-## Changes since public release v86
+## Changes since public release v87
 
-### VR inventory and gameplay menus
+### Native Linux desktop
 
-- Add a controller-friendly gameplay interface with a mirrored, animated player
-  model that faces the viewer. Native panels support moving, rotating, changing
-  distance, resizing, and saving placement through the existing panel controls.
-- Show the entire selected pack in a stable grid instead of Previous/Next pages.
-  Center item icons in their slots and use pack icons along the right edge.
-- Support dragging items between slots and packs, merging or splitting selected
-  quantities, equipping in compatible slots, and dropping into the world. Fix
-  full-stack drops incorrectly requesting a split.
-- Keep Use / Equip, Inspect, Give, Drop, and targeted item use together. Clear
-  hidden item context when changing pages while preserving unrelated world targets.
-- Arrange equipment slots by body location. Separate Attributes and Skills, with
-  +1/+10 training controls, current XP costs, and skill-credit requirements.
-- Show spell icons, descriptions, explicit hotbar tabs, and add/remove/reorder
-  actions. Newly added spells append after the last spell rather than inserting
-  at the front of the bar.
-- Fix fellowship creation and provide member selection, recruitment, leadership,
-  dismissal, openness, leaving, disbanding, and fellowship preference controls.
-- Clarify vendor buying/selling lists with item icons, offered quantities, prices,
-  removal controls, and the same inventory slot and pack styling.
-- Resolve native-menu pointer hit testing, overlapping HUD input, and inventory
-  icon composition. Update inventory views on data changes rather than unrelated
-  world-object updates. Distinguish combat pointer feedback from normal pointing.
-- Resolve self-targeted spells before pointer selection so caster-only buffs do
-  not require selecting the player.
+- Add a native x86_64 Linux download alongside the Windows and Quest packages.
+  Extract the archive and run `./AC-Unreal.sh`; Wine and Proton are not required.
+- Save Linux server profiles, account names, and settings separately from the
+  extracted application. Passwords are not saved on Linux; enter them again after
+  restarting. Supply your own updated retail DAT files through Game files.
+- Detect new Linux releases in the launcher and open the matching archive in the
+  browser. Linux updates use manual extraction; automatic installation is not
+  available. This first Linux release targets desktop play; Linux VR is unverified.
+- Keep release numbers aligned across all platforms and publish Linux download
+  instructions and checksums on the website.
 
-### Desktop controls and retail interactions
+### VR inventory and inspection
 
-- Add rebindable Show / hide interface, defaulting to Alt+Z. Keep camera zoom
-  working while the interface is hidden.
-- Allow mouse-wheel directions to be rebound to other actions instead of zoom;
-  keep zoom actions bindable and retain imported keymap filenames across restarts.
-- Preserve mouse-look and held movement when using targeting hotkeys. Add an
-  optional toggle mode for mouse-look and confine the cursor in fullscreen modes.
-- Exclude player-owned summons from monster-targeting cycles and correct UI-tab
-  action routing.
-- Honor the current/previous recipient when giving items, prompting for a target
-  only when needed. Support removing individual entries from the vendor sell list.
-- Recover rejected world-object use transactions instead of leaving a stale busy
-  state. Use the shared combat-to-interaction handling for doors, NPCs, and portals.
-- Apply retail tooltip templates, colors, and fonts; correct spellbook inspection
-  sizing and suppress duplicate inspection scrollbars.
-- Prevent overhead map view indoors and use the retail camera collision radius.
+- Add rebindable controller shortcuts: A uses or equips the selected item and B
+  inspects an item or spell. Show inspection beside the main panel with its own
+  close control, rather than requiring a separate navigation page.
+- Keep panel geometry stable as selection changes. Add spell icons and explicit
+  hotbar drop slots, with drag/drop and button-based add/remove actions.
+- Organize attributes and skills using retail grouping and icons, including
+  specialized, trained, and untrained skill sections.
+- Correct gaps in the classic inventory background and improve selected-item
+  names, material prefixes, health/mana indicators, and label fitting.
 
-### Custom servers, movement, and crowded areas
+### Salvage and world objects
 
-- Accept server-authored object scales and fresh custom NPC descriptions, including
-  a defeated creature replaced by a usable reward NPC under the same identifier.
-- Build item examination text from server appraisal properties and the player's
-  installed DAT content. Respect DAT vital formulas, gear health bonuses, and
-  enlightenment when updating shared desktop/VR vitals.
-- Match retail's most-recent opposing movement command behavior, backward movement
-  and turn rates, and movement interruption of the local casting animation. Keep
-  the corresponding movement and action packets consistent with server behavior.
-- Batch repeated creature-overlap and floor queries in crowded scenes. Retain wall,
-  stair, and creature collision checks while reducing repeated physics work.
-- Add regressions using low carenzi, medium gromnies, and elevated wasps, including
-  mixed crowds, wall contacts, stairs, and the reported dungeon location.
+- Implement Ust salvage in desktop and VR interfaces: select eligible items,
+  review the salvage list, remove entries, and submit through the server's salvage
+  transaction. Respect retained items and report server results.
+- Handle custom object descriptions and deferred world appearance across relogs
+  and visibility changes so server-defined objects can reappear reliably.
+- Correct close-range visibility and bounds for very large scaled models.
+
+### Effects and crowded-scene performance
+
+- Smooth rotating particle presentation between simulation updates, including
+  Aetheria effects on slopes.
+- Prevent weather particles such as snow from creating inferred scene lights.
+- Share a bounded pool of effect lights across a world and prioritize nearby
+  sources. Limit overlapping light energy to reduce the combined bright glow from
+  crowds with illuminated weapons while retaining their authored particles.
+- Cache repeated model-light estimates and avoid particle-position scans for
+  sources that are outside the active light budget.
 
 ## Updating
 
-Use **Updates** in the launcher or download the current installer from the site.
-Existing supported updaters detect release 87. Accounts, settings, and retail DAT
+Windows and Quest users can use **Updates** in the launcher or download from the
+site. Existing supported updaters detect release 88. Accounts, settings, and DAT
 files are retained; do not uninstall first. **Installation closes the game.**
 On Quest, confirm Android's installation prompt, wait for completion, then reopen
-AC:VR from the library. Optional automatic updating remains off by default.
+AC:VR. Optional automatic updating remains off by default.
 
-To reposition a VR panel, unlock it and hold **Move** or **Resize**. While holding
-Move, the right thumbstick pushes the panel away or brings it closer.
+Linux users should close the game, extract the new archive into a new folder,
+and run its `AC-Unreal.sh`. See `README-LINUX.txt` for requirements and setup.
 
 No retail DAT files, saved accounts, or game-server configuration are bundled.
 No new game-server deployment is required.
 
 ## Validation scope
 
-Automated coverage exercises controller clicks and drags, mirror orientation,
-inventory and fellowship packets, spellbar placement, XP costs, desktop input,
-custom object handling, and varied creature collisions using actual DAT geometry.
-Crowd-query benchmarks are synthetic; no new measured headset FPS gain is claimed.
-Live headset comfort and multiplayer/server acceptance remain separate checks.
+Release validation covers platform builds, archive contents, synchronized versions,
+update metadata, salvage, VR menu controls, selection data, custom object lifecycle,
+large-model visibility, and particle/light regressions. Crowd benchmarks and light
+comparison captures are controlled tests, not measured live gameplay FPS gains.
+Live multiplayer acceptance, headset comfort, and Linux desktop/GPU compatibility
+remain checks for users' hardware and server configurations.

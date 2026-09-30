@@ -997,7 +997,7 @@ bool AACELandblockActor::TrySpawnOneScenery(UACEDatSubsystem* Dat, const FPendin
 			return true;
 		}
 		Scenery->AttachToActor(this, FAttachmentTransformRules::KeepRelativeTransform);
-		if (!Scenery->InitializeFromSetup(static_cast<int32>(Item.ModelId), 1.f, WorldScale, /*bEnableCollision*/ true))
+		if (!Scenery->InitializeFromSetup(static_cast<int32>(Item.ModelId), 1.f, WorldScale, /*bEnableCollision*/ true, Item.bRegionDesc))
 		{
 			Scenery->Destroy();
 			return false;

@@ -67,6 +67,7 @@ public:
 	void ToggleCombat();
 	void SetCombat(int32 Mode);
 	void OpenRetailPanel(FName Name);
+	void RevealSalvagePanel();
 	void CycleSpell(int32 Direction);
 	void SelectWristSlot(int32 Slot);
 	bool SelectSpell(int32 Spell);
@@ -123,6 +124,7 @@ public:
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> WristPanel;
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> KeyboardPanel;
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> GameplayMenuPanel;
+	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> MenuInspectionPanel;
 	UPROPERTY(Transient) TObjectPtr<UACEVRMenu> GameplayMenu;
 	bool bUseDesktopMenu = false;
 
@@ -136,6 +138,8 @@ private:
 	int32 MenuDragGuid=0;
 	FVector2D MenuPointerPositions[2] = {FVector2D(-1,-1),FVector2D(-1,-1)};
 	uint8 MenuPointerState = 0;
+	FVector2D InspectionPointerPositions[2] = {FVector2D(-1,-1),FVector2D(-1,-1)};
+	uint8 InspectionPointerState = 0;
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> SpellWheelPanel;
 	bool bSpellWheelOpen = false, bWheelStickReady = false, bWheelTurnNeutral = false;
 	bool bWheelTriggerConsumed[2] = {false, false};

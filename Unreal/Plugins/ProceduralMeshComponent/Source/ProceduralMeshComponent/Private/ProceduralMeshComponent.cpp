@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved. 
 
 #include "ProceduralMeshComponent.h"
+#include "ProceduralMeshViewFacing.h"
 #include "BodySetupEnums.h"
 #include "PrimitiveViewRelevance.h"
 #include "PrimitiveSceneProxy.h"
@@ -116,7 +117,10 @@ public:
 		: FPrimitiveSceneProxy(Component)
 		, BodySetup(Component->GetBodySetup())
 		, MaterialRelevance(Component->GetMaterialRelevance(GetScene().GetShaderPlatform()))
-		, bCachedDraws(Component->bPreferCachedDraws && GACECachedWorldDraws.GetValueOnGameThread() != 0)
+		, bCachedDraws(Component->bPreferCachedDraws && GACECachedWorldDraws.GetValueOnGameThread() != 0
+			&& !ProceduralMeshViewFacing::IsViewFacing(Component->ViewFacingMode))
+		, ViewFacingMode(Component->ViewFacingMode)
+		, ViewFacingSortCenter(Component->ViewFacingSortCenter)
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(ACE_ProcMeshCreateProxy);
 		const bool bTracePath = GACETraceProxyRebuilds.GetValueOnGameThread() != 0;
@@ -411,7 +415,18 @@ public:
 						Mesh.VertexFactory = &Section->VertexFactory;
 						Mesh.MaterialRenderProxy = MaterialProxy;
 
-						if (GACEReusePrimitiveBuffers.GetValueOnRenderThread() && GetUniformBuffer())
+						if (ProceduralMeshViewFacing::IsViewFacing(ViewFacingMode))
+						{
+							const FTransform Draw = ProceduralMeshViewFacing::DrawTransform(
+								FTransform(GetLocalToWorld()), ViewFacingSortCenter, ViewFacingMode, View->ViewLocation);
+							auto& Uniform = Collector.AllocateOneFrameResource<FDynamicPrimitiveUniformBuffer>();
+							FPrimitiveUniformShaderParametersBuilder Builder;
+							BuildUniformShaderParameters(Builder);
+							Builder.LocalToWorld(Draw.ToMatrixWithScale()).PreviousLocalToWorld(Draw.ToMatrixWithScale());
+							Uniform.Set(Collector.GetRHICommandList(), Builder);
+							BatchElement.PrimitiveUniformBufferResource = &Uniform.UniformBuffer;
+						}
+						else if (GACEReusePrimitiveBuffers.GetValueOnRenderThread() && GetUniformBuffer())
 						{
 							// FPrimitiveSceneProxy updates this on transform/material changes.
 							// Allocating it per section and per eye needlessly churns Vulkan
@@ -584,6 +599,8 @@ private:
 
 	FMaterialRelevance MaterialRelevance;
 	bool bCachedDraws;
+	uint32 ViewFacingMode;
+	FVector ViewFacingSortCenter;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -1047,9 +1064,27 @@ void UProceduralMeshComponent::SetProcMeshSection(int32 SectionIndex, const FPro
 	MarkRenderStateDirty(); // New section requires recreating scene proxy
 }
 
+void UProceduralMeshComponent::SetViewFacing(uint32 Mode, const FVector& SortCenter)
+{
+	if (ViewFacingMode == Mode && ViewFacingSortCenter == SortCenter) return;
+	ViewFacingMode = Mode;
+	ViewFacingSortCenter = SortCenter;
+	UpdateBounds();
+	MarkRenderTransformDirty();
+	MarkRenderStateDirty();
+}
+
 FBoxSphereBounds UProceduralMeshComponent::CalcBounds(const FTransform& LocalToWorld) const
 {
 	FBoxSphereBounds Ret(LocalBounds.TransformBy(LocalToWorld));
+	if (ProceduralMeshViewFacing::IsViewFacing(ViewFacingMode))
+	{
+		// A thin card's original AABB cannot cull its rotated draw frame. Enclose
+		// every rotation about the part origin, including off-center giant models.
+		const double Radius = (LocalBounds.Origin.GetAbs() + LocalBounds.BoxExtent).Size()
+			* LocalToWorld.GetMaximumAxisScale();
+		Ret = FBoxSphereBounds(LocalToWorld.GetLocation(), FVector(Radius), Radius);
+	}
 
 	Ret.BoxExtent *= BoundsScale;
 	Ret.SphereRadius *= BoundsScale;
