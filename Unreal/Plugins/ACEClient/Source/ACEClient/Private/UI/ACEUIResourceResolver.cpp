@@ -370,11 +370,20 @@ UTexture2D* UACEUIResourceResolver::ResolveItemBackground(uint32 ItemType,uint32
 	ItemCompositeCache.Add(Key,Texture); return Texture;
 }
 
-UTexture2D* UACEUIResourceResolver::ResolveItemForeground(uint32 IconId,uint32 OverlayId,uint32 Effects,bool bForSale)
+UTexture2D* UACEUIResourceResolver::ResolveItemForeground(uint32 IconId,uint32 OverlayId,uint32 Effects,bool bForSale,
+	int32 Structure,int32 MaxStructure)
 {
 	if (!IconId || !Dat || !Dat->GetTextureResolver()) return nullptr;
 	const uint32 EffectId=ResolveMappedDid(0x25000009,Effects ? FMath::CountTrailingZeros(Effects)+1 : 33,33);
-	const FString Key=FString::Printf(TEXT("icon_%08X_%08X_%08X_%d"),IconId,OverlayId,EffectId,bForSale);
+	// UIElement_UIItem::UpdateStructureDisplay hides the meter exactly at full.
+	// Structure represents salvage units / remaining uses, independently of stacks.
+	const bool bMeter = MaxStructure > 0 && Structure != MaxStructure;
+	const double Fraction = MaxStructure > 0 ? FMath::Clamp(double(Structure) / MaxStructure, 0.0, 1.0) : 0.0;
+	// ItemSlot_GenericOverlays (0x21000037) authors a 5x30 bottom-up clipped
+	// meter at (26,1). Cache its raster extent, not each possible property value.
+	const int32 FillStart = bMeter ? FMath::TruncToInt((1.0 - Fraction) * 30.0) : -1;
+	const int32 FillRows = bMeter ? FMath::TruncToInt(Fraction * 30.0) : 0;
+	const FString Key=FString::Printf(TEXT("icon_%08X_%08X_%08X_%d_%d_%d"),IconId,OverlayId,EffectId,bForSale,FillStart,FillRows);
 	if (auto* Found=ItemCompositeCache.Find(Key)) return Found->Get();
 	TArray<FColor> Pixels, Overlay, Effect;
 	auto* Resolver=Dat->GetTextureResolver();
@@ -385,6 +394,21 @@ UTexture2D* UACEUIResourceResolver::ResolveItemForeground(uint32 IconId,uint32 O
 	if (DecodeIcon(Resolver,EffectId,Effect))
 		for (int32 I=0; I<1024; ++I) if (Pixels[I]==FColor::White) Pixels[I]=Effect[I];
 	if (bForSale && DecodeIcon(Resolver,0x060012D9,Overlay)) OverIcon(Pixels,Overlay);
+	if (bMeter)
+	{
+		FACEDatTexture FrameRaw, FillRaw;
+		FACEDatDecodedSurface Frame, Fill;
+		if (Resolver->LoadTextureForUi(0x06004D24,FrameRaw) && Resolver->DecodeTextureForUi(FrameRaw,Frame)
+			&& Resolver->LoadTextureForUi(0x06004D25,FillRaw) && Resolver->DecodeTextureForUi(FillRaw,Fill)
+			&& Frame.Width==5 && Frame.Height==30 && Fill.Width==5 && Fill.Height==30)
+		{
+			Overlay.Init(FColor::Transparent,1024);
+			for (int32 Y=0; Y<30; ++Y) for (int32 X=0; X<5; ++X)
+				Overlay[(Y+1)*32+X+26] = Y>=FillStart && Y<FillStart+FillRows
+					? Fill.Pixels[Y*5+X] : Frame.Pixels[Y*5+X];
+			OverIcon(Pixels,Overlay);
+		}
+	}
 	auto* Texture=FACEDatTextureResolver::CreateTransientRgbaUi(32,32,Pixels);
 	ItemCompositeCache.Add(Key,Texture); return Texture;
 }

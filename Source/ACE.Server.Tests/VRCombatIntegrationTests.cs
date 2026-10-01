@@ -32,6 +32,68 @@ namespace ACE.Server.Tests
         private static uint nextGuid = 0x8ffff000;
 
         [TestMethod]
+        public void UniformVRMoveUsesTheSamePhysicsAndLegacyObserverRates()
+        {
+            using var f = new Fixture();
+            f.Player.HandleVRCombat(new VRCombatRequest());
+            f.Player.HandleVRCombat(new VRCombatRequest { Kind = 4, FeedbackFeatures = VRLocomotion.Subscription });
+            Assert.IsTrue(f.Player.VRUniformLocomotionSubscribed);
+            ACE.Server.Network.Structure.MoveToState Packet(Vector2 input, bool extension)
+            {
+                using var stream = new MemoryStream(); using var w = new BinaryWriter(stream);
+                w.Write(0xffu); w.Write((uint)HoldKey.Run); w.Write((uint)MotionStance.NonCombat);
+                w.Write((uint)(input.Y < 0 ? MotionCommand.WalkBackwards : MotionCommand.WalkForward));
+                w.Write((uint)HoldKey.None); w.Write(MathF.Abs(input.Y));
+                w.Write((uint)(input.X < 0 ? MotionCommand.SideStepLeft : MotionCommand.SideStepRight));
+                w.Write((uint)HoldKey.None); w.Write(MathF.Abs(input.X));
+                w.Write(f.Player.Location.Cell);
+                foreach (float v in new[] { f.Player.Location.Pos.X, f.Player.Location.Pos.Y, f.Player.Location.Pos.Z, 1f, 0f, 0f, 0f }) w.Write(v);
+                for (int i = 0; i < 4; ++i) w.Write((ushort)0);
+                w.Write((byte)1); w.Write(new byte[3]);
+                if (extension) w.Write(VRLocomotion.MoveMarker);
+                stream.Position = 0;
+                return new ACE.Server.Network.Structure.MoveToState(f.Player, new BinaryReader(stream));
+            }
+            foreach (var stick in new[] { Vector2.UnitY, -Vector2.UnitY, Vector2.UnitX, -Vector2.UnitX,
+                Vector2.Normalize(new Vector2(1, -1)), new Vector2(.3f, -.4f), Vector2.Zero })
+            {
+                var state = Packet(stick, true);
+                Assert.IsTrue(state.UniformVRInput.HasValue);
+                f.Player.OnMoveToState_ServerMethod(state);
+                var interp = f.Player.PhysicsObj.get_minterp();
+                var broadcast = new ACE.Server.Network.Structure.MovementData(f.Player, state);
+                var observed = broadcast.Invalid.State;
+                var expected = VRLocomotion.Resolve(stick, true, f.Player.GetRunRate()).Velocity;
+                Assert.AreEqual(expected.X, 1.25f * observed.SidestepSpeed, .00001f);
+                Assert.AreEqual(expected.Y, (observed.ForwardCommand == MotionCommand.RunForward ? 4f : 3.12f) * observed.ForwardSpeed, .00001f);
+                var velocity = interp.get_state_velocity();
+                Assert.AreEqual(expected.X, velocity.X, .0001f);
+                Assert.AreEqual(expected.Y, velocity.Y, .0001f);
+                if (stick == Vector2.Zero)
+                {
+                    Assert.AreEqual(MotionCommand.Ready, observed.ForwardCommand);
+                    Assert.AreEqual(MotionCommand.Invalid, observed.SidestepCommand);
+                }
+                Assert.IsTrue(broadcast.Serialize().Length > 4,
+                    "Ordinary movement serialization does not require an observer VR subscription.");
+            }
+            var legacy = Packet(new Vector2(1, -1), false);
+            Assert.IsFalse(Packet(new Vector2(float.NaN, 1), true).IsValid,
+                "Rejected VR magnitudes must never fall back to unvalidated raw physics.");
+            Assert.IsTrue(legacy.IsValid);
+            Assert.IsNull(legacy.UniformVRInput, "Opt-in alone cannot change a legacy packet.");
+            f.Player.OnMoveToState_ServerMethod(legacy);
+            Assert.IsNull(f.Player.PhysicsObj.get_minterp().UniformVRInput);
+            var oldMotion = new ACE.Server.Network.Structure.MovementData(f.Player, legacy).Invalid.State;
+            Assert.AreEqual(-f.Player.GetRunRate() * .65f, oldMotion.ForwardSpeed, .00001f);
+            Assert.IsTrue(oldMotion.SidestepSpeed <= 3);
+            f.Player.OnMoveToState_ServerMethod(Packet(Vector2.UnitX, true));
+            f.Player.PhysicsObj.StopCompletely(true); // same stop used by server MoveTo/approach
+            Assert.IsNull(f.Player.PhysicsObj.get_minterp().UniformVRInput);
+            Assert.AreEqual(Vector3.Zero, f.Player.PhysicsObj.get_minterp().get_state_velocity());
+        }
+
+        [TestMethod]
         public void StationaryCancelledApproachStillCompletesUse()
         {
             using var f = new Fixture();

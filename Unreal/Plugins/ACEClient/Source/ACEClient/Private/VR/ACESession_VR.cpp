@@ -1,4 +1,5 @@
 #include "ACESession.h"
+#include "VR/ACEVRLocomotion.h"
 
 void FACESession::HandleVRCasting(FACEBinaryReader& R)
 {
@@ -186,6 +187,7 @@ void FACESession::SendVRSubscriptions()
 			| (SupportsVRCasting() ? 4u : 0u) | ((VRCapabilities & 8192u) ? 8u : 0u);
 	if (SupportsVRPoses() && (VRCapabilities & 131072u))
 		Features |= 16u | ((VRCapabilities & 32768u) ? 32u : 0u);
+	if (SupportsUniformVRMovement()) Features |= ACEVRLocomotion::Subscription;
 	if (!Features) return;
 	FACEBinaryWriter W; W.WriteUInt32(1); W.WriteUInt32(4); W.WriteUInt32(Features);
 	SendGameAction(0xF7D0, W.GetData(), ACEQueue::WeenieQueue);

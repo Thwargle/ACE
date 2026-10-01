@@ -2644,10 +2644,17 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                     Press(EKeys::R);
                     TestTrue(TEXT("R approaches NPCs, portals and doors in every combat stance"),Controller->bServerMoveToActive);
                     TestEqual(TEXT("R approaches the selected object"),Controller->ServerMoveToTargetGuid,UseTarget.Guid);
-                    TestFalse(TEXT("Approaching does not prematurely lock item use"),Session.IsUseBusy());
+                    TestTrue(TEXT("Retail world approach keeps its initial Use pending until server completion"),Session.IsUseBusy());
+                    TestTrue(TEXT("R sends Use before approach so the server can supply movement rules"),Session.NextGameActionSequence>BeforeUse);
+                    const uint32 AfterUse=Session.NextGameActionSequence;
                     Press(EKeys::R);
-                    TestEqual(TEXT("Repeated R during approach does not send duplicate Use or change stance"),Session.NextGameActionSequence,BeforeUse);
+                    TestEqual(TEXT("Repeated R during approach does not send duplicate Use or change stance"),Session.NextGameActionSequence,AfterUse);
+                    TestEqual(TEXT("Repeated R retains exactly one pending server Use transaction"),Controller->ApproachUseSendCount,1);
+                    TestEqual(TEXT("Pending Use belongs to the selected world object"),Session.UseSourceGuid,UseTarget.Guid);
                     TestEqual(TEXT("World use preserves combat stance"),Session.PlayerVitals.CombatMode,Mode);
+                    FACEBinaryWriter Done;Done.WriteUInt32(0);
+                    FACEBinaryReader DoneReader(Done.GetData());Session.HandleUseDone(DoneReader);
+                    TestFalse(TEXT("Server UseDone releases the approach transaction for the next interaction"),Session.IsUseBusy());
                 }
                 Controller->ClearServerMoveTo();Session.PendingEquipmentGuid=81002;
                 Press(EKeys::R);

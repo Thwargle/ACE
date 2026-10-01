@@ -15,6 +15,11 @@
     // Quest's overlay IME edits an offscreen field. UE otherwise discards
     // its text callbacks because the phone keyboard did not resize the view.
     bUsesVrKeyboard = true;
+    // The Quest IME is an overlay. Resizing the game surface as it opens/closes
+    // can recreate the swapchain and flash black after Enter.
+    getWindow().setSoftInputMode((getWindow().getAttributes().softInputMode
+        & ~WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST)
+        | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
     if (newVirtualKeyboardInput != null) {
         newVirtualKeyboardInput.setOnEditorActionListener(new OnEditorActionListener() {
             @Override public boolean onEditorAction(TextView view, int actionId, KeyEvent event) {
@@ -45,27 +50,28 @@
     }
     // Complete the actual keyboard entry, not a key event for the hardware
     // Slate user. Read the full buffer before hiding, including pending edits.
+    private boolean aceKeyboardResultDelivered = false;
+    public void AndroidThunkJava_ACEBeginKeyboardInput() {
+        runOnUiThread(new Runnable() { public void run() { aceKeyboardResultDelivered = false; }});
+    }
     private void ACEAcceptKeyboardInput() {
-        if (newVirtualKeyboardInput == null || bKeyboardInputCommittedByEnterKey) return;
+        if (newVirtualKeyboardInput == null || aceKeyboardResultDelivered) return;
+        aceKeyboardResultDelivered = true;
         if (virtualKeyboardTextChangeRunnable != null) {
             virtualKeyboardHandler.removeCallbacks(virtualKeyboardTextChangeRunnable);
             virtualKeyboardTextChangeRunnable = null;
         }
+        // The raw Enter path may already have requested Hide before Slate's
+        // input preprocessor supplies the final buffer. Do not schedule it twice.
+        final boolean hideAlreadyRequested = bKeyboardInputCommittedByEnterKey
+            || lastVirtualKeyboardCommand == VirtualKeyboardCommand.VK_CMD_HIDE;
         bKeyboardInputCommittedByEnterKey = true;
+        if (!hideAlreadyRequested) AndroidThunkJava_HideVirtualKeyboardInput();
         nativeVirtualKeyboardResult(true, newVirtualKeyboardInput.getText().toString());
-        AndroidThunkJava_HideVirtualKeyboardInput();
     }
     public void AndroidThunkJava_ACEAcceptKeyboardInput() {
         runOnUiThread(new Runnable() { public void run() {
-            // UE's raw Enter path already set its committed flag and requested
-            // Hide. Still supply the final text to the VR entry before dismissal.
-            if (newVirtualKeyboardInput == null) return;
-            if (!bKeyboardInputCommittedByEnterKey) { ACEAcceptKeyboardInput(); return; }
-            if (virtualKeyboardTextChangeRunnable != null) {
-                virtualKeyboardHandler.removeCallbacks(virtualKeyboardTextChangeRunnable);
-                virtualKeyboardTextChangeRunnable = null;
-            }
-            nativeVirtualKeyboardResult(true, newVirtualKeyboardInput.getText().toString());
+            ACEAcceptKeyboardInput();
         }});
     }
 

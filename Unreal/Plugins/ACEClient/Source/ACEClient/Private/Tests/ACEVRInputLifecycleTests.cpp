@@ -61,6 +61,25 @@ bool FACEVRInputLifecycleTest::RunTest(const FString&)
     RetailSecond->SetTextFromVirtualKeyboard(FText::FromString(TEXT("second chat")),ETextEntryType::TextEntryAccepted);
     TestEqual(TEXT("Retail chat accepts repeated native keyboard sessions without stale callbacks"),RetailEntry->GetText().ToString(),FString(TEXT("second chat")));
     TestEqual(TEXT("Both retail keyboard sessions finish exactly once"),Completed,4);
+    TSharedPtr<FACEVRPlatformTextEntry> OwnedSession;
+    TWeakPtr<FACEVRPlatformTextEntry> WeakSession;
+    int ReentrantCompleted = 0;
+    OwnedSession = MakeShared<FACEVRPlatformTextEntry>(Entry, [&]
+    {
+        ++ReentrantCompleted;
+        TestTrue(TEXT("Terminal state is visible before owner dismissal"), OwnedSession->HasFinished());
+        // Commit handlers can drop the component's sole reference while its
+        // native callback is still on the stack. A reentrant callback is stale.
+        auto* Active = OwnedSession.Get();
+        OwnedSession.Reset();
+        TestTrue(TEXT("Native session stays alive through owner dismissal"), WeakSession.IsValid());
+        Active->SetTextFromVirtualKeyboard(FText::FromString(TEXT("reentrant stale text")), ETextEntryType::TextEntryAccepted);
+    });
+    WeakSession = OwnedSession;
+    OwnedSession.Get()->SetTextFromVirtualKeyboard(FText::FromString(TEXT("final buffer")), ETextEntryType::TextEntryAccepted);
+    TestEqual(TEXT("Reentrant dismissal completes once"), ReentrantCompleted, 1);
+    TestEqual(TEXT("Reentrant callback cannot overwrite accepted text"), Entry->GetText().ToString(), FString(TEXT("final buffer")));
+    TestFalse(TEXT("Native session releases after the callback returns"), WeakSession.IsValid());
     RetailEntry->bDigitsOnly=true;
     TestEqual(TEXT("Retail quantity fields retain the numeric native keyboard"),RetailSecond->GetVirtualKeyboardType(),Keyboard_Number);
     Manager->Initialize();Manager->AddRoot(Root);

@@ -584,13 +584,9 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	int32 PlacementId = Object.PlacementId;
 	const bool bUsesOnOff = Object.UsesOnOffMotion();
 	const bool bHeld = Object.ParentGuid != 0 && Object.ParentLocation != 0;
-	const bool bStaticProp = !Object.bIsPlayer
-		&& (Object.ItemType & ACEItemType::Creature) == 0
-		&& (Object.PhysicsState & ACEPhysicsState::Missile) == 0
-		&& Object.ParentGuid == 0
-		&& Object.WielderId == 0
-		&& Object.ContainerId == 0
-		&& !bUsesOnOff;
+	const bool bStaticProp = !Object.bIsPlayer && (Object.ItemType & ACEItemType::Creature) == 0
+		&& (Object.PhysicsState & ACEPhysicsState::Missile) == 0 && Object.ParentGuid == 0
+		&& Object.WielderId == 0 && Object.ContainerId == 0 && !bUsesOnOff;
 	if (bHeld)
 	{
 		// Always use the ParentLocation placement (RightHandCombat / LeftHand / Shield).
@@ -602,17 +598,10 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 			PlacementId = HeldPlacement;
 		}
 	}
-	else if (PlacementId == 0 && (bStaticProp || bUsesOnOff)
-		&& NewSetupId != 0x02000306)
-	{
-		// Flying projectiles retain the network placement (including default 0).
-		// Retail applies PhysicsDesc.animframe_id after creating the part array;
-		// forcing Resting here reverses Spike Strafe's blade model in flight.
-		// Doors/chests skipped Resting because they use On/Off motion. Default (0) part
-		// frames are often a T-pose slab that does not sit in the Setup jamb.
-		// Portalspace_background (DIDMap 0x02000306) has placement 0 only — no Resting 101.
-		PlacementId = UACEDatSubsystem::ACEPlacementResting;
-	}
+	// Retail CPhysicsObj::InitPhysicsDesc applies the supplied animframe_id,
+	// including zero. Resting (101) is only valid when explicitly supplied by
+	// the server: substituting it for custom world props changes their offset
+	// and orientation, hiding floating crystals inside their pedestals.
 
 	// Retail CPhysicsObj::SetScale changes transforms independently of ObjDesc.
 	// Apply scale before the mesh-cache fast path, including preview actors.
@@ -1018,7 +1007,7 @@ void UACECharacterAppearanceComponent::InterruptCastWithMovement()
 	}
 }
 
-void UACECharacterAppearanceComponent::SetLocomotionInput(float Forward, float Strafe, bool bRunning, float PlayRate)
+void UACECharacterAppearanceComponent::SetLocomotionInput(float Forward, float Strafe, bool bRunning, float PlayRate, bool bInterpretedRate)
 {
 	if (AnimMode == EACEAnimMode::DoorTransition)
 	{
@@ -1040,6 +1029,7 @@ void UACECharacterAppearanceComponent::SetLocomotionInput(float Forward, float S
 	LocomotionStrafe = Strafe;
 	bLocomotionRunning = bRunning;
 	LocomotionPlayRate = FMath::Max(0.05f, PlayRate);
+	bLocomotionInterpretedRate = bInterpretedRate;
 	// Snap run blend so remotes don't linger in a walk/run interpolate while charging.
 	if (bRunning && !FMath::IsNearlyZero(Forward))
 	{
@@ -2160,7 +2150,7 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 	else if (bMoving && LocomotionForward < -KINDA_SMALL_NUMBER)
 	{
 		// ACE: WalkBackwards canonicalizes to WalkForward at -0.65 playback rate.
-		constexpr float BackwardsFactor = 0.65f;
+		const float BackwardsFactor = bLocomotionInterpretedRate ? 1.f : 0.65f;
 		bOk = Evaluate(WalkForward, -AnimTime * BackwardsFactor, Animated, AnimatedCount, true, &Hooks);
 		if (!bOk)
 		{

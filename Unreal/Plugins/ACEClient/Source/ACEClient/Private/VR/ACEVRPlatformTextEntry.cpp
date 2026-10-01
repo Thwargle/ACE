@@ -17,6 +17,12 @@ void FACEVRPlatformTextEntry::EnableNativeSubmit()
 {
 #if PLATFORM_ANDROID
     if (SubmitInput || !FSlateApplication::IsInitialized()) return;
+    if (JNIEnv* Env = FAndroidApplication::GetJavaEnv())
+    {
+        static jmethodID Begin = FJavaWrapper::FindMethod(Env, FJavaWrapper::GameActivityClassID,
+            "AndroidThunkJava_ACEBeginKeyboardInput", "()V", false);
+        FJavaWrapper::CallVoidMethod(Env, FJavaWrapper::GameActivityThis, Begin);
+    }
     SubmitInput = MakeShared<FACEVRKeyboardSubmitInput>([]
     {
         // Read the final IME buffer on Android's UI thread. GetText() here can

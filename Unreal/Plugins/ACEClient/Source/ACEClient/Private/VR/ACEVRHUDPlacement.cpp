@@ -82,6 +82,16 @@ void UACEVRComponent::ToggleVitalsLock()
 	Settings->Persist();
 }
 
+FTransform UACEVRComponent::GetChatAnchorTransform() const
+{
+	return Settings->ChatAnchorMode==0 ? Head->GetComponentTransform() : ChatAnchorFrame;
+}
+void UACEVRComponent::UpdateChatAnchor(float Dt)
+{
+	UpdateHUDAnchor(ChatAnchorFrame,ChatOwnerLocation,bChatAnchorReady,bChatAnchorTurning,Head->GetComponentTransform(),
+		GetOwner()->GetActorLocation(),Settings->ChatAnchorMode,EditingPanel=="Chat",Dt);
+}
+
 void UACEVRComponent::BeginVitalsDrag(bool bLeft)
 {
 	BeginPanelEdit("Vitals", bLeft, false);
@@ -112,6 +122,7 @@ void UACEVRComponent::EndVitalsDrag(bool bSave, int32 Pointer)
 
 UWidgetComponent* UACEVRComponent::GetEditablePanel(FName Panel) const
 {
+	if (Panel == "Chat") return ChatPanel;
 	if (Panel == "Vitals") return VitalsPanel;
 	if (Panel == "Compass") return CompassPanel;
 	if (Panel == "Fellowship") return FellowshipPanel;
@@ -122,6 +133,7 @@ UWidgetComponent* UACEVRComponent::GetEditablePanel(FName Panel) const
 
 float& UACEVRComponent::GetPanelScale(FName Panel)
 {
+	if (Panel == "Chat") return Settings->ChatScale;
 	if (Panel == "Vitals") return Settings->VitalsScale;
 	if (Panel == "Compass") return Settings->CompassScale;
 	if (Panel == "Fellowship") return Settings->FellowshipScale;
@@ -131,6 +143,7 @@ float& UACEVRComponent::GetPanelScale(FName Panel)
 
 bool UACEVRComponent::IsPanelLocked(FName Panel) const
 {
+	if (Panel == "Chat") return Settings->bChatLocked;
 	if (Panel == "Vitals") return Settings->bVitalsLocked;
 	if (Panel == "Compass") return Settings->bCompassLocked;
 	if (Panel == "Fellowship") return Settings->bFellowshipLocked;
@@ -151,7 +164,8 @@ void UACEVRComponent::TogglePanelLock(FName Panel)
 {
 	if (!GetEditablePanel(Panel)) return;
 	EndPanelEdit(false); EndVitalsDrag(false);
-	if (Panel == "Vitals") Settings->bVitalsLocked = !Settings->bVitalsLocked;
+	if (Panel == "Chat") Settings->bChatLocked = !Settings->bChatLocked;
+	else if (Panel == "Vitals") Settings->bVitalsLocked = !Settings->bVitalsLocked;
 	else if (Panel == "Compass") Settings->bCompassLocked = !Settings->bCompassLocked;
 	else if (Panel == "Fellowship") Settings->bFellowshipLocked = !Settings->bFellowshipLocked;
 	else if (Panel == "Menu") Settings->bMenuLocked = !Settings->bMenuLocked;
@@ -169,6 +183,7 @@ void UACEVRComponent::BeginPanelEdit(FName Panel, bool bLeft, bool bResize)
 	FVector2D Hit;
 	if (!ProjectToViewPlane(Plane, bLeft ? LeftAim.Get() : RightAim.Get(), 0, Hit) || (bResize && Hit.SizeSquared() < 4.)) return;
 	EditingPanel = Panel; PanelEditHand = bLeft ? 0 : 1; bPanelResize = bResize;
+	if (Panel == "Chat" && !bResize) bChatDocked=false;
 	PanelEditFrame = Plane; PanelEditStart = Hit; PanelEditLocation = Surface->GetComponentLocation();
 	PanelEditScale = GetPanelScale(Panel);
 	FTransform Pose=Surface->GetComponentTransform();Pose.SetScale3D(FVector::OneVector);
@@ -212,6 +227,7 @@ void UACEVRComponent::UpdatePanelEdit(float Dt)
 			Rotation=(Anchor.GetRotation().Inverse()*Pose.GetRotation()*FRotator(0,180,0).Quaternion().Inverse()).Rotator();
 		};
 		if (EditingPanel == "Compass") SaveAnchored(GetCompassAnchorTransform(),Settings->CompassViewOffset,Settings->CompassViewRotation);
+		else if (EditingPanel == "Chat") SaveAnchored(GetChatAnchorTransform(),Settings->ChatViewOffset,Settings->ChatViewRotation);
 		else if (EditingPanel == "Fellowship") SaveAnchored(GetFellowshipAnchorTransform(),Settings->FellowshipViewOffset,Settings->FellowshipViewRotation);
 		else if (EditingPanel == "Vitals") SaveAnchored(GetVitalsAnchorTransform(),Settings->VitalsViewOffset,Settings->VitalsViewRotation);
 		else if (EditingPanel == "Menu" && Settings->bPinMenuToView && !bSettingsOpen)

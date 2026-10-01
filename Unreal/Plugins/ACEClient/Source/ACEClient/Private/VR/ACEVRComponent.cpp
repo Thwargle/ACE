@@ -156,8 +156,12 @@ void UACEVRComponent::ActivateRig()
 	CompassPanel->SetRelativeScale3D(FVector(.065f));
 	CompassPanel->SetSlateWidget(SAssignNew(NativeCompass,SACEVRCompass).Rig(this).OnSelect([Weak=TWeakObjectPtr<UACEClientSubsystem>(Client)](int32 Guid)
 		{if(Weak.IsValid())Weak->SelectObject(Guid);}));
-	ChatPanel = Panel(TEXT("VRPinnedChat"), VisualRoot, FVector2D(500, 200));
-	JumpPanel = Panel(TEXT("VRJumpCharge"), Head, FVector2D(300, 50));
+	ChatPanel = Panel(TEXT("VRChat"), VisualRoot, FVector2D(760, 640), true);
+	bChatOpen=Settings->bPinChatToView;
+	JumpPanel = Panel(TEXT("VRJumpCharge"), Head, FVector2D(480, 90), true);
+	JumpPanel->SetManuallyRedraw(true); JumpPanel->SetCastShadow(false);
+	JumpPanel->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	JumpPanel->SetSlateWidget(SAssignNew(NativeJump,SACEVRJumpCharge));
 	KeyboardPanel = Panel(TEXT("VRKeyboard"), VisualRoot, FVector2D(1200, 400));
 	FocusPanel = Panel(TEXT("VRInteractionFeedback"), PresentationActor->GetRootComponent(), FVector2D(540, 200));
 	// Draw order and controller hit priority share these layers.
@@ -191,8 +195,6 @@ void UACEVRComponent::ActivateRig()
 	WristRetail = CreateWidget<UACEVRRetailSurface>(PC); WristRetail->SetStatusSource(this); WristPanel->SetWidget(WristRetail);
 	VitalsPanel->SetSlateWidget(SAssignNew(NativeVitals,SACEVRVitals).Rig(this));
 	VitalsPanel->SetManuallyRedraw(true); VitalsPanel->SetCastShadow(false);
-	ChatRetail = CreateWidget<UACEVRRetailSurface>(PC); ChatPanel->SetWidget(ChatRetail);
-	JumpRetail = CreateWidget<UACEVRRetailSurface>(PC); JumpPanel->SetWidget(JumpRetail);
 	if (!UsesPlatformKeyboard())
 	{
 		KeyboardWidget = CreateWidget<UACEVRWidget>(PC); KeyboardWidget->VR = this; KeyboardWidget->bKeyboard = true;
@@ -328,7 +330,8 @@ void UACEVRComponent::TickComponent(float Dt, ELevelTick TickType, FActorCompone
 		// A stick held over a wheel sector must not become an immediate turn.
 		if (TurnStick.Size()<.25f) { bWheelTurnNeutral=false; bTurnReady=true; }
 	}
-	else if (!IsInputBlocked())
+	else if (!IsInputBlocked() && !(ChatPanel && ChatPanel->IsVisible() &&
+		(RightPointer->GetHoveredWidgetComponent()==ChatPanel || LeftPointer->GetHoveredWidgetComponent()==ChatPanel)))
 	{
 		const float X = ACEVRMath::DeadZone(TurnStick, Settings->StickDeadZone).X;
 		if (Settings->bSnapTurn)
@@ -344,6 +347,7 @@ void UACEVRComponent::TickComponent(float Dt, ELevelTick TickType, FActorCompone
 		P->ScrollWheel(TurnStick.Y > 0.f ? 1.f : -1.f); LastScroll = GetWorld()->GetTimeSeconds();
 		if(GameplayMenuPanel && P->GetHoveredWidgetComponent()==GameplayMenuPanel)GameplayMenuPanel->RequestRedraw();
 		if(MenuInspectionPanel && P->GetHoveredWidgetComponent()==MenuInspectionPanel)MenuInspectionPanel->RequestRedraw();
+		if(ChatPanel && P->GetHoveredWidgetComponent()==ChatPanel)ChatPanel->RequestRedraw();
 	}
 	UpdatePortalView();
 	UpdateHandContacts(Dt); UpdateTwoHandUse(Dt); UpdatePanels(Dt); UpdateArms(Dt); UpdateCombat(Dt); UpdatePortalEquipmentVisibility(); UpdateComfort(Dt);

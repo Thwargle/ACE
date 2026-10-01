@@ -131,6 +131,21 @@ namespace ACE.Server.Network.Structure
                 interpState.SidestepSpeed = Math.Clamp(interpState.SidestepSpeed, -3, 3);
             }
 
+            if (state.UniformVRInput.HasValue && !state.StandingLongJump)
+            {
+                var rates = VRLocomotion.Resolve(state.UniformVRInput.Value, holdKey == HoldKey.Run, creature.GetRunRate());
+                if (rawState.ForwardCommand == MotionCommand.WalkForward || rawState.ForwardCommand == MotionCommand.WalkBackwards)
+                {
+                    interpState.ForwardCommand = state.UniformVRInput.Value.Y != 0 ? rates.ForwardCommand : MotionCommand.Ready;
+                    interpState.ForwardSpeed = rates.Forward;
+                }
+                if (rawState.SidestepCommand == MotionCommand.SideStepLeft || rawState.SidestepCommand == MotionCommand.SideStepRight)
+                {
+                    interpState.SidestepCommand = state.UniformVRInput.Value.X != 0 ? MotionCommand.SideStepRight : MotionCommand.Invalid;
+                    interpState.SidestepSpeed = rates.Side;
+                }
+            }
+
             // rotate
             if ((rawState.Flags & RawMotionFlags.TurnCommand) != 0)
             {

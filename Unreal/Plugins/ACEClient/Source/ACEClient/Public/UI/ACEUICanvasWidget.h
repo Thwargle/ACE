@@ -54,6 +54,7 @@ public:
 	void InitializeCanvas(UACEUIElementManager* InManager);
 	void SetResourceResolver(UACEUIResourceResolver* InResolver);
 	void SetGameplayBinder(UACEUIGameplayBinder* InBinder);
+	bool IsGameplayCanvas() const { return GameplayBinder != nullptr; }
 	/** Refresh once per engine frame, from either Slate or VR with the canvas hidden. */
 	void TickGameplayState();
 	void SetCharSelectBinder(UACEUICharSelectBinder* InBinder);

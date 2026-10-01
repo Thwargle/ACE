@@ -1,6 +1,7 @@
 #include "ACEHoverTooltipWidget.h"
 #include "UI/ACERetailTextBlock.h"
 #include "UI/ACEUIGameplayBinder.h"
+#include "UI/ACERetailObjectNames.h"
 #include "ACESession.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
@@ -22,11 +23,6 @@
 #include "Components/TextBlock.h"
 #include "Blueprint/WidgetTree.h"
 #include "Styling/CoreStyle.h"
-
-namespace ACESalvageMaterialNames
-{
-#include "Protocol/ACEMaterialTypeNames.inl"
-}
 
 namespace
 {
@@ -1433,6 +1429,16 @@ void UACEUIGameplayBinder::RefreshSalvageOverlays()
 	SalvageItemSlotGuids.SetNumZeroed(SalvageVisibleSlots);
 	for (int32 i = 0; i < SalvageVisibleSlots; ++i)
 	{
+		const FMargin Insets(i * Cell, 0, ListEl->Width - (i + 1) * Cell, ListEl->Height - Cell);
+		// UIElement_ItemList keeps default slot art across the visible row, even
+		// with no offers. A trailing empty cell also remains a visible drop target.
+		UBorder* Bg = EnsureIconBorder(SalvageItemBackgrounds, i);
+		if (Bg)
+		{
+			SetItemSlotBackground(Bg, nullptr);
+			Bg->SetVisibility(ESlateVisibility::HitTestInvisible);
+			Canvas->PlaceWidgetAtElement(Bg, ListEl, OverlayZ, Insets);
+		}
 		UBorder* Icon = EnsureIconBorder(SalvageItemSlots, i);
 		if (!Icon)
 		{
@@ -1455,11 +1461,9 @@ void UACEUIGameplayBinder::RefreshSalvageOverlays()
 		SalvageItemSlotGuids[i] = Guid;
 		SetItemSlotForeground(Icon, &Obj);
 		Icon->SetVisibility(ESlateVisibility::Visible);
-		UACEHoverTooltipWidget::SetWidgetTooltip(Icon, FText::FromString(FString::Printf(TEXT("%s (%s)"),
-			*Obj.Name, ACESalvageMaterialNames::GetMaterialTypeName(Obj.MaterialType))));
-		const FMargin Insets(i * Cell, 0, ListEl->Width - (i + 1) * Cell, ListEl->Height - Cell);
+		UACEHoverTooltipWidget::SetWidgetTooltip(Icon, FText::FromString(ACERetailObjectNames::Name(Obj)));
 		Canvas->PlaceWidgetAtElement(Icon, ListEl, OverlayZ + 1, Insets);
-		if (UBorder* Bg = EnsureIconBorder(SalvageItemBackgrounds, i))
+		if (Bg)
 		{
 			SetItemSlotBackground(Bg, &Obj);
 			Bg->SetVisibility(ESlateVisibility::HitTestInvisible);

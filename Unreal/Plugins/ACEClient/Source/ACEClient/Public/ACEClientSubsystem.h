@@ -55,6 +55,7 @@ class ACECLIENT_API UACEClientSubsystem : public UGameInstanceSubsystem, public 
 	friend class FACEVRRenderReplicationTest;
 	friend class FACEVRRigTest;
 	friend class FACESalvageTest;
+	friend class FACEItemPresentationTest;
 	friend class FACESelectionToolbarTest;
 	friend class FACEChatParityTest;
 	friend class FACEUILayoutCommandsTest;
@@ -199,7 +200,7 @@ public:
 
 	/** Same as SendMovement, with StandingLongJump and ground-contact bits. */
 	UFUNCTION(BlueprintCallable, Category = "ACE")
-	void SendMovementEx(float Forward, float Strafe, float Turn, bool bRunning, bool bStandingLongJump, bool bContact);
+	void SendMovementEx(float Forward, float Strafe, float Turn, bool bRunning, bool bStandingLongJump, bool bContact, bool bUniformVRMovement = false);
 
 	/** GameAction Jump (0xF61B) — Extent 0..1, velocity in ACE local space. */
 	UFUNCTION(BlueprintCallable, Category = "ACE")

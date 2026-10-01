@@ -1,6 +1,8 @@
 #include "UI/ACEGameHUDWidget.h"
 #include "ACEHoverTooltipWidget.h"
 #include "UI/ACERetailTextBlock.h"
+#include "UI/ACERetailObjectNames.h"
+#include "UI/ACEAppraisalFormatting.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
@@ -1145,7 +1147,7 @@ void UACEGameHUDWidget::RefreshInventoryUI()
 		{
 			if (Item && !Item->Name.IsEmpty())
 			{
-				UACEHoverTooltipWidget::SetWidgetTooltip(Cell, FText::FromString(Item->Name));
+				UACEHoverTooltipWidget::SetWidgetTooltip(Cell, FText::FromString(ACERetailObjectNames::Name(*Item)));
 			}
 		}
 	}
@@ -1189,7 +1191,7 @@ void UACEGameHUDWidget::RefreshInventoryUI()
 				IconDid = static_cast<uint32>(PackObj.IconId);
 				if (!PackObj.Name.IsEmpty())
 				{
-					TabName = PackObj.Name;
+					TabName = ACERetailObjectNames::Name(PackObj);
 				}
 			}
 		}
@@ -1235,7 +1237,7 @@ void UACEGameHUDWidget::RefreshInventoryUI()
 		if (i < PackItems.Num())
 		{
 			SetInventorySlotIcon(IconCell, PackItems[i].IconId, BarBackColor);
-			UACEHoverTooltipWidget::SetWidgetTooltip(IconCell, FText::FromString(PackItems[i].Name));
+			UACEHoverTooltipWidget::SetWidgetTooltip(IconCell, FText::FromString(ACERetailObjectNames::Name(PackItems[i])));
 			InventoryCellGuids[i] = PackItems[i].Guid;
 		}
 		else
@@ -2618,7 +2620,7 @@ void UACEGameHUDWidget::HandleAppraisal(const FACEAppraisalInfo& Appraisal)
 	// Retail shows appraisal only in the examination window — never in chat.
 	if (InspectTitle)
 	{
-		InspectTitle->SetText(FText::FromString(Appraisal.Name));
+		InspectTitle->SetText(FText::FromString(ACEAppraisalFormatting::ExaminationName(Appraisal)));
 		InspectTitle->SetVisibility(ESlateVisibility::HitTestInvisible);
 	}
 	if (InspectBody)
@@ -2843,8 +2845,11 @@ void UACEGameHUDWidget::RefreshSelectionUI()
 {
 	if (SelectedNameLabel)
 	{
-		SelectedNameLabel->SetText(FText::FromString(
-			LastSelection.bValid ? LastSelection.Name : TEXT("")));
+		FACEWorldObject Object;
+		const FString Name = LastSelection.bValid
+			? Client && Client->GetWorldObject(LastSelection.Guid, Object) ? ACERetailObjectNames::Name(Object) : LastSelection.Name
+			: FString();
+		SelectedNameLabel->SetText(FText::FromString(Name));
 	}
 	if (SelectedHealthFill)
 	{

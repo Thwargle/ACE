@@ -55,6 +55,7 @@ private:
     int32 MenuOwnerGuid=0;
     bool bDirty=true;
 	uint64 InventoryRevision=0;
+	uint64 SpellRevision=0;
 	int32 UseSource=0;
     int32 SpellSchool=0, SpellLevel=0;
     bool bShareFellowXP=true;

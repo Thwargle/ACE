@@ -17,6 +17,7 @@ namespace ACE.Server.Network.GameAction.Actions
             if (session.Player.PKLogout) return;
 
             var moveToState = new MoveToState(session.Player, message.Payload);
+            if (!moveToState.IsValid) return;
             session.Player.CurrentMoveToState = moveToState;
 
             if (session.Player.IsPlayerMovingTo)

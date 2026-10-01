@@ -2,6 +2,8 @@
 #include "Misc/AutomationTest.h"
 #include "Framework/Application/SlateApplication.h"
 #include "ACEPlayerController.h"
+#include "VR/ACEVRComponent.h"
+#include "VR/ACEVRSettings.h"
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
 #include "ACEOpcodes.h"
@@ -1024,13 +1026,14 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
         {
             Controller->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(Key,IE_Pressed,1.f));
         };
-        for (bool MouseTurning : {false,true}) for (bool Forward : {false,true})
+        for (bool MouseTurning : {false,true}) for (bool Forward : {false,true}) for (bool Run : {false,true})
         {
             Client->SendSetSingleCharacterOption(0x31,MouseTurning);
             for (FKey Key : {EKeys::A,EKeys::D,EKeys::Left,EKeys::Right})
             {
                 Controller->PlayerInput->FlushPressedKeys();PressKey(Key);
                 if (Forward) PressKey(EKeys::W);
+                if (!Run) PressKey(EKeys::LeftShift);
                 Controller->PlayerInput->ProcessInputStack({},.016f,false);
                 Pawn->SetActorTransform(StartTransform);Controller->PredictedPose=StartPose;
                 TestBoom->SetRelativeRotation(FRotator(-15,150,0));
@@ -1038,7 +1041,10 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
                 const float ExpectedTurn=(Key==EKeys::A || Key==EKeys::Left)?-1.f:1.f;
                 TestEqual(TEXT("A/D and arrows remain turn inputs in both mouse modes"),Controller->TurnAxis,ExpectedTurn);
                 TestEqual(TEXT("Turn keys never become sidestep inputs"),Controller->RightAxis,0.f);
-                const FQuat Expected=(FQuat(FVector::UpVector,FMath::DegreesToRadians(-180.f*ExpectedTurn*.016f))*StartPose.GetAcQuat()).GetNormalized();
+                // The DAT turn modifier is 1.5 rad/s; retail CMotionInterp's
+                // Run modifier multiplies it by 1.5 (also checked in RunSpeedParity).
+                const float ExpectedRadians=1.5f*(Run?1.5f:1.f);
+                const FQuat Expected=(FQuat(FVector::UpVector,-ExpectedRadians*ExpectedTurn*.016f)*StartPose.GetAcQuat()).GetNormalized();
                 TestTrue(TEXT("Keyboard turning changes predicted facing even with camera-follow movement"),Controller->PredictedPose.GetAcQuat().Equals(Expected,.001));
             }
         }
@@ -1152,44 +1158,84 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             ResetApproach(FVector(500,0,0));TestBoom->SetRelativeRotation(FRotator(-15,Orbit,0));
             Controller->InteractWithObject(UseTarget.Guid);
             TestTrue(TEXT("World item interaction starts an approach"),Controller->bServerMoveToActive);
-            for (int32 Frame=0;Frame<240 && CountAction(ACEGameAction::Use)==0;++Frame)
+            TestEqual(TEXT("Use is sent before walking so the server can supply approach rules"),CountAction(ACEGameAction::Use),1);
+            Session->CachedC2SPackets.Reset();
+            for (int32 Frame=0;Frame<240 && Controller->UseApproachPhase!=AACEPlayerController::EACEUseApproachPhase::Holding;++Frame)
                 Controller->PlayerTick(.016f);
-            TestEqual(TEXT("Turned-camera approach reaches item and sends Use once"),CountAction(ACEGameAction::Use),1);
+            TestEqual(TEXT("Approach never resends Use on arrival"),CountAction(ACEGameAction::Use),0);
+            TestEqual(TEXT("Autonomous approach never cancels the server chain with MoveToState"),CountAction(ACEGameAction::MoveToState),0);
             const FVector Arrived=Controller->PredictedPose.ToUnrealLocation(100);
             TestTrue(TEXT("Orbit offset cannot steer automatic approach away from target"),FMath::Abs(Arrived.Y-StartFeet.Y)<1.f);
             TestTrue(TEXT("Use is sent only after reaching the target cylinder"),
                 Controller->GetUseCylinderDistanceCm(UseTarget,Arrived,UseTarget.Position.ToUnrealLocation(100))<=62.f);
         }
         // Stuck game boards are usable world objects; corpses can retain the Dead pose.
-        for (bool bCorpse : {false, true})
+        for (bool bCorpse : {false, true}) for (float TargetHeight : {-35.f,0.f,45.f}) for (float Dt : {1.f/30,1.f/90,1.f/144})
         {
             UseTarget.ObjectDescriptionFlags = ACEObjectDescFlag::Stuck
                 | (bCorpse ? ACEObjectDescFlag::Corpse : 0u);
             UseTarget.ItemType = bCorpse ? ACEItemType::Container : static_cast<int32>(0x80000000u);
             UseTarget.ItemUseable = 1; // the public special-object descriptor enables Use
             UseTarget.InitialMotionCommand = bCorpse ? ACEMotion::Dead : ACEMotion::Ready;
-            ResetApproach(FVector(300,0,0));
+            ResetApproach(FVector(300,0,TargetHeight));
             Client->SelectObject(UseTarget.Guid);
             Controller->InteractWithSelectedObject();
             TestTrue(TEXT("Chess boards and corpses start a use approach"), Controller->bServerMoveToActive);
-            for (int32 Frame=0; Frame<240 && CountAction(ACEGameAction::Use)==0; ++Frame)
-                Controller->PlayerTick(.016f);
+            for (int32 Frame=0; Frame<6.f/Dt && Controller->UseApproachPhase!=AACEPlayerController::EACEUseApproachPhase::Holding; ++Frame)
+                Controller->PlayerTick(Dt);
             TestEqual(TEXT("Chess/corpse arrival sends exactly one Use"), CountAction(ACEGameAction::Use), 1);
+            TestTrue(TEXT("Corpse approach reaches server range for elevated and downhill targets at every frame rate"),
+                Controller->GetUseCylinderDistanceCm(UseTarget,Controller->PredictedPose.ToUnrealLocation(100),
+                    UseTarget.Position.ToUnrealLocation(100))<=UseTarget.UseRadius*100);
         }
+        // Neutral-stick VR interactions share arrival and use networking while
+        // preserving the tracked head direction, even approaching sideways/backward.
+        auto* ApproachVR=NewObject<UACEVRComponent>(Pawn);
+        Pawn->AddInstanceComponent(ApproachVR);ApproachVR->RegisterComponent();
+        ApproachVR->PC=Controller;ApproachVR->Client=Client;
+        ApproachVR->Settings=NewObject<UACEVRSettings>();ApproachVR->Settings->MovementSmoothing=0;
+        ApproachVR->Settings->MovementDirection=0;ApproachVR->bActive=true;ApproachVR->bTracking=true;
+        ApproachVR->Head=NewObject<UCameraComponent>(Pawn);Pawn->AddInstanceComponent(ApproachVR->Head);
+        ApproachVR->Head->SetupAttachment(Pawn->GetRootComponent());ApproachVR->Head->RegisterComponent();
+        ApproachVR->Head->SetUsingAbsoluteRotation(true);
+        for (float Yaw : {0.f,90.f,180.f}) for (float Height : {-35.f,45.f})
+        {
+            ResetApproach(FVector(300,0,Height));
+            ApproachVR->Head->SetWorldRotation(FRotator(0,Yaw,0));
+            Controller->InteractWithObject(UseTarget.Guid);
+            for(int32 Frame=0;Frame<540 && Controller->UseApproachPhase!=AACEPlayerController::EACEUseApproachPhase::Holding;++Frame)
+                Controller->PlayerTick(1.f/90);
+            TestEqual(TEXT("VR corpse approach sends exactly one Use"),CountAction(ACEGameAction::Use),1);
+            TestTrue(TEXT("Neutral stick permits VR corpse approach to the full server cylinder range"),
+                Controller->GetUseCylinderDistanceCm(UseTarget,Controller->PredictedPose.ToUnrealLocation(100),
+                    UseTarget.Position.ToUnrealLocation(100))<=UseTarget.UseRadius*100);
+            TestTrue(TEXT("VR approach preserves head-facing at every approach angle"),
+                Controller->PredictedPose.GetFacingDotUnreal2D(ApproachVR->GetBodyForward())>.9999f);
+            TestEqual(TEXT("VR approach leaves tracked head yaw unchanged"),ApproachVR->Head->GetComponentRotation().Yaw,double(Yaw));
+        }
+        ResetApproach(FVector(300,0,0));Controller->InteractWithObject(UseTarget.Guid);
+        ApproachVR->MoveStick=FVector2D(.5f,0);Controller->PlayerTick(1.f/90);
+        TestFalse(TEXT("Manual VR stick cancels automatic approach immediately"),Controller->bServerMoveToActive);
+        TestFalse(TEXT("Manual VR cancellation clears the pending world Use"),Client->IsUseBusy());
+        ApproachVR->MoveStick=FVector2D::ZeroVector;
+        ResetApproach(FVector(300,0,0));Controller->InteractWithObject(UseTarget.Guid);
+        ApproachVR->bTracking=false;Controller->PlayerTick(1.f/90);
+        TestFalse(TEXT("Losing tracking cancels VR automatic translation"),Controller->bServerMoveToActive);
+        ApproachVR->Head->DestroyComponent();ApproachVR->bActive=false;ApproachVR->DestroyComponent();
         UseTarget.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
         UseTarget.ItemType=0; UseTarget.ItemUseable=32; UseTarget.InitialMotionCommand=ACEMotion::Ready;
         // Decode actual MoveTo packets, retaining the start across echoes and all finite limits.
         Session->OnMotionUpdate.AddUObject(Controller,&AACEPlayerController::HandleMotionUpdate);
         Session->OnMoveToFailed.AddUObject(Controller,&AACEPlayerController::HandleMoveToFailed);
         uint16 MotionSequence=1;
-        auto ReceiveApproach=[&](float Limit)
+        auto ReceiveApproach=[&](float Limit,float Distance=.6f)
         {
             FACEBinaryWriter W;W.WriteUInt32(SelfObject.Guid);W.WriteUInt16(0);
             W.WriteUInt16(MotionSequence++);W.WriteUInt16(0);W.WriteUInt8(0);W.Align();
             W.WriteUInt8(6);W.WriteUInt8(0);W.WriteUInt16(0);W.WriteUInt32(UseTarget.Guid);
             W.WriteUInt32(UseTarget.Position.CellId);W.WriteFloat(UseTarget.Position.Location.X);
             W.WriteFloat(UseTarget.Position.Location.Y);W.WriteFloat(UseTarget.Position.Location.Z);
-            W.WriteUInt32(0);W.WriteFloat(.6f);W.WriteFloat(0);W.WriteFloat(Limit);
+            W.WriteUInt32(0);W.WriteFloat(Distance);W.WriteFloat(0);W.WriteFloat(Limit);
             W.WriteFloat(1);W.WriteFloat(15);W.WriteFloat(0);W.WriteFloat(1);
             FACEBinaryReader R(W.GetData());Session->HandleUpdateMotion(R);
         };
@@ -1228,6 +1274,11 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Finite server limits above 100 are preserved"),Controller->ServerMoveToFailDistance,250.f);
         ReceiveApproach(MAX_flt);
         TestEqual(TEXT("Unlimited server echo clears previous finite limit"),Controller->ServerMoveToFailDistance,0.f);
+        for (float Distance : {.4f,0.f,-.2f})
+        {
+            ReceiveApproach(MAX_flt,Distance);
+            TestEqual(TEXT("Server echo preserves reduced, zero and negative use distances"),Controller->ServerMoveToDistance,Distance);
+        }
         ChargeErrors=0;FACEBinaryWriter Error;Error.WriteUInt32(0x003D);
         FACEBinaryReader ErrorReader(Error.GetData());Session->HandleWeenieError(ErrorReader);
         TestFalse(TEXT("Server charge error cancels an active local approach"),Controller->bServerMoveToActive);

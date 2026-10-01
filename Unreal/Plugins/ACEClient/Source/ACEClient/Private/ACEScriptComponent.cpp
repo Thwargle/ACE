@@ -2786,6 +2786,11 @@ bool UACEScriptComponent::ShouldDegradeEmitter(const FActiveEmitter& Emitter, co
 	// remain visible even with custom/nonstandard DAT draw distances.
 	if (bEnvironmentWeather || Emitter.bVRHandFeedback || CVarParticleDistanceCulling.GetValueOnGameThread() == 0)
 		return false;
+	// CameraSet's map view disables GfxObj degradation. Measuring the 450-unit
+	// elevated camera as an ordinary viewer otherwise hides every nearby portal
+	// or other particle object even though it remains in the overhead view.
+	const auto* PC = GetWorld() ? Cast<AACEPlayerController>(GetWorld()->GetFirstPlayerController()) : nullptr;
+	if (PC && PC->IsCameraMapView()) return false;
 	const float Distance = Emitter.MaxDegradeDistance * FMath::Max(1.f, WorldScale);
 	return FVector::DistSquared(ViewLocation, GetEmitterTransform(Emitter).GetLocation()) > FMath::Square(Distance);
 }

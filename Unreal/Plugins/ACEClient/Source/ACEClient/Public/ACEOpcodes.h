@@ -18,6 +18,8 @@ namespace ACEOpcode
 	constexpr uint32 PrivateUpdatePropertyInt       = 0x02CD;
 	constexpr uint32 PublicUpdatePropertyInt        = 0x02CE;
 	constexpr uint32 PrivateUpdatePropertyInt64     = 0x02CF;
+	constexpr uint32 PrivateUpdatePropertyBool      = 0x02D1;
+	constexpr uint32 PublicUpdatePropertyBool       = 0x02D2;
 	constexpr uint32 PrivateUpdatePropertyDataID    = 0x02D7;
 	constexpr uint32 PublicUpdatePropertyDataID     = 0x02D8;
 	constexpr uint32 PublicUpdateInstanceId         = 0x02DA;

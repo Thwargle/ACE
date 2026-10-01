@@ -69,6 +69,9 @@ bool FACEInteractionRecoveryTest::RunTest(const FString&)
     Session.State=EACESessionState::InWorld;
     FACEWorldObject Door;Door.Guid=210;Door.bHasPosition=true;Door.ItemUseable=32;
     Door.ObjectDescriptionFlags=ACEObjectDescFlag::Door;Session.WorldObjects.Add(Door.Guid,Door);
+    Session.SendUseItem(Door.Guid);
+    Session.CancelWorldUseApproach();
+    TestFalse(TEXT("Manual movement or a blocked approach releases a direct world interaction"),Session.IsUseBusy());
     for(int32 Mode:{1,2,4,8}) for(uint32 Error:{0x001Du,0x0036u})
     {
         Session.PlayerVitals.CombatMode=Mode;
@@ -81,9 +84,13 @@ bool FACEInteractionRecoveryTest::RunTest(const FString&)
     }
     FACEWorldObject Drink;Drink.Guid=211;Drink.ContainerId=Session.PlayerGuid;Session.WorldObjects.Add(Drink.Guid,Drink);
     Session.SendUseItem(Drink.Guid);
+    Session.CancelWorldUseApproach();
+    TestTrue(TEXT("Cancelling world navigation cannot cancel inventory consumption"),Session.IsUseBusy());
     FACEBinaryWriter Busy;Busy.WriteUInt32(0x001D);FACEBinaryReader BusyReader(Busy.GetData());Session.HandleWeenieError(BusyReader);
     TestTrue(TEXT("Unrelated combat errors retain an inventory consumption lock"),Session.IsUseBusy());
     Session.ClearPendingUse();Session.SendUseWithTarget(Drink.Guid,Door.Guid);
+    Session.CancelWorldUseApproach();
+    TestTrue(TEXT("Cancelling world navigation cannot cancel an item-on-target operation"),Session.IsUseBusy());
     FACEBinaryReader TargetBusyReader(Busy.GetData());Session.HandleWeenieError(TargetBusyReader);
     TestTrue(TEXT("Unrelated combat errors retain a targeted-use lock"),Session.IsUseBusy());
     Session.ClearPendingUse();Session.WorldObjects.Remove(Door.Guid);Session.WorldObjects.Remove(Drink.Guid);

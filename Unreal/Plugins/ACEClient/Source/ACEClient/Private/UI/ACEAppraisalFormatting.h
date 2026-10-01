@@ -2,6 +2,10 @@
 #include "ACETypes.h"
 #include "ACEDatSubsystem.h"
 #include "ACERetailAllegianceTitle.h"
+#include "ACERetailObjectNames.h"
+#include "ACEAppraisalUsage.h"
+
+class UACEUIResourceResolver;
 
 namespace ACEAppraisalFormatting
 {
@@ -28,7 +32,11 @@ inline bool UsesCharacterExamination(const FACEAppraisalInfo& Info)
 
 inline FString ExaminationName(const FACEAppraisalInfo& Info)
 {
-    if (!UsesCharacterExamination(Info)) return Info.Name;
+    if (!UsesCharacterExamination(Info))
+    {
+        FACEWorldObject Object; Object.Name = Info.Name; Object.MaterialType = Info.IntProperties.FindRef(131);
+        return ACERetailObjectNames::Name(Object);
+    }
     const FString Rank = ACERetailAllegiance::Title(Info.IntProperties.FindRef(30),
         Info.IntProperties.FindRef(188), Info.IntProperties.FindRef(113));
     return Rank.IsEmpty() ? Info.Name : Rank + TEXT(" ") + Info.Name;
@@ -40,6 +48,48 @@ struct FCreatureDetailLine
     FString Value;
     FLinearColor Color = FLinearColor::White;
 };
+
+struct FCreatureHeadings
+{
+    FString Type, Heritage, Profession, PlayerKiller, Allegiance;
+};
+FCreatureHeadings CreatureHeadings(const FACEAppraisalInfo& Info, UACEUIResourceResolver* Resources,
+    const FACEWorldObject* Subject = nullptr);
+
+inline TArray<FCreatureDetailLine> CreatureStatLines(const FACEAppraisalInfo& Info)
+{
+    // BasicCreatureExamineUI's retail order differs from the wire attribute bits.
+    static const TCHAR* Names[] = {TEXT("Strength"), TEXT("Endurance"), TEXT("Coordination"),
+        TEXT("Quickness"), TEXT("Focus"), TEXT("Self"), TEXT("Health"), TEXT("Stamina"), TEXT("Mana")};
+    const int32 Values[] = {Info.Strength, Info.Endurance, Info.Coordination, Info.Quickness,
+        Info.Focus, Info.Self, Info.Health, Info.Stamina, Info.Mana};
+    const int32 Maxima[] = {Info.MaxHealth, Info.MaxStamina, Info.MaxMana};
+    const int32 Masks[] = {1, 2, 8, 4, 16, 32, 64, 128, 256};
+    TArray<FCreatureDetailLine> Lines;
+    for (int32 I = 0; I < UE_ARRAY_COUNT(Names); ++I)
+    {
+        FString Value = Values[I] > 0 ? FString::FromInt(Values[I]) : TEXT("???");
+        if (I >= 6)
+        {
+            const int32 Max = Maxima[I - 6];
+            Value = TEXT("???");
+            if (Max > 0)
+            {
+                const int32 Percent = FMath::RoundToInt(100.0 * Values[I] / Max);
+                if (Info.bSuccess)
+                    Value = I == 6 ? FString::Printf(TEXT("%d/%d (%d %%)"), Values[I], Max, Percent)
+                        : FString::Printf(TEXT("%d/%d"), Values[I], Max);
+                else if (I == 6) Value = FString::Printf(TEXT("%d %%"), Percent);
+            }
+        }
+        FLinearColor Color = FLinearColor::White;
+        if (!Info.bSuccess) Color = FLinearColor::Yellow;
+        else if (Info.AttributeHighlights & Masks[I])
+            Color = (Info.AttributeColors & Masks[I]) ? FLinearColor::Green : FLinearColor::Red;
+        Lines.Add({Names[I], MoveTemp(Value), Color});
+    }
+    return Lines;
+}
 
 inline TArray<FCreatureDetailLine> CreatureDetailLines(const FACEAppraisalInfo& Info, int32 ViewerFaction = 0)
 {
@@ -325,6 +375,7 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
         Text += FString::Printf(TEXT("Mana Cost: 1 point per %d seconds.\n"), FMath::RoundToInt(FMath::Abs(1.0 / *Rate)));
     else Int(117, TEXT("Mana Cost: "));
     if (!SpellDescriptions.IsEmpty()) Text += TEXT("\nSpell Descriptions:\n") + SpellDescriptions + TEXT("\n");
+    Text += ItemUsageDetails(Info);
     if (const auto* Cooldown = Info.FloatProperties.Find(167)) Text += FString::Printf(TEXT("Cooldown: %.1f seconds\n"), *Cooldown);
     if (Info.IntProperties.Contains(92)) Text += FString::Printf(TEXT("Uses remaining: %d/%d\n"), Info.IntProperties.FindRef(92), Info.IntProperties.FindRef(91));
     for (const auto& Entry : {TPair<uint32, const TCHAR*>(25, TEXT("Crafted by: ")), {38, TEXT("Destination: ")}})

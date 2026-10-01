@@ -1,4 +1,5 @@
 #include "ACESession.h"
+#include "VR/ACEVRLocomotion.h"
 #include "ACEInventoryRules.h"
 #include "ACEProfiling.h"
 #include "ACERetailChat.h"
@@ -143,6 +144,7 @@ void FACESession::Disconnect()
 	LastPatronTellSenderName.Reset(); LastMonarchTellSenderName.Reset();
 	KnownSpells.Reset();
 	SpellBars.Reset();
+	++SpellDataRevision;
 	ActiveSpellBar = 0;
 	ShortcutObjects.Reset();
 	bHasPlayerEncumbrance = false;
@@ -271,6 +273,7 @@ void FACESession::ClearWorldState()
 	LastPatronTellSenderName.Reset(); LastMonarchTellSenderName.Reset();
 	KnownSpells.Reset();
 	SpellBars.Reset();
+	++SpellDataRevision;
 	ActiveSpellBar = 0;
 	ShortcutObjects.Reset();
 	bHasPlayerEncumbrance = false;
@@ -1536,6 +1539,12 @@ void FACESession::HandleGameMessage(const TArray<uint8>& MessageBytes)
 	case ACEOpcode::PublicUpdatePropertyInt:
 		HandlePublicUpdatePropertyInt(Reader);
 		break;
+	case ACEOpcode::PrivateUpdatePropertyBool:
+		HandleUpdatePropertyBool(Reader, false);
+		break;
+	case ACEOpcode::PublicUpdatePropertyBool:
+		HandleUpdatePropertyBool(Reader, true);
+		break;
 	case ACEOpcode::PrivateUpdatePropertyDataID:
 		HandlePrivateUpdatePropertyDataID(Reader);
 		break;
@@ -2444,7 +2453,7 @@ void FACESession::HandleGameEvent(FACEBinaryReader& Reader)
 		{
 			const uint32 Version = Reader.ReadUInt32();
 			const uint32 Flags = Reader.ReadUInt32();
-			VRCapabilities = Version == 1 ? Flags & 262143u : 0u;
+			VRCapabilities = Version == 1 ? Flags & 524287u : 0u;
 			SendVRSubscriptions();
             if ((VRCapabilities & 8u) != 0) ApplyVRWorldSnapshot(Reader);
 			VRMissileWeapon = 0; VRMissileSpeed = 0.f;
@@ -3217,6 +3226,7 @@ void FACESession::HandlePlayerDescription(FACEBinaryReader& Reader)
 
 	KnownSpells.Reset();
 	SpellBars.SetNum(8);
+	++SpellDataRevision;
 	for (TArray<int32>& Bar : SpellBars) { Bar.Reset(); }
 	ShortcutObjects.Reset();
 
@@ -3888,6 +3898,9 @@ void FACESession::SelectObject(int32 ObjectGuid)
 		FACEWorldObject Obj;
 		if (GetWorldObject(ObjectGuid, Obj))
 		{
+			// UIHidden weenies remain rendered (pedestals/hooks), but retail never
+			// accepts them as a mouse, hotkey or programmatic world selection.
+			if (Obj.IsUiHidden()) return;
 			Sel.Guid = ObjectGuid;
 			Sel.Name = Obj.Name;
 			Sel.bValid = true;
@@ -4772,6 +4785,7 @@ void FACESession::SendAddSpellToBar(int32 SpellId, int32 SlotIndex, int32 BarInd
 		Bar[i] = Bar[i - 1];
 	}
 	Bar[InsertAt] = SpellId;
+	++SpellDataRevision;
 }
 
 void FACESession::SendRemoveSpellFromBar(int32 SpellId, int32 BarIndex)
@@ -4805,6 +4819,7 @@ void FACESession::SendRemoveSpellFromBar(int32 SpellId, int32 BarIndex)
 				Bar[i] = Bar[i + 1];
 			}
 			Bar[Bar.Num() - 1] = 0;
+			++SpellDataRevision;
 		}
 	}
 }
@@ -4905,7 +4920,12 @@ int32 FACESession::GetShortcutObject(int32 SlotIndex) const
 
 void FACESession::SetActiveSpellBar(int32 BarIndex)
 {
-	ActiveSpellBar = FMath::Clamp(BarIndex, 0, 7);
+	const int32 NewBar = FMath::Clamp(BarIndex, 0, 7);
+	if (ActiveSpellBar != NewBar)
+	{
+		ActiveSpellBar = NewBar;
+		++SpellDataRevision;
+	}
 }
 
 void FACESession::HandleMagicUpdateSpell(FACEBinaryReader& Reader)
@@ -4916,9 +4936,10 @@ void FACESession::HandleMagicUpdateSpell(FACEBinaryReader& Reader)
 	}
 	const int32 SpellId = static_cast<int32>(Reader.ReadUInt16());
 	Reader.ReadUInt16(); // layer
-	if (SpellId > 0)
+	if (SpellId > 0 && !KnownSpells.Contains(SpellId))
 	{
-		KnownSpells.AddUnique(SpellId);
+		KnownSpells.Add(SpellId);
+		++SpellDataRevision;
 	}
 }
 
@@ -4930,7 +4951,7 @@ void FACESession::HandleMagicRemoveSpell(FACEBinaryReader& Reader)
 	}
 	const int32 SpellId = static_cast<int32>(Reader.ReadUInt16());
 	Reader.ReadUInt16();
-	KnownSpells.Remove(SpellId);
+	if (KnownSpells.Remove(SpellId) > 0) ++SpellDataRevision;
 }
 
 bool FACESession::ReadEnchantmentRecord(FACEBinaryReader& Reader, FACEActiveEnchantment& Out)
@@ -5316,6 +5337,14 @@ void FACESession::HandleIdentifyObjectResponse(FACEBinaryReader& Reader)
 	if (GetWorldObject(Info.ObjectGuid, Known))
 	{
 		Info.Name = Known.Name;
+		Info.ObjectDescriptionFlags = Known.ObjectDescriptionFlags;
+		// Retail capacity lines read the public weenie descriptor. These fields
+		// need not be repeated in the appraisal, including on custom servers.
+		Info.IntProperties.Add(6, Known.ItemsCapacity);
+		Info.IntProperties.Add(7, Known.ContainersCapacity);
+		// Material is public descriptor data even when the appraisal omits it.
+		// Preserve it so every examination title uses the same retail item name.
+		if (Known.MaterialType > 0) Info.IntProperties.Add(131, Known.MaterialType);
 		Info.ItemType = Known.ItemType;
 		Info.bIsCreature = (Known.ItemType & ACEItemType::Creature) != 0 || Known.bIsPlayer;
 		if (Known.IconId != 0)
@@ -6001,6 +6030,14 @@ void FACESession::CancelPendingUse(const TCHAR* Reason)
 	ClearPendingUse();
 	// Release controller approach/freeze state too, without fabricating a server error.
 	OnUseDone.Broadcast(0);
+}
+
+void FACESession::CancelWorldUseApproach()
+{
+	const FACEWorldObject* Source = WorldObjects.Find(UseSourceGuid);
+	if (UseTargetGuid == 0 && Source && Source->bHasPosition
+		&& Source->ContainerId == 0 && Source->WielderId == 0 && Source->Guid != PlayerGuid)
+		CancelPendingUse(TEXT("world approach cancelled"));
 }
 
 void FACESession::CheckPendingUseTimeout(double Now)
@@ -6767,6 +6804,43 @@ void FACESession::ApplyPlayerKillerStatus(int32 Guid, int32 Status)
 		OnSelectionChanged.Broadcast(SelectedObject);
 }
 
+void FACESession::HandleUpdatePropertyBool(FACEBinaryReader& Reader, bool bPublic)
+{
+	// Qualities UIQueue: u8 sequence, optional GUID, u32 property, u32 BOOL.
+	if (!Reader.CanRead(bPublic ? 13 : 9)) return;
+	Reader.ReadUInt8();
+	const int32 Guid = bPublic ? int32(Reader.ReadUInt32()) : PlayerGuid;
+	const uint32 Property = Reader.ReadUInt32();
+	const bool Value = Reader.ReadUInt32() != 0;
+	FACEWorldObject* Object = WorldObjects.Find(Guid);
+	if (!Object) return;
+	// ACCWeenieObject::OnStatUpdated(bool): flags are live qualities, independent
+	// of PhysicsState. UIHidden must not hide the mesh or disable wall collision.
+	int32 Mask = 0;
+	bool Enabled = Value;
+	switch (Property)
+	{
+	case 1: Mask = ACEObjectDescFlag::Stuck; break;
+	case 3: Mask = ACEObjectDescFlag::Openable; Enabled = !Value; break;
+	case 22: Mask = 2; break; // Inscribable
+	case 24: Mask = ACEObjectDescFlag::UiHidden; break;
+	case 25: Mask = ACEObjectDescFlag::ImmuneCellRestrictions; break;
+	case 26: Mask = ACEObjectDescFlag::HiddenAdmin; break;
+	default: return;
+	}
+	const int32 Flags = Enabled ? Object->ObjectDescriptionFlags | Mask : Object->ObjectDescriptionFlags & ~Mask;
+	if (Flags == Object->ObjectDescriptionFlags) return;
+	Object->ObjectDescriptionFlags = Flags;
+	if (Object->ContainerId || Object->WielderId == PlayerGuid) ++InventoryDataRevision;
+	FACEWorldObject Update = *Object; Update.bAppearanceOnlyUpdate = true;
+	OnObjectCreated.Broadcast(Update);
+	if (SelectedObject.Guid == Guid)
+	{
+		if (Object->IsUiHidden()) SelectObject(0);
+		else OnSelectionChanged.Broadcast(SelectedObject);
+	}
+}
+
 void FACESession::HandlePublicUpdatePropertyInt(FACEBinaryReader& Reader)
 {
 	// 0x02CE: u8 sequence, u32 objectGuid, u32 propertyId, i32 value.
@@ -6833,6 +6907,10 @@ void FACESession::HandlePublicUpdatePropertyInt(FACEBinaryReader& Reader)
 		else if (Prop == 92) // PropertyInt.Structure
 		{
 			Obj->Structure = Value;
+		}
+		else if (Prop == 131) // PropertyInt.MaterialType
+		{
+			Obj->MaterialType = Value;
 		}
 		else if (Prop == 46) // PropertyInt.DefaultCombatStyle
 		{
@@ -7567,6 +7645,16 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 		default:
 			break;
 		}
+		// Preserve direction ratios when interpreted rates exceed one (fast VR
+		// strafing), while keeping the full physical speeds for prediction.
+		const float DominantSpeed = FMath::Max(FMath::Abs(Motion.ForwardUnitsPerSecond), FMath::Abs(Motion.StrafeUnitsPerSecond));
+		if (DominantSpeed > KINDA_SMALL_NUMBER)
+		{
+			Motion.Forward = Motion.ForwardUnitsPerSecond / DominantSpeed;
+			Motion.Strafe = Motion.StrafeUnitsPerSecond / DominantSpeed;
+			if (FMath::Abs(Motion.StrafeUnitsPerSecond) > FMath::Abs(Motion.ForwardUnitsPerSecond))
+				Motion.AnimPlayRate = FMath::Max(.05f, FMath::Abs(SideStepSpeed));
+		}
 		if (TurnCommand == 0x000d || TurnCommand == 0x000e)
 		{
 			Motion.Turn = TurnCommand == 0x000e
@@ -7992,7 +8080,7 @@ void FACESession::SetCurrentStance(uint32 Stance)
 }
 
 void FACESession::SendMoveToState(float Forward, float Strafe, float Turn, bool bRunning, bool bContact,
-	bool bStandingLongJump)
+	bool bStandingLongJump, bool bUniformVRMovement)
 {
 	if (State != EACESessionState::InWorld || bLogOffPending)
 	{
@@ -8008,6 +8096,12 @@ void FACESession::SendMoveToState(float Forward, float Strafe, float Turn, bool 
 		}
 	}
 
+	bUniformVRMovement &= SupportsUniformVRMovement();
+	if (bUniformVRMovement)
+	{
+		const FVector2D Stick = ACEVRLocomotion::Input(Forward, Strafe);
+		Forward = Stick.Y; Strafe = Stick.X;
+	}
 	uint32 Flags = ACERawMotionFlags::CurrentHoldKey | ACERawMotionFlags::CurrentStyle;
 	uint32 ForwardCommand = ACEMotion::Ready;
 	float ForwardSpeed = 0.f;
@@ -8088,6 +8182,8 @@ void FACESession::SendMoveToState(float Forward, float Strafe, float Turn, bool 
 	}
 	W.WriteUInt8(ContactFlags);
 	W.Align();
+	// Only negotiated servers consume this extension; the retail packet is unchanged otherwise.
+	if (bUniformVRMovement) W.WriteUInt32(ACEVRLocomotion::MoveMarker);
 
 	SendGameAction(ACEGameAction::MoveToState, W.GetData(), ACEQueue::WeenieQueue);
 	// Keep AutonomousPosition flowing while airborne (Contact=0) even with zero axes —

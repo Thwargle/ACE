@@ -1,4 +1,5 @@
 #include "VR/ACEVRComponent.h"
+#include "VR/ACEVRChat.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
 #include "UI/ACEUICanvasWidget.h"
@@ -43,7 +44,12 @@ void UACEVRComponent::FocusTextEntry(UWidget* Entry)
 		if (Cast<UEditableTextBox>(Entry) || Cast<UACERetailTextEntry>(Entry) || Cast<UACEUICanvasWidget>(Entry))
 		{
 			auto TextSession = MakeShared<FACEVRPlatformTextEntry>(Entry, [WeakThis = TWeakObjectPtr<UACEVRComponent>(this)]
-			{ if (WeakThis.IsValid()) WeakThis->DismissTextEntry(); });
+			{
+				// A commit delegate can already dismiss this session or select a
+				// different field. Never let its completion close a newer session.
+				if (WeakThis.IsValid() && WeakThis->PlatformTextEntry && WeakThis->PlatformTextEntry->HasFinished())
+					WeakThis->DismissTextEntry();
+			});
 			TextSession->EnableNativeSubmit();
 			PlatformTextEntry = TextSession;
 			Slate.ShowVirtualKeyboard(true, User, PlatformTextEntry);
@@ -93,7 +99,13 @@ UWidget* UACEVRComponent::TextEntryUnderPointer(UWidgetInteractionComponent* Poi
 	auto* SurfaceWidget = RetailPanel->GetWidget();
 	if (!SurfaceWidget || !SurfaceWidget->WidgetTree) return nullptr;
 	FVector2D Point = Pointer->Get2DHitLocation();
-	if (Panel == ChatPanel) Point = ChatRetail->ToCanvas(Point);
+	if (Panel == ChatPanel && ChatWidget)
+	{
+		UWidget* Entry=ChatWidget->GetEntry();
+		const auto Target=Entry?Entry->GetCachedWidget():nullptr;
+		if(Target)for(const auto& Hit:Panel->GetHitWidgetPath(Point,false))if(Hit.Widget==Target)return Entry;
+		return nullptr;
+	}
 	const auto HitPath = RetailPanel->GetHitWidgetPath(Point, false);
 	if (auto* Canvas = Cast<UACEUICanvasWidget>(SurfaceWidget); Canvas && Canvas->GetCharGenBinder()
 		&& Canvas->GetCharGenBinder()->IsNameEntryAt(Canvas->ViewportToLayout(Point)))
@@ -113,20 +125,24 @@ void UACEVRComponent::DismissTextEntry()
 {
 	if (PC && PC->DatGameplayBinder) PC->DatGameplayBinder->CancelPendingChatRefocus();
 	if (!bTextKeyboardOpen && !FocusedTextEntry.IsValid()) return;
-	// Hiding Android's keyboard can deliver a final callback after focus has
-	// moved. Invalidate this session before asking the platform to close it.
-	if (PlatformTextEntry) PlatformTextEntry->Cancel();
+	// Native acceptance/dismissal already closes Android's overlay. A second
+	// Hide from its commit callback restarts UE's delayed keyboard command and
+	// can churn the Quest overlay/focus transition. Clear our state first, since
+	// clearing Slate focus can synchronously commit and reenter this method.
+	const auto Session = MoveTemp(PlatformTextEntry);
+	const bool bPlatformAlreadyFinished = Session && Session->HasFinished();
+	FocusedTextEntry.Reset();
+	bTextKeyboardOpen = bKeyboardOpen = false;
+	if (Session) Session->Cancel();
 	// Clear only our virtual user, without disturbing captured item drags or
 	// the physical viewport's input routing. Clearing focus never submits chat.
 	if (RightPointer && FSlateApplication::IsInitialized())
 	{
 		auto& Slate = FSlateApplication::Get();
-		if (UsesPlatformKeyboard()) Slate.ShowVirtualKeyboard(false, Slate.FindOrCreateVirtualUser(RightPointer->VirtualUserIndex)->GetUserIndex());
+		if (UsesPlatformKeyboard() && !bPlatformAlreadyFinished)
+			Slate.ShowVirtualKeyboard(false, Slate.FindOrCreateVirtualUser(RightPointer->VirtualUserIndex)->GetUserIndex());
 		Slate.ClearUserFocus(Slate.FindOrCreateVirtualUser(RightPointer->VirtualUserIndex)->GetUserIndex(), EFocusCause::Cleared);
 	}
-	FocusedTextEntry.Reset();
-	PlatformTextEntry.Reset();
-	bTextKeyboardOpen = bKeyboardOpen = false;
 	if (PC) PC->ApplyInWorldInputMode();
 }
 

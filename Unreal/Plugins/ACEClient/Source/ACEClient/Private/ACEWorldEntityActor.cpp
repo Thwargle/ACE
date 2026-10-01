@@ -1350,7 +1350,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 						{
 							Appearance->SetLocomotionInput(
 								1.f, 0.f, RemoteMotion.bRunning,
-								FMath::Max(0.05f, RemoteMotion.AnimPlayRate));
+								FMath::Max(0.05f, RemoteMotion.AnimPlayRate), true);
 						}
 					}
 					else
@@ -1393,7 +1393,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 								: (RemoteMotion.ForwardUnitsPerSecond < -KINDA_SMALL_NUMBER ? -1.f : 0.f));
 						Appearance->SetLocomotionInput(
 							Fwd, S, RemoteMotion.bRunning,
-							FMath::Max(0.05f, RemoteMotion.AnimPlayRate));
+							FMath::Max(0.05f, RemoteMotion.AnimPlayRate), true);
 					}
 				}
 			}
@@ -1883,7 +1883,8 @@ bool AACEWorldEntityActor::ClampLocationToGround(FVector& InOutLocation, const F
 	// Stuck means the object cannot be picked up; creatures commonly carry it
 	// too. Only anchored scenery keeps authored Z. Applying this exemption to
 	// players/monsters left them running over slopes until the next position.
-	if (!bCreatureLike && (ObjectDescriptionFlags & ACEObjectDescFlag::Stuck) != 0)
+	if (!bCreatureLike && ((ObjectDescriptionFlags & ACEObjectDescFlag::Stuck) != 0
+		|| (PhysicsState & ACEPhysicsState::Gravity) == 0))
 	{
 		return true;
 	}
@@ -2249,7 +2250,7 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 					Forward = 1.f;
 				}
 				Appearance->SetLocomotionInput(
-					Forward, Strafe, Motion.bRunning, Motion.AnimPlayRate);
+					Forward, Strafe, Motion.bRunning, Motion.AnimPlayRate, true);
 			}
 		}
 	}

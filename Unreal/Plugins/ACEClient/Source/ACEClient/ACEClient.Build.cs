@@ -32,6 +32,10 @@ public class ACEClient : ModuleRules
 		});
 		PrivateDependencyModuleNames.AddRange(new string[] { "RenderCore", "RHI", "HTTP", "XmlParser", "AssetRegistry" });
 		AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenSSL");
+		if (Target.Platform == UnrealTargetPlatform.Linux)
+		{
+			AddEngineThirdPartyPrivateStaticDependencies(Target, "SDL3");
+		}
 		if (Target.Platform == UnrealTargetPlatform.Win64)
 		{
 			PublicSystemLibraries.Add("Crypt32.lib");

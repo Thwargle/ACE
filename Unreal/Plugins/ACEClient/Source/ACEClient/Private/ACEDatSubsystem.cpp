@@ -8493,7 +8493,7 @@ bool UACEDatSubsystem::TryGetSpellDisplayOrder(uint32 SpellId, uint32& OutDispla
 bool UACEDatSubsystem::TryGetSpellSchoolAndLevel(uint32 SpellId, uint32& OutSchool, uint32& OutLevel)
 {
 	OutSchool = 0;
-	OutLevel = 1;
+	OutLevel = 0;
 	if (SpellId == 0)
 	{
 		return false;
@@ -8502,16 +8502,10 @@ bool UACEDatSubsystem::TryGetSpellSchoolAndLevel(uint32 SpellId, uint32& OutScho
 	if (const FSpellInfoCacheEntry* Found = SpellInfoCache.Find(SpellId))
 	{
 		OutSchool = Found->School;
-		// Retail SpellFormula.MinPower thresholds → UI levels 1–8.
-		const uint32 P = Found->Power;
-		if (P >= 400u) { OutLevel = 8; }
-		else if (P >= 300u) { OutLevel = 7; }
-		else if (P >= 250u) { OutLevel = 6; }
-		else if (P >= 200u) { OutLevel = 5; }
-		else if (P >= 150u) { OutLevel = 4; }
-		else if (P >= 100u) { OutLevel = 3; }
-		else if (P >= 50u) { OutLevel = 2; }
-		else { OutLevel = 1; }
+		// CSpellBase::InqSpellLevelByRoughHeuristic uses the decoded formula's
+		// power component. Difficulty is unrelated for many special/item spells.
+		const uint32 PowerLevel = Found->IconPowerLevel;
+		OutLevel = PowerLevel >= 9 ? PowerLevel - 2 : PowerLevel >= 7 ? PowerLevel - 1 : PowerLevel;
 		return true;
 	}
 	return false;

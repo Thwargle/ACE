@@ -277,6 +277,7 @@ void UACEUIGameplayBinder::FocusChatEntryWindow(int32 Window)
 
 void UACEUIGameplayBinder::ClearChatLog(int32 Window)
 {
+	if (Window >= 0 && Window < 5) { ChatDisplayLines[Window].Reset(); ++ChatDisplayRevision; }
 	if (UScrollBox* Log = GetChatLogWidget(Window))
 	{
 		Log->ClearChildren();
@@ -570,6 +571,13 @@ void UACEUIGameplayBinder::RefreshChatRowLayout(int32 Window)
 void UACEUIGameplayBinder::AppendChatLineToLog(int32 Window, const FString& Line,
 	const FLinearColor& Color, const FString& ClickSender)
 {
+	if (Window >= 0 && Window < 5)
+	{
+		auto& Lines = ChatDisplayLines[Window];
+		Lines.Add({Line, ClickSender, Color, ++ChatDisplaySerial});
+		if (Lines.Num() > MaxChatLines) Lines.RemoveAt(0, Lines.Num() - MaxChatLines, EAllowShrinking::No);
+		++ChatDisplayRevision;
+	}
 	UScrollBox* Log = GetChatLogWidget(Window);
 	if (!Log || !Canvas || !Canvas->WidgetTree)
 	{

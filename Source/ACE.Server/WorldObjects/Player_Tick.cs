@@ -187,7 +187,10 @@ namespace ACE.Server.WorldObjects
             if (!PhysicsObj.IsMovingOrAnimating)
                 PhysicsObj.UpdateTime = PhysicsTimer.CurrentTime;
 
-            if (!PropertyManager.GetBool("client_movement_formula").Item || moveToState.StandingLongJump)
+            var hadUniformVRInput = PhysicsObj.get_minterp().UniformVRInput.HasValue;
+            PhysicsObj.get_minterp().UniformVRInput = moveToState.UniformVRInput;
+            if (hadUniformVRInput || moveToState.UniformVRInput.HasValue
+                || !PropertyManager.GetBool("client_movement_formula").Item || moveToState.StandingLongJump)
                 OnMoveToState_ServerMethod(moveToState);
             else
                 OnMoveToState_ClientMethod(moveToState);
@@ -272,6 +275,7 @@ namespace ACE.Server.WorldObjects
         public void OnMoveToState_ServerMethod(MoveToState moveToState)
         {
             var minterp = PhysicsObj.get_minterp();
+            minterp.UniformVRInput = moveToState.StandingLongJump ? null : moveToState.UniformVRInput;
             minterp.RawState.SetState(moveToState.RawMotionState);
 
             if (moveToState.StandingLongJump)

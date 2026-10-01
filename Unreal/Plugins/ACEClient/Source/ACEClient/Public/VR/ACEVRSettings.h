@@ -34,6 +34,10 @@ public:
 	UPROPERTY(Config) float FellowshipScale = .07f;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bPinVitalsToView = true;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bPinChatToView = false;
+	UPROPERTY(Config) bool bChatLocked = true;
+	UPROPERTY(Config) int32 ChatAnchorMode = 2;
+	UPROPERTY(Config) FVector ChatViewOffset = FVector(115, -45, -10);
+	UPROPERTY(Config) FRotator ChatViewRotation = FRotator::ZeroRotator;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bVitalsLocked = true;
 	/** 0: view, 1: stable body frame, 2: world position until recentered. */
 	UPROPERTY(Config, EditAnywhere, Category = "VR") int32 VitalsAnchorMode = 1;

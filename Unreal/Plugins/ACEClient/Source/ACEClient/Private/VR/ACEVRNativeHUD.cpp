@@ -8,6 +8,15 @@
 
 void UACEVRComponent::UpdateNativeHUD(bool Available, float Dt)
 {
+	const bool JumpVisible=Available && PC->bJumpCharging;
+	const bool JumpNewlyVisible=JumpVisible && !JumpPanel->IsVisible();
+	JumpPanel->SetVisibility(JumpVisible);
+	JumpPanel->SetComponentTickEnabled(JumpVisible);
+	JumpPanel->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	JumpPanel->SetRelativeLocationAndRotation(FVector(80,0,-22),FRotator(0,180,0));
+	JumpPanel->SetWorldScale3D(FVector(.075f));
+	// Charge updates at the UI cadence even when ambient meters are throttled.
+	if(JumpVisible && NativeJump && (NativeJump->Refresh(PC->JumpChargeExtent) || JumpNewlyVisible))JumpPanel->RequestRedraw();
 	const auto Show=[](UWidgetComponent* Panel,bool Visible){Panel->SetVisibility(Visible);Panel->SetCollisionEnabled(Visible?ECollisionEnabled::QueryOnly:ECollisionEnabled::NoCollision);};
  const bool VitalsVisible=Available && Settings->bPinVitalsToView;
  const bool CompassVisible=Available && Settings->bShowCompass;

@@ -68,10 +68,13 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEPortalLifetimeTest;
 	friend class FACEDeferredWorldAppearanceTest;
 	friend class FACEVRObserverProtocolTest;
+	friend class FACEVRLocomotionTest;
 	friend class FACEInteractionRecoveryTest;
 	friend class FACEVRRenderReplicationTest;
 	friend class FACEVRRigTest;
+	friend class FACESpellDataRevisionTest;
 	friend class FACESalvageTest;
+	friend class FACEItemPresentationTest;
 	friend class FACESelectionToolbarTest;
 	friend class FACEChatParityTest;
 	friend class FACEUILayoutCommandsTest;
@@ -448,7 +451,7 @@ public:
 	/** Send locomotion. Speeds are typically ±1.0f. bRunning sets HoldKey::Run.
 	 *  bStandingLongJump sets ContactLongJump bit1 while charging a standing jump. */
 	void SendMoveToState(float Forward, float Strafe, float Turn, bool bRunning, bool bContact = true,
-		bool bStandingLongJump = false);
+		bool bStandingLongJump = false, bool bUniformVRMovement = false);
 	void SendAutonomousPosition(bool bContact = true);
 	void SendStopMovement();
 	/** GameAction Use (0x36) — server approaches and activates (doors, etc.). */
@@ -456,6 +459,8 @@ public:
 
 	/** True while a Use / UseWithTarget is outstanding (cleared by UseDone 0x01C7). */
 	bool IsUseBusy() const { return bUseBusy || PendingEquipmentGuid != 0; }
+	/** Cancel only an outstanding direct world interaction when its approach stops. */
+	void CancelWorldUseApproach();
 	uint32 GetCombatEventRevision() const { return CombatEventRevision; }
 	uint64 GetInventoryDataRevision() const { return InventoryDataRevision; }
 	bool IsServerAttackInProgress() const { return bServerAttackInProgress; }
@@ -539,6 +544,7 @@ public:
 	void SendCastSpell(int32 SpellId, int32 TargetGuid = 0);
 	void RequestVRCapabilities(bool bLocalVR = true);
 	bool SupportsVRPoses() const { return (VRCapabilities & 16u) != 0; }
+	bool SupportsUniformVRMovement() const { return bLocalVRFeedback && (VRCapabilities & 262144u) != 0; }
 	double LastVRPoseSent = -100.;
 	bool SendVRPose(FACEVRPose Pose);
 	bool SupportsVRDrops() const { return (VRCapabilities & 1024u) != 0; }
@@ -555,6 +561,7 @@ public:
 		const FVector& OriginAc, const FVector& DirectionOrEndAc, float Amount, float Duration, float RequestedPower = -1.f);
 
 	const TArray<int32>& GetKnownSpells() const { return KnownSpells; }
+	uint64 GetSpellDataRevision() const { return SpellDataRevision; }
 	const TArray<int32>& GetSpellBar(int32 BarIndex) const;
 	void SetActiveSpellBar(int32 BarIndex);
 	int32 GetActiveSpellBar() const { return ActiveSpellBar; }
@@ -678,6 +685,7 @@ private:
 	void HandlePrivateUpdateSkill(FACEBinaryReader& Reader);
 	void HandlePrivateUpdatePropertyInt(FACEBinaryReader& Reader);
 	void HandlePrivateUpdatePropertyInt64(FACEBinaryReader& Reader);
+	void HandleUpdatePropertyBool(FACEBinaryReader& Reader, bool bPublic);
 	void HandleUpdateHealth(FACEBinaryReader& Reader);
 	void HandleQueryItemManaResponse(FACEBinaryReader& Reader);
 	bool CanQueryItemMana(int32 Guid) const;
@@ -983,6 +991,7 @@ private:
 	/** Initiator of the current trade window (from RegisterTrade). */
 	int32 TradeInitiatorGuid = 0;
 	TArray<int32> KnownSpells;
+	uint64 SpellDataRevision = 0;
 	TArray<TArray<int32>> SpellBars;
 	int32 ActiveSpellBar = 0;
 	/** Server PropertyInt.EncumbranceVal for the local player (not ObjectCreate Burden). */

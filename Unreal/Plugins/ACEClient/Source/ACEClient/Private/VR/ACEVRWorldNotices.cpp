@@ -24,6 +24,7 @@
 void UACEVRComponent::NPCSpeech(int32 Guid, const FString& Text)
 {
 	ClearConversationSelection(Guid);
+	if(Client && Client->GetOpenVendorGuid()==Guid)return;
 	ShowWorldNotice(Text, Guid, 0, FLinearColor(1.f,.9f,.65f));
 }
 
@@ -101,6 +102,7 @@ FVector NoticeActorPosition(AACEWorldEntityActor* Actor)
 void UACEVRComponent::ShowWorldNotice(const FString& Text, int32 Guid, int32 Kind, FLinearColor Color)
 {
 	if (!bActive || !Client || Client->GetSessionState() != EACESessionState::InWorld || !PresentationActor || Text.IsEmpty()) return;
+	if(Kind<2 && Client->GetOpenVendorGuid())return;
 	const double Now = FPlatformTime::Seconds();
 	AACEWorldEntityActor* Anchor = nullptr;
 	// Item-give chat includes the giver's name. Keep its receipt beside the same
@@ -245,7 +247,7 @@ void UACEVRComponent::UpdateWorldNotices()
 	for (auto& Notice : WorldNotices)
 	{
 		auto* Panel = Notice.Panel.Get(); if (!Panel) continue;
-		if (!InWorld) Notice.Expires = 0.;
+		if (!InWorld || (Notice.Kind<2 && Client->GetOpenVendorGuid())) Notice.Expires = 0.;
 		const bool Visible = bTracking && InWorld && !PC->bEnterWorldLoading && !PC->bWorldRevealActive && Now < Notice.Expires;
 		Panel->SetVisibility(Visible); if (!Visible) continue;
 		if (auto* Actor = Notice.Actor.Get(); Actor && Notice.Kind!=2)

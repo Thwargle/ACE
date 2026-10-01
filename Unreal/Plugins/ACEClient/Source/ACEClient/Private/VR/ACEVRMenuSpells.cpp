@@ -120,30 +120,46 @@ void UACEVRMenu::BuildSpells()
     auto Filters=SNew(SHorizontalBox);
     Filters->AddSlot().FillWidth(1).Padding(2)[Button(TEXT("Search"),[this](){if(Rig)Rig->DismissTextEntry();PageIndex=0;bDirty=true;})];
     const TCHAR* Schools[]={TEXT("All schools"),TEXT("War"),TEXT("Life"),TEXT("Item"),TEXT("Creature"),TEXT("Void")};
-    Filters->AddSlot().FillWidth(1).Padding(2)[Button(Schools[SpellSchool],[this](){SpellSchool=(SpellSchool+1)%6;PageIndex=0;bDirty=true;})];
-    Filters->AddSlot().FillWidth(1).Padding(2)[Button(SpellLevel?FString::Printf(TEXT("Level %d"),SpellLevel):TEXT("All levels"),[this](){SpellLevel=(SpellLevel+1)%9;PageIndex=0;bDirty=true;})];
+    SpellSchool=FMath::Clamp(SpellSchool,0,5);SpellLevel=FMath::Clamp(SpellLevel,0,8);
+    auto SchoolFilter=Button(Schools[SpellSchool],[this](){SpellSchool=(SpellSchool+1)%6;PageIndex=0;bDirty=true;});
+    SchoolFilter->SetTag("SpellSchoolFilter");Filters->AddSlot().FillWidth(1).Padding(2)[SchoolFilter];
+    auto LevelFilter=Button(SpellLevel?FString::Printf(TEXT("Level %d"),SpellLevel):TEXT("All levels"),[this](){SpellLevel=(SpellLevel+1)%9;PageIndex=0;bDirty=true;});
+    LevelFilter->SetTag("SpellLevelFilter");Filters->AddSlot().FillWidth(1).Padding(2)[LevelFilter];
+    Filters->AddSlot().FillWidth(1).Padding(2)[Button(TEXT("Clear filters"),[this](){Search.Reset();SpellSchool=SpellLevel=PageIndex=0;if(Rig)Rig->DismissTextEntry();bDirty=true;},!Search.IsEmpty() || SpellSchool || SpellLevel)];
     Body->AddSlot().AutoHeight()[Filters];
     TArray<int32> Spells;
+    const FString Query=Search.TrimStartAndEnd();
     for(int32 Id:Client->GetKnownSpells())
     {
         FString Name;uint32 Did=0,School=0,Level=0;
-        if(!Id || !Dat->TryGetSpellInfo(Id,Name,Did))continue;
-        Dat->TryGetSpellSchoolAndLevel(Id,School,Level);
-        if((!Search.IsEmpty() && !Name.Contains(Search)) || (SpellSchool && School!=SpellSchool) || (SpellLevel && Level!=SpellLevel))continue;
+        if(!Id || !Dat->TryGetSpellInfo(Id,Name,Did) || !Dat->TryGetSpellSchoolAndLevel(Id,School,Level))continue;
+        // Retail gmSpellbookUI::IsFilteredOut excludes unclassified spells even
+        // with every filter enabled; a known server ID need not be book-visible.
+        if(School<1 || School>5 || Level<1 || Level>8)continue;
+        if((!Query.IsEmpty() && !Name.Contains(Query,ESearchCase::IgnoreCase)) || (SpellSchool && School!=SpellSchool) || (SpellLevel && Level!=SpellLevel))continue;
         Spells.Add(Id);
     }
-    Spells.Sort(); // Stable book order; the source set's iteration order can change on updates.
+    Spells.Sort([Dat](int32 A,int32 B)
+    {
+        uint32 OrderA=0,OrderB=0;Dat->TryGetSpellDisplayOrder(A,OrderA);Dat->TryGetSpellDisplayOrder(B,OrderB);
+        return OrderA!=OrderB?OrderA<OrderB:A<B;
+    });
     // Three rows leave the hotbar and the entire current book page visible
     // together, so a controller drag never has to cross a scrolled-away bar.
     constexpr int32 PerPage=6;
     const int32 Pages=FMath::Max(1,FMath::DivideAndRoundUp(Spells.Num(),PerPage));PageIndex=FMath::Clamp(PageIndex,0,Pages-1);
     Body->AddSlot().AutoHeight().Padding(4)[SNew(SHorizontalBox)
         +SHorizontalBox::Slot().AutoWidth()[Button(TEXT("Previous"),[this](){--PageIndex;bDirty=true;},PageIndex>0)]
-        +SHorizontalBox::Slot().FillWidth(1).Padding(12)[Text(FString::Printf(TEXT("Spellbook: %d / %d"),PageIndex+1,Pages))]
+        +SHorizontalBox::Slot().FillWidth(1).Padding(12)[Text(FString::Printf(TEXT("%d spells — page %d / %d"),Spells.Num(),PageIndex+1,Pages))]
         +SHorizontalBox::Slot().AutoWidth()[Button(TEXT("Next"),[this](){++PageIndex;bDirty=true;},PageIndex+1<Pages)]];
     auto Grid=SNew(SUniformGridPanel).SlotPadding(FMargin(3));
     for(int32 I=PageIndex*PerPage;I<FMath::Min(Spells.Num(),(PageIndex+1)*PerPage);++I)
         Grid->AddSlot(I%2,(I%PerPage)/2).VAlign(VAlign_Top)[SpellButton(Spells[I],INDEX_NONE,I,true)];
+    if(Spells.IsEmpty())
+    {
+        auto Empty=Text(Client->GetKnownSpells().IsEmpty()?TEXT("You have not learned any spells yet."):TEXT("No known spells match these filters. Use Clear filters to show all schools and levels."),22);
+        Empty->SetTag("SpellBookEmpty");Grid->AddSlot(0,0)[Empty];
+    }
     auto Library=SNew(SBox).HeightOverride(280).VAlign(VAlign_Top)[Grid];Library->SetTag("SpellBookDrop");
     Body->AddSlot().AutoHeight()[Library];SpellDestinations.Add({Library,INDEX_NONE,0,true});
 }

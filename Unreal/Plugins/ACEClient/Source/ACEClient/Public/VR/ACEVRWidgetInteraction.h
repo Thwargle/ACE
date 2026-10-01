@@ -11,5 +11,6 @@ class ACECLIENT_API UACEVRWidgetInteraction : public UWidgetInteractionComponent
 public:
 	void RefreshHit() { SimulatePointerMovement(); }
 protected:
+	friend class FACEVRWidgetLayeringTest;
 	virtual FWidgetTraceResult PerformTrace() const override;
 };

@@ -35,7 +35,8 @@ public:
 	uint32 ResolvePaperDollSelectionMask(FIntPoint Point);
 	uint32 ResolvePaperDollAnimation(int32 Heritage);
 	UTexture2D* ResolveItemBackground(uint32 ItemType, uint32 UnderlayId);
-	UTexture2D* ResolveItemForeground(uint32 IconId, uint32 OverlayId, uint32 Effects, bool bForSale = false);
+	UTexture2D* ResolveItemForeground(uint32 IconId, uint32 OverlayId, uint32 Effects, bool bForSale = false,
+		int32 Structure = 0, int32 MaxStructure = 0);
 	/** Retail power background, spell mask, beneficial/harmful effect and target overlay. */
 	UTexture2D* ResolveSpellIcon(uint32 SpellId);
 	UTexture2D* ResolveFloatingHealthTexture(uint32 ResourceId);

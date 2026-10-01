@@ -408,8 +408,8 @@ public:
 	/** DisplayOrder from SpellTable — used to sort the spellbook like retail. */
 	bool TryGetSpellDisplayOrder(uint32 SpellId, uint32& OutDisplayOrder);
 	/**
-	 * MagicSchool (1=War..5=Void) and UI spell level 1–8 derived from SpellBase.Power
-	 * via retail SpellFormula.MinPower thresholds (for spellbook filter checkboxes).
+	 * MagicSchool (1=War..5=Void) and UI spell level from the decoded formula,
+	 * matching retail CSpellBase::InqSpellLevelByRoughHeuristic (0 if unclassified).
 	 */
 	bool TryGetSpellSchoolAndLevel(uint32 SpellId, uint32& OutSchool, uint32& OutLevel);
 	uint32 GetSpellIconPowerLevel(uint32 SpellId);
@@ -715,6 +715,7 @@ private:
 	friend class FACEStreamingRetirementTest;
 	friend class FACEPortalRetirementTest;
 	friend class FACELandblockInfoTest;
+	friend class FACERetailSpellLevelTest;
 	// Entries cannot move with TMap growth while a renderer is consuming their parts.
 	TMap<uint64, TSharedPtr<const FACEBuiltSetupMesh>> SetupMeshCache;
 	TMap<uint32, TSharedPtr<FACEBuiltLandblockMesh>> LandblockCache;

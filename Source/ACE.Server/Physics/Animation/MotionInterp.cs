@@ -21,6 +21,7 @@ namespace ACE.Server.Physics.Animation
         public float JumpExtent;
         public int ServerActionStamp;
         public float MyRunRate;
+        public Vector2? UniformVRInput;
         public LinkedList<MotionNode> PendingMotions;
 
         public const float BackwardsFactor = 6.4999998e-1f;
@@ -300,6 +301,7 @@ namespace ACE.Server.Physics.Animation
 
         public WeenieError StopCompletely()
         {
+            UniformVRInput = null;
             if (PhysicsObj == null) return WeenieError.NoPhysicsObject;
 
             PhysicsObj.cancel_moveto();
@@ -518,6 +520,27 @@ namespace ACE.Server.Physics.Animation
             adjust_motion(ref InterpretedState.ForwardCommand, ref InterpretedState.ForwardSpeed, RawState.ForwardHoldKey);
             adjust_motion(ref InterpretedState.SideStepCommand, ref InterpretedState.SideStepSpeed, RawState.SideStepHoldKey);
             adjust_motion(ref InterpretedState.TurnCommand, ref InterpretedState.TurnSpeed, RawState.TurnHoldKey);
+
+            if (UniformVRInput.HasValue)
+            {
+                float runRate = MyRunRate;
+                WeenieObj?.InqRunRate(ref runRate);
+                var rates = ACE.Server.Entity.VRLocomotion.Resolve(UniformVRInput.Value, RawState.CurrentHoldKey == HoldKey.Run, runRate);
+                // Do not resurrect a locomotion command stopped by casting, an emote,
+                // a server approach or a stance change between client packets.
+                if (RawState.ForwardCommand == (uint)MotionCommand.WalkForward
+                    || RawState.ForwardCommand == (uint)MotionCommand.WalkBackwards)
+                {
+                    InterpretedState.ForwardCommand = (uint)(UniformVRInput.Value.Y != 0 ? rates.ForwardCommand : MotionCommand.Ready);
+                    InterpretedState.ForwardSpeed = rates.Forward;
+                }
+                if (RawState.SideStepCommand == (uint)MotionCommand.SideStepRight
+                    || RawState.SideStepCommand == (uint)MotionCommand.SideStepLeft)
+                {
+                    InterpretedState.SideStepCommand = UniformVRInput.Value.X != 0 ? (uint)MotionCommand.SideStepRight : 0;
+                    InterpretedState.SideStepSpeed = rates.Side;
+                }
+            }
 
             apply_interpreted_movement(cancelMoveTo, allowJump);
         }

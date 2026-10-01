@@ -126,7 +126,7 @@ public:
 
 	/** Local / remote locomotion. PlayRate scales walk/run cycle speed (run uses GetRunRate). */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
-	void SetLocomotionInput(float Forward, float Strafe, bool bRunning, float PlayRate = 1.f);
+	void SetLocomotionInput(float Forward, float Strafe, bool bRunning, float PlayRate = 1.f, bool bInterpretedRate = false);
 
 	/**
 	 * Persist MotionStance from server UpdateMotion CurrentStyle (NonCombat / HandCombat / Magic…).
@@ -264,6 +264,7 @@ protected:
 	bool bLocomotionRunning = false;
 	/** Motion playback rate (1 = authored cycle speed; run often > 1). */
 	float LocomotionPlayRate = 1.f;
+	bool bLocomotionInterpretedRate = false;
 	/** Cross-fade weight between walk (0) and run (1) while moving forward. */
 	float RunBlend = 0.f;
 	/** Last frame moving state — triggers idle↔walk pose blend. */

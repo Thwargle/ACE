@@ -2,6 +2,7 @@
 #include "ACEClientSubsystem.h"
 #include "ACEInventoryRules.h"
 #include "UI/ACEUIGameplayBinder.h"
+#include "UI/ACERetailObjectNames.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SBorder.h"
@@ -21,7 +22,7 @@ void UACEVRMenu::BuildSalvage()
         Body->AddSlot().AutoHeight().Padding(8)[SalvageText(TEXT("Use an Ust to open the salvage tool."),28)];
         for(const auto& Item:Client->GetWorldObjects())
             if(Client->IsOwnedInventoryItem(Item) && ACEInventoryRules::DetermineOwnedUse(Item,Client->GetPlayerGuid())==EACEOwnedItemUse::Salvage)
-                Body->AddSlot().AutoHeight().Padding(6)[Button(TEXT("Use ")+Item.Name,[this,Id=Item.Guid](){Binder->UseInventoryItem(Id);bDirty=true;})];
+                Body->AddSlot().AutoHeight().Padding(6)[Button(TEXT("Use ")+ACERetailObjectNames::Name(Item),[this,Id=Item.Guid](){Binder->UseInventoryItem(Id);bDirty=true;})];
         return;
     }
     Body->AddSlot().AutoHeight().Padding(4)[SalvageText(TEXT("WARNING: Items in this panel will be destroyed!\nAdd items below, then press Salvage. Drag an offer out to remove it."),22)];
@@ -41,7 +42,15 @@ void UACEVRMenu::BuildSalvage()
         auto Offer=ItemButton(Item,64,true);Offer->SetTag(FName(*FString::Printf(TEXT("SalvageItem_%d"),Guid)));
         Offers->AddSlot().AutoWidth().Padding(3)[Offer];
     }
-    if(Binder->SalvageQueueGuids.IsEmpty())Offers->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(12)[SalvageText(TEXT("Drop items or a pack here"))];
+    // Match the retail horizontal item list: show its default slot squares
+    // even before the first offer, and always leave one empty drop slot.
+    constexpr int32 VisibleOfferSlots=12;
+    for(int32 I=Binder->SalvageQueueGuids.Num();I<FMath::Max(VisibleOfferSlots,Binder->SalvageQueueGuids.Num()+1);++I)
+    {
+        auto Empty=Icon(0x06004D20,64);
+        Empty->SetTag(FName(*FString::Printf(TEXT("SalvageEmpty_%d"),I)));
+        Offers->AddSlot().AutoWidth().Padding(3)[Empty];
+    }
     auto Queue=SNew(SBox).HeightOverride(84)[SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
         .BorderBackgroundColor(FLinearColor(.035f,.055f,.06f)).Padding(4)
         [SNew(SScrollBox).Orientation(Orient_Horizontal)+SScrollBox::Slot()[Offers]]];
@@ -49,7 +58,7 @@ void UACEVRMenu::BuildSalvage()
     FItemDestination Destination;Destination.Widget=Queue;Destination.Salvage=true;ItemDestinations.Add(Destination);
     FACEWorldObject SelectedItem;const bool Valid=Client->GetWorldObject(Selected,SelectedItem);
     Body->AddSlot().AutoHeight().Padding(4)[SNew(SBox).HeightOverride(48).Clipping(EWidgetClipping::ClipToBoundsAlways)
-        [SalvageText(Valid?SelectedItem.Name:TEXT("Select an item to add, remove, or inspect."))]];
+        [SalvageText(Valid?ACERetailObjectNames::Name(SelectedItem):TEXT("Select an item to add, remove, or inspect."))]];
     auto Actions=SNew(SHorizontalBox);
     Actions->AddSlot().FillWidth(1).Padding(2)[Button(TEXT("Add item"),[this](){Binder->AddItemToSalvageQueue(Selected);bDirty=true;},Binder->CanAddItemToSalvageQueue(Selected))];
     Actions->AddSlot().FillWidth(1).Padding(2)[Button(TEXT("Add pack"),[this](){Binder->AddItemToSalvageQueue(Pack);bDirty=true;},Binder->CanAddItemToSalvageQueue(Pack))];

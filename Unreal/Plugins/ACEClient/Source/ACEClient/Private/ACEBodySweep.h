@@ -55,6 +55,41 @@ namespace ACEBodySweep
         // is otherwise unused. Preserve Item/FaceIndex for instanced geometry.
         return Hit.MyBoneName==FName(TEXT("ACEUpperBodySphere"));
     }
+    // Chaos's broad phase is useful here, but its single-precision sphere TOI
+    // and MTD can differ from the authored sphere by millimetres at landblock
+    // coordinates. Reconstruct the contact in relative double precision. The
+    // tangent used for sliding must be the same one used by CanEscapeCreature;
+    // otherwise a legal tangent repeatedly fails that escape proof at time 0.
+    inline bool RefineCreatureContact(FHitResult& Hit,const FVector& From,const FVector& To,float Radius)
+    {
+        const auto* Sphere=IsCreatureBody(Hit)?Cast<USphereComponent>(Hit.GetComponent()):nullptr;
+        if(!Sphere)return true;
+        const FVector Center=Sphere->GetComponentLocation(),Relative=From-Center,Delta=To-From;
+        const double Sum=double(Radius)+Sphere->GetScaledSphereRadius();
+        const double C=Relative.SizeSquared()-Sum*Sum;
+        double Time=0.;
+        Hit.bStartPenetrating=C<0.;
+        Hit.PenetrationDepth=Hit.bStartPenetrating?Sum-Relative.Size():0.;
+        if(!Hit.bStartPenetrating)
+        {
+            const double A=Delta.SizeSquared(),B=FVector::DotProduct(Relative,Delta);
+            const double Discriminant=B*B-A*C;
+            if(A<1.e-12 || B>=0. || Discriminant<0.)return false;
+            Time=(-B-FMath::Sqrt(Discriminant))/A;
+            if(Time<0. || Time>1.)return false;
+        }
+        Hit.Time=Time;Hit.Location=From+Delta*Time;
+        Hit.Normal=(Relative+Delta*Time).GetSafeNormal(SMALL_NUMBER,Hit.Normal);
+        Hit.ImpactNormal=Hit.Normal;
+        Hit.ImpactPoint=Center+Hit.Normal*Sphere->GetScaledSphereRadius();
+        return true;
+    }
+    inline bool EarlierContact(const FHitResult& A,const FHitResult& B)
+    {
+        return (A.bStartPenetrating && !B.bStartPenetrating)
+            || (A.bStartPenetrating==B.bStartPenetrating &&
+                (A.Time<B.Time || (A.Time==B.Time && A.PenetrationDepth>B.PenetrationDepth)));
+    }
     // Retail SPHEREPATH sweeps the lower and upper body spheres, not the
     // cylinder connecting them. Filling that waist blocked otherwise clear
     // passages beside creatures and caught the body on stair/pillar corners.
@@ -66,19 +101,56 @@ namespace ACEBodySweep
         const float Radius=Body.GetCapsuleRadius();
         const double Offset=FMath::Max(0.f,Body.GetCapsuleHalfHeight()-Radius);
         bool Found=false;Hit=FHitResult();
-        TOptional<FCollisionQueryParams> EscapeParams;
-        int32 EscapeCount=0;
         for(int32 I=0;I<(Offset>.001?2:1);++I)
         {
+            TOptional<FCollisionQueryParams> EscapeParams;
+            TSet<const UPrimitiveComponent*> Retried;
+            auto Ignore=[&](const UPrimitiveComponent* Component)
+            {
+                if(!Component || Retried.Contains(Component))return false;
+                Retried.Add(Component);
+                if(!EscapeParams.IsSet())EscapeParams.Emplace(Params);
+                EscapeParams->AddIgnoredComponent(Component);return true;
+            };
+            int32 EscapeCount=0;
             const FVector Shift(0,0,I==0?-Offset:Offset);FHitResult Part;
             bool Blocked=false;
             for(;;)
             {
-                Blocked=World.SweepSingleByChannel(Part,From+Shift,To+Shift,FQuat::Identity,ECC_Pawn,
-                    FCollisionShape::MakeSphere(Radius),EscapeParams.IsSet()?EscapeParams.GetValue():Params);
-                if(!Blocked || !CanEscapeCreature(Part,From,To,Body))break;
-                if(!EscapeParams.IsSet())EscapeParams.Emplace(Params);
-                EscapeParams->AddIgnoredComponent(Part.GetComponent());
+                FHitResult Next;
+                const float TimeLimit=Blocked?Part.Time:1.f;
+                if(!World.SweepSingleByChannel(Next,From+Shift,From+Shift+(To-From)*TimeLimit,FQuat::Identity,ECC_Pawn,
+                    FCollisionShape::MakeSphere(Radius),EscapeParams.IsSet()?EscapeParams.GetValue():Params))break;
+                Next.Time*=TimeLimit;
+                const FHitResult Original=Next;
+                if(!RefineCreatureContact(Next,From+Shift,To+Shift,Radius))
+                {
+                    // Only this queried sphere missed. The other player sphere
+                    // gets its own query and must still test this component.
+                    if(!Ignore(Next.GetComponent()))
+                    {
+                        // A backend returning an already ignored component must
+                        // stop conservatively rather than retrying forever.
+                        if(!Blocked || EarlierContact(Original,Part))Part=Original;
+                        Blocked=true;break;
+                    }
+                    continue;
+                }
+                if(!CanEscapeCreature(Next,From,To,Body))
+                {
+                    if(!Blocked || EarlierContact(Next,Part))Part=Next;
+                    Blocked=true;
+                    // A later exact TOI can expose another blocker between it
+                    // and Chaos's original TOI. Keep this candidate while the
+                    // next query checks those previously truncated results.
+                    if(Next.bStartPenetrating || Next.Time<=Original.Time || !Ignore(Next.GetComponent()))break;
+                    continue;
+                }
+                if(!Ignore(Next.GetComponent()))
+                {
+                    if(!Blocked || EarlierContact(Next,Part))Part=Next;
+                    Blocked=true;break;
+                }
                 // A few overlapping creatures are cheaper with the original
                 // retries. Gather only after more than four overlapping bodies.
                 if(++EscapeCount!=5 || !BatchCrowdQueries())continue;
@@ -101,8 +173,7 @@ namespace ACEBodySweep
                     FHitResult Contact;Contact.Component=Overlap.Component;
                     Contact.bStartPenetrating=Relative.SizeSquared2D()+FMath::Square(FMath::Abs(Relative.Z)-Offset)
                         <=FMath::Square(double(Radius+Sphere->GetScaledSphereRadius()));
-                    if(CanEscapeCreature(Contact,From,To,Body))
-                        EscapeParams->AddIgnoredComponent(Contact.GetComponent());
+                    if(CanEscapeCreature(Contact,From,To,Body))Ignore(Contact.GetComponent());
                 }
                 // The next sweep exposes walls and new creature contacts
                 // behind the escaped overlaps, without weakening collision.
@@ -110,10 +181,7 @@ namespace ACEBodySweep
             if(!Blocked)continue;
             Part.Location-=Shift;Part.TraceStart=From;Part.TraceEnd=To;
             Part.MyBoneName=I==1?FName(TEXT("ACEUpperBodySphere")):NAME_None;
-            if(!Found || (Part.bStartPenetrating && !Hit.bStartPenetrating)
-                || (Part.bStartPenetrating==Hit.bStartPenetrating &&
-                    (Part.Time<Hit.Time || (Part.Time==Hit.Time && Part.PenetrationDepth>Hit.PenetrationDepth))))
-                Hit=Part;
+            if(!Found || EarlierContact(Part,Hit))Hit=Part;
             Found=true;
         }
         return Found;
@@ -125,9 +193,49 @@ namespace ACEBodySweep
         const double Offset=FMath::Max(0.f,Body.GetCapsuleHalfHeight()-Radius);
         for(int32 I=0;I<(Offset>.001?2:1);++I)
         {
-            const FVector Shift(0,0,I==0?-Offset:Offset);TArray<FHitResult> Parts;
-            World.SweepMultiByChannel(Parts,From+Shift,To+Shift,FQuat::Identity,ECC_Pawn,FCollisionShape::MakeSphere(Radius),Params);
-            for(auto& Part:Parts){Part.Location-=Shift;Part.TraceStart=From;Part.TraceEnd=To;
+            const FVector Shift(0,0,I==0?-Offset:Offset);TArray<FHitResult> Parts,Retained;
+            TOptional<FCollisionQueryParams> RetryParams;
+            TSet<const UPrimitiveComponent*> Retried;
+            float TimeLimit=1.f;
+            for(;;)
+            {
+                Parts.Reset();bool Retry=false;
+                World.SweepMultiByChannel(Parts,From+Shift,From+Shift+(To-From)*TimeLimit,FQuat::Identity,ECC_Pawn,
+                    FCollisionShape::MakeSphere(Radius),RetryParams.IsSet()?RetryParams.GetValue():Params);
+                for(auto& Part:Parts)Part.Time*=TimeLimit;
+                for(int32 J=Parts.Num()-1;J>=0;--J)
+                {
+                    auto& Part=Parts[J];const FHitResult Original=Part;
+                    const bool Valid=RefineCreatureContact(Part,From+Shift,To+Shift,Radius);
+                    if(Original.bBlockingHit && (!Valid || Part.Time>Original.Time))
+                    {
+                        const auto* Component=Original.GetComponent();
+                        if(Component && !Retried.Contains(Component))
+                        {
+                            Retried.Add(Component);
+                            if(!RetryParams.IsSet())RetryParams.Emplace(Params);
+                            RetryParams->AddIgnoredComponent(Component);
+                            // Preserve an exact valid contact while looking for
+                            // walls hidden behind its earlier approximate hit.
+                            if(Valid){Retained.Add(Part);TimeLimit=FMath::Min(TimeLimit,Part.Time);}
+                            Retry=true;Parts.RemoveAt(J);continue;
+                        }
+                        Part=Original; // finite, conservative backend fallback
+                    }
+                    else if(!Valid)Parts.RemoveAt(J);
+                }
+                if(!Retry)break;
+                // Other accepted hits recur in the next query; keeping only
+                // retained/ignored components avoids duplicate initial contacts.
+            }
+            Parts.Append(Retained);
+            float FirstBlock=1.f;
+            for(const auto& Part:Parts)if(Part.bBlockingHit && !Part.bStartPenetrating)FirstBlock=FMath::Min(FirstBlock,Part.Time);
+            // Match multi-sweep semantics: retain all initial overlaps and
+            // contacts up to the nearest exact blocking time, not later walls.
+            Parts.RemoveAll([&](const FHitResult& Part){return !Part.bStartPenetrating && Part.Time>FirstBlock;});
+            for(auto& Part:Parts){
+                Part.Location-=Shift;Part.TraceStart=From;Part.TraceEnd=To;
                 Part.MyBoneName=I==1?FName(TEXT("ACEUpperBodySphere")):NAME_None;Hits.Add(Part);}
         }
     }

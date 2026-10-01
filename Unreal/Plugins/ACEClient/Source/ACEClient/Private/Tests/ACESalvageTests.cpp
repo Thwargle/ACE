@@ -99,6 +99,11 @@ bool FACESalvageTest::RunTest(const FString&)
     TestTrue(TEXT("Empty Salvage button stays visible"), bool(Button->bVisible));
     TestFalse(TEXT("Empty Salvage button is disabled"), Button->bActivatable);
     TestFalse(TEXT("Retail scrollbar is hidden while the list fits"), bool(Scrollbar->bVisible));
+    TestEqual(TEXT("Empty salvage exposes every authored slot square"), Binder->SalvageItemBackgrounds.Num(), Binder->SalvageVisibleSlots);
+    for (const auto& Background : Binder->SalvageItemBackgrounds)
+        TestTrue(TEXT("Empty salvage slots retain the retail inventory square"), Background
+            && Background->GetVisibility() == ESlateVisibility::HitTestInvisible
+            && Background->Background.GetResourceObject() == Resources->ResolveIconTexture(0x06004D20));
     TestEqual(TEXT("Retail destructive warning remains visible"), Binder->SalvageWarningLabel->GetText().ToString(),
         FString(TEXT("WARNING: Items in this panel will be destroyed!")));
     TestTrue(TEXT("Opening Ust does not send an action"), Session.CachedC2SPackets.IsEmpty());
@@ -132,6 +137,8 @@ bool FACESalvageTest::RunTest(const FString&)
     UObject* const OriginalForeground = Binder->InventorySlots[SourceSlot]->Background.GetResourceObject();
     if (!TestNotNull(TEXT("Salvage source icon resolves from DAT"), OriginalForeground)) return false;
     TestTrue(TEXT("Steel can be queued"), Binder->AddItemToSalvageQueue(1000));
+    TestEqual(TEXT("Salvage offer names use the same material prefix as inventory"),
+        Binder->SalvageItemSlots[0]->GetToolTipText().ToString(), FString(TEXT("Steel Salvage item 1000")));
     Binder->RefreshInventoryOverlays();
     TestTrue(TEXT("Queueing adds the retail offered overlay to the source inventory icon"),
         Binder->InventorySlots[SourceSlot]->Background.GetResourceObject() != OriginalForeground);
@@ -239,6 +246,9 @@ bool FACESalvageTest::RunTest(const FString&)
     TestEqual(TEXT("Horizontal scrolling retains the final queued item beside the empty slot"),
         Binder->SalvageItemSlotGuids[Binder->SalvageItemSlotGuids.Num() - 2], 4000 + ItemCount - 1);
     TestEqual(TEXT("End of list exposes one empty drop slot"), Binder->SalvageItemSlotGuids.Last(), 0);
+    TestTrue(TEXT("Trailing empty drop slot remains visibly outlined after scrolling"),
+        Binder->SalvageItemBackgrounds.Last()->GetVisibility() == ESlateVisibility::HitTestInvisible
+        && Binder->SalvageItemBackgrounds.Last()->Background.GetResourceObject() == Resources->ResolveIconTexture(0x06004D20));
     if (const auto* Slot = Cast<UCanvasPanelSlot>(Binder->SalvageItemSlots[0]->Slot))
         TestTrue(TEXT("Salvage icon follows canvas coordinate scaling"), Slot->GetPosition().Equals(
             Canvas->LayoutToViewport(FVector2D(List->GetScreenOrigin())), .1));

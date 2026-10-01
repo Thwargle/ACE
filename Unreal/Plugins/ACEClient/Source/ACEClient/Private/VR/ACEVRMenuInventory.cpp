@@ -5,6 +5,7 @@
 #include "ACEInventoryRules.h"
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACEUIResourceResolver.h"
+#include "UI/ACERetailObjectNames.h"
 #include "Components/WidgetInteractionComponent.h"
 #include "Engine/Texture2D.h"
 #include "Widgets/SBoxPanel.h"
@@ -67,12 +68,13 @@ TSharedRef<SWidget> UACEVRMenu::ItemIcon(const FACEWorldObject& Item,float Size)
     return SNew(SBox).WidthOverride(Size).HeightOverride(Size)
         [SNew(SOverlay)
             +SOverlay::Slot()[Layer(Resources?Resources->ResolveItemBackground(Item.ItemType,Item.IconUnderlayId):nullptr)]
-            +SOverlay::Slot()[Layer(Resources?Resources->ResolveItemForeground(Item.IconId,Item.IconOverlayId,Item.UiEffects,Offered):nullptr)]];
+            +SOverlay::Slot()[Layer(Resources?Resources->ResolveItemForeground(Item.IconId,Item.IconOverlayId,Item.UiEffects,Offered,
+                Item.Structure,Item.MaxStructure):nullptr)]];
 }
 TSharedRef<SWidget> UACEVRMenu::ItemButton(const FACEWorldObject& Item,float Size,bool SalvageOffer)
 {
     auto Content=SNew(SOverlay)
-        +SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)[ItemIcon(Item)]
+        +SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)[ItemIcon(Item,Size)]
         +SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Bottom)
         [SNew(STextBlock).Text(FText::FromString(Item.StackSize>1?FString::FromInt(Item.StackSize):TEXT("")))
             .Font(FCoreStyle::GetDefaultFontStyle("Bold",18)).ColorAndOpacity(FLinearColor::White)
@@ -80,12 +82,19 @@ TSharedRef<SWidget> UACEVRMenu::ItemButton(const FACEWorldObject& Item,float Siz
     auto Control=SNew(SBox).WidthOverride(Size).HeightOverride(Size)
         [SNew(SButton).Tag(FName(*FString::Printf(TEXT("Item_%d"),Item.Guid))).ButtonStyle(&SlotStyle()).IsFocusable(false)
             .HAlign(HAlign_Center).VAlign(VAlign_Center).ContentPadding(2)
-            .ButtonColorAndOpacity_Lambda([this,Id=Item.Guid](){return bItemDragging && DragItem==Id?FLinearColor(.25f,.25f,.25f):Id==Selected?FLinearColor(.2f,.65f,.4f):FLinearColor::White;})
-            .OnHovered_Lambda([this,Name=Item.Name](){if(HoverLabel && !bItemDragging)HoverLabel->SetText(FText::FromString(Name));})
+            .ButtonColorAndOpacity_Lambda([this,Id=Item.Guid](){return bItemDragging && DragItem==Id?FLinearColor(.25f,.25f,.25f):FLinearColor::White;})
+            .OnHovered_Lambda([this,Name=ACERetailObjectNames::Name(Item)](){if(HoverLabel && !bItemDragging)HoverLabel->SetText(FText::FromString(Name));})
             .OnPressed_Lambda([this,Guid=Item.Guid,SalvageOffer](){BeginItemPointer(Guid);bDragFromSalvage=SalvageOffer && DragItem!=0;})
             .OnClicked_Lambda([this,Guid=Item.Guid](){if(!bSuppressItemClick)SelectItem(Guid);bSuppressItemClick=false;return FReply::Handled();})[Content]];
-    MenuTargets.Add({Control,Item.Guid});
-    return Control;
+    // The same DAT frame used by inventory, equipment, loot and vendor slots
+    // on desktop stays bright without tinting or obscuring the item's artwork.
+    auto Selection=Icon(0x06004D09,Size);
+    Selection->SetTag(FName(*FString::Printf(TEXT("ItemSelection_%d"),Item.Guid)));
+    Selection->SetVisibility(TAttribute<EVisibility>::CreateLambda([this,Id=Item.Guid]()
+        {return Id==Selected?EVisibility::HitTestInvisible:EVisibility::Hidden;}));
+    auto Framed=SNew(SOverlay)+SOverlay::Slot()[Control]+SOverlay::Slot()[Selection];
+    MenuTargets.Add({Framed,Item.Guid});
+    return Framed;
 }
 void UACEVRMenu::ClearItemSelection()
 {
@@ -139,7 +148,7 @@ void UACEVRMenu::UpdateItemPointer(bool OverMenu,FVector2D Pixel)
         if(DragSpell)HoverLabel->SetText(FText::FromString(TEXT("Drop on a hotbar slot to add/move; drop on the book to remove from the bar.")));
         else if(bDragFromSalvage)HoverLabel->SetText(FText::FromString(TEXT("Release outside the salvage list to remove this offer. The item stays in your inventory.")));
         else {FACEWorldObject Item;Client->GetWorldObject(DragItem,Item);
-        HoverLabel->SetText(FText::FromString(FString::Printf(TEXT("Moving %d × %s — release on a slot, pack, or in the world"),DragAmount,*Item.Name)));}
+        HoverLabel->SetText(FText::FromString(FString::Printf(TEXT("Moving %d × %s — release on a slot, pack, or in the world"),DragAmount,*ACERetailObjectNames::Name(Item))));}
     }
 }
 void UACEVRMenu::CancelItemPointer(){DragItem=DragAmount=DragSpell=0;DragSpellBar=INDEX_NONE;bItemDragging=bDragFromSalvage=false;}
@@ -241,7 +250,7 @@ void UACEVRMenu::BuildInventory()
     // and shrink the pack grid as soon as the player clicked an item.
     FACEWorldObject Item;const bool Valid=Selected && Client->GetWorldObject(Selected,Item) && Client->IsOwnedInventoryItem(Item);
     Body->AddSlot().AutoHeight().Padding(4)[SNew(SBox).HeightOverride(64).Clipping(EWidgetClipping::ClipToBoundsAlways)
-        [Text(Valid?Item.Name:TEXT("Select an item to use, equip, or inspect."),28)]];
+        [Text(Valid?ACERetailObjectNames::Name(Item):TEXT("Select an item to use, equip, or inspect."),28)]];
     auto Quantity=SNew(SVerticalBox);const auto MainBody=Body;Body=Quantity;
     if(Valid)AddQuantity(Item.StackSize);
     Body=MainBody;
@@ -258,17 +267,36 @@ TSharedRef<SWidget> UACEVRMenu::PackIcons()
 {
     if(!Pack)Pack=Client->GetPlayerGuid();
     auto Packs=SNew(SVerticalBox);
+    if(Page=="Inventory" || Page=="Equipment")
+    {
+        // A player silhouette makes the equipment view part of pack navigation.
+        static const FSlateRoundedBoxBrush Head(FLinearColor::White,8.f);
+        static const FSlateRoundedBoxBrush Shoulders(FLinearColor::White,FVector4(12.f,12.f,3.f,3.f));
+        auto PlayerIcon=SNew(SBox).WidthOverride(48).HeightOverride(48)
+            [SNew(SOverlay)
+                +SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Top).Padding(0,3,0,0)
+                [SNew(SBox).WidthOverride(16).HeightOverride(16)[SNew(SImage).Image(&Head).Visibility(EVisibility::HitTestInvisible)]]
+                +SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Bottom).Padding(0,0,0,3)
+                [SNew(SBox).WidthOverride(34).HeightOverride(23)[SNew(SImage).Image(&Shoulders).Visibility(EVisibility::HitTestInvisible)]]];
+        Packs->AddSlot().AutoHeight().Padding(2)[SNew(SBox).WidthOverride(68).HeightOverride(68)
+            [SNew(SButton).Tag("EquipmentToggle").ButtonStyle(&SlotStyle()).IsFocusable(false)
+                .HAlign(HAlign_Center).VAlign(VAlign_Center).ContentPadding(2)
+                .ButtonColorAndOpacity(Page=="Equipment"?FLinearColor(.25f,.7f,.4f):FLinearColor::White)
+                .ToolTipText(FText::FromString(Page=="Equipment"?TEXT("Return to inventory"):TEXT("Equipment")))
+                .OnHovered_Lambda([this](){if(HoverLabel)HoverLabel->SetText(FText::FromString(Page=="Equipment"?TEXT("Return to inventory"):TEXT("Equipment")));})
+                .OnClicked_Lambda([this](){OpenPage(Page=="Equipment"?"Inventory":"Equipment");return FReply::Handled();})[PlayerIcon]]];
+    }
     auto AddPack=[&](int32 Guid,const FString& Name,const TSharedRef<SWidget>& Art)
     {
-        auto Control=SNew(SBox).WidthOverride(68).HeightOverride(68)[SNew(SButton).ButtonStyle(&SlotStyle()).IsFocusable(false)
+        auto Control=SNew(SBox).WidthOverride(68).HeightOverride(68)[SNew(SButton).Tag(FName(*FString::Printf(TEXT("Pack_%d"),Guid))).ButtonStyle(&SlotStyle()).IsFocusable(false)
             .HAlign(HAlign_Center).VAlign(VAlign_Center).ContentPadding(2)
-            .ButtonColorAndOpacity(Guid==Pack?FLinearColor(.25f,.7f,.4f):FLinearColor::White)
+            .ButtonColorAndOpacity(Page!="Equipment" && Guid==Pack?FLinearColor(.25f,.7f,.4f):FLinearColor::White)
             .OnHovered_Lambda([this,Name](){if(HoverLabel)HoverLabel->SetText(FText::FromString(Name));})
             .OnClicked_Lambda([this,Guid](){SelectPack(Guid);return FReply::Handled();})[Art]];
         Packs->AddSlot().AutoHeight().Padding(2)[Control];ItemDestinations.Add({Control,Guid,0,0});
     };
-    AddPack(Client->GetPlayerGuid(),TEXT("Main pack"),Icon(Pack==Client->GetPlayerGuid()?0x06004CF8:0x06004CF7));
-    for(const auto& Bag:Client->GetPlayerPacks())AddPack(Bag.Guid,Bag.Name,ItemIcon(Bag));
+    AddPack(Client->GetPlayerGuid(),TEXT("Main pack"),Icon(Page!="Equipment" && Pack==Client->GetPlayerGuid()?0x06004CF8:0x06004CF7));
+    for(const auto& Bag:Client->GetPlayerPacks())AddPack(Bag.Guid,ACERetailObjectNames::Name(Bag),ItemIcon(Bag));
     return Packs;
 }
 

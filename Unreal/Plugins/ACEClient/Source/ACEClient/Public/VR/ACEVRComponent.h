@@ -20,6 +20,7 @@ class UACEClientSubsystem;
 class AACEPlayerController;
 class AACEWorldEntityActor;
 class UACEVRMenu;
+class UACEVRChat;
 class UACECharacterAppearanceComponent;
 
 /** OpenXR rig layered over ACE's existing collision, prediction and authenticated session. */
@@ -40,6 +41,9 @@ class ACECLIENT_API UACEVRComponent : public UActorComponent
 	friend class FACEAvatarMotionTest;
 	friend class AACEPlayerController;
 	friend class UACEVRMenu;
+	friend class UACEVRChat;
+	friend class FACEVRChatTest;
+	friend class FACERetailWorldEntryTest;
 public:
 	UACEVRComponent();
 	virtual void BeginPlay() override;
@@ -58,6 +62,8 @@ public:
 	void CompensateRoomScale(const FVector& ActualDelta);
 	void ResetTrackingOrigin();
 	void ToggleInventory();
+	void ToggleChat();
+	void FocusPanelSurface(UWidgetComponent* Panel);
 	void InventoryPressed();
 	void InventoryReleased();
 	void UpdateInventoryHold(float Dt);
@@ -129,6 +135,17 @@ public:
 	bool bUseDesktopMenu = false;
 
 private:
+	void UpdateChatPanel(bool Available, float Dt);
+	void UpdatePersonalPanelLayers();
+	UPROPERTY(Transient) TObjectPtr<UACEVRChat> ChatWidget;
+	bool bChatOpen = false, bChatDocked = false;
+	int32 ChatVendorGuid = 0;
+	FName FrontPanel = "Menu";
+	FTransform ChatAnchorFrame;
+	FVector ChatOwnerLocation = FVector::ZeroVector;
+	bool bChatAnchorReady = false, bChatAnchorTurning = false;
+	FTransform GetChatAnchorTransform() const;
+	void UpdateChatAnchor(float Dt);
 	void UpdateGameplayMenu(bool Visible, float Dt);
 	FName PendingGameplayPage;
 	UPROPERTY(Transient) TObjectPtr<AActor> MenuMirrorActor;
@@ -239,6 +256,7 @@ private:
 	void UpdatePanels(float Dt = 1.f / 90.f);
 	void UpdateNativeHUD(bool Available, float Dt = 1.f / 90.f);
 	TSharedPtr<class SACEVRVitals> NativeVitals;
+	TSharedPtr<class SACEVRJumpCharge> NativeJump;
 	TSharedPtr<class SACEVRCompass> NativeCompass;
 	TSharedPtr<class SACEVRFellowship> NativeFellowship;
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> FellowshipPanel;
@@ -337,8 +355,6 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UACEVRWidget> WristWidget;
 	UPROPERTY(Transient) TObjectPtr<UACEVRRetailSurface> WristRetail;
 	UPROPERTY(Transient) TObjectPtr<UACEVRRetailSurface> VitalsRetail;
-	UPROPERTY(Transient) TObjectPtr<UACEVRRetailSurface> ChatRetail;
-	UPROPERTY(Transient) TObjectPtr<UACEVRRetailSurface> JumpRetail;
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> JumpPanel;
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> VitalsPanel;
 	UPROPERTY(Transient) TObjectPtr<UWidgetComponent> FrameRatePanel;

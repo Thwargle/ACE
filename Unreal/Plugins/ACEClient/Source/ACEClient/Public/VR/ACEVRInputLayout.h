@@ -20,6 +20,6 @@ namespace ACEVRInputLayout
    {"VRJump",TEXT("Right stick click"),TEXT("Charge jump / release")}};
   return Values;
  }
- inline bool IsAction(FName Name){for(const auto& B:Buttons())if(B.Input==Name)return true;return false;}
- inline FString ActionLabel(FName Name){for(const auto& B:Buttons())if(B.Input==Name)return B.Action;return FString();}
+ inline bool IsAction(FName Name){if(Name=="VRChat")return true;for(const auto& B:Buttons())if(B.Input==Name)return true;return false;}
+ inline FString ActionLabel(FName Name){if(Name=="VRChat")return TEXT("Chat / panel grab");for(const auto& B:Buttons())if(B.Input==Name)return B.Action;return FString();}
 }

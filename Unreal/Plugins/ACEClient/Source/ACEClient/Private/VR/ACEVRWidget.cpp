@@ -160,7 +160,7 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 			}),[Rig,Setting](){if(Rig.IsValid())Rig->ChangeSetting(Setting);})];
 		Scroll=Sections[3];
 		Scroll->AddSlot().Padding(0,12)[Text(Literal(TEXT("Controller button layout")),24)];
-		static TArray<TSharedPtr<FName>> BindingOptions=[](){TArray<TSharedPtr<FName>> R;for(const auto& B:ACEVRInputLayout::Buttons())R.Add(MakeShared<FName>(B.Input));return R;}();
+		static TArray<TSharedPtr<FName>> BindingOptions=[](){TArray<TSharedPtr<FName>> R;for(const auto& B:ACEVRInputLayout::Buttons())R.Add(MakeShared<FName>(B.Input));R.Add(MakeShared<FName>("VRChat"));return R;}();
 		for(const auto& B:ACEVRInputLayout::Buttons())
 		{
 			Scroll->AddSlot().Padding(0,5)[SNew(SVerticalBox)
@@ -251,7 +251,7 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 				else if (Setting == "OptionsLock") Label = S->bOptionsLocked ? TEXT("VR options placement: Locked") : TEXT("VR options placement: Unlocked / Move or Resize below menu");
 				else if (Setting == "PinVitals") Label = FString::Printf(TEXT("Show pinned vitals: %s"), S->bPinVitalsToView ? TEXT("On") : TEXT("Off"));
 				else if (Setting == "VitalsLock") Label = S->bVitalsLocked ? TEXT("Vitals placement: Locked") : TEXT("Vitals placement: Unlocked / drag bar to move");
-                else if (Setting == "PinChat") Label = FString::Printf(TEXT("Pin chat in view: %s"), S->bPinChatToView ? TEXT("On") : TEXT("Off"));
+                else if (Setting == "PinChat") Label = FString::Printf(TEXT("Chat anchor: %s"), S->ChatAnchorMode==0?TEXT("Head"):S->ChatAnchorMode==1?TEXT("Body"):TEXT("World"));
 				else if (Setting == "Haptics") Label = FString::Printf(TEXT("Haptics: %s"), S->bHaptics ? TEXT("On") : TEXT("Off"));
 				else if (Setting == "Panel") Label = FString::Printf(TEXT("Menu size: %.0f%%"), S->PanelScale / .11f * 100.f);
 				else if (Setting == "Distance") Label = FString::Printf(TEXT("Menu distance: %.0f cm"), S->PanelDistance);

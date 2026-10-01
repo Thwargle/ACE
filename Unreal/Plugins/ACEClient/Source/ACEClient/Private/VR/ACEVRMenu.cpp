@@ -10,6 +10,7 @@
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "UI/ACEUICanvasWidget.h"
+#include "UI/ACERetailObjectNames.h"
 #include "Engine/GameInstance.h"
 #include "Engine/Texture2D.h"
 #include "Blueprint/WidgetTree.h"
@@ -109,7 +110,7 @@ void UACEVRMenu::OpenPage(FName InPage)
 }
 void UACEVRMenu::EntryChanged(const FText& Value)
 {
-    if(Page=="Spellbook")Search=Value.ToString();
+    if(Page=="Spellbook" && Search!=Value.ToString()){Search=Value.ToString();PageIndex=0;bDirty=true;}
     else if(Page=="Fellowship")FellowName=Value.ToString();
 }
 TSharedRef<SWidget> UACEVRMenu::Entry(const FString& Hint,const FString& Value)
@@ -131,7 +132,7 @@ TSharedRef<SWidget> UACEVRMenu::Button(const FString& Text,TFunction<void()> Cli
 TSharedRef<SWidget> UACEVRMenu::RebuildWidget()
 {
     auto Nav=SNew(SVerticalBox);
-    const TCHAR* Names[]={TEXT("Inventory"),TEXT("Equipment"),TEXT("Spellbook"),TEXT("Fellowship"),TEXT("Character"),TEXT("Vendor"),TEXT("Loot"),TEXT("Trade"),TEXT("Salvage"),TEXT("More")};
+    const TCHAR* Names[]={TEXT("Inventory"),TEXT("Spellbook"),TEXT("Fellowship"),TEXT("Character"),TEXT("Vendor"),TEXT("Loot"),TEXT("Trade"),TEXT("Salvage"),TEXT("More")};
     for(const auto* Name:Names)Nav->AddSlot().AutoHeight().Padding(2)[Button(Name,[this,Name](){OpenPage(Name);})];
     Nav->AddSlot().AutoHeight().Padding(2)[Button(TEXT("Close"),[this](){if(Rig)Rig->ToggleInventory();})];
     auto Content=SNew(SVerticalBox)
@@ -152,6 +153,8 @@ void UACEVRMenu::RefreshIfDirty()
         MenuOwnerGuid=Pack=Client->GetPlayerGuid();Selected=Spell=UseSource=PageIndex=0;
         Confirmation.Reset();Search.Reset();bAssignShortcut=false;bInspectionOpen=false;InspectItem=InspectSpell=0;bDirty=true;
     }
+	if(Client && Client->GetSession() && Page=="Spellbook" && SpellRevision!=Client->GetSession()->GetSpellDataRevision())
+	{SpellRevision=Client->GetSession()->GetSpellDataRevision();bDirty=true;}
 	if(Client && Client->GetSession() && InventoryRevision!=Client->GetSession()->GetInventoryDataRevision())
 	{InventoryRevision=Client->GetSession()->GetInventoryDataRevision();bDirty=true;}
     if(!bDirty || !Body || !Client || !Binder || DragItem || DragSpell)return;
@@ -170,7 +173,7 @@ void UACEVRMenu::RefreshIfDirty()
     {
         Body->AddSlot().AutoHeight()[Label(TEXT("Choose a recipient"),28)];
         for(const auto& Target:Client->GetWorldObjects())if(Target.IsGiveOrCreatureTarget() && Target.Guid!=Client->GetPlayerGuid() && Target.IsSelectableWorldObject())
-            Body->AddSlot().AutoHeight().Padding(4)[Button(Target.Name,[this,Id=Target.Guid]()
+            Body->AddSlot().AutoHeight().Padding(4)[Button(ACERetailObjectNames::Name(Target),[this,Id=Target.Guid]()
             {Client->SendGiveObjectRequest(Id,Selected,Binder->GetSelectedItemAmount(Selected));OpenPage("Inventory");})];
     }
     else if(Page=="Allegiance")BuildAllegiance();
@@ -216,7 +219,7 @@ void UACEVRMenu::Execute(FName Action)
     else if(Action=="Trade" && Valid)Binder->AddInventoryGuidToTrade(Selected,Amount);
     else if(Action=="Drop" && Valid)
     {
-        const FString Prompt=FString::Printf(TEXT("Drop %d %s? Press Drop again to confirm."),Amount,*Item.Name);
+        const FString Prompt=FString::Printf(TEXT("Drop %d %s? Press Drop again to confirm."),Amount,*ACERetailObjectNames::Name(Item));
         if(Confirmation==Prompt)
         {
             if(!Item.CanDropToWorld())Confirmation=TEXT("You cannot drop that item.");

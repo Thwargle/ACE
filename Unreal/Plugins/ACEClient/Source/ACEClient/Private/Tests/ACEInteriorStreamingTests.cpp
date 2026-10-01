@@ -618,7 +618,7 @@ bool FACEParticleDistanceTest::RunTest(const FString& Parameters)
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
     if (!Dat || !Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
     auto* View=Fixture.World->SpawnActor<ACameraActor>();
-    auto* PC=Fixture.World->SpawnActor<APlayerController>();
+    auto* PC=Fixture.World->SpawnActor<AACEPlayerController>();
     Fixture.World->AddController(PC);
     if (!PC->PlayerCameraManager)
     {
@@ -663,6 +663,10 @@ bool FACEParticleDistanceTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Leaving draw range hides batch and lights"),Near.bDegraded && (!Near.Batch || !Near.Batch->IsVisible()) && Lights->GetVisibleLightCount(FX)==0);
     const int32 Births=Near.TotalBorn; FX->TickEmitters(10.f);
     TestEqual(TEXT("Infinite ambient does not accumulate births while degraded"),Near.TotalBorn,Births);
+    PC->bCameraMapMode=true; FX->TickEmitters(1.f/30.f);
+    TestTrue(TEXT("Map view restores the visible particle object despite camera distance"),!Near.bDegraded && !Near.Particles.IsEmpty());
+    PC->bCameraMapMode=false; FX->TickEmitters(1.f/30.f);
+    TestTrue(TEXT("Leaving map view restores authored particle distance degradation"),Near.bDegraded);
     Culling->Set(0,ECVF_SetByCode); FX->TickEmitters(1.f/30.f);
     TestFalse(TEXT("Comparison switch resumes a distant emitter live"),Near.bDegraded);
     Culling->Set(1,ECVF_SetByCode); FX->TickEmitters(1.f/30.f);

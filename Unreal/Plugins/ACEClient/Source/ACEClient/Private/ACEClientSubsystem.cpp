@@ -442,11 +442,11 @@ void UACEClientSubsystem::SendMovement(float Forward, float Strafe, float Turn, 
 	SendMovementEx(Forward, Strafe, Turn, bRunning, false, true);
 }
 
-void UACEClientSubsystem::SendMovementEx(float Forward, float Strafe, float Turn, bool bRunning, bool bStandingLongJump, bool bContact)
+void UACEClientSubsystem::SendMovementEx(float Forward, float Strafe, float Turn, bool bRunning, bool bStandingLongJump, bool bContact, bool bUniformVRMovement)
 {
 	if (Session)
 	{
-		Session->SendMoveToState(Forward, Strafe, Turn, bRunning, bContact, bStandingLongJump);
+		Session->SendMoveToState(Forward, Strafe, Turn, bRunning, bContact, bStandingLongJump, bUniformVRMovement);
 	}
 }
 

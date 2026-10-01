@@ -74,6 +74,35 @@ private:
  TWeakObjectPtr<UACEVRComponent> Rig;FName Panel;bool bLocked=true;
 };
 
+/** Headset-sized charge feedback drawn directly from the controller's charge. */
+class SACEVRJumpCharge : public SLeafWidget
+{
+public:
+ SLATE_BEGIN_ARGS(SACEVRJumpCharge){} SLATE_END_ARGS()
+ void Construct(const FArguments&){SetVisibility(EVisibility::HitTestInvisible);}
+ bool Refresh(float Charge)
+ {
+  const float Next=FMath::IsFinite(Charge)?FMath::Clamp(Charge,0.f,1.f):0.f;
+  if(FMath::IsNearlyEqual(Next,Fraction,.001f))return false;
+  Fraction=Next;Invalidate(EInvalidateWidgetReason::Paint);return true;
+ }
+ float GetChargeFraction()const{return Fraction;}
+ virtual FVector2D ComputeDesiredSize(float)const override{return FVector2D(480,90);}
+ virtual int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& Out,int32 L,const FWidgetStyle&,bool)const override
+ {
+  using namespace ACEVRHUDArt;
+  const FLinearColor Gold(.95f,.74f,.31f);
+  Text(Out,L,G,{8,0},TEXT("JUMP"),24,Gold);
+  Text(Out,L,G,{390,0},FString::Printf(TEXT("%d%%"),FMath::RoundToInt(Fraction*100)),24,FLinearColor::White);
+  Box(Out,L,G,{4,36},{472,44},Gold,7);
+  Box(Out,L+1,G,{7,39},{466,38},FLinearColor(.004f,.006f,.01f),5);
+  if(Fraction>0)Box(Out,L+2,G,{11,43},{458*Fraction,30},FLinearColor(.68f,.32f,.025f),3);
+  return L+2;
+ }
+private:
+ float Fraction=0;
+};
+
 /** Native vector meters; no dependency on a rendered desktop canvas. */
 class SACEVRVitals : public SLeafWidget
 {

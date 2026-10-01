@@ -51,6 +51,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACEMissingDatLoginTest;
 	friend class FACELauncherViewportTest;
 	friend class FACECameraEdgeTest;
+	friend class FACEParticleDistanceTest;
 	friend class FACEInputBindingsTest;
 	friend class FACERetailScreenTest;
     friend class UACEUICharSelectBinder;
@@ -61,6 +62,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 public:
 	AACEPlayerController();
 	bool IsVRActive() const;
+	bool IsCameraMapView() const { return bCameraMapMode; }
 	class UACEVRComponent* GetVRComponent() const;
 	UPROPERTY(Transient) TObjectPtr<class UACEFrameRateWidget> FrameRateWidget;
 	void UpdateFrameRateOverlay();
@@ -68,10 +70,12 @@ public:
 	void SetDesktopInterfaceHidden(bool bHideInterface);
 	bool IsDesktopInterfaceHidden() const { return bDesktopInterfaceHidden && !IsVRActive(); }
 	TSharedPtr<class FACEKeyboardRouter> KeyboardRouter;
+	TSharedPtr<class FACEDesktopPointer> DesktopPointer;
 
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void SetupInputComponent() override;
+	virtual void SetInputMode(const FInputModeDataBase& InData) override;
 	virtual bool InputKey(const FInputKeyEventArgs& Params) override;
 	virtual void PlayerTick(float DeltaTime) override;
 
@@ -257,6 +261,7 @@ protected:
 	float TurnSent = 0.f;
 	bool bRunning = true; // AC default: run; Shift holds walk
 	bool bRunningSent = true;
+	bool bUniformVRMovementSent = false;
 	/** Retail-style auto-run (NumLock / Mouse4). Cleared by W/S. */
 	bool bAutoRun = false;
 	bool bNumLockWasDown = false;

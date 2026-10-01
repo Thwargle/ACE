@@ -10,6 +10,7 @@
 #include "VR/ACEVRComponent.h"
 #include "../VR/ACEEnemyHealthBar.h"
 #include "../VR/ACEVRNativeHUD.h"
+#include "../VR/ACEVRPlatformTextEntry.h"
 #include "VR/ACEVRSettings.h"
 #include "VR/ACEVRWidget.h"
 #include "VR/ACEVRMenu.h"
@@ -21,11 +22,15 @@
 #include "UI/ACEUIElementManager.h"
 #include "UI/ACEUILayoutResolver.h"
 #include "UI/ACEUIResourceResolver.h"
+#include "UI/ACERetailTextBlock.h"
+#include "UI/ACEAppraisalFormatting.h"
+#include "UObject/UObjectIterator.h"
 #include "Components/Border.h"
 #include "Components/ScrollBox.h"
 #include "Components/BoxComponent.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/SBoxPanel.h"
+#include "Widgets/Text/STextBlock.h"
 #include "ACEPlayerController.h"
 #include "ACEWorldEntityActor.h"
 #include "ACEClientSubsystem.h"
@@ -561,6 +566,8 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		VR->Head->SetRelativeLocationAndRotation(FVector(35, -12, 165), FRotator(0, 35, 0));
 		PollHands(); VR->UpdateTrackingState(true); VR->UpdatePanels(); VR->UpdateArms();
 		VR->Settings->ButtonBindings.Reset();
+		// Explicit grab binding: the default left grip now toggles native chat.
+		VR->Settings->ButtonBindings.Add("VRLeftGrip","VRLeftGrip");
 		VR->RouteControllerButton("VRLeftGrip",true);
 		TestTrue(TEXT("Physical button dispatch reaches its held action"),VR->bLeftGripHeld);
 		VR->ConfigureButton("VRLeftGrip","VRRightGrip");VR->RouteControllerButton("VRLeftGrip",false);
@@ -870,14 +877,14 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			const FGeometry G = W->GetCachedGeometry();
 			return GameCanvas->GetCachedGeometry().AbsoluteToLocal(G.LocalToAbsolute(G.GetLocalSize() * .5));
 		};
-		auto PointAt = [&](UWidgetComponent* Panel, FVector2D Pixel)
+		auto PointAt = [&](UWidgetComponent* Panel, FVector2D Pixel, bool ExpectHit=true)
 		{
 			const FVector2D Size = Panel->GetDrawSize();
 			const FVector Control = Panel->GetComponentTransform().TransformPosition(FVector(0, Size.X * .5 - Pixel.X, Size.Y * .5 - Pixel.Y));
 			const FVector From = Control + Panel->GetForwardVector() * 35.f;
 			VR->RightAim->SetWorldLocationAndRotation(From, (Control - From).Rotation());
 			VR->RightPointer->TickComponent(.016f, LEVELTICK_All, nullptr);
-			TestEqual(TEXT("Controller trace reaches the retail interaction surface"), VR->RightPointer->GetHoveredWidgetComponent(), Panel);
+			TestEqual(*FString::Printf(TEXT("Controller trace at %s on %s matches %s (actual %s)"),*Pixel.ToString(),*GetNameSafe(Panel),*GetNameSafe(ExpectHit?Panel:nullptr),*GetNameSafe(VR->RightPointer->GetHoveredWidgetComponent())), VR->RightPointer->GetHoveredWidgetComponent(), ExpectHit?Panel:nullptr);
 		};
 		{
 			TestTrue(TEXT("Vitals controls show while the inventory menu is open"),VR->ShouldShowVitalsControls());
@@ -989,7 +996,7 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			VR->CombatMessage(TEXT("You are too busy!"),TEXT(""),ACEChatMessageType::TransientInfo);
 			auto* Alert=VR->WorldNotices.FindByPredicate([](const auto& N){return N.Kind==3;});
 			TestTrue(TEXT("Yellow server warning appears outside the closed retail UI"),Alert && Alert->Panel->IsVisible() && Alert->Text==TEXT("You are too busy!"));
-			if(Alert) TestTrue(TEXT("Warning draws above menus and cannot intercept clicks"),Alert->Panel->TranslucencySortPriority>VR->SettingsPanel->TranslucencySortPriority && Alert->Panel->GetCollisionEnabled()==ECollisionEnabled::NoCollision);
+			if(Alert) TestTrue(TEXT("Warning remains below personal menus and cannot intercept clicks"),Alert->Panel->TranslucencySortPriority<VR->SettingsPanel->TranslucencySortPriority && Alert->Panel->GetCollisionEnabled()==ECollisionEnabled::NoCollision);
 			VR->bInventoryOpen=true;
 			for(auto& N:VR->WorldNotices) N.Panel->DestroyComponent(); VR->WorldNotices.Empty();
 			Actor->Destroy(); VR->Client->Session->WorldObjects.Remove(NPC.Guid);
@@ -1258,7 +1265,11 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 				VR->GetEditablePanel(Other)->SetCollisionEnabled(Other==Name?ECollisionEnabled::QueryOnly:ECollisionEnabled::NoCollision);
 			const FVector Center=Surface->GetComponentLocation(); const float OriginalScale=VR->GetPanelScale(Name);
 			const FVector2D Pixel=Surface->GetDrawSize()*FVector2D(.85,.85);
-			PointAt(Surface,Pixel); VR->BeginPanelEdit(Name,false,true);
+			// The menu is closed here; its retained retail canvas only renders
+			// the wrist source. Exercise the resize plane without making that
+			// hidden backing texture intercept a controller ray.
+			if(Name=="Menu")TestFalse(TEXT("Closed retail backing canvas is not a visible interaction surface"),Surface->bRenderInMainPass);
+			PointAt(Surface,Pixel,Surface->bRenderInMainPass); VR->BeginPanelEdit(Name,false,true);
 			TestEqual(*FString::Printf(TEXT("%s resize captures"),*Name.ToString()),VR->PanelEditHand,1);
 			const FVector2D Start=VR->PanelEditStart;
 			const FVector Target=VR->PanelEditFrame.TransformPosition(FVector(0,Start.X*1.2,Start.Y*1.2));
@@ -1313,6 +1324,7 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		VR->SettingsPanel->AddWorldOffset(-VR->RetailPanel->GetForwardVector()*2.f);
 		VR->SettingsPanel->SetVisibility(true);
 		VR->SettingsPanel->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		VR->FocusPanelSurface(VR->SettingsPanel);
 		PointAt(VR->SettingsPanel,FVector2D(300,100));
 		TestEqual(TEXT("Overlapping VR settings take hit priority over main UI"),VR->RightPointer->GetHoveredWidgetComponent(),VR->SettingsPanel.Get());
 		VR->SettingsPanel->SetVisibility(false);VR->SettingsPanel->SetWorldTransform(SettingsBefore);VR->UpdatePanels();
@@ -2378,7 +2390,9 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		}
 		TestTrue(TEXT("Holding jump builds the requested charge"), FMath::IsNearlyEqual(PC->JumpChargeExtent, FMath::Min(Hold, 1.f), .001f));
 		VR->UpdatePanels();
-		TestTrue(TEXT("Jump charge shows the retail height bar in the headset with inventory closed"), VR->JumpPanel->IsVisible());
+		TestTrue(TEXT("Jump charge shows the native height bar in the headset with inventory closed"), VR->JumpPanel->IsVisible());
+		TestTrue(TEXT("Jump feedback has its own native Slate surface"), VR->NativeJump.IsValid() && !VR->JumpPanel->GetUserWidgetObject());
+		if(VR->NativeJump)TestTrue(TEXT("Native bar shows the controller's actual charge"),FMath::IsNearlyEqual(VR->NativeJump->GetChargeFraction(),PC->JumpChargeExtent,.001f));
 		TestEqual(TEXT("Jump meter cannot intercept controller or melee traces"), VR->JumpPanel->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
 		VR->JumpUp();
 		VR->UpdatePanels(); TestFalse(TEXT("Releasing the jump hides its temporary meter"), VR->JumpPanel->IsVisible());
@@ -2456,9 +2470,9 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("Native-only HUD does not redraw the closed desktop canvas"),VR->RetailPanel->IsVisible() || VR->RetailPanel->IsComponentTickEnabled());
 		VR->bInventoryOpen=true;VR->bUseDesktopMenu=true;VR->UpdatePanels();
 		TestTrue(TEXT("Opening inventory restores desktop rendering and interactions"),VR->RetailPanel->IsVisible() && VR->RetailPanel->IsComponentTickEnabled() && VR->RetailPanel->GetCollisionEnabled()==ECollisionEnabled::QueryOnly);
-		VR->bInventoryOpen=false;VR->Settings->bPinChatToView=true;VR->UpdatePanels();
-		TestTrue(TEXT("Pinned chat retains its retail render source"),VR->RetailPanel->IsVisible() && VR->RetailPanel->IsComponentTickEnabled());
-		VR->Settings->bPinChatToView=false;VR->UpdatePanels();
+		VR->bInventoryOpen=false;VR->bChatOpen=true;VR->UpdatePanels();
+		TestTrue(TEXT("Native chat opens without redrawing the desktop canvas"),VR->ChatPanel->IsVisible() && !VR->RetailPanel->IsVisible() && !VR->RetailPanel->IsComponentTickEnabled());
+		VR->bChatOpen=false;VR->UpdatePanels();
 		VR->Settings->bShowFellowship=true;
 		VR->NextNativeHUDUpdate=0;VR->UpdateNativeHUD(true);
 		TestTrue(TEXT("Native compass is independent of the desktop canvas"),VR->CompassPanel->IsVisible() && VR->NativeCompass.IsValid());
@@ -2522,6 +2536,23 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		Menu->SelectItem(Item.Guid);PC->DatGameplayBinder->SelectedStackAmount=3;
 		Menu->RefreshIfDirty();
 		TestTrue(TEXT("Native icons use the same mask and overlay composition as desktop inventory"),Menu->IconTextures.Contains(VR->Client->GetUIResourceResolver()->ResolveItemForeground(Item.IconId,Item.IconOverlayId,Item.UiEffects)));
+		{
+			auto& Presented=VR->Client->Session->WorldObjects[Item.Guid];
+			Presented.Name=TEXT("Ring");Presented.MaterialType=59;Presented.Structure=50;Presented.MaxStructure=100;
+			Menu->bDirty=true;Menu->RefreshIfDirty();
+			TFunction<bool(const TSharedRef<SWidget>&)> HasMaterialName;
+			HasMaterialName=[&](const TSharedRef<SWidget>& Widget)
+			{
+				if(Widget->GetType()==FName("STextBlock") && StaticCastSharedRef<STextBlock>(Widget)->GetText().ToString()==TEXT("Copper Ring"))return true;
+				auto* Children=Widget->GetChildren();
+				for(int32 I=0;I<Children->Num();++I)if(HasMaterialName(Children->GetChildAt(I)))return true;
+				return false;
+			};
+			TestTrue(TEXT("Native inventory selection displays its material prefix"),HasMaterialName(Menu->TakeWidget()));
+			TestTrue(TEXT("Native item icons preserve the retail partial-structure meter"),Menu->IconTextures.Contains(
+				VR->Client->GetUIResourceResolver()->ResolveItemForeground(Presented.IconId,Presented.IconOverlayId,Presented.UiEffects,false,50,100)));
+			Presented=Item;Menu->bDirty=true;Menu->RefreshIfDirty();
+		}
 		if(FApp::CanEverRender())
 		{
 			FVRTestControllers MenuControllers;
@@ -2538,7 +2569,7 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			auto ClickMenu=[&](bool Left,FName Tag)
 			{
 				PaintMenu();const auto Control=FindVRMenuControl(Menu->TakeWidget(),Tag);
-				if(!TestTrue(TEXT("Native menu control exists"),Control.IsValid()))return;
+				if(!TestTrue(FString::Printf(TEXT("Native menu control '%s' exists"),*Tag.ToString()),Control.IsValid()))return;
 				const FGeometry G=Control->GetCachedGeometry();
 				const FVector2D Pixel=Menu->GetCachedGeometry().AbsoluteToLocal(G.LocalToAbsolute(G.GetLocalSize()*.5));
 				const FVector2D Size=VR->GameplayMenuPanel->GetDrawSize();
@@ -2546,8 +2577,8 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 				const FVector From=Point+VR->GameplayMenuPanel->GetForwardVector()*90;
 				(Left?VR->LeftAim:VR->RightAim)->SetWorldLocationAndRotation(From,(Point-From).Rotation());
 				auto* Pointer=Left?VR->LeftPointer.Get():VR->RightPointer.Get();Pointer->TickComponent(.016f,LEVELTICK_All,nullptr);
-				TestTrue(TEXT("Controller reaches native menu through overlapping HUD"),Pointer->GetHoveredWidgetComponent()==VR->GameplayMenuPanel);
-				TestTrue(TEXT("Rendered button participates in the controller hit grid"),Pointer->IsOverInteractableWidget());
+				TestTrue(FString::Printf(TEXT("Controller reaches native menu control '%s' through overlapping HUD"),*Tag.ToString()),Pointer->GetHoveredWidgetComponent()==VR->GameplayMenuPanel);
+				TestTrue(FString::Printf(TEXT("Rendered button '%s' participates in the controller hit grid"),*Tag.ToString()),Pointer->IsOverInteractableWidget());
 				VR->Trigger(Left,true);PaintMenu();VR->Trigger(Left,false);PaintMenu();
 			};
 			// Deliberately cover the item/nav area with a nearer HUD plane.
@@ -2559,8 +2590,21 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			VR->Client->SelectObject(0);
 			ClickMenu(false,FName(*FString::Printf(TEXT("Item_%d"),Item.Guid)));
 			TestEqual(TEXT("Right trigger selects a native inventory item"),Menu->Selected,Item.Guid);
-			ClickMenu(true,"Equipment");TestEqual(TEXT("Left trigger opens equipment"),Menu->GetPage(),FName("Equipment"));
-			ClickMenu(false,"Inventory");TestEqual(TEXT("Right trigger returns to inventory"),Menu->GetPage(),FName("Inventory"));
+			const FName SelectionTag(*FString::Printf(TEXT("ItemSelection_%d"),Item.Guid));
+			const auto SelectionFrame=FindVRMenuControl(Menu->TakeWidget(),SelectionTag);
+			TestTrue(TEXT("Selected inventory item has a visible retail frame without stealing pointer hits"),SelectionFrame && SelectionFrame->GetVisibility()==EVisibility::HitTestInvisible);
+			Menu->ClearItemSelection();PaintMenu();
+			const auto ClearedSelectionFrame=FindVRMenuControl(Menu->TakeWidget(),SelectionTag);
+			TestTrue(TEXT("Retail frame disappears on the next paint after clearing selection"),ClearedSelectionFrame && ClearedSelectionFrame->GetVisibility()==EVisibility::Hidden);
+			TestFalse(TEXT("Equipment is not a separate navigation tab"),FindVRMenuControl(Menu->TakeWidget(),"Equipment").IsValid());
+			ClickMenu(true,"EquipmentToggle");TestEqual(TEXT("Left trigger on player icon opens equipment"),Menu->GetPage(),FName("Equipment"));
+			ClickMenu(false,"EquipmentToggle");TestEqual(TEXT("Player icon toggles back to inventory"),Menu->GetPage(),FName("Inventory"));
+			ClickMenu(true,"EquipmentToggle");
+			const FName MainPackTag(*FString::Printf(TEXT("Pack_%d"),VR->Client->GetPlayerGuid()));
+			const auto PlayerButton=FindVRMenuControl(Menu->TakeWidget(),"EquipmentToggle");
+			const auto MainPackButton=FindVRMenuControl(Menu->TakeWidget(),MainPackTag);
+			TestTrue(TEXT("Player icon sits above pack icons"),PlayerButton && MainPackButton && PlayerButton->GetCachedGeometry().GetAbsolutePosition().Y<MainPackButton->GetCachedGeometry().GetAbsolutePosition().Y);
+			ClickMenu(false,MainPackTag);TestEqual(TEXT("Selecting a pack returns from equipment to that inventory"),Menu->GetPage(),FName("Inventory"));
 			VR->VitalsPanel->SetWorldTransform(VitalsPose);VR->VitalsPanel->SetVisibility(VitalsVisible);
 			TestEqual(TEXT("Switching pages clears invisible inventory context"),Menu->Selected,0);
             TestEqual(TEXT("Switching pages also clears the shared hidden-item target"),VR->Client->GetSelectedObject().Guid,0);
@@ -2655,9 +2699,12 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
                 Menu->bDirty=true;AimMenuControl("Item_99220");NativeSession.CachedC2SPackets.Reset();
                 VR->RouteControllerButton("VRSelect",true);VR->RouteControllerButton("VRSelect",false);PaintMenu();
                 TestTrue(TEXT("Using Ust opens the native salvage page"),Menu->Page=="Salvage" && PC->DatGameplayBinder->OpenSalvageToolGuid==Ust.Guid);
+                TestTrue(TEXT("Empty native salvage starts with default inventory squares"),FindVRMenuControl(Menu->TakeWidget(),"SalvageEmpty_0").IsValid()
+                    && FindVRMenuControl(Menu->TakeWidget(),"SalvageEmpty_11").IsValid());
                 ActionPayload(ACEGameAction::Use,0);
                 Menu->SelectItem(Item.Guid);PaintMenu();ClickMenu(false,"Add item");
                 TestTrue(TEXT("Native salvage can queue the selected item"),PC->DatGameplayBinder->SalvageQueueGuids.Contains(Item.Guid));
+                TestTrue(TEXT("Native salvage keeps a visible empty square after its offer"),FindVRMenuControl(Menu->TakeWidget(),"SalvageEmpty_1").IsValid());
                 AimMenuControl("SalvageItem_99210");VR->Trigger(false,true);
                 Menu->bItemDragging=true;Menu->bDragFromSalvage=true;
                 Menu->FinishItemPointer(false,FVector2D(-100,-100),true);VR->Trigger(false,false);PaintMenu();
@@ -2765,6 +2812,70 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
                 NativeSession.CachedC2SPackets.Reset();ClickMenu(false,"Leave fellowship");
                 {const auto Bytes=ActionPayload(ACEGameAction::FellowshipQuit);FACEBinaryReader NativeReader(Bytes);TestEqual(TEXT("Leave does not disband"),NativeReader.ReadUInt32(),0u);}
                 NativeSession.WorldObjects.Remove(Recruit.Guid);NativeSession.Fellowship={};
+                // Drive every school, intersect level/search, and learn/forget
+                // spells while the rendered book stays open.
+                NativeSession.KnownSpells={81,5349,51,27,6,5,4,3,2,1};
+                Menu->SpellSchool=Menu->SpellLevel=0;Menu->Search.Reset();Menu->OpenPage("Spellbook");PaintMenu();
+                auto BookIds=[&]()
+                {
+                    TArray<int32> Ids;for(const auto& Target:Menu->MenuTargets)if(Target.SpellId && Target.Bar==INDEX_NONE)Ids.Add(Target.SpellId);
+                    return Ids;
+                };
+                auto TypeSearch=[&](const TCHAR* Query)
+                {
+                    auto Keyboard=MakeShared<FACEVRPlatformTextEntry>(Menu->TextEntry,[]{});
+                    Keyboard->SetTextFromVirtualKeyboard(FText::FromString(Query),ETextEntryType::TextEntryUpdated);
+                    PaintMenu();
+                };
+                auto* BookDat=GI->GetSubsystem<UACEDatSubsystem>();
+                auto ExpectedOrder=NativeSession.KnownSpells;
+                ExpectedOrder.Sort([&](int32 A,int32 B)
+                {
+                    uint32 OrderA=0,OrderB=0;BookDat->TryGetSpellDisplayOrder(A,OrderA);BookDat->TryGetSpellDisplayOrder(B,OrderB);
+                    return OrderA!=OrderB?OrderA<OrderB:A<B;
+                });
+                ExpectedOrder.SetNum(6);
+                TestTrue(TEXT("Spellbook uses authored retail display order before pagination"),BookIds()==ExpectedOrder);
+                ClickMenu(false,"Next");TestEqual(TEXT("Book fixture has a second page"),Menu->PageIndex,1);
+                const TArray<TArray<int32>> SchoolSpells={{27,81},{5,6},{51},{1,2,3,4},{5349}};
+                for(int32 School=1;School<=5;++School)
+                {
+                    ClickMenu(false,"SpellSchoolFilter");auto Actual=BookIds();Actual.Sort();
+                    TestEqual(TEXT("Changing schools resets book page"),Menu->PageIndex,0);
+                    TestEqual(TEXT("Controller cycles to the requested retail school"),Menu->SpellSchool,School);
+                    TestTrue(TEXT("Each school includes only its known spells"),Actual==SchoolSpells[School-1]);
+                }
+                ClickMenu(false,"Clear filters");
+                Menu->PageIndex=1;TypeSearch(TEXT("  fLaMe  "));
+                TestEqual(TEXT("Native keyboard edits reach the spellbook search delegate"),Menu->Search,FString(TEXT("  fLaMe  ")));
+                TestTrue(TEXT("Typing filters case-insensitively and trims surrounding whitespace"),BookIds().Num()==2 && Menu->PageIndex==0);
+                ClickMenu(false,"SpellLevelFilter");
+                TestTrue(TEXT("Level one intersects the current search"),BookIds()==TArray<int32>{27});
+                ClickMenu(false,"SpellLevelFilter");
+                TestTrue(TEXT("Level two excludes level one without losing search"),BookIds()==TArray<int32>{81});
+                ClickMenu(false,"SpellSchoolFilter");
+                TestTrue(TEXT("School, level and search intersect"),BookIds()==TArray<int32>{81});
+                TypeSearch(TEXT("no such spell"));
+                TestTrue(TEXT("Empty filter result is explicitly explained"),BookIds().IsEmpty() && FindVRMenuControl(Menu->TakeWidget(),"SpellBookEmpty").IsValid());
+                ClickMenu(false,"Clear filters");
+                TestTrue(TEXT("Clear filters restores all schools, levels and query"),Menu->Search.IsEmpty() && Menu->SpellSchool==0 && Menu->SpellLevel==0 && BookIds().Num()==6);
+                TypeSearch(TEXT("Flame"));
+                const int32 StableBookRefreshes=Menu->GetRefreshCount();TypeSearch(TEXT("Flame"));
+                TestEqual(TEXT("Unchanged book avoids per-frame rebuilds"),Menu->GetRefreshCount(),StableBookRefreshes);
+                auto CancelSearch=MakeShared<FACEVRPlatformTextEntry>(Menu->TextEntry,[]{});
+                CancelSearch->SetTextFromVirtualKeyboard(FText::FromString(TEXT("discarded query")),ETextEntryType::TextEntryUpdated);PaintMenu();
+                TestTrue(TEXT("Native search updates filter before keyboard dismissal"),BookIds().IsEmpty());
+                CancelSearch->SetTextFromVirtualKeyboard(FText::FromString(TEXT("discarded query")),ETextEntryType::TextEntryCanceled);PaintMenu();
+                TestTrue(TEXT("Canceling native search restores the original query and matches"),Menu->Search==TEXT("Flame") && BookIds().Num()==2);
+                auto UpdateKnownSpell=[&](bool Remove)
+                {
+                    FACEBinaryWriter W;W.WriteUInt16(27);W.WriteUInt16(0);FACEBinaryReader R(W.GetData());
+                    if(Remove)NativeSession.HandleMagicRemoveSpell(R);else NativeSession.HandleMagicUpdateSpell(R);
+                    PaintMenu();
+                };
+                UpdateKnownSpell(true);TestTrue(TEXT("Server removal refreshes the open filtered book"),BookIds()==TArray<int32>{81});
+                UpdateKnownSpell(false);TestEqual(TEXT("Server learning refreshes the open filtered book"),BookIds().Num(),2);
+                ClickMenu(false,"Clear filters");
                 NativeSession.KnownSpells={1,2};NativeSession.SpellBars.SetNum(8);NativeSession.SpellBars[7]={1,0,0};NativeSession.ActiveSpellBar=7;
                 Menu->OpenPage("Spellbook");Menu->Spell=2;Menu->bDirty=true;
                 NativeSession.CachedC2SPackets.Reset();ClickMenu(false,"Add to bar 8");
@@ -2778,7 +2889,8 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
                 AimMenuControl("Spell_2_7_1");VR->RouteControllerButton("VRPrevious",true);VR->RouteControllerButton("VRPrevious",false);PaintMenu();
                 TestTrue(TEXT("B inspects the pointed spell in the side panel"),Menu->bInspectionOpen && Menu->InspectSpell==2 && Menu->Page=="Spellbook");
                 TestFalse(TEXT("Inspection is not a dedicated navigation page"),FindVRMenuControl(Menu->TakeWidget(),"Close inspection").IsValid());
-                const auto BookSpell=FindVRMenuControl(Menu->TakeWidget(),"Spell_2_-1_1");
+                const auto* BookTarget=Menu->MenuTargets.FindByPredicate([](const auto& Target){return Target.SpellId==2 && Target.Bar==INDEX_NONE;});
+                const auto BookSpell=BookTarget?BookTarget->Widget.Pin():nullptr;
                 TestTrue(TEXT("Short spellbook pages keep compact icon tiles"),BookSpell && BookSpell->GetCachedGeometry().GetLocalSize().Y<=80);
                 if(BookSpell)TestTrue(TEXT("Spellbook entries and hotbar fit in the visible content"),Menu->ContentScroll->GetCachedGeometry().IsUnderLocation(BookSpell->GetCachedGeometry().LocalToAbsolute(BookSpell->GetCachedGeometry().GetLocalSize()*.5)));
                 auto DropSpell=[&](int32 Id,int32 Source,int32 TargetBar,int32 Index,bool Remove=false)
@@ -2805,6 +2917,15 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
                 NativeSession.PlayerVitals.bValid=true;NativeSession.PlayerVitals.AvailableExperience=10000000;
                 NativeSession.PlayerVitals.StrengthXpSpent=0;
                 Menu->OpenPage("Character");Menu->bSkillsPage=false;
+                Menu->RefreshIfDirty();
+                TArray<FString> CharacterLabels;
+                TFunction<void(const TSharedRef<SWidget>&)> CollectCharacterLabels=[&](const TSharedRef<SWidget>& Widget)
+                {
+                    if(Widget->GetTypeAsString()==TEXT("STextBlock"))CharacterLabels.Add(StaticCastSharedRef<STextBlock>(Widget)->GetText().ToString());
+                    FChildren* Children=Widget->GetChildren();for(int32 I=0;I<Children->Num();++I)CollectCharacterLabels(Children->GetChildAt(I));
+                };
+                CollectCharacterLabels(Menu->TakeWidget());
+                TestTrue(TEXT("Attribute row displays its name without a custom description"),CharacterLabels.Contains(TEXT("Strength")) && !CharacterLabels.ContainsByPredicate([](const FString& Label){return Label.Contains(TEXT("\nAttribute")) || Label.Contains(TEXT("Maximum vital"));}));
                 auto* NativeDat=GI->GetSubsystem<UACEDatSubsystem>();
                 for(int32 Count:{1,10})
                 {
@@ -2823,6 +2944,9 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
                 FACESkillInfo Trained;Trained.SkillId=7;Trained.Name=TEXT("Missile Defense");Trained.AdvancementClass=2;
                 FACESkillInfo Untrained;Untrained.SkillId=22;Untrained.Name=TEXT("Jump");Untrained.AdvancementClass=1;
                 NativeSession.PlayerVitals.Skills={Untrained,Trained,Spec};Menu->bDirty=true;PaintMenu();
+                CharacterLabels.Reset();CollectCharacterLabels(Menu->TakeWidget());
+                TestTrue(TEXT("Skill rows show names without repeating their advancement description"),CharacterLabels.Contains(TEXT("Melee Defense")) && CharacterLabels.Contains(TEXT("Jump"))
+                    && !CharacterLabels.ContainsByPredicate([](const FString& Label){return Label.Contains(TEXT("\nSpecialized")) || Label.Contains(TEXT("\nTrained")) || Label.Contains(TEXT("\nUntrained"));}));
                 const auto SpecHeading=FindVRMenuControl(Menu->TakeWidget(),"Specialized");
                 const auto TrainedHeading=FindVRMenuControl(Menu->TakeWidget(),"Trained");
                 TestTrue(TEXT("Skills have retail advancement headings"),SpecHeading.IsValid() && TrainedHeading.IsValid());
@@ -2926,16 +3050,24 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		if(FApp::CanEverRender())
 		{
 			FWidgetRenderer Renderer(true,true);const FString Directory=FPaths::ProjectSavedDir()/TEXT("Automation/VR");
-			for(const TCHAR* Page:{TEXT("Inventory"),TEXT("Equipment"),TEXT("Spellbook"),TEXT("Character"),TEXT("Fellowship"),TEXT("Vendor"),TEXT("Salvage")})
+			for(const TCHAR* Page:{TEXT("Inventory"),TEXT("Equipment"),TEXT("Spellbook"),TEXT("Character"),TEXT("Skills"),TEXT("Fellowship"),TEXT("Vendor"),TEXT("Salvage")})
 			{
-				Menu->OpenPage(Page);
+				const bool SkillsPage=FCString::Strcmp(Page,TEXT("Skills"))==0;
+				Menu->OpenPage(SkillsPage?TEXT("Character"):Page);
                 auto& VisualSession=*VR->Client->Session;
                 if(Menu->GetPage()=="Inventory")
                 {
                     for(int32 Index=0;Index<35;++Index){auto Visual=Item;Visual.Guid=99500+Index;Visual.Name=FString::Printf(TEXT("Inventory item %d"),Index+1);Visual.PlacementPosition=Index+2;Visual.StackSize=Index%3==0?1:Index+2;VisualSession.WorldObjects.Add(Visual.Guid,Visual);}
                     Menu->SelectItem(Item.Guid);PC->DatGameplayBinder->SelectedStackAmount=3;
                 }
-                if(Menu->GetPage()=="Character"){Menu->bSkillsPage=false;VisualSession.PlayerVitals.bValid=true;VisualSession.PlayerVitals.Level=150;VisualSession.PlayerVitals.AvailableExperience=1000000;VisualSession.PlayerVitals.AvailableSkillCredits=12;}
+                if(Menu->GetPage()=="Character"){Menu->bSkillsPage=SkillsPage;VisualSession.PlayerVitals.bValid=true;VisualSession.PlayerVitals.Level=150;VisualSession.PlayerVitals.AvailableExperience=1000000;VisualSession.PlayerVitals.AvailableSkillCredits=12;}
+                if(SkillsPage)
+                {
+                    FACESkillInfo Spec;Spec.SkillId=6;Spec.Name=TEXT("Melee Defense");Spec.AdvancementClass=3;Spec.Current=325;
+                    FACESkillInfo Trained;Trained.SkillId=7;Trained.Name=TEXT("Missile Defense");Trained.AdvancementClass=2;Trained.Current=250;
+                    FACESkillInfo Untrained;Untrained.SkillId=22;Untrained.Name=TEXT("Jump");Untrained.AdvancementClass=1;Untrained.Current=100;
+                    VisualSession.PlayerVitals.Skills={Spec,Trained,Untrained};
+                }
                 if(Menu->GetPage()=="Vendor")
                 {
                     VisualSession.OpenVendorGuid=500;PC->DatGameplayBinder->OpenVendorGuid=500;Menu->bVendorSelling=true;
@@ -2956,8 +3088,64 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
             Menu->OpenPage("Spellbook");Menu->Spell=2;Menu->InspectSelection();Menu->RefreshIfDirty();
             const FVector2D InspectSize(460,960);auto* InspectionTarget=FWidgetRenderer::CreateTargetFor(InspectSize,TF_Bilinear,true);
             for(int32 Pass=0;Pass<3;++Pass){Renderer.DrawWidget(InspectionTarget,Menu->GetInspectionWidget(),InspectSize,0);FlushRenderingCommands();}
+            const auto SpellIcon=FindVRMenuControl(Menu->GetInspectionWidget(),TEXT("SpellInspectionIcon"));
+            TestTrue(TEXT("Spell inspection keeps the retail icon square instead of stretching across the row"),SpellIcon && SpellIcon->GetCachedGeometry().GetLocalSize().Equals(FVector2D(64,64),.01));
             TArray<FColor> InspectionPixels;InspectionTarget->GameThread_GetRenderTargetResource()->ReadPixels(InspectionPixels);TArray64<uint8> InspectionPNG;
             FImageUtils::PNGCompressImageArray(460,960,InspectionPixels,InspectionPNG);FFileHelper::SaveArrayToFile(InspectionPNG,*(Directory/TEXT("GameplaySpellInspection.png")));
+
+            Menu->InspectSpell=0;Menu->InspectItem=Item.Guid;Menu->bInspectionOpen=true;
+            FACEAppraisalInfo Appraisal;Appraisal.ObjectGuid=Item.Guid;Appraisal.Name=TEXT("Appraisal color regression sword");Appraisal.bSuccess=true;
+            Appraisal.bHasValue=Appraisal.bHasBurden=Appraisal.bHasWeaponProfile=true;Appraisal.Value=2345;Appraisal.Burden=300;
+            Appraisal.ItemType=ACEItemType::MeleeWeapon;Appraisal.Damage=50;Appraisal.DamageVariance=.2f;Appraisal.DamageType=1;Appraisal.WeaponTime=40;
+            Appraisal.WeaponEnchantments=8u|(8u<<16)|4u;Appraisal.Inscription=TEXT("An inscription retains its own paragraph.");
+            Appraisal.StringProperties.Add(8,TEXT("A Scribe"));
+            Menu->InspectionAppraisal=Appraisal;Menu->BuildInspection();
+            const FString ExpectedBody=ACEAppraisalFormatting::ItemExaminationText(Appraisal,GI->GetSubsystem<UACEDatSubsystem>(),false,false);
+            UACERetailTextBlock* ActualBody=nullptr;
+            for(TObjectIterator<UACERetailTextBlock> It;It;++It)if(It->GetText().ToString()==ExpectedBody){ActualBody=*It;break;}
+            if(TestNotNull(TEXT("VR inspection uses the same complete retail body and glyph renderer"),ActualBody))
+            {
+                const auto Colors=ACEAppraisalFormatting::ItemTextColors(Appraisal,ExpectedBody);
+                for(const TCHAR* Stat:{TEXT("Damage:"),TEXT("Speed:")})
+                {
+                    const int32 Offset=ExpectedBody.Find(Stat);
+                    TestTrue(TEXT("Every enchanted line uses its character-offset color after preceding text"),Offset!=INDEX_NONE && Colors.IsValidIndex(Offset)
+                        && ActualBody->GetGlyphColor(Offset,FLinearColor::White)==Colors[Offset]);
+                }
+            }
+            for(int32 Pass=0;Pass<3;++Pass){Renderer.DrawWidget(InspectionTarget,Menu->GetInspectionWidget(),InspectSize,0);FlushRenderingCommands();}
+            InspectionPixels.Reset();InspectionPNG.Reset();InspectionTarget->GameThread_GetRenderTargetResource()->ReadPixels(InspectionPixels);
+            FImageUtils::PNGCompressImageArray(460,960,InspectionPixels,InspectionPNG);FFileHelper::SaveArrayToFile(InspectionPNG,*(Directory/TEXT("GameplayItemInspection.png")));
+
+            Appraisal.bIsCreature=true;Appraisal.Name=TEXT("Creature appraisal");Appraisal.Level=180;
+            Appraisal.Strength=300;Appraisal.Endurance=280;Appraisal.Coordination=200;Appraisal.Quickness=210;Appraisal.Focus=190;Appraisal.Self=195;
+            Appraisal.Health=120;Appraisal.MaxHealth=200;Appraisal.Stamina=180;Appraisal.MaxStamina=250;Appraisal.Mana=90;Appraisal.MaxMana=150;
+            Appraisal.AttributeHighlights=1|8;Appraisal.AttributeColors=1;
+            Menu->InspectionAppraisal=Appraisal;Menu->BuildInspection();
+            for(int32 Pass=0;Pass<3;++Pass){Renderer.DrawWidget(InspectionTarget,Menu->GetInspectionWidget(),InspectSize,0);FlushRenderingCommands();}
+            InspectionPixels.Reset();InspectionPNG.Reset();InspectionTarget->GameThread_GetRenderTargetResource()->ReadPixels(InspectionPixels);
+            FImageUtils::PNGCompressImageArray(460,960,InspectionPixels,InspectionPNG);FFileHelper::SaveArrayToFile(InspectionPNG,*(Directory/TEXT("GameplayCreatureInspection.png")));
+
+            auto Jump=SNew(SACEVRJumpCharge);const FVector2D JumpSize=Jump->ComputeDesiredSize(1);
+            auto* JumpTarget=FWidgetRenderer::CreateTargetFor(JumpSize,TF_Bilinear,true);
+            int32 PreviousFill=-1;
+            for(float Charge:{0.f,.5f,1.f})
+            {
+                Jump->Refresh(Charge);Renderer.DrawWidget(JumpTarget,Jump,JumpSize,0);FlushRenderingCommands();
+                TArray<FColor> JumpPixels;JumpTarget->GameThread_GetRenderTargetResource()->ReadPixels(JumpPixels);
+                // Count only the meter interior, excluding labels and the gold
+                // frame. Relative channel contrast survives the render target's
+                // gamma conversion without assuming raw linear color bytes.
+                int32 Fill=0;
+                for(int32 Y=45;Y<71;++Y)for(int32 X=13;X<467;++X)
+                {
+                    const FColor C=JumpPixels[Y*480+X];
+                    if(C.A>128 && int32(C.R)>int32(C.B)+50 && int32(C.G)>int32(C.B)+30)++Fill;
+                }
+                TestTrue(TEXT("Native jump meter visibly fills as charge increases"),Fill>PreviousFill);PreviousFill=Fill;
+                TArray64<uint8> JumpPNG;FImageUtils::PNGCompressImageArray(480,90,JumpPixels,JumpPNG);
+                FFileHelper::SaveArrayToFile(JumpPNG,*(Directory/FString::Printf(TEXT("JumpCharge%d.png"),FMath::RoundToInt(Charge*100))));
+            }
 		}
 		VR->bInventoryOpen=false;VR->UpdatePanels();
 		TestFalse(TEXT("Hidden native menu stops rendering and hit testing"),VR->GameplayMenuPanel->IsComponentTickEnabled() || VR->GameplayMenuPanel->IsVisible() || VR->GameplayMenuPanel->GetCollisionEnabled()!=ECollisionEnabled::NoCollision);

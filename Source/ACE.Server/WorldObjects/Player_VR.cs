@@ -16,6 +16,7 @@ namespace ACE.Server.WorldObjects
     partial class Player
     {
         private bool vrNegotiated;
+        public bool VRUniformLocomotionSubscribed { get; private set; }
         public bool VRHealthFeedbackSubscribed { get; private set; }
         private bool vrRecoverySubscribed;
         private bool vrCastingSubscribed;
@@ -82,6 +83,7 @@ namespace ACE.Server.WorldObjects
             if (r.Kind == 4)
             {
                 VRHealthFeedbackSubscribed = vrNegotiated && (r.FeedbackFeatures & 1u) != 0;
+                VRUniformLocomotionSubscribed = vrNegotiated && (r.FeedbackFeatures & VRLocomotion.Subscription) != 0;
                 vrRecoverySubscribed = vrNegotiated && (r.FeedbackFeatures & 2u) != 0;
                 vrCastingSubscribed = vrNegotiated && (r.FeedbackFeatures & 4u) != 0;
                 VRHealthBarsSubscribed = vrNegotiated && (r.FeedbackFeatures & 8u) != 0;

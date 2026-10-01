@@ -3,6 +3,8 @@
 #include "ACECameraRetail.h"
 #include "ACEOrbitCameraBoom.h"
 #include "ACECameraSettings.h"
+#include "ACETerrainPresenterComponent.h"
+#include "ACELandblockActor.h"
 #include "ACERuntimeOptions.h"
 #include "ACERetailPortalAnimation.h"
 #include "ACELoadingScreenActor.h"
@@ -70,6 +72,15 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
             ACECameraRetail::HorizontalFovDegrees(16.f/9,120.f));
         TestTrue(TEXT("Projection keeps the calculated horizontal FOV"),Camera->bOverrideAspectRatioAxisConstraint
             && Camera->AspectRatioAxisConstraint==AspectRatio_MaintainXFOV && !Camera->bConstrainAspectRatio);
+        for (const FIntPoint Size : {FIntPoint(2048,1536),FIntPoint(1920,1080),FIntPoint(3440,1440)})
+        {
+            ACECameraRetail::ApplyFovToCamera(Camera,Size.X,Size.Y,120.f,true);
+            TestEqual(TEXT("High sky view keeps the retail 120-degree preference across window shapes"),Camera->FieldOfView,
+                ACECameraRetail::HorizontalFovDegrees(float(Size.X)/Size.Y,120.f));
+            TestFalse(TEXT("Sky view does not compound map distance with wide-FOV LOD degradation"),Camera->bUseFieldOfViewForLOD);
+            ACECameraRetail::ApplyFovToCamera(Camera,Size.X,Size.Y,120.f,false);
+            TestTrue(TEXT("Leaving sky view restores ordinary FOV-based LOD"),Camera->bUseFieldOfViewForLOD);
+        }
         ACERuntimeOptions::Set(TEXT("FieldOfViewDegrees"),110.f);
         auto* Portal=World->SpawnActor<AACELoadingScreenActor>();
         TestEqual(TEXT("Portal tunnel uses the configured world lens"),Portal->Camera->FieldOfView,
@@ -78,6 +89,7 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
         ACERuntimeOptions::Set(TEXT("FieldOfViewDegrees"),90.f);
     }
     auto* Controller=World->SpawnActor<AACEPlayerController>();
+    World->AddController(Controller); // Fixture worlds do not run normal BeginPlay registration.
     if (FParse::Param(FCommandLine::Get(),TEXT("RenderOffScreen")))
         TestFalse(TEXT("Offscreen clients do not install a native keyboard handler"),
             FACEKeyboardRouter::Create(Controller,[]{return true;}).IsValid());
@@ -284,9 +296,18 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Retail map camera is 450 game units away"),Boom->TargetArmLength,450.f*Controller->GetCameraScaleCm());
     TestTrue(TEXT("Map camera looks down with retail's direction"),FMath::IsNearlyEqual(Boom->GetRelativeRotation().Pitch,ACECameraRetail::LookDownPitchDegrees(),.01));
     TestFalse(TEXT("Map camera is not pulled into intervening roofs"),Boom->bDoCollisionTest);
+    auto* Terrain=NewObject<UACETerrainPresenterComponent>(Pawn);
+    auto* Scenery=World->SpawnActor<AACELandblockActor>();
+    Terrain->Spawned.Add(0x7D650000,Scenery);
+    Scenery->ApplyDegradeCull(57000.f);
+    Terrain->TickDegradeController(.016f);
+    TestEqual(TEXT("Sky mode disables the resident scenery fade/cull used by ordinary views"),Scenery->AppliedDegradeEndCullCm,0.f);
     Controller->SyncUserCameraArmLength(Boom);
     TestEqual(TEXT("Following ticks cannot clamp map mode to ordinary zoom"),Boom->TargetArmLength,450.f*Controller->GetCameraScaleCm());
     Controller->SetCameraMapMode(Boom,false);
+    Terrain->TickDegradeController(.016f);
+    TestTrue(TEXT("Exiting sky view immediately restores normal scenery distance policy"),Scenery->AppliedDegradeEndCullCm>0.f);
+    Terrain->Spawned.Reset();Scenery->Destroy();
     TestEqual(TEXT("Exiting map mode restores manual camera distance"),Boom->TargetArmLength,SavedArm);
     TestTrue(TEXT("Exiting map mode restores angle and collision"),Boom->GetRelativeRotation().Equals(SavedRotation,.01) && Boom->bDoCollisionTest);
     Controller->SetCameraMapMode(Boom,true);

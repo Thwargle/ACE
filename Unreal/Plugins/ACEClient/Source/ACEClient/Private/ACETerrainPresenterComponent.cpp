@@ -2737,6 +2737,26 @@ void UACETerrainPresenterComponent::CollectNeededEnvCells(TArray<int32>& OutOrde
 
 void UACETerrainPresenterComponent::TickDegradeController(float DeltaTime)
 {
+	const auto* PC = GetWorld() ? Cast<AACEPlayerController>(GetWorld()->GetFirstPlayerController()) : nullptr;
+	const bool bMapView = PC && PC->IsCameraMapView();
+	if (bMapView)
+	{
+		// Retail CameraSet::SetMapMode calls SmartBox::DisableDegrades as well
+		// as DisableFogging. Keep all resident scenery in the elevated wide view.
+		// New landblock actors also start without distance culling.
+		if (!bMapDegradesDisabled)
+		{
+			for (const auto& Pair : Spawned) if (Pair.Value) Pair.Value->ApplyDegradeCull(0.f);
+			for (const auto& Pair : SpawnedChunks) if (Pair.Value) Pair.Value->ApplyDegradeCull(0.f);
+			bMapDegradesDisabled = true;
+		}
+		return;
+	}
+	if (bMapDegradesDisabled)
+	{
+		bMapDegradesDisabled = false;
+		DegradeApplyAccum = .25f; // Restore the previous detail policy this frame.
+	}
 	// Retail Render::CalcDegLevel — Mamdani fuzzy controller over FPS, deg_mul in [-1,+1].
 	const float Fps = 1.f / FMath::Max(DeltaTime, 0.0005f);
 	DegradeFpsEma = (DegradeFpsEma < 1.f) ? Fps : FMath::Lerp(DegradeFpsEma, Fps, 0.12f);

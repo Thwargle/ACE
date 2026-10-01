@@ -1206,11 +1206,11 @@ struct ACECLIENT_API FACEWorldObject
 	/** Vendor ItemProfile supply; -1 is unlimited. Independent of the item stack size. */
 	int32 VendorQuantityAvailable = -1;
 
-	/** Item mana remaining (PublicWeenieDesc Structure). 0 = none / not mana-bearing. */
+	/** Remaining uses or salvage units (PublicWeenieDesc Structure); not item mana. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 Structure = 0;
 
-	/** Item mana capacity (PublicWeenieDesc MaxStructure). */
+	/** Maximum uses or salvage units (PublicWeenieDesc MaxStructure). */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 MaxStructure = 0;
 
@@ -1412,6 +1412,7 @@ struct ACECLIENT_API FACEWorldObject
 	bool IsSelectableWorldObject() const
 	{
 		return Guid != 0 && bHasPosition && ContainerId == 0 && WielderId == 0 && ParentGuid == 0
+			&& !IsUiHidden()
 			&& (!bDying || IsCorpse())
 			&& (PhysicsState & (ACEPhysicsState::Missile | ACEPhysicsState::ParticleEmitter | ACEPhysicsState::NoDraw)) == 0;
 	}
@@ -1550,6 +1551,8 @@ struct ACECLIENT_API FACEWorldObject
 	bool HasDefaultAnim() const { return (PhysicsState & ACEPhysicsState::HasDefaultAnim) != 0; }
 	/** ObjectDescriptionFlag.HiddenAdmin — retail draws these only for admins. */
 	bool IsHiddenAdmin() const { return (ObjectDescriptionFlags & ACEObjectDescFlag::HiddenAdmin) != 0; }
+	/** UIHidden suppresses interaction/radar, not the visible world geometry. */
+	bool IsUiHidden() const { return (ObjectDescriptionFlags & ACEObjectDescFlag::UiHidden) != 0; }
 	/** PhysicsState.Cloaked — admin-cloak / invisible unless Adminvision. */
 	bool IsCloaked() const { return (PhysicsState & ACEPhysicsState::Cloaked) != 0; }
 	bool IsAdminOnlyVisible() const { return IsHiddenAdmin() || IsCloaked(); }
@@ -1578,6 +1581,8 @@ USTRUCT(BlueprintType)
 struct ACECLIENT_API FACEAppraisalInfo
 {
 	GENERATED_BODY()
+	/** Public descriptor flags used by retail item examination (e.g. Healer). */
+	int32 ObjectDescriptionFlags = 0;
 	TMap<uint32, int32> IntProperties;
 	TMap<uint32, uint64> Int64Properties;
 	TMap<uint32, bool> BoolProperties;

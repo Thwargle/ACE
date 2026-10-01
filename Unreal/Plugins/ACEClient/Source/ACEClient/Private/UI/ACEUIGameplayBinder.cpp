@@ -572,6 +572,8 @@ void UACEUIGameplayBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEleme
 
 void UACEUIGameplayBinder::Shutdown()
 {
+	for(auto& Lines:ChatDisplayLines)Lines.Reset();
+	++ChatDisplayRevision;
 	CancelGameplayScreenshot();
 	SelectionSpellTab = INDEX_NONE;
 	for (auto& Tab : SpellTabSelections) Tab = {};
@@ -3934,12 +3936,12 @@ void UACEUIGameplayBinder::UseInventoryItem(int32 Guid)
 	}
 	if (!ACEInventoryRules::IsUsable(Obj.ItemUseable))
 	{
-		PostInventorySystemMessage(FString::Printf(TEXT("The %s cannot be used"), *Obj.Name));
+		PostInventorySystemMessage(FString::Printf(TEXT("The %s cannot be used"), *ACERetailObjectNames::Name(Obj)));
 		return;
 	}
 	if (Obj.CurrentWieldedLocation == 0 && ACEInventoryRules::LeastLimitedSourceUse(Obj.ItemUseable) == 4)
 	{
-		PostInventorySystemMessage(FString::Printf(TEXT("You must wield the %s to use it"), *Obj.Name));
+		PostInventorySystemMessage(FString::Printf(TEXT("You must wield the %s to use it"), *ACERetailObjectNames::Name(Obj)));
 		return;
 	}
 	const bool bDualUseTargeting = ACEItemUseable::IsTargeted(Obj.ItemUseable);
@@ -4041,7 +4043,7 @@ void UACEUIGameplayBinder::ShowManaStoneConfirmation(int32 Source, const FACEWor
 	FACEDatFont Font;
 	if (Body && Canvas->GetResourceResolver()->ResolveFont(Body->FontId, Font))
 	{
-		const FString Prompt = FString::Printf(TEXT("\nAre you sure you want to attempt to destroy your %s and drain its mana into this stone?"), *Target.Name);
+		const FString Prompt = FString::Printf(TEXT("\nAre you sure you want to attempt to destroy your %s and drain its mana into this stone?"), *ACERetailObjectNames::Name(Target));
 		const int32 H = ACEDatText::Layout(Font,Prompt,Body->Width-Body->TextMargins.Left-Body->TextMargins.Right,false).Num()*Font.MaxCharHeight
 			+ Body->TextMargins.Top+Body->TextMargins.Bottom;
 		const int32 Delta=H-Body->Height;
@@ -4065,7 +4067,7 @@ void UACEUIGameplayBinder::RefreshManaStoneConfirmation()
 	if (!ManaStoneConfirmSource || !Client || ManaStoneConfirmLabels.Num()!=3) return;
 	FACEWorldObject Target;
 	if (!Client->GetWorldObject(ManaStoneConfirmTarget, Target)) { FinishManaStoneConfirmation(false); return; }
-	const FString Prompt = FString::Printf(TEXT("\nAre you sure you want to attempt to destroy your %s and drain its mana into this stone?"), *Target.Name);
+	const FString Prompt = FString::Printf(TEXT("\nAre you sure you want to attempt to destroy your %s and drain its mana into this stone?"), *ACERetailObjectNames::Name(Target));
 	PlaceTextOnElement(ManaStoneConfirmLabels[0], TEXT("ManaStoneConfirmationBody"), Prompt, 12, TextWhite, 200020);
 	PlaceTextOnElement(ManaStoneConfirmLabels[1], TEXT("ManaStoneConfirmationYes"), TEXT("Yes"), 12, TextWhite, 200020, true);
 	PlaceTextOnElement(ManaStoneConfirmLabels[2], TEXT("ManaStoneConfirmationNo"), TEXT("No"), 12, TextWhite, 200020, true);
@@ -7898,7 +7900,7 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 		PlaceShortcut(Bg, El, 0);
 		Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
 		SetItemSlotForeground(Icon, Obj);
-		SetRetailTooltip(Icon, Obj ? FText::FromString(Obj->Name) : FText());
+		SetRetailTooltip(Icon, Obj ? FText::FromString(ACERetailObjectNames::Name(*Obj)) : FText());
 		PlaceShortcut(Icon, El, 1);
 		if (Number)
 		{
@@ -9588,7 +9590,7 @@ void UACEUIGameplayBinder::RefreshSpellHotbarOverlays()
         {
             FACEWorldObject Caster;
             if (Client->GetWorldObject(BuiltInCasterGuid, Caster))
-                SpellName = Caster.Name + TEXT(" (") + SpellName + TEXT(")");
+                SpellName = ACERetailObjectNames::Name(Caster) + TEXT(" (") + SpellName + TEXT(")");
         }
 		if (!SpellcastSpellNameLabel && Canvas->WidgetTree)
 		{
@@ -11486,7 +11488,8 @@ void UACEUIGameplayBinder::SetItemSlotForeground(UBorder* Border, const FACEWorl
     const bool bOffered = SalvageQueueGuids.Contains(Item->Guid)
         || (OpenVendorGuid != 0 && VendorSellCart.ContainsByPredicate(
             [Item](const TPair<int32,int32>& Entry) { return Entry.Value == Item->Guid; }));
-    UTexture2D* Texture = Canvas->GetResourceResolver()->ResolveItemForeground(Item->IconId,Item->IconOverlayId,Item->UiEffects,bOffered);
+    UTexture2D* Texture = Canvas->GetResourceResolver()->ResolveItemForeground(Item->IconId,Item->IconOverlayId,Item->UiEffects,bOffered,
+        Item->Structure,Item->MaxStructure);
     const float Flash = LastSelection.bValid && Item->Guid == LastSelection.Guid
         ? FMath::Clamp(float((SelectionFlashUntil - FPlatformTime::Seconds()) / .4),0.f,1.f) : 0.f;
     Border->SetBrushColor(FLinearColor(1.f+Flash,1.f+Flash,1.f+Flash,1));
@@ -12131,6 +12134,11 @@ uint64 UACEUIGameplayBinder::HashInventoryOverlayState() const
 		H = HashCombine(H, GetTypeHash(O.IconOverlayId));
 		H = HashCombine(H, GetTypeHash(O.IconUnderlayId));
 		H = HashCombine(H, GetTypeHash(O.StackSize));
+		H = HashCombine(H, GetTypeHash(O.Structure));
+		H = HashCombine(H, GetTypeHash(O.MaxStructure));
+		H = HashCombine(H, GetTypeHash(O.MaterialType));
+		H = HashCombine(H, GetTypeHash(O.Name));
+		H = HashCombine(H, GetTypeHash(O.PluralName));
 		H = HashCombine(H, GetTypeHash(O.UiEffects));
 		H = HashCombine(H, GetTypeHash(O.PlacementPosition));
 	}
@@ -12148,6 +12156,10 @@ uint64 UACEUIGameplayBinder::HashInventoryOverlayState() const
 		const auto& O = *Item;
 		H = HashCombine(H, GetTypeHash(O.Guid));
 		H = HashCombine(H, GetTypeHash(O.CurrentWieldedLocation));
+		H = HashCombine(H, GetTypeHash(O.Structure));
+		H = HashCombine(H, GetTypeHash(O.MaxStructure));
+		H = HashCombine(H, GetTypeHash(O.MaterialType));
+		H = HashCombine(H, GetTypeHash(O.Name));
 		H = HashCombine(H, GetTypeHash(O.IconId));
 		H = HashCombine(H, GetTypeHash(O.IconOverlayId));
 	}
@@ -12169,6 +12181,10 @@ uint64 UACEUIGameplayBinder::HashInventoryOverlayState() const
         H = HashCombine(H, GetTypeHash(Pack.IconOverlayId));
         H = HashCombine(H, GetTypeHash(Pack.IconUnderlayId));
         H = HashCombine(H, GetTypeHash(Pack.ItemType));
+        H = HashCombine(H, GetTypeHash(Pack.Structure));
+        H = HashCombine(H, GetTypeHash(Pack.MaxStructure));
+        H = HashCombine(H, GetTypeHash(Pack.MaterialType));
+        H = HashCombine(H, GetTypeHash(Pack.Name));
         H = HashCombine(H, GetTypeHash(Pack.UiEffects));
         H = HashCombine(H, GetTypeHash(Pack.ItemsCapacity));
         H = HashCombine(H, GetTypeHash(Pack.PlacementPosition));
@@ -12214,6 +12230,10 @@ uint64 UACEUIGameplayBinder::HashVendorOverlayState() const
 		H = HashCombine(H, GetTypeHash(O.IconId));
 		H = HashCombine(H, GetTypeHash(O.StackSize));
 		H = HashCombine(H, GetTypeHash(O.Value));
+		H = HashCombine(H, GetTypeHash(O.Structure));
+		H = HashCombine(H, GetTypeHash(O.MaxStructure));
+		H = HashCombine(H, GetTypeHash(O.MaterialType));
+		H = HashCombine(H, GetTypeHash(O.Name));
 	}
 	return H;
 }
@@ -12243,6 +12263,10 @@ uint64 UACEUIGameplayBinder::HashLootOverlayState() const
 		H = HashCombine(H, GetTypeHash(O.ItemType));
 		H = HashCombine(H, GetTypeHash(O.UiEffects));
 		H = HashCombine(H, GetTypeHash(O.StackSize));
+		H = HashCombine(H, GetTypeHash(O.Structure));
+		H = HashCombine(H, GetTypeHash(O.MaxStructure));
+		H = HashCombine(H, GetTypeHash(O.MaterialType));
+		H = HashCombine(H, GetTypeHash(O.Name));
 	}
 	return H;
 }
@@ -12479,7 +12503,7 @@ void UACEUIGameplayBinder::RefreshInventoryOverlays()
 			{
 				Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
 				SetItemSlotForeground(Icon, Item);
-				SetRetailTooltip(Icon, FText::FromString(Item->Name));
+				SetRetailTooltip(Icon, FText::FromString(ACERetailObjectNames::Name(*Item)));
 				Canvas->PlaceWidgetAtElement(Icon, El, OverlayZ);
 			}
 			else
@@ -12618,7 +12642,7 @@ void UACEUIGameplayBinder::RefreshInventoryOverlays()
 					SetItemSlotBackground(Bg, &Packs[PackIndex]);
 					if (Bg) { Bg->SetVisibility(ESlateVisibility::HitTestInvisible); }
 					SetRetailTooltip(Icon, FText::FromString(FString::Printf(
-						TEXT("%s (%d/%d items)"), *Packs[PackIndex].Name, PackCounts.FindRef(Packs[PackIndex].Guid), Packs[PackIndex].ItemsCapacity)));
+						TEXT("%s (%d/%d items)"), *ACERetailObjectNames::Name(Packs[PackIndex]), PackCounts.FindRef(Packs[PackIndex].Guid), Packs[PackIndex].ItemsCapacity)));
 					Icon->SetRenderOpacity(1.f);
 				}
 				else
@@ -12721,7 +12745,7 @@ void UACEUIGameplayBinder::RefreshInventoryOverlays()
 				// "Contents of %s" for sub-packs (acclient.c:222519/222536).
 				const FString ContentsText = (SelectedPackGuid == Self || PackObj.Name.IsEmpty())
 					? FString(TEXT("Contents of Backpack"))
-					: FString::Printf(TEXT("Contents of %s"), *PackObj.Name);
+					: FString::Printf(TEXT("Contents of %s"), *ACERetailObjectNames::Name(PackObj));
 				if (!InvContentsLabel && Canvas->WidgetTree)
 				{
 					InvContentsLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(
@@ -14268,7 +14292,7 @@ void UACEUIGameplayBinder::RefreshVendorInfoTexts()
 	if (ActiveVendorPage == 0)
 	{
 		const int32 Quantity = bHaveFocus ? (LastSelection.Guid == Focus.Guid ? SelectedStackAmount : 1) : 0;
-		const FString ItemName = bHaveFocus ? Focus.Name : FString();
+		const FString ItemName = bHaveFocus ? ACERetailObjectNames::Name(Focus) : FString();
 		PlaceTextOnElement(EnsureLabel(VendorItemNameLabel), TEXT("VendorItemName_Text"),
 			ItemName, 9, TextWhite, 10040);
 		FString CostText;
@@ -14769,7 +14793,7 @@ void UACEUIGameplayBinder::RefreshExternalContainerOverlays()
 			}
 			Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
 			Icon->SetRenderOpacity(ContGuid == Nested[Idx].Guid ? 1.f : 0.55f);
-			SetRetailTooltip(Icon, FText::FromString(Nested[Idx].Name));
+			SetRetailTooltip(Icon, FText::FromString(ACERetailObjectNames::Name(Nested[Idx])));
 			PlaceCell(Icon,
 				static_cast<float>(Origin.X + i * Cell),
 				static_cast<float>(Origin.Y),
@@ -14842,7 +14866,7 @@ void UACEUIGameplayBinder::RefreshExternalContainerOverlays()
 		Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
 		if (Guid != 0)
 		{
-			SetRetailTooltip(Icon, FText::FromString(Items[Idx].Name));
+			SetRetailTooltip(Icon, FText::FromString(ACERetailObjectNames::Name(Items[Idx])));
 		}
 		else
 		{
@@ -15050,7 +15074,7 @@ void UACEUIGameplayBinder::RefreshVendorOverlays()
 		PlaceCell(Bg, CellX, CellY, OverlayZ);
 		SetItemSlotForeground(Icon, &Items[Idx]);
 		Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
-		SetRetailTooltip(Icon, FText::FromString(Items[Idx].Name));
+		SetRetailTooltip(Icon, FText::FromString(ACERetailObjectNames::Name(Items[Idx])));
 		Icon->SetRenderOpacity(Items[Idx].Guid == FocusGuid ? 1.f : 0.85f);
 		PlaceCell(Icon, CellX, CellY, OverlayZ + 1);
 		if (Items[Idx].Guid == FocusGuid)
@@ -15246,7 +15270,7 @@ void UACEUIGameplayBinder::RefreshTradeOverlays()
 			SetItemSlotForeground(Icon,bItem ? &Item : nullptr);
 			Bg->SetVisibility(ESlateVisibility::HitTestInvisible);
 			Icon->SetVisibility(bItem ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
-			SetRetailTooltip(Icon, FText::FromString(Item.Name));
+			SetRetailTooltip(Icon, FText::FromString(ACERetailObjectNames::Name(Item)));
 			Count->SetText(FText::AsNumber(Item.StackSize));
 			Count->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 7));
 			Count->SetColorAndOpacity(TextWhite);

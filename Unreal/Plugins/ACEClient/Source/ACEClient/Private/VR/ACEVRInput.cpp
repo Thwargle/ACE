@@ -58,12 +58,34 @@ void UACEVRComponent::RouteControllerButton(FName Input,bool Pressed)
 			const FName MenuAction=Settings->GetMenuButtonAction(Input);
 			if(!MenuAction.IsNone())Action=MenuAction;
 		}
+		// Grip manipulates an unlocked panel under the ray before its default chat action.
+		if(Action=="VRChat" && (Input=="VRLeftGrip" || Input=="VRRightGrip"))
+		{
+			const bool Left=Input=="VRLeftGrip";
+			auto* Pointer=Left?LeftPointer.Get():RightPointer.Get();
+			if(auto* P=Cast<UACEVRWidgetInteraction>(Pointer))P->RefreshHit();
+			for(FName Name:{FName("Chat"),FName("Menu"),FName("Options"),FName("Vitals"),FName("Compass"),FName("Fellowship")})
+			{
+				auto* Surface=Name=="Menu" && GameplayMenuPanel && GameplayMenuPanel->IsVisible()?GameplayMenuPanel.Get():GetEditablePanel(Name);
+				if(Pointer && Surface && Pointer->GetHoveredWidgetComponent()==Surface && !IsPanelLocked(Name))
+				{
+					BeginPanelEdit(Name,Left,false);
+					if(PanelEditHand!=(Left?0:1))continue;
+					FocusPanelSurface(Surface);Action="VRPanelGrab";break;
+				}
+			}
+			if(Action=="VRChat" && GetCombatMode()==ACECombatMode::Missile && Left==Settings->bLeftHanded)Action=Input;
+		}
 		HeldControllerActions.Add(Input,Action);DispatchControllerAction(Action,true);
 	}
 	else
 	{
 		FName Action;
-		if(HeldControllerActions.RemoveAndCopyValue(Input,Action))DispatchControllerAction(Action,false);
+		if(HeldControllerActions.RemoveAndCopyValue(Input,Action))
+		{
+			if(Action=="VRPanelGrab")EndPanelEdit(true,Input=="VRLeftGrip"?0:1);
+			else DispatchControllerAction(Action,false);
+		}
 	}
 }
 void UACEVRComponent::DispatchControllerAction(FName Action,bool Pressed)
@@ -89,6 +111,7 @@ void UACEVRComponent::DispatchControllerAction(FName Action,bool Pressed)
 	else if(Action=="VRLeftGrip")Grip(true,Pressed);
 	else if(Action=="VRRightGrip")Grip(false,Pressed);
 	else if(Action=="VRJump"){if(Pressed)JumpDown();else JumpUp();}
+	else if(Action=="VRChat"){if(Pressed)ToggleChat();}
 	else if(Pressed)
 	{
 		if(Action=="VRCombat")ToggleCombat();
@@ -158,7 +181,6 @@ void UACEVRComponent::Trigger(bool bLeft, bool bPressed)
 			FVector2D Drop = Pointer->Get2DHitLocation();
 			bool RetailDrop = Hovered == RetailPanel;
 			if (Hovered == WristPanel || Hovered == VitalsPanel) Binder->CancelPointerGestures();
-			if (Hovered == ChatPanel) { Drop = ChatRetail->ToCanvas(Drop); RetailDrop = true; }
 			if (RetailDrop)
 			{
 				// A captured Slate pointer keeps the source window's geometry. Use
@@ -189,6 +211,7 @@ void UACEVRComponent::Trigger(bool bLeft, bool bPressed)
 	auto* TextEntry = TextEntryUnderPointer(Pointer);
 	if (UsesPlatformKeyboard() && TextEntry)
 	{
+		FocusPanelSurface(Pointer->GetHoveredWidgetComponent());
 		// Native editing provides caret/selection. Do not also send a Slate mouse
 		// press: its permanent keyboard entry competes with the native session.
 		FocusTextEntry(TextEntry); Pulse(bLeft, .2f); return;
@@ -205,6 +228,7 @@ void UACEVRComponent::Trigger(bool bLeft, bool bPressed)
 		if (bLeftPointerPressed || bRightPointerPressed) return;
 		FeedbackHand = bLeft ? 0 : 1;
 		auto* Entry = TextEntryUnderPointer(Pointer);
+		FocusPanelSurface(Pointer->GetHoveredWidgetComponent());
 		Pointer->PressPointerKey(EKeys::LeftMouseButton); Held = true;
 		Pulse(bLeft, .2f); UpdateInteractionFeedback(true);
 		if (Entry) FocusTextEntry(Entry);

@@ -1,11 +1,14 @@
 #include "ACEPlayerController.h"
+#include "VR/ACEVRLocomotion.h"
 #include "ACEKeyboardRouter.h"
+#include "ACEDesktopPointer.h"
 #include "HAL/IConsoleManager.h"
 #include "VR/ACEVRComponent.h"
 #include "ACEClientBuild.h"
 #include "ACERuntimeOptions.h"
 #include "ACEInputBindings.h"
 #include "ACERetailPortalAnimation.h"
+#include "ACERetailUseRange.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlaySessionRedirect.h"
 #include "Engine/WorldComposition.h"
@@ -287,6 +290,7 @@ void AACEPlayerController::EnsureDatIntroCanvas()
 void AACEPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	KeyboardRouter.Reset();
+	DesktopPointer.Reset();
 	if (IsLocalController()) ACERuntimeOptions::ApplyDesktopUIScale(FIntPoint::ZeroValue,true);
 #if WITH_EDITOR
 	if (GEditor)
@@ -714,6 +718,27 @@ void AACEPlayerController::SetupInputComponent()
 	// WASD is polled in PlayerTick so no DefaultInput.ini mappings are required.
 }
 
+void AACEPlayerController::SetInputMode(const FInputModeDataBase& InData)
+{
+	Super::SetInputMode(InData);
+#if PLATFORM_LINUX
+	if (IsVRActive())
+	{
+		DesktopPointer.Reset();
+		return;
+	}
+	if (auto* LP = GetLocalPlayer(); LP && LP->ViewportClient)
+	{
+		if (!DesktopPointer) DesktopPointer = FACEDesktopPointer::Create(LP->ViewportClient);
+		if (DesktopPointer)
+		{
+			FACEDesktopPointer::PrepareInputMode(LP->GetSlateOperations(), *LP->ViewportClient);
+			DesktopPointer->Update(true);
+		}
+	}
+#endif
+}
+
 bool AACEPlayerController::InputKey(const FInputKeyEventArgs& Params)
 {
  if(Params.Event==IE_Pressed)MovementKeyPressOrder.Add(Params.Key,++MovementKeySequence);
@@ -783,6 +808,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	Super::PlayerTick(DeltaTime);
 	auto* VR = GetPawn() ? GetPawn()->FindComponentByClass<UACEVRComponent>() : nullptr;
 	const bool bVR = VR && VR->IsActive();
+	if (DesktopPointer) DesktopPointer->Update(!bVR);
 	if (IsLocalController())
 	{
 		int32 Width=0,Height=0; GetViewportSize(Width,Height);
@@ -1029,15 +1055,33 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	}
 
 	if (!bChatFocused && ACEInputBindings::Down(this, ACEInputBindings::Action(TEXT("Stop")))) { F=R=T=0.f; bAutoRun=false; }
-	if (bVR) { VR->GetMovement(F, R, bRunning); T = 0.f; bAutoRun = false; if (bServerMoveToActive) ClearServerMoveTo(); }
+	if (bVR) { VR->GetMovement(F, R, bRunning); T = 0.f; bAutoRun = false; }
+	bool bUniformVRMovement = bVR && Client->GetSession() && Client->GetSession()->SupportsUniformVRMovement();
+	if (bUniformVRMovement)
+	{
+		const FVector2D Stick = ACEVRLocomotion::Input(F, R);
+		F = Stick.Y; R = Stick.X;
+	}
 	const FVector VRRoomDelta = bVR ? VR->GetRoomScaleDelta() : FVector::ZeroVector;
+	// Losing tracking or opening an interface must stop automatic VR translation.
+	if (bVR && VR->IsInputBlocked() && bServerMoveToActive)
+	{
+		HandleMoveToFailed(0);
+		if (const auto Session = Client->GetSession()) Session->CancelWorldUseApproach();
+	}
 	// Manual input cancels server-directed MoveTo approach.
 	const bool bManualKeys = !FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R) || !FMath::IsNearlyZero(T);
 	if (bManualKeys && (bServerMoveToActive || bAwaitingUseDone || ApproachUseSendCount > 0))
 	{
+		const bool bCancelUse = bAwaitingUseDone;
 		ClearServerMoveTo();
+		if (bCancelUse)
+			if (const auto Session = Client->GetSession()) Session->CancelWorldUseApproach();
 	}
 
+	// Manual input may have ended an approach above; choose its negotiated
+	// movement model immediately rather than spending one frame at legacy speed.
+	bUniformVRMovement &= !bServerMoveToActive;
 	// Follow Use approach: face the target first (direct heading), then walk straight in.
 	if (bServerMoveToActive && !bManualKeys && ServerMoveToTargetGuid != 0)
 	{
@@ -1058,11 +1102,10 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			const float UseRadiusAc = bServerMoveToActive ? ServerMoveToDistance : Target.UseRadius;
 			const float UseRadiusCm = UseRadiusAc * WorldScale;
 			// Match server IsWithinUseRadiusOf (cylinder gap ≤ UseRadius). No DistCm shortcut.
-			const float UseSlopCm = FMath::Max(2.f, 0.02f * WorldScale);
 
 			// MoveToManager::HandleMoveToPosition checks full 3D displacement, after arrival.
 			// Preserve the server's limit (15 AC for charge); zero denotes its unlimited default.
-			if (CylinderDistCm > UseRadiusCm + UseSlopCm
+			if (CylinderDistCm > UseRadiusCm
 				&& bHaveApproachStartPose && ServerMoveToFailDistance > 0.f)
 			{
 				const FVector StartLoc = ApproachStartPose.ToUnrealLocation(WorldScale);
@@ -1078,11 +1121,9 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 
 			if (bServerMoveToActive)
 			{
-			// Keep updating the aim point only while stationary. Once Walking begins this
-			// direction is locked, guaranteeing a straight line with no steering while running.
-			if ((UseApproachPhase == EACEUseApproachPhase::None
-					|| UseApproachPhase == EACEUseApproachPhase::Turning)
-				&& DistCm > 1.f)
+			// Retail MoveToManager recomputes the heading while approaching. A locked
+			// ray misses the target after sliding around collision or target movement.
+			if (DistCm > 1.f)
 			{
 				ApproachTargetDir = To.GetSafeNormal();
 			}
@@ -1091,7 +1132,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				? 1.f
 				: PoseForFacing.GetFacingDotUnreal2D(ApproachTargetDir);
 			constexpr float FaceDotMin = 0.997f; // ~4.4°; avoid stuck turning at doors
-			const bool bFacing = Dot >= FaceDotMin;
+			const bool bFacing = bVR || Dot >= FaceDotMin;
 
 			if (UseApproachPhase == EACEUseApproachPhase::None)
 			{
@@ -1106,8 +1147,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			{
 				// Finish at the exact door heading, then lock that heading for the run.
 				PredictedPose = PoseForFacing;
-				PredictedPose.SetAceFacingFromUnrealDir2D(ApproachTargetDir);
-				ApproachTargetDir = PredictedPose.GetAceForwardVector().GetSafeNormal2D();
+				if (!bVR) PredictedPose.SetAceFacingFromUnrealDir2D(ApproachTargetDir);
 				if (APawn* P = GetPawn())
 				{
 					P->SetActorRotation(PredictedPose.ToUnrealQuat());
@@ -1118,14 +1158,15 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				ApproachStallLastLoc = SelfLoc;
 				ApproachTurnSeconds = 0.f;
 			}
-			bool bInUseRange = CylinderDistCm <= UseRadiusCm + UseSlopCm;
-			// Physics stall against the target (capsule blocked) — fire Use even if our
-			// cylinder estimate is slightly pessimistic vs the server.
+			const bool bInUseRange = CylinderDistCm <= UseRadiusCm;
+			// Retail checks progress in distance/time. A fixed displacement per frame
+			// classified normal walking at high FPS as a stall, then invented arrival
+			// up to three AC units outside the server's actual use radius.
 			if (UseApproachPhase == EACEUseApproachPhase::Walking && !bInUseRange)
 			{
-				const float MovedCm = (SelfLoc - ApproachStallLastLoc).Size2D();
+				const float MovedCm = GetUseCylinderDistanceCm(Target, ApproachStallLastLoc, TargetLoc) - CylinderDistCm;
 				ApproachStallLastLoc = SelfLoc;
-				if (MovedCm < FMath::Max(5.f, 0.05f * WorldScale))
+				if (MovedCm < 0.25f * WorldScale * DeltaTime)
 				{
 					ApproachStallSeconds += DeltaTime;
 				}
@@ -1133,24 +1174,15 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				{
 					ApproachStallSeconds = 0.f;
 				}
-				// Stalled while still closing: accept as arrived if already near UseRadius
-				// (player walked as close as collision allows). Negative UseRadius (overlap)
-				// still requires near-overlap — do not widen with the +3 AC door slop.
-				const float StallLimitCm = (UseRadiusAc < 0.f)
-					? (UseRadiusCm + 0.5f * WorldScale)
-					: (UseRadiusCm + 3.f * WorldScale);
-				if (ApproachStallSeconds >= 0.4f && CylinderDistCm <= StallLimitCm)
-				{
-					bInUseRange = true;
-				}
 				// Blocked far from the target (solid furniture/walls) — retail MoveToManager
 				// cancels on failed progress. Without this the approach latched
 				// bServerMoveToActive forever and later gives failed with "You're too busy!".
-				else if (ApproachStallSeconds >= 2.5f)
+				if (ApproachStallSeconds >= 2.5f)
 				{
 					UE_LOG(LogTemp, Log, TEXT("ACE: Use approach stalled out of range guid=0x%08X cyl=%.1f — cancel"),
 						ServerMoveToTargetGuid, CylinderDistCm);
-					ClearServerMoveTo();
+					HandleMoveToFailed(0);
+					if (const auto Session = Client->GetSession()) Session->CancelWorldUseApproach();
 					// Phase is now None — the rest of this block is inert this tick.
 				}
 			}
@@ -1176,12 +1208,9 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					ClearServerMoveTo();
 					return;
 				}
-				// Vendors / corpses / chests / talk NPCs: exactly one Use. A retry toggles
-				// open containers closed (ActOnUse) so the loot window still shows items the
-				// server no longer has open — PutItemInContainer then fails. Only doors keep
-				// retrying until they actually open.
-				const bool bRetryUse = bHaveApproachTarget && ApproachTarget.IsDoor();
-				if (!bApproachPickupIntoInventory && !bRetryUse)
+				// Every world interaction is one request. Repeating it can toggle a
+				// container/door closed or restart the server's move-to chain.
+				if (!bApproachPickupIntoInventory)
 				{
 					if (ApproachUseSendCount > 0)
 					{
@@ -1199,8 +1228,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					}
 				}
 				const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
-				// Keep retrying Use while Holding — first send often races server CreateMoveToChain
-				// (client StopMovement used to cancel it). Clear only when door opens / ClearServerMoveTo.
+				// Throttle a deferred pickup/interaction, without replaying a sent Use.
 				if (!bForce && LastApproachUseTime > 0.0 && (Now - LastApproachUseTime) < 0.35)
 				{
 					return;
@@ -1259,7 +1287,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					Client->SetReportedPosition(PredictedPose);
 				}
 				UseApproachPhase = EACEUseApproachPhase::Holding;
-				if (!bApproachMoveOnly && Client)
+				if (!bApproachMoveOnly && ApproachUseSendCount == 0 && Client)
 				{
 					// Stop the client run BEFORE Use. Any MoveToState after Use (including
 					// axes-0) cancels server CreateMoveToChain.
@@ -1287,9 +1315,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					SendApproachUse(true);
 				}
 			}
-			// Holding in UseRadius: keep retrying Use until Ethereal / ClearServerMoveTo.
-			// Vendors: stop once ApproachVendor opened the panel (avoids Open-emote spam).
-			// Give/MoveOnly: keep AutoPos briefly so CreateMoveToChain can finish, then release.
+			// Keep reporting the arrived pose until the server finishes Use/Give.
+			// Opening a container is never retried: Use is a toggle on many servers.
 			if (UseApproachPhase == EACEUseApproachPhase::Holding && bInUseRange)
 			{
 				if (!bResendUseWhenInRange && !bApproachPickupIntoInventory)
@@ -1335,7 +1362,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				// Give / MoveOnly approaches must stay MoveOnly: sending Use runs
 				// StopExistingMoveToChains on the server and cancels the pending give.
 				UseApproachPhase = EACEUseApproachPhase::Walking;
-				bResendUseWhenInRange = !bApproachMoveOnly;
+				bResendUseWhenInRange = !bApproachMoveOnly && ApproachUseSendCount == 0;
 			}
 			if (UseApproachPhase == EACEUseApproachPhase::Holding && !bInUseRange && !bFacing)
 			{
@@ -1351,6 +1378,13 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				// Already facing — run straight forward only (no strafe).
 				// Keep F=1 until Use fires at true arrive; Holding may still close if Use pending.
 				F = 1.f;
+				if (bVR)
+				{
+					// Approach in world space without rotating the player's head/body frame.
+					const FVector BodyForward = VR->GetBodyForward();
+					F = FVector::DotProduct(ApproachTargetDir, BodyForward);
+					R = FVector::DotProduct(ApproachTargetDir, FVector::CrossProduct(FVector::UpVector, BodyForward));
+				}
 			}
 			// Turning/Holding: axes stay 0; heading is applied directly on PredictedPose below.
 			} // bServerMoveToActive (after fail-distance check)
@@ -1413,6 +1447,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		!FMath::IsNearlyEqual(ReportedTurn, TurnSent) ||
 		(bMoving != bWasMoving) ||
 		(bRunning != bRunningSent) ||
+		(bUniformVRMovement != bUniformVRMovementSent) ||
 		(bJumpCharging != bJumpChargeSent) ||
 		(bJumpAirborne != bJumpAirborneSent) ||
 		bMouseTurnSend;
@@ -1472,7 +1507,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			{
 				SendT = ReportedTurn;
 			}
-			Client->SendMovementEx(SendF, SendR, SendT, bRunning, bStandingLongJump, true);
+			Client->SendMovementEx(SendF, SendR, SendT, bRunning, bStandingLongJump, true, bUniformVRMovement);
 		}
 		else if (bServerMoveToActive || (Client && Client->IsUseBusy()))
 		{
@@ -1495,6 +1530,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		RightSent = R;
 		TurnSent = ReportedTurn;
 		bRunningSent = bRunning;
+		bUniformVRMovementSent = bUniformVRMovement;
 		bWasMoving = bMoving;
 		bJumpChargeSent = bJumpCharging;
 		bJumpAirborneSent = bJumpAirborne;
@@ -1513,7 +1549,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				if (!bStandingJumpLocked && (!FMath::IsNearlyZero(RawF) || !FMath::IsNearlyZero(RawR)))
 				{
 					App->SetLocomotionInput(RawF, RawR, bRunning,
-						(bRunning && RawF > 0.f) ? Client->GetRunRate() : 1.f);
+						bUniformVRMovement ? ACEVRLocomotion::AnimationRate(RawF, RawR, bRunning, Client->GetRunRate())
+							: (bRunning && RawF > 0.f) ? Client->GetRunRate() : 1.f, bUniformVRMovement);
 				}
 				else
 				{
@@ -1529,7 +1566,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					App->ClearJumpMotionIfAny();
 					App->SetSuppressLocoIdleBlend(false);
 					App->SetLocomotionInput(RawF, RawR, bRunning,
-						(bRunning && RawF > 0.f) ? Client->GetRunRate() : 1.f);
+						bUniformVRMovement ? ACEVRLocomotion::AnimationRate(RawF, RawR, bRunning, Client->GetRunRate())
+							: (bRunning && RawF > 0.f) ? Client->GetRunRate() : 1.f, bUniformVRMovement);
 				}
 				else
 				{
@@ -1544,7 +1582,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				App->ClearJumpMotionIfAny();
 				App->SetSuppressLocoIdleBlend(false);
 				App->SetLocomotionInput(F, R, bRunning,
-					(bRunning && !FMath::IsNearlyZero(F)) ? Client->GetRunRate() : 1.f);
+					bUniformVRMovement ? ACEVRLocomotion::AnimationRate(F, R, bRunning, Client->GetRunRate())
+						: (bRunning && !FMath::IsNearlyZero(F)) ? Client->GetRunRate() : 1.f, bUniformVRMovement);
 			}
 		}
 	}
@@ -1615,10 +1654,12 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				Pred.RotationXYZ = FVector(NewAc.X, NewAc.Y, NewAc.Z);
 				PendingMouseTurnDegrees = 0.f;
 			}
-			// Use approach: rotate in place toward the door; Walking is blocked until aligned.
-			if (bServerMoveToActive && !ApproachTargetDir.IsNearlyZero()
+			// Face before advancing, then keep steering toward a moving target or
+			// back toward it after a collision slide changes our line of approach.
+			if (!bVR && bServerMoveToActive && !ApproachTargetDir.IsNearlyZero()
 				&& (UseApproachPhase == EACEUseApproachPhase::Turning
-					|| UseApproachPhase == EACEUseApproachPhase::Holding))
+					|| UseApproachPhase == EACEUseApproachPhase::Holding
+					|| UseApproachPhase == EACEUseApproachPhase::Walking))
 			{
 				FACEPosition FaceTarget = Pred;
 				FaceTarget.SetAceFacingFromUnrealDir2D(ApproachTargetDir);
@@ -1642,8 +1683,13 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				const float SideSpeed = Client->GetSidestepSpeed(bRunning) * GroundScale;
 				// ACE MotionInterp: WalkBackwards → WalkForward with speed *= -0.65.
 				const float BackFactor = (F < 0.f) ? 0.65f : 1.f;
-				Pred.Location += Pred.GetAceForwardInAcSpace() * (F * BackFactor) * ForwardSpeed * DeltaTime
-					+ Pred.GetAceRightInAcSpace() * R * SideSpeed * DeltaTime;
+				const FVector LocalVelocity = bVR && bServerMoveToActive
+					? FVector(R, F, 0.f) * Client->GetLocomotionSpeed(bRunning) * GroundScale
+					: bUniformVRMovement
+					? ACEVRLocomotion::Velocity(F, R, bRunning, Client->GetRunRate()) * GroundScale
+					: FVector(R * SideSpeed, F * BackFactor * ForwardSpeed, 0.f);
+				Pred.Location += (Pred.GetAceForwardInAcSpace() * LocalVelocity.Y
+					+ Pred.GetAceRightInAcSpace() * LocalVelocity.X) * DeltaTime;
 				Pred.NormalizeOutdoorLandblock();
 			}
 			// Ballistic arc from leave-ground velocity (world ACE); no mid-air redirect.
@@ -3231,6 +3277,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					JumpWorldAceVelocity = Pred.GetAceForwardInAcSpace() * F
 						* (F < 0.f ? .65f : 1.f) * Client->GetLocomotionSpeed(bRunning)
 						+ Pred.GetAceRightInAcSpace() * R * Client->GetSidestepSpeed(bRunning);
+					if (bUniformVRMovement)
+						JumpWorldAceVelocity = Pred.GetAcQuat().RotateVector(ACEVRLocomotion::JumpVelocity(F, R, bRunning, Client->GetRunRate()));
 					JumpWorldAceVelocity.Z = -9.8f * DeltaTime;
 					GroundZ = Desired.Z - .5f * 9.8f * WorldScale * DeltaTime * DeltaTime;
 					bForceMovementResend = true;
@@ -3363,7 +3411,7 @@ void AACEPlayerController::ApplyRetailCameraFov()
 	UCameraComponent* Cam = P ? P->FindComponentByClass<UCameraComponent>() : nullptr;
 	int32 SizeX = 0, SizeY = 0;
 	GetViewportSize(SizeX, SizeY);
-	ACECameraRetail::ApplyFovToCamera(Cam, SizeX, SizeY, GetCameraFieldOfViewDegrees());
+	ACECameraRetail::ApplyFovToCamera(Cam, SizeX, SizeY, GetCameraFieldOfViewDegrees(), bCameraMapMode);
 }
 
 void AACEPlayerController::ApplyRetailCameraPivot(USpringArmComponent* Boom, UCapsuleComponent* Capsule) const
@@ -3455,6 +3503,7 @@ void AACEPlayerController::SetCameraLookDown(USpringArmComponent* Boom, bool bLo
 	if (!bLookDown && bCameraMapMode)
 	{
 		bCameraMapMode = false;
+		ApplyRetailCameraFov();
 		if (Boom) Boom->bDoCollisionTest = true;
 		if (auto* LP = GetLocalPlayer(); LP && LP->ViewportClient)
 			LP->ViewportClient->EngineShowFlags.SetFog(bMapSavedFog);
@@ -3508,6 +3557,7 @@ void AACEPlayerController::SetCameraMapMode(USpringArmComponent* Boom, bool bMap
 	if (!bMapMode) { SetCameraLookDown(Boom, false); return; }
 	SetCameraLookDown(Boom, true);
 	bCameraMapMode = true;
+	ApplyRetailCameraFov();
 	ApplyCameraOffset(Boom, ACECameraRetail::MapOffsetYAc,
 		ACECameraRetail::LookDownOffsetZAc, ACECameraRetail::LookDownPitchDegrees(), true);
 	UserCameraArmLength = Boom->TargetArmLength = -ACECameraRetail::MapOffsetYAc * GetCameraScaleCm();
@@ -4071,6 +4121,8 @@ void AACEPlayerController::ReleaseJump(float Forward, float Right)
 		LocalVel = LocalVel.GetSafeNormal2D() * MaxSpeed;
 	}
 	const float Height = Client->GetJumpHeight(Extent);
+	if (IsVRActive() && Client->GetSession() && Client->GetSession()->SupportsUniformVRMovement())
+		LocalVel = ACEVRLocomotion::JumpVelocity(Forward, Right, !bStandingAim && bRunning, Client->GetRunRate());
 	LocalVel.Z = FMath::Sqrt(FMath::Max(0.f, Height * 19.6f));
 	JumpLocalAceVelocity = LocalVel;
 
@@ -6595,8 +6647,8 @@ float AACEPlayerController::GetStepDownHeightCm() const
 float AACEPlayerController::GetUseCylinderDistanceCm(
 	const FACEWorldObject& Target, const FVector& SelfOriginCm, const FVector& TargetOriginCm) const
 {
-	// Mirror ACE Position.CylinderDistanceNoZ — gap between Setup cylinders (not centers).
-	// Slightly under-estimate radii so the client must walk a bit closer than the server allows.
+	// Match retail MoveToManager::GetCurrentDistance and server
+	// WorldObject.GetCylinderDistance, using the authored Setup dimensions.
 	float SelfScale = 1.f;
 	if (Client)
 	{
@@ -6606,11 +6658,12 @@ float AACEPlayerController::GetUseCylinderDistanceCm(
 			SelfScale = Self.Scale > KINDA_SMALL_NUMBER ? Self.Scale : 1.f;
 		}
 	}
-	// Full Setup radii — under-estimating left the client short of server UseRadius.
-	const float SelfRadiusAc = FMath::Clamp(PlayerSetupRadiusAc * SelfScale, 0.2f, 0.55f);
+	const float SelfRadiusAc = FMath::Max(0.f, PlayerSetupRadiusAc * SelfScale);
+	const float SelfHeightAc = FMath::Max(0.f, PlayerSetupHeightAc * SelfScale);
 
 	const float TargetScale = Target.Scale > KINDA_SMALL_NUMBER ? Target.Scale : 1.f;
 	float TargetRadiusAc = 0.25f;
+	float TargetHeightAc = 0.f;
 	if (Target.SetupId != 0)
 	{
 		if (UGameInstance* GI = GetGameInstance())
@@ -6621,15 +6674,15 @@ float AACEPlayerController::GetUseCylinderDistanceCm(
 				uint32 Anim = 0;
 				if (Dat->TryGetSetupPhysics(static_cast<uint32>(Target.SetupId), Step, Height, Radius, Anim))
 				{
-					TargetRadiusAc = FMath::Clamp(Radius * TargetScale, 0.08f, 2.5f);
+					TargetRadiusAc = FMath::Max(0.f, Radius * TargetScale);
+					TargetHeightAc = FMath::Max(0.f, Height * TargetScale);
 				}
 			}
 		}
 	}
 
-	const FVector OffsetAc = (TargetOriginCm - SelfOriginCm) / WorldScale;
-	const float ReachAc = OffsetAc.Size2D() - (SelfRadiusAc + TargetRadiusAc);
-	return ReachAc * WorldScale;
+	return ACERetailUseRange::CylinderDistance(SelfOriginCm, SelfRadiusAc * WorldScale, SelfHeightAc * WorldScale,
+		TargetOriginCm, TargetRadiusAc * WorldScale, TargetHeightAc * WorldScale);
 }
 
 void AACEPlayerController::ApplyPlayerCapsuleFromSetup(int32 SetupId)
@@ -6824,24 +6877,15 @@ void AACEPlayerController::BeginUseApproach(int32 TargetGuid, float DistanceAc, 
 {
 	ApproachPickupAmount = bPickupIntoInventory
 		? (PickupAmount > 0 ? PickupAmount : (DatGameplayBinder ? DatGameplayBinder->GetSelectedItemAmount(TargetGuid) : 0)) : 0;
-	if (IsVRActive())
-	{
-		FACEWorldObject Target;
-		if (!Client || Client->IsUseBusy() || !Client->GetWorldObject(TargetGuid, Target)) return;
-		const auto* Capsule = GetPawn()->FindComponentByClass<UCapsuleComponent>();
-		const FVector Feet = GetPawn()->GetActorLocation() - FVector(0, 0, Capsule->GetScaledCapsuleHalfHeight());
-		if (GetUseCylinderDistanceCm(Target, Feet, Target.Position.ToUnrealLocation(WorldScale)) > DistanceAc * WorldScale + 5.f) return;
-		Client->FlushAutonomousPosition(true);
-		if (bPickupIntoInventory) SendInventoryPickup(TargetGuid, ApproachPickupAmount);
-		else if (bFireActionWhenInRange) Client->SendUseItem(TargetGuid);
-		return;
-	}
 	if (TargetGuid == 0)
 	{
 		return;
 	}
 	if (bServerMoveToActive && ServerMoveToTargetGuid == TargetGuid)
 	{
+		// A repeated double-click must not toggle the object or reset its charge
+		// origin while the server is still servicing the first Use request.
+		if (bAwaitingUseDone) return;
 		bResendUseWhenInRange = bFireActionWhenInRange;
 		bApproachPickupIntoInventory = bPickupIntoInventory;
 		bApproachMoveOnly = !bFireActionWhenInRange;
@@ -6865,7 +6909,8 @@ void AACEPlayerController::BeginUseApproach(int32 TargetGuid, float DistanceAc, 
 	bServerMoveToActive = true;
 	ServerMoveToTargetGuid = TargetGuid;
 	ServerMoveToDistance = DistanceAc;
-	// Use / pickup: no FailDistance (server default is MaxValue). Melee charge sets it via BeginServerMoveTo.
+	// The server supplies the limit, including MAX for ordinary ACE Use and
+	// finite charge limits on servers that configure them. Never invent one.
 	ServerMoveToFailDistance = 0.f;
 	UseApproachPhase = EACEUseApproachPhase::Turning;
 	ApproachTargetDir = FVector::ZeroVector;
@@ -6888,6 +6933,21 @@ void AACEPlayerController::BeginUseApproach(int32 TargetGuid, float DistanceAc, 
 			ApproachStartPose = Seed;
 			bHaveApproachStartPose = true;
 		}
+		if (bFireActionWhenInRange && !bPickupIntoInventory)
+		{
+			// ItemHolder::UseObject sends Use before movement. This gives the
+			// server a chance to reject the interaction or supply MoveTo distance,
+			// charge limit and target; pre-walking used to bypass those rules.
+			Client->SendMovementEx(0.f, 0.f, 0.f, true, false, true);
+			ForwardSent = RightSent = TurnSent = 0.f;
+			bWasMoving = false;
+			if (bHavePredictedPose) Client->SetReportedPosition(PredictedPose);
+			Client->FlushAutonomousPosition(true);
+			bAwaitingUseDone = true;
+			ApproachUseSendCount = 1;
+			bResendUseWhenInRange = false;
+			Client->SendUseItem(TargetGuid);
+		}
 		FACEWorldObject Target;
 		if (Client->GetWorldObject(TargetGuid, Target) && Target.bHasPosition && GetPawn())
 		{
@@ -6905,11 +6965,10 @@ void AACEPlayerController::BeginUseApproach(int32 TargetGuid, float DistanceAc, 
 			}
 			// Already inside UseRadius (cylinder gap) — Use immediately; never F=1 into a wall.
 			const float UseRadiusCm = ServerMoveToDistance * WorldScale;
-			const float Sp = FMath::Max(5.f, 0.05f * WorldScale);
-			if (GetUseCylinderDistanceCm(Target, SelfLoc, TargetLoc) <= UseRadiusCm + Sp)
+			if (GetUseCylinderDistanceCm(Target, SelfLoc, TargetLoc) <= UseRadiusCm)
 			{
 				UseApproachPhase = EACEUseApproachPhase::Holding;
-				if (bFireActionWhenInRange)
+				if (bFireActionWhenInRange && ApproachUseSendCount == 0)
 				{
 					if (bPickupIntoInventory)
 					{
@@ -7036,8 +7095,8 @@ void AACEPlayerController::InteractWithObject(int32 ObjectGuid)
 		{
 			return;
 		}
-		// Client walks in (F=1 MoveToState). Send Use only once in range — any later
-		// MoveToState (including axes-0 / StopMovement) cancels server CreateMoveToChain.
+		// Send Use once, then follow the server's approach through autonomous
+		// positions. New MoveToState packets would cancel CreateMoveToChain.
 		BeginUseApproach(ObjectGuid, DistAc, /*bPickupIntoInventory*/ false);
 		UE_LOG(LogTemp, Log, TEXT("ACE: Use approach guid=0x%08X name='%s'"), ObjectGuid, *Obj.Name);
 		return;
@@ -7093,7 +7152,7 @@ void AACEPlayerController::BeginServerMoveTo(const FACEObjectMotionState& Motion
 	if (bServerMoveToActive && ServerMoveToTargetGuid == Motion.MoveToTargetGuid)
 	{
 		// Repeated server MoveTo updates must not restart Turning after the straight run begins.
-		ServerMoveToDistance = Motion.MoveToDistance > 0.f ? Motion.MoveToDistance : ServerMoveToDistance;
+		ServerMoveToDistance = Motion.MoveToDistance;
 		ServerMoveToFailDistance = Motion.MoveToFailDistance;
 		return;
 	}
@@ -7143,7 +7202,7 @@ void AACEPlayerController::HandleMotionUpdate(int32 ObjectGuid, const FACEObject
 		// A give sends its own MoveToPosition (server CreateMoveToChain for GiveObjectRequest);
 		// flipping to Use here cancelled the give chain with ActionCancelled.
 		ServerMoveToDistance = Motion.MoveToDistance;
-		bResendUseWhenInRange = !bApproachMoveOnly;
+		bResendUseWhenInRange = !bApproachMoveOnly && ApproachUseSendCount == 0;
 		ServerMoveToFailDistance = Motion.MoveToFailDistance;
 	}
 	else if (Motion.MovementType != 6 && Motion.MovementType != 7 && !Motion.bMoving)

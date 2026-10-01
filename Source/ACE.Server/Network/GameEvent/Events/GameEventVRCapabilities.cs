@@ -8,7 +8,7 @@ namespace ACE.Server.Network.GameEvent.Events
             Writer.Write(1u); // version
             // 32768: equipment/root poses; 65536: retail combat slider;
             // 131072: receive-only pose subscription (including desktop observers).
-            Writer.Write((objects == null ? 65527u : 65535u) | 65536u | Entity.VRCombatRequest.PoseObserverCapability);
+            Writer.Write((objects == null ? 65527u : 65535u) | 65536u | Entity.VRCombatRequest.PoseObserverCapability | Entity.VRLocomotion.Capability);
             if (objects != null)
             {
                 Writer.Write((uint)teleport);

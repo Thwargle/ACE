@@ -38,6 +38,7 @@ class ACECLIENT_API AACELandblockActor : public AActor
 	GENERATED_BODY()
 	friend class FACERetailInteriorStreamingTest;
 	friend class FACEEntranceTransitionTest;
+	friend class FACECameraEdgeTest;
 	friend class FACERetailRuntimeRegressionTest;
 
 public:

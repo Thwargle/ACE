@@ -25,6 +25,8 @@ namespace ACE.Server.Network.Structure
         // not sent in packet directly as bools, parsed from above
         public bool Contact;                // verify: contact (indicates if player is on ground), or sticky bit?
         public bool StandingLongJump;
+        public System.Numerics.Vector2? UniformVRInput;
+        public bool IsValid = true;
 
         public MoveToState() { }
 
@@ -48,6 +50,12 @@ namespace ACE.Server.Network.Structure
 
             // align to DWORD boundary
             reader.Align();
+            bool hasExtension = reader.BaseStream.Position != reader.BaseStream.Length;
+            UniformVRInput = Entity.VRLocomotion.ReadInput(reader,
+                wo is Player player && player.VRUniformLocomotionSubscribed, RawMotionState);
+            // A malformed opted-in packet must not fall back to raw physics with
+            // its rejected speed values. Unextended retail packets are unaffected.
+            IsValid = !hasExtension || UniformVRInput.HasValue;
         }
     }
 }

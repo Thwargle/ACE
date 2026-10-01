@@ -11,7 +11,6 @@
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "ACEClientSubsystem.h"
-#include "Protocol/ACECharacterTitleNames.inl"
 #include "ACEAppraisalFormatting.h"
 #include "ACEDatSubsystem.h"
 #include "Components/Border.h"
@@ -92,39 +91,17 @@ void UACEUIGameplayBinder::RefreshCreatureExamination()
     // 23000001/0990A1E2 and 07100DAC supply these English labels in the DAT.
     PlaceTextOnElement(ExamCreatureHeadings[0], Find(TEXT("LevelInfo_Character")), TEXT("Character"), 8, FLinearColor::White, 100001);
     PlaceTextOnElement(ExamCreatureHeadings[1], Find(TEXT("LevelInfo_Level")), TEXT("Level"), 8, FLinearColor::White, 100001);
-    FString TypeName;
-    if (LastAppraisal.CreatureType && Canvas->GetResourceResolver())
-        TypeName = Canvas->GetResourceResolver()->ResolveEnumString(0x10000005, LastAppraisal.CreatureType);
-    // AppraisalSystem::InqCreatureDisplayName replaces enum separators for display.
-    TypeName.ReplaceInline(TEXT("_"), TEXT(" "));
+    FACEWorldObject Subject;
+    const bool bHaveSubject = Client && Client->GetWorldObject(LastAppraisal.ObjectGuid, Subject);
+    const auto Headings = ACEAppraisalFormatting::CreatureHeadings(LastAppraisal, Canvas->GetResourceResolver(), bHaveSubject ? &Subject : nullptr);
     if (bCharacter)
     {
-        auto* Resources = Canvas->GetResourceResolver();
-        FString Gender = Resources ? Resources->ResolveEnumString(0x10000001, LastAppraisal.IntProperties.FindRef(113)) : FString();
-        FString Heritage = Resources ? Resources->ResolveEnumString(0x10000002, LastAppraisal.IntProperties.FindRef(188)) : FString();
-        if (!LastAppraisal.IntProperties.FindRef(113)) Gender.Reset();
-        if (!LastAppraisal.IntProperties.FindRef(188)) Heritage = TypeName;
-        Gender.ReplaceInline(TEXT("_"), TEXT(" ")); Heritage.ReplaceInline(TEXT("_"), TEXT(" "));
-        const FString GenderHeritage = (Gender + TEXT(" ") + Heritage).TrimStartAndEnd();
-        FString Profession = LastAppraisal.StringProperties.FindRef(5);
-        if (const int32* Title = LastAppraisal.IntProperties.Find(261))
-        {
-            const FString TitleName = GetCharacterTitleName(*Title);
-            if (TitleName != TEXT("(Unknown Title)")) Profession = TitleName;
-        }
-        const int32 PK = LastAppraisal.IntProperties.FindRef(134);
-        FACEWorldObject Subject;
-        const bool bHaveSubject = Client && Client->GetWorldObject(LastAppraisal.ObjectGuid, Subject);
-        const bool bPK = bHaveSubject ? (Subject.ObjectDescriptionFlags & ACEObjectDescFlag::PlayerKiller) != 0 : (PK & ACEPlayerKillerStatus::PK) != 0;
-        const bool bPKLite = bHaveSubject ? (Subject.ObjectDescriptionFlags & ACEObjectDescFlag::PkLiteStatus) != 0 : (PK & ACEPlayerKillerStatus::PKLite) != 0;
-        PlaceTextOnElement(ExamCreatureHeadings[3], Find(TEXT("HeritageText")), GenderHeritage, 9, FLinearColor::White, 100001);
-        PlaceTextOnElement(ExamCreatureHeadings[4], Find(TEXT("ProfessionText")), Profession, 9, FLinearColor::White, 100001);
-        PlaceTextOnElement(ExamCreatureHeadings[5], Find(TEXT("PlayerKillerText")), bPK ? TEXT("Player Killer")
-            : bPKLite ? TEXT("Player Killer Lite") : TEXT("Non-Player Killer"), 9, FLinearColor::White, 100001);
+        PlaceTextOnElement(ExamCreatureHeadings[3], Find(TEXT("HeritageText")), Headings.Heritage, 9, FLinearColor::White, 100001);
+        PlaceTextOnElement(ExamCreatureHeadings[4], Find(TEXT("ProfessionText")), Headings.Profession, 9, FLinearColor::White, 100001);
+        PlaceTextOnElement(ExamCreatureHeadings[5], Find(TEXT("PlayerKillerText")), Headings.PlayerKiller, 9, FLinearColor::White, 100001);
     }
-    else PlaceTextOnElement(ExamCreatureHeadings[2], Find(TEXT("CreatureName")), TypeName, 9, FLinearColor::White, 100001);
-    PlaceTextOnElement(ExamCreatureHeadings[6], Find(TEXT("AllegianceNameText")), bCharacter && LastAppraisal.IntProperties.FindRef(30) > 0
-        ? LastAppraisal.StringProperties.FindRef(47) : FString(), 9, FLinearColor::White, 100001);
+    else PlaceTextOnElement(ExamCreatureHeadings[2], Find(TEXT("CreatureName")), Headings.Type, 9, FLinearColor::White, 100001);
+    PlaceTextOnElement(ExamCreatureHeadings[6], Find(TEXT("AllegianceNameText")), Headings.Allegiance, 9, FLinearColor::White, 100001);
     auto List = Manager->FindElementUnder(TEXT("BasicCreatureExamineUI"), TEXT("BasicCreatureExam_Attributes"));
     if (!List) return;
     List->bVisible = true;
@@ -132,14 +109,8 @@ void UACEUIGameplayBinder::RefreshCreatureExamination()
     // Health (including percent), Stamina and Mana Attribute2ndInfoRegions.
     // All use the actual 2100006B/10000166 list entry, including label/value
     // alignment, glyph atlas, outline and twenty-pixel row height.
-    static const TCHAR* Names[] = {TEXT("Strength"), TEXT("Endurance"), TEXT("Coordination"),
-        TEXT("Quickness"), TEXT("Focus"), TEXT("Self"), TEXT("Health"), TEXT("Stamina"), TEXT("Mana")};
-    const int32 Values[] = {LastAppraisal.Strength, LastAppraisal.Endurance, LastAppraisal.Coordination,
-        LastAppraisal.Quickness, LastAppraisal.Focus, LastAppraisal.Self, LastAppraisal.Health,
-        LastAppraisal.Stamina, LastAppraisal.Mana};
-    const int32 Maxima[] = {LastAppraisal.MaxHealth, LastAppraisal.MaxStamina, LastAppraisal.MaxMana};
-    const int32 Masks[] = {1, 2, 8, 4, 16, 32, 64, 128, 256};
-    while (ExamAttributeRows.Num() < UE_ARRAY_COUNT(Names))
+    const auto Stats = ACEAppraisalFormatting::CreatureStatLines(LastAppraisal);
+    while (ExamAttributeRows.Num() < Stats.Num())
     {
         auto Row = UACEUILayoutResolver::LoadTemplate(0x2100006B, 0x10000166);
         if (!Row) return;
@@ -150,35 +121,18 @@ void UACEUIGameplayBinder::RefreshCreatureExamination()
         ExamAttributeLabels.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
         ExamAttributeValues.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
     }
-    for (int32 I = 0; I < UE_ARRAY_COUNT(Names); ++I)
+    for (int32 I = 0; I < Stats.Num(); ++I)
     {
         const auto Row = ExamAttributeRows[I];
-        FString Value = Values[I] > 0 ? FString::FromInt(Values[I]) : TEXT("???");
-        if (I >= 6)
-        {
-            const int32 Max = Maxima[I - 6];
-            Value = TEXT("???");
-            if (Max > 0)
-            {
-                const int32 Percent = FMath::RoundToInt(100.0 * Values[I] / Max);
-                if (LastAppraisal.bSuccess)
-                    Value = I == 6 ? FString::Printf(TEXT("%d/%d (%d %%)"), Values[I], Max, Percent)
-                        : FString::Printf(TEXT("%d/%d"), Values[I], Max);
-                else if (I == 6) Value = FString::Printf(TEXT("%d %%"), Percent);
-            }
-        }
-        FLinearColor Color = FLinearColor::White;
-        if (!LastAppraisal.bSuccess) Color = FLinearColor::Yellow;
-        else if (LastAppraisal.AttributeHighlights & Masks[I])
-            Color = (LastAppraisal.AttributeColors & Masks[I]) ? FLinearColor::Green : FLinearColor::Red;
+        const auto& Stat = Stats[I];
         for (const auto& Child : Row->Children)
         {
             if (Child->ElementName == TEXT("InfoRegion_Label"))
-                PlaceTextOnElement(ExamAttributeLabels[I], Child, Names[I], 9, FLinearColor::White, 100001);
+                PlaceTextOnElement(ExamAttributeLabels[I], Child, Stat.Label, 9, FLinearColor::White, 100001);
             else if (Child->ElementName == TEXT("InfoRegion_Value"))
             {
-                Child->TextColor = Color;
-                PlaceTextOnElement(ExamAttributeValues[I], Child, Value, 9, Color, 100001);
+                Child->TextColor = Stat.Color;
+                PlaceTextOnElement(ExamAttributeValues[I], Child, Stat.Value, 9, Stat.Color, 100001);
             }
         }
     }

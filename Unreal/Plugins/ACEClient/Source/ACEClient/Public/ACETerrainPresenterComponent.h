@@ -38,6 +38,7 @@ class ACECLIENT_API UACETerrainPresenterComponent : public UActorComponent
 	friend class FACEStreamingRetirementTest;
 	friend class FACEPortalRetirementTest;
 	friend class FACETerrainPortalRevealTest;
+	friend class FACECameraEdgeTest;
 
 public:
 	UACETerrainPresenterComponent();
@@ -341,6 +342,7 @@ protected:
 	bool bWasInPortalSpace = false;
 
 	float DegradeMul = 0.f;
+	bool bMapDegradesDisabled = false;
 	float DegradeFpsEma = 0.f;
 	float DegradeApplyAccum = 0.f;
 	TArray<float> DegradeHistory;

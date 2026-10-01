@@ -9,23 +9,38 @@
 
 namespace
 {
+struct FNoticeTextStyle
+{
+ float Height, Width;
+ FLinearColor Color;
+ TArray<FLinearColor> GlyphColors;
+ TSharedPtr<FACEUIElement> Source;
+};
 // Retain both the UMG label and its DAT element for the entire Slate lifetime.
 // The same atlas renderer is used by the original chat and inventory windows.
 class SNoticeText : public SCompoundWidget
 {
 public:
  SLATE_BEGIN_ARGS(SNoticeText) {} SLATE_END_ARGS()
- void Construct(const FArguments&, UACEClientSubsystem* Client, const FString& Value, float Height, float Width, FLinearColor Color)
+ void Construct(const FArguments&, UACEClientSubsystem* Client, const FString& Value, const FNoticeTextStyle& Style)
  {
+  const float Height=Style.Height,Width=Style.Width;
+  const auto& Source=Style.Source;
   Label.Reset(NewObject<UACERetailTextBlock>());
-  Element = MakeShared<FACEUIElement>();
-  Element->FontId = 0x40000006; // retail basefont24
-  FACEDatFont Font;
+  Element = Source ? MakeShared<FACEUIElement>(*Source) : MakeShared<FACEUIElement>();
+  if (!Source) Element->FontId = 0x40000006; // retail basefont24
+  Element->bTextOneLine = false;
   auto* Resources = Client ? Client->GetUIResourceResolver() : nullptr;
-  const float Scale = Resources && Resources->ResolveFont(Element->FontId, Font) ? Height / FMath::Max(1, int32(Font.MaxCharHeight)) : 1.f;
-  Label->SetRetailElement(Resources, Element, FVector2D(Scale), Width > 0 ? Width / Scale : 0.f, false);
   Label->SetFont(FCoreStyle::GetDefaultFontStyle("Regular", FMath::RoundToInt(Height * .75f)));
-  Label->SetText(FText::FromString(Value)); Label->SetColorAndOpacity(Color);
+  // Resolve state/inherited font selection through the same renderer first,
+  // then scale its actual glyph height for the headset's readable text size.
+  Label->SetRetailElement(Resources, Element, FVector2D(1.f), 0.f, false);
+  const auto* Font=Label->GetBitmapFont();
+  const float Scale=Font?Height/FMath::Max(1,int32(Font->MaxCharHeight)):1.f;
+  Label->SetRetailElement(Resources, Element, FVector2D(Scale), Width > 0 ? Width / Scale : 0.f, false);
+  Label->SetText(FText::FromString(Value)); Label->SetColorAndOpacity(Style.Color);
+  Label->SetAutoWrapText(true); Label->SetWrapTextAt(Width);
+  Label->SetTextColors(Style.GlyphColors);
   ChildSlot[Label->TakeWidget()];
  }
 private:
@@ -34,9 +49,11 @@ private:
 };
 }
 
-TSharedRef<SWidget> ACEVRUIStyle::Text(UACEClientSubsystem* Client, const FString& Value, float Height, float Width, FLinearColor Color)
+TSharedRef<SWidget> ACEVRUIStyle::Text(UACEClientSubsystem* Client, const FString& Value, float Height, float Width, FLinearColor Color,
+    const TArray<FLinearColor>& GlyphColors, const TSharedPtr<FACEUIElement>& Source)
 {
- return SNew(SNoticeText, Client, Value, Height, Width, Color);
+ const FNoticeTextStyle Style{Height,Width,Color,GlyphColors,Source};
+ return SNew(SNoticeText, Client, Value, Style);
 }
 
 TSharedRef<SWidget> ACEVRUIStyle::Frame(TSharedRef<SWidget> Body, float Padding, bool bInteractive)

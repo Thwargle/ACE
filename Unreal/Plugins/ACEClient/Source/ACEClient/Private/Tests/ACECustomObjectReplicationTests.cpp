@@ -2,6 +2,7 @@
 #include "Misc/AutomationTest.h"
 #include "ACESession.h"
 #include "ACEOpcodes.h"
+#include "UI/ACEAppraisalUsage.h"
 
 namespace
 {
@@ -13,6 +14,7 @@ struct FObjectPacket
 	uint16 Part = 1;
 	int32 Setup = 0x02000001;
 	int32 PhysicsState = 0;
+	int32 DescriptionFlags = 0;
 	int32 Container = 0;
 	int32 Placement = 0;
 	float Scale = 1.f;
@@ -46,7 +48,7 @@ TArray<uint8> ObjectPacket(const FObjectPacket& P, uint32 Opcode = ACEOpcode::Ob
 	W.WriteUInt32(P.Container ? 0x4000u : 0u);
 	W.WriteString16L(TEXT("Server-authored object"));
 	W.WriteUInt16(1); W.WriteUInt16(1); // WCID and icon have packed known type prefixes.
-	W.WriteUInt32(ACEItemType::Misc); W.WriteUInt32(0); W.Align();
+	W.WriteUInt32(ACEItemType::Misc); W.WriteUInt32(P.DescriptionFlags); W.Align();
 	if (P.Container) W.WriteUInt32(P.Container);
 	W.Align();
 	return W.GetData();
@@ -266,6 +268,65 @@ bool FACECustomObjectReplicationTest::RunTest(const FString&)
 	TestEqual(TEXT("Events following owned physics deletion replay after recreation"), PartId(), 0x0100000E);
 	TestTrue(TEXT("Recreated owned object enters the server-provided world placement"), Session.WorldObjects[P.Guid].bHasPosition);
 	TestEqual(TEXT("Recreated world placement supersedes retained inventory ownership"), Session.WorldObjects[P.Guid].ContainerId, 0);
+
+	// Custom scenery can be physically visible while excluded from the UI.
+	Session.ClearWorldState(); P = FObjectPacket();
+	P.DescriptionFlags = ACEObjectDescFlag::UiHidden; Create();
+	TestTrue(TEXT("Create preserves server UIHidden flag"), Session.WorldObjects[P.Guid].IsUiHidden());
+	TestFalse(TEXT("Hidden pedestal is excluded from world hotkey candidates"), Session.WorldObjects[P.Guid].IsSelectableWorldObject());
+	int32 QualityNotifications = 0;
+	Session.OnObjectCreated.AddLambda([&](const FACEWorldObject& Object)
+	{
+		if (Object.Guid == P.Guid && Object.bAppearanceOnlyUpdate) ++QualityNotifications;
+	});
+	auto BoolQuality = [&](uint32 Prop, bool Value, bool Public = true)
+	{
+		FACEBinaryWriter W;
+		W.WriteUInt32(Public ? ACEOpcode::PublicUpdatePropertyBool : ACEOpcode::PrivateUpdatePropertyBool);
+		W.WriteUInt8(1); if (Public) W.WriteUInt32(P.Guid);
+		W.WriteUInt32(Prop); W.WriteUInt32(Value ? 1 : 0);
+		Session.HandleGameMessage(W.GetData());
+	};
+	BoolQuality(24, false);
+	TestTrue(TEXT("Public unhide restores selection without recreating physics"), Session.WorldObjects[P.Guid].IsSelectableWorldObject());
+	BoolQuality(24, true);
+	TestFalse(TEXT("Public hide removes world selection"), Session.WorldObjects[P.Guid].IsSelectableWorldObject());
+	TestEqual(TEXT("UIHidden leaves physics and rendering flags alone"), Session.WorldObjects[P.Guid].PhysicsState, 0);
+	TestEqual(TEXT("Live visibility updates notify the presenter"), QualityNotifications, 2);
+	BoolQuality(24, true);
+	TestEqual(TEXT("Repeated unchanged flags do not rebuild presentation"), QualityNotifications, 2);
+	Session.PlayerGuid = P.Guid;
+	BoolQuality(24, false, false);
+	TestFalse(TEXT("Private boolean update has player-only wire layout"), Session.WorldObjects[P.Guid].IsUiHidden());
+	BoolQuality(3, false);
+	TestTrue(TEXT("Unlock updates the retail openable flag"), Session.WorldObjects[P.Guid].IsOpenable());
+	BoolQuality(3, true);
+	TestFalse(TEXT("Lock clears the retail openable flag"), Session.WorldObjects[P.Guid].IsOpenable());
+
+	// Unfamiliar weenie IDs still get the same appraisal sections; packet data
+	// supplies the values and the public descriptor supplies healer/capacity.
+	Session.WorldObjects[P.Guid].ObjectDescriptionFlags |= 0x10000;
+	Session.WorldObjects[P.Guid].ItemsCapacity = 72;
+	FACEAppraisalInfo Appraisal;
+	Session.OnAppraisal.AddLambda([&](const FACEAppraisalInfo& Info) { Appraisal = Info; });
+	FACEBinaryWriter App;
+	App.WriteUInt32(P.Guid); App.WriteUInt32(1 | 2 | 4); App.WriteUInt32(1);
+	App.WriteUInt16(1); App.WriteUInt16(16); App.WriteUInt32(90); App.WriteInt32(55);
+	App.WriteUInt16(1); App.WriteUInt16(16); App.WriteUInt32(69); App.WriteUInt32(0);
+	App.WriteUInt16(1); App.WriteUInt16(16); App.WriteUInt32(100); App.WriteDouble(1.25);
+	FACEBinaryReader AppReader(App.GetData()); Session.HandleIdentifyObjectResponse(AppReader);
+	const FString Details = ACEAppraisalFormatting::ItemUsageDetails(Appraisal);
+	TestTrue(TEXT("Custom healing kit identifies from server descriptor, not WCID"), Details.Contains(TEXT("Bonus to Healing Skill: 55")));
+	TestTrue(TEXT("Server heal-kit modifier is retained"), Details.Contains(TEXT("Restoration Bonus: 125%")));
+	TestTrue(TEXT("Public capacity survives an appraisal that omits it"), Details.Contains(TEXT("Can hold up to 72 items.")));
+	TestTrue(TEXT("Explicit false sellability is displayed"), Details.Contains(TEXT("This item cannot be sold.")));
+	Appraisal = FACEAppraisalInfo(); Appraisal.IntProperties.Add(89, 6); Appraisal.IntProperties.Add(90, -25);
+	TestTrue(TEXT("Consumable depletion uses server vital and signed amount"), ACEAppraisalFormatting::ItemUsageDetails(Appraisal).Contains(TEXT("Depletes 25 Mana")));
+	Appraisal.BoolProperties.Add(3, true); Appraisal.IntProperties.Add(38, 300); Appraisal.IntProperties.Add(173, 0);
+	TestTrue(TEXT("Zero lock success remains meaningful data"), ACEAppraisalFormatting::ItemUsageDetails(Appraisal).Contains(TEXT("impossible to pick (Resistance 300)")));
+	Appraisal.BoolProperties.Add(3, false);
+	TestTrue(TEXT("Explicit unlocked state is displayed"), ACEAppraisalFormatting::ItemUsageDetails(Appraisal).Contains(TEXT("Unlocked")));
+	TestTrue(TEXT("Missing qualities do not invent extra appraisal data"), ACEAppraisalFormatting::ItemUsageDetails(FACEAppraisalInfo()).IsEmpty());
 	return true;
 }
 #endif

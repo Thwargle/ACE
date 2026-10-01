@@ -14,7 +14,7 @@ bool UACEVRSettings::SupportsMSAASettings()
 FName UACEVRSettings::GetButtonAction(FName Input) const
 {
 	const auto* Bound=ButtonBindings.Find(Input);
-	return Bound && ACEVRInputLayout::IsAction(*Bound) ? *Bound : Input;
+	return Bound && ACEVRInputLayout::IsAction(*Bound) ? *Bound : Input=="VRLeftGrip" ? FName("VRChat") : Input;
 }
 FName UACEVRSettings::GetMenuButtonAction(FName Input) const
 {
@@ -99,6 +99,8 @@ void UACEVRSettings::Sanitize()
 	Placement(CompassViewOffset,CompassViewRotation,FVector(110,38,-16));
 	Placement(VitalsViewOffset,VitalsViewRotation,FVector(100,-24,-22));
 	Placement(FellowshipViewOffset,FellowshipViewRotation,FVector(120,-55,-5));
+	Placement(ChatViewOffset,ChatViewRotation,FVector(115,-45,-10));
+	ChatAnchorMode=FMath::Clamp(ChatAnchorMode,0,2);
 	Clamp(FellowshipScale,.07f,.04f,.15f);
 	FellowshipAnchorMode=FMath::Clamp(FellowshipAnchorMode,0,2);
 	CompassAnchorMode=FMath::Clamp(CompassAnchorMode,0,2);

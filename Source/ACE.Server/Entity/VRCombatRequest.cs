@@ -42,7 +42,7 @@ namespace ACE.Server.Entity
             // compatible with servers and clients that do not implement feedback.
             if (kind == 4 && remaining == 12)
             {
-                request = new VRCombatRequest { Kind = 4, FeedbackFeatures = reader.ReadUInt32() & 63u };
+                request = new VRCombatRequest { Kind = 4, FeedbackFeatures = reader.ReadUInt32() & 127u };
                 return true;
             }
             if (kind == 5 && (remaining == 12 || remaining == 16))

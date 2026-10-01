@@ -42,6 +42,14 @@ struct FAceIconPaintCache
 	int32 Style = 0;
 };
 
+/** Already formatted and filtered retail chat, shared with the native VR view. */
+struct FACEChatDisplayLine
+{
+	FString Text, Sender;
+	FLinearColor Color;
+	uint64 Serial = 0;
+};
+
 /**
  * Binds retail classic_gameplay ElementNames to ACE networking + dynamic overlays.
  * Owns click routing (toolbar / panel / examine / combat / chat) and data refresh
@@ -56,6 +64,8 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEVRProtocolTest;
 	friend class UACEVRComponent;
 	friend class UACEVRMenu;
+	friend class UACEVRChat;
+	friend class FACEVRChatTest;
 	friend class AACEPlayerController;
 	friend class FACEChatParityTest;
 	friend class FACEEmoteTest;
@@ -65,6 +75,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEInventoryUICostTest;
 	friend class FACEGameplayRefreshTest;
 	friend class FACESalvageTest;
+	friend class FACEItemPresentationTest;
 	friend class FACESelectionToolbarTest;
 
 public:
@@ -100,6 +111,9 @@ public:
 	void HandleEscape();
 private:
 	uint64 DismissedIdentifySerial = 0;
+	TArray<FACEChatDisplayLine> ChatDisplayLines[5];
+	uint64 ChatDisplayRevision = 0;
+	uint64 ChatDisplaySerial = 0;
 	bool bExaminationDismissed = false;
 public:
 	void ToggleKeyboardMappingUI();

@@ -66,6 +66,7 @@ namespace ACEVisibleObjectPick
             if (!Entity || Seen.Contains(Entity)) continue;
             Seen.Add(Entity); Params.AddIgnoredActor(Entity);
             if (!Entity->IsHidden() && Entity->IsCellVisible() && Entity->GetACEGuid() != 0
+                && (Entity->ObjectDescriptionFlags & ACEObjectDescFlag::UiHidden) == 0
                 && (Entity->PhysicsState & (ACEPhysicsState::Missile | ACEPhysicsState::ParticleEmitter | ACEPhysicsState::NoDraw)) == 0
                 && (!Entity->bReceivedDeathMotion || Entity->IsCorpse())) Candidates.Add(Entity);
         }

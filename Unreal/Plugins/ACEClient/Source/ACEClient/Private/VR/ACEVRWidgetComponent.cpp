@@ -3,6 +3,7 @@
 #include "Materials/Material.h"
 #if WITH_EDITOR
 #include "Materials/MaterialExpressionTextureSampleParameter2D.h"
+#include "Materials/MaterialExpressionMultiply.h"
 #endif
 
 UMaterialInterface* UACEVRWidgetComponent::GetFilteredMaterial()
@@ -12,9 +13,20 @@ UMaterialInterface* UACEVRWidgetComponent::GetFilteredMaterial()
 #if WITH_EDITOR
 	auto* Source=LoadObject<UMaterialInterface>(nullptr,TEXT("/Engine/EngineMaterials/Widget3DPassThrough_Translucent"));
 	if (!Source) return nullptr;
-	auto* Material=DuplicateObject<UMaterial>(Source->GetMaterial(),GetTransientPackage(),TEXT("M_ACEVRWidgetFiltered_v1"));
+	auto* Material=DuplicateObject<UMaterial>(Source->GetMaterial(),GetTransientPackage(),TEXT("M_ACEVRWidgetFiltered_v2"));
 	Material->SetFlags(RF_Transient);Material->ClearFlags(RF_Public|RF_Standalone);
-	Material->BlendMode=BLEND_Translucent;Material->TwoSided=true;
+	Material->BlendMode=BLEND_AlphaComposite;Material->TwoSided=true;
+	Material->bDisableDepthTest=true;Material->bUseTranslucencyVertexFog=false;
+	Material->TranslucencyPass=MTP_AfterDOF;
+	// Explicit premultiplied coverage also works on mobile Substrate's unlit
+	// path, where legacy translucent shading can behave additively. Preserve
+	// transparent pixels so the mirror and world remain visible outside panels.
+	auto* Data=Material->GetEditorOnlyData();
+	auto* Premultiply=NewObject<UMaterialExpressionMultiply>(Material);
+	Premultiply->A=static_cast<const FExpressionInput&>(Data->EmissiveColor);
+	Premultiply->B=static_cast<const FExpressionInput&>(Data->Opacity);
+	Data->ExpressionCollection.AddExpression(Premultiply);
+	Data->EmissiveColor.Expression=Premultiply;Data->EmissiveColor.OutputIndex=0;
 	for (UMaterialExpression* Expression:Material->GetExpressions())
 		if (auto* Sample=Cast<UMaterialExpressionTextureSampleParameter2D>(Expression);Sample && Sample->ParameterName==TEXT("SlateUI"))
 		{
@@ -25,9 +37,18 @@ UMaterialInterface* UACEVRWidgetComponent::GetFilteredMaterial()
 		}
 	Material->PostEditChange();Cached=Material;
 #else
-	Cached=LoadObject<UMaterialInterface>(nullptr,TEXT("/Game/ACE/RuntimeMaterials/M_ACEVRWidgetFiltered_v1.M_ACEVRWidgetFiltered_v1"));
+	Cached=LoadObject<UMaterialInterface>(nullptr,TEXT("/Game/ACE/RuntimeMaterials/M_ACEVRWidgetFiltered_v2.M_ACEVRWidgetFiltered_v2"));
 #endif
 	return Cached.Get();
+}
+
+void UACEVRWidgetComponent::SetPersonalLayer(UWidgetComponent* Panel,int32 Order)
+{
+	if(!Panel)return;
+	if(auto* Material=GetFilteredMaterial();Material && Panel->GetMaterial(0)!=Material)
+		Panel->SetMaterial(0,Material);
+	const int32 Priority=PersonalLayerBase+FMath::Clamp(Order,0,9999);
+	if(Panel->TranslucencySortPriority!=Priority)Panel->SetTranslucentSortPriority(Priority);
 }
 
 void UACEVRWidgetComponent::OnRegister()

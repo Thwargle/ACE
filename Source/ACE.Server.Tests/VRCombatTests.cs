@@ -65,13 +65,13 @@ namespace ACE.Server.Tests
             var legacy = new ACE.Server.Network.GameEvent.Events.GameEventVRCapabilities(session);
             using var oldWire = new BinaryReader(new MemoryStream(legacy.Data.ToArray()));
             oldWire.BaseStream.Position = 16;
-            Assert.AreEqual(1u, oldWire.ReadUInt32()); Assert.AreEqual(65527u | 65536u | VRCombatRequest.PoseObserverCapability, oldWire.ReadUInt32());
+            Assert.AreEqual(1u, oldWire.ReadUInt32()); Assert.AreEqual(65527u | 65536u | VRCombatRequest.PoseObserverCapability | VRLocomotion.Capability, oldWire.ReadUInt32());
             Assert.AreEqual(0u, oldWire.ReadUInt32()); Assert.AreEqual(20.0f, oldWire.ReadSingle());
             Assert.AreEqual(oldWire.BaseStream.Length, oldWire.BaseStream.Position);
             var snapshot = new ACE.Server.Network.GameEvent.Events.GameEventVRCapabilities(session, 12, new uint[] { 100, 300, 400 });
             using var wire = new BinaryReader(new MemoryStream(snapshot.Data.ToArray()));
             wire.BaseStream.Position = 16;
-            Assert.AreEqual(1u, wire.ReadUInt32()); Assert.AreEqual(65535u | 65536u | VRCombatRequest.PoseObserverCapability, wire.ReadUInt32());
+            Assert.AreEqual(1u, wire.ReadUInt32()); Assert.AreEqual(65535u | 65536u | VRCombatRequest.PoseObserverCapability | VRLocomotion.Capability, wire.ReadUInt32());
             Assert.AreEqual(12u, wire.ReadUInt32()); Assert.AreEqual(3u, wire.ReadUInt32());
             foreach (var guid in new uint[] { 100, 300, 400 }) Assert.AreEqual(guid, wire.ReadUInt32());
             Assert.AreEqual(0u, wire.ReadUInt32()); Assert.AreEqual(20.0f, wire.ReadSingle());
@@ -150,7 +150,7 @@ namespace ACE.Server.Tests
             Assert.AreEqual(4u,request.Kind); Assert.AreEqual(1u,request.FeedbackFeatures);
             data[8] = 48; Assert.IsTrue(Read(data, out request));
             Assert.AreEqual(VRCombatRequest.ReceivePoses | VRCombatRequest.ReceiveEquipmentPoses, request.FeedbackFeatures);
-            data[8] = 255; Assert.IsTrue(Read(data, out request)); Assert.AreEqual(63u, request.FeedbackFeatures);
+            data[8] = 255; Assert.IsTrue(Read(data, out request)); Assert.AreEqual(127u, request.FeedbackFeatures);
             for(int n=0;n<data.Length;++n) Assert.IsFalse(Read(data[..n],out _));
             Array.Resize(ref data,13); Assert.IsFalse(Read(data,out _));
         }

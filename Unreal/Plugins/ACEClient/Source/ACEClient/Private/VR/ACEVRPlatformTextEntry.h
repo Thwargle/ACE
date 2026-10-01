@@ -10,12 +10,13 @@ void ACEVRUpdateNativeKeyboardText(const FString& Expected, const FString& Repla
 
 // One native editing session per explicit click. Android retains a weak entry
 // identity after some dismissals; reusing Slate's permanent entry toggles Hide.
-class FACEVRPlatformTextEntry final : public IVirtualKeyboardEntry
+class FACEVRPlatformTextEntry final : public IVirtualKeyboardEntry, public TSharedFromThis<FACEVRPlatformTextEntry>
 {
 public:
     ~FACEVRPlatformTextEntry();
     void EnableNativeSubmit();
     void Cancel() { bFinished = true; }
+    bool HasFinished() const { return bFinished; }
     FACEVRPlatformTextEntry(UWidget* InEntry, TFunction<void()> InFinished)
         : Entry(InEntry), Finished(MoveTemp(InFinished))
     {
@@ -30,23 +31,37 @@ public:
         // canvas, a hidden page, or a draft already submitted to the server.
         if (bCharacterName && (!CharacterCreator.IsValid() || !CharacterCreator->CanEditName()
             || Cast<UACEUICanvasWidget>(Entry.Get())->GetCharGenBinder() != CharacterCreator.Get())) return;
+        // Text/commit delegates may dismiss their owner and drop its last
+        // reference. Keep this session alive, and mark a terminal callback
+        // before any delegate can reenter dismissal or native text handling.
+        const auto KeepAlive = AsShared();
+        const bool bCompleting = Type != ETextEntryType::TextEntryUpdated;
+        if (bCompleting) bFinished = true;
         const FText Value = Type == ETextEntryType::TextEntryCanceled ? Original : Text;
         if (auto* Chat = Cast<UACEChatEntry>(Entry.Get())) Chat->ApplyNativeText(Value, Type == ETextEntryType::TextEntryCanceled);
-        else if (auto* Box = Cast<UEditableTextBox>(Entry.Get())) Box->SetText(Value);
+        else if (auto* Box = Cast<UEditableTextBox>(Entry.Get()))
+        {
+            const bool bChanged = !Box->GetText().EqualTo(Value);
+            Box->SetText(Value);
+            // SetText changes the UMG value before Slate's callback, so UMG
+            // suppresses OnTextChanged. Native edits still need that delegate
+            // for live consumers such as the spellbook search filter.
+            if (bChanged) Box->OnTextChanged.Broadcast(Value);
+        }
         if (auto* Retail = Cast<UACERetailTextEntry>(Entry.Get())) Retail->SetText(Value);
         if (bCharacterName) CharacterCreator->SetNameFromKeyboard(Value.ToString());
         // Reply expansion must update the native edit buffer as well as Slate.
         // Do not reopen the keyboard: UE treats that as a request to hide it.
         if (Type == ETextEntryType::TextEntryUpdated && !GetText().EqualTo(Value))
             ACEVRUpdateNativeKeyboardText(Value.ToString(), GetText().ToString());
-        if (Type != ETextEntryType::TextEntryUpdated)
+        if (bCompleting)
         {
-            bFinished = true;
+            auto OnFinished = MoveTemp(Finished);
             const auto Commit = Type == ETextEntryType::TextEntryAccepted ? ETextCommit::OnEnter : ETextCommit::OnCleared;
             if (auto* Box = Cast<UEditableTextBox>(Entry.Get())) Box->OnTextCommitted.Broadcast(Box->GetText(), Commit);
             if (auto* Retail = Cast<UACERetailTextEntry>(Entry.Get())) Retail->Commit(Commit);
             if (bCharacterName && Commit == ETextCommit::OnEnter) CharacterCreator->CommitNameFromKeyboard();
-            if (Finished) Finished();
+            if (OnFinished) OnFinished();
         }
     }
     void SetSelectionFromVirtualKeyboard(int, int) override {}

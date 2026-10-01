@@ -64,13 +64,17 @@ namespace ACECameraRetail
 		return FMath::RadiansToDegrees(2.f * FMath::Atan(FMath::Tan(VRad * 0.5f) * Aspect));
 	}
 
-	inline void ApplyFovToCamera(UCameraComponent* Camera, int32 SizeX, int32 SizeY, float GameFovDegrees = 90.f)
+	inline void ApplyFovToCamera(UCameraComponent* Camera, int32 SizeX, int32 SizeY, float GameFovDegrees = 90.f,
+		bool bMapView = false)
 	{
 		if (!Camera || SizeY <= 0 || SizeX <= 0)
 		{
 			return;
 		}
 		Camera->SetConstraintAspectRatio(false);
+		// CameraSet::SetMapMode disables detail degradation, not the configured
+		// lens. A wide FOV must not further degrade the already distant map scene.
+		Camera->SetUseFieldOfViewForLOD(!bMapView);
 		// The angle below already includes retail's viewport conversion. Do not
 		// let LocalPlayer's MaintainYFOV policy apply another aspect conversion.
 		Camera->bOverrideAspectRatioAxisConstraint = true;
