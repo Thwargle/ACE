@@ -135,7 +135,8 @@ void UACEVRMenu::BeginItemPointer(int32 Guid)
 {
     bSuppressItemClick=false;
     FACEWorldObject Item;
-    if(UseSource || !Rig || !Client->GetWorldObject(Guid,Item) || !Client->IsOwnedInventoryItem(Item))return;
+    if(UseSource || !Rig || !Client->GetWorldObject(Guid,Item)
+        || (Guid!=Client->GetPlayerGuid() && !Client->IsOwnedInventoryItem(Item)))return;
     auto* Pointer=Rig->FeedbackHand==0?Rig->LeftPointer.Get():Rig->RightPointer.Get();
     DragItem=Guid;DragAmount=Binder->GetSelectedItemAmount(Guid);DragStart=Pointer->Get2DHitLocation();bItemDragging=false;
 }
@@ -188,6 +189,7 @@ void UACEVRMenu::FinishItemPointer(bool OverMenu,FVector2D Pixel,bool OverWorld)
             if(Destination.Salvage){Binder->AddItemToSalvageQueue(Guid);return;}
             FACEWorldObject Item;if(!Client->GetWorldObject(Guid,Item))return;
             if(Destination.Sell){Binder->AddInventoryGuidToVendorSellCart(Guid,Amount);return;}
+            if(Guid==Client->GetPlayerGuid())return; // Main pack is a bulk offer, not a movable object.
             if(Destination.EquipMask)
             {
                 const int64 Mask=Item.ValidLocations&Destination.EquipMask;
@@ -292,7 +294,8 @@ TSharedRef<SWidget> UACEVRMenu::PackIcons()
             .HAlign(HAlign_Center).VAlign(VAlign_Center).ContentPadding(2)
             .ButtonColorAndOpacity(Page!="Equipment" && Guid==Pack?FLinearColor(.25f,.7f,.4f):FLinearColor::White)
             .OnHovered_Lambda([this,Name](){if(HoverLabel)HoverLabel->SetText(FText::FromString(Name));})
-            .OnClicked_Lambda([this,Guid](){SelectPack(Guid);return FReply::Handled();})[Art]];
+            .OnPressed_Lambda([this,Guid](){BeginItemPointer(Guid);})
+            .OnClicked_Lambda([this,Guid](){if(!bSuppressItemClick)SelectPack(Guid);return FReply::Handled();})[Art]];
         Packs->AddSlot().AutoHeight().Padding(2)[Control];ItemDestinations.Add({Control,Guid,0,0});
     };
     AddPack(Client->GetPlayerGuid(),TEXT("Main pack"),Icon(Page!="Equipment" && Pack==Client->GetPlayerGuid()?0x06004CF8:0x06004CF7));

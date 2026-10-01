@@ -372,6 +372,8 @@ private:
 	TArray<TWeakObjectPtr<UMaterialInstanceDynamic>> EnvironmentSkyMaterials;
 	/** Physics Transparent hook (AC 0=opaque, 1=invisible). Multiplies particle OpacityMul. */
 	float ObjectTranslucency = 0.f;
+	/** CPhysicsObj::translucencyOriginal: temporary fades cannot make ghosts opaque. */
+	float OriginalObjectTranslucency = 0.f;
 	/** Next ExecuteSound plays as 2D (UI / portal-space PlaySoundFromCenter). */
 	bool bForceCenteredSound = false;
 	bool bForceAmbientSound = false;

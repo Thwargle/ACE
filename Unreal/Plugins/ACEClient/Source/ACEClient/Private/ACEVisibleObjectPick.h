@@ -2,6 +2,7 @@
 
 #include "ACEWorldEntityActor.h"
 #include "ACEEnvCellActor.h"
+#include "ACELandblockActor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
@@ -70,12 +71,31 @@ namespace ACEVisibleObjectPick
                 && (Entity->PhysicsState & (ACEPhysicsState::Missile | ACEPhysicsState::ParticleEmitter | ACEPhysicsState::NoDraw)) == 0
                 && (!Entity->bReceivedDeathMotion || Entity->IsCorpse())) Candidates.Add(Entity);
         }
-        FHitResult Wall;
-        // Terrain, building shells and EnvCell walls deliberately ignore the
-        // object-picking channel. Camera collision includes their true surfaces
-        // without the movement-only doorway/ceiling helper slabs.
-        const bool bOccluded = World.LineTraceSingleByChannel(Wall, Start, End, ECC_Camera, Params);
-        double Closest = bOccluded ? Wall.Distance : FVector::Distance(Start, End);
+        double Closest = FVector::Distance(Start, End);
+        // Retail selection tests drawing polygons, not PhysicsBSP. A building
+        // can have a continuous collision face across a visible window. Refine
+        // those hits without weakening movement/camera collision or allowing a
+        // click through the next wall behind the opening.
+        for (int32 Pass = 0; Pass < 32; ++Pass)
+        {
+            FHitResult Wall;
+            const FVector TraceEnd = Start + (End-Start).GetSafeNormal() * Closest;
+            if (!World.LineTraceSingleByChannel(Wall, Start, TraceEnd, ECC_Camera, Params)) break;
+            bool Refined = false;
+            if (auto* Cell = Cast<AACEEnvCellActor>(Wall.GetActor()); Cell && Wall.GetComponent() == Cell->CellCollisionMesh)
+            {
+                Refined = Cell->CellMesh != nullptr;
+                if (Refined && !Cell->IsHidden()) TraceMesh(*Cell->CellMesh, Start, TraceEnd, Closest);
+            }
+            else if (auto* Land = Cast<AACELandblockActor>(Wall.GetActor()))
+                Refined = Land->RefineBuildingSelectionHit(Wall.GetComponent(), Start, TraceEnd, Closest);
+            if (!Refined || Pass == 31)
+            {
+                Closest = FMath::Min(Closest, double(Wall.Distance));
+                break;
+            }
+            Params.AddIgnoredComponent(Wall.GetComponent());
+        }
         AActor* Selected = nullptr;
         TArray<AActor*, TInlineAllocator<16>> Fallback;
         for (AActor* Actor : Candidates)

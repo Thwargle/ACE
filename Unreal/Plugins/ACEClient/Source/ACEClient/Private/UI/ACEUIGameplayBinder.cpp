@@ -4850,7 +4850,18 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 	}
 
 
-	// Main backpack supports shortcuts and bulk vendor selection, never moving the player.
+	// Main backpack is the player GUID, but its contents are also a valid bulk
+	// salvage selection. Dispatch this before excluding physical player moves.
+	if (OpenSalvageToolGuid != 0 && Manager)
+	{
+		const auto List = Manager->FindElementByName(TEXT("SalvageItemsList"));
+		if (List && Canvas->IsElementExposedAt(List, CanvasLocalPos))
+		{
+			AddItemToSalvageQueue(Guid);
+			return true;
+		}
+	}
+	// Main backpack supports shortcuts and bulk offers, never moving the player.
 	if (Guid == Client->GetPlayerGuid()) return true;
 
 	// Paper doll → wield into that slot (or complete dual-use / mana stone on self).
@@ -4934,21 +4945,6 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 			Client->SendUseItem(Guid);
 		}
 		return true;
-	}
-
-	// Drop onto open salvage (Ust) panel.
-	if (OpenSalvageToolGuid != 0 && Manager)
-	{
-		auto HitSalvageUi = [&](const TCHAR* Name) -> bool
-		{
-			TSharedPtr<FACEUIElement> El = Manager->FindElementByName(Name);
-			return El && Canvas->IsElementExposedAt(El, CanvasLocalPos);
-		};
-		if (HitSalvageUi(TEXT("SalvageItemsList")))
-		{
-			AddItemToSalvageQueue(Guid);
-			return true;
-		}
 	}
 
 	// Drop onto open trade UI → offer that item on our side of the window.
@@ -8769,10 +8765,9 @@ void UACEUIGameplayBinder::RefreshSkillOverlays()
 			}
 		}
 		float Frac = 0.f;
-		if (XpToNext > 0 && MaxSpend > 0)
-		{
-			Frac = 1.f - (static_cast<float>(XpToNext) / static_cast<float>(MaxSpend + XpToNext));
-		}
+		// gmSkillUI::UpdateFooter uses (_pp - XP(rank)) / (XP(rank+1) - XP(rank)).
+		// MaxSpend is the whole skill-cap budget, not the cost of the current rank.
+		if (Sel && Dat) Dat->TryGetSkillRankProgress(Sel->AdvancementClass, Sel->Ranks, Sel->XpSpent, Frac);
 		Fill->MeterFillFraction = FMath::Clamp(Frac, 0.f, 1.f);
 	}
 	SyncStatListScrollbar();
@@ -14363,7 +14358,7 @@ void UACEUIGameplayBinder::AddInventoryGuidToVendorSellCart(int32 Guid, int32 Am
 	{
 		return;
 	}
-	if ((Obj.ItemType & ACEItemType::Container) != 0 || Obj.ItemsCapacity > 0)
+	if (Guid == Client->GetPlayerGuid() || (Obj.ItemType & ACEItemType::Container) != 0 || Obj.ItemsCapacity > 0)
 	{
 		// A pack is a bulk selection, never the item offered for sale. Use complete
 		// stacks and refresh once after the batch; an earlier partial-stack selection

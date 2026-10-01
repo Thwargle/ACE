@@ -28,6 +28,41 @@ bool FACEAppraisalPresentationTest::RunTest(const FString&)
     FACEWorldObject Object;Object.ObjectDescriptionFlags=ACEObjectDescFlag::PkLiteStatus;
     Headings=ACEAppraisalFormatting::CreatureHeadings(Info,nullptr,&Object);
     TestEqual(TEXT("Current object PK status supersedes stale appraisal data"),Headings.PlayerKiller,FString(TEXT("Player Killer Lite")));
+    FACEAppraisalInfo Item;
+    Item.bSuccess=Item.bHasValue=Item.bHasBurden=true;Item.Value=9000;Item.Burden=50;
+    Item.StringProperties.Add(14,TEXT("Use on a magic item to give the stone's stored Mana to that item."));
+    Item.StringProperties.Add(15,TEXT("Short fallback."));
+    Item.StringProperties.Add(16,TEXT("First paragraph.\r\n\r\nSecond paragraph.\r\nNext line."));
+    Item.IntProperties.Add(107,5000);Item.FloatProperties.Add(87,1.);Item.FloatProperties.Add(137,1.);
+    Item.Summary=Item.StringProperties[15]+TEXT("\n")+Item.StringProperties[14]+TEXT("\n")+Item.StringProperties[16];
+    const FString Body=ACEAppraisalFormatting::ItemExaminationText(Item,nullptr);
+    TestTrue(TEXT("Value/burden are consecutive, usage begins a new paragraph"),Body.StartsWith(TEXT("Value: 9,000\nBurden: 50\n\nUse on a magic item")));
+    TestTrue(TEXT("Mana info continues directly after usage and separates the description"),Body.Contains(TEXT("that item.\nStored Mana: 5000\nEfficiency: 100%\nChance of Destruction: 100%\n\nFirst paragraph.")));
+    TestTrue(TEXT("Authored description paragraphs and line breaks survive in both interfaces"),Body.EndsWith(TEXT("First paragraph.\n\nSecond paragraph.\nNext line.")));
+    TestFalse(TEXT("Long description replaces short description"),Body.Contains(TEXT("Short fallback")));
+    TestEqual(TEXT("Usage appears only once regardless of wire order"),Body.Find(TEXT("Use on a magic item")),Body.Find(TEXT("Use on a magic item"),ESearchCase::CaseSensitive,ESearchDir::FromEnd));
+    const FString VRBody=ACEAppraisalFormatting::ItemExaminationText(Item,nullptr,false,false);
+    TestFalse(TEXT("Separate VR value/burden chrome does not leave a leading blank line"),VRBody.StartsWith(TEXT("\n")));
+    TestFalse(TEXT("Section joins do not invent triple line breaks"),Body.Contains(TEXT("\n\n\n")));
+    Item.StringProperties[16].Empty();Item.Summary.Empty();
+    TestTrue(TEXT("Empty long description falls back to the short description"),
+        ACEAppraisalFormatting::ItemExaminationText(Item,nullptr).EndsWith(TEXT("Short fallback.")));
+    FACEAppraisalInfo FailedItem;
+    TestTrue(TEXT("Failed item appraisal keeps its message after the unknown value/burden prefix"),
+        ACEAppraisalFormatting::ItemExaminationText(FailedItem,nullptr).Contains(TEXT("You fail to appraise the item.")));
+    TestEqual(TEXT("Failed item appraisal keeps its message when value/burden have separate chrome"),
+        ACEAppraisalFormatting::ItemExaminationText(FailedItem,nullptr,false,false),FString(TEXT("You fail to appraise the item.")));
+    FACEAppraisalInfo Armor;
+    Armor.bSuccess=Armor.bHasValue=Armor.bHasBurden=true;
+    Armor.IntProperties={{171,2},{105,7},{28,100}};
+    Armor.FloatProperties={{29,1.1},{149,1.2}};
+    Armor.ArmorResistances={1.f,1.f};
+    Armor.StringProperties.Add(16,TEXT("Armor description."));
+    const FString ArmorBody=ACEAppraisalFormatting::ItemExaminationText(Armor,nullptr);
+    TestTrue(TEXT("Crafting follows burden without an extra empty line"),ArmorBody.Contains(TEXT("Burden: 0\nThis item has been tinkered 2 times.")));
+    TestTrue(TEXT("Crafting and combat stats form separate paragraphs"),ArmorBody.Contains(TEXT("Workmanship: Flawless (7)\n\nArmor Level: 100")));
+    TestTrue(TEXT("Related defense bonuses remain single spaced"),ArmorBody.Contains(TEXT("Melee Defense: +10.0%.\nBonus to Missile Defense: +20.0%.\nSlashing:")));
+    TestFalse(TEXT("Sparse armor sections have no triple line breaks"),ArmorBody.Contains(TEXT("\n\n\n")));
     return !HasAnyErrors();
 }
 #endif

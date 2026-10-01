@@ -18,7 +18,7 @@
 
 namespace
 {
-TSharedRef<SWidget> Text(const FString& Value,int32 Size=24)
+TSharedRef<SWidget> SpellLabel(const FString& Value,int32 Size=24)
 {return SNew(STextBlock).Text(FText::FromString(Value)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size)).ColorAndOpacity(FLinearColor::White).AutoWrapText(true);}
 const FButtonStyle& SpellSlotStyle()
 {
@@ -36,7 +36,7 @@ TSharedRef<SWidget> UACEVRMenu::SpellButton(int32 Id,int32 Bar,int32 Index,bool 
     if(Id && Dat)Dat->TryGetSpellInfo(Id,Name,Did);
     auto Content=SNew(SHorizontalBox);
     Content->AddSlot().AutoWidth().VAlign(VAlign_Center)[Icon(Did)];
-    if(WithName)Content->AddSlot().FillWidth(1).Padding(10,0).VAlign(VAlign_Center)[Text(Name,22)];
+    if(WithName)Content->AddSlot().FillWidth(1).Padding(10,0).VAlign(VAlign_Center)[SpellLabel(Name,22)];
     auto Cell=SNew(SBox).HeightOverride(WithName?76:64).WidthOverride(WithName?430:64)
         [SNew(SButton).Tag(FName(*FString::Printf(TEXT("Spell_%d_%d_%d"),Id,Bar,Index))).ButtonStyle(&SpellSlotStyle()).IsFocusable(false).ContentPadding(4)
             .HAlign(WithName?HAlign_Fill:HAlign_Center).VAlign(VAlign_Center)
@@ -96,7 +96,7 @@ void UACEVRMenu::BuildSpells()
     auto* Dat=Client->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();if(!Dat)return;
     const int32 BarIndex=Client->GetActiveSpellBar();
     const auto Bar=Client->GetSpellBar(BarIndex).FilterByPredicate([](int32 Id){return Id!=0;});
-    Body->AddSlot().AutoHeight().Padding(4)[Text(TEXT("Drag spells onto a hotbar slot. Drag back to the book to remove."),22)];
+    Body->AddSlot().AutoHeight().Padding(4)[SpellLabel(TEXT("Drag spells onto a hotbar slot. Drag back to the book to remove."),22)];
     auto Tabs=SNew(SHorizontalBox);
     for(int32 I=0;I<8;++I)
     {
@@ -110,7 +110,7 @@ void UACEVRMenu::BuildSpells()
         [SNew(SScrollBox).Orientation(Orient_Horizontal)+SScrollBox::Slot()[BarIcons]]];
     FString SelectedName;uint32 SelectedIcon=0;const bool Valid=Spell && Dat->TryGetSpellInfo(Spell,SelectedName,SelectedIcon);
     Body->AddSlot().AutoHeight()[SNew(SBox).HeightOverride(60).Clipping(EWidgetClipping::ClipToBoundsAlways)
-        [Text(Valid?SelectedName:TEXT("Select a spell to inspect it or edit the hotbar."),26)]];
+        [SpellLabel(Valid?SelectedName:TEXT("Select a spell to inspect it or edit the hotbar."),26)]];
     auto Actions=SNew(SHorizontalBox);
     Actions->AddSlot().FillWidth(1).Padding(2)[Button(TEXT("Inspect"),[this](){InspectSelection();},Valid)];
     Actions->AddSlot().FillWidth(1).Padding(2)[Button(FString::Printf(TEXT("Add to bar %d"),BarIndex+1),[this,BarIndex](){PlaceSpell(Spell,INDEX_NONE,BarIndex,MAX_int32);},Valid && !Bar.Contains(Spell))];
@@ -150,14 +150,14 @@ void UACEVRMenu::BuildSpells()
     const int32 Pages=FMath::Max(1,FMath::DivideAndRoundUp(Spells.Num(),PerPage));PageIndex=FMath::Clamp(PageIndex,0,Pages-1);
     Body->AddSlot().AutoHeight().Padding(4)[SNew(SHorizontalBox)
         +SHorizontalBox::Slot().AutoWidth()[Button(TEXT("Previous"),[this](){--PageIndex;bDirty=true;},PageIndex>0)]
-        +SHorizontalBox::Slot().FillWidth(1).Padding(12)[Text(FString::Printf(TEXT("%d spells — page %d / %d"),Spells.Num(),PageIndex+1,Pages))]
+        +SHorizontalBox::Slot().FillWidth(1).Padding(12)[SpellLabel(FString::Printf(TEXT("%d spells — page %d / %d"),Spells.Num(),PageIndex+1,Pages))]
         +SHorizontalBox::Slot().AutoWidth()[Button(TEXT("Next"),[this](){++PageIndex;bDirty=true;},PageIndex+1<Pages)]];
     auto Grid=SNew(SUniformGridPanel).SlotPadding(FMargin(3));
     for(int32 I=PageIndex*PerPage;I<FMath::Min(Spells.Num(),(PageIndex+1)*PerPage);++I)
         Grid->AddSlot(I%2,(I%PerPage)/2).VAlign(VAlign_Top)[SpellButton(Spells[I],INDEX_NONE,I,true)];
     if(Spells.IsEmpty())
     {
-        auto Empty=Text(Client->GetKnownSpells().IsEmpty()?TEXT("You have not learned any spells yet."):TEXT("No known spells match these filters. Use Clear filters to show all schools and levels."),22);
+        auto Empty=SpellLabel(Client->GetKnownSpells().IsEmpty()?TEXT("You have not learned any spells yet."):TEXT("No known spells match these filters. Use Clear filters to show all schools and levels."),22);
         Empty->SetTag("SpellBookEmpty");Grid->AddSlot(0,0)[Empty];
     }
     auto Library=SNew(SBox).HeightOverride(280).VAlign(VAlign_Top)[Grid];Library->SetTag("SpellBookDrop");

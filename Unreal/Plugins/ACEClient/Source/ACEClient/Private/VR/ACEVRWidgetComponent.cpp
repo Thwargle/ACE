@@ -13,11 +13,16 @@ UMaterialInterface* UACEVRWidgetComponent::GetFilteredMaterial()
 #if WITH_EDITOR
 	auto* Source=LoadObject<UMaterialInterface>(nullptr,TEXT("/Engine/EngineMaterials/Widget3DPassThrough_Translucent"));
 	if (!Source) return nullptr;
-	auto* Material=DuplicateObject<UMaterial>(Source->GetMaterial(),GetTransientPackage(),TEXT("M_ACEVRWidgetFiltered_v2"));
+	auto* Material=DuplicateObject<UMaterial>(Source->GetMaterial(),GetTransientPackage(),TEXT("M_ACEVRWidgetFiltered_v3"));
 	Material->SetFlags(RF_Transient);Material->ClearFlags(RF_Public|RF_Standalone);
 	Material->BlendMode=BLEND_AlphaComposite;Material->TwoSided=true;
 	Material->bDisableDepthTest=true;Material->bUseTranslucencyVertexFog=false;
 	Material->TranslucencyPass=MTP_AfterDOF;
+	// Desktop temporal reconstruction needs the panel's velocity, not the wall
+	// behind its depth-disabled quad. Responsive coverage limits glyph trails.
+	// Quest's MSAA path does not use temporal history; its fix is the UI sampler.
+	Material->bOutputTranslucentVelocity=true;
+	Material->bEnableResponsiveAA=true;
 	// Explicit premultiplied coverage also works on mobile Substrate's unlit
 	// path, where legacy translucent shading can behave additively. Preserve
 	// transparent pixels so the mirror and world remain visible outside panels.
@@ -30,14 +35,14 @@ UMaterialInterface* UACEVRWidgetComponent::GetFilteredMaterial()
 	for (UMaterialExpression* Expression:Material->GetExpressions())
 		if (auto* Sample=Cast<UMaterialExpressionTextureSampleParameter2D>(Expression);Sample && Sample->ParameterName==TEXT("SlateUI"))
 		{
-			// Engine widgets use the shared world sampler, whose default mip
-			// filter is point. Honor this HUD texture's trilinear sampler instead.
+			// Honor the dedicated UI sampler, including its bounded anisotropy
+			// and linear mip blending; never inherit the world's point mip filter.
 			Sample->SamplerSource=SSM_FromTextureAsset;
 			Sample->AutomaticViewMipBias=false;
 		}
 	Material->PostEditChange();Cached=Material;
 #else
-	Cached=LoadObject<UMaterialInterface>(nullptr,TEXT("/Game/ACE/RuntimeMaterials/M_ACEVRWidgetFiltered_v2.M_ACEVRWidgetFiltered_v2"));
+	Cached=LoadObject<UMaterialInterface>(nullptr,TEXT("/Game/ACE/RuntimeMaterials/M_ACEVRWidgetFiltered_v3.M_ACEVRWidgetFiltered_v3"));
 #endif
 	return Cached.Get();
 }
@@ -63,7 +68,8 @@ void UACEVRWidgetComponent::UpdateRenderTarget(FIntPoint DesiredRenderTargetSize
 	if (RenderTarget && !RenderTarget->bAutoGenerateMips)
 	{
 		RenderTarget->bAutoGenerateMips = true;
-		RenderTarget->Filter = TF_Trilinear;
+		RenderTarget->LODGroup = TEXTUREGROUP_Project01;
+		RenderTarget->Filter = TF_Default;
 		RenderTarget->AddressX = RenderTarget->AddressY = TA_Clamp;
 		RenderTarget->MipsSamplerFilter = TF_Bilinear;
 		// The superclass created a single-mip resource. Reallocate it once;

@@ -200,6 +200,19 @@ bool FACESalvageTest::RunTest(const FString&)
     TestFalse(TEXT("Unknown child records prevent destruction of apparently empty container"), Binder->CanAddItemToSalvageQueue(2007));
 
     Binder->ShowSalvagePanel(200);
+    TestTrue(TEXT("Main pack works without container metadata on the player"),Binder->CanAddItemToSalvageQueue(Session.PlayerGuid));
+    Draw(TEXT("MainPackBeforeSalvageDrop"));
+    Binder->InvDragGuid=Session.PlayerGuid;Binder->InvDragSourcePack=Session.PlayerGuid;
+    Binder->bInvDragPending=true;Binder->bInvDragActive=true;
+    Binder->TryFinishInventoryDrag(Canvas->LayoutToViewport(FVector2D(List->GetScreenOrigin())+FVector2D(15,15)));
+    TestTrue(TEXT("Main pack drag actually dispatches to salvage before player move guard"),Binder->SalvageQueueGuids.Contains(1000));
+    TestTrue(TEXT("Main pack salvage includes eligible nested contents"),Binder->SalvageQueueGuids.Contains(2003));
+    TestFalse(TEXT("Bulk salvage cannot queue the player"),Binder->SalvageQueueGuids.Contains(Session.PlayerGuid));
+    TestFalse(TEXT("Bulk salvage still excludes equipped items"),Binder->SalvageQueueGuids.Contains(1003));
+    TestFalse(TEXT("Bulk salvage still excludes retained items"),Binder->SalvageQueueGuids.Contains(1002));
+    TestTrue(TEXT("Bulk salvage only stages, never submits automatically"),Session.CachedC2SPackets.IsEmpty());
+
+    Binder->ShowSalvagePanel(200);
     const int32 ItemCount = Binder->SalvageVisibleSlots + 5;
     for (int32 I = 0; I < ItemCount; ++I)
     {

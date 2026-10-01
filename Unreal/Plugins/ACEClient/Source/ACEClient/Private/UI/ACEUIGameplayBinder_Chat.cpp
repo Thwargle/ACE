@@ -270,9 +270,40 @@ void UACEUIGameplayBinder::FocusChatEntryWindow(int32 Window)
 {
 	if (UEditableTextBox* Entry = GetChatEntryWidget(Window))
 	{
+		LastFocusedChatWindow = Window;
 		if (PlayerController && PlayerController->IsVRActive()) PlayerController->GetVRComponent()->FocusTextEntry(Entry);
 		else Entry->SetKeyboardFocus();
 	}
+}
+
+bool UACEUIGameplayBinder::IsChatTextEntryFocused() const
+{
+	for (int32 Window = 0; Window <= NumFloatyChats; ++Window)
+	{
+		const auto* Entry = GetChatEntryWidget(Window);
+		const auto Slate = Entry ? Entry->GetCachedWidget() : nullptr;
+		if (Slate && (Slate->HasKeyboardFocus() || Slate->HasFocusedDescendants())) return true;
+	}
+	return false;
+}
+
+void UACEUIGameplayBinder::ToggleChatEntryFocus()
+{
+	// ChatInterface::OnToggleChatEntry activates/deactivates without editing the
+	// draft. Preserve the active floaty too, rather than returning to main chat.
+	for (int32 Window = 0; Window <= NumFloatyChats; ++Window)
+	{
+		auto* Entry = GetChatEntryWidget(Window);
+		const auto Slate = Entry ? Entry->GetCachedWidget() : nullptr;
+		if (Slate && (Slate->HasKeyboardFocus() || Slate->HasFocusedDescendants()))
+		{
+			LastFocusedChatWindow = Window;
+			ClearChatEntryFocus();
+			return;
+		}
+	}
+	auto* Entry = GetChatEntryWidget(LastFocusedChatWindow);
+	FocusChatEntryWindow(Entry && Entry->IsVisible() ? LastFocusedChatWindow : 0);
 }
 
 void UACEUIGameplayBinder::ClearChatLog(int32 Window)

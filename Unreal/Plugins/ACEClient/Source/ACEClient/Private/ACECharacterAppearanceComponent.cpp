@@ -802,12 +802,14 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 		bPlayIdleMotion = true;
 	SetComponentTickEnabled(true);
 	}
-	else if (Object.IsLifeStone() && MotionTableId != 0)
+	else if (!bHeld && MotionTableId != 0)
 	{
-		// Fallback when Setup.DefaultAnimation is missing: MotionTable idle cycle.
+		// CPhysicsObj::SetMotionTableID initializes the table's default state for
+		// every object, not only creatures and lifestones. Custom crystals and
+		// switches can use the idle's part frames to sit above their setup origin.
 		AnimMode = EACEAnimMode::Locomotion;
 		bPlayIdleMotion = true;
-	SetComponentTickEnabled(true);
+		SetComponentTickEnabled(true);
 	}
 
 	EnsureMeshRoot();
@@ -1178,6 +1180,10 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	{
 		return;
 	}
+	// Props may have been quiescent since spawn. A lever's Twitch1 is an
+	// ordinary network motion; receiving it must wake pose evaluation too.
+	bPlayIdleMotion = true;
+	SetComponentTickEnabled(true);
 	if (Cmd <= 0xFFFFu)
 	{
 		Cmd = ACEMotion::ExpandPackedCommand(static_cast<uint16>(Cmd));

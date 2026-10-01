@@ -23,6 +23,8 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "VR") float MovementSmoothing = .12f;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") float WristSmoothing = .07f;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bPinMenuToView = false;
+	// -1 migrates the legacy pin setting; 0 Head, 1 Body, 2 persistent World.
+	UPROPERTY(Config) int32 MenuAnchorMode = -1;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bPinHotbarToView = false;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bShowWristSpellBar = true;
 	UPROPERTY(Config, EditAnywhere, Category = "VR") bool bShowCompass = true;

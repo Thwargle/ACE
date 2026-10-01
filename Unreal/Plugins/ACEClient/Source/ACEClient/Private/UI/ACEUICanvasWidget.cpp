@@ -1086,6 +1086,12 @@ FReply UACEUICanvasWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, c
 	const auto Focused = FSlateApplication::Get().GetUserFocusedWidget(InKeyEvent.GetUserIndex());
 	const bool bEditingText = Focused && (Focused->GetTypeAsString().Contains(TEXT("EditableText"))
 		|| Focused->GetTypeAsString().Contains(TEXT("RetailTextEntry")));
+	if (GameplayBinder && !ACEInputBindings::IsEditing() && (!bEditingText || GameplayBinder->IsChatTextEntryFocused())
+		&& ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("ToggleChat")), FInputChord(InKeyEvent.GetKey(),InKeyEvent.IsShiftDown(),InKeyEvent.IsControlDown(),InKeyEvent.IsAltDown(),InKeyEvent.IsCommandDown())))
+	{
+		if (!InKeyEvent.IsRepeat()) GameplayBinder->ToggleChatEntryFocus();
+		return FReply::Handled();
+	}
 	if (GameplayBinder && ACEInputBindings::Matches(EKeys::Escape, FInputChord(InKeyEvent.GetKey(),InKeyEvent.IsShiftDown(),InKeyEvent.IsControlDown(),InKeyEvent.IsAltDown(),InKeyEvent.IsCommandDown())) && !InKeyEvent.IsRepeat()
 		&& !bEditingText && !ACEInputBindings::IsEditing())
 	{

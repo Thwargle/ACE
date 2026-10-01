@@ -86,6 +86,17 @@ FTransform UACEVRComponent::GetChatAnchorTransform() const
 {
 	return Settings->ChatAnchorMode==0 ? Head->GetComponentTransform() : ChatAnchorFrame;
 }
+
+FTransform UACEVRComponent::GetMenuAnchorTransform() const
+{
+	return Settings->MenuAnchorMode == 0 ? Head->GetComponentTransform() : MenuAnchorFrame;
+}
+
+void UACEVRComponent::UpdateMenuAnchor(float Dt)
+{
+	UpdateHUDAnchor(MenuAnchorFrame, MenuOwnerLocation, bMenuAnchorReady, bMenuAnchorTurning, Head->GetComponentTransform(),
+		GetOwner()->GetActorLocation(), Settings->MenuAnchorMode, EditingPanel == "Menu", Dt);
+}
 void UACEVRComponent::UpdateChatAnchor(float Dt)
 {
 	UpdateHUDAnchor(ChatAnchorFrame,ChatOwnerLocation,bChatAnchorReady,bChatAnchorTurning,Head->GetComponentTransform(),
@@ -230,20 +241,21 @@ void UACEVRComponent::UpdatePanelEdit(float Dt)
 		else if (EditingPanel == "Chat") SaveAnchored(GetChatAnchorTransform(),Settings->ChatViewOffset,Settings->ChatViewRotation);
 		else if (EditingPanel == "Fellowship") SaveAnchored(GetFellowshipAnchorTransform(),Settings->FellowshipViewOffset,Settings->FellowshipViewRotation);
 		else if (EditingPanel == "Vitals") SaveAnchored(GetVitalsAnchorTransform(),Settings->VitalsViewOffset,Settings->VitalsViewRotation);
-		else if (EditingPanel == "Menu" && Settings->bPinMenuToView && !bSettingsOpen)
+		else if (EditingPanel == "Menu" && !bSettingsOpen)
 		{
-			SaveAnchored(Head->GetComponentTransform(),Settings->MenuViewOffset,Settings->MenuViewRotation);
-			Settings->PanelDistance=Settings->MenuViewOffset.X;
+			SaveAnchored(GetMenuAnchorTransform(),Settings->MenuViewOffset,Settings->MenuViewRotation);
 		}
 		else Surface->SetWorldLocationAndRotation(Pose.GetLocation(),Pose.GetRotation());
 	}
 	Settings->Sanitize();
+	// Publish the edited anchored pose before native children copy the surface.
+	if (EditingPanel == "Menu" && !bSettingsOpen) PositionPanel(Surface);
 }
 
 void UACEVRComponent::EndPanelEdit(bool bSave, int32 Pointer)
 {
 	if (PanelEditHand == INDEX_NONE || (Pointer != INDEX_NONE && Pointer != PanelEditHand)) return;
-	if (bSave && !bPanelResize && (EditingPanel=="Options" || (EditingPanel=="Menu" && (!Settings->bPinMenuToView || bSettingsOpen))))
+	if (bSave && !bPanelResize && (EditingPanel=="Options" || (EditingPanel=="Menu" && bSettingsOpen)))
 	{
 		const FTransform Frame=bSettingsOpen ? SettingsLayoutFrame : FTransform(FRotator(0,Head->GetComponentRotation().Yaw,0),Head->GetComponentLocation());
 		FTransform Pose=GetEditablePanel(EditingPanel)->GetComponentTransform();Pose.SetScale3D(FVector::OneVector);

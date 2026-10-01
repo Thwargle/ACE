@@ -1,5 +1,6 @@
 #include "VR/ACEVRComponent.h"
 #include "VR/ACEVRWidgetComponent.h"
+#include "VR/ACEVRPointerVisuals.h"
 #include "ACEVRNativeHUD.h"
 #include "ACEClientBuild.h"
 #include "ACEVRUIStyle.h"
@@ -220,7 +221,7 @@ void UACEVRComponent::ActivateRig()
 	{
 		BowStrings.Add(Mesh(*FString::Printf(TEXT("VRBowString%d"), I), Cylinder));
 		auto* PointerBeam=NewObject<UProceduralMeshComponent>(PresentationActor,*FString::Printf(TEXT("VRPointerBeam%d"),I));
-		if(Unlit)PointerBeam->SetMaterial(0,Unlit);
+		PointerBeam->SetMaterial(0,ACEVRPointerVisuals::GetMaterial(false));
 		PointerBeam->SetCollisionEnabled(ECollisionEnabled::NoCollision);PointerBeam->SetCastShadow(false);
 		Scene(PointerBeam,VisualRoot);PointerBeam->SetVisibility(false);PointerBeams.Add(PointerBeam);
 		PointerTips.Add(Mesh(*FString::Printf(TEXT("VRPointerTip%d"), I), Sphere));
@@ -547,6 +548,11 @@ void UACEVRComponent::RotateTracking(float Degrees)
 {
 	const FVector Pivot = Head->GetComponentLocation();
 	const FQuat Rotation(FVector::UpVector, FMath::DegreesToRadians(Degrees));
+	if (bMenuAnchorReady && Settings->MenuAnchorMode == 1)
+	{
+		MenuAnchorFrame.SetLocation(Pivot + Rotation.RotateVector(MenuAnchorFrame.GetLocation() - Pivot));
+		MenuAnchorFrame.SetRotation(Rotation * MenuAnchorFrame.GetRotation());
+	}
 	const FVector NewLocation = Pivot + Rotation.RotateVector(TrackingOrigin->GetComponentLocation() - Pivot);
 	TrackingOrigin->SetWorldLocationAndRotation(NewLocation, Rotation * TrackingOrigin->GetComponentQuat());
 	if (bVitalsAnchorReady && Settings->VitalsAnchorMode == 1)
@@ -576,6 +582,7 @@ void UACEVRComponent::ResetTrackingOrigin()
 	ResetHandContacts();
 	EndPanelEdit(); EndVitalsDrag();
 	bVitalsAnchorReady = false; bCompassAnchorReady = false; bFellowshipAnchorReady=false;
+	bMenuAnchorReady = false; bChatAnchorReady = false;
 	DismissTextEntry();
 	FRotator Orientation; FVector Position;
 	UHeadMountedDisplayFunctionLibrary::GetOrientationAndPosition(Orientation, Position);

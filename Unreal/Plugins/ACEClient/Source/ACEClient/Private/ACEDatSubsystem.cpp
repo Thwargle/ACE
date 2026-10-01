@@ -3,6 +3,7 @@
 #include "ACELoginSettings.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "VR/ACEVRWidgetComponent.h"
+#include "VR/ACEVRPointerVisuals.h"
 
 UACEUIResourceResolver* UACEDatSubsystem::GetUiResources()
 {
@@ -1023,7 +1024,8 @@ TArray<UMaterialInterface*> UACEDatSubsystem::GetRuntimeMaterialParents()
 		EnsureAceSkyTranslucentMaterialBase(), EnsureAceSkyTranslucentWrapMaterialBase(), EnsureAceSkyOpaqueMaterialBase(),
 		EnsureAceSkyAdditiveMaterialBase(), EnsureAceSkyVertexColorMaterialBase(), EnsureAceSkyColorFillMaterialBase(),
 		EnsureAceWeatherTranslucentMaterialBase(), EnsureAceWeatherAdditiveMaterialBase(), GetVRComfortMaterial(),
-		UACEVRWidgetComponent::GetFilteredMaterial()
+		UACEVRWidgetComponent::GetFilteredMaterial(),
+		ACEVRPointerVisuals::GetMaterial(false), ACEVRPointerVisuals::GetMaterial(true)
 	};
 	for (bool bMasked : { false, true })
 	{
@@ -3693,10 +3695,10 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateResolvedMaterial(
 
 	const float ObjectOpacity = 1.f - FMath::Clamp(ObjectTranslucency, 0.f, 1.f);
 	const bool bObjectUsesAlpha = ObjectOpacity < (1.f - KINDA_SMALL_NUMBER);
-	if (!Appearance.HasVisualOverrides() && !bObjectUsesAlpha && WrapAxes == 0)
-	{
-		return GetOrCreateTexturedMaterial(SurfaceId);
-	}
+	// Multipart objects must retain authored alpha even without an ObjDesc
+	// override. The scenery material path deliberately has different depth
+	// heuristics for floors; using it for a newly created corpse made the same
+	// translucent body become opaque when its PhysicsDesc translucency was zero.
 
 	uint64 Key = HashCombine(GetTypeHash(SurfaceId), GetTypeHash(PartIndex));
 	Key = HashCombine(Key, GetTypeHash(WrapAxes));
@@ -3742,6 +3744,16 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateResolvedMaterial(
 	if (!TextureResolver->ResolveSurfaceWithAppearance(SurfaceId, PartIndex, AppearancePtr, Decoded))
 	{
 		return GetOrCreateTexturedMaterial(SurfaceId);
+	}
+	if (!Appearance.HasVisualOverrides() && !bObjectUsesAlpha && WrapAxes == 0
+		&& !Decoded.bSurfaceTranslucent && Decoded.Translucency <= KINDA_SMALL_NUMBER
+		&& !(Decoded.bIsSolid && Decoded.SolidColor.A < .98f))
+	{
+		auto* Opaque = GetOrCreateTexturedMaterial(SurfaceId);
+		// Remember the classification too: resolving a cached surface copies its
+		// pixel array, which must not repeat for every same-setup body refresh.
+		if (auto* Cached = Cast<UMaterialInstanceDynamic>(Opaque)) ResolvedMaterialCache.Add(Key, Cached);
+		return Opaque; // Opaque models still share the existing material instance.
 	}
 
 	if (!Decoded.bHasPixels || Decoded.Width <= 0 || Decoded.Height <= 0)
@@ -3795,8 +3807,8 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateResolvedMaterial(
 		// Shop signs / EnvCell floors: textured UsesAlpha alone stays opaque.
 		// Soft ColorValue glass, PhysicsDesc ObjectTranslucency, and DAT SurfaceType.Translucent
 		// / Translucency (Claude Virindi body ≈0.4) use translucent so alpha+glow read correctly.
-		const bool bSoftGlass = !Decoded.bHasPixels && Decoded.SolidColor.A < 0.98f;
-		const bool bDatBodyTranslucent = Decoded.bSurfaceTranslucent || Decoded.Translucency > 0.05f;
+		const bool bSoftGlass = Decoded.bIsSolid && Decoded.SolidColor.A < 0.98f;
+		const bool bDatBodyTranslucent = Decoded.bSurfaceTranslucent || Decoded.Translucency > KINDA_SMALL_NUMBER;
 		if (bSoftGlass || bObjectUsesAlpha || bDatBodyTranslucent)
 		{
 			Base = EnsureAceUnlitTranslucentMaterialBase();
@@ -9030,6 +9042,19 @@ bool UACEDatSubsystem::TryGetSkillXpToNextRank(int32 AdvancementClass, int32 Cur
 		return false;
 	}
 	return XpToNextFromList(List, CurrentXpSpent, OutXpNeeded, OutMaxSpendable, RankCount);
+}
+
+bool UACEDatSubsystem::TryGetSkillRankProgress(int32 AdvancementClass, int32 Ranks, int32 CurrentXpSpent, float& OutProgress01)
+{
+	OutProgress01 = 0.f;
+	if (AdvancementClass < 2 || !EnsureXpTableLoaded()) return false;
+	const TArray<uint32>& List = AdvancementClass >= 3 ? SpecializedSkillXpList : TrainedSkillXpList;
+	if (!List.IsValidIndex(Ranks)) return false;
+	if (!List.IsValidIndex(Ranks + 1)) return true; // Retail shows no progress at the cap.
+	const int64 Start = List[Ranks], End = List[Ranks + 1];
+	if (End > Start)
+		OutProgress01 = FMath::Clamp(float((double(uint32(CurrentXpSpent)) - Start) / double(End - Start)), 0.f, 1.f);
+	return true;
 }
 
 bool UACEDatSubsystem::TryGetXpToNextLevel(int64 TotalExperience, int32 CurrentLevel, int64& OutXpNeeded, float* OutProgress01)

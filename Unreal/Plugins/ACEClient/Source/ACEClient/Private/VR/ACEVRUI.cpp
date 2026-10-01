@@ -23,10 +23,21 @@
 #include "ACERuntimeOptions.h"
 #include "UI/ACEFrameRateWidget.h"
 #include "ProceduralMeshComponent.h"
+#include "VR/ACEVRPointerVisuals.h"
+#include "UI/ACEUIElementManager.h"
 
 void UACEVRComponent::PositionPanel(UWidgetComponent* Panel)
 {
 	if (!Panel || !Head) return;
+	if (Panel == RetailPanel && Client && Client->GetSessionState() == EACESessionState::InWorld && !bSettingsOpen)
+	{
+		if (!bInventoryOpen && !bMenuAnchorReady) return;
+		if (!bMenuAnchorReady) UpdateMenuAnchor(0.f);
+		const FTransform Anchor = GetMenuAnchorTransform();
+		Panel->SetWorldLocationAndRotation(Anchor.TransformPosition(Settings->MenuViewOffset),
+			Anchor.GetRotation() * Settings->MenuViewRotation.Quaternion() * FRotator(0,180,0).Quaternion());
+		return;
+	}
 	if (Client && Client->GetSessionState()==EACESessionState::InWorld)
 	{
 		const FName Key=Panel==SettingsPanel ? FName("Options") : bSettingsOpen ? FName("MenuPreview") : FName("Menu");
@@ -123,7 +134,7 @@ void UACEVRComponent::UpdatePanels(float Dt)
 	};
 	// Camera descendants participate in HMD late update, so viewport-pinned
 	// text remains fixed during head motion between simulation and rendering.
-	PinToHead(RetailPanel, InWorld && Settings->bPinMenuToView && !bSettingsOpen);
+	PinToHead(RetailPanel, InWorld && Settings->MenuAnchorMode == 0 && !bSettingsOpen);
 	PinToHead(WristPanel, InWorld && Settings->bPinHotbarToView);
 	PinToHead(CompassPanel, Settings->CompassAnchorMode == 0);
 	PinToHead(FellowshipPanel,Settings->FellowshipAnchorMode==0);
@@ -144,10 +155,10 @@ void UACEVRComponent::UpdatePanels(float Dt)
 	RetailPanel->SetComponentTickEnabled(Available && Widget && NeedsRetailDraw);
 	RetailPanel->SetRenderInMainPass(ShowMain);
 	RetailPanel->SetCollisionEnabled(ShowMain ? ECollisionEnabled::QueryOnly : ECollisionEnabled::NoCollision);
-	if (InWorld && Settings->bPinMenuToView && !bSettingsOpen)
+	if (InWorld && !bSettingsOpen && (bInventoryOpen || bMenuAnchorReady))
 	{
-		RetailPanel->SetWorldLocationAndRotation(Head->GetComponentTransform().TransformPosition(Settings->MenuViewOffset),
-			Head->GetComponentQuat() * Settings->MenuViewRotation.Quaternion() * FRotator(0, 180, 0).Quaternion());
+		UpdateMenuAnchor(Dt);
+		PositionPanel(RetailPanel);
 	}
 	Show(SettingsPanel, Available && bSettingsOpen);
 	Show(KeyboardPanel, !UsesPlatformKeyboard() && Available && bKeyboardOpen);
@@ -227,20 +238,27 @@ bool UACEVRComponent::IsPointerNearPanel(bool Left, FVector* Impact) const
 	const FVector Origin = Aim->GetComponentLocation(), Direction = Aim->GetForwardVector();
 	for (auto* Panel : {ChatPanel.Get(), WristPanel.Get(), RetailPanel.Get(), GameplayMenuPanel.Get(), MenuInspectionPanel.Get(), SettingsPanel.Get(), MenuControlsPanel.Get(), OptionsControlsPanel.Get()})
 	{
-		if (!Panel || !Panel->IsVisible() || Panel->GetCollisionEnabled() == ECollisionEnabled::NoCollision) continue;
+		if (!ACEVRPointerVisuals::IsInteractivePanel(Panel)) continue;
 		const FVector Normal = Panel->GetForwardVector();
 		const float Denominator = FVector::DotProduct(Direction, Normal);
 		if (FMath::Abs(Denominator) < .15f) continue;
 		const float Distance = FVector::DotProduct(Panel->GetComponentLocation() - Origin, Normal) / Denominator;
 		if (Distance <= 0.f || Distance > 250.f) continue;
 		const FVector Point = Origin + Direction * Distance;
+		if (const auto* Canvas = Cast<UACEUICanvasWidget>(Panel->GetWidget()); Canvas && Canvas->IsGameplayCanvas() && Canvas->GetManager())
+		{
+			FVector2D Hit; Panel->GetLocalHitLocation(Point, Hit);
+			const auto Layout = Canvas->ViewportToLayout(Hit);
+			if (!Canvas->GetManager()->FindWindowAtCanvas(FMath::FloorToInt(Layout.X), FMath::FloorToInt(Layout.Y))) continue;
+		}
 		const FVector Local = Panel->GetComponentTransform().InverseTransformPosition(Point);
 		const FVector2D Size = Panel->GetDrawSize();
-		// Include the blank border and 8cm around a wrist/window. Leaving a
-		// clickable tab by a few pixels must not switch into firing a spell.
+		// A small border protects imprecise clicks without creating a large,
+		// invisible no-cast zone around the wrist. Controller aim offsets differ
+		// across devices; the former 8cm padding more than tripled its height.
 		const FVector Scale = Panel->GetComponentScale().GetAbs();
-		if (FMath::Abs(Local.Y) <= Size.X * .5f + 8.f / FMath::Max(.01f, float(Scale.Y))
-			&& FMath::Abs(Local.Z) <= Size.Y * .5f + 8.f / FMath::Max(.01f, float(Scale.Z)))
+		if (FMath::Abs(Local.Y) <= Size.X * .5f + 1.f / FMath::Max(.01f, float(Scale.Y))
+			&& FMath::Abs(Local.Z) <= Size.Y * .5f + 1.f / FMath::Max(.01f, float(Scale.Z)))
 		{
 			if (Impact) *Impact = Point;
 			return true;
@@ -265,7 +283,7 @@ void UACEVRComponent::UpdatePointerVisuals(bool Available, bool MenuVisible)
 		const bool WorldPointing = Client && Client->GetSessionState() == EACESessionState::InWorld
 			&& GetCombatMode() == ACECombatMode::NonCombat && I == (Settings->bLeftHanded ? 0 : 1);
 		const bool SpellPointing = Client && Client->GetSessionState() == EACESessionState::InWorld
-			&& GetCombatMode() == ACECombatMode::Magic && I == (Settings->bLeftHanded ? 0 : 1) && !IsInputBlocked();
+			&& GetCombatMode() == ACECombatMode::Magic && I == (Settings->bLeftHanded ? 0 : 1);
 		const bool CrossbowPointing = Client && Client->GetSessionState() == EACESessionState::InWorld
 			&& GetCombatMode() == ACECombatMode::Missile && MissileStyle() == 0x20
 			&& I == (Settings->bLeftHanded ? 1 : 0) && !IsInputBlocked();
@@ -274,19 +292,27 @@ void UACEVRComponent::UpdatePointerVisuals(bool Available, bool MenuVisible)
 		auto* Tip = PointerTips[I].Get(); Tip->SetVisibility(ShowPointer);
 		if (ShowPointer)
 		{
-			const int32 Mode=(MenuVisible || OverUI || NearUI)?0:SpellPointing?1:CrossbowPointing?2:0;
+			const int32 Mode=SpellPointing?1:CrossbowPointing?2:0;
+			const bool Overlay = Pointer->GetHoveredWidgetComponent() || NearUI;
+			auto* Material = ACEVRPointerVisuals::GetMaterial(Overlay);
+			if (Beam->GetMaterial(0) != Material) Beam->SetMaterial(0, Material);
+			if (Tip->GetMaterial(0) != Material) Tip->SetMaterial(0, Material);
+			const int32 Layer = Overlay ? ACEVRPointerVisuals::OverlayLayer : 0;
+			if (Beam->TranslucencySortPriority != Layer) Beam->SetTranslucentSortPriority(Layer);
+			if (Tip->TranslucencySortPriority != Layer + 1) Tip->SetTranslucentSortPriority(Layer + 1);
 			if(PointerBeamModes[I]!=Mode)
 			{
-				// Eight-sided unlit beam, rebuilt only on a mode transition. Vertex
-				// colors work in cooked mobile builds without another material variant.
+				// A bright core and feathered outer strips give a small halo without
+				// bloom, dynamic lights, particles, or per-frame geometry rebuilds.
 				TArray<FVector> Vertices,Normals;TArray<int32> Indices;TArray<FVector2D> UV;
 				TArray<FLinearColor> Colors;TArray<FProcMeshTangent> Tangents;
-				const FLinearColor Color=Mode==1?FLinearColor(.08f,.8f,1.f):Mode==2?FLinearColor(1.f,.45f,.035f):FLinearColor::White;
-				for(int32 Side=0;Side<8;++Side)
+				const FLinearColor Color=ACEVRPointerVisuals::ModeColor(Mode);
+				for(int32 Column=0;Column<4;++Column)
 				{
-					const float Angle=Side*PI/4;const FVector Normal(FMath::Cos(Angle),FMath::Sin(Angle),0);
-					for(float Z:{-50.f,50.f}){Vertices.Add(Normal*50+FVector(0,0,Z));Normals.Add(Normal);UV.Add(FVector2D::ZeroVector);Colors.Add(Color);}
-					const int32 A=Side*2,B=((Side+1)%8)*2;Indices.Append({A,B,A+1,B,B+1,A+1});
+					const float X = Column == 0 ? -150.f : Column == 1 ? -50.f : Column == 2 ? 50.f : 150.f;
+					FLinearColor EdgeColor = Color; EdgeColor.A = (Column == 0 || Column == 3) ? 0.f : 1.f;
+					for(float Z:{-50.f,50.f}){Vertices.Add(FVector(X,0,Z));Normals.Add(FVector::RightVector);UV.Add(FVector2D::ZeroVector);Colors.Add(EdgeColor);}
+					if(Column<3){const int32 A=Column*2,B=A+2;Indices.Append({A,B,A+1,B,B+1,A+1});}
 				}
 				Beam->CreateMeshSection_LinearColor(0,Vertices,Indices,Normals,UV,Colors,Tangents,false);
 				PointerBeamModes[I]=Mode;
@@ -294,14 +320,14 @@ void UACEVRComponent::UpdatePointerVisuals(bool Available, bool MenuVisible)
 			FVector A = Aim->GetComponentLocation();
 			FVector B = Pointer->GetHoveredWidgetComponent() ? FVector(Pointer->GetLastHitResult().ImpactPoint) : A + Aim->GetForwardVector() * 200.f;
 			if (NearUI && !OverUI) B = PanelImpact;
-			if (WorldPointing && !MenuVisible && !OverUI && !NearUI)
+			if (WorldPointing && !OverUI && !NearUI && !IsInputBlocked())
 			{
 				FVector Direction=Aim->GetForwardVector();
 				if (EquippedWeapon().ItemType & ACEItemType::Caster) GetSpellAim(A,Direction);
 				B=A+Direction*10000.f;
 				ACEVisibleObjectPick::Trace(*GetWorld(),A,B,Cast<APawn>(GetOwner()),&B,false);
 			}
-			if ((SpellPointing || CrossbowPointing) && !MenuVisible && !OverUI && !NearUI)
+			if ((SpellPointing || CrossbowPointing) && !OverUI && !NearUI && !IsInputBlocked())
 			{
 				FVector Direction, CastOrigin;
 				if (SpellPointing) GetSpellAim(CastOrigin, Direction);
@@ -310,7 +336,9 @@ void UACEVRComponent::UpdatePointerVisuals(bool Available, bool MenuVisible)
 				B = CastOrigin + Direction * 10000.f;
 				ACEVisibleObjectPick::Trace(*GetWorld(), CastOrigin, B, Cast<APawn>(GetOwner()), &B, false);
 			}
-			Beam->SetWorldLocation((A + B) * .5f); Beam->SetWorldRotation(FRotationMatrix::MakeFromZ(B - A).Rotator());
+			const FVector Along = (B - A).GetSafeNormal();
+			const FVector Side = FVector::CrossProduct(Along, Head->GetComponentLocation() - A).GetSafeNormal(SMALL_NUMBER, Aim->GetRightVector());
+			Beam->SetWorldLocation((A + B) * .5f); Beam->SetWorldRotation(FRotationMatrix::MakeFromZX(Along, Side).Rotator());
 			const float Width=Mode==0?.0025f:.005f;
 			Beam->SetWorldScale3D(FVector(Width,Width,FVector::Dist(A,B)/100.f));
 			const bool Pressed = I == 0 ? bLeftPointerPressed : bRightPointerPressed;
@@ -547,7 +575,7 @@ void UACEVRComponent::ChangeSetting(FName Setting)
 	else if (Setting == TEXT("Seated")) { Settings->bSeated = !Settings->bSeated; ResetTrackingOrigin(); }
 	else if (Setting == TEXT("CharacterHeight")) { Settings->bMatchCharacterHeight = !Settings->bMatchCharacterHeight; ResetTrackingOrigin(); }
 	else if (Setting == TEXT("Body")) Settings->bShowBody = !Settings->bShowBody;
-	else if (Setting == TEXT("PinMenu")) { Settings->bPinMenuToView = !Settings->bPinMenuToView; PositionPanel(RetailPanel); }
+	else if (Setting == TEXT("PinMenu")) { Settings->MenuAnchorMode = (Settings->MenuAnchorMode + 1) % 3; bMenuAnchorReady = false; PositionPanel(RetailPanel); }
 	else if (Setting == TEXT("PinHotbar")) { Settings->bPinHotbarToView = !Settings->bPinHotbarToView; bWristPoseReady = false; }
 	else if (Setting == TEXT("ShowWrist")) Settings->bShowWristSpellBar = !Settings->bShowWristSpellBar;
 	else if (Setting == TEXT("Compass")) Settings->bShowCompass = !Settings->bShowCompass;

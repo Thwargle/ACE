@@ -8,7 +8,12 @@
 #include "RenderingThread.h"
 #include "RHICommandList.h"
 #include "Materials/Material.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "DeviceProfiles/DeviceProfileManager.h"
+#include "DeviceProfiles/DeviceProfile.h"
+#include "Engine/TextureLODSettings.h"
 #if WITH_EDITOR
+#include "ShaderCompiler.h"
 #include "Materials/MaterialExpressionTextureSampleParameter2D.h"
 #include "Materials/MaterialExpressionMultiply.h"
 #endif
@@ -36,6 +41,10 @@ bool FACEVRWidgetFilteringTest::RunTest(const FString&)
   Panel->RequestRedraw();Panel->TickComponent(.016f,LEVELTICK_All,nullptr);FlushRenderingCommands();
   auto* Target=Panel->GetRenderTarget();
   if(!TestNotNull(TEXT("Floating HUD renders a texture"),Target))break;
+  const auto* LOD=UDeviceProfileManager::Get().GetActiveProfile()->GetTextureLODSettings();
+  TestEqual(TEXT("VR UI has its own sampler group"),int32(Target->LODGroup),int32(TEXTUREGROUP_Project01));
+  TestEqual(TEXT("Angled UI retains anisotropy and blends adjacent mip levels"),int32(LOD->GetSamplerFilter(Target)),int32(SF_AnisotropicLinear));
+  TestEqual(TEXT("UI filtering has a bounded four-tap budget independent of world quality"),LOD->GetTextureLODGroup(Target->LODGroup).MaxAniso,4);
   int32 MipCount=0;TArray<FColor> Pixels;
   auto* Resource=Target->GameThread_GetRenderTargetResource();
   ENQUEUE_RENDER_COMMAND(ReadHUDMip)([Resource,&MipCount,&Pixels](FRHICommandListImmediate& Cmd)
@@ -58,7 +67,7 @@ bool FACEVRWidgetFilteringTest::RunTest(const FString&)
   for(UMaterialExpression* Expression:Material->GetExpressions())
    if(auto* Sample=Cast<UMaterialExpressionTextureSampleParameter2D>(Expression);Sample && Sample->ParameterName==TEXT("SlateUI"))
    {
-    TestEqual(TEXT("HUD uses its trilinear texture sampler independent of world quality"),int32(Sample->SamplerSource),int32(SSM_FromTextureAsset));
+    TestEqual(TEXT("HUD uses its dedicated texture sampler independent of world quality"),int32(Sample->SamplerSource),int32(SSM_FromTextureAsset));
     TestEqual(TEXT("HUD selects mips from its projected size"),int32(Sample->MipValueMode),int32(TMVM_None));
     TestFalse(TEXT("View sharpening does not reintroduce HUD shimmer"),Sample->AutomaticViewMipBias);
    }
@@ -110,13 +119,15 @@ bool FACEVRWidgetLayeringTest::RunTest(const FString&)
   TestTrue(TEXT("World geometry cannot clip personal menu pixels"),Material->bDisableDepthTest);
   TestEqual(TEXT("Menus cover additive effects on the mobile unlit path"),int32(Material->BlendMode),int32(BLEND_AlphaComposite));
   TestFalse(TEXT("World fog cannot wash out personal UI"),Material->bUseTranslucencyVertexFog);
+  TestTrue(TEXT("Temporal desktop AA receives the panel motion instead of the background motion"),Material->bOutputTranslucentVelocity);
+  TestTrue(TEXT("Temporal desktop AA treats small glyphs as responsive coverage"),Material->bEnableResponsiveAA);
   TestEqual(TEXT("UI shares the world-effects and comfort-curtain translucency pass"),int32(Material->TranslucencyPass),int32(MTP_AfterDOF));
 #if WITH_EDITOR
   auto* Data=Material->GetEditorOnlyData();
   auto* Premultiply=Cast<UMaterialExpressionMultiply>(Data->EmissiveColor.Expression);
   TestTrue(TEXT("Premultiplied UI preserves authored alpha holes for the mirror/world"),Premultiply && Premultiply->A.Expression && Premultiply->B.Expression==Data->Opacity.Expression);
 #else
-  TestTrue(TEXT("Packaged widgets load the prepared overlay shader"),Material->GetPathName().Contains(TEXT("/Game/ACE/RuntimeMaterials/M_ACEVRWidgetFiltered_v2")));
+  TestTrue(TEXT("Packaged widgets load the prepared overlay shader"),Material->GetPathName().Contains(TEXT("/Game/ACE/RuntimeMaterials/M_ACEVRWidgetFiltered_v3")));
 #endif
  }
  Owner->Destroy();World->DestroyWorld(false);

@@ -276,7 +276,7 @@ bool ExportRetailKeymapFile(const FString& Path,FString& Error)
  {
   // This desktop presentation control has no retail action. Keep it in the
   // local input settings; exporting a retail keymap must still work by default.
-  if(A.Key==Action(TEXT("ToggleInterface")))continue;
+  if(A.Key==Action(TEXT("ToggleInterface")) || A.Key==Action(TEXT("ToggleChat")))continue;
   const FString* Name=Names.Find(A.Key);
   if(!Name)
   {for(int32 I=0;I<3;++I)if(Get(A.Key,I).Key.IsValid()){Error=FString::Printf(TEXT("%s has no retail keymap action. Clear it before exporting."),A.Label);return false;}continue;}

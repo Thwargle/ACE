@@ -81,6 +81,30 @@ bool FACERetailStatsTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("DAT ten-rank cost exceeds ten times first rank"), Ten>Cost(0,1)*10);
         TestEqual(TEXT("Raise ten equals ten successive purchases"),Ten,Sequential);
     }
+    for (int32 Class : {2, 3})
+    {
+        int64 RankStart=0, RankCost=0;
+        Dat->TryGetSkillXpToNextRank(Class,0,RankStart,nullptr,50);
+        Dat->TryGetSkillXpToNextRank(Class,int32(RankStart),RankCost);
+        float Progress=-1.f;
+        TestTrue(TEXT("Trained and specialized progress use their own DAT tables"),
+            Dat->TryGetSkillRankProgress(Class,50,int32(RankStart),Progress));
+        TestEqual(TEXT("A freshly earned skill point resets progress"),Progress,0.f);
+        Dat->TryGetSkillRankProgress(Class,50,int32(RankStart+RankCost/2),Progress);
+        TestTrue(TEXT("Usage XP halfway to the next point fills half of the meter"),FMath::IsNearlyEqual(Progress,.5f,.001f));
+        Dat->TryGetSkillRankProgress(Class,51,int32(RankStart+RankCost),Progress);
+        TestEqual(TEXT("The next rank starts a new progress span"),Progress,0.f);
+        Dat->TryGetSkillRankProgress(Class,50,int32(RankStart-1),Progress);
+        TestEqual(TEXT("Out of order XP/rank snapshots never produce a negative fill"),Progress,0.f);
+        int32 Rank=0;int64 Spent=0,Cost=0;
+        while(Rank<1000 && Dat->TryGetSkillXpToNextRank(Class,int32(Spent),Cost) && Cost>0){Spent+=Cost;++Rank;}
+        TestTrue(TEXT("Retail rank cap is found from DAT"),Rank<1000 && Spent>MAX_int32);
+        Dat->TryGetSkillRankProgress(Class,Rank,int32(Spent),Progress);
+        TestEqual(TEXT("At the skill cap, the meter is empty as in retail"),Progress,0.f);
+    }
+    float UntrainedProgress=1.f;
+    TestFalse(TEXT("Untrained skills have no usage XP progress"),Dat->TryGetSkillRankProgress(1,0,100,UntrainedProgress));
+    TestEqual(TEXT("Untrained progress is empty"),UntrainedProgress,0.f);
     return true;
 }
 #endif

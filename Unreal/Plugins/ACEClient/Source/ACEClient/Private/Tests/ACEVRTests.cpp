@@ -3,6 +3,7 @@
 #include "Misc/ScopeExit.h"
 #include "UObject/StrongObjectPtr.h"
 #include "VR/ACEVRMath.h"
+#include "VR/ACEVRPointerVisuals.h"
 #include "ACEEquipmentRules.h"
 #include "ACERuntimeOptions.h"
 #include "UI/ACEFrameRateWidget.h"
@@ -234,6 +235,14 @@ bool FACEVRMathTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Shift supports backslash key"), ACEVRMath::KeyboardCharacter('\\', true), FString(TEXT("|")));
 	TestEqual(TEXT("Shift supports capital letters"), ACEVRMath::KeyboardCharacter('a', true), FString(TEXT("A")));
 	auto* Settings = NewObject<UACEVRSettings>(); Settings->SnapDegrees = std::numeric_limits<float>::quiet_NaN(); Settings->BowFullDraw = 0;
+	Settings->MenuAnchorMode=-1; Settings->bPinMenuToView=true; Settings->Sanitize();
+	TestEqual(TEXT("Existing head-pinned inventory migrates to Head"),Settings->MenuAnchorMode,0);
+	Settings->MenuAnchorMode=-1; Settings->bPinMenuToView=false;
+	Settings->PanelLayouts.Add("Menu",FTransform(FRotator(12,170,3),FVector(120,25,-15)));
+	Settings->Sanitize();
+	TestEqual(TEXT("Existing unpinned inventory migrates to World"),Settings->MenuAnchorMode,2);
+	TestTrue(TEXT("Legacy saved inventory position survives migration"),Settings->MenuViewOffset.Equals(FVector(120,25,-15)));
+	Settings->PanelLayouts.Reset(); Settings->MenuViewOffset=FVector(90,0,-10); Settings->MenuViewRotation=FRotator::ZeroRotator;
 	Settings->Sanitize(); TestEqual(TEXT("Invalid snap resets safely"), Settings->SnapDegrees, 30.f); TestEqual(TEXT("Draw range bounded"), Settings->BowFullDraw, 30.f);
 	Settings->MovementDirection=-1;Settings->bHeadRelativeMovement=false;Settings->Sanitize();
 	TestEqual(TEXT("Existing hand-relative preference migrates"),Settings->MovementDirection,1);
@@ -1293,13 +1302,25 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		PointAt(VR->MenuControlsPanel,FVector2D(400,24)); VR->Trigger(false,true);
 		TestTrue(TEXT("Unlocked menu resize button begins placement"),VR->EditingPanel=="Menu" && VR->bPanelResize);
 		VR->Trigger(false,false); TestEqual(TEXT("Trigger release ends resizing"),VR->PanelEditHand,INDEX_NONE);
-		VR->Settings->bPinMenuToView=true; VR->UpdatePanels();
+		VR->Settings->MenuAnchorMode=0; VR->UpdatePanels();
 		const FVector OriginalMenuOffset=VR->Settings->MenuViewOffset;
 		PointAt(VR->MenuControlsPanel,FVector2D(60,24)); VR->Trigger(false,true);
 		VR->RightAim->AddWorldOffset(VR->Head->GetRightVector()*8); VR->UpdatePanels();
 		TestTrue(TEXT("Head anchored menu can be repositioned"),VR->Settings->MenuViewOffset.Y>OriginalMenuOffset.Y+7);
 		VR->Trigger(false,false); VR->Settings->MenuViewOffset=OriginalMenuOffset;
-		VR->Settings->bPinMenuToView=false; VR->PositionPanel(VR->RetailPanel); VR->UpdatePanels();
+		VR->Settings->MenuAnchorMode=2; VR->PositionPanel(VR->RetailPanel); VR->UpdatePanels();
+		const FTransform SavedMenuPose=VR->RetailPanel->GetComponentTransform();
+		const FTransform HeadBeforeMenuPin=VR->Head->GetComponentTransform();
+		VR->bInventoryOpen=false; VR->UpdatePanels();
+		VR->Head->AddWorldOffset(FVector(50,30,0)); VR->Head->AddWorldRotation(FRotator(0,35,0));
+		VR->bInventoryOpen=true; VR->PositionPanel(VR->RetailPanel); VR->UpdatePanels();
+		TestTrue(TEXT("World inventory retains its exact placement across close, head movement, and reopening"),VR->RetailPanel->GetComponentTransform().Equals(SavedMenuPose,.01f));
+		TestNull(TEXT("World inventory does not inherit camera late-update motion"),VR->RetailPanel->GetAttachParent());
+		VR->Settings->MenuAnchorMode=1; VR->bMenuAnchorReady=false; VR->UpdateMenuAnchor(.016f);
+		const FTransform BodyMenuAnchor=VR->MenuAnchorFrame;
+		VR->Head->AddWorldRotation(FRotator(0,.1f,0)); VR->UpdateMenuAnchor(.016f);
+		TestTrue(TEXT("Body inventory ignores tiny head rotations while reading"),VR->MenuAnchorFrame.Equals(BodyMenuAnchor,.01f));
+		VR->Head->SetWorldTransform(HeadBeforeMenuPin); VR->Settings->MenuAnchorMode=2; VR->bMenuAnchorReady=false; VR->UpdatePanels();
 		PointAt(VR->MenuControlsPanel,FVector2D(400,24)); VR->Trigger(false,true);
 		VR->bInventoryOpen=false; VR->UpdatePanels();
 		TestEqual(TEXT("Hiding a menu ends its active resize"),VR->PanelEditHand,INDEX_NONE);
@@ -1690,10 +1711,10 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			}
 			Enemy->Destroy();
 		}
-		VR->Settings->bPinHotbarToView = VR->Settings->bPinMenuToView = true; VR->UpdatePanels();
+		VR->Settings->bPinHotbarToView = true; VR->Settings->MenuAnchorMode=0; VR->UpdatePanels();
 		TestEqual(TEXT("Pinned retail menus use camera late update"), VR->RetailPanel->GetAttachParent(), static_cast<USceneComponent*>(VR->Head.Get()));
 		TestEqual(TEXT("Pinned hotbar uses camera late update"), VR->WristPanel->GetAttachParent(), static_cast<USceneComponent*>(VR->Head.Get()));
-		VR->Settings->bPinHotbarToView = VR->Settings->bPinMenuToView = false; VR->UpdatePanels();
+		VR->Settings->bPinHotbarToView = false; VR->Settings->MenuAnchorMode=2; VR->UpdatePanels();
 		PollHands();
 		VR->RightPointer->TickComponent(.016f, LEVELTICK_All, nullptr);
 		VR->Trigger(false, true); VR->Trigger(false, false);
@@ -1704,6 +1725,33 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		const uint32 BeforeCast = VR->Client->Session->VRSequence;
 		VR->Trigger(false, true); VR->Trigger(false, false);
 		TestEqual(TEXT("A trigger after selecting produces one VR spell action"), VR->Client->Session->VRSequence, BeforeCast+1u);
+		{
+			VR->LastCast=-100;
+			const FTransform WristTransform=VR->WristPanel->GetComponentTransform();
+			const FVector2D WristSize=VR->WristPanel->GetDrawSize();
+			const FVector WristCenter=VR->RightAim->GetComponentLocation()+VR->RightAim->GetForwardVector()*100.f;
+			VR->WristPanel->SetWorldLocationAndRotation(WristCenter,FRotationMatrix::MakeFromX(-VR->RightAim->GetForwardVector()).Rotator());
+			VR->WristPanel->SetWorldScale3D(FVector(.06));VR->WristPanel->SetDrawSize(FVector2D(500,100));
+			VR->WristPanel->AddWorldOffset(VR->WristPanel->GetUpVector()*3.5f);
+			TestTrue(TEXT("Wrist border retains a one-centimeter safety margin"),VR->IsPointerNearPanel(false));
+			VR->Trigger(false,true);VR->Trigger(false,false);
+			TestTrue(TEXT("A guarded cast explains how to move the ray clear"),VR->GetCastFeedback().Contains(TEXT("panel")));
+			VR->WristPanel->AddWorldOffset(VR->WristPanel->GetUpVector()*1.5f);
+			TestFalse(TEXT("Aiming two centimeters beyond the wrist is a world gesture"),VR->IsPointerNearPanel(false));
+			VR->WristPanel->SetWorldTransform(WristTransform);VR->WristPanel->SetDrawSize(WristSize);
+			const uint32 BeforeAnalog=VR->Client->Session->VRSequence;
+			VR->TriggerAxis(false,.8f); VR->TriggerAxis(false,1.f); VR->TriggerAxis(false,.5f); VR->TriggerAxis(false,0.f);
+			TestEqual(TEXT("Touch-compatible analog-only trigger sends exactly one spell action"),VR->Client->Session->VRSequence,BeforeAnalog+1u);
+			TestFalse(TEXT("Analog trigger release clears the mapped action"),VR->HeldControllerActions.Contains("VRRightTrigger"));
+			const int32 SavedSpell=VR->SelectedSpell;
+			for(int32 Spell:{1,2,23,24,2645})
+			{
+				VR->SelectedSpell=Spell; VR->UpdatePointerVisuals(true,true);
+				TestEqual(TEXT("Magic pointer remains blue for every spell even with a persistent chat/menu visible"),VR->PointerBeamModes[1],1);
+			}
+			VR->SelectedSpell=SavedSpell;
+			VR->LastCast=World->GetTimeSeconds();
+		}
 		VR->Client->OnChatMessage.Broadcast(TEXT("Not enough mana."), TEXT(""), ACEChatMessageType::TransientInfo);
 		TestEqual(TEXT("Server cast errors remain visible on the wrist"), VR->GetCastFeedback(), FString(TEXT("Not enough mana.")));
 		if (TestTrue(TEXT("Avatar fixture loads retail DAT"), Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))
@@ -2149,7 +2197,7 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 				Second->SetActorLocation(Origin+FVector(500,0,-Second->GetMeleeBodyHeight()*.5f));
 				VR->UpdateMissileTrajectory(Origin,Direction,1,10,false);
 				TestEqual(TEXT("Straight magic uses the creature-body contact test too"),VR->PredictedCombatTarget.Get(),Second);
-				TestEqual(TEXT("Switching arc to bolt rebuilds the straight-line topology"),VR->MissileTrajectory->GetProcMeshSection(0)->GetRenderIndexCount(),6);
+				TestEqual(TEXT("Switching arc to bolt rebuilds the three-strip straight-line topology"),VR->MissileTrajectory->GetProcMeshSection(0)->GetRenderIndexCount(),18);
 				VR->UpdateWorldSelectionHighlights(VR->PredictedCombatTarget.Get(),nullptr);
 				const auto* Part=Cast<UPrimitiveComponent>(Second->Appearance->GetPartMesh(0));
 				TestTrue(TEXT("Predicted hit uses the same model tint as world selection"),Part && Part->GetCustomPrimitiveData().Data.IsValidIndex(1) && Part->GetCustomPrimitiveData().Data[1]==1.f);

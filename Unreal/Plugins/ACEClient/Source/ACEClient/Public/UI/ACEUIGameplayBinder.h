@@ -124,6 +124,8 @@ public:
 	void PlayEmoteHotkey(uint32 MotionCommand, bool bHoldPose);
 
 	void FocusChatEntry();
+	void ToggleChatEntryFocus();
+	bool IsChatTextEntryFocused() const;
 	void ClearChatEntryFocus();
 	double InventoryDoubleClickSeconds() const;
 	bool GetVRPointerFeedback(FVector2D Point, FBox2D& Bounds, FString& Label, FString& Hint, int32& Guid) const;
@@ -557,6 +559,7 @@ private:
 	TObjectPtr<UScrollBox> ChatLog;
 	UPROPERTY()
 	TObjectPtr<UEditableTextBox> ChatEntry;
+	int32 LastFocusedChatWindow = 0;
 	int32 ChatLineCount = 0;
 	static constexpr int32 MaxChatLines = 120;
 	UPROPERTY()

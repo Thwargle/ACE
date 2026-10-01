@@ -1,5 +1,6 @@
 #include "VR/ACEVRComponent.h"
 #include "VR/ACEVRSettings.h"
+#include "VR/ACEVRPointerVisuals.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
 #include "ACEWorldEntityActor.h"
@@ -751,7 +752,7 @@ void UACEVRComponent::UpdateMissileTrajectory(const FVector& Origin, const FVect
 		MissileTrajectory->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		MissileTrajectory->SetCastShadow(false);
 		MissileTrajectory->RegisterComponent();
-		MissileTrajectory->SetMaterial(0, Arrow->GetMaterial(0));
+		MissileTrajectory->SetMaterial(0, ACEVRPointerVisuals::GetMaterial(false));
 	}
 	float Radius=.05f;
 	if (Spell) { float ProfileSpeed; bool ProfileGravity; Session->GetVRSpellProfile(SelectedSpell,ProfileSpeed,ProfileGravity,&Radius); }
@@ -791,7 +792,7 @@ void UACEVRComponent::UpdateMissileTrajectory(const FVector& Origin, const FVect
 	const bool UseBounds=Segments>1 && CVarProjectileBodyBounds.GetValueOnGameThread()!=0;
 	for(auto* Body:Bodies) Candidates.Add({Body,UseBounds ? Body->GetProjectileContactBounds(Radius) : FBox(ForceInit)});
 	TArray<FVector> Vertices, Normals; TArray<FVector2D> UVs; TArray<int32> Triangles;
-	Vertices.Reserve(Segments*4);Normals.Reserve(Segments*4);UVs.Reserve(Segments*4);Triangles.Reserve(Segments*6);
+	Vertices.Reserve(Segments*8);Normals.Reserve(Segments*8);UVs.Reserve(Segments*8);Triangles.Reserve(Segments*18);
 	TArray<FLinearColor> Colors; TArray<FProcMeshTangent> Tangents;
 	FVector Previous = Origin, End = Origin; bool HitWorld = false;
 	AACEWorldEntityActor* HitBody = nullptr;
@@ -818,9 +819,15 @@ void UACEVRComponent::UpdateMissileTrajectory(const FVector& Origin, const FVect
 		const float Width=FMath::Clamp(float(FVector::Distance(Head->GetComponentLocation(),Previous))*.0007f,.4f,4.f);
 		const FVector Side = FVector::CrossProduct(Next-Previous, Head->GetComponentLocation()-Previous).GetSafeNormal() * Width;
 		const int32 V = Vertices.Num();
-		Vertices.Append({Previous-Side,Previous+Side,Next+Side,Next-Side});
-		Triangles.Append({V,V+1,V+2,V,V+2,V+3});
-		for (int32 J=0;J<4;++J) { Normals.Add(FVector::UpVector); UVs.Add(FVector2D::ZeroVector); Colors.Add(FLinearColor(.95f,.65f,.15f)); }
+		for (int32 Column = 0; Column < 4; ++Column)
+		{
+			const float Offset = Column == 0 ? -3.f : Column == 1 ? -1.f : Column == 2 ? 1.f : 3.f;
+			FLinearColor Color = ACEVRPointerVisuals::ModeColor(Spell ? 1 : 2);
+			Color.A = (Column == 0 || Column == 3) ? 0.f : 1.f;
+			Vertices.Append({Previous + Side * Offset, Next + Side * Offset});
+			for (int32 J=0;J<2;++J) { Normals.Add(FVector::UpVector); UVs.Add(FVector2D::ZeroVector); Colors.Add(Color); }
+			if (Column < 3) { const int32 A=V+Column*2,B=A+2;Triangles.Append({A,B,A+1,B,B+1,A+1}); }
+		}
 		Previous=End=Next;
 	}
 	// One mesh section for the entire arc, rather than one draw call per segment.

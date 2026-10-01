@@ -57,6 +57,17 @@ void UACEVRSettings::ApplyRenderScale() const
 
 void UACEVRSettings::Sanitize()
 {
+	if (MenuAnchorMode < 0)
+	{
+		MenuAnchorMode = bPinMenuToView ? 0 : 2;
+		if (const auto* Pose = PanelLayouts.Find("Menu"); Pose && !bPinMenuToView)
+		{
+			MenuViewOffset = Pose->GetLocation();
+			MenuViewRotation = (Pose->GetRotation() * FRotator(0,180,0).Quaternion().Inverse()).Rotator();
+		}
+	}
+	MenuAnchorMode = FMath::Clamp(MenuAnchorMode, 0, 2);
+	bPinMenuToView = MenuAnchorMode == 0;
 	if (MovementDirection < 0) MovementDirection = bHeadRelativeMovement ? 0 : 1;
 	MovementDirection = FMath::Clamp(MovementDirection, 0, 2);
 	if (SettingsVersion < 1)

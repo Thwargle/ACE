@@ -1,10 +1,13 @@
 #include "UI/ACEChatEntry.h"
 #include "UI/ACEUIGameplayBinder.h"
+#include "ACEInputBindings.h"
 #include "Widgets/Input/SEditableTextBox.h"
 
 void UACEChatEntry::InitializeChat(UACEUIGameplayBinder* InBinder)
 {
     Binder = InBinder;
+    SetIsCaretMovedWhenGainFocus(false);
+    SetSelectAllTextWhenFocused(false);
     OnTextChanged.AddUniqueDynamic(this, &UACEChatEntry::HandleChanged);
 }
 
@@ -17,6 +20,13 @@ TSharedRef<SWidget> UACEChatEntry::RebuildWidget()
 
 FReply UACEChatEntry::HandleChatKey(const FGeometry&, const FKeyEvent& Event)
 {
+    if (Binder.IsValid() && !ACEInputBindings::IsEditing()
+        && ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("ToggleChat")),
+            FInputChord(Event.GetKey(), Event.IsShiftDown(), Event.IsControlDown(), Event.IsAltDown(), Event.IsCommandDown())))
+    {
+        if (!Event.IsRepeat()) Binder->ToggleChatEntryFocus();
+        return FReply::Handled();
+    }
     if (!Event.IsControlDown() && !Event.IsAltDown() && !Event.IsShiftDown()
         && (Event.GetKey() == EKeys::Up || Event.GetKey() == EKeys::Down))
     {

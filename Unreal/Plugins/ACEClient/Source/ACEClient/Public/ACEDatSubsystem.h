@@ -462,6 +462,8 @@ public:
 	bool TryGetVitalXpToNextRank(int32 CurrentXpSpent, int64& OutXpNeeded, int64* OutMaxSpendable = nullptr, int32 RankCount = 1);
 	/** Trained (SAC=2) or Specialized (SAC=3) skill XP tables from 0x0E000018. */
 	bool TryGetSkillXpToNextRank(int32 AdvancementClass, int32 CurrentXpSpent, int64& OutXpNeeded, int64* OutMaxSpendable = nullptr, int32 RankCount = 1);
+	/** Retail skill meter: XP within the server-reported rank, not remaining XP to the skill cap. */
+	bool TryGetSkillRankProgress(int32 AdvancementClass, int32 Ranks, int32 CurrentXpSpent, float& OutProgress01);
 	bool TryGetXpToNextLevel(int64 TotalExperience, int32 CurrentLevel, int64& OutXpNeeded, float* OutProgress01 = nullptr);
 
 	/**

@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "VR/ACEVRMath.h"
+#include "VR/ACEVRTriggerState.h"
 #include "VR/ACEVRHandCollision.h"
 #include "ACETypes.h"
 #include "ACEVRComponent.generated.h"
@@ -142,6 +143,11 @@ private:
 	int32 ChatVendorGuid = 0;
 	FName FrontPanel = "Menu";
 	FTransform ChatAnchorFrame;
+	FTransform MenuAnchorFrame;
+	FVector MenuOwnerLocation = FVector::ZeroVector;
+	bool bMenuAnchorReady = false, bMenuAnchorTurning = false;
+	FTransform GetMenuAnchorTransform() const;
+	void UpdateMenuAnchor(float Dt);
 	FVector ChatOwnerLocation = FVector::ZeroVector;
 	bool bChatAnchorReady = false, bChatAnchorTurning = false;
 	FTransform GetChatAnchorTransform() const;
@@ -290,6 +296,10 @@ private:
 	void CancelGestures();
 	void PositionPanel(UWidgetComponent* Panel);
 	void Trigger(bool bLeft, bool bPressed);
+	void TriggerAxis(bool bLeft, float Value);
+	void LeftTriggerAxis(float Value) { TriggerAxis(true, Value); }
+	void RightTriggerAxis(float Value) { TriggerAxis(false, Value); }
+	FACEVRTriggerState TriggerStates[2];
 	void Grip(bool bLeft, bool bPressed);
 	void SelectPressed();
 	void PreviousSpell();

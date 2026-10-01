@@ -275,25 +275,11 @@ inline FString WeaponDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Da
 
 inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat = nullptr)
 {
-    FString Text = WeaponDetails(Info, Dat);
+    FString Text;
     auto Int = [&](uint32 Key, const TCHAR* Label)
     {
         if (const auto* Value = Info.IntProperties.Find(Key)) Text += FString::Printf(TEXT("%s%d\n"), Label, *Value);
     };
-    if (Info.IntProperties.FindRef(33)) Text += TEXT("Bonded\n");
-    if (Info.IntProperties.FindRef(114)) Text += TEXT("Attuned\n");
-    Int(28, TEXT("Armor Level: "));
-    static const TCHAR* DamageNames[] = {TEXT("Slashing"), TEXT("Piercing"), TEXT("Bludgeoning"), TEXT("Cold"), TEXT("Fire"), TEXT("Acid"), TEXT("Nether"), TEXT("Electric")};
-    for (int32 I = 0; I < Info.ArmorResistances.Num() && I < UE_ARRAY_COUNT(DamageNames); ++I)
-    {
-        const float R = Info.ArmorResistances[I];
-        // ItemExamineUI describes the material modifier, independently of AL.
-        const TCHAR* Quality = R >= 2.f ? TEXT("Unparalleled") : R >= 1.6f ? TEXT("Excellent")
-            : R >= 1.2f ? TEXT("Above Average") : R > .8f ? TEXT("Average")
-            : R > .4f ? TEXT("Below Average") : R > 0.f ? TEXT("Poor") : TEXT("None");
-        Text += FString::Printf(TEXT("%s: %s (%d)\n"), DamageNames[I], Quality,
-            FMath::TruncToInt(Info.IntProperties.FindRef(28) * FMath::Clamp(R, 0.f, 2.f)));
-    }
     if (const auto* N = Info.IntProperties.Find(171))
         Text += FString::Printf(TEXT("This item has been tinkered %d time%s.\n"), *N, *N == 1 ? TEXT("") : TEXT("s"));
     for (const auto& E : {TPair<uint32, const TCHAR*>(39,TEXT("Last tinkered by")),{40,TEXT("Imbued by")}})
@@ -304,9 +290,24 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
         static const TCHAR* Quality[] = {TEXT("Unknown"),TEXT("Poorly crafted"),TEXT("Well-crafted"),TEXT("Finely crafted"),TEXT("Exquisitely crafted"),TEXT("Magnificent"),TEXT("Nearly flawless"),TEXT("Flawless"),TEXT("Utterly flawless"),TEXT("Incomparable"),TEXT("Priceless")};
         Text += FString::Printf(TEXT("Workmanship: %s (%d)\n\n"), Quality[FMath::Clamp(*W,0,10)], *W);
     }
+    if (!Text.IsEmpty() && !Text.EndsWith(TEXT("\n\n"))) Text += TEXT("\n");
+    // Retail prints crafting first, then consecutive weapon/defense/armor rows.
+    FString Stats = WeaponDetails(Info, Dat).TrimEnd();
+    if (!Stats.IsEmpty()) Text += Stats + TEXT("\n");
+    Int(28, TEXT("Armor Level: "));
     for (const auto& E : {TPair<uint32,const TCHAR*>(29,TEXT("Melee Defense")),{149,TEXT("Missile Defense")},{150,TEXT("Magic Defense")}})
         if (const auto* V = Info.FloatProperties.Find(E.Key))
-            Text += FString::Printf(TEXT("Bonus to %s: %+.1f%%.\n\n"), E.Value, (*V-1.0)*100.0);
+            Text += FString::Printf(TEXT("Bonus to %s: %+.1f%%.\n"), E.Value, (*V-1.0)*100.0);
+    static const TCHAR* DamageNames[] = {TEXT("Slashing"), TEXT("Piercing"), TEXT("Bludgeoning"), TEXT("Cold"), TEXT("Fire"), TEXT("Acid"), TEXT("Nether"), TEXT("Electric")};
+    for (int32 I = 0; I < Info.ArmorResistances.Num() && I < UE_ARRAY_COUNT(DamageNames); ++I)
+    {
+        const float R = Info.ArmorResistances[I];
+        const TCHAR* Quality = R >= 2.f ? TEXT("Unparalleled") : R >= 1.6f ? TEXT("Excellent")
+            : R >= 1.2f ? TEXT("Above Average") : R > .8f ? TEXT("Average")
+            : R > .4f ? TEXT("Below Average") : R > 0.f ? TEXT("Poor") : TEXT("None");
+        Text += FString::Printf(TEXT("%s: %s (%d)\n"), DamageNames[I], Quality,
+            FMath::TruncToInt(Info.IntProperties.FindRef(28) * FMath::Clamp(R, 0.f, 2.f)));
+    }
     TArray<FString> SpellNames;
     FString SpellDescriptions;
     TSet<int32> SeenSpells;
@@ -320,10 +321,13 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
         if (Dat && Dat->TryGetSpellDescription(Id,Desc))
             SpellDescriptions += TEXT("~ ") + Name + TEXT(": ") + Desc + TEXT("\n");
     }
-    if (!SpellNames.IsEmpty()) Text += TEXT("Spells: ") + FString::Join(SpellNames,TEXT(", ")) + TEXT("\n\n");
+    if (!SpellNames.IsEmpty())
+        AppendItemText(Text, TEXT("Spells: ") + FString::Join(SpellNames,TEXT(", ")), true);
     uint32 Imbued = 0;
     for (uint32 Id : {179u,303u,304u,305u,306u}) Imbued |= Info.IntProperties.FindRef(Id);
     TArray<FString> Properties;
+    if (Info.IntProperties.FindRef(33)) Properties.Add(TEXT("Bonded"));
+    if (Info.IntProperties.FindRef(114)) Properties.Add(TEXT("Attuned"));
     for (const auto& E : {TPair<uint32,const TCHAR*>(1,TEXT("Critical Strike")),{2,TEXT("Crippling Blow")},{4,TEXT("Armor Rending")},
         {8,TEXT("Slash Rending")},{16,TEXT("Pierce Rending")},{32,TEXT("Bludgeon Rending")},{64,TEXT("Acid Rending")},
         {128,TEXT("Cold Rending")},{256,TEXT("Lightning Rending")},{512,TEXT("Fire Rending")},{16384,TEXT("Nether Rending")},
@@ -332,9 +336,16 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
     if (Info.BoolProperties.FindRef(91)) Properties.Add(TEXT("Retained"));
     if (Info.BoolProperties.FindRef(99)) Properties.Add(TEXT("Ivoryable"));
     if (Info.BoolProperties.FindRef(100)) Properties.Add(TEXT("Dyeable"));
-    if (!Properties.IsEmpty()) Text += TEXT("Properties: ") + FString::Join(Properties,TEXT(", ")) + TEXT("\n");
-    if (Imbued) Text += TEXT("This item cannot be further imbued.\n");
-    if (!Properties.IsEmpty() || Imbued) Text += TEXT("\n");
+    if (!Properties.IsEmpty()) AppendItemText(Text, TEXT("Properties: ") + FString::Join(Properties,TEXT(", ")), true);
+    if (Imbued) AppendItemText(Text, TEXT("This item cannot be further imbued."));
+    // Usage is a separate section before requirements, not a description at the end.
+    if (const auto* Usage = Info.StringProperties.Find(14); Usage && !Usage->IsEmpty())
+        AppendItemText(Text, *Usage, true);
+    if (!Text.IsEmpty())
+    {
+        Text.TrimEndInline();
+        Text += (!Properties.IsEmpty() || Imbued) && !Info.StringProperties.Contains(14) ? TEXT("\n\n") : TEXT("\n");
+    }
     for (uint32 Base : {158u, 270u, 273u, 276u})
     {
         const int32 Type = Info.IntProperties.FindRef(Base), Stat = Info.IntProperties.FindRef(Base+1), Value = Info.IntProperties.FindRef(Base+2);
@@ -356,9 +367,11 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
     if (const auto* Lore = Info.IntProperties.Find(109); Lore && *Lore > 0)
         Text += FString::Printf(TEXT("Activation requires Arcane Lore: %d\n"), *Lore);
     Int(110, TEXT("Activation requires Allegiance Rank: "));
-    Text += TEXT("\n");
     if (const auto* ManaConv = Info.FloatProperties.Find(144))
-        Text += FString::Printf(TEXT("Bonus to Mana Conversion: %+.0f%%.\n\n"), *ManaConv*100.0);
+    {
+        AppendItemText(Text, FString::Printf(TEXT("Bonus to Mana Conversion: %+.0f%%."), *ManaConv*100.0), true);
+        Text += TEXT("\n");
+    }
     if (const auto* Mod = Info.FloatProperties.Find(152))
     {
         const uint32 Type = Info.IntProperties.FindRef(45);
@@ -366,33 +379,53 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
         for (const auto& E : {TPair<uint32,const TCHAR*>(1,TEXT("Slashing")),{2,TEXT("Piercing")},{4,TEXT("Bludgeoning")},{8,TEXT("Cold")},
             {16,TEXT("Fire")},{32,TEXT("Acid")},{64,TEXT("Electric")},{1024,TEXT("Nether")}})
             if (Type & E.Key) { if (!DamageName.IsEmpty()) DamageName += TEXT("/"); DamageName += E.Value; }
-        if (!DamageName.IsEmpty()) Text += FString::Printf(TEXT("Damage bonus for %s spells:\n vs. Monsters: %+.1f%%.\n vs. Players: %+.1f%%.\n"),
-            *DamageName, (*Mod-1.0)*100.0, (*Mod-1.0)*50.0);
+        if (!DamageName.IsEmpty())
+        {
+            AppendItemText(Text, FString::Printf(TEXT("Damage bonus for %s spells:\n vs. Monsters: %+.1f%%.\n vs. Players: %+.1f%%."),
+                *DamageName, (*Mod-1.0)*100.0, (*Mod-1.0)*50.0), true);
+            Text += TEXT("\n");
+        }
     }
     Int(106, TEXT("Spellcraft: "));
     if (Info.IntProperties.Contains(108)) Text += FString::Printf(TEXT("Mana: %d / %d.\n"), Info.IntProperties.FindRef(107), Info.IntProperties.FindRef(108));
     if (const auto* Rate = Info.FloatProperties.Find(5); Rate && FMath::IsFinite(*Rate) && FMath::Abs(*Rate) > SMALL_NUMBER)
         Text += FString::Printf(TEXT("Mana Cost: 1 point per %d seconds.\n"), FMath::RoundToInt(FMath::Abs(1.0 / *Rate)));
     else Int(117, TEXT("Mana Cost: "));
-    if (!SpellDescriptions.IsEmpty()) Text += TEXT("\nSpell Descriptions:\n") + SpellDescriptions + TEXT("\n");
-    Text += ItemUsageDetails(Info);
+    AppendItemText(Text, ItemUsageDetails(Info), true);
+    AppendItemText(Text, ManaStoneDetails(Info));
+    if (!Text.IsEmpty()) { Text.TrimEndInline(); Text += TEXT("\n"); }
     if (const auto* Cooldown = Info.FloatProperties.Find(167)) Text += FString::Printf(TEXT("Cooldown: %.1f seconds\n"), *Cooldown);
     if (Info.IntProperties.Contains(92)) Text += FString::Printf(TEXT("Uses remaining: %d/%d\n"), Info.IntProperties.FindRef(92), Info.IntProperties.FindRef(91));
     for (const auto& Entry : {TPair<uint32, const TCHAR*>(25, TEXT("Crafted by: ")), {38, TEXT("Destination: ")}})
         if (const auto* Value = Info.StringProperties.Find(Entry.Key); Value && !Value->IsEmpty()) Text += FString(Entry.Value) + *Value + TEXT("\n");
+    if (!SpellDescriptions.IsEmpty()) AppendItemText(Text, TEXT("Spell Descriptions:\n") + SpellDescriptions, true);
     return Text;
 }
 inline FString ItemExaminationText(const FACEAppraisalInfo& Info,UACEDatSubsystem* Dat,bool IncludeValue=true,bool IncludeBurden=true)
 {
-    FString Body=Info.Summary.IsEmpty()?(Info.bSuccess?FString():TEXT("You fail to appraise the item.")):Info.Summary;
-    TArray<FString> Lines;Body.ParseIntoArrayLines(Lines,false);
-    Lines.RemoveAll([](const FString& Line){return Line.StartsWith(TEXT("Spells (")) || Line.StartsWith(TEXT("  Spell "))
-        || (Line.StartsWith(TEXT("Damage ")) && Line.Contains(TEXT("  Speed ")) && Line.Contains(TEXT("  Offense ")));});
-    FString Prefix;
-    if(IncludeValue)Prefix+=Info.bHasValue?TEXT("Value: ")+FText::AsNumber(Info.Value).ToString()+TEXT("\n"):TEXT("Value: ???\n");
-    if(IncludeBurden)Prefix+=Info.bHasBurden?TEXT("Burden: ")+FText::AsNumber(Info.Burden).ToString()+TEXT("\n"):TEXT("Burden: Unknown\n");
-    Body=Prefix+ItemDetails(Info,Dat)+FString::Join(Lines,TEXT("\n"));
-    const FString Mana=ManaStoneDetails(Info);if(!Mana.IsEmpty())Body+=TEXT("\n")+Mana;
+    FString Body;
+    if(IncludeValue)AppendItemText(Body,Info.bHasValue?TEXT("Value: ")+FText::AsNumber(Info.Value).ToString():TEXT("Value: ???"));
+    if(IncludeBurden)AppendItemText(Body,Info.bHasBurden?TEXT("Burden: ")+FText::AsNumber(Info.Burden).ToString():TEXT("Burden: Unknown"));
+    const bool HasTinkering=Info.IntProperties.Contains(171) || Info.IntProperties.Contains(105)
+        || Info.StringProperties.Contains(39) || Info.StringProperties.Contains(40);
+    AppendItemText(Body,ItemDetails(Info,Dat),!HasTinkering);
+    // Appraisal_ShowDescription prefers LongDesc, falling back to ShortDesc.
+    // The protocol Summary concatenates all strings in wire order, so it cannot
+    // supply retail paragraph boundaries (and can repeat both descriptions).
+    FString RemainingSummary=Info.Summary.IsEmpty() && !Info.bSuccess
+        ? TEXT("You fail to appraise the item.") : Info.Summary;
+    for(uint32 Id:{14u,15u,16u})
+        if(const auto* Value=Info.StringProperties.Find(Id);Value && !Value->IsEmpty())
+            RemainingSummary.ReplaceInline(**Value,TEXT(""),ESearchCase::CaseSensitive);
+    {
+        TArray<FString> Lines;RemainingSummary.ParseIntoArrayLines(Lines,false);
+        Lines.RemoveAll([](const FString& Line){return Line.StartsWith(TEXT("Spells (")) || Line.StartsWith(TEXT("  Spell "))
+            || (Line.StartsWith(TEXT("Damage ")) && Line.Contains(TEXT("  Speed ")) && Line.Contains(TEXT("  Offense ")));});
+        AppendItemText(Body,FString::Join(Lines,TEXT("\n")),true);
+    }
+    const FString* Description=Info.StringProperties.Find(16);
+    if(!Description || Description->IsEmpty())Description=Info.StringProperties.Find(15);
+    if(Description)AppendItemText(Body,*Description,true);
     return Body;
 }
 }

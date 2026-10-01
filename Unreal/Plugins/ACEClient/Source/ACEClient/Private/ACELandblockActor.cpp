@@ -27,6 +27,40 @@ namespace
 	constexpr double GSceneryGlobalBudgetSec = 0.004; // 4ms total per frame
 }
 
+bool AACELandblockActor::RefineBuildingSelectionHit(const UPrimitiveComponent* HitComponent,
+	const FVector& Start, const FVector& End, double& ClosestDistance) const
+{
+	for (const FBuildingShell& Shell : BuildingShells)
+	{
+		if (HitComponent != Shell.Mesh && HitComponent != Shell.CollisionMesh) continue;
+		const auto* GI = GetGameInstance();
+		const auto* Dat = GI ? GI->GetSubsystem<UACEDatSubsystem>() : nullptr;
+		const auto* Built = Dat ? Dat->FindSetupMesh(Shell.ModelId, WorldScale, Shell.PlacementId) : nullptr;
+		if (!Built || !Shell.Mesh) return false; // Retain collision fallback while geometry loads.
+		if (IsHidden() || !Shell.Mesh->IsVisible() || Shell.Mesh->bHiddenInGame) return true;
+		if (!FMath::LineBoxIntersection(Shell.Mesh->Bounds.GetBox(), Start, End, End-Start)) return true;
+		for (const auto& Part : Built->Parts)
+		{
+			const FTransform Transform = Part.BindTransform * Shell.Mesh->GetComponentTransform();
+			const FVector A = Transform.InverseTransformPosition(Start), B = Transform.InverseTransformPosition(End);
+			for (const auto& Section : Part.Sections)
+			{
+				if (Section.bCollisionOnly || Section.bFullyTransparent) continue;
+				for (int32 T = 0; T + 2 < Section.Triangles.Num(); T += 3)
+				{
+					const auto& I = Section.Triangles;
+					FVector Point, Normal;
+					if (FMath::SegmentTriangleIntersection(A, B, Section.Vertices[I[T]],
+						Section.Vertices[I[T+1]], Section.Vertices[I[T+2]], Point, Normal))
+						ClosestDistance = FMath::Min(ClosestDistance, FVector::Distance(Start, Transform.TransformPosition(Point)));
+				}
+			}
+		}
+		return true;
+	}
+	return false;
+}
+
 AACELandblockActor::AACELandblockActor()
 {
 	PrimaryActorTick.bCanEverTick = true;
@@ -1105,6 +1139,8 @@ bool AACELandblockActor::TrySpawnOneScenery(UACEDatSubsystem* Dat, const FPendin
 			Comp->RegisterComponent();
 			FBuildingShell Shell;
 			Shell.InfoIndex = Item.LandblockBuildingIndex;
+			Shell.ModelId = Item.ModelId;
+			Shell.PlacementId = PlacementId;
 			Shell.Mesh = Comp;
 			if (bCollide)
 			{

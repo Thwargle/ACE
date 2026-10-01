@@ -744,6 +744,12 @@ bool AACEPlayerController::InputKey(const FInputKeyEventArgs& Params)
  if(Params.Event==IE_Pressed)MovementKeyPressOrder.Add(Params.Key,++MovementKeySequence);
  const auto Mods=FSlateApplication::Get().GetModifierKeys();
  const FInputChord Chord(Params.Key,Mods.IsShiftDown(),Mods.IsControlDown(),Mods.IsAltDown(),Mods.IsCommandDown());
+ if (Params.Event==IE_Pressed && ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("ToggleChat")),Chord)
+  && !ACEInputBindings::IsEditing() && Client && Client->GetSessionState()==EACESessionState::InWorld
+  && !IsDesktopInterfaceHidden() && DatGameplayBinder && DatCanvasWidget && DatCanvasWidget->IsVisible())
+ {
+  DatGameplayBinder->ToggleChatEntryFocus(); return true;
+ }
  if(Params.Event==IE_Pressed && ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("Chat")),Chord)
   && Client && Client->GetSessionState()==EACESessionState::InWorld && !IsDesktopInterfaceHidden())
  {

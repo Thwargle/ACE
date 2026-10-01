@@ -7,6 +7,7 @@
 class UProceduralMeshComponent;
 class UInstancedStaticMeshComponent;
 class UStaticMeshComponent;
+class UPrimitiveComponent;
 class UACEDatSubsystem;
 class AACERegionSceneryActor;
 
@@ -132,6 +133,9 @@ public:
 	void ApplyOutdoorDoorwayClips(const TArray<FACEBuildingDoorwayClip>& Clips);
 
 	int32 GetDoorwayClipMeshCount() const { return BuildingShells.Num() + BuildingMeshIndices.Num(); }
+	/** Refine a building PhysicsBSP hit against its drawn shell (windows are not walls). */
+	bool RefineBuildingSelectionHit(const UPrimitiveComponent* HitComponent, const FVector& Start,
+		const FVector& End, double& ClosestDistance) const;
 
 	/** Push current DAT linear fog onto per-building MIDs (door-clip children). */
 	void ApplyWorldDistanceFog(UACEDatSubsystem* Dat);
@@ -188,6 +192,8 @@ protected:
 	struct FBuildingShell
 	{
 		int32 InfoIndex = INDEX_NONE;
+		uint32 ModelId = 0;
+		int32 PlacementId = 0;
 		TObjectPtr<UStaticMeshComponent> Mesh;
 		/** PhysicsBSP only — visual UStaticMesh omits it (section-slot mismatch). */
 		TObjectPtr<UStaticMeshComponent> CollisionMesh;

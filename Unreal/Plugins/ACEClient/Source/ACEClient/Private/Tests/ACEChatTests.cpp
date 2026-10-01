@@ -1,6 +1,8 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "ACEClientSubsystem.h"
+#include "ACEInputBindings.h"
+#include "Misc/ConfigCacheIni.h"
 #include "ACESession.h"
 #include "UI/ACEChatEntry.h"
 #include "UI/ACEUIGameplayBinder.h"
@@ -25,6 +27,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEChatParityTest, "ACE.RetailParity.ChatInput
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEChatParityTest::RunTest(const FString&)
 {
+    const FString OriginalConfig = GGameUserSettingsIni;
+    GGameUserSettingsIni = FPaths::ProjectSavedDir() / TEXT("Automation/ChatToggleFixture.ini");
+    FConfigFile EmptyConfig; GConfig->SetFile(GGameUserSettingsIni, &EmptyConfig);
+    ACEInputBindings::Reload();
+    ON_SCOPE_EXIT { GGameUserSettingsIni = OriginalConfig; ACEInputBindings::Reload(); };
     auto* GI = NewObject<UGameInstance>();
     auto* Client = NewObject<UACEClientSubsystem>(GI);
     Client->Session = MakeShared<FACESession>();
@@ -108,6 +115,18 @@ bool FACEChatParityTest::RunTest(const FString&)
     }
     auto Submit = [&](const FString& Text, int32 W = 0)
     { Binder->TrySendChatFromEntry(&Text,W); };
+    Main->SetChatText(TEXT("hello world")); Focus(Main); Key(EKeys::End);
+    for (int I=0; I<5; ++I) Key(EKeys::Left);
+    Key(EKeys::Tab);
+    TestFalse(TEXT("Tab returns from chat to game input"), Binder->IsChatEntryFocused());
+    TestEqual(TEXT("Toggling chat leaves the unsent draft intact"), Main->GetText().ToString(), FString(TEXT("hello world")));
+    Binder->ToggleChatEntryFocus(); Type(TEXT("new "));
+    TestEqual(TEXT("Toggling back restores the middle-of-line caret"), Main->GetText().ToString(), FString(TEXT("hello new world")));
+    Other->SetChatText(TEXT("floaty draft")); Focus(Other); Key(EKeys::Home); Key(EKeys::Tab);
+    Binder->ToggleChatEntryFocus(); Type(TEXT("my "));
+    TestEqual(TEXT("Floaty chat resumes its own draft and caret"), Other->GetText().ToString(), FString(TEXT("my floaty draft")));
+    TestEqual(TEXT("Toggle does not submit a network chat message"), Session.CachedC2SPackets.Num(), 0);
+    Main->SetChatText(TEXT("")); Other->SetChatText(TEXT(""));
     auto LastAction = [&]()
     {
         uint32 Last = 0; for (const auto& Packet : Session.CachedC2SPackets) Last = FMath::Max(Last,Packet.Key);

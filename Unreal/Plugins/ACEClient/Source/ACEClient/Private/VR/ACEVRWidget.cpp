@@ -241,7 +241,7 @@ TSharedRef<SWidget> UACEVRWidget::RebuildWidget()
 				else if (Setting == "Movement") Label = FString::Printf(TEXT("Movement direction: %s"), S->MovementDirection == 2 ? TEXT("None (stick only)") : S->MovementDirection == 1 ? TEXT("Left controller") : TEXT("Head"));
 				else if (Setting == "Seated") Label = FString::Printf(TEXT("Play posture: %s"), S->bSeated ? TEXT("Seated") : TEXT("Standing"));
 				else if (Setting == "Body") Label = FString::Printf(TEXT("Avatar: %s"), S->bShowBody ? TEXT("Body and arms") : TEXT("Arms only"));
-				else if (Setting == "PinMenu") Label = FString::Printf(TEXT("Main menus pinned to: %s"), S->bPinMenuToView ? TEXT("View") : TEXT("World"));
+				else if (Setting == "PinMenu") Label = FString::Printf(TEXT("Inventory anchor: %s"), S->MenuAnchorMode==0 ? TEXT("Head") : S->MenuAnchorMode==1 ? TEXT("Body") : TEXT("World"));
 				else if (Setting == "PinHotbar") Label = FString::Printf(TEXT("Retail hotbar pinned to: %s"), S->bPinHotbarToView ? TEXT("View") : TEXT("Left wrist"));
 				else if (Setting == "ShowWrist") Label = FString::Printf(TEXT("Wrist spell bar: %s"), S->bShowWristSpellBar ? TEXT("Shown") : TEXT("Hidden (use spell wheel)"));
 				else if (Setting == "Compass") Label = FString::Printf(TEXT("Compass and coordinates: %s"), S->bShowCompass ? TEXT("Shown") : TEXT("Hidden"));

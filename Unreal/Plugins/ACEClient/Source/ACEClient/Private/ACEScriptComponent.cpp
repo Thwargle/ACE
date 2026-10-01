@@ -150,6 +150,8 @@ void UACEScriptComponent::InitializeFromObject(const FACEWorldObject& Object, fl
 		bAppearanceReady = false;
 		bDefaultStarted = false;
 	}
+	OriginalObjectTranslucency = FMath::Clamp(SafeFloat(Object.Translucency, 0.f), 0.f, 1.f);
+	if (!bSameSetup) ObjectTranslucency = OriginalObjectTranslucency;
 	// Creatures get root pose from F748/F74C prediction — DefaultAnim SetOmega must not
 	// fight that with AddActorWorldRotation (chickens / NPCs).
 	bSuppressRootOmega = (Object.ItemType & ACEItemType::Creature) != 0
@@ -205,6 +207,7 @@ void UACEScriptComponent::InitializeForEnvironment(float InWorldScale)
 	SetupScriptTableId = 0;
 	SetupSoundTableId = 0;
 	Omega = FVector::ZeroVector;
+	OriginalObjectTranslucency = 0.f;
 	bSuppressRootOmega = true;
 	bEnvironmentWeather = true;
 	bAllowInferredParticleLights = false;
@@ -1604,7 +1607,10 @@ void UACEScriptComponent::ApplyVisualValue(EACEAnimationHookType Type, int32 Par
 		// Portal FX hides the Setup mesh (ClipMap anchor) — fade must also scale particles.
 		if (Type == EACEAnimationHookType::Transparent)
 		{
-			ObjectTranslucency = FMath::Clamp(Value, 0.f, 1.f);
+			// CPhysicsObj::SetTranslucency2 clamps against the physics descriptor's
+			// original translucency, including the final UnHide/death hook at zero.
+			Value = FMath::Max(FMath::Clamp(Value, 0.f, 1.f), OriginalObjectTranslucency);
+			ObjectTranslucency = Value;
 		}
 		if (Value > 0.02f)
 		{
@@ -3198,7 +3204,7 @@ void UACEScriptComponent::StopAllEffects()
 	}
 	ActiveEmitters.Reset();
 	Tweens.Reset();
-	ObjectTranslucency = 0.f;
+	ObjectTranslucency = OriginalObjectTranslucency;
 	if (auto* Lights = GetWorld() ? GetWorld()->GetSubsystem<UACEEffectLightSubsystem>() : nullptr)
 		Lights->RemoveSource(this);
 	// Environment scripts own their particles, not the sky host's slot materials.
@@ -3208,9 +3214,9 @@ void UACEScriptComponent::StopAllEffects()
 
 void UACEScriptComponent::RestoreMeshVisuals()
 {
-	ObjectTranslucency = 0.f;
+	ObjectTranslucency = OriginalObjectTranslucency;
 	RestoreDissolveMaterials();
-	ApplyMaterialScalar(INDEX_NONE, TEXT("OpacityMul"), 1.f);
+	ApplyMaterialScalar(INDEX_NONE, TEXT("OpacityMul"), 1.f - OriginalObjectTranslucency);
 	// Local pawn (not a WorldEntityActor): portal/spell Transparent + NoDraw must not
 	// leave HiddenInGame parts after recall. World objects keep ApplyPhysicsState.
 	if (!Cast<AACEWorldEntityActor>(GetOwner()))

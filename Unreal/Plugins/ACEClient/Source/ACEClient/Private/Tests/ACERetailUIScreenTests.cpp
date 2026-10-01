@@ -1903,6 +1903,24 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         Session.ActiveEnchantments.Reset(); Session.NotifyVitalsChanged(); Client->OnVitalsUpdated.Broadcast(Stats);
         TestEqual(TEXT("Attribute expiry refreshes the tab"),Gameplay->AttributeRowValues[4]->GetText().ToString(),FString(TEXT("180")));
 
+        // The skill footer shows only the XP earned within the current rank.
+        int64 SkillStart=0,SkillCost=0;
+        Dat->TryGetSkillXpToNextRank(2,0,SkillStart,nullptr,50);
+        Dat->TryGetSkillXpToNextRank(2,int32(SkillStart),SkillCost);
+        Gameplay->LastVitals.Skills[0].AdvancementClass=2;
+        Gameplay->LastVitals.Skills[0].Ranks=50;
+        Gameplay->LastVitals.Skills[0].XpSpent=int32(SkillStart+SkillCost/2);
+        Gameplay->SelectedSkillId=39;
+        Gameplay->SyncSkillPanelTab(TEXT("SkillPage"));Gameplay->RefreshSkillOverlays();
+        auto SkillMeter=Manager->FindElementUnder(TEXT("SkillPage"),TEXT("StatManagement_Footer_Meter"));
+        if(TestTrue(TEXT("Retail skill XP meter exists"),SkillMeter.IsValid()))
+        {
+            for(const auto& Child:SkillMeter->Children)
+                if(Child && Child->Type==ACEUI::ElementType::Meter){SkillMeter=Child;break;}
+            TestTrue(TEXT("Skill footer fills halfway after half a rank of earned XP"),FMath::IsNearlyEqual(SkillMeter->MeterFillFraction,.5f,.001f));
+            Gameplay->LastVitals.Skills[0].XpSpent=int32(SkillStart);Gameplay->RefreshSkillOverlays();
+            TestEqual(TEXT("Skill footer resets after a point is earned"),SkillMeter->MeterFillFraction,0.f);
+        }
         // A capped skill retains a meaningful value in the footer.
         Gameplay->LastVitals.Skills[0].XpSpent=MAX_uint32;
         Gameplay->SelectedSkillId=39;
@@ -3254,8 +3272,13 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 Gameplay->VendorSellCart.Reset();DropPack(Pack.Guid);
                 TestTrue(TEXT("Native pack drop reaches the sell cart"),Gameplay->VendorSellCart.ContainsByPredicate([&](auto& P){return P.Value==Bread.Guid;}));
                 Session.WorldObjects[Bread.Guid].ContainerId=Player.Guid;
+                const auto SavedSelf=Session.WorldObjects[Player.Guid];
+                Session.WorldObjects[Player.Guid].ItemsCapacity=0;
+                Session.WorldObjects[Player.Guid].ItemType=ACEItemType::Creature;
                 Gameplay->VendorSellCart.Reset();DropPack(Player.Guid);
-                TestTrue(TEXT("Main backpack also supports bulk vendor drops"),Gameplay->VendorSellCart.ContainsByPredicate([&](auto& P){return P.Value==Bread.Guid;}));
+                TestTrue(TEXT("Main backpack bulk drop works without container metadata on the player"),Gameplay->VendorSellCart.ContainsByPredicate([&](auto& P){return P.Value==Bread.Guid;}));
+                TestFalse(TEXT("Main pack bulk drop never offers the player"),Gameplay->VendorSellCart.ContainsByPredicate([&](auto& P){return P.Value==Player.Guid;}));
+                Session.WorldObjects[Player.Guid]=SavedSelf;
                 Session.WorldObjects[Bread.Guid].ContainerId=Pack.Guid;
             }
             const uint32 SavedTypes=Session.VendorItemTypes;

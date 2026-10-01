@@ -15,7 +15,15 @@ bool FACEPackagingMaterialsTest::RunTest(const FString& Parameters)
 	TStrongObjectPtr<UGameInstance> Instance(NewObject<UGameInstance>());
 	TStrongObjectPtr<UACEDatSubsystem> Dat(NewObject<UACEDatSubsystem>(Instance.Get()));
 	const auto Parents = Dat->GetRuntimeMaterialParents();
-	TestEqual(TEXT("Complete world/UI/filtered VR widget/particle/sky/comfort shader set"), Parents.Num(), 36);
+	TestEqual(TEXT("Complete world/UI/filtered VR widget/pointer/particle/sky/comfort shader set"), Parents.Num(), 38);
+	TestTrue(TEXT("World pointer material included"), Parents.ContainsByPredicate([](const UMaterialInterface* Parent)
+	{
+		return Parent && Parent->GetName() == TEXT("M_ACEVRPointerWorld_v1");
+	}));
+	TestTrue(TEXT("Overlay pointer material included"), Parents.ContainsByPredicate([](const UMaterialInterface* Parent)
+	{
+		return Parent && Parent->GetName() == TEXT("M_ACEVRPointerOverlay_v1");
+	}));
 	if (GShaderCompilingManager) GShaderCompilingManager->FinishAllCompilation();
 	for (UMaterialInterface* Parent : Parents)
 	{

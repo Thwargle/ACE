@@ -78,7 +78,9 @@ namespace
 				if (Child && Child->ContainerId == Item.Guid) Out.AddUnique(Ref.ItemGuid);
 			}
 		}
-		if (!ACEInventoryRules::IsContainer(Item)) return bKnownNonempty;
+		// The main backpack is represented by the player object, whose public
+		// descriptor need not contain the Container bit or capacity fields.
+		if (Item.Guid != Session.GetPlayerGuid() && !ACEInventoryRules::IsContainer(Item)) return bKnownNonempty;
 		for (const auto& Pair : Session.GetWorldObjects())
 			if (Pair.Value.ContainerId == Item.Guid) Out.AddUnique(Pair.Key);
 		Out.Sort([&](int32 A, int32 B)

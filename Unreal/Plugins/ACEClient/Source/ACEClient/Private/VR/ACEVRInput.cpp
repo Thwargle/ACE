@@ -25,15 +25,33 @@ void UACEVRComponent::BindInput()
 	I->BindAxis(TEXT("VRMoveY"), this, &UACEVRComponent::MoveY);
 	I->BindAxis(TEXT("VRTurnX"), this, &UACEVRComponent::TurnX);
 	I->BindAxis(TEXT("VRScrollY"), this, &UACEVRComponent::ScrollY);
+	I->BindAxis(TEXT("VRLeftTriggerValue"), this, &UACEVRComponent::LeftTriggerAxis);
+	I->BindAxis(TEXT("VRRightTriggerValue"), this, &UACEVRComponent::RightTriggerAxis);
 	// Keep OpenXR's physical action set stable. Remap dispatch in the client so
 	// changes work immediately on PC and Quest without restarting the XR session.
 	for(const auto& B:ACEVRInputLayout::Buttons())for(bool Pressed:{true,false})
 	{
 		FInputActionBinding Binding(B.Input,Pressed?IE_Pressed:IE_Released);
-		Binding.ActionDelegate.GetDelegateForManualSet().BindWeakLambda(this,[this,Name=B.Input,Pressed](){RouteControllerButton(Name,Pressed);});
+		Binding.ActionDelegate.GetDelegateForManualSet().BindWeakLambda(this,[this,Name=B.Input,Pressed]()
+		{
+			if (Name == "VRLeftTrigger" || Name == "VRRightTrigger")
+			{
+				auto& State = TriggerStates[Name == "VRLeftTrigger" ? 0 : 1];
+				if (!State.SetDigital(Pressed)) return;
+				RouteControllerButton(Name, State.IsPressed());
+			}
+			else RouteControllerButton(Name,Pressed);
+		});
 		I->AddActionBinding(Binding);
 	}
 	bInputBound = true;
+}
+
+void UACEVRComponent::TriggerAxis(bool bLeft, float Value)
+{
+	auto& State = TriggerStates[bLeft ? 0 : 1];
+	if (State.SetAnalog(Value))
+		RouteControllerButton(bLeft ? FName("VRLeftTrigger") : FName("VRRightTrigger"), State.IsPressed());
 }
 
 void UACEVRComponent::InventoryPressed()
@@ -234,7 +252,12 @@ void UACEVRComponent::Trigger(bool bLeft, bool bPressed)
 		if (Entry) FocusTextEntry(Entry);
 		return;
 	}
-	if (IsPointerNearPanel(bLeft)) return;
+	if (IsPointerNearPanel(bLeft))
+	{
+		if (bLeft == Settings->bLeftHanded && GetCombatMode() == ACECombatMode::Magic)
+			SetCastFeedback(TEXT("Aim away from the panel to cast."));
+		return;
+	}
 	if (bLeft != Settings->bLeftHanded) return;
 	if (GetCombatMode() == ACECombatMode::Magic) { FireSpell(); return; }
 	if (IsInputBlocked()) return;
