@@ -225,6 +225,9 @@ void UACELoginWidget::EnsureDefaultLayout()
 	AddLine(Browser,Label(TEXT("Directory maintained by acresources / Servers.xml. Adding a server does not connect to it."),14,true),0);
 	UVerticalBox* Files; Pages->AddChild(Card(Files));
 	AddLine(Files,Label(TEXT("Your game files"),30),12);
+	FileProblem=Label(TEXT(""),20);
+	FileProblem->SetColorAndOpacity(FLinearColor(1.f,.65f,.3f,1.f));
+	FileProblem->SetVisibility(ESlateVisibility::Collapsed); AddLine(Files,FileProblem,16);
 	AddLine(Files,Label(TEXT("Choose the folder containing your Asheron's Call .dat files. The client reads these files directly."),20),24);
 	DatBox=Field(Files,TEXT("DAT folder"),TEXT("DatDirectory")); DatBox->OnTextChanged.AddDynamic(this,&UACELoginWidget::OnDatChanged);
 #if PLATFORM_WINDOWS
@@ -321,6 +324,7 @@ void UACELoginWidget::NativeConstruct()
 		if (IFileManager::Get().FileSize(*ACELoginProfile::DirectoryCachePath()) <= 2*1024*1024
 			&& FFileHelper::LoadFileToString(Cached,*ACELoginProfile::DirectoryCachePath())) ACELoginProfile::ParseDirectory(Cached,Directory,Error);
 		SetStatus(TEXT("Select a server and account, then launch."));
+		ValidateGameFiles();
 	}
 #if PLATFORM_LINUX
 	Profile.bAutoUpdate=false;
@@ -491,6 +495,9 @@ void UACELoginWidget::EditServer(bool bNew)
 void UACELoginWidget::DoLogin()
 {
 	if (Updater && Updater->IsBusy()) { SetStatus(TEXT("Finish or cancel the update before logging in.")); return; }
+	// Check both files before authenticating: the cell index is deliberately
+	// deferred, so portal readiness alone can still lead to an empty world.
+	if (!ValidateGameFiles()) return;
 	if (!Profile.SelectedServer()) { SetStatus(TEXT("Choose a server first.")); return; }
 	if (!StoreAccount()) return;
 	const auto* S=Profile.SelectedServer();
@@ -556,6 +563,36 @@ void UACELoginWidget::UpdateDatStatus()
 		Report+=FString::Printf(TEXT("%s   %s\n"),IFileManager::Get().FileSize(*(Dir/File))>0?TEXT("Found"):TEXT("Missing"),File);
 	Report+=TEXT("Portal and cell files are required. High-resolution textures are used when available.");
 	FileStatus->SetText(FText::FromString(Report));
+}
+
+bool UACELoginWidget::ValidateGameFiles()
+{
+	// Validate the active installation, not an unsaved edit in the folder field.
+	FString Dir=Profile.DatDirectory;
+	if (auto* GI=GetGameInstance()) if (auto* Dat=GI->GetSubsystem<UACEDatSubsystem>()) Dir=Dat->GetDatDirectory();
+	TArray<FString> Missing;
+	for (const TCHAR* File:{TEXT("client_portal.dat"),TEXT("client_cell_1.dat")})
+		if (Dir.IsEmpty() || IFileManager::Get().FileSize(*(Dir/File))<=0) Missing.Add(File);
+	if (Missing.IsEmpty())
+	{
+		FileProblem->SetVisibility(ESlateVisibility::Collapsed);
+		return true;
+	}
+	FString Message=FString::Printf(TEXT("Game files are missing or empty: %s.\nSearched folder: %s\n"),
+		*FString::Join(Missing,TEXT(", ")),Dir.IsEmpty()?TEXT("No folder selected"):*Dir);
+#if PLATFORM_ANDROID
+	Message+=TEXT("Close the game, connect your Quest to your computer, and run Repair-Quest.cmd from the extracted Quest installer to install the DAT files. Then reopen the game.");
+#else
+	Message+=TEXT("Select the folder containing your Asheron's Call DAT files below, then click Save location and return to Play. If you have not installed the game data yet, install it first.");
+#endif
+	// This text uses the packaged engine font; it must work without any DAT UI assets.
+	FileProblem->SetText(FText::FromString(Message));
+	FileProblem->SetVisibility(ESlateVisibility::HitTestInvisible);
+	DatBox->SetText(FText::FromString(Dir));
+	Pages->SetActiveWidgetIndex(3);
+	SetVisibility(ESlateVisibility::Visible);
+	SetStatus(TEXT("Game files required. See Game files for the missing files and repair instructions."));
+	return false;
 }
 
 void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
@@ -663,6 +700,7 @@ void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 			if (!Restart) Dat->SetDatDirectory(Dir);
 		}
 		SetStatus(Restart?TEXT("Location saved. Restart the client to use these game files."):TEXT("Game-file location saved."));
+		FileProblem->SetVisibility(ESlateVisibility::Collapsed);
 	}
 	else if (Action==TEXT("browsefolder"))
 	{

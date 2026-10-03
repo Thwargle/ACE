@@ -83,10 +83,49 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
         }
         CrystalActor->InitializeFromObject(Crystal,100,true);
         TestTrue(TEXT("Repeated object descriptions do not lower the crystal"),CrystalActor->GetActorLocation().Equals(Authored,.01));
+        for(float Scale : {.25f,.75f,2.f})
+        {
+            Crystal.Scale=Scale; CrystalActor->InitializeFromObject(Crystal,100,true);
+            FACEPosition Contact=Crystal.Position; Contact.bHasContactState=true; Contact.bIsGrounded=true;
+            for(int32 Packet=0;Packet<3;++Packet)
+            {
+                CrystalActor->ApplyACEPosition(Contact);
+                for(int32 Frame=0;Frame<60;++Frame) CrystalActor->Tick(1.f/60);
+                TestTrue(TEXT("Scaled crystal position updates do not project its elevated origin onto distant terrain"),CrystalActor->GetActorLocation().Equals(Authored,.01));
+            }
+            FBox Bounds; CrystalActor->Appearance->GetVisualWorldBounds(Bounds);
+            const FVector Center=Bounds.GetCenter();
+            TestEqual(TEXT("Scaled crystal remains clickable after contact updates"),ACEVisibleObjectPick::Trace(*World,
+                Center-FVector(300,0,0),Center+FVector(300,0,0),nullptr),static_cast<AActor*>(CrystalActor));
+        }
         CrystalActor->Destroy();
         CrystalActor=World->SpawnActor<AACEWorldEntityActor>(); CrystalActor->InitializeFromObject(Crystal,100,true);
         TestTrue(TEXT("Recreating after relog preserves the same origin"),CrystalActor->GetActorLocation().Equals(Authored,.01));
         CrystalActor->Destroy();
+    }
+
+    // ACE-World-16PY/Database/3-Core/9 WeenieDefaults/SQL/Creature:
+    // Human/22257 Fishing Hole, Crystal/06788 Nexus Crystal, Statue/24161 Fir Tree.
+    // Creature is a network category, not permission to replace these origins
+    // with a distant floor. Exercise real stock setups alongside the custom one.
+    struct FProp { uint32 Wcid, Setup, Motion, Physics; float Scale; };
+    for(const FProp Prop : {FProp{22257,0x02000F0D,0x09000122,2098204,1},
+        FProp{6788,0x02000700,0x09000097,3080,1.5f},FProp{24161,0x02000F06,0x090000CB,6292504,1.2f}})
+    {
+        FACEWorldObject Stock=Object; Stock.ItemType=ACEItemType::Creature;
+        Stock.WeenieClassId=Prop.Wcid; Stock.SetupId=Prop.Setup; Stock.MotionTableId=Prop.Motion;
+        Stock.PhysicsState=Prop.Physics; Stock.Scale=Prop.Scale; Stock.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
+        float Up=0,Height=0,Radius=0,Down=0;uint32 Anim=0;
+        TestTrue(TEXT("Stock creature prop has readable DAT physics"),Dat->TryGetSetupPhysics(Prop.Setup,Up,Height,Radius,Anim,&Down));
+        Stock.Position.Location.Z=FMath::Max(1.5f,Down*Prop.Scale+1.f);
+        const FVector Origin=Stock.Position.ToUnrealLocation(100);
+        auto* PropActor=World->SpawnActor<AACEWorldEntityActor>(); PropActor->InitializeFromObject(Stock,100,true);
+        TestTrue(TEXT("Stock creature prop has a DAT appearance"),PropActor->Appearance->HasAppearance());
+        FACEPosition Contact=Stock.Position; Contact.bHasContactState=true;Contact.bIsGrounded=true;
+        PropActor->ApplyACEPosition(Contact);
+        for(int32 Frame=0;Frame<120;++Frame)PropActor->Tick(1.f/60);
+        TestTrue(*FString::Printf(TEXT("Stock prop %u preserves server elevation beyond its step range"),Prop.Wcid),PropActor->GetActorLocation().Equals(Origin,.01));
+        PropActor->Destroy();
     }
     Floor->Destroy();
 

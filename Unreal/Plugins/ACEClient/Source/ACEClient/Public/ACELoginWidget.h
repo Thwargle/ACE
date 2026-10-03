@@ -119,6 +119,7 @@ protected:
 	UPROPERTY() TObjectPtr<UTextBlock> ServerDescription;
 	UPROPERTY() TObjectPtr<UTextBlock> BrowserDetail;
 	UPROPERTY() TObjectPtr<UTextBlock> FileStatus;
+	UPROPERTY() TObjectPtr<UTextBlock> FileProblem;
 	UPROPERTY() TObjectPtr<UEditableTextBox> NameBox;
 	UPROPERTY() TObjectPtr<UEditableTextBox> DescriptionBox;
 	UPROPERTY() TObjectPtr<UEditableTextBox> WebsiteBox;
@@ -153,6 +154,7 @@ protected:
 	void RefreshBrowser();
 	void FetchDirectory();
 	void UpdateDatStatus();
+	bool ValidateGameFiles();
 	UFUNCTION() void OnSearchChanged(const FText& Text);
 	UFUNCTION() void OnDatChanged(const FText& Text);
 	UTextBlock* Label(const FString& Text, int32 Size = 18, bool bMuted = false);

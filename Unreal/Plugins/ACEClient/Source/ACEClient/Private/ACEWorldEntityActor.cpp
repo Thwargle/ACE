@@ -1923,8 +1923,13 @@ bool AACEWorldEntityActor::ClampLocationToGround(FVector& InOutLocation, const F
 		if (TraceGroundZ(InOutLocation,GroundZ,true))
 		{
 			const float Delta = InOutLocation.Z-GroundZ;
+			// CTransition steps down only within the setup's scaled step range.
+			// The broad trace band is a search bound, not permission to move the
+			// server origin onto any floor below it. Creature-based props (and
+			// actors on raised platforms) otherwise sink on a contact update.
+			const float StepDownCm=MovementStepDownHeight*GetActorScale3D().GetAbsMax()+2.f;
 			if (Delta >= -MovementStepHeight*GetActorScale3D().GetAbsMax()-2.f
-				&& Delta < GroundClampBandAc*WorldScale) InOutLocation.Z=GroundZ+1.f;
+				&& Delta <= FMath::Min(GroundClampBandAc*WorldScale,StepDownCm)) InOutLocation.Z=GroundZ+1.f;
 		}
 		// Missing geometry must not make every idle NPC tick/retrace indefinitely.
 		return true;
