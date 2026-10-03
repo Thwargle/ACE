@@ -618,6 +618,14 @@ void UACEUIGameplayBinder::AppendChatLineToLog(int32 Window, const FString& Line
 	Row->SetSelectable(true);
 	Row->SetVisibility(ESlateVisibility::Visible);
 	const TWeakObjectPtr<UScrollBox> WeakLog(Log);
+	Row->GetSelectionPeers = [WeakLog]()
+	{
+		TArray<UACERetailTextBlock*> Rows;
+		if (const auto* Chat=WeakLog.Get())
+			for (UWidget* Child:Chat->GetAllChildren())
+				if (auto* Text=Cast<UACERetailTextBlock>(Child)) Rows.Add(Text);
+		return Rows;
+	};
 	Row->GetCopyAllText = [WeakLog]()
 	{
 		FString Text;

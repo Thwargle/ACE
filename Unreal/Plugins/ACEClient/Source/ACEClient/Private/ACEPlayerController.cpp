@@ -76,6 +76,7 @@
 #include "ACECameraRetail.h"
 #include "ACECameraSettings.h"
 #include "ACELedgeSlide.h"
+#include "ACELandingMotion.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "Camera/CameraComponent.h"
 #include "EngineUtils.h"
@@ -993,6 +994,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
         else if(GameHUDWidget)for(int32 Slot=0;Slot<9;++Slot)
             if(ACEInputBindings::Pressed(this,ACEInputBindings::Shortcut(Slot)))GameHUDWidget->ActivateHotbarSlot(Slot);
 	}
+	if (!bVR && !bChatFocused && DatGameplayBinder && (!FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R)))
+		DatGameplayBinder->CancelCombatAttack();
 
 	// Retail: F uses / picks up the selected object (same as the hand toolbar button).
 	if (!bChatFocused && ACEInputBindings::Pressed(this, ACEInputBindings::Action(TEXT("Pickup"))) && Client
@@ -1445,7 +1448,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	// (otherwise SoftReconcile snaps idle airborne poses back to the ground).
 	// The network send threshold must not discard small local mouse turns.
 	bLocalPredicting = bMoving || !FMath::IsNearlyZero(PendingMouseTurnDegrees)
-		|| bServerMoveToActive || bJumpAirborne || bJumpCharging || (bVR && !VR->IsInputBlocked());
+		|| bServerMoveToActive || bJumpAirborne || bJumpCharging || !LandingWorldAceVelocity.IsNearlyZero()
+		|| (bVR && !VR->IsInputBlocked());
 	const bool bChanged =
 		bForceMovementResend ||
 		!FMath::IsNearlyEqual(F, ForwardSent) ||
@@ -1699,6 +1703,15 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				Pred.NormalizeOutdoorLandblock();
 			}
 			// Ballistic arc from leave-ground velocity (world ACE); no mid-air redirect.
+			if (!bJumpAirborne && !LandingWorldAceVelocity.IsNearlyZero())
+			{
+				FACEWorldObject Self;
+				const float Friction = Client->GetWorldObject(Client->GetPlayerGuid(),Self) ? Self.Friction : .95f;
+				LandingWorldAceVelocity = ACELandingMotion::Step(LandingWorldAceVelocity,Friction,DeltaTime);
+				Pred.Location += LandingWorldAceVelocity * DeltaTime;
+				Pred.NormalizeOutdoorLandblock();
+				Client->SetForcePositionReporting(!LandingWorldAceVelocity.IsNearlyZero());
+			}
 			// Always integrate while airborne — zeroing XY at a wall used to make the full
 			// vector NearlyZero at apex and stop gravity (hang midair).
 			if (bJumpAirborne)
@@ -1764,6 +1777,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			auto FinishJumpLanding = [&]()
 			{
 				bLandedThisStep = true;
+				LandingWorldAceVelocity = FVector(JumpWorldAceVelocity.X,JumpWorldAceVelocity.Y,0.f);
 				// Poses received before touchdown describe the old airborne height.
 				// Wait for a fresh server anchor rather than reconciling back up.
 				bHaveLastServerPose = false;
@@ -1784,7 +1798,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				}
 				if (Client)
 				{
-					Client->SetForcePositionReporting(false);
+				Client->SetForcePositionReporting(!LandingWorldAceVelocity.IsNearlyZero());
 					// Send contact only after the resolved feet/cell are committed below.
 					// The previous pose can still be above the floor at this point.
 					bForceMovementResend = true;
@@ -3349,6 +3363,17 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                 }
             }
             P->SetActorLocation(Desired, false);
+			if (!bJumpAirborne && !LandingWorldAceVelocity.IsNearlyZero())
+			{
+				if (bMovementLedge) LandingWorldAceVelocity = FVector::ZeroVector;
+				else if (!MovementContactNormal.IsNearlyZero())
+				{
+					const FVector N = FACEPosition::AceVectorToUnreal(MovementContactNormal.GetSafeNormal2D());
+					const float Into = FVector::DotProduct(LandingWorldAceVelocity,N);
+					if (Into < 0) LandingWorldAceVelocity -= Into*N;
+				}
+				Client->SetForcePositionReporting(!LandingWorldAceVelocity.IsNearlyZero());
+			}
 			P->SetActorRotation(Pred.ToUnrealQuat());
 
 			// Desired.Z is capsule center; AutoPos must report feet so WithinUseRadius matches.
@@ -4131,6 +4156,7 @@ void AACEPlayerController::ReleaseJump(float Forward, float Right)
 		LocalVel = ACEVRLocomotion::JumpVelocity(Forward, Right, !bStandingAim && bRunning, Client->GetRunRate());
 	LocalVel.Z = FMath::Sqrt(FMath::Max(0.f, Height * 19.6f));
 	JumpLocalAceVelocity = LocalVel;
+	LandingWorldAceVelocity = FVector::ZeroVector;
 
 	FACEPosition LaunchPose;
 	if (bHavePredictedPose)
@@ -5824,6 +5850,7 @@ void AACEPlayerController::InvalidateMovementAfterTeleport(bool bAirborneArrival
 	JumpAirborneSeconds = 0.f;
 	StepHoldSeconds = 0.f;
 	JumpWorldAceVelocity = FVector::ZeroVector;
+	LandingWorldAceVelocity = FVector::ZeroVector;
 	JumpLocalAceVelocity = FVector::ZeroVector;
 	ClearServerMoveTo();
 	// Clearing an old approach disables forced reports; a falling arrival needs
@@ -6345,6 +6372,7 @@ void AACEPlayerController::HandlePositionUpdate(int32 ObjectGuid, const FACEPosi
 		StandingJumpAimF = StandingJumpAimR = 0.f;
 		JumpAirborneSeconds = JumpChargeExtent = 0.f;
 		JumpWorldAceVelocity = FVector::ZeroVector;
+		LandingWorldAceVelocity = FVector::ZeroVector;
 		JumpLocalAceVelocity = FVector::ZeroVector;
 		StepHoldSeconds = 0.f;
 		Client->SetForcePositionReporting(false);
@@ -7056,6 +7084,12 @@ void AACEPlayerController::InteractWithObject(int32 ObjectGuid)
 	}
 
 	// F and the hand toolbar share the same server-confirmed inventory operation.
+	if (Obj.WielderId == PlayerGuid)
+	{
+		// Pickup is PutItemInContainer, not Use: clothing has no ActOnUse.
+		SendInventoryPickup(ObjectGuid);
+		return;
+	}
 	if (Client->SortInventoryItem(ObjectGuid)) return;
 
 	// F/hand on external loot shares retail pickup preference and stack handling.

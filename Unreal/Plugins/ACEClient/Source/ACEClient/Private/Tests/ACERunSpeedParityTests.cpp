@@ -207,6 +207,16 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
   TestTrue(TEXT("Jump duration is frame-rate independent"),FMath::Abs(double(Frames)/Rate-Flight)<2./Rate);
   TestTrue(TEXT("Jump range agrees with retail leave-ground run speed"),FMath::Abs(Distance-12.2257250946*Flight)<12.2257250946*2./Rate+.02);
   TestFalse(TEXT("Completed jump releases airborne animation and input"),PC->bJumpAirborne);
+  const FVector Touchdown=Pawn->GetActorLocation();
+  VR->MoveStick=FVector2D::ZeroVector;
+  TestTrue(TEXT("Landing preserves horizontal physics velocity"),PC->LandingWorldAceVelocity.Size2D()>10.);
+  for(int I=0;I<Rate/2;++I)
+  {
+   VR->Head->SetWorldLocation(Pawn->GetActorLocation()+FVector(0,0,77));PC->PlayerTick(1.f/Rate);
+  }
+  const double Glide=FVector::Dist2D(Touchdown,Pawn->GetActorLocation())/100.;
+  TestTrue(TEXT("Retail friction permits a brief glide instead of gluing feet at contact"),Glide>2.5 && Glide<3.5);
+  TestFalse(TEXT("Landing glide does not re-enter airborne animation"),PC->bJumpAirborne);
   AddInfo(FString::Printf(TEXT("Jump tracked=%d rate=%d scale=%.1f charge=%.2f apex=%.3fm range=%.3fm time=%.3fs"),Tracked,Rate,Size,Extent,Peak,Distance,double(Frames)/Rate));
  }
  // Retail permits charging during flight but checks contact when executing.

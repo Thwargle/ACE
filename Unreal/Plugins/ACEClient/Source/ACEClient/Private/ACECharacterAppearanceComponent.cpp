@@ -822,7 +822,9 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 
 	HideOwnerPrimitiveMeshes();
 	bHasMesh = true;
-	bNeedsInitialPropPose = bStaticProp && !bIsCorpse && bPlayIdleMotion;
+	// Object-looking NPCs use Creature too. Retail initializes their motion
+	// table before drawing/picking, just as it does for ordinary animated props.
+	bNeedsInitialPropPose = !bHeld && !bIsCorpse && bPlayIdleMotion;
 	AppliedPlacementId = PlacementId;
 	AppliedAppearanceHash = AppearanceHash;
 	++AppearanceRevision;

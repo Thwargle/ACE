@@ -1,60 +1,23 @@
 #requires -Version 5.1
 # Shared by the developer and friend installers. Invoke-Adb, Wait-QuestConnection,
 # $AdbPath, $deviceArgs, $Serial, and $package are supplied by the installer.
-function ConvertTo-QuestNativeArgument {
-    param([string]$Value)
-    if ($Value -and $Value -notmatch '[\s"]') { return $Value }
-    $escaped = [regex]::Replace($Value, '(\\*)"', '$1$1\"')
-    $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
-    return '"' + $escaped + '"'
-}
-
-function Invoke-AdbFileInput {
-    param([string]$Source, [string[]]$Arguments)
-    # Do not pipe DAT bytes through PowerShell: Windows PowerShell 5.1 decodes
-    # native pipelines as text. A no-PTY Android shell receives the raw stream.
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo.FileName = $AdbPath
-    $process.StartInfo.Arguments = ($Arguments | ForEach-Object { ConvertTo-QuestNativeArgument $_ }) -join ' '
-    $process.StartInfo.UseShellExecute = $false
-    $process.StartInfo.CreateNoWindow = $true
-    $process.StartInfo.RedirectStandardInput = $true
-    $process.StartInfo.RedirectStandardOutput = $true
-    $process.StartInfo.RedirectStandardError = $true
-    $file = $null
-    $started = $false
+function Send-QuestDataFile {
+    param([string]$Source, [string]$Destination)
+    # Use ADB's file-sync protocol, not Windows stdin. shell -T truncates at
+    # Ctrl-Z and exec-in can terminate the ADB server after large transfers.
+    # Stage outside shared storage (which Android may remove during app setup).
+    $staging='/data/local/tmp/ace-dat-'+[guid]::NewGuid().ToString('N')+'.tmp'
     try {
-        if (!$process.Start()) { throw 'Could not start ADB for data transfer.' }
-        $started = $true
-        $stdout = $process.StandardOutput.ReadToEndAsync()
-        $stderr = $process.StandardError.ReadToEndAsync()
-        $file = [System.IO.File]::OpenRead($Source)
-        $copyError = $null
-        try {
-            $copy = $file.CopyToAsync($process.StandardInput.BaseStream)
-            if (!$copy.Wait([TimeSpan]::FromMinutes(10))) {
-                $process.Kill()
-                throw 'Data transfer timed out after ten minutes.'
-            }
-        } catch { $copyError = $_.Exception.Message }
-        $process.StandardInput.Close()
-        if (!$process.WaitForExit(30000)) {
-            $process.Kill()
-            $process.WaitForExit()
-            throw 'ADB did not finish the data transfer. Reconnect the headset and retry.'
-        }
-        $output = $stdout.Result + $stderr.Result
-        if ($process.ExitCode -ne 0 -or $copyError) {
-            throw "ADB data transfer failed (exit $($process.ExitCode)): $copyError $output"
-        }
-        if ($output.Trim()) { Write-Host $output.Trim() }
+        Invoke-Adb -Arguments ($deviceArgs + @('push', $Source, $staging)) | Out-Host
+        # The outer shell opens the shell-owned staging file before run-as
+        # changes identity. The destination is created with app ownership.
+        $receive="run-as $package sh -c 'cat > $Destination' < $staging"
+        Invoke-Adb -Arguments ($deviceArgs + @('shell', $receive)) | Out-Host
     } finally {
-        if ($file) { $file.Dispose() }
-        if ($started -and !$process.HasExited) { $process.Kill() }
-        $process.Dispose()
+        try { Invoke-Adb -Arguments ($deviceArgs + @('shell','rm','-f',$staging)) | Out-Host }
+        catch { Write-Warning "Could not remove temporary transfer file $staging. $($_.Exception.Message)" }
     }
 }
-
 function Install-QuestData {
     param([string]$DatDirectory, [string]$DiagnosticDirectory)
     $saved = 'files/ACUnreal/Saved/DAT'
@@ -83,12 +46,11 @@ function Install-QuestData {
                     Write-Host "$name is already installed and verified."
                     break
                 }
-                Write-Host "Transferring $name directly into app storage (attempt $attempt of 3)..."
+                Write-Host "Transferring $name into app storage (attempt $attempt of 3)..."
                 # Only constant paths and allowlisted basenames enter Android's
                 # shell. Never truncate the installed DAT on a failed transfer.
                 $partial = "$saved/$name.installing"
-                $receive = "run-as $package sh -c 'cat > $partial'"
-                Invoke-AdbFileInput -Source $source -Arguments ($deviceArgs + @('shell', '-T', $receive))
+                Send-QuestDataFile -Source $source -Destination $partial
                 $size = (Invoke-Adb -Arguments ($deviceArgs + @('shell', 'run-as', $package, 'stat', '-c', '%s', $partial)) | Out-String).Trim()
                 $hash = ((Invoke-Adb -Arguments ($deviceArgs + @('shell', 'run-as', $package, 'sha256sum', $partial)) | Out-String).Trim() -split '\s+')[0]
                 if ($size -ne $localSize -or $hash -ne $localHash) {

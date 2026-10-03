@@ -1502,6 +1502,66 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         auto& Session=*Client->Session;
         Session.SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("Inventory fixture sender"),false);
         Session.ServerC2SAddr=Address; Session.IssacClient=MakeUnique<FACEIsaac>(123u);
+        TFunction<void()> CheckCombatAndXP=[&]
+        {
+            const auto SavedVitals=Session.PlayerVitals;
+            FACEWorldObject Target;Target.Guid=0x70001230;Target.Name=TEXT("Combat target");
+            Target.ItemType=ACEItemType::Creature;Target.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
+            Session.WorldObjects.Add(Target.Guid,Target);Client->SelectObject(Target.Guid);
+            Gameplay->HandleSelectionChanged(Client->GetSelectedObject());
+            Gameplay->ApplyCombatMode(int32(ACECombatMode::Melee));
+            Gameplay->bCombatAutoRepeat=false;Gameplay->RequestedAttackPower=.5f;
+            Session.CachedC2SPackets.Reset();
+            Gameplay->BeginCombatPowerCharge(ACEAttackHeight::Medium,true);
+            Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-2.;
+            Gameplay->TickCombatAutoAttack(0);
+            TestEqual(TEXT("Held full-power attack sends no attack action"),Session.CachedC2SPackets.Num(),0);
+            Gameplay->ReleaseCombatPowerCharge();Gameplay->TickCombatAutoAttack(0);
+            TestEqual(TEXT("Releasing a held attack sends exactly one action"),Session.CachedC2SPackets.Num(),1);
+            for(const auto& Packet:Session.CachedC2SPackets)
+            {
+                FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);
+                TestEqual(TEXT("Melee release uses the retail targeted attack opcode"),R.ReadUInt32(),ACEGameAction::TargetedMeleeAttack);
+                TestEqual(TEXT("Melee release retains selected target"),R.ReadUInt32(),uint32(Target.Guid));
+                R.ReadUInt32();TestEqual(TEXT("Holding beyond requested mark transmits full power"),R.ReadFloat(),1.f);
+            }
+            Session.CachedC2SPackets.Reset();Gameplay->CancelCombatAttack();Gameplay->CancelCombatAttack();
+            TestEqual(TEXT("Moving cancels a non-repeat attack once"),Session.CachedC2SPackets.Num(),1);
+            for(const auto& Packet:Session.CachedC2SPackets)
+            {FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);TestEqual(TEXT("Cancellation uses standard retail networking"),R.ReadUInt32(),ACEGameAction::CancelAttack);}
+            Gameplay->ApplyCombatMode(int32(ACECombatMode::Missile));Session.SetCurrentStance(ACEMotion::StanceBowCombat);
+            Gameplay->TickCombatAutoAttack(0); // consume the preceding cancellation revision
+            Session.CachedC2SPackets.Reset();Gameplay->BeginCombatPowerCharge(ACEAttackHeight::Medium,true);
+            Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-2.;Gameplay->TickCombatAutoAttack(0);
+            TestEqual(TEXT("Held bow attack also waits for release at full charge"),Session.CachedC2SPackets.Num(),0);
+            Gameplay->ReleaseCombatPowerCharge();Gameplay->TickCombatAutoAttack(0);
+            TestEqual(TEXT("Releasing a held bow sends one action"),Session.CachedC2SPackets.Num(),1);
+            for(const auto& Packet:Session.CachedC2SPackets)
+            {FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);TestEqual(TEXT("Bow release uses standard missile networking"),R.ReadUInt32(),ACEGameAction::TargetedMissileAttack);}
+            Gameplay->ApplyCombatMode(int32(ACECombatMode::NonCombat));
+            Session.PlayerVitals.bValid=true;Session.PlayerVitals.AvailableExperience=1;
+            FACESkillInfo Skill;Skill.SkillId=6;Skill.AdvancementClass=2;Skill.XpSpent=0;
+            Session.PlayerVitals.Skills={Skill};Gameplay->SelectedSkillId=Skill.SkillId;Gameplay->ActiveSkillTab=TEXT("SkillPage");
+            Session.CachedC2SPackets.Reset();Gameplay->RaiseSelectedStat(1);Gameplay->RaiseSelectedStat(10);
+            TestEqual(TEXT("Disabled skill raises never spend partial XP or send packets"),Session.CachedC2SPackets.Num(),0);
+            Gameplay->ActiveSkillTab=TEXT("AttributePage");Gameplay->SelectedAttributeRow=0;
+            Gameplay->RaiseSelectedStat(1);Gameplay->SelectedAttributeRow=6;Gameplay->RaiseSelectedStat(1);
+            TestEqual(TEXT("Insufficient XP also blocks attributes and vitals"),Session.CachedC2SPackets.Num(),0);
+            Session.PlayerVitals=SavedVitals;Session.WorldObjects.Remove(Target.Guid);Client->SelectObject(Item.Guid);
+            Gameplay->HandleSelectionChanged(Client->GetSelectedObject());
+        };
+        CheckCombatAndXP();
+        {
+            const auto SavedAppraisal=Gameplay->LastAppraisal;
+            Gameplay->LastAppraisal.ObjectGuid=Item.Guid;
+            Gameplay->ShowExamination(true);
+            Session.CachedC2SPackets.Reset();Gameplay->ExamineSelectedObject();
+            TestFalse(TEXT("Examining the same selection again closes the ID window"),Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field"))->bVisible);
+            TestEqual(TEXT("Closing ID does not send another appraisal"),Session.CachedC2SPackets.Num(),0);
+            Gameplay->ExamineSelectedObject();
+            TestEqual(TEXT("Examining after closing requests fresh server data"),Session.CachedC2SPackets.Num(),1);
+            Gameplay->LastAppraisal=SavedAppraisal;
+        }
         Gameplay->CancelPendingUseWith(); Gameplay->ShowExamination(false);
         auto Activate=[&](FACEWorldObject Object)
         {
@@ -2645,6 +2705,19 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 Controller->PlayerInput->ProcessInputStack({},.016f,false);
                 Gameplay->PollKeyboardActions(Controller);
             };
+            {
+                TGuardValue<int32> KeepCombat(Gameplay->CombatMode,Gameplay->CombatMode);
+                TGuardValue<float> KeepPower(Gameplay->RequestedAttackPower,.5f);
+                for (int32 Mode:{int32(ACECombatMode::Melee),int32(ACECombatMode::Missile)})
+                {
+                    Gameplay->CombatMode=Mode;ACEInputBindings::SetCombatContext(Mode);
+                    Gameplay->RequestedAttackPower=.5f;Press(EKeys::Insert);
+                    TestTrue(TEXT("Insert lowers the requested combat power"),FMath::IsNearlyEqual(Gameplay->RequestedAttackPower,.4f));
+                    Press(EKeys::PageUp);
+                    TestTrue(TEXT("Page Up raises the requested combat power"),FMath::IsNearlyEqual(Gameplay->RequestedAttackPower,.5f));
+                }
+                Controller->PlayerInput->FlushPressedKeys();
+            }
             {
                 TGuardValue<int32> KeepCombat(Gameplay->CombatMode,Gameplay->CombatMode);
                 TGuardValue<int32> KeepServerCombat(Session.PlayerVitals.CombatMode,Session.PlayerVitals.CombatMode);
@@ -3845,6 +3918,18 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         FACEWorldObject Armor=Shirt; Armor.Guid=9902; Armor.Name=TEXT("Chest armor"); Armor.ItemType=ACEItemType::Armor;
         Armor.CurrentWieldedLocation=0x200; Armor.ValidLocations=0x200;
         Session.WorldObjects.Add(Shirt.Guid,Shirt); Session.WorldObjects.Add(Armor.Guid,Armor);
+        Session.ClearPendingUse();Client->SelectObject(Shirt.Guid);
+        Session.CachedC2SPackets.Reset();Controller->InteractWithSelectedObject();
+        TestEqual(TEXT("F on worn clothing sends exactly one inventory action"),Session.CachedC2SPackets.Num(),1);
+        for (const auto& Packet:Session.CachedC2SPackets)
+        {
+            if (!TestTrue(TEXT("Clothing pickup has a complete inventory payload"),Packet.Value.Payload.Num()>=40)) continue;
+            FACEBinaryReader Wire(Packet.Value.Payload);Wire.Skip(24);
+            TestEqual(TEXT("Removing clothing uses PutItemInContainer rather than ActOnUse"),Wire.ReadUInt32(),ACEGameAction::PutItemInContainer);
+            TestEqual(TEXT("Removal retains selected clothing"),Wire.ReadUInt32(),uint32(Shirt.Guid));
+            TestEqual(TEXT("Removal puts clothing into the main pack"),Wire.ReadUInt32(),uint32(Player.Guid));
+            TestEqual(TEXT("Removal uses the first inventory position"),Wire.ReadUInt32(),0u);
+        }
         Gameplay->SelectInventoryGuid(Armor.Guid);
         Gameplay->RefreshSelectionOverlay();
         Gameplay->bShowPaperdollSlots=true; Gameplay->RefreshInventoryOverlays();

@@ -40,6 +40,7 @@ struct ACECLIENT_API FACEDecodedObject
 	int32 SoundTableId = 0;
 	int32 PhysicsEffectTableId = 0;
 	float Scale = 1.f;
+	float Friction = .95f;
 	FACEPosition Position;
 	bool bHasPosition = false;
 	bool bIsPlayer = false;

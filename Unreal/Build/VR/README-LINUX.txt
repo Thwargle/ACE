@@ -13,6 +13,11 @@ Install graphics and audio drivers through your distribution's package manager.
 Engine requirements: https://dev.epicgames.com/documentation/en-us/unreal-engine/linux-development-requirements-for-unreal-engine
 This initial Linux release targets desktop play. Linux VR is not validated.
 
+AMD RADV compatibility: Linux disables pipeline precaching to avoid an ACO
+store_deref shader-compiler abort. Pipelines compile on demand, which can
+cause a brief first-use hitch. For older builds, launch with:
+  bash ./AC-Unreal.sh '-ini:Engine:[ConsoleVariables]:r.PSOPrecaching=0'
+
 GAME DATA
 Provide your own updated Asheron's Call DAT files. Required: client_portal.dat,
 client_cell_1.dat, client_local_English.dat. client_highres.dat is optional and

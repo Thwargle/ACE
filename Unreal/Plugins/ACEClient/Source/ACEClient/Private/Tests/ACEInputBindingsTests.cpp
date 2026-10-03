@@ -139,10 +139,12 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  TestEqual(TEXT("Cancel preserves prior live import"),ACEInputBindings::Get(EKeys::S,0).Key,EKeys::S);
  ACEInputBindings::BeginEdit();
  const FString ExportPath=FPaths::ProjectSavedDir()/TEXT("Automation/RoundTrip.keymap");FString ExportError;
+ ACEInputBindings::Set(ACEInputBindings::Action(TEXT("ToggleChat")),0,FInputChord(EKeys::F12));
  TestTrue(TEXT("Save As writes a retail-format keymap"),ACEInputBindings::ExportRetailKeymapFile(ExportPath,ExportError));
  ACEInputBindings::Defaults();
  const auto RoundTrip=ACEInputBindings::ImportRetailKeymapFile(ExportPath);
  TestTrue(TEXT("Exported file reloads"),RoundTrip.bSuccess);
+ TestEqual(TEXT("Toggle Chat Entry is rebindable and survives keymap export/import"),ACEInputBindings::Get(ACEInputBindings::Action(TEXT("ToggleChat")),0).Key,EKeys::F12);
  TestTrue(TEXT("Retail keymap import retains the local interface shortcut"),ACEInputBindings::Get(ToggleInterface,0)==FInputChord(EKeys::Z,false,false,true,false));
  TestTrue(TEXT("Save and load preserve modifier bindings"),ACEInputBindings::Get(EKeys::Q,1)==FInputChord(EKeys::A,false,false,true,false));
  TestFalse(TEXT("Save and load preserve unbound actions without invalid empty control records"),ACEInputBindings::Get(EKeys::W,0).Key.IsValid());
@@ -154,8 +156,8 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  TestEqual(TEXT("All supported user-file action bindings import"),Custom.BindingCount,157);
  TestEqual(TEXT("Remaining unsupported controls are reported individually"),Custom.Skipped.Num(),18);
  TestEqual(TEXT("Retail map view imports its keypad Enter"),ACEInputBindings::Get(ACEInputBindings::Action(TEXT("CameraViewMapMode")),0).Key,ACEInputBindings::NumpadEnterKey());
- TestEqual(TEXT("All explicit supported DoNothing overrides import"),ACEInputBindings::GetBlockedBindings().Num(),17);
- TestEqual(TEXT("Native input contexts are accounted for separately"),Custom.UnchangedContexts.Num(),9);
+ TestEqual(TEXT("All explicit supported DoNothing overrides import, including chat toggles"),ACEInputBindings::GetBlockedBindings().Num(),19);
+ TestEqual(TEXT("Native input contexts are accounted for separately"),Custom.UnchangedContexts.Num(),8);
  AddInfo(FString::Printf(TEXT("Custom keymap: %d imported, %d diagnostics"),Custom.BindingCount,Custom.Skipped.Num()));
  for(const auto& Entry:Custom.Skipped)AddInfo(Entry);
  TestEqual(TEXT("Self binding from user file"),ACEInputBindings::Get(ACEInputBindings::Action(TEXT("SelectionSelf")),0).Key,EKeys::NumPadOne);

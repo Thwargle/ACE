@@ -293,6 +293,7 @@ protected:
 	FVector JumpLocalAceVelocity = FVector::ZeroVector;
 	/** Locked world-ACE launch velocity for the full ballistic arc (no air steer). */
 	FVector JumpWorldAceVelocity = FVector::ZeroVector;
+	FVector LandingWorldAceVelocity = FVector::ZeroVector;
 	float JumpAirborneSeconds = 0.f;
 	bool bSpaceWasDown = false;
 	/** After teleport, force the next MoveToState even if held keys are unchanged. */

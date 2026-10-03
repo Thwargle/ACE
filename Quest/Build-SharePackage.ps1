@@ -1,5 +1,5 @@
 #requires -Version 5.1
-param([ValidateRange(1, 999)][int]$InstallerRevision = 6)
+param([ValidateRange(1, 999)][int]$InstallerRevision = 7)
 $ErrorActionPreference = 'Stop'
 $apk = Join-Path $PSScriptRoot 'Packaged\Android_ASTC\ACUnreal-arm64.apk'
 $aapt = Join-Path $PSScriptRoot 'AndroidSDK\build-tools\35.0.1\aapt.exe'

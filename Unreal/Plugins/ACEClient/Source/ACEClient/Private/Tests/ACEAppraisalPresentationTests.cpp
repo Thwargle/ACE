@@ -29,6 +29,12 @@ bool FACEAppraisalPresentationTest::RunTest(const FString&)
     Headings=ACEAppraisalFormatting::CreatureHeadings(Info,nullptr,&Object);
     TestEqual(TEXT("Current object PK status supersedes stale appraisal data"),Headings.PlayerKiller,FString(TEXT("Player Killer Lite")));
     FACEAppraisalInfo Item;
+    FACEAppraisalInfo Gear; Gear.bSuccess=true;
+    Gear.IntProperties={{370,5},{371,6},{372,7},{373,8},{374,9},{375,10},{376,11},{377,12},{378,13},{379,25}};
+    const FString GearText=ACEAppraisalFormatting::ItemExaminationText(Gear,nullptr);
+    TestTrue(TEXT("Equipment ratings come from server Gear qualities in retail order"),GearText.Contains(
+        TEXT("Ratings: Dam 5, Dam Resist 6, Crit 7, Crit Dam 9, Crit Resist 8, Crit Dam Resist 10, Heal Boost 11, Nether Resist 12, Life Resist 13")));
+    TestTrue(TEXT("Equipment vitality has its separate retail description"),GearText.Contains(TEXT("This item adds 25 Vitality.")));
     Item.bSuccess=Item.bHasValue=Item.bHasBurden=true;Item.Value=9000;Item.Burden=50;
     Item.StringProperties.Add(14,TEXT("Use on a magic item to give the stone's stored Mana to that item."));
     Item.StringProperties.Add(15,TEXT("Short fallback."));

@@ -1247,6 +1247,7 @@ struct ACECLIENT_API FACEWorldObject
 
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	float Scale = 1.f;
+	float Friction = .95f;
 
 	/** Retail physics/model scale is server-authored, including custom weenies. */
 	float GetValidObjectScale() const { return FMath::IsFinite(Scale) && Scale > 0.f ? Scale : 1.f; }

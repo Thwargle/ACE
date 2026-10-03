@@ -9,7 +9,7 @@ New-Item -ItemType Directory -Path $sourceDir,$deviceDir -Force | Out-Null
 $oldPipeDir = $env:ACE_TEST_PIPE_DIR
 $env:ACE_TEST_PIPE_DIR = $deviceDir
 $AdbPath = Join-Path $fixture 'Fake Adb.exe'
-# A real native subprocess reads the same binary stdin path used for ADB.
+# A real native subprocess exercises ADB push argument quoting and file bytes.
 Add-Type -OutputAssembly $AdbPath -OutputType ConsoleApplication -TypeDefinition @'
 using System;
 using System.IO;
@@ -17,12 +17,12 @@ using System.Text.RegularExpressions;
 public class FakeAdb {
  public static int Main(string[] args) {
   string root = Environment.GetEnvironmentVariable("ACE_TEST_PIPE_DIR");
-  if (args.Length != 5 || args[0] != "-s" || args[1] != "QUEST_A" || args[2] != "shell" || args[3] != "-T") return 8;
-  var match = Regex.Match(args[4], @"cat > files/ACUnreal/Saved/DAT/(client_\w+\.dat\.installing)'$");
-  if (!match.Success) return 9;
-  string path = Path.Combine(root, match.Groups[1].Value);
-  using (var input = Console.OpenStandardInput()) using (var output = File.Create(path)) input.CopyTo(output);
+  if (args.Length != 5 || args[0] != "-s" || args[1] != "QUEST_A" || args[2] != "push") return 8;
+  if (!Regex.IsMatch(args[4], @"^/data/local/tmp/ace-dat-[0-9a-f]{32}\.tmp$")) return 9;
+  string path = Path.Combine(root, Path.GetFileName(args[4]));
   string mode = File.Exists(Path.Combine(root,"mode")) ? File.ReadAllText(Path.Combine(root,"mode")).Trim() : "";
+  if (mode == "early-exit") { Console.Error.WriteLine("Receiver closed before reading data"); return 0; }
+  File.Copy(args[3], path, true);
   if (mode == "disconnect") { Console.Error.WriteLine("adb: error: device offline"); return 1; }
   if (mode == "corrupt") File.WriteAllText(path,"corrupted transfer");
   if (mode == "corrupt-once") { File.WriteAllText(path,"corrupted transfer"); File.WriteAllText(Path.Combine(root,"mode"),""); }
@@ -44,6 +44,21 @@ function Wait-QuestConnection { param([string]$RequestedSerial)
 function Invoke-Adb { param([string[]]$Arguments)
     $cmd = $Arguments -join ' '
     $script:commands += $cmd
+    if ($Arguments.Count -eq 5 -and $Arguments[2] -eq 'push') {
+        $output=@(& $AdbPath @Arguments 2>&1)
+        if($LASTEXITCODE){throw "ADB push failed: $($output -join ' ')"}
+        return
+    }
+    if ($cmd -match "shell run-as com.acecommunity.questtest sh -c 'cat > files/ACUnreal/Saved/DAT/(client_\w+\.dat\.installing)' < /data/local/tmp/(ace-dat-[0-9a-f]{32}\.tmp)$") {
+        [IO.File]::Copy((Join-Path $deviceDir $Matches[2]),(Join-Path $deviceDir $Matches[1]),$true)
+        return
+    }
+    if ($cmd -match 'shell rm -f /data/local/tmp/(ace-dat-[0-9a-f]{32}\.tmp)$') {
+        $tempPath=[IO.Path]::GetFullPath((Join-Path $deviceDir $Matches[1]))
+        if(!$tempPath.StartsWith($deviceDir+'\')){throw 'Fixture path escaped'}
+        if(Test-Path -LiteralPath $tempPath){Remove-Item -LiteralPath $tempPath -Force}
+        return
+    }
     if ($cmd -match 'shell am force-stop com.acecommunity.questtest$|shell run-as com.acecommunity.questtest mkdir -p files/ACUnreal/Saved/DAT$') { return }
     if ($cmd -match 'if \[ -f files/ACUnreal/Saved/DAT/(client_\w+\.dat) \]') {
         $path = Join-Path $deviceDir $Matches[1]
@@ -69,6 +84,9 @@ function Invoke-Adb { param([string[]]$Arguments)
 $bytes = New-Object byte[] (1024 * 1024 + 513)
 $random = New-Object Random(27)
 $random.NextBytes($bytes)
+# Include all byte values, especially Ctrl-Z, CR/LF, NUL, and shell escape
+# sequences. A binary .NET pipe alone is insufficient when ADB uses shell -T.
+for ($i=0; $i -lt 256; $i++) { $bytes[$i]=[byte]$i }
 foreach ($name in @('client_portal.dat','client_cell_1.dat','client_local_English.dat','client_highres.dat')) {
     [IO.File]::WriteAllBytes((Join-Path $sourceDir $name),$bytes)
 }
@@ -77,7 +95,7 @@ try {
     foreach ($name in @('client_portal.dat','client_cell_1.dat','client_local_English.dat','client_highres.dat')) {
         if ((Get-FileHash -LiteralPath (Join-Path $deviceDir $name)).Hash -ne (Get-FileHash -LiteralPath (Join-Path $sourceDir $name)).Hash) { throw 'Binary stream changed bytes' }
     }
-    Write-Output 'PASS raw binary transfer through Windows PowerShell 5.1, including whitespace/apostrophe paths'
+    Write-Output 'PASS binary file transfer through Windows PowerShell 5.1, including whitespace/apostrophe paths'
     $script:commands = @()
     Install-QuestData -DatDirectory $sourceDir -DiagnosticDirectory $fixture
     if (($script:commands -join '\n') -match '\bmv\b') { throw 'Replaced already verified data' }
@@ -88,7 +106,7 @@ try {
     Install-QuestData -DatDirectory $sourceDir -DiagnosticDirectory $fixture
     if ($script:retries -ne 1 -or (Get-FileHash -LiteralPath $target).Hash -ne (Get-FileHash -LiteralPath (Join-Path $sourceDir 'client_cell_1.dat')).Hash) { throw 'Retry did not repair data' }
     Write-Output 'PASS corrupt transfer retries on the same headset and repairs the failed cell DAT'
-    foreach ($mode in @('corrupt','disconnect','storage')) {
+    foreach ($mode in @('corrupt','disconnect','storage','early-exit')) {
         'old installed data' | Set-Content -LiteralPath $target
         $before = (Get-FileHash -LiteralPath $target).Hash
         $mode | Set-Content -LiteralPath (Join-Path $deviceDir 'mode')
@@ -98,7 +116,12 @@ try {
         if (!$failed -or (Get-FileHash -LiteralPath $target).Hash -ne $before) { throw "Failure mode $mode replaced an unverified file or claimed success" }
         $expectedRetries = if ($mode -eq 'storage') { 0 } else { 2 }
         if ($script:retries -ne $expectedRetries) { throw "Unexpected retries for $mode" }
+        if ($mode -eq 'early-exit') {
+            $diagnostic=Get-Content -LiteralPath (Join-Path $fixture 'Quest-Data.txt') -Raw
+            if ($diagnostic -match 'Exception calling "Wait"|One or more errors occurred') { throw 'Transfer diagnostic hid the underlying pipe error' }
+        }
         Write-Output "PASS $mode preserves installed files and reports the failure"
     }
-    Write-Output "All 6 data-transfer checks passed. Evidence: $fixture"
+    if (@(Get-ChildItem -LiteralPath $deviceDir -Filter 'ace-dat-*.tmp').Count) { throw 'Staging file leaked' }
+    Write-Output "All 7 data-transfer checks passed. Evidence: $fixture"
 } finally { $env:ACE_TEST_PIPE_DIR = $oldPipeDir }

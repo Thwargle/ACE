@@ -1,4 +1,4 @@
-AC:VR - INSTALLER HELPER UPDATE
+AC:VR - INSTALLER HELPER UPDATE (revision 7)
 
 This small ZIP updates only the Windows installer. It does not contain the APK
 or game data, and it does not change the game version.
@@ -16,9 +16,10 @@ or game data, and it does not change the game version.
    Otherwise run Install-Quest.cmd.
    The first verification message identifies the APK version from your manifest.
 
-DAT files now copy directly into app storage, without the shared-storage
-temporary directory that disappeared during the failed transfer. Each complete
-file is SHA256-verified before replacing the installed copy. Failed data copies
+DAT files now use ADB push and a temporary file outside Android shared storage,
+then copy into app storage. This fixes binary truncation and ADB restarts seen
+with streamed large DAT transfers. Allow extra free space for one temporary
+DAT file. Each complete file is SHA256-verified before replacing the installed copy. Failed data copies
 retry up to three times on the same headset; verified files are skipped.
 Repair-Quest.cmd does not reinstall the APK. Do not open the game until repair
 says installation is complete. An incomplete cell DAT prevents world loading.

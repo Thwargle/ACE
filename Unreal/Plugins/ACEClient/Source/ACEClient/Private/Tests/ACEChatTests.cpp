@@ -22,6 +22,8 @@
 #include "HAL/PlatformApplicationMisc.h"
 #include "Misc/ScopeExit.h"
 #include "Dat/ACEDatTextLayout.h"
+#include "Slate/WidgetRenderer.h"
+#include "Misc/App.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEChatParityTest, "ACE.RetailParity.ChatInputAndCommands",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -56,10 +58,14 @@ bool FACEChatParityTest::RunTest(const FString&)
     Output->SetText(FText::FromString(TEXT("Copy this chat message")));
     Output->SetRetailElement(Resources,nullptr,FVector2D(1,1),200,false);
     Binder->ChatEntry = Main; Binder->FloatyChatEntries.SetNum(4); Binder->FloatyChatEntries[0] = Other;
+    auto* Output2=NewObject<UACERetailTextBlock>(); Output2->SetSelectable(true);
+    Output2->SetText(FText::FromString(TEXT("Second message")));
+    Output2->SetRetailElement(Resources,nullptr,FVector2D(1,1),200,false);
     auto Window = SNew(SWindow).Title(FText::FromString(TEXT("Chat input regression"))).ClientSize(FVector2D(500,140))
         [SNew(SVerticalBox) + SVerticalBox::Slot().AutoHeight()[Main->TakeWidget()]
             + SVerticalBox::Slot().AutoHeight()[Other->TakeWidget()]
-            + SVerticalBox::Slot().AutoHeight()[Output->TakeWidget()]];
+            + SVerticalBox::Slot().AutoHeight()[Output->TakeWidget()]
+            + SVerticalBox::Slot().AutoHeight()[Output2->TakeWidget()]];
     auto& Slate = FSlateApplication::Get(); Slate.AddWindow(Window, false);
     const auto OldFocus = Slate.GetUserFocusedWidget(0);
     auto Focus = [&](UACEChatEntry* Entry, uint32 User = 0) { Slate.SetUserFocus(User, Entry->TakeWidget()); };
@@ -106,6 +112,34 @@ bool FACEChatParityTest::RunTest(const FString&)
             Ctrl(EKeys::C); ReadClipboard(Copied);
             TestEqual(TEXT("Mouse selection follows native glyph advances"),Copied,FString(TEXT("Copy")));
         }
+        Output->GetSelectionPeers=Output2->GetSelectionPeers=[Output,Output2]{return TArray<UACERetailTextBlock*>{Output,Output2};};
+        Window->SlatePrepass();
+        if (FApp::CanEverRender())
+        {
+            FWidgetRenderer Renderer;
+            Renderer.DrawWidget(Window,FVector2D(500,140));
+        }
+        auto First=Output->GetSelectionWidget().ToSharedRef();
+        auto Second=Output2->GetSelectionWidget().ToSharedRef();
+        FWidgetPath FirstPath,SecondPath;
+        Slate.GeneratePathToWidgetUnchecked(First,FirstPath);
+        Slate.GeneratePathToWidgetUnchecked(Second,SecondPath);
+        if (TestTrue(TEXT("Both chat rows are arranged"),FirstPath.IsValid() && SecondPath.IsValid()))
+        {
+            const auto G1=FirstPath.Widgets.Last().Geometry,G2=SecondPath.Widgets.Last().Geometry;
+            const FVector2D Start=G1.LocalToAbsolute(FVector2D(0,1));
+            const FVector2D End=G2.LocalToAbsolute(FVector2D(199,1));
+            Slate.SetUserFocus(0,First);
+            First->OnMouseButtonDown(G1,FPointerEvent(0,Start,Start,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
+            Slate.GetUser(0)->SetCursorCaptor(First,FirstPath);
+            First->OnMouseMove(G1,FPointerEvent(0,End,Start,{EKeys::LeftMouseButton},EKeys::Invalid,0,FModifierKeysState()));
+            Ctrl(EKeys::C); ReadClipboard(Copied);
+            TestEqual(TEXT("Dragging across chat messages copies both complete lines"),Copied,FString(TEXT("Copy this chat message\r\nSecond message")));
+            Slate.GetUser(0)->ReleaseCursorCapture();
+        }
+        // The editable chat command is intentionally single-line; test its
+        // clipboard behavior separately from copying multiline chat history.
+        Copied=TEXT("Copy"); FPlatformApplicationMisc::ClipboardCopy(*Copied);
         Main->SetChatText(TEXT("")); Focus(Main); Ctrl(EKeys::V);
         TestEqual(TEXT("Copied chat pastes into the editable entry"),Main->GetText().ToString(),Copied);
         Ctrl(EKeys::A); Ctrl(EKeys::C); Main->SetChatText(TEXT(""));

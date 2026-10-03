@@ -272,7 +272,7 @@ bool FACEObjectCreateParser::ParsePhysicsData(FACEBinaryReader& Reader, FACEDeco
 		if (!Reader.CanRead(4)) return false;
 		Out.Scale = Reader.ReadFloat();
 	}
-	if (Flags & Friction) { if (!Reader.CanRead(4)) return false; Reader.ReadFloat(); }
+	if (Flags & Friction) { if (!Reader.CanRead(4)) return false; Out.Friction = Reader.ReadFloat(); }
 	if (Flags & Elasticity) { if (!Reader.CanRead(4)) return false; Reader.ReadFloat(); }
 	if (Flags & Translucency)
 	{

@@ -868,6 +868,8 @@ FReply UACEUICanvasWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, 
 
 	if (GameplayBinder && bLeft)
 	{
+		if (GameplayBinder->TryBeginCombatButton(Local))
+			return FReply::Handled().CaptureMouse(TakeWidget());
 		if (GameplayBinder->TryBeginScrollbarDrag(Local))
 		{
 			return FReply::Handled().SetUserFocus(TakeWidget()).CaptureMouse(TakeWidget());
@@ -966,6 +968,8 @@ FReply UACEUICanvasWidget::NativeOnMouseButtonUp(const FGeometry& InGeometry, co
 	const FVector2D Local = InGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition());
 	if (GameplayBinder && InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
 	{
+		if (GameplayBinder->TryReleaseCombatButton())
+			return FReply::Handled().ReleaseMouseCapture();
 		if (GameplayBinder->TryFinishScrollbarDrag())
 		{
 			return FReply::Handled().ReleaseMouseCapture();

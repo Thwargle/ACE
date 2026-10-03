@@ -551,6 +551,28 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 	{
 		// Feet-origin actor + SelOriginAc places the capsule on torso/head.
 	}
+	if (bCreatureLike && bHavePartMesh && (!bBlocking || !AuthoredCollision.IsEmpty()))
+	{
+		// This proxy is selection-only when authored bodies provide movement
+		// collision. Include animated artwork outside Setup's small sphere (e.g.
+		// floating crystal NPCs), then let the picker refine against drawn tris.
+		// Convert to actor space so DefaultScale is not applied a second time.
+		FBox VisualBox(ForceInit);
+		if (Appearance->GetVisualWorldBounds(VisualBox))
+		{
+			FBox LocalBox(ForceInit);
+			for (int32 Corner=0; Corner<8; ++Corner)
+				LocalBox += GetActorTransform().InverseTransformPosition(FVector(
+					Corner&1 ? VisualBox.Max.X : VisualBox.Min.X,
+					Corner&2 ? VisualBox.Max.Y : VisualBox.Min.Y,
+					Corner&4 ? VisualBox.Max.Z : VisualBox.Min.Z));
+			const FVector Extent=LocalBox.GetExtent(), Center=LocalBox.GetCenter();
+			// Enclose a sphere around the posed art to allow its idle rotation.
+			const float VisualRadius=Extent.Size();
+			Radius=FMath::Max(Radius,float(FVector2D(Center-CapsuleCenterRel).Size())+VisualRadius);
+			HalfHeight=FMath::Max(HalfHeight,float(FMath::Abs(Center.Z-CapsuleCenterRel.Z))+VisualRadius+Radius);
+		}
+	}
 	// Creatures/players: Setup cylinder only (retail cylsphere). Mesh physics on
 	// wielded weapons drew capsules and let the pawn occupy the same point.
 	const bool bUseMeshPhysics = !bCreatureLike && bHavePartMesh && bMeshHasPawnCollision
@@ -2086,7 +2108,10 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position)
 	if (bSnap)
 	{
 		// Projectiles integrate their own arc (with gravity) — don't pin them to the floor.
-		if (!bHavePhysicsVelocity && !bMissile)
+		// A creature CreateObject has no contact flag. Retail uses its supplied
+		// frame, not a guessed floor beneath it. Object-looking NPCs can have an
+		// elevated origin; grounding those here buried custom floating crystals.
+		if (!bHavePhysicsVelocity && !bMissile && (!Creature || Position.bIsGrounded))
 		{
 			// Indoor: TraceGroundZ hits EnvCell physics mesh when streamed; never outdoor heightfield.
 			if (ClampLocationToGround(NewLocation, &NewRotation))

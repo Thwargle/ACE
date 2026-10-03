@@ -42,6 +42,9 @@ public:
 	bool IsSelectable() const { return bSelectable; }
 	FSimpleDelegate OnTextClicked;
 	TFunction<FString()> GetCopyAllText;
+	/** Ordered rows of one chat window; selection can span wrapped messages. */
+	TFunction<TArray<UACERetailTextBlock*>()> GetSelectionPeers;
+	TSharedPtr<STextBlock> GetSelectionWidget() const { return MyTextBlock; }
 
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;

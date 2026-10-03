@@ -41,6 +41,8 @@ def stage_release(root, release, site, *, replace_unpublished=False):
     quest = next(x for x in meta['archives'] if x['name'].startswith('AC-VR-Quest-'))
     portable = next(x for x in meta['archives'] if x['name'].startswith('AC-Unreal-and-AC-VR-Windows-'))
     entries = [('windows', win), ('quest', quest), ('portable', portable), ('questApk', meta['questApk'])]
+    if 'questInstallerUpdate' in meta:
+        entries.append(('questInstallerUpdate', meta['questInstallerUpdate']))
     if 'linux' in meta:
         entries.append(('linux', meta['linux']))
     items = {}
@@ -70,7 +72,13 @@ def stage_release(root, release, site, *, replace_unpublished=False):
         public['updates']['linux'] = items['linux']
     out = site / f'downloads/ac/v{version}'
     copies = [(release / entry['file'], out / entry['file'], entry['sha256']) for entry in items.values()]
-    copies += [(release / name, out / name, sha(release / name)) for name in ['SHA256SUMS.txt', 'RELEASE-NOTES.md']]
+    for key, default in [('checksumsFile', 'SHA256SUMS.txt'), ('releaseNotesFile', 'RELEASE-NOTES.md')]:
+        name = meta.get(key, default)
+        require(isinstance(name, str) and name not in {'', '.', '..'}
+                and not any(c in name for c in '/\\:\r\n'), 'Invalid release document filename')
+        if key in meta:
+            public[key] = name
+        copies.append((release / name, out / name, sha(release / name)))
     # Check every collision before changing the staging directory. In particular,
     # a mismatched Linux artifact must not partially replace another platform.
     for _, target, expected_sha in copies:

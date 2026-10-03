@@ -24,7 +24,7 @@
 
 namespace
 {
-    TSharedRef<SWidget> Text(const FString& Value,int Size=24)
+    TSharedRef<SWidget> PageText(const FString& Value,int Size=24)
     {return SNew(STextBlock).Text(FText::FromString(Value)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size)).ColorAndOpacity(FLinearColor::White).AutoWrapText(true);}
 }
 void UACEVRMenu::BuildFellowship()
@@ -32,14 +32,14 @@ void UACEVRMenu::BuildFellowship()
     const auto Fellow=Client->GetFellowship();
     const int32 Self=Client->GetPlayerGuid();
     const bool Leader=Fellow.bValid && Fellow.LeaderGuid==Self;
-    Body->AddSlot().AutoHeight()[Text(Fellow.bValid?Fellow.Name:TEXT("Create a fellowship"),30)];
+    Body->AddSlot().AutoHeight()[PageText(Fellow.bValid?Fellow.Name:TEXT("Create a fellowship"),30)];
     auto Preferences=[this]()
     {
         for(int32 Id:{0x02,0x12,0x0F,0x11})if(const auto* Option=ACECharacterOptions::Find(Id))
             Body->AddSlot().AutoHeight().Padding(4)[SNew(SCheckBox)
                 .IsChecked_Lambda([this,Id](){return Client->IsCharacterOptionSet(Id)?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                 .OnCheckStateChanged_Lambda([this,Id](ECheckBoxState State){Client->SendSetSingleCharacterOption(Id,State==ECheckBoxState::Checked);bDirty=true;})
-                [Text(Option->Label)]];
+                [PageText(Option->Label)]];
     };
     if(!Fellow.bValid)
     {
@@ -54,8 +54,8 @@ void UACEVRMenu::BuildFellowship()
         })];
         Preferences();return;
     }
-    Body->AddSlot().AutoHeight().Padding(4)[Text(Fellow.bOpen?TEXT("Open — members can recruit"):TEXT("Closed — only the leader can recruit"))];
-    Body->AddSlot().AutoHeight().Padding(4)[Text(TEXT("Members — select one to manage"),28)];
+    Body->AddSlot().AutoHeight().Padding(4)[PageText(Fellow.bOpen?TEXT("Open — members can recruit"):TEXT("Closed — only the leader can recruit"))];
+    Body->AddSlot().AutoHeight().Padding(4)[PageText(TEXT("Members — select one to manage"),28)];
     for(const auto& Member:Fellow.Members)
         Body->AddSlot().AutoHeight().Padding(3)[Tab(FString::Printf(TEXT("%s%s   Level %d\nHealth %d/%d   Stamina %d/%d   Mana %d/%d"),
             *Member.Name,Member.Guid==Fellow.LeaderGuid?TEXT(" (Leader)"):TEXT(""),Member.Level,Member.HealthCur,Member.HealthMax,Member.StaminaCur,Member.StaminaMax,Member.ManaCur,Member.ManaMax),
@@ -66,7 +66,7 @@ void UACEVRMenu::BuildFellowship()
     Manage->AddSlot().Padding(2)[Button(TEXT("Make leader"),[this](){Client->SendFellowshipAssignNewLeader(FellowSelection);},Leader && OtherMember)];
     Manage->AddSlot().Padding(2)[Button(Fellow.bOpen?TEXT("Close fellowship"):TEXT("Open fellowship"),[this,Fellow](){Client->SendFellowshipChangeOpenness(!Fellow.bOpen);},Leader)];
     Body->AddSlot().AutoHeight()[Manage];
-    Body->AddSlot().AutoHeight().Padding(4)[Text(TEXT("Recruit a nearby player"),28)];
+    Body->AddSlot().AutoHeight().Padding(4)[PageText(TEXT("Recruit a nearby player"),28)];
     bool Any=false;
     for(const auto& Target:Client->GetWorldObjects())
     {
@@ -75,7 +75,7 @@ void UACEVRMenu::BuildFellowship()
         Any=true;
         Body->AddSlot().AutoHeight().Padding(3)[Button(TEXT("Recruit ")+Target.Name,[this,Id=Target.Guid](){Client->SendFellowshipRecruit(Id);},(Leader || Fellow.bOpen) && Fellow.Members.Num()<9)];
     }
-    if(!Any)Body->AddSlot().AutoHeight()[Text(TEXT("No eligible players nearby."))];
+    if(!Any)Body->AddSlot().AutoHeight()[PageText(TEXT("No eligible players nearby."))];
     Body->AddSlot().AutoHeight().Padding(6)[Button(TEXT("Leave fellowship"),[this](){Client->SendFellowshipQuit(false);})];
     Body->AddSlot().AutoHeight().Padding(6)[Button(TEXT("Disband fellowship"),[this]()
     {if(Confirmation==TEXT("Press Disband again to confirm.")){Client->SendFellowshipQuit(true);Confirmation.Reset();}else Confirmation=TEXT("Press Disband again to confirm.");bDirty=true;},Leader)];
@@ -85,7 +85,7 @@ void UACEVRMenu::BuildCharacter()
 {
     const auto V=Client->GetPlayerVitals();
     auto* Dat=Client->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();if(!Dat)return;
-    Body->AddSlot().AutoHeight().Padding(4)[Text(FString::Printf(TEXT("Level %d    Available XP: %lld    Skill credits: %d"),V.Level,V.AvailableExperience,V.AvailableSkillCredits),28)];
+    Body->AddSlot().AutoHeight().Padding(4)[PageText(FString::Printf(TEXT("Level %d    Available XP: %lld    Skill credits: %d"),V.Level,V.AvailableExperience,V.AvailableSkillCredits),28)];
     Body->AddSlot().AutoHeight().Padding(4)[SNew(SHorizontalBox)
         +SHorizontalBox::Slot().FillWidth(1)[Tab(TEXT("Attributes"),!bSkillsPage,[this](){bSkillsPage=false;bDirty=true;})]
         +SHorizontalBox::Slot().FillWidth(1)[Tab(TEXT("Skills"),bSkillsPage,[this](){bSkillsPage=true;bDirty=true;})]];
@@ -93,8 +93,8 @@ void UACEVRMenu::BuildCharacter()
     {
         Body->AddSlot().AutoHeight().Padding(4,7)[SNew(SHorizontalBox)
             +SHorizontalBox::Slot().AutoWidth().Padding(4).VAlign(VAlign_Center)[Icon(Did)]
-            +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[Text(Name)]
-            +SHorizontalBox::Slot().AutoWidth().Padding(12,0).VAlign(VAlign_Center)[Text(FString::FromInt(Value))]
+            +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[PageText(Name)]
+            +SHorizontalBox::Slot().AutoWidth().Padding(12,0).VAlign(VAlign_Center)[PageText(FString::FromInt(Value))]
             +SHorizontalBox::Slot().AutoWidth().Padding(3)[Button(FString::Printf(TEXT("+1\n%lld XP"),One),[Raise](){Raise(1);},One>0 && V.AvailableExperience>=One)]
             +SHorizontalBox::Slot().AutoWidth().Padding(3)[Button(FString::Printf(TEXT("+10\n%lld XP"),Ten),[Raise](){Raise(10);},Ten>0 && V.AvailableExperience>=Ten)]];
     };
@@ -129,7 +129,7 @@ void UACEVRMenu::BuildCharacter()
         {
           if(!Skills.ContainsByPredicate([&](const auto& S){return GroupFor(S)==Group;}))continue;
           auto Heading=SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-              .BorderBackgroundColor(FLinearColor(.12f,.085f,.025f)).Padding(8)[Text(Groups[Group],28)];
+              .BorderBackgroundColor(FLinearColor(.12f,.085f,.025f)).Padding(8)[PageText(Groups[Group],28)];
           Heading->SetTag(FName(Groups[Group]));Body->AddSlot().AutoHeight().Padding(4,8)[Heading];
           for(const auto& Skill:Skills)
           {
@@ -146,7 +146,7 @@ void UACEVRMenu::BuildCharacter()
                 int32 Credits=0;const bool CanTrain=Skill.AdvancementClass==1 && Dat->TryGetSkillTrainedCost(Skill.SkillId,Credits);
                 Body->AddSlot().AutoHeight().Padding(4,7)[SNew(SHorizontalBox)
                     +SHorizontalBox::Slot().AutoWidth().Padding(4).VAlign(VAlign_Center)[Icon(Did)]
-                    +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[Text(Skill.Name)]
+                    +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[PageText(Skill.Name)]
                     +SHorizontalBox::Slot().AutoWidth()[Button(FString::Printf(TEXT("Train\n%d credits"),Credits),[this,Id=Skill.SkillId](){Binder->SelectedSkillId=Id;Binder->ActiveSkillTab="SkillPage";Binder->RaiseSelectedStat(1);},CanTrain && V.AvailableSkillCredits>=Credits)]];
             }
           }
@@ -156,24 +156,24 @@ void UACEVRMenu::BuildCharacter()
 void UACEVRMenu::BuildLoot()
 {
     const int32 Container=Client->GetOpenExternalContainerGuid();
-    if(!Container){Body->AddSlot().AutoHeight()[Text(TEXT("Open a corpse or container to see its contents."))];return;}
+    if(!Container){Body->AddSlot().AutoHeight()[PageText(TEXT("Open a corpse or container to see its contents."))];return;}
     auto Grid=SNew(SUniformGridPanel).SlotPadding(FMargin(4));int32 I=0;
     for(const auto& Item:Client->GetPackItems(Container)){Grid->AddSlot(I%6,I/6)[ItemButton(Item)];++I;}
     Body->AddSlot().AutoHeight()[Grid];
     FACEWorldObject Item;const bool Valid=Client->GetWorldObject(Selected,Item) && Item.ContainerId==Container;
-    if(Valid){Body->AddSlot().AutoHeight()[Text(ACERetailObjectNames::Name(Item),28)];AddQuantity(Item.StackSize);}
+    if(Valid){Body->AddSlot().AutoHeight()[PageText(ACERetailObjectNames::Name(Item),28)];AddQuantity(Item.StackSize);}
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Take selected"),[this](){Binder->PickupInventoryAmount(Selected,Binder->GetSelectedItemAmount(Selected));bDirty=true;},Valid)];
 }
 void UACEVRMenu::BuildVendor()
 {
-    if(!Client->GetOpenVendorGuid()){Body->AddSlot().AutoHeight()[Text(TEXT("Speak to a vendor to buy or sell."))];return;}
+    if(!Client->GetOpenVendorGuid()){Body->AddSlot().AutoHeight()[PageText(TEXT("Speak to a vendor to buy or sell."))];return;}
     Body->AddSlot().AutoHeight().Padding(4)[SNew(SHorizontalBox)
         +SHorizontalBox::Slot().FillWidth(1)[Tab(TEXT("Buying"),!bVendorSelling,[this](){ClearItemSelection();bVendorSelling=false;PageIndex=0;bDirty=true;})]
         +SHorizontalBox::Slot().FillWidth(1)[Tab(TEXT("Selling"),bVendorSelling,[this](){ClearItemSelection();bVendorSelling=true;PageIndex=0;bDirty=true;})]];
     const auto Session=Client->GetSession();if(!Session)return;
     const FString Currency=Session->GetVendorCurrencyName().IsEmpty()?TEXT("pyreals"):Session->GetVendorCurrencyName();
     const int32 Purse=Session->GetVendorCurrencyName().IsEmpty()?Binder->CountPlayerPyreals():Session->GetVendorCurrencyCount();
-    Body->AddSlot().AutoHeight().Padding(4)[Text(FString::Printf(TEXT("You have %d %s"),Purse,*Currency),28)];
+    Body->AddSlot().AutoHeight().Padding(4)[PageText(FString::Printf(TEXT("You have %d %s"),Purse,*Currency),28)];
     auto& Cart=bVendorSelling?Binder->VendorSellCart:Binder->VendorBuyCart;
     int64 Total=0;
     auto CartPanel=SNew(SVerticalBox);
@@ -185,11 +185,11 @@ void UACEVRMenu::BuildVendor()
         Item.StackSize=Offer.Key;
         CartPanel->AddSlot().AutoHeight().Padding(3)[SNew(SHorizontalBox)
             +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[ItemButton(Item)]
-            +SHorizontalBox::Slot().FillWidth(1).Padding(8).VAlign(VAlign_Center)[Text(FString::Printf(TEXT("%d × %s\n%u %s"),Offer.Key,*ACERetailObjectNames::Name(Item),Price,bVendorSelling?TEXT("pyreals"):*Currency))]
+            +SHorizontalBox::Slot().FillWidth(1).Padding(8).VAlign(VAlign_Center)[PageText(FString::Printf(TEXT("%d × %s\n%u %s"),Offer.Key,*ACERetailObjectNames::Name(Item),Price,bVendorSelling?TEXT("pyreals"):*Currency))]
             +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[Button(TEXT("Remove"),[this,Guid=Offer.Value](){auto& List=bVendorSelling?Binder->VendorSellCart:Binder->VendorBuyCart;List.RemoveAll([Guid](const auto& O){return O.Value==Guid;});bDirty=true;})]];
     }
-    CartPanel->AddSlot().AutoHeight().Padding(4)[Text(FString::Printf(TEXT("%s list: %lld %s"),bVendorSelling?TEXT("Sell"):TEXT("Buy"),Total,bVendorSelling?TEXT("pyreals"):*Currency),28)];
-    if(Cart.IsEmpty())CartPanel->AddSlot().AutoHeight().Padding(4)[Text(bVendorSelling?TEXT("Select an inventory item below, or drag it into this sell list."):TEXT("Select vendor stock below to add it to your buy list."))];
+    CartPanel->AddSlot().AutoHeight().Padding(4)[PageText(FString::Printf(TEXT("%s list: %lld %s"),bVendorSelling?TEXT("Sell"):TEXT("Buy"),Total,bVendorSelling?TEXT("pyreals"):*Currency),28)];
+    if(Cart.IsEmpty())CartPanel->AddSlot().AutoHeight().Padding(4)[PageText(bVendorSelling?TEXT("Select an inventory item below, or drag it into this sell list."):TEXT("Select vendor stock below to add it to your buy list."))];
     auto CartSurface=SNew(SBorder).Padding(8).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.03f,.05f,.07f))[CartPanel];
     Body->AddSlot().AutoHeight().Padding(4)[CartSurface];if(bVendorSelling)ItemDestinations.Add({CartSurface,0,0,0,0,true});
     Body->AddSlot().AutoHeight().Padding(4)[Button(bVendorSelling?TEXT("Sell listed items"):TEXT("Buy listed items"),[this]()
@@ -199,14 +199,14 @@ void UACEVRMenu::BuildVendor()
     const bool Valid=bVendorSelling?SelectedExists && Client->IsOwnedInventoryItem(Selection):Stock.ContainsByPredicate([this](const auto& I){return I.Guid==Selected;});
     if(Valid)
     {
-        Body->AddSlot().AutoHeight().Padding(4)[Text(ACERetailObjectNames::Name(Selection),28)];
+        Body->AddSlot().AutoHeight().Padding(4)[PageText(ACERetailObjectNames::Name(Selection),28)];
         AddQuantity(bVendorSelling?Selection.StackSize:Binder->GetVendorPurchaseLimit(Selected));
         Body->AddSlot().AutoHeight().Padding(4)[Button(bVendorSelling?TEXT("Add selected quantity to sell list"):TEXT("Add selected quantity to buy list"),[this]()
         {if(bVendorSelling)Binder->AddInventoryGuidToVendorSellCart(Selected,Binder->GetSelectedItemAmount(Selected));else{Binder->VendorSelectedGuid=Selected;Binder->AddSelectedVendorItemToBuyCart();}bDirty=true;})];
     }
     if(bVendorSelling)
     {
-        Body->AddSlot().AutoHeight().Padding(4)[Text(TEXT("Your inventory"),28)];
+        Body->AddSlot().AutoHeight().Padding(4)[PageText(TEXT("Your inventory"),28)];
         Body->AddSlot().AutoHeight()[SNew(SHorizontalBox)
             +SHorizontalBox::Slot().FillWidth(1)[PackGrid(Pack?Pack:Client->GetPlayerGuid())]
             +SHorizontalBox::Slot().AutoWidth().Padding(8,0)[PackIcons()]];
@@ -216,7 +216,7 @@ void UACEVRMenu::BuildVendor()
         const int32 Pages=FMath::Max(1,FMath::DivideAndRoundUp(Stock.Num(),24));PageIndex=FMath::Clamp(PageIndex,0,Pages-1);
         Body->AddSlot().AutoHeight().Padding(4)[SNew(SHorizontalBox)
             +SHorizontalBox::Slot().AutoWidth()[Button(TEXT("Previous"),[this](){ClearItemSelection();--PageIndex;bDirty=true;},PageIndex>0)]
-            +SHorizontalBox::Slot().FillWidth(1).Padding(12)[Text(FString::Printf(TEXT("Vendor stock: %d / %d"),PageIndex+1,Pages))]
+            +SHorizontalBox::Slot().FillWidth(1).Padding(12)[PageText(FString::Printf(TEXT("Vendor stock: %d / %d"),PageIndex+1,Pages))]
             +SHorizontalBox::Slot().AutoWidth()[Button(TEXT("Next"),[this](){ClearItemSelection();++PageIndex;bDirty=true;},PageIndex+1<Pages)]];
         auto Grid=SNew(SUniformGridPanel).SlotPadding(FMargin(4));
         for(int32 I=PageIndex*24;I<FMath::Min(Stock.Num(),(PageIndex+1)*24);++I)Grid->AddSlot((I%24)%8,(I%24)/8)[ItemButton(Stock[I])];
@@ -226,8 +226,8 @@ void UACEVRMenu::BuildVendor()
 void UACEVRMenu::BuildAllegiance()
 {
     const auto A=Client->GetAllegiance();
-    Body->AddSlot().AutoHeight().Padding(4)[Text(A.AllegianceName,30)];
-    Body->AddSlot().AutoHeight().Padding(4)[Text(FString::Printf(TEXT("Rank %d   Members %d\nMonarch: %s\nPatron: %s"),A.Rank,A.TotalMembers,*A.MonarchName,*A.PatronName))];
+    Body->AddSlot().AutoHeight().Padding(4)[PageText(A.AllegianceName,30)];
+    Body->AddSlot().AutoHeight().Padding(4)[PageText(FString::Printf(TEXT("Rank %d   Members %d\nMonarch: %s\nPatron: %s"),A.Rank,A.TotalMembers,*A.MonarchName,*A.PatronName))];
     for(const auto& Member:A.Vassals)Body->AddSlot().AutoHeight().Padding(4)[Button(FString::Printf(TEXT("%s   Level %d   Rank %d"),*Member.Name,Member.Level,Member.Rank),[this,Id=Member.Guid](){Client->SelectObject(Id);})];
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Swear to selected player"),[this](){if(Client->GetSelectedObject().Guid)Client->SendSwearAllegiance(Client->GetSelectedObject().Guid);})];
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Break allegiance to patron"),[this,A](){if(Confirmation==TEXT("Press again to break allegiance.")){Client->SendBreakAllegiance(A.PatronGuid);Confirmation.Reset();}else Confirmation=TEXT("Press again to break allegiance.");bDirty=true;},A.PatronGuid!=0)];
@@ -246,14 +246,14 @@ void UACEVRMenu::BuildTrade()
     }
     for(bool Mine:{true,false})
     {
-        Body->AddSlot().AutoHeight().Padding(4)[Text(Mine?TEXT("Your offer"):TEXT("Their offer"),30)];
+        Body->AddSlot().AutoHeight().Padding(4)[PageText(Mine?TEXT("Your offer"):TEXT("Their offer"),30)];
         auto Grid=SNew(SUniformGridPanel).SlotPadding(FMargin(4));int32 I=0;
         for(int32 Guid:Mine?Client->GetTradeSelfItems():Client->GetTradePartnerItems())
         {FACEWorldObject Item;if(Client->GetWorldObject(Guid,Item)){Grid->AddSlot(I%6,I/6)[ItemButton(Item)];++I;}}
         Body->AddSlot().AutoHeight()[Grid];
     }
     const int32 Accepted=Client->GetTradeAcceptedGuid();
-    if(Accepted)Body->AddSlot().AutoHeight().Padding(4)[Text(Accepted==Client->GetPlayerGuid()?TEXT("You have accepted this offer."):TEXT("Your partner has accepted this offer."))];
+    if(Accepted)Body->AddSlot().AutoHeight().Padding(4)[PageText(Accepted==Client->GetPlayerGuid()?TEXT("You have accepted this offer."):TEXT("Your partner has accepted this offer."))];
     Body->AddSlot().AutoHeight().Padding(4)[Button(Accepted==Client->GetPlayerGuid()?TEXT("Withdraw acceptance"):TEXT("Accept trade"),[this](){if(Client->GetTradeAcceptedGuid()==Client->GetPlayerGuid())Client->SendDeclineTrade();else Client->SendAcceptTrade();})];
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Clear your offer"),[this](){Client->SendResetTrade();})];
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Cancel trade"),[this](){Client->SendCloseTrade();bDirty=true;})];
@@ -272,11 +272,11 @@ void UACEVRMenu::BuildMore()
 }
 void UACEVRMenu::BuildShortcuts()
 {
-    Body->AddSlot().AutoHeight().Padding(4)[Text(TEXT("Choose an inventory item, then assign it to a shortcut below."))];
+    Body->AddSlot().AutoHeight().Padding(4)[PageText(TEXT("Choose an inventory item, then assign it to a shortcut below."))];
     Body->AddSlot().AutoHeight()[PackGrid(Pack?Pack:Client->GetPlayerGuid())];
     FACEWorldObject Item;const bool Owned=Client->GetWorldObject(Selected,Item) && Client->IsOwnedInventoryItem(Item);
     Body->AddSlot().AutoHeight().Padding(4)[Button(bAssignShortcut?TEXT("Cancel assignment"):TEXT("Assign selected inventory item"),[this](){bAssignShortcut=!bAssignShortcut;bDirty=true;},Owned)];
-    if(bAssignShortcut)Body->AddSlot().AutoHeight()[Text(TEXT("Choose a slot for ")+ACERetailObjectNames::Name(Item),28)];
+    if(bAssignShortcut)Body->AddSlot().AutoHeight()[PageText(TEXT("Choose a slot for ")+ACERetailObjectNames::Name(Item),28)];
     for(int32 Index=0;Index<18;++Index)
     {
         FACEWorldObject Target;const int32 Guid=Client->GetShortcutObject(Index);Client->GetWorldObject(Guid,Target);

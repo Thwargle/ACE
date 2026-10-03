@@ -1837,6 +1837,7 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecrea
 	Obj.PhysicsEffectTableId = Decoded.PhysicsEffectTableId;
 	Obj.ItemType = Decoded.ItemType;
 	Obj.Scale = Decoded.Scale > 0.f ? Decoded.Scale : 1.f;
+	Obj.Friction = FMath::IsFinite(Decoded.Friction) ? FMath::Clamp(Decoded.Friction,0.f,1.f) : .95f;
 	Obj.Position = Decoded.Position;
 	Obj.bHasPosition = Decoded.bHasPosition;
 	Obj.bIsPlayer = Decoded.bIsPlayer;
@@ -1884,6 +1885,7 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecrea
 		Obj.SoundTableId = Existing->SoundTableId;
 		Obj.PhysicsEffectTableId = Existing->PhysicsEffectTableId;
 		Obj.Scale = Existing->Scale;
+		Obj.Friction = Existing->Friction;
 		Obj.Translucency = Existing->Translucency;
 		Obj.DefaultScriptId = Existing->DefaultScriptId;
 		Obj.DefaultScriptIntensity = Existing->DefaultScriptIntensity;

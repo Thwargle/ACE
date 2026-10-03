@@ -2577,6 +2577,7 @@ void UACEUIGameplayBinder::ApplyCombatMode(int32 Mode)
 
 void UACEUIGameplayBinder::ApplyCombatModeInternal(int32 Mode, bool bSendToServer)
 {
+	if (Mode != CombatMode) CancelCombatAttack();
 	CombatMode = Mode;
 	if (bSendToServer)
 	{
@@ -2856,10 +2857,12 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 		if (Session->GetCombatEventRevision() != LastCombatEventRevision)
 		{
 			LastCombatEventRevision = Session->GetCombatEventRevision();
+			if (!Session->IsServerAttackInProgress()) bCombatRequestSent = false;
 			if (Session->GetLastAttackError() != 0)
 			{
 				bCombatRepeatActive = false;
 				bCombatAttackRequestPending = false;
+				bCombatAttackHeld = bCombatPointerHeld = bCombatKeyboardHeld = false;
 			}
 			bCombatPowerCharging = !Session->IsServerAttackInProgress()
 				&& (bCombatAttackRequestPending || (bCombatRepeatActive && bCombatAutoRepeat));
@@ -2867,7 +2870,7 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 			CombatPowerOrAccuracy = 0.f;
 			// ClientCombatSystem::HandleAttackDone only replaces a server repeat when
 			// the desired slider power changed. Sending every second restarted melee turns.
-			if (bCombatPowerCharging && bCombatRepeatActive
+			if (bCombatPowerCharging && bCombatRepeatActive && !bCombatAttackRequestPending
 				&& !FMath::IsNearlyEqual(LastCombatAttackPower, RequestedAttackPower, .01f))
 			{
 				CombatPowerOrAccuracy = RequestedAttackPower;
@@ -2887,11 +2890,13 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 	if (!bCombatPowerCharging) return;
 	const float T = GetCombatPowerChargeDuration();
 	CombatPowerOrAccuracy = FMath::Clamp(static_cast<float>(Now-CombatPowerBuildStartTime)
-		/ FMath::Max(.05f,T),0.f,RequestedAttackPower);
-	if (bCombatAttackRequestPending && CombatPowerOrAccuracy >= RequestedAttackPower - KINDA_SMALL_NUMBER)
+		/ FMath::Max(.05f,T),0.f,1.f);
+	if (bCombatAttackRequestPending && !bCombatAttackHeld
+		&& CombatPowerOrAccuracy >= ReleasedAttackPower - KINDA_SMALL_NUMBER)
 	{
 		bCombatAttackRequestPending = false;
 		bCombatPowerCharging = false;
+		CombatPowerOrAccuracy = ReleasedAttackPower;
 		FireCombatAttack();
 	}
 }
@@ -2907,7 +2912,7 @@ float UACEUIGameplayBinder::GetCombatPowerChargeDuration() const
 	return (Stance == ACEMotion::StanceDualWield) ? 0.8f : 1.0f;
 }
 
-void UACEUIGameplayBinder::BeginCombatPowerCharge(uint32 AttackHeight)
+void UACEUIGameplayBinder::BeginCombatPowerCharge(uint32 AttackHeight, bool bHeld)
 {
 	if (PlayerController && PlayerController->IsVRActive()) return;
 	if (CombatMode != static_cast<int32>(ACECombatMode::Melee)
@@ -2916,10 +2921,60 @@ void UACEUIGameplayBinder::BeginCombatPowerCharge(uint32 AttackHeight)
 		return;
 	}
 	CombatAttackHeight = AttackHeight;
+	bCombatAttackHeld = bHeld;
+	ReleasedAttackPower = RequestedAttackPower;
 	bCombatAttackRequestPending = true;
 	bCombatPowerCharging = true;
 	CombatPowerBuildStartTime = FPlatformTime::Seconds();
 	CombatPowerOrAccuracy = 0.f;
+}
+
+void UACEUIGameplayBinder::ReleaseCombatPowerCharge()
+{
+	if (!bCombatAttackHeld) return;
+	// ClientCombatSystem::EndAttackRequest: a quick click builds to the
+	// requested mark; holding beyond it uses the actual charged power.
+	const float Charged = FMath::Clamp(float(FPlatformTime::Seconds() - CombatPowerBuildStartTime)
+		/ GetCombatPowerChargeDuration(), 0.f, 1.f);
+	ReleasedAttackPower = FMath::Max(RequestedAttackPower, Charged);
+	bCombatAttackHeld = false;
+}
+
+void UACEUIGameplayBinder::CancelCombatAttack()
+{
+	if (!bCombatAttackRequestPending && !bCombatRepeatActive && !bCombatAttackHeld && !bCombatRequestSent) return;
+	bCombatRequestSent = false;
+	bCombatAttackHeld = bCombatPointerHeld = bCombatKeyboardHeld = false;
+	bCombatAttackRequestPending = bCombatRepeatActive = bCombatPowerCharging = false;
+	CombatPowerOrAccuracy = 0.f;
+	if (Client) if (const auto Session = Client->GetSession()) Session->SendCancelAttack();
+}
+
+bool UACEUIGameplayBinder::TryBeginCombatButton(FVector2D Point)
+{
+	if (!Manager || !Canvas || (PlayerController && PlayerController->IsVRActive())) return false;
+	if (CombatMode != int32(ACECombatMode::Melee) && CombatMode != int32(ACECombatMode::Missile)) return false;
+	const TCHAR* Names[] = {TEXT("LowAttack"), TEXT("MediumAttack"), TEXT("HighAttack")};
+	const uint32 Heights[] = {ACEAttackHeight::Low, ACEAttackHeight::Medium, ACEAttackHeight::High};
+	for (int32 I = 0; I < 3; ++I)
+	{
+		const auto Button = Manager->FindElementByName(Names[I]);
+		if (Button && Canvas->IsElementExposedAt(Button, Point))
+		{
+			BeginCombatPowerCharge(Heights[I], true);
+			bCombatPointerHeld = true;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UACEUIGameplayBinder::TryReleaseCombatButton()
+{
+	if (!bCombatPointerHeld) return false;
+	bCombatPointerHeld = false;
+	ReleaseCombatPowerCharge();
+	return true;
 }
 
 void UACEUIGameplayBinder::TryAutoTargetOnCombatEnter()
@@ -3006,6 +3061,7 @@ void UACEUIGameplayBinder::FireCombatAttack()
 		Client->SendTargetedMeleeAttack(TargetGuid, static_cast<int32>(CombatAttackHeight), CombatPowerOrAccuracy);
 	}
 	LastCombatAttackTarget = TargetGuid;
+	bCombatRequestSent = true;
 	LastCombatAttackPower = CombatPowerOrAccuracy;
 	bCombatRepeatActive = bCombatAutoRepeat;
 }
@@ -3200,6 +3256,7 @@ void UACEUIGameplayBinder::SelectVRSpell(int32 Spell)
 
 void UACEUIGameplayBinder::CancelPointerGestures()
 {
+	if (bCombatPointerHeld) CancelCombatAttack();
 	CancelSpellDrag(); CancelInventoryDrag();
 	bCombatPowerDrag = false;
 	TryFinishScrollbarDrag();
@@ -3458,6 +3515,13 @@ void UACEUIGameplayBinder::ExamineSelectedObject()
 	if (!Client || !LastSelection.bValid || LastSelection.Guid == 0)
 	{
 		return;
+	}
+	// Retail toggles an already displayed appraisal of this selection. A new
+	// selection still requests fresh server qualities, including custom items.
+	if (Manager && LastAppraisal.ObjectGuid == LastSelection.Guid)
+	{
+		const auto Window = Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field"));
+		if (Window && Window->bVisible) { ShowExamination(false); return; }
 	}
 	Client->SendIdentifyObject(LastSelection.Guid);
 }
@@ -9004,6 +9068,7 @@ void UACEUIGameplayBinder::RaiseSelectedStat(int32 Multiplier)
 			return;
 		}
 		int64 Wanted = (Multiplier <= 0) ? MaxSpend : XpToNext;
+		if (Multiplier > 0 && LastVitals.AvailableExperience < Wanted) return;
 		Wanted = FMath::Min3<int64>(Wanted, MaxSpend, LastVitals.AvailableExperience);
 		Wanted = FMath::Max<int64>(1, Wanted);
 		Client->SendRaiseSkill(Sel->SkillId, static_cast<int32>(FMath::Min<int64>(Wanted, MAX_int32)));
@@ -9054,6 +9119,7 @@ void UACEUIGameplayBinder::RaiseSelectedStat(int32 Multiplier)
 		return;
 	}
 	int64 Wanted = (Multiplier <= 0) ? MaxSpend : XpToNext;
+	if (Multiplier > 0 && LastVitals.AvailableExperience < Wanted) return;
 	Wanted = FMath::Min3<int64>(Wanted, MaxSpend, LastVitals.AvailableExperience);
 	Wanted = FMath::Max<int64>(1, Wanted);
 	const int32 Spend = static_cast<int32>(FMath::Min<int64>(Wanted, MAX_int32));

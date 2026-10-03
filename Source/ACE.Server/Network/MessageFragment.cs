@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 
 using ACE.Server.Network.GameMessages;
 
@@ -35,7 +34,7 @@ namespace ACE.Server.Network
             }
         }
 
-        public int TailSize => PacketFragmentHeader.HeaderSize + (DataLength % PacketFragment.MaxFragmentDataSize);
+        public int TailSize => PacketFragmentHeader.HeaderSize + DataLength - (Math.Max(0, Count - 1) * PacketFragment.MaxFragmentDataSize);
 
         public bool TailSent { get; private set; }
 
@@ -85,10 +84,11 @@ namespace ACE.Server.Network
             if (DataRemaining < dataToSend)
                 throw new InvalidOperationException("More data to send then data remaining!");
 
-            // Read data starting at position reading dataToSend bytes
-            Message.Data.Seek(position, SeekOrigin.Begin);
+            // Broadcasts share a fully serialized GameMessage across sessions, whose
+            // outbound ticks run in parallel. Copy by offset: Seek/Read would race
+            // on the shared stream cursor and corrupt fragments or throw.
             byte[] data = new byte[dataToSend];
-            Message.Data.Read(data, 0, dataToSend);
+            Buffer.BlockCopy(Message.Data.GetBuffer(), position, data, 0, dataToSend);
 
             // Build ServerPacketFragment structure
             ServerPacketFragment fragment = new ServerPacketFragment(data);

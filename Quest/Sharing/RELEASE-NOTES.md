@@ -1,77 +1,75 @@
-# AC:Unreal / AC:VR release 90
+# AC:Unreal / AC:VR release 91
 
 Windows desktop, PC VR, native Linux desktop, and standalone Quest:
-**2026.10.01.90**. Android version code: 90. Quest installer revision: 6.
+**2026.10.03.91**. Android version code: 91. Quest installer revision: 7.
 
-## Changes since public release v89
+## Changes since public release v90
 
-### VR controls and interface
+### Movement and combat
 
-- Add analog-trigger fallback alongside trigger-click events, with hysteresis and
-  duplicate-event suppression. Improve casting input across controller profiles.
-- Prevent hidden UI source surfaces and oversized panel margins from silently
-  blocking world casts. Show feedback when a visible panel blocks casting.
-- Keep a cyan casting pointer visible for every spell type, including over menus.
-  Add a soft visual halo without dynamic lights and draw the pointer above the
-  interface while hovering a panel.
-- Add Head, Body, and World inventory anchor modes. World placement persists when
-  closing and reopening the inventory during the session; dragging and resizing
-  continue to update the native menu and inspection panel together.
-- Use dedicated, bounded anisotropic filtering for VR panel textures. Preserve
-  immediate mip refresh and add desktop temporal motion-vector/responsive-AA
-  support. These changes target blur sources; live headset smearing is not yet
-  confirmed resolved.
+- Preserve post-jump landing momentum using the server's friction value instead
+  of immediately stopping the character on contact.
+- Make melee and missile attacks wait for a held attack button to be released.
+  Quick clicks still charge to the requested power; longer holds use the charged
+  power. Cancel pending and repeating attacks when moving or changing combat mode.
+- Restore keyboard attack-power adjustments while retaining spell-tab controls
+  in magic mode.
 
-### Inventory, inspection, skills, and chat
+### Interface and inventory
 
-- Allow the main backpack to be dragged into vendor and salvage lists for bulk
-  selection, matching additional packs in desktop and VR interfaces.
-- Match retail inspection paragraph grouping and description precedence across
-  desktop and VR. Preserve authored line breaks, avoid duplicated descriptions,
-  and retain failed-appraisal messages and short-description fallback.
-- Calculate skill XP progress from the current and next rank thresholds instead
-  of the total skill-cap budget, correcting bars that appeared permanently full.
-- Make Tab toggle chat/game focus while preserving the draft and caret position,
-  including the last active floating chat window. Existing custom Tab bindings
-  remain respected; the chat-toggle action is rebindable.
+- Prevent disabled skill/attribute raise buttons from spending remaining XP when
+  there is not enough for the next point, in desktop and VR interfaces.
+- Allow selection and copying of multiple lines in the desktop chat history.
+- Expose Toggle Chat Entry in keyboard settings and support its retail keymap
+  name while preserving the chat draft and caret when toggling focus.
+- Make Examine toggle an already-open inspection window for the same selection.
+- Make Pick Up remove selected worn clothing and jewelry into inventory.
+- Include missing item ratings in inspection text.
 
-### World objects and animation
+### Custom objects
 
-- Start authored idle animations for stationary props with motion tables. This
-  restores animation-defined vertical offsets, including elevated crystal props.
-- Wake dormant prop animation updates when an action arrives, allowing levers to
-  play their authored use animation.
-- Refine building click obstruction against visible polygons so NPCs can be
-  selected through window openings while solid walls still block selection.
-- Preserve server translucency through temporary fades, unhiding, and effect
-  cleanup. Retain authored DAT transparency in unmodified multipart models.
-  Newly created corpse objects continue to use their server-supplied appearance.
-- Cache repeated material classification and reject irrelevant picking geometry
-  before detailed polygon checks.
+- Preserve server-authored creature spawn heights when no ground-contact state
+  is supplied. This fixes object-looking NPCs being pulled beneath pedestals.
+- Initialize animated NPC poses before their first draw and include elevated
+  artwork in click detection without enlarging authored movement collision.
+- Verify the supplied Daralet Tou-Tou crystal setup, clothing, animation, and
+  0.75 scale against retail DAT data, including repeated updates and recreation.
+  No custom server names, weenie IDs, or placement offsets are hardcoded.
+
+### Installation and Linux
+
+- Include Quest installer revision 7: use ADB's file-transfer protocol for large
+  DAT files, verify size and SHA-256 inside app storage, and preserve existing
+  accounts, settings, and verified data during repair.
+- Disable Linux PSO precaching as a workaround for the reported Radeon/Mesa ACO
+  shader-compiler abort. First-use shader compilation may still cause a hitch.
+- Document launching Linux with `bash ./AC-Unreal.sh` when archive extraction
+  or the file manager prevents direct script execution.
 
 ## Updating
 
 Windows and Quest users can use **Updates** in the launcher or download from the
-site. Supported updaters detect release 90. Accounts, settings, and DAT files are
+site. The updater detects release 91. Accounts, settings, and DAT files are
 retained; do not uninstall first. **Installation closes the game.** On Quest,
 confirm Android's installation prompt, wait for completion, then reopen AC:VR.
 Optional automatic updating remains off by default.
 
 Linux users should close the game, extract the new archive into a new folder,
-and run its `AC-Unreal.sh`. Linux updates use manual extraction. See
-`README-LINUX.txt` for setup requirements.
+and run `AC-Unreal.sh` (or `bash ./AC-Unreal.sh`). Linux updates require manual
+extraction. See `README-LINUX.txt` for setup requirements.
 
 No retail DAT files, saved accounts, or server configuration are included.
 
 ## Validation scope
 
-Windows, Linux, and Quest compilation and 14 targeted regression suites passed.
-Coverage includes trigger handling, pointer layering, UI mip refresh, inventory
-anchoring, chat focus, skill XP, inspection, salvage/vendor offers, real DAT prop
-and lever animations, window picking, and transparency.
+Windows, Linux, and Quest packages built successfully. Ten targeted gameplay
+regression suites and the packaged Windows launcher test passed. Coverage includes
+combat input, landing momentum, chat, keybindings,
+inspection, XP spending, custom-object rendering and selection, remote movement,
+and stair support. Release packaging, website metadata, Windows updater, and
+seven Quest data-transfer checks passed. The Quest DAT transfer repair was also previously verified
+with the full portal DAT on Quest 3 using Windows PowerShell 5.1.
 
-Steam Frame casting and Quest/PC VR motion clarity still require live headset
-acceptance. The automated sharpness capture was inconclusive and is not evidence
-of a measured visual improvement. Daralet's exact crystal setup and Colier's live
-lever interaction require confirmation on the affected server. Native Linux
-runtime/GPU acceptance remains separate from cross-compilation and packaging.
+Daralet's live placement and interaction still require server-side confirmation;
+the supplied weenie does not include its spawn coordinates. Linux GPU runtime
+and live headset acceptance remain separate from compilation and offline tests.

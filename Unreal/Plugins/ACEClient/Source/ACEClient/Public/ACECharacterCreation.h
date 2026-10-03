@@ -84,6 +84,7 @@ public:
 private:
     friend class FACERetailCharacterCreationTest;
     friend class FACEAppearancePlacementTest;
+    friend class FACECustomWorldPresentationTest;
     friend class FACERetailWorldEntryTest;
     void ResetSkills();
     void ConstrainAppearance(const int32 (&ColorIndices)[4]);

@@ -99,7 +99,7 @@ const TMap<FString,FKey>& ActionNames()
   {TEXT("ToggleInventoryPanel"),EKeys::I},{TEXT("ToggleAttributesPanel"),EKeys::P},{TEXT("ToggleSkillsPanel"),Action(TEXT("Skills"))},
   {TEXT("ToggleSpellbookPanel"),EKeys::M},{TEXT("ToggleSpellComponentsPanel"),Action(TEXT("Components"))},{TEXT("ToggleWorldPanel"),Action(TEXT("World"))},
   {TEXT("ToggleOptionsPanel"),EKeys::O},{TEXT("ToggleAllegiancePanel"),Action(TEXT("Allegiance"))},{TEXT("ToggleFellowshipPanel"),Action(TEXT("Fellowship"))},
-  {TEXT("ToggleContractsPanel"),EKeys::U},
+  {TEXT("ToggleContractsPanel"),EKeys::U},{TEXT("ToggleChat"),Action(TEXT("ToggleChat"))},
   {TEXT("USE"),EKeys::F},{TEXT("EscapeKey"),EKeys::Escape},{TEXT("EnterChatMode"),Action(TEXT("Chat"))},{TEXT("CombatToggleCombat"),EKeys::Tilde},
   {TEXT("PointState"),EKeys::K},{TEXT("Wave"),EKeys::J},{TEXT("Laugh"),Action(TEXT("Laugh"))},{TEXT("Cheer"),Action(TEXT("Cheer"))},{TEXT("Cry"),Action(TEXT("Cry"))},
   {TEXT("CreateShortcut"),EKeys::Zero},
@@ -143,6 +143,7 @@ FString GroupFor(const FString& Name,int32 Context,const TCHAR* Page)
  if(FString(Page)==TEXT("Emotes"))return TEXT("Emotes");
  if(Name.StartsWith(TEXT("UseQuickSlot"))||Name==TEXT("CreateShortcut"))return TEXT("QuickslotCommands");
  if(Name.StartsWith(TEXT("Selection"))&&Name!=TEXT("SelectionExamine"))return TEXT("ItemSelectionCommands");
+ if(Name==TEXT("ToggleChat"))return TEXT("ToggleChatEntry");
  if(Name==TEXT("EnterChatMode"))return TEXT("ChatCommands");
  if(Name==TEXT("CombatToggleCombat"))return TEXT("Combat");
  return TEXT("UICommands");
@@ -190,7 +191,7 @@ FImportResult ImportRetailKeymap(const FString& Text)
  {
   // A camera action in CameraAlternateControls must never replace a movement
   // arrow in the ordinary map. Only contexts implemented by our dispatcher apply.
-  static const TSet<FString> SupportedGroups={TEXT("MovementCommands"),TEXT("ItemSelectionCommands"),TEXT("UICommands"),TEXT("QuickslotCommands"),TEXT("ChatCommands"),TEXT("Combat"),TEXT("MeleeCombat"),TEXT("MissileCombat"),TEXT("MagicCombat"),TEXT("Emotes"),TEXT("CameraControls")};
+  static const TSet<FString> SupportedGroups={TEXT("MovementCommands"),TEXT("ItemSelectionCommands"),TEXT("UICommands"),TEXT("QuickslotCommands"),TEXT("ChatCommands"),TEXT("ToggleChatEntry"),TEXT("Combat"),TEXT("MeleeCombat"),TEXT("MissileCombat"),TEXT("MagicCombat"),TEXT("Emotes"),TEXT("CameraControls")};
   if(!SupportedGroups.Contains(Group.Name))
   {if(!Group.Children.IsEmpty())Result.UnchangedContexts.AddUnique(FString::Printf(TEXT("%s (%d entries): existing application controls remain in use"),*Group.Name,Group.Children.Num()));continue;}
   GroupsSeen.Add(Group.Name);
@@ -276,7 +277,7 @@ bool ExportRetailKeymapFile(const FString& Path,FString& Error)
  {
   // This desktop presentation control has no retail action. Keep it in the
   // local input settings; exporting a retail keymap must still work by default.
-  if(A.Key==Action(TEXT("ToggleInterface")) || A.Key==Action(TEXT("ToggleChat")))continue;
+  if(A.Key==Action(TEXT("ToggleInterface")))continue;
   const FString* Name=Names.Find(A.Key);
   if(!Name)
   {for(int32 I=0;I<3;++I)if(Get(A.Key,I).Key.IsValid()){Error=FString::Printf(TEXT("%s has no retail keymap action. Clear it before exporting."),A.Label);return false;}continue;}

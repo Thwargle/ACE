@@ -2277,7 +2277,7 @@ void UACEGameHUDWidget::RaiseSelectedAttribute(int32 Multiplier)
 	if (Sel.AttributeId != 0)
 	{
 		XpSpent = LastVitals.GetAttributeXpSpent(Sel.AttributeId);
-		Dat->TryGetAttributeXpToNextRank(XpSpent, XpToNext, &MaxSpend);
+		Dat->TryGetAttributeXpToNextRank(XpSpent, XpToNext, &MaxSpend, FMath::Max(1, Multiplier));
 	}
 	else
 	{
@@ -2288,7 +2288,7 @@ void UACEGameHUDWidget::RaiseSelectedAttribute(int32 Multiplier)
 		case 5: XpSpent = LastVitals.ManaXpSpent; break;
 		default: break;
 		}
-		Dat->TryGetVitalXpToNextRank(XpSpent, XpToNext, &MaxSpend);
+		Dat->TryGetVitalXpToNextRank(XpSpent, XpToNext, &MaxSpend, FMath::Max(1, Multiplier));
 	}
 	if (XpToNext <= 0 || MaxSpend <= 0 || LastVitals.AvailableExperience <= 0)
 	{
@@ -2302,9 +2302,10 @@ void UACEGameHUDWidget::RaiseSelectedAttribute(int32 Multiplier)
 	}
 	else
 	{
-		Wanted = static_cast<int64>(XpToNext) * Multiplier;
+		Wanted = XpToNext;
 		Wanted = FMath::Min<int64>(Wanted, MaxSpend);
 	}
+	if (Multiplier > 0 && LastVitals.AvailableExperience < Wanted) return;
 	Wanted = FMath::Min<int64>(Wanted, LastVitals.AvailableExperience);
 	Wanted = FMath::Max<int64>(1, Wanted);
 	if (Sel.AttributeId != 0)
@@ -3297,14 +3298,15 @@ void UACEGameHUDWidget::RaiseSelectedSkill(int32 Multiplier)
 	}
 	int64 XpToNext = 0;
 	int64 MaxSpend = 0;
-	Dat->TryGetSkillXpToNextRank(Sel->AdvancementClass, Sel->XpSpent, XpToNext, &MaxSpend);
+	Dat->TryGetSkillXpToNextRank(Sel->AdvancementClass, Sel->XpSpent, XpToNext, &MaxSpend, FMath::Max(1, Multiplier));
 	if (XpToNext <= 0 || MaxSpend <= 0 || LastVitals.AvailableExperience <= 0)
 	{
 		return;
 	}
 	int64 Wanted = (Multiplier <= 0)
 		? MaxSpend
-		: FMath::Min<int64>(XpToNext * Multiplier, MaxSpend);
+		: FMath::Min<int64>(XpToNext, MaxSpend);
+	if (Multiplier > 0 && LastVitals.AvailableExperience < Wanted) return;
 	Wanted = FMath::Min<int64>(Wanted, LastVitals.AvailableExperience);
 	Wanted = FMath::Max<int64>(1, Wanted);
 	Client->SendRaiseSkill(Sel->SkillId, static_cast<int32>(FMath::Min<int64>(Wanted, MAX_int32)));

@@ -158,6 +158,9 @@ public:
 	void UpdateSpellDrag(FVector2D CanvasLocalPos);
 	bool TryFinishSpellDrag(FVector2D CanvasLocalPos);
 	bool TryBeginCombatPowerDrag(FVector2D CanvasLocalPos);
+	bool TryBeginCombatButton(FVector2D CanvasLocalPos);
+	bool TryReleaseCombatButton();
+	void CancelCombatAttack();
 	void UpdateCombatPowerDrag(FVector2D CanvasLocalPos);
 	bool TryFinishCombatPowerDrag(FVector2D CanvasLocalPos);
 	/** DAT scrollbar thumb drag (inventory / spellbook / loot / skills). */
@@ -456,6 +459,11 @@ private:
 	bool bCombatPowerDrag = false;
 	bool bCombatPowerCharging = false;
 	bool bCombatAttackRequestPending = false;
+	bool bCombatAttackHeld = false;
+	bool bCombatPointerHeld = false;
+	bool bCombatKeyboardHeld = false;
+	bool bCombatRequestSent = false;
+	float ReleasedAttackPower = 0.f;
 	bool bCombatRepeatActive = false;
 	uint32 LastCombatEventRevision = 0;
 	int32 LastCombatAttackTarget = 0;
@@ -1481,7 +1489,8 @@ private:
 	void RefreshCombatPanelOverlays();
 	void TickCombatAutoAttack(float DeltaSeconds);
 	void FireCombatAttack();
-	void BeginCombatPowerCharge(uint32 AttackHeight);
+	void BeginCombatPowerCharge(uint32 AttackHeight, bool bHeld = false);
+	void ReleaseCombatPowerCharge();
 	float GetCombatPowerChargeDuration() const;
 	void TryAutoTargetOnCombatEnter();
 	void SyncExamineBodyVisibility(bool bCreature);

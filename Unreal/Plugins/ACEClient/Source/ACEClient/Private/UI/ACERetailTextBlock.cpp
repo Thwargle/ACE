@@ -36,6 +36,7 @@ public:
 		if (E.GetEffectingButton()==EKeys::LeftMouseButton)
 		{
 			const int32 At=CharacterAt(G,E.GetScreenSpacePosition());
+			if (!E.IsShiftDown()) ClearPeerSelection();
 			if (!E.IsShiftDown()) Anchor=At;
 			Caret=At; PressPosition=E.GetScreenSpacePosition(); bDragged=E.IsShiftDown();
 			Invalidate(EInvalidateWidgetReason::Paint);
@@ -49,7 +50,7 @@ public:
 				Menu.AddMenuEntry(FText::FromString(Caption),FText::GetEmpty(),FSlateIcon(),
 					FUIAction(FExecuteAction::CreateLambda([Text]{FPlatformApplicationMisc::ClipboardCopy(*Text);})));
 			};
-			if (Anchor!=Caret) AddCopy(TEXT("Copy selection"),SelectedText());
+			if (!SelectedText().IsEmpty()) AddCopy(TEXT("Copy selection"),SelectedText());
 			AddCopy(TEXT("Copy message"),GetText().ToString());
 			if (Owner->GetCopyAllText) AddCopy(TEXT("Copy chat window"),Owner->GetCopyAllText());
 			FSlateApplication::Get().PushMenu(SharedThis(this),FWidgetPath(),Menu.MakeWidget(),
@@ -62,7 +63,7 @@ public:
 	{
 		if (!HasMouseCapture()) return FReply::Unhandled();
 		bDragged|=FVector2D::Distance(PressPosition,E.GetScreenSpacePosition())>3.f;
-		Caret=CharacterAt(G,E.GetScreenSpacePosition());
+		SelectThrough(E.GetScreenSpacePosition());
 		Invalidate(EInvalidateWidgetReason::Paint);
 		return FReply::Handled();
 	}
@@ -84,12 +85,14 @@ public:
 		if (!SupportsKeyboardFocus()) return FReply::Unhandled();
 		if (E.IsControlDown() && E.GetKey()==EKeys::A)
 		{
+			for (auto* Peer : Peers()) { Peer->Anchor=0; Peer->Caret=Peer->GetText().ToString().Len(); Peer->Invalidate(EInvalidateWidgetReason::Paint); }
 			Anchor=0; Caret=GetText().ToString().Len(); Invalidate(EInvalidateWidgetReason::Paint);
 			return FReply::Handled();
 		}
 		if (E.IsControlDown() && E.GetKey()==EKeys::C)
 		{
-			FPlatformApplicationMisc::ClipboardCopy(*(Anchor==Caret ? GetText().ToString() : SelectedText()));
+			const FString Selection=SelectedText();
+			FPlatformApplicationMisc::ClipboardCopy(*(Selection.IsEmpty() ? GetText().ToString() : Selection));
 			return FReply::Handled();
 		}
 		return FReply::Unhandled();
@@ -97,7 +100,8 @@ public:
 	virtual void OnFocusLost(const FFocusEvent& E) override
 	{
 		STextBlock::OnFocusLost(E);
-		Anchor=Caret=0;
+		// Preserve the selection for copying or moving focus between rows.
+		// Starting another selection clears the entire window's old range.
 		Invalidate(EInvalidateWidgetReason::Paint);
 	}
 
@@ -265,7 +269,52 @@ public:
 private:
 	FString SelectedText() const
 	{
-		return GetText().ToString().Mid(FMath::Min(Anchor,Caret),FMath::Abs(Anchor-Caret));
+		FString Result;
+		for (const auto* Peer : Peers())
+		{
+			if (Peer->Anchor==Peer->Caret) continue;
+			if (!Result.IsEmpty()) Result+=TEXT("\r\n");
+			Result+=Peer->GetText().ToString().Mid(FMath::Min(Peer->Anchor,Peer->Caret),FMath::Abs(Peer->Anchor-Peer->Caret));
+		}
+		return Result;
+	}
+	TArray<SACERetailTextBlock*> Peers() const
+	{
+		TArray<SACERetailTextBlock*> Result;
+		if (Owner.IsValid() && Owner->GetSelectionPeers)
+			for (auto* Row : Owner->GetSelectionPeers())
+				if (Row && Row->GetSelectionWidget()) Result.Add(static_cast<SACERetailTextBlock*>(Row->GetSelectionWidget().Get()));
+		if (Result.IsEmpty()) Result.Add(const_cast<SACERetailTextBlock*>(this));
+		return Result;
+	}
+	void ClearPeerSelection()
+	{
+		for (auto* Peer : Peers()) { Peer->Anchor=Peer->Caret=0; Peer->Invalidate(EInvalidateWidgetReason::Paint); }
+	}
+	void SelectThrough(FVector2D Position)
+	{
+		const auto Rows=Peers();
+		const int32 Start=Rows.Find(this);
+		if (Start==INDEX_NONE) return;
+		int32 End=Rows.Num()-1;
+		for (int32 I=0; I<Rows.Num(); ++I)
+		{
+			const auto& Geometry=Rows[I]->GetCachedGeometry();
+			if (Position.Y < Geometry.LocalToAbsolute(FVector2D(0,Geometry.GetLocalSize().Y)).Y) { End=I; break; }
+		}
+		const int32 StartChar=Anchor;
+		const int32 EndChar=Rows[End]->CharacterAt(Rows[End]->GetCachedGeometry(),Position);
+		for (int32 I=0; I<Rows.Num(); ++I)
+		{
+			auto* Row=Rows[I];
+			int32 A=0,B=0;
+			if (I>=FMath::Min(Start,End) && I<=FMath::Max(Start,End))
+			{
+				A=I==Start?StartChar:(End<Start?Row->GetText().ToString().Len():0);
+				B=I==End?EndChar:(End<Start?0:Row->GetText().ToString().Len());
+			}
+			Row->Anchor=A; Row->Caret=B; Row->Invalidate(EInvalidateWidgetReason::Paint);
+		}
 	}
 	int32 CharacterAt(const FGeometry& G,FVector2D Absolute)
 	{

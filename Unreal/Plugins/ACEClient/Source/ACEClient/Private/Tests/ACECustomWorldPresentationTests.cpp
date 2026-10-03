@@ -3,6 +3,7 @@
 #include "Misc/ScopeExit.h"
 #include "ACEDatSubsystem.h"
 #include "ACECharacterAppearanceComponent.h"
+#include "ACECharacterCreation.h"
 #include "ACEWorldEntityActor.h"
 #include "ACEVisibleObjectPick.h"
 #include "ACEScriptComponent.h"
@@ -41,8 +42,53 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
     Entity->Destroy(); Entity=World->SpawnActor<AACEWorldEntityActor>(); Entity->InitializeFromObject(Object,100,false);
     TestTrue(TEXT("Ordinary gravity loot still seats on its floor"),Entity->GetActorLocation().Z < Authored.Z-100);
     Entity->Destroy();
-    Floor->Destroy(); Object.PhysicsState=0;
+    Object.PhysicsState=0;
     FTransform Actual;
+
+    // Daralet's supplied Tou-Tou weenie (1050067): an object-looking Creature,
+    // not a static prop. Its setup, clothing and motion all come from retail DAT.
+    {
+        FACEWorldObject Crystal=Object;
+        Crystal.WeenieClassId=1050067; Crystal.Name=TEXT("Tou-Tou");
+        Crystal.ItemType=ACEItemType::Creature; Crystal.SetupId=0x02001AC5;
+        Crystal.MotionTableId=0x090001FC; Crystal.Scale=.75f;
+        Crystal.UseRadius=2;
+        Crystal.InitialMotionStyle=ACEMotion::StanceNonCombat;
+        Crystal.InitialMotionCommand=ACEMotion::Ready;
+        Crystal.PhysicsState=ACEPhysicsState::Gravity | ACEPhysicsState::Ethereal | ACEPhysicsState::ReportCollisions;
+        Crystal.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
+        Crystal.Appearance.PaletteBaseId=0x04000BEF;
+        FACECharacterCreation Creation; FString Error;
+        TestTrue(TEXT("Tou-Tou clothing decoder loads"),Creation.Load(*Dat->GetPortalDat(),Error));
+        TestTrue(TEXT("Tou-Tou clothing resolves"),Creation.ApplyClothing(0x100007D8,Crystal.SetupId,2,0,Crystal.Appearance));
+        auto* CrystalActor=World->SpawnActor<AACEWorldEntityActor>();
+        CrystalActor->InitializeFromObject(Crystal,100,true);
+        TestTrue(TEXT("Tou-Tou creation preserves the elevated server origin above nearby terrain"),CrystalActor->GetActorLocation().Equals(Authored,.01));
+        CrystalActor->Appearance->GetPartCurrentTransform(0,Actual);
+        TestEqual(TEXT("Tou-Tou has its authored idle lift before the first draw"),Actual.GetLocation().Z,50.);
+        TArray<FTransform> Pose; int32 Count=0;
+        for (int32 Frame=0;Frame<3;++Frame)
+        {
+            if(Frame) CrystalActor->Appearance->TickComponent(.5f,LEVELTICK_All,nullptr);
+            CrystalActor->Appearance->GetPartCurrentTransform(0,Actual);
+            TestTrue(TEXT("Retail DAT supplies Tou-Tou's rotating Ready pose"),Dat->EvaluateMotionCommand(
+                Crystal.MotionTableId,ACEMotion::Ready,Frame*.5f,1,Pose,100,Count,nullptr,nullptr,ACEMotion::StanceNonCombat));
+            TestTrue(TEXT("Object-looking NPC retains the complete DAT pose"),Count==1 && Actual.Equals(Pose[0],.001));
+            TestTrue(TEXT("Crystal animation offset receives server scale exactly once"),
+                FMath::IsNearlyEqual(CrystalActor->Appearance->GetPartMesh(0)->GetComponentLocation().Z-Authored.Z,37.5,.01));
+            FBox Bounds; CrystalActor->Appearance->GetVisualWorldBounds(Bounds);
+            const FVector Center=Bounds.GetCenter();
+            TestEqual(TEXT("Visible Tou-Tou crystal can be clicked at its animated height"),ACEVisibleObjectPick::Trace(*World,
+                Center-FVector(200,0,0),Center+FVector(200,0,0),nullptr),static_cast<AActor*>(CrystalActor));
+        }
+        CrystalActor->InitializeFromObject(Crystal,100,true);
+        TestTrue(TEXT("Repeated object descriptions do not lower the crystal"),CrystalActor->GetActorLocation().Equals(Authored,.01));
+        CrystalActor->Destroy();
+        CrystalActor=World->SpawnActor<AACEWorldEntityActor>(); CrystalActor->InitializeFromObject(Crystal,100,true);
+        TestTrue(TEXT("Recreating after relog preserves the same origin"),CrystalActor->GetActorLocation().Equals(Authored,.01));
+        CrystalActor->Destroy();
+    }
+    Floor->Destroy();
 
     // Real setup 020014CA has a zero-height placement but a 2 m idle part
     // offset in 09000198/03000B5E. The weenie need not be a creature/lifestone.

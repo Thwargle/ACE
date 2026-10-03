@@ -391,6 +391,18 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
     if (const auto* Rate = Info.FloatProperties.Find(5); Rate && FMath::IsFinite(*Rate) && FMath::Abs(*Rate) > SMALL_NUMBER)
         Text += FString::Printf(TEXT("Mana Cost: 1 point per %d seconds.\n"), FMath::RoundToInt(FMath::Abs(1.0 / *Rate)));
     else Int(117, TEXT("Mana Cost: "));
+    // ItemExamineUI::Appraisal_ShowRatings uses Gear* qualities (370..379),
+    // not the creature's aggregate DamageRating/ResistRating qualities.
+    TArray<FString> Ratings;
+    const uint32 RatingIds[] = {370,371,372,374,373,375,376,377,378};
+    const TCHAR* RatingNames[] = {TEXT("Dam"),TEXT("Dam Resist"),TEXT("Crit"),TEXT("Crit Dam"),
+        TEXT("Crit Resist"),TEXT("Crit Dam Resist"),TEXT("Heal Boost"),TEXT("Nether Resist"),TEXT("Life Resist")};
+    for (int32 I=0; I<UE_ARRAY_COUNT(RatingIds); ++I)
+        if (const int32 Value=Info.IntProperties.FindRef(RatingIds[I]); Value>0)
+            Ratings.Add(FString::Printf(TEXT("%s %d"),RatingNames[I],Value));
+    if (!Ratings.IsEmpty()) AppendItemText(Text,TEXT("Ratings: ")+FString::Join(Ratings,TEXT(", ")),true);
+    if (const int32 Vitality=Info.IntProperties.FindRef(379); Vitality>0)
+        AppendItemText(Text,FString::Printf(TEXT("This item adds %d Vitality."),Vitality),true);
     AppendItemText(Text, ItemUsageDetails(Info), true);
     AppendItemText(Text, ManaStoneDetails(Info));
     if (!Text.IsEmpty()) { Text.TrimEndInline(); Text += TEXT("\n"); }
