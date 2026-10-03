@@ -95,6 +95,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACERetailCombatProtocolTest;
 	friend class FACERetailNetworkTest;
 	friend class FACECustomObjectReplicationTest;
+	friend class FACECustomWorldPresentationTest;
 	friend class FACELoginHandshakeTest;
 	friend class FACEGDLEInteractionTransportTest;
 	friend class FACERetailNetworkWeatherTest;

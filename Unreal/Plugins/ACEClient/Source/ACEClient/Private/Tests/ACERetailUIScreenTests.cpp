@@ -1538,6 +1538,45 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("Releasing a held bow sends one action"),Session.CachedC2SPackets.Num(),1);
             for(const auto& Packet:Session.CachedC2SPackets)
             {FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);TestEqual(TEXT("Bow release uses standard missile networking"),R.ReadUInt32(),ACEGameAction::TargetedMissileAttack);}
+            // Fire/abort high, then hold low while the prior attack's delayed
+            // commence/cancellation arrives. A server response must not eat
+            // the new input, including its eventual release and chosen height.
+            auto CombatEvent=[&](uint32 Type,uint32 Error=0)
+            {
+                FACEBinaryWriter W;W.WriteUInt32(Session.PlayerGuid);W.WriteUInt32(1);W.WriteUInt32(Type);W.WriteUInt32(Error);
+                FACEBinaryReader R(W.GetData());Session.HandleGameEvent(R);Gameplay->TickCombatAutoAttack(0);
+            };
+            for(bool ReleaseBeforeDone:{false,true})
+            {
+                Gameplay->CancelCombatAttack();Session.CachedC2SPackets.Reset();
+                Gameplay->BeginCombatPowerCharge(ACEAttackHeight::Low,true);Gameplay->bCombatKeyboardHeld=true;
+                Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-.25;
+                CombatEvent(ACEGameEvent::CombatCommenceAttack);
+                TestTrue(TEXT("Previous commence preserves the queued low attack"),Gameplay->bCombatAttackRequestPending && Gameplay->bCombatAttackHeld);
+                if(ReleaseBeforeDone){Gameplay->bCombatKeyboardHeld=false;Gameplay->ReleaseCombatPowerCharge();}
+                CombatEvent(ACEGameEvent::AttackDone,0x36); // retail ActionCancelled
+                TestTrue(TEXT("Delayed cancellation preserves the next manual request"),Gameplay->bCombatAttackRequestPending && Gameplay->bCombatPowerCharging);
+                TestEqual(TEXT("Cancellation preserves the current held state"),Gameplay->bCombatAttackHeld,!ReleaseBeforeDone);
+                TestFalse(TEXT("Cancellation still stops automatic repeat"),Gameplay->bCombatRepeatActive);
+                TestEqual(TEXT("A queued/held second shot does not fire on cancellation"),Session.CachedC2SPackets.Num(),0);
+                Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-2.;
+                if(!ReleaseBeforeDone)
+                {
+                    Gameplay->TickCombatAutoAttack(0);
+                    TestEqual(TEXT("Second shot remains held at full charge"),Session.CachedC2SPackets.Num(),0);
+                    Gameplay->bCombatKeyboardHeld=false;Gameplay->ReleaseCombatPowerCharge();
+                }
+                Gameplay->TickCombatAutoAttack(0);
+                TestEqual(TEXT("Second shot fires once without another press"),Session.CachedC2SPackets.Num(),1);
+                for(const auto& Packet:Session.CachedC2SPackets)
+                {
+                    FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);
+                    TestEqual(TEXT("Second shot uses retail missile action"),R.ReadUInt32(),ACEGameAction::TargetedMissileAttack);
+                    TestEqual(TEXT("Second shot retains target"),R.ReadUInt32(),uint32(Target.Guid));
+                    TestEqual(TEXT("Second shot retains low aim"),R.ReadUInt32(),uint32(ACEAttackHeight::Low));
+                }
+            }
+            CombatEvent(ACEGameEvent::AttackDone);
             Gameplay->ApplyCombatMode(int32(ACECombatMode::NonCombat));
             Session.PlayerVitals.bValid=true;Session.PlayerVitals.AvailableExperience=1;
             FACESkillInfo Skill;Skill.SkillId=6;Skill.AdvancementClass=2;Skill.XpSpent=0;
@@ -2705,6 +2744,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 Controller->PlayerInput->ProcessInputStack({},.016f,false);
                 Gameplay->PollKeyboardActions(Controller);
             };
+            TFunction<void()> CheckCombatPowerKeys=[&]
             {
                 TGuardValue<int32> KeepCombat(Gameplay->CombatMode,Gameplay->CombatMode);
                 TGuardValue<float> KeepPower(Gameplay->RequestedAttackPower,.5f);
@@ -2712,12 +2752,26 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 {
                     Gameplay->CombatMode=Mode;ACEInputBindings::SetCombatContext(Mode);
                     Gameplay->RequestedAttackPower=.5f;Press(EKeys::Insert);
-                    TestTrue(TEXT("Insert lowers the requested combat power"),FMath::IsNearlyEqual(Gameplay->RequestedAttackPower,.4f));
+                    TestTrue(TEXT("Insert lowers the requested combat power by one retail step"),FMath::IsNearlyEqual(Gameplay->RequestedAttackPower,2.f/6));
                     Press(EKeys::PageUp);
                     TestTrue(TEXT("Page Up raises the requested combat power"),FMath::IsNearlyEqual(Gameplay->RequestedAttackPower,.5f));
+                    Gameplay->RequestedAttackPower=0.f;
+                    for(int32 Step=1;Step<=8;++Step)
+                    {
+                        Press(EKeys::PageUp);
+                        TestTrue(TEXT("Power traverses all seven retail positions and clamps at maximum"),FMath::IsNearlyEqual(Gameplay->RequestedAttackPower,FMath::Min(Step,6)/6.f));
+                    }
+                    for(int32 Step=5;Step>=-2;--Step)
+                    {
+                        Press(EKeys::Insert);
+                        TestTrue(TEXT("Power traverses retail positions downward and clamps at minimum"),FMath::IsNearlyEqual(Gameplay->RequestedAttackPower,FMath::Max(Step,0)/6.f));
+                    }
+                    Gameplay->RequestedAttackPower=.43f;Press(EKeys::Insert);
+                    TestTrue(TEXT("Mouse slider values round to the nearest sixth before stepping"),FMath::IsNearlyEqual(Gameplay->RequestedAttackPower,2.f/6));
                 }
                 Controller->PlayerInput->FlushPressedKeys();
-            }
+            };
+            CheckCombatPowerKeys();
             {
                 TGuardValue<int32> KeepCombat(Gameplay->CombatMode,Gameplay->CombatMode);
                 TGuardValue<int32> KeepServerCombat(Session.PlayerVitals.CombatMode,Session.PlayerVitals.CombatMode);

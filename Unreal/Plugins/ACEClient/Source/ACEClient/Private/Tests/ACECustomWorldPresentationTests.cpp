@@ -4,6 +4,9 @@
 #include "ACEDatSubsystem.h"
 #include "ACECharacterAppearanceComponent.h"
 #include "ACECharacterCreation.h"
+#include "ACEClientSubsystem.h"
+#include "ACESession.h"
+#include "ACEWorldPresenterComponent.h"
 #include "ACEWorldEntityActor.h"
 #include "ACEVisibleObjectPick.h"
 #include "ACEScriptComponent.h"
@@ -102,6 +105,75 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
         CrystalActor=World->SpawnActor<AACEWorldEntityActor>(); CrystalActor->InitializeFromObject(Crystal,100,true);
         TestTrue(TEXT("Recreating after relog preserves the same origin"),CrystalActor->GetActorLocation().Equals(Authored,.01));
         CrystalActor->Destroy();
+
+        // Exercise the login presenter, not only synchronous actor construction:
+        // Ready can arrive before the queued mesh, and a relog keeps DAT caches.
+        auto* Owner=World->SpawnActor<AActor>();
+        auto* Presenter=NewObject<UACEWorldPresenterComponent>(Owner);
+        Owner->AddInstanceComponent(Presenter); Presenter->RegisterComponent(); Owner->DispatchBeginPlay();
+        auto Session=GI->GetSubsystem<UACEClientSubsystem>()->GetSession();
+        for(int32 Login=0;Login<3;++Login)
+        {
+            Presenter->ClearSpawned();
+            Crystal.Scale=.75f;
+            Session->WorldObjects.Add(Crystal.Guid,Crystal);
+            FACEObjectMotionState Ready; Ready.CurrentStyle=ACEMotion::StanceNonCombat;
+            Ready.ForwardCommand=ACEMotion::Ready;
+            Presenter->HandleMotionUpdate(Crystal.Guid,Ready);
+            Presenter->SpawnOrUpdateEntity(Crystal,false);
+            auto* Deferred=Presenter->FindEntityActor(Crystal.Guid);
+            if(!TestNotNull(TEXT("Relog creates the deferred crystal"),Deferred)) return false;
+            // Positions can be received while the model is still in the queue.
+            FACEPosition Contact=Crystal.Position; Contact.bHasContactState=true;Contact.bIsGrounded=true;
+            Presenter->HandlePositionUpdate(Crystal.Guid,Contact);
+            Presenter->DrainPendingDatAppearance();
+            for(int32 Frame=0;Frame<120;++Frame)
+            {
+                Deferred->Tick(1.f/60);
+                Deferred->Appearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+                // Other creatures continually change the shared DAT motion reader.
+                TArray<FTransform> Other; int32 OtherCount=0;
+                Dat->EvaluateMotionCommand(0x09000001,ACEMotion::Ready,Frame/60.f,1,Other,100,OtherCount);
+            }
+            TestTrue(TEXT("Deferred relog keeps the server origin"),Deferred->GetActorLocation().Equals(Authored,.01));
+            TestTrue(TEXT("Deferred relog keeps the animated crystal elevation"),FMath::IsNearlyEqual(
+                Deferred->Appearance->GetPartMesh(0)->GetComponentLocation().Z-Authored.Z,37.5,.01));
+        }
+        Presenter->ClearSpawned(); Owner->Destroy(); Session->WorldObjects.Remove(Crystal.Guid);
+
+        // Updated Tou-Tou sets GravityStatus=false. ACE's CalculatedPhysicsState
+        // clears Gravity even though the stored integer still contains 1032.
+        // A floating creature close to a surface must not acquire walking
+        // support merely because a position correction wakes its actor tick.
+        for(bool Gravity : {false,true})
+        {
+            Crystal.PhysicsState=ACEPhysicsState::Ethereal | ACEPhysicsState::ReportCollisions
+                | (Gravity ? ACEPhysicsState::Gravity : 0);
+            // Clear the capsule's rounded bottom, but stay within the setup's
+            // 8.67 cm scaled step-down range so this exercises ground seating.
+            Crystal.Position.Location=FVector(50,50,.08);
+            auto* Floating=World->SpawnActor<AACEWorldEntityActor>();
+            Floating->InitializeFromObject(Crystal,100,true);
+            FACEPosition Correction=Crystal.Position; Correction.Location.X+=.25;
+            Floating->ApplyACEPosition(Correction);
+            TestTrue(TEXT("Position correction wakes floating prop prediction"),Floating->IsActorTickEnabled());
+            for(int32 Frame=0;Frame<120;++Frame) Floating->Tick(1.f/60);
+            const double ExpectedZ=Gravity ? 1. : Correction.ToUnrealLocation(100).Z;
+            AddInfo(FString::Printf(TEXT("Floating fixture gravity=%d received Z=%.4f actual Z=%.4f"),
+                Gravity,Correction.ToUnrealLocation(100).Z,Floating->GetActorLocation().Z));
+            TestTrue(Gravity ? TEXT("Gravity-enabled grounded prediction still seats within its step range")
+                : TEXT("Gravity-disabled creature retains server height while smoothing near a floor"),
+                FMath::IsNearlyEqual(Floating->GetActorLocation().Z,ExpectedZ,.02));
+            // A server's contact hint is not permission to enable gravity on a
+            // non-gravitating display object during reconciliation either.
+            Correction.bHasContactState=true; Correction.bIsGrounded=true;
+            Floating->ApplyACEPosition(Correction);
+            for(int32 Frame=0;Frame<120;++Frame) Floating->Tick(1.f/60);
+            TestTrue(Gravity ? TEXT("Gravity-enabled contact retains floor support")
+                : TEXT("Gravity-disabled contact does not lower a floating creature"),
+                FMath::IsNearlyEqual(Floating->GetActorLocation().Z,ExpectedZ,.02));
+            Floating->Destroy();
+        }
     }
 
     // ACE-World-16PY/Database/3-Core/9 WeenieDefaults/SQL/Creature:

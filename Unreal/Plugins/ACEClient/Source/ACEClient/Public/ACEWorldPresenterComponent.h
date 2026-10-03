@@ -29,6 +29,7 @@ class ACECLIENT_API UACEWorldPresenterComponent : public UActorComponent
 	friend class FACEPortalLifetimeTest;
 	friend class FACEEntityLookupTest;
 	friend class FACEDeferredWorldAppearanceTest;
+	friend class FACECustomWorldPresentationTest;
 
 public:
 	UACEWorldPresenterComponent();

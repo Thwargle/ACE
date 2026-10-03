@@ -12,6 +12,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Application/SlateUser.h"
 #include "Widgets/SWindow.h"
+#include "Widgets/SViewport.h"
 #include "Widgets/SBoxPanel.h"
 #include "Sockets.h"
 #include "SocketSubsystem.h"
@@ -269,6 +270,21 @@ bool FACEChatParityTest::RunTest(const FString&)
     TestEqual(TEXT("Repeated native Enter requests one confirmation"),NativeRequests,1);
     TestFalse(TEXT("Native submit filter leaves cancellation alone"),NativeKeys.HandleKeyDownEvent(Slate,FKeyEvent(EKeys::Escape,FModifierKeysState(),0,false,0,0)));
 
+    // Placement diagnostics are local even on custom servers and must not use
+    // the selected prop, request an appraisal, or broadcast diagnostic data.
+    Client->SelectObject(0);
+    Session.CachedC2SPackets.Reset();
+    TestTrue(TEXT("Object report handles missing selection locally"),Binder->TryDispatchChatCommand(TEXT("/aceobject")));
+    FACEWorldObject Crystal; Crystal.Guid=0x71001001; Crystal.Name=TEXT("Tou-Tou");
+    Crystal.WeenieClassId=1050067; Crystal.SetupId=0x02001AC5; Crystal.MotionTableId=0x090001FC;
+    Crystal.ItemType=ACEItemType::Creature; Crystal.Scale=.75f;
+    Session.WorldObjects.Add(Crystal.Guid,Crystal); Client->SelectObject(Crystal.Guid);
+    Session.CachedC2SPackets.Reset();
+    TestTrue(TEXT("Object report handles unloaded world actors"),Binder->TryDispatchChatCommand(TEXT("/aceobject")));
+    TestEqual(TEXT("Object report never sends diagnostics or an action to the server"),Session.CachedC2SPackets.Num(),0);
+    TestEqual(TEXT("Object report preserves the selected crystal"),Client->GetSelectedObject().Guid,Crystal.Guid);
+    Client->SelectObject(0); Session.WorldObjects.Remove(Crystal.Guid);
+
     Session.CachedC2SPackets.Reset(); Binder->LastOutgoingTellName.Reset();
     Binder->TryDispatchChatCommand(TEXT("/rt not a reply"));
     TestEqual(TEXT("Retell never silently targets the incoming teller"),Session.CachedC2SPackets.Num(),0);
@@ -309,6 +325,68 @@ bool FACEChatParityTest::RunTest(const FString&)
         const uint32 Flags=R.ReadUInt32();TestEqual(TEXT("Point contains one emote"),Flags>>11,1u);
         R.ReadUInt32();R.ReadUInt32();
         TestEqual(TEXT("Point sends accepted retail PointState rather than its transition"),R.ReadUInt16(),uint16(0xf0)); } }
+    {
+        // Route real Slate Enter/W events through an edit box and a registered
+        // game viewport; merely checking that chat lost focus misses this bug.
+        class FChatReturnViewport : public ISlateViewport
+        {
+        public:
+            int32 MovementKeys=0;
+            FIntPoint GetSize() const override { return FIntPoint(320,100); }
+            FSlateShaderResource* GetViewportRenderTargetTexture() const override { return nullptr; }
+            bool RequiresVsync() const override { return false; }
+            FReply OnKeyDown(const FGeometry&,const FKeyEvent& Event) override
+            {
+                if(Event.GetKey()==EKeys::W) { ++MovementKeys; return FReply::Handled(); }
+                return FReply::Unhandled();
+            }
+        };
+        auto Input=MakeShared<FChatReturnViewport>();
+        auto Viewport=SNew(SViewport).ViewportInterface(Input);
+        auto* FocusBinder=NewObject<UACEUIGameplayBinder>(); FocusBinder->Client=Client;
+        auto* EmptyMain=NewObject<UACEChatEntry>(); EmptyMain->InitializeChat(FocusBinder);
+        auto* EmptyOther=NewObject<UACEChatEntry>(); EmptyOther->InitializeChat(FocusBinder);
+        FocusBinder->ChatEntry=EmptyMain; FocusBinder->FloatyChatEntries.SetNum(4); FocusBinder->FloatyChatEntries[0]=EmptyOther;
+        EmptyMain->SetClearKeyboardFocusOnCommit(true); EmptyOther->SetClearKeyboardFocusOnCommit(true);
+        EmptyMain->OnTextCommitted.AddDynamic(FocusBinder,&UACEUIGameplayBinder::HandleChatTextCommitted);
+        EmptyOther->OnTextCommitted.AddDynamic(FocusBinder,&UACEUIGameplayBinder::HandleFloatyChat1Committed);
+        auto FocusWindow=SNew(SWindow).ClientSize(FVector2D(320,180))
+            [SNew(SVerticalBox) + SVerticalBox::Slot()[Viewport]
+                + SVerticalBox::Slot().AutoHeight()[EmptyMain->TakeWidget()]
+                + SVerticalBox::Slot().AutoHeight()[EmptyOther->TakeWidget()]];
+        const auto PreviousViewport=Slate.GetGameViewport();
+        const uint32 PreviousOptions=Session.CharacterOptions1;
+        Slate.AddWindow(FocusWindow,false); Slate.RegisterGameViewport(Viewport);
+        ON_SCOPE_EXIT {
+            Slate.UnregisterGameViewport();
+            if(PreviousViewport) Slate.RegisterGameViewport(PreviousViewport.ToSharedRef());
+            Slate.RequestDestroyWindow(FocusWindow); Session.CharacterOptions1=PreviousOptions;
+        };
+        for(bool StayInChat : {false,true}) for(auto* Entry : {EmptyMain,EmptyOther})
+            for(const TCHAR* Blank : {TEXT(""),TEXT("   "),TEXT("\u200B\uFEFF\u00A0")})
+        {
+            Session.CharacterOptions1=StayInChat ? 0x00000800u : 0;
+            Session.CachedC2SPackets.Reset(); FocusBinder->CancelPendingChatRefocus();
+            Entry->SetChatText(Blank); Focus(Entry); Key(EKeys::Enter);
+            TestTrue(TEXT("Blank Enter schedules a handoff after Slate commit"),FocusBinder->bPendingChatRefocus);
+            FocusBinder->ApplyPendingChatFocus();
+            TestEqual(TEXT("Blank Enter sends no chat packet"),Session.CachedC2SPackets.Num(),0);
+            const int32 Before=Input->MovementKeys;
+            Key(EKeys::W);
+            if(StayInChat)
+            {
+                TestTrue(TEXT("Stay-in-chat preserves the source window after blank Enter"),Entry->HasKeyboardFocus());
+                Type(TEXT("x"));
+                TestTrue(TEXT("Typing still works after blank Enter"),Entry->GetText().ToString().EndsWith(TEXT("x")));
+                TestEqual(TEXT("Chat retains keys when requested"),Input->MovementKeys,Before);
+            }
+            else
+            {
+                TestTrue(TEXT("Blank Enter restores actual game viewport focus"),Viewport->HasKeyboardFocus());
+                TestEqual(TEXT("W reaches gameplay without a mouse click after blank Enter"),Input->MovementKeys,Before+1);
+            }
+        }
+    }
     Slate.ClearUserFocus(VirtualUser); Slate.ClearUserFocus(0); Slate.RequestDestroyWindow(Window);
     if (OldFocus) Slate.SetUserFocus(0,OldFocus);
     Client->Session.Reset(); Receiver->Close(); Sockets->DestroySocket(Receiver);

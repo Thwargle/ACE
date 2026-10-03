@@ -287,6 +287,14 @@ bool UACEUIGameplayBinder::IsChatTextEntryFocused() const
 	return false;
 }
 
+void UACEUIGameplayBinder::ApplyPendingChatFocus()
+{
+	if (!bPendingChatRefocus) return;
+	bPendingChatRefocus = false;
+	if (PendingChatRefocusWindow == INDEX_NONE) ClearChatEntryFocus();
+	else FocusChatEntryWindow(PendingChatRefocusWindow);
+}
+
 void UACEUIGameplayBinder::ToggleChatEntryFocus()
 {
 	// ChatInterface::OnToggleChatEntry activates/deactivates without editing the

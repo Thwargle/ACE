@@ -1793,7 +1793,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				if (UACECharacterAppearanceComponent* App =
 					P->FindComponentByClass<UACECharacterAppearanceComponent>())
 				{
-					App->ClearJumpMotionIfAny();
+					App->ClearJumpMotionIfAny(true);
 					App->SetSuppressLocoIdleBlend(false);
 				}
 				if (Client)

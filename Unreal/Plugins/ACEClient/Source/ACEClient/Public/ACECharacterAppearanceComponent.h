@@ -179,9 +179,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
 	void SetSuppressLocoIdleBlend(bool bSuppress);
 
-	/** Clear Jumpup / Falling / JumpCharging holds so loco Ready/run can resume. */
+	/** Clear airborne holds; an actual landing plays the DAT recovery into Ready/run. */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
-	void ClearJumpMotionIfAny();
+	void ClearJumpMotionIfAny(bool bLanded = false);
 
 	/** Cancel a held (or hold-pending) chat-pose emote — retail clears it on move/jump. */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")

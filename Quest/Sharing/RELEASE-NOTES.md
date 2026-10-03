@@ -1,36 +1,39 @@
-# AC:Unreal / AC:VR release 92
+# AC:Unreal / AC:VR release 93
 
 Windows desktop, PC VR, native Linux x86_64, and standalone Quest share version
-**2026.10.03.92**. Android version code: 92. Quest installer revision: 7.
+**2026.10.03.93**. Android version code: 93. Quest installer revision: 7.
 
 ## Changes
 
-- Missing or empty game DAT files now open the Game files page before login,
-  with the missing filenames, searched folder, and instructions to recover.
-  Quest users receive instructions for running Repair-Quest.cmd. This message
-  uses packaged fonts and remains readable without the DAT assets.
-- The launcher checks both client_portal.dat and client_cell_1.dat before
-  connecting. Selecting and saving a complete installation clears the error.
-  client_highres.dat remains optional.
-- Fixed a remaining placement error for creature-based objects: later grounded
-  network updates could pull an elevated object down to distant terrain.
-  Ground correction now respects the model's scaled DAT step-down distance.
-  This applies to custom content and stock creature-based props, without
-  hardcoded server names or object IDs.
+- Fixed delayed cancellation of a previous attack discarding the next held
+  attack. Firing, cancelling, and immediately holding a different aim height
+  now preserves the new request until release.
+- Melee and missile power hotkeys now use retail's seven positions, including
+  minimum, middle, and maximum. Mouse slider values round to the nearest step.
+- Restored the authored jump landing recovery: kneeling back to Ready or
+  transitioning into walking/running, while allowing the next jump to interrupt.
+- Fixed keyboard focus after pressing Enter in an empty chat box. Normal chat
+  returns control to the game; Stay in Chat retains a usable text entry.
+- Gravity-disabled creature-based objects retain their server-supplied height
+  even close to a floor. Ground/contact updates no longer pull them down.
+- Added `/aceobject` diagnostics for selected object placement, model, scale,
+  and physics flags to help investigate custom-server content.
 
-## Validation
+## Validation and remaining checks
 
-- Missing, empty, and partial DAT installations, recovery after choosing a valid
-  folder, persistent error text, and launcher layout checks passed.
-- Scaled Tou-Tou crystals retain their elevation and selection after repeated
-  position updates. Stock Fishing Hole, Nexus Crystal, and Fir Tree fixtures
-  passed with their retail DAT models.
-- Remote movement, stair support, and movement review regression suites passed.
-- The exact Daralet tower scene still needs an in-game recheck. No new live
-  headset or Linux runtime acceptance is claimed for this release.
+- Regression coverage includes delayed attack responses, queued releases,
+  all seven power positions, DAT landing poses, repeated jumps, chat focus,
+  gravity-disabled custom objects, and remote movement/support.
+- Desktop and VR movement fixtures verify jump trajectories and landing coast
+  against retail friction at 30, 90, and 144 Hz. Glide distance has not been
+  artificially increased; the reported shorter glide needs a live comparison.
+- The original gravity-enabled Daralet crystal scene remains unverified in-game.
+  The placement fix covers the administrator's gravity-disabled configuration.
+- No new live headset or Linux runtime acceptance is claimed for this release.
 
 ## Updating
 
 Use the client updater or download the matching platform package from the
 website. Installing an update closes the game; on Quest this is expected while
 Android installs the replacement. Accounts, settings, and DAT files are retained.
+Linux updates are downloaded and extracted manually.

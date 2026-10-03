@@ -376,6 +376,7 @@ private:
 	/** Retail ChatInterface input history: 100 entries, up/down recall, pos resets on send. */
 	/** "Stay in chat mode after sending" — refocus entry on the tick after commit. */
 	bool bPendingChatRefocus = false;
+	void ApplyPendingChatFocus();
 	/** Window (0 = main, 1..4 = floaty) awaiting the deferred refocus. */
 	int32 PendingChatRefocusWindow = 0;
 

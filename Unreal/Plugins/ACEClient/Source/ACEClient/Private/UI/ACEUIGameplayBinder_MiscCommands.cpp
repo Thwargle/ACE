@@ -6,6 +6,10 @@
 #include "ACEPlayerController.h"
 #include "ACESession.h"
 #include "ACEClientBuild.h"
+#include "ACEWorldEntityActor.h"
+#include "ACECharacterAppearanceComponent.h"
+#include "Components/SceneComponent.h"
+#include "EngineUtils.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "HAL/FileManager.h"
@@ -17,6 +21,52 @@ bool UACEUIGameplayBinder::TryDispatchMiscCommand(const FString& Cmd, const FStr
     auto Error=[this](const FString& Text) { AppendLocalChatLine(Text,ACEChatMessageType::ChatError); };
     auto Print=[this](const FString& Text) { AppendLocalChatLine(Text,ACEChatMessageType::System); };
     if (Cmd==TEXT("fillcomps")) { FillVendorComponents(Args); return true; }
+    if (Cmd==TEXT("aceobject"))
+    {
+        // Local-only report: users can share a chat screenshot without locating logs.
+        FACEWorldObject Object;
+        if (!Client->GetWorldObject(Client->GetSelectedObject().Guid, Object))
+        {
+            Error(TEXT("Select a world object, then type /aceobject to display its placement details."));
+            return true;
+        }
+        Print(FString::Printf(TEXT("Object report %s: %s [%08X / WCID %d]"),
+            ACEClientBuild::Version, *Object.Name, uint32(Object.Guid), Object.WeenieClassId));
+        Print(FString::Printf(TEXT("Setup %08X Motion %08X Placement %d Scale %.4f"),
+            uint32(Object.SetupId), uint32(Object.MotionTableId), Object.PlacementId, Object.Scale));
+        Print(FString::Printf(TEXT("Type %08X Desc %08X Physics %08X Parent %08X"),
+            uint32(Object.ItemType), uint32(Object.ObjectDescriptionFlags), uint32(Object.PhysicsState), uint32(Object.ParentGuid)));
+        const FACEPosition& P = Object.Position;
+        Print(FString::Printf(TEXT("Received %08X [%.4f %.4f %.4f] Contact %d/%d"),
+            uint32(P.CellId), P.Location.X, P.Location.Y, P.Location.Z, P.bHasContactState, P.bIsGrounded));
+        Print(FString::Printf(TEXT("Rotation %.4f %.4f %.4f %.4f Velocity %.4f %.4f %.4f"),
+            P.RotationW, P.RotationXYZ.X, P.RotationXYZ.Y, P.RotationXYZ.Z, Object.Velocity.X, Object.Velocity.Y, Object.Velocity.Z));
+        // An explicit diagnostic can scan actors once; no work is added to frame updates.
+        UWorld* World = Client->GetWorld();
+        if (World) for (TActorIterator<AACEWorldEntityActor> It(World); It; ++It)
+        {
+            if (It->GetACEGuid() != Object.Guid) continue;
+            const float Units = FMath::Max(It->WorldScale, SMALL_NUMBER);
+            const FVector Delta = (It->GetActorLocation() - P.ToUnrealLocation(Units)) / Units;
+            const FVector Scale = It->GetActorScale3D();
+            Print(FString::Printf(TEXT("Actor delta (UE axes/AC units) [%.4f %.4f %.4f] Scale [%.4f %.4f %.4f]"),
+                Delta.X, Delta.Y, Delta.Z, Scale.X, Scale.Y, Scale.Z));
+            if (auto* Appearance = It->Appearance.Get())
+            {
+                Print(FString::Printf(TEXT("Parts %d Animated %d Visible %d Mesh %d"),
+                    Appearance->GetPartCount(), Appearance->IsComponentTickEnabled(), It->IsCellVisible(), It->bUsingDatMesh));
+                if (auto* Part = Appearance->GetPartMesh(0))
+                {
+                    const FVector Local = Part->GetRelativeLocation() / Units;
+                    Print(FString::Printf(TEXT("Part 0 local [%.4f %.4f %.4f] Height above received origin %.4f"),
+                        Local.X, Local.Y, Local.Z, (Part->GetComponentLocation().Z - P.ToUnrealLocation(Units).Z) / Units));
+                }
+            }
+            return true;
+        }
+        Print(TEXT("No rendered world actor for this selection (inventory, hidden, or still loading)."));
+        return true;
+    }
     if (Cmd==TEXT("age") || Cmd==TEXT("birth") || Cmd==TEXT("pkl") || Cmd==TEXT("pklite"))
     {
         if (!Args.IsEmpty()) Error(FString::Printf(TEXT("Usage: /%s"),*Cmd));

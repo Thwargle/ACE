@@ -189,8 +189,8 @@ bool FACEAvatarMotionTest::RunTest(const FString&)
    const float Time=App->AnimTime;App->PlayActionMotion(0x40000015u,1,Style);
    TestEqual(TEXT("Duplicate airborne motion echoes cannot restart the transition"),App->AnimTime,Time);
    if(Jump%2==0)for(int Frame=0;Frame<FMath::CeilToInt(.4f/Dt);++Frame)App->TickComponent(Dt,LEVELTICK_All,nullptr);
-   App->ClearJumpMotionIfAny();App->TickComponent(Dt,LEVELTICK_All,nullptr);
-   TestTrue(TEXT("Landing releases both unfinished and held airborne motion"),App->ActionCommand==0 && !App->bHoldActionFinal && !App->bHoldActionFinalAfterFinish && !App->QueuedHoldAction);
+   App->ClearJumpMotionIfAny(true);App->TickComponent(Dt,LEVELTICK_All,nullptr);
+   TestTrue(TEXT("Landing replaces unfinished and held airborne motion with its recovery link"),App->ActionFromCommand==0x40000015u && App->bActionUsesStateTransition && !App->bHoldActionFinal && !App->bHoldActionFinalAfterFinish && !App->QueuedHoldAction);
   }
  }
  // charge_jump does not replace the active Falling link/hold. Exercise the
@@ -237,7 +237,7 @@ bool FACEAvatarMotionTest::RunTest(const FString&)
   TestTrue(*FString::Printf(TEXT("Midair jump spam matches uninterrupted rendered poses (%s)"),*Case),SamePose);
   TestTrue(*FString::Printf(TEXT("Midair jump spam never replaces the current flight (%s)"),*Case),SameFlight);
   Press();PC->JumpChargeExtent=.6f;
-  PC->bJumpAirborne=false;App->ClearJumpMotionIfAny(); // HitGround animation handoff.
+  PC->bJumpAirborne=false;App->ClearJumpMotionIfAny(true); // HitGround animation handoff.
   TestTrue(TEXT("Landing keeps a held follow-up charge"),PC->bJumpCharging && PC->JumpChargeExtent==.6f);
   Release();
   TestTrue(TEXT("Release after landing starts a fresh airborne animation"),PC->bJumpAirborne && App->ActionCommand==0x40000015u && App->AnimTime==0.f && !App->bHoldActionFinal);

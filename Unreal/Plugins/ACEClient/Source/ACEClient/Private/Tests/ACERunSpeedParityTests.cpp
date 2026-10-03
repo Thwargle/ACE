@@ -208,6 +208,10 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
   TestTrue(TEXT("Jump range agrees with retail leave-ground run speed"),FMath::Abs(Distance-12.2257250946*Flight)<12.2257250946*2./Rate+.02);
   TestFalse(TEXT("Completed jump releases airborne animation and input"),PC->bJumpAirborne);
   const FVector Touchdown=Pawn->GetActorLocation();
+  // A 30 Hz VR frame contains three movement substeps; its final substep
+  // may already have coasted after contact. Start this comparison at the
+  // sampled pose/velocity, rather than counting that time a second time.
+  const double TouchdownSpeed=PC->LandingWorldAceVelocity.Size2D();
   VR->MoveStick=FVector2D::ZeroVector;
   TestTrue(TEXT("Landing preserves horizontal physics velocity"),PC->LandingWorldAceVelocity.Size2D()>10.);
   for(int I=0;I<Rate/2;++I)
@@ -216,6 +220,24 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
   }
   const double Glide=FVector::Dist2D(Touchdown,Pawn->GetActorLocation())/100.;
   TestTrue(TEXT("Retail friction permits a brief glide instead of gluing feet at contact"),Glide>2.5 && Glide<3.5);
+  // Independent CPhysicsObj::UpdatePhysicsInternal reference: friction is
+  // applied before displacement, and the pre-friction speed owns the cutoff.
+  double ReferenceSpeed=TouchdownSpeed,ReferenceDistance=0;
+  for(int I=0;I<Rate/2;++I)
+  {
+   ReferenceSpeed=ReferenceSpeed*ReferenceSpeed < .0625+.0002 ? 0 : ReferenceSpeed*FMath::Pow(.05,1./Rate);
+   ReferenceDistance+=ReferenceSpeed/Rate;
+  }
+  TestTrue(TEXT("Half-second glide matches retail friction, not an arbitrary distance multiplier"),FMath::Abs(Glide-ReferenceDistance)<.025);
+  for(int I=Rate/2;I<Rate*4;++I)
+  {
+   ReferenceSpeed=ReferenceSpeed*ReferenceSpeed < .0625+.0002 ? 0 : ReferenceSpeed*FMath::Pow(.05,1./Rate);
+   ReferenceDistance+=ReferenceSpeed/Rate;
+   VR->Head->SetWorldLocation(Pawn->GetActorLocation()+FVector(0,0,77));PC->PlayerTick(1.f/Rate);
+  }
+  const double FullGlide=FVector::Dist2D(Touchdown,Pawn->GetActorLocation())/100.;
+  TestTrue(TEXT("Full coast reaches the retail friction distance without early cancellation"),FMath::Abs(FullGlide-ReferenceDistance)<.025);
+  TestTrue(TEXT("Coast ends at retail's small-velocity cutoff"),PC->LandingWorldAceVelocity.IsNearlyZero());
   TestFalse(TEXT("Landing glide does not re-enter airborne animation"),PC->bJumpAirborne);
   AddInfo(FString::Printf(TEXT("Jump tracked=%d rate=%d scale=%.1f charge=%.2f apex=%.3fm range=%.3fm time=%.3fs"),Tracked,Rate,Size,Extent,Peak,Distance,double(Frames)/Rate));
  }

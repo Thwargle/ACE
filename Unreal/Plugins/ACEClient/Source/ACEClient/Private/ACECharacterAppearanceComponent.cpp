@@ -1383,7 +1383,7 @@ void UACECharacterAppearanceComponent::SetSuppressLocoIdleBlend(bool bSuppress)
 	}
 }
 
-void UACECharacterAppearanceComponent::ClearJumpMotionIfAny()
+void UACECharacterAppearanceComponent::ClearJumpMotionIfAny(bool bLanded)
 {
 	constexpr uint32 Jumpup = 0x1000004bu;
 	constexpr uint32 Falling = 0x40000015u;
@@ -1401,8 +1401,21 @@ void UACECharacterAppearanceComponent::ClearJumpMotionIfAny()
 		|| !FMath::IsNearlyZero(LocomotionStrafe);
 	if (AnimMode == EACEAnimMode::ActionOneShot && bJumpCmd)
 	{
-		// Retail HitGround removes airborne links and immediately resumes current
-		// movement. Keep only a short visual handoff, interruptible by the next jump.
+		if (bLanded && ActionCommand != JumpCharging)
+		{
+			// CMotionInterp::HitGround removes the airborne links, then applies
+			// current movement through the motion table. Falling->Ready supplies
+			// the kneel/recovery; Falling->Run/Walk supplies the moving landing.
+			const uint32 Destination = LocomotionForward > KINDA_SMALL_NUMBER
+				? (bLocomotionRunning ? 0x44000007u : 0x45000005u)
+				: LocomotionForward < -KINDA_SMALL_NUMBER ? 0x45000006u : ACEMotion::Ready;
+			PlayActionMotion(Destination, 1.f, PreferredStyle, false);
+			ActionFromCommand = Falling;
+			bActionUsesStateTransition = true;
+			BeginPoseBlendFromCurrent(.06f);
+			return;
+		}
+		// Cancellation/teleport cleanup does not imply a ground contact.
 		BeginPoseBlendFromCurrent(.08f);
 		AnimMode = EACEAnimMode::Locomotion;
 		ActionCommand = 0;

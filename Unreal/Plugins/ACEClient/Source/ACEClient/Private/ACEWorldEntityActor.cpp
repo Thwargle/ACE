@@ -980,7 +980,10 @@ FVector AACEWorldEntityActor::ResolvePredictedMovement(const FVector& From, cons
 		// Server feet can sit above the center ray on an incline (retail's
 		// supporting sphere) or differ slightly after quantization. Use the
 		// authored step range, rather than dropping support after a 2 cm error.
-		const bool FollowGround=bClampToGround && TraceGroundZ(From,Ground,true)
+		// Creature is also used for floating interactive props. A stationary
+		// velocity does not grant ground-following when the server disables gravity.
+		const bool FollowGround=bClampToGround && (PhysicsState & ACEPhysicsState::Gravity) != 0
+			&& TraceGroundZ(From,Ground,true)
 			&& From.Z-Ground<=Down && Ground-From.Z<=Up;
 		const int32 Steps=FMath::Clamp(FMath::CeilToInt(Remaining.Size2D()/FMath::Max(10.f,MovementSweepRadius*Scale*.5f)),1,32);
 		const FVector Step=Remaining/Steps;
@@ -1896,7 +1899,10 @@ void AACEWorldEntityActor::SupportDroppedItem(FVector& Location, const FQuat& Ro
 
 bool AACEWorldEntityActor::ClampLocationToGround(FVector& InOutLocation, const FQuat* Rotation) const
 {
-	if (!bClampToGround)
+	// Honor the effective network state for every item type, including Creature
+	// props. ACE's explicit GravityStatus=false overrides an integer default that
+	// still contains Gravity; do not reintroduce it through visual ground seating.
+	if (!bClampToGround || (PhysicsState & ACEPhysicsState::Gravity) == 0)
 	{
 		return true;
 	}
@@ -1905,8 +1911,7 @@ bool AACEWorldEntityActor::ClampLocationToGround(FVector& InOutLocation, const F
 	// Stuck means the object cannot be picked up; creatures commonly carry it
 	// too. Only anchored scenery keeps authored Z. Applying this exemption to
 	// players/monsters left them running over slopes until the next position.
-	if (!bCreatureLike && ((ObjectDescriptionFlags & ACEObjectDescFlag::Stuck) != 0
-		|| (PhysicsState & ACEPhysicsState::Gravity) == 0))
+	if (!bCreatureLike && (ObjectDescriptionFlags & ACEObjectDescFlag::Stuck) != 0)
 	{
 		return true;
 	}

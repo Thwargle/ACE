@@ -374,7 +374,14 @@ void UACEUIGameplayBinder::PollKeyboardActions(APlayerController* PC)
   const bool Missile=CombatMode==int32(ACECombatMode::Missile);
   const int32 Delta=Pressed(Missile?TEXT("MissileIncrease"):TEXT("MeleeIncrease"))?1:Pressed(Missile?TEXT("MissileDecrease"):TEXT("MeleeDecrease"))?-1:0;
   const bool Low=Pressed(Missile?TEXT("MissileLow"):TEXT("MeleeLow")),Medium=Pressed(Missile?TEXT("MissileMedium"):TEXT("MeleeMedium")),High=Pressed(Missile?TEXT("MissileHigh"):TEXT("MeleeHigh"));
-  if(Delta){RequestedAttackPower=FMath::Clamp(RequestedAttackPower+Delta*.1f,0.f,1.f);RefreshCombatPanelOverlays();}
+  if(Delta)
+  {
+   // Retail HandleCombatAction rounds the slider to the nearest sixth,
+   // then steps once: seven positions including minimum and maximum.
+   const int32 Step=FMath::FloorToInt(RequestedAttackPower*6.f+.5f);
+   RequestedAttackPower=FMath::Clamp(Step+Delta,0,6)/6.f;
+   RefreshCombatPanelOverlays();
+  }
   if(Low||Medium||High){BeginCombatPowerCharge(Low?ACEAttackHeight::Low:High?ACEAttackHeight::High:ACEAttackHeight::Medium,true);bCombatKeyboardHeld=true;}
   if(bCombatKeyboardHeld && !ACEInputBindings::Down(PC,ACEInputBindings::Action(Missile?TEXT("MissileLow"):TEXT("MeleeLow")))
    && !ACEInputBindings::Down(PC,ACEInputBindings::Action(Missile?TEXT("MissileMedium"):TEXT("MeleeMedium")))

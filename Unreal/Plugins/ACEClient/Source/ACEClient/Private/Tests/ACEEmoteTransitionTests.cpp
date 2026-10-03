@@ -154,6 +154,38 @@ bool FACEEmoteTransitionTest::RunTest(const FString&)
   }
   TestTrue(TEXT("A gesture queued during lay-down retains the get-up and does not block Ready"), SawWave && App->ActionCommand == 0);
  }
+ // Landing uses the real Falling->movement link, not a blend from a frozen
+ // airborne endpoint. Compare every rendered part against the DAT recovery.
+ for(float Forward:{0.f,1.f})for(bool Run:{false,true})for(float Dt:{1.f/30,1.f/90})
+ {
+  App->ClearActionMotion();App->SetPreferredStyle(Style);App->SetLocomotionInput(Forward,0,Run,1);
+  App->SetHeldActionMotion(0x40000015u,Style);
+  const uint32 Destination=Forward==0?ACEMotion::Ready:Run?0x44000007u:0x45000005u;
+  const auto* Link=Direct(0x40000015u,Destination);
+  if(!TestNotNull(TEXT("Retail supplies a landing link for this movement"),Link))return false;
+  App->ClearJumpMotionIfAny(true);
+  TestTrue(TEXT("Landing plays Falling->current movement"),App->ActionFromCommand==0x40000015u && App->ActionCommand==Destination && App->bActionUsesStateTransition);
+  const FTransform Root=Actor->GetActorTransform();bool Completed=false;
+  for(int32 Frame=0;Frame<120;++Frame)
+  {
+   const float Time=App->AnimTime+Dt;
+   App->ClearJumpMotionIfAny(); // ordinary grounded controller refresh
+   App->SetLocomotionInput(Forward,0,Run,1);
+   App->TickComponent(Dt,LEVELTICK_All,nullptr);
+   TArray<FTransform> Expected;int32 Count=0;bool Finished=false;
+   TestTrue(TEXT("Authored landing clips evaluate"),Player.EvaluateAnimSequence(Link->Anims,Time,App->GetPartCount(),Expected,100,Count,false,&Finished));
+   if(Time>.08f)for(int32 Part=0;Part<Count;++Part)
+   {
+    const auto Actual=App->GetPartMesh(Part)->GetRelativeTransform();
+    TestTrue(TEXT("Landing recovery follows authored body motion"),Actual.GetTranslation().Equals(Expected[Part].GetTranslation(),.04001)
+     && Actual.GetRotation().Equals(Expected[Part].GetRotation(),.000011));
+   }
+   TestTrue(TEXT("Landing animation cannot change the network/collision root"),Actor->GetActorTransform().Equals(Root));
+   if(Finished){Completed=true;break;}
+   TestTrue(TEXT("Grounded refresh preserves the unfinished recovery"),App->ActionCommand==Destination && App->bActionUsesStateTransition);
+  }
+  TestTrue(TEXT("Landing recovery completes and resumes locomotion"),Completed && App->ActionCommand==0);
+ }
  // The state-link path must not interfere with the separate scarab/cast queue,
  // immediate airborne motions or the final death hold.
  App->SetPreferredStyle(ACEMotion::StanceMagic);

@@ -700,12 +700,7 @@ void UACEUIGameplayBinder::TickRefresh()
 	// "Stay in chat mode after sending" — refocus after the commit's focus clear.
 	Manager->BeginNameLookupPass();
 	ON_SCOPE_EXIT { if (Manager) Manager->EndNameLookupPass(); };
-	if (bPendingChatRefocus)
-	{
-		bPendingChatRefocus = false;
-		if (PendingChatRefocusWindow == INDEX_NONE) ClearChatEntryFocus();
-		else FocusChatEntryWindow(PendingChatRefocusWindow);
-	}
+	ApplyPendingChatFocus();
 	// Keep drag ghosts tracking the cursor even when MouseMove is sparse under capture.
 	if ((bInvDragPending || bSpellDragPending) && FSlateApplication::IsInitialized()
 		&& !(PlayerController && PlayerController->IsVRActive()))
@@ -2860,9 +2855,10 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 			if (!Session->IsServerAttackInProgress()) bCombatRequestSent = false;
 			if (Session->GetLastAttackError() != 0)
 			{
+				// Retail HandleAttackDone stops automatic repeat, but preserves a
+				// new manual request. This response can belong to the shot cancelled
+				// before the player pressed/held a different attack height.
 				bCombatRepeatActive = false;
-				bCombatAttackRequestPending = false;
-				bCombatAttackHeld = bCombatPointerHeld = bCombatKeyboardHeld = false;
 			}
 			bCombatPowerCharging = !Session->IsServerAttackInProgress()
 				&& (bCombatAttackRequestPending || (bCombatRepeatActive && bCombatAutoRepeat));
@@ -6582,15 +6578,6 @@ bool UACEUIGameplayBinder::TrySendChatFromEntry(const FString* OverrideText, int
 	Message.ReplaceInline(TEXT("\u200B"), TEXT(""));
 	Message.ReplaceInline(TEXT("\u00A0"), TEXT(" "));
 	Message.TrimStartAndEndInline();
-	if (Message.IsEmpty())
-	{
-		FocusChatEntryWindow(SourceWindow);
-		return true;
-	}
-	CloseChatTargetPopup();
-
-	if (auto* Chat = Cast<UACEChatEntry>(Entry)) Chat->RememberSubmitted(Message);
-
 	// Retail "Stay in chat mode after sending" (PlayerOption 0x0B): keep the entry
 	// focused after the send. Deferred one tick — the edit box clears keyboard
 	// focus after the commit delegate returns, which would undo a same-frame focus.
@@ -6606,6 +6593,13 @@ bool UACEUIGameplayBinder::TrySendChatFromEntry(const FString* OverrideText, int
 		bPendingChatRefocus = true;
 		PendingChatRefocusWindow = INDEX_NONE;
 	}
+	// ChatInterface::HandleEnterKey relinquishes/retains focus before checking
+	// for an empty command. Slate clears focus after this callback, so empty
+	// submissions need the same deferred handoff as messages that get sent.
+	if (Message.IsEmpty()) return true;
+	CloseChatTargetPopup();
+
+	if (auto* Chat = Cast<UACEChatEntry>(Entry)) Chat->RememberSubmitted(Message);
 
 	// Retail pose emote: *bow* / *wave* → ChatPoseTable + SoulEmote (+ local motion).
 	if (Message.StartsWith(TEXT("*")))

@@ -36,6 +36,7 @@ bool FACERemoteSupportTest::RunTest(const FString&)
  for(int FPS:{30,90,144})for(int Direction:{1,-1})
  {
   FACEWorldObject O;O.SetupId=0x02000001;O.bIsPlayer=true;O.ItemType=ACEItemType::Creature;
+  O.PhysicsState=ACEPhysicsState::Gravity;
   O.bHasPosition=true;O.Position=P;O.Position.Location.Y+=(Direction>0?-1.f:8.f);
   O.Position.Location.Z+=Direction>0?0:.8f;
   auto* Walker=World->SpawnActor<AACEWorldEntityActor>();Walker->InitializeFromObject(O,100,false);
@@ -65,6 +66,7 @@ bool FACERemoteSupportTest::RunTest(const FString&)
  for(auto* A:Geometry)A->Destroy();Geometry.Reset();
  Box(FVector(0,0,-10),FVector(400,2000,10));
  FACEWorldObject O;O.SetupId=0x02000001;O.bIsPlayer=true;O.ItemType=ACEItemType::Creature;O.bHasPosition=true;O.Position=P;
+ O.PhysicsState=ACEPhysicsState::Gravity;
  auto* Walker=World->SpawnActor<AACEWorldEntityActor>();Walker->InitializeFromObject(O,100,false);
  // Warm geometry and compare the same collision path before/after. Isolated
  // CPU timings are informational; correctness has no machine-speed threshold.
