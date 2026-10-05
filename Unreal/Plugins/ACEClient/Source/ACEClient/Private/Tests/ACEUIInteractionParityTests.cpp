@@ -426,6 +426,9 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     Binder->ExaminedSpellId=LongInspectionSpell; Binder->bExaminationDismissed=false;
     Binder->ShowExamination(true); Binder->RefreshExaminationOverlay();
     Draw(TEXT("SpellExamination")); Binder->RefreshExaminationOverlay();
+    TestFalse(TEXT("Fixed spell formula divider cannot cross the responsive description"),
+        Manager->FindElementUnder(TEXT("SpellExamineUI"),TEXT("SpellExamBackground_Divider_Lower"))->bVisible);
+    TestTrue(TEXT("Spell examination includes authored ingredient names"),Binder->ExamBody->GetText().ToString().Contains(TEXT("Ingredients:")));
     TestTrue(TEXT("Spell inspection creates the shared scroll box"),Binder->ExamScroll!=nullptr);
     if (Binder->ExamScroll)
     {

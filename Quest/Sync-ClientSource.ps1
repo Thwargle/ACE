@@ -6,7 +6,7 @@ $target = [IO.Path]::GetFullPath($TargetRoot)
 $differences = @()
 # Windows' cook regenerates runtime material assets. Quest deliberately disables
 # ACEWorldBake, so it must consume those generated assets as well as shared code.
-foreach ($subdirectory in @('Source', 'Plugins\ACEClient\Source', 'Plugins\ACEClient\Docs\UI\Resolved', 'Plugins\ACEClient\Tests\Fixtures', 'Plugins\ProceduralMeshComponent\Source', 'Content\ACE\RuntimeMaterials', 'Build\Android\res')) {
+foreach ($subdirectory in @('Source', 'Plugins\ACEClient\Source', 'Plugins\ACEClient\Docs\UI\Resolved', 'Plugins\ACEClient\Tests\Fixtures', 'Plugins\ACEClient\ClientMods', 'Plugins\ProceduralMeshComponent\Source', 'Content\ACE\RuntimeMaterials', 'Build\Android\res')) {
     foreach ($source in Get-ChildItem (Join-Path $shared $subdirectory) -File -Recurse) {
         $relative = [IO.Path]::GetRelativePath($shared, $source.FullName)
         $destination = Join-Path $target $relative

@@ -9,6 +9,7 @@ class UACEUIResourceResolver;
 
 namespace ACEAppraisalFormatting
 {
+FString EquipmentSetName(int32 Id);
 inline FString ManaStoneDetails(const FACEAppraisalInfo& Info)
 {
     // ItemExamineUI::Appraisal_ShowManaStoneInfo: property presence (including
@@ -202,6 +203,7 @@ inline TArray<FLinearColor> ItemTextColors(const FACEAppraisalInfo& Info, const 
         }
     };
     Stat(TEXT("Armor Level:"), Info.ArmorEnchantments, 1);
+    Stat(TEXT("Base Shield Level:"), Info.ArmorEnchantments, 1);
     const TCHAR* Armor[] = {TEXT("Slashing:"),TEXT("Piercing:"),TEXT("Bludgeoning:"),TEXT("Cold:"),TEXT("Fire:"),TEXT("Acid:"),TEXT("Electric:"),TEXT("Nether:")};
     for (int32 I=0; I<UE_ARRAY_COUNT(Armor); ++I) Stat(Armor[I], Info.ArmorEnchantments, 2u<<I);
     Stat(TEXT("Damage:"), Info.WeaponEnchantments, 8);
@@ -251,10 +253,15 @@ inline FString WeaponDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Da
     }
     if (const int32 Bonus = Info.IntProperties.FindRef(204); Bonus > 0)
         Text += FString::Printf(TEXT("Elemental Damage Bonus: %d, %s\n"), Bonus, *DamageType);
-    if (UsesAmmo && FMath::IsFinite(Info.WeaponDamageMod) && Info.WeaponDamageMod > 0.0)
-        Text += FString::Printf(TEXT("Damage Modifier: %.3gx\n"), Info.WeaponDamageMod);
-    if (Info.WeaponTime < 0) Text += TEXT("Speed: Unknown\n");
-    else
+    if (UsesAmmo)
+        Text += Info.bSuccess && FMath::IsFinite(Info.WeaponDamageMod) && Info.WeaponDamageMod > 0.0
+            ? FString::Printf(TEXT("Damage Modifier: %s%d%%.\n"), Info.WeaponDamageMod < 1.0 ? TEXT("-") : TEXT("+"),
+                FMath::RoundToInt(FMath::Abs(Info.WeaponDamageMod - 1.0) * 100.0))
+            : TEXT("Damage Modifier: Unknown\n");
+    const bool ShowSpeed = (Info.IntProperties.FindRef(9) & 0x2500000)
+        || (Info.ItemType & (ACEItemType::MeleeWeapon | ACEItemType::MissileWeapon));
+    if (ShowSpeed && Info.WeaponTime < 0) Text += TEXT("Speed: Unknown\n");
+    else if (ShowSpeed)
     {
         const TCHAR* Speed = Info.WeaponTime < 11 ? TEXT("Very Fast") : Info.WeaponTime < 31 ? TEXT("Fast")
             : Info.WeaponTime < 50 ? TEXT("Average") : Info.WeaponTime < 80 ? TEXT("Slow") : TEXT("Very Slow");
@@ -273,7 +280,7 @@ inline FString WeaponDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Da
     return Text + TEXT("\n");
 }
 
-inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat = nullptr)
+inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat = nullptr, const FACEPlayerVitals* Viewer = nullptr)
 {
     FString Text;
     auto Int = [&](uint32 Key, const TCHAR* Label)
@@ -292,15 +299,58 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
     }
     if (!Text.IsEmpty() && !Text.EndsWith(TEXT("\n\n"))) Text += TEXT("\n");
     // Retail prints crafting first, then consecutive weapon/defense/armor rows.
+    const FString SetName=EquipmentSetName(Info.IntProperties.FindRef(265));
+    if(!SetName.IsEmpty())Text+=TEXT("Set: ")+SetName+TEXT("\n\n");
+    if ((Info.IntProperties.FindRef(9)&0x8007FFF) || (Info.ItemType&(ACEItemType::Armor|ACEItemType::Clothing)))
+    {
+        TArray<FString> Covers;
+        const uint32 Coverage=Info.IntProperties.FindRef(4);
+        for(const auto& Part:{TPair<uint32,const TCHAR*>(0x4000,TEXT("Head")),{0x408,TEXT("Chest")},{0x810,TEXT("Abdomen")},
+            {0x1020,TEXT("Upper Arms")},{0x2040,TEXT("Lower Arms")},{0x8000,TEXT("Hands")},
+            {0x102,TEXT("Upper Legs")},{0x204,TEXT("Lower Legs")},{0x10000,TEXT("Feet")}})
+            if(Coverage&Part.Key)Covers.Add(Part.Value);
+        if(!Covers.IsEmpty())Text+=TEXT("Covers ")+FString::Join(Covers,TEXT(", "))+TEXT("\n");
+    }
+    const bool Shield = (Info.IntProperties.FindRef(9) & ACEEquipMask::Shield) != 0;
+    if (Shield)
+    {
+        if (const int32* Level = Info.IntProperties.Find(28))
+        {
+            Int(28, TEXT("Base Shield Level: "));
+            if (Viewer)
+            {
+                int32 Limit = 0;
+                for (const auto& Skill : Viewer->Skills) if (Skill.SkillId == 48)
+                    Limit = Skill.AdvancementClass >= 3 ? Skill.Current : Skill.Current / 2;
+                Text += FString::Printf(TEXT("Effective Shield Level : %d (with Shield skill)\n"), FMath::Min(*Level, Limit));
+            }
+        }
+        else Text += TEXT("Shield Level: Unknown\n");
+    }
     FString Stats = WeaponDetails(Info, Dat).TrimEnd();
     if (!Stats.IsEmpty()) Text += Stats + TEXT("\n");
-    Int(28, TEXT("Armor Level: "));
+    const bool Launcher = (Info.IntProperties.FindRef(9) & ACEEquipMask::MissileWeapon)
+        || (Info.ItemType & ACEItemType::MissileWeapon);
+    const bool Ammunition = (Info.IntProperties.FindRef(9) & ACEEquipMask::MissileAmmo) != 0;
+    if (Launcher || Ammunition)
+    {
+        const int32 Ammo = Info.IntProperties.FindRef(50);
+        const TCHAR* Kind = Ammo==1 ? (Launcher?TEXT("arrows"):TEXT("bows"))
+            : Ammo==2 ? (Launcher?TEXT("quarrels"):TEXT("crossbows"))
+            : Ammo==4 ? (Launcher?TEXT("atlatl darts"):TEXT("atlatls")) : nullptr;
+        if (Kind) Text += Launcher ? FString::Printf(TEXT("Uses %s as ammunition.\n"),Kind)
+            : FString::Printf(TEXT("Used as ammunition by %s.\n"),Kind);
+    }
     for (const auto& E : {TPair<uint32,const TCHAR*>(29,TEXT("Melee Defense")),{149,TEXT("Missile Defense")},{150,TEXT("Magic Defense")}})
         if (const auto* V = Info.FloatProperties.Find(E.Key))
             Text += FString::Printf(TEXT("Bonus to %s: %+.1f%%.\n"), E.Value, (*V-1.0)*100.0);
+    const bool HasArmor = !Info.ArmorResistances.IsEmpty() && Info.IntProperties.FindRef(28) > 0;
+    if (HasArmor || (!Shield && Info.IntProperties.Contains(28))) Int(28, TEXT("Armor Level: "));
     static const TCHAR* DamageNames[] = {TEXT("Slashing"), TEXT("Piercing"), TEXT("Bludgeoning"), TEXT("Cold"), TEXT("Fire"), TEXT("Acid"), TEXT("Nether"), TEXT("Electric")};
-    for (int32 I = 0; I < Info.ArmorResistances.Num() && I < UE_ARRAY_COUNT(DamageNames); ++I)
+    // Wire storage order differs from ItemExamineUI::Appraisal_ShowArmorMods.
+    for (int32 I : {0,1,2,4,3,5,7,6})
     {
+        if (!HasArmor || !Info.ArmorResistances.IsValidIndex(I)) continue;
         const float R = Info.ArmorResistances[I];
         const TCHAR* Quality = R >= 2.f ? TEXT("Unparalleled") : R >= 1.6f ? TEXT("Excellent")
             : R >= 1.2f ? TEXT("Above Average") : R > .8f ? TEXT("Average")
@@ -413,14 +463,14 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
     if (!SpellDescriptions.IsEmpty()) AppendItemText(Text, TEXT("Spell Descriptions:\n") + SpellDescriptions, true);
     return Text;
 }
-inline FString ItemExaminationText(const FACEAppraisalInfo& Info,UACEDatSubsystem* Dat,bool IncludeValue=true,bool IncludeBurden=true)
+inline FString ItemExaminationText(const FACEAppraisalInfo& Info,UACEDatSubsystem* Dat,bool IncludeValue=true,bool IncludeBurden=true,const FACEPlayerVitals* Viewer=nullptr)
 {
     FString Body;
     if(IncludeValue)AppendItemText(Body,Info.bHasValue?TEXT("Value: ")+FText::AsNumber(Info.Value).ToString():TEXT("Value: ???"));
     if(IncludeBurden)AppendItemText(Body,Info.bHasBurden?TEXT("Burden: ")+FText::AsNumber(Info.Burden).ToString():TEXT("Burden: Unknown"));
     const bool HasTinkering=Info.IntProperties.Contains(171) || Info.IntProperties.Contains(105)
         || Info.StringProperties.Contains(39) || Info.StringProperties.Contains(40);
-    AppendItemText(Body,ItemDetails(Info,Dat),!HasTinkering);
+    AppendItemText(Body,ItemDetails(Info,Dat,Viewer),!HasTinkering);
     // Appraisal_ShowDescription prefers LongDesc, falling back to ShortDesc.
     // The protocol Summary concatenates all strings in wire order, so it cannot
     // supply retail paragraph boundaries (and can repeat both descriptions).

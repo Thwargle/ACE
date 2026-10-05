@@ -123,6 +123,15 @@ static FORCENOINLINE void CheckKeyboardCapture(FAutomationTestBase& Test, UACERe
                 Test.TestFalse(TEXT("Wheel completes binding capture"),Key->GetIsSelectingKey());
                 Test.TestEqual(TEXT("Wheel direction becomes the selected hotkey"),ACEInputBindings::Get(EKeys::W,0).Key,Delta>0?EKeys::MouseScrollUp:EKeys::MouseScrollDown);
             }
+            CaptureSlate->OnKeyDown(Key->GetCachedGeometry(),EnterKey);CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),EnterKey);
+            const FAnalogInputEvent Stick(EKeys::Gamepad_RightX,FModifierKeysState(),0,false,0,0,-.9f);
+            Test.TestTrue(TEXT("Controller stick direction is captured by the key editor"),Key->FilterCaptureAnalog(Stick));
+            Test.TestFalse(TEXT("Controller capture ends normally"),Key->GetIsSelectingKey());
+            Test.TestEqual(TEXT("Captured stick direction maps to the requested action"),ACEInputBindings::Get(EKeys::W,0).Key,EKeys::Gamepad_RightStick_Left);
+            CaptureSlate->OnKeyDown(Key->GetCachedGeometry(),EnterKey);CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),EnterKey);
+            const FKeyEvent Button(EKeys::Gamepad_FaceButton_Left,FModifierKeysState(),0,false,0,0);
+            Key->FilterCaptureKey(Button,true);Key->FilterCaptureKey(Button,false);CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),Button);
+            Test.TestEqual(TEXT("Controller face buttons can also be rebound"),ACEInputBindings::Get(EKeys::W,0).Key,EKeys::Gamepad_FaceButton_Left);
             for(const FKey& Modifier:{EKeys::LeftShift,EKeys::RightShift,EKeys::LeftControl,EKeys::RightControl,EKeys::LeftAlt,EKeys::RightAlt})
             {
                 CaptureSlate->OnKeyDown(Key->GetCachedGeometry(),EnterKey);CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),EnterKey);
@@ -1366,7 +1375,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         {
             auto* Label=Cast<UACERetailTextBlock>(Gameplay->OptionsButtonLabels[Index]);
             if (!Label) continue;
-            const bool ShouldShow=GameplayPage?Index<7:Index>=7;
+            const bool ShouldShow=GameplayPage?Index<8:Index>=8;
             TestEqual(TEXT("Options captions belong only to the active tab"),Label->GetVisibility()!=ESlateVisibility::Collapsed,ShouldShow);
             if (!ShouldShow) continue;
             ++VisibleLabels;
@@ -1383,8 +1392,14 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
 
             }
         }
-        TestEqual(TEXT("Only the active page's button captions are visible"),VisibleLabels,GameplayPage?7:3);
-        if (GameplayPage) CaptureScreen(TEXT("GameplayOptionsReturn"));
+        TestEqual(TEXT("Only the active page's button captions are visible"),VisibleLabels,GameplayPage?8:3);
+        if (GameplayPage)
+        {
+            const auto PluginButton=Manager->FindElementUnder(PageName,TEXT("GameplayOptions_Plugins_Button"));
+            TestTrue(TEXT("Plugin manager button fits inside options"),PluginButton && PluginButton->Parent.IsValid()
+                && PluginButton->Y+PluginButton->Height<=PluginButton->Parent.Pin()->Height);
+            CaptureScreen(TEXT("GameplayOptionsReturn"));
+        }
         else if (FString(PageName)==TEXT("ChatPage")) CaptureScreen(TEXT("GameplayChatOptions"));
     }
     {
@@ -1430,13 +1445,14 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         NativeClick(TEXT("KeymapFileOK"));
         TestFalse(TEXT("Review returns to the mapping draft"),Gameplay->bKeymapImportOpen);
         ACEInputBindings::Revert();Gameplay->RefreshKeyboardOverlays();
-        TestEqual(TEXT("Key editor exposes three buttons for every keyboard action"),Gameplay->KeyboardRows.Num(),ACEInputBindings::Actions().Num()*3);
+        TestEqual(TEXT("Key editor exposes retail mappings plus a controller mapping"),Gameplay->KeyboardRows.Num(),ACEInputBindings::Actions().Num()*4);
+        TestTrue(TEXT("Gamepad column has a visible heading"),Gameplay->KeyboardLabels.ContainsByPredicate([](const UTextBlock* T){return T && T->IsVisible() && T->GetText().ToString()==TEXT("Gamepad");}));
         TestEqual(TEXT("Mapping rows use the retail DAT template"),Gameplay->KeyboardEntryElements[0]->ElementId,0x1000002fu);
         TestTrue(TEXT("Load File retains the retail caption"),Gameplay->KeyboardLabels.ContainsByPredicate([](const UTextBlock* T){return T&&T->GetText().ToString()==TEXT("Load File...");}));
-        for(int32 K=0;K<3;++K)
+        for(int32 K=0;K<4;++K)
         {
             const auto Button=Gameplay->KeyboardEntryElements[0]->Children[K];
-            TestEqual(TEXT("Mapping columns retain retail positions"),Button->X,270+K*100);
+            TestEqual(TEXT("Four mapping columns fit the retail row"),Button->X,270+K*75);
             TestEqual(TEXT("Mapping button includes left, middle and right chrome"),Button->Children.Num(),3);
             TestTrue(TEXT("Mapping button has a usable input target"),Gameplay->KeyboardRows[K]->IsVisible());
         }
@@ -1577,6 +1593,39 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 }
             }
             CombatEvent(ACEGameEvent::AttackDone);
+            Gameplay->CancelCombatAttack();
+            for (const int32 Mode : {int32(ACECombatMode::Missile),int32(ACECombatMode::Melee)})
+            {
+                CombatEvent(ACEGameEvent::AttackDone,0x36);
+                Gameplay->ApplyCombatMode(Mode);
+                Session.SetCurrentStance(Mode==int32(ACECombatMode::Missile)?ACEMotion::StanceBowCombat:ACEMotion::StanceHandCombat);
+                Gameplay->TickCombatAutoAttack(0);
+                Gameplay->BeginCombatPowerCharge(ACEAttackHeight::Low,true);Gameplay->bCombatKeyboardHeld=true;
+                Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-.75;
+                Session.CachedC2SPackets.Reset();
+                Gameplay->SetCombatMovementBlocked(true);Gameplay->TickCombatAutoAttack(0);
+                CombatEvent(ACEGameEvent::AttackDone,0x36);
+                TestTrue(TEXT("Moving preserves held manual attack input"),Gameplay->bCombatAttackHeld && Gameplay->bCombatKeyboardHeld && Gameplay->bCombatAttackRequestPending);
+                TestEqual(TEXT("Moving resets charge to zero"),Gameplay->CombatPowerOrAccuracy,0.f);
+                Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-2.;Gameplay->TickCombatAutoAttack(0);
+                TestEqual(TEXT("Charge cannot build or fire while moving"),Session.CachedC2SPackets.Num(),0);
+                Gameplay->SetCombatMovementBlocked(false);Gameplay->TickCombatAutoAttack(0);
+                TestTrue(TEXT("Stopping restarts held charge from zero"),Gameplay->bCombatPowerCharging && Gameplay->CombatPowerOrAccuracy<.05f);
+                Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-2.;Gameplay->ReleaseCombatPowerCharge();Gameplay->TickCombatAutoAttack(0);
+                TestEqual(TEXT("Held attack fires after movement without a second press"),Session.CachedC2SPackets.Num(),1);
+                for(const auto& Packet:Session.CachedC2SPackets)
+                {
+                    FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);
+                    TestEqual(TEXT("Restarted attack uses the standard retail action"),R.ReadUInt32(),
+                        Mode==int32(ACECombatMode::Missile)?ACEGameAction::TargetedMissileAttack:ACEGameAction::TargetedMeleeAttack);
+                }
+                Gameplay->CancelCombatAttack();Gameplay->TickCombatAutoAttack(0);
+                Gameplay->BeginCombatPowerCharge(ACEAttackHeight::Low,true);Gameplay->SetCombatMovementBlocked(true);
+                Gameplay->ReleaseCombatPowerCharge();Gameplay->SetCombatMovementBlocked(false);
+                Session.CachedC2SPackets.Reset();Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-2.;Gameplay->TickCombatAutoAttack(0);
+                TestEqual(TEXT("Releasing while moving does not create a delayed stray shot"),Session.CachedC2SPackets.Num(),0);
+                Gameplay->CancelCombatAttack();
+            }
             Gameplay->ApplyCombatMode(int32(ACECombatMode::NonCombat));
             Session.PlayerVitals.bValid=true;Session.PlayerVitals.AvailableExperience=1;
             FACESkillInfo Skill;Skill.SkillId=6;Skill.AdvancementClass=2;Skill.XpSpent=0;
@@ -2660,6 +2709,50 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("Item traversal still includes doors"),Client->GetSelectedObject().Guid,80100);
             Controller->CycleNearbyTarget(false,1);
             TestEqual(TEXT("Item traversal still includes portals"),Client->GetSelectedObject().Guid,80101);
+            TFunction<void()> CheckAutoTarget=[&]()
+            {
+                // This fixture replaces the subsystem session; restore its normal
+                // selection delegate bridge for the end-to-end targeting checks.
+                const auto Bridge=Session.OnSelectionChanged.AddLambda([&](const FACESelectedObject& Selection){Client->OnSelectionChanged.Broadcast(Selection);});
+                ON_SCOPE_EXIT{Session.OnSelectionChanged.Remove(Bridge);};
+                TGuardValue<int32> Attacker(Session.LastAttackerGuid,0);
+                TGuardValue<double> AttackerTime(Session.LastAttackerTimeSeconds,0.);
+                auto Distant=Session.WorldObjects[80010];Distant.Guid=80013;Distant.Position.Location.X=Self.Position.Location.X+110.f;
+                Session.WorldObjects.Add(Distant.Guid,Distant);
+                Client->SelectObject(80011);Controller->CycleNearbyTarget(true,1);
+                TestEqual(TEXT("Monster hotkeys reach known objects beyond the compass edge"),Client->GetSelectedObject().Guid,80013);
+                Session.WorldObjects[80010].bDying=Session.WorldObjects[80011].bDying=true;
+                Controller->CycleNearbyTarget(true,0);
+                TestEqual(TEXT("Nearest monster has no separate 60 metre cutoff"),Client->GetSelectedObject().Guid,80013);
+                Session.WorldObjects.Remove(80013);
+                Session.WorldObjects[80010].bDying=Session.WorldObjects[80011].bDying=false;
+                TGuardValue<uint32> Options(Session.CharacterOptions1,Session.CharacterOptions1|0x2000u);
+                TGuardValue<int32> Mode(Gameplay->CombatMode,2);
+                TGuardValue<TObjectPtr<AACEPlayerController>> Owner(Gameplay->PlayerController,Controller);
+                Client->SelectObject(0);Gameplay->TryAutoTargetOnCombatEnter();
+                TestEqual(TEXT("Saved auto-target selects nearest on combat entry without last attacker"),Client->GetSelectedObject().Guid,80010);
+                Session.WorldObjects[80010].bDying=true;
+                Client->SelectObject(0);Gameplay->TickCombatAutoAttack(.016f);
+                TestEqual(TEXT("Death selection loss automatically chooses the next living monster"),Client->GetSelectedObject().Guid,80011);
+                Session.WorldObjects[80010].bDying=false;
+                Gameplay->TryAutoTargetOnCombatEnter();
+                TestEqual(TEXT("Auto-target preserves the player's valid existing target"),Client->GetSelectedObject().Guid,80011);
+                Session.CharacterOptions1&=~0x2000u;Client->SelectObject(0);Gameplay->TryAutoTargetOnCombatEnter();
+                TestFalse(TEXT("Disabled auto-target leaves an empty selection"),Client->GetSelectedObject().bValid);
+                Session.CharacterOptions1|=0x2000u;Gameplay->CombatMode=4;Gameplay->TryAutoTargetOnCombatEnter();
+                TestEqual(TEXT("Missile auto-target uses the same monster filter and nearest fallback"),Client->GetSelectedObject().Guid,80010);
+                const auto Removed=Session.WorldObjects[80010];
+                FACEBinaryWriter Delete;Delete.WriteUInt32(80010);FACEBinaryReader DeleteReader(Delete.GetData());
+                Session.HandleObjectDelete(DeleteReader);Gameplay->TickCombatAutoAttack(.016f);
+                TestEqual(TEXT("ObjectDelete without a death-motion packet also retargets"),Client->GetSelectedObject().Guid,80011);
+                Session.WorldObjects.Add(Removed.Guid,Removed);
+                Client->SelectObject(0);Gameplay->TickCombatAutoAttack(.016f);
+                TestFalse(TEXT("Explicitly clearing a live monster does not immediately reselect it"),Client->GetSelectedObject().bValid);
+                Session.LastAttackerGuid=80011;Session.LastAttackerTimeSeconds=FPlatformTime::Seconds();
+                Gameplay->TryAutoTargetOnCombatEnter();
+                TestEqual(TEXT("Retail recent-attacker preference precedes nearest-target fallback"),Client->GetSelectedObject().Guid,80011);
+            };
+            CheckAutoTarget();
             // Keep the input sequence out of the already-large screen test's optimizer unit.
             TFunction<void()> CheckTargetKeys=[&]()
             {
@@ -3323,6 +3416,27 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Gameplay->SetVendorPage(0);
             Session.VendorMerchandise[0].VendorQuantityAvailable=-1;Gameplay->HandleVendorOpened(99122);
             TestEqual(TEXT("Unlimited ammunition is limited to its real stack size"),Gameplay->SelectedStackMax,250);
+            // Custom weenies use the same server stock and pyreal purchase path.
+            // Exercise actual pointer routing, not only the binder methods.
+            [&]()
+            {
+            Session.VendorMerchandise[0].WeenieClassId=1050067;
+            Session.VendorCurrencyName.Empty();
+            Gameplay->VendorBuyCart.Reset();Gameplay->SetVendorPage(0);Gameplay->HandleVendorOpened(99122);
+            CaptureScreen(TEXT("GameplayCustomPyrealVendor"));
+            {
+                const auto& Geo=Gameplay->VendorItemSlots[0]->GetCachedGeometry();
+                const FVector2D Point=Geo.GetAbsolutePosition()+Geo.GetAbsoluteSize()*.5;
+                Canvas->NativeOnMouseButtonDown(Canvas->GetCachedGeometry(),FPointerEvent(0,Point,Point,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
+                Canvas->NativeOnMouseButtonUp(Canvas->GetCachedGeometry(),FPointerEvent(0,Point,Point,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
+            }
+            Session.CachedC2SPackets.Reset();NativeClick(TEXT("VendorItemBuy_Button"));
+            TestTrue(TEXT("Custom pyreal stock Buy button sends a retail Buy action"),HasAction(ACEGameAction::Buy));
+            NativeClick(TEXT("VendorItemAdd_Button"));
+            TestTrue(TEXT("Custom pyreal stock Add to List button adds the selected item"),
+                Gameplay->VendorBuyCart.ContainsByPredicate([&](const auto& P){return P.Value==Stock.Guid&&P.Key>0;}));
+            Gameplay->VendorBuyCart.Reset();Gameplay->SetVendorPage(0);
+            }();
             Session.VendorMerchandise[0].VendorQuantityAvailable=0;Gameplay->HandleVendorOpened(99122);
             TestEqual(TEXT("Sold-out stack hides quantity control"),Gameplay->SelectedStackMax,0);
             Session.CachedC2SPackets.Reset();Gameplay->BuySelectedVendorItem();

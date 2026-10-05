@@ -21,7 +21,19 @@ public:
  { return Owner.IsValid() && Owner->FilterCaptureKey(Event,false); }
  virtual bool HandleMouseWheelOrGestureEvent(FSlateApplication&,const FPointerEvent& Event,const FPointerEvent*) override
  { return Owner.IsValid() && Owner->FilterCaptureWheel(Event); }
+ virtual bool HandleAnalogInputEvent(FSlateApplication&,const FAnalogInputEvent& Event) override
+ { return Owner.IsValid() && Owner->FilterCaptureAnalog(Event); }
 };
+
+bool UACERetailKeySelector::FilterCaptureAnalog(const FAnalogInputEvent& Event)
+{
+ const auto Selector=GetCachedWidget();
+ if(!GetIsSelectingKey() || !Selector || FMath::Abs(Event.GetAnalogValue())<.6f)return false;
+ const FKey Key=ACEInputBindings::StickDirectionKey(Event.GetKey(),Event.GetAnalogValue());
+ if(!Key.IsValid())return false;
+ Selector->OnKeyUp(Selector->GetCachedGeometry(),FKeyEvent(Key,Event.GetModifierKeys(),Event.GetUserIndex(),false,0,0));
+ return true;
+}
 
 bool UACERetailKeySelector::FilterCaptureWheel(const FPointerEvent& Event)
 {
@@ -77,7 +89,7 @@ void UACERetailKeySelector::CaptureStateChanged()
 }
 void UACERetailKeySelector::InitializeBinding(FKey Key,int32 InSlot)
 {
- ActionKey=Key;BindingSlot=InSlot;SetAllowModifierKeys(true);SetAllowGamepadKeys(false);
+ ActionKey=Key;BindingSlot=InSlot;SetAllowModifierKeys(true);SetAllowGamepadKeys(true);
  FTextBlockStyle Text=FCoreStyle::Get().GetWidgetStyle<FTextBlockStyle>("NormalText");
  Text.SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),9));
  Text.SetColorAndOpacity(FSlateColor(FLinearColor(.95f,.91f,.78f,1)));
@@ -91,7 +103,7 @@ void UACERetailKeySelector::InitializeBinding(FKey Key,int32 InSlot)
  SetMargin(FMargin(0));
  SetNoKeySpecifiedText(FText::GetEmpty());
  SetKeySelectionText(FText::FromString(TEXT("Press a key")));
- UACEHoverTooltipWidget::SetWidgetTooltip(this, FText::FromString(TEXT("Click, then press a key, mouse button, or scroll the wheel. Backspace clears this binding; Escape cancels.")));
+ UACEHoverTooltipWidget::SetWidgetTooltip(this, FText::FromString(TEXT("Click, then press a key, mouse button, controller button, move a stick, or scroll the wheel. Backspace clears; Escape cancels. Controller mappings are saved locally; retail keymap files contain the three keyboard/mouse columns.")));
  SetSelectedKey(ACEInputBindings::Get(Key,InSlot));
  OnKeySelected.AddDynamic(this,&UACERetailKeySelector::AcceptBinding);
  OnIsSelectingKeyChanged.AddDynamic(this,&UACERetailKeySelector::CaptureStateChanged);
@@ -116,6 +128,17 @@ void UACERetailKeySelector::RefreshBinding()
   Caption.ReplaceInline(TEXT("Left Control"),TEXT("L Ctrl"));Caption.ReplaceInline(TEXT("Right Control"),TEXT("R Ctrl"));
   Caption.ReplaceInline(TEXT("Left Alt"),TEXT("L Alt"));Caption.ReplaceInline(TEXT("Right Alt"),TEXT("R Alt"));
   Caption.ReplaceInline(TEXT("Space Bar"),TEXT("Space"));
+  Caption.ReplaceInline(TEXT("Gamepad "),TEXT(""));
+  Caption.ReplaceInline(TEXT("Left Thumbstick"),TEXT("L Stick"));Caption.ReplaceInline(TEXT("Right Thumbstick"),TEXT("R Stick"));
+  Caption.ReplaceInline(TEXT("Left Trigger"),TEXT("LT"));Caption.ReplaceInline(TEXT("Right Trigger"),TEXT("RT"));
+  Caption.ReplaceInline(TEXT("Left Shoulder"),TEXT("LB"));Caption.ReplaceInline(TEXT("Right Shoulder"),TEXT("RB"));
+  if(Chord.Key==EKeys::Gamepad_FaceButton_Bottom)Caption=TEXT("A / Cross");
+  else if(Chord.Key==EKeys::Gamepad_FaceButton_Right)Caption=TEXT("B / Circle");
+  else if(Chord.Key==EKeys::Gamepad_FaceButton_Left)Caption=TEXT("X / Square");
+  else if(Chord.Key==EKeys::Gamepad_FaceButton_Top)Caption=TEXT("Y / Triangle");
+  else if(Chord.Key==EKeys::Gamepad_Special_Left)Caption=TEXT("Back / View");
+  else if(Chord.Key==EKeys::Gamepad_Special_Right)Caption=TEXT("Start / Menu");
+  Caption.ReplaceInline(TEXT("L Stick "),TEXT("L "));Caption.ReplaceInline(TEXT("R Stick "),TEXT("R "));
   RetailLabel->SetText(FText::FromString(GetIsSelectingKey()?TEXT("Press a key"):Caption));
  }
  if (GetIsSelectingKey()) return;

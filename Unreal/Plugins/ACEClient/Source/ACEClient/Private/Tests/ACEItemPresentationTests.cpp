@@ -11,6 +11,7 @@
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACERetailObjectNames.h"
 #include "UI/ACEAppraisalFormatting.h"
+#include "UI/ACERadarColors.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEItemPresentationTest, "ACE.RetailParity.ItemPresentation",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -42,6 +43,50 @@ bool FACEItemPresentationTest::RunTest(const FString&)
         Packet.WriteUInt32(Property); Packet.WriteInt32(Value);
         FACEBinaryReader Reader(Packet.GetData()); Session.HandlePublicUpdatePropertyInt(Reader);
     };
+    {
+        FACEWorldObject Target; Target.Guid = Item.Guid;
+        const auto Check = [&](const TCHAR* Name, uint8 Expected, const FACEFellowshipInfo* Fellowship = nullptr)
+        {
+            const uint8 Color = Binder->ResolveRadarColor(Target, Fellowship);
+            TestEqual(Name, Color, Expected);
+            TestTrue(TEXT("Selection arrows and radar share retail color"),
+                Binder->ColorFromSelectionMarker(Color).Equals(ACERadarColors::Tint(Expected)));
+        };
+        Target.ObjectDescriptionFlags = ACEObjectDescFlag::Door; Check(TEXT("Door is white"), ACERadarColor::White);
+        Target.ObjectDescriptionFlags = ACEObjectDescFlag::Stuck; Check(TEXT("Sign is white"), ACERadarColor::White);
+        Target.ObjectDescriptionFlags = ACEObjectDescFlag::Openable; Check(TEXT("Chest is white"), ACERadarColor::White);
+        Target.ObjectDescriptionFlags = ACEObjectDescFlag::Corpse; Check(TEXT("Corpse is white"), ACERadarColor::White);
+        Target.ObjectDescriptionFlags = 0; Check(TEXT("Loose item is white"), ACERadarColor::White);
+        Target.ItemType = ACEItemType::Creature; Check(TEXT("Creature prop without an explicit tint stays white"), ACERadarColor::White);
+        Target.RadarBlipColor = ACERadarColor::NPC; Check(TEXT("Authored NPC yellow is preserved"), ACERadarColor::Yellow);
+        Target.RadarBlipColor = 0; Target.ObjectDescriptionFlags = ACEObjectDescFlag::Attackable;
+        Check(TEXT("Attackable creature is gold"), ACERadarColor::Gold);
+        Target.ObjectDescriptionFlags |= ACEObjectDescFlag::Vendor; Check(TEXT("Vendor overrides creature gold"), ACERadarColor::Yellow);
+        Target.ObjectDescriptionFlags |= ACEObjectDescFlag::Portal; Check(TEXT("Portal overrides vendor yellow"), ACERadarColor::Purple);
+        Target.bIsPlayer = true; Target.ObjectDescriptionFlags = 0; Check(TEXT("Ordinary player is white"), ACERadarColor::White);
+        Target.ObjectDescriptionFlags = ACEObjectDescFlag::PkLiteStatus; Check(TEXT("PK Lite is pink"), ACERadarColor::Pink);
+        Target.ObjectDescriptionFlags |= ACEObjectDescFlag::PlayerKiller; Check(TEXT("PK takes precedence over PK Lite"), ACERadarColor::Red);
+        Target.ObjectDescriptionFlags = ACEObjectDescFlag::FreePkStatus; Check(TEXT("Free PK is gold"), ACERadarColor::Gold);
+        Target.ObjectDescriptionFlags = ACEObjectDescFlag::Admin; Check(TEXT("Visible admin is cyan"), ACERadarColor::Cyan);
+        Target.ObjectDescriptionFlags |= ACEObjectDescFlag::HiddenAdmin; Check(TEXT("Hidden admin does not expose admin color"), ACERadarColor::White);
+        FACEFellowshipInfo Fellowship; Fellowship.bValid = true; Fellowship.LeaderGuid = Target.Guid;
+        Target.ObjectDescriptionFlags = ACEObjectDescFlag::PlayerKiller;
+        Check(TEXT("Fellowship leader is green"), ACERadarColor::BrightGreen, &Fellowship);
+        Fellowship.LeaderGuid = 0; FACEFellowshipMember Member; Member.Guid = Target.Guid; Fellowship.Members.Add(Member);
+        Check(TEXT("Fellowship member is green"), ACERadarColor::BrightGreen, &Fellowship);
+        Target.RadarBlipColor = ACERadarColor::Blue;
+        Check(TEXT("Explicit server color precedes player and fellowship status"), ACERadarColor::Blue, &Fellowship);
+        Target.ObjectDescriptionFlags |= ACEObjectDescFlag::UiHidden;
+        Check(TEXT("UiHidden suppresses explicit tint"), ACERadarColor::White, &Fellowship);
+        TestTrue(TEXT("Default palette color is white"), ACERadarColors::Tint(0).Equals(FLinearColor::White));
+        TestTrue(TEXT("Unknown palette color falls back to white"), ACERadarColors::Tint(255).Equals(FLinearColor::White));
+        TestTrue(TEXT("Retail and ACE bright-green IDs both render green"),
+            ACERadarColors::Tint(10).Equals(FLinearColor::Green) && ACERadarColors::Tint(16).Equals(FLinearColor::Green));
+        UpdateInt(95, ACERadarColor::Cyan);
+        TestEqual(TEXT("Public radar color update is used immediately"), ACERadarColors::Resolve(Session.WorldObjects[Item.Guid]), ACERadarColor::Cyan);
+        UpdateInt(95, 0);
+        TestEqual(TEXT("Clearing public color restores white item selection"), ACERadarColors::Resolve(Session.WorldObjects[Item.Guid]), ACERadarColor::White);
+    }
     const uint64 InitialHash = Binder->HashInventoryOverlayState();
     const uint64 InitialRevision = Session.GetInventoryDataRevision();
     UpdateInt(131, 59);
@@ -60,6 +105,21 @@ bool FACEItemPresentationTest::RunTest(const FString&)
     FACEBinaryWriter Identify; Identify.WriteUInt32(Item.Guid); Identify.WriteUInt32(0); Identify.WriteUInt32(0);
     FACEBinaryReader IdentifyReader(Identify.GetData()); Session.HandleIdentifyObjectResponse(IdentifyReader);
     TestEqual(TEXT("Failed appraisal preserves the known material in its title"), ACEAppraisalFormatting::ExaminationName(Appraisal), FString(TEXT("Copper Ring")));
+    {
+        auto& Known=Session.WorldObjects[Item.Guid];
+        const auto Saved=Known;
+        Known.ValidLocations=ACEEquipMask::MissileWeapon;Known.AmmoType=1;Known.ClothingPriority=0x810;
+        FACEBinaryWriter Reply;Reply.WriteUInt32(Item.Guid);Reply.WriteUInt32(0);Reply.WriteUInt32(1);
+        FACEBinaryReader Reader(Reply.GetData());Session.HandleIdentifyObjectResponse(Reader);
+        TestEqual(TEXT("Appraisal inherits public ammo type when the server omits it"),Appraisal.IntProperties.FindRef(50),1);
+        TestEqual(TEXT("Appraisal inherits public equipment locations"),Appraisal.IntProperties.FindRef(9),static_cast<int32>(ACEEquipMask::MissileWeapon));
+        TestEqual(TEXT("Appraisal inherits clothing coverage"),Appraisal.IntProperties.FindRef(4),0x810);
+        FACEBinaryWriter Override;Override.WriteUInt32(Item.Guid);Override.WriteUInt32(1);Override.WriteUInt32(1);
+        Override.WriteUInt16(1);Override.WriteUInt16(0);Override.WriteUInt32(50);Override.WriteInt32(2);
+        FACEBinaryReader OverrideReader(Override.GetData());Session.HandleIdentifyObjectResponse(OverrideReader);
+        TestEqual(TEXT("Explicit server appraisal quality overrides a public descriptor fallback"),Appraisal.IntProperties.FindRef(50),2);
+        Known=Saved;
+    }
 
     FACEDatTexture FrameRaw, FillRaw; FACEDatDecodedSurface Frame, Fill;
     auto* Decoder = Dat->GetTextureResolver();

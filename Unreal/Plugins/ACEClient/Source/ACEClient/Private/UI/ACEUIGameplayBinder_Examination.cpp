@@ -49,12 +49,25 @@ void UACEUIGameplayBinder::RefreshSpellExamination()
     SetIconDid(ExamIconBorder, Icon);
     ExamIconBorder->SetVisibility(ESlateVisibility::HitTestInvisible);
     Canvas->PlaceWidgetAtElement(ExamIconBorder, Manager->FindElementUnder(TEXT("SpellExamineUI"), TEXT("SpellIcon")), 100001);
-    for (const TCHAR* Field : {TEXT("SpellManaText"), TEXT("SpellDurationText"), TEXT("SpellRangeText"), TEXT("SpellFormulaText"), TEXT("SpellFormulaIconList")})
+    // Details and ingredients share a responsive scroll area. Retire the
+    // original fixed-height subdivisions instead of drawing them through text.
+    for (const TCHAR* Field : {TEXT("SpellManaText"), TEXT("SpellDurationText"), TEXT("SpellRangeText"), TEXT("SpellFormulaText"), TEXT("SpellFormulaIconList"),
+        TEXT("SpellExamBackground_Divider_Middle"),TEXT("SpellExamBackground_Divider_Lower")})
         if (auto Element=Manager->FindElementUnder(TEXT("SpellExamineUI"),Field)) Element->bVisible=false;
     const auto Body=Manager->FindElementUnder(TEXT("SpellExamineUI"), TEXT("SpellDisplayText"));
     if (!Body) return;
+    const auto Panel=Manager->FindElementByName(TEXT("SpellExamineUI"));
+    const auto Divider=Manager->FindElementUnder(TEXT("SpellExamineUI"),TEXT("SpellExamBackground_Divider"));
+    if(Panel && Divider)
+    {
+        Body->Y=Divider->Y+Divider->Height+6;
+        Body->Height=FMath::Max(32,Panel->Height-Body->Y-4);
+        if(auto Background=Manager->FindElementUnder(TEXT("SpellExamineUI"),TEXT("SpellExamBackground")))Background->Height=Panel->Height;
+        if(auto Scrollbar=Manager->FindElementUnder(TEXT("SpellExamineUI"),TEXT("SpellDisplayTextScrollbar")))
+        {Scrollbar->Y=Body->Y;Scrollbar->Height=Body->Height;}
+    }
     if (!ExamBody) ExamBody=Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
-    ExamBody->SetText(FText::FromString(Details));
+    ExamBody->SetText(FText::FromString(RemainingDetails));
     ExamBody->SetColorAndOpacity(FLinearColor::White); ExamBody->SetAutoWrapText(true);
     ExamBody->SetVisibility(ESlateVisibility::HitTestInvisible);
     if (auto* Retail=Cast<UACERetailTextBlock>(ExamBody))

@@ -241,6 +241,39 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
   TestFalse(TEXT("Landing glide does not re-enter airborne animation"),PC->bJumpAirborne);
   AddInfo(FString::Printf(TEXT("Jump tracked=%d rate=%d scale=%.1f charge=%.2f apex=%.3fm range=%.3fm time=%.3fs"),Tracked,Rate,Size,Extent,Peak,Distance,double(Frames)/Rate));
  }
+ // Authored landing displacement uses the collision root and normal AutoPos,
+ // including when the presentation mesh is not being ticked/rendered.
+ for(bool Tracked:{false,true})for(int Rate:{30,90,144})for(float Size:{1.f,1.1f})for(bool Blocked:{false,true})
+ {
+  VR->bActive=Tracked;VR->MoveStick=VR->SmoothedMoveStick=FVector2D::ZeroVector;
+  Session->WorldObjects[Self.Guid].Scale=Size;
+  FACEPosition Pose;Pose.CellId=0x01010001;Pose.SetLocationFromUnreal(StartFeet,100);
+  Pose.SetAceFacingFromUnrealDir2D(FVector::XAxisVector);Session->SetLocalPosition(Pose);
+  PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;
+  PC->bJumpAirborne=false;PC->bStandingJumpLocked=false;PC->LandingWorldAceVelocity=FVector::ZeroVector;
+  Pawn->SetActorLocationAndRotation(StartFeet+FVector(0,0,88),Pose.ToUnrealQuat());
+  TestTrue(TEXT("Run landing track loads from retail DAT"),Dat->BuildTransitionRootTrack(0x09000001,0x40000015,0x44000007,ACEMotion::StanceNonCombat,PC->LandingRootTrack));
+  AActor* Wall=nullptr;
+  if(Blocked)
+  {
+   Wall=World->SpawnActor<AActor>();auto* Shape=NewObject<UBoxComponent>(Wall);
+   Wall->SetRootComponent(Shape);Wall->AddInstanceComponent(Shape);Shape->SetBoxExtent(FVector(10,500,500));
+   Shape->SetCollisionResponseToAllChannels(ECR_Block);Shape->RegisterComponent();Wall->SetActorLocation(StartFeet+FVector(90,0,100));
+  }
+  for(int I=0;I<Rate;++I)
+  {
+   VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,77),FRotator::ZeroRotator);
+   PC->PlayerTick(1.f/Rate);
+  }
+  const double Travel=FVector::Dist2D(StartFeet,Pawn->GetActorLocation())/100.;
+  if(Blocked)TestTrue(TEXT("Authored landing motion stops against walls instead of bypassing collision"),Travel<.4);
+  else TestTrue(TEXT("Controller applies full size-scaled landing displacement"),FMath::Abs(Travel-.760*Size)<.003);
+  TestTrue(TEXT("Reported position follows the resolved landing feet"),FVector::Dist2D(Client->GetPlayerPosition().ToUnrealLocation(100),Pawn->GetActorLocation())<.01);
+  TestFalse(TEXT("Authored landing motion stays grounded"),PC->bJumpAirborne);
+  TestFalse(TEXT("Landing track finishes instead of repeating its last frame"),PC->LandingRootTrack.IsActive());
+  TestFalse(TEXT("Completed landing releases extra position reporting"),Session->bForcePositionReporting);
+  if(Wall)Wall->Destroy();
+ }
  // Retail permits charging during flight but checks contact when executing.
  for(bool Tracked:{false,true})
  {

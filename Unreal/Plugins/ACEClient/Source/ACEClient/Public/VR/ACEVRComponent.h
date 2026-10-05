@@ -56,6 +56,7 @@ public:
 	bool IsMenuOpen() const { return bInventoryOpen || bSettingsOpen; }
 	bool IsLoginPanelReady() const;
 	bool IsInputBlocked() const;
+	bool IsMovementBlocked() const;
 	void GetMovement(float& Forward, float& Right, bool& Running) const;
 	void PrepareMovement(float Dt);
 	FVector GetBodyForward() const;
@@ -74,6 +75,7 @@ public:
 	void ToggleCombat();
 	void SetCombat(int32 Mode);
 	void OpenRetailPanel(FName Name);
+	void OpenPluginManager();
 	void RevealSalvagePanel();
 	void CycleSpell(int32 Direction);
 	void SelectWristSlot(int32 Slot);

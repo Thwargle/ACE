@@ -1,4 +1,5 @@
 #include "UI/ACERetailTextBlock.h"
+#include "ACELinkQuality.h"
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElement.h"
@@ -483,7 +484,7 @@ void UACEUIGameplayBinder::RefreshLinkStatusPanelOverlays()
 				LinkStatusStrings.LoadStrings(Dat->GetDatDirectory(), 0x23000001);
 	}
 	const FString Body = LinkStatusStrings.Text(TEXT("ID_LinkStatus_Info"))
-		+ LinkStatusStrings.Text(TEXT("ID_LinkStatus_Colors"))
+		+ TEXT("\nGreen: under 300 ms ping and 2% packet loss. Yellow: 300 ms or 2% loss. Red: 1000 ms or 10% loss. No server packets for 5 seconds shows yellow; 20 seconds or disconnection shows red.\n")
 		+ LinkStatusStrings.Text(TEXT("ID_LinkStatus_Disconnect"))
 		+ LinkStatusStrings.FormatText(TEXT("ID_LinkStatus_PacketLoss"),
 			{{TEXT("PACKET_LOSS"), FString::Printf(TEXT("%.2f"), LastLinkStatus.PacketLossPercent)}})
@@ -545,12 +546,12 @@ void UACEUIGameplayBinder::RefreshStatusIndicators()
 
 	LastLinkStatus = Client->GetLinkStatus();
 	uint32 LinkDid = DidLinkGood;
-	// Retail colors reflect time without server packets, not internet latency.
-	if (!LastLinkStatus.bConnected || LastLinkStatus.SecondsSinceLastPacket >= 20.f)
+	const auto Quality = ACELinkQuality::Evaluate(LastLinkStatus);
+	if (Quality == ACELinkQuality::EQuality::Poor)
 	{
 		LinkDid = DidLinkPoor;
 	}
-	else if (LastLinkStatus.SecondsSinceLastPacket >= 5.f)
+	else if (Quality == ACELinkQuality::EQuality::Fair)
 	{
 		LinkDid = DidLinkFair;
 	}

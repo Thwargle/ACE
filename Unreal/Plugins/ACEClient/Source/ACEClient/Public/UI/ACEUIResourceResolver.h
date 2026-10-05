@@ -31,6 +31,8 @@ public:
 	UTexture2D* ResolveRadarBlip(int32 Shape, bool bSelected);
 	/** Retail EnumMapper::GetString via the client enum-to-resource map. */
 	FString ResolveEnumString(uint32 EnumId, uint32 Value);
+	/** Complete inherited enum table; child entries override base entries. */
+	TMap<uint32,FString> ResolveEnumStrings(uint32 EnumId);
 	/** gmPaperDollUI's authored pixel selection mask, in DAT coordinates. */
 	uint32 ResolvePaperDollSelectionMask(FIntPoint Point);
 	uint32 ResolvePaperDollAnimation(int32 Heritage);
@@ -61,6 +63,7 @@ public:
 	bool TryGetCursor(uint32 CursorImageId, FCursorDesc& Out) const;
 
 private:
+	bool EnsureEnumStringsLoaded(uint32 Did);
 	UPROPERTY()
 	TObjectPtr<UACEDatSubsystem> Dat;
 

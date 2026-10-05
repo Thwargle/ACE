@@ -357,6 +357,8 @@ void UACEVRComponent::ToggleInventory()
 	if(!bInventoryOpen && GameplayMenu)GameplayMenu->UseSource=0;
 	if (bInventoryOpen)
 	{
+		// Like chat, capture the current view on each open, then honor the anchor mode.
+		bMenuAnchorReady=false;
 		FrontPanel="Menu";
 		bUseDesktopMenu=false;
 		if(GameplayMenu)GameplayMenu->OpenPage("Inventory");
@@ -373,7 +375,7 @@ void UACEVRComponent::RevealSalvagePanel()
 	bUseDesktopMenu=false;PendingGameplayPage="Salvage";
 	if(GameplayMenu){GameplayMenu->OpenPage(PendingGameplayPage);PendingGameplayPage=NAME_None;}
 	if(bInventoryOpen && !bSettingsOpen)return;
-	DismissTextEntry();CancelGestures();bSettingsOpen=false;bInventoryOpen=true;PositionPanel(RetailPanel);
+	DismissTextEntry();CancelGestures();bSettingsOpen=false;bInventoryOpen=true;bMenuAnchorReady=false;PositionPanel(RetailPanel);
 }
 
 void UACEVRComponent::RevealRetailDialog(int32 Guid)
@@ -389,6 +391,7 @@ void UACEVRComponent::RevealRetailDialog(int32 Guid)
 	if (bInventoryOpen && !bSettingsOpen) return;
 	DismissTextEntry();
 	CancelGestures(); bSettingsOpen = false; bInventoryOpen = true;
+	bMenuAnchorReady=false;
 	PositionPanel(RetailPanel);
 }
 
@@ -415,6 +418,7 @@ void UACEVRComponent::ToggleSettings()
 
 void UACEVRComponent::OpenRetailPanel(FName Name)
 {
+	if (!bInventoryOpen || bSettingsOpen) bMenuAnchorReady=false;
 	DismissTextEntry();
 	bUseDesktopMenu=true;
 	CancelGestures(); bSettingsOpen = false; bInventoryOpen = true;

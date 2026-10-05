@@ -127,7 +127,8 @@ void UACEVRMenu::BuildInspection()
             +SVerticalBox::Slot().AutoHeight()[Label(FString::Printf(TEXT("Value: %d"),A.Value),24,320,FLinearColor::White,TEXT("ItemValueText"))]
             +SVerticalBox::Slot().AutoHeight()[Label(FString::Printf(TEXT("Burden: %d"),A.Burden),24,320,FLinearColor::White,TEXT("ItemBurdenText"))]];
     InspectionBody->AddSlot().AutoHeight().Padding(0,4)[Header];
-    const FString Details=ACEAppraisalFormatting::ItemExaminationText(A,Dat,false,false);
+    const FACEPlayerVitals Viewer=Client->GetPlayerVitals();
+    const FString Details=ACEAppraisalFormatting::ItemExaminationText(A,Dat,false,false,&Viewer);
     InspectionBody->AddSlot().AutoHeight().Padding(2,4)[Label(Details,24,400,FLinearColor::White,TEXT("ItemDisplayText"),ACEAppraisalFormatting::ItemTextColors(A,Details))];
     if(!A.Inscription.IsEmpty())
     {

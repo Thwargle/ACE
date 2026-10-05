@@ -147,6 +147,32 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
     FACEBinaryReader RR(RootContents.GetData()); Session.HandleViewContents(RR);
     Check(100,{1,2}); Check(100,{10,20},true);
 
+    // A bag's ViewContents can arrive before its ownership or the login root
+    // list. It must stop being an external container once either establishes
+    // ownership, without deleting the inventory list through the UI close.
+    for(bool OwnerObjectFirst:{false,true})
+    {
+        Session.ClearWorldState();Session.PlayerGuid=100;
+        auto View=[&](int32 Guid,TArray<FACEContainerItemRef> Refs)
+        {
+            FACEBinaryWriter W;W.WriteUInt32(Guid);W.WriteUInt32(Refs.Num());
+            for(const auto& Ref:Refs){W.WriteUInt32(Ref.ItemGuid);W.WriteUInt32(Ref.ContainerType);}
+            FACEBinaryReader R(W.GetData());Session.HandleViewContents(R);
+        };
+        View(20,{{21,0}});
+        const auto Closed=Session.OnCloseGroundContainer.AddLambda([&](int32 Guid){Session.ClearContainerContents(Guid);});
+        if(OwnerObjectFirst)Session.UpsertWorldObject(Item(20,100,0,true));
+        else View(100,{{20,1}});
+        TestEqual(TEXT("Late bag ownership clears phantom external container"),Session.OpenExternalContainerGuid,0);
+        TestTrue(TEXT("Closing phantom bag preserves its contents"),Session.ContainerContents.Contains(20));
+        Session.UpsertWorldObject(Item(21,20,0));Check(20,{21});
+        auto OpenableBag=Item(20,100,0,true);OpenableBag.ObjectDescriptionFlags|=ACEObjectDescFlag::Openable;
+        Session.UpsertWorldObject(OpenableBag);View(20,{{21,0}});
+        TestEqual(TEXT("Owned openable bag is never external loot"),Session.OpenExternalContainerGuid,0);
+        View(700,{});Session.ClearContainerContents(700);
+        TestEqual(TEXT("Local panel closure clears session access without server close"),Session.OpenExternalContainerGuid,0);
+        Session.OnCloseGroundContainer.Remove(Closed);
+    }
     // ACE sends corpse contents (including bags) before CreateObject; GDLE can
     // describe objects first. Both orders must expose the same root and ownership.
     for (bool ObjectsFirst : {false,true})

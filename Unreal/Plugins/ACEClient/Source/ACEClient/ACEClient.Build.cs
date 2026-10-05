@@ -31,7 +31,7 @@ public class ACEClient : ModuleRules
 			"Landscape"
 		});
 		PrivateDependencyModuleNames.AddRange(new string[] { "RenderCore", "RHI", "HTTP", "XmlParser", "AssetRegistry" });
-		AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenSSL");
+		AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenSSL", "ICU");
 		if (Target.Platform == UnrealTargetPlatform.Linux)
 		{
 			AddEngineThirdPartyPrivateStaticDependencies(Target, "SDL3");
@@ -52,5 +52,6 @@ public class ACEClient : ModuleRules
 			PrivateDependencyModuleNames.Add("UnrealEd");
 		}
 		RuntimeDependencies.Add("$(PluginDir)/Docs/UI/Resolved/*.json", StagedFileType.NonUFS);
+        RuntimeDependencies.Add("$(PluginDir)/ClientMods/...", StagedFileType.UFS);
 	}
 }

@@ -4,6 +4,8 @@
 #include "ACEDatSubsystem.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
+#include "ACEWorldEntityActor.h"
+#include "ACEOrbitCameraBoom.h"
 #include "ACESession.h"
 #include "ACEHoverTooltipWidget.h"
 #include "VR/ACEVRComponent.h"
@@ -149,6 +151,26 @@ bool FACEVRWallContactTest::RunTest(const FString&)
  Session->PlayerGuid=12345;Session->State=EACESessionState::InWorld;
  FACEWorldObject Self;Self.Guid=12345;Self.SetupId=0x02000001;Self.bIsPlayer=true;Self.bIsSelf=true;
  Session->WorldObjects.Add(Self.Guid,Self);
+ // A buried room's camera sphere must ignore terrain only while wholly
+ // indoors; room walls still obstruct, and outdoor terrain still blocks.
+ {
+  FACEPosition Pose;Pose.CellId=0xC98C0129;Pose.SetLocationFromUnreal(Contact+FVector(0,300,-90.75),100);
+  PC->PredictedPose=Pose;PC->bHavePredictedPose=true;Session->SetLocalPosition(Pose);
+  Pawn->SetActorLocation(Contact+FVector(0,300,0));
+  auto* Boom=NewObject<UACEOrbitCameraBoom>(Pawn);Pawn->AddInstanceComponent(Boom);
+  Boom->SetupAttachment(Capsule);Boom->RegisterComponent();Boom->ProbeSize=5;
+  const FVector Start=Boom->GetComponentLocation(),End=Start+FVector(0,100,0);
+  auto* A=World->SpawnActor<AActor>();auto* Ground=NewObject<UBoxComponent>(A);A->SetRootComponent(Ground);
+  Ground->SetBoxExtent(FVector(500,500,20));Ground->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+  Ground->SetCollisionResponseToAllChannels(ECR_Block);Ground->ComponentTags.Add(TEXT("ACEOutdoorTerrain"));
+  Ground->RegisterComponent();A->SetActorLocation(Start);
+  TestTrue(TEXT("Indoor camera is not collapsed by a crossing outdoor heightfield"),Boom->BlendLocations(End,Start,true,0).Equals(End,.1));
+  Ground->ComponentTags.Reset();
+  TestTrue(TEXT("Same camera continues to collide with room architecture"),!Boom->BlendLocations(End,Start,true,0).Equals(End,.1));
+  Ground->ComponentTags.Add(TEXT("ACEOutdoorTerrain"));PC->PredictedPose.CellId=0xC98C0020;
+  TestTrue(TEXT("Outdoor camera retains terrain blocking"),Boom->BlendLocations(End,Start,true,0).Equals(Start,.1));
+  A->Destroy();Boom->DestroyComponent();
+ }
  auto* VR=NewObject<UACEVRComponent>(Pawn);Pawn->AddInstanceComponent(VR);VR->RegisterComponent();
  VR->PC=PC;VR->Client=Client;VR->Settings=NewObject<UACEVRSettings>();VR->ActivateRig();
  VR->bTracking=true;VR->Settings->MovementSmoothing=0;VR->Settings->bRun=true;VR->Settings->MovementDirection=0;
@@ -156,6 +178,28 @@ bool FACEVRWallContactTest::RunTest(const FString&)
  // deliberately reducing the input's sideways component.
  VR->Settings->ForwardAssistDegrees=0;
  Client->SetRunSkill(600);PC->InputComponent->AxisBindings.Reset();
+ // Real authored bodies, including low, waist-height and flying creatures.
+ // Press into each body first, then strafe without releasing forward.
+ for(uint32 Setup:{0x02000A95u,0x02000037u,0x02001121u,0x02000964u,0x02000041u})
+ {
+  FACEWorldObject Mob;Mob.Guid=45678;Mob.SetupId=Setup;Mob.ItemType=ACEItemType::Creature;
+  Mob.PhysicsState=ACEPhysicsState::Gravity;Mob.bHasPosition=true;Mob.Position.CellId=0xC98C0129;
+  Mob.Position.SetLocationFromUnreal(Contact+FVector(0,350,-90.75),100);
+  auto* Monster=World->SpawnActor<AACEWorldEntityActor>();Monster->InitializeFromObject(Mob,100,true);
+  FACEPosition Pose=Mob.Position;Pose.SetLocationFromUnreal(Contact+FVector(0,650,-90.75),100);
+  Pose.SetAceFacingFromUnrealDir2D(FVector(0,-1,0));Session->SetLocalPosition(Pose);
+  PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;
+  PC->bJumpAirborne=false;PC->bStandingJumpLocked=false;PC->StepHoldSeconds=0;
+  Pawn->SetActorLocationAndRotation(Pose.ToUnrealLocation(100)+FVector(0,0,90.75),Pose.ToUnrealQuat());
+  auto Move=[&](FVector2D Stick){VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,84.25),FRotator(0,-90,0));VR->MoveStick=Stick;PC->PlayerTick(1.f/90);};
+  for(int I=0;I<45;++I)Move(FVector2D(0,1));
+  const FVector Pressed=Pawn->GetActorLocation();
+  for(int I=0;I<30;++I)Move(FVector2D(1,1));
+  const FVector Slid=Pawn->GetActorLocation();
+  TestTrue(FString::Printf(TEXT("Actual creature %08X permits diagonal strafe after forward contact: %s"),Setup,*(Slid-Pressed).ToString()),FMath::Abs(Slid.X-Pressed.X)>15);
+  TestFalse(TEXT("Sliding around actual creature stays grounded"),PC->bJumpAirborne);
+  Monster->Destroy();
+ }
  const double Begin=FPlatformTime::Seconds();int32 Ticks=0;
  for(float Dt:{1.f/90,1.f/15})
  {

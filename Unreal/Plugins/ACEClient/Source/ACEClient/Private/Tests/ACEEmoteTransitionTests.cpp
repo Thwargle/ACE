@@ -165,6 +165,13 @@ bool FACEEmoteTransitionTest::RunTest(const FString&)
   if(!TestNotNull(TEXT("Retail supplies a landing link for this movement"),Link))return false;
   App->ClearJumpMotionIfAny(true);
   TestTrue(TEXT("Landing plays Falling->current movement"),App->ActionFromCommand==0x40000015u && App->ActionCommand==Destination && App->bActionUsesStateTransition);
+  ACELandingMotion::FRootTrack Track;
+  TestTrue(TEXT("Landing exposes authored position frames to the movement controller"),App->BuildLandingRootTrack(Track));
+  FVector Travel=FVector::ZeroVector;
+  for(int32 Step=0;Step<300 && Track.IsActive();++Step) Travel+=Track.Advance(Dt).GetTranslation();
+  const float ExpectedTravel=Forward==0?0.f:Run?.760f:.610f;
+  TestTrue(TEXT("Landing consumes the complete authored displacement at every frame rate"),Travel.Equals(FVector(0,ExpectedTravel,0),.0001));
+  TestTrue(TEXT("Completed recovery cannot apply its final frame twice"),Track.Advance(Dt).Equals(FTransform::Identity));
   const FTransform Root=Actor->GetActorTransform();bool Completed=false;
   for(int32 Frame=0;Frame<120;++Frame)
   {

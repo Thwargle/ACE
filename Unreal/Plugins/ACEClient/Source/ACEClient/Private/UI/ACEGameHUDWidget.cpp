@@ -1,4 +1,5 @@
 #include "UI/ACEGameHUDWidget.h"
+#include "UI/ACERadarColors.h"
 #include "ACEHoverTooltipWidget.h"
 #include "UI/ACERetailTextBlock.h"
 #include "UI/ACERetailObjectNames.h"
@@ -1642,27 +1643,8 @@ void UACEGameHUDWidget::RefreshRadar()
 		const float ScreenY = RadarCenterY - RelY / RadarRangeAc * (RadarRadiusPx - 4);
 
 		UBorder* Blip = RadarBlips[BlipIndex];
-		FLinearColor Color = FLinearColor(0.85f, 0.15f, 0.10f, 1.f);
-		if (Obj.RadarBlipColor != 0)
-		{
-			switch (Obj.RadarBlipColor)
-			{
-			case ACERadarColor::Blue: Color = FLinearColor(0.25f, 0.45f, 0.95f, 1.f); break;
-			case ACERadarColor::Gold: Color = FLinearColor(0.92f, 0.75f, 0.20f, 1.f); break;
-			case ACERadarColor::White: Color = FLinearColor::White; break;
-			case ACERadarColor::Purple: Color = FLinearColor(0.70f, 0.30f, 0.90f, 1.f); break;
-			case ACERadarColor::Red: Color = FLinearColor(0.90f, 0.18f, 0.15f, 1.f); break;
-			case ACERadarColor::Yellow: Color = FLinearColor(0.95f, 0.88f, 0.20f, 1.f); break;
-			case ACERadarColor::Pink: Color = FLinearColor(0.95f, 0.45f, 0.70f, 1.f); break;
-			case ACERadarColor::Green: Color = FLinearColor(0.25f, 0.75f, 0.30f, 1.f); break;
-			case ACERadarColor::Cyan: Color = FLinearColor(0.25f, 0.85f, 0.90f, 1.f); break;
-			case ACERadarColor::BrightGreen: Color = FLinearColor(0.35f, 0.95f, 0.40f, 1.f); break;
-			default: break;
-			}
-		}
-		else if (Obj.bIsPlayer) { Color = FLinearColor::White; }
-		else if (bPortal) { Color = FLinearColor(0.65f, 0.25f, 0.90f, 1.f); }
-		else if (bCreature && !Obj.IsAttackable()) { Color = FLinearColor(0.95f, 0.88f, 0.20f, 1.f); }
+        const auto& Fellowship = Client->GetFellowship();
+        const FLinearColor Color = ACERadarColors::Tint(ACERadarColors::Resolve(Obj, &Fellowship));
 		Blip->SetBrush(MakeRoundedBrush(Color, 3.f));
 		Blip->SetVisibility(ESlateVisibility::Visible);
 		BlipVirtualRects[BlipIndex] = FVector4(ScreenX - 2.5f, ScreenY - 2.5f, 5.f, 5.f);

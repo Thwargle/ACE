@@ -38,6 +38,7 @@ struct FACEBuiltSetupPart
 	uint32 GfxObjId = 0;
 	uint32 DrawMode = 1;
 	FVector SortCenter = FVector::ZeroVector;
+	FSphere DrawingSphere = FSphere(FVector::ZeroVector, 0.0);
 	float MaxDegradeDistance = 100.f;
 	FTransform BindTransform = FTransform::Identity;
 	TArray<FACEBuiltMeshSection> Sections;

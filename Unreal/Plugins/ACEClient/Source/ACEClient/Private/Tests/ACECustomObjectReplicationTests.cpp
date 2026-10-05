@@ -20,6 +20,7 @@ struct FObjectPacket
 	float Scale = 1.f;
 	float X = 10.f;
 	bool bPosition = true;
+	float Workmanship = -1.f;
 };
 
 void WriteAppearance(FACEBinaryWriter& W, uint16 Part)
@@ -45,11 +46,12 @@ TArray<uint8> ObjectPacket(const FObjectPacket& P, uint32 Opcode = ACEOpcode::Ob
 	for (int32 I = 0; I < ACEPhysicsTimeStamp::Count; ++I)
 		W.WriteUInt16(I == ACEPhysicsTimeStamp::Instance ? P.Instance : P.Sequence);
 	W.Align();
-	W.WriteUInt32(P.Container ? 0x4000u : 0u);
+	W.WriteUInt32((P.Container ? 0x4000u : 0u) | (P.Workmanship>=0 ? 0x01000000u : 0u));
 	W.WriteString16L(TEXT("Server-authored object"));
 	W.WriteUInt16(1); W.WriteUInt16(1); // WCID and icon have packed known type prefixes.
 	W.WriteUInt32(ACEItemType::Misc); W.WriteUInt32(P.DescriptionFlags); W.Align();
 	if (P.Container) W.WriteUInt32(P.Container);
+	if (P.Workmanship>=0) W.WriteFloat(P.Workmanship);
 	W.Align();
 	return W.GetData();
 }
@@ -128,6 +130,11 @@ bool FACECustomObjectReplicationTest::RunTest(const FString&)
 	TestEqual(TEXT("Positioned object does not inherit an old inventory owner"), Session.WorldObjects[P.Guid].ContainerId, 0);
 	TestTrue(TEXT("Server placement is visible after the inventory stub"), Session.WorldObjects[P.Guid].bHasPosition);
 	TestEqual(TEXT("Custom server setup is retained"), Session.WorldObjects[P.Guid].SetupId, P.Setup);
+	P.Workmanship=7.25f;Create();
+	TestEqual(TEXT("Public workmanship preserves fractional salvage without appraisal"),Session.WorldObjects[P.Guid].SalvageWorkmanship,7.25f);
+	P.Workmanship=8.5f;Create(ACEOpcode::UpdateObject);
+	TestEqual(TEXT("Updated workmanship reaches replicated objects"),Session.WorldObjects[P.Guid].SalvageWorkmanship,8.5f);
+	Deleted=0; // The explicit UpdateObject above legitimately replaced its actor.
 
 	Appearance(3, 8, 8); State(3, 8, ACEPhysicsState::Hidden);
 	Appearance(2, 99, 9); State(2, 99, 0); Pickup(2, 99); Parent(2, 99); Delete(2);
@@ -302,6 +309,17 @@ bool FACECustomObjectReplicationTest::RunTest(const FString&)
 	TestTrue(TEXT("Unlock updates the retail openable flag"), Session.WorldObjects[P.Guid].IsOpenable());
 	BoolQuality(3, true);
 	TestFalse(TEXT("Lock clears the retail openable flag"), Session.WorldObjects[P.Guid].IsOpenable());
+	{
+		auto& Object=Session.WorldObjects[P.Guid];
+		Object.ObjectDescriptionFlags&=~ACEObjectDescFlag::UiHidden;
+		Object.bDying=true;Object.ItemUseable=0;
+		BoolQuality(19,false);
+		TestTrue(TEXT("An ordinary dead creature is not revived by attackability alone"),Object.bDying);
+		Object.ItemUseable=0x20;BoolQuality(19,true);BoolQuality(19,false);
+		TestFalse(TEXT("Server transition from defeated creature to usable NPC clears death state"),Object.bDying);
+		TestFalse(TEXT("Live attackability flag follows the server"),(Object.ObjectDescriptionFlags&ACEObjectDescFlag::Attackable)!=0);
+		TestTrue(TEXT("Reward NPC is selectable without a weenie whitelist"),Object.IsSelectableWorldObject());
+	}
 
 	// Unfamiliar weenie IDs still get the same appraisal sections; packet data
 	// supplies the values and the public descriptor supplies healer/capacity.

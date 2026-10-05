@@ -22,6 +22,8 @@
 #include "XRMotionControllerBase.h"
 #include "MotionControllerComponent.h"
 #include "ACEClientSubsystem.h"
+#include "Mods/ACEPluginSubsystem.h"
+#include "Widgets/Text/SRichTextBlock.h"
 #include "ACEPlayerController.h"
 #include "UI/ACEChatEntry.h"
 #include "UI/ACEUIGameplayBinder.h"
@@ -130,6 +132,16 @@ bool FACEVRChatTest::RunTest(const FString&)
     TestEqual(TEXT("Clearing removes visible native rows"), Chat->Lines->GetChildren()->Num(), 0);
     TestEqual(TEXT("Main clear leaves auxiliary windows intact"), Binder->ChatDisplayLines[1].Num(), 1);
     TestFalse(TEXT("Cleared native chat becomes idle again"), Chat->Refresh());
+    auto* Plugins=GI->GetSubsystem<UACEPluginSubsystem>();
+    for(auto Plugin:Plugins->Plugins)if(Plugin->Id==TEXT("waypoint"))Plugin->Enabled=true;
+    Binder->AppendChatLineToLog(0,TEXT("Meet at 42.0N, 33.6E and then 12.5S, 7.25W."),TellColor,TEXT("Friend"));
+    TestTrue(TEXT("Coordinate-bearing chat refreshes"),Chat->Refresh());
+    const auto CoordinateRow=Chat->Lines->GetChildren()->GetChildAt(0);
+    TestEqual(TEXT("VR uses inline hyperlinks for coordinates"),CoordinateRow->GetType(),FName(TEXT("SRichTextBlock")));
+    const auto Rich=StaticCastSharedRef<SRichTextBlock>(CoordinateRow);
+    TestTrue(TEXT("Both VR destination links have independent metadata"),Rich->GetText().ToString().Contains(TEXT("href=\"42.00N, 33.60E\"")) && Rich->GetText().ToString().Contains(TEXT("href=\"12.50S, 7.25W\"")));
+    Binder->ClearChatLog(0);Chat->Refresh();
+
 
     // Exercise the actual shared slash-command dispatcher without a network.
     Binder->Client = GI->GetSubsystem<UACEClientSubsystem>();

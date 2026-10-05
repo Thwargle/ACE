@@ -2454,6 +2454,9 @@ bool UACEScriptComponent::EnsureParticleBatch(FActiveEmitter& Emitter)
 	if (!Dat || !Owner) return false;
 	auto* Batch = NewObject<UACEParticleBatchComponent>(Owner);
 	Owner->AddInstanceComponent(Batch);
+	// Object-wide transparency/diffuse hooks belong to the model. Particles
+	// carry their own authored opacity, just like the pooled mesh path.
+	Batch->ComponentTags.Add(TEXT("ACEParticle"));
 	Batch->SetMobility(EComponentMobility::Movable);
 	Batch->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	Batch->SetGenerateOverlapEvents(false); Batch->SetCastShadow(false);

@@ -35,6 +35,7 @@ namespace
 		const uint32 ShareLoot = Reader.ReadUInt32();
 		Out.bShareLoot = (ShareLoot != 0);
 		Out.Name = Reader.ReadString16L();
+		Out.VitalsReceivedAt = FPlatformTime::Seconds();
 		return true;
 	}
 }

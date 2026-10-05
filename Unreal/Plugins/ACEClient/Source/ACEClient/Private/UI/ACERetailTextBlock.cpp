@@ -28,6 +28,7 @@ public:
 	virtual bool SupportsKeyboardFocus() const override { return Owner.IsValid() && Owner->IsSelectable(); }
 	virtual FCursorReply OnCursorQuery(const FGeometry& G, const FPointerEvent& E) const override
 	{
+		if (Owner.IsValid() && Owner->IsLinkAt(CharacterAt(G,E.GetScreenSpacePosition()))) return FCursorReply::Cursor(EMouseCursor::Hand);
 		return SupportsKeyboardFocus() ? FCursorReply::Cursor(EMouseCursor::TextEditBeam) : STextBlock::OnCursorQuery(G,E);
 	}
 	virtual FReply OnMouseButtonDown(const FGeometry& G, const FPointerEvent& E) override
@@ -70,7 +71,12 @@ public:
 	virtual FReply OnMouseButtonUp(const FGeometry&,const FPointerEvent& E) override
 	{
 		if (!HasMouseCapture() || E.GetEffectingButton()!=EKeys::LeftMouseButton) return FReply::Unhandled();
-		if (!bDragged && Owner.IsValid()) Owner->OnTextClicked.ExecuteIfBound();
+		if (!bDragged && Owner.IsValid())
+		{
+			if (Owner->IsLinkAt(Caret) && Owner->OnLinkClicked && Owner->OnLinkClicked(Caret))
+				return FReply::Handled().ReleaseMouseCapture();
+			Owner->OnTextClicked.ExecuteIfBound();
+		}
 		return FReply::Handled().ReleaseMouseCapture();
 	}
 	virtual FReply OnMouseButtonDoubleClick(const FGeometry&,const FPointerEvent& E) override
@@ -237,6 +243,13 @@ public:
 					if (CachedText[I] == '\n') continue;
 					const FACEDatFontChar* Ch = ACEDatText::FindChar(*DatFont, CachedText[I]);
 					if (!Ch) continue;
+					if (!bBackground && Label->IsLinkAt(I))
+					{
+						const float Advance=ACEDatText::Advance(*DatFont,CachedText[I])*Scale.X;
+						FSlateDrawElement::MakeLines(Elements,Layer+1,Geometry.ToPaintGeometry(),
+							TArray<FVector2D>{FVector2D(X,Y+DatFont->MaxCharHeight*Scale.Y-1),FVector2D(X+Advance,Y+DatFont->MaxCharHeight*Scale.Y-1)},
+							ESlateDrawEffect::None,FLinearColor(.18f,.72f,1.f),true,1.f);
+					}
 					X += static_cast<int8>(Ch->HorizontalOffsetBefore) * Scale.X;
 					if (Ch->Width > 0 && Ch->Height > 0)
 					{
@@ -316,7 +329,7 @@ private:
 			Row->Anchor=A; Row->Caret=B; Row->Invalidate(EInvalidateWidgetReason::Paint);
 		}
 	}
-	int32 CharacterAt(const FGeometry& G,FVector2D Absolute)
+	int32 CharacterAt(const FGeometry& G,FVector2D Absolute) const
 	{
 		const auto* Label=Owner.Get();
 		const auto* GlyphFont=Label ? Label->GetBitmapFont() : nullptr;

@@ -701,11 +701,25 @@ namespace ACEBodySweep
             {
                 // A moving creature can overlap a falling body at a wall. Its
                 // rounded top is not a floor and must not lift/trap the player.
-                // Stop horizontal travel, then sweep only the remaining fall
-                // past that creature. All architecture still blocks this path.
+                // Preserve tangential travel around the creature before solving
+                // the fall. Dropping both horizontal axes made strafe input stop
+                // completely on landing beside a casting monster.
                 if(!Hit.bStartPenetrating){Result.Position=Hit.Location;Remaining*=1.f-Hit.Time;}
+                const FVector SideNormal=Hit.Normal.GetSafeNormal2D();
+                FVector Lateral(Remaining.X,Remaining.Y,0);
+                Lateral-=SideNormal*FMath::Min(0.,FVector::DotProduct(Lateral,SideNormal));
+                if(!Lateral.IsNearlyZero(.01f))
+                {
+                    // Never ignore a creature during lateral motion: another
+                    // body or wall may block the tangent at a crowded corner.
+                    FHitResult SideHit;
+                    const FVector SideEnd=Result.Position+Lateral;
+                    if(Sweep(World,SideHit,Result.Position,SideEnd,Capsule,Params))
+                        Result.Position=SlideGrounded(World,Result.Position,SideEnd,SideHit,Capsule,Params);
+                    else Result.Position=SideEnd;
+                }
                 Remaining.X=Remaining.Y=0;
-                Result.ContactNormal=Hit.Normal.GetSafeNormal2D();
+                Result.ContactNormal=SideNormal;
                 const auto* Body=Hit.GetComponent();
                 if(!Body || IgnoredBodies.Contains(Body)) break;
                 IgnoredBodies.Add(Body);AirParams.AddIgnoredComponent(Body);

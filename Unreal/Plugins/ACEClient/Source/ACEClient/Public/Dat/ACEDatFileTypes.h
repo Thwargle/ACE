@@ -86,6 +86,8 @@ struct FACEDatGfxObj
 	TSet<uint16> DrawingPolygonIds;
 	TMultiMap<int32, uint16> DrawingPortalIndices;
 	FVector3f SortCenter = FVector3f::ZeroVector;
+	/** Root DrawingBSP sphere used by retail mouse selection (not Setup collision). */
+	FSphere DrawingSphere = FSphere(FVector::ZeroVector, 0.0);
 	uint32 DIDDegrade = 0;
 	uint32 DrawMode = 1; // First GfxObjInfo.DegradeMode; populated with the degrade table.
 	float MaxDegradeDistance = 100.f; // AC meters; CPhysicsPart's fallback without a degrade table.
@@ -467,6 +469,7 @@ struct FACEDatAnimation
 	uint32 Flags = 0;
 	uint32 NumParts = 0;
 	uint32 NumFrames = 0;
+	TArray<FTransform3f> PositionFrames;
 	TArray<FACEDatAnimationFrame> PartFrames;
 };
 
@@ -832,7 +835,7 @@ namespace ACEDatUnpack
 
 	bool SkipBspTree(FACEDatCursor& Cur, EACEBspType TreeType, int32 Depth = 0,
 		TSet<uint16>* OutDrawingPortalPolys = nullptr, TSet<uint16>* OutPhysicsPolyIds = nullptr, TMultiMap<int32, uint16>* OutPortalIndices = nullptr,
-		TSet<uint16>* OutDrawingPolyIds = nullptr);
+		TSet<uint16>* OutDrawingPolyIds = nullptr, FSphere* OutRootSphere = nullptr);
 	bool SkipAnimationHook(FACEDatCursor& Cur);
 	bool UnpackAnimationHook(FACEDatCursor& Cur, FACEDatAnimationHook& Out);
 	bool UnpackPolygon(FACEDatCursor& Cur, FACEDatPolygon& Out);

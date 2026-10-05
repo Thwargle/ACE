@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ACEWorldEntityActor.h"
+#include "ACECharacterAppearanceComponent.h"
 #include "ACEEnvCellActor.h"
 #include "ACELandblockActor.h"
 #include "Engine/World.h"
@@ -13,9 +14,9 @@ namespace ACEVisibleObjectPick
     // Render::GfxObjUnderSelectionRay / GetMouseSelectionObjectID: a polygon
     // hit takes precedence over broad selection bounds, including nearer bounds.
     inline bool TraceMesh(UProceduralMeshComponent& Mesh, const FVector& Start,
-        const FVector& End, double& ClosestDistance, bool* HasGeometry = nullptr)
+        const FVector& End, double& ClosestDistance, bool* HasGeometry = nullptr, bool IncludeHidden = false, bool AnyHit = false)
     {
-        if (!Mesh.IsVisible() || Mesh.bHiddenInGame || !Mesh.IsRegistered()) return false;
+        if (!Mesh.IsRegistered() || (!IncludeHidden && (!Mesh.IsVisible() || Mesh.bHiddenInGame))) return false;
         const FTransform Transform = Mesh.GetComponentTransform();
         const FVector A = Transform.InverseTransformPosition(Start);
         const FVector B = Transform.InverseTransformPosition(End);
@@ -23,7 +24,7 @@ namespace ACEVisibleObjectPick
         for (int32 S = 0; S < Mesh.GetNumSections(); ++S)
         {
             const FProcMeshSection* Section = Mesh.GetProcMeshSection(S);
-            if (!Section || !Section->bSectionVisible || Section->ProcIndexBuffer.Num()<3) continue;
+            if (!Section || (!IncludeHidden && !Section->bSectionVisible) || Section->ProcIndexBuffer.Num()<3) continue;
             if (HasGeometry) *HasGeometry = true;
             if (!FMath::LineBoxIntersection(Section->SectionLocalBox, A, B, B-A)) continue;
             const auto& V = Section->ProcVertexBuffer;
@@ -36,7 +37,7 @@ namespace ACEVisibleObjectPick
                     V[I[T+1]].Position, V[I[T+2]].Position, Point, Normal))
                 {
                     const double Distance = FVector::Distance(Start, Transform.TransformPosition(Point));
-                    if (Distance < ClosestDistance) { ClosestDistance = Distance; bHit = true; }
+                    if (Distance < ClosestDistance) { ClosestDistance = Distance; bHit = true; if (AnyHit) return true; }
                 }
             }
         }
@@ -107,8 +108,16 @@ namespace ACEVisibleObjectPick
                 if (TraceMesh(*Mesh, Start, End, Closest, &HasGeometry)) Selected = Actor;
             if (!HasGeometry) Fallback.Add(Actor);
         }
-        // Effect-only portals and still-loading models need a fallback. A
-        // rendered statue/sign/corpse must never select empty space around it.
+        // Retail keeps the nearest drawing-sphere miss, but a direct polygon
+        // hit always wins. Never use the inflated broad-phase capsule of a
+        // loaded model: it is not the authored per-part selection volume.
+        if (!Selected) for (AActor* Actor : Candidates)
+        {
+            if (Actor->IsHidden()) continue;
+            if (const auto* Appearance = Actor->FindComponentByClass<UACECharacterAppearanceComponent>())
+                if (Appearance->TraceDrawingSpheres(Start, End, Closest)) Selected = Actor;
+        }
+        // Effect-only portals and still-loading models have no drawing sphere.
         if (!Selected) for (AActor* Actor : Fallback)
         {
             if (Actor->IsHidden()) continue;

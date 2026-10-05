@@ -51,6 +51,8 @@ UCLASS()
 class ACECLIENT_API UACEClientSubsystem : public UGameInstanceSubsystem, public FTickableGameObject
 {
 	friend class FACEPortalLifetimeTest;
+	friend class FACEPluginEquipmentTest;
+	friend class FACEPluginRequestsTest;
 	GENERATED_BODY()
 	friend class FACEVRRenderReplicationTest;
 	friend class FACEVRRigTest;
@@ -131,6 +133,10 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category = "ACE")
 	FACEAppraisalDyn OnAppraisal;
+	/** All appraisal responses, including background plugin requests. */
+	UPROPERTY() FACEAppraisalDyn OnAppraisalObserved;
+	void RequestBackgroundAppraisal(int32 Guid);
+	TSet<int32> BackgroundAppraisals;
 
 	UPROPERTY(BlueprintAssignable, Category = "ACE")
 	FACESelectionChangedDyn OnSelectionChanged;
@@ -515,8 +521,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ACE|Social")
 	void SendFellowshipUpdateRequest(bool bPanelOpen);
 	void SetVRFellowshipUpdates(bool bEnabled);
+	void SetPluginFellowshipUpdates(bool bEnabled);
 	bool bRetailFellowshipUpdates = false;
 	bool bVRFellowshipUpdates = false;
+	bool bPluginFellowshipUpdates = false;
 
 	UFUNCTION(BlueprintCallable, Category = "ACE|Social")
 	void SendFellowshipAssignNewLeader(int32 MemberGuid);
@@ -589,6 +597,8 @@ public:
 	/** Local player attributes + vitals (valid after PlayerDescription arrives). */
 	UFUNCTION(BlueprintPure, Category = "ACE")
 	FACEPlayerVitals GetPlayerVitals() const;
+	/** Read-only native view; valid until session replacement. Do not retain across callbacks. */
+	const FACEPlayerVitals& GetPlayerVitalsView() const;
 
 	/** True when PropertyInt.EncumbranceVal has been received for the local player. */
 	bool TryGetPlayerEncumbrance(int32& OutEncumbrance) const;

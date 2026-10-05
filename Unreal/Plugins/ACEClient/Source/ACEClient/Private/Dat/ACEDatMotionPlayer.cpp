@@ -359,6 +359,37 @@ bool FACEDatMotionPlayer::EvaluateAnimSequence(
 	return EvaluateAnimData(Anims.Last(), Durations.Last(), NumParts, OutPartTransforms, WorldScale, OutAnimatedPartCount,
 		false, bOutFinished, nullptr, OutCrossedHooks);
 }
+bool FACEDatMotionPlayer::BuildTransitionRootTrack(uint32 From, uint32 To, uint32 Style, ACELandingMotion::FRootTrack& Out) const
+{
+	Out.Reset();
+	TArray<FACEDatAnimData> Clips;
+	if (!FindTransitionAnims(From, To, Clips, Style)) return false;
+	FTransform Pose = FTransform::Identity;
+	float Time = 0.f;
+	Out.Keys.Add({Time,Pose});
+	for (const auto& Clip : Clips)
+	{
+		const FACEDatAnimation* Anim = LoadAnimation(Clip.AnimId);
+		const float Rate = FMath::Abs(Clip.Framerate);
+		if (!Anim || Anim->NumFrames <= 0 || Rate <= SMALL_NUMBER) { Out.Reset(); return false; }
+		const int32 High = Clip.HighFrame < 0 ? int32(Anim->NumFrames)-1 : FMath::Min(Clip.HighFrame,int32(Anim->NumFrames)-1);
+		const int32 Low = FMath::Clamp(Clip.LowFrame,0,High);
+		for (int32 I=0; I<=High-Low; ++I)
+		{
+			const int32 Frame = Clip.Framerate < 0.f ? High-I : Low+I;
+			FTransform Delta = Anim->PositionFrames.IsValidIndex(Frame)
+				? FTransform(Anim->PositionFrames[Frame]) : FTransform::Identity;
+			// CSequence::update_internal combines forward frames, subtracts reverse frames.
+			if (Clip.Framerate < 0.f) Delta = Delta.Inverse();
+			Pose.SetTranslation(Pose.GetTranslation()+Pose.GetRotation().RotateVector(Delta.GetTranslation()));
+			Pose.SetRotation((Pose.GetRotation()*Delta.GetRotation()).GetNormalized());
+			Time += 1.f/Rate;
+			Out.Keys.Add({Time,Pose});
+		}
+	}
+	return Out.IsActive();
+}
+
 bool FACEDatMotionPlayer::EvaluateAnimData(
 	const FACEDatAnimData& AnimData, float TimeSeconds, int32 NumParts,
 	TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount,

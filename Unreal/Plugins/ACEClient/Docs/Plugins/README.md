@@ -1,0 +1,543 @@
+# Client plugins â€” API 1 (preview)
+
+AC:Unreal hosts portable Lua plugins. The same source and native management panel
+are used on Windows, Linux, PC VR and standalone Quest. This is a new API, not a
+loader for Decal DLLs or Virindi View Services assemblies.
+
+## Users
+
+**Waypoint** adds clickable chat coordinates, a movable navigation arrow and a
+world/dungeon map, with optional GoArrow atlas import. See [Waypoint](Waypoint.md)
+for controls, data sources and the UtilityBelt compatibility findings. This visual
+plugin requires no Start action or game-action permissions.
+
+Open **Plugins** on the login screen, **Game Play â†’ Plugins / UCM** in desktop
+options, **More â†’ Plugins / UCM** in VR, or type `/plugins`. Each plugin shows its
+version, requested actions, status, and profile controls. Enable grants its listed
+capabilities. Start is separate, available only after entering the world. Nothing
+automatically starts at login. A capability change requires enabling again.
+
+In desktop play, a compact **Mods bar** appears at the left edge. Each enabled
+plugin has a button: click it to show or hide that plugin's own window. Several
+windows can stay open together. Gold text indicates an open window; `RUN` marks
+a running plugin. Closing a window does not stop its plugin. Use its Stop control
+or `/ucm stop` to stop automation. The `+` button opens plugin management.
+
+Drag the bar or a window by its title strip. Positions are saved locally and
+clamped to the viewport when the window size changes. The bar and its windows
+hide with the desktop interface (Alt+Z by default) and are removed on logout.
+Disabled plugins are removed from the bar. In VR, use More â†’ Plugins / UCM.
+
+UCM is **Unattended Combat Manager**. The 0.7 interface has Overview, Buffs, Buff others,
+Combat, Recovery, Route, Loot, Rules, Metas and Profiles pages. Desktop plugin
+windows can be resized using the lower-right grip; position and size are saved.
+In VR, More â†’ Plugins / UCM opens UCM directly, with a separate management button.
+
+### Buffing and recovery
+
+Enable **Buff**, then Start. Automatic selection includes relevant known Self
+creature/life buffs and item enchantments, using the highest tier within the
+configured magic-skill margin. Untrained skills that the retail DAT says are
+usable (such as Run/Jump) are also eligible. Other skill buffs require training.
+Self-buffing targets the player once per item-spell family: banes and
+Impenetrability cover worn armor, and weapon auras apply to the character.
+It does not repeat those casts on inventory items or weapons in the combat pool.
+Optional family exclusions and legacy explicit buff lists remain available.
+The host equips a usable casting tool before casting, respects existing buffs,
+and waits for server action completion. Three failed/unconfirmed attempts stop
+with a status message; no cast is treated as successful merely because it was sent.
+A server missing-components response excludes that tier temporarily and tries a
+lower supplied tier. If no tier remains, UCM stops with a restocking message.
+
+Health, stamina and mana each have a recovery slider. UCM first considers
+assessed usable supplies for that vital (including healing kits and potions),
+then eligible life spells. Stamina to Mana is allowed only with sufficient
+stamina. It waits for a successful server completion and a vital increase before declaring
+recovery successful; natural regeneration alone is not confirmation.
+Filled mana stones/charges can replenish low equipped-item mana. Empty supply
+pools permit automatic selection; adding supply types restricts the pool.
+Assessments are refreshed periodically, so equipment mana is not instantaneous.
+
+### Combat and items
+
+Choose melee, missile, magic, or auto. Inventory appraisals provide requirements,
+damage, speed, modifiers, slayer and element data. Individual weapon IDs can be
+added to an equipment pool; an empty pool permits all eligible inventory weapons.
+Ammunition is matched to the launcher and assessed damage. Equipping uses ordinary
+server actions and waits for the equipped state. Private/custom requirements that
+are unavailable to the client are not guessed.
+
+Known attack spells and equipment are scored against resistances **when the
+server sends them**. This is a heuristic, not an exact DPS simulation: it does not
+model every proc, imbue, critical, armor part or projectile trajectory. Many
+servers do not expose base monster resistances. UCM uses neutral values in that
+case; Rules lets the player specify an element, combat mode, ignore flag and
+priority per monster-name prefix. First matching rule wins. It does not bundle or
+copy VT's monster database. Acquisition range, approach distance, attack range,
+power/accuracy and attack height have separate controls.
+
+### Navigation, loot and states
+
+**Force Buff** on Overview or Buffs immediately refreshes the enabled self-buff
+families, ignoring their remaining timers. It retains spell eligibility, skill
+margin and exclusions, and counts a family only after a successful cast is
+confirmed. Repeated clicks do not restart the cycle. **Cancel refresh** cancels
+the remaining queue; an already submitted cast can finish. When started from
+stopped UCM, this runs buffs and configured recovery only, then stops. An existing
+run resumes its activities afterward. Imported `/vt forcebuff` uses the same
+refresh policy. The request is temporary and is not saved in profiles.
+
+Record close, walkable points at corners. A live world-space line connects the
+points; amber marks jumps. Add portal/object-use points while that object is
+selected. Add a destination point after actually reaching the far side. Recall
+spells and timed pauses are also available. Jumps record charge and facing and
+use the normal player jump pipeline; movement never sets pawn location directly.
+Outdoor paths can cross landblocks. Interior transitions between separate
+landblocks require a portal/recall action. Individual walking segments are limited
+to 400 meters. Five seconds without progress stops movement. This is recorded-route
+following, not a navmesh pathfinder or automatic obstacle planner.
+
+Starting UCM joins the nearest route waypoint using the character's world position
+and height, independent of camera direction. It then follows the remaining points
+in order, retaining loop/reverse behavior. Loading another route selects a new
+entry point. Imported action-only entries are not spatial join targets; leading
+setup actions are preserved when joining the first spatial point. Native points
+in a different dungeon are excluded. Record enough corners to reach the nearby
+route safely; nearest-point joining does not find a new path through walls.
+
+Combat rejects monsters behind physical walls, scenery and closed doors, then
+continues the recorded route. Open doors along route is on by default; explicitly
+disabled profiles keep that setting. Record corners and door approaches so the
+route leads around obstructions. Combat settings separate target acquisition,
+missile/spell firing distance and melee approach distance. Monster Rules can
+override attack distance (0 uses Combat settings). Sight is rechecked before
+each attack or offensive cast, using scaled setup heights for the target.
+
+**Peace mode when idle** (Overview or Combat, off by default) switches to peace
+when no eligible combat target is nearby, including during route following.
+Buffing, recovery and corpse looting finish first. Combat resumes in the configured
+mode when attacking a target; magic casting automatically restores magic mode.
+
+Corpse opening uses the same approach and server Use sequence as manual
+interaction. UCM waits for opening, complete contents and transfer confirmation
+before resuming combat or navigation. Navigation priority does not suppress
+nearby looting, and obstructed corpses are skipped until the route reaches them.
+Enable Loot corpses and load or create matching rules; empty rules intentionally
+take nothing.
+
+Loot rules are configured in **Loot → New rule**. Give the rule a name, choose
+**Keep** or **Skip**, then set any combination of:
+
+- Item name: exact, begins with, or literal contains; case insensitive for ASCII.
+  Names use the displayed material prefix, for example `Copper Bracelet`.
+- Material selected by name and an optional item-type mask.
+- Inclusive minimum/maximum salvage workmanship, including fractional values.
+- Inclusive minimum/maximum value and burden for the whole item/stack.
+- Damage rating range, which requires appraisal.
+- Keep up to a quantity per weenie type (counts include owned packs/equipment).
+
+Zero disables a numerical bound; zero quantity means unlimited. All conditions
+in a rule must match. Rules run top to bottom: the **first match wins**, including
+Skip or an already satisfied quantity cap. Unmatched items remain on the corpse.
+Use **Edit**, **Enable/Disable**, **Up/Down** and **Remove** on rule cards. Changing
+rules stops UCM; press Start to use the new set consistently.
+
+For example, a Keep rule for Copper, workmanship 7–10, collects suitable copper
+items for later salvaging. A Skip rule for an exact item name above it protects
+that item from broader rules. A Keep rule with minimum value 10,000 and maximum
+burden 100 collects lightweight valuables. **Use selected item's name and
+material** fills those fields without memorizing IDs; clear the name to collect
+all items of the material.
+
+**Save loot profile** stores rules alone under `Saved/ClientPlugins/LootProfiles`.
+Loading one copies its rules into the current UCM setup without replacing combat,
+buffs, recovery or navigation. Loading stops UCM. Whole UCM profiles also retain
+their own copy of loot rules. Loot-profile files are versioned UCM JSON, not VT
+`.utl` imports. Existing UCM prefix/minimum rules remain compatible.
+
+Public server workmanship is retained from Create/UpdateObject, including
+fractional combined-salvage values. Public name/material/value/workmanship checks
+run before appraisal. Missing necessary details trigger bounded background ID
+requests; absent properties after successful appraisal do not match. Corpse
+item descriptions and loot transfers must be observed before proceeding, and
+quantity limits can request a partial stack. Rule scans use actual instruction
+and regex work, continuing at the current rule, condition, or item spell when
+the callback is nearly full. The status shows item/rule progress, and stable
+item ordering prevents snapshot reordering from restarting the scan. Other open containers are not
+looted. Empty rules never open corpses or take items. Optional stacking uses the
+normal compatible-stack merge. This version collects salvage candidates but does
+not automatically salvage, sell, destroy, read or drop them.
+
+Behavioral references: VT's [loot tutorial](https://www.virindi.net/wiki/index.php/VTClassic_Tutorial)
+and [advanced looting notes](https://update.virindi.net/wiki/index.php/VTClassic_AdvancedLooting),
+plus the supplied `eLootAction`/`LootPlugins` interfaces. The public-workmanship
+optimization follows VT's distinction between public and appraisal-only fields.
+Full arbitrary-property/spell-expression matching, VT profile import and the
+additional salvage/sell/read/mana actions remain outside this implementation.
+
+Metas provides a native state editor: name states, choose a starting state,
+override activities, and add ordered transitions. Current conditions are vital
+thresholds, elapsed time, target availability and route completion. This is a
+bounded UCM rule system, not the full VT expression language.
+
+Named profiles contain all these settings. Save As creates a copy; Load selects
+one. Activity/range/threshold edits are live. Loading a profile or editing routes
+and state rules stops the run. Manual movement, death, logout, character changes,
+disabling and reloading stop automation. Closing its window does not stop it.
+Only one plugin can run at a time. Commands `/ucm start` and `/ucm stop` remain.
+
+## Installation and source editing
+
+Built-ins live at `Plugins/ACEClient/ClientMods/` and are staged as UFS assets,
+including on Quest. Add user plugins under the application's writable
+`Saved/ClientPlugins/Installed/<id>/`, with these files:
+
+* `plugin.json`: manifest (API, identity, capabilities, settings controls).
+* `main.lua`: source returning a `function(snapshot, profile)`.
+* `default.json`: default profile object.
+
+Preferences are in `Saved/ClientPlugins/settings.json`; named profiles are in
+`Saved/ClientPlugins/Profiles/<id>/<name>.json`. Quest's Saved directory is in the
+app's private storage; installation of user plugins there currently requires ADB.
+The manager does not download packages, resolve dependencies, or run native DLLs.
+Duplicate IDs are rejected; user files cannot override the built-in UCM ID. To
+modify UCM independently, copy its three files into a user plugin with a new ID.
+Press Reload installed plugins after editing source. A malformed manifest is
+skipped with a visible diagnostic. Invalid scripts stop only their own instance.
+
+## Minimal plugin
+
+`plugin.json`:
+
+```json
+{
+  "api": 1,
+  "id": "vital_monitor",
+  "name": "Vital Monitor",
+  "short_name": "VIT",
+  "version": "0.1.0",
+  "description": "Shows current health in the manager.",
+  "permissions": [],
+  "settings": []
+}
+```
+
+Optional `short_name` supplies the desktop bar label (up to four characters).
+Otherwise the bar uses the first four characters of the plugin ID. The tooltip
+always includes the full name and current status.
+
+`default.json`: `{}`
+
+`main.lua`:
+
+```lua
+return function(snapshot, profile)
+    return { status = "Health: " .. snapshot.health .. "/" .. snapshot.max_health }
+end
+```
+
+Callbacks run at most twice per second on the game thread, only while running.
+They receive fresh data tables; mutating those tables does not modify game state
+or the saved profile. Return `nil` or one flat intent table. Local variables outside
+the function retain state until Stop. UCM metas can resume after an explicit Stop
+or a manual-movement pause: variables, the call stack and fired rules survive,
+ordinary state timers restart, and persistent timers include paused time. Changing
+the character, profile or script, or encountering an error, starts a fresh VM.
+Pending gameplay requests are cleared on resume. No background threads are created.
+
+### Snapshot
+
+* `time`: monotonic seconds, not a wall-clock date.
+* `health`, `max_health`, `mana`, `max_mana`, `stamina`, `max_stamina`:
+  current server-supplied player vitals.
+* `busy`: current object-use transaction; `ready`: host action interval elapsed.
+* `position`: `{cell,x,y,z}`, using locally predicted position where available.
+* `moving`: plugin route movement is active.
+* `nearest`: eligible nearest monster GUID, or zero; `distance`: meters.
+  Uses the client's existing monster filters, excluding players, fellows and pets.
+* `spells`: records with `id`, `known`, `school`, `power`, `category`, `skill`,
+  `self_buff`, `name`, `icon`, `beneficial`, `caster_target`, `duration`,
+  `target_type`, `flags`, `projectile`. Includes known spells and metadata for selected profile buff IDs.
+  `known=false` references are never castable.
+* `enchantments`: beneficial non-cooldown records with `id`, `category`, `power`,
+  `remaining` seconds. Permanent effects use a large remaining value.
+
+### Intents and permissions
+
+All intents may include a `status` string (maximum 1,024 UTF-8 bytes).
+
+```lua
+return {action="cast", spell=123, target=456} -- requires cast; target optional for Self
+return {action="attack", mode=2, power=0.5, height=2} -- requires combat; 2 melee, 4 missile
+return {action="move", cell=0x7D63000D, x=25, y=97, z=12} -- requires navigation
+return {action="stop", status="Finished"} -- always permitted
+```
+
+The host revalidates known spells and normal spell targeting. VR automation sends
+the same ordinary cast request as desktop, rather than merely selecting a VR spell.
+Attack validates the requested eligible monster and uses the existing melee/missile requests.
+Power is clamped to 0â€“1 and attack height to 1â€“3. Host throttles cast/attack requests
+to at most one per 3.5 seconds and route intents to at most two per second. Inspect
+`ready` before advancing action-specific state. These intervals are conservative;
+the server still controls cast success, range, components, equipment and attack
+speed. Action requests never assert that the server completed an action.
+
+### Native settings UI
+
+Manifest `settings` entries specify `key`, `label`, and `type`:
+
+* `bool`: checkbox.
+* `number`: numeric editor, with `min` and `max`.
+* `choice`: buttons for strings in `values`.
+
+Values are persisted in the profile. The same controls render in desktop and VR.
+The optional `tools` list can contain `spells` and `route`, adding the shared spell
+family/attack-spell chooser and waypoint recorder. The advanced JSON editor exposes
+other profile structures. Arbitrary widget code, texture loading, chat hooks,
+inter-plugin messaging and arbitrary custom widget code are not part of API 1 yet.
+
+## UCM state rules (metas)
+
+Each state can override `buffing`, `combat`, and `navigation`. Unspecified values
+come from the main profile. The first matching transition wins, with at most one
+transition per tick. Supported conditions: `health_below`, `stamina_below`, `mana_below`, `elapsed`
+(seconds in state), `no_targets`, `target_available`, and `route_complete`.
+The Metas page edits these rules without JSON. Unknown states produce a visible error and stop. Example:
+
+```json
+{
+  "initial_state": "Buff",
+  "states": [
+    {"name":"Buff", "buffing":true, "combat":"off", "navigation":false,
+     "transitions":[{"when":"elapsed","value":180,"next":"Hunt"}]},
+    {"name":"Hunt", "combat":"missile", "navigation":true,
+     "transitions":[{"when":"health_below","value":50,"next":"Wait"}]},
+    {"name":"Wait", "combat":"off", "navigation":false, "transitions":[]}
+  ]
+}
+```
+
+These are UCM-native profiles. VT `.usd`, `.nav`, `.met`, loot profiles, and VVS XML
+are not imported. More complex conditions or behavior can be authored in Lua.
+
+## Runtime and references
+
+Each script has a separate Lua 5.4.9 VM with an 8 MiB allocator cap and 250,000 Lua
+instructions per initialization/callback. Files are loaded as source, not bytecode.
+Available libraries: basic functions, table, math, utf8, and bounded string
+operations. No filesystem/process/network/native loading, debug, coroutine,
+dynamic load, pcall/xpcall, or metatable APIs are exposed. Lua string pattern
+functions are omitted because their C execution is outside the instruction hook.
+Install plugins from authors you trust; these limits are not an OS process sandbox.
+
+`workavailable()` lets a plugin cooperatively save its cursor and return before
+exhausting the callback's work allowance. It becomes false after 200,000 Lua
+instructions or 5 ms of regex work. Calling it never resets or extends the hard
+250,000-instruction and 20 ms regex limits. Each callback gets a fresh allowance.
+
+`spellindex(spells, inventory, time, skill_margin, unavailable_until)` returns
+three tables: spells keyed by ID, component availability keyed by ID, and the
+ordered castable spell list. Records reference the supplied snapshot; no spell
+records are copied. It combines component stacks and checks known spells, school
+skill, component knowledge and temporary exclusions. UCM shares this index within
+one decision and rebuilds it for the next snapshot. Native indexing is capped at
+16,384 spells, 4,096 inventory entries and 131,072 total entry/component visits per
+callback, independently of the unchanged Lua instruction limit.
+
+The decompiled VT material was consulted for behavior boundaries (profiles,
+spell categories, rule scheduling, navigation and view abstraction). Its source
+was not incorporated. Public references:
+
+* [Decal](https://www.decaldev.com/)
+* [Virindi Views](https://virindi.net/wiki/index.php/Virindi_Views)
+* [Virindi Tank meta system](https://www.virindi.net/wiki/index.php/Virindi_Tank_Meta_System)
+* [Bundle plugin APIs](https://virindi.net/wiki/index.php/Writing_Plugins_that_Interface_With_the_Virindi_Bundle)
+* [Lua 5.4 manual](https://www.lua.org/manual/5.4/)
+
+Regression suites: `ACE.Plugins.Runtime`, `ACE.Plugins.UCM`, `ACE.Plugins.Decisions`,
+`ACE.Plugins.HostAndPanel`. Live server and physical headset/controller testing is
+still needed before treating this preview as an unattended hunting replacement.
+
+## Additional automation API 1 fields and intents
+
+Snapshots additionally expose `player`, `jumping`, `action_serial`, `action_error`,
+`trained_skills`, `usable_skills`, `teleport_sequence`, `last_spell`, `inventory`, `targets`, `corpses`, `container`,
+`contents`, `route_objects` and confirmed `item_buffs`. GUIDs use unsigned JSON
+numbers. Inventory snapshots cache until inventory/appraisal/eligibility changes.
+Background appraisals do not open the user's inspection window; explicit user
+inspection takes precedence. Automatic appraisal discovery is limited to one
+request per second and existing assessments refresh after two minutes. Successful mana-stone use invalidates
+equipment mana assessments immediately so it cannot spend charges using stale
+values. UCM skips snapshot construction while an action is pending.
+
+Inventory entries include ID/template/name/type/icon, slot mask, quantity,
+container, equipped/usable state, ammo type and assessment status. Successful
+assessments add wield eligibility, damage/modifiers, recovery vital/amount,
+item mana and ratings. Unknown fields must not be treated as authoritative zeros.
+Target entries have positions, distance and only server-supplied resistances.
+Confirmed item buff records are session-local; restarting the client loses them.
+
+Additional actions:
+
+```lua
+return {action="identify", item=guid}                -- inventory permission
+return {action="equip", item=guid}                   -- inventory; owned, usable requirements
+return {action="use_item", item=guid}                -- inventory; owned supplies, self/untargeted
+return {action="merge", item=source, target=dest}     -- inventory; compatible owned stacks
+return {action="open_corpse", item=guid}             -- loot permission
+return {action="loot", item=guid, amount=quantity}   -- loot; current open corpse only
+return {action="close_corpse"}                       -- loot
+return {action="use_world", item=guid}               -- navigation; selectable world object
+return {action="jump", heading=90, charge=.5, forward=1} -- navigation; ordinary jump
+```
+
+## VT review and remaining gaps
+
+Reviewed the supplied decompile's orchestration, buff/cast selection, equipment,
+recovery, waypoints, loot actions, meta rules and view definitions as behavioral
+references. No VT source or assets are incorporated. Also consulted its official
+[standard options](https://virindi.net/wiki/index.php/Virindi_Tank_Standard_Options),
+[advanced options](https://virindi.net/wiki/index.php/Virindi_Tank_Advanced_Options),
+and [meta documentation](https://virindi.net/wiki/index.php/Virindi_Tank_Meta_System).
+
+UCM now covers the main requested configuration paths, but **is not full VT
+parity**. Explicit remaining work includes:
+
+- Advanced USD assistance, external plugin APIs and VVS-generated views.
+- Remaining UI/HUD expressions, full .NET formatting and third-party loot User actions.
+- Full streak optimization, specialized imbue rankings, dispel drums for others,
+  general crafting and ammunition manufacture. Pets, rings, ordered DOTs,
+  self-dispel spells/supplies and primary/offhand choices are implemented.
+- Vendor restocking, automatic fellowship management and non-fellow shared-vital
+  recovery. Server-provided fellowship vitals are supported.
+- Dynamic obstacle planning and verified monster weaknesses absent from appraisal.
+
+NAV and supported MET/UTL imports, chat-triggered metas, following, auto-cramming,
+salvage combining and loot Salvage/Sell/Read actions are now implemented. See the
+compatibility document for exact corpus results and remaining import failures.
+
+Live server validation still needs ordinary and custom inventories, long combat
+cycles, recovery depletion, slope/corpse use, portal destinations and jump routes.
+Physical VR pointer/controller usability and comfort are not established by
+render tests or cross-compilation. Do not describe these offline checks as a
+successful unattended hunt or complete VT replacement.
+
+## Tell buff requests and route overlay
+
+In **Buff others**, turn on **Accept buff requests**, enable **Buff**, and start
+UCM. The default exact tell keywords are `mage`, `heavy`, `missile`, `light`, and
+`finesse`. Edit keywords or add aliases in this tab. Case and surrounding spaces
+are ignored. Public chat and NPC dialogue never start a request. Up to eight
+players can queue; a player cannot reset an active request by repeating a tell.
+Completed requests have a two-minute request cooldown. Stop, logout, and character
+changes clear the queue. Disabling buffs cancels requests. No automatic reply
+messages are sent; progress and unavailable-buff counts appear locally.
+
+All roles request six attributes, three defenses, lore, healing, run, jump,
+mana conversion, regeneration, armor, and elemental life protections. Mage adds
+creature/item/life/war/void skills. Weapon roles add their corresponding weapon
+skill and relevant support skills. UCM chooses known **Other** spells within the
+caster's skill margin and honors buff exclusions. Self-only spells are never
+redirected to the requester. Normal recovery and self buffs take priority.
+
+Item magic targets compatible equipped objects that the server has exposed for
+the recipient. Keep the intended weapon equipped. Other players' clothing is
+often only transmitted as appearance, without targetable item GUIDs; a full set
+of armor banes cannot be guaranteed in that case. This follows the server's item
+spell rules rather than pretending that casting a bane on another player buffs
+all their armor. Missing spells, equipment, or failed casts produce an incomplete
+summary. The requester must remain nearby; leaving range for 30 seconds cancels
+the request. Each queued request expires after 15 minutes.
+
+**Route → Show route in world** defaults on for both new and migrated profiles.
+A cyan ground-projected line joins recorded points, with amber jump segments.
+The active waypoint has a green ring, while other destinations use small spheres.
+Circular routes include the final segment back to the first point; linear routes
+reverse along the existing path. The overlay uses a normal unlit game mesh.
+Portal and recall steps break the path across teleportation. Edits and current
+waypoint changes refresh on the next UCM update. Geometry is retained between
+updates, with bounded periodic ground traces for streamed terrain; this is a
+route preview, not an obstacle-avoiding pathfinder.
+
+## Loot Profile Editor and Virindi files
+
+The separate **LOOT** plugin-bar button opens **Loot Profile Editor**. It has no
+permission to perform game actions. Its native rules are shared with UCM; saving
+rule changes stops UCM. Enable UCM and start it separately to automate looting.
+The same Slate interface is available from the VR plugin manager.
+
+Native profiles support ordered Keep/Skip/Salvage/Sell/Read rules, name/material/workmanship/value
+filters, keep-count limits, integer/decimal/string appraisal properties, and spell
+name/count filters. The first match decides. Use **Property and spell conditions**
+for armor, set, ratings and other server properties. Native rules require missing
+properties to exist unless **Missing value: use 0 (VT)** is selected. Appraisal is
+requested before making a decision that depends on unknown data. Spell patterns
+support bounded regex with groups, alternatives, repetition and named captures;
+unsupported .NET dialect features are reported. Native loot profiles allow 2,048
+rules, 64 conditions per rule and an 8 MiB JSON file. Rule lists
+are filtered and paged to avoid constructing thousands of widgets.
+
+**Import / compatibility** accepts a file path, a folder, or files copied into
+`Saved/ClientPlugins/ImportInbox`. It reads `.utl`, `.nav`, `.met` and `.usd` files.
+Preview shows incompatibilities before import. A supported conversion creates a
+named UCM profile, preserving unrelated settings and stopping automation. Original
+files are never modified. Reports under `Saved/ClientPlugins/Imports` preserve the
+parsed source, converted data and every compatibility issue. Unsupported earlier
+Skip rules block the entire import; they cannot silently fall through to Keep.
+
+**Edit UTL rules / save compatible copy** opens the standalone legacy loot editor.
+It supports creating, filtering, reordering, adding/removing rules and requirements,
+all 31 installed VT Classic requirement types, actions, keep counts and custom
+expression text. Unknown requirement bodies and extra blocks (including salvage
+combination settings) are retained. **Save UTL copy** writes version-1 `.utl` files
+to `Saved/ClientPlugins/LegacyLootProfiles`; those files can also be read by VT
+Classic. Saving a UTL does not activate its rules. Use **Check compatibility of
+saved copy** before importing it into UCM. Legacy expressions and custom actions
+are data in this editor, not executable plugin code.
+
+See [Virindi compatibility](VirindiCompatibility.md) for the verified collection,
+format details, supported imports and remaining runtime gaps.
+
+UCM 0.7 adds executable VT meta imports for supported rule sets, bracket-syntax
+variables/stopwatches, state calls, embedded navigation and native command adapters.
+Use **Metas** to enable the imported program and see its current state. Navigation
+supports Circular (wrap), Linear (reverse) and Once modes, plus follow, portals,
+recalls, pauses, checkpoints and directional jumps. All 88 files in the supplied
+vtank-routes repository convert. Public metas are only partially compatible;
+review the import report before running. Local/fellowship chat, fellowship operations and server-confirmation responses
+request separate `say`, `fellowship` and `confirm` capabilities; re-enable UCM
+to grant a changed capability list. Nothing starts automatically.
+
+
+The Loot page also edits salvage workmanship groups, material overrides and value
+targets. Combining is separately enabled. Destructive loot actions apply only to
+newly transferred items; pending jobs are cleared on Stop/logout. Do not stop UCM
+before visiting a vendor if you intend to process its queued Sell rules.
+
+
+## UCM folder library and compact controls
+
+Profiles now browses `.nav`, `.met` and `.utl` files directly from a chosen
+folder. Set the folder once, then Refresh after adding or modifying files. Select
+a filename to validate and load it; select it again to reload edits. Route and
+Meta tabs also have selectors. Current filenames and source paths are shown.
+Each selection is independent, persisted with the current UCM setup and stops
+automation before switching. Unsupported files leave the previous setup intact.
+`[None]` clears that selection. Loaded nav points immediately feed the existing
+world route overlay and enable Follow route; press Start to begin moving. You can
+turn Follow route off independently. Original files are
+never rewritten. Meta dependencies are resolved alongside their source file.
+
+Buff is automatic by default. The Buffs tab shows compact toggles, skill margin
+and refresh threshold; **Edit buff exceptions** reveals the searchable family
+list only when needed. The workflow follows VT's separation between profile
+selection and route/meta editing, while retaining native modern controls.
+Reference: https://www.virindi.net/wiki/index.php/BeginnerBundleGuide
+
+Buff planning indexes selected spells, exclusions and equipment once rather than
+scanning those lists for every spell. Repeated NeedBuff conditions reuse a plan
+within the current snapshot only. A plan is discarded before the next callback,
+so confirmations, inventory changes and option changes are not cached across
+ticks. The sandbox still enforces its original 250,000-instruction ceiling.
+Regression coverage includes 2,200 spells with equally large selection and
+exclusion lists, plus full inventory and infinite-loop rejection fixtures.

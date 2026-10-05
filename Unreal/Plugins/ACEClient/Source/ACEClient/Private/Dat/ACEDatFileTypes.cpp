@@ -18,8 +18,17 @@ namespace ACEDatUnpack
 	}
 
 	bool SkipBspTree(FACEDatCursor& Cur, EACEBspType TreeType, int32 Depth, TSet<uint16>* OutDrawingPortalPolys,
-		TSet<uint16>* OutPhysicsPolyIds, TMultiMap<int32, uint16>* OutPortalIndices, TSet<uint16>* OutDrawingPolyIds)
+		TSet<uint16>* OutPhysicsPolyIds, TMultiMap<int32, uint16>* OutPortalIndices, TSet<uint16>* OutDrawingPolyIds, FSphere* OutRootSphere)
 	{
+		auto ReadRootSphere = [&]()
+		{
+			if (!OutRootSphere) return SkipSphere(Cur);
+			bool Ok = true;
+			const FVector Center(Cur.ReadVector3(Ok));
+			const float Radius = Cur.ReadF32(Ok);
+			if (Ok) *OutRootSphere = FSphere(Center, Radius);
+			return Ok;
+		};
 		// Desynced streams can recurse forever on garbage that keeps looking like split nodes.
 		constexpr int32 MaxDepth = 4096;
 		if (Depth > MaxDepth)
@@ -55,7 +64,7 @@ namespace ACEDatUnpack
 			}
 			if (TreeType == EACEBspType::Drawing)
 			{
-				if (!SkipSphere(Cur))
+				if (!ReadRootSphere())
 				{
 					return false;
 				}
@@ -155,7 +164,7 @@ namespace ACEDatUnpack
 			return true;
 		}
 
-		if (!SkipSphere(Cur))
+		if (!ReadRootSphere())
 		{
 			return false;
 		}
@@ -567,7 +576,7 @@ namespace ACEDatUnpack
 				}
 				Out.Polygons.Add(Key, MoveTemp(Poly));
 			}
-			if (!SkipBspTree(Cur, EACEBspType::Drawing, 0, &Out.DrawingPortalPolygonIds, nullptr, &Out.DrawingPortalIndices, &Out.DrawingPolygonIds))
+			if (!SkipBspTree(Cur, EACEBspType::Drawing, 0, &Out.DrawingPortalPolygonIds, nullptr, &Out.DrawingPortalIndices, &Out.DrawingPolygonIds, &Out.DrawingSphere))
 			{
 				return false;
 			}
@@ -1041,12 +1050,15 @@ namespace ACEDatUnpack
 
 		if ((Out.Flags & 0x1) != 0) // PosFrames
 		{
+			Out.PositionFrames.Reserve(Out.NumFrames);
 			for (uint32 i = 0; i < Out.NumFrames; ++i)
 			{
-				if (!SkipFrame(Cur))
+				FVector3f Origin; FQuat4f Rotation;
+				if (!Cur.ReadFrame(Origin, Rotation))
 				{
 					return false;
 				}
+				Out.PositionFrames.Emplace(Rotation, Origin);
 			}
 		}
 

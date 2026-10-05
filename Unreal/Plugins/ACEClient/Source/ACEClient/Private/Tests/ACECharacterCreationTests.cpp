@@ -242,6 +242,19 @@ bool FACERetailCharacterCreationScreenTest::RunTest(const FString& Parameters)
         return true;
     }
     for(int Page=1;Page<=6;++Page)Capture(Page);
+    Binder->SetPage(3);Binder->Tick(0);
+    int32 CheckedIcons=0;
+    for(const auto& Row:Binder->SkillRows)if(Row&&Row->bVisible)
+        if(auto Icon=Binder->Child(Row,0x10000300))
+        {
+            auto* Texture=Resources->ResolveTexture(Icon->ImageFileId);
+            if(!TestNotNull(TEXT("Creation skill icon resolves"),Texture))continue;
+            TestTrue(TEXT("Creation icon cannot repeat horizontally or vertically"),Icon->Width<=Texture->GetSizeX()&&Icon->Height<=Texture->GetSizeY());
+            TestEqual(TEXT("Icon centered horizontally in authored slot"),Icon->X,(26-Icon->Width)/2);
+            TestEqual(TEXT("Icon centered vertically in authored slot"),Icon->Y,(26-Icon->Height)/2);
+            ++CheckedIcons;
+        }
+    TestTrue(TEXT("Visible skill rows exercised"),CheckedIcons>0);
     auto NameField=Manager->FindElementByName(TEXT("NameTextBox"));
     TestEqual(TEXT("Native name prompt resolves bracket escapes"),Binder->Labels[NameField->InstanceId]->GetText().ToString(),FString(TEXT("[ Name ]")));
     Binder->SetPage(1);Binder->Activate(Manager->FindElementByName(TEXT("RadioSho")));TestEqual(TEXT("Heritage button selects correct wire ID"),Binder->Model.Selection.Heritage,3u);

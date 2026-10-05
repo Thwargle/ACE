@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "ACELandingMotion.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Tickable.h"
 #include "Dat/ACEDatDatabase.h"
@@ -376,6 +377,7 @@ public:
 		bool bLoop = true, bool* bOutFinished = nullptr) const;
 	/** One-shot MotionTable Links transition (door Off→On / attack Ready→Slash). Clamps to final frame.
 	 *  PreferredStyle = CurrentStyle (HandCombat etc.); 0 = DefaultStyle / NonCombat fallbacks. */
+	bool BuildTransitionRootTrack(uint32 Table, uint32 From, uint32 To, uint32 Style, ACELandingMotion::FRootTrack& Out) const;
 	bool EvaluateMotionLink(uint32 MotionTableId, uint32 FromCommand, uint32 ToCommand, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount, bool& bOutFinished,
 		const float* PreviousTimeSeconds = nullptr, TArray<FACEDatAnimationHook>* OutCrossedHooks = nullptr, uint32 PreferredStyle = 0) const;
 	/** Loop a raw Animation DID (Setup DefaultAnimation / lifestones). */
@@ -403,6 +405,9 @@ public:
 
 	/** SpellTable (0x0E00000E) name + icon DID. Lazily parsed once portal.dat is ready. */
 	bool TryGetSpellInfo(uint32 SpellId, FString& OutName, uint32& OutIconDid);
+	bool TryGetPluginSpellInfo(uint32 SpellId, uint32& School, uint32& Power, uint32& Category, uint32& Flags, double& Duration);
+	bool IsPluginSingleTargetOffensiveSpell(uint32 SpellId);
+	bool TryGetPluginSpellScarabs(uint32 SpellId, TMap<FString, int32>& OutRequirements);
 	bool TryGetSpellDescription(uint32 SpellId, FString& OutDescription);
 	bool TryGetSpellExamination(uint32 SpellId, FString& OutDetails);
 	/** DisplayOrder from SpellTable — used to sort the spellbook like retail. */
@@ -783,10 +788,13 @@ private:
 		uint32 RetailTargetType = 0;
 		bool bProjectile = false;
 		uint32 DisplayOrder = 0;
+		uint32 Category = 0;
 		uint32 School = 0;
 		uint32 Power = 0;
 		uint32 IconPowerLevel = 0;
 		uint32 BaseMana = 0;
+		uint32 FormulaVersion = 0;
+		TArray<uint32> Formula;
 		float BaseRange = 0.f, RangeMod = 0.f;
 		double Duration = 0.0;
 		uint32 TrainedCost = 0;

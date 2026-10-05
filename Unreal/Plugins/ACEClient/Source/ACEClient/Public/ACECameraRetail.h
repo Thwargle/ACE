@@ -35,7 +35,12 @@ namespace ACECameraRetail
 	constexpr float ZoomRate = 0.2f;
 	/** SpringArm defaults along −X; AC facing is pawn +Y, so boom yaw +90. */
 	constexpr float BoomYawToFaceAcForward = 90.f;
-	constexpr float NumpadOrbitDegreesPerSecond = 75.f;
+	// CameraSet's angle is 8 degrees, multiplied by the adjustment speed (40).
+	constexpr float NumpadOrbitDegreesPerSecond = 8.f * AdjustmentSpeed;
+	inline float KeyboardPitchRate(float AdjustmentMultiplier, bool MouseTurning)
+	{
+		return NumpadOrbitDegreesPerSecond * AdjustmentMultiplier * (MouseTurning ? .25f : 1.f);
+	}
 	/** CameraSet::Raise/Lower translate by 0.2 units per call in look-down mode.
 	 * Normalize the 60 Hz step to our shared keyboard/mouse orbit delta. */
 	constexpr float LookDownUnitsPerOrbitDegree = 0.2f * 60.f / NumpadOrbitDegreesPerSecond;

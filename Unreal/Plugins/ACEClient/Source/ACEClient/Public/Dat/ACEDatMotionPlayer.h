@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Dat/ACEDatDatabase.h"
 #include "Dat/ACEDatFileTypes.h"
+#include "ACELandingMotion.h"
 
 /** Evaluates MotionTable cycles (idle / walk / run) into part transforms. */
 class ACECLIENT_API FACEDatMotionPlayer
@@ -14,6 +15,7 @@ public:
 	}
 
 	bool SetMotionTable(uint32 MotionTableId);
+	bool BuildTransitionRootTrack(uint32 From, uint32 To, uint32 Style, ACELandingMotion::FRootTrack& Out) const;
 	bool GetCycleVelocity(uint32 MotionCommand, uint32 Style, FVector& Out) const;
 	int32 GetCachedMotionTableCount() const { return MotionTableCache.Num(); }
 

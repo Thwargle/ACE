@@ -1,4 +1,5 @@
 #include "VR/ACEVRMenu.h"
+#include "Mods/ACEPluginSubsystem.h"
 #include "VR/ACEVRComponent.h"
 #include "VR/ACEVRSettings.h"
 #include "VR/ACEVRUIStyle.h"
@@ -156,7 +157,7 @@ void UACEVRMenu::RefreshIfDirty()
 	if(Client && Client->GetSession() && Page=="Spellbook" && SpellRevision!=Client->GetSession()->GetSpellDataRevision())
 	{SpellRevision=Client->GetSession()->GetSpellDataRevision();bDirty=true;}
 	if(Client && Client->GetSession() && InventoryRevision!=Client->GetSession()->GetInventoryDataRevision())
-	{InventoryRevision=Client->GetSession()->GetInventoryDataRevision();bDirty=true;}
+	{InventoryRevision=Client->GetSession()->GetInventoryDataRevision();if(Page!="Plugins")bDirty=true;}
     if(!bDirty || !Body || !Client || !Binder || DragItem || DragSpell)return;
     bDirty=false;++RefreshCount;
     Body->ClearChildren();ItemDestinations.Reset();MenuTargets.Reset();SpellDestinations.Reset();IconBrushes.Reset();IconTextures.Reset();
@@ -177,6 +178,12 @@ void UACEVRMenu::RefreshIfDirty()
             {Client->SendGiveObjectRequest(Id,Selected,Binder->GetSelectedItemAmount(Selected));OpenPage("Inventory");})];
     }
     else if(Page=="Allegiance")BuildAllegiance();
+    else if(Page=="Plugins")
+    {
+        Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Manage installed plugins"),[this](){OpenPage("PluginManager");})];
+        Body->AddSlot().AutoHeight()[SNew(SBox).HeightOverride(610)[GetGameInstance()->GetSubsystem<UACEPluginSubsystem>()->MakePanel(TEXT("ucm"))]];
+    }
+    else if(Page=="PluginManager")Body->AddSlot().AutoHeight()[SNew(SBox).HeightOverride(610)[GetGameInstance()->GetSubsystem<UACEPluginSubsystem>()->MakePanel()]];
     else if(Page=="Options")BuildOptions();
     else if(Page=="Hotbars")BuildShortcuts();
     else BuildMore();
@@ -232,4 +239,11 @@ void UACEVRMenu::Execute(FName Action)
         Page="Give";
     }
     bDirty=true;
+}
+
+void UACEVRComponent::OpenPluginManager()
+{
+    bUseDesktopMenu=false;
+    if(!bInventoryOpen)ToggleInventory();
+    if(GameplayMenu)GameplayMenu->OpenPage("Plugins");
 }

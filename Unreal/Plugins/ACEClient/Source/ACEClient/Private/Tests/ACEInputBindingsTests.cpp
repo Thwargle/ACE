@@ -220,6 +220,33 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  TestFalse(TEXT("Wheel action cannot remain held"),ACEInputBindings::Down(PC,EKeys::NumLock));
  ACEInputBindings::BeginEdit();ACEInputBindings::Set(EKeys::Add,0,FInputChord(EKeys::F6));ACEInputBindings::Commit();
  Hold({EKeys::F6});TestTrue(TEXT("Zoom can be bound to an ordinary key"),ACEInputBindings::Down(PC,EKeys::Add));
+ ACEInputBindings::BeginEdit();ACEInputBindings::Defaults();ACEInputBindings::Commit();
+ TestEqual(TEXT("Controller default does not replace the third retail strafe chord"),ACEInputBindings::Get(EKeys::Q,2),FInputChord(EKeys::Left,false,false,true,false));
+ TestEqual(TEXT("Controller has its own fourth binding slot"),ACEInputBindings::Get(EKeys::Q,3).Key,EKeys::Gamepad_LeftStick_Left);
+ for(int32 Mode:{2,4,8})
+ {
+  ACEInputBindings::SetCombatContext(Mode);Hold({EKeys::Gamepad_RightTrigger});
+  const auto Attack=ACEInputBindings::Action(Mode==2?TEXT("MeleeMedium"):Mode==4?TEXT("MissileMedium"):TEXT("SpellCast"));
+  TestTrue(TEXT("Controller trigger uses the existing stance-specific attack action"),ACEInputBindings::Down(PC,Attack));
+ }
+ ACEInputBindings::BeginEdit();ACEInputBindings::Set(EKeys::SpaceBar,3,FInputChord(EKeys::Gamepad_FaceButton_Top));ACEInputBindings::Commit();
+ ACEInputBindings::Reload();Hold({EKeys::Gamepad_FaceButton_Top});
+ TestTrue(TEXT("Controller rebind persists through a settings reload"),ACEInputBindings::Down(PC,EKeys::SpaceBar));
+ TestFalse(TEXT("Controller rebind resolves conflicting pickup action"),ACEInputBindings::Down(PC,ACEInputBindings::Action(TEXT("Pickup"))));
+ Hold({EKeys::SpaceBar});TestTrue(TEXT("Controller rebind preserves the keyboard jump"),ACEInputBindings::Down(PC,EKeys::SpaceBar));
+ Movement->PlayerInput=NewObject<UPlayerInput>(Movement);
+ Movement->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::Gamepad_LeftY,IE_Axis,.65f));
+ Movement->PlayerInput->ProcessInputStack({},.016f,false);
+ TestTrue(TEXT("Analog stick is translated to the rebindable forward action"),ACEInputBindings::Down(Movement,EKeys::W));
+ const float Analog=ACEInputBindings::Value(Movement,EKeys::W);
+ TestTrue(TEXT("Partial stick deflection retains an analog magnitude"),Analog>0.f && Analog<1.f);
+ Movement->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::Gamepad_LeftY,IE_Axis,.05f));
+ Movement->PlayerInput->ProcessInputStack({},.016f,false);
+ TestFalse(TEXT("Recenter/deadzone releases the direction instead of leaving movement held"),ACEInputBindings::Down(Movement,EKeys::W));
+ ACEInputBindings::BeginEdit();ACEInputBindings::Set(EKeys::W,3,FInputChord(EKeys::Gamepad_LeftStick_Down));ACEInputBindings::Commit();
+ Movement->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::Gamepad_LeftY,IE_Axis,-1.f));
+ Movement->PlayerInput->ProcessInputStack({},.016f,false);
+ TestTrue(TEXT("Stick directions can be rebound just like buttons"),ACEInputBindings::Down(Movement,EKeys::W));
  return !HasAnyErrors();
 }
 #endif

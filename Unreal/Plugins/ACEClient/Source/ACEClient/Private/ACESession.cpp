@@ -1536,6 +1536,21 @@ void FACESession::HandleGameMessage(const TArray<uint8>& MessageBytes)
 	case ACEOpcode::PrivateUpdatePropertyInt64:
 		HandlePrivateUpdatePropertyInt64(Reader);
 		break;
+	case ACEOpcode::PublicUpdatePropertyInt64:
+		HandlePrivateUpdatePropertyInt64(Reader, true);
+		break;
+	case ACEOpcode::PrivateUpdatePropertyFloat:
+		HandleUpdatePropertyFloat(Reader, false);
+		break;
+	case ACEOpcode::PublicUpdatePropertyFloat:
+		HandleUpdatePropertyFloat(Reader, true);
+		break;
+	case ACEOpcode::PrivateUpdatePropertyString:
+		HandleUpdatePropertyString(Reader, false);
+		break;
+	case ACEOpcode::PublicUpdatePropertyString:
+		HandleUpdatePropertyString(Reader, true);
+		break;
 	case ACEOpcode::PublicUpdatePropertyInt:
 		HandlePublicUpdatePropertyInt(Reader);
 		break;
@@ -1747,6 +1762,7 @@ void FACESession::UpsertWorldObject(const FACEWorldObject& Object, bool bForceRe
 		}
 	}
 	WorldObjects.Add(Merged.Guid, Merged);
+	ReconcileOpenContainerOwnership();
 	OnObjectCreated.Broadcast(Merged);
 }
 
@@ -1827,6 +1843,7 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecrea
 	Obj.ItemUseable = Decoded.ItemUseable;
 	Obj.TargetType = Decoded.TargetType;
 	Obj.MaterialType = Decoded.MaterialType;
+	Obj.SalvageWorkmanship = Decoded.SalvageWorkmanship;
 	if (Obj.MaxStackSize > 0 && Obj.StackSize > Obj.MaxStackSize)
 	{
 		Obj.StackSize = Obj.MaxStackSize;
@@ -2901,6 +2918,7 @@ void FACESession::HandleTell(FACEBinaryReader& Reader)
 	{
 		LastTellSenderGuid = SenderId;
 		LastTellSenderName = Sender;
+		OnPlayerTell.Broadcast(Text,Sender,SenderId);
 	}
 	OnChatMessage.Broadcast(Text, Sender, Type);
 	if (const auto* NPC = WorldObjects.Find(SenderId); NPC && !NPC->bIsPlayer && (NPC->ItemType & ACEItemType::Creature))
@@ -3047,6 +3065,7 @@ void FACESession::HandlePlayerDescription(FACEBinaryReader& Reader)
 		{
 			const uint32 Key = Reader.ReadUInt32();
 			const int64 Value = static_cast<int64>(Reader.ReadUInt64());
+			Vitals.QualityInt64s.Add(static_cast<int32>(Key), Value);
 			if (Key == 1) // PropertyInt64.TotalExperience
 			{
 				Vitals.TotalExperience = Value;
@@ -3072,6 +3091,7 @@ void FACESession::HandlePlayerDescription(FACEBinaryReader& Reader)
 		{
 			const uint32 Key = Reader.ReadUInt32();
 			const uint32 Value = Reader.ReadUInt32();
+			Vitals.QualityBools.Add(static_cast<int32>(Key), Value != 0);
 			// PropertyBool.IsAdmin=44, IsArch=45, IsSentinel=46 (SendOnLogin).
 			if ((Key == 44 || Key == 45 || Key == 46) && Value != 0)
 			{
@@ -3084,8 +3104,9 @@ void FACESession::HandlePlayerDescription(FACEBinaryReader& Reader)
 		const int32 Count = ReadTableHeader();
 		for (int32 i = 0; i < Count && Reader.CanRead(12); ++i)
 		{
-			Reader.ReadUInt32();
-			Reader.ReadDouble();
+			const int32 Key = static_cast<int32>(Reader.ReadUInt32());
+			const double Value = Reader.ReadDouble();
+			if (FMath::IsFinite(Value)) Vitals.QualityDoubles.Add(Key, Value);
 		}
 	}
 	if (PropertyFlags & FlagPropertyString)
@@ -3095,6 +3116,7 @@ void FACESession::HandlePlayerDescription(FACEBinaryReader& Reader)
 		{
 			const uint32 Key = Reader.ReadUInt32();
 			const FString Value = Reader.ReadString16L();
+			Vitals.QualityStrings.Add(static_cast<int32>(Key), Value);
 			if (Key == 5) // PropertyString.Template
 			{
 				Vitals.TemplateName = Value;
@@ -3792,36 +3814,53 @@ void FACESession::ApplyServerCombatMode(int32 Mode)
 	NotifyVitalsChanged();
 }
 
-void FACESession::HandlePrivateUpdatePropertyInt64(FACEBinaryReader& Reader)
+void FACESession::HandlePrivateUpdatePropertyInt64(FACEBinaryReader& Reader, bool bPublic)
 {
-	// byte sequence, property key u32, value i64
-	if (!Reader.CanRead(13))
-	{
-		return;
-	}
+	// Public numeric updates insert the object GUID before the property key.
+	if (!Reader.CanRead(bPublic ? 17 : 13)) return;
 	Reader.ReadUInt8();
-	const uint32 Key = Reader.ReadUInt32();
+	const int32 Guid = bPublic ? static_cast<int32>(Reader.ReadUInt32()) : PlayerGuid;
+	const int32 Key = static_cast<int32>(Reader.ReadUInt32());
 	const int64 Value = static_cast<int64>(Reader.ReadUInt64());
-	if (Key == 1)
-	{
-		PlayerVitals.TotalExperience = Value;
-		NotifyVitalsChanged();
-	}
-	else if (Key == 2)
-	{
-		PlayerVitals.AvailableExperience = Value;
-		NotifyVitalsChanged();
-	}
-	else if (Key == 6)
-	{
-		PlayerVitals.AvailableLuminance = Value;
-		NotifyVitalsChanged();
-	}
-	else if (Key == 7)
-	{
-		PlayerVitals.MaximumLuminance = Value;
-		NotifyVitalsChanged();
-	}
+	if (Guid != PlayerGuid) return;
+	PlayerVitals.QualityInt64s.Add(Key, Value);
+	if (Key == 1) PlayerVitals.TotalExperience = Value;
+	else if (Key == 2) PlayerVitals.AvailableExperience = Value;
+	else if (Key == 6) PlayerVitals.AvailableLuminance = Value;
+	else if (Key == 7) PlayerVitals.MaximumLuminance = Value;
+	NotifyVitalsChanged();
+}
+
+void FACESession::HandleUpdatePropertyFloat(FACEBinaryReader& Reader, bool bPublic)
+{
+	if (!Reader.CanRead(bPublic ? 17 : 13)) return;
+	Reader.ReadUInt8();
+	const int32 Guid = bPublic ? static_cast<int32>(Reader.ReadUInt32()) : PlayerGuid;
+	const int32 Key = static_cast<int32>(Reader.ReadUInt32());
+	const double Value = Reader.ReadDouble();
+	if (Guid != PlayerGuid || !FMath::IsFinite(Value)) return;
+	PlayerVitals.QualityDoubles.Add(Key, Value);
+	NotifyVitalsChanged();
+}
+
+void FACESession::HandleUpdatePropertyString(FACEBinaryReader& Reader, bool bPublic)
+{
+	if (!Reader.CanRead(bPublic ? 9 : 5)) return;
+	Reader.ReadUInt8();
+	// Unlike numeric properties, retail strings put the property before the GUID.
+	const int32 Key = static_cast<int32>(Reader.ReadUInt32());
+	const int32 Guid = bPublic ? static_cast<int32>(Reader.ReadUInt32()) : PlayerGuid;
+	Reader.Align();
+	if (!Reader.CanRead(2)) return;
+	const int32 StringStart = Reader.Tell();
+	const uint16 Length = Reader.ReadUInt16();
+	if (!Reader.CanRead(Length)) return;
+	Reader.Seek(StringStart);
+	const FString Value = Reader.ReadString16L();
+	if (Guid != PlayerGuid) return;
+	PlayerVitals.QualityStrings.Add(Key, Value);
+	if (Key == 5) PlayerVitals.TemplateName = Value;
+	NotifyVitalsChanged();
 }
 
 void FACESession::SendTalk(const FString& Message)
@@ -5344,6 +5383,13 @@ void FACESession::HandleIdentifyObjectResponse(FACEBinaryReader& Reader)
 		// need not be repeated in the appraisal, including on custom servers.
 		Info.IntProperties.Add(6, Known.ItemsCapacity);
 		Info.IntProperties.Add(7, Known.ContainersCapacity);
+		// Retail also uses the public descriptor for weapon/armor classification;
+		// servers need not repeat these fields in an appraisal. Explicit appraisal
+		// qualities below take precedence over these descriptor defaults.
+		Info.IntProperties.Add(9, static_cast<int32>(Known.ValidLocations));
+		Info.IntProperties.Add(50, Known.AmmoType);
+		Info.IntProperties.Add(4, Known.ClothingPriority);
+		Info.IntProperties.Add(51, Known.CombatUse);
 		// Material is public descriptor data even when the appraisal omits it.
 		// Preserve it so every examination title uses the same retail item name.
 		if (Known.MaterialType > 0) Info.IntProperties.Add(131, Known.MaterialType);
@@ -5651,23 +5697,7 @@ void FACESession::HandleViewContents(FACEBinaryReader& Reader)
 	// Contents for a bag inside a corpse are metadata for the same open root,
 	// not a second container-open event. Resolve through lists as well as objects
 	// because ACE sends root/bag ViewContents before the corresponding creates.
-	int32 RootGuid = ContainerGuid;
-	TSet<int32> VisitedContainers;
-	while (RootGuid && !VisitedContainers.Contains(RootGuid))
-	{
-		VisitedContainers.Add(RootGuid);
-		int32 ParentGuid = 0;
-		if (const FACEWorldObject* Obj = WorldObjects.Find(RootGuid)) ParentGuid = Obj->ContainerId;
-		if (!ParentGuid)
-			for (const auto& Contents : ContainerContents)
-				if (Contents.Value.ContainsByPredicate([&](const FACEContainerItemRef& Ref) { return Ref.ItemGuid == RootGuid; }))
-				{
-					ParentGuid = Contents.Key;
-					break;
-				}
-		if (!ParentGuid) break;
-		RootGuid = ParentGuid;
-	}
+	const int32 RootGuid = ResolveContainerRoot(ContainerGuid);
 	bool bIsPlayerInventory = (RootGuid == PlayerGuid);
 	if (!bIsPlayerInventory)
 	{
@@ -5683,12 +5713,10 @@ void FACESession::HandleViewContents(FACEBinaryReader& Reader)
 		}
 	}
 
-	bool bExternalByType = false;
 	bool bIsVendor = false;
 	if (const FACEWorldObject* ContainerObj = WorldObjects.Find(ContainerGuid))
 	{
 		bIsVendor = ContainerObj->IsVendor();
-		bExternalByType = ContainerObj->IsCorpse() || ContainerObj->IsOpenable();
 	}
 
 	// Vendors use ApproachVendor (0x0062) for UI — don't open ExternalContainer for them.
@@ -5697,7 +5725,7 @@ void FACESession::HandleViewContents(FACEBinaryReader& Reader)
 		return;
 	}
 
-	if (!bIsPlayerInventory || bExternalByType)
+	if (!bIsPlayerInventory)
 	{
 		OpenExternalContainerGuid = RootGuid;
 		OnViewContentsExternal.Broadcast(RootGuid);
@@ -5723,6 +5751,11 @@ void FACESession::HandleCloseGroundContainer(FACEBinaryReader& Reader)
 
 void FACESession::ClearContainerContents(int32 ContainerGuid)
 {
+	// A bag contents packet can precede ownership at login. Dismissing that
+	// presentation must not discard the now-owned bag's authoritative item list.
+	if (PlayerGuid && ResolveContainerRoot(ContainerGuid) == PlayerGuid) {ReconcileOpenContainerOwnership();return;}
+	// Presentation closure must also end local access without a server close.
+	if (OpenExternalContainerGuid == ContainerGuid) OpenExternalContainerGuid = 0;
 	if (ContainerGuid != 0)
 	{
 		TArray<FACEContainerItemRef> Contents;
@@ -5820,6 +5853,7 @@ void FACESession::HandleApproachVendor(FACEBinaryReader& Reader)
 		Obj.ItemUseable = Decoded.ItemUseable;
 		Obj.TargetType = Decoded.TargetType;
 		Obj.MaterialType = Decoded.MaterialType;
+		Obj.SalvageWorkmanship = Decoded.SalvageWorkmanship;
 		Obj.ValidLocations = static_cast<int64>(Decoded.ValidLocations);
 		Obj.ObjectDescriptionFlags = Decoded.ObjectDescriptionFlags;
 		Obj.PetOwnerId = Decoded.PetOwnerId;
@@ -6281,6 +6315,33 @@ void FACESession::ApplyPlayerInventoryProfile()
     LoginEquipment.Reset();
 }
 
+int32 FACESession::ResolveContainerRoot(int32 ContainerGuid) const
+{
+	TSet<int32> Seen;
+	while (ContainerGuid && !Seen.Contains(ContainerGuid) && Seen.Num() < 64)
+	{
+		if (PlayerGuid && ContainerGuid == PlayerGuid) return PlayerGuid;
+		Seen.Add(ContainerGuid);
+		int32 Parent = 0;
+		if (const auto* Object = WorldObjects.Find(ContainerGuid)) Parent = Object->ContainerId;
+		if (!Parent) for (const auto& List : ContainerContents)
+			if (List.Key != ContainerGuid && List.Value.ContainsByPredicate([&](const FACEContainerItemRef& Ref){return Ref.ItemGuid == ContainerGuid;}))
+			{Parent = List.Key;break;}
+		if (!Parent) break;
+		ContainerGuid = Parent;
+	}
+	return ContainerGuid;
+}
+
+void FACESession::ReconcileOpenContainerOwnership()
+{
+	if (!OpenExternalContainerGuid || !PlayerGuid || ResolveContainerRoot(OpenExternalContainerGuid) != PlayerGuid) return;
+	const int32 OldContainer = OpenExternalContainerGuid;
+	OpenExternalContainerGuid = 0;
+	// ClearContainerContents preserves owned lists if the UI close calls it.
+	OnCloseGroundContainer.Broadcast(OldContainer);
+}
+
 void FACESession::RestampContainerListPlacements(int32 ContainerGuid)
 {
 	TArray<FACEContainerItemRef>* Contents = ContainerContents.Find(ContainerGuid);
@@ -6306,6 +6367,7 @@ void FACESession::RestampContainerListPlacements(int32 ContainerGuid)
             Obj->ParentLocation = 0;
         }
 	}
+	ReconcileOpenContainerOwnership();
 }
 
 void FACESession::ApplyPropertyDataID(int32 ObjectGuid, uint32 PropertyId, uint32 Value)
@@ -6814,6 +6876,11 @@ void FACESession::HandleUpdatePropertyBool(FACEBinaryReader& Reader, bool bPubli
 	const int32 Guid = bPublic ? int32(Reader.ReadUInt32()) : PlayerGuid;
 	const uint32 Property = Reader.ReadUInt32();
 	const bool Value = Reader.ReadUInt32() != 0;
+	if (Guid == PlayerGuid)
+	{
+		PlayerVitals.QualityBools.Add(static_cast<int32>(Property), Value);
+		NotifyVitalsChanged();
+	}
 	FACEWorldObject* Object = WorldObjects.Find(Guid);
 	if (!Object) return;
 	// ACCWeenieObject::OnStatUpdated(bool): flags are live qualities, independent
@@ -6824,6 +6891,7 @@ void FACESession::HandleUpdatePropertyBool(FACEBinaryReader& Reader, bool bPubli
 	{
 	case 1: Mask = ACEObjectDescFlag::Stuck; break;
 	case 3: Mask = ACEObjectDescFlag::Openable; Enabled = !Value; break;
+	case 19: Mask = ACEObjectDescFlag::Attackable; break;
 	case 22: Mask = 2; break; // Inscribable
 	case 24: Mask = ACEObjectDescFlag::UiHidden; break;
 	case 25: Mask = ACEObjectDescFlag::ImmuneCellRestrictions; break;
@@ -6833,6 +6901,14 @@ void FACESession::HandleUpdatePropertyBool(FACEBinaryReader& Reader, bool bPubli
 	const int32 Flags = Enabled ? Object->ObjectDescriptionFlags | Mask : Object->ObjectDescriptionFlags & ~Mask;
 	if (Flags == Object->ObjectDescriptionFlags) return;
 	Object->ObjectDescriptionFlags = Flags;
+	// An explicit server change from enemy to noncombat NPC is a role change,
+	// unlike a late Ready motion from the defeated incarnation.
+	if (Property == 19 && !Value && Object->bDying && !Object->IsCorpse() && (Object->ItemUseable & 0x20) != 0)
+	{
+		Object->bDying = false;
+		Object->InitialMotionCommand = ACEMotion::Ready;
+		Object->InitialMotionStyle = ACEMotion::StanceNonCombat;
+	}
 	if (Object->ContainerId || Object->WielderId == PlayerGuid) ++InventoryDataRevision;
 	FACEWorldObject Update = *Object; Update.bAppearanceOnlyUpdate = true;
 	OnObjectCreated.Broadcast(Update);
@@ -6854,6 +6930,11 @@ void FACESession::HandlePublicUpdatePropertyInt(FACEBinaryReader& Reader)
 	const int32 Guid = static_cast<int32>(Reader.ReadUInt32());
 	const uint32 Prop = Reader.ReadUInt32();
 	const int32 Value = Reader.ReadInt32();
+	if (Guid == PlayerGuid)
+	{
+		PlayerVitals.StatQualityInts.Add(static_cast<int32>(Prop), Value);
+		if (Prop != 134) NotifyVitalsChanged();
+	}
 	if (Prop == 134)
 	{
 		ApplyPlayerKillerStatus(Guid, Value);
@@ -6909,6 +6990,10 @@ void FACESession::HandlePublicUpdatePropertyInt(FACEBinaryReader& Reader)
 		else if (Prop == 92) // PropertyInt.Structure
 		{
 			Obj->Structure = Value;
+		}
+		else if (Prop == 95) // PropertyInt.RadarBlipColor (e.g. advocate items).
+		{
+			Obj->RadarBlipColor = static_cast<uint8>(Value);
 		}
 		else if (Prop == 131) // PropertyInt.MaterialType
 		{

@@ -207,7 +207,19 @@ void UACEUICharGenBinder::RefreshSkills()
         if(Id<0){const TCHAR* Names[]={TEXT("Unusable Untrained"),TEXT("Usable Untrained"),TEXT("Trained"),TEXT("Specialized")};Label(Child(Row,0x100002f6),Names[-Id-1]);Label(Child(Row,0x100002f7),TEXT("Level"));continue;}
         auto& S=Model.Skills[Id];uint32 Level=Model.Selection.Skills[Id];auto Cost=Model.SkillCost(Id);int Up=Level==1?Cost.X:Cost.Y-Cost.X;
         Label(Child(Row,0x10000301),S.Name);Label(Child(Row,0x10000302),FString::FromInt(Model.SkillValue(Id)));Label(Child(Row,0x10000303),Level==3?TEXT("0"):Up>=0&&Up<999?FString::FromInt(Up):TEXT(""));Label(Child(Row,0x10000306),Level>=2?FString::FromInt(Level==3?Cost.Y-Cost.X:Cost.X):TEXT("0"));
-        if(auto E=Child(Row,0x10000300))E->ImageFileId=S.Icon;
+        if(auto E=Child(Row,0x10000300))
+        {
+            E->ImageFileId=S.Icon;
+            // SkillTable icons are 16px, unlike the authored 26px widget art.
+            // Graphic::Draw tiles images across a larger region; retain the row
+            // spacing but give this replacement image one centered native tile.
+            if(auto* Icon=Client->GetUIResourceResolver()->ResolveTexture(S.Icon))
+            {
+                E->Width=E->AuthoredWidth=FMath::Min(26,Icon->GetSizeX());
+                E->Height=E->AuthoredHeight=FMath::Min(26,Icon->GetSizeY());
+                E->X=(26-E->Width)/2;E->Y=(26-E->Height)/2;
+            }
+        }
         if(auto E=Child(Row,0x10000304)){E->bActivatable=Level<3&&Up>=0&&Up<=Model.SkillCredits();E->bUseExplicitState=true;E->DefaultState=E->bActivatable?0x1000001b:0x1000001a;}
         if(auto E=Child(Row,0x10000305)){E->bActivatable=Level==3||(Level==2&&Cost.X>0);E->bUseExplicitState=true;E->DefaultState=E->bActivatable?0x1000001b:0x1000001a;}
         Row->DefaultState=SelectedSkill==Id?6:1;

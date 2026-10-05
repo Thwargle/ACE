@@ -1,0 +1,875 @@
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+#include "Misc/FileHelper.h"
+#include "Interfaces/IPluginManager.h"
+#include "Serialization/JsonSerializer.h"
+#include "Mods/ACEPluginVM.h"
+#include "Mods/ACEPluginSubsystem.h"
+#include "Mods/ACEVTProfile.h"
+#include "ACEClientSubsystem.h"
+#include "ACESession.h"
+#include "Engine/GameInstance.h"
+#include "Misc/ScopeExit.h"
+
+namespace
+{
+    TSharedPtr<FJsonObject> ParseUCM(const TCHAR* S)
+    {TSharedPtr<FJsonObject> O;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(S),O);return O;}
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMBuffMarginTest,"ACE.Plugins.BuffSkillMargin",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMBuffMarginTest::RunTest(const FString&)
+{
+    FString Source,Error;
+    FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    // Exercise the actual policy, including the distinct imported buff margin.
+    // Spell IDs are deliberately unordered: difficulty determines the tier.
+    for(int32 School:{2,3,4})for(const auto& Case:TArray<FIntVector>{{200,150,50},{200,30,100},{200,0,200},{230,30,200},{229,30,100},{330,30,300}})
+    {
+        FACEPluginVM VM;
+        if(!TestTrue(TEXT("Buff policy loads"),VM.Load(Source,Error)))return false;
+        auto S=ParseUCM(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"action_serial":0,"action_error":0,"enchantments":[],"trained_skills":[],"targets":[],"inventory":[{"id":99,"type":32768,"equipped":true,"identified":true,"can_wield":true}]})"));
+        auto P=ParseUCM(TEXT(R"({"initial_state":"Default","states":[{"name":"Default"}],"buffing":true,"recovery":false,"combat":"off","skill_margin":500})"));
+        P->SetNumberField(TEXT("buff_skill_margin"),Case.Y);
+        TArray<TSharedPtr<FJsonValue>> Spells;
+        for(int32 Power:{300,50,200,100})
+        {
+            auto Spell=ParseUCM(TEXT(R"({"category":1,"duration":300,"self_buff":true,"beneficial":true,"known":true})"));
+            Spell->SetNumberField(TEXT("id"),1000-Power);Spell->SetNumberField(TEXT("power"),Power);
+            Spell->SetNumberField(TEXT("school"),School);Spell->SetNumberField(TEXT("skill"),Case.X);
+            Spells.Add(MakeShared<FJsonValueObject>(Spell));
+        }
+        S->SetArrayField(TEXT("spells"),Spells);
+        TSharedPtr<FJsonObject> Intent;
+        if(!TestTrue(*Error,VM.Step(S,P,Intent,Error))||!Intent)return false;
+        TestEqual(*FString::Printf(TEXT("School %d skill %d buffer %d selects strongest qualifying tier"),School,Case.X,Case.Y),Intent->GetNumberField(TEXT("spell")),double(1000-Case.Z));
+        // Profiles without a dedicated buff margin retain the existing fallback.
+        FACEPluginVM Legacy;Legacy.Load(Source,Error);
+        P->RemoveField(TEXT("buff_skill_margin"));P->SetNumberField(TEXT("skill_margin"),Case.Y);
+        if(TestTrue(TEXT("Legacy margin policy runs"),Legacy.Step(S,P,Intent,Error))&&Intent)
+            TestEqual(TEXT("Legacy shared margin produces the same buff tier"),Intent->GetNumberField(TEXT("spell")),double(1000-Case.Z));
+    }
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMRouteJoinTest,"ACE.Plugins.RouteJoin",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMRouteJoinTest::RunTest(const FString&)
+{
+    FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    auto Snapshot=[](){return ParseUCM(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"nearest":0,"ready":true,"busy":false,"action_serial":0,"action_error":0,"container":0,"position":{"cell":2103705613,"x":90,"y":97,"z":12},"spells":[],"targets":[],"inventory":[]})"));};
+    auto Profile=[](){return ParseUCM(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","navigation":true,"route":[{"cell":2103705613,"x":0,"y":97,"z":12},{"cell":2103705613,"x":40,"y":97,"z":12},{"cell":2103705613,"x":100,"y":97,"z":12},{"cell":2103705613,"x":150,"y":97,"z":12}]})"));};
+    auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+    for(int Heading:{0,90,180,270})
+    {
+        FACEPluginVM VM;TestTrue(TEXT("Route policy loads"),VM.Load(Source,Error));auto S=Snapshot(),P=Profile();S->SetNumberField(TEXT("heading"),Heading);
+        auto I=Step(VM,S,P);TestEqual(TEXT("Start approaches closest waypoint regardless of camera/heading"),I->GetNumberField(TEXT("x")),100.);
+        TestEqual(TEXT("Overlay receives chosen route index"),I->GetNumberField(TEXT("route_point")),3.);
+        S->GetObjectField(TEXT("position"))->SetNumberField(TEXT("x"),40);
+        TestEqual(TEXT("Movement or combat detours do not continually reselect nearest point"),Step(VM,S,P)->GetNumberField(TEXT("x")),100.);
+        S->GetObjectField(TEXT("position"))->SetNumberField(TEXT("x"),100);Step(VM,S,P);
+        TestEqual(TEXT("After joining follows the next ordered point"),Step(VM,S,P)->GetNumberField(TEXT("x")),150.);
+        P->SetNumberField(TEXT("vt_revision"),1);P->SetStringField(TEXT("vt_loaded_kind"),TEXT("nav"));S->GetObjectField(TEXT("position"))->SetNumberField(TEXT("x"),3);
+        TestEqual(TEXT("Newly loaded route selects nearest again"),Step(VM,S,P)->GetNumberField(TEXT("x")),0.);
+    }
+    for(bool Reverse:{false,true})
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("loop_route"),true);P->SetBoolField(TEXT("reverse_route"),Reverse);
+        S->GetObjectField(TEXT("position"))->SetNumberField(TEXT("x"),150);Step(VM,S,P);
+        TestEqual(TEXT("Joining final point retains loop or reverse semantics"),Step(VM,S,P)->GetNumberField(TEXT("x")),Reverse?100.:0.);
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Point=P->GetArrayField(TEXT("route"))[1]->AsObject();Point->SetNumberField(TEXT("x"),90);Point->SetNumberField(TEXT("z"),50);
+        TestEqual(TEXT("Nearest includes height instead of choosing another floor"),Step(VM,S,P)->GetNumberField(TEXT("x")),100.);
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Pos=S->GetObjectField(TEXT("position"));Pos->SetNumberField(TEXT("x"),190);
+        auto Point=P->GetArrayField(TEXT("route"))[3]->AsObject();Point->SetNumberField(TEXT("cell"),2103705613u+0x1000000u);Point->SetNumberField(TEXT("x"),1);
+        TestEqual(TEXT("Outdoor route joins across landblocks in world coordinates"),Step(VM,S,P)->GetNumberField(TEXT("cell")),double(2103705613u+0x1000000u));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Pos=S->GetObjectField(TEXT("position"));Pos->SetNumberField(TEXT("cell"),0x01430171);Pos->SetNumberField(TEXT("x"),49);Pos->SetNumberField(TEXT("y"),-75);Pos->SetNumberField(TEXT("z"),0);
+        P->SetArrayField(TEXT("route"),ParseUCM(TEXT(R"({"route":[{"cell":2116833,"x":49,"y":20,"z":0,"legacy":true,"walk_first":true},{"cell":2113537,"x":49,"y":120,"z":0,"legacy":true,"walk_first":true}]})"))->GetArrayField(TEXT("route")));
+        // Imported NAV stores absolute coordinates even when a dungeon extends
+        // beyond its nominal block. 0x01420001 + y=120 is local y=-72 in 0x0143.
+        P->GetArrayField(TEXT("route"))[0]->AsObject()->SetNumberField(TEXT("cell"),0x01430001);
+        P->GetArrayField(TEXT("route"))[1]->AsObject()->SetNumberField(TEXT("cell"),0x01420001);
+        TestEqual(TEXT("Imported negative dungeon coordinates choose correct anchor"),Step(VM,S,P)->GetNumberField(TEXT("y")),120.);
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();S->GetObjectField(TEXT("position"))->SetNumberField(TEXT("cell"),0x01430171);
+        TestEqual(TEXT("Different native dungeon does not send player to unrelated start"),Step(VM,S,P)->GetStringField(TEXT("status")),FString(TEXT("No route waypoint in this area")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Point=P->GetArrayField(TEXT("route"))[2]->AsObject();Point->SetStringField(TEXT("kind"),TEXT("jump"));Point->SetNumberField(TEXT("charge"),.8);
+        TestEqual(TEXT("Join approaches jump launch point first"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("move")));
+        S->GetObjectField(TEXT("position"))->SetNumberField(TEXT("x"),100);
+        TestEqual(TEXT("Join retains launch action"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("jump")));
+        S->SetNumberField(TEXT("time"),104);S->SetBoolField(TEXT("jumping"),false);
+        Step(VM,S,P);TestEqual(TEXT("Landing continues forward instead of rejoining launch"),Step(VM,S,P)->GetNumberField(TEXT("x")),150.);
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Point=P->GetArrayField(TEXT("route"))[1]->AsObject();Point->SetBoolField(TEXT("legacy"),true);Point->SetBoolField(TEXT("walk_first"),false);Point->SetStringField(TEXT("kind"),TEXT("jump"));Point->SetNumberField(TEXT("x"),90);
+        TestEqual(TEXT("Imported action placeholder is not a join destination"),Step(VM,S,P)->GetNumberField(TEXT("x")),100.);
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();TArray<TSharedPtr<FJsonValue>> Points;
+        for(int I=0;I<2048;++I){auto Point=ParseUCM(TEXT(R"({"cell":2103705613,"x":0,"y":97,"z":12})"));Point->SetNumberField(TEXT("x"),I);Points.Add(MakeShared<FJsonValueObject>(Point));}P->SetArrayField(TEXT("route"),Points);S->GetObjectField(TEXT("position"))->SetNumberField(TEXT("x"),2000.5);
+        TSharedPtr<FJsonObject> I;for(int Tick=0;Tick<10;++Tick){I=Step(VM,S,P);if(I->GetStringField(TEXT("status"))!=TEXT("Finding nearest route waypoint"))break;}
+        TestEqual(TEXT("Maximum route joins without exceeding instruction budget"),I->GetNumberField(TEXT("route_point")),2002.);
+    }
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMPolicyTest,"ACE.Plugins.Decisions",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMPolicyTest::RunTest(const FString&)
+{
+    FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    auto Snapshot=[](){return ParseUCM(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"nearest":0,"ready":true,"busy":false,"action_serial":0,"action_error":0,"container":0,"position":{"cell":2103705613,"x":25,"y":97,"z":12},"spells":[],"enchantments":[],"trained_skills":[],"targets":[],"inventory":[{"id":99,"wcid":99,"name":"Orb","type":32768,"equipped":true,"identified":true,"can_wield":true,"count":1}]})"));};
+    auto Profile=[](){return ParseUCM(TEXT(R"({"initial_state":"Default","states":[{"name":"Default"}],"buffing":false,"recovery":false,"combat":"off","skill_margin":30})"));};
+    auto Array=[](auto O,const TCHAR* Key,const TCHAR* Entries){O->SetArrayField(Key,ParseUCM(Entries)->GetArrayField(TEXT("values")));};
+    auto Check=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;const bool OK=VM.Step(S,P,I,Error);TestTrue(*Error,OK);return I?I:MakeShared<FJsonObject>();};
+    auto Start=[&](FACEPluginVM& VM){TestTrue(TEXT("Policy loads"),VM.Load(Source,Error));};
+    for(bool Navigation:{false,true})for(bool Priority:{false,true})
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
+        P->SetStringField(TEXT("combat"),TEXT("magic"));P->SetBoolField(TEXT("idle_peace"),true);P->SetBoolField(TEXT("navigation"),Navigation);P->SetBoolField(TEXT("nav_priority"),Priority);
+        S->SetNumberField(TEXT("combat_mode"),8);
+        Array(P,TEXT("route"),TEXT(R"({"values":[{"cell":2103705613,"x":25,"y":105,"z":12}]})"));
+        auto I=Check(VM,S,P);TestEqual(TEXT("Idle peace works with route and navigation priority"),I->GetStringField(TEXT("action")),FString(TEXT("combat_mode")));TestEqual(TEXT("Idle stance is peace"),I->GetNumberField(TEXT("mode")),1.);
+        S->SetNumberField(TEXT("combat_mode"),1);I=Check(VM,S,P);
+        TestFalse(TEXT("Confirmed peace does not repeatedly request stance changes"),I->GetStringField(TEXT("action"))==TEXT("combat_mode"));
+        if(Navigation)TestEqual(TEXT("Walking resumes after switching to peace"),I->GetStringField(TEXT("action")),FString(TEXT("move")));
+        P->SetBoolField(TEXT("nav_priority"),false);
+        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":201,"category":117,"power":100,"skill":300,"school":4}]})"));
+        Array(S,TEXT("targets"),TEXT(R"({"values":[{"id":500,"name":"Rat","distance":10,"identified":true,"line_of_sight":true}]})"));
+        I=Check(VM,S,P);TestEqual(TEXT("New nearby target produces a magic cast from peace mode"),I->GetStringField(TEXT("action")),FString(TEXT("cast")));
+        // Native cast dispatch enters magic mode; simulate its optimistic mode
+        // update and server cast completion before the target disappears.
+        S->SetNumberField(TEXT("combat_mode"),8);S->SetNumberField(TEXT("action_serial"),1);S->SetNumberField(TEXT("last_spell"),201);S->SetArrayField(TEXT("targets"),{});
+        TestEqual(TEXT("Target loss cancels attack before resting"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("cancel_attack")));
+        TestEqual(TEXT("Returns to peace after the target is gone"),Check(VM,S,P)->GetNumberField(TEXT("mode")),1.);
+        P->SetBoolField(TEXT("idle_peace"),false);I=Check(VM,S,P);
+        TestFalse(TEXT("Toggle off leaves current stance alone"),I->GetStringField(TEXT("action"))==TEXT("combat_mode"));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("idle_peace"),true);P->SetBoolField(TEXT("looting"),true);S->SetNumberField(TEXT("combat_mode"),8);
+        Array(P,TEXT("loot_rules"),TEXT(R"({"values":[{"action":"keep"}]})"));
+        Array(S,TEXT("corpses"),TEXT(R"({"values":[{"id":700,"name":"Corpse","distance":5,"line_of_sight":true}]})"));
+        TestEqual(TEXT("Idle peace does not force stance change before corpse looting"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("open_corpse")));
+        S->SetBoolField(TEXT("busy"),true);TestFalse(TEXT("Idle toggle does not interrupt pending game action"),Check(VM,S,P)->HasField(TEXT("action")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
+        P->SetStringField(TEXT("combat"),TEXT("missile"));P->SetBoolField(TEXT("navigation"),true);P->SetNumberField(TEXT("monster_attempts"),1);P->SetNumberField(TEXT("monster_blacklist_seconds"),120);
+        Array(P,TEXT("route"),TEXT(R"({"values":[{"cell":2103705613,"x":25,"y":105,"z":12}]})"));
+        Array(S,TEXT("inventory"),TEXT(R"({"values":[{"id":50,"name":"Thrown weapon","type":256,"identified":true,"can_wield":true,"equipped":true,"damage":20}]})"));
+        Array(S,TEXT("targets"),TEXT(R"({"values":[{"id":500,"name":"Wasp","distance":20,"identified":true,"line_of_sight":true}]})"));
+        TestEqual(TEXT("Unhittable policy starts with an ordinary attack"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+        Array(S,TEXT("combat_events"),TEXT(R"({"values":[{"serial":1,"target":500,"hit":false}]})"));
+        TestEqual(TEXT("Exactly the failure limit still permits a retry"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+        TestEqual(TEXT("Old outcomes are not counted twice"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+        Array(S,TEXT("combat_events"),TEXT(R"({"values":[{"serial":2,"target":500,"hit":true},{"serial":3,"target":500,"hit":false}]})"));
+        TestEqual(TEXT("An actual damage hit clears previous environment failures"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+        Array(S,TEXT("combat_events"),TEXT(R"({"values":[{"serial":4,"target":500,"hit":false}]})"));
+        TestEqual(TEXT("Exceeding failure limit cancels a repeating attack"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("cancel_attack")));
+        TestEqual(TEXT("Blacklisted target yields to navigation"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("move")));
+        S->SetNumberField(TEXT("time"),219);TestEqual(TEXT("Target remains excluded before expiry"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("move")));
+        S->SetNumberField(TEXT("time"),220);TestEqual(TEXT("Exact timeout re-enables the target"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+        Array(S,TEXT("combat_events"),TEXT(R"({"values":[{"serial":5,"target":500,"hit":false}]})"));Check(VM,S,P);
+        auto Targets=S->GetArrayField(TEXT("targets"));S->SetArrayField(TEXT("targets"),{});Check(VM,S,P);S->SetArrayField(TEXT("targets"),Targets);
+        Array(S,TEXT("combat_events"),TEXT(R"({"values":[{"serial":6,"target":500,"hit":false}]})"));
+        TestEqual(TEXT("Leaving awareness clears failure history for reused IDs"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+        Array(S,TEXT("combat_events"),TEXT(R"({"values":[{"serial":7,"target":500,"hit":false,"unhittable":true}]})"));
+        TestEqual(TEXT("Permanent spell target failure bypasses retry threshold"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("cancel_attack")));
+        TestEqual(TEXT("Permanent spell failure lets the route continue"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("move")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("dispel_items"),true);
+        Array(S,TEXT("inventory"),TEXT(R"({"values":[{"id":80,"name":"Chocolate Gromnie","usable":true,"count":5},{"id":81,"name":"Society Gem of Dispelling","usable":true,"count":5,"int_properties":{"280":222}}]})"));
+        Array(S,TEXT("harmful_enchantments"),TEXT(R"({"values":[{"id":77,"category":102,"power":400,"remaining":100}]})"));
+        TestEqual(TEXT("350-power supply is skipped for a 400-power vulnerability"),Check(VM,S,P)->GetNumberField(TEXT("item")),81.);
+        S->SetNumberField(TEXT("action_serial"),1);
+        TestFalse(TEXT("UseDone alone does not authorize another dispel"),Check(VM,S,P)->HasField(TEXT("item")));
+        S->SetArrayField(TEXT("harmful_enchantments"),{});
+        TestFalse(TEXT("Confirmed removal completes dispel without using another supply"),Check(VM,S,P)->HasField(TEXT("item")));
+        Array(S,TEXT("harmful_enchantments"),TEXT(R"({"values":[{"id":78,"category":116,"power":100,"remaining":100}]})"));
+        TestFalse(TEXT("Imperil alone is not VT's elemental-vulnerability trigger"),Check(VM,S,P)->HasField(TEXT("item")));
+        Array(S,TEXT("harmful_enchantments"),TEXT(R"({"values":[{"id":79,"category":104,"power":300,"remaining":100}]})"));
+        S->SetObjectField(TEXT("cooldowns"),ParseUCM(TEXT(R"({"222":30})")));
+        TestEqual(TEXT("Cooling-down gem falls back to eligible chocolate"),Check(VM,S,P)->GetNumberField(TEXT("item")),80.);
+        S->SetNumberField(TEXT("time"),109);
+        TestFalse(TEXT("Missing effect removal does not rapidly consume supplies"),Check(VM,S,P)->HasField(TEXT("item")));
+        S->SetNumberField(TEXT("time"),124);
+        TestEqual(TEXT("Unconfirmed dispel can retry after bounded backoff"),Check(VM,S,P)->GetNumberField(TEXT("item")),80.);
+        FACEPluginVM Caster;Start(Caster);P->SetBoolField(TEXT("dispel_items"),false);P->SetBoolField(TEXT("dispel_self"),true);
+        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":2500,"category":250,"school":2,"power":350,"skill":500,"caster_target":true,"beneficial":true}]})"));
+        Array(S,TEXT("inventory"),TEXT(R"({"values":[{"id":99,"name":"Orb","type":32768,"equipped":true,"identified":true,"can_wield":true}]})"));
+        TestFalse(TEXT("Self dispel requires Chorizite even with enough casting skill"),Check(Caster,S,P)->HasField(TEXT("spell")));
+        auto Items=S->GetArrayField(TEXT("inventory"));Items.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":100,"name":"Chorizite","count":5})"))));S->SetArrayField(TEXT("inventory"),Items);
+        TestEqual(TEXT("Eligible Life self dispel uses the player target"),Check(Caster,S,P)->GetNumberField(TEXT("target")),1.);
+    }
+    {
+        // One continuous run crosses activity boundaries. Isolated policy tests
+        // missed lost final-item acknowledgements and routes starved by looting.
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
+        P->SetBoolField(TEXT("buffing"),true);P->SetBoolField(TEXT("navigation"),true);P->SetBoolField(TEXT("looting"),true);P->SetStringField(TEXT("combat"),TEXT("magic"));
+        Array(P,TEXT("route"),TEXT(R"({"values":[{"cell":2103705613,"x":25,"y":110,"z":12}]})"));
+        Array(P,TEXT("loot_rules"),TEXT(R"({"values":[{"action":"salvage","min_workmanship":7}]})"));
+        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":11,"category":1,"power":100,"skill":300,"school":4,"duration":300,"self_buff":true},{"id":12,"category":102,"power":100,"skill":300,"school":2,"duration":300,"self_buff":true},{"id":13,"category":154,"power":100,"skill":300,"school":3,"duration":300,"beneficial":true,"target_type":1},{"id":201,"category":117,"power":100,"skill":300,"school":4},{"id":202,"category":121,"power":200,"skill":300,"school":4}]})"));
+        Array(S,TEXT("targets"),TEXT(R"({"values":[{"id":500,"name":"Monster","distance":20,"identified":true,"line_of_sight":false,"resists":{"8":0.1,"32":1.5}}]})"));
+        TArray<TSharedPtr<FJsonValue>> Confirmed;int Serial=0;
+        for(int Spell:{11,12,13})
+        {
+            auto I=Check(VM,S,P);TestEqual(TEXT("Integrated run casts creature/life/item buffs before hunting"),I->GetNumberField(TEXT("spell")),double(Spell));
+            auto Buff=ParseUCM(TEXT(R"({"target":1,"power":100,"expires":1000})"));Buff->SetNumberField(TEXT("category"),Spell==11?1:Spell==12?102:154);Confirmed.Add(MakeShared<FJsonValueObject>(Buff));S->SetArrayField(TEXT("item_buffs"),Confirmed);
+            S->SetNumberField(TEXT("action_serial"),++Serial);S->SetNumberField(TEXT("last_spell"),Spell);S->SetNumberField(TEXT("time"),100+Serial*4);
+        }
+        TestEqual(TEXT("Integrated run follows route past an occluded monster"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("move")));
+        S->GetArrayField(TEXT("targets"))[0]->AsObject()->SetBoolField(TEXT("line_of_sight"),true);
+        TestEqual(TEXT("Integrated run chooses damage by resistance, not spell tier alone"),Check(VM,S,P)->GetNumberField(TEXT("spell")),201.);
+        S->SetNumberField(TEXT("action_serial"),++Serial);S->SetNumberField(TEXT("last_spell"),201);S->SetArrayField(TEXT("targets"),{});
+        Array(S,TEXT("corpses"),TEXT(R"({"values":[{"id":700,"name":"Corpse","distance":5,"line_of_sight":true}]})"));
+        TestEqual(TEXT("Death cancels combat before looting"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("cancel_attack")));
+        TestEqual(TEXT("Hunt opens the resulting corpse"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("open_corpse")));
+        S->SetNumberField(TEXT("container"),700);S->SetBoolField(TEXT("container_is_corpse"),true);S->SetBoolField(TEXT("contents_ready"),true);
+        Array(S,TEXT("contents"),TEXT(R"({"values":[{"id":701,"wcid":701,"name":"Copper Ring","count":1,"identified":false}]})"));
+        TestEqual(TEXT("Appraises loot before applying workmanship rule"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("identify")));
+        auto Ring=S->GetArrayField(TEXT("contents"))[0]->AsObject();Ring->SetBoolField(TEXT("identified"),true);Ring->SetNumberField(TEXT("workmanship"),8);
+        TestEqual(TEXT("Matching appraised item is looted"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("loot")));
+        auto Items=S->GetArrayField(TEXT("inventory"));Items.Add(MakeShared<FJsonValueObject>(Ring));Items.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":9,"wcid":9,"name":"Ust","count":1,"object_class":40})"))));S->SetArrayField(TEXT("inventory"),Items);
+        S->SetNumberField(TEXT("container"),0);S->SetArrayField(TEXT("contents"),{});
+        TestEqual(TEXT("Auto-closed corpse preserves the queued salvage action"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("salvage")));
+        Items.RemoveAt(1);S->SetArrayField(TEXT("inventory"),Items);
+        TestEqual(TEXT("Completed hunt resumes its original route without reopening corpse"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("move")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("buffing"),true);
+        Array(S,TEXT("usable_skills"),TEXT(R"({"values":[24]})"));
+        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":77,"category":77,"power":100,"skill":300,"school":4,"duration":300,"self_buff":true}]})"));
+        TestEqual(TEXT("Innate usable Run skill receives its buff without being trained"),Check(VM,S,P)->GetNumberField(TEXT("spell")),77.);
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
+        P->SetBoolField(TEXT("buffing"),true);P->SetBoolField(TEXT("auto_buffs"),false);P->SetBoolField(TEXT("buff_others"),true);
+        S->SetObjectField(TEXT("buff_request"),ParseUCM(TEXT(R"({"id":1,"player":2,"name":"Visitor","role":"mage","present":true,"distance":5,"expires":1000})")));
+        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":11,"name":"Strength Other","category":1,"power":100,"skill":300,"school":4,"duration":300,"beneficial":true}]})"));
+        for(int Attempt=0;Attempt<3;++Attempt)
+        {
+            S->SetNumberField(TEXT("time"),100+Attempt*16);
+            TestEqual(TEXT("Missing acknowledgement retries the requested buff with a bound"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("cast")));
+            TestFalse(TEXT("A retry waits for acknowledgement instead of flooding casts"),Check(VM,S,P)->HasField(TEXT("action")));
+        }
+        S->SetNumberField(TEXT("time"),148);auto I=Check(VM,S,P);
+        TestEqual(TEXT("Three missing acknowledgements release the request queue"),I->GetStringField(TEXT("action")),FString(TEXT("buff_request_done")));
+        TestTrue(TEXT("Missing acknowledgements never count as a successful buff"),I->GetStringField(TEXT("status")).Contains(TEXT("0 buffs confirmed")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
+        P->SetBoolField(TEXT("navigation"),true);P->SetNumberField(TEXT("waypoint_radius"),.2);
+        Array(P,TEXT("route"),TEXT(R"({"values":[{"cell":2103705613,"x":26,"y":97,"z":12}]})"));
+        auto I=Check(VM,S,P);TestEqual(TEXT("Host receives the profile's tight arrival tolerance"),I->GetNumberField(TEXT("arrival_radius")),.2);
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("navigation"),true);
+        Array(P,TEXT("route"),TEXT(R"({"values":[{"cell":2103705613,"x":25,"y":97,"z":12,"kind":"command","command":{"op":"forcebuff","value":true}}]})"));
+        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":11,"category":1,"power":100,"skill":300,"school":4,"duration":300,"self_buff":true}]})"));
+        Array(S,TEXT("enchantments"),TEXT(R"({"values":[{"category":1,"power":100,"remaining":1000}]})"));
+        Check(VM,S,P);auto I=Check(VM,S,P);
+        TestEqual(TEXT("Imported forcebuff commands also ignore fresh timers"),I->GetNumberField(TEXT("spell")),11.);
+        S->SetNumberField(TEXT("action_serial"),1);S->SetNumberField(TEXT("last_spell"),11);I=Check(VM,S,P);
+        TestEqual(TEXT("Imported forced cycle terminates after confirmation"),I->GetStringField(TEXT("status")),FString(TEXT("Force Buff complete")));
+        I=Check(VM,S,P);TestFalse(TEXT("Imported force command does not loop forever"),I->HasField(TEXT("action")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
+        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":11,"name":"Strength Self","category":1,"power":100,"skill":300,"school":4,"duration":300,"self_buff":true},{"id":12,"name":"Armor Self","category":102,"power":100,"skill":300,"school":2,"duration":300,"self_buff":true},{"id":13,"name":"Blood Drinker","category":154,"power":100,"skill":300,"school":3,"duration":300,"beneficial":true,"target_type":1},{"id":14,"category":3,"power":100,"skill":300,"school":4,"duration":300,"self_buff":true}]})"));
+        Array(P,TEXT("excluded_buffs"),TEXT(R"({"values":[3]})"));
+        Array(S,TEXT("enchantments"),TEXT(R"({"values":[{"category":1,"power":100,"remaining":1000},{"category":102,"power":100,"remaining":1000}]})"));
+        Array(S,TEXT("item_buffs"),TEXT(R"({"values":[{"target":1,"category":154,"power":100,"expires":2000}]})"));
+        S->SetNumberField(TEXT("force_buff_request"),1);int Serial=0;
+        for(int Id:{11,12,13})
+        {
+            auto I=Check(VM,S,P);TestEqual(TEXT("Forced cycle refreshes creature, life and item buffs despite fresh timers and Buff off"),I->GetNumberField(TEXT("spell")),double(Id));
+            TestEqual(TEXT("Forced item buffs also target the player once"),I->GetNumberField(TEXT("target")),1.);
+            I=Check(VM,S,P);TestFalse(TEXT("Old timers cannot masquerade as forced-cast completion"),I->HasField(TEXT("action")));
+            S->SetNumberField(TEXT("action_serial"),++Serial);S->SetNumberField(TEXT("last_spell"),Id);
+        }
+        auto I=Check(VM,S,P);TestEqual(TEXT("Cycle completes once each eligible family is confirmed"),I->GetStringField(TEXT("action")),FString(TEXT("force_buff_done")));
+        TestEqual(TEXT("Completion identifies the request"),I->GetNumberField(TEXT("request")),1.);
+        S->SetNumberField(TEXT("force_buff_request"),0);I=Check(VM,S,P);TestFalse(TEXT("Returns to normal Buff-off behavior"),I->HasField(TEXT("action")));
+        S->SetNumberField(TEXT("force_buff_request"),2);I=Check(VM,S,P);TestEqual(TEXT("A later manual refresh starts a new cycle"),I->GetNumberField(TEXT("spell")),11.);
+        S->SetNumberField(TEXT("action_serial"),++Serial);S->SetNumberField(TEXT("last_spell"),11);S->SetNumberField(TEXT("action_error"),1);
+        I=Check(VM,S,P);TestFalse(TEXT("Failed casts are not counted as refreshed"),I->HasField(TEXT("action")));
+        S->SetNumberField(TEXT("time"),113);I=Check(VM,S,P);TestEqual(TEXT("Failed family retries after throttle"),I->GetNumberField(TEXT("spell")),11.);
+        S->SetNumberField(TEXT("force_buff_request"),0);I=Check(VM,S,P);TestFalse(TEXT("Cancel does not start another buff family"),I->HasField(TEXT("action")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
+        P->SetStringField(TEXT("combat"),TEXT("missile"));P->SetBoolField(TEXT("navigation"),true);
+        Array(P,TEXT("route"),TEXT(R"({"values":[{"cell":2103705613,"x":25,"y":105,"z":12}]})"));
+        Array(S,TEXT("inventory"),TEXT(R"({"values":[{"id":50,"name":"Thrown weapon","type":256,"identified":true,"can_wield":true,"equipped":true,"damage":20}]})"));
+        Array(S,TEXT("targets"),TEXT(R"({"values":[{"id":500,"name":"Wasp","distance":20,"identified":true,"line_of_sight":false,"cell":2103705613,"x":45,"y":97,"z":12}]})"));
+        auto Target=S->GetArrayField(TEXT("targets"))[0]->AsObject();
+        auto I=Check(VM,S,P);TestEqual(TEXT("Blocked monster yields to recorded route"),I->GetStringField(TEXT("action")),FString(TEXT("move")));
+        TestEqual(TEXT("Route follows its corner instead of chasing through wall"),I->GetNumberField(TEXT("y")),105.);
+        Array(S,TEXT("route_objects"),TEXT(R"({"values":[{"id":77,"object_class":26,"door_open":false,"distance":1,"cell":2103705613,"x":25,"y":98,"z":12}]})"));
+        I=Check(VM,S,P);TestEqual(TEXT("Closed door along the route is opened instead of shot through"),I->GetStringField(TEXT("action")),FString(TEXT("use_world")));
+        Target->SetBoolField(TEXT("line_of_sight"),true);
+        I=Check(VM,S,P);TestEqual(TEXT("Combat resumes when target becomes unobstructed"),I->GetStringField(TEXT("action")),FString(TEXT("attack")));
+        Target->SetBoolField(TEXT("line_of_sight"),false);
+        I=Check(VM,S,P);TestEqual(TEXT("Losing sight cancels any repeating attack"),I->GetStringField(TEXT("action")),FString(TEXT("cancel_attack")));
+        I=Check(VM,S,P);TestEqual(TEXT("Then continues walking the route"),I->GetStringField(TEXT("action")),FString(TEXT("move")));
+        Target->SetBoolField(TEXT("line_of_sight"),true);P->SetNumberField(TEXT("radius"),10);
+        I=Check(VM,S,P);TestEqual(TEXT("Global attack range stops premature firing"),I->GetStringField(TEXT("action")),FString(TEXT("move")));
+        Array(P,TEXT("monsters"),TEXT(R"({"values":[{"name":"Wasp","range":25}]})"));
+        I=Check(VM,S,P);TestEqual(TEXT("Per-monster attack range overrides global range"),I->GetStringField(TEXT("action")),FString(TEXT("attack")));
+        P->GetArrayField(TEXT("monsters"))[0]->AsObject()->SetNumberField(TEXT("range"),0);
+        I=Check(VM,S,P);TestEqual(TEXT("Zero override uses global range"),I->GetStringField(TEXT("action")),FString(TEXT("move")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
+        P->SetBoolField(TEXT("navigation"),true);P->SetBoolField(TEXT("nav_priority"),true);P->SetBoolField(TEXT("looting"),true);
+        Array(P,TEXT("route"),TEXT(R"({"values":[{"cell":2103705613,"x":25,"y":105,"z":12}]})"));
+        Array(P,TEXT("loot_rules"),TEXT(R"({"values":[{"name":"Copper","action":"keep"}]})"));
+        Array(S,TEXT("corpses"),TEXT(R"({"values":[{"id":700,"name":"Corpse","distance":8,"line_of_sight":false}]})"));
+        auto I=Check(VM,S,P);TestEqual(TEXT("Corpse behind wall does not interrupt route"),I->GetStringField(TEXT("action")),FString(TEXT("move")));
+        S->GetArrayField(TEXT("corpses"))[0]->AsObject()->SetBoolField(TEXT("line_of_sight"),true);
+        I=Check(VM,S,P);TestEqual(TEXT("Navigation priority does not starve nearby loot"),I->GetStringField(TEXT("action")),FString(TEXT("open_corpse")));
+        S->SetNumberField(TEXT("time"),103);I=Check(VM,S,P);TestFalse(TEXT("Route cannot cancel corpse approach"),I->HasField(TEXT("action")));
+        S->SetNumberField(TEXT("container"),700);S->SetBoolField(TEXT("container_is_corpse"),true);S->SetBoolField(TEXT("contents_ready"),false);
+        I=Check(VM,S,P);TestFalse(TEXT("Wait for server contents instead of closing early"),I->HasField(TEXT("action")));
+        S->SetBoolField(TEXT("contents_ready"),true);
+        Array(S,TEXT("contents"),TEXT(R"({"values":[{"id":701,"wcid":701,"name":"Copper Ring","count":1,"identified":true}]})"));
+        I=Check(VM,S,P);TestEqual(TEXT("Matching drop is collected"),I->GetStringField(TEXT("action")),FString(TEXT("loot")));
+        I=Check(VM,S,P);TestFalse(TEXT("Route waits for loot acknowledgement"),I->HasField(TEXT("action")));
+        Array(S,TEXT("inventory"),TEXT(R"({"values":[{"id":701,"wcid":701,"name":"Copper Ring","count":1}]})"));
+        S->SetArrayField(TEXT("contents"),{});I=Check(VM,S,P);
+        TestEqual(TEXT("Acknowledged loot completes corpse"),I->GetStringField(TEXT("action")),FString(TEXT("close_corpse")));
+        S->SetNumberField(TEXT("container"),0);I=Check(VM,S,P);
+        TestEqual(TEXT("Route resumes without reopening completed corpse"),I->GetStringField(TEXT("action")),FString(TEXT("move")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("buffing"),true);
+        TArray<TSharedPtr<FJsonValue>> Spells,Selected,Excluded;
+        for(int Id=1;Id<=2200;++Id)
+        {
+            auto Spell=ParseUCM(TEXT(R"({"category":1,"power":100,"skill":300,"school":4,"duration":300,"self_buff":true})"));
+            Spell->SetNumberField(TEXT("id"),Id);Spells.Add(MakeShared<FJsonValueObject>(Spell));
+            Selected.Add(MakeShared<FJsonValueNumber>(Id));Excluded.Add(MakeShared<FJsonValueNumber>(Id+10000));
+        }
+        S->SetArrayField(TEXT("spells"),Spells);P->SetArrayField(TEXT("buffs"),Selected);P->SetArrayField(TEXT("excluded_buffs"),Excluded);
+        auto I=Check(VM,S,P);TestTrue(TEXT("Large spellbook and exception lists stay within unchanged instruction budget"),I->HasField(TEXT("spell")));
+        Array(S,TEXT("enchantments"),TEXT(R"({"values":[{"category":1,"power":100,"remaining":1000}]})"));
+        I=Check(VM,S,P);TestFalse(TEXT("Next snapshot sees new enchantment; no stale buff plan"),I->HasField(TEXT("action")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
+        S->SetNumberField(TEXT("force_buff_request"),1);
+        TArray<TSharedPtr<FJsonValue>> Spells;
+        for(int Id=1;Id<=5000;++Id)
+        {
+            auto Spell=ParseUCM(TEXT(R"({"category":1,"power":100,"skill":300,"school":4,"duration":300,"self_buff":true,"known":true,"components_known":true,"scarabs":{"Scarab":1}})"));
+            Spell->SetNumberField(TEXT("id"),Id);
+            Spell->SetNumberField(TEXT("category"),700+(Id-1)%100);
+            Spell->SetNumberField(TEXT("power"),100+((Id-1)/100)%8*20);
+            Spells.Add(MakeShared<FJsonValueObject>(Spell));
+        }
+        S->SetArrayField(TEXT("spells"),Spells);
+        auto Inventory=S->GetArrayField(TEXT("inventory"));
+        Inventory.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":100,"name":"Scarab","count":100})"))));S->SetArrayField(TEXT("inventory"),Inventory);
+        auto I=Check(VM,S,P);
+        TestTrue(TEXT("Force Buff with a full supplied spellbook stays within the sandbox budget"),I->HasField(TEXT("spell")));
+        TSet<int32> Categories;
+        for(int Cycle=1;Cycle<=100&&I->HasField(TEXT("spell"));++Cycle)
+        {
+            const int Id=int(I->GetNumberField(TEXT("spell")));
+            const auto Spell=Spells[Id-1]->AsObject();const int Category=int(Spell->GetNumberField(TEXT("category")));
+            TestFalse(TEXT("Manual refresh does not repeat a completed family"),Categories.Contains(Category));Categories.Add(Category);
+            TestEqual(TEXT("Strongest supplied tier is selected"),Spell->GetNumberField(TEXT("power")),240.);
+            S->SetNumberField(TEXT("action_serial"),Cycle);S->SetNumberField(TEXT("last_spell"),Id);S->SetNumberField(TEXT("time"),100+Cycle*3);
+            I=Check(VM,S,P);
+        }
+        TestEqual(TEXT("Large-book refresh completes every family"),Categories.Num(),100);
+        TestEqual(TEXT("Large-book refresh reports completion"),I->HasField(TEXT("action"))?I->GetStringField(TEXT("action")):FString(),FString(TEXT("force_buff_done")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("buffing"),true);
+        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":10,"name":"Item mastery","category":45,"power":100,"skill":300,"school":4,"duration":300,"self_buff":true},{"id":11,"name":"Strength Self","category":1,"power":100,"skill":300,"school":4,"duration":300,"self_buff":true}]})"));
+        auto I=Check(VM,S,P);TestEqual(TEXT("Untrained skill family excluded from automatic buffs"),I->GetNumberField(TEXT("spell")),11.);
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("buffing"),true);
+        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":12,"name":"Blood Drinker","category":154,"power":100,"skill":300,"school":3,"duration":300,"beneficial":true,"target_type":1}]})"));
+        auto Items=S->GetArrayField(TEXT("inventory"));Items.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":55,"wcid":55,"name":"Sword","type":1,"equipped":false,"count":1})"))));S->SetArrayField(TEXT("inventory"),Items);
+        P->SetArrayField(TEXT("weapons"),{MakeShared<FJsonValueNumber>(55)});
+        auto I=Check(VM,S,P);TestEqual(TEXT("Weapon aura targets the player even with an explicit weapon pool"),I->GetNumberField(TEXT("target")),1.);
+        Array(S,TEXT("item_buffs"),TEXT(R"({"values":[{"target":1,"category":154,"power":100,"expires":500}]})"));
+        I=Check(VM,S,P);TestFalse(TEXT("Confirmed item buff suppresses recast"),I->HasField(TEXT("action")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("buffing"),true);
+        auto Items=S->GetArrayField(TEXT("inventory"));
+        for(int Id=100;Id<300;++Id)
+        {
+            auto Item=ParseUCM(TEXT(R"({"type":2,"equipped":true,"count":1})"));Item->SetNumberField(TEXT("id"),Id);
+            Items.Add(MakeShared<FJsonValueObject>(Item));
+        }
+        S->SetArrayField(TEXT("inventory"),Items);
+        TArray<TSharedPtr<FJsonValue>> Spells,Confirmed;
+        for(int Category:{160,162,164,166,168,170,172,174,152,154,156,158,195,695})
+        {
+            auto Spell=ParseUCM(TEXT(R"({"power":100,"skill":300,"school":3,"duration":300,"beneficial":true,"target_type":7})"));
+            Spell->SetNumberField(TEXT("id"),Category);Spell->SetNumberField(TEXT("category"),Category);
+            Spells.Add(MakeShared<FJsonValueObject>(Spell));
+        }
+        S->SetArrayField(TEXT("spells"),Spells);
+        for(const auto& Spell:Spells)
+        {
+            auto I=Check(VM,S,P);
+            TestEqual(TEXT("Each item buff family casts exactly once on the player"),I->GetNumberField(TEXT("target")),1.);
+            TestEqual(TEXT("Confirmation advances to the next family rather than another item"),I->GetNumberField(TEXT("spell")),Spell->AsObject()->GetNumberField(TEXT("id")));
+            auto E=ParseUCM(TEXT(R"({"target":1,"power":100,"expires":500})"));
+            E->SetNumberField(TEXT("category"),Spell->AsObject()->GetNumberField(TEXT("category")));Confirmed.Add(MakeShared<FJsonValueObject>(E));
+            S->SetArrayField(TEXT("item_buffs"),Confirmed);
+        }
+        auto I=Check(VM,S,P);TestFalse(TEXT("Full item-buff cycle completes despite hundreds of inventory targets"),I->HasField(TEXT("action")));
+        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":700,"category":192,"power":100,"skill":300,"school":3,"duration":300,"beneficial":true,"target_type":640}]})"));
+        I=Check(VM,S,P);TestFalse(TEXT("Lock spells are not redirected to the player"),I->HasField(TEXT("action")));
+    }
+    for(int Vital:{2,4,6})
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("recovery"),true);
+        const TCHAR* Key=Vital==2?TEXT("health"):Vital==4?TEXT("stamina"):TEXT("mana");S->SetNumberField(Key,20);
+        auto Item=ParseUCM(TEXT(R"({"id":42,"wcid":42,"name":"Supply","type":32,"usable":true,"identified":true,"boost":100,"count":10})"));Item->SetNumberField(TEXT("boost_vital"),Vital);
+        auto Items=S->GetArrayField(TEXT("inventory"));Items.Add(MakeShared<FJsonValueObject>(Item));S->SetArrayField(TEXT("inventory"),Items);
+        auto I=Check(VM,S,P);TestEqual(TEXT("Recovery uses supply for correct vital"),I->GetStringField(TEXT("action")),FString(TEXT("use_item")));
+        S->SetNumberField(TEXT("time"),102);I=Check(VM,S,P);TestFalse(TEXT("Recovery waits for actual vital update"),I->HasField(TEXT("action")));
+        S->SetNumberField(Key,100);S->SetNumberField(TEXT("action_serial"),1);I=Check(VM,S,P);TestFalse(TEXT("Recovered vital needs no more supply"),I->HasField(TEXT("action")));
+    }
+    for(bool Trained:{false,true})for(int Uses:{0,10})
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("recovery"),true);S->SetNumberField(TEXT("health"),30);
+        if(Trained)Array(S,TEXT("trained_skills"),TEXT(R"({"values":[21]})"));
+        auto Kit=ParseUCM(TEXT(R"({"id":42,"wcid":42,"name":"Kit","healing_kit":true,"usable":true,"identified":true,"boost_vital":2,"boost":100,"count":1})"));Kit->SetNumberField(TEXT("structure"),Uses);
+        auto Potion=ParseUCM(TEXT(R"({"id":43,"wcid":43,"name":"Potion","usable":true,"identified":true,"boost_vital":2,"boost":50,"count":1})"));
+        S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(Kit),MakeShared<FJsonValueObject>(Potion)});
+        TestEqual(TEXT("Recovery skips untrained or exhausted healing kits and uses a viable potion"),Check(VM,S,P)->GetNumberField(TEXT("item")),Trained&&Uses>0?42.:43.);
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("recovery"),true);S->SetNumberField(TEXT("mana"),20);
+        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":20,"name":"Stamina to Mana VI","category":91,"power":200,"skill":300,"school":2,"caster_target":true,"duration":0}]})"));
+        auto I=Check(VM,S,P);TestEqual(TEXT("Mana recovery can use stamina conversion"),I->GetNumberField(TEXT("spell")),20.);
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("buffing"),true);
+        S->GetArrayField(TEXT("inventory"))[0]->AsObject()->SetBoolField(TEXT("equipped"),false);
+        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":11,"category":1,"power":100,"skill":300,"self_buff":true}]})"));
+        auto I=Check(VM,S,P);TestEqual(TEXT("Casting equipment is equipped before buff request"),I->GetStringField(TEXT("action")),FString(TEXT("equip")));
+        S->GetArrayField(TEXT("inventory"))[0]->AsObject()->SetBoolField(TEXT("equipped"),true);I=Check(VM,S,P);
+        TestEqual(TEXT("Cast begins after server equipment confirmation"),I->GetStringField(TEXT("action")),FString(TEXT("cast")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("combat"),TEXT("melee"));
+        Array(S,TEXT("targets"),TEXT(R"({"values":[{"id":500,"name":"Target","distance":1,"identified":true,"resists":{"8":0.1,"32":1.5}}]})"));
+        Array(S,TEXT("inventory"),TEXT(R"({"values":[{"id":50,"wcid":50,"name":"Fire","type":1,"identified":true,"can_wield":true,"damage":100,"damage_type":8},{"id":51,"wcid":51,"name":"Acid","type":1,"identified":true,"can_wield":true,"damage":50,"damage_type":32},{"id":52,"wcid":52,"name":"Unusable","type":1,"identified":true,"can_wield":false,"damage":500,"damage_type":32}]})"));
+        auto I=Check(VM,S,P);TestEqual(TEXT("Weakness scoring penalizes resisted weapon and excludes unmet requirements"),I->GetNumberField(TEXT("item")),51.);
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("looting"),true);S->SetNumberField(TEXT("container"),700);
+        Array(P,TEXT("loot_rules"),TEXT(R"({"values":[{"name":"Sword","min_rating":10,"keep_up_to":2}]})"));
+        Array(S,TEXT("contents"),TEXT(R"({"values":[{"id":701,"wcid":701,"name":"Sword of fire","type":1,"value":100,"count":5,"identified":false}]})"));
+        auto I=Check(VM,S,P);TestEqual(TEXT("Loot rating filter requests missing appraisal"),I->GetStringField(TEXT("action")),FString(TEXT("identify")));
+        auto Item=S->GetArrayField(TEXT("contents"))[0]->AsObject();Item->SetBoolField(TEXT("identified"),true);Item->SetNumberField(TEXT("damage_rating"),20);
+        I=Check(VM,S,P);TestEqual(TEXT("Keep-up-to takes only needed quantity"),I->GetNumberField(TEXT("amount")),2.);
+        S->SetNumberField(TEXT("time"),102);I=Check(VM,S,P);TestFalse(TEXT("Corpse stays open while transfer is pending"),I->HasField(TEXT("action")));
+        S->SetNumberField(TEXT("time"),111);I=Check(VM,S,P);TestEqual(TEXT("Missing loot acknowledgement stops instead of flooding"),I->GetStringField(TEXT("action")),FString(TEXT("stop")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("navigation"),true);
+        Array(P,TEXT("route"),TEXT(R"({"values":[{"cell":2103705613,"x":25,"y":97,"z":12,"kind":"portal","wcid":123},{"cell":2103771149,"x":5,"y":97,"z":12}]})"));
+        Array(S,TEXT("route_objects"),TEXT(R"({"values":[{"id":77,"wcid":123,"name":"Portal","distance":1}]})"));
+        auto I=Check(VM,S,P);TestEqual(TEXT("Portal uses normal object interaction"),I->GetStringField(TEXT("action")),FString(TEXT("use_world")));
+        S->SetNumberField(TEXT("time"),104);I=Check(VM,S,P);TestFalse(TEXT("Portal is not used repeatedly while transit is pending"),I->HasField(TEXT("action")));
+        S->SetNumberField(TEXT("time"),150);I=Check(VM,S,P);TestEqual(TEXT("Failed portal times out explicitly"),I->GetStringField(TEXT("action")),FString(TEXT("stop")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("buffing"),true);
+        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":10,"category":1,"power":100,"skill":300,"self_buff":true},{"id":11,"category":1,"power":200,"skill":300,"self_buff":true}]})"));
+        auto I=Check(VM,S,P);TestEqual(TEXT("Preferred buff starts at highest usable tier"),I->GetNumberField(TEXT("spell")),11.);
+        S->SetNumberField(TEXT("action_serial"),1);S->SetNumberField(TEXT("last_spell"),11);S->SetNumberField(TEXT("action_error"),0x400);S->SetNumberField(TEXT("time"),104);
+        I=Check(VM,S,P);TestEqual(TEXT("Server missing-components result falls back to a lower tier"),I->GetNumberField(TEXT("spell")),10.);
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("combat"),TEXT("missile"));
+        Array(S,TEXT("targets"),TEXT(R"({"values":[{"id":500,"name":"Target","distance":20,"identified":true,"resists":{"8":0.1,"32":1.5}}]})"));
+        Array(S,TEXT("inventory"),TEXT(R"({"values":[{"id":50,"wcid":50,"name":"Bow","type":256,"identified":true,"can_wield":true,"equipped":true,"ammo_type":1,"damage_mod":2},{"id":51,"wcid":51,"name":"Fire arrow","type":256,"slots":8388608,"ammo_type":1,"identified":true,"can_wield":true,"damage":100,"damage_type":8},{"id":52,"wcid":52,"name":"Acid arrow","type":256,"slots":8388608,"ammo_type":1,"identified":true,"can_wield":true,"damage":50,"damage_type":32}]})"));
+        auto I=Check(VM,S,P);TestEqual(TEXT("Launcher chooses compatible ammunition by effective element damage"),I->GetNumberField(TEXT("item")),52.);
+        S->GetArrayField(TEXT("inventory"))[2]->AsObject()->SetBoolField(TEXT("equipped"),true);I=Check(VM,S,P);
+        TestEqual(TEXT("Missile attack waits for ammunition equipment confirmation"),I->GetStringField(TEXT("action")),FString(TEXT("attack")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("navigation"),true);S->SetNumberField(TEXT("teleport_sequence"),4);
+        Array(P,TEXT("route"),TEXT(R"({"values":[{"cell":2103705613,"x":25,"y":97,"z":12,"kind":"portal","wcid":123},{"cell":2103705613,"x":27,"y":97,"z":12}]})"));
+        Array(S,TEXT("route_objects"),TEXT(R"({"values":[{"id":77,"wcid":123,"name":"Portal","distance":1}]})"));
+        Check(VM,S,P);S->SetNumberField(TEXT("time"),104);auto I=Check(VM,S,P);
+        TestFalse(TEXT("Nearby destination is not mistaken for a completed teleport"),I->HasField(TEXT("action")));
+        S->SetNumberField(TEXT("teleport_sequence"),5);Check(VM,S,P);I=Check(VM,S,P);
+        TestEqual(TEXT("Server teleport sequence advances the route"),I->GetStringField(TEXT("action")),FString(TEXT("move")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("navigation"),true);
+        Array(P,TEXT("route"),TEXT(R"({"values":[{"cell":2103705613,"x":25,"y":97,"z":12,"kind":"jump","heading":90,"charge":0.8},{"cell":2103705613,"x":35,"y":97,"z":12}]})"));
+        auto I=Check(VM,S,P);TestEqual(TEXT("Jump uses charge intent"),I->GetStringField(TEXT("action")),FString(TEXT("jump")));
+        S->SetBoolField(TEXT("jumping"),true);S->SetNumberField(TEXT("time"),103);I=Check(VM,S,P);TestFalse(TEXT("Jump is not restarted midair"),I->HasField(TEXT("action")));
+        S->SetBoolField(TEXT("jumping"),false);S->SetNumberField(TEXT("time"),105);Check(VM,S,P);I=Check(VM,S,P);TestEqual(TEXT("Route resumes after landing"),I->GetStringField(TEXT("action")),FString(TEXT("move")));
+    }
+    for(const FString Role:{TEXT("mage"),TEXT("heavy"),TEXT("missile")})
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
+        P->SetBoolField(TEXT("buffing"),true);P->SetBoolField(TEXT("auto_buffs"),false);P->SetBoolField(TEXT("buff_others"),true);
+        auto Request=ParseUCM(TEXT(R"({"id":1,"player":1342177290,"name":"Visitor","present":true,"distance":5,"expires":1000,"equipment":[{"id":400,"type":2,"count":1},{"id":401,"type":1,"count":1}]})"));
+        Request->SetStringField(TEXT("role"),Role);S->SetObjectField(TEXT("buff_request"),Request);
+        TArray<TSharedPtr<FJsonValue>> Spells;
+        for(int Cat:{1,3,5,7,9,11,37,39,41,43,45,47,49,31,19,101,115,160,154})
+        {
+            auto Spell=ParseUCM(TEXT(R"({"power":100,"skill":300,"beneficial":true,"duration":500,"target_type":16,"school":4})"));
+            Spell->SetNumberField(TEXT("id"),Cat+1000);Spell->SetNumberField(TEXT("category"),Cat);
+            if(Cat==160||Cat==154){Spell->SetNumberField(TEXT("school"),3);Spell->SetNumberField(TEXT("target_type"),Cat==160?2:1);}
+            Spells.Add(MakeShared<FJsonValueObject>(Spell));
+        }
+        auto Self=ParseUCM(TEXT(R"({"id":999,"category":1,"power":250,"skill":300,"beneficial":true,"duration":500,"caster_target":true,"self_buff":true})"));
+        Spells.Add(MakeShared<FJsonValueObject>(Self));S->SetArrayField(TEXT("spells"),Spells);
+        TSet<int32> Casts;bool Finished=false;int Serial=0;
+        for(int Tick=0;Tick<40;++Tick)
+        {
+            auto I=Check(VM,S,P);const FString Action=I->GetStringField(TEXT("action"));
+            if(Action==TEXT("buff_request_done")){Finished=true;break;}
+            if(!TestEqual(TEXT("Other buff sequence casts instead of swapping gear"),Action,FString(TEXT("cast"))))break;
+            const int32 Spell=I->GetNumberField(TEXT("spell"));Casts.Add(Spell);
+            TestTrue(TEXT("Other buff is never redirected to caster"),I->GetNumberField(TEXT("target"))!=1);
+            if(Spell==1160)TestEqual(TEXT("Bane targets requester's server-known armor"),I->GetNumberField(TEXT("target")),400.);
+            if(Spell==1154)TestEqual(TEXT("Weapon enchantment targets requester's weapon"),I->GetNumberField(TEXT("target")),401.);
+            auto Waiting=Check(VM,S,P);TestFalse(TEXT("Request waits for UseDone before next spell"),Waiting->HasField(TEXT("action")));
+            S->SetNumberField(TEXT("action_serial"),++Serial);S->SetNumberField(TEXT("last_spell"),Spell);S->SetNumberField(TEXT("time"),105+Tick*5);
+        }
+        TestTrue(TEXT("Requested role finishes with confirmed casts"),Finished);
+        for(int Cat:{1,3,5,7,9,11,37,39,41,101,115,160,154})TestTrue(*FString::Printf(TEXT("%s includes shared buff family %d"),*Role,Cat),Casts.Contains(1000+Cat));
+        TestTrue(TEXT("Role-specific attack skill included"),Casts.Contains(Role==TEXT("mage")?1049:Role==TEXT("heavy")?1031:1019));
+        TestFalse(TEXT("Stronger Self spell is not used for Other request"),Casts.Contains(999));
+        TestFalse(TEXT("Unrelated attack skill is excluded"),Casts.Contains(Role==TEXT("missile")?1031:1019));
+        P->SetBoolField(TEXT("buffing"),false);auto I=Check(VM,S,P);TestEqual(TEXT("Disabling buffs cancels queued request"),I->GetStringField(TEXT("action")),FString(TEXT("buff_request_done")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("combat"),TEXT("missile"));P->SetNumberField(TEXT("damage_type"),8);
+        Array(S,TEXT("targets"),TEXT(R"({"values":[{"id":500,"name":"Monster","distance":20,"identified":true}]})"));
+        Array(S,TEXT("inventory"),TEXT(R"({"values":[{"id":50,"wcid":50,"name":"Bow","type":256,"identified":true,"can_wield":true,"equipped":true,"ammo_type":1,"damage_type":2,"damage_mod":2},{"id":51,"wcid":51,"name":"Fire arrows","type":256,"slots":8388608,"ammo_type":1,"identified":false,"count":50}]})"));
+        TestEqual(TEXT("Unappraised compatible ammo is inspected before declaring loadout unavailable"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("identify")));
+        auto Ammo=S->GetArrayField(TEXT("inventory"))[1]->AsObject();Ammo->SetBoolField(TEXT("identified"),true);Ammo->SetBoolField(TEXT("can_wield"),true);Ammo->SetNumberField(TEXT("damage"),30);Ammo->SetNumberField(TEXT("damage_type"),8);
+        auto I=Check(VM,S,P);TestEqual(TEXT("A piercing bow can select a requested elemental arrow loadout"),I->GetStringField(TEXT("action")),FString(TEXT("equip")));TestEqual(TEXT("Equips requested fire ammunition"),I->GetNumberField(TEXT("item")),51.);
+        Ammo->SetBoolField(TEXT("equipped"),true);TestEqual(TEXT("Correct loadout attacks after ammo confirmation"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+        Ammo->SetNumberField(TEXT("damage_type"),16);TestEqual(TEXT("Missing requested ammunition does not fire the previous loadout"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("stop")));
+    }
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
+        P->SetBoolField(TEXT("buffing"),true);P->SetBoolField(TEXT("auto_buffs"),false);P->SetBoolField(TEXT("buff_others"),true);
+        S->SetObjectField(TEXT("buff_request"),ParseUCM(TEXT(R"({"id":1,"player":1342177290,"name":"Visitor","role":"heavy","present":true,"distance":5,"equipment":[{"id":55,"type":1,"count":1}]})")));
+        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":10,"category":154,"power":100,"skill":300,"beneficial":true,"duration":500,"school":3,"target_type":1},{"id":11,"category":154,"power":200,"skill":300,"beneficial":true,"duration":500,"school":3,"target_type":1}]})"));
+        auto I=Check(VM,S,P);TestEqual(TEXT("Other item buff selects strongest tier"),I->GetNumberField(TEXT("spell")),11.);
+        S->SetNumberField(TEXT("action_serial"),1);S->SetNumberField(TEXT("last_spell"),11);S->SetNumberField(TEXT("action_error"),0x400);S->SetNumberField(TEXT("time"),104);
+        I=Check(VM,S,P);TestEqual(TEXT("Missing components on Other item buff falls back without stopping self buffs"),I->GetNumberField(TEXT("spell")),10.);
+        S->SetNumberField(TEXT("action_serial"),2);S->SetNumberField(TEXT("last_spell"),10);S->SetNumberField(TEXT("action_error"),0);S->SetNumberField(TEXT("time"),108);
+        I=Check(VM,S,P);TestEqual(TEXT("Request completes after lower tier confirmed"),I->GetStringField(TEXT("action")),FString(TEXT("buff_request_done")));
+        S->GetObjectField(TEXT("buff_request"))->SetBoolField(TEXT("present"),false);
+        I=Check(VM,S,P);TestFalse(TEXT("No cast while requester is out of awareness"),I->HasField(TEXT("action")));
+        S->SetNumberField(TEXT("time"),140);I=Check(VM,S,P);TestEqual(TEXT("Requester leaving range cancels instead of blocking navigation indefinitely"),I->GetStringField(TEXT("action")),FString(TEXT("buff_request_done")));
+    }
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPluginEquipmentTest,"ACE.Plugins.EquipmentBuffCycle",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEPluginEquipmentTest::RunTest(const FString&)
+{
+    auto* GI=NewObject<UGameInstance>();GI->Init();
+    ON_SCOPE_EXIT {GI->Shutdown();};
+    auto* C=GI->GetSubsystem<UACEClientSubsystem>();
+    auto* H=GI->GetSubsystem<UACEPluginSubsystem>();
+    C->Session=MakeShared<FACESession>();auto& Session=*C->Session;
+    Session.State=EACESessionState::InWorld;Session.PlayerGuid=0x50000001;
+    auto Add=[&](int32 Id,int32 Type,int64 Slots,bool Equipped)
+    {
+        FACEWorldObject O;O.Guid=Id;O.Name=FString::Printf(TEXT("Item %u"),uint32(Id));
+        O.ItemType=Type;O.ValidLocations=Slots;O.StackSize=1;
+        O.ContainerId=Equipped?0:Session.PlayerGuid;
+        O.WielderId=Equipped?Session.PlayerGuid:0;O.CurrentWieldedLocation=Equipped?Slots:0;
+        Session.WorldObjects.Add(Id,O);
+        FACEAppraisalInfo A;A.ObjectGuid=Id;A.bSuccess=true;H->ObserveAppraisal(A);
+    };
+    const int32 WandA=int32(0x80000E82u),WandB=int32(0x80000A68u),Armor=int32(0x80001000u);
+    Add(WandA,ACEItemType::Caster,ACEEquipMask::Held,false);
+    Add(WandB,ACEItemType::Caster,ACEEquipMask::Held,false);
+    Add(Armor,ACEItemType::Armor,ACEEquipMask::ChestWear,true);
+    Session.WorldObjects[Armor].SalvageWorkmanship=7.25f;
+    auto Foreign=Session.WorldObjects[Armor];Foreign.Guid=700;Foreign.WielderId=0x50000002;
+    Session.WorldObjects.Add(Foreign.Guid,Foreign);
+    auto Ground=Session.WorldObjects[WandA];Ground.Guid=701;Ground.ContainerId=0;
+    Session.WorldObjects.Add(Ground.Guid,Ground);
+    TestFalse(TEXT("Another player's equipment is not plugin-owned"),H->IsOwnedPluginItem(Foreign));
+    TestFalse(TEXT("Ground items are not plugin-owned"),H->IsOwnedPluginItem(Ground));
+    TestFalse(TEXT("Pack-only drag/merge ownership still excludes worn armor"),C->IsOwnedInventoryItem(Session.WorldObjects[Armor]));
+    auto Attached=Session.WorldObjects[Armor];Attached.WielderId=0;Attached.ParentGuid=Session.PlayerGuid;
+    TestTrue(TEXT("Acknowledged equipment with a player parent is plugin-owned"),H->IsOwnedPluginItem(Attached));
+    auto S=ParseUCM(TEXT(R"({"time":100,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"nearest":0,"ready":true,"busy":false,"position":{},"enchantments":[],"spells":[{"id":11,"category":1,"power":100,"skill":300,"self_buff":true},{"id":12,"category":160,"power":100,"skill":300,"school":3,"duration":300,"beneficial":true,"target_type":7}]})"));
+    auto P=ParseUCM(TEXT(R"({"buffing":true,"recovery":false,"combat":"off","navigation":false})"));
+    FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    FACEPluginVM VM;TestTrue(TEXT("UCM loads"),VM.Load(Source,Error));TSharedPtr<FJsonObject> Intent;
+    auto Step=[&](){H->ExtendSnapshot(S);TestTrue(*Error,VM.Step(S,P,Intent,Error));return Intent.IsValid();};
+    if(!Step())return false;
+    TestEqual(TEXT("Both carried wands and worn armor appear in real host snapshot"),S->GetArrayField(TEXT("inventory")).Num(),3);
+    for(auto V:S->GetArrayField(TEXT("inventory")))if(uint32(V->AsObject()->GetNumberField(TEXT("id")))==uint32(Armor))
+    {
+        TestEqual(TEXT("Real host snapshot retains public fractional workmanship"),V->AsObject()->GetNumberField(TEXT("workmanship")),7.25);
+        TestFalse(TEXT("Missing appraisal rating is not invented as zero"),V->AsObject()->HasField(TEXT("damage_rating")));
+    }
+    TestEqual(TEXT("Buff cycle first requests casting equipment"),Intent->GetStringField(TEXT("action")),FString(TEXT("equip")));
+    const int32 Chosen=int32(uint32(Intent->GetNumberField(TEXT("item"))));
+    FACEBinaryWriter W;W.WriteUInt32(uint32(Chosen));W.WriteInt32(int32(ACEEquipMask::Held));
+    FACEBinaryReader Reader(W.GetData());Session.HandleWieldItem(Reader);
+    S->SetNumberField(TEXT("time"),103);
+    if(!Step())return false;
+    TestEqual(TEXT("Server wield acknowledgement retains the wand in the snapshot"),S->GetArrayField(TEXT("inventory")).Num(),3);
+    TestEqual(TEXT("Buff casts instead of swapping to the other wand"),Intent->GetStringField(TEXT("action")),FString(TEXT("cast")));
+    S->SetArrayField(TEXT("enchantments"),{MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"category":1,"power":100,"remaining":500})")))});
+    S->SetNumberField(TEXT("time"),107);
+    if(!Step())return false;
+    TestEqual(TEXT("Worn armor is buffed via a single player-target cast"),Intent->GetNumberField(TEXT("target")),double(uint32(Session.PlayerGuid)));
+    auto E=ParseUCM(TEXT(R"({"category":160,"power":100})"));
+    E->SetNumberField(TEXT("target"),uint32(Session.PlayerGuid));E->SetNumberField(TEXT("expires"),FPlatformTime::Seconds()+500);
+    H->ItemBuffs.Add(MakeShared<FJsonValueObject>(E));
+    S->SetNumberField(TEXT("time"),111);
+    if(!Step())return false;
+    TestFalse(TEXT("Confirmed self and equipment buffs complete the cycle"),Intent->HasField(TEXT("action")));
+    S->SetNumberField(TEXT("time"),130);if(!Step())return false;
+    TestFalse(TEXT("Later ticks do not restart equipment swapping after buff completion"),Intent->HasField(TEXT("action")));
+    {
+        // Exercise the session-to-policy boundary, not a hand-authored container
+        // flag. An early owned-bag packet used to block UCM forever.
+        FACEBinaryWriter Contents;Contents.WriteUInt32(900);Contents.WriteUInt32(0);
+        FACEBinaryReader ContentsReader(Contents.GetData());Session.HandleViewContents(ContentsReader);
+        FACEWorldObject Bag;Bag.Guid=900;Bag.Name=TEXT("Pack");Bag.ContainerId=Session.PlayerGuid;Bag.ItemsCapacity=24;
+        Session.UpsertWorldObject(Bag);
+        FACEWorldObject Player;Player.Guid=Session.PlayerGuid;Player.Name=TEXT("Loot Tester");Session.UpsertWorldObject(Player);
+        FACEWorldObject Corpse;Corpse.Guid=int32(0x800001AEu);Corpse.Name=TEXT("Corpse of Brown Rat");
+        Corpse.bHasPosition=true;Corpse.Position=Session.PlayerPosition;Corpse.ObjectDescriptionFlags=ACEObjectDescFlag::Corpse;
+        Session.UpsertWorldObject(Corpse);
+        FACEAppraisalInfo Info;Info.ObjectGuid=Corpse.Guid;Info.bSuccess=true;Info.StringProperties.Add(16,TEXT("Killed by Loot Tester."));H->ObserveAppraisal(Info);
+        auto LootProfile=ParseUCM(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","looting":true,"loot_rules":[{"action":"keep"}]})"));
+        FACEPluginVM LootVM;TestTrue(TEXT("Corpse lifecycle policy loads"),LootVM.Load(Source,Error));
+        H->ExtendSnapshot(S);
+        TestEqual(TEXT("Host no longer exposes owned bag as open container"),S->GetNumberField(TEXT("container")),0.);
+        TestTrue(TEXT("Loot policy executes after bag ownership arrives"),LootVM.Step(S,LootProfile,Intent,Error));
+        if(Intent)TestEqual(TEXT("UCM approaches own corpse after phantom container clears"),Intent->GetStringField(TEXT("action")),FString(TEXT("open_corpse")));
+        // ACE deliberately strips '+' from killer.Name in the corpse's LongDesc.
+        // Test the real snapshot parser and policy together for admins and pets.
+        for(const TCHAR* Description:{TEXT("Killed by Loot Tester."),TEXT("Killed by loot tester's Fire Elemental.")})
+        {
+            Player.Name=TEXT("+Loot Tester");Session.UpsertWorldObject(Player);
+            H->Appraisals.Remove(Corpse.Guid);
+            FACEPluginVM AdminLoot;AdminLoot.Load(Source,Error);H->ExtendSnapshot(S);
+            TestTrue(TEXT("New admin corpse starts with appraisal"),AdminLoot.Step(S,LootProfile,Intent,Error));
+            if(Intent)TestEqual(TEXT("Unidentified corpse requests ownership appraisal"),Intent->GetStringField(TEXT("action")),FString(TEXT("identify")));
+            Info.StringProperties.Add(16,Description);H->ObserveAppraisal(Info);H->ExtendSnapshot(S);
+            TestTrue(TEXT("Admin corpse ownership policy executes"),AdminLoot.Step(S,LootProfile,Intent,Error));
+            if(Intent)TestEqual(TEXT("Admin and summoned-pet kills approach without enabling others' corpses"),Intent->GetStringField(TEXT("action")),FString(TEXT("open_corpse")));
+        }
+    }
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMLootMemoryTest,"ACE.Plugins.LootMemory",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMLootMemoryTest::RunTest(const FString&)
+{
+    FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    TArray<TSharedPtr<FJsonObject>> Profiles;
+    auto Synthetic=ParseUCM(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","looting":true})"));
+    TArray<TSharedPtr<FJsonValue>> Rules;
+    for(int I=0;I<1637;++I)
+    {
+        auto Rule=ParseUCM(TEXT(R"({"action":"keep","label":"Complex salvage rule","conditions":[{"field":"int","key":1,"op":"ge","value":0},{"field":"int","key":2,"op":"ge","value":0},{"field":"int","key":3,"op":"ge","value":0},{"field":"int","key":4,"op":"ge","value":0}]})"));
+        Rule->SetNumberField(TEXT("material"),I==1636?59:60);Rules.Add(MakeShared<FJsonValueObject>(Rule));
+    }
+    Synthetic->SetArrayField(TEXT("loot_rules"),Rules);Profiles.Add(Synthetic);
+    const FString Folder=FPaths::ProjectSavedDir()/TEXT("ClientPlugins/ImportInbox");
+    for(const TCHAR* Name:{TEXT("LootSnobV4.utl"),TEXT("Gardener_LootSnobV4.utl")})if(FPaths::FileExists(Folder/Name))
+    {
+        TArray<FString> Issues;auto Profile=ACEVTProfile::ConvertFile(Folder/Name,Issues);
+        if(!TestTrue(TEXT("Large loot fixture converts"),Profile.IsValid()&&Issues.IsEmpty()))return false;
+        Profile->SetBoolField(TEXT("buffing"),false);Profile->SetBoolField(TEXT("recovery"),false);
+        Profile->SetStringField(TEXT("combat"),TEXT("off"));Profile->SetBoolField(TEXT("looting"),true);Profiles.Add(Profile);
+    }
+    for(int ProfileIndex=0;ProfileIndex<Profiles.Num();++ProfileIndex)
+    {
+        FACEPluginVM VM;if(!TestTrue(TEXT("Loot memory policy loads"),VM.Load(Source,Error)))return false;
+        bool Looted=false;int FirstDecision=-1;
+        for(int Tick=0;Tick<80;++Tick)
+        {
+            auto Snapshot=ParseUCM(TEXT(R"({"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"inventory":[],"targets":[],"container":700,"container_is_corpse":true,"contents_ready":true,"contents":[{"id":701,"wcid":42,"name":"Copper Bracelet","type":8,"material":59,"workmanship":7.25,"value":20000,"burden":50,"count":1,"identified":true,"int_properties":{"1":1,"2":1,"3":1,"4":1}}]})"));
+            Snapshot->SetNumberField(TEXT("time"),100+Tick);
+            TArray<TSharedPtr<FJsonValue>> Spells;
+            for(int I=1;I<=4000;++I)
+            {
+                auto Spell=ParseUCM(TEXT(R"({"known":true,"name":"Learned spell","icon":100663297,"school":4,"power":200,"category":1,"target_type":1,"flags":12,"duration":300,"projectile":false,"beneficial":true,"caster_target":true,"self_buff":true,"skill":400,"components_known":true,"scarabs":{"Scarab":1}})"));
+                Spell->SetNumberField(TEXT("id"),I);Spells.Add(MakeShared<FJsonValueObject>(Spell));
+            }
+            Snapshot->SetArrayField(TEXT("spells"),Spells);
+            TArray<TSharedPtr<FJsonValue>> Inventory;
+            for(int I=0;I<250;++I)
+            {
+                auto Item=ParseUCM(TEXT(R"({"wcid":42,"name":"Carried equipment","type":8,"count":1,"identified":true,"material":59,"value":20000,"burden":50,"int_properties":{"1":1,"2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9,"10":10}})"));
+                Item->SetNumberField(TEXT("id"),10000+I);Inventory.Add(MakeShared<FJsonValueObject>(Item));
+            }
+            Snapshot->SetArrayField(TEXT("inventory"),Inventory);
+            TSharedPtr<FJsonObject> Intent;
+            if(!VM.Step(Snapshot,MakeShared<FJsonObject>(*Profiles[ProfileIndex]),Intent,Error))
+            {AddError(FString::Printf(TEXT("Loot profile %d, tick %d, peak %llu bytes: %s"),ProfileIndex,Tick,uint64(VM.GetPeakMemoryUsage()),*Error));return false;}
+            FString Action;if(Intent&&Intent->TryGetStringField(TEXT("action"),Action))
+            {if(Action==TEXT("loot"))Looted=true;if(FirstDecision<0)FirstDecision=Tick;}
+        }
+        if(ProfileIndex==0)TestTrue(TEXT("Large profile reaches its last matching rule"),Looted);
+        TestTrue(TEXT("Large loot profile decides within four callbacks, including a full spellbook"),FirstDecision>=0&&FirstDecision<4);
+        AddInfo(FString::Printf(TEXT("Loot profile %d: first decision after %d callbacks"),ProfileIndex,FirstDecision+1));
+        AddInfo(FString::Printf(TEXT("Loot profile %d: %llu bytes peak, %llu bytes after 80 callbacks"),ProfileIndex,uint64(VM.GetPeakMemoryUsage()),uint64(VM.GetMemoryUsage())));
+    }
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMLootTest,"ACE.Plugins.LootRules",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMLootTest::RunTest(const FString&)
+{
+    FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    auto Snapshot=[](){return ParseUCM(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"mana":100,"max_mana":100,"nearest":0,"inventory":[],"spells":[],"targets":[],"container":700,"container_is_corpse":true,"contents_ready":true,"contents":[{"id":701,"wcid":42,"name":"Copper Bracelet","type":8,"material":59,"workmanship":7.25,"value":20000,"burden":50,"count":5,"identified":false}]})"));};
+    auto Profile=[](){return ParseUCM(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","looting":true,"loot_rules":[]})"));};
+    auto Check=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+    auto Rule=[&](const TCHAR* Json,const FString& Expected,const TCHAR* Label)
+    {
+        FACEPluginVM VM;TestTrue(TEXT("Loot policy loads"),VM.Load(Source,Error));auto S=Snapshot(),P=Profile();
+        P->SetArrayField(TEXT("loot_rules"),ParseUCM(Json)->GetArrayField(TEXT("rules")));
+        TestEqual(Label,Check(VM,S,P)->GetStringField(TEXT("action")),Expected);
+    };
+    Rule(TEXT(R"({"rules":[{"material":59,"min_workmanship":7,"max_workmanship":8,"min_value":20000,"max_burden":50}]})"),TEXT("loot"),TEXT("Public material/workmanship/value/burden match without appraisal"));
+    Rule(TEXT(R"({"rules":[{"material":60,"min_rating":10}]})"),TEXT("close_corpse"),TEXT("Wrong material avoids unnecessary appraisal"));
+    Rule(TEXT(R"({"rules":[{"min_workmanship":8}]})"),TEXT("close_corpse"),TEXT("Low workmanship stays on corpse"));
+    Rule(TEXT(R"({"rules":[{"max_workmanship":7}]})"),TEXT("close_corpse"),TEXT("Workmanship upper bound preserves fractional precision"));
+    Rule(TEXT(R"({"rules":[{"name":"copper bracelet","name_mode":"exact"}]})"),TEXT("loot"),TEXT("Exact matching is case insensitive"));
+    Rule(TEXT(R"({"rules":[{"name":"Copper","name_mode":"exact"}]})"),TEXT("close_corpse"),TEXT("Exact is not prefix matching"));
+    Rule(TEXT(R"({"rules":[{"name":"brace","name_mode":"contains"}]})"),TEXT("loot"),TEXT("Substring name matches"));
+    Rule(TEXT(R"({"rules":[{"name":".*","name_mode":"contains"}]})"),TEXT("close_corpse"),TEXT("Name text is literal, not executable patterns"));
+    Rule(TEXT(R"({"rules":[{"action":"skip","material":59},{}]})"),TEXT("close_corpse"),TEXT("Skip beats a later broad Keep rule"));
+    Rule(TEXT(R"({"rules":[{"action":"skip","enabled":false},{}]})"),TEXT("loot"),TEXT("Disabled rule is ignored"));
+    Rule(TEXT(R"({"rules":[{"max_value":19999}]})"),TEXT("close_corpse"),TEXT("Maximum value is honored"));
+    Rule(TEXT(R"({"rules":[{"type":2}]})"),TEXT("close_corpse"),TEXT("Item type filter is honored"));
+    for(bool Legacy:{false,true})
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();
+        auto R=ParseUCM(TEXT(R"({"keep_up_to":4})"));R->SetBoolField(TEXT("count_by_name"),Legacy);P->SetArrayField(TEXT("loot_rules"),{MakeShared<FJsonValueObject>(R)});
+        S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":2,"wcid":999,"name":"Copper Bracelet","count":3})")))});
+        TestEqual(TEXT("Imported KeepUpTo uses exact item name across WCIDs; native rule retains WCID scope"),Check(VM,S,P)->GetNumberField(TEXT("amount")),Legacy?1.:4.);
+    }
+    for(bool Confirm:{false,true})
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();
+        P->SetArrayField(TEXT("loot_rules"),{MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"action":"salvage"})")))});
+        auto Item=S->GetArrayField(TEXT("contents"))[0]->AsObject();Item->SetNumberField(TEXT("count"),1);
+        auto Ust=MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":9,"wcid":9,"name":"Ust","count":1,"object_class":40})")));
+        S->SetArrayField(TEXT("inventory"),{Ust});
+        TestEqual(TEXT("Salvage rule starts by taking the item"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("loot")));
+        S->SetNumberField(TEXT("container"),0);S->SetArrayField(TEXT("contents"),{});
+        TestFalse(TEXT("Auto-closed corpse still waits for ownership confirmation"),Check(VM,S,P)->HasField(TEXT("action")));
+        if(!Confirm)
+        {
+            S->SetNumberField(TEXT("time"),111);
+            TestEqual(TEXT("Closure never turns a failed transfer into success"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("stop")));
+        }
+        else
+        {
+            S->SetArrayField(TEXT("corpses"),{MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":700,"name":"Corpse","distance":2})")))});
+            S->SetArrayField(TEXT("inventory"),{Ust,MakeShared<FJsonValueObject>(Item)});
+            auto I=Check(VM,S,P);TestEqual(TEXT("Final corpse item retains its salvage action after auto-close"),I->GetStringField(TEXT("action")),FString(TEXT("salvage")));
+            TestEqual(TEXT("Only the newly acquired item is salvaged"),I->GetNumberField(TEXT("item")),701.);
+            TestFalse(TEXT("Salvage is issued once while its result is pending"),Check(VM,S,P)->HasField(TEXT("action")));
+            S->SetArrayField(TEXT("inventory"),{Ust});TestFalse(TEXT("Completed salvage job is not replayed"),Check(VM,S,P)->HasField(TEXT("action")));
+        }
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Item=S->GetArrayField(TEXT("contents"))[0]->AsObject();
+        P->SetArrayField(TEXT("loot_rules"),{MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"min_workmanship":7})")))});
+        Item->RemoveField(TEXT("workmanship"));TestEqual(TEXT("Absent workmanship requests appraisal"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("identify")));
+        Item->SetBoolField(TEXT("identified"),true);TestEqual(TEXT("Missing appraisal property does not match"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("close_corpse")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();
+        P->SetArrayField(TEXT("loot_rules"),ParseUCM(TEXT(R"({"rules":[{"keep_up_to":4},{}]})"))->GetArrayField(TEXT("rules")));
+        S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":2,"wcid":42,"count":2,"equipped":true})")))});
+        TestEqual(TEXT("Keep limit includes equipped and bag counts"),Check(VM,S,P)->GetNumberField(TEXT("amount")),2.);
+        S->GetArrayField(TEXT("contents"))[0]->AsObject()->SetNumberField(TEXT("count"),3);
+        TestFalse(TEXT("Corpse change alone is not inventory confirmation"),Check(VM,S,P)->HasField(TEXT("action")));
+        S->GetArrayField(TEXT("inventory"))[0]->AsObject()->SetNumberField(TEXT("count"),4);
+        TestEqual(TEXT("Reached keep limit does not fall through to broad Keep"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("close_corpse")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetArrayField(TEXT("loot_rules"),{MakeShared<FJsonValueObject>(MakeShared<FJsonObject>())});
+        S->SetBoolField(TEXT("contents_ready"),false);TestFalse(TEXT("Late descriptions are not mistaken for empty corpse"),Check(VM,S,P)->HasField(TEXT("action")));
+        S->SetBoolField(TEXT("contents_ready"),true);S->SetBoolField(TEXT("container_is_corpse"),false);
+        TestFalse(TEXT("Loot rules do not take items from other containers"),Check(VM,S,P)->HasField(TEXT("action")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();TArray<TSharedPtr<FJsonValue>> Rules;
+        for(int32 Index=0;Index<511;++Index)Rules.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"material":60})"))));
+        Rules.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"material":59})"))));P->SetArrayField(TEXT("loot_rules"),Rules);
+        TestEqual(TEXT("512 simple rules finish in one callback"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("loot")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();TArray<TSharedPtr<FJsonValue>> Rules;
+        auto Item=S->GetArrayField(TEXT("contents"))[0]->AsObject();Item->SetBoolField(TEXT("identified"),true);
+        Item->SetObjectField(TEXT("int_properties"),ParseUCM(TEXT(R"({"1":1})")));
+        // Force continuation partway through rules; reverse contents every tick
+        // as unordered server-object enumeration can do. First match still wins.
+        TArray<TSharedPtr<FJsonValue>> Conditions;
+        for(int I=0;I<33;++I)Conditions.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"field":"int","key":1,"op":"eq","value":1})"))));
+        Conditions.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"field":"int","key":1,"op":"eq","value":2})"))));
+        for(int I=0;I<64;++I){auto R=MakeShared<FJsonObject>();R->SetArrayField(TEXT("conditions"),Conditions);Rules.Add(MakeShared<FJsonValueObject>(R));}
+        Rules.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"action":"skip"})"))));
+        Rules.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"action":"keep"})"))));P->SetArrayField(TEXT("loot_rules"),Rules);
+        auto Other=MakeShared<FJsonObject>(*Item);Other->SetNumberField(TEXT("id"),702);
+        bool Finished=false,Yielded=false;
+        for(int Tick=0;Tick<8&&!Finished;++Tick)
+        {
+            S->SetArrayField(TEXT("contents"),Tick%2?TArray<TSharedPtr<FJsonValue>>{MakeShared<FJsonValueObject>(Other),MakeShared<FJsonValueObject>(Item)}:TArray<TSharedPtr<FJsonValue>>{MakeShared<FJsonValueObject>(Item),MakeShared<FJsonValueObject>(Other)});
+            auto Intent=Check(VM,S,P);FString Action;
+            if(Intent->TryGetStringField(TEXT("action"),Action)){TestEqual(TEXT("Skip precedes keep after continued evaluation"),Action,FString(TEXT("close_corpse")));Finished=true;}
+            else {Yielded=true;TestTrue(TEXT("Continuation reports rule progress"),Intent->GetStringField(TEXT("status")).Contains(TEXT("rule ")));}
+        }
+        TestTrue(TEXT("Complex scan uses cooperative continuation"),Yielded);
+        TestTrue(TEXT("Reordered corpse completes without restarting"),Finished);
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();
+        auto Item=S->GetArrayField(TEXT("contents"))[0]->AsObject();Item->SetBoolField(TEXT("identified"),true);
+        TArray<TSharedPtr<FJsonValue>> Names,Conditions;
+        for(int I=0;I<128;++I)Names.Add(MakeShared<FJsonValueString>(TEXT("Spell")));
+        for(int I=0;I<64;++I)Conditions.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"field":"spells","pattern":"^Spell$","value":128})"))));
+        Item->SetArrayField(TEXT("spell_names"),Names);
+        auto R=MakeShared<FJsonObject>();R->SetArrayField(TEXT("conditions"),Conditions);R->SetStringField(TEXT("action"),TEXT("skip"));
+        P->SetArrayField(TEXT("loot_rules"),{MakeShared<FJsonValueObject>(R),MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"action":"keep"})")))});
+        bool Finished=false,Yielded=false;
+        for(int Tick=0;Tick<32&&!Finished;++Tick)
+        {
+            auto Intent=Check(VM,S,P);FString Action;
+            if(Intent->TryGetStringField(TEXT("action"),Action)){TestEqual(TEXT("Spell count survives continuation inside a condition"),Action,FString(TEXT("close_corpse")));Finished=true;}
+            else Yielded=true;
+        }
+        TestTrue(TEXT("Expensive spell rule cooperatively yields"),Yielded);
+        TestTrue(TEXT("Expensive spell rule finishes without quota errors"),Finished);
+    }
+    return true;
+}
+#endif

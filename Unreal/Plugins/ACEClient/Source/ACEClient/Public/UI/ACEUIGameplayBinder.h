@@ -79,6 +79,8 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACESelectionToolbarTest;
 
 public:
+    /** Shared attack mark used by desktop controls, VR and plugin commands. */
+    void SetRequestedAttackPower(float Power) { RequestedAttackPower=FMath::Clamp(Power,0.f,1.f); }
 	bool ScrollFellowship(float WheelDelta, FVector2D CanvasLocalPos);
 	bool ScrollAllegiance(float WheelDelta, FVector2D CanvasLocalPos);
 	bool ScrollSalvage(float WheelDelta, FVector2D CanvasLocalPos);
@@ -161,6 +163,7 @@ public:
 	bool TryBeginCombatButton(FVector2D CanvasLocalPos);
 	bool TryReleaseCombatButton();
 	void CancelCombatAttack();
+	void SetCombatMovementBlocked(bool bBlocked);
 	void UpdateCombatPowerDrag(FVector2D CanvasLocalPos);
 	bool TryFinishCombatPowerDrag(FVector2D CanvasLocalPos);
 	/** DAT scrollbar thumb drag (inventory / spellbook / loot / skills). */
@@ -461,6 +464,7 @@ private:
 	bool bCombatPowerCharging = false;
 	bool bCombatAttackRequestPending = false;
 	bool bCombatAttackHeld = false;
+	bool bCombatMovementBlocked = false;
 	bool bCombatPointerHeld = false;
 	bool bCombatKeyboardHeld = false;
 	bool bCombatRequestSent = false;
@@ -1493,7 +1497,8 @@ private:
 	void BeginCombatPowerCharge(uint32 AttackHeight, bool bHeld = false);
 	void ReleaseCombatPowerCharge();
 	float GetCombatPowerChargeDuration() const;
-	void TryAutoTargetOnCombatEnter();
+	void TryAutoTargetOnCombatEnter(int32 ExcludeGuid = 0);
+	int32 PendingAutoTargetLoss = 0;
 	void SyncExamineBodyVisibility(bool bCreature);
 	bool HasEquippedCaster() const;
 	bool HasEquippedMissileWeapon() const;

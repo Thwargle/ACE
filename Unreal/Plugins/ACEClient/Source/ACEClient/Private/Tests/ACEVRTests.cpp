@@ -1311,10 +1311,20 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		VR->Settings->MenuAnchorMode=2; VR->PositionPanel(VR->RetailPanel); VR->UpdatePanels();
 		const FTransform SavedMenuPose=VR->RetailPanel->GetComponentTransform();
 		const FTransform HeadBeforeMenuPin=VR->Head->GetComponentTransform();
-		VR->bInventoryOpen=false; VR->UpdatePanels();
+		const bool DesktopMenuBeforeReopen=VR->bUseDesktopMenu;
+		VR->ToggleInventory();
 		VR->Head->AddWorldOffset(FVector(50,30,0)); VR->Head->AddWorldRotation(FRotator(0,35,0));
-		VR->bInventoryOpen=true; VR->PositionPanel(VR->RetailPanel); VR->UpdatePanels();
-		TestTrue(TEXT("World inventory retains its exact placement across close, head movement, and reopening"),VR->RetailPanel->GetComponentTransform().Equals(SavedMenuPose,.01f));
+		VR->ToggleInventory();
+		const FTransform ReopenedMenuPose=VR->RetailPanel->GetComponentTransform();
+		TestFalse(TEXT("Reopening inventory leaves the old world position"),ReopenedMenuPose.Equals(SavedMenuPose,.01f));
+		TestTrue(TEXT("Reopening inventory captures the current head position and yaw"),VR->MenuAnchorFrame.Equals(
+			FTransform(FRotator(0,VR->Head->GetComponentRotation().Yaw,0),VR->Head->GetComponentLocation()),.01f));
+		TestTrue(TEXT("Reopening inventory preserves the user's placement offset"),VR->Settings->MenuViewOffset.Equals(OriginalMenuOffset,.01f));
+		VR->Head->AddWorldOffset(FVector(20,10,0)); VR->Head->AddWorldRotation(FRotator(0,15,0)); VR->UpdatePanels();
+		TestTrue(TEXT("World inventory stays pinned while open"),VR->RetailPanel->GetComponentTransform().Equals(ReopenedMenuPose,.01f));
+		VR->RevealRetailDialog(200);
+		TestTrue(TEXT("Refreshing an open dialog does not recapture its world anchor"),VR->RetailPanel->GetComponentTransform().Equals(ReopenedMenuPose,.01f));
+		VR->bUseDesktopMenu=DesktopMenuBeforeReopen;
 		TestNull(TEXT("World inventory does not inherit camera late-update motion"),VR->RetailPanel->GetAttachParent());
 		VR->Settings->MenuAnchorMode=1; VR->bMenuAnchorReady=false; VR->UpdateMenuAnchor(.016f);
 		const FTransform BodyMenuAnchor=VR->MenuAnchorFrame;
@@ -2451,8 +2461,27 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 	}
 	PC->bJumpAirborne = false; VR->JumpDown(); VR->PrepareMovement(.1f); VR->CancelGestures();
 	TestFalse(TEXT("Cancelling input cancels the held jump"), PC->bJumpCharging || VR->IsJumpHeld());
-	VR->bInventoryOpen = true; VR->PrepareMovement(1.f / 90.f); VR->GetMovement(F, R, Run);
-	TestTrue(TEXT("Opening a menu stops motion immediately"), F == 0 && R == 0 && VR->SmoothedMoveStick.IsNearlyZero());
+	VR->bInventoryOpen = true;
+	TestTrue(TEXT("Inventory allows locomotion while blocking combat gestures"),!VR->IsMovementBlocked() && VR->IsInputBlocked());
+	for (const FVector2D Stick : {FVector2D(0,1),FVector2D(1,0),FVector2D(0,-1),FVector2D(.7f,.7f)})
+	{
+		VR->MoveStick=Stick; VR->SmoothedMoveStick=FVector2D::ZeroVector;
+		for(int32 Frame=0;Frame<180;++Frame)VR->PrepareMovement(1.f/90.f);
+		VR->GetMovement(F,R,Run);
+		const FVector2D MenuMovement(R,F);
+		VR->bInventoryOpen=false; VR->GetMovement(F,R,Run); VR->bInventoryOpen=true;
+		TestTrue(TEXT("Inventory preserves normal stick movement in every direction"),!MenuMovement.IsNearlyZero() && MenuMovement.Equals(FVector2D(R,F),.001f));
+	}
+	for (bool* Blocker : {&VR->bSettingsOpen,&VR->bTextKeyboardOpen})
+	{
+		*Blocker=true; VR->PrepareMovement(1.f/90.f); VR->GetMovement(F,R,Run);
+		TestTrue(TEXT("Settings and text entry still stop locomotion"),F==0 && R==0 && VR->SmoothedMoveStick.IsNearlyZero());
+		*Blocker=false;
+	}
+	VR->PanelEditHand=0; VR->GetMovement(F,R,Run);
+	TestTrue(TEXT("Panel placement reserves the sticks instead of moving the player"),F==0 && R==0 && VR->IsMovementBlocked());
+	VR->PanelEditHand=INDEX_NONE;
+	VR->MoveStick=VR->SmoothedMoveStick=FVector2D::ZeroVector;
 	VR->bDrawing = true; VR->CancelGestures();
 	TestFalse(TEXT("Cancel releases nocked shots"), VR->bDrawing);
 	VR->Client->Session->State = EACESessionState::InWorld; VR->Client->Session->PlayerGuid = 100;

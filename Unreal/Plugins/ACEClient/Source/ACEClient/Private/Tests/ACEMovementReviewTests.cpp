@@ -70,6 +70,29 @@ bool FACEMovementReviewTest::RunTest(const FString&)
    TestEqual(FString::Printf(TEXT("Authored %08X passage margin %.1f follows sphere-pair envelope"),Model.Key,Margin),Blocked,Margin<0);
   }
   AddInfo(FString::Printf(TEXT("Creature %08X physical radius %.2fcm vs bound %.2fcm, player passing offset %.2fcm"),Model.Key,MaxRadius*Model.Value,Body->MovementRadius*Model.Value,Width));
+  // Reproduce a sustained forward contact followed by strafe, rather than
+  // testing only a clear pass beside the creature's bounding envelope.
+  for(double Overlap:{0.,.02,2.})for(double Direction:{-1.,1.})
+  {
+   FVector Position=Base+FVector(-Width+Overlap,0,91.75);
+   const FVector Initial=Position;
+   for(int Frame=0;Frame<90;++Frame)
+   {
+    const FVector End=Position+FVector(3,Direction*3,0);FHitResult Contact;
+    Position=ACEBodySweep::Sweep(*World,Contact,Position,End,PlayerBody,Q)
+      ? ACEBodySweep::SlideGrounded(*World,Position,End,Contact,PlayerBody,Q) : End;
+   }
+   TestTrue(FString::Printf(TEXT("Creature %08X overlap %.2f permits sustained diagonal strafe %+.0f"),Model.Key,Overlap,Direction),
+    Direction*(Position.Y-Initial.Y)>150);
+  }
+  // Descending alongside a mob must preserve strafe, not zero both axes.
+  for(double Direction:{-1.,1.})
+  {
+   const FVector Start=Base+FVector(-Width+.02,0,91.75);
+   const auto Slide=ACEBodySweep::MoveAirborne(*World,Start,Start+FVector(3,Direction*3,-1),PlayerBody,Q,true);
+   TestTrue(TEXT("Descending creature contact preserves sideways input"),Direction*(Slide.Position.Y-Start.Y)>2.5);
+   TestTrue(TEXT("Creature contact permits descent without treating mob as a floor"),Slide.Position.Z<Start.Z&&!Slide.bLanded);
+  }
   Body->Destroy();
  }
  // Spike Strafe (1842, projectile weenie 7278) shares the sword gfx with
@@ -241,6 +264,7 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   for(int FPS:{30,90,144})
   {
    FACEWorldObject O;O.SetupId=0x02000001;O.bIsPlayer=true;O.ItemType=ACEItemType::Creature;O.bHasPosition=true;O.Position=P;
+   O.PhysicsState=ACEPhysicsState::Gravity;
    auto* Walker=World->SpawnActor<AACEWorldEntityActor>();Walker->InitializeFromObject(O,100,false);
    Walker->RemoteMotion.bMoving=true;Walker->RemoteMotion.ForwardUnitsPerSecond=4;Walker->RemoteMotion.Forward=1;
    double MaxFrameMove=0,MaxBeyondEdge=0,MaxGroundError=0;FVector Last=Walker->GetActorLocation();
@@ -301,15 +325,17 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   for(bool Grounded:{false,true})
   {
    FACEWorldObject Spawn;Spawn.Guid=12344;Spawn.SetupId=0x02000001;Spawn.ItemType=ACEItemType::Creature;Spawn.bIsPlayer=true;
+   Spawn.PhysicsState=ACEPhysicsState::Gravity;
    Spawn.bHasPosition=true;Spawn.Position=P;Spawn.Position.bIsGrounded=Grounded;
    Spawn.bHasVelocity=true;Spawn.Velocity=FVector(0,4,Grounded?0:3);
    auto* Walker=World->SpawnActor<AACEWorldEntityActor>();Walker->InitializeFromObject(Spawn,100,false);
    TestEqual(TEXT("Grounded position wins over the descriptor velocity exactly once"),Walker->bHavePhysicsVelocity,!Grounded);
    Walker->RemoteMotion.bMoving=true;Walker->RemoteMotion.Forward=1;Walker->RemoteMotion.ForwardUnitsPerSecond=4;
-   for(int I=0;I<90;++I)Walker->Tick(1.f/90);
+   double Highest=0;
+   for(int I=0;I<90;++I){Walker->Tick(1.f/90);Highest=FMath::Max(Highest,Walker->GetActorLocation().Z-Origin.Z);}
    const FVector L=Walker->GetActorLocation()-Origin;
    TestTrue(TEXT("A grounded velocity-bearing spawn follows the slope; a real jump stays airborne"),
-    Grounded ? FMath::Abs(L.Z+.4*L.Y-1)<1.5 : L.Z>200);
+    Grounded ? FMath::Abs(L.Z+.4*L.Y-1)<1.5 : Highest>25);
    Walker->Destroy();
   }
   // ObjectCreate has no PositionPack contact bit. A horizontal vector is also
@@ -332,10 +358,10 @@ bool FACEMovementReviewTest::RunTest(const FString&)
     if(I%45==0) Walker->ApplyPhysicsVelocity(Spawn.Velocity);
     Walker->Tick(1.f/90);
     const FVector L=Walker->GetActorLocation()-Origin;
-    MaxError=FMath::Max(MaxError,FMath::Abs(L.Z+.4*L.Y-1));
+    MaxError=FMath::Max(MaxError,Gravity?FMath::Abs(L.Z+.4*L.Y-1):FMath::Abs(L.Z));
     MaxLateral=FMath::Max(MaxLateral,FMath::Abs(L.X*Direction.Y-L.Y*Direction.X));
    }
-   TestTrue(FString::Printf(TEXT("Velocity packets preserve slope contact, gravity=%d error=%.2f"),Gravity,MaxError),MaxError<2);
+   TestTrue(FString::Printf(TEXT("Velocity packets honor gravity: slope contact or authored elevation, gravity=%d error=%.2f"),Gravity,MaxError),MaxError<2);
    TestTrue(TEXT("Straight remote runner does not wander sideways"),MaxLateral<.1);
    TestTrue(TEXT("Full DAT body keeps progressing downhill"),FVector::DotProduct(Walker->GetActorLocation()-Origin,Direction)>650);
    AddInfo(FString::Printf(TEXT("Remote slope gravity=%d heading=%.0f height error=%.3fcm lateral drift=%.3fcm"),Gravity,Heading,MaxError,MaxLateral));
@@ -344,6 +370,7 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   for(bool VR:{false,true})for(bool Player:{false,true})for(int Frames:{30,90,144})
   {
    auto* Walker=World->SpawnActor<AACEWorldEntityActor>();Walker->bIsPlayer=Player;Walker->ItemType=ACEItemType::Creature;
+   Walker->PhysicsState=ACEPhysicsState::Gravity;
    Walker->ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
    Walker->ApplyACEPosition(P);Walker->RemoteMotion.bMoving=true;Walker->RemoteMotion.Forward=1;Walker->RemoteMotion.ForwardUnitsPerSecond=4;
    const float Dt=1.f/Frames;double MaxError=0;
@@ -866,6 +893,7 @@ bool FACEMovementReviewTest::RunTest(const FString&)
  if(FoundHill)for(float Dt:{1.f/90,1.f/15})for(float Direction:{-1.f,1.f})
  {
   FACEWorldObject Remote;Remote.Guid=290001;Remote.SetupId=0x02000001;Remote.ItemType=ACEItemType::Creature;Remote.bIsPlayer=true;
+  Remote.PhysicsState=ACEPhysicsState::Gravity;
   auto* Walker=World->SpawnActor<AACEWorldEntityActor>();Walker->InitializeFromObject(Remote,100,false);
   Walker->LastAceCellId=0x7D64000C;Walker->bClampToGround=true;Walker->bPendingGroundClamp=false;
   FVector HillPose=HillStart;if(Direction<0)HillPose.Y+=800;

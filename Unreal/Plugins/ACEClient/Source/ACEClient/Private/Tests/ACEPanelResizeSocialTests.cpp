@@ -118,6 +118,7 @@ bool FACEPanelResizeSocialTest::RunTest(const FString&)
     FACEBinaryReader Read(W.GetData());Session.HandleFellowshipFullUpdate(Read);
     TestEqual(TEXT("Decoded leader matches local player"),Session.Fellowship.LeaderGuid,1234);
     TestEqual(TEXT("Decoded fellowship includes both members"),Session.Fellowship.Members.Num(),2);
+    for(const auto& Member:Session.Fellowship.Members)TestTrue(TEXT("Fellow vitals carry a fresh receive timestamp"),Member.VitalsReceivedAt>0 && FPlatformTime::Seconds()-Member.VitalsReceivedAt<1);
     FACEWorldObject Other;Other.Guid=5678;Other.Name=TEXT("Fellow");Other.bIsPlayer=true;Session.WorldObjects.Add(Other.Guid,Other);
     Other.Guid=9999;Other.Name=TEXT("Recruit");Session.WorldObjects.Add(Other.Guid,Other);
     auto& A=Session.Allegiance; A.bValid=true; A.PatronGuid=8888; A.PatronName=TEXT("Patron"); A.MonarchGuid=7777;A.MonarchName=TEXT("Monarch");
@@ -175,8 +176,13 @@ bool FACEPanelResizeSocialTest::RunTest(const FString&)
     Session.CachedC2SPackets.Reset();Click(TEXT("FellowshipPage"),TEXT("FellowDisbandButton"));TestFalse(TEXT("Nonleader cannot disband"),HasAction(ACEGameAction::FellowshipQuit,1));
     Session.CachedC2SPackets.Reset();Click(TEXT("FellowshipPage"),TEXT("FellowQuitButton"));TestTrue(TEXT("Member can leave"),HasAction(ACEGameAction::FellowshipQuit,0));
     Session.Fellowship=FACEFellowshipInfo();Binder->RefreshFellowshipOverlays();Binder->RefreshSocialButtonLabels();
-    Binder->FellowshipNameEntry->SetText(FText::FromString(TEXT("New fellowship")));Draw(TEXT("CreateFellowship"));
-    const uint32 Before=Session.NextGameActionSequence;Click(TEXT("FellowshipPage"),TEXT("CreateFellowshipButton"));TestEqual(TEXT("Actual Create click sends one action"),Session.NextGameActionSequence,Before+1);
+    // Programmatic SetText does not emit the user-edit event in UE 5.8.
+    // Simulate that event before exercising the actual Create button click.
+    Draw(TEXT("CreateFellowshipEmpty"));
+    const FText NewFellowshipName=FText::FromString(TEXT("New fellowship"));
+    Binder->FellowshipNameEntry->SetText(NewFellowshipName);
+    Binder->FellowshipNameEntry->OnTextChanged.Broadcast(NewFellowshipName);Draw(TEXT("CreateFellowship"));
+    const uint32 Before=Session.NextGameActionSequence;Click(TEXT("FellowshipPage"),TEXT("CreateFellowshipButton"));TestEqual(TEXT("Actual Create click sends one action"),int32(Session.NextGameActionSequence-Before),1);
     Binder->SyncSocialPanelTab(TEXT("AllegiancePage"));Draw(TEXT("AllegianceActions"));
     const auto VList=Manager->FindElementUnder(TEXT("AllegiancePage"),TEXT("VassalsListBox"));
     ClickPoint(FVector2D(VList->GetScreenOrigin())+FVector2D(20,27));TestEqual(TEXT("Second vassal row can be selected"),Binder->SelectedVassalGuid,20001);
@@ -192,6 +198,14 @@ bool FACEPanelResizeSocialTest::RunTest(const FString&)
     Client->SelectObject(9999);Binder->RefreshAllegianceOverlays();Session.CachedC2SPackets.Reset();Click(TEXT("AllegiancePage"),TEXT("SwearButton"));
     TestEqual(TEXT("Swear needs confirmation"),Binder->PendingAllegianceGuid,9999);Client->SelectObject(5678);Binder->FinishServerConfirmation(true);
     TestTrue(TEXT("Confirmation retains original patron despite selection change"),HasAction(ACEGameAction::SwearAllegiance,9999));
+    Session.CachedC2SPackets.Reset();Client->SetPluginFellowshipUpdates(true);
+    TestTrue(TEXT("Recovery independently subscribes to fellowship vitals"),HasAction(ACEGameAction::FellowshipUpdateRequest,1));
+    Session.CachedC2SPackets.Reset();Client->SendFellowshipUpdateRequest(false);
+    TestTrue(TEXT("Closing desktop panel preserves recovery updates"),HasAction(ACEGameAction::FellowshipUpdateRequest,1));
+    Client->SetVRFellowshipUpdates(true);Session.CachedC2SPackets.Reset();Client->SetPluginFellowshipUpdates(false);
+    TestTrue(TEXT("Stopping recovery preserves VR panel updates"),HasAction(ACEGameAction::FellowshipUpdateRequest,1));
+    Session.CachedC2SPackets.Reset();Client->SetVRFellowshipUpdates(false);
+    TestTrue(TEXT("Last subscriber releases server updates"),HasAction(ACEGameAction::FellowshipUpdateRequest,0));
     return true;
 }
 #endif

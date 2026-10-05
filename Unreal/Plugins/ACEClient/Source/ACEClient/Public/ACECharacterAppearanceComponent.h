@@ -4,6 +4,7 @@
 #include "Components/ActorComponent.h"
 #include "ACETypes.h"
 #include "ACEOpcodes.h"
+#include "ACELandingMotion.h"
 #include "ACECharacterAppearanceComponent.generated.h"
 
 class UMaterialInstanceDynamic;
@@ -76,6 +77,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "ACE|Appearance")
 	bool GetPartBindTransform(int32 PartIndex, FTransform& OutTransform) const;
 	int32 GetPartCount() const { return PartMeshes.Num(); }
+	/** Retail fallback uses each animated GfxObj's authored DrawingBSP sphere. */
+	bool TraceDrawingSpheres(const FVector& Start, const FVector& End, double& ClosestDistance) const;
+	bool GetSelectionWorldBounds(FBox& OutBox) const;
 	/** Tracked VR body; lower-body gait follows actual world travel, independent of stance. */
 	bool bVRPoseControlled = false;
 
@@ -182,6 +186,7 @@ public:
 	/** Clear airborne holds; an actual landing plays the DAT recovery into Ready/run. */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
 	void ClearJumpMotionIfAny(bool bLanded = false);
+	bool BuildLandingRootTrack(ACELandingMotion::FRootTrack& Out) const;
 
 	/** Cancel a held (or hold-pending) chat-pose emote — retail clears it on move/jump. */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
@@ -244,6 +249,7 @@ protected:
 
 	UPROPERTY()
 	TArray<TObjectPtr<UProceduralMeshComponent>> PartMeshes;
+	TArray<FSphere> PartDrawingSpheres;
 
 	TArray<FTransform> BindTransforms;
 	/** Object physics frame (omega tumble) combined with default-anim part quats. */

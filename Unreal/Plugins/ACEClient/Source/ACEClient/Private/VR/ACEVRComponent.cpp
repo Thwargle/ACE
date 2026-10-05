@@ -325,14 +325,15 @@ void UACEVRComponent::TickComponent(float Dt, ELevelTick TickType, FActorCompone
 	{
 		LastPlayer = 0; ResetTrackingOrigin();
 	}
+	const bool ChatHovered = ChatPanel && ChatPanel->IsVisible() &&
+		(RightPointer->GetHoveredWidgetComponent()==ChatPanel || LeftPointer->GetHoveredWidgetComponent()==ChatPanel);
 	if (bSpellWheelOpen) UpdateSpellWheel();
 	else if (bWheelTurnNeutral)
 	{
 		// A stick held over a wheel sector must not become an immediate turn.
 		if (TurnStick.Size()<.25f) { bWheelTurnNeutral=false; bTurnReady=true; }
 	}
-	else if (!IsInputBlocked() && !(ChatPanel && ChatPanel->IsVisible() &&
-		(RightPointer->GetHoveredWidgetComponent()==ChatPanel || LeftPointer->GetHoveredWidgetComponent()==ChatPanel)))
+	else if (!IsMovementBlocked() && !ChatHovered)
 	{
 		const float X = ACEVRMath::DeadZone(TurnStick, Settings->StickDeadZone).X;
 		if (Settings->bSnapTurn)
@@ -342,7 +343,9 @@ void UACEVRComponent::TickComponent(float Dt, ELevelTick TickType, FActorCompone
 		}
 		else if (FMath::Abs(X) > 0.f) RotateTracking(X * Settings->SmoothTurnDegreesPerSecond * FMath::Min(Dt, .05f));
 	}
-	else if (PanelEditHand == INDEX_NONE && FMath::Abs(TurnStick.Y) > .45f && GetWorld()->GetTimeSeconds() - LastScroll > .08f)
+	// Vertical menu scrolling remains available alongside horizontal turning.
+	if (!bSpellWheelOpen && !bWheelTurnNeutral && (IsMenuOpen() || ChatHovered) &&
+		PanelEditHand == INDEX_NONE && FMath::Abs(TurnStick.Y) > .45f && GetWorld()->GetTimeSeconds() - LastScroll > .08f)
 	{
 		auto* P = RightPointer->IsOverHitTestVisibleWidget() ? RightPointer.Get() : LeftPointer.Get();
 		P->ScrollWheel(TurnStick.Y > 0.f ? 1.f : -1.f); LastScroll = GetWorld()->GetTimeSeconds();
@@ -396,7 +399,7 @@ void UACEVRComponent::TickComponent(float Dt, ELevelTick TickType, FActorCompone
 		++TimingFrames;
         TimingWorldSeconds += Dt;
         const double Distance = FVector::Dist2D(TimingPosition, LastTimingPosition);
-        if (TimingDelta > 0 && TimingDelta < .25 && Distance < 200. && SmoothedMoveStick.Y > .85f && !IsInputBlocked())
+        if (TimingDelta > 0 && TimingDelta < .25 && Distance < 200. && SmoothedMoveStick.Y > .85f && !IsMovementBlocked())
         { TimingMoveSeconds += TimingDelta; TimingMoveDistance += Distance; }
 		TimingGame += FPlatformTime::ToMilliseconds(GGameThreadTime);
 		TimingRender += FPlatformTime::ToMilliseconds(GRenderThreadTime);
@@ -475,9 +478,15 @@ void UACEVRComponent::UpdateTrackingState(bool Tracked)
 
 bool UACEVRComponent::IsInputBlocked() const
 {
+	// Menu interaction suppresses attacks, but must not freeze locomotion.
+	return IsMovementBlocked() || bInventoryOpen;
+}
+
+bool UACEVRComponent::IsMovementBlocked() const
+{
 	return !bTracking || !PC || !Client || Client->GetSessionState() != EACESessionState::InWorld
-		|| PC->bEnterWorldLoading || PC->bWorldRevealActive || IsMenuOpen() || bTextKeyboardOpen || VitalsDragHand != INDEX_NONE || PanelEditHand != INDEX_NONE
-		|| (Client->GetPlayerVitals().bValid && Client->GetPlayerVitals().Health <= 0);
+		|| PC->bEnterWorldLoading || PC->bWorldRevealActive || bSettingsOpen || bTextKeyboardOpen || VitalsDragHand != INDEX_NONE || PanelEditHand != INDEX_NONE
+		|| (Client->GetPlayerVitalsView().bValid && Client->GetPlayerVitalsView().Health <= 0);
 }
 
 FVector UACEVRComponent::GetBodyForward() const
@@ -513,10 +522,10 @@ void UACEVRComponent::PrepareMovement(float Dt)
 	}
 	// Touch sticks commonly stop around 0.93 at the gate. Reach the retail
 	// maximum at the outer 10%, without increasing the character's run speed.
-	const FVector2D Desired = IsInputBlocked() ? FVector2D::ZeroVector : ACEVRMath::AssistForward(
+	const FVector2D Desired = IsMovementBlocked() ? FVector2D::ZeroVector : ACEVRMath::AssistForward(
 		ACEVRMath::DeadZone(MoveStick, Settings->StickDeadZone, .9f), Settings->ForwardAssistDegrees);
 	const float Alpha = Settings->MovementSmoothing <= 0.f ? 1.f : 1.f - FMath::Exp(-FMath::Min(Dt, .1f) / Settings->MovementSmoothing);
-	SmoothedMoveStick = IsInputBlocked() ? FVector2D::ZeroVector : FMath::Lerp(SmoothedMoveStick, Desired, Alpha);
+	SmoothedMoveStick = IsMovementBlocked() ? FVector2D::ZeroVector : FMath::Lerp(SmoothedMoveStick, Desired, Alpha);
 	if (Desired.IsNearlyZero() && SmoothedMoveStick.SizeSquared() < .0001f) SmoothedMoveStick = FVector2D::ZeroVector;
 }
 
@@ -525,14 +534,14 @@ void UACEVRComponent::GetMovement(float& Forward, float& Right, bool& Running) c
 	// The controller's normal movement path applies current Run skill and burden.
 	// Walk/run is a persistent preference, independent of combat grip gestures.
 	Forward = Right = 0.f; Running = Settings->bRun;
-	if (IsInputBlocked()) return;
+	if (IsMovementBlocked()) return;
 	const FVector2D V = SmoothedMoveStick * Settings->MovementScale;
 	Forward = V.Y; Right = V.X;
 }
 
 FVector UACEVRComponent::GetRoomScaleDelta() const
 {
-	if (IsInputBlocked() || MoveStick.Size() > Settings->StickDeadZone || PC->bJumpAirborne) return FVector::ZeroVector;
+	if (IsMovementBlocked() || MoveStick.Size() > Settings->StickDeadZone || PC->bJumpAirborne) return FVector::ZeroVector;
 	FVector Delta = Head->GetComponentLocation() - GetOwner()->GetActorLocation(); Delta.Z = 0.f;
 	return Delta.GetClampedToMaxSize(20.f);
 }

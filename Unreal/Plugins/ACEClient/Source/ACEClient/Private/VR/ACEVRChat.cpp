@@ -1,4 +1,9 @@
 #include "VR/ACEVRChat.h"
+#include "Mods/ACEWaypoint.h"
+#include "Mods/ACEPluginSubsystem.h"
+#include "Widgets/Text/SRichTextBlock.h"
+#include "Styling/SlateStyle.h"
+#include "Engine/GameInstance.h"
 #include "VR/ACEVRComponent.h"
 #include "VR/ACEVRSettings.h"
 #include "ACEVRNativeHUD.h"
@@ -104,6 +109,34 @@ bool UACEVRChat::Refresh()
     {
         if(!DisplayedLines.IsEmpty() && Line.Serial<=DisplayedLines.Last())continue;
         DisplayedLines.Add(Line.Serial);
+        const auto CoordinateLinks=ACEWaypoint::FindCoordinates(Line.Text);
+        auto* PluginHost=GetGameInstance()->GetSubsystem<UACEPluginSubsystem>();
+        if(PluginHost && PluginHost->IsWaypointEnabled() && !CoordinateLinks.IsEmpty())
+        {
+            static const TSharedRef<FSlateStyleSet> LinkStyles=[]
+            {
+                auto Styles=MakeShared<FSlateStyleSet>(TEXT("WaypointChat"));
+                auto Link=FCoreStyle::Get().GetWidgetStyle<FHyperlinkStyle>(TEXT("Hyperlink"));
+                auto Text=Link.TextStyle;Text.SetFont(FCoreStyle::GetDefaultFontStyle("Regular",24));Text.SetColorAndOpacity(FLinearColor(.18f,.72f,1.f));
+                Link.SetTextStyle(Text);Styles->Set(TEXT("Waypoint.Link"),Link);return Styles;
+            }();
+            auto Escape=[](FString S){S.ReplaceInline(TEXT("&"),TEXT("&amp;"));S.ReplaceInline(TEXT("<"),TEXT("&lt;"));S.ReplaceInline(TEXT(">"),TEXT("&gt;"));S.ReplaceInline(TEXT("\""),TEXT("&quot;"));return S;};
+            FString Markup;int32 At=0;
+            for(const auto& Link:CoordinateLinks)
+            {
+                Markup+=Escape(Line.Text.Mid(At,Link.Begin-At));
+                Markup+=TEXT("<a id=\"waypoint\" style=\"Waypoint.Link\" href=\"")+ACEWaypoint::Format(Link.Coordinates)+TEXT("\">")+Escape(Line.Text.Mid(Link.Begin,Link.End-Link.Begin))+TEXT("</>");At=Link.End;
+            }
+            Markup+=Escape(Line.Text.Mid(At));
+            const TWeakObjectPtr<UACEPluginSubsystem> WeakHost=PluginHost;
+            // Rich text owns its copied style; only coordinate spans navigate, never the whole message.
+            const FTextBlockStyle RowStyle=FTextBlockStyle().SetFont(FCoreStyle::GetDefaultFontStyle("Regular",24)).SetColorAndOpacity(Line.Color);
+            Lines->AddSlot().AutoHeight().Padding(0,3)[SNew(SRichTextBlock).Text(FText::FromString(Markup)).TextStyle(&RowStyle)
+                .DecoratorStyleSet(&LinkStyles.Get()).WrapTextAt(700.f)
+                +SRichTextBlock::HyperlinkDecorator(TEXT("waypoint"),FSlateHyperlinkRun::FOnClick::CreateLambda([WeakHost](const FSlateHyperlinkRun::FMetadata& Data)
+                {if(WeakHost.IsValid() && WeakHost->IsWaypointEnabled())if(const FString* Text=Data.Find(TEXT("href")))WeakHost->SetWaypoint(*Text);}))];
+            continue;
+        }
         auto Row=ChatLabel(Line.Text,Line.Color);
         // The 760px panel leaves 700px after frame and scrollbar padding.
         // Auto wrapping learns its width during paint, leaving a new row's

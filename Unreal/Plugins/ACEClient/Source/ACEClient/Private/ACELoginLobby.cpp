@@ -1,4 +1,5 @@
 #include "ACELoginWidget.h"
+#include "Mods/ACEPluginPanel.h"
 #include "ACELoginSettings.h"
 #include "ACEClientBuild.h"
 #include "ACEUpdateSubsystem.h"
@@ -155,6 +156,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	for (const auto& Item : TArray<TPair<FString,FString>>{{TEXT("Play"),TEXT("play")},{TEXT("Browse servers"),TEXT("browser")},{TEXT("Game files"),TEXT("files")},{TEXT("Quit"),TEXT("quit")}})
 		Header->AddChildToWrapBox(ActionButton(Item.Key,Item.Value));
 	UpdateNavButton=ActionButton(TEXT("Updates"),TEXT("updates")); Header->AddChildToWrapBox(UpdateNavButton);
+	Header->AddChildToWrapBox(ActionButton(TEXT("Plugins"),TEXT("plugins")));
 	Pages = WidgetTree->ConstructWidget<UWidgetSwitcher>(); AddLine(Root, Pages, 16);
 	auto Card = [&](UVerticalBox*& Content) -> UBorder*
 	{
@@ -282,6 +284,8 @@ void UACELoginWidget::EnsureDefaultLayout()
 	CancelUpdateButton=ActionButton(TEXT("Cancel update"),TEXT("cancelupdate")); UpdateActions->AddChildToWrapBox(CancelUpdateButton);
 	UpdateInstallHelp=Label(PLATFORM_LINUX?TEXT("Extract each release into a new folder. Saved settings and DAT files are kept separately."):ACEUpdates::InstallationNotice(PLATFORM_ANDROID),18,true); AddLine(Updates,UpdateInstallHelp);
 	Row(Updates,{{TEXT("Release notes"),TEXT("updatenotes")},{TEXT("Back to play"),TEXT("play")}});
+	auto* PluginPanel=WidgetTree->ConstructWidget<UACEPluginPanel>();
+	auto* PluginSize=WidgetTree->ConstructWidget<USizeBox>(); PluginSize->SetHeightOverride(600); PluginSize->SetContent(PluginPanel); Pages->AddChild(PluginSize);
 	// Inline destructive-action confirmation is also fully usable with VR pointers.
 	FooterSize=WidgetTree->ConstructWidget<USizeBox>(); FooterSize->SetWidthOverride(1028);
 	auto* FooterSlot=Canvas->AddChildToCanvas(FooterSize); FooterSlot->SetAnchors(FAnchors(.5f,1)); FooterSlot->SetAlignment(FVector2D(.5f,1)); FooterSlot->SetPosition(FVector2D(0,-18)); FooterSlot->SetAutoSize(true);
@@ -603,6 +607,7 @@ void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 		UKismetSystemLibrary::QuitGame(this,GetOwningPlayer(),EQuitPreference::Quit,false);
 		return;
 	}
+	if (Action==TEXT("plugins")) { Pages->SetActiveWidgetIndex(5); return; }
 	if (Action==TEXT("updates")) { Pages->SetActiveWidgetIndex(4); RefreshUpdateControls(); return; }
 	if (Updater)
 	{

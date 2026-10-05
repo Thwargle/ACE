@@ -126,6 +126,25 @@ const TArray<FAction>& Actions()
   static const TCHAR* SpellLabels[]={TEXT("Magic: spell 1"),TEXT("Magic: spell 2"),TEXT("Magic: spell 3"),TEXT("Magic: spell 4"),TEXT("Magic: spell 5"),TEXT("Magic: spell 6"),TEXT("Magic: spell 7"),TEXT("Magic: spell 8"),TEXT("Magic: spell 9")};
   for(int32 I=0;I<9;++I)Result.Emplace(SpellSlot(I),SpellLabels[I],TEXT("Combat"),TArray<FInputChord>{FInputChord(Digits[I])},8);
   Result.Append(ACERetailAdditionalActions());
+  // Keep the three retail mapping slots intact, including imported keymaps.
+  const TMap<FKey,FKey> Controller={
+   {EKeys::W,EKeys::Gamepad_LeftStick_Up},{EKeys::S,EKeys::Gamepad_LeftStick_Down},
+   {EKeys::Q,EKeys::Gamepad_LeftStick_Left},{EKeys::E,EKeys::Gamepad_LeftStick_Right},
+   {EKeys::NumPadFour,EKeys::Gamepad_RightStick_Left},{EKeys::NumPadSix,EKeys::Gamepad_RightStick_Right},
+   {EKeys::NumPadEight,EKeys::Gamepad_RightStick_Up},{EKeys::NumPadTwo,EKeys::Gamepad_RightStick_Down},
+   {EKeys::SpaceBar,EKeys::Gamepad_FaceButton_Bottom},{EKeys::F,EKeys::Gamepad_FaceButton_Right},
+   {Action(TEXT("Examine")),EKeys::Gamepad_FaceButton_Left},{Action(TEXT("Pickup")),EKeys::Gamepad_FaceButton_Top},
+   {EKeys::Tilde,EKeys::Gamepad_LeftShoulder},{Action(TEXT("ClosestMonster")),EKeys::Gamepad_LeftTrigger},
+   {EKeys::Apostrophe,EKeys::Gamepad_RightShoulder},{EKeys::NumLock,EKeys::Gamepad_LeftThumbstick},
+   {EKeys::NumPadZero,EKeys::Gamepad_RightThumbstick},{EKeys::I,EKeys::Gamepad_Special_Right},
+   {EKeys::Escape,EKeys::Gamepad_Special_Left},{EKeys::Add,EKeys::Gamepad_DPad_Right},{EKeys::Subtract,EKeys::Gamepad_DPad_Left},
+   {Action(TEXT("MeleeMedium")),EKeys::Gamepad_RightTrigger},{Action(TEXT("MissileMedium")),EKeys::Gamepad_RightTrigger},
+   {Action(TEXT("SpellCast")),EKeys::Gamepad_RightTrigger},
+   {Action(TEXT("MeleeIncrease")),EKeys::Gamepad_DPad_Up},{Action(TEXT("MeleeDecrease")),EKeys::Gamepad_DPad_Down},
+   {Action(TEXT("MissileIncrease")),EKeys::Gamepad_DPad_Up},{Action(TEXT("MissileDecrease")),EKeys::Gamepad_DPad_Down},
+   {Action(TEXT("SpellNext")),EKeys::Gamepad_DPad_Up},{Action(TEXT("SpellPrevious")),EKeys::Gamepad_DPad_Down}
+  };
+  for(auto& A:Result){A.DefaultBindings.SetNum(BindingSlots);if(const auto* Key=Controller.Find(A.Key))A.DefaultBindings[3]=FInputChord(*Key);}
   return Result;
  }();
  return List;
@@ -147,8 +166,8 @@ static void Load()
  TSet<FKey> SavedActions;
  for(const auto& A:Actions())
  {
-  auto& Bindings=Live.Add(A.Key,A.DefaultBindings); Bindings.SetNum(3);
-  for(int32 S=0;S<3;++S)
+  auto& Bindings=Live.Add(A.Key,A.DefaultBindings); Bindings.SetNum(BindingSlots);
+  for(int32 S=0;S<BindingSlots;++S)
   {
    FString Text; if(!GConfig->GetString(TEXT("ACE.InputBindings"),*FString::Printf(TEXT("%s.%d"),*A.Key.ToString(),S),Text,GGameUserSettingsIni))continue;
    TArray<FString> Fields; Text.ParseIntoArray(Fields,TEXT("|"),false);
@@ -209,12 +228,41 @@ static bool Check(const APlayerController* PC,FKey Key,bool bPressed)
 }
 bool Down(const APlayerController* PC,FKey Key){return Check(PC,Key,false);}
 bool Pressed(const APlayerController* PC,FKey Key){return Check(PC,Key,true);}
+FKey StickDirectionKey(FKey Axis,float V)
+{
+ if(Axis==EKeys::Gamepad_LeftX)return V>=0?EKeys::Gamepad_LeftStick_Right:EKeys::Gamepad_LeftStick_Left;
+ if(Axis==EKeys::Gamepad_LeftY)return V>=0?EKeys::Gamepad_LeftStick_Up:EKeys::Gamepad_LeftStick_Down;
+ if(Axis==EKeys::Gamepad_RightX)return V>=0?EKeys::Gamepad_RightStick_Right:EKeys::Gamepad_RightStick_Left;
+ if(Axis==EKeys::Gamepad_RightY)return V>=0?EKeys::Gamepad_RightStick_Up:EKeys::Gamepad_RightStick_Down;
+ return FKey();
+}
+float Value(const APlayerController* PC,FKey ActionKey)
+{
+ if(!Down(PC,ActionKey))return 0.f;
+ float Result=0.f;
+ const auto* Bindings=Live.Find(ActionKey);if(!Bindings)return 1.f;
+ for(const auto& C:*Bindings)
+ {
+  if(!(PC->IsInputKeyDown(C.Key)||((C.Key==EKeys::MouseScrollUp||C.Key==EKeys::MouseScrollDown)&&PC->WasInputKeyJustPressed(C.Key))) || !Matches(ActionKey,FInputChord(C.Key,
+   PC->IsInputKeyDown(EKeys::LeftShift)||PC->IsInputKeyDown(EKeys::RightShift),
+   PC->IsInputKeyDown(EKeys::LeftControl)||PC->IsInputKeyDown(EKeys::RightControl),
+   PC->IsInputKeyDown(EKeys::LeftAlt)||PC->IsInputKeyDown(EKeys::RightAlt),
+   PC->IsInputKeyDown(EKeys::LeftCommand)||PC->IsInputKeyDown(EKeys::RightCommand))))continue;
+  float Amount=1.f;
+  for(FKey Axis:{EKeys::Gamepad_LeftX,EKeys::Gamepad_LeftY,EKeys::Gamepad_RightX,EKeys::Gamepad_RightY})
+   if(C.Key==StickDirectionKey(Axis,1.f)||C.Key==StickDirectionKey(Axis,-1.f))
+    Amount=FMath::Clamp((FMath::Abs(PC->GetInputAnalogKeyState(Axis))-.2f)/.8f,0.f,1.f);
+  Result=FMath::Max(Result,Amount);
+ }
+ return Result;
+}
 float MovementAxis(const APlayerController* PC,FKey Positive,FKey Negative,const TMap<FKey,uint64>& PressOrder,
  FKey AdditionalPositive,FKey AdditionalNegative)
 {
  const bool P=Down(PC,Positive)||(AdditionalPositive.IsValid()&&Down(PC,AdditionalPositive));
  const bool N=Down(PC,Negative)||(AdditionalNegative.IsValid()&&Down(PC,AdditionalNegative));
- if(!P||!N)return float(P)-float(N);
+ if(!P||!N)return P?FMath::Max(Value(PC,Positive),AdditionalPositive.IsValid()?Value(PC,AdditionalPositive):0.f)
+  : N?-FMath::Max(Value(PC,Negative),AdditionalNegative.IsValid()?Value(PC,AdditionalNegative):0.f):0.f;
  const FInputChord Modifiers(EKeys::Invalid,
   PC->IsInputKeyDown(EKeys::LeftShift)||PC->IsInputKeyDown(EKeys::RightShift),
   PC->IsInputKeyDown(EKeys::LeftControl)||PC->IsInputKeyDown(EKeys::RightControl),
@@ -235,7 +283,7 @@ float MovementAxis(const APlayerController* PC,FKey Positive,FKey Negative,const
 }
 void BeginEdit(){Load();Draft=Live;DraftBlocked=LiveBlocked;DraftFileName=LiveFileName;bEditing=true;}
 void Reload(){bLoaded=false;bEditing=false;ActiveContext=1;Live.Reset();Draft.Reset();LiveBlocked.Reset();DraftBlocked.Reset();Load();}
-void Defaults(){DraftFileName=TEXT("acclient.keymap");DraftBlocked.Reset();for(const auto& A:Actions()){auto& B=Draft.FindOrAdd(A.Key);B=A.DefaultBindings;B.SetNum(3);}}
+void Defaults(){DraftFileName=TEXT("acclient.keymap");DraftBlocked.Reset();for(const auto& A:Actions()){auto& B=Draft.FindOrAdd(A.Key);B=A.DefaultBindings;B.SetNum(BindingSlots);}}
 void Revert(){Draft=Live;DraftBlocked=LiveBlocked;DraftFileName=LiveFileName;}
 void Cancel(){Revert();bEditing=false;}
 void ReplaceBlockedBindings(const TSet<FString>& Groups,const TArray<FBlockedBinding>& Bindings)
@@ -251,10 +299,10 @@ void SetKeymapFileName(const FString& Name){if(bEditing&&!Name.IsEmpty())DraftFi
 FInputChord Get(FKey Key,int32 Slot){Load();const auto* B=(bEditing?Draft:Live).Find(Key);return B&&B->IsValidIndex(Slot)?(*B)[Slot]:FInputChord();}
 void Set(FKey Key,int32 Slot,FInputChord Chord)
 {
- if(!bEditing||Slot<0||Slot>2)return;
+ if(!bEditing||Slot<0||Slot>=BindingSlots)return;
  if(Chord.Key.IsValid())DraftBlocked.RemoveAll([&](const FBlockedBinding& B){return B.Context==Context(Key)&&B.Chord==Chord;});
  if(Chord.Key.IsValid())for(auto& Pair:Draft)if(Context(Pair.Key)==Context(Key))for(auto& C:Pair.Value)if(C==Chord)C=FInputChord();
- auto& B=Draft.FindOrAdd(Key);B.SetNum(3);B[Slot]=Chord;
+ auto& B=Draft.FindOrAdd(Key);B.SetNum(BindingSlots);B[Slot]=Chord;
 }
 void Commit()
 {

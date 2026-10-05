@@ -66,7 +66,7 @@ namespace
 		}
 	}
 
-	/** Retail CPartArray::GetSelectionSphere — Visibility pick is that sphere (actor scale applies). */
+	/** Setup selection sphere seeds the broad phase; retail refines per GfxObj. */
 	bool TrySetupSelectionCapsule(
 		UACEDatSubsystem* Dat, int32 InSetupId, float WorldScale,
 		float& OutRadius, float& OutHalfHeight, FVector& OutCenterRel)
@@ -188,6 +188,14 @@ void AACEWorldEntityActor::InitializeFromObject(const FACEWorldObject& Object, f
 		Remote->AddTickPrerequisiteActor(this);
 		Remote->AddTickPrerequisiteComponent(Appearance);
 		ScriptComponent->AddTickPrerequisiteComponent(Remote);
+	}
+	// The session has already rejected stale descriptions. A replacement
+	// reward NPC can reuse both GUID and Setup; retaining its previous death
+	// animation/materials then leaves the new, usable object invisible.
+	if (bReceivedDeathMotion && !Object.bDying)
+	{
+		if (Appearance) Appearance->ClearDeathMotion();
+		if (ScriptComponent) ScriptComponent->RestoreMeshVisuals();
 	}
 	bReceivedDeathMotion = Object.bDying;
 	ParentGuid = Object.ParentGuid;
@@ -555,10 +563,10 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 	{
 		// This proxy is selection-only when authored bodies provide movement
 		// collision. Include animated artwork outside Setup's small sphere (e.g.
-		// floating crystal NPCs), then let the picker refine against drawn tris.
+		// floating crystal NPCs), then refine with retail polygon/sphere picking.
 		// Convert to actor space so DefaultScale is not applied a second time.
 		FBox VisualBox(ForceInit);
-		if (Appearance->GetVisualWorldBounds(VisualBox))
+		if (Appearance->GetSelectionWorldBounds(VisualBox))
 		{
 			FBox LocalBox(ForceInit);
 			for (int32 Corner=0; Corner<8; ++Corner)
@@ -640,8 +648,8 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 	}
 	else if (bHavePartMesh && bCreatureLike)
 	{
-		// Retail pick is GetSelectionSphere, not gfx-part tris. Mesh vis on legs-only
-		// PhysicsPolygons made give/select work only from the waist down.
+		// The proxy admits the ray; the shared picker tests drawing polygons and
+		// DrawingBSP spheres, never the legs-only PhysicsPolygons.
 		Appearance->ConfigurePartCollision(false, false);
 	}
 	else if (bHavePartMesh && bBlocking)

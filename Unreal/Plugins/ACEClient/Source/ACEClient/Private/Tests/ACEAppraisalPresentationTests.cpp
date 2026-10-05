@@ -66,9 +66,47 @@ bool FACEAppraisalPresentationTest::RunTest(const FString&)
     Armor.StringProperties.Add(16,TEXT("Armor description."));
     const FString ArmorBody=ACEAppraisalFormatting::ItemExaminationText(Armor,nullptr);
     TestTrue(TEXT("Crafting follows burden without an extra empty line"),ArmorBody.Contains(TEXT("Burden: 0\nThis item has been tinkered 2 times.")));
-    TestTrue(TEXT("Crafting and combat stats form separate paragraphs"),ArmorBody.Contains(TEXT("Workmanship: Flawless (7)\n\nArmor Level: 100")));
-    TestTrue(TEXT("Related defense bonuses remain single spaced"),ArmorBody.Contains(TEXT("Melee Defense: +10.0%.\nBonus to Missile Defense: +20.0%.\nSlashing:")));
+    TestTrue(TEXT("Crafting and combat stats form separate paragraphs"),ArmorBody.Contains(TEXT("Workmanship: Flawless (7)\n\nBonus to Melee Defense:")));
+    TestTrue(TEXT("Defense bonuses precede armor in retail order"),ArmorBody.Contains(TEXT("Melee Defense: +10.0%.\nBonus to Missile Defense: +20.0%.\nArmor Level: 100\nSlashing:")));
     TestFalse(TEXT("Sparse armor sections have no triple line breaks"),ArmorBody.Contains(TEXT("\n\n\n")));
+    FACEAppraisalInfo Bow;Bow.bSuccess=Bow.bHasWeaponProfile=true;Bow.ItemType=ACEItemType::MissileWeapon;
+    Bow.IntProperties={{9,static_cast<int32>(ACEEquipMask::MissileWeapon)},{50,1}};
+    Bow.WeaponDamageMod=2.5f;Bow.Damage=5;Bow.WeaponTime=20;Bow.WeaponMaxVelocity=40;
+    for(int32 Ammo:{1,2,4})
+    {
+        Bow.IntProperties[50]=Ammo;
+        const FString Detail=ACEAppraisalFormatting::ItemDetails(Bow);
+        TestTrue(TEXT("Bow, crossbow and atlatl display percentage damage modifier"),Detail.Contains(TEXT("Damage Modifier: +150%")));
+        TestTrue(TEXT("Launchers identify ammunition damage as a bonus"),Detail.Contains(TEXT("Damage Bonus: 5")));
+    }
+    Bow.IntProperties[50]=0;
+    TestFalse(TEXT("Thrown weapon has no launcher multiplier"),ACEAppraisalFormatting::ItemDetails(Bow).Contains(TEXT("Damage Modifier:")));
+    Bow.IntProperties[50]=1;Bow.bSuccess=false;
+    TestTrue(TEXT("Failed launcher appraisal does not disclose the multiplier"),ACEAppraisalFormatting::ItemDetails(Bow).Contains(TEXT("Damage Modifier: Unknown")));
+    FACEAppraisalInfo Shield;Shield.bSuccess=true;Shield.IntProperties={{9,static_cast<int32>(ACEEquipMask::Shield)},{28,400}};
+    Shield.ArmorResistances={1.f,1.1f,1.2f,1.3f,1.4f,1.5f,1.6f,1.7f};
+    FACEPlayerVitals Viewer;FACESkillInfo Skill;Skill.SkillId=48;Skill.Current=300;Skill.AdvancementClass=2;Viewer.Skills.Add(Skill);
+    auto ShieldText=ACEAppraisalFormatting::ItemDetails(Shield,nullptr,&Viewer);
+    TestTrue(TEXT("Shield shows base and trained skill-limited effective level"),ShieldText.Contains(TEXT("Base Shield Level: 400\nEffective Shield Level : 150 (with Shield skill)")));
+    Viewer.Skills[0].AdvancementClass=3;Viewer.Skills[0].Current=500;
+    TestTrue(TEXT("Specialized Shield skill caps at the base level"),ACEAppraisalFormatting::ItemDetails(Shield,nullptr,&Viewer).Contains(TEXT("Effective Shield Level : 400")));
+    int32 Previous=-1;
+    for(const TCHAR* Name:{TEXT("Slashing:"),TEXT("Piercing:"),TEXT("Bludgeoning:"),TEXT("Fire:"),TEXT("Cold:"),TEXT("Acid:"),TEXT("Electric:"),TEXT("Nether:")})
+    {const int32 At=ShieldText.Find(Name);TestTrue(TEXT("Resistances use retail display order without reordering the wire values"),At>Previous);Previous=At;}
+    Shield.IntProperties.Remove(28);
+    TestTrue(TEXT("Unknown shield level is explicit"),ACEAppraisalFormatting::ItemDetails(Shield).Contains(TEXT("Shield Level: Unknown")));
+    Armor.IntProperties.Add(4,0xB1E);Armor.IntProperties.Add(265,14);Armor.ItemType=ACEItemType::Armor;
+    const auto CoverageText=ACEAppraisalFormatting::ItemDetails(Armor);
+    TestTrue(TEXT("Armor set and coverage follow server qualities and retail body-part order"),CoverageText.Contains(
+        TEXT("Set: Adept's\n\nCovers Chest, Abdomen, Upper Legs, Lower Legs")));
+    FACEAppraisalInfo Ammo;Ammo.IntProperties={{9,static_cast<int32>(ACEEquipMask::MissileAmmo)},{50,2}};
+    TestTrue(TEXT("Ammunition describes its launcher without needing a weapon profile"),ACEAppraisalFormatting::ItemDetails(Ammo).Contains(TEXT("Used as ammunition by crossbows.")));
+    TestFalse(TEXT("Ammunition does not invent weapon speed"),ACEAppraisalFormatting::ItemDetails(Ammo).Contains(TEXT("Speed:")));
+    Shield.IntProperties.Add(28,400);Shield.ArmorEnchantments=1u|(1u<<16)|16u;
+    ShieldText=ACEAppraisalFormatting::ItemDetails(Shield);
+    const auto ShieldColors=ACEAppraisalFormatting::ItemTextColors(Shield,ShieldText);
+    TestTrue(TEXT("Base shield level uses the armor enchantment color"),ShieldColors[ShieldText.Find(TEXT("Base Shield Level:"))].G>.8f);
+    TestTrue(TEXT("Reordered Cold resistance keeps the correct harmful wire color"),ShieldColors[ShieldText.Find(TEXT("Cold:"))].R>.9f);
     return !HasAnyErrors();
 }
 #endif

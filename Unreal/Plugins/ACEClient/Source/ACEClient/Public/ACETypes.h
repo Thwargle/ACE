@@ -1053,6 +1053,11 @@ struct ACECLIENT_API FACEPlayerVitals
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") TArray<FACESkillInfo> Skills;
 	/** Integer qualities contributing to skills (augmentation bonuses). */
 	TMap<int32, int32> StatQualityInts;
+	/** Server character qualities retained for plugin queries, including custom IDs. */
+	TMap<int32, int64> QualityInt64s;
+	TMap<int32, bool> QualityBools;
+	TMap<int32, double> QualityDoubles;
+	TMap<int32, FString> QualityStrings;
 
 	int32 GetAttributeBase(int32 Id) const
 	{
@@ -1229,6 +1234,10 @@ struct ACECLIENT_API FACEWorldObject
 	/** PublicWeenieDesc MaterialType (0 = none). Used for salvage suitability. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 MaterialType = 0;
+
+	/** PublicWeenieDesc workmanship; fractional for combined salvage, -1 if absent. */
+	UPROPERTY(BlueprintReadOnly, Category = "ACE")
+	float SalvageWorkmanship = -1.f;
 
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 SetupId = 0;
@@ -1716,6 +1725,8 @@ struct ACECLIENT_API FACEFellowshipMember
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 ManaCur = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 ManaMax = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") bool bShareLoot = true;
+	// Monotonic receive time; automation must not heal from stale fellowship data.
+	double VitalsReceivedAt = 0;
 };
 
 USTRUCT(BlueprintType)

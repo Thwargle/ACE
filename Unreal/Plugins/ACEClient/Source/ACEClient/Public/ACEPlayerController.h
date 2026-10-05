@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
 #include "ACETypes.h"
+#include "ACELandingMotion.h"
 #include "ACEPlayerController.generated.h"
 
 class UACEClientSubsystem;
@@ -60,8 +61,17 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
     friend class FACERetailCharacterCreationScreenTest;
 
 public:
+    void SetPluginAttackPower(float Power);
 	AACEPlayerController();
+	int32 FindNearbyTarget(bool bEnemies, int32 Direction = 0, int32 ExcludeGuid = 0) const;
 	bool IsVRActive() const;
+    void QueuePluginJump(float Charge,float Heading,float Forward,float Strafe=0,bool Walk=false);
+    void CancelPluginJump();
+    bool IsPluginJumpPending() const {return bPluginJumpQueued || bJumpAirborne;}
+    bool bPluginJumpQueued=false;
+    float PluginJumpCharge=0,PluginJumpHeading=0,PluginJumpForward=1,PluginJumpStrafe=0;
+    bool bPluginWalkJump=false;
+    double PluginJumpStarted=0;
 	bool IsCameraMapView() const { return bCameraMapMode; }
 	class UACEVRComponent* GetVRComponent() const;
 	UPROPERTY(Transient) TObjectPtr<class UACEFrameRateWidget> FrameRateWidget;
@@ -137,6 +147,7 @@ public:
 
 	/** Stop Holding Use retries (e.g. after ApproachVendor opens the vendor UI). */
 	void EndUseApproach();
+	bool IsUseApproachActive() const { return bServerMoveToActive; }
 	/** GameEvent UseDone — release local approach so idle StopMovement cannot cancel the chain. */
 	void HandleUseDone(uint32 Error);
 	void HandleMoveToFailed(uint32 Error);
@@ -294,6 +305,7 @@ protected:
 	/** Locked world-ACE launch velocity for the full ballistic arc (no air steer). */
 	FVector JumpWorldAceVelocity = FVector::ZeroVector;
 	FVector LandingWorldAceVelocity = FVector::ZeroVector;
+	ACELandingMotion::FRootTrack LandingRootTrack;
 	float JumpAirborneSeconds = 0.f;
 	bool bSpaceWasDown = false;
 	/** After teleport, force the next MoveToState even if held keys are unchanged. */

@@ -1,4 +1,6 @@
 #include "ACERetailChat.h"
+#include "Mods/ACEPluginSubsystem.h"
+#include "Mods/ACEWaypoint.h"
 #include "ACERuntimeOptions.h"
 #include "UI/ACERetailTextBlock.h"
 #include "UI/ACEUIGameplayBinder.h"
@@ -655,6 +657,19 @@ void UACEUIGameplayBinder::AppendChatLineToLog(int32 Window, const FString& Line
 				FocusChatEntryWindow(Window);
 			}
 		});
+	if (auto* GI=GetWorld()?GetWorld()->GetGameInstance():nullptr)
+	{
+		const TWeakObjectPtr<UACEPluginSubsystem> Host=GI->GetSubsystem<UACEPluginSubsystem>();
+		const auto Links=ACEWaypoint::FindCoordinates(Line);
+		for(const auto& Link:Links)Row->TextLinks.Add(FIntPoint(Link.Begin,Link.End));
+		Row->AreLinksEnabled=[Host]{return Host.IsValid() && Host->IsWaypointEnabled();};
+		Row->OnLinkClicked=[Host,Links](int32 Index)
+		{
+			if(!Host.IsValid() || !Host->IsWaypointEnabled())return false;
+			for(const auto& Link:Links)if(Index>=Link.Begin && Index<Link.End){Host->SetWaypoint(Link.Coordinates);return true;}
+			return false;
+		};
+	}
 	Row->SetText(FText::FromString(Line));
 	Row->SetAutoWrapText(true);
 	Row->SetColorAndOpacity(FSlateColor(Color));
@@ -1019,7 +1034,20 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 	{
 		return false;
 	}
-	if (TryDispatchMiscCommand(Cmd,Args)) return true;
+	if (Cmd == TEXT("plugins") || Cmd == TEXT("ucm"))
+    {
+        if (auto* Host=Client->GetGameInstance()->GetSubsystem<UACEPluginSubsystem>())
+        {
+            if(Cmd==TEXT("ucm"))
+            {
+                Host->RunUCMCommand(Args);
+                if(!Host->Notice.IsEmpty())AppendLocalChatLine(Host->Notice,ACEChatMessageType::System);
+            }
+            else Host->TogglePanel();
+        }
+        return true;
+    }
+    if (TryDispatchMiscCommand(Cmd,Args)) return true;
 	if (Cmd == TEXT("friends_add")) { Cmd=TEXT("friends"); Args=TEXT("add ")+Args; }
 	if (Cmd == TEXT("friends_remove")) { Cmd=TEXT("friends"); Args=TEXT("remove ")+Args; }
 	if (Cmd == TEXT("hou")) Cmd=TEXT("house");

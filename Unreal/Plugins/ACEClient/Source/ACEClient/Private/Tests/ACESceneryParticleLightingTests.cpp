@@ -15,6 +15,7 @@
 #include "ACERegionSceneryActor.h"
 #include "ACEScriptComponent.h"
 #include "ACEWorldEntityActor.h"
+#include "ACECharacterAppearanceComponent.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACESceneryParticleLightingTest, "ACE.RetailParity.SceneryParticleLighting",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -88,6 +89,11 @@ bool FACESceneryParticleLightingTest::RunTest(const FString&)
         auto* Owner = World->SpawnActor<AACERegionSceneryActor>();
         if (!TestTrue(TEXT("Actual region scenery snow initializes"), Owner->InitializeFromSetup(Snow.Setup, 1.f, 100.f, false, true))) return false;
         auto* FX = Owner->ScriptComponent.Get();
+        if(Owner->Appearance && !Owner->Appearance->GetPartMesh(0))
+        {
+            Owner->Appearance->TickComponent(1.f/60.f,LEVELTICK_All,nullptr);
+            TestFalse(TEXT("Particle-only scenery stops scheduling empty pose ticks"),Owner->Appearance->IsComponentTickEnabled());
+        }
         const FString Case = FString::Printf(TEXT("Snow %08X batch%d"), Snow.Setup, Batch);
         TestFalse(Case + TEXT(" disables generated illumination"), FX->bAllowInferredParticleLights);
         TestFalse(Case + TEXT(" retains scenery coordinates rather than camera weather coordinates"), FX->bEnvironmentWeather);

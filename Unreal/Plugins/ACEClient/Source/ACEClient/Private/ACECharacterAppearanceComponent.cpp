@@ -142,6 +142,54 @@ bool UACECharacterAppearanceComponent::GetPartBindTransform(int32 PartIndex, FTr
 	return true;
 }
 
+bool UACECharacterAppearanceComponent::GetSelectionWorldBounds(FBox& OutBox) const
+{
+	GetVisualWorldBounds(OutBox);
+	for (int32 I = 0; I < PartDrawingSpheres.Num(); ++I)
+	{
+		if (!PartMeshes.IsValidIndex(I) || !PartMeshes[I] || PartDrawingSpheres[I].W <= 0) continue;
+		const FSphere Sphere = PartDrawingSpheres[I].TransformBy(PartMeshes[I]->GetComponentTransform());
+		OutBox += FBox(Sphere.Center - FVector(Sphere.W), Sphere.Center + FVector(Sphere.W));
+	}
+	return OutBox.IsValid != 0;
+}
+
+bool UACECharacterAppearanceComponent::TraceDrawingSpheres(const FVector& Start, const FVector& End, double& ClosestDistance) const
+{
+	bool Hit = false;
+	const double Length = FVector::Distance(Start, End);
+	for (int32 I = 0; I < PartDrawingSpheres.Num(); ++I)
+	{
+		const auto* Part = PartMeshes.IsValidIndex(I) ? PartMeshes[I].Get() : nullptr;
+		const FSphere& Sphere = PartDrawingSpheres[I];
+		if (!Part || !Part->IsRegistered() || !Part->IsVisible() || Part->bHiddenInGame || Sphere.W <= 0) continue;
+		bool VisibleGeometry = false;
+		for (int32 S = 0; S < Part->GetNumSections(); ++S)
+		{
+			const auto* Section = const_cast<UProceduralMeshComponent*>(Part)->GetProcMeshSection(S);
+			if (Section && Section->bSectionVisible && Section->ProcIndexBuffer.Num() >= 3) { VisibleGeometry = true; break; }
+		}
+		if (!VisibleGeometry) continue;
+		// Trace in part space, so animation, orientation and nonuniform server
+		// scale apply exactly once. CSphere::sphere_intersects_ray rejects an
+		// origin inside the sphere; it must not capture the viewer's own body.
+		const FTransform& Transform = Part->GetComponentTransform();
+		const FVector A = Transform.InverseTransformPosition(Start) - Sphere.Center;
+		const FVector D = Transform.InverseTransformPosition(End) - Transform.InverseTransformPosition(Start);
+		const double DD = D.SizeSquared(), AD = FVector::DotProduct(A, D);
+		const double C = A.SizeSquared() - Sphere.W * Sphere.W;
+		const double Discriminant = AD * AD - DD * C;
+		if (DD <= UE_SMALL_NUMBER || C <= 0 || Discriminant < 0) continue;
+		const double T = (-AD - FMath::Sqrt(Discriminant)) / DD;
+		if (T >= 0 && T <= 1 && T * Length < ClosestDistance)
+		{
+			ClosestDistance = T * Length;
+			Hit = true;
+		}
+	}
+	return Hit;
+}
+
 void UACECharacterAppearanceComponent::StabilizeVRPelvis()
 {
 	FTransform Bind, Animated;
@@ -189,6 +237,11 @@ bool UACECharacterAppearanceComponent::ReplacePartGfxObj(int32 PartIndex, uint32
 		PartMeshes[PartIndex], static_cast<int32>(GfxObjId), WorldScale, /*bEnableCollision*/ false);
 	if (bOk)
 	{
+		if (const auto* Built = Dat->GetOrBuildSetupMesh(GfxObjId, WorldScale); Built && Built->Parts.Num() == 1)
+		{
+			PartDrawingSpheres.SetNum(PartMeshes.Num());
+			PartDrawingSpheres[PartIndex] = Built->Parts[0].DrawingSphere;
+		}
 		// Keep the part's current placement/anim transform; only geometry/materials change.
 		UE_LOG(LogTemp, Verbose, TEXT("ACEAppearance: ReplaceObject part=%d gfx=0x%08X"),
 			PartIndex, GfxObjId);
@@ -712,6 +765,8 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	if (AActor* Owner = GetOwner())
 		if (auto* Scripts = Owner->FindComponentByClass<UACEScriptComponent>()) Scripts->NotifyAppearanceChanging();
 	EnsurePartMeshes(Built.Parts.Num());
+	PartDrawingSpheres.Reset(Built.Parts.Num());
+	for (const auto& Part : Built.Parts) PartDrawingSpheres.Add(Part.DrawingSphere);
 	const double MeshStart = FPlatformTime::Seconds();
 	TArray<UProceduralMeshComponent*> Meshes;
 	for (int32 i = 0; i < Built.Parts.Num(); ++i)
@@ -1383,6 +1438,15 @@ void UACECharacterAppearanceComponent::SetSuppressLocoIdleBlend(bool bSuppress)
 	}
 }
 
+bool UACECharacterAppearanceComponent::BuildLandingRootTrack(ACELandingMotion::FRootTrack& Out) const
+{
+	Out.Reset();
+	UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
+	UACEDatSubsystem* Dat = GI ? GI->GetSubsystem<UACEDatSubsystem>() : nullptr;
+	return Dat && bActionUsesStateTransition && ActionFromCommand == 0x40000015u
+		&& Dat->BuildTransitionRootTrack(MotionTableId, ActionFromCommand, ActionCommand, PreferredStyle, Out);
+}
+
 void UACECharacterAppearanceComponent::ClearJumpMotionIfAny(bool bLanded)
 {
 	constexpr uint32 Jumpup = 0x1000004bu;
@@ -1725,6 +1789,9 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 	if (!bHasMesh || PartMeshes.Num() == 0)
 	{
+		// Particle-only scenery has no pose to evaluate. A later successful
+		// ApplyWorldObject explicitly enables ticking when it installs a mesh.
+		SetComponentTickEnabled(false);
 		return;
 	}
 	if (!bPlayIdleMotion)

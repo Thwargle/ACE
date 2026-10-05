@@ -69,17 +69,44 @@ void UACEUIGameplayBinder::RefreshKeyboardOverlays()
  const FString PageName=ActiveKeyboardPage+TEXT("Page");
  const auto List=Manager->FindElementUnder(PageName,TEXT("KeyboardMappingListBox"));
  Caption(Manager->FindElementUnder(PageName,TEXT("KeyboardMappingNameColumnLabel")),TEXT("Command"));
- for(int32 I=1;I<=3;++I)Caption(Manager->FindElementUnder(PageName,FString::Printf(TEXT("KeyboardMapping%dColumnLabel"),I)),FString::Printf(TEXT("Mapping %d"),I));
+ const auto FirstColumn=Manager->FindElementUnder(PageName,TEXT("KeyboardMapping1ColumnLabel"));
+ if(FirstColumn)
+ {
+  auto ControllerColumn=Manager->FindElementUnder(PageName,TEXT("KeyboardMapping4ColumnLabel"));
+  if(!ControllerColumn)
+  {
+   ControllerColumn=Manager->CreateElementByType(FirstColumn->Type,0,TEXT("KeyboardMapping4ColumnLabel"));
+   ControllerColumn->ElementName=TEXT("KeyboardMapping4ColumnLabel");
+   ControllerColumn->FontId=FirstColumn->FontId;ControllerColumn->FontHeight=FirstColumn->FontHeight;
+   ControllerColumn->TextColor=FirstColumn->TextColor;ControllerColumn->bHasTextLayout=FirstColumn->bHasTextLayout;
+   ControllerColumn->Y=FirstColumn->Y;ControllerColumn->Height=FirstColumn->Height;
+   if(auto Parent=FirstColumn->Parent.Pin())Parent->AddChild(ControllerColumn);
+  }
+  for(int32 I=1;I<=ACEInputBindings::BindingSlots;++I)
+  {
+   auto Column=Manager->FindElementUnder(PageName,FString::Printf(TEXT("KeyboardMapping%dColumnLabel"),I));
+   if(Column){Column->X=FirstColumn->X+(I-1)*75;Column->Width=75;Column->LayoutAuthoredX=Column->X;Column->LayoutAuthoredW=75;}
+   Caption(Column,I==4?TEXT("Gamepad"):FString::Printf(TEXT("Key %d"),I));
+  }
+ }
  RefreshKeymapDialog();
  if(!List)return;
  const auto& Actions=ACEInputBindings::Actions();
  if(KeyboardEntryElements.IsEmpty())for(const auto& A:Actions)
  {
-  // gmKeyboardUI::AddActionKeyMap uses this exact DAT row, including three
-  // separate strip buttons. Keep their fonts, chrome and column positions.
-  KeyboardEntryElements.Add(UACEUILayoutResolver::LoadTemplate(0x21000009,0x1000002f));
+  // Extend the retail row without consuming one of its keyboard mappings.
+  const auto Entry=UACEUILayoutResolver::LoadTemplate(0x21000009,0x1000002f);
+  const auto Extra=UACEUILayoutResolver::LoadTemplate(0x21000009,0x1000002f);
+  const auto ControllerButton=Extra->Children[0]; // Copy before reparent removes it from Extra.
+  Entry->AddChild(ControllerButton);
+  for(int32 S=0;S<ACEInputBindings::BindingSlots;++S)
+  {
+   auto Button=Entry->Children[S];Button->X=270+75*S;Button->Width=75;
+   for(auto Child:Button->Children){Child->X=FMath::RoundToInt(Child->X*.75f);Child->Width=FMath::Max(1,FMath::RoundToInt(Child->Width*.75f));}
+  }
+  KeyboardEntryElements.Add(Entry);
   KeyboardRowLabels.Add(Canvas->WidgetTree->ConstructWidget<UACERetailTextBlock>());
-  for(int32 S=0;S<3;++S)
+  for(int32 S=0;S<ACEInputBindings::BindingSlots;++S)
   {
    auto* Key=Canvas->WidgetTree->ConstructWidget<UACERetailKeySelector>();Key->InitializeBinding(A.Key,S);KeyboardRows.Add(Key);
    KeyboardKeyLabels.Add(Canvas->WidgetTree->ConstructWidget<UACERetailTextBlock>());
@@ -114,19 +141,19 @@ void UACEUIGameplayBinder::RefreshKeyboardOverlays()
   if(!Visible)
   {
    KeyboardRowLabels[I]->SetVisibility(ESlateVisibility::Collapsed);
-   for(int32 S=0;S<3;++S){KeyboardRows[I*3+S]->SetVisibility(ESlateVisibility::Collapsed);KeyboardKeyLabels[I*3+S]->SetVisibility(ESlateVisibility::Collapsed);}
+   for(int32 S=0;S<ACEInputBindings::BindingSlots;++S){KeyboardRows[I*ACEInputBindings::BindingSlots+S]->SetVisibility(ESlateVisibility::Collapsed);KeyboardKeyLabels[I*ACEInputBindings::BindingSlots+S]->SetVisibility(ESlateVisibility::Collapsed);}
    continue;
   }
   if(Entry->Parent.Pin()!=List)List->AddChild(Entry);
   Entry->Y=Line*RowH;Entry->bVisible=true;
   UTextBlock* Label=KeyboardRowLabels[I];Label->SetText(FText::FromString(Actions[I].Label));Label->SetVisibility(ESlateVisibility::HitTestInvisible);
   Canvas->PlaceWidgetAtElement(Label,Entry,100210,FMargin(0,0,300,0));
-  for(int32 S=0;S<3;++S)
+  for(int32 S=0;S<ACEInputBindings::BindingSlots;++S)
   {
    const auto Button=Entry->Children[S];
-   auto* Key=CastChecked<UACERetailKeySelector>(KeyboardRows[I*3+S]);Key->SetVisibility(ESlateVisibility::Visible);
+   auto* Key=CastChecked<UACERetailKeySelector>(KeyboardRows[I*ACEInputBindings::BindingSlots+S]);Key->SetVisibility(ESlateVisibility::Visible);
    Key->SetIsEnabled(!bKeymapImportOpen);
-   Key->SetRetailButton(Canvas,Button,KeyboardKeyLabels[I*3+S]);
+   Key->SetRetailButton(Canvas,Button,KeyboardKeyLabels[I*ACEInputBindings::BindingSlots+S]);
   }
  }
  SyncDatScrollbar(Manager->FindElementUnder(PageName,TEXT("KeyboardMappingScrollbar")),KeyboardMaxOffset?float(KeyboardScrollOffset)/KeyboardMaxOffset:0,float(KeyboardVisibleRows)/(PageActions.Num()+1));

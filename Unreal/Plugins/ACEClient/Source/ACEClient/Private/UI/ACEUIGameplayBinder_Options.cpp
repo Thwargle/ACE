@@ -2,6 +2,8 @@
 #include "UI/ACERetailKeySelector.h"
 #include "UI/ACEVideoSettingsWidget.h"
 #include "ACEInputBindings.h"
+#include "Mods/ACEPluginSubsystem.h"
+#include "Engine/GameInstance.h"
 #include "ACERetailChat.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
@@ -10,6 +12,7 @@
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
+#include "UI/ACEUILayoutResolver.h"
 #include "UI/ACEUIElement.h"
 #include "ACECharacterOptions.h"
 #include "ACERuntimeOptions.h"
@@ -242,7 +245,24 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 		for (UBorder* B : OptionRowCheckboxes) { if (B) { B->SetVisibility(ESlateVisibility::Collapsed); } }
 		OptionRowOptions.Reset();
 
-		static const TPair<const TCHAR*, const TCHAR*> Buttons[] = {
+		// A native button using the same DAT chrome as the surrounding options.
+        if(!Manager->FindElementUnder(ActiveOptionsTab,TEXT("GameplayOptions_Plugins_Button")))
+        {
+            auto Source=Manager->FindElementUnder(ActiveOptionsTab,TEXT("GameplayOptions_ReportAbuse_Button"));
+            if(Source)if(auto Parent=Source->Parent.Pin())
+            {
+                // LoadTemplate assigns fresh IDs to every strip of the button.
+                // Copying nodes with InstanceId=0 aliases the canvas paint cache.
+                if(auto B=UACEUILayoutResolver::LoadTemplate(0x2100002A,0x10000207))
+                {
+                    B->SetElementName(TEXT("GameplayOptions_Plugins_Button"));B->TextEntryId=0;
+                    B->X=Source->X;B->Y=Source->Y+Source->Height+8;
+                    B->Width=Source->Width;B->Height=Source->Height;
+                    Parent->AddChild(B);
+                }
+            }
+        }
+        static const TPair<const TCHAR*, const TCHAR*> Buttons[] = {
 			{ TEXT("GameplayOptions_LeaveWorld_Button"), TEXT("Leave World") },
 			{ TEXT("GameplayOptions_Quit_Button"), TEXT("Quit") },
 			{ TEXT("GameplayOptions_Keyboard_Button"), TEXT("Keyboard Layout") },
@@ -250,8 +270,19 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 			{ TEXT("GameplayOptions_Help_Button"), TEXT("Help") },
 			{ TEXT("GameplayOptions_UrgentAssistance_Button"), TEXT("Urgent Assistance") },
 			{ TEXT("GameplayOptions_ReportAbuse_Button"), TEXT("Report Abuse") },
+            { TEXT("GameplayOptions_Plugins_Button"), TEXT("Plugins / UCM") },
 		};
-		while (OptionsButtonLabels.Num() < UE_ARRAY_COUNT(Buttons))
+		if(auto First=Manager->FindElementUnder(ActiveOptionsTab,Buttons[0].Key))if(auto Parent=First->Parent.Pin())
+        {
+            const int32 StartY=First->Y;
+            // Keep the retail-sized gaps when the page is tall. Distributing
+            // eight buttons over the full height produced huge empty bands.
+            const int32 Step=FMath::Clamp((Parent->Height-StartY-First->Height-4)/(int32(UE_ARRAY_COUNT(Buttons))-1),First->Height,First->Height+8);
+            for(int32 Index=0;Index<UE_ARRAY_COUNT(Buttons);++Index)
+                if(auto B=Manager->FindElementUnder(ActiveOptionsTab,Buttons[Index].Key))
+                {B->Y=StartY+Index*Step;B->LayoutAuthoredY=B->Y;}
+        }
+        while (OptionsButtonLabels.Num() < UE_ARRAY_COUNT(Buttons))
 		{
 			UTextBlock* L = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
 			L->SetJustification(ETextJustify::Center);
@@ -346,7 +377,7 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 			Btn->EdgeAnchorX = Btn->EdgeAnchorY = 0; Btn->RecomputeLayoutOffset();
 		}
 	}
-	while (OptionsButtonLabels.Num() < 10)
+	while (OptionsButtonLabels.Num() < 11)
 	{
 		UTextBlock* L = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
 		L->SetJustification(ETextJustify::Center);
@@ -354,8 +385,8 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 	}
 	for (int32 i = 0; i < UE_ARRAY_COUNT(Footer); ++i)
 	{
-		// Footer labels live at the tail of the shared label pool (7 gameplay buttons first).
-		UTextBlock* Label = OptionsButtonLabels.IsValidIndex(7 + i) ? OptionsButtonLabels[7 + i] : nullptr;
+		// Footer labels live at the tail of the shared label pool (8 gameplay buttons first).
+		UTextBlock* Label = OptionsButtonLabels.IsValidIndex(8 + i) ? OptionsButtonLabels[8 + i] : nullptr;
 		if (!Label)
 		{
 			continue;
@@ -683,7 +714,12 @@ bool UACEUIGameplayBinder::HandleOptionsNamedClick(const FString& Name)
 		}
 		return true;
 	}
-	if (Name == TEXT("GameplayOptions_Keyboard_Button"))
+	if (Name == TEXT("GameplayOptions_Plugins_Button"))
+    {
+        if(Client)Client->GetGameInstance()->GetSubsystem<UACEPluginSubsystem>()->TogglePanel();
+        return true;
+    }
+    if (Name == TEXT("GameplayOptions_Keyboard_Button"))
 	{
 		ToggleKeyboardMappingUI();
 		return true;

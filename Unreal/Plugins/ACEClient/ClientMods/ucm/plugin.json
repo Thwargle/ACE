@@ -1,0 +1,93 @@
+{
+  "api": 1,
+  "id": "ucm",
+  "name": "Unattended Combat Manager",
+  "short_name": "UCM",
+  "version": "0.7.0",
+  "description": "UCM: automatic buffs, inventory-aware combat, vital recovery, recorded routes, loot profiles and activity states.",
+  "permissions": [
+    "cast",
+    "combat",
+    "navigation",
+    "inventory",
+    "loot",
+    "say",
+    "fellowship",
+    "confirm"
+  ],
+  "settings": [
+    {
+      "key": "buffing",
+      "label": "Maintain automatic creature, life and item buffs",
+      "type": "bool"
+    },
+    {
+      "key": "skill_margin",
+      "label": "Required magic skill above spell difficulty",
+      "type": "number",
+      "min": 0,
+      "max": 200
+    },
+    {
+      "key": "refresh_seconds",
+      "label": "Refresh buffs with fewer seconds remaining",
+      "type": "number",
+      "min": 10,
+      "max": 300
+    },
+    {
+      "key": "combat",
+      "label": "Combat mode",
+      "type": "choice",
+      "values": [
+        "off",
+        "auto",
+        "melee",
+        "missile",
+        "magic"
+      ]
+    },
+    {
+      "key": "radius",
+      "label": "Missile / spell attack range (meters)",
+      "type": "number",
+      "min": 1,
+      "max": 100
+    },
+    {
+      "key": "power",
+      "label": "Melee power / missile accuracy (0 to 1)",
+      "type": "number",
+      "min": 0,
+      "max": 1
+    },
+    {
+      "key": "navigation",
+      "label": "Follow recorded route when no target is nearby",
+      "type": "bool"
+    },
+    {
+      "key": "loop_route",
+      "label": "Repeat the route",
+      "type": "bool"
+    },
+    {
+      "key": "stop_health",
+      "label": "Stop below this health percentage",
+      "type": "number",
+      "min": 1,
+      "max": 100
+    },
+    {
+      "key": "stop_mana",
+      "label": "Stop below this mana percentage when casting",
+      "type": "number",
+      "min": 0,
+      "max": 100
+    }
+  ],
+  "tools": [
+    "spells",
+    "route"
+  ]
+}

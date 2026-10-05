@@ -297,6 +297,32 @@ uint32 UACEUIResourceResolver::ResolvePaperDollSelectionMask(FIntPoint Point)
 	}
 }
 
+bool UACEUIResourceResolver::EnsureEnumStringsLoaded(uint32 Did)
+{
+	if(EnumStrings.Contains(Did))return true;
+	if(!Dat||!Dat->GetPortalDat())return false;
+
+	TArray<uint8> Blob;
+	if (!Dat->GetPortalDat()->ReadFile(Did, Blob)) return false;
+	FACEDatCursor Cursor(Blob);
+	uint32 Id = 0, Base = 0; uint8 Numbering = 0; bool bOk = true;
+	if (!Cursor.Read(Id) || Id != Did || !Cursor.Read(Base) || !Cursor.Read(Numbering)) return false;
+	const uint32 Count = Cursor.ReadCompressedUInt32(bOk);
+	if (!bOk || Count > static_cast<uint32>(Cursor.Remaining() / 5)) return false;
+	TMap<uint32, FString> Strings;
+	for (uint32 I = 0; I < Count; ++I)
+	{
+		uint32 Key = 0;
+		if (!Cursor.Read(Key)) return false;
+		FString Name = Cursor.ReadPString(bOk, 1);
+		if (!bOk) return false;
+		Strings.Add(Key, MoveTemp(Name));
+	}
+	EnumStrings.Add(Did, MoveTemp(Strings));
+	BaseEnumMaps.Add(Did, Base);
+	return true;
+}
+
 FString UACEUIResourceResolver::ResolveEnumString(uint32 EnumId, uint32 Value)
 {
 	uint32 Did = ResolveMappedDid(0x25000001, EnumId, EnumId);
@@ -304,31 +330,29 @@ FString UACEUIResourceResolver::ResolveEnumString(uint32 EnumId, uint32 Value)
 	while ((Did >> 24) == 0x22 && !Visited.Contains(Did))
 	{
 		Visited.Add(Did);
-		if (!EnumStrings.Contains(Did))
-		{
-			TArray<uint8> Blob;
-			if (!Dat->GetPortalDat()->ReadFile(Did, Blob)) return {};
-			FACEDatCursor Cursor(Blob);
-			uint32 Id = 0, Base = 0; uint8 Numbering = 0; bool bOk = true;
-			if (!Cursor.Read(Id) || Id != Did || !Cursor.Read(Base) || !Cursor.Read(Numbering)) return {};
-			const uint32 Count = Cursor.ReadCompressedUInt32(bOk);
-			if (!bOk || Count > static_cast<uint32>(Cursor.Remaining() / 5)) return {};
-			TMap<uint32, FString> Strings;
-			for (uint32 I = 0; I < Count; ++I)
-			{
-				uint32 Key = 0;
-				if (!Cursor.Read(Key)) return {};
-				FString Name = Cursor.ReadPString(bOk, 1);
-				if (!bOk) return {};
-				Strings.Add(Key, MoveTemp(Name));
-			}
-			EnumStrings.Add(Did, MoveTemp(Strings));
-			BaseEnumMaps.Add(Did, Base);
-		}
+		if(!EnsureEnumStringsLoaded(Did))return {};
 		if (const FString* Name = EnumStrings[Did].Find(Value)) return *Name;
 		Did = BaseEnumMaps.FindRef(Did);
 	}
 	return {};
+}
+
+TMap<uint32,FString> UACEUIResourceResolver::ResolveEnumStrings(uint32 EnumId)
+{
+	TMap<uint32,FString> Result;
+	if(!Dat||!Dat->GetPortalDat())return Result;
+	uint32 Did=ResolveMappedDid(0x25000001,EnumId,EnumId);
+	TSet<uint32> Visited;
+	while((Did>>24)==0x22&&!Visited.Contains(Did))
+	{
+		Visited.Add(Did);
+		// Populate using the same parser as individual lookups, including bases.
+		if(!EnsureEnumStringsLoaded(Did))break;
+		if(const auto* Table=EnumStrings.Find(Did))for(const auto& Entry:*Table)
+			if(!Result.Contains(Entry.Key))Result.Add(Entry.Key,Entry.Value);
+		Did=BaseEnumMaps.FindRef(Did);
+	}
+	return Result;
 }
 
 namespace

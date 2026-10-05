@@ -26,6 +26,7 @@ public:
 	void SetTextColors(const TArray<FLinearColor>& Colors) { TextColors = Colors; InvalidateLayoutAndVolatility(); }
 	FLinearColor GetGlyphColor(int32 Index, FLinearColor Default) const
 	{
+		if (IsLinkAt(Index)) return FLinearColor(.18f,.72f,1.f);
 		if (TextColors.IsValidIndex(Index)) return TextColors[Index];
 		return ModifierBegin >= 0 && Index >= ModifierBegin ? ModifierColor : Default;
 	}
@@ -41,6 +42,17 @@ public:
 	void SetSelectable(bool Value) { bSelectable = Value; }
 	bool IsSelectable() const { return bSelectable; }
 	FSimpleDelegate OnTextClicked;
+	// Chat links use character offsets so wrapping and drag-to-copy remain intact.
+	TArray<FIntPoint> TextLinks;
+	TFunction<bool()> AreLinksEnabled;
+	TFunction<bool(int32)> OnLinkClicked;
+	bool IsLinkAt(int32 Index) const
+	{
+		if (TextLinks.IsEmpty()) return false;
+		if (AreLinksEnabled && !AreLinksEnabled()) return false;
+		for (const auto& Range:TextLinks) if(Index>=Range.X && Index<Range.Y)return true;
+		return false;
+	}
 	TFunction<FString()> GetCopyAllText;
 	/** Ordered rows of one chat window; selection can span wrapped messages. */
 	TFunction<TArray<UACERetailTextBlock*>()> GetSelectionPeers;

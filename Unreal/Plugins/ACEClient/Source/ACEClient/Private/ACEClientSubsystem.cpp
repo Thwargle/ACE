@@ -116,7 +116,8 @@ void UACEClientSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	});
 	Session->OnAppraisal.AddLambda([this](const FACEAppraisalInfo& Info)
 	{
-		OnAppraisal.Broadcast(Info);
+		OnAppraisalObserved.Broadcast(Info);
+		if (!BackgroundAppraisals.Remove(Info.ObjectGuid)) OnAppraisal.Broadcast(Info);
 	});
 	Session->OnSelectionChanged.AddLambda([this](const FACESelectedObject& Sel)
 	{
@@ -553,6 +554,7 @@ void UACEClientSubsystem::SendSetInscription(int32 ObjectGuid, const FString& Te
 
 void UACEClientSubsystem::SendIdentifyObject(int32 ObjectGuid)
 {
+	BackgroundAppraisals.Remove(ObjectGuid);
 	if (Session)
 	{
 		++IdentifyRequestSerial;
@@ -1009,14 +1011,21 @@ void UACEClientSubsystem::SendFellowshipRecruit(int32 PlayerGuid)
 void UACEClientSubsystem::SendFellowshipUpdateRequest(bool bPanelOpen)
 {
 	bRetailFellowshipUpdates=bPanelOpen;
-	if (Session) { Session->SendFellowshipUpdateRequest(bPanelOpen || bVRFellowshipUpdates); }
+	if (Session) { Session->SendFellowshipUpdateRequest(bPanelOpen || bVRFellowshipUpdates || bPluginFellowshipUpdates); }
 }
 
 void UACEClientSubsystem::SetVRFellowshipUpdates(bool bEnabled)
 {
 	if (bVRFellowshipUpdates==bEnabled) return;
 	bVRFellowshipUpdates=bEnabled;
-	if (Session) Session->SendFellowshipUpdateRequest(bEnabled || bRetailFellowshipUpdates);
+	if (Session) Session->SendFellowshipUpdateRequest(bEnabled || bRetailFellowshipUpdates || bPluginFellowshipUpdates);
+}
+
+void UACEClientSubsystem::SetPluginFellowshipUpdates(bool bEnabled)
+{
+	if (bPluginFellowshipUpdates==bEnabled) return;
+	bPluginFellowshipUpdates=bEnabled;
+	if (Session) Session->SendFellowshipUpdateRequest(bEnabled || bRetailFellowshipUpdates || bVRFellowshipUpdates);
 }
 
 void UACEClientSubsystem::SendFellowshipAssignNewLeader(int32 MemberGuid)
@@ -1274,6 +1283,12 @@ int32 UACEClientSubsystem::GetShortcutObject(int32 SlotIndex) const
 FACEPlayerVitals UACEClientSubsystem::GetPlayerVitals() const
 {
 	return Session ? Session->GetPlayerVitals() : FACEPlayerVitals();
+}
+
+const FACEPlayerVitals& UACEClientSubsystem::GetPlayerVitalsView() const
+{
+	static const FACEPlayerVitals Empty;
+	return Session ? Session->GetPlayerVitals() : Empty;
 }
 
 bool UACEClientSubsystem::TryGetPlayerEncumbrance(int32& OutEncumbrance) const
@@ -1586,4 +1601,9 @@ float UACEClientSubsystem::GetSidestepSpeed(bool bRunning) const
 		Rate = FMath::Min(Rate, MaxSidestepAnimRate);
 	}
 	return SidestepAnimSpeed * Rate;
+}
+
+void UACEClientSubsystem::RequestBackgroundAppraisal(int32 Guid)
+{
+    if(Session && Guid){BackgroundAppraisals.Add(Guid);Session->SendIdentifyObject(Guid);}
 }

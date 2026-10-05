@@ -4,6 +4,9 @@
 class APlayerController;
 namespace ACEInputBindings
 {
+constexpr int32 BindingSlots = 4; // Three retail mappings plus a separate controller mapping.
+ACECLIENT_API FKey StickDirectionKey(FKey Axis, float Value);
+ACECLIENT_API float Value(const APlayerController* PC, FKey ActionKey);
 // Key is a stable action identifier (also the legacy settings key), not
 // necessarily its current/default physical key.
 struct FAction

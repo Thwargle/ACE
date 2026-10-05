@@ -34,6 +34,7 @@ struct ACECLIENT_API FACEDecodedObject
 	/** PublicWeenieDesc TargetType (ItemType mask of valid use targets). */
 	int32 TargetType = 0;
 	int32 MaterialType = 0;
+	float SalvageWorkmanship = -1.f;
 	int32 ObjectDescriptionFlags = 0;
 	int32 SetupId = 0;
 	int32 MotionTableId = 0;

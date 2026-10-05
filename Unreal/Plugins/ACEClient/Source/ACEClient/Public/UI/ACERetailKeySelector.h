@@ -22,6 +22,7 @@ public:
  UFUNCTION() void CaptureStateChanged();
  bool FilterCaptureKey(const FKeyEvent& Event,bool Down);
  bool FilterCaptureWheel(const FPointerEvent& Event);
+ bool FilterCaptureAnalog(const FAnalogInputEvent& Event);
  virtual void ReleaseSlateResources(bool ReleaseChildren) override;
 protected:
  virtual TSharedRef<SWidget> RebuildWidget() override;

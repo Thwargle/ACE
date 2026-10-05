@@ -1,4 +1,5 @@
 #include "ACEPlayerController.h"
+#include "Mods/ACEPluginSubsystem.h"
 #include "VR/ACEVRLocomotion.h"
 #include "ACEKeyboardRouter.h"
 #include "ACEDesktopPointer.h"
@@ -764,6 +765,23 @@ bool AACEPlayerController::InputKey(const FInputKeyEventArgs& Params)
   }
  }
  const bool Handled=Super::InputKey(Params);
+ // Some desktop backends report stick axes without directional button events.
+ // Feed those directions through the ordinary rebindable action path, retaining
+ // analog magnitude separately for movement/camera and releasing on recenter.
+ if (Params.Event==IE_Axis && !IsVRActive() && ACEInputBindings::StickDirectionKey(Params.Key,1.f).IsValid())
+ {
+  for(float Sign:{-1.f,1.f})
+  {
+   const FKey Direction=ACEInputBindings::StickDirectionKey(Params.Key,Sign);
+   const bool Down=Params.AmountDepressed*Sign>.2f;
+   if(Down!=IsInputKeyDown(Direction))
+   {
+    auto Event=Params;Event.Key=Direction;Event.Event=Down?IE_Pressed:IE_Released;Event.AmountDepressed=Down?1.f:0.f;
+    InputKey(Event);
+   }
+  }
+  return true;
+ }
  // A hidden HUD cannot receive NativeOnMouseWheel. Handle wheel events that
  // reach the viewport through the same binding-aware zoom path. Slate consumes
  // scrolling over visible panels before it gets here. Use only the axis event:
@@ -994,8 +1012,9 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
         else if(GameHUDWidget)for(int32 Slot=0;Slot<9;++Slot)
             if(ACEInputBindings::Pressed(this,ACEInputBindings::Shortcut(Slot)))GameHUDWidget->ActivateHotbarSlot(Slot);
 	}
-	if (!bVR && !bChatFocused && DatGameplayBinder && (!FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R)))
-		DatGameplayBinder->CancelCombatAttack();
+	if (!bVR && DatGameplayBinder)
+		DatGameplayBinder->SetCombatMovementBlocked(bJumpAirborne
+			|| (!bChatFocused && (!FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R))));
 
 	// Retail: F uses / picks up the selected object (same as the hand toolbar button).
 	if (!bChatFocused && ACEInputBindings::Pressed(this, ACEInputBindings::Action(TEXT("Pickup"))) && Client
@@ -1400,7 +1419,38 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		}
 	}
 
-	// Retail: no air control of the arc — lock JumpWorldAceVelocity. A/D may still yaw the
+	bool bPluginDrivingMovement=false;
+	if (auto* Plugins = GetGameInstance()->GetSubsystem<UACEPluginSubsystem>())
+    {
+        const FVector Facing = bVR ? VR->GetBodyForward() : (GetPawn() ? GetPawn()->GetActorForwardVector() : FVector::ForwardVector);
+        Plugins->ApplyMovement(this, F, R, T, bManualKeys || bSpaceDown,
+            (!bVR && bChatFocused) || (bVR && VR->IsMovementBlocked()) || bJumpAirborne || bServerMoveToActive, bVR, Facing);
+        bPluginDrivingMovement=Plugins->IsDrivingMovement();
+    }
+
+    if(bPluginJumpQueued)
+    {
+        if(bManualKeys || bSpaceDown)CancelPluginJump();
+        else if(!bJumpAirborne && GetPawn() && !bServerMoveToActive && (bVR?!VR->IsMovementBlocked():!bChatFocused))
+        {
+            const float Angle=FMath::FindDeltaAngleDegrees(GetPawn()->GetActorRotation().Yaw,PluginJumpHeading);
+            // Angle is Unreal yaw; AC-space turn integration reflects its sign.
+            F=R=0;T=bVR?0:FMath::Clamp(Angle/45.f,-1.f,1.f);
+            if(bVR || FMath::Abs(Angle)<3)
+            {
+                if(!PluginJumpStarted){BeginJumpCharge();PluginJumpStarted=FPlatformTime::Seconds();}
+                JumpChargeExtent=FMath::Clamp(float(FPlatformTime::Seconds()-PluginJumpStarted),0.f,1.f);
+                if(JumpChargeExtent>=PluginJumpCharge)
+                {
+                    const float Rad=FMath::DegreesToRadians(Angle);
+                    bRunning=!bPluginWalkJump;ReleaseJump(bVR?PluginJumpForward*FMath::Cos(Rad)-PluginJumpStrafe*FMath::Sin(Rad):PluginJumpForward,bVR?PluginJumpForward*FMath::Sin(Rad)+PluginJumpStrafe*FMath::Cos(Rad):PluginJumpStrafe);
+                    bPluginJumpQueued=false;PluginJumpStarted=0;
+                }
+            }
+        }
+    }
+
+    // Retail: no air control of the arc — lock JumpWorldAceVelocity. A/D may still yaw the
 	// mesh while airborne (visual only); charge keeps turn for aim.
 	const float RawF = F;
 	const float RawR = R;
@@ -1425,7 +1475,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
     PendingMouseTurnDegrees = 0.f;
     // Explicit keyboard turning takes precedence over camera-follow steering.
 	// Automatic approach supplies F too; its heading belongs to the target, not the camera.
-	if (!bServerMoveToActive && bMouseFacing && FMath::IsNearlyZero(T) && GetPawn())
+	if (!bServerMoveToActive && !bPluginDrivingMovement && bMouseFacing && FMath::IsNearlyZero(T) && GetPawn())
     {
         if (auto* Boom = GetPawn()->FindComponentByClass<USpringArmComponent>())
             PendingMouseTurnDegrees = ACECameraRetail::FollowTurnDegrees(Boom->GetRelativeRotation().Yaw,
@@ -1448,8 +1498,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	// (otherwise SoftReconcile snaps idle airborne poses back to the ground).
 	// The network send threshold must not discard small local mouse turns.
 	bLocalPredicting = bMoving || !FMath::IsNearlyZero(PendingMouseTurnDegrees)
-		|| bServerMoveToActive || bJumpAirborne || bJumpCharging || !LandingWorldAceVelocity.IsNearlyZero()
-		|| (bVR && !VR->IsInputBlocked());
+		|| bServerMoveToActive || bJumpAirborne || bJumpCharging || !LandingWorldAceVelocity.IsNearlyZero() || LandingRootTrack.IsActive()
+		|| (bVR && !VR->IsMovementBlocked());
 	const bool bChanged =
 		bForceMovementResend ||
 		!FMath::IsNearlyEqual(F, ForwardSent) ||
@@ -1636,7 +1686,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			}
 
 			const uint32 SupportedStartCell = Pred.CellId;
-			if (bVR && !VR->IsInputBlocked())
+			if (bVR && !VR->IsMovementBlocked())
 			{
 				Pred.SetAceFacingFromUnrealDir2D(VR->GetBodyForward());
 				Pred.Location += FACEPosition::AceVectorToUnreal(VRRoomDelta / MovementSteps, 1.f / WorldScale);
@@ -1702,15 +1752,30 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					+ Pred.GetAceRightInAcSpace() * LocalVelocity.X) * DeltaTime;
 				Pred.NormalizeOutdoorLandblock();
 			}
+			// Retail applies authored grounded position frames in addition to both
+			// cycle velocity and physical landing coast. Resolve through the same
+			// collision path below; never move only the visible character mesh.
+			const bool bHadLandingMotion = !bJumpAirborne
+				&& (!LandingWorldAceVelocity.IsNearlyZero() || LandingRootTrack.IsActive());
+			if (!bJumpAirborne && LandingRootTrack.IsActive())
+			{
+				const FTransform RootDelta = LandingRootTrack.Advance(DeltaTime);
+				const FQuat Facing = Pred.GetAcQuat();
+				Pred.Location += Facing.RotateVector(RootDelta.GetTranslation()) * GetLocalCreatureScale();
+				const FQuat Rotation = (Facing * RootDelta.GetRotation()).GetNormalized();
+				Pred.RotationW = Rotation.W;
+				Pred.RotationXYZ = FVector(Rotation.X,Rotation.Y,Rotation.Z);
+				Pred.NormalizeOutdoorLandblock();
+			}
 			// Ballistic arc from leave-ground velocity (world ACE); no mid-air redirect.
-			if (!bJumpAirborne && !LandingWorldAceVelocity.IsNearlyZero())
+			if (bHadLandingMotion)
 			{
 				FACEWorldObject Self;
 				const float Friction = Client->GetWorldObject(Client->GetPlayerGuid(),Self) ? Self.Friction : .95f;
 				LandingWorldAceVelocity = ACELandingMotion::Step(LandingWorldAceVelocity,Friction,DeltaTime);
 				Pred.Location += LandingWorldAceVelocity * DeltaTime;
 				Pred.NormalizeOutdoorLandblock();
-				Client->SetForcePositionReporting(!LandingWorldAceVelocity.IsNearlyZero());
+				Client->SetForcePositionReporting(!LandingWorldAceVelocity.IsNearlyZero() || LandingRootTrack.IsActive());
 			}
 			// Always integrate while airborne — zeroing XY at a wall used to make the full
 			// vector NearlyZero at apex and stop gravity (hang midair).
@@ -1777,6 +1842,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			auto FinishJumpLanding = [&]()
 			{
 				bLandedThisStep = true;
+				LandingRootTrack.Reset();
 				LandingWorldAceVelocity = FVector(JumpWorldAceVelocity.X,JumpWorldAceVelocity.Y,0.f);
 				// Poses received before touchdown describe the old airborne height.
 				// Wait for a fresh server anchor rather than reconciling back up.
@@ -1794,16 +1860,18 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					P->FindComponentByClass<UACECharacterAppearanceComponent>())
 				{
 					App->ClearJumpMotionIfAny(true);
+					App->BuildLandingRootTrack(LandingRootTrack);
 					App->SetSuppressLocoIdleBlend(false);
 				}
 				if (Client)
 				{
-				Client->SetForcePositionReporting(!LandingWorldAceVelocity.IsNearlyZero());
+				Client->SetForcePositionReporting(!LandingWorldAceVelocity.IsNearlyZero() || LandingRootTrack.IsActive());
 					// Send contact only after the resolved feet/cell are committed below.
 					// The previous pose can still be above the floor at this point.
 					bForceMovementResend = true;
 				}
-			};
+			};
+
 
 			// Collision + stair climb. Dual thresholds match PhysicsGlobals:
 			//   LandingZ (~0.087) — wall vs landable (step-down / jump land)
@@ -3363,16 +3431,16 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                 }
             }
             P->SetActorLocation(Desired, false);
-			if (!bJumpAirborne && !LandingWorldAceVelocity.IsNearlyZero())
+			if (!bJumpAirborne && (bHadLandingMotion || bLandedThisStep))
 			{
-				if (bMovementLedge) LandingWorldAceVelocity = FVector::ZeroVector;
+				if (bMovementLedge) { LandingWorldAceVelocity = FVector::ZeroVector; LandingRootTrack.Reset(); }
 				else if (!MovementContactNormal.IsNearlyZero())
 				{
 					const FVector N = FACEPosition::AceVectorToUnreal(MovementContactNormal.GetSafeNormal2D());
 					const float Into = FVector::DotProduct(LandingWorldAceVelocity,N);
 					if (Into < 0) LandingWorldAceVelocity -= Into*N;
 				}
-				Client->SetForcePositionReporting(!LandingWorldAceVelocity.IsNearlyZero());
+				Client->SetForcePositionReporting(!LandingWorldAceVelocity.IsNearlyZero() || LandingRootTrack.IsActive());
 			}
 			P->SetActorRotation(Pred.ToUnrealQuat());
 
@@ -3643,15 +3711,16 @@ void AACEPlayerController::ResetCameraToRetailDefaults(USpringArmComponent* Boom
 void AACEPlayerController::SetMouseLookActive(bool bActive)
 {
 	if (bActive && !IsUseMouseTurning() && !bInstantMouseLookHeld) return;
-	if (bMouseLookActive == bActive)
+	if (bMouseLookActive == bActive && !bActive)
 	{
 		return;
 	}
+	const bool bEntering = bActive && !bMouseLookActive;
 	bMouseLookActive = bActive;
 	if (!bActive) bMouseLookToggled=false;
 	if (bActive)
 	{
-		MouseLookTravelPixels = 0.f;
+		if (bEntering) MouseLookTravelPixels = 0.f;
 		bMouseLookUsesCapture = IsUseMouseTurning() || bInstantMouseLookHeld;
 		if (bMouseLookUsesCapture)
 		{
@@ -3669,7 +3738,7 @@ void AACEPlayerController::SetMouseLookActive(bool bActive)
 		}
 		int32 SizeX = 0, SizeY = 0;
 		GetViewportSize(SizeX, SizeY);
-		if (SizeX > 0 && SizeY > 0)
+		if (bEntering && SizeX > 0 && SizeY > 0)
 		{
 			SetMouseLocation(SizeX / 2, SizeY / 2);
 		}
@@ -3745,7 +3814,8 @@ void AACEPlayerController::UpdateMouseLook(float DeltaTime, USpringArmComponent*
     const bool bLeftDown = IsInputKeyDown(EKeys::LeftMouseButton);
     float MX = 0.f, MY = 0.f;
     const bool bHaveMouse = GetMousePosition(MX, MY);
-    if ((bRightDown && !bRightMouseWasDown) || (bLeftDown && !bLeftMouseWasDown && !bRightDown))
+    if (bHaveMouse && !bMouseLookActive && ((bRightDown && !bRightMouseWasDown)
+        || (bLeftDown && !bLeftMouseWasDown && !bRightDown)))
     {
         MouseLookPressX = MX;
         MouseLookPressY = MY;
@@ -3846,13 +3916,17 @@ void AACEPlayerController::UpdateOrbitCamera(float DeltaTime)
 
 	UpdateMouseLook(DeltaTime, Boom);
 
-	const bool bOrbitLeft = ACEInputBindings::Down(this, EKeys::NumPadFour);
-	const bool bOrbitRight = ACEInputBindings::Down(this, EKeys::NumPadSix);
-	const bool bOrbitUp = ACEInputBindings::Down(this, EKeys::NumPadEight);
-	const bool bOrbitDown = ACEInputBindings::Down(this, EKeys::NumPadTwo);
-	const float OrbitStep = ACECameraRetail::NumpadOrbitDegreesPerSecond * DeltaTime;
-	ApplyCameraOrbitDelta(Boom, (int32(bOrbitLeft) - int32(bOrbitRight)) * OrbitStep,
-		(int32(bOrbitDown) - int32(bOrbitUp)) * OrbitStep);
+	const float bOrbitLeft = ACEInputBindings::Value(this, EKeys::NumPadFour);
+	const float bOrbitRight = ACEInputBindings::Value(this, EKeys::NumPadSix);
+	const float bOrbitUp = ACEInputBindings::Value(this, EKeys::NumPadEight);
+	const float bOrbitDown = ACEInputBindings::Value(this, EKeys::NumPadTwo);
+	const float OrbitStep = ACECameraRetail::NumpadOrbitDegreesPerSecond * DeltaTime
+		* ACERuntimeOptions::Get(TEXT("CameraAdjustment"));
+	const float PitchStep = bCameraLookDown
+		? ACECameraRetail::NumpadOrbitDegreesPerSecond * DeltaTime
+		: ACECameraRetail::KeyboardPitchRate(ACERuntimeOptions::Get(TEXT("CameraAdjustment")),IsUseMouseTurning()) * DeltaTime;
+	ApplyCameraOrbitDelta(Boom, (bOrbitLeft - bOrbitRight) * OrbitStep,
+		(bOrbitDown - bOrbitUp) * PitchStep);
 
 	if (ACEInputBindings::Down(this, EKeys::Add)) StepCameraZoom(Boom, true, DeltaTime);
 	else if (ACEInputBindings::Down(this, EKeys::Subtract)) StepCameraZoom(Boom, false, DeltaTime);
@@ -4157,6 +4231,7 @@ void AACEPlayerController::ReleaseJump(float Forward, float Right)
 	LocalVel.Z = FMath::Sqrt(FMath::Max(0.f, Height * 19.6f));
 	JumpLocalAceVelocity = LocalVel;
 	LandingWorldAceVelocity = FVector::ZeroVector;
+	LandingRootTrack.Reset();
 
 	FACEPosition LaunchPose;
 	if (bHavePredictedPose)
@@ -5851,6 +5926,7 @@ void AACEPlayerController::InvalidateMovementAfterTeleport(bool bAirborneArrival
 	StepHoldSeconds = 0.f;
 	JumpWorldAceVelocity = FVector::ZeroVector;
 	LandingWorldAceVelocity = FVector::ZeroVector;
+	LandingRootTrack.Reset();
 	JumpLocalAceVelocity = FVector::ZeroVector;
 	ClearServerMoveTo();
 	// Clearing an old approach disables forced reports; a falling arrival needs
@@ -6021,6 +6097,9 @@ void AACEPlayerController::FinishWorldTransition()
 	ShowGameHUD();
 	bShowMouseCursor = true;
 	EnsureRetailMouseCursor();
+	// The loading screen releases viewport capture. Preserve the user's hold/
+	// toggle intent and restore relative input without replacing the saved cursor.
+	if (bMouseLookActive && !IsVRActive()) SetMouseLookActive(true);
 
 	// Re-seed prediction from the post-teleport server pose and force a fresh MoveToState
 	// so held WASD keys don't silently reuse pre-portal movement sequences.
@@ -6373,6 +6452,7 @@ void AACEPlayerController::HandlePositionUpdate(int32 ObjectGuid, const FACEPosi
 		JumpAirborneSeconds = JumpChargeExtent = 0.f;
 		JumpWorldAceVelocity = FVector::ZeroVector;
 		LandingWorldAceVelocity = FVector::ZeroVector;
+		LandingRootTrack.Reset();
 		JumpLocalAceVelocity = FVector::ZeroVector;
 		StepHoldSeconds = 0.f;
 		Client->SetForcePositionReporting(false);
@@ -7619,27 +7699,39 @@ void AACEPlayerController::PollObjectHover()
 
 void AACEPlayerController::CycleNearbyTarget(bool bEnemies, int32 Direction)
 {
-	if (!Client) return;
+	if (const int32 Target = FindNearbyTarget(bEnemies,Direction)) Client->SelectObject(Target);
+}
+
+int32 AACEPlayerController::FindNearbyTarget(bool bEnemies, int32 Direction, int32 ExcludeGuid) const
+{
+	if (!Client) return 0;
 	const FVector Origin = Client->GetPlayerPosition().ToUnrealLocation(WorldScale);
+	const auto Fellowship = Client->GetFellowship();
 	TArray<FACEWorldObject> Objects = Client->GetWorldObjects();
 	Objects.RemoveAll([&](const FACEWorldObject& Obj)
 	{
 		return !Obj.IsSelectableWorldObject() || !Client->IsWorldObjectVisible(Obj)
-			|| Obj.Guid == Client->GetPlayerGuid() || Obj.bIsPlayer
+			|| Obj.Guid == Client->GetPlayerGuid() || Obj.Guid == ExcludeGuid || Obj.bIsPlayer
 			|| (bEnemies ? ((Obj.ItemType & ACEItemType::Creature) == 0 || !Obj.IsAttackable() || Obj.PetOwnerId != 0)
 				: (Obj.ItemType & ACEItemType::Creature) != 0)
-			|| FVector::DistSquared(Origin, Obj.Position.ToUnrealLocation(WorldScale)) > FMath::Square(60.f * WorldScale);
+			|| (bEnemies && Fellowship.Members.ContainsByPredicate([&](const auto& Member) { return Member.Guid == Obj.Guid; }));
 	});
+	// CPlayerSystem::SelectNext traverses the known visible-object table, not a
+	// separate 60m sphere. Its ordering weights height as well as planar distance.
+	auto Distance = [&](const FACEWorldObject& Obj)
+	{
+		const FVector Delta = Obj.Position.ToUnrealLocation(WorldScale)-Origin;
+		return Delta.Size2D()+FMath::Abs(Delta.Z)*1.2;
+	};
 	Objects.Sort([&](const FACEWorldObject& A, const FACEWorldObject& B)
 	{
-		const double DA = FVector::DistSquared(Origin, A.Position.ToUnrealLocation(WorldScale));
-		const double DB = FVector::DistSquared(Origin, B.Position.ToUnrealLocation(WorldScale));
+		const double DA = Distance(A), DB = Distance(B);
 		return DA == DB ? static_cast<uint32>(A.Guid) < static_cast<uint32>(B.Guid) : DA < DB;
 	});
-	if (Objects.IsEmpty()) return;
+	if (Objects.IsEmpty()) return 0;
 	const int32 Current = Objects.IndexOfByPredicate([&](const FACEWorldObject& O) { return O.Guid == Client->GetSelectedObject().Guid; });
 	const int32 Next = Current == INDEX_NONE || Direction == 0 ? 0 : (Current + Direction + Objects.Num()) % Objects.Num();
-	Client->SelectObject(Objects[Next].Guid);
+	return Objects[Next].Guid;
 }
 
 void AACEPlayerController::IdentifyAtScreenPosition(float MouseX, float MouseY)
@@ -7851,4 +7943,19 @@ void AACEPlayerController::ShowCharacterCreationUI()
     // not perform another input-mode handoff when character creation opens.
     if(IsVRActive()){ApplyInWorldInputMode();return;}
     FInputModeGameAndUI Mode;Mode.SetWidgetToFocus(DatCanvasWidget->TakeWidget());Mode.SetHideCursorDuringCapture(false);Mode.SetLockMouseToViewportBehavior(DesktopMouseLockMode());SetInputMode(Mode);bShowMouseCursor=true;
+}
+
+void AACEPlayerController::QueuePluginJump(float Charge,float Heading,float Forward,float Strafe,bool Walk)
+{
+    if(bPluginJumpQueued||bJumpAirborne||bJumpCharging||!FMath::IsFinite(Heading))return;
+    bPluginJumpQueued=true;PluginJumpCharge=FMath::Clamp(Charge,0.f,1.f);PluginJumpHeading=Heading;PluginJumpForward=FMath::Clamp(Forward,-1.f,1.f);PluginJumpStrafe=FMath::Clamp(Strafe,-1.f,1.f);bPluginWalkJump=Walk;PluginJumpStarted=0;
+}
+void AACEPlayerController::CancelPluginJump()
+{
+    if(bPluginJumpQueued&&PluginJumpStarted){bJumpCharging=false;bStandingJumpLocked=false;JumpChargeExtent=0;}
+    bPluginJumpQueued=false;PluginJumpStarted=0;
+}
+void AACEPlayerController::SetPluginAttackPower(float Power)
+{
+    if(DatGameplayBinder)DatGameplayBinder->SetRequestedAttackPower(Power);
 }

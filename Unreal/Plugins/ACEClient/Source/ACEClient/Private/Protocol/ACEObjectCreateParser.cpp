@@ -476,7 +476,12 @@ bool FACEObjectCreateParser::ParseWeenieHeader(FACEBinaryReader& Reader, FACEDec
 		Out.RadarBehavior = Reader.ReadUInt8();
 	}
 	if (WeenieFlags & PScript) { if (!Need(2)) return false; Reader.ReadUInt16(); }
-	if (WeenieFlags & Workmanship) { if (!Need(4)) return false; Reader.ReadFloat(); }
+	if (WeenieFlags & Workmanship)
+	{
+		if (!Need(4)) return false;
+		Out.SalvageWorkmanship = Reader.ReadFloat();
+		if (!FMath::IsFinite(Out.SalvageWorkmanship) || Out.SalvageWorkmanship < 0.f) return false;
+	}
 	if (WeenieFlags & Burden) { if (!Need(2)) return false; Out.Burden = Reader.ReadUInt16(); }
 	if (WeenieFlags & Spell)
 	{

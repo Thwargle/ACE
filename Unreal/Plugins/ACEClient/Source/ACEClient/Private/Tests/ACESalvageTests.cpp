@@ -232,7 +232,7 @@ bool FACESalvageTest::RunTest(const FString&)
         const auto& Geometry = Canvas->GetCachedGeometry();
         TestTrue(TEXT("Thumb regression uses the requested actual Slate DPI transform"),
             (Geometry.LocalToAbsolute(FVector2D(100, 0)) - Geometry.LocalToAbsolute(FVector2D::ZeroVector))
-                .Equals(FVector2D(100 * DPIScale, 0), .1));
+                .Equals(FVector2D(100 * DPIScale, 0), .1f));
         const FVector2D StartLocal = Canvas->LayoutToViewport(FVector2D(Thumb->GetScreenOrigin()) + FVector2D(Thumb->Width, Thumb->Height) * .5);
         const FVector2D Start = Geometry.LocalToAbsolute(StartLocal);
         const FPointerEvent Down(0, Start, Start, TSet<FKey>{EKeys::LeftMouseButton}, EKeys::LeftMouseButton, 0, FModifierKeysState());

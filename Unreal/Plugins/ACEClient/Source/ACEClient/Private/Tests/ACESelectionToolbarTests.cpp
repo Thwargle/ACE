@@ -144,7 +144,7 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     Draw(TEXT("LongName150"), 1.5f);
     TestTrue(TEXT("Scaled capture uses the real 150 percent Slate transform"),
         (Canvas->GetCachedGeometry().LocalToAbsolute(FVector2D(100, 0))
-            - Canvas->GetCachedGeometry().LocalToAbsolute(FVector2D::ZeroVector)).Equals(FVector2D(150, 0), .1));
+            - Canvas->GetCachedGeometry().LocalToAbsolute(FVector2D::ZeroVector)).Equals(FVector2D(150, 0), .1f));
     TestTrue(TEXT("DPI scale does not shrink the authored name field"), TextSlot->GetSize().Equals(FVector2D(140, 31)));
 
     Item.Name = TEXT("Compass"); Item.MaterialType = 0;

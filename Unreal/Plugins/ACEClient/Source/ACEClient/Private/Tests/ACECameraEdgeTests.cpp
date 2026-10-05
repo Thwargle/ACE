@@ -39,6 +39,9 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     ACEInputBindings::Reload();
     // Numeric reference projections from SmartBox::GetOverrideFovDistance
     // and Render's vertical perspective, before Unreal's horizontal conversion.
+    TestEqual(TEXT("Retail default keyboard orbit is angle(8) times adjustment(40)"),ACECameraRetail::NumpadOrbitDegreesPerSecond,320.f);
+    TestEqual(TEXT("Retail mouse-turning preference quarters keyboard pitch"),ACECameraRetail::KeyboardPitchRate(1,true),80.f);
+    TestEqual(TEXT("Camera adjustment slider scales keyboard pitch"),ACECameraRetail::KeyboardPitchRate(.25f,false),80.f);
     TestTrue(TEXT("Retail 4:3 60-degree preference"),FMath::IsNearlyEqual(ACECameraRetail::HorizontalFovDegrees(4.f/3,60),62.15513f,.0001f));
     TestTrue(TEXT("Retail 16:9 default projection"),FMath::IsNearlyEqual(ACECameraRetail::HorizontalFovDegrees(16.f/9,90),83.90130f,.0001f));
     TestTrue(TEXT("Retail ultrawide 120-degree preference"),FMath::IsNearlyEqual(ACECameraRetail::HorizontalFovDegrees(21.f/9,120),99.53647f,.0001f));
@@ -569,6 +572,13 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     Controller->UpdateMouseButtons(true,false,false,false);
     Controller->UpdateMouseButtons(false,false,false,false);
     TestTrue(TEXT("Toggle mouse look survives right-button release"),Controller->bMouseLookActive && Controller->bMouseLookToggled);
+    Controller->MouseLookPressX=123;Controller->MouseLookPressY=234;
+    Controller->MouseLookTravelPixels=40;
+    Controller->bShowMouseCursor=true; // loading screen temporarily owns input
+    Controller->SetMouseLookActive(true);
+    TestTrue(TEXT("Portal recapture preserves active toggle and hides cursor"),Controller->bMouseLookToggled && !Controller->bShowMouseCursor);
+    TestEqual(TEXT("Portal recapture retains cursor restore X"),Controller->MouseLookPressX,123.f);
+    TestEqual(TEXT("Portal recapture does not turn a drag into an inspect click"),Controller->MouseLookTravelPixels,40.f);
     Controller->UpdateMouseButtons(true,false,false,false);
     Controller->UpdateMouseButtons(false,false,false,false);
     TestFalse(TEXT("Second right-button press releases toggle mouse look"),Controller->bMouseLookActive);

@@ -14,9 +14,13 @@ public:
 	virtual FRotator GetDesiredRotation() const override;
 
 protected:
+	virtual FVector BlendLocations(const FVector& DesiredArmLocation, const FVector& TraceHitLocation, bool bHitSomething, float DeltaTime) override;
 	virtual void UpdateDesiredArmLocation(bool bDoTrace, bool bDoLocationLag, bool bDoRotationLag, float DeltaTime) override;
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FACEVRWallContactTest;
+#endif
 	bool bApplyingOrbitRotation = false;
 	FRotator OrbitRotation = FRotator::ZeroRotator;
 };

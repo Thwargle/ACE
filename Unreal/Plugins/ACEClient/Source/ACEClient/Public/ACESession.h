@@ -32,6 +32,7 @@ DECLARE_MULTICAST_DELEGATE(FACEOnPlayerTeleportStarted);
 DECLARE_MULTICAST_DELEGATE_ThreeParams(FACEOnPlayScriptId, int32 /*ObjectGuid*/, int32 /*PhysicsScriptId*/, float /*Intensity*/);
 DECLARE_MULTICAST_DELEGATE_ThreeParams(FACEOnPlayEffect, int32 /*ObjectGuid*/, int32 /*ScriptType*/, float /*Intensity*/);
 DECLARE_MULTICAST_DELEGATE_ThreeParams(FACEOnChatMessage, const FString& /*Text*/, const FString& /*Sender*/, int32 /*Type*/);
+DECLARE_MULTICAST_DELEGATE_ThreeParams(FACEOnPlayerTell, const FString&, const FString&, int32);
 DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnVitalsUpdated, const FACEPlayerVitals&);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FACEOnObjectHealth, int32 /*ObjectGuid*/, float /*HealthFraction*/);
 DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnAppraisal, const FACEAppraisalInfo&);
@@ -66,6 +67,8 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 {
 	friend class FACEVRProtocolTest;
 	friend class FACEPortalLifetimeTest;
+	friend class FACEPluginEquipmentTest;
+	friend class FACEPluginRequestsTest;
 	friend class FACEDeferredWorldAppearanceTest;
 	friend class FACEVRObserverProtocolTest;
 	friend class FACEVRLocomotionTest;
@@ -145,6 +148,7 @@ public:
 	FACEOnPlayScriptId OnPlayScriptId;
 	FACEOnPlayEffect OnPlayEffect;
 	FACEOnChatMessage OnChatMessage;
+	FACEOnPlayerTell OnPlayerTell;
 	FACEOnVitalsUpdated OnVitalsUpdated;
 	TFunction<void(FACEPlayerVitals&, const TArray<FACEActiveEnchantment>&)> StatResolver;
 	void NotifyVitalsChanged();
@@ -685,7 +689,9 @@ private:
 	void HandlePrivateUpdateAttribute2ndLevel(FACEBinaryReader& Reader);
 	void HandlePrivateUpdateSkill(FACEBinaryReader& Reader);
 	void HandlePrivateUpdatePropertyInt(FACEBinaryReader& Reader);
-	void HandlePrivateUpdatePropertyInt64(FACEBinaryReader& Reader);
+	void HandlePrivateUpdatePropertyInt64(FACEBinaryReader& Reader, bool bPublic = false);
+	void HandleUpdatePropertyFloat(FACEBinaryReader& Reader, bool bPublic);
+	void HandleUpdatePropertyString(FACEBinaryReader& Reader, bool bPublic);
 	void HandleUpdatePropertyBool(FACEBinaryReader& Reader, bool bPublic);
 	void HandleUpdateHealth(FACEBinaryReader& Reader);
 	void HandleQueryItemManaResponse(FACEBinaryReader& Reader);
@@ -781,6 +787,8 @@ private:
 		int32 InsertGuid = 0, int32 InsertAt = INDEX_NONE);
 	/** Keep ViewContents list order ↔ PlacementPosition in sync after list mutations. */
 	void RestampContainerListPlacements(int32 ContainerGuid);
+	int32 ResolveContainerRoot(int32 ContainerGuid) const;
+	void ReconcileOpenContainerOwnership();
 	void ApplyPlayerInventoryProfile();
 	void ApplyPropertyDataID(int32 ObjectGuid, uint32 PropertyId, uint32 Value);
 	void HandleMagicUpdateSpell(FACEBinaryReader& Reader);

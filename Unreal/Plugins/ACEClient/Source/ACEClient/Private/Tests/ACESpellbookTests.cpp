@@ -2,12 +2,27 @@
 #include "Misc/AutomationTest.h"
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
+#include "ACESpellFormula.h"
 #include "Engine/GameInstance.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailSpellLevelTest,"ACE.RetailParity.SpellFormulaLevels",
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACERetailSpellLevelTest::RunTest(const FString&)
 {
+    const TArray<uint32> Formula={6,63,10,64,20,30,65,40};
+    TestTrue(TEXT("Unknown formula versions preserve server DAT ingredients"),ACESpellFormula::Customize(Formula,0,TEXT("test"))==Formula);
+    for(uint32 Version:{1u,2u,3u})
+    {
+        const auto Customized=ACESpellFormula::Customize(Formula,Version,TEXT("test"));
+        TestEqual(TEXT("Customization preserves ingredient count"),Customized.Num(),Formula.Num());
+        for(int Index:{0,2,4,5,7})TestEqual(TEXT("Account formula preserves non-taper components"),Customized[Index],Formula[Index]);
+        for(int Index:Version==1?TArray<int>{1,3,6}:TArray<int>{3,6})
+            TestTrue(TEXT("Customized taper is an authored colored taper"),Customized[Index]>=63&&Customized[Index]<=74);
+    }
+    TestTrue(TEXT("Focus level six replaces herbs with four prismatic tapers"),
+        ACESpellFormula::WithFocus(Formula,6)==TArray<uint32>({6,188,188,188,188}));
+    TestTrue(TEXT("Level eight focus retains both scarab and chorizite"),
+        ACESpellFormula::WithFocus({193,112,10,20},10)==TArray<uint32>({193,112,188,188,188,188}));
     auto* Dat=NewObject<UACEDatSubsystem>(NewObject<UGameInstance>());
     Dat->bSpellTableLoaded=true;
     // All power-component results from retail MagicSystem, including the two

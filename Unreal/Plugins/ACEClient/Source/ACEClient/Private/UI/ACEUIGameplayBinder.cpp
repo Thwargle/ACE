@@ -1,4 +1,5 @@
 #include "UI/ACEUIGameplayBinder.h"
+#include "UI/ACERadarColors.h"
 #include "ACEHoverTooltipWidget.h"
 #include "ACEVendorPricing.h"
 #include "Components/ComboBoxString.h"
@@ -1490,6 +1491,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 	{
 		bCombatAutoTarget = !bCombatAutoTarget;
 		if (Client) Client->SendSetSingleCharacterOption(0x0D, bCombatAutoTarget);
+		if (bCombatAutoTarget) TryAutoTargetOnCombatEnter();
 		return true;
 	}
 	if (Name == TEXT("ViewCombatTarget"))
@@ -2603,9 +2605,8 @@ void UACEUIGameplayBinder::ApplyCombatModeInternal(int32 Mode, bool bSendToServe
 	SetFloatyVisible(TEXT("RootGameplay_FloatyCombatPanel_Field"), bInCombat);
 	if (bInCombat)
 	{
-		if (bSendToServer
-			&& (CombatMode == static_cast<int32>(ACECombatMode::Melee)
-				|| CombatMode == static_cast<int32>(ACECombatMode::Missile)))
+		if (CombatMode == static_cast<int32>(ACECombatMode::Melee)
+				|| CombatMode == static_cast<int32>(ACECombatMode::Missile))
 		{
 			TryAutoTargetOnCombatEnter();
 		}
@@ -2834,6 +2835,22 @@ void UACEUIGameplayBinder::RefreshCombatPanelOverlays()
 
 void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 {
+	if (Client && (CombatMode == int32(ACECombatMode::Melee) || CombatMode == int32(ACECombatMode::Missile)))
+	{
+		if (PendingAutoTargetLoss)
+		{
+			const int32 Lost = PendingAutoTargetLoss; PendingAutoTargetLoss = 0;
+			FACEWorldObject Previous;
+			const auto Selection=Client->GetSelectedObject();
+			// ObjectDelete clears selection before erasing the object. Defer this
+			// check until the event is complete; an intentional clear of a living
+			// target must not immediately select it again.
+			if (!Client->GetWorldObject(Lost,Previous) || Previous.bDying
+				|| (Selection.Guid==Lost && Selection.bShowHealth && Selection.HealthFraction<=0.f))
+				TryAutoTargetOnCombatEnter(Lost);
+		}
+	}
+	else PendingAutoTargetLoss=0;
 	if (PlayerController && PlayerController->IsVRActive())
 	{
 		bCombatRepeatActive = bCombatAttackRequestPending = bCombatPowerCharging = false;
@@ -2866,7 +2883,7 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 			CombatPowerOrAccuracy = 0.f;
 			// ClientCombatSystem::HandleAttackDone only replaces a server repeat when
 			// the desired slider power changed. Sending every second restarted melee turns.
-			if (bCombatPowerCharging && bCombatRepeatActive && !bCombatAttackRequestPending
+			if (!bCombatMovementBlocked && bCombatPowerCharging && bCombatRepeatActive && !bCombatAttackRequestPending
 				&& !FMath::IsNearlyEqual(LastCombatAttackPower, RequestedAttackPower, .01f))
 			{
 				CombatPowerOrAccuracy = RequestedAttackPower;
@@ -2882,6 +2899,12 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 				bCombatPowerCharging = bCombatAttackRequestPending;
 			}
 		}
+	}
+	if (bCombatMovementBlocked)
+	{
+		bCombatPowerCharging = false;
+		CombatPowerOrAccuracy = 0.f;
+		return;
 	}
 	if (!bCombatPowerCharging) return;
 	const float T = GetCombatPowerChargeDuration();
@@ -2920,7 +2943,7 @@ void UACEUIGameplayBinder::BeginCombatPowerCharge(uint32 AttackHeight, bool bHel
 	bCombatAttackHeld = bHeld;
 	ReleasedAttackPower = RequestedAttackPower;
 	bCombatAttackRequestPending = true;
-	bCombatPowerCharging = true;
+	bCombatPowerCharging = !bCombatMovementBlocked;
 	CombatPowerBuildStartTime = FPlatformTime::Seconds();
 	CombatPowerOrAccuracy = 0.f;
 }
@@ -2928,6 +2951,11 @@ void UACEUIGameplayBinder::BeginCombatPowerCharge(uint32 AttackHeight, bool bHel
 void UACEUIGameplayBinder::ReleaseCombatPowerCharge()
 {
 	if (!bCombatAttackHeld) return;
+	if (bCombatMovementBlocked)
+	{
+		bCombatAttackHeld = bCombatAttackRequestPending = bCombatPowerCharging = false;
+		return;
+	}
 	// ClientCombatSystem::EndAttackRequest: a quick click builds to the
 	// requested mark; holding beyond it uses the actual charged power.
 	const float Charged = FMath::Clamp(float(FPlatformTime::Seconds() - CombatPowerBuildStartTime)
@@ -2944,6 +2972,29 @@ void UACEUIGameplayBinder::CancelCombatAttack()
 	bCombatAttackRequestPending = bCombatRepeatActive = bCombatPowerCharging = false;
 	CombatPowerOrAccuracy = 0.f;
 	if (Client) if (const auto Session = Client->GetSession()) Session->SendCancelAttack();
+}
+
+void UACEUIGameplayBinder::SetCombatMovementBlocked(bool bBlocked)
+{
+	const bool bWasBlocked = bCombatMovementBlocked;
+	bCombatMovementBlocked = bBlocked;
+	if (bBlocked)
+	{
+		// ClientCombatSystem::UseTime stops the build when not ready, but
+		// retains attackRequestInProgress while the attack control is held.
+		if (bCombatRequestSent || bCombatRepeatActive)
+			if (Client) if (const auto Session = Client->GetSession()) Session->SendCancelAttack();
+		bCombatRequestSent = bCombatRepeatActive = bCombatPowerCharging = false;
+		bCombatAttackRequestPending = bCombatAttackHeld;
+		CombatPowerOrAccuracy = 0.f;
+		CombatPowerBuildStartTime = FPlatformTime::Seconds();
+	}
+	else if (bWasBlocked && bCombatAttackHeld && bCombatAttackRequestPending)
+	{
+		bCombatPowerCharging = !Client || !Client->GetSession() || !Client->GetSession()->IsServerAttackInProgress();
+		CombatPowerBuildStartTime = FPlatformTime::Seconds();
+		CombatPowerOrAccuracy = 0.f;
+	}
 }
 
 bool UACEUIGameplayBinder::TryBeginCombatButton(FVector2D Point)
@@ -2973,32 +3024,30 @@ bool UACEUIGameplayBinder::TryReleaseCombatButton()
 	return true;
 }
 
-void UACEUIGameplayBinder::TryAutoTargetOnCombatEnter()
+void UACEUIGameplayBinder::TryAutoTargetOnCombatEnter(int32 ExcludeGuid)
 {
-	if (Client && Client->GetSessionState() == EACESessionState::InWorld)
-		bCombatAutoTarget = Client->IsCharacterOptionSet(0x0D);
-	if (!bCombatAutoTarget || !Client || !Client->GetSession())
-	{
-		return;
-	}
-	const TSharedPtr<FACESession> Session = Client->GetSession();
-	const int32 Attacker = Session->GetLastAttackerGuid();
-	if (Attacker == 0 || Attacker == Client->GetPlayerGuid())
-	{
-		return;
-	}
-	if (FPlatformTime::Seconds() - Session->GetLastAttackerTimeSeconds() > 15.0)
-	{
-		return;
-	}
-	FACEWorldObject Obj;
-	if (!Client->GetWorldObject(Attacker, Obj) || !Obj.IsAttackable())
-	{
-		return;
-	}
-	Client->SelectObject(Attacker);
+    if (!Client || !Client->GetSession() || !PlayerController
+        || (CombatMode != int32(ACECombatMode::Melee) && CombatMode != int32(ACECombatMode::Missile))) return;
+    bCombatAutoTarget = Client->IsCharacterOptionSet(0x0D);
+    if (!bCombatAutoTarget) return;
+    const auto Fellowship = Client->GetFellowship();
+    auto Eligible = [&](int32 Guid)
+    {
+        FACEWorldObject Obj;
+        return Guid && Guid != ExcludeGuid && Guid != Client->GetPlayerGuid()
+            && Client->GetWorldObject(Guid,Obj) && Obj.IsSelectableWorldObject()
+            && Obj.IsAttackable() && !Obj.bIsPlayer && (Obj.ItemType & ACEItemType::Creature)
+            && !Obj.PetOwnerId && Client->IsWorldObjectVisible(Obj)
+            && !Fellowship.Members.ContainsByPredicate([&](const auto& M) { return M.Guid==Guid; });
+    };
+    if (Eligible(Client->GetSelectedObject().Guid)) return;
+    const auto Session = Client->GetSession();
+    const int32 Attacker = Session->GetLastAttackerGuid();
+    if (Eligible(Attacker) && FPlatformTime::Seconds()-Session->GetLastAttackerTimeSeconds()<15.)
+        Client->SelectObject(Attacker);
+    else if (const int32 Nearest = PlayerController->FindNearbyTarget(true,0,ExcludeGuid))
+        Client->SelectObject(Nearest);
 }
-
 void UACEUIGameplayBinder::FireCombatAttack()
 {
 	if (PlayerController && PlayerController->IsVRActive()) return;
@@ -6232,6 +6281,16 @@ void UACEUIGameplayBinder::HandleAppraisal(const FACEAppraisalInfo& Appraisal)
 
 void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Selection)
 {
+	if (!Selection.bValid && LastSelection.bValid && Client)
+	{
+		FACEWorldObject Previous;
+		if (!Client->GetWorldObject(LastSelection.Guid,Previous) || Previous.bDying
+			|| (Previous.ItemType & ACEItemType::Creature))
+			PendingAutoTargetLoss = LastSelection.Guid;
+	}
+	if (Selection.bValid && Selection.bShowHealth && Selection.HealthFraction <= 0.f
+		&& (Selection.Guid != LastSelection.Guid || LastSelection.HealthFraction > 0.f))
+		PendingAutoTargetLoss = Selection.Guid;
 	const bool bNewClick = Selection.Guid != LastSelection.Guid
 		|| Selection.SelectionSerial != LastSelection.SelectionSerial;
 	if (bNewClick)
@@ -10360,74 +10419,12 @@ void UACEUIGameplayBinder::PlaceRadarWidget(UWidget* Widget, float ScreenX, floa
 
 FLinearColor UACEUIGameplayBinder::ColorFromRadarBlip(uint8 RadarColor)
 {
-    // Retail RGBAColor_Radar constants are encoded display colors.
-    FColor Color(255,255,128);
-    switch(RadarColor)
-    {
-    case ACERadarColor::Blue: Color=FColor(64,168,255);break;
-    case ACERadarColor::Gold: Color=FColor(255,171,0);break;
-    case ACERadarColor::White: Color=FColor::White;break;
-    case ACERadarColor::Purple: Color=FColor(191,99,255);break;
-    case ACERadarColor::Red: Color=FColor(255,64,99);break;
-    case ACERadarColor::Pink: Color=FColor(255,168,191);break;
-    case ACERadarColor::Green: Color=FColor(0,128,64);break;
-    case ACERadarColor::Cyan: Color=FColor(0,255,255);break;
-    case ACERadarColor::BrightGreen: Color=FColor(0,255,0);break;
-    default:break;
-    }
-    return FLinearColor::FromSRGBColor(Color);
+    return ACERadarColors::Tint(RadarColor);
 }
 
 uint8 UACEUIGameplayBinder::ResolveRadarColor(const FACEWorldObject& Obj, const FACEFellowshipInfo* Fellowship)
 {
-	// gmRadarUI::GetBlipColor applies fellowship membership last, overriding
-	// the ordinary player/PK color. VividTargetIndicator uses that same result.
-	if (Fellowship && Fellowship->bValid && Fellowship->Members.ContainsByPredicate(
-		[&](const FACEFellowshipMember& Member) { return Member.Guid == Obj.Guid; }))
-		return ACERadarColor::BrightGreen;
-	if (Obj.bIsPlayer)
-	{
-		if ((Obj.ObjectDescriptionFlags & ACEObjectDescFlag::PkLiteStatus) != 0)
-		{
-			return ACERadarColor::PKLite;
-		}
-		if ((Obj.ObjectDescriptionFlags & ACEObjectDescFlag::PlayerKiller) != 0)
-		{
-			return ACERadarColor::PlayerKiller;
-		}
-		if (Obj.RadarBlipColor != ACERadarColor::Default
-			&& Obj.RadarBlipColor != ACERadarColor::White)
-		{
-			return Obj.RadarBlipColor;
-		}
-		return ACERadarColor::White;
-	}
-	if (Obj.RadarBlipColor != ACERadarColor::Default)
-	{
-		return Obj.RadarBlipColor;
-	}
-	if (Obj.IsLifeStone() || (Obj.ObjectDescriptionFlags & ACEObjectDescFlag::BindStone) != 0)
-	{
-		return ACERadarColor::LifeStone;
-	}
-	if ((Obj.ItemType & ACEItemType::Portal) != 0
-		|| (Obj.ObjectDescriptionFlags & ACEObjectDescFlag::Portal) != 0)
-	{
-		return ACERadarColor::Portal;
-	}
-	if (Obj.IsVendor())
-	{
-		return ACERadarColor::Vendor;
-	}
-	if ((Obj.ItemType & ACEItemType::Creature) != 0)
-	{
-		if (Obj.IsAttackable())
-		{
-			return ACERadarColor::Creature; // gold / orange selection
-		}
-		return ACERadarColor::NPC; // yellow — friendly NPC
-	}
-	return ACERadarColor::Yellow; // loose items / misc
+    return ACERadarColors::Resolve(Obj, Fellowship);
 }
 
 bool UACEUIGameplayBinder::ShouldShowOnRadar(const FACEWorldObject& Obj, int32 SelfGuid)
@@ -10665,7 +10662,7 @@ void UACEUIGameplayBinder::RefreshRadarOverlays()
 		int32 Shape=4;
         uint8 RadarColor=ResolveRadarColor(Obj,&Fellowship);
         if(Fellowship.bValid && Fellowship.Members.ContainsByPredicate([&](const auto& M){return M.Guid==Obj.Guid;}))
-        { Shape=Fellowship.LeaderGuid==Obj.Guid ? 5:6;RadarColor=ACERadarColor::BrightGreen; }
+        { Shape=Fellowship.LeaderGuid==Obj.Guid ? 5:6; }
         else if(SelfObject && Obj.MonarchGuid!=0 && Obj.MonarchGuid==SelfObject->MonarchGuid) Shape=2;
         else if(Obj.bIsPlayer && SelfObject && (Obj.ObjectDescriptionFlags & SelfObject->ObjectDescriptionFlags
             & (ACEObjectDescFlag::PlayerKiller|ACEObjectDescFlag::PkLiteStatus))) Shape=3;
@@ -10919,7 +10916,7 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
                 FSlateBrush Brush;Brush.SetResourceObject(Texture);Brush.ImageSize=Size;Brush.DrawAs=ESlateBrushDrawType::Image;
                 SelectionDirectionArrow->SetBrush(Brush);
                 const auto Fellowship=Client->GetFellowship();
-                SelectionDirectionArrow->SetBrushColor(ColorFromSelectionMarker(bHaveObj?ResolveRadarColor(SelObj,&Fellowship):ACERadarColor::Yellow));
+                SelectionDirectionArrow->SetBrushColor(ColorFromSelectionMarker(bHaveObj?ResolveRadarColor(SelObj,&Fellowship):ACERadarColor::White));
                 SelectionDirectionArrow->SetVisibility(ESlateVisibility::HitTestInvisible);
                 if(auto* Slot=Cast<UCanvasPanelSlot>(SelectionDirectionArrow->Slot))
                 {
@@ -11136,10 +11133,11 @@ void UACEUIGameplayBinder::RefreshExaminationOverlay()
 	for (UTextBlock* Text : ExamCreatureHeadings) if (Text) Text->SetVisibility(ESlateVisibility::Collapsed);
 	for (UTextBlock* Text : ExamAttributeLabels) if (Text) Text->SetVisibility(ESlateVisibility::Collapsed);
 	for (UTextBlock* Text : ExamAttributeValues) if (Text) Text->SetVisibility(ESlateVisibility::Collapsed);
+	const FACEPlayerVitals Viewer = Client ? Client->GetPlayerVitals() : FACEPlayerVitals();
 	const FString Body = ACEAppraisalFormatting::ItemExaminationText(LastAppraisal,
         Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr,
         !Manager->FindElementUnder(TEXT("ItemExamineUI"), TEXT("ItemValueText")),
-        !Manager->FindElementUnder(TEXT("ItemExamineUI"), TEXT("ItemBurdenText")));
+        !Manager->FindElementUnder(TEXT("ItemExamineUI"), TEXT("ItemBurdenText")), &Viewer);
 	const FString BodyEl = LastAppraisal.bIsCreature
 		? TEXT("BasicCreatureExam_Attributes")
 		: TEXT("ItemDisplayText");

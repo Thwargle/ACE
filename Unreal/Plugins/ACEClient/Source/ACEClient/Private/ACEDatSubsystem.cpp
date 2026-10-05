@@ -1,4 +1,7 @@
 #include "ACEDatSubsystem.h"
+#include "ACESpellFormula.h"
+#include "ACEClientSubsystem.h"
+#include "ACESession.h"
 #include "Dat/ACEStreamingBudget.h"
 #include "ACELoginSettings.h"
 #include "UI/ACEUIResourceResolver.h"
@@ -8025,6 +8028,13 @@ bool UACEDatSubsystem::EvaluateMotionCommand(uint32 MotionTableId, uint32 Motion
 		PreviousTimeSeconds, OutCrossedHooks, PreferredStyle, bLoop, bOutFinished);
 }
 
+bool UACEDatSubsystem::BuildTransitionRootTrack(uint32 Table, uint32 From, uint32 To, uint32 Style, ACELandingMotion::FRootTrack& Out) const
+{
+	Out.Reset();
+	return bPortalLoaded && MotionPlayer && Table != 0 && MotionPlayer->SetMotionTable(Table)
+		&& MotionPlayer->BuildTransitionRootTrack(From, To, Style, Out);
+}
+
 bool UACEDatSubsystem::EvaluateMotionTransition(uint32 Table, uint32 From, uint32 To, float Time, int32 Parts,
 	TArray<FTransform>& Out, float Scale, int32& Count, bool& Finished,
 	const float* Previous, TArray<FACEDatAnimationHook>* Hooks, uint32 Style) const
@@ -8361,14 +8371,14 @@ bool UACEDatSubsystem::EnsureSpellTableLoaded()
 		Cur.AlignBoundary();
 		Entry.School = Cur.ReadU32(bOk);
 		Entry.IconDid = Cur.ReadU32(bOk);
-		Cur.ReadU32(bOk); // Category
+		Entry.Category = Cur.ReadU32(bOk); // Category
 		Entry.Bitfield = Cur.ReadU32(bOk);
 		Entry.BaseMana = Cur.ReadU32(bOk);
 		Entry.BaseRange = Cur.ReadF32(bOk);
 		Entry.RangeMod = Cur.ReadF32(bOk);
 		Entry.Power = Cur.ReadU32(bOk);
 		Cur.ReadF32(bOk);
-		Cur.ReadU32(bOk);
+		Entry.FormulaVersion = Cur.ReadU32(bOk);
 		Cur.ReadF32(bOk);
 		const uint32 MetaSpellType = Cur.ReadU32(bOk);
 		Entry.bProjectile = MetaSpellType == 2 || MetaSpellType == 10 || MetaSpellType == 15;
@@ -8405,6 +8415,7 @@ bool UACEDatSubsystem::EnsureSpellTableLoaded()
 		const uint32 FormulaKey = FormulaHash(Entry.Name) % 0x12107680u + FormulaHash(Entry.Description) % 0xBEADCF45u;
 		for (auto& Component : Formula)
 			if (Component) { Component -= FormulaKey; if (Component > 198) Component &= 0xFF; }
+		for (uint32 Component : Formula) { if (!Component) break; Entry.Formula.Add(Component); }
 		if (Formula[0])
 		{
 			const uint32 Component = Formula[0];
@@ -8440,6 +8451,27 @@ bool UACEDatSubsystem::EnsureSpellTableLoaded()
 	bSpellTableLoaded = true;
 	UE_LOG(LogTemp, Log, TEXT("ACEDat: SpellTable loaded (%d spells)"), SpellInfoCache.Num());
 	return true;
+}
+
+bool UACEDatSubsystem::TryGetPluginSpellInfo(uint32 Id, uint32& School, uint32& Power, uint32& Category, uint32& Flags, double& Duration)
+{
+    if (!EnsureSpellTableLoaded()) return false;
+    const auto* Entry = SpellInfoCache.Find(Id); if (!Entry) return false;
+    School=Entry->School; Power=Entry->Power; Category=Entry->Category; Flags=Entry->Bitfield; Duration=Entry->Duration;
+    // EnchantmentProjectile does not serialize its duration in portal.dat.
+    // VT MySpell.Duration supplies these family durations for its effect tracker.
+    if(Duration<=0){if(Category==636||Category==638)Duration=31.;else if(Category==637)Duration=16.;}
+    return true;
+}
+
+bool UACEDatSubsystem::IsPluginSingleTargetOffensiveSpell(uint32 SpellId)
+{
+    if(!EnsureSpellTableLoaded())return false;
+    const auto* E=SpellInfoCache.Find(SpellId);
+    // VT excludes multi-target formulae (component 110), Corrosion, and untargeted
+    // self-centred spells such as Tugak from per-monster failure accounting.
+    return E && !(E->Bitfield&(4|8)) && E->RetailTargetType && E->Category!=638
+        && !E->Formula.IsEmpty() && E->Formula[0]!=110;
 }
 
 bool UACEDatSubsystem::TryGetSpellInfo(uint32 SpellId, FString& OutName, uint32& OutIconDid)
@@ -8483,6 +8515,43 @@ bool UACEDatSubsystem::TryGetSpellExamination(uint32 SpellId, FString& OutDetail
 	else if (Spell->BaseRange > 0.f) OutDetails += FString::Printf(TEXT("\nRange: %.1f m + %.3f m per skill point"), Spell->BaseRange, Spell->RangeMod);
 	if (Spell->Duration > 0.0) OutDetails += FString::Printf(TEXT("\nBase duration: %.0f seconds"), Spell->Duration);
 	OutDetails += TEXT("\n\n") + Spell->Description;
+	FString Account;
+	bool HasFocus=false;
+	if(auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>())
+	{
+		if(const auto Session=Client->GetSession())Account=Session->GetAccountName();
+		static const uint32 FocusWcid[]={0,15271,15270,15269,15268,43173};
+		static const uint32 FocusAug[]={0,297,296,295,294,328};
+		if(Spell->School>0 && Spell->School<UE_ARRAY_COUNT(FocusWcid))
+		{
+			HasFocus=Client->GetPlayerVitals().StatQualityInts.FindRef(FocusAug[Spell->School])>0;
+			if(!HasFocus)for(const auto& Item:Client->GetPackItems(Client->GetPlayerGuid()))
+				if(uint32(Item.WeenieClassId)==FocusWcid[Spell->School]){HasFocus=true;break;}
+		}
+	}
+	const auto Formula=HasFocus?ACESpellFormula::WithFocus(Spell->Formula,Spell->IconPowerLevel)
+		:ACESpellFormula::Customize(Spell->Formula,Spell->FormulaVersion,Account);
+	TArray<uint32> Order;TMap<uint32,int32> Counts;
+	for(uint32 Component:Formula){if(!Counts.Contains(Component))Order.Add(Component);++Counts.FindOrAdd(Component);}
+	TArray<FString> Names;
+	for(uint32 Id:Order)if(const auto* Component=GetSpellComponents().FindByPredicate([&](const auto& C){return C.ComponentId==Id;}))
+		Names.Add(Counts[Id]>1?FString::Printf(TEXT("%s (%d)"),*Component->Name,Counts[Id]):Component->Name);
+	if(!Names.IsEmpty())OutDetails+=TEXT("\n\nIngredients: ")+FString::Join(Names,TEXT(", "));
+	return true;
+}
+
+bool UACEDatSubsystem::TryGetPluginSpellScarabs(uint32 SpellId, TMap<FString, int32>& OutRequirements)
+{
+	OutRequirements.Reset();EnsureSpellTableLoaded();
+	const auto* Spell=SpellInfoCache.Find(SpellId);if(!Spell)return false;
+	const auto& Components=GetSpellComponents();
+	for(uint32 Id:Spell->Formula)
+	{
+		if(!Id)continue;
+		const auto* Component=Components.FindByPredicate([&](const auto& C){return C.ComponentId==Id;});
+		if(!Component)return false;
+		if(Component->Type==1)++OutRequirements.FindOrAdd(Component->Name);
+	}
 	return true;
 }
 

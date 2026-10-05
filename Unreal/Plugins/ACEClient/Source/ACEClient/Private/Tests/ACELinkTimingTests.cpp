@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "ACESession.h"
+#include "ACELinkQuality.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACELinkTimingTest,"ACE.RetailParity.LinkTiming",
  EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
@@ -35,6 +36,27 @@ bool FACELinkTimingTest::RunTest(const FString&)
  TestFalse(TEXT("A failed connection is never marked connected"),Session.GetLinkStatusAt(Start+20).bConnected);
  Session.Disconnect();
  TestEqual(TEXT("Reconnect cannot inherit old loss buckets"),Session.GetLinkStatusAt(Start+1).PacketLossPercent,0.f);
+ FACELinkStatus Link; Link.bConnected=true; Link.bHasPing=true; Link.RoundTripSeconds=.05f;
+ using Q=ACELinkQuality::EQuality;
+ TestTrue(TEXT("Healthy link is green"),ACELinkQuality::Evaluate(Link)==Q::Good);
+ Link.PacketLossPercent=88;Link.RoundTripSeconds=2.4f;
+ TestTrue(TEXT("88 percent loss and 2400 ms stays red despite fresh packets"),ACELinkQuality::Evaluate(Link)==Q::Poor);
+ Link.PacketLossPercent=0;
+ TestTrue(TEXT("Severe latency alone is red"),ACELinkQuality::Evaluate(Link)==Q::Poor);
+ Link.RoundTripSeconds=.05f;Link.PacketLossPercent=10;
+ TestTrue(TEXT("Severe loss alone is red"),ACELinkQuality::Evaluate(Link)==Q::Poor);
+ Link.PacketLossPercent=2;
+ TestTrue(TEXT("Moderate loss is yellow"),ACELinkQuality::Evaluate(Link)==Q::Fair);
+ Link.PacketLossPercent=0;Link.RoundTripSeconds=.3f;
+ TestTrue(TEXT("Moderate latency is yellow"),ACELinkQuality::Evaluate(Link)==Q::Fair);
+ Link.bHasPing=false;Link.RoundTripSeconds=2.4f;
+ TestTrue(TEXT("Unknown ping is not treated as a measured bad sample"),ACELinkQuality::Evaluate(Link)==Q::Good);
+ Link.SecondsSinceLastPacket=5;
+ TestTrue(TEXT("Retail silence warning is retained"),ACELinkQuality::Evaluate(Link)==Q::Fair);
+ Link.SecondsSinceLastPacket=20;
+ TestTrue(TEXT("Retail silence failure is retained"),ACELinkQuality::Evaluate(Link)==Q::Poor);
+ Link.SecondsSinceLastPacket=0;Link.bConnected=false;
+ TestTrue(TEXT("Disconnected link is red even without loss or ping"),ACELinkQuality::Evaluate(Link)==Q::Poor);
  return true;
 }
 #endif

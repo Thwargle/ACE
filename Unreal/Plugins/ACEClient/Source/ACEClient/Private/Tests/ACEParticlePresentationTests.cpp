@@ -120,6 +120,18 @@ bool FACEParticlePresentationTest::RunTest(const FString&)
         if (!TestTrue(TEXT("Actual DAT glyph lifetime spans the motion probe"), Emitter.Particles[0].Life > .2f)) return false;
         for (auto& P : Emitter.Particles) P.bParentLocal = ParentLocal;
         if (!TestEqual(TEXT("Requested real particle rendering path is active"), bool(Emitter.Batch), Batch != 0)) return false;
+        // Local first-person visibility/appearance hooks act on the body only.
+        // Batched effects must be isolated just like individual particle meshes.
+        auto* ParticleVisual=Batch?static_cast<UProceduralMeshComponent*>(Emitter.Batch.Get()):Emitter.Particles[0].Mesh.Get();
+        float BeforeOpacity=0,AfterOpacity=0;
+        if(ParticleVisual && ParticleVisual->GetMaterial(0))
+        {
+            ParticleVisual->GetMaterial(0)->GetScalarParameterValue(TEXT("OpacityMul"),BeforeOpacity);
+            FX->ApplyMaterialScalar(INDEX_NONE,TEXT("OpacityMul"),0.f);
+            ParticleVisual->GetMaterial(0)->GetScalarParameterValue(TEXT("OpacityMul"),AfterOpacity);
+            TestEqual(TEXT("Body transparency hooks never hide Aetheria particles"),AfterOpacity,BeforeOpacity);
+            FX->ApplyMaterialScalar(INDEX_NONE,TEXT("OpacityMul"),1.f);
+        }
         Reference->ClearAllMeshSections();
         if (!TestTrue(TEXT("Untransformed DAT glyph geometry loads for independent vertex oracle"),
             Dat->ApplyParticleGfxToProceduralMesh(Reference, Emitter.Info.GfxObjId, 100, false))) return false;

@@ -260,6 +260,7 @@ void UACEVRMenu::BuildTrade()
 }
 void UACEVRMenu::BuildMore()
 {
+    Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Plugins / UCM"),[this](){OpenPage("Plugins");})];
     Body->AddSlot().AutoHeight()[Button(TEXT("VR settings"),[this](){Rig->ToggleSettings();})];
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Allegiance"),[this](){OpenPage("Allegiance");})];
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Character and chat options"),[this](){OpenPage("Options");})];
