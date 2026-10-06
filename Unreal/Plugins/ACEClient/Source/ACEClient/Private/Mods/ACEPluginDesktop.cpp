@@ -135,8 +135,7 @@ void SACEPluginDesktop::Tick(const FGeometry& G,double Time,float Delta)
     if(auto* Map=Windows.Find(TEXT("waypoint.dungeon"));Map&&Map->Open&&Host.IsValid())
     {
         const auto P=Host->WaypointPlayerPosition();
-        const bool Inside=P.IsValid()&&(uint32(P.CellId)&65535)>=256;
-        Map->Widget->SetVisibility(!Inside?EVisibility::Collapsed:Host->IsWaypointMapUnlocked()?EVisibility::Visible:EVisibility::HitTestInvisible);
+        Map->Widget->SetVisibility(!P.IsValid()?EVisibility::Collapsed:Host->IsWaypointMapUnlocked()?EVisibility::Visible:EVisibility::HitTestInvisible);
     }
     if(!G.GetLocalSize().Equals(ViewSize))
     {ViewSize=G.GetLocalSize();for(auto& Pair:Windows)Layout(Pair.Value);}

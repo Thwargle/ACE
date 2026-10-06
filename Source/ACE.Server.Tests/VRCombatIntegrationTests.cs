@@ -32,6 +32,33 @@ namespace ACE.Server.Tests
         private static uint nextGuid = 0x8ffff000;
 
         [TestMethod]
+        public void ReportedDungeonLoginPlacement()
+        {
+            using var f = new Fixture();
+            var original = new Position(0x01D9010A,30.057709f,-15.371094f,0,0,0,-.186291f,.982495f);
+            bool Place(Vector3 offset)
+            {
+                f.Player.PhysicsObj?.DestroyObject();
+                typeof(WorldObject).GetProperty("PhysicsObj").SetValue(f.Player,null);
+                f.Player.Location = new Position(original);
+                f.Player.Location.Pos += offset;
+                f.Player.InitPhysicsObj();
+                return f.Player.AddPhysicsObj();
+            }
+            Assert.IsTrue(Place(Vector3.Zero), "The reported floor-contact login must not relocate to sanctuary.");
+            Assert.AreEqual(original.Cell, f.Player.Location.Cell);
+            Assert.AreEqual(original.PositionX, f.Player.Location.PositionX, .00001f);
+            Assert.AreEqual(original.PositionY, f.Player.Location.PositionY, .00001f);
+            Assert.AreEqual(.005f, f.Player.Location.PositionZ, .0002f);
+            Assert.IsTrue(Place(new Vector3(0,0,.005f)), "Already valid placement still uses the original position.");
+            Assert.AreEqual(.005f, f.Player.Location.PositionZ, .0002f);
+            Assert.IsFalse(Place(new Vector3(0,0,-1)), "A genuine below-floor position must still fail collision validation.");
+            Assert.IsNull(f.Player.PhysicsObj, "Failed placement still cleans up physics for the sanctuary fallback.");
+            Assert.IsTrue(Place(new Vector3(0,0,3)), "Airborne portal/logon positions remain valid without a ground requirement.");
+            Assert.IsTrue(f.Player.Location.PositionZ > .5f, "A legitimate drop must not be snapped to the floor.");
+        }
+
+        [TestMethod]
         public void UniformVRMoveUsesTheSamePhysicsAndLegacyObserverRates()
         {
             using var f = new Fixture();

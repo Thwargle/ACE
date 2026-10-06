@@ -107,6 +107,33 @@ bool FACEAppraisalPresentationTest::RunTest(const FString&)
     const auto ShieldColors=ACEAppraisalFormatting::ItemTextColors(Shield,ShieldText);
     TestTrue(TEXT("Base shield level uses the armor enchantment color"),ShieldColors[ShieldText.Find(TEXT("Base Shield Level:"))].G>.8f);
     TestTrue(TEXT("Reordered Cold resistance keeps the correct harmful wire color"),ShieldColors[ShieldText.Find(TEXT("Cold:"))].R>.9f);
+    FACEAppraisalInfo Cleaving;Cleaving.bSuccess=true;Cleaving.ItemType=ACEItemType::MeleeWeapon;
+    Cleaving.FloatProperties.Add(157,1.2);Cleaving.IntProperties.Add(263,4);
+    Cleaving.IntProperties.Add(45,1); // Actual weapon damage may differ from its resistance cleave.
+    for(bool IncludeChrome:{false,true})
+    {
+        const FString Details=ACEAppraisalFormatting::ItemExaminationText(Cleaving,nullptr,IncludeChrome,IncludeChrome);
+        TestTrue(TEXT("Desktop and VR expose server-provided Bludgeoning resistance cleave"),Details.Contains(TEXT("Properties: Resistance Cleaving: Bludgeoning")));
+        TestFalse(TEXT("Resistance cleave is not misreported as an imbue"),Details.Contains(TEXT("cannot be further imbued")));
+    }
+    for(const auto& Type:{TPair<int32,const TCHAR*>(1,TEXT("Slashing")),{2,TEXT("Piercing")},{4,TEXT("Bludgeoning")},{8,TEXT("Cold")},
+        {16,TEXT("Fire")},{32,TEXT("Acid")},{64,TEXT("Electrical")},{1024,TEXT("Nether")},{0x10000000,TEXT("Prismatic")},{5,TEXT("Slashing/Bludgeoning")}})
+    {
+        Cleaving.IntProperties[263]=Type.Key;
+        TestTrue(TEXT("Cleave damage labels and combined flags match retail"),ACEAppraisalFormatting::ItemDetails(Cleaving).Contains(FString(TEXT("Resistance Cleaving: "))+Type.Value));
+    }
+    Cleaving.FloatProperties[157]=1.;
+    TestTrue(TEXT("Retail checks modifier presence, not its magnitude"),ACEAppraisalFormatting::ItemDetails(Cleaving).Contains(TEXT("Resistance Cleaving:")));
+    Cleaving.IntProperties.Remove(263);
+    TestFalse(TEXT("Modifier alone does not invent a resistance type"),ACEAppraisalFormatting::ItemDetails(Cleaving).Contains(TEXT("Resistance Cleaving:")));
+    Cleaving.IntProperties.Add(263,4);Cleaving.FloatProperties.Remove(157);
+    TestFalse(TEXT("Resistance type alone does not imply cleaving"),ACEAppraisalFormatting::ItemDetails(Cleaving).Contains(TEXT("Resistance Cleaving:")));
+    Cleaving.FloatProperties.Add(157,1.2);Cleaving.bSuccess=false;
+    // Retail's special-properties section displays fields the server supplied,
+    // even when other parts of an appraisal failed. It does not gate on success.
+    TestTrue(TEXT("Received partial-appraisal properties remain visible like retail"),ACEAppraisalFormatting::ItemExaminationText(Cleaving,nullptr).Contains(TEXT("Resistance Cleaving: Bludgeoning")));
+    Cleaving.IntProperties.Reset();Cleaving.FloatProperties.Reset();
+    TestFalse(TEXT("Failed appraisal without properties does not invent cleaving"),ACEAppraisalFormatting::ItemExaminationText(Cleaving,nullptr).Contains(TEXT("Resistance Cleaving:")));
     return !HasAnyErrors();
 }
 #endif

@@ -179,6 +179,10 @@ FString NativeCommand(const FString& Text)
     // Only replace the command token; quoted chat text and item names are data.
     if(Command.Len()>=3&&Command.Left(3).Equals(TEXT("/vt"),ESearchCase::IgnoreCase)
         &&(Command.Len()==3||FChar::IsWhitespace(Command[3])))Command=TEXT("/ucm")+Command.Mid(3);
+    if((Command.Equals(TEXT("/og summon off"),ESearchCase::IgnoreCase)||Command.Equals(TEXT("/og summon false"),ESearchCase::IgnoreCase)))return TEXT("/ucm opt set SummonPets false");
+    if((Command.Equals(TEXT("/og summon on"),ESearchCase::IgnoreCase)||Command.Equals(TEXT("/og summon true"),ESearchCase::IgnoreCase)))return TEXT("/ucm opt set SummonPets true");
+    for(const auto& Alias:TArray<TPair<FString,FString>>{{TEXT("/ucm settings loadchar "),TEXT("/ucm settings load ")},{TEXT("/ucm lootprofile load "),TEXT("/ucm looting load ")}})
+        if(Command.StartsWith(Alias.Key,ESearchCase::IgnoreCase))return Alias.Value+Command.Mid(Alias.Key.Len());
     return Command;
 }
 #include "ACEVTMeta.inl"
@@ -325,6 +329,9 @@ J Convert(const J& D,TArray<FString>& Issues)
                 else Conditions.Add(Obj(C));
             }
             Q->SetArrayField(TEXT("conditions"),Conditions);
+            // Disabled Classic rules can retain requirements without a runtime adapter.
+            // Do not let the native editor later enable a partially converted rule.
+            if(Problems.Num()){A Pending;for(const auto& Problem:Problems)Pending.Add(Str(Problem));Q->SetArrayField(TEXT("compatibility_issues"),Pending);}
             if(Conditions.Num()>MaxLootConditions)Issues.Add(FString::Printf(TEXT("Rule %d (%s) exceeds %d conditions."),Rules.Num()+1,*S(R,TEXT("label")),MaxLootConditions));
             // Preserve original data separately. Never silently activate a partially converted rule set.
             if(!Disabled)for(const auto& P:Problems)Issues.Add(FString::Printf(TEXT("Rule %d (%s): %s"),Rules.Num()+1,*S(R,TEXT("label")),*P));

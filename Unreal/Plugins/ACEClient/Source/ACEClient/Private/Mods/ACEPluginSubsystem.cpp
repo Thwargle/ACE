@@ -87,7 +87,7 @@ namespace
             }
         }
         // Validate structures consumed by native widgets, not only the script.
-        for(const TCHAR* Key:{TEXT("route"),TEXT("states"),TEXT("loot_rules"),TEXT("monsters"),TEXT("buff_commands"),TEXT("assist_items"),TEXT("buff_items"),TEXT("item_buff_targets"),TEXT("recharge_handlers"),TEXT("pea_recipes")})
+        for(const TCHAR* Key:{TEXT("route"),TEXT("states"),TEXT("loot_rules"),TEXT("monsters"),TEXT("buff_commands"),TEXT("assist_items"),TEXT("buff_items"),TEXT("item_buff_targets"),TEXT("recharge_handlers"),TEXT("pea_recipes"),TEXT("vendor_rules")})
         {
             if(!O->HasField(Key))continue;
             const TArray<TSharedPtr<FJsonValue>>* Values=nullptr;
@@ -96,6 +96,13 @@ namespace
             {
                 if(Value->Type!=EJson::Object)return false;
                 auto Entry=Value->AsObject();
+                if(FString(Key)==TEXT("vendor_rules"))
+                {
+                    for(const TCHAR* K:{TEXT("vendor_name"),TEXT("item_name"),TEXT("server")})
+                    {FString V;if(!Entry->TryGetStringField(K,V)||V.IsEmpty()||V.Len()>256)return false;}
+                    for(const TCHAR* K:{TEXT("vendor_wcid"),TEXT("item_wcid"),TEXT("quantity")})
+                    {double V;if(!Entry->TryGetNumberField(K,V)||!FMath::IsFinite(V)||V<1||V>(FString(K)==TEXT("quantity")?100000:MAX_int32)||FMath::FloorToDouble(V)!=V)return false;}
+                }
                 if(FString(Key)==TEXT("pea_recipes"))
                 {
                     for(const TCHAR* TextKey:{TEXT("tool"),TEXT("input"),TEXT("output")})
@@ -166,6 +173,13 @@ namespace
             if(!TArray<FString>{TEXT("keep"),TEXT("skip"),TEXT("salvage"),TEXT("sell"),TEXT("read")}.Contains(String(R,TEXT("action"),TEXT("keep"))))return false;
             if(!TArray<FString>{TEXT("prefix"),TEXT("exact"),TEXT("contains")}.Contains(String(R,TEXT("name_mode"),TEXT("prefix"))))return false;
             if(R->HasField(TEXT("enabled"))&&R->Values[TEXT("enabled")]->Type!=EJson::Boolean)return false;
+            if(R->HasField(TEXT("count_by_name"))&&R->Values[TEXT("count_by_name")]->Type!=EJson::Boolean)return false;
+            if(R->HasField(TEXT("compatibility_issues")))
+            {
+                const TArray<TSharedPtr<FJsonValue>>* Problems=nullptr;bool Enabled=true;R->TryGetBoolField(TEXT("enabled"),Enabled);
+                if(!R->TryGetArrayField(TEXT("compatibility_issues"),Problems)||Problems->Num()>128||(Enabled&&Problems->Num()))return false;
+                for(const auto& Problem:*Problems)if(Problem->Type!=EJson::String||Problem->AsString().Len()>2048)return false;
+            }
             for(const TCHAR* K:{TEXT("material"),TEXT("type"),TEXT("keep_up_to"),TEXT("min_value"),TEXT("max_value"),TEXT("min_workmanship"),TEXT("max_workmanship"),TEXT("min_burden"),TEXT("max_burden"),TEXT("min_rating"),TEXT("max_rating")})
                 if(R->HasField(K)&&(R->Values[K]->Type!=EJson::Number||!FMath::IsFinite(R->Values[K]->AsNumber())||R->Values[K]->AsNumber()<0||R->Values[K]->AsNumber()>MAX_uint32))return false;
             for(const TCHAR* K:{TEXT("material"),TEXT("type"),TEXT("keep_up_to")})if(FMath::FloorToDouble(Number(R,K))!=Number(R,K))return false;
@@ -302,6 +316,7 @@ bool UACEPluginSubsystem::Start(const FString& Id)
     }
     P->CanResumeMeta=false;P->ResumeMetaPending=Resume;P->VMSourceHash=SourceHash;P->VMProfileHash=ProfileHash;P->VMSession=C->GetSession();
     P->Running = true; P->Player = C->GetPlayerGuid(); P->Server = C->GetServerName();
+    if(Id==TEXT("ucm")){IdleManaVM.Reset();IdleManaFailed=false;}
     if(Id==TEXT("ucm")){PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();CombatOutcomes.Empty();ClearBuffRequests();if(!Resume){RuntimeRoute.Reset();RoutePoint=1;}RouteRebuiltAt=0;}
     CachedSpells.Reset();
     P->NextAction = 0; P->Status = TEXT("Running"); Notice.Empty(); return true;
@@ -510,6 +525,7 @@ bool UACEPluginSubsystem::SaveLootProfile(const FString& Name)
     if(P->Profile->TryGetArrayField(TEXT("loot_rules"),Rules))O->SetArrayField(TEXT("loot_rules"),*Rules);
     else O->SetArrayField(TEXT("loot_rules"),{});
     if(P->Profile->HasTypedField<EJson::Object>(TEXT("salvage_policy")))O->SetObjectField(TEXT("salvage_policy"),P->Profile->GetObjectField(TEXT("salvage_policy")));
+    if(P->Profile->TryGetArrayField(TEXT("vendor_rules"),Rules))O->SetArrayField(TEXT("vendor_rules"),*Rules);
     O->SetNumberField(TEXT("version"),1);
     if(!ValidUCMProfile(O)||Encode(O).Len()>8*1024*1024||!Write(UserDirectory()/TEXT("LootProfiles")/(Name+TEXT(".json")),O))
     {Notice=TEXT("Loot profile could not be saved; check rule ranges and file access.");return false;}
@@ -525,6 +541,8 @@ bool UACEPluginSubsystem::LoadLootProfile(const FString& Name)
     // Copy before saving: a failed load must leave the active profile untouched.
     auto Updated=MakeShared<FJsonObject>();Updated->Values=P->Profile->Values;
     Updated->SetArrayField(TEXT("loot_rules"),*Rules);Updated->SetStringField(TEXT("loot_profile"),Name);
+    const TArray<TSharedPtr<FJsonValue>>* Vendors=nullptr;
+    Updated->SetArrayField(TEXT("vendor_rules"),O->TryGetArrayField(TEXT("vendor_rules"),Vendors)?*Vendors:TArray<TSharedPtr<FJsonValue>>{});
     Updated->RemoveField(TEXT("utl_source"));Updated->RemoveField(TEXT("loot_modified"));
     Updated->RemoveField(TEXT("salvage_policy"));if(O->HasTypedField<EJson::Object>(TEXT("salvage_policy")))Updated->SetObjectField(TEXT("salvage_policy"),O->GetObjectField(TEXT("salvage_policy")));
     return SaveProfile(TEXT("ucm"),P->ProfileName,Encode(Updated));
@@ -604,6 +622,8 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::Snapshot()
         S->SetBoolField(TEXT("components_known"),D->TryGetPluginSpellScarabs(Id,ScarabCounts));
         for(const auto& Pair:ScarabCounts)Scarabs->SetNumberField(Pair.Key,Pair.Value);
         S->SetObjectField(TEXT("scarabs"),Scarabs);
+        uint32 Level=0,LevelSchool=0;D->TryGetSpellSchoolAndLevel(Id,LevelSchool,Level);
+        S->SetNumberField(TEXT("level"),Level);
         S->SetNumberField(TEXT("school"), School); S->SetNumberField(TEXT("power"), Power); S->SetNumberField(TEXT("category"), Category);
         FString SpellName;uint32 Icon=0,TargetFlags=0,TargetType=0;bool Projectile=false;
         D->TryGetSpellInfo(Id,SpellName,Icon);D->TryGetRetailSpellTargeting(Id,TargetFlags,TargetType,Projectile);
@@ -656,7 +676,44 @@ bool UACEPluginSubsystem::Tick(float)
     DrawRoute();
     auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     if(PendingSpell && FPlatformTime::Seconds()-PendingSpellAt>30)
-    {PendingSpell=0;StopAll(TEXT("Cast confirmation timed out; check connection and spell requirements"));}
+    {PendingSpell=0;PendingSpellOwner.Empty();StopAll(TEXT("Cast confirmation timed out; check connection and spell requirements"));}
+    // VT ManaChargesWhenOff is deliberately independent of Start/Stop. Use a
+    // separate VM restricted to equipment recharge; no meta/combat/nav can run.
+    if(auto P=Find(TEXT("ucm"));P&&P->Enabled&&!P->Running&&C->GetSessionState()==EACESessionState::InWorld&&C->GetPlayerVitalsView().Health>0)
+    {
+        bool Enabled=false;P->Profile->TryGetBoolField(TEXT("mana_charges_when_off"),Enabled);
+        const double Now=FPlatformTime::Seconds();
+        if(Enabled&&!Plugins.ContainsByPredicate([](const auto& Other){return Other->Running;})&&Now>=NextIdleManaDecision)
+        {
+            NextIdleManaDecision=Now+2;
+            const uint32 Hash=GetTypeHash(Encode(P->Profile));
+            if(IdleManaSession.Pin()!=C->GetSession()||IdleManaPlayer!=C->GetPlayerGuid()||Hash!=IdleManaProfileHash)
+            {IdleManaVM.Reset();IdleManaFailed=false;IdleManaSession=C->GetSession();IdleManaPlayer=C->GetPlayerGuid();IdleManaProfileHash=Hash;}
+            if(!IdleManaFailed)
+            {
+                FString Error,Source;
+                if(!IdleManaVM)
+                {
+                    IdleManaVM=MakeShared<FACEPluginVM>();
+                    if(!FFileHelper::LoadFileToString(Source,*(P->Directory/TEXT("main.lua")))||!IdleManaVM->Load(Source,Error))IdleManaFailed=true;
+                }
+                if(!IdleManaFailed)
+                {
+                    auto Profile=MakeShared<FJsonObject>(*P->Profile);Profile->RemoveField(TEXT("vt_library"));Profile->SetBoolField(TEXT("ucm_mana_only"),true);
+                    TSharedPtr<FJsonObject> Intent;
+                    if(!IdleManaVM->Step(Snapshot(),Profile,Intent,Error))IdleManaFailed=true;
+                    else if(Intent)
+                    {
+                        const FString Action=String(Intent,TEXT("action"));
+                        if(Action==TEXT("stop")){IdleManaFailed=true;P->Status=String(Intent,TEXT("status"));}
+                        else if(Action==TEXT("use_item"))Execute(*P,Intent);
+                    }
+                }
+                if(!Error.IsEmpty())P->Status=TEXT("Idle mana recharge stopped: ")+Error;
+            }
+        }
+        else if(!Enabled){IdleManaVM.Reset();IdleManaFailed=false;}
+    }
     for (const auto& P : Plugins) if (P->Running)
     {
         if (C->GetSessionState() != EACESessionState::InWorld || C->GetPlayerGuid() != P->Player || C->GetServerName() != P->Server || (C->GetPlayerVitalsView().Health <= 0 && !P->Profile->HasField(TEXT("vt_meta"))))
@@ -700,7 +757,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         if(ForceBuffRequest&&Number(I,TEXT("request"))==ForceBuffRequest)
         {
             ForceBuffRequest=0;
-            if(bForceBuffOnly)Stop(P.Id,TEXT("Force Buff complete"),true);
+            if(bForceBuffOnly)Stop(P.Id,Status.IsEmpty()?TEXT("Force Buff complete"):Status,true);
             bForceBuffOnly=false;
         }
         return;
@@ -732,7 +789,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         if(Kind==TEXT("usd")){auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();if(Client&&Client->GetSession())Client->GetSession()->SendCancelAttack();}
         P.Profile=Updated;RuntimeRoute.Reset();RouteRebuiltAt=0;MovementOwner.Empty();MoveExpires=0;return;
     }
-    const FString Permission = ((Action == TEXT("move") || Action == TEXT("face") || Action == TEXT("jump") || Action == TEXT("recall") || Action == TEXT("use_world") || Action == TEXT("select") || Action == TEXT("logout")) ? TEXT("navigation") : (Action == TEXT("attack") || Action == TEXT("cancel_attack") || Action == TEXT("combat_mode")) ? TEXT("combat") : (Action == TEXT("store_item") || Action == TEXT("give") || Action == TEXT("apply_item") || Action == TEXT("equip") || Action == TEXT("use_item") || Action == TEXT("identify") || Action == TEXT("merge")) ? TEXT("inventory") : (Action == TEXT("combine_salvage") || Action == TEXT("salvage") || Action == TEXT("sell") || Action == TEXT("read") || Action == TEXT("loot") || Action == TEXT("open_corpse") || Action == TEXT("close_corpse")) ? TEXT("loot") : Action);
+    const FString Permission = ((Action == TEXT("move") || Action == TEXT("face") || Action == TEXT("jump") || Action == TEXT("recall") || Action == TEXT("use_world") || Action == TEXT("select") || Action == TEXT("logout")) ? TEXT("navigation") : (Action == TEXT("attack") || Action == TEXT("cancel_attack") || Action == TEXT("combat_mode")) ? TEXT("combat") : (Action == TEXT("store_item") || Action == TEXT("give") || Action == TEXT("apply_item") || Action == TEXT("equip") || Action == TEXT("use_item") || Action == TEXT("identify") || Action == TEXT("merge")) ? TEXT("inventory") : (Action == TEXT("buy") || Action == TEXT("combine_salvage") || Action == TEXT("salvage") || Action == TEXT("sell") || Action == TEXT("read") || Action == TEXT("loot") || Action == TEXT("open_corpse") || Action == TEXT("close_corpse")) ? TEXT("loot") : Action);
     if (!P.Permissions.Contains(Action==TEXT("attack_bar")?TEXT("combat"):Permission)) { Stop(P.Id, TEXT("Action not permitted: ") + Action); return; }
     auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     auto* PC = Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
@@ -825,7 +882,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         // SendCastSpell's public UI path selects only in VR. Automation uses the same
         // resolved target and session cast action in both modes, without a fake trigger.
         PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();
-        PendingSpell=Spell;PendingSpellTarget=Target;PendingSpellAt=Now;
+        PendingSpell=Spell;PendingSpellTarget=Target;PendingSpellAt=Now;PendingSpellOwner=P.Id;
         // UseDone also succeeds for resisted spells. Track the specific server
         // magic-chat confirmation before considering an offensive enchantment active.
         uint32 School=0,Power=0,Category=0,Flags=0,Icon=0;double Duration=0;FString SpellName;

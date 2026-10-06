@@ -1,6 +1,36 @@
 TSharedPtr<FJsonObject> LegacyRule;
 int32 LegacyRuleIndex=INDEX_NONE,LegacyPage=0;
 FString LegacyFilter;
+bool ShowLegacyExtras=false;
+FString LegacyPropertyKind(int32 Type,int32 Field)const
+{
+    if(Field==1&&(Type==1||Type==2||Type==3||Type==4||Type==5||Type==11||Type==12||Type==13||Type==2003||Type==2005))return Type==1?TEXT("string"):(Type==4||Type==5||Type==2005)?TEXT("float"):TEXT("int");
+    if(Type==7&&Field==0)return TEXT("class");
+    if((Type==1000&&Field==1)||(Type==1004&&Field==0))return TEXT("skill");
+    return FString();
+}
+void SetLegacyValue(const TSharedPtr<FJsonObject>& Req,int32 Index,const FString& Value)
+{
+    TArray<FString> Fields;Str(Req,TEXT("body")).Replace(TEXT("\r"),TEXT("")).ParseIntoArray(Fields,TEXT("\n"),false);
+    if(Fields.Num()&&Fields.Last().IsEmpty())Fields.Pop();
+    if(Fields.IsValidIndex(Index)){Fields[Index]=Value;Req->SetStringField(TEXT("body"),FString::Join(Fields,TEXT("\r\n"))+TEXT("\r\n"));}
+}
+FString LegacyRequirementSummary(const TSharedPtr<FJsonObject>& Req)const
+{
+    const int Type=int(Num(Req,TEXT("type")));const FString* Schema=LegacySchemas().Find(Type);
+    if(!Schema)return FString::Printf(TEXT("Unknown requirement %d: "),Type)+Str(Req,TEXT("body"));
+    TArray<FString> Fields,Values;Schema->ParseIntoArray(Fields,TEXT("|"));
+    Str(Req,TEXT("body")).Replace(TEXT("\r"),TEXT("")).ParseIntoArray(Values,TEXT("\n"),false);if(Values.Num()&&Values.Last().IsEmpty())Values.Pop();
+    FString Summary=Fields[0];
+    for(int I=0;I<Values.Num();++I)
+    {
+        const FString Kind=LegacyPropertyKind(Type,I);int32 Id=0;
+        const FString Value=!Kind.IsEmpty()&&LexTryParseString(Id,*Values[I])?ACEUCMLootPresentation::PropertyLabel(Kind,Id):Values[I];
+        Summary+=TEXT("\n")+(Fields.IsValidIndex(I+1)?Fields[I+1]:TEXT("Extra field"))+TEXT(": ")+Value;
+    }
+    if(Type>=14&&Type<=16)Summary+=TEXT("\nEditable / preserved; color matching is not executable in UCM yet.");
+    return Summary;
+}
 const TMap<int32,FString>& LegacySchemas()const
 {
     static const TMap<int32,FString> S={
@@ -23,7 +53,9 @@ const TMap<int32,FString>& LegacySchemas()const
 void LegacyLootPanel()
 {
     if(!LegacyDocument||Str(LegacyDocument,TEXT("format"))!=TEXT("utl")){Page=TEXT("Import");ImportPanel();return;}
-    Heading(TEXT("UTL loot editor"),TEXT("Edit VT Classic files without running their rules. All requirement types, rule order, expressions and extra blocks are retained. Saving creates a separate .utl copy; UCM still requires a successful compatibility check before import."));
+    Heading(TEXT("Classic UTL document"),TEXT("Editing the original-format document, not the active converted rules. All requirement values, expressions and extra blocks are retained. Save a copy, or explicitly apply it after compatibility validation."));
+    Add(Text(TEXT("Source: ")+(LegacyPath.IsEmpty()?TEXT("New document"):LegacyPath),13,Accent));
+    Add(Button(TEXT("Back to active loot rules"),[this](){LegacyRule.Reset();Page=TEXT("Loot");Rebuild();}));
     auto Rules=LegacyDocument->GetArrayField(TEXT("rules"));
     if(LegacyRule)
     {
@@ -36,9 +68,10 @@ void LegacyLootPanel()
         auto Menu=SNew(SVerticalBox);for(int I=0;I<Actions.Num();++I)Menu->AddSlot().AutoHeight()[Button(Actions[I],[this,I](){LegacyRule->SetNumberField(TEXT("action_id"),I);FSlateApplication::Get().DismissAllMenus();Rebuild();})];
         const int Action=int(Num(LegacyRule,TEXT("action_id")));
         Add(SNew(SComboButton).ButtonStyle(&Style()).ButtonContent()[Text(Actions.IsValidIndex(Action)?Actions[Action]:FString::Printf(TEXT("Custom action %d"),Action))].MenuContent()[Menu]);
-        if(Action==10)Add(SNew(SSpinBox<int32>).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).MinValue(1).MaxValue(100000).Value(int(Num(LegacyRule,TEXT("amount"),1))).OnValueChanged_Lambda([this](int V){LegacyRule->SetNumberField(TEXT("amount"),V);}));
+        if(Action==10){Add(Text(TEXT("Keep # (matching display names; 0 keeps none)"),14,Muted));Add(SNew(SSpinBox<int32>).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).MinValue(0).MaxValue(MAX_int32).Value(int(Num(LegacyRule,TEXT("amount"),1))).OnValueChanged_Lambda([this](int V){LegacyRule->SetNumberField(TEXT("amount"),V);}));}
+        if(Action>=5&&Action<=9)Add(Text(TEXT("User actions need their original third-party plugin. The value can be edited and saved, but UCM will not activate it."),14,FLinearColor(1,.65f,.35f)));
         Add(Text(TEXT("Priority (stored by VT; file order controls first-match evaluation)"),14,Muted));
-        Add(SNew(SSpinBox<int32>).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).MinValue(-100000).MaxValue(100000).Value(int(Num(LegacyRule,TEXT("priority")))).OnValueChanged_Lambda([this](int V){LegacyRule->SetNumberField(TEXT("priority"),V);}));
+        Add(SNew(SSpinBox<int32>).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).MinValue(MIN_int32).MaxValue(MAX_int32).Value(int(Num(LegacyRule,TEXT("priority")))).OnValueChanged_Lambda([this](int V){LegacyRule->SetNumberField(TEXT("priority"),V);}));
         auto Reqs=LegacyRule->GetArrayField(TEXT("requirements"));
         for(int I=0;I<Reqs.Num();++I)
         {
@@ -51,6 +84,11 @@ void LegacyLootPanel()
                 for(int J=0;J<Values.Num();++J)
                 {
                     Add(Text(Fields[J+1],14,Muted));
+                    const FString Kind=LegacyPropertyKind(Type,J);int32 Property=0;
+                    if(!Kind.IsEmpty()&&LexTryParseString(Property,*Values[J]))
+                    {Add(LootPropertyPicker(Kind,Property,[this,Req,J](int32 V){SetLegacyValue(Req,J,FString::FromInt(V));Rebuild();}));continue;}
+                    if(Type==9999)
+                    {Add(SNew(SCheckBox).IsChecked(Values[J].Equals(TEXT("true"),ESearchCase::IgnoreCase)?ECheckBoxState::Checked:ECheckBoxState::Unchecked).OnCheckStateChanged_Lambda([this,Req,J](ECheckBoxState S){SetLegacyValue(Req,J,S==ECheckBoxState::Checked?TEXT("true"):TEXT("false"));})[Text(TEXT("Disable this rule"))]);continue;}
                     Add(SNew(SEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Text(FText::FromString(Values[J])).OnTextChanged_Lambda([Req,J](const FText& V)
                     {
                         TArray<FString> Updated;Str(Req,TEXT("body")).Replace(TEXT("\r"),TEXT("")).ParseIntoArray(Updated,TEXT("\n"),false);
@@ -59,6 +97,14 @@ void LegacyLootPanel()
                 }
             }
             else Add(SNew(SBox).HeightOverride(100)[SNew(SMultiLineEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Text(FText::FromString(Str(Req,TEXT("body")))).OnTextChanged_Lambda([Req](const FText& V){Req->SetStringField(TEXT("body"),V.ToString());})]);
+            if(Type>=14&&Type<=16)
+            {
+                Add(Text(TEXT("RGB components: 0-255. Hue tolerance is in degrees; saturation/value tolerance is 0-1. Color requirements remain editable but cannot be activated in UCM yet."),13,FLinearColor(1,.65f,.35f)));
+                Add(SNew(SBox).WidthOverride(72).HeightOverride(24).HAlign(HAlign_Left)[SNew(SBorder).BorderImage(White()).BorderBackgroundColor_Lambda([Req]()
+                {TArray<FString> C;Str(Req,TEXT("body")).Replace(TEXT("\r"),TEXT("")).ParseIntoArray(C,TEXT("\n"),false);return C.Num()>=3?FLinearColor(FColor(FMath::Clamp(FCString::Atoi(*C[0]),0,255),FMath::Clamp(FCString::Atoi(*C[1]),0,255),FMath::Clamp(FCString::Atoi(*C[2]),0,255))):FLinearColor::White;})]);
+            }
+            for(int Direction:{-1,1})if(Reqs.IsValidIndex(I+Direction))Add(Button(Direction<0?TEXT("Move requirement up"):TEXT("Move requirement down"),[this,Reqs,I,Direction]()mutable{Reqs.Swap(I,I+Direction);LegacyRule->SetArrayField(TEXT("requirements"),Reqs);Rebuild();}));
+            Add(Button(TEXT("Copy requirement"),[this,Req](){auto Values=LegacyRule->GetArrayField(TEXT("requirements"));Values.Add(MakeShared<FJsonValueObject>(ACEUCMLootPresentation::Clone(Req)));LegacyRule->SetArrayField(TEXT("requirements"),Values);Rebuild();}));
             Add(Button(TEXT("Remove requirement"),[this,I,Reqs]()mutable{Reqs.RemoveAt(I);LegacyRule->SetArrayField(TEXT("requirements"),Reqs);Rebuild();}));
         }
         auto Requirements=SNew(SVerticalBox);TArray<int32> Types;LegacySchemas().GetKeys(Types);Types.Sort();
@@ -69,7 +115,7 @@ void LegacyLootPanel()
             Req->SetStringField(TEXT("body"),RequirementBody);auto List=LegacyRule->GetArrayField(TEXT("requirements"));List.Add(MakeShared<FJsonValueObject>(Req));LegacyRule->SetArrayField(TEXT("requirements"),List);FSlateApplication::Get().DismissAllMenus();Rebuild();
         })];}
         Add(SNew(SComboButton).ButtonStyle(&Style()).ButtonContent()[Text(TEXT("+ Add requirement"))].MenuContent()[SNew(SBox).MaxDesiredHeight(320)[SNew(SScrollBox)+SScrollBox::Slot()[Requirements]]]);
-        Add(Button(TEXT("Save rule draft"),[this,Rules]()mutable{if(LegacyRuleIndex==INDEX_NONE)Rules.Add(MakeShared<FJsonValueObject>(LegacyRule));else if(Rules.IsValidIndex(LegacyRuleIndex))Rules[LegacyRuleIndex]=MakeShared<FJsonValueObject>(LegacyRule);LegacyDocument->SetArrayField(TEXT("rules"),Rules);LegacyRule.Reset();Rebuild();}));
+        Add(Button(TEXT("Save rule draft"),[this,Rules]()mutable{auto Check=MakeShared<FJsonObject>();Check->SetStringField(TEXT("format"),TEXT("utl"));Check->SetArrayField(TEXT("rules"),{MakeShared<FJsonValueObject>(LegacyRule)});FString Error;ACEVTProfile::WriteLoot(Check,Error);if(!Error.IsEmpty()){Host->Notice=Error;return;}if(LegacyRuleIndex==INDEX_NONE)Rules.Add(MakeShared<FJsonValueObject>(LegacyRule));else if(Rules.IsValidIndex(LegacyRuleIndex))Rules[LegacyRuleIndex]=MakeShared<FJsonValueObject>(LegacyRule);LegacyDocument->SetArrayField(TEXT("rules"),Rules);LegacyRule.Reset();Rebuild();}));
         Add(Button(TEXT("Cancel rule changes"),[this](){LegacyRule.Reset();Rebuild();}));return;
     }
     Add(SNew(SEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).HintText(FText::FromString(TEXT("Filter rule names"))).Text(FText::FromString(LegacyFilter)).OnTextCommitted_Lambda([this](const FText& V,ETextCommit::Type){LegacyFilter=V.ToString();LegacyPage=0;Rebuild();}));
@@ -81,13 +127,39 @@ void LegacyLootPanel()
     for(int Row=LegacyPage*25;Row<FMath::Min(Visible.Num(),(LegacyPage+1)*25);++Row)
     {
         const int I=Visible[Row];auto R=Rules[I]->AsObject();auto RuleCard=SNew(SVerticalBox);RuleCard->AddSlot().AutoHeight()[Text(FString::Printf(TEXT("%d. %s"),I+1,*Str(R,TEXT("label"))),16)];
+        const TArray<FString> Actions={TEXT("Skip"),TEXT("Keep"),TEXT("Salvage"),TEXT("Sell"),TEXT("Read"),TEXT("User 1"),TEXT("User 2"),TEXT("User 3"),TEXT("User 4"),TEXT("User 5"),TEXT("Keep #")};const int Action=int(Num(R,TEXT("action_id")));
+        RuleCard->AddSlot().AutoHeight()[Text(FString::Printf(TEXT("Action: %s | Priority: %.0f"),Actions.IsValidIndex(Action)?*Actions[Action]:TEXT("Custom"),Num(R,TEXT("priority")))+(Action==10?FString::Printf(TEXT(" | Count: %.0f"),Num(R,TEXT("amount"))):TEXT("")),14,Accent)];
+        if(!Str(R,TEXT("expression")).IsEmpty())RuleCard->AddSlot().AutoHeight()[Text(TEXT("Expression: ")+Str(R,TEXT("expression"))+TEXT(" (requires adapter)"),14,FLinearColor(1,.65f,.35f))];
+        for(const auto& Req:R->GetArrayField(TEXT("requirements")))RuleCard->AddSlot().AutoHeight().Padding(0,6)[Text(LegacyRequirementSummary(Req->AsObject()),14,Muted)];
         auto Buttons=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(5,5));
         Buttons->AddSlot()[Button(TEXT("Edit"),[this,R,I](){FString Json;FJsonSerializer::Serialize(R,TJsonWriterFactory<>::Create(&Json));FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json),LegacyRule);LegacyRuleIndex=I;Rebuild();})];
+        Buttons->AddSlot()[Button(TEXT("Copy"),[this,R](){LegacyRule=ACEUCMLootPresentation::Clone(R);LegacyRule->SetStringField(TEXT("label"),Str(R,TEXT("label"))+TEXT(" copy"));LegacyRuleIndex=INDEX_NONE;Rebuild();})];
         for(int Direction:{-1,1})if(Rules.IsValidIndex(I+Direction))Buttons->AddSlot()[Button(Direction<0?TEXT("Up"):TEXT("Down"),[this,Rules,I,Direction]()mutable{Rules.Swap(I,I+Direction);LegacyDocument->SetArrayField(TEXT("rules"),Rules);Rebuild();})];
         Buttons->AddSlot()[Button(TEXT("Remove"),[this,Rules,I]()mutable{Rules.RemoveAt(I);LegacyDocument->SetArrayField(TEXT("rules"),Rules);Rebuild();})];RuleCard->AddSlot().AutoHeight()[Buttons];Add(Tile(RuleCard));
     }
     Add(SNew(SEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Text(FText::FromString(LegacyName)).HintText(FText::FromString(TEXT("Output filename"))).OnTextChanged_Lambda([this](const FText& V){LegacyName=V.ToString();}));
     Add(Button(TEXT("Save UTL copy"),[this](){Host->SaveLegacyLoot(LegacyName,LegacyDocument);}));
+    Add(Button(TEXT("Save copy and apply to active loot"),[this]()
+    {
+        TArray<FString> Issues;auto Converted=ACEVTProfile::Convert(LegacyDocument,Issues);
+        if(!Converted||Issues.Num()){Host->Notice=TEXT("Cannot activate: ")+FString::Join(Issues,TEXT("\n"));return;}
+        if(!Host->SaveLegacyLoot(LegacyName,LegacyDocument))return;
+        auto Updated=ACEUCMLootPresentation::Clone(P());Updated->RemoveField(TEXT("salvage_policy"));Updated->RemoveField(TEXT("loot_profile"));Updated->RemoveField(TEXT("loot_modified"));
+        for(const auto& Pair:Converted->Values)Updated->Values.Add(Pair.Key,Pair.Value);
+        Updated->SetStringField(TEXT("utl_source"),Host->UserDirectory()/TEXT("LegacyLootProfiles")/(LegacyName+TEXT(".utl")));
+        FString Json;FJsonSerializer::Serialize(Updated.ToSharedRef(),TJsonWriterFactory<>::Create(&Json));
+        if(Host->SaveProfile(Plugin->Id,Plugin->ProfileName,Json)){Page=TEXT("Loot");Rebuild();}
+    }));
     Add(Button(TEXT("Check compatibility of saved copy"),[this](){if(Host->SaveLegacyLoot(LegacyName,LegacyDocument)){Page=TEXT("Import");PreviewLegacy(Host->UserDirectory()/TEXT("LegacyLootProfiles")/(LegacyName+TEXT(".utl")));}}));
-    Add(Text(TEXT("Extra blocks (including salvage combination ranges) remain intact in saved copies."),14,Muted));
+    Add(Button(ShowLegacyExtras?TEXT("Hide extra file blocks"):TEXT("View / edit extra file blocks"),[this](){ShowLegacyExtras=!ShowLegacyExtras;Rebuild();}));
+    if(ShowLegacyExtras)
+    {
+        Add(Text(TEXT("Advanced original-format data. Salvage combining can also be edited in the active loot settings. Invalid blocks prevent activation; unknown blocks are preserved."),14,Muted));
+        const TArray<TSharedPtr<FJsonValue>>* Extras=nullptr;
+        if(LegacyDocument->TryGetArrayField(TEXT("extras"),Extras))for(const auto& Extra:*Extras)
+        {
+            const auto Block=Extra->AsObject();Add(Text(Str(Block,TEXT("name")),16));
+            Add(SNew(SBox).HeightOverride(160)[SNew(SMultiLineEditableTextBox).Text(FText::FromString(Str(Block,TEXT("body")))).OnTextChanged_Lambda([Block](const FText& T){Block->SetStringField(TEXT("body"),T.ToString());})]);
+        }
+    }
 }

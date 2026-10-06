@@ -32,6 +32,12 @@ bool FACEVTProfileTest::RunTest(const FString&)
     TestTrue(TEXT("VT KeepUpTo retains name-based inventory counting"),Converted->GetArrayField(TEXT("loot_rules"))[0]->AsObject()->GetBoolField(TEXT("count_by_name")));
     auto Bad=ACEVTProfile::Read(TEXT("UTL\n1\n1\nSkip\n\n0;0;999\n4\nabc\n"),TEXT("utl"),Error);
     TestTrue(TEXT("Unknown requirement is retained"),Bad.IsValid());ACEVTProfile::Convert(Bad,Issues);TestTrue(TEXT("Unknown Skip blocks whole profile activation"),Issues.Num()>0);
+    auto Disabled=ParseVTTest(TEXT(R"({"format":"utl","extras":[],"rules":[{"label":"Disabled unknown","action_id":1,"requirements":[{"type":123456,"body":"custom"},{"type":9999,"body":"True\n"}]}]})"));
+    auto DisabledProfile=ACEVTProfile::Convert(Disabled,Issues);
+    TestEqual(TEXT("Disabled unsupported requirement does not block other rules"),Issues.Num(),0);
+    const auto DisabledRule=DisabledProfile->GetArrayField(TEXT("loot_rules"))[0]->AsObject();
+    TestFalse(TEXT("Disabled imported rule stays disabled"),DisabledRule->GetBoolField(TEXT("enabled")));
+    TestTrue(TEXT("Unsupported requirements remain flagged against partial reactivation"),DisabledRule->GetArrayField(TEXT("compatibility_issues")).Num()>0);
     TestTrue(TEXT("Regex repetition accepted with runtime work limits"),ACEVTProfile::IsSupportedPattern(TEXT("(a+)+$")));
     TestTrue(TEXT("Literal alternatives and anchors supported"),ACEVTProfile::IsSupportedPattern(TEXT("^Copper|Legendary Strength$")));
     auto Nav=ACEVTProfile::Read(TEXT("uTank2 NAV 1.2\n2\n2\n0\n0\n0\n0.05\n0\n3\n0.01\n0\n0.05\n0\n1500\n"),TEXT("nav"),Error);

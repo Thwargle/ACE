@@ -93,6 +93,12 @@ void UACEPluginSubsystem::ObserveAppraisal(const FACEAppraisalInfo& Info)
 }
 void UACEPluginSubsystem::ObserveUseDone(uint32 Error)
 {
+    // A completed cast releases its own request throttle. Keep busy/pending
+    // gates and the minimum request interval; do not wait out a fixed 3.5s
+    // after the server has already acknowledged the action.
+    if(PendingSpell)if(auto Owner=Find(PendingSpellOwner))
+        Owner->NextAction=FMath::Min(Owner->NextAction,PendingSpellAt+.5);
+    PendingSpellOwner.Empty();
     FastCastOwner.Empty();
     if(Error&&PendingSpell)OffensiveCasts.RemoveAll([this](const auto& E){return E.Spell==PendingSpell&&E.Target==PendingSpellTarget;});
     if(Error&&PendingSpell)PendingDebuffCasts.RemoveAll([this](const auto& E){return N(E->AsObject(),TEXT("spell"))==PendingSpell&&N(E->AsObject(),TEXT("target"))==uint32(PendingSpellTarget);});
@@ -117,6 +123,7 @@ void UACEPluginSubsystem::ObserveUseDone(uint32 Error)
             auto E=MakeShared<FJsonObject>();E->SetNumberField(TEXT("target"),uint32(PendingSpellTarget));
             E->SetNumberField(TEXT("category"),Category);E->SetNumberField(TEXT("power"),Power);
             E->SetNumberField(TEXT("expires"),FPlatformTime::Seconds()+Duration);
+            E->SetNumberField(TEXT("duration"),Duration);
             ItemBuffs.RemoveAll([&](const auto& Old){return N(Old->AsObject(),TEXT("target"))==uint32(PendingSpellTarget)&&N(Old->AsObject(),TEXT("category"))==Category;});
             ItemBuffs.Add(MakeShared<FJsonValueObject>(E));
         }
@@ -210,7 +217,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
     if(!Session || C->GetSessionState()!=EACESessionState::InWorld)
     {
         DataPlayer=0;Appraisals.Empty();CorpseFirstSeen.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();CachedInventory.Empty();ClearBuffRequests();
-        PendingSpell=0;FastCastOwner.Empty();PendingManaRefresh=false;Debuffs.Empty();PendingDebuffCasts.Empty();OffensiveCasts.Empty();InventoryRevision=MAX_uint64;C->BackgroundAppraisals.Empty();return;
+        PendingSpell=0;PendingSpellOwner.Empty();FastCastOwner.Empty();PendingManaRefresh=false;Debuffs.Empty();PendingDebuffCasts.Empty();OffensiveCasts.Empty();InventoryRevision=MAX_uint64;C->BackgroundAppraisals.Empty();return;
     }
     if(DataPlayer!=C->GetPlayerGuid()||DataServer!=C->GetServerName()||ObservedSession.Pin()!=Session)
     {
@@ -221,7 +228,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
         PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();CombatOutcomes.Empty();OffensiveCasts.Empty();
         TellHandle=Session->OnPlayerTell.AddUObject(this,&UACEPluginSubsystem::ObservePlayerTell);ClearBuffRequests();
         DataPlayer=C->GetPlayerGuid();DataServer=C->GetServerName();NextAppraisalScan=0;Appraisals.Empty();CachedSpeciesNames.Reset();CorpseFirstSeen.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();
-        PendingSpell=0;FastCastOwner.Empty();Debuffs.Empty();PendingDebuffCasts.Empty();InventoryRevision=MAX_uint64;++DataRevision;C->BackgroundAppraisals.Empty();
+        PendingSpell=0;PendingSpellOwner.Empty();FastCastOwner.Empty();Debuffs.Empty();PendingDebuffCasts.Empty();InventoryRevision=MAX_uint64;++DataRevision;C->BackgroundAppraisals.Empty();
     }
     ExpireOffensiveCasts(FPlatformTime::Seconds());
     auto UCM=Find(TEXT("ucm"));if(!UCM||!UCM->Enabled)return;
@@ -257,6 +264,8 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
     TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginSnapshot);
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Session=C->GetSession();if(!Session)return;
     const auto& V=C->GetPlayerVitalsView();const double Now=FPlatformTime::Seconds();
+    const bool* ComponentsRequired=V.QualityBools.Find(68); // SpellComponentsRequired, absent means true.
+    Out->SetBoolField(TEXT("components_required"),!ComponentsRequired||*ComponentsRequired);
     if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController()))Out->SetBoolField(TEXT("jumping"),PC->IsPluginJumpPending());
     Out->SetNumberField(TEXT("player"),uint32(C->GetPlayerGuid()));Out->SetNumberField(TEXT("action_serial"),ActionSerial);
     Out->SetNumberField(TEXT("action_error"),LastActionError);Out->SetNumberField(TEXT("container"),uint32(C->GetOpenExternalContainerGuid()));
@@ -269,6 +278,19 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
     Out->SetArrayField(TEXT("combat_events"),CombatOutcomes);
     Out->SetNumberField(TEXT("portal_serial"),MetaPortalSerial);Out->SetArrayField(TEXT("portal_events"),MetaPortalEvents);Out->SetBoolField(TEXT("portal_space"),MetaPortalSpace);
     Out->SetNumberField(TEXT("selected"),uint32(C->GetSelectedObject().Guid));Out->SetNumberField(TEXT("vendor"),uint32(C->GetOpenVendorGuid()));
+    FACEWorldObject Vendor;
+    TArray<TSharedPtr<FJsonValue>> Stock;
+    if(C->GetOpenVendorGuid()&&C->GetWorldObject(C->GetOpenVendorGuid(),Vendor))
+    {
+        Out->SetStringField(TEXT("vendor_name"),Vendor.Name);Out->SetNumberField(TEXT("vendor_wcid"),Vendor.WeenieClassId);
+        for(const auto& Item:C->GetVendorMerchandise())
+        {
+            auto J=MakeShared<FJsonObject>();J->SetNumberField(TEXT("id"),uint32(Item.Guid));J->SetNumberField(TEXT("wcid"),Item.WeenieClassId);
+            J->SetStringField(TEXT("name"),ACERetailObjectNames::Name(Item));J->SetNumberField(TEXT("limit"),ACEInventoryRules::VendorPurchaseLimit(Item));
+            Stock.Add(MakeShared<FJsonValueObject>(J));
+        }
+    }
+    Out->SetArrayField(TEXT("vendor_stock"),Stock);
     int32 Encumbrance=0;Session->TryGetPlayerEncumbrance(Encumbrance);
     Out->SetNumberField(TEXT("burden_percent"),100.*FMath::Max(0,Encumbrance)/(FMath::Max(1,V.GetBuffedStrength())*(150.+30.*FMath::Clamp(V.CarryingCapacityAugs,0,5))));Out->SetNumberField(TEXT("level"),V.Level);
     auto CharStrings=MakeShared<FJsonObject>();for(const auto& Pair:V.QualityStrings)CharStrings->SetStringField(FString::FromInt(Pair.Key),Pair.Value);FACEWorldObject PlayerObject;
@@ -461,6 +483,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
             const FVector Delta=Obj.Position.ToUnrealLocation()-P.ToUnrealLocation();
             J->SetNumberField(TEXT("angle"),FMath::Abs(FMath::FindDeltaAngleDegrees(N(Out,TEXT("heading")),double(Delta.Rotation().Yaw))));
             if(C->GetSelectedObject().Guid==Obj.Guid&&C->GetSelectedObject().bShowHealth&&C->GetSelectedObject().HealthFraction<=0)continue;
+            if(C->GetSelectedObject().Guid==Obj.Guid&&C->GetSelectedObject().bShowHealth)J->SetNumberField(TEXT("health_fraction"),C->GetSelectedObject().HealthFraction);
             auto Resist=MakeShared<FJsonObject>();const auto* A=Appraisals.Find(Obj.Guid);
             J->SetBoolField(TEXT("identified"),A&&A->bSuccess);
             if(A&&A->bSuccess)
@@ -557,6 +580,18 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();const double Now=FPlatformTime::Seconds();
     const double Raw=N(I,TEXT("item"));const int32 Id=Raw>0&&Raw<=MAX_uint32&&FMath::FloorToDouble(Raw)==Raw?int32(uint32(Raw)):0;
     FACEWorldObject Item;const bool Found=C->GetWorldObject(Id,Item),Owned=Found&&C->IsOwnedInventoryItem(Item);
+    if(Action==TEXT("buy"))
+    {
+        const int32 Vendor=C->GetOpenVendorGuid();const double Amount=N(I,TEXT("count"));
+        if(!Vendor||N(I,TEXT("vendor"))!=uint32(Vendor)||Amount<1||Amount>100000||FMath::FloorToDouble(Amount)!=Amount)
+        {Stop(P.Id,TEXT("Vendor changed or purchase quantity is invalid"));return true;}
+        for(const auto& Stock:C->GetVendorMerchandise())if(Stock.Guid==Id)
+        {
+            if(Amount>ACEInventoryRules::VendorPurchaseLimit(Stock)){Stop(P.Id,TEXT("Requested vendor stock is no longer available"));return true;}
+            C->SendBuyItems(Vendor,{{int32(Amount),Id}});return true;
+        }
+        Stop(P.Id,TEXT("Purchase item is not in the open vendor's stock"));return true;
+    }
     if(Action==TEXT("combine_salvage"))
     {
         const double ToolId=N(I,TEXT("tool"));FACEWorldObject Tool;

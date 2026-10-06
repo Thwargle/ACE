@@ -10,6 +10,7 @@
 #include "Mods/ACEVTProfile.h"
 #include "ACEOpcodes.h"
 #include "ACEClientSubsystem.h"
+#include "ACESession.h"
 #include "UI/ACEUIElementManager.h"
 #include "Engine/GameInstance.h"
 #include "Engine/TextureRenderTarget2D.h"
@@ -82,6 +83,10 @@ bool FACEPluginVMTest::RunTest(const FString&)
           assert(#usable==1 and usable[1]==spells[1])
           local _,new_supply=spellindex(spells,{},100,30,{})
           assert(not new_supply[1])
+          local _,exempt,castable=spellindex(spells,{},100,30,{[5]=110},false)
+          assert(exempt[1] and exempt[2] and exempt[6] and #castable==3)
+          local _,required=spellindex(spells,{},100,30,{},true)
+          assert(not required[1] and not required[6])
           return {status='indexed'}
         end
     )"),Error));
@@ -207,9 +212,13 @@ bool FACEPluginHostTest::RunTest(const FString&)
     TestFalse(TEXT("Invalid native route data rejected"),H->SaveProfile(TEXT("ucm"),TEXT("Broken"),TEXT("{\"route\":[42]}")));
     TestFalse(TEXT("Malformed monster catalog rejected"),H->SaveProfile(TEXT("ucm"),TEXT("Broken"),TEXT(R"({"monster_catalog":{"Monster":{"species":"bad","max_health":100}}})")));
     TestFalse(TEXT("Fractional pea output rejected"),H->SaveProfile(TEXT("ucm"),TEXT("Broken"),TEXT(R"({"pea_recipes":[{"tool":"Tool","input":"Pea","output":"Scarab","count":0.5}]})")));
+    TestFalse(TEXT("Partially converted loot rule cannot be enabled"),H->SaveProfile(TEXT("ucm"),TEXT("Broken"),TEXT(R"({"loot_rules":[{"enabled":true,"compatibility_issues":["requirement 14"]}]})")));
+    TestFalse(TEXT("Partial loot rule defaults cannot bypass activation validation"),H->SaveProfile(TEXT("ucm"),TEXT("Broken"),TEXT(R"({"loot_rules":[{"compatibility_issues":["requirement 14"]}]})")));
+    TestTrue(TEXT("Disabled unsupported rule can be preserved"),H->SaveProfile(TEXT("ucm"),TEXT("Mage"),TEXT(R"({"loot_rules":[{"enabled":false,"compatibility_issues":["requirement 14"]}]})")));
     TestTrue(TEXT("Named profile saved"),H->SaveProfile(TEXT("ucm"),TEXT("Mage"),TEXT("{\"skill_margin\":45}")));
     const TCHAR* LootProfile=TEXT(R"({"skill_margin":45,"loot_rules":[{"label":"Copper","material":59,"min_workmanship":7,"max_workmanship":10}]})");
     TestTrue(TEXT("Loot rules saved with UCM setup"),H->SaveProfile(TEXT("ucm"),TEXT("Mage"),LootProfile));
+    P->Profile->SetArrayField(TEXT("vendor_rules"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"server":"Test","vendor_name":"Arcanist","vendor_wcid":2,"item_name":"Scarab","item_wcid":3,"quantity":100})")))});
     TestTrue(TEXT("Loot-only profile saved"),H->SaveLootProfile(TEXT("Copper_W7")));
     TestFalse(TEXT("Loot profile path traversal rejected"),H->SaveLootProfile(TEXT("../escape")));
     TestTrue(TEXT("Other hunt saved"),H->SaveProfile(TEXT("ucm"),TEXT("Mage"),TEXT("{\"skill_margin\":45,\"loot_rules\":[]}")));
@@ -219,6 +228,7 @@ bool FACEPluginHostTest::RunTest(const FString&)
     TestFalse(TEXT("Loading native rules clears previous UTL label"),P->Profile->HasField(TEXT("utl_source")));
     TestFalse(TEXT("Loaded rules are not labeled as local edits"),P->Profile->HasField(TEXT("loot_modified")));
     TestEqual(TEXT("Loot profile leaves unrelated settings alone"),P->Profile->GetNumberField(TEXT("skill_margin")),45.);
+    TestEqual(TEXT("Saved vendor supplies restored"),P->Profile->GetArrayField(TEXT("vendor_rules"))[0]->AsObject()->GetNumberField(TEXT("quantity")),100.);
     TestEqual(TEXT("Saved rules restored"),P->Profile->GetArrayField(TEXT("loot_rules")).Num(),1);
     TestFalse(TEXT("Missing loot profile rejected"),H->LoadLootProfile(TEXT("Missing")));
     TestEqual(TEXT("Failed load preserves active rules"),P->Profile->GetArrayField(TEXT("loot_rules")).Num(),1);
@@ -421,8 +431,27 @@ bool FACEPluginHostTest::RunTest(const FString&)
     auto Dock=SNew(SACEPluginDesktop).Host(H);H->DesktopDock=Dock;
     TestTrue(TEXT("Pinned map reopens with desktop dock"),Dock->IsOpen(TEXT("waypoint.dungeon")));
     TestEqual(TEXT("Pinned map restores its size"),Dock->Windows[TEXT("waypoint.dungeon")].Size,FVector2D(300,300));
+    {
+        auto Session=GI->GetSubsystem<UACEClientSubsystem>()->GetSession();
+        const auto Geometry=FGeometry::MakeRoot(FVector2D(1920,1080),FSlateLayoutTransform());
+        const auto OriginalWidget=Dock->Windows[TEXT("waypoint.dungeon")].Widget;
+        for(bool Unlocked:{false,true})for(uint32 Cell:{0x7D640014u,0x01430171u,0x7D64001Au})
+        {
+            Ui->SetUiLocked(!Unlocked);
+            FACEPosition Position;Position.CellId=int32(Cell);Position.Location=FVector(50,50,0);Session->SetLocalPosition(Position);
+            Dock->Tick(Geometry,1,.016f);
+            const auto& Window=Dock->Windows[TEXT("waypoint.dungeon")];
+            TestTrue(TEXT("World/interior transitions reuse pinned widget"),Window.Widget==OriginalWidget);
+            TestTrue(TEXT("Pinned map remains visible and honors shared UI lock in either view"),Window.Widget->GetVisibility()==(Unlocked?EVisibility::Visible:EVisibility::HitTestInvisible));
+            TestEqual(TEXT("World/interior transitions preserve pinned position"),Window.Position,FVector2D(800,100));
+            TestEqual(TEXT("World/interior transitions preserve pinned size"),Window.Size,FVector2D(300,300));
+        }
+        Ui->SetUiLocked(true);
+    }
     H->SetWaypointOption(TEXT("dungeon_overlay"),false);Dock->Refresh();
     TestFalse(TEXT("Normal-map-only mode hides pinned overlay"),Dock->IsOpen(TEXT("waypoint.dungeon")));
+    Dock->Tick(FGeometry::MakeRoot(FVector2D(1920,1080),FSlateLayoutTransform()),2,.016f);
+    TestTrue(TEXT("Unpinned overlay stays hidden outdoors"),Dock->Windows[TEXT("waypoint.dungeon")].Widget->GetVisibility()==EVisibility::Collapsed);
     Dock->Toggle(TEXT("ucm"));Dock->Toggle(TEXT("monitor"));
     TestTrue(TEXT("Multiple independent plugin windows can be open"),H->IsPluginWindowOpen(TEXT("ucm"))&&H->IsPluginWindowOpen(TEXT("monitor")));
     P->Running=true;Dock->Toggle(TEXT("ucm"));
@@ -472,10 +501,11 @@ bool FACEPluginHostTest::RunTest(const FString&)
             Png.Reset();FImageUtils::PNGCompressImageArray(Width,760,Pixels,Png);
             FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("Automation")/FString::Printf(TEXT("Waypoint-%s-%d.png"),Map?TEXT("Map"):TEXT("Settings"),Width)));WaypointTarget->ReleaseResource();
         }
-        for(const FString Page:{TEXT("Overview"),TEXT("Buffs"),TEXT("Buff others"),TEXT("Combat"),TEXT("Recovery"),TEXT("Route"),TEXT("Loot"),TEXT("Loot editor"),TEXT("Salvage groups"),TEXT("Rules"),TEXT("Metas"),TEXT("Profiles"),TEXT("Standalone loot"),TEXT("Import")})
+        for(const FString Page:{TEXT("Overview"),TEXT("Buffs"),TEXT("Buff others"),TEXT("Combat"),TEXT("Recovery"),TEXT("Route"),TEXT("Loot"),TEXT("Vendors"),TEXT("Loot editor"),TEXT("Salvage groups"),TEXT("Rules"),TEXT("Metas"),TEXT("Profiles"),TEXT("Standalone loot"),TEXT("Import")})
         for(int Width:{780,450})
         {
             const int Height=Page==TEXT("Loot editor")?1800:760;
+            if(Page==TEXT("Vendors"))P->Profile->SetArrayField(TEXT("vendor_rules"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"server":"Test","vendor_name":"Master Arcanist","vendor_wcid":2,"item_name":"Platinum Scarab","item_wcid":3,"quantity":100})")))});
             auto PageWidget=H->MakeUCMPanel(Page);const FVector2D Size(Width,Height);
             auto* PageTarget=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
             for(int Pass=0;Pass<3;++Pass){Renderer.DrawWidget(PageTarget,PageWidget,Size,0);FlushRenderingCommands();}

@@ -1,5 +1,6 @@
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEVTProfile.h"
+#include "ACEUCMLootPresentation.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "UI/ACEUIResourceResolver.h"
@@ -60,6 +61,7 @@ namespace
 
     class SUCMPanel : public SCompoundWidget
     {
+        friend class FACEUCMLootEditorTest;
     public:
         SLATE_BEGIN_ARGS(SUCMPanel){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(FString,InitialPage) SLATE_END_ARGS()
         void Construct(const FArguments& A)
@@ -69,7 +71,7 @@ namespace
             LegacyFolder=Host->GetProfileFolder();RefreshLibrary();
             EditorOnly=Page==TEXT("Standalone loot");if(EditorOnly)Page=TEXT("Loot");
             if(Page==TEXT("Salvage groups")){Page=TEXT("Loot");EditingSalvage=true;}
-            if(Page==TEXT("Loot editor")){Page=TEXT("Loot");LootDraft=MakeShared<FJsonObject>();LootDraft->SetStringField(TEXT("action"),TEXT("keep"));LootDraft->SetStringField(TEXT("name_mode"),TEXT("prefix"));}
+            if(Page==TEXT("Loot editor")){Page=TEXT("Loot");ShowLootFilters=true;LootDraft=MakeShared<FJsonObject>();LootDraft->SetStringField(TEXT("action"),TEXT("keep"));LootDraft->SetStringField(TEXT("name_mode"),TEXT("prefix"));}
             ChildSlot[SNew(SBorder).BorderImage(White()).BorderBackgroundColor(Bg).Padding(14)
                 [SNew(SVerticalBox)
                 +SVerticalBox::Slot().AutoHeight()[Header()]
@@ -78,6 +80,12 @@ namespace
                 +SVerticalBox::Slot().AutoHeight().Padding(0,8)[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).ColorAndOpacity(Muted)
                     .AutoWrapText(true).Text_Lambda([H=Host](){return FText::FromString(H.IsValid()?H->Notice:FString());})]]];
             Rebuild();
+        }
+        virtual void Tick(const FGeometry& Geometry,const double Time,const float Delta) override
+        {
+            SCompoundWidget::Tick(Geometry,Time,Delta);
+            const bool Narrow=Geometry.GetLocalSize().X<700;
+            if(Narrow!=LootNarrow){LootNarrow=Narrow;if(Page==TEXT("Loot")&&!EditingSalvage)Rebuild();}
         }
     private:
         TWeakObjectPtr<UACEPluginSubsystem> Host;TSharedPtr<FACEClientPlugin> Plugin;
@@ -114,8 +122,8 @@ namespace
         TSharedRef<SWidget> Tabs()
         {
             auto Row=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
-            if(EditorOnly){Row->AddSlot()[Button(TEXT("Loot rules"),[this](){Page=TEXT("Loot");Rebuild();})];Row->AddSlot()[Button(TEXT("Import / compatibility"),[this](){Page=TEXT("Import tools");Rebuild();})];return Row;}
-            for(const TCHAR* Name:{TEXT("Overview"),TEXT("Buffs"),TEXT("Buff others"),TEXT("Combat"),TEXT("Recovery"),TEXT("Route"),TEXT("Loot"),TEXT("Rules"),TEXT("Metas"),TEXT("Profiles")})
+            if(EditorOnly){Row->AddSlot()[Button(TEXT("Vendors"),[this](){Page=TEXT("Vendors");Rebuild();})];Row->AddSlot()[Button(TEXT("Loot rules"),[this](){Page=TEXT("Loot");Rebuild();})];Row->AddSlot()[Button(TEXT("Import / compatibility"),[this](){Page=TEXT("Import tools");Rebuild();})];return Row;}
+            for(const TCHAR* Name:{TEXT("Overview"),TEXT("Buffs"),TEXT("Buff others"),TEXT("Combat"),TEXT("Recovery"),TEXT("Route"),TEXT("Loot"),TEXT("Vendors"),TEXT("Rules"),TEXT("Metas"),TEXT("Profiles")})
                 Row->AddSlot()[SNew(SButton).ButtonStyle(&Style()).IsFocusable(false).ContentPadding(FMargin(7,8))
                     .OnClicked_Lambda([this,Name](){Page=Name;BodyScroll->ScrollToStart();Rebuild();return FReply::Handled();})
                     [SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Bold",14)).Text(FText::FromString(Name))
@@ -264,6 +272,22 @@ namespace
         }
         void BuffDifficultyControls()
         {
+            Add(Text(TEXT("Spell level by school"),18));
+            Add(Text(TEXT("Automatic highest chooses the strongest learned, usable buff. A selected level casts that exact tier; unavailable spells are skipped. These choices affect self buffs and buff requests, not vital recovery."),14,Muted));
+            for(const auto& School:TArray<TPair<FString,FString>>{{TEXT("creature_buff_level"),TEXT("Creature Magic")},{TEXT("life_buff_level"),TEXT("Life Magic")},{TEXT("item_buff_level"),TEXT("Item Magic")}})
+            {
+                const FString Key=School.Key;
+                const int32 Selected=FMath::Clamp(int32(Num(P(),*Key)),0,8);
+                auto Menu=SNew(SVerticalBox);
+                for(int32 Level=0;Level<=8;++Level)
+                    Menu->AddSlot().AutoHeight()[Button(Level?FString::Printf(TEXT("Level %d"),Level):TEXT("Automatic highest"),[this,Key,Level]()
+                    {P()->SetNumberField(Key,Level);Save();FSlateApplication::Get().DismissAllMenus();Rebuild();})];
+                Add(SNew(SHorizontalBox)
+                    +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[Text(School.Value)]
+                    +SHorizontalBox::Slot().AutoWidth()[SNew(SComboButton).ButtonStyle(&Style()).ContentPadding(FMargin(12,8))
+                        .ButtonContent()[Text(Selected?FString::Printf(TEXT("Level %d"),Selected):TEXT("Automatic highest"))]
+                        .MenuContent()[Menu]]);
+            }
             Slider(TEXT("buff_skill_margin"),TEXT("Extra skill required above spell difficulty"),0,150,
                 float(Num(P(),TEXT("skill_margin"),30)),Accent,TEXT(" points"));
             Add(Text(TEXT("UCM chooses the strongest learned buff whose difficulty plus this buffer fits your current magic skill. Raising the buffer favors easier casts but can lower the spell level. Lower it to allow stronger buffs. This is a skill difference, not a success percentage."),14,Muted));
@@ -286,12 +310,14 @@ namespace
             {
                 const FString Name=School==4?TEXT("Creature"):School==2?TEXT("Life"):TEXT("Item");
                 const auto Tiers=Levels.FindRef(School);
+                const FString LevelKey=School==4?TEXT("creature_buff_level"):School==2?TEXT("life_buff_level"):TEXT("item_buff_level");
                 Add(Tile(SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",15)).ColorAndOpacity(Ink).AutoWrapText(true)
-                    .Text_Lambda([this,School,Name,Tiers]()
+                    .Text_Lambda([this,School,Name,Tiers,LevelKey]()
                     {
                         const int32 Skill=BuffSchoolSkill(School),Buffer=FMath::RoundToInt(BuffMargin());
                         const int32 Limit=Skill-Buffer;uint32 Level=0;
-                        for(const auto& Tier:Tiers)if(int64(Tier.Key)<=Limit)Level=FMath::Max(Level,Tier.Value);
+                        const uint32 Requested=uint32(Num(P(),*LevelKey));
+                        for(const auto& Tier:Tiers)if(int64(Tier.Key)<=Limit&&(!Requested||Tier.Value==Requested))Level=FMath::Max(Level,Tier.Value);
                         const FString Result=Level?FString::Printf(TEXT("up to level %u learned buffs"),Level):TEXT("no learned buff fits");
                         return FText::FromString(FString::Printf(TEXT("%s: skill %d - buffer %d = difficulty %d max\n%s"),*Name,Skill,Buffer,Limit,*Result));
                     })));
@@ -324,7 +350,7 @@ namespace
             }
             else if(Page==TEXT("Buffs"))
             {
-                Heading(TEXT("Automatic buffing"),TEXT("Uses your highest usable spells for attributes, trained skills, protections and equipment."));
+                Heading(TEXT("Automatic buffing"),TEXT("Uses your highest usable sustained buffs for attributes, trained skills, protections and equipment."));
                 Add(Toggle(TEXT("buffing"),TEXT("Buff"),TEXT("Maintains buffs while UCM is running."),true));
                 ForceBuffControls();
                 Add(Toggle(TEXT("auto_buffs"),TEXT("Choose buffs automatically"),TEXT("Turn off only when using a manually authored buff list."),true));
@@ -343,17 +369,18 @@ namespace
                 TMap<int32,uint32> Powers;
                 for(int32 Id:Known){uint32 S=0,Pow=0,Cat=0,F=0;double Dur=0;if(D->TryGetPluginSpellInfo(Id,S,Pow,Cat,F,Dur))Powers.Add(Id,Pow);}
                 Known.Sort([&Powers](int32 A,int32 B){const uint32 PA=Powers.FindRef(A),PB=Powers.FindRef(B);return PA==PB?A<B:PA>PB;});
-                Add(Text(TEXT("Families are named by their highest learned spell. The skill buffer above determines which tier UCM can cast."),14,Muted));
+                Add(Text(TEXT("Families show their highest learned sustained buff. Short burst spells require an explicit profile entry. The skill buffer determines the usable tier."),14,Muted));
                 for(int32 Id:Known)
                 {
                     uint32 School,Power,Cat,Flags,Icon;double Duration;FString Name;
-                    if(!D->TryGetPluginSpellInfo(Id,School,Power,Cat,Flags,Duration)||!(Flags&4)||Duration<=0||Seen.Contains(Cat))continue;
+                    if(!D->TryGetPluginSpellInfo(Id,School,Power,Cat,Flags,Duration)||!(Flags&4)||Duration<=0||(Duration<300&&!Has(TEXT("buffs"),Id))||Seen.Contains(Cat))continue;
                     Seen.Add(Cat);D->TryGetSpellInfo(Id,Name,Icon);if(!BuffSearch.IsEmpty()&&!Name.Contains(BuffSearch))continue;
                     Add(Tile(SNew(SHorizontalBox)+SHorizontalBox::Slot().AutoWidth()[IconWidget(Icon)]
                         +SHorizontalBox::Slot().FillWidth(1).Padding(10,0).VAlign(VAlign_Center)[Text(Name)]
                         +SHorizontalBox::Slot().AutoWidth()[Button(Has(TEXT("excluded_buffs"),Cat)?TEXT("Excluded"):TEXT("Automatic"),[this,Cat](){ToggleId(TEXT("excluded_buffs"),Cat);})]));
                 }
             }
+            else if(Page==TEXT("Vendors")){VendorPanel();}
             else if(Page==TEXT("Buff others"))
             {
                 Heading(TEXT("Buff requests by tell"),TEXT("Players can request role-based buffs by tell while UCM and Buff are running."));
@@ -433,13 +460,34 @@ namespace
             }
             else if(Page==TEXT("Recovery"))
             {
+                Add(Toggle(TEXT("mana_charges_when_off"),TEXT("Recharge equipment while UCM is stopped"),TEXT("Uses configured mana supplies only; does not start combat, buffs or navigation.")));
                 Heading(TEXT("Spell components"),TEXT("Imported pea recipes travel with the saved setup. Keep a Splitting Tool and the requested peas in inventory."));
                 Add(Toggle(TEXT("split_peas"),TEXT("Split component peas"),TEXT("Uses imported All Peas or named component choices and waits for inventory confirmation."),true));
                 Slider(TEXT("component_critical"),TEXT("Critical component minimum"),0,100,4);
                 Slider(TEXT("component_normal"),TEXT("Normal component minimum"),0,100,20);
                 Slider(TEXT("component_idle"),TEXT("Idle component minimum"),0,100,20);
-                Heading(TEXT("Maintain your vitals"),TEXT("Use supplies first, then eligible life magic. Choose when each vital should be restored."));
+                Heading(TEXT("Maintain your vitals"),TEXT("Recover when a vital falls below its percentage. Prefer the highest eligible Life Magic spell, with supplies as fallback; unknown recovery supplies are inspected automatically. Imported setups retain their ordered recovery methods."));
                 Add(Toggle(TEXT("recovery"),TEXT("Automatic recovery"),TEXT("Active while UCM is running."),true));
+                Add(Text(FString::Printf(TEXT("Recovery spells use your current magic skill minus the %.0f-point skill buffer. Components are required unless the server grants an exemption."),Num(P(),TEXT("skill_margin"),30)),14,Muted));
+                if(P()->HasField(TEXT("recharge_handlers")))Add(Toggle(TEXT("use_imported_recovery_order"),TEXT("Use imported recovery order"),TEXT("On: preserve this profile's ordered recovery handlers. Turn off to use the spell/consumable preference below."),true));
+                Add(SNew(SCheckBox)
+                    .IsChecked_Lambda([this](){return Bool(P(),TEXT("recovery_supplies_first"))?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+                    .OnCheckStateChanged_Lambda([this](ECheckBoxState State)
+                    {
+                        P()->SetBoolField(TEXT("recovery_supplies_first"),State==ECheckBoxState::Checked);
+                        // An explicit user choice must take effect even on an imported setup.
+                        P()->SetBoolField(TEXT("use_imported_recovery_order"),false);Save();
+                    })
+                    [SNew(SBox).MinDesiredHeight(32).VAlign(VAlign_Center).Padding(8,0)[Text(TEXT("Prefer kits and consumables"))]]);
+                Add(SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).ColorAndOpacity(Muted).AutoWrapText(true)
+                    .Text_Lambda([this]()
+                    {
+                        if(P()->HasField(TEXT("recharge_handlers"))&&Bool(P(),TEXT("use_imported_recovery_order"),true))
+                            return FText::FromString(TEXT("Using imported recovery order. Change the preference above to override it."));
+                        return FText::FromString(Bool(P(),TEXT("recovery_supplies_first"))
+                            ?TEXT("Kits/consumables first, then spells if unavailable or unsuccessful.")
+                            :TEXT("Spells first, then kits/consumables if unavailable or unsuccessful."));
+                    }));
                 Slider(TEXT("health_threshold"),TEXT("Health"),1,95,65,FLinearColor(.95f,.25f,.3f));
                 Slider(TEXT("stamina_threshold"),TEXT("Stamina"),1,95,50,FLinearColor(.95f,.7f,.15f));
                 Slider(TEXT("mana_threshold"),TEXT("Mana"),1,95,45,FLinearColor(.2f,.55f,1));
@@ -591,6 +639,7 @@ namespace
         {const TArray<TSharedPtr<FJsonValue>>* Before=nullptr;const int32 Count=P()->TryGetArrayField(TEXT("route"),Before)?Before->Num():0;
          Host->RecordRouteAction(Kind);const TArray<TSharedPtr<FJsonValue>>* After=nullptr;
          if(P()->TryGetArrayField(TEXT("route"),After)&&After->Num()==Count+1){After->Last()->AsObject()->SetNumberField(Key,Value);Save(true);}Rebuild();}
+        #include "ACEUCMVendorPanel.inl"
         #include "ACEUCMLootPanel.inl"
         #include "ACEVTImportPanel.inl"
         #include "ACEVTLegacyLootPanel.inl"
@@ -599,3 +648,130 @@ namespace
     };
 }
 TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMPanel(const FString& InitialPage){return SNew(SUCMPanel).Host(this).InitialPage(InitialPage);}
+
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
+#include "Misc/FileHelper.h"
+#include "Slate/WidgetRenderer.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "ImageUtils.h"
+#include "RenderingThread.h"
+namespace
+{
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMLootEditorTest,"ACE.Plugins.LootEditor",EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMLootEditorTest::RunTest(const FString&)
+{
+    auto* GI=NewObject<UGameInstance>();GI->Init();ON_SCOPE_EXIT{GI->Shutdown();};
+    auto* Host=GI->GetSubsystem<UACEPluginSubsystem>();TSharedPtr<FACEClientPlugin> Plugin;
+    for(auto P:Host->Plugins)if(P->Id==TEXT("ucm"))Plugin=P;
+    if(!Plugin)return false;
+    const auto Original=Plugin->Profile;ON_SCOPE_EXIT{Plugin->Profile=Original;};
+    auto Parse=[](const TCHAR* Text){TSharedPtr<FJsonObject> O;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text),O);return O;};
+    Plugin->Profile=Parse(TEXT(R"({"loot_profile":"Imported sample","loot_rules":[{"label":"Legendary armor","action":"keep","keep_up_to":4,"count_by_name":true,"conditions":[{"field":"int","key":265,"op":"ge","value":1,"missing_zero":true},{"field":"float","key":167772169,"op":"ge","value":7.25},{"field":"spells","pattern":"Legendary|Epic","exclude":"Bane","value":2}]}]})"));
+    auto Panel=SNew(SUCMPanel).Host(Host).InitialPage(TEXT("Standalone loot"));
+    const auto Rule=Plugin->Profile->GetArrayField(TEXT("loot_rules"))[0]->AsObject();
+    const auto Conditions=Rule->GetArrayField(TEXT("conditions"));
+    TestEqual(TEXT("Opening editor selects first rule"),Panel->LootEditIndex,0);
+    TestTrue(TEXT("Unchanged rule can be switched"),Panel->CanLeaveLootRule());
+    Panel->SelectLootRequirement(0);
+    TestTrue(TEXT("Opening a requirement alone does not dirty it"),Panel->CanLeaveLootRequirement());
+    Panel->SelectLootRequirement(0);
+    Panel->ConditionDraft->SetNumberField(TEXT("value"),42);
+    TestFalse(TEXT("Unsaved requirement prevents changing rule"),Panel->CanLeaveLootRule());
+    Panel->DiscardLootRule();
+    TestEqual(TEXT("Discard restores requirement value"),Panel->LootDraft->GetArrayField(TEXT("conditions"))[0]->AsObject()->GetNumberField(TEXT("value")),1.);
+    Panel->LootDraft->SetStringField(TEXT("label"),TEXT("Unsaved"));
+    Panel->NewLootRule();
+    TestEqual(TEXT("New cannot silently replace an edited rule"),Panel->LootEditIndex,0);
+    Panel->DiscardLootRule();
+    Panel->SelectLootRule(0,true);
+    TestEqual(TEXT("Clone is a new draft"),Panel->LootEditIndex,INDEX_NONE);
+    TestEqual(TEXT("Clone has distinct name"),Panel->LootDraft->GetStringField(TEXT("label")),FString(TEXT("Legendary armor copy")));
+    Panel->LootDraft->GetArrayField(TEXT("conditions"))[0]->AsObject()->SetNumberField(TEXT("value"),77);
+    TestEqual(TEXT("Cloned requirements do not modify original"),Conditions[0]->AsObject()->GetNumberField(TEXT("value")),1.);
+    Panel->DiscardLootRule();
+    Panel->NewLootRule();
+    Panel->LootDraft->SetStringField(TEXT("action"),TEXT("invalid-test-action"));
+    Panel->ApplyLootRule();
+    TestEqual(TEXT("Rejected new rule remains a new draft"),Panel->LootEditIndex,INDEX_NONE);
+    TestTrue(TEXT("Rejected save retains editable draft"),Panel->LootDraft.IsValid());
+    TestEqual(TEXT("Rejected save leaves active rules unchanged"),Panel->CurrentLootRules().Num(),1);
+    Panel->DiscardLootRule();
+    Host->Notice.Reset();
+    TestTrue(TEXT("Classic property names include armor set ID"),ACEUCMLootPresentation::ConditionSummary(Conditions[0]->AsObject()).Contains(TEXT("ArmorSetID (265) >= 1")));
+    TestTrue(TEXT("Fractional workmanship appears in summary"),ACEUCMLootPresentation::ConditionSummary(Conditions[1]->AsObject()).Contains(TEXT("7.25")));
+    const FString SpellSummary=ACEUCMLootPresentation::ConditionSummary(Conditions[2]->AsObject());
+    TestTrue(TEXT("Spell summary includes count and both regexes"),SpellSummary.Contains(TEXT(">= 2"))&&SpellSummary.Contains(TEXT("Legendary|Epic"))&&SpellSummary.Contains(TEXT("Exclude regex: Bane")));
+    TestEqual(TEXT("Public workmanship tagged correctly"),ACEUCMLootPresentation::DataRequirement(Conditions[1]->AsObject()),FString(TEXT("Public item data")));
+    TestEqual(TEXT("Appraisal property tagged correctly"),ACEUCMLootPresentation::DataRequirement(Conditions[0]->AsObject()),FString(TEXT("Appraisal may be needed")));
+    TestTrue(TEXT("Unknown property ID remains visible"),ACEUCMLootPresentation::PropertyLabel(TEXT("int"),999999).Contains(TEXT("999999")));
+    for(int Key:{6,7,10,17,1000,1001,1002,1003,1004,2000,2001,2003,2005,2006,2007,2008})
+        TestTrue(*FString::Printf(TEXT("Every executable calculated condition has editor fields: %d"),Key),ACEUCMLootPresentation::Calculated().Contains(Key));
+    Panel->LootDraft=ACEUCMLootPresentation::Clone(Rule);
+    Panel->LootDraft->GetArrayField(TEXT("conditions"))[0]->AsObject()->SetNumberField(TEXT("value"),10);
+    TestEqual(TEXT("Cancelling nested draft does not alter active rule"),Conditions[0]->AsObject()->GetNumberField(TEXT("value")),1.);
+    Panel->LootDraft.Reset();
+
+    auto Document=Parse(TEXT(R"({"format":"utl","rules":[],"extras":[{"name":"CustomBlock","body":"unchanged\r\n"}]})"));
+    TArray<TSharedPtr<FJsonValue>> Rules;
+    for(const auto& Schema:Panel->LegacySchemas())
+    {
+        TArray<FString> Fields;Schema.Value.ParseIntoArray(Fields,TEXT("|"));
+        auto Req=MakeShared<FJsonObject>();Req->SetNumberField(TEXT("type"),Schema.Key);FString Body;
+        for(int I=1;I<Fields.Num();++I)Body+=(Schema.Key==9999?FString(TEXT("true")):Fields[I].Contains(TEXT("attern"))?FString(TEXT("^Legendary|Epic")):(Schema.Key==15&&I==6)?FString(TEXT("Amuli Coat (Chest)")):FString(TEXT("1")))+TEXT("\r\n");
+        Req->SetStringField(TEXT("body"),Body);
+        auto R=Parse(TEXT(R"({"label":"Classic requirement","action_id":10,"amount":0,"priority":2147483647,"expression":"custom expression","requirements":[]})"));
+        R->SetArrayField(TEXT("requirements"),{MakeShared<FJsonValueObject>(Req)});Rules.Add(MakeShared<FJsonValueObject>(R));
+        TestTrue(TEXT("Every Classic field is visible in its summary"),Panel->LegacyRequirementSummary(Req).Contains(Fields[1]));
+    }
+    TestEqual(TEXT("All original Classic requirement types covered"),Rules.Num(),31);
+    Document->SetArrayField(TEXT("rules"),Rules);FString Error;
+    const FString Encoded=ACEVTProfile::WriteLoot(Document,Error);TestTrue(TEXT("All Classic requirement layouts save"),!Encoded.IsEmpty()&&Error.IsEmpty());
+    const auto Reload=ACEVTProfile::Read(Encoded,TEXT("utl"),Error);if(!TestTrue(TEXT("Original-format document reloads"),Reload.IsValid()))return false;
+    TestEqual(TEXT("Expressions remain intact"),Reload->GetArrayField(TEXT("rules"))[0]->AsObject()->GetStringField(TEXT("expression")),FString(TEXT("custom expression")));
+    TestEqual(TEXT("Extra blocks remain intact"),Reload->GetArrayField(TEXT("extras"))[0]->AsObject()->GetStringField(TEXT("body")),FString(TEXT("unchanged\r\n")));
+    for(int I=0;I<Rules.Num();++I)TestEqual(TEXT("Every requirement body round trips without narrowing"),Reload->GetArrayField(TEXT("rules"))[I]->AsObject()->GetArrayField(TEXT("requirements"))[0]->AsObject()->GetStringField(TEXT("body")),Rules[I]->AsObject()->GetArrayField(TEXT("requirements"))[0]->AsObject()->GetStringField(TEXT("body")));
+    auto Req=Parse(TEXT(R"({"type":9,"body":"Epic\r\nBane\r\n3\r\n"})"));
+    Panel->SetLegacyValue(Req,1,TEXT("Bane|Ward"));TestEqual(TEXT("Editing one field retains other fields"),Req->GetStringField(TEXT("body")),FString(TEXT("Epic\r\nBane|Ward\r\n3\r\n")));
+    int ImportedFiles=0;TSharedPtr<FJsonObject> ImportedProfile;
+    for(const FString& Folder:{FPaths::ProjectSavedDir()/TEXT("ClientPlugins/ImportInbox"),FString(TEXT("C:/Games/VirindiPlugins/VirindiTank"))})
+    {
+        TArray<FString> Files;IFileManager::Get().FindFiles(Files,*(Folder/TEXT("*.utl")),true,false);
+        for(const auto& File:Files)
+        {
+            FString Source;FFileHelper::LoadFileToString(Source,*(Folder/File));const auto OriginalFile=ACEVTProfile::Read(Source,TEXT("utl"),Error);
+            if(!TestTrue(*(TEXT("Existing UTL parses: ")+File),OriginalFile.IsValid()))continue;
+            const FString SavedCopy=ACEVTProfile::WriteLoot(ACEUCMLootPresentation::Clone(OriginalFile),Error);
+            const auto Reopened=ACEVTProfile::Read(SavedCopy,TEXT("utl"),Error);
+            TestTrue(*(TEXT("Existing UTL survives draft / save / reload: ")+File),Reopened.IsValid()&&ACEVTProfile::WriteLoot(Reopened,Error)==SavedCopy);
+            TArray<FString> Issues;auto Converted=ACEVTProfile::Convert(OriginalFile,Issues);
+            if(Converted&&Issues.IsEmpty())for(const auto& Entry:Converted->GetArrayField(TEXT("loot_rules")))
+                for(const auto& Condition:Entry->AsObject()->GetArrayField(TEXT("conditions")))TestFalse(TEXT("Imported condition has readable presentation"),ACEUCMLootPresentation::ConditionSummary(Condition->AsObject()).IsEmpty());
+            if(Converted&&Issues.IsEmpty()&&File==TEXT("Gardener_LootSnobV4.utl")){ImportedProfile=Converted;ImportedProfile->SetStringField(TEXT("loot_profile"),File);}
+            ++ImportedFiles;
+        }
+    }
+    AddInfo(FString::Printf(TEXT("Existing local UTL files checked without modifying originals: %d"),ImportedFiles));
+    if(FApp::CanEverRender())
+    {
+        FWidgetRenderer Renderer(false,true);
+        const auto SampleProfile=Plugin->Profile;
+        for(int Width:{780,450})for(const FString View:{TEXT("Rules"),TEXT("Condition"),TEXT("Classic"),TEXT("Imported")})
+        {
+            Plugin->Profile=View==TEXT("Imported")&&ImportedProfile?ImportedProfile:SampleProfile;
+            Panel->Page=TEXT("Loot");Panel->LootDraft.Reset();Panel->ConditionDraft.Reset();
+            if(View==TEXT("Condition")){Panel->LootDraft=ACEUCMLootPresentation::Clone(Rule);Panel->ConditionDraft=Parse(TEXT(R"({"field":"legacy","key":2008,"args":[70,1.15,1.12]})"));}
+            if(View==TEXT("Classic")){Panel->Page=TEXT("Legacy loot");Panel->LegacyDocument=Document;Panel->LegacyRule=Parse(TEXT(R"({"label":"Amuli chest color","action_id":10,"amount":4,"priority":0,"expression":"","requirements":[{"type":15,"body":"255\r\n0\r\n0\r\n10\r\n0.1\r\nAmuli Coat (Chest)\r\n"}]})"));}
+            Panel->Rebuild();const FVector2D Size(Width,1100);auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
+            for(int Pass=0;Pass<3;++Pass){Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
+            TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
+            TestEqual(TEXT("Loot editor renders at desktop and narrow widths"),Pixels.Num(),Width*1100);
+            TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(Width,1100,Pixels,PNG);
+            FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/TEXT("Automation")/FString::Printf(TEXT("LootEditor-%s-%d.png"),*View,Width)));Target->ReleaseResource();
+        }
+    }
+    return true;
+}
+}
+#endif

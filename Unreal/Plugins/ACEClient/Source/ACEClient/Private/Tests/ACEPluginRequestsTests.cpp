@@ -16,6 +16,8 @@
 #include "ACEPlayerController.h"
 #include "GameFramework/Pawn.h"
 #include "ACESession.h"
+#include "Sockets.h"
+#include "SocketSubsystem.h"
 #include "ProceduralMeshComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
@@ -72,6 +74,13 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             TestEqual(TEXT("Live bool updates before player ObjectCreate"),Snapshot->GetObjectField(TEXT("char_bools"))->GetNumberField(TEXT("9001")),Public?1.:0.);
             TestEqual(TEXT("String packet handles property/GUID order and alignment"),Snapshot->GetObjectField(TEXT("char_strings"))->GetStringField(TEXT("9003")),FString(Public?TEXT("Public"):TEXT("Private")));
         }
+        TestTrue(TEXT("Absent exemption still requires components"),Snapshot->GetBoolField(TEXT("components_required")));
+        for(bool Required:{false,true})
+        {
+            FACEBinaryWriter B;B.WriteUInt32(Required?ACEOpcode::PublicUpdatePropertyBool:ACEOpcode::PrivateUpdatePropertyBool);B.WriteUInt8(1);
+            if(Required)B.WriteUInt32(Session.PlayerGuid);B.WriteUInt32(68);B.WriteUInt32(Required?1:0);Session.HandleGameMessage(B.GetData());
+            H->ExtendSnapshot(Snapshot);TestEqual(TEXT("Server component policy updates live"),Snapshot->GetBoolField(TEXT("components_required")),Required);
+        }
         FACEBinaryWriter Other;Other.WriteUInt32(ACEOpcode::PublicUpdatePropertyFloat);Other.WriteUInt8(1);Other.WriteUInt32(Session.PlayerGuid+1);Other.WriteUInt32(9002);Other.WriteDouble(99);Session.HandleGameMessage(Other.GetData());
         TestEqual(TEXT("Another player's update cannot contaminate self qualities"),Session.PlayerVitals.QualityDoubles.FindRef(9002),0.75);
         FACEBinaryWriter Short;Short.WriteUInt32(ACEOpcode::PrivateUpdatePropertyString);Short.WriteUInt8(1);Short.WriteUInt32(9003);Short.Align();Short.WriteUInt16(50);Session.HandleGameMessage(Short.GetData());
@@ -83,6 +92,37 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
     auto P=H->Find(TEXT("ucm"));if(!TestTrue(TEXT("UCM discovered"),P.IsValid()))return false;
     P->Enabled=true;P->Running=true;P->Profile=MakeShared<FJsonObject>();
     P->Profile->SetBoolField(TEXT("buffing"),true);P->Profile->SetBoolField(TEXT("buff_others"),true);
+    {
+        FACEWorldObject Vendor;Vendor.Guid=500;Vendor.Name=TEXT("Arcanist");Vendor.WeenieClassId=200;
+        auto* Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+        FSocket* Receiver=Sockets->CreateSocket(NAME_DGram,TEXT("UCM vendor test receiver"),false);
+        const auto Address=Sockets->CreateInternetAddr();bool Valid=false;Address->SetIp(TEXT("127.0.0.1"),Valid);Address->SetPort(0);
+        if(!TestTrue(TEXT("Isolated vendor test socket binds"),Receiver&&Receiver->Bind(*Address)))return false;
+        Receiver->GetAddress(*Address);Session.SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("UCM vendor test sender"),false);
+        Session.ServerC2SAddr=Address;Session.IssacClient=MakeUnique<FACEIsaac>(123u);
+        ON_SCOPE_EXIT {Session.SocketC2S->Close();Sockets->DestroySocket(Session.SocketC2S);Session.SocketC2S=nullptr;Session.ServerC2SAddr.Reset();Session.IssacClient.Reset();Receiver->Close();Sockets->DestroySocket(Receiver);Session.CachedC2SPackets.Reset();};
+        FACEWorldObject Stock;Stock.Guid=501;Stock.Name=TEXT("Scarab");Stock.WeenieClassId=300;Stock.MaxStackSize=100;Stock.VendorQuantityAvailable=-1;
+        Session.OpenVendorGuid=Vendor.Guid;Session.WorldObjects.Add(Vendor.Guid,Vendor);Session.VendorMerchandise={Stock};
+        auto Snapshot=MakeShared<FJsonObject>();H->ExtendSnapshot(Snapshot);
+        TestEqual(TEXT("Vendor snapshot carries stable identity"),Snapshot->GetNumberField(TEXT("vendor_wcid")),200.);
+        TestEqual(TEXT("Vendor stock includes retail quantity limit"),Snapshot->GetArrayField(TEXT("vendor_stock"))[0]->AsObject()->GetNumberField(TEXT("limit")),100.);
+        auto Buy=MakeShared<FJsonObject>();Buy->SetNumberField(TEXT("vendor"),500);Buy->SetNumberField(TEXT("item"),501);Buy->SetNumberField(TEXT("count"),3);
+        Session.CachedC2SPackets.Reset();H->ExecuteInventory(*P,Buy,TEXT("buy"));
+        TestEqual(TEXT("Restock sends one retail action"),Session.CachedC2SPackets.Num(),1);
+        for(const auto& Packet:Session.CachedC2SPackets)
+        {
+            FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);
+            TestEqual(TEXT("Restock uses retail Buy opcode"),R.ReadUInt32(),ACEGameAction::Buy);
+            TestEqual(TEXT("Purchase identifies open vendor"),R.ReadUInt32(),500u);TestEqual(TEXT("Purchase has one stock row"),R.ReadUInt32(),1u);
+            TestEqual(TEXT("Purchase transmits missing units"),R.ReadInt32(),3);TestEqual(TEXT("Purchase transmits stock GUID"),R.ReadUInt32(),501u);
+        }
+        auto HasPurchase=[&](){for(const auto& Packet:Session.CachedC2SPackets){FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.ReadUInt32()==ACEGameAction::Buy)return true;}return false;};
+        Session.CachedC2SPackets.Reset();Session.VendorMerchandise[0].VendorQuantityAvailable=0;H->ExecuteInventory(*P,Buy,TEXT("buy"));
+        TestTrue(TEXT("Sold-out stock cannot send a purchase"),!HasPurchase());
+        P->Running=true;Session.OpenVendorGuid=0;H->ExecuteInventory(*P,Buy,TEXT("buy"));
+        TestTrue(TEXT("Closed vendor cannot send a purchase"),!HasPurchase());
+        P->Running=true;Session.WorldObjects.Remove(Vendor.Guid);Session.VendorMerchandise.Empty();
+    }
     H->RefreshAutomationData();
     {
         TestTrue(TEXT("Native vitals view uses session storage"),&C->GetPlayerVitalsView()==&Session.GetPlayerVitals());
@@ -178,6 +218,17 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         Cast();Session.WorldObjects.Remove(900);H->ExpireOffensiveCasts(FPlatformTime::Seconds()+10);
         TestTrue(TEXT("Released target cannot acquire a timeout for a reused GUID"),H->OffensiveCasts.IsEmpty());
         H->CombatOutcomes.Empty();H->PendingSpell=H->PendingSpellTarget=0;Session.SelectedObject.Guid=0;Session.WorldObjects.Remove(Player.Guid);
+    }
+    for(uint32 CastError:{0u,1u})
+    {
+        const double Sent=FPlatformTime::Seconds()-1.;
+        H->PendingSpell=123;H->PendingSpellTarget=0;H->PendingSpellAt=Sent;H->PendingSpellOwner=P->Id;
+        P->NextAction=Sent+3.5;H->ObserveUseDone(CastError);
+        TestTrue(TEXT("Completed/rejected cast releases fixed delay after minimum request interval"),P->NextAction<=Sent+.5);
+        TestTrue(TEXT("Cast completion clears owner and pending spell"),H->PendingSpellOwner.IsEmpty()&&H->PendingSpell==0);
+        P->NextAction=Sent+8;H->ObserveUseDone(0);
+        TestEqual(TEXT("Unrelated use completion cannot clear another action throttle"),P->NextAction,Sent+8);
+        P->NextAction=0;
     }
     auto Tell=[&](const FString& Text,int32 Sender=0x50000002,int32 Type=ACEChatMessageType::Tell)
     {

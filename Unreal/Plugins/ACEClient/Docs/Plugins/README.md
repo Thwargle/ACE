@@ -37,23 +37,32 @@ In VR, More â†’ Plugins / UCM opens UCM directly, with a separate managemen
 
 Enable **Buff**, then Start. Automatic selection includes relevant known Self
 creature/life buffs and item enchantments, using the highest tier within the
-configured magic-skill margin. Untrained skills that the retail DAT says are
+configured magic-skill margin. The Buffs tab has separate Creature, Life and Item
+Magic selectors: **Automatic highest** (default), or an exact level I–VIII.
+Explicit tiers still require the learned spell, sufficient skill and components;
+unavailable families are skipped. These settings also apply to buff requests,
+while recovery independently chooses its highest usable spell. Untrained skills that the retail DAT says are
 usable (such as Run/Jump) are also eligible. Other skill buffs require training.
 Self-buffing targets the player once per item-spell family: banes and
 Impenetrability cover worn armor, and weapon auras apply to the character.
 It does not repeat those casts on inventory items or weapons in the combat pool.
 Optional family exclusions and legacy explicit buff lists remain available.
 The host equips a usable casting tool before casting, respects existing buffs,
-and waits for server action completion. Three failed/unconfirmed attempts stop
-with a status message; no cast is treated as successful merely because it was sent.
+and waits for server action completion. Three failed/unconfirmed attempts skip that buff family for two minutes
+and continue the cycle; no cast is treated as successful merely because it was sent.
 A server missing-components response excludes that tier temporarily and tries a
-lower supplied tier. If no tier remains, UCM stops with a restocking message.
+lower supplied tier. If no tier remains, UCM continues with other families. Force Buff reports
+when unavailable or failed buffs were skipped instead of claiming full success.
 
-Health, stamina and mana each have a recovery slider. UCM first considers
-assessed usable supplies for that vital (including healing kits and potions),
-then eligible life spells. Stamina to Mana is allowed only with sufficient
-stamina. It waits for a successful server completion and a vital increase before declaring
-recovery successful; natural regeneration alone is not confirmation.
+Health, stamina and mana each have a recovery slider. UCM prefers eligible Life Magic recovery spells,
+then assessed supplies (including healing kits and potions). Enable **Prefer kits
+and consumables** on the Recovery tab to reverse this order. Unavailable or failed
+methods fall back to the other kind; failed methods cool down for 15 seconds.
+Changing this toggle overrides imported recovery order and saves with the setup.
+The status below it shows the active preference; **Use imported recovery order**
+can explicitly restore the imported priorities. Stamina to Mana is allowed only with sufficient
+stamina. It observes replicated vital increases and server action failures before retrying.
+Rejected recovery spells temporarily yield to other tiers or supplies.
 Filled mana stones/charges can replenish low equipped-item mana. Empty supply
 pools permit automatic selection; adding supply types restricts the pool.
 Assessments are refreshed periodically, so equipment mana is not instantaneous.
@@ -185,6 +194,75 @@ one. Activity/range/threshold edits are live. Loading a profile or editing route
 and state rules stops the run. Manual movement, death, logout, character changes,
 disabling and reloading stop automation. Closing its window does not stop it.
 Only one plugin can run at a time. Commands `/ucm start` and `/ucm stop` remain.
+
+## Automatic vital recovery
+
+While UCM is running, Recovery restores health, stamina and mana below their
+configured percentages before starting another combat attack. Known spells use
+current magic skill and the shared skill buffer; server component exemptions
+remain honored. Retail Heal Self uses category 67, so recovery distinguishes it
+from the timed Healing skill buff. Tier VII conversion names and tier VIII
+Incantations are recognized alongside the lower tiers.
+
+Mana recovery prefers a usable Stamina to Mana spell over Mana Boost, even if
+Mana Boost is a higher tier. Revitalize restores stamina once it falls below the
+configured threshold; health retains first priority. Low stamina, unavailable
+spells and the selected supplies-first preference still control fallback.
+Imported Regular Spell handlers use this same mana preference.
+
+Unknown healing kits and food/potions are appraised automatically when no ready
+method is available. Selected supply restrictions and imported handler order
+remain authoritative. Turn off **Use imported recovery order** to switch an
+imported setup to UCM’s spell/consumable preference. The client confirms recovery through replicated vital
+changes, even when UseDone arrives separately. If no method is available while
+idle, UCM reports that instead of displaying a generic Ready status.
+
+## Loot editor: imported rules and original values
+
+The Loot page uses the Classic editor's rule-list/detail workflow. Choose a rule
+on the left to edit its name, action, and requirements on the right. New, Clone,
+Delete, Move up, and Move down act on the selected rule; the highlighted row shows
+which rule you are editing. Search and paging keep large imported lists usable.
+Narrow windows stack the list above the editor instead of squeezing the fields.
+
+Select a requirement to edit its property, comparison, and value. New, Clone,
+Delete, Up, and Down manage requirements. Apply requirement accepts that draft;
+Apply rule saves the rule and stops UCM. Discard changes restores the saved rule.
+Changing selection cannot silently discard edits. The rule list remains visible
+while editing, and Apply/Discard stay outside the scrolling detail fields.
+
+The active profile is shown above the editor. Open / save profile, Salvage
+combination, and Looting settings are separate from rule editing. Summaries show
+named properties and IDs, exact thresholds, include/exclude patterns, and whether
+appraisal is needed. Basic filters remain summarized when collapsed. Rule order
+is first-match order, and every requirement in a rule must match.
+
+Property selectors search Classic's integer, decimal and string keys, plus ACE
+server keys. Custom numeric IDs remain editable; a named key does not guarantee
+that the current server sends it. Decimal bonuses remain raw multipliers: +15%
+melee defense is 1.15 and +130% bow damage is 2.3. Keep counts explicitly choose
+display-name matching (Classic Keep #) or item-template matching. A condition
+draft must be accepted or cancelled before saving its containing rule.
+
+**View / edit original Classic UTL copy** opens the source document separately
+from the active converted rules. The document editor exposes all 31 Classic
+requirement types, priority, actions and counts, custom expressions, RGB/tolerance
+values, palette slots, and extra file blocks. Unknown requirement bodies are
+retained in a raw editor. Save a separate copy; **Save copy and apply to active
+loot** validates compatibility before changing only the current setup's loot
+rules and salvage policy. Other hunt settings remain intact. Import/compatibility
+also opens files that cannot be activated.
+
+Color matching, custom expressions and third-party User actions can be viewed,
+edited and saved in UTL form but still cannot execute in UCM. The editor labels
+these limits; it does not silently drop them to activate a profile. Disabled
+unsupported rules remain disabled until their original requirements can pass
+compatibility validation; they cannot be enabled as partial native rules. The retired
+DamagePercentGE requirement remains editable and never matches, as in Classic.
+
+Reviewed against the Classic tutorial, advanced tips, and the public VTClassic
+Shared Constants.cs / LootRules.cs catalog. Named Classic keys retain their MIT
+notice in `ClientMods/LICENSE-VTClassic.txt`.
 
 ## Installation and source editing
 
@@ -534,6 +612,19 @@ list only when needed. The workflow follows VT's separation between profile
 selection and route/meta editing, while retaining native modern controls.
 Reference: https://www.virindi.net/wiki/index.php/BeginnerBundleGuide
 
+Self-buff cycles start with Creature Enchantment Mastery, Focus, Willpower
+(Self), Mana Conversion and Life Magic Mastery, matching VT's opening order.
+Other trained magic schools follow before ordinary buffs. This also applies to
+Force Buff. Exclusions and eligibility still apply; each new snapshot rechecks
+current skill so confirmed buffs can unlock a higher spell tier immediately.
+
+Automatic maintenance chooses sustained buffs (at least five minutes), so
+short burst spells such as Tusker Leap do not replace regular Jump buffs.
+Explicit `buffs` entries can still request short spells. Renewal windows are
+capped at half the base duration, preventing a fresh short buff from immediately
+becoming due again. Confirmed casts release their request delay while retaining
+the busy gate and minimum action interval.
+
 Buff planning indexes selected spells, exclusions and equipment once rather than
 scanning those lists for every spell. Repeated NeedBuff conditions reuse a plan
 within the current snapshot only. A plan is discarded before the next callback,
@@ -541,3 +632,27 @@ so confirmations, inventory changes and option changes are not cached across
 ticks. The sandbox still enforces its original 250,000-instruction ceiling.
 Regression coverage includes 2,200 spells with equally large selection and
 exclusion lists, plus full inventory and infinite-loop rejection fixtures.
+
+## Vendor supply lists and component exemptions
+
+The **Vendors** page is available in both UCM and the Loot Profile Editor.
+Open a vendor, press **Refresh vendor stock**, add supplies, and enter the total
+quantity to keep in inventory. Enable **Automatically buy saved supplies**.
+While UCM runs, opening that vendor buys the difference, including when a route
+Use point visits it. This does not generate a route to the vendor: record the
+walk and Use points as usual. Lists match server, vendor name/class, and item
+name/class rather than temporary object IDs. They are saved with the UCM setup;
+Save/Load Loot Profile also includes them. Old loot profiles clear the supply list.
+Purchases use the regular client Buy protocol and wait for inventory confirmation.
+Failure or timeout stops restocking; inspect currency, stock and pack space
+before restarting. Inventory and stock are indexed once per decision.
+
+The server's `SpellComponentsRequired=false` exemption bypasses component and
+pea checks. Missing/true uses the existing component checks. Changing characters
+or changing the server property takes effect in the next snapshot. Skill, known
+spell and server rejection checks remain active.
+
+**Recovery > Recharge equipment while UCM is stopped** implements imported
+`ManaChargesWhenOff`. It only uses the configured equipment-mana supplies and
+never runs hunting, buffing, navigation or metas. Disable it to stop background
+recharging. Repeated failures suspend it until restarting UCM or changing setup.

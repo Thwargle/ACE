@@ -5,16 +5,19 @@ local route_join_pending,route_join_scan=true,nil
 local retries, until_time, corpses, item_attempts = {}, {}, {}, {}
 local route_pending, loot_pending, recovery_pending, buff_item_pending = nil, nil, nil, nil
 local monster_failures,monster_blacklist,combat_serial={},{},0
+local ghost_attempts,ghost_hp={},{ }
 local corpse_pending=nil
 local mana_refill_pending=nil
 local helper_pending=nil
 local debuff_pending=nil
 local debuff_scan=nil
+local purchase_pending=nil
 local pea_pending=nil
 local pet_pending=nil
 local dispel_pending=nil
 local last_cast, unavailable_spells = nil, {}
 local forced_buff=nil
+local buff_skips={}
 local other_job=nil
 local loot_scan={}
 local loot_jobs={}
@@ -25,6 +28,11 @@ local skill_categories = {[17]=45,[19]=47,[21]=3,[23]=46,[25]=5,[27]=9,[29]=10,[
  [37]=6,[39]=7,[41]=15,[43]=31,[45]=32,[47]=33,[49]=34,[51]=16,[53]=14,[55]=29,[57]=18,[59]=30,[61]=28,
  [63]=27,[65]=20,[67]=21,[69]=22,[71]=35,[73]=23,[75]=36,[77]=24,[205]=19,[216]=39,[218]=37,[221]=38,
  [593]=41,[645]=43,[665]=52,[668]=49,[671]=50,[674]=48,[677]=51,[696]=54}
+-- VT BuffController starts Creature mastery, Focus, Self/Willpower,
+-- Mana Conversion and Life mastery. Finish the other magic schools before
+-- ordinary buffs; category IDs preserve this order across every spell tier.
+local casting_buff_order={43,9,11,51,47,45,49,645}
+local casting_buff_family={};for _,category in ipairs(casting_buff_order) do casting_buff_family[category]=true end
 local elements={32,4,16,64,8,2,1}
 local function pct(v,m) return m>0 and v*100/m or 0 end
 local function result(a,status) return {action=a,status=status} end
@@ -47,13 +55,33 @@ local function cast(s,v,target,status)
  last_cast={id=v.id,category=v.category,target=target,serial=s.action_serial or 0}
  return {action='cast',spell=v.id,target=target,status=status}
 end
+-- Retail portal.dat puts Heal Self (including Adja's Intervention) in category
+-- 67, also used by the timed Healing skill enchantment. Duration separates them.
+-- Conversion categories identify the consumed vital, not the restored vital;
+-- tier VII has distinct names and tier VIII adds "Incantation of".
+local conversion_aliases={['Meditative Trance']='Stamina to Mana',['Rushed Recovery']='Stamina to Health',
+ ['Energize Vitality']='Mana to Health',['Energize Vigor']='Mana to Stamina',['Cannibalize']='Health to Mana',['Self Sacrifice']='Health to Stamina'}
+local vital_ids={Health=2,Stamina=4,Mana=6}
+local function recovery_spell(v)
+ if not v.caster_target or (v.duration or 0)~=0 then return end
+ local c=v.category
+ if c==67 or c==79 or c==257 then return 2,0 end
+ if c==81 or c==407 then return 4,0 end
+ if c==83 or c==259 then return 6,0 end
+ local name=conversion_aliases[v.name] or v.name or ''
+ if name:sub(1,15)=='Incantation of ' then name=name:sub(16) end
+ for source,from in pairs(vital_ids) do for destination,to in pairs(vital_ids) do if from~=to then
+  local prefix=source..' to '..destination
+  if name==prefix or name:sub(1,#prefix+1)==prefix..' ' then return to,from end
+ end end end
+end
 -- Host regex matching has bounded input, stack, match time and per-tick work.
 local function literal_pattern(text,pattern) return regexmatch(text,pattern)~=nil end
 local catalog_snapshot,catalog_margin,catalog_by_id,catalog_supplied,catalog_usable
 local function index_spells(s,margin)
  if catalog_snapshot~=s or (margin and catalog_margin~=margin) then
   catalog_snapshot=s;catalog_margin=margin or 30
-  catalog_by_id,catalog_supplied,catalog_usable=spellindex(s.spells or {},s.inventory or {},s.time,catalog_margin,unavailable_spells)
+  catalog_by_id,catalog_supplied,catalog_usable=spellindex(s.spells or {},s.inventory or {},s.time,catalog_margin,unavailable_spells,s.components_required~=false)
  end
  return catalog_by_id,catalog_usable
 end
@@ -71,6 +99,22 @@ local function buff_element_enabled(p,spell)
  local selection=profiles[p[kind..'_profile'] or 2] or 'ALL'
  if selection=='CUSTOM' then selection=string.upper(p[kind..'_custom'] or 'ALL') end
  return selection=='ALL' or (selection~='NONE' and selection:contains(letter))
+end
+-- Zero means automatic; explicit tiers use the retail formula level, not
+-- difficulty (special spells can have different difficulty at the same tier).
+local function stronger_spell(v,other)
+ if not other then return true end
+ if (v.level or 0)~=(other.level or 0) then return (v.level or 0)>(other.level or 0) end
+ return v.power>other.power
+end
+local function buff_tier(v,p)
+ local key=v.school==4 and 'creature_buff_level' or v.school==2 and 'life_buff_level' or v.school==3 and 'item_buff_level'
+ local level=key and (p[key] or 0) or 0
+ return level==0 or v.level==level
+end
+local function buff_skipped(s,target,category)
+ local key=tostring(target)..':'..category
+ return s.time<(buff_skips[key] or 0) or (forced_buff and forced_buff.skipped and forced_buff.skipped[key])
 end
 -- A side-effect-free buff plan is shared by NeedBuff and the casting policy.
 local function compute_buff(s,p)
@@ -92,8 +136,9 @@ local function compute_buff(s,p)
  local eligibility={}
  local item_targets=p.item_buff_targets and #p.item_buff_targets>0
  local margin=p.buff_skill_margin or p.skill_margin or 30
+ local tiers={[2]=p.life_buff_level or 0,[3]=p.item_buff_level or 0,[4]=p.creature_buff_level or 0}
  for _,v in ipairs(s.spells or {}) do
-  if item_targets and v.known~=false and v.beneficial and v.school==3 and (v.duration or 0)>0 and (v.skill or 0)>=v.power+margin and not excluded[v.category] then
+  if item_targets and v.known~=false and v.beneficial and v.school==3 and (v.duration or 0)>0 and (v.skill or 0)>=v.power+margin and buff_tier(v,p) and not excluded[v.category] then
    if not item_best[v.category] or item_best[v.category].power<v.power then
     if s.time<(unavailable_spells[v.id] or 0) or not catalog_supplied[v.id] then item_blocked[v.category]=true
     else item_best[v.category]=v end
@@ -106,8 +151,12 @@ local function compute_buff(s,p)
    local skill=skill_categories[v.category];eligible=((p.auto_buffs~=false and (not skill or trained[skill]) and buff_element_enabled(p,v)) or families[v.category])==true
    eligibility[v.category]=eligible
   end
-  if eligible and not excluded[v.category] and (not best[v.category] or v.power>best[v.category].power) and (v.skill or 0)>=v.power+margin then
-   if s.time<(unavailable_spells[v.id] or 0) or not catalog_supplied[v.id] then blocked[v.category]=v
+  -- Automatic maintenance uses sustained buffs. Burst spells such as Tusker
+  -- Leap (10 seconds) are only included when explicitly selected.
+  if eligible and ((v.duration or 300)>=300 or selected[v.id]) and not excluded[v.category] and (not best[v.category] or v.power>best[v.category].power) then
+   local tier=tiers[v.school] or 0
+   if (tier~=0 and v.level~=tier) or (v.skill or 0)<v.power+margin
+    or s.time<(unavailable_spells[v.id] or 0) or not catalog_supplied[v.id] then blocked[v.category]=v
    else
     if not best[v.category] then order[#order+1]=v.category end
     best[v.category]=v
@@ -115,17 +164,31 @@ local function compute_buff(s,p)
   end
   end
  end
- for _,e in ipairs(s.enchantments or {}) do if e.remaining>refresh then active[e.category]=math.max(active[e.category] or 0,e.power) end end
- for _,e in ipairs(s.item_buffs or {}) do if e.expires-s.time>refresh then local k=tostring(e.target)..':'..e.category;confirmed[k]=math.max(confirmed[k] or 0,e.power) end end
+ -- Order only the chosen families, not the entire spellbook. Keep the
+ -- remaining families stable and preserve exclusions/skill/component checks.
+ local ordered={}
+ for _,category in ipairs(casting_buff_order) do if best[category] then ordered[#ordered+1]=category end end
+ for _,category in ipairs(order) do if not casting_buff_family[category] then ordered[#ordered+1]=category end end
+ order=ordered
+ -- A configured refresh window must never make a freshly cast short buff stale.
+ local function refresh_window(duration) return duration and duration>0 and math.min(refresh,duration*.5) or refresh end
+ for _,e in ipairs(s.enchantments or {}) do local v=by_id[e.id] or best[e.category]
+  if e.remaining>refresh_window(v and v.duration) then active[e.category]=math.max(active[e.category] or 0,e.power) end
+ end
+ for _,e in ipairs(s.item_buffs or {}) do local v=best[e.category] or item_best[e.category]
+  if e.expires-s.time>refresh_window(e.duration or (v and v.duration)) then local k=tostring(e.target)..':'..e.category;confirmed[k]=math.max(confirmed[k] or 0,e.power) end
+ end
  -- Retail equipment-compatible item spells accept the player. Banes/impen
  -- spread to worn armor, and weapon auras apply to the character. Do not cast
  -- the same family on every carried weapon or armor piece. Other-player banes
  -- intentionally retain their separate equipment targeting below.
  local id=s.player or 0
  for _,category in ipairs(order) do local v=best[category]
+  if not buff_skipped(s,id,category) then
   local refreshed=forced_buff and (forced_buff.done[tostring(id)..':'..v.category] or -1)>=v.power
   if forced_buff and not refreshed then return v,id end
   if not forced_buff and not ((active[v.category] or -1)>=v.power or (confirmed[tostring(id)..':'..v.category] or -1)>=v.power) then return v,id end
+  end
  end
  local owned,usable_names,current_weapon={},{},nil
  for _,v in ipairs(s.inventory or {}) do owned[v.id]=v;if v.usable and v.name then usable_names[v.name]=v end;if v.equipped and band(v.type,0x8101)~=0 then current_weapon=v end end
@@ -136,30 +199,33 @@ local function compute_buff(s,p)
    -- Keep UCM's player-targeted armor/weapon auras. Explicit non-redirectable
    -- item enchantments (for example a jewelry target) retain their own target.
    local target=(v.caster_target or band(v.target_type,0x8107)~=0) and id or item.id
-   if target==id or band(v.target_type,item.type or 0)~=0 then
+   if (target==id or band(v.target_type,item.type or 0)~=0) and not buff_skipped(s,target,v.category) then
     local key=tostring(target)..':'..v.category
     if forced_buff and (forced_buff.done[key] or -1)<v.power then return v,target end
     if not forced_buff and (confirmed[key] or -1)<v.power and (target~=id or (active[v.category] or -1)<v.power) then return v,target end
    end
-  elseif item and exemplar and item_blocked[exemplar.category] then return nil,nil,true
+  elseif item and exemplar and item_blocked[exemplar.category] then blocked[exemplar.category]=exemplar
   end
  end
+ local incomplete=false
  for category,v in pairs(blocked) do if not best[category] then
-  if forced_buff and not forced_buff.done[tostring(id)..':'..category] or (not forced_buff and not (active[category] or confirmed[tostring(id)..':'..category])) then return nil,nil,true end
+  if forced_buff and not forced_buff.done[tostring(id)..':'..category] or (not forced_buff and not (active[category] or confirmed[tostring(id)..':'..category])) then incomplete=true end
  end end
+ for _,expires in pairs(buff_skips) do if s.time<expires then incomplete=true;break end end
  for _,b in ipairs(p.buff_items or {}) do
   local v=by_id[b.spell]
   if v and (band(v.flags,0x2000)==0 or s.in_fellowship) and (active[v.category] or -1)<v.power then
-   if usable_names[b.name] then return nil,nil,false,true end
+   if usable_names[b.name] and (item_attempts['buffitem'..b.name] or 0)<3 then return nil,nil,incomplete,true end
   end
  end
+ return nil,nil,incomplete
 end
 -- NeedBuff may occur in many rules in the same meta tick. Reuse the plan only
 -- within that snapshot and identical options; never cache server confirmations
 -- or inventory across ticks.
 local buff_plan
 local function next_buff(s,p)
- local keys={'auto_buffs','buffs','excluded_buffs','excluded_buff_spells','item_buff_targets','buff_items','skill_margin','buff_skill_margin','refresh_seconds'}
+ local keys={'auto_buffs','buffs','excluded_buffs','excluded_buff_spells','item_buff_targets','buff_items','skill_margin','buff_skill_margin','refresh_seconds','creature_buff_level','life_buff_level','item_buff_level'}
  local same=buff_plan and buff_plan.snapshot==s
  if same then for _,k in ipairs(keys) do if buff_plan.options[k]~=p[k] then same=false;break end end end
  if not same then
@@ -377,7 +443,7 @@ meta_expression=function(e,s)
    if n~='actiontryequipanywand' then
     if type(args[1])~='number' then error('Spell expression requires numeric spell ID') end
     for _,v in ipairs(s.spells or {}) do if v.id==args[1] then spell=v;break end end
-    local eligible=spell and spell.known~=false and spell.components_known~=false and spell.skill>=spell.power+setting(n=='getcancastspell_buff' and 'buff_skill_margin' or 'skill_margin',n=='getcancastspell_buff' and 5 or 30)
+    local eligible=spell and spell.known~=false and spell.skill>=spell.power+setting(n=='getcancastspell_buff' and 'buff_skill_margin' or 'skill_margin',n=='getcancastspell_buff' and 5 or 30)
     eligible=eligible and spell_supplied(s,spell)
     if n=='getcancastspell_hunt' or n=='getcancastspell_buff' then return eligible and 1 or 0 end
     local untargeted=spell and (spell.caster_target or spell.target_type==0)
@@ -512,7 +578,7 @@ local function meta_condition(c,s,p)
  if t==8 then return (s.health or 0)<=0 end
  if t==9 then return (s.vendor or 0)~=0 end
  if t==10 then return (s.vendor or 0)==0 end
- if t==15 then local v,_,blocked,consumable=next_buff(s,p);return v~=nil or blocked==true or consumable==true end
+ if t==15 then local v,_,blocked,consumable=next_buff(s,p);return v~=nil or consumable==true end
  if t==23 then for _,e in ipairs(s.enchantments or {}) do if e.id==q.sid and e.remaining>=q.sec then return true end end;return false end
  if t==24 then return (s.burden_percent or 0)>=v end
  if t==25 then
@@ -818,6 +884,31 @@ local function rule_match(rule,item,s,scan)
  if missing then if item.identified then return false else return nil end end
  return true
 end
+local function equipment_mana(s,p,inventory,option)
+ -- Inventory mana is an item resource, not the player's mana vital.
+ if mana_refill_pending then
+  local improved=false
+  for _,v in ipairs(inventory) do local before=mana_refill_pending.before[v.id];if before and (v.mana or 0)>before then improved=true;break end end
+  if improved then mana_refill_pending=nil;item_attempts.mana_refill=0
+  elseif ((s.action_serial or 0)~=mana_refill_pending.serial and (s.action_error or 0)~=0) or s.time>=mana_refill_pending.expires then
+   mana_refill_pending=nil;until_time.mana_stone=s.time+30
+  else return result(nil,'Waiting for equipment mana refresh') end
+ end
+ if option('item_mana',true) then
+  local low=false;for _,v in ipairs(inventory) do if v.equipped and (v.max_mana or 0)>0 and pct(v.mana or 0,v.max_mana)<math.min(99,option('item_mana_threshold',20)) then low=true end end
+  if low and s.time>=(until_time.mana_stone or 0) then
+   for _,v in ipairs(inventory) do
+    local named=p.assist_items==nil;for _,a in ipairs(p.assist_items or {}) do if (a.type==6 or a.type==8) and a.name==v.name then named=true end end
+    if band(v.type,0x80000)~=0 and (v.mana or 0)>0 and (not v.workmanship or v.workmanship==0 or (v.mana or 0)>=option('mana_tank_minimum',0)) and allowed(p.consumables,v.wcid) and named then
+    if (item_attempts.mana_refill or 0)>=3 then return result('stop','Equipment mana refill failed repeatedly; check charges and item requirements') end
+    item_attempts.mana_refill=(item_attempts.mana_refill or 0)+1
+    local before={};for _,gear in ipairs(inventory) do if gear.equipped then before[gear.id]=gear.mana or 0 end end
+    mana_refill_pending={before=before,serial=s.action_serial or 0,expires=s.time+10}
+    until_time.mana_stone=s.time+30;return {action='use_item',item=v.id,status='Recharging equipment: '..v.name} end end
+  end
+ end
+end
+
 local function tick(s,p)
  if not state then state=p.initial_state or 'Default';entered=s.time end
  local hp,sp,mp=pct(s.health,s.max_health),pct(s.stamina or 0,s.max_stamina or 1),pct(s.mana,s.max_mana)
@@ -835,7 +926,7 @@ local function tick(s,p)
   combat_serial=e.serial
   if present[e.target] then
    if e.unhittable then monster_blacklist[e.target]=s.time+option('monster_blacklist_seconds',120);monster_failures[e.target]=nil
-   elseif e.hit then monster_failures[e.target]=nil
+   elseif e.hit then monster_failures[e.target]=nil;ghost_attempts[e.target]=nil;ghost_hp[e.target]={time=s.time}
    else
     local failures=(monster_failures[e.target] or 0)+1
     if failures>option('monster_attempts',4) then monster_blacklist[e.target]=s.time+option('monster_blacklist_seconds',120);monster_failures[e.target]=nil
@@ -843,6 +934,17 @@ local function tick(s,p)
    end
   end
  end end
+ -- Keep server-owned objects intact; suppress stale combat targets locally.
+ for id in pairs(ghost_attempts) do if not present[id] then ghost_attempts[id]=nil end end
+ for id in pairs(ghost_hp) do if not present[id] then ghost_hp[id]=nil end end
+ for _,t in ipairs(s.targets or {}) do
+  local h=ghost_hp[t.id]
+  if not h or (t.health_fraction and t.health_fraction~=h.health) then h={time=s.time,health=t.health_fraction};ghost_hp[t.id]=h end
+  if (option('delete_ghost_monsters',false) and (ghost_attempts[t.id] or 0)>option('ghost_spell_attempts',20))
+   or (option('delete_ghost_hp',false) and t.id==locked_target and s.time-h.time>=option('ghost_hp_seconds',600)) then
+   monster_blacklist[t.id]=s.time+option('monster_blacklist_seconds',120);ghost_attempts[t.id]=nil;h.time=s.time
+  end
+ end
  local function ring_enabled(rule) if rule and rule.ring~=nil then return rule.ring end;return option('ring',false) end
  local target,target_rule,priority=nil,nil,-1e9
  local function nearer(a,b)
@@ -876,9 +978,9 @@ local function tick(s,p)
    forced_buff.done[tostring(last_cast.target)..':'..last_cast.category]=last_cast.power;buff_plan=nil
   end
   if (s.action_error or 0)==0 and not last_cast.request then
-   local key=tostring(last_cast.target)..':'..last_cast.category;retries[key]=nil
+   local key=tostring(last_cast.target)..':'..last_cast.category;retries[key]=nil;until_time[key]=nil
   end
-  if s.action_error==0x400 then
+  if s.action_error==0x400 or (last_cast.recovery and (s.action_error or 0)~=0) then
    if last_cast.request and other_job and other_job.id==last_cast.request then
     other_job.unavailable[last_cast.id]=s.time+120
    else
@@ -911,6 +1013,42 @@ local function tick(s,p)
  for _,id in ipairs(s.trained_skills or {}) do trained[id]=true end
  for _,id in ipairs(s.usable_skills or {}) do trained[id]=true end
  local inventory=s.inventory or {}
+ -- Restock exact saved stock identities at an open vendor; never guess by GUID
+ -- across logins. Wait for server inventory replication before buying again.
+ local stock_counts
+ local function stock_count(wcid,name)
+  if not stock_counts then
+   stock_counts={};for _,v in ipairs(inventory) do if v.wcid and v.name then
+    local names=stock_counts[v.wcid] or {};stock_counts[v.wcid]=names;names[v.name]=(names[v.name] or 0)+(v.count or 1)
+   end end
+  end
+  return stock_counts[wcid] and stock_counts[wcid][name] or 0
+ end
+ if purchase_pending then
+  local q=purchase_pending
+  if stock_count(q.wcid,q.name)>=q.expected then purchase_pending=nil
+  elseif s.time>=q.deadline or (s.vendor or 0)~=q.vendor or ((s.action_serial or 0)~=q.serial and (s.action_error or 0)~=0) then
+   return result('stop','Purchase not confirmed: check currency, pack space and vendor stock')
+  else return result(nil,'Waiting for purchased '..q.name) end
+ end
+ if option('vendor_restock',false) and (s.vendor or 0)~=0 then
+  local stock={}
+  for _,v in ipairs(s.vendor_stock or {}) do if v.limit>0 then local names=stock[v.wcid] or {};stock[v.wcid]=names;names[v.name]=v end end
+  for _,r in ipairs(p.vendor_rules or {}) do
+   if r.enabled~=false and r.server==s.world_name and r.vendor_wcid==s.vendor_wcid and r.vendor_name==s.vendor_name then
+    local have=stock_count(r.item_wcid,r.item_name)
+    if have<r.quantity then
+     local v=stock[r.item_wcid] and stock[r.item_wcid][r.item_name]
+     if v then
+      local count=math.min(r.quantity-have,v.limit)
+      purchase_pending={wcid=r.item_wcid,name=r.item_name,expected=have+count,deadline=s.time+15,serial=s.action_serial or 0,vendor=s.vendor}
+      return {action='buy',vendor=s.vendor,item=v.id,count=count,status='Restocking '..r.item_name..' ('..have..' / '..r.quantity..')'}
+     end
+     return result('stop','Saved restock item is not available: '..r.item_name)
+    end
+   end
+  end
+ end
  local usable_names={};for _,v in ipairs(inventory) do if v.usable and v.name then usable_names[v.name]=v end end
  local weapon_types,weapon_ids={},{ }
  for _,v in ipairs(p.weapons or {}) do weapon_types[v]=true end
@@ -1042,6 +1180,7 @@ local function tick(s,p)
  end
  -- Confirm the vital actually improved. A failed kit or fizzle must not loop forever.
  local function split_peas(minimum)
+  if s.components_required==false then pea_pending=nil;return end
   if not pea_pending and (not option('split_peas',true) or #(p.pea_recipes or {})==0) then return end
   local counts,items={},{};for _,v in ipairs(inventory) do if not v.equipped and v.name then counts[v.name]=(counts[v.name] or 0)+(v.count or 1);items[v.name]=v end end
   if pea_pending then local q=pea_pending
@@ -1068,25 +1207,70 @@ local function tick(s,p)
  local critical_components=split_peas(option('component_critical',4));if critical_components then return critical_components end
  if recovery_pending then
   local v=recovery_pending.vital;local value=v==2 and s.health or v==4 and s.stamina or s.mana
-  local confirmed=s.action_serial~=recovery_pending.serial and (s.action_error or 0)==0
-  if confirmed and value>recovery_pending.before then item_attempts['recover'..v]=0;recovery_pending=nil
-  elseif s.time<recovery_pending.expires then return result(nil,'Waiting for recovery result')
+  local failed=s.action_serial~=recovery_pending.serial and (s.action_error or 0)~=0
+  -- Vital replication and UseDone may arrive in either order. The authoritative
+  -- vital increase is enough; do not accumulate failures across successful uses.
+  if not failed and value>recovery_pending.before then item_attempts['recover'..v]=0;recovery_pending=nil
+  elseif not failed and s.time<recovery_pending.expires then return result(nil,'Waiting for recovery result')
   else
+   -- A rejected or unconfirmed preferred method yields to the other kind.
+   -- Otherwise a bad kit could consume all retries without ever trying a heal.
+   if recovery_pending.spell then
+    unavailable_spells[recovery_pending.spell]=math.max(unavailable_spells[recovery_pending.spell] or 0,s.time+30)
+    until_time['recover_spell'..v]=s.time+15
+    catalog_snapshot=nil;by_id,spells=index_spells(s,option('skill_margin',30))
+   elseif recovery_pending.item then until_time['recover_supply'..v]=s.time+15 end
    if recovery_pending.handler then until_time[recovery_pending.handler]=s.time+15 end
    recovery_pending=nil
   end
  end
+ local recovery_missing={}
  local function recovery(vital,percent,threshold)
-  if percent>=threshold then return end
+  if percent>=threshold then item_attempts['recover'..vital]=0;return end
   if (item_attempts['recover'..vital] or 0)>=3 then return result('stop','Recovery failed repeatedly; check supplies, skill and components') end
   local function pending(handler)
    item_attempts['recover'..vital]=(item_attempts['recover'..vital] or 0)+1
    recovery_pending={vital=vital,before=vital==2 and s.health or vital==4 and s.stamina or s.mana,expires=s.time+8,serial=s.action_serial,handler=handler}
   end
+  local function can_prepare_spell()
+   if s.time<(until_time['recover_spell'..vital] or 0) then return false end
+   if not s.inventory then return true end
+   for _,item in ipairs(inventory) do
+    if band(item.type,0x8000)~=0 and (item.equipped or (item.identified and item.can_wield)) then return true end
+   end
+   return false
+  end
+  local function recover_cast(spell,handler)
+   local equipment=caster();if equipment then return equipment end
+   pending(handler);recovery_pending.spell=spell.id
+   local action=cast(s,spell,s.player,'Recovering with '..(spell.name or 'spell'));last_cast.recovery=true
+   return action
+  end
   local function named_supply(item,kind)
    if not p.assist_items then return true end
    for _,a in ipairs(p.assist_items) do if a.type==kind and a.name==item.name then return true end end
    return false
+  end
+  local function assess_supply(handlers)
+   for _,v in ipairs(inventory) do
+    local candidate=not v.identified and v.usable and not v.equipped and allowed(p.consumables,v.wcid)
+     and ((v.healing_kit and trained[21] and (v.structure or 0)>0) or band(v.type,32)~=0 or contains(p.consumables,v.wcid))
+    if candidate and handlers then
+     candidate=false
+     for _,h in ipairs(handlers) do
+      local kit=h.handler=='Kit Recharge'
+      if h.vital==vital and h.stance==(s.combat_mode==8 and 1 or 2) and (kit or h.handler=='Recharge With Food')
+       and (v.healing_kit==true)==kit and named_supply(v,vital-2+(kit and 0 or 1)) then candidate=true;break end
+     end
+    end
+    if candidate and (item_attempts['id'..v.id] or 0)<3 then return assess(v) end
+   end
+  end
+  local function source_ready(source)
+   if source==0 then return true end
+   local percent=source==2 and hp or source==4 and sp or mp
+   local reserve=source==2 and option('health_threshold',65) or source==4 and option('stamina_threshold',50) or option('mana_threshold',45)
+   return percent>math.max(source==2 and 50 or 25,reserve)
   end
   local function kit_ready(v)
    if not trained[21] or (v.structure or 0)<=0 or (vital~=4 and (s.stamina or 0)<15) then return false end
@@ -1108,19 +1292,19 @@ local function tick(s,p)
   end
   local function use_supply(best,handler)
    if best.healing_kit and option('kit_peace',false) and s.combat_mode~=1 then return {action='combat_mode',mode=1,status='Entering peace to use healing kit'} end
-   pending(handler);return {action='use_item',item=best.id,status='Recovering with '..best.name}
+   pending(handler);recovery_pending.item=best.id;return {action='use_item',item=best.id,status='Recovering with '..best.name}
   end
-  if p.recharge_handlers then
+  if p.recharge_handlers and option('use_imported_recovery_order',true) then
    local stance=s.combat_mode==8 and 1 or 2;local last
    for i,h in ipairs(p.recharge_handlers) do if h.vital==vital and h.stance==stance then last=i end end
    for i,h in ipairs(p.recharge_handlers) do
     local key='handler'..i
     if h.vital==vital and h.stance==stance and (i==last or (percent>=h.min and percent<=h.max)) and s.time>=(until_time[key] or 0) then
-     local best;local kind=h.handler
+     local best,best_rank;local kind=h.handler
      if kind=='Recharge With Food' or kind=='Kit Recharge' then
       local kit=kind=='Kit Recharge'
       for _,v in ipairs(inventory) do
-       if v.identified and v.usable and v.boost_vital==vital and (v.healing_kit==true)==kit and allowed(p.consumables,v.wcid)
+       if s.time>=(until_time['recover_supply'..vital] or 0) and (v.count or 1)>0 and v.identified and v.usable and v.boost_vital==vital and (v.healing_kit==true)==kit and allowed(p.consumables,v.wcid)
         and named_supply(v,vital-2+(kit and 0 or 1)) and (not kit or kit_ready(v))
         and ((kit and better_kit(v,best)) or (not kit and (not best or (v.boost or 0)>(best.boost or 0)))) then best=v end
       end
@@ -1131,33 +1315,55 @@ local function tick(s,p)
       local reserve=kind:sub(1,6)=='Health' and option('health_threshold',65) or kind:sub(1,7)=='Stamina' and option('stamina_threshold',50) or option('mana_threshold',45)
       if not conversion or source>(vital==2 and 10 or reserve) then
        for _,v in ipairs(spells) do
-        local regular=v.category==(vital==2 and 79 or vital==4 and 81 or 83) or v.category==(vital==2 and 257 or vital==4 and 407 or 259)
-         or (vital==6 and sp>option('stamina_threshold',50) and string.lower(v.name or ''):sub(1,15)=='stamina to mana')
-        local matches=conversion and string.lower(v.name or ''):sub(1,#kind)==string.lower(kind) or (not conversion and regular)
-        if matches and v.caster_target and (v.duration or 0)==0 and (not best or v.power>best.power) then best=v end
+        local destination,from=recovery_spell(v)
+        local regular=destination==vital and (from==0 or (vital==6 and from==4 and source_ready(from)))
+        local handler_source=kind:sub(1,6)=='Health' and 2 or kind:sub(1,7)=='Stamina' and 4 or 6
+        local matches=conversion and destination==vital and from==handler_source or (not conversion and regular)
+        local rank=not conversion and vital==6 and from==4 and 2 or 1
+        if matches and v.caster_target and (v.duration or 0)==0 and (not best or rank>best_rank or (rank==best_rank and stronger_spell(v,best))) then best=v;best_rank=rank end
        end
       end
-      if best then local equipment=caster();if equipment then return equipment end;pending(key);return cast(s,best,s.player,'Recovering with '..best.name) end
+      if best and conversion and vital==2 then
+       local healing,heal_power=0,-1
+       local amounts={['Heal Self I']=17,['Heal Self II']=25,['Heal Self III']=32,['Heal Self IV']=45,['Heal Self V']=67,['Heal Self VI']=87,["Adja's Intervention"]=115,['Incantation of Heal Self']=135}
+       for _,v in ipairs(spells) do local destination,from=recovery_spell(v);if destination==2 and from==0 and v.power>heal_power then heal_power=v.power;healing=amounts[v.name] or 10 end end
+       local multiplier=kind=='Stamina to Health' and option('stamina_health_multiplier',1) or option('mana_health_multiplier',1)
+       local source_value=kind=='Stamina to Health' and s.stamina or math.max(0,s.mana-30)
+       local ratio,cap=1.75,math.huge
+       local levels={{' I',.9,50},{' II',1,100},{' III',1.1,150},{' IV',1.2,200},{' V',1.35,math.huge},{' VI',1.5,math.huge}}
+       for _,v in ipairs(levels) do if best.name:sub(-#v[1])==v[1] then ratio=v[2];cap=v[3];break end end
+       local missing=s.max_health-s.health;local gain=math.min(missing,cap,math.floor(source_value*ratio))
+       if healing>missing or healing*multiplier>=missing or healing*multiplier>=gain then best=nil end
+      end
+      if best and can_prepare_spell() then return recover_cast(best,key) end
      end
     end
    end
+   local appraisal=assess_supply(p.recharge_handlers);if appraisal then return appraisal end
+   recovery_missing[#recovery_missing+1]=vital
    return -- An explicit handler list must not fall back to unrelated supplies.
   end
   local best
   for _,v in ipairs(inventory) do
-   if v.identified and v.usable and v.boost_vital==vital and allowed(p.consumables,v.wcid)
+   if s.time>=(until_time['recover_supply'..vital] or 0) and (v.count or 1)>0 and v.identified and v.usable and v.boost_vital==vital and allowed(p.consumables,v.wcid)
     and (not v.healing_kit or kit_ready(v))
     and (not best or (v.boost or 0)>(best.boost or 0)) then best=v end
   end
-  if best then return use_supply(best) end
-  local cat=vital==2 and 79 or vital==4 and 81 or 83
+  local supply=best;best=nil
+  if supply and option('recovery_supplies_first',false) then return use_supply(supply) end
+  local best_rank=0;local casting_available=can_prepare_spell()
   for _,v in ipairs(spells) do
-   local conversion=vital==6 and sp>math.max(25,option('stamina_threshold',50)) and string.lower(v.name or ''):sub(1,15)=='stamina to mana'
-   if v.caster_target and (v.category==cat or v.category==(vital==2 and 257 or vital==4 and 407 or 259) or conversion)
-    and (v.duration or 0)==0 and (not best or v.power>best.power) then best=v end
+   local destination,from=recovery_spell(v)
+   if destination==vital and source_ready(from) and casting_available then
+    -- VT Regular Spell uses Stamina to Mana; direct Mana Boost is fallback.
+    local rank=vital==6 and from==4 and 3 or from==0 and 2 or 1
+    if not best or rank>best_rank or (rank==best_rank and stronger_spell(v,best)) then best=v;best_rank=rank end
+   end
   end
-  if best then local equipment=caster();if equipment then return equipment end
-   pending();return cast(s,best,s.player,'Recovering with '..(best.name or 'spell')) end
+  if best then return recover_cast(best) end
+  if supply then return use_supply(supply) end
+  local appraisal=assess_supply();if appraisal then return appraisal end
+  recovery_missing[#recovery_missing+1]=vital
  end
  if option('recovery',true) then
   local action=recovery(2,hp,not target and math.max(option('idle_health_threshold',0),option('health_threshold',65)) or option('health_threshold',65))
@@ -1241,28 +1447,7 @@ local function tick(s,p)
    end
   end
  end
- -- Inventory mana is an item resource, not the player's mana vital.
- if mana_refill_pending then
-  local improved=false
-  for _,v in ipairs(inventory) do local before=mana_refill_pending.before[v.id];if before and (v.mana or 0)>before then improved=true;break end end
-  if improved then mana_refill_pending=nil;item_attempts.mana_refill=0
-  elseif ((s.action_serial or 0)~=mana_refill_pending.serial and (s.action_error or 0)~=0) or s.time>=mana_refill_pending.expires then
-   mana_refill_pending=nil;until_time.mana_stone=s.time+30
-  else return result(nil,'Waiting for equipment mana refresh') end
- end
- if option('item_mana',true) then
-  local low=false;for _,v in ipairs(inventory) do if v.equipped and (v.max_mana or 0)>0 and pct(v.mana or 0,v.max_mana)<math.min(99,option('item_mana_threshold',20)) then low=true end end
-  if low and s.time>=(until_time.mana_stone or 0) then
-   for _,v in ipairs(inventory) do
-    local named=p.assist_items==nil;for _,a in ipairs(p.assist_items or {}) do if (a.type==6 or a.type==8) and a.name==v.name then named=true end end
-    if band(v.type,0x80000)~=0 and (v.mana or 0)>0 and allowed(p.consumables,v.wcid) and named then
-    if (item_attempts.mana_refill or 0)>=3 then return result('stop','Equipment mana refill failed repeatedly; check charges and item requirements') end
-    item_attempts.mana_refill=(item_attempts.mana_refill or 0)+1
-    local before={};for _,gear in ipairs(inventory) do if gear.equipped then before[gear.id]=gear.mana or 0 end end
-    mana_refill_pending={before=before,serial=s.action_serial or 0,expires=s.time+10}
-    until_time.mana_stone=s.time+30;return {action='use_item',item=v.id,status='Recharging equipment: '..v.name} end end
-  end
- end
+ local mana_action=equipment_mana(s,p,inventory,option);if mana_action then return mana_action end
  local function buffs(refresh)
  if forced_buff or option('buffing',true) then
   -- Consumable buffs require an observed enchantment, not merely UseDone.
@@ -1279,13 +1464,18 @@ local function tick(s,p)
   local settings={};for k,val in pairs(p) do settings[k]=val end;for k,val in pairs(current) do settings[k]=val end
   if refresh then settings.refresh_seconds=refresh end
   local v,id,blocked=next_buff(s,settings)
-  if blocked then return result('stop','Buffing incomplete: restock missing components and restart') end
+  -- Missing components or rejected families must not stop the rest of a run.
   if v then
    local key=tostring(id)..':'..v.category
    if s.time<(until_time[key] or 0) then return result(nil,'Waiting for buff confirmation') end
    if mp<option('stop_mana',10) then return result('stop','Mana too low to buff; configure recovery') end
-   local equipment=caster();if equipment then return equipment end
-   if (retries[key] or 0)>=3 then return result('stop','Buff failed: '..(v.name or tostring(v.id))..'; check components, equipment and skill margin') end
+   local equipment=caster()
+   if (retries[key] or 0)>=3 or (equipment and equipment.action=='stop') then
+    buff_skips[key]=s.time+120;retries[key]=nil;until_time[key]=nil;buff_plan=nil
+    if forced_buff then forced_buff.skipped=forced_buff.skipped or {};forced_buff.skipped[key]=true end
+    return result(nil,'Skipping failed buff: '..(v.name or tostring(v.id))..'; continuing cycle')
+   end
+   if equipment then return equipment end
    retries[key]=(retries[key] or 0)+1;until_time[key]=s.time+12
    local action=cast(s,v,id,(forced_buff and 'Force Buff: ' or 'Buffing: ')..(v.name or tostring(v.id)))
    if forced_buff then last_cast.force_cycle=forced_buff;last_cast.power=v.power end
@@ -1296,9 +1486,8 @@ local function tick(s,p)
    if spell and item and (band(spell.flags,0x2000)==0 or s.in_fellowship) then
     local active,before=false,0;for _,e in ipairs(s.enchantments or {}) do if e.category==spell.category and e.power>=spell.power then before=math.max(before,e.remaining);if e.remaining>(refresh or option('refresh_seconds',60)) then active=true end end end
     local needed=forced_buff and not forced_buff.done['item'..b.name] or (not forced_buff and not active)
-    if needed then
+    if needed and (item_attempts['buffitem'..b.name] or 0)<3 then
      local key='buffitem'..b.name
-     if (item_attempts[key] or 0)>=3 then return result('stop','Consumable buff failed: '..b.name) end
      if s.time<(until_time[key] or 0) then return result(nil,'Waiting before retrying consumable buff: '..b.name) end
      item_attempts[key]=(item_attempts[key] or 0)+1
      buff_item_pending={name=b.name,category=spell.category,power=spell.power,before=before,expires=s.time+12}
@@ -1308,9 +1497,12 @@ local function tick(s,p)
   end
   meta.forcebuff=false
   if forced_buff then
+   local skipped=blocked or (forced_buff.skipped and next(forced_buff.skipped))
+   for _,b in ipairs(p.buff_items or {}) do if (item_attempts['buffitem'..b.name] or 0)>=3 then skipped=true end end
+   local status=skipped and 'Force Buff finished; unavailable or failed buffs skipped' or 'Force Buff complete'
    local request=forced_buff.request;forced_buff=nil;buff_plan=nil
-   if request~=0 then return {action='force_buff_done',request=request,status='Force Buff complete'} end
-   return result(nil,'Force Buff complete')
+   if request~=0 then return {action='force_buff_done',request=request,status=status} end
+   return result(nil,status)
   end
  end
  end
@@ -1349,7 +1541,7 @@ local function tick(s,p)
   for _,c in ipairs({152,154,156,158,160,162,164,166,168,170,172,174,195}) do wanted[c]=true end
   local best={}
   for _,v in ipairs(spells) do
-   if wanted[v.category] and v.beneficial and not v.caster_target and not v.self_buff and (v.duration or 0)>0 and s.time>=(job.unavailable[v.id] or 0)
+   if wanted[v.category] and buff_tier(v,p) and v.beneficial and not v.caster_target and not v.self_buff and (v.duration or 0)>0 and s.time>=(job.unavailable[v.id] or 0)
     and not contains(p.excluded_buffs,v.category) and (not best[v.category] or v.power>best[v.category].power) then best[v.category]=v end
   end
   local categories={};for c in pairs(wanted) do categories[#categories+1]=c end;table.sort(categories)
@@ -1501,6 +1693,11 @@ local function tick(s,p)
     -- Carried copies suppress duplicates while a new scroll waits to be read.
     if option('read_unknown_scrolls',false) and item.object_class==42 and item.scroll_can_learn and (item.spell or 0)>0 and not learned[item.spell] and not carried_scrolls[item.spell] then
      item_rules={{action='read',label='Learn unknown spell'}}
+    end
+    if band(item.type,0x80000)~=0 and (p.mana_stone_loot_count or 0)>0 then
+     for _,a in ipairs(p.assist_items or {}) do if a.type==8 and a.name==item.name then
+      item_rules={{action='keep',name=item.name,name_mode='exact',keep_up_to=p.mana_stone_loot_count,count_by_name=true,label='Mana stone supplies'}};break
+     end end
     end
     while loot_scan.rule<=#item_rules do
      local rule=item_rules[loot_scan.rule]
@@ -1823,6 +2020,7 @@ local function tick(s,p)
    end
   elseif mode=='magic' and attack then
    local equipment=caster();if equipment then return equipment end
+   ghost_attempts[target.id]=(ghost_attempts[target.id] or 0)+1
    return cast(s,attack,target.id,'Casting '..(attack.name or 'attack'))
   elseif mode=='melee' or mode=='missile' then
    local power=option('power_percent',nil)
@@ -1893,10 +2091,18 @@ local function tick(s,p)
  end
  local nav=navigate();if nav then return nav end
  local idle=idle_stance();if idle then return idle end
+ if #recovery_missing>0 then
+  local names={};for _,v in ipairs(recovery_missing) do names[#names+1]=v==2 and 'health' or v==4 and 'stamina' or 'mana' end
+  return result(nil,'Recovery unavailable for '..table.concat(names,', ')..'; check skill buffer, components, supplies and imported handlers')
+ end
  return result(nil,'Ready - waiting for enabled activities')
 end
 
 local function run(s,p)
+ if p.ucm_mana_only then
+  if s.busy or s.ready==false or s.jumping then return result(nil,'Waiting for game action') end
+  return equipment_mana(s,p,s.inventory or {},function(k,d) if p[k]==nil then return d end;return p[k] end) or result(nil,'Equipment mana ready')
+ end
  species_names=s.species_names or {}
  meta_active_profile=p
  if not meta.entered then meta_state('Default',s) end
@@ -1914,7 +2120,7 @@ local function run(s,p)
  end
  local request=s.force_buff_request or 0
  if request~=0 and (not forced_buff or forced_buff.request~=request) then
-  forced_buff={request=request,done={}};buff_plan=nil;retries={}
+  forced_buff={request=request,done={}};buff_plan=nil;retries={};buff_skips={}
   for key in pairs(until_time) do
    local text=tostring(key)
    for i=1,#text do if text:sub(i,i)==':' then until_time[key]=nil;break end end
@@ -1970,10 +2176,10 @@ return function(s,p)
   meta.pending=nil;meta.queue={};meta.forcebuff=false
   if meta.route then meta.route_changed=true end
   route_pending=nil;loot_pending=nil;recovery_pending=nil;buff_item_pending=nil
-  corpse_pending=nil;mana_refill_pending=nil;helper_pending=nil;debuff_pending=nil;debuff_scan=nil;pea_pending=nil;pet_pending=nil;dispel_pending=nil
-  last_cast=nil;unavailable_spells={};forced_buff=nil;other_job=nil
+  corpse_pending=nil;purchase_pending=nil;mana_refill_pending=nil;helper_pending=nil;debuff_pending=nil;debuff_scan=nil;pea_pending=nil;pet_pending=nil;dispel_pending=nil
+  last_cast=nil;unavailable_spells={};forced_buff=nil;buff_skips={};other_job=nil
   loot_scan={};loot_jobs={};loot_job_pending=nil;combine_pending=nil
-  retries={};until_time={};item_attempts={};corpses={};monster_failures={};monster_blacklist={}
+  retries={};until_time={};item_attempts={};corpses={};monster_failures={};monster_blacklist={};ghost_attempts={};ghost_hp={}
   follow_path={};follow_target=nil;follow_teleport=nil
  end
  buff_plan=nil

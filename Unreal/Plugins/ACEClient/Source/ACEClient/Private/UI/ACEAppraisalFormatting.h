@@ -384,6 +384,20 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
         {1024,TEXT("+1 Melee Defense")},{2048,TEXT("+1 Missile Defense")},{4096,TEXT("+1 Magic Defense")},{0x80000000u,TEXT("Phantasmal")}})
         if (Imbued & E.Key) Properties.Add(E.Value);
     if (Info.BoolProperties.FindRef(91)) Properties.Add(TEXT("Retained"));
+    // Retail ItemExamineUI::Appraisal_ShowSpecialProperties checks presence of
+    // ResistanceModifier (float 157) and ResistanceModifierType (int 263).
+    // This is independent of imbued/rending flags and the weapon's damage type.
+    if (Info.FloatProperties.Contains(157))
+    {
+        if (const int32* ResistanceType = Info.IntProperties.Find(263))
+        {
+            TArray<FString> Names;
+            for (const auto& E : {TPair<uint32,const TCHAR*>(1,TEXT("Slashing")),{2,TEXT("Piercing")},{4,TEXT("Bludgeoning")},
+                {8,TEXT("Cold")},{16,TEXT("Fire")},{32,TEXT("Acid")},{64,TEXT("Electrical")},{1024,TEXT("Nether")},{0x10000000u,TEXT("Prismatic")}})
+                if (uint32(*ResistanceType) & E.Key) Names.Add(E.Value);
+            Properties.Add(TEXT("Resistance Cleaving: ") + FString::Join(Names,TEXT("/")));
+        }
+    }
     if (Info.BoolProperties.FindRef(99)) Properties.Add(TEXT("Ivoryable"));
     if (Info.BoolProperties.FindRef(100)) Properties.Add(TEXT("Dyeable"));
     if (!Properties.IsEmpty()) AppendItemText(Text, TEXT("Properties: ") + FString::Join(Properties,TEXT(", ")), true);

@@ -96,7 +96,7 @@ J VTSettings(const J& D,TArray<FString>& Issues)
                 const FString Key=S(Row,TEXT("Setting"));const auto Value=Row->TryGetField(TEXT("Value"));
                 // Off is supported for these optional strategies; requesting
                 // them remains an import error until their runtime exists.
-                if(Value&&Value->Type==EJson::Boolean&&!Value->AsBool()&&Key.Equals(TEXT("randomhelperbuffs"),ESearchCase::IgnoreCase))continue;
+                if(Value&&Value->Type==EJson::Boolean&&!Value->AsBool()&&(Key.Equals(TEXT("randomhelperbuffs"),ESearchCase::IgnoreCase)||Key.Equals(TEXT("AutoFellowManagement"),ESearchCase::IgnoreCase)||Key.Equals(TEXT("DoJiggle"),ESearchCase::IgnoreCase)))continue;
                 if(Key.Equals(TEXT("RechargeHandlerSet"),ESearchCase::IgnoreCase))
                 {
                     if(!Value||Value->Type!=EJson::Object){Issues.Add(TEXT("Invalid recharge handler table"));continue;}

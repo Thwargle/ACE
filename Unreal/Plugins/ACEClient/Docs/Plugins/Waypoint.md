@@ -33,10 +33,12 @@ The desktop overlay hides with Alt+Z and is removed on logout.
 
 ## Map
 
-- **Pin transparent dungeon map** keeps a frameless, background-free desktop
-  overlay after closing the normal map window. It follows the player's predicted
-  position continuously and hides outside interiors. Clear Pin to use only the
-  normal window; reopen the globe window at any time to change these options.
+- **Pin map to interface** keeps a frameless desktop overlay after closing the
+  normal map window. It follows the player's predicted position and automatically
+  switches between overworld terrain and transparent dungeon/building outlines.
+  Both views share the saved position, size and visibility; existing dungeon pins
+  carry over. Each view retains its own zoom while the overlay is open. Clear Pin
+  to hide both views; reopen the globe window to change these options.
 - **Player facing up** rotates both maps with the character; off keeps north up.
 - Use the game UI's **lock/unlock icon** to lock the pinned map (click-through)
   or unlock it to drag, resize from its bottom-right corner, or zoom with the

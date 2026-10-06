@@ -208,6 +208,19 @@ namespace ACE.Server.WorldObjects
 
             var success = PhysicsObj.enter_world(location);
 
+            // A client can save feet exactly on a dungeon floor, where placement
+            // rejects the touching sphere although ordinary movement was valid.
+            // Retry players once with half a centimetre of floor clearance before
+            // login falls back to their sanctuary. Keep normal placement checks:
+            // this must not force a player into walls or require ground for drops.
+            if (!success && PhysicsObj.CurCell == null && this is Player)
+            {
+                location.ObjCellID = cell.ID;
+                location.Frame.Origin = Location.Pos + new Vector3(0, 0, 0.005f);
+                location.Frame.Orientation = Location.Rotation;
+                success = PhysicsObj.enter_world(location);
+            }
+
             if (!success || PhysicsObj.CurCell == null)
             {
                 PhysicsObj.DestroyObject();

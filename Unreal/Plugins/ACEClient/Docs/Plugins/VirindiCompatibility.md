@@ -270,6 +270,22 @@ advancing; item auras target the player rather than every carried item. Buff-oth
 requests have bounded confirmation waits and report unconfirmed families instead
 of treating them as successful. The host also stops on a lost cast acknowledgement.
 
+Self-buff order was verified against VT `eq.cs` (`BuffController`), whose
+`b()` builds Creature Enchantment Mastery, Focus, Willpower, Mana Conversion
+and Life Magic Mastery first; its cast selector consumes that list in order.
+UCM uses those family priorities for normal and forced cycles, followed by the
+other trained magic schools. Server-reported current skills determine the next
+usable tier; no predicted skill gains are substituted for network updates.
+
+Recovery ordering was checked against VT `m.cs` / `he.cs`: Regular Spell uses
+Heal Self, Revitalize Self and Stamina to Mana. UCM keeps direct Mana Boost as a
+fallback. VT `gj.cs` returns its cast state to idle on a matching completion;
+UCM now releases its fixed request delay on server UseDone, retaining busy and
+pending-action checks. UCM's automatic maintenance deliberately excludes buffs
+under five minutes; explicitly selected short buffs remain supported with a
+bounded renewal window. DAT-backed regressions cover Tusker Leap (10 seconds),
+regular Jump VIII, conversion followed by Revitalize, and mana-boost fallback.
+
 Weapon/spell choices use known requirements and resistance data. A launcher's
 elemental override is evaluated against its ammunition, not the bow's intrinsic
 piercing damage type. Unknown compatible ammunition is appraised; unavailable
@@ -446,3 +462,25 @@ untrained kit rejection, lost acknowledgements, exact named supplies, excluded
 families, item bindings, consumable confirmation, fellowship requirements,
 monster predicates and element/streak selection. The installed corpus improves
 from 80 to 137 supported conversions; the public meta corpus remains 41 of 91.
+
+## October 5: reported AunRalirea profile
+
+The local AunRalirea `.met`, `.usd` and `.utl` now convert without adapter
+issues. Its meta passes repeated sandbox ticks; this is offline validation,
+not a completed in-game quest. `/og summon on/off/true/false` converts to UCM's
+`SummonPets` option; `settings loadchar` and `lootprofile load` use the existing
+validated character/loot loaders. Original files remain unchanged.
+
+Added mana-stone loot quantities, reusable tank minimum mana, conversion-heal
+comparison multipliers, and equipment recharge while automation is stopped.
+Ghost thresholds optionally suppress stale combat targets locally rather than
+deleting server-owned world objects. Disabled AutoFellowManagement and DoJiggle
+are accepted; enabling these still requires an adapter. Unknown third-party
+commands remain errors instead of being silently skipped.
+
+The wider ImportInbox scan still finds unsupported external integrations in
+ChaseOswald (`/mt loot`), DiemosFlag (the malformed `enablenavfalse` command), and
+IBControl (Chat Helper, Virindi Window Tool, simulated keys, and other commands).
+These files are not claimed as supported. The MenhirRings full-route corpus
+fixture also fails its assumed start-point traversal; this pass does not certify
+that route. Reports and build/test logs use `ucm-vendor-adapters-*` in Saved/Logs.

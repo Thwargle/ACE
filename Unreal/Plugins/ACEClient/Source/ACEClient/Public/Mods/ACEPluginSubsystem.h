@@ -127,6 +127,7 @@ private:
     void RemoveDesktopDock();
     FString MovementOwner;
     FString FastCastOwner;
+    FString PendingSpellOwner;
     bool FastCastStarted = false;
     FString UseApproachOwner;
     uint32 ForceBuffSerial=0,ForceBuffRequest=0;
@@ -202,4 +203,10 @@ private:
     TArray<TSharedPtr<FJsonValue>> CachedSpells;
     TArray<TSharedPtr<FJsonValue>> CachedKnownSpellValues;
     uint64 CachedSpellRevision = MAX_uint64;
+    TSharedPtr<class FACEPluginVM> IdleManaVM;
+    TWeakPtr<class FACESession> IdleManaSession;
+    uint32 IdleManaProfileHash=0;
+    int32 IdleManaPlayer=0;
+    double NextIdleManaDecision=0;
+    bool IdleManaFailed=false;
 };

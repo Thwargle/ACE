@@ -48,6 +48,8 @@ namespace
     {
         luaL_checktype(L,1,LUA_TTABLE);luaL_checktype(L,2,LUA_TTABLE);luaL_checktype(L,5,LUA_TTABLE);
         const double Now=luaL_checknumber(L,3),Margin=luaL_checknumber(L,4);
+        // Only an explicit server exemption bypasses component validation.
+        const bool ComponentsRequired=lua_type(L,6)!=LUA_TBOOLEAN||lua_toboolean(L,6);
         const size_t Count=lua_rawlen(L,1),Inventory=lua_rawlen(L,2);
         if(Count>16384||Inventory>4096)return luaL_error(L,"spell index exceeds snapshot limit");
         lua_newtable(L);const int Supplies=lua_gettop(L);
@@ -73,9 +75,9 @@ namespace
             lua_rawgeti(L,1,I);const int Spell=lua_gettop(L);luaL_checktype(L,Spell,LUA_TTABLE);
             lua_getfield(L,Spell,"id");const int Id=lua_gettop(L);luaL_checktype(L,Id,LUA_TNUMBER);
             lua_pushvalue(L,Id);lua_pushvalue(L,Spell);lua_rawset(L,ById);
-            bool HasSupply=NotFalse(L,Spell,"components_known");
+            bool HasSupply=!ComponentsRequired||NotFalse(L,Spell,"components_known");
             lua_getfield(L,Spell,"scarabs");
-            if(HasSupply&&lua_istable(L,-1))
+            if(ComponentsRequired&&HasSupply&&lua_istable(L,-1))
             {
                 lua_pushnil(L);
                 while(lua_next(L,-2))
