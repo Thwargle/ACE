@@ -33,6 +33,33 @@ Combat, Recovery, Route, Loot, Rules, Metas and Profiles pages. Desktop plugin
 windows can be resized using the lower-right grip; position and size are saved.
 In VR, More â†’ Plugins / UCM opens UCM directly, with a separate management button.
 
+### UCM Micro, combat and route recovery
+
+**UCM Micro** is a compact companion window on the plugin bar and in plugin
+management. Its checkboxes control the same active UCM profile: running,
+buffing, combat, looting, navigation, vital recovery, buff requests, vendor
+restocking, metas, and peace while idle. Closing Micro does not stop UCM.
+UCM still needs its normal permissions; Micro grants no additional capabilities.
+
+In **Keyboard Layout → UI**, bind **UCM Start / Stop** to a keyboard, mouse,
+or controller button. It is unbound initially to avoid replacing an existing
+control. The binding is saved in local input settings. It is not exported to
+retail keymaps, which have no equivalent action.
+
+Combat automatically prefers the highest usable trained combat skill, then
+ranks eligible equipment, ammunition and spells for that skill against the
+target's resistances. If that loadout is unavailable, it can use the next usable
+skill. Explicit imported monster-rule weapon/mode overrides are preserved.
+Attack height uses the target's DAT selection origin, server scale and elevation.
+Advanced file profiles may retain `manual_combat` or `manual_attack_height`
+overrides; the normal interface does not require either choice.
+
+After a combat/loot detour, navigation retraces sampled positions before
+resuming its ordered route. Joining skips nearby points behind scenery or closed
+doors; ordinary route traversal still opens configured doors. Blocking allows
+bounded recovery and target avoidance, then stops if the return path cannot be
+followed. This is recorded-route following, not arbitrary dungeon pathfinding.
+
 ### Buffing and recovery
 
 Enable **Buff**, then Start. Automatic selection includes relevant known Self
@@ -191,8 +218,12 @@ bounded UCM rule system, not the full VT expression language.
 
 Named profiles contain all these settings. Save As creates a copy; Load selects
 one. Activity/range/threshold edits are live. Loading a profile or editing routes
-and state rules stops the run. Manual movement, death, logout, character changes,
-disabling and reloading stop automation. Closing its window does not stop it.
+and state rules stops the run. Manual movement overrides plugin steering without
+stopping UCM or resetting its activities. Turn Combat off and Loot on to fight
+manually with automatic looting. Steering can resume on the next plugin decision
+after manual input ends. Stop UCM through its interface, UCM Micro, the bound
+Start / Stop hotkey, or `/ucm stop`. Death, logout, character changes, disabling
+and reloading still stop automation. Closing its window does not stop it.
 Only one plugin can run at a time. Commands `/ucm start` and `/ucm stop` remain.
 
 ## Automatic vital recovery
@@ -465,6 +496,8 @@ return {action="merge", item=source, target=dest}     -- inventory; compatible o
 return {action="open_corpse", item=guid}             -- loot permission
 return {action="loot", item=guid, amount=quantity}   -- loot; current open corpse only
 return {action="close_corpse"}                       -- loot
+return {action="split_note", vendor=vendorGuid, item=guid, count=quantity} -- loot; owned trade notes only
+return {action="sell_note", vendor=vendorGuid, item=guid, count=quantity}  -- loot; confirmed whole note stack only
 return {action="use_world", item=guid}               -- navigation; selectable world object
 return {action="jump", heading=90, charge=.5, forward=1} -- navigation; ordinary jump
 ```
@@ -644,6 +677,14 @@ walk and Use points as usual. Lists match server, vendor name/class, and item
 name/class rather than temporary object IDs. They are saved with the UCM setup;
 Save/Load Loot Profile also includes them. Old loot profiles clear the supply list.
 Purchases use the regular client Buy protocol and wait for inventory confirmation.
+When pyreals are insufficient, UCM redeems accepted trade notes for the shortfall.
+Partial stacks are split first; only the confirmed new stack is sold. UCM waits
+for both removal of the notes and receipt of their pyreals before buying.
+Retained notes, notes offered in trade, and note types in this vendor's saved
+restock list are excluded. Alternate-currency purchases do not redeem notes.
+The snapshot supplies `pyreals`, `vendor_uses_pyreals`, eligible
+`vendor_trade_notes` (identity, count and unit face value), and each stock item's
+`unit_value` and `sell_rate`. These fields use the open vendor's server data.
 Failure or timeout stops restocking; inspect currency, stock and pack space
 before restarting. Inventory and stock are indexed once per decision.
 

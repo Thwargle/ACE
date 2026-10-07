@@ -37,14 +37,11 @@
     },
     {
       "key": "combat",
-      "label": "Combat mode",
+      "label": "Combat (automatic skill selection)",
       "type": "choice",
       "values": [
         "off",
-        "auto",
-        "melee",
-        "missile",
-        "magic"
+        "auto"
       ]
     },
     {

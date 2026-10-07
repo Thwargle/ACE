@@ -27,12 +27,44 @@ bool FACEUCMRestockTest::RunTest(const FString&)
     S->SetNumberField(TEXT("time"),117);Step(Relog);TestEqual(TEXT("Unconfirmed purchase stops rather than rebuying"),I->GetStringField(TEXT("action")),FString(TEXT("stop")));
     FACEPluginVM WrongServer;WrongServer.Load(Script,Error);S->SetStringField(TEXT("world_name"),TEXT("Other"));Step(WrongServer);TestFalse(TEXT("Profiles cannot buy on another server"),I->HasField(TEXT("action")));
     S->SetStringField(TEXT("world_name"),TEXT("Test"));P->SetBoolField(TEXT("vendor_restock"),false);FACEPluginVM Disabled;Disabled.Load(Script,Error);Step(Disabled);TestFalse(TEXT("Toggle disables buying"),I->HasField(TEXT("action")));
+    {
+        const auto SavedS=S,SavedP=P;
+        S=RestockJSON(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"world_name":"Test","vendor":2,"vendor_name":"Arcanist","vendor_wcid":200,"vendor_uses_pyreals":true,"pyreals":100,"action_serial":0,"inventory":[{"id":9,"wcid":300,"name":"Scarab","count":7},{"id":40,"wcid":400,"name":"Trade Note","count":10}],"vendor_stock":[{"id":3,"wcid":300,"name":"Scarab","limit":100,"unit_value":1000,"sell_rate":1.2}],"vendor_trade_notes":[{"id":40,"wcid":400,"name":"Trade Note","count":10,"unit_value":1000}]})"));
+        P=RestockJSON(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","vendor_restock":true,"vendor_rules":[{"server":"Test","vendor_name":"Arcanist","vendor_wcid":200,"item_name":"Scarab","item_wcid":300,"quantity":10}]})"));
+        FACEPluginVM Redeem;TestTrue(TEXT("Trade-note policy loads"),Redeem.Load(Script,Error));
+        Step(Redeem);TestEqual(TEXT("Partial redemption splits first"),I->GetStringField(TEXT("action")),FString(TEXT("split_note")));
+        TestEqual(TEXT("Only four notes cover the 3500 shortfall"),I->GetNumberField(TEXT("count")),4.);
+        S->SetNumberField(TEXT("time"),101);Step(Redeem);TestFalse(TEXT("No repeated split while waiting"),I->HasField(TEXT("action")));
+        auto NewNote=RestockJSON(TEXT(R"({"id":41,"wcid":400,"name":"Trade Note","count":4,"unit_value":1000})"));
+        auto Inventory=S->GetArrayField(TEXT("inventory"));Inventory[1]->AsObject()->SetNumberField(TEXT("count"),6);Inventory.Add(MakeShared<FJsonValueObject>(NewNote));S->SetArrayField(TEXT("inventory"),Inventory);
+        auto Notes=S->GetArrayField(TEXT("vendor_trade_notes"));Notes[0]->AsObject()->SetNumberField(TEXT("count"),6);Notes.Add(MakeShared<FJsonValueObject>(NewNote));S->SetArrayField(TEXT("vendor_trade_notes"),Notes);
+        Step(Redeem);TestEqual(TEXT("Sells the confirmed new stack"),I->GetNumberField(TEXT("item")),41.);TestEqual(TEXT("Confirmed split becomes redemption"),I->GetStringField(TEXT("action")),FString(TEXT("sell_note")));
+        S->SetNumberField(TEXT("pyreals"),4100);Step(Redeem);TestFalse(TEXT("Money arriving first cannot cause a duplicate sale or premature buy"),I->HasField(TEXT("action")));
+        Inventory.Pop();Notes.Pop();S->SetArrayField(TEXT("inventory"),Inventory);S->SetArrayField(TEXT("vendor_trade_notes"),Notes);
+        Step(Redeem);TestEqual(TEXT("Restocking resumes after sale replication"),I->GetStringField(TEXT("action")),FString(TEXT("buy")));TestEqual(TEXT("Original missing quantity preserved"),I->GetNumberField(TEXT("count")),3.);
+        Step(Redeem);TestFalse(TEXT("Purchase waits for inventory confirmation"),I->HasField(TEXT("action")));
+        S->SetNumberField(TEXT("pyreals"),100);S->GetArrayField(TEXT("inventory"))[1]->AsObject()->SetNumberField(TEXT("count"),1);S->GetArrayField(TEXT("vendor_trade_notes"))[0]->AsObject()->SetNumberField(TEXT("count"),1);
+        FACEPluginVM Poor;Poor.Load(Script,Error);Step(Poor);TestEqual(TEXT("Insufficient combined funds do not liquidate notes pointlessly"),I->GetStringField(TEXT("action")),FString(TEXT("stop")));
+        S->GetArrayField(TEXT("vendor_trade_notes"))[0]->AsObject()->SetNumberField(TEXT("unit_value"),5000);
+        FACEPluginVM Whole;Whole.Load(Script,Error);Step(Whole);TestEqual(TEXT("Whole note sells without splitting"),I->GetStringField(TEXT("action")),FString(TEXT("sell_note")));
+        S->SetNumberField(TEXT("vendor"),99);Step(Whole);TestFalse(TEXT("Changing vendor cancels pending redemption"),I->HasField(TEXT("action")));S->SetNumberField(TEXT("vendor"),2);
+        S->SetBoolField(TEXT("vendor_uses_pyreals"),false);FACEPluginVM Alternate;Alternate.Load(Script,Error);Step(Alternate);TestEqual(TEXT("Alternate currencies never sell notes"),I->GetStringField(TEXT("action")),FString(TEXT("buy")));
+        S->SetBoolField(TEXT("vendor_uses_pyreals"),true);FACEPluginVM Timeout;Timeout.Load(Script,Error);Step(Timeout);S->SetNumberField(TEXT("time"),120);Step(Timeout);TestEqual(TEXT("No confirmation stops instead of repeatedly selling notes"),I->GetStringField(TEXT("action")),FString(TEXT("stop")));
+        auto Rules=P->GetArrayField(TEXT("vendor_rules"));Rules.Add(MakeShared<FJsonValueObject>(RestockJSON(TEXT(R"({"server":"Test","vendor_name":"Arcanist","vendor_wcid":200,"item_name":"Trade Note","item_wcid":400,"quantity":10})"))));P->SetArrayField(TEXT("vendor_rules"),Rules);
+        FACEPluginVM Reserved;Reserved.Load(Script,Error);Step(Reserved);TestEqual(TEXT("Notes configured for restocking cannot be sold in a buy/sell loop"),I->GetStringField(TEXT("action")),FString(TEXT("stop")));
+        S=SavedS;P=SavedP;
+    }
     // Exemption bypasses supplies, not skill/known checks or server failures.
     P=RestockJSON(TEXT(R"({"buffing":true,"combat":"off","recovery":false,"buff_skill_margin":0})"));
     S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(RestockJSON(TEXT(R"({"id":99,"name":"Orb","type":32768,"equipped":true})")))});S->SetNumberField(TEXT("vendor"),0);S->SetNumberField(TEXT("combat_mode"),8);
     auto Spell=RestockJSON(TEXT(R"({"id":10,"name":"Buff","power":100,"skill":300,"category":1,"self_buff":true,"caster_target":true,"components_known":false,"scarabs":{"Scarab":1}})"));S->SetArrayField(TEXT("spells"),{MakeShared<FJsonValueObject>(Spell)});
     S->SetBoolField(TEXT("components_required"),false);FACEPluginVM Admin;Admin.Load(Script,Error);Step(Admin);TestEqual(TEXT("Admin can buff without components"),I->GetStringField(TEXT("action")),FString(TEXT("cast")));
-    S->SetBoolField(TEXT("components_required"),true);FACEPluginVM Normal;Normal.Load(Script,Error);Step(Normal);TestEqual(TEXT("Normal character still stops for components"),I->GetStringField(TEXT("action")),FString(TEXT("stop")));
+    Spell->SetBoolField(TEXT("components_known"),true);
+    S->SetBoolField(TEXT("components_required"),true);FACEPluginVM Normal;Normal.Load(Script,Error);Step(Normal);
+    FString NormalAction;I->TryGetStringField(TEXT("action"),NormalAction);
+    TestFalse(TEXT("Normal character skips casts without required components"),NormalAction==TEXT("cast"));
+    auto Supplied=S->GetArrayField(TEXT("inventory"));Supplied.Add(MakeShared<FJsonValueObject>(RestockJSON(TEXT(R"({"id":100,"name":"Scarab","count":1})"))));S->SetArrayField(TEXT("inventory"),Supplied);
+    FACEPluginVM Restocked;Restocked.Load(Script,Error);Step(Restocked);TestEqual(TEXT("Normal character can cast after restocking components"),I->GetStringField(TEXT("action")),FString(TEXT("cast")));
     TArray<FString> Issues;
     auto Command=ACEVTProfile::CompileCommand(TEXT("/og summon off"),Issues);TestEqual(TEXT("Octagram pet command has adapter"),Issues.Num(),0);
     TestEqual(TEXT("Canonical command uses UCM namespace"),Command->GetStringField(TEXT("source_command")),FString(TEXT("/ucm opt set SummonPets false")));

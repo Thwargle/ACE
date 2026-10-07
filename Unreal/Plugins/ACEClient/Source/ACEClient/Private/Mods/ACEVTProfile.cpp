@@ -32,9 +32,15 @@ struct Reader
     {double N=0;const FString S=Line();if(!LexTryParseString(N,*S)||!FMath::IsFinite(N))Error=TEXT("Invalid number");return N;}
     int32 Count(int32 Max=10000)
     {const double N=Number();if(N<0||N>Max||FMath::FloorToDouble(N)!=N){Error=TEXT("Invalid count");return 0;}return int32(N);}
-    FString Block()
+    FString Block(bool AllowFinalNewline=false)
     {
-        const int32 N=Count(4*1024*1024);if(N>Text.Len()-At){Error=TEXT("Truncated length-prefixed block");return {};}
+        const int32 N=Count(4*1024*1024);
+        // Some Classic exports lose the final CRLF in transport. Recover only
+        // that terminator on the final named policy, never a truncated rule.
+        const int32 Remaining=Text.Len()-At;
+        if(AllowFinalNewline&&N==Remaining+2&&Remaining>0&&Text[Text.Len()-1]!='\n'&&Text[Text.Len()-1]!='\r')
+        {FString S=Text.Mid(At)+TEXT("\r\n");At=Text.Len();return S;}
+        if(N>Remaining){Error=TEXT("Truncated length-prefixed block");return {};}
         FString S=Text.Mid(At,N);At+=N;return S;
     }
     J Table(int32 Depth)
@@ -96,7 +102,7 @@ J Read(const FString& Text,const FString& Extension,FString& Error)
         while(R.At<Text.Len()&&R.Error.IsEmpty())
         {
             const FString Name=R.Line();if(Name.IsEmpty()&&R.At==Text.Len())break;
-            auto E=MakeShared<FJsonObject>();E->SetStringField(TEXT("name"),Name);E->SetStringField(TEXT("body"),R.Block());Extras.Add(Obj(E));
+            auto E=MakeShared<FJsonObject>();E->SetStringField(TEXT("name"),Name);E->SetStringField(TEXT("body"),R.Block(Name==TEXT("SalvageCombine")));Extras.Add(Obj(E));
         }
         D->SetArrayField(TEXT("extras"),Extras);
     }

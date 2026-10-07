@@ -1,4 +1,5 @@
 #include "VR/ACEVRComponent.h"
+#include "ACERuntimeOptions.h"
 #include "VR/ACEVRSettings.h"
 #include "VR/ACEVRRetailSurface.h"
 #include "UI/ACEUICanvasWidget.h"
@@ -21,6 +22,7 @@ bool UACEVRComponent::ShouldShowVitalsControls() const
 
 void UACEVRComponent::UpdateWorldSelectionHighlights(AACEWorldEntityActor* Selection, AACEWorldEntityActor* Hover)
 {
+	if (ACERuntimeOptions::Get(TEXT("ObjectGlow"))<.5f) { Selection=nullptr; Hover=nullptr; }
 	if (Selection && (Selection->IsHidden() || !Selection->IsCellVisible())) Selection=nullptr;
 	if (Hover && (Hover->IsHidden() || !Hover->IsCellVisible())) Hover=nullptr;
 	for (auto Previous : {HighlightedSelection,HighlightedHover})

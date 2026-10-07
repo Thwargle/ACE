@@ -2803,7 +2803,7 @@ void UACEUIGameplayBinder::RefreshCombatPanelOverlays()
 	SetCheckbox(TEXT("AutoTarget"), bCombatAutoTarget, CombatCheckboxAutoTarget);
 	SetCheckbox(TEXT("ViewCombatTarget"), bCombatViewTarget, CombatCheckboxViewTarget);
 
-	const float DisplayPower = bCombatPowerCharging ? CombatPowerOrAccuracy : 0.f;
+	const float DisplayPower = (bCombatPowerCharging || bCombatRequestSent || bCombatRepeatActive) ? CombatPowerOrAccuracy : 0.f;
 
 	if (TSharedPtr<FACEUIElement> Meter = Manager->FindElementByName(TEXT("PowerMeter")))
 	{
@@ -2880,7 +2880,10 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 			bCombatPowerCharging = !Session->IsServerAttackInProgress()
 				&& (bCombatAttackRequestPending || (bCombatRepeatActive && bCombatAutoRepeat));
 			CombatPowerBuildStartTime = Now;
-			CombatPowerOrAccuracy = 0.f;
+			// Retail holds the requested mark through the swing, then starts a
+			// new build on AttackDone. Commence must not blank the visible bar.
+			CombatPowerOrAccuracy = Session->IsServerAttackInProgress() && !bCombatAttackRequestPending
+				? RequestedAttackPower : 0.f;
 			// ClientCombatSystem::HandleAttackDone only replaces a server repeat when
 			// the desired slider power changed. Sending every second restarted melee turns.
 			if (!bCombatMovementBlocked && bCombatPowerCharging && bCombatRepeatActive && !bCombatAttackRequestPending
@@ -2888,6 +2891,10 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 			{
 				CombatPowerOrAccuracy = RequestedAttackPower;
 				FireCombatAttack();
+				// This changes the server's queued repeat power. It is not the
+				// start of the next swing; keep displaying the current refill.
+				LastCombatEventRevision = Session->GetCombatEventRevision();
+				CombatPowerOrAccuracy = 0.f;
 			}
 		}
 		if (bCombatRepeatActive)
@@ -2910,6 +2917,8 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 	const float T = GetCombatPowerChargeDuration();
 	CombatPowerOrAccuracy = FMath::Clamp(static_cast<float>(Now-CombatPowerBuildStartTime)
 		/ FMath::Max(.05f,T),0.f,1.f);
+	if (!bCombatAttackRequestPending && bCombatRepeatActive)
+		CombatPowerOrAccuracy = FMath::Min(CombatPowerOrAccuracy, RequestedAttackPower);
 	if (bCombatAttackRequestPending && !bCombatAttackHeld
 		&& CombatPowerOrAccuracy >= ReleasedAttackPower - KINDA_SMALL_NUMBER)
 	{
@@ -2918,6 +2927,18 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 		CombatPowerOrAccuracy = ReleasedAttackPower;
 		FireCombatAttack();
 	}
+}
+
+void UACEUIGameplayBinder::ShowPluginAttack(int32 Target, uint32 Height, float Power)
+{
+	// Observe the already-sent action. Never send a second attack from the UI.
+	CombatAttackHeight = Height;
+	RequestedAttackPower = LastCombatAttackPower = CombatPowerOrAccuracy = FMath::Clamp(Power, 0.f, 1.f);
+	LastCombatAttackTarget = Target;
+	bCombatRequestSent = true;
+	bCombatRepeatActive = Client && Client->IsCharacterOptionSet(0x00); // AutoRepeatAttack
+	bCombatPowerCharging = bCombatAttackRequestPending = bCombatAttackHeld = false;
+	if (Client && Client->GetSession()) LastCombatEventRevision = Client->GetSession()->GetCombatEventRevision();
 }
 
 float UACEUIGameplayBinder::GetCombatPowerChargeDuration() const

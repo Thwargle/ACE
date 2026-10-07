@@ -177,6 +177,7 @@ void AACEWorldEntityActor::InitializeFromObject(const FACEWorldObject& Object, f
 	ItemType = Object.ItemType;
 	InitialMotionCommand = Object.InitialMotionCommand;
 	ObjectDescriptionFlags = Object.ObjectDescriptionFlags;
+	bAllowsDeadPoseInteraction = Object.AllowsDeadPoseInteraction();
 	PhysicsState = Object.PhysicsState;
 	UseRadius = Object.UseRadius;
 	bIsSelf = Object.bIsSelf;
@@ -2163,7 +2164,7 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 	if (bReceivedDeathMotion && !bIsPlayer && !bDeath) return;
 	if (bReceivedDeathMotion && bIsPlayer && !bDeath && Appearance)
 		Appearance->ClearDeathMotion();
-	bReceivedDeathMotion = bDeath && !IsCorpse();
+	bReceivedDeathMotion = bDeath && !IsCorpse() && !bAllowsDeadPoseInteraction;
 	SetActorEnableCollision(!bReceivedDeathMotion);
 	// A corpse is a separate object at the final death frame. Late Ready/locomotion
 	// updates must not turn it back into an idle creature.

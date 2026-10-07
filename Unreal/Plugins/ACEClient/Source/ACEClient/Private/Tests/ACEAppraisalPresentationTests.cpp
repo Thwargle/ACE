@@ -134,6 +134,27 @@ bool FACEAppraisalPresentationTest::RunTest(const FString&)
     TestTrue(TEXT("Received partial-appraisal properties remain visible like retail"),ACEAppraisalFormatting::ItemExaminationText(Cleaving,nullptr).Contains(TEXT("Resistance Cleaving: Bludgeoning")));
     Cleaving.IntProperties.Reset();Cleaving.FloatProperties.Reset();
     TestFalse(TEXT("Failed appraisal without properties does not invent cleaving"),ACEAppraisalFormatting::ItemExaminationText(Cleaving,nullptr).Contains(TEXT("Resistance Cleaving:")));
+    FACEAppraisalInfo Requirements; Requirements.bSuccess=true;
+    Requirements.IntProperties={{158,7},{159,0},{160,180},{270,4},{271,1},{272,200},
+        {273,9},{274,287},{275,500},{276,7},{277,0},{278,200},
+        {109,150},{115,100},{176,34},{257,5},{258,250},{259,5},{260,300}};
+    Requirements.StringProperties.Add(16,TEXT("Ancient craftsmanship.\n\nThe forgotten king's final gift."));
+    const FString AllRequirements=ACEAppraisalFormatting::ItemExaminationText(Requirements,nullptr);
+    for (const TCHAR* Line : {TEXT("Wield requires Level 180"),TEXT("Wield requires base Strength 200"),
+        TEXT("Standing with the Celestial Hand 500"),TEXT("Wield requires Level 200"),
+        TEXT("Activation requires Arcane Lore: 150"),TEXT("Activation requires Skill 34: 100"),
+        TEXT("Activation requires Focus: 250"),TEXT("Activation requires Mana: 300"),
+        TEXT("Ancient craftsmanship.\n\nThe forgotten king's final gift.")})
+        TestTrue(FString(TEXT("Shared inspection retains "))+Line,AllRequirements.Contains(Line));
+    Requirements.IntProperties.Add(172,4);Requirements.IntProperties.Add(177,2);Requirements.IntProperties.Add(178,21);
+    TestTrue(TEXT("Retail description decoration retains gem details at the bottom"),
+        ACEAppraisalFormatting::ItemExaminationText(Requirements,nullptr).Contains(TEXT(", set with 2 ")));
+    Requirements.IntProperties.Add(178,38);
+    TestTrue(TEXT("Retail gem description pluralizes rubies"),
+        ACEAppraisalFormatting::ItemExaminationText(Requirements,nullptr).Contains(TEXT(", set with 2 Rubies")));
+    Requirements.IntProperties.Add(178,24);
+    TestTrue(TEXT("Retail gem description uses pieces for uncountable materials"),
+        ACEAppraisalFormatting::ItemExaminationText(Requirements,nullptr).Contains(TEXT(", set with 2 pieces of ")));
     return !HasAnyErrors();
 }
 #endif

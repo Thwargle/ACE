@@ -484,3 +484,35 @@ IBControl (Chat Helper, Virindi Window Tool, simulated keys, and other commands)
 These files are not claimed as supported. The MenhirRings full-route corpus
 fixture also fails its assumed start-point traversal; this pass does not certify
 that route. Reports and build/test logs use `ucm-vendor-adapters-*` in Saved/Logs.
+
+
+## October 6: Phaelae and RedRatCave regression pass
+
+`PhaelaeCustom_v6.utl` contains 1,434 rules and no custom expressions. Its final
+SalvageCombine block declares 760 characters but only has 758: the final CRLF
+was omitted. Import restores only that exact missing final policy terminator.
+Truncated rule bodies and incomplete policy data remain errors. The original
+file is never modified.
+
+All requirement types used by this supplied profile convert to executable UCM
+conditions, including exact palette, buffed properties, ratings, expected
+missile damage and calculated tinkered melee targets. Tests preserve every
+original requirement, disabled rule and salvage group through UTL re-export,
+then exercise the full converted profile against matching and unmatched loot
+under the existing VM limits. The rule browser now reports active and disabled
+counts separately. Color-tolerance rules, arbitrary custom expressions and
+third-party User actions remain compatibility limitations; this result does
+not claim that every Classic profile can execute.
+
+RedRatCave's 12 imported points retain linear reversal semantics. Coverage also
+checks a combat detour at the reported 0x01D9010B coordinates, returns around an
+observed corner, nearest visible joining, and ordinary host movement at multiple
+frame rates and camera angles. This is offline regression coverage; a live
+melee run in the reported dungeon remains the acceptance check.
+
+VT references for this pass: the supplied decompilation's `f7.cs`/`bo.cs`
+(attack-height settings), and the public Classic `LootRules.cs` snapshot in
+Saved/Automation (rule IDs, exact palette behavior, comparisons and advanced
+requirements). Automatic height/skill selection and the Micro panel are UCM
+convenience features; outgoing actions still use ordinary client movement,
+equipment and targeted attack messages.

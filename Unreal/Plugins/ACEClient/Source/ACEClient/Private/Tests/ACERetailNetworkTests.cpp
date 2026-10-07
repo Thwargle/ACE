@@ -59,6 +59,30 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     SendMotion(Corpse.Guid,1,ACEMotion::DeadCommandU16);
     TestFalse(TEXT("Corpse pose does not mark its container as a dying creature"),DeathSession.WorldObjects[Corpse.Guid].bDying);
     TestEqual(TEXT("Corpse death pose preserves its selection markers"),DeathSession.SelectedObject.Guid,Corpse.Guid);
+    // Server-authored Creature weenies may intentionally pose as quest remains.
+    // These are the public properties of the supplied exports, not a WCID exception.
+    for (int32 Type : {ACEItemType::Misc, ACEItemType::Creature})
+    {
+        FACEWorldObject Reward = Corpse; Reward.Guid = 600 + Type;
+        Reward.ItemType = Type; Reward.bHasPosition = true; Reward.ItemUseable = 32;
+        Reward.ObjectDescriptionFlags = ACEObjectDescFlag::Stuck;
+        DeathSession.UpsertWorldObject(Reward); DeathSession.SelectObject(Reward.Guid);
+        for (uint16 Sequence=1; Sequence<=3; ++Sequence)
+        {
+            SendMotion(Reward.Guid,Sequence,ACEMotion::DeadCommandU16);
+            const auto& Posed = DeathSession.WorldObjects[Reward.Guid];
+            TestFalse(TEXT("Reward NPC Dead emote is not an authoritative death"),Posed.bDying);
+            TestTrue(TEXT("Repeated heartbeat Dead leaves reward selectable"),Posed.IsSelectableWorldObject());
+            TestFalse(TEXT("Reward remains is not an attack target"),Posed.IsAttackable());
+            TestEqual(TEXT("Dead emote preserves reward selection"),DeathSession.SelectedObject.Guid,Reward.Guid);
+            DeathSession.UpsertWorldObject(Posed);
+        }
+        DeathSession.bUseBusy=false; const auto Before=DeathSession.NextGameActionSequence;
+        DeathSession.SendUseItem(Reward.Guid);
+        TestEqual(TEXT("Reward use still sends the ordinary server Use action"),DeathSession.NextGameActionSequence,Before+1);
+        Reward.ItemUseable=33;
+        TestFalse(TEXT("Explicit No-use bit is not exempt from death handling"),Reward.AllowsDeadPoseInteraction());
+    }
     // Corrections from an earlier incarnation/teleport must never displace a
     // remote player, even if their independent position sequence is higher.
     FACESession PositionSession;

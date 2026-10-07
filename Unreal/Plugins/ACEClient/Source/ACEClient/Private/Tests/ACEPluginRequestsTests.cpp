@@ -117,6 +117,49 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             TestEqual(TEXT("Purchase transmits missing units"),R.ReadInt32(),3);TestEqual(TEXT("Purchase transmits stock GUID"),R.ReadUInt32(),501u);
         }
         auto HasPurchase=[&](){for(const auto& Packet:Session.CachedC2SPackets){FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.ReadUInt32()==ACEGameAction::Buy)return true;}return false;};
+        {
+            const auto SavedObjects=Session.WorldObjects;
+            ON_SCOPE_EXIT {Session.WorldObjects=SavedObjects;Session.VendorCurrencyName.Empty();Session.VendorCurrencyWeenie=0;Session.TradeSelfItems.Reset();Session.CachedC2SPackets.Reset();P->Running=true;};
+            FACEWorldObject Self;Self.Guid=Session.PlayerGuid;Self.ItemsCapacity=102;Session.WorldObjects.Add(Self.Guid,Self);
+            FACEWorldObject Note;Note.Guid=600;Note.WeenieClassId=400;Note.Name=TEXT("Trade Note");Note.ItemType=ACEItemType::PromissoryNote;
+            Note.ContainerId=Session.PlayerGuid;Note.StackSize=10;Note.MaxStackSize=100;Note.Value=10000;Session.WorldObjects.Add(Note.Guid,Note);
+            FACEWorldObject Coins;Coins.Guid=601;Coins.WeenieClassId=273;Coins.ItemType=ACEItemType::Money;Coins.ContainerId=Self.Guid;Coins.StackSize=100;Session.WorldObjects.Add(Coins.Guid,Coins);
+            auto Refresh=[&](){auto Out=MakeShared<FJsonObject>();H->ExtendSnapshot(Out);return Out;};
+            auto Money=Refresh();TestEqual(TEXT("Live restock purse counts carried pyreals"),Money->GetNumberField(TEXT("pyreals")),100.);
+            TestEqual(TEXT("Trade note redemption uses face value per unit"),Money->GetArrayField(TEXT("vendor_trade_notes"))[0]->AsObject()->GetNumberField(TEXT("unit_value")),1000.);
+            auto CountSales=[&](){int32 Count=0;for(const auto& Packet:Session.CachedC2SPackets){FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.CanRead(4)&&R.ReadUInt32()==ACEGameAction::Sell)++Count;}return Count;};
+            auto Redeem=MakeShared<FJsonObject>();Redeem->SetNumberField(TEXT("vendor"),500);Redeem->SetNumberField(TEXT("item"),600);Redeem->SetNumberField(TEXT("count"),4);
+            Session.CachedC2SPackets.Reset();H->ExecuteInventory(*P,Redeem,TEXT("split_note"));
+            TestEqual(TEXT("Partial redemption sends exactly one split"),Session.CachedC2SPackets.Num(),1);
+            for(const auto& Packet:Session.CachedC2SPackets)
+            {
+                FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);TestEqual(TEXT("Trade note split uses retail opcode"),R.ReadUInt32(),ACEGameAction::StackableSplitToContainer);
+                TestEqual(TEXT("Split identifies original stack"),R.ReadUInt32(),600u);TestEqual(TEXT("Split stays in owned pack"),R.ReadUInt32(),uint32(Self.Guid));
+                R.ReadInt32();TestEqual(TEXT("Split transmits needed quantity only"),R.ReadInt32(),4);
+            }
+            Session.CachedC2SPackets.Reset();H->ExecuteInventory(*P,Redeem,TEXT("sell_note"));
+            TestEqual(TEXT("Cannot sell an unsplit partial stack"),CountSales(),0);
+            Session.CachedC2SPackets.Reset();P->Running=true;Note.Guid=602;Note.StackSize=4;Note.Value=4000;Session.WorldObjects.Add(Note.Guid,Note);Redeem->SetNumberField(TEXT("item"),602);
+            H->ExecuteInventory(*P,Redeem,TEXT("sell_note"));TestEqual(TEXT("Confirmed note object can be redeemed"),Session.CachedC2SPackets.Num(),1);
+            for(const auto& Packet:Session.CachedC2SPackets)
+            {
+                FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);TestEqual(TEXT("Redemption uses retail Sell opcode"),R.ReadUInt32(),ACEGameAction::Sell);
+                TestEqual(TEXT("Redemption identifies current vendor"),R.ReadUInt32(),500u);TestEqual(TEXT("One note stack is sold"),R.ReadUInt32(),1u);
+                TestEqual(TEXT("Exact split quantity is sold"),R.ReadInt32(),4);TestEqual(TEXT("Only the new stack is sold"),R.ReadUInt32(),602u);
+            }
+            Session.WorldObjects[600].ObjectDescriptionFlags|=ACEObjectDescFlag::Retained;
+            Session.WorldObjects[602].ObjectDescriptionFlags|=ACEObjectDescFlag::Retained;
+            TestEqual(TEXT("Retained notes excluded immediately without appraisal refresh"),Refresh()->GetArrayField(TEXT("vendor_trade_notes")).Num(),0);
+            Session.CachedC2SPackets.Reset();H->ExecuteInventory(*P,Redeem,TEXT("sell_note"));TestEqual(TEXT("Retained note cannot be redeemed even with stale intent"),CountSales(),0);
+            Session.WorldObjects[602].ObjectDescriptionFlags=0;Session.VendorCurrencyName=TEXT("Tokens");P->Running=true;
+            H->ExecuteInventory(*P,Redeem,TEXT("sell_note"));TestEqual(TEXT("Custom currency vendor cannot redeem for restocking"),CountSales(),0);
+            Session.VendorCurrencyName.Empty();Session.VendorCurrencyWeenie=999;P->Running=true;
+            TestFalse(TEXT("Unnamed alternate currency is not pyreals"),Refresh()->GetBoolField(TEXT("vendor_uses_pyreals")));
+            H->ExecuteInventory(*P,Redeem,TEXT("sell_note"));TestEqual(TEXT("Unnamed alternate currency cannot sell notes"),CountSales(),0);
+            Session.VendorCurrencyWeenie=0;Session.TradeSelfItems.Add(602);P->Running=true;
+            TestEqual(TEXT("Notes offered in trade excluded from redemption"),Refresh()->GetArrayField(TEXT("vendor_trade_notes")).Num(),0);
+            H->ExecuteInventory(*P,Redeem,TEXT("sell_note"));TestEqual(TEXT("Stale trade-offered intent cannot sell notes"),CountSales(),0);
+        }
         Session.CachedC2SPackets.Reset();Session.VendorMerchandise[0].VendorQuantityAvailable=0;H->ExecuteInventory(*P,Buy,TEXT("buy"));
         TestTrue(TEXT("Sold-out stock cannot send a purchase"),!HasPurchase());
         P->Running=true;Session.OpenVendorGuid=0;H->ExecuteInventory(*P,Buy,TEXT("buy"));
@@ -404,6 +447,12 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             TestTrue(*FString::Printf(TEXT("%s route reaches each corner within %.1f cm at %.0f FPS, camera %.0f"),VR?TEXT("VR"):TEXT("Desktop"),Arrival,Rate,CameraYaw),FVector::Dist2D(Location,Goal)<Arrival);
         }
     }
+    H->MovementOwner=TEXT("ucm");H->MoveExpires=FPlatformTime::Seconds()+20;
+    H->LastMovePosition=Session.PlayerPosition.ToUnrealLocation();H->LastProgress=FPlatformTime::Seconds()-6;
+    const uint32 BeforeBlocked=H->MovementBlockedSerial;float BlockF=1,BlockR=1,BlockT=1;
+    H->ApplyMovement(PC,BlockF,BlockR,BlockT,false,false,false,FVector::ForwardVector);
+    TestEqual(TEXT("Blocked movement asks policy to recover"),H->MovementBlockedSerial,BeforeBlocked+1);
+    TestTrue(TEXT("Blocked movement clears drive input before recovery"),H->MovementOwner.IsEmpty()&&BlockF==0&&BlockR==0&&BlockT==0);
     H->MovementOwner.Empty();Session.PlayerPosition=OutdoorPosition;PC->UnPossess();Pawn->Destroy();PC->Destroy();
     if(FParse::Param(FCommandLine::Get(),TEXT("WaypointRender")))
     {

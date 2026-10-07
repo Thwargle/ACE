@@ -1,0 +1,9 @@
+{
+  "api": 1,
+  "id": "ucmmicro",
+  "short_name": "MICRO",
+  "name": "UCM Micro",
+  "version": "0.1.0",
+  "description": "Compact controls for the active UCM profile. Uses UCM permissions and does not run another automation instance.",
+  "permissions": []
+}

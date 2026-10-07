@@ -24,6 +24,7 @@
 #include "ACESpellTargeting.h"
 #include "HAL/PlatformProcess.h"
 #include "Components/EditableTextBox.h"
+#include "Components/CheckBox.h"
 #include "ACECharacterOptions.h"
 #include "UI/ACERetailTextBlock.h"
 #include "UI/ACEVideoSettingsWidget.h"
@@ -317,12 +318,21 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
 
     Binder->SyncOptionsPanelTab(TEXT("ConfigPage"));Draw(TEXT("RetailConfigOptions"));
     auto* Video=Cast<UACEVideoSettingsWidget>(Binder->VideoSettings);
+    auto* Glow=Video?Cast<UCheckBox>(Video->WidgetTree->FindWidget(TEXT("ObjectGlow"))):nullptr;
+    if(TestNotNull(TEXT("Graphics options exposes object glow"),Glow))
+    {
+        TestTrue(TEXT("Glow defaults checked"),Glow->IsChecked());
+        Glow->SetIsChecked(false);Video->ApplyInterfaceOptions();Video->ResetVideo();
+        TestFalse(TEXT("Glow preference survives UI reload"),Glow->IsChecked());
+        Glow->SetIsChecked(true);Video->ApplyInterfaceOptions();
+    }
     auto* ScreenshotFolder=Video?Cast<UEditableTextBox>(Video->WidgetTree->FindWidget(TEXT("ScreenshotDirectory"))):nullptr;
     if(TestNotNull(TEXT("Config exposes screenshot save folder"),ScreenshotFolder))
     {
         const FString CustomFolder=FPaths::ConvertRelativePathToFull(ArtDirectory/TEXT("Custom Screenshots"));
         ScreenshotFolder->SetText(FText::FromString(CustomFolder)); Video->ApplyInterfaceOptions(); Video->ResetVideo();
         TestEqual(TEXT("Screenshot folder applies and reloads"),ScreenshotFolder->GetText().ToString(),CustomFolder);
+        Video->SetScrollOffset(Video->GetScrollEnd()); Draw(TEXT("ScreenshotDirectory")); Video->SetScrollOffset(0);
         ScreenshotFolder->SetText(FText::GetEmpty()); Video->ApplyInterfaceOptions();
         TestEqual(TEXT("Empty setting restores default folder"),ACEScreenshotSettings::GetDirectory(),ACEScreenshotSettings::DefaultDirectory());
     }

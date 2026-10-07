@@ -45,6 +45,7 @@ public:
     TArray<TSharedPtr<FACEClientPlugin>> Plugins;
     FString Notice;
     bool Start(const FString& Id);
+    void ToggleUCM();
     void StopAll(const FString& Reason, bool PreserveMeta = false);
     void Stop(const FString& Id, const FString& Reason = TEXT("Stopped"), bool PreserveMeta = false);
     void SetEnabled(const FString& Id, bool Enabled);
@@ -69,8 +70,11 @@ public:
     bool IsPluginWindowOpen(const FString& Id) const;
     FVector2D GetPluginWindowPosition(const FString& Id, const FVector2D& Default) const;
     void SavePluginWindowPosition(const FString& Id, const FVector2D& Position);
+    bool IsPluginBarVisible() const;
+    void SetPluginBarVisible(bool Visible);
     void TogglePanel();
     TSharedRef<SWidget> MakeUCMPanel(const FString& InitialPage=FString());
+    TSharedRef<SWidget> MakeUCMMicroPanel();
     TSharedRef<SWidget> MakeWaypointPanel(bool bMap=false, bool bArrowOnly=false);
     TSharedRef<SWidget> MakeWaypointMapIcon();
     TSharedRef<SWidget> MakeWaypointDungeonOverlay();
@@ -195,6 +199,10 @@ private:
     UPROPERTY(Transient) TObjectPtr<AActor> RouteActor;
     TArray<FACEPluginRouteSegment> RouteSegments;
     int32 RoutePoint=1;
+    uint32 MovementBlockedSerial=0;
+    bool bRouteJoinRequested=true;
+    int32 RouteVisibilityOffset=0;
+    FVector RouteVisibilityOrigin=FVector::ZeroVector;
     uint32 RouteSignature=0;
     double RouteRebuiltAt=0;
     double NextRouteCheck=0;

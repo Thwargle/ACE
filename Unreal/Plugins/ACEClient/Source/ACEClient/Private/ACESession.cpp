@@ -1670,7 +1670,7 @@ void FACESession::UpsertWorldObject(const FACEWorldObject& Object, bool bForceRe
 			&& Merged.ItemType == Existing->ItemType
 			&& ((Merged.ObjectDescriptionFlags ^ Existing->ObjectDescriptionFlags)
 				& (ACEObjectDescFlag::Attackable | ACEObjectDescFlag::Vendor | ACEObjectDescFlag::Corpse)) == 0;
-		if (Existing->bDying && !Merged.bIsPlayer && bSameInstance && bSameWeenieRole)
+		if (Existing->bDying && !Merged.bIsPlayer && bSameInstance && bSameWeenieRole && !Merged.AllowsDeadPoseInteraction())
 		{
 			Merged.bDying = true;
 			Merged.InitialMotionCommand = ACEMotion::Dead;
@@ -1885,7 +1885,7 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecrea
 	Obj.DefaultScriptIntensity = Decoded.DefaultScriptIntensity;
 	Obj.InitialMotionCommand = Decoded.InitialMotionCommand;
 	Obj.InitialMotionStyle = Decoded.InitialMotionStyle;
-	Obj.bDying = !Obj.IsCorpse() && ACEMotion::NormalizeCommand(Obj.InitialMotionCommand) == ACEMotion::Dead;
+	Obj.bDying = !Obj.IsCorpse() && !Obj.AllowsDeadPoseInteraction() && ACEMotion::NormalizeCommand(Obj.InitialMotionCommand) == ACEMotion::Dead;
 	Obj.Appearance = Decoded.Appearance;
 	if (Decoded.bHasPhysicsTimestamps)
 	{
@@ -5793,6 +5793,7 @@ void FACESession::HandleApproachVendor(FACEBinaryReader& Reader)
 	VendorSellRate = 1.f;
 
 	// merchandiseItemTypes, minValue, maxValue, dealMagic, buyPrice, sellPrice, altCurrencyWcid
+	VendorCurrencyWeenie = 0;
 	if (Reader.CanRead(28))
 	{
 		VendorItemTypes = Reader.ReadUInt32();
@@ -5801,7 +5802,7 @@ void FACESession::HandleApproachVendor(FACEBinaryReader& Reader)
 		Reader.ReadUInt32(); // DealMagicalItems
 		VendorBuyRate = Reader.ReadFloat();
 		VendorSellRate = Reader.ReadFloat();
-		Reader.ReadUInt32(); // AlternateCurrency WCID
+		VendorCurrencyWeenie = Reader.ReadUInt32();
 	}
 	VendorCurrencyName.Reset(); VendorCurrencyCount = 0;
 	// altCurrencyCount
@@ -7865,7 +7866,7 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 	{
 		const bool bDeath = Motion.IsDeathMotion();
 		if (Obj->bDying && !Obj->bIsPlayer && !bDeath) return;
-		Obj->bDying = bDeath && !Obj->IsCorpse();
+		Obj->bDying = bDeath && !Obj->IsCorpse() && !Obj->AllowsDeadPoseInteraction();
 		if (bDeath)
 		{
 			Obj->InitialMotionCommand = ACEMotion::Dead;
@@ -7874,7 +7875,7 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 			Obj->bHasVelocity = false;
 			Motion.bMoving = false;
 			Motion.Forward = Motion.Strafe = Motion.Turn = Motion.ForwardUnitsPerSecond = 0.f;
-			if (!Obj->IsCorpse() && SelectedObject.Guid == Guid) SelectObject(0);
+			if (Obj->bDying && SelectedObject.Guid == Guid) SelectObject(0);
 		}
 		else if (ACEMotion::NormalizeCommand(Obj->InitialMotionCommand) == ACEMotion::Dead)
 		{

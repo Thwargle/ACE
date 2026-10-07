@@ -67,6 +67,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 {
 	friend class FACEVRProtocolTest;
 	friend class FACEPortalLifetimeTest;
+	friend class FACEDesktopHighlightTest;
 	friend class FACEPluginEquipmentTest;
 	friend class FACEPluginRequestsTest;
 	friend class FACEDeferredWorldAppearanceTest;
@@ -422,6 +423,7 @@ public:
 	float GetVendorSellRate() const { return VendorSellRate; }
 	FString GetVendorCurrencyName() const { return VendorCurrencyName; }
 	int32 GetVendorCurrencyCount() const { return VendorCurrencyCount; }
+	bool VendorUsesPyreals() const { return VendorCurrencyWeenie == 0 && VendorCurrencyName.IsEmpty(); }
 	bool CanVendorBuyItem(const FACEWorldObject& Item) const;
 
 	/** GameAction AddSpellFavorite (0x01E3) — place SpellId at BarIndex slot SlotIndex. Local bars update immediately. */
@@ -964,6 +966,7 @@ private:
 	float VendorSellRate = 1.f;
 	FString VendorCurrencyName;
 	int32 VendorCurrencyCount = 0;
+	uint32 VendorCurrencyWeenie = 0;
 	uint32 VendorItemTypes = MAX_uint32;
 	int32 VendorMinValue = -1;
 	int32 VendorMaxValue = -1;

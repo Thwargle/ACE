@@ -1594,6 +1594,36 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             }
             CombatEvent(ACEGameEvent::AttackDone);
             Gameplay->CancelCombatAttack();
+            Gameplay->ApplyCombatMode(int32(ACECombatMode::Melee));
+            Gameplay->bCombatAutoRepeat=true; Gameplay->RequestedAttackPower=.5f;
+            Gameplay->BeginCombatPowerCharge(ACEAttackHeight::Medium,true);
+            Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-2.;
+            Gameplay->ReleaseCombatPowerCharge();Gameplay->TickCombatAutoAttack(0);
+            Gameplay->TickCombatAutoAttack(0); // consume initial request
+            CombatEvent(ACEGameEvent::AttackDone);
+            Session.CachedC2SPackets.Reset();
+            Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-.25;
+            Gameplay->TickCombatAutoAttack(0);
+            TestTrue(TEXT("Repeat power correction preserves second-swing refill"),Gameplay->bCombatPowerCharging && Gameplay->CombatPowerOrAccuracy>.2f);
+            Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-.75;
+            Gameplay->TickCombatAutoAttack(0);
+            TestEqual(TEXT("Automatic refill stops at the selected midpoint"),Gameplay->CombatPowerOrAccuracy,.5f);
+            TestEqual(TEXT("Displaying repeat charge sends no extra attack"),Session.CachedC2SPackets.Num(),0);
+            CombatEvent(ACEGameEvent::CombatCommenceAttack);
+            TestEqual(TEXT("Commence holds the requested power visible during swing"),Gameplay->CombatPowerOrAccuracy,.5f);
+            Gameplay->CancelCombatAttack();
+            Session.CharacterOptions1|=1u;
+            Session.SendTargetedMeleeAttack(Target.Guid,ACEAttackHeight::Low,.25f);
+            const int32 Sent=Session.CachedC2SPackets.Num();
+            Gameplay->ShowPluginAttack(Target.Guid,ACEAttackHeight::Low,.25f);
+            TestEqual(TEXT("Plugin attack displays its actual height"),Gameplay->CombatAttackHeight,uint32(ACEAttackHeight::Low));
+            TestEqual(TEXT("Plugin attack displays its actual power marker"),Gameplay->RequestedAttackPower,.25f);
+            TestEqual(TEXT("Plugin display does not duplicate the network action"),Session.CachedC2SPackets.Num(),Sent);
+            CombatEvent(ACEGameEvent::AttackDone);
+            Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-.15;
+            Gameplay->TickCombatAutoAttack(0);
+            TestTrue(TEXT("Plugin melee repeats animate the ordinary power meter"),Gameplay->bCombatPowerCharging && Gameplay->CombatPowerOrAccuracy>.1f);
+            Gameplay->CancelCombatAttack();Gameplay->bCombatAutoRepeat=false;
             for (const int32 Mode : {int32(ACECombatMode::Missile),int32(ACECombatMode::Melee)})
             {
                 CombatEvent(ACEGameEvent::AttackDone,0x36);
@@ -2657,6 +2687,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Preview world uses the real DAT subsystem"),PreviewDat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
         auto* Controller=World->SpawnActor<AACEPlayerController>();
         Controller->Client=Client; Gameplay->PlayerController=Controller;
+        TFunction<void()> CheckKeyboardTargets=[&]
         {
             auto& Session=*Client->Session;
             const auto SavedObjects=Session.WorldObjects; const auto SavedSelection=Session.SelectedObject;
@@ -2705,6 +2736,13 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("Monster traversal wraps without visiting items"),Client->GetSelectedObject().Guid,80010);
             Controller->CycleNearbyTarget(true,-1);
             TestEqual(TEXT("Previous monster also excludes items"),Client->GetSelectedObject().Guid,80011);
+            AddObject(80013,100,false);
+            Session.WorldObjects[80013].ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
+            Controller->CycleNearbyTarget(true,1);
+            TestEqual(TEXT("Known monster can be cycled twenty meters beyond the 80m compass"),Client->GetSelectedObject().Guid,80013);
+            Controller->CycleNearbyTarget(true,-1);
+            TestEqual(TEXT("Reverse cycling returns from beyond the compass"),Client->GetSelectedObject().Guid,80011);
+            Session.WorldObjects.Remove(80013);
             Controller->CycleNearbyTarget(false,0);
             TestEqual(TEXT("Item traversal still includes doors"),Client->GetSelectedObject().Guid,80100);
             Controller->CycleNearbyTarget(false,1);
@@ -2934,7 +2972,8 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Controller->PlayerInput->FlushPressedKeys();ACEInputBindings::Reload();
             Session.WorldObjects=SavedObjects;Session.SelectedObject=SavedSelection;Session.Fellowship=SavedFellowship;Session.PlayerPosition=SavedPosition;
             Gameplay->HandleSelectionChanged(SavedSelection);Gameplay->RefreshSelectionOverlay();
-        }
+        };
+        CheckKeyboardTargets();
 		{
 			TGuardValue<TObjectPtr<UACEUIElementManager>> KeepManager(Client->UIElementManager,Manager);
 			TGuardValue<TObjectPtr<UACEUILayoutResolver>> KeepLayout(Client->UILayoutResolver,Layout);

@@ -51,6 +51,39 @@ bool FACESelectionSphereTest::RunTest(const FString&)
     auto* Dat = GI->GetSubsystem<UACEDatSubsystem>();
     if (!TestTrue(TEXT("Retail DAT opens"), Dat && Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
 
+    // Actual DAT models and public flags from the custom reward-NPC exports.
+    for (int32 Index=0; Index<2; ++Index)
+    {
+        FACEWorldObject Reward; Reward.Guid=0x71001000+Index; Reward.bHasPosition=true;
+        Reward.ItemType=Index ? ACEItemType::Creature : ACEItemType::Misc;
+        Reward.SetupId=Index ? 0x02000AAD : 0x02001B99;
+        Reward.MotionTableId=Index ? 0x09000221 : 0x09000001;
+        Reward.Scale=Index ? 1.5f : 1.2f; Reward.ItemUseable=32;
+        Reward.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
+        Reward.PhysicsState=Index ? 6294556 : 1044;
+        Reward.InitialMotionCommand=ACEMotion::Dead;
+        Reward.InitialMotionStyle=ACEMotion::StanceNonCombat;
+        auto* Entity=World->SpawnActor<AACEWorldEntityActor>(); Entity->InitializeFromObject(Reward,100,true);
+        auto* Appearance=Entity->FindComponentByClass<UACECharacterAppearanceComponent>();
+        for (int32 Pass=0; Pass<3; ++Pass)
+        {
+            FACEObjectMotionState Motion; Motion.ForwardCommand=ACEMotion::DeadCommandU16;
+            Motion.CurrentStyle=ACEMotion::StanceNonCombat; Entity->ApplyMotionState(Motion);
+            TestTrue(TEXT("Usable remains retain query collision after Dead"),Entity->GetActorEnableCollision());
+            FBox Bounds(ForceInit);
+            TestTrue(TEXT("Reward model has drawn bounds"),Appearance && Appearance->GetSelectionWorldBounds(Bounds));
+            bool Picked=false;
+            for (int32 Y=-4; Y<=4 && !Picked; ++Y) for (int32 Z=-4; Z<=4 && !Picked; ++Z)
+            {
+                const FVector P=Bounds.GetCenter()+FVector(0,Y*Bounds.GetExtent().Y/5,Z*Bounds.GetExtent().Z/5);
+                Picked=ACEVisibleObjectPick::Trace(*World,P-FVector(2000,0,0),P+FVector(2000,0,0),nullptr)==Entity
+                    && ACEVisibleObjectPick::Trace(*World,P-FVector(2000,0,0),P+FVector(2000,0,0),nullptr,nullptr,false)==Entity;
+            }
+            TestTrue(TEXT("Both desktop and VR can pick custom reward remains"),Picked);
+            Entity->InitializeFromObject(Reward,100,true);
+        }
+        Entity->Destroy();
+    }
     int32 Guid = 0x71002000;
     for (const auto& Fixture : ACECreatureFixtures::Models)
     {

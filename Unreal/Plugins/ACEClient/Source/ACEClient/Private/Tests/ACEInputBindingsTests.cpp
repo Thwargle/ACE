@@ -140,6 +140,10 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  ACEInputBindings::BeginEdit();
  const FString ExportPath=FPaths::ProjectSavedDir()/TEXT("Automation/RoundTrip.keymap");FString ExportError;
  ACEInputBindings::Set(ACEInputBindings::Action(TEXT("ToggleChat")),0,FInputChord(EKeys::F12));
+ const FKey ToggleUCM=ACEInputBindings::Action(TEXT("ToggleUCM"));
+ ACEInputBindings::Set(ToggleUCM,0,FInputChord(EKeys::F10));
+ TestTrue(TEXT("UCM action appears in keybinding UI"),ACEInputBindings::Actions().ContainsByPredicate([&](const auto& A){return A.Key==ToggleUCM;}));
+ TestTrue(TEXT("UCM start/stop accepts custom bindings"),ACEInputBindings::Get(ToggleUCM,0)==FInputChord(EKeys::F10));
  TestTrue(TEXT("Save As writes a retail-format keymap"),ACEInputBindings::ExportRetailKeymapFile(ExportPath,ExportError));
  ACEInputBindings::Defaults();
  const auto RoundTrip=ACEInputBindings::ImportRetailKeymapFile(ExportPath);

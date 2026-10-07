@@ -69,7 +69,7 @@ namespace
             if (!PluginOnly)
             {
                 Add(Label(TEXT("Client plugins"), 28));
-                Add(Label(TEXT("Enable a plugin to grant its listed actions. Start is manual each session. Manual movement stops automation. /ucm stop stops UCM; /plugins opens this panel."), 18));
+                Add(Label(TEXT("Enable a plugin to grant its listed actions. Start is manual each session. Manual movement takes priority without stopping plugins. /ucm stop stops UCM; /plugins opens this panel."), 18));
                 Add(Button(TEXT("Reload installed plugins"), [this](){ Host->Discover(); Rebuild(); }));
                 for (auto P : Host->Plugins)
                 {
@@ -90,6 +90,7 @@ namespace
             Add(SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text_Lambda([H=Host](){return FText::FromString(H.IsValid()?H->Notice:FString());}).AutoWrapText(true));
             if(P->Id==TEXT("waypoint")){Add(SNew(SBox).HeightOverride(650)[Host->MakeWaypointPanel()]);return;}
             if(P->Id==TEXT("looteditor")){Add(SNew(SBox).HeightOverride(650)[Host->MakeUCMPanel(TEXT("Standalone loot"))]);return;}
+            if(P->Id==TEXT("ucmmicro")){Add(Host->MakeUCMMicroPanel());return;}
             if(P->Id==TEXT("ucm")){Add(SNew(SBox).HeightOverride(650)[Host->MakeUCMPanel()]);return;}
             Add(Label(P->Name,26));
             Add(SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text_Lambda([P](){return FText::FromString(P->Status);}).AutoWrapText(true));
@@ -183,7 +184,7 @@ namespace
     };
 }
 
-TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId) { if(PluginId==TEXT("waypoint") || PluginId==TEXT("waypoint.map"))return MakeWaypointPanel(PluginId.EndsWith(TEXT(".map")));if(PluginId==TEXT("looteditor"))return MakeUCMPanel(TEXT("Standalone loot"));if(PluginId==TEXT("ucm"))return MakeUCMPanel();return SNew(SACEPlugins).Host(this).PluginId(PluginId); }
+TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId) { if(PluginId==TEXT("ucmmicro"))return MakeUCMMicroPanel();if(PluginId==TEXT("waypoint") || PluginId==TEXT("waypoint.map"))return MakeWaypointPanel(PluginId.EndsWith(TEXT(".map")));if(PluginId==TEXT("looteditor"))return MakeUCMPanel(TEXT("Standalone loot"));if(PluginId==TEXT("ucm"))return MakeUCMPanel();return SNew(SACEPlugins).Host(this).PluginId(PluginId); }
 void UACEPluginSubsystem::TogglePanel()
 {
     if(auto* PC=GetGameInstance()->GetFirstLocalPlayerController())if(APawn* Pawn=PC->GetPawn())

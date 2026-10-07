@@ -130,6 +130,12 @@ namespace
                         .ColorAndOpacity_Lambda([this,Name](){return Page==Name?Accent:Muted;})]];
             return Row;
         }
+        TSharedRef<SWidget> CombatToggle()
+        {
+            return SNew(SCheckBox).IsChecked_Lambda([this](){return Str(P(),TEXT("combat"),TEXT("off"))!=TEXT("off")?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+                .OnCheckStateChanged_Lambda([this](ECheckBoxState State){P()->SetStringField(TEXT("combat"),State==ECheckBoxState::Checked?TEXT("auto"):TEXT("off"));P()->SetBoolField(TEXT("manual_combat"),false);Save();})
+                [Text(TEXT("Combat (automatic skill and equipment selection)"),16)];
+        }
         TSharedRef<SWidget> Toggle(const TCHAR* Key,const FString& Caption,const FString& Help,bool Default=false)
         {
             return SNew(SCheckBox).IsChecked_Lambda([this,Key,Default](){return Bool(P(),Key,Default)?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
@@ -329,7 +335,12 @@ namespace
             Body->ClearChildren();Brushes.Empty();
             if(Page==TEXT("Overview"))
             {
-                Heading(TEXT("Your hunting setup"),TEXT("Choose activities, then Start. Each activity can be adjusted while running. Manual movement stops UCM."));
+                Heading(TEXT("Your hunting setup"),TEXT("Choose activities, then Start. Each activity can be adjusted while running. Manual movement takes priority without stopping UCM. Turn Combat off to fight manually while Loot stays on."));
+                Add(SNew(SCheckBox)
+                    .IsChecked_Lambda([this](){return Host->IsPluginBarVisible()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+                    .OnCheckStateChanged_Lambda([this](ECheckBoxState State){Host->SetPluginBarVisible(State==ECheckBoxState::Checked);})
+                    .ToolTipText(FText::FromString(TEXT("Hide or show the plugin bar. Plugins keep running. Open Settings > Game Play > Plugins / UCM to restore it. This preference applies to every profile.")))
+                    [SNew(SBox).MinDesiredHeight(32).VAlign(VAlign_Center).Padding(8,0)[Text(TEXT("Show plugin bar"),16)]]);
                 if(!Plugin->Enabled)Add(Button(TEXT("Enable UCM capabilities"),[this](){Host->SetEnabled(Plugin->Id,true);Rebuild();}));
                 Add(Toggle(TEXT("buffing"),TEXT("Buff"),TEXT("Automatically maintains relevant creature, life and item enchantments."),true));
                 ForceBuffControls();
@@ -342,7 +353,7 @@ namespace
                     if(Index==0)Add(SNew(SEditableTextBox).Text(FText::FromString(Str(P(),*Custom,TEXT("ALL")))).HintText(FText::FromString(TEXT("A acid, B bludgeon, C cold, L lightning, F fire, P pierce, S slash")))
                         .OnTextCommitted_Lambda([this,Custom](const FText& Value,ETextCommit::Type){FString Letters=Value.ToString().ToUpper();if(Letters.Len()<=7){P()->SetStringField(Custom,Letters);Save();}}));
                 }
-                Add(Text(TEXT("Combat mode"),18));Choices(TEXT("combat"),{TEXT("off"),TEXT("auto"),TEXT("melee"),TEXT("missile"),TEXT("magic")});
+                Add(CombatToggle());
                 Add(Toggle(TEXT("idle_peace"),TEXT("Peace mode when idle"),TEXT("Enter peace mode when no eligible monsters are nearby, including while following a route. Return to the configured combat mode when attacking. Buffing, recovery and looting finish first.")));
                 Add(Toggle(TEXT("recovery"),TEXT("Recover vitals"),TEXT("Use eligible spells and supplies at your health, stamina and mana thresholds."),true));
                 Add(Toggle(TEXT("navigation"),TEXT("Follow route"),TEXT("Walk recorded points and perform portal, use and jump actions.")));
@@ -413,7 +424,8 @@ namespace
             else if(Page==TEXT("Combat"))
             {
                 Heading(TEXT("Targeting & equipment"),TEXT("Auto ranks usable equipment and known attack spells against assessed resistances. Unknown resistances use neutral values; choose an element override when needed."));
-                Choices(TEXT("combat"),{TEXT("off"),TEXT("auto"),TEXT("melee"),TEXT("missile"),TEXT("magic")});
+                Add(CombatToggle());
+                Add(Text(TEXT("Automatically chooses your highest usable trained combat skill, then the best available weapon or spell. Monster-rule overrides are retained."),15,Muted));
                 Add(Toggle(TEXT("idle_peace"),TEXT("Peace mode when idle"),TEXT("Enter peace mode when no eligible monsters are nearby, including while following a route. Return to the configured combat mode when attacking. Buffing, recovery and looting finish first.")));
                 const int32 Selection=FMath::Clamp(int32(Num(P(),TEXT("target_select"),1)),1,3);
                 const TCHAR* SelectionNames[]={TEXT(""),TEXT("Distance"),TEXT("Angle"),TEXT("Angle nearby, distance farther away")};
@@ -449,9 +461,7 @@ namespace
                 const TCHAR* DebuffNames[]={TEXT(""),TEXT("Debuff one target"),TEXT("Debuff same-priority targets first"),TEXT("Debuff all targets first")};
                 Add(Button(DebuffNames[DebuffMode],[this,DebuffMode](){P()->SetNumberField(TEXT("debuff_each_first"),DebuffMode%3+1);Save();Rebuild();}));
                 Add(Toggle(TEXT("debuff_fallback"),TEXT("Allow debuff fallback"),TEXT("Continue attacking if a required debuff is unavailable or fails three times.")));
-                auto Heights=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
-                const TCHAR* HeightNames[]={TEXT("Low"),TEXT("Medium"),TEXT("High")};
-                for(int Height=1;Height<=3;++Height)Heights->AddSlot()[Button(FString(HeightNames[Height-1])+(Num(P(),TEXT("height"),2)==Height?TEXT(" •"):TEXT("")),[this,Height](){P()->SetNumberField(TEXT("height"),Height);Save();Rebuild();})];Add(Heights);
+                Add(Text(TEXT("Attack height: automatic from the target body and elevation."),15,Muted));
                 Add(Toggle(TEXT("approach"),TEXT("Approach targets"),TEXT("Move through the normal collision and networking path."),true));
                 auto Elements=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
                 const TCHAR* Names[]={TEXT("Auto"),TEXT("Slash"),TEXT("Pierce"),TEXT("Blunt"),TEXT("Fire"),TEXT("Cold"),TEXT("Acid"),TEXT("Electric"),TEXT("Nether")};

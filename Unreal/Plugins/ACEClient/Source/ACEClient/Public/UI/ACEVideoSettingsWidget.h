@@ -52,6 +52,7 @@ private:
  UPROPERTY() TObjectPtr<UComboBoxString> FrameLimit;
  UPROPERTY() TObjectPtr<UCheckBox> VSync;
  UPROPERTY() TObjectPtr<UCheckBox> ShowFrameRate;
+ UPROPERTY() TObjectPtr<UCheckBox> ObjectGlow;
  UPROPERTY() TObjectPtr<USlider> MouseTurnSpeed;
  UPROPERTY() TObjectPtr<UCheckBox> InvertMouseX;
  UPROPERTY() TObjectPtr<UCheckBox> InvertMouseY;

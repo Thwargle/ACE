@@ -1418,6 +1418,12 @@ struct ACECLIENT_API FACEWorldObject
 			|| Cmd == static_cast<int32>(ACEMotion::Off);
 	}
 	bool IsCorpse() const { return (ObjectDescriptionFlags & ACEObjectDescFlag::Corpse) != 0; }
+	/** Remote-use NPCs can deliberately hold Dead as an emote (quest remains). */
+	bool AllowsDeadPoseInteraction() const
+	{
+		return !bIsPlayer && (ItemUseable & 0x21) == 0x20
+			&& (ObjectDescriptionFlags & ACEObjectDescFlag::Attackable) == 0;
+	}
 	bool IsGameBoard() const { return (static_cast<uint32>(ItemType) & 0x80000000u) != 0; }
 	bool IsSelectableWorldObject() const
 	{

@@ -10,6 +10,7 @@ class UACEUIResourceResolver;
 namespace ACEAppraisalFormatting
 {
 FString EquipmentSetName(int32 Id);
+FString RequirementEnumName(UACEDatSubsystem* Dat, uint32 Enum, int32 Value);
 inline FString ManaStoneDetails(const FACEAppraisalInfo& Info)
 {
     // ItemExamineUI::Appraisal_ShowManaStoneInfo: property presence (including
@@ -427,10 +428,45 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
             static const TCHAR* Vitals[] = {TEXT(""),TEXT("Health"),TEXT("Health"),TEXT("Stamina"),TEXT("Stamina"),TEXT("Mana"),TEXT("Mana")};
             if (Stat > 0 && Stat < 7) Text += FString::Printf(TEXT("Wield requires %s%s %d\n"), (Type == 4 || Type == 6) ? TEXT("base ") : TEXT(""), Type < 5 ? Attributes[Stat] : Vitals[Stat], Value);
         }
+        else if (Type == 9 || Type == 10)
+        {
+            const TCHAR* Standing = Stat == 287 ? TEXT("Standing with the Celestial Hand")
+                : Stat == 288 ? TEXT("Standing with the Eldrytch Web") : Stat == 289 ? TEXT("Standing with the Radiant Blood") : TEXT("unknown quality");
+            Text += FString::Printf(TEXT("Wield requires %s %d\n"), Standing, Value);
+        }
+        else if (Type == 11 || Type == 12)
+            Text += FString::Printf(TEXT("Wield requires %s %s\n"), *RequirementEnumName(Dat, Type == 11 ? 0x10000005 : 0x10000002, Value), Type == 11 ? TEXT("type") : TEXT("race"));
     }
+    if (const int32 Heritage = Info.IntProperties.FindRef(324); Heritage)
+        Text += TEXT("Wield requires ") + RequirementEnumName(Dat, 0x10000002, Heritage) + TEXT("\n");
     if (const auto* Lore = Info.IntProperties.Find(109); Lore && *Lore > 0)
         Text += FString::Printf(TEXT("Activation requires Arcane Lore: %d\n"), *Lore);
     Int(110, TEXT("Activation requires Allegiance Rank: "));
+    if (const int32 Heritage = Info.IntProperties.FindRef(188); Heritage)
+        Text += TEXT("Activation requires ") + RequirementEnumName(Dat, 0x10000002, Heritage) + TEXT("\n");
+    // Retail Appraisal_ShowActivationRequirements also displays the independent
+    // skill, attribute and vital limits; these are not additional wield slots.
+    if (const int32 Limit = Info.IntProperties.FindRef(115); Limit > 0)
+    {
+        FString Name; uint32 Icon = 0;
+        const int32 Skill = Info.IntProperties.FindRef(176);
+        if (Dat) Dat->TryGetSkillInfo(Skill, Name, Icon);
+        if (Name.IsEmpty()) Name = FString::Printf(TEXT("Skill %d"), Skill);
+        Text += FString::Printf(TEXT("Activation requires %s: %d\n"), *Name, Limit);
+    }
+    for (uint32 Base : {257u, 259u})
+    {
+        const int32 Stat = Info.IntProperties.FindRef(Base), Limit = Info.IntProperties.FindRef(Base+1);
+        static const TCHAR* Attributes[] = {TEXT(""),TEXT("Strength"),TEXT("Endurance"),TEXT("Quickness"),TEXT("Coordination"),TEXT("Focus"),TEXT("Self")};
+        static const TCHAR* Vitals[] = {TEXT(""),TEXT("Health"),TEXT("Health"),TEXT("Stamina"),TEXT("Stamina"),TEXT("Mana"),TEXT("Mana")};
+        if (Limit > 0 && Stat > 0 && Stat < 7)
+            Text += FString::Printf(TEXT("Activation requires %s: %d\n"), Base == 257 ? Attributes[Stat] : Vitals[Stat], Limit);
+    }
+    if (Info.BoolProperties.FindRef(94))
+    {
+        const FString Owner = Info.StringProperties.FindRef(25);
+        Text += TEXT("This item can only be activated by ") + (Owner.IsEmpty() ? TEXT("the original owner") : Owner) + TEXT(".\n");
+    }
     if (const auto* ManaConv = Info.FloatProperties.Find(144))
     {
         AppendItemText(Text, FString::Printf(TEXT("Bonus to Mana Conversion: %+.0f%%."), *ManaConv*100.0), true);
@@ -501,7 +537,51 @@ inline FString ItemExaminationText(const FACEAppraisalInfo& Info,UACEDatSubsyste
     }
     const FString* Description=Info.StringProperties.Find(16);
     if(!Description || Description->IsEmpty())Description=Info.StringProperties.Find(15);
-    if(Description)AppendItemText(Body,*Description,true);
+    if(Description)
+    {
+        FString Decorated = *Description;
+        if (Description == Info.StringProperties.Find(16))
+        {
+            if (const auto* Plating = Info.StringProperties.Find(52)) Decorated = *Plating;
+            if (const int32* Decoration = Info.IntProperties.Find(172))
+            {
+                FString Prefix;
+                if ((*Decoration & 1) && Info.IntProperties.Contains(105))
+                {
+                    static const TCHAR* Quality[] = {TEXT("Unknown"),TEXT("Poorly crafted"),TEXT("Well-crafted"),TEXT("Finely crafted"),TEXT("Exquisitely crafted"),TEXT("Magnificent"),TEXT("Nearly flawless"),TEXT("Flawless"),TEXT("Utterly flawless"),TEXT("Incomparable"),TEXT("Priceless")};
+                    Prefix = FString(Quality[FMath::Clamp(Info.IntProperties[105],0,10)]) + TEXT(" ");
+                }
+                const int32 Material = Info.IntProperties.FindRef(131);
+                if (Material > 0 && Material <= 77)
+                {
+                    const FString Name = ACERetailObjectNames::GetMaterialTypeName(Material);
+                    Decorated.ReplaceInline(*Name,TEXT(""),ESearchCase::CaseSensitive);
+                    Decorated.TrimStartAndEndInline(); Prefix += Name + TEXT(" ");
+                }
+                Decorated = Prefix + Decorated;
+                const int32 Gems = Info.IntProperties.FindRef(177), GemType = Info.IntProperties.FindRef(178);
+                if ((*Decoration & 4) && Gems > 0 && GemType > 0 && GemType <= 77)
+                {
+                    FString GemName = ACERetailObjectNames::GetMaterialTypeName(GemType);
+                    if (Gems != 1)
+                    {
+                        // AppraisalSystem::InqPluralizedGemName uses material-specific grammar.
+                        switch (GemType)
+                        {
+                        case 38: GemName=TEXT("Rubies"); break;
+                        case 11: case 24: case 27: case 29: case 32: case 36:
+                        case 37: case 40: case 45: case 46: GemName=TEXT("pieces of ")+GemName; break;
+                        case 26: case 49: GemName+=TEXT("es"); break;
+                        case 28: break;
+                        default: GemName+=TEXT("s"); break;
+                        }
+                    }
+                    Decorated += FString::Printf(TEXT(", set with %d %s"),Gems,*GemName);
+                }
+            }
+        }
+        AppendItemText(Body,Decorated,true);
+    }
     return Body;
 }
 }

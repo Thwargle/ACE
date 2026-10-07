@@ -165,7 +165,7 @@ void SACEPluginDesktop::SaveOverlayLayout()
 void SACEPluginDesktop::Resize(const FString& Id,FVector2D Delta,bool Save)
 {
     if(auto* W=Windows.Find(Id))
-    {W->Size+=Delta;const double MinWidth=Id==TEXT("waypoint.dungeon")?220.:400.;W->Size.X=FMath::Clamp(W->Size.X,MinWidth,FMath::Max(MinWidth,ViewSize.X));const double MinHeight=Id==TEXT("waypoint.map")?640.:Id==TEXT("waypoint.dungeon")?220.:320.;W->Size.Y=FMath::Clamp(W->Size.Y,MinHeight,FMath::Max(MinHeight,ViewSize.Y));Layout(*W);
+    {W->Size+=Delta;const double MinWidth=Id==TEXT("ucmmicro")?240.:Id==TEXT("waypoint.dungeon")?220.:400.;W->Size.X=FMath::Clamp(W->Size.X,MinWidth,FMath::Max(MinWidth,ViewSize.X));const double MinHeight=Id==TEXT("ucmmicro")?290.:Id==TEXT("waypoint.map")?640.:Id==TEXT("waypoint.dungeon")?220.:320.;W->Size.Y=FMath::Clamp(W->Size.Y,MinHeight,FMath::Max(MinHeight,ViewSize.Y));Layout(*W);
      if(Save&&Host.IsValid())Host->SavePluginWindowPosition(Id+TEXT(".size"),W->Size);}
 }
 void SACEPluginDesktop::Raise(const FString& Id)
@@ -196,6 +196,7 @@ void SACEPluginDesktop::Toggle(const FString& Id)
     FWindow W;W.Position=Host->GetPluginWindowPosition(Id,FVector2D(84+24*(Windows.Num()-1),80+24*(Windows.Num()-1)));W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(780,700));
     const bool Arrow=Id==TEXT("waypoint.arrow");
     const bool Dungeon=Id==TEXT("waypoint.dungeon");
+    if(Id==TEXT("ucmmicro"))W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(270,360));
     if(Arrow)W.Size=FVector2D(290,225);
     if(Dungeon)W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(420,420));
     W.Widget=SNew(SPluginFrame).Title(Arrow?TEXT("Waypoint · drag when unlocked"):Id==TEXT("waypoint.map")?TEXT("Waypoint Map"):Plugin->Name)
@@ -210,6 +211,7 @@ void SACEPluginDesktop::Toggle(const FString& Id)
 void SACEPluginDesktop::Refresh()
 {
     if(!Host.IsValid())return;
+    Windows.FindChecked(BarId).Widget->SetVisibility(Host->IsPluginBarVisible()?EVisibility::Visible:EVisibility::Collapsed);
     FString Next;TSet<FString> Enabled;
     for(auto P:Host->Plugins)if(P->Enabled){Next+=P->Id+TEXT("|");Enabled.Add(P->Id);}
     if(Enabled.Contains(TEXT("waypoint")))
@@ -233,7 +235,7 @@ void SACEPluginDesktop::Refresh()
         .OnClicked_Lambda([this](){if(Host.IsValid())Host->TogglePanel();return FReply::Handled();})[Caption(TEXT("+"),18)]]];
     for(auto P:Host->Plugins)if(P->Enabled)
     {
-        FString Short;P->Manifest->TryGetStringField(TEXT("short_name"),Short);if(Short.IsEmpty())Short=P->Id.ToUpper();Short=Short.Left(4);
+        FString Short;P->Manifest->TryGetStringField(TEXT("short_name"),Short);if(Short.IsEmpty())Short=P->Id.ToUpper();Short=Short.Left(P->Id==TEXT("ucmmicro")?5:4);
         Buttons->AddSlot().AutoHeight().Padding(1)[SNew(SBox).HeightOverride(42)
             [SNew(SButton).ButtonStyle(&DockButtonStyle()).IsFocusable(false).HAlign(HAlign_Center).ContentPadding(2)
             .ToolTipText_Lambda([this,P]()
@@ -288,6 +290,16 @@ void UACEPluginSubsystem::TogglePluginWindow(const FString& Id)
 {UpdateDesktopDock();if(DesktopDock)DesktopDock->Toggle(Id);}
 bool UACEPluginSubsystem::IsPluginWindowOpen(const FString& Id) const
 {return DesktopDock&&DesktopDock->IsOpen(Id);}
+bool UACEPluginSubsystem::IsPluginBarVisible() const
+{
+    bool Visible=true;if(Settings)Settings->TryGetBoolField(TEXT("_show_plugin_bar"),Visible);return Visible;
+}
+void UACEPluginSubsystem::SetPluginBarVisible(bool Visible)
+{
+    if(!Settings)return;
+    Settings->SetBoolField(TEXT("_show_plugin_bar"),Visible);SaveSettings();
+    if(DesktopDock)DesktopDock->Refresh();
+}
 FVector2D UACEPluginSubsystem::GetPluginWindowPosition(const FString& Id,const FVector2D& Default) const
 {
     const TSharedPtr<FJsonObject>* Positions=nullptr;

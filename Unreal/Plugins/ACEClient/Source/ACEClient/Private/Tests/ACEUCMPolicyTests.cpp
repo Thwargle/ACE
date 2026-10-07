@@ -97,7 +97,7 @@ bool FACEUCMRouteJoinTest::RunTest(const FString&)
     }
     {
         FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();S->GetObjectField(TEXT("position"))->SetNumberField(TEXT("cell"),0x01430171);
-        TestEqual(TEXT("Different native dungeon does not send player to unrelated start"),Step(VM,S,P)->GetStringField(TEXT("status")),FString(TEXT("No route waypoint in this area")));
+        TestEqual(TEXT("Different native dungeon does not send player to unrelated start"),Step(VM,S,P)->GetStringField(TEXT("status")),FString(TEXT("No reachable route waypoint in this area")));
     }
     {
         FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Point=P->GetArrayField(TEXT("route"))[2]->AsObject();Point->SetStringField(TEXT("kind"),TEXT("jump"));Point->SetNumberField(TEXT("charge"),.8);

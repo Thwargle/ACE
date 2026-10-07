@@ -130,7 +130,8 @@ void LootPanel()
     RuleList->AddSlot().FillHeight(1)[SNew(SScrollBox)+SScrollBox::Slot()[Rows]];
     auto Paging=SNew(SHorizontalBox);
     Paging->AddSlot().AutoWidth()[SNew(SBox).IsEnabled(LootPage>0)[LootTool(TEXT("<"),[this](){--LootPage;Rebuild();})]];
-    Paging->AddSlot().FillWidth(1).VAlign(VAlign_Center).Padding(6,0)[Text(FString::Printf(TEXT("%d rules | %d / %d"),Visible.Num(),LootPage+1,FMath::Max(1,(Visible.Num()+49)/50)),12,Muted)];
+    int32 EnabledCount=0;for(const auto& Rule:Rules)if(Bool(Rule->AsObject(),TEXT("enabled"),true))++EnabledCount;
+    Paging->AddSlot().FillWidth(1).VAlign(VAlign_Center).Padding(6,0)[Text(FString::Printf(TEXT("%d active / %d disabled | %d matches | page %d / %d"),EnabledCount,Rules.Num()-EnabledCount,Visible.Num(),LootPage+1,FMath::Max(1,(Visible.Num()+49)/50)),12,Muted)];
     Paging->AddSlot().AutoWidth()[SNew(SBox).IsEnabled((LootPage+1)*50<Visible.Num())[LootTool(TEXT(">"),[this](){++LootPage;Rebuild();})]];
     Add(Paging);
     auto Tools=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));

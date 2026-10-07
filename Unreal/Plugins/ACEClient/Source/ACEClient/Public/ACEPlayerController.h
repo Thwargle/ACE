@@ -54,6 +54,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACECameraEdgeTest;
 	friend class FACEParticleDistanceTest;
 	friend class FACEInputBindingsTest;
+	friend class FACEDesktopHighlightTest;
 	friend class FACERetailScreenTest;
     friend class UACEUICharSelectBinder;
     friend class UACEUICharGenBinder;
@@ -62,6 +63,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 
 public:
     void SetPluginAttackPower(float Power);
+    void ShowPluginAttack(int32 Target, uint32 Height, float Power);
 	AACEPlayerController();
 	int32 FindNearbyTarget(bool bEnemies, int32 Direction = 0, int32 ExcludeGuid = 0) const;
 	bool IsVRActive() const;
@@ -467,6 +469,9 @@ protected:
 	void ApplyInWorldInputMode();
 	void PollObjectClick();
 	void PollObjectHover();
+	AACEWorldEntityActor* PickWorldPointer(bool& bHitSelf) const;
+	void UpdateDesktopHighlights(bool bEnabled);
+	TWeakObjectPtr<AACEWorldEntityActor> DesktopHover, DesktopHighlightSelection, DesktopHighlightHover;
 	/** True when the cursor is over interactive UMG (inventory, hotbar, panels) — skip world pick. */
 	bool IsMouseOverBlockingUI() const;
 	void EnsureHoverTooltipWidget();

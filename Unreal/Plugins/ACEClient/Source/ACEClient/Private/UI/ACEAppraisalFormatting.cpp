@@ -1,5 +1,19 @@
 #include "ACEAppraisalFormatting.h"
 #include "UI/ACEUIResourceResolver.h"
+
+FString ACEAppraisalFormatting::RequirementEnumName(UACEDatSubsystem* Dat, uint32 Enum, int32 Value)
+{
+    if (Dat)
+    {
+        auto* Resources = NewObject<UACEUIResourceResolver>();
+        Resources->Initialize(Dat);
+        FString Name = Resources->ResolveEnumString(Enum, Value);
+        Resources->Shutdown();
+        Name.ReplaceInline(TEXT("_"),TEXT(" "));
+        if (!Name.IsEmpty()) return Name;
+    }
+    return FString::FromInt(Value);
+}
 namespace ACEAppraisalFormatting::Titles
 {
 #include "Protocol/ACECharacterTitleNames.inl"

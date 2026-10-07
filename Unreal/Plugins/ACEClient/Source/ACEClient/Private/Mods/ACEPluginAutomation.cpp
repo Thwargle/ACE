@@ -3,6 +3,7 @@
 #include "ACEDatSubsystem.h"
 #include "ACEPlayerController.h"
 #include "ACEInventoryRules.h"
+#include "ACEVendorPricing.h"
 #include "ACEVTObjectClass.h"
 #include "ACESession.h"
 #include "ACEOpcodes.h"
@@ -10,6 +11,7 @@
 #include "Engine/World.h"
 #include "ProceduralMeshComponent.h"
 #include "Mods/ACEPluginSight.h"
+#include "Mods/ACEPluginCombat.h"
 #include "UI/ACERetailObjectNames.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
@@ -280,6 +282,8 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
     Out->SetNumberField(TEXT("selected"),uint32(C->GetSelectedObject().Guid));Out->SetNumberField(TEXT("vendor"),uint32(C->GetOpenVendorGuid()));
     FACEWorldObject Vendor;
     TArray<TSharedPtr<FJsonValue>> Stock;
+    TArray<TSharedPtr<FJsonValue>> Notes;
+    int64 Pyreals=0;
     if(C->GetOpenVendorGuid()&&C->GetWorldObject(C->GetOpenVendorGuid(),Vendor))
     {
         Out->SetStringField(TEXT("vendor_name"),Vendor.Name);Out->SetNumberField(TEXT("vendor_wcid"),Vendor.WeenieClassId);
@@ -287,10 +291,30 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         {
             auto J=MakeShared<FJsonObject>();J->SetNumberField(TEXT("id"),uint32(Item.Guid));J->SetNumberField(TEXT("wcid"),Item.WeenieClassId);
             J->SetStringField(TEXT("name"),ACERetailObjectNames::Name(Item));J->SetNumberField(TEXT("limit"),ACEInventoryRules::VendorPurchaseLimit(Item));
+            J->SetNumberField(TEXT("unit_value"),FMath::Max(0,Item.Value)/FMath::Max(1,Item.StackSize));
+            J->SetNumberField(TEXT("sell_rate"),Item.ItemType==ACEItemType::PromissoryNote?1.15:double(C->GetVendorSellRate()));
             Stock.Add(MakeShared<FJsonValueObject>(J));
+        }
+        // Use live ownership/retained/trade flags here, not the appraisal cache.
+        for(const auto& Pair:Session->GetWorldObjects())
+        {
+            const auto& Item=Pair.Value;
+            if(!C->IsOwnedInventoryItem(Item))continue;
+            if(Item.WeenieClassId==273)Pyreals+=FMath::Max(1,Item.StackSize);
+            if(Item.ItemType!=ACEItemType::PromissoryNote || Item.Value<=0
+                || !LootItemAvailable(C,Item) || !Session->CanVendorBuyItem(Item))continue;
+            const int32 UnitValue=Item.Value/FMath::Max(1,Item.StackSize);
+            if(UnitValue<=0)continue;
+            auto J=MakeShared<FJsonObject>();J->SetNumberField(TEXT("id"),uint32(Item.Guid));
+            J->SetNumberField(TEXT("wcid"),Item.WeenieClassId);J->SetStringField(TEXT("name"),ACERetailObjectNames::Name(Item));
+            J->SetNumberField(TEXT("count"),FMath::Max(1,Item.StackSize));J->SetNumberField(TEXT("unit_value"),ACEVendorPricing::VendorBuyPayout(Item,1,C->GetVendorBuyRate()));
+            Notes.Add(MakeShared<FJsonValueObject>(J));
         }
     }
     Out->SetArrayField(TEXT("vendor_stock"),Stock);
+    Out->SetArrayField(TEXT("vendor_trade_notes"),Notes);
+    Out->SetBoolField(TEXT("vendor_uses_pyreals"),Session->VendorUsesPyreals());
+    Out->SetNumberField(TEXT("pyreals"),double(Pyreals));
     int32 Encumbrance=0;Session->TryGetPlayerEncumbrance(Encumbrance);
     Out->SetNumberField(TEXT("burden_percent"),100.*FMath::Max(0,Encumbrance)/(FMath::Max(1,V.GetBuffedStrength())*(150.+30.*FMath::Clamp(V.CarryingCapacityAugs,0,5))));Out->SetNumberField(TEXT("level"),V.Level);
     auto CharStrings=MakeShared<FJsonObject>();for(const auto& Pair:V.QualityStrings)CharStrings->SetStringField(FString::FromInt(Pair.Key),Pair.Value);FACEWorldObject PlayerObject;
@@ -481,6 +505,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         if(Monster)
         {
             const FVector Delta=Obj.Position.ToUnrealLocation()-P.ToUnrealLocation();
+            J->SetNumberField(TEXT("attack_height"),ACEPluginCombat::AttackHeight(*Dat,Obj,P));
             J->SetNumberField(TEXT("angle"),FMath::Abs(FMath::FindDeltaAngleDegrees(N(Out,TEXT("heading")),double(Delta.Rotation().Yaw))));
             if(C->GetSelectedObject().Guid==Obj.Guid&&C->GetSelectedObject().bShowHealth&&C->GetSelectedObject().HealthFraction<=0)continue;
             if(C->GetSelectedObject().Guid==Obj.Guid&&C->GetSelectedObject().bShowHealth)J->SetNumberField(TEXT("health_fraction"),C->GetSelectedObject().HealthFraction);
@@ -544,6 +569,38 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
         FACEPluginSightQuery Sight(*World,PC?PC->GetPawn():nullptr);
         const FVector Eye=P.ToUnrealLocation()+FVector(0,0,120);
+        Out->SetNumberField(TEXT("movement_blocked_serial"),MovementBlockedSerial);
+        if(auto UCM=Find(TEXT("ucm"));UCM&&UCM->Running&&bRouteJoinRequested)
+        {
+            const TArray<TSharedPtr<FJsonValue>>* Route=nullptr;
+            if((RuntimeRoute?RuntimeRoute:UCM->Profile)->TryGetArrayField(TEXT("route"),Route))
+            {
+                auto Visible=MakeShared<FJsonObject>();
+                TArray<TPair<double,int32>> Nearest;
+                for(int32 Index=0;Index<Route->Num();++Index)
+                {
+                    const auto Point=(*Route)[Index]->AsObject();FACEPosition Dest;
+                    bool Legacy=false,WalkFirst=false;Point->TryGetBoolField(TEXT("legacy"),Legacy);Point->TryGetBoolField(TEXT("walk_first"),WalkFirst);
+                    if(Legacy&&!WalkFirst)continue;
+                    Dest.CellId=int32(uint32(N(Point,TEXT("cell"))));Dest.Location=FVector(N(Point,TEXT("x")),N(Point,TEXT("y")),N(Point,TEXT("z")));
+                    Visible->SetBoolField(FString::FromInt(Index+1),false);
+                    Nearest.Emplace(FVector::DistSquared(P.ToUnrealLocation(),Dest.ToUnrealLocation()),Index);
+                }
+                Nearest.Sort([](const auto& A,const auto& B){return A.Key<B.Key;});
+                if(RouteVisibilityOffset>=Nearest.Num()||FVector::DistSquared(RouteVisibilityOrigin,P.ToUnrealLocation())>2500)RouteVisibilityOffset=0;
+                RouteVisibilityOrigin=P.ToUnrealLocation();
+                const int32 ScanEnd=FMath::Min(RouteVisibilityOffset+16,Nearest.Num());
+                for(int32 I=RouteVisibilityOffset;I<ScanEnd;++I)
+                {
+                    const int32 Index=Nearest[I].Value;const auto Point=(*Route)[Index]->AsObject();FACEPosition Dest;
+                    Dest.CellId=int32(uint32(N(Point,TEXT("cell"))));Dest.Location=FVector(N(Point,TEXT("x")),N(Point,TEXT("y")),N(Point,TEXT("z")));
+                    const FVector End=Dest.ToUnrealLocation()+FVector(0,0,60);
+                    Visible->SetBoolField(FString::FromInt(Index+1),Sight.Clear(P.ToUnrealLocation()+FVector(0,0,60),End));
+                }
+                RouteVisibilityOffset=ScanEnd;
+                Out->SetObjectField(TEXT("route_visible"),Visible);
+            }
+        }
         for(const auto& Value:Members)
         {
             const auto J=Value->AsObject();FACEWorldObject Obj;
@@ -580,6 +637,30 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();const double Now=FPlatformTime::Seconds();
     const double Raw=N(I,TEXT("item"));const int32 Id=Raw>0&&Raw<=MAX_uint32&&FMath::FloorToDouble(Raw)==Raw?int32(uint32(Raw)):0;
     FACEWorldObject Item;const bool Found=C->GetWorldObject(Id,Item),Owned=Found&&C->IsOwnedInventoryItem(Item);
+    if(Action==TEXT("split_note")||Action==TEXT("sell_note"))
+    {
+        auto Session=C->GetSession();const int32 Vendor=C->GetOpenVendorGuid();const double Amount=N(I,TEXT("count"));
+        if(!Session||!Vendor||N(I,TEXT("vendor"))!=uint32(Vendor)||!Session->VendorUsesPyreals()
+            || !Owned||!LootItemAvailable(C,Item)||Item.ItemType!=ACEItemType::PromissoryNote||Item.Value<=0
+            || !Session->CanVendorBuyItem(Item)||Amount<1||Amount>FMath::Max(1,Item.StackSize)||FMath::FloorToDouble(Amount)!=Amount)
+        {Stop(P.Id,TEXT("Trade note or vendor changed; restocking stopped"));return true;}
+        if(Action==TEXT("sell_note"))
+        {
+            if(Amount!=FMath::Max(1,Item.StackSize)){Stop(P.Id,TEXT("Trade note split is not confirmed; nothing sold"));return true;}
+            C->SendSellItems(Vendor,{{int32(Amount),Id}});return true;
+        }
+        if(Amount>=FMath::Max(1,Item.StackSize)){Stop(P.Id,TEXT("Trade note stack changed; nothing split"));return true;}
+        int32 Destination=0;
+        auto TryPack=[&](int32 PackId)
+        {
+            FACEWorldObject Pack;if(Destination||!C->GetWorldObject(PackId,Pack))return;
+            const int32 Capacity=Pack.ItemsCapacity>0?Pack.ItemsCapacity:(PackId==C->GetPlayerGuid()?102:0);
+            if(Capacity>C->GetPackItems(PackId).Num())Destination=PackId;
+        };
+        TryPack(Item.ContainerId);TryPack(C->GetPlayerGuid());for(const auto& Pack:C->GetPlayerPacks())TryPack(Pack.Guid);
+        if(!Destination){Stop(P.Id,TEXT("Free an inventory slot to split trade notes for restocking"));return true;}
+        C->SendStackableSplitToContainer(Id,Destination,0,int32(Amount));return true;
+    }
     if(Action==TEXT("buy"))
     {
         const int32 Vendor=C->GetOpenVendorGuid();const double Amount=N(I,TEXT("count"));

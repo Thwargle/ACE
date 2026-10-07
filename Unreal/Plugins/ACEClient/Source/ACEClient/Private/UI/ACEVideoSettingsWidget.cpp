@@ -115,6 +115,9 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  Row(TEXT("Cursor size"),CursorScale);
  CursorScaleLabel=Label(TEXT("100%")); CursorScaleLabel->SetJustification(ETextJustify::Right); Box->AddChild(Fixed(CursorScaleLabel,250,14));
  UACEHoverTooltipWidget::SetWidgetTooltip(CursorScale, FText::FromString(TEXT("50% to 300% in 25% steps. Previews and saves immediately, including move, resize, and targeting pointers.")));
+ ObjectGlow=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("ObjectGlow"));
+ ObjectGlow->SetWidgetStyle(RoundToggle); ObjectGlow->SetContent(Label(TEXT("Highlight selected and hovered objects"))); Box->AddChild(Fixed(ObjectGlow,272,20));
+ UACEHoverTooltipWidget::SetWidgetTooltip(ObjectGlow,FText::FromString(TEXT("Glow on selected objects and pointer targets, including the center of view during mouse look. Left-click selects; double-click interacts. Applies to desktop and VR.")));
  ShowFrameRate=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("ShowFrameRate"));
  ShowFrameRate->SetWidgetStyle(RoundToggle);ShowFrameRate->SetContent(Label(TEXT("Show FPS overlay")));Box->AddChild(Fixed(ShowFrameRate,272,20));
  Resolution=Combo(TEXT("Resolution"));
@@ -170,11 +173,15 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  Box->AddChild(Fixed(Label(TEXT("Save screenshots to:")),272,18));
  ScreenshotDirectory=WidgetTree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass(),TEXT("ScreenshotDirectory"));
  auto ScreenshotStyle=ScreenshotDirectory->GetWidgetStyle();
- ScreenshotStyle.SetTextStyle(FTextBlockStyle(ScreenshotStyle.TextStyle).SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),9)));
+ ScreenshotStyle.SetTextStyle(FTextBlockStyle(ScreenshotStyle.TextStyle).SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),11)).SetColorAndOpacity(FLinearColor::White));
+ ScreenshotStyle.SetForegroundColor(FLinearColor::White).SetFocusedForegroundColor(FLinearColor::White)
+  .SetBackgroundColor(FLinearColor(.025f,.035f,.05f,1.f)).SetPadding(FMargin(6,4));
+ FSlateBrush PathBackground; PathBackground.DrawAs=ESlateBrushDrawType::Box; PathBackground.TintColor=FLinearColor::White;
+ ScreenshotStyle.SetBackgroundImageNormal(PathBackground).SetBackgroundImageHovered(PathBackground).SetBackgroundImageFocused(PathBackground);
  ScreenshotDirectory->SetWidgetStyle(ScreenshotStyle);
  ScreenshotDirectory->SetHintText(FText::FromString(ACEScreenshotSettings::DefaultDirectory()));
  UACEHoverTooltipWidget::SetWidgetTooltip(ScreenshotDirectory, FText::FromString(TEXT("Screenshot folder. Leave blank to use the default. Use Apply to save changes.")));
- Box->AddChild(Fixed(ScreenshotDirectory,272,26));
+ Box->AddChild(Fixed(ScreenshotDirectory,272,32));
  ResetVideo();
  return Super::RebuildWidget();
 }
@@ -202,6 +209,7 @@ void UACEVideoSettingsWidget::ResetVideo()
  DesktopScale->SetSelectedIndex(FMath::RoundToInt((ACERuntimeOptions::Get(TEXT("DesktopUIScale"))-1.f)*4.f));
  CursorScale->SetValue(ACERuntimeOptions::Get(TEXT("CursorScale")));
  CursorScaleLabel->SetText(FText::FromString(FString::Printf(TEXT("%d%%"),FMath::RoundToInt(CursorScale->GetValue()*100.f))));
+ ObjectGlow->SetIsChecked(ACERuntimeOptions::Get(TEXT("ObjectGlow"))>.5f);
  ShowFrameRate->SetIsChecked(ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f);
  ChatFontFace->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontFace"))));
  ChatFontSize->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontSize"))));
@@ -255,6 +263,7 @@ bool UACEVideoSettingsWidget::HasPendingChanges() const
   || ToggleMouseLook->IsChecked()!=ACECameraSettings::GetToggleMouseLook()
   || InvertMouseY->IsChecked()!=ACECameraSettings::GetInvertMouseY()
   || DesktopScale->GetSelectedIndex()!=FMath::RoundToInt((ACERuntimeOptions::Get(TEXT("DesktopUIScale"))-1.f)*4.f)
+  || ObjectGlow->IsChecked()!=(ACERuntimeOptions::Get(TEXT("ObjectGlow"))>.5f)
   || ShowFrameRate->IsChecked()!=(ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f)
   || ChatFontFace->GetSelectedIndex()!=FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontFace")))
   || ChatFontSize->GetSelectedIndex()!=FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontSize")))
@@ -298,6 +307,7 @@ void UACEVideoSettingsWidget::ApplyInterfaceOptions()
  ACECameraSettings::SetToggleMouseLook(ToggleMouseLook->IsChecked());
  if(DesktopScale->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("DesktopUIScale"),1.f+DesktopScale->GetSelectedIndex()*.25f);
  if(CursorScale) ACERuntimeOptions::Set(TEXT("CursorScale"),CursorScale->GetValue());
+ ACERuntimeOptions::Set(TEXT("ObjectGlow"),ObjectGlow->IsChecked()?1.f:0.f);
  ACERuntimeOptions::Set(TEXT("ShowFrameRate"),ShowFrameRate->IsChecked()?1.f:0.f);
  if(ChatFontFace->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("ChatFontFace"),ChatFontFace->GetSelectedIndex());
  if(ChatFontSize->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("ChatFontSize"),ChatFontSize->GetSelectedIndex());
@@ -339,6 +349,7 @@ void UACEVideoSettingsWidget::DefaultsVideo()
  InvertMouseX->SetIsChecked(false);InvertMouseY->SetIsChecked(false);DesktopScale->SetSelectedIndex(0);
  ToggleMouseLook->SetIsChecked(false);
  CursorScale->SetValue(1.f); ChangeCursorScale(1.f);
+ ObjectGlow->SetIsChecked(true);
  ShowFrameRate->SetIsChecked(false);
  ChatFontFace->SetSelectedIndex(2); ChatFontSize->SetSelectedIndex(1);
  ScreenshotDirectory->SetText(FText::FromString(ACEScreenshotSettings::DefaultDirectory()));

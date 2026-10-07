@@ -22,6 +22,7 @@
 #include "Misc/App.h"
 #include "Slate/WidgetRenderer.h"
 #include "Widgets/Layout/SBorder.h"
+#include "Widgets/Input/SCheckBox.h"
 #include "ImageUtils.h"
 #include "RenderingThread.h"
 
@@ -169,6 +170,7 @@ bool FACEPluginHostTest::RunTest(const FString&)
     TestFalse(TEXT("War and void never use fast-buff movement"),ACEPluginCastMotion::FastBuff(1,25,0,0)||ACEPluginCastMotion::FastBuff(5,25,0,0));
     const FString Root=FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir()/TEXT("Automation")/(TEXT("PluginTest-")+FGuid::NewGuid().ToString(EGuidFormats::Digits)));
     H->StorageRoot=Root;H->Settings=MakeShared<FJsonObject>();H->Discover();
+    TestTrue(TEXT("UCM Micro is discovered as a controls-only plugin"),H->Find(TEXT("ucmmicro"))&&H->Find(TEXT("ucmmicro"))->Permissions.IsEmpty());
     {
         auto Queue=[&](){auto E=Json(TEXT(R"({"target":100,"spell":42,"category":42,"power":100,"duration":120,"confirmation":"You cast Magic Yield Other I on Target","resist":"Target resists your spell"})"));E->SetNumberField(TEXT("sent"),FPlatformTime::Seconds());H->PendingDebuffCasts.Add(MakeShared<FJsonValueObject>(E));};
         Queue();H->ObserveUseDone(0);TestTrue(TEXT("UseDone alone never confirms offensive enchantments"),H->Debuffs.IsEmpty());
@@ -350,7 +352,22 @@ bool FACEPluginHostTest::RunTest(const FString&)
     TestFalse(TEXT("Changed permission set requires re-enabling"),P->Enabled);
     P->Running=true;float F=1,R=0,T=0;H->FastCastOwner=TEXT("ucm");
     H->ApplyMovement(nullptr,F,R,T,true,false,false,FVector::ForwardVector);
-    TestFalse(TEXT("Manual movement stops automation"),P->Running);
+    TestTrue(TEXT("Manual movement leaves UCM running"),P->Running);
+    const auto ActiveVM=P->VM;const auto ActiveProfile=P->Profile;
+    for(bool VR:{false,true})for(int Frame=0;Frame<4;++Frame)
+    {
+        H->MovementOwner=TEXT("ucm");H->MoveExpires=FPlatformTime::Seconds()+2;H->FaceHeading=90;
+        H->FastCastOwner=TEXT("ucm");H->FastCastStarted=true;H->UseApproachOwner=TEXT("ucm");
+        H->LastProgress=FPlatformTime::Seconds()-60; // Stale route must not trip its watchdog during manual play.
+        F=-.5f;R=.75f;T=.25f;
+        H->ApplyMovement(nullptr,F,R,T,true,false,VR,FVector::ForwardVector);
+        TestTrue(TEXT("Desktop and VR manual input retains running VM and activity profile"),P->Running&&P->VM==ActiveVM&&P->Profile==ActiveProfile);
+        TestEqual(TEXT("Manual forward/backward input wins"),F,-.5f);TestEqual(TEXT("Manual strafe input wins"),R,.75f);TestEqual(TEXT("Manual turn input wins"),T,.25f);
+        TestFalse(TEXT("Manual input releases plugin steering ownership"),H->IsDrivingMovement());
+        TestTrue(TEXT("Manual input clears stale heading and approach owner"),!H->FaceHeading.IsSet()&&H->UseApproachOwner.IsEmpty());
+    }
+    F=R=T=0;H->ApplyMovement(nullptr,F,R,T,false,false,false,FVector::ForwardVector);
+    TestTrue(TEXT("Releasing input needs no restart and cannot revive stale steering"),P->Running&&F==0&&R==0&&T==0);
     TestTrue(TEXT("Manual movement releases fast-cast input"),H->FastCastOwner.IsEmpty());
     H->FastCastOwner=TEXT("ucm");H->ObserveUseDone(0);TestTrue(TEXT("Cast completion releases fast-cast input"),H->FastCastOwner.IsEmpty());
     P->Running=true;H->Tick(.5f);
@@ -456,6 +473,19 @@ bool FACEPluginHostTest::RunTest(const FString&)
     TestTrue(TEXT("Multiple independent plugin windows can be open"),H->IsPluginWindowOpen(TEXT("ucm"))&&H->IsPluginWindowOpen(TEXT("monitor")));
     P->Running=true;Dock->Toggle(TEXT("ucm"));
     TestTrue(TEXT("Hiding a plugin does not stop it or hide another"),P->Running&&!Dock->IsOpen(TEXT("ucm"))&&Dock->IsOpen(TEXT("monitor")));
+    TestTrue(TEXT("Plugin bar is visible by default"),H->IsPluginBarVisible());
+    H->SetPluginBarVisible(false);
+    TestTrue(TEXT("Hiding bar removes its entire frame and hit targets"),Dock->Windows[TEXT("__bar")].Widget->GetVisibility()==EVisibility::Collapsed);
+    TestTrue(TEXT("Hiding bar keeps plugins running and other windows open"),P->Running&&Dock->IsOpen(TEXT("monitor")));
+    Dock->Toggle(TEXT("ucm"));
+    TestTrue(TEXT("Plugin window remains accessible without the bar"),Dock->IsOpen(TEXT("ucm")));
+    Dock->Toggle(TEXT("ucm"));
+    FString BarSettings;TestTrue(TEXT("Bar visibility saves to disk"),FFileHelper::LoadFileToString(BarSettings,*(Root/TEXT("settings.json"))));
+    H->Settings=Json(*BarSettings);auto HiddenDock=SNew(SACEPluginDesktop).Host(H);
+    TestTrue(TEXT("Hidden bar stays hidden after recreation and preference reload"),HiddenDock->Windows[TEXT("__bar")].Widget->GetVisibility()==EVisibility::Collapsed);
+    TestTrue(TEXT("Manager remains constructible while bar is hidden"),H->MakePanel()->GetVisibility()!=EVisibility::Collapsed);
+    H->SetPluginBarVisible(true);
+    TestTrue(TEXT("Overview can restore the existing bar"),Dock->Windows[TEXT("__bar")].Widget->GetVisibility()==EVisibility::Visible);
     P->Running=false;Dock->Toggle(TEXT("ucm"));
     TestTrue(TEXT("Second click reopens its existing window"),Dock->IsOpen(TEXT("ucm")));
     Dock->Resize(TEXT("ucm"),FVector2D(-300,-150),true);
@@ -491,6 +521,28 @@ bool FACEPluginHostTest::RunTest(const FString&)
         Png.Reset();FImageUtils::PNGCompressImageArray(1280,720,Pixels,Png);
         FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("Automation/PluginDock.png")));
         DockTarget->ReleaseResource();
+        {
+            const FVector2D Size(270,360);auto Micro=H->MakeUCMMicroPanel();
+            auto* MicroTarget=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
+            for(int Pass=0;Pass<3;++Pass){Renderer.DrawWidget(MicroTarget,Micro,Size,0);FlushRenderingCommands();}
+            TArray<TSharedRef<SCheckBox>> Toggles;
+            TFunction<void(TSharedRef<SWidget>)> Visit=[&](TSharedRef<SWidget> Widget)
+            {if(Widget->GetTypeAsString()==TEXT("SCheckBox"))Toggles.Add(StaticCastSharedRef<SCheckBox>(Widget));auto* Children=Widget->GetChildren();for(int I=0;I<Children->Num();++I)Visit(Children->GetChildAt(I));};
+            Visit(Micro);TestEqual(TEXT("Micro includes run and all major activity toggles"),Toggles.Num(),10);
+            if(Toggles.Num()==10)
+            {
+                auto Loot=Toggles[3];const bool Before=Loot->IsChecked();const auto Geometry=Loot->GetCachedGeometry();const FVector2D At=Geometry.LocalToAbsolute(Geometry.GetLocalSize()*.5);
+                Loot->OnMouseButtonDown(Geometry,FPointerEvent(0,At,At,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
+                Loot->OnMouseButtonUp(Geometry,FPointerEvent(0,At,At,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
+                bool Enabled=false;P->Profile->TryGetBoolField(TEXT("looting"),Enabled);
+                TestEqual(TEXT("Micro changes the actual active loot setting"),Enabled,!Before);
+                const FString Name=P->ProfileName;TestTrue(TEXT("Micro setting persists across profile reload"),H->LoadProfile(TEXT("ucm"),Name));
+                TestEqual(TEXT("Micro follows reloaded profile instead of retaining a stale copy"),Loot->IsChecked(),!Before);
+            }
+            Pixels.Reset();MicroTarget->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,ReadFlags);
+            Png.Reset();FImageUtils::PNGCompressImageArray(270,360,Pixels,Png);
+            FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("Automation/UCM-Micro.png")));MicroTarget->ReleaseResource();
+        }
         for(bool Map:{false,true})for(int Width:{780,450})
         {
             const FVector2D Size(Width,760);auto Widget=H->MakeWaypointPanel(Map);

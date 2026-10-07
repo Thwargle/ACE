@@ -86,6 +86,26 @@ bool FACEVTProfileTest::RunTest(const FString&)
                     auto Profile=ACEVTProfile::ConvertFile(File,Issues);Profile->RemoveField(TEXT("vt_library"));if(Issues.IsEmpty())
                     {
                         ++Ready;
+                        if(FPaths::GetCleanFilename(File)==TEXT("PhaelaeCustom_v6.utl"))
+                        {
+                            TestEqual(TEXT("Phaelae preserves all original rules"),Profile->GetArrayField(TEXT("loot_rules")).Num(),1434);
+                            Profile->SetBoolField(TEXT("looting"),true);Profile->SetBoolField(TEXT("buffing"),false);Profile->SetBoolField(TEXT("recovery"),false);Profile->SetStringField(TEXT("combat"),TEXT("off"));
+                            for(const TCHAR* ItemName:{TEXT("Aetheria"),TEXT("Unmatched regression object")})
+                            {
+                                auto State=ParseVTTest(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"mana":100,"max_mana":100,"main_pack_slots":20,"inventory":[],"container":9,"container_is_corpse":true,"contents_ready":true,"contents":[{"id":10,"wcid":12,"count":1,"identified":true,"int_properties":{"218103849":27704},"spell_names":[]}]})"));
+                                auto CorpusItem=State->GetArrayField(TEXT("contents"))[0]->AsObject();CorpusItem->SetStringField(TEXT("name"),ItemName);auto Strings=MakeShared<FJsonObject>();Strings->SetStringField(TEXT("1"),ItemName);CorpusItem->SetObjectField(TEXT("string_properties"),Strings);
+                                FACEPluginVM LootVM;LootVM.Load(Script,Error);TSharedPtr<FJsonObject> CorpusIntent;bool Looted=false,Ran=true;
+                                const double Begin=FPlatformTime::Seconds();
+                                for(int Tick=0;Tick<128&&Ran;++Tick)
+                                {
+                                    State->SetNumberField(TEXT("time"),100+Tick*.2);Ran=LootVM.Step(State,Profile,CorpusIntent,Error);
+                                    if(Ran&&CorpusIntent&&CorpusIntent->GetStringField(TEXT("action"))==TEXT("loot")){Looted=true;break;}
+                                }
+                                TestTrue(*(FString(TEXT("Full Phaelae rules fit sandbox: "))+Error),Ran);
+                                TestEqual(TEXT("Full profile accepts Aetheria and rejects unmatched loot"),Looted,FString(ItemName)==TEXT("Aetheria"));
+                                AddInfo(FString::Printf(TEXT("Phaelae %s: %.2f ms total"),ItemName,(FPlatformTime::Seconds()-Begin)*1000));
+                            }
+                        }
                         const TArray<TSharedPtr<FJsonValue>>* MetaRules=nullptr;
                         if(Profile->TryGetArrayField(TEXT("vt_meta"),MetaRules)&&MetaRules->IsEmpty())Entry->SetBoolField(TEXT("empty_meta"),true);
                         if(FPaths::GetCleanFilename(File)==TEXT("VirindiSpells.utl"))

@@ -13,6 +13,7 @@
 #include "ACEEffectLightSubsystem.h"
 #include "ACEParticleBatchComponent.h"
 #include "ACERegionSceneryActor.h"
+#include "ACELandblockActor.h"
 #include "ACEScriptComponent.h"
 #include "ACEWorldEntityActor.h"
 #include "ACECharacterAppearanceComponent.h"
@@ -65,6 +66,30 @@ bool FACESceneryParticleLightingTest::RunTest(const FString&)
     };
     struct FSnowCase { uint32 Setup, Script, Emitter; };
     const FSnowCase Cases[] = {{0x02000406, 0x33000114, 0x32000143}, {0x02000407, 0x33000113, 0x32000142}};
+    // Exercise the real landblock spawn path. Initial particle births must use
+    // the placed scenery, not its parent's origin (which can be in range).
+    for (const auto& Snow : Cases)
+    {
+        Dat->GetOrBuildSetupMesh(Snow.Setup,100.f);
+        auto* Landblock=World->SpawnActor<AACELandblockActor>();
+        AACELandblockActor::FPendingScenery Placement;
+        Placement.ModelId=Snow.Setup;Placement.bRegionDesc=true;
+        Placement.Origin=FVector3f(150,100,0);Placement.Scale=1.3f;
+        TestTrue(TEXT("Landblock initializes placed snow"),Landblock->TrySpawnOneScenery(Dat,Placement));
+        if(!TestEqual(TEXT("One placed snow actor created"),Landblock->AnimatedScenery.Num(),1))return false;
+        auto* Scenery=Landblock->AnimatedScenery[0].Get();
+        auto* FX=Scenery->ScriptComponent.Get();
+        if(!TestEqual(TEXT("Placed snow script starts immediately"),FX->ActiveEmitters.Num(),1))return false;
+        auto& Emitter=FX->ActiveEmitters[0];
+        TestTrue(TEXT("Distant snow is degraded before its first allocation"),Emitter.bDegraded && Emitter.Particles.IsEmpty());
+        TestTrue(TEXT("Emitter starts at the authored scenery frame"),Emitter.LastOrigin.Equals(FX->GetEmitterTransform(Emitter).GetLocation(),.01));
+        TestTrue(TEXT("Scenery retains its authored scale"),Scenery->GetActorScale3D().Equals(FVector(1.3f),.001));
+        View->SetActorLocation(Scenery->GetActorLocation());PC->PlayerCameraManager->UpdateCamera(0.f);
+        FX->TickEmitters(1.f/30.f);
+        TestTrue(TEXT("Placed snow populates when the viewer reaches it"),!Emitter.bDegraded && !Emitter.Particles.IsEmpty());
+        FX->StopAllEffects();Scenery->Destroy();Landblock->Destroy();
+        View->SetActorLocation(FVector::ZeroVector);PC->PlayerCameraManager->UpdateCamera(0.f);
+    }
     FLinearColor SnowColor; float SnowLuminosity = 0;
     const uint64 SurfaceResolvesBefore = Dat->GetTextureResolver()->GetSurfaceResolveCount();
     const bool bSnowEstimate = Dat->TryEstimateGfxLight(0x01001166, SnowColor, SnowLuminosity);

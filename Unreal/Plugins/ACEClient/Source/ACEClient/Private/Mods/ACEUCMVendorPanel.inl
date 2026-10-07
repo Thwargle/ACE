@@ -1,7 +1,7 @@
         void VendorPanel()
         {
             Heading(TEXT("Vendor restocking"),TEXT("Open a vendor, add stock below, and set the total quantity to keep in inventory. Saved lists match this server, vendor and item across logins. With UCM running, visiting that vendor buys only the missing quantity. Route Use points can visit vendors automatically."));
-            Add(Toggle(TEXT("vendor_restock"),TEXT("Automatically buy saved supplies"),TEXT("Uses normal vendor purchases. Stops if currency, space or stock prevents confirmation.")));
+            Add(Toggle(TEXT("vendor_restock"),TEXT("Automatically buy saved supplies"),TEXT("Redeems available trade notes when pyreals are short, splitting stacks as needed. Retained notes and notes in trade are excluded. Stops if funds, space or stock are insufficient.")));
             const TArray<TSharedPtr<FJsonValue>>* Saved=nullptr;
             if(P()->TryGetArrayField(TEXT("vendor_rules"),Saved))for(int32 Index=0;Index<Saved->Num();++Index)
             {

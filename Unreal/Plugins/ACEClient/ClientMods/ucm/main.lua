@@ -2,6 +2,9 @@
 local state, entered, point, locked_target = nil, 0, 1, nil
 local route_direction=1
 local route_join_pending,route_join_scan=true,nil
+local route_trail,route_walking,route_returning={},false,false
+local route_teleport,route_revision,blocked_serial=nil,nil,nil
+local route_blocks=0
 local retries, until_time, corpses, item_attempts = {}, {}, {}, {}
 local route_pending, loot_pending, recovery_pending, buff_item_pending = nil, nil, nil, nil
 local monster_failures,monster_blacklist,combat_serial={},{},0
@@ -12,6 +15,7 @@ local helper_pending=nil
 local debuff_pending=nil
 local debuff_scan=nil
 local purchase_pending=nil
+local note_pending=nil
 local pea_pending=nil
 local pet_pending=nil
 local dispel_pending=nil
@@ -34,6 +38,11 @@ local skill_categories = {[17]=45,[19]=47,[21]=3,[23]=46,[25]=5,[27]=9,[29]=10,[
 local casting_buff_order={43,9,11,51,47,45,49,645}
 local casting_buff_family={};for _,category in ipairs(casting_buff_order) do casting_buff_family[category]=true end
 local elements={32,4,16,64,8,2,1}
+local combat_school_skill={[1]=34,[2]=33,[3]=32,[4]=31,[5]=43}
+local function trained_skill(s,id)
+ local skill=s.skills and s.skills[tostring(math.floor(id or 0))]
+ return skill and (skill.training or 0)>=2 and (skill.current or 0) or 0
+end
 local function pct(v,m) return m>0 and v*100/m or 0 end
 local function result(a,status) return {action=a,status=status} end
 local function contains(list,id) for _,v in ipairs(list or {}) do if v==id then return true end end return false end
@@ -972,7 +981,7 @@ local function tick(s,p)
   if match then state=r.next;entered=s.time;return result(nil,'State: '..state) end
  end
  if s.busy or s.ready==false or s.jumping then return result(nil,s.jumping and 'Following jump arc' or 'Waiting for game action') end
- if locked_target and not target then locked_target=nil;return result('cancel_attack','No unobstructed combat target; continuing other activities') end
+ if locked_target and (not target or option('combat','off')=='off') then locked_target=nil;return result('cancel_attack','No unobstructed combat target; continuing other activities') end
  if last_cast and (s.action_serial or 0)~=last_cast.serial and s.last_spell==last_cast.id then
   if (s.action_error or 0)==0 and forced_buff and last_cast.force_cycle==forced_buff then
    forced_buff.done[tostring(last_cast.target)..':'..last_cast.category]=last_cast.power;buff_plan=nil
@@ -1024,6 +1033,37 @@ local function tick(s,p)
   end
   return stock_counts[wcid] and stock_counts[wcid][name] or 0
  end
+ if note_pending then
+  local q=note_pending
+  if not option('vendor_restock',false) or s.vendor~=q.vendor or not s.vendor_uses_pyreals then
+   note_pending=nil;return result(nil,'Trade note redemption cancelled: vendor or restocking changed')
+  end
+  if s.time>=q.deadline or ((s.action_serial or 0)~=q.serial and (s.action_error or 0)~=0) then
+   return result('stop','Trade note redemption not confirmed: check inventory space and vendor messages')
+  end
+  local source
+  for _,v in ipairs(inventory) do if v.id==q.id then source=v;break end end
+  if not source then for _,v in ipairs(s.vendor_trade_notes or {}) do if v.id==q.id then source=v;break end end end
+  if q.phase=='split' then
+   local candidate
+   for _,v in ipairs(s.vendor_trade_notes or {}) do
+    if not q.known[v.id] and v.wcid==q.wcid and v.name==q.name and v.count==q.count and v.unit_value==q.unit_value then
+     if candidate then return result('stop','Trade note split is ambiguous; no notes sold') end
+     candidate=v
+    end
+   end
+   if source and source.count==q.before-q.count and candidate then
+    q.phase='sell';q.id=candidate.id;q.deadline=s.time+15;q.serial=s.action_serial or 0;q.known=nil
+    q.money=s.pyreals or 0
+    return {action='sell_note',vendor=q.vendor,item=q.id,count=q.count,status='Redeeming '..q.count..' '..q.name..' for supplies'}
+   end
+   return result(nil,'Waiting for trade note split')
+  end
+  -- Require both sides of the transaction. Replication may deliver the money
+  -- before the sold object disappears, or vice versa.
+  if not source and (s.pyreals or 0)>=q.money+q.count*q.unit_value then note_pending=nil
+  else return result(nil,'Waiting for trade note proceeds') end
+ end
  if purchase_pending then
   local q=purchase_pending
   if stock_count(q.wcid,q.name)>=q.expected then purchase_pending=nil
@@ -1041,6 +1081,37 @@ local function tick(s,p)
      local v=stock[r.item_wcid] and stock[r.item_wcid][r.item_name]
      if v then
       local count=math.min(r.quantity-have,v.limit)
+      local cost=v.unit_value and math.max(1,math.ceil(v.unit_value*(v.sell_rate or 1)*count-.1))
+      if cost and s.vendor_uses_pyreals and (s.pyreals or 0)<cost then
+       local deficit=cost-(s.pyreals or 0);local candidates,total={},0;local reserved={}
+       for _,rule in ipairs(p.vendor_rules or {}) do
+        if rule.enabled~=false and rule.server==s.world_name and rule.vendor_wcid==s.vendor_wcid and rule.vendor_name==s.vendor_name then reserved[rule.item_wcid]=true end
+       end
+       for _,note in ipairs(s.vendor_trade_notes or {}) do
+        if not reserved[note.wcid] and note.unit_value>0 and note.count>0 then
+         candidates[#candidates+1]=note;total=total+note.unit_value*note.count
+        end
+       end
+       if total<deficit then return result('stop','Not enough pyreals or redeemable trade notes for '..r.item_name) end
+       -- Prefer a denomination covering the shortfall with the least change.
+       -- Otherwise redeem the largest available contribution and reassess.
+       table.sort(candidates,function(a,b)
+        local ac=math.min(a.count,math.ceil(deficit/a.unit_value))*a.unit_value
+        local bc=math.min(b.count,math.ceil(deficit/b.unit_value))*b.unit_value
+        if (ac>=deficit)~=(bc>=deficit) then return ac>=deficit end
+        if ac~=bc then if ac>=deficit then return ac<bc else return ac>bc end end
+        return a.id<b.id
+       end)
+       local note=candidates[1];local amount=math.min(note.count,math.ceil(deficit/note.unit_value))
+       note_pending={phase=amount<note.count and 'split' or 'sell',id=note.id,wcid=note.wcid,name=note.name,
+        unit_value=note.unit_value,count=amount,before=note.count,money=s.pyreals or 0,vendor=s.vendor,deadline=s.time+15,serial=s.action_serial or 0}
+       if amount<note.count then
+        note_pending.known={};for _,item in ipairs(inventory) do note_pending.known[item.id]=true end
+        for _,item in ipairs(s.vendor_trade_notes or {}) do note_pending.known[item.id]=true end
+        return {action='split_note',vendor=s.vendor,item=note.id,count=amount,status='Splitting '..amount..' '..note.name..' for supplies'}
+       end
+       return {action='sell_note',vendor=s.vendor,item=note.id,count=amount,status='Redeeming '..amount..' '..note.name..' for supplies'}
+      end
       purchase_pending={wcid=r.item_wcid,name=r.item_name,expected=have+count,deadline=s.time+15,serial=s.action_serial or 0,vendor=s.vendor}
       return {action='buy',vendor=s.vendor,item=v.id,count=count,status='Restocking '..r.item_name..' ('..have..' / '..r.quantity..')'}
      end
@@ -1102,13 +1173,23 @@ local function tick(s,p)
    aim=aim or follow
    return {action='move',cell=aim.cell,x=aim.x,y=aim.y,z=aim.z,status='Following '..follow.name}
   end
+  if meta.route_changed then return result(nil,'Loading route geometry') end
   local route=p.route or {};if #route==0 then return result(nil,'Record a route to begin navigation') end
+  -- Return along positions actually traversed during combat/looting. Picking
+  -- the nearest waypoint after a chase can cut across an adjacent room wall.
+  if route_walking then route_trail={} end
+  while #route_trail>0 do
+   local back=route_trail[#route_trail]
+   if distance(s.position,back)<=.45 then table.remove(route_trail)
+   else route_returning=true;return {action='move',cell=back.cell,x=back.x,y=back.y,z=back.z,arrival_radius=.4,status='Returning to route'} end
+  end
+  route_returning=false;route_walking=true
   if route_join_pending then
    -- Join once, then retain the ordered cursor through combat, looting and
    -- portal/jump acknowledgements. Camera heading must not affect the choice.
    -- Imported NAV action coordinates can be placeholders; only walk-first
    -- entries are spatial anchors. Keep action-only routes in their original order.
-   local scan=route_join_scan or {index=1,position=s.position};route_join_scan=scan
+   local scan=route_join_scan or {index=1,position=s.position,visible=s.route_visible};route_join_scan=scan
    local here=scan.position;local cell=math.floor(here.cell)
    while scan.index<=#route do
     if not workavailable() then return result(nil,'Finding nearest route waypoint') end
@@ -1118,7 +1199,7 @@ local function tick(s,p)
      scan.first=scan.first or i
      local target=math.floor(candidate.cell)
      local connected=candidate.legacy or (cell>>16)==(target>>16) or ((cell&0xffff)<0x100 and (target&0xffff)<0x100)
-     if connected then
+     if connected and (not scan.visible or scan.visible[tostring(i)]~=false) then
       local d=distance(here,candidate)
       if not scan.distance or d<scan.distance then scan.point=i;scan.distance=d end
      end
@@ -1126,7 +1207,7 @@ local function tick(s,p)
    end
    -- Native routes in another dungeon cannot be joined by walking to their
    -- unrelated coordinates. Do not silently charge towards waypoint one.
-   if not scan.point and scan.first then route_join_scan=nil;return result(nil,'No route waypoint in this area') end
+   if not scan.point and scan.first then route_join_scan=nil;return result(nil,'No reachable route waypoint in this area') end
    -- Retain a NAV's leading setup/use/confirmation actions when joining its
    -- first spatial anchor. They are not independent destinations to skip.
    point=(scan.point==scan.first) and 1 or (scan.point or 1);route_join_pending=false;route_join_scan=nil
@@ -1138,6 +1219,7 @@ local function tick(s,p)
    else return result(nil,'Route complete') end
   end
   local v=route[point];local kind=v.kind or 'walk'
+  if distance(s.position,v)<=option('waypoint_radius',.8) then route_blocks=0 end
   if (not v.legacy or v.walk_first) and distance(s.position,v)>option('waypoint_radius',.8) then
    if option('open_doors',true) then
     local px,py=world(s.position);local tx,ty=world(v);local dx,dy=tx-px,ty-py;local length=dx*dx+dy*dy
@@ -1574,6 +1656,7 @@ local function tick(s,p)
   return finish(string.format('%s: %d buffs confirmed%s',request.name,job.count,missing>0 and (', '..missing..' unavailable or failed (skills, components or visible equipment)') or '; requested set complete'))
  else other_job=nil end
  local combat=option('combat','off')
+ if combat~='off' and not option('manual_combat',false) then combat='auto' end
  local pet_cooldown=(s.cooldowns or {})['213'] or 0
  if pet_pending then
   if s.owned_pet or pet_cooldown>0 then pet_pending=nil
@@ -1834,12 +1917,20 @@ local function tick(s,p)
   local ring,ring_score,streak_spell,streak_score=nil,-1,nil,-1
   local arc,arc_score=nil,-1
   local use_ring=ring_enabled(target_rule)
+  local magic_skill=-1
+  if target_combat=='auto' then
+   for _,v in ipairs(attack_spells) do
+    local e=element(v)
+    if e~=0 and not v.beneficial and (not damage_override or damage_override==0 or damage_override==e)
+     and (not p.attack_spell or p.attack_spell==0 or p.attack_spell==v.id) then magic_skill=math.max(magic_skill,trained_skill(s,combat_school_skill[v.school])) end
+   end
+  end
   local bolt_enabled=not target_rule or target_rule.bolt~=false
   local streak_enabled=not target_rule or target_rule.streak~=false
   for _,v in ipairs(attack_spells) do local e=element(v)
    local streak=(v.category>=243 and v.category<=249) or v.category==639
    local is_ring=(v.category>=222 and v.category<=228) or v.category==641
-   if e~=0 and not v.beneficial and (not p.attack_spell or p.attack_spell==0 or p.attack_spell==v.id) then
+   if e~=0 and not v.beneficial and (not p.attack_spell or p.attack_spell==0 or p.attack_spell==v.id) and trained_skill(s,combat_school_skill[v.school])>=magic_skill then
     local score=v.power*resistance(target,e);if damage_override and damage_override~=0 and e~=damage_override then score=-1 end
     if is_ring then if use_ring and score>ring_score then ring=v;ring_score=score end
     elseif streak then if streak_enabled and score>streak_score then streak_spell=v;streak_score=score end
@@ -1856,7 +1947,7 @@ local function tick(s,p)
   -- the configured minimum applies (counted only from ring-enabled rules).
   if streak_spell and (not bolt_enabled or streak_score>best_score) then attack=streak_spell;best_score=streak_score end
   if ring and (ring_count>=option('ring_min_targets',4) or (not bolt_enabled and not streak_enabled and ring_count>0)) then attack=ring;best_score=ring_score end
-  local weapon,score=nil,-1
+  local weapon,score,best_skill=nil,-1,-1
   local unassessed,unassessed_ammo
   local ammo_scores,ammo_elements,unknown_ammo={},{},{}
   for _,a in ipairs(combat_inventory) do if band(a.slots,0x800000)~=0 then
@@ -1888,7 +1979,12 @@ local function tick(s,p)
     -- Bows/launchers inherit the ammunition's element. Their own piercing
     -- profile must not reject a requested fire/acid/etc. arrow loadout.
     if not explicit and damage_override and damage_override~=0 and not caster and not launcher and damage~=0 and band(damage,damage_override)==0 then value=-1 end
-    if value>score then weapon=v;score=value end
+    -- Compare usable skill first, then damage within that skill. A wand's
+    -- spell damage is not comparable to a sword's per-swing damage.
+    local skill_id=caster and attack and combat_school_skill[attack.school] or v.weapon_skill
+    local rank=trained_skill(s,skill_id)
+    if target_combat~='auto' then rank=0 end
+    if value>=0 and (rank>best_skill or (rank==best_skill and value>score)) then weapon=v;score=value;best_skill=rank end
    end
   end
   local mode=weapon and (band(weapon.type,0x8000)~=0 and 'magic' or band(weapon.type,0x100)~=0 and 'missile' or 'melee') or target_combat
@@ -2037,7 +2133,7 @@ local function tick(s,p)
     end
     if option('use_recklessness',false) and trained[50] then power=math.max(.11,math.min(.9,power)) end
    end
-   return {action='attack',target=target.id,mode=mode=='melee' and 2 or 4,power=power,height=option('height',2),status='Combat: '..mode}
+   return {action='attack',target=target.id,mode=mode=='melee' and 2 or 4,power=power,height=option('manual_attack_height',false) and option('height',2) or (target.attack_height or 2),status='Combat: '..mode}
   elseif s.inventory then return result('stop','No eligible combat equipment or attack spell; review Combat setup') end
  end
  local loot_action=loot();if loot_action then return loot_action end
@@ -2151,11 +2247,38 @@ local function run(s,p)
    end
   end
  else follow_path={};follow_target=nil end
+ local route=effective.route or {}
+ if not effective.navigation or route_teleport~=s.teleport_sequence or route_revision~=(effective.vt_revision or 0) or route_join_pending then
+  route_trail={};route_returning=false;route_walking=false
+ end
+ if route_teleport~=s.teleport_sequence or route_revision~=(effective.vt_revision or 0) then route_blocks=0 end
+ route_teleport=s.teleport_sequence;route_revision=effective.vt_revision or 0
+ if effective.navigation and #route>0 and s.position and not route_pending then
+  if route_walking then
+   route_trail={{cell=s.position.cell,x=s.position.x,y=s.position.y,z=s.position.z}}
+  elseif not route_returning and #route_trail>0 and distance(s.position,route_trail[#route_trail])>=.6 then
+   if distance(s.position,route_trail[#route_trail])>15 then route_trail={};route_join_pending=true
+   elseif #route_trail>=256 then return result('stop','Combat detour is too long; return to the route')
+   else route_trail[#route_trail+1]={cell=s.position.cell,x=s.position.x,y=s.position.y,z=s.position.z} end
+  end
+ end
+ local blocked=s.movement_blocked_serial or 0
+ if blocked_serial==nil then blocked_serial=blocked end
+ if blocked~=blocked_serial then
+  blocked_serial=blocked;route_blocks=route_blocks+1
+  if route_blocks>2 then return result('stop','Route obstructed after two recovery attempts; clear the path') end
+  if route_returning then return result('stop','Return path blocked; clear the obstruction before restarting') end
+  if locked_target then monster_blacklist[locked_target]=s.time+30;locked_target=nil end
+  if #route_trail==0 then route_join_pending=true;route_join_scan=nil end
+ end
  local intent=(not forced_buff and meta_work(s,effective)) or tick(s,effective)
  if intent then
+  route_walking=intent.status and (intent.status:sub(1,9)=='Waypoint ' or intent.status=='Route complete') or false
+  if intent.status~='Returning to route' then route_returning=false end
   if intent.action=='cast' then intent.fast_cast=effective.fast_cast_buffs==true end
   intent.helper_updates=effective.recovery~=false and ((effective.helper_health_threshold or 0)>0 or (effective.helper_stamina_threshold or 0)>0 or (effective.helper_mana_threshold or 0)>0)
   intent.route_point=point
+  intent.route_join_pending=route_join_pending
   if p.vt_meta then intent.meta_state=meta.name end
   if meta.route_changed then
    intent.runtime_route=meta.route.route;intent.runtime_loop_route=effective.loop_route==true;intent.runtime_reverse_route=effective.reverse_route==true
@@ -2171,12 +2294,12 @@ return function(s,p)
   -- variables, fired rules, call stack and selected route. In-flight requests
   -- are abandoned: inventory/targets may have changed while stopped.
   if meta.entered then meta.entered=s.time end
-  entered=s.time;locked_target=nil
+  entered=s.time;locked_target=nil;route_blocks=0;blocked_serial=nil
   route_join_pending=true;route_join_scan=nil
   meta.pending=nil;meta.queue={};meta.forcebuff=false
   if meta.route then meta.route_changed=true end
   route_pending=nil;loot_pending=nil;recovery_pending=nil;buff_item_pending=nil
-  corpse_pending=nil;purchase_pending=nil;mana_refill_pending=nil;helper_pending=nil;debuff_pending=nil;debuff_scan=nil;pea_pending=nil;pet_pending=nil;dispel_pending=nil
+  corpse_pending=nil;purchase_pending=nil;note_pending=nil;mana_refill_pending=nil;helper_pending=nil;debuff_pending=nil;debuff_scan=nil;pea_pending=nil;pet_pending=nil;dispel_pending=nil
   last_cast=nil;unavailable_spells={};forced_buff=nil;buff_skips={};other_job=nil
   loot_scan={};loot_jobs={};loot_job_pending=nil;combine_pending=nil
   retries={};until_time={};item_attempts={};corpses={};monster_failures={};monster_blacklist={};ghost_attempts={};ghost_hp={}

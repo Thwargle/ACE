@@ -35,7 +35,18 @@ FVector UACEOrbitCameraBoom::BlendLocations(const FVector& Desired, const FVecto
 			FCollisionShape::MakeSphere(ProbeSize), Query))
 		{
 			const auto* Component = Contact.GetComponent();
-			if (!IndoorOnly || !Component || !Component->ComponentTags.Contains(TEXT("ACEOutdoorTerrain"))) return Contact.Location;
+			if (!Component || !Component->ComponentTags.Contains(TEXT("ACEOutdoorTerrain"))) return Contact.Location;
+			// A portal intersecting the probe's broad-phase envelope adds an
+			// outdoor cell even though the actual terrain contact is inside the
+			// room. Test that contact against the room BSP before shortening the
+			// boom. Outside contacts and building walls still block normally.
+			const bool ContactInside = IndoorOnly || Cells.ContainsByPredicate([&](uint32 C)
+			{
+				return ACECellTransit::IsIndoorCell(C)
+					&& Dat->IsPointInsideEnvCell(C, Contact.Location, PC->WorldScale, 0.f)
+					&& Dat->IsPointInsideEnvCell(C, Contact.ImpactPoint, PC->WorldScale, 0.f);
+			});
+			if (!ContactInside) return Contact.Location;
 			Query.AddIgnoredComponent(Component);
 		}
 		uint32 NextCell=Cell;

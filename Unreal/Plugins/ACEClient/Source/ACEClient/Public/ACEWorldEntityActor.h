@@ -121,6 +121,7 @@ public:
 	bool IsCellVisible() const { return bCellVisible; }
 	bool bCellVisible = true;
 	bool bReceivedDeathMotion = false;
+	bool bAllowsDeadPoseInteraction = false;
 	int32 GetWielderId() const { return WielderId; }
 
 	/** Standing creature/player (not a parented wielded mesh). */

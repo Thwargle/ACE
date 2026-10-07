@@ -21,6 +21,7 @@
 #include "ACEEnvCellActor.h"
 #include "ACETypes.h"
 #include "Dat/ACEEnvCellMeshBuilder.h"
+#include "Dat/ACECellTransit.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 
@@ -172,6 +173,42 @@ bool FACEVRWallContactTest::RunTest(const FString&)
   A->Destroy();Boom->DestroyComponent();
  }
  auto* VR=NewObject<UACEVRComponent>(Pawn);Pawn->AddInstanceComponent(VR);VR->RegisterComponent();
+ // Actual Shoushi building cells at 33.4S,72.5E. Unlike the enclosed room
+ // above, these add outdoor cells through their doorway/SeenOutside portals.
+ {
+  const uint32 LB=0xDA550000;
+  const auto Info=Dat->GetLandblockInfo(LB);
+  Dat->GetOrBuildLandblockMesh(LB,100);
+  int32 Checked=0;
+  if(Info) for(uint32 I=0;I<Info->NumCells;++I)Dat->GetOrBuildEnvCellMesh(LB|uint32(0x100+I),100);
+  if(Info) for(uint32 I=0;I<Info->NumCells;++I)
+  {
+   const uint32 Cell=LB|uint32(0x100+I);const auto* Mesh=Dat->FindEnvCellMesh(Cell,100);
+   if(!Mesh || !Mesh->bHasLocalBounds)continue;
+   const FTransform Frame=Mesh->GetCellLocalToLandblock(100)*FTransform(FVector(-218*19200,85*19200,0));
+   const FVector P=Frame.TransformPosition(FVector((Mesh->LocalBoundsMin.X+Mesh->LocalBoundsMax.X)*.5,
+    (Mesh->LocalBoundsMin.Y+Mesh->LocalBoundsMax.Y)*.5,Mesh->LocalBoundsMin.Z+90));
+   const FVector End=P+FVector(0,30,0);
+   if(FVector::Dist2D(P,FVector(-4186800,1645200,0))>4000 || !Dat->IsPointInsideEnvCell(Cell,P,100,0)
+     || !Dat->IsPointInsideEnvCell(Cell,End,100,0))continue;
+   TArray<uint32> Cells;ACECellTransit::FindCellList(*Dat,Cell,P,40,100,Cells);
+   if(!Cells.ContainsByPredicate([](uint32 C){return !ACECellTransit::IsIndoorCell(C);}))continue;
+   FACEPosition Pose;Pose.CellId=Cell;Pose.SetLocationFromUnreal(P-FVector(0,0,90.75),100);
+   PC->PredictedPose=Pose;PC->bHavePredictedPose=true;Session->SetLocalPosition(Pose);Pawn->SetActorLocation(P);
+   auto* Boom=NewObject<UACEOrbitCameraBoom>(Pawn);Pawn->AddInstanceComponent(Boom);
+   Boom->SetupAttachment(Capsule);Boom->RegisterComponent();Boom->ProbeSize=5;
+   auto* A=World->SpawnActor<AActor>();auto* Ground=NewObject<UBoxComponent>(A);A->SetRootComponent(Ground);
+   Ground->SetBoxExtent(FVector(10,10,10));Ground->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+   Ground->SetCollisionResponseToAllChannels(ECR_Block);Ground->ComponentTags.Add(TEXT("ACEOutdoorTerrain"));
+   Ground->RegisterComponent();A->SetActorLocation(P);
+   TestTrue(TEXT("Open Shoushi room ignores overlapping outdoor terrain at an indoor camera contact"),Boom->BlendLocations(End,P,true,0).Equals(End,.1));
+   Ground->ComponentTags.Reset();
+   TestFalse(TEXT("Open Shoushi room still blocks the camera on architecture"),Boom->BlendLocations(End,P,true,0).Equals(End,.1));
+   AddInfo(FString::Printf(TEXT("Shoushi camera cell=%08X point=%s"),Cell,*P.ToString()));
+   ++Checked;A->Destroy();Boom->DestroyComponent();
+  }
+  TestTrue(TEXT("Camera regression exercises actual Shoushi rooms with outdoor transit candidates"),Checked>0);
+ }
  VR->PC=PC;VR->Client=Client;VR->Settings=NewObject<UACEVRSettings>();VR->ActivateRig();
  VR->bTracking=true;VR->Settings->MovementSmoothing=0;VR->Settings->bRun=true;VR->Settings->MovementDirection=0;
  // This fixture measures collision, without the later-added forward-stick assist
@@ -371,8 +408,10 @@ bool FACEVRWallContactTest::RunTest(const FString&)
  }
  // The reported crowded dungeon floor, using the retail cell at its actual
  // coordinates. Exercise normal movement and a real charged jump while crowded.
- for(uint32 ReportedCell:{0x0143015Fu,0x0143014Fu,0x01430171u})
+ for(int32 SwarmCase=0;SwarmCase<4;++SwarmCase)
  {
+  const uint32 ReportedCell=SwarmCase==0?0x0143015Fu:SwarmCase==1?0x0143014Fu:0x01430171u;
+  const bool ActualWasps=SwarmCase==3;
   FACEPosition Seed;Seed.CellId=ReportedCell;Seed.Location=ReportedCell==0x0143015F
    ? FVector(43.304642,-68.413086,-.002981) : ReportedCell==0x0143014F
    ? FVector(36.702820,-30.505859,.031020) : FVector(49.011993,-74.999023,0);
@@ -386,8 +425,18 @@ bool FACEVRWallContactTest::RunTest(const FString&)
   const FVector Center=Seed.ToUnrealLocation(100)+FVector(0,0,90.75);
   TArray<AActor*> Bodies;
   FCollisionQueryParams Environment=Query;
-  for(int I=0;I<8;++I)
+  for(int I=0;I<(ActualWasps?32:8);++I)
   {
+   if(ActualWasps)
+   {
+    FACEWorldObject Wasp;Wasp.Guid=0x78001000+I;Wasp.SetupId=0x02001121;
+    Wasp.MotionTableId=0x09000167;Wasp.Scale=1.2f;Wasp.ItemType=ACEItemType::Creature;
+    Wasp.PhysicsState=ACEPhysicsState::Gravity;Wasp.bHasPosition=true;Wasp.Position=Seed;
+    const float Angle=I*PI/16;
+    Wasp.Position.SetLocationFromUnreal(Center+FVector(55*FMath::Cos(Angle),55*FMath::Sin(Angle),-90.75),100);
+    auto* Monster=World->SpawnActor<AACEWorldEntityActor>();Monster->InitializeFromObject(Wasp,100,true);
+    Bodies.Add(Monster);Environment.AddIgnoredActor(Monster);continue;
+   }
    auto* A=World->SpawnActor<AActor>();UPrimitiveComponent* Body;
    if(ReportedCell==0x01430171)
    {
@@ -421,6 +470,13 @@ bool FACEVRWallContactTest::RunTest(const FString&)
    }
    for(int Frame=0;Frame<(Jump?150:45);++Frame)
    {
+    if(ActualWasps)for(int32 I=0;I<Bodies.Num();++I)
+    {
+     // Networked creatures may move into an airborne player between sweeps.
+     // Include changing altitude instead of testing only stationary proxies.
+     const float Angle=I*PI/16+Frame*.015f,Radius=45+15*FMath::Sin(Frame*.13f);
+     Bodies[I]->SetActorLocation(Center+FVector(Radius*FMath::Cos(Angle),Radius*FMath::Sin(Angle),-90.75+35*FMath::Sin(Frame*.1f)));
+    }
     VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,175-90.75),Seed.ToUnrealQuat());
     VR->MoveStick=FVector2D(.4,1);PC->PlayerTick(1.f/30);Airborne+=PC->bJumpAirborne?1:0;
     if(ReportedCell==0x01430171)

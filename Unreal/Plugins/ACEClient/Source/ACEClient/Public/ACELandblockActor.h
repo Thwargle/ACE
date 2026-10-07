@@ -165,6 +165,7 @@ public:
 
 protected:
 	friend class FACEVRSceneryCollisionTest;
+	friend class FACESceneryParticleLightingTest;
 	struct FPendingScenery
 	{
 		uint32 ModelId = 0;

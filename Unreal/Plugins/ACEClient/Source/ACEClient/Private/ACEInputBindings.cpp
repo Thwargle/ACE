@@ -91,6 +91,7 @@ const TArray<FAction>& Actions()
    {Action(TEXT("Examine")),TEXT("Examine selected object"),TEXT("UI"),{FInputChord(EKeys::E)}},
    {Action(TEXT("Chat")),TEXT("Begin chat"),TEXT("UI"),{FInputChord(EKeys::Enter),FInputChord(EKeys::Slash)}},
    {Action(TEXT("ToggleChat")),TEXT("Toggle Chat Entry"),TEXT("UI"),{FInputChord(EKeys::Tab)}},
+   {Action(TEXT("ToggleUCM")),TEXT("UCM Start / Stop"),TEXT("UI"),{}},
    {EKeys::Escape,TEXT("Dismiss window / options"),TEXT("UI"),{FInputChord(EKeys::Escape)}},
    {EKeys::I,TEXT("Inventory"),TEXT("UI"),{FInputChord(EKeys::F12)}},
    {EKeys::P,TEXT("Attributes"),TEXT("CharacterSettings"),{FInputChord(EKeys::F8)}},

@@ -81,6 +81,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 public:
     /** Shared attack mark used by desktop controls, VR and plugin commands. */
     void SetRequestedAttackPower(float Power) { RequestedAttackPower=FMath::Clamp(Power,0.f,1.f); }
+    void ShowPluginAttack(int32 Target, uint32 Height, float Power);
 	bool ScrollFellowship(float WheelDelta, FVector2D CanvasLocalPos);
 	bool ScrollAllegiance(float WheelDelta, FVector2D CanvasLocalPos);
 	bool ScrollSalvage(float WheelDelta, FVector2D CanvasLocalPos);

@@ -291,6 +291,7 @@ void AACEPlayerController::EnsureDatIntroCanvas()
 
 void AACEPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	UpdateDesktopHighlights(false);
 	KeyboardRouter.Reset();
 	DesktopPointer.Reset();
 	if (IsLocalController()) ACERuntimeOptions::ApplyDesktopUIScale(FIntPoint::ZeroValue,true);
@@ -746,6 +747,13 @@ bool AACEPlayerController::InputKey(const FInputKeyEventArgs& Params)
  if(Params.Event==IE_Pressed)MovementKeyPressOrder.Add(Params.Key,++MovementKeySequence);
  const auto Mods=FSlateApplication::Get().GetModifierKeys();
  const FInputChord Chord(Params.Key,Mods.IsShiftDown(),Mods.IsControlDown(),Mods.IsAltDown(),Mods.IsCommandDown());
+ if(Params.Event==IE_Pressed && ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("ToggleUCM")),Chord)
+  && !ACEInputBindings::IsEditing() && Client && Client->GetSessionState()==EACESessionState::InWorld
+  && !(DatGameplayBinder && DatGameplayBinder->IsChatEntryFocused()) && !(GameHUDWidget && GameHUDWidget->IsChatEntryFocused()))
+ {
+  if(auto* Plugins=GetGameInstance()->GetSubsystem<UACEPluginSubsystem>())Plugins->ToggleUCM();
+  return true;
+ }
  if (Params.Event==IE_Pressed && ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("ToggleChat")),Chord)
   && !ACEInputBindings::IsEditing() && Client && Client->GetSessionState()==EACESessionState::InWorld
   && !IsDesktopInterfaceHidden() && DatGameplayBinder && DatCanvasWidget && DatCanvasWidget->IsVisible())
@@ -891,11 +899,13 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		&& (Client->GetSessionState() == EACESessionState::EnteringWorld
 			|| Client->GetSessionState() == EACESessionState::InWorld))
 	{
+		UpdateDesktopHighlights(false);
 		TickWorldTransition();
 		return;
 	}
 	if (!Client || Client->GetSessionState() != EACESessionState::InWorld)
 	{
+		UpdateDesktopHighlights(false);
 		if (GameHUDWidget)
 		{
 			DestroyGameHUD();
@@ -953,7 +963,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		}
 	}
 
-	if (!bVR) { PollObjectHover(); if (!bMouseLookActive) PollObjectClick(); }
+	if (!bVR) { PollObjectHover(); PollObjectClick(); }
+	UpdateDesktopHighlights(!bVR);
 
 	// Poll logical actions through the retail/rebound keymap: W/X forward/back,
 	// A/D turn, Z/C sidestep by default. Opposing held commands form a stack.
@@ -7555,9 +7566,9 @@ namespace
 		return Cast<AACEWorldEntityActor>(Actor->GetOwner());
 	}
 
-	FACEVisibilityPick ResolveVisibilityPick(UWorld& World, const FVector& Start, const FVector& End, APawn* SelfPawn)
+	FACEVisibilityPick ResolveVisibilityPick(UWorld& World, const FVector& Start, const FVector& End, APawn* SelfPawn, bool IncludeSelf = true)
 	{
-		AActor* Actor = ACEVisibleObjectPick::Trace(World, Start, End, SelfPawn);
+		AActor* Actor = ACEVisibleObjectPick::Trace(World, Start, End, SelfPawn, nullptr, IncludeSelf);
 		FACEVisibilityPick Out;
 		Out.bHitSelf = Actor && Actor == SelfPawn;
 		Out.Entity = Out.bHitSelf ? nullptr : AsWorldEntity(Actor);
@@ -7565,8 +7576,56 @@ namespace
 	}
 }
 
+AACEWorldEntityActor* AACEPlayerController::PickWorldPointer(bool& bHitSelf) const
+{
+	bHitSelf=false;
+	if (!GetWorld()) return nullptr;
+	FVector Origin,Direction;
+	if (bMouseLookActive)
+	{
+		FRotator ViewRotation; GetPlayerViewPoint(Origin,ViewRotation);
+		Direction=ViewRotation.Vector();
+	}
+	else
+	{
+		float X=0,Y=0;
+		if (!GetMousePosition(X,Y) || !DeprojectScreenPositionToWorld(X,Y,Origin,Direction)) return nullptr;
+	}
+	const auto Pick=ResolveVisibilityPick(*GetWorld(),Origin,Origin+Direction*200000.f,GetPawn(),!bMouseLookActive);
+	bHitSelf=Pick.bHitSelf;
+	return Pick.Entity;
+}
+
+void AACEPlayerController::UpdateDesktopHighlights(bool bEnabled)
+{
+	AACEWorldEntityActor* Selection=nullptr;
+	AACEWorldEntityActor* Hover=nullptr;
+	if (bEnabled && Client && Client->GetSessionState()==EACESessionState::InWorld
+		&& ACERuntimeOptions::Get(TEXT("ObjectGlow"))>.5f)
+	{
+		Hover=DesktopHover.Get();
+		if (auto* Mode=GetWorld()->GetAuthGameMode())
+			if (auto* Presenter=Mode->FindComponentByClass<UACEWorldPresenterComponent>())
+				Selection=Presenter->FindEntityActor(Client->GetSelectedObject().Guid);
+	}
+	auto Visible=[](AACEWorldEntityActor* Actor)
+	{
+		return Actor && !Actor->IsHidden() && Actor->IsCellVisible()
+			&& !(Actor->ObjectDescriptionFlags & ACEObjectDescFlag::UiHidden)
+			&& !(Actor->PhysicsState & ACEPhysicsState::NoDraw);
+	};
+	if (!Visible(Selection)) Selection=nullptr;
+	if (!Visible(Hover)) Hover=nullptr;
+	for (auto Previous:{DesktopHighlightSelection,DesktopHighlightHover})
+		if (auto* Actor=Previous.Get(); Actor && Actor!=Selection && Actor!=Hover) Actor->SetSelectionHighlight(0.f);
+	DesktopHighlightSelection=Selection; DesktopHighlightHover=Hover;
+	if (Hover && Hover!=Selection) Hover->SetSelectionHighlight(.45f);
+	if (Selection) Selection->SetSelectionHighlight(1.f);
+}
+
 void AACEPlayerController::PollObjectHover()
 {
+	DesktopHover.Reset();
 	bHoverTooltipVisible = false;
 	HoverTooltipText.Reset();
 
@@ -7582,10 +7641,16 @@ void AACEPlayerController::PollObjectHover()
 		}
 	};
 
-	if (!Client || Client->GetSessionState() != EACESessionState::InWorld || bMouseLookActive || IsDesktopInterfaceHidden())
+	if (!Client || Client->GetSessionState() != EACESessionState::InWorld)
 	{
 		HideTip();
 		return;
+	}
+
+	if (bMouseLookActive)
+	{
+		bool bHitSelf=false; DesktopHover=PickWorldPointer(bHitSelf);
+		HideTip(); return;
 	}
 
 	EnsureHoverTooltipWidget();
@@ -7598,7 +7663,7 @@ void AACEPlayerController::PollObjectHover()
 	}
 	HoverCursorPixels = FVector2D(MouseX, MouseY);
 	uint32 TooltipTemplate = UACEHoverTooltipWidget::OptionsTemplate;
-	if (DatGameplayBinder && FSlateApplication::IsInitialized()
+	if (!IsDesktopInterfaceHidden() && DatGameplayBinder && FSlateApplication::IsInitialized()
 		&& DatGameplayBinder->GetStatTooltipAt(FSlateApplication::Get().GetCursorPos(), HoverTooltipText, &TooltipTemplate))
 	{
 		bHoverTooltipVisible = true;
@@ -7622,27 +7687,10 @@ void AACEPlayerController::PollObjectHover()
 		return;
 	}
 
-	FVector WorldOrigin, WorldDir;
-	if (!DeprojectScreenPositionToWorld(MouseX, MouseY, WorldOrigin, WorldDir))
-	{
-		HideTip();
-		return;
-	}
-
-	UWorld* World = GetWorld();
-	if (!World)
-	{
-		HideTip();
-		return;
-	}
-
-	// Use the same rendered-polygon ordering for hover, click, identify, and drag.
-	const FVector TraceEnd = WorldOrigin + WorldDir * 200000.f;
-
-	APawn* SelfPawn = GetPawn();
-	const FACEVisibilityPick Pick = ResolveVisibilityPick(*World, WorldOrigin, TraceEnd, SelfPawn);
-	AACEWorldEntityActor* Entity = Pick.Entity;
-	const bool bHitSelf = Pick.bHitSelf;
+	bool bHitSelf=false;
+	AACEWorldEntityActor* Entity=PickWorldPointer(bHitSelf);
+	DesktopHover=Entity;
+	if (IsDesktopInterfaceHidden()) { HideTip(); return; }
 	if (!Entity && !bHitSelf)
 	{
 		HideTip();
@@ -7772,7 +7820,7 @@ void AACEPlayerController::IdentifyAtScreenPosition(float MouseX, float MouseY)
 
 void AACEPlayerController::PollObjectClick()
 {
-	if (!Client || Client->GetSessionState() != EACESessionState::InWorld || bMouseLookActive)
+	if (!Client || Client->GetSessionState() != EACESessionState::InWorld)
 	{
 		return;
 	}
@@ -7783,13 +7831,7 @@ void AACEPlayerController::PollObjectClick()
 		return;
 	}
 
-	float MouseX = 0.f, MouseY = 0.f;
-	if (!GetMousePosition(MouseX, MouseY))
-	{
-		return;
-	}
-
-	if (IsMouseOverBlockingUI())
+	if (!bMouseLookActive && IsMouseOverBlockingUI())
 	{
 		return;
 	}
@@ -7799,24 +7841,8 @@ void AACEPlayerController::PollObjectClick()
 		DatGameplayBinder->ClearChatEntryFocus();
 	}
 
-	FVector WorldOrigin, WorldDir;
-	if (!DeprojectScreenPositionToWorld(MouseX, MouseY, WorldOrigin, WorldDir))
-	{
-		return;
-	}
-
-	UWorld* World = GetWorld();
-	if (!World)
-	{
-		return;
-	}
-
-	const FVector TraceEnd = WorldOrigin + WorldDir * 200000.f;
-
-	APawn* SelfPawn = GetPawn();
-	const FACEVisibilityPick Pick = ResolveVisibilityPick(*World, WorldOrigin, TraceEnd, SelfPawn);
-	AACEWorldEntityActor* Entity = Pick.Entity;
-	const bool bHitSelf = Pick.bHitSelf;
+	bool bHitSelf=false;
+	AACEWorldEntityActor* Entity=PickWorldPointer(bHitSelf);
 
 	const int32 SelfGuid = Client->GetPlayerGuid();
 	if (!Entity && !bHitSelf)
@@ -7958,4 +7984,9 @@ void AACEPlayerController::CancelPluginJump()
 void AACEPlayerController::SetPluginAttackPower(float Power)
 {
     if(DatGameplayBinder)DatGameplayBinder->SetRequestedAttackPower(Power);
+}
+
+void AACEPlayerController::ShowPluginAttack(int32 Target, uint32 Height, float Power)
+{
+    if (DatGameplayBinder) DatGameplayBinder->ShowPluginAttack(Target, Height, Power);
 }

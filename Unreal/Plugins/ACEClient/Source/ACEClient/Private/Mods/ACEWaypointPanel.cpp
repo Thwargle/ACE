@@ -1,4 +1,5 @@
 #include "Mods/ACEWaypoint.h"
+#include "ACEDungeonMapContours.h"
 #include "Mods/ACEWaypointTiles.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEClientSubsystem.h"
@@ -253,7 +254,7 @@ public:
         const bool Inside=(uint32(Player.CellId)&65535)>=256;
         const bool NextDungeon=Overlay?Inside:H->WaypointOption(TEXT("dungeon"),false);
         if(Dungeon!=NextDungeon || (NextDungeon && (LB!=Landblock || Inside!=WasInside)))
-        {Dungeon=NextDungeon;Landblock=LB;WasInside=Inside;NextMarkers=0;NextCellRetry=0;Floors.Reset();Environments.Reset();CellIndex=0;CellCount=0;ResetView();
+        {Dungeon=NextDungeon;Landblock=LB;WasInside=Inside;NextMarkers=0;NextCellRetry=0;Floors.Reset();Contours=FACEDungeonMapContours();Environments.Reset();CellIndex=0;CellCount=0;ResetView();
          if(Overlay)Zoom=Dungeon?PinnedDungeonZoom:PinnedWorldZoom;
          if(Dungeon)CenterOnPlayer();}
         // The overlay may first open indoors or before the portal DAT is ready.
@@ -268,6 +269,16 @@ public:
             {FACEDatLandblockInfo Info;if(Dat->LoadLandblockInfo(LB,Info))CellCount=FMath::Min(Info.NumCells,4096u);}
         }
         if(Dungeon && CellIndex<CellCount)LoadDungeonCells();
+        if(Dungeon && CellCount && CellIndex==CellCount && !Contours.IsComplete())
+        {
+            const int32 First=Contours.Lines.Num();Contours.BuildStep();
+            for(int32 I=First;I<Contours.Lines.Num();++I)
+            {
+                const auto& Edge=Contours.Lines[I];FFloor Floor;Floor.Z=(Edge.A.Z+Edge.B.Z)*.5;
+                for(auto V:{Edge.A,Edge.B}){FACEPosition P;P.CellId=int32(Landblock|0x100);P.Location=V;Floor.Points.Add(ACEWaypoint::Coordinates(P));}
+                Floors.Add(MoveTemp(Floor));
+            }
+        }
         if(Overlay)CenterOnPlayer();
         if(!Dungeon)if(auto* Dat=H->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();Dat&&Dat->IsCellReady())
         {
@@ -301,10 +312,10 @@ public:
             for(const auto& Floor:Floors)
             {
                 const bool Current=FMath::Abs(Floor.Z-Player.Location.Z)<4;
-                TArray<FVector2D> Points;for(auto V:Floor.Points)Points.Add(Project(V,Size));if(Points.Num()>1){const FVector2D First=Points[0];Points.Add(First);Line(Out,L+1,G,Points,Current?FLinearColor(.25f,.72f,.82f):FLinearColor(.12f,.2f,.27f),Current?1.5f:1.f);}
+                TArray<FVector2D> Points;for(auto V:Floor.Points)Points.Add(Project(V,Size));if(Points.Num()>1){Line(Out,L+1,G,Points,Current?FLinearColor(.25f,.72f,.82f):FLinearColor(.12f,.2f,.27f),Current?1.5f:1.f);}
             }
             if(!CellCount)Text(Out,L+2,G,{16,16},TEXT("Enter a dungeon or building to see its layout."),16,Muted);
-            else if(CellIndex<CellCount)Text(Out,L+2,G,{16,16},FString::Printf(TEXT("Loading layout: %u / %u"),CellIndex,CellCount),14,Muted);
+            else if(CellIndex<CellCount || !Contours.IsComplete())Text(Out,L+2,G,{16,16},FString::Printf(TEXT("Loading layout: %u / %u"),CellIndex,CellCount),14,Muted);
         }
         PaintedMarkers.Reset();TSet<FIntPoint> Occupied;TArray<FBox2D,TInlineAllocator<64>> Labels;
         for(int32 Index=0;Index<Markers.Num();++Index)
@@ -364,7 +375,7 @@ private:
     TWeakObjectPtr<UACEPluginSubsystem> Host;
     TStrongObjectPtr<UACEUIResourceResolver> Resources;TStrongObjectPtr<UTexture2D> MapTexture;FSlateBrush MapBrush;
     FACEWaypointTiles Tiles;
-    TArray<FMarker> Markers;mutable TArray<int32> PaintedMarkers;TArray<FFloor> Floors;TMap<uint32,FACEDatEnvironment> Environments;
+    TArray<FMarker> Markers;mutable TArray<int32> PaintedMarkers;TArray<FFloor> Floors;FACEDungeonMapContours Contours;TMap<uint32,FACEDatEnvironment> Environments;
     FACEPosition Player;FVector2D Pan=FVector2D::ZeroVector,Press,Last,Hover=FVector2D(-100,-100),LastSize=FVector2D(560,450);
     FVector2D MapUp=FVector2D(0,1);
     double Zoom=1,PinnedWorldZoom=8,PinnedDungeonZoom=3.5,NextMarkers=0,NextCellRetry=0,NextMapRetry=0;bool Dragged=false,Dungeon=false,WasInside=false,Overlay=false;FString Search;uint32 Landblock=0,CellIndex=0,CellCount=0;
@@ -420,16 +431,15 @@ private:
                 if(!ACEDatUnpack::UnpackEnvironment(Cursor,Env))continue;Environments.Add(Cell.EnvironmentId,MoveTemp(Env));
             }
             const auto* Structure=Environments[Cell.EnvironmentId].Cells.Find(Cell.CellStructure);if(!Structure)continue;
-            const auto& Polygons=Structure->PhysicsPolygons.IsEmpty()?Structure->Polygons:Structure->PhysicsPolygons;
-            for(const auto& Pair:Polygons)
+            // Match the actual collision mesh: unused physics faces and draw-only
+            // portal planes are not walls and must not close walkable connections.
+            for(uint16 Id:Structure->PhysicsCollisionPolyIds)
             {
-                if(Floors.Num()>=50000){CellIndex=CellCount;break;}
-                const auto& Poly=Pair.Value;TArray<FVector> Points;
-                for(auto Id:Poly.VertexIds)if(const auto* V=Structure->Vertices.Find(uint16(Id)))Points.Add(FVector(Cell.Orientation.RotateVector(V->Origin)+Cell.Origin));
-                if(Points.Num()<3)continue;const auto Normal=FVector::CrossProduct(Points[1]-Points[0],Points[2]-Points[0]).GetSafeNormal();
-                if(Normal.Z<.35)continue;FFloor Floor;
-                for(auto V:Points){FACEPosition P;P.CellId=int32(Cell.Id);P.Location=V;Floor.Points.Add(ACEWaypoint::Coordinates(P));Floor.Z+=V.Z/Points.Num();}
-                Floors.Add(MoveTemp(Floor));
+                const auto* Poly=Structure->PhysicsPolygons.Find(Id);if(!Poly)continue;
+                TArray<FVector> Points;
+                for(auto Vertex:Poly->VertexIds)if(const auto* V=Structure->Vertices.Find(uint16(Vertex)))Points.Add(FVector(Cell.Orientation.RotateVector(V->Origin)+Cell.Origin));
+                if(Points.Num()!=Poly->VertexIds.Num())continue;
+                Contours.AddPolygon(Points);
             }
         }
     }
@@ -576,10 +586,12 @@ bool FACEWaypointOverlayTest::RunTest(const FString&)
             for(int Pass=0;Pass<2100;++Pass)
             {
                 Overlay->Tick(Geometry,Time+=.016,.016f);
-                if(Overlay->CellCount&&Overlay->CellIndex==Overlay->CellCount)break;
+                if(Overlay->CellCount&&Overlay->CellIndex==Overlay->CellCount&&Overlay->Contours.IsComplete())break;
             }
             for(int Pass=0;Pass<3;++Pass){Renderer.DrawWidget(Target,Overlay,Size,.016f);FlushRenderingCommands();}
             TestTrue(TEXT("Pinned fixture contains dungeon floor outlines"),Overlay->Floors.Num()>0);
+            TestTrue(TEXT("Real dungeon removes internal floor seams"),Overlay->Contours.Lines.Num()<Overlay->Contours.InputEdgeCount());
+            AddInfo(FString::Printf(TEXT("Dungeon %08X: %d floor edges -> %d contour segments"),uint32(P.CellId),Overlay->Contours.InputEdgeCount(),Overlay->Contours.Lines.Num()));
             TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);
             Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
             int32 Transparent=0;for(const auto& Pixel:Pixels)if(Pixel.A==0)++Transparent;

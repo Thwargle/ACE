@@ -276,7 +276,7 @@ void UACEPluginSubsystem::Discover()
             P->Permissions.Sort();
             const FString Grant = FString::Join(P->Permissions, TEXT(","));
             P->Enabled = String(Settings, *Id) == TEXT("enabled:") + Grant;
-            if((Id==TEXT("looteditor")||Id==TEXT("waypoint"))&&!Settings->HasField(Id))P->Enabled=true;
+            if((Id==TEXT("looteditor")||Id==TEXT("waypoint")||Id==TEXT("ucmmicro"))&&!Settings->HasField(Id))P->Enabled=true;
             P->Profile = Read(P->Directory / TEXT("default.json"));
             if (!P->Profile) P->Profile = MakeShared<FJsonObject>();
             Plugins.Add(P);
@@ -294,12 +294,17 @@ void UACEPluginSubsystem::SetEnabled(const FString& Id, bool Enabled)
         Settings->SetStringField(Id, Enabled ? TEXT("enabled:") + FString::Join(P->Permissions, TEXT(",")) : TEXT("disabled")); SaveSettings();
     }
 }
+void UACEPluginSubsystem::ToggleUCM()
+{
+    if(auto P=Find(TEXT("ucm")))
+    {if(P->Running)Stop(P->Id,TEXT("Stopped"),true);else Start(P->Id);}
+}
 bool UACEPluginSubsystem::Start(const FString& Id)
 {
     auto P = Find(Id); auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     if (!P || !P->Enabled || C->GetSessionState() != EACESessionState::InWorld || !C->GetPlayerVitalsView().bValid || (C->GetPlayerVitalsView().Health <= 0 && !P->Profile->HasField(TEXT("vt_meta"))))
     { Notice = TEXT("Enable the plugin and log into a living character before starting."); return false; }
-    if(Id==TEXT("looteditor")||Id==TEXT("waypoint")){Notice=TEXT("This plugin has no automation to start. Open its window from the plugin bar.");return false;}
+    if(Id==TEXT("looteditor")||Id==TEXT("waypoint")||Id==TEXT("ucmmicro")){Notice=TEXT("This plugin has no automation to start. Open its window from the plugin bar.");return false;}
     StopAll(TEXT("Another plugin started"));
     FString Source, Error;
     const FString Path = P->Directory / TEXT("main.lua");
@@ -316,7 +321,7 @@ bool UACEPluginSubsystem::Start(const FString& Id)
     }
     P->CanResumeMeta=false;P->ResumeMetaPending=Resume;P->VMSourceHash=SourceHash;P->VMProfileHash=ProfileHash;P->VMSession=C->GetSession();
     P->Running = true; P->Player = C->GetPlayerGuid(); P->Server = C->GetServerName();
-    if(Id==TEXT("ucm")){IdleManaVM.Reset();IdleManaFailed=false;}
+    if(Id==TEXT("ucm")){IdleManaVM.Reset();IdleManaFailed=false;bRouteJoinRequested=true;RouteVisibilityOffset=0;}
     if(Id==TEXT("ucm")){PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();CombatOutcomes.Empty();ClearBuffRequests();if(!Resume){RuntimeRoute.Reset();RoutePoint=1;}RouteRebuiltAt=0;}
     CachedSpells.Reset();
     P->NextAction = 0; P->Status = TEXT("Running"); Notice.Empty(); return true;
@@ -737,6 +742,7 @@ bool UACEPluginSubsystem::Tick(float)
 }
 void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObject>& I)
 {
+    if(P.Id==TEXT("ucm"))I->TryGetBoolField(TEXT("route_join_pending"),bRouteJoinRequested);
     if(P.Id==TEXT("ucm") && I->HasField(TEXT("route_point")))RoutePoint=FMath::Clamp(int32(Number(I,TEXT("route_point"),1)),1,2049);
     if(P.Id==TEXT("ucm")&&I->HasField(TEXT("runtime_route")))
     {
@@ -787,9 +793,9 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         Updated->SetStringField(Kind+TEXT("_source"),Name);
         Updated->SetNumberField(TEXT("vt_revision"),Number(P.Profile,TEXT("vt_revision"))+1);Updated->SetStringField(TEXT("vt_loaded_kind"),Kind);
         if(Kind==TEXT("usd")){auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();if(Client&&Client->GetSession())Client->GetSession()->SendCancelAttack();}
-        P.Profile=Updated;RuntimeRoute.Reset();RouteRebuiltAt=0;MovementOwner.Empty();MoveExpires=0;return;
+        P.Profile=Updated;RuntimeRoute.Reset();RouteRebuiltAt=0;bRouteJoinRequested=true;MovementOwner.Empty();MoveExpires=0;return;
     }
-    const FString Permission = ((Action == TEXT("move") || Action == TEXT("face") || Action == TEXT("jump") || Action == TEXT("recall") || Action == TEXT("use_world") || Action == TEXT("select") || Action == TEXT("logout")) ? TEXT("navigation") : (Action == TEXT("attack") || Action == TEXT("cancel_attack") || Action == TEXT("combat_mode")) ? TEXT("combat") : (Action == TEXT("store_item") || Action == TEXT("give") || Action == TEXT("apply_item") || Action == TEXT("equip") || Action == TEXT("use_item") || Action == TEXT("identify") || Action == TEXT("merge")) ? TEXT("inventory") : (Action == TEXT("buy") || Action == TEXT("combine_salvage") || Action == TEXT("salvage") || Action == TEXT("sell") || Action == TEXT("read") || Action == TEXT("loot") || Action == TEXT("open_corpse") || Action == TEXT("close_corpse")) ? TEXT("loot") : Action);
+    const FString Permission = ((Action == TEXT("move") || Action == TEXT("face") || Action == TEXT("jump") || Action == TEXT("recall") || Action == TEXT("use_world") || Action == TEXT("select") || Action == TEXT("logout")) ? TEXT("navigation") : (Action == TEXT("attack") || Action == TEXT("cancel_attack") || Action == TEXT("combat_mode")) ? TEXT("combat") : (Action == TEXT("store_item") || Action == TEXT("give") || Action == TEXT("apply_item") || Action == TEXT("equip") || Action == TEXT("use_item") || Action == TEXT("identify") || Action == TEXT("merge")) ? TEXT("inventory") : (Action == TEXT("buy") || Action == TEXT("split_note") || Action == TEXT("sell_note") || Action == TEXT("combine_salvage") || Action == TEXT("salvage") || Action == TEXT("sell") || Action == TEXT("read") || Action == TEXT("loot") || Action == TEXT("open_corpse") || Action == TEXT("close_corpse")) ? TEXT("loot") : Action);
     if (!P.Permissions.Contains(Action==TEXT("attack_bar")?TEXT("combat"):Permission)) { Stop(P.Id, TEXT("Action not permitted: ") + Action); return; }
     auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     auto* PC = Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
@@ -924,13 +930,29 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         const float Power = FMath::Clamp(float(Number(I, TEXT("power"), .5)), 0.f, 1.f);
         PhysicalAttackTarget=Target;PhysicalAttackOwner=P.Id;PhysicalAttackUntil=Now+30;
         if (Mode == 2) C->SendTargetedMeleeAttack(Target, Height, Power); else C->SendTargetedMissileAttack(Target, Height, Power);
+        PC->ShowPluginAttack(Target, Height, Power);
         P.NextAction = Now + 3.5;
     }
     else Stop(P.Id, TEXT("Unknown action: ") + Action);
 }
 void UACEPluginSubsystem::ApplyMovement(AACEPlayerController* PC, float& F, float& R, float& T, bool Manual, bool Blocked, bool VR, const FVector& Facing)
 {
-    if (Manual) { StopAll(TEXT("Paused by manual movement; press Start to resume"),true); return; }
+    if (Manual)
+    {
+        // Player input wins this frame, but independent activities (especially
+        // loot during manual combat) keep their VM, queues and running state.
+        // Discard stale steering so it cannot snap back after input is released;
+        // the next normal plugin decision can request fresh movement.
+        MovementOwner.Empty();MoveExpires=0;FaceHeading.Reset();
+        FastCastOwner.Empty();FastCastStarted=false;
+        if(PC)
+        {
+            PC->CancelPluginJump();
+            if(!UseApproachOwner.IsEmpty())PC->EndUseApproach();
+        }
+        UseApproachOwner.Empty();
+        return;
+    }
     if(!FastCastOwner.IsEmpty())
     {
         if(!PendingSpell||FPlatformTime::Seconds()-PendingSpellAt>30)FastCastOwner.Empty();
@@ -952,7 +974,19 @@ void UACEPluginSubsystem::ApplyMovement(AACEPlayerController* PC, float& F, floa
     }
     const FVector Location = Pos.ToUnrealLocation();
     if (FVector::Dist2D(Location, LastMovePosition) > 20) { LastMovePosition = Location; LastProgress = Now; }
-    if (Now - LastProgress > 5) { StopAll(TEXT("Route blocked; manual reposition required"),true); return; }
+    if (Now - LastProgress > 5)
+    {
+        // Let UCM backtrack the approach and blacklist an unreachable target.
+        // Other plugins retain the safety stop; no teleport or collision bypass.
+        if(MovementOwner==TEXT("ucm"))
+        {
+            ++MovementBlockedSerial;bRouteJoinRequested=true;RouteVisibilityOffset=0;MovementOwner.Empty();MoveExpires=0;F=R=T=0;
+            if(auto P=Find(TEXT("ucm")))P->NextDecision=0;
+            if(auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>())if(auto Session=C->GetSession())Session->SendCancelAttack();
+        }
+        else StopAll(TEXT("Route blocked; manual reposition required"),true);
+        return;
+    }
     const FVector Delta = MoveTarget.ToUnrealLocation() - Location;
     if (Delta.Size2D() < MoveArrivalRadius)
     {

@@ -23,6 +23,7 @@
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "ProfilingDebugging/TraceAuxiliary.h"
 #include "UnrealClient.h"
 
 // Deliberately offline: exercise the normal presenters/HUD without credentials,
@@ -53,7 +54,7 @@ public:
    return;
   }
   const FString Scene=Args.Num()?Args[0]:TEXT("outdoor");
-  if(Scene!=TEXT("outdoor") && Scene!=TEXT("indoor") && Scene!=TEXT("effects") && Scene!=TEXT("caul") && Scene!=TEXT("swarm"))return;
+  if(Scene!=TEXT("outdoor") && Scene!=TEXT("indoor") && Scene!=TEXT("effects") && Scene!=TEXT("caul") && Scene!=TEXT("swarm") && Scene!=TEXT("frozen"))return;
   UE_LOG(LogTemp,Display,TEXT("ACE PerfScene preparing %s"),*Scene);
   // The login path intentionally defers cell DAT indexing. This offline setup
   // phase is outside the timed sample and needs both databases immediately.
@@ -62,6 +63,14 @@ public:
   FACEPosition Spawn;Spawn.CellId=0x7D640001;Spawn.Location=FVector(100,100,0);
   // Dense authored ambient particles at the landblock captured on Quest.
   if(Scene==TEXT("caul"))Spawn.CellId=0x09050001;
+  if(Scene==TEXT("frozen"))
+  {
+   // 83.7N, 4.5W: use the reported location, with authored region scenery.
+   const FVector Global((101.95-4.5)*240.,(101.95+83.7)*240.,0);
+   const int32 X=FMath::FloorToInt(Global.X/192.),Y=FMath::FloorToInt(Global.Y/192.);
+   Spawn.CellId=(uint32(X)<<24)|(uint32(Y)<<16)|1;
+   Spawn.Location=Global-FVector(X*192,Y*192,0);
+  }
   if(Scene==TEXT("swarm"))
   {
    Spawn.CellId=0x01430171;Spawn.Location=FVector(49.011993,-74.999023,0);
@@ -106,7 +115,7 @@ public:
   ACEPlaySessionRedirect::GPendingWcTravelMapAfterLogin.Empty();
   PC->bUseEnterWorldLoadScreen=false;
   Client->OnEnteredWorld.Broadcast(Self.Guid,Spawn);
-  const int32 Count=Scene==TEXT("swarm")?64:Scene==TEXT("indoor")?8:32;
+  const int32 Count=Scene==TEXT("frozen")?0:Scene==TEXT("swarm")?64:Scene==TEXT("indoor")?8:32;
   for(int32 I=0;I<Count;++I)
   {
    FACEWorldObject NPC=Self;NPC.Guid+=I+1;NPC.bIsSelf=false;NPC.bIsPlayer=false;
@@ -162,7 +171,7 @@ private:
  FString Scene,Directory;
  double StartTime=0,LastTime=0;
  double LastEffectTime=0;
- bool bSampling=false, bWarmupCapture=false;
+ bool bSampling=false, bWarmupCapture=false, bControlledView=false;
  double SampleStartTime=0;
  uint64 PreviousFrame=uint64(-1);
  TArray<double> Frames;
@@ -180,6 +189,14 @@ private:
   if(FParse::Param(FCommandLine::Get(),TEXT("ACEPerfCameraMotion")))
    Camera->SetActorLocation(CameraOrigin+FVector(8*FMath::Sin(Elapsed),8*FMath::Cos(Elapsed),2*FMath::Sin(2*Elapsed)));
   auto* PC=World->GetFirstPlayerController();PC->SetViewTarget(Camera.Get());
+  if(!bControlledView && Elapsed>=5 && FParse::Param(FCommandLine::Get(),TEXT("ACEPerfCleanView")))
+  {
+   // Apply after login preferences have restored the user's ordinary window.
+   // This changes only the offline run, not the saved preferences.
+   bControlledView=true;
+   GEngine->Exec(World.Get(),TEXT("r.SetRes 1920x1080w"));
+   if(auto* Controller=Cast<AACEPlayerController>(PC))Controller->SetDesktopInterfaceHidden(true);
+  }
   if(Scene==TEXT("effects") && Elapsed>20 && Now-LastEffectTime>2)
   {
    int32 Played=0;
@@ -201,7 +218,11 @@ private:
   if(!bSampling && Elapsed>=45)
   {
    bSampling=true;SampleStartTime=Now;
-   GEngine->Exec(World.Get(),*FString::Printf(TEXT("Trace.File %s cpu,gpu,frame,bookmark"),*(Directory/TEXT("scene.utrace"))));
+   if(!FTraceAuxiliary::IsConnected())
+   {
+    const FString TracePath=Directory/FString::Printf(TEXT("scene-%s.utrace"),*FDateTime::UtcNow().ToString(TEXT("%Y%m%d-%H%M%S")));
+    GEngine->Exec(World.Get(),*FString::Printf(TEXT("Trace.File \"%s\" cpu,gpu,frame,bookmark"),*TracePath));
+   }
    UE_LOG(LogTemp,Display,TEXT("ACE PerfScene sampling %s"),*Scene);
    return true;
   }
@@ -249,6 +270,6 @@ private:
  }
 };
 static FAutoConsoleCommandWithWorldAndArgs GACEPerfScene(TEXT("ace.PerfScene"),
- TEXT("Disconnected development benchmark: outdoor, indoor, effects, caul or swarm. Writes Saved/Performance after 75 seconds."),
+ TEXT("Disconnected development benchmark: outdoor, indoor, effects, caul, swarm or frozen. Writes Saved/Performance after 75 seconds. -ACEPerfCleanView uses a hidden HUD at 1920x1080."),
  FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&FACEPerformanceScene::Start));
 #endif

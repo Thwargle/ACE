@@ -1025,13 +1025,16 @@ bool AACELandblockActor::TrySpawnOneScenery(UACEDatSubsystem* Dat, const FPendin
 		Params.Owner = this;
 		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 		AACERegionSceneryActor* Scenery = World->SpawnActor<AACERegionSceneryActor>(
-			AACERegionSceneryActor::StaticClass(), GetActorTransform(), Params);
+			AACERegionSceneryActor::StaticClass(), RelXform * GetActorTransform(), Params);
 		if (!Scenery)
 		{
 			return true;
 		}
-		Scenery->AttachToActor(this, FAttachmentTransformRules::KeepRelativeTransform);
-		if (!Scenery->InitializeFromSetup(static_cast<int32>(Item.ModelId), 1.f, WorldScale, /*bEnableCollision*/ true, Item.bRegionDesc))
+		// Default scripts can emit immediately. Install the authored placement
+		// before starting them, so distance degradation and world-space births
+		// use the scenery's position rather than the landblock origin.
+		Scenery->AttachToActor(this, FAttachmentTransformRules::KeepWorldTransform);
+		if (!Scenery->InitializeFromSetup(static_cast<int32>(Item.ModelId), Scale, WorldScale, /*bEnableCollision*/ true, Item.bRegionDesc))
 		{
 			Scenery->Destroy();
 			return false;
