@@ -5,12 +5,14 @@ local route_join_pending,route_join_scan=true,nil
 local route_trail,route_walking,route_returning={},false,false
 local route_teleport,route_revision,blocked_serial=nil,nil,nil
 local route_blocks=0
+local navigation_paused,door_attempts=nil,{}
 local retries, until_time, corpses, item_attempts = {}, {}, {}, {}
 local route_pending, loot_pending, recovery_pending, buff_item_pending = nil, nil, nil, nil
 local monster_failures,monster_blacklist,combat_serial={},{},0
 local ghost_attempts,ghost_hp={},{ }
 local corpse_pending=nil
 local mana_refill_pending=nil
+local mana_fill_pending,pet_refill_pending=nil,nil
 local helper_pending=nil
 local debuff_pending=nil
 local debuff_scan=nil
@@ -27,6 +29,17 @@ local loot_scan={}
 local loot_jobs={}
 local loot_job_pending=nil
 local combine_pending=nil
+-- An operational failure belongs to one activity, never the whole scheduler.
+-- Cooldowns prevent a failing high-priority activity starving combat/recovery.
+local activity,activity_time,activity_pauses='meta',0,{}
+local function activity_ready(name)
+ local until_at=activity_pauses[name]
+ if until_at and activity_time<until_at then return false end
+ activity_pauses[name]=nil;activity=name;return true
+end
+local function failed(reason)
+ return {action='activity_failed',activity=activity,status=reason}
+end
 local follow_path,follow_target,follow_teleport={},nil,nil
 local skill_categories = {[17]=45,[19]=47,[21]=3,[23]=46,[25]=5,[27]=9,[29]=10,[31]=44,[33]=12,[35]=13,
  [37]=6,[39]=7,[41]=15,[43]=31,[45]=32,[47]=33,[49]=34,[51]=16,[53]=14,[55]=29,[57]=18,[59]=30,[61]=28,
@@ -45,6 +58,12 @@ local function trained_skill(s,id)
 end
 local function pct(v,m) return m>0 and v*100/m or 0 end
 local function result(a,status) return {action=a,status=status} end
+local function pause_navigation(reason)
+ navigation_paused='Navigation paused: '..reason..'. UCM remains active; enable Follow route to retry'
+ route_pending=nil;route_trail={};route_returning=false;route_walking=false
+ route_join_pending=true;route_join_scan=nil
+ return result('pause_navigation',navigation_paused)
+end
 local function contains(list,id) for _,v in ipairs(list or {}) do if v==id then return true end end return false end
 local function vt_string(value) if type(value)=='number' then return string.format('%.15g',value) end;return tostring(value) end
 local function allowed(list,id) return not list or #list==0 or contains(list,id) end
@@ -85,7 +104,7 @@ local function recovery_spell(v)
  end end end
 end
 -- Host regex matching has bounded input, stack, match time and per-tick work.
-local function literal_pattern(text,pattern) return regexmatch(text,pattern)~=nil end
+local function literal_pattern(text,pattern) return regextest(text,pattern) end
 local catalog_snapshot,catalog_margin,catalog_by_id,catalog_supplied,catalog_usable
 local function index_spells(s,margin)
  if catalog_snapshot~=s or (margin and catalog_margin~=margin) then
@@ -639,7 +658,7 @@ local function meta_action(a,s,p)
    kit_min_success=0,kits_in_magic=true,kit_peace=false,helper_health_threshold=0,helper_stamina_threshold=0,helper_mana_threshold=0,
    helper_health_range=74.5,helper_stamina_range=74.5,helper_mana_range=40,ring_range=5,ring_min_targets=4,debuff_refresh=5,debuff_fallback=false,
    split_peas=true,component_critical=4,component_normal=20,component_idle=20,fast_cast_buffs=false,switch_debuff_wand=true,
-   summon_pets=false,pet_range_mode=0,pet_range=5,pet_min_targets=1,
+   summon_pets=false,pet_range_mode=0,pet_range=5,pet_min_targets=1,refill_summons=false,summon_refill_charges=5,fill_mana_stones=false,
    protection_profile=2,bane_profile=2,protection_custom='ALL',bane_custom='ALL',target_select=1,target_angle_range=5,minimum_range=0,monster_attempts=4,monster_blacklist_seconds=120,corpse_attempts=30,corpse_blacklist_seconds=200,use_arcs=1,arc_range=5,debuff_each_first=1}
   local v=meta.options[a.key];if v==nil then v=p[a.key] end;if v==nil then v=defaults[a.key] end
   if a.key=='combat' then v=v~='off' end
@@ -698,11 +717,12 @@ local function meta_tick(s,p)
  end
 end
 local function meta_work(s,p)
+ if not activity_ready('meta') then return end
  if meta.notice then local text=meta.notice;meta.notice=nil;return {action='notice',text=text,status=text} end
  if meta.turn then
   local delta=math.abs(((s.heading or 0)-meta.turn.heading+180)%360-180)
   if delta<2 then meta.turn=nil
-  elseif s.time>meta.turn.deadline then return result('stop','Unable to face route heading')
+  elseif s.time>meta.turn.deadline then return failed('Unable to face route heading')
   else return {action='face',heading=meta.turn.heading,status='Facing route heading'} end
  end
  if (s.health or 0)<=0 then meta.pending=nil;return result(nil,'Waiting for resurrection') end
@@ -725,16 +745,16 @@ local function meta_work(s,p)
   if s.ready==false then return result(nil,'Waiting to respond to confirmation') end
   if dialog then table.remove(meta.queue,1);return {action='confirm',type=dialog.type,context=dialog.context,accept=confirmation.accept,status='Responding to server confirmation'} end
   confirmation.deadline=confirmation.deadline or s.time+10
-  if s.time>=confirmation.deadline then return result('stop','Expected server confirmation did not appear') end
+  if s.time>=confirmation.deadline then return failed('Expected server confirmation did not appear') end
   return result(nil,'Waiting for server confirmation')
  end
  if meta.pending then
   local q=meta.pending
   if not q.portal and (s.action_serial or 0)~=q.serial then
-   if (s.action_error or 0)~=0 then return result('stop','Meta interaction failed; check target, range and item requirements') end
+   if (s.action_error or 0)~=0 then return failed('Meta interaction failed; check target, range and item requirements') end
    meta.pending=nil
   elseif (s.teleport_sequence or 0)~=q.teleport and not s.portal_space then meta.pending=nil
-  elseif s.time>q.deadline then return result('stop','Meta interaction timed out')
+  elseif s.time>q.deadline then return failed('Meta interaction timed out')
   else return result(nil,'Waiting for meta interaction') end
  end
  if meta.loading then return result(nil,'Waiting for profile load') end
@@ -756,7 +776,7 @@ local function meta_work(s,p)
  if c.op=='jump' then return immediate({action='jump',charge=c.charge,forward=c.forward or 0,strafe=c.strafe or 0,walk_jump=c.walk_jump,heading=c.heading,current_heading=c.current_heading~=false,status='Meta jump'}) end
  if c.op=='face' then meta.turn={heading=c.heading,deadline=s.time+10};return immediate({action='face',heading=c.heading,status='Facing route heading'}) end
  if c.op=='fellowship' then
-  local id;if c.operation=='recruit' then for _,o in ipairs(s.route_objects or {}) do if o.object_class==24 and string.lower(o.name)==string.lower(c.name) then id=o.id;break end end;if not id then return result('stop','Fellowship recruit is not nearby: '..c.name) end end
+  local id;if c.operation=='recruit' then for _,o in ipairs(s.route_objects or {}) do if o.object_class==24 and string.lower(o.name)==string.lower(c.name) then id=o.id;break end end;if not id then return failed('Fellowship recruit is not nearby: '..c.name) end end
   return immediate({action='fellowship',operation=c.operation,name=c.name,target=id,status='Fellowship: '..c.operation})
  end
  local function find(list,name,id,partial)
@@ -771,14 +791,14 @@ local function meta_work(s,p)
   if c.scope~='world' then item=find(s.inventory,c.item,c.item_id,partial);if item then action='use_item';break end end
   if c.scope~='inventory' then item=find(s.route_objects,c.item,c.item_id,partial) or find(s.targets,c.item,c.item_id,partial) or find(s.corpses,c.item,c.item_id,partial);if item then action='use_world';break end end
  end
- if not item then return result('stop','Meta item or object is unavailable: '..(c.item or tostring(c.item_id))) end
+ if not item then return failed('Meta item or object is unavailable: '..(c.item or tostring(c.item_id))) end
  if c.op=='select' then meta.selected=item.id;return immediate({action='select',target=item.id,status='Selected '..item.name}) end
  local target
  if c.target or c.target_id then
-  if action~='use_item' then return result('stop','Meta use-on/give requires an owned item') end
+  if action~='use_item' then return failed('Meta use-on/give requires an owned item') end
   if c.target_id==s.player then target={id=s.player} end
   for _,partial in ipairs({false,true}) do target=target or find(s.route_objects,c.target,c.target_id,partial) or find(s.inventory,c.target,c.target_id,partial) or find(s.targets,c.target,c.target_id,partial);if target then break end end
-  if not target then return result('stop','Meta target is unavailable: '..(c.target or tostring(c.target_id))) end
+  if not target then return failed('Meta target is unavailable: '..(c.target or tostring(c.target_id))) end
   action=c.op=='give' and 'give' or 'apply_item'
  end
  table.remove(meta.queue,1);meta.pending={serial=s.action_serial or 0,teleport=s.teleport_sequence or 0,deadline=s.time+45}
@@ -849,7 +869,10 @@ local function condition_match(c,item,s,scan)
   for index=scan.spell_index or 1,#names do
    if not workavailable() then scan.spell_count=count;scan.spell_index=index;return 'pending' end
    local name=names[index]
-   if literal_pattern(name,c.pattern or '') and ((c.exclude or '')=='' or not literal_pattern(name,c.exclude)) then count=count+1 end
+   if literal_pattern(name,c.pattern or '') and ((c.exclude or '')=='' or not literal_pattern(name,c.exclude)) then
+    count=count+1
+    if count>=(c.value or 1) then scan.spell_count=nil;scan.spell_index=nil;return true end
+   end
   end
   scan.spell_count=nil;scan.spell_index=nil
   return count>=(c.value or 1)
@@ -884,16 +907,33 @@ local function rule_match(rule,item,s,scan)
   end
  end
  local conditions=rule.conditions or {}
+ -- Conditions are ANDed. Reject on inexpensive public/numeric properties before
+ -- scanning spell names, regardless of the editor's display order.
+ for phase=scan.phase or 1,2 do
  for index=scan.condition or 1,#conditions do
-  if not workavailable() then scan.condition=index;scan.missing=missing;return 'pending' end
+  local c=conditions[index];local expensive=c.field=='spells' or c.field=='string'
+  if expensive==(phase==2) then
+  if not workavailable() then scan.phase=phase;scan.condition=index;scan.missing=missing;return 'pending' end
   local match=condition_match(conditions[index],item,s,scan)
-  if match=='pending' then scan.condition=index;scan.missing=missing;return 'pending'
+  if match=='pending' then scan.phase=phase;scan.condition=index;scan.missing=missing;return 'pending'
   elseif match==false then return false elseif match==nil then missing=true end
+  end
+ end
+ scan.condition=nil
  end
  if missing then if item.identified then return false else return nil end end
  return true
 end
 local function equipment_mana(s,p,inventory,option)
+ if not activity_ready('item_mana') then return end
+ if mana_fill_pending then
+  local q=mana_fill_pending;local stone
+  for _,v in ipairs(inventory) do if v.id==q.stone then stone=v;break end end
+  if stone and stone.identified and (stone.mana or 0)>0 then mana_fill_pending=nil
+  elseif ((s.action_serial or 0)~=q.serial and (s.action_error or 0)~=0) or s.time>=q.deadline then
+   mana_fill_pending=nil;until_time.mana_fill=s.time+30
+  else return end -- Keep combat/recovery available while appraisal catches up.
+ end
  -- Inventory mana is an item resource, not the player's mana vital.
  if mana_refill_pending then
   local improved=false
@@ -909,12 +949,51 @@ local function equipment_mana(s,p,inventory,option)
    for _,v in ipairs(inventory) do
     local named=p.assist_items==nil;for _,a in ipairs(p.assist_items or {}) do if (a.type==6 or a.type==8) and a.name==v.name then named=true end end
     if band(v.type,0x80000)~=0 and (v.mana or 0)>0 and (not v.workmanship or v.workmanship==0 or (v.mana or 0)>=option('mana_tank_minimum',0)) and allowed(p.consumables,v.wcid) and named then
-    if (item_attempts.mana_refill or 0)>=3 then return result('stop','Equipment mana refill failed repeatedly; check charges and item requirements') end
+    if (item_attempts.mana_refill or 0)>=3 then return failed('Equipment mana refill failed repeatedly; check charges and item requirements') end
     item_attempts.mana_refill=(item_attempts.mana_refill or 0)+1
     local before={};for _,gear in ipairs(inventory) do if gear.equipped then before[gear.id]=gear.mana or 0 end end
     mana_refill_pending={before=before,serial=s.action_serial or 0,expires=s.time+10}
     until_time.mana_stone=s.time+30;return {action='use_item',item=v.id,status='Recharging equipment: '..v.name} end end
   end
+ end
+ if option('fill_mana_stones',false) and s.time>=(until_time.mana_fill or 0) then
+  local stone,source
+  local sources={};for _,id in ipairs(p.mana_source_items or {}) do sources[id]=true end
+  for _,v in ipairs(inventory) do
+   if v.identified and v.usable and v.mana_empty and band(v.type,0x80000)~=0 and allowed(p.consumables,v.wcid) then stone=stone or v end
+   -- Explicit individual items, never all items of the same weenie class.
+   if sources[v.id] and v.identified and not v.equipped and not v.retained and v.resource_available~=false
+    and (v.mana or 0)>0 and (v.max_mana or 0)>0 and band(v.type,0x80200)==0 then source=source or v end
+  end
+  if stone and source and stone.id~=source.id then
+   mana_fill_pending={stone=stone.id,source=source.id,serial=s.action_serial or 0,deadline=s.time+15}
+   return {action='apply_item',item=stone.id,target=source.id,status='Filling '..stone.name..' from '..source.name..' (consumes item)'}
+  end
+ end
+end
+
+local function refill_pet(s,p,inventory,option,eligible)
+ if not activity_ready('pets') then return end
+ if pet_refill_pending then
+  local q=pet_refill_pending;local device
+  for _,v in ipairs(inventory) do if v.id==q.id then device=v;break end end
+  if device and (device.structure or 0)>q.before then pet_refill_pending=nil
+  elseif ((s.action_serial or 0)~=q.serial and (s.action_error or 0)~=0) or s.time>=q.deadline then
+   pet_refill_pending=nil;until_time.pet_refill=s.time+30
+  else return end
+ end
+ if not option('refill_summons',false) or s.time<(until_time.pet_refill or 0) then return end
+ local spirit,device
+ for _,v in ipairs(inventory) do
+  -- ACE's Encapsulated Spirit recipe explicitly uses WCID 49485.
+  if v.wcid==49485 and v.usable and not v.equipped and v.resource_available~=false then spirit=spirit or v end
+  local props=v.int_properties or {}
+  if eligible(v) and v.identified and props['280']==213 and (v.max_structure or 0)>0
+   and (v.structure or 0)<v.max_structure and (v.structure or 0)<=option('summon_refill_charges',5) then device=device or v end
+ end
+ if spirit and device then
+  pet_refill_pending={id=device.id,before=device.structure or 0,serial=s.action_serial or 0,deadline=s.time+15}
+  return {action='apply_item',item=spirit.id,target=device.id,status='Refilling summon: '..device.name}
  end
 end
 
@@ -924,8 +1003,11 @@ local function tick(s,p)
  local current;for _,v in ipairs(p.states or {}) do if v.name==state then current=v end end
  if p.usd_keys then state='Default';current={} end -- Imported character settings replace native state overrides.
  if not p.states and state=='Default' then current={} end
- if not current then return result('stop','Unknown state: '..state) end
- local function option(k,default) if current[k]~=nil then return current[k] end;if p[k]~=nil then return p[k] end;return default end
+ if not current then
+  local invalid=state;state='Default';current={};entered=s.time
+  if activity_ready('meta') then return failed('Unknown activity state: '..invalid..'; using base settings') end
+ end
+ local function option(k,default) if k=='navigation' and navigation_paused then return false end;if current[k]~=nil then return current[k] end;if p[k]~=nil then return p[k] end;return default end
  -- Failure counts come from server combat feedback, not from elapsed attack time
  -- or evades. Match VT's strict count > limit and let the route run past failures.
  local present={};for _,t in ipairs(s.targets or {}) do present[t.id]=true end
@@ -1001,8 +1083,9 @@ local function tick(s,p)
   last_cast=nil
  end
  if route_pending and not forced_buff then
+   activity='navigation'
    local route=p.route or {};local v=route[point]
-   if not v then return result('stop','Route changed during an action') end
+   if not v then return failed('Route changed during an action') end
    local kind=v.kind or 'walk'
    if kind=='pause' then
     if s.time-route_pending.time>=(v.seconds or 5) then route_pending=nil;point=point+route_direction end
@@ -1011,11 +1094,11 @@ local function tick(s,p)
    elseif kind=='portal' or kind=='recall' then
     local nextpoint=route[point+route_direction]
     if s.teleport_sequence~=route_pending.teleport and not s.portal_space and (v.legacy or (nextpoint and distance(s.position,nextpoint)<30)) then local step=route_pending.confirmed and 2 or 1;route_pending=nil;point=point+route_direction*step
-    elseif s.time-route_pending.time>45 then return result('stop','Portal did not reach the recorded destination') end
+    elseif s.time-route_pending.time>45 then return pause_navigation('portal did not reach the recorded destination') end
    elseif s.action_serial~=route_pending.serial then
-    if (s.action_error or 0)~=0 then return result('stop','Route interaction failed') end
+    if (s.action_error or 0)~=0 then return pause_navigation('route interaction failed') end
     local step=route_pending.confirmed and 2 or 1;route_pending=nil;point=point+route_direction*step
-   elseif s.time-route_pending.time>30 then return result('stop','Route action timed out') end
+   elseif s.time-route_pending.time>30 then return pause_navigation('route action timed out') end
    return result(nil,'Waiting for route action')
   end
  local by_id,spells=index_spells(s,option('skill_margin',30));local trained={}
@@ -1033,13 +1116,14 @@ local function tick(s,p)
   end
   return stock_counts[wcid] and stock_counts[wcid][name] or 0
  end
+ if activity_ready('vendors') then
  if note_pending then
   local q=note_pending
   if not option('vendor_restock',false) or s.vendor~=q.vendor or not s.vendor_uses_pyreals then
    note_pending=nil;return result(nil,'Trade note redemption cancelled: vendor or restocking changed')
   end
   if s.time>=q.deadline or ((s.action_serial or 0)~=q.serial and (s.action_error or 0)~=0) then
-   return result('stop','Trade note redemption not confirmed: check inventory space and vendor messages')
+   return failed('Trade note redemption not confirmed: check inventory space and vendor messages')
   end
   local source
   for _,v in ipairs(inventory) do if v.id==q.id then source=v;break end end
@@ -1048,7 +1132,7 @@ local function tick(s,p)
    local candidate
    for _,v in ipairs(s.vendor_trade_notes or {}) do
     if not q.known[v.id] and v.wcid==q.wcid and v.name==q.name and v.count==q.count and v.unit_value==q.unit_value then
-     if candidate then return result('stop','Trade note split is ambiguous; no notes sold') end
+     if candidate then return failed('Trade note split is ambiguous; no notes sold') end
      candidate=v
     end
    end
@@ -1068,7 +1152,7 @@ local function tick(s,p)
   local q=purchase_pending
   if stock_count(q.wcid,q.name)>=q.expected then purchase_pending=nil
   elseif s.time>=q.deadline or (s.vendor or 0)~=q.vendor or ((s.action_serial or 0)~=q.serial and (s.action_error or 0)~=0) then
-   return result('stop','Purchase not confirmed: check currency, pack space and vendor stock')
+   return failed('Purchase not confirmed: check currency, pack space and vendor stock')
   else return result(nil,'Waiting for purchased '..q.name) end
  end
  if option('vendor_restock',false) and (s.vendor or 0)~=0 then
@@ -1092,7 +1176,7 @@ local function tick(s,p)
          candidates[#candidates+1]=note;total=total+note.unit_value*note.count
         end
        end
-       if total<deficit then return result('stop','Not enough pyreals or redeemable trade notes for '..r.item_name) end
+       if total<deficit then return failed('Not enough pyreals or redeemable trade notes for '..r.item_name) end
        -- Prefer a denomination covering the shortfall with the least change.
        -- Otherwise redeem the largest available contribution and reassess.
        table.sort(candidates,function(a,b)
@@ -1115,11 +1199,12 @@ local function tick(s,p)
       purchase_pending={wcid=r.item_wcid,name=r.item_name,expected=have+count,deadline=s.time+15,serial=s.action_serial or 0,vendor=s.vendor}
       return {action='buy',vendor=s.vendor,item=v.id,count=count,status='Restocking '..r.item_name..' ('..have..' / '..r.quantity..')'}
      end
-     return result('stop','Saved restock item is not available: '..r.item_name)
+     return failed('Saved restock item is not available: '..r.item_name)
     end
    end
   end
  end
+ end -- vendor activity
  local usable_names={};for _,v in ipairs(inventory) do if v.usable and v.name then usable_names[v.name]=v end end
  local weapon_types,weapon_ids={},{ }
  for _,v in ipairs(p.weapons or {}) do weapon_types[v]=true end
@@ -1133,13 +1218,13 @@ local function tick(s,p)
  local function equip(v,offhand,unequip)
   local key='equip'..v.id..(offhand and ':offhand' or unequip and ':remove' or '')
   if s.time<(until_time[key] or 0) then return result(nil,'Waiting for equipment') end
-  if (item_attempts[key] or 0)>=3 then return result('stop','Could not equip '..v.name) end
+  if (item_attempts[key] or 0)>=3 then return failed('Could not equip '..v.name) end
   until_time[key]=s.time+5;item_attempts[key]=(item_attempts[key] or 0)+1
   return {action='equip',item=v.id,offhand=offhand,unequip=unequip,status=(unequip and 'Removing ' or 'Equipping ')..v.name}
  end
  local function assess(v)
   local key='id'..v.id
-  if (item_attempts[key] or 0)>=3 then return result('stop','Unable to assess '..v.name..'; check appraisal skills') end
+  if (item_attempts[key] or 0)>=3 then return failed('Unable to assess '..v.name..'; check appraisal skills') end
   if s.time<(until_time[key] or 0) then return result(nil,'Waiting for appraisal: '..v.name) end
   item_attempts[key]=(item_attempts[key] or 0)+1;until_time[key]=s.time+30
   return {action='identify',item=v.id,status='Assessing '..v.name}
@@ -1154,14 +1239,44 @@ local function tick(s,p)
   end end
   if best then return equip(best) end
   if unknown then return assess(unknown) end
-  return result('stop','No usable casting equipment; add a wand, staff or orb')
+  return failed('No usable casting equipment; add a wand, staff or orb')
  end
  local function idle_stance()
   if not target and option('idle_peace',false) and (s.combat_mode or 1)~=1 then
    return {action='combat_mode',mode=1,status='Resting in peace mode'}
   end
  end
+ local function route_door(destination)
+  if not option('open_doors',true) then return end
+  for id,attempt in pairs(door_attempts) do
+   if s.time-attempt.time>30 then door_attempts[id]=nil end
+  end
+  local px,py=world(s.position);local tx,ty=world(destination)
+  local dx,dy=tx-px,ty-py;local length=dx*dx+dy*dy
+  if length==0 then return end
+  for _,door in ipairs(s.route_objects or {}) do
+   if door.object_class==26 then
+    if door.door_open then door_attempts[door.id]=nil
+    elseif door.distance<=option('door_range',2) and s.time>=(until_time['door'..door.id] or 0) then
+     local x,y=world(door);local along=((x-px)*dx+(y-py)*dy)/length
+     if along>=0 and along<=1 and (x-px-along*dx)^2+(y-py-along*dy)^2<2.25 then
+      local attempt=door_attempts[door.id]
+      -- A used door can close again. Only bound retries at the same obstruction;
+      -- opening it, moving away, or returning later starts a fresh attempt.
+      if not attempt or distance(s.position,attempt.position)>2 or s.time-attempt.time>30 then
+       attempt={count=0,position=s.position};door_attempts[door.id]=attempt
+      end
+      if attempt.count>=3 then return pause_navigation('door remains closed after three attempts') end
+      attempt.count=attempt.count+1;attempt.time=s.time
+      until_time['door'..door.id]=s.time+5
+      return {action='use_world',item=door.id,status='Opening route door'}
+     end
+    end
+   end
+  end
+ end
  local function navigate()
+ if not activity_ready('navigation') then return end
  if option('navigation',false) then
   local idle=idle_stance();if idle then return idle end
   if (p.follow_name or '')~='' or (p.follow_id or 0)~=0 then
@@ -1171,6 +1286,7 @@ local function tick(s,p)
    if follow.distance<=option('follow_distance',3) then return result(nil,'Following '..follow.name) end
    local aim=option('follow_corners',false) and follow_path[1] or follow
    aim=aim or follow
+   local door=route_door(aim);if door then return door end
    return {action='move',cell=aim.cell,x=aim.x,y=aim.y,z=aim.z,status='Following '..follow.name}
   end
   if meta.route_changed then return result(nil,'Loading route geometry') end
@@ -1181,7 +1297,8 @@ local function tick(s,p)
   while #route_trail>0 do
    local back=route_trail[#route_trail]
    if distance(s.position,back)<=.45 then table.remove(route_trail)
-   else route_returning=true;return {action='move',cell=back.cell,x=back.x,y=back.y,z=back.z,arrival_radius=.4,status='Returning to route'} end
+   else route_returning=true;local door=route_door(back);if door then return door end
+    return {action='move',cell=back.cell,x=back.x,y=back.y,z=back.z,arrival_radius=.4,status='Returning to route'} end
   end
   route_returning=false;route_walking=true
   if route_join_pending then
@@ -1221,29 +1338,21 @@ local function tick(s,p)
   local v=route[point];local kind=v.kind or 'walk'
   if distance(s.position,v)<=option('waypoint_radius',.8) then route_blocks=0 end
   if (not v.legacy or v.walk_first) and distance(s.position,v)>option('waypoint_radius',.8) then
-   if option('open_doors',true) then
-    local px,py=world(s.position);local tx,ty=world(v);local dx,dy=tx-px,ty-py;local length=dx*dx+dy*dy
-    for _,door in ipairs(s.route_objects or {}) do if door.object_class==26 and not door.door_open and door.distance<=option('door_range',2) and s.time>=(until_time['door'..door.id] or 0) then
-     local x,y=world(door);local along=length>0 and ((x-px)*dx+(y-py)*dy)/length or -1
-     if along>=0 and along<=1 and (x-px-along*dx)^2+(y-py-along*dy)^2<2.25 then
-      until_time['door'..door.id]=s.time+5;return {action='use_world',item=door.id,status='Opening route door'}
-     end
-    end end
-   end
+   local door=route_door(v);if door then return door end
    return {action='move',cell=v.cell,x=v.x,y=v.y,z=v.z,arrival_radius=option('waypoint_radius',.8),coordinate_route=v.legacy,status='Waypoint '..point..' / '..#route}
   end
   if kind=='checkpoint' and (not s.server_position or distance(s.server_position,v)>option('waypoint_radius',.8)) then return result(nil,'Checkpoint: waiting for server position') end
   if kind=='pause' then route_pending={time=s.time};return result(nil,'Pausing on route') end
   if kind=='recall' then
-   if not by_id[v.spell] or by_id[v.spell].known==false then return result('stop','Route recall spell is not known') end
+   if not by_id[v.spell] or by_id[v.spell].known==false then return failed('Route recall spell is not known') end
    local equipment=caster();if equipment then return equipment end
-   if not v.legacy and not route[point+route_direction] then return result('stop','Record a destination point after the recall') end
+   if not v.legacy and not route[point+route_direction] then return failed('Record a destination point after the recall') end
    route_pending={time=s.time,serial=s.action_serial,teleport=s.teleport_sequence};return cast(s,by_id[v.spell],s.player,'Recalling on route')
   end
-  if kind=='command' then local e=meta_command(v.command,s);if e then return result('stop',e) end;point=point+route_direction;return result(nil,'Route command completed') end
+  if kind=='command' then local e=meta_command(v.command,s);if e then if e=='Stopped by UCM command' then return result('stop',e) end;return failed(e) end;point=point+route_direction;return result(nil,'Route command completed') end
   if kind=='jump' then route_pending={time=s.time};return {action='jump',heading=v.heading or 0,current_heading=v.current_heading,charge=v.charge or .5,forward=v.forward or 1,strafe=v.strafe or 0,walk_jump=v.walk_jump,status='Charging route jump'} end
   if kind=='portal' or kind=='use' then
-   if kind=='portal' and not v.legacy and not route[point+route_direction] then return result('stop','Record a destination point after the portal') end
+   if kind=='portal' and not v.legacy and not route[point+route_direction] then return failed('Record a destination point after the portal') end
    local object
    for _,o in ipairs(s.route_objects or {}) do
     local match=(v.object_id and o.id==v.object_id) or (not v.object_id and ((v.wcid and o.wcid==v.wcid) or o.name==v.object_name))
@@ -1254,7 +1363,7 @@ local function tick(s,p)
     end
     if match and (not object or o.distance<object.distance) then object=o end
    end
-   if not object then return result('stop','Route object is not visible; select it and record Use again') end
+   if not object then return failed('Route object is not visible; select it and record Use again') end
    route_pending={time=s.time,serial=s.action_serial,teleport=s.teleport_sequence};return {action='use_world',item=object.id,status='Using '..object.name}
   end
   point=point+route_direction;return result(nil,'Waypoint reached')
@@ -1262,12 +1371,13 @@ local function tick(s,p)
  end
  -- Confirm the vital actually improved. A failed kit or fizzle must not loop forever.
  local function split_peas(minimum)
+  if not activity_ready('components') then return end
   if s.components_required==false then pea_pending=nil;return end
   if not pea_pending and (not option('split_peas',true) or #(p.pea_recipes or {})==0) then return end
   local counts,items={},{};for _,v in ipairs(inventory) do if not v.equipped and v.name then counts[v.name]=(counts[v.name] or 0)+(v.count or 1);items[v.name]=v end end
   if pea_pending then local q=pea_pending
    if (counts[q.output] or 0)>q.before then pea_pending=nil;item_attempts['pea'..q.output]=0
-   elseif s.time>=q.deadline or ((s.action_serial or 0)~=q.serial and (s.action_error or 0)~=0) then return result('stop','Pea splitting was not confirmed; check supplies and pack space')
+   elseif s.time>=q.deadline or ((s.action_serial or 0)~=q.serial and (s.action_error or 0)~=0) then return failed('Pea splitting was not confirmed; check supplies and pack space')
    else return result(nil,'Waiting for '..q.output..' from splitting') end
   end
   if not option('split_peas',true) then return end
@@ -1278,7 +1388,7 @@ local function tick(s,p)
     local tool,input=items[recipe.tool],items[recipe.input]
     if tool and input and (input.count or 1)>0 then
      if (s.combat_mode or 1)~=1 then return {action='combat_mode',mode=1,status='Preparing to split '..recipe.input} end
-     if (item_attempts['pea'..recipe.output] or 0)>=3 then return result('stop','Pea splitting exceeded retry limit') end
+     if (item_attempts['pea'..recipe.output] or 0)>=3 then return failed('Pea splitting exceeded retry limit') end
      item_attempts['pea'..recipe.output]=(item_attempts['pea'..recipe.output] or 0)+1
      pea_pending={output=recipe.output,before=counts[recipe.output] or 0,serial=s.action_serial or 0,deadline=s.time+15}
      return {action='apply_item',item=tool.id,target=input.id,status='Splitting '..recipe.input}
@@ -1308,8 +1418,9 @@ local function tick(s,p)
  end
  local recovery_missing={}
  local function recovery(vital,percent,threshold)
+  if not activity_ready('recovery'..vital) then return end
   if percent>=threshold then item_attempts['recover'..vital]=0;return end
-  if (item_attempts['recover'..vital] or 0)>=3 then return result('stop','Recovery failed repeatedly; check supplies, skill and components') end
+  if (item_attempts['recover'..vital] or 0)>=3 then return failed('Recovery failed repeatedly; check supplies, skill and components') end
   local function pending(handler)
    item_attempts['recover'..vital]=(item_attempts['recover'..vital] or 0)+1
    recovery_pending={vital=vital,before=vital==2 and s.health or vital==4 and s.stamina or s.mana,expires=s.time+8,serial=s.action_serial,handler=handler}
@@ -1453,9 +1564,11 @@ local function tick(s,p)
    or recovery(6,mp,not target and math.max(option('idle_mana_threshold',0),option('mana_threshold',45)) or option('mana_threshold',45))
   if action then return action end
  end
- if hp<option('stop_health',15) then return result('stop','Health critical; no ready recovery method') end
+ -- Even without a ready heal, keep fighting; stopping here abandons the player.
+ local health_critical=hp<option('stop_health',15)
  -- VT c4/c8/cx only dispel temporary elemental vulnerabilities, not every
  -- negative enchantment. A UseDone acknowledgement alone is not success.
+ activity='dispel'
  local vulnerabilities={};local lowest_vulnerability
  for _,e in ipairs(s.harmful_enchantments or {}) do
   if e.category>=102 and e.category<=114 and e.category%2==0 and (e.remaining or 0)>0 then
@@ -1469,7 +1582,7 @@ local function tick(s,p)
    dispel_pending=nil;until_time.dispel=s.time+15
   else return result(nil,'Waiting for dispel enchantment update') end
  end
- if lowest_vulnerability and s.time>=(until_time.dispel or 0) and (option('dispel_self',false) or option('dispel_items',false)) then
+ if activity_ready('dispel') and lowest_vulnerability and s.time>=(until_time.dispel or 0) and (option('dispel_self',false) or option('dispel_items',false)) then
   local function pending_dispel()
    dispel_pending={before=vulnerabilities,expires=s.time+8,serial=s.action_serial or 0}
   end
@@ -1502,7 +1615,7 @@ local function tick(s,p)
    helper_pending=nil;until_time[q.key]=s.time+15
   else return result(nil,'Waiting for fellowship recovery result') end
  end
- if not forced_buff and option('recovery',true) and fellows.valid then
+ if activity_ready('helper') and not forced_buff and option('recovery',true) and fellows.valid then
   for index,vital in ipairs({'health','stamina','mana'}) do
    local threshold=option('helper_'..vital..'_threshold',0)
    local recipient,lowest=nil,threshold
@@ -1531,6 +1644,7 @@ local function tick(s,p)
  end
  local mana_action=equipment_mana(s,p,inventory,option);if mana_action then return mana_action end
  local function buffs(refresh)
+ if health_critical or not activity_ready('buffs') then return end
  if forced_buff or option('buffing',true) then
   -- Consumable buffs require an observed enchantment, not merely UseDone.
   -- Failed uses rotate to the next item instead of consuming a whole stack.
@@ -1550,9 +1664,9 @@ local function tick(s,p)
   if v then
    local key=tostring(id)..':'..v.category
    if s.time<(until_time[key] or 0) then return result(nil,'Waiting for buff confirmation') end
-   if mp<option('stop_mana',10) then return result('stop','Mana too low to buff; configure recovery') end
+   if mp<option('stop_mana',10) then return failed('Mana too low to buff; configure recovery') end
    local equipment=caster()
-   if (retries[key] or 0)>=3 or (equipment and equipment.action=='stop') then
+   if (retries[key] or 0)>=3 or (equipment and equipment.action=='activity_failed') then
     buff_skips[key]=s.time+120;retries[key]=nil;until_time[key]=nil;buff_plan=nil
     if forced_buff then forced_buff.skipped=forced_buff.skipped or {};forced_buff.skipped[key]=true end
     return result(nil,'Skipping failed buff: '..(v.name or tostring(v.id))..'; continuing cycle')
@@ -1592,7 +1706,7 @@ local function tick(s,p)
  local normal_components=split_peas(option('component_normal',20));if normal_components then return normal_components end
  -- Tell requests use Other spells, never redirect Self spells to the requester.
  local request=s.buff_request
- if request then
+ if request and activity_ready('buff_others') then
   local function finish(message)
    other_job=nil;return {action='buff_request_done',request=request.id,status=message}
   end
@@ -1655,16 +1769,18 @@ local function tick(s,p)
   local missing=0;for _ in pairs(job.failed) do missing=missing+1 end
   return finish(string.format('%s: %d buffs confirmed%s',request.name,job.count,missing>0 and (', '..missing..' unavailable or failed (skills, components or visible equipment)') or '; requested set complete'))
  else other_job=nil end
- local combat=option('combat','off')
+ local combat=activity_ready('combat') and option('combat','off') or 'off'
  if combat~='off' and not option('manual_combat',false) then combat='auto' end
  local pet_cooldown=(s.cooldowns or {})['213'] or 0
+ activity='pets'
+ local refill=refill_pet(s,p,inventory,option,weapon_allowed);if refill then return refill end
  if pet_pending then
   if s.owned_pet or pet_cooldown>0 then pet_pending=nil
   elseif ((s.action_serial or 0)~=pet_pending.serial and (s.action_error or 0)~=0) or s.time>pet_pending.deadline then
-   return result('stop','Pet summon was not confirmed; check charges and requirements')
+   return failed('Pet summon was not confirmed; check charges and requirements')
   else return result(nil,'Waiting for summoned pet or server cooldown') end
  end
- if combat~='off' and option('summon_pets',false) and not s.owned_pet and pet_cooldown<=0 then
+ if activity_ready('pets') and not pet_refill_pending and combat~='off' and option('summon_pets',false) and not s.owned_pet and pet_cooldown<=0 then
   local skill=(s.skills or {})['54'] or {}
   if (skill.training or 0)>=2 then
    local pet_target,pet_rule,count=nil,nil,0
@@ -1707,7 +1823,8 @@ local function tick(s,p)
      end
     end
     if best then
-     if (s.combat_mode or 1)~=1 then return {action='combat_mode',mode=1,status='Preparing to summon a pet'} end
+     -- Summoning devices can be used while armed. Keep the current stance;
+     -- dropping to peace here unnecessarily removes combat defenses.
      pet_pending={serial=s.action_serial or 0,deadline=s.time+15}
      return {action='use_item',item=best.id,status='Summoning with '..best.name}
     end
@@ -1716,6 +1833,7 @@ local function tick(s,p)
  end
  if combat=='off' then debuff_pending=nil;debuff_scan=nil;if locked_target then locked_target=nil;return result('cancel_attack','Combat disabled') end end
  local function loot()
+ if not activity_ready('loot') then return end
  if corpse_pending then
   if s.container==corpse_pending.id then item_attempts['corpse'..corpse_pending.id]=0;corpse_pending=nil
   elseif s.time<corpse_pending.deadline and not ((s.action_serial or 0)~=corpse_pending.serial and (s.action_error or 0)~=0) then return result(nil,'Approaching / waiting for corpse to open')
@@ -1730,19 +1848,25 @@ local function tick(s,p)
  -- independently of the UI container, before moving on or applying loot jobs.
    if loot_pending then
     local present=false;for _,v in ipairs(s.contents or {}) do if s.container==loot_pending.container and v.id==loot_pending.id and v.count>=loot_pending.count then present=true end end
-    local owned=0;for _,v in ipairs(inventory) do if v.wcid==loot_pending.wcid then owned=owned+(v.count or 1) end end
-    if present or owned<loot_pending.expected then
+    local owned,received_exact=0,false
+    for _,v in ipairs(inventory) do
+     if v.wcid==loot_pending.wcid then owned=owned+(v.count or 1) end
+     if v.id==loot_pending.id and (v.count or 1)>=loot_pending.amount then received_exact=true end
+    end
+    if not received_exact and (present or owned<loot_pending.expected) then
      if s.time<loot_pending.expires then return result(nil,'Waiting for loot transfer') end
-     return result('stop','Loot transfer failed; check pack capacity and corpse ownership')
+     -- A timeout does not prove full packs or lost ownership. Release this
+     -- corpse so combat/recovery continue; retry it later without flooding Use.
+     return failed('Loot transfer unconfirmed; leaving items untouched')
     end
     if loot_pending.after and loot_pending.after~='keep' then
-     if #loot_jobs>=128 then return result('stop','Too many pending loot actions; visit a vendor') end
+     if #loot_jobs>=128 then return failed('Too many pending loot actions; visit a vendor') end
      local received
      for _,i in ipairs(inventory) do if i.wcid==loot_pending.wcid and not loot_pending.before[i.id] and (i.count or 1)==loot_pending.amount then
-      if received then return result('stop','Loot transfer has multiple matching new items; review inventory before continuing') end
+      if received then return failed('Loot transfer has multiple matching new items; review inventory before continuing') end
       received=i
      end end
-     if not received then return result('stop','Loot was merged or changed; review inventory before applying a destructive rule') end
+     if not received then return failed('Loot was merged or changed; review inventory before applying a destructive rule') end
      loot_jobs[#loot_jobs+1]={id=received.id,count=loot_pending.amount,action=loot_pending.after,wcid=loot_pending.wcid}
     end
     if s.container~=loot_pending.container then corpses[loot_pending.container]=s.time+30 end
@@ -1767,7 +1891,8 @@ local function tick(s,p)
     for _,v in ipairs(inventory) do if v.object_class==42 and (v.spell or 0)>0 then carried_scrolls[v.spell]=true end end
    end
    local function progress()
-    return result(nil,'Checking loot rules: item '..loot_scan.item..'/'..#contents..', rule '..loot_scan.rule..'/'..#rules)
+    local r=result(nil,'Checking loot rules: item '..loot_scan.item..'/'..#contents..', rule '..loot_scan.rule..'/'..#rules)
+    r.continue_work=true;return r
    end
    while loot_scan.item<=#contents do
     local item=contents[loot_scan.item]
@@ -1791,7 +1916,7 @@ local function tick(s,p)
      loot_scan.evaluation=nil
      if match==nil then
       local key='id'..item.id
-      if (item_attempts[key] or 0)>=3 then return result('stop','Unable to appraise loot; check appraisal skills') end
+      if (item_attempts[key] or 0)>=3 then return failed('Unable to appraise loot; check appraisal skills') end
       if s.time>=(until_time[key] or 0) then item_attempts[key]=(item_attempts[key] or 0)+1;until_time[key]=s.time+10;return {action='identify',item=item.id,status='Inspecting '..item.name..' for loot rule'} end
       return result(nil,'Waiting for loot appraisal')
      elseif match then
@@ -1818,17 +1943,17 @@ local function tick(s,p)
  if loot_job_pending then
   local job=loot_job_pending;local exists=false;for _,i in ipairs(inventory) do if i.id==job.id then exists=true end end
   if not exists then table.remove(loot_jobs,job.index);loot_job_pending=nil
-  elseif (s.action_serial or 0)~=job.serial and (s.action_error or 0)~=0 then return result('stop','Loot '..job.action..' was rejected by the server')
-  elseif s.time>=job.deadline then return result('stop','Loot '..job.action..' did not complete; item remains in inventory')
+  elseif (s.action_serial or 0)~=job.serial and (s.action_error or 0)~=0 then return failed('Loot '..job.action..' was rejected by the server')
+  elseif s.time>=job.deadline then return failed('Loot '..job.action..' did not complete; item remains in inventory')
   else return result(nil,'Waiting for loot '..job.action) end
  end
  if not s.container or s.container==0 then
   for index,job in ipairs(loot_jobs) do if job.action~='sell' or (s.vendor or 0)~=0 then
    local item;for _,i in ipairs(inventory) do if i.id==job.id and i.wcid==job.wcid then item=i;break end end
    if not item then table.remove(loot_jobs,index);return result(nil,'Queued loot item is no longer present') end
-   if item.equipped or (item.count or 1)~=job.count then return result('stop','Queued loot item was equipped or its stack changed; review loot rules') end
+   if item.equipped or (item.count or 1)~=job.count then return failed('Queued loot item was equipped or its stack changed; review loot rules') end
    local tool
-   if job.action=='salvage' then for _,i in ipairs(inventory) do if i.object_class==40 then tool=i.id;break end end;if not tool then return result('stop','Salvage rule requires an Ust') end end
+   if job.action=='salvage' then for _,i in ipairs(inventory) do if i.object_class==40 then tool=i.id;break end end;if not tool then return failed('Salvage rule requires an Ust') end end
    loot_job_pending={index=index,id=item.id,action=job.action,serial=s.action_serial or 0,deadline=s.time+15}
    return {action=job.action,item=item.id,tool=tool,status=job.action..': '..item.name}
   end end
@@ -1855,6 +1980,7 @@ local function tick(s,p)
  -- Finish a corpse transaction before another activity cancels its approach or transfer.
  if corpse_pending or loot_pending or (s.container and s.container~=0 and s.container_is_corpse~=false) or option('loot_priority',false) then local action=loot();if action then return action end end
  if option('nav_priority',false) then local action=loot();if action then return action end;local nav=navigate();if nav then return nav end end
+ activity='combat'
  local attack_spells,combat_inventory,best_debuffs,attack_indices={},{},{},{}
  if target and combat~='off' then
  for _,v in ipairs(spells) do
@@ -2048,14 +2174,14 @@ local function tick(s,p)
   local attack,weapon,mode,damage_override=plan.attack,plan.weapon,plan.mode,plan.damage
   if not weapon and plan.unassessed then return assess(plan.unassessed) end
   if not weapon and plan.unassessed_ammo then return assess(plan.unassessed_ammo) end
-  if not weapon and s.inventory then return result('stop','No eligible combat loadout; check weapon requirements, damage type and ammunition') end
+  if not weapon and s.inventory then return failed('No eligible combat loadout; check weapon requirements, damage type and ammunition') end
   local categories,confirmed=plan.categories,plan.confirmed
   for _,category in ipairs(categories) do
    local spell=best_debuffs[category]
-   if not spell then if not option('debuff_fallback',false) then return result('stop','Required debuff unavailable; check learned spells, skill margin and scarabs') end
+   if not spell then if not option('debuff_fallback',false) then return failed('Required debuff unavailable; check learned spells, skill margin and scarabs') end
    elseif (confirmed[category] or 0)<spell.power then
     local key='debuff'..target.id..':'..category
-    if (item_attempts[key] or 0)>=3 then if not option('debuff_fallback',false) then return result('stop','Debuff resisted or unconfirmed after three attempts') end
+    if (item_attempts[key] or 0)>=3 then if not option('debuff_fallback',false) then return failed('Debuff resisted or unconfirmed after three attempts') end
     elseif target.distance<=option('radius',30) then
      if option('switch_debuff_wand',true) and mode=='magic' and weapon and not weapon.equipped then return equip(weapon) end
      local equipment=caster();if equipment then return equipment end
@@ -2105,7 +2231,7 @@ local function tick(s,p)
     if value>rank then ammo=v;rank=value end
    end end
    if not ammo and unknown_ammo then return assess(unknown_ammo) end
-   if not ammo then return result('stop','No usable ammunition for this weapon') end
+   if not ammo then return failed('No usable ammunition for this weapon') end
    if not ammo.equipped then return equip(ammo) end
   end
   local range=mode=='melee' and option('melee_range',2) or option('radius',30)
@@ -2134,23 +2260,23 @@ local function tick(s,p)
     if option('use_recklessness',false) and trained[50] then power=math.max(.11,math.min(.9,power)) end
    end
    return {action='attack',target=target.id,mode=mode=='melee' and 2 or 4,power=power,height=option('manual_attack_height',false) and option('height',2) or (target.attack_height or 2),status='Combat: '..mode}
-  elseif s.inventory then return result('stop','No eligible combat equipment or attack spell; review Combat setup') end
+  elseif s.inventory then return failed('No eligible combat equipment or attack spell; review Combat setup') end
  end
  local loot_action=loot();if loot_action then return loot_action end
  if not target then local components=split_peas(option('component_idle',20));if components then return components end end
  if not target and option('idle_buff_topoff',false) then local action=buffs(option('idle_buff_seconds',1200));if action then return action end end
- if option('autocram',false) and (s.main_pack_slots or 0)<2 then
+ if activity_ready('inventory') and option('autocram',false) and (s.main_pack_slots or 0)<2 then
   for _,bag in ipairs(s.packs or {}) do if bag.free>0 then for _,item in ipairs(inventory) do
    if item.container==s.player and item.object_class~=10 and item.object_class~=38 and not item.equipped then
     return {action='store_item',item=item.id,target=bag.id,status='Making room in the main pack'}
    end
   end end end
  end
- if option('salvage_combine',false) and (not s.container or s.container==0) then
+ if activity_ready('combine') and option('salvage_combine',false) and (not s.container or s.container==0) then
   if combine_pending then
    local remains=false;for _,item in ipairs(inventory) do if combine_pending.ids[item.id] then remains=true end end
    if not remains then combine_pending=nil
-   elseif ((s.action_serial or 0)~=combine_pending.serial and (s.action_error or 0)~=0) or s.time>combine_pending.deadline then return result('stop','Salvage combine did not complete; review bags and Ust')
+   elseif ((s.action_serial or 0)~=combine_pending.serial and (s.action_error or 0)~=0) or s.time>combine_pending.deadline then return failed('Salvage combine did not complete; review bags and Ust')
    else return result(nil,'Waiting for salvage combination') end
   end
   local policy=p.salvage_policy or {default={{min=1,max=6},{min=7,max=8},{min=9,max=9},{min=10,max=10}}}
@@ -2172,14 +2298,14 @@ local function tick(s,p)
     selected=bags[1].structure+bags[2].structure<100 and {bags[1],bags[2]} or {}
    end
    if #selected>=2 then
-    if not tool then return result('stop','Salvage combining requires an Ust') end
+    if not tool then return failed('Salvage combining requires an Ust') end
     local ids,text={},{};for _,bag in ipairs(selected) do ids[bag.id]=true;text[#text+1]=string.format('%d',bag.id) end
     combine_pending={ids=ids,deadline=s.time+15,serial=s.action_serial or 0}
     return {action='combine_salvage',tool=tool,items=table.concat(text,','),status='Combining salvage workmanship group'}
    end
   end end
  end
- if option('autostack',false) then
+ if activity_ready('inventory') and option('autostack',false) then
   local stacks={};for _,v in ipairs(inventory) do if v.max_stack>1 then
    local old=stacks[v.wcid];if old and old.count<old.max_stack then return {action='merge',item=v.id,target=old.id,status='Stacking '..v.name} end
    stacks[v.wcid]=v
@@ -2191,10 +2317,58 @@ local function tick(s,p)
   local names={};for _,v in ipairs(recovery_missing) do names[#names+1]=v==2 and 'health' or v==4 and 'stamina' or 'mana' end
   return result(nil,'Recovery unavailable for '..table.concat(names,', ')..'; check skill buffer, components, supplies and imported handlers')
  end
- return result(nil,'Ready - waiting for enabled activities')
+ return result(nil,navigation_paused or (health_critical and 'Health critical; recovery unavailable, UCM remains active') or 'Ready - waiting for enabled activities')
+end
+
+local function pause_activity(s,name,reason)
+ if name=='navigation' then return pause_navigation(reason) end
+ -- Invalid meta execution requires explicit restart; do not skip ahead through
+ -- a script whose later commands may depend on the rejected operation.
+ local delay=name=='meta' and math.huge or (name=='combat' or name:sub(1,8)=='recovery') and 5 or 30
+ activity_pauses[name]=s.time+delay
+ if name=='vendors' then note_pending=nil;purchase_pending=nil
+ elseif name=='loot' then
+  if loot_pending then corpses[loot_pending.container]=s.time+30 end
+  if corpse_pending then corpses[corpse_pending.id]=s.time+30 end
+  if s.container and s.container~=0 then corpses[s.container]=s.time+30 end
+  -- Never retry ambiguous destructive jobs or reclassify existing inventory.
+  loot_pending=nil;corpse_pending=nil;loot_scan={};loot_jobs={};loot_job_pending=nil
+ elseif name=='components' then pea_pending=nil
+ elseif name=='item_mana' then mana_refill_pending=nil;mana_fill_pending=nil;item_attempts.mana_refill=0
+ elseif name=='pets' then pet_pending=nil;pet_refill_pending=nil
+ elseif name=='combine' then combine_pending=nil
+ elseif name=='helper' then helper_pending=nil
+ elseif name=='dispel' then dispel_pending=nil
+ elseif name=='buffs' then buff_item_pending=nil
+ elseif name=='buff_others' then other_job=nil
+ elseif name=='combat' then locked_target=nil;debuff_pending=nil;debuff_scan=nil
+ elseif name:sub(1,8)=='recovery' then recovery_pending=nil;item_attempts['recover'..name:sub(9)]=0
+ elseif name=='meta' then
+  meta.pending=nil;meta.queue={};meta.turn=nil;meta.options={}
+  meta.forcebuff=false;if forced_buff and forced_buff.request==0 then forced_buff=nil end
+ end
+ -- Shared preparation can fail inside several activities. Release exhausted
+ -- appraisal/equipment attempts, while the activity cooldown prevents a spin.
+ for key in pairs(item_attempts) do
+  local text=tostring(key)
+  if text:sub(1,5)=='equip' or text:sub(1,2)=='id' or (name=='components' and text:sub(1,3)=='pea') then item_attempts[key]=nil end
+ end
+ local labels={loot='Looting',vendors='Vendor restocking',components='Component preparation',item_mana='Equipment mana',pets='Pet summoning',combine='Salvage combining',helper='Fellowship recovery',dispel='Dispelling',buffs='Buffing',buff_others='Buff requests',combat='Combat',recovery2='Health recovery',recovery4='Stamina recovery',recovery6='Mana recovery',meta='Meta',inventory='Inventory management'}
+ return {action='activity_failed',activity=name,status=(labels[name] or name)..' paused: '..reason..
+  (delay==math.huge and '. Restart UCM to retry; other activities remain active' or '. Retrying in '..delay..' seconds; other activities remain active')}
 end
 
 local function run(s,p)
+ if p.ucm_activity_failure then
+  local failure=p.ucm_activity_failure
+  return pause_activity(s,failure.activity,failure.status)
+ end
+ -- The host switches navigation off when it receives pause_navigation. Only
+ -- re-enabling that shared switch can resume; state/meta overrides cannot.
+ if navigation_paused and p.navigation then
+   navigation_paused=nil;route_blocks=0;door_attempts={}
+   route_join_pending=true;route_join_scan=nil;meta.options.navigation=nil
+ end
  if p.ucm_mana_only then
   if s.busy or s.ready==false or s.jumping then return result(nil,'Waiting for game action') end
   return equipment_mana(s,p,s.inventory or {},function(k,d) if p[k]==nil then return d end;return p[k] end) or result(nil,'Equipment mana ready')
@@ -2206,7 +2380,10 @@ local function run(s,p)
  -- Host drains this array once; it is never saved in a user profile.
  for _,command in ipairs(p.ucm_commands or {}) do
   local command_error=meta_command(command,s)
-  if command_error then return result('stop',command_error) end
+  if command_error then
+   if command_error=='Stopped by UCM command' then return result('stop',command_error) end
+   return failed(command_error)
+  end
  end
  if p.ucm_command_only then
   local command_intent=meta_work(s,p)
@@ -2223,9 +2400,14 @@ local function run(s,p)
   end
  elseif request==0 and forced_buff and forced_buff.request~=0 then forced_buff=nil;buff_plan=nil end
  local effective=meta_profile(s,p)
- local error=(not forced_buff or forced_buff.request==0) and meta_tick(s,effective)
- if error then local out=result('stop',error);out.preserve_meta=error=='Stopped by UCM command';return out end
+ activity='meta'
+ local error=activity_ready('meta') and not navigation_paused and (not forced_buff or forced_buff.request==0) and meta_tick(s,effective)
+ if error then
+  if error=='Stopped by UCM command' then local out=result('stop',error);out.preserve_meta=true;return out end
+  return failed(error)
+ end
  effective=meta_profile(s,p)
+ if navigation_paused then effective.navigation=false end
  -- Retain the followed player's observed path even while combat/actions pause walking.
  if effective.follow_corners and effective.navigation then
   local target
@@ -2236,7 +2418,7 @@ local function run(s,p)
    local last=follow_path[#follow_path]
    if last and distance(last,target)>50 then follow_path={} end
    if #follow_path==0 or distance(follow_path[#follow_path],target)>=.096 then
-    if #follow_path>=512 then return result('stop','Follow path exceeded 512 points; move closer and restart') end
+    if #follow_path>=512 then return pause_navigation('follow path exceeded 512 points') end
     follow_path[#follow_path+1]=target
    end
    local px,py,pz=world(s.position)
@@ -2258,20 +2440,23 @@ local function run(s,p)
    route_trail={{cell=s.position.cell,x=s.position.x,y=s.position.y,z=s.position.z}}
   elseif not route_returning and #route_trail>0 and distance(s.position,route_trail[#route_trail])>=.6 then
    if distance(s.position,route_trail[#route_trail])>15 then route_trail={};route_join_pending=true
-   elseif #route_trail>=256 then return result('stop','Combat detour is too long; return to the route')
+   elseif #route_trail>=256 then return pause_navigation('combat detour is too long')
    else route_trail[#route_trail+1]={cell=s.position.cell,x=s.position.x,y=s.position.y,z=s.position.z} end
   end
  end
  local blocked=s.movement_blocked_serial or 0
  if blocked_serial==nil then blocked_serial=blocked end
  if blocked~=blocked_serial then
-  blocked_serial=blocked;route_blocks=route_blocks+1
-  if route_blocks>2 then return result('stop','Route obstructed after two recovery attempts; clear the path') end
-  if route_returning then return result('stop','Return path blocked; clear the obstruction before restarting') end
+  blocked_serial=blocked
+  if effective.navigation then
+   route_blocks=route_blocks+1
+   if route_blocks>2 then return pause_navigation('route obstructed after two recovery attempts') end
+   if route_returning then return pause_navigation('return path is blocked') end
+  end
   if locked_target then monster_blacklist[locked_target]=s.time+30;locked_target=nil end
   if #route_trail==0 then route_join_pending=true;route_join_scan=nil end
  end
- local intent=(not forced_buff and meta_work(s,effective)) or tick(s,effective)
+ local intent=(not forced_buff and not navigation_paused and meta_work(s,effective)) or tick(s,effective)
  if intent then
   route_walking=intent.status and (intent.status:sub(1,9)=='Waypoint ' or intent.status=='Route complete') or false
   if intent.status~='Returning to route' then route_returning=false end
@@ -2289,6 +2474,7 @@ local function run(s,p)
 end
 
 return function(s,p)
+ activity_time=s.time;activity='meta'
  if p.ucm_resume then
   -- VT resets the ordinary state timer on Start, retaining the persistent timer,
   -- variables, fired rules, call stack and selected route. In-flight requests
@@ -2299,14 +2485,23 @@ return function(s,p)
   meta.pending=nil;meta.queue={};meta.forcebuff=false
   if meta.route then meta.route_changed=true end
   route_pending=nil;loot_pending=nil;recovery_pending=nil;buff_item_pending=nil
-  corpse_pending=nil;purchase_pending=nil;note_pending=nil;mana_refill_pending=nil;helper_pending=nil;debuff_pending=nil;debuff_scan=nil;pea_pending=nil;pet_pending=nil;dispel_pending=nil
+  corpse_pending=nil;purchase_pending=nil;note_pending=nil;mana_refill_pending=nil;mana_fill_pending=nil;pet_refill_pending=nil;helper_pending=nil;debuff_pending=nil;debuff_scan=nil;pea_pending=nil;pet_pending=nil;dispel_pending=nil
   last_cast=nil;unavailable_spells={};forced_buff=nil;buff_skips={};other_job=nil
   loot_scan={};loot_jobs={};loot_job_pending=nil;combine_pending=nil
   retries={};until_time={};item_attempts={};corpses={};monster_failures={};monster_blacklist={};ghost_attempts={};ghost_hp={}
   follow_path={};follow_target=nil;follow_teleport=nil
+  activity_pauses={}
  end
  buff_plan=nil
  local intent=run(s,p)
+ if intent then
+  intent.activity=intent.activity or activity
+  -- Host rejections arrive already formatted; ordinary policy failures are
+  -- isolated here once, after the deciding function has unwound.
+  if intent.action=='activity_failed' and not p.ucm_activity_failure then
+   intent=pause_activity(s,intent.activity,intent.status)
+  end
+ end
  buff_plan=nil -- do not retain the previous full snapshot across callbacks
  catalog_snapshot=nil;catalog_by_id=nil;catalog_supplied=nil;catalog_usable=nil
  object_snapshot=nil -- references keep IDs; the full world snapshot can be collected

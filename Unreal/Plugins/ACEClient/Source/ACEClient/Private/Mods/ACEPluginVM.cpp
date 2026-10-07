@@ -125,6 +125,19 @@ namespace
         }
     }
     int PushArgument(lua_State* L);
+    int RegexTest(lua_State* L)
+    {
+        size_t TextBytes=0,PatternBytes=0;const char* Text=luaL_checklstring(L,1,&TextBytes);const char* Pattern=luaL_checklstring(L,2,&PatternBytes);
+        if(TextBytes>16384||PatternBytes>8192)return luaL_error(L,"Regex input exceeds limit");
+        bool Failed=false,Found=false;
+        {
+            const double Start=FPlatformTime::Seconds();FString Error;
+            Found=ACEVTRegex::Test(UTF8_TO_TCHAR(Pattern),UTF8_TO_TCHAR(Text),Error);
+            RegexWork+=FPlatformTime::Seconds()-Start;Failed=!Error.IsEmpty()||RegexWork>.02;
+        }
+        if(Failed)return luaL_error(L,"Regex failed or exceeded per-tick work limit");
+        lua_pushboolean(L,Found);return 1;
+    }
     int RegexMatch(lua_State* L)
     {
         size_t TextBytes=0,PatternBytes=0;const char* Text=luaL_checklstring(L,1,&TextBytes);const char* Pattern=luaL_checklstring(L,2,&PatternBytes);
@@ -175,6 +188,7 @@ namespace
         lua_pushcfunction(L,PlainContains);lua_setfield(L,-2,"contains");
         lua_pop(L, 1);
         lua_pushcfunction(L,RegexMatch);lua_setglobal(L,"regexmatch");
+        lua_pushcfunction(L,RegexTest);lua_setglobal(L,"regextest");
         lua_pushcfunction(L,CompileCommand);lua_setglobal(L,"vtcommand"); // Legacy plugin API alias.
         lua_pushcfunction(L,CompileCommand);lua_setglobal(L,"ucmcommand");
         lua_pushcfunction(L,SpellIndex);lua_setglobal(L,"spellindex");

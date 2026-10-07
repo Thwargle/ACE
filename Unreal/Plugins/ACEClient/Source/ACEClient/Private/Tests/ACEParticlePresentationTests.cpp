@@ -13,6 +13,7 @@
 #include "Camera/CameraComponent.h"
 #include "Camera/PlayerCameraManager.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/Pawn.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "ProceduralMeshComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -237,7 +238,46 @@ bool FACEParticlePresentationTest::RunTest(const FString&)
                 Emitter.Age == Age && Emitter.Particles[0].Age == ParticleAge && Emitter.TotalBorn == Born && FX->Random.GetCurrentSeed() == Seed);
         }
     }
-    FX->StopAllEffects();
+    // Compare the local plain pawn with a remote entity, using complete DAT effects
+    // and real casting motions. Cleanup must not erase the independent surge slot.
+    FX->StopAllEffects();Human.MotionTableId=0x09000001;Human.bIsSelf=true;
+    auto* LocalPawn=World->SpawnActor<APawn>();
+    auto* LocalRoot=NewObject<USceneComponent>(LocalPawn);LocalPawn->AddInstanceComponent(LocalRoot);
+    LocalPawn->SetRootComponent(LocalRoot);LocalRoot->RegisterComponent();
+    auto* LocalAppearance=NewObject<UACECharacterAppearanceComponent>(LocalPawn);
+    LocalPawn->AddInstanceComponent(LocalAppearance);LocalAppearance->RegisterComponent();
+    LocalAppearance->ApplyWorldObject(Human,100,false);
+    auto* LocalFX=NewObject<UACEScriptComponent>(LocalPawn);LocalPawn->AddInstanceComponent(LocalFX);LocalFX->RegisterComponent();
+    LocalFX->InitializeFromObject(Human,100);LocalFX->NotifyAppearanceReady();
+    Human.bIsSelf=false;
+    auto* Remote=World->SpawnActor<AACEWorldEntityActor>();Remote->InitializeFromObject(Human,100,true);
+    auto* RemoteFX=Remote->ScriptComponent.Get();
+    LocalFX->StopAllEffects();RemoteFX->StopAllEffects();
+    LocalFX->Random.Initialize(42);RemoteFX->Random.Initialize(42);
+    LocalFX->PlayEffect(0xA2,1.f);RemoteFX->PlayEffect(0xA2,1.f);
+    int32 LastSurgeFrame=0;
+    for (int32 Frame=0;Frame<1500;++Frame)
+    {
+        if(Frame==60) LocalAppearance->PlayActionMotion(0x400000d3,1.f,0x80000049);
+        if(Frame==120) { LocalAppearance->ClearActionMotion();LocalFX->StopCastGestureEffects(); }
+        if(Frame==240) LocalAppearance->PlayActionMotion(0x40000032,1.f,0x80000049);
+        LocalAppearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+        if(Frame==180) { LocalFX->InitializeFromObject(Human,100);LocalFX->NotifyAppearanceReady(); }
+        LocalFX->TickScripts(1.f/60);RemoteFX->TickScripts(1.f/60);
+        LocalFX->TickParticleSimulation(1.f/60);RemoteFX->TickParticleSimulation(1.f/60);
+        const auto* OwnSurge=LocalFX->ActiveEmitters.FindByPredicate([](const auto& E){return E.SourcePlayScript==0xA2;});
+        const auto* OtherSurge=RemoteFX->ActiveEmitters.FindByPredicate([](const auto& E){return E.SourcePlayScript==0xA2;});
+        if(OwnSurge)LastSurgeFrame=Frame;
+        if(Frame%60==59)
+        {
+            TestEqual(TEXT("Local cast cleanup and appearance refresh preserve surge lifetime"),OwnSurge!=nullptr,OtherSurge!=nullptr);
+            if(OwnSurge && OtherSurge)TestEqual(TEXT("Local surge retains the same visible particle count"),OwnSurge->Particles.Num(),OtherSurge->Particles.Num());
+        }
+    }
+    TestTrue(TEXT("DAT surge survives the reported first few seconds"),LastSurgeFrame>600);
+    TestTrue(TEXT("Finite surge finishes rather than becoming permanent"),LastSurgeFrame<1499);
+    AddInfo(FString::Printf(TEXT("Complete DAT surge lifetime including particle tail: %.2f seconds"),float(LastSurgeFrame)/60));
+    LocalFX->StopAllEffects();LocalPawn->Destroy();RemoteFX->StopAllEffects();Remote->Destroy();
     return !HasAnyErrors();
 }
 #endif

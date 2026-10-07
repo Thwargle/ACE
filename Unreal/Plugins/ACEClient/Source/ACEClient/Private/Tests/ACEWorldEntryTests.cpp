@@ -1152,6 +1152,24 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
             UseTarget.Position.SetLocationFromUnreal(StartFeet+TargetOffset,100);
             Session->WorldObjects.Add(UseTarget.Guid,UseTarget);Session->CachedC2SPackets.Reset();
         };
+        ResetApproach(FVector(500,0,0));
+        Controller->PredictedPose.SetLocationFromUnreal(StartFeet+FVector(80,0,0),100);
+        Controller->InteractWithObject(UseTarget.Guid);
+        bool SawSynchronizedMove=false;
+        for (const auto& Pair:Session->CachedC2SPackets)
+        {
+            FACEBinaryReader R(Pair.Value.Payload);R.Skip(16);
+            if(R.ReadUInt32()!=ACEOpcode::GameAction)continue;
+            R.ReadUInt32();if(R.ReadUInt32()!=ACEGameAction::MoveToState)continue;
+            const int32 PositionOffset=Pair.Value.Payload.Num()-44;
+            FACEBinaryReader UsePoseReader(Pair.Value.Payload);UsePoseReader.Skip(PositionOffset);
+            TestEqual(TEXT("Ordered movement carries current cell"),UsePoseReader.ReadUInt32(),uint32(Controller->PredictedPose.CellId));
+            const float X=UsePoseReader.ReadFloat(),Y=UsePoseReader.ReadFloat(),Z=UsePoseReader.ReadFloat();
+            TestTrue(TEXT("Ordered movement carries current predicted feet, not previous idle pose"),FVector(X,Y,Z).Equals(FVector(Controller->PredictedPose.Location),.001f));
+            SawSynchronizedMove=true;
+        }
+        TestTrue(TEXT("Interaction sends ordered movement before Use"),SawSynchronizedMove);
+        TestTrue(TEXT("Interaction installs predicted feet before serializing movement"),Session->GetPlayerPosition().Location.Equals(Controller->PredictedPose.Location,.001f));
         for (bool MouseTurning : {false,true}) for (float Orbit : {-90.f,90.f,180.f})
         {
             Client->SendSetSingleCharacterOption(0x31,MouseTurning);

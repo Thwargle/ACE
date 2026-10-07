@@ -23,6 +23,7 @@ public:
     {
         bCommitting=false;
         if (Owner.IsValid()) { Original=Owner->Value; Undo.Reset(); bHasUndo=false; }
+        if (Owner.IsValid() && Owner->bSelectAllOnFocus) { Anchor=0; Cursor=Owner->Value.Len(); }
         return FReply::Handled();
     }
     virtual void OnFocusLost(const FFocusEvent& E) override
@@ -67,13 +68,15 @@ public:
     TArray<FACEBitmapTextLine> Lines(float Width) const
     {
         if (!Owner.IsValid() || !Owner->FontLabel || !Owner->FontLabel->GetBitmapFont()) return {{0,0,0}};
-        auto Result=ACEDatText::Layout(*Owner->FontLabel->GetBitmapFont(),Owner->Value,FMath::Max(1,FMath::FloorToInt(Width-4)),!Owner->bMultiline);
+        const FMargin Padding=Owner->ContentMargins.Get(FMargin(2.f));
+        auto Result=ACEDatText::Layout(*Owner->FontLabel->GetBitmapFont(),Owner->Value,FMath::Max(1,FMath::FloorToInt(Width-Padding.Left-Padding.Right)),!Owner->bMultiline);
         if (Result.IsEmpty()) Result.Add({0,0,0});
         return Result;
     }
     float Left(const FACEBitmapTextLine& Line, float Width) const
     {
-        return Owner->bDigitsOnly ? FMath::Max(2.f,Width-8-Line.Width) : 2.f;
+        const FMargin Padding=Owner->ContentMargins.Get(FMargin(2.f,2.f,8.f,2.f));
+        return Owner->bDigitsOnly ? FMath::Max(Padding.Left,Width-Padding.Right-Line.Width) : Padding.Left;
     }
     int32 CursorLine(const TArray<FACEBitmapTextLine>& Rows) const
     {
@@ -82,6 +85,7 @@ public:
     }
     float Scroll(const TArray<FACEBitmapTextLine>& Rows, float Height, int32 LineHeight) const
     {
+        if (Owner->ContentMargins.IsSet() && !Owner->bMultiline) return 0.f;
         return HasKeyboardFocus() ? FMath::Max(0.f,(CursorLine(Rows)+1)*LineHeight+2-Height) : 0.f;
     }
     int32 Hit(const FGeometry& G, FVector2D Absolute) const
@@ -91,7 +95,7 @@ public:
         auto Rows=Lines(G.GetLocalSize().X);
         const FVector2D P=G.AbsoluteToLocal(Absolute);
         const float Offset=Scroll(Rows,G.GetLocalSize().Y,Font.MaxCharHeight);
-        const int32 R=FMath::Clamp(FMath::FloorToInt((P.Y+Offset-2)/Font.MaxCharHeight),0,Rows.Num()-1);
+        const int32 R=FMath::Clamp(FMath::FloorToInt((P.Y+Offset-Owner->ContentMargins.Get(FMargin(2.f)).Top)/Font.MaxCharHeight),0,Rows.Num()-1);
         float X=Left(Rows[R],G.GetLocalSize().X);
         for (int32 I=Rows[R].Begin;I<Rows[R].End;++I)
         {
@@ -181,7 +185,7 @@ public:
         const int32 Begin=FMath::Min(Cursor,Anchor), End=FMath::Max(Cursor,Anchor);
         for (int32 R=0;R<Rows.Num();++R)
         {
-            float X=Left(Rows[R],G.GetLocalSize().X), Y=(O->bDigitsOnly ? 0 : 2)+R*Font.MaxCharHeight-Offset;
+            float X=Left(Rows[R],G.GetLocalSize().X), Y=O->ContentMargins.Get(FMargin(0.f,O->bDigitsOnly ? 0.f : 2.f)).Top+R*Font.MaxCharHeight-Offset;
             for (int32 I=Rows[R].Begin;I<Rows[R].End;++I)
             {
                 const int32 Adv=ACEDatText::Advance(Font,O->Value[I]);

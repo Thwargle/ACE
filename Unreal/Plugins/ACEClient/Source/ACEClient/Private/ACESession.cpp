@@ -108,7 +108,7 @@ void FACESession::Disconnect()
 	IssacClient.Reset();
 	IssacServer.Reset();
 	Characters.Reset();
-	PartialFragments.Reset();
+	ResetReceivedMessages();
 	WorldObjects.Reset();
 	ObjectVisibilityDeadlines.Reset();
 	PendingObjectPhysicsEvents.Reset();
@@ -137,13 +137,18 @@ void FACESession::Disconnect()
 	Fellowship = FACEFellowshipInfo();
 	Allegiance = FACEAllegianceInfo();
 	Friends.Reset();
+	Squelches.Reset(); GlobalSquelchMask=0;
 	Contracts.Reset();
 	House = FACEHouseInfo();
+	CloseHouseProfile();
+	CloseBarber();
 	LastTellSenderGuid = 0;
 	LastTellSenderName.Reset();
 	LastPatronTellSenderName.Reset(); LastMonarchTellSenderName.Reset();
 	KnownSpells.Reset();
 	SpellBars.Reset();
+	SpellbookFilters = 0x3FFFu;
+	InstanceSeq = ServerControlSeq = TeleportSeq = ForcePositionSeq = 0;
 	++SpellDataRevision;
 	ActiveSpellBar = 0;
 	ShortcutObjects.Reset();
@@ -171,6 +176,8 @@ void FACESession::Disconnect()
 	LastReceivedPacketSequence = 1;
 	CachedC2SPackets.Reset();
 	OutOfOrderS2CPackets.Reset();
+	RequestedS2CPackets.Reset();
+	RejectedS2CPackets.Reset();
 	LastRequestForRetransmitTime = 0.0;
 	ConnectResponseRetryTimer = 0.f;
 	CharacterListWaitTimer = 0.f;
@@ -266,13 +273,18 @@ void FACESession::ClearWorldState()
 	Fellowship = FACEFellowshipInfo();
 	Allegiance = FACEAllegianceInfo();
 	Friends.Reset();
+	Squelches.Reset(); GlobalSquelchMask=0;
 	Contracts.Reset();
 	House = FACEHouseInfo();
+	CloseHouseProfile();
+	CloseBarber();
 	LastTellSenderGuid = 0;
 	LastTellSenderName.Reset();
 	LastPatronTellSenderName.Reset(); LastMonarchTellSenderName.Reset();
 	KnownSpells.Reset();
 	SpellBars.Reset();
+	SpellbookFilters = 0x3FFFu;
+	InstanceSeq = ServerControlSeq = TeleportSeq = ForcePositionSeq = 0;
 	++SpellDataRevision;
 	ActiveSpellBar = 0;
 	ShortcutObjects.Reset();
@@ -299,7 +311,7 @@ void FACESession::ClearWorldState()
 	bLoginCompleteSent = false;
 	bMoving = false;
 	bForcePositionReporting = false;
-	PartialFragments.Reset();
+	ResetReceivedMessages();
 }
 
 bool FACESession::CreateSockets()
@@ -602,6 +614,7 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 	float EchoClientTime = -1.f;
 	float EchoResponseClientTime = -1.f;
 	TArray<uint32> RetransmitSequences;
+	TArray<uint32> RejectedSequences;
 	uint32 ServerAckSequence = 0;
 	bool bHasServerAck = false;
 	uint32 NetErrorStringId = 0, NetErrorTableId = 0;
@@ -640,7 +653,7 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 		const int32 Start = Payload.Tell();
 		const uint32 Count = Payload.ReadUInt32();
 		if (Count > static_cast<uint32>(Payload.Remaining() / 4)) return;
-		Payload.Skip(static_cast<int32>(Count * 4));
+		for (uint32 i = 0; i < Count; ++i) RejectedSequences.Add(Payload.ReadUInt32());
 		OptionalBytes.Append(Payload.GetData() + Start, 4 + static_cast<int32>(Count * 4));
 	}
 	if (EnumHasAnyFlags(Flags, EACEPacketHeaderFlags::AckSequence))
@@ -702,8 +715,7 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 				return;
 			}
 			const int32 FragHeaderStart = Payload.Tell();
-			const uint32 FragSeq = Payload.ReadUInt32();
-			Payload.ReadUInt32(); // Id
+			const uint64 BlobId = Payload.ReadUInt64();
 			const uint16 FragCount = Payload.ReadUInt16();
 			const uint16 FragSize = Payload.ReadUInt16();
 			const uint16 FragIndex = Payload.ReadUInt16();
@@ -723,7 +735,7 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 
 			// Keep validated wire fragments local until CRC and packet sequencing pass.
 			FReceivedFragment& Fragment = Fragments.AddDefaulted_GetRef();
-			Fragment.Sequence = FragSeq;
+			Fragment.BlobId = BlobId;
 			Fragment.Count = FragCount;
 			Fragment.Index = FragIndex;
 			Fragment.Queue = FragQueue;
@@ -822,14 +834,28 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 		return;
 	}
 
-	// Cleartext NAK: retransmit cached C2S — do not advance S2C LastReceived (ACE early-return).
-	const bool bCleartextNak = EnumHasAnyFlags(Flags, EACEPacketHeaderFlags::RequestRetransmit)
-		&& !EnumHasAnyFlags(Flags, EACEPacketHeaderFlags::EncryptedChecksum);
-	if (bCleartextNak)
+	// SharedNet processes transport headers as soon as the packet validates.
+	// Missing gameplay data must not delay keepalive replies or RTT updates.
+	if (FMath::IsFinite(EchoClientTime) && EchoClientTime >= 0.f) SendEchoResponse(EchoClientTime);
+	if (FMath::IsFinite(EchoResponseClientTime) && EchoResponseClientTime >= 0.f)
+		UpdateLinkStatusFromEcho(EchoResponseClientTime, ReceivedAt);
+
+	// SharedNet::HandleNak services both checksum forms. A standalone NAK uses
+	// the current sequence without consuming a slot (ACE NetworkSession too).
+	if (!RetransmitSequences.IsEmpty()) HandleServerRequestRetransmit(RetransmitSequences);
+	const auto NakFlags = Flags & ~(EACEPacketHeaderFlags::EncryptedChecksum | EACEPacketHeaderFlags::Retransmission);
+	if (NakFlags == EACEPacketHeaderFlags::RequestRetransmit)
 	{
-		HandleServerRequestRetransmit(RetransmitSequences);
 		return;
 	}
+	// Retail HandleEmptyAck removes these IDs from its outstanding NAK set.
+	// Our contiguous dispatcher must also release the holes, or every later
+	// position/chat/update waits forever for a packet the server no longer has.
+	// Never let an unsolicited rejection skip packets we have not requested.
+	for (uint32 Rejected : RejectedSequences)
+		if (Rejected > LastReceivedPacketSequence && RequestedS2CPackets.Contains(Rejected)
+			&& !OutOfOrderS2CPackets.Contains(Rejected)) RejectedS2CPackets.Add(Rejected);
+	if (!RejectedSequences.IsEmpty()) DrainOutOfOrderS2C();
 
 	if (EnumHasAnyFlags(Flags, EACEPacketHeaderFlags::Disconnect))
 	{
@@ -860,7 +886,7 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 	const bool bAckOnly = Flags == EACEPacketHeaderFlags::AckSequence;
 	if (Sequence == 0 || bAckOnly)
 	{
-		ProcessOrderedS2CPacket(Sequence, Flags, EchoClientTime, EchoResponseClientTime, Fragments, ServerTicks, ReceivedAt);
+		ProcessOrderedS2CPacket(Sequence, Flags, Fragments, ServerTicks, ReceivedAt);
 		return;
 	}
 
@@ -875,8 +901,6 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 	{
 		FPendingS2CPacket& Pending = OutOfOrderS2CPackets.FindOrAdd(Sequence);
 		Pending.Flags = Flags;
-		Pending.EchoClientTime = EchoClientTime;
-		Pending.EchoResponseClientTime = EchoResponseClientTime;
 		Pending.Fragments = MoveTemp(Fragments);
 		Pending.ServerTicks = ServerTicks;
 		Pending.ReceivedAt = ReceivedAt;
@@ -885,25 +909,18 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 		return;
 	}
 
-	ProcessOrderedS2CPacket(Sequence, Flags, EchoClientTime, EchoResponseClientTime, Fragments, ServerTicks, ReceivedAt);
+	ProcessOrderedS2CPacket(Sequence, Flags, Fragments, ServerTicks, ReceivedAt);
 	DrainOutOfOrderS2C();
 }
 
 void FACESession::ProcessOrderedS2CPacket(uint32 Sequence, EACEPacketHeaderFlags Flags,
-	float EchoClientTime, float EchoResponseClientTime, const TArray<FReceivedFragment>& Fragments, double ServerTicks, double ReceivedAt)
+	const TArray<FReceivedFragment>& Fragments, double ServerTicks, double ReceivedAt)
 {
-	if (EchoClientTime >= 0.f)
-	{
-		SendEchoResponse(EchoClientTime);
-	}
-	if (EchoResponseClientTime >= 0.f)
-	{
-		UpdateLinkStatusFromEcho(EchoResponseClientTime, ReceivedAt);
-	}
-
 	if (Sequence != 0 && Flags != EACEPacketHeaderFlags::AckSequence)
 	{
 		LastReceivedPacketSequence = Sequence;
+		RequestedS2CPackets.Remove(Sequence);
+		RejectedS2CPackets.Remove(Sequence);
 		bNeedAck = true;
 	}
 
@@ -930,41 +947,118 @@ void FACESession::RequestMissingS2CPackets(double Now)
 	if (Now - Oldest < .15) return;
 	TArray<uint32> Missing;
 	for (uint32 Seq = LastReceivedPacketSequence + 1; Seq < Highest && Missing.Num() < 115; ++Seq)
-		if (!OutOfOrderS2CPackets.Contains(Seq)) Missing.Add(Seq);
+		if (!OutOfOrderS2CPackets.Contains(Seq) && !RejectedS2CPackets.Contains(Seq)) Missing.Add(Seq);
 	if (Missing.IsEmpty()) return;
+	for (uint32 Sequence : Missing) RequestedS2CPackets.Add(Sequence);
 	SendRequestRetransmit(Missing);
 	LastRequestForRetransmitTime = Now;
 }
 
 void FACESession::DrainOutOfOrderS2C()
 {
-	while (const FPendingS2CPacket* Pending = OutOfOrderS2CPackets.Find(LastReceivedPacketSequence + 1))
+	for (;;)
 	{
 		const uint32 Seq = LastReceivedPacketSequence + 1;
+		if (!OutOfOrderS2CPackets.Contains(Seq) && RejectedS2CPackets.Remove(Seq))
+		{
+			RequestedS2CPackets.Remove(Seq);
+			LastReceivedPacketSequence = Seq; bNeedAck = true;
+			Log(FString::Printf(TEXT("Server cannot retransmit packet %u; continuing received updates"), Seq));
+			continue;
+		}
+		const FPendingS2CPacket* Pending = OutOfOrderS2CPackets.Find(Seq);
+		if (!Pending) break;
 		FPendingS2CPacket Copy = *Pending;
 		OutOfOrderS2CPackets.Remove(Seq);
-		ProcessOrderedS2CPacket(Seq, Copy.Flags, Copy.EchoClientTime, Copy.EchoResponseClientTime, Copy.Fragments, Copy.ServerTicks, Copy.ReceivedAt);
+		ProcessOrderedS2CPacket(Seq, Copy.Flags, Copy.Fragments, Copy.ServerTicks, Copy.ReceivedAt);
 	}
+}
+
+void FACESession::ResetReceivedMessages()
+{
+	PartialFragments.Reset();
+	EphemeralMessages.Reset();
+	PartialMessageBytes = 0;
+	LastEphemeralExpiry = 0;
+}
+
+void FACESession::RemovePartialMessage(uint64 BlobId)
+{
+	if (const FPartialMessage* Partial = PartialFragments.Find(BlobId))
+		PartialMessageBytes -= Partial->Bytes;
+	PartialFragments.Remove(BlobId);
+}
+
+void FACESession::ExpireEphemeralMessages(double Now)
+{
+	// Indicator::FlushTimedOutEphInfo / ArrivedEphInfo::fTimedOut: five-second
+	// sweeps of ordering-stamp history, not a timeout for reliable message data.
+	if (Now - LastEphemeralExpiry < 5.) return;
+	LastEphemeralExpiry = Now;
+	for (auto It = EphemeralMessages.CreateIterator(); It; ++It)
+		if (Now - It.Value().UpdatedAt > 5.) It.RemoveCurrent();
 }
 
 void FACESession::ProcessReceivedFragment(const FReceivedFragment& Fragment)
 {
+	if (State == EACESessionState::Failed) return;
+	// PacketController::AddReceivedBlobToQueue accepts queues 1..11. Discard
+	// only this blob, preserving other valid fragments in the same packet.
+	if (Fragment.Queue == 0 || Fragment.Queue >= 12) return;
+	const double Now = FPlatformTime::Seconds();
+	ExpireEphemeralMessages(Now);
+	if (Fragment.BlobId & 0x8000000000000000ull)
+	{
+		// NetBlobIDUtils: sequence includes the server byte; bits 32..47 are
+		// the wrapping ordering stamp. Never join two versions of the same blob.
+		const uint64 SequenceId = Fragment.BlobId & 0x00FF0000FFFFFFFFull;
+		if (FEphemeralMessage* Latest = EphemeralMessages.Find(SequenceId))
+		{
+			if (Latest->BlobId != Fragment.BlobId)
+			{
+				const uint16 PreviousStamp = uint16(Latest->BlobId >> 32);
+				const uint16 IncomingStamp = uint16(Fragment.BlobId >> 32);
+				if (ACEPhysicsTimeStamp::IsNewer(IncomingStamp, PreviousStamp)) return;
+				RemovePartialMessage(Latest->BlobId);
+				Latest->BlobId = Fragment.BlobId;
+				Latest->UpdatedAt = Now;
+			}
+		}
+		else
+		{
+			EphemeralMessages.Add(SequenceId, {Fragment.BlobId, Now});
+		}
+	}
 	if (Fragment.Count == 1)
 	{
+		// A conflicting single-fragment body must not bypass an existing assembly.
+		if (PartialFragments.Contains(Fragment.BlobId)) return;
 		HandleGameMessage(Fragment.Data);
 		return;
 	}
-	FPartialMessage& Partial = PartialFragments.FindOrAdd(Fragment.Sequence);
-	if (Partial.Count != 0 && (Partial.Count != Fragment.Count || Partial.Queue != Fragment.Queue))
+	if (const FPartialMessage* Existing = PartialFragments.Find(Fragment.BlobId))
 	{
-		Log(TEXT("Inconsistent fragment metadata — dropped"));
+		if (Existing->Count != Fragment.Count || Existing->Queue != Fragment.Queue) return;
+		if (Existing->Parts.Contains(Fragment.Index)) return;
+	}
+	// Modern resource guard, not a retail timeout: keep delayed reliable data
+	// until completion. If bounds are exhausted, report failure rather than silently
+	// discarding inventory/world updates and continuing with inconsistent state.
+	if ((!PartialFragments.Contains(Fragment.BlobId) && PartialFragments.Num() >= MaxPartialMessages)
+		|| PartialMessageBytes + Fragment.Data.Num() > MaxPartialMessageBytes)
+	{
+		ConnectionError = TEXT("Too many incomplete network messages. Please reconnect to the server.");
+		Log(ConnectionError);
+		ResetReceivedMessages();
+		SetState(EACESessionState::Failed);
 		return;
 	}
+	FPartialMessage& Partial = PartialFragments.FindOrAdd(Fragment.BlobId);
 	Partial.Count = Fragment.Count;
 	Partial.Queue = Fragment.Queue;
-	// Retransmission never replaces previously authenticated fragment bytes.
-	if (Partial.Parts.Contains(Fragment.Index)) return;
 	Partial.Parts.Add(Fragment.Index, Fragment.Data);
+	Partial.Bytes += Fragment.Data.Num();
+	PartialMessageBytes += Fragment.Data.Num();
 	if (Partial.Parts.Num() != Partial.Count) return;
 	TArray<uint8> Message;
 	for (uint16 Index=0; Index<Partial.Count; ++Index)
@@ -973,7 +1067,7 @@ void FACESession::ProcessReceivedFragment(const FReceivedFragment& Fragment)
 		if (!Part) return;
 		Message.Append(*Part);
 	}
-	PartialFragments.Remove(Fragment.Sequence);
+	RemovePartialMessage(Fragment.BlobId);
 	HandleGameMessage(Message);
 }
 
@@ -1009,8 +1103,9 @@ void FACESession::HandleServerRequestRetransmit(const TArray<uint32>& Sequences)
 			const uint16 Time = PacketIntervalAt(FPlatformTime::Seconds());
 			constexpr uint16 Iteration = 1;
 			const uint32 HHash = HeaderHash32(Seq, Flags, ClientId, Time, PayloadSize, Iteration);
-			const uint32 PayloadHash = FACEHash32::Calculate(Cached->Payload);
-			const uint32 FinalChecksum = HHash + (PayloadHash ^ Cached->IsaacXor);
+			// Optional headers and fragments are hashed separately on the wire.
+			// Hashing their concatenation changes the checksum at unaligned boundaries.
+			const uint32 FinalChecksum = HHash + (Cached->PayloadHash ^ Cached->IsaacXor);
 			auto W32 = [&](int32 Off, uint32 V)
 			{
 				Packet[Off] = static_cast<uint8>(V & 0xFF);
@@ -1053,7 +1148,7 @@ void FACESession::HandleServerRequestRetransmit(const TArray<uint32>& Sequences)
 	}
 }
 
-void FACESession::CacheOutboundPacket(uint32 Sequence, EACEPacketHeaderFlags Flags, uint32 IsaacXor, const TArray<uint8>& PayloadAfterHeader)
+void FACESession::CacheOutboundPacket(uint32 Sequence, EACEPacketHeaderFlags Flags, uint32 IsaacXor, uint32 PayloadHash, const TArray<uint8>& PayloadAfterHeader)
 {
 	if (Sequence < 2)
 	{
@@ -1062,6 +1157,7 @@ void FACESession::CacheOutboundPacket(uint32 Sequence, EACEPacketHeaderFlags Fla
 	FCachedC2SPacket& Entry = CachedC2SPackets.FindOrAdd(Sequence);
 	Entry.Flags = Flags;
 	Entry.IsaacXor = IsaacXor;
+	Entry.PayloadHash = PayloadHash;
 	Entry.Payload = PayloadAfterHeader;
 	// Bound cache — prune oldest if huge (server ACK normally clears).
 	constexpr int32 MaxCached = 512;
@@ -1299,7 +1395,7 @@ void FACESession::SendRawPacket(
 	{
 		TArray<uint8> PayloadAfterHeader;
 		PayloadAfterHeader.Append(Packet.GetData() + PacketHeaderSize, PayloadSize);
-		CacheOutboundPacket(Sequence, Flags, IsaacXor, PayloadAfterHeader);
+		CacheOutboundPacket(Sequence, Flags, IsaacXor, PayloadHash, PayloadAfterHeader);
 	}
 
 	int32 Sent = 0;
@@ -1634,6 +1730,7 @@ void FACESession::HandlePlayerCreate(FACEBinaryReader& Reader)
 	{
 		Existing->bIsSelf = true;
 		Existing->bIsPlayer = true;
+		AdoptPlayerPhysicsTimestamps(*Existing);
 	}
 	if (!bLoginCompleteSent)
 	{
@@ -1762,8 +1859,18 @@ void FACESession::UpsertWorldObject(const FACEWorldObject& Object, bool bForceRe
 		}
 	}
 	WorldObjects.Add(Merged.Guid, Merged);
+	if (Merged.Guid == PlayerGuid) AdoptPlayerPhysicsTimestamps(Merged);
 	ReconcileOpenContainerOwnership();
 	OnObjectCreated.Broadcast(Merged);
+}
+
+void FACESession::AdoptPlayerPhysicsTimestamps(const FACEWorldObject& Object)
+{
+	if (!Object.bHasPhysicsTimestamps || Object.bPhysicsDescriptionPending) return;
+	InstanceSeq = Object.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance];
+	ServerControlSeq = Object.PhysicsTimestamps[ACEPhysicsTimeStamp::ServerControl];
+	TeleportSeq = Object.PhysicsTimestamps[ACEPhysicsTimeStamp::Teleport];
+	ForcePositionSeq = Object.PhysicsTimestamps[ACEPhysicsTimeStamp::ForcePosition];
 }
 
 void FACESession::MaybeEnterWorldComplete()
@@ -2028,6 +2135,7 @@ void FACESession::ReplayObjectPhysicsEvents(int32 Guid)
 		case ACEOpcode::ParentEvent: HandleParentEvent(Reader); break;
 		case ACEOpcode::PickupEvent: HandlePickupEvent(Reader); break;
 		case ACEOpcode::UpdatePosition: HandleUpdatePosition(Reader); break;
+		case ACEOpcode::UpdateMotion: HandleUpdateMotion(Reader); break;
 		case ACEOpcode::VectorUpdate: HandleVectorUpdate(Reader); break;
 		default: break;
 		}
@@ -2266,11 +2374,9 @@ void FACESession::HandleHearSpeech(FACEBinaryReader& Reader)
 {
 	const FString Text = Reader.ReadString16L();
 	const FString Sender = Reader.ReadString16L();
-	if (Reader.CanRead(4))
-	{
-		Reader.ReadUInt32();
-	}
+	const int32 SenderGuid = Reader.CanRead(4) ? Reader.ReadInt32() : 0;
 	const int32 Type = Reader.CanRead(4) ? static_cast<int32>(Reader.ReadUInt32()) : 0;
+	if (IsSenderSquelched(SenderGuid,Sender,Type)) return;
 	OnChatMessage.Broadcast(Text, Sender, Type);
 }
 
@@ -2286,6 +2392,7 @@ void FACESession::HandleChannelBroadcast(FACEBinaryReader& Reader)
 	const FString Text = Reader.ReadString16L();
 	int32 Type;
 	const FString Line = ACERetailChat::Format(ChannelId,Sender,Text,Type);
+	if (IsSenderSquelched(0,Sender,Type)) return;
 	// Retail OnChannelBroadcast remembers who last used @p/@m, separately
 	// from private tells; our own empty-sender echoes cannot replace them.
 	if (!Sender.IsEmpty())
@@ -2348,7 +2455,7 @@ void FACESession::HandleTurbineChat(FACEBinaryReader& Reader)
 	const FString Sender = Reader.ReadPackedUnicode();
 	const FString Text = Reader.ReadPackedUnicode();
 	if (Reader.CanRead(4)) { Reader.ReadUInt32(); } // extra size
-	if (Reader.CanRead(4)) { Reader.ReadUInt32(); } // speaker
+	const int32 Speaker = Reader.CanRead(4) ? Reader.ReadInt32() : 0;
 	if (Reader.CanRead(4)) { Reader.ReadUInt32(); } // hresult
 	const uint32 ChatType = Reader.CanRead(4) ? Reader.ReadUInt32() : ChannelId;
 
@@ -2370,6 +2477,7 @@ void FACESession::HandleTurbineChat(FACEBinaryReader& Reader)
 	default: Tag = TEXT("General"); break;
 	}
 	const FString Line = FString::Printf(TEXT("[%s] %s says, \"%s\""), Tag, *Sender, *Text);
+	if (IsSenderSquelched(Speaker,Sender,ChannelLogType)) return;
 	OnChatMessage.Broadcast(Line, Sender, ChannelLogType);
 }
 
@@ -2377,15 +2485,13 @@ void FACESession::HandleHearRangedSpeech(FACEBinaryReader& Reader)
 {
 	const FString Text = Reader.ReadString16L();
 	const FString Sender = Reader.ReadString16L();
-	if (Reader.CanRead(4))
-	{
-		Reader.ReadUInt32(); // sender id
-	}
+	const int32 SenderGuid = Reader.CanRead(4) ? Reader.ReadInt32() : 0;
 	if (Reader.CanRead(4))
 	{
 		Reader.ReadFloat(); // range
 	}
 	const int32 Type = Reader.CanRead(4) ? static_cast<int32>(Reader.ReadUInt32()) : 0;
+	if (IsSenderSquelched(SenderGuid,Sender,Type)) return;
 	OnChatMessage.Broadcast(Text, Sender, Type);
 }
 
@@ -2404,7 +2510,8 @@ void FACESession::HandleSoulEmote(FACEBinaryReader& Reader)
 	{
 		return;
 	}
-	OnChatMessage.Broadcast(Text, Sender, ACEChatMessageType::Emote);
+	if (!IsSenderSquelched(SenderGuid,Sender,ACEChatMessageType::Emote))
+		OnChatMessage.Broadcast(Text, Sender, ACEChatMessageType::Emote);
 }
 
 bool FACESession::RespondToConfirmation(uint32 Type, uint32 Context, bool Accept)
@@ -2431,6 +2538,22 @@ void FACESession::HandleGameEvent(FACEBinaryReader& Reader)
 
 	switch (EventType)
 	{
+	case 0x021D: HandleHouseProfile(Reader); break;
+	case 0x0075: // StartBarber: publish only a complete retail appearance.
+		if(Reader.CanRead(FACEBarberProfile::Count*4))
+		{
+			for(auto& Value:BarberProfile.Values) Value=Reader.ReadUInt32();
+			bBarberOpen=true; ++BarberRevision;
+		}
+		break;
+	case 0x0259: // FailedHouseTransaction: retail refreshes the active slumlord offer.
+		if (Reader.CanRead(4))
+		{
+			Reader.ReadUInt32();
+			if (HouseOffer.LordGuid && State==EACESessionState::InWorld)
+				SendGameActionU32(0x0258, HouseOffer.LordGuid);
+		}
+		break;
 	case 0x0274: // CharacterConfirmationRequest
 	{
 		if (State != EACESessionState::InWorld || !Reader.CanRead(10)) break;
@@ -2589,8 +2712,10 @@ void FACESession::HandleGameEvent(FACEBinaryReader& Reader)
 	case ACEGameEvent::AllegianceUpdate:
 		HandleAllegianceUpdate(Reader);
 		break;
-	case ACEGameEvent::AllegianceUpdateDone:
 	case ACEGameEvent::AllegianceLoginNotification:
+		HandleAllegianceLoginNotification(Reader);
+		break;
+	case ACEGameEvent::AllegianceUpdateDone:
 	case ACEGameEvent::AllegianceInfoResponse:
 		break;
 	case ACEGameEvent::FriendsListUpdate:
@@ -2912,6 +3037,7 @@ void FACESession::HandleTell(FACEBinaryReader& Reader)
 		Reader.ReadUInt32();
 	}
 	// NPC dialogue must not replace the last player teller (retail IID range).
+	if (IsSenderSquelched(SenderId,Sender,Type)) return;
 	if ((Type == ACEChatMessageType::Tell || Type == ACEChatMessageType::AdminTell)
 		&& static_cast<uint32>(SenderId) >= 0x50000001u
 		&& static_cast<uint32>(SenderId) <= 0x6FFFFFFFu && SenderId != PlayerGuid)
@@ -3356,12 +3482,16 @@ void FACESession::HandlePlayerDescription(FACEBinaryReader& Reader)
 			}
 		}
 
-		if (OptionFlags & OptSpellLists8)
+		// PlayerModule::UnPack always reads the first list; older clients have
+		// five or seven bars. Validate counts before allocating server-sized data.
+		const int32 BarCount = (OptionFlags & 0x04u) ? 5 : (OptionFlags & 0x10u) ? 7
+			: (OptionFlags & OptSpellLists8) ? 8 : 1;
 		{
-			for (int32 Bar = 0; Bar < 8; ++Bar)
+			for (int32 Bar = 0; Bar < BarCount; ++Bar)
 			{
-				if (!Reader.CanRead(4)) { break; }
+				if (!Reader.CanRead(4)) { return; }
 				const int32 Count = Reader.ReadInt32();
+				if (Count < 0 || Count > Reader.Remaining() / 4) { return; }
 				const int32 BarSize = FMath::Max(56, Count);
 				SpellBars[Bar].SetNumZeroed(BarSize);
 				for (int32 i = 0; i < Count && Reader.CanRead(4); ++i)
@@ -3373,10 +3503,6 @@ void FACESession::HandlePlayerDescription(FACEBinaryReader& Reader)
 					}
 				}
 			}
-		}
-		else if (Reader.CanRead(4))
-		{
-			Reader.ReadUInt32(); // empty single list sentinel
 		}
 
 		DesiredComponents.Reset();
@@ -3394,16 +3520,55 @@ void FACESession::HandlePlayerDescription(FACEBinaryReader& Reader)
 			}
 		}
 
-		// SpellbookFilters is always written by ACE after DesiredComps.
-		if (Reader.CanRead(4))
+		SpellbookFilters = 0x3FFFu;
+		if (OptionFlags & OptSpellbookFilters)
 		{
-			Reader.ReadUInt32();
+			if (!Reader.CanRead(4)) { return; }
+			SpellbookFilters = Reader.ReadUInt32();
 		}
 
+		CharacterOptions2 = 9733888u; // PlayerModule::UnPack's legacy default.
 		if (OptionFlags & OptCharacterOptions2)
 		{
-			if (Reader.CanRead(4)) { CharacterOptions2 = Reader.ReadUInt32(); }
+			if (!Reader.CanRead(4)) { return; }
+			CharacterOptions2 = Reader.ReadUInt32();
 		}
+		// Legacy timestamp and GenericQualitiesData occur before gameplay options.
+		// They cannot be mistaken for the inventory footer on non-ACE servers.
+		auto SkipString = [&Reader]() -> bool
+		{
+			if (!Reader.CanRead(2)) return false;
+			const uint32 Length = Reader.ReadUInt16();
+			const int32 Bytes = Length + ((4 - ((Length + 2) & 3)) & 3);
+			if (!Reader.CanRead(Bytes)) return false;
+			Reader.Skip(Bytes); return true;
+		};
+		if ((OptionFlags & 0x80u) && !SkipString()) return;
+		if (OptionFlags & 0x100u)
+		{
+			if (!Reader.CanRead(4)) return;
+			const uint32 Qualities = Reader.ReadUInt32();
+			if (Qualities & ~0xFu) return;
+			for (uint32 Flag : {1u, 2u, 4u, 8u})
+			{
+				if (!(Qualities & Flag)) continue;
+				const int32 Count = ReadTableHeader();
+				if (Count < 0) return;
+				if (Flag != 8u)
+				{
+					const int32 Bytes = Count * (Flag == 4u ? 12 : 8);
+					if (!Reader.CanRead(Bytes)) return;
+					Reader.Skip(Bytes);
+				}
+				else for (int32 I = 0; I < Count; ++I)
+				{
+					if (!Reader.CanRead(4)) return;
+					Reader.Skip(4);
+					if (!SkipString()) return;
+				}
+			}
+		}
+		Reader.Align();
 
 		// GameplayOptions is a raw byte[] with no length prefix (System.IO.BinaryWriter).
 		// Inventory + equipped lists follow it. Scan for a valid inventory footer.
@@ -4471,14 +4636,24 @@ void FACESession::SendCharacterOptions(uint32 Options1, uint32 Options2)
 	}
 	CharacterOptions1 = Options1;
 	CharacterOptions2 = Options2;
-	// Minimal retail payload: flags with only CharacterOptions2 present, then options1, the
-	// always-written tab-1 spell count, then options2.
+	// Preserve the server's spell filters when applying other character options.
 	FACEBinaryWriter W;
-	W.WriteUInt32(0x00000040u);
+	W.WriteUInt32(0x00000060u);
 	W.WriteUInt32(Options1);
 	W.WriteUInt32(0);
+	W.WriteUInt32(SpellbookFilters);
 	W.WriteUInt32(Options2);
 	SendGameAction(ACEGameAction::SetCharacterOptions, W.GetData(), ACEQueue::WeenieQueue);
+}
+
+void FACESession::SendSpellbookFilters(uint32 Filters)
+{
+	if (State != EACESessionState::InWorld || SpellbookFilters == Filters) return;
+	SpellbookFilters = Filters;
+	FACEBinaryWriter W;
+	W.WriteUInt32(Filters);
+	// CM_Character::Event_SpellbookFilterEvent, also handled by ACE and GDLE.
+	SendGameAction(0x0286u, W.GetData(), ACEQueue::WeenieQueue);
 }
 
 void FACESession::CancelEquipmentSwap()
@@ -5805,6 +5980,7 @@ void FACESession::HandleApproachVendor(FACEBinaryReader& Reader)
 		VendorCurrencyWeenie = Reader.ReadUInt32();
 	}
 	VendorCurrencyName.Reset(); VendorCurrencyCount = 0;
+	VendorPurseRevision = MAX_uint64;
 	// altCurrencyCount
 	if (Reader.CanRead(4))
 	{
@@ -6824,6 +7000,31 @@ void FACESession::HandleInventoryRemoveObject(FACEBinaryReader& Reader)
 	OnObjectDeleted.Broadcast(ItemGuid);
 }
 
+int32 FACESession::GetVendorCurrencyCount() const
+{
+	if (!VendorCurrencyWeenie) return VendorCurrencyCount;
+	if (VendorPurseRevision == InventoryDataRevision && VendorPurseWeenie == VendorCurrencyWeenie) return VendorPurseCount;
+	int64 Count = 0;
+	for (const auto& Pair : WorldObjects)
+	{
+		const auto& Item = Pair.Value;
+		if (uint32(Item.WeenieClassId) != VendorCurrencyWeenie || Item.WielderId || Item.CurrentWieldedLocation) continue;
+		int32 Container = Item.ContainerId;
+		TSet<int32> Seen;
+		while (Container && Container != PlayerGuid && !Seen.Contains(Container))
+		{
+			Seen.Add(Container);
+			const auto* Parent = WorldObjects.Find(Container);
+			Container = Parent ? Parent->ContainerId : 0;
+		}
+		if (Container == PlayerGuid && PlayerGuid) Count += Item.MaxStackSize > 0 ? FMath::Max(0, Item.StackSize) : 1;
+	}
+	// ApproachVendor deliberately includes currency already spent. Retail's
+	// current purse follows inventory ownership/stack updates, not that snapshot.
+	VendorPurseRevision = InventoryDataRevision; VendorPurseWeenie = VendorCurrencyWeenie;
+	return VendorPurseCount = int32(FMath::Min<int64>(Count, MAX_int32));
+}
+
 void FACESession::HandleSetStackSize(FACEBinaryReader& Reader)
 {
 	++InventoryDataRevision;
@@ -7406,8 +7607,16 @@ bool FACESession::GetWorldObject(int32 Guid, FACEWorldObject& Out) const
 void FACESession::HandleUpdatePosition(FACEBinaryReader& Reader)
 {
 	const int32 PayloadStart = Reader.Tell();
+	if (!Reader.CanRead(8)) return;
 	const int32 Guid = static_cast<int32>(Reader.ReadUInt32());
 	const uint32 PosFlags = Reader.ReadUInt32();
+	// PositionPack always includes timestamps. Never treat a truncated packet
+	// as an unsequenced correction (or synthesize coordinates from failed reads).
+	int32 BodyBytes = 16 + 8;
+	for (uint32 Omitted : {0x08u, 0x10u, 0x20u, 0x40u}) if (!(PosFlags & Omitted)) BodyBytes += 4;
+	if (PosFlags & 1u) BodyBytes += 12;
+	if (PosFlags & 2u) BodyBytes += 4;
+	if (!Reader.CanRead(BodyBytes)) return;
 	FACEPosition Pos;
 	Pos.CellId = static_cast<int32>(Reader.ReadUInt32());
 	Pos.Location.X = Reader.ReadFloat();
@@ -7441,6 +7650,8 @@ void FACESession::HandleUpdatePosition(FACEBinaryReader& Reader)
 	{
 		Reader.ReadUInt32();
 	}
+	if (Pos.Location.ContainsNaN() || Pos.RotationXYZ.ContainsNaN()
+		|| !FMath::IsFinite(Pos.RotationW) || Pos.Velocity.ContainsNaN()) return;
 	if (Reader.CanRead(8))
 	{
 		const uint16 IncomingInstance = Reader.ReadUInt16();
@@ -7502,6 +7713,7 @@ void FACESession::HandleUpdatePosition(FACEBinaryReader& Reader)
 
 void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 {
+	const int32 PayloadStart = Reader.Tell();
 	// GameMessageUpdateMotion: guid, instance sequence, MovementData header/body.
 	if (!Reader.CanRead(16))
 	{
@@ -7512,26 +7724,19 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 	const uint16 IncomingInstance = Reader.ReadUInt16();
 	const uint16 IncomingMovement = Reader.ReadUInt16();
 	const uint16 IncomingServerControl = Reader.ReadUInt16();
-	Reader.ReadUInt8();  // autonomous
+	const bool bAutonomous = Reader.ReadUInt8() != 0;
 	Reader.Align();
 
-	if (FACEWorldObject* Obj = WorldObjects.Find(Guid))
+	if (FACEWorldObject* Obj = WorldObjects.Find(Guid); Obj && !Obj->bPhysicsDescriptionPending)
 	{
-		if (Obj->bHasPhysicsTimestamps)
+		if (Obj->bHasPhysicsTimestamps && IncomingInstance == Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance])
 		{
-			if (IncomingInstance != Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]) return;
+			// CPhysics::SetObjectMovement requires a newer movement number AND
+			// a server-control epoch that has not gone backwards.
 			if (!ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Movement], IncomingMovement)
-				&& !ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ServerControl], IncomingServerControl))
+				|| ACEPhysicsTimeStamp::IsNewer(IncomingServerControl, Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ServerControl]))
 			{
 				return;
-			}
-			if (ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Movement], IncomingMovement))
-			{
-				Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Movement] = IncomingMovement;
-			}
-			if (ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ServerControl], IncomingServerControl))
-			{
-				Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ServerControl] = IncomingServerControl;
 			}
 		}
 	}
@@ -7592,7 +7797,7 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 				return false;
 			}
 			Out = Reader.ReadFloat();
-			return true;
+			return FMath::IsFinite(Out);
 		};
 
 		uint16 StyleRaw = 0;
@@ -7631,6 +7836,7 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 			const uint16 RawCmd = Reader.ReadUInt16();
 			Reader.ReadUInt16(); // sequence + autonomous bit
 			const float Speed = Reader.ReadFloat();
+			if (!FMath::IsFinite(Speed)) return;
 			const uint32 Full = ACEMotion::ExpandPackedCommand(RawCmd);
 			// FastTick magic packs every scarab windup into one CommandList — keep order
 			// (first → ActionCommand, rest → ActionFollowups). Do not keep only the last.
@@ -7653,8 +7859,9 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 			}
 		}
 		Reader.Align();
-		if ((MotionFlags & 0x01u) != 0 && Reader.CanRead(4))
+		if ((MotionFlags & 0x01u) != 0)
 		{
+			if (!Reader.CanRead(4)) return;
 			Motion.StickyTargetGuid = static_cast<int32>(Reader.ReadUInt32());
 		}
 
@@ -7830,6 +8037,31 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 		Motion.MoveToDesiredHeading = Reader.ReadFloat();
 	}
 
+	else return; // Unknown movement bodies must not consume a valid sequence.
+
+	if (Motion.MoveToLocalAce.ContainsNaN() || !FMath::IsFinite(Motion.MoveToDistance)
+		|| !FMath::IsFinite(Motion.MoveToSpeed) || !FMath::IsFinite(Motion.MoveToRunRate)
+		|| !FMath::IsFinite(Motion.MoveToWalkRunThreshold) || !FMath::IsFinite(Motion.MoveToDesiredHeading)
+		|| !FMath::IsFinite(Motion.TurnToSpeed)) return;
+	if (DeferObjectPhysicsEvent(Guid, IncomingInstance, ACEOpcode::UpdateMotion, Reader, PayloadStart)) return;
+	// Commit only after the entire movement body has validated. A malformed
+	// update must not prevent a valid retransmission with the same timestamps.
+	if (FACEWorldObject* Obj = WorldObjects.Find(Guid); Obj && Obj->bHasPhysicsTimestamps)
+	{
+		for (const auto& Stamp : {TPair<int32, uint16>(ACEPhysicsTimeStamp::Movement, IncomingMovement),
+			TPair<int32, uint16>(ACEPhysicsTimeStamp::ServerControl, IncomingServerControl)})
+			if (ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[Stamp.Key], Stamp.Value))
+				Obj->PhysicsTimestamps[Stamp.Key] = Stamp.Value;
+	}
+
+	if (Guid == PlayerGuid)
+	{
+		ServerControlSeq = IncomingServerControl;
+		// Retail acknowledges its own autonomous echo without restarting local
+		// movement. Remote players still need the same autonomous motion body.
+		if (bAutonomous) return;
+	}
+
 	Motion.bMoving = !FMath::IsNearlyZero(Motion.Forward)
 		|| !FMath::IsNearlyZero(Motion.Strafe)
 		|| !FMath::IsNearlyZero(Motion.Turn)
@@ -7902,6 +8134,7 @@ void FACESession::HandleVectorUpdate(FACEBinaryReader& Reader)
 	AceOmega.X = Reader.ReadFloat();
 	AceOmega.Y = Reader.ReadFloat();
 	AceOmega.Z = Reader.ReadFloat();
+	if (AceVelocity.ContainsNaN() || AceOmega.ContainsNaN()) return;
 	const uint16 Instance = Reader.ReadUInt16();
 	const uint16 VectorSequence = Reader.ReadUInt16();
 	if (DeferObjectPhysicsEvent(Guid, Instance, ACEOpcode::VectorUpdate, Reader, PayloadStart)) return;

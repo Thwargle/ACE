@@ -320,11 +320,11 @@ bool UACEPluginSubsystem::Start(const FString& Id)
         if (!P->VM->Load(Source, Error)) { P->Status = Error; P->VM.Reset();P->CanResumeMeta=false;return false; }
     }
     P->CanResumeMeta=false;P->ResumeMetaPending=Resume;P->VMSourceHash=SourceHash;P->VMProfileHash=ProfileHash;P->VMSession=C->GetSession();
-    P->Running = true; P->Player = C->GetPlayerGuid(); P->Server = C->GetServerName();
+    P->Running = true; P->ActivityFailure.Reset(); P->Player = C->GetPlayerGuid(); P->Server = C->GetServerName();
     if(Id==TEXT("ucm")){IdleManaVM.Reset();IdleManaFailed=false;bRouteJoinRequested=true;RouteVisibilityOffset=0;}
     if(Id==TEXT("ucm")){PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();CombatOutcomes.Empty();ClearBuffRequests();if(!Resume){RuntimeRoute.Reset();RoutePoint=1;}RouteRebuiltAt=0;}
     CachedSpells.Reset();
-    P->NextAction = 0; P->Status = TEXT("Running"); Notice.Empty(); return true;
+    P->NextAction = 0; P->NextDecision=0;P->WaitAction.Empty();P->Status = TEXT("Running"); Notice.Empty(); return true;
 }
 bool UACEPluginSubsystem::RequestForceBuff()
 {
@@ -394,13 +394,14 @@ void UACEPluginSubsystem::Stop(const FString& Id, const FString& Reason, bool Pr
             if (C && C->GetSession()) C->GetSession()->SendCancelAttack();
         }
         P->CanResumeMeta=PreserveMeta&&Id==TEXT("ucm")&&P->VM.IsValid()&&P->Profile->HasField(TEXT("vt_meta"));
-        P->Running = false;P->ResumeMetaPending=false;if(!P->CanResumeMeta)P->VM.Reset();P->Status=Reason;
+        P->Running = false;P->WaitAction.Empty();P->ResumeMetaPending=false;if(!P->CanResumeMeta)P->VM.Reset();P->Status=Reason;
         if(Id==TEXT("ucm"))if(auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>())C->SetPluginFellowshipUpdates(false);
         if(Id==TEXT("ucm")){ClearBuffRequests();ForceBuffRequest=0;bForceBuffOnly=false;bUCMCommandOnly=false;UCMCommands.Reset();if(!P->CanResumeMeta){RuntimeRoute.Reset();RoutePoint=1;}RouteRebuiltAt=0;}
         if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController()))
         {PC->CancelPluginJump();if(UseApproachOwner==Id){PC->EndUseApproach();UseApproachOwner.Empty();}}
         if (MovementOwner == Id) { MovementOwner.Empty(); MoveExpires = 0; }
         if (FastCastOwner == Id) FastCastOwner.Empty();
+        if (PendingSpellOwner == Id) { PendingSpell=0; PendingSpellOwner.Empty(); PendingSpellActivity.Empty(); }
         OffensiveCasts.RemoveAll([&](const auto& E){return E.Owner==Id;});
     }
 }
@@ -674,14 +675,22 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::Snapshot()
     ExtendSnapshot(O);
     return O;
 }
+void UACEPluginSubsystem::CheckPendingSpellTimeout()
+{
+    if(!PendingSpell||FPlatformTime::Seconds()-PendingSpellAt<=30)return;
+    auto Owner=Find(PendingSpellOwner);
+    auto Intent=MakeShared<FJsonObject>();Intent->SetStringField(TEXT("action"),TEXT("cast"));
+    Intent->SetStringField(TEXT("activity"),PendingSpellActivity);
+    PendingSpell=0;PendingSpellOwner.Empty();PendingSpellActivity.Empty();FastCastOwner.Empty();
+    if(Owner&&Owner->Running)ReportActivityFailure(*Owner,Intent,TEXT("Cast confirmation timed out; check connection and spell requirements"));
+}
 bool UACEPluginSubsystem::Tick(float)
 {
     UpdateDesktopDock();
     RefreshAutomationData();
     DrawRoute();
     auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
-    if(PendingSpell && FPlatformTime::Seconds()-PendingSpellAt>30)
-    {PendingSpell=0;PendingSpellOwner.Empty();StopAll(TEXT("Cast confirmation timed out; check connection and spell requirements"));}
+    CheckPendingSpellTimeout();
     // VT ManaChargesWhenOff is deliberately independent of Start/Stop. Use a
     // separate VM restricted to equipment recharge; no meta/combat/nav can run.
     if(auto P=Find(TEXT("ucm"));P&&P->Enabled&&!P->Running&&C->GetSessionState()==EACESessionState::InWorld&&C->GetPlayerVitalsView().Health>0)
@@ -711,7 +720,7 @@ bool UACEPluginSubsystem::Tick(float)
                     {
                         const FString Action=String(Intent,TEXT("action"));
                         if(Action==TEXT("stop")){IdleManaFailed=true;P->Status=String(Intent,TEXT("status"));}
-                        else if(Action==TEXT("use_item"))Execute(*P,Intent);
+                        else if(Action==TEXT("use_item")||Action==TEXT("apply_item"))Execute(*P,Intent);
                     }
                 }
                 if(!Error.IsEmpty())P->Status=TEXT("Idle mana recharge stopped: ")+Error;
@@ -725,6 +734,7 @@ bool UACEPluginSubsystem::Tick(float)
         { Stop(P->Id, TEXT("Stopped: character died, changed, or left world")); continue; }
         // UCM cannot issue a second action while the first is pending. Avoid
         // copying a large spellbook/inventory into Lua just to return "waiting".
+        RefreshActionWait(*P);
         if(FPlatformTime::Seconds()<P->NextDecision)continue;
         auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
         if(PC&&!PC->IsUseApproachActive())UseApproachOwner.Empty();
@@ -733,12 +743,56 @@ bool UACEPluginSubsystem::Tick(float)
         auto TickProfile=MakeShared<FJsonObject>(*P->Profile);TickProfile->RemoveField(TEXT("vt_library"));
         if(P->Id==TEXT("ucm")){TickProfile->SetArrayField(TEXT("ucm_commands"),UCMCommands);TickProfile->SetBoolField(TEXT("ucm_command_only"),bUCMCommandOnly);UCMCommands.Reset();}
         TickProfile->SetBoolField(TEXT("ucm_resume"),P->ResumeMetaPending);P->ResumeMetaPending=false;
+        if(P->ActivityFailure){TickProfile->SetObjectField(TEXT("ucm_activity_failure"),P->ActivityFailure);P->ActivityFailure.Reset();}
         if (!P->VM->Step(Snapshot(), TickProfile, Intent, Error)) { Stop(P->Id, TEXT("Script error: ") + Error); continue; }
         if (Intent) Execute(*P, Intent);
         // Idle/blocked policies need not rebuild world sight and inventory every frame.
-        P->NextDecision=FPlatformTime::Seconds()+.25;
+        bool ContinueWork=false;if(Intent)Intent->TryGetBoolField(TEXT("continue_work"),ContinueWork);
+        P->NextDecision=FPlatformTime::Seconds()+(ContinueWork?.05:.25);
     }
     return true;
+}
+void UACEPluginSubsystem::ReportActivityFailure(FACEClientPlugin& P, const TSharedPtr<FJsonObject>& I, const FString& Reason, bool NotifyPolicy)
+{
+    if(P.Id!=TEXT("ucm")){Stop(P.Id,Reason);return;}
+    FString Activity=String(I,TEXT("activity"));
+    if(Activity.IsEmpty())
+    {
+        // Legacy intents have no activity tag. New policy intents always carry
+        // one, since equip/cast/identify may belong to several activities.
+        const FString Action=String(I,TEXT("action"));
+        if(Action==TEXT("buy")||Action==TEXT("sell_note")||Action==TEXT("split_note"))Activity=TEXT("vendors");
+        else if(Action==TEXT("combine_salvage"))Activity=TEXT("combine");
+        else if(Action==TEXT("loot")||Action==TEXT("salvage")||Action==TEXT("read")||Action==TEXT("sell")||Action==TEXT("open_corpse")||Action==TEXT("close_corpse"))Activity=TEXT("loot");
+        else if(Action==TEXT("store_item")||Action==TEXT("merge"))Activity=TEXT("inventory");
+        else if(Action==TEXT("attack"))Activity=TEXT("combat");
+        else if(Action==TEXT("move")||Action==TEXT("jump")||I->HasField(TEXT("runtime_route")))Activity=TEXT("navigation");
+        else Activity=TEXT("meta");
+    }
+    P.Status=NotifyPolicy?Activity+TEXT(" failed: ")+Reason+TEXT(". UCM remains active"):Reason;
+    Notice=P.Status;
+    if(NotifyPolicy)
+    {
+        P.ActivityFailure=MakeShared<FJsonObject>();
+        P.ActivityFailure->SetStringField(TEXT("activity"),Activity);
+        P.ActivityFailure->SetStringField(TEXT("status"),Reason);
+    }
+    if(MovementOwner==P.Id){MovementOwner.Empty();MoveExpires=0;FaceHeading.Reset();}
+    if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController()))
+    {if(UseApproachOwner==P.Id)PC->EndUseApproach();if(Activity==TEXT("navigation"))PC->CancelPluginJump();}
+    if(UseApproachOwner==P.Id)UseApproachOwner.Empty();
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    if(C&&C->GetSession())
+    {
+        if(Activity==TEXT("combat")){C->GetSession()->SendCancelAttack();PhysicalAttackOwner.Empty();PhysicalAttackTarget=0;}
+        if(Activity==TEXT("loot"))
+        {
+            const int32 Container=C->GetOpenExternalContainerGuid();FACEWorldObject Object;
+            if(Container&&C->GetWorldObject(Container,Object)&&Object.IsCorpse())
+                C->SendNoLongerViewingContents(Container);
+        }
+    }
+    P.NextAction=0;P.NextDecision=0;
 }
 void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObject>& I)
 {
@@ -747,8 +801,8 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
     if(P.Id==TEXT("ucm")&&I->HasField(TEXT("runtime_route")))
     {
         const TArray<TSharedPtr<FJsonValue>>* Route=nullptr;
-        if(!I->TryGetArrayField(TEXT("runtime_route"),Route)||Route->Num()>2048){Stop(P.Id,TEXT("Invalid runtime route"));return;}
-        for(const auto& V:*Route)if(V->Type!=EJson::Object){Stop(P.Id,TEXT("Invalid runtime waypoint"));return;}
+        if(!I->TryGetArrayField(TEXT("runtime_route"),Route)||Route->Num()>2048){ReportActivityFailure(P,I,TEXT("Invalid runtime route"));return;}
+        for(const auto& V:*Route)if(V->Type!=EJson::Object){ReportActivityFailure(P,I,TEXT("Invalid runtime waypoint"));return;}
         RuntimeRoute=MakeShared<FJsonObject>();RuntimeRoute->SetArrayField(TEXT("route"),*Route);RouteRebuiltAt=0;MovementOwner.Empty();MoveExpires=0;
         bool Loop=false,Reverse=false;I->TryGetBoolField(TEXT("runtime_loop_route"),Loop);I->TryGetBoolField(TEXT("runtime_reverse_route"),Reverse);
         RuntimeRoute->SetBoolField(TEXT("loop_route"),Loop);RuntimeRoute->SetBoolField(TEXT("reverse_route"),Reverse);
@@ -757,6 +811,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
     if(!MetaState.IsEmpty())P.MetaState=MetaState;
     const FString Status = String(I, TEXT("status")); if (!Status.IsEmpty()) P.Status = Status;
     const FString Action = String(I, TEXT("action"));
+    if(P.Id==TEXT("ucm")&&Action==TEXT("activity_failed")){ReportActivityFailure(P,I,Status,false);return;}
     if(P.Id==TEXT("ucm"))if(auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>()){bool Updates=false;I->TryGetBoolField(TEXT("helper_updates"),Updates);Client->SetPluginFellowshipUpdates(Updates);}
     if(P.Id==TEXT("ucm")&&Action==TEXT("force_buff_done"))
     {
@@ -769,6 +824,19 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         return;
     }
     if(P.Id==TEXT("ucm")&&Action==TEXT("notice")){Notice=String(I,TEXT("text")).Left(1024);return;}
+    if(P.Id==TEXT("ucm")&&Action==TEXT("pause_navigation"))
+    {
+        // A blocked route must not discard the VM or stop combat/recovery.
+        // Reflect the safety pause in the same switch used by UCM and Micro.
+        P.Profile->SetBoolField(TEXT("navigation"),false);
+        if(MovementOwner==P.Id){MovementOwner.Empty();MoveExpires=0;FaceHeading.Reset();}
+        if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController()))
+        {PC->CancelPluginJump();if(UseApproachOwner==P.Id)PC->EndUseApproach();}
+        if(UseApproachOwner==P.Id)UseApproachOwner.Empty();
+        bRouteJoinRequested=true;RouteVisibilityOffset=0;P.NextAction=0;P.NextDecision=0;
+        Notice=Status;
+        return;
+    }
     if(P.Id==TEXT("ucm") && Action==TEXT("buff_request_done"))
     {
         const uint32 Request=uint32(Number(I,TEXT("request")));
@@ -781,9 +849,9 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
     if(Action==TEXT("profile_load")&&P.Id==TEXT("ucm"))
     {
         const FString Name=String(I,TEXT("profile")),Kind=String(I,TEXT("kind"));const TSharedPtr<FJsonObject>* Library=nullptr;
-        if(!TArray<FString>{TEXT("met"),TEXT("nav"),TEXT("utl"),TEXT("usd")}.Contains(Kind)||!Name.EndsWith(TEXT(".")+Kind)){Stop(P.Id,TEXT("Invalid profile load type"));return;}
+        if(!TArray<FString>{TEXT("met"),TEXT("nav"),TEXT("utl"),TEXT("usd")}.Contains(Kind)||!Name.EndsWith(TEXT(".")+Kind)){ReportActivityFailure(P,I,TEXT("Invalid profile load type"));return;}
         if(!P.Profile->TryGetObjectField(TEXT("vt_library"),Library)||!(*Library)->HasTypedField<EJson::Object>(Name))
-        {Stop(P.Id,TEXT("Referenced profile was not validated during import: ")+Name);return;}
+        {ReportActivityFailure(P,I,TEXT("Referenced profile was not validated during import: ")+Name);return;}
         const auto Loaded=(*Library)->GetObjectField(Name);auto Updated=MakeShared<FJsonObject>(*P.Profile);
         if(Kind==TEXT("usd")){const TArray<TSharedPtr<FJsonValue>>* Keys=nullptr;if(Updated->TryGetArrayField(TEXT("usd_keys"),Keys)){const auto Copy=*Keys;for(const auto& Key:Copy)Updated->RemoveField(Key->AsString());}}
         if(Kind==TEXT("utl")){Updated->RemoveField(TEXT("salvage_policy"));Updated->RemoveField(TEXT("loot_profile"));Updated->RemoveField(TEXT("loot_modified"));}
@@ -796,18 +864,19 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         P.Profile=Updated;RuntimeRoute.Reset();RouteRebuiltAt=0;bRouteJoinRequested=true;MovementOwner.Empty();MoveExpires=0;return;
     }
     const FString Permission = ((Action == TEXT("move") || Action == TEXT("face") || Action == TEXT("jump") || Action == TEXT("recall") || Action == TEXT("use_world") || Action == TEXT("select") || Action == TEXT("logout")) ? TEXT("navigation") : (Action == TEXT("attack") || Action == TEXT("cancel_attack") || Action == TEXT("combat_mode")) ? TEXT("combat") : (Action == TEXT("store_item") || Action == TEXT("give") || Action == TEXT("apply_item") || Action == TEXT("equip") || Action == TEXT("use_item") || Action == TEXT("identify") || Action == TEXT("merge")) ? TEXT("inventory") : (Action == TEXT("buy") || Action == TEXT("split_note") || Action == TEXT("sell_note") || Action == TEXT("combine_salvage") || Action == TEXT("salvage") || Action == TEXT("sell") || Action == TEXT("read") || Action == TEXT("loot") || Action == TEXT("open_corpse") || Action == TEXT("close_corpse")) ? TEXT("loot") : Action);
-    if (!P.Permissions.Contains(Action==TEXT("attack_bar")?TEXT("combat"):Permission)) { Stop(P.Id, TEXT("Action not permitted: ") + Action); return; }
+    if (!P.Permissions.Contains(Action==TEXT("attack_bar")?TEXT("combat"):Permission)) { ReportActivityFailure(P,I, TEXT("Action not permitted: ") + Action); return; }
     auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     auto* PC = Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
     if (!PC || !C->GetSession() || (C->IsUseBusy() && Action!=TEXT("confirm")) || PC->IsWorldTransitionActive()) return;
     const double Now = FPlatformTime::Seconds();
     if (Now < P.NextAction) return;
     P.NextAction = Now + .5;
+    P.WaitAction.Empty();
     if(Action!=TEXT("move")&&Action!=TEXT("face")){MovementOwner.Empty();MoveExpires=0;FaceHeading.Reset();}
     if(Action==TEXT("confirm"))
     {
         bool Accept=false;const double Type=Number(I,TEXT("type"),-1),Context=Number(I,TEXT("context"),-1);
-        if(Type<0||Type>MAX_uint32||Context<0||Context>MAX_uint32||FMath::FloorToDouble(Type)!=Type||FMath::FloorToDouble(Context)!=Context||!I->TryGetBoolField(TEXT("accept"),Accept)||!C->GetSession()->RespondToConfirmation(uint32(Type),uint32(Context),Accept))Stop(P.Id,TEXT("Server confirmation changed or disappeared"));
+        if(Type<0||Type>MAX_uint32||Context<0||Context>MAX_uint32||FMath::FloorToDouble(Type)!=Type||FMath::FloorToDouble(Context)!=Context||!I->TryGetBoolField(TEXT("accept"),Accept)||!C->GetSession()->RespondToConfirmation(uint32(Type),uint32(Context),Accept))ReportActivityFailure(P,I,TEXT("Server confirmation changed or disappeared"));
         return;
     }
     if (ExecuteInventory(P,I,Action)) return;
@@ -818,14 +887,14 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         if(Op==TEXT("quit")||Op==TEXT("disband"))C->SendFellowshipQuit(Op==TEXT("disband"));
         else if(Op==TEXT("open")||Op==TEXT("close"))C->SendFellowshipChangeOpenness(Op==TEXT("open"));
         else if(Op==TEXT("create")&&!Name.IsEmpty()&&Name.Len()<=80)C->SendFellowshipCreate(Name);
-        else if(Op==TEXT("recruit")){FACEWorldObject Target;if(C->GetWorldObject(Guid(I,TEXT("target")),Target)&&Target.bIsPlayer)C->SendFellowshipRecruit(Target.Guid);else Stop(P.Id,TEXT("Recruit target is unavailable"));}
-        else Stop(P.Id,TEXT("Invalid fellowship action"));return;
+        else if(Op==TEXT("recruit")){FACEWorldObject Target;if(C->GetWorldObject(Guid(I,TEXT("target")),Target)&&Target.bIsPlayer)C->SendFellowshipRecruit(Target.Guid);else ReportActivityFailure(P,I,TEXT("Recruit target is unavailable"));}
+        else ReportActivityFailure(P,I,TEXT("Invalid fellowship action"));return;
     }
     if(Action==TEXT("select"))
     {
         FACEWorldObject Target;const int32 Id=Guid(I,TEXT("target"));
         if(C->GetWorldObject(Id,Target)&&(Target.IsSelectableWorldObject()||IsOwnedPluginItem(Target)))C->SelectObject(Id);
-        else Stop(P.Id,TEXT("Meta selection target disappeared"));return;
+        else ReportActivityFailure(P,I,TEXT("Meta selection target disappeared"));return;
     }
     if(Action==TEXT("cancel_attack")){PhysicalAttackUntil=Now+2;C->GetSession()->SendCancelAttack();return;}
     if(Action==TEXT("combat_mode")){const int Mode=int(Number(I,TEXT("mode")));if(Mode==1||Mode==2||Mode==4||Mode==8)C->SendChangeCombatMode(Mode);return;}
@@ -834,7 +903,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
     if(Action==TEXT("recall"))
     {
         const FString Destination=String(I,TEXT("destination"));
-        if(Destination==TEXT("marketplace"))C->SendTeleToMarketplace();else if(Destination==TEXT("lifestone"))C->SendTeleToLifestone();else if(Destination==TEXT("allegiance"))C->SendRecallAllegianceHometown();else if(Destination==TEXT("house"))C->SendTeleToHouse();else if(Destination==TEXT("mansion"))C->SendTeleToMansion();else Stop(P.Id,TEXT("Unknown recall destination"));return;
+        if(Destination==TEXT("marketplace"))C->SendTeleToMarketplace();else if(Destination==TEXT("lifestone"))C->SendTeleToLifestone();else if(Destination==TEXT("allegiance"))C->SendRecallAllegianceHometown();else if(Destination==TEXT("house"))C->SendTeleToHouse();else if(Destination==TEXT("mansion"))C->SendTeleToMansion();else ReportActivityFailure(P,I,TEXT("Unknown recall destination"));return;
     }
     if(Action==TEXT("say"))
     {
@@ -856,7 +925,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
             Dest.CellId=Pos.CellId;
         }
         if (!Dest.IsValid() || (((uint32(Dest.CellId)>>16)!=(uint32(Pos.CellId)>>16)) && ((uint32(Dest.CellId)&0xffff)>=0x100 || (uint32(Pos.CellId)&0xffff)>=0x100)) || FVector::Distance(Dest.ToUnrealLocation(), Pos.ToUnrealLocation()) > 40000.)
-        { Stop(P.Id, TEXT("Route needs a portal between these cells, or a closer waypoint (maximum 400m)")); return; }
+        { ReportActivityFailure(P,I, TEXT("Route needs a portal between these cells, or a closer waypoint (maximum 400m)")); return; }
         if (MovementOwner != P.Id || FVector::Distance(Dest.ToUnrealLocation(), MoveTarget.ToUnrealLocation()) > .1)
         { LastMovePosition = Pos.ToUnrealLocation(); LastProgress = Now; }
         // Stay inside the policy's arrival radius. A fixed 70cm host stop
@@ -888,7 +957,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         // SendCastSpell's public UI path selects only in VR. Automation uses the same
         // resolved target and session cast action in both modes, without a fake trigger.
         PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();
-        PendingSpell=Spell;PendingSpellTarget=Target;PendingSpellAt=Now;PendingSpellOwner=P.Id;
+        PendingSpell=Spell;PendingSpellTarget=Target;PendingSpellAt=Now;PendingSpellOwner=P.Id;PendingSpellActivity=String(I,TEXT("activity"));
         // UseDone also succeeds for resisted spells. Track the specific server
         // magic-chat confirmation before considering an offensive enchantment active.
         uint32 School=0,Power=0,Category=0,Flags=0,Icon=0;double Duration=0;FString SpellName;
@@ -923,7 +992,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         if(!HasClearCombatSight(Monster)){C->GetSession()->SendCancelAttack();P.Status=TEXT("Target behind an obstruction; continuing route");return;}
         if (!Target) { P.Status = TEXT("No eligible monster"); return; }
         const int32 Mode = Guid(I,TEXT("mode"),2);
-        if (Mode != 2 && Mode != 4) { Stop(P.Id, TEXT("Attack mode must be melee (2) or missile (4)")); return; }
+        if (Mode != 2 && Mode != 4) { ReportActivityFailure(P,I, TEXT("Attack mode must be melee (2) or missile (4)")); return; }
         if(C->GetSelectedObject().Guid!=Target)C->SelectObject(Target);
         if(C->GetPlayerVitalsView().CombatMode!=Mode)C->SendChangeCombatMode(Mode);
         const int32 Height = int32(FMath::Clamp(Number(I, TEXT("height"), 2), 1., 3.));
@@ -933,7 +1002,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         PC->ShowPluginAttack(Target, Height, Power);
         P.NextAction = Now + 3.5;
     }
-    else Stop(P.Id, TEXT("Unknown action: ") + Action);
+    else ReportActivityFailure(P,I, TEXT("Unknown action: ") + Action);
 }
 void UACEPluginSubsystem::ApplyMovement(AACEPlayerController* PC, float& F, float& R, float& T, bool Manual, bool Blocked, bool VR, const FVector& Facing)
 {

@@ -27,6 +27,9 @@ public:
     void RequestPlatformKeyboard(uint32 UserIndex);
     bool bMultiline = false;
     bool bDigitsOnly = false;
+    bool bSelectAllOnFocus = false;
+    // Optional authored padding for compact single-line fields such as stack quantity.
+    TOptional<FMargin> ContentMargins;
     int32 MaxLength = 1000;
     int32 ContextId = 0;
     FLinearColor TextColor = FLinearColor::White;

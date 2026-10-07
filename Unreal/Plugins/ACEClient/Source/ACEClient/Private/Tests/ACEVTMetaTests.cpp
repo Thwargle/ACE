@@ -231,7 +231,7 @@ bool FACEVTMetaTest::RunTest(const FString&)
     FACEPluginVM UVM;UVM.Load(Script,Error);UVM.Step(Snap,Uses,Intent,Error);TestEqual(TEXT("Key applies to chosen door"),Intent->GetStringField(TEXT("action")),FString(TEXT("apply_item")));TestEqual(TEXT("Correct target"),Intent->GetNumberField(TEXT("target")),10.);
     UVM.Step(Snap,Uses,Intent,Error);TestFalse(TEXT("Next use waits for server response"),Intent->HasField(TEXT("action")));
     Snap->SetNumberField(TEXT("action_serial"),1);UVM.Step(Snap,Uses,Intent,Error);TestEqual(TEXT("Next use follows completion"),Intent->GetStringField(TEXT("action")),FString(TEXT("use_world")));
-    Snap->SetNumberField(TEXT("action_serial"),2);Snap->SetNumberField(TEXT("action_error"),1);UVM.Step(Snap,Uses,Intent,Error);TestEqual(TEXT("Failed interaction stops meta"),Intent->GetStringField(TEXT("action")),FString(TEXT("stop")));
+    Snap->SetNumberField(TEXT("action_serial"),2);Snap->SetNumberField(TEXT("action_error"),1);UVM.Step(Snap,Uses,Intent,Error);TestEqual(TEXT("Failed interaction pauses meta"),Intent->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
     auto Edge=ACEVTProfile::Read(TEXT("uTank2 NAV 1.2\n4\n1\n0\n-101.950012143709\n18.0138335307439\n-0.474979146321615\n0\n"),TEXT("nav"),Error);
     auto EP=ACEVTProfile::Convert(Edge,Issues);TestEqual(TEXT("Dungeon point just beyond block zero imports"),Issues.Num(),0);TestTrue(TEXT("Negative local position is preserved"),EP->GetArrayField(TEXT("route"))[0]->AsObject()->GetNumberField(TEXT("x"))<0);
     {

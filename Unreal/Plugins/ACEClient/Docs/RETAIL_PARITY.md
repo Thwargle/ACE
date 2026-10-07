@@ -5,8 +5,281 @@ network behavior, controls, DAT content, and interface design. Graphical fidelit
 work follows feature completion. A feature is not complete merely because its
 button exists, its opcode has a constant, or a focused regression test passes.
 
-This is the working acceptance record, updated for build 2026.09.12.2. The client
+This is the working acceptance record, most recently reviewed on 2026-10-07. The client
 is **not yet a feature-complete retail replacement**.
+
+## Interface and player-network review: 2026-10-07
+
+Scope: review the classic desktop UI against the local retail decompile and DAT
+layouts, and trace player transmission/reception through the retail protocol,
+ACE server readers, local prediction, and remote presentation. This is a source
+and automated-test review, not a pixel-by-pixel certification of every screen
+or a live retail/Unreal multiplayer acceptance session. Existing user-requested
+VR menus, plugin windows, server selection, and Unreal graphics controls remain
+intentional extensions.
+
+### Confirmed discrepancies corrected
+
+- **Friends and Squelch:** Squelch now uses `classic_squelch`'s 24-pixel
+  row template, alphabetical ordering, selection artwork, and separate
+  yellow Character/red Account status column. Wheel, arrow, and thumb
+  scrolling reach the full list instead of stopping at 24 entries. Both
+  screens apply retail's selection/online/capacity button states. Friend
+  tells retain multiword names, and friend update type 3 removes silently.
+  Incoming speech, ranged speech, emotes, tells, fellowship/allegiance, and
+  Turbine chat consult the server-provided squelches before chat/plugin
+  delivery. Preserve the four-word channel mask and retail's personal
+  spellcasting-text exception; clear stale squelches on session reset.
+  Account-wide identity enforcement remains server-owned via the standard
+  account-squelch request. Evidence: `gmFriendsUI`, `gmSquelchUI`,
+  `SquelchDB::IsSquelched`, `SquelchInfo::IsSquelched`, ACE message writers,
+  rendered social panels, and isolated incoming/outgoing wire regressions.
+  This does not replace a live two-account server acceptance test.
+- **Chat destination text:** match `gmMainChatUI::HandleSelection`,
+  `InitTalkFocusMenu`, and language DAT `0x23000001` for the compact mode
+  captions (`Chat`, `Fell`, `Gen`, etc.) and all fourteen popup labels
+  (`Chat to All`, `Tell to General Chat`, etc.). Selected-character labels
+  retain the retail wording; an ignored selection checks the squelch row
+  without replacing its caption. The screen regression compares every
+  retail caption and menu label directly against the DAT strings and verifies
+  the existing bitmap font, named selection, and checked state.
+- **Complete fragment identity and supersession:** retain all 64 bits of the
+  server's blob ID rather than combining fragments by its low 32 bits. Track
+  ephemeral sequence/server identity separately from its wrapping 16-bit ordering
+  stamp; discard obsolete versions and reclaim their superseded partial data.
+  Ordering history uses retail's five-second expiry and sweep interval.
+  References: `NetBlobIDUtils`, `Indicator::FragIsObsoleteEmphemeral`,
+  `Indicator::AcceptFrag`, and `ArrivedEphInfo::fTimedOut`.
+- **Incomplete-message storage:** maintain exact buffered-byte accounting,
+  release it on completion/supersession/world exit, and bound assemblies to
+  1,024 messages / 32 MiB. Exhaustion reports a reconnect error instead of silently
+  dropping authoritative gameplay data. These bounds are modern resource guards,
+  not retail timeout constants. Delayed message payloads are not expired merely
+  because their ordering-history entry expires. Reject unregistered queue IDs
+  without rejecting later valid packet contents, following
+  `PacketController::AddReceivedBlobToQueue` (queues 1 through 11).
+- **Transport timing under loss:** checksum-validated echo requests and responses
+  are processed on receipt, before gameplay packet reordering. Missing gameplay
+  packets no longer delay keepalive replies or hide a received RTT sample; draining
+  the reorder queue does not repeat either operation. Reference:
+  `SharedNet::ProcessPacket` / optional-header dispatch. Gameplay ordering and
+  chronological TimeSync handling remain separate.
+- **Motion before object creation:** queue validated F74C updates for missing
+  objects, inventory-only stubs, and future incarnations; replay them after the
+  complete physics description arrives. Reject old incarnations and stale motion
+  sequences. Previously these updates were broadcast before an actor existed or
+  discarded for a future incarnation. Reference: `ACSmartBox::DispatchSmartBoxEvent`
+  case F74C and `SmartBox::ProcessObjectNetBlobs` in the local retail decompile.
+- **Unavailable retransmissions:** process the server's RejectRetransmit list
+  after checksum validation. Release only previously requested missing packet
+  IDs, then drain later received updates. Previously the optional header was
+  skipped and the contiguous dispatcher could wait forever. A late real packet
+  takes precedence over a pending rejection. References: retail
+  `SharedNet::HandleEmptyAck`, ACE `PacketRejectRetransmit`, and `NetworkSession`.
+  This restores progress; it cannot reconstruct data the server no longer has.
+- **Retransmission requests and checksums:** service checksum-validated encrypted
+  standalone NAKs as well as cleartext NAKs without consuming a gameplay packet
+  sequence. Preserve the original separately hashed payload and ISAAC key on
+  retries; hashing the concatenation could produce a different checksum across
+  unaligned fragment boundaries. Reference: retail `SharedNet::HandleNak` and
+  ACE packet/fragment checksum construction.
+- **Server-controlled movement acknowledgements:** `FACESession` previously
+  left its outgoing server-control timestamp at zero. Seed the four outgoing
+  physics timestamps from the player's complete creation description, advance
+  server-control from accepted movement, and reset them on world/session exit.
+  AutonomousPosition, MoveToState, and Jump share these session timestamps.
+  The wire test checks the incarnation and server-control fields actually sent.
+- **Motion ordering:** accept only newer movement under a non-older server
+  control timestamp. The previous OR condition allowed stale movement when
+  control advanced, or newer movement from obsolete control. A player's own
+  autonomous echo now acknowledges timestamps without replaying local movement;
+  other players' autonomous updates still animate. Reference:
+  `CPhysics::SetObjectMovement` in `CPhysics.cpp`.
+- **Malformed physics messages:** reject incomplete PositionPack bodies rather
+  than treating them as unsequenced positions. Validate the complete motion
+  body, including sticky targets, before advancing sequence state; reject
+  nonfinite position, vector, and motion fields. Truncation tests follow a bad
+  message with the valid same-sequence message to prove it remains acceptable.
+- **PlayerModule and spellbook persistence:** honor the flags for one/five/
+  seven/eight spell bars, optional spellbook filters, options2, legacy timestamp
+  strings, and GenericQualitiesData. The previous parser discarded old bar
+  lists and unconditionally consumed a filter word, displacing later fields
+  when that word was absent. Restore retail's default filter/options masks.
+  References: `PlayerModule::UnPack` and `gmSpellbookUI::IsFilteredOut`.
+- **Spellbook controls:** restore the received school/level filters, map the
+  retail school bits to the DAT school identifiers, and send filter edits with
+  retail action 0x0286. Saving other character options retains those filters.
+  Preserve the unexposed ninth-level/reserved bits instead of clearing them.
+- **HUD failure path:** the DAT-enabled desktop HUD no longer silently falls
+  back to `UACEGameHUDWidget` when the retail interface cannot load. It returns
+  to login with a data error. The custom widget remains an explicit development
+  opt-out, not the production failure path.
+
+### Screen coverage and remaining differences
+
+The 101-entry layout asset manifest is an inventory of DAT resources, not proof
+that 101 functional screens have been implemented. The ordinary gameplay tree
+is `classic_gameplay` (0x21000005); its imported subtrees provide inventory,
+vendor, trade, container, salvage, and other retail windows. Dynamic lists and
+labels are implemented through the gameplay binder and retail text renderer.
+
+- **Character selection/creation:** reviewed the DAT flow, profession and
+  attribute/skill controls, and 3D preview path against the chargen/character
+  management classes. Covered by CharacterCreationData, CharacterCreationScreens,
+  CharacterManagement, and LocalLoginSettings tests.
+- **Inventory, paperdoll, stack controls, selection toolbar, container, vendor,
+  trade, salvage, and examination:** reviewed the imported layout subtrees,
+  shared object properties, binder action dispatch, and corresponding session
+  send/receive paths. Coverage includes InventoryOrder, ItemPresentation,
+  AppraisalPresentation, Salvage, SelectionMana, SelectionToolbar, UIScreens,
+  and UIInteractions. Existing checks do not exhaust every custom-server
+  property combination or every vendor/trade rejection response.
+- **Character attributes/skills/titles, vitals, spellbook/casting/components,
+  combat power, and indicators:** use DAT assets and server-supplied state;
+  CharacterStats, SpellFormulaLevels, CombatProtocol, AvatarMotion, UIScreens,
+  and PlayerModuleOptions exercise the shared behavior. Filter persistence and
+  legacy bar decoding were the concrete defects corrected in this pass.
+- **Chat, keyboard/configuration, friends, fellowship, allegiance, journal,
+  contracts/books, housing information, map/radar, and support dialogs:** traced
+  their binder and session handlers. ChatInputAndCommands, KeyboardBindings,
+  PanelResizeSocial, UILayout*, RadarArt, and UIScreens cover representative
+  behavior. Support dialog text includes ACE-specific wording; these are
+  reconstructed dialogs, not a verbatim reproduction of all retail CSR text.
+- **Barber:** StartBarber (0x0075) now opens the authored DAT barber controls
+  in gameplay, with face/hair choices, palette wheel, shade slider, rotating
+  portrait, Apply and Cancel. Crown/flame suppression and Empyrean Earthbound
+  use retail's heritage-specific options. Appearance restoration distinguishes
+  bald styles sharing a head model; undead skeletons use the alternate facial
+  texture entries. Untouched server fields survive editing. FinishBarber
+  (0x0311) sends sixteen 32-bit fields on WeenieQueue; Cancel sends nothing,
+  and the world appearance awaits the server update. Truncated incoming
+  appearances cannot open the editor. VR opens the same retail panel.
+  Sources: `gmBarberUI`, `ACCharGenData::GenerateBaseAppearanceData`,
+  `CM_Character::Event_FinishBarber`, ACE `GameEventStartBarber`, and
+  `Player.FinishBarber`/`SetupConst`. `ACE.RetailParity.Barber` exercises DAT
+  hairstyle round trips, option changes, gameplay opening/replacement/closing,
+  cancel/reopen, rotation, malformed events, exact outgoing packet fields,
+  and visible portrait pixels in the composed UI. Capture:
+  `Saved/Automation/Barber/Human.png`; build/test logs:
+  `Saved/RetailInterfaceNetworkReview/barber-*`. Live server persistence and
+  live VR interaction remain unverified; no Linux/Android binary is built
+  by this source-parity pass.
+- **House purchase/rent:** the follow-up now connects HouseProfile (0x021D)
+  to the actual Slumlord DAT subtree, Buy/Maintenance tabs, payment slots,
+  scrolling, ownership checks, stack splitting, pack expansion, and retail
+  confirmations. Purchases require all payment requirements; maintenance can
+  be partial. Trade notes count as pyreals at face value. Actions 0x021C/0x0221
+  carry the lord and payment object IDs on the retail WeenieQueue, with no
+  speculative removal of inventory. Failed transactions query the active lord
+  again (0x0258); subsequent profiles replace the authoritative paid amounts.
+  Reference: `gmSlumlordUI`, `CM_House`, `HouseProfile`, `HousePaymentList`,
+  `ACCWeenieObject::GetHousePayment`, and ACE's matching event/action readers.
+  `ACE.RetailParity.Housing` covers wire parsing and truncation, purchase/rent
+  packets, notes, foreign/equipped/trade rejection, full and partial stacks,
+  high-bit dynamic item IDs, main-pack drag, drag-out removal, confirmations,
+  refresh after failure, and changing environment windows. Offscreen captures
+  verify the authored tabs, slots, and labels. Live purchases, live VR use,
+  and legacy incremental rent notices not emitted by the current ACE server
+  remain unverified; this is not certification of every housing operation.
+  Validation: Windows editor build and the Housing, Salvage,
+  InteractionRecovery, and PlayerModuleOptions automation cases passed.
+  Housing captures are under `Saved/Automation/Housing`; logs are under
+  `Saved/RetailInterfaceNetworkReview/housing-*`. Quest shared-source sync and
+  `-CheckOnly` passed; no new Linux or Android binary was built in this pass.
+- **Allegiance detail response:** `AllegianceInfoResponse` is explicitly ignored
+  in the session switch. Existing AllegianceUpdate-based display and commands
+  do not establish parity for this separate response.
+- **Saved gameplay UI options are incomplete:** the PlayerModule 0x200 archive
+  remains opaque and is skipped by inventory-footer probing. Local layout
+  persistence is not an implementation of retail's server-stored GameplayOptions
+  archive. The new decoder only fixes the preceding flagged fields.
+- **Administrative and uncommon response paths require more work:** an imported
+  Admin layout alone does not establish a working retail AdminQualities screen.
+  Editable-book response events and PopupString also lack explicit event cases;
+  book reading, chat errors, and ordinary confirmation dialogs are separate paths.
+
+### Networking coverage and limits
+
+Reviewed packet headers, ISAAC/checksums, 464-byte fragment payloads, reliable
+ordering/retransmission/acknowledgement, login/world lifecycle, and the movement
+senders/receivers. References include retail `PositionPack`,
+`AutonomousPositionPack`, `RawMotionState`, `SmartBox::UnpackPositionEvent`,
+`CPhysics::SetObjectMovement`, and the matching ACE network structures/actions.
+The new tests use independent field-by-field packets and UDP loopback, rather
+than merely round-tripping the same serializer.
+
+Movement/presentation coverage includes run speed, command decoding, turning,
+teleport epochs, delayed corrections, collision support, jumping, slopes/stairs,
+and remote replay at multiple render rates. VR extension messages are capability
+gated, while standard position/motion remains available to retail observers.
+Server tests exercise VR negotiation, raw motion, run speed, and network strings.
+Head/hand poses remain a negotiated extension; an unmodified retail client
+cannot display those extra joints.
+
+**Open acceptance gates:** live retail-to-Unreal and Unreal-to-retail movement
+under loss/reordering and portal/server-control changes; Linux and physical
+Quest/SteamVR input/rendering; visual review of every resizable panel at each
+supported scale. Tests with names such as LiveLogin can skip without configured
+credentials and must not be presented as evidence of a live session.
+
+The broad baseline completed 121 tests with six failures. Two were stale test
+fixtures: standalone font labels were marked canvas-flattened, and the VR leg
+reset compared against an animated idle frame instead of the authored bind pose.
+Those fixtures were corrected; a clipboard test also now waits for the Windows
+clipboard before pasting. Four baseline failures remain outside the fixes above:
+
+- ShoushiGap: retreat from the Eiichi/lifestone collision gap.
+- VR.StairCeiling: steep-slope body penetration and wading-height assertions.
+- WorldDat: drawing triangle count for GfxObj 01001221 (20 expected, 44 actual).
+- YaraqScene: pedestal material count (two expected, three actual).
+
+The last two compare raw fixture geometry/material counts against runtime mesh
+construction, which also resolves authored close-detail models. They need a
+separate geometry/fixture investigation; the expected counts were not changed
+merely to obtain a pass. Collision failures remain real acceptance blockers
+until resolved. The overall client is therefore **not certified as full parity**.
+
+Validation logs are under `Unreal/Saved/RetailInterfaceNetworkReview/` (local,
+ignored artifacts):
+
+- Message-identity continuation: editor build passed
+  (`message-identity-final-build.log`), and all nine networking/movement/VR checks
+  listed below passed again (`message-identity-tests.log`, exit 0). Added wire
+  fixtures for 64-bit identity collisions, ordering-stamp wrap/supersession,
+  obsolete complete messages, history expiry, assembly budget exhaustion,
+  duplicate accounting, unsupported queues, immediate echo/RTT during a packet
+  gap, bad echo CRC, and no repeated echo when the gap drains. Quest sync and
+  CheckOnly passed. No physical-device or live multiplayer test was performed.
+- Networking continuation: Windows editor build passed
+  (`network-recovery-build.log`); all nine selected checks passed with exit 0
+  (`network-recovery-final.log`): NetworkTransport, CustomObjectReplication,
+  AvatarMotion, MovementReview, LinkTiming, NetworkWeather, RemoteMovementReplay,
+  VR.RenderingAndReplication, and VR.UniformLocomotionProtocol. The wire tests
+  cover malformed/unsolicited retransmission rejections, multiple gaps, late
+  packets, encrypted NAK delivery and unaligned-fragment retry checksums.
+  Motion tests cover pre-create, future incarnation, stale/duplicate updates,
+  truncated payloads, and inventory-only stubs. An initial run aborted on a
+  new loopback fixture's unconfigured socket/unchecked empty receive; the fixture
+  was corrected before the complete nine-test rerun. Quest sync and CheckOnly
+  passed. This is Windows automation and shared-source validation, not Linux,
+  Android, or a live multiplayer loss test.
+- Windows editor builds succeeded (`build-final.log`, `build-fixtures.log`,
+  `build-verified.log`). After final HUD guard/message cleanup, all four smoke
+  checks passed: MissingDatLogin, NetworkTransport, PlayerModuleOptions, and
+  UIScreens (`smoke-tests.log`).
+- Across `final-tests.log`, `wire-tests.log`, and `remaining-tests.log`, all
+  123 selected client checks completed: 119 reported Success and four reported
+  Fail (the four listed above). One Success is the explicitly skipped LiveLogin
+  opt-in check, so this represents 118 executed passes, one skipped live check,
+  and four failures. `results.txt` contains the consolidated results.
+- The first final run stopped on a new test-fixture cache lookup using the next
+  packet number instead of the packet just sent. The fixture was corrected,
+  both new wire tests passed in isolation, and the remaining tests then ran to
+  completion. That aborted process is not counted as a successful full run.
+- ACE server network/VR selection: 84 passed, zero failed/skipped
+  (`server-focused.log`, `server-tests/network-and-vr.trx`).
+- Quest shared-source synchronization and `-CheckOnly` passed. This verifies
+  source consistency, not an Android package or physical-headset playtest.
 
 ## Sources and comparison method
 
@@ -2374,11 +2647,17 @@ tells, channel aliases, and unknown command forwarding. See
 test results, and native-keyboard acceptance limits.
 
 NetworkTransport now covers real datagram parsing, CRC failures, ordering,
-duplicates, malformed fragment indexes, authenticated time, world entry and
-loopback fragmentation. Still exercise live session loss/recovery, encrypted
-retransmission/key windows, multi-queue delivery, movement timestamps, logout and
+duplicates, malformed fragment indexes, authenticated time, world entry,
+loopback fragmentation, encrypted NAKs, retry checksums and rejected recovery
+requests. Still exercise live session loss/recovery, long-running encrypted
+key windows, multi-queue delivery, movement timestamps, logout and
 relogin, all gameplay responses, and server error paths. Large-message delivery
 must remain within packet budgets for character generation and bulk operations.
+The client's contiguous packet dispatcher still differs from retail's per-flow
+delivery. Rejecting an unrecoverable hole allows subsequent complete messages
+through but cannot recover its lost payload. Assembly storage is now bounded,
+but lost reliable messages and independent gameplay queue delivery still need
+further review under sustained loss.
 
 A release can be called a retail replacement only after the account lifecycle and
 all required gameplay/UI flows work against an unmodified compatible server,

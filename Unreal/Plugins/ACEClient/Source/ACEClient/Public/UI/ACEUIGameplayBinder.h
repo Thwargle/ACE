@@ -1,5 +1,7 @@
 #pragma once
 
+class UACEUICharGenBinder;
+
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
 #include "ACETypes.h"
@@ -75,6 +77,8 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEInventoryUICostTest;
 	friend class FACEGameplayRefreshTest;
 	friend class FACESalvageTest;
+	friend class FACEHousingTest;
+	friend class FACEBarberTest;
 	friend class FACEItemPresentationTest;
 	friend class FACESelectionToolbarTest;
 
@@ -298,6 +302,8 @@ private:
 		StackSize,
 		Effects,
 		Fellowship,
+		Friends,
+		Squelch,
 		Allegiance,
 		Keyboard,
 		EffectsInfo,
@@ -306,6 +312,7 @@ private:
 		VendorBuy,
 		VendorSell,
 		TradeSelf,
+		HousePayment,
 		TradeOther,
 		Salvage,
 		OptionsList,
@@ -862,7 +869,7 @@ private:
 	TSet<int32> KeyboardOpenedCorpses;
 	void PollAdditionalKeyboardActions(APlayerController* PC);
 	void CycleKeyboardSelection(const FString& Kind, int32 Direction);
-	UPROPERTY() TObjectPtr<UEditableTextBox> StackAmountEntry;
+    UPROPERTY() TObjectPtr<UACERetailTextEntry> StackAmountEntry;
 	int32 StackAmountEntryGuid = 0;
 	UFUNCTION() void HandleStackAmountCommitted(const FText& Text, ETextCommit::Type Method);
 	void RefreshStackAmountEntry(bool bShow);
@@ -1031,10 +1038,17 @@ private:
 	UPROPERTY()
 	TArray<TObjectPtr<UTextBlock>> FriendRows;
 	UPROPERTY()
+	TArray<TObjectPtr<UTextBlock>> FriendStatusRows;
+	TArray<TSharedPtr<FACEUIElement>> FriendRowElements;
+	int32 FriendScrollOffset = 0;
+	int32 FriendVisibleRows = 1;
+	UPROPERTY()
 	TArray<int32> FriendRowGuids;
 	UPROPERTY()
 	TArray<TObjectPtr<UTextBlock>> VassalRows;
 	UPROPERTY() TArray<TObjectPtr<UTextBlock>> VassalXPRows;
+	UPROPERTY() TArray<TObjectPtr<UTextBlock>> VassalStatusRows;
+	TArray<TSharedPtr<FACEUIElement>> VassalRowElements;
 	FACECharacterCreation SocialStrings;
 	bool bLoadedSocialStrings = false;
 	UPROPERTY()
@@ -1043,6 +1057,10 @@ private:
 	TObjectPtr<UEditableTextBox> SquelchNameEntry;
 	UPROPERTY()
 	TArray<TObjectPtr<UTextBlock>> SquelchRows;
+	UPROPERTY() TArray<TObjectPtr<UTextBlock>> SquelchStatusRows;
+	TArray<TSharedPtr<FACEUIElement>> SquelchRowElements;
+	int32 SquelchScrollOffset = 0;
+	int32 SquelchVisibleRows = 1;
 	UPROPERTY()
 	TArray<int32> SquelchRowGuids;
 	TArray<FString> SquelchRowNames;
@@ -1241,6 +1259,7 @@ private:
 	int32 InvDragShortcutSlot = INDEX_NONE;
 	bool bInvDragFromVendorSell = false;
 	bool bInvDragFromSalvage = false;
+	bool bInvDragFromHouse = false;
 	int32 HitTestShortcutSlot(FVector2D CanvasLocalPos) const;
 	int32 InvDragIconDid = 0;
 	int32 InvDragSourcePack = 0;
@@ -1448,6 +1467,24 @@ private:
 	void RefreshWorldOverlays();
 	void RefreshWorldMapPage(const TSharedPtr<FACEUIElement>& Page);
 	void RefreshWorldHousePage(const TSharedPtr<FACEUIElement>& Page);
+	void RefreshHouseOffer();
+	void RefreshBarber();
+	UPROPERTY() TObjectPtr<UACEUICharGenBinder> Barber;
+	uint64 SeenBarberRevision=0;
+	void CloseHouseOffer();
+	bool HandleHouseControl(const TSharedPtr<FACEUIElement>& Element);
+	bool HitHouseItemList(FVector2D Local) const;
+	bool TryHouseItemClick(FVector2D Local);
+	void StageHouseItem(int32 Guid, int32 Amount);
+	int32 OpenHouseLord = 0, HouseItemOffset = 0, SelectedHouseItem = 0;
+	uint64 SeenHouseRevision = 0;
+	bool bHouseRentTab = false, bHousePaymentConfirm = false;
+	FString HouseConfirmPrompt;
+	FInventoryStackSplit HousePaymentSplit;
+	UPROPERTY() TArray<TObjectPtr<UTextBlock>> HouseOfferLabels;
+	UPROPERTY() TArray<TObjectPtr<UBorder>> HouseOfferSlots;
+	UPROPERTY() TArray<TObjectPtr<UBorder>> HouseOfferBackgrounds;
+	UPROPERTY() TArray<TObjectPtr<UBorder>> HouseOfferSelections;
 	void HideWorldOverlays();
 	bool HandleWorldNamedClick(const FString& Name);
 	/** Abuse / Urgent Assistance multi-page wizards + Book + MiniGame chrome. */

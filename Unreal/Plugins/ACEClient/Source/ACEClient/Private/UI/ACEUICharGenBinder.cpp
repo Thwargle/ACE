@@ -55,6 +55,7 @@ bool UACEUICharGenBinder::Initialize(UACEClientSubsystem* InClient,UACEUICanvasW
 }
 void UACEUICharGenBinder::Shutdown()
 {
+    if(BarberRoot) BarberRoot->bVisible=false;
     MouseUp(); bNameFocus=false;
     if(Manager)Manager->OnElementActivated.Remove(ActivatedHandle);
     if(Client&&Client->GetSession())Client->GetSession()->OnCharacterCreated.Remove(CreatedHandle);
@@ -69,7 +70,16 @@ void UACEUICharGenBinder::Shutdown()
     if(Preview)Preview->Destroy();Preview=nullptr;Capture=nullptr;Target=nullptr;SkillRows.Reset();SummaryRows.Reset();
     Canvas=nullptr;
 }
-TSharedPtr<FACEUIElement> UACEUICharGenBinder::Find(const TCHAR* Name) const{return Manager?Manager->FindElementByName(Name):nullptr;}
+TSharedPtr<FACEUIElement> UACEUICharGenBinder::Find(const TCHAR* Name) const
+{
+    if(!Manager)return nullptr;
+    if(!bBarber)return Manager->FindElementByName(Name);
+    FString Mapped=Name;
+    if(Mapped==TEXT("RootCharGenMaster"))return BarberRoot;
+    if(Mapped==TEXT("3DViewport") || Mapped==TEXT("RotateClockwise") || Mapped==TEXT("RotateCounterClockwise") || Mapped==TEXT("FaceChoices")
+        || Mapped==TEXT("HairSpin") || Mapped==TEXT("EyesSpin") || Mapped==TEXT("NoseSpin") || Mapped==TEXT("MouthSpin") || Mapped==TEXT("SkinSpin"))Mapped=TEXT("Barber")+Mapped;
+    return Manager->FindElementUnder(TEXT("RootGameplay_FloatyBarber_Field"),Mapped);
+}
 TSharedPtr<FACEUIElement> UACEUICharGenBinder::Under(const TCHAR* Parent,const TCHAR* Name) const{return Manager?Manager->FindElementUnder(Parent,Name):nullptr;}
 TSharedPtr<FACEUIElement> UACEUICharGenBinder::Child(TSharedPtr<FACEUIElement> Parent,uint32 Id) const{if(!Parent)return nullptr;for(auto C:Parent->Children){if(C->ElementId==Id)return C;if(auto R=Child(C,Id))return R;}return nullptr;}
 void UACEUICharGenBinder::Show(const TCHAR* Name,bool Value){if(auto E=Find(Name))E->bVisible=Value;}
@@ -110,6 +120,7 @@ void UACEUICharGenBinder::SetPage(int32 InPage)
 }
 void UACEUICharGenBinder::Tick(float Delta)
 {
+    if(bBarber && (!Client || !Client->GetSession() || !Client->GetSession()->IsBarberOpen()))return;
     if(bReturn){bReturn=false;if(Controller&&Client&&Client->GetSession()){Controller->ShowCharacterSelectUI(Client->GetCharacters(),Client->GetSession()->GetServerName());}return;}
     // Place labels every frame so they follow viewport resizing and the native state font.
     Refresh();RefreshPreview(Delta);RefreshTooltip(Delta);
@@ -127,6 +138,7 @@ void UACEUICharGenBinder::Refresh()
     Show(TEXT("AdminButton"),false);Show(TEXT("EnvoyButton"),false);
     if(auto E=Find(TEXT("CGFinishButton")))E->bActivatable=!Pending;
     StaticLabels(Find(TEXT("RootCharGenMaster")));
+    if(bBarber)RefreshBarberOptions();
     if(Page==1)
     {
         for(int I=1;I<=13;++I)if(auto E=Find(HeritageButtons[I])){E->bUseExplicitState=true;E->DefaultState=I==Model.Selection.Heritage?0x10000017:0x10000016;E->bVisible=Model.Heritages.Contains(I);}
@@ -153,7 +165,7 @@ void UACEUICharGenBinder::Refresh()
         Selected(TEXT("FemaleButton"),Model.Selection.Sex==2);Selected(TEXT("MaleButton"),Model.Selection.Sex==1);Selected(TEXT("FaceButton"),!bClothes);Selected(TEXT("ClothesButton"),bClothes);
         Show(TEXT("FaceChoices"),!bClothes);Show(TEXT("ClothesChoices"),bClothes);
         Show(TEXT("ClothesButton"),!SpecialBody);Show(TEXT("NoseSpin"),!SpecialBody);Show(TEXT("MouthSpin"),!SpecialBody);
-        if(auto Skin=Find(TEXT("SkinSpin")))Skin->Y=SpecialBody?90:180;
+        if(auto Skin=Find(TEXT("SkinSpin")))Skin->Y=SpecialBody?(bBarber?88:90):(bBarber?176:180);
         for(uint32 Id:{0x1000030au,0x1000030bu})if(auto Arrow=Child(Find(TEXT("EyesSpin")),Id))Arrow->bVisible=!SpecialBody;
         const FString Prefix=Model.Selection.Heritage==6?TEXT("ID_CharGen_GearText_"):TEXT("ID_CharGen_OlthoiText_");
         Label(TEXT("HairSpin"),Model.Text(SpecialBody?Prefix+TEXT("HairButton"):TEXT("ID_CharGen_HairStyle")));
@@ -168,7 +180,7 @@ void UACEUICharGenBinder::Refresh()
         double Hue=ColorField==0?Model.Selection.HairHue:(ColorField>=2&&ColorField<=4)?Model.Selection.SkinHue:ColorField>=5?Model.Selection.GearHue[ColorField-5]:0;
         if(auto Thumb=Child(Find(TEXT("GradientScroll")),1))Thumb->Y=FMath::RoundToInt(Hue*64.);
         FString Desc=Model.Sex()->Name; if(ColorField>=5){int I=ColorField-5;if(Model.Sex()->Gear[I].IsValidIndex(Model.Selection.GearStyle[I]))Desc=Model.Sex()->Gear[I][Model.Selection.GearStyle[I]].Name;}
-        auto TextBox=Find(TEXT("AppearanceTextBox"));ScrollText(TextBox,Model.Strings.FindRef(TextBox->TextEntryId));RefreshColors();
+        auto TextBox=Find(TEXT("AppearanceTextBox"));if(TextBox)ScrollText(TextBox,Model.Strings.FindRef(TextBox->TextEntryId));RefreshColors();
     }
     if(Page==5)
     {
@@ -355,12 +367,20 @@ void UACEUICharGenBinder::Submit()
 }
 void UACEUICharGenBinder::Activate(TSharedPtr<FACEUIElement> E)
 {
+    if(bBarber){bool Own=false;for(auto P=E;P;P=P->Parent.Pin())if(P==BarberRoot){Own=true;break;}if(!Own)return;}
     if(!E)return;bool Pending=Client&&Client->GetSession()&&Client->GetSession()->IsCharacterCreationPending();if(Pending)return;
     if(DialogAction){if(E==Child(Dialog,0x17)){CloseDialog(true);return;}if(E==Child(Dialog,0x19)){CloseDialog(false);return;}for(auto P=E;P;P=P->Parent.Pin()){if(P==Child(Dialog,0x17)){CloseDialog(true);return;}if(P==Child(Dialog,0x19)){CloseDialog(false);return;}}return;}
     FString Name=E->ElementName;
     for(auto P=E;P;P=P->Parent.Pin())
     {
         Name=P->ElementName;
+        if(bBarber)
+        {
+            if(Name==TEXT("BarberApplyButton")){FinishBarber(true);return;}
+            if(Name==TEXT("BarberCancelButton")){FinishBarber(false);return;}
+            if(Name==TEXT("BarberOption1")){bSuppressEffect=!bSuppressEffect;bPreviewDirty=bDirty=true;return;}
+            Name.RemoveFromStart(TEXT("Barber"));
+        }
         for(int I=1;I<=6;++I)if(Name==Navigation[I]){SetPage(I);return;}
         if(Name==TEXT("CGLeftButton")){SetPage(Page-1);return;}if(Name==TEXT("CGRightButton")){SetPage(Page+1);return;}
         if(Name==TEXT("CGFinishButton")){Submit();return;}if(Name==TEXT("CGExitButton")){ShowDialog(2,Model.Text(TEXT("ID_CharGen_ExitWarning")));return;}
@@ -372,7 +392,7 @@ void UACEUICharGenBinder::Activate(TSharedPtr<FACEUIElement> E)
         if(Name==TEXT("FaceButton")||Name==TEXT("ClothesButton")){bClothes=Name==TEXT("ClothesButton");Zoom=bClothes?1:0;ColorField=bClothes?5:0;bPreviewDirty=bDirty=true;return;}
         for(int I=0;I<9;++I)if(Name==SpinNames[I]){Spin(I,E->ElementName.Contains(TEXT("LeftArrow"))?-1:E->ElementName.Contains(TEXT("RightArrow"))?1:0);return;}
         if(Name.StartsWith(TEXT("ColorSpot"))){int Index=FCString::Atoi(*Name.Mid(9))-1;if(Index<0)return;if(ColorField==0&&Model.Sex()->HairColors.IsValidIndex(Index))Model.Selection.HairColor=Index;if(ColorField==1&&Model.Sex()->EyeColors.IsValidIndex(Index))Model.Selection.EyeColor=Index;if(ColorField>=5){auto Colors=Model.GearColors(ColorField-5);if(Colors.IsValidIndex(Index))Model.Selection.GearColor[ColorField-5]=Colors[Index];}bDirty=bPreviewDirty=true;return;}
-        if(Name==TEXT("RotateClockwise")||Name==TEXT("RotateCounterClockwise")){PreviewYaw+=Name==TEXT("RotateClockwise")?15:-15;return;}
+        if(Name==TEXT("RotateClockwise")||Name==TEXT("RotateCounterClockwise")){const int Dir=Name==TEXT("RotateClockwise")?1:-1;if(bBarber)RotateDirection=RotateDirection==Dir?0:Dir;else PreviewYaw+=Dir*15;return;}
         if(Name==TEXT("ZoomIn")||Name==TEXT("ZoomOut")){Zoom=Name==TEXT("ZoomIn")?0:1;return;}
         for(int I=0;I<4;++I)if(Name==Model.StartAreas[I]){Model.Selection.StartArea=I;bDirty=true;return;}
         if(Name.StartsWith(TEXT("CreationSkill"))){int Id=FCString::Atoi(*Name.Mid(13));if(Id<0)return;if(SelectedSkill!=Id)DescriptionScroll=0;SelectedSkill=Id;if(E->bActivatable&&E->ElementId==0x10000304)Model.SetSkill(Id,Model.Selection.Skills[Id]+1);if(E->bActivatable&&E->ElementId==0x10000305)Model.SetSkill(Id,Model.Selection.Skills[Id]-1);bDirty=true;return;}
@@ -382,11 +402,13 @@ void UACEUICharGenBinder::Activate(TSharedPtr<FACEUIElement> E)
 FVector2D UACEUICharGenBinder::Relative(FVector2D P) const{auto E=Find(TEXT("RootCharGenMaster"));return E?P-FVector2D(E->GetScreenOrigin()):P;}
 bool UACEUICharGenBinder::MouseDown(FVector2D P)
 {
+    if(bBarber && !Contains(BarberRoot,P))return false;
+    if(bBarber && Canvas && !Canvas->IsElementExposedAt(BarberRoot,P*Manager->GetCanvasScale(Canvas->GetCachedGeometry().GetLocalSize())))return false;
     TooltipClock=0;if(Tooltip)Tooltip->bVisible=false;
     if(Client&&Client->GetSession()&&Client->GetSession()->IsCharacterCreationPending())return true;
     if(DialogAction)return false;
     LastMouse=P;
-    if(Page==4){if(Contains(Find(TEXT("RotateClockwise")),P)){RotateDirection=1;return true;}if(Contains(Find(TEXT("RotateCounterClockwise")),P)){RotateDirection=-1;return true;}}
+    if(Page==4&&!bBarber){if(Contains(Find(TEXT("RotateClockwise")),P)){RotateDirection=1;return true;}if(Contains(Find(TEXT("RotateCounterClockwise")),P)){RotateDirection=-1;return true;}}
     if(auto Hit=Manager->HitTestCanvas(P.X,P.Y))for(auto E=Hit;E;E=E->Parent.Pin())if(E->Type==ACEUI::ElementType::Scrollbar&&E->ElementName!=TEXT("GradientScroll")&&E->ElementName!=TEXT("AttribSlider")&&Hit->ElementName!=TEXT("ScrollBar_Up")&&Hit->ElementName!=TEXT("ScrollBar_Down")){DragScrollbar=E;MouseMove(P);return true;}
     if(Page==2)for(int I=0;I<6;++I){FString N=FString(AttrNames[I])+TEXT("Slider");if(Contains(Under(*N,TEXT("Locker")),P)){Model.Selection.Locked[I]=!Model.Selection.Locked[I];bDirty=true;return true;}if(Contains(Under(*N,TEXT("AttribSlider")),P)){DragAttribute=I;MouseMove(P);return true;}}
     if(Page==4&&Contains(Find(TEXT("GradientScroll")),P)){bGradientDrag=true;MouseMove(P);return true;}
@@ -403,7 +425,7 @@ void UACEUICharGenBinder::MouseMove(FVector2D P)
     if(bPreviewDrag)PreviewYaw+=(P.X-LastMouse.X);LastMouse=P;
     if(bNameDrag)NameCaret=NamePosition(P);
 }
-void UACEUICharGenBinder::MouseUp(){DragAttribute=-1;bGradientDrag=false;bPreviewDrag=false;bNameDrag=false;RotateDirection=0;DragScrollbar.Reset();}
+void UACEUICharGenBinder::MouseUp(){DragAttribute=-1;bGradientDrag=false;bPreviewDrag=false;bNameDrag=false;if(!bBarber)RotateDirection=0;DragScrollbar.Reset();}
 int32 UACEUICharGenBinder::NamePosition(FVector2D P) const
 {
     auto E=Find(TEXT("NameTextBox"));if(!E)return 0;FACEDatFont Font;int Position=NameDisplayStart;
@@ -415,6 +437,8 @@ int32 UACEUICharGenBinder::NamePosition(FVector2D P) const
 }
 bool UACEUICharGenBinder::MouseWheel(FVector2D P,float D)
 {
+    if(bBarber && !Contains(BarberRoot,P))return false;
+    if(bBarber && Canvas && !Canvas->IsElementExposedAt(BarberRoot,P*Manager->GetCanvasScale(Canvas->GetCachedGeometry().GetLocalSize())))return false;
     if(DialogAction)return true;
     if(Page==3&&!Contains(Find(TEXT("SkillInfoBoxText")),P))SkillScroll-=FMath::RoundToInt(D*3);else if(Page==6&&Contains(Find(TEXT("SummaryListBox")),P))SummaryScroll-=FMath::RoundToInt(D*3);else if(Page==4&&!Contains(Find(TEXT("AppearanceTextBox")),P))Zoom=FMath::Clamp(Zoom-D*.1f,0.f,1.f);else DescriptionScroll=FMath::Max(0,DescriptionScroll-FMath::RoundToInt(D));bDirty=true;return true;
 }
@@ -432,6 +456,7 @@ bool UACEUICharGenBinder::KeyDown(const FKeyEvent& E)
     // Motion-controller buttons belong to the VR input bindings, even if the
     // canvas has keyboard focus. Only text/navigation keys belong here.
     if(E.GetKey().IsGamepadKey())return false;
+    if(bBarber){if(E.GetKey()==EKeys::Escape){FinishBarber(false);return true;}return false;}
     if(Client&&Client->GetSession()&&Client->GetSession()->IsCharacterCreationPending())return true;
     if(DialogAction){if(E.GetKey()==EKeys::Escape)CloseDialog(false);else if(E.GetKey()==EKeys::Enter)CloseDialog(true);return true;}
     if(E.GetKey()==EKeys::Escape){ShowDialog(2,Model.Text(TEXT("ID_CharGen_ExitWarning")));return true;}
@@ -447,6 +472,7 @@ bool UACEUICharGenBinder::KeyDown(const FKeyEvent& E)
 }
 bool UACEUICharGenBinder::KeyChar(const FCharacterEvent& E)
 {
+    if(bBarber)return false;
     if(!DialogAction&&Page==6&&bNameFocus&&!(Client&&Client->GetSession()&&Client->GetSession()->IsCharacterCreationPending())&&!E.IsControlDown()&&FACECharacterCreation::IsNameCharacter(E.GetCharacter()))InsertName(FString::Chr(E.GetCharacter()));return true;
 }
 void UACEUICharGenBinder::RefreshPreview(float Delta)
@@ -471,7 +497,7 @@ void UACEUICharGenBinder::RefreshPreview(float Delta)
         // opacity on mobile LDR or when Slate draws into the VR panel texture.
         Target=NewObject<UTextureRenderTarget2D>(this);
         Target->ClearColor=FLinearColor(0,0,0,1);
-        Target->InitCustomFormat(490,742,PF_FloatRGBA,true);
+        Target->InitCustomFormat(bBarber?400:490,bBarber?400:742,PF_FloatRGBA,true);
         Target->UpdateResourceImmediate(true);
         Capture=NewObject<USceneCaptureComponent2D>(Preview);Capture->SetupAttachment(Root);Capture->RegisterComponent();Capture->TextureTarget=Target;Capture->CaptureSource=ESceneCaptureSource::SCS_SceneColorHDR;Capture->bCaptureEveryFrame=false;Capture->bCaptureOnMovement=false;Capture->ShowFlags.SetAtmosphere(false);Capture->ShowFlags.SetFog(false);Capture->PrimitiveRenderMode=ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
         Capture->ShowFlags.SetMotionBlur(false);
@@ -491,7 +517,7 @@ void UACEUICharGenBinder::RefreshPreview(float Delta)
     {
         const bool Animate=Page==6||bClothes;
         FACEWorldObject Object;
-        if(Model.BuildAppearance(Object,Page==4&&!bClothes))
+        if(bBarber?BuildBarberPreview(Object):Model.BuildAppearance(Object,Page==4&&!bClothes))
         {
             const uint32 Animation=Model.MappedAsset(0x25000010,Model.Selection.Heritage==12?0x10000011:Model.Selection.Heritage==13?0x10000013:Animate?0x10000006:0x10000005);
             // Retain the generated mesh and animation phase when the selected swatch/shade
@@ -502,14 +528,14 @@ void UACEUICharGenBinder::RefreshPreview(float Delta)
                 App->SetPreviewAnimation(Animation,Animate);
             PreviewAnimationId=Animation;bPreviewWasAnimated=Animate;
         }
-        if(PreviewEnvironmentId!=Model.Heritage()->Environment)
+        if(!bBarber && PreviewEnvironmentId!=Model.Heritage()->Environment)
         {
             if(PreviewEnvironment)PreviewEnvironment->Destroy();PreviewEnvironment=nullptr;
             PreviewEnvironmentId=Model.Heritage()->Environment;
             if(PreviewEnvironmentId){FActorSpawnParameters Spawn;Spawn.ObjectFlags|=RF_Transient;PreviewEnvironment=World->SpawnActor<AActor>(AActor::StaticClass(),Preview->GetActorLocation(),FRotator::ZeroRotator,Spawn);if(PreviewEnvironment){auto Root=NewObject<USceneComponent>(PreviewEnvironment);PreviewEnvironment->SetRootComponent(Root);Root->RegisterComponent();PreviewEnvironment->SetActorLocation(Preview->GetActorLocation());auto Environment=NewObject<UACECharacterAppearanceComponent>(PreviewEnvironment);Environment->RegisterComponent();FACEWorldObject Backdrop;Backdrop.SetupId=PreviewEnvironmentId;Environment->ApplyWorldObject(Backdrop,100,false);}}
         }
         Capture->ClearShowOnlyComponents();TArray<UPrimitiveComponent*> Prims;Preview->GetComponents(Prims);if(PreviewEnvironment){TArray<UPrimitiveComponent*> Background;PreviewEnvironment->GetComponents(Background);Prims.Append(Background);}
-        auto* Dat=Client->GetUIResourceResolver()->GetDatSubsystem();
+        auto* Dat=Canvas->GetResourceResolver()->GetDatSubsystem();
         for(auto Prim:Prims)
         {
             Prim->SetCollisionEnabled(ECollisionEnabled::NoCollision);Prim->SetLightingChannels(false,false,true);Prim->SetVisibleInSceneCaptureOnly(true);
@@ -524,9 +550,11 @@ void UACEUICharGenBinder::RefreshPreview(float Delta)
     if(App&&App->GetMeshRoot())App->GetMeshRoot()->SetRelativeRotation(FRotator(0,PreviewYaw,0));
     const uint32 Heritage=Model.Selection.Heritage;
     FVector Close(0,-55,165),Far(0,-250,95);
+    if(bBarber)Close=FVector(0,-65,170);
     if(Heritage==7)Close=FVector(0,-85,165);
     if(Heritage==12){Close=FVector(0,-185,185);Far=FVector(0,-380,115);}
     if(Heritage==13){Close=FVector(0,-305,275);Far=FVector(0,-570,165);}
+    if(bBarber)Close=(Heritage==6||Heritage>=12)?FVector(0,-80,150):FVector(0,-65,170);
     const FVector Desired=FMath::Lerp(Close,Far,Page==6?1.f:Zoom);
     // gmCGAppearancePage::DoZoomAnimation linearly traverses the selected camera
     // endpoints in 0.6 seconds, independent of heritage size or current zoom.

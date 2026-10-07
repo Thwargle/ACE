@@ -20,6 +20,8 @@
 #include "UI/ACEUIResourceResolver.h"
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACERetailTextBlock.h"
+#include "UI/ACERetailTextEntry.h"
+#include "Framework/Application/SlateApplication.h"
 #include "UI/ACERetailObjectNames.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACESelectionToolbarTest, "ACE.RetailParity.SelectionToolbar",
@@ -130,6 +132,60 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     TestEqual(TEXT("Stack name aligns left in retail state"), int32(Label->GetTextJustification()), int32(ETextJustify::Left));
     TestEqual(TEXT("Stack uses retail selected field state"), Field->DefaultState, 0x1000000Cu);
     Draw(TEXT("Stack"));
+
+    const auto Track = Stack->Children[0], Thumb = Stack->Children[1];
+    TestEqual(TEXT("Retail stack track art"), Track->ImageFileId, 0x06004CF6u);
+    TestEqual(TEXT("Retail stack thumb art"), Thumb->ImageFileId, 0x06005DC3u);
+    TestEqual(TEXT("Native thumb is 16 pixels wide"), Thumb->Width, 16);
+    if (!TestNotNull(TEXT("Stack quantity is editable DAT text"), Binder->StackAmountEntry.Get())) return false;
+    auto* Entry = Binder->StackAmountEntry.Get();
+    TestTrue(TEXT("Quantity only accepts digits"), Entry->bDigitsOnly);
+    TestTrue(TEXT("Quantity uses authored right padding"), Entry->ContentMargins.IsSet() && Entry->ContentMargins->Right == 2.f);
+    auto Commit = [&](const TCHAR* Value) { Entry->SetText(FText::FromString(Value)); Entry->Commit(ETextCommit::OnEnter); };
+    Commit(TEXT("7"));
+    TestEqual(TEXT("Typed amount immediately updates selected quantity"), Binder->SelectedStackAmount, 7);
+    TestEqual(TEXT("Partial quantity does not shrink the track"), Track->Width, Stack->Width);
+    TestEqual(TEXT("Typed quantity immediately repositions thumb"), Thumb->X, 10);
+    TestEqual(TEXT("Typed quantity immediately updates name"), Label->GetText().ToString(), FString(TEXT("7 Steel Arrows (of 50)")));
+    const auto Frame = Manager->FindElementByName(TEXT("SelectionBlinkField"));
+    TestTrue(TEXT("Opaque selection frame paints below the slider"), Field->Children.IndexOfByKey(Frame) < Field->Children.IndexOfByKey(Stack));
+    Draw(TEXT("StackPartial"));
+    Draw(TEXT("StackPartial150"), 1.5f);
+    Draw(TEXT("StackPartial"));
+    Commit(TEXT("9999999999")); TestEqual(TEXT("Large quantity clamps to stack"), Binder->SelectedStackAmount, 50);
+    Commit(TEXT("")); TestEqual(TEXT("Empty quantity clamps to one"), Binder->SelectedStackAmount, 1);
+    Commit(TEXT("0")); TestEqual(TEXT("Zero quantity clamps to one"), Binder->SelectedStackAmount, 1);
+    Commit(TEXT("25"));
+    const auto Origin = Stack->GetScreenOrigin();
+    const FVector2D Grab(Origin.X + Thumb->X + 3, Origin.Y + 7);
+    TestTrue(TEXT("Thumb starts dragging"), Binder->TryBeginScrollbarDrag(Grab));
+    Binder->UpdateScrollbarDrag(Grab);
+    TestEqual(TEXT("Grabbing thumb does not change quantity"), Binder->SelectedStackAmount, 25);
+    Binder->UpdateScrollbarDrag(Grab + FVector2D(-200, 0));
+    TestEqual(TEXT("Dragging left clamps to one"), Binder->SelectedStackAmount, 1);
+    Binder->UpdateScrollbarDrag(Grab + FVector2D(200, 0));
+    TestEqual(TEXT("Dragging right selects full stack"), Binder->SelectedStackAmount, 50);
+    Binder->TryFinishScrollbarDrag();
+    TestTrue(TEXT("Track click starts dragging"), Binder->TryBeginScrollbarDrag(FVector2D(Origin.X + 44.5, Origin.Y + 7)));
+    TestEqual(TEXT("Retail midpoint quantization selects 26 of 50"), Binder->SelectedStackAmount, 26);
+    TestEqual(TEXT("Slider updates typed amount"), Entry->GetText().ToString(), FString(TEXT("26")));
+    Binder->TryFinishScrollbarDrag();
+
+    // Exercise the actual editable Slate widget, including hotkey focus/select-all.
+    const auto EntrySlate = Entry->TakeWidget();
+    EntrySlate->OnFocusReceived(Entry->GetCachedGeometry(), FFocusEvent(EFocusCause::SetDirectly, 0));
+    EntrySlate->OnKeyChar(Entry->GetCachedGeometry(), FCharacterEvent('9', FModifierKeysState(), 0, false));
+    EntrySlate->OnKeyChar(Entry->GetCachedGeometry(), FCharacterEvent('x', FModifierKeysState(), 0, false));
+    TestEqual(TEXT("Typing replaces focused amount and rejects letters"), Entry->GetText().ToString(), FString(TEXT("9")));
+    EntrySlate->OnKeyDown(Entry->GetCachedGeometry(), FKeyEvent(EKeys::Enter, FModifierKeysState(), 0, false, 0, 0));
+    TestEqual(TEXT("Enter commits typed quantity"), Binder->SelectedStackAmount, 9);
+    EntrySlate->OnFocusReceived(Entry->GetCachedGeometry(), FFocusEvent(EFocusCause::SetDirectly, 0));
+    EntrySlate->OnKeyChar(Entry->GetCachedGeometry(), FCharacterEvent('3', FModifierKeysState(), 0, false));
+    EntrySlate->OnKeyDown(Entry->GetCachedGeometry(), FKeyEvent(EKeys::Escape, FModifierKeysState(), 0, false, 0, 0));
+    TestEqual(TEXT("Escape restores previous quantity"), Binder->SelectedStackAmount, 9);
+    StackItem.StackSize = 5; Binder->RefreshSelectionOverlay();
+    TestEqual(TEXT("Server stack decrease clamps quantity"), Binder->SelectedStackAmount, 5);
+    TestEqual(TEXT("Server stack decrease updates entry"), Entry->GetText().ToString(), FString(TEXT("5")));
 
     StackItem.StackSize = 1; Binder->RefreshSelectionOverlay();
     TestEqual(TEXT("One remaining stackable item uses a singular uncounted name"), Label->GetText().ToString(), FString(TEXT("Steel Arrow")));

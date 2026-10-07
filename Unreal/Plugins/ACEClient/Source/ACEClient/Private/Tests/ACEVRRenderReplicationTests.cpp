@@ -157,7 +157,10 @@ bool FACEVRRenderReplicationTest::RunTest(const FString& Parameters)
 	};
 	ReceivePose(W.GetData());
 	FACEVRPose Pose; TestTrue(TEXT("Received pose is available to the renderer"),Session.GetVRPose(123,Pose));
-	const FTransform LegBefore=Entity->Appearance->GetPartMesh(2)->GetRelativeTransform();
+	// Object creation now evaluates retail idle immediately. Compare to the
+	// authored bind pose, not that (deliberately different) initial animation.
+	FTransform LegBefore;
+	TestTrue(TEXT("VR fixture has an authored leg bind pose"),Entity->Appearance->GetPartBindTransform(2,LegBefore));
 	Remote->TickComponent(.05f,LEVELTICK_All,nullptr);
 	TestTrue(TEXT("Remote upper body is controlled by tracking"),Entity->Appearance->bVRPoseControlled);
 	TestTrue(TEXT("Stationary VR lower body uses the neutral bind pose"),Entity->Appearance->GetPartMesh(2)->GetRelativeTransform().Equals(LegBefore));

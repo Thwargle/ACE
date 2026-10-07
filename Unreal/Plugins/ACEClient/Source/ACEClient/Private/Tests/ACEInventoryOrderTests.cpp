@@ -109,7 +109,9 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
     FACEBinaryWriter Login;
     Login.WriteUInt32(1); Login.WriteUInt32(0); // quality flags and weenie type
     Login.WriteUInt16(1); Login.WriteUInt16(1); Login.WriteUInt32(322); Login.WriteInt32(3);
-    for(int I=0;I<6;++I) Login.WriteUInt32(0); // vectors and player module
+    Login.WriteUInt32(0); Login.WriteUInt32(0); // vectors
+    Login.WriteUInt32(0x20); // filter field is flagged, as in retail PlayerModule
+    for(int I=0;I<3;++I) Login.WriteUInt32(0); // options, first bar, filters
     Login.WriteUInt32(4);
     for(const auto& Ref : {TPair<int32,int32>(2,0),{20,1},{1,0},{10,1}})
     { Login.WriteUInt32(Ref.Key); Login.WriteUInt32(Ref.Value); }

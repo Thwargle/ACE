@@ -1,4 +1,5 @@
 #pragma once
+#include "ACEBarber.h"
 
 #include "CoreMinimal.h"
 #include "ACECharacterCreation.h"
@@ -78,9 +79,12 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEVRRigTest;
 	friend class FACESpellDataRevisionTest;
 	friend class FACESalvageTest;
+	friend class FACEHousingTest;
+	friend class FACEBarberTest;
 	friend class FACEItemPresentationTest;
 	friend class FACESelectionToolbarTest;
 	friend class FACEChatParityTest;
+	friend class FACEPlayerModuleParityTest;
 	friend class FACEUILayoutCommandsTest;
 	friend class FACEUIInteractionParityTest;
 	friend class FACEPanelResizeSocialTest;
@@ -367,6 +371,8 @@ public:
 
 	/** Character options bitfields as last known from PlayerDescription / our own edits. */
 	uint32 GetCharacterOptions1() const { return CharacterOptions1; }
+	uint32 GetSpellbookFilters() const { return SpellbookFilters; }
+	void SendSpellbookFilters(uint32 Filters);
 	uint32 GetCharacterOptions2() const { return CharacterOptions2; }
 	/** PlayerDescription IsAdmin/IsArch/IsSentinel or ObjectDesc Admin on self. */
 	bool IsLocalPlayerAdmin() const { return bLocalPlayerIsAdmin; }
@@ -422,7 +428,7 @@ public:
 	float GetVendorBuyRate() const { return VendorBuyRate; }
 	float GetVendorSellRate() const { return VendorSellRate; }
 	FString GetVendorCurrencyName() const { return VendorCurrencyName; }
-	int32 GetVendorCurrencyCount() const { return VendorCurrencyCount; }
+	int32 GetVendorCurrencyCount() const;
 	bool VendorUsesPyreals() const { return VendorCurrencyWeenie == 0 && VendorCurrencyName.IsEmpty(); }
 	bool CanVendorBuyItem(const FACEWorldObject& Item) const;
 
@@ -491,6 +497,20 @@ public:
 	void SendAbandonContract(int32 ContractId);
 	/** Housing panel state from GameEvent HouseData / HouseStatus. */
 	const FACEHouseInfo& GetHouseInfo() const { return House; }
+	const FACEHouseProfile& GetHouseProfile() const { return HouseOffer; }
+	const FACEBarberProfile& GetBarberProfile() const { return BarberProfile; }
+	bool IsBarberOpen() const { return bBarberOpen; }
+	uint64 GetBarberRevision() const { return BarberRevision; }
+	void CloseBarber() { bBarberOpen=false; }
+	bool FinishBarber(const FACEBarberProfile& Profile);
+	uint64 GetHouseProfileRevision() const { return HouseOfferRevision; }
+	const TArray<int32>& GetHousePaymentItems(bool bRent) const { return bRent ? HouseRentItems : HouseBuyItems; }
+	bool StageHousePayment(int32 Guid, bool bRent);
+	void RemoveHousePayment(int32 Guid, bool bRent);
+	int64 GetHousePaymentAmount(int32 Wcid, bool bRent) const;
+	bool CanPayHouse(bool bRent) const;
+	bool SendHousePayment(bool bRent);
+	void CloseHouseProfile();
 	/** GameAction HouseQuery (0x021E) — refresh the housing panel. */
 	void SendHouseQuery();
 	/** Open book from BookDataResponse / BookPageDataResponse. */
@@ -510,6 +530,7 @@ public:
 	void SendChessMove(int32 FromX, int32 FromY, int32 ToX, int32 ToY);
 	/** Squelch list from GameEvent SetSquelchDB. */
 	const TArray<FACESquelchEntry>& GetSquelches() const { return Squelches; }
+	bool IsSenderSquelched(int32 Guid, const FString& Name, uint32 MessageType) const;
 	int32 GetGlobalSquelchMask() const { return GlobalSquelchMask; }
 	/** Fill-component book from PlayerDescription: component wcid → quantity to rebuy. */
 	const TMap<int32, int32>& GetDesiredComponents() const { return DesiredComponents; }
@@ -597,9 +618,10 @@ public:
 	void SetReportedContact(bool bContact) { bAutoPosContact = bContact; }
 
 private:
+	void AdoptPlayerPhysicsTimestamps(const FACEWorldObject& Object);
 	struct FReceivedFragment
 	{
-		uint32 Sequence = 0;
+		uint64 BlobId = 0;
 		uint16 Count = 0;
 		uint16 Index = 0;
 		uint16 Queue = 0;
@@ -611,6 +633,12 @@ private:
 		uint16 Count = 0;
 		uint16 Queue = 0;
 		TMap<uint16, TArray<uint8>> Parts;
+		int32 Bytes = 0;
+	};
+	struct FEphemeralMessage
+	{
+		uint64 BlobId = 0;
+		double UpdatedAt = 0;
 	};
 
 	void SetState(EACESessionState NewState);
@@ -721,12 +749,15 @@ private:
 	void HandleFellowshipDismissEvent(FACEBinaryReader& Reader);
 	void HandleFellowshipDisband(FACEBinaryReader& Reader);
 	void HandleAllegianceUpdate(FACEBinaryReader& Reader);
+	void HandleAllegianceLoginNotification(FACEBinaryReader& Reader);
 	void HandleFriendsListUpdate(FACEBinaryReader& Reader);
 	void HandleSalvageOperationsResult(FACEBinaryReader& Reader);
 	void HandleContractTrackerTable(FACEBinaryReader& Reader);
 	void HandleContractTracker(FACEBinaryReader& Reader);
 	void HandleSetSquelchDB(FACEBinaryReader& Reader);
 	void HandleHouseData(FACEBinaryReader& Reader);
+	void HandleHouseProfile(FACEBinaryReader& Reader);
+	bool IsHousePaymentOwned(int32 Guid) const;
 	void HandleHouseStatus(FACEBinaryReader& Reader);
 	void HandleBookDataResponse(FACEBinaryReader& Reader);
 	void HandleBookPageDataResponse(FACEBinaryReader& Reader);
@@ -832,12 +863,15 @@ private:
 	/** Cleartext C2S NAK — retail PacketHeaderFlags.RequestRetransmit (no EncryptedChecksum). */
 	void SendRequestRetransmit(const TArray<uint32>& MissingSequences);
 	void HandleServerRequestRetransmit(const TArray<uint32>& Sequences);
-	void CacheOutboundPacket(uint32 Sequence, EACEPacketHeaderFlags Flags, uint32 IsaacXor, const TArray<uint8>& PayloadAfterHeader);
-	void ProcessOrderedS2CPacket(uint32 Sequence, EACEPacketHeaderFlags Flags, float EchoClientTime, float EchoResponseClientTime, const TArray<FReceivedFragment>& Fragments, double ServerTicks, double ReceivedAt);
+	void CacheOutboundPacket(uint32 Sequence, EACEPacketHeaderFlags Flags, uint32 IsaacXor, uint32 PayloadHash, const TArray<uint8>& PayloadAfterHeader);
+	void ProcessOrderedS2CPacket(uint32 Sequence, EACEPacketHeaderFlags Flags, const TArray<FReceivedFragment>& Fragments, double ServerTicks, double ReceivedAt);
 	void ApplyServerTime(double ServerTicks, double ReceivedAt, const TCHAR* Source);
 	void DrainOutOfOrderS2C();
 	void RequestMissingS2CPackets(double Now);
 	void ProcessReceivedFragment(const FReceivedFragment& Fragment);
+	void ResetReceivedMessages();
+	void RemovePartialMessage(uint64 BlobId);
+	void ExpireEphemeralMessages(double Now);
 
 	static uint32 HeaderHash32(uint32 Sequence, EACEPacketHeaderFlags Flags, uint16 Id, uint16 Time, uint16 Size, uint16 Iteration);
 
@@ -845,14 +879,13 @@ private:
 	{
 		EACEPacketHeaderFlags Flags = EACEPacketHeaderFlags::None;
 		uint32 IsaacXor = 0;
+		uint32 PayloadHash = 0;
 		TArray<uint8> Payload; // bytes after 20-byte header
 	};
 
 	struct FPendingS2CPacket
 	{
 		EACEPacketHeaderFlags Flags = EACEPacketHeaderFlags::None;
-		float EchoClientTime = -1.f;
-		float EchoResponseClientTime = -1.f;
 		TArray<FReceivedFragment> Fragments;
 		double ServerTicks = 0.0;
 		double ReceivedAt = 0.0;
@@ -919,6 +952,8 @@ private:
 	double LastRequestForRetransmitTime = 0.0;
 	TMap<uint32, FCachedC2SPacket> CachedC2SPackets;
 	TMap<uint32, FPendingS2CPacket> OutOfOrderS2CPackets;
+	TSet<uint32> RequestedS2CPackets;
+	TSet<uint32> RejectedS2CPackets;
 	float AutoPosTimer = 0.f;
 	float EchoTimer = 0.f;
 	/** While awaiting CharacterList, retransmit ConnectResponse (UDP loss + auth race). */
@@ -966,6 +1001,9 @@ private:
 	float VendorSellRate = 1.f;
 	FString VendorCurrencyName;
 	int32 VendorCurrencyCount = 0;
+	mutable uint64 VendorPurseRevision = MAX_uint64;
+	mutable uint32 VendorPurseWeenie = 0;
+	mutable int32 VendorPurseCount = 0;
 	uint32 VendorCurrencyWeenie = 0;
 	uint32 VendorItemTypes = MAX_uint32;
 	int32 VendorMinValue = -1;
@@ -997,6 +1035,12 @@ private:
 	TArray<FACEContractEntry> Contracts;
 	TArray<FACESquelchEntry> Squelches;
 	FACEHouseInfo House;
+	FACEHouseProfile HouseOffer;
+	FACEBarberProfile BarberProfile;
+	bool bBarberOpen=false;
+	uint64 BarberRevision=0;
+	uint64 HouseOfferRevision = 0;
+	TArray<int32> HouseBuyItems, HouseRentItems;
 	FACEBookInfo Book;
 	int32 GlobalSquelchMask = 0;
 	TMap<int32, int32> DesiredComponents;
@@ -1032,6 +1076,7 @@ private:
 
 	/** PlayerDescription CharacterOptions1 / CharacterOptions2 bitfields. */
 	uint32 CharacterOptions1 = 0;
+	uint32 SpellbookFilters = 0x3FFFu;
 	uint32 CharacterOptions2 = 0;
 	bool bLocalPlayerIsAdmin = false;
 
@@ -1073,7 +1118,12 @@ private:
 	/** Client MotionItem sequence for autonomous CommandList entries (soul emotes). */
 	uint16 MotionActionSeq = 0;
 
-	TMap<uint32, FPartialMessage> PartialFragments;
+	TMap<uint64, FPartialMessage> PartialFragments;
+	TMap<uint64, FEphemeralMessage> EphemeralMessages;
+	int32 PartialMessageBytes = 0;
+	double LastEphemeralExpiry = 0;
+	static constexpr int32 MaxPartialMessages = 1024;
+	static constexpr int32 MaxPartialMessageBytes = 32 * 1024 * 1024;
 
 	static constexpr int32 PacketHeaderSize = 20;
 	static constexpr int32 FragmentHeaderSize = 16;

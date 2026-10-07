@@ -1,4 +1,5 @@
 #include "UI/ACEUIGameplayBinder.h"
+#include "ACESpellbookFilters.h"
 #include "UI/ACERadarColors.h"
 #include "ACEHoverTooltipWidget.h"
 #include "ACEVendorPricing.h"
@@ -30,6 +31,7 @@
 #include "ACEDatSubsystem.h"
 #include "ACEPlayerController.h"
 #include "VR/ACEVRComponent.h"
+#include "UI/ACEUICharGenBinder.h"
 #include "ACEWorldEntityActor.h"
 #include "ACEWorldPresenterComponent.h"
 #include "GameFramework/GameModeBase.h"
@@ -514,6 +516,9 @@ void UACEUIGameplayBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEleme
 {
 	Shutdown();
 	Client = InClient;
+	const uint32 Filters = Client && Client->GetSession() ? Client->GetSession()->GetSpellbookFilters() : 0x3FFFu;
+	SpellbookSchoolFilterMask = ACESpellbookFilters::Schools(Filters);
+	SpellbookLevelFilterMask = ACESpellbookFilters::Levels(Filters);
 	Manager = InManager;
 	Canvas = InCanvas;
 	PlayerController = InPC;
@@ -584,6 +589,17 @@ void UACEUIGameplayBinder::Shutdown()
 	AutoLayoutSession.Reset(); AutoLayoutPlayer = 0; AutoLayoutSize = FIntPoint::ZeroValue;
 	CancelPendingUseWith();
 	KeyboardOpenedCorpses.Reset();
+	if(Barber){Barber->Shutdown();Barber=nullptr;}
+	if(Canvas)Canvas->SetBarberBinder(nullptr);
+	SeenBarberRevision=0;
+	if (OpenHouseLord) CloseHouseOffer();
+	for (auto* Array : {&HouseOfferSlots,&HouseOfferBackgrounds,&HouseOfferSelections})
+	{
+		for (auto& B : *Array) if (B) B->RemoveFromParent();
+		Array->Reset();
+	}
+	for (auto& L : HouseOfferLabels) if (L) L->RemoveFromParent();
+	HouseOfferLabels.Reset(); SeenHouseRevision=0;
 	if (StackAmountEntry) StackAmountEntry->RemoveFromParent();
 	StackAmountEntry=nullptr; StackAmountEntryGuid=0;
 	if (KeymapReportScroll) KeymapReportScroll->RemoveFromParent();
@@ -702,6 +718,8 @@ void UACEUIGameplayBinder::TickRefresh()
 	Manager->BeginNameLookupPass();
 	ON_SCOPE_EXIT { if (Manager) Manager->EndNameLookupPass(); };
 	ApplyPendingChatFocus();
+	RefreshHouseOffer();
+	RefreshBarber();
 	// Keep drag ghosts tracking the cursor even when MouseMove is sparse under capture.
 	if ((bInvDragPending || bSpellDragPending) && FSlateApplication::IsInitialized()
 		&& !(PlayerController && PlayerController->IsVRActive()))
@@ -837,6 +855,7 @@ void UACEUIGameplayBinder::TickRefresh()
 
 void UACEUIGameplayBinder::OnElementActivated(TSharedPtr<FACEUIElement> Element)
 {
+	if (HandleHouseControl(Element)) return;
 	if(OpenSalvageToolGuid && Element && (Element->ElementName==TEXT("ScrollBar_Left") || Element->ElementName==TEXT("ScrollBar_Right")))
 		for(auto Parent=Element->Parent.Pin();Parent;Parent=Parent->Parent.Pin())
 			if(Parent->ElementName==TEXT("Salvage_ItemListScroll"))
@@ -873,6 +892,10 @@ void UACEUIGameplayBinder::OnElementActivated(TSharedPtr<FACEUIElement> Element)
 			{VassalScrollOffset+=Dir;RefreshAllegianceOverlays();return;}
 			if(A->ElementName==TEXT("FellowsListBoxScrollbar"))
 			{FellowScrollOffset+=Dir;RefreshFellowshipOverlays();return;}
+			if(A->ElementName==TEXT("FreindsListBoxScrollbar"))
+			{FriendScrollOffset+=Dir;RefreshFriendsOverlays();return;}
+			if(A->ElementName==TEXT("SquelchListBoxScrollbar"))
+			{SquelchScrollOffset+=Dir;RefreshSquelchOverlays();return;}
 			if(A->ElementName==TEXT("KeyboardMappingScrollbar"))
 			{KeyboardScrollOffset+=Dir;RefreshKeyboardOverlays();return;}
 			if (A->ElementName == TEXT("BookPanel_Field") && BookScroll)
@@ -1198,7 +1221,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 		bool bAccount = false;
 		for (const FACESquelchEntry& E : Client->GetSquelches())
 		{
-			if (E.Guid == SelectedSquelchGuid)
+			if (E.Guid == SelectedSquelchGuid && E.Name == SelectedSquelchName)
 			{
 				bAccount = E.bAccount;
 				break;
@@ -1214,6 +1237,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 		}
 		SelectedSquelchGuid = 0;
 		SelectedSquelchName.Reset();
+		RefreshSquelchOverlays();
 		return true;
 	}
 	if (Name == TEXT("KickButton"))
@@ -1232,7 +1256,7 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 					if (ChatEntry)
 					{
 						ChatEntry->SetText(FText::FromString(
-							FString::Printf(TEXT("/tell %s "), *F.Name)));
+							FString::Printf(TEXT("/tell %s, "), *F.Name)));
 					}
 					FocusChatEntry();
 					break;
@@ -2230,6 +2254,7 @@ void UACEUIGameplayBinder::HandleEscape()
 	if (OpenVendorGuid != 0) { HideVendorPanel(); return; }
 	if (bTradeOpen) { HideTradePanel(true); return; }
 	if (OpenSalvageToolGuid != 0) { HideSalvagePanel(); return; }
+	if (OpenHouseLord != 0) { CloseHouseOffer(); return; }
 	if (!ActivePanelPage.IsEmpty()) { HidePanel(); return; }
 	ActiveOptionsTab = TEXT("GameplayOptionsPage");
 	ShowPanelPage(TEXT("OptionsPanel_Field"));
@@ -4316,6 +4341,7 @@ void UACEUIGameplayBinder::CancelInventoryDrag()
 {
 	bInvDragFromVendorSell = false;
 	bInvDragFromSalvage = false;
+	bInvDragFromHouse = false;
 	if (PaperDollDragTargetIcon) PaperDollDragTargetIcon->SetVisibility(ESlateVisibility::Collapsed);
 	InvDragGuid = 0;
 	InvDragAmount = 0;
@@ -4496,6 +4522,7 @@ bool UACEUIGameplayBinder::TryBeginInventoryDrag(FVector2D CanvasLocalPos)
 	{
 		if (bInvDragPending && InvDragGuid) InvDragAmount = GetSelectedItemAmount(InvDragGuid);
 	};
+	if (TryHouseItemClick(CanvasLocalPos)) return true;
 
 	InvDragShortcutSlot = INDEX_NONE;
 	const int32 Index = HitTestShortcutSlot(CanvasLocalPos);
@@ -4840,6 +4867,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 	const bool bDoubleClick = bInvDoubleClickPending;
 	const bool bVendorSellSource = bInvDragFromVendorSell;
 	const bool bSalvageSource = bInvDragFromSalvage;
+	const bool bHouseSource = bInvDragFromHouse;
 	const bool bLootSource = OpenLootContainerGuid != 0
 		&& (SourcePack == OpenLootContainerGuid || SourcePack == OpenLootSelectedPackGuid);
 	CancelInventoryDrag();
@@ -4855,6 +4883,16 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 	}
 	const FVector2D Absolute = Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos);
 
+	if (bHouseSource)
+	{
+		if (bDoubleClick || (bWasDragging && !HitHouseItemList(CanvasLocalPos)))
+		{
+			if (auto S=Client->GetSession()) S->RemoveHousePayment(Guid,bHouseRentTab);
+			LastInvClickGuid=0; LastInvClickTime=0;
+		}
+		else if (!bWasDragging) { LastInvClickGuid=Guid; LastInvClickTime=FPlatformTime::Seconds(); }
+		RefreshHouseOffer(); return true;
+	}
 	if(bSalvageSource)
 	{
 		const auto List=Manager?Manager->FindElementByName(TEXT("SalvageItemsList")):nullptr;
@@ -4936,6 +4974,10 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 	}
 
 	// Both authored rows accept inventory items and shortcut-to-shortcut swaps.
+	if (HitHouseItemList(CanvasLocalPos))
+	{
+		StageHouseItem(Guid,Amount); RefreshHouseOffer(); return true;
+	}
 	if (const int32 Destination = HitTestShortcutSlot(CanvasLocalPos); Destination != INDEX_NONE)
 	{
 		AssignInventoryShortcut(Guid, Destination, ShortcutSource);
@@ -5608,27 +5650,9 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 				{
 					continue;
 				}
-				if (Canvas->IsWidgetExposedAt(Row, Absolute))
+				if (FriendRowElements.IsValidIndex(i) && Canvas->IsElementExposedAt(FriendRowElements[i], CanvasLocalPos))
 				{
 					SelectedFriendGuid = FriendRowGuids[i];
-					if (SelectedFriendGuid != 0 && Client)
-					{
-						// Second click on same friend removes (retail-style management).
-						static int32 LastFriendClickGuid = 0;
-						static double LastFriendClickTime = 0.0;
-						const double Now = FPlatformTime::Seconds();
-						if (LastFriendClickGuid == SelectedFriendGuid && (Now - LastFriendClickTime) < 0.4)
-						{
-							Client->SendRemoveFriend(SelectedFriendGuid);
-							SelectedFriendGuid = 0;
-							LastFriendClickGuid = 0;
-						}
-						else
-						{
-							LastFriendClickGuid = SelectedFriendGuid;
-							LastFriendClickTime = Now;
-						}
-					}
 					RefreshFriendsOverlays();
 					return true;
 				}
@@ -5643,7 +5667,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 				{
 					continue;
 				}
-				if (Canvas->IsWidgetExposedAt(Row, Absolute))
+				if (SquelchRowElements.IsValidIndex(i) && Canvas->IsElementExposedAt(SquelchRowElements[i],CanvasLocalPos))
 				{
 					SelectedSquelchGuid = SquelchRowGuids[i];
 					SelectedSquelchName = SquelchRowNames.IsValidIndex(i)
@@ -5666,7 +5690,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 				{
 					continue;
 				}
-				if (Canvas->IsWidgetExposedAt(Row, Absolute) || (VassalXPRows.IsValidIndex(i) && Canvas->IsWidgetExposedAt(VassalXPRows[i],Absolute)))
+				if (VassalRowElements.IsValidIndex(i) && Canvas->IsElementExposedAt(VassalRowElements[i], CanvasLocalPos))
 				{
 					SelectedVassalGuid = VassalRowGuids[i];
 					RefreshAllegianceOverlays();
@@ -7241,6 +7265,12 @@ bool UACEUIGameplayBinder::ToggleSpellbookFilter(const FString& Name)
 		return false;
 	}
 	SpellbookFilterPressedName = Name;
+	if (Client && Client->GetSession())
+	{
+		const auto Session = Client->GetSession();
+		Session->SendSpellbookFilters(ACESpellbookFilters::ToWire(
+			SpellbookSchoolFilterMask, SpellbookLevelFilterMask, Session->GetSpellbookFilters()));
+	}
 	SpellbookFilterPressedUntil = FPlatformTime::Seconds() + 0.15;
 	SpellbookScrollOffset = 0;
 	SyncSpellbookFilterCheckboxes();
@@ -10759,7 +10789,7 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 	const bool bShowMana = LastSelection.bValid && !bShowStack && !bShowHealth && LastSelection.bShowMana;
 	const float HealthFrac = FMath::Clamp(LastSelection.HealthFraction, 0.f, 1.f);
 	const float ManaFrac = FMath::Clamp(LastSelection.ManaFraction, 0.f, 1.f);
-	const float StackFrac = (SelectedStackMax > 0)
+	const float StackFrac = ScrollDragTarget == EACEUIScrollTarget::StackSize ? ScrollDragFraction : (SelectedStackMax > 0)
 		? FMath::Clamp(static_cast<float>(SelectedStackAmount) / static_cast<float>(SelectedStackMax), 0.f, 1.f)
 		: 0.f;
 
@@ -10793,14 +10823,13 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 				if (Slider->Children.IsValidIndex(0) && Slider->Children[0].IsValid())
 				{
 					Slider->Children[0]->bVisible = true;
-					Slider->Children[0]->Width = FMath::Max(1,
-						FMath::RoundToInt(static_cast<float>(Slider->Width) * StackFrac));
+					Slider->Children[0]->Width = Slider->Width;
 				}
 				if (Slider->Children.IsValidIndex(1) && Slider->Children[1].IsValid())
 				{
 					const int32 ThumbW = FMath::Max(8, Slider->Children[1]->Width);
 					Slider->Children[1]->X = FMath::Clamp(
-						FMath::RoundToInt(static_cast<float>(Slider->Width) * StackFrac) - ThumbW / 2,
+						FMath::FloorToInt(static_cast<float>(Slider->Width - ThumbW) * StackFrac),
 						0, FMath::Max(0, Slider->Width - ThumbW));
 					Slider->Children[1]->bVisible = true;
 				}
@@ -12295,6 +12324,11 @@ uint64 UACEUIGameplayBinder::HashVendorOverlayState() const
 		return H;
 	}
 	const auto Session = Client->GetSession();
+	if (Session)
+	{
+		H = HashCombine(H, GetTypeHash(Session->GetVendorCurrencyCount()));
+		H = HashCombine(H, GetTypeHash(Session->GetVendorCurrencyName()));
+	}
 	const TConstArrayView<FACEWorldObject> Merch = Session
 		? TConstArrayView<FACEWorldObject>(Session->GetVendorMerchandise()) : TConstArrayView<FACEWorldObject>();
 	H = HashCombine(H, GetTypeHash(Merch.Num()));
@@ -13062,14 +13096,23 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 					&& CanvasLocalPos.Y < O.Y + Slider->Height)
 				{
 					ScrollDragBar.Reset();
-					ScrollDragGrabOffset = 0;
+					const auto Thumb = Slider->Children.Num() > 1 ? Slider->Children[1] : nullptr;
+					const int32 ThumbWidth = Thumb ? Thumb->Width : 16;
+					const float LocalX = CanvasLocalPos.X - O.X;
+					const bool bOnThumb = Thumb && LocalX >= Thumb->X && LocalX < Thumb->X + ThumbWidth;
 					ScrollDragLastOffset = INDEX_NONE;
 					ScrollDragTarget = EACEUIScrollTarget::StackSize;
 					ScrollDragMaxOff = SelectedStackMax;
 					bScrollDragHorizontal = true;
 					ScrollDragTrackOrigin = O.X;
-					ScrollDragTravel = FMath::Max(1, Slider->Width);
-					UpdateScrollbarDrag(CanvasLocalPos);
+					ScrollDragTravel = FMath::Max(1, Slider->Width - ThumbWidth);
+					// Retail moves the touched point to the thumb center; grabbing the thumb
+					// preserves its fractional position and the selected amount until dragged.
+					ScrollDragFraction = bOnThumb ? float(SelectedStackAmount) / SelectedStackMax
+						: FMath::Clamp((LocalX - ThumbWidth * .5f) / FMath::Max(1, ScrollDragTravel - 1), 0.f, 1.f);
+					ScrollDragGrabOffset = LocalX - ScrollDragFraction * ScrollDragTravel;
+					if (bOnThumb) ScrollDragLastOffset = SelectedStackAmount;
+					else UpdateScrollbarDrag(CanvasLocalPos);
 					return true;
 				}
 			}
@@ -13145,6 +13188,13 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 		return true;
 	};
 
+	if(OpenHouseLord && Client && Client->GetSession())
+	{
+		const FString Prefix=bHouseRentTab?TEXT("HouseMaintenance"):TEXT("HouseBuy");
+		const auto List=Manager->FindElementByName(Prefix+TEXT("ItemsList"));
+		if(List && TryBar(Manager->FindElementByName(Prefix+TEXT("_ItemListScroll")),EACEUIScrollTarget::HousePayment,
+			FMath::Max(0,Client->GetSession()->GetHousePaymentItems(bHouseRentTab).Num()-FMath::Max(1,List->Width/32)),true)) return true;
+	}
 	if(OpenSalvageToolGuid && TryBar(Manager->FindElementByName(TEXT("Salvage_ItemListScroll")),EACEUIScrollTarget::Salvage,
 		FMath::Max(0,SalvageQueueGuids.Num()+1-SalvageVisibleSlots),true))return true;
 	if (ActivePanelPage==TEXT("SocialPanel_Field") && ActiveSocialTab==TEXT("AllegiancePage") && Client)
@@ -13153,6 +13203,12 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 	if (ActivePanelPage == TEXT("SocialPanel_Field") && ActiveSocialTab == TEXT("FellowshipPage") && Client)
 		if (TryBar(Manager->FindElementUnder(TEXT("FellowshipPage"),TEXT("FellowsListBoxScrollbar")),
 			EACEUIScrollTarget::Fellowship,FMath::Max(0,Client->GetFellowship().Members.Num()-FellowVisibleRows),false)) return true;
+	if (ActivePanelPage == TEXT("SocialPanel_Field") && ActiveSocialTab == TEXT("FriendsPage") && Client)
+		if (TryBar(Manager->FindElementUnder(TEXT("FriendsPage"),TEXT("FreindsListBoxScrollbar")),
+			EACEUIScrollTarget::Friends,FMath::Max(0,Client->GetFriends().Num()-FriendVisibleRows),false)) return true;
+	if (ActivePanelPage == TEXT("SocialPanel_Field") && ActiveSocialTab == TEXT("SquelchPage") && Client)
+		if (TryBar(Manager->FindElementUnder(TEXT("SquelchPage"),TEXT("SquelchListBoxScrollbar")),
+			EACEUIScrollTarget::Squelch,FMath::Max(0,Client->GetSquelches().Num()-SquelchVisibleRows),false)) return true;
 	if (const auto KeyboardRoot=Manager->FindElementByName(TEXT("RootGameplay_Keyboard_Field"));KeyboardRoot && KeyboardRoot->bVisible && !bKeymapImportOpen)
 		if(TryBar(Manager->FindElementUnder(ActiveKeyboardPage+TEXT("Page"),TEXT("KeyboardMappingScrollbar")),
 			EACEUIScrollTarget::Keyboard,KeyboardMaxOffset,false))return true;
@@ -13381,8 +13437,16 @@ void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D CanvasLocalPos)
 	const float Pos = bScrollDragHorizontal ? CanvasLocalPos.X : CanvasLocalPos.Y;
 	const float T = FMath::Clamp((Pos - ScrollDragGrabOffset - static_cast<float>(ScrollDragTrackOrigin))
 		/ static_cast<float>(ScrollDragTravel), 0.f, 1.f);
+	if (ScrollDragTarget == EACEUIScrollTarget::StackSize && ScrollDragLastOffset != INDEX_NONE
+		&& FMath::IsNearlyEqual(T, ScrollDragFraction)) return;
 	ScrollDragFraction = T;
 	int32 Off = FMath::RoundToInt(T * static_cast<float>(ScrollDragMaxOff));
+	if (ScrollDragTarget == EACEUIScrollTarget::StackSize)
+	{
+		// UIElement_Scrollbar sends integer thousandths; gmToolbarUI maps these to 1..max.
+		const int32 Thousandths = FMath::FloorToInt(double(T) * 1000.0);
+		Off = int32(FMath::Clamp<int64>(1 + int64(Thousandths) * SelectedStackMax / 1000, 1, FMath::Max(1, SelectedStackMax)));
+	}
 	if (ScrollDragTarget == EACEUIScrollTarget::InvGrid)
 		if (const auto Grid = Manager->FindElementUnder(TEXT("InventoryPanel_Field"), TEXT("Inv_3DItemList")))
 			Off -= Off % FMath::Max(1, Grid->Width/32);
@@ -13397,6 +13461,10 @@ void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D CanvasLocalPos)
 		VassalScrollOffset=Off; RefreshAllegianceOverlays(); break;
 	case EACEUIScrollTarget::Fellowship:
 		FellowScrollOffset=Off;RefreshFellowshipOverlays();break;
+	case EACEUIScrollTarget::Friends:
+		FriendScrollOffset=Off;RefreshFriendsOverlays();break;
+	case EACEUIScrollTarget::Squelch:
+		SquelchScrollOffset=Off;RefreshSquelchOverlays();break;
 	case EACEUIScrollTarget::Keyboard:
 		KeyboardScrollOffset=Off;RefreshKeyboardOverlays();break;
 	case EACEUIScrollTarget::JournalList:
@@ -13407,6 +13475,8 @@ void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D CanvasLocalPos)
 	case EACEUIScrollTarget::Salvage:
 		SetSalvageScrollOffset(Off);
 		break;
+	case EACEUIScrollTarget::HousePayment:
+		HouseItemOffset=Off; RefreshHouseOffer(); break;
 	case EACEUIScrollTarget::Book:
 		if (BookScroll) BookScroll->SetScrollOffset(Off);
 		break;
@@ -13475,11 +13545,7 @@ void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D CanvasLocalPos)
 		break;
 	case EACEUIScrollTarget::StackSize:
 		{
-			// Map track fraction onto 1..SelectedStackMax (not 0..Max).
-			const int32 Amt = FMath::Clamp(
-				FMath::RoundToInt(T * static_cast<float>(SelectedStackMax)),
-				1, FMath::Max(1, SelectedStackMax));
-			SelectedStackAmount = Amt;
+			SelectedStackAmount = Off;
 			RefreshSelectionOverlay();
 			RefreshVendorOverlays();
 			break;
@@ -13612,7 +13678,8 @@ void UACEUIGameplayBinder::SyncEnvPanelMode()
 	const bool bVendor = OpenVendorGuid != 0;
 	const bool bTrade = bTradeOpen;
 	const bool bSalvage = OpenSalvageToolGuid != 0;
-	const bool bAny = bLoot || bVendor || bTrade || bSalvage;
+	const bool bHouse = OpenHouseLord != 0 && !bLoot && !bVendor && !bTrade && !bSalvage;
+	const bool bAny = bLoot || bVendor || bTrade || bSalvage || bHouse;
 	SetFloatyVisible(TEXT("RootGameplay_FloatyEnvPanel_Field"), bAny);
 	// Only one env mode panel at a time — Salvage/Trade ghosts under vendor/loot otherwise.
 	Manager->SetElementVisibleByName(TEXT("SalvagePanel"), bSalvage);
@@ -13633,7 +13700,18 @@ void UACEUIGameplayBinder::SyncEnvPanelMode()
 	SetEnvTreeVisible(TEXT("Vendor"), bVendor);
 	// Mag-nus gmEnvPanelUI::SetupChildren hides Slumlord until house UI — wood/maroon
 	// ghost behind Vendor Buy is Slumlord (0x06004CC2 + HouseBuy buttons) left visible.
-	SetEnvTreeVisible(TEXT("Slumlord"), false);
+	SetEnvTreeVisible(TEXT("Slumlord"), bHouse);
+	if (!bHouse)
+	{
+		for (auto* Array : {&HouseOfferSlots,&HouseOfferBackgrounds,&HouseOfferSelections})
+			for (auto& B : *Array) if(B) B->SetVisibility(ESlateVisibility::Collapsed);
+		for(auto& L : HouseOfferLabels) if(L) L->SetVisibility(ESlateVisibility::Collapsed);
+	}
+	else
+	{
+		ExpandEnvFloatyForWideContent();
+		Manager->SetElementVisibleByName(TEXT("CloseSlumlordButton"),true);
+	}
 	// Collapse inactive mode chrome so authored backgrounds cannot ghost through.
 	if (!bVendor)
 	{
@@ -15419,8 +15497,8 @@ void UACEUIGameplayBinder::RefreshServerConfirmation()
 {
 	const auto Session = Client ? Client->GetSession() : nullptr;
 	if (!Session || Session->GetState()!=EACESessionState::InWorld)
-	{ PendingAllegianceAction.Reset(); PendingAllegiancePrompt.Reset(); PendingAllegianceGuid=0; }
-	if (!Session || (Session->GetConfirmations().IsEmpty() && !PendingAllegianceGuid))
+	{ PendingAllegianceAction.Reset(); PendingAllegiancePrompt.Reset(); PendingAllegianceGuid=0; bHousePaymentConfirm=false; }
+	if (!Session || (Session->GetConfirmations().IsEmpty() && !PendingAllegianceGuid && !bHousePaymentConfirm))
 	{
 		if (ServerConfirmRoot) ServerConfirmRoot->bVisible = false;
 		for (UTextBlock* Label : ServerConfirmLabels) if (Label) Label->SetVisibility(ESlateVisibility::Collapsed);
@@ -15451,10 +15529,10 @@ void UACEUIGameplayBinder::RefreshServerConfirmation()
 			ServerConfirmLabels.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
 	}
 
-	const bool bLocal=PendingAllegianceGuid!=0;
+	const bool bLocal=PendingAllegianceGuid!=0 || bHousePaymentConfirm;
 	const uint32 PendingType=bLocal ? 0 : Session->GetConfirmations()[0].Type;
-	const uint32 PendingContext=bLocal ? uint32(PendingAllegianceGuid) : Session->GetConfirmations()[0].Context;
-	const FString PendingPrompt=bLocal ? PendingAllegiancePrompt : Session->GetConfirmations()[0].Prompt;
+	const uint32 PendingContext=bLocal ? uint32(bHousePaymentConfirm?OpenHouseLord:PendingAllegianceGuid) : Session->GetConfirmations()[0].Context;
+	const FString PendingPrompt=bLocal ? (bHousePaymentConfirm?HouseConfirmPrompt:PendingAllegiancePrompt) : Session->GetConfirmations()[0].Prompt;
 	if (!ServerConfirmRoot->bVisible || ServerConfirmType != PendingType || ServerConfirmContext != PendingContext || ServerConfirmPrompt != PendingPrompt)
 	{
 		ServerConfirmType = PendingType; ServerConfirmContext = PendingContext; ServerConfirmPrompt = PendingPrompt;
@@ -15489,7 +15567,12 @@ void UACEUIGameplayBinder::RefreshServerConfirmation()
 
 void UACEUIGameplayBinder::FinishServerConfirmation(bool bAccept)
 {
-	if (PendingAllegianceGuid)
+	if (bHousePaymentConfirm)
+	{
+		bHousePaymentConfirm=false;
+		if (bAccept && Client) if (auto S=Client->GetSession()) S->SendHousePayment(bHouseRentTab);
+	}
+	else if (PendingAllegianceGuid)
 	{
 		if (bAccept && CanActivateAllegianceControl(PendingAllegianceAction,PendingAllegianceGuid))
 		{

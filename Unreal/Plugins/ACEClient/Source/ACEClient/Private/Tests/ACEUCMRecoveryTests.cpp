@@ -287,4 +287,64 @@ bool FACEUCMRecoveryTest::RunTest(const FString&)
     }
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMResourcesTest,"ACE.Plugins.ResourceMaintenance",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMResourcesTest::RunTest(const FString&)
+{
+    FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    auto Snapshot=[](){return RecoveryJson(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"combat_mode":1,"ready":true,"busy":false,"action_serial":0,"action_error":0,"spells":[],"enchantments":[],"targets":[],"inventory":[{"id":20,"wcid":20,"name":"Essence","type":128,"identified":true,"usable":true,"structure":2,"max_structure":50,"int_properties":{"280":213}},{"id":21,"wcid":49485,"name":"Encapsulated Spirit","type":128,"usable":true},{"id":30,"wcid":30,"name":"Mana Stone","type":524288,"identified":true,"usable":true,"mana_empty":true,"mana":0},{"id":31,"wcid":31,"name":"Loot Ring","type":8,"identified":true,"mana":5000,"max_mana":5000},{"id":32,"wcid":31,"name":"Keep Ring","type":8,"identified":true,"mana":5000,"max_mana":5000},{"id":33,"wcid":33,"name":"Armor","type":2,"identified":true,"equipped":true,"mana":10,"max_mana":100}]})"));};
+    auto Profile=[](){return RecoveryJson(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","looting":false,"refill_summons":true,"summon_refill_charges":5,"weapon_items":[20],"item_mana":false,"fill_mana_stones":false,"mana_source_items":[31]})"));};
+    auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject>I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+    {
+        FACEPluginVM VM;TestTrue(TEXT("Resource maintenance policy loads"),VM.Load(Source,Error));auto S=Snapshot(),P=Profile();
+        auto I=Step(VM,S,P);TestEqual(TEXT("Low essence gets a spirit independently of automatic combat/summoning"),I->GetStringField(TEXT("action")),FString(TEXT("apply_item")));
+        TestEqual(TEXT("Spirit is source"),I->GetNumberField(TEXT("item")),21.);TestEqual(TEXT("Essence is target"),I->GetNumberField(TEXT("target")),20.);
+        S->SetNumberField(TEXT("time"),101);S->SetNumberField(TEXT("action_serial"),1);
+        TestFalse(TEXT("UseDone alone cannot consume another spirit"),Step(VM,S,P)->HasField(TEXT("action")));
+        S->GetArrayField(TEXT("inventory"))[0]->AsObject()->SetNumberField(TEXT("structure"),50);
+        TestFalse(TEXT("Confirmed full essence stops refilling"),Step(VM,S,P)->HasField(TEXT("action")));
+    }
+    for(int Case=0;Case<5;++Case)
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Inv=S->GetArrayField(TEXT("inventory"));
+        if(Case==0)P->SetBoolField(TEXT("refill_summons"),false);
+        if(Case==1)Inv[0]->AsObject()->SetNumberField(TEXT("structure"),6);
+        if(Case==2)Inv[1]->AsObject()->SetNumberField(TEXT("wcid"),999);
+        if(Case==3)P->SetArrayField(TEXT("weapon_items"),{MakeShared<FJsonValueNumber>(99)});
+        if(Case==4)Inv[0]->AsObject()->SetBoolField(TEXT("identified"),false);
+        TestFalse(TEXT("Disabled, sufficient, missing spirit, excluded or unassessed essences are not refilled"),Step(VM,S,P)->HasField(TEXT("action")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();Step(VM,S,P);
+        S->SetNumberField(TEXT("time"),101);S->SetNumberField(TEXT("action_serial"),1);S->SetNumberField(TEXT("action_error"),1);
+        TestFalse(TEXT("Rejected refill backs off without stopping UCM"),Step(VM,S,P)->HasField(TEXT("action")));
+        S->SetNumberField(TEXT("time"),132);S->SetNumberField(TEXT("action_error"),0);
+        TestEqual(TEXT("Refill can retry after backoff"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("apply_item")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("refill_summons"),false);P->SetBoolField(TEXT("fill_mana_stones"),true);P->SetBoolField(TEXT("item_mana"),true);
+        auto I=Step(VM,S,P);TestEqual(TEXT("Empty stone fills via normal targeted use"),I->GetStringField(TEXT("action")),FString(TEXT("apply_item")));
+        TestEqual(TEXT("Only specifically selected item is consumed"),I->GetNumberField(TEXT("target")),31.);
+        S->SetNumberField(TEXT("time"),101);S->SetNumberField(TEXT("action_serial"),1);
+        TestFalse(TEXT("Stone filling waits for actual contents"),Step(VM,S,P)->HasField(TEXT("action")));
+        auto Stone=S->GetArrayField(TEXT("inventory"))[2]->AsObject();Stone->SetNumberField(TEXT("mana"),5000);Stone->SetBoolField(TEXT("mana_empty"),false);
+        I=Step(VM,S,P);TestEqual(TEXT("Newly filled stone recharges gear through player-targeting use"),I->GetStringField(TEXT("action")),FString(TEXT("use_item")));
+        TestEqual(TEXT("Uses the filled stone"),I->GetNumberField(TEXT("item")),30.);
+        S->GetArrayField(TEXT("inventory"))[5]->AsObject()->SetNumberField(TEXT("mana"),100);
+        TestFalse(TEXT("Full gear does not consume another charge"),Step(VM,S,P)->HasField(TEXT("action")));
+    }
+    for(int Case=0;Case<6;++Case)
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("refill_summons"),false);P->SetBoolField(TEXT("fill_mana_stones"),true);
+        auto Inv=S->GetArrayField(TEXT("inventory"));auto Donor=Inv[3]->AsObject();
+        if(Case==0)P->SetArrayField(TEXT("mana_source_items"),{});
+        if(Case==1)Donor->SetBoolField(TEXT("equipped"),true);
+        if(Case==2)Donor->SetBoolField(TEXT("retained"),true);
+        if(Case==3)Donor->SetBoolField(TEXT("resource_available"),false);
+        if(Case==4)Inv[2]->AsObject()->SetBoolField(TEXT("mana_empty"),false);
+        if(Case==5)Donor->SetBoolField(TEXT("identified"),false);
+        TestFalse(TEXT("No unselected/equipped/retained/traded/unidentified donor or nonempty stone is consumed"),Step(VM,S,P)->HasField(TEXT("action")));
+    }
+    return !HasAnyErrors();
+}
 #endif

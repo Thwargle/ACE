@@ -16,6 +16,91 @@ namespace
     TSharedPtr<FJsonObject> ParseUCM(const TCHAR* S)
     {TSharedPtr<FJsonObject> O;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(S),O);return O;}
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMFailureIsolationTest,"ACE.Plugins.ActivityFailureIsolation",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMFailureIsolationTest::RunTest(const FString&)
+{
+    FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    auto Snapshot=[](){return ParseUCM(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"nearest":0,"ready":true,"busy":false,"action_serial":0,"action_error":0,"container":0,"position":{"cell":2103705613,"x":25,"y":97,"z":12},"spells":[],"enchantments":[],"targets":[],"inventory":[{"id":50,"wcid":50,"name":"Sword","type":1,"identified":true,"can_wield":true,"equipped":true,"damage":30,"damage_type":1},{"id":51,"wcid":51,"name":"Potion","type":32,"identified":true,"usable":true,"count":5,"boost_vital":2,"boost":50}]})"));};
+    auto Profile=[](){return ParseUCM(TEXT(R"({"buffing":false,"recovery":true,"combat":"melee","looting":true,"loot_rules":[{"action":"salvage","name":"Ring"}]})"));};
+    auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;const bool OK=VM.Step(S,P,I,Error);TestTrue(*Error,OK);return I?I:MakeShared<FJsonObject>();};
+    auto Targets=[](auto S){S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":500,"name":"Rat","distance":1,"identified":true})")))});};
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();Targets(S);
+        P->SetStringField(TEXT("initial_state"),TEXT("Missing"));P->SetArrayField(TEXT("states"),{});
+        TestEqual(TEXT("Invalid state reports a scoped failure"),Step(VM,S,P)->GetStringField(TEXT("activity")),FString(TEXT("meta")));
+        TestEqual(TEXT("Invalid state cannot keep blocking base combat settings"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+    }
+    // Trigger a real failed salvage, not just a synthetic error result.
+    {
+        FACEPluginVM VM;TestTrue(TEXT("Failure isolation policy loads"),VM.Load(Source,Error));auto S=Snapshot(),P=Profile();
+        const auto Ring=ParseUCM(TEXT(R"({"id":701,"wcid":701,"name":"Ring","count":1,"identified":true})"));
+        S->SetNumberField(TEXT("container"),700);S->SetArrayField(TEXT("contents"),{MakeShared<FJsonValueObject>(Ring)});
+        TestEqual(TEXT("Loot starts normally"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("loot")));
+        auto Inventory=S->GetArrayField(TEXT("inventory"));Inventory.Add(MakeShared<FJsonValueObject>(Ring));S->SetArrayField(TEXT("inventory"),Inventory);
+        S->SetNumberField(TEXT("container"),0);S->SetArrayField(TEXT("contents"),{});
+        auto I=Step(VM,S,P);TestEqual(TEXT("Missing Ust pauses only loot"),I->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
+        TestEqual(TEXT("Salvage failure retains its activity identity"),I->GetStringField(TEXT("activity")),FString(TEXT("loot")));
+        Targets(S);S->SetNumberField(TEXT("time"),101);
+        TestEqual(TEXT("Combat proceeds immediately after loot failure"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+        S->SetNumberField(TEXT("health"),10);S->SetNumberField(TEXT("time"),102);
+        TestEqual(TEXT("Critical-health recovery still uses supplies"),Step(VM,S,P)->GetNumberField(TEXT("item")),51.);
+        S->SetNumberField(TEXT("health"),100);S->SetNumberField(TEXT("time"),132);
+        S->SetArrayField(TEXT("targets"),{});Step(VM,S,P); // cancel old attack
+        I=Step(VM,S,P);TestFalse(TEXT("Discarded destructive job is never replayed after cooldown"),I->HasField(TEXT("action")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();Targets(S);
+        P->SetBoolField(TEXT("buffing"),true);S->SetNumberField(TEXT("mana"),5);
+        S->SetArrayField(TEXT("spells"),{MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":20,"category":1,"power":100,"skill":300,"school":4,"self_buff":true})")))});
+        auto I=Step(VM,S,P);TestEqual(TEXT("Low mana pauses only the buff activity"),I->GetStringField(TEXT("activity")),FString(TEXT("buffs")));
+        TestEqual(TEXT("Buff failure cannot starve melee combat"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();Targets(S);S->SetNumberField(TEXT("health"),10);
+        for(int Attempt=0;Attempt<3;++Attempt)
+        {
+            S->SetNumberField(TEXT("time"),100+16*Attempt);
+            TestEqual(TEXT("Recovery attempts remain bounded"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("use_item")));
+            S->SetNumberField(TEXT("time"),101+16*Attempt);S->SetNumberField(TEXT("action_serial"),Attempt+1);S->SetNumberField(TEXT("action_error"),1);
+            auto I=Step(VM,S,P);
+            TestEqual(TEXT("Failed recovery yields to combat or its own cooldown"),I->GetStringField(TEXT("action")),FString(Attempt==2?TEXT("activity_failed"):TEXT("attack")));
+            if(Attempt==2)TestEqual(TEXT("Health recovery failure is isolated from other vitals"),I->GetStringField(TEXT("activity")),FString(TEXT("recovery2")));
+        }
+        S->SetNumberField(TEXT("time"),134);
+        TestEqual(TEXT("Recovery failure does not stop fighting at critical health"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+        S->SetNumberField(TEXT("time"),149);S->SetNumberField(TEXT("action_error"),0);
+        TestEqual(TEXT("Recovery retries after cooldown instead of remaining disabled"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("use_item")));
+    }
+    // Native execution may reject stale items after the Lua decision. Those
+    // failures must return to the same isolation mechanism, across activities.
+    for(const TCHAR* Activity:{TEXT("loot"),TEXT("vendors"),TEXT("components"),TEXT("item_mana"),TEXT("pets"),TEXT("combine"),TEXT("helper"),TEXT("dispel"),TEXT("buffs"),TEXT("buff_others"),TEXT("meta"),TEXT("inventory")})
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();Targets(S);
+        auto Failure=MakeShared<FJsonObject>();Failure->SetStringField(TEXT("activity"),Activity);Failure->SetStringField(TEXT("status"),TEXT("Server rejected action"));P->SetObjectField(TEXT("ucm_activity_failure"),Failure);
+        TestEqual(*FString::Printf(TEXT("%s rejection pauses activity"),Activity),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
+        P->RemoveField(TEXT("ucm_activity_failure"));S->SetNumberField(TEXT("time"),101);
+        TestEqual(*FString::Printf(TEXT("Combat survives %s rejection"),Activity),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+        S->SetNumberField(TEXT("health"),10);
+        TestEqual(*FString::Printf(TEXT("Recovery survives %s rejection"),Activity),Step(VM,S,P)->GetNumberField(TEXT("item")),51.);
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();Targets(S);S->SetArrayField(TEXT("inventory"),{});
+        TestEqual(TEXT("Unavailable combat loadout pauses combat"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
+        S->SetArrayField(TEXT("corpses"),{MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":700,"name":"Corpse","distance":1,"identified":true})")))});
+        TestEqual(TEXT("Other activities continue when combat is unavailable"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("open_corpse")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();Targets(S);
+        // No usable heal: still fight rather than stopping at stop_health.
+        S->SetNumberField(TEXT("health"),1);P->SetBoolField(TEXT("recovery"),false);
+        TestEqual(TEXT("Critical health alone never cancels available combat"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+        P->SetArrayField(TEXT("ucm_commands"),{MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"op":"stop"})")))});
+        TestEqual(TEXT("Explicit user Stop still stops UCM"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("stop")));
+    }
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMBuffMarginTest,"ACE.Plugins.BuffSkillMargin",
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACEUCMBuffMarginTest::RunTest(const FString&)
@@ -482,7 +567,11 @@ bool FACEUCMPolicyTest::RunTest(const FString&)
         auto Item=S->GetArrayField(TEXT("contents"))[0]->AsObject();Item->SetBoolField(TEXT("identified"),true);Item->SetNumberField(TEXT("damage_rating"),20);
         I=Check(VM,S,P);TestEqual(TEXT("Keep-up-to takes only needed quantity"),I->GetNumberField(TEXT("amount")),2.);
         S->SetNumberField(TEXT("time"),102);I=Check(VM,S,P);TestFalse(TEXT("Corpse stays open while transfer is pending"),I->HasField(TEXT("action")));
-        S->SetNumberField(TEXT("time"),111);I=Check(VM,S,P);TestEqual(TEXT("Missing loot acknowledgement stops instead of flooding"),I->GetStringField(TEXT("action")),FString(TEXT("stop")));
+        S->SetNumberField(TEXT("time"),111);I=Check(VM,S,P);TestEqual(TEXT("Missing loot acknowledgement pauses loot without stopping UCM"),I->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
+        S->SetNumberField(TEXT("container"),0);S->SetNumberField(TEXT("time"),112);
+        Array(S,TEXT("contents"),TEXT(R"({"values":[]})"));
+        Array(S,TEXT("corpses"),TEXT(R"({"values":[{"id":700,"name":"Timed out corpse","distance":1,"identified":true,"can_loot":true}]})"));
+        I=Check(VM,S,P);TestFalse(TEXT("Unconfirmed corpse is not immediately retried"),I->HasField(TEXT("action")));
     }
     {
         FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("navigation"),true);
@@ -490,7 +579,7 @@ bool FACEUCMPolicyTest::RunTest(const FString&)
         Array(S,TEXT("route_objects"),TEXT(R"({"values":[{"id":77,"wcid":123,"name":"Portal","distance":1}]})"));
         auto I=Check(VM,S,P);TestEqual(TEXT("Portal uses normal object interaction"),I->GetStringField(TEXT("action")),FString(TEXT("use_world")));
         S->SetNumberField(TEXT("time"),104);I=Check(VM,S,P);TestFalse(TEXT("Portal is not used repeatedly while transit is pending"),I->HasField(TEXT("action")));
-        S->SetNumberField(TEXT("time"),150);I=Check(VM,S,P);TestEqual(TEXT("Failed portal times out explicitly"),I->GetStringField(TEXT("action")),FString(TEXT("stop")));
+        S->SetNumberField(TEXT("time"),150);I=Check(VM,S,P);TestEqual(TEXT("Failed portal pauses navigation while UCM stays active"),I->GetStringField(TEXT("action")),FString(TEXT("pause_navigation")));
     }
     {
         FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("buffing"),true);
@@ -567,7 +656,7 @@ bool FACEUCMPolicyTest::RunTest(const FString&)
         auto Ammo=S->GetArrayField(TEXT("inventory"))[1]->AsObject();Ammo->SetBoolField(TEXT("identified"),true);Ammo->SetBoolField(TEXT("can_wield"),true);Ammo->SetNumberField(TEXT("damage"),30);Ammo->SetNumberField(TEXT("damage_type"),8);
         auto I=Check(VM,S,P);TestEqual(TEXT("A piercing bow can select a requested elemental arrow loadout"),I->GetStringField(TEXT("action")),FString(TEXT("equip")));TestEqual(TEXT("Equips requested fire ammunition"),I->GetNumberField(TEXT("item")),51.);
         Ammo->SetBoolField(TEXT("equipped"),true);TestEqual(TEXT("Correct loadout attacks after ammo confirmation"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
-        Ammo->SetNumberField(TEXT("damage_type"),16);TestEqual(TEXT("Missing requested ammunition does not fire the previous loadout"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("stop")));
+        Ammo->SetNumberField(TEXT("damage_type"),16);TestEqual(TEXT("Missing requested ammunition does not fire the previous loadout"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
     }
     {
         FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
@@ -787,7 +876,7 @@ bool FACEUCMLootTest::RunTest(const FString&)
         if(!Confirm)
         {
             S->SetNumberField(TEXT("time"),111);
-            TestEqual(TEXT("Closure never turns a failed transfer into success"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("stop")));
+            TestEqual(TEXT("Closure never turns a failed transfer into success"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
         }
         else
         {
@@ -855,8 +944,10 @@ bool FACEUCMLootTest::RunTest(const FString&)
         FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();
         auto Item=S->GetArrayField(TEXT("contents"))[0]->AsObject();Item->SetBoolField(TEXT("identified"),true);
         TArray<TSharedPtr<FJsonValue>> Names,Conditions;
-        for(int I=0;I<128;++I)Names.Add(MakeShared<FJsonValueString>(TEXT("Spell")));
-        for(int I=0;I<64;++I)Conditions.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"field":"spells","pattern":"^Spell$","value":128})"))));
+        // Cached predicates are much cheaper; use enough work to exercise the
+        // instruction checkpoint rather than relying on regex compilation time.
+        for(int I=0;I<512;++I)Names.Add(MakeShared<FJsonValueString>(TEXT("Spell")));
+        for(int I=0;I<64;++I)Conditions.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"field":"spells","pattern":"^Spell$","value":512})"))));
         Item->SetArrayField(TEXT("spell_names"),Names);
         auto R=MakeShared<FJsonObject>();R->SetArrayField(TEXT("conditions"),Conditions);R->SetStringField(TEXT("action"),TEXT("skip"));
         P->SetArrayField(TEXT("loot_rules"),{MakeShared<FJsonValueObject>(R),MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"action":"keep"})")))});
@@ -869,6 +960,61 @@ bool FACEUCMLootTest::RunTest(const FString&)
         }
         TestTrue(TEXT("Expensive spell rule cooperatively yields"),Yielded);
         TestTrue(TEXT("Expensive spell rule finishes without quota errors"),Finished);
+    }
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMLootThroughputTest,"ACE.Plugins.LootThroughput",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMLootThroughputTest::RunTest(const FString&)
+{
+    FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    TArray<TSharedPtr<FJsonObject>> Profiles;
+    auto Synthetic=ParseUCM(TEXT(R"({"loot_rules":[]})"));
+    TArray<TSharedPtr<FJsonValue>> Rules;
+    // The expensive condition appears first in the editor, as in imported
+    // profiles. Rejecting the later numeric condition must avoid spell scans.
+    for(int I=0;I<1000;++I)Rules.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"action":"skip","conditions":[{"field":"spells","pattern":"^Incantation","value":30},{"field":"int","key":1,"op":"eq","value":999}]})"))));
+    Rules.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"action":"keep","conditions":[{"field":"spells","pattern":"^Incantation","value":1}]})"))));
+    Synthetic->SetArrayField(TEXT("loot_rules"),Rules);Profiles.Add(Synthetic);
+    for(const FString& Path:{FPaths::ProjectSavedDir()/TEXT("ClientPlugins/ImportInbox/LootSnobV4.utl"),FPaths::ProjectSavedDir()/TEXT("ClientPlugins/ImportInbox/Gardener_LootSnobV4.utl"),FString(TEXT("C:/Users/orent/Downloads/PhaelaeCustom_v6.utl"))})if(FPaths::FileExists(Path))
+    {
+        TArray<FString> Issues;auto P=ACEVTProfile::ConvertFile(Path,Issues);
+        if(!TestTrue(*FString::Printf(TEXT("Import %s"),*FPaths::GetCleanFilename(Path)),P.IsValid()&&Issues.IsEmpty()))return false;
+        Profiles.Add(P);
+    }
+    for(int Index=0;Index<Profiles.Num();++Index)
+    {
+        auto P=Profiles[Index];P->SetBoolField(TEXT("buffing"),false);P->SetBoolField(TEXT("recovery"),false);P->SetStringField(TEXT("combat"),TEXT("off"));P->SetBoolField(TEXT("looting"),true);
+        auto S=ParseUCM(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"inventory":[],"targets":[],"spells":[],"container":700,"container_is_corpse":true,"contents_ready":true})"));
+        TArray<TSharedPtr<FJsonValue>> Contents,Inventory,Names;
+        for(int I=0;I<128;++I)Names.Add(MakeShared<FJsonValueString>(I==0?TEXT("Incantation of Strength Self"):TEXT("Other Spell")));
+        for(int I=0;I<20;++I)
+        {
+            auto Item=ParseUCM(TEXT(R"({"id":701,"wcid":42,"name":"Copper Bracelet","type":8,"object_class":8,"material":59,"workmanship":7.25,"value":20000,"burden":50,"count":1,"identified":true,"int_properties":{"1":1},"string_properties":{"1":"Copper Bracelet"}})"));
+            Item->SetNumberField(TEXT("id"),701+I);Item->SetArrayField(TEXT("spell_names"),Names);Contents.Add(MakeShared<FJsonValueObject>(Item));
+        }
+        FACEPluginVM VM;if(!TestTrue(TEXT("Throughput policy loads"),VM.Load(Source,Error)))return false;
+        int Steps=0,Looted=0,Yields=0;bool Finished=false;double Work=0,Peak=0;
+        for(;Steps<256&&!Finished;++Steps)
+        {
+            S->SetArrayField(TEXT("contents"),Contents);S->SetArrayField(TEXT("inventory"),Inventory);S->SetNumberField(TEXT("time"),100+Steps*.25);
+            TSharedPtr<FJsonObject> Intent;const double Started=FPlatformTime::Seconds();const bool OK=VM.Step(S,P,Intent,Error);
+            const double Elapsed=FPlatformTime::Seconds()-Started;Work+=Elapsed;Peak=FMath::Max(Peak,Elapsed);
+            if(!TestTrue(*Error,OK))return false;
+            FString Action;if(Intent)Intent->TryGetStringField(TEXT("action"),Action);
+            if(Action==TEXT("close_corpse"))Finished=true;
+            else if(Action==TEXT("loot"))
+            {
+                const double Id=Intent->GetNumberField(TEXT("item"));
+                const int At=Contents.IndexOfByPredicate([Id](const auto& V){return V->AsObject()->GetNumberField(TEXT("id"))==Id;});
+                if(!TestTrue(TEXT("Transfer targets remaining corpse item"),At!=INDEX_NONE))return false;
+                Inventory.Add(Contents[At]);Contents.RemoveAt(At);++Looted;
+            }
+            else {++Yields;TestTrue(TEXT("Rule continuation requests prompt bounded rescheduling"),Intent&&Intent->HasField(TEXT("continue_work")));}
+        }
+        TestTrue(TEXT("Twenty-item corpse completes within bounded work"),Finished);
+        if(Index==0)TestEqual(TEXT("Late cheap rejects preserve final matching rule for every item"),Looted,20);
+        AddInfo(FString::Printf(TEXT("Loot throughput profile %d (%d rules): %d items taken, %d decisions, %d yields, %.2fms total VM work, %.2fms peak, %llu bytes peak Lua"),Index,P->GetArrayField(TEXT("loot_rules")).Num(),Looted,Steps,Yields,Work*1000,Peak*1000,uint64(VM.GetPeakMemoryUsage())));
     }
     return true;
 }

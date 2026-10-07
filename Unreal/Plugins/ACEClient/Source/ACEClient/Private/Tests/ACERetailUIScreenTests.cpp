@@ -111,8 +111,8 @@ static FORCENOINLINE void CheckKeyboardCapture(FAutomationTestBase& Test, UACERe
             Test.TestTrue(TEXT("Synthetic right Shift release is filtered"),Key->FilterCaptureKey(FKeyEvent(EKeys::RightShift,FModifierKeysState(),0,false,0,0),false));
             Test.TestTrue(TEXT("An orphan modifier release cannot finish key capture"),Key->GetIsSelectingKey());
             Key->FilterCaptureKey(FKeyEvent(EKeys::F7,FModifierKeysState(),0,false,0,0),true);
-            Test.TestFalse(TEXT("Matching key release is delivered"),Key->FilterCaptureKey(FKeyEvent(EKeys::F7,FModifierKeysState(),0,false,0,0),false));
-            CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),FKeyEvent(EKeys::F7,FModifierKeysState(),0,false,0,0));Key->RefreshBinding();
+            Test.TestTrue(TEXT("Matching key release is consumed by its capture owner"),Key->FilterCaptureKey(FKeyEvent(EKeys::F7,FModifierKeysState(),0,false,0,0),false));
+            Key->RefreshBinding();
             Test.TestEqual(TEXT("Captured key updates the draft"),ACEInputBindings::Get(EKeys::W,0).Key,EKeys::F7);
             Test.TestEqual(TEXT("Retail label shows the captured binding"),Key->RetailLabel->GetText().ToString(),FString(TEXT("F7")));
             for(float Delta:{1.f,-1.f})
@@ -130,7 +130,7 @@ static FORCENOINLINE void CheckKeyboardCapture(FAutomationTestBase& Test, UACERe
             Test.TestEqual(TEXT("Captured stick direction maps to the requested action"),ACEInputBindings::Get(EKeys::W,0).Key,EKeys::Gamepad_RightStick_Left);
             CaptureSlate->OnKeyDown(Key->GetCachedGeometry(),EnterKey);CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),EnterKey);
             const FKeyEvent Button(EKeys::Gamepad_FaceButton_Left,FModifierKeysState(),0,false,0,0);
-            Key->FilterCaptureKey(Button,true);Key->FilterCaptureKey(Button,false);CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),Button);
+            Key->FilterCaptureKey(Button,true);Key->FilterCaptureKey(Button,false);
             Test.TestEqual(TEXT("Controller face buttons can also be rebound"),ACEInputBindings::Get(EKeys::W,0).Key,EKeys::Gamepad_FaceButton_Left);
             for(const FKey& Modifier:{EKeys::LeftShift,EKeys::RightShift,EKeys::LeftControl,EKeys::RightControl,EKeys::LeftAlt,EKeys::RightAlt})
             {
@@ -138,8 +138,8 @@ static FORCENOINLINE void CheckKeyboardCapture(FAutomationTestBase& Test, UACERe
                 const FKeyEvent Event(Modifier,FModifierKeysState(),0,false,0,0);
                 Key->FilterCaptureKey(Event,true);
                 Test.TestTrue(TEXT("Unpressed key cannot replace the pressed modifier"),Key->FilterCaptureKey(FKeyEvent(EKeys::F8,FModifierKeysState(),0,false,0,0),false));
-                Test.TestFalse(TEXT("Physical modifier release reaches capture"),Key->FilterCaptureKey(Event,false));
-                CaptureSlate->OnKeyUp(Key->GetCachedGeometry(),Event);Key->RefreshBinding();
+                Test.TestTrue(TEXT("Physical modifier release is consumed by its capture owner"),Key->FilterCaptureKey(Event,false));
+                Key->RefreshBinding();
                 Test.TestEqual(TEXT("Capture preserves each modifier's physical left/right identity"),ACEInputBindings::Get(EKeys::W,0).Key,Modifier);
             }
 }
@@ -1087,12 +1087,41 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Chat menu text uses the authored DAT font"),CastChecked<UACERetailTextBlock>(Gameplay->ChatTargetPopupRows[0])->GetBitmapFont()!=nullptr);
     {
         const auto Saved=Client->Session->SelectedObject;
+        const int32 SavedChannel=Gameplay->ChatSendChannel;
+        FACECharacterCreation ChatStrings;
+        TestTrue(TEXT("Retail chat strings load from the language DAT"),ChatStrings.LoadStrings(Dat->GetDatDirectory(),0x23000001));
+        const TCHAR* MenuKeys[]={TEXT("SquelchSelectedNoSelection"),TEXT("TellToMonarch"),TEXT("TellToSelectedNoSelection"),
+            TEXT("TellToPatron"),TEXT("TellToAll"),TEXT("TellToVassals"),TEXT("TellToFellows"),TEXT("TellToAllegiance"),
+            TEXT("TellToGeneral"),TEXT("TellToTrade"),TEXT("TellToLFG"),TEXT("TellToRoleplay"),TEXT("TellToSociety"),TEXT("TellToOlthoi")};
+        Client->Session->SelectedObject={}; Gameplay->RefreshChatTargetPopup();
+        for(int32 I=0;I<UE_ARRAY_COUNT(MenuKeys);++I)
+            TestEqual(FString::Printf(TEXT("Chat menu row %d matches retail DAT wording"),I),
+                Gameplay->ChatTargetPopupRows[I]->GetText().ToString(),ChatStrings.Text(FString(TEXT("ID_Chat_"))+MenuKeys[I]));
+        const TCHAR* CaptionKeys[]={TEXT(""),TEXT("Fellows"),TEXT("Allegiance"),TEXT("Vassals"),TEXT("Patron"),TEXT("Monarch"),
+            nullptr,TEXT("General"),TEXT("Trade"),TEXT("LFG"),TEXT("Roleplay"),TEXT("Society"),TEXT("Selected"),TEXT("Olthoi")};
+        for(int32 I=0;I<UE_ARRAY_COUNT(CaptionKeys);++I)
+        {
+            if(!CaptionKeys[I])continue; // Co-vassals is a command-only extension.
+            Gameplay->ChatSendChannel=I; Gameplay->RefreshChatChromeOverlays();
+            TestEqual(FString::Printf(TEXT("Chat mode %d displays the retail compact caption"),I),
+                Gameplay->ChatTargetLabel->GetText().ToString(),ChatStrings.Text(FString(TEXT("ID_Chat_ChatTargetMenu"))+CaptionKeys[I]));
+        }
+        Gameplay->ChatSendChannel=SavedChannel; Gameplay->RefreshChatChromeOverlays();
         FACEWorldObject NPC;NPC.Guid=0x123455;NPC.Name=TEXT("Eiichi");NPC.ItemType=ACEItemType::Creature;
         Client->Session->WorldObjects.Add(NPC.Guid,NPC);
         FACESelectedObject Selected;Selected.Guid=NPC.Guid;Selected.bValid=true;
         Client->Session->SelectedObject=Selected;Gameplay->RefreshChatTargetPopup();
         TestEqual(TEXT("Retail Tell selection includes NPC names"),Gameplay->ChatTargetPopupRows[2]->GetText().ToString(),FString(TEXT("Tell to Eiichi")));
+        TestEqual(TEXT("Selected squelch caption matches the retail string template"),Gameplay->ChatTargetPopupRows[0]->GetText().ToString(),
+            ChatStrings.Text(TEXT("ID_Chat_SquelchSelected"))+NPC.Name);
         TestTrue(TEXT("NPC Tell option is enabled"),Gameplay->ChatTargetPopupElements[2]->PaintState!=13);
+        const auto SavedSquelches=Client->Session->Squelches;
+        auto& Squelch=Client->Session->Squelches.AddDefaulted_GetRef();Squelch.Guid=NPC.Guid;Squelch.Name=NPC.Name;Squelch.Mask=-1;
+        Gameplay->RefreshChatTargetPopup();
+        TestEqual(TEXT("Ignored selection checks the squelch row like retail"),Gameplay->ChatTargetPopupElements[0]->PaintState,0x10000001u);
+        TestEqual(TEXT("Ignoring keeps the retail squelch caption"),Gameplay->ChatTargetPopupRows[0]->GetText().ToString(),
+            ChatStrings.Text(TEXT("ID_Chat_SquelchSelected"))+NPC.Name);
+        Client->Session->Squelches=SavedSquelches;
         NPC.ItemType=ACEItemType::Container;Client->Session->WorldObjects[NPC.Guid]=NPC;Gameplay->RefreshChatTargetPopup();
         TestEqual(TEXT("Objects cannot receive selected tells"),Gameplay->ChatTargetPopupElements[2]->PaintState,13u);
         Client->Session->WorldObjects.Remove(NPC.Guid);Client->Session->SelectedObject=Saved;Gameplay->RefreshChatTargetPopup();
@@ -1469,6 +1498,14 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         {
             auto* Key=CastChecked<UACERetailKeySelector>(Gameplay->KeyboardRows[0]);
             CheckKeyboardCapture(*this,Key);
+            const auto Selector=Key->GetCachedWidget();
+            const FKeyEvent Activate(EKeys::Enter,FModifierKeysState(),0,false,0,0);
+            Selector->OnKeyDown(Key->GetCachedGeometry(),Activate);Selector->OnKeyUp(Key->GetCachedGeometry(),Activate);
+            Gameplay->HandleKeyboardNamedClick(TEXT("CombatTab"));
+            TestFalse(TEXT("Changing page cancels hidden key capture"),Key->GetIsSelectingKey());
+            TestFalse(TEXT("Hidden capture cannot consume gameplay keys"),Key->FilterCaptureKey(Activate,true));
+            Gameplay->HandleKeyboardNamedClick(TEXT("MovementTab"));
+
             ACEInputBindings::Revert();Gameplay->RefreshKeyboardOverlays();
         }
         Gameplay->HandleKeyboardNamedClick(TEXT("KeyboardSaveKeymapAsButton"));
@@ -3444,6 +3481,22 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 Session.VendorCurrencyCount=9;Gameplay->HandleVendorOpened(99122);
                 TestTrue(TEXT("A balance-only vendor reply refreshes the caption"),Gameplay->VendorItemCostLabel->GetText().ToString().Contains(TEXT("Stipends. You have 9")));
             }
+            const uint32 SavedCurrencyWeenie=Session.VendorCurrencyWeenie;
+            Session.VendorCurrencyWeenie=76543;Session.VendorCurrencyName=TEXT("Grisly Meats");
+            Session.VendorCurrencyCount=9;
+            FACEWorldObject Currency;Currency.Guid=99224;Currency.WeenieClassId=76543;
+            Currency.ContainerId=Session.PlayerGuid;Currency.StackSize=9;Currency.MaxStackSize=100;
+            Session.WorldObjects.Add(Currency.Guid,Currency);++Session.InventoryDataRevision;
+            Gameplay->RefreshVendorOverlays();
+            TestTrue(TEXT("Trophy vendor displays owned currency"),Gameplay->VendorItemCostLabel->GetText().ToString().Contains(TEXT("You have 9")));
+            FACEBinaryWriter Spent;Spent.WriteUInt8(1);Spent.WriteUInt32(Currency.Guid);Spent.WriteUInt32(5);Spent.WriteUInt32(5);
+            FACEBinaryReader SpentReader(Spent.GetData());Session.HandleSetStackSize(SpentReader);
+            Gameplay->RefreshVendorOverlays();
+            TestTrue(TEXT("Purchase stack update refreshes count without another trade"),Gameplay->VendorItemCostLabel->GetText().ToString().Contains(TEXT("You have 5")));
+            TestEqual(TEXT("Stale ApproachVendor count cannot restore spent currency"),Session.GetVendorCurrencyCount(),5);
+            Session.WorldObjects.Remove(Currency.Guid);++Session.InventoryDataRevision;
+            TestEqual(TEXT("Final currency removal reports zero"),Session.GetVendorCurrencyCount(),0);
+            Session.VendorCurrencyWeenie=SavedCurrencyWeenie;
             Session.VendorCurrencyName=SavedCurrency;Session.VendorCurrencyCount=SavedCurrencyCount;
             Gameplay->VendorBuyCart.Reset();Gameplay->AddSelectedVendorItemToBuyCart();
             TestEqual(TEXT("Vendor Add transfers the default one unit"),Gameplay->VendorBuyCart[0].Key,1);

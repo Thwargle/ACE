@@ -21,6 +21,8 @@ class ACECLIENT_API UACEUICharGenBinder : public UObject
     GENERATED_BODY()
 public:
     bool Initialize(UACEClientSubsystem* InClient,UACEUICanvasWidget* InCanvas,AACEPlayerController* InController);
+    bool InitializeBarber(UACEClientSubsystem* InClient,UACEUICanvasWidget* InCanvas,AACEPlayerController* InController);
+    bool IsBarber() const { return bBarber; }
     void Shutdown();
     void Tick(float Delta);
     bool MouseDown(FVector2D Position);
@@ -42,6 +44,15 @@ public:
     int32 GetPage() const {return Page;}
 private:
     friend class FACERetailCharacterCreationScreenTest;
+    friend class FACEBarberTest;
+    void RefreshBarberOptions();
+    void FinishBarber(bool Apply);
+    bool BuildBarberPreview(FACEWorldObject& Object) const;
+    bool bBarber=false,bSuppressEffect=false;
+    FACEBarberProfile BarberOriginal;
+    FACECGSelection BarberInitial;
+    TSharedPtr<FACEUIElement> BarberRoot;
+    FACECharacterCreation BarberStrings;
     void Refresh();
     void RefreshPreview(float Delta);
     void RefreshSkills();

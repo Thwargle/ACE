@@ -1,6 +1,7 @@
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
+#include "UI/ACERetailTextEntry.h"
 #include "ACEInputBindings.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
@@ -52,9 +53,12 @@ void UACEUIGameplayBinder::HandleStackAmountCommitted(const FText& Text,ETextCom
  if(Method!=ETextCommit::OnCleared && StackAmountEntryGuid==LastSelection.Guid)
  {
   const FString Value=Text.ToString().TrimStartAndEnd();
-  if(Value.IsNumeric())SelectedStackAmount=int32(FMath::Clamp<int64>(FCString::Atoi64(*Value),1,FMath::Max(1,SelectedStackMax)));
+  // Retail commits on accept/focus loss, clamps empty/zero to one and excess to the stack size.
+  SelectedStackAmount=int32(FMath::Clamp<int64>(FCString::Atoi64(*Value),1,FMath::Max(1,SelectedStackMax)));
  }
  if(StackAmountEntry)StackAmountEntry->SetText(FText::AsNumber(SelectedStackAmount,&FNumberFormattingOptions::DefaultNoGrouping()));
+ RefreshSelectionOverlay();
+ RefreshVendorOverlays();
 }
 
 void UACEUIGameplayBinder::RefreshStackAmountEntry(bool bShow)
@@ -64,13 +68,13 @@ void UACEUIGameplayBinder::RefreshStackAmountEntry(bool bShow)
  if(!bShow){if(StackAmountEntry)StackAmountEntry->SetVisibility(ESlateVisibility::Collapsed);return;}
  if(!StackAmountEntry)
  {
-  StackAmountEntry=Canvas->WidgetTree->ConstructWidget<UEditableTextBox>();
-  StackAmountEntry->SetJustification(ETextJustify::Center);
-  StackAmountEntry->SetSelectAllTextWhenFocused(true);
-  StackAmountEntry->SetSelectAllTextOnCommit(true);
-  auto Style=StackAmountEntry->GetWidgetStyle();Style.SetPadding(FMargin(1.f,0.f));Style.SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),8));
-  Style.SetBackgroundImageNormal(FSlateNoResource());Style.SetBackgroundImageHovered(FSlateNoResource());Style.SetBackgroundImageFocused(FSlateNoResource());
-  Style.SetForegroundColor(FLinearColor::White);StackAmountEntry->SetWidgetStyle(Style);
+  StackAmountEntry=Canvas->WidgetTree->ConstructWidget<UACERetailTextEntry>();
+  StackAmountEntry->bDigitsOnly=true;
+  StackAmountEntry->bSelectAllOnFocus=true;
+  StackAmountEntry->MaxLength=10;
+  const auto Entry=Manager->FindElementByName(TEXT("StackSizeEntryBox"));
+  StackAmountEntry->SetRetailElement(Canvas->GetResourceResolver(),Entry);
+  if(Entry)StackAmountEntry->ContentMargins=Entry->TextMargins;
   StackAmountEntry->OnTextCommitted.AddDynamic(this,&UACEUIGameplayBinder::HandleStackAmountCommitted);
  }
  if(!StackAmountEntry->HasKeyboardFocus() || StackAmountEntryGuid!=LastSelection.Guid)

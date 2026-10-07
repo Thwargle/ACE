@@ -114,6 +114,30 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     Position(3,1,3,48,0x70);
     TestTrue(TEXT("Airborne and descriptor positions remain distinguishable"),LastPosition.bHasContactState && !LastPosition.bIsGrounded);
     TestEqual(TEXT("A genuine new teleport epoch reaches presentation"),LastPosition.TeleportSequence,uint16(3));
+    {
+        FACEBinaryWriter Full; Full.WriteUInt32(123); Full.WriteUInt32(0x74); Full.WriteUInt32(0x2B120021);
+        Full.WriteFloat(52); Full.WriteFloat(90); Full.WriteFloat(20); Full.WriteFloat(1);
+        for (uint16 V : {uint16(3),uint16(2),uint16(3),uint16(0)}) Full.WriteUInt16(V);
+        const int32 Before=Corrections;
+        for (int32 Bytes=0; Bytes<Full.GetData().Num(); ++Bytes)
+        { FACEBinaryReader Short(Full.GetData().GetData(),Bytes); PositionSession.HandleUpdatePosition(Short); }
+        TestEqual(TEXT("Every truncated position packet is ignored"),Corrections,Before);
+        FACEBinaryReader Complete(Full.GetData()); PositionSession.HandleUpdatePosition(Complete);
+        TestEqual(TEXT("Valid position after truncation is still accepted"),Corrections,Before+1);
+    }
+    {
+        FACEBinaryWriter Motion; Motion.WriteUInt32(123); Motion.WriteUInt16(3); Motion.WriteUInt16(9);
+        Motion.WriteUInt16(0); Motion.WriteUInt8(0); Motion.Align();
+        Motion.WriteUInt8(0); Motion.WriteUInt8(1); Motion.WriteUInt16(0x3D);
+        Motion.WriteUInt32(6); Motion.WriteUInt16(7); Motion.WriteFloat(1.5f); Motion.Align(); Motion.WriteUInt32(456);
+        int32 Updates=0; PositionSession.OnMotionUpdate.AddLambda([&](int32,const FACEObjectMotionState&){++Updates;});
+        for (int32 Bytes=0; Bytes<Motion.GetData().Num(); ++Bytes)
+        { FACEBinaryReader Short(Motion.GetData().GetData(),Bytes); PositionSession.HandleUpdateMotion(Short); }
+        TestEqual(TEXT("Truncated motion never reaches presentation"),Updates,0);
+        TestEqual(TEXT("Truncated motion cannot advance sequence"),PositionSession.WorldObjects[123].PhysicsTimestamps[ACEPhysicsTimeStamp::Movement],uint16(0));
+        FACEBinaryReader Complete(Motion.GetData()); PositionSession.HandleUpdateMotion(Complete);
+        TestEqual(TEXT("Valid retransmission with the same sequence is accepted"),Updates,1);
+    }
     FString LastChat; int32 ChatType = -1;
     ChatSession.OnChatMessage.AddLambda([&](const FString& Message, const FString&, int32 Type) { LastChat = Message; ChatType = Type; });
     FACEBinaryWriter Closed; Closed.WriteUInt32(0x0451);
@@ -267,11 +291,11 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("A subsequent unbuffed item clears highlight masks"),Appraisal.WeaponEnchantments|Appraisal.ArmorEnchantments|Appraisal.ResistanceEnchantments,0);
     // Wire fixtures exercise the actual datagram parser, checksum, reorder buffer,
     // message assembler and dispatch. No live server or account is involved.
-    auto Fragment=[](uint32 Seq, uint16 Count, uint16 Index, const TArray<uint8>& Bytes)
+    auto Fragment=[](uint32 Seq, uint16 Count, uint16 Index, const TArray<uint8>& Bytes, uint32 Id=0x80000000, uint16 Queue=ACEQueue::UIQueue)
     {
-        FACEBinaryWriter W; W.WriteUInt32(Seq); W.WriteUInt32(0x80000000);
+        FACEBinaryWriter W; W.WriteUInt32(Seq); W.WriteUInt32(Id);
         W.WriteUInt16(Count); W.WriteUInt16(16+Bytes.Num()); W.WriteUInt16(Index);
-        W.WriteUInt16(ACEQueue::UIQueue); W.WriteBytes(Bytes); return W.GetData();
+        W.WriteUInt16(Queue); W.WriteBytes(Bytes); return W.GetData();
     };
     auto Packet=[](uint32 Seq, EACEPacketHeaderFlags Flags, const TArray<uint8>& Body)
     {
@@ -302,6 +326,55 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     Deliver(Ordered,P2); Deliver(Ordered,P4);
     TestEqual(TEXT("Duplicates cannot recreate partial-message state"),Ordered.PartialFragments.Num(),0);
 
+    FACESession Identities;
+    Deliver(Identities,Packet(2,EACEPacketHeaderFlags::BlobFragments,Fragment(1,2,0,Head,0x00010000)));
+    Deliver(Identities,Packet(3,EACEPacketHeaderFlags::BlobFragments,Fragment(1,2,1,Tail,0x00020000)));
+    TestTrue(TEXT("Different upper message IDs cannot splice into one game message"),Identities.ServerName.IsEmpty());
+    TestEqual(TEXT("Assemblies retain full 64-bit identity"),Identities.PartialFragments.Num(),2);
+    Deliver(Identities,Packet(4,EACEPacketHeaderFlags::BlobFragments,Fragment(1,2,1,Tail,0x00010000)));
+    TestEqual(TEXT("Matching upper ID completes the original message"),Identities.ServerName,FString(TEXT("Assembled last")));
+    TestEqual(TEXT("Completing one assembly retains bytes for the other"),Identities.PartialMessageBytes,Tail.Num());
+    Deliver(Identities,Packet(5,EACEPacketHeaderFlags::BlobFragments,Fragment(1,2,0,Head,0x00020000)));
+    TestEqual(TEXT("Completed assemblies release all received bytes"),Identities.PartialMessageBytes,0);
+
+    FACESession Versions;
+    Deliver(Versions,Packet(2,EACEPacketHeaderFlags::BlobFragments,Fragment(7,2,0,Head,0x8000FFFF)));
+    Deliver(Versions,Packet(3,EACEPacketHeaderFlags::BlobFragments,Fragment(7,2,1,Tail,0x80000000)));
+    TestTrue(TEXT("Wrapped newer ordering stamp cannot complete an older message"),Versions.ServerName.IsEmpty());
+    TestEqual(TEXT("Superseded partial message bytes are reclaimed"),Versions.PartialMessageBytes,Tail.Num());
+    Deliver(Versions,Packet(4,EACEPacketHeaderFlags::BlobFragments,Fragment(7,2,0,Head,0x8000FFFF)));
+    TestTrue(TEXT("Late old-stamp fragment remains rejected"),Versions.ServerName.IsEmpty());
+    Deliver(Versions,Packet(5,EACEPacketHeaderFlags::BlobFragments,Fragment(7,2,0,Head,0x80000000)));
+    TestEqual(TEXT("New ordering stamp assembles without mixing old bytes"),Versions.ServerName,FString(TEXT("Assembled last")));
+    TestEqual(TEXT("Supersession and completion leave no buffered bytes"),Versions.PartialMessageBytes,0);
+    Deliver(Versions,Packet(6,EACEPacketHeaderFlags::BlobFragments,Fragment(7,1,0,NameMessage(TEXT("Obsolete")),0x8000FFFF)));
+    TestEqual(TEXT("Obsolete complete ephemeral message cannot roll back state"),Versions.ServerName,FString(TEXT("Assembled last")));
+    Versions.ExpireEphemeralMessages(FPlatformTime::Seconds()+11);
+    TestTrue(TEXT("Retail five-second ephemeral history expires"),Versions.EphemeralMessages.IsEmpty());
+
+    FACESession Limited;
+    FACESession::FReceivedFragment Unfinished;
+    Unfinished.Count=2; Unfinished.Queue=ACEQueue::UIQueue; Unfinished.Data=Head;
+    for(int32 I=0;I<FACESession::MaxPartialMessages;++I)
+    {
+        Unfinished.BlobId=uint64(I+1); Limited.ProcessReceivedFragment(Unfinished);
+    }
+    TestEqual(TEXT("Incomplete message count has a fixed storage budget"),Limited.PartialFragments.Num(),FACESession::MaxPartialMessages);
+    Limited.ProcessReceivedFragment(Unfinished);
+    TestFalse(TEXT("Duplicate fragment does not exhaust storage budget"),Limited.State==EACESessionState::Failed);
+    Unfinished.BlobId=99999; Limited.ProcessReceivedFragment(Unfinished);
+    TestTrue(TEXT("Exhausted assembly budget produces an explicit connection error"),Limited.State==EACESessionState::Failed && Limited.ConnectionError.Contains(TEXT("incomplete network messages")));
+    TestTrue(TEXT("Exhausted assembly storage is released"),Limited.PartialFragments.IsEmpty() && Limited.PartialMessageBytes==0);
+    Deliver(Versions,Packet(7,EACEPacketHeaderFlags::BlobFragments,Fragment(8,2,0,Head)));
+    Versions.ClearWorldState();
+    TestTrue(TEXT("World exit clears message ordering history and buffered bytes"),Versions.EphemeralMessages.IsEmpty() && Versions.PartialMessageBytes==0 && Versions.PartialFragments.IsEmpty());
+    FACESession Queues;
+    Deliver(Queues,Packet(2,EACEPacketHeaderFlags::BlobFragments,Fragment(10,1,0,NameMessage(TEXT("Invalid queue")),0x80000000,0)));
+    Deliver(Queues,Packet(3,EACEPacketHeaderFlags::BlobFragments,Fragment(11,1,0,NameMessage(TEXT("Invalid queue")),0x80000000,12)));
+    TestTrue(TEXT("Unregistered queues cannot dispatch gameplay"),Queues.ServerName.IsEmpty());
+    Deliver(Queues,Packet(4,EACEPacketHeaderFlags::BlobFragments,Fragment(12,1,0,NameMessage(TEXT("Valid queue")))));
+    TestEqual(TEXT("Unknown queues do not block later valid gameplay packets"),Queues.ServerName,FString(TEXT("Valid queue")));
+
     FACESession SingleGap;
     Deliver(SingleGap,P3);
     const double RetryTime=FPlatformTime::Seconds()+2;
@@ -314,6 +387,53 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Recovery never advances ACK past a hole"),SingleGap.LastReceivedPacketSequence,1u);
     Deliver(SingleGap,P2);
     TestEqual(TEXT("Retransmission releases queued world updates"),SingleGap.ServerName,FString(TEXT("Between fragments")));
+
+    auto RejectPacket=[&](uint32 Seq,uint32 Missing)
+    {
+        FACEBinaryWriter W; W.WriteUInt32(1); W.WriteUInt32(Missing);
+        return Packet(Seq,EACEPacketHeaderFlags::RejectRetransmit,W.GetData());
+    };
+    FACESession Unrecoverable;
+    Deliver(Unrecoverable,P3);
+    Unrecoverable.RequestMissingS2CPackets(RetryTime);
+    auto Rejection=RejectPacket(4,2), BadRejection=Rejection; BadRejection[8]^=1;
+    Deliver(Unrecoverable,BadRejection);
+    TestEqual(TEXT("Bad CRC cannot authorize skipping a missing packet"),Unrecoverable.LastReceivedPacketSequence,1u);
+    FACEBinaryWriter ShortReject; ShortReject.WriteUInt32(2); ShortReject.WriteUInt32(2);
+    Deliver(Unrecoverable,Packet(4,EACEPacketHeaderFlags::RejectRetransmit,ShortReject.GetData()));
+    TestEqual(TEXT("Truncated rejection cannot release world updates"),Unrecoverable.LastReceivedPacketSequence,1u);
+    Deliver(Unrecoverable,Rejection);
+    TestEqual(TEXT("Server rejection releases later gameplay instead of freezing the stream"),Unrecoverable.ServerName,FString(TEXT("Between fragments")));
+    TestEqual(TEXT("Rejection itself participates in packet ordering"),Unrecoverable.LastReceivedPacketSequence,4u);
+    TestTrue(TEXT("Rejected holes are acknowledged and recovery bookkeeping is cleared"),Unrecoverable.bNeedAck && Unrecoverable.RequestedS2CPackets.IsEmpty() && Unrecoverable.RejectedS2CPackets.IsEmpty());
+    Deliver(Unrecoverable,P2);
+    TestEqual(TEXT("Late missing packet cannot resurrect stale gameplay"),Unrecoverable.PartialFragments.Num(),0);
+
+    FACESession Unsolicited;
+    Deliver(Unsolicited,RejectPacket(4,2));
+    TestEqual(TEXT("Unsolicited rejection cannot jump over an unrequested sequence"),Unsolicited.LastReceivedPacketSequence,1u);
+
+    FACESession MultipleGaps;
+    Deliver(MultipleGaps,P3);
+    Deliver(MultipleGaps,Packet(5,EACEPacketHeaderFlags::BlobFragments,Fragment(3,1,0,NameMessage(TEXT("After both gaps")))));
+    MultipleGaps.RequestMissingS2CPackets(RetryTime);
+    Deliver(MultipleGaps,RejectPacket(6,4));
+    TestEqual(TEXT("Rejecting a later hole does not skip an earlier missing packet"),MultipleGaps.LastReceivedPacketSequence,1u);
+    Deliver(MultipleGaps,P4); // Actual data wins over the pending rejection.
+    Deliver(MultipleGaps,P2);
+    TestEqual(TEXT("Late retransmission is preserved while draining a rejected hole"),MultipleGaps.PartialFragments.Num(),0);
+    TestEqual(TEXT("Mixed retransmission and rejection drain all later packets"),MultipleGaps.LastReceivedPacketSequence,6u);
+    TestEqual(TEXT("Later gameplay remains current"),MultipleGaps.ServerName,FString(TEXT("After both gaps")));
+
+    FACESession SkipLater;
+    Deliver(SkipLater,P3);
+    Deliver(SkipLater,Packet(5,EACEPacketHeaderFlags::None,{}));
+    SkipLater.RequestMissingS2CPackets(RetryTime);
+    Deliver(SkipLater,RejectPacket(6,4));
+    Deliver(SkipLater,P2);
+    TestEqual(TEXT("A confirmed later hole is skipped after its earlier hole arrives"),SkipLater.LastReceivedPacketSequence,6u);
+    SkipLater.Disconnect();
+    TestTrue(TEXT("Reconnect clears rejected and requested packet state"),SkipLater.RequestedS2CPackets.IsEmpty() && SkipLater.RejectedS2CPackets.IsEmpty());
 
     FACESession Damaged;
     auto Bad=P2; Bad.Last()^=0x40;
@@ -393,6 +513,107 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Fragments retain UI queue"),R.ReadUInt16(),ACEQueue::UIQueue);
         Reconstructed.Append(R.ReadBytes(FragmentSize-16)); ++Packets;
     }
+    // Uneven fragment lengths expose a retry checksum error that single-fragment
+    // packets cannot. The incoming NAK is encrypted and deliberately out of order.
+    auto ReceiveWire=[&]()
+    {
+        TArray<uint8> Bytes; const double Until=FPlatformTime::Seconds()+1.;
+        while(FPlatformTime::Seconds()<Until)
+        {
+            uint8 Buffer[2048]; int32 Read=0;
+            if(Receiver->Recv(Buffer,sizeof(Buffer),Read)) { Bytes.Append(Buffer,Read); break; }
+            FPlatformProcess::Sleep(.001f);
+        }
+        TestFalse(TEXT("Expected UDP packet was received"),Bytes.IsEmpty());
+        return Bytes;
+    };
+    Sender.IssacClient=MakeUnique<FACEIsaac>(456);
+    Sender.IssacServer=MakeUnique<FACECryptoSystem>(789);
+    const auto FragA=Fragment(10,1,0,TArray<uint8>{1,2,3});
+    const auto FragB=Fragment(11,1,0,TArray<uint8>{4,5,6,7,8});
+    const uint32 OutboundSequence=Sender.NextPacketSequence;
+    Sender.SendRawPacket(EACEPacketHeaderFlags::None,{},TArray<TArray<uint8>>{FragA,FragB},false,true,Sender.ClientId);
+    const auto OriginalWire=ReceiveWire();
+    const uint32 NextBeforeRetry=Sender.NextPacketSequence;
+    const uint32 SplitHash=FACEHash32::Calculate(FragA)+FACEHash32::Calculate(FragB);
+    FACEBinaryWriter Nak; Nak.WriteUInt32(1); Nak.WriteUInt32(OutboundSequence);
+    const auto NakFlags=EACEPacketHeaderFlags::RequestRetransmit|EACEPacketHeaderFlags::EncryptedChecksum;
+    FACEIsaac ServerKeys(789);
+    const uint32 NakHash=FACESession::HeaderHash32(99,NakFlags,0,0,Nak.GetData().Num(),1)+(FACEHash32::Calculate(Nak.GetData())^ServerKeys.Next());
+    FACEBinaryWriter EncryptedNak; EncryptedNak.WriteUInt32(99); EncryptedNak.WriteUInt32(static_cast<uint32>(NakFlags)); EncryptedNak.WriteUInt32(NakHash);
+    EncryptedNak.WriteUInt16(0); EncryptedNak.WriteUInt16(0); EncryptedNak.WriteUInt16(Nak.GetData().Num()); EncryptedNak.WriteUInt16(1); EncryptedNak.WriteBytes(Nak.GetData());
+    Deliver(Sender,EncryptedNak.GetData());
+    const auto RetryWire=ReceiveWire();
+    if(OriginalWire.Num()>=20 && RetryWire.Num()>=20)
+    {
+        FACEBinaryReader R(RetryWire); const uint32 Seq=R.ReadUInt32(); const auto Flags=static_cast<EACEPacketHeaderFlags>(R.ReadUInt32());
+        const uint32 Hash=R.ReadUInt32(); const uint16 Id=R.ReadUInt16(),Stamp=R.ReadUInt16(),Size=R.ReadUInt16(),Iteration=R.ReadUInt16();
+        TestEqual(TEXT("Retry uses the original packet sequence"),Seq,OutboundSequence);
+        TestTrue(TEXT("Retry retains encrypted checksum and adds retransmission flag"),EnumHasAllFlags(Flags,EACEPacketHeaderFlags::EncryptedChecksum|EACEPacketHeaderFlags::Retransmission));
+        FACEIsaac ClientKeys(456);
+        TestEqual(TEXT("Retry preserves split payload hash and original ISAAC key"),Hash,FACESession::HeaderHash32(Seq,Flags,Id,Stamp,Size,Iteration)+(SplitHash^ClientKeys.Next()));
+        TestTrue(TEXT("Retry preserves every payload byte"),R.ReadBytes(Size)==TArray<uint8>(OriginalWire.GetData()+20,OriginalWire.Num()-20));
+    }
+    TestEqual(TEXT("Retry does not consume an outgoing packet sequence"),Sender.NextPacketSequence,NextBeforeRetry);
+    TestEqual(TEXT("Standalone encrypted NAK does not block incoming gameplay ordering"),Sender.LastReceivedPacketSequence,1u);
+    TestTrue(TEXT("Standalone encrypted NAK cannot enter the reorder queue"),Sender.OutOfOrderS2CPackets.IsEmpty());
+
+    FACEBinaryWriter EchoBody; EchoBody.WriteFloat(42.f);
+    const float PingToken=Sender.RecordEchoRequest(FPlatformTime::Seconds()-.25);
+    EchoBody.WriteFloat(PingToken); EchoBody.WriteFloat(0.f);
+    auto EchoPacket=Packet(3,EACEPacketHeaderFlags::EchoRequest|EACEPacketHeaderFlags::EchoResponse,EchoBody.GetData());
+    auto BadEcho=EchoPacket; BadEcho[8]^=1;
+    const uint32 BeforeEcho=Sender.NextPacketSequence;
+    Deliver(Sender,BadEcho);
+    TestEqual(TEXT("Invalid checksum cannot elicit an echo reply"),Sender.NextPacketSequence,BeforeEcho);
+    TestTrue(TEXT("Invalid echo response leaves the real RTT request pending"),Sender.PendingEchoTimes.Contains(PingToken));
+    Deliver(Sender,EchoPacket);
+    const auto EchoWire=ReceiveWire();
+    TestTrue(TEXT("RTT updates even while gameplay waits on packet loss"),Sender.LinkStatus.bHasPing && Sender.LinkStatus.RoundTripSeconds>=.2f);
+    TestEqual(TEXT("Immediate echo does not acknowledge missing gameplay"),Sender.LastReceivedPacketSequence,1u);
+    if(EchoWire.Num()>=28)
+    {
+        FACEBinaryReader EchoReader(EchoWire); EchoReader.Skip(4);
+        TestTrue(TEXT("Keepalive produces an encrypted echo response"),EnumHasAllFlags(static_cast<EACEPacketHeaderFlags>(EchoReader.ReadUInt32()),EACEPacketHeaderFlags::EchoResponse|EACEPacketHeaderFlags::EncryptedChecksum));
+        EchoReader.Skip(12);
+        TestEqual(TEXT("Keepalive echoes the original timestamp"),EchoReader.ReadFloat(),42.f);
+    }
+    const uint32 AfterEcho=Sender.NextPacketSequence;
+    Deliver(Sender,Packet(2,EACEPacketHeaderFlags::None,{}));
+    TestEqual(TEXT("Draining reordered gameplay does not repeat an echo reply"),Sender.NextPacketSequence,AfterEcho);
+    TestEqual(TEXT("Gameplay ordering catches up normally"),Sender.LastReceivedPacketSequence,3u);
+
+    Sender.State=EACESessionState::InWorld; Sender.PlayerGuid=123;
+    Sender.IssacClient=MakeUnique<FACEIsaac>(123);
+    FACEWorldObject Self=Remote; Self.PhysicsTimestamps[ACEPhysicsTimeStamp::ServerControl]=5;
+    Sender.UpsertWorldObject(Self);
+    TestEqual(TEXT("Create seeds the outgoing server-control epoch"),Sender.ServerControlSeq,uint16(5));
+    int32 SelfMotions=0; Sender.OnMotionUpdate.AddLambda([&](int32,const FACEObjectMotionState&){++SelfMotions;});
+    auto SelfMotion=[&](uint16 Movement,uint16 Control,bool Autonomous)
+    {
+        FACEBinaryWriter W; W.WriteUInt32(123); W.WriteUInt16(3); W.WriteUInt16(Movement);
+        W.WriteUInt16(Control); W.WriteUInt8(Autonomous); W.Align();
+        W.WriteUInt8(0); W.WriteUInt8(0); W.WriteUInt16(0x3D); W.WriteUInt32(0);
+        FACEBinaryReader R(W.GetData()); Sender.HandleUpdateMotion(R);
+    };
+    SelfMotion(1,5,false); SelfMotion(2,4,false); SelfMotion(1,6,false);
+    TestEqual(TEXT("New motion requires current control and new movement sequence"),SelfMotions,1);
+    SelfMotion(2,6,false);
+    TestEqual(TEXT("Valid server control is presented"),SelfMotions,2);
+    TestEqual(TEXT("Received server control is echoed in future client movement"),Sender.ServerControlSeq,uint16(6));
+    SelfMotion(3,6,true);
+    TestEqual(TEXT("Own autonomous echo cannot restart local movement"),SelfMotions,2);
+    TestEqual(TEXT("Own autonomous echo still advances accepted sequence"),Sender.WorldObjects[123].PhysicsTimestamps[ACEPhysicsTimeStamp::Movement],uint16(3));
+    Sender.PlayerPosition.CellId=0x7D640019; Sender.PlayerPosition.Location=FVector(40,40,12);
+    Sender.SendAutonomousPosition(true);
+    const auto* PositionPacket=Sender.CachedC2SPackets.Find(Sender.NextPacketSequence-1);
+    if (!TestNotNull(TEXT("Autonomous position produces a cached wire packet"),PositionPacket))
+    { Sockets->DestroySocket(Receiver); return false; }
+    FACEBinaryReader Report(PositionPacket->Payload); Report.Skip(60);
+    TestEqual(TEXT("AutonomousPosition carries the current incarnation"),Report.ReadUInt16(),uint16(3));
+    TestEqual(TEXT("AutonomousPosition carries accepted server control"),Report.ReadUInt16(),uint16(6));
+    Sender.ClearWorldState();
+    TestEqual(TEXT("Relog does not reuse another character's server control"),Sender.ServerControlSeq,uint16(0));
     Receiver->Close(); Sockets->DestroySocket(Receiver);
     FACEBinaryWriter Expected; Expected.WriteUInt32(0xF656); Expected.WriteBytes(Large);
     TestEqual(TEXT("Large message is sent in three independently retransmittable packets"),Packets,3);

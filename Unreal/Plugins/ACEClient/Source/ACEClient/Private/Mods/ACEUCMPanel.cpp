@@ -30,7 +30,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Framework/Application/SlateApplication.h"
 
-namespace
+namespace ACEUCMPanelPrivate
 {
     const FLinearColor Bg(.012f,.018f,.03f),Card(.024f,.035f,.052f),Ink(.9f,.94f,1),Muted(.48f,.58f,.7f),Accent(.12f,.65f,.85f);
     const FSlateBrush* White(){return FCoreStyle::Get().GetBrush("WhiteBrush");}
@@ -214,6 +214,25 @@ namespace
             }
         }
         bool ACEInventoryRulesUsable(const FACEWorldObject& O)const{return !(O.ItemUseable&1)&&!(O.ItemType&(ACEItemType::Container|ACEItemType::SpellComponents|ACEItemType::Money));}
+        void ManaSources()
+        {
+            Heading(TEXT("Mana source items"),TEXT("Only checked individual items may be consumed to fill empty stones. Equipped and retained items are excluded. An empty selection consumes nothing."));
+            Add(Button(TEXT("Refresh inventory"),[this](){Rebuild();}));
+            Add(Button(TEXT("Clear mana source selection"),[this](){P()->SetArrayField(TEXT("mana_source_items"),{});Save();Rebuild();}));
+            auto* C=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+            for(const auto& O:C->GetWorldObjects())
+            {
+                const auto* A=Host->GetPluginAppraisals().Find(O.Guid);
+                if(!Host->IsOwnedPluginItem(O)||O.WielderId||O.CurrentWieldedLocation
+                    ||(O.ObjectDescriptionFlags&ACEObjectDescFlag::Retained)||(O.ItemType&(ACEItemType::ManaStone|ACEItemType::Container))
+                    ||!A||!A->bSuccess||A->IntProperties.FindRef(107)<=0||A->IntProperties.FindRef(108)<=0)continue;
+                const uint32 Id=uint32(O.Guid);
+                auto Row=SNew(SHorizontalBox);Row->AddSlot().AutoWidth()[Icon(O.IconId)];
+                Row->AddSlot().FillWidth(1).Padding(8,0).VAlign(VAlign_Center)[Text(FString::Printf(TEXT("%s - %d mana"),*ACERetailObjectNames::Name(O),A->IntProperties.FindRef(107)))];
+                Row->AddSlot().AutoWidth()[Button(Has(TEXT("mana_source_items"),Id)?TEXT("Will consume"):TEXT("Allow consumption"),[this,Id](){ToggleId(TEXT("mana_source_items"),Id);})];
+                Add(Tile(Row));
+            }
+        }
         void MonsterEquipment(const TSharedPtr<FJsonObject>& Rule,bool Offhand)
         {
             const TCHAR* Key=Offhand?TEXT("secondary_equip"):TEXT("weapon");
@@ -450,6 +469,8 @@ namespace
                 Add(Toggle(TEXT("fast_cast_buffs"),TEXT("Fast buff movement"),TEXT("Hold backward during eligible instant life/creature casts, using normal movement. Stops with the cast or manual input.")));
                 Heading(TEXT("Summoned pets"),TEXT("Add essences to the equipment list below. Uses server requirements, remaining charges and cooldowns."));
                 Add(Toggle(TEXT("summon_pets"),TEXT("Summon combat pets"),TEXT("Choose an eligible essence for nearby monsters; keep an existing pet active.")));
+                Add(Toggle(TEXT("refill_summons"),TEXT("Refill summon essences"),TEXT("Use Encapsulated Spirit from your inventory to refill low-charge essences in the equipment pool. Works independently of automatic summoning.")));
+                Slider(TEXT("summon_refill_charges"),TEXT("Refill at or below remaining charges"),0,50,5,Accent,TEXT(" charges"));
                 Add(Button(Num(P(),TEXT("pet_range_mode"))==1?TEXT("Pet range: custom"):TEXT("Pet range: attack distance"),[this](){P()->SetNumberField(TEXT("pet_range_mode"),Num(P(),TEXT("pet_range_mode"))==1?0:1);Save();Rebuild();}));
                 Slider(TEXT("pet_range"),TEXT("Custom pet distance"),1,240,5,Accent,TEXT(" m"));
                 Slider(TEXT("pet_min_targets"),TEXT("Minimum nearby monsters"),1,20,1);
@@ -512,7 +533,10 @@ namespace
                 Slider(TEXT("helper_stamina_threshold"),TEXT("Fellow stamina"),0,100,0,FLinearColor(.95f,.7f,.15f));
                 Slider(TEXT("helper_mana_threshold"),TEXT("Fellow mana"),0,100,0,FLinearColor(.2f,.55f,1));
                 Add(Toggle(TEXT("item_mana"),TEXT("Recharge equipment"),TEXT("Use filled mana stones / charges on the player when equipped item mana is low."),true));
-                Slider(TEXT("item_mana_threshold"),TEXT("Equipment mana threshold"),0,99,20,FLinearColor(.2f,.55f,1));Inventory(true);
+                Slider(TEXT("item_mana_threshold"),TEXT("Equipment mana threshold"),0,99,20,FLinearColor(.2f,.55f,1),TEXT("%"));
+                Add(Toggle(TEXT("fill_mana_stones"),TEXT("Automatically fill empty mana stones"),TEXT("Consumes only the individual mana source items selected below. Filled stones can then recharge all equipped gear through the player.")));
+                ManaSources();
+                Inventory(true);
             }
             else if(Page==TEXT("Route"))
             {
@@ -657,7 +681,7 @@ namespace
         {auto Route=P()->GetArrayField(TEXT("route"));if(!Direction)Route.RemoveAt(I);else if(Route.IsValidIndex(I+Direction))Route.Swap(I,I+Direction);P()->SetArrayField(TEXT("route"),Route);Save(true);Rebuild();}
     };
 }
-TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMPanel(const FString& InitialPage){return SNew(SUCMPanel).Host(this).InitialPage(InitialPage);}
+TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMPanel(const FString& InitialPage){return SNew(ACEUCMPanelPrivate::SUCMPanel).Host(this).InitialPage(InitialPage);}
 
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
@@ -667,7 +691,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMPanel(const FString& InitialPage
 #include "Engine/TextureRenderTarget2D.h"
 #include "ImageUtils.h"
 #include "RenderingThread.h"
-namespace
+namespace ACEUCMPanelPrivate
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMLootEditorTest,"ACE.Plugins.LootEditor",EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
 bool FACEUCMLootEditorTest::RunTest(const FString&)

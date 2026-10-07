@@ -286,6 +286,8 @@ struct FACEUIElement : public TSharedFromThis<FACEUIElement>
 			|| ElementName == TEXT("SpellcastSlot_Background")
 			|| ElementName == TEXT("SpellcastSlot_TabBackground")
 			|| ElementName == TEXT("StatManagement_Template")
+			// Opaque selected-item frame; stack entry/slider must paint over it.
+			|| ElementName == TEXT("SelectionBlinkField")
 			|| ElementName == TEXT("SkillManagement_Attribute_Field")
 			// Opaque page slab (0x06004CC2) — keep behind list overlays / filters.
 			|| ElementName == TEXT("SpellbookPage")

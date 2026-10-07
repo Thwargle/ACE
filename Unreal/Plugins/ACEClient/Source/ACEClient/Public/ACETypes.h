@@ -1021,6 +1021,8 @@ struct ACECLIENT_API FACEPlayerVitals
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Gender = 0;
 	/** PropertyInt.HeritageGroup (Aluvian=1 …). */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 HeritageGroup = 0;
+	/** Effective PropertyInt.AllegianceRank, including winning rank enchantments. */
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 EffectiveAllegianceRank = -1;
 	/** PropertyInt.PlayerKillerStatus flags. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 PlayerKillerStatus = 0;
 	/** PropertyInt.Age — total in-game seconds (retail CharacterInfo birth/age line). */
@@ -1772,6 +1774,21 @@ struct ACECLIENT_API FACESquelchEntry
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") bool bAccount = false;
 	/** SquelchMask of filtered channels. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Mask = 0;
+	// Retail vlong is a 128-bit channel mask, not four copies to OR together.
+	TArray<uint32> FilterWords;
+	bool Blocks(uint32 Type) const
+	{
+		if (Type == 1)
+		{
+			if (FilterWords.IsEmpty()) return uint32(Mask) == MAX_uint32;
+			for (int32 I=0;I<4;++I) if (!FilterWords.IsValidIndex(I) || FilterWords[I]!=MAX_uint32) return false;
+			return true;
+		}
+		if (Type>=128) return false;
+		const uint32 Word=FilterWords.IsEmpty() ? (Type<32 ? uint32(Mask) : 0u)
+			: (FilterWords.IsValidIndex(Type/32) ? FilterWords[Type/32] : 0u);
+		return (Word & (1u<<(Type%32)))!=0;
+	}
 };
 
 /** One row of the server's ContractTracker table (GameEvent 0x0298 / 0x0299). */
@@ -1799,6 +1816,17 @@ struct ACECLIENT_API FACEHousePayment
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Wcid = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") FString Name;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") FString PluralName;
+};
+
+/** Retail slumlord offer, separate from the player's owned-house information. */
+struct ACECLIENT_API FACEHouseProfile
+{
+	int32 LordGuid = 0, DwellingId = 0, OwnerGuid = 0;
+	uint32 Flags = 0;
+	int32 MinLevel = -1, MaxLevel = -1, MinRank = -1, MaxRank = -1, Type = 0;
+	bool bMaintenanceFree = false;
+	FString OwnerName;
+	TArray<FACEHousePayment> Buy, Rent;
 };
 
 /** House panel state: GameEvent HouseData (0x0225) for owners, HouseStatus (0x0226) otherwise. */
@@ -1851,6 +1879,8 @@ struct ACECLIENT_API FACEAllegianceMember
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") FString Name;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Level = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Rank = 0;
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Gender = 0;
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 HeritageGroup = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") bool bOnline = false;
 	/** 0=monarch, 1=patron, 2=self, 3=vassal */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 Role = 0;
@@ -1875,6 +1905,10 @@ struct ACECLIENT_API FACEAllegianceInfo
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 MonarchGuid = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") FString PatronName;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 PatronGuid = 0;
+	/** Full network records retain rank titles and online state for presentation. */
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") FACEAllegianceMember Monarch;
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") FACEAllegianceMember Patron;
+	UPROPERTY(BlueprintReadOnly, Category = "ACE") FACEAllegianceMember Self;
 	/** Own unpassed / passed allegiance XP, shown on the allegiance page footer. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 SelfCPCached = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 SelfCPTithed = 0;

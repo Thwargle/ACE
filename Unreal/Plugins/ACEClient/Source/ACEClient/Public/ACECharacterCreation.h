@@ -1,6 +1,7 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "ACETypes.h"
+#include "ACEBarber.h"
 
 class FACEDatDatabase;
 class FACEBinaryWriter;
@@ -72,6 +73,9 @@ public:
     TArray<uint32> GearColors(int32 Slot) const;
     bool Validate(FString& Error) const;
     bool BuildAppearance(FACEWorldObject& Object, bool bHideHeadgear=false) const;
+    bool RestoreBarber(const FACEBarberProfile& Profile,uint32 HeritageId,uint32 Gender);
+    FACEBarberProfile MakeBarberProfile() const;
+    FACEBarberProfile BuildBarberProfile(const FACEBarberProfile& Original,const FACECGSelection& Initial,bool SuppressEffect) const;
     uint32 MappedAsset(uint32 Mapper,uint32 Key) const;
     TArray<FColor> ColorSamples(int32 Field) const;
     void RandomizeAppearance();

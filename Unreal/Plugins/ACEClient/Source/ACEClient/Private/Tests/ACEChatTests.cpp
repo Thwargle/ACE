@@ -143,7 +143,10 @@ bool FACEChatParityTest::RunTest(const FString&)
         Copied=TEXT("Copy"); FPlatformApplicationMisc::ClipboardCopy(*Copied);
         Main->SetChatText(TEXT("")); Focus(Main); Ctrl(EKeys::V);
         TestEqual(TEXT("Copied chat pastes into the editable entry"),Main->GetText().ToString(),Copied);
-        Ctrl(EKeys::A); Ctrl(EKeys::C); Main->SetChatText(TEXT(""));
+        Ctrl(EKeys::A); Ctrl(EKeys::C);
+        FString EntryCopied; ReadClipboard(EntryCopied);
+        TestEqual(TEXT("The input field copies its selection"),EntryCopied,Copied);
+        Main->SetChatText(TEXT(""));
         Ctrl(EKeys::V);
         TestEqual(TEXT("The input field supports copy as well as paste"),Main->GetText().ToString(),Copied);
         Main->SetChatText(TEXT(""));
@@ -386,6 +389,62 @@ bool FACEChatParityTest::RunTest(const FString&)
                 TestEqual(TEXT("W reaches gameplay without a mouse click after blank Enter"),Input->MovementKeys,Before+1);
             }
         }
+    }
+    {
+        constexpr int32 BlockedGuid=0x50000999;
+        auto SetDB=[&](TArray<uint32> Words)
+        {
+            FACEBinaryWriter W;W.WriteUInt16(0);W.WriteUInt16(0); // account hash is server-side in ACE
+            W.WriteUInt16(Words.IsEmpty()?0:1);W.WriteUInt16(0);
+            if(!Words.IsEmpty())
+            {
+                W.WriteInt32(BlockedGuid);W.WriteInt32(Words.Num());
+                for(uint32 Word:Words)W.WriteUInt32(Word);
+                W.WriteString16L(TEXT("Blocked Player"));W.WriteUInt32(0);
+            }
+            W.WriteUInt32(0);W.WriteString16L(TEXT(""));W.WriteUInt32(0);
+            FACEBinaryReader R(W.GetData());Session.HandleSetSquelchDB(R);
+        };
+        SetDB({1u<<ACEChatMessageType::Tell,1u<<ACEChatMessageType::Speech,0,0});
+        TestTrue(TEXT("Squelch DB blocks the requested tell channel"),Session.IsSenderSquelched(BlockedGuid,TEXT("Changed display name"),ACEChatMessageType::Tell));
+        TestFalse(TEXT("High mask words do not incorrectly squelch speech"),Session.IsSenderSquelched(BlockedGuid,TEXT("Blocked Player"),ACEChatMessageType::Speech));
+        TestTrue(TEXT("Retail high channel bits are preserved"),Session.IsSenderSquelched(BlockedGuid,TEXT("Blocked Player"),32+ACEChatMessageType::Speech));
+        TestFalse(TEXT("Partial squelch is not an all-channel menu check"),Session.Squelches[0].Blocks(1));
+        SetDB({MAX_uint32,MAX_uint32,MAX_uint32,MAX_uint32});
+        TestTrue(TEXT("All-channel squelch checks the menu"),Session.Squelches[0].Blocks(1));
+        TestTrue(TEXT("Name-only channels use case-insensitive exact names"),Session.IsSenderSquelched(0,TEXT("blocked player"),ACEChatMessageType::Social));
+        TestFalse(TEXT("A similarly named player is not blocked"),Session.IsSenderSquelched(0,TEXT("Blocked Player Two"),ACEChatMessageType::Tell));
+        TestFalse(TEXT("Retail personal squelches preserve spellcasting text"),Session.IsSenderSquelched(BlockedGuid,TEXT("Blocked Player"),17));
+        int32 Messages=0,Tells=0;
+        const auto ChatHandle=Session.OnChatMessage.AddLambda([&](const FString&,const FString&,int32){++Messages;});
+        const auto TellHandle=Session.OnPlayerTell.AddLambda([&](const FString&,const FString&,int32){++Tells;});
+        auto Incoming=[&]()
+        {
+            FACEBinaryWriter Speech;Speech.WriteString16L(TEXT("hidden"));Speech.WriteString16L(TEXT("Blocked Player"));
+            Speech.WriteInt32(BlockedGuid);Speech.WriteInt32(ACEChatMessageType::Speech);
+            FACEBinaryReader SR(Speech.GetData());Session.HandleHearSpeech(SR);
+            FACEBinaryWriter Ranged;Ranged.WriteString16L(TEXT("hidden"));Ranged.WriteString16L(TEXT("Blocked Player"));
+            Ranged.WriteInt32(BlockedGuid);Ranged.WriteFloat(30);Ranged.WriteInt32(ACEChatMessageType::Speech);
+            FACEBinaryReader RR(Ranged.GetData());Session.HandleHearRangedSpeech(RR);
+            FACEBinaryWriter Emote;Emote.WriteInt32(BlockedGuid);Emote.WriteString16L(TEXT("Blocked Player"));Emote.WriteString16L(TEXT("waves."));
+            FACEBinaryReader ER(Emote.GetData());Session.HandleSoulEmote(ER);
+            FACEBinaryWriter Tell;Tell.WriteString16L(TEXT("hidden"));Tell.WriteString16L(TEXT("Blocked Player"));
+            Tell.WriteInt32(BlockedGuid);Tell.WriteInt32(Session.PlayerGuid);Tell.WriteInt32(ACEChatMessageType::Tell);Tell.WriteUInt32(0);
+            FACEBinaryReader TR(Tell.GetData());Session.HandleTell(TR);
+            FACEBinaryWriter Channel;Channel.WriteUInt32(ACEChatChannel::Fellow);Channel.WriteString16L(TEXT("Blocked Player"));Channel.WriteString16L(TEXT("hidden"));
+            FACEBinaryReader CR(Channel.GetData());Session.HandleChannelBroadcast(CR);
+            FACEBinaryWriter Turbine;Turbine.WriteUInt32(0);Turbine.WriteUInt32(ACETurbineChat::BlobEventBinary);
+            for(int32 I=0;I<7;++I)Turbine.WriteUInt32(0);
+            Turbine.WriteUInt32(ACETurbineChat::General);Turbine.WritePackedUnicode(TEXT("Blocked Player"));Turbine.WritePackedUnicode(TEXT("hidden"));
+            Turbine.WriteUInt32(12);Turbine.WriteInt32(BlockedGuid);Turbine.WriteUInt32(0);Turbine.WriteUInt32(ACETurbineChat::General);
+            FACEBinaryReader TCR(Turbine.GetData());Session.HandleTurbineChat(TCR);
+        };
+        Incoming();TestEqual(TEXT("All incoming player chat paths suppress a squelched sender"),Messages,0);
+        TestEqual(TEXT("Squelched tells cannot trigger plugin buff requests"),Tells,0);
+        SetDB({});Incoming();
+        TestEqual(TEXT("Server removal restores all six incoming chat paths"),Messages,6);
+        TestEqual(TEXT("Unsquelched tells reach plugins again"),Tells,1);
+        Session.OnChatMessage.Remove(ChatHandle);Session.OnPlayerTell.Remove(TellHandle);
     }
     Slate.ClearUserFocus(VirtualUser); Slate.ClearUserFocus(0); Slate.RequestDestroyWindow(Window);
     if (OldFocus) Slate.SetUserFocus(0,OldFocus);

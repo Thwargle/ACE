@@ -334,8 +334,8 @@ bool FACESession::ReadAllegianceData(FACEBinaryReader& Reader, FACEAllegianceMem
 	{
 		return false;
 	}
-	Reader.ReadUInt8(); // gender
-	Reader.ReadUInt8(); // heritage
+	Out.Gender = Reader.ReadUInt8();
+	Out.HeritageGroup = Reader.ReadUInt8();
 	Out.Rank = Reader.ReadUInt16();
 	constexpr uint32 HasPackedLevel = 0x8;
 	constexpr uint32 HasAllegianceAge = 0x4;
@@ -374,6 +374,22 @@ bool FACESession::ReadAllegianceData(FACEBinaryReader& Reader, FACEAllegianceMem
 	}
 	Out.Name = Reader.ReadString16L();
 	return true;
+}
+
+void FACESession::HandleAllegianceLoginNotification(FACEBinaryReader& Reader)
+{
+	if (!Reader.CanRead(8)) return;
+	const int32 Guid = static_cast<int32>(Reader.ReadUInt32());
+	const bool bOnline = Reader.ReadUInt32() != 0;
+	bool bChanged = false;
+	auto Update = [&](FACEAllegianceMember& Member)
+	{
+		if (Member.Guid == Guid && Member.bOnline != bOnline)
+		{ Member.bOnline = bOnline; bChanged = true; }
+	};
+	Update(Allegiance.Monarch); Update(Allegiance.Patron); Update(Allegiance.Self);
+	for (auto& Vassal : Allegiance.Vassals) Update(Vassal);
+	if (bChanged) OnAllegianceChanged.Broadcast();
 }
 
 void FACESession::HandleAllegianceUpdate(FACEBinaryReader& Reader)
@@ -448,6 +464,8 @@ void FACESession::HandleAllegianceUpdate(FACEBinaryReader& Reader)
 			Monarch.Role = 0;
 			Allegiance.MonarchGuid = Monarch.Guid;
 			Allegiance.MonarchName = Monarch.Name;
+			Allegiance.Monarch = Monarch;
+			if (Monarch.Guid == PlayerGuid) Allegiance.Self = Monarch;
 		}
 	}
 	// Remaining records: treeParent + AllegianceData  (RecordCount - 1). Parent links are only
@@ -473,6 +491,7 @@ void FACESession::HandleAllegianceUpdate(FACEBinaryReader& Reader)
 		if (Rec.Value.Guid == PlayerGuid)
 		{
 			Allegiance.PatronGuid = Rec.Key;
+			Allegiance.Self = Rec.Value;
 			Allegiance.SelfCPCached = Rec.Value.CPCached;
 			Allegiance.SelfCPTithed = Rec.Value.CPTithed;
 			Allegiance.Rank = Rec.Value.Rank;
@@ -490,6 +509,7 @@ void FACESession::HandleAllegianceUpdate(FACEBinaryReader& Reader)
 		{
 			Member.Role = 1;
 			Allegiance.PatronName = Member.Name;
+			Allegiance.Patron = Member;
 		}
 		else if (Rec.Key == PlayerGuid)
 		{
@@ -500,6 +520,7 @@ void FACESession::HandleAllegianceUpdate(FACEBinaryReader& Reader)
 	if (Allegiance.PatronGuid == Allegiance.MonarchGuid && Allegiance.PatronName.IsEmpty())
 	{
 		Allegiance.PatronName = Allegiance.MonarchName;
+		Allegiance.Patron = Allegiance.Monarch;
 	}
 
 	Allegiance.bValid = !Allegiance.AllegianceName.IsEmpty() || Allegiance.MonarchGuid != 0;
@@ -553,10 +574,10 @@ void FACESession::HandleFriendsListUpdate(FACEBinaryReader& Reader)
 	{
 		Friends = MoveTemp(Parsed);
 	}
-	else if (Parsed.Num() > 0)
+	else if (Parsed.Num() > 0 && UpdateType<=4)
 	{
 		const FACEFriendInfo& One = Parsed[0];
-		if (UpdateType == 2) // Removed
+		if (UpdateType == 2 || UpdateType == 3) // Removed / removed silently (retail)
 		{
 			Friends.RemoveAll([&](const FACEFriendInfo& F) { return F.Guid == One.Guid; });
 		}
@@ -646,28 +667,38 @@ void FACESession::HandleSalvageOperationsResult(FACEBinaryReader& Reader)
 	}
 }
 
+bool FACESession::IsSenderSquelched(int32 Guid, const FString& Name, uint32 MessageType) const
+{
+	// SquelchDB::IsSquelched exempts spellcasting text from personal squelches.
+	if (MessageType==17 || Guid==PlayerGuid) return false;
+	for (const auto& Entry:Squelches)
+		if ((Guid!=0 ? Entry.Guid==Guid : !Name.IsEmpty() && Entry.Name.Equals(Name,ESearchCase::IgnoreCase))
+			&& Entry.Blocks(MessageType)) return true;
+	return false;
+}
+
 void FACESession::HandleSetSquelchDB(FACEBinaryReader& Reader)
 {
 	// SquelchDB: PackableHashTable<string, uint> accounts (always empty in retail),
 	// PackableHashTable<uint, SquelchInfo> characters, then the global SquelchInfo.
 	Squelches.Reset();
 	GlobalSquelchMask = 0;
-	auto ReadSquelchInfo = [&Reader](int32& OutMask, FString& OutName, bool& bOutAccount) -> bool
+	auto ReadSquelchInfo = [&Reader](FACESquelchEntry& Entry) -> bool
 	{
 		if (!Reader.CanRead(4))
 		{
 			return false;
 		}
 		const int32 FilterCount = Reader.ReadInt32();
-		int32 Mask = 0;
-		for (int32 i = 0; i < FilterCount && Reader.CanRead(4); ++i)
+		if (FilterCount<0 || FilterCount>4 || !Reader.CanRead(FilterCount*4)) return false;
+		for (int32 i = 0; i < FilterCount; ++i)
 		{
-			// Retail repeats the same mask 4x; OR them so any variant is honoured.
-			Mask |= static_cast<int32>(Reader.ReadUInt32());
+			Entry.FilterWords.Add(Reader.ReadUInt32());
 		}
-		OutName = Reader.ReadString16L();
-		bOutAccount = Reader.CanRead(4) ? (Reader.ReadUInt32() != 0) : false;
-		OutMask = Mask;
+		Entry.Name = Reader.ReadString16L();
+		if (!Reader.CanRead(4)) return false;
+		Entry.bAccount = Reader.ReadUInt32() != 0;
+		Entry.Mask = Entry.FilterWords.IsEmpty() ? 0 : int32(Entry.FilterWords[0]);
 		return true;
 	};
 	if (!Reader.CanRead(4))
@@ -697,18 +728,16 @@ void FACESession::HandleSetSquelchDB(FACEBinaryReader& Reader)
 		}
 		FACESquelchEntry Entry;
 		Entry.Guid = static_cast<int32>(Reader.ReadUInt32());
-		if (!ReadSquelchInfo(Entry.Mask, Entry.Name, Entry.bAccount))
+		if (!ReadSquelchInfo(Entry))
 		{
 			break;
 		}
 		Squelches.Add(Entry);
 	}
-	int32 GlobalMask = 0;
-	FString GlobalName;
-	bool bGlobalAccount = false;
-	if (ReadSquelchInfo(GlobalMask, GlobalName, bGlobalAccount))
+	FACESquelchEntry Global;
+	if (ReadSquelchInfo(Global))
 	{
-		GlobalSquelchMask = GlobalMask;
+		GlobalSquelchMask = Global.Mask;
 	}
 	OnSquelchChanged.Broadcast();
 }

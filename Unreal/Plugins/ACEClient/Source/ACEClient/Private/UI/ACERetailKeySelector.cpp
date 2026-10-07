@@ -53,11 +53,17 @@ bool UACERetailKeySelector::FilterCaptureKey(const FKeyEvent& Event,bool Down)
  if(Down)
  {
   if(!Event.IsRepeat()) CapturePressedKeys.Add(Event.GetKey());
-  return false;
+  return true;
  }
  // Windows can synthesize modifier releases after a focus change. Only a key
  // actually pressed during this capture may complete the binding.
- return CapturePressedKeys.Remove(Event.GetKey())==0;
+ if(CapturePressedKeys.Remove(Event.GetKey())!=0)
+ {
+  // Deliver to the selector that owns capture. Platform focus/navigation must
+  // not consume Tab/Enter or route the release to a different Slate widget.
+  if(const auto Selector=GetCachedWidget()) Selector->OnKeyUp(Selector->GetCachedGeometry(),Event);
+ }
+ return true;
 }
 void UACERetailKeySelector::ReleaseSlateResources(bool ReleaseChildren)
 {
@@ -65,6 +71,13 @@ void UACERetailKeySelector::ReleaseSlateResources(bool ReleaseChildren)
   FSlateApplication::Get().UnregisterInputPreProcessor(CaptureFilter);
  CaptureFilter.Reset();CapturePressedKeys.Reset();
  Super::ReleaseSlateResources(ReleaseChildren);
+}
+void UACERetailKeySelector::CancelCapture()
+{
+ if (!GetIsSelectingKey() && !CaptureFilter) return;
+ if (GetIsSelectingKey())
+  if (const auto Selector=GetCachedWidget()) Selector->OnFocusLost(FFocusEvent(EFocusCause::Cleared, 0));
+ CaptureStateChanged();
 }
 TSharedRef<SWidget> UACERetailKeySelector::RebuildWidget()
 {

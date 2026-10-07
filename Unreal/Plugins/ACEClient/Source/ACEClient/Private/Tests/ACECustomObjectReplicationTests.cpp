@@ -61,6 +61,46 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECustomObjectReplicationTest, "ACE.RetailPar
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACECustomObjectReplicationTest::RunTest(const FString&)
 {
+	// ACSmartBox queues F74C for absent objects and newer incarnations, then
+	// replays after CreateObject. Exercise actual wire parsing and presentation.
+	{
+		FACESession MotionSession;
+		FObjectPacket Object;
+		int32 Motions = 0;
+		MotionSession.OnMotionUpdate.AddLambda([&](int32 Guid, const FACEObjectMotionState&)
+		{
+			TestTrue(TEXT("Deferred motion has a created object before presentation"), MotionSession.WorldObjects.Contains(Guid));
+			++Motions;
+		});
+		auto Motion = [&](uint16 Instance, uint16 Sequence, bool Truncated = false)
+		{
+			FACEBinaryWriter W; W.WriteUInt32(ACEOpcode::UpdateMotion); W.WriteUInt32(Object.Guid);
+			W.WriteUInt16(Instance); W.WriteUInt16(Sequence); W.WriteUInt16(1); W.WriteUInt8(0); W.Align();
+			W.WriteUInt8(0); W.WriteUInt8(0); W.WriteUInt16(0x3D);
+			if (!Truncated) W.WriteUInt32(0);
+			MotionSession.HandleGameMessage(W.GetData());
+		};
+		Motion(3, 2, true);
+		TestEqual(TEXT("Incomplete motion cannot enter the deferred queue"), MotionSession.PendingObjectPhysicsBytes, 0);
+		Motion(3, 2);
+		TestEqual(TEXT("Motion waits for its object create"), Motions, 0);
+		MotionSession.HandleGameMessage(ObjectPacket(Object));
+		TestEqual(TEXT("Create replays a newer deferred motion"), Motions, 1);
+		TestEqual(TEXT("Motion timestamp survives deferred replay"), MotionSession.WorldObjects[Object.Guid].PhysicsTimestamps[ACEPhysicsTimeStamp::Movement], uint16(2));
+		Motion(3, 2); Motion(2, 100);
+		TestEqual(TEXT("Duplicate and old-incarnation motions stay rejected"), Motions, 1);
+		Motion(4, 5);
+		TestEqual(TEXT("Future incarnation cannot animate the existing object"), Motions, 1);
+		Object.Instance = 4;
+		MotionSession.HandleGameMessage(ObjectPacket(Object));
+		TestEqual(TEXT("Recreated incarnation receives its queued motion"), Motions, 2);
+		TestEqual(TEXT("Replayed motion releases queued bytes"), MotionSession.PendingObjectPhysicsBytes, 0);
+		MotionSession.WorldObjects[Object.Guid].bPhysicsDescriptionPending = true;
+		Motion(4, 6);
+		TestEqual(TEXT("Inventory-only stub cannot consume motion"), Motions, 2);
+		MotionSession.HandleGameMessage(ObjectPacket(Object));
+		TestEqual(TEXT("Full physics description releases stub motion"), Motions, 3);
+	}
 	FACESession Session;
 	Session.PlayerGuid = 100;
 	FObjectPacket P;

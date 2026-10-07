@@ -16,6 +16,11 @@
     "confirm"
   ],
   "settings": [
+    {"key":"refill_summons","label":"Refill summon essences with Encapsulated Spirit","type":"bool"},
+    {"key":"summon_refill_charges","label":"Refill summons at or below remaining charges","type":"number","min":0,"max":50},
+    {"key":"item_mana","label":"Recharge equipped gear with filled mana stones","type":"bool"},
+    {"key":"item_mana_threshold","label":"Recharge gear below mana percentage","type":"number","min":0,"max":99},
+    {"key":"fill_mana_stones","label":"Fill empty mana stones from selected source items (consumes them)","type":"bool"},
     {
       "key": "buffing",
       "label": "Maintain automatic creature, life and item buffs",
@@ -70,14 +75,14 @@
     },
     {
       "key": "stop_health",
-      "label": "Stop below this health percentage",
+      "label": "Pause buffing below this health percentage; keep recovery and combat active",
       "type": "number",
       "min": 1,
       "max": 100
     },
     {
       "key": "stop_mana",
-      "label": "Stop below this mana percentage when casting",
+      "label": "Pause buffing below this mana percentage",
       "type": "number",
       "min": 0,
       "max": 100

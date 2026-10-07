@@ -58,6 +58,21 @@ bool FACEVTAdaptersTest::RunTest(const FString&)
     TestEqual(TEXT("Dotnet named group numbered after unnamed"),Captures.FindRef(TEXT("2")),FString(TEXT("A")));
     TestTrue(TEXT("Dotnet apostrophe named captures translate"),ACEVTRegex::Match(TEXT("(?'speaker'A)(B)"),TEXT("AB"),Captures,Error));
     TestEqual(TEXT("Translated named capture preserves name"),Captures.FindRef(TEXT("speaker")),FString(TEXT("A")));
+    for(int I=0;I<600;++I)
+    {
+        const FString Pattern=FString::Printf(TEXT("^(?<value>Item%d)$"),I);
+        TestTrue(TEXT("Bounded predicate cache matches changing text"),ACEVTRegex::Test(Pattern,FString::Printf(TEXT("Item%d"),I),Error));
+    }
+    TestTrue(TEXT("Evicted pattern recompiles with capture mapping intact"),ACEVTRegex::Match(TEXT("(?'speaker'A)(B)"),TEXT("AB"),Captures,Error));
+    TestEqual(TEXT("Cached captures retain .NET numbering"),Captures.FindRef(TEXT("1")),FString(TEXT("B")));
+    for(int I=0;I<2;++I)
+    {
+        TestFalse(TEXT("Predicate negative results stay negative"),ACEVTRegex::Test(TEXT("^Fire$"),TEXT("Cold"),Error));
+        TestTrue(TEXT("No-match is not an error"),Error.IsEmpty());
+        TestTrue(TEXT("Changing text cannot reuse another input's result"),ACEVTRegex::Test(TEXT("^Fire$"),TEXT("Fire"),Error));
+        TestFalse(TEXT("Invalid predicates never become cached no-match results"),ACEVTRegex::Test(TEXT("["),TEXT("Fire"),Error));
+        TestFalse(TEXT("Invalid pattern keeps its diagnostic"),Error.IsEmpty());
+    }
     TestFalse(TEXT("Unsupported extended mode rejected during import"),ACEVTRegex::Validate(TEXT("(?x)a # comment ("),Error));
     TestFalse(TEXT("Capture limit enforced on import"),ACEVTRegex::Validate(FString::ChrN(33,'(')+FString::ChrN(33,')'),Error));
     const double Start=FPlatformTime::Seconds();
@@ -92,7 +107,7 @@ bool FACEVTAdaptersTest::RunTest(const FString&)
     TestTrue(TEXT("Give executes"),VM.Step(S,Give,Intent,Error));if(!Intent){AddError(Error);return false;}
     TestEqual(TEXT("Normal give intent"),Intent->GetStringField(TEXT("action")),FString(TEXT("give")));TestEqual(TEXT("Give one item"),Intent->GetNumberField(TEXT("amount")),1.);
     VM.Step(S,Give,Intent,Error);TestFalse(TEXT("Give not repeated while waiting"),Intent->HasField(TEXT("action")));
-    S->SetNumberField(TEXT("action_serial"),1);S->SetNumberField(TEXT("action_error"),3);VM.Step(S,Give,Intent,Error);TestEqual(TEXT("Rejected give stops"),Intent->GetStringField(TEXT("action")),FString(TEXT("stop")));
+    S->SetNumberField(TEXT("action_serial"),1);S->SetNumberField(TEXT("action_error"),3);VM.Step(S,Give,Intent,Error);TestEqual(TEXT("Rejected give pauses the meta"),Intent->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
     S->SetNumberField(TEXT("action_error"),0);
     auto Use=Compile(TEXT("/vt mexec actiontryuseitem[wobjectfindnearestbyobjectclass[37]]"));TestEqual(TEXT("World expression compiles"),Issues.Num(),0);
     FACEPluginVM U;U.Load(Script,Error);U.Step(S,Use,Intent,Error);TestEqual(TEXT("Expression resolves NPC and uses it"),Intent->GetNumberField(TEXT("item")),10.);
@@ -158,7 +173,7 @@ bool FACEVTAdaptersTest::RunTest(const FString&)
         if(Intent)TestEqual(TEXT("Pending item processed before next corpse"),Intent->GetStringField(TEXT("action")),Action);
         TestTrue(TEXT("Wait for server completion"),Loot.Step(Snap,Profile,Intent,Error));if(Intent)TestFalse(TEXT("No duplicate destructive request"),Intent->HasField(TEXT("action")));
         Snap->SetNumberField(TEXT("time"),120);TestTrue(TEXT("Unchanged item timeout handled"),Loot.Step(Snap,Profile,Intent,Error));
-        if(Intent)TestEqual(TEXT("Timeout stops instead of selling again"),Intent->GetStringField(TEXT("action")),FString(TEXT("stop")));
+        if(Intent)TestEqual(TEXT("Timeout pauses its activity instead of selling again"),Intent->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
     }
     for(int Type:{2000,2001,2003,2005,2006,2008,17})
     {
@@ -239,7 +254,7 @@ bool FACEVTAdaptersTest::RunTest(const FString&)
         auto Snap=AdapterJSON(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"mana":100,"max_mana":100,"action_serial":0,"spells":[{"id":20,"name":"Strength Self","category":1,"power":50,"skill":300,"known":true,"self_buff":true}]})"));
         Buff.Step(Snap,Profile,Intent,Error);if(Intent)TestEqual(TEXT("Initial buff attempt"),Intent->GetStringField(TEXT("action")),FString(TEXT("cast")));
         Snap->SetNumberField(TEXT("action_serial"),1);Snap->SetNumberField(TEXT("last_spell"),20);Snap->SetNumberField(TEXT("action_error"),1024);Snap->SetNumberField(TEXT("time"),105);
-        Buff.Step(Snap,Profile,Intent,Error);if(Intent)TestEqual(TEXT("No supplied buff tier stops with restocking status"),Intent->GetStringField(TEXT("action")),FString(TEXT("stop")));
+        Buff.Step(Snap,Profile,Intent,Error);if(Intent)TestFalse(TEXT("Unavailable buff tier does not stop the scheduler"),Intent->HasField(TEXT("action")));
     }
     {
         FACEPluginVM Follow;Follow.Load(Script,Error);
@@ -252,13 +267,13 @@ bool FACEVTAdaptersTest::RunTest(const FString&)
     }
     {
         FACEPluginVM RouteDialog;RouteDialog.Load(Script,Error);
-        auto Profile=AdapterJSON(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","navigation":true,"route":[{"kind":"use","legacy":true,"object_id":10},{"kind":"command","legacy":true,"command":{"op":"confirm","accept":true}},{"kind":"walk","cell":2139029505,"x":20,"y":0,"z":12}]})"));
+        auto Profile=AdapterJSON(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","navigation":true,"route":[{"kind":"use","legacy":true,"object_id":10,"cell":2139029505,"x":0,"y":0,"z":12},{"kind":"command","legacy":true,"cell":2139029505,"x":0,"y":0,"z":12,"command":{"op":"confirm","accept":true}},{"kind":"walk","cell":2139029505,"x":20,"y":0,"z":12}]})"));
         auto Snap=AdapterJSON(TEXT(R"({"time":100,"health":100,"max_health":100,"mana":100,"max_mana":100,"action_serial":0,"position":{"cell":2139029505,"x":0,"y":0,"z":12},"route_objects":[{"id":10,"name":"Gate","distance":1}]})"));
-        RouteDialog.Step(Snap,Profile,Intent,Error);if(Intent)TestEqual(TEXT("Route first uses object"),Intent->GetStringField(TEXT("action")),FString(TEXT("use_world")));
+        TestTrue(*Error,RouteDialog.Step(Snap,Profile,Intent,Error));if(Intent)TestEqual(TEXT("Route first uses object"),Intent->GetStringField(TEXT("action")),FString(TEXT("use_world")));
         Snap->SetBoolField(TEXT("busy"),true);Snap->SetArrayField(TEXT("confirmations"),{MakeShared<FJsonValueObject>(AdapterJSON(TEXT(R"({"type":5,"context":123})")))});
-        RouteDialog.Step(Snap,Profile,Intent,Error);if(Intent)TestEqual(TEXT("Next NAV confirmation can unblock pending use"),Intent->GetStringField(TEXT("action")),FString(TEXT("confirm")));
+        TestTrue(*Error,RouteDialog.Step(Snap,Profile,Intent,Error));if(Intent)TestEqual(TEXT("Next NAV confirmation can unblock pending use"),Intent->GetStringField(TEXT("action")),FString(TEXT("confirm")));
         Snap->SetBoolField(TEXT("busy"),false);Snap->SetArrayField(TEXT("confirmations"),{});Snap->SetNumberField(TEXT("action_serial"),1);
-        RouteDialog.Step(Snap,Profile,Intent,Error);RouteDialog.Step(Snap,Profile,Intent,Error);
+        TestTrue(*Error,RouteDialog.Step(Snap,Profile,Intent,Error));TestTrue(*Error,RouteDialog.Step(Snap,Profile,Intent,Error));
         if(Intent)TestEqual(TEXT("Completed confirmation is not issued twice"),Intent->GetStringField(TEXT("action")),FString(TEXT("move")));
     }
     return true;

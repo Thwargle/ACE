@@ -12,7 +12,9 @@ One-to-one mapping from retail client classes to Unreal (ACEClient plugin).
 4. **Default visibility** for classic gameplay hides on-demand floaties; only always-on chrome paints.
 5. **`UACEUICanvasWidget`** paints LayoutDesc at **1:1** pixel size. Floaties edge-anchor on
    wide/tall windows; vitals use clipped retail meter textures.
-6. **`AACEPlayerController`** prefers the DAT canvas (`bUseDatDrivenHud`); `UACEGameHUDWidget` is fallback only.
+6. **`AACEPlayerController`** uses the DAT canvas (`bUseDatDrivenHud` defaults on). A failed
+   retail layout reports a data error rather than silently substituting a custom HUD.
+   `UACEGameHUDWidget` is reachable only through an explicit development opt-out.
 
 Regenerate resolved layouts:
 

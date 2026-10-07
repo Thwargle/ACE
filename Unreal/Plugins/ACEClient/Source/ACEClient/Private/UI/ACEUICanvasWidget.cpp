@@ -780,7 +780,7 @@ void UACEUICanvasWidget::CancelPointerGestures()
 {
 	ResetPointerOwnership(); bVRPointerDown = false;
 	if (GameplayBinder) GameplayBinder->CancelPointerGestures();
-	if (CharGenBinder) CharGenBinder->MouseUp();
+	if (auto* Appearance=GetAppearanceInputBinder()) Appearance->MouseUp();
 	if (Manager) Manager->CancelPointerCapture();
 }
 
@@ -789,7 +789,7 @@ FReply UACEUICanvasWidget::NativeOnMouseMove(const FGeometry& InGeometry, const 
 	if (PressedPointer != INDEX_NONE && (PressedPointer != InMouseEvent.GetPointerIndex() || PressedUser != InMouseEvent.GetUserIndex())) return FReply::Unhandled();
 	const FVector2D Local = InGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition());
 	const FVector2D ViewportSize = InGeometry.GetLocalSize();
-	if(CharGenBinder) CharGenBinder->MouseMove(ViewportToLayout(Local));
+	if(auto* Appearance=GetAppearanceInputBinder()) Appearance->MouseMove(ViewportToLayout(Local));
 	if (GameplayBinder)
 	{
 		GameplayBinder->UpdateInventoryDrag(Local);
@@ -896,7 +896,7 @@ FReply UACEUICanvasWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, 
 		}
 	}
 	const FVector2D LayoutPos = ViewportToLayout(Local);
-	if(CharGenBinder && bLeft && CharGenBinder->MouseDown(LayoutPos)) return FReply::Handled().SetUserFocus(TakeWidget()).CaptureMouse(TakeWidget());
+	if(auto* Appearance=GetAppearanceInputBinder(); Appearance && bLeft && Appearance->MouseDown(LayoutPos)) return FReply::Handled().SetUserFocus(TakeWidget()).CaptureMouse(TakeWidget());
 	const FVector2D ViewportSize = InGeometry.GetLocalSize();
 	if (CharSelectBinder && bLeft)
 	{
@@ -964,7 +964,7 @@ FReply UACEUICanvasWidget::NativeOnMouseButtonUp(const FGeometry& InGeometry, co
 {
 	if (PressedPointer != INDEX_NONE && (PressedPointer != InMouseEvent.GetPointerIndex() || PressedUser != InMouseEvent.GetUserIndex())) return FReply::Unhandled();
 	PressedPointer = PressedUser = INDEX_NONE;
-	if(CharGenBinder) CharGenBinder->MouseUp();
+	if(auto* Appearance=GetAppearanceInputBinder()) Appearance->MouseUp();
 	const FVector2D Local = InGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition());
 	if (GameplayBinder && InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
 	{
@@ -1001,7 +1001,7 @@ FReply UACEUICanvasWidget::NativeOnMouseButtonUp(const FGeometry& InGeometry, co
 
 FReply UACEUICanvasWidget::NativeOnMouseWheel(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
-	if(CharGenBinder && CharGenBinder->MouseWheel(ViewportToLayout(InGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition())),InMouseEvent.GetWheelDelta())) return FReply::Handled();
+	if(auto* Appearance=GetAppearanceInputBinder(); Appearance && Appearance->MouseWheel(ViewportToLayout(InGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition())),InMouseEvent.GetWheelDelta())) return FReply::Handled();
 	if (GameplayBinder)
 	{
 		const FVector2D Local = InGeometry.AbsoluteToLocal(InMouseEvent.GetScreenSpacePosition());
@@ -1115,7 +1115,7 @@ FReply UACEUICanvasWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, c
 FReply UACEUICanvasWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
 	if (CharSelectBinder && CharSelectBinder->KeyDown(InKeyEvent)) return FReply::Handled();
-	if(CharGenBinder && CharGenBinder->KeyDown(InKeyEvent)) return FReply::Handled();
+	if(auto* Appearance=GetAppearanceInputBinder(); Appearance && Appearance->KeyDown(InKeyEvent)) return FReply::Handled();
 	if (GameplayBinder && ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("Chat")), FInputChord(InKeyEvent.GetKey(),InKeyEvent.IsShiftDown(),InKeyEvent.IsControlDown(),InKeyEvent.IsAltDown(),InKeyEvent.IsCommandDown()))
 		&& !InKeyEvent.IsRepeat()
 		&& !ACEInputBindings::IsEditing())
@@ -1133,6 +1133,6 @@ FReply UACEUICanvasWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FK
 
 FReply UACEUICanvasWidget::NativeOnKeyChar(const FGeometry& Geometry,const FCharacterEvent& Event)
 {
-    if(CharGenBinder && CharGenBinder->KeyChar(Event))return FReply::Handled();
+    if(auto* Appearance=GetAppearanceInputBinder(); Appearance && Appearance->KeyChar(Event))return FReply::Handled();
     return Super::NativeOnKeyChar(Geometry,Event);
 }

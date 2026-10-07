@@ -237,7 +237,7 @@ protected:
 	UPROPERTY() TObjectPtr<class UACEUICharGenBinder> DatCharGenBinder = nullptr;
 	void ShowCharacterCreationUI();
 
-	/** Prefer UACEUICanvasWidget + UIFlow; fall back to hardcoded UACEGameHUDWidget when layout load fails. */
+	/** Use the retail DAT interface. Disable only to explicitly opt into the development HUD. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ACE|UI")
 	bool bUseDatDrivenHud = true;
 

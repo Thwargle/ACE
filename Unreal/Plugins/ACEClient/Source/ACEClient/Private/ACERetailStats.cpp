@@ -49,6 +49,13 @@ void UACEDatSubsystem::RecomputePlayerStats(FACEPlayerVitals& V, const TArray<FA
 			else if (E.StatModType & 0x8000) { Add += E.StatModValue; }
 		}
 	};
+	V.EffectiveAllegianceRank = -1;
+	if (const int32* Rank = V.StatQualityInts.Find(30); Rank && *Rank >= 0)
+	{
+		float Mul, Add;
+		Modifiers(0x4, 30, Mul, Add); // Int quality, AllegianceRank.
+		V.EffectiveAllegianceRank = FMath::TruncToInt(*Rank * Mul + Add);
+	}
 	Modifiers(1, 1, V.StrengthEnchantMul, V.StrengthEnchantAdd);
 	Modifiers(1, 2, V.EnduranceEnchantMul, V.EnduranceEnchantAdd);
 	Modifiers(1, 3, V.QuicknessEnchantMul, V.QuicknessEnchantAdd);

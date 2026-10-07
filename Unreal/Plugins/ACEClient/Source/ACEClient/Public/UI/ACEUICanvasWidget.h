@@ -60,6 +60,8 @@ public:
 	void SetCharSelectBinder(UACEUICharSelectBinder* InBinder);
 	void SetCharGenBinder(UACEUICharGenBinder* InBinder) { CharGenBinder=InBinder; SetIsFocusable(InBinder != nullptr); }
 	UACEUICharGenBinder* GetCharGenBinder() const { return CharGenBinder; }
+	void SetBarberBinder(UACEUICharGenBinder* InBinder) { BarberBinder=InBinder; }
+	UACEUICharGenBinder* GetAppearanceInputBinder() const { return BarberBinder?BarberBinder.Get():CharGenBinder.Get(); }
 	virtual FReply NativeOnKeyChar(const FGeometry& Geometry, const FCharacterEvent& Event) override;
 
 	UACEUIElementManager* GetManager() const { return Manager; }
@@ -125,6 +127,7 @@ private:
 	UPROPERTY()
 	TObjectPtr<UACEUICharSelectBinder> CharSelectBinder;
 	UPROPERTY() TObjectPtr<UACEUICharGenBinder> CharGenBinder;
+	UPROPERTY() TObjectPtr<UACEUICharGenBinder> BarberBinder;
 
 	UPROPERTY()
 	TObjectPtr<UCanvasPanel> RootCanvas;

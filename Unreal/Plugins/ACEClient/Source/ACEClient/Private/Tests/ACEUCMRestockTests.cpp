@@ -24,7 +24,7 @@ bool FACEUCMRestockTest::RunTest(const FString&)
     FACEPluginVM Relog;Relog.Load(Script,Error);S->SetNumberField(TEXT("vendor"),22);S->GetArrayField(TEXT("vendor_stock"))[0]->AsObject()->SetNumberField(TEXT("id"),33);
     S->GetArrayField(TEXT("inventory"))[0]->AsObject()->SetNumberField(TEXT("count"),8);Step(Relog);TestEqual(TEXT("New session uses new vendor GUID"),I->GetNumberField(TEXT("vendor")),22.);
     TestEqual(TEXT("New session uses new stock GUID"),I->GetNumberField(TEXT("item")),33.);
-    S->SetNumberField(TEXT("time"),117);Step(Relog);TestEqual(TEXT("Unconfirmed purchase stops rather than rebuying"),I->GetStringField(TEXT("action")),FString(TEXT("stop")));
+    S->SetNumberField(TEXT("time"),117);Step(Relog);TestEqual(TEXT("Unconfirmed purchase pauses its activity rather than rebuying"),I->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
     FACEPluginVM WrongServer;WrongServer.Load(Script,Error);S->SetStringField(TEXT("world_name"),TEXT("Other"));Step(WrongServer);TestFalse(TEXT("Profiles cannot buy on another server"),I->HasField(TEXT("action")));
     S->SetStringField(TEXT("world_name"),TEXT("Test"));P->SetBoolField(TEXT("vendor_restock"),false);FACEPluginVM Disabled;Disabled.Load(Script,Error);Step(Disabled);TestFalse(TEXT("Toggle disables buying"),I->HasField(TEXT("action")));
     {
@@ -44,14 +44,14 @@ bool FACEUCMRestockTest::RunTest(const FString&)
         Step(Redeem);TestEqual(TEXT("Restocking resumes after sale replication"),I->GetStringField(TEXT("action")),FString(TEXT("buy")));TestEqual(TEXT("Original missing quantity preserved"),I->GetNumberField(TEXT("count")),3.);
         Step(Redeem);TestFalse(TEXT("Purchase waits for inventory confirmation"),I->HasField(TEXT("action")));
         S->SetNumberField(TEXT("pyreals"),100);S->GetArrayField(TEXT("inventory"))[1]->AsObject()->SetNumberField(TEXT("count"),1);S->GetArrayField(TEXT("vendor_trade_notes"))[0]->AsObject()->SetNumberField(TEXT("count"),1);
-        FACEPluginVM Poor;Poor.Load(Script,Error);Step(Poor);TestEqual(TEXT("Insufficient combined funds do not liquidate notes pointlessly"),I->GetStringField(TEXT("action")),FString(TEXT("stop")));
+        FACEPluginVM Poor;Poor.Load(Script,Error);Step(Poor);TestEqual(TEXT("Insufficient combined funds do not liquidate notes pointlessly"),I->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
         S->GetArrayField(TEXT("vendor_trade_notes"))[0]->AsObject()->SetNumberField(TEXT("unit_value"),5000);
         FACEPluginVM Whole;Whole.Load(Script,Error);Step(Whole);TestEqual(TEXT("Whole note sells without splitting"),I->GetStringField(TEXT("action")),FString(TEXT("sell_note")));
         S->SetNumberField(TEXT("vendor"),99);Step(Whole);TestFalse(TEXT("Changing vendor cancels pending redemption"),I->HasField(TEXT("action")));S->SetNumberField(TEXT("vendor"),2);
         S->SetBoolField(TEXT("vendor_uses_pyreals"),false);FACEPluginVM Alternate;Alternate.Load(Script,Error);Step(Alternate);TestEqual(TEXT("Alternate currencies never sell notes"),I->GetStringField(TEXT("action")),FString(TEXT("buy")));
-        S->SetBoolField(TEXT("vendor_uses_pyreals"),true);FACEPluginVM Timeout;Timeout.Load(Script,Error);Step(Timeout);S->SetNumberField(TEXT("time"),120);Step(Timeout);TestEqual(TEXT("No confirmation stops instead of repeatedly selling notes"),I->GetStringField(TEXT("action")),FString(TEXT("stop")));
+        S->SetBoolField(TEXT("vendor_uses_pyreals"),true);FACEPluginVM Timeout;Timeout.Load(Script,Error);Step(Timeout);S->SetNumberField(TEXT("time"),120);Step(Timeout);TestEqual(TEXT("No confirmation pauses its activity instead of repeatedly selling notes"),I->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
         auto Rules=P->GetArrayField(TEXT("vendor_rules"));Rules.Add(MakeShared<FJsonValueObject>(RestockJSON(TEXT(R"({"server":"Test","vendor_name":"Arcanist","vendor_wcid":200,"item_name":"Trade Note","item_wcid":400,"quantity":10})"))));P->SetArrayField(TEXT("vendor_rules"),Rules);
-        FACEPluginVM Reserved;Reserved.Load(Script,Error);Step(Reserved);TestEqual(TEXT("Notes configured for restocking cannot be sold in a buy/sell loop"),I->GetStringField(TEXT("action")),FString(TEXT("stop")));
+        FACEPluginVM Reserved;Reserved.Load(Script,Error);Step(Reserved);TestEqual(TEXT("Notes configured for restocking cannot be sold in a buy/sell loop"),I->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
         S=SavedS;P=SavedP;
     }
     // Exemption bypasses supplies, not skill/known checks or server failures.

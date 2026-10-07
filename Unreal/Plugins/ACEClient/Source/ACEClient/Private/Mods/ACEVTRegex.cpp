@@ -53,7 +53,62 @@ static URegularExpression* Compile(const FString& Input,FString& Error,FString* 
     if(U_FAILURE(Status)){uregex_close(Regex);Error=TEXT("Cannot bound regex execution");return nullptr;}
     return Regex;
 }
+struct FCompiledPattern
+{
+    URegularExpression* Regex = nullptr;
+    FString Normalized;
+    uint64 Used = 0;
+    ~FCompiledPattern() { if (Regex) uregex_close(Regex); }
+};
+static URegularExpression* CachedClone(const FString& Pattern,FString& Error,FString* Normalized=nullptr)
+{
+    // Cache text-free templates. Every invocation gets its own matcher, so ICU
+    // never retains a pointer to a previous call's temporary UTF-16 input.
+    static thread_local TMap<FString,TSharedPtr<FCompiledPattern>> Cache;
+    static thread_local uint64 Clock=0;
+    auto Entry=Cache.FindRef(Pattern);
+    if(!Entry)
+    {
+        Entry=MakeShared<FCompiledPattern>();
+        Entry->Regex=Compile(Pattern,Error,&Entry->Normalized);if(!Entry->Regex)return nullptr;
+        if(Cache.Num()>=256)
+        {
+            FString Oldest;uint64 Age=MAX_uint64;
+            for(const auto& Pair:Cache)if(Pair.Value->Used<Age){Age=Pair.Value->Used;Oldest=Pair.Key;}
+            Cache.Remove(Oldest);
+        }
+        Cache.Add(Pattern,Entry);
+    }
+    Entry->Used=++Clock;if(Normalized)*Normalized=Entry->Normalized;
+    UErrorCode Status=U_ZERO_ERROR;
+    auto* Regex=uregex_clone(Entry->Regex,&Status);
+    if(U_FAILURE(Status)){Error=TEXT("Cannot clone bounded regex");return nullptr;}
+    // ICU clones the pattern/flags, not matcher limits.
+    uregex_setTimeLimit(Regex,2,&Status);uregex_setStackLimit(Regex,65536,&Status);
+    if(U_FAILURE(Status)){uregex_close(Regex);Error=TEXT("Cannot bound cloned regex execution");return nullptr;}
+    return Regex;
+}
 #endif
+bool Test(const FString& Pattern,const FString& Text,FString& Error)
+{
+    Error.Empty();
+    if(Text.Len()>4096||Pattern.Len()>8192){Error=TEXT("Regex input exceeds limit");return false;}
+#if UE_ENABLE_ICU
+    static thread_local TMap<FString,bool> Results;
+    const FString Key=FString::FromInt(Pattern.Len())+TEXT(":")+Pattern+Text;
+    if(const bool* Found=Results.Find(Key))return *Found;
+    auto* Regex=CachedClone(Pattern,Error);if(!Regex)return false;
+    const auto Utf16=StringCast<UTF16CHAR>(*Text,Text.Len());UErrorCode Status=U_ZERO_ERROR;
+    uregex_setText(Regex,reinterpret_cast<const UChar*>(Utf16.Get()),Utf16.Length(),&Status);
+    const bool Found=uregex_find(Regex,0,&Status)!=0;
+    uregex_close(Regex);
+    if(U_FAILURE(Status)){Error=FString::Printf(TEXT("Regex failed within its work limit: %s"),UTF8_TO_TCHAR(u_errorName(Status)));return false;}
+    if(Results.Num()>=512)Results.Empty();
+    Results.Add(Key,Found);return Found;
+#else
+    Error=TEXT("This build lacks ICU regex support");return false;
+#endif
+}
 bool Validate(const FString& Pattern,FString& Error)
 {
     Error.Empty();
@@ -68,7 +123,7 @@ bool Match(const FString& Pattern,const FString& Text,TMap<FString,FString>& Cap
 {
     Captures.Empty();Error.Empty();if(Text.Len()>4096){Error=TEXT("Regex input exceeds 4096 characters");return false;}
 #if UE_ENABLE_ICU
-    FString Normalized;auto* Regex=Compile(Pattern,Error,&Normalized);if(!Regex)return false;
+    FString Normalized;auto* Regex=CachedClone(Pattern,Error,&Normalized);if(!Regex)return false;
     const auto Utf16=StringCast<UTF16CHAR>(*Text,Text.Len());UErrorCode Status=U_ZERO_ERROR;
     uregex_setText(Regex,reinterpret_cast<const UChar*>(Utf16.Get()),Utf16.Length(),&Status);
     const bool Found=uregex_find(Regex,0,&Status)!=0;

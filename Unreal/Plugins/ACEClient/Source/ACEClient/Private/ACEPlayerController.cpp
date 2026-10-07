@@ -4305,8 +4305,9 @@ void AACEPlayerController::ShowGameHUD()
 
 	DestroyCharacterSelectUI();
 
-	if (bUseDatDrivenHud && Client)
+	if (bUseDatDrivenHud)
 	{
+		if (!Client) return; // Wait for initialization; never substitute the development HUD.
 		// Portal transit only hides the HUD. Reinitializing its binder here resets
 		// the selected panel, inventory position, and chat buffers.
 		if (DatCanvasWidget && DatGameplayBinder)
@@ -4361,6 +4362,9 @@ void AACEPlayerController::ShowGameHUD()
 			EnsureRetailMouseCursor();
 			return;
 		}
+		// A failed retail layout must not silently substitute a different UI.
+		FailWorldEntry(TEXT("Cannot load the retail gameplay interface. Check Game files and repair or reinstall the client, then log in again."));
+		return;
 	}
 
 	if (!GameHUDWidget)
@@ -7063,10 +7067,13 @@ void AACEPlayerController::BeginUseApproach(int32 TargetGuid, float DistanceAc, 
 			// ItemHolder::UseObject sends Use before movement. This gives the
 			// server a chance to reject the interaction or supply MoveTo distance,
 			// charge limit and target; pre-walking used to bypass those rules.
+			// MoveToState and Use share the ordered weenie queue. Install the
+			// current pose before serializing that movement event; the separate
+			// autonomous-position queue cannot establish ordering ahead of Use.
+			if (bHavePredictedPose) Client->SetReportedPosition(PredictedPose);
 			Client->SendMovementEx(0.f, 0.f, 0.f, true, false, true);
 			ForwardSent = RightSent = TurnSent = 0.f;
 			bWasMoving = false;
-			if (bHavePredictedPose) Client->SetReportedPosition(PredictedPose);
 			Client->FlushAutonomousPosition(true);
 			bAwaitingUseDone = true;
 			ApproachUseSendCount = 1;

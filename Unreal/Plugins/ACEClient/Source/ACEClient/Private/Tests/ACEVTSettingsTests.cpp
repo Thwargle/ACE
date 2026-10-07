@@ -117,9 +117,9 @@ bool FACEVTSettingsTest::RunTest(const FString&)
         Confirm(102);TestEqual(TEXT("All confirmed debuffs advance to damage"),Step(VM,S,B)->GetNumberField(TEXT("spell")),20.);
         S->SetNumberField(TEXT("time"),216);TestEqual(TEXT("Precast threshold refreshes debuff"),Step(VM,S,B)->GetNumberField(TEXT("spell")),21.);
         S->SetNumberField(TEXT("time"),100);S->SetArrayField(TEXT("debuffs"),{});FACEPluginVM Resists;Resists.Load(Script,Error);Step(Resists,S,B);
-        for(int Attempt=1;Attempt<=3;++Attempt){S->SetNumberField(TEXT("debuff_revision"),Attempt);S->SetNumberField(TEXT("debuff_target"),100);S->SetNumberField(TEXT("debuff_spell"),21);auto I=Step(Resists,S,B);TestEqual(TEXT("Resisted debuff retries are bounded"),I->GetStringField(TEXT("action")),Attempt<3?FString(TEXT("cast")):FString(TEXT("stop")));}
+        for(int Attempt=1;Attempt<=3;++Attempt){S->SetNumberField(TEXT("debuff_revision"),Attempt);S->SetNumberField(TEXT("debuff_target"),100);S->SetNumberField(TEXT("debuff_spell"),21);auto I=Step(Resists,S,B);TestEqual(TEXT("Resisted debuff retries are bounded"),I->GetStringField(TEXT("action")),Attempt<3?FString(TEXT("cast")):FString(TEXT("activity_failed")));}
         B->SetBoolField(TEXT("debuff_fallback"),true);S->SetArrayField(TEXT("spells"),{S->GetArrayField(TEXT("spells"))[0]});FACEPluginVM Fallback;Fallback.Load(Script,Error);TestEqual(TEXT("Explicit fallback permits damage with unavailable debuffs"),Step(Fallback,S,B)->GetNumberField(TEXT("spell")),20.);
-        B->SetBoolField(TEXT("debuff_fallback"),false);FACEPluginVM Strict;Strict.Load(Script,Error);TestEqual(TEXT("Strict debuff policy reports missing spells"),Step(Strict,S,B)->GetStringField(TEXT("action")),FString(TEXT("stop")));
+        B->SetBoolField(TEXT("debuff_fallback"),false);FACEPluginVM Strict;Strict.Load(Script,Error);TestEqual(TEXT("Strict debuff policy reports missing spells"),Step(Strict,S,B)->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
     }
     {
         auto D=SettingsJSON(TEXT(R"({"format":"usd","tables":[{"name":"AssistItems","columns":["Object","Type"],"rows":[["[All Peas]",11]]}]})"));
@@ -133,7 +133,7 @@ bool FACEVTSettingsTest::RunTest(const FString&)
         S->SetNumberField(TEXT("combat_mode"),1);auto I=Step(VM,S,B);TestEqual(TEXT("Tool applied through ordinary item action"),I->GetStringField(TEXT("action")),FString(TEXT("apply_item")));TestEqual(TEXT("Tool GUID used"),I->GetNumberField(TEXT("item")),20.);TestEqual(TEXT("Pea GUID targeted"),I->GetNumberField(TEXT("target")),21.);
         S->SetNumberField(TEXT("action_serial"),1);TestFalse(TEXT("UseDone without component increase cannot confirm split"),Step(VM,S,B)->HasField(TEXT("action")));
         S->GetArrayField(TEXT("inventory"))[2]->AsObject()->SetNumberField(TEXT("count"),50);TestFalse(TEXT("Component increase completes split without repeat"),Step(VM,S,B)->HasField(TEXT("action")));
-        S->GetArrayField(TEXT("inventory"))[2]->AsObject()->SetNumberField(TEXT("count"),0);FACEPluginVM Timeout;Timeout.Load(Script,Error);Step(Timeout,S,B);S->SetNumberField(TEXT("time"),116);TestEqual(TEXT("Unconfirmed split stops rather than consuming more peas"),Step(Timeout,S,B)->GetStringField(TEXT("action")),FString(TEXT("stop")));
+        S->GetArrayField(TEXT("inventory"))[2]->AsObject()->SetNumberField(TEXT("count"),0);FACEPluginVM Timeout;Timeout.Load(Script,Error);Step(Timeout,S,B);S->SetNumberField(TEXT("time"),116);TestEqual(TEXT("Unconfirmed split pauses its activity rather than consuming more peas"),Step(Timeout,S,B)->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
         B->SetBoolField(TEXT("split_peas"),false);FACEPluginVM Disabled;Disabled.Load(Script,Error);TestFalse(TEXT("SplitPeas off preserves all supplies"),Step(Disabled,S,B)->HasField(TEXT("action")));
         B->SetBoolField(TEXT("split_peas"),true);B->SetArrayField(TEXT("assist_items"),{MakeShared<FJsonValueObject>(SettingsJSON(TEXT(R"({"name":"Black Opal","type":9})")))});FACEPluginVM Named;Named.Load(Script,Error);TestFalse(TEXT("Specific component excludes other pea recipes"),Step(Named,S,B)->HasField(TEXT("action")));
     }
@@ -259,7 +259,14 @@ bool FACEVTSettingsTest::RunTest(const FString&)
         S->SetNumberField(TEXT("action_serial"),1);TestFalse(TEXT("UseDone alone does not repeat a pet summon"),Step(Pet,S,Profile)->HasField(TEXT("action")));
         S->SetObjectField(TEXT("cooldowns"),SettingsJSON(TEXT(R"({"213":40})")));TestFalse(TEXT("Server cooldown confirms and blocks repeated summoning"),Step(Pet,S,Profile)->HasField(TEXT("action")));
         S->SetObjectField(TEXT("cooldowns"),MakeShared<FJsonObject>());S->SetBoolField(TEXT("owned_pet"),true);TestFalse(TEXT("Living pet is not dismissed by automation"),Choose()->HasField(TEXT("action")));
-        S->SetBoolField(TEXT("owned_pet"),false);S->SetNumberField(TEXT("combat_mode"),8);TestEqual(TEXT("Pet enters peace mode before use"),Choose()->GetNumberField(TEXT("mode")),1.);S->SetNumberField(TEXT("combat_mode"),1);
+        S->SetBoolField(TEXT("owned_pet"),false);
+        for(int32 Mode:{1,2,4,8})
+        {
+            S->SetNumberField(TEXT("combat_mode"),Mode);const auto Summon=Choose();
+            TestEqual(TEXT("Pet use preserves peace/melee/missile/magic stance"),Summon->GetStringField(TEXT("action")),FString(TEXT("use_item")));
+            TestEqual(TEXT("Combat summon still selects the best eligible essence"),Summon->GetNumberField(TEXT("item")),20.);
+        }
+        S->SetNumberField(TEXT("combat_mode"),1);
         Fire->SetNumberField(TEXT("structure"),0);TestEqual(TEXT("Empty essence falls back to charged essence"),Choose()->GetNumberField(TEXT("item")),21.);
         Cold->GetObjectField(TEXT("int_properties"))->SetNumberField(TEXT("362"),1);TestFalse(TEXT("Wrong mastery excluded"),Choose()->HasField(TEXT("action")));
         Cold->GetObjectField(TEXT("int_properties"))->RemoveField(TEXT("362"));Cold->GetObjectField(TEXT("int_properties"))->SetNumberField(TEXT("368"),54);TestFalse(TEXT("Skill specialization requirement is a skill ID"),Choose()->HasField(TEXT("action")));
@@ -268,7 +275,7 @@ bool FACEVTSettingsTest::RunTest(const FString&)
         S->GetArrayField(TEXT("targets"))[1]->AsObject()->SetBoolField(TEXT("line_of_sight"),false);TestFalse(TEXT("Wall-hidden monster does not satisfy density"),Choose()->HasField(TEXT("action")));S->GetArrayField(TEXT("targets"))[1]->AsObject()->SetBoolField(TEXT("line_of_sight"),true);
         Profile->SetNumberField(TEXT("pet_range_mode"),0);TestFalse(TEXT("Attack-distance range respected"),Choose()->HasField(TEXT("action")));Profile->SetNumberField(TEXT("pet_range_mode"),1);
         Profile->SetBoolField(TEXT("summon_pets"),false);TestFalse(TEXT("Summoning disabled"),Choose()->HasField(TEXT("action")));Profile->SetBoolField(TEXT("summon_pets"),true);
-        FACEPluginVM Timeout;Timeout.Load(Script,Error);Step(Timeout,S,Profile);S->SetNumberField(TEXT("time"),116);TestEqual(TEXT("Unconfirmed summon stops instead of consuming repeatedly"),Step(Timeout,S,Profile)->GetStringField(TEXT("action")),FString(TEXT("stop")));
+        FACEPluginVM Timeout;Timeout.Load(Script,Error);Step(Timeout,S,Profile);S->SetNumberField(TEXT("time"),116);TestEqual(TEXT("Unconfirmed summon pauses its activity instead of consuming repeatedly"),Step(Timeout,S,Profile)->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
     }
     {
         TArray<FString> LocalIssues;auto Doc=SettingsJSON(TEXT(R"({"format":"usd","tables":[{"name":"Settings","columns":["Setting","Value"],"rows":[["BuffProfile_Prots",1],["BuffProfile-Prots","BPS"],["BuffProfile_Banes",3]]}]})"));

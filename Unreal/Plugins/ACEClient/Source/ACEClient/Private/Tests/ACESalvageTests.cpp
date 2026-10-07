@@ -202,11 +202,14 @@ bool FACESalvageTest::RunTest(const FString&)
     Binder->ShowSalvagePanel(200);
     TestTrue(TEXT("Main pack works without container metadata on the player"),Binder->CanAddItemToSalvageQueue(Session.PlayerGuid));
     Draw(TEXT("MainPackBeforeSalvageDrop"));
-    Binder->InvDragGuid=Session.PlayerGuid;Binder->InvDragSourcePack=Session.PlayerGuid;
+    const auto MainPack = Manager->FindElementByName(TEXT("Inv_MainPackSlot"));
+    if (!TestTrue(TEXT("Main pack has authored hit area"), MainPack.IsValid())) return false;
+    Binder->TryBeginInventoryDrag(Canvas->LayoutToViewport(FVector2D(MainPack->GetScreenOrigin()) + FVector2D(MainPack->Width, MainPack->Height) * .5));
+    TestEqual(TEXT("Dragging main pack selects player inventory, never first side pack"), Binder->InvDragGuid, Session.PlayerGuid);
     Binder->bInvDragPending=true;Binder->bInvDragActive=true;
     Binder->TryFinishInventoryDrag(Canvas->LayoutToViewport(FVector2D(List->GetScreenOrigin())+FVector2D(15,15)));
     TestTrue(TEXT("Main pack drag actually dispatches to salvage before player move guard"),Binder->SalvageQueueGuids.Contains(1000));
-    TestTrue(TEXT("Main pack salvage includes eligible nested contents"),Binder->SalvageQueueGuids.Contains(2003));
+    TestFalse(TEXT("Main pack salvage excludes side-pack contents like retail itemsList"),Binder->SalvageQueueGuids.Contains(2003));
     TestFalse(TEXT("Bulk salvage cannot queue the player"),Binder->SalvageQueueGuids.Contains(Session.PlayerGuid));
     TestFalse(TEXT("Bulk salvage still excludes equipped items"),Binder->SalvageQueueGuids.Contains(1003));
     TestFalse(TEXT("Bulk salvage still excludes retained items"),Binder->SalvageQueueGuids.Contains(1002));

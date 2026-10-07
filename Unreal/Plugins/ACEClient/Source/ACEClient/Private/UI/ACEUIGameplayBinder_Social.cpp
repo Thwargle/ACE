@@ -2,6 +2,7 @@
 #include "UI/ACERetailTextBlock.h"
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACERetailObjectNames.h"
+#include "UI/ACERetailAllegianceTitle.h"
 #include "ACESession.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
@@ -61,11 +62,16 @@ namespace
 			&& !(Item.ObjectDescriptionFlags & ACEObjectDescFlag::Retained);
 	}
 
-	// Pack item queries intentionally omit nested packs. Salvage recursively adds
-	// their contents, so retain container entries here and guard cycles in callers.
+	// Retail GetContainedItemsList is _itemsList, separate from _containersList.
+	// A main-pack drop must not traverse every backpack carried by the player.
 	bool GetSalvageChildren(const FACESession& Session, const FACEWorldObject& Item, TArray<int32>& Out)
 	{
 		Out.Reset();
+		if (Item.Guid == Session.GetPlayerGuid())
+		{
+			Session.GetPackItemGuids(Item.Guid, Out);
+			return !Out.IsEmpty();
+		}
 		bool bKnownNonempty = false;
 		if (const auto* Contents = Session.GetContainerContents(Item.Guid))
 		{
@@ -120,6 +126,7 @@ void UACEUIGameplayBinder::HandleSquelchChanged()
 		if (auto S=Client->GetSession();S.IsValid())
 			GlobalChatTypeFilter=(GlobalChatTypeFilter&0xffffffff00000000ull)|uint32(~S->GetGlobalSquelchMask());
 	RefreshSquelchOverlays();
+	if (bChatTargetPopupOpen) RefreshChatTargetPopup();
 }
 
 void UACEUIGameplayBinder::HandleSquelchNameCommitted(const FText& Text, ETextCommit::Type CommitMethod)
@@ -191,12 +198,17 @@ void UACEUIGameplayBinder::EnsureSocialEntryBoxes()
 
 bool UACEUIGameplayBinder::ScrollFellowship(float WheelDelta,FVector2D CanvasLocalPos)
 {
-	if(ActivePanelPage!=TEXT("SocialPanel_Field") || ActiveSocialTab!=TEXT("FellowshipPage") || !Manager || !Canvas)return false;
-	const auto List=Manager->FindElementUnder(TEXT("FellowshipPage"),TEXT("FellowsListBox"));
+	const bool bFriends = ActiveSocialTab == TEXT("FriendsPage");
+	const bool bSquelch = ActiveSocialTab == TEXT("SquelchPage");
+	if(ActivePanelPage!=TEXT("SocialPanel_Field") || (!bFriends && !bSquelch && ActiveSocialTab!=TEXT("FellowshipPage")) || !Manager || !Canvas)return false;
+	const auto List=Manager->FindElementUnder(ActiveSocialTab,bFriends?TEXT("FriendsListBox"):bSquelch?TEXT("SquelchListBox"):TEXT("FellowsListBox"));
 	if(!List || !Canvas->IsElementExposedAt(List,CanvasLocalPos))return false;
 	const FVector2D P=Canvas->ViewportToLayout(CanvasLocalPos);const FIntPoint O=List->GetScreenOrigin();
 	if(P.X<O.X||P.Y<O.Y||P.X>=O.X+List->Width||P.Y>=O.Y+List->Height)return false;
-	FellowScrollOffset+=WheelDelta>0?-1:1;RefreshFellowshipOverlays();return true;
+	if (bFriends) { FriendScrollOffset+=WheelDelta>0?-1:1;RefreshFriendsOverlays(); }
+	else if (bSquelch) { SquelchScrollOffset+=WheelDelta>0?-1:1;RefreshSquelchOverlays(); }
+	else { FellowScrollOffset+=WheelDelta>0?-1:1;RefreshFellowshipOverlays(); }
+	return true;
 }
 
 void UACEUIGameplayBinder::HandleFellowshipNameChanged(const FText&)
@@ -405,158 +417,137 @@ void UACEUIGameplayBinder::RefreshSocialOverlays()
 
 void UACEUIGameplayBinder::RefreshAllegianceOverlays()
 {
-	auto Hide = [](UTextBlock* T)
-	{
-		if (T) { T->SetVisibility(ESlateVisibility::Collapsed); }
-	};
+	auto Hide = [](UTextBlock* T) { if (T) T->SetVisibility(ESlateVisibility::Collapsed); };
 	if (ActivePanelPage != TEXT("SocialPanel_Field") || ActiveSocialTab != TEXT("AllegiancePage")
 		|| !Client || !Manager || !Canvas)
 	{
-		Hide(AllegianceNameLabel);
-		Hide(MonarchNameLabel);
-		Hide(PatronNameLabel);
-		Hide(AllegianceXPLabel);
-		Hide(AllegiancePatronXPLabel);
-		for (UTextBlock* L : AllegianceCaptionLabels) { Hide(L); }
-		for (UTextBlock* R : VassalRows) { Hide(R); }
-		for (UTextBlock* R : VassalXPRows) { Hide(R); }
+		Hide(AllegianceNameLabel); Hide(MonarchNameLabel); Hide(PatronNameLabel);
+		Hide(AllegianceXPLabel); Hide(AllegiancePatronXPLabel);
+		for (UTextBlock* L : AllegianceCaptionLabels) Hide(L);
+		for (UTextBlock* L : VassalRows) Hide(L);
+		for (UTextBlock* L : VassalXPRows) Hide(L);
+		for (UTextBlock* L : VassalStatusRows) Hide(L);
+		for (const auto& Row : VassalRowElements) if (Row) Row->bVisible = false;
 		return;
 	}
 	EnsureOverlays();
-	constexpr int32 AllegianceZ = 100000;
-	const FACEAllegianceInfo Info = Client->GetAllegiance();
-	if (!Info.Vassals.ContainsByPredicate([&](const auto& V){return V.Guid==SelectedVassalGuid;})) SelectedVassalGuid=0;
-	for (const TCHAR* Name:{TEXT("SwearButton"),TEXT("BreakButton"),TEXT("KickButton")})
-		if (auto Button=Manager->FindElementUnder(TEXT("AllegiancePage"),Name))
-		{ Button->bActivatable=CanActivateAllegianceControl(Name); Button->bGhosted=!Button->bActivatable; }
-	auto Place = [&](TObjectPtr<UTextBlock>& Label, const FString& ElementName, const FString& Text, int32 Z)
+	if (!bLoadedSocialStrings && Canvas->GetResourceResolver())
+		if (const auto* Dat = Canvas->GetResourceResolver()->GetDatSubsystem())
+			bLoadedSocialStrings = SocialStrings.LoadStrings(Dat->GetDatDirectory(), 0x23000001);
+	const FACEAllegianceInfo& Info = Client->GetAllegiance();
+	if (!Info.Vassals.ContainsByPredicate([&](const auto& V) { return V.Guid == SelectedVassalGuid; })) SelectedVassalGuid = 0;
+	for (const TCHAR* Name : {TEXT("SwearButton"), TEXT("BreakButton"), TEXT("KickButton")})
+		if (auto Button = Manager->FindElementUnder(TEXT("AllegiancePage"), Name))
+		{ Button->bActivatable = CanActivateAllegianceControl(Name); Button->bGhosted = !Button->bActivatable; }
+
+	// gmAllegianceUI shows a combined Patron/Monarch field when directly sworn to
+	// the monarch, and no upstream fields for the monarch themself.
+	const bool bMonarch = Info.MonarchGuid != 0 && Info.MonarchGuid != Client->GetPlayerGuid();
+	const bool bPatron = Info.PatronGuid != 0 && Info.PatronGuid != Info.MonarchGuid;
+	const bool bDirectMonarch = bMonarch && Info.PatronGuid == Info.MonarchGuid;
+	for (const auto& Field : {TPair<const TCHAR*, bool>(TEXT("MonarchField"), bMonarch),
+		TPair<const TCHAR*, bool>(TEXT("PatronField"), bPatron)})
+		if (auto El = Manager->FindElementUnder(TEXT("AllegiancePage"), Field.Key))
+		{
+			El->bVisible = Field.Value;
+			El->bUseExplicitState = true;
+			El->DefaultState = (FString(Field.Key) == TEXT("MonarchField") ? Info.Monarch.bOnline : Info.Patron.bOnline) ? 1 : 13;
+		}
+	if (auto XP = Manager->FindElementUnder(TEXT("MonarchField"), TEXT("XPProducedFrame"))) XP->bVisible = bDirectMonarch;
+
+	auto Place = [&](TObjectPtr<UTextBlock>& Label, const TSharedPtr<FACEUIElement>& El, const FString& Text)
 	{
-		if (!Label && Canvas->WidgetTree)
-		{
-			Label = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
-		}
-		if (!Label)
-		{
-			return;
-		}
-		// Prefer AllegiancePage scope so fonts resolve from the DAT BaseElement.
-		TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(TEXT("AllegiancePage"), ElementName);
-		if (!El.IsValid())
-		{
-			El = Manager->FindElementByName(ElementName);
-		}
-		PlaceTextOnElement(Label, El, Text, 9, SocialWhite, AllegianceZ + Z);
+		if (!Label && Canvas->WidgetTree) Label = Canvas->WidgetTree->ConstructWidget<UACERetailTextBlock>();
+		PlaceTextOnElement(Label, El, Text, 9, SocialWhite, SocialOverlayZ + 10);
 	};
-	Place(AllegianceNameLabel, TEXT("AllegianceNameText"),
-		Info.bValid ? Info.AllegianceName : TEXT("No Allegiance"), 0);
-	Place(MonarchNameLabel, TEXT("MonarchName"),
-		Info.MonarchName.IsEmpty() ? TEXT("-") : Info.MonarchName, 1);
-	Place(PatronNameLabel, TEXT("PatronName"),
-		Info.PatronName.IsEmpty() ? TEXT("-") : Info.PatronName, 2);
-
-	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(TEXT("AllegiancePage"), TEXT("VassalsListBox"));
-	if (!ListEl.IsValid())
+	auto FullName = [](const FACEAllegianceMember& Member, const FString& Name)
 	{
-		ListEl = Manager->FindElementByName(TEXT("VassalsListBox"));
-	}
-	constexpr int32 RowH=18;
-	VassalVisibleRows=ListEl ? FMath::Max(1,ListEl->Height/RowH) : 1;
-	const int32 MaxOffset=FMath::Max(0,Info.Vassals.Num()-VassalVisibleRows);
-	VassalScrollOffset=FMath::Clamp(VassalScrollOffset,0,MaxOffset);
-	SyncDatScrollbar(Manager->FindElementUnder(TEXT("AllegiancePage"),TEXT("VassalsListBoxScrollbar")),
-		MaxOffset ? float(VassalScrollOffset)/MaxOffset : 0.f, Info.Vassals.IsEmpty() ? 1.f : FMath::Min(1.f,float(VassalVisibleRows)/Info.Vassals.Num()));
-	const int32 MaxRows=FMath::Min(VassalVisibleRows,Info.Vassals.Num());
-	while (VassalRows.Num() < MaxRows && Canvas->WidgetTree)
-	{
-		UTextBlock* Row = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
-		VassalRows.Add(Row);
-		VassalXPRows.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
-	}
-	VassalRowGuids.SetNum(VassalRows.Num());
-	for (int32 i = 0; i < VassalRows.Num(); ++i)
-	{
-		UTextBlock* Row = VassalRows[i];
-		if (!Row)
-		{
-			continue;
-		}
-		if (!ListEl.IsValid() || !Info.Vassals.IsValidIndex(i+VassalScrollOffset) || i>=VassalVisibleRows)
-		{
-			Row->SetVisibility(ESlateVisibility::Collapsed);
-			VassalRowGuids[i] = 0;
-			VassalXPRows[i]->SetVisibility(ESlateVisibility::Collapsed);
-			continue;
-		}
-		const FACEAllegianceMember& V = Info.Vassals[i+VassalScrollOffset];
-		VassalRowGuids[i] = V.Guid;
-		const bool bSel = (V.Guid != 0 && V.Guid == SelectedVassalGuid);
-		FString Line=FString::Printf(TEXT("%s (L%d)"),*V.Name,V.Level);
-		FACEDatFont Font;
-		if (Canvas->GetResourceResolver()->ResolveFont(0x40000000,Font)) Line=ACEDatText::Ellipsize(Font,Line,171);
-		const FLinearColor Color=bSel ? SocialGold : V.bOnline ? SocialWhite : SocialDim;
-		PlaceTextOnElement(Row,ListEl,Line,9,Color,AllegianceZ+10+i);
-		Canvas->PlaceWidgetAtElement(Row,ListEl,AllegianceZ+10+i,FMargin(4,i*RowH,ListEl->Width-175,ListEl->Height-(i+1)*RowH));
-		UTextBlock* XP=VassalXPRows[i];
-		PlaceTextOnElement(XP,ListEl,FText::AsNumber(V.CPTithed).ToString(),9,Color,AllegianceZ+10+i);
-		XP->SetJustification(ETextJustify::Right);
-		Canvas->PlaceWidgetAtElement(XP,ListEl,AllegianceZ+10+i,FMargin(179,i*RowH,4,ListEl->Height-(i+1)*RowH));
-
-	}
-
-	if (!AllegianceXPLabel && Canvas->WidgetTree)
-	{
-		AllegianceXPLabel = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
-	}
-	if (AllegianceXPLabel)
-	{
-		PlaceTextOnElement(AllegianceXPLabel, Manager->FindElementUnder(TEXT("MonarchField"),
-			TEXT("XPProduced")), FText::AsNumber(Info.SelfCPTithed).ToString(), 9, SocialWhite,
-			AllegianceZ + 3);
-	}
-	if (!AllegiancePatronXPLabel && Canvas->WidgetTree)
-	{
-		AllegiancePatronXPLabel =
-			Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
-	}
-	if (AllegiancePatronXPLabel)
-	{
-		PlaceTextOnElement(AllegiancePatronXPLabel, Manager->FindElementUnder(TEXT("PatronField"),
-			TEXT("XPProduced")), FText::AsNumber(Info.SelfCPTithed).ToString(), 9, SocialWhite,
-			AllegianceZ + 4);
-	}
-
-	// Player header + list captions. Retail fills these from code, not from the DAT.
-	struct FAllegianceCaption { const TCHAR* Element; FString Text; };
-	const int32 SelfLevel = Client->GetPlayerVitals().Level;
-	FACEWorldObject SelfObj;
-	const FString SelfName = Client->GetWorldObject(Client->GetPlayerGuid(), SelfObj)
-		? SelfObj.Name : FString(TEXT("You"));
-	const FAllegianceCaption Captions[] = {
-		{ TEXT("PlayerName"), FString::Printf(TEXT("%s (L%d)"), *SelfName, SelfLevel) },
-		{ TEXT("PlayerRank"), FString::Printf(TEXT("Rank %d"), Info.Rank) },
-		{ TEXT("PlayerFollowers"), FString::Printf(TEXT("%d followers"),
-			FMath::Max(0, Info.TotalMembers - 1)) },
-		{ TEXT("MonarchFollowers"), FString::Printf(TEXT("%d in allegiance"),
-			FMath::Max(0, Info.TotalMembers)) },
-		{ TEXT("VassalsListBoxLabel"), FString::Printf(TEXT("Vassals (%d)"), Info.Vassals.Num()) },
-		{ TEXT("VassalsXPProducedLabel"), FString(TEXT("XP Produced")) },
+		const FString Title = ACERetailAllegiance::Title(Member.Rank, Member.HeritageGroup, Member.Gender);
+		return Title.IsEmpty() ? Name : Title + TEXT(" ") + Name;
 	};
-	while (AllegianceCaptionLabels.Num() < UE_ARRAY_COUNT(Captions) && Canvas->WidgetTree)
+	auto XPText = [&](int32 Value)
 	{
-		AllegianceCaptionLabels.Add(
-			Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
+		return SocialStrings.FormatText(TEXT("ID_Allegiance_VassalExperiencePassedUp"),
+			{{TEXT("VALUE"), FText::AsNumber(Value).ToString()}});
+	};
+	Place(AllegianceNameLabel, Manager->FindElementUnder(TEXT("AllegiancePage"), TEXT("PlayerName")),
+		SocialStrings.FormatText(TEXT("ID_Allegiance_CharacterName"), {{TEXT("NAME"), Info.AllegianceName}}));
+	Place(MonarchNameLabel, Manager->FindElementUnder(TEXT("AllegiancePage"), TEXT("MonarchName")), FullName(Info.Monarch, Info.MonarchName));
+	Place(PatronNameLabel, Manager->FindElementUnder(TEXT("AllegiancePage"), TEXT("PatronName")), FullName(Info.Patron, Info.PatronName));
+	Place(AllegianceXPLabel, Manager->FindElementUnder(TEXT("MonarchField"), TEXT("XPProduced")), XPText(Info.SelfCPTithed));
+	Place(AllegiancePatronXPLabel, Manager->FindElementUnder(TEXT("PatronField"), TEXT("XPProduced")), XPText(Info.SelfCPTithed));
+
+	const auto& Vitals = Client->GetPlayerVitals();
+	const int32* QualityRank = Vitals.StatQualityInts.Find(30);
+	const int32 DisplayRank = Vitals.EffectiveAllegianceRank >= 0 ? Vitals.EffectiveAllegianceRank
+		: QualityRank && *QualityRank >= 0 ? *QualityRank : Info.Rank;
+	const bool bBuffed = DisplayRank != Info.Rank;
+	const FString Title = ACERetailAllegiance::Title(Info.Rank,
+		Info.Self.HeritageGroup ? Info.Self.HeritageGroup : Vitals.HeritageGroup,
+		Info.Self.Gender ? Info.Self.Gender : Vitals.Gender);
+	if (auto El = Manager->FindElementUnder(TEXT("AllegiancePage"), TEXT("PlayerRank")))
+	{ El->bUseExplicitState = true; El->DefaultState = bBuffed ? 0x10000014 : 1; }
+	const TPair<const TCHAR*, FString> Captions[] = {
+		{TEXT("PlayerRank"), SocialStrings.FormatText(bBuffed ? TEXT("ID_Allegiance_RankBuffed") : TEXT("ID_Allegiance_Rank"),
+			{{TEXT("TITLE"), Title}, {TEXT("RANK"), FString::FromInt(DisplayRank)}, {TEXT("RANKBUFF"), FString::FromInt(DisplayRank - Info.Rank)}}).Replace(TEXT("\\["), TEXT("[")).Replace(TEXT("\\]"), TEXT("]"))},
+		{TEXT("PlayerFollowers"), SocialStrings.FormatText(TEXT("ID_Allegiance_Followers"), {{TEXT("FOLLOWERS"), FText::AsNumber(Info.TotalVassals).ToString()}})},
+		{TEXT("MonarchFollowers"), SocialStrings.FormatText(TEXT("ID_Allegiance_Followers"), {{TEXT("FOLLOWERS"), FText::AsNumber(FMath::Max(0, Info.TotalMembers - 1)).ToString()}})},
+		{TEXT("VassalsListBoxLabel"), SocialStrings.Text(TEXT("ID_Allegiance_VassalsLabel"))},
+		{TEXT("VassalsXPProducedLabel"), SocialStrings.Strings.FindRef(0x0B1AF37C)}
+	};
+	while (AllegianceCaptionLabels.Num() < UE_ARRAY_COUNT(Captions) + 2) AllegianceCaptionLabels.Add(nullptr);
+	for (int32 I = 0; I < UE_ARRAY_COUNT(Captions); ++I)
+	{
+		const auto El = Manager->FindElementUnder(TEXT("AllegiancePage"), Captions[I].Key);
+		const FString Text = El && El->TextEntryId ? SocialStrings.Strings.FindRef(El->TextEntryId) : Captions[I].Value;
+		Place(AllegianceCaptionLabels[I], El, Text);
 	}
-	for (int32 i = 0; i < UE_ARRAY_COUNT(Captions); ++i)
+
+	for (int32 I = 0; I < 2; ++I)
 	{
-		if (UTextBlock* L = AllegianceCaptionLabels[i])
+		const auto El = Manager->FindElementUnder(I == 0 ? TEXT("MonarchField") : TEXT("PatronField"), TEXT("XPProducedLabel"));
+		Place(AllegianceCaptionLabels[UE_ARRAY_COUNT(Captions) + I], El, El ? SocialStrings.Strings.FindRef(El->TextEntryId) : FString());
+	}
+
+	const auto List = Manager->FindElementUnder(TEXT("AllegiancePage"), TEXT("VassalsListBox"));
+	// Retail's template is two lines: titled name, then offline status and XP.
+	constexpr int32 RowHeight = 32;
+	VassalVisibleRows = List ? FMath::Max(1, List->Height / RowHeight) : 1;
+	const int32 MaxOffset = FMath::Max(0, Info.Vassals.Num() - VassalVisibleRows);
+	VassalScrollOffset = FMath::Clamp(VassalScrollOffset, 0, MaxOffset);
+	SyncDatScrollbar(Manager->FindElementUnder(TEXT("AllegiancePage"), TEXT("VassalsListBoxScrollbar")),
+		MaxOffset ? float(VassalScrollOffset) / MaxOffset : 0.f,
+		Info.Vassals.IsEmpty() ? 1.f : FMath::Min(1.f, float(VassalVisibleRows) / Info.Vassals.Num()));
+	const int32 Count = FMath::Min(VassalVisibleRows, Info.Vassals.Num());
+	while (VassalRows.Num() < Count && Canvas->WidgetTree)
+	{
+		VassalRows.Add(nullptr); VassalXPRows.Add(nullptr); VassalStatusRows.Add(nullptr);
+		VassalRowElements.Add(UACEUILayoutResolver::LoadTemplate(0x2100002F, 0x10000266));
+	}
+	VassalRowGuids.SetNumZeroed(VassalRows.Num());
+	for (int32 I = 0; I < VassalRows.Num(); ++I)
+	{
+		const auto Entry = VassalRowElements[I];
+		if (Entry && List && Entry->Parent.Pin() != List) List->AddChild(Entry);
+		if (Entry) Entry->bVisible = List && I < Count;
+		if (!Entry || !Entry->bVisible)
+		{ Hide(VassalRows[I]); Hide(VassalXPRows[I]); Hide(VassalStatusRows[I]); VassalRowGuids[I] = 0; continue; }
+		const auto& V = Info.Vassals[I + VassalScrollOffset];
+		VassalRowGuids[I] = V.Guid;
+		Entry->Y = I * RowHeight; Entry->Width = List->Width;
+		Entry->bUseExplicitState = true; Entry->DefaultState = V.Guid == SelectedVassalGuid ? 6 : 1;
+		for (const auto& Child : Entry->Children)
 		{
-			TSharedPtr<FACEUIElement> CapEl = Manager->FindElementUnder(TEXT("AllegiancePage"),
-				Captions[i].Element);
-			if (!CapEl.IsValid())
+			if (Child->ElementId == 0x10000267)
 			{
-				CapEl = Manager->FindElementByName(Captions[i].Element);
+				Child->Width = Entry->Width;
+				for (const auto& Name : Child->Children)
+				{ Name->Width = Child->Width; Place(VassalRows[I], Name, FullName(V, V.Name)); }
 			}
-			PlaceTextOnElement(L, CapEl, Captions[i].Text, 9, SocialWhite, AllegianceZ + 5 + i);
+			else if (Child->ElementId == 0x10000269)
+			{ Child->Width = Entry->Width - Child->X; Place(VassalXPRows[I], Child, XPText(V.CPTithed)); }
+			else if (Child->ElementId == 0x100004AA)
+			{ Child->bVisible = !V.bOnline; Place(VassalStatusRows[I], Child, SocialStrings.Strings.FindRef(Child->TextEntryId)); }
 		}
 	}
 }
@@ -707,6 +698,8 @@ void UACEUIGameplayBinder::RefreshFriendsOverlays()
 		|| !Client || !Manager || !Canvas)
 	{
 		for (UTextBlock* R : FriendRows) { if (R) R->SetVisibility(ESlateVisibility::Collapsed); }
+		for (UTextBlock* R : FriendStatusRows) { if (R) R->SetVisibility(ESlateVisibility::Collapsed); }
+		for (const auto& R : FriendRowElements) { if (R) R->bVisible = false; }
 		if (FriendNameEntry) { FriendNameEntry->SetVisibility(ESlateVisibility::Collapsed); }
 		return;
 	}
@@ -726,18 +719,37 @@ void UACEUIGameplayBinder::RefreshFriendsOverlays()
 			Canvas->PlaceWidgetAtElement(FriendNameEntry, EntryEl, SocialOverlayZ + 5, FMargin(3.f, 1.f));
 		}
 	}
-	const TArray<FACEFriendInfo> List = Client->GetFriends();
+	TArray<FACEFriendInfo> List = Client->GetFriends();
+	// gmFriendsUI::FindSortedInsertPosition: online first, then name.
+	List.Sort([](const FACEFriendInfo& A, const FACEFriendInfo& B)
+	{ return A.bOnline != B.bOnline ? A.bOnline : A.Name < B.Name; });
+	const auto* Selected=List.FindByPredicate([&](const auto& F){return F.Guid==SelectedFriendGuid;});
+	if (!Selected) SelectedFriendGuid=0;
+	for (const TCHAR* Name:{TEXT("TellButton"),TEXT("RemoveButton"),TEXT("AddButton")})
+		if (auto Button=Manager->FindElementUnder(TEXT("FriendsPage"),Name))
+		{
+			Button->bActivatable=FString(Name)==TEXT("AddButton") ? List.Num()<50
+				: Selected && (FString(Name)!=TEXT("TellButton") || Selected->bOnline);
+			Button->bGhosted=!Button->bActivatable;
+		}
 	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(
 		TEXT("FriendsPage"), TEXT("FriendsListBox"));
-	constexpr int32 MaxRows = 20;
-	constexpr int32 RowH = 16;
+	constexpr int32 RowH = 24;
+	FriendVisibleRows = ListEl ? FMath::Max(1, ListEl->Height / RowH) : 1;
+	const int32 MaxRows = FMath::Min(List.Num(), FriendVisibleRows);
+	const int32 MaxOffset = FMath::Max(0, List.Num() - FriendVisibleRows);
+	FriendScrollOffset = FMath::Clamp(FriendScrollOffset, 0, MaxOffset);
+	SyncDatScrollbar(Manager->FindElementUnder(TEXT("FriendsPage"), TEXT("FreindsListBoxScrollbar")),
+		MaxOffset ? float(FriendScrollOffset) / MaxOffset : 0.f,
+		List.IsEmpty() ? 1.f : FMath::Min(1.f, float(FriendVisibleRows) / List.Num()));
 	while (FriendRows.Num() < MaxRows && Canvas->WidgetTree)
 	{
 		UTextBlock* Row = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
-		Row->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 8));
 		FriendRows.Add(Row);
+		FriendStatusRows.Add(Canvas->WidgetTree->ConstructWidget<UACERetailTextBlock>());
+		FriendRowElements.Add(UACEUILayoutResolver::LoadTemplate(0x2100005D, 0x10000519));
 	}
-	FriendRowGuids.SetNum(MaxRows);
+	FriendRowGuids.SetNum(FriendRows.Num());
 	for (int32 i = 0; i < FriendRows.Num(); ++i)
 	{
 		UTextBlock* Row = FriendRows[i];
@@ -745,22 +757,39 @@ void UACEUIGameplayBinder::RefreshFriendsOverlays()
 		{
 			continue;
 		}
-		if (!ListEl.IsValid() || !List.IsValidIndex(i))
+		const auto Entry = FriendRowElements[i];
+		const int32 Index = i + FriendScrollOffset;
+		if (ListEl && Entry && Entry->Parent.Pin() != ListEl) ListEl->AddChild(Entry);
+		if (Entry) Entry->bVisible = ListEl && i < FriendVisibleRows && List.IsValidIndex(Index);
+		if (!Entry || !Entry->bVisible)
 		{
 			Row->SetVisibility(ESlateVisibility::Collapsed);
+			FriendStatusRows[i]->SetVisibility(ESlateVisibility::Collapsed);
 			FriendRowGuids[i] = 0;
 			continue;
 		}
-		const FACEFriendInfo& F = List[i];
+		const FACEFriendInfo& F = List[Index];
 		FriendRowGuids[i] = F.Guid;
 		const bool bSel = (F.Guid == SelectedFriendGuid);
-		Row->SetText(FText::FromString(FString::Printf(TEXT("%s  %s"),
-			*F.Name, F.bOnline ? TEXT("[online]") : TEXT("[offline]"))));
+		Entry->Y = i * RowH; Entry->Width = ListEl->Width;
+		Entry->bUseExplicitState = true; Entry->DefaultState = bSel ? 6 : 1;
+		const auto NameEl = Entry->Children.IsEmpty() ? nullptr : Entry->Children[0];
+		if (!NameEl) continue;
+		NameEl->Width = Entry->Width;
+		NameEl->bUseExplicitState = true; NameEl->DefaultState = F.bOnline ? 0x10000054 : 0x10000055;
+		for (const auto& Status : NameEl->Children)
+		{
+			Status->Width = Entry->Width;
+			Status->bUseExplicitState = true; Status->DefaultState = NameEl->DefaultState;
+			FriendStatusRows[i]->SetText(FText::FromString(F.bOnline ? TEXT("Online") : TEXT("Offline")));
+			FriendStatusRows[i]->SetVisibility(ESlateVisibility::HitTestInvisible);
+			FriendStatusRows[i]->SetJustification(ETextJustify::Right);
+			Canvas->PlaceWidgetAtElement(FriendStatusRows[i], Status, SocialOverlayZ + 11);
+		}
+		Row->SetText(FText::FromString(F.Name));
 		Row->SetVisibility(ESlateVisibility::HitTestInvisible);
-		Row->SetColorAndOpacity(FSlateColor(bSel ? SocialGold : (F.bOnline ? SocialWhite : SocialDim)));
-		const float Top = static_cast<float>(2 + i * RowH);
-		Canvas->PlaceWidgetAtElement(Row, ListEl, SocialOverlayZ + 10 + i,
-			FMargin(4.f, Top, 4.f, FMath::Max(0.f, static_cast<float>(ListEl->Height) - Top - RowH)));
+		Row->SetClipping(EWidgetClipping::ClipToBounds);
+		Canvas->PlaceWidgetAtElement(Row, NameEl, SocialOverlayZ + 10, FMargin(0, 0, 70, 0));
 	}
 }
 
@@ -770,6 +799,8 @@ void UACEUIGameplayBinder::RefreshSquelchOverlays()
 		|| !Client || !Manager || !Canvas)
 	{
 		for (UTextBlock* R : SquelchRows) { if (R) { R->SetVisibility(ESlateVisibility::Collapsed); } }
+		for (UTextBlock* R : SquelchStatusRows) if (R) R->SetVisibility(ESlateVisibility::Collapsed);
+		for (const auto& R : SquelchRowElements) if (R) R->bVisible=false;
 		if (SquelchNameEntry) { SquelchNameEntry->SetVisibility(ESlateVisibility::Collapsed); }
 		return;
 	}
@@ -789,19 +820,35 @@ void UACEUIGameplayBinder::RefreshSquelchOverlays()
 			Canvas->PlaceWidgetAtElement(SquelchNameEntry, EntryEl, SocialOverlayZ + 5, FMargin(3.f, 1.f));
 		}
 	}
-	const TArray<FACESquelchEntry> List = Client->GetSquelches();
+	TArray<FACESquelchEntry> List = Client->GetSquelches();
+	List.Sort([](const auto& A,const auto& B){return A.Name<B.Name;});
 	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(
 		TEXT("SquelchPage"), TEXT("SquelchListBox"));
-	constexpr int32 MaxRows = 24;
-	constexpr int32 RowH = 16;
+	constexpr int32 RowH = 24; // classic_squelch/SquelchEntryTemplate
+	SquelchVisibleRows=ListEl ? FMath::Max(1,ListEl->Height/RowH) : 1;
+	const int32 MaxRows=FMath::Min(List.Num(),SquelchVisibleRows);
+	const int32 MaxOffset=FMath::Max(0,List.Num()-SquelchVisibleRows);
+	SquelchScrollOffset=FMath::Clamp(SquelchScrollOffset,0,MaxOffset);
+	SyncDatScrollbar(Manager->FindElementUnder(TEXT("SquelchPage"),TEXT("SquelchListBoxScrollbar")),
+		MaxOffset ? float(SquelchScrollOffset)/MaxOffset : 0.f,
+		List.IsEmpty() ? 1.f : FMath::Min(1.f,float(SquelchVisibleRows)/List.Num()));
+	if (!List.ContainsByPredicate([&](const auto& E){return E.Guid==SelectedSquelchGuid && E.Name==SelectedSquelchName;}))
+	{SelectedSquelchGuid=0;SelectedSquelchName.Reset();}
+	for (const TCHAR* Name:{TEXT("SquelchRemoveButton"),TEXT("SquelchCharacterButton"),TEXT("SquelchAccountButton")})
+		if (auto Button=Manager->FindElementUnder(TEXT("SquelchPage"),Name))
+		{
+			Button->bActivatable=FString(Name)==TEXT("SquelchRemoveButton") ? !SelectedSquelchName.IsEmpty() : List.Num()<50;
+			Button->bGhosted=!Button->bActivatable;
+		}
 	while (SquelchRows.Num() < MaxRows && Canvas->WidgetTree)
 	{
 		UTextBlock* Row = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
-		Row->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 8));
 		SquelchRows.Add(Row);
+		SquelchStatusRows.Add(Canvas->WidgetTree->ConstructWidget<UACERetailTextBlock>());
+		SquelchRowElements.Add(UACEUILayoutResolver::LoadTemplate(0x21000060,0x10000541));
 	}
-	SquelchRowGuids.SetNum(MaxRows);
-	SquelchRowNames.SetNum(MaxRows);
+	SquelchRowGuids.SetNum(SquelchRows.Num());
+	SquelchRowNames.SetNum(SquelchRows.Num());
 	for (int32 i = 0; i < SquelchRows.Num(); ++i)
 	{
 		UTextBlock* Row = SquelchRows[i];
@@ -809,31 +856,42 @@ void UACEUIGameplayBinder::RefreshSquelchOverlays()
 		{
 			continue;
 		}
-		if (!ListEl.IsValid() || !List.IsValidIndex(i))
+		const int32 Index=i+SquelchScrollOffset;
+		const auto Entry=SquelchRowElements[i];
+		if (ListEl && Entry && Entry->Parent.Pin()!=ListEl) ListEl->AddChild(Entry);
+		if (Entry) Entry->bVisible=ListEl && i<SquelchVisibleRows && List.IsValidIndex(Index);
+		if (!Entry || !Entry->bVisible)
 		{
 			Row->SetVisibility(ESlateVisibility::Collapsed);
+			SquelchStatusRows[i]->SetVisibility(ESlateVisibility::Collapsed);
 			SquelchRowGuids[i] = 0;
 			SquelchRowNames[i].Reset();
 			continue;
 		}
-		const FACESquelchEntry& E = List[i];
+		const FACESquelchEntry& E = List[Index];
 		SquelchRowGuids[i] = E.Guid;
 		SquelchRowNames[i] = E.Name;
-		const bool bSel = (E.Guid != 0 && E.Guid == SelectedSquelchGuid);
-		Row->SetText(FText::FromString(FString::Printf(TEXT("%s%s"),
-			*E.Name, E.bAccount ? TEXT("  [account]") : TEXT(""))));
+		const bool bSel = E.Guid==SelectedSquelchGuid && E.Name==SelectedSquelchName;
+		Entry->Y=i*RowH;Entry->Width=ListEl->Width;
+		Entry->bUseExplicitState=true;Entry->DefaultState=bSel ? 6 : 1;
+		const auto NameEl=Entry->Children.IsEmpty() ? nullptr : Entry->Children[0];
+		if (!NameEl) continue;
+		NameEl->Width=Entry->Width;NameEl->bUseExplicitState=true;
+		NameEl->DefaultState=E.bAccount ? 0x10000057 : 0x10000056;
+		for (const auto& Status:NameEl->Children)
+		{
+			Status->Width=Entry->Width;Status->bUseExplicitState=true;Status->DefaultState=NameEl->DefaultState;
+			FString Caption=SocialStrings.Strings.FindRef(E.bAccount ? 0x0CD7089Cu : 0x0C3DF83Cu);
+			if (Caption.IsEmpty()) Caption=E.bAccount ? TEXT("Account") : TEXT("Character");
+			SquelchStatusRows[i]->SetText(FText::FromString(Caption));
+			SquelchStatusRows[i]->SetVisibility(ESlateVisibility::HitTestInvisible);
+			SquelchStatusRows[i]->SetJustification(ETextJustify::Right);
+			Canvas->PlaceWidgetAtElement(SquelchStatusRows[i],Status,SocialOverlayZ+11);
+		}
+		Row->SetText(FText::FromString(E.Name));
 		Row->SetVisibility(ESlateVisibility::HitTestInvisible);
-		Row->SetColorAndOpacity(FSlateColor(bSel ? SocialGold : SocialWhite));
-		const float Top = static_cast<float>(2 + i * RowH);
-		Canvas->PlaceWidgetAtElement(Row, ListEl, SocialOverlayZ + 10 + i,
-			FMargin(4.f, Top, 4.f, FMath::Max(0.f, static_cast<float>(ListEl->Height) - Top - RowH)));
-	}
-	if (List.Num() == 0 && ListEl.IsValid() && SquelchRows.Num() > 0 && SquelchRows[0])
-	{
-		SquelchRows[0]->SetText(FText::FromString(TEXT("No squelched characters.")));
-		SquelchRows[0]->SetColorAndOpacity(FSlateColor(SocialDim));
-		SquelchRows[0]->SetVisibility(ESlateVisibility::HitTestInvisible);
-		Canvas->PlaceWidgetAtElement(SquelchRows[0], ListEl, SocialOverlayZ + 10, FMargin(4.f, 2.f, 4.f, 2.f));
+		Row->SetClipping(EWidgetClipping::ClipToBounds);
+		Canvas->PlaceWidgetAtElement(Row,NameEl,SocialOverlayZ+10,FMargin(0,0,90,0));
 	}
 }
 
@@ -896,6 +954,12 @@ void UACEUIGameplayBinder::RefreshSocialButtonLabels()
 			}
 			FString Caption=El ? SocialStrings.Strings.FindRef(El->TextEntryId) : FString();
 			if (Caption.IsEmpty()) Caption=Labels[i].Text;
+			if (FString(Labels[i].Element) == TEXT("MonarchLabel") && Client)
+			{
+				const auto& A = Client->GetAllegiance();
+				Caption = SocialStrings.Text(A.PatronGuid != 0 && A.PatronGuid == A.MonarchGuid
+					? TEXT("ID_Allegiance_PatronSlashMonarchLabel") : TEXT("ID_Allegiance_MonarchLabel"));
+			}
 			if (FString(Labels[i].Element)==TEXT("FellowOpenButton") && Client && Client->GetFellowship().bOpen) Caption=TEXT("Close");
 			PlaceTextOnElement(L, El, Caption, 8,
 				Labels[i].bCentered ? SocialWhite : SocialGold,

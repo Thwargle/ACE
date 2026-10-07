@@ -165,6 +165,57 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         P->Running=true;Session.OpenVendorGuid=0;H->ExecuteInventory(*P,Buy,TEXT("buy"));
         TestTrue(TEXT("Closed vendor cannot send a purchase"),!HasPurchase());
         P->Running=true;Session.WorldObjects.Remove(Vendor.Guid);Session.VendorMerchandise.Empty();
+        {
+            const int32 OldMode=Session.PlayerVitals.CombatMode;
+            FACEWorldObject Essence;Essence.Guid=9200;Essence.ContainerId=Session.PlayerGuid;
+            Essence.Name=TEXT("Custom Summoning Essence");Essence.ItemType=ACEItemType::Misc;Essence.ItemUseable=8;
+            Session.WorldObjects.Add(Essence.Guid,Essence);
+            FACEAppraisalInfo Appraisal;Appraisal.bSuccess=true;Appraisal.IntProperties.Add(280,213);H->Appraisals.Add(Essence.Guid,Appraisal);
+            auto Use=MakeShared<FJsonObject>();Use->SetNumberField(TEXT("item"),Essence.Guid);
+            for(int32 Mode:{1,2,4,8})
+            {
+                Session.PlayerVitals.CombatMode=Mode;Session.CachedC2SPackets.Reset();
+                H->ExecuteInventory(*P,Use,TEXT("use_item"));
+                TestEqual(TEXT("Summoning preserves current combat mode"),Session.PlayerVitals.CombatMode,Mode);
+                TestEqual(TEXT("Summon sends only Use, with no peace-mode packet"),Session.CachedC2SPackets.Num(),1);
+                for(const auto& Packet:Session.CachedC2SPackets)
+                {
+                    FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);
+                    TestEqual(TEXT("Summon uses standard retail Use opcode"),R.ReadUInt32(),ACEGameAction::Use);
+                    TestEqual(TEXT("Summon targets selected essence"),R.ReadUInt32(),uint32(Essence.Guid));
+                }
+            }
+            Session.WorldObjects.Remove(Essence.Guid);H->Appraisals.Remove(Essence.Guid);
+            Session.PlayerVitals.CombatMode=OldMode;P->WaitAction.Empty();P->NextAction=0;
+        }
+        {
+            const int32 OldMode=Session.PlayerVitals.CombatMode;Session.PlayerVitals.CombatMode=1;
+            FACEWorldObject Stone;Stone.Guid=9100;Stone.ContainerId=Session.PlayerGuid;Stone.Name=TEXT("Mana Stone");Stone.ItemType=ACEItemType::ManaStone;Stone.ItemUseable=0x00100008;
+            FACEWorldObject Donor;Donor.Guid=9101;Donor.ContainerId=Session.PlayerGuid;Donor.Name=TEXT("Donor");Donor.ItemType=ACEItemType::Jewelry;
+            Session.WorldObjects.Add(Stone.Guid,Stone);Session.WorldObjects.Add(Donor.Guid,Donor);
+            FACEAppraisalInfo StoneID;StoneID.bSuccess=true;H->Appraisals.Add(Stone.Guid,StoneID);
+            FACEAppraisalInfo DonorID;DonorID.bSuccess=true;DonorID.IntProperties.Add(107,5000);DonorID.IntProperties.Add(108,5000);H->Appraisals.Add(Donor.Guid,DonorID);
+            auto Use=MakeShared<FJsonObject>();Use->SetNumberField(TEXT("item"),Stone.Guid);Use->SetNumberField(TEXT("target"),Donor.Guid);Use->SetStringField(TEXT("activity"),TEXT("item_mana"));
+            Session.CachedC2SPackets.Reset();H->ExecuteInventory(*P,Use,TEXT("apply_item"));
+            TestEqual(TEXT("Stone filling sends one normal network action"),Session.CachedC2SPackets.Num(),1);
+            for(const auto& Packet:Session.CachedC2SPackets)
+            {
+                FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);
+                TestEqual(TEXT("Stone filling uses retail UseWithTarget opcode"),R.ReadUInt32(),ACEGameAction::UseWithTarget);
+                TestEqual(TEXT("Packet carries stone as source"),R.ReadUInt32(),uint32(Stone.Guid));
+                TestEqual(TEXT("Packet carries donor as target"),R.ReadUInt32(),uint32(Donor.Guid));
+            }
+            TestTrue(TEXT("Source stone queued for fresh appraisal"),H->PendingResourceRefresh.Contains(Stone.Guid));
+            H->ObserveUseDone(0);TestFalse(TEXT("Old stone contents discarded on completion"),H->Appraisals.Contains(Stone.Guid));
+            TestFalse(TEXT("Old donor appraisal discarded on completion"),H->Appraisals.Contains(Donor.Guid));
+            H->Appraisals.Add(Stone.Guid,StoneID);H->Appraisals.Add(Donor.Guid,DonorID);
+            Session.WorldObjects[Donor.Guid].ObjectDescriptionFlags|=ACEObjectDescFlag::Retained;
+            Session.CachedC2SPackets.Reset();H->ExecuteInventory(*P,Use,TEXT("apply_item"));
+            TestEqual(TEXT("Stale intent cannot consume an item now retained"),Session.CachedC2SPackets.Num(),0);
+            TestTrue(TEXT("Rejected refill leaves UCM running"),P->Running);
+            Session.WorldObjects.Remove(Stone.Guid);Session.WorldObjects.Remove(Donor.Guid);H->Appraisals.Remove(Stone.Guid);H->Appraisals.Remove(Donor.Guid);
+            P->Profile->RemoveField(TEXT("ucm_activity_failure"));Session.PlayerVitals.CombatMode=OldMode;
+        }
     }
     H->RefreshAutomationData();
     {
@@ -413,12 +464,35 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             auto Pickup=MakeShared<FJsonObject>();Pickup->SetNumberField(TEXT("item"),871);
             H->ExecuteInventory(*P,Pickup,TEXT("loot"));
             TestEqual(TEXT("Taking corpse loot preserves mode"),Session.PlayerVitals.CombatMode,Mode);
+            const double Deadline=P->NextAction;H->RefreshActionWait(*P);
+            TestEqual(TEXT("Unconfirmed pickup retains throttle"),P->NextAction,Deadline);
+            FACEAppraisalInfo OtherID;OtherID.ObjectGuid=123456;H->ObserveAppraisal(OtherID);
+            TestEqual(TEXT("Unrelated appraisal cannot release a pickup"),P->NextAction,Deadline);
+            Session.WorldObjects[871].ContainerId=Session.PlayerGuid;H->RefreshActionWait(*P);
+            TestTrue(TEXT("Ownership confirmation removes fixed one-second pickup delay"),P->NextAction<=P->ActionSentAt+.25);
+            TestEqual(TEXT("Confirmation wakes next policy decision"),P->NextDecision,0.);
+            Session.WorldObjects[871].ContainerId=870;
             H->ExecuteInventory(*P,Intent,TEXT("close_corpse"));
             TestEqual(TEXT("Closing corpse preserves mode"),Session.PlayerVitals.CombatMode,Mode);
         }
         Corpse.ObjectDescriptionFlags=0;Session.WorldObjects.Add(870,Corpse);Session.PlayerVitals.CombatMode=8;
         H->ExecuteInventory(*P,Intent,TEXT("use_world"));
         TestEqual(TEXT("Ordinary world-use stance behavior is unchanged"),Session.PlayerVitals.CombatMode,1);
+        H->TrackActionWait(*P,TEXT("equip"),871,0x100000);P->NextAction=P->ActionSentAt+2;
+        H->RefreshActionWait(*P);TestFalse(TEXT("Equipment request does not complete before wield update"),P->WaitAction.IsEmpty());
+        Session.WorldObjects[871].WielderId=Session.PlayerGuid;Session.WorldObjects[871].CurrentWieldedLocation=0x100000;
+        H->RefreshActionWait(*P);TestTrue(TEXT("Wield confirmation releases equipment delay"),P->WaitAction.IsEmpty()&&P->NextAction<=P->ActionSentAt+.25);
+        H->TrackActionWait(*P,TEXT("identify"),871);P->NextAction=P->ActionSentAt+.5;
+        FACEAppraisalInfo Reply;Reply.ObjectGuid=870;H->ObserveAppraisal(Reply);
+        TestFalse(TEXT("Different appraisal cannot wake item decision"),P->WaitAction.IsEmpty());
+        Reply.ObjectGuid=871;H->ObserveAppraisal(Reply);
+        TestTrue(TEXT("Requested appraisal wakes decision, including a failed appraisal"),P->WaitAction.IsEmpty()&&P->NextAction<=P->ActionSentAt+.25);
+        H->Appraisals.Remove(870);H->Appraisals.Remove(871);H->Appraisals.Remove(123456);
+        H->TrackActionWait(*P,TEXT("use"));P->NextAction=P->ActionSentAt+3;
+        H->RefreshActionWait(*P);TestFalse(TEXT("Consumable waits for UseDone"),P->WaitAction.IsEmpty());
+        H->ObserveUseDone(0);H->RefreshActionWait(*P);
+        TestTrue(TEXT("Consumable completion releases three-second fallback"),P->WaitAction.IsEmpty()&&P->NextAction<=P->ActionSentAt+.25);
+        P->NextAction=0;
     }
     // Exercise AC's +Y-forward pose and AC-space turn integration, not a
     // synthetic Unreal X-forward pawn (which masked both steering errors).
@@ -453,6 +527,42 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
     H->ApplyMovement(PC,BlockF,BlockR,BlockT,false,false,false,FVector::ForwardVector);
     TestEqual(TEXT("Blocked movement asks policy to recover"),H->MovementBlockedSerial,BeforeBlocked+1);
     TestTrue(TEXT("Blocked movement clears drive input before recovery"),H->MovementOwner.IsEmpty()&&BlockF==0&&BlockR==0&&BlockT==0);
+    {
+        const auto OriginalProfile=P->Profile;
+        P->Profile=MakeShared<FJsonObject>(*OriginalProfile);P->Running=true;
+        P->Profile->SetBoolField(TEXT("navigation"),true);P->Profile->SetBoolField(TEXT("recovery"),true);P->Profile->SetStringField(TEXT("combat"),TEXT("auto"));
+        const auto OriginalVM=P->VM;
+        H->MovementOwner=TEXT("ucm");H->UseApproachOwner=TEXT("ucm");H->MoveExpires=FPlatformTime::Seconds()+20;
+        auto Pause=MakeShared<FJsonObject>();Pause->SetStringField(TEXT("action"),TEXT("pause_navigation"));Pause->SetStringField(TEXT("status"),TEXT("Navigation paused: blocked door"));
+        H->Execute(*P,Pause);
+        TestTrue(TEXT("Route failure retains running UCM and its VM"),P->Running&&P->VM==OriginalVM);
+        TestFalse(TEXT("Route failure disables shared navigation toggle"),P->Profile->GetBoolField(TEXT("navigation")));
+        TestTrue(TEXT("Route failure preserves enabled recovery"),P->Profile->GetBoolField(TEXT("recovery")));
+        TestEqual(TEXT("Route failure preserves combat"),P->Profile->GetStringField(TEXT("combat")),FString(TEXT("auto")));
+        TestTrue(TEXT("Route failure clears drive and approach ownership"),H->MovementOwner.IsEmpty()&&H->UseApproachOwner.IsEmpty()&&H->MoveExpires==0);
+        P->Profile=OriginalProfile;
+    }
+    for(const TCHAR* Action:{TEXT("salvage"),TEXT("sell"),TEXT("buy"),TEXT("split_note"),TEXT("combine_salvage"),TEXT("store_item")})
+    {
+        P->Running=true;P->ActivityFailure.Reset();const auto OriginalVM=P->VM;
+        Session.CachedC2SPackets.Reset();
+        auto Invalid=MakeShared<FJsonObject>();Invalid->SetStringField(TEXT("action"),Action);Invalid->SetNumberField(TEXT("item"),1234567);
+        TestTrue(TEXT("Invalid inventory intent is handled"),H->ExecuteInventory(*P,Invalid,Action));
+        TestTrue(*FString::Printf(TEXT("Rejected %s retains UCM and VM"),Action),P->Running&&P->VM==OriginalVM);
+        TestTrue(TEXT("Host rejection is returned to activity policy"),P->ActivityFailure.IsValid());
+        TestTrue(TEXT("Rejected inventory action sends neither destructive request nor attack cancellation"),Session.CachedC2SPackets.IsEmpty());
+    }
+    P->ActivityFailure.Reset();
+    for(const TCHAR* Activity:{TEXT("buffs"),TEXT("combat"),TEXT("recovery2")})
+    {
+        P->Running=true;const auto OriginalVM=P->VM;
+        H->PendingSpell=123;H->PendingSpellOwner=P->Id;H->PendingSpellActivity=Activity;H->PendingSpellAt=FPlatformTime::Seconds()-31;
+        H->CheckPendingSpellTimeout();
+        TestTrue(TEXT("Cast timeout retains running UCM and its policy"),P->Running&&P->VM==OriginalVM);
+        TestEqual(TEXT("Timed-out cast no longer blocks decisions"),H->PendingSpell,0);
+        TestTrue(TEXT("Cast timeout reports its specific activity"),P->ActivityFailure&&P->ActivityFailure->GetStringField(TEXT("activity"))==Activity);
+        P->ActivityFailure.Reset();
+    }
     H->MovementOwner.Empty();Session.PlayerPosition=OutdoorPosition;PC->UnPossess();Pawn->Destroy();PC->Destroy();
     if(FParse::Param(FCommandLine::Get(),TEXT("WaypointRender")))
     {

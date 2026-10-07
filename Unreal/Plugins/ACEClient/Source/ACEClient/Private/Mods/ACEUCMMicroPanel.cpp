@@ -23,7 +23,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
     Row(TEXT("UCM running"),[UCM](){auto P=UCM();return P&&P->Running;},[Host,UCM](bool On)
     {if(Host.IsValid())if(auto P=UCM()){if(On)Host->Start(P->Id);else Host->Stop(P->Id,TEXT("Stopped"),true);}});
     for(const auto& Entry:TArray<TPair<FString,FString>>{
-        {TEXT("buffing"),TEXT("Buffing")},{TEXT("combat"),TEXT("Combat (automatic)")},
+        {TEXT("buffing"),TEXT("Buffing")},{TEXT("combat"),TEXT("Combat")},
         {TEXT("looting"),TEXT("Looting")},{TEXT("navigation"),TEXT("Navigation")},
         {TEXT("recovery"),TEXT("Vital recovery")},{TEXT("buff_others"),TEXT("Buff others")},
         {TEXT("vendor_restock"),TEXT("Vendor restocking")},{TEXT("meta_enabled"),TEXT("Metas")},{TEXT("idle_peace"),TEXT("Peace when idle")}})

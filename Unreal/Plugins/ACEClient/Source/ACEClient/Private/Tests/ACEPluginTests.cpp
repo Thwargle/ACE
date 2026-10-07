@@ -111,8 +111,8 @@ bool FACEUCMTest::RunTest(const FString&)
     S->SetNumberField(TEXT("time"),102);VM.Step(S,P,I,Error);TestFalse(TEXT("No repeated cast while awaiting enchantment"),I->HasField(TEXT("action")));
     auto E=Json(TEXT(R"({"category":1,"power":200,"remaining":1000})"));S->SetArrayField(TEXT("enchantments"),{MakeShared<FJsonValueObject>(E)});
     S->SetNumberField(TEXT("time"),120);VM.Step(S,P,I,Error);TestFalse(TEXT("Active adequate buff prevents recast"),I->HasField(TEXT("action")));
-    S->SetNumberField(TEXT("health"),1);VM.Step(S,P,I,Error);TestEqual(TEXT("Low health stops"),I->GetStringField(TEXT("action")),FString(TEXT("stop")));
-    S->SetNumberField(TEXT("health"),100);P->SetBoolField(TEXT("buffing"),false);P->SetStringField(TEXT("combat"),TEXT("missile"));S->SetNumberField(TEXT("nearest"),123);S->SetNumberField(TEXT("distance"),5);
+    S->SetNumberField(TEXT("health"),1);VM.Step(S,P,I,Error);TestFalse(TEXT("Low health alone does not stop UCM"),I->HasField(TEXT("action")));
+    S->SetNumberField(TEXT("health"),100);P->SetBoolField(TEXT("buffing"),false);P->SetStringField(TEXT("combat"),TEXT("missile"));P->SetBoolField(TEXT("manual_combat"),true);S->SetNumberField(TEXT("nearest"),123);S->SetNumberField(TEXT("distance"),5);
     VM.Step(S,P,I,Error);TestEqual(TEXT("Missile action"),I->GetNumberField(TEXT("mode")),4.);
     S->SetNumberField(TEXT("distance"),100);VM.Step(S,P,I,Error);TestFalse(TEXT("Targets beyond profile radius not attacked"),I->HasField(TEXT("action")));
     P->SetBoolField(TEXT("navigation"),true);P->SetArrayField(TEXT("route"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"cell":2103705613,"x":27,"y":97,"z":12})")))});
@@ -374,7 +374,10 @@ bool FACEPluginHostTest::RunTest(const FString&)
     TestFalse(TEXT("Leaving world stops automation"),P->Running);
     auto Permissions=P->Permissions;P->Permissions.Empty();P->Running=true;
     H->Execute(*P,Json(TEXT("{\"action\":\"cast\",\"spell\":42}")));
-    TestFalse(TEXT("Host rejects ungranted action"),P->Running);P->Permissions=Permissions;
+    TestTrue(TEXT("Permission rejection preserves other UCM activities"),P->Running&&P->ActivityFailure.IsValid());
+    TestEqual(TEXT("Denied spell is not dispatched"),H->PendingSpell,0);
+    TestTrue(TEXT("Permission rejection is reported to the policy"),P->ActivityFailure&&P->ActivityFailure->GetStringField(TEXT("status")).Contains(TEXT("Action not permitted")));
+    P->ActivityFailure.Reset();P->Permissions=Permissions;
     // Exercise actual shipped/import-folder loot files through activation and
     // reload, not just the converter or an in-memory profile assignment.
     const FString Inbox=FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir()/TEXT("ClientPlugins/ImportInbox"));
@@ -556,7 +559,7 @@ bool FACEPluginHostTest::RunTest(const FString&)
         for(const FString Page:{TEXT("Overview"),TEXT("Buffs"),TEXT("Buff others"),TEXT("Combat"),TEXT("Recovery"),TEXT("Route"),TEXT("Loot"),TEXT("Vendors"),TEXT("Loot editor"),TEXT("Salvage groups"),TEXT("Rules"),TEXT("Metas"),TEXT("Profiles"),TEXT("Standalone loot"),TEXT("Import")})
         for(int Width:{780,450})
         {
-            const int Height=Page==TEXT("Loot editor")?1800:760;
+            const int Height=Page==TEXT("Loot editor")?1800:(Page==TEXT("Recovery")||Page==TEXT("Combat"))?2400:760;
             if(Page==TEXT("Vendors"))P->Profile->SetArrayField(TEXT("vendor_rules"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"server":"Test","vendor_name":"Master Arcanist","vendor_wcid":2,"item_name":"Platinum Scarab","item_wcid":3,"quantity":100})")))});
             auto PageWidget=H->MakeUCMPanel(Page);const FVector2D Size(Width,Height);
             auto* PageTarget=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);

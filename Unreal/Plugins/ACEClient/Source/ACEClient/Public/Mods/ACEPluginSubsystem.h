@@ -19,6 +19,7 @@ struct FACEClientPlugin
     TArray<FString> Permissions;
     TSharedPtr<FJsonObject> Manifest, Profile;
     TSharedPtr<FACEPluginVM> VM;
+    TSharedPtr<FJsonObject> ActivityFailure;
     bool Enabled = false;
     bool Running = false;
     bool CanResumeMeta = false, ResumeMetaPending = false;
@@ -26,6 +27,10 @@ struct FACEClientPlugin
     TWeakPtr<class FACESession> VMSession;
     double NextAction = 0;
     double NextDecision = 0;
+    FString WaitAction;
+    int32 WaitItem = 0, WaitValue = 0;
+    uint32 WaitSerial = 0;
+    double ActionSentAt = 0;
     int32 Player = 0;
     FString Server,MetaState;
 };
@@ -102,6 +107,8 @@ public:
     /** Plugin inspection/buffing includes both carried and equipped gear. */
     bool IsOwnedPluginItem(const FACEWorldObject& Item) const;
     bool ExecuteInventory(FACEClientPlugin& P, const TSharedPtr<FJsonObject>& Intent, const FString& Action);
+    void TrackActionWait(FACEClientPlugin& P,const FString& Action,int32 Item=0,int32 Value=0);
+    void RefreshActionWait(FACEClientPlugin& P);
     void DrawRoute();
     bool IsDrivingMovement() const { return !MovementOwner.IsEmpty()||!FastCastOwner.IsEmpty(); }
     void ObservePlayerTell(const FString& Text,const FString& Sender,int32 SenderId);
@@ -122,6 +129,8 @@ public:
 private:
     bool Tick(float DeltaTime);
     void Execute(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Intent);
+    void ReportActivityFailure(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Intent, const FString& Reason, bool NotifyPolicy = true);
+    void CheckPendingSpellTimeout();
     void SaveSettings();
     TSharedPtr<FACEClientPlugin> Find(const FString& Id) const;
     FTSTicker::FDelegateHandle Ticker;
@@ -131,7 +140,7 @@ private:
     void RemoveDesktopDock();
     FString MovementOwner;
     FString FastCastOwner;
-    FString PendingSpellOwner;
+    FString PendingSpellOwner, PendingSpellActivity;
     bool FastCastStarted = false;
     FString UseApproachOwner;
     uint32 ForceBuffSerial=0,ForceBuffRequest=0;
@@ -188,6 +197,7 @@ private:
     double NextAppraisalScan = 0;
     int32 PendingSpell = 0, PendingSpellTarget = 0;
     bool PendingManaRefresh = false;
+    TSet<int32> PendingResourceRefresh;
     double PendingSpellAt = 0;
     TArray<TSharedPtr<FJsonValue>> ItemBuffs;
     TArray<TSharedPtr<FJsonValue>> Debuffs, PendingDebuffCasts;

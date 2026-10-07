@@ -26,6 +26,7 @@
 #include "Components/SizeBox.h"
 #include "Components/EditableTextBox.h"
 #include "Styling/CoreStyle.h"
+#include "Framework/Application/SlateApplication.h"
 void UACEUIGameplayBinder::RefreshKeyboardOverlays()
 {
  if(!Manager||!Canvas||!Canvas->WidgetTree)return;
@@ -33,7 +34,11 @@ void UACEUIGameplayBinder::RefreshKeyboardOverlays()
  const bool Open=Root && Root->bVisible;
  auto HideRows=[&]()
  {
-  for(UWidget* R:KeyboardRows)if(R)R->SetVisibility(ESlateVisibility::Collapsed);
+  for(UWidget* R:KeyboardRows)if(R)
+  {
+   if(auto* Key=Cast<UACERetailKeySelector>(R))Key->CancelCapture();
+   R->SetVisibility(ESlateVisibility::Collapsed);
+  }
   for(UTextBlock* L:KeyboardRowLabels)if(L)L->SetVisibility(ESlateVisibility::Collapsed);
   for(UTextBlock* L:KeyboardKeyLabels)if(L)L->SetVisibility(ESlateVisibility::Collapsed);
   for(auto E:KeyboardEntryElements)if(E)E->bVisible=false;
@@ -141,7 +146,11 @@ void UACEUIGameplayBinder::RefreshKeyboardOverlays()
   if(!Visible)
   {
    KeyboardRowLabels[I]->SetVisibility(ESlateVisibility::Collapsed);
-   for(int32 S=0;S<ACEInputBindings::BindingSlots;++S){KeyboardRows[I*ACEInputBindings::BindingSlots+S]->SetVisibility(ESlateVisibility::Collapsed);KeyboardKeyLabels[I*ACEInputBindings::BindingSlots+S]->SetVisibility(ESlateVisibility::Collapsed);}
+   for(int32 S=0;S<ACEInputBindings::BindingSlots;++S)
+   {
+    auto* Key=CastChecked<UACERetailKeySelector>(KeyboardRows[I*ACEInputBindings::BindingSlots+S]);Key->CancelCapture();
+    Key->SetVisibility(ESlateVisibility::Collapsed);KeyboardKeyLabels[I*ACEInputBindings::BindingSlots+S]->SetVisibility(ESlateVisibility::Collapsed);
+   }
    continue;
   }
   if(Entry->Parent.Pin()!=List)List->AddChild(Entry);
@@ -153,6 +162,7 @@ void UACEUIGameplayBinder::RefreshKeyboardOverlays()
    const auto Button=Entry->Children[S];
    auto* Key=CastChecked<UACERetailKeySelector>(KeyboardRows[I*ACEInputBindings::BindingSlots+S]);Key->SetVisibility(ESlateVisibility::Visible);
    Key->SetIsEnabled(!bKeymapImportOpen);
+   if(bKeymapImportOpen)Key->CancelCapture();
    Key->SetRetailButton(Canvas,Button,KeyboardKeyLabels[I*ACEInputBindings::BindingSlots+S]);
   }
  }
@@ -186,6 +196,7 @@ bool UACEUIGameplayBinder::HandleKeyboardNamedClick(const FString& Name)
  {
   if(Name==TEXT("KeyboardOKButton"))ACEInputBindings::Commit();else ACEInputBindings::Cancel();
   Root->bVisible=false;
+  if(FSlateApplication::IsInitialized())FSlateApplication::Get().SetAllUserFocusToGameViewport();
  }
  else return false;
  bKeymapImportOpen=false;RefreshKeyboardOverlays();return true;

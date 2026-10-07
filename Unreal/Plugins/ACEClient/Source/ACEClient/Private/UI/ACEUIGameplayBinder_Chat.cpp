@@ -82,16 +82,20 @@ void UACEUIGameplayBinder::SendPoseChat(const FString& Command, FString MyEmote,
 namespace
 {
 	constexpr int32 ChatDestCount = 14;
+	// gmMainChatUI::HandleSelection: compact ID_Chat_ChatTargetMenu* captions
+	// from retail's 0x23000001 string table, not the full destination names.
 	const TCHAR* ChatDestLabels[ChatDestCount] = {
-		TEXT("Say"), TEXT("Fellow"), TEXT("Allegiance"),
-		TEXT("Vassals"), TEXT("Patron"), TEXT("Monarch"), TEXT("Co-Vassals"),
-		TEXT("General"), TEXT("Trade"), TEXT("LFG"), TEXT("Roleplay"), TEXT("Society"), TEXT("Selected"), TEXT("Olthoi")
+		TEXT("Chat"), TEXT("Fell"), TEXT("Alg"),
+		TEXT("Vas"), TEXT("Pat"), TEXT("Mon"), TEXT("Co-Vassals"),
+		TEXT("Gen"), TEXT("Trade"), TEXT("LFG"), TEXT("RP"), TEXT("Soc"), TEXT("Tell"), TEXT("Olt")
 	};
 	// gmMainChatUI::InitTalkFocusMenu insertion order. -1 is the squelch action.
 	constexpr int32 ChatMenuChannels[] = {-1,5,12,4,0,3,1,2,7,8,9,10,11,13};
-	const TCHAR* ChatMenuLabels[] = {TEXT("Squelch selected"),TEXT("Tell to monarch"),TEXT("Tell to selected"),
-		TEXT("Tell to patron"),TEXT("Say"),TEXT("Tell to vassals"),TEXT("Tell to fellows"),TEXT("Tell to allegiance"),
-		TEXT("General"),TEXT("Trade"),TEXT("LFG"),TEXT("Roleplay"),TEXT("Society"),TEXT("Olthoi")};
+	// ID_Chat_SquelchSelectedNoSelection and ID_Chat_TellTo* in the same table.
+	const TCHAR* ChatMenuLabels[] = {TEXT("Squelch (ignore) Selected"),TEXT("Tell to Monarch"),TEXT("Tell to Selected"),
+		TEXT("Tell to Patron"),TEXT("Chat to All"),TEXT("Tell to Vassals"),TEXT("Tell to Fellows"),TEXT("Tell to Allegiance"),
+		TEXT("Tell to General Chat"),TEXT("Tell to Trade Chat"),TEXT("Tell to LFG Chat"),TEXT("Tell to Roleplay Chat"),
+		TEXT("Tell to Society Chat"),TEXT("Tell to Olthoi Chat")};
 	constexpr int32 ChatMenuCount = UE_ARRAY_COUNT(ChatMenuChannels);
 	const FLinearColor ChatGold(0.95f, 0.82f, 0.35f, 1.f);
 	const FLinearColor ChatWhite(0.92f, 0.92f, 0.88f, 1.f);
@@ -908,7 +912,7 @@ void UACEUIGameplayBinder::RefreshChatTargetPopup()
 	const bool bTalkable=Client && Selection.bValid && Client->GetWorldObject(Selection.Guid,Selected)
 		&& Selected.ItemType==ACEItemType::Creature && Selected.Guid!=Client->GetPlayerGuid();
 	bool bSquelched=false;
-	if (bTalkable) for (const auto& Entry : Client->GetSquelches()) if (Entry.Guid==Selected.Guid) bSquelched=true;
+	if (bTalkable) for (const auto& Entry : Client->GetSquelches()) if (Entry.Guid==Selected.Guid && Entry.Blocks(1)) bSquelched=true;
 	while (ChatTargetPopupRows.Num()<ChatMenuCount)
 	{
 		ChatTargetPopupRows.Add(Canvas->WidgetTree->ConstructWidget<UACERetailTextBlock>());
@@ -922,7 +926,7 @@ void UACEUIGameplayBinder::RefreshChatTargetPopup()
 		const auto Element=ChatTargetPopupElements[Index];
 		const int32 Channel=ChatMenuChannels[Index];
 		const bool bEnabled=(Channel!=-1 && Channel!=12) || bTalkable;
-		Element->PaintState=!bEnabled ? 13 : Channel==ChatSendChannel ? 0x10000001 : 1;
+		Element->PaintState=!bEnabled ? 13 : (Channel==ChatSendChannel || (Channel==-1 && bSquelched)) ? 0x10000001 : 1;
 		const auto* State=Element->States.Find(Element->PaintState);
 		SetArt(Background,State ? State->ImageFileId : EntryTemplate->ImageFileId);
 		// UIElement_ListBox horizontal flow fills each row before the next.
@@ -931,8 +935,9 @@ void UACEUIGameplayBinder::RefreshChatTargetPopup()
 		Place(Background,X,Y,ColumnW,RowH,200001);
 		Place(Row,X,Y,ColumnW,RowH,200002);
 		FString Label=ChatMenuLabels[Index];
-		if (Channel==-1) Label=bTalkable ? FString::Printf(TEXT("%s %s"),bSquelched ? TEXT("Unsquelch") : TEXT("Squelch"),*Selected.Name) : TEXT("Squelch (no selection)");
-		if (Channel==12) Label=bTalkable ? FString::Printf(TEXT("Tell to %s"),*Selected.Name) : TEXT("Tell to (no selection)");
+		// Retail keeps the squelch caption and checks the row when already ignored.
+		if (bTalkable && Channel==-1) Label=FString::Printf(TEXT("Squelch (ignore) %s"),*Selected.Name);
+		if (bTalkable && Channel==12) Label=FString::Printf(TEXT("Tell to %s"),*Selected.Name);
 		Row->SetText(FText::FromString(Label)); Row->SetColorAndOpacity(FLinearColor::White);
 		const FMargin M=Element->TextMargins;
 		Row->SetMargin(FMargin(M.Left*Scale.X,M.Top*Scale.Y,M.Right*Scale.X,M.Bottom*Scale.Y));
@@ -1005,7 +1010,7 @@ bool UACEUIGameplayBinder::TryHandleChatTargetPopupClick(FVector2D Absolute)
 					&& Selected.ItemType==ACEItemType::Creature && Selected.Guid!=Client->GetPlayerGuid())
 				{
 					bool bSquelched=false;
-					for (const auto& Entry : Client->GetSquelches()) if (Entry.Guid==Selected.Guid) bSquelched=true;
+					for (const auto& Entry : Client->GetSquelches()) if (Entry.Guid==Selected.Guid && Entry.Blocks(1)) bSquelched=true;
 					Client->SendModifyCharacterSquelch(!bSquelched,Selected.Guid,Selected.Name,ACEChatMessageType::AllChannels);
 				}
 				CloseChatTargetPopup();

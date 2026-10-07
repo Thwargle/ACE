@@ -125,7 +125,8 @@ bool FACERetailFontWidgetTest::RunTest(const FString& Parameters)
     const auto Element = MakeShared<FACEUIElement>();
     Element->FontId = 0x40000001;
     Element->bTextOneLine = true;
-    Label->SetRetailElement(Resources, Element, FVector2D(1,1), 240);
+    // A standalone widget has no DAT canvas ancestors to clip against.
+    Label->SetRetailElement(Resources, Element, FVector2D(1,1), 240, false);
     Label->SetText(FText::FromString(TEXT("Inventory")));
     Label->SetColorAndOpacity(FSlateColor(FLinearColor::White));
     if (!TestNotNull(TEXT("Widget binds the DAT bitmap font"), Label->GetBitmapFont())) return false;
