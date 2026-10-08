@@ -98,19 +98,151 @@ void UACEPluginSubsystem::ObserveAppraisal(const FACEAppraisalInfo& Info)
     {
         P->NextAction=FMath::Min(P->NextAction,P->ActionSentAt+.25);
         P->NextDecision=0;P->WaitAction.Empty();
+        if(P->Id==TEXT("ucm")&&P->Running&&Info.ObjectGuid==CombatTarget)
+        {P->NextAction=0;ScheduleDecisionWake(FPlatformTime::Seconds());}
+    }
+}
+void UACEPluginSubsystem::UnbindCombatEvents()
+{
+    if(auto S=ObservedSession.Pin())
+    {
+        S->OnObjectHealth.Remove(TargetHealthHandle);S->OnMotionUpdate.Remove(TargetMotionHandle);
+        S->OnObjectDeleted.Remove(TargetDeletedHandle);S->OnObjectCreated.Remove(TargetCreatedHandle);
+        S->OnVitalsUpdated.Remove(CombatVitalsHandle);
+    }
+}
+void UACEPluginSubsystem::WakeCombatDecision()
+{
+    auto P=Find(TEXT("ucm"));if(!P||!P->Running)return;
+    // Physical attack's retry throttle is not a server action lock. Release
+    // only that delay; casts, inventory transfers and equipment still wait.
+    if(PhysicalAttackOwner==P->Id&&P->WaitAction.IsEmpty()&&!PendingSpell
+        &&P->NextAction==PhysicalAttackNextSendAt)P->NextAction=0;
+    P->NextDecision=0;ScheduleDecisionWake(FPlatformTime::Seconds());
+}
+void UACEPluginSubsystem::ReleaseCombatTarget(int32 Guid)
+{
+    if(!Guid||CombatTarget!=Guid)return;
+    WakeCombatDecision();CombatTarget=0;
+    if(auto P=Find(TEXT("ucm"));P&&P->WaitAction==TEXT("identify")&&P->WaitItem==Guid)
+    {P->WaitAction.Empty();P->NextAction=0;}
+    if(PhysicalAttackTarget==Guid){PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();PhysicalAttackNextSendAt=0;}
+    // Do not clear PendingSpell: its untagged UseDone still belongs to that
+    // cast. A death event can arrive while a projectile or recoil is active.
+}
+void UACEPluginSubsystem::ObserveTargetHealth(int32 Guid,float Fraction)
+{
+    if(!FMath::IsFinite(Fraction))return;
+    FACEWorldObject Object;auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    if(Fraction>0){DefeatedTargets.Remove(Guid);return;}
+    if(C->GetWorldObject(Guid,Object)&&Object.IsAttackable()&&!Object.bIsPlayer&&!Object.PetOwnerId)
+    {DefeatedTargets.Add(Guid);ReleaseCombatTarget(Guid);}
+}
+void UACEPluginSubsystem::ObserveTargetMotion(int32 Guid,const FACEObjectMotionState& Motion)
+{
+    FACEWorldObject Object;
+    if(Motion.IsDeathMotion()&&GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->GetWorldObject(Guid,Object)&&Object.bDying)
+        ReleaseCombatTarget(Guid);
+}
+void UACEPluginSubsystem::ObserveTargetDeleted(int32 Guid)
+{DefeatedTargets.Remove(Guid);ReleaseCombatTarget(Guid);}
+void UACEPluginSubsystem::ObserveTargetCreated(const FACEWorldObject& Object)
+{DefeatedTargets.Remove(Object.Guid);}
+void UACEPluginSubsystem::ObserveCombatVitals(const FACEPlayerVitals& Vitals)
+{
+    const FIntVector Current(Vitals.Health,Vitals.Stamina,Vitals.Mana);
+    if(Current==LastCombatVitals)return;
+    LastCombatVitals=Current;
+    // VT's ChangeVital wakes the scheduler. Run recovery through the ordinary
+    // policy before choosing another attack; never attack from this callback.
+    if(CombatTarget||!PhysicalAttackOwner.IsEmpty())WakeCombatDecision();
+}
+void UACEPluginSubsystem::PrepareSpellConfirmation(const FString& SpellName)
+{
+    PendingSpellConfirmation.Empty();PendingSpellItemConfirmations.Empty();PendingSpellRecoveryConfirmations.Empty();
+    auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    const int32 Player=Client->GetPlayerGuid();
+    const bool Self=PendingSpellTarget==Player;
+    FACEWorldObject Recipient;
+    const FString Prefix=TEXT("You cast ")+SpellName+TEXT(" on ");
+    if(Self||Client->GetWorldObject(PendingSpellTarget,Recipient))
+        PendingSpellConfirmation=Prefix+(Self?TEXT("yourself"):Recipient.Name);
+
+    auto* Dat=GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
+    uint32 School=0,Power=0,Category=0,Flags=0,TargetType=0;double Duration=0;bool Projectile=false;
+    if(!Dat->TryGetPluginSpellInfo(PendingSpell,School,Power,Category,Flags,Duration))return;
+    // VT d3 also recognizes boost results, which omit "on yourself".
+    // Match the exact spell/recipient and a numeric restored amount, not merely
+    // a general recovery phrase from unrelated server chat.
+    if(School==2&&(Flags&4)&&Duration==0&&!PendingSpellConfirmation.IsEmpty())
+        for(const FString Vital:{TEXT("health"),TEXT("stamina"),TEXT("mana")})
+            PendingSpellRecoveryConfirmations.Emplace(
+                Self?TEXT("You cast ")+SpellName+TEXT(" and restore "):TEXT("With ")+SpellName+TEXT(" you restore "),
+                Self?TEXT(" points of your ")+Vital+TEXT("."):TEXT(" points of ")+Vital+TEXT(" to ")+Recipient.Name+TEXT("."));
+
+    // ACE redirects a self-targeted bane/impenetrability to worn vestments.
+    // Its result names each item, not "yourself". VT's d3/gj/dm likewise
+    // accepts the item result and retains a timer for the requested buff.
+    // Snapshot only compatible worn items: a matching spell on carried armor
+    // or another player's equipment must not confirm this attempt.
+    if(!Self||!Player||School!=3||!(Flags&4)||Duration<=0
+        ||!Dat->TryGetRetailSpellTargeting(PendingSpell,Flags,TargetType,Projectile)
+        ||!(TargetType&(ACEItemType::Armor|ACEItemType::Clothing)))return;
+    if(auto Session=Client->GetSession())for(const auto& Pair:Session->GetWorldObjects())
+    {
+        const auto& Item=Pair.Value;
+        const bool Worn=Item.WielderId==Player||(Item.CurrentWieldedLocation&&Item.ParentGuid==Player);
+        if(Worn&&(uint32(Item.ItemType)&TargetType)&&!Item.Name.IsEmpty())
+            PendingSpellItemConfirmations.AddUnique(Prefix+Item.Name);
     }
 }
 void UACEPluginSubsystem::ObserveUseDone(uint32 Error)
 {
-    // A matching spell result followed by UseDone is ready for the next cast.
-    // VT advances on the result; do not add an arbitrary half-second floor to
-    // already completed instant buffs. Rejections retain the retry throttle,
-    // and the pending-request gate still prevents overlapping casts.
+    // A confirmed buff may have already advanced the policy. Its late success
+    // acknowledgment must never finish the next cast or an inventory action.
+    if(ConfirmedBuffAckAt && !Error)
+    {
+        ConfirmedBuffAckAt=0;ConfirmedBuffOwner.Empty();
+        if(BuffRetryAt)BuffRetryAt=FPlatformTime::Seconds();
+        ScheduleDecisionWake(FPlatformTime::Seconds());return;
+    }
+    // A manually attempted use can fail while waiting for recoil. Its error
+    // is not the successful buff's acknowledgment and must not release it.
+    if(ConfirmedBuffAckAt&&!PendingSpell)return;
+    // VT retries CastSpell while waiting for the spell words. Servers without
+    // recoil queuing reject an early request as busy; retry that same request,
+    // without consuming the buff family's failure limit or advancing Lua.
+    if(Error==0x001D && PendingBuffResultDriven && !PendingSpellWords
+        && FPlatformTime::Seconds()-PendingSpellAt<5)
+    {
+        BuffRetryAt=FPlatformTime::Seconds()+.2;
+        ScheduleDecisionWake(BuffRetryAt);return;
+    }
+    CompletePendingAction(Error);
+}
+void UACEPluginSubsystem::CompleteConfirmedBuff()
+{
+    if(!PendingSpell||!PendingBuffResultDriven||!PendingSpellConfirmed||PendingSpellFizzled||ConfirmedBuffAckAt)return;
+    // Words and result may arrive in one network batch. Preserve the single
+    // movement edge that cancels recoil before letting the next buff start.
+    if(!FastCastOwner.IsEmpty()&&FastCastStarted&&!FastCastMovementApplied)return;
+    const FString Owner=PendingSpellOwner;
+    CompletePendingAction(0);
+    ConfirmedBuffAckAt=FPlatformTime::Seconds();ConfirmedBuffOwner=Owner;
+}
+void UACEPluginSubsystem::CompletePendingAction(uint32 Error)
+{
+    BuffRetryAt=0;PendingBuffResultDriven=false;PendingSpellWords=false;
+    // UseDone releases the caster even while a launched projectile is still
+    // travelling. Damage/enchantment confirmation is tracked separately.
+    // Wake on the next frame like VT's SchedulePoke, rather than adding up to
+    // half a second from the idle ticker. Fizzles/rejections retain backoff.
     if(PendingSpell)if(auto Owner=Find(PendingSpellOwner))
     {
-        const bool Confirmed=PendingSpellConfirmed&&!PendingSpellFizzled&&!Error;
-        Owner->NextAction=FMath::Min(Owner->NextAction,Confirmed?FPlatformTime::Seconds():PendingSpellAt+.5);
+        const bool Completed=!PendingSpellFizzled&&!Error;
+        Owner->NextAction=FMath::Min(Owner->NextAction,Completed?FPlatformTime::Seconds():PendingSpellAt+.5);
         Owner->NextDecision=0;
+        if(Owner->Running)ScheduleDecisionWake(Owner->NextAction);
     }
     PendingSpellOwner.Empty();
     FastCastOwner.Empty();
@@ -149,6 +281,11 @@ void UACEPluginSubsystem::ObserveUseDone(uint32 Error)
         auto* D=GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
         if(D->TryGetPluginSpellInfo(PendingSpell,School,Power,Category,Flags,Duration) && (Flags&4) && Duration>0)
         {
+            // VT MySpell.EffectiveDurationS and ACE EnchantmentManager apply
+            // +20% per IncreasedSpellDuration augmentation to cast buffs.
+            // Otherwise item-only banes are refreshed before their real expiry.
+            auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+            Duration*=1.+.2*FMath::Max(0,Client->GetPlayerVitalsView().StatQualityInts.FindRef(238));
             // Item enchantments are not in the player's enchantment list. Only
             // record confirmed casts, never assume a request was successful.
             auto E=MakeShared<FJsonObject>();E->SetNumberField(TEXT("target"),uint32(PendingSpellTarget));
@@ -160,6 +297,8 @@ void UACEPluginSubsystem::ObserveUseDone(uint32 Error)
         }
     }
     PendingSpell=PendingSpellTarget=0;
+    PendingSpellItemConfirmations.Empty();
+    PendingSpellRecoveryConfirmations.Empty();
 }
 void UACEPluginSubsystem::RecordCombatOutcome(bool Hit)
 {
@@ -247,15 +386,24 @@ void UACEPluginSubsystem::RefreshAutomationData()
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Session=C->GetSession();
     if(!Session || C->GetSessionState()!=EACESessionState::InWorld)
     {
+        CombatTarget=0;DefeatedTargets.Empty();LastCombatVitals=FIntVector(-1,-1,-1);
+        ConfirmedBuffAckAt=BuffRetryAt=0;ConfirmedBuffOwner.Empty();DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();PendingBuffResultDriven=false;
         DataPlayer=0;Appraisals.Empty();CorpseFirstSeen.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();CachedInventory.Empty();ClearBuffRequests();
         PendingSpell=0;PendingSpellOwner.Empty();FastCastOwner.Empty();PendingManaRefresh=false;PendingResourceRefresh.Empty();Debuffs.Empty();PendingDebuffCasts.Empty();OffensiveCasts.Empty();InventoryRevision=MAX_uint64;C->BackgroundAppraisals.Empty();return;
     }
     if(DataPlayer!=C->GetPlayerGuid()||DataServer!=C->GetServerName()||ObservedSession.Pin()!=Session)
     {
+        UnbindCombatEvents();CombatTarget=0;DefeatedTargets.Empty();LastCombatVitals=FIntVector(-1,-1,-1);
+        ConfirmedBuffAckAt=BuffRetryAt=0;ConfirmedBuffOwner.Empty();DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();PendingBuffResultDriven=false;
         if(auto Old=ObservedSession.Pin()){Old->OnUseDone.Remove(UseDoneHandle);Old->OnPlayerTell.Remove(TellHandle);Old->OnChatMessage.Remove(MetaChatHandle);Old->OnCombatFeedback.Remove(CombatFeedbackHandle);}
         ObservedSession=Session;UseDoneHandle=Session->OnUseDone.AddUObject(this,&UACEPluginSubsystem::ObserveUseDone);
         MetaChatHandle=Session->OnChatMessage.AddUObject(this,&UACEPluginSubsystem::ObserveMetaChat);MetaChatEvents.Empty();MetaPortalEvents.Empty();MetaPortalSpace=false;
         CombatFeedbackHandle=Session->OnCombatFeedback.AddUObject(this,&UACEPluginSubsystem::ObserveCombatFeedback);
+        TargetHealthHandle=Session->OnObjectHealth.AddUObject(this,&UACEPluginSubsystem::ObserveTargetHealth);
+        TargetMotionHandle=Session->OnMotionUpdate.AddUObject(this,&UACEPluginSubsystem::ObserveTargetMotion);
+        TargetDeletedHandle=Session->OnObjectDeleted.AddUObject(this,&UACEPluginSubsystem::ObserveTargetDeleted);
+        TargetCreatedHandle=Session->OnObjectCreated.AddUObject(this,&UACEPluginSubsystem::ObserveTargetCreated);
+        CombatVitalsHandle=Session->OnVitalsUpdated.AddUObject(this,&UACEPluginSubsystem::ObserveCombatVitals);
         PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();CombatOutcomes.Empty();OffensiveCasts.Empty();
         TellHandle=Session->OnPlayerTell.AddUObject(this,&UACEPluginSubsystem::ObservePlayerTell);ClearBuffRequests();
         DataPlayer=C->GetPlayerGuid();DataServer=C->GetServerName();NextAppraisalScan=0;Appraisals.Empty();CachedSpeciesNames.Reset();CorpseFirstSeen.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();
@@ -540,6 +688,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         J->SetNumberField(TEXT("object_class"),ACEVTObjectClass::Classify(Obj));J->SetNumberField(TEXT("wcid"),Obj.WeenieClassId);
         if(Monster)
         {
+            if(DefeatedTargets.Contains(Obj.Guid))continue;
             const FVector Delta=Obj.Position.ToUnrealLocation()-P.ToUnrealLocation();
             J->SetNumberField(TEXT("attack_height"),ACEPluginCombat::AttackHeight(*Dat,Obj,P));
             J->SetNumberField(TEXT("angle"),FMath::Abs(FMath::FindDeltaAngleDegrees(N(Out,TEXT("heading")),double(Delta.Rotation().Yaw))));
@@ -693,7 +842,13 @@ void UACEPluginSubsystem::RefreshActionWait(FACEClientPlugin& P)
         P.NextAction=FMath::Min(P.NextAction,P.ActionSentAt+.25);
         P.NextDecision=0;P.WaitAction.Empty();
     }
-    else if(FPlatformTime::Seconds()>=P.NextAction)P.WaitAction.Empty();
+    else if(FPlatformTime::Seconds()>=P.NextAction)
+    {
+        // Keep ownership of an ongoing corpse approach beyond the initial
+        // throttle so combat can interrupt it even on a long walk.
+        auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
+        if(P.WaitAction!=TEXT("open_corpse")||UseApproachOwner!=P.Id||!PC||!PC->IsUseApproachActive())P.WaitAction.Empty();
+    }
 }
 bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<FJsonObject>& I,const FString& Action)
 {
@@ -1067,11 +1222,11 @@ void UACEPluginSubsystem::ObserveMetaChat(const FString& Text,const FString& Sen
     if(Sender.IsEmpty()&&Type==0&&Text.TrimStartAndEnd()==TEXT("Your missile attack hit the environment."))RecordCombatOutcome(false);
     // VT starts its backward input when the local spell words arrive, not when
     // requesting the spell (which can still be turning or entering magic mode).
-    if(PendingSpell&&!FastCastOwner.IsEmpty()&&Type==ACEChatMessageType::Spellcasting)
+    if(PendingSpell&&Type==ACEChatMessageType::Spellcasting)
     {
         auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();FACEWorldObject Player;
         if(!FastCastStarted&&C->GetWorldObject(C->GetPlayerGuid(),Player)&&!Player.Name.IsEmpty()&&Sender==Player.Name)
-        {FastCastStarted=true;FastCastStartedAt=FPlatformTime::Seconds();}
+        {PendingSpellWords=true;BuffRetryAt=0;if(!FastCastOwner.IsEmpty()){FastCastStarted=true;FastCastStartedAt=FPlatformTime::Seconds();}}
     }
     if(Sender.IsEmpty()&&Type==ACEChatMessageType::Magic)
     {
@@ -1080,8 +1235,30 @@ void UACEPluginSubsystem::ObserveMetaChat(const FString& Text,const FString& Sen
             // UseDone acknowledges the action, including a fizzle. Only the
             // matching server spell result confirms an enchantment was applied.
             const FString& Prefix=PendingSpellConfirmation;
-            if(!Prefix.IsEmpty()&&(Text==Prefix||Text==Prefix+TEXT(".")||Text.StartsWith(Prefix+TEXT(", "))||Text.StartsWith(Prefix+TEXT(" and "))))
+            const auto Matches=[&Text](const FString& Expected)
+            {
+                return !Expected.IsEmpty()&&(Text==Expected||Text==Expected+TEXT(".")
+                    ||Text.StartsWith(Expected+TEXT(", refreshing "))||Text.StartsWith(Expected+TEXT(", surpassing "))
+                    ||Text.StartsWith(Expected+TEXT(", but it is surpassed by "))||Text.StartsWith(Expected+TEXT(" and ")));
+            };
+            const bool Direct=!Prefix.IsEmpty()&&(Text==Prefix||Text==Prefix+TEXT(".")
+                ||Text.StartsWith(Prefix+TEXT(", "))||Text.StartsWith(Prefix+TEXT(" and ")));
+            const bool Recovery=PendingSpellRecoveryConfirmations.ContainsByPredicate([&Text](const auto& Pattern)
+            {
+                if(!Text.StartsWith(Pattern.Key)||!Text.EndsWith(Pattern.Value))return false;
+                const int32 Digits=Text.Len()-Pattern.Key.Len()-Pattern.Value.Len();
+                if(Digits<=0)return false;
+                for(int32 I=0;I<Digits;++I)if(!FChar::IsDigit(Text[Pattern.Key.Len()+I]))return false;
+                return true;
+            });
+            if(Direct||Recovery||PendingSpellItemConfirmations.ContainsByPredicate(Matches))
+            {
                 PendingSpellConfirmed=true;
+                // Success is authoritative. Keep at most one completed cast's
+                // acknowledgment outstanding; a second overlapping completion
+                // falls back to the ordinary UseDone path.
+                CompleteConfirmedBuff();
+            }
             if(Text==TEXT("Your spell fizzled.")){PendingSpellFizzled=true;FastCastOwner.Empty();FastCastStarted=false;}
         }
         const double Now=FPlatformTime::Seconds();

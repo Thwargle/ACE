@@ -223,7 +223,7 @@ bool FACEObjectCreateParser::ParsePhysicsData(FACEBinaryReader& Reader, FACEDeco
 		Out.PlacementId = static_cast<int32>(Reader.ReadUInt32());
 	}
 
-	if (Flags & Position)
+	if (Flags & ACEPhysicsDescFlags::Position)
 	{
 		if (!Reader.CanRead(32)) return false;
 		Out.Position = Reader.ReadPosition();

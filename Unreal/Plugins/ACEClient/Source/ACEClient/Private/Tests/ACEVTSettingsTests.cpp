@@ -110,6 +110,14 @@ bool FACEVTSettingsTest::RunTest(const FString&)
         S->SetArrayField(TEXT("targets"),SettingsJSON(TEXT(R"({"v":[{"id":100,"name":"Target","identified":true,"distance":10}]})"))->GetArrayField(TEXT("v")));
         S->SetArrayField(TEXT("spells"),SettingsJSON(TEXT(R"({"v":[{"id":20,"name":"Acid Bolt","category":117,"power":200,"skill":300},{"id":21,"name":"Yield","category":42,"power":100,"skill":300,"duration":120},{"id":22,"name":"Imperil","category":116,"power":100,"skill":300,"duration":120},{"id":23,"name":"Acid Vulnerability","category":102,"power":100,"skill":300,"duration":120}]})"))->GetArrayField(TEXT("v")));
         FACEPluginVM VM;VM.Load(Script,Error);TestEqual(TEXT("Yield precedes other debuffs"),Step(VM,S,B)->GetNumberField(TEXT("spell")),21.);
+        {
+            FACEPluginVM DeadRecipient;DeadRecipient.Load(Script,Error);Step(DeadRecipient,S,B);
+            const auto OriginalTargets=S->GetArrayField(TEXT("targets"));
+            S->SetArrayField(TEXT("targets"),SettingsJSON(TEXT(R"({"v":[{"id":101,"name":"Next target","identified":true,"distance":10}]})"))->GetArrayField(TEXT("v")));
+            auto Next=Step(DeadRecipient,S,B);
+            TestEqual(TEXT("Dead debuff recipient does not stall the next opponent for ten seconds"),Next->GetNumberField(TEXT("target")),101.);
+            S->SetArrayField(TEXT("targets"),OriginalTargets);
+        }
         S->SetNumberField(TEXT("action_serial"),1);S->SetNumberField(TEXT("last_spell"),21);TestFalse(TEXT("Successful cast action without effect confirmation waits"),Step(VM,S,B)->HasField(TEXT("action")));
         TArray<TSharedPtr<FJsonValue>> Confirmed;auto Confirm=[&](int Category){auto E=SettingsJSON(TEXT(R"({"target":100,"power":100,"expires":220})"));E->SetNumberField(TEXT("category"),Category);Confirmed.Add(MakeShared<FJsonValueObject>(E));S->SetArrayField(TEXT("debuffs"),Confirmed);};
         Confirm(42);TestEqual(TEXT("Confirmed Yield advances to Imperil"),Step(VM,S,B)->GetNumberField(TEXT("spell")),22.);
@@ -143,6 +151,12 @@ bool FACEVTSettingsTest::RunTest(const FString&)
         auto S=Snapshot();S->SetNumberField(TEXT("health"),100);S->SetArrayField(TEXT("spells"),SettingsJSON(TEXT(R"({"v":[{"id":10,"category":1,"power":100,"skill":300,"self_buff":true,"beneficial":true,"caster_target":true,"duration":300,"school":4}]})"))->GetArrayField(TEXT("v")));
         FACEPluginVM VM;VM.Load(Script,Error);auto I=Step(VM,S,B);TestTrue(TEXT("Fast buff uses ordinary cast with explicit movement preference"),I->GetStringField(TEXT("action"))==TEXT("cast")&&I->GetBoolField(TEXT("fast_cast")));
         B->SetBoolField(TEXT("fast_cast_buffs"),false);FACEPluginVM Off;Off.Load(Script,Error);TestFalse(TEXT("Disabled fast buff leaves movement untouched"),Step(Off,S,B)->GetBoolField(TEXT("fast_cast")));
+        B->RemoveField(TEXT("fast_cast_buffs"));FACEPluginVM Default;Default.Load(Script,Error);
+        TestTrue(TEXT("Existing native profiles without a preference default to fast buff movement"),Step(Default,S,B)->GetBoolField(TEXT("fast_cast")));
+        auto Missing=SettingsJSON(TEXT(R"({"format":"usd","tables":[{"name":"Settings","columns":["Setting","Value"],"rows":[]}]})"));
+        TestTrue(TEXT("Imports without FastCastBuffs use UCM's enabled default"),ACEVTProfile::Convert(Missing,Issues)->GetBoolField(TEXT("fast_cast_buffs")));
+        D->GetArrayField(TEXT("tables"))[0]->AsObject()->SetArrayField(TEXT("rows"),SettingsJSON(TEXT(R"({"v":[["FastCastBuffs",false]]})"))->GetArrayField(TEXT("v")));
+        TestFalse(TEXT("An imported explicit opt-out is preserved"),ACEVTProfile::Convert(D,Issues)->GetBoolField(TEXT("fast_cast_buffs")));
     }
     auto Bad=SettingsJSON(TEXT(R"({"format":"usd","tables":[{"name":"Settings","columns":["Setting","Value"],"rows":[["UnknownFutureOption",true]]}]})"));
     ACEVTProfile::Convert(Bad,Issues);TestTrue(TEXT("Unsupported active setting blocks whole import"),Issues.Num()>0);

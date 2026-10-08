@@ -669,7 +669,7 @@ local function meta_action(a,s,p)
    idle_health_threshold=0,idle_stamina_threshold=0,idle_mana_threshold=0,loot_range=15,loot_priority=false,loot_only_rare=false,salvage_combine=false,follow_corners=false,target_lock=true,
    kit_min_success=0,kits_in_magic=true,kit_peace=false,helper_health_threshold=0,helper_stamina_threshold=0,helper_mana_threshold=0,
    helper_health_range=74.5,helper_stamina_range=74.5,helper_mana_range=40,ring_range=5,ring_min_targets=4,debuff_refresh=5,debuff_fallback=false,
-   split_peas=true,component_critical=4,component_normal=20,component_idle=20,fast_cast_buffs=false,switch_debuff_wand=true,
+   split_peas=true,component_critical=4,component_normal=20,component_idle=20,fast_cast_buffs=true,switch_debuff_wand=true,
    summon_pets=false,pet_range_mode=0,pet_range=5,pet_min_targets=1,refill_summons=false,summon_refill_charges=5,fill_mana_stones=false,
    protection_profile=2,bane_profile=2,protection_custom='ALL',bane_custom='ALL',target_select=1,target_angle_range=5,minimum_range=0,monster_attempts=4,monster_blacklist_seconds=120,corpse_attempts=30,corpse_blacklist_seconds=200,use_arcs=1,arc_range=5,debuff_each_first=1}
   local v=meta.options[a.key];if v==nil then v=p[a.key] end;if v==nil then v=defaults[a.key] end
@@ -1073,6 +1073,16 @@ local function tick(s,p)
    or (r.when=='elapsed' and s.time-entered>=r.value) or (r.when=='no_targets' and not target)
    or (r.when=='target_available' and target~=nil) or (r.when=='route_complete' and point>#(p.route or {}))
   if match then state=r.next;entered=s.time;return result(nil,'State: '..state) end
+ end
+ -- The host exposes only UCM's cancellable corpse approach here, never an
+ -- inventory transfer or a cast. Reuse normal target filtering (LOS, rules,
+ -- range and blacklists) before interrupting it for combat.
+ if s.loot_approaching and not s.jumping and target and option('combat','off')~='off'
+  and not option('loot_priority',false) and activity_ready('combat') then
+  if corpse_pending then
+   local key='corpse'..corpse_pending.id;item_attempts[key]=math.max(0,(item_attempts[key] or 1)-1);corpse_pending=nil
+  end
+  return result('pause_loot_approach','Pausing corpse approach for combat')
  end
  if s.busy or s.ready==false or s.jumping then return result(nil,s.jumping and 'Following jump arc' or 'Waiting for game action') end
  if locked_target and (not target or option('combat','off')=='off') then locked_target=nil;return result('cancel_attack','No unobstructed combat target; continuing other activities') end
@@ -2044,9 +2054,17 @@ local function tick(s,p)
    corpse_pending={id=c.id,deadline=s.time+20,serial=s.action_serial or 0};return {action='open_corpse',item=c.id,status='Opening '..c.name} end end end
  end
  end
- -- Finish a corpse transaction before another activity cancels its approach or transfer.
- if corpse_pending or loot_pending or (s.container and s.container~=0 and s.container_is_corpse~=false) or option('loot_priority',false) then local action=loot();if action then return action end end
- if option('nav_priority',false) then local action=loot();if action then return action end;local nav=navigate();if nav then return nav end end
+ -- VT cLogic puts corpse approach and loot actions before attack only with
+ -- LootPriorityBoost. An open corpse or pending receipt must not enable it.
+ -- Keep loot_pending intact across combat so the server transfer is reconciled
+ -- once, rather than requesting the item again or losing its follow-up rule.
+ if option('loot_priority',false) then local action=loot();if action then return action end end
+ if option('nav_priority',false) then
+  -- Keep clear-area looting from being starved by a continuous route, without
+  -- implicitly enabling LootPriorityBoost while a combat target is present.
+  if not target or combat=='off' then local action=loot();if action then return action end end
+  local nav=navigate();if nav then return nav end
+ end
  activity='combat'
  local attack_spells,combat_inventory,best_debuffs,attack_indices={},{},{},{}
  if target and combat~='off' then
@@ -2201,10 +2219,12 @@ local function tick(s,p)
  -- Keep an in-flight debuff on its recipient until the server answers. A new
  -- higher-priority spawn must not make UseDone look like successful debuffing.
  if debuff_pending then local q=debuff_pending
+  local recipient_present=s.targets==nil
+  for _,candidate in ipairs(s.targets or {}) do if candidate.id==q.target then recipient_present=true;break end end
   local reported=(s.debuff_revision or 0)~=q.revision and s.debuff_target==q.target and s.debuff_spell==q.spell
   local failed=(s.action_serial or 0)~=q.serial and (s.action_error or 0)~=0
   local confirmed=false;for _,e in ipairs(s.debuffs or {}) do if e.target==q.target and e.category==q.category and e.power>=q.power and e.expires>s.time then confirmed=true;break end end
-  if reported or failed or confirmed or s.time>=q.deadline then debuff_pending=nil
+  if not recipient_present or reported or failed or confirmed or s.time>=q.deadline then debuff_pending=nil
   else return result(nil,'Waiting for debuff confirmation') end
  end
  local debuff_mode=option('debuff_each_first',1)
@@ -2548,7 +2568,7 @@ local function run(s,p)
  if intent then
   route_walking=intent.status and (intent.status:sub(1,9)=='Waypoint ' or intent.status=='Route complete') or false
   if intent.status~='Returning to route' then route_returning=false end
-  if intent.action=='cast' then intent.fast_cast=effective.fast_cast_buffs==true end
+  if intent.action=='cast' then intent.fast_cast=effective.fast_cast_buffs~=false end
   intent.helper_updates=effective.recovery~=false and ((effective.helper_health_threshold or 0)>0 or (effective.helper_stamina_threshold or 0)>0 or (effective.helper_mana_threshold or 0)>0)
   intent.route_point=point
   intent.route_join_pending=route_join_pending

@@ -45,7 +45,8 @@ J VTSettings(const J& D,TArray<FString>& Issues)
     Out->SetBoolField(TEXT("navigation"),false);Out->SetBoolField(TEXT("looting"),false);Out->SetBoolField(TEXT("meta_enabled"),false);
     Out->SetBoolField(TEXT("recovery"),true);Out->SetBoolField(TEXT("target_lock"),false);
     Out->SetNumberField(TEXT("target_select"),3);Out->SetNumberField(TEXT("target_angle_range"),5);Out->SetNumberField(TEXT("minimum_range"),0);
-    Out->SetBoolField(TEXT("fast_cast_buffs"),false);
+    // UCM defaults to fast buffs; an explicit imported FastCastBuffs still wins.
+    Out->SetBoolField(TEXT("fast_cast_buffs"),true);
     Out->SetBoolField(TEXT("dispel_self"),false);Out->SetBoolField(TEXT("dispel_items"),false);
     Out->SetBoolField(TEXT("summon_pets"),true);Out->SetNumberField(TEXT("pet_range_mode"),0);Out->SetNumberField(TEXT("pet_range"),5);Out->SetNumberField(TEXT("pet_min_targets"),1);
     Out->SetBoolField(TEXT("split_peas"),true);Out->SetNumberField(TEXT("component_critical"),4);Out->SetNumberField(TEXT("component_normal"),20);Out->SetNumberField(TEXT("component_idle"),20);

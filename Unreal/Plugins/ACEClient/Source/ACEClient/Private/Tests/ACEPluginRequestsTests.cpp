@@ -11,6 +11,8 @@
 #include "ImageUtils.h"
 #include "RenderingThread.h"
 #include "Mods/ACEPluginSubsystem.h"
+#include "Mods/ACEPluginVM.h"
+#include "Interfaces/IPluginManager.h"
 #include "Mods/ACEPluginSight.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
@@ -319,11 +321,72 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         const double Sent=FPlatformTime::Seconds()-1.;
         H->PendingSpell=123;H->PendingSpellTarget=0;H->PendingSpellAt=Sent;H->PendingSpellOwner=P->Id;
         P->NextAction=Sent+3.5;H->ObserveUseDone(CastError);
-        TestTrue(TEXT("Completed/rejected cast releases fixed delay after minimum request interval"),P->NextAction<=Sent+.5);
+        TestTrue(TEXT("Completed cast releases immediately; rejected cast retains minimum request interval"),P->NextAction<=(CastError?Sent+.5:FPlatformTime::Seconds()));
         TestTrue(TEXT("Cast completion clears owner and pending spell"),H->PendingSpellOwner.IsEmpty()&&H->PendingSpell==0);
         P->NextAction=Sent+8;H->ObserveUseDone(0);
         TestEqual(TEXT("Unrelated use completion cannot clear another action throttle"),P->NextAction,Sent+8);
         P->NextAction=0;
+    }
+    {
+        const auto SavedPlugin=*P;
+        const auto SavedVitals=Session.PlayerVitals;
+        const bool SavedUseBusy=Session.bUseBusy;
+        const int32 SavedEquipment=Session.PendingEquipmentGuid;
+        const double SavedMaintenance=H->NextMaintenanceAt;
+        ON_SCOPE_EXIT
+        {
+            FTSTicker::GetCoreTicker().RemoveTicker(H->DecisionWakeTicker);
+            H->DecisionWakeTicker.Reset();H->DecisionWakeAt=0;
+            H->NextMaintenanceAt=SavedMaintenance;*P=SavedPlugin;Session.PlayerVitals=SavedVitals;
+            Session.bUseBusy=SavedUseBusy;Session.PendingEquipmentGuid=SavedEquipment;
+            H->PendingSpell=0;H->PendingSpellOwner.Empty();
+        };
+        FTSTicker::GetCoreTicker().RemoveTicker(H->DecisionWakeTicker);H->DecisionWakeTicker.Reset();
+        P->VM=MakeShared<FACEPluginVM>();FString Error;
+        TestTrue(TEXT("Load cast scheduling probe"),P->VM->Load(TEXT("local n=0; return function(s,p) n=n+1; return {status='Decision '..n} end"),Error));
+        P->Profile=MakeShared<FJsonObject>();P->Running=true;P->Player=Session.PlayerGuid;P->Server=C->GetServerName();
+        Session.PlayerVitals.bValid=true;Session.PlayerVitals.Health=100;
+        Session.bUseBusy=false;Session.PendingEquipmentGuid=0;
+        P->WaitAction.Empty();P->NextDecision=0;P->NextAction=0;P->Status=TEXT("Waiting");
+        H->NextMaintenanceAt=FPlatformTime::Seconds()+60;
+        const double Maintenance=H->NextMaintenanceAt;
+        auto CompleteCast=[&](uint32 Result)
+        {
+            FACEBinaryWriter Packet;Packet.WriteUInt32(Result);FACEBinaryReader Reader(Packet.GetData());
+            Session.HandleUseDone(Reader);
+        };
+        auto DeliverWake=[&]()
+        {
+            // Invoke the registered callback without recursively ticking the global ticker.
+            FTSTicker::GetCoreTicker().RemoveTicker(H->DecisionWakeTicker);
+            H->RunDecisionWake(.016f);
+        };
+        for(int32 Cast=1;Cast<=20;++Cast)
+        {
+            H->PendingSpell=123;H->PendingSpellAt=FPlatformTime::Seconds();H->PendingSpellOwner=P->Id;
+            H->PendingSpellConfirmed=false;H->PendingSpellFizzled=false;
+            P->NextAction=H->PendingSpellAt+3.5;P->NextDecision=0;
+            const FString Before=P->Status;H->Tick(.016f);
+            TestEqual(TEXT("Pending spell prevents another decision"),P->Status,Before);
+            CompleteCast(0);
+            TestTrue(TEXT("Server completion schedules immediate deferred decision"),H->DecisionWakeTicker.IsValid()&&H->DecisionWakeAt<=FPlatformTime::Seconds());
+            TestEqual(TEXT("Network callback does not execute policy reentrantly"),P->Status,Before);
+            TestFalse(TEXT("Projectile still in flight is not falsely confirmed"),H->LastSpellConfirmed);
+            const double WakeAt=H->DecisionWakeAt;H->ScheduleDecisionWake(WakeAt+1);
+            TestEqual(TEXT("Later wake cannot delay an already ready cast"),H->DecisionWakeAt,WakeAt);
+            DeliverWake();
+            TestEqual(TEXT("Each acknowledged cast gets the next decision"),P->Status,FString::Printf(TEXT("Decision %d"),Cast));
+            H->Tick(.016f);
+            TestEqual(TEXT("Periodic poll cannot duplicate the same decision"),P->Status,FString::Printf(TEXT("Decision %d"),Cast));
+            TestEqual(TEXT("Rapid cast completions do not repeat background scans"),H->NextMaintenanceAt,Maintenance);
+        }
+        H->PendingSpell=123;H->PendingSpellOwner=P->Id;H->PendingSpellAt=FPlatformTime::Seconds();
+        P->NextAction=H->PendingSpellAt+3.5;CompleteCast(1);
+        TestTrue(TEXT("Immediate rejection retains half-second retry floor"),H->DecisionWakeAt>=H->PendingSpellAt+.5);
+        DeliverWake();TestEqual(TEXT("Early retry cannot execute another decision"),P->Status,FString(TEXT("Decision 20")));
+        H->PendingSpell=123;H->PendingSpellOwner=P->Id;CompleteCast(0);
+        P->Running=false;DeliverWake();
+        TestEqual(TEXT("Stopping before a queued wake prevents another decision"),P->Status,FString(TEXT("Decision 20")));
     }
     auto Tell=[&](const FString& Text,int32 Sender=0x50000002,int32 Type=ACEChatMessageType::Tell)
     {
@@ -537,6 +600,27 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             H->ExecuteInventory(*P,Intent,TEXT("close_corpse"));
             TestEqual(TEXT("Closing corpse preserves mode"),Session.PlayerVitals.CombatMode,Mode);
         }
+        {
+            const bool Busy=Session.bUseBusy;const int32 Equipment=Session.PendingEquipmentGuid;
+            const int32 SourceGuid=Session.UseSourceGuid,TargetGuid=Session.UseTargetGuid;
+            ON_SCOPE_EXIT {Session.bUseBusy=Busy;Session.PendingEquipmentGuid=Equipment;Session.UseSourceGuid=SourceGuid;Session.UseTargetGuid=TargetGuid;H->PendingSpell=0;};
+            Session.PendingEquipmentGuid=0;Session.OpenExternalContainerGuid=0;H->PendingSpell=0;P->Running=true;
+            LootPC->BeginUseApproach(870,.6f);H->UseApproachOwner=P->Id;
+            H->TrackActionWait(*P,TEXT("open_corpse"),870);P->NextAction=FPlatformTime::Seconds()-1;
+            Session.BeginPendingUse(870,0);H->RefreshActionWait(*P);
+            TestEqual(TEXT("Long corpse approach retains ownership after initial throttle"),P->WaitAction,FString(TEXT("open_corpse")));
+            TestTrue(TEXT("Only the owned corpse approach is available for interruption"),H->CanPauseLootApproach(*P));
+            TestTrue(TEXT("Busy snapshot exposes the safe corpse interruption"),H->Snapshot()->GetBoolField(TEXT("loot_approaching")));
+            H->PendingSpell=123;TestFalse(TEXT("A pending cast cannot be released as corpse approach"),H->CanPauseLootApproach(*P));H->PendingSpell=0;
+            Session.PendingEquipmentGuid=871;TestFalse(TEXT("Pending equipment cannot be released as corpse approach"),H->CanPauseLootApproach(*P));Session.PendingEquipmentGuid=0;
+            Session.UseSourceGuid=871;TestFalse(TEXT("An unrelated use cannot be released as corpse approach"),H->CanPauseLootApproach(*P));Session.UseSourceGuid=870;
+            H->TrackActionWait(*P,TEXT("loot"),871);TestFalse(TEXT("An item transfer is not a cancellable approach"),H->CanPauseLootApproach(*P));
+            H->TrackActionWait(*P,TEXT("open_corpse"),870);
+            auto Pause=MakeShared<FJsonObject>();Pause->SetStringField(TEXT("action"),TEXT("pause_loot_approach"));
+            H->Execute(*P,Pause);
+            TestTrue(TEXT("Combat interruption releases only approach and its use wait"),!LootPC->IsUseApproachActive()&&!Session.IsUseBusy()&&P->WaitAction.IsEmpty()&&P->NextAction==0);
+            TestTrue(TEXT("Interrupting looting keeps UCM running"),P->Running);
+        }
         Corpse.ObjectDescriptionFlags=0;Session.WorldObjects.Add(870,Corpse);Session.PlayerVitals.CombatMode=8;
         H->ExecuteInventory(*P,Intent,TEXT("use_world"));
         TestEqual(TEXT("Ordinary world-use stance behavior is unchanged"),Session.PlayerVitals.CombatMode,1);
@@ -593,6 +677,225 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         Begin();H->FastCastStartedAt=FPlatformTime::Seconds()-5;
         TestEqual(TEXT("Missing result cannot leave backward held for thirty seconds"),Drive(),0.f);
         H->ObserveUseDone(0);TestFalse(TEXT("Missing spell result cannot confirm a forced buff"),H->LastSpellConfirmed);
+    }
+    {
+        auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
+        if(!TestTrue(TEXT("Retail DAT loads for redirected bane confirmations"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+        FACEWorldObject Armor;Armor.Guid=0x71009000;Armor.Name=TEXT("Copper Helm");Armor.ItemType=ACEItemType::Armor;Armor.WielderId=Session.PlayerGuid;
+        FACEWorldObject Shirt=Armor;Shirt.Guid++;Shirt.Name=TEXT("Linen Shirt");Shirt.ItemType=ACEItemType::Clothing;
+        FACEWorldObject Carried=Armor;Carried.Guid+=2;Carried.Name=TEXT("Carried Helm");Carried.WielderId=0;Carried.ContainerId=Session.PlayerGuid;
+        FACEWorldObject Other=Armor;Other.Guid+=3;Other.Name=TEXT("Other Helm");Other.WielderId=Session.PlayerGuid+1;
+        for(const auto& Item:{Armor,Shirt,Carried,Other})Session.WorldObjects.Add(Item.Guid,Item);
+        ON_SCOPE_EXIT{for(const auto& Item:{Armor,Shirt,Carried,Other})Session.WorldObjects.Remove(Item.Guid);H->ItemBuffs.Empty();};
+        FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+        for(const FString Name:{TEXT("Blade Bane I"),TEXT("Impenetrability I")})
+        {
+            uint32 Spell=0,School=0,Power=0,Category=0,Flags=0;double Duration=0;
+            for(uint32 Id=1;Id<7000;++Id){FString Candidate;uint32 Icon=0;if(Dat->TryGetSpellInfo(Id,Candidate,Icon)&&Candidate==Name){Spell=Id;break;}}
+            if(!TestTrue(TEXT("Retail bane/impen spell found"),Spell&&Dat->TryGetPluginSpellInfo(Spell,School,Power,Category,Flags,Duration)))return false;
+            auto Begin=[&](int32 Target)
+            {
+                H->ItemBuffs.Empty();H->PendingSpell=Spell;H->PendingSpellTarget=Target;
+                H->PendingSpellAt=FPlatformTime::Seconds();H->PendingSpellConfirmed=false;H->PendingSpellFizzled=false;
+                H->PrepareSpellConfirmation(Name);
+            };
+            auto Chat=[&](const FString& Target,const FString& Suffix=TEXT(""),const FString& Sender=TEXT(""))
+            {H->ObserveMetaChat(TEXT("You cast ")+Name+TEXT(" on ")+Target+Suffix,Sender,ACEChatMessageType::Magic);};
+            for(const FString& Suffix:TArray<FString>{TEXT(""),TEXT("."),TEXT(", refreshing ")+Name,TEXT(", surpassing ")+Name,TEXT(", but it is surpassed by ")+Name})
+            {
+                Begin(Session.PlayerGuid);
+                Chat(Carried.Name);Chat(Other.Name);Chat(Armor.Name+TEXT(" Replica"));Chat(Armor.Name,TEXT(""),TEXT("Other caster"));
+                H->ObserveMetaChat(TEXT("You cast Wrong Spell on ")+Armor.Name,TEXT(""),ACEChatMessageType::Magic);
+                TestFalse(TEXT("Unrelated item/spell/sender cannot confirm a self bane"),H->PendingSpellConfirmed);
+                Chat(Armor.Name,Suffix);Chat(Shirt.Name,Suffix);
+                TestTrue(TEXT("Worn item result confirms the redirected spell"),H->PendingSpellConfirmed);
+                H->ObserveUseDone(0);
+                TestTrue(TEXT("Acknowledged bane succeeds"),H->LastSpellConfirmed);
+                TestEqual(TEXT("Multiple armor results retain one player-targeted family timer"),H->ItemBuffs.Num(),1);
+                if(H->ItemBuffs.Num())TestEqual(TEXT("Timer belongs to the requested player"),H->ItemBuffs[0]->AsObject()->GetNumberField(TEXT("target")),double(uint32(Session.PlayerGuid)));
+            }
+            // Feed the real host timer into UCM, including a manual forced cycle.
+            for(bool Forced:{false,true})
+            {
+                FACEPluginVM VM;if(!TestTrue(*Error,VM.Load(Source,Error)))return false;
+                TSharedPtr<FJsonObject> State=MakeShared<FJsonObject>();
+                FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(TEXT(R"({"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"combat_mode":8,"components_required":false,"inventory":[{"id":99,"type":32768,"equipped":true}],"spells":[]})")),State);
+                State->SetNumberField(TEXT("player"),uint32(Session.PlayerGuid));State->SetNumberField(TEXT("time"),FPlatformTime::Seconds());
+                State->SetNumberField(TEXT("action_serial"),H->ActionSerial);
+                auto Settings=MakeShared<FJsonObject>();Settings->SetBoolField(TEXT("buffing"),true);Settings->SetBoolField(TEXT("recovery"),false);Settings->SetStringField(TEXT("combat"),TEXT("off"));
+                auto Info=MakeShared<FJsonObject>();Info->SetNumberField(TEXT("id"),Spell);Info->SetNumberField(TEXT("category"),Category);Info->SetNumberField(TEXT("school"),School);Info->SetNumberField(TEXT("power"),Power);Info->SetNumberField(TEXT("duration"),Duration);Info->SetNumberField(TEXT("skill"),600);Info->SetNumberField(TEXT("target_type"),6);Info->SetBoolField(TEXT("beneficial"),true);
+                State->SetArrayField(TEXT("spells"),{MakeShared<FJsonValueObject>(Info)});
+                if(Forced){State->SetNumberField(TEXT("force_buff_request"),1);State->SetArrayField(TEXT("item_buffs"),H->ItemBuffs);}
+                TSharedPtr<FJsonObject> Intent;TestTrue(*Error,VM.Step(State,Settings,Intent,Error));
+                if(!TestTrue(TEXT("Buff cycle issues initial bane"),Intent&&Intent->HasField(TEXT("spell"))))return false;
+                Begin(Session.PlayerGuid);Chat(Armor.Name);H->ObserveUseDone(0);
+                State->SetNumberField(TEXT("action_serial"),H->ActionSerial);State->SetNumberField(TEXT("last_spell"),Spell);State->SetBoolField(TEXT("last_spell_confirmed"),H->LastSpellConfirmed);State->SetNumberField(TEXT("action_error"),0);State->SetArrayField(TEXT("item_buffs"),H->ItemBuffs);
+                TestTrue(*Error,VM.Step(State,Settings,Intent,Error));
+                TestFalse(TEXT("Confirmed bane advances instead of repeating"),Intent->HasField(TEXT("spell")));
+                if(Forced)TestEqual(TEXT("Force Buff completes after item result"),Intent->GetStringField(TEXT("action")),FString(TEXT("force_buff_done")));
+                State->SetNumberField(TEXT("force_buff_request"),0);State->SetNumberField(TEXT("time"),FPlatformTime::Seconds()+Duration+1);
+                TestTrue(*Error,VM.Step(State,Settings,Intent,Error));TestTrue(TEXT("Bane becomes eligible again when its timer expires"),Intent->HasField(TEXT("spell")));
+            }
+            Begin(Session.PlayerGuid);H->ObserveUseDone(0);TestTrue(TEXT("UseDone alone cannot manufacture a bane timer"),H->ItemBuffs.IsEmpty());
+            Begin(Session.PlayerGuid);Chat(Armor.Name);H->ObserveMetaChat(TEXT("Your spell fizzled."),TEXT(""),ACEChatMessageType::Magic);H->ObserveUseDone(0);
+            TestTrue(TEXT("Fizzle does not retain a bane timer"),H->ItemBuffs.IsEmpty());
+            Begin(Session.PlayerGuid);Chat(Armor.Name);H->ObserveUseDone(1);TestTrue(TEXT("Failed UseDone cannot retain a bane timer"),H->ItemBuffs.IsEmpty());
+            Begin(Armor.Guid);Chat(Shirt.Name);TestFalse(TEXT("An explicit item buff cannot confirm against a different worn item"),H->PendingSpellConfirmed);
+            Chat(Armor.Name);H->ObserveUseDone(0);TestTrue(TEXT("Explicit item result still confirms"),H->LastSpellConfirmed);
+            const int32 OldDurationAug=Session.PlayerVitals.StatQualityInts.FindRef(238);
+            for(int32 Augments:{0,1,5})
+            {
+                Session.PlayerVitals.StatQualityInts.Add(238,Augments);
+                Begin(Session.PlayerGuid);Chat(Armor.Name);H->ObserveUseDone(0);
+                TestEqual(TEXT("Confirmed item buff timer includes retail spell-duration augmentations"),
+                    H->ItemBuffs[0]->AsObject()->GetNumberField(TEXT("duration")),Duration*(1.+.2*Augments));
+            }
+            Session.PlayerVitals.StatQualityInts.Add(238,OldDurationAug);
+        }
+    }
+    {
+        auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
+        for(const FString Name:{TEXT("Heal Self I"),TEXT("Revitalize Self I"),TEXT("Mana Boost Self I"),TEXT("Heal Other I")})
+        {
+            uint32 Spell=0;for(uint32 Id=1;Id<7000;++Id){FString Candidate;uint32 Icon=0;if(Dat->TryGetSpellInfo(Id,Candidate,Icon)&&Candidate==Name){Spell=Id;break;}}
+            if(!TestTrue(TEXT("Retail recovery spell exists"),Spell!=0))return false;
+            const bool Self=!Name.Contains(TEXT("Other"));
+            FACEWorldObject Friend;Friend.Guid=0x71009010;Friend.Name=TEXT("Friend");Session.WorldObjects.Add(Friend.Guid,Friend);
+            const FString Vital=Name.StartsWith(TEXT("Heal"))?TEXT("health"):Name.StartsWith(TEXT("Revitalize"))?TEXT("stamina"):TEXT("mana");
+            const FString Message=Self?TEXT("You cast ")+Name+TEXT(" and restore 42 points of your ")+Vital+TEXT(".")
+                :TEXT("With ")+Name+TEXT(" you restore 42 points of ")+Vital+TEXT(" to Friend.");
+            auto Begin=[&]()
+            {
+                H->PendingSpell=Spell;H->PendingSpellTarget=Self?Session.PlayerGuid:Friend.Guid;H->PendingSpellAt=FPlatformTime::Seconds();
+                H->PendingSpellOwner=P->Id;H->PendingSpellConfirmed=false;H->PendingSpellFizzled=false;H->PrepareSpellConfirmation(Name);
+            };
+            Begin();H->ObserveMetaChat(Message,TEXT("Other caster"),ACEChatMessageType::Magic);
+            H->ObserveMetaChat(Message.Replace(*Name,TEXT("Unrelated Spell")),TEXT(""),ACEChatMessageType::Magic);
+            H->ObserveMetaChat(Message.Replace(TEXT("42"),TEXT("invalid")),TEXT(""),ACEChatMessageType::Magic);
+            if(!Self)H->ObserveMetaChat(Message.Replace(TEXT("Friend."),TEXT("Someone Else.")),TEXT(""),ACEChatMessageType::Magic);
+            TestFalse(TEXT("Recovery confirmation rejects unrelated or malformed messages"),H->PendingSpellConfirmed);
+            H->ObserveMetaChat(Message,TEXT(""),ACEChatMessageType::Magic);H->ObserveUseDone(0);
+            TestTrue(TEXT("VT recovery message confirms the cast"),H->LastSpellConfirmed);
+            TestTrue(TEXT("Recovery result releases the host cast delay immediately"),P->NextAction<=FPlatformTime::Seconds());
+            Begin();H->ObserveMetaChat(Message,TEXT(""),ACEChatMessageType::Magic);H->ObserveUseDone(1);
+            TestFalse(TEXT("Recovery error still overrides chat success"),H->LastSpellConfirmed);
+            Session.WorldObjects.Remove(Friend.Guid);
+        }
+    }
+    {
+        // Real DAT spells and loopback packets exercise result-driven buff
+        // dispatch, including servers which reject casts during recoil.
+        const auto SavedPlugin=*P;const auto SavedVitals=Session.PlayerVitals;const auto SavedSpells=Session.KnownSpells;
+        auto* BuffPC=World->SpawnActor<AACEPlayerController>();auto* BuffPawn=World->SpawnActor<APawn>();
+        auto* BuffRoot=NewObject<USceneComponent>(BuffPawn);BuffPawn->SetRootComponent(BuffRoot);BuffRoot->RegisterComponent();BuffPC->Possess(BuffPawn);
+        auto* Local=NewObject<ULocalPlayer>(GEngine);GI->AddLocalPlayer(Local,FPlatformUserId::CreateFromInternalId(0));BuffPC->SetPlayer(Local);
+        auto* Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+        auto* Receiver=Sockets->CreateSocket(NAME_DGram,TEXT("Fast buff receiver"),false);
+        auto Address=Sockets->CreateInternetAddr();bool Valid=false;Address->SetIp(TEXT("127.0.0.1"),Valid);Address->SetPort(0);
+        if(!TestTrue(TEXT("Fast buff test binds loopback"),Receiver&&Receiver->Bind(*Address)))return false;
+        Receiver->GetAddress(*Address);Session.SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("Fast buff sender"),false);
+        Session.ServerC2SAddr=Address;Session.IssacClient=MakeUnique<FACEIsaac>(123u);
+        ON_SCOPE_EXIT
+        {
+            *P=SavedPlugin;Session.PlayerVitals=SavedVitals;Session.KnownSpells=SavedSpells;
+            H->PendingSpell=0;H->PendingSpellOwner.Empty();H->PendingBuffResultDriven=false;H->BuffRetryAt=0;
+            H->ConfirmedBuffAckAt=0;H->ConfirmedBuffOwner.Empty();H->DeferredBuffIntent.Reset();H->DeferredBuffOwner.Empty();H->FastCastOwner.Empty();H->ItemBuffs.Empty();
+            FTSTicker::GetCoreTicker().RemoveTicker(H->DecisionWakeTicker);H->DecisionWakeTicker.Reset();
+            Session.SocketC2S->Close();Sockets->DestroySocket(Session.SocketC2S);Session.SocketC2S=nullptr;
+            Session.ServerC2SAddr.Reset();Session.IssacClient.Reset();Receiver->Close();Sockets->DestroySocket(Receiver);Session.CachedC2SPackets.Reset();
+            GI->RemoveLocalPlayer(Local);BuffPC->Destroy();BuffPawn->Destroy();
+        };
+        auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();int32 Focus=0,Self=0;
+        for(uint32 Id=1;Id<7000&&(!Focus||!Self);++Id)
+        {FString Name;uint32 Icon;if(Dat->TryGetSpellInfo(Id,Name,Icon)){if(Name==TEXT("Focus Self I"))Focus=Id;if(Name==TEXT("Willpower Self I"))Self=Id;}}
+        if(!TestTrue(TEXT("Retail focus and self buffs found"),Focus&&Self))return false;
+        Session.KnownSpells={Focus,Self};Session.PlayerVitals.CombatMode=8;Session.PlayerVitals.Health=100;
+        Session.bUseBusy=false;Session.PendingEquipmentGuid=0;P->Running=true;P->Player=Session.PlayerGuid;P->Server=C->GetServerName();
+        P->Permissions.Add(TEXT("cast"));P->Permissions.Add(TEXT("navigation"));P->WaitAction.Empty();P->NextAction=0;
+        auto Intent=[&](int32 Spell)
+        {
+            auto I=MakeShared<FJsonObject>();I->SetStringField(TEXT("action"),TEXT("cast"));I->SetStringField(TEXT("activity"),TEXT("buffs"));
+            I->SetNumberField(TEXT("spell"),Spell);I->SetNumberField(TEXT("target"),uint32(Session.PlayerGuid));I->SetBoolField(TEXT("fast_cast"),true);return I;
+        };
+        auto Result=[&](int32 Spell)
+        {FString Name;uint32 Icon;Dat->TryGetSpellInfo(Spell,Name,Icon);H->ObserveMetaChat(TEXT("You cast ")+Name+TEXT(" on yourself."),TEXT(""),ACEChatMessageType::Magic);};
+        auto Ack=[&](uint32 Error){FACEBinaryWriter Packet;Packet.WriteUInt32(Error);FACEBinaryReader R(Packet.GetData());Session.HandleUseDone(R);};
+        auto Drive=[&](){float F=0,R=0,T=0;H->ApplyMovement(BuffPC,F,R,T,false,false,false,FVector::ForwardVector);return F;};
+        auto CastCount=[&](){int32 Count=0;for(const auto& Packet:Session.CachedC2SPackets){FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.CanRead(4)&&R.ReadUInt32()==ACEGameAction::CastTargetedSpell)++Count;}return Count;};
+        H->Execute(*P,Intent(Focus));TestTrue(TEXT("Buff dispatch enables result-driven pipeline"),H->PendingBuffResultDriven&&H->PendingSpell==Focus);
+        H->ObserveMetaChat(TEXT("words"),TEXT("Caster"),ACEChatMessageType::Spellcasting);Result(Focus);
+        TestEqual(TEXT("Coalesced buff result waits for the cancellation movement edge"),H->PendingSpell,Focus);
+        TestEqual(TEXT("Result-driven cast preserves one backward edge"),Drive(),-1.f);
+        TestTrue(TEXT("Confirmed buff advances before late UseDone"),!H->PendingSpell&&H->ConfirmedBuffAckAt&&H->LastSpellConfirmed&&P->NextAction<=FPlatformTime::Seconds());
+        TestEqual(TEXT("Backward movement releases on the next frame"),Drive(),0.f);
+        H->Execute(*P,Intent(Self));TestEqual(TEXT("Next buff sends without waiting through recoil"),CastCount(),2);
+        const auto Serial=H->ActionSerial;
+        Ack(0x001D);TestTrue(TEXT("Busy during recoil preserves second buff and schedules retry"),H->PendingSpell==Self&&H->BuffRetryAt&&H->ActionSerial==Serial&&H->ConfirmedBuffAckAt);
+        Ack(0);TestTrue(TEXT("Old success only drains the first buff acknowledgment"),!H->ConfirmedBuffAckAt&&H->PendingSpell==Self&&H->ActionSerial==Serial);
+        H->UpdateBuffDispatch();TestEqual(TEXT("Draining recoil promptly retries the rejected buff"),CastCount(),3);
+        H->UpdateBuffDispatch();TestEqual(TEXT("Accepted retry is not resent without a rejection"),CastCount(),3);
+        H->ObserveMetaChat(TEXT("words"),TEXT("Caster"),ACEChatMessageType::Spellcasting);Drive();Result(Self);
+        TestTrue(TEXT("Retry result confirms once and clears movement"),H->ActionSerial==Serial+1&&H->LastCompletedSpell==Self&&H->LastSpellConfirmed&&Drive()==0);
+        auto FinishNotice=MakeShared<FJsonObject>();FinishNotice->SetStringField(TEXT("action"),TEXT("notice"));FinishNotice->SetStringField(TEXT("text"),TEXT("Buff pipeline complete"));
+        H->Execute(*P,FinishNotice);TestTrue(TEXT("Non-buff intent waits for outstanding untagged acknowledgment"),H->DeferredBuffIntent.IsValid());
+        Ack(0x001D);TestTrue(TEXT("Unrelated rejected manual use cannot drain a successful buff acknowledgment"),H->ConfirmedBuffAckAt&&H->DeferredBuffIntent.IsValid());
+        Ack(0);H->NextMaintenanceAt=FPlatformTime::Seconds()+60;H->Tick(.016f);
+        TestTrue(TEXT("Deferred intent runs exactly after acknowledgment"),!H->DeferredBuffIntent&&H->Notice==TEXT("Buff pipeline complete"));
+        // When queue support accepts a second buff, even an early second result
+        // cannot create two acknowledgment debts or complete an unrelated action.
+        P->NextAction=0;H->Execute(*P,Intent(Focus));Result(Focus);H->Execute(*P,Intent(Self));
+        Result(Self);TestTrue(TEXT("Only one confirmed cast may be awaiting its acknowledgment"),H->ConfirmedBuffAckAt&&H->PendingSpell==Self);
+        Ack(0);TestEqual(TEXT("First queued acknowledgment cannot finish the second buff"),H->PendingSpell,Self);
+        Ack(0);TestTrue(TEXT("Second queued acknowledgment finishes the second buff"),!H->PendingSpell&&!H->ConfirmedBuffAckAt&&H->LastSpellConfirmed);
+        // Standard ack-only completion and fizzle remain conservative.
+        P->NextAction=0;H->Execute(*P,Intent(Focus));Ack(0);
+        TestFalse(TEXT("UseDone alone never confirms a buff"),H->LastSpellConfirmed);
+        P->NextAction=0;H->Execute(*P,Intent(Focus));H->ObserveMetaChat(TEXT("Your spell fizzled."),TEXT(""),ACEChatMessageType::Magic);Ack(0);
+        TestTrue(TEXT("Fizzle creates no acknowledgment debt"),!H->ConfirmedBuffAckAt&&!H->LastSpellConfirmed&&H->FastCastOwner.IsEmpty());
+        P->NextAction=0;H->Execute(*P,Intent(Focus));H->PendingSpellAt=FPlatformTime::Seconds()-6;Ack(0x001D);
+        TestTrue(TEXT("Busy retry window is bounded"),!H->PendingSpell&&!H->BuffRetryAt&&H->LastActionError==0x001D);
+        P->NextAction=0;H->Execute(*P,Intent(Focus));Result(Focus);H->Execute(*P,FinishNotice);H->Stop(P->Id);
+        TestTrue(TEXT("Stop discards deferred actions but retains late acknowledgment guard"),!H->DeferredBuffIntent&&H->ConfirmedBuffAckAt&&!H->BuffRetryAt);
+        Ack(0);TestFalse(TEXT("Late acknowledgment after Stop is drained"),H->ConfirmedBuffAckAt!=0);
+        // Death wakes bypass only the old physical attack retry interval, and
+        // use the same packet path for melee and missile on the next opponent.
+        P->Running=true;P->Permissions.Add(TEXT("combat"));P->WaitAction.Empty();
+        FACEWorldObject Enemy;Enemy.Guid=970;Enemy.Name=TEXT("Target one");Enemy.ItemType=ACEItemType::Creature;
+        Enemy.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;Enemy.bHasPosition=true;Enemy.Position=Session.PlayerPosition;Enemy.Position.Location.X+=2;
+        FACEWorldObject NextEnemy=Enemy;NextEnemy.Guid=971;NextEnemy.Name=TEXT("Target two");NextEnemy.Position.Location.Y+=2;
+        ON_SCOPE_EXIT{Session.WorldObjects.Remove(970);Session.WorldObjects.Remove(971);H->CombatTarget=0;H->DefeatedTargets.Empty();H->PhysicalAttackTarget=0;H->PhysicalAttackOwner.Empty();Session.SelectedObject.Guid=0;};
+        auto AttackIntent=[&](int32 Target,int32 Mode)
+        {auto I=MakeShared<FJsonObject>();I->SetStringField(TEXT("action"),TEXT("attack"));I->SetStringField(TEXT("activity"),TEXT("combat"));I->SetNumberField(TEXT("target"),Target);I->SetNumberField(TEXT("mode"),Mode);return I;};
+        auto AttackCount=[&](){int32 Count=0;for(const auto& Packet:Session.CachedC2SPackets){FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.CanRead(4)){const uint32 Op=R.ReadUInt32();if(Op==ACEGameAction::TargetedMeleeAttack||Op==ACEGameAction::TargetedMissileAttack)++Count;}}return Count;};
+        for(int32 Mode:{2,4})
+        {
+            Session.WorldObjects.Add(970,Enemy);Session.WorldObjects.Add(971,NextEnemy);H->DefeatedTargets.Empty();H->PhysicalAttackOwner.Empty();
+            Session.PlayerVitals.CombatMode=Mode;P->NextAction=0;H->Execute(*P,AttackIntent(970,Mode));
+            const int32 Before=AttackCount();TestTrue(TEXT("Physical attack establishes a tracked target"),H->CombatTarget==970&&H->PhysicalAttackTarget==970);
+            auto Changed=Session.PlayerVitals;Changed.Health=40;H->LastCombatVitals=FIntVector(-1,-1,-1);
+            Session.OnVitalsUpdated.Broadcast(Changed);
+            TestTrue(TEXT("Vital changes release physical throttle for immediate recovery decision"),P->NextAction==0&&P->NextDecision==0&&H->DecisionWakeAt<=FPlatformTime::Seconds());
+            H->Execute(*P,AttackIntent(970,Mode));TestEqual(TEXT("Checking recovery without needing it does not restart server attack"),AttackCount(),Before);
+            const double Throttle=P->NextAction;Session.OnVitalsUpdated.Broadcast(Changed);
+            TestEqual(TEXT("Identical vital updates do not continually wake policy"),P->NextAction,Throttle);
+            FACEBinaryWriter Health;Health.WriteUInt32(970);Health.WriteFloat(0);FACEBinaryReader HR(Health.GetData());Session.HandleUpdateHealth(HR);
+            TestTrue(TEXT("Zero-health network event bypasses remaining physical attack wait"),P->NextAction==0&&H->CombatTarget==0&&H->DefeatedTargets.Contains(970));
+            H->Execute(*P,AttackIntent(971,Mode));TestEqual(TEXT("Next opponent attack is sent immediately after death"),AttackCount(),Before+1);
+            auto State=H->Snapshot();bool DeadInSnapshot=false;for(const auto& V:State->GetArrayField(TEXT("targets")))DeadInSnapshot|=V->AsObject()->GetNumberField(TEXT("id"))==970;
+            TestFalse(TEXT("Dead opponent stays excluded after selection moves to next opponent"),DeadInSnapshot);
+            Session.WorldObjects.Remove(971);Session.OnObjectDeleted.Broadcast(971);
+            TestTrue(TEXT("Removal without health update also releases target throttle"),H->CombatTarget==0&&P->NextAction==0);
+        }
+        Session.WorldObjects.Add(970,Enemy);Session.OnObjectCreated.Broadcast(Enemy);
+        TestFalse(TEXT("Newly created object with reused GUID does not inherit dead filter"),H->DefeatedTargets.Contains(970));
+        H->CombatTarget=970;H->PendingSpell=Focus;H->PendingSpellOwner=P->Id;H->PendingSpellAt=FPlatformTime::Seconds();P->NextAction=H->PendingSpellAt+3.5;
+        const double CastingGate=P->NextAction;Session.WorldObjects[970].bDying=true;FACEObjectMotionState Death;Death.ForwardCommand=ACEMotion::Dead;
+        Session.OnMotionUpdate.Broadcast(970,Death);
+        TestTrue(TEXT("Death motion wakes targeting but preserves outstanding spell acknowledgment"),H->CombatTarget==0&&H->PendingSpell==Focus&&P->NextAction==CastingGate);
+        Ack(0);P->WaitAction=TEXT("equip");P->NextAction=FPlatformTime::Seconds()+2;H->PhysicalAttackOwner=P->Id;H->CombatTarget=970;
+        const double EquipmentGate=P->NextAction;H->LastCombatVitals=FIntVector(-1,-1,-1);Session.OnVitalsUpdated.Broadcast(Session.PlayerVitals);
+        TestEqual(TEXT("Recovery wake cannot bypass pending equipment"),P->NextAction,EquipmentGate);
+        P->WaitAction.Empty();P->NextAction=0;
     }
     for(float Arrival:{17.5f,70.f})for(float Rate:{30.f,90.f,144.f})for(bool VR:{false,true})for(float CameraYaw:{0.f,90.f,210.f})
     {

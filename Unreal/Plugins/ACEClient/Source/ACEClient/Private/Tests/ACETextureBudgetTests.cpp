@@ -52,6 +52,28 @@ bool FACETextureBudgetTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Visible texture is reused after eviction instead of duplicated"), Resolver.GetOrCreateUTexture(123, Owner.Get()) == World.Get());
 	Resolver.DiscardNonSkyRuntimeTextures();
 	TestEqual(TEXT("Explicit invalidation discards retained identities"), Resolver.RetainedWorldTextures.Num(), 0);
+	for (uint32 Bits=0; Bits<16; ++Bits)
+	{
+		FACEDatDecodedSurface Surface; Surface.bHasPixels=true;
+		Surface.Pixels.Init(FColor::White,1024*1024);
+		Surface.bFullyTransparent=(Bits&1)!=0;Surface.bUsesAlpha=(Bits&2)!=0;
+		Surface.bClipMap=(Bits&4)!=0;Surface.bAdditive=(Bits&8)!=0;
+		Surface.bIsSolid=(Bits&1)!=0;Surface.bSurfaceTranslucent=(Bits&2)!=0;
+		Surface.Translucency=.25f;Surface.SolidColor.A=.5f;
+		Resolver.SurfaceCache.Add(Bits,MoveTemp(Surface));
+		const auto Before=Resolver.GetSurfaceResolveCount();
+		FACEDatSurfaceRenderFlags Flags;
+		for(int32 Repeat=0;Repeat<32;++Repeat)TestTrue(TEXT("Cached surface classification succeeds"),Resolver.ResolveSurfaceRenderFlags(Bits,Flags));
+		TestEqual(TEXT("Classification never resolves or copies the pixel payload"),Resolver.GetSurfaceResolveCount(),Before);
+		TestTrue(TEXT("All authored rendering flags survive classification"),Flags.bFullyTransparent==((Bits&1)!=0)
+			&& Flags.bUsesAlpha==((Bits&2)!=0) && Flags.bClipMap==((Bits&4)!=0) && Flags.bAdditive==((Bits&8)!=0)
+			&& Flags.bIsSolid==((Bits&1)!=0) && Flags.bSurfaceTranslucent==((Bits&2)!=0)
+			&& Flags.Translucency==.25f && Flags.SolidAlpha==.5f);
+	}
+	Resolver.InvalidateSurfaceCache();
+	FACEDatSurfaceRenderFlags MissingFlags;MissingFlags.bAdditive=true;
+	TestFalse(TEXT("Invalidated flags cannot outlive their surface"),Resolver.ResolveSurfaceRenderFlags(1,MissingFlags));
+	TestFalse(TEXT("A failed lookup clears old flags"),MissingFlags.bAdditive);
 	TArray<FColor> LandPixels; LandPixels.Init(FColor::Green, 32 * 32);
 	TStrongObjectPtr<UMaterialInterface> Land(Owner->GetOrCreateLandMaterial(0x12345678, LandPixels, 32, 32));
 	if (!TestNotNull(TEXT("Terrain material builds"), Land.Get())) return false;

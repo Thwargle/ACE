@@ -1101,4 +1101,84 @@ bool FACEUCMLootThroughputTest::RunTest(const FString&)
     }
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMLootPriorityTest,"ACE.Plugins.LootCombatPriority",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMLootPriorityTest::RunTest(const FString&)
+{
+    FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    auto Snapshot=[](){return ParseUCM(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"nearest":0,"ready":true,"busy":false,"action_serial":0,"action_error":0,"container":0,"spells":[],"targets":[],"inventory":[{"id":50,"wcid":50,"name":"Sword","type":1,"identified":true,"can_wield":true,"equipped":true,"damage":30,"damage_type":1}],"corpses":[{"id":700,"name":"Corpse of Rat","distance":2,"identified":true}],"contents":[{"id":701,"wcid":701,"name":"Ring","count":1,"identified":true}]})"));};
+    auto Profile=[](){return ParseUCM(TEXT(R"({"buffing":false,"recovery":false,"combat":"melee","looting":true,"loot_priority":false,"loot_rules":[{"action":"keep"}]})"));};
+    auto Enemies=[](auto S,bool Visible=true){S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(ParseUCM(Visible?TEXT(R"({"id":500,"name":"Rat","distance":1,"identified":true,"line_of_sight":true})"):TEXT(R"({"id":500,"name":"Rat","distance":1,"identified":true,"line_of_sight":false})")))});};
+    auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+    auto Action=[](auto I){FString A;I->TryGetStringField(TEXT("action"),A);return A;};
+    for(bool Priority:{false,true})for(bool NavPriority:{false,true})for(bool Open:{false,true})
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();Enemies(S);
+        P->SetBoolField(TEXT("loot_priority"),Priority);P->SetBoolField(TEXT("nav_priority"),NavPriority);
+        if(Open)S->SetNumberField(TEXT("container"),700);
+        TestEqual(*FString::Printf(TEXT("Priority=%d nav=%d open=%d honors combat/loot order"),Priority,NavPriority,Open),Action(Step(VM,S,P)),FString(Priority?(Open?TEXT("loot"):TEXT("open_corpse")):TEXT("attack")));
+    }
+    for(bool Priority:{false,true})
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();
+        P->SetBoolField(TEXT("loot_priority"),Priority);
+        TestEqual(TEXT("Without an enemy approach the corpse"),Action(Step(VM,S,P)),FString(TEXT("open_corpse")));
+        Enemies(S);S->SetBoolField(TEXT("loot_approaching"),true);S->SetBoolField(TEXT("busy"),true);S->SetBoolField(TEXT("ready"),false);
+        TestEqual(TEXT("A new enemy interrupts only low-priority corpse approach"),Action(Step(VM,S,P)),FString(Priority?TEXT(""):TEXT("pause_loot_approach")));
+        if(Priority)continue;
+        S->SetBoolField(TEXT("loot_approaching"),false);S->SetBoolField(TEXT("busy"),false);S->SetBoolField(TEXT("ready"),true);
+        TestEqual(TEXT("Fight after cancelling approach"),Action(Step(VM,S,P)),FString(TEXT("attack")));
+        S->SetArrayField(TEXT("targets"),{});Step(VM,S,P); // release combat target
+        TestEqual(TEXT("Interrupted corpse can be retried without a blacklist or timeout"),Action(Step(VM,S,P)),FString(TEXT("open_corpse")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();S->SetNumberField(TEXT("container"),700);
+        TestEqual(TEXT("Loot starts when the area is clear"),Action(Step(VM,S,P)),FString(TEXT("loot")));
+        Enemies(S);
+        TestEqual(TEXT("Pending transfer does not force another loot cycle before combat"),Action(Step(VM,S,P)),FString(TEXT("attack")));
+        auto Inventory=S->GetArrayField(TEXT("inventory"));Inventory.Add(S->GetArrayField(TEXT("contents"))[0]);S->SetArrayField(TEXT("inventory"),Inventory);
+        S->SetArrayField(TEXT("contents"),{});S->SetArrayField(TEXT("targets"),{});Step(VM,S,P);
+        TestEqual(TEXT("Confirmed transfer survives combat and is not requested twice"),Action(Step(VM,S,P)),FString(TEXT("close_corpse")));
+    }
+    for(bool Combat:{false,true})
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();Enemies(S,!Combat);
+        if(!Combat)P->SetStringField(TEXT("combat"),TEXT("off"));
+        TestEqual(TEXT("Manual combat or enemies behind walls do not prevent looting"),Action(Step(VM,S,P)),FString(TEXT("open_corpse")));
+    }
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMTargetHandoffTest,"ACE.Plugins.TargetHandoff",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMTargetHandoffTest::RunTest(const FString&)
+{
+    FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+    for(const FString Mode:{TEXT("melee"),TEXT("missile"),TEXT("magic")})for(int32 Vital:{0,2,4,6})
+    {
+        auto S=ParseUCM(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"nearest":0,"ready":true,"busy":false,"action_serial":0,"combat_mode":8,"components_required":false,"spells":[{"id":20,"name":"Acid Bolt","category":117,"school":1,"power":100,"skill":300}],"inventory":[{"id":50,"name":"Weapon","type":1,"identified":true,"can_wield":true,"equipped":true,"damage":30,"damage_type":1}],"targets":[{"id":500,"name":"First","distance":1,"identified":true,"line_of_sight":true}]})"));
+        auto P=ParseUCM(TEXT(R"({"buffing":false,"recovery":true,"combat":"melee","looting":true,"loot_priority":false,"loot_rules":[{"action":"keep"}]})"));
+        P->SetStringField(TEXT("combat"),Mode);auto Items=S->GetArrayField(TEXT("inventory"));Items[0]->AsObject()->SetNumberField(TEXT("type"),Mode==TEXT("magic")?32768:Mode==TEXT("missile")?256:1);
+        FACEPluginVM VM;VM.Load(Source,Error);auto First=Step(VM,S,P);
+        TestEqual(TEXT("Initial attack targets the first enemy"),First->GetNumberField(TEXT("target")),500.);
+        S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":501,"name":"Next","distance":1,"identified":true,"line_of_sight":true})")))});
+        S->SetArrayField(TEXT("corpses"),{MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":700,"name":"Corpse of First","distance":1,"identified":true})")))});
+        S->SetNumberField(TEXT("action_serial"),1);S->SetNumberField(TEXT("last_spell"),20);S->SetBoolField(TEXT("last_spell_confirmed"),true);
+        if(Vital)
+        {
+            S->SetNumberField(Vital==2?TEXT("health"):Vital==4?TEXT("stamina"):TEXT("mana"),20);
+            auto Potion=ParseUCM(TEXT(R"({"id":51,"name":"Potion","type":32,"identified":true,"usable":true,"count":5,"boost":50})"));Potion->SetNumberField(TEXT("boost_vital"),Vital);
+            Items.Add(MakeShared<FJsonValueObject>(Potion));S->SetArrayField(TEXT("inventory"),Items);
+            auto Recovery=Step(VM,S,P);
+            TestEqual(TEXT("Target switch checks all vital recovery priorities first"),Recovery->GetStringField(TEXT("activity")),FString::Printf(TEXT("recovery%d"),Vital));
+        }
+        else
+        {
+            auto Next=Step(VM,S,P);
+            TestEqual(TEXT("Next living target attacks at the same timestamp without loot or idle delay"),Next->GetNumberField(TEXT("target")),501.);
+            TestEqual(TEXT("Correct attack type is retained across kills"),Next->GetStringField(TEXT("action")),FString(Mode==TEXT("magic")?TEXT("cast"):TEXT("attack")));
+        }
+    }
+    return true;
+}
 #endif

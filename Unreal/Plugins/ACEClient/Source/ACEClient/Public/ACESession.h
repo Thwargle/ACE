@@ -473,6 +473,7 @@ public:
 
 	/** True while a Use / UseWithTarget is outstanding (cleared by UseDone 0x01C7). */
 	bool IsUseBusy() const { return bUseBusy || PendingEquipmentGuid != 0; }
+	bool IsPendingWorldUse(int32 Guid) const { return bUseBusy && UseSourceGuid == Guid && UseTargetGuid == 0 && PendingEquipmentGuid == 0; }
 	/** Cancel only an outstanding direct world interaction when its approach stops. */
 	void CancelWorldUseApproach();
 	uint32 GetCombatEventRevision() const { return CombatEventRevision; }

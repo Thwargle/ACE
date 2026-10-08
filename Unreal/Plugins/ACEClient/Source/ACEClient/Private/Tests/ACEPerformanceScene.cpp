@@ -26,6 +26,16 @@
 #include "ProfilingDebugging/TraceAuxiliary.h"
 #include "UnrealClient.h"
 
+// Retail ACE weenie 43592; the model/effect inputs are shared by the rendered
+// Frozen Valley benchmark and the lifecycle regression below.
+static void ACEPerfApplySnowTusker(FACEWorldObject& Object)
+{
+ Object.Name=TEXT("Snow Tusker");Object.SetupId=0x02001A33;Object.MotionTableId=0x0900000C;
+ Object.SoundTableId=0x20000011;Object.PhysicsEffectTableId=0x34000027;
+ Object.ItemType=ACEItemType::Creature;Object.Scale=1.5f;
+ Object.PhysicsState=ACEPhysicsState::Gravity | ACEPhysicsState::ReportCollisions;
+}
+
 // Deliberately offline: exercise the normal presenters/HUD without credentials,
 // database writes, or benchmark entities leaking onto a connected server.
 class FACEPerformanceScene : public TSharedFromThis<FACEPerformanceScene>
@@ -54,7 +64,7 @@ public:
    return;
   }
   const FString Scene=Args.Num()?Args[0]:TEXT("outdoor");
-  if(Scene!=TEXT("outdoor") && Scene!=TEXT("indoor") && Scene!=TEXT("effects") && Scene!=TEXT("caul") && Scene!=TEXT("swarm") && Scene!=TEXT("frozen"))return;
+  if(Scene!=TEXT("outdoor") && Scene!=TEXT("indoor") && Scene!=TEXT("effects") && Scene!=TEXT("caul") && Scene!=TEXT("swarm") && Scene!=TEXT("frozen") && Scene!=TEXT("frozen-tuskers"))return;
   UE_LOG(LogTemp,Display,TEXT("ACE PerfScene preparing %s"),*Scene);
   // The login path intentionally defers cell DAT indexing. This offline setup
   // phase is outside the timed sample and needs both databases immediately.
@@ -63,7 +73,7 @@ public:
   FACEPosition Spawn;Spawn.CellId=0x7D640001;Spawn.Location=FVector(100,100,0);
   // Dense authored ambient particles at the landblock captured on Quest.
   if(Scene==TEXT("caul"))Spawn.CellId=0x09050001;
-  if(Scene==TEXT("frozen"))
+  if(Scene==TEXT("frozen") || Scene==TEXT("frozen-tuskers"))
   {
    // 83.7N, 4.5W: use the reported location, with authored region scenery.
    const FVector Global((101.95-4.5)*240.,(101.95+83.7)*240.,0);
@@ -115,11 +125,12 @@ public:
   ACEPlaySessionRedirect::GPendingWcTravelMapAfterLogin.Empty();
   PC->bUseEnterWorldLoadScreen=false;
   Client->OnEnteredWorld.Broadcast(Self.Guid,Spawn);
-  const int32 Count=Scene==TEXT("frozen")?0:Scene==TEXT("swarm")?64:Scene==TEXT("indoor")?8:32;
+  const int32 Count=Scene==TEXT("frozen")?0:Scene==TEXT("frozen-tuskers")?12:Scene==TEXT("swarm")?64:Scene==TEXT("indoor")?8:32;
   for(int32 I=0;I<Count;++I)
   {
    FACEWorldObject NPC=Self;NPC.Guid+=I+1;NPC.bIsSelf=false;NPC.bIsPlayer=false;
    NPC.Position.Location+=FVector(3+(I%8)*1.4,(I/8-1.5)*1.4,0);
+   if(Scene==TEXT("frozen-tuskers"))ACEPerfApplySnowTusker(NPC);
    if(Scene==TEXT("swarm"))
    {
     ACECreatureFixtures::Apply(NPC,I);
@@ -132,6 +143,7 @@ public:
     NPC.Position.NormalizeOutdoorLandblock();
    }
    Session->WorldObjects.Add(NPC.Guid,NPC);Client->OnObjectCreated.Broadcast(NPC);
+   if(Scene==TEXT("frozen-tuskers"))Run->SnowCreatures.Add(NPC);
   }
   Run->Camera=World->SpawnActor<ACameraActor>();
   const FVector Center=Spawn.ToUnrealLocation(100);
@@ -175,6 +187,8 @@ private:
  double SampleStartTime=0;
  uint64 PreviousFrame=uint64(-1);
  TArray<double> Frames;
+ TArray<FACEWorldObject> SnowCreatures;
+ int32 SnowPhase=0;
  // Alternate inside one process to reduce startup/GPU-clock/background noise.
  // This mode is opt-in and applies only to the disconnected swarm fixture.
  int32 CrowdMode=-1;
@@ -204,6 +218,33 @@ private:
     if(It->ScriptComponent && It->ACEGuid>=0x7100F001 && It->ACEGuid<=0x7100F020)
     { It->ScriptComponent->PlayScriptId(0x330000D5,1);++Played; }
    LastEffectTime=Now;
+  }
+  if(!SnowCreatures.IsEmpty() && Elapsed>20 && Now-LastEffectTime>3)
+  {
+   auto* Client=World->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+   auto Session=Client ? Client->GetSession() : nullptr;
+   if(!Session || Session->PlayerGuid!=0x7100F000 || Session->GetState()!=EACESessionState::InWorld)return false;
+   if(SnowPhase==0)
+   {
+    FACEObjectMotionState Death;Death.ForwardCommand=ACEMotion::Dead;Death.CurrentStyle=ACEMotion::StanceNonCombat;
+    for(TActorIterator<AACEWorldEntityActor> It(World.Get());It;++It)
+     if(SnowCreatures.ContainsByPredicate([&](const FACEWorldObject& O){return O.Guid==It->ACEGuid;}))It->ApplyMotionState(Death);
+   }
+   else for(const auto& Creature:SnowCreatures)
+   {
+    const uint32 Removed=Creature.Guid+(SnowPhase==2?0x100:0);
+    Session->WorldObjects.Remove(Removed);Client->OnObjectDeleted.Broadcast(Removed);
+    FACEWorldObject Replacement=Creature;
+    if(SnowPhase==1)
+    {
+     Replacement.Guid+=0x100;Replacement.Name=TEXT("Corpse of Snow Tusker");Replacement.ItemType=ACEItemType::Container;
+     Replacement.ObjectDescriptionFlags=ACEObjectDescFlag::Corpse|ACEObjectDescFlag::Openable;
+     Replacement.PhysicsState=ACEPhysicsState::Ethereal;
+    }
+    Session->WorldObjects.Add(Replacement.Guid,Replacement);Client->OnObjectCreated.Broadcast(Replacement);
+   }
+   UE_LOG(LogTemp,Display,TEXT("ACE PerfScene Snow Tusker lifecycle phase=%d"),SnowPhase);
+   SnowPhase=(SnowPhase+1)%3;LastEffectTime=Now;
   }
   if(!bWarmupCapture && Elapsed>=20)
   {
@@ -270,6 +311,68 @@ private:
  }
 };
 static FAutoConsoleCommandWithWorldAndArgs GACEPerfScene(TEXT("ace.PerfScene"),
- TEXT("Disconnected development benchmark: outdoor, indoor, effects, caul, swarm or frozen. Writes Saved/Performance after 75 seconds. -ACEPerfCleanView uses a hidden HUD at 1920x1080."),
+ TEXT("Disconnected development benchmark: outdoor, indoor, effects, caul, swarm, frozen or frozen-tuskers (spawn/death/corpse cycles). Writes Saved/Performance after 75 seconds. -ACEPerfCleanView uses a hidden HUD at 1920x1080."),
  FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&FACEPerformanceScene::Start));
+#endif
+
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+#include "Misc/ScopeExit.h"
+#include "Engine/Engine.h"
+#include "Engine/GameInstance.h"
+#include "ACEDatSubsystem.h"
+#include "ACEWorldEntityActor.h"
+#include "ACECharacterAppearanceComponent.h"
+#include "ACEScriptComponent.h"
+#include "ProceduralMeshComponent.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACESnowTuskerPerformanceTest, "ACE.Rendering.SnowTuskerLifecycle",
+ EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACESnowTuskerPerformanceTest::RunTest(const FString&)
+{
+ const auto Values=UWorld::InitializationValues().AllowAudioPlayback(false).RequiresHitProxies(false)
+  .CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false);
+ auto* World=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);
+ auto& Context=GEngine->CreateNewWorldContext(EWorldType::Game); Context.SetCurrentWorld(World);
+ auto* GI=NewObject<UGameInstance>(GEngine); World->SetGameInstance(GI); Context.OwningGameInstance=GI;
+ GI->OnWorldChanged(nullptr,World); GI->Init();
+ ON_SCOPE_EXIT { GI->Shutdown(); GEngine->DestroyWorldContext(World); World->DestroyWorld(false); };
+ auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
+ if(!TestTrue(TEXT("Retail DAT loads"),Dat && Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+ // ACE retail Snow Tusker (43592), also used throughout Frozen Valley.
+ FACEWorldObject Object; Object.Guid=0x7100A000;ACEPerfApplySnowTusker(Object);
+ for(int32 Pass=0;Pass<4;++Pass)
+ {
+  const uint64 Resolves=Dat->GetTextureResolver()->GetSurfaceResolveCount();
+  const double Start=FPlatformTime::Seconds();
+  auto* Actor=World->SpawnActor<AACEWorldEntityActor>();Actor->InitializeFromObject(Object,100,true);
+  const double Spawned=FPlatformTime::Seconds();
+  if(!TestTrue(TEXT("Snow Tusker appearance builds"),Actor->Appearance->HasAppearance()))return false;
+  int32 Vertices=0,Sections=0;
+  for(int32 P=0;P<Actor->Appearance->GetPartCount();++P)
+   if(auto* Part=Cast<UProceduralMeshComponent>(Actor->Appearance->GetPartMesh(P)))
+    for(int32 S=0;S<Part->GetNumSections();++S){++Sections;Vertices+=Part->GetProcMeshSection(S)->ProcVertexBuffer.Num();}
+  FACEObjectMotionState Death;Death.ForwardCommand=ACEMotion::Dead;Death.CurrentStyle=ACEMotion::StanceNonCombat;
+  Actor->ApplyMotionState(Death);
+  for(int32 Frame=0;Frame<180;++Frame)
+  {Actor->Appearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);Actor->ScriptComponent->TickComponent(1.f/60,LEVELTICK_All,nullptr);}
+  const double Died=FPlatformTime::Seconds();
+  FACEWorldObject Corpse=Object;Corpse.Guid+=100;Corpse.Name=TEXT("Corpse of Snow Tusker");Corpse.ItemType=ACEItemType::Container;
+  Corpse.ObjectDescriptionFlags=ACEObjectDescFlag::Corpse|ACEObjectDescFlag::Openable;Corpse.PhysicsState=ACEPhysicsState::Ethereal;
+  auto* Body=World->SpawnActor<AACEWorldEntityActor>();Body->InitializeFromObject(Corpse,100,true);
+  const double BodyBuilt=FPlatformTime::Seconds();
+  TestTrue(TEXT("Corpse retains the Snow Tusker model"),Body->Appearance->HasAppearance());
+  for(int32 Frame=0;Frame<180;++Frame)Body->Appearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+  const double Finished=FPlatformTime::Seconds();
+  TestEqual(TEXT("Tusker retains its authored multipart setup"),Actor->Appearance->GetPartCount(),25);
+  TestEqual(TEXT("Optimization preserves the complete drawing geometry"),Vertices,7753);
+  TestTrue(TEXT("Corpse remains an openable object"),Body->IsCorpse() && Body->IsOpenable());
+  if(Pass>0)TestEqual(TEXT("Warm creature and corpse spawns do not re-resolve decoded pixels"),Dat->GetTextureResolver()->GetSurfaceResolveCount(),Resolves);
+  AddInfo(FString::Printf(TEXT("SnowTusker pass=%d parts=%d sections=%d vertices=%d spawn=%.3fms death180=%.3fms corpse=%.3fms corpse180=%.3fms surfaceResolves=%llu emitters=%d"),
+   Pass,Actor->Appearance->GetPartCount(),Sections,Vertices,(Spawned-Start)*1000,(Died-Spawned)*1000,
+   (BodyBuilt-Died)*1000,(Finished-BodyBuilt)*1000,Dat->GetTextureResolver()->GetSurfaceResolveCount()-Resolves,Actor->ScriptComponent->ActiveEmitters.Num()));
+  Actor->Destroy();Body->Destroy();++Object.Guid;
+ }
+ return !HasAnyErrors();
+}
 #endif

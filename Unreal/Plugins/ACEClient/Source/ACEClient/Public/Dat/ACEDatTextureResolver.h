@@ -60,9 +60,20 @@ struct FACEDatDecodedSurface
 	}
 };
 
-/**
- * Resolves Surface → Texture with optional ObjDesc texture swaps + dyed palette.
- */
+/** Surface classification without the decoded pixel payload. */
+struct FACEDatSurfaceRenderFlags
+{
+	bool bFullyTransparent = false;
+	bool bUsesAlpha = false;
+	bool bClipMap = false;
+	bool bAdditive = false;
+	bool bIsSolid = false;
+	bool bSurfaceTranslucent = false;
+	float Translucency = 0.f;
+	float SolidAlpha = 1.f;
+};
+
+/** Resolves Surface → Texture with optional ObjDesc texture swaps + dyed palette. */
 class ACECLIENT_API FACEDatTextureResolver
 {
 	friend class FACETextureBudgetTest;
@@ -73,6 +84,9 @@ public:
 	}
 
 	bool ResolveSurface(uint32 SurfaceId, FACEDatDecodedSurface& Out);
+	/** Classify the default surface without copying cached high-resolution pixels.
+	 * Uses SurfaceCache directly so DAT/cache invalidation also invalidates these flags. */
+	bool ResolveSurfaceRenderFlags(uint32 SurfaceId, FACEDatSurfaceRenderFlags& Out);
 	/** Per-resolver diagnostic; worker resolvers own their counters. */
 	uint64 GetSurfaceResolveCount() const { return SurfaceResolveCount; }
 	bool ResolveSurfaceWithAppearance(uint32 SurfaceId, int32 PartIndex, const FACEObjDesc* Appearance, FACEDatDecodedSurface& Out);

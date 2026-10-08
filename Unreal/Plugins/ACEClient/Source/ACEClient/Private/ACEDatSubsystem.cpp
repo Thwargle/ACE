@@ -3742,21 +3742,23 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateResolvedMaterial(
 		}
 	}
 
-	FACEDatDecodedSurface Decoded;
-	const FACEObjDesc* AppearancePtr = Appearance.HasVisualOverrides() ? &Appearance : nullptr;
-	if (!TextureResolver->ResolveSurfaceWithAppearance(SurfaceId, PartIndex, AppearancePtr, Decoded))
-	{
-		return GetOrCreateTexturedMaterial(SurfaceId);
-	}
+	FACEDatSurfaceRenderFlags SurfaceFlags;
 	if (!Appearance.HasVisualOverrides() && !bObjectUsesAlpha && WrapAxes == 0
-		&& !Decoded.bSurfaceTranslucent && Decoded.Translucency <= KINDA_SMALL_NUMBER
-		&& !(Decoded.bIsSolid && Decoded.SolidColor.A < .98f))
+		&& TextureResolver->ResolveSurfaceRenderFlags(SurfaceId, SurfaceFlags)
+		&& !SurfaceFlags.bSurfaceTranslucent && SurfaceFlags.Translucency <= KINDA_SMALL_NUMBER
+		&& !(SurfaceFlags.bIsSolid && SurfaceFlags.SolidAlpha < .98f))
 	{
 		auto* Opaque = GetOrCreateTexturedMaterial(SurfaceId);
 		// Remember the classification too: resolving a cached surface copies its
 		// pixel array, which must not repeat for every same-setup body refresh.
 		if (auto* Cached = Cast<UMaterialInstanceDynamic>(Opaque)) ResolvedMaterialCache.Add(Key, Cached);
 		return Opaque; // Opaque models still share the existing material instance.
+	}
+	FACEDatDecodedSurface Decoded;
+	const FACEObjDesc* AppearancePtr = Appearance.HasVisualOverrides() ? &Appearance : nullptr;
+	if (!TextureResolver->ResolveSurfaceWithAppearance(SurfaceId, PartIndex, AppearancePtr, Decoded))
+	{
+		return GetOrCreateTexturedMaterial(SurfaceId);
 	}
 
 	if (!Decoded.bHasPixels || Decoded.Width <= 0 || Decoded.Height <= 0)
@@ -4993,14 +4995,12 @@ bool UACEDatSubsystem::ApplySetupParts(const TArray<UProceduralMeshComponent*>& 
 			{
 				continue;
 			}
-			if (TextureResolver && Sec.SurfaceId != 0 && !Sec.bClipMap)
-			{
-				FACEDatDecodedSurface Decoded;
-				if (TextureResolver->ResolveSurface(Sec.SurfaceId, Decoded) && Decoded.bFullyTransparent)
-				{
-					continue;
-				}
-			}
+			// Classification needs four flags, not two copies of the complete
+			// high-resolution pixel array for every part of every spawned body.
+			FACEDatSurfaceRenderFlags SurfaceFlags;
+			const bool bResolvedSurface = TextureResolver && Sec.SurfaceId != 0
+				&& TextureResolver->ResolveSurfaceRenderFlags(Sec.SurfaceId, SurfaceFlags);
+			if (!Sec.bClipMap && bResolvedSurface && SurfaceFlags.bFullyTransparent) continue;
 			// DAT clothing can deliberately address another texture tile. Mukkir
 			// Wings use U=0.89..1.95; clamping turns most of their surface black.
 			// Only wrap axes that tile, so face patches retain their clamped edges.
@@ -5014,14 +5014,10 @@ bool UACEDatSubsystem::ApplySetupParts(const TArray<UProceduralMeshComponent*>& 
 				Sec.SurfaceId, P, Appearance, ObjectTranslucency, WrapAxes);
 			bool bSoftAlpha = Sec.bClipMap || Sec.bFullyTransparent;
 			bool bAdditive = false;
-			if (TextureResolver && Sec.SurfaceId != 0)
+			if (bResolvedSurface)
 			{
-				FACEDatDecodedSurface Decoded;
-				if (TextureResolver->ResolveSurface(Sec.SurfaceId, Decoded))
-				{
-					bSoftAlpha = bSoftAlpha || Decoded.bUsesAlpha || Decoded.bFullyTransparent || Decoded.bClipMap;
-					bAdditive = Decoded.bAdditive;
-				}
+				bSoftAlpha = bSoftAlpha || SurfaceFlags.bUsesAlpha || SurfaceFlags.bFullyTransparent || SurfaceFlags.bClipMap;
+				bAdditive = SurfaceFlags.bAdditive;
 			}
 			if (!Mat && (bSoftAlpha || bAdditive || Sec.bClipMap || Sec.bFullyTransparent))
 			{

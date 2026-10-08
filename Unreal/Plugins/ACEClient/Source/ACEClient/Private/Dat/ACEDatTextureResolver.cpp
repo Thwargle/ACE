@@ -874,6 +874,28 @@ bool FACEDatTextureResolver::ResolveSurface(uint32 SurfaceId, FACEDatDecodedSurf
 	return ResolveSurfaceWithAppearance(SurfaceId, INDEX_NONE, nullptr, Out);
 }
 
+bool FACEDatTextureResolver::ResolveSurfaceRenderFlags(uint32 SurfaceId, FACEDatSurfaceRenderFlags& Out)
+{
+	Out = {};
+	const FACEDatDecodedSurface* Surface = SurfaceCache.Find(SurfaceId);
+	FACEDatDecodedSurface Decoded;
+	if (!Surface)
+	{
+		if (!ResolveSurface(SurfaceId, Decoded)) return false;
+		Surface = &Decoded;
+	}
+	if (!Surface->bHasPixels && !Surface->bIsSolid) return false;
+	Out.bFullyTransparent = Surface->bFullyTransparent;
+	Out.bUsesAlpha = Surface->bUsesAlpha;
+	Out.bClipMap = Surface->bClipMap;
+	Out.bAdditive = Surface->bAdditive;
+	Out.bIsSolid = Surface->bIsSolid;
+	Out.bSurfaceTranslucent = Surface->bSurfaceTranslucent;
+	Out.Translucency = Surface->Translucency;
+	Out.SolidAlpha = Surface->SolidColor.A;
+	return true;
+}
+
 bool FACEDatTextureResolver::ResolveSurfaceWithAppearance(uint32 SurfaceId, int32 PartIndex, const FACEObjDesc* Appearance, FACEDatDecodedSurface& Out)
 {
 	++SurfaceResolveCount;

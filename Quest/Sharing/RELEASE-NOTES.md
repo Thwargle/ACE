@@ -1,52 +1,47 @@
-# AC:Unreal / AC:VR release 99
+# AC:Unreal / AC:VR release 100
 
 Windows desktop, PC VR, native Linux x86_64, and standalone Quest share version
-**2026.10.07.99**. Android version code: 99. Quest installer revision: 7.
+**2026.10.08.100**. Android version code: 100. Quest installer revision: 7.
 
-## Movement and inventory
+## UCM combat and recovery
 
-- Fixed an airborne lock when a nearby creature blocks recovery from a wall
-  overlap. Falling recovery preserves architecture collision while excluding
-  creatures from the support retry, following retail collision behavior.
-- Improved ramp-to-floor transitions so tiny collision overlaps do not repeatedly
-  roll the player back at a seam.
-- Native UCM routes and imported VT routes share ground-following steering and
-  three-dimensional arrival checks. Route lines follow ramps and elevation changes.
-- Swapping weapons with a full main pack now stows displaced equipment in an
-  available side pack and handles server container acknowledgements correctly,
-  preventing weapons from disappearing until relogging.
+- Target death, zero-health, and removal notifications wake UCM immediately,
+  releasing the previous physical attack's retry delay before the next target.
+- Health, stamina and mana changes trigger recovery checks during physical combat.
+  Rechecking priorities does not repeatedly restart the same attack.
+- Finished combat appraisals wake the next decision promptly. Dead debuff
+  recipients no longer stall combat while waiting for an obsolete result.
+- With Loot Before Combat disabled, nearby eligible enemies take priority over
+  corpse approach and looting, including when a corpse is already open.
 
-## UCM buffing and equipment
+## UCM buffing
 
-- Improved fast-cast scheduling, stopped stale navigation movement during buffs,
-  and kept Force Buff active until its enabled buff families are handled.
-- Expanded configurable other-player buff requests for Heavy, Finesse, Light,
-  Unarmed, Two-Handed and general melee roles, including supporting combat skills.
-- Added a visible FIFO buff queue with tell replies for queue position, turn,
-  completion and cancellation. Out-of-range requesters are removed so the next
-  player can receive buffs.
-- Added default main-hand/offhand weapon choices and honored the server's
-  Left-hand Tether property in ordinary equipment handling and UCM selection.
+- Fast buff movement is enabled by default. Explicit saved or imported opt-outs
+  remain respected. Movement stops on completion, failure or manual input.
+- Confirmed buffs advance promptly, with guarded handling of late server
+  acknowledgments and bounded retries when a server rejects a cast during recoil.
+- Corrected confirmation of player-targeted banes that report results on worn
+  armor. Timers include spell-duration augmentations, preventing premature repeats.
+- Recognize healing and other recovery spell result messages correctly.
+- Cast completion wakes scheduling without repeating background inventory and
+  appraisal scans on every wake.
 
-## UCM salvage
+## Rendering performance
 
-- Added an explicit, default-off option to apply the active profile's salvage
-  rules to items already in owned inventory, even with corpse looting disabled.
-- Appraisal and safety checks preserve equipped, retained, traded, tinkered and
-  inscribed items. Importing a profile alone does not enable inventory salvage.
-- Corrected fractional workmanship groups, material overrides, value thresholds,
-  full-bag exclusions, and CombineSalvage import/command handling.
-- Inventory rule scans resume within the plugin budget and reuse completed
-  results until relevant inventory, appraisal or profile data changes.
+- Cache decoded texture surface information instead of copying full pixel data
+  during repeated model construction. This reduces repeated Snow Tusker spawn
+  and corpse setup work in Frozen Valley and benefits other shared models.
 
 ## Validation and installation
 
-Automated coverage includes carenzi, gromnie and wasp collision shapes, desktop
-and VR jumps at the reported dungeon location, landing position/contact state,
-ramps, stairs, ledges, equipment swaps and the changed UCM policy paths.
-This is not a claim of complete retail or Virindi Tank parity. Live multiplayer,
-headset and Linux gameplay acceptance remain necessary. Four previously observed
-stair/terrain assertions remain outside the fixes in this release.
+The Windows editor build and 30 plugin regression suites passed before packaging.
+Tests cover target changes, recovery priorities, buff confirmations, delayed
+acknowledgments, busy retries and combat/loot ordering. Targeted texture and
+Snow Tusker performance checks were also completed during development.
+The packaged Windows client passed 29 regression suites. Release packaging and
+website metadata checks passed, including native Linux archive validation.
+Live multiplayer, Linux gameplay and headset acceptance remain necessary;
+these changes do not claim complete retail or Virindi Tank parity.
 
 Installing an update closes the game. Accounts, settings and DAT files are retained.
 Linux updates are downloaded and extracted manually. Game DAT files are not included.

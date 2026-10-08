@@ -1,3 +1,4 @@
+#include "ACEBarber.h"
 #include "ACECharacterCreation.h"
 #include "ACESession.h"
 #include "Dat/ACEDatDatabase.h"

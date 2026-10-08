@@ -1,5 +1,6 @@
 {
   "buffing": true,
+  "fast_cast_buffs": true,
   "buffs": [],
   "skill_margin": 30,
   "refresh_seconds": 60,

@@ -233,11 +233,13 @@ void UACEPluginSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 }
 void UACEPluginSubsystem::Deinitialize()
 {
+    UnbindCombatEvents();
     if(RouteMesh){RouteMesh->DestroyComponent();RouteMesh=nullptr;}
     if(RouteActor){RouteActor->Destroy();RouteActor=nullptr;}
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnAppraisalObserved.RemoveDynamic(this,&UACEPluginSubsystem::ObserveAppraisal);
     if(auto S=ObservedSession.Pin()){S->OnUseDone.Remove(UseDoneHandle);S->OnPlayerTell.Remove(TellHandle);S->OnChatMessage.Remove(MetaChatHandle);S->OnCombatFeedback.Remove(CombatFeedbackHandle);}
     StopAll(TEXT("Client closing")); FTSTicker::GetCoreTicker().RemoveTicker(Ticker);
+    FTSTicker::GetCoreTicker().RemoveTicker(DecisionWakeTicker);DecisionWakeTicker.Reset();
     if (DesktopPanel) if (auto* V = GetGameInstance()->GetGameViewportClient()) V->RemoveViewportWidgetContent(DesktopPanel.ToSharedRef());
     RemoveDesktopDock();
     DesktopPanel.Reset(); Plugins.Reset(); Super::Deinitialize();
@@ -324,7 +326,7 @@ bool UACEPluginSubsystem::Start(const FString& Id)
     P->CanResumeMeta=false;P->ResumeMetaPending=Resume;P->VMSourceHash=SourceHash;P->VMProfileHash=ProfileHash;P->VMSession=C->GetSession();
     P->Running = true; P->ActivityFailure.Reset(); P->Player = C->GetPlayerGuid(); P->Server = C->GetServerName();
     if(Id==TEXT("ucm")){IdleManaVM.Reset();IdleManaFailed=false;bRouteJoinRequested=true;RouteVisibilityOffset=0;}
-    if(Id==TEXT("ucm")){PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();CombatOutcomes.Empty();ClearBuffRequests();if(!Resume){RuntimeRoute.Reset();RoutePoint=1;}RouteRebuiltAt=0;}
+    if(Id==TEXT("ucm")){CombatTarget=0;PhysicalAttackNextSendAt=0;PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();CombatOutcomes.Empty();ClearBuffRequests();if(!Resume){RuntimeRoute.Reset();RoutePoint=1;}RouteRebuiltAt=0;}
     CachedSpells.Reset();
     P->NextAction = 0; P->NextDecision=0;P->WaitAction.Empty();P->Status = TEXT("Running"); Notice.Empty(); return true;
 }
@@ -403,7 +405,11 @@ void UACEPluginSubsystem::Stop(const FString& Id, const FString& Reason, bool Pr
         {PC->CancelPluginJump();if(UseApproachOwner==Id){PC->EndUseApproach();UseApproachOwner.Empty();}}
         if (MovementOwner == Id) { MovementOwner.Empty(); MoveExpires = 0; }
         if (FastCastOwner == Id) FastCastOwner.Empty();
+        if(Id==TEXT("ucm"))CombatTarget=0;
+        if(PhysicalAttackOwner==Id){PhysicalAttackOwner.Empty();PhysicalAttackTarget=0;PhysicalAttackNextSendAt=0;}
         if (PendingSpellOwner == Id) { PendingSpell=0; PendingSpellOwner.Empty(); PendingSpellActivity.Empty(); }
+        if(DeferredBuffOwner==Id){DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();}
+        if(!PendingSpell){BuffRetryAt=0;PendingBuffResultDriven=false;}
         OffensiveCasts.RemoveAll([&](const auto& E){return E.Owner==Id;});
     }
 }
@@ -591,6 +597,7 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::Snapshot()
     bool Ready = true;
     for(const auto& P:Plugins)if(P->Running && FPlatformTime::Seconds()<P->NextAction)Ready=false;
     O->SetBoolField(TEXT("ready"), Ready);
+    if(auto P=Find(TEXT("ucm")))O->SetBoolField(TEXT("loot_approaching"),CanPauseLootApproach(*P));
     FACEPosition Pos = C->GetPlayerPosition();
     auto* PC = Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
     if (PC) {PC->TryGetLocallyPredictedPosition(Pos);if(PC->IsWorldTransitionActive())O->SetBoolField(TEXT("ready"),false);
@@ -683,15 +690,97 @@ void UACEPluginSubsystem::CheckPendingSpellTimeout()
     auto Owner=Find(PendingSpellOwner);
     auto Intent=MakeShared<FJsonObject>();Intent->SetStringField(TEXT("action"),TEXT("cast"));
     Intent->SetStringField(TEXT("activity"),PendingSpellActivity);
-    PendingSpell=0;PendingSpellOwner.Empty();PendingSpellActivity.Empty();FastCastOwner.Empty();
+    PendingSpell=0;PendingSpellOwner.Empty();PendingSpellActivity.Empty();FastCastOwner.Empty();BuffRetryAt=0;PendingBuffResultDriven=false;
     if(Owner&&Owner->Running)ReportActivityFailure(*Owner,Intent,TEXT("Cast confirmation timed out; check connection and spell requirements"));
+}
+void UACEPluginSubsystem::ScheduleDecisionWake(double ReadyAt)
+{
+    if(DecisionWakeTicker.IsValid()&&DecisionWakeAt<=ReadyAt)return;
+    FTSTicker::GetCoreTicker().RemoveTicker(DecisionWakeTicker);
+    DecisionWakeAt=ReadyAt;
+    DecisionWakeTicker=FTSTicker::GetCoreTicker().AddTicker(
+        FTickerDelegate::CreateUObject(this,&UACEPluginSubsystem::RunDecisionWake),
+        float(FMath::Max(0.,ReadyAt-FPlatformTime::Seconds())));
+}
+bool UACEPluginSubsystem::RunDecisionWake(float DeltaTime)
+{
+    DecisionWakeTicker.Reset();DecisionWakeAt=0;
+    Tick(DeltaTime);
+    return false;
+}
+bool UACEPluginSubsystem::CanPauseLootApproach(const FACEClientPlugin& P) const
+{
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
+    FACEWorldObject Corpse;
+    return P.Id==TEXT("ucm")&&P.Running&&UseApproachOwner==P.Id&&P.WaitAction==TEXT("open_corpse")
+        &&!PendingSpell&&PC&&PC->IsUseApproachActive()&&!PC->IsWorldTransitionActive()
+        &&C->GetSession()&&(!C->IsUseBusy()||C->GetSession()->IsPendingWorldUse(P.WaitItem))
+        &&C->GetWorldObject(P.WaitItem,Corpse)&&Corpse.IsCorpse()&&Corpse.bHasPosition
+        &&!Corpse.ContainerId&&!Corpse.WielderId;
+}
+bool UACEPluginSubsystem::IsBuffCastIntent(const TSharedPtr<FJsonObject>& I) const
+{
+    if(String(I,TEXT("action"))!=TEXT("cast"))return false;
+    const FString Activity=String(I,TEXT("activity"));
+    if(Activity!=TEXT("buffs")&&Activity!=TEXT("buff_others"))return false;
+    uint32 School,Power,Category,Flags;double Duration;
+    return GetGameInstance()->GetSubsystem<UACEDatSubsystem>()->TryGetPluginSpellInfo(Guid(I,TEXT("spell")),School,Power,Category,Flags,Duration)
+        &&(Flags&4)&&Duration>0;
+}
+bool UACEPluginSubsystem::ResolvePluginSpellTarget(int32 Spell,int32 Selected,int32& Target) const
+{
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    if(C->ResolveSpellCastTarget(Spell,Selected,Target))return true;
+    FACEWorldObject Item;uint32 Flags=0,Type=0;bool Projectile=false;
+    auto* Dat=GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
+    if(Dat->TryGetRetailSpellTargeting(Spell,Flags,Type,Projectile)&&(Flags&4)&&C->GetWorldObject(Selected,Item)
+        &&(IsOwnedPluginItem(Item)||(BuffRequests.Num()&&(Item.WielderId==int32(uint32(Number(BuffRequests[0]->AsObject(),TEXT("player"))))
+            ||(Item.CurrentWieldedLocation&&Item.ParentGuid==int32(uint32(Number(BuffRequests[0]->AsObject(),TEXT("player"))))))))
+        &&(uint32(Item.ItemType)&Type)&&Item.StackSize<=1){Target=Selected;return true;}
+    return false;
+}
+void UACEPluginSubsystem::UpdateBuffDispatch()
+{
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    const double Now=FPlatformTime::Seconds();
+    CompleteConfirmedBuff();
+    if(ConfirmedBuffAckAt&&Now-ConfirmedBuffAckAt>30)
+    {
+        auto Owner=Find(ConfirmedBuffOwner);ConfirmedBuffAckAt=0;ConfirmedBuffOwner.Empty();
+        DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();
+        if(Owner&&Owner->Running)
+        {
+            auto I=MakeShared<FJsonObject>();I->SetStringField(TEXT("activity"),TEXT("buffs"));
+            ReportActivityFailure(*Owner,I,TEXT("Buff acknowledgment timed out; check connection"));
+        }
+    }
+    if(BuffRetryAt&&Now>=BuffRetryAt)
+    {
+        auto Owner=Find(PendingSpellOwner);
+        if(!PendingSpell||!Owner||!Owner->Running){BuffRetryAt=0;return;}
+        if(Now-PendingSpellAt>=5){CompletePendingAction(0x001D);return;}
+        if(!C->GetSession()||C->GetSessionState()!=EACESessionState::InWorld||C->GetPlayerGuid()!=Owner->Player||C->GetServerName()!=Owner->Server||C->GetPlayerVitalsView().Health<=0)return;
+        auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
+        if(C->IsUseBusy()||(PC&&PC->IsWorldTransitionActive()))return;
+        int32 Target=0;
+        if(!C->GetKnownSpells().Contains(PendingSpell)||!ResolvePluginSpellTarget(PendingSpell,PendingSpellTarget,Target)||Target!=PendingSpellTarget)
+        {CompletePendingAction(0x001D);return;}
+        BuffRetryAt=0;C->GetSession()->SendCastSpell(PendingSpell,Target);
+    }
 }
 bool UACEPluginSubsystem::Tick(float)
 {
-    UpdateDesktopDock();
-    RefreshAutomationData();
-    DrawRoute();
+    // VT cLogic.SchedulePoke wakes on cast completion instead of waiting for
+    // the idle poll. Keep expensive presentation/background scans at their
+    // original cadence when several actions finish between periodic ticks.
+    if(FPlatformTime::Seconds()>=NextMaintenanceAt)
+    {
+        NextMaintenanceAt=FPlatformTime::Seconds()+.5;
+        UpdateDesktopDock();RefreshAutomationData();DrawRoute();
+    }
     auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    UpdateBuffDispatch();
     CheckPendingSpellTimeout();
     // VT ManaChargesWhenOff is deliberately independent of Start/Stop. Use a
     // separate VM restricted to equipment recharge; no meta/combat/nav can run.
@@ -734,13 +823,19 @@ bool UACEPluginSubsystem::Tick(float)
     {
         if (C->GetSessionState() != EACESessionState::InWorld || C->GetPlayerGuid() != P->Player || C->GetServerName() != P->Server || (C->GetPlayerVitalsView().Health <= 0 && !P->Profile->HasField(TEXT("vt_meta"))))
         { Stop(P->Id, TEXT("Stopped: character died, changed, or left world")); continue; }
+        if(DeferredBuffIntent&&DeferredBuffOwner==P->Id)
+        {
+            if(ConfirmedBuffAckAt||PendingSpell||C->IsUseBusy())continue;
+            auto I=DeferredBuffIntent;DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();
+            P->NextAction=0;Execute(*P,I);P->NextDecision=FPlatformTime::Seconds()+.25;continue;
+        }
         // UCM cannot issue a second action while the first is pending. Avoid
         // copying a large spellbook/inventory into Lua just to return "waiting".
         RefreshActionWait(*P);
         if(FPlatformTime::Seconds()<P->NextDecision)continue;
         auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
         if(PC&&!PC->IsUseApproachActive())UseApproachOwner.Empty();
-        if(P->Id==TEXT("ucm") && !P->Profile->HasField(TEXT("vt_meta")) && (C->IsUseBusy() || PendingSpell || FPlatformTime::Seconds()<P->NextAction || (PC&&PC->IsUseApproachActive())))continue;
+        if(P->Id==TEXT("ucm") && !P->Profile->HasField(TEXT("vt_meta")) && !CanPauseLootApproach(*P) && (C->IsUseBusy() || PendingSpell || FPlatformTime::Seconds()<P->NextAction || (PC&&PC->IsUseApproachActive())))continue;
         TSharedPtr<FJsonObject> Intent; FString Error;
         auto TickProfile=MakeShared<FJsonObject>(*P->Profile);TickProfile->RemoveField(TEXT("vt_library"));
         if(P->Id==TEXT("ucm")){TickProfile->SetArrayField(TEXT("ucm_commands"),UCMCommands);TickProfile->SetBoolField(TEXT("ucm_command_only"),bUCMCommandOnly);UCMCommands.Reset();}
@@ -798,6 +893,11 @@ void UACEPluginSubsystem::ReportActivityFailure(FACEClientPlugin& P, const TShar
 }
 void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObject>& I)
 {
+    // Only another validated buff may overlap the previous buff's recoil.
+    // Hold other policy intents without stepping Lua again until its untagged
+    // UseDone is drained, including force-buff completion and equipment changes.
+    if(ConfirmedBuffAckAt && !IsBuffCastIntent(I))
+    {DeferredBuffIntent=MakeShared<FJsonObject>(*I);DeferredBuffOwner=P.Id;return;}
     if(P.Id==TEXT("ucm"))I->TryGetBoolField(TEXT("route_join_pending"),bRouteJoinRequested);
     if(P.Id==TEXT("ucm") && I->HasField(TEXT("route_point")))RoutePoint=FMath::Clamp(int32(Number(I,TEXT("route_point"),1)),1,2049);
     if(P.Id==TEXT("ucm")&&I->HasField(TEXT("runtime_route")))
@@ -826,6 +926,19 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         return;
     }
     if(P.Id==TEXT("ucm")&&Action==TEXT("notice")){Notice=String(I,TEXT("text")).Left(1024);return;}
+    if(P.Id==TEXT("ucm")&&Action==TEXT("pause_loot_approach"))
+    {
+        if(P.Permissions.Contains(TEXT("loot"))&&CanPauseLootApproach(P))
+        {
+            // Same local cancellation as manual movement, followed by a normal
+            // movement stop. Never release pending pickup/equipment/cast gates.
+            auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+            Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController())->EndUseApproach();
+            Client->GetSession()->CancelWorldUseApproach();Client->StopMovement();
+            UseApproachOwner.Empty();P.WaitAction.Empty();P.NextAction=0;P.NextDecision=0;
+        }
+        return;
+    }
     if(P.Id==TEXT("ucm")&&Action==TEXT("pause_navigation"))
     {
         // A blocked route must not discard the VM or stop combat/recovery.
@@ -883,6 +996,11 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
     if (Now < P.NextAction) return;
     P.NextAction = Now + .5;
     P.WaitAction.Empty();
+    if(P.Id==TEXT("ucm")&&Action==TEXT("identify")&&String(I,TEXT("activity"))==TEXT("combat"))
+    {
+        FACEWorldObject Target;
+        if(C->GetWorldObject(Guid(I,TEXT("item")),Target)&&Target.IsAttackable()&&!Target.bIsPlayer&&!Target.PetOwnerId)CombatTarget=Target.Guid;
+    }
     if(Action!=TEXT("move")&&Action!=TEXT("face")){MovementOwner.Empty();MoveExpires=0;FaceHeading.Reset();}
     if(Action==TEXT("confirm"))
     {
@@ -907,7 +1025,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         if(C->GetWorldObject(Id,Target)&&(Target.IsSelectableWorldObject()||IsOwnedPluginItem(Target)))C->SelectObject(Id);
         else ReportActivityFailure(P,I,TEXT("Meta selection target disappeared"));return;
     }
-    if(Action==TEXT("cancel_attack")){PhysicalAttackUntil=Now+2;C->GetSession()->SendCancelAttack();return;}
+    if(Action==TEXT("cancel_attack")){PhysicalAttackUntil=Now+2;PhysicalAttackNextSendAt=0;CombatTarget=0;C->GetSession()->SendCancelAttack();return;}
     if(Action==TEXT("combat_mode")){const int Mode=int(Number(I,TEXT("mode")));if(Mode==1||Mode==2||Mode==4||Mode==8)C->SendChangeCombatMode(Mode);return;}
     if(Action==TEXT("attack_bar")){if(PC)PC->SetPluginAttackPower(Number(I,TEXT("power")));return;}
     if(Action==TEXT("logout")){Stop(P.Id,TEXT("Logged out by meta"));C->Logout();return;}
@@ -950,26 +1068,20 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         const int32 Spell = Guid(I,TEXT("spell")); int32 Target = 0;
         if (!C->GetKnownSpells().Contains(Spell)) { P.Status = TEXT("Spell is not known"); return; }
         const int32 Selected = Guid(I,TEXT("target"),uint32(C->GetSelectedObject().Guid));
-        if (!C->ResolveSpellCastTarget(Spell, Selected, Target))
-        {
-            FACEWorldObject Item;uint32 Flags=0,Type=0;bool Projectile=false;
-            auto* Dat=GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
-            if(Dat->TryGetRetailSpellTargeting(Spell,Flags,Type,Projectile) && (Flags&4) && C->GetWorldObject(Selected,Item)
-                && (IsOwnedPluginItem(Item) || (BuffRequests.Num() && (Item.WielderId==int32(uint32(Number(BuffRequests[0]->AsObject(),TEXT("player"))))
-                    || (Item.CurrentWieldedLocation && Item.ParentGuid==int32(uint32(Number(BuffRequests[0]->AsObject(),TEXT("player"))))))))
-                && (uint32(Item.ItemType)&Type) && Item.StackSize<=1) Target=Selected;
-            else {P.Status=TEXT("Spell target is unavailable");return;}
-        }
-        FACEWorldObject CombatTarget;
-        if(C->GetWorldObject(Target,CombatTarget)&&CombatTarget.IsAttackable()&&!CombatTarget.bIsPlayer&&!CombatTarget.PetOwnerId
-            && !HasClearCombatSight(CombatTarget)){C->GetSession()->SendCancelAttack();P.Status=TEXT("Target behind an obstruction; continuing route");return;}
+        if (!ResolvePluginSpellTarget(Spell,Selected,Target))
+        {P.Status=TEXT("Spell target is unavailable");return;}
+        FACEWorldObject CastTargetObject;
+        if(DefeatedTargets.Contains(Target)){P.NextAction=0;P.NextDecision=0;ScheduleDecisionWake(Now);return;}
+        if(C->GetWorldObject(Target,CastTargetObject)&&CastTargetObject.IsAttackable()&&!CastTargetObject.bIsPlayer&&!CastTargetObject.PetOwnerId
+            && !HasClearCombatSight(CastTargetObject)){C->GetSession()->SendCancelAttack();P.Status=TEXT("Target behind an obstruction; continuing route");return;}
         if(Target && Target!=C->GetPlayerGuid() && Target!=C->GetSelectedObject().Guid)C->SelectObject(Target);
         if(C->GetPlayerVitalsView().CombatMode!=8)C->SendChangeCombatMode(8);
         // SendCastSpell's public UI path selects only in VR. Automation uses the same
         // resolved target and session cast action in both modes, without a fake trigger.
         PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();
         PendingSpell=Spell;PendingSpellTarget=Target;PendingSpellAt=Now;PendingSpellOwner=P.Id;PendingSpellActivity=String(I,TEXT("activity"));
-        PendingSpellConfirmation.Empty();PendingSpellConfirmed=false;PendingSpellFizzled=false;
+        PendingBuffResultDriven=P.Id==TEXT("ucm")&&IsBuffCastIntent(I);PendingSpellWords=false;BuffRetryAt=0;
+        PendingSpellConfirmation.Empty();PendingSpellItemConfirmations.Empty();PendingSpellRecoveryConfirmations.Empty();PendingSpellConfirmed=false;PendingSpellFizzled=false;
         // UseDone also succeeds for resisted spells. Track the specific server
         // magic-chat confirmation before considering an offensive enchantment active.
         uint32 School=0,Power=0,Category=0,Flags=0,Icon=0;double Duration=0;FString SpellName;
@@ -978,26 +1090,24 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         FastCastStartedAt=0;FastCastMovementApplied=false;
         if(Dat->TryGetSpellInfo(Spell,SpellName,Icon))
         {
-            const bool Self=Target==C->GetPlayerGuid();
-            FACEWorldObject Recipient;
-            if(Self||C->GetWorldObject(Target,Recipient))
-                PendingSpellConfirmation=TEXT("You cast ")+SpellName+TEXT(" on ")+(Self?TEXT("yourself"):Recipient.Name);
+            PrepareSpellConfirmation(SpellName);
         }
-        if(C->GetWorldObject(Target,CombatTarget)&&CombatTarget.IsAttackable()&&!CombatTarget.bIsPlayer&&!CombatTarget.PetOwnerId
+        if(C->GetWorldObject(Target,CastTargetObject)&&CastTargetObject.IsAttackable()&&!CastTargetObject.bIsPlayer&&!CastTargetObject.PetOwnerId
             &&Dat->IsPluginSingleTargetOffensiveSpell(Spell)&&Dat->TryGetSpellInfo(Spell,SpellName,Icon))
         {
+            if(P.Id==TEXT("ucm"))this->CombatTarget=Target;
             FOffensiveCast Record;Record.Spell=Spell;Record.Target=Target;Record.Owner=P.Id;
-            Record.SpellName=SpellName;Record.TargetName=CombatTarget.Name;Record.Sent=Now;
+            Record.SpellName=SpellName;Record.TargetName=CastTargetObject.Name;Record.Sent=Now;
             OffensiveCasts.Add(MoveTemp(Record));if(OffensiveCasts.Num()>8)OffensiveCasts.RemoveAt(0);
         }
         if(FastCast&&P.Permissions.Contains(TEXT("navigation"))&&Dat->TryGetPluginSpellInfo(Spell,School,Power,Category,Flags,Duration)
             &&ACEPluginCastMotion::FastBuff(School,Power,Flags,Duration))FastCastOwner=P.Id;
         if(Target&&Dat->TryGetPluginSpellInfo(Spell,School,Power,Category,Flags,Duration)
-            &&!(Flags&4)&&Duration>0&&Dat->TryGetSpellInfo(Spell,SpellName,Icon)&&C->GetWorldObject(Target,CombatTarget))
+            &&!(Flags&4)&&Duration>0&&Dat->TryGetSpellInfo(Spell,SpellName,Icon)&&C->GetWorldObject(Target,CastTargetObject))
         {
             auto Record=MakeShared<FJsonObject>();Record->SetNumberField(TEXT("target"),uint32(Target));Record->SetNumberField(TEXT("spell"),Spell);
-            Record->SetStringField(TEXT("confirmation"),TEXT("You cast ")+SpellName+TEXT(" on ")+CombatTarget.Name);
-            Record->SetStringField(TEXT("resist"),CombatTarget.Name+TEXT(" resists your spell"));
+            Record->SetStringField(TEXT("confirmation"),TEXT("You cast ")+SpellName+TEXT(" on ")+CastTargetObject.Name);
+            Record->SetStringField(TEXT("resist"),CastTargetObject.Name+TEXT(" resists your spell"));
             Record->SetNumberField(TEXT("category"),Category);Record->SetNumberField(TEXT("power"),Power);
             Record->SetNumberField(TEXT("duration"),Duration);Record->SetNumberField(TEXT("sent"),Now);
             PendingDebuffCasts.Add(MakeShared<FJsonValueObject>(Record));if(PendingDebuffCasts.Num()>8)PendingDebuffCasts.RemoveAt(0);
@@ -1008,7 +1118,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
     {
         const auto Selection=C->GetSelectedObject();
         const int32 Target = Guid(I,TEXT("target"),uint32(PC->FindNearbyTarget(true,0,Selection.bShowHealth && Selection.HealthFraction<=0?Selection.Guid:0)));
-        FACEWorldObject Monster;if(!C->GetWorldObject(Target,Monster)||!Monster.IsAttackable()||Monster.bIsPlayer||Monster.PetOwnerId)return;
+        FACEWorldObject Monster;if(!C->GetWorldObject(Target,Monster)||!Monster.IsAttackable()||Monster.bIsPlayer||Monster.PetOwnerId||DefeatedTargets.Contains(Target))return;
         if(!HasClearCombatSight(Monster)){C->GetSession()->SendCancelAttack();P.Status=TEXT("Target behind an obstruction; continuing route");return;}
         if (!Target) { P.Status = TEXT("No eligible monster"); return; }
         const int32 Mode = Guid(I,TEXT("mode"),2);
@@ -1017,7 +1127,14 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         if(C->GetPlayerVitalsView().CombatMode!=Mode)C->SendChangeCombatMode(Mode);
         const int32 Height = int32(FMath::Clamp(Number(I, TEXT("height"), 2), 1., 3.));
         const float Power = FMath::Clamp(float(Number(I, TEXT("power"), .5)), 0.f, 1.f);
+        if(P.Id==TEXT("ucm"))CombatTarget=Target;
+        // Recovery/death events may wake Lua during an ongoing server repeat.
+        // Re-evaluate policy immediately without restarting the same attack.
+        if(PhysicalAttackOwner==P.Id&&PhysicalAttackTarget==Target&&PhysicalAttackMode==Mode
+            &&PhysicalAttackHeight==Height&&FMath::IsNearlyEqual(PhysicalAttackPower,Power,.001f)&&Now<PhysicalAttackNextSendAt)
+        {P.NextAction=PhysicalAttackNextSendAt;return;}
         PhysicalAttackTarget=Target;PhysicalAttackOwner=P.Id;PhysicalAttackUntil=Now+30;
+        PhysicalAttackMode=Mode;PhysicalAttackHeight=Height;PhysicalAttackPower=Power;PhysicalAttackNextSendAt=Now+3.5;
         if (Mode == 2) C->SendTargetedMeleeAttack(Target, Height, Power); else C->SendTargetedMissileAttack(Target, Height, Power);
         PC->ShowPluginAttack(Target, Height, Power);
         P.NextAction = Now + 3.5;
@@ -1056,7 +1173,8 @@ void UACEPluginSubsystem::ApplyMovement(AACEPlayerController* PC, float& F, floa
         {
             // Use the normal movement/collision/network path, never inject keys
             // or alter spell speed. Chat, UI blocking and jumps suspend the input.
-            if(FastCastStarted&&!Blocked&&PC&&PC->GetPawn()){F=-1;R=T=0;FastCastMovementApplied=true;}return;
+            if(FastCastStarted&&!Blocked&&PC&&PC->GetPawn())
+            {F=-1;R=T=0;FastCastMovementApplied=true;CompleteConfirmedBuff();}return;
         }
     }
     if (MovementOwner.IsEmpty()) return;

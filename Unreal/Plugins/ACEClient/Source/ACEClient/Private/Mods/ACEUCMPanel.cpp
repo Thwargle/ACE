@@ -471,7 +471,7 @@ namespace ACEUCMPanelPrivate
                 const TCHAR* ArcNames[]={TEXT(""),TEXT("Prefer bolts"),TEXT("Prefer arcs at range"),TEXT("Prefer arcs")};
                 Add(Button(ArcNames[Arcs],[this,Arcs](){P()->SetNumberField(TEXT("use_arcs"),Arcs%3+1);Save();Rebuild();}));
                 Slider(TEXT("arc_range"),TEXT("Arc preference distance"),0,100,5,Accent,TEXT(" m"));
-                Add(Toggle(TEXT("fast_cast_buffs"),TEXT("Fast buff movement"),TEXT("Hold backward during eligible instant life/creature casts, using normal movement. Stops with the cast or manual input.")));
+                Add(Toggle(TEXT("fast_cast_buffs"),TEXT("Fast buff movement"),TEXT("Use VT-style backward movement after eligible spell words to shorten buff recoil. Stops on the spell result or manual input."),true));
                 Heading(TEXT("Summoned pets"),TEXT("Add essences to the equipment list below. Uses server requirements, remaining charges and cooldowns."));
                 Add(Toggle(TEXT("summon_pets"),TEXT("Summon combat pets"),TEXT("Choose an eligible essence for nearby monsters; keep an existing pet active.")));
                 Add(Toggle(TEXT("refill_summons"),TEXT("Refill summon essences"),TEXT("Use Encapsulated Spirit from your inventory to refill low-charge essences in the equipment pool. Works independently of automatic summoning.")));
