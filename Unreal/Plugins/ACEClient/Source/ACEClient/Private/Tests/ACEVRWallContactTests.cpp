@@ -15,6 +15,7 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/SphereComponent.h"
 #include "Components/BoxComponent.h"
+#include "ProceduralMeshComponent.h"
 #include "Components/InputComponent.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/PlayerInput.h"
@@ -406,6 +407,48 @@ bool FACEVRWallContactTest::RunTest(const FString&)
   TestTrue(TEXT("Stationary support remains on the ramp"),FMath::Abs(Pawn->GetActorLocation().Z-90.75-Ground.ImpactPoint.Z)<15);
   A->Destroy();
  }
+ // Independent room faces meeting at ramp/flat seams, at large world coordinates.
+ // Include tiny authored cracks/overlaps and both input paths/directions.
+ for(float Rise:{300.f,600.f})for(float Gap:{0.f,.2f,-.2f})for(float Lip:{0.f,2.f,-2.f})
+ {
+  const FVector Base=Contact+FVector(8000,8000,2000);
+  TArray<AActor*> Surfaces;
+  auto Face=[&](double X0,double Z0,double X1,double Z1)
+  {
+   auto* A=World->SpawnActor<AActor>();auto* Mesh=NewObject<UProceduralMeshComponent>(A);A->SetRootComponent(Mesh);
+   Mesh->SetCollisionEnabled(ECollisionEnabled::QueryOnly);Mesh->SetCollisionResponseToAllChannels(ECR_Block);
+   Mesh->RegisterComponent();A->SetActorLocation(Base);
+   Mesh->CreateMeshSection(0,{FVector(X0,-300,Z0),FVector(X1,-300,Z1),FVector(X1,300,Z1),FVector(X0,300,Z0)},
+    {0,1,2,0,2,3},{},{},{},{},true);Surfaces.Add(A);
+  };
+  Face(-600,0,0,0);Face(Gap,Lip,600,Rise+Lip);Face(600+Gap,Rise,1200,Rise);
+  for(bool Tracked:{false,true})for(bool Reverse:{false,true})for(float Rate:{30.f,144.f})
+  {
+   const FVector Direction(Reverse?-1:1,0,0);
+   FACEPosition Seed;Seed.CellId=0xC98C0129;
+   Seed.SetLocationFromUnreal(Base+FVector(Reverse?850:-250,0,Reverse?Rise:0),100);
+   Seed.SetAceFacingFromUnrealDir2D(Direction);
+   VR->bActive=Tracked;VR->Settings->bRun=true;Session->SetLocalPosition(Seed);PC->PredictedPose=Seed;
+   PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;PC->bJumpAirborne=false;PC->bStandingJumpLocked=false;PC->StepHoldSeconds=0;
+   Pawn->SetActorLocationAndRotation(Seed.ToUnrealLocation()+FVector(0,0,90.75),Seed.ToUnrealQuat());
+   if(!Tracked)PC->PlayerInput->InputKey(FInputKeyParams(EKeys::W,IE_Pressed,1.,false));
+   bool Reached=false;int32 Stalls=0,MaxStalls=0;
+   for(int32 Frame=0;Frame<int32(Rate*8);++Frame)
+   {
+    const FVector Before=Pawn->GetActorLocation();
+    VR->Head->SetWorldLocationAndRotation(Before+FVector(0,0,175-90.75),Direction.Rotation());
+    VR->MoveStick=FVector2D(0,1);++GFrameCounter;PC->PlayerTick(1.f/Rate);
+    const FVector After=Pawn->GetActorLocation();
+    Stalls=FVector::Dist2D(Before,After)<.01?Stalls+1:0;MaxStalls=FMath::Max(MaxStalls,Stalls);
+    if(Reverse?After.X<Base.X-150:After.X>Base.X+750){Reached=true;break;}
+   }
+   if(!Tracked)PC->PlayerInput->InputKey(FInputKeyParams(EKeys::W,IE_Released,0.,false));
+   AddInfo(FString::Printf(TEXT("Ramp seam rise=%.0f gap=%.2f lip=%.2f vr=%d reverse=%d fps=%.0f end=%s stalls=%d"),Rise,Gap,Lip,Tracked,Reverse,Rate,*(Pawn->GetActorLocation()-Base).ToString(),MaxStalls));
+   TestTrue(TEXT("Ramp and flat seams can be crossed without jumping"),Reached);
+   TestTrue(TEXT("Seam does not hold moving player in place"),MaxStalls<Rate*.25);
+  }
+  for(auto* A:Surfaces)A->Destroy();
+ }
  // The reported crowded dungeon floor, using the retail cell at its actual
  // coordinates. Exercise normal movement and a real charged jump while crowded.
  for(int32 SwarmCase=0;SwarmCase<4;++SwarmCase)
@@ -504,6 +547,109 @@ bool FACEVRWallContactTest::RunTest(const FString&)
   }
   for(auto* A:Bodies)A->Destroy();
   ReportedRoom->Destroy();
+ }
+ // Enter a swarm from outside, with the full controller integrating gravity,
+ // bouncing velocity and updating the position reported to the server.
+ for(bool Reported:{false,true})
+ {
+  FACEPosition Report;Report.CellId=0x0143014F;Report.Location=FVector(36.698425,-29.878906,0);
+  const FVector Base=Reported?Report.ToUnrealLocation(100):Contact+FVector(10000,10000,2000);
+  TArray<AACEEnvCellActor*> Cells;
+  if(Reported)
+  {
+   TArray<uint32> Ids{0x0143014F};
+   for(int32 Index=0;Index<Ids.Num() && Index<24;++Index)
+   {
+    auto* Cell=World->SpawnActor<AACEEnvCellActor>();
+    Cell->LoadEnvCell(Ids[Index],FVector(-19200,67*19200,0),100);Cell->SetEnvCellCollisionActive(true);Cells.Add(Cell);
+    const auto* Mesh=Dat->FindEnvCellMesh(Ids[Index],100);
+    if(Mesh && Index<4)for(const auto& Portal:Mesh->CellPortals)
+     if(!Portal.IsOutsidePortal())Ids.AddUnique(0x01430000u|Portal.OtherCellId);
+   }
+  }
+  auto* FloorActor=World->SpawnActor<AActor>();auto* Floor=NewObject<UBoxComponent>(FloorActor);
+  FloorActor->SetRootComponent(Floor);Floor->SetBoxExtent(FVector(5000,5000,10));
+  Floor->SetCollisionEnabled(Reported?ECollisionEnabled::NoCollision:ECollisionEnabled::QueryOnly);Floor->SetCollisionResponseToAllChannels(ECR_Block);
+  Floor->RegisterComponent();FloorActor->SetActorLocation(Base-FVector(0,0,10));
+  TArray<AACEWorldEntityActor*> Mobs;
+  for(int32 I=0;I<32;++I)
+  {
+   FACEWorldObject Mob;Mob.Guid=0x78002000+I;Mob.SetupId=0x02001121;Mob.Scale=1.2f;
+   Mob.ItemType=ACEItemType::Creature;Mob.PhysicsState=ACEPhysicsState::Gravity;
+   auto* Actor=World->SpawnActor<AACEWorldEntityActor>();Actor->InitializeFromObject(Mob,100,true);Mobs.Add(Actor);
+  }
+  int32 JumpCases=0;
+  for(bool Tracked:{false,true})for(int32 FPS:{30,144})for(int32 Mode=0;Mode<3;++Mode)for(int32 Heading=0;Heading<8;++Heading)
+  {
+   const FVector Direction(FMath::Cos(Heading*PI/4),FMath::Sin(Heading*PI/4),0);
+   FACEPosition Pose;Pose.CellId=Reported?0x0143014F:0xC98C0129;Pose.SetLocationFromUnreal(Base-Direction*(Reported?0:400),100);
+   const FVector Start=Pose.ToUnrealLocation(100)+FVector(0,0,90.75);
+   FCollisionQueryParams Env=Query;for(auto* Mob:Mobs)Env.AddIgnoredActor(Mob);
+   TArray<FHitResult> Initial;ACEBodySweep::SweepBodyContacts(*World,Initial,Start,Start+FVector(0,0,.001),Shape,Env);
+   if(Initial.ContainsByPredicate([](const FHitResult& H){return H.bStartPenetrating && H.PenetrationDepth>.05;}))continue;
+   Pose.SetAceFacingFromUnrealDir2D(Direction);Session->SetLocalPosition(Pose);
+   VR->bActive=Tracked;VR->MoveStick=FVector2D::ZeroVector;
+   PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;
+   PC->bJumpAirborne=false;PC->bStandingJumpLocked=false;PC->StepHoldSeconds=0;
+   Pawn->SetActorLocationAndRotation(Pose.ToUnrealLocation(100)+FVector(0,0,90.75),Pose.ToUnrealQuat());
+   PC->bRunning=true;PC->bJumpCharging=true;PC->ReleaseJump(1,.4f);
+   PC->JumpWorldAceVelocity=FVector(-Direction.X*6,Direction.Y*6,6);
+   int32 Frames=0;
+   for(;Frames<FPS*8 && PC->bJumpAirborne;++Frames)
+   {
+    for(int32 I=0;I<Mobs.Num();++I)
+    {
+     const double Angle=I*2*PI/Mobs.Num()+(Mode?Frames*.4/FPS:0);
+     const FVector At=Pawn->GetActorLocation();
+     const FVector Center=Mode==2 && Frames>FPS*.35 ? FVector(At.X,At.Y,Base.Z) : Base+Direction*(Reported?150:0);
+     Mobs[I]->SetActorLocation(Center+FVector(80*FMath::Cos(Angle),80*FMath::Sin(Angle),Mode==1?150:0));
+    }
+    VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,84.25),Direction.Rotation());
+    PC->PlayerTick(1.f/FPS);
+   }
+   TestFalse(FString::Printf(TEXT("Controller swarm jump lands: reported=%d tracked=%d fps=%d mode=%d heading=%d frames=%d feet=%.3f velocity=%s"),
+    Reported,Tracked,FPS,Mode,Heading,Frames,Pawn->GetActorLocation().Z-Base.Z-90.75,*PC->JumpWorldAceVelocity.ToString()),PC->bJumpAirborne);
+   TestTrue(TEXT("Landing in a swarm restores the reported server contact state"),Session->bAutoPosContact);
+   ++JumpCases;
+  }
+  TestTrue(TEXT("Swarm integration exercises valid starting positions"),JumpCases>0);
+  AddInfo(FString::Printf(TEXT("Completed %d controller swarm jumps, reported dungeon=%d"),JumpCases,Reported));
+  if(!Reported)
+  {
+   // A small wall overlap plus a nearby (not yet overlapping) wasp blocks
+   // depenetration. Exercise the actual controller and network contact flag.
+   auto* WallActor=World->SpawnActor<AActor>();auto* Wall=NewObject<UBoxComponent>(WallActor);
+   WallActor->SetRootComponent(Wall);Wall->SetBoxExtent(FVector(10,1000,1000));
+   Wall->SetCollisionEnabled(ECollisionEnabled::QueryOnly);Wall->SetCollisionResponseToAllChannels(ECR_Block);
+   Wall->RegisterComponent();WallActor->SetActorLocation(Base+FVector(-10,0,0));
+   TArray<FACEDatCollisionShape> Spheres;bool BSP=false;Dat->GetSetupCollisionShapes(0x02001121,Spheres,BSP);
+   double Width=0;
+   for(const auto& S:Spheres)for(double Z:{48.,133.5})
+    Width=FMath::Max(Width,FMath::Sqrt(FMath::Max(0.,FMath::Square(48.+S.Radius*120)-FMath::Square(Z-S.Origin.Z*120))));
+   for(bool Tracked:{false,true})for(int32 FPS:{30,144})for(double Depth:{.2,2.})
+   {
+    for(auto* Mob:Mobs)Mob->SetActorLocation(Base+FVector(48-Depth+Width+.01,0,250-90.75));
+    FACEPosition Pose;Pose.CellId=0xC98C0129;Pose.SetLocationFromUnreal(Base+FVector(48-Depth,0,250-90.75),100);
+    Pose.SetAceFacingFromUnrealDir2D(FVector(0,1,0));Session->SetLocalPosition(Pose);
+    VR->bActive=Tracked;VR->MoveStick=FVector2D::ZeroVector;
+    PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;
+    PC->bJumpAirborne=true;PC->bStandingJumpLocked=true;PC->StepHoldSeconds=0;
+    PC->JumpWorldAceVelocity=FVector(0,0,-1);Session->SetReportedContact(false);
+    Pawn->SetActorLocationAndRotation(Pose.ToUnrealLocation(100)+FVector(0,0,90.75),Pose.ToUnrealQuat());
+    for(int32 Frame=0;Frame<FPS*3 && PC->bJumpAirborne;++Frame)
+    {
+     VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,84.25),FRotator(0,90,0));
+     PC->PlayerTick(1.f/FPS);
+    }
+    TestFalse(FString::Printf(TEXT("Crowded wall releases airborne/input lock: vr=%d fps=%d depth=%.2f"),Tracked,FPS,Depth),
+     PC->bJumpAirborne || PC->bStandingJumpLocked);
+    TestTrue(TEXT("Recovered landing reports ground contact to the server"),Session->bAutoPosContact);
+    TestTrue(TEXT("Recovered landing reports the same feet position as the visual body"),
+     Session->GetPlayerPosition().ToUnrealLocation(100).Equals(Pawn->GetActorLocation()-FVector(0,0,90.75),.1));
+   }
+   WallActor->Destroy();
+  }
+  for(auto* Mob:Mobs)Mob->Destroy();FloorActor->Destroy();for(auto* Cell:Cells)Cell->Destroy();
  }
  Session->State=EACESessionState::Disconnected;Session->PlayerGuid=0;
  World->DestroyWorld(false);GEngine->DestroyWorldContext(World);return true;

@@ -131,6 +131,40 @@ bool FACEUCMRecoveryTest::RunTest(const FString&)
         Low->SetNumberField(TEXT("skill"),350);High->SetNumberField(TEXT("skill"),350);Focus->SetNumberField(TEXT("skill"),350);
         TestEqual(TEXT("Newly usable mastery upgrade does not wait out stale retry delay"),Step(Policy,State,Settings)->GetNumberField(TEXT("spell")),8002.);
     }
+    {
+        auto S=Snapshot(),P=Profile();S->SetNumberField(TEXT("force_buff_request"),1);
+        P->SetBoolField(TEXT("fast_cast_buffs"),true);
+        TArray<TSharedPtr<FJsonValue>> Book;
+        for(int School:{2,3,4})
+        {
+            auto Spell=RecoveryJson(TEXT(R"({"power":100,"skill":500,"duration":300,"self_buff":true})"));
+            Spell->SetNumberField(TEXT("id"),School);Spell->SetNumberField(TEXT("category"),School+100);Spell->SetNumberField(TEXT("school"),School);
+            Book.Add(MakeShared<FJsonValueObject>(Spell));
+        }
+        S->SetArrayField(TEXT("spells"),Book);FACEPluginVM Policy;Policy.Load(Source,Error);
+        auto I=Step(Policy,S,P);TestEqual(TEXT("Force Buff starts with first available school"),I->GetNumberField(TEXT("spell")),2.);
+        TestTrue(TEXT("Fast-cast option reaches the cast request"),I->GetBoolField(TEXT("fast_cast")));
+        S->SetNumberField(TEXT("last_spell"),2);S->SetNumberField(TEXT("action_serial"),1);S->SetBoolField(TEXT("last_spell_confirmed"),false);
+        S->SetNumberField(TEXT("time"),100.5);I=Step(Policy,S,P);
+        TestEqual(TEXT("Completed fizzle retries promptly, without twelve-second confirmation wait"),I->GetNumberField(TEXT("spell")),2.);
+        int Serial=1;
+        for(int School:{2,3,4})
+        {
+            S->SetNumberField(TEXT("last_spell"),School);S->SetNumberField(TEXT("action_serial"),++Serial);
+            S->SetBoolField(TEXT("last_spell_confirmed"),true);S->SetNumberField(TEXT("time"),100.5+Serial*.5);
+            I=Step(Policy,S,P);
+            if(School<4)TestEqual(TEXT("Forced cycle continues across all three schools"),I->GetNumberField(TEXT("spell")),double(School+1));
+        }
+        TestEqual(TEXT("Force Buff finishes only after all available families confirm"),I->GetStringField(TEXT("action")),FString(TEXT("force_buff_done")));
+        // A fresh manual request must retry a previously rejected spell rather
+        // than silently skipping it due to the prior pass's cooldown.
+        S->SetNumberField(TEXT("force_buff_request"),2);I=Step(Policy,S,P);
+        S->SetNumberField(TEXT("last_spell"),2);S->SetNumberField(TEXT("action_serial"),++Serial);S->SetNumberField(TEXT("action_error"),0x400);
+        S->SetBoolField(TEXT("last_spell_confirmed"),false);I=Step(Policy,S,P);
+        TestEqual(TEXT("Rejected family allows other buffs to continue"),I->GetNumberField(TEXT("spell")),3.);
+        S->SetNumberField(TEXT("force_buff_request"),3);S->SetNumberField(TEXT("action_error"),0);I=Step(Policy,S,P);
+        TestEqual(TEXT("New Force Buff retries the previously unavailable family"),I->GetNumberField(TEXT("spell")),2.);
+    }
     // Use real DAT duration/power: Tusker Leap is stronger than Jump VIII,
     // but expires in 10s, inside the default 60s renewal window.
     {

@@ -43,6 +43,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEPluginHostTest;
     friend class FACEPluginEquipmentTest;
     friend class FACEPluginRequestsTest;
+    friend class FACEPluginRampRouteTest;
 public:
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
@@ -116,6 +117,9 @@ public:
     FString BuffRequestStatus;
     int32 QueuedBuffRequests() const { return BuffRequests.Num(); }
     void ClearBuffRequests();
+    FString BuffQueueSummary() const;
+    void ReplyBuffRequest(int32 Player, const FString& Name, const FString& Message, bool RateLimit = false);
+    void NotifyBuffQueuePositions();
     bool RequestForceBuff();
     void CancelForceBuff();
     bool IsForceBuffRequested() const { return ForceBuffRequest!=0; }
@@ -142,6 +146,11 @@ private:
     FString FastCastOwner;
     FString PendingSpellOwner, PendingSpellActivity;
     bool FastCastStarted = false;
+    double FastCastStartedAt = 0;
+    bool FastCastMovementApplied = false;
+    FString PendingSpellConfirmation;
+    bool PendingSpellConfirmed = false, PendingSpellFizzled = false;
+    bool LastSpellConfirmed = false;
     FString UseApproachOwner;
     uint32 ForceBuffSerial=0,ForceBuffRequest=0;
     bool bForceBuffOnly=false;
@@ -192,6 +201,7 @@ private:
     TSharedPtr<FJsonObject> RuntimeRoute;
     TArray<TSharedPtr<FJsonValue>> BuffRequests;
     TMap<int32,double> LastBuffRequest;
+    TMap<int32,double> LastBuffReply;
     uint32 BuffRequestSerial=0;
     double LastAppraisalRequest = 0;
     double NextAppraisalScan = 0;

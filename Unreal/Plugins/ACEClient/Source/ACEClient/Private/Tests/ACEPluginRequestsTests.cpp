@@ -14,6 +14,7 @@
 #include "Mods/ACEPluginSight.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
+#include "ACEInventoryRules.h"
 #include "GameFramework/Pawn.h"
 #include "ACESession.h"
 #include "Sockets.h"
@@ -330,6 +331,67 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         W.WriteUInt32(Session.PlayerGuid);W.WriteUInt32(Type);W.WriteUInt32(0);
         FACEBinaryReader R(W.GetData());Session.HandleTell(R);
     };
+    {
+        auto* Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+        FSocket* Receiver=Sockets->CreateSocket(NAME_DGram,TEXT("UCM queue receiver"),false);
+        auto Address=Sockets->CreateInternetAddr();bool Valid=false;Address->SetIp(TEXT("127.0.0.1"),Valid);Address->SetPort(0);
+        if(!TestTrue(TEXT("Queue test binds only to loopback"),Receiver&&Receiver->Bind(*Address)))return false;
+        Receiver->GetAddress(*Address);Session.SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("UCM queue sender"),false);
+        Session.ServerC2SAddr=Address;Session.IssacClient=MakeUnique<FACEIsaac>(123u);
+        ON_SCOPE_EXIT{H->ClearBuffRequests();Session.SocketC2S->Close();Sockets->DestroySocket(Session.SocketC2S);Session.SocketC2S=nullptr;Session.ServerC2SAddr.Reset();Session.IssacClient.Reset();Receiver->Close();Sockets->DestroySocket(Receiver);Session.CachedC2SPackets.Reset();};
+        auto HasTell=[&](const FString& Name,const FString& Part){for(const auto& Packet:Session.CachedC2SPackets)
+        {FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.ReadUInt32()!=ACEGameAction::Tell)continue;const auto Message=R.ReadString16L(),Recipient=R.ReadString16L();if(Recipient==Name&&Message.Contains(Part))return true;}return false;};
+        H->ObservePlayerTell(TEXT("heavy"),TEXT("Alice"),0x50000020);
+        H->ObservePlayerTell(TEXT("mage"),TEXT("Bob"),0x50000021);
+        TestTrue(TEXT("Second requester receives direct queue position"),HasTell(TEXT("Bob"),TEXT("#2 (1 ahead")));
+        TestTrue(TEXT("Host can see queued names and order"),H->BuffQueueSummary().Contains(TEXT("2. Bob")));
+        auto Start=MakeShared<FJsonObject>();Start->SetStringField(TEXT("action"),TEXT("buff_request_start"));Start->SetNumberField(TEXT("request"),H->BuffRequests[0]->AsObject()->GetNumberField(TEXT("id")));
+        Session.CachedC2SPackets.Reset();H->Execute(*P,Start);TestTrue(TEXT("First requester gets turn notification"),HasTell(TEXT("Alice"),TEXT("your turn")));
+        Session.CachedC2SPackets.Reset();H->Execute(*P,Start);TestTrue(TEXT("Repeated start cannot spam turn notifications"),Session.CachedC2SPackets.IsEmpty());
+        auto Done=MakeShared<FJsonObject>(*Start);Done->SetStringField(TEXT("action"),TEXT("buff_request_done"));Done->SetStringField(TEXT("status"),TEXT("Buffs complete"));H->Execute(*P,Done);
+        TestTrue(TEXT("Finished player gets a completion tell"),HasTell(TEXT("Alice"),TEXT("Buffs complete")));
+        TestTrue(TEXT("Remaining player gets updated position"),HasTell(TEXT("Bob"),TEXT("#1")));
+        Start->SetNumberField(TEXT("request"),H->BuffRequests[0]->AsObject()->GetNumberField(TEXT("id")));Session.CachedC2SPackets.Reset();H->Execute(*P,Start);
+        TestTrue(TEXT("Next player is notified when their buff task starts"),HasTell(TEXT("Bob"),TEXT("your turn")));
+        H->ClearBuffRequests();TestTrue(TEXT("Clear sends cancellation to the remaining requester"),HasTell(TEXT("Bob"),TEXT("cancelled")));
+        FACEWorldObject Blade;Blade.Guid=9300;Blade.Name=TEXT("Tethered blade");Blade.ContainerId=Session.PlayerGuid;
+        Blade.ItemType=ACEItemType::MeleeWeapon;Blade.ValidLocations=ACEEquipMask::MeleeWeapon;Blade.CombatUse=1;
+        Session.WorldObjects.Add(Blade.Guid,Blade);FACEAppraisalInfo BladeInfo;BladeInfo.bSuccess=true;H->Appraisals.Add(Blade.Guid,BladeInfo);
+        auto Equip=MakeShared<FJsonObject>();Equip->SetNumberField(TEXT("item"),Blade.Guid);
+        for(bool Left:{true,false})
+        {
+            const uint64 Revision=Session.GetInventoryDataRevision();
+            FACEBinaryWriter Update;Update.WriteUInt32(ACEOpcode::PublicUpdatePropertyBool);Update.WriteUInt8(Left?1:2);Update.WriteUInt32(Blade.Guid);Update.WriteUInt32(130);Update.WriteUInt32(Left?1:0);
+            Session.HandleGameMessage(Update.GetData());
+            TestTrue(TEXT("Tether property updates invalidate cached inventory"),Session.GetInventoryDataRevision()>Revision);
+            TestTrue(TEXT("Ordinary inventory use honors live automatic hand flag"),ACEInventoryRules::DetermineOwnedUse(Session.WorldObjects[Blade.Guid],Session.PlayerGuid)==(Left?EACEOwnedItemUse::WieldLeft:EACEOwnedItemUse::WieldRight));
+            auto Snapshot=MakeShared<FJsonObject>();H->ExtendSnapshot(Snapshot);
+            bool Found=false;for(const auto& V:Snapshot->GetArrayField(TEXT("inventory")))if(V->AsObject()->GetNumberField(TEXT("id"))==Blade.Guid)
+            {Found=true;TestEqual(TEXT("UCM sees tether changes without relog or appraisal"),V->AsObject()->GetBoolField(TEXT("auto_wield_left")),Left);}
+            TestTrue(TEXT("Tethered weapon is in inventory snapshot"),Found);
+            Session.PlayerVitals.CombatMode=1;Session.CachedC2SPackets.Reset();H->ExecuteInventory(*P,Equip,TEXT("equip"));
+            bool Sent=false;for(const auto& Packet:Session.CachedC2SPackets)
+            {FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.ReadUInt32()!=ACEGameAction::GetAndWieldItem)continue;Sent=true;TestEqual(TEXT("Equip packet identifies blade"),R.ReadUInt32(),uint32(Blade.Guid));TestEqual(TEXT("Equip packet uses retail right/left location"),R.ReadUInt32(),uint32(Left?ACEEquipMask::Shield:ACEEquipMask::MeleeWeapon));}
+            TestTrue(TEXT("UCM sends standard equipment request"),Sent);Session.CancelEquipmentSwap();
+        }
+        FACEWorldObject Ust;Ust.Guid=9301;Ust.ContainerId=Session.PlayerGuid;Ust.ItemType=0x20000000;Session.WorldObjects.Add(Ust.Guid,Ust);
+        auto Salvage=MakeShared<FJsonObject>();Salvage->SetNumberField(TEXT("item"),Blade.Guid);Salvage->SetNumberField(TEXT("tool"),Ust.Guid);
+        for(int Protection=0;Protection<4;++Protection)
+        {
+            auto& Live=Session.WorldObjects[Blade.Guid];Live=Blade;Live.MaterialType=59;Live.Structure=200;
+            H->Appraisals[Blade.Guid]=BladeInfo;
+            if(Protection==1)H->Appraisals[Blade.Guid].IntProperties.Add(171,1);
+            if(Protection==2)H->Appraisals[Blade.Guid].StringProperties.Add(8,TEXT("Owner"));
+            if(Protection==3)Live.ObjectDescriptionFlags|=ACEObjectDescFlag::Retained;
+            Session.CachedC2SPackets.Reset();H->ExecuteInventory(*P,Salvage,TEXT("salvage"));
+            bool Sent=false;for(const auto& Packet:Session.CachedC2SPackets)
+            {FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.ReadUInt32()==ACEGameAction::CreateTinkeringTool)Sent=true;}
+            TestEqual(TEXT("Host validates protected salvage and permits ordinary items with over 100 uses"),Sent,Protection==0);
+        }
+        Session.WorldObjects.Remove(Ust.Guid);P->ActivityFailure.Reset();
+        Session.WorldObjects.Remove(Blade.Guid);H->Appraisals.Remove(Blade.Guid);P->WaitAction.Empty();P->NextAction=0;
+        H->LastBuffReply.Empty();
+    }
     Session.OnChatMessage.Broadcast(TEXT("mage"),TEXT("Visitor"),ACEChatMessageType::Tell);
     TestEqual(TEXT("Ordinary chat display cannot fabricate a buff request"),H->QueuedBuffRequests(),0);
     Tell(TEXT("mage"),0x70000001);Tell(TEXT("mage"),Session.PlayerGuid);Tell(TEXT("please mage"));
@@ -498,6 +560,40 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
     // synthetic Unreal X-forward pawn (which masked both steering errors).
     auto* PC=World->SpawnActor<AACEPlayerController>();auto* Pawn=World->SpawnActor<APawn>();
     auto* Root=NewObject<USceneComponent>(Pawn);Pawn->SetRootComponent(Root);Root->RegisterComponent();PC->Possess(Pawn);
+    {
+        H->MovementOwner.Empty();
+        FACEWorldObject Player;Player.Guid=Session.PlayerGuid;Player.Name=TEXT("Caster");Session.WorldObjects.Add(Player.Guid,Player);
+        auto Begin=[&]()
+        {
+            H->PendingSpell=123;H->PendingSpellAt=FPlatformTime::Seconds();H->PendingSpellOwner=TEXT("ucm");
+            H->PendingSpellConfirmation=TEXT("You cast Focus Self I on yourself");
+            H->PendingSpellConfirmed=false;H->PendingSpellFizzled=false;H->FastCastOwner=TEXT("ucm");
+            H->FastCastStarted=false;H->FastCastMovementApplied=false;
+            H->ObserveMetaChat(TEXT("words"),TEXT("Other"),ACEChatMessageType::Spellcasting);
+            TestFalse(TEXT("Another caster cannot start backward input"),H->FastCastStarted);
+            H->ObserveMetaChat(TEXT("words"),TEXT("Caster"),ACEChatMessageType::Spellcasting);
+        };
+        auto Drive=[&]() {float F=0,R=0,T=0;H->ApplyMovement(PC,F,R,T,false,false,false,FVector::ForwardVector);return F;};
+        Begin();TestEqual(TEXT("Local words start normal backward input"),Drive(),-1.f);
+        H->ObserveMetaChat(TEXT("You cast Focus Self I on yourself"),TEXT("Other"),ACEChatMessageType::Magic);
+        H->ObserveMetaChat(TEXT("You cast Focus Self II on yourself"),TEXT(""),ACEChatMessageType::Magic);
+        TestFalse(TEXT("Wrong sender or spell cannot complete our buff"),H->PendingSpellConfirmed);
+        H->ObserveMetaChat(TEXT("You cast Focus Self I on yourself, refreshing Focus Self I"),TEXT(""),ACEChatMessageType::Magic);
+        TestEqual(TEXT("Spell result releases backward input before delayed UseDone"),Drive(),0.f);
+        TestEqual(TEXT("Result retains the request until its server acknowledgment"),H->PendingSpell,123);
+        P->NextAction=FPlatformTime::Seconds()+3.5;P->NextDecision=FPlatformTime::Seconds()+.25;
+        H->ObserveUseDone(0);TestTrue(TEXT("Acknowledged matching result confirms the buff"),H->LastSpellConfirmed);
+        TestTrue(TEXT("Completed fast buff is ready immediately, without a half-second floor"),P->NextAction<=FPlatformTime::Seconds()&&P->NextDecision==0);
+        Begin();H->ObserveMetaChat(TEXT("You cast Focus Self I on yourself"),TEXT(""),ACEChatMessageType::Magic);
+        TestEqual(TEXT("Coalesced words and result still produce one recoil-cancel edge"),Drive(),-1.f);
+        TestEqual(TEXT("Coalesced result never leaves backward held"),Drive(),0.f);H->ObserveUseDone(0);
+        Begin();H->ObserveMetaChat(TEXT("Your spell fizzled."),TEXT(""),ACEChatMessageType::Magic);
+        TestEqual(TEXT("Fizzle releases movement immediately"),Drive(),0.f);H->ObserveUseDone(0);
+        TestFalse(TEXT("Success UseDone after a fizzle cannot confirm a forced buff"),H->LastSpellConfirmed);
+        Begin();H->FastCastStartedAt=FPlatformTime::Seconds()-5;
+        TestEqual(TEXT("Missing result cannot leave backward held for thirty seconds"),Drive(),0.f);
+        H->ObserveUseDone(0);TestFalse(TEXT("Missing spell result cannot confirm a forced buff"),H->LastSpellConfirmed);
+    }
     for(float Arrival:{17.5f,70.f})for(float Rate:{30.f,90.f,144.f})for(bool VR:{false,true})for(float CameraYaw:{0.f,90.f,210.f})
     {
         H->MoveArrivalRadius=Arrival;

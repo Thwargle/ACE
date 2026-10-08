@@ -4672,7 +4672,18 @@ void FACESession::AdvanceEquipmentSwap()
 	PendingEquipmentUntil = FPlatformTime::Seconds() + 15.0;
 	if (!PendingEquipmentRemovals.IsEmpty())
 	{
-		SendPutItemInContainer(PendingEquipmentRemovals[0], PlayerGuid, 0);
+        // Retail ItemHolder::AttemptToPlaceInContainer checks main pack, then
+        // side packs in inventory order before issuing the dequip. Sending a
+        // full destination can make ACE dequip first, then restore into another
+        // pack without a ContainID in its failure path (invisible until relog).
+        const int32 Destination=FindEquipmentStowContainer({});
+        if(!Destination)
+        {
+            CancelEquipmentSwap();
+            OnChatMessage.Broadcast(TEXT("Not enough room in your packs to change equipment."),TEXT(""),ACEChatMessageType::TransientInfo);
+            return;
+        }
+		SendPutItemInContainer(PendingEquipmentRemovals[0], Destination, 0);
 		return;
 	}
 	FACEBinaryWriter W;
@@ -4680,6 +4691,38 @@ void FACESession::AdvanceEquipmentSwap()
 	W.WriteInt32(static_cast<int32>(PendingEquipmentLocation));
 	bPendingEquipmentWieldSent = true;
 	SendGameAction(ACEGameAction::GetAndWieldItem, W.GetData(), ACEQueue::WeenieQueue);
+}
+
+int32 FACESession::FindEquipmentStowContainer(const TMap<int32, int32>& Reserved) const
+{
+    TArray<int32> Packs;GetPlayerPackGuids(Packs);Packs.Insert(PlayerGuid,0);
+    for(int32 Container:Packs)
+    {
+        const auto* Pack=WorldObjects.Find(Container);
+        if(Container!=PlayerGuid && (!Pack || ResolveContainerRoot(Container)!=PlayerGuid
+            || TradeSelfItems.Contains(Container) || TradePartnerItems.Contains(Container)))continue;
+        const int32 Capacity=Container==PlayerGuid && (!Pack || Pack->ItemsCapacity==0)?102:Pack->ItemsCapacity;
+        if(Capacity==-1)return Container;
+        if(Capacity<=0)continue; // foci occupy pack slots but cannot store equipment
+        TSet<int32> Items;
+        if(const auto* List=ContainerContents.Find(Container))for(const auto& Ref:*List)
+        {
+            const auto* Item=WorldObjects.Find(Ref.ItemGuid);
+            if(Ref.ContainerType==0 && (!Item || (!IsPackSlotItem(*Item) && !Item->WielderId
+                && !Item->CurrentWieldedLocation && !Item->ParentGuid
+                && (!Item->ContainerId || Item->ContainerId==Container))))Items.Add(Ref.ItemGuid);
+        }
+        // Include ObjectCreate entries even before a contents list arrives, and
+        // reserve unknown list entries so a late description cannot overfill it.
+        for(const auto& Pair:WorldObjects)
+        {
+            const auto& Item=Pair.Value;
+            if(Item.ContainerId==Container && !Item.WielderId && !Item.CurrentWieldedLocation
+                && !Item.ParentGuid && !IsPackSlotItem(Item))Items.Add(Item.Guid);
+        }
+        if(Items.Num()+Reserved.FindRef(Container)<Capacity)return Container;
+    }
+    return 0;
 }
 
 void FACESession::SendGetAndWieldItem(int32 Guid, int64 Loc)
@@ -4753,6 +4796,20 @@ void FACESession::SendGetAndWieldItem(int32 Guid, int64 Loc)
 			PendingEquipmentRemovals.Add(Eq.Guid);
 		}
 	}
+    // Reserve room for every conflict before removing the first item (for
+    // example, both weapon and shield when changing to a two-handed weapon).
+    TMap<int32,int32> Reserved;
+    for(int32 Removing:PendingEquipmentRemovals)
+    {
+        const int32 Destination=FindEquipmentStowContainer(Reserved);
+        if(!Destination)
+        {
+            CancelEquipmentSwap();
+            OnChatMessage.Broadcast(TEXT("Not enough room in your packs to change equipment."),TEXT(""),ACEChatMessageType::TransientInfo);
+            return;
+        }
+        ++Reserved.FindOrAdd(Destination);
+    }
 	// PutItemInContainer can wait for a stance animation on the server. Sending
 	// Wield in the same burst races that dequip and leaves the new item unwielded.
 	AdvanceEquipmentSwap();
@@ -6638,7 +6695,7 @@ void FACESession::HandleInventoryPutObjInContainer(FACEBinaryReader& Reader)
     RestampContainerListPlacements(ContainerGuid);
 	if (!PendingEquipmentRemovals.IsEmpty() && ItemGuid == PendingEquipmentRemovals[0])
 	{
-		if (ContainerGuid == PlayerGuid)
+		if (ContainerGuid && ResolveContainerRoot(ContainerGuid) == PlayerGuid)
 		{
 			PendingEquipmentRemovals.RemoveAt(0);
 			AdvanceEquipmentSwap();
@@ -7098,6 +7155,7 @@ void FACESession::HandleUpdatePropertyBool(FACEBinaryReader& Reader, bool bPubli
 	case 24: Mask = ACEObjectDescFlag::UiHidden; break;
 	case 25: Mask = ACEObjectDescFlag::ImmuneCellRestrictions; break;
 	case 26: Mask = ACEObjectDescFlag::HiddenAdmin; break;
+	case 130: Mask = ACEObjectDescFlag::WieldLeft; break; // AutowieldLeft / Left-hand Tether
 	default: return;
 	}
 	const int32 Flags = Enabled ? Object->ObjectDescriptionFlags | Mask : Object->ObjectDescriptionFlags & ~Mask;

@@ -757,6 +757,35 @@ namespace ACEBodySweep
                         continue;
                     }
                 }
+                if (bFalling && Remaining.Z<0.f && !IsCreatureBody(Hit))
+                {
+                    // Retail CSphere::intersects_sphere excludes creatures in
+                    // the collide/support retry. A neighboring mob need not
+                    // overlap yet: it can block the push out of a wall's small
+                    // initial overlap, preventing every subsequent fall sweep.
+                    // Gather the entire bounded recovery neighborhood, not just
+                    // creatures hit by the original downward ray. Retry only
+                    // gravity; ordinary lateral travel still tests all bodies.
+                    const float Reach=Capsule.GetCapsuleRadius()*2.f;
+                    TArray<FOverlapResult> Nearby;
+                    World.OverlapMultiByChannel(Nearby,Start,FQuat::Identity,ECC_Pawn,
+                        FCollisionShape::MakeCapsule(Capsule.GetCapsuleRadius()+Reach,
+                            Capsule.GetCapsuleHalfHeight()+Reach),AirParams);
+                    bool bIgnoredCreature=false;
+                    for (const auto& Overlap:Nearby)
+                    {
+                        const auto* Body=Overlap.GetComponent();
+                        if (!Body || !Body->ComponentTags.Contains(TEXT("ACECreatureBody"))
+                            || IgnoredBodies.Contains(Body)) continue;
+                        IgnoredBodies.Add(Body);AirParams.AddIgnoredComponent(Body);
+                        bIgnoredCreature=true;
+                    }
+                    if (bIgnoredCreature)
+                    {
+                        Remaining.X=Remaining.Y=0;
+                        continue;
+                    }
+                }
                 break;
             }
             Result.Position=Hit.Location+Normal*.1f;

@@ -71,6 +71,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEDesktopHighlightTest;
 	friend class FACEPluginEquipmentTest;
 	friend class FACEPluginRequestsTest;
+    friend class FACEPluginRampRouteTest;
 	friend class FACEDeferredWorldAppearanceTest;
 	friend class FACEVRObserverProtocolTest;
 	friend class FACEVRLocomotionTest;
@@ -780,6 +781,7 @@ private:
 	void HandleInventoryServerSaveFailed(FACEBinaryReader& Reader);
 	void AdvanceEquipmentSwap();
 	void CancelEquipmentSwap();
+    int32 FindEquipmentStowContainer(const TMap<int32, int32>& Reserved) const;
 	int32 PendingEquipmentGuid = 0;
 	uint32 PendingEquipmentCombatMode = 0;
 	bool bPendingEquipmentWieldSent = false;

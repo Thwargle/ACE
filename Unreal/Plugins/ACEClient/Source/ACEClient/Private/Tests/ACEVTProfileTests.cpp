@@ -134,6 +134,14 @@ bool FACEVTProfileTest::RunTest(const FString&)
                                 FACEPluginVM RouteVM;RouteVM.Load(Script,Error);
                                 Profile->SetBoolField(TEXT("navigation"),true);Profile->SetBoolField(TEXT("buffing"),false);Profile->SetBoolField(TEXT("recovery"),false);Profile->SetStringField(TEXT("combat"),TEXT("off"));
                                 auto State=ParseVTTest(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"mana":100,"max_mana":100,"nearest":0,"inventory":[]})"));
+                                // This fixture measures an ordered full cycle from
+                                // point one. The +5m approach below can be closer
+                                // to a different point, so explicitly expose only
+                                // the intended entry for the initial join. Nearest
+                                // visible joining is tested by RouteJoin separately.
+                                auto Visible=MakeShared<FJsonObject>();
+                                for(int PointIndex=0;PointIndex<Points.Num();++PointIndex)Visible->SetBoolField(FString::FromInt(PointIndex+1),PointIndex==0);
+                                State->SetObjectField(TEXT("route_visible"),Visible);
                                 bool Reverse=false,Loop=false;Profile->TryGetBoolField(TEXT("reverse_route"),Reverse);Profile->TryGetBoolField(TEXT("loop_route"),Loop);
                                 int Index=0,Direction=1,Visited=0;bool Passed=true;
                                 const int Steps=(Loop||Reverse)?Points.Num()*2+2:Points.Num();

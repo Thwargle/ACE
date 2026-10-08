@@ -21,6 +21,12 @@ bool FACEVTAdaptersTest::RunTest(const FString&)
     FString Error,Script;TArray<FString> Issues;TSharedPtr<FJsonObject> Intent;
     FFileHelper::LoadFileToString(Script,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
     {
+        TArray<FString> Problems;auto Command=ACEVTProfile::CompileCommand(TEXT("/vt opt set CombineSalvage true"),Problems);
+        TestEqual(TEXT("VT's actual CombineSalvage option has an adapter"),Problems.Num(),0);
+        TestEqual(TEXT("CombineSalvage controls bag combining"),Command->GetStringField(TEXT("key")),FString(TEXT("salvage_combine")));
+        TestTrue(TEXT("CombineSalvage retains the requested state"),Command->GetBoolField(TEXT("value")));
+    }
+    {
         auto S=AdapterJSON(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"position":{"cell":2139029505,"x":84,"y":84,"z":12},"inventory":[],"char_strings":{"1":"Alice"},"fellowship":{"members":[{"id":2,"name":"Bob","share_loot":true}]},"corpses":[{"id":10,"name":"Corpse","distance":2,"identified":true,"ownership_available":true,"observed_age":10,"killer":"Alice","rare":false}]})"));
         auto P=AdapterJSON(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","looting":true,"loot_rules":[{"action":"keep"}]})"));
         auto Corpse=S->GetArrayField(TEXT("corpses"))[0]->AsObject();
@@ -163,6 +169,7 @@ bool FACEVTAdaptersTest::RunTest(const FString&)
         auto Snap=AdapterJSON(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"mana":100,"max_mana":100,"position":{"cell":2139029505,"x":84,"y":84,"z":12},"action_serial":0,"container":100,"container_is_corpse":true,"inventory":[{"id":42,"wcid":42,"name":"Ust","object_class":40,"count":1}],"contents":[{"id":99,"wcid":500,"name":"Loot","count":1,"identified":true}],"corpses":[{"id":101,"name":"Next corpse","distance":1}]})"));
         auto Profile=AdapterJSON(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","looting":true,"loot_rules":[{"action":"keep"}]})"));
         Profile->GetArrayField(TEXT("loot_rules"))[0]->AsObject()->SetStringField(TEXT("action"),Action);
+        Snap->GetArrayField(TEXT("contents"))[0]->AsObject()->SetNumberField(TEXT("material"),59);
         TestTrue(TEXT("Loot action transfers first"),Loot.Step(Snap,Profile,Intent,Error));if(!Intent){AddError(Error);continue;}
         TestEqual(TEXT("Loot uses normal transfer"),Intent->GetStringField(TEXT("action")),FString(TEXT("loot")));
         auto Owned=Snap->GetArrayField(TEXT("inventory"));Owned.Add(Snap->GetArrayField(TEXT("contents"))[0]);Snap->SetArrayField(TEXT("inventory"),Owned);Snap->SetArrayField(TEXT("contents"),{});

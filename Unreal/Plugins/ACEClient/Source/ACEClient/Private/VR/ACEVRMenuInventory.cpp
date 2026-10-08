@@ -3,6 +3,7 @@
 #include "VR/ACEVRUIStyle.h"
 #include "ACEClientSubsystem.h"
 #include "ACEInventoryRules.h"
+#include "ACEEquipmentRules.h"
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "UI/ACERetailObjectNames.h"
@@ -192,7 +193,10 @@ void UACEVRMenu::FinishItemPointer(bool OverMenu,FVector2D Pixel,bool OverWorld)
             if(Guid==Client->GetPlayerGuid())return; // Main pack is a bulk offer, not a movable object.
             if(Destination.EquipMask)
             {
-                const int64 Mask=Item.ValidLocations&Destination.EquipMask;
+                // Retail permits one-handed melee weapons in ShieldLoc even
+                // when their advertised primary location is MeleeWeapon only.
+                const int64 Mask=Destination.EquipMask==ACEEquipMask::Shield&&ACEEquipmentRules::CanWieldInSlot(Item,Destination.EquipMask)
+                    ?ACEEquipMask::Shield:Item.ValidLocations&Destination.EquipMask;
                 if(Mask)Client->SendGetAndWieldItem(Guid,Mask);
                 else Confirmation=TEXT("That item cannot be equipped in this slot.");
                 return;

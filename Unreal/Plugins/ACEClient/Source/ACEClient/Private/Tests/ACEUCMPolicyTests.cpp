@@ -34,7 +34,7 @@ bool FACEUCMFailureIsolationTest::RunTest(const FString&)
     // Trigger a real failed salvage, not just a synthetic error result.
     {
         FACEPluginVM VM;TestTrue(TEXT("Failure isolation policy loads"),VM.Load(Source,Error));auto S=Snapshot(),P=Profile();
-        const auto Ring=ParseUCM(TEXT(R"({"id":701,"wcid":701,"name":"Ring","count":1,"identified":true})"));
+        const auto Ring=ParseUCM(TEXT(R"({"id":701,"wcid":701,"name":"Ring","count":1,"identified":true,"material":59})"));
         S->SetNumberField(TEXT("container"),700);S->SetArrayField(TEXT("contents"),{MakeShared<FJsonValueObject>(Ring)});
         TestEqual(TEXT("Loot starts normally"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("loot")));
         auto Inventory=S->GetArrayField(TEXT("inventory"));Inventory.Add(MakeShared<FJsonValueObject>(Ring));S->SetArrayField(TEXT("inventory"),Inventory);
@@ -319,7 +319,7 @@ bool FACEUCMPolicyTest::RunTest(const FString&)
         S->SetNumberField(TEXT("container"),700);S->SetBoolField(TEXT("container_is_corpse"),true);S->SetBoolField(TEXT("contents_ready"),true);
         Array(S,TEXT("contents"),TEXT(R"({"values":[{"id":701,"wcid":701,"name":"Copper Ring","count":1,"identified":false}]})"));
         TestEqual(TEXT("Appraises loot before applying workmanship rule"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("identify")));
-        auto Ring=S->GetArrayField(TEXT("contents"))[0]->AsObject();Ring->SetBoolField(TEXT("identified"),true);Ring->SetNumberField(TEXT("workmanship"),8);
+        auto Ring=S->GetArrayField(TEXT("contents"))[0]->AsObject();Ring->SetBoolField(TEXT("identified"),true);Ring->SetNumberField(TEXT("workmanship"),8);Ring->SetNumberField(TEXT("material"),59);
         TestEqual(TEXT("Matching appraised item is looted"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("loot")));
         auto Items=S->GetArrayField(TEXT("inventory"));Items.Add(MakeShared<FJsonValueObject>(Ring));Items.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":9,"wcid":9,"name":"Ust","count":1,"object_class":40})"))));S->SetArrayField(TEXT("inventory"),Items);
         S->SetNumberField(TEXT("container"),0);S->SetArrayField(TEXT("contents"),{});
@@ -384,8 +384,8 @@ bool FACEUCMPolicyTest::RunTest(const FString&)
         S->SetNumberField(TEXT("force_buff_request"),0);I=Check(VM,S,P);TestFalse(TEXT("Returns to normal Buff-off behavior"),I->HasField(TEXT("action")));
         S->SetNumberField(TEXT("force_buff_request"),2);I=Check(VM,S,P);TestEqual(TEXT("A later manual refresh starts a new cycle"),I->GetNumberField(TEXT("spell")),11.);
         S->SetNumberField(TEXT("action_serial"),++Serial);S->SetNumberField(TEXT("last_spell"),11);S->SetNumberField(TEXT("action_error"),1);
-        I=Check(VM,S,P);TestFalse(TEXT("Failed casts are not counted as refreshed"),I->HasField(TEXT("action")));
-        S->SetNumberField(TEXT("time"),113);I=Check(VM,S,P);TestEqual(TEXT("Failed family retries after throttle"),I->GetNumberField(TEXT("spell")),11.);
+        I=Check(VM,S,P);TestEqual(TEXT("Failed cast retries the same family rather than counting it refreshed"),I->GetNumberField(TEXT("spell")),11.);
+        S->SetNumberField(TEXT("time"),113);I=Check(VM,S,P);TestEqual(TEXT("Missing retry reply retains the confirmation watchdog"),I->GetNumberField(TEXT("spell")),11.);
         S->SetNumberField(TEXT("force_buff_request"),0);I=Check(VM,S,P);TestFalse(TEXT("Cancel does not start another buff family"),I->HasField(TEXT("action")));
     }
     {
@@ -612,14 +612,17 @@ bool FACEUCMPolicyTest::RunTest(const FString&)
         S->SetBoolField(TEXT("jumping"),true);S->SetNumberField(TEXT("time"),103);I=Check(VM,S,P);TestFalse(TEXT("Jump is not restarted midair"),I->HasField(TEXT("action")));
         S->SetBoolField(TEXT("jumping"),false);S->SetNumberField(TEXT("time"),105);Check(VM,S,P);I=Check(VM,S,P);TestEqual(TEXT("Route resumes after landing"),I->GetStringField(TEXT("action")),FString(TEXT("move")));
     }
-    for(const FString Role:{TEXT("mage"),TEXT("heavy"),TEXT("missile")})
+    for(const FString Role:{TEXT("mage"),TEXT("heavy"),TEXT("missile"),TEXT("finesse"),TEXT("light"),TEXT("unarmed"),TEXT("twohanded"),TEXT("melee")})
     {
         FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
         P->SetBoolField(TEXT("buffing"),true);P->SetBoolField(TEXT("auto_buffs"),false);P->SetBoolField(TEXT("buff_others"),true);
         auto Request=ParseUCM(TEXT(R"({"id":1,"player":1342177290,"name":"Visitor","present":true,"distance":5,"expires":1000,"equipment":[{"id":400,"type":2,"count":1},{"id":401,"type":1,"count":1}]})"));
         Request->SetStringField(TEXT("role"),Role);S->SetObjectField(TEXT("buff_request"),Request);
+        Request->SetBoolField(TEXT("started"),false);
+        TestEqual(TEXT("A queued request announces its turn before casting"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("buff_request_start")));
+        Request->SetBoolField(TEXT("started"),true);
         TArray<TSharedPtr<FJsonValue>> Spells;
-        for(int Cat:{1,3,5,7,9,11,37,39,41,43,45,47,49,31,19,101,115,160,154})
+        for(int Cat:{1,3,5,7,9,11,37,39,41,43,45,47,49,31,19,17,23,593,668,665,671,677,101,115,160,154})
         {
             auto Spell=ParseUCM(TEXT(R"({"power":100,"skill":300,"beneficial":true,"duration":500,"target_type":16,"school":4})"));
             Spell->SetNumberField(TEXT("id"),Cat+1000);Spell->SetNumberField(TEXT("category"),Cat);
@@ -643,7 +646,11 @@ bool FACEUCMPolicyTest::RunTest(const FString&)
         }
         TestTrue(TEXT("Requested role finishes with confirmed casts"),Finished);
         for(int Cat:{1,3,5,7,9,11,37,39,41,101,115,160,154})TestTrue(*FString::Printf(TEXT("%s includes shared buff family %d"),*Role,Cat),Casts.Contains(1000+Cat));
-        TestTrue(TEXT("Role-specific attack skill included"),Casts.Contains(Role==TEXT("mage")?1049:Role==TEXT("heavy")?1031:1019));
+        const int Skill=Role==TEXT("mage")?49:Role==TEXT("heavy")||Role==TEXT("melee")?31:Role==TEXT("missile")?19:Role==TEXT("finesse")?23:Role==TEXT("twohanded")?593:17;
+        TestTrue(TEXT("Role-specific attack skill included"),Casts.Contains(1000+Skill));
+        if(Role!=TEXT("mage")&&Role!=TEXT("missile"))for(int Cat:{668,665,671,677})
+            TestTrue(*FString::Printf(TEXT("%s includes melee support family %d"),*Role,Cat),Casts.Contains(1000+Cat));
+        if(Role==TEXT("melee"))for(int Cat:{17,23,31,593})TestTrue(TEXT("General melee includes every weapon skill"),Casts.Contains(1000+Cat));
         TestFalse(TEXT("Stronger Self spell is not used for Other request"),Casts.Contains(999));
         TestFalse(TEXT("Unrelated attack skill is excluded"),Casts.Contains(Role==TEXT("missile")?1031:1019));
         P->SetBoolField(TEXT("buffing"),false);auto I=Check(VM,S,P);TestEqual(TEXT("Disabling buffs cancels queued request"),I->GetStringField(TEXT("action")),FString(TEXT("buff_request_done")));
@@ -669,8 +676,84 @@ bool FACEUCMPolicyTest::RunTest(const FString&)
         S->SetNumberField(TEXT("action_serial"),2);S->SetNumberField(TEXT("last_spell"),10);S->SetNumberField(TEXT("action_error"),0);S->SetNumberField(TEXT("time"),108);
         I=Check(VM,S,P);TestEqual(TEXT("Request completes after lower tier confirmed"),I->GetStringField(TEXT("action")),FString(TEXT("buff_request_done")));
         S->GetObjectField(TEXT("buff_request"))->SetBoolField(TEXT("present"),false);
-        I=Check(VM,S,P);TestFalse(TEXT("No cast while requester is out of awareness"),I->HasField(TEXT("action")));
-        S->SetNumberField(TEXT("time"),140);I=Check(VM,S,P);TestEqual(TEXT("Requester leaving range cancels instead of blocking navigation indefinitely"),I->GetStringField(TEXT("action")),FString(TEXT("buff_request_done")));
+        I=Check(VM,S,P);TestEqual(TEXT("Requester leaving awareness is cancelled immediately"),I->GetStringField(TEXT("action")),FString(TEXT("buff_request_done")));
+    }
+    for(bool Present:{false,true})
+    {
+        FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
+        P->SetBoolField(TEXT("buffing"),true);P->SetBoolField(TEXT("auto_buffs"),false);P->SetBoolField(TEXT("buff_others"),true);P->SetNumberField(TEXT("buff_other_range"),12);
+        auto Request=ParseUCM(TEXT(R"({"id":1,"player":2,"name":"Visitor","role":"mage","present":true,"distance":12.1,"started":false})"));
+        Request->SetBoolField(TEXT("present"),Present);S->SetObjectField(TEXT("buff_request"),Request);
+        auto I=Check(VM,S,P);
+        TestEqual(TEXT("Unavailable queue head is removed without a turn notification or grace delay"),I->GetStringField(TEXT("action")),FString(TEXT("buff_request_done")));
+        TestEqual(TEXT("Cancellation addresses the unavailable request"),I->GetNumberField(TEXT("request")),1.);
+        // The host pops the completed head; the same VM must accept the next
+        // nearby player without inheriting a wait or pending spell.
+        Request->SetNumberField(TEXT("id"),2);Request->SetNumberField(TEXT("player"),3);Request->SetBoolField(TEXT("present"),true);Request->SetNumberField(TEXT("distance"),12);
+        I=Check(VM,S,P);TestEqual(TEXT("Next requester at the configured range boundary starts immediately"),I->GetStringField(TEXT("action")),FString(TEXT("buff_request_start")));
+        TestEqual(TEXT("Turn belongs to next queued request"),I->GetNumberField(TEXT("request")),2.);
+        Request->SetBoolField(TEXT("started"),true);Request->SetNumberField(TEXT("distance"),13);
+        TestEqual(TEXT("Leaving range during a turn also releases the queue immediately"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("buff_request_done")));
+    }
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMInventorySalvageTest,"ACE.Plugins.InventorySalvage",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMInventorySalvageTest::RunTest(const FString&)
+{
+    FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    auto Profile=[](){return ParseUCM(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","salvage_inventory":true,"loot_rules":[{"action":"keep","name":"Keepsake","name_mode":"exact"},{"action":"salvage","material":59,"min_workmanship":7}]})"));};
+    auto Snapshot=[](){return ParseUCM(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"mana":100,"max_mana":100,"inventory_revision":1,"appraisal_revision":1,"inventory":[{"id":9,"name":"Ust","object_class":40,"resource_available":true},{"id":20,"wcid":200,"name":"Copper Ring","material":59,"workmanship":7.5,"count":1,"identified":true,"container":99,"resource_available":true}]})"));};
+    auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+    for(int Protection=0;Protection<8;++Protection)
+    {
+        FACEPluginVM VM;TestTrue(TEXT("Inventory salvage policy loads"),VM.Load(Source,Error));auto S=Snapshot(),P=Profile();auto Item=S->GetArrayField(TEXT("inventory"))[1]->AsObject();
+        if(Protection==0)P->RemoveField(TEXT("salvage_inventory"));
+        if(Protection==1)Item->SetStringField(TEXT("name"),TEXT("Keepsake"));
+        if(Protection==2)Item->SetBoolField(TEXT("equipped"),true);
+        if(Protection==3)Item->SetBoolField(TEXT("retained"),true);
+        if(Protection==4)Item->SetBoolField(TEXT("resource_available"),false);
+        if(Protection==5)Item->SetObjectField(TEXT("int_properties"),ParseUCM(TEXT(R"({"171":1})")));
+        if(Protection==6)Item->SetObjectField(TEXT("string_properties"),ParseUCM(TEXT(R"({"8":"Owner"})")));
+        if(Protection==7)Item->SetNumberField(TEXT("object_class"),39);
+        for(int Tick=0;Tick<2;++Tick)TestFalse(TEXT("Existing possessions remain protected without opt-in or when excluded"),Step(VM,S,P)->HasField(TEXT("action")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Item=S->GetArrayField(TEXT("inventory"))[1]->AsObject();
+        Item->SetBoolField(TEXT("identified"),false);
+        TestEqual(TEXT("Existing item is appraised for tinkering/inscription before destruction"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("identify")));
+        Item->SetBoolField(TEXT("identified"),true);S->SetNumberField(TEXT("appraisal_revision"),2);
+        TestTrue(TEXT("Matching item in a side pack is queued"),Step(VM,S,P)->GetStringField(TEXT("status")).StartsWith(TEXT("Queued inventory salvage:")));
+        auto I=Step(VM,S,P);TestEqual(TEXT("Existing inventory uses normal salvage action"),I->GetStringField(TEXT("action")),FString(TEXT("salvage")));TestEqual(TEXT("Correct side-pack item is salvaged"),I->GetNumberField(TEXT("item")),20.);
+        TestFalse(TEXT("Pending salvage is not resubmitted"),Step(VM,S,P)->HasField(TEXT("action")));
+        auto Items=S->GetArrayField(TEXT("inventory"));Items.RemoveAt(1);S->SetArrayField(TEXT("inventory"),Items);S->SetNumberField(TEXT("inventory_revision"),2);
+        TestFalse(TEXT("Server removal completes salvage"),Step(VM,S,P)->HasField(TEXT("action")));
+        Item->SetNumberField(TEXT("id"),21);Items.Add(MakeShared<FJsonValueObject>(Item));S->SetArrayField(TEXT("inventory"),Items);S->SetNumberField(TEXT("inventory_revision"),3);
+        TestTrue(TEXT("Inventory changes scan new items"),Step(VM,S,P)->GetStringField(TEXT("status")).StartsWith(TEXT("Queued inventory salvage:")));
+        Item->SetBoolField(TEXT("retained"),true);
+        TestFalse(TEXT("New retention is rechecked before the queued action"),Step(VM,S,P)->HasField(TEXT("action")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();TArray<TSharedPtr<FJsonValue>> Rules;
+        for(int Index=0;Index<1500;++Index)Rules.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"action":"skip","material":60})"))));
+        Rules.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"action":"salvage","material":59})"))));P->SetArrayField(TEXT("loot_rules"),Rules);
+        bool Queued=false;for(int Tick=0;Tick<128&&!Queued;++Tick)Queued=Step(VM,S,P)->GetStringField(TEXT("status")).StartsWith(TEXT("Queued inventory salvage:"));
+        TestTrue(TEXT("Large imported inventory rules finish within the unchanged sandbox budget"),Queued);
+    }
+    for(int Mode=0;Mode<4;++Mode)
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("salvage_inventory"),false);P->SetBoolField(TEXT("salvage_combine"),true);
+        S->SetArrayField(TEXT("inventory"),ParseUCM(TEXT(R"({"v":[{"id":9,"object_class":40},{"id":30,"object_class":39,"material":59,"structure":60,"workmanship":6.9,"value":100},{"id":31,"object_class":39,"material":59,"structure":60,"workmanship":6,"value":100},{"id":32,"object_class":39,"material":59,"structure":20,"workmanship":7,"value":100},{"id":33,"object_class":39,"material":61,"structure":20,"workmanship":6,"value":100},{"id":34,"object_class":39,"material":59,"structure":100,"workmanship":6,"value":100},{"id":35,"object_class":39,"material":59,"structure":20,"workmanship":6,"value":100,"retained":true},{"id":36,"object_class":39,"material":59,"structure":20,"workmanship":6,"value":100,"resource_available":false}]})"))->GetArrayField(TEXT("v")));
+        if(Mode>0)P->SetObjectField(TEXT("salvage_policy"),ParseUCM(TEXT(R"({"default":[{"min":1,"max":6},{"min":7,"max":8},{"min":9,"max":9},{"min":10,"max":10}],"values":{"59":10000}})")));
+        if(Mode==2)P->GetObjectField(TEXT("salvage_policy"))->GetObjectField(TEXT("values"))->SetNumberField(TEXT("59"),0);
+        if(Mode==3)P->GetObjectField(TEXT("salvage_policy"))->SetObjectField(TEXT("materials"),ParseUCM(TEXT(R"({"59":[{"min":1,"max":6},{"min":6.5,"max":10}]})")));
+        auto I=Step(VM,S,P);
+        if(Mode==1)TestFalse(TEXT("Value target prevents producing low-value full bags"),I->HasField(TEXT("action")));
+        else
+        {
+            TestEqual(TEXT("Eligible bags combine"),I->GetStringField(TEXT("action")),FString(TEXT("combine_salvage")));
+            TestEqual(TEXT("Classic fractional ranges, material overrides, protected/full bags and zero value mode"),I->GetStringField(TEXT("items")),Mode==3?FString(TEXT("32,30")):FString(TEXT("31,30")));
+        }
     }
     return true;
 }
@@ -867,7 +950,7 @@ bool FACEUCMLootTest::RunTest(const FString&)
     {
         FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();
         P->SetArrayField(TEXT("loot_rules"),{MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"action":"salvage"})")))});
-        auto Item=S->GetArrayField(TEXT("contents"))[0]->AsObject();Item->SetNumberField(TEXT("count"),1);
+        auto Item=S->GetArrayField(TEXT("contents"))[0]->AsObject();Item->SetNumberField(TEXT("count"),1);Item->SetBoolField(TEXT("identified"),true);
         auto Ust=MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":9,"wcid":9,"name":"Ust","count":1,"object_class":40})")));
         S->SetArrayField(TEXT("inventory"),{Ust});
         TestEqual(TEXT("Salvage rule starts by taking the item"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("loot")));

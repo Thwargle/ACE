@@ -7,7 +7,7 @@ TArray<TSharedPtr<FJsonValue>> UACEPluginSubsystem::BuffCommands() const
     const TArray<TSharedPtr<FJsonValue>>* Commands=nullptr;
     if(auto P=Find(TEXT("ucm"));P&&P->Profile->TryGetArrayField(TEXT("buff_commands"),Commands))return *Commands;
     TArray<TSharedPtr<FJsonValue>> Defaults;
-    for(const TCHAR* Role:{TEXT("mage"),TEXT("heavy"),TEXT("missile"),TEXT("light"),TEXT("finesse")})
+    for(const TCHAR* Role:{TEXT("mage"),TEXT("heavy"),TEXT("missile"),TEXT("light"),TEXT("finesse"),TEXT("twohanded"),TEXT("unarmed"),TEXT("melee")})
     {
         auto O=MakeShared<FJsonObject>();O->SetStringField(TEXT("keyword"),Role);O->SetStringField(TEXT("role"),Role);
         Defaults.Add(MakeShared<FJsonValueObject>(O));
@@ -15,7 +15,37 @@ TArray<TSharedPtr<FJsonValue>> UACEPluginSubsystem::BuffCommands() const
     return Defaults;
 }
 void UACEPluginSubsystem::ClearBuffRequests()
-{BuffRequests.Empty();LastBuffRequest.Empty();BuffRequestStatus.Empty();}
+{
+    for(const auto& V:BuffRequests){const auto O=V->AsObject();ReplyBuffRequest(int32(uint32(O->GetNumberField(TEXT("player")))),O->GetStringField(TEXT("name")),TEXT("UCM: your buff request was cancelled; the queue was cleared."));}
+    BuffRequests.Empty();LastBuffRequest.Empty();BuffRequestStatus.Empty();
+}
+void UACEPluginSubsystem::ReplyBuffRequest(int32 Player,const FString& Name,const FString& Message,bool RateLimit)
+{
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    if(!C||C->GetSessionState()!=EACESessionState::InWorld||Name.IsEmpty())return;
+    const double Now=FPlatformTime::Seconds();
+    for(auto It=LastBuffReply.CreateIterator();It;++It)if(Now-It.Value()>300)It.RemoveCurrent();
+    if(RateLimit){if(const auto* Last=LastBuffReply.Find(Player);Last&&Now-*Last<10)return;if(LastBuffReply.Num()>=256)return;}
+    LastBuffReply.Add(Player,Now);C->SendTell(Name,Message);
+}
+FString UACEPluginSubsystem::BuffQueueSummary() const
+{
+    FString Summary;
+    for(int32 Index=0;Index<BuffRequests.Num();++Index)
+    {
+        const auto O=BuffRequests[Index]->AsObject();bool Started=false;O->TryGetBoolField(TEXT("started"),Started);
+        Summary+=FString::Printf(TEXT("%s%d. %s - %s (%s)"),Index?TEXT("\n"):TEXT(""),Index+1,*O->GetStringField(TEXT("name")),*O->GetStringField(TEXT("role")),Started?TEXT("buffing"):TEXT("waiting"));
+    }
+    return Summary.IsEmpty()?TEXT("No buff requests queued."):Summary;
+}
+void UACEPluginSubsystem::NotifyBuffQueuePositions()
+{
+    for(int32 Index=0;Index<BuffRequests.Num();++Index)
+    {
+        const auto O=BuffRequests[Index]->AsObject();
+        ReplyBuffRequest(int32(uint32(O->GetNumberField(TEXT("player")))),O->GetStringField(TEXT("name")),FString::Printf(TEXT("UCM: your buff request is now #%d in the queue (%d ahead of you)."),Index+1,Index));
+    }
+}
 
 void UACEPluginSubsystem::ObservePlayerTell(const FString& Text,const FString& Sender,int32 SenderId)
 {
@@ -31,14 +61,16 @@ void UACEPluginSubsystem::ObservePlayerTell(const FString& Text,const FString& S
         if(O&&O->TryGetStringField(TEXT("keyword"),K)&&O->TryGetStringField(TEXT("role"),R)&&K.TrimStartAndEnd().ToLower()==Keyword)
         {Role=R;break;}
     }
-    if(!TArray<FString>{TEXT("mage"),TEXT("heavy"),TEXT("missile"),TEXT("light"),TEXT("finesse")}.Contains(Role))return;
+    if(!TArray<FString>{TEXT("mage"),TEXT("heavy"),TEXT("missile"),TEXT("light"),TEXT("finesse"),TEXT("twohanded"),TEXT("unarmed"),TEXT("melee")}.Contains(Role))return;
     const double Now=FPlatformTime::Seconds();
     for(auto It=LastBuffRequest.CreateIterator();It;++It)if(Now-It.Value()>300)It.RemoveCurrent();
-    if(BuffRequests.Num()>=8||LastBuffRequest.Num()>=256)return;
-    if(const auto* Last=LastBuffRequest.Find(SenderId);Last&&Now-*Last<120)return;
-    for(const auto& V:BuffRequests)if(uint32(V->AsObject()->GetNumberField(TEXT("player")))==uint32(SenderId))return;
+    for(int32 Index=0;Index<BuffRequests.Num();++Index)if(uint32(BuffRequests[Index]->AsObject()->GetNumberField(TEXT("player")))==uint32(SenderId))
+    {ReplyBuffRequest(SenderId,Sender,FString::Printf(TEXT("UCM: you already have a buff request at #%d in the queue (%d ahead of you)."),Index+1,Index),true);return;}
+    if(BuffRequests.Num()>=8||LastBuffRequest.Num()>=256){ReplyBuffRequest(SenderId,Sender,TEXT("UCM: the buff queue is full. Please try again shortly."),true);return;}
+    if(const auto* Last=LastBuffRequest.Find(SenderId);Last&&Now-*Last<120){ReplyBuffRequest(SenderId,Sender,TEXT("UCM: please wait two minutes between buff requests."),true);return;}
     auto O=MakeShared<FJsonObject>();O->SetNumberField(TEXT("id"),++BuffRequestSerial);
     O->SetNumberField(TEXT("player"),uint32(SenderId));O->SetStringField(TEXT("name"),Sender.Left(128));O->SetStringField(TEXT("role"),Role);
     O->SetNumberField(TEXT("expires"),Now+900);BuffRequests.Add(MakeShared<FJsonValueObject>(O));LastBuffRequest.Add(SenderId,Now);
     BuffRequestStatus=FString::Printf(TEXT("Queued %s buffs for %s (%d waiting)"),*Role,*Sender,BuffRequests.Num());
+    ReplyBuffRequest(SenderId,Sender,FString::Printf(TEXT("UCM: %s buffs queued at #%d (%d ahead of you). I will tell you when it is your turn."),*Role,BuffRequests.Num(),BuffRequests.Num()-1));
 }

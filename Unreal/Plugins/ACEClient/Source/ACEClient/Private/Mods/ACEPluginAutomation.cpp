@@ -3,6 +3,7 @@
 #include "ACEDatSubsystem.h"
 #include "ACEPlayerController.h"
 #include "ACEInventoryRules.h"
+#include "ACEEquipmentRules.h"
 #include "ACEVendorPricing.h"
 #include "ACEVTObjectClass.h"
 #include "ACESession.h"
@@ -11,6 +12,7 @@
 #include "Engine/World.h"
 #include "ProceduralMeshComponent.h"
 #include "Mods/ACEPluginSight.h"
+#include "Mods/ACEPluginRouteGround.h"
 #include "Mods/ACEPluginCombat.h"
 #include "UI/ACERetailObjectNames.h"
 #include "UI/ACEUIResourceResolver.h"
@@ -100,19 +102,22 @@ void UACEPluginSubsystem::ObserveAppraisal(const FACEAppraisalInfo& Info)
 }
 void UACEPluginSubsystem::ObserveUseDone(uint32 Error)
 {
-    // A completed cast releases its own request throttle. Keep busy/pending
-    // gates and the minimum request interval; do not wait out a fixed 3.5s
-    // after the server has already acknowledged the action.
+    // A matching spell result followed by UseDone is ready for the next cast.
+    // VT advances on the result; do not add an arbitrary half-second floor to
+    // already completed instant buffs. Rejections retain the retry throttle,
+    // and the pending-request gate still prevents overlapping casts.
     if(PendingSpell)if(auto Owner=Find(PendingSpellOwner))
     {
-        Owner->NextAction=FMath::Min(Owner->NextAction,PendingSpellAt+.5);
+        const bool Confirmed=PendingSpellConfirmed&&!PendingSpellFizzled&&!Error;
+        Owner->NextAction=FMath::Min(Owner->NextAction,Confirmed?FPlatformTime::Seconds():PendingSpellAt+.5);
         Owner->NextDecision=0;
     }
     PendingSpellOwner.Empty();
     FastCastOwner.Empty();
+    FastCastStarted=false;
     if(Error&&PendingSpell)OffensiveCasts.RemoveAll([this](const auto& E){return E.Spell==PendingSpell&&E.Target==PendingSpellTarget;});
     if(Error&&PendingSpell)PendingDebuffCasts.RemoveAll([this](const auto& E){return N(E->AsObject(),TEXT("spell"))==PendingSpell&&N(E->AsObject(),TEXT("target"))==uint32(PendingSpellTarget);});
-    LastActionError=Error;LastCompletedSpell=PendingSpell;++ActionSerial;
+    LastActionError=Error;LastCompletedSpell=PendingSpell;LastSpellConfirmed=PendingSpellConfirmed&&!PendingSpellFizzled&&!Error;++ActionSerial;
     if(PendingManaRefresh&&!Error)
     {
         auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
@@ -138,7 +143,7 @@ void UACEPluginSubsystem::ObserveUseDone(uint32 Error)
     }
     if (!PendingResourceRefresh.IsEmpty()) ++DataRevision;
     PendingResourceRefresh.Empty();
-    if(PendingSpell && FPlatformTime::Seconds()-PendingSpellAt<30 && !Error)
+    if(PendingSpell && FPlatformTime::Seconds()-PendingSpellAt<30 && LastSpellConfirmed)
     {
         uint32 School,Power,Category,Flags;double Duration;
         auto* D=GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
@@ -297,6 +302,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
     Out->SetNumberField(TEXT("action_error"),LastActionError);Out->SetNumberField(TEXT("container"),uint32(C->GetOpenExternalContainerGuid()));
     Out->SetNumberField(TEXT("teleport_sequence"),C->GetTeleportSeq());
     Out->SetNumberField(TEXT("last_spell"),LastCompletedSpell);
+    Out->SetBoolField(TEXT("last_spell_confirmed"),LastSpellConfirmed);
     TArray<TSharedPtr<FJsonValue>> Confirmations;
     for(const auto& Dialog:Session->GetConfirmations()){auto D=MakeShared<FJsonObject>();D->SetNumberField(TEXT("type"),Dialog.Type);D->SetNumberField(TEXT("context"),Dialog.Context);Confirmations.Add(MakeShared<FJsonValueObject>(D));}
     Out->SetArrayField(TEXT("confirmations"),Confirmations);
@@ -404,6 +410,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
             }
         }
         J->SetNumberField(TEXT("slots"),Item.ValidLocations);
+        J->SetBoolField(TEXT("auto_wield_left"),(Item.ObjectDescriptionFlags&ACEObjectDescFlag::WieldLeft)!=0);
         TArray<TSharedPtr<FJsonValue>> Palettes;for(const auto& Palette:Item.Appearance.SubPalettes)Palettes.Add(MakeShared<FJsonValueNumber>(uint32(Palette.SubPaletteId)));J->SetArrayField(TEXT("palettes"),Palettes);
         J->SetNumberField(TEXT("burden"),Item.Burden);
         J->SetNumberField(TEXT("structure"),Item.Structure);J->SetNumberField(TEXT("max_structure"),Item.MaxStructure);J->SetBoolField(TEXT("retained"),(Item.ObjectDescriptionFlags&ACEObjectDescFlag::Retained)!=0);
@@ -478,11 +485,14 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         InventoryRevision=Session->GetInventoryDataRevision();InventoryAppraisalRevision=DataRevision;InventoryEligibility=Eligibility;
     }
     Out->SetArrayField(TEXT("inventory"),CachedInventory);
+    Out->SetNumberField(TEXT("inventory_revision"),double(InventoryRevision));
+    Out->SetNumberField(TEXT("appraisal_revision"),double(InventoryAppraisalRevision));
     bool AcceptOthers=false;if(auto Plugin=Find(TEXT("ucm")))Plugin->Profile->TryGetBoolField(TEXT("buff_others"),AcceptOthers);
     if(!AcceptOthers)ClearBuffRequests();
     if(BuffRequests.Num())
     {
         auto Request=MakeShared<FJsonObject>(*BuffRequests[0]->AsObject());
+        bool Started=false;Request->TryGetBoolField(TEXT("started"),Started);Request->SetBoolField(TEXT("started"),Started);
         const int32 Recipient=int32(uint32(N(Request,TEXT("player"))));FACEWorldObject Person;
         const bool Present=C->GetWorldObject(Recipient,Person)&&Person.bIsPlayer;
         Request->SetBoolField(TEXT("present"),Present);
@@ -616,12 +626,12 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
                 if(RouteVisibilityOffset>=Nearest.Num()||FVector::DistSquared(RouteVisibilityOrigin,P.ToUnrealLocation())>2500)RouteVisibilityOffset=0;
                 RouteVisibilityOrigin=P.ToUnrealLocation();
                 const int32 ScanEnd=FMath::Min(RouteVisibilityOffset+16,Nearest.Num());
+                FACEPluginRouteGround Ground(*World,2048);
                 for(int32 I=RouteVisibilityOffset;I<ScanEnd;++I)
                 {
                     const int32 Index=Nearest[I].Value;const auto Point=(*Route)[Index]->AsObject();FACEPosition Dest;
                     Dest.CellId=int32(uint32(N(Point,TEXT("cell"))));Dest.Location=FVector(N(Point,TEXT("x")),N(Point,TEXT("y")),N(Point,TEXT("z")));
-                    const FVector End=Dest.ToUnrealLocation()+FVector(0,0,60);
-                    Visible->SetBoolField(FString::FromInt(Index+1),Sight.Clear(P.ToUnrealLocation()+FVector(0,0,60),End));
+                    Visible->SetBoolField(FString::FromInt(Index+1),Ground.Reachable(P.ToUnrealLocation(),Dest.ToUnrealLocation(),Sight));
                 }
                 RouteVisibilityOffset=ScanEnd;
                 Out->SetObjectField(TEXT("route_visible"),Visible);
@@ -762,6 +772,9 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
         }
         const auto* A=Appraisals.Find(Id);
         if(!Owned||!A||!A->bSuccess||!Wieldable(*A,C->GetPlayerVitalsView())){P.Status=TEXT("Equipment requirements unavailable or not met");return true;}
+        // Ordinary equip honors the same automatic hand preference as retail
+        // ItemHolder::DetermineUse. It is live object data, not an appraisal hint.
+        if((Item.ObjectDescriptionFlags&ACEObjectDescFlag::WieldLeft)!=0)Offhand=true;
         int64 Mask=Item.ItemType&ACEItemType::Caster?0x1000000:Item.ItemType&ACEItemType::MissileWeapon?0x400000:Item.ItemType&ACEItemType::MeleeWeapon?0x100000:Item.ValidLocations;
         if(Item.ValidLocations&0x2000000)Mask=0x2000000;
         if(Item.ValidLocations&0x800000)Mask=0x800000;
@@ -769,7 +782,7 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
         {
             // A melee weapon's normal location is the primary hand; dual wield
             // explicitly uses ShieldLoc. Never put a two-handed weapon there.
-            if((Item.ValidLocations&0x2000000)||!(Item.ItemType&(ACEItemType::MeleeWeapon|ACEItemType::Armor)))return true;
+            if(!ACEEquipmentRules::CanWieldInSlot(Item,ACEEquipMask::Shield))return true;
             Mask=0x200000;
         }
         Mask &= Item.ValidLocations;
@@ -789,7 +802,10 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
             C->SendSellItems(Vendor,{TPair<int32,int32>(FMath::Max(1,Item.StackSize),Id)});P.NextAction=Now+2;return true;
         }
         const double ToolId=N(I,TEXT("tool"));FACEWorldObject Tool;
-        if(ToolId<=0||ToolId>MAX_uint32||FMath::FloorToDouble(ToolId)!=ToolId||!C->GetWorldObject(int32(uint32(ToolId)),Tool)||!LootItemAvailable(C,Tool)||ACEVTObjectClass::Classify(Tool)!=40||Item.Guid==Tool.Guid||Item.ItemsCapacity>0||Item.Structure>=100||Item.MaterialType<1||Item.MaterialType>77||TArray<int>{3,9,56,65,72}.Contains(Item.MaterialType))
+        const auto* SalvageAppraisal=Appraisals.Find(Id);
+        if(!SalvageAppraisal||!SalvageAppraisal->bSuccess||SalvageAppraisal->IntProperties.FindRef(171)>0||!SalvageAppraisal->StringProperties.FindRef(8).IsEmpty())
+        {ReportActivityFailure(P,I,TEXT("Automatic salvage requires appraisal and skips tinkered or inscribed items"));return true;}
+        if(ToolId<=0||ToolId>MAX_uint32||FMath::FloorToDouble(ToolId)!=ToolId||!C->GetWorldObject(int32(uint32(ToolId)),Tool)||!LootItemAvailable(C,Tool)||ACEVTObjectClass::Classify(Tool)!=40||Item.Guid==Tool.Guid||Item.ItemsCapacity>0||(ACEVTObjectClass::Classify(Item)==39&&Item.Structure>=100)||Item.MaterialType<1||Item.MaterialType>77||TArray<int>{3,9,56,65,72}.Contains(Item.MaterialType))
         {ReportActivityFailure(P,I,TEXT("Item is not salvageable or no owned Ust is available"));return true;}
         if(C->GetPlayerVitalsView().CombatMode!=1)C->SendChangeCombatMode(1);
         C->SendCreateTinkeringTool(Tool.Guid,{Id});P.NextAction=Now+3;return true;
@@ -955,13 +971,11 @@ void UACEPluginSubsystem::DrawRoute()
     // reprojection accommodates freshly streamed terrain without per-frame traces.
     if(RouteRebuiltAt>0&&Signature==RouteSignature&&Now-RouteRebuiltAt<3)return;
     RouteRebuiltAt=Now;RouteSignature=Signature;RouteSegments.Reset();
-    FCollisionObjectQueryParams Objects(ECC_WorldStatic);FCollisionQueryParams Query(SCENE_QUERY_STAT(UCMRoute),true);
-    int32 TraceBudget=2048;
+    FACEPluginRouteGround Floor(*W);
     auto Ground=[&](const FVector& V)
     {
-        FHitResult Hit;
-        if(TraceBudget-->0 && W->LineTraceSingleByObjectType(Hit,V+FVector(0,0,100),V-FVector(0,0,250),Objects,Query)
-            && Hit.ImpactNormal.Z>.25)return Hit.ImpactPoint+FVector(0,0,10);
+        FVector Hit;
+        if(Floor.Sample(V,Hit))return Hit+FVector(0,0,10);
         return V+FVector(0,0,10);
     };
     auto& Lines=RouteSegments;
@@ -972,9 +986,10 @@ void UACEPluginSubsystem::DrawRoute()
         const bool Connected=(uint32(From.CellId)>>16)==(uint32(To.CellId)>>16)||((uint32(From.CellId)&0xffff)<0x100&&(uint32(To.CellId)&0xffff)<0x100);
         const FVector A=From.ToUnrealLocation(),B=To.ToUnrealLocation();const double Length=FVector::Distance(A,B);
         if(!Connected||Length>=40000)return;
-        const int32 Steps=FMath::Clamp(FMath::CeilToInt(Length/200),1,200);FVector Last=Ground(A);
-        for(int32 I=1;I<=Steps&&Lines.Num()<4096;++I)
-        {const FVector V=Ground(FMath::Lerp(A,B,double(I)/Steps));Line(Last,V,Color);Last=V;}
+        TArray<FVector> Path;
+        if(!Floor.Path(A,B,Path))return; // no false line through voids or another floor
+        for(int32 I=1;I<Path.Num()&&Lines.Num()<8192;++I)
+            Line(Path[I-1]+FVector(0,0,10),Path[I]+FVector(0,0,10),Color);
     };
     FACEPosition Prev,First;bool Have=false,FirstVisible=false;int32 Index=0;
     for(const auto& Value:*Points)
@@ -1009,7 +1024,7 @@ void UACEPluginSubsystem::DrawRoute()
                     if(I)Line(Last,V,FLinearColor(.2f,1,.35f),8);Last=V;
                 }
             }
-            else if(Lines.Num()+24<4000)
+            else if(Lines.Num()+24<8192)
             {
                 // Three great circles read as a small sphere without the full
                 // latitude/longitude debug-sphere cost at every waypoint.
@@ -1055,10 +1070,20 @@ void UACEPluginSubsystem::ObserveMetaChat(const FString& Text,const FString& Sen
     if(PendingSpell&&!FastCastOwner.IsEmpty()&&Type==ACEChatMessageType::Spellcasting)
     {
         auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();FACEWorldObject Player;
-        if(C->GetWorldObject(C->GetPlayerGuid(),Player)&&!Player.Name.IsEmpty()&&Sender==Player.Name)FastCastStarted=true;
+        if(!FastCastStarted&&C->GetWorldObject(C->GetPlayerGuid(),Player)&&!Player.Name.IsEmpty()&&Sender==Player.Name)
+        {FastCastStarted=true;FastCastStartedAt=FPlatformTime::Seconds();}
     }
     if(Sender.IsEmpty()&&Type==ACEChatMessageType::Magic)
     {
+        if(PendingSpell)
+        {
+            // UseDone acknowledges the action, including a fizzle. Only the
+            // matching server spell result confirms an enchantment was applied.
+            const FString& Prefix=PendingSpellConfirmation;
+            if(!Prefix.IsEmpty()&&(Text==Prefix||Text==Prefix+TEXT(".")||Text.StartsWith(Prefix+TEXT(", "))||Text.StartsWith(Prefix+TEXT(" and "))))
+                PendingSpellConfirmed=true;
+            if(Text==TEXT("Your spell fizzled.")){PendingSpellFizzled=true;FastCastOwner.Empty();FastCastStarted=false;}
+        }
         const double Now=FPlatformTime::Seconds();
         for(int32 Index=PendingDebuffCasts.Num()-1;Index>=0;--Index)
         {

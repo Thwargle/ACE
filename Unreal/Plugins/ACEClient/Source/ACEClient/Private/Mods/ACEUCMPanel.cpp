@@ -233,14 +233,14 @@ namespace ACEUCMPanelPrivate
                 Add(Tile(Row));
             }
         }
-        void MonsterEquipment(const TSharedPtr<FJsonObject>& Rule,bool Offhand)
+        void MonsterEquipment(const TSharedPtr<FJsonObject>& Rule,bool Offhand,bool DefaultMelee=false)
         {
-            const TCHAR* Key=Offhand?TEXT("secondary_equip"):TEXT("weapon");
+            const TCHAR* Key=DefaultMelee?(Offhand?TEXT("melee_secondary_equip"):TEXT("melee_weapon")):(Offhand?TEXT("secondary_equip"):TEXT("weapon"));
             const double Selected=Num(Rule,Key,Offhand?0:-1);
-            const TArray<FString> Modes=Offhand?TArray<FString>{TEXT("Automatic"),TEXT("Shield"),TEXT("Dual wield"),TEXT("Empty hand")}:TArray<FString>{TEXT("Automatic"),TEXT("Casting device")};
+            const TArray<FString> Modes=Offhand?TArray<FString>{TEXT("Automatic"),TEXT("Shield"),TEXT("Dual wield"),TEXT("Empty hand")}:DefaultMelee?TArray<FString>{TEXT("Automatic")}:TArray<FString>{TEXT("Automatic"),TEXT("Casting device")};
             FString Caption=TEXT("Missing item — choose another");
             for(int32 I=0;I<Modes.Num();++I)if(Selected==(Offhand?I:I-1))Caption=Modes[I];
-            if(Offhand&&!Rule->HasField(Key))Caption=TEXT("Keep current equipment");
+            if(Offhand&&!Rule->HasField(Key))Caption=DefaultMelee?TEXT("Left-hand Tether / keep current"):TEXT("Use default hand settings");
             auto* C=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
             TArray<FACEWorldObject> Items;
             for(const auto& O:C->GetWorldObjects())if(Host->IsOwnedPluginItem(O))
@@ -249,15 +249,16 @@ namespace ACEUCMPanelPrivate
                 const bool Melee=(O.ItemType&ACEItemType::MeleeWeapon)&&!(O.ValidLocations&0x2000000);
                 const bool Shield=(O.ItemType&ACEItemType::Armor)&&(O.ValidLocations&0x200000);
                 const bool Primary=(O.ItemType&(ACEItemType::MeleeWeapon|ACEItemType::MissileWeapon|ACEItemType::Caster))&&!(O.ValidLocations&0x800000);
-                if(Offhand?(Melee||Shield):Primary)Items.Add(O);
+                if(Offhand?(Melee||Shield):Primary&&(!DefaultMelee||(O.ItemType&ACEItemType::MeleeWeapon))&&!(O.ObjectDescriptionFlags&ACEObjectDescFlag::WieldLeft))Items.Add(O);
             }
             Items.Sort([](const auto& A,const auto& B){return ACERetailObjectNames::Name(A)<ACERetailObjectNames::Name(B);});
-            Add(SNew(SComboButton).ButtonContent()[Text((Offhand?TEXT("Offhand: "):TEXT("Weapon: "))+Caption)]
+            Add(SNew(SComboButton).ButtonContent()[Text((Offhand?TEXT("Offhand: "):DefaultMelee?TEXT("Main hand: "):TEXT("Weapon: "))+Caption)]
                 .OnGetMenuContent_Lambda([this,Rule,Key,Offhand,Modes,Items](){
                     auto List=SNew(SVerticalBox);
                     auto Select=[this,Rule,Key](double Value){Rule->SetNumberField(Key,Value);FSlateApplication::Get().DismissAllMenus();Save(true);Rebuild();};
+                    if(Offhand)List->AddSlot().AutoHeight()[Button(TEXT("Use default / Left-hand Tether"),[this,Rule,Key](){Rule->RemoveField(Key);FSlateApplication::Get().DismissAllMenus();Save(true);Rebuild();})];
                     for(int32 I=0;I<Modes.Num();++I)List->AddSlot().AutoHeight()[Button(Modes[I],[Select,I,Offhand](){Select(Offhand?I:I-1);})];
-                    for(const auto& O:Items)List->AddSlot().AutoHeight()[Button(ACERetailObjectNames::Name(O),[Select,Id=uint32(O.Guid)](){Select(Id);})];
+                    for(const auto& O:Items)List->AddSlot().AutoHeight()[Button(ACERetailObjectNames::Name(O)+((O.ObjectDescriptionFlags&ACEObjectDescFlag::WieldLeft)?TEXT(" (Left-hand Tether)"):TEXT("")),[Select,Id=uint32(O.Guid)](){Select(Id);})];
                     return SNew(SBox).MaxDesiredHeight(400)[SNew(SScrollBox)+SScrollBox::Slot()[List]];
                 }));
         }
@@ -418,6 +419,7 @@ namespace ACEUCMPanelPrivate
                 Slider(TEXT("buff_other_range"),TEXT("Requester distance"),3,30,20,Accent,TEXT(" m"));
                 Add(SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(Accent).Text_Lambda([H=Host](){return FText::FromString(H.IsValid()?FString::Printf(TEXT("%d queued  •  %s"),H->QueuedBuffRequests(),*H->BuffRequestStatus):FString());}));
                 Add(Button(TEXT("Clear request queue"),[this](){Host->ClearBuffRequests();}));
+                Add(SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(Ink).Text_Lambda([H=Host](){return FText::FromString(H.IsValid()?H->BuffQueueSummary():FString());}));
                 Heading(TEXT("Tell keywords"),TEXT("Edit a keyword and press Enter to save. Add another entry to give a role an additional keyword."));
                 const auto Commands=Host->BuffCommands();
                 for(int32 I=0;I<Commands.Num();++I)
@@ -433,9 +435,10 @@ namespace ACEUCMPanelPrivate
                     Row->AddSlot().AutoWidth()[Button(TEXT("Remove"),[this,I](){auto V=Host->BuffCommands();V.RemoveAt(I);P()->SetArrayField(TEXT("buff_commands"),V);Save();Rebuild();})];Add(Tile(Row));
                 }
                 auto Roles=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(5,5));
-                for(const FString Role:{TEXT("mage"),TEXT("heavy"),TEXT("missile"),TEXT("light"),TEXT("finesse")})
+                for(const FString Role:{TEXT("mage"),TEXT("heavy"),TEXT("missile"),TEXT("light"),TEXT("finesse"),TEXT("twohanded"),TEXT("unarmed"),TEXT("melee")})
                     Roles->AddSlot()[Button(TEXT("+ ")+Role,[this,Role](){auto V=Host->BuffCommands();auto O=MakeShared<FJsonObject>();O->SetStringField(TEXT("role"),Role);O->SetStringField(TEXT("keyword"),Role+FString::FromInt(V.Num()+1));V.Add(MakeShared<FJsonValueObject>(O));P()->SetArrayField(TEXT("buff_commands"),V);Save();Rebuild();})];
                 Add(Roles);
+                Add(Text(TEXT("Melee roles include Dual Wield, Dirty Fighting, Recklessness, Sneak Attack and Shield. Unarmed uses Light Weapons in modern retail. Players receive tells with their queue position, turn and completion status."),15,Muted));
                 Add(Text(TEXT("Every role includes all six attributes, melee/missile/magic defense, life protections and regeneration, run, jump, healing, lore and mana conversion. Mage adds magic schools; weapon roles add their attack skills. Uses the highest known Other spells within your skill margin, including item buffs on the requester's server-visible equipped gear."),15,Muted));
                 Add(Text(TEXT("Keep the intended weapon equipped. Servers may not expose other players' armor as targetable items; UCM reports unavailable buffs instead of claiming those banes succeeded. Self-only spells cannot be cast on someone else."),15,Muted));
 
@@ -444,6 +447,8 @@ namespace ACEUCMPanelPrivate
             {
                 Heading(TEXT("Targeting & equipment"),TEXT("Auto ranks usable equipment and known attack spells against assessed resistances. Unknown resistances use neutral values; choose an element override when needed."));
                 Add(CombatToggle());
+                Heading(TEXT("Melee hands"),TEXT("Choose a default main hand and offhand. Monster rules can override these choices. Left-hand Tether reserves a weapon for the offhand; two-handed weapons cannot use a second weapon."));
+                MonsterEquipment(P(),false,true);MonsterEquipment(P(),true,true);
                 Add(Text(TEXT("Automatically chooses your highest usable trained combat skill, then the best available weapon or spell. Monster-rule overrides are retained."),15,Muted));
                 Add(Toggle(TEXT("idle_peace"),TEXT("Peace mode when idle"),TEXT("Enter peace mode when no eligible monsters are nearby, including while following a route. Return to the configured combat mode when attacking. Buffing, recovery and looting finish first.")));
                 const int32 Selection=FMath::Clamp(int32(Num(P(),TEXT("target_select"),1)),1,3);

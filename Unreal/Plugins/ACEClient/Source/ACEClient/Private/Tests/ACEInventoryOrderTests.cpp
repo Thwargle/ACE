@@ -276,6 +276,87 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Failed removal cannot later equip the requested item"),Session.CachedC2SPackets.Num(),Sent);
         TestEqual(TEXT("Failure cancels pending swap"),Session.PendingEquipmentGuid,0);
     }
+    // Full main pack: retail chooses the first side pack that can hold each
+    // dequip, before sending it. Reconstruct normal ACE property + ContainID
+    // replies and verify the old weapon is immediately usable without relog.
+    for(bool HaveContents:{false,true})for(int32 Conflicts:{1,2})
+    {
+        Session.ClearWorldState();Session.PlayerGuid=100;Session.State=EACESessionState::InWorld;
+        auto Self=Item(100,0,0);Self.ItemsCapacity=2;Session.UpsertWorldObject(Self);
+        auto New=Item(900,100,0);New.ItemType=ACEItemType::MeleeWeapon;Session.UpsertWorldObject(New);
+        Session.UpsertWorldObject(Item(950,100,1));
+        auto Old=Item(901,0,-1);Old.ItemType=ACEItemType::MeleeWeapon;
+        Old.WielderId=100;Old.CurrentWieldedLocation=ACEEquipMask::MeleeWeapon;Session.UpsertWorldObject(Old);
+        if(Conflicts==2){auto Shield=Old;Shield.Guid=902;Shield.CurrentWieldedLocation=ACEEquipMask::Shield;Session.UpsertWorldObject(Shield);}
+        // GUID order deliberately differs from pack placement order.
+        auto Full=Item(10,100,0,true);Full.ItemsCapacity=1;Session.UpsertWorldObject(Full);
+        Session.UpsertWorldObject(Item(11,10,0));
+        auto Focus=Item(20,100,1,true);Focus.ItemsCapacity=0;Session.UpsertWorldObject(Focus);
+        auto Traded=Item(30,100,2,true);Session.UpsertWorldObject(Traded);Session.TradeSelfItems.Add(30);
+        auto First=Item(3000,100,3,true);First.ItemsCapacity=1;Session.UpsertWorldObject(First);
+        auto Second=Item(1000,100,4,true);Second.ItemsCapacity=1;Session.UpsertWorldObject(Second);
+        if(HaveContents){Session.ContainerContents.Add(3000,{});Session.ContainerContents.Add(1000,{});}
+        const int64 Location=Conflicts==2?ACEEquipMask::TwoHanded:ACEEquipMask::MeleeWeapon;
+        auto Last=[&]()
+        {
+            uint32 Seq=0;for(const auto& Packet:Session.CachedC2SPackets)Seq=FMath::Max(Seq,Packet.Key);
+            TArray<uint32> Words;if(!Seq)return Words;
+            FACEBinaryReader R(Session.CachedC2SPackets[Seq].Payload);R.Skip(24);
+            while(R.CanRead(4))Words.Add(R.ReadUInt32());return Words;
+        };
+        Session.CachedC2SPackets.Reset();Session.SendGetAndWieldItem(900,Location);
+        TMap<int32,int32> Stowed;
+        for(int32 I=0;I<Conflicts;++I)
+        {
+            if(!TestTrue(TEXT("Full-pack swap retains its pending removal"),!Session.PendingEquipmentRemovals.IsEmpty()))break;
+            const int32 Removing=Session.PendingEquipmentRemovals[0],Destination=I==0?3000:1000;
+            const auto Wire=Last();if(!TestEqual(TEXT("Dequip request has item, container and position"),Wire.Num(),4))break;
+            TestEqual(TEXT("Full-pack swap uses standard PutItemInContainer"),Wire[0],ACEGameAction::PutItemInContainer);
+            TestEqual(TEXT("Dequip goes to first available non-traded pack in display order"),Wire[2],uint32(Destination));
+            TestEqual(TEXT("Request does not predict item out of equipment"),Session.WorldObjects[Removing].WielderId,100);
+            const int32 Before=Session.CachedC2SPackets.Num();
+            FACEBinaryWriter Prop;Prop.WriteUInt8(1);Prop.WriteUInt32(Removing);Prop.WriteUInt32(2);Prop.WriteUInt32(Destination);
+            FACEBinaryReader PR(Prop.GetData());Session.HandlePublicUpdateInstanceId(PR);
+            TestEqual(TEXT("Side-pack property still waits for ContainID"),Session.CachedC2SPackets.Num(),Before);
+            Contains(Removing,Destination,0);Stowed.Add(Removing,Destination);
+            TArray<FACEWorldObject> StowedContents;Session.GetPackItems(Destination,StowedContents);
+            TestTrue(TEXT("Removed equipment is immediately visible in the destination pack"),StowedContents.ContainsByPredicate([&](const auto& O){return O.Guid==Removing;}));
+            TestEqual(TEXT("Removed equipment is no longer wielded"),Session.WorldObjects[Removing].CurrentWieldedLocation,int64(0));
+        }
+        const auto WieldWire=Last();
+        if(TestTrue(TEXT("Side-pack acknowledgements release the final wield"),WieldWire.Num()>=3))
+            TestEqual(TEXT("Swap sends GetAndWieldItem after all removals"),WieldWire[0],ACEGameAction::GetAndWieldItem);
+        FACEBinaryWriter W;W.WriteUInt32(900);W.WriteInt32(int32(Location));FACEBinaryReader WR(W.GetData());Session.HandleWieldItem(WR);
+        TestFalse(TEXT("Successful full-pack swap releases busy state"),Session.IsUseBusy());
+        for(const auto& Pair:Stowed)TestEqual(TEXT("New wield cannot put stowed equipment back into main pack"),Session.WorldObjects[Pair.Key].ContainerId,Pair.Value);
+        // Hotkey the old weapon immediately: the new weapon now fits the freed
+        // main-pack slot, and the old GUID remains a normal equip target.
+        Session.SendGetAndWieldItem(901,ACEEquipMask::MeleeWeapon);
+        const auto Back=Last();if(TestEqual(TEXT("Switch back starts with a dequip"),Back.Num(),4))
+            TestEqual(TEXT("Freed main-pack space is preferred again"),Back[2],100u);
+        Contains(900,100,0);const auto BackWield=Last();
+        if(TestTrue(TEXT("Old weapon can be hotkeyed without relogging"),BackWield.Num()>=3))
+        {TestEqual(TEXT("Old weapon wield action"),BackWield[0],ACEGameAction::GetAndWieldItem);TestEqual(TEXT("Old weapon GUID preserved"),BackWield[1],901u);}
+    }
+    // No room for all conflicts must not remove even the first item. Also count
+    // slot reservations whose ObjectCreate has not arrived yet.
+    for(bool UnknownItem:{false,true})
+    {
+        Session.ClearWorldState();Session.PlayerGuid=100;Session.State=EACESessionState::InWorld;
+        auto Self=Item(100,0,0);Self.ItemsCapacity=1;Session.UpsertWorldObject(Self);
+        Session.UpsertWorldObject(Item(900,100,0));
+        auto Old=Item(901,0,-1);Old.WielderId=100;Old.CurrentWieldedLocation=ACEEquipMask::MeleeWeapon;Session.UpsertWorldObject(Old);
+        auto Shield=Old;Shield.Guid=902;Shield.CurrentWieldedLocation=ACEEquipMask::Shield;Session.UpsertWorldObject(Shield);
+        auto Pack=Item(10,100,0,true);Pack.ItemsCapacity=1;Session.UpsertWorldObject(Pack);
+        if(UnknownItem){FACEContainerItemRef Ref;Ref.ItemGuid=888;Ref.ContainerType=0;Session.ContainerContents.Add(10,{Ref});}
+        FString Message;const auto Handle=Session.OnChatMessage.AddLambda([&](const FString& Text,const FString&,int32){Message=Text;});
+        Session.CachedC2SPackets.Reset();Session.SendGetAndWieldItem(900,UnknownItem?ACEEquipMask::MeleeWeapon:ACEEquipMask::TwoHanded);
+        TestEqual(TEXT("Insufficient capacity sends no destructive dequip"),Session.CachedC2SPackets.Num(),0);
+        TestEqual(TEXT("Insufficient capacity preserves old equipped weapon"),Session.WorldObjects[901].WielderId,100);
+        TestFalse(TEXT("No capacity does not leave a pending busy swap"),Session.IsUseBusy());
+        TestTrue(TEXT("No capacity explains why the equipment change did not happen"),Message.Contains(TEXT("room")));
+        Session.OnChatMessage.Remove(Handle);
+    }
     for(bool CancelCombat:{false,true})
     {
         Session.ClearWorldState();Session.PlayerGuid=100;Session.State=EACESessionState::InWorld;

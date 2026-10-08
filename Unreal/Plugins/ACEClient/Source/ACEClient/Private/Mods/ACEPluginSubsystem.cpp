@@ -75,6 +75,8 @@ namespace
     }
     bool ValidUCMProfile(const TSharedPtr<FJsonObject>& O)
     {
+        for(const TCHAR* Key:{TEXT("melee_weapon"),TEXT("melee_secondary_equip")})if(O->HasField(Key))
+        {double Value=0;if(!O->TryGetNumberField(Key,Value)||!FMath::IsFinite(Value)||Value<-1||Value>MAX_uint32||FMath::FloorToDouble(Value)!=Value)return false;}
         if(O->HasField(TEXT("monster_catalog")))
         {
             const TSharedPtr<FJsonObject>* Catalog=nullptr;
@@ -132,7 +134,7 @@ namespace
             for(const auto& V:*Commands)
             {
                 const FString Key=String(V->AsObject(),TEXT("keyword")).TrimStartAndEnd().ToLower(),Role=String(V->AsObject(),TEXT("role"));
-                if(Key.IsEmpty()||Key.Len()>64||Keywords.Contains(Key)||!TArray<FString>{TEXT("mage"),TEXT("heavy"),TEXT("missile"),TEXT("light"),TEXT("finesse")}.Contains(Role))return false;
+                if(Key.IsEmpty()||Key.Len()>64||Keywords.Contains(Key)||!TArray<FString>{TEXT("mage"),TEXT("heavy"),TEXT("missile"),TEXT("light"),TEXT("finesse"),TEXT("twohanded"),TEXT("unarmed"),TEXT("melee")}.Contains(Role))return false;
                 Keywords.Add(Key);
             }
         }
@@ -837,11 +839,20 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         Notice=Status;
         return;
     }
+    if(P.Id==TEXT("ucm") && Action==TEXT("buff_request_start"))
+    {
+        if(BuffRequests.Num()&&uint32(Number(I,TEXT("request")))==uint32(Number(BuffRequests[0]->AsObject(),TEXT("id"))))
+        {
+            auto Request=BuffRequests[0]->AsObject();bool Started=false;Request->TryGetBoolField(TEXT("started"),Started);
+            if(!Started){Request->SetBoolField(TEXT("started"),true);ReplyBuffRequest(Guid(Request,TEXT("player")),String(Request,TEXT("name")),TEXT("UCM: it is your turn for buffs. Please stay nearby with your equipment on."));}
+        }
+        return;
+    }
     if(P.Id==TEXT("ucm") && Action==TEXT("buff_request_done"))
     {
         const uint32 Request=uint32(Number(I,TEXT("request")));
         if(BuffRequests.Num() && uint32(Number(BuffRequests[0]->AsObject(),TEXT("id")))==Request)
-        {BuffRequests.RemoveAt(0);BuffRequestStatus=Status;Notice=Status;}
+        {const auto Completed=BuffRequests[0]->AsObject();ReplyBuffRequest(Guid(Completed,TEXT("player")),String(Completed,TEXT("name")),TEXT("UCM: ")+Status);BuffRequests.RemoveAt(0);BuffRequestStatus=Status;Notice=Status;NotifyBuffQueuePositions();}
         return;
     }
     if (Action.IsEmpty()) return;
@@ -958,11 +969,20 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         // resolved target and session cast action in both modes, without a fake trigger.
         PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();
         PendingSpell=Spell;PendingSpellTarget=Target;PendingSpellAt=Now;PendingSpellOwner=P.Id;PendingSpellActivity=String(I,TEXT("activity"));
+        PendingSpellConfirmation.Empty();PendingSpellConfirmed=false;PendingSpellFizzled=false;
         // UseDone also succeeds for resisted spells. Track the specific server
         // magic-chat confirmation before considering an offensive enchantment active.
         uint32 School=0,Power=0,Category=0,Flags=0,Icon=0;double Duration=0;FString SpellName;
         auto* Dat=GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
         bool FastCast=false;I->TryGetBoolField(TEXT("fast_cast"),FastCast);FastCastOwner.Empty();FastCastStarted=false;
+        FastCastStartedAt=0;FastCastMovementApplied=false;
+        if(Dat->TryGetSpellInfo(Spell,SpellName,Icon))
+        {
+            const bool Self=Target==C->GetPlayerGuid();
+            FACEWorldObject Recipient;
+            if(Self||C->GetWorldObject(Target,Recipient))
+                PendingSpellConfirmation=TEXT("You cast ")+SpellName+TEXT(" on ")+(Self?TEXT("yourself"):Recipient.Name);
+        }
         if(C->GetWorldObject(Target,CombatTarget)&&CombatTarget.IsAttackable()&&!CombatTarget.bIsPlayer&&!CombatTarget.PetOwnerId
             &&Dat->IsPluginSingleTargetOffensiveSpell(Spell)&&Dat->TryGetSpellInfo(Spell,SpellName,Icon))
         {
@@ -1024,12 +1044,19 @@ void UACEPluginSubsystem::ApplyMovement(AACEPlayerController* PC, float& F, floa
     }
     if(!FastCastOwner.IsEmpty())
     {
-        if(!PendingSpell||FPlatformTime::Seconds()-PendingSpellAt>30)FastCastOwner.Empty();
+        // VT's result watchdog is about four seconds after the spell words.
+        // Never hold an input for the full network action timeout. A result can
+        // share a packet with the words: deliver one movement edge, then release
+        // it on the following frame so the normal motion path cancels recoil.
+        if(!PendingSpell || FPlatformTime::Seconds()-PendingSpellAt>30
+            || (FastCastStarted && (FPlatformTime::Seconds()-FastCastStartedAt>=4
+                || PendingSpellFizzled || (PendingSpellConfirmed&&FastCastMovementApplied))))
+        {FastCastOwner.Empty();FastCastStarted=false;}
         else
         {
             // Use the normal movement/collision/network path, never inject keys
             // or alter spell speed. Chat, UI blocking and jumps suspend the input.
-            if(FastCastStarted&&!Blocked&&PC&&PC->GetPawn()){F=-1;R=T=0;}return;
+            if(FastCastStarted&&!Blocked&&PC&&PC->GetPawn()){F=-1;R=T=0;FastCastMovementApplied=true;}return;
         }
     }
     if (MovementOwner.IsEmpty()) return;
@@ -1057,9 +1084,11 @@ void UACEPluginSubsystem::ApplyMovement(AACEPlayerController* PC, float& F, floa
         return;
     }
     const FVector Delta = MoveTarget.ToUnrealLocation() - Location;
-    if (Delta.Size2D() < MoveArrivalRadius)
+    if (Delta.Size() < MoveArrivalRadius || Delta.Size2D() < 1.)
     {
         F=R=T=0;
+        // Use the policy's 3D arrival metric on ramps. An XY-only stop at
+        // 70cm could remain almost a metre away along a slope forever.
         // If the recorded height is unreachable, retain the progress watchdog.
         // Recreating an expired movement every tick used to wait forever here.
         return;

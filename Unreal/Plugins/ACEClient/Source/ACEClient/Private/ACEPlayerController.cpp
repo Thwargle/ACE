@@ -3253,6 +3253,25 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                         // support is grounded too. Requiring an earlier impact
                         // toggled falling on exact end-of-sweep stair contacts.
                         bHaveGround=Snap.bLanded || Snap.Position.Equals(SupportCenter,.01f);
+                        if (!bHaveGround && Snap.Position.Equals(Center,.01f))
+                        {
+                            // At a ramp/flat seam, Chaos can report microscopic
+                            // penetration of the lower sphere into the tread
+                            // edge. Recovery cannot resolve that rounded contact
+                            // and the ledge guard would undo all forward travel.
+                            // Accept only contact skin, with independently proven
+                            // walkable support within retail StepDown. Walls,
+                            // crowns, creatures and real overlaps still block.
+                            FHitResult Contact;
+                            if (ACEBodySweep::Sweep(*World,Contact,Center,SupportCenter,
+                                FCollisionShape::MakeCapsule(CapsuleRadius,CapsuleHalfHeight),Params,false)
+                                && Contact.bStartPenetrating && Contact.PenetrationDepth<=.05f
+                                && Contact.Normal.Z>.0871557f && !ACEBodySweep::IsUpperBodyContact(Contact)
+                                && !ACEBodySweep::IsCreatureBody(Contact)
+                                && HasLedgeSupport(*World,GetGameInstance()->GetSubsystem<UACEDatSubsystem>(),
+                                    FVector(Desired.X,Desired.Y,GroundZ),CapsuleRadius,SnapStepDownCm,
+                                    WorldScale,!bIndoor,Params)) bHaveGround=true;
+                        }
                         for (int32 Retry=0; !bHaveGround && Retry<3; ++Retry)
                         {
                             // A side contact can shift XY while descending off

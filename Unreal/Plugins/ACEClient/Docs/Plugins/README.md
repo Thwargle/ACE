@@ -114,6 +114,26 @@ power/accuracy and attack height have separate controls.
 
 ### Navigation, loot and states
 
+**Buff others** accepts `mage`, `heavy`, `finesse`, `light`, `unarmed`,
+`twohanded`, `melee` and `missile` by default. Keywords are editable; existing
+custom keyword lists are preserved. All melee requests include Dual Wield,
+Dirty Fighting, Recklessness, Sneak Attack and Shield. `melee` includes all four
+modern weapon skills; `unarmed` uses Light Weapons, as in modern retail.
+Requests share a FIFO queue of up to eight players. UCM tells each requester their
+position, updates it when someone finishes, announces their turn when their buff
+task starts, and reports completion or cancellation. Duplicate requests do not
+restart a cycle; repeated status replies are rate limited. The host sees names,
+roles and waiting/buffing state on Buff others.
+
+Combat's **Melee hands** controls select default main-hand and offhand equipment.
+Monster rules can override the defaults. Without an offhand override, a weapon's
+server-provided Left-hand Tether flag reserves it for the offhand. Automatic main
+hand selection excludes tethered weapons, including live tether changes.
+An explicit Shield or Empty hand setting overrides automatic offhand selection;
+two-handed loadouts do not equip a second weapon. Profiles store the defaults as
+`melee_weapon` (-1 automatic or item GUID) and `melee_secondary_equip` (omitted:
+tether/keep current, 0 automatic, 1 shield, 2 dual wield, 3 empty, or item GUID).
+
 **Force Buff** on Overview or Buffs immediately refreshes the enabled self-buff
 families, ignoring their remaining timers. It retains spell eligibility, skill
 margin and exclusions, and counts a family only after a successful cast is
@@ -140,6 +160,15 @@ entry point. Imported action-only entries are not spatial join targets; leading
 setup actions are preserved when joining the first spatial point. Native points
 in a different dungeon are excluded. Record enough corners to reach the nearby
 route safely; nearest-point joining does not find a new path through walls.
+
+Native and imported walking points share the same steering and 3D arrival
+radius. On ramps, steering continues until the slope distance is inside that
+radius. The route overlay samples successive floor heights every 50cm instead
+of tracing the straight chord between waypoint heights; reachable-entry checks
+follow that floor too. Loaded dungeon physics meshes remain available for these
+queries when their rendering/collision is culled. Gaps and different floors do
+not become walking connections. Record corners and explicit jumps/portals as
+usual; this does not invent a route around walls or across voids.
 
 Combat rejects monsters behind physical walls, scenery and closed doors, then
 continues the recorded route. Open doors along route is on by default; explicitly
@@ -470,9 +499,14 @@ still needed before treating this preview as an unattended hunting replacement.
 ## Additional automation API 1 fields and intents
 
 Snapshots additionally expose `player`, `jumping`, `action_serial`, `action_error`,
-`trained_skills`, `usable_skills`, `teleport_sequence`, `last_spell`, `inventory`, `targets`, `corpses`, `container`,
+`trained_skills`, `usable_skills`, `teleport_sequence`, `last_spell`, `last_spell_confirmed`, `inventory`, `targets`, `corpses`, `container`,
 `contents`, `route_objects` and confirmed `item_buffs`. GUIDs use unsigned JSON
 numbers. Inventory snapshots cache until inventory/appraisal/eligibility changes.
+Inventory records expose `auto_wield_left` from the live object description.
+`last_spell_confirmed` distinguishes a matching spell result from a successful
+UseDone alone (which can follow a fizzle). `buff_request.started` is false until
+UCM submits `buff_request_start` with its request ID; completion uses
+`buff_request_done`. Queue notices use normal retail Tell packets.
 Background appraisals do not open the user's inspection window; explicit user
 inspection takes precedence. Automatic appraisal discovery is limited to one
 request per second and existing assessments refresh after two minutes. Successful mana-stone use invalidates
@@ -536,13 +570,14 @@ successful unattended hunt or complete VT replacement.
 ## Tell buff requests and route overlay
 
 In **Buff others**, turn on **Accept buff requests**, enable **Buff**, and start
-UCM. The default exact tell keywords are `mage`, `heavy`, `missile`, `light`, and
-`finesse`. Edit keywords or add aliases in this tab. Case and surrounding spaces
+UCM. The default exact tell keywords are `mage`, `heavy`, `missile`, `light`,
+`finesse`, `twohanded`, `unarmed`, and `melee`. Edit keywords or add aliases in this tab. Case and surrounding spaces
 are ignored. Public chat and NPC dialogue never start a request. Up to eight
 players can queue; a player cannot reset an active request by repeating a tell.
 Completed requests have a two-minute request cooldown. Stop, logout, and character
-changes clear the queue. Disabling buffs cancels requests. No automatic reply
-messages are sent; progress and unavailable-buff counts appear locally.
+changes clear the queue. Disabling buffs cancels requests. Automatic tells report
+queue position, turn start, and completion or cancellation; progress and
+unavailable-buff counts also appear locally.
 
 All roles request six attributes, three defenses, lore, healing, run, jump,
 mana conversion, regeneration, armor, and elemental life protections. Mage adds
@@ -557,8 +592,10 @@ often only transmitted as appearance, without targetable item GUIDs; a full set
 of armor banes cannot be guaranteed in that case. This follows the server's item
 spell rules rather than pretending that casting a bane on another player buffs
 all their armor. Missing spells, equipment, or failed casts produce an incomplete
-summary. The requester must remain nearby; leaving range for 30 seconds cancels
-the request. Each queued request expires after 15 minutes.
+summary. When a request reaches the front of the queue, a requester outside the
+configured distance or no longer visible to the client is removed immediately,
+notified, and skipped so the next player can receive buffs. Leaving range during
+the turn also cancels the request. Each queued request expires after 15 minutes.
 
 **Route → Show route in world** defaults on for both new and migrated profiles.
 A cyan ground-projected line joins recorded points, with amber jump segments.
@@ -621,8 +658,25 @@ to grant a changed capability list. Nothing starts automatically.
 
 
 The Loot page also edits salvage workmanship groups, material overrides and value
-targets. Combining is separately enabled. Destructive loot actions apply only to
-newly transferred items; pending jobs are cleared on Stop/logout. Do not stop UCM
+targets. Combining is separately enabled. **Loot → Looting settings → Apply salvage
+rules to existing inventory** is an explicit, default-off option to process all
+owned packs while UCM runs, even with corpse looting disabled. It uses the active
+profile's first matching rule and only executes Salvage; earlier Keep/Skip rules
+protect items. An Ust and successful appraisal are required. Equipped, retained,
+traded, tinkered and inscribed items, packs, tools and salvage bags are excluded.
+The same tinkering/inscription checks protect newly looted salvage. Pending jobs
+are revalidated before sending the normal server salvage request.
+
+**Salvage combination** edits per-material groups and value targets. Materials
+never mix; full, retained and traded bags are excluded. Classic assigns gaps to
+the preceding group: `1-6,7-8,9,10` means values like 6.9 stay with the first
+group. Below a value target, only pairs totaling less than 100 units combine;
+zero disables value mode. Workmanship-only mode selects in ascending workmanship
+order until reaching 100 units, with a maximum of 64 input bags per request.
+The imported `CombineSalvage` option controls this setting.
+
+Without inventory salvage enabled, destructive loot actions apply only to newly
+transferred items. Pending jobs are cleared on Stop/logout. Do not stop UCM
 before visiting a vendor if you intend to process its queued Sell rules.
 
 

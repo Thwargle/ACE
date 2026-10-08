@@ -26,6 +26,8 @@ local forced_buff=nil
 local buff_skips={}
 local other_job=nil
 local loot_scan={}
+local inventory_salvage_scan={}
+local inventory_salvage_blocked={}
 local loot_jobs={}
 local loot_job_pending=nil
 local combine_pending=nil
@@ -68,6 +70,16 @@ local function contains(list,id) for _,v in ipairs(list or {}) do if v==id then 
 local function vt_string(value) if type(value)=='number' then return string.format('%.15g',value) end;return tostring(value) end
 local function allowed(list,id) return not list or #list==0 or contains(list,id) end
 local function band(a,b) return (a or 0)&b end
+local function salvage_candidate(item)
+ local material=item.material or 0
+ return not item.equipped and not item.retained and item.resource_available~=false
+  and item.object_class~=39 and item.object_class~=40 and item.object_class~=10
+  and item.object_class~=38 and material>0 and material<=77
+  and material~=3 and material~=9 and material~=56 and material~=65 and material~=72
+end
+local function salvage_protected(item)
+ return ((item.int_properties or {})['171'] or 0)>0 or ((item.string_properties or {})['8'] or '')~=''
+end
 local function world(v) local lb=math.floor(v.cell/65536);return -(math.floor(lb/256)*192+v.x),(lb%256)*192+v.y,v.z end
 local function distance(a,b) local x,y,z=world(a);local X,Y,Z=world(b);return math.sqrt((x-X)^2+(y-Y)^2+(z-Z)^2) end
 local function element(spell)
@@ -1065,11 +1077,16 @@ local function tick(s,p)
  if s.busy or s.ready==false or s.jumping then return result(nil,s.jumping and 'Following jump arc' or 'Waiting for game action') end
  if locked_target and (not target or option('combat','off')=='off') then locked_target=nil;return result('cancel_attack','No unobstructed combat target; continuing other activities') end
  if last_cast and (s.action_serial or 0)~=last_cast.serial and s.last_spell==last_cast.id then
-  if (s.action_error or 0)==0 and forced_buff and last_cast.force_cycle==forced_buff then
+  local confirmed=(s.action_error or 0)==0 and s.last_spell_confirmed~=false
+  if confirmed and forced_buff and last_cast.force_cycle==forced_buff then
    forced_buff.done[tostring(last_cast.target)..':'..last_cast.category]=last_cast.power;buff_plan=nil
   end
-  if (s.action_error or 0)==0 and not last_cast.request then
-   local key=tostring(last_cast.target)..':'..last_cast.category;retries[key]=nil;until_time[key]=nil
+  if not last_cast.request then
+   -- The server finished this attempt, so the twelve-second missing-reply
+   -- watchdog no longer applies. Fizzles retry promptly but retain the bounded
+   -- attempt count; they must not mark a forced family complete.
+   local key=tostring(last_cast.target)..':'..last_cast.category;until_time[key]=nil
+   if confirmed then retries[key]=nil end
   end
   if s.action_error==0x400 or (last_cast.recovery and (s.action_error or 0)~=0) then
    if last_cast.request and other_job and other_job.id==last_cast.request then
@@ -1715,23 +1732,24 @@ local function tick(s,p)
   local job=other_job
   if s.time>(request.expires or math.huge) then return finish('Buff request expired: '..request.name) end
   if not request.present or request.distance>option('buff_other_range',20) then
-   job.away=job.away or s.time
-   if s.time-job.away>30 then return finish('Buff request cancelled: '..request.name..' is not nearby') end
-   return result(nil,'Waiting for '..request.name..' to stand nearby')
+   return finish('Buff request cancelled: '..request.name..' is not nearby; continuing to the next request')
   end
-  job.away=nil
+  if request.started==false then return {action='buff_request_start',request=request.id,status='Starting buffs for '..request.name} end
   if job.pending then
    local pending=job.pending
    local confirmed=(s.action_serial or 0)~=pending.serial and s.last_spell==pending.spell
    if not confirmed and s.time<pending.deadline then return result(nil,'Waiting for requested buff confirmation') end
-   if confirmed and (s.action_error or 0)==0 then job.done[pending.key]=true;job.count=job.count+1
+   if confirmed and (s.action_error or 0)==0 and s.last_spell_confirmed~=false then job.done[pending.key]=true;job.count=job.count+1
    elseif (job.attempts[pending.key] or 0)>=3 then job.failed[pending.key]=pending.name end
    job.pending=nil
   end
   local common={1,3,5,7,9,11,37,39,41,51,53,67,69,77,93,95,97,101,103,105,107,109,111,113,115}
-  local roles={mage={43,45,47,49,645},heavy={31,593,668,674,665,671,677},light={17,668,674,665,671,677},finesse={23,668,674,665,671,677},missile={19,677}}
+  local roles={mage={43,45,47,49,645},heavy={31,593},light={17},unarmed={17},finesse={23},twohanded={593},melee={17,23,31,593},missile={19,677}}
   local wanted={};for _,c in ipairs(common) do wanted[c]=true end
   for _,c in ipairs(roles[request.role] or {}) do wanted[c]=true end
+  -- Modern retail uses Light Weapons for unarmed attacks. Every melee role
+  -- includes Dual Wield, Shield, Dirty Fighting, Recklessness and Sneak Attack.
+  if request.role~='mage' and request.role~='missile' then for _,c in ipairs({668,674,665,671,677}) do wanted[c]=true end end
   -- These are retail item buff families; DAT target masks determine which
   -- of the requester's server-known equipped items can receive each spell.
   for _,c in ipairs({152,154,156,158,160,162,164,166,168,170,172,174,195}) do wanted[c]=true end
@@ -1938,8 +1956,8 @@ local function tick(s,p)
    corpses[s.container]=s.time+300;return {action='close_corpse',status='Loot complete'}
   end
  end
- -- Only newly looted items are queued; never reclassify equipped or pre-existing
- -- possessions for destructive actions when a user imports a profile.
+ -- Existing possessions require the explicit inventory salvage option below.
+ -- Importing a loot profile alone must never queue them for destruction.
  if loot_job_pending then
   local job=loot_job_pending;local exists=false;for _,i in ipairs(inventory) do if i.id==job.id then exists=true end end
   if not exists then table.remove(loot_jobs,job.index);loot_job_pending=nil
@@ -1953,11 +1971,60 @@ local function tick(s,p)
    if not item then table.remove(loot_jobs,index);return result(nil,'Queued loot item is no longer present') end
    if item.equipped or (item.count or 1)~=job.count then return failed('Queued loot item was equipped or its stack changed; review loot rules') end
    local tool
-   if job.action=='salvage' then for _,i in ipairs(inventory) do if i.object_class==40 then tool=i.id;break end end;if not tool then return failed('Salvage rule requires an Ust') end end
+   if job.action=='salvage' then
+    if not salvage_candidate(item) or salvage_protected(item) then table.remove(loot_jobs,index);return result(nil,'Keeping protected or unsalvageable item: '..item.name) end
+    if not item.identified then return assess(item) end
+    for _,i in ipairs(inventory) do if i.object_class==40 and i.resource_available~=false then tool=i.id;break end end
+    if not tool then return failed('Salvage rule requires an Ust') end
+   end
    loot_job_pending={index=index,id=item.id,action=job.action,serial=s.action_serial or 0,deadline=s.time+15}
    return {action=job.action,item=item.id,tool=tool,status=job.action..': '..item.name}
   end end
  end
+ if option('salvage_inventory',false) and (not s.container or s.container==0) then
+  local scan=inventory_salvage_scan;local rules=p.loot_rules or {}
+  local revision=tostring(s.inventory_revision)..':'..tostring(s.appraisal_revision)..':'..(p.loot_revision or 0)..':'..(p.vt_revision or 0)
+  if scan.revision~=revision then scan={revision=revision,item=1,rule=1};inventory_salvage_scan=scan end
+  if not scan.done then
+  local has_salvage=false;for _,rule in ipairs(rules) do if rule.enabled~=false and rule.action=='salvage' then has_salvage=true;break end end
+  if not has_salvage then scan.done=true else
+  local ordered,present={},{};for _,v in ipairs(inventory) do ordered[#ordered+1]=v;present[v.id]=true end;table.sort(ordered,function(a,b)return a.id<b.id end)
+  for id in pairs(inventory_salvage_blocked) do if not present[id] then inventory_salvage_blocked[id]=nil end end
+  local function progress() local r=result(nil,'Checking inventory salvage rules: item '..scan.item..'/'..#ordered);r.continue_work=true;return r end
+  while scan.item<=#ordered do
+   local item=ordered[scan.item]
+   if salvage_candidate(item) and not inventory_salvage_blocked[item.id] then
+    if not item.identified then
+     if (item_attempts['id'..item.id] or 0)>=3 then inventory_salvage_blocked[item.id]=true
+     else return assess(item) end
+    elseif not salvage_protected(item) then
+     while scan.rule<=#rules do
+      if not workavailable() then return progress() end
+      scan.evaluation=scan.evaluation or {};local match=rule_match(rules[scan.rule],item,s,scan.evaluation)
+      if match=='pending' then return progress() end
+      scan.evaluation=nil
+      if match==nil then inventory_salvage_blocked[item.id]=true;break end
+      if match then
+       if rules[scan.rule].action=='salvage' then
+        -- Freeze identity and count; execute through the same validated queue
+        -- as newly looted salvage, never Sell/Read a pre-existing possession.
+        inventory_salvage_blocked[item.id]=true
+        loot_jobs[#loot_jobs+1]={id=item.id,count=item.count or 1,action='salvage',wcid=item.wcid}
+        scan.item=scan.item+1;scan.rule=1
+        return result(nil,'Queued inventory salvage: '..item.name)
+       end
+       break -- First match wins, including Keep, Skip and disabled quantities.
+      end
+      scan.rule=scan.rule+1
+     end
+    end
+   end
+   scan.item=scan.item+1;scan.rule=1
+  end
+  scan.done=true
+  end
+  end
+ else inventory_salvage_scan={} end
  if option('looting',false) and (#(p.loot_rules or {})>0 or option('read_unknown_scrolls',false)) then
   for _,c in ipairs(s.corpses or {}) do if c.line_of_sight~=false and c.distance<=option('loot_range',15) and s.time>=(corpses[c.id] or 0) then
    if (c.ownership_available or option('loot_only_rare',false)) and not c.identified then return assess(c) end
@@ -2034,7 +2101,7 @@ local function tick(s,p)
   local target_combat=target_rule and target_rule.combat or combat
   local requested=target_rule and target_rule.weapon
   local explicit
-  if requested and requested>0 then for _,v in ipairs(combat_inventory) do if v.id==requested then explicit=v;break end end end
+  if requested and requested>0 then for _,v in ipairs(combat_inventory) do if v.id==requested and not v.auto_wield_left then explicit=v;break end end end
   -- VT falls back to automatic selection when an explicit object is no longer
   -- owned. Zero means automatic casting equipment, not the first melee item.
   if requested==0 then target_combat='magic' end
@@ -2088,6 +2155,11 @@ local function tick(s,p)
   for _,v in ipairs(combat_inventory) do
    local melee=band(v.type,1)~=0;local missile=band(v.type,0x100)~=0 and band(v.slots,0x800000)==0;local caster=band(v.type,0x8000)~=0
    local allowed=explicit and v.id==explicit.id or not explicit and weapon_allowed(v)
+   local main_hand=option('melee_weapon',-1)
+   if melee then
+    if not explicit and main_hand>0 then allowed=v.id==main_hand end
+    if v.auto_wield_left then allowed=false end
+   end
    if not v.identified and allowed and (melee or missile or caster) then unassessed=v end
    if v.identified and v.can_wield and allowed and (explicit or (target_combat=='auto' and (melee or missile or (caster and attack))) or (target_combat=='melee' and melee) or (target_combat=='missile' and missile) or (target_combat=='magic' and caster)) then
     local damage=v.damage_type or 0;local resist=damage==0 and 1 or 0
@@ -2192,15 +2264,22 @@ local function tick(s,p)
    else item_attempts['debuff'..target.id..':'..category]=0 end
   end
   if weapon and (not weapon.equipped or band(weapon.equipped_slot,0x200000)~=0) then return equip(weapon) end
-  if weapon and mode=='melee' and target_rule and target_rule.secondary_equip~=nil and band(weapon.slots,0x2000000)==0 then
-   local requested=target_rule.secondary_equip
+  local secondary_request=target_rule and target_rule.secondary_equip
+  if secondary_request==nil then secondary_request=option('melee_secondary_equip',nil) end
+  -- With no explicit offhand rule, Left-hand Tether is the user's assignment.
+  -- Do not rank this weapon as a main hand or repeatedly swap the two hands.
+  local tether_only=secondary_request==nil
+  if tether_only then for _,v in ipairs(inventory) do if v.auto_wield_left and weapon_allowed(v) then secondary_request=2;break end end end
+  if weapon and mode=='melee' and secondary_request~=nil and band(weapon.slots,0x2000000)==0 then
+   local requested=secondary_request
    local current,shield,secondary,unknown
    local rank=-1
    for _,v in ipairs(inventory) do
     if v.equipped and band(v.equipped_slot,0x200000)~=0 then current=v end
     local melee=band(v.type,1)~=0 and band(v.slots,0x2000000)==0
     local armor=band(v.type,2)~=0 and band(v.slots,0x200000)~=0
-    if v.id~=weapon.id and (melee or armor) and (requested>3 and requested==v.id or requested<=2 and weapon_allowed(v)) then
+    if v.id~=weapon.id and (melee or armor) and (not tether_only or v.auto_wield_left)
+     and (requested>3 and requested==v.id or requested<=2 and weapon_allowed(v)) then
      if not v.identified then unknown=v
      elseif v.can_wield then
       if requested>3 then secondary=v
@@ -2208,12 +2287,12 @@ local function tick(s,p)
       elseif melee then
        local resistance_score=0;for bit=0,7 do local e=1<<bit;if band(v.damage_type,e)~=0 then resistance_score=math.max(resistance_score,resistance(target,e)) end end
        local value=(v.damage or 0)*(1-(v.variance or 0)*.5)*resistance_score/(1+(v.weapon_time or 0)/100)
-       if value>rank then secondary=v;rank=value end
+       if not secondary or (v.auto_wield_left and not secondary.auto_wield_left) or ((v.auto_wield_left==true)==(secondary.auto_wield_left==true) and value>rank) then secondary=v;rank=value end
       end
      end
     end
    end
-   if requested==1 or requested==0 and (trained[48] or not trained[49]) and shield then secondary=shield
+   if requested==1 or requested==0 and not (secondary and secondary.auto_wield_left) and (trained[48] or not trained[49]) and shield then secondary=shield
    elseif requested==3 then secondary=nil end
    if not secondary and unknown and requested~=3 then return assess(unknown) end
    if secondary then
@@ -2282,8 +2361,8 @@ local function tick(s,p)
   local policy=p.salvage_policy or {default={{min=1,max=6},{min=7,max=8},{min=9,max=9},{min=10,max=10}}}
   local groups,tool={},nil
   for _,item in ipairs(inventory) do
-   if item.object_class==40 then tool=item.id end
-   if item.object_class==39 and not item.equipped and not item.retained and (item.structure or 0)>0 and item.structure<100 and item.workmanship then
+   if item.object_class==40 and item.resource_available~=false then tool=item.id end
+   if item.object_class==39 and not item.equipped and not item.retained and item.resource_available~=false and (item.material or 0)>0 and (item.structure or 0)>0 and item.structure<100 and item.workmanship then
     local ranges=(policy.materials or {})[vt_string(item.material)] or policy.default or {};local index=#ranges+1
     for n,range in ipairs(ranges) do if range.min>item.workmanship then index=n-1;break elseif item.workmanship<=range.max then index=n;break end end
     local key=tostring(item.material)..':'..index;groups[key]=groups[key] or {};groups[key][#groups[key]+1]=item
@@ -2291,7 +2370,11 @@ local function tick(s,p)
   end
   local keys={};for key in pairs(groups) do keys[#keys+1]=key end;table.sort(keys)
   for _,key in ipairs(keys) do local bags=groups[key];if #bags>=2 then
+   -- VT sorts by material/workmanship before selecting bags. Stable GUID ties
+   -- keep server enumeration order from changing the selected combination.
+   table.sort(bags,function(a,b)return a.workmanship==b.workmanship and a.id<b.id or a.workmanship<b.workmanship end)
    local selected,units,value={},0,0;local threshold=(policy.values or {})[vt_string(bags[1].material)]
+   if threshold and threshold<=0 then threshold=nil end
    for _,bag in ipairs(bags) do selected[#selected+1]=bag;units=units+bag.structure;value=value+(bag.value or 0);if #selected==64 or (not threshold and units>=100) then break end end
    if threshold and value<threshold then
     table.sort(bags,function(a,b) return a.structure<b.structure end)
@@ -2394,8 +2477,13 @@ local function run(s,p)
  local request=s.force_buff_request or 0
  if request~=0 and (not forced_buff or forced_buff.request~=request) then
   forced_buff={request=request,done={}};buff_plan=nil;retries={};buff_skips={}
+  -- Force Buff is an explicit new attempt, including families skipped by a
+  -- previous pass. Preserve component/skill eligibility and fresh failures.
+  unavailable_spells={};catalog_snapshot=nil;activity_pauses.buffs=nil
+  for key in pairs(item_attempts) do if tostring(key):sub(1,8)=='buffitem' then item_attempts[key]=nil end end
   for key in pairs(until_time) do
    local text=tostring(key)
+   if text:sub(1,8)=='buffitem' then until_time[key]=nil end
    for i=1,#text do if text:sub(i,i)==':' then until_time[key]=nil;break end end
   end
  elseif request==0 and forced_buff and forced_buff.request~=0 then forced_buff=nil;buff_plan=nil end
@@ -2487,7 +2575,7 @@ return function(s,p)
   route_pending=nil;loot_pending=nil;recovery_pending=nil;buff_item_pending=nil
   corpse_pending=nil;purchase_pending=nil;note_pending=nil;mana_refill_pending=nil;mana_fill_pending=nil;pet_refill_pending=nil;helper_pending=nil;debuff_pending=nil;debuff_scan=nil;pea_pending=nil;pet_pending=nil;dispel_pending=nil
   last_cast=nil;unavailable_spells={};forced_buff=nil;buff_skips={};other_job=nil
-  loot_scan={};loot_jobs={};loot_job_pending=nil;combine_pending=nil
+  loot_scan={};loot_jobs={};loot_job_pending=nil;combine_pending=nil;inventory_salvage_scan={};inventory_salvage_blocked={}
   retries={};until_time={};item_attempts={};corpses={};monster_failures={};monster_blacklist={};ghost_attempts={};ghost_hp={}
   follow_path={};follow_target=nil;follow_teleport=nil
   activity_pauses={}

@@ -1,5 +1,85 @@
 # Virindi compatibility review — 2026-10-04
 
+## Current review — 2026-10-07
+
+This section supersedes the historical gap lists below. Full VT parity is still
+not established. This pass compares the local VT decompile's `uTank2/cLogic.cs`
+activity ordering, `hv.cs` loot transfer/queue handling, `ar.cs` salvage activity,
+and `c7.cs` bag selection with UCM's policy, host validation, importer and editor.
+Classic's public `UTLBlock_SalvageCombine.cs` and `LootRules.cs` provide the rule
+and workmanship semantics:
+http://www.virindi.net/repos/virindi_public/trunk/VirindiTankLootPlugins/VTClassic%20Shared/
+
+Implemented and corrected in this pass:
+
+- Explicit, default-off **Apply salvage rules to existing inventory**, under
+  Loot / Looting settings. It scans owned packs using the active profile's
+  first-match rules, including imported requirements. Only Salvage executes on
+  pre-existing possessions; earlier Keep/Skip rules protect them. Corpse looting
+  can remain off. Importing a profile alone does not enable inventory salvage.
+- Automatic salvage now requires appraisal and preserves tinkered/inscribed
+  items as VT's `hv.cs` does. Equipped, retained and traded items remain excluded.
+  Host validation repeats these checks before sending CreateTinkeringTool. An
+  ordinary item having 100+ uses no longer incorrectly counts as a full salvage
+  bag. A pending transfer or destruction still requires inventory confirmation.
+- Inventory rule evaluation resumes within the existing instruction budget and
+  completed scans are cached against inventory, appraisal and profile revisions.
+  Failed/ambiguous items are not automatically resubmitted by the inventory scan
+  during that run. Other UCM activities retain their existing failure isolation.
+- Bag combining preserves material-specific overrides, Classic's fractional
+  workmanship grouping, value thresholds and full-bag exclusion. Selection now
+  sorts by workmanship as VT does, excludes trade-unavailable bags/tools, and
+  treats the UI's zero value target as disabled. The original `CombineSalvage`
+  setting now imports and runs through its missing command adapter.
+- The existing value-mode fallback deterministically chooses the two smallest
+  bags totaling less than 100 units. Classic tries up to twelve random pairs;
+  UCM retains the same under-100 constraint without randomly missing a valid pair.
+
+The broader source review confirms that vendor restocking/trade-note funding,
+summon refills, mana-stone filling and equipment recharge, recovery ordering,
+buff tiers/Force Buff, other-player buff queues, default/per-monster hands,
+door retry and route failure isolation are implemented. They are no longer
+correctly described as missing by the earlier October 5 lists.
+
+Remaining confirmed compatibility gaps:
+
+- Classic color-tolerance requirements (types 14–16), arbitrary loot expressions,
+  and third-party User actions cannot execute. The original-format editor retains
+  their fields and can save copies; activation reports incompatibility. Exact
+  palette requirements and supported computed/stat requirements do execute.
+- Enabled AutoFellowManagement, DoJiggle and random helper buffing lack adapters.
+  Fellowship vital recovery exists, but arbitrary non-fellow vital broadcasts and
+  full other-player dispel/drum assistance do not have equivalent runtime paths.
+- General crafting/ammunition manufacture and every VT assistance-item type are
+  not implemented. Supported pea splitting, consumables, mana and summon refills
+  do not constitute a general crafting system.
+- Streak selection exists, but does not reproduce VT's full streak-chain/HP
+  strategy. Equipment selection is not a demonstrated replica of every VT
+  hybrid, imbue and damage-efficiency ranking.
+- External multi-client/login queues, injected VVS/UI layouts, simulated key
+  commands and cross-client broadcasts still require their original integrations
+  or new adapters. Missing companion profiles, databases and template values
+  remain explicit import failures. `/og summon` and supported native command
+  conversions are already implemented; not every external command is missing.
+- Complete .NET expression/formatting/regex behavior remains broader than the
+  bounded adapters. Monster resistance and other-player equipment decisions also
+  depend on information actually supplied by the server.
+
+Validation so far: 27 plugin suites pass in
+`Saved/UCMBuffQueueHandsReview/salvage-final-tests.log`. The installed VT folder
+converts 224/225 files; the remaining `Unlimited_IBControl.met` requests external
+tools and unresolved template dependencies. The public meta collection converts
+52/91 files. All 88 public NAV files convert, and all 48 walk-only routes pass
+their synthetic full-cycle traversal after correcting the fixture's obsolete
+assumption that a +5m offset must join point one. The fixture now supplies an
+explicit visible entry; the independent nearest-point RouteJoin suite also passes.
+Routes with interactions are not counted as completed end-to-end runs. The new
+CombineSalvage adapter passes LegacyAdapters. These are conversion/test counts,
+including empty metas and companion files, not completed unattended quests.
+Corpus JSON and focused tests are saved
+in that review directory. Windows Editor compilation passed. Live hunts, server
+timing, VR comfort and Linux/Quest packaged execution remain unverified this pass.
+
 ## Current coverage — 2026-10-05
 
 Full parity remains incomplete. This section is the current status; the dated

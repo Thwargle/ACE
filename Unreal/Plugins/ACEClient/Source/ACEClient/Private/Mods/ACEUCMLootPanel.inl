@@ -312,6 +312,7 @@ void LootSettings()
     const FString Original=Str(P(),TEXT("utl_source"));
     if(!Original.IsEmpty())Add(Button(TEXT("View / edit original Classic UTL copy"),[this,Original](){PreviewLegacy(Original);if(LegacyDocument){LegacyName=TEXT("Loot_edited");LegacyRule.Reset();Page=TEXT("Legacy loot");Rebuild();}}));
     Slider(TEXT("loot_range"),TEXT("Corpse search range"),1,60,15,Accent,TEXT(" m"));
+    Add(Toggle(TEXT("salvage_inventory"),TEXT("Apply salvage rules to existing inventory"),TEXT("While UCM runs, destroys matching items in all packs using the active loot profile and an Ust. First matching rule wins. Skips equipped, retained, traded, tinkered and inscribed items; Keep/Skip rules protect items. Off by default.")));
     Add(Toggle(TEXT("salvage_combine"),TEXT("Combine partial salvage bags"),TEXT("Uses imported workmanship groups and value thresholds; consumes matching bags with an Ust.")));
     Add(Button(TEXT("Edit salvage combining groups"),[this](){EditingSalvage=true;SalvageMaterial=0;SalvageDraft.Reset();Rebuild();}));
     Add(Toggle(TEXT("loot_priority"),TEXT("Loot before combat"),TEXT("Finish nearby corpses before selecting another combat target.")));
@@ -461,7 +462,7 @@ void SalvagePanel()
     for(int32 Id=0;Id<=77;++Id)Menu->AddSlot().AutoHeight()[Button(Id?ACERetailObjectNames::GetMaterialTypeName(Id):TEXT("Default groups"),[this,Id](){SalvageMaterial=Id;SalvageDraft.Reset();FSlateApplication::Get().DismissAllMenus();Rebuild();})];
     Add(SNew(SComboButton).ButtonStyle(&Style()).ContentPadding(FMargin(12,9)).ButtonContent()[Text(SalvageMaterial?ACERetailObjectNames::GetMaterialTypeName(SalvageMaterial):TEXT("Default groups"),16)]
         .MenuContent()[SNew(SBox).MaxDesiredHeight(320)[SNew(SScrollBox)+SScrollBox::Slot()[Menu]]]);
-    Add(Text(TEXT("Workmanship groups: minimum / maximum"),16,Muted));
+    Add(Text(TEXT("Workmanship groups: minimum / maximum. Classic assigns gaps to the preceding group: 1-6 includes 6.99 until the next group starts at 7. Materials never mix."),16,Muted));
     const auto Ranges=SalvageDraft->GetArrayField(TEXT("ranges"));
     for(int32 Index=0;Index<Ranges.Num();++Index)
     {
