@@ -316,7 +316,8 @@ docker-compose.arm64
 **/Packaged/
 **/PackagedVR/
 **/Logs/
-**/Performance/
+/Unreal/**/Performance/
+/Quest/**/Performance/
 **/AndroidSDK/
 *.apk
 *.aab
@@ -347,6 +348,10 @@ log4net.config
 **/.ruff_cache/
 *.utrace
 *.ucache
+# Rebuildable DAT geometry caches, including ad-hoc test output.
+*.acpx
+*.aclb
+*.acec
 *.trx
 /Testing/
 
