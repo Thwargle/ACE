@@ -899,7 +899,10 @@ bool FACEDatTextureResolver::ResolveSurfaceRenderFlags(uint32 SurfaceId, FACEDat
 bool FACEDatTextureResolver::ResolveSurfaceWithAppearance(uint32 SurfaceId, int32 PartIndex, const FACEObjDesc* Appearance, FACEDatDecodedSurface& Out)
 {
 	++SurfaceResolveCount;
-	const bool bUseCache = Appearance == nullptr || !Appearance->HasVisualOverrides();
+	// Part/model replacements select geometry, not pixels. They must not force
+	// identical surfaces through high-resolution decompression for every limb.
+	// Texture changes on another part are likewise irrelevant here.
+	const bool bUseCache = !Appearance || !Appearance->HasSurfaceOverrides(PartIndex);
 	if (bUseCache)
 	{
 		if (const FACEDatDecodedSurface* Cached = SurfaceCache.Find(SurfaceId))

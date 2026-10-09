@@ -1,6 +1,8 @@
 #include "ACEParticleBatchComponent.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "HAL/IConsoleManager.h"
+#include "ACEParticleUpdateSubsystem.h"
+#include "Engine/World.h"
 
 static TAutoConsoleVariable<int32> CVarActiveParticlePrefix(TEXT("ace.Particles.ActivePrefix"), 1,
 	TEXT("Upload/draw only live particle slots. Set 0 to compare the reserved-capacity path."));
@@ -15,6 +17,9 @@ void UACEParticleBatchComponent::InitializeParticles(int32 Capacity)
 	{
 		const FProcMeshSection Original = *GetProcMeshSection(S);
 		auto& Out = Sections[S]; Out.Source = Original.ProcVertexBuffer;
+		Out.bUniformNormal=!Out.Source.IsEmpty();
+		for(int32 V=1;V<Out.Source.Num();++V)
+			Out.bUniformNormal &= Out.Source[V].Normal==Out.Source[0].Normal;
 		Out.IndicesPerParticle = Original.ProcIndexBuffer.Num();
 		const int32 N=Out.Source.Num(), Count=N*MaxParticles;
 		Out.Positions.SetNumZeroed(Count); Out.Normals.SetNumZeroed(Count);
@@ -56,10 +61,33 @@ void UACEParticleBatchComponent::ClearParticles()
 void UACEParticleBatchComponent::FlushParticles()
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_ParticleBatchFlush);
+	if(!bDirty && bLastFlushedUseActivePrefix==(CVarActiveParticlePrefix.GetValueOnGameThread()!=0)) return;
+	if(auto* World=GetWorld(); World && IsRegistered())
+		if(auto* Updates=World->GetSubsystem<UACEParticleUpdateSubsystem>(); Updates && Updates->Queue(this)) return;
+	if(!BeginParticleFlush()) return;
+	PrepareParticleVertices();
+	SubmitParticleVertices();
+}
+
+bool UACEParticleBatchComponent::BeginParticleFlush()
+{
 	const bool bUseActivePrefix = CVarActiveParticlePrefix.GetValueOnGameThread() != 0;
-	if(!bDirty && bLastFlushedUseActivePrefix == bUseActivePrefix) return;
+	if(!bDirty && bLastFlushedUseActivePrefix == bUseActivePrefix) return false;
 	bDirty=false;
 	bLastFlushedUseActivePrefix = bUseActivePrefix;
+	return true;
+}
+
+int64 UACEParticleBatchComponent::GetPendingVertexCount() const
+{
+	int64 Count=0;
+	for(const auto& Section:Sections) Count+=int64(Section.Source.Num())*FMath::Max(Transforms.Num(),LastFlushedParticleCount);
+	return Count;
+}
+
+void UACEParticleBatchComponent::PrepareParticleVertices()
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_PrepareParticleVertices);
 	// Inactive slots start degenerate. Only slots that were active in the last
 	// upload need clearing; a sparse emitter need not transform its full capacity.
 	const int32 UpdateCount=FMath::Max(Transforms.Num(),LastFlushedParticleCount);
@@ -70,11 +98,15 @@ void UACEParticleBatchComponent::FlushParticles()
 		{
 			const bool Active=Transforms.IsValidIndex(P);
 			const uint8 Alpha=Active ? uint8(FMath::Clamp(FMath::RoundToInt(Opacities[P]*255.f),0,255)) : 0;
+			// Sprite/card vertices share a face normal. Rotate it once per particle,
+			// while preserving distinct normals on authored three-dimensional meshes.
+			const FVector Normal=Active && Out.bUniformNormal
+				? Transforms[P].TransformVectorNoScale(Out.Source[0].Normal) : FVector::UpVector;
 			for(int32 I=0; I<N; ++I)
 			{
 				const int32 V=P*N+I;
 				Out.Positions[V]=Active ? Transforms[P].TransformPosition(Out.Source[I].Position) : FVector::ZeroVector;
-				Out.Normals[V]=Active ? Transforms[P].TransformVectorNoScale(Out.Source[I].Normal) : FVector::UpVector;
+				Out.Normals[V]=Active && !Out.bUniformNormal ? Transforms[P].TransformVectorNoScale(Out.Source[I].Normal) : Normal;
 				Out.Colors[V]=Out.Source[I].Color;
 				// The unbatched particle shader takes opacity from the material
 				// surface/texture and OpacityMul, not DAT vertex-color alpha.
@@ -83,9 +115,18 @@ void UACEParticleBatchComponent::FlushParticles()
 				Out.Colors[V].A=Alpha;
 			}
 		}
+	}
+}
+
+void UACEParticleBatchComponent::SubmitParticleVertices()
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_SubmitParticleVertices);
+	for(int32 S=0; S<Sections.Num(); ++S)
+	{
+		auto& Out=Sections[S]; const int32 N=Out.Source.Num();
 		// UVs and tangents never change after initialization.
 		const int32 ActiveVertices = Transforms.Num() * N;
-		if (!bUseActivePrefix ||
+		if (!bLastFlushedUseActivePrefix ||
 			!UpdateMeshSectionActivePrefix(S,
 				MakeArrayView(Out.Positions.GetData(), ActiveVertices),
 				MakeArrayView(Out.Normals.GetData(), ActiveVertices),

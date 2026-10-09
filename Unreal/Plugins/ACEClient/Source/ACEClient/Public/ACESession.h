@@ -66,6 +66,7 @@ DECLARE_MULTICAST_DELEGATE_FourParams(FACEOnCombatFeedback, const FString&, int3
  */
 class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 {
+	friend class FACECollisionSizingTest;
 	friend class FACEVRProtocolTest;
 	friend class FACEPortalLifetimeTest;
 	friend class FACEDesktopHighlightTest;

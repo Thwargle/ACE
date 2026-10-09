@@ -17,6 +17,11 @@ public:
 	int32 GetParticleCount() const { return Transforms.Num(); }
 	void FlushParticles();
 private:
+	friend class UACEParticleUpdateSubsystem;
+	bool BeginParticleFlush();
+	int64 GetPendingVertexCount() const;
+	void PrepareParticleVertices();
+	void SubmitParticleVertices();
 	struct FSection
 	{
 		TArray<FProcMeshVertex> Source;
@@ -25,6 +30,7 @@ private:
 		TArray<FColor> Colors;
 		TArray<FProcMeshTangent> Tangents;
 		int32 IndicesPerParticle = 0;
+		bool bUniformNormal = false;
 	};
 	TArray<FSection> Sections;
 	TArray<FTransform> Transforms;
@@ -33,4 +39,5 @@ private:
 	int32 LastFlushedParticleCount = 0;
 	bool bLastFlushedUseActivePrefix = true;
 	bool bDirty = false;
+	bool bFlushQueued = false;
 };

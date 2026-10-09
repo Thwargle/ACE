@@ -275,6 +275,7 @@ protected:
 	float MovementHalfHeight = 90.f;
 	float MovementSweepRadius = 25.f;
 	float MovementBodyOffsetZ = 90.f;
+	TArray<FVector4f> MovementSpheresAc;
 	float MovementStepDownHeight = 50.f;
 	float MovementStepHeight = 50.f;
 	bool bHaveVRPresentation = false;

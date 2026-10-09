@@ -192,10 +192,13 @@ bool FACEVRStairCeilingTest::RunTest(const FString&)
     if(I>2)
     {
      FHitResult Pen;FCollisionQueryParams Q(SCENE_QUERY_STAT(SamsurBody),true,Pawn);
-     if(World->SweepSingleByChannel(Pen,At,At+FVector(0,0,.01),FQuat::Identity,ECC_Pawn,FCollisionShape::MakeCapsule(48,90.75),Q) && Pen.bStartPenetrating)
+     if(ACEBodySweep::SweepBody(*World,Pen,At,At+FVector(0,0,.01),FCollisionShape::MakeCapsule(48,90.75),Q) && Pen.bStartPenetrating)
      {
       if(Pen.PenetrationDepth>WorstOverlap && Pen.PenetrationDepth>1.f)
-       AddInfo(FString::Printf(TEXT("Samsur overlap slope=%d dt=%.4f turn=%.0f frame=%d position=%s normal=%s depth=%.3f"),S,Dt,Turn,I,*At.ToString(),*Pen.ImpactNormal.ToString(),Pen.PenetrationDepth));
+      {
+       FVector SampleNormal;Dat->SampleOutdoorGroundZ(At.X,At.Y,100,Z,&SampleNormal);
+       AddInfo(FString::Printf(TEXT("Samsur overlap slope=%d dt=%.4f turn=%.0f frame=%d position=%s normal=%s depth=%.3f clearance=%.3f terrain=%s air=%d"),S,Dt,Turn,I,*At.ToString(),*Pen.ImpactNormal.ToString(),Pen.PenetrationDepth,At.Z-90.75-Z,*SampleNormal.ToString(),PC->bJumpAirborne));
+      }
       WorstOverlap=FMath::Max(WorstOverlap,double(Pen.PenetrationDepth));
      }
     }
@@ -346,6 +349,10 @@ bool FACEVRStairCeilingTest::RunTest(const FString&)
     VR->bActive=Active;
     FACEPosition Pose;Pose.CellId=WetBlock|1;Pose.SetLocationFromUnreal(Water+FVector(0,0,Depth),100);Pose.NormalizeOutdoorLandblock();
     Session->SetLocalPosition(Pose);PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;PC->bJumpAirborne=false;PC->StepHoldSeconds=0;PC->bLocalPredicting=true;
+    // Each water fixture begins at rest. Retained landing momentum from the
+    // cliff case otherwise carries the first sample onto a different bank.
+    PC->LandingWorldAceVelocity=FVector::ZeroVector;PC->LandingRootTrack.Reset();
+    PC->JumpWorldAceVelocity=FVector::ZeroVector;PC->JumpLocalAceVelocity=FVector::ZeroVector;
     Pawn->SetActorLocation(Pose.ToUnrealLocation(100)+FVector(0,0,90.75));VR->MoveStick=FVector2D::ZeroVector;
     for(int32 I=0;I<FMath::CeilToInt(.5f/Dt);++I){VR->Head->SetWorldLocation(Pawn->GetActorLocation()+FVector(0,0,84.25));PC->PlayerTick(Dt);}
     const float FeetZ=Pawn->GetActorLocation().Z-90.75;

@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "ACEParticleBatchComponent.h"
+#include "ACEParticleUpdateSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Engine/Engine.h"
@@ -45,6 +46,13 @@ bool FACEParticleBatchTest::RunTest(const FString&)
  TestTrue(TEXT("Fallback clears all inactive slots"),Section->ProcVertexBuffer[3].Position.IsNearlyZero() && Section->ProcVertexBuffer[3].Color.A==0);
  Prefix->Set(1,ECVF_SetByCode);Batch->FlushParticles();
  TestEqual(TEXT("Unchanged particles resume active-prefix rendering when the mode changes"),Section->GetRenderIndexCount(),3);
+ // Three-dimensional particle meshes must retain their individual normals.
+ auto* Solid=NewObject<UACEParticleBatchComponent>();
+ const TArray<FVector> Normals={FVector::ForwardVector,FVector::RightVector,FVector::UpVector};
+ Solid->CreateMeshSection(0,Vertices,{0,1,2},Normals,{},{},{},false);Solid->InitializeParticles(2);
+ const FTransform Turn(FRotator(20,35,10));Solid->AddParticle(Turn,1);Solid->FlushParticles();
+ for(int32 I=0;I<3;++I)TestTrue(TEXT("Nonuniform authored normals retain the exact transform"),
+  Solid->GetProcMeshSection(0)->ProcVertexBuffer[I].Normal.Equals(Turn.TransformVectorNoScale(Normals[I]),1.e-6));
  return true;
 }
 
@@ -54,6 +62,9 @@ bool FACEParticlePrefixRenderTest::RunTest(const FString&)
 {
  if (!FApp::CanEverRender()) { AddError(TEXT("This test needs an active renderer")); return false; }
  auto* Prefix=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Particles.ActivePrefix"));
+ auto* Parallel=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Particles.ParallelUpdates"));
+ const int32 PreviousParallel=Parallel->GetInt();Parallel->Set(1,ECVF_SetByCode);
+ ON_SCOPE_EXIT { Parallel->Set(PreviousParallel,ECVF_SetByCode); };
  const int32 Previous=Prefix->GetInt();
  ON_SCOPE_EXIT { Prefix->Set(Previous,ECVF_SetByCode); };
  const auto Values=UWorld::InitializationValues().AllowAudioPlayback(false).RequiresHitProxies(false)
@@ -93,11 +104,14 @@ bool FACEParticlePrefixRenderTest::RunTest(const FString&)
   Material->SetScalarParameterValue(TEXT("OpacityMul"),1.f);Material->SetScalarParameterValue(TEXT("EmissiveStrength"),1.f);
   Batch->SetMaterial(0,Material);
   TArray<TArray<FLinearColor>> Reference;
-  for(int32 Mode:{0,1})
+  for(int32 Mode:{0,1,2})
   {
-   Prefix->Set(Mode,ECVF_SetByCode);Batch->ClearParticles();Batch->FlushParticles();
+   Prefix->Set(Mode==0?0:1,ECVF_SetByCode);Batch->ClearParticles();Batch->FlushParticles();
+   // Also exercise the real end-of-tick queue and require identical pixels.
+   World->bInTick=Mode==2;
    int32 Frame=0;
    auto Compare=[&](const TCHAR* Stage) {
+    World->GetSubsystem<UACEParticleUpdateSubsystem>()->FlushPending();
     const auto Pixels=Read();TestEqual(TEXT("Capture size"),Pixels.Num(),128*128);
     int32 Visible=0;for(const auto& P:Pixels)Visible+=P.GetMax()>.03f && (P.R+P.G+P.B)>.03f;
     if(Frame==2)TestEqual(TEXT("Empty batch is invisible"),Visible,0);
@@ -119,6 +133,7 @@ bool FACEParticlePrefixRenderTest::RunTest(const FString&)
    for(int32 I=0;I<64;++I)Batch->AddParticle(FTransform(FVector(100,(I-2)*36,0)),.7f);
    Batch->FlushParticles();Compare(TEXT("full refill"));
    Batch->RemoveParticle(2);Batch->FlushParticles();Batch->MarkRenderStateDirty();Compare(TEXT("proxy recreation"));
+   World->bInTick=false;
   }
  }
  return true;

@@ -11,6 +11,52 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailNetworkTest, "ACE.RetailParity.Networ
 bool FACERetailNetworkTest::RunTest(const FString& Parameters)
 {
     FACESession ChatSession;
+    {
+        FACESession Actions;Actions.PlayerGuid=1;
+        FACEWorldObject Remote;Remote.Guid=2;Remote.bHasPhysicsTimestamps=true;
+        Remote.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]=3;Actions.WorldObjects.Add(2,Remote);
+        FACEObjectMotionState Seen;int32 Received=0;
+        Actions.OnMotionUpdate.AddLambda([&](int32,const FACEObjectMotionState& M){Seen=M;++Received;});
+        auto Packet=[&](uint16 Movement,uint16 First,uint16 Second,int32 Truncate=0)
+        {
+            FACEBinaryWriter W;W.WriteUInt32(2);W.WriteUInt16(3);W.WriteUInt16(Movement);
+            W.WriteUInt16(0);W.WriteUInt8(0);W.Align();
+            W.WriteUInt8(0);W.WriteUInt8(0);W.WriteUInt16(0x3D);
+            W.WriteUInt32(2u<<7); // Two MotionItems, with default Ready locomotion.
+            W.WriteUInt16(ACEMotion::DeadCommandU16);W.WriteUInt16(First);W.WriteFloat(.75f);
+            W.WriteUInt16(ACEMotion::DeadCommandU16);W.WriteUInt16(Second);W.WriteFloat(1.5f);W.Align();
+            FACEBinaryReader R(W.GetData().GetData(),W.GetData().Num()-Truncate);Actions.HandleUpdateMotion(R);
+        };
+        // Use a corpse role to avoid the living-creature death guard: this test
+        // isolates command sequencing rather than death-state transitions.
+        Actions.WorldObjects[2].ItemType=ACEItemType::Container;
+        Actions.WorldObjects[2].ObjectDescriptionFlags=ACEObjectDescFlag::Corpse;
+        Packet(1,0x7FFE,0x7FFF);
+        TestEqual(TEXT("First wire action keeps its own speed"),Seen.ActionSpeed,.75f);
+        TestEqual(TEXT("Follow-up wire action keeps its independent speed"),Seen.FollowupSpeed(0),1.5f);
+        TestEqual(TEXT("Both first-time actions are delivered"),Seen.ActionFollowups.Num(),1);
+        Packet(2,0x7FFE,0x7FFF);
+        TestEqual(TEXT("A newer movement packet does not replay old actions"),Seen.ActionCommand,0);
+        TestTrue(TEXT("Repeated actions leave the follow-up queue empty"),Seen.ActionFollowups.IsEmpty());
+        Packet(3,0x7FFF,0);
+        TestEqual(TEXT("Action stamp rollover keeps the new action"),Seen.ActionSpeed,1.5f);
+        TestTrue(TEXT("Rollover does not replay the preceding action"),Seen.ActionFollowups.IsEmpty());
+        const int32 Before=Received;
+        Packet(4,1,2,1);
+        TestEqual(TEXT("Truncated motion cannot consume an action stamp"),Actions.WorldObjects[2].ReceivedActionStamp,uint16(0));
+        TestEqual(TEXT("Truncated action list is never presented"),Received,Before);
+        Packet(4,1,2);
+        TestEqual(TEXT("Valid retransmission delivers both actions"),Seen.ActionFollowups.Num(),1);
+        Remote=Actions.WorldObjects[2];Remote.bHasReceivedActionStamp=false;Remote.ReceivedActionStamp=0;
+        Actions.UpsertWorldObject(Remote);
+        TestEqual(TEXT("Same-incarnation description retains action history"),Actions.WorldObjects[2].ReceivedActionStamp,uint16(2));
+        Packet(5,1,2);
+        TestEqual(TEXT("Description refresh cannot replay finished actions"),Seen.ActionCommand,0);
+        Actions.PlayerGuid=2;
+        Packet(6,0x8003,4);
+        TestEqual(TEXT("Owner skips autonomous actions within a server-controlled update"),Seen.ActionSpeed,1.5f);
+        TestTrue(TEXT("Owner does not queue the autonomous action again"),Seen.ActionFollowups.IsEmpty());
+    }
     FACESession DeathSession;
     DeathSession.PlayerGuid=1;
     DeathSession.State=EACESessionState::InWorld;
@@ -612,6 +658,34 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     FACEBinaryReader Report(PositionPacket->Payload); Report.Skip(60);
     TestEqual(TEXT("AutonomousPosition carries the current incarnation"),Report.ReadUInt16(),uint16(3));
     TestEqual(TEXT("AutonomousPosition carries accepted server control"),Report.ReadUInt16(),uint16(6));
+    for(bool Contact:{false,true})
+    {
+        Sender.SendMoveToState(1,0,0,true,Contact,false);
+        Sender.SendStopMovement();
+        const auto* Stop=Sender.CachedC2SPackets.Find(Sender.NextPacketSequence-1);
+        if(!TestNotNull(TEXT("Movement cancellation produces a packet"),Stop))continue;
+        FACEBinaryReader R(Stop->Payload);R.Skip(24);
+        TestEqual(TEXT("Cancellation uses retail MoveToState action"),R.ReadUInt32(),ACEGameAction::MoveToState);
+        TestEqual(TEXT("Cancellation clears the movement axes"),R.ReadUInt32(),uint32(ACERawMotionFlags::CurrentHoldKey|ACERawMotionFlags::CurrentStyle));
+        R.Skip(8+32); // Hold/style and current position.
+        TestEqual(TEXT("Stop retains the character incarnation"),R.ReadUInt16(),Sender.InstanceSeq);
+        TestEqual(TEXT("Stop retains the server-control epoch"),R.ReadUInt16(),Sender.ServerControlSeq);
+        TestEqual(TEXT("Stop retains the teleport epoch"),R.ReadUInt16(),Sender.TeleportSeq);
+        TestEqual(TEXT("Stop retains the forced-position epoch"),R.ReadUInt16(),Sender.ForcePositionSeq);
+        TestEqual(TEXT("Stopping input never invents ground contact"),R.ReadUInt8(),uint8(Contact));
+        TestEqual(TEXT("Future position reports preserve the physical contact state"),Sender.bAutoPosContact,Contact);
+    }
+    const uint32 BeforeLogout=Sender.NextPacketSequence;
+    Sender.bAutoPosContact=false;Sender.RequestLogOff();
+    bool LogoutPosition=false;
+    for(const auto& Pair:Sender.CachedC2SPackets)
+    {
+        if(Pair.Key<BeforeLogout||Pair.Value.Payload.Num()<28)continue;
+        FACEBinaryReader R(Pair.Value.Payload);R.Skip(24);
+        if(R.ReadUInt32()==ACEGameAction::AutonomousPosition)
+        {R.Skip(40);TestEqual(TEXT("Logout's final position does not manufacture a landing"),R.ReadUInt8(),uint8(0));LogoutPosition=true;}
+    }
+    TestTrue(TEXT("Logout flushes its final position"),LogoutPosition);
     Sender.ClearWorldState();
     TestEqual(TEXT("Relog does not reuse another character's server control"),Sender.ServerControlSeq,uint16(0));
     Receiver->Close(); Sockets->DestroySocket(Receiver);

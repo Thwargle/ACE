@@ -1,5 +1,6 @@
 #include "ACEHoverTooltipWidget.h"
 #include "UI/ACERetailTextBlock.h"
+#include "UI/ACERetailTextEntry.h"
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACERetailObjectNames.h"
 #include "UI/ACERetailAllegianceTitle.h"
@@ -155,34 +156,20 @@ void UACEUIGameplayBinder::EnsureSocialEntryBoxes()
 		return;
 	}
 	UWidgetTree* Tree = Canvas->WidgetTree;
-	auto MakeEntry = [&](TObjectPtr<UEditableTextBox>& Box, const FString& Hint)
+	auto MakeEntry = [&](TObjectPtr<UACERetailTextEntry>& Box)
 	{
 		if (Box)
 		{
 			return;
 		}
-		Box = Tree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass());
+		Box = Tree->ConstructWidget<UACERetailTextEntry>();
 		Box->SetVisibility(ESlateVisibility::Collapsed);
-		Box->SetHintText(FText::FromString(Hint));
-		// Mirror ChatEntry: replace brushes + set a real font once. Mutating DrawAs only
-		// (or round-tripping GetWidgetStyle every refresh) left a bad FSlateFontInfo and
-		// crashed Slate Prepass when FellowshipNameEntry became visible.
-		FEditableTextBoxStyle Style = Box->GetWidgetStyle();
-		FSlateBrush Clear;
-		Clear.DrawAs = ESlateBrushDrawType::NoDrawType;
-		Style.BackgroundImageNormal = Clear;
-		Style.BackgroundImageHovered = Clear;
-		Style.BackgroundImageFocused = Clear;
-		Style.BackgroundImageReadOnly = Clear;
-		Style.Padding = FMargin(2.f, 0.f);
-		Style.TextStyle.SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 9));
-		Style.TextStyle.ColorAndOpacity = FSlateColor(SocialWhite);
-		Box->SetWidgetStyle(Style);
-		Box->SetClearKeyboardFocusOnCommit(true);
+		Box->ContentMargins=FMargin(2.f,0.f);
+		Box->TextColor=SocialWhite;
 	};
-	MakeEntry(FellowshipNameEntry, TEXT("Fellowship name"));
-	MakeEntry(FriendNameEntry, TEXT("Friend name"));
-	MakeEntry(SquelchNameEntry, TEXT("Character name"));
+	MakeEntry(FellowshipNameEntry);
+	MakeEntry(FriendNameEntry);
+	MakeEntry(SquelchNameEntry);
 	if (FriendNameEntry && !bSocialEntriesBound)
 	{
 		FellowshipNameEntry->OnTextChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleFellowshipNameChanged);
@@ -574,7 +561,7 @@ void UACEUIGameplayBinder::RefreshFellowshipOverlays()
 	Manager->SetElementVisibleByName(TEXT("NotInAFellowshipFrame"), !Info.bValid);
 	Manager->SetElementVisibleByName(TEXT("FellowshipFrame"), Info.bValid);
 
-	auto PlaceSocialEntry = [&](UEditableTextBox* Box, const FString& ElementName)
+	auto PlaceSocialEntry = [&](UACERetailTextEntry* Box, const FString& ElementName)
 	{
 		if (!Box)
 		{
@@ -591,8 +578,7 @@ void UACEUIGameplayBinder::RefreshFellowshipOverlays()
 			Box->SetVisibility(ESlateVisibility::Collapsed);
 			return;
 		}
-		// Style is set once in EnsureSocialEntryBoxes — do not Get/SetWidgetStyle here
-		// (corrupts FSlateFontInfo and crashes Slate Prepass on show).
+		Box->SetRetailElement(Canvas->GetResourceResolver(),EntryEl);
 		Box->SetVisibility(ESlateVisibility::Visible);
 		Canvas->PlaceWidgetAtElement(Box, EntryEl, SocialOverlayZ + 5, FMargin(3.f, 1.f));
 	};
@@ -716,6 +702,7 @@ void UACEUIGameplayBinder::RefreshFriendsOverlays()
 		if (EntryEl.IsValid())
 		{
 			FriendNameEntry->SetVisibility(ESlateVisibility::Visible);
+			FriendNameEntry->SetRetailElement(Canvas->GetResourceResolver(),EntryEl);
 			Canvas->PlaceWidgetAtElement(FriendNameEntry, EntryEl, SocialOverlayZ + 5, FMargin(3.f, 1.f));
 		}
 	}
@@ -817,6 +804,7 @@ void UACEUIGameplayBinder::RefreshSquelchOverlays()
 		if (EntryEl.IsValid())
 		{
 			SquelchNameEntry->SetVisibility(ESlateVisibility::Visible);
+			SquelchNameEntry->SetRetailElement(Canvas->GetResourceResolver(),EntryEl);
 			Canvas->PlaceWidgetAtElement(SquelchNameEntry, EntryEl, SocialOverlayZ + 5, FMargin(3.f, 1.f));
 		}
 	}
@@ -1039,7 +1027,8 @@ void UACEUIGameplayBinder::RefreshQuestOverlays()
 {
 	for (UTextBlock* L : QuestTabLabels) if (L) L->SetVisibility(ESlateVisibility::Collapsed);
 	for (UTextBlock* L : JournalLabels) if (L) L->SetVisibility(ESlateVisibility::Collapsed);
-	for (UEditableTextBox* E : JournalEntries) if (E) E->SetVisibility(ESlateVisibility::Collapsed);
+	for (const auto& Row : JournalRowElements) if (Row) Row->bVisible=false;
+	for (UACERetailTextEntry* E : JournalEntries) if (E) E->SetVisibility(ESlateVisibility::Collapsed);
 	if (JournalNotes) JournalNotes->SetVisibility(ESlateVisibility::Collapsed);
 	if (ActivePanelPage != TEXT("QuestManagementPanel_Field") || !Client || !Manager || !Canvas
 		|| !Canvas->WidgetTree)

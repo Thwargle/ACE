@@ -84,6 +84,13 @@ public:
 	}
 
 	bool ResolveSurface(uint32 SurfaceId, FACEDatDecodedSurface& Out);
+	/** Borrow default decoded pixels for immediate sampling. Invalid after any resolver
+	 * mutation; do not retain across another resolve, trim, or invalidation. */
+	const FACEDatDecodedSurface* FindCachedSurface(uint32 SurfaceId) const
+	{
+		const FACEDatDecodedSurface* Surface = SurfaceCache.Find(SurfaceId);
+		return Surface && (Surface->bHasPixels || Surface->bIsSolid) ? Surface : nullptr;
+	}
 	/** Classify the default surface without copying cached high-resolution pixels.
 	 * Uses SurfaceCache directly so DAT/cache invalidation also invalidates these flags. */
 	bool ResolveSurfaceRenderFlags(uint32 SurfaceId, FACEDatSurfaceRenderFlags& Out);

@@ -85,6 +85,8 @@ public:
 	bool LoadGfxObj(uint32 GfxObjId, FACEDatGfxObj& Out);
 
 private:
+	/** Internal build borrows immutable decoded geometry; the public copy API remains available. */
+	const FACEDatGfxObj* FindOrLoadGfxObj(uint32 GfxObjId);
 	bool BuildGfxObjOnly(uint32 GfxObjId, const FACEObjDesc& Appearance, float WorldScale, FACEBuiltSetupMesh& OutMesh);
 	void AppendGfxObjLocal(const FACEDatGfxObj& Gfx, int32 PartIndex, const FACEObjDesc* Appearance, float WorldScale, FACEBuiltSetupPart& OutPart);
 	/** Emit invisible collision-only sections from GfxObj PhysicsPolygons (retail HasPhysics). */

@@ -13,6 +13,7 @@ void ACEPolygonMeshBuilder::Append(const TMap<uint16, FACEDatPolygon>& Polygons,
     // the same texture/palette for every polygon and every side.
     TMap<uint32, FACEDatDecodedSurface> PartSurfaces;
     TSet<uint32> FailedSurfaces;
+    const bool bDefaultSurface = !Appearance || !Appearance->HasSurfaceOverrides(PartIndex);
     for (const auto& Pair : Polygons)
     {
         const FACEDatPolygon& Poly = Pair.Value;
@@ -35,7 +36,12 @@ void ACEPolygonMeshBuilder::Append(const TMap<uint16, FACEDatPolygon>& Polygons,
                 bBack && bSeparateBack ? EACEStipplingType::Negative : EACEStipplingType::Positive);
             const uint32 SectionKey = FACEDatTextureResolver::WorldTextureKey(SurfaceId, bWrapTexture);
             const TArray<uint8>& UVIndices = bBack && bSeparateBack ? Poly.NegUVIndices : Poly.PosUVIndices;
-            const FACEDatDecodedSurface* Decoded = PartSurfaces.Find(SurfaceId);
+            // Borrow default pixels instead of copying a high-resolution texture for
+            // each limb. Reacquire for each side: resolving another surface may move
+            // the resolver's map storage. No resolver mutation occurs while sampling.
+            const FACEDatDecodedSurface* Decoded = Textures && bDefaultSurface
+                ? Textures->FindCachedSurface(SurfaceId) : nullptr;
+            if (!Decoded) Decoded = PartSurfaces.Find(SurfaceId);
             if (!Decoded && Textures && !FailedSurfaces.Contains(SurfaceId))
             {
                 FACEDatDecodedSurface Surface;

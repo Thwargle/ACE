@@ -1238,6 +1238,7 @@ void UACEDatSubsystem::ClearLoadedState()
 		TextureResolver->ReleaseTextureObjects();
 	}
 	SetupMeshCache.Reset();
+	ClearAppearanceMeshCache();
 	LandblockCache.Reset();
 	LandblockInfoCache.Reset();
 	DoorwayGeometryCache.Reset();
@@ -1609,6 +1610,7 @@ bool UACEDatSubsystem::EnsureLoaded()
 		if (AppliedSurfaceUnpackVersion != SurfaceUnpackVersion)
 		{
 			SetupMeshCache.Reset();
+			ClearAppearanceMeshCache();
 			SetupStaticMeshCache.Reset();
 			SetupStaticMeshSlotMaterials.Reset();
 			InvisibleCollisionMaterial = nullptr;
@@ -3698,6 +3700,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateResolvedMaterial(
 
 	const float ObjectOpacity = 1.f - FMath::Clamp(ObjectTranslucency, 0.f, 1.f);
 	const bool bObjectUsesAlpha = ObjectOpacity < (1.f - KINDA_SMALL_NUMBER);
+	const bool bSurfaceOverrides = Appearance.HasSurfaceOverrides(PartIndex);
 	// Multipart objects must retain authored alpha even without an ObjDesc
 	// override. The scenery material path deliberately has different depth
 	// heuristics for floors; using it for a newly created corpse made the same
@@ -3743,7 +3746,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateResolvedMaterial(
 	}
 
 	FACEDatSurfaceRenderFlags SurfaceFlags;
-	if (!Appearance.HasVisualOverrides() && !bObjectUsesAlpha && WrapAxes == 0
+	if (!bSurfaceOverrides && !bObjectUsesAlpha && WrapAxes == 0
 		&& TextureResolver->ResolveSurfaceRenderFlags(SurfaceId, SurfaceFlags)
 		&& !SurfaceFlags.bSurfaceTranslucent && SurfaceFlags.Translucency <= KINDA_SMALL_NUMBER
 		&& !(SurfaceFlags.bIsSolid && SurfaceFlags.SolidAlpha < .98f))
@@ -3755,7 +3758,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateResolvedMaterial(
 		return Opaque; // Opaque models still share the existing material instance.
 	}
 	FACEDatDecodedSurface Decoded;
-	const FACEObjDesc* AppearancePtr = Appearance.HasVisualOverrides() ? &Appearance : nullptr;
+	const FACEObjDesc* AppearancePtr = bSurfaceOverrides ? &Appearance : nullptr;
 	if (!TextureResolver->ResolveSurfaceWithAppearance(SurfaceId, PartIndex, AppearancePtr, Decoded))
 	{
 		return GetOrCreateTexturedMaterial(SurfaceId);
@@ -4538,24 +4541,83 @@ UStaticMesh* UACEDatSubsystem::GetOrCreateParticleStaticMesh(uint32 GfxObjId, fl
 	return GetOrCreateSetupStaticMesh(GfxObjId, WorldScale, /*bEnableCollision*/ false, /*PlacementId*/ 0, /*bParticleGfx*/ true);
 }
 
+namespace
+{
+ bool SameAppearance(const FACEObjDesc& A, const FACEObjDesc& B)
+ {
+  if (A.PaletteBaseId != B.PaletteBaseId || A.SubPalettes.Num() != B.SubPalettes.Num()
+   || A.TextureChanges.Num() != B.TextureChanges.Num() || A.AnimPartChanges.Num() != B.AnimPartChanges.Num()) return false;
+  for (int32 I=0; I<A.SubPalettes.Num(); ++I)
+   if (A.SubPalettes[I].SubPaletteId != B.SubPalettes[I].SubPaletteId || A.SubPalettes[I].Offset != B.SubPalettes[I].Offset
+    || A.SubPalettes[I].NumColors != B.SubPalettes[I].NumColors) return false;
+  for (int32 I=0; I<A.TextureChanges.Num(); ++I)
+   if (A.TextureChanges[I].PartIndex != B.TextureChanges[I].PartIndex || A.TextureChanges[I].OldTexture != B.TextureChanges[I].OldTexture
+    || A.TextureChanges[I].NewTexture != B.TextureChanges[I].NewTexture) return false;
+  for (int32 I=0; I<A.AnimPartChanges.Num(); ++I)
+   if (A.AnimPartChanges[I].PartIndex != B.AnimPartChanges[I].PartIndex || A.AnimPartChanges[I].PartId != B.AnimPartChanges[I].PartId) return false;
+  return true;
+ }
+ SIZE_T AppearanceMeshBytes(const FACEBuiltSetupMesh& Mesh, const FACEObjDesc& Appearance)
+ {
+  SIZE_T Bytes=sizeof(Mesh)+Mesh.Parts.GetAllocatedSize()+Appearance.SubPalettes.GetAllocatedSize()
+   +Appearance.TextureChanges.GetAllocatedSize()+Appearance.AnimPartChanges.GetAllocatedSize();
+  for (const auto& Part : Mesh.Parts)
+  {
+   Bytes+=Part.Sections.GetAllocatedSize()+Part.Portals.GetAllocatedSize();
+   for (const auto& Portal : Part.Portals) Bytes+=Portal.Vertices.GetAllocatedSize();
+   for (const auto& Section : Part.Sections)
+    Bytes+=Section.Vertices.GetAllocatedSize()+Section.Triangles.GetAllocatedSize()+Section.Normals.GetAllocatedSize()
+     +Section.UVs.GetAllocatedSize()+Section.VertexColors.GetAllocatedSize();
+  }
+  return Bytes;
+ }
+}
+
+TSharedPtr<const FACEBuiltSetupMesh> UACEDatSubsystem::GetOrBuildSetupAppearanceShared(uint32 SetupId,
+ const FACEObjDesc& Appearance, float WorldScale, int32 PlacementId)
+{
+ if (!EnsureLoaded() || !Builder || SetupId == 0) return nullptr;
+ if (!Appearance.HasVisualOverrides()) return GetOrBuildSetupMeshShared(SetupId, WorldScale, PlacementId);
+ // ObjDesc hashes are accelerators, not identity: compare every field on a hit.
+ const uint64 Key=MakeSetupCacheKey(SetupId, WorldScale, PlacementId) ^ Appearance.GetContentHash();
+ if (auto* Entry=AppearanceMeshCache.Find(Key))
+ {
+  if (Entry->SetupId==SetupId && Entry->WorldScale==WorldScale && Entry->PlacementId==PlacementId
+   && SameAppearance(Entry->Appearance,Appearance))
+  {
+   Entry->LastUse=++AppearanceMeshUse;
+   return Entry->Mesh;
+  }
+  AppearanceMeshCacheBytes-=Entry->Bytes;
+  AppearanceMeshCache.Remove(Key);
+ }
+ FACEBuiltSetupMesh Built;
+ if (!Builder->BuildSetupWithAppearance(SetupId,Appearance,WorldScale,Built,PlacementId)) return nullptr;
+ auto Mesh=MakeShared<FACEBuiltSetupMesh>(MoveTemp(Built));
+ const SIZE_T Bytes=AppearanceMeshBytes(*Mesh,Appearance)+sizeof(FAppearanceMeshEntry);
+ constexpr SIZE_T Budget=PLATFORM_ANDROID ? 8*1024*1024 : 32*1024*1024;
+ // Unusually large custom models still render; they simply bypass retention.
+ if (Bytes>Budget) return Mesh;
+ while (AppearanceMeshCache.Num()>=128 || AppearanceMeshCacheBytes+Bytes>Budget)
+ {
+  uint64 OldestKey=0, OldestUse=MAX_uint64;
+  for (const auto& Pair : AppearanceMeshCache)
+   if (Pair.Value.LastUse<OldestUse) { OldestUse=Pair.Value.LastUse;OldestKey=Pair.Key; }
+  AppearanceMeshCacheBytes-=AppearanceMeshCache.FindChecked(OldestKey).Bytes;
+  AppearanceMeshCache.Remove(OldestKey);
+ }
+ FAppearanceMeshEntry Entry;
+ Entry.SetupId=SetupId;Entry.WorldScale=WorldScale;Entry.PlacementId=PlacementId;Entry.Appearance=Appearance;
+ Entry.Mesh=Mesh;Entry.LastUse=++AppearanceMeshUse;Entry.Bytes=Bytes;
+ AppearanceMeshCache.Add(Key,MoveTemp(Entry));AppearanceMeshCacheBytes+=Bytes;
+ return Mesh;
+}
+
 bool UACEDatSubsystem::BuildSetupAppearance(uint32 SetupId, const FACEObjDesc& Appearance, float WorldScale, FACEBuiltSetupMesh& OutMesh, int32 PlacementId)
 {
-	OutMesh = FACEBuiltSetupMesh();
-	if (!EnsureLoaded() || !Builder || SetupId == 0)
-	{
-		return false;
-	}
-	if (!Appearance.HasVisualOverrides())
-	{
-		const FACEBuiltSetupMesh* Cached = GetOrBuildSetupMesh(SetupId, WorldScale, PlacementId);
-		if (!Cached)
-		{
-			return false;
-		}
-		OutMesh = *Cached;
-		return OutMesh.Parts.Num() > 0;
-	}
-	return Builder->BuildSetupWithAppearance(SetupId, Appearance, WorldScale, OutMesh, PlacementId);
+ const auto Mesh=GetOrBuildSetupAppearanceShared(SetupId,Appearance,WorldScale,PlacementId);
+ OutMesh=Mesh ? *Mesh : FACEBuiltSetupMesh();
+ return Mesh && Mesh->Parts.Num()>0;
 }
 
 bool UACEDatSubsystem::GetHoldingLocation(uint32 ParentSetupId, int32 ParentLocation, int32& OutPartIndex, FTransform& OutUnrealRelative, float WorldScale)
@@ -4926,16 +4988,16 @@ bool UACEDatSubsystem::ApplySetupParts(const TArray<UProceduralMeshComponent*>& 
 	OutBindTransforms.Reset();
 	OutDefaultMotionTableId = 0;
 
-	FACEBuiltSetupMesh LocalBuilt;
+	TSharedPtr<const FACEBuiltSetupMesh> LocalBuilt;
 	const FACEBuiltSetupMesh* BuiltPtr = Prebuilt;
 	if (!BuiltPtr)
 	{
-		if (!BuildSetupAppearance(static_cast<uint32>(SetupId), Appearance, WorldScale, LocalBuilt, PlacementId)
-			|| LocalBuilt.Parts.Num() == 0)
+		LocalBuilt = GetOrBuildSetupAppearanceShared(static_cast<uint32>(SetupId), Appearance, WorldScale, PlacementId);
+		if (!LocalBuilt || LocalBuilt->Parts.Num() == 0)
 		{
 			return false;
 		}
-		BuiltPtr = &LocalBuilt;
+		BuiltPtr = LocalBuilt.Get();
 	}
 	else if (BuiltPtr->Parts.Num() == 0)
 	{
@@ -5395,6 +5457,7 @@ bool UACEDatSubsystem::ConsumeLandMeshReloadRequest(bool* bOutClearEnvCells)
 		UncachedSetupRuntimeMetadata = FSetupRuntimeMetadata();
 		EnvCellMeshCache.Reset();
 		SetupMeshCache.Reset();
+		ClearAppearanceMeshCache();
 		BuildingInteriorFootprints.Reset();
 		LandMaterialCache.Reset();
 		LandMaterialBase = nullptr;
@@ -8104,6 +8167,7 @@ const UACEDatSubsystem::FSetupRuntimeMetadata* UACEDatSubsystem::FindSetupRuntim
 			Value.ScriptTable = Setup.DefaultScriptTable; Value.SoundTable = Setup.DefaultSoundTable;
 			Value.bPhysicsBSP = EnumHasAnyFlags(Setup.Flags, EACESetupFlags::HasPhysicsBSP);
 			// Retail prefers cylinder-spheres when available, otherwise spheres.
+			Value.MovementSpheres=Setup.Spheres;
 			Value.Shapes = Setup.CylSpheres.IsEmpty() ? MoveTemp(Setup.Spheres) : MoveTemp(Setup.CylSpheres);
 		}
 	}
@@ -8131,6 +8195,15 @@ bool UACEDatSubsystem::GetSetupCollisionShapes(uint32 SetupId, TArray<FACEDatCol
 	const auto* Data = FindSetupRuntimeMetadata(SetupId);
 	if (!Data) return false;
 	OutShapes = Data->Shapes; bHasPhysicsBSP = Data->bPhysicsBSP;
+	return true;
+}
+
+bool UACEDatSubsystem::GetSetupMovementSpheres(uint32 SetupId, TArray<FACEDatCollisionShape>& OutSpheres)
+{
+	OutSpheres.Reset();
+	const auto* Data=FindSetupRuntimeMetadata(SetupId);
+	if (!Data)return false;
+	OutSpheres=Data->MovementSpheres;
 	return true;
 }
 

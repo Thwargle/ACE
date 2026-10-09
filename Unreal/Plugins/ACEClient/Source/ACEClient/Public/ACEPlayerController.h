@@ -4,6 +4,7 @@
 #include "GameFramework/PlayerController.h"
 #include "ACETypes.h"
 #include "ACELandingMotion.h"
+#include "ACECollisionBody.h"
 #include "ACEPlayerController.generated.h"
 
 class UACEClientSubsystem;
@@ -30,6 +31,7 @@ UCLASS()
 class ACECLIENT_API AACEPlayerController : public APlayerController
 {
 	GENERATED_BODY()
+	friend class FACECollisionSizingTest;
 	friend class UACEVRComponent;
 	friend class FACEVRRigTest;
 	friend class FACEVRInteriorTest;
@@ -485,6 +487,8 @@ protected:
 	/** Retail Setup.StepDownHeight * Scale * WorldScale — max snap/walk-off drop (CheckWalkable). */
 	float GetStepDownHeightCm() const;
 	void ApplyPlayerCapsuleFromSetup(int32 SetupId);
+	FACECollisionBody GetPlayerCollisionBody() const;
+	TArray<FVector4f> PlayerMovementSpheresAc;
 	/** NPK walks through players; PK / PK Lite block ECC_Pawn. */
 	void ApplyLocalPawnPkCollision();
 

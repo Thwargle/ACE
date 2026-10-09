@@ -7,10 +7,17 @@
 
 bool FACESetupMeshBuilder::LoadGfxObj(uint32 GfxObjId, FACEDatGfxObj& Out)
 {
+ const FACEDatGfxObj* Cached = FindOrLoadGfxObj(GfxObjId);
+ if (!Cached) return false;
+ Out = *Cached;
+ return true;
+}
+
+const FACEDatGfxObj* FACESetupMeshBuilder::FindOrLoadGfxObj(uint32 GfxObjId)
+{
 	if (const FACEDatGfxObj* Cached = GfxCache.Find(GfxObjId))
 	{
-		Out = *Cached;
-		return true;
+		return Cached;
 	}
 
 	TArray<uint8> Blob;
@@ -22,7 +29,7 @@ bool FACESetupMeshBuilder::LoadGfxObj(uint32 GfxObjId, FACEDatGfxObj& Out)
 	if (!bFound)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("ACEDat: missing GfxObj 0x%08X"), GfxObjId);
-		return false;
+		return nullptr;
 	}
 
 	FACEDatCursor Cur(Blob);
@@ -30,7 +37,7 @@ bool FACESetupMeshBuilder::LoadGfxObj(uint32 GfxObjId, FACEDatGfxObj& Out)
 	if (!ACEDatUnpack::UnpackGfxObj(Cur, Parsed))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("ACEDat: failed to unpack GfxObj 0x%08X"), GfxObjId);
-		return false;
+		return nullptr;
 	}
 
 	// CPhysicsPart::GetMaxDegradeDistance honors the authored zero-distance
@@ -85,9 +92,7 @@ bool FACESetupMeshBuilder::LoadGfxObj(uint32 GfxObjId, FACEDatGfxObj& Out)
 			if (Ok && MaxDistance <= 0.f) Parsed.Polygons.Reset();
 		}
 	}
-	GfxCache.Add(GfxObjId, Parsed);
-	Out = MoveTemp(Parsed);
-	return true;
+	return &GfxCache.Add(GfxObjId, MoveTemp(Parsed));
 }
 
 void FACESetupMeshBuilder::AppendGfxObjLocal(const FACEDatGfxObj& Gfx, int32 PartIndex,
@@ -253,8 +258,8 @@ bool FACESetupMeshBuilder::BuildGfxObjOnly(uint32 GfxObjId, const FACEObjDesc& A
 	// 0x02 SetupModel, so we must build one identity-placed part from it.
 	OutMesh = FACEBuiltSetupMesh();
 
-	FACEDatGfxObj Gfx;
-	if (!LoadGfxObj(GfxObjId, Gfx))
+	const FACEDatGfxObj* Gfx = FindOrLoadGfxObj(GfxObjId);
+	if (!Gfx)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("ACEDat: SetupId 0x%08X is a GfxObj but failed to load"), GfxObjId);
 		return false;
@@ -265,8 +270,8 @@ bool FACESetupMeshBuilder::BuildGfxObjOnly(uint32 GfxObjId, const FACEObjDesc& A
 	Part.BindTransform = FTransform::Identity;
 
 	const FACEObjDesc* AppearancePtr = Appearance.HasVisualOverrides() ? &Appearance : nullptr;
-	AppendGfxObjLocal(Gfx, 0, AppearancePtr, WorldScale, Part);
-	AppendGfxObjPhysicsLocal(Gfx, WorldScale, Part);
+	AppendGfxObjLocal(*Gfx, 0, AppearancePtr, WorldScale, Part);
+	AppendGfxObjPhysicsLocal(*Gfx, WorldScale, Part);
 	OutMesh.Parts.Add(MoveTemp(Part));
 
 	const bool bOk = OutMesh.Parts.Num() > 0;
@@ -380,25 +385,24 @@ bool FACESetupMeshBuilder::BuildSetupWithAppearance(uint32 SetupId, const FACEOb
 		constexpr uint32 PortalFxAnchorGfx = 0x0100168Bu;
 		if (Parts[PartIndex] != 0 && Parts[PartIndex] != NullGfxObjId && Parts[PartIndex] != PortalFxAnchorGfx)
 		{
-			FACEDatGfxObj Gfx;
-			if (LoadGfxObj(Parts[PartIndex], Gfx))
+			if (const FACEDatGfxObj* Gfx = FindOrLoadGfxObj(Parts[PartIndex]))
 			{
-				if (Gfx.Polygons.Num() == 0)
+				if (Gfx->Polygons.Num() == 0)
 				{
 					UE_LOG(LogTemp, Verbose, TEXT("ACEDat: GfxObj 0x%08X (Setup 0x%08X part %d) has no drawing polygons (physics-only?)"),
 						Parts[PartIndex], SetupId, PartIndex);
 				}
-				else if (Gfx.Polygons.Num() <= 1 && Gfx.Vertices.Num() <= 3
-					&& Gfx.PhysicsPolygons.Num() == 0)
+				else if (Gfx->Polygons.Num() <= 1 && Gfx->Vertices.Num() <= 3
+					&& Gfx->PhysicsPolygons.Num() == 0)
 				{
 					// Degenerate null speck only — keep 1-poly GfxObjs that still have physics.
 				}
 				else
 				{
-					AppendGfxObjLocal(Gfx, PartIndex, AppearancePtr, WorldScale, Part);
+					AppendGfxObjLocal(*Gfx, PartIndex, AppearancePtr, WorldScale, Part);
 				}
 				// Retail collision comes from PhysicsPolygons, not alpha-filtered draw meshes.
-				AppendGfxObjPhysicsLocal(Gfx, WorldScale, Part);
+				AppendGfxObjPhysicsLocal(*Gfx, WorldScale, Part);
 			}
 		}
 

@@ -1,20 +1,39 @@
 #include "UI/ACEUIGameplayBinder.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
+#include "UI/ACEUILayoutResolver.h"
 #include "UI/ACERetailTextBlock.h"
+#include "UI/ACERetailTextEntry.h"
 #include "ACEClientSubsystem.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
-#include "Components/EditableTextBox.h"
-#include "Components/MultiLineEditableText.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonSerializer.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Misc/SecureHash.h"
 #include "HAL/FileManager.h"
-#include "Styling/CoreStyle.h"
+
+namespace
+{
+FString JournalTimerText(double End)
+{
+ if(End<=0)return TEXT("None");
+ int64 Seconds=static_cast<int64>(End-FDateTime::UtcNow().ToUnixTimestamp());
+ if(Seconds<=0)return TEXT("Ready");
+ // ClientUISystem::DeltaTimeToString uses 30-day months and omits zero units.
+ FString Text;
+ const int64 Units[]={2592000,86400,3600,60};
+ const TCHAR* Suffixes[]={TEXT("mo"),TEXT("d"),TEXT("h"),TEXT("m")};
+ for(int32 I=0;I<4;++I)
+ {
+  const int64 Count=Seconds/Units[I];Seconds%=Units[I];
+  if(Count)Text+=FString::Printf(TEXT("%lld%s "),Count,Suffixes[I]);
+ }
+ return Text+FString::Printf(TEXT("%llds"),Seconds);
+}
+}
 
 // Retail gmJournalUI stores personal pages on the client, separate from server contracts.
 void UACEUIGameplayBinder::SaveJournal()
@@ -92,10 +111,11 @@ bool UACEUIGameplayBinder::HandleJournalNamedClick(const FString& Name)
  }
  else if (Name==TEXT("SearchPageButton")) JournalSearch=JournalEntries.IsValidIndex(6)?JournalEntries[6]->GetText().ToString():FString();
  else if (Name==TEXT("ResetSearchButton")) {JournalSearch.Reset(); if(JournalEntries.IsValidIndex(6))JournalEntries[6]->SetText(FText::GetEmpty());}
- else if (Name==TEXT("TitleSortButton")) JournalPages.StableSort([](const FJournalPage&A,const FJournalPage&B){return A.Title<B.Title;});
- else if (Name==TEXT("LabelSortButton")) JournalPages.StableSort([](const FJournalPage&A,const FJournalPage&B){return A.Label<B.Label;});
- else if (Name==TEXT("TimerSortButton")) JournalPages.StableSort([](const FJournalPage&A,const FJournalPage&B){return A.TimerEnd<B.TimerEnd;});
- else if (Name==TEXT("PageSortButton")) { JournalSearch.Reset(); }
+ else if (Name==TEXT("TitleSortButton") || Name==TEXT("LabelSortButton") || Name==TEXT("TimerSortButton") || Name==TEXT("PageSortButton"))
+ {
+  bJournalSortDescending=JournalSortColumn==Name ? !bJournalSortDescending : false;
+  JournalSortColumn=Name; JournalScrollOffset=0;
+ }
  else return false;
  if (JournalPages.IsEmpty()) JournalPages.AddDefaulted();
  JournalPageIndex=FMath::Clamp(JournalPageIndex,0,JournalPages.Num()-1);
@@ -127,19 +147,19 @@ void UACEUIGameplayBinder::RefreshJournalOverlays()
  }
  while(JournalEntries.Num()<7)
  {
-  auto* Entry=Canvas->WidgetTree->ConstructWidget<UEditableTextBox>();
-  auto Style=Entry->GetWidgetStyle(); Style.BackgroundImageNormal.DrawAs=ESlateBrushDrawType::NoDrawType;
-  Style.BackgroundImageHovered=Style.BackgroundImageNormal; Style.BackgroundImageFocused=Style.BackgroundImageNormal;
-  Style.SetPadding(FMargin(3,0)); Style.TextStyle.SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),10)); Entry->SetWidgetStyle(Style);
-  Entry->SetForegroundColor(FLinearColor::Black);
+  auto* Entry=Canvas->WidgetTree->ConstructWidget<UACERetailTextEntry>();
+  Entry->ContentMargins=FMargin(3,0); Entry->TextColor=FLinearColor::Black;
+  const int32 Index=JournalEntries.Num();
+  Entry->MaxLength=Index==0 || Index==2 ? 16 : Index==1 ? 32 : Index==6 ? 1000 : 3;
+  Entry->bDigitsOnly=Index>=3 && Index<=5;
   Entry->OnTextChanged.AddDynamic(this,&UACEUIGameplayBinder::HandleJournalEdited);
   JournalEntries.Add(Entry);
  }
  if(!JournalNotes)
  {
-  JournalNotes=Canvas->WidgetTree->ConstructWidget<UMultiLineEditableText>();
-  JournalNotes->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),10));
-  FTextBlockStyle NotesStyle=JournalNotes->WidgetStyle; NotesStyle.SetColorAndOpacity(FLinearColor::Black); JournalNotes->SetWidgetStyle(NotesStyle); JournalNotes->SetAutoWrapText(true);
+  JournalNotes=Canvas->WidgetTree->ConstructWidget<UACERetailTextEntry>();
+  JournalNotes->bMultiline=true; JournalNotes->MaxLength=2048;
+  JournalNotes->ContentMargins=FMargin(3,0); JournalNotes->TextColor=FLinearColor::Black;
   JournalNotes->OnTextChanged.AddDynamic(this,&UACEUIGameplayBinder::HandleJournalEdited);
  }
  JournalPageIndex=FMath::Clamp(JournalPageIndex,0,JournalPages.Num()-1);
@@ -161,9 +181,14 @@ void UACEUIGameplayBinder::RefreshJournalOverlays()
  {
   const TCHAR* Names[]={TEXT("PageLabelEntryBox"),TEXT("PageTitleEntryBox"),TEXT("LocationText"),TEXT("DaysEntryBox"),TEXT("HoursEntryBox"),TEXT("MinutesEntryBox")};
   for(int32 I=0;I<6;++I) if(auto E=Manager->FindElementUnder(ActiveQuestTab,Names[I]))
-  { Canvas->PlaceWidgetAtElement(JournalEntries[I],E,100051); JournalEntries[I]->SetVisibility(ESlateVisibility::Visible); }
+  { JournalEntries[I]->SetRetailElement(Canvas->GetResourceResolver(),E); Canvas->PlaceWidgetAtElement(JournalEntries[I],E,100051); JournalEntries[I]->SetVisibility(ESlateVisibility::Visible); }
   if(auto E=Manager->FindElementUnder(ActiveQuestTab,TEXT("NotesEntryBox")))
-  { Canvas->PlaceWidgetAtElement(JournalNotes,E,100051,FMargin(3,0)); JournalNotes->SetVisibility(ESlateVisibility::Visible); }
+  {
+   JournalNotes->SetRetailElement(Canvas->GetResourceResolver(),E); Canvas->PlaceWidgetAtElement(JournalNotes,E,100051); JournalNotes->SetVisibility(ESlateVisibility::Visible);
+   const float End=JournalNotes->GetScrollOffsetOfEnd();
+   SyncDatScrollbar(Manager->FindElementUnder(ActiveQuestTab,TEXT("NotesScrollbar")),End>0?JournalNotes->GetScrollOffset()/End:0.f,
+    E->Height>0 ? float(E->Height)/(E->Height+End) : 1.f);
+  }
   Caption(TEXT("NewPageButton"),TEXT("New")); Caption(TEXT("PageLabelLabel"),TEXT("Label:"));
   Caption(TEXT("PageTitleLabel"),TEXT("Title:")); Caption(TEXT("NotesLabel"),TEXT("Notes:"));
   Caption(TEXT("FirstPageButton"),TEXT("First")); Caption(TEXT("LastPageButton"),TEXT("Last"));
@@ -174,7 +199,7 @@ void UACEUIGameplayBinder::RefreshJournalOverlays()
   const bool Running=P.TimerEnd>0;
   for(int32 I=3;I<6;++I)if(Running)JournalEntries[I]->SetVisibility(ESlateVisibility::Collapsed);
   Caption(TEXT("StartTimerButton"),Running?TEXT("Stop"):TEXT("Start"));
-  Caption(TEXT("TimerText"),Running?FTimespan::FromSeconds(FMath::Max(0.,P.TimerEnd-FDateTime::UtcNow().ToUnixTimestamp())).ToString():FString());
+  Caption(TEXT("TimerText"),Running?JournalTimerText(P.TimerEnd):FString());
  }
  else
  {
@@ -182,10 +207,11 @@ void UACEUIGameplayBinder::RefreshJournalOverlays()
   Caption(TEXT("TimerSortButton"),TEXT("Timer")); Caption(TEXT("LabelSortButton"),TEXT("Label"));
   Caption(TEXT("DeletePageButton"),TEXT("Delete")); Caption(TEXT("SearchPageButton"),TEXT("Search:")); Caption(TEXT("ResetSearchButton"),TEXT("Reset"));
   if(auto E=Manager->FindElementUnder(ActiveQuestTab,TEXT("SearchEntryBox")))
-  { Canvas->PlaceWidgetAtElement(JournalEntries[6],E,100051); JournalEntries[6]->SetVisibility(ESlateVisibility::Visible); JournalEntries[6]->SetForegroundColor(FLinearColor::White); }
+  { JournalEntries[6]->SetRetailElement(Canvas->GetResourceResolver(),E); Canvas->PlaceWidgetAtElement(JournalEntries[6],E,100051); JournalEntries[6]->SetVisibility(ESlateVisibility::Visible); JournalEntries[6]->TextColor=FLinearColor::White; }
   auto List=Manager->FindElementUnder(ActiveQuestTab,TEXT("PageListBox")); if(!List)return;
   const int32 MaxRows=FMath::Max(1,List->Height/20);
   while(QuestRows.Num()<MaxRows)QuestRows.Add(Canvas->WidgetTree->ConstructWidget<UACERetailTextBlock>());
+  while(JournalRowElements.Num()<MaxRows)JournalRowElements.Add(UACEUILayoutResolver::LoadTemplate(0x21000067,0x10000589));
   TArray<int32> Filtered;
   for(int32 I=0;I<JournalPages.Num();++I)
   {
@@ -193,6 +219,21 @@ void UACEUIGameplayBinder::RefreshJournalOverlays()
    if(JournalSearch.IsEmpty() || Page.Title.Contains(JournalSearch) || Page.Notes.Contains(JournalSearch) || Page.Label.Contains(JournalSearch)) Filtered.Add(I);
   }
   JournalFilteredCount=Filtered.Num();
+  // Retail sorts a display copy. Stored page numbers and the current page are stable.
+  Filtered.StableSort([&](int32 A,int32 B)
+  {
+   const auto& L=JournalPages[A]; const auto& R=JournalPages[B]; int32 Order=0;
+   if(JournalSortColumn==TEXT("TitleSortButton"))Order=L.Title.Compare(R.Title,ESearchCase::IgnoreCase);
+   else if(JournalSortColumn==TEXT("LabelSortButton"))Order=L.Label.Compare(R.Label,ESearchCase::IgnoreCase);
+   else if(JournalSortColumn==TEXT("TimerSortButton"))
+   {
+    const bool LeftRunning=L.TimerEnd>0,RightRunning=R.TimerEnd>0;
+    if(LeftRunning!=RightRunning)Order=LeftRunning?-1:1;
+    else if(LeftRunning && L.TimerEnd!=R.TimerEnd)Order=L.TimerEnd<R.TimerEnd?-1:1;
+   }
+   if(Order==0)Order=A<B?-1:A>B?1:0;
+   return bJournalSortDescending ? Order>0 : Order<0;
+  });
   JournalScrollOffset=FMath::Clamp(JournalScrollOffset,0,FMath::Max(0,Filtered.Num()-MaxRows));
   if(auto Bar=Manager->FindElementUnder(ActiveQuestTab,TEXT("PageListBoxScrollbar")))
    SyncDatScrollbar(Bar,Filtered.Num()>MaxRows ? float(JournalScrollOffset)/(Filtered.Num()-MaxRows) : 0.f,
@@ -201,10 +242,25 @@ void UACEUIGameplayBinder::RefreshJournalOverlays()
   for(int32 N=JournalScrollOffset;N<Filtered.Num() && Row<MaxRows;++N)
   {
    const int32 I=Filtered[N]; const auto& Page=JournalPages[I];
-   UTextBlock* Text=QuestRows[Row]; Text->SetText(FText::FromString(FString::Printf(TEXT("%d   %s   %s"),I+1,Page.Title.IsEmpty()?TEXT("Untitled"):*Page.Title,*Page.Label)));
-   Text->SetColorAndOpacity(I==JournalPageIndex?FLinearColor(.1f,.35f,.05f):FLinearColor::Black);
-   Canvas->PlaceWidgetAtElement(Text,List,100052,FMargin(0,Row*20,0,List->Height-(Row+1)*20));
-   Text->SetVisibility(ESlateVisibility::HitTestInvisible); QuestRowIds[Row++]=-I-1;
+   const auto Entry=JournalRowElements[Row]; if(!Entry)continue;
+   if(Entry->Parent.Pin()!=List)List->AddChild(Entry);
+   Entry->bVisible=true;Entry->Y=Row*20;Entry->Width=List->Width;
+   Entry->bUseExplicitState=true;Entry->DefaultState=I==JournalPageIndex?6:1;
+   const FString Timer=JournalTimerText(Page.TimerEnd);
+   const FString Values[]={FString::FromInt(I+1),Page.Title,Timer,Page.Label};
+   for(int32 Column=0;Column<Entry->Children.Num() && Column<4;++Column)
+   {
+    UTextBlock* Text=nullptr;
+    if(Column==1)Text=QuestRows[Row];
+    else
+    {
+     if(JournalLabels.Num()<=LabelIndex)JournalLabels.Add(Canvas->WidgetTree->ConstructWidget<UACERetailTextBlock>());
+     Text=JournalLabels[LabelIndex++];
+    }
+    Text->SetClipping(EWidgetClipping::ClipToBounds);
+    PlaceTextOnElement(Text,Entry->Children[Column],Values[Column],9,FLinearColor::White,100052);
+   }
+   QuestRowIds[Row++]=-I-1;
   }
  }
 }

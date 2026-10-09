@@ -73,6 +73,16 @@ internal static class RetailWorldFixtures
             .Where((id, i) => i % 97 == 0 || id == 0x010025E3))
         {
             var gfx = DatManager.PortalDat.ReadFromDat<GfxObj>(id);
+            bool hidden = false;
+            if (gfx.DIDDegrade != 0)
+            {
+                // CPhysicsPart::LoadGfxObjArray selects entry zero for close-up
+                // drawing and physics; the root DID may contain a coarser mesh.
+                var levels = DatManager.PortalDat.ReadFromDat<GfxObjDegradeInfo>(gfx.DIDDegrade).Degrades;
+                hidden = levels.Count > 0 && levels.All(level => level.Id == 0 || level.MaxDist <= 0);
+                if (levels.Count > 0 && levels[0].Id != 0 && levels[0].Id != id)
+                    gfx = DatManager.PortalDat.ReadFromDat<GfxObj>(levels[0].Id);
+            }
             var polyIds = new HashSet<ushort>();
             void VisitGfx(BSPNode? node)
             {
@@ -93,7 +103,7 @@ internal static class RetailWorldFixtures
             gfxRows.Add(new { id = $"{id:X8}", triangles = count,
                 // PView replaces these faces with the view through the aperture.
                 // Unreal admits those cells directly, retaining PORT geometry separately.
-                drawTriangles = DrawTriangles(gfx.Polygons.Where(p => !apertures.Contains(p.Key)).Select(p => p.Value), gfx.Surfaces.Count),
+                drawTriangles = hidden ? 0 : DrawTriangles(gfx.Polygons.Where(p => !apertures.Contains(p.Key)).Select(p => p.Value), gfx.Surfaces.Count),
                 portalPolygons = apertures.Count });
         }
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(output))!);

@@ -220,7 +220,7 @@ void FACESession::RequestLogOff()
 			SendChangeCombatMode(ACECombatMode::NonCombat);
 		}
 		SendStopMovement();
-		FlushAutonomousPosition(true);
+		FlushAutonomousPosition(bAutoPosContact);
 		bLogOffPending = true;
 		LogOffTimeout = 45.f; // logout anim + landblock remove + 6s SendFinalLogOffMessages
 		LogOffRetransmitTimer = 0.f;
@@ -1750,6 +1750,8 @@ void FACESession::UpsertWorldObject(const FACEWorldObject& Object, bool bForceRe
 		|| Object.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] == Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]);
 	if (Existing && bSameInstance && !bForceRecreate)
 	{
+		Merged.ReceivedActionStamp=Existing->ReceivedActionStamp;
+		Merged.bHasReceivedActionStamp=Existing->bHasReceivedActionStamp;
 		// CreateObject (SmartboxQueue) and ContainId (UIQueue) can reorder. If ContainId
 		// homed an item first, a later CreateObject that omits Container must not wipe it
 		// — that dropped newly created salvage bags out of GetPackItems.
@@ -2235,6 +2237,7 @@ void FACESession::DeleteWorldObject(int32 Guid)
 			// A later full Create must rebuild its setup even if the instance is unchanged.
 			Obj->bPhysicsDescriptionPending = true;
 			Obj->bHasPhysicsTimestamps = false;
+			Obj->bHasReceivedActionStamp = false;
 			FMemory::Memzero(Obj->PhysicsTimestamps, sizeof(Obj->PhysicsTimestamps));
 			Obj->bDying = false;
 			Obj->bHasPosition = false;
@@ -7810,6 +7813,11 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 
 	FACEObjectMotionState Motion;
 	Motion.MovementType = MovementType;
+	uint16 ActionStamp=0;
+	bool bHaveActionStamp=false;
+	if(const auto* Obj=WorldObjects.Find(Guid);Obj && !Obj->bPhysicsDescriptionPending
+		&& (!Obj->bHasPhysicsTimestamps || Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]==IncomingInstance))
+	{ActionStamp=Obj->ReceivedActionStamp;bHaveActionStamp=Obj->bHasReceivedActionStamp;}
 	if (HeaderStyleRaw != 0)
 	{
 		Motion.CurrentStyle = static_cast<int32>(ACEMotion::ExpandPackedCommand(HeaderStyleRaw));
@@ -7892,9 +7900,16 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 		for (uint32 i = 0; i < CommandCount; ++i)
 		{
 			const uint16 RawCmd = Reader.ReadUInt16();
-			Reader.ReadUInt16(); // sequence + autonomous bit
+			const uint16 PackedActionStamp=Reader.ReadUInt16(); // 15-bit stamp + autonomous bit
 			const float Speed = Reader.ReadFloat();
 			if (!FMath::IsFinite(Speed)) return;
+			// CMotionInterp::HandleMovement processes each action once, independent
+			// of the movement packet sequence, and retains that action's own speed.
+			const uint16 IncomingAction=PackedActionStamp & 0x7FFFu;
+			const uint16 ActionDelta=(IncomingAction-ActionStamp) & 0x7FFFu;
+			if ((Guid==PlayerGuid && (PackedActionStamp & 0x8000u))
+				|| (bHaveActionStamp && (ActionDelta==0 || ActionDelta>=0x4000u))) continue;
+			ActionStamp=IncomingAction;bHaveActionStamp=true;
 			const uint32 Full = ACEMotion::ExpandPackedCommand(RawCmd);
 			// FastTick magic packs every scarab windup into one CommandList — keep order
 			// (first → ActionCommand, rest → ActionFollowups). Do not keep only the last.
@@ -7913,6 +7928,7 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 				else
 				{
 					Motion.ActionFollowups.Add(static_cast<int32>(Full));
+					Motion.ActionFollowupSpeeds.Add(ClampedSpeed);
 				}
 			}
 		}
@@ -8119,6 +8135,8 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 		// movement. Remote players still need the same autonomous motion body.
 		if (bAutonomous) return;
 	}
+	if(auto* Obj=WorldObjects.Find(Guid))
+	{Obj->ReceivedActionStamp=ActionStamp;Obj->bHasReceivedActionStamp=bHaveActionStamp;}
 
 	Motion.bMoving = !FMath::IsNearlyZero(Motion.Forward)
 		|| !FMath::IsNearlyZero(Motion.Strafe)
@@ -8595,7 +8613,9 @@ void FACESession::SendJump(float Extent, const FVector& LocalAceVelocity)
 
 void FACESession::SendStopMovement()
 {
-	SendMoveToState(0.f, 0.f, 0.f, false, true, false);
+	// Retail CmdInterp::send_move_to_state derives contact from physics, not
+	// the input axes. Cancelling a use/route while falling is not a landing.
+	SendMoveToState(0.f, 0.f, 0.f, false, bAutoPosContact, false);
 	bMoving = false;
 }
 

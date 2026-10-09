@@ -434,12 +434,17 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 	// Setup.Radius is an enclosing/sorting bound (human: .6788, walking
 	// sphere: .48). Keep that bound for retail interaction range, but never
 	// use it to widen a remote character's movement collision.
-	TArray<FACEDatCollisionShape> MovementShapes;bool HasBsp=false;
-	if(Dat && Dat->GetSetupCollisionShapes(SetupId,MovementShapes,HasBsp) && !MovementShapes.IsEmpty())
+	TArray<FACEDatCollisionShape> MovementShapes;
+	MovementSpheresAc.Reset();
+	const bool bHaveSetupMetadata=Dat && Dat->GetSetupMovementSpheres(SetupId,MovementShapes);
+	if(bHaveSetupMetadata && !MovementShapes.IsEmpty())
 	{
 		float R=0,Bottom=MAX_flt,Top=-MAX_flt;
-		for(const auto& S:MovementShapes)
+		for(int32 I=0;I<FMath::Min(2,MovementShapes.Num());++I)
 		{
+			const auto& S=MovementShapes[I];
+			if (!FMath::IsFinite(S.Radius) || S.Radius<=0 || FVector(S.Origin).ContainsNaN())continue;
+			MovementSpheresAc.Add(FVector4f(S.Origin,S.Radius));
 			R=FMath::Max(R,S.Radius+FVector2f(S.Origin.X,S.Origin.Y).Size());
 			Bottom=FMath::Min(Bottom,S.Origin.Z-(S.Height>0?0:S.Radius));
 			Top=FMath::Max(Top,S.Origin.Z+(S.Height>0?S.Height:S.Radius));
@@ -586,7 +591,10 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 	// wielded weapons drew capsules and let the pawn occupy the same point.
 	const bool bUseMeshPhysics = !bCreatureLike && bHavePartMesh && bMeshHasPawnCollision
 		&& (bDoorOrOpenable || bBlocking);
-	const bool bProxyBlocks = bBlocking && !bUseMeshPhysics && AuthoredCollision.IsEmpty();
+	// An explicitly empty retail body is not a missing body. Its pick volume
+	// must stay selection-only instead of manufacturing an invisible obstacle.
+	const bool bProxyBlocks = bBlocking && !bUseMeshPhysics && AuthoredCollision.IsEmpty()
+		&& (!bHaveSetupMetadata || bSetupHasPhysicsBSP);
 	if (CollisionProxy)
 	{
 		if (bCreatureLike) CollisionProxy->ComponentTags.AddUnique(TEXT("ACECreatureBody"));
@@ -974,7 +982,18 @@ FVector AACEWorldEntityActor::ResolvePredictedMovement(const FVector& From, cons
 		|| (!bIsPlayer && !(ItemType & ACEItemType::Creature))) return Destination;
 	const float Scale = GetActorScale3D().GetAbsMax();
 	const float Half = MovementHalfHeight * Scale;
-	const auto Shape = FCollisionShape::MakeCapsule(MovementSweepRadius * Scale, Half);
+	FACECollisionBody Shape(FCollisionShape::MakeCapsule(MovementSweepRadius * Scale, Half));
+	if (!MovementSpheresAc.IsEmpty())
+	{
+		Shape.Count=FMath::Min(2,MovementSpheresAc.Num());
+		for(int32 I=0;I<Shape.Count;++I)
+		{
+			const auto& S=MovementSpheresAc[I];
+			Shape.Centers[I]=GetActorQuat().RotateVector(FACEPosition::AceVectorToUnreal(FVector(S.X,S.Y,S.Z),WorldScale*Scale))
+				-FVector(0,0,MovementBodyOffsetZ*Scale);
+			Shape.Radii[I]=S.W*WorldScale*Scale;
+		}
+	}
 	FCollisionQueryParams Query(SCENE_QUERY_STAT(ACERemoteBody), true, this);
 	const FVector Offset(0, 0, MovementBodyOffsetZ * Scale);
 	FVector Position = From + Offset;
@@ -2246,9 +2265,9 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 				}
 				if (!bHoldEmote)
 				{
-					for (int32 Followup : Motion.ActionFollowups)
+					for (int32 I=0;I<Motion.ActionFollowups.Num();++I)
 					{
-						Appearance->QueueActionMotion(Followup, Motion.ActionSpeed, Motion.CurrentStyle, false);
+						Appearance->QueueActionMotion(Motion.ActionFollowups[I], Motion.FollowupSpeed(I), Motion.CurrentStyle, false);
 					}
 				}
 			}

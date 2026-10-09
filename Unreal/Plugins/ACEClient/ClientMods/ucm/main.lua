@@ -1109,14 +1109,12 @@ local function tick(s,p)
   end
   last_cast=nil
  end
- if route_pending and not forced_buff then
+ if route_pending and route_pending.kind~='pause' and not forced_buff then
    activity='navigation'
    local route=p.route or {};local v=route[point]
    if not v then return failed('Route changed during an action') end
    local kind=v.kind or 'walk'
-   if kind=='pause' then
-    if s.time-route_pending.time>=(v.seconds or 5) then route_pending=nil;point=point+route_direction end
-   elseif kind=='jump' then
+   if kind=='jump' then
     if s.time-route_pending.time>2 and not s.jumping then route_pending=nil;point=point+route_direction end
    elseif kind=='portal' or kind=='recall' then
     local nextpoint=route[point+route_direction]
@@ -1305,6 +1303,13 @@ local function tick(s,p)
  local function navigate()
  if not activity_ready('navigation') then return end
  if option('navigation',false) then
+  -- VT's timed pause stops route movement, not the higher-priority combat and
+  -- recharge rules. It has no server acknowledgement to monopolize the loop.
+  if route_pending and route_pending.kind=='pause' then
+   if s.time<route_pending.deadline then return end
+   route_pending=nil;point=point+route_direction
+   return result(nil,'Route pause complete')
+  end
   local idle=idle_stance();if idle then return idle end
   if (p.follow_name or '')~='' or (p.follow_id or 0)~=0 then
    local follow
@@ -1369,7 +1374,11 @@ local function tick(s,p)
    return {action='move',cell=v.cell,x=v.x,y=v.y,z=v.z,arrival_radius=option('waypoint_radius',.8),coordinate_route=v.legacy,status='Waypoint '..point..' / '..#route}
   end
   if kind=='checkpoint' and (not s.server_position or distance(s.server_position,v)>option('waypoint_radius',.8)) then return result(nil,'Checkpoint: waiting for server position') end
-  if kind=='pause' then route_pending={time=s.time};return result(nil,'Pausing on route') end
+  if kind=='pause' then
+   route_pending={kind='pause',time=s.time,deadline=s.time+(v.seconds or 5)}
+   route_trail={{cell=s.position.cell,x=s.position.x,y=s.position.y,z=s.position.z}}
+   return result(nil,'Pausing on route')
+  end
   if kind=='recall' then
    if not by_id[v.spell] or by_id[v.spell].known==false then return failed('Route recall spell is not known') end
    local equipment=caster();if equipment then return equipment end
@@ -1918,6 +1927,8 @@ local function tick(s,p)
     for _,id in ipairs(s.known_spells or {}) do learned[id]=true end
     for _,v in ipairs(inventory) do if v.object_class==42 and (v.spell or 0)>0 then carried_scrolls[v.spell]=true end end
    end
+   local pending_appraisals=0
+   for _,item in ipairs(contents) do if not item.identified and s.time<(until_time['id'..item.id] or 0) then pending_appraisals=pending_appraisals+1 end end
    local function progress()
     local r=result(nil,'Checking loot rules: item '..loot_scan.item..'/'..#contents..', rule '..loot_scan.rule..'/'..#rules)
     r.continue_work=true;return r
@@ -1944,9 +1955,16 @@ local function tick(s,p)
      loot_scan.evaluation=nil
      if match==nil then
       local key='id'..item.id
-      if (item_attempts[key] or 0)>=3 then return failed('Unable to appraise loot; check appraisal skills') end
-      if s.time>=(until_time[key] or 0) then item_attempts[key]=(item_attempts[key] or 0)+1;until_time[key]=s.time+10;return {action='identify',item=item.id,status='Inspecting '..item.name..' for loot rule'} end
-      return result(nil,'Waiting for loot appraisal')
+      if (item_attempts[key] or 0)>=3 and s.time>=(until_time[key] or 0) then return failed('Unable to appraise loot; check appraisal skills') end
+      -- VT's ID queue advances while earlier replies are pending. Preserve
+      -- first-match rule order for this item, but keep examining other items.
+      loot_scan.waiting=true
+      if pending_appraisals<4 and s.time>=(until_time[key] or 0) then
+       item_attempts[key]=(item_attempts[key] or 0)+1;until_time[key]=s.time+10
+       loot_scan.item=loot_scan.item+1;loot_scan.rule=1
+       return {action='identify',item=item.id,status='Inspecting '..item.name..' for loot rule'}
+      end
+      break
      elseif match then
       -- First match wins, including Skip and a satisfied quantity limit.
       local have=rule.count_by_name and (owned_names[item.name] or 0) or (owned[item.wcid] or 0)
@@ -1962,7 +1980,8 @@ local function tick(s,p)
     end
     loot_scan.item=loot_scan.item+1;loot_scan.rule=1
    end
-   loot_scan={}
+   local waiting=loot_scan.waiting;loot_scan={}
+   if waiting then return result(nil,'Waiting for loot appraisal') end
    corpses[s.container]=s.time+300;return {action='close_corpse',status='Loot complete'}
   end
  end
@@ -2420,7 +2439,7 @@ local function tick(s,p)
   local names={};for _,v in ipairs(recovery_missing) do names[#names+1]=v==2 and 'health' or v==4 and 'stamina' or 'mana' end
   return result(nil,'Recovery unavailable for '..table.concat(names,', ')..'; check skill buffer, components, supplies and imported handlers')
  end
- return result(nil,navigation_paused or (health_critical and 'Health critical; recovery unavailable, UCM remains active') or 'Ready - waiting for enabled activities')
+ return result(nil,navigation_paused or (route_pending and route_pending.kind=='pause' and 'Pausing on route') or (health_critical and 'Health critical; recovery unavailable, UCM remains active') or 'Ready - waiting for enabled activities')
 end
 
 local function pause_activity(s,name,reason)
@@ -2543,7 +2562,7 @@ local function run(s,p)
  end
  if route_teleport~=s.teleport_sequence or route_revision~=(effective.vt_revision or 0) then route_blocks=0 end
  route_teleport=s.teleport_sequence;route_revision=effective.vt_revision or 0
- if effective.navigation and #route>0 and s.position and not route_pending then
+ if effective.navigation and #route>0 and s.position and (not route_pending or route_pending.kind=='pause') then
   if route_walking then
    route_trail={{cell=s.position.cell,x=s.position.x,y=s.position.y,z=s.position.z}}
   elseif not route_returning and #route_trail>0 and distance(s.position,route_trail[#route_trail])>=.6 then

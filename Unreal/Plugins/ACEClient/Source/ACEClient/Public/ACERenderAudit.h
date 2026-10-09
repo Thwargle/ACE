@@ -22,6 +22,9 @@ struct ACECLIENT_API FACERenderAudit
 	int64 LandscapeSourceBytes = 0, LandscapeRawSourceBytes = 0;
 	int32 DuplicateIdentityCount = 0, OverlappingStaticInstanceCount = 0;
 	int32 ParticleEmitters = 0, DegradedEmitters = 0, ActiveParticles = 0, ParticleLights = 0;
+	int32 ParticleUpdateBatches = 0;
+	int64 ParticleUpdateVertices = 0;
+	bool bParallelParticleUpdates = false;
 	static FACERenderAudit Collect(UWorld* World);
 	void Log() const;
 };

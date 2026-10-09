@@ -750,14 +750,14 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 		return false;
 	}
 
-	FACEBuiltSetupMesh Built;
 	const double BuildStart = FPlatformTime::Seconds();
-	if (!Dat->BuildSetupAppearance(static_cast<uint32>(SetupId), Appearance, WorldScale, Built, PlacementId)
-		|| Built.Parts.Num() == 0)
+	const auto SharedBuilt = Dat->GetOrBuildSetupAppearanceShared(static_cast<uint32>(SetupId), Appearance, WorldScale, PlacementId);
+	if (!SharedBuilt || SharedBuilt->Parts.Num() == 0)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("ACEAppearance: failed Setup 0x%08X for '%s'"), SetupId, *Object.Name);
 		return false;
 	}
+	const FACEBuiltSetupMesh& Built = *SharedBuilt;
 
 	// A dissolve's saved materials belong to the previous ObjDesc. Retire them
 	// before replacing the parts, otherwise UnHide restores the old character's
@@ -787,6 +787,9 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	if (bUseWorldLighting)
 	{
 		WorldLightingInstances.Reset();
+		// Share identical lighting within this body. Part-specific hooks already
+		// clone to mesh-owned MIDs before mutation; other actors remain independent.
+		TMap<UMaterialInterface*, UMaterialInstanceDynamic*> ActorMaterials;
 		for (auto* Part : Meshes)
 			if (Part) for (int32 I = 0; I < Part->GetNumMaterials(); ++I)
 			{
@@ -794,10 +797,15 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 				auto* WorldMaterial=Dat->GetWorldObjectMaterial(Source);
 				if (WorldMaterial && WorldMaterial!=Source)
 				{
-					auto* Instance=UMaterialInstanceDynamic::Create(WorldMaterial->GetMaterial(),this);
-					Instance->CopyMaterialUniformParameters(WorldMaterial);
-					Dat->UpdateWorldObjectLighting(Instance,false);
-					WorldLightingInstances.Add(Instance); Part->SetMaterial(I,Instance);
+					auto*& Instance=ActorMaterials.FindOrAdd(WorldMaterial);
+					if (!Instance)
+					{
+						Instance=UMaterialInstanceDynamic::Create(WorldMaterial->GetMaterial(),this);
+						Instance->CopyMaterialUniformParameters(WorldMaterial);
+						Dat->UpdateWorldObjectLighting(Instance,false);
+						WorldLightingInstances.Add(Instance);
+					}
+					Part->SetMaterial(I,Instance);
 				}
 			}
 		bWorldLightingInterior=false;
@@ -917,26 +925,31 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 		SetHeldActionMotion(Object.InitialMotionCommand, Style);
 	}
 
-	int32 TotalVerts = 0;
-	FBox LocalBounds(ForceInit);
-	for (const FACEBuiltSetupPart& Part : Built.Parts)
-	{
-		for (const FACEBuiltMeshSection& Sec : Part.Sections)
-		{
-			for (const FVector& V : Sec.Vertices)
-			{
-				LocalBounds += Part.BindTransform.TransformPosition(V);
-				++TotalVerts;
-			}
-		}
-	}
-	const FVector Extent = TotalVerts > 0 ? LocalBounds.GetExtent() : FVector::ZeroVector;
 	// Do not camera-lock thin world meshes. Doors, pedestals, cacti, and trees are
 	// authored in Setup space; yawing them toward the camera was never correct.
 	bBillboardSpriteParts = false;
-	UE_LOG(LogTemp, Log, TEXT("ACEAppearance: applied '%s' setup=0x%08X parts=%d verts=%d boxExtent=(%.1f,%.1f,%.1f) meshYaw=%.0f overrides=%s"),
-		*Object.Name, SetupId, Built.Parts.Num(), TotalVerts, Extent.X, Extent.Y, Extent.Z, MeshFacingYawDegrees,
-		Appearance.HasVisualOverrides() ? TEXT("yes") : TEXT("no"));
+	// Bounds are diagnostic only; avoid transforming every vertex on each spawn.
+	if (UE_LOG_ACTIVE(LogTemp, Verbose))
+	{
+		int32 TotalVerts = 0;
+		FBox LocalBounds(ForceInit);
+		for (const FACEBuiltSetupPart& Part : Built.Parts)
+		{
+			for (const FACEBuiltMeshSection& Sec : Part.Sections)
+			{
+				for (const FVector& V : Sec.Vertices)
+				{
+					LocalBounds += Part.BindTransform.TransformPosition(V);
+					++TotalVerts;
+				}
+			}
+		}
+		const FVector Extent = TotalVerts > 0 ? LocalBounds.GetExtent() : FVector::ZeroVector;
+		UE_LOG(LogTemp, Verbose, TEXT("ACEAppearance: applied '%s' setup=0x%08X parts=%d verts=%d boxExtent=(%.1f,%.1f,%.1f) meshYaw=%.0f overrides=%s"),
+			*Object.Name, SetupId, Built.Parts.Num(), TotalVerts, Extent.X, Extent.Y, Extent.Z, MeshFacingYawDegrees,
+			Appearance.HasVisualOverrides() ? TEXT("yes") : TEXT("no"));
+	}
+
 	if (Object.bIsPlayer || Object.bIsSelf)
 	{
 		int32 HeadAnim = 0;

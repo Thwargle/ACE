@@ -225,14 +225,54 @@ bool FACEPortalDropTest::RunTest(const FString&)
 {
     // ACE-World-16PY-Patches portal weenies 43001, 7289 and 7508. Exercise their
     // real DAT geometry, not portal-name exceptions or a fabricated floor check.
-    struct FArrival { const TCHAR* Name; uint32 Cell; FVector Location; bool Airborne; };
-    const FArrival Arrivals[] = {
+    struct FArrival { const TCHAR* Name; uint32 Cell; FVector Location; bool Airborne; bool Water=false; };
+    TArray<FArrival> Arrivals = {
+        {TEXT("Withered Beach coastal water arrival"),0x1B120033,FVector(158.300995,50.575699,-.895),false,true},
+        {TEXT("Withered Beach drop into coastal water"),0x1B120033,FVector(158.300995,50.575699,1.105),true,true},
         {TEXT("Fort Tethana town-network arrival"),0x2681001D,FVector(77.7,108.1,240),false},
         // Same real outdoor geometry, with a server-authored drop above it.
         {TEXT("Fort Tethana elevated arrival"),0x2681001D,FVector(77.7,108.1,260),true},
         {TEXT("Aerlinthe Reservoir"),0x02EE03D2,FVector(80,-110,6),true},
         {TEXT("Aerlinthe Lower Reservoir"),0x02ED01B5,FVector(70,-30,-72),true}
     };
+    // Exercise independently located river and shallow shoreline cells too.
+    // Portal placement must depend on DAT terrain, never a portal name, weenie
+    // or destination ID. Author the test drops from real water support heights.
+    {
+        FEntryWorld F;
+        auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
+        if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+        auto AddWaterArrivals=[&](uint32 Block,float X,float Y,const TCHAR* GroundName,const TCHAR* DropName)
+        {
+            Dat->GetOrBuildLandblockMesh(Block,100);
+            FACEPosition Pose;Pose.CellId=Block|1;Pose.Location=FVector(X,Y,0);Pose.NormalizeOutdoorLandblock();
+            const FVector At=Pose.ToUnrealLocation(100);float Ground=0;FVector Normal;
+            if(!Dat->SampleOutdoorGroundZ(At.X,At.Y,100,Ground,&Normal) || Normal.Z<.999f
+                || Dat->GetOutdoorWaterDepthCm(At.X,At.Y,100)<=20.f
+                || Dat->GetOutdoorBlockWaterType(At.X,At.Y,100)==2) return false;
+            Pose.Location.Z=(Ground+.5f)/100;
+            Arrivals.Add({GroundName,uint32(Pose.CellId),Pose.Location,false,true});
+            Pose.Location.Z+=2;
+            Arrivals.Add({DropName,uint32(Pose.CellId),Pose.Location,true,true});
+            return true;
+        };
+        TestTrue(TEXT("Independent DC56 water fixture exists"),AddWaterArrivals(0xDC560000,95.269531f,147.908203f,
+            TEXT("DC56 water arrival"),TEXT("DC56 water drop")));
+        bool FoundShore=false;
+        for(uint32 X=198;X<=203 && !FoundShore;++X)for(uint32 Y=137;Y<=143 && !FoundShore;++Y)
+        {
+            const uint32 Block=(X<<24)|(Y<<16);Dat->GetOrBuildLandblockMesh(Block,100);
+            for(int32 I=4;I<188 && !FoundShore;I+=4)for(int32 J=4;J<188 && !FoundShore;J+=4)
+            {
+                FACEPosition Pose;Pose.CellId=Block|1;Pose.Location=FVector(I,J,0);
+                const FVector At=Pose.ToUnrealLocation(100);
+                const float Depth=Dat->GetOutdoorWaterDepthCm(At.X,At.Y,100);
+                if(Depth>20.f && Depth<80.f)
+                    FoundShore=AddWaterArrivals(Block,I,J,TEXT("Rithwic shallow shoreline arrival"),TEXT("Rithwic shallow shoreline drop"));
+            }
+        }
+        TestTrue(TEXT("Independent shallow riverbank fixture exists"),FoundShore);
+    }
     for (const auto& Arrival : Arrivals)
     {
         FEntryWorld F;
@@ -300,6 +340,24 @@ bool FACEPortalDropTest::RunTest(const FString&)
         TestFalse(TEXT("A long portal animation cannot recall a valid drop"),PC->TickWorldEntryRecovery(.016f,TEXT("spawn-placement")));
         TestFalse(TEXT("A valid drop never attempts lifestone recovery"),PC->bWorldEntryRecoveryAttempted);
 
+        if(Arrival.Water && !Arrival.Airborne)
+        {
+            TestTrue(TEXT("Water arrival really exercises submerged DAT support"),
+                Dat->GetOutdoorWaterDepthCm(Feet.X,Feet.Y,100)>20.f);
+            auto* Obstacle=F.World->SpawnActor<AActor>();
+            auto* Box=NewObject<UBoxComponent>(Obstacle);Obstacle->SetRootComponent(Box);Obstacle->AddInstanceComponent(Box);
+            Box->SetBoxExtent(FVector(75,75,300));Box->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+            Box->SetCollisionResponseToAllChannels(ECR_Block);Box->RegisterComponent();
+            Obstacle->SetActorLocation(Feet+FVector(0,0,100));
+            FVector NearbyPlacement;
+            TestTrue(TEXT("Obstructed water arrival finds nearby clear support"),PC->FindWorldEntryPlacement(NearbyPlacement));
+            const double Distance=FVector::Dist2D(NearbyPlacement,Placement);
+            TestTrue(TEXT("Nearby landing moves clear but stays inside retail's four-unit search"),Distance>75 && Distance<=400.1);
+            TestFalse(TEXT("A nearby landing avoids lifestone recovery"),PC->TickWorldEntryRecovery(.016f,TEXT("spawn-placement")));
+            TestFalse(TEXT("Solid scenery still blocks the original water landing"),NearbyPlacement.Equals(Placement,1));
+            Box->SetCollisionEnabled(ECollisionEnabled::NoCollision);Obstacle->Destroy();
+        }
+
         // Use the real reveal cut and movement tick with no held keys. It must
         // neither reapply an old grounded anchor nor send a grounded StopMovement.
         PC->PlayerInput=NewObject<UPlayerInput>(PC);PC->bRetailCursorInstalled=true;
@@ -313,7 +371,17 @@ bool FACEPortalDropTest::RunTest(const FString&)
         TestTrue(TEXT("Arrival keeps autonomous reporting active"),Session->bForcePositionReporting);
         TestTrue(TEXT("Stale server anchor cannot overwrite validated arrival"),PC->PredictedPose.ToUnrealLocation(100).Equals(Placement-FVector(0,0,91.75),.01));
         TestEqual(TEXT("Arrival reports the resolved room to the server"),uint32(Session->GetPlayerPosition().CellId),PlacementCell);
-        if(!Arrival.Airborne) continue;
+        if(!Arrival.Airborne)
+        {
+            if(Arrival.Water)
+            {
+                for(int32 Frame=0;Frame<15;++Frame)PC->PlayerTick(1.f/90.f);
+                TestTrue(TEXT("Wading arrival stays at its DAT support after reveal"),FMath::Abs(Pawn->GetActorLocation().Z-91.75-Feet.Z)<2.f);
+                TestTrue(TEXT("Wading retains network ground contact"),Session->bAutoPosContact);
+                TestFalse(TEXT("Wading does not trigger recovery after reveal"),PC->bWorldEntryRecoveryAttempted);
+            }
+            continue;
+        }
         TestTrue(TEXT("Drop predicts its fall immediately"),PC->bLocalPredicting);
         for(int32 Frame=0;Frame<15;++Frame) PC->PlayerTick(1.f/90.f);
         TestTrue(TEXT("Gravity advances without a movement or Jump input"),Pawn->GetActorLocation().Z<Placement.Z-5);
@@ -937,7 +1005,7 @@ bool FACERetailWorldEntryTest::RunTest(const FString& Parameters)
         Controller->ApplyPlayerCapsuleFromSetup(SelfObject.SetupId);
         TestTrue(TEXT("Appearance updates keep local visual feet on the same surface"),
             App->MeshRoot->GetComponentLocation().Equals(Feet,.01));
-        const float ExpectedHalf = FMath::Clamp(Controller->PlayerSetupHeightAc * ObjectScale,1.5f,2.2f)*50.f-1.f;
+        const float ExpectedHalf = Controller->PlayerSetupHeightAc * ObjectScale * 50.f;
         TestTrue(TEXT("World capsule height applies object scale exactly once"),
             FMath::IsNearlyEqual(Capsule->GetScaledCapsuleHalfHeight(),ExpectedHalf,.01f));
     }

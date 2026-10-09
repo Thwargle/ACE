@@ -321,6 +321,7 @@ private:
 		CharacterInfo,
 		Book,
 		JournalList,
+		JournalNotes,
 		Components,
 	};
 	UPROPERTY()
@@ -1024,9 +1025,9 @@ private:
 	int32 VassalScrollOffset = 0, VassalVisibleRows = 1;
 	bool bSocialEntriesBound = false;
 	UPROPERTY()
-	TObjectPtr<UEditableTextBox> FellowshipNameEntry;
+	TObjectPtr<UACERetailTextEntry> FellowshipNameEntry;
 	UPROPERTY()
-	TObjectPtr<UEditableTextBox> FriendNameEntry;
+	TObjectPtr<UACERetailTextEntry> FriendNameEntry;
 	UPROPERTY()
 	TArray<TObjectPtr<UTextBlock>> FellowRows;
 	UPROPERTY()
@@ -1054,7 +1055,7 @@ private:
 	UPROPERTY()
 	TArray<int32> VassalRowGuids;
 	UPROPERTY()
-	TObjectPtr<UEditableTextBox> SquelchNameEntry;
+	TObjectPtr<UACERetailTextEntry> SquelchNameEntry;
 	UPROPERTY()
 	TArray<TObjectPtr<UTextBlock>> SquelchRows;
 	UPROPERTY() TArray<TObjectPtr<UTextBlock>> SquelchStatusRows;
@@ -1089,8 +1090,9 @@ private:
 	FString ActiveQuestTab = TEXT("ContractsPage");
 	UPROPERTY() TArray<TObjectPtr<UTextBlock>> QuestTabLabels;
 	UPROPERTY() TArray<TObjectPtr<UTextBlock>> JournalLabels;
-	UPROPERTY() TArray<TObjectPtr<UEditableTextBox>> JournalEntries;
-	UPROPERTY() TObjectPtr<UMultiLineEditableText> JournalNotes;
+	TArray<TSharedPtr<FACEUIElement>> JournalRowElements;
+	UPROPERTY() TArray<TObjectPtr<UACERetailTextEntry>> JournalEntries;
+	UPROPERTY() TObjectPtr<UACERetailTextEntry> JournalNotes;
 	struct FJournalPage { FString Label, Title, Notes, Location; int32 Days=0, Hours=0, Minutes=0; double TimerEnd=0; };
 	TArray<FJournalPage> JournalPages;
 	FString JournalFile;
@@ -1099,6 +1101,8 @@ private:
 	int32 JournalPageIndex=0;
 	int32 JournalScrollOffset=0;
 	int32 JournalFilteredCount=0;
+	FString JournalSortColumn=TEXT("PageSortButton");
+	bool bJournalSortDescending=false;
 	int32 LastJournalClickPage=-1;
 	double LastJournalClickTime=0;
 	bool bJournalFieldsDirty=true;

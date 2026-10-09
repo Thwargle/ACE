@@ -1,5 +1,6 @@
 #include "ACERenderAudit.h"
 #include "ACEScriptComponent.h"
+#include "ACEParticleUpdateSubsystem.h"
 #include "ACEWorldEntityActor.h"
 #include "ACEClientSubsystem.h"
 #include "ACECharacterAppearanceComponent.h"
@@ -58,6 +59,12 @@ FACERenderAudit FACERenderAudit::Collect(UWorld* World)
 {
 	FACERenderAudit Out;
 	if (!World) return Out;
+	if(const auto* Updates=World->GetSubsystem<UACEParticleUpdateSubsystem>())
+	{
+		Out.ParticleUpdateBatches=Updates->GetLastBatchCount();
+		Out.ParticleUpdateVertices=Updates->GetLastVertexCount();
+		Out.bParallelParticleUpdates=Updates->WasLastFlushParallel();
+	}
 	TMap<FString, FString> Identities, StaticInstances;
 	TSet<UTexture2D*> LandscapeTextures;
 	auto Identity = [&](const FString& Key, AActor* A)
@@ -194,6 +201,8 @@ void FACERenderAudit::Log() const
 	}
 	UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: particleEmitters=%d degraded=%d activeParticles=%d particleLights=%d"),
 		ParticleEmitters, DegradedEmitters, ActiveParticles, ParticleLights);
+	UE_LOG(LogTemp,Display,TEXT("ACE RenderAudit: last particle update batches=%d vertices=%lld parallel=%d (CPU preparation; no density reduction)"),
+		ParticleUpdateBatches,ParticleUpdateVertices,bParallelParticleUpdates);
 	for (const auto& Format : LandscapeTextureFormats)
 		UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: landscapeTexture %s unique=%d"), *Format.Key, Format.Value);
 	UE_LOG(LogTemp, Display, TEXT("ACE RenderAudit: landscapeTexture allocatedEstimateMiB=%.2f (unique textures, including mipmaps)"),

@@ -17,7 +17,7 @@ public:
     void Construct(const FArguments&, UACERetailTextEntry* InOwner) { Owner=InOwner; SetClipping(EWidgetClipping::ClipToBounds); }
     virtual bool ComputeVolatility() const override { return HasKeyboardFocus(); }
     virtual bool SupportsKeyboardFocus() const override { return true; }
-    void ResetSelection() { if (Owner.IsValid()) Cursor=Anchor=Owner->Value.Len(); }
+    void ResetSelection() { if (Owner.IsValid()) Cursor=Anchor=Owner->Value.Len(); ScrollOffset=0; bFollowCaret=true; }
     virtual FVector2D ComputeDesiredSize(float) const override { return FVector2D(60,16); }
     virtual FReply OnFocusReceived(const FGeometry&, const FFocusEvent&) override
     {
@@ -48,7 +48,7 @@ public:
         if (Type!=ETextEntryType::TextEntryUpdated)
         {
             bCommitting=true; bPlatformKeyboardOpen=false;
-            if (Type==ETextEntryType::TextEntryCanceled) Owner->Value=Original;
+            if (Type==ETextEntryType::TextEntryCanceled) { Owner->Value=Original; Owner->OnTextChanged.Broadcast(Owner->GetText()); }
             Owner->Commit(Type==ETextEntryType::TextEntryAccepted ? ETextCommit::OnEnter : ETextCommit::OnCleared);
             FSlateApplication::Get().ClearUserFocus(KeyboardUser,EFocusCause::Cleared);
         }
@@ -86,8 +86,39 @@ public:
     float Scroll(const TArray<FACEBitmapTextLine>& Rows, float Height, int32 LineHeight) const
     {
         if (Owner->ContentMargins.IsSet() && !Owner->bMultiline) return 0.f;
-        return HasKeyboardFocus() ? FMath::Max(0.f,(CursorLine(Rows)+1)*LineHeight+2-Height) : 0.f;
+        const FMargin Padding=Owner->ContentMargins.Get(FMargin(2.f));
+        const float Visible=FMath::Max(float(LineHeight),Height-Padding.Top-Padding.Bottom);
+        if (HasKeyboardFocus() && bFollowCaret)
+        {
+            const float Top=CursorLine(Rows)*LineHeight;
+            if (Top<ScrollOffset) ScrollOffset=Top;
+            else if (Top+LineHeight>ScrollOffset+Visible) ScrollOffset=Top+LineHeight-Visible;
+            bFollowCaret=false;
+        }
+        ScrollOffset=FMath::Clamp(ScrollOffset,0.f,FMath::Max(0.f,Rows.Num()*LineHeight-Visible));
+        return ScrollOffset;
     }
+    virtual FReply OnMouseWheel(const FGeometry& G,const FPointerEvent& E) override
+    {
+        if (!Owner.IsValid() || !Owner->bMultiline || !Owner->FontLabel || !Owner->FontLabel->GetBitmapFont()) return FReply::Unhandled();
+        const int32 Height=Owner->FontLabel->GetBitmapFont()->MaxCharHeight;
+        ScrollOffset=Scroll(Lines(G.GetLocalSize().X),G.GetLocalSize().Y,Height)-E.GetWheelDelta()*Height*3;
+        bFollowCaret=false; Invalidate(EInvalidateWidgetReason::Paint); return FReply::Handled();
+    }
+    float GetScrollOffset() const
+    {
+        if(!Owner.IsValid() || !Owner->FontLabel || !Owner->FontLabel->GetBitmapFont())return 0;
+        return Scroll(Lines(GetCachedGeometry().GetLocalSize().X),GetCachedGeometry().GetLocalSize().Y,Owner->FontLabel->GetBitmapFont()->MaxCharHeight);
+    }
+    float GetScrollEnd() const
+    {
+        if(!Owner.IsValid() || !Owner->bMultiline || !Owner->FontLabel || !Owner->FontLabel->GetBitmapFont())return 0;
+        const float Height=Owner->FontLabel->GetBitmapFont()->MaxCharHeight;
+        const FMargin Padding=Owner->ContentMargins.Get(FMargin(2.f));
+        return FMath::Max(0.f,Lines(GetCachedGeometry().GetLocalSize().X).Num()*Height
+            -FMath::Max(Height,float(GetCachedGeometry().GetLocalSize().Y)-Padding.Top-Padding.Bottom));
+    }
+    void SetScrollOffset(float Offset) { ScrollOffset=FMath::Clamp(Offset,0.f,GetScrollEnd()); bFollowCaret=false; Invalidate(EInvalidateWidgetReason::Paint); }
     int32 Hit(const FGeometry& G, FVector2D Absolute) const
     {
         if (!Owner.IsValid() || !Owner->FontLabel || !Owner->FontLabel->GetBitmapFont()) return 0;
@@ -132,6 +163,8 @@ public:
         Undo=O->Value; bHasUndo=true;
         O->Value=O->Value.Left(Begin)+Insert+O->Value.Mid(End);
         Cursor=Anchor=Begin+Insert.Len(); Invalidate(EInvalidateWidgetReason::LayoutAndVolatility);
+        bFollowCaret=true;
+        O->OnTextChanged.Broadcast(O->GetText());
     }
     virtual FReply OnKeyChar(const FGeometry&, const FCharacterEvent& E) override
     {
@@ -149,7 +182,7 @@ public:
             if (Key==EKeys::X) ReplaceSelection(FString());
         }
         else if (E.IsControlDown() && Key==EKeys::V) { FString P; FPlatformApplicationMisc::ClipboardPaste(P); ReplaceSelection(P); }
-        else if (E.IsControlDown() && Key==EKeys::Z) { if (bHasUndo) { Swap(O->Value,Undo); ResetSelection(); } }
+        else if (E.IsControlDown() && Key==EKeys::Z) { if (bHasUndo) { Swap(O->Value,Undo); ResetSelection(); O->OnTextChanged.Broadcast(O->GetText()); } }
         else if (Key==EKeys::BackSpace || Key==EKeys::Delete)
         {
             if (Cursor==Anchor) { if (Key==EKeys::BackSpace) Anchor=FMath::Max(0,Cursor-1); else Cursor=FMath::Min(O->Value.Len(),Cursor+1); }
@@ -158,7 +191,7 @@ public:
         else if (Key==EKeys::Escape || Key==EKeys::Tab || (Key==EKeys::Enter && (!O->bMultiline || E.IsControlDown())))
         {
             bCommitting=true;
-            if (Key==EKeys::Escape) O->Value=Original;
+            if (Key==EKeys::Escape) { O->Value=Original; O->OnTextChanged.Broadcast(O->GetText()); }
             O->Commit(Key==EKeys::Escape ? ETextCommit::OnCleared : Key==EKeys::Tab ? ETextCommit::OnUserMovedFocus : ETextCommit::OnEnter);
             return FReply::Handled().ClearUserFocus();
         }
@@ -173,7 +206,7 @@ public:
             if (!E.IsShiftDown()) Anchor=Cursor;
         }
         else return FReply::Unhandled();
-        Invalidate(EInvalidateWidgetReason::Paint); return FReply::Handled();
+        bFollowCaret=true; Invalidate(EInvalidateWidgetReason::Paint); return FReply::Handled();
     }
     virtual int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& Out,int32 Layer,const FWidgetStyle& Style,bool) const override
     {
@@ -209,8 +242,16 @@ private:
     int32 Cursor=0,Anchor=0;
     FString Original,Undo;
     bool bCommitting=false, bHasUndo=false;
+    mutable float ScrollOffset=0;
+    mutable bool bFollowCaret=true;
 };
 
+UACERetailTextEntry::UACERetailTextEntry()
+{
+    // UWidget synchronizes its clipping onto Slate after Construct. Setting only
+    // the leaf's clipping lets long notes draw over neighboring retail controls.
+    SetClipping(EWidgetClipping::ClipToBounds);
+}
 void UACERetailTextEntry::SetText(const FText& Text) { Value=Text.ToString(); if (Editor) Editor->ResetSelection(); InvalidateLayoutAndVolatility(); }
 void UACERetailTextEntry::SetRetailElement(UACEUIResourceResolver* Resources,const TSharedPtr<FACEUIElement>& Element)
 {
@@ -219,5 +260,8 @@ void UACERetailTextEntry::SetRetailElement(UACEUIResourceResolver* Resources,con
 }
 void UACERetailTextEntry::Commit(ETextCommit::Type Method) { OnTextCommitted.Broadcast(GetText(),Method); OnContextCommitted.Broadcast(ContextId,GetText(),Method); }
 void UACERetailTextEntry::RequestPlatformKeyboard(uint32 UserIndex) { if (Editor.IsValid()) Editor->OpenPlatformKeyboard(UserIndex); }
+float UACERetailTextEntry::GetScrollOffset() const { return Editor ? Editor->GetScrollOffset() : 0.f; }
+float UACERetailTextEntry::GetScrollOffsetOfEnd() const { return Editor ? Editor->GetScrollEnd() : 0.f; }
+void UACERetailTextEntry::SetScrollOffset(float Offset) { if(Editor)Editor->SetScrollOffset(Offset); }
 TSharedRef<SWidget> UACERetailTextEntry::RebuildWidget() { Editor=SNew(SACERetailTextEntry,this); Editor->ResetSelection(); return Editor.ToSharedRef(); }
 void UACERetailTextEntry::ReleaseSlateResources(bool bChildren) { Super::ReleaseSlateResources(bChildren); Editor.Reset(); }

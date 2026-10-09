@@ -166,6 +166,8 @@ public:
 	void BindSetupStaticMeshMaterials(UStaticMeshComponent* Comp, uint32 SetupId, float WorldScale, bool bEnableCollision, int32 PlacementId, bool bParticleGfx = false, bool bStencilHoleClip = false, bool bOutdoorLit = false, bool bPhysicsCollisionOnly = false);
 
 	bool BuildSetupAppearance(uint32 SetupId, const FACEObjDesc& Appearance, float WorldScale, FACEBuiltSetupMesh& OutMesh, int32 PlacementId = 0);
+	/** Immutable geometry shared across identical creatures/corpses; materials and animation remain per actor. */
+	TSharedPtr<const FACEBuiltSetupMesh> GetOrBuildSetupAppearanceShared(uint32 SetupId, const FACEObjDesc& Appearance, float WorldScale, int32 PlacementId = 0);
 
 	UFUNCTION(BlueprintCallable, Category = "ACE|DAT")
 	bool ApplySetupToProceduralMesh(UProceduralMeshComponent* ProcMesh, int32 SetupId, float WorldScale = 1.f, bool bEnableCollision = false, int32 PlacementId = 0, bool bForceDrawCollision = false, bool bIndoorStairCollision = false, bool bOutdoorLit = false, bool bReverseFaces = false);
@@ -390,6 +392,7 @@ public:
 	/** Setup defaults used by the PhysicsScript/sound runtime. */
 	bool TryGetSetupRuntimeMetadata(uint32 SetupId, uint32& OutDefaultScriptId, uint32& OutScriptTableId, uint32& OutSoundTableId);
 	bool GetSetupCollisionShapes(uint32 SetupId, TArray<FACEDatCollisionShape>& OutShapes, bool& bHasPhysicsBSP);
+	bool GetSetupMovementSpheres(uint32 SetupId, TArray<FACEDatCollisionShape>& OutSpheres);
 
 	/** Parsed client_portal.dat script/particle assets; returned pointers remain valid until DAT reset. */
 	const FACEDatParticleEmitterInfo* GetParticleEmitterInfo(uint32 Id);
@@ -725,6 +728,21 @@ private:
 	friend class FACERetailSpellLevelTest;
 	// Entries cannot move with TMap growth while a renderer is consuming their parts.
 	TMap<uint64, TSharedPtr<const FACEBuiltSetupMesh>> SetupMeshCache;
+	friend class FACECreatureSpawnCacheTest;
+	struct FAppearanceMeshEntry
+	{
+		uint32 SetupId = 0;
+		float WorldScale = 0;
+		int32 PlacementId = 0;
+		FACEObjDesc Appearance;
+		TSharedPtr<const FACEBuiltSetupMesh> Mesh;
+		uint64 LastUse = 0;
+		SIZE_T Bytes = 0;
+	};
+	TMap<uint64, FAppearanceMeshEntry> AppearanceMeshCache;
+	SIZE_T AppearanceMeshCacheBytes = 0;
+	uint64 AppearanceMeshUse = 0;
+	void ClearAppearanceMeshCache() { AppearanceMeshCache.Reset(); AppearanceMeshCacheBytes = 0; AppearanceMeshUse = 0; }
 	TMap<uint32, TSharedPtr<FACEBuiltLandblockMesh>> LandblockCache;
 	TMap<uint32, TSharedPtr<const FACEDatLandblockInfo>> LandblockInfoCache;
 	struct FCachedDoorwayGeometry
@@ -739,6 +757,7 @@ private:
 		float SelectionRadius = 0.f;
 		uint32 Animation = 0, Script = 0, ScriptTable = 0, SoundTable = 0;
 		TArray<FACEDatCollisionShape> Shapes;
+		TArray<FACEDatCollisionShape> MovementSpheres;
 		bool bPhysicsBSP = false, bValid = false;
 		uint64 LastUse = 0;
 	};

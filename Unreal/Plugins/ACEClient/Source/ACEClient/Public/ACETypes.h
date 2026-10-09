@@ -399,6 +399,13 @@ struct ACECLIENT_API FACEObjDesc
 	{
 		return PaletteBaseId != 0 || SubPalettes.Num() > 0 || TextureChanges.Num() > 0 || AnimPartChanges.Num() > 0;
 	}
+	/** Geometry replacements do not recolor surfaces; texture changes are part-specific. */
+	bool HasSurfaceOverrides(int32 PartIndex) const
+	{
+		return PaletteBaseId != 0 || !SubPalettes.IsEmpty()
+			|| TextureChanges.ContainsByPredicate([PartIndex](const FACEObjDescTextureChange& Change)
+				{ return static_cast<int32>(Change.PartIndex) == PartIndex; });
+	}
 
 	/** Stable fingerprint for skipping redundant ApplyWorldObject rebuilds (ObjDesc spam on wield). */
 	uint64 GetContentHash() const
@@ -494,6 +501,10 @@ struct ACECLIENT_API FACEObjectMotionState
 	/** Remaining CommandList actions after ActionCommand (scarab windup chain). */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE|Movement")
 	TArray<int32> ActionFollowups;
+	/** Each MotionItem carries its own speed, including follow-up windups. */
+	UPROPERTY(BlueprintReadOnly, Category = "ACE|Movement")
+	TArray<float> ActionFollowupSpeeds;
+	float FollowupSpeed(int32 Index) const { return ActionFollowupSpeeds.IsValidIndex(Index) ? ActionFollowupSpeeds[Index] : ActionSpeed; }
 
 	/** MovementType from MovementData (0=interpreted, 6=MoveToObject, 7=MoveToPosition). */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE|Movement")
@@ -1332,6 +1343,10 @@ struct ACECLIENT_API FACEWorldObject
 	/** PhysicsDesc 9×uint16 timestamps (ACEPhysicsTimeStamp). */
 	uint16 PhysicsTimestamps[ACEPhysicsTimeStamp::Count] = {};
 	bool bHasPhysicsTimestamps = false;
+	// CMotionInterp's independent 15-bit action stamp. Movement updates can
+	// repeat outstanding actions without asking observers to replay them.
+	uint16 ReceivedActionStamp = 0;
+	bool bHasReceivedActionStamp = false;
 	/** UI-only record awaiting CreateObject's full physics description. Events cannot complete it. */
 	bool bPhysicsDescriptionPending = false;
 

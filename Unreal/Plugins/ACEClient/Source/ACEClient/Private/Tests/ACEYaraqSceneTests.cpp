@@ -271,8 +271,13 @@ bool FACEYaraqSceneTest::RunTest(const FString& Parameters)
     {
         auto* Component=NewObject<UStaticMeshComponent>(Owner); Component->SetStaticMesh(Pedestal);
         Dat->BindSetupStaticMeshMaterials(Component,0x01002A1B,100,false,0,false,true);
-        TestEqual(TEXT("Pedestal retains both textured surfaces without its PORT fill"),Component->GetNumMaterials(),2);
         const auto* PedestalData=Dat->GetOrBuildSetupMesh(0x01002A1B,100);
+        TSet<uint32> PedestalSurfaces;
+        int32 MaterialSections=0;
+        if(PedestalData)for(const auto& Part:PedestalData->Parts)for(const auto& Section:Part.Sections)
+            if(!Section.bCollisionOnly){PedestalSurfaces.Add(Section.SurfaceId);++MaterialSections;}
+        TestEqual(TEXT("Pedestal retains both textured surfaces without its PORT fill"),PedestalSurfaces.Num(),2);
+        TestEqual(TEXT("Wrapped and clamped uses retain separate material slots"),Component->GetNumMaterials(),MaterialSections);
         TestTrue(TEXT("Pedestal retains its black portal aperture for PView"),PedestalData && !PedestalData->Parts[0].Portals.IsEmpty());
         for (int32 I=0; I<Component->GetNumMaterials(); ++I)
         {

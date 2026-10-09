@@ -154,4 +154,50 @@ bool FACERefinedContactOrderingTest::RunTest(const FString&)
  CheckBoth(Sphere,TEXT("Exact penetrating creature"),true);
  return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACESlopeContactSlideTest,"ACE.Collision.SlopeContactSlide",
+ EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACESlopeContactSlideTest::RunTest(const FString&)
+{
+ const auto Values=UWorld::InitializationValues().AllowAudioPlayback(false).RequiresHitProxies(false)
+  .CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false);
+ auto* World=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);
+ auto& Context=GEngine->CreateNewWorldContext(EWorldType::Game);Context.SetCurrentWorld(World);
+ ON_SCOPE_EXIT{World->DestroyWorld(false);GEngine->DestroyWorldContext(World);};
+ auto MakePlane=[&](const FVector& Normal,const FVector& Surface)
+ {
+  auto* Actor=World->SpawnActor<AActor>();auto* Box=NewObject<UBoxComponent>(Actor);
+  Actor->SetRootComponent(Box);Box->InitBoxExtent(FVector(1000,1000,1));
+  Box->SetCollisionEnabled(ECollisionEnabled::QueryOnly);Box->SetCollisionResponseToAllChannels(ECR_Ignore);
+  Box->SetCollisionResponseToChannel(ECC_Pawn,ECR_Block);Box->RegisterComponent();
+  Actor->SetActorLocationAndRotation(Surface-Normal,FRotationMatrix::MakeFromZ(Normal).ToQuat());
+  return Actor;
+ };
+ const auto Body=FCollisionShape::MakeCapsule(10,20);
+ FCollisionQueryParams Query(SCENE_QUERY_STAT(SlopeContactSlide),false);
+ const FVector WallNormal=FVector(-1,-1,0).GetSafeNormal();
+ auto* Wall=MakePlane(WallNormal,-WallNormal*10);
+ for(double Gradient:{-.5,0.,.5})
+ {
+  const FVector GroundNormal=FVector(0,-Gradient,1).GetSafeNormal();
+  auto* Floor=MakePlane(GroundNormal,FVector::ZeroVector);
+  // Lower sphere rests on the slope; the upper sphere touches the same wall.
+  const FVector From=WallNormal*.02+FVector(0,0,10+10/GroundNormal.Z+.02);
+  const FVector Requested(20,40,40*Gradient);
+  FHitResult Hit;
+  TestTrue(TEXT("Sloped wall fixture blocks the original diagonal"),ACEBodySweep::Sweep(*World,Hit,From,From+Requested,Body,Query));
+  const FVector Actual=ACEBodySweep::SlideGrounded(*World,From,From+Requested,Hit,Body,Query)-From;
+  // Retail CSphere::slide_sphere projects the requested displacement onto
+  // the intersection (-1,1,gradient). Analytic expected Y = (20+40*g*g)/(2+g*g).
+  const double Y=(20+40*Gradient*Gradient)/(2+Gradient*Gradient);
+  const FVector Expected(-Y,Y,Y*Gradient);
+  AddInfo(FString::Printf(TEXT("Slope %.2f slide %s expected %s"),Gradient,*Actual.ToString(),*Expected.ToString()));
+  TestTrue(TEXT("Grounded slide matches retail contact-plane displacement"),Actual.Equals(Expected,.15));
+  TestTrue(TEXT("Slide remains on its ground plane"),FMath::Abs(FVector::DotProduct(Actual,GroundNormal))<.15);
+  FHitResult EndHit;
+  TestFalse(TEXT("Sliding does not penetrate the wall or ramp"),ACEBodySweep::SweepBody(*World,EndHit,From+Actual,From+Actual+GroundNormal*.01,Body,Query) && EndHit.bStartPenetrating && EndHit.PenetrationDepth>.1);
+  Floor->Destroy();
+ }
+ Wall->Destroy();
+ return true;
+}
 #endif

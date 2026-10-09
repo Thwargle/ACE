@@ -55,6 +55,7 @@
 #include "UI/ACEUILayoutResolver.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "UI/ACERetailTextBlock.h"
+#include "UI/ACERetailTextEntry.h"
 #include "UI/ACERetailKeySelector.h"
 #include "Engine/GameInstance.h"
 #include "Engine/TextureRenderTarget2D.h"
@@ -3113,15 +3114,60 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         Gameplay->HandleJournalEdited(FText::GetEmpty());
         Gameplay->JournalFile.Reset(); Gameplay->RefreshQuestOverlays();
         TestEqual(TEXT("Journal notes survive a disk reload"),Gameplay->JournalNotes->GetText().ToString(),FString(TEXT("Remember the Yaraq roofs.")));
+        const auto NotesSlate=Gameplay->JournalNotes->TakeWidget();
+        NotesSlate->OnFocusReceived(Gameplay->JournalNotes->GetCachedGeometry(),FFocusEvent());
+        NotesSlate->OnKeyChar(Gameplay->JournalNotes->GetCachedGeometry(),FCharacterEvent('!',FModifierKeysState(),0,false));
+        TestEqual(TEXT("DAT journal editing updates the saved page immediately"),Gameplay->JournalPages[0].Notes,FString(TEXT("Remember the Yaraq roofs.!")));
+        NotesSlate->OnKeyDown(Gameplay->JournalNotes->GetCachedGeometry(),FKeyEvent(EKeys::Escape,FModifierKeysState(),0,false,0,0));
+        TestEqual(TEXT("Cancelling an edit restores the saved notes too"),Gameplay->JournalPages[0].Notes,FString(TEXT("Remember the Yaraq roofs.")));
+        FString LongNotes;for(int32 Line=0;Line<60;++Line)LongNotes+=FString::Printf(TEXT("Journal line %d\n"),Line);
+        Gameplay->JournalNotes->SetText(FText::FromString(LongNotes));CaptureScreen(TEXT("GameplayJournalLongNotes"));
+        TestTrue(TEXT("Long DAT notes expose a scroll range"),Gameplay->JournalNotes->GetScrollOffsetOfEnd()>0);
+        TestTrue(TEXT("Long journal text remains clipped after UMG property synchronization"),
+            Gameplay->JournalNotes->GetCachedWidget()->GetClipping()==EWidgetClipping::ClipToBounds);
+        const auto NotesDown=Manager->FindElementUnder(TEXT("NotesScrollbar"),TEXT("ScrollBar_Down"));
+        Gameplay->OnElementActivated(NotesDown);
+        TestTrue(TEXT("Authored journal scrollbar moves the editable text"),Gameplay->JournalNotes->GetScrollOffset()>0);
+        Gameplay->JournalNotes->SetScrollOffset(Gameplay->JournalNotes->GetScrollOffsetOfEnd());CaptureScreen(TEXT("GameplayJournalNotesEnd"));
+        TestTrue(TEXT("The last journal lines remain reachable"),FMath::IsNearlyEqual(Gameplay->JournalNotes->GetScrollOffset(),Gameplay->JournalNotes->GetScrollOffsetOfEnd()));
+        Gameplay->JournalNotes->SetText(FText::FromString(TEXT("Remember the Yaraq roofs.")));
         Gameplay->HandleNamedClick(TEXT("PageListTab")); CaptureScreen(TEXT("GameplayJournalPages"));
         TestTrue(TEXT("Page list shows saved titles"),Gameplay->QuestRows[0]->GetText().ToString().Contains(TEXT("Roof survey")));
+        Gameplay->JournalPages.SetNum(1); // Keep reruns independent of the saved sorting fixture below.
         for (int32 Page=1;Page<40;++Page) { auto& Note=Gameplay->JournalPages.AddDefaulted_GetRef(); Note.Title=FString::Printf(TEXT("Entry %d"),Page); }
         Gameplay->RefreshQuestOverlays(); Gameplay->ScrollQuestList(-1.f);
         TestTrue(TEXT("Page list scrolls to later saved pages"),Gameplay->JournalScrollOffset==3 && Gameplay->QuestRowIds[0]==-4);
         Gameplay->JournalSearch=TEXT("Entry 39"); Gameplay->RefreshQuestOverlays();
         TestTrue(TEXT("Journal search reaches pages beyond the visible rows"),Gameplay->JournalFilteredCount==1 && Gameplay->QuestRowIds[0]==-40);
         Gameplay->JournalSearch.Reset(); Gameplay->JournalPages.SetNum(1); Gameplay->JournalScrollOffset=0;
+        Gameplay->JournalPages[0].Title=TEXT("Zebra");
+        Gameplay->JournalPages.AddDefaulted_GetRef().Title=TEXT("Alpha");
+        Gameplay->JournalPageIndex=0;
+        Gameplay->HandleNamedClick(TEXT("TitleSortButton"));
+        TestEqual(TEXT("Title sorting orders the visible list"),Gameplay->QuestRowIds[0],-2);
+        TestEqual(TEXT("Title sorting preserves stored page numbers"),Gameplay->JournalPages[0].Title,FString(TEXT("Zebra")));
+        TestEqual(TEXT("Sorting preserves the currently edited page"),Gameplay->JournalPageIndex,0);
+        Gameplay->HandleNamedClick(TEXT("TitleSortButton"));
+        TestEqual(TEXT("Repeated title click reverses the list"),Gameplay->QuestRowIds[0],-1);
+        Gameplay->JournalPages[1].TimerEnd=double(FDateTime::UtcNow().ToUnixTimestamp())+3600;
+        Gameplay->HandleNamedClick(TEXT("TimerSortButton"));
+        TestEqual(TEXT("Retail timer sort shows running timers before stopped timers"),Gameplay->QuestRowIds[0],-2);
+        Gameplay->HandleNamedClick(TEXT("PageSortButton"));
+        TestEqual(TEXT("Page sort restores the original numbered order"),Gameplay->QuestRowIds[0],-1);
+        Gameplay->JournalPages[0].Title=TEXT("A long journal title near its cap");
+        Gameplay->JournalPages[0].Label=TEXT("Quest notes");
+        Gameplay->JournalPages[0].TimerEnd=double(FDateTime::UtcNow().ToUnixTimestamp())-1;
+        Gameplay->RefreshQuestOverlays();CaptureScreen(TEXT("GameplayJournalColumns"));
+        const auto JournalRow=Gameplay->JournalRowElements[0];
+        TestEqual(TEXT("Journal rows use the retail four-column template"),JournalRow->Children.Num(),4);
+        TestEqual(TEXT("Selected journal row uses the retail selection artwork"),JournalRow->DefaultState,uint32(6));
+        TestTrue(TEXT("Journal cells restore DAT ink instead of retaining parchment or contract colors"),
+            Gameplay->QuestRows[0]->GetColorAndOpacity().GetSpecifiedColor().Equals(FLinearColor::White));
+        TestTrue(TEXT("Journal page title stays inside its own column"),Gameplay->QuestRows[0]->GetCachedGeometry().GetLocalSize().X<=90);
+        TestTrue(TEXT("Expired journal timers show retail Ready text"),Gameplay->JournalLabels.ContainsByPredicate([](const auto& Label){return Label && Label->GetVisibility()!=ESlateVisibility::Collapsed && Label->GetText().ToString()==TEXT("Ready");}));
+        Gameplay->JournalPages.SetNum(1);
         Gameplay->HandleNamedClick(TEXT("ContractsTab")); Gameplay->RefreshQuestOverlays();
+        TestFalse(TEXT("Journal row art hides when leaving the page list"),JournalRow->bVisible);
         TestEqual(TEXT("Returning to contracts restores its page"),Gameplay->ActiveQuestTab,FString(TEXT("ContractsPage")));
         Gameplay->ShowPanelPage(TEXT("SpellManagementPanel_Field"));
         Client->Session->KnownSpells={1,2,3,4,5,6,7,8,9};

@@ -1891,9 +1891,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			{
 				constexpr float WallSkinCm = 2.f;
 				constexpr float LandingZ = 0.0871557f;
-				const FCollisionShape Shape = FCollisionShape::MakeCapsule(
-					FMath::Max(8.f, CapsuleRadius),
-					FMath::Max(10.f, CapsuleHalfHeight));
+				const auto Shape = GetPlayerCollisionBody();
 				FCollisionQueryParams Params(SCENE_QUERY_STAT(ACEWallBlock), /*bTraceComplex*/ true, P);
 				if (bVR) { TArray<AActor*> AttachedPresentation; P->GetAttachedActors(AttachedPresentation, true, true); Params.AddIgnoredActors(AttachedPresentation); }
 				// Channel sweep (ECC_Pawn): ObjectType-only queries miss WorldDynamic meshes and
@@ -2322,7 +2320,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				{
 					bool bFound = SampleFeetZ(X,Y,FeetNow,RampClimbCm,RampDropCm,OutFeetZ,false);
 					float SphereZ = FeetNow;
-					if (ACEBodySweep::FindFootSupport(*World,FVector(X,Y,FeetNow),CapsuleRadius,
+					if (ACEBodySweep::FindBodyFootSupport(*World,FVector(X,Y,FeetNow),Shape,
 						RampDropCm,SweepParams,SphereZ,RampClimbCm,bFound && OutFeetZ<=FeetNow,true)
 						&& (!bFound || SphereZ>OutFeetZ))
 					{
@@ -2839,24 +2837,19 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						{
 							BounceNormalUe = Hit.ImpactNormal.GetSafeNormal();
 							bHaveBounceNormal = true;
-							const FVector Normal2D = Hit.Normal.GetSafeNormal2D();
 							const FVector HitLoc(Hit.Location.X, Hit.Location.Y, Hit.Location.Z);
 							FVector SlideOrigin = HitLoc;
-							FVector Remainder(End.X - SlideOrigin.X, End.Y - SlideOrigin.Y, 0.f);
-							const float IntoWall = FVector::DotProduct(Remainder, Normal2D);
-							if (IntoWall < 0.f)
-							{
-								Remainder -= Normal2D * IntoWall;
-							}
+							const FVector GroundNormal=ACEBodySweep::GroundContactNormal(*World,Start,Shape,SweepParams);
+							const FVector Remainder=ACEBodySweep::GroundSlideDelta(End-SlideOrigin,Hit.Normal.GetSafeNormal(),GroundNormal);
 							// Keep airborne Z from End (ballistic); ground slides snap feet.
 							FVector SlideEnd = SlideOrigin + Remainder;
-							SlideEnd.Z = bJumpAirborne ? End.Z : SlideOrigin.Z;
+							if (bJumpAirborne) SlideEnd.Z=End.Z;
 							if (!bJumpAirborne)
 							{
 								float SlideFeet = SlideOrigin.Z - CapsuleHalfHeight;
 								if (SampleFeetZ(SlideEnd.X, SlideEnd.Y, FeetNow, RampClimbCm, RampDropCm, SlideFeet))
 								{
-									SlideEnd.Z = FMath::Max(SlideOrigin.Z, SlideFeet + CapsuleHalfHeight);
+									SlideEnd.Z = FMath::Max(SlideEnd.Z, SlideFeet + CapsuleHalfHeight);
 								}
 							}
 							FHitResult SlideHit;
@@ -3036,8 +3029,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                 // Use the same lower-sphere support as the movement sweep. A
                 // second center-only snap must not undo a successful edge step.
                 float SphereGroundZ=FeetZ;
-                const bool bHaveSphereGround=ACEBodySweep::FindFootSupport(*World,
-                    FVector(Desired.X,Desired.Y,FeetZ),CapsuleRadius,SnapStepDownCm,Params,SphereGroundZ);
+                const bool bHaveSphereGround=ACEBodySweep::FindBodyFootSupport(*World,
+                    FVector(Desired.X,Desired.Y,FeetZ),GetPlayerCollisionBody(),SnapStepDownCm,Params,SphereGroundZ);
 				const float TraceTop = FeetZ + RampClimbCm + .5f;
 				TArray<FHitResult> Hits;
 				auto CollectGroundHits = [&](float X, float Y)
@@ -3213,7 +3206,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                     FHitResult RiseHit;
                     if (ACEBodySweep::Sweep(*World,RiseHit,Center,
                         FVector(Center.X,Center.Y,GroundZ+CapsuleHalfHeight),
-                        FCollisionShape::MakeCapsule(CapsuleRadius,CapsuleHalfHeight),Params)
+                        GetPlayerCollisionBody(),Params)
                         && RiseHit.ImpactNormal.Z<.6641741f)
                     {
                         GroundZ=RiseHit.bStartPenetrating ? FeetZ : RiseHit.Location.Z-CapsuleHalfHeight;
@@ -3221,13 +3214,13 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                         // Recover downhill when upward recovery cannot clear
                         // the ceiling, rather than keeping that wedged pose.
                         FVector Clamped(Desired.X,Desired.Y,GroundZ+CapsuleHalfHeight);
-                        const auto BodyShape=FCollisionShape::MakeCapsule(CapsuleRadius,CapsuleHalfHeight);
-                        const FVector FootCenter=Clamped-FVector(0,0,CapsuleHalfHeight-CapsuleRadius);
+                        const auto BodyShape=GetPlayerCollisionBody();
+                        const FVector FootCenter=Clamped+BodyShape.Centers[0];
                         FHitResult Contact;
                         // Query the foot separately: a time-zero crown hit can
                         // hide its simultaneous ramp contact in a body sweep.
                         if (World->SweepSingleByChannel(Contact,FootCenter,FootCenter-FVector(0,0,.1f),
-                            FQuat::Identity,ECC_Pawn,FCollisionShape::MakeSphere(CapsuleRadius),Params)
+                            FQuat::Identity,ECC_Pawn,FCollisionShape::MakeSphere(BodyShape.Radii[0]),Params)
                             && !ACEBodySweep::IsCreatureBody(Contact)
                             && Contact.bStartPenetrating && Contact.PenetrationDepth>.05f && Contact.Normal.Z>=.6641741f)
                         {
@@ -3246,7 +3239,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                         const FVector SupportCenter(Center.X,Center.Y,GroundZ+CapsuleHalfHeight);
                         const auto Snap = ACEBodySweep::MoveAirborne(*World, Center,
                             SupportCenter,
-                            FCollisionShape::MakeCapsule(CapsuleRadius,CapsuleHalfHeight),Params,true,FloorZ);
+                            GetPlayerCollisionBody(),Params,true,FloorZ);
                         Desired.X=Snap.Position.X; Desired.Y=Snap.Position.Y;
                         GroundZ=Snap.Position.Z-CapsuleHalfHeight;
                         // An unobstructed sweep reaching the already validated
@@ -3264,7 +3257,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                             // crowns, creatures and real overlaps still block.
                             FHitResult Contact;
                             if (ACEBodySweep::Sweep(*World,Contact,Center,SupportCenter,
-                                FCollisionShape::MakeCapsule(CapsuleRadius,CapsuleHalfHeight),Params,false)
+                                GetPlayerCollisionBody(),Params,false)
                                 && Contact.bStartPenetrating && Contact.PenetrationDepth<=.05f
                                 && Contact.Normal.Z>.0871557f && !ACEBodySweep::IsUpperBodyContact(Contact)
                                 && !ACEBodySweep::IsCreatureBody(Contact)
@@ -3281,8 +3274,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                             // cannot attach the feet to a floor across a drop.
                             float ResolvedSupportZ=GroundZ;
                             const float RemainingDown=FMath::Max(0.f,GroundZ-(FeetZ-SnapStepDownCm));
-                            if (!ACEBodySweep::FindFootSupport(*World,
-                                FVector(Desired.X,Desired.Y,GroundZ),CapsuleRadius,RemainingDown,
+                            if (!ACEBodySweep::FindBodyFootSupport(*World,
+                                FVector(Desired.X,Desired.Y,GroundZ),GetPlayerCollisionBody(),RemainingDown,
                                 Params,ResolvedSupportZ,CapsuleRadius)) break;
                             if (FMath::Abs(ResolvedSupportZ-GroundZ)<1.f)
                             {
@@ -3293,7 +3286,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                             const FVector ResolvedCenter(Desired.X,Desired.Y,GroundZ+CapsuleHalfHeight);
                             const FVector ResolvedTarget(Desired.X,Desired.Y,ResolvedSupportZ+CapsuleHalfHeight);
                             const auto Contact=ACEBodySweep::MoveAirborne(*World,ResolvedCenter,ResolvedTarget,
-                                FCollisionShape::MakeCapsule(CapsuleRadius,CapsuleHalfHeight),Params,true,FloorZ);
+                                GetPlayerCollisionBody(),Params,true,FloorZ);
                             Desired.X=Contact.Position.X; Desired.Y=Contact.Position.Y;
                             GroundZ=Contact.Position.Z-CapsuleHalfHeight;
                             bHaveGround=Contact.bLanded || Contact.Position.Equals(ResolvedTarget,.01f);
@@ -3420,11 +3413,56 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				{
 					float TerrainZ;
 					FVector TerrainNormal;
-					if (Dat->SampleOutdoorGroundZ(Desired.X, Desired.Y, WorldScale, TerrainZ, &TerrainNormal) && GroundZ < TerrainZ)
+					if (Dat->SampleOutdoorGroundZ(Desired.X, Desired.Y, WorldScale, TerrainZ, &TerrainNormal))
 					{
-						GroundZ = TerrainZ;
-						bHaveGround = true;
-						if (bJumpAirborne && TerrainNormal.Z >= FloorZ) FinishJumpLanding();
+						if (GroundZ < TerrainZ)
+						{
+							GroundZ = TerrainZ;
+							bHaveGround = true;
+							if (bJumpAirborne && TerrainNormal.Z >= FloorZ) FinishJumpLanding();
+						}
+						// A heightfield point is not the lower body's contact point on
+						// an incline. The fallback above can put the sphere into the
+						// slope even though its feet are above the sampled triangle.
+						// Resolve that actual overlap against all solids; do not raise
+						// the player from an infinite extension of the terrain plane.
+						if (GroundZ<=TerrainZ+CapsuleRadius && TerrainNormal.Z<.999f)
+						{
+							FCollisionQueryParams TerrainParams(SCENE_QUERY_STAT(TerrainBodyRecovery),true,P);
+							const FVector Center(Desired.X,Desired.Y,GroundZ+CapsuleHalfHeight);
+							FilterWadingTerrain(*GetWorld(),Dat,Center,Center,WorldScale,TerrainParams);
+							FHitResult TerrainHit;
+							const auto Body=GetPlayerCollisionBody();
+							FVector Recovered=Center;
+							for(int32 Contact=0;Contact<4;++Contact)
+							{
+								if (!ACEBodySweep::SweepBody(*GetWorld(),TerrainHit,Recovered,Recovered+FVector(0,0,.01f),Body,TerrainParams)
+									|| !TerrainHit.bStartPenetrating || TerrainHit.PenetrationDepth<=.05f
+									|| TerrainHit.Normal.Z<=.0871557f || !TerrainHit.GetComponent()
+									|| !TerrainHit.GetComponent()->ComponentHasTag(TEXT("ACEOutdoorTerrain"))) break;
+								const FVector Next=ACEBodySweep::Recover(*GetWorld(),Recovered,
+									TerrainHit.Normal*(TerrainHit.PenetrationDepth+.2f),TerrainHit,Body,TerrainParams);
+								if (Next.Equals(Recovered,.01f)) break;
+								Recovered=Next;
+							}
+							if (!Recovered.Equals(Center,.01f))
+							{
+								const FVector RecoveredFeet=Recovered-FVector(0,0,CapsuleHalfHeight);
+								if (!bJumpAirborne && LedgeSupportParams.IsSet()
+									&& !HasLedgeSupport(*GetWorld(),Dat,RecoveredFeet,CapsuleRadius,
+										SnapStepDownCm,WorldScale,true,LedgeSupportParams.GetValue()))
+								{
+									Desired.X=Current.X;Desired.Y=Current.Y;
+									GroundZ=Current.Z-CapsuleHalfHeight;
+									bMovementLedge=true;
+								}
+								else
+								{
+									Desired.X=RecoveredFeet.X;Desired.Y=RecoveredFeet.Y;
+									GroundZ=RecoveredFeet.Z;
+								}
+							}
+						}
 					}
 				}
 			}
@@ -5240,9 +5278,11 @@ bool AACEPlayerController::FindWorldEntryPlacement(FVector& OutCapsuleCenter, EW
 	UACEDatSubsystem* Dat = GetGameInstance() ? GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr;
 	const float Radius = Capsule->GetScaledCapsuleRadius();
 	const float HalfHeight = Capsule->GetScaledCapsuleHalfHeight();
-	// Match the capsule foot sphere: a narrower floor probe places the full
-	// body inside sloping ground even when its center foot point is supported.
-	const float FloorRadius = Radius;
+	// Placement uses the same authored lower sphere as normal movement,
+	// including its offset from the object's origin.
+	const auto Body = GetPlayerCollisionBody();
+	const float FloorRadius = Body.Radii[0];
+	const FVector LowerCenter = Body.Centers[0]+FVector(0,0,HalfHeight);
 	const float StepUp = FMath::Max(2.f, GetStepUpHeightCm());
 	const float StepDown = GetStepDownHeightCm();
 	const bool bGeometryReady = IsWorldEntryGeometryReady();
@@ -5256,17 +5296,30 @@ bool AACEPlayerController::FindWorldEntryPlacement(FVector& OutCapsuleCenter, EW
 	// movement immediately resumes their authored collision and escape rules.
 	const float Limit = 4.f * WorldScale;
 	TArray<FOverlapResult> Nearby;
-	const auto Shape = FCollisionShape::MakeCapsule(FMath::Max(1.f, Radius - .5f), FMath::Max(Radius, HalfHeight - .5f));
+	const auto Shape = Body.WithClearance(0.f,.5f);
 	auto TryPosition = [&](FVector CandidateFeet)
 	{
 		// Outdoor portal coordinates can predate the current land height (the
 		// Khayyaban arrival is below its DAT terrain). Seed from that height,
 		// then still require cooked geometry and a clear full body.
 		float TerrainZ = 0.f;
-		if (!ACECellTransit::IsIndoorCell(Pose.CellId) && Dat
-			&& Dat->SampleOutdoorGroundZ(CandidateFeet.X, CandidateFeet.Y, WorldScale, TerrainZ))
+		FVector TerrainNormal=FVector::UpVector;
+		const bool bOutdoorSupport=!ACECellTransit::IsIndoorCell(Pose.CellId) && Dat
+			&& Dat->SampleOutdoorGroundZ(CandidateFeet.X, CandidateFeet.Y, WorldScale, TerrainZ,&TerrainNormal);
+		if (bOutdoorSupport)
 			CandidateFeet.Z = FMath::Max(CandidateFeet.Z, double(TerrainZ));
 		FCollisionQueryParams Params=BaseParams;
+		const bool bWading=bOutdoorSupport && Dat->GetOutdoorWaterDepthCm(CandidateFeet.X,CandidateFeet.Y,WorldScale)>0.f;
+		if(bWading)
+		{
+			// CLandCell::find_env_collisions rejects entirely-water blocks, but
+			// coastal water supports feet at the depth used by validate_walkable.
+			if(Dat->GetOutdoorBlockWaterType(CandidateFeet.X,CandidateFeet.Y,WorldScale)==2)
+			{bSawSolidBlocker=true;return false;}
+			// The rendered sheet is above that support. Do not interpret wading
+			// below it as penetrating a solid floor; scenery remains collidable.
+			FilterWadingTerrain(*GetWorld(),Dat,CandidateFeet,CandidateFeet,WorldScale,Params);
+		}
 		Nearby.Reset();
 		// Query at the corrected candidate height as well as its XY: old outdoor
 		// portal coordinates can lie below today's terrain and its creatures.
@@ -5283,12 +5336,19 @@ bool AACEPlayerController::FindWorldEntryPlacement(FVector& OutCapsuleCenter, EW
 		// Retail CTransition::find_placement_position keeps the placement and clears
 		// contact when its normal step-down finds no floor. Four units is the lateral
 		// escape search, not a mandatory floor search or a license to skip a portal drop.
-		const bool bSupported = GetWorld()->SweepSingleByChannel(Floor,
-			CandidateFeet + FVector(0, 0, StepUp + FloorRadius),
-			CandidateFeet + FVector(0, 0, FloorRadius - StepDown), FQuat::Identity,
+		bool bSupported = GetWorld()->SweepSingleByChannel(Floor,
+			CandidateFeet + LowerCenter + FVector(0, 0, StepUp),
+			CandidateFeet + LowerCenter - FVector(0, 0, StepDown), FQuat::Identity,
 			ECC_Pawn, FCollisionShape::MakeSphere(FloorRadius), Params)
 			&& !Floor.bStartPenetrating && Floor.ImpactNormal.Z >= .5f;
-		if (bSupported) CandidateFeet.Z = Floor.Location.Z - FloorRadius + .5f;
+		float SupportZ=bSupported ? Floor.Location.Z-LowerCenter.Z : -MAX_flt;
+		if(bWading && bGeometryReady && TerrainNormal.Z>=.5f
+			&& TerrainZ>=CandidateFeet.Z-StepDown && TerrainZ<=CandidateFeet.Z+StepUp)
+		{
+			SupportZ=FMath::Max(SupportZ,TerrainZ);
+			bSupported=true;
+		}
+		if (bSupported) CandidateFeet.Z = SupportZ + .5f;
 		const FVector Center = CandidateFeet + FVector(0, 0, HalfHeight);
 		if (ACEBodySweep::OverlapsBody(*GetWorld(),Center,Shape,Params))
 		{
@@ -5296,7 +5356,7 @@ bool AACEPlayerController::FindWorldEntryPlacement(FVector& OutCapsuleCenter, EW
 			return false;
 		}
 		uint32 CandidateCell = Pose.CellId;
-		const FVector FootCenter = CandidateFeet + FVector(0, 0, Radius);
+		const FVector FootCenter = CandidateFeet + LowerCenter;
 		if (ACECellTransit::IsIndoorCell(Pose.CellId) && (!Dat
 			|| !ACECellTransit::SphereIntersectsEnvCell(*Dat, CandidateCell, FootCenter, 0.f, WorldScale)))
 		{
@@ -6510,16 +6570,14 @@ void AACEPlayerController::HandlePositionUpdate(int32 ObjectGuid, const FACEPosi
 				CapsuleRadius = Cap->GetScaledCapsuleRadius();
 			}
 			FCollisionQueryParams Params(SCENE_QUERY_STAT(ACERecallDepenetrate), false, P);
-			const FCollisionShape CapsuleShape = FCollisionShape::MakeCapsule(
-				CapsuleRadius, CapsuleHalfHeight * 0.9f);
+			const auto CapsuleShape = GetPlayerCollisionBody();
 			auto Occupied = [&](const FVector& At) -> bool
 			{
 				if (!GetWorld())
 				{
 					return false;
 				}
-				return GetWorld()->OverlapAnyTestByChannel(
-					At, TargetQ, ECC_Pawn, CapsuleShape, Params);
+				return ACEBodySweep::OverlapsBody(*GetWorld(),At,CapsuleShape,Params);
 			};
 			if (Occupied(Target))
 			{
@@ -6591,7 +6649,7 @@ void AACEPlayerController::HandlePositionUpdate(int32 ObjectGuid, const FACEPosi
 	// also covers the frame after releasing movement, when prediction goes idle.
 	if (auto* Cap = P->FindComponentByClass<UCapsuleComponent>(); Cap && GetWorld())
 	{
-		const auto Shape = FCollisionShape::MakeCapsule(Cap->GetScaledCapsuleRadius(), Cap->GetScaledCapsuleHalfHeight());
+		const auto Shape = GetPlayerCollisionBody();
 		const FCollisionQueryParams Query(SCENE_QUERY_STAT(ACEIdleCorrection), true, P);
 		FHitResult Hit;
 		if (ACEBodySweep::Sweep(*GetWorld(), Hit, Current, Adjusted, Shape, Query))
@@ -6833,6 +6891,26 @@ float AACEPlayerController::GetUseCylinderDistanceCm(
 		TargetOriginCm, TargetRadiusAc * WorldScale, TargetHeightAc * WorldScale);
 }
 
+FACECollisionBody AACEPlayerController::GetPlayerCollisionBody() const
+{
+	const APawn* BodyPawn=GetPawn();
+	const auto* Capsule=BodyPawn?BodyPawn->FindComponentByClass<UCapsuleComponent>():nullptr;
+	FACECollisionBody Body(FCollisionShape::MakeCapsule(Capsule?Capsule->GetScaledCapsuleRadius():48.f,
+		Capsule?Capsule->GetScaledCapsuleHalfHeight():91.75f));
+	if (PlayerMovementSpheresAc.IsEmpty())return Body;
+	const float Scale=GetLocalCreatureScale()*WorldScale;
+	const FQuat Rotation=BodyPawn?BodyPawn->GetActorQuat():FQuat::Identity;
+	Body.Count=FMath::Min(2,PlayerMovementSpheresAc.Num());
+	for(int32 I=0;I<Body.Count;++I)
+	{
+		const auto& S=PlayerMovementSpheresAc[I];
+		Body.Centers[I]=Rotation.RotateVector(FACEPosition::AceVectorToUnreal(FVector(S.X,S.Y,S.Z),Scale))
+			-FVector(0,0,Body.HalfHeight);
+		Body.Radii[I]=S.W*Scale;
+	}
+	return Body;
+}
+
 void AACEPlayerController::ApplyPlayerCapsuleFromSetup(int32 SetupId)
 {
 	APawn* P = GetPawn();
@@ -6867,38 +6945,33 @@ void AACEPlayerController::ApplyPlayerCapsuleFromSetup(int32 SetupId)
 		FACEWorldObject Self;
 		if (Client->GetWorldObject(Client->GetPlayerGuid(), Self) && Self.Scale > KINDA_SMALL_NUMBER)
 		{
-			ObjScale = Self.Scale;
+			ObjScale = Self.GetValidObjectScale();
 		}
 	}
 
 	// Full Setup size for Use-radius math only.
-	PlayerSetupHeightAc = FMath::Max(0.5f, HeightAc);
-	PlayerSetupRadiusAc = FMath::Max(0.15f, RadiusAc);
+	PlayerSetupHeightAc = FMath::Max(0.f, HeightAc);
+	PlayerSetupRadiusAc = FMath::Max(0.f, RadiusAc);
 
-	// Physics cylinder height (Setup.Height) is feet→crown — NOT mesh bounds. Mesh AABB
-	// includes wings/weapons and made the capsule taller than the head (stair soffit hits).
-	const float CollisionHeightAc = FMath::Clamp(PlayerSetupHeightAc * ObjScale, 1.5f, 2.2f);
-	// Fall back to the setup bound only when no walking sphere is authored.
-	float CollisionRadiusAc = FMath::Clamp(PlayerSetupRadiusAc * ObjScale, 0.24f, 0.55f);
-	// CPhysicsObj initializes SPHEREPATH from Setup's actual spheres.
-	// Setup.Radius is an enclosing bound, not the walking sphere.
-	if (auto* Dat = GetGameInstance() ? GetGameInstance()->GetSubsystem<UACEDatSubsystem>() : nullptr)
+	// Retail applies object scale to the authored body without human-size clamps.
+	// Keep Setup.Height for the feet-to-pawn coordinate frame; actual movement
+	// queries use the individual spheres (including their small foot offsets).
+	float CollisionRadiusAc=FMath::Max(.001f,RadiusAc);
+	PlayerMovementSpheresAc.Reset();
+	if (auto* Dat=GetGameInstance()?GetGameInstance()->GetSubsystem<UACEDatSubsystem>():nullptr)
 	{
-		TArray<FACEDatCollisionShape> Shapes; bool bHasBsp = false;
-		if (Dat->GetSetupCollisionShapes(SetupId, Shapes, bHasBsp) && !Shapes.IsEmpty())
-		{
-			const auto* Lower = &Shapes[0];
-			for (const auto& S : Shapes) if (S.Origin.Z < Lower->Origin.Z) Lower = &S;
-			if (Lower->Height == 0.f && Lower->Radius > 0.f && Lower->Origin.SizeSquared2D() < .0001f)
-				CollisionRadiusAc = FMath::Clamp(Lower->Radius * ObjScale, .08f, 2.5f);
-		}
+		TArray<FACEDatCollisionShape> Spheres;
+		if (Dat->GetSetupMovementSpheres(SetupId,Spheres))
+			for(int32 I=0;I<FMath::Min(2,Spheres.Num());++I)
+			{
+				const auto& S=Spheres[I];
+				if (!FMath::IsFinite(S.Radius) || S.Radius<=0 || FVector(S.Origin).ContainsNaN())continue;
+				PlayerMovementSpheresAc.Add(FVector4f(S.Origin,S.Radius));
+			}
 	}
-	const float RadiusCm = CollisionRadiusAc * WorldScale;
-	// Unreal capsules require half-height >= radius. Match AC cylinder top to the head —
-	// only a tiny shave so indoor soffits still clear without losing roof hits.
-	constexpr float HeadClearanceCm = 2.f;
-	const float HalfHeightCm = FMath::Max(RadiusCm,
-		CollisionHeightAc * WorldScale * 0.5f - HeadClearanceCm * 0.5f);
+	if (!PlayerMovementSpheresAc.IsEmpty())CollisionRadiusAc=PlayerMovementSpheresAc[0].W;
+	const float RadiusCm=CollisionRadiusAc*ObjScale*WorldScale;
+	const float HalfHeightCm=FMath::Max(RadiusCm,FMath::Max(.001f,HeightAc)*ObjScale*WorldScale*.5f);
 
 	const float OldHalf = Cap->GetScaledCapsuleHalfHeight();
 	const FVector Loc = P->GetActorLocation();
@@ -7407,9 +7480,9 @@ void AACEPlayerController::HandleMotionUpdate(int32 ObjectGuid, const FACEObject
 				App->PlayActionMotion(Motion.ActionCommand, Motion.ActionSpeed, Motion.CurrentStyle, bHoldEmote);
 				if (!bHoldEmote)
 				{
-					for (int32 Followup : Motion.ActionFollowups)
+					for (int32 I=0;I<Motion.ActionFollowups.Num();++I)
 					{
-						App->QueueActionMotion(Followup, Motion.ActionSpeed, Motion.CurrentStyle, false);
+						App->QueueActionMotion(Motion.ActionFollowups[I], Motion.FollowupSpeed(I), Motion.CurrentStyle, false);
 					}
 				}
 			}

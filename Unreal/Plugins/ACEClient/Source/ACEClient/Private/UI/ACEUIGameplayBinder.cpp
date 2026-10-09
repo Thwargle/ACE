@@ -898,6 +898,8 @@ void UACEUIGameplayBinder::OnElementActivated(TSharedPtr<FACEUIElement> Element)
 			{SquelchScrollOffset+=Dir;RefreshSquelchOverlays();return;}
 			if(A->ElementName==TEXT("KeyboardMappingScrollbar"))
 			{KeyboardScrollOffset+=Dir;RefreshKeyboardOverlays();return;}
+			if(A->ElementName==TEXT("NotesScrollbar") && JournalNotes)
+			{JournalNotes->SetScrollOffset(JournalNotes->GetScrollOffset()+Dir*28.f);RefreshJournalOverlays();return;}
 			if (A->ElementName == TEXT("BookPanel_Field") && BookScroll)
 			{
 				BookScroll->SetScrollOffset(FMath::Clamp(BookScroll->GetScrollOffset()+Dir*28.f,0.f,BookScroll->GetScrollOffsetOfEnd()));
@@ -5554,7 +5556,18 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 			{
 				continue;
 			}
-			if (Canvas->IsWidgetExposedAt(Row, Absolute)
+			bool bJournalRowHit=false;
+			if (ActiveQuestTab==TEXT("PageListPage") && JournalRowElements.IsValidIndex(i))
+			{
+				const auto Entry=JournalRowElements[i];
+				if(Entry && Entry->bVisible && Canvas->IsElementExposedAt(Entry,CanvasLocalPos))
+				{
+					const FIntPoint O=Entry->GetScreenOrigin();
+					bJournalRowHit=CanvasLocalPos.X>=O.X && CanvasLocalPos.X<O.X+Entry->Width
+						&& CanvasLocalPos.Y>=O.Y && CanvasLocalPos.Y<O.Y+Entry->Height;
+				}
+			}
+			if (bJournalRowHit || Canvas->IsWidgetExposedAt(Row, Absolute)
 				|| (QuestStatusRows.IsValidIndex(i) && Canvas->IsWidgetExposedAt(QuestStatusRows[i], Absolute)))
 			{
 				if (ActiveQuestTab == TEXT("PageListPage"))
@@ -7804,6 +7817,9 @@ bool UACEUIGameplayBinder::IsChatEntryFocused() const
 {
 	if (StackAmountEntry && StackAmountEntry->HasKeyboardFocus()) return true;
 	// This gate also suppresses movement keys while editing other HUD text.
+	if (SquelchNameEntry && SquelchNameEntry->HasKeyboardFocus()) return true;
+	if (JournalNotes && JournalNotes->HasKeyboardFocus()) return true;
+	for (const auto& Entry : JournalEntries) if (Entry && Entry->HasKeyboardFocus()) return true;
 	if (EditingInscriptionGuid && ExamInscriptionEditor && ExamInscriptionEditor->HasKeyboardFocus()) return true;
 	for (const auto& Entry : ComponentDesiredEntries) if (Entry && Entry->HasKeyboardFocus()) return true;
 	if (ChatEntry && ChatEntry->HasKeyboardFocus())
@@ -13218,6 +13234,9 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 		if (List && TryBar(Manager->FindElementUnder(ActiveQuestTab,TEXT("PageListBoxScrollbar")),
 			EACEUIScrollTarget::JournalList,FMath::Max(0,JournalFilteredCount-List->Height/20),false)) return true;
 	}
+	if (ActivePanelPage == TEXT("QuestManagementPanel_Field") && ActiveQuestTab == TEXT("JournalPage") && JournalNotes)
+		if(TryBar(Manager->FindElementUnder(ActiveQuestTab,TEXT("NotesScrollbar")),EACEUIScrollTarget::JournalNotes,
+			FMath::CeilToInt(JournalNotes->GetScrollOffsetOfEnd()),false))return true;
 	if (ActivePanelPage == TEXT("SpellManagementPanel_Field") && ActiveSpellPanelTab == TEXT("SpellComponentPage"))
 	{
 		const auto List = Manager->FindElementUnder(ActiveSpellPanelTab, TEXT("SpellComponents_ComponentList"));
@@ -13469,6 +13488,9 @@ void UACEUIGameplayBinder::UpdateScrollbarDrag(FVector2D CanvasLocalPos)
 		KeyboardScrollOffset=Off;RefreshKeyboardOverlays();break;
 	case EACEUIScrollTarget::JournalList:
 		JournalScrollOffset=Off; RefreshQuestOverlays(); break;
+	case EACEUIScrollTarget::JournalNotes:
+		if(JournalNotes)JournalNotes->SetScrollOffset(Off);
+		break;
 	case EACEUIScrollTarget::CharacterInfo:
 		if (CharacterInfoScroll) CharacterInfoScroll->SetScrollOffset(Off);
 		break;
