@@ -1,4 +1,6 @@
 #include "ACESession.h"
+#include "ACEOlthoi.h"
+#include "ACECombatTargeting.h"
 #include "VR/ACEVRLocomotion.h"
 #include "ACEInventoryRules.h"
 #include "ACEProfiling.h"
@@ -109,6 +111,7 @@ void FACESession::Disconnect()
 	IssacServer.Reset();
 	Characters.Reset();
 	ResetReceivedMessages();
+	ChessBoardGuid = 0; ChessJoinPendingUntil = 0.0;
 	WorldObjects.Reset();
 	ObjectVisibilityDeadlines.Reset();
 	PendingObjectPhysicsEvents.Reset();
@@ -253,6 +256,7 @@ void FACESession::ClearWorldState()
 	{
 		OnObjectDeleted.Broadcast(Guid);
 	}
+	ChessBoardGuid = 0; ChessJoinPendingUntil = 0.0;
 	WorldObjects.Reset();
 	ContainerContents.Reset();
 	LoginEquipment.Reset();
@@ -2397,10 +2401,17 @@ void FACESession::HandleServerMessage(FACEBinaryReader& Reader)
 void FACESession::HandleHearSpeech(FACEBinaryReader& Reader)
 {
 	const FString Text = Reader.ReadString16L();
-	const FString Sender = Reader.ReadString16L();
+	FString Sender = Reader.ReadString16L();
 	const int32 SenderGuid = Reader.CanRead(4) ? Reader.ReadInt32() : 0;
 	const int32 Type = Reader.CanRead(4) ? static_cast<int32>(Reader.ReadUInt32()) : 0;
+	const bool SpeakerOlthoi = Sender.EndsWith(TEXT("&"));
+	const bool Foreign = ACEOlthoi::DecodeSpeaker(Sender,PlayerVitals.HeritageGroup,PlayerVitals.QualityBools.FindRef(129));
 	if (IsSenderSquelched(SenderGuid,Sender,Type)) return;
+	if (Foreign && SenderGuid != PlayerGuid)
+	{
+		OnChatMessage.Broadcast(Sender+TEXT(" ")+ACEOlthoi::ForeignSpeech(SpeakerOlthoi),FString(),Type);
+		return;
+	}
 	OnChatMessage.Broadcast(Text, Sender, Type);
 }
 
@@ -2508,14 +2519,21 @@ void FACESession::HandleTurbineChat(FACEBinaryReader& Reader)
 void FACESession::HandleHearRangedSpeech(FACEBinaryReader& Reader)
 {
 	const FString Text = Reader.ReadString16L();
-	const FString Sender = Reader.ReadString16L();
+	FString Sender = Reader.ReadString16L();
 	const int32 SenderGuid = Reader.CanRead(4) ? Reader.ReadInt32() : 0;
 	if (Reader.CanRead(4))
 	{
 		Reader.ReadFloat(); // range
 	}
 	const int32 Type = Reader.CanRead(4) ? static_cast<int32>(Reader.ReadUInt32()) : 0;
+	const bool SpeakerOlthoi = Sender.EndsWith(TEXT("&"));
+	const bool Foreign = ACEOlthoi::DecodeSpeaker(Sender,PlayerVitals.HeritageGroup,PlayerVitals.QualityBools.FindRef(129));
 	if (IsSenderSquelched(SenderGuid,Sender,Type)) return;
+	if (Foreign && SenderGuid != PlayerGuid)
+	{
+		OnChatMessage.Broadcast(Sender+TEXT(" ")+ACEOlthoi::ForeignSpeech(SpeakerOlthoi),FString(),Type);
+		return;
+	}
 	OnChatMessage.Broadcast(Text, Sender, Type);
 }
 
@@ -2527,15 +2545,17 @@ void FACESession::HandleSoulEmote(FACEBinaryReader& Reader)
 	{
 		SenderGuid = Reader.ReadUInt32();
 	}
-	const FString Sender = Reader.ReadString16L();
+	FString Sender = Reader.ReadString16L();
 	const FString Text = Reader.ReadString16L();
 	// Local player already appended "You …" — skip self echo.
 	if (SenderGuid != 0 && SenderGuid == static_cast<uint32>(PlayerGuid))
 	{
 		return;
 	}
+	const bool SpeakerOlthoi = Sender.EndsWith(TEXT("&"));
+	const bool Foreign = ACEOlthoi::DecodeSpeaker(Sender,PlayerVitals.HeritageGroup,PlayerVitals.QualityBools.FindRef(129));
 	if (!IsSenderSquelched(SenderGuid,Sender,ACEChatMessageType::Emote))
-		OnChatMessage.Broadcast(Text, Sender, ACEChatMessageType::Emote);
+		OnChatMessage.Broadcast(Foreign ? ACEOlthoi::ForeignSpeech(SpeakerOlthoi) : Text, Sender, ACEChatMessageType::Emote);
 }
 
 bool FACESession::RespondToConfirmation(uint32 Type, uint32 Context, bool Accept)
@@ -3043,7 +3063,7 @@ void FACESession::HandleTell(FACEBinaryReader& Reader)
 {
 	// GameEvent Tell: message, senderName, senderId, targetId, chatType, pad.
 	const FString Text = Reader.ReadString16L();
-	const FString Sender = Reader.ReadString16L();
+	FString Sender = Reader.ReadString16L();
 	int32 SenderId = 0;
 	if (Reader.CanRead(4))
 	{
@@ -3061,7 +3081,16 @@ void FACESession::HandleTell(FACEBinaryReader& Reader)
 		Reader.ReadUInt32();
 	}
 	// NPC dialogue must not replace the last player teller (retail IID range).
+	const bool SpeakerOlthoi = Sender.EndsWith(TEXT("&"));
+	const bool Foreign = ACEOlthoi::DecodeSpeaker(Sender,PlayerVitals.HeritageGroup,PlayerVitals.QualityBools.FindRef(129));
 	if (IsSenderSquelched(SenderId,Sender,Type)) return;
+	if (Foreign && SenderId != PlayerGuid)
+	{
+		// Retail preserves the incoming channel/color, but formats foreign
+		// speech as an action rather than a quoted tell (and no reply link).
+		OnChatMessage.Broadcast(Sender+TEXT(" ")+ACEOlthoi::ForeignSpeech(SpeakerOlthoi),FString(),Type);
+		return;
+	}
 	if ((Type == ACEChatMessageType::Tell || Type == ACEChatMessageType::AdminTell)
 		&& static_cast<uint32>(SenderId) >= 0x50000001u
 		&& static_cast<uint32>(SenderId) <= 0x6FFFFFFFu && SenderId != PlayerGuid)
@@ -3933,6 +3962,16 @@ void FACESession::HandlePrivateUpdatePropertyInt(FACEBinaryReader& Reader)
 	{
 		ApplyPlayerKillerStatus(PlayerGuid, Value);
 	}
+	else if (Key == 181) // Server-authoritative chess rating, including losses.
+	{
+		PlayerVitals.ChessRank = Value;
+		NotifyVitalsChanged();
+	}
+	else if (Key == 188) // Heritage can change on custom servers without relogging.
+	{
+		PlayerVitals.HeritageGroup = Value;
+		NotifyVitalsChanged();
+	}
 	else if (Key == 40) // PropertyInt.CombatMode
 	{
 		ApplyServerCombatMode(Value);
@@ -4095,6 +4134,12 @@ bool FACESession::CanQueryObjectHealth(int32 Guid) const
 	const auto* Player = WorldObjects.Find(PlayerGuid);
 	return Object->IsAttackable() || (Object->ObjectDescriptionFlags & ACEObjectDescFlag::FreePkStatus)
 		|| (Player && (Player->ObjectDescriptionFlags & ACEObjectDescFlag::FreePkStatus));
+}
+
+bool FACESession::IsCombatTarget(int32 Guid) const
+{
+	const auto* Target = WorldObjects.Find(Guid);
+	return Target && Guid != PlayerGuid && ACECombatTargeting::CanAttack(*Target, WorldObjects.Find(PlayerGuid));
 }
 
 bool FACESession::CanQueryItemMana(int32 Guid) const
@@ -5538,12 +5583,16 @@ void FACESession::HandleMagicPurgeEnchantments(FACEBinaryReader& /*Reader*/)
 	{
 		return;
 	}
-	// Keep Vitae; purge other enchantments (retail MagicPurgeEnchantments).
+	// CEnchantmentRegistry::PurgeEnchantmentList retains duration -1 effects.
+	// Equipment enchantments remain active through death. Vitae and cooldowns
+	// live in separate retail lists, so this purge must not touch those either.
+	const int32 Before = ActiveEnchantments.Num();
 	ActiveEnchantments.RemoveAll([](const FACEActiveEnchantment& E)
 	{
-		return !E.bVitae && E.SpellId != 666;
+		return E.Duration != -1.f && !E.bVitae && E.SpellId != 666
+			&& !E.bCooldown && E.SpellId < 0x8000;
 	});
-	NotifyEnchantmentsChanged();
+	if (ActiveEnchantments.Num() != Before) NotifyEnchantmentsChanged();
 }
 
 void FACESession::HandleMagicPurgeBadEnchantments(FACEBinaryReader& /*Reader*/)
@@ -5551,7 +5600,9 @@ void FACESession::HandleMagicPurgeBadEnchantments(FACEBinaryReader& /*Reader*/)
 	const int32 Before = ActiveEnchantments.Num();
 	ActiveEnchantments.RemoveAll([](const FACEActiveEnchantment& E)
 	{
-		return !E.bBeneficial && !E.bVitae && !E.bCooldown && E.SpellId != 666;
+		// PurgeBadEnchantmentList has the same permanent-effect exception.
+		return E.Duration != -1.f && !E.bBeneficial && !E.bVitae && !E.bCooldown
+			&& E.SpellId != 666 && E.SpellId < 0x8000;
 	});
 	if (ActiveEnchantments.Num() != Before)
 	{
@@ -8288,6 +8339,11 @@ void FACESession::SendUseItem(int32 ObjectGuid)
 {
 	if (State != EACESessionState::InWorld || ObjectGuid == 0)
 	{
+		return;
+	}
+	if (const FACEWorldObject* Object = WorldObjects.Find(ObjectGuid); Object && Object->IsGameBoard())
+	{
+		SendChessJoin(ObjectGuid); // CM_Game::Event_Join, same approach/interaction as retail.
 		return;
 	}
 	// Never turn a puzzle/quest door into a player-operated door. Switches and keys

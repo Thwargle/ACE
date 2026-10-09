@@ -4,6 +4,7 @@
 #include "ACEPlayerController.h"
 #include "ACEInventoryRules.h"
 #include "ACEEquipmentRules.h"
+#include "ACEScrollLearning.h"
 #include "ACEVendorPricing.h"
 #include "ACEVTObjectClass.h"
 #include "ACESession.h"
@@ -552,9 +553,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
             uint32 School=0,Power=0,Category=0,Flags=0;double Duration=0;
             if(Dat->TryGetPluginSpellInfo(Item.SpellDID,School,Power,Category,Flags,Duration))
             {
-                const int32 Schools[]={0,34,33,32,31,43};int32 Skill=0;
-                for(const auto& Entry:V.Skills)if(School<UE_ARRAY_COUNT(Schools)&&Entry.SkillId==Schools[School])Skill=Entry.Current;
-                J->SetBoolField(TEXT("scroll_can_learn"),Skill>=int32(Power)-15);
+                J->SetBoolField(TEXT("scroll_can_learn"),ACEScrollLearning::CanLearn(Power,School,V));
             }
         }
         J->SetNumberField(TEXT("slots"),Item.ValidLocations);

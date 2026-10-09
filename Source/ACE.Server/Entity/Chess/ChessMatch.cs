@@ -203,7 +203,7 @@ namespace ACE.Server.Entity.Chess
 
         public void Join(Player player)
         {
-            var color = GetFreeColor();
+            var color = player.ChessMatch == null ? GetFreeColor() : ChessColor.None;
             if (color != ChessColor.None)
             {
                 if (NextRangeCheck == null)
@@ -410,18 +410,26 @@ namespace ACE.Server.Entity.Chess
                 SendMoveResponse(opponent, MoveResult);
 
             side = Sides[(int)Logic.Turn];
-            if (side != null)
+            if (side != null && !side.IsAi())
             {
-                if (side.IsAi())
-                    AiState = ChessAiState.WaitingToStart;
-                else
-                {
-                    var move = Logic.GetLastMove();
-                    var piece = Logic.GetPiece(move.To);
-                    var data = new GameMoveData(ChessMoveType.FromTo, move.Color, move.From, move.To);
-                    SendOpponentTurn(side.GetPlayer(), opponentGuid, piece, data);
-                }
+                var move = Logic.GetLastMove();
+                var piece = Logic.GetPiece(move.To);
+                SendOpponentTurn(side.GetPlayer(), opponentGuid, piece,
+                    new GameMoveData(ChessMoveType.FromTo, move.Color, move.From, move.To));
             }
+            // Resolve only after world-piece motion completes and both boards see the move.
+            if (MoveResult.HasFlag(ChessMoveResult.OKMoveCheckmate))
+            {
+                Finish((int)Chess.InverseColor(Logic.Turn));
+                return;
+            }
+            if (!Logic.HasLegalMove(Logic.Turn))
+            {
+                Finish(Chess.ChessWinnerStalemate);
+                return;
+            }
+            if (side != null && side.IsAi())
+                AiState = ChessAiState.WaitingToStart;
         }
 
         public void StartAiMove()
@@ -445,25 +453,8 @@ namespace ACE.Server.Entity.Chess
 
             if (MoveResult == ChessMoveResult.NoMoveResult)
             {
-                var color = Chess.InverseColor(Logic.Turn);
-                var side = Sides[(int)color];
-                var opSide = Sides[(int)Logic.Turn];
-
-                // checkmate
-                if (Logic.InCheckmate(color, true))
-                {
-                    Finish((int)Logic.Turn);
-                }
-                // stalemate
-                else
-                {
-                    side.Stalemate = true;
-
-                    if (opSide.Stalemate)
-                        Finish(Chess.ChessWinnerStalemate);
-                    else
-                        SendOpponentStalemate(opSide.GetPlayer(), side.Color, true);
-                }
+                Finish(Logic.InCheck(Logic.Turn)
+                    ? (int)Chess.InverseColor(Logic.Turn) : Chess.ChessWinnerStalemate);
             }
             else
                 FinalizeWeenieMove(result.Result);

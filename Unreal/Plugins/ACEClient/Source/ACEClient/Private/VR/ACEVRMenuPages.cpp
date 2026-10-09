@@ -267,7 +267,7 @@ void UACEVRMenu::BuildMore()
     Body->AddSlot().AutoHeight().Padding(4)[Button(TEXT("Item hotbars"),[this](){OpenPage("Hotbars");})];
     // Keep every existing interaction reachable while the native views share its
     // controller. The desktop surface is rendered only when explicitly opened.
-    const TPair<const TCHAR*,const TCHAR*> Pages[]={{TEXT("Journal"),TEXT("QuestManagementPanel_Field")},
+    const TPair<const TCHAR*,const TCHAR*> Pages[]={{TEXT("Chess / Game Center"),TEXT("MiniGamePanel_Field")},{TEXT("Journal"),TEXT("QuestManagementPanel_Field")},
         {TEXT("Map"),TEXT("WorldPanel_Field")},{TEXT("Options"),TEXT("OptionsPanel_Field")},{TEXT("All classic panels"),TEXT("InventoryPanel_Field")}};
     for(const auto& P:Pages)Body->AddSlot().AutoHeight().Padding(4)[Button(P.Key,[this,Panel=FName(P.Value)](){Rig->bUseDesktopMenu=true;Rig->OpenRetailPanel(Panel);})];
 }

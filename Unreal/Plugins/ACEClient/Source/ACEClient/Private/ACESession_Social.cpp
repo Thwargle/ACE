@@ -919,10 +919,12 @@ void FACESession::SendChessStalemate(bool bStalemate)
 
 void FACESession::SendChessJoin(int32 BoardGuid)
 {
-	if (State != EACESessionState::InWorld)
+	if (State != EACESessionState::InWorld || !BoardGuid || ChessBoardGuid
+		|| FPlatformTime::Seconds() < ChessJoinPendingUntil)
 	{
 		return;
 	}
+	ChessJoinPendingUntil = FPlatformTime::Seconds() + 15.0;
 	// Retail CM_Game::Event_Join(idGame, 0xFFFFFFFF) — -1 = join either color.
 	FACEBinaryWriter W;
 	W.WriteUInt32(static_cast<uint32>(BoardGuid));
@@ -947,57 +949,60 @@ void FACESession::SendChessMove(int32 FromX, int32 FromY, int32 ToX, int32 ToY)
 
 void FACESession::HandleChessGameEvent(uint32 EventType, FACEBinaryReader& Reader)
 {
+	// Reject partial notices rather than treating absent fields as a white win/move.
+	if (!Reader.CanRead(8)) return;
 	FACEChessEvent Event;
 	Event.EventType = static_cast<int32>(EventType);
-	if (Reader.CanRead(4))
-	{
-		Event.BoardGuid = static_cast<int32>(Reader.ReadUInt32());
-	}
+	Event.BoardGuid = static_cast<int32>(Reader.ReadUInt32());
 	switch (EventType)
 	{
-	case ACEGameEvent::ChessJoinGameResponse: // boardGuid, ChessColor (-1 = failure)
-	case ACEGameEvent::ChessStartGame:        // boardGuid, ChessColor to move first
-	case ACEGameEvent::ChessMoveResponse:     // boardGuid, ChessMoveResult
-	case ACEGameEvent::ChessGameOver:         // boardGuid, winning team
-		if (Reader.CanRead(4))
-		{
-			Event.Value = Reader.ReadInt32();
-		}
+	case ACEGameEvent::ChessJoinGameResponse:
+	case ACEGameEvent::ChessStartGame:
+	case ACEGameEvent::ChessMoveResponse:
+	case ACEGameEvent::ChessGameOver:
+		Event.Value = Reader.ReadInt32();
 		break;
-	case ACEGameEvent::ChessOpponentStalemate: // boardGuid, color, offer/retract
-		if (Reader.CanRead(8))
-		{
-			Reader.ReadInt32(); // color
-			Event.Value = Reader.ReadInt32();
-		}
+	case ACEGameEvent::ChessOpponentStalemate:
+		if (!Reader.CanRead(8)) return;
+		Reader.ReadInt32(); // color
+		Event.Value = Reader.ReadInt32();
 		break;
 	case ACEGameEvent::ChessOpponentTurn:
-		// boardGuid, color, ChessMoveData { type, playerGuid, per-type payload }.
-		if (Reader.CanRead(12))
+		if (!Reader.CanRead(12)) return;
+		Event.Value = Reader.ReadInt32();
+		Event.MoveType = Reader.ReadInt32();
+		Reader.ReadUInt32(); // mover guid
+		switch (Event.MoveType)
 		{
-			Event.Value = Reader.ReadInt32(); // mover color
-			Event.MoveType = Reader.ReadInt32();
-			Reader.ReadUInt32(); // player guid
-			if (Event.MoveType == 4 && Reader.CanRead(8)) // Grid: to only
-			{
-				Event.ToX = Reader.ReadInt32();
-				Event.ToY = Reader.ReadInt32();
-			}
-			else if (Event.MoveType == 5 && Reader.CanRead(16)) // FromTo
-			{
-				Event.FromX = Reader.ReadInt32();
-				Event.FromY = Reader.ReadInt32();
-				Event.ToX = Reader.ReadInt32();
-				Event.ToY = Reader.ReadInt32();
-			}
-			else if (Event.MoveType == 6 && Reader.CanRead(4)) // SelectedPiece
-			{
-				Reader.ReadUInt32(); // piece guid
-			}
+		case 1: break; // pass (other minigames)
+		case 4:
+			if (!Reader.CanRead(8)) return;
+			Event.ToX = Reader.ReadInt32(); Event.ToY = Reader.ReadInt32();
+			break;
+		case 5:
+			if (!Reader.CanRead(16)) return;
+			Event.FromX = Reader.ReadInt32(); Event.FromY = Reader.ReadInt32();
+			Event.ToX = Reader.ReadInt32(); Event.ToY = Reader.ReadInt32();
+			if (Event.FromX < 0 || Event.FromX > 7 || Event.FromY < 0 || Event.FromY > 7
+				|| Event.ToX < 0 || Event.ToX > 7 || Event.ToY < 0 || Event.ToY > 7) return;
+			break;
+		case 6:
+			if (!Reader.CanRead(4)) return;
+			Reader.ReadUInt32();
+			break;
+		default: return;
 		}
 		break;
-	default:
-		break;
+	default: return;
+	}
+	if (EventType == ACEGameEvent::ChessJoinGameResponse)
+	{
+		ChessJoinPendingUntil = 0.0;
+		if (!ChessBoardGuid && Event.BoardGuid && (Event.Value == 0 || Event.Value == 1)) ChessBoardGuid = Event.BoardGuid;
+	}
+	else if (EventType == ACEGameEvent::ChessGameOver && Event.BoardGuid == ChessBoardGuid)
+	{
+		ChessBoardGuid = 0;
 	}
 	OnChessEvent.Broadcast(Event);
 }

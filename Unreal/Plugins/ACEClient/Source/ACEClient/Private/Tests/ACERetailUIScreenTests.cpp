@@ -3878,6 +3878,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("Retail spell flags override missing server beneficial flags"),Gameplay->EffectsContentCount,24);
 			auto Stronger=Session.ActiveEnchantments[0]; Stronger.PowerLevel=200; Session.ActiveEnchantments.Add(Stronger);
 			Gameplay->RefreshEffectsOverlays(true); TestEqual(TEXT("Superseded enchantment is not a second active row"),Gameplay->EffectsContentCount,24);
+			const auto PositiveFixtures=Session.ActiveEnchantments;
 			Session.ActiveEnchantments.Reset();
 			for(int32 Id=1;Id<1000 && Session.ActiveEnchantments.Num()<24;++Id)
 			{
@@ -3887,6 +3888,40 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
 			FACEActiveEnchantment Cooldown;Cooldown.SpellId=0x8001;Cooldown.SpellCategory=0x8001;Cooldown.bCooldown=true;Session.ActiveEnchantments.Add(Cooldown);
 			Gameplay->ShowPanelPage(TEXT("NegativeEffectsPanel_Field")); Gameplay->TickRefresh(); CaptureScreen(TEXT("GameplayHarmfulEffectsRetailColumns"));
 			TestEqual(TEXT("Debuff list follows spell flags and excludes cooldowns"),Gameplay->EffectsContentCount,24);
+			// Death and debuff-only purge must update both panels, retaining
+			// permanent equipment effects and revealing an underlying weaker buff.
+			// Keep this fixture out of the already large screen-test function.
+			TFunction<void()> CheckDeathEffects=[&]()
+			{
+			auto GearBuff=PositiveFixtures[0];GearBuff.Duration=-1;GearBuff.Layer=1;GearBuff.bBeneficial=true;
+			auto CastBuff=PositiveFixtures[1];CastBuff.Duration=180;CastBuff.Layer=2;CastBuff.bBeneficial=true;
+			CastBuff.SpellCategory=GearBuff.SpellCategory;CastBuff.PowerLevel=GearBuff.PowerLevel+100;
+			auto GearCurse=Session.ActiveEnchantments[0];GearCurse.Duration=-1;GearCurse.bBeneficial=false;
+			auto CastCurse=Session.ActiveEnchantments[1];CastCurse.Duration=180;CastCurse.bBeneficial=false;
+			FACEActiveEnchantment Vitae;Vitae.SpellId=666;Vitae.bVitae=true;Vitae.Duration=-1;Vitae.StatModValue=.95f;
+			Session.ActiveEnchantments={GearBuff,CastBuff,GearCurse,CastCurse,Cooldown,Vitae};
+			Gameplay->EffectsScrollOffset=0;Gameplay->ShowPanelPage(TEXT("PositiveEffectsPanel_Field"));Gameplay->TickRefresh();
+			TestTrue(TEXT("Timed stronger buff suppresses equipment buff before death"),Gameplay->EffectsListSpellIds.Contains(CastBuff.SpellId) && !Gameplay->EffectsListSpellIds.Contains(GearBuff.SpellId));
+			FACEBinaryWriter EmptyPurge;FACEBinaryReader PurgeReader(EmptyPurge.GetData());
+			Session.HandleMagicPurgeBadEnchantments(PurgeReader);
+			Gameplay->ShowPanelPage(TEXT("NegativeEffectsPanel_Field"));Gameplay->TickRefresh();
+			TestEqual(TEXT("Debuff-only purge keeps permanent equipment curse"),Gameplay->EffectsContentCount,1);
+			TestTrue(TEXT("Correct retained harmful spell is displayed"),Gameplay->EffectsListSpellIds.Contains(GearCurse.SpellId));
+			Gameplay->ShowPanelPage(TEXT("PositiveEffectsPanel_Field"));Gameplay->TickRefresh();
+			TestTrue(TEXT("Debuff-only purge leaves beneficial timed cast in place"),Gameplay->EffectsListSpellIds.Contains(CastBuff.SpellId));
+			Session.HandleMagicPurgeEnchantments(PurgeReader);Gameplay->TickRefresh();
+			TestEqual(TEXT("Death retains equipment, cooldown and Vitae records"),Session.ActiveEnchantments.Num(),4);
+			TestEqual(TEXT("Buff panel contains only the surviving equipment buff"),Gameplay->EffectsContentCount,1);
+			TestTrue(TEXT("Equipment buff becomes visible after stronger cast is purged"),Gameplay->EffectsListSpellIds.Contains(GearBuff.SpellId) && !Gameplay->EffectsListSpellIds.Contains(CastBuff.SpellId));
+			CaptureScreen(TEXT("GameplayEquipmentEffectsAfterDeath"));
+			Gameplay->ShowPanelPage(TEXT("NegativeEffectsPanel_Field"));Gameplay->TickRefresh();
+			TestEqual(TEXT("Death retains permanent harmful effect without exposing Vitae or cooldown"),Gameplay->EffectsContentCount,1);
+			// A later authoritative removal (unequip/mana loss) still removes it.
+			FACEBinaryWriter RemoveGear;RemoveGear.WriteUInt16(GearCurse.SpellId);RemoveGear.WriteUInt16(GearCurse.Layer);
+			FACEBinaryReader RemoveGearReader(RemoveGear.GetData());Session.HandleMagicRemoveEnchantment(RemoveGearReader);Gameplay->TickRefresh();
+			TestEqual(TEXT("Explicit removal clears the harmful panel"),Gameplay->EffectsContentCount,0);
+			};
+			CheckDeathEffects();
 			Session.ActiveEnchantments=SavedEnchantments;
 			Gameplay->ShowPanelPage(TEXT("SocialPanel_Field"));
 		}

@@ -540,8 +540,8 @@ void UACEUIGameplayBinder::RefreshStatusIndicators()
 	SetIndicatorLit(Manager, TEXT("PositiveEffectsIndicator"), PosCount > 0, DidPosLit, DidPosDark);
 	SetIndicatorLit(Manager, TEXT("NegativeEffectsIndicator"), NegCount > 0, DidNegLit, DidNegDark);
 
-	// Chess/minigame: lit only while that panel is open (no active-match state wired yet).
-	const bool bChess = ActivePanelPage == TEXT("MiniGamePanel_Field");
+	// Retail indicator tracks participation even when another panel is open.
+	const bool bChess = bChessActive;
 	SetIndicatorLit(Manager, TEXT("MiniGameIndicator"), bChess, DidChessLit, DidChessDark);
 
 	LastLinkStatus = Client->GetLinkStatus();

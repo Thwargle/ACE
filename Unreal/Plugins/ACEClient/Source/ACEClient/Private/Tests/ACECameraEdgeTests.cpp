@@ -136,7 +136,21 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
             // Range is planar, while height still contributes to ordering.
             Session.WorldObjects.Reset(); Add(2,10,100); Add(3,20);
             TestEqual(TEXT("Retail height weighting orders targets inside planar range"),Controller->FindNearbyTarget(true),3);
-            TestEqual(TEXT("Height alone does not impose a spherical cutoff"),Controller->FindNearbyTarget(true,0,3),2);
+          TestEqual(TEXT("Height alone does not impose a spherical cutoff"),Controller->FindNearbyTarget(true,0,3),2);
+          // Retail monster selection includes hostile players, notably playable
+          // Olthoi. It must not blindly include protected humans or dead players.
+          Session.WorldObjects.Reset();Add(2,10);Add(3,20);
+          Session.WorldObjects[2].bIsPlayer=true;
+          Session.WorldObjects[2].ObjectDescriptionFlags=ACEObjectDescFlag::FreePkStatus;
+          TestEqual(TEXT("Nearest monster includes Free-PK Olthoi"),Controller->FindNearbyTarget(true),2);
+          Session.WorldObjects[2].ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
+          TestEqual(TEXT("NPK player is excluded despite attackable descriptor"),Controller->FindNearbyTarget(true),3);
+          Add(1,0);Session.WorldObjects[1].bIsPlayer=true;
+          Session.WorldObjects[1].ObjectDescriptionFlags=ACEObjectDescFlag::PlayerKiller;
+          Session.WorldObjects[2].ObjectDescriptionFlags=ACEObjectDescFlag::PlayerKiller;
+          TestEqual(TEXT("PK Olthoi can cycle to a PK player"),Controller->FindNearbyTarget(true),2);
+          Session.WorldObjects[2].bDying=true;
+          TestEqual(TEXT("Dead PK player cannot retain auto-target"),Controller->FindNearbyTarget(true),3);
         }
         Session.PlayerPosition.CellId=0xDA550001; Session.PlayerPosition.Location=FVector(190,10,0);
         Session.WorldObjects.Reset();

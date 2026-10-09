@@ -41,6 +41,7 @@
 #include "ACESkyDomeActor.h"
 #include "ACEMovementComponent.h"
 #include "ACECharacterAppearanceComponent.h"
+#include "ACECombatTargeting.h"
 #include "ACECombatStance.h"
 #include "ACEWorldPresenterComponent.h"
 #include "ACETerrainPresenterComponent.h"
@@ -7870,14 +7871,16 @@ int32 AACEPlayerController::FindNearbyTarget(bool bEnemies, int32 Direction, int
 	const double RangeSquared=FMath::Square(ACERadarVisuals::RangeAc(uint32(PlayerPosition.CellId)));
 	const auto Fellowship = Client->GetFellowship();
 	TArray<FACEWorldObject> Objects = Client->GetWorldObjects();
+	FACEWorldObject Self;
+	const FACEWorldObject* SelfObject = Client->GetWorldObject(Client->GetPlayerGuid(), Self) ? &Self : nullptr;
 	Objects.RemoveAll([&](const FACEWorldObject& Obj)
 	{
 		return !Obj.IsSelectableWorldObject()
 			|| FVector::DistSquaredXY(Obj.Position.ToUnrealLocation(1.f),Origin)>RangeSquared
 			|| !Client->IsWorldObjectVisible(Obj)
-			|| Obj.Guid == Client->GetPlayerGuid() || Obj.Guid == ExcludeGuid || Obj.bIsPlayer
-			|| (bEnemies ? ((Obj.ItemType & ACEItemType::Creature) == 0 || !Obj.IsAttackable() || Obj.PetOwnerId != 0)
-				: (Obj.ItemType & ACEItemType::Creature) != 0)
+			|| Obj.Guid == Client->GetPlayerGuid() || Obj.Guid == ExcludeGuid
+			|| (bEnemies ? (!ACECombatTargeting::CanAttack(Obj, SelfObject) || Obj.PetOwnerId != 0 || Obj.IsVendor())
+				: (Obj.bIsPlayer || (Obj.ItemType & ACEItemType::Creature) != 0))
 			|| (bEnemies && Fellowship.Members.ContainsByPredicate([&](const auto& Member) { return Member.Guid == Obj.Guid; }));
 	});
 	// CPlayerSystem::SelectNext limits candidates by planar radar radius first,

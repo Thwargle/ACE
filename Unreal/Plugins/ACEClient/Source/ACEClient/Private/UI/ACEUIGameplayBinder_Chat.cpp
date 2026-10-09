@@ -4,6 +4,7 @@
 #include "ACERuntimeOptions.h"
 #include "UI/ACERetailTextBlock.h"
 #include "UI/ACEUIGameplayBinder.h"
+#include "ACEOlthoi.h"
 #include "UI/ACEChatEntry.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "Components/CanvasPanel.h"
@@ -213,6 +214,7 @@ namespace
 
 void UACEUIGameplayBinder::SetChatSendChannel(int32 ChannelIndex)
 {
+	if (Client && !ACEOlthoi::CanUseChatDestination(Client->GetPlayerVitals().HeritageGroup, ChannelIndex)) return;
 	ChatSendChannel = FMath::Clamp(ChannelIndex, 0, ChatDestCount - 1);
 	CloseChatTargetPopup();
 	RefreshChatChromeOverlays();
@@ -925,7 +927,8 @@ void UACEUIGameplayBinder::RefreshChatTargetPopup()
 		auto* Background=ChatTargetPopupRowBackgrounds[Index].Get();
 		const auto Element=ChatTargetPopupElements[Index];
 		const int32 Channel=ChatMenuChannels[Index];
-		const bool bEnabled=(Channel!=-1 && Channel!=12) || bTalkable;
+		const bool bEnabled=((Channel!=-1 && Channel!=12) || bTalkable)
+			&& (Channel==-1 || !Client || ACEOlthoi::CanUseChatDestination(Client->GetPlayerVitals().HeritageGroup, Channel));
 		Element->PaintState=!bEnabled ? 13 : (Channel==ChatSendChannel || (Channel==-1 && bSquelched)) ? 0x10000001 : 1;
 		const auto* State=Element->States.Find(Element->PaintState);
 		SetArt(Background,State ? State->ImageFileId : EntryTemplate->ImageFileId);

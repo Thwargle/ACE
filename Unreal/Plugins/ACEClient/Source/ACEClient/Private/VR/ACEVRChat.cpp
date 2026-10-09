@@ -1,4 +1,5 @@
 #include "VR/ACEVRChat.h"
+#include "ACEOlthoi.h"
 #include "Mods/ACEWaypoint.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "Widgets/Text/SRichTextBlock.h"
@@ -66,7 +67,8 @@ TSharedRef<SWidget> UACEVRChat::RebuildWidget()
             +SScrollBox::Slot()[SAssignNew(Lines,SVerticalBox)]]
         +SVerticalBox::Slot().AutoHeight()[SNew(SHorizontalBox)
             +SHorizontalBox::Slot().FillWidth(1)[SNew(SComboBox<TSharedPtr<int32>>).OptionsSource(&Channels).IsFocusable(false)
-                .OnGenerateWidget_Lambda([this](TSharedPtr<int32> C){return ChatLabel(ChannelLabel(*C));})
+                .OnGenerateWidget_Lambda([this](TSharedPtr<int32> C){auto Label=ChatLabel(ChannelLabel(*C));
+                    Label->SetEnabled(!Binder || !Binder->Client || ACEOlthoi::CanUseChatDestination(Binder->Client->GetPlayerVitals().HeritageGroup,*C));return Label;})
                 .OnSelectionChanged_Lambda([this](TSharedPtr<int32> C,ESelectInfo::Type){if(Binder && C)Binder->SetChatSendChannel(*C);})
                 [SNew(STextBlock).Text_Lambda([this](){return FText::FromString(ChannelLabel(Binder?Binder->ChatSendChannel:0));})
                     .Font(FCoreStyle::GetDefaultFontStyle("Regular",24)).ColorAndOpacity(ACEVRUIStyle::TextColor)]]

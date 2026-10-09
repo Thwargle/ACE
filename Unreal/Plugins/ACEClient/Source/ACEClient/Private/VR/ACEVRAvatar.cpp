@@ -71,7 +71,9 @@ void UACEVRComponent::UpdateArms(float Dt)
 				const bool HeadPart = Human && (I == 16 || I == 21 || I == 22);
 				Part->SetCastHiddenShadow(true);
 				Part->SetOwnerNoSee(HeadPart || (!Settings->bShowBody && !Arm));
-				Part->SetVisibility(Visible && Human, false);
+				// Nonhuman player setups retain their authored animation and
+				// body/shadow. They cannot use human IK, but are still avatars.
+				Part->SetVisibility(Visible, false);
 				Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 			}
 		}

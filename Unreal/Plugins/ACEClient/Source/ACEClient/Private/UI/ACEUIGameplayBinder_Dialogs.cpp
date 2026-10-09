@@ -493,6 +493,7 @@ void UACEUIGameplayBinder::ApplyChessMove(int32 FromX, int32 FromY, int32 ToX, i
 		return;
 	}
 	const int8 Piece = ChessBoard[FromY * 8 + FromX];
+	if (!Piece || (FromX == ToX && FromY == ToY)) return;
 	const int8 Dst = ChessBoard[ToY * 8 + ToX];
 	// En passant: pawn moves diagonally onto an empty square — remove the passed pawn.
 	if (FMath::Abs(Piece) == 1 && FromX != ToX && Dst == 0)
@@ -521,16 +522,43 @@ void UACEUIGameplayBinder::ApplyChessMove(int32 FromX, int32 FromY, int32 ToX, i
 	ChessTurnColor = ChessTurnColor == 0 ? 1 : 0;
 }
 
+void UACEUIGameplayBinder::ResetChessGame()
+{
+	bChessActive = bChessStarted = bChessStalemateOffered = bChessQuitRequested = bChessQuitConfirm = false;
+	ChessBoardGuid = 0;
+	ChessMyColor = ChessTurnColor = -1;
+	ResetChessBoard();
+}
+
+bool UACEUIGameplayBinder::SubmitChessMove(int32 FromX, int32 FromY, int32 ToX, int32 ToY)
+{
+	if (!Client || !bChessStarted || !bChessActive || bChessQuitRequested
+		|| ChessTurnColor != ChessMyColor || ChessPendingFromX >= 0
+		|| FromX < 0 || FromX > 7 || FromY < 0 || FromY > 7
+		|| ToX < 0 || ToX > 7 || ToY < 0 || ToY > 7 || (FromX == ToX && FromY == ToY)) return false;
+	const int8 Piece = ChessBoard[FromY * 8 + FromX];
+	if (!Piece || ((Piece > 0) != (ChessMyColor == 0))) return false;
+	ChessPendingFromX = FromX; ChessPendingFromY = FromY;
+	ChessPendingToX = ToX; ChessPendingToY = ToY;
+	Client->SendChessMove(FromX, FromY, ToX, ToY);
+	return true;
+}
+
 void UACEUIGameplayBinder::HandleChessEvent(const FACEChessEvent& Event)
 {
+	// Retail gmMiniGameUI scopes notices to the current board and state.
+	if (Event.EventType != ACEGameEvent::ChessJoinGameResponse
+		&& (!bChessActive || Event.BoardGuid != ChessBoardGuid)) return;
 	switch (static_cast<uint32>(Event.EventType))
 	{
 	case ACEGameEvent::ChessJoinGameResponse:
-		if (Event.Value < 0)
+		if (Event.Value < 0 || Event.Value > 1 || Event.BoardGuid == 0)
 		{
 			AppendLocalChatLine(TEXT("You cannot join that game."), ACEChatMessageType::System);
 			break;
 		}
+		if (bChessActive) return;
+		ResetChessGame();
 		bChessActive = true;
 		ChessBoardGuid = Event.BoardGuid;
 		ChessMyColor = Event.Value;
@@ -541,13 +569,15 @@ void UACEUIGameplayBinder::HandleChessEvent(const FACEChessEvent& Event)
 		ShowPanelPage(TEXT("MiniGamePanel_Field"));
 		break;
 	case ACEGameEvent::ChessStartGame:
-		bChessActive = true;
-		ChessBoardGuid = Event.BoardGuid;
+		if (bChessStarted || Event.Value < 0 || Event.Value > 1) return;
+		bChessStarted = true;
 		ChessTurnColor = Event.Value;
-		ResetChessBoard();
-		AppendLocalChatLine(TEXT("The chess game begins!"), ACEChatMessageType::System);
+		AppendLocalChatLine(ChessTurnColor == ChessMyColor
+			? TEXT("The game has begun, it is your turn to move.")
+			: TEXT("The game has begun, waiting for your opponent to move."), ACEChatMessageType::System);
 		break;
 	case ACEGameEvent::ChessMoveResponse:
+		if (!bChessStarted || ChessPendingFromX < 0) return;
 		if (Event.Value > 0)
 		{
 			// OKMove* — commit the pending move to the local board mirror.
@@ -575,6 +605,13 @@ void UACEUIGameplayBinder::HandleChessEvent(const FACEChessEvent& Event)
 			case -101: Reason = TEXT("The selected piece cannot move that far."); break;
 			case -102: Reason = TEXT("You tried to move an empty square."); break;
 			case -103: Reason = TEXT("The selected piece is not yours."); break;
+			case -104: Reason = TEXT("You cannot move off the board."); break;
+			case -105: Reason = TEXT("You cannot attack your own pieces."); break;
+			case -106: Reason = TEXT("That move would put you in check."); break;
+			case -107: Reason = TEXT("You can only move through empty squares."); break;
+			case -108: Reason = TEXT("You cannot castle out of check."); break;
+			case -109: Reason = TEXT("You cannot castle through check."); break;
+			case -110: Reason = TEXT("You cannot castle after moving the King or Rook."); break;
 			default: break;
 			}
 			AppendLocalChatLine(Reason, ACEChatMessageType::ChatError);
@@ -582,6 +619,7 @@ void UACEUIGameplayBinder::HandleChessEvent(const FACEChessEvent& Event)
 		ChessPendingFromX = ChessPendingFromY = ChessPendingToX = ChessPendingToY = -1;
 		break;
 	case ACEGameEvent::ChessOpponentTurn:
+		if (!bChessStarted || ChessPendingFromX >= 0 || ChessTurnColor == ChessMyColor || Event.Value != ChessTurnColor) return;
 		if (Event.MoveType == 5) // FromTo
 		{
 			ApplyChessMove(Event.FromX, Event.FromY, Event.ToX, Event.ToY);
@@ -598,7 +636,11 @@ void UACEUIGameplayBinder::HandleChessEvent(const FACEChessEvent& Event)
 			: TEXT("Your opponent retracts the stalemate offer."), ACEChatMessageType::System);
 		break;
 	case ACEGameEvent::ChessGameOver:
-		if (Event.Value < 0)
+		if (Event.Value == -2)
+		{
+			AppendLocalChatLine(TEXT("The chess game has ended."), ACEChatMessageType::System);
+		}
+		else if (Event.Value == -1)
 		{
 			AppendLocalChatLine(TEXT("The chess game ends in a draw."), ACEChatMessageType::System);
 		}
@@ -608,9 +650,8 @@ void UACEUIGameplayBinder::HandleChessEvent(const FACEChessEvent& Event)
 				? TEXT("You win the chess game!")
 				: TEXT("You lose the chess game."), ACEChatMessageType::System);
 		}
-		bChessActive = false;
-		ChessMyColor = -1;
-		ChessSelX = ChessSelY = -1;
+		ResetChessGame();
+		RefreshServerConfirmation();
 		break;
 	default:
 		break;
@@ -639,6 +680,7 @@ bool UACEUIGameplayBinder::TryHandleChessBoardClick(FVector2D CanvasLocalPos)
 	{
 		return false;
 	}
+	if (!bChessStarted || bChessQuitRequested || ChessTurnColor != ChessMyColor || ChessPendingFromX >= 0) return true;
 	const int32 Col = FMath::Clamp(RelX * 8 / FMath::Max(1, BoardEl->Width), 0, 7);
 	const int32 RowFromTop = FMath::Clamp(RelY * 8 / FMath::Max(1, BoardEl->Height), 0, 7);
 	// Own color at the bottom: white ranks ascend upward, black view is mirrored.
@@ -671,14 +713,7 @@ bool UACEUIGameplayBinder::TryHandleChessBoardClick(FVector2D CanvasLocalPos)
 		RefreshMiniGameOverlays();
 		return true;
 	}
-	if (Client)
-	{
-		ChessPendingFromX = ChessSelX;
-		ChessPendingFromY = ChessSelY;
-		ChessPendingToX = X;
-		ChessPendingToY = Y;
-		Client->SendChessMove(ChessSelX, ChessSelY, X, Y);
-	}
+	SubmitChessMove(ChessSelX, ChessSelY, X, Y);
 	ChessSelX = ChessSelY = -1;
 	RefreshMiniGameOverlays();
 	return true;
@@ -707,7 +742,7 @@ void UACEUIGameplayBinder::RefreshMiniGameOverlays()
 	if (MiniGameLabels.IsValidIndex(2) && MiniGameLabels[2]) MiniGameLabels[2]->SetVisibility(ESlateVisibility::Collapsed);
 	PlaceTextOnElement(EnsureLabel(Tree, MiniGameLabels, 3),
 		Manager->FindElementUnder(TEXT("MiniGamePanel_Field"), TEXT("MiniGame_Stalemate")),
-		TEXT("Stalemate"), 9, DlgGold, 731, true);
+		bChessStalemateOffered ? TEXT("Retract") : TEXT("Stalemate"), 9, DlgGold, 731, true);
 
 	TSharedPtr<FACEUIElement> BoardEl = Manager->FindElementUnder(
 		TEXT("MiniGamePanel_Field"), TEXT("MiniGame_PieceListBox"));
@@ -887,29 +922,24 @@ bool UACEUIGameplayBinder::HandleDialogNamedClick(const FString& Name)
 	}
 	if (Name == TEXT("MiniGame_Resign"))
 	{
-		if (Client) { Client->SendChessQuit(); }
-		bChessActive = false;
-		ChessMyColor = -1;
-		ChessSelX = ChessSelY = -1;
-		RefreshMiniGameOverlays();
-		PostInventorySystemMessage(TEXT("You resign the chess game."));
-		return true;
-	}
-	if (Name == TEXT("MiniGame_Pass"))
-	{
-		if (Client) { Client->SendChessMovePass(); }
-		if (bChessActive && ChessTurnColor == ChessMyColor)
+		if (bChessActive && !bChessQuitRequested)
 		{
-			ChessTurnColor = ChessTurnColor == 0 ? 1 : 0;
-			RefreshMiniGameOverlays();
+			bChessQuitConfirm = true;
+			RefreshServerConfirmation();
 		}
-		PostInventorySystemMessage(TEXT("You pass your chess turn."));
 		return true;
 	}
+	if (Name == TEXT("MiniGame_Pass")) return true; // Hidden in retail chess.
 	if (Name == TEXT("MiniGame_Stalemate"))
 	{
-		if (Client) { Client->SendChessStalemate(true); }
-		PostInventorySystemMessage(TEXT("You offer a stalemate."));
+		if (Client && bChessStarted && bChessActive && !bChessQuitRequested)
+		{
+			bChessStalemateOffered = !bChessStalemateOffered;
+			Client->SendChessStalemate(bChessStalemateOffered);
+			PostInventorySystemMessage(bChessStalemateOffered
+				? TEXT("You offer a stalemate.") : TEXT("You retract your stalemate offer."));
+			RefreshMiniGameOverlays();
+		}
 		return true;
 	}
 	return false;

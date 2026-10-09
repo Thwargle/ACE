@@ -1904,6 +1904,23 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			auto* App = NewObject<UACECharacterAppearanceComponent>(Pawn); Pawn->AddInstanceComponent(App); App->RegisterComponent();
 			App->bAlignMeshToCapsuleBottom = true;
 			FACEWorldObject Self; Self.SetupId = 0x02000001; Self.bIsPlayer = true;
+			for(int32 OlthoiSetup:{0x02001A21,0x02001A20})
+			{
+				Self.SetupId=OlthoiSetup;
+				TestTrue(TEXT("Olthoi avatar builds in VR"),App->ApplyWorldObject(Self,100,false));
+				for(bool ShowBody:{true,false})
+				{
+					VR->Settings->bShowBody=ShowBody;VR->UpdateArms();
+					TestFalse(TEXT("Olthoi keeps authored motion instead of human IK"),App->bVRPoseControlled);
+					for(int32 I=0;I<App->GetPartCount();++I)
+					{
+						auto* Part=Cast<UPrimitiveComponent>(App->GetPartMesh(I));
+						TestTrue(TEXT("Olthoi body remains available for rendering and shadows"),Part && Part->IsVisible());
+						if(Part)TestEqual(TEXT("Olthoi respects show-body preference"),bool(Part->bOwnerNoSee),!ShowBody);
+					}
+				}
+			}
+			VR->Settings->bShowBody=true;Self.SetupId=0x02000001;
 			TestTrue(TEXT("Retail human fixture builds"), App->ApplyWorldObject(Self, 100, false));
 			VR->AvatarEyeHeight = 165.f; VR->Head->SetRelativeLocationAndRotation(FVector(25,15,165),FRotator::ZeroRotator); VR->UpdateArms();
 			FTransform HeadBind; App->GetPartBindTransform(16, HeadBind);
@@ -3228,6 +3245,9 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("Hidden native menu stops rendering and hit testing"),VR->GameplayMenuPanel->IsComponentTickEnabled() || VR->GameplayMenuPanel->IsVisible() || VR->GameplayMenuPanel->GetCollisionEnabled()!=ECollisionEnabled::NoCollision);
 		TestTrue(TEXT("Closing inventory hides the 3D mirror"),!VR->MenuMirrorActor || VR->MenuMirrorActor->IsHidden());
 		VR->OpenRetailPanel(NAME_None);TestTrue(TEXT("Server confirmation dialogs retain a visible input surface"),VR->bUseDesktopMenu && VR->RetailPanel->IsVisible());
+		VR->bInventoryOpen=false;VR->bUseDesktopMenu=false;VR->UpdatePanels();
+		PC->DatGameplayBinder->OpenGameplayPanel(TEXT("MiniGamePanel_Field"));
+		TestTrue(TEXT("Chess automatically reveals the playable retail board in VR"),VR->bInventoryOpen && VR->bUseDesktopMenu && VR->RetailPanel->IsVisible());
 	}
 	if (FApp::CanEverRender())
 	{

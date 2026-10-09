@@ -688,6 +688,36 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
     {
         auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
         if(!TestTrue(TEXT("Retail DAT loads for redirected bane confirmations"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+        {
+            const auto SavedSkills=Session.PlayerVitals.Skills;
+            FACEWorldObject Scroll;Scroll.Guid=0x71009f00;Scroll.ItemType=ACEItemType::Writable;Scroll.ContainerId=Session.PlayerGuid;
+            ON_SCOPE_EXIT {Session.PlayerVitals.Skills=SavedSkills;Session.WorldObjects.Remove(Scroll.Guid);H->InventoryRevision=MAX_uint64;};
+            for(uint32 ExpectedPower:{1u,250u,300u,400u})
+            {
+                Scroll.SpellDID=0;
+                for(uint32 Id=1;Id<7000;++Id)
+                {
+                    uint32 School=0,Power=0,Category=0,Flags=0;double Duration=0;
+                    if(Dat->TryGetPluginSpellInfo(Id,School,Power,Category,Flags,Duration)&&School==1&&Power==ExpectedPower){Scroll.SpellDID=Id;break;}
+                }
+                if(!TestTrue(*FString::Printf(TEXT("Retail spell found for scroll power %u"),ExpectedPower),Scroll.SpellDID!=0))return false;
+                Session.WorldObjects.Add(Scroll.Guid,Scroll);H->InventoryRevision=MAX_uint64;
+                FACESkillInfo Skill;Skill.SkillId=34;Skill.AdvancementClass=1;Skill.Current=500;
+                Session.PlayerVitals.Skills={Skill};
+                for(int Case=0;Case<3;++Case)
+                {
+                    if(Case>0){Session.PlayerVitals.Skills[0].AdvancementClass=2;Session.PlayerVitals.Skills[0].Current=Case==1?199:200;}
+                    auto Snapshot=MakeShared<FJsonObject>();Snapshot->SetObjectField(TEXT("position"),MakeShared<FJsonObject>());H->ExtendSnapshot(Snapshot);
+                    bool Found=false;
+                    for(const auto& Record:Snapshot->GetArrayField(TEXT("inventory")))
+                    {
+                        const auto Item=Record->AsObject();if(Item->GetNumberField(TEXT("id"))!=double(uint32(Scroll.Guid)))continue;
+                        Found=true;TestEqual(TEXT("UCM learning eligibility follows retail tiers and live skill updates"),Item->GetBoolField(TEXT("scroll_can_learn")),ExpectedPower!=250||Case==2);
+                    }
+                    TestTrue(TEXT("Owned scroll reaches automation snapshot"),Found);
+                }
+            }
+        }
         FACEWorldObject Armor;Armor.Guid=0x71009000;Armor.Name=TEXT("Copper Helm");Armor.ItemType=ACEItemType::Armor;Armor.WielderId=Session.PlayerGuid;
         FACEWorldObject Shirt=Armor;Shirt.Guid++;Shirt.Name=TEXT("Linen Shirt");Shirt.ItemType=ACEItemType::Clothing;
         FACEWorldObject Carried=Armor;Carried.Guid+=2;Carried.Name=TEXT("Carried Helm");Carried.WielderId=0;Carried.ContainerId=Session.PlayerGuid;

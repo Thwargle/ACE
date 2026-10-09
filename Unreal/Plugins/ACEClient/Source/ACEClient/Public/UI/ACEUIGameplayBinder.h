@@ -79,6 +79,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEGameplayRefreshTest;
 	friend class FACESalvageTest;
 	friend class FACEHousingTest;
+	friend class FACEChessTest;
 	friend class FACEBarberTest;
 	friend class FACEItemPresentationTest;
 	friend class FACESelectionToolbarTest;
@@ -1154,6 +1155,12 @@ private:
 
 	// —— Chess (retail gmMiniGameUI + GameBoardGrid, CM_Game protocol) ——
 	bool bChessActive = false;
+	bool bChessStarted = false;
+	bool bChessStalemateOffered = false;
+	bool bChessQuitRequested = false;
+	bool bChessQuitConfirm = false;
+	void ResetChessGame();
+	bool SubmitChessMove(int32 FromX, int32 FromY, int32 ToX, int32 ToY);
 	int32 ChessBoardGuid = 0;
 	/** ChessColor: 0 = white, 1 = black, -1 = not playing. */
 	int32 ChessMyColor = -1;

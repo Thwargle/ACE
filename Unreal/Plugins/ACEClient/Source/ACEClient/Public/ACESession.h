@@ -67,6 +67,7 @@ DECLARE_MULTICAST_DELEGATE_FourParams(FACEOnCombatFeedback, const FString&, int3
 class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 {
 	friend class FACECollisionSizingTest;
+	friend class FACEPlayableOlthoiTest;
 	friend class FACEVRProtocolTest;
 	friend class FACEPortalLifetimeTest;
 	friend class FACEDesktopHighlightTest;
@@ -82,6 +83,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACESpellDataRevisionTest;
 	friend class FACESalvageTest;
 	friend class FACEHousingTest;
+	friend class FACEChessTest;
 	friend class FACEBarberTest;
 	friend class FACEItemPresentationTest;
 	friend class FACESelectionToolbarTest;
@@ -472,6 +474,7 @@ public:
 	void SendStopMovement();
 	/** GameAction Use (0x36) — server approaches and activates (doors, etc.). */
 	void SendUseItem(int32 ObjectGuid);
+	bool IsCombatTarget(int32 Guid) const;
 
 	/** True while a Use / UseWithTarget is outstanding (cleared by UseDone 0x01C7). */
 	bool IsUseBusy() const { return bUseBusy || PendingEquipmentGuid != 0; }
@@ -531,6 +534,8 @@ public:
 	void SendChessStalemate(bool bStalemate);
 	/** Chess join (retail CM_Game::Event_Join, color -1 = any) and grid move. */
 	void SendChessJoin(int32 BoardGuid);
+	int32 ChessBoardGuid = 0;
+	double ChessJoinPendingUntil = 0.0;
 	void SendChessMove(int32 FromX, int32 FromY, int32 ToX, int32 ToY);
 	/** Squelch list from GameEvent SetSquelchDB. */
 	const TArray<FACESquelchEntry>& GetSquelches() const { return Squelches; }

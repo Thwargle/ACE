@@ -199,6 +199,9 @@ namespace ACE.Server.Entity.Chess
                 //return ChessMoveResult.BadMoveDestination;
                 return ChessMoveResult.BadMoveInvalidCommand;
 
+            if (!IsLegalMove(foundMove))
+                return ChessMoveResult.BadMoveSelfCheck;
+
             return FinalizeMove(foundMove);
         }
 
@@ -215,6 +218,7 @@ namespace ACE.Server.Entity.Chess
             var nonCheckMoves = new List<ChessMove>();
             foreach (var generatedMove in storage)
             {
+                if (!IsLegalMove(generatedMove)) continue;
                 // no need to evaluate the board if the ai has checkmated the other player
                 var result = FinalizeMove(generatedMove);
                 if (result.HasFlag(ChessMoveResult.OKMoveCheckmate))
@@ -243,7 +247,6 @@ namespace ACE.Server.Entity.Chess
             if (bestMove == null && nonCheckMoves.Count > 0)
             {
                 var rng = ThreadSafeRandom.Next(0, nonCheckMoves.Count - 1);
-                rng = 0;    // easier debugging
                 bestMove = nonCheckMoves[rng];
             }
 
@@ -270,6 +273,7 @@ namespace ACE.Server.Entity.Chess
 
             foreach (var generatedMove in storage)
             {
+                if (!IsLegalMove(generatedMove)) continue;
                 // no need to evaluate the board if the ai has checkmated the other player
                 var result = FinalizeMove(generatedMove);
                 if (result.HasFlag(ChessMoveResult.OKMoveCheckmate))
@@ -291,13 +295,9 @@ namespace ACE.Server.Entity.Chess
 
             // ever generated move had the same board score, pick one at random
             // this shouldn't happen, just here to prevent crash
-            if (bestMove == null && storage.Count > 0)
-            {
-                var rng = ThreadSafeRandom.Next(0, storage.Count - 1);
-                bestMove = storage[rng];
-            }
+            if (bestMove == null) bestMove = storage.FirstOrDefault(IsLegalMove);
 
-            Debug.Assert(bestMove != null);
+            if (bestMove == null) return ChessMoveResult.NoMoveResult;
             from = bestMove.From;
             to = bestMove.To;
 
@@ -318,6 +318,7 @@ namespace ACE.Server.Entity.Chess
                 var bestBoardScore = -9999.0f;
                 foreach (var move in storage)
                 {
+                    if (!IsLegalMove(move)) continue;
                     FinalizeMove(move);
                     bestBoardScore = Math.Max(bestBoardScore, MinimaxAlphaBeta(depth - 1, alpha, beta, false, ref counter));
                     UndoMove(1);
@@ -333,6 +334,7 @@ namespace ACE.Server.Entity.Chess
                 var bestBoardScore = 9999.0f;
                 foreach (var move in storage)
                 {
+                    if (!IsLegalMove(move)) continue;
                     FinalizeMove(move);
                     bestBoardScore = Math.Max(bestBoardScore, MinimaxAlphaBeta(depth - 1, alpha, beta, true, ref counter));
                     UndoMove(1);
@@ -434,12 +436,13 @@ namespace ACE.Server.Entity.Chess
             }
 
             // only check for castling during full board generation or for a single king
-            if (!single || piece.Type == ChessPieceType.King)
+            if (piece.Type == ChessPieceType.King)
             {
-                if ((Castling[(int)color] & ChessMoveFlag.KingSideCastle | ChessMoveFlag.QueenSideCastle) != 0)
+                if ((Castling[(int)color] & (ChessMoveFlag.KingSideCastle | ChessMoveFlag.QueenSideCastle)) != 0)
                 {
                     var king = GetPiece(color, ChessPieceType.King);
                     var kingCoord = king.Coord;
+                    if (kingCoord.X != 4 || kingCoord.Y != (color == ChessColor.White ? 0 : 7)) return;
 
                     var opColor = Chess.InverseColor(color);
 
@@ -450,7 +453,8 @@ namespace ACE.Server.Entity.Chess
                         var castlingToR = new ChessPieceCoord(kingCoord);    // destination rook
                         castlingToR.MoveOffset(1, 0);
 
-                        if (GetPiece(castlingToR) == null
+                        if (GetPiece(CastleRook(color, true)) is RookPiece rookK && rookK.Color == color
+                            && GetPiece(castlingToR) == null
                             && GetPiece(castlingToK) == null
                             && !CanAttack(opColor, kingCoord)
                             && !CanAttack(opColor, castlingToR)
@@ -469,7 +473,8 @@ namespace ACE.Server.Entity.Chess
                         var castlingToI = new ChessPieceCoord(kingCoord);    // intermediate
                         castlingToI.MoveOffset(-3, 0);
 
-                        if (GetPiece(castlingToR) == null
+                        if (GetPiece(CastleRook(color, false)) is RookPiece rookQ && rookQ.Color == color
+                            && GetPiece(castlingToR) == null
                             && GetPiece(castlingToK) == null
                             && GetPiece(castlingToI) == null
                             && !CanAttack(opColor, kingCoord)
@@ -482,6 +487,9 @@ namespace ACE.Server.Entity.Chess
                 }
             }
         }
+
+        private static ChessPieceCoord CastleRook(ChessColor color, bool kingSide) =>
+            new ChessPieceCoord(kingSide ? 7 : 0, color == ChessColor.White ? 0 : 7);
 
         public void GenerateMoves(ChessColor color, List<ChessMove> storage)
         {
@@ -525,13 +533,9 @@ namespace ACE.Server.Entity.Chess
                                 if (!to.IsValid())
                                     break;
 
-                                var toPiece = GetPiece(to);
-                                if (toPiece != null)
-                                {
-                                    if (to.Equals(victim))
-                                        return true;
-                                    break;
-                                }
+                                // Empty squares can be attacked too (castling through check).
+                                if (to.Equals(victim)) return true;
+                                if (GetPiece(to) != null) break;
                             }
                         }
                     }
@@ -548,37 +552,34 @@ namespace ACE.Server.Entity.Chess
             return CanAttack(Chess.InverseColor(color), king.Coord);
         }
 
-        public bool InCheckmate(ChessColor color, bool fullCheck = false)
+        // Probe with InternalMove, never FinalizeMove: testing mate must not recurse.
+        public bool IsLegalMove(ChessMove move)
+        {
+            if (move.Captured == ChessPieceType.King) return false;
+            InternalMove(move);
+            var legal = !InCheck(move.Color);
+            UndoMove(1);
+            return legal;
+        }
+
+        public bool HasLegalMove(ChessColor color)
         {
             var storage = new List<ChessMove>();
             GenerateMoves(color, storage);
+            return storage.Any(IsLegalMove);
+        }
 
-            var hasMove = false;
-            if (fullCheck)
-            {
-                foreach (var generatedMove in storage)
-                {
-                    var result = FinalizeMove(generatedMove);
-
-                    if (!InCheck(color))
-                        hasMove = true;
-
-                    UndoMove(1);
-
-                    if (hasMove)
-                        break;
-                }
-            }
-            else
-                hasMove = storage.Count > 0;
-
-            return InCheck(color) && !hasMove;
+        public bool InCheckmate(ChessColor color, bool fullCheck = false)
+        {
+            return InCheck(color) && !HasLegalMove(color);
         }
 
         public void BuildMove(List<ChessMove> storage, ChessMoveFlag result, ChessColor color, ChessPieceType type, ChessPieceCoord from, ChessPieceCoord to)
         {
+            if (!to.IsValid()) return;
             var fromPiece = GetPiece(from);
             var toPiece = GetPiece(to);
+            if (toPiece?.Type == ChessPieceType.King) return;
 
             // AC's Chess implementation doesn't support underpromotion
             var promotion = ChessPieceType.Empty;
@@ -681,7 +682,7 @@ namespace ACE.Server.Entity.Chess
 
             // turn off castling if we capture one of the opponent's rooks
             if (Castling[(int)opColor] != ChessMoveFlag.None)
-                DoCastleCheck(opColor, from);
+                DoCastleCheck(opColor, to);
 
             if (flags.HasFlag(ChessMoveFlag.BigPawn))
             {
@@ -715,8 +716,8 @@ namespace ACE.Server.Entity.Chess
                 var move = History.Peek();
 
                 // undo 'global' information
-                Turn = Chess.InverseColor(move.Color);
-                Castling = move.Castling;
+                Turn = move.Color;
+                Castling = new List<ChessMoveFlag>(move.Castling);
                 EnPassantCoord = move.EnPassantCoord;
                 HalfMove = move.HalfMove;
                 Move = move.Move;
@@ -726,13 +727,13 @@ namespace ACE.Server.Entity.Chess
                 var flags = move.Flags;
                 if (flags.HasFlag(ChessMoveFlag.Promotion))
                 {
-                    var piece = AddPiece(Turn, ChessPieceType.Pawn, move.To);
+                    var piece = AddPiece(move.Color, ChessPieceType.Pawn, move.From);
                     piece.Guid = move.Guid;
                 }
 
                 if (flags.HasFlag(ChessMoveFlag.Capture))
                 {
-                    var piece = AddPiece(Turn, move.Captured, move.To);
+                    var piece = AddPiece(Chess.InverseColor(move.Color), move.Captured, move.To);
                     piece.Guid = move.CapturedGuid;
                 }
 
@@ -741,7 +742,7 @@ namespace ACE.Server.Entity.Chess
                     var enPassantFrom = new ChessPieceCoord(move.To);
                     enPassantFrom.MoveOffset(0, move.Color == ChessColor.Black ? 1 : -1);
 
-                    var piece = AddPiece(Turn, ChessPieceType.Pawn, enPassantFrom);
+                    var piece = AddPiece(Chess.InverseColor(move.Color), ChessPieceType.Pawn, enPassantFrom);
                     piece.Guid = move.CapturedGuid;
                 }
 
@@ -761,7 +762,7 @@ namespace ACE.Server.Entity.Chess
                         castlingFrom.MoveOffset(1, 0);
                     }
 
-                    MovePiece(castlingTo, castlingFrom);
+                    MovePiece(castlingFrom, castlingTo);
                 }
 
                 History.Pop();

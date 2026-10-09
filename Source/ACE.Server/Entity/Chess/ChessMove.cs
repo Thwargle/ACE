@@ -37,7 +37,7 @@ namespace ACE.Server.Entity.Chess
             Captured = captured;
             Move = move;
             HalfMove = halfMove;
-            Castling = castling;
+            Castling = new List<ChessMoveFlag>(castling);
             EnPassantCoord = enPassantCoord;
             Guid = guid;
             CapturedGuid = capturedGuid;

@@ -152,6 +152,7 @@ IMPLEMENT_COMPLEX_AUTOMATION_TEST(FACERetailCharacterCreationScreenTest,"ACE.Ret
 void FACERetailCharacterCreationScreenTest::GetTests(TArray<FString>& Names,TArray<FString>& Commands) const
 {
     Names.Add(TEXT("Preview"));Commands.Add(TEXT("Preview"));
+    Names.Add(TEXT("Olthoi"));Commands.Add(TEXT("Olthoi"));
     // The keyboard fixture creates a desktop Slate window; the render-only
     // fixture also runs under -game -FeatureLevelES31 for the Quest renderer.
     if(GIsEditor){Names.Add(TEXT("Controls"));Commands.Add(TEXT("Controls"));}
@@ -234,6 +235,28 @@ bool FACERetailCharacterCreationScreenTest::RunTest(const FString& Parameters)
             FlushRenderingCommands();
         }
     };
+    if(Parameters==TEXT("Olthoi"))
+    {
+        for(uint32 Heritage:{12u,13u})
+        {
+            Binder->Model.SelectHeritage(Heritage);
+            Binder->bDirty=Binder->bPreviewDirty=true;
+            Binder->SetPage(1);Binder->SetPage(2);
+            TestEqual(TEXT("Olthoi skips human attributes and skills"),Binder->GetPage(),4);
+            for(int Page:{4,6})
+            {
+                Capture(Page);
+                TestTrue(TEXT("Creation examination keeps native setup scale"),Binder->Preview->GetActorScale3D().Equals(FVector::OneVector));
+                IFileManager::Get().Copy(*(FPaths::ProjectSavedDir()/FString::Printf(TEXT("Automation/RetailParity/Olthoi%uCreation%d.png"),Heritage,Page)),
+                    *(FPaths::ProjectSavedDir()/FString::Printf(TEXT("Automation/RetailParity/CharacterCreation%d.png"),Page)));
+            }
+            Binder->SetPage(4);Binder->SetPage(5);
+            TestEqual(TEXT("Olthoi skips human starting towns"),Binder->GetPage(),6);
+        }
+        Binder->Shutdown();Canvas->SetCharGenBinder(nullptr);GI->Shutdown();
+        GEngine->DestroyWorldContext(World);World->DestroyWorld(false);
+        return true;
+    }
     if(Parameters==TEXT("Preview"))
     {
         Capture(4);Capture(6);

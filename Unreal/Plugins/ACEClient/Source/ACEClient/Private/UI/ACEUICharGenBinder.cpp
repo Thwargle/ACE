@@ -519,6 +519,10 @@ void UACEUICharGenBinder::RefreshPreview(float Delta)
         FACEWorldObject Object;
         if(bBarber?BuildBarberPreview(Object):Model.BuildAppearance(Object,Page==4&&!bClothes))
         {
+            // gmCG3DView creates an examination object at the setup's native
+            // scale. Sex_CG.scale is for the server-created world character;
+            // applying it here shrinks Olthoi below their authored cameras.
+            if(!bBarber)Object.Scale=1.f;
             const uint32 Animation=Model.MappedAsset(0x25000010,Model.Selection.Heritage==12?0x10000011:Model.Selection.Heritage==13?0x10000013:Animate?0x10000006:0x10000005);
             // Retain the generated mesh and animation phase when the selected swatch/shade
             // has not changed. Mouse motion and page text refreshes are not mesh changes.

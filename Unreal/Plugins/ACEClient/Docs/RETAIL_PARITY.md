@@ -8,6 +8,86 @@ button exists, its opcode has a constant, or a focused regression test passes.
 This is the working acceptance record, most recently reviewed on 2026-10-09. The client
 is **not yet a feature-complete retail replacement**.
 
+## Enchantment panels after death: 2026-10-09
+
+Corrected `MagicPurgeEnchantments` and `MagicPurgeBadEnchantments` to retain
+duration -1 equipment effects. Retail `CEnchantmentRegistry::PurgeEnchantmentList`
+and `PurgeBadEnchantmentList` explicitly preserve these records; Vitae and
+cooldowns are separate registries and also survive the purge. ACE's
+`EnchantmentManager.RemoveAllEnchantments/RemoveAllBadEnchantments` uses the same
+exceptions, including cooldown spell IDs above 0x7fff. The client previously
+discarded equipment effects on both paths and cooldowns on the ordinary purge.
+
+The server still chooses whether a death removes temporary buffs or preserves
+them through the spell-retention augmentation. Beneficial/harmful panel placement
+continues to use retail SpellBase flags; purge decisions use the transmitted
+enchantment flags. Explicit enchantment removals still remove permanent effects
+when equipment is taken off or loses its enchantment. The screen regression now
+checks both panels after each purge, a weaker gear buff reappearing after a
+stronger temporary cast is removed, and a later explicit removal clearing the
+harmful panel. It also verifies that Vitae and cooldowns do not appear as normal
+buff/debuff rows.
+
+Validation: Windows editor development build and both `ACE.RetailParity.UIScreens`
+and `ACE.RetailParity.CharacterStats` passed without test warnings. Reports are
+in `Saved/EnchantmentReview`; the retained equipment row is captured in
+`Saved/Automation/RetailParity/GameplayEquipmentEffectsAfterDeath.png`.
+
+## Playable Olthoi review: 2026-10-09
+
+Reviewed both heritages (12 Ripper, 13 Acid Spitter) against retail
+`CharGenState`, `gmCGHeritagePage`, `gmCGAppearancePage`, `gmCG3DView`,
+`ClientCombatSystem::ObjectIsAttackable`, `ClientCommunicationSystem`, and
+`gmMainChatUI`. Compared the existing ACE player factory, Olthoi templates
+43480/43481 and Salivatory Goo 43489 with the client data and action packets.
+
+The existing DAT-driven creator already offers both heritages, body/marking
+customization, the authored preview/paperdoll animations, and the three-page
+heritage/appearance/summary flow. Fixed examination previews to use native setup
+scale as retail does; world-character scale had incorrectly shrunk the Acid
+Spitter below the authored camera. The creation packet retains the normal DAT
+selection and server-side template validation. VR now keeps nonhuman bodies
+visible, subject to the show-body preference, using authored animation rather
+than human IK. VR controller indicators remain the fallback for nonhuman hands.
+
+Nearest-monster selection, automatic targeting, and repeated melee attacks now
+use retail's shared hostility policy: matching PK/PKLite player pairs and either
+side's Free-PK flag are eligible. Ordinary NPK players, dead targets, and self
+are excluded. Hostility is determined from replicated server flags, not from an
+assumption that every Olthoi is Free-PK. Existing target distance limits remain.
+The UCM hunting plugin remains PvE; this does not introduce automated PvP.
+
+Local speech, tells and emotes now decode ACE's Olthoi `&` and language-bypass
+`^` name markers. Human/Olthoi speech is scrambled with retail's phrases unless
+the listener has NoOlthoiTalk. Names are decoded before squelch/reply matching;
+unintelligible tells do not trigger plugin commands or replace the reply target.
+Desktop and VR chat destination selection follows retail's heritage restrictions.
+Incoming heritage property changes update these rules without requiring relogging.
+
+Combat and looting use the existing standard protocol: Ripper unarmed attacks,
+Acid Spitter's equipped Salivatory Goo and six starter spells, opening corpses,
+moving slag to inventory, and giving rewards to NPCs. ACE continues to own
+eligibility, starting inventory/spells, equipment restrictions, PvP damage,
+death/loot rewards, progression, portal/recall restrictions, and social limits.
+Their existing Olthoi-specific server error messages are present in the client's
+weenie-error table. This change does not enable Olthoi on servers that disable it.
+
+Validation: Windows editor development build succeeded. Ten distinct automated
+tests passed across the focused and final runs, covering creation data and wire
+payloads, rendered creation controls/previews (including both Olthoi), customized
+meshes, authored collision dimensions and animations, acid-spell metadata,
+hostility, language handling, standard combat/loot packets, desktop chat, and VR
+chat/rig/menus. The initial camera fixture emitted its existing contextless-world
+cleanup warning; all seven tests in the final run passed without warnings.
+Evidence is in `Saved/OlthoiReview` and rendered screenshots in
+`Saved/Automation/RetailParity/Olthoi*Creation*.png`.
+
+This is source/data, rendered-fixture and loopback-protocol verification, not a
+completed live multiplayer acceptance run. Still required for release acceptance:
+create both types on an Olthoi-enabled server, relog, test human/Olthoi PvP with a
+retail observer, collect slag/glands and redeem upgrades, verify death/re-entry
+and portal eligibility, and playtest physical VR on both headset runtimes.
+
 ## Rendering and collision cost review: 2026-10-09
 
 Reviewed texture/material reuse, creature geometry and animation, particle
@@ -2756,3 +2836,74 @@ all required gameplay/UI flows work against an unmodified compatible server,
 with comparison evidence and no open blocking discrepancies. A numbered build
 provided for testing does not meet that gate merely by compiling or passing the
 current suite.
+
+
+## Chess lifecycle and rating review (2026-10-09)
+
+Compared local retail `gmMiniGameUI`, `GameBoardGrid`, `CM_Game`,
+`ClientMiniGameSystem`, and `gmUIElement_MiniGameIndicator` with ACE's chess
+messages, match logic, world-piece motion, and rating persistence.
+
+- World-board use now sends retail ChessJoin (board GUID, either-color -1).
+  Duplicate pending joins are suppressed and active matches cannot join again.
+- The native DAT board retains its textures, piece icons, and orientation for
+  each color. Input waits for StartGame, the player's turn, and confirmation of
+  the preceding move. Rejected moves leave the board unchanged; unrelated-board,
+  duplicate, and truncated notices do not mutate the game.
+- Stalemate can be offered/retracted. Resign uses the native confirmation dialog;
+  closing the panel preserves the match. The game indicator tracks participation.
+  Joining reveals the native board in VR; the VR More menu can reopen Game Center.
+  Game-over and logout clear the board's pending state.
+- ChessRank private-property updates refresh Character Information immediately,
+  including decreases and zero. Rating computation and persistence remain server-side.
+- Server regression uncovered broken checkmate detection and reversible move
+  search (turn, captured color, promotion, castling and shared castling rights).
+  Fixed those paths, self-check validation, castling through attacked empty squares,
+  and captured-rook castling rights. AI searches legal moves without corrupting
+  the board. Match results are sent after the world-piece motion completes, with
+  checkmate/stalemate terminating the match and the existing rating/counter policy
+  applied. Duplicate joins cannot seat the same player on both sides.
+
+Validation: Development editor build passed; `ACE.RetailParity.Chess`,
+`CharacterInformation`, `Housing`, `UIScreens`, and `ACE.VR.RigAndMenus` passed
+with no test warnings (five unique client tests, six server tests). The VR rig
+regression confirms opening chess reveals its interactive panel.
+The chess fixture checks actual loopback action packets, server-event decoding,
+rendered white/black boards and confirmation, move rejection, special moves,
+draw/resign/end notices, malformed notices, and live rating updates.
+`ACE.Server.Tests.ChessTests` covers complete checkmate, legal/illegal moves,
+search undo, special moves, AI, and actual rating/counter updates on isolated
+in-memory player records, including persistence dirty flags. It does not write
+real character data. Evidence: `Saved/ChessReview` and `Saved/Automation/Chess`.
+
+Limits: no live two-client retail/Unreal match or world-piece rendering session
+was performed. Server rule fixes require the updated ACE server; client fixes
+also work with other servers using the existing retail chess protocol.
+
+### Scroll learning eligibility (2026-10-09)
+
+Retail explicitly permits level I and VII scrolls without training or skill
+(June 2002 Castling announcement, “How Players Learn Spells”:
+https://asheron.info/wiki/index.php/Announcements_-_2002/06_-_Castling).
+ACE's `Player.CanReadScroll` extends the exemption to all power >= 300,
+including VIII. Levels II–VI require a trained/specialized school and current
+skill of at least 0/50/100/150/200 respectively (spell power minus 50).
+Learning a spell does not guarantee being able to cast it.
+
+UCM's unknown-scroll filter incorrectly used power minus 15 and omitted the
+training check and exemptions. `ACEScrollLearning` now supplies the correct
+learning policy to its inventory/corpse snapshots. Eligibility refreshes with
+live skill changes. Explicit scroll Use remains server-authoritative: ACE
+rejects already-known or ineligible spells before consuming the scroll, and
+only adds a spell after a successful inventory consumption. NPC/admin spell
+grants are separate and are not subject to scroll-only requirements.
+
+Regression coverage includes all five magic schools, trained/specialized and
+untrained states, exact II–VI thresholds, I/VII/VIII exemptions, real DAT spell
+metadata in UCM inventory snapshots, live eligibility cache invalidation, and
+existing unknown/known/duplicate scroll loot-and-read flows. No live server
+scroll consumption session was performed.
+
+Validation: Development editor build succeeded. ScrollLearning, LegacyAdapters, and RouteAndTellRequests passed (three tests, zero errors). The broader request fixture emits 24 missing-position JSON warnings from its existing snapshots; the new scroll snapshots initialize position. Evidence: Saved/ScrollReview/build.log and Saved/ScrollReview/Tests/index.json.
+
+Release v105 validation: the packaged Windows client passed 15 focused suites, including chess, Olthoi previews/targeting/chat, enchantment panels, plugin requests, VR menus, and updater behavior. The packaged chess fixture now makes its loopback sender nonblocking and closes it on scope exit, matching live session socket ownership; otherwise the following subsystem tick could block on an idle test socket. One chat clipboard run failed while Windows denied clipboard access; the final run passed. See Saved/ReleaseValidation/v105.

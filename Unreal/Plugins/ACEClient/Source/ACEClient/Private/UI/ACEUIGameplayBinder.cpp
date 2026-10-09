@@ -578,6 +578,7 @@ void UACEUIGameplayBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEleme
 
 void UACEUIGameplayBinder::Shutdown()
 {
+	ResetChessGame();
 	for(auto& Lines:ChatDisplayLines)Lines.Reset();
 	++ChatDisplayRevision;
 	CancelGameplayScreenshot();
@@ -2111,6 +2112,9 @@ void UACEUIGameplayBinder::ShowPanelPage(const FString& PageElementName)
 	else if (PageElementName == TEXT("MiniGamePanel_Field"))
 	{
 		RefreshMiniGameOverlays();
+		if (PlayerController && PlayerController->GetPawn())
+			if (auto* VR = PlayerController->GetPawn()->FindComponentByClass<UACEVRComponent>(); VR && VR->IsActive())
+				VR->OpenRetailPanel(NAME_None);
 	}
 	else
 	{
@@ -2926,8 +2930,7 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 		}
 		if (bCombatRepeatActive)
 		{
-			FACEWorldObject Target;
-			if (!Client->GetWorldObject(LastCombatAttackTarget, Target) || !Target.IsAttackable())
+			if (!Client->GetSession() || !Client->GetSession()->IsCombatTarget(LastCombatAttackTarget))
 			{
 				bCombatRepeatActive = false;
 				bCombatPowerCharging = bCombatAttackRequestPending;
@@ -3084,7 +3087,8 @@ void UACEUIGameplayBinder::TryAutoTargetOnCombatEnter(int32 ExcludeGuid)
         FACEWorldObject Obj;
         return Guid && Guid != ExcludeGuid && Guid != Client->GetPlayerGuid()
             && Client->GetWorldObject(Guid,Obj) && Obj.IsSelectableWorldObject()
-            && Obj.IsAttackable() && !Obj.bIsPlayer && (Obj.ItemType & ACEItemType::Creature)
+            && Client->GetSession()->IsCombatTarget(Guid)
+            && !Obj.IsVendor()
             && !Obj.PetOwnerId && Client->IsWorldObjectVisible(Obj)
             && !Fellowship.Members.ContainsByPredicate([&](const auto& M) { return M.Guid==Guid; });
     };
@@ -3123,7 +3127,8 @@ void UACEUIGameplayBinder::FireCombatAttack()
 	}
 
 	FACEWorldObject Target;
-	if (!Client->GetWorldObject(TargetGuid, Target) || !Target.IsAttackable())
+	if (!Client->GetSession() || !Client->GetSession()->IsCombatTarget(TargetGuid)
+		|| !Client->GetWorldObject(TargetGuid, Target))
 	{
 		return;
 	}
@@ -15539,8 +15544,8 @@ void UACEUIGameplayBinder::RefreshServerConfirmation()
 {
 	const auto Session = Client ? Client->GetSession() : nullptr;
 	if (!Session || Session->GetState()!=EACESessionState::InWorld)
-	{ PendingAllegianceAction.Reset(); PendingAllegiancePrompt.Reset(); PendingAllegianceGuid=0; bHousePaymentConfirm=false; }
-	if (!Session || (Session->GetConfirmations().IsEmpty() && !PendingAllegianceGuid && !bHousePaymentConfirm))
+	{ PendingAllegianceAction.Reset(); PendingAllegiancePrompt.Reset(); PendingAllegianceGuid=0; bHousePaymentConfirm=false; bChessQuitConfirm=false; }
+	if (!Session || (Session->GetConfirmations().IsEmpty() && !PendingAllegianceGuid && !bHousePaymentConfirm && !bChessQuitConfirm))
 	{
 		if (ServerConfirmRoot) ServerConfirmRoot->bVisible = false;
 		for (UTextBlock* Label : ServerConfirmLabels) if (Label) Label->SetVisibility(ESlateVisibility::Collapsed);
@@ -15571,10 +15576,10 @@ void UACEUIGameplayBinder::RefreshServerConfirmation()
 			ServerConfirmLabels.Add(Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass()));
 	}
 
-	const bool bLocal=PendingAllegianceGuid!=0 || bHousePaymentConfirm;
+	const bool bLocal=PendingAllegianceGuid!=0 || bHousePaymentConfirm || bChessQuitConfirm;
 	const uint32 PendingType=bLocal ? 0 : Session->GetConfirmations()[0].Type;
-	const uint32 PendingContext=bLocal ? uint32(bHousePaymentConfirm?OpenHouseLord:PendingAllegianceGuid) : Session->GetConfirmations()[0].Context;
-	const FString PendingPrompt=bLocal ? (bHousePaymentConfirm?HouseConfirmPrompt:PendingAllegiancePrompt) : Session->GetConfirmations()[0].Prompt;
+	const uint32 PendingContext=bLocal ? uint32(bChessQuitConfirm?ChessBoardGuid:(bHousePaymentConfirm?OpenHouseLord:PendingAllegianceGuid)) : Session->GetConfirmations()[0].Context;
+	const FString PendingPrompt=bLocal ? (bChessQuitConfirm?FString(TEXT("Are you sure you want to resign this game?")):(bHousePaymentConfirm?HouseConfirmPrompt:PendingAllegiancePrompt)) : Session->GetConfirmations()[0].Prompt;
 	if (!ServerConfirmRoot->bVisible || ServerConfirmType != PendingType || ServerConfirmContext != PendingContext || ServerConfirmPrompt != PendingPrompt)
 	{
 		ServerConfirmType = PendingType; ServerConfirmContext = PendingContext; ServerConfirmPrompt = PendingPrompt;
@@ -15609,7 +15614,16 @@ void UACEUIGameplayBinder::RefreshServerConfirmation()
 
 void UACEUIGameplayBinder::FinishServerConfirmation(bool bAccept)
 {
-	if (bHousePaymentConfirm)
+	if (bChessQuitConfirm)
+	{
+		bChessQuitConfirm=false;
+		if (bAccept && Client && bChessActive && !bChessQuitRequested)
+		{
+			bChessQuitRequested=true;
+			Client->SendChessQuit();
+		}
+	}
+	else if (bHousePaymentConfirm)
 	{
 		bHousePaymentConfirm=false;
 		if (bAccept && Client) if (auto S=Client->GetSession()) S->SendHousePayment(bHouseRentTab);
