@@ -1,4 +1,54 @@
-# Virindi compatibility review — 2026-10-04
+# Virindi compatibility review
+
+## Current review — 2026-10-09
+
+Compared the local VT decompile's `uTank2/cLogic.cs` scheduler, `cr.cs`
+recharge rule, and `hi.cs` combat spell selector with UCM's policy, settings
+adapters and Classic loot editor. The October 7 feature-gap list below remains
+applicable; passing the regression suite is not evidence of complete VT parity.
+
+Corrected a newly identified scheduling gap: a pending route portal or recall
+previously returned before recovery and combat for up to 45 seconds, even when
+the host reported that the character was ready. VT schedules normal recharge
+ahead of navigation, and waiting for a destination does not justify monopolizing
+the scheduler. UCM now permits recovery/combat during that wait, including with
+navigation priority enabled. Actual busy/jumping states still gate actions.
+Pending actions retain their kind and cannot be resubmitted by the navigation
+phase. Only teleport-sequence and destination confirmation advance a portal or
+recall; an unrelated healing/attack completion cannot advance it. Timeout still
+pauses navigation alone.
+
+Additional scheduling gaps identified, not yet corrected:
+
+- The single pending-recovery record can wait up to eight seconds before
+  reevaluating health, even if it was originally restoring stamina or mana.
+  VT's `cr.cs` reevaluates health before stamina/mana whenever its item-use lock
+  permits. A fix needs independent confirmation bookkeeping so interrupting a
+  mana recovery neither loses its result nor resubmits it repeatedly.
+- Pending vendor purchases/trade-note operations and ordinary route Use actions
+  still return before normal recovery. Their completion/failure checks use a
+  general action serial. Allowing unrelated actions without correlating the
+  original request could falsely complete or reject the pending operation.
+  Portal waits are independently correlated and therefore were safe to fix now.
+
+Reconfirmed feature gaps in source: Classic color-tolerance rules (14–16), loot
+expressions and third-party User actions are preserved/editable but cannot run;
+enabled AutoFellowManagement, DoJiggle and random helper buffs lack adapters.
+VT's mixed bolt/streak decision uses a target-specific streak tracker and a
+difficulty-derived threshold (`hi.cs`); UCM's score-based choice does not reproduce
+that strategy. General crafting, full assistance-item coverage and external
+plugin/multiclient integrations also remain incomplete. Do not silently ignore
+these requirements when activating imported profiles.
+
+Validation: Windows Editor build succeeded; all 32 `ACE.Plugins.*` automation
+tests passed. Scheduling regressions cover portal/recall, navigation priority
+on/off, actual busy state, urgent healing, combat, unrelated UseDone, confirmed
+arrival and timeout with continued recovery. Existing buff, recovery, resource,
+loot/editor, vendor, failure-isolation, navigation and VT adapter tests passed.
+Reports: `Saved/UCMParityOct09/Tests/index.json`; build/test logs are in the same
+review directory. These are source and automated-policy checks, not live-server
+unattended runs or new Linux/Quest package verification. Earlier corpus totals
+below are historical and were not remeasured in this pass.
 
 ## Current review — 2026-10-07
 

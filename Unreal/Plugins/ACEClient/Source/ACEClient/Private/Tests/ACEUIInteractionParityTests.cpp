@@ -1,3 +1,4 @@
+#include "VR/ACEVRMenu.h"
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "Misc/ConfigCacheIni.h"
@@ -485,6 +486,64 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
         Draw(TEXT("SpellAfterItemExamination"));
         TestEqual(TEXT("Repeated inspection switches retain one scrollbar"),Binder->ExamScroll->GetScrollBarVisibility(),ESlateVisibility::Collapsed);
         Binder->ShowExamination(false);
+    }
+
+    // An open inspection follows selections, including out-of-order appraisal replies.
+    {
+        auto SelectForInspection=[&](const FACESelectedObject& S)
+        {
+            Session.SelectedObject=S; // The session updates its snapshot before broadcasting.
+            Client->OnSelectionChanged.Broadcast(S);
+        };
+        FACEWorldObject A;A.Guid=91001;A.Name=TEXT("First inspected item");A.ItemType=ACEItemType::Misc;
+        FACEWorldObject B=A;B.Guid=91002;B.Name=TEXT("New inspected target");B.ItemType=ACEItemType::Creature;
+        Session.WorldObjects.Add(A.Guid,A);Session.WorldObjects.Add(B.Guid,B);
+        FACESelectedObject Selection;Selection.Guid=A.Guid;Selection.Name=A.Name;Selection.bValid=true;
+        SelectForInspection(Selection);
+        Client->SendIdentifyObject(A.Guid);
+        FACEAppraisalInfo First;First.ObjectGuid=A.Guid;First.Name=A.Name;First.bSuccess=true;
+        Binder->HandleAppraisal(First);
+        auto* Menu=NewObject<UACEVRMenu>();Menu->InitializeMenu(nullptr,Client,Binder);
+        Menu->bInspectionOpen=true;Menu->InspectItem=A.Guid;Menu->InspectionAppraisal=First;
+        const uint64 Before=Client->GetIdentifyRequestSerial();
+        Selection.Guid=B.Guid;Selection.Name=B.Name;
+        SelectForInspection(Selection);
+        TestEqual(TEXT("Open desktop and VR panels share one new appraisal request"),Client->GetIdentifyRequestSerial(),Before+1);
+        TestEqual(TEXT("Desktop immediately replaces old target"),Binder->LastAppraisal.ObjectGuid,B.Guid);
+        TestEqual(TEXT("Desktop clears stale appraisal fields while waiting"),Binder->LastAppraisal.Summary,FString(TEXT("Waiting for the server's appraisal...")));
+        TestEqual(TEXT("VR follows a world target even outside the inventory page"),Menu->InspectItem,B.Guid);
+        TestEqual(TEXT("VR discards the previous target's qualities"),Menu->InspectionAppraisal.ObjectGuid,0);
+        Selection.bShowHealth=true;Selection.HealthFraction=.75f;
+        SelectForInspection(Selection);
+        TestEqual(TEXT("Health updates do not spam identification requests"),Client->GetIdentifyRequestSerial(),Before+1);
+        Client->OnAppraisal.Broadcast(First);
+        TestEqual(TEXT("Late appraisal cannot restore old desktop target"),Binder->LastAppraisal.ObjectGuid,B.Guid);
+        TestEqual(TEXT("Late appraisal cannot restore old VR target"),Menu->InspectionAppraisal.ObjectGuid,0);
+        FACEAppraisalInfo Second;Second.ObjectGuid=B.Guid;Second.Name=B.Name;Second.bIsCreature=true;Second.bSuccess=true;
+        Client->OnAppraisal.Broadcast(Second);
+        TestTrue(TEXT("New creature appraisal switches desktop panel type"),Binder->LastAppraisal.bIsCreature);
+        TestEqual(TEXT("VR accepts new target appraisal"),Menu->InspectionAppraisal.ObjectGuid,B.Guid);
+        Draw(TEXT("InspectionFollowsTarget"));
+        SelectForInspection(FACESelectedObject{});
+        TestFalse(TEXT("Clearing selection closes desktop inspection"),Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field"))->bVisible);
+        TestFalse(TEXT("Clearing selection closes VR inspection"),Menu->IsInspectionOpen());
+        Client->OnAppraisal.Broadcast(Second);
+        TestFalse(TEXT("A late reply cannot reopen dismissed inspection"),Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field"))->bVisible);
+        const uint64 ClosedSerial=Client->GetIdentifyRequestSerial();
+        SelectForInspection(Selection);
+        TestEqual(TEXT("Closed inspection stays closed when targets change"),Client->GetIdentifyRequestSerial(),ClosedSerial);
+        // VR-only inspection still requests updates when the desktop panel is hidden.
+        Menu->bInspectionOpen=true;Menu->InspectItem=B.Guid;
+        Selection.Guid=A.Guid;Selection.Name=A.Name;SelectForInspection(Selection);
+        TestEqual(TEXT("VR-only inspection follows selection"),Menu->InspectItem,A.Guid);
+        TestEqual(TEXT("VR-only selection requests appraisal"),Client->GetIdentifyRequestSerial(),ClosedSerial+1);
+        Menu->InspectSpell=1;Menu->InspectItem=0;Binder->ExaminedSpellId=1;Binder->ShowExamination(true);
+        const uint64 SpellSerial=Client->GetIdentifyRequestSerial();
+        SelectForInspection(Selection);
+        TestEqual(TEXT("Health-only selection update leaves desktop spell inspection intact"),Binder->ExaminedSpellId,1);
+        TestEqual(TEXT("Health-only selection update leaves VR spell inspection intact"),Menu->InspectSpell,1);
+        TestEqual(TEXT("Spell inspection does not trigger object appraisal on health updates"),Client->GetIdentifyRequestSerial(),SpellSerial);
+        Binder->ShowExamination(false);Menu->NativeDestruct();
     }
 
     // Existing keymap UI can rebind screenshot; exercise the actual engine save path.

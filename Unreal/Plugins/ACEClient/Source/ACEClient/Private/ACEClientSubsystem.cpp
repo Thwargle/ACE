@@ -117,7 +117,10 @@ void UACEClientSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	Session->OnAppraisal.AddLambda([this](const FACEAppraisalInfo& Info)
 	{
 		OnAppraisalObserved.Broadcast(Info);
-		if (!BackgroundAppraisals.Remove(Info.ObjectGuid)) OnAppraisal.Broadcast(Info);
+		const bool bBackground = BackgroundAppraisals.Remove(Info.ObjectGuid) != 0;
+		// Automation may appraise the same object while a manual request is pending.
+		// That must not consume the reply intended for the open inspection panel.
+		if (!bBackground || Info.ObjectGuid == IdentifyRequestGuid) OnAppraisal.Broadcast(Info);
 	});
 	Session->OnSelectionChanged.AddLambda([this](const FACESelectedObject& Sel)
 	{

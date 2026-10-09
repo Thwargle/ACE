@@ -118,6 +118,28 @@ bool FACERetailStreamingCostTest::RunTest(const FString& Parameters)
         for(int32 I=0; I<Count; ++I)
             TestTrue(TEXT("ATOYOT stays on authored frame 19"),AtStart[I].Equals(Later[I],.001));
     }
+    // Borrowing cached links must preserve the old copied-list poses and completion times.
+    TestTrue(TEXT("Human motion table loads for cast/death/link comparison"),Player.SetMotionTable(0x09000001));
+    int32 ComparedLinks=0;
+    for(uint32 Command : {0x1000006Fu,0x4000002Bu,ACEMotion::Dead})
+    {
+        const uint32 Style=Command==ACEMotion::Dead ? ACEMotion::StanceNonCombat : ACEMotion::StanceMagic;
+        const auto* Link=Player.FindLink(ACEMotion::Ready,Command,Style);
+        if(!TestNotNull(TEXT("Real cast/death linkage exists"),Link))continue;
+        TArray<FTransform> Before,After; int32 BeforeCount=0,AfterCount=0; bool BeforeFinished=false,AfterFinished=false;
+        for(int32 Frame=0;Frame<180;++Frame)
+        {
+            const float Time=Frame/60.f;
+            const TArray<FACEDatAnimData> Copied=Link->Anims;
+            const bool A=Player.EvaluateAnimSequence(Copied,Time,34,Before,100,BeforeCount,false,&BeforeFinished,nullptr,nullptr);
+            const bool B=Player.EvaluateLink(ACEMotion::Ready,Command,Time,34,After,100,AfterCount,AfterFinished,nullptr,nullptr,Style);
+            bool Identical=A==B && BeforeCount==AfterCount && BeforeFinished==AfterFinished && Before.Num()==After.Num();
+            for(int32 I=0;I<FMath::Min(Before.Num(),After.Num());++I) Identical &= Before[I].Equals(After[I],0);
+            TestTrue(TEXT("Borrowed casting/death links preserve every part pose and completion flag"),Identical);
+        }
+        ++ComparedLinks;
+    }
+    TestEqual(TEXT("Compared windup, release and death clips"),ComparedLinks,3);
     FACEObjectMotionState Move;
     Move.MoveToFlags=1; Move.MoveToSpeed=0.5f; Move.MoveToRunRate=4.f;
     Move.UpdateMoveToGait(20.f);

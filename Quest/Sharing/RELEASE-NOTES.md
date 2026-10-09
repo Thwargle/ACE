@@ -1,43 +1,46 @@
-# AC:Unreal / AC:VR release 103
+# AC:Unreal / AC:VR release 104
 
 Windows desktop, PC VR, native Linux x86_64, and standalone Quest share version
-**2026.10.08.103**. Android version code: 103. Quest installer revision: 7.
+**2026.10.09.104**. Android version code: 104. Quest installer revision: 7.
 
-## Gameplay fixes
+## Movement and targeting
 
-- Honor the server's ethereal flag for pets and other creatures after spawning,
-  physics updates, and visibility changes. Pets no longer become solid obstacles.
-- Fix custom vendors whose zero catalog quantity prevented Add to List and Buy.
-- Keep typing in Loot Editor and other editable text fields from triggering
-  gameplay movement or shortcuts.
+- Improve landing, standing, jumping again, and strafing off creatures, including
+  low carenzi, medium gromnies, and flying wasps. Preserve wall-contact protection.
+- Limit nearest/next/previous target selection to the current retail radar range:
+  75 meters outdoors and 25 indoors. Previously seen distant monsters no longer
+  stay eligible after the player moves away.
+
+## Interface and inspection
+
+- Restore retail skill hover descriptions and attribute formulas.
+- Correct Character Information augmentation descriptions and summoning mastery
+  labels, including Naturalist, and the displayed chess rank.
+- Update an open desktop or VR inspection panel when the selected target changes.
+- Improve examination spacing, requirements, ratings, enchantments, portal details,
+  item experience, salvage workmanship, and weapon-property presentation.
+- Keep spell enchantment flags from the appraisal packet while preserving
+  normalized spell IDs for plugins.
 
 ## UCM
 
-- Limit fast-buff backward movement to a brief 0.12-second pulse, independent of
-  delayed spell results. Send both movement and release through normal networking
-  while casting is busy; repeated spell messages cannot restart the bump.
-- Add direct attack spell selection and Void damage-over-time controls. Correct
-  Nether damage handling and conversion of imported VT profiles.
-- Add an optional desktop-only setting to suspend the 3D world view while UCM
-  runs. Interface, simulation, and networking continue; stopping UCM restores
-  the view. This does not pause the game or apply to VR.
+- Keep recovery and combat available while waiting for a portal or recall result,
+  instead of blocking other activities for the entire pending teleport timeout.
 
-## Waypoint map
+## Performance
 
-- Keep nearby portal markers visible while decluttering their labels. Shorten
-  the "Portal to" prefix in map labels while retaining full names on hover.
-- Minimize the pinned map independently of the direction arrow. Preserve its
-  expanded size and position, and keep the minimize control usable while locked.
-- Add a thin gold map border and adjustable map opacity.
-- The existing Show / hide interface binding remains configurable under
-  Keyboard > UI, allowing an alternative to Alt+Z.
+- Remove per-frame clip-list allocations during casting and death animations.
+- Calculate dense particle bounds on workers alongside vertex generation. The
+  desktop CPU benchmark improved dense particle updates by approximately 3-4%
+  with identical geometry and bounds; this is not a whole-game FPS estimate.
+- Retain full textures, model detail, particle counts, and collision accuracy.
 
 ## Validation and installation
 
-Targeted editor regressions cover text focus, Void selection and imports, map
-rendering and persistence, buff movement and release, custom vendor catalog
-quantities, creature collision, and VR wall contact. These checks do not replace
-live-server or headset acceptance testing.
+Focused regressions cover inspection, character information, skill tooltips,
+UCM scheduling, target range, creature landing, textures, model caches, particles,
+and lighting. The performance review passed 30 tests plus three final particle
+checks. Automated fixtures do not replace live-server or headset acceptance.
 
 Installing an update closes the game. Accounts, settings and DAT files are retained.
 Linux updates are downloaded and extracted manually. Game DAT files are not included.

@@ -1668,6 +1668,9 @@ struct ACECLIENT_API FACEAppraisalInfo
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") TArray<int32> ArmorLevels;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") bool bIsCreature = false;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") TArray<int32> SpellIds;
+	// Preserve appraisal's high-bit enchantment marker for retail presentation.
+	// SpellIds remains the normalized list consumed by automation and loot rules.
+	TArray<int32> SpellBookEntries;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") FString Summary;
 	/** PropertyString.Inscription (7) when present. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") FString Inscription;

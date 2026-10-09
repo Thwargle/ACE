@@ -451,6 +451,8 @@ public:
 
 	/** SkillTable (0x0E000004) name + icon DID. Lazily parsed once portal.dat is ready. */
 	bool TryGetSkillInfo(uint32 SkillId, FString& OutName, uint32& OutIconDid);
+	/** Retail SkillInfoRegion tooltip: attribute formula, then the DAT description. */
+	bool TryGetSkillTooltip(uint32 SkillId, FString& OutText);
 	/** CACQualities: DAT formulas, raw/buffed attributes and top-layer enchantments. */
 	void RecomputePlayerStats(FACEPlayerVitals& Vitals, const TArray<FACEActiveEnchantment>& Enchantments);
 	/** SkillTable trained credit cost (GameAction TrainSkill). May be 0 for free skills. */

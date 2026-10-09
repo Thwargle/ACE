@@ -67,7 +67,7 @@ bool FACEAppraisalPresentationTest::RunTest(const FString&)
     const FString ArmorBody=ACEAppraisalFormatting::ItemExaminationText(Armor,nullptr);
     TestTrue(TEXT("Crafting follows burden without an extra empty line"),ArmorBody.Contains(TEXT("Burden: 0\nThis item has been tinkered 2 times.")));
     TestTrue(TEXT("Crafting and combat stats form separate paragraphs"),ArmorBody.Contains(TEXT("Workmanship: Flawless (7)\n\nBonus to Melee Defense:")));
-    TestTrue(TEXT("Defense bonuses precede armor in retail order"),ArmorBody.Contains(TEXT("Melee Defense: +10.0%.\nBonus to Missile Defense: +20.0%.\nArmor Level: 100\nSlashing:")));
+    TestTrue(TEXT("Defense bonuses precede a separate armor paragraph in retail order"),ArmorBody.Contains(TEXT("Melee Defense: +10.0%.\nBonus to Missile Defense: +20.0%.\n\nArmor Level: 100\nSlashing:")));
     TestFalse(TEXT("Sparse armor sections have no triple line breaks"),ArmorBody.Contains(TEXT("\n\n\n")));
     FACEAppraisalInfo Bow;Bow.bSuccess=Bow.bHasWeaponProfile=true;Bow.ItemType=ACEItemType::MissileWeapon;
     Bow.IntProperties={{9,static_cast<int32>(ACEEquipMask::MissileWeapon)},{50,1}};
@@ -88,6 +88,7 @@ bool FACEAppraisalPresentationTest::RunTest(const FString&)
     FACEPlayerVitals Viewer;FACESkillInfo Skill;Skill.SkillId=48;Skill.Current=300;Skill.AdvancementClass=2;Viewer.Skills.Add(Skill);
     auto ShieldText=ACEAppraisalFormatting::ItemDetails(Shield,nullptr,&Viewer);
     TestTrue(TEXT("Shield shows base and trained skill-limited effective level"),ShieldText.Contains(TEXT("Base Shield Level: 400\nEffective Shield Level : 150 (with Shield skill)")));
+    TestTrue(TEXT("Shield resistance section has retail's blank before Armor Level"),ShieldText.Contains(TEXT("(with Shield skill)\n\nArmor Level: 400")));
     Viewer.Skills[0].AdvancementClass=3;Viewer.Skills[0].Current=500;
     TestTrue(TEXT("Specialized Shield skill caps at the base level"),ACEAppraisalFormatting::ItemDetails(Shield,nullptr,&Viewer).Contains(TEXT("Effective Shield Level : 400")));
     int32 Previous=-1;
@@ -155,6 +156,67 @@ bool FACEAppraisalPresentationTest::RunTest(const FString&)
     Requirements.IntProperties.Add(178,24);
     TestTrue(TEXT("Retail gem description uses pieces for uncountable materials"),
         ACEAppraisalFormatting::ItemExaminationText(Requirements,nullptr).Contains(TEXT(", set with 2 pieces of ")));
+    FACEAppraisalInfo Magic; Magic.bSuccess=true; Magic.SpellIds={1};
+    Magic.IntProperties={{158,7},{160,50},{109,100}};
+    for (bool Chrome : {false,true})
+    {
+        const auto Text=ACEAppraisalFormatting::ItemExaminationText(Magic,nullptr,Chrome,Chrome);
+        TestTrue(TEXT("Spell list and requirements have a blank line on desktop and VR"),Text.Contains(TEXT("Spells: Spell 1\n\nWield requires Level 50\nActivation requires Arcane Lore: 100")));
+        TestFalse(TEXT("Shared inspection does not introduce triple breaks"),Text.Contains(TEXT("\n\n\n")));
+    }
+    Gear.IntProperties.Add(265,14); Gear.IntProperties.Add(28,100); Gear.ArmorResistances={1.f};
+    const auto RatedArmor=ACEAppraisalFormatting::ItemDetails(Gear);
+    TestTrue(TEXT("Gear ratings follow the set and precede armor stats"),RatedArmor.Contains(TEXT("Set: Adept's\nRatings:"))
+        && RatedArmor.Find(TEXT("Ratings:"))<RatedArmor.Find(TEXT("Armor Level:")));
+    TestTrue(TEXT("Vitality immediately follows the gear rating row"),RatedArmor.Contains(TEXT("Life Resist 13\nThis item adds 25 Vitality.")));
+    FACEAppraisalInfo Portal; Portal.bSuccess=true;
+    Portal.IntProperties={{86,20},{87,40}}; Portal.StringProperties={{14,TEXT("Use this portal.")},{38,TEXT("A custom destination")},{16,TEXT("An ancient passage.")}};
+    TestTrue(TEXT("Portal limits and destination precede its description"),ACEAppraisalFormatting::ItemExaminationText(Portal,nullptr,false,false).Contains(
+        TEXT("Use this portal.\n\nRestricted to characters of Levels 20 to 40.\n\nDestination: A custom destination\n\nAn ancient passage.")));
+    for (const auto& Limit : {TPair<int32,const TCHAR*>(20,TEXT("Level 20.")),{0,TEXT("Level 20 or greater.")}})
+    {
+        Portal.IntProperties[87]=Limit.Key;
+        TestTrue(TEXT("Equal and unbounded portal level limits match retail"),ACEAppraisalFormatting::ItemDetails(Portal).Contains(Limit.Value));
+    }
+    FACEAppraisalInfo Door; Door.bSuccess=true; Door.BoolProperties={{3,true}}; Door.IntProperties={{38,200},{173,70}};
+    Door.StringProperties.Add(16,TEXT("A sturdy door."));
+    TestEqual(TEXT("Door inspection separates lock difficulty and authored description"),ACEAppraisalFormatting::ItemExaminationText(Door,nullptr,false,false),
+        FString(TEXT("Locked\n\nThe lock looks mildly challenging to pick (Resistance 200).\n\nA sturdy door.")));
+    Door.BoolProperties[3]=false;
+    TestEqual(TEXT("Unlocked doors omit lock difficulty"),ACEAppraisalFormatting::ItemExaminationText(Door,nullptr,false,false),FString(TEXT("Unlocked\n\nA sturdy door.")));
+    FACEAppraisalInfo Sign; Sign.bSuccess=true; Sign.StringProperties={{16,TEXT("Welcome.\r\n\r\nKeep out of the mine.")}};
+    TestEqual(TEXT("Signs retain authored paragraphs without creature or gear rows"),ACEAppraisalFormatting::ItemExaminationText(Sign,nullptr,false,false),FString(TEXT("Welcome.\n\nKeep out of the mine.")));
+    FACEAppraisalInfo Use; Use.bSuccess=true; Use.BoolProperties={{85,true}}; Use.StringProperties={{25,TEXT("Thwargle")}};
+    Use.IntProperties={{369,100},{366,54},{367,570},{368,54}};
+    const auto UseText=ACEAppraisalFormatting::ItemDetails(Use);
+    TestTrue(TEXT("Owner restriction is separate from activation and use restrictions"),UseText.Contains(TEXT("Wield requires Thwargle\n\nUse requires level 100.\nUse requires Unknown Skill of at least 570.\nUse requires specialized Unknown Skill.")));
+    FACEAppraisalInfo Salvage; Salvage.bSuccess=true; Salvage.IntProperties={{105,29},{170,4}};
+    FACEAppraisalInfo Special; Special.bSuccess=true; Special.FloatProperties={{136,0.2},{147,0.1},{155,0.5}};
+    Special.BoolProperties={{130,true}}; Special.IntProperties={{158,7},{160,100}};
+    TestTrue(TEXT("Weapon special properties and left-hand tether precede requirements"),ACEAppraisalFormatting::ItemDetails(Special).Contains(
+        TEXT("Properties: Crushing Blow, Biting Strike, Armor Cleaving\nThis item is tethered to the left side.\n\nWield requires Level 100")));
+    TestTrue(TEXT("Salvage displays average workmanship and contributing items"),ACEAppraisalFormatting::ItemDetails(Salvage).Contains(TEXT("Workmanship: Flawless (7.25)\n\nSalvaged from 4 items.")));
+    FACEAppraisalInfo Leveled; Leveled.Int64Properties={{5,1000},{4,3500}}; Leveled.IntProperties={{319,5},{320,1}};
+    for (int32 Scheme : {1,2,3})
+    {
+        Leveled.IntProperties[320]=Scheme;
+        const auto Text=ACEAppraisalFormatting::ItemLevelDetails(Leveled);
+        const TCHAR* Expected=Scheme==1?TEXT("Item Level: 3 / 5\nItem XP: 3,500 / 4,000")
+            :Scheme==2?TEXT("Item Level: 2 / 5\nItem XP: 3,500 / 7,000"):TEXT("Item Level: 2 / 5\nItem XP: 3,500 / 6,000");
+        TestEqual(TEXT("Item XP follows retail's progression schemes"),Text,FString(Expected));
+    }
+    Leveled.IntProperties[320]=1;Leveled.Int64Properties[4]=5000;
+    TestTrue(TEXT("Capped item uses the maximum-level XP threshold"),ACEAppraisalFormatting::ItemLevelDetails(Leveled).Contains(TEXT("Item Level: 5 / 5\nItem XP: 5,000 / 5,000")));
+    // Character/NPC and monster appraisals deliberately have different sections.
+    FACEAppraisalInfo Creature; Creature.bIsCreature=Creature.bSuccess=true; Creature.Name=TEXT("Wasp");
+    TestFalse(TEXT("A monster does not use character examination"),ACEAppraisalFormatting::UsesCharacterExamination(Creature));
+    TestTrue(TEXT("An ordinary monster does not invent player history or armor legend"),ACEAppraisalFormatting::CreatureDetailLines(Creature).IsEmpty());
+    Creature.StringProperties={{5,TEXT("War Mage")},{21,TEXT("Monarch")},{35,TEXT("Monarch")},{10,TEXT("Friends")}};
+    Creature.IntProperties={{30,2},{43,0}}; Creature.ArmorLevels={10000,10,20,30,40,50,60,70,80};
+    TestTrue(TEXT("Profession-bearing NPCs use the same character panel as players"),ACEAppraisalFormatting::UsesCharacterExamination(Creature));
+    const auto Details=ACEAppraisalFormatting::CreatureDetailLines(Creature);
+    for (const TCHAR* Value : {TEXT("Monarch"),TEXT("Friends"),TEXT("Has never died"),TEXT("AL: *1/10/20")})
+        TestTrue(FString(TEXT("Character inspection retains "))+Value,Details.ContainsByPredicate([&](const auto& Row){return Row.Value==Value;}));
     return !HasAnyErrors();
 }
 #endif

@@ -36,6 +36,7 @@ public:
     virtual void NativeDestruct() override;
 private:
     friend class FACEVRRigTest;
+    friend class FACEUIInteractionParityTest;
     friend class UACEVRComponent;
     UPROPERTY(Transient) TObjectPtr<UACEVRComponent> Rig;
     UPROPERTY(Transient) TObjectPtr<UACEClientSubsystem> Client;
@@ -49,6 +50,7 @@ private:
     TSharedPtr<SWidget> InspectionWidget;
     bool bInspectionOpen=false;
     int32 InspectItem=0, InspectSpell=0;
+    int32 InspectionSelectionGuid=0;
     FACEAppraisalInfo InspectionAppraisal;
     FName Page="Inventory";
     int32 Pack=0, Selected=0, Spell=0, PageIndex=0, RefreshCount=0;

@@ -62,6 +62,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 {
 	GENERATED_BODY()
 	friend class FACERetailScreenTest;
+	friend class FACECharacterInfoParityTest;
 	friend class FACEVRRigTest;
 	friend class FACEVRProtocolTest;
 	friend class UACEVRComponent;

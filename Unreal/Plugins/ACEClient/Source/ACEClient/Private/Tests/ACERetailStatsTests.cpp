@@ -11,6 +11,15 @@ bool FACERetailStatsTest::RunTest(const FString& Parameters)
     auto* GI = NewObject<UGameInstance>();
     auto* Dat = NewObject<UACEDatSubsystem>(GI);
     if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    FString Tooltip;
+    TestTrue(TEXT("Cooking tooltip resolves from the skill table"), Dat->TryGetSkillTooltip(39, Tooltip));
+    const FString CookingFormula = TEXT("( (Coordination + Focus) / 3 )\n");
+    TestTrue(TEXT("Retail tooltip begins with its complete two-attribute formula"), Tooltip.StartsWith(CookingFormula));
+    TestTrue(TEXT("Retail DAT skill description follows the formula"), Tooltip.Len() > CookingFormula.Len());
+    TestTrue(TEXT("Run tooltip resolves"), Dat->TryGetSkillTooltip(24, Tooltip));
+    TestTrue(TEXT("Single-attribute formula omits divisor one and inner parentheses"), Tooltip.StartsWith(TEXT("( Quickness )\n")));
+    TestFalse(TEXT("Missing skill has no fabricated tooltip"), Dat->TryGetSkillTooltip(MAX_uint32, Tooltip));
+    TestTrue(TEXT("Missing skill clears previous hover text"), Tooltip.IsEmpty());
     FACESession Session;
     Session.StatResolver = [Dat](auto& V, const auto& E) { Dat->RecomputePlayerStats(V, E); };
     auto& V = Session.PlayerVitals;

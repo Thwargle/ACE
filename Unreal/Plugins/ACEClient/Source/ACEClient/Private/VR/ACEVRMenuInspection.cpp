@@ -42,6 +42,7 @@ void UACEVRMenu::QuickAction(bool Inspect,bool Pointed,FVector2D Pixel)
 void UACEVRMenu::SelectMenuSpell(int32 Id)
 {
     Spell=Id;bDirty=true;
+    if(bInspectionOpen) {InspectSpell=Id;InspectItem=0;InspectionAppraisal={};}
 }
 void UACEVRMenu::InspectSelection()
 {
@@ -122,10 +123,9 @@ void UACEVRMenu::BuildInspection()
         return;
     }
     auto Header=SNew(SHorizontalBox)+SHorizontalBox::Slot().AutoWidth().Padding(2,4,14,4)[ItemIcon(Object,64)];
-    if(A.bSuccess)
-        Header->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SVerticalBox)
-            +SVerticalBox::Slot().AutoHeight()[Label(FString::Printf(TEXT("Value: %d"),A.Value),24,320,FLinearColor::White,TEXT("ItemValueText"))]
-            +SVerticalBox::Slot().AutoHeight()[Label(FString::Printf(TEXT("Burden: %d"),A.Burden),24,320,FLinearColor::White,TEXT("ItemBurdenText"))]];
+    Header->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SVerticalBox)
+        +SVerticalBox::Slot().AutoHeight()[Label(A.bHasValue?TEXT("Value: ")+FText::AsNumber(A.Value).ToString():TEXT("Value: ???"),24,320,FLinearColor::White,TEXT("ItemValueText"))]
+        +SVerticalBox::Slot().AutoHeight()[Label(A.bHasBurden?TEXT("Burden: ")+FText::AsNumber(A.Burden).ToString():TEXT("Burden: Unknown"),24,320,FLinearColor::White,TEXT("ItemBurdenText"))]];
     InspectionBody->AddSlot().AutoHeight().Padding(0,4)[Header];
     const FACEPlayerVitals Viewer=Client->GetPlayerVitals();
     const FString Details=ACEAppraisalFormatting::ItemExaminationText(A,Dat,false,false,&Viewer);

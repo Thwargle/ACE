@@ -6430,11 +6430,27 @@ void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Sele
 		{
 			if (TSharedPtr<FACEUIElement> Exam = Manager->FindElementByName(
 					TEXT("RootGameplay_FloatyExamination_Field"));
-				Exam.IsValid() && Exam->bVisible)
+				Exam.IsValid() && Exam->bVisible && !SameStackSelection)
 			{
+				if (EditingInscriptionGuid && ExamInscriptionEditor)
+					HandleInscriptionCommitted(ExamInscriptionEditor->GetText(), ETextCommit::OnUserMovedFocus);
+				// Never leave the previous object's qualities on screen while the
+				// server appraises the new selection. Replies are filtered by GUID.
+				LastAppraisal = {};
+				LastAppraisal.ObjectGuid = Selection.Guid;
+				LastAppraisal.Name = Selection.Name;
+				LastAppraisal.Summary = TEXT("Waiting for the server's appraisal...");
+				ExaminedSpellId = 0;
 				Client->SendIdentifyObject(Selection.Guid);
+				RefreshExaminationOverlay();
 			}
 		}
+	}
+	else if (Manager && !ExaminedSpellId)
+	{
+		// Retail closes object examination when selection is cleared.
+		const auto Exam = Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field"));
+		if (Exam && Exam->bVisible) { ShowExamination(false); RefreshExaminationOverlay(); }
 	}
 	RefreshSelectionOverlay();
 }
@@ -7774,10 +7790,12 @@ bool UACEUIGameplayBinder::GetStatTooltipAt(FVector2D Absolute, FString& OutText
 	{
 		if (!Values[I] || Values[I]->GetVisibility() == ESlateVisibility::Collapsed) continue;
 		if (Canvas->IsWidgetExposedAt(Values[I], Absolute)
-			|| (Names.IsValidIndex(I) && Names[I] && Canvas->IsWidgetExposedAt(Names[I], Absolute)))
+			|| (Names.IsValidIndex(I) && Names[I] && Canvas->IsWidgetExposedAt(Names[I], Absolute))
+			|| (!Attributes && SkillRowHighlights.IsValidIndex(I) && SkillRowHighlights[I]
+				&& Canvas->IsWidgetExposedAt(SkillRowHighlights[I], Absolute)))
 		{
 			OutText = Values[I]->GetToolTipText().ToString();
-			if (Names.IsValidIndex(I) && Names[I] && !OutText.IsEmpty()) OutText = Names[I]->GetText().ToString() + TEXT("\n") + OutText;
+			if (Attributes && Names.IsValidIndex(I) && Names[I] && !OutText.IsEmpty()) OutText = Names[I]->GetText().ToString() + TEXT("\n") + OutText;
 			return !OutText.IsEmpty();
 		}
 	}
@@ -8833,7 +8851,9 @@ void UACEUIGameplayBinder::RefreshSkillOverlays()
 			Val->SetVisibility(ESlateVisibility::HitTestInvisible);
 			Val->SetJustification(ETextJustify::Right);
 			Val->SetColorAndOpacity(FSlateColor(Sk.Current > Sk.Base ? FLinearColor::Green : Sk.Current < Sk.Base ? FLinearColor::Red : TextWhite));
-			UACEHoverTooltipWidget::SetWidgetTooltip(Val, FText::FromString(FString::Printf(TEXT("Base: %d\nCurrent: %d"), Sk.Base, Sk.Current)));
+			FString Tooltip;
+			if (Dat) Dat->TryGetSkillTooltip(static_cast<uint32>(Sk.SkillId), Tooltip);
+			UACEHoverTooltipWidget::SetWidgetTooltip(Val, FText::FromString(Tooltip));
 			if (Val->GetParent() != Canvas->GetElementLayer())
 			{
 				Canvas->GetElementLayer()->AddChild(Val);
@@ -10577,7 +10597,7 @@ void UACEUIGameplayBinder::RefreshRadarOverlays()
 	const float CenterX = static_cast<float>(Origin.X) + RadarW * 0.5f;
 	const float CenterY = static_cast<float>(Origin.Y) + RadarH * 0.5f;
 	const float RadiusPx = FMath::Min(RadarW, RadarH) * 0.5f - 8.f;
-	const float RadarRangeAc = (uint32(PlayerPos.CellId)&0xFFFFu)>=0x100 ? 25.f : 75.f;
+	const float RadarRangeAc = ACERadarVisuals::RangeAc(uint32(PlayerPos.CellId));
 	auto* Resources=Canvas->GetResourceResolver();
 	if(!Resources)return;
 	auto SetBlip=[&](UBorder* Blip,int32 Shape,bool Selected,FLinearColor Color)

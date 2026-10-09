@@ -4,6 +4,7 @@
 #include "ACEDatSubsystem.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
+#include "ACEInputBindings.h"
 #include "ACEWorldEntityActor.h"
 #include "ACEOrbitCameraBoom.h"
 #include "ACESession.h"
@@ -379,7 +380,7 @@ bool FACEVRWallContactTest::RunTest(const FString&)
   TestTrue(TEXT("Ground ray sees the floor behind blocking creatures"),ACEBodySweep::TraceGround(*World,Ground,Feet+FVector(0,0,100),Feet-FVector(0,0,40),Query));
   TestTrue(TEXT("Ground results contain no creature floor"),Ground.ContainsByPredicate([](const FHitResult& H){return H.bBlockingHit && !ACEBodySweep::IsCreatureBody(H) && H.ImpactNormal.Z>.66;}));
   const auto Fall=ACEBodySweep::MoveAirborne(*World,Feet+FVector(0,0,160),Feet+FVector(0,0,50),FCollisionShape::MakeCapsule(30,90),Query,true);
-  TestTrue(TEXT("Falling through a dense overlapping crowd still reaches architecture"),Fall.bLanded && Fall.Position.Z<Feet.Z+100);
+  TestTrue(TEXT("A clean fall lands on top of the crowd rather than penetrating it"),Fall.bLanded && Fall.Position.Z>Feet.Z+120);
   for(auto* A:Bodies)A->Destroy();
  }
  // A stationary tracked player must settle once on a tilted support rather
@@ -448,6 +449,61 @@ bool FACEVRWallContactTest::RunTest(const FString&)
    TestTrue(TEXT("Seam does not hold moving player in place"),MaxStalls<Rate*.25);
   }
   for(auto* A:Surfaces)A->Destroy();
+ }
+ // Landing is not finished merely because the airborne flag cleared once.
+ // Stay on real authored creature tops, then jump AGAIN and move away. This
+ // catches a ground snap pulling the player inside the mob on the next tick.
+ for(uint32 Setup:{0x02000A95u,0x02000037u,0x02001121u})for(float Scale:{.6f,1.2f})
+ {
+  FACEWorldObject Mob;Mob.Guid=0x78003000;Mob.SetupId=Setup;Mob.Scale=Scale;
+  Mob.ItemType=ACEItemType::Creature;Mob.PhysicsState=ACEPhysicsState::Gravity;
+  auto* Monster=World->SpawnActor<AACEWorldEntityActor>();Monster->InitializeFromObject(Mob,100,true);
+  Monster->SetActorLocation(Contact+FVector(20000,20000,3000));
+  TArray<USphereComponent*> Spheres;Monster->GetComponents(Spheres);USphereComponent* Top=nullptr;
+  for(auto* Sphere:Spheres)if(Sphere->ComponentTags.Contains(TEXT("ACECreatureBody"))
+   && (!Top || Sphere->GetComponentLocation().Z+Sphere->GetScaledSphereRadius()>Top->GetComponentLocation().Z+Top->GetScaledSphereRadius()))Top=Sphere;
+  if(!TestNotNull(TEXT("Authored creature has a physical top sphere"),Top)){Monster->Destroy();continue;}
+  const auto PlayerBody=PC->GetPlayerCollisionBody();
+  const double ContactRadius=Top->GetScaledSphereRadius()+PlayerBody.Radii[0];
+  for(double Offset:{0.,.35})for(bool Tracked:{false,true})for(int32 FPS:{30,144})
+  {
+   const FVector Rest=Top->GetComponentLocation()+FVector(ContactRadius*Offset,0,ContactRadius*FMath::Sqrt(1.-Offset*Offset))-PlayerBody.Centers[0];
+   FACEPosition Pose;Pose.CellId=0xC98C0129;Pose.SetLocationFromUnreal(Rest+FVector(0,0,100-PlayerBody.HalfHeight),100);
+   Pose.SetAceFacingFromUnrealDir2D(FVector(1,0,0));Session->SetLocalPosition(Pose);
+   VR->bActive=Tracked;VR->MoveStick=FVector2D::ZeroVector;
+   PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;
+   PC->bJumpAirborne=true;PC->bStandingJumpLocked=true;PC->StepHoldSeconds=0;
+   PC->JumpWorldAceVelocity=FVector(0,0,-1);Session->SetReportedContact(false);
+   Pawn->SetActorLocationAndRotation(Pose.ToUnrealLocation(100)+FVector(0,0,PlayerBody.HalfHeight),Pose.ToUnrealQuat());
+   auto Tick=[&](){VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,84.25),FRotator(0,0,0));PC->PlayerTick(1.f/FPS);};
+   for(int32 Frame=0;Frame<FPS*2;++Frame)Tick();
+   TestFalse(FString::Printf(TEXT("Creature top stays grounded: setup=%08X scale=%.1f vr=%d fps=%d"),Setup,Scale,Tracked,FPS),PC->bJumpAirborne||PC->bStandingJumpLocked);
+   TestTrue(TEXT("Ground snap retains authored creature top height"),FMath::Abs(Pawn->GetActorLocation().Z-Rest.Z)<1.);
+   TestTrue(TEXT("Creature landing reports contact to retail server"),Session->bAutoPosContact);
+   PC->bJumpCharging=true;PC->JumpChargeExtent=1;PC->ReleaseJump(0,0);
+   TestTrue(TEXT("Player can jump again from the creature"),PC->bJumpAirborne);
+   // Use a vertical second jump to isolate support from locomotion speed.
+   PC->JumpWorldAceVelocity=FVector(0,0,3);
+   double Apex=Pawn->GetActorLocation().Z;
+   for(int32 Frame=0;Frame<FPS*2;++Frame){Tick();Apex=FMath::Max(Apex,Pawn->GetActorLocation().Z);}
+   TestTrue(TEXT("Second jump actually leaves the creature"),Apex>Rest.Z+20);
+   TestFalse(TEXT("Second landing releases jump/input lock"),PC->bJumpAirborne||PC->bStandingJumpLocked);
+   TestTrue(TEXT("Second landing retains top instead of embedding in body"),FMath::Abs(Pawn->GetActorLocation().Z-Rest.Z)<1.);
+   TestTrue(*FString::Printf(TEXT("Reported feet on creature: setup=%08X vr=%d fps=%d delta=%s"),Setup,Tracked,FPS,
+    *(Session->GetPlayerPosition().ToUnrealLocation(100)-(Pawn->GetActorLocation()-FVector(0,0,PlayerBody.HalfHeight))).ToString()),
+    Session->GetPlayerPosition().ToUnrealLocation(100).Equals(Pawn->GetActorLocation()-FVector(0,0,PlayerBody.HalfHeight),.2)); // 1mm contact skin + large-coordinate float quantization.
+   const FVector Before=Pawn->GetActorLocation();
+   const auto Strafe=ACEInputBindings::Get(EKeys::E,0);
+   auto StrafeKey=[&](bool Down){
+    for(auto Key:TArray<FKey>{Strafe.Key,Strafe.bShift?EKeys::LeftShift:FKey(),Strafe.bCtrl?EKeys::LeftControl:FKey(),Strafe.bAlt?EKeys::LeftAlt:FKey(),Strafe.bCmd?EKeys::LeftCommand:FKey()})
+     if(Key.IsValid())PC->PlayerInput->InputKey(FInputKeyParams(Key,Down?IE_Pressed:IE_Released,Down?1.:0.,false));
+   };
+   if(Tracked)VR->MoveStick=FVector2D(1,0);else StrafeKey(true);
+   for(int32 Frame=0;Frame<FPS/4;++Frame)Tick();
+   TestTrue(*FString::Printf(TEXT("Strafe after repeated creature landings: setup=%08X vr=%d fps=%d delta=%s"),Setup,Tracked,FPS,*(Pawn->GetActorLocation()-Before).ToString()),FVector::Dist2D(Before,Pawn->GetActorLocation())>10);
+   VR->MoveStick=FVector2D::ZeroVector;if(!Tracked)StrafeKey(false);
+  }
+  Monster->Destroy();
  }
  // The reported crowded dungeon floor, using the retail cell at its actual
  // coordinates. Exercise normal movement and a real charged jump while crowded.

@@ -866,7 +866,7 @@ void UProceduralMeshComponent::UpdateMeshSection(int32 SectionIndex, const TArra
 
 bool UProceduralMeshComponent::UpdateMeshSectionActivePrefix(int32 SectionIndex,
 	TConstArrayView<FVector> Vertices, TConstArrayView<FVector> Normals,
-	TConstArrayView<FColor> Colors, int32 ActiveIndexCount)
+	TConstArrayView<FColor> Colors, int32 ActiveIndexCount, const FBox* PreparedBounds)
 {
 	SCOPE_CYCLE_COUNTER(STAT_ProcMesh_UpdateSectionGT);
 	if (!ProcMeshSections.IsValidIndex(SectionIndex)) return false;
@@ -881,12 +881,12 @@ bool UProceduralMeshComponent::UpdateMeshSectionActivePrefix(int32 SectionIndex,
 #endif
 	Section.RenderIndexCount = ActiveIndexCount;
 	if (bPreferCachedDraws) MarkRenderStateDirty();
-	Section.SectionLocalBox.Init();
+	Section.SectionLocalBox = PreparedBounds ? *PreparedBounds : FBox(ForceInit);
 	for (int32 I = 0; I < Count; ++I)
 	{
 		auto& Vertex = Section.ProcVertexBuffer[I];
 		Vertex.Position = Vertices[I]; Vertex.Normal = Normals[I]; Vertex.Color = Colors[I];
-		Section.SectionLocalBox += Vertices[I];
+		if (!PreparedBounds) Section.SectionLocalBox += Vertices[I];
 	}
 	// Copy only the active prefix into the queued update. UVs and source tangents
 	// remain in the fixed-capacity buffers; no topology or resource recreation.

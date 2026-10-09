@@ -9,6 +9,7 @@
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
 #include "UI/ACEUIGameplayBinder.h"
+#include "UI/ACEUIElementManager.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACERetailObjectNames.h"
@@ -50,6 +51,7 @@ namespace
 void UACEVRMenu::InitializeMenu(UACEVRComponent* InRig,UACEClientSubsystem* InClient,UACEUIGameplayBinder* InBinder)
 {
     Rig=InRig; Client=InClient; Binder=InBinder;
+    InspectionSelectionGuid=Client->GetSelectedObject().Guid;
     Client->OnObjectCreated.AddUniqueDynamic(this,&UACEVRMenu::ObjectChanged);
     Client->OnObjectDeleted.AddUniqueDynamic(this,&UACEVRMenu::ObjectDeleted);
     Client->OnSelectionChanged.AddUniqueDynamic(this,&UACEVRMenu::SelectionChanged);
@@ -85,10 +87,25 @@ void UACEVRMenu::ObjectChanged(const FACEWorldObject& O)
 void UACEVRMenu::ObjectDeleted(int32 Guid){bDirty=true;if(Guid==DragItem)CancelItemPointer();if(Guid==Selected)Selected=0;if(Guid==UseSource)UseSource=0;if(Guid==Pack)Pack=Client->GetPlayerGuid();}
 void UACEVRMenu::SelectionChanged(const FACESelectedObject& S)
 {
+    const bool TargetChanged=InspectionSelectionGuid!=S.Guid;
+    InspectionSelectionGuid=S.Guid;
     FACEWorldObject Item;
     const bool Found=Client && Client->GetWorldObject(S.Guid,Item);
     Selected=Found && ((Page=="Inventory" && Item.ContainerId==Pack) || (Page=="Equipment" && Item.WielderId==Client->GetPlayerGuid())
         || Page=="Salvage" || Page=="Loot" || Page=="Vendor" || Page=="Trade" || (Page=="Hotbars" && Client->IsOwnedInventoryItem(Item)))?S.Guid:0;
+    if(bInspectionOpen && (!InspectSpell || (TargetChanged && S.bValid && S.Guid)))
+    {
+        if(!S.bValid || !S.Guid) {bInspectionOpen=false;InspectItem=0;InspectionAppraisal={};}
+        else if(InspectItem!=S.Guid || InspectSpell)
+        {
+            InspectItem=S.Guid;InspectSpell=0;InspectionAppraisal={};
+            // Desktop's selection listener may already have requested this
+            // appraisal. Share it when both presentations are open.
+            const auto Exam=Binder && Binder->Manager?Binder->Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field")):nullptr;
+            if(!Exam || !Exam->bVisible || Client->GetIdentifyRequestGuid()!=S.Guid)
+                Client->SendIdentifyObject(S.Guid);
+        }
+    }
     Confirmation.Reset();bDirty=true;
 }
 void UACEVRMenu::VitalsChanged(const FACEPlayerVitals&){if(Page=="Character")bDirty=true;}
@@ -201,7 +218,9 @@ void UACEVRMenu::SelectItem(int32 Guid)
         else Confirmation=TEXT("Choose a compatible item. Use on item is still active.");
         bDirty=true;return;
     }
-    Selected=Guid;Binder->SelectInventoryGuid(Guid);Client->SendIdentifyObject(Guid);bDirty=true;
+    Selected=Guid;Binder->SelectInventoryGuid(Guid);
+    if(!bInspectionOpen || InspectItem!=Guid)Client->SendIdentifyObject(Guid);
+    bDirty=true;
 }
 void UACEVRMenu::AddQuantity(int32 Maximum)
 {

@@ -20,7 +20,7 @@ private:
 	friend class UACEParticleUpdateSubsystem;
 	bool BeginParticleFlush();
 	int64 GetPendingVertexCount() const;
-	void PrepareParticleVertices();
+	void PrepareParticleVertices(bool bOnWorker = false);
 	void SubmitParticleVertices();
 	struct FSection
 	{
@@ -29,6 +29,7 @@ private:
 		TArray<FVector2D> UVs;
 		TArray<FColor> Colors;
 		TArray<FProcMeshTangent> Tangents;
+		FBox PreparedBounds{ForceInit};
 		int32 IndicesPerParticle = 0;
 		bool bUniformNormal = false;
 	};
@@ -38,6 +39,7 @@ private:
 	int32 MaxParticles = 0;
 	int32 LastFlushedParticleCount = 0;
 	bool bLastFlushedUseActivePrefix = true;
+	bool bPrepareBounds = true;
 	bool bDirty = false;
 	bool bFlushQueued = false;
 };

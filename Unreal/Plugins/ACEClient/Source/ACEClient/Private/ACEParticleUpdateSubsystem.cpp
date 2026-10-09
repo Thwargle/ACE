@@ -81,7 +81,7 @@ void UACEParticleUpdateSubsystem::FlushPending()
 	ParallelFor(Jobs,[&](int32 Job)
 	{
 		const int32 Begin=Work.Num()*Job/Jobs,End=Work.Num()*(Job+1)/Jobs;
-		for(int32 Index=Begin;Index<End;++Index) Work[Index]->PrepareParticleVertices();
+		for(int32 Index=Begin;Index<End;++Index) Work[Index]->PrepareParticleVertices(true);
 	});
 	for(auto* Batch:Work) Batch->SubmitParticleVertices();
 }

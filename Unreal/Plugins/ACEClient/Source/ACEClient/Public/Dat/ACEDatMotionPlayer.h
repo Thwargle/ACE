@@ -55,7 +55,7 @@ private:
 	const FACEDatAnimation* LoadAnimation(uint32 AnimId) const;
 	const FACEDatMotionData* FindCycle(uint32 MotionCommand, uint32 PreferredStyle) const;
 	bool FindCycleAnims(uint32 MotionCommand, TArray<FACEDatAnimData>& OutAnims, uint32 PreferredStyle = 0) const;
-	bool FindLinkAnims(uint32 FromCommand, uint32 ToCommand, TArray<FACEDatAnimData>& OutAnims, uint32 PreferredStyle = 0) const;
+	const FACEDatMotionData* FindLink(uint32 FromCommand, uint32 ToCommand, uint32 PreferredStyle = 0) const;
 	bool FindTransitionAnims(uint32 FromCommand, uint32 ToCommand, TArray<FACEDatAnimData>& OutAnims, uint32 PreferredStyle) const;
 	float GetAnimDataDuration(const FACEDatAnimData& AnimData) const;
 	bool EvaluateAnimSequence(const TArray<FACEDatAnimData>& Anims, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount,

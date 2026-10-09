@@ -1,4 +1,5 @@
 #include "ACEPlayerController.h"
+#include "UI/ACERadarVisuals.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "VR/ACEVRLocomotion.h"
 #include "ACEKeyboardRouter.h"
@@ -7863,22 +7864,28 @@ void AACEPlayerController::CycleNearbyTarget(bool bEnemies, int32 Direction)
 int32 AACEPlayerController::FindNearbyTarget(bool bEnemies, int32 Direction, int32 ExcludeGuid) const
 {
 	if (!Client) return 0;
-	const FVector Origin = Client->GetPlayerPosition().ToUnrealLocation(WorldScale);
+	const FACEPosition PlayerPosition=Client->GetPlayerPosition();
+	if (!PlayerPosition.IsValid()) return 0;
+	const FVector Origin = PlayerPosition.ToUnrealLocation(1.f);
+	const double RangeSquared=FMath::Square(ACERadarVisuals::RangeAc(uint32(PlayerPosition.CellId)));
 	const auto Fellowship = Client->GetFellowship();
 	TArray<FACEWorldObject> Objects = Client->GetWorldObjects();
 	Objects.RemoveAll([&](const FACEWorldObject& Obj)
 	{
-		return !Obj.IsSelectableWorldObject() || !Client->IsWorldObjectVisible(Obj)
+		return !Obj.IsSelectableWorldObject()
+			|| FVector::DistSquaredXY(Obj.Position.ToUnrealLocation(1.f),Origin)>RangeSquared
+			|| !Client->IsWorldObjectVisible(Obj)
 			|| Obj.Guid == Client->GetPlayerGuid() || Obj.Guid == ExcludeGuid || Obj.bIsPlayer
 			|| (bEnemies ? ((Obj.ItemType & ACEItemType::Creature) == 0 || !Obj.IsAttackable() || Obj.PetOwnerId != 0)
 				: (Obj.ItemType & ACEItemType::Creature) != 0)
 			|| (bEnemies && Fellowship.Members.ContainsByPredicate([&](const auto& Member) { return Member.Guid == Obj.Guid; }));
 	});
-	// CPlayerSystem::SelectNext traverses the known visible-object table, not a
-	// separate 60m sphere. Its ordering weights height as well as planar distance.
+	// CPlayerSystem::SelectNext limits candidates by planar radar radius first,
+	// then orders them by planar distance plus weighted height. Cached visibility
+	// alone must never make a previously encountered distant monster eligible.
 	auto Distance = [&](const FACEWorldObject& Obj)
 	{
-		const FVector Delta = Obj.Position.ToUnrealLocation(WorldScale)-Origin;
+		const FVector Delta = Obj.Position.ToUnrealLocation(1.f)-Origin;
 		return Delta.Size2D()+FMath::Abs(Delta.Z)*1.2;
 	};
 	Objects.Sort([&](const FACEWorldObject& A, const FACEWorldObject& B)

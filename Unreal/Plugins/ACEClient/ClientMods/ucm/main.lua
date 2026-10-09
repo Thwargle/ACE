@@ -1125,7 +1125,10 @@ local function tick(s,p)
     if (s.action_error or 0)~=0 then return pause_navigation('route interaction failed') end
     local step=route_pending.confirmed and 2 or 1;route_pending=nil;point=point+route_direction*step
    elseif s.time-route_pending.time>30 then return pause_navigation('route action timed out') end
-   return result(nil,'Waiting for route action')
+   -- Portal arrival is confirmed by teleport sequence/position, never by a
+   -- generic UseDone. While the host is free, VT's recharge/combat rules still
+   -- run ahead of navigation. Do not let a missing portal monopolize them.
+   if kind~='portal' and kind~='recall' then return result(nil,'Waiting for route action') end
   end
  local by_id,spells=index_spells(s,option('skill_margin',30));local trained={}
  for _,id in ipairs(s.trained_skills or {}) do trained[id]=true end
@@ -1311,6 +1314,9 @@ local function tick(s,p)
    route_pending=nil;point=point+route_direction
    return result(nil,'Route pause complete')
   end
+  -- A pending portal/recall has already been submitted. Yield without issuing
+  -- it again, including when navigation priority is enabled.
+  if route_pending then return end
   local idle=idle_stance();if idle then return idle end
   if (p.follow_name or '')~='' or (p.follow_id or 0)~=0 then
    local follow
@@ -1384,10 +1390,10 @@ local function tick(s,p)
    if not by_id[v.spell] or by_id[v.spell].known==false then return failed('Route recall spell is not known') end
    local equipment=caster();if equipment then return equipment end
    if not v.legacy and not route[point+route_direction] then return failed('Record a destination point after the recall') end
-   route_pending={time=s.time,serial=s.action_serial,teleport=s.teleport_sequence};return cast(s,by_id[v.spell],s.player,'Recalling on route')
+   route_pending={kind=kind,time=s.time,serial=s.action_serial,teleport=s.teleport_sequence};return cast(s,by_id[v.spell],s.player,'Recalling on route')
   end
   if kind=='command' then local e=meta_command(v.command,s);if e then if e=='Stopped by UCM command' then return result('stop',e) end;return failed(e) end;point=point+route_direction;return result(nil,'Route command completed') end
-  if kind=='jump' then route_pending={time=s.time};return {action='jump',heading=v.heading or 0,current_heading=v.current_heading,charge=v.charge or .5,forward=v.forward or 1,strafe=v.strafe or 0,walk_jump=v.walk_jump,status='Charging route jump'} end
+  if kind=='jump' then route_pending={kind=kind,time=s.time};return {action='jump',heading=v.heading or 0,current_heading=v.current_heading,charge=v.charge or .5,forward=v.forward or 1,strafe=v.strafe or 0,walk_jump=v.walk_jump,status='Charging route jump'} end
   if kind=='portal' or kind=='use' then
    if kind=='portal' and not v.legacy and not route[point+route_direction] then return failed('Record a destination point after the portal') end
    local object
@@ -1401,7 +1407,7 @@ local function tick(s,p)
     if match and (not object or o.distance<object.distance) then object=o end
    end
    if not object then return failed('Route object is not visible; select it and record Use again') end
-   route_pending={time=s.time,serial=s.action_serial,teleport=s.teleport_sequence};return {action='use_world',item=object.id,status='Using '..object.name}
+   route_pending={kind=kind,time=s.time,serial=s.action_serial,teleport=s.teleport_sequence};return {action='use_world',item=object.id,status='Using '..object.name}
   end
   point=point+route_direction;return result(nil,'Waypoint reached')
  end
@@ -2441,7 +2447,7 @@ local function tick(s,p)
   local names={};for _,v in ipairs(recovery_missing) do names[#names+1]=v==2 and 'health' or v==4 and 'stamina' or 'mana' end
   return result(nil,'Recovery unavailable for '..table.concat(names,', ')..'; check skill buffer, components, supplies and imported handlers')
  end
- return result(nil,navigation_paused or (route_pending and route_pending.kind=='pause' and 'Pausing on route') or (health_critical and 'Health critical; recovery unavailable, UCM remains active') or 'Ready - waiting for enabled activities')
+ return result(nil,navigation_paused or (route_pending and (route_pending.kind=='pause' and 'Pausing on route' or 'Waiting for route action')) or (health_critical and 'Health critical; recovery unavailable, UCM remains active') or 'Ready - waiting for enabled activities')
 end
 
 local function pause_activity(s,name,reason)

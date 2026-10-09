@@ -8982,7 +8982,7 @@ bool UACEDatSubsystem::TryGetSkillInfo(uint32 SkillId, FString& OutName, uint32&
 		{
 			const uint32 Key = Cur.ReadU32(bOk);
 			FSpellInfoCacheEntry Entry;
-			Cur.ReadPString(bOk); // Description
+			Entry.Description = Cur.ReadPString(bOk);
 			Cur.AlignBoundary();
 			Entry.Name = Cur.ReadPString(bOk);
 			Cur.AlignBoundary();
@@ -9011,6 +9011,39 @@ bool UACEDatSubsystem::TryGetSkillInfo(uint32 SkillId, FString& OutName, uint32&
 		return !OutName.IsEmpty() || OutIconDid != 0;
 	}
 	return false;
+}
+
+bool UACEDatSubsystem::TryGetSkillTooltip(uint32 SkillId, FString& OutText)
+{
+	OutText.Reset();
+	FString Name;
+	uint32 Icon = 0;
+	if (!SkillId || !TryGetSkillInfo(SkillId, Name, Icon)) return false;
+	const FSpellInfoCacheEntry* Skill = SkillInfoCache.Find(SkillId);
+	if (!Skill) return false;
+	// SkillSystem::InqSkillFormula uses full attribute names, weighted terms,
+	// parentheses for a two-attribute sum, and omits a divisor of one.
+	static const TCHAR* Attributes[] = {TEXT(""), TEXT("Strength"), TEXT("Endurance"),
+		TEXT("Quickness"), TEXT("Coordination"), TEXT("Focus"), TEXT("Self")};
+	TArray<FString, TInlineAllocator<2>> Terms;
+	auto AddTerm = [&](uint32 Weight, uint32 Attribute)
+	{
+		if (!Weight || !Attribute || Attribute >= UE_ARRAY_COUNT(Attributes)) return;
+		Terms.Add(Weight == 1 ? FString(Attributes[Attribute])
+			: FString::Printf(TEXT("(%u x %s)"), Weight, Attributes[Attribute]));
+	};
+	AddTerm(Skill->FormulaX, Skill->FormulaAttr1);
+	AddTerm(Skill->FormulaY, Skill->FormulaAttr2);
+	if (!Terms.IsEmpty())
+	{
+		OutText = TEXT("( ");
+		OutText += Terms.Num() == 2 ? TEXT("(") + Terms[0] + TEXT(" + ") + Terms[1] + TEXT(")") : Terms[0];
+		if (Skill->FormulaZ != 1) OutText += FString::Printf(TEXT(" / %u"), Skill->FormulaZ);
+		if (Skill->FormulaW) OutText += FString::Printf(TEXT("+%u"), Skill->FormulaW);
+		OutText += TEXT(" )\n");
+	}
+	OutText += Skill->Description;
+	return !OutText.IsEmpty();
 }
 
 bool UACEDatSubsystem::TryGetSkillTrainedCost(uint32 SkillId, int32& OutTrainedCost)

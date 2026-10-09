@@ -120,6 +120,25 @@ bool FACEItemPresentationTest::RunTest(const FString&)
         TestEqual(TEXT("Explicit server appraisal quality overrides a public descriptor fallback"),Appraisal.IntProperties.FindRef(50),2);
         Known=Saved;
     }
+    {
+        // Real appraisal packet: one inherent spell and one active enchantment.
+        FACEBinaryWriter Reply; Reply.WriteUInt32(Item.Guid); Reply.WriteUInt32(0x10); Reply.WriteUInt32(1);
+        Reply.WriteUInt32(2); Reply.WriteUInt32(1); Reply.WriteUInt32(0x80000002u);
+        FACEBinaryReader Reader(Reply.GetData()); Session.HandleIdentifyObjectResponse(Reader);
+        TestTrue(TEXT("Appraisal preserves raw enchantment flag without changing loot spell IDs"),
+            Appraisal.SpellBookEntries==TArray<int32>({1,int32(0x80000002u)}) && Appraisal.SpellIds==TArray<int32>({1,2}));
+        FString SpellName,EnchantName,Description; uint32 Icon=0;
+        TestTrue(TEXT("Retail spell names resolve for appraisal fixture"),Dat->TryGetSpellInfo(1,SpellName,Icon) && Dat->TryGetSpellInfo(2,EnchantName,Icon)
+            && Dat->TryGetSpellDescription(2,Description));
+        const FString Text=ACEAppraisalFormatting::ItemExaminationText(Appraisal,Dat,false,false);
+        TestTrue(TEXT("Inherent spells retain their short list"),Text.Contains(TEXT("Spells: ")+SpellName));
+        TestFalse(TEXT("Active enchantments are not appended to the short spell list"),Text.Contains(TEXT("Spells: ")+SpellName+TEXT(", ")+EnchantName));
+        TestTrue(TEXT("Active enchantments have retail's separate description section"),Text.Contains(TEXT("Enchantments:\n\n~ ")+EnchantName+TEXT(": ")+Description));
+        Appraisal.bSuccess=false;
+        const auto Failed=ACEAppraisalFormatting::ItemExaminationText(Appraisal,Dat,false,false);
+        TestTrue(TEXT("Failed spellbook appraisal is unknown"),Failed.Contains(TEXT("Spells: unknown.")));
+        TestFalse(TEXT("Failed spellbook appraisal does not reveal descriptions"),Failed.Contains(TEXT("Spell Descriptions:")) || Failed.Contains(TEXT("Enchantments:")));
+    }
 
     FACEDatTexture FrameRaw, FillRaw; FACEDatDecodedSurface Frame, Fill;
     auto* Decoder = Dat->GetTextureResolver();

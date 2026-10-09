@@ -1,6 +1,44 @@
 #include "ACEAppraisalFormatting.h"
 #include "UI/ACEUIResourceResolver.h"
 
+FString ACEAppraisalFormatting::ItemLevelDetails(const FACEAppraisalInfo& Info)
+{
+    FString Text;
+    const uint64 Base=Info.Int64Properties.FindRef(5), XP=Info.Int64Properties.FindRef(4);
+    const int32 Maximum=Info.IntProperties.FindRef(319), Scheme=Info.IntProperties.FindRef(320);
+    if (Base>0 && Maximum>0 && Scheme>=1 && Scheme<=3)
+    {
+        // ExperienceSystem's linear, doubling and increasing-cost schemes.
+        // Binary search avoids work proportional to a custom server's cap.
+        auto Threshold=[&](int32 Level,uint64& Value)
+        {
+            uint64 Factor=uint64(Level);
+            if (Scheme==2)
+            {
+                if (Level>64) { Value=MAX_uint64; return false; }
+                Factor=Level==64?MAX_uint64:(uint64(1)<<Level)-1;
+            }
+            else if (Scheme==3) Factor=uint64(Level)*(uint64(Level)+1)/2;
+            if (Factor && Base>MAX_uint64/Factor) { Value=MAX_uint64; return false; }
+            Value=Base*Factor; return true;
+        };
+        int32 Low=0, High=Maximum;
+        while (Low<High)
+        {
+            const int32 Mid=Low+int32((int64(High)-Low+1)/2);
+            uint64 Required=0;
+            if (Threshold(Mid,Required) && XP>=Required) Low=Mid;
+            else High=Mid-1;
+        }
+        uint64 Next=0; Threshold(Low<Maximum?Low+1:Maximum,Next);
+        Text=FString::Printf(TEXT("Item Level: %d / %d\nItem XP: %s / %s"),Low,Maximum,
+            *FText::AsNumber(XP).ToString(),*FText::AsNumber(Next).ToString());
+    }
+    if (Info.IntProperties.FindRef(352)==2)
+        AppendItemText(Text,TEXT("This cloak has a chance to reduce an incoming attack by 200 damage."),!Text.IsEmpty());
+    return Text;
+}
+
 FString ACEAppraisalFormatting::RequirementEnumName(UACEDatSubsystem* Dat, uint32 Enum, int32 Value)
 {
     if (Dat)

@@ -553,6 +553,13 @@ namespace ACEBodySweep
             if (!World.SweepSingleByChannel(Hit,Top,Top-FVector(0,0,MaxDown+MaxUp+Clearance),
                 FQuat::Identity,ECC_Pawn,FCollisionShape::MakeSphere(SupportRadius),SupportParams))return false;
             if(!IsCreatureBody(Hit))break;
+            // Retail land_on_sphere permits standing on a creature. Preserve
+            // a nearby lower-sphere top contact after landing; do not step up
+            // onto creatures or treat an initial side overlap as a floor.
+            const FVector Bottom=Top-FVector(0,0,MaxDown+MaxUp+Clearance);
+            if(RefineCreatureContact(Hit,Top,Bottom,SupportRadius)
+                && !Hit.bStartPenetrating && Hit.Normal.Z>=.6641741f
+                && Hit.Location.Z-SupportRadius<=Feet.Z+Clearance)break;
             const auto* Component=Hit.GetComponent();
             if (!Component || Ignored.Contains(Component)) return false;
             Ignored.Add(Component);SupportParams.AddIgnoredComponent(Component);
@@ -569,7 +576,7 @@ namespace ACEBodySweep
             // the old tread's convex edge. This is clearance along a bounded
             // step, not permission to stand on a wall or roll over a cliff.
             || (bHasLowerTread && Hit.Normal.Z>.0871557f);
-        if (IsCreatureBody(Hit) || Hit.bStartPenetrating || !bWalkableContact) return false;
+        if (Hit.bStartPenetrating || !bWalkableContact) return false;
         const float Z=Hit.Location.Z-SupportRadius;
         if (Z>Feet.Z+MaxUp+Clearance || Z<Feet.Z-MaxDown) return false;
         // Retain edge contact when descending and on sloped ramp planes, but
@@ -616,7 +623,8 @@ namespace ACEBodySweep
                 SideClearance=.1f;
                 continue;
             }
-            if (bMayClearFloor && !IsUpperBodyContact(Hit) && !IsCreatureBody(Hit) && Hit.Normal.Z>=.6641741f && FloorRetries<3)
+            if (bMayClearFloor && !IsUpperBodyContact(Hit) && Hit.Normal.Z>=.6641741f && FloorRetries<3
+                && (!IsCreatureBody(Hit) || Hit.PenetrationDepth<=.5f))
             {
                 const float Next=FloorClearance+FMath::Max(0.f,Hit.PenetrationDepth)/Hit.Normal.Z+1.f;
                 if (Capsule.Count>1 && Capsule.Centers[0].Z+Next<=Capsule.Centers[1].Z)
@@ -636,8 +644,8 @@ namespace ACEBodySweep
         FVector Normal=FVector::UpVector;
         float SupportZ=0.f;
         // Only a nearby, walkable lower-sphere contact is a ground plane.
-        // Monsters never provide support, and a floor far below a ledge must
-        // not steer the body. Query only when resolving a blocking contact.
+        // A landed-on creature can support the feet; a side overlap or floor
+        // far below a ledge cannot. Query only when resolving a blocking contact.
         FindFootSupport(World,Center+Capsule.Centers[0]-FVector(0,0,Capsule.Radii[0]),
             Capsule.Radii[0],2.f,Params,SupportZ,.5f,false,true,&Normal);
         return Normal;
@@ -740,8 +748,20 @@ namespace ACEBodySweep
             bool bHit=Sweep(World,Hit,Start,Start+Remaining,Capsule,AirParams,false);
             if (bHit && bFalling && IsCreatureBody(Hit))
             {
+                // Retail land_on_sphere accepts a clean lower-body landing on
+                // creatures too. Its creature exclusion is for support retries,
+                // not this first contact. Keep the landing before attempting
+                // the side/overlap escape below, or gravity pulls us into mobs.
+                if(!Hit.bStartPenetrating && !IsUpperBodyContact(Hit)
+                    && Hit.Normal.Z>=LandingZ && Remaining.Z<0.f)
+                {
+                    Result.Position=Hit.Location+Hit.Normal*.1f;
+                    Result.ContactNormal=Hit.Normal;
+                    Result.bLanded=true;
+                    break;
+                }
                 // A moving creature can overlap a falling body at a wall. Its
-                // rounded top is not a floor and must not lift/trap the player.
+                // side/initial overlap must not lift/trap the player.
                 // Preserve tangential travel around the creature before solving
                 // the fall. Dropping both horizontal axes made strafe input stop
                 // completely on landing beside a casting monster.

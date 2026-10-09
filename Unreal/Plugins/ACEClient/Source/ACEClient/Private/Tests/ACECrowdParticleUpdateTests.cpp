@@ -15,6 +15,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECrowdParticleUpdateTest,"ACE.Rendering.Crow
  EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACECrowdParticleUpdateTest::RunTest(const FString&)
 {
+ auto* Bounds=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Particles.PreparedBounds"));
+ const int32 SavedBounds=Bounds->GetInt();
+ ON_SCOPE_EXIT { Bounds->Set(SavedBounds,ECVF_SetByCode); };
  auto* Parallel=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Particles.ParallelUpdates"));
  auto* Threshold=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Particles.ParallelMinVertices"));
  const int32 Saved=Parallel->GetInt(),SavedThreshold=Threshold->GetInt();
@@ -45,10 +48,11 @@ bool FACECrowdParticleUpdateTest::RunTest(const FString&)
  for(const int32 Particles:{64,512})
  {
  TArray<TArray<FProcMeshSection>> Reference;
- double Milliseconds[2]={};
- for(int32 Mode:{0,1})
+ double Milliseconds[3]={};
+ for(int32 Mode:{0,1,2})
  {
-  Parallel->Set(Mode,ECVF_SetByCode);
+  Parallel->Set(Mode?1:0,ECVF_SetByCode);
+  Bounds->Set(Mode==2?1:0,ECVF_SetByCode);
   for(auto* Batch:Batches)
   {
    Batch->ClearParticles();Batch->FlushParticles();
@@ -89,6 +93,7 @@ bool FACECrowdParticleUpdateTest::RunTest(const FString&)
    {
     const auto& Before=Reference[B][S];const auto& After=*Batch->GetProcMeshSection(S);
     bool Identical=Before.GetRenderIndexCount()==After.GetRenderIndexCount();
+    TestTrue(TEXT("Worker-prepared bounds exactly match the original active-vertex bounds"),Before.SectionLocalBox==After.SectionLocalBox);
     for(int32 V=0;V<After.ProcVertexBuffer.Num();++V)
     {
      const auto& A=Before.ProcVertexBuffer[V];const auto& C=After.ProcVertexBuffer[V];
@@ -98,8 +103,8 @@ bool FACECrowdParticleUpdateTest::RunTest(const FString&)
    }
   }
  }
- AddInfo(FString::Printf(TEXT("40 casters / %d emitters / %d live particles / %lld vertices: serial %.3f ms, adaptive %.3f ms per CPU flush"),
-  Count,Count*Particles,Updates->GetLastVertexCount(),Milliseconds[0]/Frames,Milliseconds[1]/Frames));
+ AddInfo(FString::Printf(TEXT("40 casters / %d emitters / %d live particles / %lld vertices: original serial %.3f ms, original adaptive %.3f ms, prepared adaptive %.3f ms per CPU flush"),
+  Count,Count*Particles,Updates->GetLastVertexCount(),Milliseconds[0]/Frames,Milliseconds[1]/Frames,Milliseconds[2]/Frames));
  }
  // Small scenes remain serial; repeated requests use the latest state once.
  World->bInTick=true;

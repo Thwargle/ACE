@@ -13,6 +13,44 @@ bool FACEUCMSchedulingTest::RunTest(const FString&)
  FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
  auto Snapshot=[&](){return Json(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"action_serial":0,"action_error":0,"container":0,"teleport_sequence":1,"position":{"cell":30998795,"x":30,"y":-34,"z":0},"spells":[],"targets":[],"inventory":[{"id":99,"wcid":99,"count":1,"type":1,"equipped":true,"identified":true,"can_wield":true,"weapon_skill":47,"damage":10,"name":"Sword"},{"id":51,"wcid":51,"name":"Potion","type":32,"identified":true,"usable":true,"count":5,"boost_vital":2,"boost":50}]})"));};
  auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+ for(bool Recall:{false,true}) for(bool Boost:{false,true}) for(bool Arrives:{false,true})
+ {
+  FACEPluginVM VM;TestTrue(TEXT("Portal scheduling policy loads"),VM.Load(Source,Error));auto S=Snapshot();
+  auto P=Json(TEXT(R"({"buffing":false,"recovery":true,"combat":"melee","navigation":true,"route":[{"kind":"portal","object_id":800,"cell":30998795,"x":30,"y":-34,"z":0},{"cell":30998795,"x":130,"y":-34,"z":0},{"cell":30998795,"x":145,"y":-34,"z":0}]})"));
+  P->SetBoolField(TEXT("nav_priority"),Boost);
+  S->SetArrayField(TEXT("route_objects"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":800,"name":"Portal","distance":0})")))});
+  if(Recall)
+  {
+   auto V=P->GetArrayField(TEXT("route"))[0]->AsObject();V->SetStringField(TEXT("kind"),TEXT("recall"));V->SetNumberField(TEXT("spell"),900);
+   S->SetArrayField(TEXT("spells"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":900,"name":"Recall","category":100,"power":50,"skill":300,"known":true})")))});
+   auto Items=S->GetArrayField(TEXT("inventory"));Items.Add(MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":98,"name":"Orb","type":32768,"equipped":true,"identified":true,"can_wield":true})"))));S->SetArrayField(TEXT("inventory"),Items);
+  }
+  TestEqual(TEXT("Route action is submitted once"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(Recall?TEXT("cast"):TEXT("use_world")));
+  S->SetNumberField(TEXT("time"),101);S->SetNumberField(TEXT("health"),10);S->SetBoolField(TEXT("busy"),true);
+  TestFalse(TEXT("An actual game action remains locked"),Step(VM,S,P)->HasField(TEXT("action")));
+  S->SetBoolField(TEXT("busy"),false);
+  TestEqual(TEXT("Pending portal or recall cannot starve healing"),Step(VM,S,P)->GetNumberField(TEXT("item")),51.);
+  S->SetNumberField(TEXT("health"),100);S->SetNumberField(TEXT("time"),102);S->SetNumberField(TEXT("action_serial"),1);
+  S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":500,"name":"Rat","distance":1,"identified":true,"line_of_sight":true})")))});
+  TestEqual(TEXT("Pending teleport yields to combat even with navigation priority"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+  S->SetArrayField(TEXT("targets"),{});Step(VM,S,P); // Cancel completed attack.
+  auto I=Step(VM,S,P);
+  TestFalse(TEXT("Unrelated UseDone never advances or reissues the portal"),I->HasField(TEXT("action")));
+  TestEqual(TEXT("Waiting portal remains visible in status"),I->GetStringField(TEXT("status")),FString(TEXT("Waiting for route action")));
+  if(Arrives)
+  {
+   S->SetNumberField(TEXT("teleport_sequence"),2);S->GetObjectField(TEXT("position"))->SetNumberField(TEXT("x"),130);
+   Step(VM,S,P);I=Step(VM,S,P);
+   TestEqual(TEXT("Confirmed arrival advances to the next walking segment"),I->GetNumberField(TEXT("x")),145.);
+  }
+  else
+  {
+   S->SetNumberField(TEXT("time"),146);
+   TestEqual(TEXT("Missing portal pauses only navigation"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("pause_navigation")));
+   P->SetBoolField(TEXT("navigation"),false);S->SetNumberField(TEXT("health"),10);
+   TestEqual(TEXT("Recovery remains active after portal failure"),Step(VM,S,P)->GetNumberField(TEXT("item")),51.);
+  }
+ }
  for(bool Boost:{false,true}) for(bool Legacy:{false,true})
  {
   FACEPluginVM VM;TestTrue(TEXT("UCM loads"),VM.Load(Source,Error));auto S=Snapshot();

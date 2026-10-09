@@ -171,9 +171,12 @@ public:
 
 	/** Update a packed prefix of a non-colliding section without re-uploading immutable
 	 * UVs or unused capacity. The index prefix must reference only the supplied vertices.
+	 * PreparedBounds, when supplied, must enclose exactly this vertex prefix in local space.
+	 * This lets worker-side geometry generation calculate bounds in the same pass.
 	 * Existing full-section APIs retain their original behavior. */
 	UE_API bool UpdateMeshSectionActivePrefix(int32 SectionIndex, TConstArrayView<FVector> Vertices,
-		TConstArrayView<FVector> Normals, TConstArrayView<FColor> Colors, int32 ActiveIndexCount);
+		TConstArrayView<FVector> Normals, TConstArrayView<FColor> Colors, int32 ActiveIndexCount,
+		const FBox* PreparedBounds = nullptr);
 
 	/**
 	 *	Create/replace a section for this procedural mesh component.

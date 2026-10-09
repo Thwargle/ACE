@@ -118,6 +118,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACERunSpeedParityTest;
 	friend class FACERetailPkStatusTest;
 	friend class FACERetailScreenTest;
+	friend class FACECharacterInfoParityTest;
 	friend class FACECameraEdgeTest;
 	friend class FACERetailParticleTimingTest;
 	friend class FACERetailStatsTest;

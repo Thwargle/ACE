@@ -89,9 +89,20 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   for(double Direction:{-1.,1.})
   {
    const FVector Start=Base+FVector(-Width+.02,0,91.75);
-   const auto Slide=ACEBodySweep::MoveAirborne(*World,Start,Start+FVector(3,Direction*3,-1),PlayerBody,Q,true);
-   TestTrue(TEXT("Descending creature contact preserves sideways input"),Direction*(Slide.Position.Y-Start.Y)>2.5);
-   TestTrue(TEXT("Creature contact permits descent without treating mob as a floor"),Slide.Position.Z<Start.Z&&!Slide.bLanded);
+   const FVector End=Start+FVector(3,Direction*3,-1);FHitResult Contact;
+   const bool Landable=ACEBodySweep::Sweep(*World,Contact,Start,End,PlayerBody,Q,false)
+    && !Contact.bStartPenetrating && !ACEBodySweep::IsUpperBodyContact(Contact) && Contact.Normal.Z>=.0871557f;
+   const auto Slide=ACEBodySweep::MoveAirborne(*World,Start,End,PlayerBody,Q,true);
+   if(Landable)
+   {
+    TestTrue(TEXT("Descending onto creature upper surface lands like retail"),Slide.bLanded);
+    TestTrue(TEXT("Creature landing stops at the sphere instead of passing through it"),Slide.Position.Z>=Contact.Location.Z-.01);
+   }
+   else
+   {
+    TestTrue(TEXT("Descending creature side contact preserves sideways input"),Direction*(Slide.Position.Y-Start.Y)>2.5);
+    TestTrue(TEXT("Creature side contact permits descent without treating mob as a floor"),Slide.Position.Z<Start.Z&&!Slide.bLanded);
+   }
   }
   Body->Destroy();
  }

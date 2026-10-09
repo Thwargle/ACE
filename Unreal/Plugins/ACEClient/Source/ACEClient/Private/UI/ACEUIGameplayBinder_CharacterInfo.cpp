@@ -1,5 +1,8 @@
 #include "UI/ACEUIGameplayBinder.h"
 #include "ACEClientSubsystem.h"
+#include "ACEDatSubsystem.h"
+#include "UI/ACEUICanvasWidget.h"
+#include "UI/ACEUIResourceResolver.h"
 #include "Misc/DateTime.h"
 #include <ctime>
 
@@ -34,43 +37,119 @@ FString UACEUIGameplayBinder::BuildCharacterInformation()
     Text+=FString::Printf(TEXT("Innate Strength: %d\nInnate Endurance: %d\nInnate Coordination: %d\nInnate Quickness: %d\nInnate Focus: %d\nInnate Self: %d\n\n"),
         V.Strength-V.StrengthRanks,V.Endurance-V.EnduranceRanks,V.Coordination-V.CoordinationRanks,
         V.Quickness-V.QuicknessRanks,V.Focus-V.FocusRanks,V.Self-V.SelfRanks);
-    Text+=FString::Printf(TEXT("Chess Rank: %s\nFishing Skill: %d\n\n"),*FText::AsNumber(V.ChessRank>0?V.ChessRank:1400).ToString(),V.FishingSkill);
+    Text+=FString::Printf(TEXT("Chess Rank: %s\nFishing Skill: %d\n\n"),*FText::AsNumber(V.ChessRank).ToString(),V.FishingSkill);
     const TCHAR* Masteries[]={TEXT("Unknown"),TEXT("Unarmed Weapons"),TEXT("Swords"),TEXT("Axes"),TEXT("Maces"),TEXT("Spears"),TEXT("Daggers"),TEXT("Staves"),TEXT("Bows"),TEXT("Crossbows"),TEXT("Thrown Weapons"),TEXT("Two Handed Weapons"),TEXT("Magical Spells")};
     for (int32 P : {354,355}) if (const int32 M=Int(P); M>0)
         Text+=FString::Printf(TEXT("Your %s mastery is %s.\n"),P==354?TEXT("melee"):TEXT("ranged"),Masteries[M<UE_ARRAY_COUNT(Masteries)?M:0]);
     if (const int32 M=Int(362); M>0)
-        Text+=FString::Printf(TEXT("\nYour summoning mastery is %s.\n"),M==1?TEXT("Naturalist"):M==2?TEXT("Necromancer"):M==3?TEXT("Primalist"):TEXT("Unknown"));
-    Text+=TEXT("\nLuminance Augmentations:\n\n");
-    struct FInfo { int32 Property; const TCHAR* Description; };
-    const FInfo Lum[]={
-        {333,TEXT("Damage rating")},{334,TEXT("Damage reduction rating")},{335,TEXT("Critical damage rating")},
-        {336,TEXT("Critical damage reduction rating")},{337,TEXT("Surge effect rating")},{338,TEXT("Surge chance rating")},
-        {339,TEXT("Item mana usage augmentation")},{340,TEXT("Item mana gain augmentation")},{341,TEXT("Vitality augmentation")},
-        {342,TEXT("Healing rating")},{343,TEXT("Crafting skill augmentation")},{344,TEXT("Specialized skill augmentation")}
+        Text+=FString::Printf(TEXT("\nYour summoning mastery is %s.\n"),M==1?TEXT("Primalist"):M==2?TEXT("Necromancer"):M==3?TEXT("Naturalist"):TEXT("Unknown"));
+    // gmCharacterInfoUI::UpdateAugmentations uses the localized descriptions,
+    // including their paragraph breaks, rather than displaying raw quality names.
+    if (!bLoadedSocialStrings && Canvas && Canvas->GetResourceResolver())
+        if (const auto* Dat = Canvas->GetResourceResolver()->GetDatSubsystem())
+            bLoadedSocialStrings = SocialStrings.LoadStrings(Dat->GetDatDirectory(), 0x23000001);
+    auto AppendAugmentation = [&](const TCHAR* Key, int32 Count)
+    {
+        FString Description = SocialStrings.FormatText(Key, {{TEXT("NUM_AUGMENTATIONS"), FString::FromInt(Count)}});
+        // Retail StringInfo chooses count-dependent text such as {time[1]|times}.
+        int32 Start = 0;
+        while ((Start = Description.Find(TEXT("{"), ESearchCase::CaseSensitive, ESearchDir::FromStart, Start)) != INDEX_NONE)
+        {
+            const int32 End = Description.Find(TEXT("}"), ESearchCase::CaseSensitive, ESearchDir::FromStart, Start);
+            if (End == INDEX_NONE) break;
+            TArray<FString> Choices;
+            Description.Mid(Start + 1, End - Start - 1).ParseIntoArray(Choices, TEXT("|"), false);
+            FString Selected;
+            for (const FString& Choice : Choices)
+            {
+                int32 Condition = INDEX_NONE;
+                if (Choice.EndsWith(TEXT("]")) && Choice.FindLastChar(TEXT('['), Condition))
+                {
+                    const FString Number = Choice.Mid(Condition + 1, Choice.Len() - Condition - 2);
+                    if (Number.IsNumeric() && FCString::Atoi(*Number) == Count) { Selected = Choice.Left(Condition); break; }
+                }
+                else Selected = Choice;
+            }
+            Description = Description.Left(Start) + Selected + Description.Mid(End + 1);
+            Start += Selected.Len();
+        }
+        Text += Description;
     };
-    for (const auto& A:Lum) if (const int32 N=Int(A.Property);N>0) Text+=FString::Printf(TEXT("%s: %d\n\n"),A.Description,N);
-    if (Int(229)>0) Text+=TEXT("You have augmented your pack-carrying capacity.\n\n");
-    if (Int(230)>0) Text+=FString::Printf(TEXT("You have augmented your burden-bearing ability %d times.\n\n"),Int(230));
-    const FInfo Infused[]={ {294,TEXT("Creature Magic")},{295,TEXT("Item Magic")},{296,TEXT("Life Magic")},{297,TEXT("War Magic")},{328,TEXT("Void Magic")} };
-    for (const auto& A:Infused) if (Int(A.Property)>0)
-        Text+=FString::Printf(TEXT("You earned the Infused %s augmentation. You no longer need foci to cast %s spells.\n\n"),A.Description,A.Description);
-    if (Int(326)>0) Text+=TEXT("You earned the Jack of All Trades augmentation. All your effective skills are increased by 5.\n\n");
-    const FInfo Other[]={
-        {218,TEXT("Innate Strength")},{219,TEXT("Innate Endurance")},{220,TEXT("Innate Coordination")},
-        {221,TEXT("Innate Quickness")},{222,TEXT("Innate Focus")},{223,TEXT("Innate Self")},
-        {224,TEXT("Specialized Salvaging")},{225,TEXT("Specialized Item Tinkering")},{226,TEXT("Specialized Armor Tinkering")},
-        {227,TEXT("Specialized Magic Item Tinkering")},{228,TEXT("Specialized Weapon Tinkering")},
-        {231,TEXT("Fewer items lost on death")},{232,TEXT("Spells retained after death")},{233,TEXT("Critical defense")},
-        {234,TEXT("Bonus experience")},{235,TEXT("Bonus salvage")},{236,TEXT("Bonus imbue chance")},
-        {237,TEXT("Faster regeneration")},{238,TEXT("Increased spell duration")},
-        {240,TEXT("Slashing resistance")},{241,TEXT("Piercing resistance")},{242,TEXT("Bludgeoning resistance")},
-        {243,TEXT("Acid resistance")},{244,TEXT("Fire resistance")},{245,TEXT("Cold resistance")},{246,TEXT("Lightning resistance")},
-        {293,TEXT("Specialized Gearcraft")},{298,TEXT("Critical expertise")},{299,TEXT("Critical power")},
-        {300,TEXT("Skilled melee")},{301,TEXT("Skilled missile")},{302,TEXT("Skilled magic")},
-        {309,TEXT("Damage bonus")},{310,TEXT("Damage reduction")},{327,TEXT("Nether resistance")}
+    AppendAugmentation(TEXT("ID_CharacterInfo_Luminance_Header"), 0);
+    struct FLuminanceInfo { int32 Property; const TCHAR* Base; const TCHAR* Specialized; int32 Multiplier; };
+    const FLuminanceInfo Luminance[] = {
+        {333, TEXT("Damage"), TEXT("Damage"), 1},
+        {334, TEXT("Reduction"), TEXT("Reduction"), 1},
+        {335, TEXT("Crit_Damage"), TEXT("Crit_Damage"), 1},
+        {336, TEXT("Crit_Reduction"), TEXT("Crit_Reduction"), 1},
+        {338, TEXT("Surge_Chance"), nullptr, 1},
+        {339, TEXT("Mana_Use"), nullptr, 5},
+        {340, TEXT("Mana_Gain"), nullptr, 5},
+        {342, TEXT("Healing"), nullptr, 1},
+        {343, TEXT("Skilled_Craft"), nullptr, 1},
+        {344, nullptr, TEXT("Skilled_Spec"), 2},
+        {365, TEXT("All_Skills"), nullptr, 1}
     };
-    for (const auto& A:Other) if (const int32 N=Int(A.Property);N>0)
-        Text+=FString::Printf(TEXT("%s augmentation: %d\n\n"),A.Description,N);
+    for (const auto& A : Luminance)
+    {
+        const int32 Count = Int(A.Property);
+        if (Count <= 0) continue;
+        if (A.Base)
+            AppendAugmentation(*FString::Printf(TEXT("ID_CharacterInfo_Luminance_Base_%s"), A.Base),
+                (A.Specialized ? FMath::Min(Count, 5) : Count) * A.Multiplier);
+        if (A.Specialized && (!A.Base || Count > 5))
+            AppendAugmentation(*FString::Printf(TEXT("ID_CharacterInfo_Luminance_Spec_%s"), A.Specialized),
+                (A.Base ? Count - 5 : Count) * A.Multiplier);
+    }
+    struct FAugmentationInfo { int32 Property; const TCHAR* StringKey; };
+    const FAugmentationInfo Augmentations[] = {
+        {218, TEXT("ID_CharacterInfo_Augmentation_Attribute_Strength")},
+        {219, TEXT("ID_CharacterInfo_Augmentation_Attribute_Endurance")},
+        {220, TEXT("ID_CharacterInfo_Augmentation_Attribute_Coordination")},
+        {221, TEXT("ID_CharacterInfo_Augmentation_Attribute_Quickness")},
+        {222, TEXT("ID_CharacterInfo_Augmentation_Attribute_Focus")},
+        {223, TEXT("ID_CharacterInfo_Augmentation_Attribute_Self")},
+        {240, TEXT("ID_CharacterInfo_Augmentation_Resist_Slash")},
+        {241, TEXT("ID_CharacterInfo_Augmentation_Resist_Pierce")},
+        {242, TEXT("ID_CharacterInfo_Augmentation_Resist_Blunt")},
+        {243, TEXT("ID_CharacterInfo_Augmentation_Resist_Acid")},
+        {327, TEXT("ID_CharacterInfo_Augmentation_Resist_Nether")},
+        {244, TEXT("ID_CharacterInfo_Augmentation_Resist_Fire")},
+        {245, TEXT("ID_CharacterInfo_Augmentation_Resist_Frost")},
+        {246, TEXT("ID_CharacterInfo_Augmentation_Resist_Lightning")},
+        {224, TEXT("ID_CharacterInfo_Augmentation_Spec_Salvaging")},
+        {225, TEXT("ID_CharacterInfo_Augmentation_Spec_ItemTinkering")},
+        {226, TEXT("ID_CharacterInfo_Augmentation_Spec_ArmorTinkering")},
+        {227, TEXT("ID_CharacterInfo_Augmentation_Spec_MagicItemTinkering")},
+        {228, TEXT("ID_CharacterInfo_Augmentation_Spec_WeaponTinkering")},
+        {293, TEXT("ID_CharacterInfo_Augmentation_Spec_Gearcraft")},
+        {229, TEXT("ID_CharacterInfo_Augmentation_ExtraPackSlot")},
+        {230, TEXT("ID_CharacterInfo_Augmentation_IncreasedCarryingCapacity")},
+        {231, TEXT("ID_CharacterInfo_Augmentation_LessDeathItemLoss")},
+        {232, TEXT("ID_CharacterInfo_Augmentation_SpellsRemainPastDeath")},
+        {233, TEXT("ID_CharacterInfo_Augmentation_CriticalDefense")},
+        {234, TEXT("ID_CharacterInfo_Augmentation_BonusXP")},
+        {235, TEXT("ID_CharacterInfo_Augmentation_BonusSalvage")},
+        {236, TEXT("ID_CharacterInfo_Augmentation_BonusImbueChance")},
+        {237, TEXT("ID_CharacterInfo_Augmentation_FasterRegen")},
+        {238, TEXT("ID_CharacterInfo_Augmentation_IncreasedSpellDuration")},
+        {294, TEXT("ID_CharacterInfo_Augmentation_Infused_CreatureMagic")},
+        {295, TEXT("ID_CharacterInfo_Augmentation_Infused_ItemMagic")},
+        {296, TEXT("ID_CharacterInfo_Augmentation_Infused_LifeMagic")},
+        {297, TEXT("ID_CharacterInfo_Augmentation_Infused_WarMagic")},
+        {328, TEXT("ID_CharacterInfo_Augmentation_Infused_VoidMagic")},
+        {300, TEXT("ID_CharacterInfo_Augmentation_SkilledMelee")},
+        {301, TEXT("ID_CharacterInfo_Augmentation_SkilledMissile")},
+        {302, TEXT("ID_CharacterInfo_Augmentation_SkilledMagic")},
+        {309, TEXT("ID_CharacterInfo_Augmentation_DamageBonus")},
+        {310, TEXT("ID_CharacterInfo_Augmentation_DamageResist")},
+        {298, TEXT("ID_CharacterInfo_Augmentation_CriticalExpertise")},
+        {299, TEXT("ID_CharacterInfo_Augmentation_CriticalPower")},
+        {326, TEXT("ID_CharacterInfo_Augmentation_JackOfAllTrades")},
+    };
+    for (const auto& A : Augmentations)
+        if (const int32 Count = Int(A.Property); Count > 0) AppendAugmentation(A.StringKey, Count);
+    Text += TEXT("\n");
     int32 Burden=0;
     if (Client) Client->TryGetPlayerEncumbrance(Burden);
     const int32 Capacity=FMath::Max(1,(150+FMath::Clamp(30*V.CarryingCapacityAugs,0,150))*V.GetBuffedStrength());

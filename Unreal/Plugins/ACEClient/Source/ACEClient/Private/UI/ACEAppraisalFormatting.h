@@ -10,6 +10,7 @@ class UACEUIResourceResolver;
 namespace ACEAppraisalFormatting
 {
 FString EquipmentSetName(int32 Id);
+FString ItemLevelDetails(const FACEAppraisalInfo& Info);
 FString RequirementEnumName(UACEDatSubsystem* Dat, uint32 Enum, int32 Value);
 inline FString ManaStoneDetails(const FACEAppraisalInfo& Info)
 {
@@ -296,12 +297,31 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
     if (const auto* W = Info.IntProperties.Find(105))
     {
         static const TCHAR* Quality[] = {TEXT("Unknown"),TEXT("Poorly crafted"),TEXT("Well-crafted"),TEXT("Finely crafted"),TEXT("Exquisitely crafted"),TEXT("Magnificent"),TEXT("Nearly flawless"),TEXT("Flawless"),TEXT("Utterly flawless"),TEXT("Incomparable"),TEXT("Priceless")};
-        Text += FString::Printf(TEXT("Workmanship: %s (%d)\n\n"), Quality[FMath::Clamp(*W,0,10)], *W);
+        const int32 Count=Info.IntProperties.FindRef(170);
+        if (Count>0)
+        {
+            const double Average=double(*W)/Count;
+            Text+=FString::Printf(TEXT("Workmanship: %s (%.2f)\n\nSalvaged from %d items.\n\n"),
+                Quality[FMath::Clamp(FMath::RoundToInt(Average),0,10)],Average,Count);
+        }
+        else Text += FString::Printf(TEXT("Workmanship: %s (%d)\n\n"), Quality[FMath::Clamp(*W,0,10)], *W);
     }
     if (!Text.IsEmpty() && !Text.EndsWith(TEXT("\n\n"))) Text += TEXT("\n");
-    // Retail prints crafting first, then consecutive weapon/defense/armor rows.
+    // ItemExamineUI prints crafting, set and ratings before equipment stats.
     const FString SetName=EquipmentSetName(Info.IntProperties.FindRef(265));
-    if(!SetName.IsEmpty())Text+=TEXT("Set: ")+SetName+TEXT("\n\n");
+    if(!SetName.IsEmpty())Text+=TEXT("Set: ")+SetName+TEXT("\n");
+    TArray<FString> Ratings;
+    const uint32 RatingIds[] = {370,371,372,374,373,375,376,377,378};
+    const TCHAR* RatingNames[] = {TEXT("Dam"),TEXT("Dam Resist"),TEXT("Crit"),TEXT("Crit Dam"),
+        TEXT("Crit Resist"),TEXT("Crit Dam Resist"),TEXT("Heal Boost"),TEXT("Nether Resist"),TEXT("Life Resist")};
+    for (int32 I=0; I<UE_ARRAY_COUNT(RatingIds); ++I)
+        if (const int32 Value=Info.IntProperties.FindRef(RatingIds[I]); Value>0)
+            Ratings.Add(FString::Printf(TEXT("%s %d"),RatingNames[I],Value));
+    if (!Ratings.IsEmpty()) AppendItemText(Text,TEXT("Ratings: ")+FString::Join(Ratings,TEXT(", ")));
+    const int32 Vitality=Info.IntProperties.FindRef(379);
+    if (Vitality>0) AppendItemText(Text,FString::Printf(TEXT("This item adds %d Vitality."),Vitality));
+    if (!SetName.IsEmpty() || !Ratings.IsEmpty() || Vitality>0)
+    { Text.TrimEndInline(); Text+=TEXT("\n\n"); }
     if ((Info.IntProperties.FindRef(9)&0x8007FFF) || (Info.ItemType&(ACEItemType::Armor|ACEItemType::Clothing)))
     {
         TArray<FString> Covers;
@@ -346,7 +366,12 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
         if (const auto* V = Info.FloatProperties.Find(E.Key))
             Text += FString::Printf(TEXT("Bonus to %s: %+.1f%%.\n"), E.Value, (*V-1.0)*100.0);
     const bool HasArmor = !Info.ArmorResistances.IsEmpty() && Info.IntProperties.FindRef(28) > 0;
-    if (HasArmor || (!Shield && Info.IntProperties.Contains(28))) Int(28, TEXT("Armor Level: "));
+    if (HasArmor || (!Shield && Info.IntProperties.Contains(28)))
+    {
+        // Appraisal_ShowArmorMods starts with an explicit newline.
+        AppendItemText(Text,FString::Printf(TEXT("Armor Level: %d"),Info.IntProperties.FindRef(28)),true);
+        Text+=TEXT("\n");
+    }
     static const TCHAR* DamageNames[] = {TEXT("Slashing"), TEXT("Piercing"), TEXT("Bludgeoning"), TEXT("Cold"), TEXT("Fire"), TEXT("Acid"), TEXT("Nether"), TEXT("Electric")};
     // Wire storage order differs from ItemExamineUI::Appraisal_ShowArmorMods.
     for (int32 I : {0,1,2,4,3,5,7,6})
@@ -361,19 +386,26 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
     }
     TArray<FString> SpellNames;
     FString SpellDescriptions;
+    FString EnchantmentDescriptions;
     TSet<int32> SeenSpells;
-    for (int32 Id : Info.SpellIds)
+    for (int32 WireId : Info.SpellBookEntries.IsEmpty()?Info.SpellIds:Info.SpellBookEntries)
     {
-        if (SeenSpells.Contains(Id)) continue;
-        SeenSpells.Add(Id);
+        if (!Info.bSuccess || SeenSpells.Contains(WireId)) continue;
+        SeenSpells.Add(WireId);
+        // Retail marks active enchantments with the high bit. They are not
+        // inherent item spells, but have their own description section.
+        const bool Enchantment=(uint32(WireId)&0x80000000u)!=0;
+        const int32 Id=uint32(WireId)&0x7fffffffu;
         FString Name, Desc; uint32 Icon=0;
         if (!Dat || !Dat->TryGetSpellInfo(Id,Name,Icon)) Name=FString::Printf(TEXT("Spell %d"),Id);
-        SpellNames.Add(Name);
+        if (!Enchantment) SpellNames.Add(Name);
         if (Dat && Dat->TryGetSpellDescription(Id,Desc))
-            SpellDescriptions += TEXT("~ ") + Name + TEXT(": ") + Desc + TEXT("\n");
+            (Enchantment?EnchantmentDescriptions:SpellDescriptions) += TEXT("~ ") + Name + TEXT(": ") + Desc + TEXT("\n");
     }
     if (!SpellNames.IsEmpty())
         AppendItemText(Text, TEXT("Spells: ") + FString::Join(SpellNames,TEXT(", ")), true);
+    else if (!Info.bSuccess && !Info.SpellIds.IsEmpty())
+        AppendItemText(Text,TEXT("Spells: unknown."),true);
     uint32 Imbued = 0;
     for (uint32 Id : {179u,303u,304u,305u,306u}) Imbued |= Info.IntProperties.FindRef(Id);
     TArray<FString> Properties;
@@ -385,6 +417,9 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
         {1024,TEXT("+1 Melee Defense")},{2048,TEXT("+1 Missile Defense")},{4096,TEXT("+1 Magic Defense")},{0x80000000u,TEXT("Phantasmal")}})
         if (Imbued & E.Key) Properties.Add(E.Value);
     if (Info.BoolProperties.FindRef(91)) Properties.Add(TEXT("Retained"));
+    for (const auto& Property : {TPair<uint32,const TCHAR*>(136,TEXT("Crushing Blow")),
+        {147,TEXT("Biting Strike")},{155,TEXT("Armor Cleaving")}})
+        if (Info.FloatProperties.Contains(Property.Key)) Properties.Add(Property.Value);
     // Retail ItemExamineUI::Appraisal_ShowSpecialProperties checks presence of
     // ResistanceModifier (float 157) and ResistanceModifierType (int 263).
     // This is independent of imbued/rending flags and the weapon's damage type.
@@ -403,14 +438,34 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
     if (Info.BoolProperties.FindRef(100)) Properties.Add(TEXT("Dyeable"));
     if (!Properties.IsEmpty()) AppendItemText(Text, TEXT("Properties: ") + FString::Join(Properties,TEXT(", ")), true);
     if (Imbued) AppendItemText(Text, TEXT("This item cannot be further imbued."));
+    const bool Tethered=Info.BoolProperties.FindRef(130);
+    if (Tethered) AppendItemText(Text,TEXT("This item is tethered to the left side."));
     // Usage is a separate section before requirements, not a description at the end.
     if (const auto* Usage = Info.StringProperties.Find(14); Usage && !Usage->IsEmpty())
         AppendItemText(Text, *Usage, true);
     if (!Text.IsEmpty())
     {
         Text.TrimEndInline();
-        Text += (!Properties.IsEmpty() || Imbued) && !Info.StringProperties.Contains(14) ? TEXT("\n\n") : TEXT("\n");
+        // Appraisal_ShowSpecialProperties reserves a blank line even when
+        // there are no special properties between the spells and requirements.
+        const bool HasUsage=!Info.StringProperties.FindRef(14).IsEmpty();
+        Text += (!Properties.IsEmpty() || Imbued || Tethered || !Info.SpellIds.IsEmpty()) && !HasUsage ? TEXT("\n\n") : TEXT("\n");
     }
+    const int32 MinLevel=Info.IntProperties.FindRef(86), MaxLevel=Info.IntProperties.FindRef(87);
+    FString LevelLimit;
+    if (MinLevel>0 && MaxLevel>0)
+        LevelLimit=MinLevel==MaxLevel?FString::Printf(TEXT("Restricted to characters of Level %d."),MinLevel)
+            :FString::Printf(TEXT("Restricted to characters of Levels %d to %d."),MinLevel,MaxLevel);
+    else if (MinLevel>0) LevelLimit=FString::Printf(TEXT("Restricted to characters of Level %d or greater."),MinLevel);
+    else if (MaxLevel>0) LevelLimit=FString::Printf(TEXT("Restricted to characters of Level %d or below."),MaxLevel);
+    if (!LevelLimit.IsEmpty()) { AppendItemText(Text,LevelLimit,true); Text+=TEXT("\n"); }
+    if (const auto* Destination=Info.StringProperties.Find(38); Destination && !Destination->IsEmpty())
+    { AppendItemText(Text,TEXT("Destination: ")+*Destination,true); Text+=TEXT("\n"); }
+    if (Info.BoolProperties.FindRef(85))
+        Text+=TEXT("Wield requires ")+(Info.StringProperties.FindRef(25).IsEmpty()?FString(TEXT("the original owner")):Info.StringProperties[25])+TEXT("\n");
+    if (Info.IntProperties.FindRef(26)==1) Text+=TEXT("Use requires Throne of Destiny.\n");
+    if (const int32 Heritage = Info.IntProperties.FindRef(324); Heritage)
+        Text += TEXT("Wield requires ") + RequirementEnumName(Dat, 0x10000002, Heritage) + TEXT("\n");
     for (uint32 Base : {158u, 270u, 273u, 276u})
     {
         const int32 Type = Info.IntProperties.FindRef(Base), Stat = Info.IntProperties.FindRef(Base+1), Value = Info.IntProperties.FindRef(Base+2);
@@ -437,8 +492,21 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
         else if (Type == 11 || Type == 12)
             Text += FString::Printf(TEXT("Wield requires %s %s\n"), *RequirementEnumName(Dat, Type == 11 ? 0x10000005 : 0x10000002, Value), Type == 11 ? TEXT("type") : TEXT("race"));
     }
-    if (const int32 Heritage = Info.IntProperties.FindRef(324); Heritage)
-        Text += TEXT("Wield requires ") + RequirementEnumName(Dat, 0x10000002, Heritage) + TEXT("\n");
+    FString UseLimits;
+    if (const int32 Level=Info.IntProperties.FindRef(369); Level>0)
+        AppendItemText(UseLimits,FString::Printf(TEXT("Use requires level %d."),Level));
+    for (uint32 Key : {366u,368u})
+    {
+        const int32 Skill=Info.IntProperties.FindRef(Key), Minimum=Info.IntProperties.FindRef(367);
+        if (!Skill || (Key==366 && !Minimum)) continue;
+        FString Name; uint32 Icon=0;
+        if (!Dat || !Dat->TryGetSkillInfo(Skill,Name,Icon)) Name=TEXT("Unknown Skill");
+        AppendItemText(UseLimits,Key==368?FString::Printf(TEXT("Use requires specialized %s."),*Name)
+            :FString::Printf(TEXT("Use requires %s of at least %d."),*Name,Minimum));
+    }
+    if (!UseLimits.IsEmpty()) { AppendItemText(Text,UseLimits,true); Text+=TEXT("\n"); }
+    if (const FString Levels=ItemLevelDetails(Info); !Levels.IsEmpty())
+    { AppendItemText(Text,Levels); Text+=TEXT("\n\n"); }
     if (const auto* Lore = Info.IntProperties.Find(109); Lore && *Lore > 0)
         Text += FString::Printf(TEXT("Activation requires Arcane Lore: %d\n"), *Lore);
     Int(110, TEXT("Activation requires Allegiance Rank: "));
@@ -486,31 +554,23 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
             Text += TEXT("\n");
         }
     }
-    Int(106, TEXT("Spellcraft: "));
-    if (Info.IntProperties.Contains(108)) Text += FString::Printf(TEXT("Mana: %d / %d.\n"), Info.IntProperties.FindRef(107), Info.IntProperties.FindRef(108));
-    if (const auto* Rate = Info.FloatProperties.Find(5); Rate && FMath::IsFinite(*Rate) && FMath::Abs(*Rate) > SMALL_NUMBER)
-        Text += FString::Printf(TEXT("Mana Cost: 1 point per %d seconds.\n"), FMath::RoundToInt(FMath::Abs(1.0 / *Rate)));
-    else Int(117, TEXT("Mana Cost: "));
-    // ItemExamineUI::Appraisal_ShowRatings uses Gear* qualities (370..379),
-    // not the creature's aggregate DamageRating/ResistRating qualities.
-    TArray<FString> Ratings;
-    const uint32 RatingIds[] = {370,371,372,374,373,375,376,377,378};
-    const TCHAR* RatingNames[] = {TEXT("Dam"),TEXT("Dam Resist"),TEXT("Crit"),TEXT("Crit Dam"),
-        TEXT("Crit Resist"),TEXT("Crit Dam Resist"),TEXT("Heal Boost"),TEXT("Nether Resist"),TEXT("Life Resist")};
-    for (int32 I=0; I<UE_ARRAY_COUNT(RatingIds); ++I)
-        if (const int32 Value=Info.IntProperties.FindRef(RatingIds[I]); Value>0)
-            Ratings.Add(FString::Printf(TEXT("%s %d"),RatingNames[I],Value));
-    if (!Ratings.IsEmpty()) AppendItemText(Text,TEXT("Ratings: ")+FString::Join(Ratings,TEXT(", ")),true);
-    if (const int32 Vitality=Info.IntProperties.FindRef(379); Vitality>0)
-        AppendItemText(Text,FString::Printf(TEXT("This item adds %d Vitality."),Vitality),true);
     AppendItemText(Text, ItemUsageDetails(Info), true);
     AppendItemText(Text, ManaStoneDetails(Info));
     if (!Text.IsEmpty()) { Text.TrimEndInline(); Text += TEXT("\n"); }
     if (const auto* Cooldown = Info.FloatProperties.Find(167)) Text += FString::Printf(TEXT("Cooldown: %.1f seconds\n"), *Cooldown);
     if (Info.IntProperties.Contains(92)) Text += FString::Printf(TEXT("Uses remaining: %d/%d\n"), Info.IntProperties.FindRef(92), Info.IntProperties.FindRef(91));
-    for (const auto& Entry : {TPair<uint32, const TCHAR*>(25, TEXT("Crafted by: ")), {38, TEXT("Destination: ")}})
-        if (const auto* Value = Info.StringProperties.Find(Entry.Key); Value && !Value->IsEmpty()) Text += FString(Entry.Value) + *Value + TEXT("\n");
+    if (const auto* Craftsman=Info.StringProperties.Find(25); Craftsman && !Craftsman->IsEmpty()) Text+=TEXT("Crafted by: ")+*Craftsman+TEXT("\n");
+    if (!SpellNames.IsEmpty())
+    {
+        if (const auto* Craft=Info.IntProperties.Find(106)) Text+=FString::Printf(TEXT("Spellcraft: %d.\n"),*Craft);
+        if (Info.IntProperties.Contains(107) && Info.IntProperties.Contains(108)) Text+=FString::Printf(TEXT("Mana: %d / %d.\n"),Info.IntProperties[107],Info.IntProperties[108]);
+        if (const auto* Rate=Info.FloatProperties.Find(5); Rate && FMath::IsFinite(*Rate) && FMath::Abs(*Rate)>SMALL_NUMBER)
+            Text+=FString::Printf(TEXT("Mana Cost: 1 point per %d seconds.\n"),FMath::RoundToInt(FMath::Abs(1.0 / *Rate)));
+        else if (const auto* Cost=Info.IntProperties.Find(117))
+            AppendItemText(Text,FString::Printf(TEXT("Mana Cost: %d."),*Cost)+(*Cost>0?TEXT("\n(Can be reduced by the Mana Conversion skill)"):TEXT("")),true);
+    }
     if (!SpellDescriptions.IsEmpty()) AppendItemText(Text, TEXT("Spell Descriptions:\n") + SpellDescriptions, true);
+    if (!EnchantmentDescriptions.IsEmpty()) AppendItemText(Text,TEXT("Enchantments:\n\n")+EnchantmentDescriptions,true);
     return Text;
 }
 inline FString ItemExaminationText(const FACEAppraisalInfo& Info,UACEDatSubsystem* Dat,bool IncludeValue=true,bool IncludeBurden=true,const FACEPlayerVitals* Viewer=nullptr)

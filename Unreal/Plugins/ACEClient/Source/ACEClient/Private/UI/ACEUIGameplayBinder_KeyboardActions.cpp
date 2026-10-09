@@ -5,6 +5,7 @@
 #include "ACEInputBindings.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
+#include "ACERadarVisuals.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/EditableTextBox.h"
 #include "Components/TextBlock.h"
@@ -16,7 +17,8 @@
 void UACEUIGameplayBinder::CycleKeyboardSelection(const FString& Kind,int32 Direction)
 {
  if(!Client)return;
- const auto Origin=Client->GetPlayerPosition().ToUnrealLocation(1.f);
+ const auto Position=Client->GetPlayerPosition();
+ const auto Origin=Position.ToUnrealLocation(1.f);
  const auto Fellow=Client->GetFellowship();
  TArray<FACEWorldObject> Objects=Client->GetWorldObjects();
  Objects.RemoveAll([&](const FACEWorldObject& O)
@@ -24,7 +26,7 @@ void UACEUIGameplayBinder::CycleKeyboardSelection(const FString& Kind,int32 Dire
   if(!O.IsSelectableWorldObject() || (Kind!=TEXT("CompassItem") && !Client->IsWorldObjectVisible(O)))return true;
   const auto Delta=O.Position.ToUnrealLocation(1.f)-Origin;
   if(Kind==TEXT("Fellow"))return !Fellow.Members.ContainsByPredicate([&](const FACEFellowshipMember& M){return M.Guid==O.Guid;});
-  if(Delta.SizeSquared2D()>FMath::Square(60.f))return true;
+  if(!Position.IsValid() || Delta.SizeSquared2D()>FMath::Square(ACERadarVisuals::RangeAc(uint32(Position.CellId))))return true;
   if(O.Guid==Client->GetPlayerGuid())return true;
   if(Kind==TEXT("Player"))return !O.bIsPlayer || !ShouldShowOnRadar(O,Client->GetPlayerGuid());
   if(Kind==TEXT("Corpse"))return !O.IsCorpse() || KeyboardOpenedCorpses.Contains(O.Guid);

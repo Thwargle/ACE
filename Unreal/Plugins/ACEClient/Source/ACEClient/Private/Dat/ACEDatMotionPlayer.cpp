@@ -125,17 +125,15 @@ bool FACEDatMotionPlayer::SetMotionTable(uint32 MotionTableId)
 	return true;
 }
 
-bool FACEDatMotionPlayer::FindLinkAnims(uint32 FromCommand, uint32 ToCommand, TArray<FACEDatAnimData>& OutAnims, uint32 PreferredStyle) const
+const FACEDatMotionData* FACEDatMotionPlayer::FindLink(uint32 FromCommand, uint32 ToCommand, uint32 PreferredStyle) const
 {
-	OutAnims.Reset();
 	if (MotionTable->Links.Num() == 0)
 	{
-		return false;
+		return nullptr;
 	}
 
 	const uint32 FromMasked = FromCommand & 0xFFFFFu;
 	const uint32 ToFull = ToCommand;
-	const uint32 ToMasked = ToCommand & 0xFFFFFu;
 	constexpr uint32 NonCombat = 0x8000003Du;
 	constexpr uint32 HandCombat = 0x8000003Cu;
 	constexpr uint32 SwordCombat = 0x8000003Eu;
@@ -173,42 +171,34 @@ bool FACEDatMotionPlayer::FindLinkAnims(uint32 FromCommand, uint32 ToCommand, TA
 	AddStyle(SwordCombat);
 	AddStyle(Magic);
 
-	auto TryKey = [&](uint32 OuterKey, uint32 InnerKey) -> bool
+	auto TryKey = [&](uint32 OuterKey, uint32 InnerKey) -> const FACEDatMotionData*
 	{
 		const TMap<uint32, FACEDatMotionData>* Inner = MotionTable->Links.Find(OuterKey);
 		if (!Inner)
 		{
-			return false;
+			return nullptr;
 		}
 		const FACEDatMotionData* Data = Inner->Find(InnerKey);
 		if (!Data || Data->Anims.Num() == 0 || Data->Anims[0].AnimId == 0)
 		{
-			return false;
+			return nullptr;
 		}
-		OutAnims = Data->Anims;
-		return true;
+		return Data;
 	};
 
 	for (uint32 Style : Styles)
 	{
 		// Retail MotionTable::GetObjectLinkage uses the FULL motion id as the link key.
 		// ToMasked cross-family fallbacks (CastSpell → Attack*) made monster casts look melee.
-		if (TryKey((Style << 16) | FromMasked, ToFull)
-			|| TryKey((Style << 16) | (FromCommand & 0xFFFFFFu), ToFull)
-			|| TryKey(Style << 16, ToFull))
-		{
-			return true;
-		}
+		for (uint32 Key : {(Style << 16) | FromMasked, (Style << 16) | (FromCommand & 0xFFFFFFu), Style << 16})
+			if (const auto* Data = TryKey(Key, ToFull)) return Data;
 		if (const uint32* DefaultMotion = MotionTable->StyleDefaults.Find(Style))
 		{
 			const uint32 DefMasked = (*DefaultMotion) & 0xFFFFFu;
-			if (TryKey((Style << 16) | DefMasked, ToFull))
-			{
-				return true;
-			}
+			if (const auto* Data = TryKey((Style << 16) | DefMasked, ToFull)) return Data;
 		}
 	}
-	return false;
+	return nullptr;
 }
 
 bool FACEDatMotionPlayer::FindTransitionAnims(uint32 From, uint32 To, TArray<FACEDatAnimData>& Out, uint32 PreferredStyle) const
@@ -661,12 +651,13 @@ bool FACEDatMotionPlayer::EvaluateLink(uint32 FromCommand, uint32 ToCommand, flo
 	{
 		return false;
 	}
-	TArray<FACEDatAnimData> Anims;
-	if (!FindLinkAnims(FromCommand, ToCommand, Anims, PreferredStyle))
+	const auto* Link = FindLink(FromCommand, ToCommand, PreferredStyle);
+	if (!Link)
 	{
 		return false;
 	}
-	return EvaluateAnimSequence(Anims, TimeSeconds, NumParts, OutPartTransforms, WorldScale, OutAnimatedPartCount,
+	// The cached table owns these immutable clips; casting/death poses need no per-frame copy.
+	return EvaluateAnimSequence(Link->Anims, TimeSeconds, NumParts, OutPartTransforms, WorldScale, OutAnimatedPartCount,
 		false, &bOutFinished, PreviousTimeSeconds, OutCrossedHooks);
 }
 

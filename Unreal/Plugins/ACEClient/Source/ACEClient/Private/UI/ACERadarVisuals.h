@@ -3,6 +3,13 @@
 
 namespace ACERadarVisuals
 {
+    // CPlayerSystem::GetRadarRadius / SmartBox::is_player_outside. Selection
+    // uses this same planar range, even if an object remains in the cache.
+    inline float RangeAc(uint32 PlayerCell)
+    {
+        return (PlayerCell & 0xFFFFu) < 0x100u ? 75.f : 25.f;
+    }
+
     // VividTargetIndicator::OnDraw puts each 12px corner OUTSIDE the projected
     // selection sphere. Clamp the corner origins, not the object's bounds.
     inline FBox2D SelectionFrame(FVector2D Min, FVector2D Max, FVector2D View, FVector2D Scale)

@@ -100,6 +100,55 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     auto* Client=NewObject<UACEClientSubsystem>(GI);
     Client->Session=MakeShared<FACESession>(); Client->Session->State=EACESessionState::InWorld;
     Controller->Client=Client; Controller->bRetailCursorInstalled=true;
+    {
+        auto& Session=*Client->Session;
+        TGuardValue<int32> Self(Session.PlayerGuid,1);
+        TGuardValue<FACEPosition> Position(Session.PlayerPosition,FACEPosition{});
+        TGuardValue<FACESelectedObject> Selection(Session.SelectedObject,FACESelectedObject{});
+        ON_SCOPE_EXIT { Session.WorldObjects.Reset(); };
+        for (const uint32 Cell : {0xDA55001Du,0x0143014Fu})
+        {
+            Session.WorldObjects.Reset();
+            Session.PlayerPosition.CellId=Cell;
+            Session.PlayerPosition.Location=FVector(100,100,20);
+            const double Range=Cell==0xDA55001D?75.:25.;
+            auto Add=[&](int32 Guid,double X,double Z=0.)
+            {
+                FACEWorldObject Obj; Obj.Guid=Guid; Obj.ItemType=ACEItemType::Creature;
+                Obj.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable; Obj.bHasPosition=true;
+                Obj.Position=Session.PlayerPosition; Obj.Position.Location+=FVector(X,0,Z);
+                Session.WorldObjects.Add(Guid,Obj);
+            };
+            Add(2,10); Add(3,Range); Add(4,Range+.1); Add(5,Range*2);
+            TestEqual(TEXT("Nearest targeting ignores retained distant monsters"),Controller->FindNearbyTarget(true),2);
+            Client->SelectObject(2);
+            TestEqual(TEXT("Next includes exact retail range boundary"),Controller->FindNearbyTarget(true,1),3);
+            Client->SelectObject(3);
+            TestEqual(TEXT("Next wraps instead of reaching cached monsters beyond range"),Controller->FindNearbyTarget(true,1),2);
+            Client->SelectObject(2);
+            TestEqual(TEXT("Previous wraps within the same range"),Controller->FindNearbyTarget(true,-1),3);
+            // Keep every previously seen object in the cache, as in the report.
+            Session.PlayerPosition.Location.X-=Range*2;
+            for (int32 Direction : {-1,0,1})
+                TestEqual(TEXT("Walking away makes all cached targets ineligible immediately"),Controller->FindNearbyTarget(true,Direction),0);
+            Session.PlayerPosition.Location.X+=Range*2;
+            TestEqual(TEXT("Returning restores nearby targets without another spawn packet"),Controller->FindNearbyTarget(true),2);
+            // Range is planar, while height still contributes to ordering.
+            Session.WorldObjects.Reset(); Add(2,10,100); Add(3,20);
+            TestEqual(TEXT("Retail height weighting orders targets inside planar range"),Controller->FindNearbyTarget(true),3);
+            TestEqual(TEXT("Height alone does not impose a spherical cutoff"),Controller->FindNearbyTarget(true,0,3),2);
+        }
+        Session.PlayerPosition.CellId=0xDA550001; Session.PlayerPosition.Location=FVector(190,10,0);
+        Session.WorldObjects.Reset();
+        FACEWorldObject Across; Across.Guid=2; Across.ItemType=ACEItemType::Creature;
+        Across.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable; Across.bHasPosition=true;
+        Across.Position.CellId=0xDB550001; Across.Position.Location=FVector(2,10,0);
+        Session.WorldObjects.Add(2,Across);
+        TestEqual(TEXT("Adjacent landblock uses global distance rather than local coordinates"),Controller->FindNearbyTarget(true),2);
+        Session.PlayerPosition.CellId=0xDA550100;
+        Session.PlayerPosition.Location.X=150;
+        TestEqual(TEXT("Entering an indoor cell immediately reduces selection range"),Controller->FindNearbyTarget(true),0);
+    }
     TestTrue(TEXT("Mouse turning defaults on with fresh local settings and retail's off bit"),Client->IsCharacterOptionSet(0x31));
     const uint32 InitialOptions2=Client->GetCharacterOptions2();
     Client->SendSetSingleCharacterOption(0x31,false);

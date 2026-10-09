@@ -5,8 +5,100 @@ network behavior, controls, DAT content, and interface design. Graphical fidelit
 work follows feature completion. A feature is not complete merely because its
 button exists, its opcode has a constant, or a focused regression test passes.
 
-This is the working acceptance record, most recently reviewed on 2026-10-07. The client
+This is the working acceptance record, most recently reviewed on 2026-10-09. The client
 is **not yet a feature-complete retail replacement**.
+
+## Rendering and collision cost review: 2026-10-09
+
+Reviewed texture/material reuse, creature geometry and animation, particle
+simulation/vertex submission, pooled lighting, and collision/selection queries.
+Removed per-evaluation animation-list allocations from casting/death links by
+borrowing the immutable motion-table records, retaining the same retail link
+lookup order. Dense particle updates now compute exact section bounds during
+worker-side vertex generation instead of calculating them during the game-thread
+upload. Serial updates retain their original bounds path: moving that calculation
+did not improve the large serial fixture. `ace.Particles.PreparedBounds=0` retains
+the original path for A/B comparisons. No particle counts, textures, model detail,
+animation cadence, collision sizes, or networking policy were reduced or changed.
+
+The same-process desktop development benchmark with 120 emitters and 61,440 live
+particles measured 9.405 ms per CPU flush with original adaptive updates versus
+9.041 ms with prepared bounds (about 4%). The final worker-only run measured
+9.483 versus 9.186 ms (about 3%). These are isolated CPU measurements,
+not whole-frame FPS or a Quest/Linux GPU benchmark. Regression checks compare all
+vertices, normals, colors, UVs, draw counts, and exact bounds with the original
+path; rendered prefix tests also exercise shrinking, clearing, and refilling.
+
+Existing caches remain effective: warm Snow Tusker creature/corpse construction
+performs zero surface re-resolves, and repeated geometry requests use the shared
+cache. First-time Snow Tusker construction still measured 20.57 ms in the cold
+fixture, versus 0.80-0.87 ms warm; corpse construction was 4.11-4.37 ms. This does
+not establish that live Frozen Valley hitches are eliminated. Lighting checks
+measured 0.031 ms for 128 candidate sources and eight actual lights, and 0.035 ms
+for lighting updates on 64 real Acid Staff effects, excluding GPU cost. Retained
+the existing batched collision queries and exact authored body sizes rather than
+lowering collision frequency or skipping contacts.
+
+Local evidence is under `Saved/PerformanceOct09/`: baseline, build logs,
+same-process benchmark, and regression reports. All 30 selected rendering,
+animation, streaming, visibility, and collision tests passed (SceneAudit emits an
+existing temporary-world cleanup warning). All three final focused particle tests
+passed after the worker-only refinement. Remaining acceptance includes live crowded encounters,
+GPU overdraw, and standalone/mobile hardware profiling.
+
+## Cached monster targeting regression: 2026-10-09
+
+`CPlayerSystem::SelectNext` checks planar distance against `GetRadarRadius`
+before applying its distance-plus-height ordering. `GetRadarRadius` is 75 AC
+meters outdoors and 25 indoors, classified by the player's cell suffix in
+`SmartBox::is_player_outside`. Our monster/item traversal had omitted that
+check, allowing previously seen monsters throughout retained landblocks.
+Restored the range check using current player/object positions on every
+selection, and shared the radius with the radar and other keyboard selection
+paths. Fellowship traversal retains its separate member-list behavior.
+
+Replaced erroneous tests expecting 100-110m selection with compass-rim cases.
+`ACE.RetailParity.CameraAndEdges` now checks nearest/next/previous bounds,
+cached targets after walking away and returning, exact boundaries, indoor
+transitions, cross-landblock coordinates, and planar range versus weighted
+height ordering. `ACE.RetailParity.UIScreens` exercises the keyboard and
+automatic-targeting integration. Local evidence: `Saved/TargetRangeOct09/`.
+
+## Inspection presentation review: 2026-10-09
+
+Compared shared desktop/VR appraisal formatting with local retail
+`ItemExamineUI`, `BasicCreatureExamineUI`, `CreatureExamineUI`,
+`CharExamineUI`, and `ExperienceSystem`. This is source, packet-fixture and
+rendered-screen verification, not live acceptance on every custom server.
+
+- Restore the blank line between an item's spell list and requirements, and
+  before Armor Level, including shields. Keep individual requirements and
+  elemental resistance rows consecutive.
+- Put equipment set/gear ratings before equipment stats, including the
+  separate vitality line. Preserve retail armor resistance ordering/colors,
+  bow damage modifiers and skill-limited effective shield levels.
+- Preserve the appraisal spellbook's high-bit enchantment marker separately
+  from the normalized spell IDs used by plugins. Inherent spells appear in
+  the short list; active enchantments have their own description section.
+  Failed appraisals show unknown spells rather than disclosing descriptions.
+  Spellcraft, mana and mana cost accompany the inherent spell details.
+- Display portal minimum/maximum levels and destination, owner-only wield
+  restrictions, item-use level/skill/specialization requirements, and item
+  level/XP using retail's three progression schemes. Salvage shows average
+  workmanship and the number of contributing items.
+- Include server-provided Crushing Blow, Biting Strike, Armor Cleaving and
+  left-hand tether text. VR value/burden now preserve unknown fields and
+  number grouping instead of treating absent values as zero.
+- Check player/profession-bearing NPC routing, allegiance and body armor,
+  monster stat rows, failed appraisals, door lock status/difficulty, and
+  authored sign/description paragraphs without adding gear or player fields.
+
+Regression coverage: `ACE.RetailParity.AppraisalPresentation`,
+`ACE.RetailParity.ItemPresentation`, `ACE.RetailParity.UIInteractions`,
+`ACE.RetailParity.UIScreens`, and `ACE.VR.RigAndMenus`. Local reports and
+renders: `Saved/InspectionParityOct09/` and `Saved/Automation/RetailParity/`.
+The generated screens verify the current renderer against retail source/DAT
+contracts; they are not a simultaneous retail-client screenshot comparison.
 
 ## Interface and player-network review: 2026-10-07
 

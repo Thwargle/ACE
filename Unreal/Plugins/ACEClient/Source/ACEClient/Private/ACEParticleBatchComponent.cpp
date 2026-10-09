@@ -6,6 +6,8 @@
 
 static TAutoConsoleVariable<int32> CVarActiveParticlePrefix(TEXT("ace.Particles.ActivePrefix"), 1,
 	TEXT("Upload/draw only live particle slots. Set 0 to compare the reserved-capacity path."));
+static TAutoConsoleVariable<int32> CVarPrepareParticleBounds(TEXT("ace.Particles.PreparedBounds"), 1,
+	TEXT("Compute exact particle bounds during worker vertex generation. 0 computes them during submission."));
 
 void UACEParticleBatchComponent::InitializeParticles(int32 Capacity)
 {
@@ -75,6 +77,7 @@ bool UACEParticleBatchComponent::BeginParticleFlush()
 	if(!bDirty && bLastFlushedUseActivePrefix == bUseActivePrefix) return false;
 	bDirty=false;
 	bLastFlushedUseActivePrefix = bUseActivePrefix;
+	bPrepareBounds = bUseActivePrefix && CVarPrepareParticleBounds.GetValueOnGameThread() != 0;
 	return true;
 }
 
@@ -85,15 +88,19 @@ int64 UACEParticleBatchComponent::GetPendingVertexCount() const
 	return Count;
 }
 
-void UACEParticleBatchComponent::PrepareParticleVertices()
+void UACEParticleBatchComponent::PrepareParticleVertices(bool bOnWorker)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_PrepareParticleVertices);
+	// Serial updates are faster keeping the bounds calculation in submission;
+	// only the worker path benefits from moving it off the game thread.
+	bPrepareBounds &= bOnWorker;
 	// Inactive slots start degenerate. Only slots that were active in the last
 	// upload need clearing; a sparse emitter need not transform its full capacity.
 	const int32 UpdateCount=FMath::Max(Transforms.Num(),LastFlushedParticleCount);
 	for(int32 S=0; S<Sections.Num(); ++S)
 	{
 		auto& Out=Sections[S]; const int32 N=Out.Source.Num();
+		Out.PreparedBounds.Init();
 		for(int32 P=0; P<UpdateCount; ++P)
 		{
 			const bool Active=Transforms.IsValidIndex(P);
@@ -106,6 +113,7 @@ void UACEParticleBatchComponent::PrepareParticleVertices()
 			{
 				const int32 V=P*N+I;
 				Out.Positions[V]=Active ? Transforms[P].TransformPosition(Out.Source[I].Position) : FVector::ZeroVector;
+				if (bPrepareBounds && Active) Out.PreparedBounds += Out.Positions[V];
 				Out.Normals[V]=Active && !Out.bUniformNormal ? Transforms[P].TransformVectorNoScale(Out.Source[I].Normal) : Normal;
 				Out.Colors[V]=Out.Source[I].Color;
 				// The unbatched particle shader takes opacity from the material
@@ -130,7 +138,8 @@ void UACEParticleBatchComponent::SubmitParticleVertices()
 			!UpdateMeshSectionActivePrefix(S,
 				MakeArrayView(Out.Positions.GetData(), ActiveVertices),
 				MakeArrayView(Out.Normals.GetData(), ActiveVertices),
-				MakeArrayView(Out.Colors.GetData(), ActiveVertices), Transforms.Num() * Out.IndicesPerParticle))
+				MakeArrayView(Out.Colors.GetData(), ActiveVertices), Transforms.Num() * Out.IndicesPerParticle,
+				bPrepareBounds ? &Out.PreparedBounds : nullptr))
 		{
 			UpdateMeshSection(S,Out.Positions,Out.Normals,{},Out.Colors,{});
 		}

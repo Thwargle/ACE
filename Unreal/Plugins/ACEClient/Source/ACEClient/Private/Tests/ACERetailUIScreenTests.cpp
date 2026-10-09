@@ -2063,12 +2063,19 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Cooking displays its authored skill icon"), Gameplay->SkillRowIcons[CookingRow]->GetVisibility() != ESlateVisibility::Collapsed);
             auto* Value=Gameplay->SkillRowValues[CookingRow].Get();
             TestEqual(TEXT("Skill tab shows full buffed Cooking value"),Value->GetText().ToString(),FString(TEXT("155")));
-            TestEqual(TEXT("Skill tab keeps base and current available"),Value->GetToolTipText().ToString(),FString(TEXT("Base: 115\nCurrent: 155")));
+            FString ExpectedTooltip;
+            TestTrue(TEXT("Cooking has a DAT tooltip"),Dat->TryGetSkillTooltip(39,ExpectedTooltip));
+            TestEqual(TEXT("Skill hover shows retail formula and description"),Value->GetToolTipText().ToString(),ExpectedTooltip);
             const FLinearColor BuffColor=Value->GetColorAndOpacity().GetSpecifiedColor();
             TestTrue(TEXT("Selected buffed skill stays green"),BuffColor.G>BuffColor.R);
             auto* Highlight=Gameplay->SkillRowHighlights[CookingRow].Get();
             for (float Fraction : {.04f,.5f,.95f})
             {
+                const auto& HoverGeometry=Highlight->GetCachedGeometry();
+                const FVector2D HoverPoint=HoverGeometry.LocalToAbsolute(HoverGeometry.GetLocalSize()*FVector2D(Fraction,.5));
+                FString HoverText;
+                TestTrue(TEXT("Skill icon, name and value all expose the tooltip"),Gameplay->GetStatTooltipAt(HoverPoint,HoverText));
+                TestEqual(TEXT("Skill row hover preserves retail text without an extra name header"),HoverText,ExpectedTooltip);
                 ClickStatRow(Highlight,Fraction);
                 TestEqual(TEXT("Clicking selected skill immediately deselects it"),Gameplay->SelectedSkillId,0);
                 CheckStatHighlight(Highlight,false);
@@ -2774,10 +2781,10 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("Monster traversal wraps without visiting items"),Client->GetSelectedObject().Guid,80010);
             Controller->CycleNearbyTarget(true,-1);
             TestEqual(TEXT("Previous monster also excludes items"),Client->GetSelectedObject().Guid,80011);
-            AddObject(80013,100,false);
+            AddObject(80013,74.5f,false);
             Session.WorldObjects[80013].ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
             Controller->CycleNearbyTarget(true,1);
-            TestEqual(TEXT("Known monster can be cycled twenty meters beyond the 80m compass"),Client->GetSelectedObject().Guid,80013);
+            TestEqual(TEXT("Monster at retail's compass rim remains selectable"),Client->GetSelectedObject().Guid,80013);
             Controller->CycleNearbyTarget(true,-1);
             TestEqual(TEXT("Reverse cycling returns from beyond the compass"),Client->GetSelectedObject().Guid,80011);
             Session.WorldObjects.Remove(80013);
@@ -2793,10 +2800,10 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 ON_SCOPE_EXIT{Session.OnSelectionChanged.Remove(Bridge);};
                 TGuardValue<int32> Attacker(Session.LastAttackerGuid,0);
                 TGuardValue<double> AttackerTime(Session.LastAttackerTimeSeconds,0.);
-                auto Distant=Session.WorldObjects[80010];Distant.Guid=80013;Distant.Position.Location.X=Self.Position.Location.X+110.f;
+                auto Distant=Session.WorldObjects[80010];Distant.Guid=80013;Distant.Position.Location.X=Self.Position.Location.X+74.9f;
                 Session.WorldObjects.Add(Distant.Guid,Distant);
                 Client->SelectObject(80011);Controller->CycleNearbyTarget(true,1);
-                TestEqual(TEXT("Monster hotkeys reach known objects beyond the compass edge"),Client->GetSelectedObject().Guid,80013);
+                TestEqual(TEXT("Monster hotkeys reach the outer edge of retail's radar range"),Client->GetSelectedObject().Guid,80013);
                 Session.WorldObjects[80010].bDying=Session.WorldObjects[80011].bDying=true;
                 Controller->CycleNearbyTarget(true,0);
                 TestEqual(TEXT("Nearest monster has no separate 60 metre cutoff"),Client->GetSelectedObject().Guid,80013);
@@ -3783,8 +3790,10 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         const auto SavedVitals=Session.PlayerVitals;
         Session.PlayerVitals.bValid=true;Session.PlayerVitals.AgeSeconds=443581;Session.PlayerVitals.NumDeaths=6;
         Session.PlayerVitals.StatQualityInts.Add(98,1698189042);Session.PlayerVitals.StatQualityInts.Add(354,6);
-        Session.PlayerVitals.StatQualityInts.Add(355,8);Session.PlayerVitals.StatQualityInts.Add(362,1);
+        Session.PlayerVitals.StatQualityInts.Add(355,8);Session.PlayerVitals.StatQualityInts.Add(362,3);
         Session.PlayerVitals.StatQualityInts.Add(294,1);Session.PlayerVitals.StatQualityInts.Add(326,1);
+        Session.PlayerVitals.ChessRank=0;
+        for (int32 Property : {233,238,309,310,299}) Session.PlayerVitals.StatQualityInts.Add(Property,1);
         Gameplay->ShowPanelPage(TEXT("InventoryPanel_Field"));Gameplay->HandleNamedClick(TEXT("BurdenIndicator"));Gameplay->TickRefresh();
         TestEqual(TEXT("Small pack opens Character Information"),Gameplay->ActivePanelPage,FString(TEXT("CharacterInfoPanel_Field")));
         TestEqual(TEXT("Character Information title is visible"),Gameplay->CharacterInfoTitle->GetText().ToString(),FString(TEXT("Character Information")));

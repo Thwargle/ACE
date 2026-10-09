@@ -5788,7 +5788,9 @@ void FACESession::HandleIdentifyObjectResponse(FACEBinaryReader& Reader)
 			const uint32 SpellCount = Reader.ReadUInt32();
 			for (uint32 i = 0; i < SpellCount && Reader.CanRead(4); ++i)
 			{
-				const int32 SpellId = static_cast<int32>(Reader.ReadUInt32() & 0x7FFFFFFF);
+				const uint32 Entry = Reader.ReadUInt32();
+				Info.SpellBookEntries.Add(static_cast<int32>(Entry));
+				const int32 SpellId = static_cast<int32>(Entry & 0x7FFFFFFF);
 				Info.SpellIds.Add(SpellId);
 			}
 			if (Info.SpellIds.Num() > 0)
