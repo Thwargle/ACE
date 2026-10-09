@@ -675,6 +675,63 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Stopping input never invents ground contact"),R.ReadUInt8(),uint8(Contact));
         TestEqual(TEXT("Future position reports preserve the physical contact state"),Sender.bAutoPosContact,Contact);
     }
+    // DreamWeave fast-tick/portal loading exposes stale stationary positions:
+    // the wire must carry final physics changes even after movement input ends.
+    Sender.bMoving=false; Sender.bForcePositionReporting=false;
+    Sender.FlushAutonomousPosition(true);
+    auto CountPositions=[&]()
+    {
+        int32 Count=0;
+        for(const auto& Pair:Sender.CachedC2SPackets)
+        {
+            if(Pair.Value.Payload.Num()<28)continue;
+            FACEBinaryReader R(Pair.Value.Payload);R.Skip(24);
+            if(R.ReadUInt32()==ACEGameAction::AutonomousPosition)++Count;
+        }
+        return Count;
+    };
+    int32 Reports=CountPositions();
+    Sender.TickPositionReporting(5.f);
+    TestEqual(TEXT("Unchanged stationary players do not flood position packets"),CountPositions(),Reports);
+    Sender.PlayerPosition.Location.Z+=.03;
+    Sender.TickPositionReporting(.01f);
+    TestEqual(TEXT("Ground settling reports without a movement key or jump"),CountPositions(),++Reports);
+    Sender.PlayerPosition.Location.X+=.5;
+    Sender.TickPositionReporting(.5f);
+    TestEqual(TEXT("Same-cell drift respects the retail report interval"),CountPositions(),Reports);
+    Sender.TickPositionReporting(.5f);
+    TestEqual(TEXT("Final stationary drift reaches the server"),CountPositions(),++Reports);
+    Sender.bAutoPosContact=false;
+    Sender.TickPositionReporting(.01f);
+    TestEqual(TEXT("Loss of ground contact is reported without waiting a second"),CountPositions(),++Reports);
+    Sender.SendStopMovement();
+    TestTrue(TEXT("Cancelling input while airborne preserves position updates"),Sender.bMoving);
+    Sender.bMoving=false; Sender.bAutoPosContact=true;
+    ++Sender.PlayerPosition.CellId;
+    Sender.TickPositionReporting(.01f);
+    TestEqual(TEXT("Landing/cell transition is reported immediately"),CountPositions(),++Reports);
+    FACEBinaryReader FinalPose(Sender.CachedC2SPackets[Sender.NextPacketSequence-1].Payload);
+    FinalPose.Skip(28);
+    TestEqual(TEXT("Final report carries the actual cell"),FinalPose.ReadUInt32(),uint32(Sender.PlayerPosition.CellId));
+    TestEqual(TEXT("Final report carries the actual X coordinate"),FinalPose.ReadFloat(),float(Sender.PlayerPosition.Location.X));
+    FACEBinaryWriter Portal;Portal.WriteUInt16(10);Portal.Align();
+    FACEBinaryReader PortalReader(Portal.GetData());Sender.HandlePlayerTeleport(PortalReader);
+    Sender.PlayerPosition.Location.X+=10;
+    Sender.TickPositionReporting(2.f);Sender.FlushAutonomousPosition(true);
+    TestEqual(TEXT("Portal loading never publishes an unplaced destination"),CountPositions(),Reports);
+    Sender.SendLoginComplete();Sender.TickPositionReporting(1.f);
+    TestEqual(TEXT("Portal completion sends the new arrival position while idle"),CountPositions(),++Reports);
+    Sender.WorldObjects[123].PhysicsState|=ACEPhysicsState::Hidden;
+    auto Materialize=[&](uint16 Sequence)
+    {
+        FACEBinaryWriter W;W.WriteUInt32(123);W.WriteUInt32(ACEPhysicsState::ReportCollisions);
+        W.WriteUInt16(3);W.WriteUInt16(Sequence);
+        FACEBinaryReader R(W.GetData());Sender.HandleSetState(R);
+    };
+    Materialize(1);Sender.TickPositionReporting(1.f);
+    TestEqual(TEXT("Delayed server materialization refreshes the ignored arrival pose"),CountPositions(),++Reports);
+    Materialize(2);Sender.TickPositionReporting(2.f);
+    TestEqual(TEXT("Repeated visible-state updates do not create a reporting loop"),CountPositions(),Reports);
     const uint32 BeforeLogout=Sender.NextPacketSequence;
     Sender.bAutoPosContact=false;Sender.RequestLogOff();
     bool LogoutPosition=false;
@@ -687,6 +744,8 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     }
     TestTrue(TEXT("Logout flushes its final position"),LogoutPosition);
     Sender.ClearWorldState();
+    TestFalse(TEXT("Relog clears the last character's position report"),Sender.bHaveReportedPosition);
+    TestFalse(TEXT("Relog clears the previous portal reporting hold"),Sender.bPositionReportingSuspended);
     TestEqual(TEXT("Relog does not reuse another character's server control"),Sender.ServerControlSeq,uint16(0));
     Receiver->Close(); Sockets->DestroySocket(Receiver);
     FACEBinaryWriter Expected; Expected.WriteUInt32(0xF656); Expected.WriteBytes(Large);

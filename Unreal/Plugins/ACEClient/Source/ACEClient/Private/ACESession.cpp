@@ -170,6 +170,10 @@ void FACESession::Disconnect()
 	bLoginCompleteSent = false;
 	bMoving = false;
 	bForcePositionReporting = false;
+	bHaveReportedPosition = false;
+	bPositionReportingSuspended = false;
+	bAutoPosContact = bLastReportedContact = true;
+	AutoPosTimer = 0.f;
 	NextPacketSequence = 2;
 	NextFragmentSequence = 1;
 	NextGameActionSequence = 1;
@@ -311,6 +315,10 @@ void FACESession::ClearWorldState()
 	bLoginCompleteSent = false;
 	bMoving = false;
 	bForcePositionReporting = false;
+	bHaveReportedPosition = false;
+	bPositionReportingSuspended = false;
+	bAutoPosContact = bLastReportedContact = true;
+	AutoPosTimer = 0.f;
 	ResetReceivedMessages();
 }
 
@@ -519,20 +527,31 @@ void FACESession::Tick(float DeltaSeconds)
 		EchoTimer = 0.f;
 	}
 
-	if (State == EACESessionState::InWorld && !bLogOffPending && (bMoving || bForcePositionReporting))
+	TickPositionReporting(DeltaSeconds);
+}
+
+void FACESession::TickPositionReporting(float DeltaSeconds)
+{
+	if (State == EACESessionState::InWorld && !bLogOffPending && !bPositionReportingSuspended)
 	{
-		AutoPosTimer += DeltaSeconds;
-		// Retail acclient sends AutonomousPosition ~1 Hz while moving (ACE handler comment).
-		// ACE then applies the pose each world tick; observer F748 broadcasts are separately
-		// capped at MoveToState_UpdatePosition_Threshold (1 s) unless broadcast is forced.
+		AutoPosTimer = FMath::Min(AutoPosTimer + DeltaSeconds, AutonomousPositionInterval);
+		// Retail CommandInterpreter::ShouldSendPositionEvent compares the actual
+		// frame, not just input axes. Landing, ground settling and collision can
+		// change the final pose after StopMovement has cleared those axes.
+		const bool CellOrContactChanged = bHaveReportedPosition
+			&& (LastReportedPosition.CellId != PlayerPosition.CellId || bLastReportedContact != bAutoPosContact);
+		const bool PoseChanged = !bHaveReportedPosition || CellOrContactChanged
+			|| !LastReportedPosition.Location.Equals(PlayerPosition.Location, .0001)
+			|| !LastReportedPosition.RotationXYZ.Equals(PlayerPosition.RotationXYZ, .0001)
+			|| !FMath::IsNearlyEqual(LastReportedPosition.RotationW, PlayerPosition.RotationW, .0001f);
 		// SendVRPose now pairs each tracked sample with its feet. Do not send a
 		// second timed report in the same frame; retain normal reporting if the
 		// tracking stream pauses or the headset is disabled.
 		const bool PoseReportsFeet=SupportsVRPoses() && FPlatformTime::Seconds()-LastVRPoseSent<.5;
-		if (!PoseReportsFeet && AutoPosTimer >= AutonomousPositionInterval)
+		if (!PoseReportsFeet && (CellOrContactChanged || (AutoPosTimer >= AutonomousPositionInterval
+			&& (PoseChanged || bMoving || bForcePositionReporting))))
 		{
 			SendAutonomousPosition(bAutoPosContact);
-			AutoPosTimer = 0.f;
 		}
 	}
 }
@@ -2323,6 +2342,8 @@ void FACESession::HandlePlayerTeleport(FACEBinaryReader& Reader)
 	const uint16 ObjectTeleportSeq = Reader.ReadUInt16();
 	Reader.Align();
 	Log(FString::Printf(TEXT("PlayerTeleport seq=%u"), ObjectTeleportSeq));
+	bPositionReportingSuspended = true;
+	bHaveReportedPosition = false;
 	// A pending interaction in the old location cannot survive portal entry.
 	CancelPendingUse(TEXT("portal entry"));
 	SelectObject(0);
@@ -8246,6 +8267,12 @@ void FACESession::HandleSetState(FACEBinaryReader& Reader)
 		if (Obj->bHasPhysicsTimestamps
 			&& !ACEPhysicsTimeStamp::IsNewer(Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::State], IncomingState)) return;
 		Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::State] = IncomingState;
+		// Forks can defer LoginComplete while destination objects load, ignoring
+		// our first arrival pose. Re-report once their materialize acknowledgement
+		// arrives, even if the player has remained completely still since then.
+		if (Guid == PlayerGuid && (Obj->PhysicsState & ACEPhysicsState::Hidden)
+			&& !(PhysicsState & ACEPhysicsState::Hidden))
+			bHaveReportedPosition = false;
 		Obj->PhysicsState = PhysicsState;
 	}
 	OnPhysicsStateUpdate.Broadcast(Guid, PhysicsState);
@@ -8459,6 +8486,8 @@ void FACESession::SendLoginComplete()
 	// Safe to call on every portal exit — ACE OnTeleportComplete clears Teleporting each time.
 	SendGameAction(ACEGameAction::LoginComplete, {}, ACEQueue::ControlQueue);
 	bLoginCompleteSent = true;
+	bPositionReportingSuspended = false;
+	bHaveReportedPosition = false;
 	Log(TEXT("LoginComplete (exited portal space)"));
 	MaybeEnterWorldComplete();
 }
@@ -8616,12 +8645,11 @@ void FACESession::SendStopMovement()
 	// Retail CmdInterp::send_move_to_state derives contact from physics, not
 	// the input axes. Cancelling a use/route while falling is not a landing.
 	SendMoveToState(0.f, 0.f, 0.f, false, bAutoPosContact, false);
-	bMoving = false;
 }
 
 void FACESession::SendAutonomousPosition(bool bContact)
 {
-	if (State != EACESessionState::InWorld || !PlayerPosition.IsValid() || bLogOffPending)
+	if (State != EACESessionState::InWorld || !PlayerPosition.IsValid() || bLogOffPending || bPositionReportingSuspended)
 	{
 		return;
 	}
@@ -8651,6 +8679,10 @@ void FACESession::SendAutonomousPosition(bool bContact)
 	W.Align();
 
 	SendGameAction(ACEGameAction::AutonomousPosition, W.GetData(), ACEQueue::SecureWeenieQueue);
+	LastReportedPosition = PlayerPosition;
+	bHaveReportedPosition = true;
+	bLastReportedContact = bContact;
+	AutoPosTimer = 0.f;
 }
 
 void FACESession::FlushAutonomousPosition(bool bContact)

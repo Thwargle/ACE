@@ -959,6 +959,11 @@ private:
 	TSet<uint32> RequestedS2CPackets;
 	TSet<uint32> RejectedS2CPackets;
 	float AutoPosTimer = 0.f;
+	void TickPositionReporting(float DeltaSeconds);
+	FACEPosition LastReportedPosition;
+	bool bHaveReportedPosition = false;
+	bool bLastReportedContact = true;
+	bool bPositionReportingSuspended = false;
 	float EchoTimer = 0.f;
 	/** While awaiting CharacterList, retransmit ConnectResponse (UDP loss + auth race). */
 	float ConnectResponseRetryTimer = 0.f;
