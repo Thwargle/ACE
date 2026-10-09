@@ -9,6 +9,7 @@ namespace ACEWaypoint
     TArray<FLink> FindCoordinates(const FString& Text);
     bool Parse(const FString& Text, FVector2D& Out);
     FString Format(FVector2D Coordinates);
+    FString MarkerLabel(const FString& Name);
     FVector2D Coordinates(const FACEPosition& Position);
     double RelativeBearing(FVector2D From, FVector2D To, FVector2D Forward);
     // Screen basis: north-up by default, or the normalized facing vector up.

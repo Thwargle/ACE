@@ -6103,7 +6103,11 @@ void FACESession::HandleApproachVendor(FACEBinaryReader& Reader)
 		Obj.ItemType = Decoded.ItemType;
 		Obj.Value = Decoded.Value;
 		Obj.Burden = Decoded.Burden;
-		Obj.VendorQuantityAvailable = Supply == 0x00FFFFFFu ? -1 : static_cast<int32>(Supply);
+		// Retail gmVendorUI::BuySingleItem requests one when the shop entry has
+		// no positive stack quantity. Custom ACE create lists can advertise zero;
+		// this does not make the entry unbuyable. Normalize at receipt so desktop,
+		// VR and automation share that single-item fallback (not unlimited stock).
+		Obj.VendorQuantityAvailable = Supply == 0x00FFFFFFu ? -1 : FMath::Max(1, static_cast<int32>(Supply));
 		Obj.StackSize = Decoded.StackSize;
 		Obj.MaxStackSize = Decoded.MaxStackSize;
 		Obj.Structure = Decoded.Structure;

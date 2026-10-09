@@ -1181,4 +1181,39 @@ bool FACEUCMTargetHandoffTest::RunTest(const FString&)
     }
     return true;
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMVoidCombatTest,"ACE.Plugins.VoidCombat",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMVoidCombatTest::RunTest(const FString&)
+{
+    FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    auto Snapshot=[](){return ParseUCM(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"action_serial":0,"combat_mode":8,"components_required":false,"spells":[{"id":20,"name":"Nether Bolt","category":640,"school":5,"power":300,"skill":500},{"id":21,"name":"Acid Bolt","category":117,"school":1,"power":300,"skill":500}],"inventory":[{"id":50,"name":"Wand","type":32768,"identified":true,"can_wield":true,"equipped":true}],"targets":[{"id":500,"name":"Enemy","distance":10,"identified":true,"line_of_sight":true,"resists":{"1024":2,"32":0.1}}]})"));};
+    for(int32 Element:{0,128,1024})
+    {
+        FACEPluginVM VM;TestTrue(TEXT("Void policy loads"),VM.Load(Source,Error));auto S=Snapshot();
+        auto P=ParseUCM(TEXT(R"({"buffing":false,"recovery":false,"combat":"magic","looting":false})"));P->SetNumberField(TEXT("damage_type"),Element);
+        TSharedPtr<FJsonObject> Intent;TestTrue(*Error,VM.Step(S,P,Intent,Error));
+        if(TestTrue(TEXT("Void attack produces an intent"),Intent.IsValid()))
+        {TestEqual(TEXT("Nether spell can be selected automatically or explicitly"),Intent->GetNumberField(TEXT("spell")),20.);}
+    }
+    const TCHAR* Options[]={TEXT("debuff_corruption"),TEXT("debuff_destructive"),TEXT("debuff_corrosion")};
+    for(int32 Index=0;Index<3;++Index)
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot();
+        auto P=ParseUCM(TEXT(R"({"buffing":false,"recovery":false,"combat":"magic","looting":false,"damage_type":1024})"));P->SetBoolField(Options[Index],true);
+        auto Spells=S->GetArrayField(TEXT("spells"));
+        for(int32 Tier:{1,2})
+        {
+            auto Dot=ParseUCM(TEXT(R"({"name":"Void curse","school":5,"skill":500,"duration":30})"));
+            Dot->SetNumberField(TEXT("id"),100+Tier);Dot->SetNumberField(TEXT("category"),636+Index);Dot->SetNumberField(TEXT("power"),Tier*100);
+            Spells.Add(MakeShared<FJsonValueObject>(Dot));
+        }
+        S->SetArrayField(TEXT("spells"),Spells);TSharedPtr<FJsonObject> Intent;TestTrue(*Error,VM.Step(S,P,Intent,Error));
+        if(TestTrue(TEXT("Enabled Void curse produces an intent"),Intent.IsValid()))TestEqual(TEXT("Highest usable Void DoT casts first"),Intent->GetNumberField(TEXT("spell")),102.);
+        auto Confirmed=ParseUCM(TEXT(R"({"target":500,"power":200,"expires":130})"));Confirmed->SetNumberField(TEXT("category"),636+Index);
+        S->SetArrayField(TEXT("debuffs"),{MakeShared<FJsonValueObject>(Confirmed)});S->SetNumberField(TEXT("time"),101);S->SetNumberField(TEXT("action_serial"),1);
+        TestTrue(*Error,VM.Step(S,P,Intent,Error));
+        if(Intent)TestEqual(TEXT("Confirmed DoT allows direct Nether attacks instead of recasting"),Intent->GetNumberField(TEXT("spell")),20.);
+    }
+    return true;
+}
 #endif

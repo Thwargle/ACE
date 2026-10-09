@@ -3,8 +3,11 @@
 
 namespace ACEPluginCastMotion
 {
-    // VT MySpell.IsInstantCast and gj/u: hold backward for fast non-war,
-    // non-void casts. Ordinary item/other buffs retain their casting animation.
+    // A short command edge replaces the casting substate. Never tie movement
+    // duration to a server result/watchdog: delayed results must not cause travel.
+    constexpr double BackwardPulseSeconds = 0.12;
+    // VT MySpell.IsInstantCast eligibility. Ordinary item/other buffs retain
+    // their casting animation.
     inline bool FastBuff(uint32 School,uint32 Power,uint32 Flags,double Duration)
     {
         if(School<1||School>5||School==1||School==5)return false;

@@ -77,6 +77,34 @@ bool FACECollisionSizingTest::RunTest(const FString&)
   }
  }
  TestEqual(TEXT("All player morph and creature scale fixtures executed"),Cases,35);
+ // Passive ACE pets receive Ethereal at runtime, independently of their SQL
+ // setup/body. Exercise actual pawn sweeps and state refreshes, not just flags.
+ {
+  FACEWorldObject Pet;Pet.Guid=1002;Pet.SetupId=0x02000001;Pet.ItemType=ACEItemType::Creature;
+  const int32 SolidState=ACEPhysicsState::Gravity|ACEPhysicsState::ReportCollisions;
+  Pet.PhysicsState=SolidState|ACEPhysicsState::Ethereal;Pet.bHasPosition=true;
+  Pet.Position.CellId=0x7D640001;Pet.Position.Location=FVector(20,20,12);
+  auto* Actor=World->SpawnActor<AACEWorldEntityActor>();Actor->InitializeFromObject(Pet,100,true);
+  const FVector Center=Actor->GetActorLocation()+FVector(0,0,48);
+  const FACECollisionBody Probe(FCollisionShape::MakeSphere(10));
+  FCollisionQueryParams Query(SCENE_QUERY_STAT(EtherealPet),false,Pawn);
+  auto Blocks=[&]() {FHitResult Hit;return ACEBodySweep::SweepBody(*World,Hit,Center-FVector(200,0,0),Center+FVector(200,0,0),Probe,Query);};
+  TestFalse(TEXT("Ethereal pet is walk-through immediately after spawn"),Blocks());
+  Actor->ApplyPhysicsState(Pet.PhysicsState);
+  TestFalse(TEXT("Physics refresh cannot make a pet solid"),Blocks());
+  Actor->SetCellVisible(false);Actor->SetCellVisible(true);
+  TestFalse(TEXT("Cell visibility refresh cannot make a pet solid"),Blocks());
+  Actor->InitializeFromObject(Pet,100,true);
+  TestFalse(TEXT("Recreated pet remains walk-through"),Blocks());
+  TestEqual(TEXT("Ethereal does not disable the selection channel"),Actor->CollisionProxy->GetCollisionResponseToChannel(ECC_Visibility),ECR_Block);
+  Actor->ApplyPhysicsState(SolidState);
+  TestTrue(TEXT("Server clearing Ethereal restores normal creature collision"),Blocks());
+  Actor->ApplyPhysicsState(SolidState|ACEPhysicsState::NoDraw);
+  TestTrue(TEXT("Rendering flags alone do not remove physical collision"),Blocks());
+  Actor->ApplyPhysicsState(Pet.PhysicsState);
+  TestFalse(TEXT("Server enabling Ethereal removes an existing solid body"),Blocks());
+  Actor->Destroy();
+ }
  // A known setup with no physics body must not inherit the enlarged pick
  // capsule. Retail's object collision loop has no shapes to collide against.
  constexpr uint32 EmptySetup=0x02000054;

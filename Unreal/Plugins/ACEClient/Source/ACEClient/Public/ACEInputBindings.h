@@ -40,6 +40,8 @@ ACECLIENT_API bool ExportRetailKeymapFile(const FString& Path, FString& Error);
 ACECLIENT_API const TArray<FAction>& Actions();
 ACECLIENT_API bool Down(const APlayerController* PC, FKey DefaultKey);
 ACECLIENT_API bool Pressed(const APlayerController* PC, FKey DefaultKey);
+// Plugin editors use Slate text controls outside the native chat widget.
+ACECLIENT_API bool IsTextEntryFocused();
 // Retail CommandList: newest held direction wins; releasing it restores the
 // previously held direction. Preserve physical event order across remaps.
 ACECLIENT_API float MovementAxis(const APlayerController* PC, FKey Positive, FKey Negative,

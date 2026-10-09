@@ -3575,6 +3575,69 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 Gameplay->VendorBuyCart.ContainsByPredicate([&](const auto& P){return P.Value==Stock.Guid&&P.Key>0;}));
             Gameplay->VendorBuyCart.Reset();Gameplay->SetVendorPage(0);
             }();
+            // Shrine of Knowledge (43370020) advertises each gem with a zero
+            // create-list quantity and charges MMDs. Replay the server packet:
+            // retail BuySingleItem still buys one, rather than treating it as sold out.
+            [&]()
+            {
+                const auto PreviousStock=Session.VendorMerchandise;
+                const auto PreviousContents=Session.ContainerContents.FindRef(99122);
+                TGuardValue<uint32> CurrencyWeenieGuard(Session.VendorCurrencyWeenie,20630u);
+                TGuardValue<FString> CurrencyNameGuard(Session.VendorCurrencyName,TEXT("Trade Notes (250,000)"));
+                TGuardValue<int32> CurrencyCountGuard(Session.VendorCurrencyCount,10);
+                TGuardValue<float> BuyRateGuard(Session.VendorBuyRate,.9f);
+                TGuardValue<uint32> ItemTypesGuard(Session.VendorItemTypes,4481568u);
+                TGuardValue<int32> MinValueGuard(Session.VendorMinValue,0);
+                TGuardValue<int32> MaxValueGuard(Session.VendorMaxValue,100000);
+                auto ReceiveStock=[&](uint32 Supply,uint16 MaxStackSize)
+                {
+                    FACEBinaryWriter Wire;
+                    Wire.WriteUInt32(99122);Wire.WriteUInt32(4481568);
+                    Wire.WriteUInt32(0);Wire.WriteUInt32(100000);Wire.WriteUInt32(1);
+                    Wire.WriteFloat(.9f);Wire.WriteFloat(1.f);Wire.WriteUInt32(20630);
+                    Wire.WriteUInt32(10);Wire.WriteString16L(TEXT("Trade Notes (250,000)"));
+                    Wire.WriteUInt32(1);Wire.WriteUInt32(0xFF000000u|(Supply&0xFFFFFFu));
+                    Wire.WriteUInt32(Stock.Guid);Wire.WriteUInt32(0x00003008u); // value, stack, max stack
+                    Wire.WriteString16L(TEXT("Gem of Raising Strength"));
+                    Wire.WriteUInt16(22948);Wire.WriteUInt16(0x10E8);
+                    Wire.WriteUInt32(ACEItemType::Gem);Wire.WriteUInt32(0);Wire.Align();
+                    Wire.WriteUInt32(1);Wire.WriteUInt16(1);Wire.WriteUInt16(MaxStackSize);Wire.Align();
+                    FACEBinaryReader Reader(Wire.GetData());Session.HandleApproachVendor(Reader);
+                    TestEqual(TEXT("Custom vendor packet retains its catalog entry"),Session.VendorMerchandise.Num(),1);
+                    Gameplay->VendorBuyCart.Reset();Gameplay->VendorSelectedGuid=Stock.Guid;
+                    Gameplay->LastSelection={};Session.SelectedObject=Pick;
+                    Gameplay->HandleVendorOpened(99122);Gameplay->HandleSelectionChanged(Pick);Gameplay->SetVendorPage(0);
+                };
+                ReceiveStock(0,0);
+                TestEqual(TEXT("Zero-quantity custom gem permits one retail purchase"),Gameplay->SelectedStackMax,1);
+                CaptureScreen(TEXT("GameplayCustomZeroQuantityVendor"));
+                Session.CachedC2SPackets.Reset();NativeClick(TEXT("VendorItemBuy_Button"));
+                TestTrue(TEXT("Zero-quantity vendor Buy button sends a purchase"),HasAction(ACEGameAction::Buy));
+                for(const auto& Packet:Session.CachedC2SPackets)
+                {
+                    FACEBinaryReader Wire(Packet.Value.Payload);Wire.Skip(16);
+                    if(Wire.ReadUInt32()!=ACEOpcode::GameAction)continue;
+                    Wire.ReadUInt32();if(Wire.ReadUInt32()!=ACEGameAction::Buy)continue;
+                    TestEqual(TEXT("Gem purchase addresses the open shrine"),Wire.ReadUInt32(),99122u);
+                    TestEqual(TEXT("Gem purchase contains one line"),Wire.ReadUInt32(),1u);
+                    TestEqual(TEXT("Gem purchase requests one unit"),Wire.ReadInt32(),1);
+                    TestEqual(TEXT("Gem purchase uses server stock GUID"),Wire.ReadUInt32(),uint32(Stock.Guid));
+                }
+                NativeClick(TEXT("VendorItemAdd_Button"));
+                TestTrue(TEXT("Zero-quantity vendor Add to List stages one gem"),
+                    Gameplay->VendorBuyCart.ContainsByPredicate([&](const auto& P){return P.Value==Stock.Guid&&P.Key==1;}));
+                Session.CachedC2SPackets.Reset();Gameplay->HandleNamedClick(TEXT("VendorBuyBuyAll_Button"));
+                TestTrue(TEXT("Zero-quantity vendor cart sends a purchase"),HasAction(ACEGameAction::Buy));
+                ReceiveStock(0,250);
+                TestEqual(TEXT("Zero supply permits one, not an unlimited stack"),Gameplay->SelectedStackMax,1);
+                ReceiveStock(17,250);
+                TestEqual(TEXT("Positive wire supply preserves its finite limit"),Gameplay->SelectedStackMax,17);
+                ReceiveStock(0xFFFFFFu,250);
+                TestEqual(TEXT("Unlimited wire supply preserves its stack limit"),Gameplay->SelectedStackMax,250);
+                Session.VendorMerchandise=PreviousStock;Session.WorldObjects[Stock.Guid]=Stock;
+                Session.ContainerContents.FindOrAdd(99122)=PreviousContents;
+                Gameplay->VendorBuyCart.Reset();
+            }();
             Session.VendorMerchandise[0].VendorQuantityAvailable=0;Gameplay->HandleVendorOpened(99122);
             TestEqual(TEXT("Sold-out stack hides quantity control"),Gameplay->SelectedStackMax,0);
             Session.CachedC2SPackets.Reset();Gameplay->BuySelectedVendorItem();

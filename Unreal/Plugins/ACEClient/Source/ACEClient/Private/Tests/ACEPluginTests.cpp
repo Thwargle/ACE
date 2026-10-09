@@ -25,6 +25,8 @@
 #include "Widgets/Input/SCheckBox.h"
 #include "ImageUtils.h"
 #include "RenderingThread.h"
+#include "Engine/GameViewportClient.h"
+#include "Engine/Engine.h"
 
 namespace
 {
@@ -162,6 +164,17 @@ bool FACEPluginHostTest::RunTest(const FString&)
 {
     auto* GI=NewObject<UGameInstance>(); GI->Init();
     auto* H=GI->GetSubsystem<UACEPluginSubsystem>();
+    {
+        auto* Viewport=NewObject<UGameViewportClient>(GEngine);
+        for(bool Previous:{false,true})
+        {
+            H->SuspendedWorldViewport=Viewport;H->PreviousWorldRenderingDisabled=Previous;
+            Viewport->bDisableWorldRendering=true;
+            H->Stop(TEXT("ucm"),TEXT("Rendering test"));
+            TestEqual(TEXT("Stopping UCM restores the prior world-rendering state"),bool(Viewport->bDisableWorldRendering),Previous);
+            TestFalse(TEXT("Stopping relinquishes ownership of the viewport"),H->SuspendedWorldViewport.IsValid());
+        }
+    }
     TestTrue(TEXT("Fast buff motion applies to self creature buffs"),ACEPluginCastMotion::FastBuff(4,300,12,300));
     TestTrue(TEXT("Fast buff motion applies to low-difficulty life spells"),ACEPluginCastMotion::FastBuff(2,25,4,0));
     TestFalse(TEXT("Fellowship buffs retain ordinary casting"),ACEPluginCastMotion::FastBuff(4,300,12|0x2000,300));
@@ -462,10 +475,19 @@ bool FACEPluginHostTest::RunTest(const FString&)
             Dock->Tick(Geometry,1,.016f);
             const auto& Window=Dock->Windows[TEXT("waypoint.dungeon")];
             TestTrue(TEXT("World/interior transitions reuse pinned widget"),Window.Widget==OriginalWidget);
-            TestTrue(TEXT("Pinned map remains visible and honors shared UI lock in either view"),Window.Widget->GetVisibility()==(Unlocked?EVisibility::Visible:EVisibility::HitTestInvisible));
+            TestTrue(TEXT("Pinned map keeps its minimize button clickable even when locked"),Window.Widget->GetVisibility()==EVisibility::Visible);
             TestEqual(TEXT("World/interior transitions preserve pinned position"),Window.Position,FVector2D(800,100));
             TestEqual(TEXT("World/interior transitions preserve pinned size"),Window.Size,FVector2D(300,300));
         }
+        const auto ExpandedSize=Dock->Windows[TEXT("waypoint.dungeon")].Size;
+        H->SetWaypointOption(TEXT("map_minimized"),true);Dock->Tick(Geometry,2,.016f);
+        TestEqual(TEXT("Minimized map retains expanded size"),Dock->Windows[TEXT("waypoint.dungeon")].Size,ExpandedSize);
+        TestEqual(TEXT("Minimized map uses a compact restore button"),Dock->Windows[TEXT("waypoint.dungeon")].Slot->GetOffset().Right,70.f);
+        TestTrue(TEXT("Minimizing map leaves arrow open"),Dock->IsOpen(TEXT("waypoint.arrow")));
+        H->SetWaypointOption(TEXT("map_minimized"),false);Dock->Tick(Geometry,3,.016f);
+        TestEqual(TEXT("Restoring map recovers saved width"),double(Dock->Windows[TEXT("waypoint.dungeon")].Slot->GetOffset().Right),ExpandedSize.X);
+        H->SetWaypointMapOpacity(.4f);TestEqual(TEXT("Pinned opacity is independently configurable"),H->WaypointMapOpacity(),.4f);
+        H->SetWaypointMapOpacity(1.f);
         Ui->SetUiLocked(true);
     }
     H->SetWaypointOption(TEXT("dungeon_overlay"),false);Dock->Refresh();

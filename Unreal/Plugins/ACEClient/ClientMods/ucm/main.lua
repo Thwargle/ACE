@@ -53,6 +53,7 @@ local skill_categories = {[17]=45,[19]=47,[21]=3,[23]=46,[25]=5,[27]=9,[29]=10,[
 local casting_buff_order={43,9,11,51,47,45,49,645}
 local casting_buff_family={};for _,category in ipairs(casting_buff_order) do casting_buff_family[category]=true end
 local elements={32,4,16,64,8,2,1}
+local damage_elements={1,2,4,8,16,32,64,1024}
 local combat_school_skill={[1]=34,[2]=33,[3]=32,[4]=31,[5]=43}
 local function trained_skill(s,id)
  local skill=s.skills and s.skills[tostring(math.floor(id or 0))]
@@ -87,7 +88,7 @@ local function element(spell)
  if c>=117 and c<=130 then return elements[(c-117)%7+1] end
  if c>=243 and c<=249 then return elements[c-242] end
  if c>=222 and c<=228 then return elements[c-221] end
- if c==640 or c==639 or c==636 or c==637 or c==638 or c==641 then return 128 end
+ if c==640 or c==639 or c==636 or c==637 or c==638 or c==641 then return 1024 end
  return 0
 end
 local function resistance(t,damage) return t and t.resists and t.resists[tostring(math.floor(damage))] or 1 end
@@ -1839,7 +1840,7 @@ local function tick(s,p)
       if e~=0 and not v.beneficial and rank>score then attack_element=e;score=rank end
      end
      if combat~='magic' then for _,v in ipairs(inventory) do if v.equipped and (band(v.type,1)~=0 or band(v.slots,0x800000)~=0) then
-      local rank=-1;for bit=0,7 do local e=1<<bit;if band(v.damage_type,e)~=0 and resistance(pet_target,e)>rank then attack_element=e;rank=resistance(pet_target,e) end end
+      local rank=-1;for _,e in ipairs(damage_elements) do if band(v.damage_type,e)~=0 and resistance(pet_target,e)>rank then attack_element=e;rank=resistance(pet_target,e) end end
      end end end
     end
     for _,v in ipairs(inventory) do local props=v.int_properties or {}
@@ -2143,6 +2144,7 @@ local function tick(s,p)
   -- owned. Zero means automatic casting equipment, not the first melee item.
   if requested==0 then target_combat='magic' end
   local damage_override=target_rule and target_rule.damage_type or p.damage_type
+  if damage_override==128 then damage_override=1024 end -- previous UCM Nether setting
   local attack,best_score=nil,-1
   local ring,ring_score,streak_spell,streak_score=nil,-1,nil,-1
   local arc,arc_score=nil,-1
@@ -2200,7 +2202,7 @@ local function tick(s,p)
    if not v.identified and allowed and (melee or missile or caster) then unassessed=v end
    if v.identified and v.can_wield and allowed and (explicit or (target_combat=='auto' and (melee or missile or (caster and attack))) or (target_combat=='melee' and melee) or (target_combat=='missile' and missile) or (target_combat=='magic' and caster)) then
     local damage=v.damage_type or 0;local resist=damage==0 and 1 or 0
-    for bit=0,7 do local e=1<<bit;if band(damage,e)~=0 then resist=math.max(resist,resistance(target,e)) end end
+    for _,e in ipairs(damage_elements) do if band(damage,e)~=0 then resist=math.max(resist,resistance(target,e)) end end
     local value=caster and best_score or ((v.damage or 0)*(1-(v.variance or 0)*.5)*math.max(1,v.damage_mod or 1)*resist/(1+(v.weapon_time or 0)/100))
     if caster and attack and band(damage,element(attack))~=0 then value=value*math.max(1,v.element_mod or 1) end
     local launcher=missile and (v.ammo_type or 0)~=0
@@ -2228,7 +2230,7 @@ local function tick(s,p)
    if mode=='magic' and attack then debuff_element=element(attack)
    elseif mode=='missile' and weapon and (weapon.ammo_type or 0)~=0 then
     debuff_element=ammo_elements[weapon.ammo_type]
-   elseif weapon then local best=-1;for bit=0,7 do local e=1<<bit;if band(weapon.damage_type,e)~=0 and resistance(target,e)>best then debuff_element=e;best=resistance(target,e) end end end
+   elseif weapon then local best=-1;for _,e in ipairs(damage_elements) do if band(weapon.damage_type,e)~=0 and resistance(target,e)>best then debuff_element=e;best=resistance(target,e) end end end
   end
   local categories=debuff_categories(target_rule,debuff_element)
   local confirmed=effect_index[target.id] or {}
@@ -2324,7 +2326,7 @@ local function tick(s,p)
       if requested>3 then secondary=v
       elseif armor and not shield then shield=v
       elseif melee then
-       local resistance_score=0;for bit=0,7 do local e=1<<bit;if band(v.damage_type,e)~=0 then resistance_score=math.max(resistance_score,resistance(target,e)) end end
+       local resistance_score=0;for _,e in ipairs(damage_elements) do if band(v.damage_type,e)~=0 then resistance_score=math.max(resistance_score,resistance(target,e)) end end
        local value=(v.damage or 0)*(1-(v.variance or 0)*.5)*resistance_score/(1+(v.weapon_time or 0)/100)
        if not secondary or (v.auto_wield_left and not secondary.auto_wield_left) or ((v.auto_wield_left==true)==(secondary.auto_wield_left==true) and value>rank) then secondary=v;rank=value end
       end
@@ -2369,7 +2371,7 @@ local function tick(s,p)
     power=1
     if mode=='melee' then
      local damage=damage_override
-     if not damage or damage==0 then local best=-1;for bit=0,7 do local e=1<<bit;if band(weapon.damage_type,e)~=0 and resistance(target,e)>best then damage=e;best=resistance(target,e) end end end
+     if not damage or damage==0 then local best=-1;for _,e in ipairs(damage_elements) do if band(weapon.damage_type,e)~=0 and resistance(target,e)>best then damage=e;best=resistance(target,e) end end end
      local secondary='none';for _,v in ipairs(inventory) do if v.equipped and band(v.equipped_slot,0x200000)~=0 then secondary=band(v.type,1)~=0 and 'melee' or 'shield';break end end
      local dual=weapon.damage_type==3;local multi=band(weapon.attack_type,0x40)~=0
      if weapon.weapon_type==1 and secondary~='melee' then power=damage==1 and dual and .5 or 0

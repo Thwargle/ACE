@@ -273,6 +273,7 @@ protected:
 	float RightAxis = 0.f;
 	float TurnAxis = 0.f;
 	float ForwardSent = 0.f;
+	bool bPluginFastBuffMovementSent = false;
 	float RightSent = 0.f;
 	float TurnSent = 0.f;
 	bool bRunning = true; // AC default: run; Shift holds walk

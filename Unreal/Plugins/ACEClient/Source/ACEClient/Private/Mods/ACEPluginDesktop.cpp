@@ -42,12 +42,14 @@ namespace
             SLATE_ARGUMENT(TFunction<void(FVector2D,bool)>, Resize)
             SLATE_ARGUMENT(TFunction<void()>, Raise)
             SLATE_ARGUMENT(TFunction<void()>, Close)
+            SLATE_ARGUMENT(TFunction<bool()>, CanManipulate)
             SLATE_DEFAULT_SLOT(FArguments, Content)
         SLATE_END_ARGS()
         void Construct(const FArguments& Args)
         {
             Move = Args._Move; Resize = Args._Resize; Raise = Args._Raise;
             Frameless=Args._Frameless;
+            CanManipulate=Args._CanManipulate;
             if(Frameless){ChildSlot[Args._Content.Widget];return;}
             auto Title = SNew(SHorizontalBox);
             Title->AddSlot().FillWidth(1).VAlign(VAlign_Center)[Caption(Args._Title)];
@@ -74,7 +76,7 @@ namespace
         { if(Raise)Raise();return FReply::Unhandled(); }
         virtual FReply OnMouseButtonDown(const FGeometry& G,const FPointerEvent& E) override
         {
-            if(!Frameless||E.GetEffectingButton()!=EKeys::LeftMouseButton)return FReply::Unhandled();
+            if(!Frameless||E.GetEffectingButton()!=EKeys::LeftMouseButton||(CanManipulate&&!CanManipulate()))return FReply::Unhandled();
             const auto At=G.AbsoluteToLocal(E.GetScreenSpacePosition());
             Resizing=Resize&&At.X>=G.GetLocalSize().X-24&&At.Y>=G.GetLocalSize().Y-24;
             Dragging=!Resizing;return FReply::Handled().CaptureMouse(SharedThis(this));
@@ -97,6 +99,7 @@ namespace
         bool Dragging=false,Resizing=false,Frameless=false;
         TFunction<void(FVector2D,bool)> Move,Resize;
         TFunction<void()> Raise;
+        TFunction<bool()> CanManipulate;
     };
 }
 
@@ -118,9 +121,10 @@ void SACEPluginDesktop::Construct(const FArguments& Args)
 }
 void SACEPluginDesktop::Layout(FWindow& W)
 {
+    const FVector2D DisplaySize=W.MapOverlay&&Host.IsValid()&&Host->WaypointOption(TEXT("map_minimized"),false)?FVector2D(70,26):W.Size;
     if(ViewSize.X<=0||ViewSize.Y<=0)
-    {W.Slot->SetOffset(FMargin(W.Position.X,W.Position.Y,W.Size.X,W.Size.Y));return;}
-    const FVector2D Size(FMath::Min(W.Size.X,ViewSize.X),FMath::Min(W.Size.Y,ViewSize.Y));
+    {W.Slot->SetOffset(FMargin(W.Position.X,W.Position.Y,DisplaySize.X,DisplaySize.Y));return;}
+    const FVector2D Size(FMath::Min(DisplaySize.X,ViewSize.X),FMath::Min(DisplaySize.Y,ViewSize.Y));
     // Fit the rendered window without overwriting the user's saved placement
     // during login, minimization or a temporary viewport size change.
     const FVector2D At(FMath::Clamp(W.Position.X,0.,FMath::Max(0.,ViewSize.X-Size.X)),
@@ -135,7 +139,8 @@ void SACEPluginDesktop::Tick(const FGeometry& G,double Time,float Delta)
     if(auto* Map=Windows.Find(TEXT("waypoint.dungeon"));Map&&Map->Open&&Host.IsValid())
     {
         const auto P=Host->WaypointPlayerPosition();
-        Map->Widget->SetVisibility(!P.IsValid()?EVisibility::Collapsed:Host->IsWaypointMapUnlocked()?EVisibility::Visible:EVisibility::HitTestInvisible);
+        Map->Widget->SetVisibility(!P.IsValid()?EVisibility::Collapsed:EVisibility::Visible);
+        Layout(*Map); // Minimize without replacing the saved expanded size.
     }
     if(!G.GetLocalSize().Equals(ViewSize))
     {ViewSize=G.GetLocalSize();for(auto& Pair:Windows)Layout(Pair.Value);}
@@ -196,11 +201,13 @@ void SACEPluginDesktop::Toggle(const FString& Id)
     FWindow W;W.Position=Host->GetPluginWindowPosition(Id,FVector2D(84+24*(Windows.Num()-1),80+24*(Windows.Num()-1)));W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(780,700));
     const bool Arrow=Id==TEXT("waypoint.arrow");
     const bool Dungeon=Id==TEXT("waypoint.dungeon");
+    W.MapOverlay=Dungeon;
     if(Id==TEXT("ucmmicro"))W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(270,360));
     if(Arrow)W.Size=FVector2D(290,225);
     if(Dungeon)W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(420,420));
     W.Widget=SNew(SPluginFrame).Title(Arrow?TEXT("Waypoint · drag when unlocked"):Id==TEXT("waypoint.map")?TEXT("Waypoint Map"):Plugin->Name)
         .Frameless(Arrow||Dungeon)
+        .CanManipulate([this,Dungeon,Arrow](){return Dungeon?Host->IsWaypointMapUnlocked():!Arrow||Host->IsWaypointUnlocked();})
         .Move([this,Id,Arrow,Dungeon](FVector2D D,bool Save){if(Save||(Dungeon?Host->IsWaypointMapUnlocked():!Arrow||Host->IsWaypointUnlocked()))Move(Id,D,Save);})
         .Resize(Arrow?TFunction<void(FVector2D,bool)>():TFunction<void(FVector2D,bool)>([this,Id,Dungeon](FVector2D D,bool Save){if(Save||!Dungeon||Host->IsWaypointMapUnlocked())Resize(Id,D,Save);}))
         .Raise([this,Id](){Raise(Id);}).Close([this,Id,Arrow](){Hide(Id);if(Arrow)Host->SetWaypointOption(TEXT("arrow"),false);})[Dungeon?Host->MakeWaypointDungeonOverlay():Arrow?Host->MakeWaypointPanel(false,true):Host->MakePanel(Id)];

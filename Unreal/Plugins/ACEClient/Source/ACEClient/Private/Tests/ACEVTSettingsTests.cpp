@@ -29,6 +29,18 @@ bool FACEVTSettingsTest::RunTest(const FString&)
         TestTrue(TEXT("Self dispel import enabled"),Dispels->GetBoolField(TEXT("dispel_self")));TestTrue(TEXT("Dispel supply import enabled"),Dispels->GetBoolField(TEXT("dispel_items")));
     }
     auto P=ACEVTProfile::Convert(Document,Issues);TestEqual(TEXT("Supported character tables convert"),Issues.Num(),0);
+    {
+        auto VoidDocument=SettingsJSON(TEXT(R"({"format":"usd","tables":[{"name":"MyMonsters","columns":["MonsterName","DamageType","Corruption"],"rows":[["<DEFAULT>",9,true]]}]})"));
+        auto Converted=ACEVTProfile::Convert(VoidDocument,Issues);
+        TestEqual(TEXT("VT Nether profile imports without gaps"),Issues.Num(),0);
+        const auto& Rules=Converted->GetArrayField(TEXT("monsters"));
+        if(TestEqual(TEXT("Void import retains the default monster rule"),Rules.Num(),1))
+        {
+            const auto Rule=Rules[0]->AsObject();
+            TestEqual(TEXT("VT Nether uses the retail damage bit"),Rule->GetNumberField(TEXT("damage_type")),1024.);
+            TestTrue(TEXT("VT Void damage-over-time choice survives import"),Rule->GetBoolField(TEXT("debuff_corruption")));
+        }
+    }
     TestEqual(TEXT("VT map distance becomes world meters"),P->GetNumberField(TEXT("radius")),24.);
     TestEqual(TEXT("Signed object GUID preserved"),P->GetArrayField(TEXT("weapon_items"))[0]->AsNumber(),2147483649.);
     auto Snapshot=[](){return SettingsJSON(TEXT(R"({"time":100,"player":1,"health":20,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"combat_mode":8,"nearest":0,"action_serial":0,"action_error":0,"position":{"cell":2139029505,"x":84,"y":84,"z":12},"trained_skills":[21],"skills":{"21":{"current":400}},"inventory":[{"id":1,"name":"Orb","type":32768,"equipped":true},{"id":2,"name":"Bread","type":0,"identified":true,"usable":true,"boost_vital":2,"boost":20},{"id":3,"name":"Unlisted Food","type":0,"identified":true,"usable":true,"boost_vital":2,"boost":90},{"id":4,"name":"Healing Kit","type":0,"identified":true,"usable":true,"healing_kit":true,"structure":5,"boost_vital":2,"boost":30}],"spells":[{"id":10,"name":"Heal Self I","category":79,"skill":300,"power":50,"caster_target":true,"duration":0}],"enchantments":[]})"));};

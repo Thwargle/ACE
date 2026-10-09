@@ -674,9 +674,16 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         Begin();H->ObserveMetaChat(TEXT("Your spell fizzled."),TEXT(""),ACEChatMessageType::Magic);
         TestEqual(TEXT("Fizzle releases movement immediately"),Drive(),0.f);H->ObserveUseDone(0);
         TestFalse(TEXT("Success UseDone after a fizzle cannot confirm a forced buff"),H->LastSpellConfirmed);
-        Begin();H->FastCastStartedAt=FPlatformTime::Seconds()-5;
-        TestEqual(TEXT("Missing result cannot leave backward held for thirty seconds"),Drive(),0.f);
+        Begin();TestEqual(TEXT("Unconfirmed cast begins with a bump"),Drive(),-1.f);
+        H->FastCastStartedAt=FPlatformTime::Seconds()-.13;
+        TestEqual(TEXT("Missing result releases backward within 120ms"),Drive(),0.f);
+        TestEqual(TEXT("Movement timeout does not discard the pending spell"),H->PendingSpell,123);
+        H->ObserveMetaChat(TEXT("words"),TEXT("Caster"),ACEChatMessageType::Spellcasting);
+        TestEqual(TEXT("Repeated spell words cannot restart an expired bump"),Drive(),0.f);
         H->ObserveUseDone(0);TestFalse(TEXT("Missing spell result cannot confirm a forced buff"),H->LastSpellConfirmed);
+        Begin();H->FastCastStartedAt=FPlatformTime::Seconds()-.13;
+        TestEqual(TEXT("A blocked or delayed frame never starts a stale bump"),Drive(),0.f);
+        H->ObserveUseDone(0);
     }
     {
         auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();

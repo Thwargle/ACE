@@ -464,7 +464,9 @@ void AACEWorldEntityActor::ConfigureWorldCollision(bool bEnable)
 
 	const bool bFxOnlySetup = IsRetailPortalEffectSetup(static_cast<uint32>(SetupId));
 	const bool bHavePartMesh = Appearance && bUsingDatMesh && !bFxOnlySetup;
-	const bool bBlocking = bEnable;
+	// Ethereal is authoritative for creatures as well as scenery. In particular,
+	// ACE's Pet.SetEphemeralValues sets it even when the base setup has a body.
+	const bool bBlocking = bEnable && !IsEthereal();
 	const bool bCreatureLike = bIsPlayer || (ItemType & ACEItemType::Creature) != 0;
 	if (Dat && (CollisionSetupId != uint32(SetupId) || !FMath::IsNearlyEqual(CollisionWorldScale, WorldScale)))
 	{
@@ -2480,9 +2482,6 @@ void AACEWorldEntityActor::ApplyPhysicsState(int32 InPhysicsState)
 	PhysicsState = InPhysicsState;
 	if (ScriptComponent) ScriptComponent->SetPhysicsHidden((PhysicsState & ACEPhysicsState::Hidden) != 0);
 	const bool bNowEthereal = IsEthereal();
-	// Creature collision is independent of the server's rendering flags.
-	const bool bCreatureLike = bIsPlayer || bIsSelf
-		|| (ItemType & ACEItemType::Creature) != 0;
 	// PhysicsDesc's Hidden flag suppresses the object regardless of item type.
 	// It is independent of animation NoDraw and must survive deferred mesh creation.
 	const bool bNoDraw = IsMeshSuppressed();
@@ -2525,12 +2524,9 @@ void AACEWorldEntityActor::ApplyPhysicsState(int32 InPhysicsState)
 	}
 	// Doors/chests: open = walk-through (held On or Ethereal). Closed Off = solid.
 	// Prefer motion state so open doors never stay blocking if Ethereal SetState lags.
-	// Creatures ignore stale Ethereal on ObjectCreate — only corpses become non-solid.
-	bool bSolid = !IsCorpse();
-	if (!bCreatureLike)
-	{
-		bSolid = !(bNowEthereal || IsCorpse());
-	}
+	// Retail CPhysicsObj::find_obj_collisions treats an ethereal object as
+	// nonblocking regardless of its creature/player/item classification.
+	bool bSolid = !(bNowEthereal || IsCorpse());
 	if (UsesOnOffMotion())
 	{
 		const bool bOpen = (Appearance && Appearance->IsDoorHeldOpen()) || bNowEthereal;

@@ -701,7 +701,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
                 J->SetNumberField(TEXT("creature_type"),A->CreatureType);
                 J->SetNumberField(TEXT("max_health"),A->MaxHealth);
                 const int Props[]={64,65,66,67,68,69,70,166};
-                for(int I=0;I<8;++I)if(const double* R=A->FloatProperties.Find(Props[I]))Resist->SetNumberField(FString::FromInt(1<<I),*R);
+                for(int I=0;I<8;++I)if(const double* R=A->FloatProperties.Find(Props[I]))Resist->SetNumberField(FString::FromInt(I==7?1024:1<<I),*R);
             }
             J->SetObjectField(TEXT("resists"),Resist);Targets.Add(MakeShared<FJsonValueObject>(J));
         }

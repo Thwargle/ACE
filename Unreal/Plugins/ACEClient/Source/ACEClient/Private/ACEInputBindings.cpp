@@ -3,6 +3,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
+#include "Framework/Application/SlateApplication.h"
 namespace ACEInputBindings
 {
 static TMap<FKey,TArray<FInputChord>> Live, Draft;
@@ -210,9 +211,15 @@ bool Matches(FKey Key,const FInputChord& Input)
  }
  return false;
 }
+bool IsTextEntryFocused()
+{
+ if(!FSlateApplication::IsInitialized())return false;
+ const auto Focus=FSlateApplication::Get().GetKeyboardFocusedWidget();
+ return Focus.IsValid() && Focus->GetTypeAsString().Contains(TEXT("EditableText"));
+}
 static bool Check(const APlayerController* PC,FKey Key,bool bPressed)
 {
- Load(); if(!PC || bEditing)return false;
+ Load(); if(!PC || bEditing || IsTextEntryFocused())return false;
  const auto* Bindings=Live.Find(Key);
  if(!Bindings)return bPressed ? PC->WasInputKeyJustPressed(Key) : PC->IsInputKeyDown(Key);
  const bool Shift=PC->IsInputKeyDown(EKeys::LeftShift)||PC->IsInputKeyDown(EKeys::RightShift);

@@ -9,6 +9,9 @@
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerInput.h"
 #include "RetailCustomKeymap.inl"
+#include "Framework/Application/SlateApplication.h"
+#include "Widgets/SWindow.h"
+#include "Widgets/Input/SEditableTextBox.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEInputBindingsTest,"ACE.RetailParity.KeyboardBindings",
  EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
@@ -38,6 +41,22 @@ bool FACEInputBindingsTest::RunTest(const FString&)
   for(FKey Key:Keys)PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(Key,IE_Pressed,1.f));
   PC->PlayerInput->ProcessInputStack({},.016f,false);
  };
+ {
+  auto& Slate=FSlateApplication::Get();const auto PreviousFocus=Slate.GetKeyboardFocusedWidget();
+  TSharedPtr<SEditableTextBox> Entry;
+  auto Window=SNew(SWindow).ClientSize(FVector2D(300,80))[SAssignNew(Entry,SEditableTextBox)];
+  Slate.AddWindow(Window,false);Slate.SetKeyboardFocus(Entry,EFocusCause::SetDirectly);
+  TestTrue(TEXT("Plugin edit field is recognized without native chat focus"),ACEInputBindings::IsTextEntryFocused());
+  Hold({EKeys::W,EKeys::E});
+  TestFalse(TEXT("Typing forward key cannot move the player"),ACEInputBindings::Down(PC,EKeys::W));
+  TestFalse(TEXT("Typing inspect key cannot trigger an action"),ACEInputBindings::Pressed(PC,EKeys::F));
+  Movement->PlayerInput=NewObject<UPlayerInput>(Movement);
+  TestTrue(TEXT("Plugin text key-down is consumed before gameplay input"),Movement->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f)));
+  TestFalse(TEXT("Text entry cannot leave forward key latched"),Movement->IsInputKeyDown(EKeys::W));
+  Slate.ClearKeyboardFocus();Hold({EKeys::W});
+  TestTrue(TEXT("Gameplay resumes when text entry loses focus"),ACEInputBindings::Down(PC,EKeys::W));
+  Slate.RequestDestroyWindow(Window);if(PreviousFocus)Slate.SetKeyboardFocus(PreviousFocus);
+ }
  // Shipped DAT gmDefaultMap (14000000) and DefaultMap (14000002),
  // rather than the later WASD bindings that were invented by this client.
  Hold({EKeys::X});TestTrue(TEXT("Retail X moves backward"),ACEInputBindings::Down(PC,EKeys::S));

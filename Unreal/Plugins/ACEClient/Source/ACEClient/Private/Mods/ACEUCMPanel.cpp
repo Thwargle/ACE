@@ -189,6 +189,36 @@ namespace ACEUCMPanelPrivate
             TSharedPtr<FSlateBrush> B=MakeShared<FSlateBrush>();B->SetResourceObject(R?R->ResolveIconTexture(Did):nullptr);B->ImageSize=FVector2D(32,32);Brushes.Add(B);
             return SNew(SBox).WidthOverride(36).HeightOverride(36).HAlign(HAlign_Center).VAlign(VAlign_Center)[SNew(SImage).Image(B.Get())];
         }
+        void AttackSpellControls()
+        {
+            auto* C=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+            auto* D=Host->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
+            FString Selected=TEXT("Automatic attack spell");uint32 IconId=0;
+            if(const int32 Id=int32(Num(P(),TEXT("attack_spell"))))D->TryGetSpellInfo(Id,Selected,IconId);
+            Add(SNew(SComboButton).ButtonContent()[Text(Selected)]
+                .OnGetMenuContent_Lambda([this,C,D]()
+                {
+                    auto List=SNew(SVerticalBox);
+                    auto Choose=[this](int32 Id){P()->SetNumberField(TEXT("attack_spell"),Id);FSlateApplication::Get().DismissAllMenus();Save();Rebuild();};
+                    List->AddSlot().AutoHeight()[Button(TEXT("Automatic attack spell"),[Choose](){Choose(0);})];
+                    auto Known=C->GetKnownSpells();Known.Sort();
+                    for(int32 Id:Known)
+                    {
+                        uint32 School,Power,Category,Flags,IconId;double Duration;FString Name;
+                        if(!D->TryGetPluginSpellInfo(Id,School,Power,Category,Flags,Duration)||(Flags&4))continue;
+                        const bool Attack=(Category>=117&&Category<=130)||(Category>=222&&Category<=228)||(Category>=243&&Category<=249)||(Category>=639&&Category<=641);
+                        if(!Attack||!D->TryGetSpellInfo(Id,Name,IconId))continue;
+                        List->AddSlot().AutoHeight()[Button(Name,[Choose,Id](){Choose(Id);})];
+                    }
+                    return SNew(SBox).MaxDesiredHeight(350)[SNew(SScrollBox)+SScrollBox::Slot()[List]];
+                }));
+            Heading(TEXT("Void curses"),TEXT("Cast the highest usable learned tier before direct attacks. Each curse is refreshed when it expires; monster rules can override these choices."));
+            Add(Toggle(TEXT("debuff_corruption"),TEXT("Corruption"),TEXT("Nether damage over time.")));
+            Add(Toggle(TEXT("debuff_destructive"),TEXT("Destructive Curse"),TEXT("Nether damage over time.")));
+            Add(Toggle(TEXT("debuff_corrosion"),TEXT("Corrosion"),TEXT("Nether damage over time.")));
+            Add(Toggle(TEXT("debuff_weakening"),TEXT("Weakening Curse"),TEXT("Lower the target's damage rating.")));
+            Add(Toggle(TEXT("debuff_festering"),TEXT("Festering Curse"),TEXT("Reduce the target's healing.")));
+        }
         void Inventory(bool Consumables)
         {
             auto* C=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();TSet<int32> Seen;
@@ -274,7 +304,7 @@ namespace ACEUCMPanelPrivate
             Add(Toggles);Add(Text(TEXT("Secondary vulnerability"),14,Muted));
             auto Elements=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
             const TCHAR* Names[]={TEXT("None"),TEXT("Slash"),TEXT("Pierce"),TEXT("Blunt"),TEXT("Fire"),TEXT("Cold"),TEXT("Acid"),TEXT("Electric")};
-            for(int32 I=0;I<8;++I){const int32 Element=I?1<<(I-1):0;Elements->AddSlot()[Button(FString(Names[I])+(Num(Rule,TEXT("secondary_vuln"))==Element?TEXT(" •"):TEXT("")),[this,Rule,Element](){Rule->SetNumberField(TEXT("secondary_vuln"),Element);Save(true);Rebuild();})];}
+            for(int32 I=0;I<8;++I){const int32 Element=I==8?1024:I?1<<(I-1):0;Elements->AddSlot()[Button(FString(Names[I])+(Num(Rule,TEXT("secondary_vuln"))==Element?TEXT(" •"):TEXT("")),[this,Rule,Element](){Rule->SetNumberField(TEXT("secondary_vuln"),Element);Save(true);Rebuild();})];}
             Add(Elements);
         }
         void ForceBuffControls()
@@ -362,6 +392,8 @@ namespace ACEUCMPanelPrivate
                     .ToolTipText(FText::FromString(TEXT("Hide or show the plugin bar. Plugins keep running. Open Settings > Game Play > Plugins / UCM to restore it. This preference applies to every profile.")))
                     [SNew(SBox).MinDesiredHeight(32).VAlign(VAlign_Center).Padding(8,0)[Text(TEXT("Show plugin bar"),16)]]);
                 if(!Plugin->Enabled)Add(Button(TEXT("Enable UCM capabilities"),[this](){Host->SetEnabled(Plugin->Id,true);Rebuild();}));
+                Add(Toggle(TEXT("suspend_world_rendering"),TEXT("Suspend 3D view while UCM runs"),TEXT("Desktop only. Keeps this interface, UCM and networking active while the world view is black. Turn this off or stop UCM to restore the view. Does not apply in VR.")));
+                Add(Text(TEXT("Hide the entire interface: Keyboard > UI > Show / hide interface. Rebind Alt+Z there if another application uses it."),14,Muted));
                 Add(Toggle(TEXT("buffing"),TEXT("Buff"),TEXT("Automatically maintains relevant creature, life and item enchantments."),true));
                 ForceBuffControls();
                 for(bool Bane:{false,true})
@@ -471,7 +503,7 @@ namespace ACEUCMPanelPrivate
                 const TCHAR* ArcNames[]={TEXT(""),TEXT("Prefer bolts"),TEXT("Prefer arcs at range"),TEXT("Prefer arcs")};
                 Add(Button(ArcNames[Arcs],[this,Arcs](){P()->SetNumberField(TEXT("use_arcs"),Arcs%3+1);Save();Rebuild();}));
                 Slider(TEXT("arc_range"),TEXT("Arc preference distance"),0,100,5,Accent,TEXT(" m"));
-                Add(Toggle(TEXT("fast_cast_buffs"),TEXT("Fast buff movement"),TEXT("Use VT-style backward movement after eligible spell words to shorten buff recoil. Stops on the spell result or manual input."),true));
+                Add(Toggle(TEXT("fast_cast_buffs"),TEXT("Fast buff movement"),TEXT("Use a brief backward bump after eligible spell words to shorten buff recoil. Releases within 0.12 seconds even if the server result is delayed."),true));
                 Heading(TEXT("Summoned pets"),TEXT("Add essences to the equipment list below. Uses server requirements, remaining charges and cooldowns."));
                 Add(Toggle(TEXT("summon_pets"),TEXT("Summon combat pets"),TEXT("Choose an eligible essence for nearby monsters; keep an existing pet active.")));
                 Add(Toggle(TEXT("refill_summons"),TEXT("Refill summon essences"),TEXT("Use Encapsulated Spirit from your inventory to refill low-charge essences in the equipment pool. Works independently of automatic summoning.")));
@@ -491,7 +523,8 @@ namespace ACEUCMPanelPrivate
                 Add(Toggle(TEXT("approach"),TEXT("Approach targets"),TEXT("Move through the normal collision and networking path."),true));
                 auto Elements=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
                 const TCHAR* Names[]={TEXT("Auto"),TEXT("Slash"),TEXT("Pierce"),TEXT("Blunt"),TEXT("Fire"),TEXT("Cold"),TEXT("Acid"),TEXT("Electric"),TEXT("Nether")};
-                for(int I=0;I<9;++I)Elements->AddSlot()[Button(FString(Names[I])+(Num(P(),TEXT("damage_type"))==(I?1<<(I-1):0)?TEXT(" •"):TEXT("")),[this,I](){P()->SetNumberField(TEXT("damage_type"),I?1<<(I-1):0);Save();Rebuild();})];Add(Elements);
+                for(int I=0;I<9;++I)Elements->AddSlot()[Button(FString(Names[I])+((Num(P(),TEXT("damage_type"))==(I==8?1024:I?1<<(I-1):0)||(I==8&&Num(P(),TEXT("damage_type"))==128))?TEXT(" •"):TEXT("")),[this,I](){P()->SetNumberField(TEXT("damage_type"),I==8?1024:I?1<<(I-1):0);Save();Rebuild();})];Add(Elements);
+                AttackSpellControls();
                 Inventory(false);
             }
             else if(Page==TEXT("Recovery"))
@@ -593,7 +626,7 @@ namespace ACEUCMPanelPrivate
                 for(const FString Mode:{TEXT("auto"),TEXT("melee"),TEXT("missile"),TEXT("magic"),TEXT("ignore")})Modes->AddSlot()[SNew(SButton).ButtonStyle(&Style()).IsFocusable(false).OnClicked_Lambda([this,Mode](){MonsterMode=Mode;return FReply::Handled();})[SNew(STextBlock).Text(FText::FromString(Mode)).ColorAndOpacity_Lambda([this,Mode](){return MonsterMode==Mode?Accent:Muted;})]];
                 Add(Modes);auto Elements=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
                 const TCHAR* Names[]={TEXT("Auto"),TEXT("Slash"),TEXT("Pierce"),TEXT("Blunt"),TEXT("Fire"),TEXT("Cold"),TEXT("Acid"),TEXT("Electric"),TEXT("Nether")};
-                for(int Index=0;Index<9;++Index){const int32 Element=Index?1<<(Index-1):0;Elements->AddSlot()[SNew(SButton).ButtonStyle(&Style()).IsFocusable(false).OnClicked_Lambda([this,Element](){MonsterElement=Element;return FReply::Handled();})[SNew(STextBlock).Text(FText::FromString(Names[Index])).ColorAndOpacity_Lambda([this,Element](){return MonsterElement==Element?Accent:Muted;})]];}
+                for(int Index=0;Index<9;++Index){const int32 Element=Index==8?1024:Index?1<<(Index-1):0;Elements->AddSlot()[SNew(SButton).ButtonStyle(&Style()).IsFocusable(false).OnClicked_Lambda([this,Element](){MonsterElement=Element;return FReply::Handled();})[SNew(STextBlock).Text(FText::FromString(Names[Index])).ColorAndOpacity_Lambda([this,Element](){return MonsterElement==Element?Accent:Muted;})]];}
                 Add(Elements);Add(Button(TEXT("Add monster rule"),[this](){
                     if(MonsterName->GetText().IsEmpty()){Host->Notice=TEXT("Enter a monster name prefix");return;}
                     auto Rule=MakeShared<FJsonObject>();Rule->SetStringField(TEXT("name"),MonsterName->GetText().ToString());Rule->SetStringField(TEXT("combat"),MonsterMode);Rule->SetBoolField(TEXT("ignore"),MonsterMode==TEXT("ignore"));Rule->SetNumberField(TEXT("priority"),MonsterPriority);Rule->SetNumberField(TEXT("damage_type"),MonsterElement);

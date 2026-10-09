@@ -8,6 +8,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEWaypointCoordinatesTest,"ACE.Plugins.Waypoi
 bool FACEWaypointCoordinatesTest::RunTest(const FString&)
 {
     FVector2D P;
+    TestEqual(TEXT("Short portal labels preserve destination"),ACEWaypoint::MarkerLabel(TEXT("Portal to Holtburg")),FString(TEXT("Holtburg")));
+    TestEqual(TEXT("Ordinary portal names are unchanged"),ACEWaypoint::MarkerLabel(TEXT("Holtburg Portal")),FString(TEXT("Holtburg Portal")));
     TestTrue(TEXT("Retail chat syntax"),ACEWaypoint::Parse(TEXT("42.0N, 33.6E"),P));
     TestEqual(TEXT("EW is X"),P,FVector2D(33.6,42));
     TestTrue(TEXT("Lowercase and whitespace"),ACEWaypoint::Parse(TEXT(" 12.5s 7.25w "),P));

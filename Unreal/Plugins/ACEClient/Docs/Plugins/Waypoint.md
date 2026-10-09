@@ -33,14 +33,19 @@ The desktop overlay hides with Alt+Z and is removed on logout.
 
 ## Map
 
-- **Pin map to interface** keeps a frameless desktop overlay after closing the
+- **Pin map to interface** keeps a thin gold-bordered desktop overlay after closing the
   normal map window. It follows the player's predicted position and automatically
   switches between overworld terrain and transparent dungeon/building outlines.
   Both views share the saved position, size and visibility; existing dungeon pins
   carry over. Each view retains its own zoom while the overlay is open. Clear Pin
   to hide both views; reopen the globe window to change these options.
+- Use the pinned map's **− / Map +** button to minimize or restore it without
+  hiding the direction arrow. Its expanded size and position are retained.
+  **Pinned map opacity** in the globe window adjusts the terrain, lines, markers,
+  and border together; this preference and minimized state are saved.
 - **Player facing up** rotates both maps with the character; off keeps north up.
-- Use the game UI's **lock/unlock icon** to lock the pinned map (click-through)
+- Use the game UI's **lock/unlock icon** to lock the pinned map (click-through,
+  except for its minimize/restore button)
   or unlock it to drag, resize from its bottom-right corner, or zoom with the
   wheel. Position, size, pinned mode and orientation survive logout and restart.
   Saved arrow and map positions are retained across temporary viewport changes.
@@ -49,7 +54,9 @@ The desktop overlay hides with Alt+Z and is removed on logout.
 - Click a marker or map location to set a destination.
 - Towns, Portals and POIs control marker categories. The name filter restricts markers.
 - Labels appear when zoomed in, or by hovering a marker. Detailed atlas markers
-  appear at 3× zoom or while searching; overlapping markers are thinned on screen.
+  appear at 3× zoom or while searching. Close markers remain visible and selectable;
+  only overlapping labels are hidden. Labels omit a leading "Portal to", while
+  hovering shows the full name and search still matches the original name.
 - Dungeon toggles the current landblock's interior layout, including buildings.
   Floor outlines around the player's elevation are highlighted; other floors are dim.
   A destination clicked in a dungeon is tied to that landblock, so the arrow does

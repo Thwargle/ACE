@@ -744,6 +744,9 @@ void AACEPlayerController::SetInputMode(const FInputModeDataBase& InData)
 
 bool AACEPlayerController::InputKey(const FInputKeyEventArgs& Params)
 {
+ // Text controls may leave key-down unhandled while consuming the character.
+ // Do not let that key reach gameplay. Releases still clear previously held keys.
+ if(ACEInputBindings::IsTextEntryFocused() && !Params.Key.IsMouseButton() && Params.Event!=IE_Released)return true;
  if(Params.Event==IE_Pressed)MovementKeyPressOrder.Add(Params.Key,++MovementKeySequence);
  const auto Mods=FSlateApplication::Get().GetModifierKeys();
  const FInputChord Chord(Params.Key,Mods.IsShiftDown(),Mods.IsControlDown(),Mods.IsAltDown(),Mods.IsCommandDown());
@@ -970,7 +973,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	// A/D turn, Z/C sidestep by default. Opposing held commands form a stack.
 	// Run is the default hold-key; Shift = walk (retail AC).
 	const bool bChatFocused = bVR || (DatGameplayBinder && DatGameplayBinder->IsChatEntryFocused())
-		|| (GameHUDWidget && GameHUDWidget->IsChatEntryFocused()) || ACEInputBindings::IsEditing();
+		|| (GameHUDWidget && GameHUDWidget->IsChatEntryFocused()) || ACEInputBindings::IsEditing() || ACEInputBindings::IsTextEntryFocused();
 	if (!bVR && (!bChatFocused || IsDesktopInterfaceHidden())
 		&& ACEInputBindings::Pressed(this, ACEInputBindings::Action(TEXT("ToggleInterface"))))
 		SetDesktopInterfaceHidden(!bDesktopInterfaceHidden);
@@ -1431,9 +1434,11 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	}
 
 	bool bPluginDrivingMovement=false;
+	bool bPluginFastBuffMovement=false;
 	if (auto* Plugins = GetGameInstance()->GetSubsystem<UACEPluginSubsystem>())
     {
         const FVector Facing = bVR ? VR->GetBodyForward() : (GetPawn() ? GetPawn()->GetActorForwardVector() : FVector::ForwardVector);
+        bPluginFastBuffMovement=Plugins->IsFastBuffMovementActive();
         Plugins->ApplyMovement(this, F, R, T, bManualKeys || bSpaceDown,
             (!bVR && bChatFocused) || (bVR && VR->IsMovementBlocked()) || bJumpAirborne || bServerMoveToActive, bVR, Facing);
         bPluginDrivingMovement=Plugins->IsDrivingMovement();
@@ -1530,7 +1535,12 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			if(auto* App=P->FindComponentByClass<UACECharacterAppearanceComponent>())App->InterruptCastWithMovement();
 
 	// After Use is in flight, MoveToState (F=1 leftover or axes-0) cancels CreateMoveToChain.
-	const bool bFreezeMoveToState = !bManualKeys && !bJumpAirborne && !bJumpCharging
+	// Fast buff input must reach the server like physical movement, including
+	// the release after a result clears plugin ownership. Keep ordinary object
+	// approaches protected from unsolicited movement-chain cancellation.
+	const bool bSendFastBuffMovement = !bServerMoveToActive && !bAwaitingUseDone && ApproachUseSendCount == 0
+		&& (bPluginFastBuffMovement || bPluginFastBuffMovementSent);
+	const bool bFreezeMoveToState = !bSendFastBuffMovement && !bManualKeys && !bJumpAirborne && !bJumpCharging
 		&& (bAwaitingUseDone || ApproachUseSendCount > 0 || Client->IsUseBusy());
 
 	if (bFreezeMoveToState)
@@ -1607,6 +1617,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		bJumpAirborneSent = bJumpAirborne;
 	}
 
+	bPluginFastBuffMovementSent = bPluginFastBuffMovement;
 	// Drive walk/run anim on the local player's appearance from the same axes we send to the server.
 	if (APawn* PossessedPawn = GetPawn())
 	{
@@ -3875,7 +3886,7 @@ void AACEPlayerController::UpdateMouseLook(float DeltaTime, USpringArmComponent*
 {
     (void)DeltaTime;
     const bool bInputFocused = (DatGameplayBinder && DatGameplayBinder->IsChatEntryFocused())
-        || (GameHUDWidget && GameHUDWidget->IsChatEntryFocused()) || ACEInputBindings::IsEditing();
+        || (GameHUDWidget && GameHUDWidget->IsChatEntryFocused()) || ACEInputBindings::IsEditing() || ACEInputBindings::IsTextEntryFocused();
     const bool bWasInstant = bInstantMouseLookHeld;
     bInstantMouseLookHeld = !bInputFocused && ACEInputBindings::Down(this,ACEInputBindings::Action(TEXT("CameraInstantMouseLook")));
     const bool bRightDown = IsInputKeyDown(EKeys::RightMouseButton) || bInstantMouseLookHeld;

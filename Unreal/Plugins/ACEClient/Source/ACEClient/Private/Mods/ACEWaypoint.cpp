@@ -3,6 +3,10 @@
 
 namespace ACEWaypoint
 {
+FString MarkerLabel(const FString& Name)
+{
+    return Name.StartsWith(TEXT("Portal to "),ESearchCase::IgnoreCase) ? Name.Mid(10) : Name;
+}
 TArray<FLink> FindCoordinates(const FString& Text)
 {
     static const FRegexPattern Pattern(TEXT("(?i)(?<![\\w.+-])([0-9]{1,3}(?:\\.[0-9]{1,6})?)\\s*([NS])\\s*[,; ]\\s*([0-9]{1,3}(?:\\.[0-9]{1,6})?)\\s*([EW])(?![\\w])"));

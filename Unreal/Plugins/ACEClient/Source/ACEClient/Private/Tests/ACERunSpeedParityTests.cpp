@@ -5,6 +5,7 @@
 #include "ACESession.h"
 #include "ACEDatSubsystem.h"
 #include "ACEInputBindings.h"
+#include "Mods/ACEPluginSubsystem.h"
 #include "ACECharacterAppearanceComponent.h"
 #include "ACEHoverTooltipWidget.h"
 #include "Dat/ACEDatCursor.h"
@@ -120,6 +121,36 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
  App->InterruptCastWithMovement();
  TestEqual(TEXT("Movement does not truncate a queued scarab windup action"),App->ActionCommand,0x1000006Fu);
  App->ClearActionMotion();
+ // A pending cast marks the session use-busy. Plugin bumps must still send
+ // both movement edges, just as a physical backward key would.
+ {
+  auto* Plugins=GI->GetSubsystem<UACEPluginSubsystem>();VR->bActive=false;
+  FACEPosition Pose;Pose.CellId=0x01010001;Pose.SetLocationFromUnreal(StartFeet,100);
+  Pose.SetAceFacingFromUnrealDir2D(FVector::XAxisVector);Session->SetLocalPosition(Pose);
+  PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;
+  Pawn->SetActorLocationAndRotation(StartFeet+FVector(0,0,88),Pose.ToUnrealQuat());
+  Session->bUseBusy=true;Session->bMoving=false;
+  Plugins->PendingSpell=123;Plugins->PendingSpellAt=FPlatformTime::Seconds();
+  Plugins->PendingSpellConfirmed=false;Plugins->PendingSpellFizzled=false;
+  Plugins->FastCastOwner=TEXT("ucm");Plugins->FastCastStarted=true;
+  Plugins->FastCastStartedAt=FPlatformTime::Seconds();Plugins->FastCastMovementApplied=false;
+  App->PlayActionMotion(0x40000034,2.f,ACEMotion::StanceMagic);
+  PC->PlayerTick(1.f/90);
+  TestTrue(TEXT("Fast buff movement reaches session while cast is use-busy"),Session->bMoving);
+  TestEqual(TEXT("Fast buff edge interrupts local casting substate"),App->ActionCommand,0u);
+  Plugins->FastCastStartedAt=FPlatformTime::Seconds()-.13;
+  PC->PlayerTick(1.f/90);
+  TestFalse(TEXT("Pulse expiration sends release while spell result is missing"),Session->bMoving);
+  TestEqual(TEXT("Pulse expiration clears local movement"),PC->ForwardAxis,0.f);
+  // Completion can clear ownership between controller ticks. Its release
+  // must not be swallowed by the ordinary object-use movement freeze.
+  Plugins->FastCastOwner=TEXT("ucm");Plugins->FastCastStarted=true;
+  Plugins->FastCastStartedAt=FPlatformTime::Seconds();PC->PlayerTick(1.f/90);
+  Plugins->FastCastOwner.Empty();Plugins->FastCastStarted=false;
+  PC->PlayerTick(1.f/90);
+  TestFalse(TEXT("Asynchronous completion also sends the release"),Session->bMoving);
+  Session->bUseBusy=false;Plugins->PendingSpell=0;PC->PlayerTick(1.f/90);
+ }
  struct FCase { int32 Skill; float Scale,Burden; int32 Stamina; double Speed; };
  const FCase Cases[]={
   {593,1,0,500,12.2257250946},{593,1.1f,0,500,13.4482976041},

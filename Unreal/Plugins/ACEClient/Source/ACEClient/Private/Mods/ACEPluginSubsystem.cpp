@@ -233,6 +233,7 @@ void UACEPluginSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 }
 void UACEPluginSubsystem::Deinitialize()
 {
+    RestoreWorldRendering();
     UnbindCombatEvents();
     if(RouteMesh){RouteMesh->DestroyComponent();RouteMesh=nullptr;}
     if(RouteActor){RouteActor->Destroy();RouteActor=nullptr;}
@@ -390,6 +391,7 @@ void UACEPluginSubsystem::CancelForceBuff()
 }
 void UACEPluginSubsystem::Stop(const FString& Id, const FString& Reason, bool PreserveMeta)
 {
+    if(Id==TEXT("ucm"))RestoreWorldRendering();
     if (auto P = Find(Id))
     {
         if (P->Running)
@@ -769,8 +771,32 @@ void UACEPluginSubsystem::UpdateBuffDispatch()
         BuffRetryAt=0;C->GetSession()->SendCastSpell(PendingSpell,Target);
     }
 }
+void UACEPluginSubsystem::RestoreWorldRendering()
+{
+    if(auto* Viewport=SuspendedWorldViewport.Get())Viewport->bDisableWorldRendering=PreviousWorldRenderingDisabled;
+    SuspendedWorldViewport.Reset();
+}
+void UACEPluginSubsystem::UpdateWorldRendering()
+{
+    auto* GI=GetGameInstance();auto* Viewport=GI->GetGameViewportClient();
+    auto* PC=Cast<AACEPlayerController>(GI->GetFirstLocalPlayerController());
+    auto* Client=GI->GetSubsystem<UACEClientSubsystem>();
+    const auto UCM=Find(TEXT("ucm"));bool Requested=false;
+    if(UCM&&UCM->Enabled&&UCM->Running)UCM->Profile->TryGetBoolField(TEXT("suspend_world_rendering"),Requested);
+    const bool Suspend=Requested&&Viewport&&PC&&!PC->IsVRActive()&&Client&&Client->GetSessionState()==EACESessionState::InWorld;
+    if(!Suspend||SuspendedWorldViewport.Get()!=Viewport)RestoreWorldRendering();
+    if(Suspend)
+    {
+        if(!SuspendedWorldViewport.IsValid())
+        {SuspendedWorldViewport=Viewport;PreviousWorldRenderingDisabled=Viewport->bDisableWorldRendering;}
+        // Skip only the world draw. Slate, world ticks, collision and networking
+        // continue at their normal cadence; never pause or throttle the game.
+        Viewport->bDisableWorldRendering=true;
+    }
+}
 bool UACEPluginSubsystem::Tick(float)
 {
+    UpdateWorldRendering();
     // VT cLogic.SchedulePoke wakes on cast completion instead of waiting for
     // the idle poll. Keep expensive presentation/background scans at their
     // original cadence when several actions finish between periodic ticks.
@@ -1161,14 +1187,13 @@ void UACEPluginSubsystem::ApplyMovement(AACEPlayerController* PC, float& F, floa
     }
     if(!FastCastOwner.IsEmpty())
     {
-        // VT's result watchdog is about four seconds after the spell words.
-        // Never hold an input for the full network action timeout. A result can
-        // share a packet with the words: deliver one movement edge, then release
-        // it on the following frame so the normal motion path cancels recoil.
+        // Bound the bump independently of cast completion and network latency.
+        // Expire from the words, so UI/jump blocking cannot defer a stale bump.
+        // A coalesced result still gets one edge within this short window.
         if(!PendingSpell || FPlatformTime::Seconds()-PendingSpellAt>30
-            || (FastCastStarted && (FPlatformTime::Seconds()-FastCastStartedAt>=4
+            || (FastCastStarted && (FPlatformTime::Seconds()-FastCastStartedAt>=ACEPluginCastMotion::BackwardPulseSeconds
                 || PendingSpellFizzled || (PendingSpellConfirmed&&FastCastMovementApplied))))
-        {FastCastOwner.Empty();FastCastStarted=false;}
+        {FastCastOwner.Empty();FastCastStarted=false;CompleteConfirmedBuff();return;}
         else
         {
             // Use the normal movement/collision/network path, never inject keys

@@ -10,6 +10,7 @@
 class FACEPluginVM;
 class SWidget;
 class AACEPlayerController;
+class UGameViewportClient;
 struct FACEWaypointLandmark { FVector2D Coordinates; FString Name, Type; };
 struct FACEPluginRouteSegment { FVector Start,End; FLinearColor Color; float Thickness; };
 
@@ -43,6 +44,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEPluginHostTest;
     friend class FACEPluginEquipmentTest;
     friend class FACEPluginRequestsTest;
+    friend class FACERunSpeedParityTest;
     friend class FACEPluginRampRouteTest;
 public:
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
@@ -93,6 +95,8 @@ public:
     bool GetWaypoint(FVector2D& Coordinates, uint32& DungeonLandblock) const;
     bool WaypointOption(const FString& Key, bool Default=true) const;
     void SetWaypointOption(const FString& Key,bool Value);
+    float WaypointMapOpacity() const;
+    void SetWaypointMapOpacity(float Value);
     void ClearWaypoint();
     bool ImportWaypointLocations(const FString& Path);
     const TArray<FACEWaypointLandmark>& GetWaypointLocations();
@@ -112,6 +116,7 @@ public:
     void RefreshActionWait(FACEClientPlugin& P);
     void DrawRoute();
     bool IsDrivingMovement() const { return !MovementOwner.IsEmpty()||!FastCastOwner.IsEmpty(); }
+    bool IsFastBuffMovementActive() const { return !FastCastOwner.IsEmpty() && FastCastStarted; }
     void ObservePlayerTell(const FString& Text,const FString& Sender,int32 SenderId);
     TArray<TSharedPtr<FJsonValue>> BuffCommands() const;
     FString BuffRequestStatus;
@@ -131,6 +136,10 @@ public:
     void ApplyMovement(AACEPlayerController* Controller, float& Forward, float& Right, float& Turn,
         bool Manual, bool Blocked, bool VR, const FVector& Facing);
 private:
+    void UpdateWorldRendering();
+    void RestoreWorldRendering();
+    TWeakObjectPtr<UGameViewportClient> SuspendedWorldViewport;
+    bool PreviousWorldRenderingDisabled=false;
     bool Tick(float DeltaTime);
     void Execute(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Intent);
     void ReportActivityFailure(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Intent, const FString& Reason, bool NotifyPolicy = true);

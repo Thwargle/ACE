@@ -26,6 +26,7 @@ private:
         SConstraintCanvas::FSlot* Slot = nullptr;
         FVector2D Position, Size;
         bool Open = true;
+        bool MapOverlay = false;
     };
     TWeakObjectPtr<UACEPluginSubsystem> Host;
     TSharedPtr<SConstraintCanvas> Canvas;

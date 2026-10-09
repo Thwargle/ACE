@@ -166,7 +166,7 @@ J VTSettings(const J& D,TArray<FString>& Issues)
                 R->SetBoolField(TEXT("ignore"),!Attack&&!Streak&&!Ring);
                 const int Damage=int(N(Row,TEXT("DamageType"),8));const int Elements[]={2,4,1,32,64,16,8};
                 if(Damage>=0&&Damage<7)R->SetNumberField(TEXT("damage_type"),Elements[Damage]);
-                else if(Damage==9)R->SetNumberField(TEXT("damage_type"),128);
+                else if(Damage==9)R->SetNumberField(TEXT("damage_type"),1024);
                 else if(Damage!=8)Issues.Add(TEXT("Unsupported monster damage mode: ")+Monster);
                 const double Weapon=N(Row,TEXT("WeaponToUse"),-1);
                 if(Weapon<MIN_int32||Weapon>MAX_uint32||FMath::FloorToDouble(Weapon)!=Weapon)Issues.Add(TEXT("Invalid monster weapon: ")+Monster);

@@ -33,6 +33,23 @@ Combat, Recovery, Route, Loot, Rules, Metas and Profiles pages. Desktop plugin
 windows can be resized using the lower-right grip; position and size are saved.
 In VR, More â†’ Plugins / UCM opens UCM directly, with a separate management button.
 
+### Display and controls
+
+Loot Editor and other plugin text fields keep typed keys out of gameplay actions.
+**Keyboard > UI > Show / hide interface** is rebindable; replace Alt+Z there if
+NVIDIA or another application captures it.
+
+In **UCM > Overview**, **Suspend 3D view while UCM runs** disables the desktop
+world draw while keeping the interface, simulation, and networking active. Turn
+the option off or stop UCM to restore the view. Logout also restores it. This
+does not disable the engine or apply in VR; simulation and UI still use resources.
+
+In **Combat**, select **Automatic attack spell** or a specific learned direct
+attack, including Void bolts, streaks and rings. The **Void curses** controls
+enable Corruption, Destructive Curse, Corrosion, Weakening Curse, and Festering
+Curse. UCM uses eligible learned tiers and waits for effect confirmation before
+moving on to direct attacks. Per-monster rules can override these settings.
+
 ### UCM Micro, combat and route recovery
 
 **UCM Micro** is a compact companion window on the plugin bar and in plugin
