@@ -228,6 +228,7 @@ void UACEPluginSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnAppraisalObserved.AddDynamic(this,&UACEPluginSubsystem::ObserveAppraisal);
     Settings = Read(UserDirectory() / TEXT("settings.json"));
     if (!Settings) Settings = MakeShared<FJsonObject>();
+    UCMLog.Load(UserDirectory()/TEXT("ucm-log.json"));
     Discover();
     Ticker = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateUObject(this, &UACEPluginSubsystem::Tick), .5f);
 }
@@ -240,6 +241,7 @@ void UACEPluginSubsystem::Deinitialize()
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnAppraisalObserved.RemoveDynamic(this,&UACEPluginSubsystem::ObserveAppraisal);
     if(auto S=ObservedSession.Pin()){S->OnUseDone.Remove(UseDoneHandle);S->OnPlayerTell.Remove(TellHandle);S->OnChatMessage.Remove(MetaChatHandle);S->OnCombatFeedback.Remove(CombatFeedbackHandle);}
     StopAll(TEXT("Client closing")); FTSTicker::GetCoreTicker().RemoveTicker(Ticker);
+    FlushUCMLog();
     FTSTicker::GetCoreTicker().RemoveTicker(DecisionWakeTicker);DecisionWakeTicker.Reset();
     if (DesktopPanel) if (auto* V = GetGameInstance()->GetGameViewportClient()) V->RemoveViewportWidgetContent(DesktopPanel.ToSharedRef());
     RemoveDesktopDock();
@@ -314,7 +316,7 @@ bool UACEPluginSubsystem::Start(const FString& Id)
     FString Source, Error;
     const FString Path = P->Directory / TEXT("main.lua");
     if (IFileManager::Get().FileSize(*Path) > 256 * 1024 || !FFileHelper::LoadFileToString(Source, *Path))
-    { P->Status = TEXT("Cannot read main.lua (maximum 256 KiB)"); return false; }
+    { P->Status = TEXT("Cannot read main.lua (maximum 256 KiB)"); LogUCMEvent(*P,P->Status,EACEUCMLogLevel::Error);return false; }
     const uint32 SourceHash=GetTypeHash(Source),ProfileHash=GetTypeHash(Encode(P->Profile));
     const bool Resume=P->CanResumeMeta&&P->VM.IsValid()&&P->VMSession.Pin()==C->GetSession()
         &&P->Player==C->GetPlayerGuid()&&P->Server==C->GetServerName()
@@ -322,13 +324,16 @@ bool UACEPluginSubsystem::Start(const FString& Id)
     if(!Resume)
     {
         P->VM = MakeShared<FACEPluginVM>();
-        if (!P->VM->Load(Source, Error)) { P->Status = Error; P->VM.Reset();P->CanResumeMeta=false;return false; }
+        if (!P->VM->Load(Source, Error)) { P->Status = Error; LogUCMEvent(*P,TEXT("Script load failed: ")+Error,EACEUCMLogLevel::Error);P->VM.Reset();P->CanResumeMeta=false;return false; }
     }
     P->CanResumeMeta=false;P->ResumeMetaPending=Resume;P->VMSourceHash=SourceHash;P->VMProfileHash=ProfileHash;P->VMSession=C->GetSession();
     P->Running = true; P->ActivityFailure.Reset(); P->Player = C->GetPlayerGuid(); P->Server = C->GetServerName();
-    if(Id==TEXT("ucm")){IdleManaVM.Reset();IdleManaFailed=false;bRouteJoinRequested=true;RouteVisibilityOffset=0;}
+    if(Id==TEXT("ucm")){IdleManaVM.Reset();IdleManaFailed=false;bRouteJoinRequested=true;RouteVisibilityOffset=0;
+        bTrackRouteMovement=false;RouteMovementSamples.Reset();bRouteMovementOverflow=false;}
     if(Id==TEXT("ucm")){CombatTarget=0;PhysicalAttackNextSendAt=0;PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();CombatOutcomes.Empty();ClearBuffRequests();if(!Resume){RuntimeRoute.Reset();RoutePoint=1;}RouteRebuiltAt=0;}
     CachedSpells.Reset();
+    P->LoggedActivity.Empty();P->LoggedRouteStatus.Empty();
+    LogUCMEvent(*P,Resume?TEXT("UCM resumed"):TEXT("UCM started"));
     P->NextAction = 0; P->NextDecision=0;P->WaitAction.Empty();P->Status = TEXT("Running"); Notice.Empty(); return true;
 }
 bool UACEPluginSubsystem::RequestForceBuff()
@@ -340,16 +345,17 @@ bool UACEPluginSubsystem::RequestForceBuff()
     bForceBuffOnly=!WasRunning;ForceBuffRequest=++ForceBuffSerial;
     if(!ForceBuffRequest)ForceBuffRequest=++ForceBuffSerial;
     MovementOwner.Empty();MoveExpires=0;P->NextDecision=0;
-    P->Status=TEXT("Force Buff queued; refreshing enabled buffs");return true;
+    P->Status=TEXT("Force Buff queued; refreshing enabled buffs");LogUCMEvent(*P,P->Status);return true;
 }
 bool UACEPluginSubsystem::RunUCMCommand(const FString& Arguments)
 {
     const FString Args=Arguments.TrimStartAndEnd();
     if(Args.IsEmpty()){TogglePluginWindow(TEXT("ucm"));return true;}
+    if(Args.Equals(TEXT("log"),ESearchCase::IgnoreCase)){TogglePluginWindow(TEXT("ucm.log"));return true;}
     if(Args.Equals(TEXT("stop"),ESearchCase::IgnoreCase)){Stop(TEXT("ucm"),TEXT("Stopped"),true);Notice=TEXT("UCM stopped.");return true;}
     if(Args.Equals(TEXT("start"),ESearchCase::IgnoreCase))return Start(TEXT("ucm"));
     if(Args.Equals(TEXT("help"),ESearchCase::IgnoreCase))
-    {Notice=TEXT("/ucm start | stop | forcebuff | cancelforcebuff | jump <heading> <true/false> <milliseconds> [forward/strafeleft/straferight] | tapjump | opt set <option> <value> | enablecombat/enablebuffing/enablenav/enablelooting <true/false> | meta/nav/loot/looting/settings load <file> | setmetastate <state> | mexec <expression> | echo <text>");return true;}
+    {Notice=TEXT("/ucm start | stop | log | forcebuff | cancelforcebuff | jump <heading> <true/false> <milliseconds> [forward/strafeleft/straferight] | tapjump | opt set <option> <value> | enablecombat/enablebuffing/enablenav/enablelooting <true/false> | meta/nav/loot/looting/settings load <file> | setmetastate <state> | mexec <expression> | echo <text>");return true;}
     TArray<FString> Issues;const auto Command=ACEVTProfile::CompileCommand(TEXT("/ucm ")+Args,Issues);
     if(!Command||Issues.Num()){Notice=FString::Join(Issues,TEXT("\n"));return false;}
     auto P=Find(TEXT("ucm"));if(!P||!P->Enabled){Notice=TEXT("Enable UCM before using its commands.");return false;}
@@ -391,11 +397,14 @@ void UACEPluginSubsystem::CancelForceBuff()
 }
 void UACEPluginSubsystem::Stop(const FString& Id, const FString& Reason, bool PreserveMeta)
 {
-    if(Id==TEXT("ucm"))RestoreWorldRendering();
+    if(Id==TEXT("ucm")){RestoreWorldRendering();bTrackRouteMovement=false;RouteMovementSamples.Reset();bRouteMovementOverflow=false;}
     if (auto P = Find(Id))
     {
         if (P->Running)
         {
+            LogUCMEvent(*P,TEXT("UCM stopped: ")+Reason,Reason.StartsWith(TEXT("Script error"))?EACEUCMLogLevel::Error:
+                Reason.Contains(TEXT("died"))||Reason.Contains(TEXT("failed"))||Reason.Contains(TEXT("blocked"))?EACEUCMLogLevel::Warning:EACEUCMLogLevel::Info);
+            FlushUCMLog();
             auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
             if (C && C->GetSession()) C->GetSession()->SendCancelAttack();
         }
@@ -605,6 +614,13 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::Snapshot()
     if (PC) {PC->TryGetLocallyPredictedPosition(Pos);if(PC->IsWorldTransitionActive())O->SetBoolField(TEXT("ready"),false);
         if(PC->IsUseApproachActive())O->SetBoolField(TEXT("busy"),true);}
     O->SetObjectField(TEXT("position"), Position(Pos));
+    if(RouteMovementTeleport==C->GetTeleportSeq())
+    {
+        TArray<TSharedPtr<FJsonValue>> Samples;
+        for(const auto& Sample:RouteMovementSamples)Samples.Add(MakeShared<FJsonValueObject>(Position(Sample)));
+        O->SetArrayField(TEXT("route_motion"),Samples);
+        O->SetBoolField(TEXT("route_motion_overflow"),bRouteMovementOverflow);
+    }
     O->SetObjectField(TEXT("server_position"),Position(C->GetPlayerPosition()));
     O->SetBoolField(TEXT("moving"), !MovementOwner.IsEmpty() || (!FastCastOwner.IsEmpty() && FastCastStarted));
     O->SetNumberField(TEXT("heading"),PC&&PC->GetPawn()?PC->GetPawn()->GetActorRotation().Yaw:0);
@@ -796,6 +812,7 @@ void UACEPluginSubsystem::UpdateWorldRendering()
 }
 bool UACEPluginSubsystem::Tick(float)
 {
+    if(FPlatformTime::Seconds()>=NextUCMLogSave){NextUCMLogSave=FPlatformTime::Seconds()+10;FlushUCMLog();}
     UpdateWorldRendering();
     // VT cLogic.SchedulePoke wakes on cast completion instead of waiting for
     // the idle poll. Keep expensive presentation/background scans at their
@@ -868,6 +885,7 @@ bool UACEPluginSubsystem::Tick(float)
         TickProfile->SetBoolField(TEXT("ucm_resume"),P->ResumeMetaPending);P->ResumeMetaPending=false;
         if(P->ActivityFailure){TickProfile->SetObjectField(TEXT("ucm_activity_failure"),P->ActivityFailure);P->ActivityFailure.Reset();}
         if (!P->VM->Step(Snapshot(), TickProfile, Intent, Error)) { Stop(P->Id, TEXT("Script error: ") + Error); continue; }
+        if(P->Id==TEXT("ucm")){RouteMovementSamples.Reset();bRouteMovementOverflow=false;}
         if (Intent) Execute(*P, Intent);
         // Idle/blocked policies need not rebuild world sight and inventory every frame.
         bool ContinueWork=false;if(Intent)Intent->TryGetBoolField(TEXT("continue_work"),ContinueWork);
@@ -893,6 +911,7 @@ void UACEPluginSubsystem::ReportActivityFailure(FACEClientPlugin& P, const TShar
         else Activity=TEXT("meta");
     }
     P.Status=NotifyPolicy?Activity+TEXT(" failed: ")+Reason+TEXT(". UCM remains active"):Reason;
+    LogUCMEvent(P,P.Status,EACEUCMLogLevel::Warning,I);
     Notice=P.Status;
     if(NotifyPolicy)
     {
@@ -924,7 +943,11 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
     // UseDone is drained, including force-buff completion and equipment changes.
     if(ConfirmedBuffAckAt && !IsBuffCastIntent(I))
     {DeferredBuffIntent=MakeShared<FJsonObject>(*I);DeferredBuffOwner=P.Id;return;}
-    if(P.Id==TEXT("ucm"))I->TryGetBoolField(TEXT("route_join_pending"),bRouteJoinRequested);
+    if(P.Id==TEXT("ucm"))
+    {
+        I->TryGetBoolField(TEXT("route_join_pending"),bRouteJoinRequested);
+        bTrackRouteMovement=false;I->TryGetBoolField(TEXT("route_track_movement"),bTrackRouteMovement);
+    }
     if(P.Id==TEXT("ucm") && I->HasField(TEXT("route_point")))RoutePoint=FMath::Clamp(int32(Number(I,TEXT("route_point"),1)),1,2049);
     if(P.Id==TEXT("ucm")&&I->HasField(TEXT("runtime_route")))
     {
@@ -936,6 +959,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         RuntimeRoute->SetBoolField(TEXT("loop_route"),Loop);RuntimeRoute->SetBoolField(TEXT("reverse_route"),Reverse);
     }
     const FString MetaState=String(I,TEXT("meta_state"));
+    LogUCMIntent(P,I);
     if(!MetaState.IsEmpty())P.MetaState=MetaState;
     const FString Status = String(I, TEXT("status")); if (!Status.IsEmpty()) P.Status = Status;
     const FString Action = String(I, TEXT("action"));
@@ -967,6 +991,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
     }
     if(P.Id==TEXT("ucm")&&Action==TEXT("pause_navigation"))
     {
+        LogUCMEvent(P,Status,EACEUCMLogLevel::Warning,I);
         // A blocked route must not discard the VM or stop combat/recovery.
         // Reflect the safety pause in the same switch used by UCM and Micro.
         P.Profile->SetBoolField(TEXT("navigation"),false);
@@ -1167,8 +1192,25 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
     }
     else ReportActivityFailure(P,I, TEXT("Unknown action: ") + Action);
 }
+void UACEPluginSubsystem::RecordRouteMovement(const FACEPosition& Position,uint32 TeleportSequence)
+{
+    if(!bTrackRouteMovement||!Position.IsValid())return;
+    if(RouteMovementTeleport!=TeleportSequence){RouteMovementSamples.Reset();bRouteMovementOverflow=false;}
+    RouteMovementTeleport=TeleportSequence;
+    if(!RouteMovementSamples.IsEmpty()&&FVector::DistSquared(RouteMovementSamples.Last().ToUnrealLocation(),Position.ToUnrealLocation())<3600.)return;
+    if(RouteMovementSamples.Num()>=256){bRouteMovementOverflow=true;return;}
+    RouteMovementSamples.Add(Position);
+}
 void UACEPluginSubsystem::ApplyMovement(AACEPlayerController* PC, float& F, float& R, float& T, bool Manual, bool Blocked, bool VR, const FVector& Facing)
 {
+    // Sample the ordinary predicted path even while Lua waits for a server
+    // attack/use acknowledgment. No new movement or networking is generated.
+    if(bTrackRouteMovement&&PC)
+    {
+        auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+        FACEPosition Position=C->GetPlayerPosition();PC->TryGetLocallyPredictedPosition(Position);
+        RecordRouteMovement(Position,C->GetTeleportSeq());
+    }
     if (Manual)
     {
         // Player input wins this frame, but independent activities (especially
@@ -1220,7 +1262,7 @@ void UACEPluginSubsystem::ApplyMovement(AACEPlayerController* PC, float& F, floa
         if(MovementOwner==TEXT("ucm"))
         {
             ++MovementBlockedSerial;bRouteJoinRequested=true;RouteVisibilityOffset=0;MovementOwner.Empty();MoveExpires=0;F=R=T=0;
-            if(auto P=Find(TEXT("ucm")))P->NextDecision=0;
+            if(auto P=Find(TEXT("ucm"))){LogUCMEvent(*P,TEXT("No movement progress for 5 seconds; requesting route recovery"),EACEUCMLogLevel::Warning);P->NextDecision=0;}
             if(auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>())if(auto Session=C->GetSession())Session->SendCancelAttack();
         }
         else StopAll(TEXT("Route blocked; manual reposition required"),true);

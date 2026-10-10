@@ -184,7 +184,7 @@ namespace
     };
 }
 
-TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId) { if(PluginId==TEXT("ucmmicro"))return MakeUCMMicroPanel();if(PluginId==TEXT("waypoint") || PluginId==TEXT("waypoint.map"))return MakeWaypointPanel(PluginId.EndsWith(TEXT(".map")));if(PluginId==TEXT("looteditor"))return MakeUCMPanel(TEXT("Standalone loot"));if(PluginId==TEXT("ucm"))return MakeUCMPanel();return SNew(SACEPlugins).Host(this).PluginId(PluginId); }
+TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId) { if(PluginId==TEXT("ucm.log"))return MakeUCMLogPanel();if(PluginId==TEXT("ucmmicro"))return MakeUCMMicroPanel();if(PluginId==TEXT("waypoint") || PluginId==TEXT("waypoint.map"))return MakeWaypointPanel(PluginId.EndsWith(TEXT(".map")));if(PluginId==TEXT("looteditor"))return MakeUCMPanel(TEXT("Standalone loot"));if(PluginId==TEXT("ucm"))return MakeUCMPanel();return SNew(SACEPlugins).Host(this).PluginId(PluginId); }
 void UACEPluginSubsystem::TogglePanel()
 {
     if(auto* PC=GetGameInstance()->GetFirstLocalPlayerController())if(APawn* Pawn=PC->GetPawn())

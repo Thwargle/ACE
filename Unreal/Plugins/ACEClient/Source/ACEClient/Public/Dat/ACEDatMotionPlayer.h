@@ -4,6 +4,7 @@
 #include "Dat/ACEDatDatabase.h"
 #include "Dat/ACEDatFileTypes.h"
 #include "ACELandingMotion.h"
+#include "ACEWalkingMotion.h"
 
 /** Evaluates MotionTable cycles (idle / walk / run) into part transforms. */
 class ACECLIENT_API FACEDatMotionPlayer
@@ -17,6 +18,8 @@ public:
 	bool SetMotionTable(uint32 MotionTableId);
 	bool BuildTransitionRootTrack(uint32 From, uint32 To, uint32 Style, ACELandingMotion::FRootTrack& Out) const;
 	bool GetCycleVelocity(uint32 MotionCommand, uint32 Style, FVector& Out) const;
+	bool BuildWalkingLink(int8 From, int8 To, uint32 Style, ACEWalkingMotion::FLink& Out) const;
+	bool EvaluateWalkingLink(const ACEWalkingMotion::FLink& Link, int32 Parts, TArray<FTransform>& Out, float Scale, int32& Count, TArray<FACEDatAnimationHook>& Hooks) const;
 	int32 GetCachedMotionTableCount() const { return MotionTableCache.Num(); }
 
 	/** DefaultStyle idle/ready cycle. OutAnimatedPartCount = parts written from the anim frame. */
@@ -47,10 +50,12 @@ public:
 	bool IsReady() const { return bReady; }
 
 private:
+	bool BuildRootTrack(const TArray<FACEDatAnimData>& Clips, ACELandingMotion::FRootTrack& Out) const;
 #if WITH_DEV_AUTOMATION_TESTS
     friend class FACERetailStreamingCostTest;
     friend class FACEAnimationLifetimeTest;
     friend class FACEEmoteTransitionTest;
+    friend class FACEArcheryMotionTest;
 #endif
 	const FACEDatAnimation* LoadAnimation(uint32 AnimId) const;
 	const FACEDatMotionData* FindCycle(uint32 MotionCommand, uint32 PreferredStyle) const;

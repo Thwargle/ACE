@@ -439,6 +439,59 @@ void UACEPluginSubsystem::RefreshAutomationData()
     }
     if(Request){LastAppraisalRequest=Now;AppraisalRequests.Add(Request,Now);C->RequestBackgroundAppraisal(Request);}
 }
+void UACEPluginSubsystem::UpdateRouteVisibility(const FACEPosition& Position,
+    const TArray<TSharedPtr<FJsonValue>>& Route, const FACEPluginSightQuery& Sight,
+    const TSharedPtr<FJsonObject>& Out)
+{
+    auto Visible=MakeShared<FJsonObject>();
+    struct FCandidate { double Distance; int32 Index; FVector Location; };
+    TArray<FCandidate> Nearest;
+    const FVector Origin=Position.ToUnrealLocation();
+    const uint32 Cell=uint32(Position.CellId);
+    uint32 Signature=GetTypeHash(Route.Num());
+    for(int32 Index=0;Index<Route.Num();++Index)
+    {
+        const auto Point=Route[Index]->AsObject();FACEPosition Dest;
+        bool Legacy=false,WalkFirst=false;Point->TryGetBoolField(TEXT("legacy"),Legacy);Point->TryGetBoolField(TEXT("walk_first"),WalkFirst);
+        Dest.CellId=int32(uint32(N(Point,TEXT("cell"))));Dest.Location=FVector(N(Point,TEXT("x")),N(Point,TEXT("y")),N(Point,TEXT("z")));
+        Signature=HashCombineFast(Signature,HashCombineFast(GetTypeHash(Dest.CellId),GetTypeHash(Dest.Location)));
+        Signature=HashCombineFast(Signature,uint32(Legacy)|(uint32(WalkFirst)<<1));
+        if(Legacy&&!WalkFirst)continue;
+        Visible->SetBoolField(FString::FromInt(Index+1),false);
+        const uint32 Target=uint32(Dest.CellId);
+        const bool Connected=Legacy||(Cell>>16)==(Target>>16)||((Cell&0xffff)<0x100&&(Target&0xffff)<0x100);
+        const double Distance=FVector::DistSquared(Origin,Dest.ToUnrealLocation());
+        // Same movement validation as Execute: no cross-dungeon walk or
+        // unbounded geometry scan. Combat acquisition is well inside 400m.
+        if(Dest.IsValid()&&Connected&&Distance<=FMath::Square(40000.))
+            Nearest.Add({Distance,Index,Dest.ToUnrealLocation()});
+    }
+    Nearest.Sort([](const FCandidate& A,const FCandidate& B){return A.Distance==B.Distance?A.Index<B.Index:A.Distance<B.Distance;});
+    if(RouteVisibilityOffset>=Nearest.Num()||RouteVisibilitySignature!=Signature||RouteVisibilityCell!=Cell
+        ||FVector::DistSquared(RouteVisibilityOrigin,Origin)>2500)
+        RouteVisibilityOffset=0;
+    if(RouteVisibilityOffset==0)RouteVisibilityOrigin=Origin;
+    RouteVisibilitySignature=Signature;RouteVisibilityCell=Cell;
+    FACEPluginRouteGround Ground(*GetWorld(),2048);
+    const int32 ScanEnd=FMath::Min(RouteVisibilityOffset+16,Nearest.Num());
+    bool Found=false;
+    while(RouteVisibilityOffset<ScanEnd)
+    {
+        const auto& Candidate=Nearest[RouteVisibilityOffset];
+        if(!Ground.CanQueryPath(Origin,Candidate.Location))break;
+        ++RouteVisibilityOffset;
+        if(Ground.Reachable(Origin,Candidate.Location,Sight))
+        {
+            Visible->SetBoolField(FString::FromInt(Candidate.Index+1),true);
+            Found=true;break; // sorted: the closest reachable entry is sufficient
+        }
+    }
+    const bool Pending=!Found&&RouteVisibilityOffset<Nearest.Num();
+    Out->SetBoolField(TEXT("route_visible_pending"),Pending);
+    Out->SetObjectField(TEXT("route_visible"),Visible);
+    if(!Pending)RouteVisibilityOffset=0;
+}
+
 void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
 {
     TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginSnapshot);
@@ -758,32 +811,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         {
             const TArray<TSharedPtr<FJsonValue>>* Route=nullptr;
             if((RuntimeRoute?RuntimeRoute:UCM->Profile)->TryGetArrayField(TEXT("route"),Route))
-            {
-                auto Visible=MakeShared<FJsonObject>();
-                TArray<TPair<double,int32>> Nearest;
-                for(int32 Index=0;Index<Route->Num();++Index)
-                {
-                    const auto Point=(*Route)[Index]->AsObject();FACEPosition Dest;
-                    bool Legacy=false,WalkFirst=false;Point->TryGetBoolField(TEXT("legacy"),Legacy);Point->TryGetBoolField(TEXT("walk_first"),WalkFirst);
-                    if(Legacy&&!WalkFirst)continue;
-                    Dest.CellId=int32(uint32(N(Point,TEXT("cell"))));Dest.Location=FVector(N(Point,TEXT("x")),N(Point,TEXT("y")),N(Point,TEXT("z")));
-                    Visible->SetBoolField(FString::FromInt(Index+1),false);
-                    Nearest.Emplace(FVector::DistSquared(P.ToUnrealLocation(),Dest.ToUnrealLocation()),Index);
-                }
-                Nearest.Sort([](const auto& A,const auto& B){return A.Key<B.Key;});
-                if(RouteVisibilityOffset>=Nearest.Num()||FVector::DistSquared(RouteVisibilityOrigin,P.ToUnrealLocation())>2500)RouteVisibilityOffset=0;
-                RouteVisibilityOrigin=P.ToUnrealLocation();
-                const int32 ScanEnd=FMath::Min(RouteVisibilityOffset+16,Nearest.Num());
-                FACEPluginRouteGround Ground(*World,2048);
-                for(int32 I=RouteVisibilityOffset;I<ScanEnd;++I)
-                {
-                    const int32 Index=Nearest[I].Value;const auto Point=(*Route)[Index]->AsObject();FACEPosition Dest;
-                    Dest.CellId=int32(uint32(N(Point,TEXT("cell"))));Dest.Location=FVector(N(Point,TEXT("x")),N(Point,TEXT("y")),N(Point,TEXT("z")));
-                    Visible->SetBoolField(FString::FromInt(Index+1),Ground.Reachable(P.ToUnrealLocation(),Dest.ToUnrealLocation(),Sight));
-                }
-                RouteVisibilityOffset=ScanEnd;
-                Out->SetObjectField(TEXT("route_visible"),Visible);
-            }
+                UpdateRouteVisibility(P,*Route,Sight,Out);
         }
         for(const auto& Value:Members)
         {

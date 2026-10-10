@@ -8,6 +8,7 @@
 #include "Mods/ACEVTProfile.h"
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
+#include "ACEDatSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Misc/ScopeExit.h"
 
@@ -1196,6 +1197,24 @@ bool FACEUCMVoidCombatTest::RunTest(const FString&)
         {TestEqual(TEXT("Nether spell can be selected automatically or explicitly"),Intent->GetNumberField(TEXT("spell")),20.);}
     }
     const TCHAR* Options[]={TEXT("debuff_corruption"),TEXT("debuff_destructive"),TEXT("debuff_corrosion")};
+    const int32 Categories[]={638,636,637};
+    const TCHAR* Names[]={TEXT("Corruption"),TEXT("Destructive Curse"),TEXT("Corrosion")};
+    auto* Dat=NewObject<UACEDatSubsystem>(NewObject<UGameInstance>());
+    if (!TestTrue(TEXT("Retail spells load"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+    ON_SCOPE_EXIT { Dat->Deinitialize(); };
+    bool Verified[3]={};
+    for(uint32 Id=1;Id<6500;++Id)
+    {
+        FString Name;uint32 Icon;
+        if(!Dat->TryGetSpellInfo(Id,Name,Icon))continue;
+        for(int32 I=0;I<3;++I) if(!Verified[I] && Name.StartsWith(Names[I]))
+        {
+            uint32 School,Power,Category,Flags;double Duration;
+            if(Dat->TryGetPluginSpellInfo(Id,School,Power,Category,Flags,Duration))
+            { TestEqual(*FString::Printf(TEXT("Retail category for %s"),Names[I]),Category,uint32(Categories[I]));Verified[I]=true; }
+        }
+    }
+    for(int32 I=0;I<3;++I)TestTrue(Names[I],Verified[I]);
     for(int32 Index=0;Index<3;++Index)
     {
         FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot();
@@ -1204,12 +1223,12 @@ bool FACEUCMVoidCombatTest::RunTest(const FString&)
         for(int32 Tier:{1,2})
         {
             auto Dot=ParseUCM(TEXT(R"({"name":"Void curse","school":5,"skill":500,"duration":30})"));
-            Dot->SetNumberField(TEXT("id"),100+Tier);Dot->SetNumberField(TEXT("category"),636+Index);Dot->SetNumberField(TEXT("power"),Tier*100);
+            Dot->SetNumberField(TEXT("id"),100+Tier);Dot->SetNumberField(TEXT("category"),Categories[Index]);Dot->SetNumberField(TEXT("power"),Tier*100);
             Spells.Add(MakeShared<FJsonValueObject>(Dot));
         }
         S->SetArrayField(TEXT("spells"),Spells);TSharedPtr<FJsonObject> Intent;TestTrue(*Error,VM.Step(S,P,Intent,Error));
         if(TestTrue(TEXT("Enabled Void curse produces an intent"),Intent.IsValid()))TestEqual(TEXT("Highest usable Void DoT casts first"),Intent->GetNumberField(TEXT("spell")),102.);
-        auto Confirmed=ParseUCM(TEXT(R"({"target":500,"power":200,"expires":130})"));Confirmed->SetNumberField(TEXT("category"),636+Index);
+        auto Confirmed=ParseUCM(TEXT(R"({"target":500,"power":200,"expires":130})"));Confirmed->SetNumberField(TEXT("category"),Categories[Index]);
         S->SetArrayField(TEXT("debuffs"),{MakeShared<FJsonValueObject>(Confirmed)});S->SetNumberField(TEXT("time"),101);S->SetNumberField(TEXT("action_serial"),1);
         TestTrue(*Error,VM.Step(S,P,Intent,Error));
         if(Intent)TestEqual(TEXT("Confirmed DoT allows direct Nether attacks instead of recasting"),Intent->GetNumberField(TEXT("spell")),20.);

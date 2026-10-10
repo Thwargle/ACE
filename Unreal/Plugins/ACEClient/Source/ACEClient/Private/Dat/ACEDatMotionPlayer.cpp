@@ -354,6 +354,40 @@ bool FACEDatMotionPlayer::BuildTransitionRootTrack(uint32 From, uint32 To, uint3
 	Out.Reset();
 	TArray<FACEDatAnimData> Clips;
 	if (!FindTransitionAnims(From, To, Clips, Style)) return false;
+	return BuildRootTrack(Clips, Out);
+}
+
+bool FACEDatMotionPlayer::BuildWalkingLink(int8 From, int8 To, uint32 Style, ACEWalkingMotion::FLink& Out) const
+{
+	Out = {};
+	if (Style == 0) Style = MotionTable->DefaultStyle;
+	constexpr uint32 Ready = 0x41000003u, Walk = 0x45000005u;
+	uint32 Source = From ? Walk : Ready, Target = To ? Walk : Ready;
+	// CMotionTable::get_link reverses the lookup for negative movement. Entry
+	// uses WalkBackwards' -0.65 rate; returning to Ready uses -1.
+	const bool Reverse = From < 0 || To < 0;
+	if (Reverse) Swap(Source, Target);
+	const FACEDatMotionData* Data = nullptr;
+	for (uint32 Key : {(Style << 16) | (Source & 0xFFFFFFu), Style << 16})
+		if (const auto* Links = MotionTable->Links.Find(Key))
+			if ((Data = Links->Find(Target))) break;
+	// No cross-stance fallback: combat styles can intentionally omit walk links.
+	if (!Data || Data->Anims.IsEmpty()) return false;
+	Out.Clips = Data->Anims;
+	const float Rate = To < 0 ? -.65f : Reverse ? -1.f : 1.f;
+	for (auto& Clip : Out.Clips) Clip.Framerate *= Rate;
+	return BuildRootTrack(Out.Clips, Out.Root);
+}
+
+bool FACEDatMotionPlayer::EvaluateWalkingLink(const ACEWalkingMotion::FLink& Link, int32 Parts,
+	TArray<FTransform>& Out, float Scale, int32& Count, TArray<FACEDatAnimationHook>& Hooks) const
+{
+	return EvaluateAnimSequence(Link.Clips, Link.Root.Time, Parts, Out, Scale, Count, false, nullptr, &Link.PreviousTime, &Hooks);
+}
+
+bool FACEDatMotionPlayer::BuildRootTrack(const TArray<FACEDatAnimData>& Clips, ACELandingMotion::FRootTrack& Out) const
+{
+	Out.Reset();
 	FTransform Pose = FTransform::Identity;
 	float Time = 0.f;
 	Out.Keys.Add({Time,Pose});

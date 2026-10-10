@@ -1332,6 +1332,7 @@ private:
 	/** Graft Mag-nus creature/player examine frame (floaty ships solid 0x06004CC2). */
 	void EnsureExamineCreatureChrome();
 	void SyncSkillPanelTab(const FString& PageName);
+	void SyncStatFooterChrome();
 	void SyncSpellPanelTab(const FString& PageName);
 	/** Swap PanelTabTemplate LeftEnd/middle/RightEnd art for selected vs idle. */
 	void ApplyPanelTabChrome(const FString& TabElementName, bool bSelected);
@@ -1420,6 +1421,9 @@ private:
 	void BuyVendorCartItem();
 	void SellVendorCart(bool bSelectedOnly = false);
 	void AddInventoryGuidToVendorSellCart(int32 Guid, int32 Amount = INDEX_NONE);
+	bool CanStageVendorSellItem(int32 Guid) const;
+	bool CanMoveInventoryAmountToContainer(int32 Guid, int32 Container, int32 Amount, int32 MergeTarget = 0) const;
+	void UpdateInventoryContainerDropFeedback(FVector2D CanvasLocalPos);
 	void UpdateVendorSellSplit();
 	void SyncVendorPageVisibility();
 	void RefreshVendorTabLabels();
@@ -1540,6 +1544,8 @@ private:
 	void ApplyCombatMode(int32 Mode);
 	void ApplyCombatModeInternal(int32 Mode, bool bSendToServer);
 	void SyncCombatModeButtons();
+	void SyncCombatAmmoCount();
+	UPROPERTY() TObjectPtr<UTextBlock> CombatAmmoLabel;
 	void SyncInventoryButtonVisual();
 	void RefreshCombatPanelOverlays();
 	void TickCombatAutoAttack(float DeltaSeconds);

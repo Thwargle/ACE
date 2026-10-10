@@ -574,10 +574,14 @@ void UACEUIGameplayBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEleme
 	RefreshStatusIndicators();
 	EnsureOverlays();
 	RefreshStatusIndicators();
+	if (Client) for (const auto& Message : Client->GetChatHistory())
+		HandleChatMessage(Message.Text, Message.Sender, Message.Type);
 }
 
 void UACEUIGameplayBinder::Shutdown()
 {
+	if (CombatAmmoLabel) CombatAmmoLabel->RemoveFromParent();
+	CombatAmmoLabel = nullptr;
 	ResetChessGame();
 	for(auto& Lines:ChatDisplayLines)Lines.Reset();
 	++ChatDisplayRevision;
@@ -822,6 +826,7 @@ void UACEUIGameplayBinder::TickRefresh()
 		}
 	}
 	SyncInventoryButtonVisual();
+	SyncCombatAmmoCount();
 	if (bChatStickToBottom && ChatLog)
 	{
 		ChatLog->ForceLayoutPrepass();
@@ -1258,8 +1263,9 @@ bool UACEUIGameplayBinder::HandleNamedClick(const FString& Name)
 				{
 					if (ChatEntry)
 					{
-						ChatEntry->SetText(FText::FromString(
-							FString::Printf(TEXT("/tell %s, "), *F.Name)));
+						const FString Prefix=FString::Printf(TEXT("/tell %s, "),*F.Name);
+						if (auto* Chat=Cast<UACEChatEntry>(ChatEntry)) Chat->SetChatText(Prefix);
+						else ChatEntry->SetText(FText::FromString(Prefix));
 					}
 					FocusChatEntry();
 					break;
@@ -2203,8 +2209,7 @@ void UACEUIGameplayBinder::SyncInventoryButtonVisual()
 		Btn->ImageFileId = bInvOpen ? DidBagOpen : DidBagClosed;
 	}
 	// 0x060011F9 is ItemSlot_GenericDragOver (green ring) — only for drag-over, not idle chrome.
-	Manager->SetElementVisibleByName(TEXT("BigBackpack_Icon_DragAccept"),
-		bInvDragActive || bInvDragPending);
+	Manager->SetElementVisibleByName(TEXT("BigBackpack_Icon_DragAccept"), false);
 }
 
 void UACEUIGameplayBinder::TogglePanelPage(const FString& PageElementName)
@@ -2254,6 +2259,13 @@ void UACEUIGameplayBinder::HandleEscape()
 			return;
 		}
 	}
+	// Deselect is a complete Escape action. Keep it here so both Slate keyboard
+	// focus and the viewport/controller path leave the current panel intact.
+	if (Client && Client->GetSelectedObject().Guid != 0)
+	{
+		Client->SelectObject(0);
+		return;
+	}
 	const auto Exam = Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field"));
 	if (Exam && Exam->bVisible) { ShowExamination(false); RefreshExaminationOverlay(); return; }
 	if (OpenLootContainerGuid != 0) { HideExternalContainer(true); return; }
@@ -2261,7 +2273,7 @@ void UACEUIGameplayBinder::HandleEscape()
 	if (bTradeOpen) { HideTradePanel(true); return; }
 	if (OpenSalvageToolGuid != 0) { HideSalvagePanel(); return; }
 	if (OpenHouseLord != 0) { CloseHouseOffer(); return; }
-	if (!ActivePanelPage.IsEmpty()) { HidePanel(); return; }
+	if (ActivePanelPage == TEXT("OptionsPanel_Field")) { HidePanel(); return; }
 	ActiveOptionsTab = TEXT("GameplayOptionsPage");
 	ShowPanelPage(TEXT("OptionsPanel_Field"));
 }
@@ -2511,6 +2523,18 @@ void UACEUIGameplayBinder::SyncSkillPanelTab(const FString& PageName)
 	{
 		Manager->SetElementVisibleByName(Tab, PageName == Tab);
 	}
+	SyncStatFooterChrome();
+	ApplyPanelTabChrome(TEXT("AttributeTab"), PageName == TEXT("AttributePage"));
+	ApplyPanelTabChrome(TEXT("SkillTab"), PageName == TEXT("SkillPage"));
+	ApplyPanelTabChrome(TEXT("CharacterTitleTab"), PageName == TEXT("CharacterTitlePage"));
+}
+
+void UACEUIGameplayBinder::SyncStatFooterChrome()
+{
+	if (!Manager) return;
+	const bool bAttributeSelected = SelectedAttributeRow >= 0 && SelectedAttributeRow < 9;
+	const bool bSkillSelected = SelectedSkillId != 0 && LastVitals.Skills.ContainsByPredicate(
+		[this](const FACESkillInfo& Skill) { return Skill.SkillId == SelectedSkillId; });
 	// Retail footers sit on each page — toggle under the active page only (duplicate names).
 	auto SetFooter = [this](const FString& Page, const FString& Footer, bool bVis)
 	{
@@ -2519,16 +2543,15 @@ void UACEUIGameplayBinder::SyncSkillPanelTab(const FString& PageName)
 			El->bVisible = bVis;
 		}
 	};
-	for (const TCHAR* Tab : Tabs)
+	for (const TCHAR* Tab : {TEXT("AttributePage"), TEXT("SkillPage"), TEXT("CharacterTitlePage")})
 	{
-		const bool bActive = PageName == Tab;
-		SetFooter(Tab, TEXT("StatManagement_Footer_Default"), bActive && PageName == TEXT("CharacterTitlePage"));
-		SetFooter(Tab, TEXT("StatManagement_Footer_Text"), bActive && PageName == TEXT("AttributePage"));
-		SetFooter(Tab, TEXT("StatManagement_Footer_Meter"), bActive && PageName == TEXT("SkillPage"));
+		const bool bActive = ActiveSkillTab == Tab;
+		const bool bText = bActive && ActiveSkillTab == TEXT("AttributePage") && bAttributeSelected;
+		const bool bMeter = bActive && ActiveSkillTab == TEXT("SkillPage") && bSkillSelected;
+		SetFooter(Tab, TEXT("StatManagement_Footer_Default"), bActive && !bText && !bMeter);
+		SetFooter(Tab, TEXT("StatManagement_Footer_Text"), bText);
+		SetFooter(Tab, TEXT("StatManagement_Footer_Meter"), bMeter);
 	}
-	ApplyPanelTabChrome(TEXT("AttributeTab"), PageName == TEXT("AttributePage"));
-	ApplyPanelTabChrome(TEXT("SkillTab"), PageName == TEXT("SkillPage"));
-	ApplyPanelTabChrome(TEXT("CharacterTitleTab"), PageName == TEXT("CharacterTitlePage"));
 }
 
 void UACEUIGameplayBinder::SyncSpellPanelTab(const FString& PageName)
@@ -3535,12 +3558,28 @@ bool UACEUIGameplayBinder::TryFinishSpellDrag(FVector2D CanvasLocalPos)
 	return true;
 }
 
+void UACEUIGameplayBinder::SyncCombatAmmoCount()
+{
+	const auto Session = Client ? Client->GetSession() : nullptr;
+	const auto Button = Manager ? Manager->FindElementByName(TEXT("MissileModeButton")) : nullptr;
+	if (!Button || !Canvas || !Canvas->WidgetTree) return;
+	// gmToolbarUI::UpdateAmmoID: stacked thrown weapons precede readied ammo.
+	const auto* Ammo = Session ? Session->FindEquippedItem(ACEEquipMask::MissileWeapon) : nullptr;
+	if (!Ammo || Ammo->MaxStackSize <= 1)
+		Ammo = Session ? Session->FindEquippedItem(ACEEquipMask::MissileAmmo) : nullptr;
+	if (!CombatAmmoLabel) CombatAmmoLabel = Canvas->WidgetTree->ConstructWidget<UACERetailTextBlock>();
+	CombatAmmoLabel->SetVisibility(Button->bVisible && Ammo ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	if (Button->bVisible && Ammo)
+		PlaceTextOnElement(CombatAmmoLabel, Button, FString::FromInt(FMath::Max(1, Ammo->StackSize)), 8, FLinearColor::White, 520);
+}
+
 void UACEUIGameplayBinder::SyncCombatModeButtons()
 {
 	if (!Manager)
 	{
 		return;
 	}
+	SyncCombatAmmoCount();
 	// Retail stacks four mode buttons at the same rect; show the active mode art.
 	const int32 Equipped = ResolveEquippedCombatMode();
 	const bool bPeace = CombatMode == static_cast<int32>(ACECombatMode::NonCombat);
@@ -4782,7 +4821,7 @@ void UACEUIGameplayBinder::UpdateInventoryDrag(FVector2D CanvasLocalPos)
 		InvDragIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
 	}
 	SetIconDid(InvDragIcon, InvDragIconDid);
-	// ItemSlot's DAT accept/reject artwork belongs to the hovered equipment box.
+	// ItemSlot's DAT accept/reject artwork belongs to the hovered destination cell.
 	if (PaperDollDragTargetIcon) PaperDollDragTargetIcon->SetVisibility(ESlateVisibility::Collapsed);
 	FString TargetName; int64 TargetMask = 0;
 	const FVector2D Absolute = Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos);
@@ -4808,6 +4847,35 @@ void UACEUIGameplayBinder::UpdateInventoryDrag(FVector2D CanvasLocalPos)
 			Canvas->PlaceWidgetAtElement(PaperDollDragTargetIcon, TargetElement, 120004);
 		}
 	}
+	if (OpenVendorGuid && Client)
+	{
+		for (UBorder* Cell : VendorItemSlotBgs)
+		{
+			if (!Cell || !Cell->IsVisible() || !Canvas->IsWidgetExposedAt(Cell, Absolute)) continue;
+			const auto* CellSlot = Cast<UCanvasPanelSlot>(Cell->Slot);
+			if (!CellSlot) break;
+			if (!PaperDollDragTargetIcon)
+			{
+				PaperDollDragTargetIcon = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+				PaperDollDragTargetIcon->SetPadding(FMargin(0));
+			}
+			SetIconDid(PaperDollDragTargetIcon, CanStageVendorSellItem(InvDragGuid) ? 0x060011F9 : 0x060011F8);
+			PaperDollDragTargetIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
+			if (PaperDollDragTargetIcon->GetParent() != Canvas->GetElementLayer())
+				Canvas->GetElementLayer()->AddChild(PaperDollDragTargetIcon);
+			if (auto* Slot = Cast<UCanvasPanelSlot>(PaperDollDragTargetIcon->Slot))
+			{
+				Slot->SetAnchors(FAnchors(0.f, 0.f));
+				Slot->SetAutoSize(false);
+				Slot->SetPosition(CellSlot->GetPosition());
+				Slot->SetSize(CellSlot->GetSize());
+				Canvas->SetOverlayOrder(PaperDollDragTargetIcon,
+					Manager->FindElementByName(TEXT("RootGameplay_FloatyEnvPanel_Field")), 120004);
+			}
+			break;
+		}
+	}
+	UpdateInventoryContainerDropFeedback(CanvasLocalPos);
 	InvDragIcon->SetBrushColor(FLinearColor(1.f, 1.f, 1.f, 0.85f));
 	InvDragIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
 	if (InvDragIcon->GetParent() != Canvas->GetElementLayer())
@@ -5241,12 +5309,9 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 			FVector2D ViewportLocal = FVector2D::ZeroVector, ViewportWidgetPosition;
 			if (!PlayerController->IsVRActive()) USlateBlueprintLibrary::AbsoluteToViewport(PlayerController, Absolute,
 				ViewportLocal, ViewportWidgetPosition);
-			AACEWorldEntityActor* Target = PlayerController->PickWorldEntityAtScreenPosition(
-				ViewportLocal.X, ViewportLocal.Y);
-			if (!Target)
-			{
-				Target = PlayerController->PickWorldEntityUnderCursor();
-			}
+			// Resolve the release ray only. Captured drags leave the cached cursor hit
+			// at the press location; a miss means ground, never the old selection.
+			AACEWorldEntityActor* Target = PlayerController->PickWorldEntityAtScreenPosition(ViewportLocal.X, ViewportLocal.Y);
 
 			auto ResolveGiveTargetObj = [&](AACEWorldEntityActor* Candidate, FACEWorldObject& OutObj) -> bool
 			{
@@ -5261,62 +5326,6 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 			FACEWorldObject TargetObj;
 			bool bGiveTarget = ResolveGiveTargetObj(Target, TargetObj);
 
-			// Pick miss / scenery hit → fall back to the currently selected world NPC when it is
-			// a give target and either is that selection or sits near the cursor.
-			if (!bGiveTarget && !PlayerController->IsVRActive())
-			{
-				const FACESelectedObject Sel = Client->GetSelectedObject();
-				if (Sel.bValid && Sel.Guid != 0 && Sel.Guid != Guid)
-				{
-					FACEWorldObject SelObj;
-					if (Client->GetWorldObject(Sel.Guid, SelObj) && SelObj.IsGiveOrCreatureTarget())
-					{
-						AACEWorldEntityActor* SelActor = nullptr;
-						if (UWorld* World = PlayerController->GetWorld())
-						{
-							for (TActorIterator<AACEWorldEntityActor> It(World); It; ++It)
-							{
-								if (It->GetACEGuid() == Sel.Guid)
-								{
-									SelActor = *It;
-									break;
-								}
-							}
-						}
-						bool bAcceptSelected = (SelActor == nullptr);
-						if (SelActor)
-						{
-							FVector2D Screen = FVector2D::ZeroVector;
-							const bool bOnScreen = PlayerController->ProjectWorldLocationToScreen(
-								SelActor->GetActorLocation(), Screen);
-							constexpr float MaxScreenDistPx = 96.f;
-							const float DistSq = bOnScreen
-								? FVector2D::DistSquared(Screen, ViewportLocal)
-								: TNumericLimits<float>::Max();
-							// Selected NPC: accept on full pick miss, or when near the drop cursor.
-							bAcceptSelected = !Target || DistSq <= MaxScreenDistPx * MaxScreenDistPx;
-						}
-						const FACEPosition PlayerPos = Client->GetPlayerPosition();
-						if (bAcceptSelected && PlayerPos.IsValid() && SelObj.bHasPosition)
-						{
-							const uint32 PC = static_cast<uint32>(PlayerPos.CellId);
-							const uint32 SC = static_cast<uint32>(SelObj.Position.CellId);
-							const bool bPlayerIndoor = (PC & 0xFFFFu) >= 0x0100u;
-							const bool bSelIndoor = (SC & 0xFFFFu) >= 0x0100u;
-							if (bPlayerIndoor && bSelIndoor && PC != SC)
-							{
-								bAcceptSelected = false;
-							}
-						}
-						if (bAcceptSelected)
-						{
-							Target = SelActor;
-							TargetObj = SelObj;
-							bGiveTarget = true;
-						}
-					}
-				}
-			}
 
 			if (Target || bGiveTarget)
 			{
@@ -5794,6 +5803,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 			TSharedPtr<FACEUIElement> Btn;
 			if (TSharedPtr<FACEUIElement> Foot = Manager->FindElementUnder(Page, Footer))
 			{
+				if (!Foot->bVisible) return false;
 				Btn = FindNamedUnder(Foot, BtnName);
 			}
 			if (!Btn.IsValid())
@@ -5951,13 +5961,13 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 			const int32 Guid = ExtItemGuids[i];
 			if (Guid != 0 && Client)
 			{
+				SelectInventoryGuid(Guid);
 				if (bRightClick)
 				{
 					Client->SendIdentifyObject(Guid);
 				}
 				else
 				{
-					SelectInventoryGuid(Guid);
 					const double Now = FPlatformTime::Seconds();
 					constexpr double DoubleClickSeconds = 0.75;
 					if (Guid == LastInvClickGuid && (Now - LastInvClickTime) < DoubleClickSeconds)
@@ -8471,6 +8481,7 @@ void UACEUIGameplayBinder::RefreshAttributeOverlays()
 
 	// Retail Footer_Text: XP to raise for the selected attribute + unassigned XP.
 	const bool bHasSel = SelectedAttributeRow >= 0 && SelectedAttributeRow < 9;
+	SyncStatFooterChrome();
 	int32 SelXpSpent = 0;
 	int64 SelXpToNext = 0;
 	int64 SelMaxSpend = 0;
@@ -8517,11 +8528,12 @@ void UACEUIGameplayBinder::RefreshAttributeOverlays()
 		Retail->SetModifierSuffix(ModifierBegin, Bonus > 0 ? FLinearColor::Green : FLinearColor::Red);
 
 	PlaceTextUnder(AttrFooterLine1Label, TEXT("AttributePage"), TEXT("StatManagement_Footer_LineOneLabel"),
-		TEXT("Experience needed to raise"), 8, TextWhite, StatOverlayZ);
+		bHasSel ? TEXT("Experience needed to raise") : TEXT("Skill Credits Available:"), 8, TextWhite, StatOverlayZ);
 	if (AttrFooterLine1Label) { AttrFooterLine1Label->SetJustification(ETextJustify::Left); }
 	if (AttrFooterLine1Value) { AttrFooterLine1Value->SetJustification(ETextJustify::Right); }
 	PlaceTextUnder(AttrFooterLine1Value, TEXT("AttributePage"), TEXT("StatManagement_Footer_LineOneValue"),
-		(bHasSel && SelXpToNext > 0) ? FormatXpNumber(SelXpToNext)
+		!bHasSel ? FString::FromInt(LastVitals.AvailableSkillCredits)
+			: SelXpToNext > 0 ? FormatXpNumber(SelXpToNext)
 			: bHasSel && bAttributeXpKnown ? TEXT("Infinite") : TEXT("—"), 8, TextWhite, StatOverlayZ);
 	PlaceTextUnder(AttrFooterLine2Label, TEXT("AttributePage"), TEXT("StatManagement_Footer_LineTwoLabel"),
 		TEXT("Unassigned Experience"), 8, TextWhite, StatOverlayZ);
@@ -8878,6 +8890,7 @@ void UACEUIGameplayBinder::RefreshSkillOverlays()
 	{
 		if (Sk.SkillId == SelectedSkillId) { Sel = &Sk; break; }
 	}
+	SyncStatFooterChrome();
 	int64 XpToNext = 0;
 	int64 MaxSpend = 0;
 	int32 TrainCost = 0;
@@ -8919,11 +8932,12 @@ void UACEUIGameplayBinder::RefreshSkillOverlays()
 	else
 	{
 		PlaceTextUnder(AttrFooterLine1Label, TEXT("SkillPage"), TEXT("StatManagement_Footer_LineOneLabel"),
-			TEXT("XP to raise"), 8, TextWhite, StatOverlayZ);
+			Sel ? TEXT("XP to raise") : TEXT("Skill Credits Available:"), 8, TextWhite, StatOverlayZ);
 		if (AttrFooterLine1Label) { AttrFooterLine1Label->SetJustification(ETextJustify::Left); }
 		if (AttrFooterLine1Value) { AttrFooterLine1Value->SetJustification(ETextJustify::Right); }
 		PlaceTextUnder(AttrFooterLine1Value, TEXT("SkillPage"), TEXT("StatManagement_Footer_LineOneValue"),
-			(Sel && XpToNext > 0) ? FormatXpNumber(XpToNext)
+			!Sel ? FString::FromInt(LastVitals.AvailableSkillCredits)
+				: XpToNext > 0 ? FormatXpNumber(XpToNext)
 				: Sel && bSkillXpKnown && Sel->AdvancementClass >= 2 ? TEXT("Infinite") : TEXT("—"), 8, TextWhite, StatOverlayZ);
 		PlaceTextUnder(AttrFooterLine2Label, TEXT("SkillPage"), TEXT("StatManagement_Footer_LineTwoLabel"),
 			TEXT("Unassigned Experience"), 8, TextWhite, StatOverlayZ);
@@ -14560,6 +14574,11 @@ void UACEUIGameplayBinder::AddInventoryGuidToVendorSellCart(int32 Guid, int32 Am
 	FACEWorldObject Obj;
 	if (!Client->GetWorldObject(Guid, Obj))
 	{
+		return;
+	}
+	if (!CanStageVendorSellItem(Guid))
+	{
+		PostInventorySystemMessage(TEXT("That item cannot be sold here."));
 		return;
 	}
 	if (Guid == Client->GetPlayerGuid() || (Obj.ItemType & ACEItemType::Container) != 0 || Obj.ItemsCapacity > 0)

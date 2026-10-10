@@ -261,7 +261,8 @@ void UACEGameHUDWidget::NativeConstruct()
 	}
 
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-	AppendChatLine(TEXT("Welcome to Dereth!"), ChatSystemColor);
+	if (Client) for (const auto& Message : Client->GetChatHistory())
+		HandleChatMessage(Message.Text, Message.Sender, Message.Type);
 	EnsureArtApplied();
 }
 

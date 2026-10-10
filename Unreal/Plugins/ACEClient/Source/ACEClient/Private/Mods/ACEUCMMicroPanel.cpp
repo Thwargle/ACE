@@ -3,6 +3,7 @@
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SButton.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Styling/CoreStyle.h"
 
@@ -45,6 +46,8 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
     Rows->AddSlot().AutoHeight().Padding(2,6)[SNew(STextBlock).AutoWrapText(true)
         .Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
         .Text_Lambda([UCM](){auto P=UCM();return FText::FromString(P?P->Status:TEXT("Enable UCM in Plugins."));})];
+    Rows->AddSlot().AutoHeight().Padding(2,4)[SNew(SButton).IsFocusable(false).Text(FText::FromString(TEXT("Open UCM Log")))
+        .OnClicked_Lambda([Host](){if(Host.IsValid())Host->TogglePluginWindow(TEXT("ucm.log"));return FReply::Handled();})];
     return SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
         .BorderBackgroundColor(FLinearColor(.012f,.018f,.03f)).Padding(10)
         [SNew(SScrollBox)+SScrollBox::Slot()[Rows]];

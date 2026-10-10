@@ -1742,46 +1742,149 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Session.CancelEquipmentSwap();
             return Actions;
         };
-        // F / hand sorts the selected item: server-confirmed merges, then front of main pack.
+        // F / hand merges once, selects the survivor, and preserves its pack.
         auto LastWire=[&](uint32 Expected, TArray<uint32> Values)
         {
-            uint32 Last=0; for(const auto& Pair:Session.CachedC2SPackets) Last=FMath::Max(Last,Pair.Key);
+            uint32 Last=0;
+            for(const auto& Pair:Session.CachedC2SPackets)
+            {
+                FACEBinaryReader Candidate(Pair.Value.Payload);
+                if(!Candidate.CanRead(28)) continue;
+                Candidate.Skip(24);
+                // Selecting the merge destination can also request appraisal.
+                if(Candidate.ReadUInt32()==Expected) Last=FMath::Max(Last,Pair.Key);
+            }
             if (!TestTrue(TEXT("Sort emits a reliable action"),Last!=0)) return;
             FACEBinaryReader Wire(Session.CachedC2SPackets[Last].Payload); Wire.Skip(16);
             TestEqual(TEXT("Sort uses GameAction envelope"),Wire.ReadUInt32(),ACEOpcode::GameAction); Wire.ReadUInt32();
             TestEqual(TEXT("Sort emits requested action"),Wire.ReadUInt32(),Expected);
+            if(!TestTrue(TEXT("Inventory action contains all expected fields"),Wire.CanRead(Values.Num()*4))) return;
             for(uint32 Value:Values) TestEqual(TEXT("Sort sends exact server quantity/container"),Wire.ReadUInt32(),Value);
         };
+        TFunction<void()> VerifyStackCombining = [&]()
+        {
+        auto RemoveStack = [&](int32 Guid)
+        {
+            FACEBinaryWriter Removed; Removed.WriteUInt32(uint32(Guid));
+            FACEBinaryReader Reader(Removed.GetData()); Session.HandleInventoryRemoveObject(Reader);
+        };
         FACEWorldObject Stack; Stack.Guid=9101; Stack.ContainerId=Player.Guid; Stack.WeenieClassId=999901;
-        Stack.StackSize=80; Stack.MaxStackSize=100; Stack.PlacementPosition=10;
-        FACEWorldObject Match=Stack; Match.Guid=9102; Match.StackSize=50; Match.PlacementPosition=11;
-        FACEWorldObject Match2=Stack; Match2.Guid=9103; Match2.StackSize=90; Match2.PlacementPosition=12;
-        for(const auto& O:{Stack,Match,Match2}) Session.WorldObjects.Add(O.Guid,O);
+        Stack.StackSize=5; Stack.MaxStackSize=100; Stack.PlacementPosition=10;
+        FACEWorldObject Match=Stack; Match.Guid=9102; Match.StackSize=10; Match.PlacementPosition=11;
+        FACEWorldObject Pack; Pack.Guid=9104; Pack.ContainerId=Player.Guid;
+        Pack.ItemType=ACEItemType::Container; Pack.ItemsCapacity=24;
+        FACEWorldObject Match2=Stack; Match2.Guid=9103; Match2.StackSize=20; Match2.ContainerId=Pack.Guid;
+        for(const auto& O:{Stack,Match,Match2,Pack}) Session.WorldObjects.Add(O.Guid,O);
+        Client->SelectObject(Stack.Guid);
         Session.CachedC2SPackets.Reset();
         TestTrue(TEXT("Owned selection begins sorting"),Client->SortInventoryItem(Stack.Guid));
-        LastWire(ACEGameAction::StackableMerge,{uint32(Stack.Guid),uint32(Match.Guid),50});
+        LastWire(ACEGameAction::StackableMerge,{uint32(Stack.Guid),uint32(Match.Guid),5});
+        TestEqual(TEXT("Merge immediately selects surviving stack"),Client->GetSelectedObject().Guid,Match.Guid);
         const int32 PendingCount=Session.CachedC2SPackets.Num();
-        Client->SortInventoryItem(Stack.Guid); Client->TickInventorySort(.1f);
+        Client->SortInventoryItem(Client->GetSelectedObject().Guid); Client->TickInventorySort(.1f);
         TestEqual(TEXT("Repeated F cannot merge the same stale quantities twice"),Session.CachedC2SPackets.Num(),PendingCount);
-        Session.WorldObjects[Stack.Guid].StackSize=30; Client->TickInventorySort(.1f);
+        RemoveStack(Stack.Guid); Client->TickInventorySort(.1f);
         TestEqual(TEXT("Source-only update cannot advance the merge"),Session.CachedC2SPackets.Num(),PendingCount);
-        Session.WorldObjects[Match.Guid].StackSize=100; Client->TickInventorySort(.1f);
-        LastWire(ACEGameAction::StackableMerge,{uint32(Stack.Guid),uint32(Match2.Guid),10});
-        Session.WorldObjects[Stack.Guid].StackSize=20; Session.WorldObjects[Match2.Guid].StackSize=100;
+        TestEqual(TEXT("Deleting consumed stack preserves survivor selection"),Client->GetSelectedObject().Guid,Match.Guid);
+        Session.WorldObjects[Match.Guid].StackSize=15; Client->TickInventorySort(.1f);
+        TestEqual(TEXT("Server confirmation does not automatically start another operation"),Session.CachedC2SPackets.Num(),PendingCount);
+        TestEqual(TEXT("Completed merge clears pending source"),Client->SortSourceGuid,0);
+        Session.CachedC2SPackets.Reset();
+        Client->SortInventoryItem(Client->GetSelectedObject().Guid);
+        LastWire(ACEGameAction::StackableMerge,{uint32(Match.Guid),uint32(Match2.Guid),15});
+        TestEqual(TEXT("Next F selects the matching stack inside the backpack"),Client->GetSelectedObject().Guid,Match2.Guid);
+        Session.WorldObjects[Match2.Guid].StackSize=35;
+        const int32 SecondCount=Session.CachedC2SPackets.Num();
         Client->TickInventorySort(.1f);
+        TestTrue(TEXT("Destination update alone still waits for source removal"),Client->SortSourceGuid!=0);
+        RemoveStack(Match.Guid);
+        Client->TickInventorySort(.1f);
+        TestEqual(TEXT("Merge in backpack never sends a move to main pack"),Session.CachedC2SPackets.Num(),SecondCount);
+        TestEqual(TEXT("Backpack stack stays in backpack"),Session.WorldObjects[Match2.Guid].ContainerId,Pack.Guid);
+        Session.CachedC2SPackets.Reset();
+        Client->SortInventoryItem(Client->GetSelectedObject().Guid);
+        LastWire(ACEGameAction::PutItemInContainer,{uint32(Match2.Guid),uint32(Player.Guid),0});
+        TestEqual(TEXT("Moving without a match retains selection"),Client->GetSelectedObject().Guid,Match2.Guid);
+        // Auto merge must not partially fill a stack and then scatter the remainder.
+        Session.WorldObjects[Match2.Guid].StackSize=99;
+        Session.WorldObjects.Add(Stack.Guid,Stack); Client->SortInventoryItem(Stack.Guid);
         LastWire(ACEGameAction::PutItemInContainer,{uint32(Stack.Guid),uint32(Player.Guid),0});
-        TestEqual(TEXT("Completed sort clears pending source"),Client->SortSourceGuid,0);
-        Session.WorldObjects[Match.Guid].StackSize=50;
-        Client->SortInventoryItem(Stack.Guid);
-        LastWire(ACEGameAction::StackableMerge,{uint32(Stack.Guid),uint32(Match.Guid),20});
-        Session.WorldObjects[Match.Guid].StackSize=70; Session.WorldObjects.Remove(Stack.Guid);
-        Client->TickInventorySort(.1f);
-        LastWire(ACEGameAction::PutItemInContainer,{uint32(Match.Guid),uint32(Player.Guid),0});
-        TestEqual(TEXT("Consumed stack moves the surviving match to the front"),Client->SortSourceGuid,0);
+        Session.WorldObjects[Match2.Guid].StackSize=20;
         Session.WorldObjects.Add(Stack.Guid,Stack); Client->SortInventoryItem(Stack.Guid);
         Session.CachedC2SPackets.Reset(); Client->TickInventorySort(9.f);
         TestEqual(TEXT("Missing server confirmation times out without more inventory actions"),Session.CachedC2SPackets.Num(),0);
-        for(int32 Guid:{Stack.Guid,Match.Guid,Match2.Guid}) Session.WorldObjects.Remove(Guid);
+        for(int32 Guid:{Stack.Guid,Match.Guid,Match2.Guid,Pack.Guid}) Session.WorldObjects.Remove(Guid);
+        Client->SelectObject(0);
+        };
+        VerifyStackCombining();
+        TFunction<void()> VerifyInventoryDropFeedback = [&]()
+        {
+            const auto SavedPage=Gameplay->ActivePanelPage;
+            const int32 SavedPack=Gameplay->SelectedPackGuid;
+            const auto SavedSelf=Session.WorldObjects[Player.Guid];
+            const FVector2D SavedCursor=FSlateApplication::Get().GetCursorPos();
+            ON_SCOPE_EXIT { FSlateApplication::Get().SetCursorPos(SavedCursor); };
+            FACEWorldObject Free;Free.Guid=9110;Free.ContainerId=Player.Guid;Free.ItemType=ACEItemType::Container;
+            Free.ItemsCapacity=2;Free.PlacementPosition=0;Free.IconId=0x06004CF7;
+            FACEWorldObject Full=Free;Full.Guid=9111;Full.ItemsCapacity=1;Full.PlacementPosition=1;
+            FACEWorldObject Source;Source.Guid=9112;Source.ContainerId=Player.Guid;Source.ItemType=ACEItemType::Misc;
+            Source.StackSize=5;Source.MaxStackSize=100;Source.WeenieClassId=998871;Source.IconId=0x06004CF7;
+            FACEWorldObject Target=Source;Target.Guid=9113;Target.ContainerId=Full.Guid;Target.WeenieClassId=998872;
+            for(const auto& Item:{Free,Full,Source,Target}) Session.WorldObjects.Add(Item.Guid,Item);
+            Session.WorldObjects[Player.Guid].ItemsCapacity=Client->GetPackItems(Player.Guid).Num()+10;
+            Session.WorldObjects[Player.Guid].ContainersCapacity=10;
+            Gameplay->ShowPanelPage(TEXT("InventoryPanel_Field"));
+            auto Preview=[&](UBorder* Cell,uint32 Expected)
+            {
+                const auto& Geo=Cell->GetCachedGeometry();
+                const FVector2D Absolute=Geo.LocalToAbsolute(Geo.GetLocalSize()*.5);
+                FSlateApplication::Get().SetCursorPos(Absolute);
+                Gameplay->InvDragGuid=Source.Guid;Gameplay->InvDragIconDid=Source.IconId;
+                Gameplay->InvDragAmount=5;Gameplay->bInvDragPending=true;Gameplay->bInvDragActive=true;
+                Gameplay->UpdateInventoryDrag(Canvas->GetCachedGeometry().AbsoluteToLocal(Absolute));
+                auto* Marker=Gameplay->PaperDollDragTargetIcon.Get();
+                if(!TestNotNull(TEXT("Inventory destination has feedback"),Marker)) return;
+                TestTrue(TEXT("Inventory target feedback visible"),Marker->IsVisible());
+                TestTrue(TEXT("Inventory drop uses exact retail arrow/ring/blocked texture"),
+                    Marker->Background.GetResourceObject()==Resources->ResolveIconTexture(Expected));
+                TestEqual(TEXT("Inventory marker follows cell position"),Cast<UCanvasPanelSlot>(Marker->Slot)->GetPosition(),Cast<UCanvasPanelSlot>(Cell->Slot)->GetPosition());
+                TestEqual(TEXT("Inventory marker follows cell scale"),Cast<UCanvasPanelSlot>(Marker->Slot)->GetSize(),Cast<UCanvasPanelSlot>(Cell->Slot)->GetSize());
+            };
+            for(float Scale:{1.f,1.5f})
+            {
+                Gameplay->SelectedPackGuid=Player.Guid;CaptureScreen(TEXT("InventoryDropLayout"),Scale);
+                const int32 FreeIndex=Gameplay->PackSlotGuids.IndexOfByKey(Free.Guid);
+                const int32 FullIndex=Gameplay->PackSlotGuids.IndexOfByKey(Full.Guid);
+                if(!TestTrue(TEXT("Both backpack targets are visible"),FreeIndex>=0 && FullIndex>=0)) break;
+                Preview(Gameplay->PackSlotBgs[FreeIndex],0x060011F7);
+                CaptureScreen(TEXT("InventoryBackpackArrow"),Scale);
+                Preview(Gameplay->PackSlotBgs[FullIndex],0x060011F8);
+                CaptureScreen(TEXT("InventoryBackpackBlocked"),Scale);
+                Gameplay->CancelInventoryDrag();
+                Gameplay->SelectedPackGuid=Free.Guid;CaptureScreen(TEXT("InventoryFreePack"),Scale);
+                Preview(Gameplay->InventorySlotBgs[0],0x060011F9);
+                CaptureScreen(TEXT("InventorySlotRing"),Scale);
+                Gameplay->CancelInventoryDrag();
+                Gameplay->SelectedPackGuid=Full.Guid;CaptureScreen(TEXT("InventoryFullPack"),Scale);
+                Preview(Gameplay->InventorySlotBgs[0],0x060011F8);
+                Session.WorldObjects[Target.Guid].WeenieClassId=Source.WeenieClassId;
+                Preview(Gameplay->InventorySlotBgs[0],0x060011F9); // merges need no empty slot
+                Session.WorldObjects[Target.Guid].StackSize=100;
+                Preview(Gameplay->InventorySlotBgs[0],0x060011F8);
+                Session.WorldObjects[Target.Guid]=Target;
+                Gameplay->CancelInventoryDrag();
+                TestFalse(TEXT("Cancel clears inventory drop feedback"),Gameplay->PaperDollDragTargetIcon->IsVisible());
+            }
+            TestTrue(TEXT("Reordering within a full pack remains valid"),Gameplay->CanMoveInventoryAmountToContainer(Target.Guid,Full.Guid,5));
+            TestFalse(TEXT("Splitting within a full pack needs another slot"),Gameplay->CanMoveInventoryAmountToContainer(Target.Guid,Full.Guid,2));
+            TestFalse(TEXT("A backpack cannot contain itself"),Gameplay->CanMoveInventoryAmountToContainer(Full.Guid,Full.Guid,1));
+            TestFalse(TEXT("A backpack cannot be nested inside a side pack"),Gameplay->CanMoveInventoryAmountToContainer(Full.Guid,Free.Guid,1));
+            Session.WorldObjects[Player.Guid]=SavedSelf;
+            for(const auto& Item:{Free,Full,Source,Target}) Session.WorldObjects.Remove(Item.Guid);
+            Gameplay->SelectedPackGuid=SavedPack;Gameplay->ShowPanelPage(SavedPage);
+            CaptureScreen(TEXT("InventoryDropRestored"));
+        };
+        VerifyInventoryDropFeedback();
         FACEWorldObject Device; Device.Guid=3345; Device.Name=TEXT("Charged device");
         Device.ContainerId=Player.Guid; Device.ItemType=ACEItemType::Misc;
         Device.MaxStructure=50; Device.Structure=50; Device.ItemUseable=8;
@@ -2030,6 +2133,8 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
 
         // The actual stat widgets must consume recomputed server values and retain
         // base/current details when a selected skill is buffed or debuffed.
+        TFunction<void()> VerifyStatFooters = [&]()
+        {
         auto ClickStatRow=[&](UBorder* Row, float Fraction)
         {
             const auto& RowGeometry=Row->GetCachedGeometry();
@@ -2048,6 +2153,20 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         Session.StatResolver = [Dat](auto& V, const auto& E) { Dat->RecomputePlayerStats(V,E); };
         auto& Stats = Session.PlayerVitals;
         Stats.bValid=true; Stats.Coordination=120; Stats.Focus=180;
+        Stats.AvailableSkillCredits=10; Stats.AvailableExperience=94384;
+        auto CheckDefaultStatFooter = [&](const TCHAR* Page)
+        {
+            TestEqual(TEXT("Deselected footer shows skill credit label"),Gameplay->AttrFooterLine1Label->GetText().ToString(),FString(TEXT("Skill Credits Available:")));
+            TestEqual(TEXT("Deselected footer shows current server skill credits"),Gameplay->AttrFooterLine1Value->GetText().ToString(),FString::FromInt(Stats.AvailableSkillCredits));
+            TestTrue(TEXT("Skill credits are visible"),Gameplay->AttrFooterLine1Value->GetVisibility()!=ESlateVisibility::Collapsed);
+            TestEqual(TEXT("Deselected footer retains unassigned XP"),Gameplay->AttrFooterLine2Value->GetText().ToString(),FString(TEXT("94,384")));
+            for (const TCHAR* Footer : {TEXT("StatManagement_Footer_Default"),TEXT("StatManagement_Footer_Text"),TEXT("StatManagement_Footer_Meter")})
+            {
+                auto Element=Manager->FindElementUnder(Page,Footer);
+                if(TestTrue(TEXT("Authored stat footer exists"),Element.IsValid()))
+                    TestEqual(TEXT("Only the default footer is shown without a selection"),Element->bVisible,FString(Footer)==TEXT("StatManagement_Footer_Default"));
+            }
+        };
         FACESkillInfo Cooking; Cooking.SkillId=39; Cooking.AdvancementClass=2; Cooking.InitLevel=5; Cooking.Ranks=10;
         Stats.Skills={Cooking}; Session.NotifyVitalsChanged();
         Gameplay->ShowPanelPage(TEXT("SkillManagementPanel_Field")); Gameplay->SyncSkillPanelTab(TEXT("SkillPage"));
@@ -2080,7 +2199,11 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 TestEqual(TEXT("Clicking selected skill immediately deselects it"),Gameplay->SelectedSkillId,0);
                 CheckStatHighlight(Highlight,false);
                 TestTrue(TEXT("Deselecting skill immediately clears footer"),Gameplay->AttrFooterTitle->GetText().ToString().StartsWith(TEXT("Select")));
+                CheckDefaultStatFooter(TEXT("SkillPage"));
+                CaptureScreen(TEXT("GameplaySkillCredits"));
+                Stats.AvailableSkillCredits=0;
                 Client->OnVitalsUpdated.Broadcast(Stats);
+                CheckDefaultStatFooter(TEXT("SkillPage"));
                 TestEqual(TEXT("Stat updates preserve deselection"),Gameplay->SelectedSkillId,0);
                 ClickStatRow(Highlight,Fraction);
                 TestEqual(TEXT("Clicking skill again immediately selects it"),Gameplay->SelectedSkillId,39);
@@ -2109,7 +2232,11 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("Clicking selected attribute deselects it"),Gameplay->SelectedAttributeRow,INDEX_NONE);
             CheckStatHighlight(FocusHighlight,false);
             TestEqual(TEXT("Deselecting attribute immediately clears footer"),Gameplay->AttrFooterTitle->GetText().ToString(),FString(TEXT("Select an Attribute to Improve")));
+            CheckDefaultStatFooter(TEXT("AttributePage"));
+            Stats.AvailableSkillCredits=10;
             Client->OnVitalsUpdated.Broadcast(Stats);
+            CheckDefaultStatFooter(TEXT("AttributePage"));
+            CaptureScreen(TEXT("GameplayAttributeCredits"));
             TestEqual(TEXT("Refreshing does not force Strength selection"),Gameplay->SelectedAttributeRow,INDEX_NONE);
             CheckStatHighlight(Gameplay->AttributeRowHighlights[0],false);
             ClickStatRow(FocusHighlight,Fraction);
@@ -2149,6 +2276,8 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         Gameplay->SelectedSkillId=39;
         Gameplay->SyncSkillPanelTab(TEXT("SkillPage")); Gameplay->RefreshSkillOverlays();
         TestEqual(TEXT("Maximum trained skill reads Infinite"),Gameplay->AttrFooterLine1Value->GetText().ToString(),FString(TEXT("Infinite")));
+        };
+        VerifyStatFooters();
 
         // Titles: exercise the real sorted row hit regions and SetTitle wire action.
         FACEBinaryWriter Titles;
@@ -2363,18 +2492,50 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Server close immediately retires nearby loot panel"),Gameplay->OpenLootContainerGuid,0);
         TestFalse(TEXT("Server close cancels a drag of inaccessible loot"),Gameplay->bInvDragPending);
         Session.bUseBusy=false; Session.ShortcutObjects[0]=0; Session.WorldObjects.Remove(ShortcutUse.Guid);
+        Client->SelectObject(0);
         Gameplay->ShowExamination(true);
         Gameplay->HandleEscape();
         TestFalse(TEXT("Escape closes inspection first"),Manager->FindElementByName(TEXT("RootGameplay_FloatyExamination_Field"))->bVisible);
         TestEqual(TEXT("Closing inspection retains equipment panel"),Gameplay->ActivePanelPage,FString(TEXT("InventoryPanel_Field")));
-        Gameplay->HandleEscape();
-        TestTrue(TEXT("Next Escape closes equipment before opening options"),Gameplay->ActivePanelPage.IsEmpty());
         Gameplay->ActiveOptionsTab=TEXT("ConfigPage");
         Gameplay->HandleEscape();
         TestEqual(TEXT("Escape opens options on Game Play regardless of the last tab"),Gameplay->ActiveOptionsTab,FString(TEXT("GameplayOptionsPage")));
-        TestEqual(TEXT("Escape reaches the game menu after dismissing panels"),Gameplay->ActivePanelPage,FString(TEXT("OptionsPanel_Field")));
+        TestEqual(TEXT("Escape switches directly from equipment to the game menu"),Gameplay->ActivePanelPage,FString(TEXT("OptionsPanel_Field")));
         Gameplay->HandleEscape();
         TestTrue(TEXT("Escape toggles the game menu closed"),Gameplay->ActivePanelPage.IsEmpty());
+        TFunction<void()> VerifyEscapeSelection = [&]()
+        {
+            for (int32 Kind=0;Kind<3;++Kind)
+            {
+                FACEWorldObject Target;Target.Guid=9120;
+                Target.Name=TEXT("Escape selection fixture");
+                Target.ItemType=Kind==0 ? ACEItemType::Creature : ACEItemType::Misc;
+                Target.ContainerId=Kind==2 ? Player.Guid : 0;
+                Session.WorldObjects.Add(Target.Guid,Target);
+                Gameplay->ShowPanelPage(TEXT("InventoryPanel_Field"));
+                Client->SelectObject(Target.Guid);
+                // Exercise the shared handler both through Slate and directly,
+                // as used by the controller when the viewport owns focus.
+                auto PressEscape=[&]()
+                {
+                    if(Kind==1) Gameplay->HandleEscape();
+                    else TestTrue(TEXT("Canvas consumes Escape"),Canvas->NativeOnPreviewKeyDown(Canvas->GetCachedGeometry(),Escape).IsEventHandled());
+                };
+                PressEscape();
+                TestEqual(TEXT("First Escape deselects world and inventory targets"),Client->GetSelectedObject().Guid,0);
+                TestEqual(TEXT("Deselect leaves the backpack page intact"),Gameplay->ActivePanelPage,FString(TEXT("InventoryPanel_Field")));
+                TestTrue(TEXT("Deselect leaves the backpack window visible"),Panel->bVisible);
+                PressEscape();
+                TestEqual(TEXT("Second Escape opens Gameplay options"),Gameplay->ActivePanelPage,FString(TEXT("OptionsPanel_Field")));
+                TestEqual(TEXT("Escape chooses Gameplay options tab"),Gameplay->ActiveOptionsTab,FString(TEXT("GameplayOptionsPage")));
+                PressEscape();
+                TestTrue(TEXT("Third Escape closes options"),Gameplay->ActivePanelPage.IsEmpty());
+                PressEscape();
+                TestEqual(TEXT("Fourth Escape reopens options"),Gameplay->ActivePanelPage,FString(TEXT("OptionsPanel_Field")));
+                Session.WorldObjects.Remove(Target.Guid);
+            }
+        };
+        VerifyEscapeSelection();
         Gameplay->ShowPanelPage(TEXT("InventoryPanel_Field"));
 
         FACEWorldObject Partner; Partner.Guid=4567; Partner.Name=TEXT("Trade partner"); Session.WorldObjects.Add(Partner.Guid,Partner);
@@ -3024,6 +3185,53 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
 			TGuardValue<TObjectPtr<UACEUILayoutResolver>> KeepLayout(Client->UILayoutResolver,Layout);
 			TGuardValue<TObjectPtr<UACEUIResourceResolver>> KeepResources(Client->UIResourceResolver,Resources);
 			Controller->DatCanvasWidget=Canvas;Controller->DatGameplayBinder=Gameplay;
+			TFunction<void()> CheckHoverCursors = [&]()
+			{
+				const bool SavedLock=Manager->IsUiLocked();
+				const bool SavedShow=Controller->bShowMouseCursor;
+				const bool SavedHud=Controller->bUseDatDrivenHud;
+				const auto SavedCursorType=Controller->CurrentMouseCursor;
+				const FVector2D SavedCursor=FSlateApplication::Get().GetCursorPos();
+				const auto Radar=Manager->FindElementByName(TEXT("RootGameplay_Radar_Field"));
+				const FIntPoint SavedDrag(Radar->UserDragX,Radar->UserDragY);
+				Controller->bShowMouseCursor=true;Controller->bUseDatDrivenHud=true;
+				Controller->CurrentMouseCursor=EMouseCursor::Default;
+				Manager->SetUiLocked(false);Gameplay->ShowPanelPage(TEXT("InventoryPanel_Field"));
+				for (float Scale : {1.f,1.5f})
+				{
+					CaptureScreen(TEXT("RadarHoverSetup"),Scale);
+					for (const TCHAR* Name : {TEXT("RadarDrag"),TEXT("InvTitleText"),TEXT("PanelLeftBorder")})
+					{
+						const auto Handle=Manager->FindElementByName(Name);
+						Manager->BringFloatyToFront(Handle);
+						const FGeometry Geo=Canvas->GetCachedGeometry();
+						const FVector2D Point=Canvas->LayoutToViewport(FVector2D(Handle->GetScreenOrigin())+FVector2D(Handle->Width,Handle->Height)*.5);
+						FSlateApplication::Get().SetCursorPos(Geo.LocalToAbsolute(Point));
+						TestEqual(TEXT("Viewport shows move cursor on hover before clicking"),Controller->GetMouseCursor(),EMouseCursor::CardinalCross);
+						Manager->SetUiLocked(true);
+						TestEqual(TEXT("Locked HUD does not advertise movement"),Controller->GetMouseCursor(),EMouseCursor::Default);
+						Manager->SetUiLocked(false);
+						if (Handle->ElementName==TEXT("RadarDrag"))
+						{
+							const FIntPoint Before(Radar->UserDragX,Radar->UserDragY);
+							FPointerEvent Down(0,Geo.LocalToAbsolute(Point),Geo.LocalToAbsolute(Point),{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState());
+							TestTrue(TEXT("Canvas accepts radar handle press"),Canvas->NativeOnMouseButtonDown(Geo,Down).IsEventHandled());
+							const FVector2D End=Point+Canvas->LayoutToViewport(FVector2D(-50,35))-Canvas->LayoutToViewport(FVector2D::ZeroVector);
+							Manager->NotifyMouseMove(End,Geo.GetLocalSize());
+							TestEqual(TEXT("Radar follows drag at each UI scale"),FIntPoint(Radar->UserDragX,Radar->UserDragY),Before+FIntPoint(-50,35));
+							FPointerEvent Up(0,Geo.LocalToAbsolute(End),Geo.LocalToAbsolute(Point),{},EKeys::LeftMouseButton,0,FModifierKeysState());
+							Canvas->NativeOnMouseButtonUp(Geo,Up);
+						}
+					}
+					FSlateApplication::Get().SetCursorPos(Canvas->GetCachedGeometry().LocalToAbsolute(FVector2D(500,250)));
+					TestEqual(TEXT("Leaving the frame restores the default cursor"),Controller->GetMouseCursor(),EMouseCursor::Default);
+				}
+				Radar->UserDragX=SavedDrag.X;Radar->UserDragY=SavedDrag.Y;Radar->RecomputeLayoutOffset();Manager->SaveFloatyLayout();
+				Manager->SetUiLocked(SavedLock);Controller->bShowMouseCursor=SavedShow;Controller->bUseDatDrivenHud=SavedHud;
+				Controller->CurrentMouseCursor=SavedCursorType;
+				FSlateApplication::Get().SetCursorPos(SavedCursor);CaptureScreen(TEXT("RadarHoverRestored"));
+			};
+			CheckHoverCursors();
 			Gameplay->ShowPanelPage(TEXT("InventoryPanel_Field"));
 			const auto Frame=Manager->FindElementByName(TEXT("InventoryPanel_Field"));
 			Controller->bGameplayUiAssetsReady=false;
@@ -3709,6 +3917,54 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Gameplay->AddInventoryGuidToVendorSellCart(Pack.Guid);
             TestEqual(TEXT("Repeated pack drops do not duplicate sale entries"),Gameplay->VendorSellCart.Num(),1);
             Gameplay->ShowVendorPanel(99122);CaptureScreen(TEXT("GameplayBulkVendor"));
+            TFunction<void()> VerifyVendorDropFeedback = [&]()
+            {
+                const FVector2D SavedCursor=FSlateApplication::Get().GetCursorPos();
+                ON_SCOPE_EXIT { FSlateApplication::Get().SetCursorPos(SavedCursor); };
+                for (float Scale : {1.f, 1.5f})
+                {
+                    CaptureScreen(TEXT("VendorDragLayout"),Scale);
+                    auto Preview = [&](int32 Guid, bool Accept, int32 CellIndex)
+                    {
+                        auto* Cell=Gameplay->VendorItemSlotBgs[CellIndex].Get();
+                        const auto& Geo=Cell->GetCachedGeometry();
+                        const FVector2D Point=Canvas->GetCachedGeometry().AbsoluteToLocal(Geo.LocalToAbsolute(Geo.GetLocalSize()*.5));
+                        FSlateApplication::Get().SetCursorPos(Geo.LocalToAbsolute(Geo.GetLocalSize()*.5));
+                        Gameplay->InvDragGuid=Guid;Gameplay->bInvDragPending=true;Gameplay->bInvDragActive=true;
+                        Gameplay->InvDragIconDid=0x06004CF7u;
+                        Gameplay->UpdateInventoryDrag(Point);
+                        auto* Marker=Gameplay->PaperDollDragTargetIcon.Get();
+                        if (!TestNotNull(TEXT("Vendor cell has drag feedback"),Marker)) return;
+                        TestTrue(TEXT("Vendor feedback is visible"),Marker->IsVisible());
+                        TestTrue(TEXT("Vendor drag uses the retail green circle or red blocked artwork"),
+                            Marker->Background.GetResourceObject()==Resources->ResolveIconTexture(Accept?0x060011F9:0x060011F8));
+                        auto* MarkerSlot=Cast<UCanvasPanelSlot>(Marker->Slot);
+                        auto* CellSlot=Cast<UCanvasPanelSlot>(Cell->Slot);
+                        TestEqual(TEXT("Vendor marker snaps to hovered cell"),MarkerSlot->GetPosition(),CellSlot->GetPosition());
+                        TestEqual(TEXT("Vendor marker matches scaled cell size"),MarkerSlot->GetSize(),CellSlot->GetSize());
+                    };
+                    Preview(Player.Guid,true,0);
+                    Preview(Pack.Guid,true,1); // empty cells are also drop targets
+                    Preview(Bread.Guid,true,0);
+                    CaptureScreen(TEXT("VendorAcceptDrop"),Scale);
+                    Preview(Retained.Guid,false,1);
+                    CaptureScreen(TEXT("VendorRejectDrop"),Scale);
+                    Preview(Bound.Guid,false,0);
+                    const int32 Count=Gameplay->VendorSellCart.Num();
+                    Gameplay->AddInventoryGuidToVendorSellCart(Retained.Guid);
+                    TestEqual(TEXT("Blocked item cannot be staged on drop"),Gameplay->VendorSellCart.Num(),Count);
+                    const uint32 Types=Session.VendorItemTypes;
+                    Session.VendorItemTypes=ACEItemType::Armor; Preview(Bread.Guid,false,0);
+                    Session.VendorItemTypes=Types;
+                    Gameplay->UpdateInventoryDrag(FVector2D(500,200));
+                    TestFalse(TEXT("Leaving vendor cells hides drag feedback"),Gameplay->PaperDollDragTargetIcon->IsVisible());
+                    Preview(Player.Guid,true,0);
+                    Gameplay->CancelInventoryDrag();
+                    TestFalse(TEXT("Canceling drag clears vendor feedback"),Gameplay->PaperDollDragTargetIcon->IsVisible());
+                }
+                CaptureScreen(TEXT("GameplayBulkVendor"));
+            };
+            VerifyVendorDropFeedback();
             const auto SellList=Manager->FindElementUnder(TEXT("VendorSellPage"),TEXT("VendorSellList"));
             if(TestTrue(TEXT("Vendor sell list is a real drop target"),SellList.IsValid()))
             {
@@ -3738,6 +3994,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Session.VendorMaxValue=9;Gameplay->AddInventoryGuidToVendorSellCart(Pack.Guid);
             TestTrue(TEXT("Bulk sale respects vendor per-unit value limits"),Gameplay->VendorSellCart.IsEmpty());
             Session.VendorMaxValue=-1;
+            Client->SelectObject(0);
             Gameplay->HandleEscape();
             TestEqual(TEXT("Escape dismisses an open vendor"),Gameplay->OpenVendorGuid,0);
             for(const auto& Object:{Pack,Bread,Retained,Bound})Session.WorldObjects.Remove(Object.Guid);

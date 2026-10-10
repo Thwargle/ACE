@@ -659,7 +659,9 @@ void UACEUIGameplayBinder::AppendChatLineToLog(int32 Window, const FString& Line
 		{
 			if (auto* Entry=GetChatEntryWidget(Window))
 			{
-				Entry->SetText(FText::FromString(FString::Printf(TEXT("@tell %s, "),*ClickSender)));
+				const FString Prefix=FString::Printf(TEXT("@tell %s, "),*ClickSender);
+				if (auto* Chat=Cast<UACEChatEntry>(Entry)) Chat->SetChatText(Prefix);
+				else Entry->SetText(FText::FromString(Prefix));
 				FocusChatEntryWindow(Window);
 			}
 		});
@@ -827,7 +829,9 @@ bool UACEUIGameplayBinder::TryHandleChatNameClick(FVector2D Absolute)
 		{
 			return false;
 		}
-		Entry->SetText(FText::FromString(FString::Printf(TEXT("@tell %s, "), *E.Sender)));
+		const FString Prefix=FString::Printf(TEXT("@tell %s, "),*E.Sender);
+		if (auto* Chat=Cast<UACEChatEntry>(Entry)) Chat->SetChatText(Prefix);
+		else Entry->SetText(FText::FromString(Prefix));
 		FocusChatEntryWindow(E.Window);
 		return true;
 	}
@@ -1445,7 +1449,9 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 		{
 			if (Entry)
 			{
-				Entry->SetText(FText::FromString(FString::Printf(TEXT("@tell %s, "), *Name)));
+				const FString Prefix=FString::Printf(TEXT("@tell %s, "),*Name);
+				if (auto* Chat=Cast<UACEChatEntry>(Entry)) Chat->SetChatText(Prefix);
+				else Entry->SetText(FText::FromString(Prefix));
 			}
 			if (bClearEntry)
 			{

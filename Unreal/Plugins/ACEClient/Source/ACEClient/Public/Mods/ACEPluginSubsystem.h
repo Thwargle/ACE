@@ -5,6 +5,7 @@
 #include "Containers/Ticker.h"
 #include "Dom/JsonObject.h"
 #include "ACETypes.h"
+#include "Mods/ACEUCMLog.h"
 #include "ACEPluginSubsystem.generated.h"
 
 class FACEPluginVM;
@@ -34,6 +35,7 @@ struct FACEClientPlugin
     double ActionSentAt = 0;
     int32 Player = 0;
     FString Server,MetaState;
+    FString LoggedActivity, LoggedRouteStatus;
 };
 
 /** Versioned, opt-in script plugins. No native injection or server protocol extensions. */
@@ -46,6 +48,8 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEPluginRequestsTest;
     friend class FACERunSpeedParityTest;
     friend class FACEPluginRampRouteTest;
+    friend class FACEUCMRouteRejoinTest;
+    friend class FACEUCMLogTest;
 public:
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
@@ -83,6 +87,10 @@ public:
     void TogglePanel();
     TSharedRef<SWidget> MakeUCMPanel(const FString& InitialPage=FString());
     TSharedRef<SWidget> MakeUCMMicroPanel();
+    TSharedRef<SWidget> MakeUCMLogPanel();
+    const FACEUCMLog& GetUCMLog() const { return UCMLog; }
+    void ClearUCMLog();
+    FString UCMLogSaveError;
     TSharedRef<SWidget> MakeWaypointPanel(bool bMap=false, bool bArrowOnly=false);
     TSharedRef<SWidget> MakeWaypointMapIcon();
     TSharedRef<SWidget> MakeWaypointDungeonOverlay();
@@ -136,6 +144,18 @@ public:
     void ApplyMovement(AACEPlayerController* Controller, float& Forward, float& Right, float& Turn,
         bool Manual, bool Blocked, bool VR, const FVector& Facing);
 private:
+    void UpdateRouteVisibility(const FACEPosition& Position, const TArray<TSharedPtr<FJsonValue>>& Route,
+        const class FACEPluginSightQuery& Sight, const TSharedPtr<FJsonObject>& Snapshot);
+    void RecordRouteMovement(const FACEPosition& Position, uint32 TeleportSequence);
+    bool bTrackRouteMovement=false, bRouteMovementOverflow=false;
+    TArray<FACEPosition> RouteMovementSamples;
+    uint32 RouteMovementTeleport=0;
+    FACEUCMLog UCMLog;
+    double NextUCMLogSave = 0;
+    void FlushUCMLog();
+    void LogUCMEvent(const FACEClientPlugin& Plugin, const FString& Message,
+        EACEUCMLogLevel Level = EACEUCMLogLevel::Info, const TSharedPtr<FJsonObject>& Intent = nullptr);
+    void LogUCMIntent(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Intent);
     void UpdateWorldRendering();
     void RestoreWorldRendering();
     TWeakObjectPtr<UGameViewportClient> SuspendedWorldViewport;
@@ -264,6 +284,7 @@ private:
     bool bRouteJoinRequested=true;
     int32 RouteVisibilityOffset=0;
     FVector RouteVisibilityOrigin=FVector::ZeroVector;
+    uint32 RouteVisibilitySignature=0, RouteVisibilityCell=0;
     uint32 RouteSignature=0;
     double RouteRebuiltAt=0;
     double NextRouteCheck=0;

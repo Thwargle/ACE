@@ -5,6 +5,7 @@
 #include "ACETypes.h"
 #include "ACEOpcodes.h"
 #include "ACELandingMotion.h"
+#include "ACEWalkingMotion.h"
 #include "ACECharacterAppearanceComponent.generated.h"
 
 class UMaterialInstanceDynamic;
@@ -28,12 +29,20 @@ class ACECLIENT_API UACECharacterAppearanceComponent : public UActorComponent
 	friend class FACEAvatarMotionTest;
 	friend class FACERunSpeedParityTest;
 	friend class FACEEmoteTransitionTest;
+	friend class FACEArcheryMotionTest;
+	friend class FACEWalkingStepTest;
 	friend class FACEMultipartUpdateTest;
 	friend class FACERetailScreenTest;
     friend class FACERetailWorldEntryTest;
 	friend class FACERetailPortalSpaceTest;
 
 public:
+	// The controller consumes root displacement before collision. Remote actors
+	// advance the same sequence for presentation only, using network positions.
+	void SetWalkingTransitionsEnabled(bool bEnabled);
+	FTransform AdvanceWalkingMotion(float Dt, float& CycleSeconds);
+	bool HasWalkingTransition() const { return WalkingMotion.HasPending(); }
+	void ResetWalkingMotion() { WalkingMotion.Reset(); }
 	/** World bodies receive scene lights; UI and portal-space previews keep their own lighting. */
 	bool bUseWorldLighting = false;
 	bool HasAuthoredPhysicsGeometry() const;
@@ -191,6 +200,8 @@ public:
 	/** Cancel a held (or hold-pending) chat-pose emote — retail clears it on move/jump. */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
 	void CancelHeldActionMotion();
+	/** Server Ready completes missile substates without interrupting a locally predicted jump/cast. */
+	void FinishMissileMotion();
 
 	/** Seed held action pose without replaying (ObjectCreate corpse already Dead). */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
@@ -266,6 +277,9 @@ protected:
 	bool bHasMesh = false;
 	bool bNeedsInitialPropPose = false;
 	float LocomotionForward = 0.f;
+	ACEWalkingMotion::FSequence WalkingMotion;
+	bool bWalkingTransitionsEnabled = true;
+	bool bWalkingExternallyAdvanced = false;
 	float LocomotionStrafe = 0.f;
 	bool bLocomotionRunning = false;
 	/** Motion playback rate (1 = authored cycle speed; run often > 1). */

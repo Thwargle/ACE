@@ -120,14 +120,15 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  UACEHoverTooltipWidget::SetWidgetTooltip(ObjectGlow,FText::FromString(TEXT("Glow on selected objects and pointer targets, including the center of view during mouse look. Left-click selects; double-click interacts. Applies to desktop and VR.")));
  ShowFrameRate=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("ShowFrameRate"));
  ShowFrameRate->SetWidgetStyle(RoundToggle);ShowFrameRate->SetContent(Label(TEXT("Show FPS overlay")));Box->AddChild(Fixed(ShowFrameRate,272,20));
- Resolution=Combo(TEXT("Resolution"));
+ Resolution=Combo(TEXT("Resolution")); Resolution->Rename(TEXT("DisplayResolution"));
  FScreenResolutionArray Modes; RHIGetAvailableResolutions(Modes,true);
  for (const auto& M:Modes) if(M.Width>=800&&M.Height>=600)
  {
   FString Value=FString::Printf(TEXT("%u x %u"),M.Width,M.Height);
   if(Resolution->FindOptionIndex(Value)<0)Resolution->AddOption(Value);
  }
- WindowMode=Combo(TEXT("Display")); for(const TCHAR* S:{TEXT("Fullscreen"),TEXT("Borderless"),TEXT("Windowed")})WindowMode->AddOption(S);
+ UACEHoverTooltipWidget::SetWidgetTooltip(Resolution,FText::FromString(TEXT("Resolution for fullscreen and windowed modes. Borderless fills the desktop at its native resolution.")));
+ WindowMode=Combo(TEXT("Display")); WindowMode->Rename(TEXT("DisplayMode")); for(const TCHAR* S:{TEXT("Fullscreen"),TEXT("Borderless"),TEXT("Windowed")})WindowMode->AddOption(S);
  FrameLimit=Combo(TEXT("Frame limit")); for(const TCHAR* S:{TEXT("Unlimited"),TEXT("30"),TEXT("60"),TEXT("120"),TEXT("144"),TEXT("240")})FrameLimit->AddOption(S);
  VSync=WidgetTree->ConstructWidget<UCheckBox>();
  FCheckBoxStyle Toggle;
@@ -185,10 +186,26 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  ResetVideo();
  return Super::RebuildWidget();
 }
+void UACEVideoSettingsWidget::NativeTick(const FGeometry& Geometry, float DeltaTime)
+{
+ Super::NativeTick(Geometry,DeltaTime);
+ auto* S=UGameUserSettings::GetGameUserSettings();
+ if (!S || !Resolution || !WindowMode) return;
+ // Alt+Enter changes only the display controls; preserve unapplied quality edits.
+ const auto R=S->GetScreenResolution(); const int32 Mode=int32(S->GetFullscreenMode());
+ if (Mode!=ObservedWindowMode || R!=ObservedResolution)
+ {
+  ObservedWindowMode=Mode; ObservedResolution=R;
+  WindowMode->SetSelectedIndex(Mode);
+  const FString Value=FString::Printf(TEXT("%d x %d"),R.X,R.Y);
+  if(Resolution->FindOptionIndex(Value)<0)Resolution->AddOption(Value);
+  Resolution->SetSelectedOption(Value);
+ }
+}
 void UACEVideoSettingsWidget::ResetVideo()
 {
  auto* S=UGameUserSettings::GetGameUserSettings();if(!S||!Resolution)return;
- const auto R=S->GetScreenResolution();const FString Value=FString::Printf(TEXT("%d x %d"),R.X,R.Y);
+ const auto R=S->GetScreenResolution(); ObservedResolution=R; ObservedWindowMode=int32(S->GetFullscreenMode()); const FString Value=FString::Printf(TEXT("%d x %d"),R.X,R.Y);
  if(Resolution->FindOptionIndex(Value)<0)Resolution->AddOption(Value);Resolution->SetSelectedOption(Value);
  WindowMode->SetSelectedIndex(int32(S->GetFullscreenMode()));
  const int32 Q=S->GetOverallScalabilityLevel();Quality->SetSelectedIndex(Q>=0?Q:5);
@@ -273,6 +290,7 @@ bool UACEVideoSettingsWidget::HasPendingChanges() const
 void UACEVideoSettingsWidget::ApplyVideo()
 {
  auto* S=UGameUserSettings::GetGameUserSettings();if(!S||!Resolution)return;
+ S->ValidateSettings();
  FString X,Y;if(Resolution->GetSelectedOption().Split(TEXT(" x "),&X,&Y))S->SetScreenResolution(FIntPoint(FCString::Atoi(*X),FCString::Atoi(*Y)));
  S->SetFullscreenMode(EWindowMode::Type(FMath::Clamp(WindowMode->GetSelectedIndex(),0,2)));
  if(Quality->GetSelectedIndex()<5 && Quality->GetSelectedIndex()!=InitialQuality) S->SetOverallScalabilityLevel(Quality->GetSelectedIndex());
@@ -284,9 +302,9 @@ void UACEVideoSettingsWidget::ApplyVideo()
  // Validation can reload/reset the config on first launch or after an engine
  // settings-version change. Save our preferences after that reload completes.
  S->SetFrameRateLimit(FCString::Atof(*FrameLimit->GetSelectedOption()));S->SetVSyncEnabled(VSync->IsChecked());
- S->ValidateSettings();S->ApplySettings(false);S->ConfirmVideoMode();S->SaveSettings();
+ S->ApplySettings(false);S->ConfirmVideoMode();S->SaveSettings();
  ApplyRuntimeOptions(); ResetVideo();
- if(auto* PC=Cast<AACEPlayerController>(GetOwningPlayer()))PC->ApplyInWorldInputMode();
+ if(auto* PC=Cast<AACEPlayerController>(GetOwningPlayer()))PC->RefreshDesktopDisplayInputMode();
 }
 
 void UACEVideoSettingsWidget::ApplyRuntimeOptions()

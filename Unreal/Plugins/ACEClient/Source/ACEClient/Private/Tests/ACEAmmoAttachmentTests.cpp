@@ -2,6 +2,7 @@
 #include "Misc/AutomationTest.h"
 #include "Protocol/ACEBinaryWriter.h"
 #include "Protocol/ACEObjectCreateParser.h"
+#include "ACESession.h"
 
 namespace
 {
@@ -51,6 +52,39 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEAmmoAttachmentTest, "ACE.RetailParity.Login
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEAmmoAttachmentTest::RunTest(const FString&)
 {
+	// The first ParentEvent stamp belongs to the wielder, never the arrow.
+	// Exercise local and remote wielders, and either order of object creation.
+	for (bool bLocal : {false, true}) for (int32 Order : {0, 1, 2})
+	{
+		FACESession Session; Session.PlayerGuid = bLocal ? 100 : 200;
+		FACEWorldObject Parent; Parent.Guid=100; Parent.bHasPhysicsTimestamps=true;
+		Parent.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]=7;
+		FACEWorldObject Arrow; Arrow.Guid=300; Arrow.SetupId=0x02000BBA;
+		Arrow.WielderId=100; Arrow.CurrentWieldedLocation=ACEEquipMask::MissileAmmo;
+		Arrow.bHasPhysicsTimestamps=true; Arrow.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]=2;
+		Arrow.PhysicsTimestamps[ACEPhysicsTimeStamp::Position]=4;
+		auto SendParent=[&](uint16 Instance,uint16 Position)
+		{
+			FACEBinaryWriter W; W.WriteUInt32(100);W.WriteUInt32(300);W.WriteUInt32(1);W.WriteUInt32(1);
+			W.WriteUInt16(Instance);W.WriteUInt16(Position);
+			FACEBinaryReader R(W.GetData());Session.HandleParentEvent(R);
+		};
+		if(Order!=1)Session.WorldObjects.Add(100,Parent);
+		if(Order!=2)Session.WorldObjects.Add(300,Arrow);
+		SendParent(7,5);
+		if(Order==1){Session.WorldObjects.Add(100,Parent);Session.ReplayObjectPhysicsEvents(100);}
+		if(Order==2){Session.WorldObjects.Add(300,Arrow);Session.ReplayObjectPhysicsEvents(300);}
+		TestEqual(TEXT("Reload attaches an arrow with a different incarnation from its wielder"),Session.WorldObjects[300].ParentGuid,100);
+		TestEqual(TEXT("Reload retains the combat placement"),Session.WorldObjects[300].PlacementId,1);
+		TestEqual(TEXT("Deferred attachment drains after both objects exist"),Session.PendingObjectPhysicsBytes,0);
+		Session.WorldObjects[300].ParentGuid=0;
+		SendParent(6,99);
+		TestEqual(TEXT("Previous player login cannot reattach an arrow"),Session.WorldObjects[300].ParentGuid,0);
+		SendParent(7,4);
+		TestEqual(TEXT("Old child position sequence cannot reattach an arrow"),Session.WorldObjects[300].ParentGuid,0);
+		SendParent(7,6);
+		TestEqual(TEXT("Next reload reattaches the same equipped stack"),Session.WorldObjects[300].ParentGuid,100);
+	}
 	for (uint16 AmmoType : {1, 2, 4}) // Arrow, bolt, atlatl dart
 	{
 		for (bool bGameDataOnly : {false, true})

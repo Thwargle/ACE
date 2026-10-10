@@ -69,6 +69,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACECollisionSizingTest;
 	friend class FACEPlayableOlthoiTest;
 	friend class FACEVRProtocolTest;
+	friend class FACEAmmoAttachmentTest;
 	friend class FACEPortalLifetimeTest;
 	friend class FACEDesktopHighlightTest;
 	friend class FACEPluginEquipmentTest;
@@ -118,6 +119,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACELedgeSafetyTest;
 	friend class FACEFortTethStairsTest;
 	friend class FACERunSpeedParityTest;
+	friend class FACEWalkingStepTest;
 	friend class FACERetailPkStatusTest;
 	friend class FACERetailScreenTest;
 	friend class FACECharacterInfoParityTest;

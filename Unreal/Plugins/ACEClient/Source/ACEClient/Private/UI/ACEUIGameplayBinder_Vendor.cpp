@@ -2,6 +2,21 @@
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
 
+bool UACEUIGameplayBinder::CanStageVendorSellItem(int32 Guid) const
+{
+	FACEWorldObject Item;
+	if (!Client || !OpenVendorGuid || !Client->GetSession()
+		|| VendorSellSplit.SourceGuid || TradeStackSplit.SourceGuid
+		|| !Client->GetWorldObject(Guid, Item) || Client->GetTradeSelfItems().Contains(Guid)) return false;
+	const bool bMainPack = Guid == Client->GetPlayerGuid();
+	if (!bMainPack && !Client->IsOwnedInventoryItem(Item)) return false;
+	// VendorSellUI::DragItemAcceptable accepts a carried pack as a bulk offer.
+	// Its contents are filtered individually; the pack itself is never sold.
+	if (bMainPack || (Item.ItemType & ACEItemType::Container) || Item.ItemsCapacity > 0)
+		return !Client->GetPackItems(Guid).IsEmpty();
+	return Item.Attuned == 0 && Client->GetSession()->CanVendorBuyItem(Item);
+}
+
 void UACEUIGameplayBinder::UpdateVendorSellSplit()
 {
 	if (!VendorSellSplit.SourceGuid) return;

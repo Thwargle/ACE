@@ -7071,7 +7071,14 @@ void FACESession::HandleParentEvent(FACEBinaryReader& Reader)
 	const int32 Placement = static_cast<int32>(Reader.ReadInt32());
 	const uint16 IncomingInstance = Reader.ReadUInt16();
 	const uint16 IncomingPosOrParent = Reader.ReadUInt16();
-	if (DeferObjectPhysicsEvent(ChildGuid, IncomingInstance, ACEOpcode::ParentEvent, Reader, PayloadStart)) return;
+	// ParentEvent carries the parent's incarnation, but the child's position
+	// sequence (SmartBox::HandleParentEvent / ACE GameMessageParentEvent).
+	// Comparing this instance with the arrow's instance hides loaded ammunition
+	// whenever the wielder has logged in more often than the inventory object.
+	if (ParentGuid != 0 && DeferObjectPhysicsEvent(ParentGuid, IncomingInstance, ACEOpcode::ParentEvent, Reader, PayloadStart)) return;
+	const FACEWorldObject* Child = WorldObjects.Find(ChildGuid);
+	const uint16 ChildInstance = Child ? Child->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] : 0;
+	if (DeferObjectPhysicsEvent(ChildGuid, ChildInstance, ACEOpcode::ParentEvent, Reader, PayloadStart)) return;
 	if (FACEWorldObject* Obj = WorldObjects.Find(ChildGuid))
 	{
 		if (Obj->bHasPhysicsTimestamps

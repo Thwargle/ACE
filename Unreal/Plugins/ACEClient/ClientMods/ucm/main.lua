@@ -653,6 +653,7 @@ local function meta_action(a,s,p)
  elseif t==3 then for _,c in ipairs(a.children) do local e=meta_action(c,s,p);if e then return e end end
  elseif t==4 then
   meta.route=a.route;point=1;route_direction=1;route_pending=nil;route_join_pending=true;route_join_scan=nil;meta.route_revision=meta.route_revision+1;meta.route_changed=true
+  route_trail={};route_returning=false;route_walking=false
  elseif t==5 then
   if #meta.stack>=128 then return 'Meta call stack exceeds 128 entries' end
   meta.stack[#meta.stack+1]=q.ret;meta_state(q.st,s)
@@ -702,6 +703,7 @@ local function meta_tick(s,p)
   if not first and p.vt_loaded_kind=='met' then meta={name='Default',fired={},stack={},options=meta.options,queue={},profile_revision=p.vt_revision,route_revision=0};meta_vars={};meta_state('Default',s) end
   if not first and (p.vt_loaded_kind=='nav' or p.vt_loaded_kind=='met') then
    point=1;route_direction=1;route_pending=nil;route_join_pending=true;route_join_scan=nil;meta.route=nil;meta.route_changed=false
+   route_trail={};route_returning=false;route_walking=false
   end
   meta.loading=false
  end
@@ -1341,6 +1343,9 @@ local function tick(s,p)
   end
   route_returning=false;route_walking=true
   if route_join_pending then
+   -- The host checks nearest entries in bounded batches. An untested entry is
+   -- not an obstruction, and choosing a farther entry mid-scan can skip actions.
+   if s.route_visible_pending then route_join_scan=nil;return {status='Finding nearest route waypoint',continue_work=true} end
    -- Join once, then retain the ordered cursor through combat, looting and
    -- portal/jump acknowledgements. Camera heading must not affect the choice.
    -- Imported NAV action coordinates can be placeholders; only walk-first
@@ -2121,9 +2126,9 @@ local function tick(s,p)
   if wanted(rule,'debuff_yield') then categories[#categories+1]=42 end
   if wanted(rule,'debuff_weakening') then categories[#categories+1]=642 end
   if wanted(rule,'debuff_festering') then categories[#categories+1]=643 end
-  if wanted(rule,'debuff_corruption') then categories[#categories+1]=636 end
-  if wanted(rule,'debuff_destructive') then categories[#categories+1]=637 end
-  if wanted(rule,'debuff_corrosion') then categories[#categories+1]=638 end
+  if wanted(rule,'debuff_corruption') then categories[#categories+1]=638 end
+  if wanted(rule,'debuff_destructive') then categories[#categories+1]=636 end
+  if wanted(rule,'debuff_corrosion') then categories[#categories+1]=637 end
   if wanted(rule,'debuff_imperil') then categories[#categories+1]=116 end
   if wanted(rule,'debuff_vuln') and vulns[element] then categories[#categories+1]=vulns[element] end
   local secondary=rule and vulns[rule.secondary_vuln]
@@ -2565,18 +2570,30 @@ local function run(s,p)
   end
  else follow_path={};follow_target=nil end
  local route=effective.route or {}
- if not effective.navigation or route_teleport~=s.teleport_sequence or route_revision~=(effective.vt_revision or 0) or route_join_pending then
+ local route_changed=route_teleport~=s.teleport_sequence or route_revision~=(effective.vt_revision or 0)
+ if not effective.navigation or route_changed then
   route_trail={};route_returning=false;route_walking=false
  end
  if route_teleport~=s.teleport_sequence or route_revision~=(effective.vt_revision or 0) then route_blocks=0 end
  route_teleport=s.teleport_sequence;route_revision=effective.vt_revision or 0
  if effective.navigation and #route>0 and s.position and (not route_pending or route_pending.kind=='pause') then
-  if route_walking then
+  -- Combat may win the very first decision, before any waypoint is selected.
+  -- Keep that departure position too; join-pending must not erase a chase.
+  if route_walking or (#route_trail==0 and not route_returning) then
    route_trail={{cell=s.position.cell,x=s.position.x,y=s.position.y,z=s.position.z}}
-  elseif not route_returning and #route_trail>0 and distance(s.position,route_trail[#route_trail])>=.6 then
-   if distance(s.position,route_trail[#route_trail])>15 then route_trail={};route_join_pending=true
-   elseif #route_trail>=256 then return pause_navigation('combat detour is too long')
-   else route_trail[#route_trail+1]={cell=s.position.cell,x=s.position.x,y=s.position.y,z=s.position.z} end
+  elseif not route_returning and #route_trail>0 then
+   -- A delayed combat/loot acknowledgment can span more than 15m of ordinary
+   -- travel. Only an actual teleport/revision invalidates the return trail.
+   local function remember(at)
+    if distance(at,route_trail[#route_trail])<.6 then return end
+    if #route_trail>=2048 then return pause_navigation('combat detour is too long') end
+    route_trail[#route_trail+1]={cell=at.cell,x=at.x,y=at.y,z=at.z}
+   end
+   if not route_changed then
+    if s.route_motion_overflow then return pause_navigation('movement history exceeded its limit') end
+    for _,at in ipairs(s.route_motion or {}) do local limit=remember(at);if limit then return limit end end
+   end
+   local limit=remember(s.position);if limit then return limit end
   end
  end
  local blocked=s.movement_blocked_serial or 0
@@ -2599,6 +2616,7 @@ local function run(s,p)
   intent.helper_updates=effective.recovery~=false and ((effective.helper_health_threshold or 0)>0 or (effective.helper_stamina_threshold or 0)>0 or (effective.helper_mana_threshold or 0)>0)
   intent.route_point=point
   intent.route_join_pending=route_join_pending
+  intent.route_track_movement=effective.navigation and #route>0 and not route_walking and not route_returning and (not route_pending or route_pending.kind=='pause') or false
   if p.vt_meta then intent.meta_state=meta.name end
   if meta.route_changed then
    intent.runtime_route=meta.route.route;intent.runtime_loop_route=effective.loop_route==true;intent.runtime_reverse_route=effective.reverse_route==true
@@ -2617,6 +2635,7 @@ return function(s,p)
   if meta.entered then meta.entered=s.time end
   entered=s.time;locked_target=nil;route_blocks=0;blocked_serial=nil
   route_join_pending=true;route_join_scan=nil
+  route_trail={};route_returning=false;route_walking=false
   meta.pending=nil;meta.queue={};meta.forcebuff=false
   if meta.route then meta.route_changed=true end
   route_pending=nil;loot_pending=nil;recovery_pending=nil;buff_item_pending=nil

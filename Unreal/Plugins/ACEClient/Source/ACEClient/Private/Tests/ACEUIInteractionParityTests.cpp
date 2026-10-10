@@ -22,6 +22,8 @@
 #include "ACEInputBindings.h"
 #include "ACERuntimeOptions.h"
 #include "ACEScreenshotSettings.h"
+#include "ACEDesktopDisplay.h"
+#include "GameFramework/GameUserSettings.h"
 #include "ACESpellTargeting.h"
 #include "HAL/PlatformProcess.h"
 #include "Components/EditableTextBox.h"
@@ -65,8 +67,28 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     auto* Client=NewObject<UACEClientSubsystem>(GI); Client->Session=MakeShared<FACESession>();
     auto& Session=*Client->Session; Session.State=EACESessionState::InWorld; Session.PlayerGuid=1234;
     FACEWorldObject Self; Self.Guid=1234; Self.Name=TEXT("UI regression"); Self.bIsPlayer=true; Self.ItemType=ACEItemType::Creature; Session.WorldObjects.Add(Self.Guid,Self);
+    Session.OnChatMessage.AddLambda([Client](const FString& Text,const FString& Sender,int32 Type){Client->ReceiveChatMessage(Text,Sender,Type);});
+    FACEBinaryWriter Welcome;Welcome.WriteString16L(TEXT("Welcome to Asheron's Call\n powered by ACEmulator"));Welcome.WriteInt32(ACEChatMessageType::Broadcast);
+    FACEBinaryReader WelcomeReader(Welcome.GetData());Session.HandleServerMessage(WelcomeReader);
+    FACEBinaryWriter Joined;Joined.WriteUInt32(0x051B);Joined.WriteString16L(TEXT("General"));
+    FACEBinaryReader JoinedReader(Joined.GetData());Session.HandleWeenieErrorWithString(JoinedReader);
     auto* Binder=NewObject<UACEUIGameplayBinder>(); Binder->Initialize(Client,Manager,Canvas,nullptr);
     Canvas->SetGameplayBinder(Binder);
+    TestTrue(TEXT("Login messages received before HUD creation are replayed"),Binder->ChatDisplayLines[0].ContainsByPredicate([](const auto& Line){return Line.Text.Contains(TEXT("Welcome to Asheron's Call"));}));
+    TestTrue(TEXT("Early channel notices survive HUD creation"),Binder->ChatDisplayLines[0].ContainsByPredicate([](const auto& Line){return Line.Text.Contains(TEXT("entered the General"));}));
+    const int32 LoginLines=Binder->ChatDisplayLines[0].Num();
+    Client->ReceiveChatMessage(TEXT("Live message"),FString(),ACEChatMessageType::System);
+    TestEqual(TEXT("Live messages are delivered once"),Binder->ChatDisplayLines[0].Num(),LoginLines+1);
+    for (auto Preferred:{EWindowMode::Fullscreen,EWindowMode::WindowedFullscreen})
+    {
+        auto Mode=Preferred;
+        for(int32 I=0;I<12;++I)
+        {
+            Mode=FACEDesktopDisplay::ToggleMode(Mode,Preferred);
+            TestEqual(TEXT("Fullscreen and borderless each toggle back to windowed repeatedly"),Mode,I%2==0?EWindowMode::Windowed:Preferred);
+        }
+    }
+
     ON_SCOPE_EXIT { Binder->Shutdown(); Canvas->SetGameplayBinder(nullptr); Manager->Shutdown(); Dat->Deinitialize(); TGuardValue<FString> Restore(GGameUserSettingsIni,OriginalSettings); ACEInputBindings::Reload(); };
     FWidgetRenderer Renderer(true,true);
     auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(1600,900),TF_Bilinear,true);
@@ -319,6 +341,25 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
 
     Binder->SyncOptionsPanelTab(TEXT("ConfigPage"));Draw(TEXT("RetailConfigOptions"));
     auto* Video=Cast<UACEVideoSettingsWidget>(Binder->VideoSettings);
+    if (Video)
+    {
+        auto* Settings=UGameUserSettings::GetGameUserSettings();
+        const auto SavedMode=Settings->GetFullscreenMode();const auto SavedSize=Settings->GetScreenResolution();
+        ON_SCOPE_EXIT {Settings->SetFullscreenMode(SavedMode);Settings->SetScreenResolution(SavedSize);Video->ResetVideo();};
+        auto* Mode=Cast<UComboBoxString>(Video->WidgetTree->FindWidget(TEXT("DisplayMode")));
+        auto* Size=Cast<UComboBoxString>(Video->WidgetTree->FindWidget(TEXT("DisplayResolution")));
+        if (TestNotNull(TEXT("Display mode control exists"),Mode) && TestNotNull(TEXT("Resolution control exists"),Size))
+        {
+            Settings->SetFullscreenMode(EWindowMode::Windowed);Settings->SetScreenResolution(FIntPoint(1024,768));
+            Video->NativeTick(FGeometry(),0.f);
+            TestEqual(TEXT("External display changes update the mode selector"),Mode->GetSelectedIndex(),2);
+            TestEqual(TEXT("External resolution changes update the selector"),Size->GetSelectedOption(),FString(TEXT("1024 x 768")));
+            Mode->SetSelectedIndex(0);Video->NativeTick(FGeometry(),0.f);
+            TestEqual(TEXT("Polling preserves an unapplied display selection"),Mode->GetSelectedIndex(),0);
+            Settings->SetFullscreenMode(EWindowMode::WindowedFullscreen);Video->NativeTick(FGeometry(),0.f);
+            TestEqual(TEXT("Alt+Enter to borderless cannot leave Fullscreen displayed"),Mode->GetSelectedIndex(),1);
+        }
+    }
     auto* Glow=Video?Cast<UCheckBox>(Video->WidgetTree->FindWidget(TEXT("ObjectGlow"))):nullptr;
     if(TestNotNull(TEXT("Graphics options exposes object glow"),Glow))
     {

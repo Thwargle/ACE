@@ -18,6 +18,17 @@
 #include "Engine/World.h"
 #include "Engine/GameInstance.h"
 
+void UACEClientSubsystem::ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type)
+{
+	// Transient notices should not reappear after changing the HUD.
+	if (Type != ACEChatMessageType::TransientInfo)
+	{
+		if (ChatHistory.Num() >= 256) ChatHistory.RemoveAt(0);
+		ChatHistory.Add({Text.Left(16384), Sender.Left(256), Type});
+	}
+	OnChatMessage.Broadcast(Text, Sender, Type);
+}
+
 void UACEClientSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
@@ -43,6 +54,8 @@ void UACEClientSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	Session->OnStateChanged.AddLambda([this](EACESessionState S)
 	{
+		if (S == EACESessionState::EnteringWorld || S == EACESessionState::Connecting || S == EACESessionState::Disconnected)
+			ChatHistory.Reset();
 		OnSessionStateChanged.Broadcast(S);
 	});
 	Session->OnCharacterList.AddLambda([this](const TArray<FACECharacterInfo>& Chars, const FString& Name)
@@ -99,7 +112,7 @@ void UACEClientSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	});
 	Session->OnChatMessage.AddLambda([this](const FString& Text, const FString& Sender, int32 Type)
 	{
-		OnChatMessage.Broadcast(Text, Sender, Type);
+		ReceiveChatMessage(Text, Sender, Type);
 	});
 	Session->OnVitalsUpdated.AddLambda([this](const FACEPlayerVitals& Vitals)
 	{
@@ -387,8 +400,11 @@ void UACEClientSubsystem::TickInventorySort(float DeltaTime)
 		}
 		if (Target.StackSize!=SortExpectedTarget
 			|| (SortExpectedSource>0 ? (!bHaveSource || Source.StackSize!=SortExpectedSource) : bHaveSource)) return;
-		SendPutItemInContainer(Target.Guid,SortPlayerGuid,0);
+		// One F press performs one merge. Retail leaves the surviving stack in
+		// its existing pack; another press acts on that selected stack.
 		SortMergeTargetGuid=0;
+		SortSourceGuid=0;
+		return;
 	}
 	if (!bHaveSource) { SortSourceGuid=0; return; }
 	TArray<FACEWorldObject> Candidates=GetPackItems(SortPlayerGuid);
@@ -397,11 +413,14 @@ void UACEClientSubsystem::TickInventorySort(float DeltaTime)
 	{
 		if (!IsOwnedInventoryItem(Target) || Offered.Contains(Target.Guid)) continue;
 		const int32 Amount=ACEInventoryRules::MergeAmount(Source,Target);
-		if (Amount<=0) continue;
+		// ItemHolder::AttemptAutoMerge requires room for the entire selected
+		// stack, unlike an explicit drag onto a partially full stack.
+		if (Amount<FMath::Max(1,Source.StackSize)) continue;
 		SortMergeTargetGuid=Target.Guid; SortWaitSeconds=0;
 		SortExpectedSource=FMath::Max(1,Source.StackSize)-Amount;
 		SortExpectedTarget=FMath::Max(1,Target.StackSize)+Amount;
 		SendStackableMerge(Source.Guid,Target.Guid,Amount);
+		SelectObject(Target.Guid); // ItemHolder::AttemptMerge selects the survivor immediately.
 		return;
 	}
 	SendPutItemInContainer(Source.Guid,SortPlayerGuid,0);

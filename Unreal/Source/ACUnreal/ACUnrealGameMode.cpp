@@ -187,19 +187,8 @@ void AACUnrealGameMode::StartPlay()
 		Atmo->Set(0, ECVF_SetByCode);
 	}
 
-	if (GEngine && GetWorld() && !GetWorld()->IsPlayInEditor())
-	{
-		if (UGameUserSettings* Settings = GEngine->GetGameUserSettings())
-		{
-			Settings->SetFullscreenMode(EWindowMode::WindowedFullscreen);
-			const FIntPoint Desktop = Settings->GetDesktopResolution();
-			if (Desktop.X > 0 && Desktop.Y > 0)
-			{
-				Settings->SetScreenResolution(Desktop);
-			}
-			Settings->ApplySettings(false);
-		}
-	}
+	// The engine restores GameUserSettings before creating the window.
+	// Do not overwrite the saved mode and resolution at every StartPlay.
 
 	UE_LOG(LogTemp, Warning, TEXT("ACE: AACUnrealGameMode::StartPlay — DefaultPlayerControllerClass=%s"),
 		PlayerControllerClass ? *PlayerControllerClass->GetName() : TEXT("NULL"));

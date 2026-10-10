@@ -19,6 +19,12 @@ public:
  { return Owner.IsValid() && Owner->FilterCaptureKey(Event,true); }
  virtual bool HandleKeyUpEvent(FSlateApplication&,const FKeyEvent& Event) override
  { return Owner.IsValid() && Owner->FilterCaptureKey(Event,false); }
+ virtual bool HandleMouseButtonDownEvent(FSlateApplication&,const FPointerEvent& Event) override
+ { return Owner.IsValid() && Owner->FilterCaptureMouseButton(Event,true); }
+ virtual bool HandleMouseButtonUpEvent(FSlateApplication&,const FPointerEvent& Event) override
+ { return Owner.IsValid() && Owner->FilterCaptureMouseButton(Event,false); }
+ virtual bool HandleMouseButtonDoubleClickEvent(FSlateApplication&,const FPointerEvent& Event) override
+ { return Owner.IsValid() && Owner->FilterCaptureMouseButton(Event,true); }
  virtual bool HandleMouseWheelOrGestureEvent(FSlateApplication&,const FPointerEvent& Event,const FPointerEvent*) override
  { return Owner.IsValid() && Owner->FilterCaptureWheel(Event); }
  virtual bool HandleAnalogInputEvent(FSlateApplication&,const FAnalogInputEvent& Event) override
@@ -39,29 +45,43 @@ bool UACERetailKeySelector::FilterCaptureWheel(const FPointerEvent& Event)
 {
  const auto Selector=GetCachedWidget();
  if(!GetIsSelectingKey() || !Selector || FMath::IsNearlyZero(Event.GetWheelDelta()))return false;
- // SInputKeySelector handles mouse buttons but has no wheel capture. Complete
- // its normal key-up path so capture ends and the same binding delegate runs.
+ // Wheel input is a pulse, with modifiers from the actual pointer event.
  const FKey Key=Event.GetWheelDelta()>0?EKeys::MouseScrollUp:EKeys::MouseScrollDown;
  Selector->OnKeyUp(Selector->GetCachedGeometry(),
   FKeyEvent(Key,Event.GetModifierKeys(),Event.GetUserIndex(),false,0,0));
  return true;
 }
 
+bool UACERetailKeySelector::FilterCaptureMouseButton(const FPointerEvent& Event,bool Down)
+{
+ // Stock SInputKeySelector strips all modifiers from mouse clicks. Route clicks
+ // through the same chord capture as keyboard/controller buttons instead.
+ return FilterCaptureKey(FKeyEvent(Event.GetEffectingButton(),Event.GetModifierKeys(),Event.GetUserIndex(),false,0,0),Down);
+}
+
 bool UACERetailKeySelector::FilterCaptureKey(const FKeyEvent& Event,bool Down)
 {
- if(!GetIsSelectingKey()) { CapturePressedKeys.Reset(); return false; }
+ if(!GetIsSelectingKey()) { CapturePressedKeys.Reset(); CaptureChord.Reset(); return false; }
  if(Down)
  {
-  if(!Event.IsRepeat()) CapturePressedKeys.Add(Event.GetKey());
+  if(!Event.IsRepeat())
+  {
+   CapturePressedKeys.Add(Event.GetKey());
+   if(!Event.GetKey().IsModifierKey() && !CaptureChord.IsSet())CaptureChord=Event;
+  }
   return true;
  }
  // Windows can synthesize modifier releases after a focus change. Only a key
  // actually pressed during this capture may complete the binding.
  if(CapturePressedKeys.Remove(Event.GetKey())!=0)
  {
+  // A held non-modifier owns the capture. For Shift+R, either release order
+  // must bind Shift+R rather than Shift alone or an unmodified R.
+  if(CaptureChord.IsSet() && CaptureChord->GetKey()!=Event.GetKey())return true;
+  const FKeyEvent ChordEvent=CaptureChord.IsSet()?CaptureChord.GetValue():Event;
   // Deliver to the selector that owns capture. Platform focus/navigation must
   // not consume Tab/Enter or route the release to a different Slate widget.
-  if(const auto Selector=GetCachedWidget()) Selector->OnKeyUp(Selector->GetCachedGeometry(),Event);
+  if(const auto Selector=GetCachedWidget()) Selector->OnKeyUp(Selector->GetCachedGeometry(),ChordEvent);
  }
  return true;
 }
@@ -69,7 +89,7 @@ void UACERetailKeySelector::ReleaseSlateResources(bool ReleaseChildren)
 {
  if(CaptureFilter && FSlateApplication::IsInitialized())
   FSlateApplication::Get().UnregisterInputPreProcessor(CaptureFilter);
- CaptureFilter.Reset();CapturePressedKeys.Reset();
+ CaptureFilter.Reset();CapturePressedKeys.Reset();CaptureChord.Reset();
  Super::ReleaseSlateResources(ReleaseChildren);
 }
 void UACERetailKeySelector::CancelCapture()
@@ -88,6 +108,7 @@ TSharedRef<SWidget> UACERetailKeySelector::RebuildWidget()
 void UACERetailKeySelector::CaptureStateChanged()
 {
  CapturePressedKeys.Reset();
+ CaptureChord.Reset();
  if(!FSlateApplication::IsInitialized()) return;
  if(GetIsSelectingKey() && !CaptureFilter)
  {
@@ -103,6 +124,9 @@ void UACERetailKeySelector::CaptureStateChanged()
 void UACERetailKeySelector::InitializeBinding(FKey Key,int32 InSlot)
 {
  ActionKey=Key;BindingSlot=InSlot;SetAllowModifierKeys(true);SetAllowGamepadKeys(true);
+ // The engine reserves controller Start as another Escape by default. All
+ // controller buttons are bindable here; keyboard Escape still cancels.
+ SetEscapeKeys({});
  FTextBlockStyle Text=FCoreStyle::Get().GetWidgetStyle<FTextBlockStyle>("NormalText");
  Text.SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),9));
  Text.SetColorAndOpacity(FSlateColor(FLinearColor(.95f,.91f,.78f,1)));
@@ -116,7 +140,7 @@ void UACERetailKeySelector::InitializeBinding(FKey Key,int32 InSlot)
  SetMargin(FMargin(0));
  SetNoKeySpecifiedText(FText::GetEmpty());
  SetKeySelectionText(FText::FromString(TEXT("Press a key")));
- UACEHoverTooltipWidget::SetWidgetTooltip(this, FText::FromString(TEXT("Click, then press a key, mouse button, controller button, move a stick, or scroll the wheel. Backspace clears; Escape cancels. Controller mappings are saved locally; retail keymap files contain the three keyboard/mouse columns.")));
+ UACEHoverTooltipWidget::SetWidgetTooltip(this, FText::FromString(TEXT("Click, then press a key, mouse button, controller button, move a stick, or scroll the wheel. Hold Shift, Ctrl, or Alt to bind a combination. Backspace alone clears; Escape cancels. Controller mappings are saved locally; retail keymap files contain the three keyboard/mouse columns.")));
  SetSelectedKey(ACEInputBindings::Get(Key,InSlot));
  OnKeySelected.AddDynamic(this,&UACERetailKeySelector::AcceptBinding);
  OnIsSelectingKeyChanged.AddDynamic(this,&UACERetailKeySelector::CaptureStateChanged);
@@ -145,12 +169,19 @@ void UACERetailKeySelector::RefreshBinding()
   Caption.ReplaceInline(TEXT("Left Thumbstick"),TEXT("L Stick"));Caption.ReplaceInline(TEXT("Right Thumbstick"),TEXT("R Stick"));
   Caption.ReplaceInline(TEXT("Left Trigger"),TEXT("LT"));Caption.ReplaceInline(TEXT("Right Trigger"),TEXT("RT"));
   Caption.ReplaceInline(TEXT("Left Shoulder"),TEXT("LB"));Caption.ReplaceInline(TEXT("Right Shoulder"),TEXT("RB"));
-  if(Chord.Key==EKeys::Gamepad_FaceButton_Bottom)Caption=TEXT("A / Cross");
-  else if(Chord.Key==EKeys::Gamepad_FaceButton_Right)Caption=TEXT("B / Circle");
-  else if(Chord.Key==EKeys::Gamepad_FaceButton_Left)Caption=TEXT("X / Square");
-  else if(Chord.Key==EKeys::Gamepad_FaceButton_Top)Caption=TEXT("Y / Triangle");
-  else if(Chord.Key==EKeys::Gamepad_Special_Left)Caption=TEXT("Back / View");
-  else if(Chord.Key==EKeys::Gamepad_Special_Right)Caption=TEXT("Start / Menu");
+  FString ButtonName;
+  if(Chord.Key==EKeys::Gamepad_FaceButton_Bottom)ButtonName=TEXT("A / Cross");
+  else if(Chord.Key==EKeys::Gamepad_FaceButton_Right)ButtonName=TEXT("B / Circle");
+  else if(Chord.Key==EKeys::Gamepad_FaceButton_Left)ButtonName=TEXT("X / Square");
+  else if(Chord.Key==EKeys::Gamepad_FaceButton_Top)ButtonName=TEXT("Y / Triangle");
+  else if(Chord.Key==EKeys::Gamepad_Special_Left)ButtonName=TEXT("Back / View");
+  else if(Chord.Key==EKeys::Gamepad_Special_Right)ButtonName=TEXT("Start / Menu");
+  if(!ButtonName.IsEmpty())
+  {
+   const FString Modifiers=(Chord.bCtrl?TEXT("Ctrl+"):FString())+(Chord.bAlt?TEXT("Alt+"):FString())
+    +(Chord.bShift?TEXT("Shift+"):FString())+(Chord.bCmd?TEXT("Cmd+"):FString());
+   Caption=Modifiers+ButtonName;
+  }
   Caption.ReplaceInline(TEXT("L Stick "),TEXT("L "));Caption.ReplaceInline(TEXT("R Stick "),TEXT("R "));
   RetailLabel->SetText(FText::FromString(GetIsSelectingKey()?TEXT("Press a key"):Caption));
  }
@@ -162,6 +193,6 @@ void UACERetailKeySelector::RefreshBinding()
 void UACERetailKeySelector::AcceptBinding(FInputChord Chord)
 {
  if (bSyncing) return;
- if (Chord.Key==EKeys::BackSpace) Chord=FInputChord();
+ if (Chord.Key==EKeys::BackSpace && !Chord.bShift && !Chord.bCtrl && !Chord.bAlt && !Chord.bCmd) Chord=FInputChord();
  ACEInputBindings::Set(ActionKey,BindingSlot,Chord);
 }

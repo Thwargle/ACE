@@ -69,6 +69,11 @@ bool FACEAppraisalPresentationTest::RunTest(const FString&)
     TestTrue(TEXT("Crafting and combat stats form separate paragraphs"),ArmorBody.Contains(TEXT("Workmanship: Flawless (7)\n\nBonus to Melee Defense:")));
     TestTrue(TEXT("Defense bonuses precede a separate armor paragraph in retail order"),ArmorBody.Contains(TEXT("Melee Defense: +10.0%.\nBonus to Missile Defense: +20.0%.\n\nArmor Level: 100\nSlashing:")));
     TestFalse(TEXT("Sparse armor sections have no triple line breaks"),ArmorBody.Contains(TEXT("\n\n\n")));
+    FACEAppraisalInfo Cloak; Cloak.bSuccess=true; Cloak.IntProperties={{28,0}};
+    Cloak.ArmorResistances={1.f,1.f};
+    TestFalse(TEXT("Zero armor on cloaks does not fabricate an armor paragraph"),ACEAppraisalFormatting::ItemDetails(Cloak).Contains(TEXT("Armor Level:")));
+    Cloak.IntProperties[28]=100;Cloak.ArmorResistances.Reset();
+    TestFalse(TEXT("Armor modifiers require the retail appraisal armor profile"),ACEAppraisalFormatting::ItemDetails(Cloak).Contains(TEXT("Armor Level:")));
     FACEAppraisalInfo Bow;Bow.bSuccess=Bow.bHasWeaponProfile=true;Bow.ItemType=ACEItemType::MissileWeapon;
     Bow.IntProperties={{9,static_cast<int32>(ACEEquipMask::MissileWeapon)},{50,1}};
     Bow.WeaponDamageMod=2.5f;Bow.Damage=5;Bow.WeaponTime=20;Bow.WeaponMaxVelocity=40;

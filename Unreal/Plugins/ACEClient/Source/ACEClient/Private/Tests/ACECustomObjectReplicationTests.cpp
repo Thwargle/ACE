@@ -103,6 +103,9 @@ bool FACECustomObjectReplicationTest::RunTest(const FString&)
 	}
 	FACESession Session;
 	Session.PlayerGuid = 100;
+	FACEWorldObject Wielder; Wielder.Guid=100; Wielder.bHasPhysicsTimestamps=true;
+	Wielder.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]=3;
+	Session.WorldObjects.Add(100,Wielder);
 	FObjectPacket P;
 	int32 Deleted = 0;
 	Session.OnObjectDeleted.AddLambda([&](int32 Guid) { if (Guid == P.Guid) ++Deleted; });
@@ -276,6 +279,8 @@ bool FACECustomObjectReplicationTest::RunTest(const FString&)
 	// None of the early physics events is a substitute for the first full Create.
 	P = FObjectPacket(); Session.PlayerGuid = 100; ContainStub();
 	TestTrue(TEXT("ContainId marks a partial inventory record awaiting physics"), Session.WorldObjects[P.Guid].bPhysicsDescriptionPending);
+	Wielder.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]=P.Instance;
+	Session.WorldObjects.Add(100,Wielder);
 	Appearance(P.Instance, 8, 8); State(P.Instance, 8, ACEPhysicsState::Hidden); Parent(P.Instance, 8);
 	TestEqual(TEXT("Physics events wait while only the inventory record exists"), Session.PendingObjectPhysicsEvents[P.Guid].Num(), 3);
 	Create();

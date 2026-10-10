@@ -366,7 +366,7 @@ inline FString ItemDetails(const FACEAppraisalInfo& Info, UACEDatSubsystem* Dat 
         if (const auto* V = Info.FloatProperties.Find(E.Key))
             Text += FString::Printf(TEXT("Bonus to %s: %+.1f%%.\n"), E.Value, (*V-1.0)*100.0);
     const bool HasArmor = !Info.ArmorResistances.IsEmpty() && Info.IntProperties.FindRef(28) > 0;
-    if (HasArmor || (!Shield && Info.IntProperties.Contains(28)))
+    if (HasArmor)
     {
         // Appraisal_ShowArmorMods starts with an explicit newline.
         AppendItemText(Text,FString::Printf(TEXT("Armor Level: %d"),Info.IntProperties.FindRef(28)),true);

@@ -22,6 +22,7 @@ public:
  UFUNCTION() void AcceptBinding(FInputChord Chord);
  UFUNCTION() void CaptureStateChanged();
  bool FilterCaptureKey(const FKeyEvent& Event,bool Down);
+ bool FilterCaptureMouseButton(const FPointerEvent& Event,bool Down);
  bool FilterCaptureWheel(const FPointerEvent& Event);
  bool FilterCaptureAnalog(const FAnalogInputEvent& Event);
  virtual void ReleaseSlateResources(bool ReleaseChildren) override;
@@ -29,4 +30,6 @@ protected:
  virtual TSharedRef<SWidget> RebuildWidget() override;
  TSharedPtr<IInputProcessor> CaptureFilter;
  TSet<FKey> CapturePressedKeys;
+ // Snapshot the chord on press; releasing a modifier first must not change it.
+ TOptional<FKeyEvent> CaptureChord;
 };

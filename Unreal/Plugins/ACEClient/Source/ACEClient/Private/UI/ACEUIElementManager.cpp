@@ -27,6 +27,7 @@ namespace
 	bool IsFixedSizeFloaty(const FString& Name)
 	{
 		return Name == TEXT("RootGameplay_FloatyIndicators_Field")
+			|| Name == TEXT("RootGameplay_Radar_Field")
 			|| Name == TEXT("RootGameplay_PowerBar_Field") || Name == TEXT("RootFloatyPowerBar_Field");
 	}
 
@@ -63,6 +64,8 @@ namespace
 			return;
 		}
 		const FString& Name = Node->ElementName;
+		// gmRadarUI::UpdateLockedStatus hides the native move button while locked.
+		if (Name == TEXT("RadarDrag")) Node->bVisible = !bUiLocked;
 		if (!Name.IsEmpty() && IsFrameChromeName(Name))
 		{
 			const bool bLockedVariant = Name.Contains(TEXT("_Locked"));
@@ -610,6 +613,7 @@ TSharedPtr<FACEUIElement> UACEUIElementManager::FindFloatyRoot(const TSharedPtr<
 	for (TSharedPtr<FACEUIElement> Cur = Element; Cur.IsValid(); Cur = Cur->Parent.Pin())
 	{
 		if (Cur->ElementName.StartsWith(TEXT("RootGameplay_Floaty"))
+			|| Cur->ElementName == TEXT("RootGameplay_Radar_Field")
 			|| Cur->ElementName == TEXT("RootGameplay_PowerBar_Field")
 			|| Cur->ElementName == TEXT("RootFloatyPowerBar_Field"))
 		{
@@ -626,6 +630,9 @@ bool UACEUIElementManager::IsFloatyDragHandle(const TSharedPtr<FACEUIElement>& E
 		return false;
 	}
 	const FString& Name = Element->ElementName;
+	// The native radar grip is a Button, not a Dragbar. Keep the radar face
+	// available for blip selection and only move it from the authored grip.
+	if (Name == TEXT("RadarDrag")) return true;
 	// This meter has no clickable controls. Its fill/label are safe grab areas,
 	// so repositioning a charging jump does not require hitting a five-pixel rim.
 	if (const auto Window = FindFloatyRoot(Element); Window

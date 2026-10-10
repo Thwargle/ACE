@@ -11,8 +11,13 @@
 #include "RenderingThread.h"
 #include "ImageUtils.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Components/Border.h"
 #include "ACEDatSubsystem.h"
 #include "ACEClientSubsystem.h"
+#include "ACEPlayerController.h"
+#include "SocketSubsystem.h"
+#include "Sockets.h"
+#include "Protocol/ACEIsaac.h"
 #include "ACESession.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
@@ -215,7 +220,74 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     TestFalse(TEXT("Clearing selection hides split controls"), bool(Stack->bVisible));
     TestEqual(TEXT("Clearing restores empty field state"), Field->DefaultState, 0u);
     TestEqual(TEXT("Clearing hides name overlay"), Label->GetVisibility(), ESlateVisibility::Collapsed);
+    FACEWorldObject Corpse;Corpse.Guid=400;Corpse.Name=TEXT("Corpse of rat");Corpse.ItemType=ACEItemType::Container;Corpse.ItemsCapacity=24;
+    Session.WorldObjects.Add(Corpse.Guid,Corpse);Session.OpenExternalContainerGuid=Corpse.Guid;
+    FACEWorldObject Loot=Item;Loot.Guid=401;Loot.ContainerId=Corpse.Guid;Loot.ObjectDescriptionFlags=0;Loot.Name=TEXT("Ring");
+    Session.WorldObjects.Add(Loot.Guid,Loot);
+    FACEContainerItemRef Ref;Ref.ItemGuid=Loot.Guid;Ref.ContainerType=0;Session.ContainerContents.Add(Corpse.Guid,{Ref});
+    Binder->HandleExternalContainerOpened(Corpse.Guid);Draw(TEXT("CorpseBeforeID"));
+    const int32 LootSlot=Binder->ExtItemGuids.IndexOfByKey(Loot.Guid);
+    if(TestTrue(TEXT("Corpse loot is displayed"),Binder->ExtItemSlots.IsValidIndex(LootSlot)))
+    {
+        const auto& Geometry=Binder->ExtItemSlots[LootSlot]->GetCachedGeometry();
+        const auto Point=Canvas->GetCachedGeometry().AbsoluteToLocal(Geometry.LocalToAbsolute(Geometry.GetLocalSize()*.5));
+        Client->SelectObject(Corpse.Guid);
+        TestTrue(TEXT("Right click is handled by the corpse slot"),Binder->TryHandleOverlayClick(Point,true));
+        TestEqual(TEXT("Right click selects the inspected loot for the pickup binding"),Session.GetSelectedObject().Guid,Loot.Guid);
+        TestEqual(TEXT("Binder pickup selection follows inspection"),Binder->LastSelection.Guid,Loot.Guid);
+    }
+    Binder->HandleExternalContainerClosed(Corpse.Guid);Session.OpenExternalContainerGuid=0;
+    FACEWorldObject Ammo;Ammo.Guid=300;Ammo.WielderId=Self.Guid;Ammo.CurrentWieldedLocation=ACEEquipMask::MissileAmmo;Ammo.StackSize=868;
+    Session.WorldObjects.Add(Ammo.Guid,Ammo);
+    Binder->CombatMode=int32(ACECombatMode::Missile);Binder->SyncCombatModeButtons();Binder->SyncCombatAmmoCount();
+    TestEqual(TEXT("Readied arrow count appears on missile button"),Binder->CombatAmmoLabel->GetText().ToString(),FString(TEXT("868")));
+    Session.WorldObjects[Ammo.Guid].StackSize=867;Binder->SyncCombatAmmoCount();
+    TestEqual(TEXT("Count updates after firing"),Binder->CombatAmmoLabel->GetText().ToString(),FString(TEXT("867")));
+    FACEWorldObject Thrown=Ammo;Thrown.Guid=301;Thrown.CurrentWieldedLocation=ACEEquipMask::MissileWeapon;Thrown.MaxStackSize=100;Thrown.StackSize=20;
+    Session.WorldObjects.Add(Thrown.Guid,Thrown);Binder->SyncCombatAmmoCount();
+    TestEqual(TEXT("Thrown stack takes precedence over ammunition"),Binder->CombatAmmoLabel->GetText().ToString(),FString(TEXT("20")));
+    Draw(TEXT("MissileAmmo"));
+    Session.WorldObjects.Remove(Ammo.Guid);Session.WorldObjects.Remove(Thrown.Guid);Binder->SyncCombatAmmoCount();
+    TestEqual(TEXT("No ammunition clears the count"),Binder->CombatAmmoLabel->GetVisibility(),ESlateVisibility::Collapsed);
     TestTrue(TEXT("UI regression has no network connection"), Session.CachedC2SPackets.IsEmpty());
+    auto* World=UWorld::CreateWorld(EWorldType::Game,false);
+    auto* PC=World->SpawnActor<AACEPlayerController>();PC->Client=Client;PC->DatGameplayBinder=Binder;
+    Binder->PlayerController=PC;
+    auto* Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+    auto Address=Sockets->CreateInternetAddr();bool Valid=false;Address->SetIp(TEXT("127.0.0.1"),Valid);Address->SetPort(0);
+    auto* Receiver=Sockets->CreateSocket(NAME_DGram,TEXT("UI pickup receiver"),false);
+    if(!TestTrue(TEXT("Loopback binds"),Receiver && Receiver->Bind(*Address))) return false;
+    Receiver->GetAddress(*Address);
+    Session.SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("UI pickup sender"),false);
+    Session.SocketC2S->SetNonBlocking(true);Session.ServerC2SAddr=Address;Session.IssacClient=MakeUnique<FACEIsaac>(123u);
+    ON_SCOPE_EXIT {
+        Session.SocketC2S->Close();Sockets->DestroySocket(Session.SocketC2S);Session.SocketC2S=nullptr;
+        Receiver->Close();Sockets->DestroySocket(Receiver);Session.ServerC2SAddr.Reset();
+        Binder->PlayerController=nullptr;PC->Client=nullptr;PC->DatGameplayBinder=nullptr;World->DestroyWorld(false);
+    };
+    auto HasAction=[&](uint32 Action,int32 Object)
+    {
+        for(const auto& Pair:Session.CachedC2SPackets)
+        {
+            FACEBinaryReader Wire(Pair.Value.Payload);Wire.Skip(16);
+            if(Wire.ReadUInt32()!=ACEOpcode::GameAction)continue;Wire.ReadUInt32();
+            if(Wire.ReadUInt32()==Action && Wire.ReadInt32()==Object)return true;
+        }
+        return false;
+    };
+    Session.WorldObjects[Self.Guid].ItemsCapacity=24;
+    Session.OpenExternalContainerGuid=Corpse.Guid;Client->SelectObject(Loot.Guid);
+    PC->InteractWithSelectedObject();
+    TestTrue(TEXT("F pickup sends inspected corpse item's GUID to server"),HasAction(ACEGameAction::PutItemInContainer,Loot.Guid));
+    Session.OpenExternalContainerGuid=0;
+    FACEWorldObject NPC;NPC.Guid=450;NPC.Name=TEXT("Previously selected NPC");NPC.ItemType=ACEItemType::Creature;
+    Session.WorldObjects.Add(NPC.Guid,NPC);Client->SelectObject(NPC.Guid);
+    Session.CachedC2SPackets.Reset();
+    Session.WorldObjects[Item.Guid].ObjectDescriptionFlags=0;
+    Binder->InvDragGuid=Item.Guid;Binder->InvDragSourcePack=Self.Guid;Binder->bInvDragPending=Binder->bInvDragActive=true;
+    TestTrue(TEXT("Empty-world drag release is consumed"),Binder->TryFinishInventoryDrag(FVector2D(800,300)));
+    TestTrue(TEXT("Empty release drops the item despite an old NPC selection"),HasAction(ACEGameAction::DropItem,Item.Guid));
+    TestFalse(TEXT("Drag miss cannot give to the old selection"),HasAction(ACEGameAction::GiveObjectRequest,NPC.Guid));
     return !HasAnyErrors();
 }
 #endif

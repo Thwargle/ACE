@@ -35,6 +35,24 @@ In VR, More â†’ Plugins / UCM opens UCM directly, with a separate managemen
 
 ### Display and controls
 
+**UCM Log** is a separate movable, resizable desktop window. Open it with the
+**LOG** button on the plugin bar, **Open UCM Log** in Overview or UCM Micro, or
+`/ucm log`. The **Log** page inside UCM also works in VR. Closing the log does not
+stop UCM or recording. Window position and size are saved.
+
+The log keeps the latest **1,000 events**, replacing the oldest. It records local
+timestamps, activity changes, route recovery attempts, pauses and errors, with
+the setup, route, waypoint and location where available. Unchanged polling
+statuses are skipped. **Problems only** filters warnings/errors; **Copy log**
+copies the visible history. Scroll back to pause following, or enable **Follow
+latest** to return to new messages. The latest problem remains visible even if
+its original entry has rolled out of the history. **Clear** clears both.
+
+History is saved every ten seconds while changed, and when UCM stops, to the
+single bounded file `Saved/ClientPlugins/ucm-log.json`. It replaces that file
+instead of appending forever; a crash can lose the last ten seconds. No chat
+transcripts or credentials are recorded.
+
 Loot Editor and other plugin text fields keep typed keys out of gameplay actions.
 **Keyboard > UI > Show / hide interface** is rebindable; replace Alt+Z there if
 NVIDIA or another application captures it.

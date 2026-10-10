@@ -7,6 +7,9 @@
 #include "ACEInputBindings.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACECharacterAppearanceComponent.h"
+#include "ACEWorldEntityActor.h"
+#include "Protocol/ACEBinaryReader.h"
+#include "Protocol/ACEBinaryWriter.h"
 #include "ACEHoverTooltipWidget.h"
 #include "Dat/ACEDatCursor.h"
 #include "Dat/ACEDatFileTypes.h"
@@ -336,6 +339,70 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
  Session->PlayerVitals.CarryingCapacityAugs=5;
  TestTrue(TEXT("Carrying augmentations use the server/retail capacity"),FMath::IsNearlyEqual(Client->GetLocomotionSpeed(true),12.225725f,.00001f));
  VR->bActive=false;
+ // Strafe cadence must use the interpreted SideStep speed, independently of
+ // the forward run rate. Exercise the real controller and compare its pose
+ // with the authored DAT cycle and a server UpdateMotion for another player.
+ TFunction<void()> CheckStrafe = [&]
+ {
+  Self.MotionTableId=0x09000001;Session->WorldObjects[Self.Guid].Scale=1.f;
+  if(!TestTrue(TEXT("Strafe avatar builds"),App->ApplyWorldObject(Self,100,false)))return;
+  App->SetPreviewCapture(true);
+  auto Other=Self;Other.Guid=23456;Other.bIsSelf=false;
+  Session->WorldObjects.Add(Other.Guid,Other);
+  auto* Remote=World->SpawnActor<AACEWorldEntityActor>();Remote->InitializeFromObject(Other,100,true);
+  auto* RemoteApp=Remote->Appearance.Get();RemoteApp->SetPreviewCapture(true);
+  if(!TestEqual(TEXT("Remote strafe avatar has the same parts"),RemoteApp->GetPartCount(),App->GetPartCount()))return;
+  FACEObjectMotionState Received;
+  const auto Handle=Session->OnMotionUpdate.AddLambda([&](int32 Guid,const FACEObjectMotionState& Motion)
+   {if(Guid==Other.Guid){Received=Motion;Remote->ApplyMotionState(Motion);}});
+  ON_SCOPE_EXIT{Session->OnMotionUpdate.Remove(Handle);Remote->Destroy();};
+  struct FStrafeCase {int32 Skill,Stamina;float Burden,RunSideRate;};
+  const FStrafeCase StrafeCases[]={{0,500,0,1.248f},{150,500,0,2.71885714f},
+   {593,500,0,3.f},{593,500,1.5f,2.5312131f},{593,0,0,1.248f}};
+  uint16 MotionStamp=0;
+  for(int32 FPS:{30,90,144})for(bool Run:{false,true})for(int Direction:{-1,1})
+  for(uint32 Style:{ACEMotion::StanceNonCombat,ACEMotion::StanceMagic,0x8000003eu,0x8000003fu})
+  for(const auto& C:StrafeCases)
+  {
+   PC->PlayerInput->FlushPressedKeys();PC->PlayerInput->ProcessInputStack({},1.f/FPS,false);
+   PC->bJumpAirborne=PC->bJumpCharging=PC->bStandingJumpLocked=false;
+   PC->LandingWorldAceVelocity=FVector::ZeroVector;PC->LandingRootTrack.Reset();PC->StepHoldSeconds=0;
+   PC->bServerMoveToActive=false;PC->ForwardSent=PC->RightSent=0;PC->bWasMoving=false;
+   Session->bHasPlayerEncumbrance=false;Client->SetBurden(C.Burden);Client->SetRunSkill(C.Skill);
+   Session->PlayerVitals.Stamina=C.Stamina;
+   FACEPosition Pose;Pose.CellId=0x01010001;Pose.SetLocationFromUnreal(StartFeet,100);
+   Pose.SetAceFacingFromUnrealDir2D(FVector::XAxisVector);Session->SetLocalPosition(Pose);
+   PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;
+   Pawn->SetActorLocationAndRotation(StartFeet+FVector(0,0,88),Pose.ToUnrealQuat());
+   for(auto* Appearance:{App,RemoteApp})
+   {
+    Appearance->ClearActionMotion();Appearance->ResetWalkingMotion();Appearance->PreferredStyle=Style;
+    Appearance->AnimTime=Appearance->DeferredPoseDeltaTime=0;Appearance->LocomotionForward=Appearance->LocomotionStrafe=0;
+   }
+   const float ExpectedRate=Run?C.RunSideRate:1.248f;
+   FACEBinaryWriter W;W.WriteUInt32(Other.Guid);W.WriteUInt16(0);W.WriteUInt16(++MotionStamp);W.WriteUInt16(0);W.WriteUInt8(0);W.Align();
+   W.WriteUInt8(0);W.WriteUInt8(0);W.WriteUInt16(uint16(Style));
+   W.WriteUInt32(0x18);W.WriteUInt16(0x000f);W.WriteFloat(Direction*ExpectedRate);W.Align();
+   FACEBinaryReader Reader(W.GetData());Session->HandleUpdateMotion(Reader);
+   TestTrue(TEXT("Network strafe preserves the already interpreted animation multiplier"),FMath::IsNearlyEqual(Received.AnimPlayRate,ExpectedRate,.00001f));
+   Key(Direction>0?EKeys::C:EKeys::Z,true);if(!Run)Key(EKeys::LeftShift,true);
+   const int32 Frames=FMath::RoundToInt(FPS*.7f);
+   for(int32 Frame=0;Frame<Frames;++Frame)
+   {PC->PlayerTick(1.f/FPS);App->TickComponent(1.f/FPS,LEVELTICK_All,nullptr);RemoteApp->TickComponent(1.f/FPS,LEVELTICK_All,nullptr);}
+   TestTrue(TEXT("Local strafe cadence matches retail's walk multiplier and run cap"),FMath::IsNearlyEqual(App->LocomotionPlayRate,ExpectedRate,.00001f));
+   const double Time=double(Frames)/FPS,Travel=FVector::Dist2D(StartFeet,Pawn->GetActorLocation())/100.;
+   TestTrue(TEXT("Cadence correction preserves retail lateral travel"),FMath::Abs(Travel-Time*ExpectedRate*1.25)<.005);
+   TArray<FTransform> Expected;int32 Count=0;
+   if(!TestTrue(TEXT("Retail strafe cycle evaluates"),Dat->EvaluateMotionCommand(Self.MotionTableId,ACEMotion::SideStepRight,
+    Direction*Time*ExpectedRate,App->GetPartCount(),Expected,100,Count,nullptr,nullptr,Style)))return;
+   for(int32 Part=0;Part<Count;++Part)
+   {
+    TestTrue(TEXT("Local feet and body follow the retail DAT strafe phase"),App->GetPartMesh(Part)->GetRelativeTransform().Equals(Expected[Part],.04));
+    TestTrue(TEXT("Remote strafe phase matches local without a second speed multiplier"),RemoteApp->GetPartMesh(Part)->GetRelativeTransform().Equals(Expected[Part],.04));
+   }
+  }
+ };
+ CheckStrafe();
  GI->Shutdown();GEngine->DestroyWorldContext(World);World->DestroyWorld(false);
  return !HasAnyErrors();
 }

@@ -123,7 +123,7 @@ namespace ACEUCMPanelPrivate
         {
             auto Row=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
             if(EditorOnly){Row->AddSlot()[Button(TEXT("Vendors"),[this](){Page=TEXT("Vendors");Rebuild();})];Row->AddSlot()[Button(TEXT("Loot rules"),[this](){Page=TEXT("Loot");Rebuild();})];Row->AddSlot()[Button(TEXT("Import / compatibility"),[this](){Page=TEXT("Import tools");Rebuild();})];return Row;}
-            for(const TCHAR* Name:{TEXT("Overview"),TEXT("Buffs"),TEXT("Buff others"),TEXT("Combat"),TEXT("Recovery"),TEXT("Route"),TEXT("Loot"),TEXT("Vendors"),TEXT("Rules"),TEXT("Metas"),TEXT("Profiles")})
+            for(const TCHAR* Name:{TEXT("Overview"),TEXT("Buffs"),TEXT("Buff others"),TEXT("Combat"),TEXT("Recovery"),TEXT("Route"),TEXT("Loot"),TEXT("Vendors"),TEXT("Rules"),TEXT("Metas"),TEXT("Profiles"),TEXT("Log")})
                 Row->AddSlot()[SNew(SButton).ButtonStyle(&Style()).IsFocusable(false).ContentPadding(FMargin(7,8))
                     .OnClicked_Lambda([this,Name](){Page=Name;BodyScroll->ScrollToStart();Rebuild();return FReply::Handled();})
                     [SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Bold",14)).Text(FText::FromString(Name))
@@ -383,9 +383,15 @@ namespace ACEUCMPanelPrivate
         void Rebuild()
         {
             Body->ClearChildren();Brushes.Empty();
+            if(Page==TEXT("Log"))
+            {
+                Add(Button(TEXT("Open floating UCM Log (desktop)"),[this](){Host->TogglePluginWindow(TEXT("ucm.log"));}));
+                Add(SNew(SBox).HeightOverride(460)[Host->MakeUCMLogPanel()]);return;
+            }
             if(Page==TEXT("Overview"))
             {
                 Heading(TEXT("Your hunting setup"),TEXT("Choose activities, then Start. Each activity can be adjusted while running. Manual movement takes priority without stopping UCM. Turn Combat off to fight manually while Loot stays on."));
+                Add(Button(TEXT("Open UCM Log"),[this](){Host->TogglePluginWindow(TEXT("ucm.log"));}));
                 Add(SNew(SCheckBox)
                     .IsChecked_Lambda([this](){return Host->IsPluginBarVisible()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                     .OnCheckStateChanged_Lambda([this](ECheckBoxState State){Host->SetPluginBarVisible(State==ECheckBoxState::Checked);})
@@ -416,6 +422,7 @@ namespace ACEUCMPanelPrivate
                 Heading(TEXT("Automatic buffing"),TEXT("Uses your highest usable sustained buffs for attributes, trained skills, protections and equipment."));
                 Add(Toggle(TEXT("buffing"),TEXT("Buff"),TEXT("Maintains buffs while UCM is running."),true));
                 ForceBuffControls();
+                Add(Toggle(TEXT("fast_cast_buffs"),TEXT("Fast buff movement"),TEXT("Use a brief backward bump after eligible spell words to shorten buff recoil. Releases within 0.12 seconds even if the server result is delayed."),true));
                 Add(Toggle(TEXT("auto_buffs"),TEXT("Choose buffs automatically"),TEXT("Turn off only when using a manually authored buff list."),true));
                 BuffDifficultyControls();
                 Slider(TEXT("refresh_seconds"),TEXT("Rebuff before expiry"),10,300,60,Accent,TEXT(" sec"));
@@ -503,7 +510,6 @@ namespace ACEUCMPanelPrivate
                 const TCHAR* ArcNames[]={TEXT(""),TEXT("Prefer bolts"),TEXT("Prefer arcs at range"),TEXT("Prefer arcs")};
                 Add(Button(ArcNames[Arcs],[this,Arcs](){P()->SetNumberField(TEXT("use_arcs"),Arcs%3+1);Save();Rebuild();}));
                 Slider(TEXT("arc_range"),TEXT("Arc preference distance"),0,100,5,Accent,TEXT(" m"));
-                Add(Toggle(TEXT("fast_cast_buffs"),TEXT("Fast buff movement"),TEXT("Use a brief backward bump after eligible spell words to shorten buff recoil. Releases within 0.12 seconds even if the server result is delayed."),true));
                 Heading(TEXT("Summoned pets"),TEXT("Add essences to the equipment list below. Uses server requirements, remaining charges and cooldowns."));
                 Add(Toggle(TEXT("summon_pets"),TEXT("Summon combat pets"),TEXT("Choose an eligible essence for nearby monsters; keep an existing pet active.")));
                 Add(Toggle(TEXT("refill_summons"),TEXT("Refill summon essences"),TEXT("Use Encapsulated Spirit from your inventory to refill low-charge essences in the equipment pool. Works independently of automatic summoning.")));

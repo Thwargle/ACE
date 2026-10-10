@@ -8103,6 +8103,18 @@ bool UACEDatSubsystem::EvaluateMotionTransition(uint32 Table, uint32 From, uint3
 		&& MotionPlayer->EvaluateTransition(From, To, Time, Parts, Out, Scale, Count, Finished, Previous, Hooks, Style);
 }
 
+bool UACEDatSubsystem::BuildWalkingLink(uint32 Table, int8 From, int8 To, uint32 Style, ACEWalkingMotion::FLink& Out) const
+{
+	return bPortalLoaded && MotionPlayer && Table != 0 && MotionPlayer->SetMotionTable(Table)
+		&& MotionPlayer->BuildWalkingLink(From, To, Style, Out);
+}
+
+bool UACEDatSubsystem::EvaluateWalkingLink(const ACEWalkingMotion::FLink& Link, int32 Parts,
+	TArray<FTransform>& Out, float Scale, int32& Count, TArray<FACEDatAnimationHook>& Hooks) const
+{
+	return bPortalLoaded && MotionPlayer && MotionPlayer->EvaluateWalkingLink(Link, Parts, Out, Scale, Count, Hooks);
+}
+
 bool UACEDatSubsystem::EvaluateMotionLink(uint32 MotionTableId, uint32 FromCommand, uint32 ToCommand, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount, bool& bOutFinished,
 	const float* PreviousTimeSeconds, TArray<FACEDatAnimationHook>* OutCrossedHooks, uint32 PreferredStyle) const
 {

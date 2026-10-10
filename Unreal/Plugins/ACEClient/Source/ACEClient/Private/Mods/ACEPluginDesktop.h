@@ -11,6 +11,7 @@ class SVerticalBox;
 class SACEPluginDesktop : public SCompoundWidget
 {
     friend class FACEPluginHostTest;
+    friend class FACEUCMLogTest;
 public:
     SLATE_BEGIN_ARGS(SACEPluginDesktop) {} SLATE_ARGUMENT(UACEPluginSubsystem*, Host) SLATE_END_ARGS()
     void Construct(const FArguments& Args);

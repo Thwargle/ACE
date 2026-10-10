@@ -51,6 +51,18 @@ static bool ACEIsMagicCastCommand(uint32 Command)
 		|| Command == 0x400000E1u;
 }
 
+static bool ACEIsMissileSubstate(uint32 Command)
+{
+	return Command == 0x40000016u // Reload
+		|| (Command >= 0x4000001Eu && Command <= 0x4000002Au); // Aim
+}
+
+static bool ACEIsLauncherStyle(uint32 Style)
+{
+	return Style == 0x8000003Fu || Style == 0x80000041u || Style == 0x8000013Bu
+		|| Style == 0x800000E8u || Style == 0x800000E9u;
+}
+
 static bool ACEIsEmoteSubstate(uint32 Command)
 {
 	// Action gestures (0x1300...) already contain their return motion. Held
@@ -587,6 +599,7 @@ void UACECharacterAppearanceComponent::HideOwnerPrimitiveMeshes()
 
 void UACECharacterAppearanceComponent::ClearAppearance()
 {
+	WalkingMotion.Reset();
 	WorldLightingInstances.Reset(); bWorldLightingInterior=false;
 	if (AActor* Owner = GetOwner())
 		if (auto* Scripts = Owner->FindComponentByClass<UACEScriptComponent>()) Scripts->StopAllEffects();
@@ -1079,6 +1092,18 @@ void UACECharacterAppearanceComponent::InterruptCastWithMovement()
 	}
 }
 
+void UACECharacterAppearanceComponent::SetWalkingTransitionsEnabled(bool bEnabled)
+{
+	bWalkingTransitionsEnabled = bEnabled;
+	if (!bEnabled) WalkingMotion.Reset();
+}
+
+FTransform UACECharacterAppearanceComponent::AdvanceWalkingMotion(float Dt, float& CycleSeconds)
+{
+	bWalkingExternallyAdvanced = true;
+	return WalkingMotion.Advance(Dt, CycleSeconds);
+}
+
 void UACECharacterAppearanceComponent::SetLocomotionInput(float Forward, float Strafe, bool bRunning, float PlayRate, bool bInterpretedRate)
 {
 	if (AnimMode == EACEAnimMode::DoorTransition)
@@ -1096,6 +1121,14 @@ void UACECharacterAppearanceComponent::SetLocomotionInput(float Forward, float S
 		bPlayIdleMotion = true;
 	SetComponentTickEnabled(true);
 	}
+	if (!bWalkingTransitionsEnabled || bVRPoseControlled || bInterpretedRate
+		|| AnimMode != EACEAnimMode::Locomotion || (bRunning && !FMath::IsNearlyZero(Forward)))
+		WalkingMotion.Reset();
+	else if (UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr)
+		if (auto* Dat = GI->GetSubsystem<UACEDatSubsystem>())
+			WalkingMotion.SetDirection(FMath::IsNearlyZero(Forward) ? 0 : Forward > 0.f ? 1 : -1,
+				[&](int8 From, int8 To, ACEWalkingMotion::FLink& Link)
+				{ return Dat->BuildWalkingLink(MotionTableId, From, To, PreferredStyle, Link); });
 	// ActionOneShot still records loco so we resume the right cycle when the attack ends.
 	LocomotionForward = Forward;
 	LocomotionStrafe = Strafe;
@@ -1153,6 +1186,7 @@ void UACECharacterAppearanceComponent::SetPreferredStyle(int32 Style)
 	{
 		return;
 	}
+	WalkingMotion.Reset();
 
 	// Capture the current visual pose so the next ticks can cross-fade into the new stance.
 	StanceBlendFrom.SetNum(PartMeshes.Num());
@@ -1173,7 +1207,15 @@ void UACECharacterAppearanceComponent::SetPreferredStyle(int32 Style)
 	}
 	StanceBlendAlpha = 0.f;
 	PoseBlendDuration = StanceBlendDuration;
+	const uint32 PreviousStyle = PreferredStyle;
 	PreferredStyle = Expanded;
+	if (PreviousStyle != 0 && (ACEIsLauncherStyle(PreviousStyle) || ACEIsLauncherStyle(Expanded))
+		&& AnimMode != EACEAnimMode::DoorTransition && ActionCommand != ACEMotion::Dead)
+	{
+		// Retail changes style through its authored linkage before entering the
+		// new Ready cycle. Cross-fading directly to drawn-bow Ready skips this.
+		PlayActionMotion(Expanded, 1.f, PreviousStyle, false);
+	}
 }
 
 void UACECharacterAppearanceComponent::BeginPoseBlendFromCurrent(float Duration)
@@ -1281,9 +1323,18 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 		return;
 	}
 	const bool bFromEmote = AnimMode == EACEAnimMode::ActionOneShot && ACEIsEmoteSubstate(ActionCommand);
+	const bool bFromMissile = AnimMode == EACEAnimMode::ActionOneShot && ACEIsMissileSubstate(ActionCommand)
+		&& (ACEIsMissileSubstate(Cmd) || Cmd == ACEMotion::Ready);
+	if (AnimMode == EACEAnimMode::ActionOneShot && (ActionCommand & 0xFF000000u) == 0x80000000u
+		&& ACEIsMissileSubstate(Cmd))
+	{
+		if (PendingActionCommands.IsEmpty() || PendingActionCommands.Last() != Cmd)
+			QueueActionMotion(Cmd, PlayRate, Style, bHoldFinalPose);
+		return;
+	}
 	const bool bToEmoteOrReady = (ACEMotion::IsHeldRestCommand(Cmd) && Cmd != ACEMotion::Dead) || Cmd == ACEMotion::Ready;
-	if (AnimMode == EACEAnimMode::ActionOneShot && !bHoldActionFinal && bToEmoteOrReady
-		&& (bFromEmote || bActionUsesStateTransition))
+	if (AnimMode == EACEAnimMode::ActionOneShot && !bHoldActionFinal
+		&& (bFromMissile || (bToEmoteOrReady && (bFromEmote || bActionUsesStateTransition))))
 	{
 		// Retail removes only the cyclic tail, not an unfinished entry/exit.
 		// Repeated movement/Ready echoes must not append another stand-up sequence.
@@ -1292,11 +1343,12 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 		bHoldActionFinalAfterFinish = false;
 		return;
 	}
-	ActionFromCommand = bFromEmote ? ActionCommand : ACEMotion::Ready;
-	bActionUsesStateTransition = bFromEmote;
+	ActionFromCommand = bFromEmote || bFromMissile ? ActionCommand : ACEMotion::Ready;
+	WalkingMotion.Reset();
+	bActionUsesStateTransition = bFromEmote || bFromMissile;
 	// Falling already contains retail's takeoff link (~0.2 s). A full stance
 	// cross-fade hid it behind the previous jump's frozen endpoint.
-	BeginPoseBlendFromCurrent(bFromEmote || Cmd == 0x40000015u ? .06f : StanceBlendDuration);
+	BeginPoseBlendFromCurrent(bFromEmote || bFromMissile || ACEIsMissileSubstate(Cmd) || Cmd == 0x40000015u ? .06f : StanceBlendDuration);
 	AnimMode = EACEAnimMode::ActionOneShot;
 	ActionCommand = Cmd;
 	PendingActionCommands.Reset();
@@ -1380,6 +1432,15 @@ void UACECharacterAppearanceComponent::QueueActionMotion(int32 InActionCommand, 
 	PendingActionHolds.Add(bHoldFinalPose);
 }
 
+void UACECharacterAppearanceComponent::FinishMissileMotion()
+{
+	if (AnimMode != EACEAnimMode::ActionOneShot) return;
+	if (ACEIsMissileSubstate(ActionCommand))
+		PlayActionMotion(ACEMotion::Ready, 1.f, ActionStyle, false);
+	else if (!PendingActionCommands.IsEmpty() && ACEIsMissileSubstate(PendingActionCommands.Last()))
+		QueueActionMotion(ACEMotion::Ready, 1.f, PendingActionStyles.Last(), false);
+}
+
 void UACECharacterAppearanceComponent::CancelHeldActionMotion()
 {
 	// Retail clears a held chat-pose when the player moves or jumps — the emote either
@@ -1389,6 +1450,12 @@ void UACECharacterAppearanceComponent::CancelHeldActionMotion()
 	// or bHoldActionFinal. The server's Ready must release it just like other holds.
 	const bool bMissileEndpoint = ActionCommand == 0x40000016u
 		|| (ActionCommand >= 0x4000001Eu && ActionCommand <= 0x4000002Au);
+	if (AnimMode == EACEAnimMode::ActionOneShot && (bMissileEndpoint
+		|| (!PendingActionCommands.IsEmpty() && ACEIsMissileSubstate(PendingActionCommands.Last()))))
+	{
+		FinishMissileMotion();
+		return;
+	}
 	if (AnimMode == EACEAnimMode::ActionOneShot && ACEIsEmoteSubstate(ActionCommand))
 	{
 		PlayActionMotion(ACEMotion::Ready, 1.f, ActionStyle, false);
@@ -1968,12 +2035,16 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 		}
 		// A table without an exit link may resume locomotion immediately. Do not
 		// strand it in Ready's zero-rate cycle while movement input is active.
-		if (!bOk && !bPreferCycle && !(bActionUsesStateTransition && ActionCommand == ACEMotion::Ready))
+		if (!bOk && !bPreferCycle && (ActionCommand & 0xFF000000u) != 0x80000000u
+			&& !(bActionUsesStateTransition && ActionCommand == ACEMotion::Ready))
 		{
 			bOk = Dat->EvaluateMotionCommand(
 				static_cast<uint32>(MotionTableId), ActionCommand, AnimTime,
 				PartMeshes.Num(), Animated, WorldScale, AnimatedCount,
 				PreviousTime, &Hooks, ActionStyle, /*bLoop*/ false, &bFinished);
+			// A missing entry link may resolve directly to a zero-rate endpoint
+			// (e.g. drudge Reload). It must not block an already queued Ready.
+			if (bOk && bIsMissileGesture) bFinished = true;
 		}
 		if (!bOk && bIsDead && ActionStyle != ACEMotion::StanceNonCombat)
 		{
@@ -2014,6 +2085,12 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 				// Keep the final death frame until ObjectDelete / corpse replace.
 				bHoldActionFinal = true;
 			}
+			else if (bIsMissileGesture && bOk && PendingActionCommands.IsEmpty())
+			{
+				// Reload and Aim are persistent substates. Keep their endpoint until
+				// the server's next state so Reload -> Ready plays the nock/draw link.
+				bHoldActionFinal = true;
+			}
 			else if (bHoldActionFinalAfterFinish && (bFinished || bActionEverEvaluated) && bOk)
 			{
 				bHoldActionFinal = true;
@@ -2037,7 +2114,7 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 				if (PendingActionPlayRates.Num() > 0) { PendingActionPlayRates.RemoveAt(0); }
 				if (PendingActionHolds.Num() > 0) { PendingActionHolds.RemoveAt(0); }
 				// Start next without wiping the rest of the scarab/cast queue.
-				ActionFromCommand = ACEIsEmoteSubstate(ActionCommand) ? ActionCommand : ACEMotion::Ready;
+				ActionFromCommand = ACEIsEmoteSubstate(ActionCommand) || ACEIsMissileSubstate(ActionCommand) ? ActionCommand : ACEMotion::Ready;
 				bActionUsesStateTransition = ActionFromCommand != ACEMotion::Ready;
 				BeginPoseBlendFromCurrent(bActionUsesStateTransition ? .06f : StanceBlendDuration);
 				AnimMode = EACEAnimMode::ActionOneShot;
@@ -2175,6 +2252,22 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 		return;
 	}
 
+	float WalkCycleSeconds = DeltaTime;
+	if (!bWalkingExternallyAdvanced) WalkingMotion.Advance(DeltaTime, WalkCycleSeconds);
+	if (!WalkingMotion.Display.Clips.IsEmpty())
+	{
+		int32 Count = 0;
+		TArray<FACEDatAnimationHook> Hooks;
+		if (Dat->EvaluateWalkingLink(WalkingMotion.Display, PartMeshes.Num(), Animated, WorldScale, Count, Hooks))
+		{
+			ApplyAnimatedPartsWithBlend(Animated, Count, DeltaTime);
+			DispatchCrossedHooks(Hooks);
+			// The cyclic tail starts at frame zero after the last linkage.
+			AnimTime = 0.f;
+			bWasLocomotionMoving = !FMath::IsNearlyZero(LocomotionForward) || !FMath::IsNearlyZero(LocomotionStrafe);
+			return;
+		}
+	}
 	const bool bMoving = !FMath::IsNearlyZero(LocomotionForward) || !FMath::IsNearlyZero(LocomotionStrafe);
 	{
 		const int8 FwdSign = (LocomotionForward > 0.15f) ? 1

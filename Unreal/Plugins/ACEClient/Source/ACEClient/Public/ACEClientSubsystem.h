@@ -8,6 +8,12 @@
 
 class FACESession;
 
+struct FACEBufferedChatMessage
+{
+	FString Text, Sender;
+	int32 Type = 0;
+};
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FACESessionStateChangedDyn, EACESessionState, NewState);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FACECharacterListDyn, const TArray<FACECharacterInfo>&, Characters, const FString&, ServerName);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FACEEnteredWorldDyn, int32, PlayerGuid, const FACEPosition&, SpawnPosition);
@@ -128,6 +134,12 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category = "ACE")
 	FACEChatMessageDyn OnChatMessage;
+
+	// Retain server messages received before the gameplay HUD exists (world entry).
+	const TArray<FACEBufferedChatMessage>& GetChatHistory() const { return ChatHistory; }
+	void ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type);
+	TArray<FACEBufferedChatMessage> ChatHistory;
+
 
 	UPROPERTY(BlueprintAssignable, Category = "ACE")
 	FACEVitalsUpdatedDyn OnVitalsUpdated;
@@ -705,7 +717,7 @@ public:
 	 * Amount == 0 means the whole stack. An existing mergeable stack takes priority. */
 	int32 ResolvePickupContainer(int32 ItemGuid, int32 OpenPackGuid, int32 Amount = 0) const;
 
-	/** F/hand on owned inventory: merge compatible stacks, then place survivors at the front. */
+	/** F/hand: merge into and select one compatible stack, or move to main pack if none fits. */
 	bool SortInventoryItem(int32 Guid);
 
 	/** ACE MovementSystem.GetRunRate — used for client prediction speed. */

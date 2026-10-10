@@ -104,6 +104,25 @@ bool FACEUILayoutCommandsTest::RunTest(const FString&)
     Radar->UserDragX = 0; Radar->RecomputeLayoutOffset();
     Manager->LoadFloatyLayout();
     TestEqual(TEXT("Radar position persists in ordinary layout cache"), Radar->GetDrawX(), 1600);
+    const auto RadarGrip=Manager->FindElementUnder(TEXT("RootGameplay_Radar_Field"),TEXT("RadarDrag"));
+    TestTrue(TEXT("Radar retains its native circular grip"),RadarGrip.IsValid());
+    if (RadarGrip)
+    {
+        Manager->SetUiLocked(false);
+        TestTrue(TEXT("Unlocked radar exposes its drag grip"),bool(RadarGrip->bVisible));
+        const FVector2D View(1920,1080);
+        const FVector2D Start=FVector2D(RadarGrip->GetScreenOrigin())+FVector2D(RadarGrip->Width,RadarGrip->Height)*.5;
+        const FIntPoint Before(Radar->GetDrawX(),Radar->GetDrawY());
+        TestEqual(TEXT("Radar advertises dragging before mouse down"),Manager->GetWindowCursor(Start,View),EMouseCursor::CardinalCross);
+        Manager->NotifyMouseDown(Start,View,EKeys::LeftMouseButton);
+        Manager->NotifyMouseMove(Start+FVector2D(-120,75),View);
+        Manager->NotifyMouseUp(Start+FVector2D(-120,75),View,EKeys::LeftMouseButton);
+        TestEqual(TEXT("Radar grip moves the whole radar"),FIntPoint(Radar->GetDrawX(),Radar->GetDrawY()),Before+FIntPoint(-120,75));
+        Radar->UserDragX=Radar->UserDragY=0;Radar->RecomputeLayoutOffset();Manager->LoadFloatyLayout();
+        TestEqual(TEXT("Dragged radar position survives a layout reload"),FIntPoint(Radar->GetDrawX(),Radar->GetDrawY()),Before+FIntPoint(-120,75));
+        Manager->SetUiLocked(true);
+        TestFalse(TEXT("Retail hides the radar grip when locked"),bool(RadarGrip->bVisible));
+    }
     auto* FreshManager = NewObject<UACEUIElementManager>(); FreshManager->Initialize();
     auto* FreshLayout = NewObject<UACEUILayoutResolver>(); FreshLayout->Initialize(Dat, FreshManager);
     TestTrue(TEXT("Fresh gameplay layout loads"), FreshLayout->LoadLayout(ACEUI::LayoutId::ClassicGameplay));
@@ -112,6 +131,8 @@ bool FACEUILayoutCommandsTest::RunTest(const FString&)
     TestEqual(TEXT("Fresh session keeps saved chat size"), FIntPoint(FreshChat->Width,FreshChat->Height), FIntPoint(520,240));
     TestEqual(TEXT("Fresh session keeps saved chat position"), FIntPoint(FreshChat->GetDrawX(),FreshChat->GetDrawY()), FIntPoint(35,640));
     TestEqual(TEXT("Fresh session keeps two-row hotbar"), FreshManager->FindElementByName(TEXT("RootGameplay_FloatyToolbar_Field"))->Height,132);
+    const auto FreshRadar=FreshManager->FindElementByName(TEXT("RootGameplay_Radar_Field"));
+    TestEqual(TEXT("Fresh session keeps dragged radar position"),FIntPoint(FreshRadar->GetDrawX(),FreshRadar->GetDrawY()),FIntPoint(1480,100));
     FreshManager->Shutdown();
 
     auto* Client = NewObject<UACEClientSubsystem>(GI); Client->Session = MakeShared<FACESession>();

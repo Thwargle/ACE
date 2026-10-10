@@ -23,6 +23,7 @@ class ACECLIENT_API UACEVideoSettingsWidget : public UUserWidget
  GENERATED_BODY()
 public:
  virtual TSharedRef<SWidget> RebuildWidget() override;
+ virtual void NativeTick(const FGeometry& Geometry, float DeltaTime) override;
  UFUNCTION() void ApplyVideo();
  void ApplyInterfaceOptions();
  void ApplyRuntimeOptions();
@@ -40,6 +41,8 @@ public:
  void SetScrollOffset(float Offset);
 private:
  int32 InitialQuality = 0;
+ int32 ObservedWindowMode = -1;
+ FIntPoint ObservedResolution = FIntPoint::ZeroValue;
  UPROPERTY() TObjectPtr<UScrollBox> Scroll;
  UPROPERTY() TArray<TObjectPtr<UComboBoxString>> QualityLevels;
  UPROPERTY() TMap<FName,TObjectPtr<USlider>> ValueSliders;

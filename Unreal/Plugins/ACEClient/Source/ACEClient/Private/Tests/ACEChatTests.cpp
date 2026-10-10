@@ -5,6 +5,9 @@
 #include "Misc/ConfigCacheIni.h"
 #include "ACESession.h"
 #include "UI/ACEChatEntry.h"
+#include "UI/ACEUICanvasWidget.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/ScrollBox.h"
 #include "UI/ACEUIGameplayBinder.h"
 #include "VR/ACEVRPlatformTextEntry.h"
 #include "VR/ACEVRKeyboardSubmitInput.h"
@@ -164,6 +167,39 @@ bool FACEChatParityTest::RunTest(const FString&)
     Binder->ToggleChatEntryFocus(); Type(TEXT("my "));
     TestEqual(TEXT("Floaty chat resumes its own draft and caret"), Other->GetText().ToString(), FString(TEXT("my floaty draft")));
     TestEqual(TEXT("Toggle does not submit a network chat message"), Session.CachedC2SPackets.Num(), 0);
+    {
+        // Exercise the actual chat-row click callback, then deliver real Slate
+        // typing. Merely checking the prefilled text misses a misplaced caret.
+        auto* Canvas=NewObject<UACEUICanvasWidget>();
+        Canvas->WidgetTree=NewObject<UWidgetTree>(Canvas);Binder->Canvas=Canvas;
+        Binder->ChatLog=NewObject<UScrollBox>();
+        Binder->FloatyChatLogs.SetNum(4);Binder->FloatyChatLogs[0]=NewObject<UScrollBox>();
+        Binder->FloatyChatLineCounts.SetNumZeroed(4);
+        for (int32 W : {0,1})
+        {
+            Binder->AppendChatLineToLog(W,TEXT("A Friend says, Hello"),FLinearColor::White,TEXT("A Friend"));
+            auto* Row=CastChecked<UACERetailTextBlock>(Binder->GetChatLogWidget(W)->GetChildAt(0));
+            auto* Entry=W==0 ? Main : Other;
+            for (int32 Case=0;Case<3;++Case)
+            {
+                Entry->SetChatText(Case==0 ? TEXT("") : TEXT("an unfinished message"));
+                Focus(Entry);Key(EKeys::Home);
+                if (Case==2)
+                {
+                    const FModifierKeysState Ctrl(false,false,true,false,false,false,false,false,false);
+                    Slate.ProcessKeyDownEvent(FKeyEvent(EKeys::A,Ctrl,0,false,0,0));
+                    Slate.ProcessKeyUpEvent(FKeyEvent(EKeys::A,Ctrl,0,false,0,0));
+                }
+                Slate.SetUserFocus(0,Output->TakeWidget());
+                Row->OnTextClicked.ExecuteIfBound();
+                Type(TEXT("hello"));
+                TestEqual(TEXT("Clicking a sender types after the tell recipient, clearing any old selection"),
+                    Entry->GetText().ToString(),FString(TEXT("@tell A Friend, hello")));
+            }
+        }
+        TestEqual(TEXT("Clicking a name only prepares a tell without sending it"),Session.CachedC2SPackets.Num(),0);
+        Binder->Canvas=nullptr;Binder->ChatLog=nullptr;Binder->FloatyChatLogs.Reset();Binder->ChatRowSenders.Reset();
+    }
     Main->SetChatText(TEXT("")); Other->SetChatText(TEXT(""));
     auto LastAction = [&]()
     {

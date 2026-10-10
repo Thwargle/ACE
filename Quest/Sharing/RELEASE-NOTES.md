@@ -1,44 +1,58 @@
-# AC:Unreal / AC:VR release 105
+# AC:Unreal / AC:VR release 106
 
 Windows desktop, PC VR, native Linux x86_64, and standalone Quest share version
-**2026.10.09.105**. Android version code: 105. Quest installer revision: 7.
+**2026.10.09.106**. Android version code: 106. Quest installer revision: 7.
 
-## Playable Olthoi
+## Controls and display
 
-- Improve character creation previews, PvP target eligibility, and Olthoi chat
-  channels and language handling using retail rules.
-- Preserve the nonhuman player body in VR rather than applying humanoid hiding.
+- Preserve Shift, Ctrl, Alt, and combined keybindings even when the modifier is
+  released first. Mouse buttons retain modifiers, and wheel up/down can be bound
+  with or without modifiers. Controller Start can also be rebound.
+- Restore saved desktop resolution, display mode, and window placement. Keep
+  Alt+Enter transitions and the settings display synchronized.
+- Make the radar movable from its handle and show the move cursor on hover.
+- Escape clears a selected target before toggling gameplay options, without
+  also closing the backpack.
+- Clicking a chat name places the typing cursor after the tell prefix. Preserve
+  server welcome and channel messages received before the gameplay HUD opens.
 
-## Buff and debuff panels
+## Inventory and item presentation
 
-- Preserve permanent equipment enchantments, Vitae, and cooldown entries when
-  the server purges temporary enchantments on death.
-- Keep beneficial and harmful enchantment purges consistent with server events.
+- Right-clicking corpse contents selects the item as well as examining it, so
+  the pickup key can take it immediately.
+- Combine stacks one press at a time, select the resulting stack, and preserve
+  its backpack until a subsequent pickup action moves it.
+- Show retail drop-target indicators for inventory, backpacks, equipment, and
+  vendor sales. Resolve world drops at the release position.
+- Restore available skill credits when no attribute or skill is selected.
+- Show equipped ammunition counts on the combat-mode button and omit the
+  inappropriate Armor Level: 0 line on cloaks.
 
-## Chess
+## Movement and archery
 
-- Join world chess boards through the retail game protocol and open the board
-  in desktop or VR. Reopen an active game through Game Center.
-- Correct turn handling, confirmed and rejected moves, stalemate offers,
-  resignation confirmation, and cleanup after a match or logout.
-- Refresh the displayed chess rating immediately when the server changes it.
-- The accompanying ACE source fixes checkmate, special moves, AI move search,
-  and match-result handling. These server-side improvements require deploying
-  the updated ACE server separately; client installers do not include a server.
+- Complete retail forward/backward walking steps after a short key tap, using
+  authored motion and matching movement updates.
+- Match strafe animation cadence to movement speed to reduce foot sliding.
+- Correct bow-ready and reload transitions and ammunition attachment handling,
+  including parent-event sequencing after relogging.
 
-## UCM scroll learning
+## Unattended Combat Manager
 
-- Match scroll-learning requirements to retail and ACE rather than casting
-  difficulty. Levels II-VI require a trained school and 0/50/100/150/200 current
-  skill respectively. Levels I and VII, plus ACE's VIII, retain their exemptions.
-- Refresh unknown-scroll eligibility when the character's skills change.
+- Add a movable UCM activity log for diagnosing route failures and other actions.
+  Keep the latest 1,000 events in a bounded file that survives client restarts.
+- Improve returning to routes after long combat chases. Retain the traveled
+  detour, search reachable waypoints over multiple updates, and distinguish
+  unfinished reachability checks from a blocked route.
+- Correct the Corruption, Destructive Curse, and Corrosion spell selections.
+- Move Fast buff movement from Combat to Buffs, preserving saved preferences.
 
 ## Validation and installation
 
-Focused automated regressions cover Olthoi creation, targeting and chat; death
-enchantment purges; chess UI, protocol and server rules; and scroll eligibility.
-Live retail/Unreal chess matches, live Olthoi PvP, and headset gameplay remain
-acceptance checks; successful packaging is not live gameplay certification.
+Automated regressions cover input capture, saved bindings, retail UI interactions,
+inventory, chat, movement, archery, and UCM route recovery and logging. Windows,
+Linux, and Quest packages use the shared source and version checks. Linux and
+headset gameplay still require live acceptance; packaging is not live certification.
 
-Installing an update closes the game. Accounts, settings and DAT files are retained.
-Linux updates are downloaded and extracted manually. Game DAT files are not included.
+Installing an update closes the game. Accounts, settings, and DAT files are retained.
+Linux updates are downloaded and extracted manually. Game DAT files and a game
+server are not included.

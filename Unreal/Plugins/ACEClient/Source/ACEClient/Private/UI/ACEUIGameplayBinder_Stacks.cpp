@@ -5,6 +5,82 @@
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
 #include "Components/Border.h"
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
+#include "Blueprint/WidgetTree.h"
+
+bool UACEUIGameplayBinder::CanMoveInventoryAmountToContainer(int32 Guid, int32 Container, int32 Amount, int32 MergeTarget) const
+{
+	FACEWorldObject Item, Destination;
+	if (!Client || !Guid || !Container || Guid == Client->GetPlayerGuid() || Guid == Container
+		|| !Client->GetWorldObject(Guid, Item) || !Client->GetWorldObject(Container, Destination)
+		|| Client->GetTradeSelfItems().Contains(Guid) || Client->GetTradeSelfItems().Contains(Container)) return false;
+	Amount = Amount > 0 ? FMath::Min(Amount, FMath::Max(1, Item.StackSize)) : FMath::Max(1, Item.StackSize);
+	const bool bPack = ACEInventoryRules::IsContainer(Item) || (Item.ItemType & ACEItemType::Container)
+		|| (Item.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot);
+	// Retail's side-pack list is separate from ordinary inventory slots.
+	if (bPack && Container != Client->GetPlayerGuid()) return false;
+	if (MergeTarget)
+	{
+		FACEWorldObject Target;
+		if (Client->GetWorldObject(MergeTarget, Target) && Target.ContainerId == Container
+			&& !Client->GetTradeSelfItems().Contains(MergeTarget)
+			&& ACEInventoryRules::MergeAmount(Item, Target) > 0) return true;
+	}
+	// A full move within the same pack simply reorders its existing slot.
+	if (Item.ContainerId == Container && Amount == FMath::Max(1, Item.StackSize)) return true;
+	const int32 Capacity = bPack ? Destination.ContainersCapacity : Destination.ItemsCapacity;
+	if (Capacity == -1) return true;
+	return Capacity > (bPack ? Client->GetPlayerPacks().Num() : Client->GetPackItems(Container).Num());
+}
+
+void UACEUIGameplayBinder::UpdateInventoryContainerDropFeedback(FVector2D CanvasLocalPos)
+{
+	if (!Client || !Canvas || !Manager || !Canvas->WidgetTree) return;
+	const FVector2D Absolute = Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos);
+	const int32 Amount = InvDragAmount > 0 ? InvDragAmount : GetSelectedItemAmount(InvDragGuid);
+	auto Mark = [&](UBorder* Cell, bool Accept, bool DropIn, const TCHAR* Owner)
+	{
+		const auto* CellSlot = Cell ? Cast<UCanvasPanelSlot>(Cell->Slot) : nullptr;
+		if (!CellSlot) return;
+		if (!PaperDollDragTargetIcon)
+		{
+			PaperDollDragTargetIcon = Canvas->WidgetTree->ConstructWidget<UBorder>(UBorder::StaticClass());
+			PaperDollDragTargetIcon->SetPadding(FMargin(0));
+		}
+		// ItemSlot_DragOver_DropIn / Accept / Reject, from retail layout 0x21000037.
+		SetIconDid(PaperDollDragTargetIcon, Accept ? (DropIn ? 0x060011F7 : 0x060011F9) : 0x060011F8);
+		PaperDollDragTargetIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
+		if (PaperDollDragTargetIcon->GetParent() != Canvas->GetElementLayer())
+			Canvas->GetElementLayer()->AddChild(PaperDollDragTargetIcon);
+		if (auto* Slot = Cast<UCanvasPanelSlot>(PaperDollDragTargetIcon->Slot))
+		{
+			Slot->SetAnchors(FAnchors(0,0)); Slot->SetAutoSize(false);
+			Slot->SetPosition(CellSlot->GetPosition()); Slot->SetSize(CellSlot->GetSize());
+			Canvas->SetOverlayOrder(PaperDollDragTargetIcon, Manager->FindElementByName(Owner), 120004);
+		}
+	};
+	for (int32 I=0; I<PackSlotBgs.Num() && I<PackSlotGuids.Num(); ++I)
+	{
+		auto* Cell=PackSlotBgs[I].Get();
+		if (!Cell || !Cell->IsVisible() || !Canvas->IsWidgetExposedAt(Cell,Absolute)) continue;
+		const bool Reorder = InvDragPackSlotIndex != INDEX_NONE && InvDragGuid != Client->GetPlayerGuid();
+		const int32 Container = Reorder ? Client->GetPlayerGuid() : PackSlotGuids[I];
+		Mark(Cell, CanMoveInventoryAmountToContainer(InvDragGuid,Container,Amount), !Reorder, TEXT("InventoryPanel_Field"));
+		return;
+	}
+	int32 Target=0, Index=INDEX_NONE;
+	if (HitTestInventorySlot(Absolute,Target,Index))
+	{
+		const int32 Visible=Index-InventoryScrollOffset;
+		FACEWorldObject Item;
+		const bool Ordinary=Client->GetWorldObject(InvDragGuid,Item) && !ACEInventoryRules::IsContainer(Item)
+			&& !(Item.ItemType & ACEItemType::Container) && !(Item.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot);
+		if (InventorySlotBgs.IsValidIndex(Visible))
+			Mark(InventorySlotBgs[Visible], Ordinary && CanMoveInventoryAmountToContainer(InvDragGuid,
+				SelectedPackGuid ? SelectedPackGuid : Client->GetPlayerGuid(),Amount,Target), false, TEXT("InventoryPanel_Field"));
+	}
+}
 
 bool UACEUIGameplayBinder::TryDropInExternalContainer(int32 Guid, int32 Amount, FVector2D Absolute)
 {

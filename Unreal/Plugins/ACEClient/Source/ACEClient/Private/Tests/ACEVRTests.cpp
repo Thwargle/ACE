@@ -292,6 +292,7 @@ bool FACEVRProtocolTest::RunTest(const FString& Parameters)
 {
 	FACESession Session;
 	Session.State = EACESessionState::InWorld; Session.PlayerGuid = 100;
+	FACEWorldObject Wielder; Wielder.Guid=100;Session.WorldObjects.Add(100,Wielder);
 	TestFalse(TEXT("No VR combat without capability ACK"), Session.SendVRCombat(1, 0x12340001, 200, 1, 0, FVector(0, 0, 1.5), FVector(0, 1, 0), 1, 0));
 	auto* Sockets = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
 	auto Address = Sockets->CreateInternetAddr(); bool Valid = false; Address->SetIp(TEXT("127.0.0.1"), Valid); Address->SetPort(0);

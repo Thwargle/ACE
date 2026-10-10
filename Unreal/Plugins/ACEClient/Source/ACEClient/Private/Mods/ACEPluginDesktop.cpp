@@ -190,7 +190,7 @@ void SACEPluginDesktop::Toggle(const FString& Id)
 {
     if(!Host.IsValid())return;
     TSharedPtr<FACEClientPlugin> Plugin;
-    for(auto P:Host->Plugins)if((P->Id==Id || (Id.StartsWith(TEXT("waypoint."))&&P->Id==TEXT("waypoint")))&&P->Enabled)Plugin=P;
+    for(auto P:Host->Plugins)if((P->Id==Id || (Id.StartsWith(TEXT("waypoint."))&&P->Id==TEXT("waypoint")) || (Id==TEXT("ucm.log")&&P->Id==TEXT("ucm")))&&(P->Enabled||Id==TEXT("ucm.log")))Plugin=P;
     if(!Plugin)return;
     if(auto* W=Windows.Find(Id))
     {
@@ -203,9 +203,10 @@ void SACEPluginDesktop::Toggle(const FString& Id)
     const bool Dungeon=Id==TEXT("waypoint.dungeon");
     W.MapOverlay=Dungeon;
     if(Id==TEXT("ucmmicro"))W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(270,360));
+    if(Id==TEXT("ucm.log"))W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(700,440));
     if(Arrow)W.Size=FVector2D(290,225);
     if(Dungeon)W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(420,420));
-    W.Widget=SNew(SPluginFrame).Title(Arrow?TEXT("Waypoint · drag when unlocked"):Id==TEXT("waypoint.map")?TEXT("Waypoint Map"):Plugin->Name)
+    W.Widget=SNew(SPluginFrame).Title(Id==TEXT("ucm.log")?TEXT("UCM Log"):Arrow?TEXT("Waypoint · drag when unlocked"):Id==TEXT("waypoint.map")?TEXT("Waypoint Map"):Plugin->Name)
         .Frameless(Arrow||Dungeon)
         .CanManipulate([this,Dungeon,Arrow](){return Dungeon?Host->IsWaypointMapUnlocked():!Arrow||Host->IsWaypointUnlocked();})
         .Move([this,Id,Arrow,Dungeon](FVector2D D,bool Save){if(Save||(Dungeon?Host->IsWaypointMapUnlocked():!Arrow||Host->IsWaypointUnlocked()))Move(Id,D,Save);})
@@ -221,6 +222,7 @@ void SACEPluginDesktop::Refresh()
     Windows.FindChecked(BarId).Widget->SetVisibility(Host->IsPluginBarVisible()?EVisibility::Visible:EVisibility::Collapsed);
     FString Next;TSet<FString> Enabled;
     for(auto P:Host->Plugins)if(P->Enabled){Next+=P->Id+TEXT("|");Enabled.Add(P->Id);}
+    if(Host->Plugins.ContainsByPredicate([](const auto& P){return P->Id==TEXT("ucm");}))Enabled.Add(TEXT("ucm.log"));
     if(Enabled.Contains(TEXT("waypoint")))
     {
         Enabled.Add(TEXT("waypoint.map"));Enabled.Add(TEXT("waypoint.arrow"));Enabled.Add(TEXT("waypoint.dungeon"));
@@ -265,6 +267,9 @@ void SACEPluginDesktop::Refresh()
                 .Text_Lambda([this,P](){return FText::FromString(P->Id==TEXT("looteditor")?TEXT("EDITOR"):P->Running?TEXT("RUN"):IsOpen(P->Id)?TEXT("OPEN"):TEXT("HIDDEN"));})
                 .ColorAndOpacity_Lambda([P](){return FSlateColor(P->Running?FLinearColor(.3f,1,.4f):FLinearColor(.7f,.7f,.7f));})]]]];
     }
+    if(Enabled.Contains(TEXT("ucm")))Buttons->AddSlot().AutoHeight().Padding(1)[SNew(SBox).HeightOverride(34)
+        [SNew(SButton).ButtonStyle(&DockButtonStyle()).IsFocusable(false).ToolTipText(FText::FromString(TEXT("UCM activity and problem log")))
+        .OnClicked_Lambda([this](){Toggle(TEXT("ucm.log"));return FReply::Handled();})[Caption(TEXT("LOG"))]]];
     if(Host->IsWaypointEnabled())Buttons->AddSlot().AutoHeight().Padding(1)[SNew(SBox).HeightOverride(42)
         [SNew(SButton).ButtonStyle(&DockButtonStyle()).IsFocusable(false).ToolTipText(FText::FromString(TEXT("Waypoint world / dungeon map")))
         .OnClicked_Lambda([this](){Toggle(TEXT("waypoint.map"));return FReply::Handled();})[Host->MakeWaypointMapIcon()]]];

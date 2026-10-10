@@ -3,6 +3,8 @@
 #include "Mods/ACEPluginSubsystem.h"
 #include "VR/ACEVRLocomotion.h"
 #include "ACEKeyboardRouter.h"
+#include "ACEDesktopDisplay.h"
+#include "Widgets/SWindow.h"
 #include "ACEDesktopPointer.h"
 #include "HAL/IConsoleManager.h"
 #include "VR/ACEVRComponent.h"
@@ -95,9 +97,9 @@ EMouseLockMode DesktopMouseLockMode()
 {
     // LockInFullscreen in UE only covers exclusive fullscreen. Borderless
     // occupies a monitor too and must not leak its cursor into the next one.
-    const auto* Settings=UGameUserSettings::GetGameUserSettings();
-    return Settings && Settings->GetFullscreenMode()!=EWindowMode::Windowed
-        ? EMouseLockMode::LockAlways : EMouseLockMode::LockInFullscreen;
+    const auto Window=GEngine && GEngine->GameViewport ? GEngine->GameViewport->GetWindow() : nullptr;
+    return Window && Window->GetWindowMode()!=EWindowMode::Windowed
+        ? EMouseLockMode::LockAlways : EMouseLockMode::DoNotLock;
 }
 // CTransition::transitional_insert/edge_slide retains the previous supported
 // position when a grounded step loses contact. A sloping face alone is not
@@ -158,6 +160,7 @@ void AACEPlayerController::BeginPlay()
 {
 	ACERuntimeOptions::Apply();
 	Super::BeginPlay();
+	if (IsLocalController()) DesktopDisplay=FACEDesktopDisplay::Create(this);
 	if (IsLocalController()) KeyboardRouter=FACEKeyboardRouter::Create(this,[this]()
 	{
 		return Client && Client->GetSessionState()==EACESessionState::InWorld && !IsVRActive()
@@ -295,6 +298,7 @@ void AACEPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	UpdateDesktopHighlights(false);
 	KeyboardRouter.Reset();
+	DesktopDisplay.Reset();
 	DesktopPointer.Reset();
 	if (IsLocalController()) ACERuntimeOptions::ApplyDesktopUIScale(FIntPoint::ZeroValue,true);
 #if WITH_EDITOR
@@ -635,6 +639,15 @@ void AACEPlayerController::ScheduleDesiredSizeRetry()
 	}
 }
 
+void AACEPlayerController::RefreshDesktopDisplayInputMode()
+{
+	if (IsVRActive()) return;
+	if (FSlateApplication::IsInitialized()) FSlateApplication::Get().ReleaseAllPointerCapture();
+	if (LoginWidget) ApplyLoginUIInputMode();
+	else if (bMouseLookActive) SetMouseLookActive(true);
+	else ApplyInWorldInputMode();
+}
+
 void AACEPlayerController::ApplyLoginUIInputMode()
 {
 	if (IsVRActive()) { SetInputMode(FInputModeGameOnly()); bShowMouseCursor = false; return; }
@@ -721,6 +734,24 @@ void AACEPlayerController::SetupInputComponent()
 	if (PlayerInput) PlayerInput->DebugExecBindings.Reset();
 	GetMutableDefault<UInputSettings>()->ConsoleKeys.Reset();
 	// WASD is polled in PlayerTick so no DefaultInput.ini mappings are required.
+}
+
+EMouseCursor::Type AACEPlayerController::GetMouseCursor() const
+{
+	// The game viewport can query the controller instead of the Slate HUD
+	// before mouse capture (notably on Linux). Use the same hover hit test.
+	if (bShowMouseCursor && bUseDatDrivenHud && Client && DatCanvasWidget
+		&& DatCanvasWidget->IsVisible() && FSlateApplication::IsInitialized())
+	{
+		if (const auto* Manager = Client->GetUIElementManager())
+		{
+			const FGeometry& Geometry = DatCanvasWidget->GetCachedGeometry();
+			const EMouseCursor::Type Cursor = Manager->GetWindowCursor(
+				Geometry.AbsoluteToLocal(FSlateApplication::Get().GetCursorPos()), Geometry.GetLocalSize());
+			if (Cursor != EMouseCursor::Default) return Cursor;
+		}
+	}
+	return Super::GetMouseCursor();
 }
 
 void AACEPlayerController::SetInputMode(const FInputModeDataBase& InData)
@@ -904,12 +935,16 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		&& (Client->GetSessionState() == EACESessionState::EnteringWorld
 			|| Client->GetSessionState() == EACESessionState::InWorld))
 	{
+		if (APawn* P = GetPawn())
+			if (auto* App = P->FindComponentByClass<UACECharacterAppearanceComponent>()) App->ResetWalkingMotion();
 		UpdateDesktopHighlights(false);
 		TickWorldTransition();
 		return;
 	}
 	if (!Client || Client->GetSessionState() != EACESessionState::InWorld)
 	{
+		if (APawn* P = GetPawn())
+			if (auto* App = P->FindComponentByClass<UACECharacterAppearanceComponent>()) App->ResetWalkingMotion();
 		UpdateDesktopHighlights(false);
 		if (GameHUDWidget)
 		{
@@ -1088,7 +1123,6 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					App->CancelHeldActionMotion();
 				}
 			}
-			Client->SelectObject(0);
 		}
 		else if (ACEInputBindings::Pressed(this, ACEInputBindings::Action(TEXT("ClosestMonster")))) CycleNearbyTarget(true, 0);
 		else if (ACEInputBindings::Pressed(this, ACEInputBindings::Action(TEXT("ClosestItem")))) CycleNearbyTarget(false, 0);
@@ -1511,12 +1545,83 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	const float TurnRateDegPerSec=FMath::RadiansToDegrees(1.5f)*(bRunning?1.5f:1.f);
 	const float ReportedTurn = bMouseTurnSend
 		? FMath::Clamp(PendingMouseTurnDegrees / FMath::Max(TurnRateDegPerSec*DeltaTime, KINDA_SMALL_NUMBER),-1.f,1.f) : T;
+	auto LocalAnimationRate = [&](float Forward, float Strafe)
+	{
+		if (bUniformVRMovement)
+			return ACEVRLocomotion::AnimationRate(Forward, Strafe, bRunning, Client->GetRunRate());
+		// CMotionInterp::adjust_motion scales SideStep by 0.5 * 3.12 / 1.25,
+		// then Run multiplies/clamps it to 3. Match the physical sidestep rate;
+		// passing 1 here left local feet at one third of the high-skill cadence.
+		if (FMath::Abs(Strafe) > FMath::Abs(Forward) + KINDA_SMALL_NUMBER)
+			return FMath::Abs(Strafe) * Client->GetSidestepSpeed(bRunning) / 1.25f;
+		return bRunning && !FMath::IsNearlyZero(Forward) ? Client->GetRunRate() : 1.f;
+	};
+	// Drive walk/run anim on the local player's appearance from the same axes we send to the server.
+	FTransform WalkingRootDelta = FTransform::Identity;
+	float WalkingCycleSeconds = DeltaTime;
+	bool bWalkingTransitionThisFrame = false, bWalkingTransitionPending = false;
+	if (APawn* PossessedPawn = GetPawn())
+	{
+		if (UACECharacterAppearanceComponent* App = PossessedPawn->FindComponentByClass<UACECharacterAppearanceComponent>())
+		{
+			App->SetWalkingTransitionsEnabled(!bVR && !bJumpAirborne && !bJumpCharging
+				&& !bServerMoveToActive && !bPluginDrivingMovement && !bPluginFastBuffMovement
+				&& !bChatFocused && !ACEInputBindings::Down(this, ACEInputBindings::Action(TEXT("Stop"))));
+			if (!bJumpAirborne && !FMath::IsNearlyZero(F) && FMath::Sign(F) != FMath::Sign(ForwardSent))
+				App->InterruptCastWithMovement();
+			App->UpdateCellLighting((bHavePredictedPose ? PredictedPose : Client->GetPlayerPosition()).CellId);
+			if (bJumpAirborne)
+			{
+				App->SetSuppressLocoIdleBlend(true);
+				// Standing jump: no loco axes. Run jump: keep Raw axes for land resume.
+				if (!bStandingJumpLocked && (!FMath::IsNearlyZero(RawF) || !FMath::IsNearlyZero(RawR)))
+				{
+					App->SetLocomotionInput(RawF, RawR, bRunning,
+						LocalAnimationRate(RawF, RawR), bUniformVRMovement);
+				}
+				else
+				{
+					App->SetLocomotionInput(0.f, 0.f, false, 1.f);
+				}
+			}
+			else if (bJumpCharging)
+			{
+				// Retail keeps the current run/walk or Ready cycle while charging.
+				if (!bStandingJumpLocked && (!FMath::IsNearlyZero(RawF) || !FMath::IsNearlyZero(RawR)))
+				{
+					// Discard an old airborne pose before continuing grounded movement.
+					App->ClearJumpMotionIfAny();
+					App->SetSuppressLocoIdleBlend(false);
+					App->SetLocomotionInput(RawF, RawR, bRunning,
+						LocalAnimationRate(RawF, RawR), bUniformVRMovement);
+				}
+				else
+				{
+					// Retail charge_jump keeps Ready while standing; JumpCharging has
+					// no player motion entry and must not latch an unevaluated held pose.
+					App->ClearJumpMotionIfAny();
+					App->SetLocomotionInput(0.f, 0.f, false, 1.f);
+				}
+			}
+			else
+			{
+				App->ClearJumpMotionIfAny();
+				App->SetSuppressLocoIdleBlend(false);
+				App->SetLocomotionInput(F, R, bRunning,
+					LocalAnimationRate(F, R), bUniformVRMovement);
+			}
+			bWalkingTransitionThisFrame = App->HasWalkingTransition();
+			WalkingRootDelta = App->AdvanceWalkingMotion(DeltaTime, WalkingCycleSeconds);
+			bWalkingTransitionPending = App->HasWalkingTransition();
+		}
+	}
+
 	const bool bMoving = !FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R) || !FMath::IsNearlyZero(T) || !VRRoomDelta.IsNearlyZero();
 	// Keep local prediction while Use approach is active, and for the full jump arc
 	// (otherwise SoftReconcile snaps idle airborne poses back to the ground).
 	// The network send threshold must not discard small local mouse turns.
 	bLocalPredicting = bMoving || !FMath::IsNearlyZero(PendingMouseTurnDegrees)
-		|| bServerMoveToActive || bJumpAirborne || bJumpCharging || !LandingWorldAceVelocity.IsNearlyZero() || LandingRootTrack.IsActive()
+		|| bServerMoveToActive || bJumpAirborne || bJumpCharging || bWalkingTransitionThisFrame || !LandingWorldAceVelocity.IsNearlyZero() || LandingRootTrack.IsActive()
 		|| (bVR && !VR->IsMovementBlocked());
 	const bool bChanged =
 		bForceMovementResend ||
@@ -1529,13 +1634,6 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		(bJumpCharging != bJumpChargeSent) ||
 		(bJumpAirborne != bJumpAirborneSent) ||
 		bMouseTurnSend;
-	// Process command changes, not held axes on every frame. Retail's local
-	// DoMotion path replaces a cast substate when a new forward/back command
-	// arrives; strafe/turn remain additive modifiers during the cast.
-	if(!bJumpAirborne && !FMath::IsNearlyZero(F) && FMath::Sign(F)!=FMath::Sign(ForwardSent))
-		if(APawn* P=GetPawn())
-			if(auto* App=P->FindComponentByClass<UACECharacterAppearanceComponent>())App->InterruptCastWithMovement();
-
 	// After Use is in flight, MoveToState (F=1 leftover or axes-0) cancels CreateMoveToChain.
 	// Fast buff input must reach the server like physical movement, including
 	// the release after a result clears plugin ownership. Keep ordinary object
@@ -1607,7 +1705,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			}
 			Client->FlushAutonomousPosition(true);
 			Client->StopMovement();
-			Client->SetForcePositionReporting(false);
+			Client->SetForcePositionReporting(bWalkingTransitionThisFrame);
 		}
 		ForwardSent = F;
 		RightSent = R;
@@ -1620,58 +1718,6 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	}
 
 	bPluginFastBuffMovementSent = bPluginFastBuffMovement;
-	// Drive walk/run anim on the local player's appearance from the same axes we send to the server.
-	if (APawn* PossessedPawn = GetPawn())
-	{
-		if (UACECharacterAppearanceComponent* App = PossessedPawn->FindComponentByClass<UACECharacterAppearanceComponent>())
-		{
-			App->UpdateCellLighting((bHavePredictedPose ? PredictedPose : Client->GetPlayerPosition()).CellId);
-			if (bJumpAirborne)
-			{
-				App->SetSuppressLocoIdleBlend(true);
-				// Standing jump: no loco axes. Run jump: keep Raw axes for land resume.
-				if (!bStandingJumpLocked && (!FMath::IsNearlyZero(RawF) || !FMath::IsNearlyZero(RawR)))
-				{
-					App->SetLocomotionInput(RawF, RawR, bRunning,
-						bUniformVRMovement ? ACEVRLocomotion::AnimationRate(RawF, RawR, bRunning, Client->GetRunRate())
-							: (bRunning && RawF > 0.f) ? Client->GetRunRate() : 1.f, bUniformVRMovement);
-				}
-				else
-				{
-					App->SetLocomotionInput(0.f, 0.f, false, 1.f);
-				}
-			}
-			else if (bJumpCharging)
-			{
-				// Retail keeps the current run/walk or Ready cycle while charging.
-				if (!bStandingJumpLocked && (!FMath::IsNearlyZero(RawF) || !FMath::IsNearlyZero(RawR)))
-				{
-					// Discard an old airborne pose before continuing grounded movement.
-					App->ClearJumpMotionIfAny();
-					App->SetSuppressLocoIdleBlend(false);
-					App->SetLocomotionInput(RawF, RawR, bRunning,
-						bUniformVRMovement ? ACEVRLocomotion::AnimationRate(RawF, RawR, bRunning, Client->GetRunRate())
-							: (bRunning && RawF > 0.f) ? Client->GetRunRate() : 1.f, bUniformVRMovement);
-				}
-				else
-				{
-					// Retail charge_jump keeps Ready while standing; JumpCharging has
-					// no player motion entry and must not latch an unevaluated held pose.
-					App->ClearJumpMotionIfAny();
-					App->SetLocomotionInput(0.f, 0.f, false, 1.f);
-				}
-			}
-			else
-			{
-				App->ClearJumpMotionIfAny();
-				App->SetSuppressLocoIdleBlend(false);
-				App->SetLocomotionInput(F, R, bRunning,
-					bUniformVRMovement ? ACEVRLocomotion::AnimationRate(F, R, bRunning, Client->GetRunRate())
-						: (bRunning && !FMath::IsNearlyZero(F)) ? Client->GetRunRate() : 1.f, bUniformVRMovement);
-			}
-		}
-	}
-
 	// Resolve support, cell transitions and body sweeps together at a bounded
 	// physics interval. Subdividing only the lateral sweep still sampled stairs
 	// at the far end of a 50-70ms headset frame, lifting the body onto furniture
@@ -1772,8 +1818,18 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					: bUniformVRMovement
 					? ACEVRLocomotion::Velocity(F, R, bRunning, Client->GetRunRate()) * GroundScale
 					: FVector(R * SideSpeed, F * BackFactor * ForwardSpeed, 0.f);
-				Pred.Location += (Pred.GetAceForwardInAcSpace() * LocalVelocity.Y
-					+ Pred.GetAceRightInAcSpace() * LocalVelocity.X) * DeltaTime;
+				// Entry/exit position frames replace forward cycle displacement;
+				// strafe remains an immediate additive modifier in retail.
+				Pred.Location += Pred.GetAceForwardInAcSpace() * LocalVelocity.Y * (WalkingCycleSeconds / MovementSteps)
+					+ Pred.GetAceRightInAcSpace() * LocalVelocity.X * DeltaTime;
+				Pred.NormalizeOutdoorLandblock();
+			}
+			if (bWalkingTransitionThisFrame && !bJumpAirborne)
+			{
+				Pred.Location += Pred.GetAcQuat().RotateVector(WalkingRootDelta.GetTranslation()) * GetLocalCreatureScale() / MovementSteps;
+				const FQuat Facing = (Pred.GetAcQuat() * WalkingRootDelta.GetRotation()).GetNormalized();
+				Pred.RotationW = Facing.W;
+				Pred.RotationXYZ = FVector(Facing.X, Facing.Y, Facing.Z);
 				Pred.NormalizeOutdoorLandblock();
 			}
 			// Retail applies authored grounded position frames in addition to both
@@ -3542,6 +3598,17 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				if (bLocalPredicting)
 				{
 					Client->SetReportedPosition(Pred);
+					if (bWalkingTransitionThisFrame && !bMoving && !bJumpAirborne)
+					{
+						// Raw keys are already released. Continue AutoPos through the
+						// final collision-resolved footstep, then relinquish ownership.
+						Client->SetForcePositionReporting(true);
+						if (!bWalkingTransitionPending)
+						{
+							Client->FlushAutonomousPosition(true);
+							Client->SetForcePositionReporting(false);
+						}
+					}
 				}
 				else if (bHaveLastServerPose)
 				{
@@ -6566,6 +6633,7 @@ void AACEPlayerController::HandlePositionUpdate(int32 ObjectGuid, const FACEPosi
 		bForceMovementResend = true;
 		if (auto* App = P->FindComponentByClass<UACECharacterAppearanceComponent>())
 		{
+			App->ResetWalkingMotion();
 			App->ClearJumpMotionIfAny();
 			App->SetSuppressLocoIdleBlend(false);
 		}
@@ -6574,6 +6642,7 @@ void AACEPlayerController::HandlePositionUpdate(int32 ObjectGuid, const FACEPosi
 
 	if (bForceSnap)
 	{
+		if (auto* App = P->FindComponentByClass<UACECharacterAppearanceComponent>()) App->ResetWalkingMotion();
 		// Lifestone / portal recalls often land on the weenie origin (crystal center).
 		// If the capsule overlaps world geometry at the snap point, push out along facing.
 		{
@@ -7498,6 +7567,12 @@ void AACEPlayerController::HandleMotionUpdate(int32 ObjectGuid, const FACEObject
 						App->QueueActionMotion(Motion.ActionFollowups[I], Motion.FollowupSpeed(I), Motion.CurrentStyle, false);
 					}
 				}
+			}
+			else if (ACEMotion::NormalizeCommand(static_cast<uint32>(Motion.ForwardCommand)) == ACEMotion::Ready)
+			{
+				// Ready is carried as a substate, not an action. In particular it
+				// completes Reload with the authored overhead nock/draw animation.
+				App->FinishMissileMotion();
 			}
 		}
 	}

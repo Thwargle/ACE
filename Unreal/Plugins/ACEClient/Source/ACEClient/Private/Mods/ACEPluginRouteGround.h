@@ -79,6 +79,14 @@ public:
         return FMath::Abs(Last.Z-To.Z)<=90.;
     }
 
+    // Reserve a whole candidate before testing it. Exhausting a shared batch
+    // budget halfway along a distant path does not mean that path is blocked.
+    bool CanQueryPath(const FVector& From,const FVector& To) const
+    {
+        const int32 Steps=FMath::Max(1,FMath::CeilToInt(FVector::Dist2D(From,To)/50.));
+        return Steps<=800 && Steps+1<=Remaining;
+    }
+
     bool Reachable(const FVector& From,const FVector& To,const FACEPluginSightQuery& Sight)
     {
         TArray<FVector> Points;

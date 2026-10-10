@@ -32,6 +32,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 {
 	GENERATED_BODY()
 	friend class FACECollisionSizingTest;
+	friend class FACESelectionToolbarTest;
 	friend class UACEVRComponent;
 	friend class FACEVRRigTest;
 	friend class FACEVRInteriorTest;
@@ -52,6 +53,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACELedgeSafetyTest;
 	friend class FACEFortTethStairsTest;
 	friend class FACERunSpeedParityTest;
+	friend class FACEWalkingStepTest;
 	friend class FACEMissingDatLoginTest;
 	friend class FACELauncherViewportTest;
 	friend class FACECameraEdgeTest;
@@ -85,12 +87,15 @@ public:
 	void SetDesktopInterfaceHidden(bool bHideInterface);
 	bool IsDesktopInterfaceHidden() const { return bDesktopInterfaceHidden && !IsVRActive(); }
 	TSharedPtr<class FACEKeyboardRouter> KeyboardRouter;
+	TSharedPtr<class FACEDesktopDisplay> DesktopDisplay;
+	void RefreshDesktopDisplayInputMode();
 	TSharedPtr<class FACEDesktopPointer> DesktopPointer;
 
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void SetupInputComponent() override;
 	virtual void SetInputMode(const FInputModeDataBase& InData) override;
+	virtual EMouseCursor::Type GetMouseCursor() const override;
 	virtual bool InputKey(const FInputKeyEventArgs& Params) override;
 	virtual void PlayerTick(float DeltaTime) override;
 

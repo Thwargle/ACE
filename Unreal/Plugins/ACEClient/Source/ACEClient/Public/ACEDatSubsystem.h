@@ -380,6 +380,8 @@ public:
 	/** One-shot MotionTable Links transition (door Off→On / attack Ready→Slash). Clamps to final frame.
 	 *  PreferredStyle = CurrentStyle (HandCombat etc.); 0 = DefaultStyle / NonCombat fallbacks. */
 	bool BuildTransitionRootTrack(uint32 Table, uint32 From, uint32 To, uint32 Style, ACELandingMotion::FRootTrack& Out) const;
+	bool BuildWalkingLink(uint32 Table, int8 From, int8 To, uint32 Style, ACEWalkingMotion::FLink& Out) const;
+	bool EvaluateWalkingLink(const ACEWalkingMotion::FLink& Link, int32 Parts, TArray<FTransform>& Out, float Scale, int32& Count, TArray<FACEDatAnimationHook>& Hooks) const;
 	bool EvaluateMotionLink(uint32 MotionTableId, uint32 FromCommand, uint32 ToCommand, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount, bool& bOutFinished,
 		const float* PreviousTimeSeconds = nullptr, TArray<FACEDatAnimationHook>* OutCrossedHooks = nullptr, uint32 PreferredStyle = 0) const;
 	/** Loop a raw Animation DID (Setup DefaultAnimation / lifestones). */
