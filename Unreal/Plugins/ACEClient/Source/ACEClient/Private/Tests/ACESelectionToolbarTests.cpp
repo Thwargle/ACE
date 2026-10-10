@@ -192,6 +192,15 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     TestEqual(TEXT("Server stack decrease clamps quantity"), Binder->SelectedStackAmount, 5);
     TestEqual(TEXT("Server stack decrease updates entry"), Entry->GetText().ToString(), FString(TEXT("5")));
 
+    StackItem.StackSize=12;Binder->RefreshSelectionOverlay();
+    TestEqual(TEXT("A merged full stack selects the new full quantity"),Binder->SelectedStackAmount,12);
+    TestEqual(TEXT("Merged toolbar count uses the current total"),Label->GetText().ToString(),FString(TEXT("12 Steel Arrows")));
+    Commit(TEXT("7"));StackItem.StackSize=15;Binder->RefreshSelectionOverlay();
+    TestEqual(TEXT("Inventory growth preserves an explicit partial quantity"),Binder->SelectedStackAmount,7);
+    Commit(TEXT("15"));StackItem.StackSize=21;Session.OnSelectionChanged.Broadcast(Session.SelectedObject);
+    TestEqual(TEXT("Selection notification also expands a full stack after merging"),Binder->SelectedStackAmount,21);
+    TestEqual(TEXT("Selection notification refreshes combined stack label"),Label->GetText().ToString(),FString(TEXT("21 Steel Arrows")));
+
     StackItem.StackSize = 1; Binder->RefreshSelectionOverlay();
     TestEqual(TEXT("One remaining stackable item uses a singular uncounted name"), Label->GetText().ToString(), FString(TEXT("Steel Arrow")));
     TestFalse(TEXT("One remaining stackable item hides split controls"), bool(Stack->bVisible));
@@ -250,6 +259,31 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     Session.WorldObjects.Remove(Ammo.Guid);Session.WorldObjects.Remove(Thrown.Guid);Binder->SyncCombatAmmoCount();
     TestEqual(TEXT("No ammunition clears the count"),Binder->CombatAmmoLabel->GetVisibility(),ESlateVisibility::Collapsed);
     TestTrue(TEXT("UI regression has no network connection"), Session.CachedC2SPackets.IsEmpty());
+    {
+        const auto Bag=Manager->FindElementByName(TEXT("InventoryButton"));
+        if(!TestTrue(TEXT("Toolbar backpack exists"),Bag.IsValid()))return false;
+        Binder->ShowPanelPage(TEXT("InventoryPanel_Field"));Binder->SyncInventoryButtonVisual();
+        const auto Open=Bag->ResolvePaintState(false,false,false);
+        TestTrue(TEXT("Backpack retains retail open artwork after pointer leaves"),Open && Open->ImageFileId==0x06004CF8u);
+        Draw(TEXT("InventoryOpenToolbar"));
+        Binder->HidePanel();
+        const auto Closed=Bag->ResolvePaintState(false,false,false);
+        TestTrue(TEXT("Closing inventory restores the closed backpack"),Closed && Closed->ImageFileId==0x06004CF7u);
+
+        FACEWorldObject First=Item;First.Guid=702;First.Name=TEXT("First vendor stock");First.VendorQuantityAvailable=-1;
+        FACEWorldObject Second=First;Second.Guid=701;Second.Name=TEXT("Second vendor stock");
+        Session.WorldObjects.Add(First.Guid,First);Session.WorldObjects.Add(Second.Guid,Second);
+        Session.VendorMerchandise={First,Second};
+        Binder->ShowVendorPanel(700);
+        TestEqual(TEXT("Opening vendor selects leftmost stock in displayed order"),Session.SelectedObject.Guid,First.Guid);
+        TestEqual(TEXT("Buy/Add to List use that initial selection"),Binder->VendorSelectedGuid,First.Guid);
+        Binder->VendorSelectedGuid=Second.Guid;Client->SelectObject(Second.Guid);
+        Binder->HandleVendorOpened(700);
+        TestEqual(TEXT("Same-vendor updates retain the user's selection"),Session.SelectedObject.Guid,Second.Guid);
+        Binder->HideVendorPanel();Binder->ShowVendorPanel(700);
+        TestEqual(TEXT("Reopening vendor resets to first merchandise"),Session.SelectedObject.Guid,First.Guid);
+        Binder->HideVendorPanel();Session.VendorMerchandise.Reset();
+    }
     auto* World=UWorld::CreateWorld(EWorldType::Game,false);
     auto* PC=World->SpawnActor<AACEPlayerController>();PC->Client=Client;PC->DatGameplayBinder=Binder;
     Binder->PlayerController=PC;
@@ -288,6 +322,24 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     TestTrue(TEXT("Empty-world drag release is consumed"),Binder->TryFinishInventoryDrag(FVector2D(800,300)));
     TestTrue(TEXT("Empty release drops the item despite an old NPC selection"),HasAction(ACEGameAction::DropItem,Item.Guid));
     TestFalse(TEXT("Drag miss cannot give to the old selection"),HasAction(ACEGameAction::GiveObjectRequest,NPC.Guid));
+    {
+        FACEWorldObject Stone;Stone.Guid=800;Stone.ContainerId=Self.Guid;Stone.ItemType=ACEItemType::ManaStone;
+        Stone.ItemUseable=0x00080008;Stone.TargetType=ACEItemType::Jewelry;Session.WorldObjects.Add(Stone.Guid,Stone);
+        Session.bUseBusy=false;Session.CachedC2SPackets.Reset();Binder->PendingUseWithSourceGuid=Stone.Guid;
+        TestFalse(TEXT("Corpse is not a compatible mana-stone cursor target"),Binder->IsPendingUseTargetCompatible(Corpse.Guid));
+        TestTrue(TEXT("Clicking an invalid target is consumed"),Binder->TryCompletePendingUseWithTarget(Corpse.Guid));
+        TestEqual(TEXT("Invalid corpse never offers destruction confirmation"),Binder->ManaStoneConfirmTarget,0);
+        TestEqual(TEXT("Invalid target leaves targeting active"),Binder->PendingUseWithSourceGuid,Stone.Guid);
+        TestFalse(TEXT("Invalid corpse sends no use packet"),HasAction(ACEGameAction::UseWithTarget,Stone.Guid));
+        Binder->TryCompletePendingUseWithTarget(Loot.Guid);
+        TestEqual(TEXT("An unowned item is also excluded from an inventory-only target mode"),Binder->ManaStoneConfirmTarget,0);
+        Binder->TryCompletePendingUseWithTarget(Item.Guid);
+        TestEqual(TEXT("Compatible owned item still asks for destruction confirmation"),Binder->ManaStoneConfirmTarget,Item.Guid);
+        // Ownership can change between opening and accepting the confirmation.
+        Session.WorldObjects[Item.Guid].ContainerId=Corpse.Guid;Binder->FinishManaStoneConfirmation(true);
+        TestFalse(TEXT("Confirmation rechecks target eligibility"),HasAction(ACEGameAction::UseWithTarget,Stone.Guid));
+        Session.WorldObjects[Item.Guid].ContainerId=Self.Guid;
+    }
     return !HasAnyErrors();
 }
 #endif

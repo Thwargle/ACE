@@ -46,7 +46,9 @@ ACECLIENT_API bool IsTextEntryFocused();
 // previously held direction. Preserve physical event order across remaps.
 ACECLIENT_API float MovementAxis(const APlayerController* PC, FKey Positive, FKey Negative,
  const TMap<FKey,uint64>& PressOrder,FKey AdditionalPositive=FKey(),FKey AdditionalNegative=FKey());
-ACECLIENT_API bool Matches(FKey ActionKey, const FInputChord& Input);
+// Controller buttons can be held as modifiers in addition to Shift/Ctrl/Alt/Cmd.
+// Supply the controller when matching live input (including immediate UI actions).
+ACECLIENT_API bool Matches(FKey ActionKey, const FInputChord& Input, const APlayerController* PC=nullptr);
 ACECLIENT_API void BeginEdit();
 ACECLIENT_API void Defaults();
 ACECLIENT_API void Revert();
@@ -54,7 +56,8 @@ ACECLIENT_API void Cancel();
 ACECLIENT_API void Commit();
 ACECLIENT_API void Reload();
 ACECLIENT_API FInputChord Get(FKey DefaultKey, int32 Slot);
-ACECLIENT_API void Set(FKey DefaultKey, int32 Slot, FInputChord Chord);
+ACECLIENT_API TArray<FKey> GetControllerModifiers(FKey ActionKey, int32 Slot);
+ACECLIENT_API void Set(FKey DefaultKey, int32 Slot, FInputChord Chord, const TArray<FKey>& ControllerModifiers={});
 ACECLIENT_API bool IsEditing();
 ACECLIENT_API FString GetKeymapFileName();
 ACECLIENT_API void SetKeymapFileName(const FString& Name);

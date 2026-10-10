@@ -22,7 +22,7 @@ FReply UACEChatEntry::HandleChatKey(const FGeometry&, const FKeyEvent& Event)
 {
     if (Binder.IsValid() && !ACEInputBindings::IsEditing()
         && ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("ToggleChat")),
-            FInputChord(Event.GetKey(), Event.IsShiftDown(), Event.IsControlDown(), Event.IsAltDown(), Event.IsCommandDown())))
+            FInputChord(Event.GetKey(), Event.IsShiftDown(), Event.IsControlDown(), Event.IsAltDown(), Event.IsCommandDown()),GetOwningPlayer()))
     {
         if (!Event.IsRepeat()) Binder->ToggleChatEntryFocus();
         return FReply::Handled();

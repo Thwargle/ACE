@@ -1045,7 +1045,9 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
     if (!PC || !C->GetSession() || (C->IsUseBusy() && Action!=TEXT("confirm")) || PC->IsWorldTransitionActive()) return;
     const double Now = FPlatformTime::Seconds();
     if (Now < P.NextAction) return;
-    P.NextAction = Now + .5;
+    // Steering does not send a use/cast action. Reserving the action throttle
+    // here blocked the arrival wake and stopped at every short return segment.
+    P.NextAction = (Action==TEXT("move") || Action==TEXT("face")) ? Now : Now + .5;
     P.WaitAction.Empty();
     if(P.Id==TEXT("ucm")&&Action==TEXT("identify")&&String(I,TEXT("activity"))==TEXT("combat"))
     {
@@ -1107,7 +1109,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         if (!Dest.IsValid() || (((uint32(Dest.CellId)>>16)!=(uint32(Pos.CellId)>>16)) && ((uint32(Dest.CellId)&0xffff)>=0x100 || (uint32(Pos.CellId)&0xffff)>=0x100)) || FVector::Distance(Dest.ToUnrealLocation(), Pos.ToUnrealLocation()) > 40000.)
         { ReportActivityFailure(P,I, TEXT("Route needs a portal between these cells, or a closer waypoint (maximum 400m)")); return; }
         if (MovementOwner != P.Id || FVector::Distance(Dest.ToUnrealLocation(), MoveTarget.ToUnrealLocation()) > .1)
-        { LastMovePosition = Pos.ToUnrealLocation(); LastProgress = Now; }
+        { LastMovePosition = Pos.ToUnrealLocation(); LastProgress = Now; bMoveArrived = false; }
         // Stay inside the policy's arrival radius. A fixed 70cm host stop
         // stranded routes configured with a smaller NavCloseStopRange.
         MoveArrivalRadius = FMath::Clamp(float(Number(I,TEXT("arrival_radius"),.8)) * 100.f,1.f,500.f) * .875f;
@@ -1201,7 +1203,7 @@ void UACEPluginSubsystem::RecordRouteMovement(const FACEPosition& Position,uint3
     if(RouteMovementSamples.Num()>=256){bRouteMovementOverflow=true;return;}
     RouteMovementSamples.Add(Position);
 }
-void UACEPluginSubsystem::ApplyMovement(AACEPlayerController* PC, float& F, float& R, float& T, bool Manual, bool Blocked, bool VR, const FVector& Facing)
+void UACEPluginSubsystem::ApplyMovement(AACEPlayerController* PC, float& F, float& R, float& T, bool Manual, bool Blocked, bool VR, const FVector& Facing, float MaxFrameTravel)
 {
     // Sample the ordinary predicted path even while Lua waits for a server
     // attack/use acknowledgment. No new movement or networking is generated.
@@ -1272,12 +1274,20 @@ void UACEPluginSubsystem::ApplyMovement(AACEPlayerController* PC, float& F, floa
     if (Delta.Size() < MoveArrivalRadius || Delta.Size2D() < 1.)
     {
         F=R=T=0;
+        if (!bMoveArrived && Delta.Size() < MoveArrivalRadius)
+        {
+            bMoveArrived = true;
+            // Advance on the next policy tick instead of waiting a quarter
+            // second at every breadcrumb. Never bypass pending use/cast gates.
+            if (auto P=Find(MovementOwner)) { P->NextDecision=0; ScheduleDecisionWake(Now); }
+        }
         // Use the policy's 3D arrival metric on ramps. An XY-only stop at
         // 70cm could remain almost a metre away along a slope forever.
         // If the recorded height is unreachable, retain the progress watchdog.
         // Recreating an expired movement every tick used to wait forever here.
         return;
     }
+    bMoveArrived = false;
     // The AC avatar travels along local +Y, not Unreal's actor +X. Steer
     // from the predicted physics pose, independently of camera/visual rotation.
     const FVector Direction = Delta.GetSafeNormal2D(), Forward = (VR ? Facing : Pos.GetAceForwardVector()).GetSafeNormal2D();
@@ -1289,5 +1299,13 @@ void UACEPluginSubsystem::ApplyMovement(AACEPlayerController* PC, float& F, floa
         // Controller integrates -T in AC space; the X reflection reverses
         // that sign in Unreal space. Positive T therefore increases UE yaw.
         T = FMath::Clamp(Angle * 2.f, -1.f, 1.f); F = FMath::Abs(Angle) < .3 ? 1.f : 0.f; R = 0;
+    }
+    // A high Run skill or slow frame can cross an entire small arrival sphere
+    // between polls. Bound this frame's normal analog input to the destination;
+    // prediction, collision and MoveToState still use the same movement axes.
+    if (MaxFrameTravel > 0.f)
+    {
+        const float Scale=FMath::Min(1.f, float(Delta.Size2D()) / MaxFrameTravel);
+        F*=Scale; R*=Scale;
     }
 }

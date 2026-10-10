@@ -142,7 +142,7 @@ public:
     TSharedPtr<FJsonObject> Snapshot();
     /** Called before the normal prediction/network pipeline; never teleports the pawn. */
     void ApplyMovement(AACEPlayerController* Controller, float& Forward, float& Right, float& Turn,
-        bool Manual, bool Blocked, bool VR, const FVector& Facing);
+        bool Manual, bool Blocked, bool VR, const FVector& Facing, float MaxFrameTravel = 0.f);
 private:
     void UpdateRouteVisibility(const FACEPosition& Position, const TArray<TSharedPtr<FJsonValue>>& Route,
         const class FACEPluginSightQuery& Sight, const TSharedPtr<FJsonObject>& Snapshot);
@@ -205,6 +205,7 @@ private:
     TOptional<float> FaceHeading;
     FACEPosition MoveTarget;
     float MoveArrivalRadius = 70.f;
+    bool bMoveArrived = false;
     FVector LastMovePosition = FVector::ZeroVector;
     double MoveExpires = 0, LastProgress = 0;
     TSharedPtr<FJsonObject> Settings;

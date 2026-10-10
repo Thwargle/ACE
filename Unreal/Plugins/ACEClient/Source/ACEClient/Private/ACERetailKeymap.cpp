@@ -286,6 +286,8 @@ bool ExportRetailKeymapFile(const FString& Path,FString& Error)
   for(int32 I=0;I<3;++I)
   {
    const auto C=Get(A.Key,I);if(!C.Key.IsValid())continue;
+   if(!GetControllerModifiers(A.Key,I).IsEmpty())
+   {Error=TEXT("Controller combinations are saved locally. Move them to the controller column before exporting a retail keymap.");return false;}
    const FString* Control=Controls.Find(C.Key);
    if(!Control){Error=FString::Printf(TEXT("%s cannot be saved in a retail keymap."),*C.Key.GetDisplayName().ToString());return false;}
    const uint32 Mask=(C.bShift?1u:0u)|(C.bCtrl?2u:0u)|(C.bAlt?4u:0u)|(C.bCmd?8u:0u);

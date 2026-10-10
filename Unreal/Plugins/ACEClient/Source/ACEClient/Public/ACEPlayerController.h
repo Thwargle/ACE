@@ -47,6 +47,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACERetailWorldEntryTest;
 	friend class FACEPortalPlacementTest;
 	friend class FACEPortalDropTest;
+	friend class FACEPortalMotionTest;
 	friend class FACELoadingTransitionTest;
 	friend class FACEPortalRetirementTest;
 	friend class FACELedgeStairsTest;
@@ -195,6 +196,8 @@ public:
 
 	/** World entity under the cursor (Visibility channel). Used for inventory drag→Give. */
 	AACEWorldEntityActor* PickWorldEntityUnderCursor() const;
+	/** Live Slate cursor in viewport pixels, including while a UI widget owns capture. */
+	bool GetWorldPointerPosition(float& X, float& Y) const;
 
 	/** Same as PickWorldEntityUnderCursor but using explicit viewport pixel coords (drag capture). */
 	AACEWorldEntityActor* PickWorldEntityAtScreenPosition(float ScreenX, float ScreenY) const;

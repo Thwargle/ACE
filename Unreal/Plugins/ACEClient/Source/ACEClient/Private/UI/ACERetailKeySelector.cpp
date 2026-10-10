@@ -34,10 +34,11 @@ public:
 bool UACERetailKeySelector::FilterCaptureAnalog(const FAnalogInputEvent& Event)
 {
  const auto Selector=GetCachedWidget();
- if(!GetIsSelectingKey() || !Selector || FMath::Abs(Event.GetAnalogValue())<.6f)return false;
+ if(!GetIsSelectingKey() || !Selector)return false;
+ if(FMath::Abs(Event.GetAnalogValue())<.6f)return false;
  const FKey Key=ACEInputBindings::StickDirectionKey(Event.GetKey(),Event.GetAnalogValue());
  if(!Key.IsValid())return false;
- Selector->OnKeyUp(Selector->GetCachedGeometry(),FKeyEvent(Key,Event.GetModifierKeys(),Event.GetUserIndex(),false,0,0));
+ CapturePulse(FKeyEvent(Key,Event.GetModifierKeys(),Event.GetUserIndex(),false,0,0));
  return true;
 }
 
@@ -47,8 +48,7 @@ bool UACERetailKeySelector::FilterCaptureWheel(const FPointerEvent& Event)
  if(!GetIsSelectingKey() || !Selector || FMath::IsNearlyZero(Event.GetWheelDelta()))return false;
  // Wheel input is a pulse, with modifiers from the actual pointer event.
  const FKey Key=Event.GetWheelDelta()>0?EKeys::MouseScrollUp:EKeys::MouseScrollDown;
- Selector->OnKeyUp(Selector->GetCachedGeometry(),
-  FKeyEvent(Key,Event.GetModifierKeys(),Event.GetUserIndex(),false,0,0));
+ CapturePulse(FKeyEvent(Key,Event.GetModifierKeys(),Event.GetUserIndex(),false,0,0));
  return true;
 }
 
@@ -61,13 +61,20 @@ bool UACERetailKeySelector::FilterCaptureMouseButton(const FPointerEvent& Event,
 
 bool UACERetailKeySelector::FilterCaptureKey(const FKeyEvent& Event,bool Down)
 {
- if(!GetIsSelectingKey()) { CapturePressedKeys.Reset(); CaptureChord.Reset(); return false; }
+ if(!GetIsSelectingKey()) { CapturePressedKeys.Reset(); CaptureChord.Reset(); CaptureControllerModifiers.Reset(); return false; }
  if(Down)
  {
-  if(!Event.IsRepeat())
+  if(!Event.IsRepeat()&&!CapturePressedKeys.Contains(Event.GetKey()))
   {
    CapturePressedKeys.Add(Event.GetKey());
-   if(!Event.GetKey().IsModifierKey() && !CaptureChord.IsSet())CaptureChord=Event;
+   if(Event.GetKey()==EKeys::Escape){CaptureChord=Event;CaptureControllerModifiers.Reset();}
+   else if(!Event.GetKey().IsModifierKey() && (!CaptureChord.IsSet()||CaptureChord->GetKey().IsGamepadKey()))
+   {
+    // The last button is the action; earlier held controller buttons become
+    // modifiers. A trigger tapped on its own remains a normal trigger binding.
+    CaptureChord=Event;CaptureControllerModifiers.Reset();
+    for(FKey Held:CapturePressedKeys)if(Held.IsGamepadKey()&&Held!=Event.GetKey())CaptureControllerModifiers.Add(Held);
+   }
   }
   return true;
  }
@@ -81,15 +88,35 @@ bool UACERetailKeySelector::FilterCaptureKey(const FKeyEvent& Event,bool Down)
   const FKeyEvent ChordEvent=CaptureChord.IsSet()?CaptureChord.GetValue():Event;
   // Deliver to the selector that owns capture. Platform focus/navigation must
   // not consume Tab/Enter or route the release to a different Slate widget.
-  if(const auto Selector=GetCachedWidget()) Selector->OnKeyUp(Selector->GetCachedGeometry(),ChordEvent);
+  CompleteCapture(ChordEvent);
  }
  return true;
+}
+void UACERetailKeySelector::CapturePulse(const FKeyEvent& Event)
+{
+ CaptureControllerModifiers.Reset();
+ for(FKey Held:CapturePressedKeys)if(Held.IsGamepadKey()&&Held!=Event.GetKey())CaptureControllerModifiers.Add(Held);
+ CompleteCapture(Event);
+}
+void UACERetailKeySelector::CompleteCapture(const FKeyEvent& Event)
+{
+ if(CaptureControllerModifiers.IsEmpty()||Event.GetKey()==EKeys::Escape)
+ {
+  if(const auto Selector=GetCachedWidget())Selector->OnKeyUp(Selector->GetCachedGeometry(),Event);
+  return;
+ }
+ // SInputKeySelector can only emit keyboard modifier bits. Finish its capture
+ // without emitting a plain binding (which would unbind the plain-button action).
+ const auto Modifiers=CaptureControllerModifiers;
+ CancelCapture();
+ ACEInputBindings::Set(ActionKey,BindingSlot,FInputChord(Event.GetKey(),Event.IsShiftDown(),Event.IsControlDown(),Event.IsAltDown(),Event.IsCommandDown()),Modifiers);
+ RefreshBinding();
 }
 void UACERetailKeySelector::ReleaseSlateResources(bool ReleaseChildren)
 {
  if(CaptureFilter && FSlateApplication::IsInitialized())
   FSlateApplication::Get().UnregisterInputPreProcessor(CaptureFilter);
- CaptureFilter.Reset();CapturePressedKeys.Reset();CaptureChord.Reset();
+ CaptureFilter.Reset();CapturePressedKeys.Reset();CaptureChord.Reset();CaptureControllerModifiers.Reset();
  Super::ReleaseSlateResources(ReleaseChildren);
 }
 void UACERetailKeySelector::CancelCapture()
@@ -109,6 +136,8 @@ void UACERetailKeySelector::CaptureStateChanged()
 {
  CapturePressedKeys.Reset();
  CaptureChord.Reset();
+ CaptureControllerModifiers.Reset();
+
  if(!FSlateApplication::IsInitialized()) return;
  if(GetIsSelectingKey() && !CaptureFilter)
  {
@@ -140,7 +169,7 @@ void UACERetailKeySelector::InitializeBinding(FKey Key,int32 InSlot)
  SetMargin(FMargin(0));
  SetNoKeySpecifiedText(FText::GetEmpty());
  SetKeySelectionText(FText::FromString(TEXT("Press a key")));
- UACEHoverTooltipWidget::SetWidgetTooltip(this, FText::FromString(TEXT("Click, then press a key, mouse button, controller button, move a stick, or scroll the wheel. Hold Shift, Ctrl, or Alt to bind a combination. Backspace alone clears; Escape cancels. Controller mappings are saved locally; retail keymap files contain the three keyboard/mouse columns.")));
+ UACEHoverTooltipWidget::SetWidgetTooltip(this, FText::FromString(TEXT("Click, then press a key, mouse button, controller button, move a stick, or scroll the wheel. For combinations, hold Shift/Ctrl/Alt or a controller button, then press the action button (for example, hold RT and press A). Release the action button to finish. Backspace alone clears; Escape cancels. Controller mappings are saved locally; retail keymap files contain the three keyboard/mouse columns.")));
  SetSelectedKey(ACEInputBindings::Get(Key,InSlot));
  OnKeySelected.AddDynamic(this,&UACERetailKeySelector::AcceptBinding);
  OnIsSelectingKeyChanged.AddDynamic(this,&UACERetailKeySelector::CaptureStateChanged);
@@ -182,6 +211,21 @@ void UACERetailKeySelector::RefreshBinding()
     +(Chord.bShift?TEXT("Shift+"):FString())+(Chord.bCmd?TEXT("Cmd+"):FString());
    Caption=Modifiers+ButtonName;
   }
+  FString ControllerPrefix;
+  for(FKey Modifier:ACEInputBindings::GetControllerModifiers(ActionKey,BindingSlot))
+  {
+   FString Name=Modifier.GetDisplayName().ToString();Name.ReplaceInline(TEXT("Gamepad "),TEXT(""));
+   if(Modifier==EKeys::Gamepad_RightTrigger)Name=TEXT("RT");
+   else if(Modifier==EKeys::Gamepad_LeftTrigger)Name=TEXT("LT");
+   else if(Modifier==EKeys::Gamepad_LeftShoulder)Name=TEXT("LB");
+   else if(Modifier==EKeys::Gamepad_RightShoulder)Name=TEXT("RB");
+   else if(Modifier==EKeys::Gamepad_FaceButton_Bottom)Name=TEXT("A");
+   else if(Modifier==EKeys::Gamepad_FaceButton_Right)Name=TEXT("B");
+   else if(Modifier==EKeys::Gamepad_FaceButton_Left)Name=TEXT("X");
+   else if(Modifier==EKeys::Gamepad_FaceButton_Top)Name=TEXT("Y");
+   ControllerPrefix+=Name+TEXT("+");
+  }
+  Caption=ControllerPrefix+Caption;
   Caption.ReplaceInline(TEXT("L Stick "),TEXT("L "));Caption.ReplaceInline(TEXT("R Stick "),TEXT("R "));
   RetailLabel->SetText(FText::FromString(GetIsSelectingKey()?TEXT("Press a key"):Caption));
  }

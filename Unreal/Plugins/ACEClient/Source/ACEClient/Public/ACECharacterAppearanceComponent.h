@@ -30,6 +30,7 @@ class ACECLIENT_API UACECharacterAppearanceComponent : public UActorComponent
 	friend class FACERunSpeedParityTest;
 	friend class FACEEmoteTransitionTest;
 	friend class FACEArcheryMotionTest;
+	friend class FACEPortalMotionTest;
 	friend class FACEWalkingStepTest;
 	friend class FACEMultipartUpdateTest;
 	friend class FACERetailScreenTest;
@@ -157,6 +158,8 @@ public:
 	void ClearActionMotion();
 	/** Respawn keeps the pawn; release only its death pose, leaving other actions alone. */
 	void ClearDeathMotion();
+	/** Teleport reuses the avatar, but not departed locomotion, action queues or pose blends. */
+	void ResetMotionForTeleport();
 
 	/** Seed held door pose without replaying (ObjectCreate already On/Off). */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")

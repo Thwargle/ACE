@@ -219,6 +219,86 @@ bool FACEPortalPlacementTest::RunTest(const FString&)
     return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPortalMotionTest,"ACE.RetailParity.PortalArrivalMotion",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEPortalMotionTest::RunTest(const FString&)
+{
+    FEntryWorld F;
+    auto* Dat=F.GI->GetSubsystem<UACEDatSubsystem>();
+    if(!TestTrue(TEXT("Retail DAT opens"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+    auto* Client=F.GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
+    auto* PC=F.World->SpawnActor<AACEPlayerController>();PC->Client=Client;F.World->AddController(PC);
+    auto* Pawn=F.World->SpawnActor<APawn>();auto* Root=NewObject<USceneComponent>(Pawn);
+    Pawn->SetRootComponent(Root);Pawn->AddInstanceComponent(Root);Root->RegisterComponent();PC->Possess(Pawn);
+    auto* App=NewObject<UACECharacterAppearanceComponent>(Pawn);Pawn->AddInstanceComponent(App);App->RegisterComponent();
+    FACEWorldObject Self;Self.Guid=123;Self.SetupId=0x02000001;Self.MotionTableId=0x09000001;Self.bIsPlayer=true;
+    if(!TestTrue(TEXT("Player uses actual retail animation geometry"),App->ApplyWorldObject(Self,100,false)))return false;
+    Session->PlayerVitals.bValid=true;
+    for(uint32 Mode:{ACECombatMode::NonCombat,ACECombatMode::Magic})
+    for(float Dt:{1.f/30,1.f/90,1.f/144})
+    for(int Scenario=0;Scenario<3;++Scenario)
+    {
+        Session->PlayerVitals.CombatMode=Mode;
+        const uint32 Style=Mode==ACECombatMode::Magic?ACEMotion::StanceMagic:ACEMotion::StanceNonCombat;
+        App->SetPreferredStyle(Style);
+        App->SetLocomotionInput(1,0,Scenario!=2,1.5f);
+        App->TickComponent(.1f,LEVELTICK_All,nullptr);
+        if(Scenario==1)
+        {
+            App->SetHeldActionMotion(0x40000015); // Portal entered during a running landing.
+            App->ClearJumpMotionIfAny(true);
+            TestEqual(TEXT("Fixture has a pending Falling->Run link"),App->ActionCommand,0x44000007u);
+            App->QueueActionMotion(ACEMotion::Ready);
+        }
+        PC->ForwardAxis=1;PC->RightAxis=1;PC->TurnAxis=1;PC->bAutoRun=true;
+        PC->bMouseLookToggled=true;
+        // Shared arrival path used by the tunnel reveal and instant teleports.
+        PC->InvalidateMovementAfterTeleport();
+        TestFalse(TEXT("Teleport cancels autorun as retail does"),PC->bAutoRun);
+        TestTrue(TEXT("Teleport retains mouselook intent"),PC->bMouseLookToggled);
+        TestTrue(TEXT("No cached movement survives arrival"),PC->ForwardAxis==0 && PC->RightAxis==0 && PC->TurnAxis==0);
+        TestTrue(TEXT("Arrival discards locomotion, walk links and queued actions"),App->LocomotionForward==0
+            && App->LocomotionStrafe==0 && !App->HasWalkingTransition() && App->ActionCommand==0
+            && App->PendingActionCommands.IsEmpty() && App->QueuedHoldAction==0);
+        TestEqual(TEXT("Local idle keeps the restored combat stance"),App->PreferredStyle,Style);
+        TestEqual(TEXT("Network stop keeps the restored combat stance"),Session->GetCurrentStance(),Style);
+        TestTrue(TEXT("Grounded arrival reports contact"),Session->bAutoPosContact);
+        // Check the rendered first frame and subsequent three seconds against
+        // retail Ready, not merely the state fields: no departed pose crossfade.
+        float Elapsed=0;
+        for(int Frame=0;Frame<=FMath::CeilToInt(3.f/Dt);++Frame)
+        {
+            if(Frame>0){App->TickComponent(Dt,LEVELTICK_All,nullptr);Elapsed+=Dt;}
+            TArray<FTransform> Expected;int32 Count=0;
+            if(!TestTrue(TEXT("Retail Ready resolves"),Dat->EvaluateMotionCommand(0x09000001,ACEMotion::Ready,
+                Elapsed,App->GetPartCount(),Expected,100,Count,nullptr,nullptr,Style)))return false;
+            for(int Part=0;Part<Count;++Part)
+            {
+                // Render updates intentionally skip sub-millimeter translation
+                // changes. Compare within that tolerance, keeping rotation tight.
+                const FTransform& Actual=App->GetPartMesh(Part)->GetRelativeTransform();
+                if(!Actual.GetTranslation().Equals(Expected[Part].GetTranslation(),.05)
+                    || !Actual.GetRotation().Equals(Expected[Part].GetRotation(),.00002)
+                    || !Actual.GetScale3D().Equals(Expected[Part].GetScale3D(),.0001))
+                {AddError(FString::Printf(TEXT("Portal idle differs: mode %u scenario %d frame %d part %d"),Mode,Scenario,Frame,Part));return false;}
+            }
+        }
+        // Actual new movement resumes immediately; it is not locked by a cooldown.
+        App->SetLocomotionInput(1,0,true,1);App->TickComponent(.1f,LEVELTICK_All,nullptr);
+        TestEqual(TEXT("New input resumes running"),App->LocomotionForward,1.f);
+    }
+    App->SetLocomotionInput(1,0,true,1);
+    App->SetHeldActionMotion(0x40000015);App->ClearJumpMotionIfAny(true);
+    PC->InvalidateMovementAfterTeleport(true);
+    TestEqual(TEXT("Airborne portal arrival uses Falling, never a running landing"),App->ActionCommand,0x40000015u);
+    TestTrue(TEXT("Airborne arrival holds Falling and discards old movement"),App->bHoldActionFinal && App->LocomotionForward==0);
+    TestTrue(TEXT("Airborne arrival retains prediction and reports no contact"),PC->bJumpAirborne && PC->bLocalPredicting && !Session->bAutoPosContact);
+    // Repeated arrivals must also release a previous airborne hold.
+    PC->InvalidateMovementAfterTeleport();
+    TestTrue(TEXT("Following grounded teleport restores idle/contact"),App->ActionCommand==0 && !PC->bJumpAirborne && Session->bAutoPosContact);
+    return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPortalDropTest,"ACE.RetailParity.PortalDrops",
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACEPortalDropTest::RunTest(const FString&)

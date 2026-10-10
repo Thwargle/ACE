@@ -12,6 +12,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Widgets/SWindow.h"
 #include "Widgets/Input/SEditableTextBox.h"
+#include "UI/ACERetailTextEntry.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEInputBindingsTest,"ACE.RetailParity.KeyboardBindings",
  EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
@@ -55,6 +56,38 @@ bool FACEInputBindingsTest::RunTest(const FString&)
   TestFalse(TEXT("Text entry cannot leave forward key latched"),Movement->IsInputKeyDown(EKeys::W));
   Slate.ClearKeyboardFocus();Hold({EKeys::W});
   TestTrue(TEXT("Gameplay resumes when text entry loses focus"),ACEInputBindings::Down(PC,EKeys::W));
+  Slate.RequestDestroyWindow(Window);if(PreviousFocus)Slate.SetKeyboardFocus(PreviousFocus);
+ }
+ {
+  // Journal, Page List, Fellowship, Friends and Squelch share this DAT editor.
+  auto& Slate=FSlateApplication::Get();const auto PreviousFocus=Slate.GetKeyboardFocusedWidget();
+  auto* Entry=NewObject<UACERetailTextEntry>();const auto Widget=Entry->TakeWidget();
+  auto Window=SNew(SWindow).ClientSize(FVector2D(300,80))[Widget];Slate.AddWindow(Window,false);
+  for(bool Multiline:{false,true})
+  {
+   Entry->bMultiline=Multiline;Entry->SetText(FText::GetEmpty());Slate.SetKeyboardFocus(Widget);
+   TestTrue(TEXT("Retail bitmap text editor blocks gameplay polling"),ACEInputBindings::IsTextEntryFocused());
+   Hold({EKeys::W,EKeys::E});
+   TestFalse(TEXT("Retail field suppresses held movement"),ACEInputBindings::Down(PC,EKeys::W));
+   TestFalse(TEXT("Retail field suppresses examine"),ACEInputBindings::Pressed(PC,ACEInputBindings::Action(TEXT("Examine"))));
+   for(FKey Key:{EKeys::W,EKeys::A,EKeys::S,EKeys::D,EKeys::R})
+   {
+    TestTrue(TEXT("Retail key down does not bubble to panel/viewport actions"),Widget->OnKeyDown(FGeometry(),FKeyEvent(Key,FModifierKeysState(),0,false,0,0)).IsEventHandled());
+    Movement->InputKey(FInputKeyEventArgs::CreateSimulated(Key,IE_Pressed,1.f));
+    Movement->PlayerInput->ProcessInputStack({},.016f,false);
+    TestFalse(TEXT("Typing cannot latch a gameplay key"),Movement->IsInputKeyDown(Key));
+   }
+   for(TCHAR C:FString(TEXT("wasdr")))Slate.ProcessKeyCharEvent(FCharacterEvent(C,FModifierKeysState(),0,false));
+   TestEqual(TEXT("Letters still enter the retail field"),Entry->GetText().ToString(),FString(TEXT("wasdr")));
+   // Releases must reach PlayerInput even when a field gained focus mid-hold.
+   Movement->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));
+   Movement->PlayerInput->ProcessInputStack({},.016f,false);
+   Movement->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Released,0.f));
+   Movement->PlayerInput->ProcessInputStack({},.016f,false);
+   TestFalse(TEXT("Focus during a held key cannot strand movement after editing"),Movement->IsInputKeyDown(EKeys::W));
+   Slate.ClearKeyboardFocus();
+  }
+  Hold({EKeys::W});TestTrue(TEXT("Gameplay resumes after retail editing"),ACEInputBindings::Down(PC,EKeys::W));
   Slate.RequestDestroyWindow(Window);if(PreviousFocus)Slate.SetKeyboardFocus(PreviousFocus);
  }
  // Shipped DAT gmDefaultMap (14000000) and DefaultMap (14000002),

@@ -380,6 +380,10 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
     Appearance->AnimTime=Appearance->DeferredPoseDeltaTime=0;Appearance->LocomotionForward=Appearance->LocomotionStrafe=0;
    }
    const float ExpectedRate=Run?C.RunSideRate:1.248f;
+   // Start from an arbitrary idle phase. Retail starts the new sidestep
+   // immediately instead of easing from this pose for a quarter second.
+   App->AnimTime=.37f;App->bWasLocomotionMoving=false;
+   App->StanceBlendAlpha=1.f;App->StanceBlendFrom.Reset();
    FACEBinaryWriter W;W.WriteUInt32(Other.Guid);W.WriteUInt16(0);W.WriteUInt16(++MotionStamp);W.WriteUInt16(0);W.WriteUInt8(0);W.Align();
    W.WriteUInt8(0);W.WriteUInt8(0);W.WriteUInt16(uint16(Style));
    W.WriteUInt32(0x18);W.WriteUInt16(0x000f);W.WriteFloat(Direction*ExpectedRate);W.Align();
@@ -388,7 +392,17 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
    Key(Direction>0?EKeys::C:EKeys::Z,true);if(!Run)Key(EKeys::LeftShift,true);
    const int32 Frames=FMath::RoundToInt(FPS*.7f);
    for(int32 Frame=0;Frame<Frames;++Frame)
-   {PC->PlayerTick(1.f/FPS);App->TickComponent(1.f/FPS,LEVELTICK_All,nullptr);RemoteApp->TickComponent(1.f/FPS,LEVELTICK_All,nullptr);}
+   {
+    PC->PlayerTick(1.f/FPS);App->TickComponent(1.f/FPS,LEVELTICK_All,nullptr);RemoteApp->TickComponent(1.f/FPS,LEVELTICK_All,nullptr);
+    if(Frame==0)
+    {
+     TArray<FTransform> FirstStep;int32 FirstCount=0;
+     if(!Dat->EvaluateMotionCommand(Self.MotionTableId,ACEMotion::SideStepRight,Direction*ExpectedRate/FPS,
+      App->GetPartCount(),FirstStep,100,FirstCount,nullptr,nullptr,Style))return;
+     for(int32 Part=0;Part<FirstCount;++Part)
+      TestTrue(TEXT("First strafe frame immediately uses the authored step pose"),App->GetPartMesh(Part)->GetRelativeTransform().Equals(FirstStep[Part],.04));
+    }
+   }
    TestTrue(TEXT("Local strafe cadence matches retail's walk multiplier and run cap"),FMath::IsNearlyEqual(App->LocomotionPlayRate,ExpectedRate,.00001f));
    const double Time=double(Frames)/FPS,Travel=FVector::Dist2D(StartFeet,Pawn->GetActorLocation())/100.;
    TestTrue(TEXT("Cadence correction preserves retail lateral travel"),FMath::Abs(Travel-Time*ExpectedRate*1.25)<.005);

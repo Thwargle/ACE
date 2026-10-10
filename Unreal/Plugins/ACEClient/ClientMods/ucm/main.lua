@@ -1335,6 +1335,17 @@ local function tick(s,p)
   -- Return along positions actually traversed during combat/looting. Picking
   -- the nearest waypoint after a chase can cut across an adjacent room wall.
   if route_walking then route_trail={} end
+  -- Loot can be directly ahead on the leg already being followed. Once back
+  -- on that same segment, continue toward its pending waypoint instead of
+  -- walking backwards to the departure point. The tight 3D corridor excludes
+  -- parallel rooms/floors; off-route returns still retain their observed bends.
+  local destination=route[point]
+  if not route_join_pending and #route_trail>0 and destination and (not destination.legacy or destination.walk_first) then
+   local ax,ay,az=world(route_trail[1]);local bx,by,bz=world(destination);local x,y,z=world(s.position)
+   local dx,dy,dz=bx-ax,by-ay,bz-az;local length=dx*dx+dy*dy+dz*dz
+   local t=length>0 and ((x-ax)*dx+(y-ay)*dy+(z-az)*dz)/length or -1
+   if t>=0 and t<=1 and (x-ax-t*dx)^2+(y-ay-t*dy)^2+(z-az-t*dz)^2<=.2^2 then route_trail={} end
+  end
   while #route_trail>0 do
    local back=route_trail[#route_trail]
    if distance(s.position,back)<=.45 then table.remove(route_trail)
@@ -2586,6 +2597,19 @@ local function run(s,p)
    -- travel. Only an actual teleport/revision invalidates the return trail.
    local function remember(at)
     if distance(at,route_trail[#route_trail])<.6 then return end
+    -- Coalesce only short, nearly straight runs of the observed path. Keep
+    -- bends and elevation changes rather than cutting to a nearby waypoint
+    -- through a dungeon wall. Dense host samples otherwise cause a stop at
+    -- every 60cm breadcrumb on the way back from combat.
+    if #route_trail>=2 then
+     local a,b=route_trail[#route_trail-1],route_trail[#route_trail]
+     local ax,ay,az=world(a);local bx,by,bz=world(b);local cx,cy,cz=world(at)
+     local dx,dy,dz=cx-ax,cy-ay,cz-az;local length=dx*dx+dy*dy+dz*dz
+     local t=length>0 and ((bx-ax)*dx+(by-ay)*dy+(bz-az)*dz)/length or 0
+     if length<=36 and t>0 and t<1 and (bx-ax-t*dx)^2+(by-ay-t*dy)^2+(bz-az-t*dz)^2<=.02^2 then
+      route_trail[#route_trail]={cell=at.cell,x=at.x,y=at.y,z=at.z};return
+     end
+    end
     if #route_trail>=2048 then return pause_navigation('combat detour is too long') end
     route_trail[#route_trail+1]={cell=at.cell,x=at.x,y=at.y,z=at.z}
    end

@@ -113,12 +113,14 @@ bool FACEUCMBlockedRouteTest::RunTest(const FString&)
     for(int N=1;N<=3;++N)
     {S->SetNumberField(TEXT("time"),106+N*6);TestEqual(TEXT("A persistently closed door has bounded retries"),Action(Doors),FString(N==3?TEXT("pause_navigation"):TEXT("use_world")));}
 
-    // A door that closes during a fight also blocks the recorded return path.
+    // A door that closes during an off-route fight blocks the recorded return path.
+    // Keep the detour off the active segment: an on-route fight now resumes forward.
     FACEPluginVM Return;Return.Load(Script,Error);S->SetArrayField(TEXT("route_objects"),{});S->SetNumberField(TEXT("time"),200);
     Step(Return);S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(Target)});
-    Step(Return);S->GetObjectField(TEXT("position"))->SetNumberField(TEXT("x"),34);Step(Return);
+    Step(Return);S->GetObjectField(TEXT("position"))->SetNumberField(TEXT("x"),34);
+    S->GetObjectField(TEXT("position"))->SetNumberField(TEXT("y"),-30);Step(Return);
     S->SetArrayField(TEXT("targets"),{});Step(Return); // Cancel attack.
-    Door->SetNumberField(TEXT("x"),33);Door->SetBoolField(TEXT("door_open"),false);
+    Door->SetNumberField(TEXT("x"),33);Door->SetNumberField(TEXT("y"),-31);Door->SetBoolField(TEXT("door_open"),false);
     S->SetArrayField(TEXT("route_objects"),{MakeShared<FJsonValueObject>(Door)});
     TestEqual(TEXT("Return from combat checks doors too"),Action(Return),FString(TEXT("use_world")));
     TestEqual(TEXT("Return continues during the door retry cooldown"),Action(Return),FString(TEXT("move")));

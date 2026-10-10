@@ -55,6 +55,8 @@
 #include "Components/PrimitiveComponent.h"
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/GameViewportSubsystem.h"
+#include "Blueprint/SlateBlueprintLibrary.h"
+#include "Slate/SGameLayerManager.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/GameViewportClient.h"
 #include "SceneView.h"
@@ -164,7 +166,7 @@ void AACEPlayerController::BeginPlay()
 	if (IsLocalController()) KeyboardRouter=FACEKeyboardRouter::Create(this,[this]()
 	{
 		return Client && Client->GetSessionState()==EACESessionState::InWorld && !IsVRActive()
-			&& !ACEInputBindings::IsEditing()
+			&& !ACEInputBindings::IsEditing() && !ACEInputBindings::IsTextEntryFocused()
 			&& !(DatGameplayBinder && DatGameplayBinder->IsChatEntryFocused())
 			&& !(GameHUDWidget && GameHUDWidget->IsChatEntryFocused());
 	});
@@ -779,24 +781,33 @@ bool AACEPlayerController::InputKey(const FInputKeyEventArgs& Params)
 {
  // Text controls may leave key-down unhandled while consuming the character.
  // Do not let that key reach gameplay. Releases still clear previously held keys.
- if(ACEInputBindings::IsTextEntryFocused() && !Params.Key.IsMouseButton() && Params.Event!=IE_Released)return true;
+ if(ACEInputBindings::IsTextEntryFocused() && !Params.Key.IsMouseButton() && Params.Event!=IE_Released)
+ {
+  // Preserve controller modifier state so a chord can leave chat as well as
+  // enter it. Gameplay polling is blocked while the text field owns focus.
+  if(Params.Key.IsGamepadKey())Super::InputKey(Params);
+  return true;
+ }
+ // Record controller buttons even when an immediate UI action consumes them:
+ // they may also be held as modifiers for another button in this same frame.
+ const bool GamepadHandled=Params.Key.IsGamepadKey()?Super::InputKey(Params):false;
  if(Params.Event==IE_Pressed)MovementKeyPressOrder.Add(Params.Key,++MovementKeySequence);
  const auto Mods=FSlateApplication::Get().GetModifierKeys();
  const FInputChord Chord(Params.Key,Mods.IsShiftDown(),Mods.IsControlDown(),Mods.IsAltDown(),Mods.IsCommandDown());
- if(Params.Event==IE_Pressed && ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("ToggleUCM")),Chord)
+ if(Params.Event==IE_Pressed && ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("ToggleUCM")),Chord,this)
   && !ACEInputBindings::IsEditing() && Client && Client->GetSessionState()==EACESessionState::InWorld
   && !(DatGameplayBinder && DatGameplayBinder->IsChatEntryFocused()) && !(GameHUDWidget && GameHUDWidget->IsChatEntryFocused()))
  {
   if(auto* Plugins=GetGameInstance()->GetSubsystem<UACEPluginSubsystem>())Plugins->ToggleUCM();
   return true;
  }
- if (Params.Event==IE_Pressed && ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("ToggleChat")),Chord)
+ if (Params.Event==IE_Pressed && ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("ToggleChat")),Chord,this)
   && !ACEInputBindings::IsEditing() && Client && Client->GetSessionState()==EACESessionState::InWorld
   && !IsDesktopInterfaceHidden() && DatGameplayBinder && DatCanvasWidget && DatCanvasWidget->IsVisible())
  {
   DatGameplayBinder->ToggleChatEntryFocus(); return true;
  }
- if(Params.Event==IE_Pressed && ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("Chat")),Chord)
+ if(Params.Event==IE_Pressed && ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("Chat")),Chord,this)
   && Client && Client->GetSessionState()==EACESessionState::InWorld && !IsDesktopInterfaceHidden())
  {
   if(DatGameplayBinder && DatCanvasWidget && DatCanvasWidget->IsVisible() && !DatGameplayBinder->IsChatEntryFocused())
@@ -808,7 +819,7 @@ bool AACEPlayerController::InputKey(const FInputKeyEventArgs& Params)
    GameHUDWidget->FocusChatEntry();return true;
   }
  }
- const bool Handled=Super::InputKey(Params);
+ const bool Handled=Params.Key.IsGamepadKey()?GamepadHandled:Super::InputKey(Params);
  // Some desktop backends report stick axes without directional button events.
  // Feed those directions through the ordinary rebindable action path, retaining
  // analog magnitude separately for movement/camera and releasing on recenter.
@@ -842,7 +853,7 @@ bool AACEPlayerController::InputKey(const FInputKeyEventArgs& Params)
  if (!Params.Key.IsMouseButton() && Client && Client->GetSessionState()==EACESessionState::InWorld
   && !ACEInputBindings::IsEditing() && !(DatGameplayBinder && DatGameplayBinder->IsChatEntryFocused())
   && !(GameHUDWidget && GameHUDWidget->IsChatEntryFocused()))
-  for (const auto& Action:ACEInputBindings::Actions()) if (ACEInputBindings::Matches(Action.Key,Chord)) return true;
+  for (const auto& Action:ACEInputBindings::Actions()) if (ACEInputBindings::Matches(Action.Key,Chord,this)) return true;
  return Handled;
 }
 
@@ -1476,7 +1487,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
         const FVector Facing = bVR ? VR->GetBodyForward() : (GetPawn() ? GetPawn()->GetActorForwardVector() : FVector::ForwardVector);
         bPluginFastBuffMovement=Plugins->IsFastBuffMovementActive();
         Plugins->ApplyMovement(this, F, R, T, bManualKeys || bSpaceDown,
-            (!bVR && bChatFocused) || (bVR && VR->IsMovementBlocked()) || bJumpAirborne || bServerMoveToActive, bVR, Facing);
+            (!bVR && bChatFocused) || (bVR && VR->IsMovementBlocked()) || bJumpAirborne || bServerMoveToActive, bVR, Facing,
+            Client->GetLocomotionSpeed(bRunning) * GetLocalCreatureScale() * WorldScale * DeltaTime);
         bPluginDrivingMovement=Plugins->IsDrivingMovement();
     }
 
@@ -4167,7 +4179,7 @@ bool AACEPlayerController::IsUseMouseTurning() const
 void AACEPlayerController::ApplyCameraWheelZoom(float WheelDelta, bool bForwardHotkeys)
 {
 	if (FMath::IsNearlyZero(WheelDelta) || IsMouseOverBlockingUI()
-		|| ACEInputBindings::IsEditing()
+		|| ACEInputBindings::IsEditing() || ACEInputBindings::IsTextEntryFocused()
 		|| (DatGameplayBinder && DatGameplayBinder->IsChatEntryFocused())
 		|| (GameHUDWidget && GameHUDWidget->IsChatEntryFocused()))
 	{
@@ -4175,8 +4187,8 @@ void AACEPlayerController::ApplyCameraWheelZoom(float WheelDelta, bool bForwardH
 	}
     const auto Mods=FSlateApplication::Get().GetModifierKeys();
     const FInputChord Chord(WheelDelta>0?EKeys::MouseScrollUp:EKeys::MouseScrollDown,Mods.IsShiftDown(),Mods.IsControlDown(),Mods.IsAltDown(),Mods.IsCommandDown());
-    if(ACEInputBindings::Matches(EKeys::Add,Chord))AdjustMouseCameraDistance(FMath::Abs(WheelDelta));
-    else if(ACEInputBindings::Matches(EKeys::Subtract,Chord))AdjustMouseCameraDistance(-FMath::Abs(WheelDelta));
+    if(ACEInputBindings::Matches(EKeys::Add,Chord,this))AdjustMouseCameraDistance(FMath::Abs(WheelDelta));
+    else if(ACEInputBindings::Matches(EKeys::Subtract,Chord,this))AdjustMouseCameraDistance(-FMath::Abs(WheelDelta));
     else if(bForwardHotkeys)
     {
         // The visible canvas consumes this Slate wheel event. Deliver its pulse
@@ -5233,6 +5245,8 @@ void AACEPlayerController::BeginWorldTransition(const TCHAR* Reason)
 	{
 		P->SetActorHiddenInGame(true);
 		P->SetActorEnableCollision(false);
+		if (auto* App = P->FindComponentByClass<UACECharacterAppearanceComponent>())
+			App->ResetMotionForTeleport();
 		if (UACEScriptComponent* Scripts = P->FindComponentByClass<UACEScriptComponent>())
 		{
 			Scripts->StopAllEffects();
@@ -6058,6 +6072,10 @@ void AACEPlayerController::BeginWorldReveal()
 
 void AACEPlayerController::InvalidateMovementAfterTeleport(bool bAirborneArrival)
 {
+	// CommandInterpreter::PlayerTeleported cancels autorun. Physical held keys
+	// are sampled normally next tick; cached pre-portal axes must not survive.
+	bAutoRun = false;
+	ForwardAxis = RightAxis = TurnAxis = 0.f;
 	// Re-seed MotionStance from CombatMode before StopMovement so MoveToState does not
 	// echo NonCombat and wipe HandCombat/Magic after portal arrival.
 	if (Client && Client->GetPlayerVitals().bValid)
@@ -6106,11 +6124,20 @@ void AACEPlayerController::InvalidateMovementAfterTeleport(bool bAirborneArrival
 	// Clearing an old approach disables forced reports; a falling arrival needs
 	// them immediately, including the interval before the next movement tick.
 	if (Client) Client->SetForcePositionReporting(true);
-	if (bAirborneArrival && GetPawn())
+	if (GetPawn())
 		if (auto* App = GetPawn()->FindComponentByClass<UACECharacterAppearanceComponent>())
 		{
-			App->SetSuppressLocoIdleBlend(true);
-			App->SetHeldActionMotion(0x40000015); // Falling, without a Jump action/impulse.
+			// Also clear anything received while loading, after restoring the combat
+			// stance. This covers both tunnel exits and instant server teleports.
+			App->ResetMotionForTeleport();
+			if (bAirborneArrival)
+			{
+				App->SetSuppressLocoIdleBlend(true);
+				App->SetHeldActionMotion(0x40000015); // Falling, without a Jump action/impulse.
+			}
+			// The appearance tick may already have run this frame. Seat the arrival
+			// pose before the camera cut instead of displaying one last running frame.
+			App->TickComponent(0.f, LEVELTICK_All, nullptr);
 		}
 }
 
@@ -7710,6 +7737,7 @@ bool AACEPlayerController::IsMouseOverBlockingUI() const
 			|| Type == TEXT("SScrollBar")
 			|| Type == TEXT("SScrollBox")
 			|| Type.Contains(TEXT("EditableText"))
+			|| Type.Contains(TEXT("RetailTextEntry"))
 			|| Type.Contains(TEXT("SCheckBox"))
 			|| Type.Contains(TEXT("SSlider"))
 			|| Type.Contains(TEXT("SCombo"));
@@ -7763,6 +7791,25 @@ namespace
 	}
 }
 
+bool AACEPlayerController::GetWorldPointerPosition(float& X, float& Y) const
+{
+	// SceneViewport's cached mouse position stops updating while an inventory
+	// widget captures the drag. Use the same desktop-to-viewport conversion as
+	// the release/drop path so hovering cannot remain at the press location.
+	auto* Viewport = GetWorld() ? GetWorld()->GetGameViewport() : nullptr;
+	const auto LayerManager = Viewport ? Viewport->GetGameLayerManager() : nullptr;
+	if (Viewport && Viewport->Viewport && FSlateApplication::IsInitialized() && LayerManager.IsValid()
+		&& LayerManager->GetViewportWidgetHostGeometry().GetLocalSize().GetMin() > 0.f)
+	{
+		FVector2D Pixels, Local, Size=FVector2D::ZeroVector;
+		USlateBlueprintLibrary::AbsoluteToViewport(this, FSlateApplication::Get().GetCursorPos(), Pixels, Local);
+		Viewport->GetViewportSize(Size);
+		X=Pixels.X; Y=Pixels.Y;
+		return X>=0 && Y>=0 && X<Size.X && Y<Size.Y;
+	}
+	return !(DatGameplayBinder && DatGameplayBinder->IsInventoryDragActive()) && GetMousePosition(X,Y);
+}
+
 AACEWorldEntityActor* AACEPlayerController::PickWorldPointer(bool& bHitSelf) const
 {
 	bHitSelf=false;
@@ -7776,7 +7823,7 @@ AACEWorldEntityActor* AACEPlayerController::PickWorldPointer(bool& bHitSelf) con
 	else
 	{
 		float X=0,Y=0;
-		if (!GetMousePosition(X,Y) || !DeprojectScreenPositionToWorld(X,Y,Origin,Direction)) return nullptr;
+		if (!GetWorldPointerPosition(X,Y) || !DeprojectScreenPositionToWorld(X,Y,Origin,Direction)) return nullptr;
 	}
 	const auto Pick=ResolveVisibilityPick(*GetWorld(),Origin,Origin+Direction*200000.f,GetPawn(),!bMouseLookActive);
 	bHitSelf=Pick.bHitSelf;
@@ -7843,7 +7890,7 @@ void AACEPlayerController::PollObjectHover()
 	EnsureHoverTooltipWidget();
 
 	float MouseX = 0.f, MouseY = 0.f;
-	if (!GetMousePosition(MouseX, MouseY))
+	if (!GetWorldPointerPosition(MouseX, MouseY))
 	{
 		HideTip();
 		return;
@@ -8099,7 +8146,7 @@ void AACEPlayerController::PollObjectClick()
 AACEWorldEntityActor* AACEPlayerController::PickWorldEntityUnderCursor() const
 {
 	float MouseX = 0.f, MouseY = 0.f;
-	if (!GetMousePosition(MouseX, MouseY))
+	if (!GetWorldPointerPosition(MouseX, MouseY))
 	{
 		return nullptr;
 	}

@@ -1,57 +1,50 @@
-# AC:Unreal / AC:VR release 106
+# AC:Unreal / AC:VR release 107
 
 Windows desktop, PC VR, native Linux x86_64, and standalone Quest share version
-**2026.10.09.106**. Android version code: 106. Quest installer revision: 7.
+**2026.10.10.107**. Android version code: 107. Quest installer revision: 7.
 
-## Controls and display
+## Controls and movement
 
-- Preserve Shift, Ctrl, Alt, and combined keybindings even when the modifier is
-  released first. Mouse buttons retain modifiers, and wheel up/down can be bound
-  with or without modifiers. Controller Start can also be rebound.
-- Restore saved desktop resolution, display mode, and window placement. Keep
-  Alt+Enter transitions and the settings display synchronized.
-- Make the radar movable from its handle and show the move cursor on hover.
-- Escape clears a selected target before toggling gameplay options, without
-  also closing the backpack.
-- Clicking a chat name places the typing cursor after the tell prefix. Preserve
-  server welcome and channel messages received before the gameplay HUD opens.
+- Bind controller button combinations such as RT+A in the keybinding screen.
+  Save held-button modifiers, distinguish combinations from plain buttons, and
+  retain correct behavior when buttons are released in different orders.
+- Prevent movement and gameplay shortcuts while typing in retail text fields,
+  including Journal, Page List, Fellowship, Friends, and Squelch.
+- Clear stale running, action, and movement state during portal transitions so
+  arrival immediately shows the appropriate idle or falling animation.
+- Start strafing at the authored retail step phase without the initial glide.
+  Preserve movement speed and matching local/remote animation cadence.
 
-## Inventory and item presentation
+## Inventory and vendors
 
-- Right-clicking corpse contents selects the item as well as examining it, so
-  the pickup key can take it immediately.
-- Combine stacks one press at a time, select the resulting stack, and preserve
-  its backpack until a subsequent pickup action moves it.
-- Show retail drop-target indicators for inventory, backpacks, equipment, and
-  vendor sales. Resolve world drops at the release position.
-- Restore available skill credits when no attribute or skill is selected.
-- Show equipped ammunition counts on the combat-mode button and omit the
-  inappropriate Armor Level: 0 line on cloaks.
-
-## Movement and archery
-
-- Complete retail forward/backward walking steps after a short key tap, using
-  authored motion and matching movement updates.
-- Match strafe animation cadence to movement speed to reduce foot sliding.
-- Correct bow-ready and reload transitions and ammunition attachment handling,
-  including parent-event sequencing after relogging.
+- Select the first merchandise item when opening a vendor. Preserve the chosen
+  item when that vendor refreshes its stock during shopping.
+- Keep the large toolbar backpack icon open while the inventory panel is open.
+- Update the selected stack's displayed quantity after combining stacks while
+  preserving manually selected partial quantities.
+- Apply retail target-type, ownership, and trade restrictions before targeted
+  item use. Mana stones no longer offer to destroy incompatible targets such as
+  corpses, and confirmation rechecks that the target remains eligible.
+- Update inventory-drag world highlighting from the current pointer and camera
+  position instead of retaining the object beneath the initial drag location.
 
 ## Unattended Combat Manager
 
-- Add a movable UCM activity log for diagnosing route failures and other actions.
-  Keep the latest 1,000 events in a bounded file that survives client restarts.
-- Improve returning to routes after long combat chases. Retain the traveled
-  detour, search reachable waypoints over multiple updates, and distinguish
-  unfinished reachability checks from a blocked route.
-- Correct the Corruption, Destructive Curse, and Corrosion spell selections.
-- Move Fast buff movement from Combat to Buffs, preserving saved preferences.
+- Smooth route returns after chasing monsters by combining straight portions
+  of the traveled path while preserving corners and elevation changes.
+- Limit movement near return points to prevent overshooting, wake the route
+  decision immediately on arrival, and remove the action delay from steering.
+- Continue toward the pending waypoint after looting on the current route
+  segment instead of walking back to the departure point. Off-route returns
+  retain their observed path around obstacles and between floors.
 
 ## Validation and installation
 
-Automated regressions cover input capture, saved bindings, retail UI interactions,
-inventory, chat, movement, archery, and UCM route recovery and logging. Windows,
-Linux, and Quest packages use the shared source and version checks. Linux and
-headset gameplay still require live acceptance; packaging is not live certification.
+Automated regressions cover controller combinations, text focus, drag targeting,
+portal arrival, strafe timing, vendor selection, stack quantities, targeted item
+use, and native/imported route recovery. Windows, Linux, and Quest packages use
+the shared source and version checks. Linux and headset gameplay still require
+live acceptance; packaging is not live certification.
 
 Installing an update closes the game. Accounts, settings, and DAT files are retained.
 Linux updates are downloaded and extracted manually. Game DAT files and a game

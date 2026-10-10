@@ -51,6 +51,46 @@ bool FACEUCMRouteRejoinTest::RunTest(const FString&)
         TestFalse(TEXT("Return does not disable navigation"),I->GetBoolField(TEXT("route_join_pending")));
     }
 
+    {
+        FACEPluginVM VM;VM.Load(Script,Error);auto S=Snapshot(),P=Profile();
+        auto Target=Json(TEXT(R"({"id":50,"name":"Tusker Guard","identified":true,"distance":20,"cell":30998795,"x":36,"y":6,"z":0,"line_of_sight":true})"));
+        S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(Target)});Step(VM,S,P);
+        TArray<TSharedPtr<FJsonValue>> Samples;
+        auto Sample=[&](double X,double Y){auto J=Json(TEXT(R"({"cell":30998795,"z":0})"));J->SetNumberField(TEXT("x"),X);J->SetNumberField(TEXT("y"),Y);Samples.Add(MakeShared<FJsonValueObject>(J));};
+        for(int32 I=0;I<=6;++I)Sample(30,I);
+        for(int32 I=1;I<=6;++I)Sample(30+I,6);
+        S->SetArrayField(TEXT("route_motion"),Samples);At(S,36,6);Target->SetNumberField(TEXT("distance"),0);Step(VM,S,P);
+        S->RemoveField(TEXT("route_motion"));S->SetArrayField(TEXT("targets"),{});Step(VM,S,P);
+        auto I=Step(VM,S,P);
+        TestEqual(TEXT("Dense chase samples return directly along the straight corridor"),I->GetNumberField(TEXT("x")),30.);
+        TestEqual(TEXT("Return retains the corner rather than cutting across a wall"),I->GetNumberField(TEXT("y")),6.);
+        At(S,30,6);I=Step(VM,S,P);
+        TestEqual(TEXT("After the corner returns to the actual route departure"),I->GetNumberField(TEXT("y")),0.);
+        TestEqual(TEXT("Departure stays on the observed corridor"),I->GetNumberField(TEXT("x")),30.);
+    }
+
+    // Looting partway along a leg must continue forward. An excursion away
+    // from that leg still follows its observed return path, including floors.
+    for(bool Legacy:{false,true})for(const FVector Offset:{FVector(6,0,0),FVector(6,3,0),FVector(6,0,6)})
+    {
+        FACEPluginVM VM;VM.Load(Script,Error);auto S=Snapshot(),P=Profile();
+        P->SetStringField(TEXT("combat"),TEXT("off"));P->SetBoolField(TEXT("looting"),true);
+        S->GetArrayField(TEXT("inventory"))[0]->AsObject()->SetNumberField(TEXT("wcid"),99);
+        P->SetArrayField(TEXT("loot_rules"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"action":"keep"})")))});
+        for(const auto& V:P->GetArrayField(TEXT("route"))){V->AsObject()->SetBoolField(TEXT("legacy"),Legacy);V->AsObject()->SetBoolField(TEXT("walk_first"),true);}
+        S->SetObjectField(TEXT("route_visible"),Json(TEXT(R"({"1":false,"2":true})")));
+        TestEqual(TEXT("Loot route starts toward the next ordered waypoint"),Step(VM,S,P)->GetNumberField(TEXT("x")),45.);
+        S->SetArrayField(TEXT("corpses"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":88,"name":"Corpse of rat","distance":6,"identified":true,"line_of_sight":true})")))});
+        TestEqual(TEXT("Nearby corpse interrupts route travel"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("open_corpse")));
+        At(S,30+Offset.X,Offset.Y);S->GetObjectField(TEXT("position"))->SetNumberField(TEXT("z"),Offset.Z);
+        S->SetNumberField(TEXT("container"),88);S->SetArrayField(TEXT("contents"),{});
+        TestEqual(TEXT("Finished corpse closes before travel resumes"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("close_corpse")));
+        S->SetNumberField(TEXT("container"),0);auto I=Step(VM,S,P);
+        const bool OnRoute=Offset.Y==0&&Offset.Z==0;
+        TestEqual(TEXT("Loot on the route continues forward; off-route loot retains its return trail"),I->GetNumberField(TEXT("x")),OnRoute?45.:30.);
+        TestEqual(TEXT("Only an off-route excursion retraces the departure point"),I->GetStringField(TEXT("status")).StartsWith(TEXT("Returning")),!OnRoute);
+    }
+
     const auto Values=UWorld::InitializationValues().AllowAudioPlayback(false).RequiresHitProxies(false)
         .CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false);
     auto* World=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);

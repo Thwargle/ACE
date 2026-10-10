@@ -20,6 +20,11 @@
 #include "Camera/PlayerCameraManager.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
+#include "Engine/GameViewportClient.h"
+#include "Engine/LocalPlayer.h"
+#include "Slate/SceneViewport.h"
+#include "Slate/SGameLayerManager.h"
+#include "Framework/Application/SlateApplication.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEDesktopHighlightTest,"ACE.Input.DesktopHighlights",
  EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
@@ -52,6 +57,58 @@ bool FACEDesktopHighlightTest::RunTest(const FString&)
  PC->PlayerCameraManager=World->SpawnActor<APlayerCameraManager>();PC->PlayerCameraManager->InitializeFor(PC);PC->SetViewTarget(View);
  bool HitSelf=false;
  if(!TestTrue(TEXT("Mouselook aims from view without any mouse coordinates"),PC->PickWorldPointer(HitSelf)==Entity))return false;
+ {
+  // Simulate a viewport whose last mouse event was the inventory press. The
+  // Slate cursor continues moving under UI capture, including DPI/window offsets.
+  class FCapturedViewport : public FSceneViewport
+  {
+  public:
+   FCapturedViewport(const TSharedPtr<SViewport>& Widget):FSceneViewport(Widget){}
+   FIntPoint GetSizeXY() const override {return FIntPoint(1600,900);}
+   void GetMousePos(FIntPoint& Out,bool Local=true) override {Out=FIntPoint(800,450);}
+  };
+  class FPointerLayers : public SGameLayerManager
+  {
+  public:
+   FGeometry Geometry;
+   FGeometry GetViewportWidgetHostGeometry() const override {return Geometry;}
+   bool CustomPrepass(float) override {return true;}
+  };
+  auto& Slate=FSlateApplication::Get();const FVector2D SavedCursor=Slate.GetCursorPos();
+  auto* Context=GI->GetWorldContext();const auto SavedViewport=Context->GameViewport;
+  auto* Viewport=NewObject<UGameViewportClient>(GEngine);Context->GameViewport=Viewport;
+  auto* Player=NewObject<ULocalPlayer>(GEngine);Player->ViewportClient=Viewport;PC->Player=Player;Player->PlayerController=PC;
+  Player->Origin=FVector2D::ZeroVector;Player->Size=FVector2D(1,1);
+  const auto Widget=SNew(SViewport);const auto Scene=MakeShared<FCapturedViewport>(Widget);Viewport->Viewport=&Scene.Get();
+  // Inject deterministic host geometry without creating a second game window.
+  PRAGMA_DISABLE_DEPRECATION_WARNINGS
+  const auto Layers=SNew(FPointerLayers);Viewport->SetGameLayerManager(Layers);
+  PRAGMA_ENABLE_DEPRECATION_WARNINGS
+  ON_SCOPE_EXIT {PC->Player=nullptr;Context->GameViewport=SavedViewport;Viewport->Viewport=nullptr;Slate.SetCursorPos(SavedCursor);PC->bMouseLookActive=true;};
+  PC->bMouseLookActive=false;
+  for(float Scale:{1.f,1.5f,2.f})
+  {
+   Layers->Geometry=FGeometry::MakeRoot(FVector2D(1600,900)/Scale,FSlateLayoutTransform(Scale,FVector2D(120,75)));
+   for(const FVector2D Pixel:{FVector2D(800,450),FVector2D(1350,700)})
+   {
+    Slate.SetCursorPos(Layers->Geometry.LocalToAbsolute(Pixel/Scale));
+    float X=0,Y=0;TestTrue(TEXT("Live pointer resolves under captured inventory drag"),PC->GetWorldPointerPosition(X,Y));
+    TestTrue(TEXT("Hover follows the current cursor in viewport pixels at each DPI"),FVector2D(X,Y).Equals(Pixel,1.f));
+    FIntPoint Cached;Scene->GetMousePos(Cached);TestEqual(TEXT("Viewport press cache remains stale during the fixture"),Cached,FIntPoint(800,450));
+    TestEqual(TEXT("World hover and release use the same current ray during capture"),PC->PickWorldPointer(HitSelf),PC->PickWorldEntityAtScreenPosition(Pixel.X,Pixel.Y));
+    if(Pixel.X==800)
+    {
+     TestEqual(TEXT("The press position initially points to the fixture creature"),PC->PickWorldPointer(HitSelf),Entity);
+     View->SetActorRotation(FRotator(0,90,0));
+     TestNull(TEXT("Rotating during a drag releases the old world highlight"),PC->PickWorldPointer(HitSelf));
+     View->SetActorRotation(FRotator::ZeroRotator);
+    }
+    else TestNull(TEXT("Moving a captured cursor off the creature clears its hover"),PC->PickWorldPointer(HitSelf));
+   }
+   Slate.SetCursorPos(Layers->Geometry.LocalToAbsolute(FVector2D(-20,300)));
+   float X=0,Y=0;TestFalse(TEXT("Dragging outside the viewport cannot highlight a world object"),PC->GetWorldPointerPosition(X,Y));
+  }
+ }
  PC->PollObjectHover();PC->UpdateDesktopHighlights(true);
  auto* Appearance=Entity->FindComponentByClass<UACECharacterAppearanceComponent>();
  auto Strength=[&](){auto* Part=Cast<UPrimitiveComponent>(Appearance->GetPartMesh(0));const auto& Data=Part->GetCustomPrimitiveData().Data;return Data.IsValidIndex(1)?Data[1]:0.f;};

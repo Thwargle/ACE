@@ -32,4 +32,7 @@ protected:
  TSet<FKey> CapturePressedKeys;
  // Snapshot the chord on press; releasing a modifier first must not change it.
  TOptional<FKeyEvent> CaptureChord;
+ TArray<FKey> CaptureControllerModifiers;
+ void CompleteCapture(const FKeyEvent& Event);
+ void CapturePulse(const FKeyEvent& Event);
 };

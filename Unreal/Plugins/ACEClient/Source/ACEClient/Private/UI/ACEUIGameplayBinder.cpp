@@ -2206,6 +2206,7 @@ void UACEUIGameplayBinder::SyncInventoryButtonVisual()
 	constexpr uint32 DidBagOpen = 0x06004CF8u;
 	if (TSharedPtr<FACEUIElement> Btn = Manager->FindElementByName(TEXT("InventoryButton")))
 	{
+		Btn->bHighlighted = bInvOpen;
 		Btn->ImageFileId = bInvOpen ? DidBagOpen : DidBagClosed;
 	}
 	// 0x060011F9 is ItemSlot_GenericDragOver (green ring) — only for drag-over, not idle chrome.
@@ -4194,6 +4195,13 @@ bool UACEUIGameplayBinder::TryCompletePendingUseWithTarget(int32 TargetGuid)
 		CancelPendingUseWith();
 		return true;
 	}
+	// Use the same public target mask, ownership and trade restrictions as the
+	// retail targeting cursor, before offering any destructive confirmation.
+	if (!IsUseTargetCompatible(Source.Guid, TargetGuid))
+	{
+		PostInventorySystemMessage(TEXT("Choose a compatible target. Use on item is still active."));
+		return true;
+	}
 	// ItemHolder::TargetAcquired: empty mana stones destroy the selected item.
 	// Retail blocks Retained items and requires the authored Yes/No dialog first.
 	if ((Source.ItemType & ACEItemType::ManaStone) && !(Source.UiEffects & 1))
@@ -4283,6 +4291,7 @@ void UACEUIGameplayBinder::FinishManaStoneConfirmation(bool bAccept)
 	FACEWorldObject SourceObject, TargetObject;
 	if (bAccept && Source && Client && !Client->IsUseBusy()
 		&& Client->GetWorldObject(Source, SourceObject) && Client->GetWorldObject(Target, TargetObject)
+		&& IsUseTargetCompatible(Source, Target)
 		&& !(TargetObject.ObjectDescriptionFlags & ACEObjectDescFlag::Retained))
 		Client->SendUseWithTarget(Source, Target);
 }
@@ -6419,6 +6428,7 @@ void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Sele
 	}
 	const bool SameStackSelection = LastSelection.Guid == Selection.Guid;
 	const int32 PreviousStackAmount = SelectedStackAmount;
+	const int32 PreviousStackMax = SelectedStackMax;
 	LastSelection = Selection;
 	if(ActivePanelPage==TEXT("SocialPanel_Field") && ActiveSocialTab==TEXT("FellowshipPage"))RefreshFellowshipOverlays();
 	if(ActivePanelPage==TEXT("SocialPanel_Field") && ActiveSocialTab==TEXT("AllegiancePage"))RefreshAllegianceOverlays();
@@ -6437,7 +6447,7 @@ void UACEUIGameplayBinder::HandleSelectionChanged(const FACESelectedObject& Sele
 			{
 				SelectedStackMax=GetVendorSelectionLimit(Obj.Guid);
 			}
-			SelectedStackAmount=SelectedStackMax<=0 ? 0 : SameStackSelection ? FMath::Clamp(PreviousStackAmount,1,SelectedStackMax)
+			SelectedStackAmount=SelectedStackMax<=0 ? 0 : SameStackSelection && (VendorStock || PreviousStackAmount<PreviousStackMax) ? FMath::Clamp(PreviousStackAmount,1,SelectedStackMax)
 				: VendorStock ? ACEInventoryRules::VendorInitialQuantity(Obj,SelectedStackMax) : SelectedStackMax;
 		}
 		// Keep an open examine/inspect panel in sync with the current selection.
@@ -10821,8 +10831,9 @@ void UACEUIGameplayBinder::RefreshSelectionOverlay()
 			}
 			else
 			{
+				const bool bFullStackSelected = SelectedStackAmount >= SelectedStackMax;
 				SelectedStackMax = FMath::Max(1, SelObj.StackSize);
-				SelectedStackAmount = FMath::Clamp(SelectedStackAmount, 1, SelectedStackMax);
+				SelectedStackAmount = bFullStackSelected ? SelectedStackMax : FMath::Clamp(SelectedStackAmount, 1, SelectedStackMax);
 			}
 			const bool bStackable = SelObj.MaxStackSize > 1 || SelObj.StackSize > 1;
 			if (bStackable)
@@ -13928,6 +13939,18 @@ void UACEUIGameplayBinder::ShowVendorPanel(int32 Guid)
 		PlayerController->EndUseApproach();
 	}
 	SyncEnvPanelMode();
+	if (!bSameVendor && Client)
+	{
+		// VendorItemsUI::UpdateItemsList(selectFirst): use the displayed stock
+		// order, and initialize the ordinary selection/quantity controls too.
+		TArray<FACEWorldObject> Items = Client->GetVendorMerchandise();
+		if (Items.IsEmpty()) Items = Client->GetPackItems(Guid);
+		if (!Items.IsEmpty())
+		{
+			VendorSelectedGuid = Items[0].Guid;
+			Client->SelectObject(VendorSelectedGuid);
+		}
+	}
 	RefreshVendorOverlays();
 }
 

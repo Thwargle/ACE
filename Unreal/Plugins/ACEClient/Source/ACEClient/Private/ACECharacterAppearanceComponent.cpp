@@ -1129,6 +1129,19 @@ void UACECharacterAppearanceComponent::SetLocomotionInput(float Forward, float S
 			WalkingMotion.SetDirection(FMath::IsNearlyZero(Forward) ? 0 : Forward > 0.f ? 1 : -1,
 				[&](int8 From, int8 To, ACEWalkingMotion::FLink& Link)
 				{ return Dat->BuildWalkingLink(MotionTableId, From, To, PreferredStyle, Link); });
+	// Retail starts a new sidestep cycle immediately. Blending from an arbitrary
+	// idle phase for 0.28s made the body translate before the feet took a step.
+	const bool bLateral = FMath::Abs(Strafe) > FMath::Abs(Forward) && !FMath::IsNearlyZero(Strafe);
+	const bool bWasLateral = FMath::Abs(LocomotionStrafe) > FMath::Abs(LocomotionForward);
+	if (AnimMode == EACEAnimMode::Locomotion && bLateral
+		&& (!bWasLateral || FMath::Sign(Strafe) != FMath::Sign(LocomotionStrafe)))
+	{
+		AnimTime = DeferredPoseDeltaTime = 0.f;
+		StanceBlendFrom.Reset();
+		StanceBlendAlpha = 1.f;
+		bWasLocomotionMoving = true;
+		ResetHookTracking();
+	}
 	// ActionOneShot still records loco so we resume the right cycle when the attack ends.
 	LocomotionForward = Forward;
 	LocomotionStrafe = Strafe;
@@ -1608,6 +1621,36 @@ void UACECharacterAppearanceComponent::ClearActionMotion()
 	AnimTime = 0.f;
 	DeferredPoseDeltaTime = 0.f;
 	ResetHookTracking();
+}
+
+void UACECharacterAppearanceComponent::ResetMotionForTeleport()
+{
+	// Retail removes pending actions/link animations on world exit. A reused
+	// pawn must also discard the old locomotion and blend source: zero input
+	// alone cannot interrupt a Falling->Run landing or queued one-shot.
+	ClearActionMotion();
+	WalkingMotion.Reset();
+	bWalkingExternallyAdvanced = false;
+	LocomotionForward = LocomotionStrafe = 0.f;
+	LocomotionPlayRate = 1.f;
+	bLocomotionRunning = bLocomotionInterpretedRate = false;
+	RunBlend = 0.f;
+	LastLocomotionFwdSign = 0;
+	bWasLocomotionMoving = bSuppressLocoIdleBlend = false;
+	AnimMode = EACEAnimMode::Locomotion;
+	ActionCommand = QueuedHoldAction = QueuedHoldStyle = 0;
+	ActionFromCommand = ACEMotion::Ready;
+	bActionUsesStateTransition = bHoldActionFinal = bHoldActionFinalAfterFinish = false;
+	bActionEverEvaluated = bResumeDefaultAnimAfterAction = false;
+	PendingActionCommands.Reset();
+	PendingActionStyles.Reset();
+	PendingActionPlayRates.Reset();
+	PendingActionHolds.Reset();
+	AnimTime = DeferredPoseDeltaTime = 0.f;
+	StanceBlendFrom.Reset();
+	StanceBlendAlpha = 1.f;
+	ResetHookTracking();
+	ResetVRLowerBody();
 }
 
 void UACECharacterAppearanceComponent::SetHeldActionMotion(int32 InActionCommand, int32 Style)

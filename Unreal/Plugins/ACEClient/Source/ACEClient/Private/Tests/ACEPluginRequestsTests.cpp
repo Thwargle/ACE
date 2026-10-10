@@ -934,7 +934,7 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         TestEqual(TEXT("Recovery wake cannot bypass pending equipment"),P->NextAction,EquipmentGate);
         P->WaitAction.Empty();P->NextAction=0;
     }
-    for(float Arrival:{17.5f,70.f})for(float Rate:{30.f,90.f,144.f})for(bool VR:{false,true})for(float CameraYaw:{0.f,90.f,210.f})
+    for(float Speed:{600.f,2000.f})for(float Arrival:{17.5f,70.f})for(float Rate:{15.f,30.f,90.f,144.f})for(bool VR:{false,true})for(float CameraYaw:{0.f,90.f,210.f})
     {
         H->MoveArrivalRadius=Arrival;
         FVector Location=Origin;FACEPosition Pose=OutdoorPosition;Pose.RotationW=1;Pose.RotationXYZ=FVector::ZeroVector;
@@ -949,14 +949,36 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
                 Session.PlayerPosition=Pose;Pawn->SetActorLocationAndRotation(Location,Pose.ToUnrealQuat());
                 // VR uses body facing; a desktop camera direction must be ignored.
                 const FVector Facing=VR?Pose.GetAceForwardVector():FRotator(0,CameraYaw,0).Vector();
-                float F=0,R=0,T=0;H->ApplyMovement(PC,F,R,T,false,false,VR,Facing);
+                float F=0,R=0,T=0;H->ApplyMovement(PC,F,R,T,false,false,VR,Facing,Speed/Rate);
                 const FQuat Turn(FVector::UpVector,-1.5f*1.5f*T/Rate);
                 const FQuat Ac=(Turn*Pose.GetAcQuat()).GetNormalized();Pose.RotationW=Ac.W;Pose.RotationXYZ=FVector(Ac.X,Ac.Y,Ac.Z);
-                Location+=(Pose.GetAceForwardVector()*F+Pose.GetAceRightVector()*R)*600.f/Rate;
+                Location+=(Pose.GetAceForwardVector()*F+Pose.GetAceRightVector()*R)*Speed/Rate;
             }
             TestTrue(*FString::Printf(TEXT("%s route reaches each corner within %.1f cm at %.0f FPS, camera %.0f"),VR?TEXT("VR"):TEXT("Desktop"),Arrival,Rate,CameraYaw),FVector::Dist2D(Location,Goal)<Arrival);
         }
     }
+    {
+        auto Move=MakeShared<FJsonObject>();Move->SetStringField(TEXT("action"),TEXT("move"));
+        Move->SetNumberField(TEXT("cell"),uint32(Session.PlayerPosition.CellId));
+        Move->SetNumberField(TEXT("x"),Session.PlayerPosition.Location.X);
+        Move->SetNumberField(TEXT("y"),Session.PlayerPosition.Location.Y);
+        Move->SetNumberField(TEXT("z"),Session.PlayerPosition.Location.Z);
+        P->NextAction=0;Session.bUseBusy=false;H->Execute(*P,Move);
+        TestTrue(TEXT("Steering leaves no action delay that can block arrival decisions"),P->NextAction<=FPlatformTime::Seconds());
+        TestEqual(TEXT("Steering retains movement ownership"),H->MovementOwner,P->Id);
+        const FACEPosition Before=H->MoveTarget;Move->SetNumberField(TEXT("x"),Before.Location.X+1);
+        P->NextAction=FPlatformTime::Seconds()+2;H->Execute(*P,Move);
+        TestEqual(TEXT("Steering still respects an outstanding action throttle"),H->MoveTarget.Location.X,Before.Location.X);
+        P->NextAction=0;
+    }
+    H->MovementOwner=TEXT("ucm");H->MoveTarget=Session.PlayerPosition;H->MoveExpires=FPlatformTime::Seconds()+20;
+    H->LastProgress=FPlatformTime::Seconds();H->bMoveArrived=false;P->NextDecision=FPlatformTime::Seconds()+.25;
+    float ArriveF=1,ArriveR=1,ArriveT=1;
+    H->ApplyMovement(PC,ArriveF,ArriveR,ArriveT,false,false,false,FVector::ForwardVector);
+    TestTrue(TEXT("Arrival stops all axes and wakes policy without a breadcrumb pause"),ArriveF==0&&ArriveR==0&&ArriveT==0&&P->NextDecision==0);
+    P->NextDecision=FPlatformTime::Seconds()+.25;const double NextArrivalDecision=P->NextDecision;
+    H->ApplyMovement(PC,ArriveF,ArriveR,ArriveT,false,false,false,FVector::ForwardVector);
+    TestEqual(TEXT("Idle arrival does not force repeated expensive policy snapshots"),P->NextDecision,NextArrivalDecision);
     H->MovementOwner=TEXT("ucm");H->MoveExpires=FPlatformTime::Seconds()+20;
     H->LastMovePosition=Session.PlayerPosition.ToUnrealLocation();H->LastProgress=FPlatformTime::Seconds()-6;
     const uint32 BeforeBlocked=H->MovementBlockedSerial;float BlockF=1,BlockR=1,BlockT=1;

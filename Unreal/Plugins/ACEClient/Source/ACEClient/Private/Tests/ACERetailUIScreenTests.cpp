@@ -273,6 +273,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     Client->Session=MakeShared<FACESession>(); Client->Session->State=EACESessionState::InWorld;
     Client->Session->PlayerGuid=1234;
     FACEWorldObject Player; Player.Guid=1234; Player.Name=TEXT("Retail test"); Player.ItemsCapacity=102;
+    Player.ItemType=ACEItemType::Creature;
     Client->Session->WorldObjects.Add(Player.Guid,Player);
     FACEWorldObject Item; Item.Guid=2345; Item.Name=TEXT("Test inventory wand"); Item.ContainerId=1234;
     Item.ItemType=ACEItemType::Caster; Item.IconId=0x060010F9; Item.PlacementPosition=0;
@@ -1933,7 +1934,8 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         for (int32 I=1; I<=4; ++I) Gameplay->SetFloatyVisible(FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"),I),false);
         Device=FACEWorldObject(); Device.Guid=3345; Device.ContainerId=Player.Guid;
         Device.Name=TEXT("Mana stone"); Device.ItemType=ACEItemType::ManaStone;
-        Device.ItemUseable=0x080008; Device.UiEffects=1; Device.IconId=0x060010F9; Device.PlacementPosition=1;
+        Device.ItemUseable=0x080008; Device.TargetType=ACEItemType::Jewelry|ACEItemType::Armor|ACEItemType::Clothing|ACEItemType::Caster;
+        Device.UiEffects=1; Device.IconId=0x060010F9; Device.PlacementPosition=1;
         Session.WorldObjects.Add(Device.Guid,Device); Session.bUseBusy=false;
         Gameplay->SelectedPackGuid=Player.Guid;
         Gameplay->ShowPanelPage(TEXT("InventoryPanel_Field")); Gameplay->RefreshInventoryOverlays();
@@ -1981,6 +1983,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         const auto ConfirmationPixels=CaptureScreen(TEXT("GameplayManaStoneConfirmation"));
         int32 ConfirmationInk=0;
         const auto Body=Manager->FindElementByName(TEXT("ManaStoneConfirmationBody"));
+        if (!TestTrue(TEXT("Valid mana target creates a confirmation body"),Body.IsValid())) return false;
         const FIntPoint BodyOrigin=Body->GetScreenOrigin();
         for (int32 Y=BodyOrigin.Y; Y<BodyOrigin.Y+Body->Height; ++Y)
             for (int32 X=BodyOrigin.X; X<BodyOrigin.X+Body->Width; ++X)
@@ -2707,7 +2710,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             const int32 SavedCombatMode=Gameplay->CombatMode;
             FACEWorldObject Kit; Kit.Guid=98801; Kit.Name=TEXT("Healing Kit");
             Kit.ContainerId=Player.Guid; Kit.ItemType=ACEItemType::Misc;
-            Kit.ItemUseable=0x400008; // Contained source, creature target.
+            Kit.ItemUseable=0x220008; Kit.TargetType=ACEItemType::Creature; // Contained source, remote or self target.
             FACEWorldObject Monster; Monster.Guid=98802; Monster.Name=TEXT("Combat target");
             Monster.ItemType=ACEItemType::Creature; Monster.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
             Monster.Position=Player.Position;
@@ -3595,6 +3598,10 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         [&]()
         {
             const int32 OldVendor=Gameplay->OpenVendorGuid, OldSessionVendor=Session.OpenVendorGuid;
+            // This fixture constructs its own session; mirror the live
+            // selection bridge before exercising the editable stack quantity.
+            const auto SelectionBridge=Session.OnSelectionChanged.AddLambda([&](const FACESelectedObject& Selection){Client->OnSelectionChanged.Broadcast(Selection);});
+            ON_SCOPE_EXIT{Session.OnSelectionChanged.Remove(SelectionBridge);};
             const auto OldSellCart=Gameplay->VendorSellCart;
             const auto OldSelection=Session.SelectedObject;
             FACEWorldObject Notes;Notes.Guid=99301;Notes.WeenieClassId=20630;

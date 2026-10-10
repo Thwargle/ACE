@@ -205,7 +205,9 @@ public:
             else { const int32 Next=FMath::Clamp(R+(Key==EKeys::Up ? -1 : 1),0,Rows.Num()-1); Cursor=FMath::Min(Rows[Next].End,Rows[Next].Begin+Cursor-Rows[R].Begin); }
             if (!E.IsShiftDown()) Anchor=Cursor;
         }
-        else return FReply::Unhandled();
+        // Printable keys insert through OnKeyChar. Consume their key-down as
+        // well so parent widgets/viewport bindings cannot also act on typing.
+        else return Key.IsGamepadKey() ? FReply::Unhandled() : FReply::Handled();
         bFollowCaret=true; Invalidate(EInvalidateWidgetReason::Paint); return FReply::Handled();
     }
     virtual int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& Out,int32 Layer,const FWidgetStyle& Style,bool) const override
