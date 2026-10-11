@@ -1,4 +1,5 @@
 #include "UI/ACEUIGameplayBinder.h"
+#include "ACERetailChat.h"
 #include "ACESpellbookFilters.h"
 #include "UI/ACERadarColors.h"
 #include "ACEHoverTooltipWidget.h"
@@ -51,6 +52,8 @@
 #include "Components/ScrollBox.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Components/SizeBox.h"
+#include "Components/VerticalBox.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/MeshComponent.h"
 #include "Components/TextRenderComponent.h"
@@ -120,74 +123,8 @@ namespace
 	const FLinearColor TextWhite(0.95f, 0.95f, 0.9f, 1.f);
 	const FLinearColor TextGreen(0.35f, 0.85f, 0.40f, 1.f);
 	const FLinearColor TextRed(0.90f, 0.22f, 0.18f, 1.f);
-	/**
-	 * Retail ClientCommunicationSystem::BuildChatColorLookupTable (acclient.c:287161)
-	 * float RGB constants (acclient.c:45151-45164), keyed by LogTextType.
-	 */
-	const FLinearColor ChatGreen(0.5f, 1.f, 0.498f, 1.f);          // default fill / World_Broadcast
-	const FLinearColor ChatWhite(1.f, 1.f, 1.f, 1.f);              // Speech (2)
-	const FLinearColor ChatGrey(0.824f, 0.824f, 0.784f, 1.f);      // Emote (12)
-	const FLinearColor ChatYellow(1.f, 1.f, 0.247f, 1.f);          // Tell (3) / Social (10) / Fellowship (19)
-	const FLinearColor ChatTan(0.824f, 0.824f, 0.392f, 1.f);       // Speech_Direct_Send (4) / Social_Send (11)
-	const FLinearColor ChatPink(1.f, 0.588f, 0.588f, 1.f);         // Channel (8) / Channel_Send (9)
-	const FLinearColor ChatOrange(0.933f, 0.573f, 0.118f, 1.f);    // Allegiance (18)
-	const FLinearColor ChatDarkRed(1.f, 0.247f, 0.247f, 1.f);      // Combat (6) / Combat_Enemy (21) / Help (15)
-	const FLinearColor ChatLightRed(0.96f, 0.459f, 0.447f, 1.f);   // Combat_Self (22)
-	const FLinearColor ChatLightBlue(0.247f, 0.749f, 1.f, 1.f);    // Magic (7) / Spellcasting (17)
-	const FLinearColor ChatCyan(0.247f, 0.863f, 0.863f, 1.f);      // Advancement (13)
-	const FLinearColor ChatBrightPurple(1.f, 0.498f, 1.f, 1.f);    // System (5)
 	/** Overlays must sit above DAT chrome (InOutZOrder routinely exceeds 500). */
 	constexpr int32 StatOverlayZ = 100000;
-	FLinearColor ColorForChatType(int32 ChatType)
-	{
-		switch (ChatType)
-		{
-		case ACEChatMessageType::Speech:
-			return ChatWhite;
-		case ACEChatMessageType::Tell:
-		case ACEChatMessageType::AdminTell:
-		case ACEChatMessageType::Social:
-		case ACEChatMessageType::Fellowship:
-			return ChatYellow;
-		case ACEChatMessageType::OutgoingTell:
-		case ACEChatMessageType::SocialSend:
-			return ChatTan;
-		case ACEChatMessageType::CombatSelf:
-			return ChatLightRed;
-		case ACEChatMessageType::CombatEnemy:
-		case ACEChatMessageType::Combat:
-		case ACEChatMessageType::Help:
-			return ChatDarkRed;
-		case ACEChatMessageType::Magic:
-		case ACEChatMessageType::Spellcasting:
-			return ChatLightBlue;
-		case ACEChatMessageType::Channel:
-		case ACEChatMessageType::ChannelSend:
-			return ChatPink;
-		case ACEChatMessageType::Allegiance:
-			return ChatOrange;
-		case ACEChatMessageType::Emote:
-			return ChatGrey;
-		case ACEChatMessageType::Advancement:
-			return ChatCyan;
-		case ACEChatMessageType::System:
-			return ChatBrightPurple;
-	case ACEChatMessageType::Abuse:
-		return FLinearColor(0.706f, 0.863f, 0.941f, 1.f); // retail colorBlueGrey
-	case ACEChatMessageType::General:
-	case ACEChatMessageType::Trade:
-	case ACEChatMessageType::LFG:
-	case ACEChatMessageType::Roleplay:
-	case ACEChatMessageType::Society:
-		return FLinearColor(0.55f, 0.62f, 0.70f, 1.f);    // retail global-chat blue-grey
-	case ACEChatMessageType::ChatError:
-			return FLinearColor(1.f, 0.f, 0.f, 1.f);          // retail colorBrightRed
-		default:
-			// Retail fills every LogTextType slot with green before overrides
-			// (Broadcast/World_Broadcast/Recall/Craft/Salvaging all stay green).
-			return ChatGreen;
-		}
-	}
 	FString FormatGenderHeritageTitle(const FACEPlayerVitals& V)
 	{
 		FString Gender;
@@ -548,6 +485,7 @@ void UACEUIGameplayBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEleme
 		Client->OnFriendsChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleFriendsChanged);
 		Client->OnContractsChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleContractsChanged);
 		Client->OnEnchantmentsChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleEnchantmentsChanged);
+		Client->OnSpellLearned.AddDynamic(this, &UACEUIGameplayBinder::HandleSpellLearned);
 		Client->OnLinkStatusChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleLinkStatusChanged);
 		Client->OnBookChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleBookChanged);
 		LastVitals = Client->GetPlayerVitals();
@@ -664,10 +602,19 @@ void UACEUIGameplayBinder::Shutdown()
 		Client->OnFriendsChanged.RemoveDynamic(this, &UACEUIGameplayBinder::HandleFriendsChanged);
 		Client->OnContractsChanged.RemoveDynamic(this, &UACEUIGameplayBinder::HandleContractsChanged);
 		Client->OnEnchantmentsChanged.RemoveDynamic(this, &UACEUIGameplayBinder::HandleEnchantmentsChanged);
+		Client->OnSpellLearned.RemoveDynamic(this, &UACEUIGameplayBinder::HandleSpellLearned);
 		Client->OnLinkStatusChanged.RemoveDynamic(this, &UACEUIGameplayBinder::HandleLinkStatusChanged);
 		Client->OnBookChanged.RemoveDynamic(this, &UACEUIGameplayBinder::HandleBookChanged);
 	}
 	bBound = false;
+	bRevealLearnedSpell = false;
+	if (TransientInfoBox) TransientInfoBox->RemoveFromParent();
+	TransientInfoBox = nullptr;
+	TransientInfoText = nullptr;
+	TransientInfoLines.Reset();
+	TransientInfoTimes.Reset();
+	TransientInfoTemplate.Reset();
+	TransientInfoScale = FVector2D::ZeroVector;
 	Client = nullptr;
 	Manager = nullptr;
 	Canvas = nullptr;
@@ -2467,6 +2414,15 @@ void UACEUIGameplayBinder::SyncSpellcastTabChrome()
 	}
 }
 
+const TCHAR* UACEUIGameplayBinder::GetStatSelectionFooter() const
+{
+	const FACESkillInfo* Skill = LastVitals.Skills.FindByPredicate(
+		[this](const FACESkillInfo& Entry) { return Entry.SkillId == SelectedSkillId; });
+	// gmSkillUI uses the text footer for training and the XP meter for trained skills.
+	return ActiveSkillTab == TEXT("SkillPage") && Skill && Skill->AdvancementClass >= 2
+		? TEXT("StatManagement_Footer_Meter") : TEXT("StatManagement_Footer_Text");
+}
+
 void UACEUIGameplayBinder::SyncRaiseButtonChrome(bool bCanRaise1, bool bCanRaise10)
 {
 	if (!Manager)
@@ -2474,10 +2430,9 @@ void UACEUIGameplayBinder::SyncRaiseButtonChrome(bool bCanRaise1, bool bCanRaise
 		return;
 	}
 	const FString Page = ActiveSkillTab.IsEmpty() ? TEXT("AttributePage") : ActiveSkillTab;
-	const FString Footer = (Page == TEXT("SkillPage"))
-		? TEXT("StatManagement_Footer_Meter")
-		: TEXT("StatManagement_Footer_Text");
-	auto SetBtn = [&](const FString& BtnName, uint32 LitDid, uint32 DarkDid, bool bLit)
+	const FString Footer = GetStatSelectionFooter();
+	const bool bShowRaise10 = Page != TEXT("SkillPage") || Footer == TEXT("StatManagement_Footer_Meter");
+	auto SetBtn = [&](const FString& BtnName, uint32 LitDid, uint32 DarkDid, bool bLit, bool bVisible)
 	{
 		TSharedPtr<FACEUIElement> Btn;
 		if (TSharedPtr<FACEUIElement> Foot = Manager->FindElementUnder(Page, Footer))
@@ -2495,19 +2450,15 @@ void UACEUIGameplayBinder::SyncRaiseButtonChrome(bool bCanRaise1, bool bCanRaise
 				}
 			}
 		}
-		if (!Btn.IsValid())
-		{
-			Btn = Manager->FindElementUnder(Page, BtnName);
-		}
 		if (Btn.IsValid())
 		{
 			Btn->ImageFileId = bLit ? LitDid : DarkDid;
-			Btn->bVisible = true;
-			Btn->bActivatable = bLit;
+			Btn->bVisible = bVisible;
+			Btn->bActivatable = bVisible && bLit;
 		}
 	};
-	SetBtn(TEXT("StatManagement_Footer_RaiseButton"), DidRaise1Lit, DidRaise1Dark, bCanRaise1);
-	SetBtn(TEXT("StatManagement_Footer_Raise10Button"), DidRaise10Lit, DidRaise10Dark, bCanRaise10);
+	SetBtn(TEXT("StatManagement_Footer_RaiseButton"), DidRaise1Lit, DidRaise1Dark, bCanRaise1, true);
+	SetBtn(TEXT("StatManagement_Footer_Raise10Button"), DidRaise10Lit, DidRaise10Dark, bCanRaise10, bShowRaise10);
 }
 
 void UACEUIGameplayBinder::SyncSkillPanelTab(const FString& PageName)
@@ -2536,6 +2487,7 @@ void UACEUIGameplayBinder::SyncStatFooterChrome()
 	const bool bAttributeSelected = SelectedAttributeRow >= 0 && SelectedAttributeRow < 9;
 	const bool bSkillSelected = SelectedSkillId != 0 && LastVitals.Skills.ContainsByPredicate(
 		[this](const FACESkillInfo& Skill) { return Skill.SkillId == SelectedSkillId; });
+	const bool bTraining = GetStatSelectionFooter() == FString(TEXT("StatManagement_Footer_Text"));
 	// Retail footers sit on each page — toggle under the active page only (duplicate names).
 	auto SetFooter = [this](const FString& Page, const FString& Footer, bool bVis)
 	{
@@ -2547,8 +2499,9 @@ void UACEUIGameplayBinder::SyncStatFooterChrome()
 	for (const TCHAR* Tab : {TEXT("AttributePage"), TEXT("SkillPage"), TEXT("CharacterTitlePage")})
 	{
 		const bool bActive = ActiveSkillTab == Tab;
-		const bool bText = bActive && ActiveSkillTab == TEXT("AttributePage") && bAttributeSelected;
-		const bool bMeter = bActive && ActiveSkillTab == TEXT("SkillPage") && bSkillSelected;
+		const bool bText = bActive && ((ActiveSkillTab == TEXT("AttributePage") && bAttributeSelected)
+			|| (ActiveSkillTab == TEXT("SkillPage") && bSkillSelected && bTraining));
+		const bool bMeter = bActive && ActiveSkillTab == TEXT("SkillPage") && bSkillSelected && !bTraining;
 		SetFooter(Tab, TEXT("StatManagement_Footer_Default"), bActive && !bText && !bMeter);
 		SetFooter(Tab, TEXT("StatManagement_Footer_Text"), bText);
 		SetFooter(Tab, TEXT("StatManagement_Footer_Meter"), bMeter);
@@ -2866,6 +2819,9 @@ void UACEUIGameplayBinder::RefreshCombatPanelOverlays()
 	}
 	if (TSharedPtr<FACEUIElement> Fill = Manager->FindElementByName(TEXT("basic_recklessness_fill")))
 	{
+		// gmCombatUI gates the authored band on Recklessness training.
+		Fill->bVisible = LastVitals.Skills.ContainsByPredicate([](const FACESkillInfo& Skill)
+			{ return Skill.SkillId == 50 && Skill.AdvancementClass >= 2; });
 		if (TSharedPtr<FACEUIElement> Parent = Fill->Parent.Pin())
 		{
 			Parent->MeterFillFraction = FMath::Clamp(DisplayPower, 0.f, 1.f);
@@ -3729,7 +3685,7 @@ void UACEUIGameplayBinder::SelectInventoryGuid(int32 Guid)
 	{
 		return;
 	}
-	Client->SelectObject(Guid);
+	Client->SelectInventoryObject(Guid);
 }
 
 void UACEUIGameplayBinder::PostInventorySystemMessage(const FString& Text)
@@ -3740,65 +3696,119 @@ void UACEUIGameplayBinder::PostInventorySystemMessage(const FString& Text)
 
 void UACEUIGameplayBinder::ShowTransientInfo(const FString& Message)
 {
-	if (!Canvas || !Canvas->WidgetTree || Message.IsEmpty())
+	const FString Notice = Message.TrimEnd(); // gmSpewBoxUI trims trailing whitespace.
+	if (!Canvas || !Canvas->WidgetTree || Notice.IsEmpty())
 	{
 		return;
 	}
-	if (!TransientInfoText)
+	if (!TransientInfoBox)
 	{
-		TransientInfoText = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
-		TransientInfoText->SetJustification(ETextJustify::Center);
-		TransientInfoText->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 12));
-		// Retail transient text gold-yellow with a dark drop shadow for readability.
-		TransientInfoText->SetColorAndOpacity(FSlateColor(FLinearColor(1.f, 0.9f, 0.2f)));
-		TransientInfoText->SetShadowColorAndOpacity(FLinearColor(0.f, 0.f, 0.f, 0.9f));
-		TransientInfoText->SetShadowOffset(FVector2D(1.f, 1.f));
+		TransientInfoBox = Canvas->WidgetTree->ConstructWidget<USizeBox>();
+		TransientInfoBox->SetVisibility(ESlateVisibility::HitTestInvisible);
+		auto* Rows = Canvas->WidgetTree->ConstructWidget<UVerticalBox>();
+		TransientInfoBox->AddChild(Rows);
+		TransientInfoTemplate = UACEUILayoutResolver::LoadTemplate(0x21000011u, 0x1000004Au);
+		if (TransientInfoTemplate)
+		{
+			// Use the notice palette, not the template's generic "changed" red state.
+			TransientInfoTemplate->States.Reset();
+			TransientInfoTemplate->bTextOutline = true;
+		}
+		// classic_spewbox permits four concurrent messages. Reuse fixed rows so
+		// repeated server failures cannot grow either the widget tree or a queue.
+		for (int32 I = 0; I < 4; ++I)
+		{
+			auto* Text = Canvas->WidgetTree->ConstructWidget<UACERetailTextBlock>();
+			Text->SetJustification(ETextJustify::Center);
+			Text->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Bold"), 12));
+			Text->SetColorAndOpacity(FSlateColor(FLinearColor(1.f, 0.9f, 0.2f)));
+			Text->SetShadowColorAndOpacity(FLinearColor::Black);
+			Text->SetShadowOffset(FVector2D(1.f, 1.f));
+			Text->SetVisibility(ESlateVisibility::Collapsed);
+			Rows->AddChildToVerticalBox(Text);
+			TransientInfoLines.Add(Text);
+			TransientInfoTimes.Add(0.0);
+		}
+		TransientInfoText = TransientInfoLines[0];
 	}
-	TransientInfoText->SetText(FText::FromString(Message));
-	TransientInfoText->SetVisibility(ESlateVisibility::HitTestInvisible);
-	TransientInfoText->SetRenderOpacity(1.f);
-	TransientInfoShownAt = FPlatformTime::Seconds();
+	// Retail inserts newest first and refreshes an immediately repeated message.
+	if (TransientInfoText->GetText().ToString() != Notice)
+	{
+		for (int32 I = TransientInfoLines.Num() - 1; I > 0; --I)
+		{
+			TransientInfoLines[I]->SetText(TransientInfoLines[I - 1]->GetText());
+			TransientInfoTimes[I] = TransientInfoTimes[I - 1];
+		}
+	}
+	TransientInfoText->SetText(FText::FromString(Notice));
+	TransientInfoTimes[0] = FPlatformTime::Seconds();
 
 	if (UCanvasPanel* Layer = Canvas->GetElementLayer())
 	{
-		if (TransientInfoText->GetParent() != Layer)
+		if (TransientInfoBox->GetParent() != Layer)
 		{
-			Layer->AddChild(TransientInfoText);
+			Layer->AddChild(TransientInfoBox);
 		}
-		if (UCanvasPanelSlot* InfoSlot = Cast<UCanvasPanelSlot>(TransientInfoText->Slot))
+		if (UCanvasPanelSlot* InfoSlot = Cast<UCanvasPanelSlot>(TransientInfoBox->Slot))
 		{
-			// Anchored top-center of the viewport, below the 3D view's upper edge.
 			InfoSlot->SetAnchors(FAnchors(0.5f, 0.f, 0.5f, 0.f));
 			InfoSlot->SetAlignment(FVector2D(0.5f, 0.f));
 			InfoSlot->SetAutoSize(true);
-			InfoSlot->SetPosition(FVector2D(0.f, 48.f));
-			Canvas->SetOverlayOrder(TransientInfoText, Manager->FindElementByName(TEXT("RootGameplay_SmartBox_Field")), 15000);
+			Canvas->SetOverlayOrder(TransientInfoBox, Manager ? Manager->FindElementByName(TEXT("RootGameplay_SmartBox_Field")) : nullptr, 15000);
 		}
 	}
+	TickTransientInfo();
 }
 
 void UACEUIGameplayBinder::TickTransientInfo()
 {
-	if (!TransientInfoText || TransientInfoText->GetVisibility() == ESlateVisibility::Collapsed)
+	if (!TransientInfoBox || !Canvas)
 	{
 		return;
 	}
-	// Retail hold ≈ 4s, then a short fade before hiding.
+	const FVector2D Scale = Canvas->GetLastScale2D();
+	if (Scale != TransientInfoScale)
+	{
+		TransientInfoScale = Scale;
+		// Native spewbox width; bitmap text wraps before leaving the game view.
+		TransientInfoBox->SetWidthOverride(450.f * Scale.X);
+		for (const auto& Text : TransientInfoLines)
+		{
+			Text->SetWrapTextAt(450.f * Scale.X);
+			CastChecked<UACERetailTextBlock>(Text.Get())->SetRetailElement(
+				Canvas->GetResourceResolver(), TransientInfoTemplate, Scale, 450.f, false);
+		}
+	}
+	// Retail places the spewbox 20 pixels below the game view's top. Our movable
+	// vitals may occupy that space: keep the notices below overlapping meters.
+	float Top = 20.f * Scale.Y;
+	const float Center = Canvas->GetCachedGeometry().GetLocalSize().X * .5f;
+	if (Manager)
+	{
+		for (const TCHAR* Name : {TEXT("RootGameplay_FloatyVitals_Field"), TEXT("RootGameplay_FloatySideVitals_Field")})
+		{
+			const auto Vitals = Manager->FindElementByName(Name);
+			if (!Vitals || !Vitals->bVisible) continue;
+			const FVector2D Origin = Canvas->LayoutToViewport(FVector2D(Vitals->GetScreenOrigin()));
+			const FVector2D Size = FVector2D(Vitals->Width, Vitals->GetLayoutHeight()) * Scale;
+			if (Origin.X < Center + 225.f * Scale.X && Origin.X + Size.X > Center - 225.f * Scale.X
+				&& Origin.Y < Top + 72.f * Scale.Y && Origin.Y + Size.Y > Top)
+				Top = Origin.Y + Size.Y + 6.f * Scale.Y;
+		}
+	}
+	if (auto* Slot = Cast<UCanvasPanelSlot>(TransientInfoBox->Slot))
+		if (!Slot->GetPosition().Equals(FVector2D(0.f, Top))) Slot->SetPosition(FVector2D(0.f, Top));
 	constexpr double HoldSeconds = 4.0;
 	constexpr double FadeSeconds = 1.0;
-	const double Elapsed = FPlatformTime::Seconds() - TransientInfoShownAt;
-	if (Elapsed <= HoldSeconds)
+	const double Now = FPlatformTime::Seconds();
+	for (int32 I = 0; I < TransientInfoLines.Num(); ++I)
 	{
-		TransientInfoText->SetRenderOpacity(1.f);
-		return;
+		auto* Text = TransientInfoLines[I].Get();
+		const double Elapsed = Now - TransientInfoTimes[I];
+		const bool bVisible = TransientInfoTimes[I] > 0 && Elapsed < HoldSeconds + FadeSeconds;
+		Text->SetVisibility(bVisible ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+		if (bVisible) Text->SetRenderOpacity(FMath::Clamp(1.f - static_cast<float>((Elapsed - HoldSeconds) / FadeSeconds), 0.f, 1.f));
 	}
-	if (Elapsed >= HoldSeconds + FadeSeconds)
-	{
-		TransientInfoText->SetVisibility(ESlateVisibility::Collapsed);
-		return;
-	}
-	TransientInfoText->SetRenderOpacity(
-		1.f - static_cast<float>((Elapsed - HoldSeconds) / FadeSeconds));
 }
 
 void UACEUIGameplayBinder::FitCombatFloatyContentWidth(int32 ContentW)
@@ -5815,10 +5825,6 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 				if (!Foot->bVisible) return false;
 				Btn = FindNamedUnder(Foot, BtnName);
 			}
-			if (!Btn.IsValid())
-			{
-				Btn = Manager->FindElementUnder(Page, BtnName);
-			}
 			if (!Btn.IsValid() || !Btn->bVisible || Btn->Width <= 0 || Btn->Height <= 0)
 			{
 				return false;
@@ -5829,9 +5835,7 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 			return X >= O.X && Y >= O.Y && X < O.X + Btn->Width && Y < O.Y + Btn->Height;
 		};
 		const FString Page = ActiveSkillTab;
-		const FString Footer = (Page == TEXT("SkillPage"))
-			? TEXT("StatManagement_Footer_Meter")
-			: TEXT("StatManagement_Footer_Text");
+		const FString Footer = GetStatSelectionFooter();
 		if (HitRaiseUnder(Page, Footer, TEXT("StatManagement_Footer_RaiseButton")))
 		{
 			RaiseSelectedStat(1);
@@ -6185,12 +6189,13 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 
 void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString& Sender, int32 ChatType)
 {
-	// CommunicationTransientString uses the fading center-top banner.
-	// Failure events instead enter chat with their retail message type.
-	if (ChatType == ACEChatMessageType::TransientInfo)
+	// gmSpewBoxUI::RecvNotice_DisplayFinalStringInfo consumes LogTextType 26,
+	// including WeenieError/UseDone failures. Chat receives it independently only
+	// if explicitly enabled in that window's filter (retail defaults exclude it).
+	if (ACEChatMessageType::IsTransientNotice(ChatType))
 	{
 		ShowTransientInfo(Text);
-		return;
+		if (ChatType == ACEChatMessageType::TransientInfo) return;
 	}
 
 	if (!ChatLog)
@@ -6228,6 +6233,7 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 
 	FString Line;
 	if (ACEChatMessageType::IsGlobalChannel(ChatType)
+        || ChatType == ACEChatMessageType::Allegiance
         || ChatType == ACEChatMessageType::Channel || ChatType == ACEChatMessageType::ChannelSend
         || ChatType == ACEChatMessageType::Social || ChatType == ACEChatMessageType::SocialSend
         || ChatType == ACEChatMessageType::Fellowship || ChatType == ACEChatMessageType::Abuse
@@ -6295,15 +6301,15 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 		Line = FString::Printf(TEXT("%d:%02d:%02d %s"),
 			Now.GetHour(), Now.GetMinute(), Now.GetSecond(), *Line);
 	}
-	// Retail @log mirror — appends the displayed line to the chosen text file.
-	if (bChatMirrorToFile && !ChatMirrorFilePath.IsEmpty())
+	// ClientSystem::AddTextToScroll excludes LogTextType 26 from @log too.
+	if (ChatType != ACEChatMessageType::ChatError && bChatMirrorToFile && !ChatMirrorFilePath.IsEmpty())
 	{
 		FFileHelper::SaveStringToFile(Line + LINE_TERMINATOR, *ChatMirrorFilePath,
 			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM, &IFileManager::Get(),
 			FILEWRITE_Append);
 	}
 
-	const FLinearColor Color = ColorForChatType(ChatType);
+	const FLinearColor Color = ACERetailChat::Color(ChatType);
 	// Player-attributed rows become click-to-tell targets (retail <Tell:IIDString>).
 	FString ClickSender;
 	if (!Sender.IsEmpty() && !Sender.Equals(TEXT("You"), ESearchCase::IgnoreCase)
@@ -8918,22 +8924,22 @@ void UACEUIGameplayBinder::RefreshSkillOverlays()
 		}
 	}
 	PlaceTextUnder(AttrFooterTitle, TEXT("SkillPage"), TEXT("StatManagement_Footer_Title"),
-		Sel ? FString::Printf(TEXT("%s: %d%s"), *Sel->Name, Sel->Current,
+		bNeedsTrain ? Sel->Name : Sel ? FString::Printf(TEXT("%s: %d%s"), *Sel->Name, Sel->Current,
 			Sel->Current == Sel->Base ? TEXT("") : *FString::Printf(TEXT(" (%+d)"), Sel->Current-Sel->Base))
 			: TEXT("Select a Skill"), 9, TextWhite, StatOverlayZ);
 	if (auto* Retail = Cast<UACERetailTextBlock>(AttrFooterTitle))
-		Retail->SetModifierSuffix(Sel ? FString::Printf(TEXT("%s: %d"), *Sel->Name, Sel->Current).Len() : -1,
+		Retail->SetModifierSuffix(Sel && !bNeedsTrain ? FString::Printf(TEXT("%s: %d"), *Sel->Name, Sel->Current).Len() : -1,
 			Sel && Sel->Current > Sel->Base ? FLinearColor::Green : FLinearColor::Red);
 	if (bNeedsTrain)
 	{
 		PlaceTextUnder(AttrFooterLine1Label, TEXT("SkillPage"), TEXT("StatManagement_Footer_LineOneLabel"),
-			TEXT("Skill Credits to train"), 8, TextWhite, StatOverlayZ);
+			TEXT("Skill Credits to Train:"), 8, TextWhite, StatOverlayZ);
 		if (AttrFooterLine1Label) { AttrFooterLine1Label->SetJustification(ETextJustify::Left); }
 		if (AttrFooterLine1Value) { AttrFooterLine1Value->SetJustification(ETextJustify::Right); }
 		PlaceTextUnder(AttrFooterLine1Value, TEXT("SkillPage"), TEXT("StatManagement_Footer_LineOneValue"),
 			Sel ? FString::FromInt(TrainCost) : TEXT("—"), 8, TextWhite, StatOverlayZ);
 		PlaceTextUnder(AttrFooterLine2Label, TEXT("SkillPage"), TEXT("StatManagement_Footer_LineTwoLabel"),
-			TEXT("Skill Credits Available"), 8, TextWhite, StatOverlayZ);
+			TEXT("Skill Credits Available:"), 8, TextWhite, StatOverlayZ);
 		if (AttrFooterLine2Label) { AttrFooterLine2Label->SetJustification(ETextJustify::Left); }
 		if (AttrFooterLine2Value) { AttrFooterLine2Value->SetJustification(ETextJustify::Right); }
 		PlaceTextUnder(AttrFooterLine2Value, TEXT("SkillPage"), TEXT("StatManagement_Footer_LineTwoValue"),
@@ -8963,7 +8969,7 @@ void UACEUIGameplayBinder::RefreshSkillOverlays()
 		{
 			if (bNeedsTrain)
 			{
-				bCanRaise1 = LastVitals.AvailableSkillCredits >= TrainCost;
+				bCanRaise1 = TrainCost > 0 && LastVitals.AvailableSkillCredits >= TrainCost;
 				bCanRaise10 = false; // retail: train uses Raise once, not ×10
 			}
 			else if (XpToNext > 0 && MaxSpend > 0)
@@ -9178,8 +9184,8 @@ void UACEUIGameplayBinder::RaiseSelectedStat(int32 Multiplier)
 		PostInventorySystemMessage(TEXT("Character stats are not ready yet."));
 		return;
 	}
-	UACEDatSubsystem* Dat = nullptr;
-	if (PlayerController)
+	UACEDatSubsystem* Dat = Canvas && Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr;
+	if (!Dat && PlayerController)
 	{
 		if (UGameInstance* GI = PlayerController->GetGameInstance())
 		{
@@ -9210,10 +9216,12 @@ void UACEUIGameplayBinder::RaiseSelectedStat(int32 Multiplier)
 		// Untrained (1): spend skill credits via TrainSkill. Trained+ (2+): spend XP via RaiseSkill.
 		if (Sel->AdvancementClass < 2)
 		{
+			// Training is a single skill-credit action; the XP +10 action never trains.
+			if (Multiplier != 1) return;
 			int32 Cost = 0;
-			if (!Dat->TryGetSkillTrainedCost(static_cast<uint32>(Sel->SkillId), Cost))
+			if (!Dat->TryGetSkillTrainedCost(static_cast<uint32>(Sel->SkillId), Cost) || Cost <= 0)
 			{
-				Cost = 1;
+				return;
 			}
 			if (LastVitals.AvailableSkillCredits < Cost)
 			{
@@ -9976,7 +9984,7 @@ void UACEUIGameplayBinder::RefreshSpellbookOverlays()
 		return;
 	}
 	SyncSpellbookFilterCheckboxes();
-	UACEDatSubsystem* Dat = nullptr;
+	UACEDatSubsystem* Dat = Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr;
 	if (PlayerController)
 	{
 		if (UGameInstance* GI = PlayerController->GetGameInstance())
@@ -10030,6 +10038,15 @@ void UACEUIGameplayBinder::RefreshSpellbookOverlays()
 	const int32 RightMargin = Template.Text && Template.Root ? Template.Root->Width - TextX - Template.Text->Width : 8;
 	const int32 TextW = FMath::Max(1, ListEl->Width - TextX - RightMargin);
 	const int32 MaxRows = FMath::Max(1, ListEl->Height / RowH);
+	if (bRevealLearnedSpell)
+	{
+		// gmSpellbookUI::SetSelected calls ScrollToView after inserting in DAT
+		// display order. Do this once so subsequent manual scrolling stays put.
+		const int32 Selected = Spells.Find(SelectedSpellbookId);
+		if (Selected != INDEX_NONE)
+			SpellbookScrollOffset = FMath::Clamp(SpellbookScrollOffset, FMath::Max(0, Selected - MaxRows + 1), Selected);
+		bRevealLearnedSpell = false;
+	}
 	SpellbookScrollOffset = FMath::Clamp(SpellbookScrollOffset, 0, FMath::Max(0, Spells.Num() - MaxRows));
 	SpellbookRowIds.SetNum(MaxRows);
 	while (SpellbookRows.Num() < MaxRows && Canvas->WidgetTree)

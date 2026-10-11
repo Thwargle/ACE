@@ -417,6 +417,53 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
   }
  };
  CheckStrafe();
+ // Navigation can reduce analog input to stop precisely at a close waypoint.
+ // Its DAT gait phase must cover the same distance as physical prediction.
+ TFunction<void()> CheckRoutePose = [&]
+ {
+  auto* Plugins=GI->GetSubsystem<UACEPluginSubsystem>();
+  PC->PlayerInput->FlushPressedKeys();PC->PlayerInput->ProcessInputStack({},1.f/90,false);
+  VR->bActive=false;Session->bHasPlayerEncumbrance=false;Client->SetBurden(0);Client->SetRunSkill(593);
+  Session->PlayerVitals.Stamina=500;Session->bUseBusy=false;
+  auto Reset=[&](uint32 Style,float Distance)
+  {
+   PC->bJumpAirborne=PC->bJumpCharging=PC->bStandingJumpLocked=false;
+   PC->LandingWorldAceVelocity=FVector::ZeroVector;PC->LandingRootTrack.Reset();PC->StepHoldSeconds=0;
+   PC->bServerMoveToActive=false;PC->ForwardSent=PC->RightSent=0;PC->bWasMoving=false;
+   FACEPosition Pose;Pose.CellId=0x01010001;Pose.SetLocationFromUnreal(StartFeet,100);
+   Pose.SetAceFacingFromUnrealDir2D(FVector::XAxisVector);Session->SetLocalPosition(Pose);
+   PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;
+   Pawn->SetActorLocationAndRotation(StartFeet+FVector(0,0,88),Pose.ToUnrealQuat());
+   App->ResetMotionForTeleport();App->PreferredStyle=Style;App->SetPreviewCapture(true);
+   Plugins->MoveTarget=Pose;Plugins->MoveTarget.SetLocationFromUnreal(StartFeet+FVector(Distance,0,0),100);
+   Plugins->MovementOwner=TEXT("ucm");Plugins->MoveExpires=FPlatformTime::Seconds()+100;
+   Plugins->LastProgress=FPlatformTime::Seconds();Plugins->LastMovePosition=StartFeet;Plugins->MoveArrivalRadius=1;
+  };
+  for(int FPS:{15,90,144})for(uint32 Style:{ACEMotion::StanceNonCombat,ACEMotion::StanceMagic,0x8000003eu,0x8000003fu})
+  {
+   Reset(Style,5);
+   App->AnimTime=.37f; // Starting from an arbitrary idle frame must not skip the first step.
+   PC->PlayerTick(1.f/FPS);App->TickComponent(1.f/FPS,LEVELTICK_All,nullptr);
+   const double Travel=FVector::Dist2D(StartFeet,Pawn->GetActorLocation())/100.;
+   TestTrue(TEXT("Close route waypoint uses fractional movement without overshoot"),PC->ForwardAxis>0&&PC->ForwardAxis<1&&FMath::Abs(Travel-.05)<.002);
+   TestTrue(TEXT("Navigation gait phase matches distance when arrival limits the axis"),FMath::Abs(App->AnimTime-Travel/DatRunSpeed)<.0001);
+   TArray<FTransform> Expected;int32 Count=0;
+   if(!TestTrue(TEXT("Route gait resolves the retail run cycle"),Dat->EvaluateMotionCommand(Self.MotionTableId,ACEMotion::RunForward,
+    Travel/DatRunSpeed,App->GetPartCount(),Expected,100,Count,nullptr,nullptr,Style)))return;
+   for(int Part=0;Part<Count;++Part)
+    TestTrue(TEXT("First navigation step uses the DAT pose without an idle glide"),App->GetPartMesh(Part)->GetRelativeTransform().Equals(Expected[Part],.04));
+  }
+  for(uint32 Action:{0u,0x40000018u,0x40000016u,0x40000034u})
+  {
+   Reset(Action==0x40000016u?0x8000003eu:ACEMotion::StanceMagic,5000);
+   if(Action)App->PlayActionMotion(Action,1.f,App->PreferredStyle);
+   for(int Frame=0;Frame<180;++Frame)
+   {PC->PlayerTick(1.f/90);App->TickComponent(1.f/90,LEVELTICK_All,nullptr);}
+   TestTrue(TEXT("Route travel resumes locomotion after a previous activity"),App->ActionCommand==0&&App->LocomotionForward>0);
+  }
+  Plugins->MovementOwner.Empty();Plugins->MoveExpires=0;
+ };
+ CheckRoutePose();
  GI->Shutdown();GEngine->DestroyWorldContext(World);World->DestroyWorld(false);
  return !HasAnyErrors();
 }

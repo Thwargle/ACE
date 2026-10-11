@@ -81,6 +81,7 @@ bool FACESession::Connect(const FACELoginCredentials& Credentials)
 
 void FACESession::Disconnect()
 {
+	GiveRecipientGuid = 0;
 	Confirmations.Reset();
 	LastServerPacketAt = 0.0;
 	LastServerDatagramAt = LastReceivePortKeepaliveAt = 0.0;
@@ -313,6 +314,7 @@ void FACESession::ClearWorldState()
 	SelectedObject = FACESelectedObject();
 	SelectedManaQueryGuid = 0;
 	PreviousSelectedObjectGuid = 0;
+	GiveRecipientGuid = 0;
 	CurrentStance = ACEMotion::StanceNonCombat;
 	bEnteredWorldSent = false;
 	PendingEnterCharacterId = 0;
@@ -1622,6 +1624,18 @@ void FACESession::HandleGameMessage(const TArray<uint8>& MessageBytes)
 	case ACEOpcode::ServerMessage:
 		HandleServerMessage(Reader);
 		break;
+	case ACEOpcode::PlayerKilled:
+	{
+		// Retail suppresses the public copy for victim/killer: they receive
+		// 01AC/01AD separately. Everyone else sees the server's green death text.
+		const FString Message = Reader.ReadString16L();
+		if (!Reader.CanRead(8)) break;
+		const int32 Victim = Reader.ReadInt32();
+		const int32 Killer = Reader.ReadInt32();
+		if (!Message.IsEmpty() && PlayerGuid != Victim && PlayerGuid != Killer)
+			OnChatMessage.Broadcast(Message, FString(), ACEChatMessageType::Broadcast);
+		break;
+	}
 	case ACEOpcode::HearSpeech:
 		HandleHearSpeech(Reader);
 		break;
@@ -2270,6 +2284,7 @@ void FACESession::DeleteWorldObject(int32 Guid)
 	}
 	if (!bKeepInventoryRecord)
 	{
+		if (GiveRecipientGuid == Guid) GiveRecipientGuid = 0;
 		if (OpenExternalContainerGuid == Guid)
 		{
 			OpenExternalContainerGuid = 0;
@@ -2498,7 +2513,7 @@ void FACESession::HandleTurbineChat(FACEBinaryReader& Reader)
 	int32 ChannelLogType = ACEChatMessageType::General;
 	switch (ChatType)
 	{
-	case ACETurbineChat::Allegiance: Tag = TEXT("Allegiance"); ChannelLogType = ACEChatMessageType::Social; break;
+	case ACETurbineChat::Allegiance: Tag = TEXT("Allegiance"); ChannelLogType = ACEChatMessageType::Allegiance; break;
 	case ACETurbineChat::Trade: Tag = TEXT("Trade"); ChannelLogType = ACEChatMessageType::Trade; break;
 	case ACETurbineChat::LFG: Tag = TEXT("LFG"); ChannelLogType = ACEChatMessageType::LFG; break;
 	case ACETurbineChat::Roleplay: Tag = TEXT("Roleplay"); ChannelLogType = ACEChatMessageType::Roleplay; break;
@@ -2508,7 +2523,7 @@ void FACESession::HandleTurbineChat(FACEBinaryReader& Reader)
 	case ACETurbineChat::SocietyRadiantBlood:
 		Tag = TEXT("Society"); ChannelLogType = ACEChatMessageType::Society;
 		break;
-	case ACETurbineChat::Olthoi: Tag = TEXT("Olthoi"); ChannelLogType = ACEChatMessageType::General; break;
+	case ACETurbineChat::Olthoi: Tag = TEXT("Olthoi"); ChannelLogType = ACEChatMessageType::Allegiance; break;
 	default: Tag = TEXT("General"); break;
 	}
 	const FString Line = FString::Printf(TEXT("[%s] %s says, \"%s\""), Tag, *Sender, *Text);
@@ -2900,7 +2915,7 @@ void FACESession::HandleCombatVictimNotification(FACEBinaryReader& Reader)
 	const FString Msg = Reader.ReadString16L();
 	if (!Msg.IsEmpty())
 	{
-		OnChatMessage.Broadcast(Msg, TEXT(""), ACEChatMessageType::CombatEnemy);
+		OnChatMessage.Broadcast(Msg, TEXT(""), ACEChatMessageType::Broadcast);
 	}
 }
 
@@ -2909,7 +2924,7 @@ void FACESession::HandleCombatKillerNotification(FACEBinaryReader& Reader)
 	const FString Msg = Reader.ReadString16L();
 	if (!Msg.IsEmpty())
 	{
-		OnChatMessage.Broadcast(Msg, TEXT(""), ACEChatMessageType::CombatSelf);
+		OnChatMessage.Broadcast(Msg, TEXT(""), ACEChatMessageType::Broadcast);
 	}
 }
 
@@ -4011,6 +4026,8 @@ void FACESession::HandlePrivateUpdatePropertyInt(FACEBinaryReader& Reader)
 
 void FACESession::ApplyServerCombatMode(int32 Mode)
 {
+	PlayerVitals.StatQualityInts.Add(40, Mode);
+	++CombatModeRevision;
 	const double Now = FPlatformTime::Seconds();
 	if (PendingCombatMode != 0 && Now < PendingCombatModeUntil)
 	{
@@ -4114,11 +4131,19 @@ void FACESession::SendChatChannel(uint32 ChannelId, const FString& Message)
 	SendGameAction(ACEGameAction::ChatChannel, W.GetData(), ACEQueue::WeenieQueue);
 }
 
-void FACESession::SetSelectedObjectInternal(const FACESelectedObject& Sel)
+void FACESession::SetSelectedObjectInternal(const FACESelectedObject& Sel, bool bInventorySelection)
 {
-	// ACCWeenieObject::SetSelectedObject retains the immediately preceding
-	// selection for Give. Reselecting or refreshing the same object preserves it.
+	// Preserve retail's ordinary selection history separately. Inventory tabs,
+	// packs and automatic vendor-stock selection can all intervene before Give.
 	if (SelectedObject.Guid != Sel.Guid) PreviousSelectedObjectGuid = SelectedObject.Guid;
+	const auto* Object = WorldObjects.Find(Sel.Guid);
+	const bool bBrowsingItems = Object && (Object->ContainerId || Object->WielderId || Object->ParentGuid
+		|| (bInventorySelection && Sel.Guid == PlayerGuid));
+	if (!bBrowsingItems)
+	{
+		GiveRecipientGuid = Object && Sel.Guid != PlayerGuid && Object->IsSelectableWorldObject()
+			&& !Object->bDying && Object->IsGiveOrCreatureTarget() ? Sel.Guid : 0;
+	}
 	const uint32 Serial = SelectedObject.SelectionSerial + 1;
 	SelectedObject = Sel;
 	SelectedObject.SelectionSerial = Serial;
@@ -4159,7 +4184,7 @@ bool FACESession::CanQueryItemMana(int32 Guid) const
 	return false;
 }
 
-void FACESession::SelectObject(int32 ObjectGuid)
+void FACESession::SelectObject(int32 ObjectGuid, bool bInventorySelection)
 {
 	if (State != EACESessionState::InWorld)
 	{
@@ -4197,7 +4222,7 @@ void FACESession::SelectObject(int32 ObjectGuid)
 			Sel.bValid = true;
 		}
 	}
-	SetSelectedObjectInternal(Sel);
+	SetSelectedObjectInternal(Sel, bInventorySelection);
 
 	FACEBinaryWriter W;
 	W.WriteUInt32(static_cast<uint32>(HealthTarget));
@@ -5282,6 +5307,8 @@ void FACESession::HandleMagicUpdateSpell(FACEBinaryReader& Reader)
 	{
 		KnownSpells.Add(SpellId);
 		++SpellDataRevision;
+		// Incremental learning is distinct from the login spellbook snapshot.
+		if (State == EACESessionState::InWorld) OnSpellLearned.Broadcast(SpellId);
 	}
 }
 
@@ -8008,6 +8035,7 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 				if (Motion.ActionCommand == 0)
 				{
 					Motion.ActionCommand = static_cast<int32>(Full);
+					Motion.bNewAction = true;
 					Motion.ActionSpeed = ClampedSpeed;
 				}
 				else
@@ -8138,7 +8166,7 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 		Motion.bHaveMoveToTarget = Motion.MoveToCellId != 0;
 		Motion.MoveToFlags = Reader.ReadUInt32(); // MovementParameters flags
 		Motion.MoveToDistance = Reader.ReadFloat(); // distance / use radius
-		Reader.ReadFloat(); // minimum distance
+		Motion.MoveToMinDistance = Reader.ReadFloat();
 		Motion.MoveToFailDistance = Reader.ReadFloat(); // fail distance (melee charge = 15; Use = MaxValue)
 		// MaxValue means "no fail" on the server — treat as 0 for local checks.
 		if (!FMath::IsFinite(Motion.MoveToFailDistance) || Motion.MoveToFailDistance == MAX_flt
@@ -8199,6 +8227,7 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 	else return; // Unknown movement bodies must not consume a valid sequence.
 
 	if (Motion.MoveToLocalAce.ContainsNaN() || !FMath::IsFinite(Motion.MoveToDistance)
+		|| !FMath::IsFinite(Motion.MoveToMinDistance)
 		|| !FMath::IsFinite(Motion.MoveToSpeed) || !FMath::IsFinite(Motion.MoveToRunRate)
 		|| !FMath::IsFinite(Motion.MoveToWalkRunThreshold) || !FMath::IsFinite(Motion.MoveToDesiredHeading)
 		|| !FMath::IsFinite(Motion.TurnToSpeed)) return;

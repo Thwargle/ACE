@@ -48,6 +48,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FACESquelchChangedDyn);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FACEHouseChangedDyn);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FACEBookChangedDyn);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FACEEnchantmentsChangedDyn);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FACESpellLearnedDyn, int32, SpellId);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FACELinkStatusChangedDyn, const FACELinkStatus&, Status);
 
 /**
@@ -59,6 +60,7 @@ class ACECLIENT_API UACEClientSubsystem : public UGameInstanceSubsystem, public 
 	friend class FACEPortalLifetimeTest;
 	friend class FACEPluginEquipmentTest;
 	friend class FACEPluginRequestsTest;
+	friend class FACEItemToolsTest;
     friend class FACEPluginRampRouteTest;
 	GENERATED_BODY()
 	friend class FACEVRRenderReplicationTest;
@@ -201,6 +203,9 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category = "ACE|Magic")
 	FACEEnchantmentsChangedDyn OnEnchantmentsChanged;
+
+	UPROPERTY(BlueprintAssignable, Category = "ACE|Magic")
+	FACESpellLearnedDyn OnSpellLearned;
 
 	UPROPERTY(BlueprintAssignable, Category = "ACE")
 	FACELinkStatusChangedDyn OnLinkStatusChanged;
@@ -641,6 +646,8 @@ public:
 	FACESelectedObject GetSelectedObject() const;
 
 	int32 GetPreviousSelectedObjectGuid() const;
+	int32 GetGiveRecipientGuid() const;
+	void SelectInventoryObject(int32 ObjectGuid);
 
 	/** Send LoginComplete (0x00A1) — tell the server we exited portal space / arrived. */
 	UFUNCTION(BlueprintCallable, Category = "ACE")
@@ -716,6 +723,8 @@ public:
 	/** Retail pickup preference/fallback; explicit inventory drops do not use this.
 	 * Amount == 0 means the whole stack. An existing mergeable stack takes priority. */
 	int32 ResolvePickupContainer(int32 ItemGuid, int32 OpenPackGuid, int32 Amount = 0) const;
+	/** Same retail search, but returns zero when no owned container can accept the item. */
+	int32 FindPickupContainer(int32 ItemGuid, int32 OpenPackGuid, int32 Amount = 0) const;
 
 	/** F/hand: merge into and select one compatible stack, or move to main pack if none fits. */
 	bool SortInventoryItem(int32 Guid);

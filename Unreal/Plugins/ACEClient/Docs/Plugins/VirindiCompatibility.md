@@ -1,5 +1,35 @@
 # Virindi compatibility review
 
+## Combat action synchronization — 2026-10-11
+
+Compared ACE's `Player_Magic`, `Player_Melee` and `Player_Combat` handlers with
+retail `ClientCombatSystem::PlayerInReadyPosition` and VT's equipment/action
+manager (`ga.cs`) and casting engine (`gj.cs`). VT returns after requesting a
+stance/equipment change and gates casting on magic mode. UCM previously sent a
+stance request and cast together, using the client's optimistic mode as proof
+that the server was ready. ACE can defer the change behind `NextUseTime`, causing
+`CombatMode mismatch NonCombat` warnings or rejected spells.
+
+Automated actions now retain their intent while waiting for a server combat-mode
+property update. Changing out of physical combat first cancels repeats and waits
+for terminal `AttackDone`; a repeat's successful `AttackDone(0)` is insufficient.
+ACE's already-started swing still executes its damage hooks after cancellation,
+so changing mode or removing either weapon early could produce `no weapon` and
+`DamageType.Undef`. Ownership checks now allow UCM to remove or change hands on
+its equipped offhand item. Fast-buff retries also recheck confirmed magic mode.
+
+Consecutive casts and same-mode target handoffs do not acquire a transition
+wait. Missing confirmations time out only the affected activity; Stop discards
+queued intents. Packet regressions cover these transitions, including transient
+peace updates and cancellation between repeated attacks. Live-server validation
+of the reported October 10 session remains necessary.
+
+Validation: Windows Editor build passed. Six targeted tests passed:
+`RouteAndTellRequests`, `EquipmentBuffCycle`, `Recovery`, `Decisions`,
+`SchedulingParity`, and `InventoryOrder`. The packet tests also verify that
+stopped-UCM mana maintenance retains its stance handshake. Shared Quest sources
+were synchronized; no Linux or live-server run was performed in this review.
+
 ## Current review — 2026-10-09
 
 Compared the local VT decompile's `uTank2/cLogic.cs` scheduler, `cr.cs`
@@ -320,8 +350,11 @@ continue running against their bundled, validated dependency library.
 
 Both importing and selecting a legacy file save a native JSON setup in
 `Saved/ClientPlugins/Profiles/ucm` (or the configured plugin storage root),
-available from UCM's Profiles tab. Linked profiles are compiled into that setup,
-including cyclic references; their original names remain library lookup keys.
+available from UCM's Profiles tab. The setup references reusable Character, Routes,
+Loot, Monsters, Metas and Vendors files. Imported meta dependencies (including
+cyclic references) are compiled into the Metas file; their original names remain
+library lookup keys. See the README's reusable UCM profiles section for migration
+and sharing behavior.
 Command text stored in compiled actions uses `/ucm`; item names, chat payloads
 and chat-matching expressions are preserved. Command-producing expression
 prefixes are converted without stripping concatenation whitespace; dynamically

@@ -154,6 +154,37 @@ bool FACEEmoteTransitionTest::RunTest(const FString&)
   }
   TestTrue(TEXT("A gesture queued during lay-down retains the get-up and does not block Ready"), SawWave && App->ActionCommand == 0);
  }
+ // RecipeManager sends one freshly stamped ClapHands for every combine.
+ // Replay it at rest; retain the guard for non-action state echoes.
+ for (float Dt : {1.f/30, 1.f/90})
+ {
+  App->ClearActionMotion(); App->SetPreferredStyle(Style); App->SetLocomotionInput(0,0,false,1);
+  for (int Combine=0; Combine<4; ++Combine)
+  {
+   App->PlayActionMotion(0x1300007eu,1,Style,true,true);
+   TestEqual(TEXT("Each combine restarts its authored gesture"),App->AnimTime,0.f);
+   TestFalse(TEXT("Each combine releases the previous final pose"),App->bHoldActionFinal);
+   for(int Frame=0; Frame<FMath::CeilToInt(10.f/Dt) && !App->bHoldActionFinal; ++Frame)App->TickComponent(Dt,LEVELTICK_All,nullptr);
+   TestTrue(TEXT("Repeated combine evaluates to completion without walking"),App->bHoldActionFinal && App->bActionEverEvaluated);
+   const float End=App->AnimTime;
+   App->PlayActionMotion(0x1300007eu,1,Style,true,false);
+   TestEqual(TEXT("State echo does not restart a completed gesture"),App->AnimTime,End);
+  }
+  App->ClearActionMotion();App->PlayActionMotion(0x1300007eu,1,Style,true,true);
+  App->TickComponent(Dt,LEVELTICK_All,nullptr);
+  App->PlayActionMotion(0x1300007eu,1,Style,true,true);
+  TestEqual(TEXT("Early next combine is queued instead of lost"),App->PendingActionCommands.Num(),1);
+  for(int Frame=0;Frame<FMath::CeilToInt(20.f/Dt) && (!App->PendingActionCommands.IsEmpty()||!App->bHoldActionFinal);++Frame)App->TickComponent(Dt,LEVELTICK_All,nullptr);
+  TestTrue(TEXT("Both queued combines finish"),App->PendingActionCommands.IsEmpty() && App->bHoldActionFinal);
+ }
+ // Multiple distinct combines may be coalesced into one server command list.
+ App->ClearActionMotion();
+ FACEObjectMotionState Combines;Combines.CurrentStyle=Style;Combines.ActionCommand=0x1300007eu;
+ Combines.bNewAction=true;Combines.ActionFollowups={int32(0x1300007eu),int32(0x1300007eu)};
+ Actor->ApplyMotionState(Combines);
+ TestEqual(TEXT("Batched crafting actions all enter the animation queue"),App->PendingActionCommands.Num(),2);
+ for(int Frame=0;Frame<1800 && (!App->PendingActionCommands.IsEmpty()||!App->bHoldActionFinal);++Frame)App->TickComponent(1.f/90,LEVELTICK_All,nullptr);
+ TestTrue(TEXT("Batched combines finish without movement"),App->PendingActionCommands.IsEmpty()&&App->bHoldActionFinal);
  // Landing uses the real Falling->movement link, not a blend from a frozen
  // airborne endpoint. Compare every rendered part against the DAT recovery.
  for(float Forward:{0.f,1.f})for(bool Run:{false,true})for(float Dt:{1.f/30,1.f/90})

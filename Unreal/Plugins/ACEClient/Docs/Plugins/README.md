@@ -6,16 +6,84 @@ loader for Decal DLLs or Virindi View Services assemblies.
 
 ## Users
 
+**Item Tools** provides bulk giving, vendor buy/sell, GiveVT-style profile
+transfers, keyed chest collection/distribution, and character-specific supply
+restocking. See [Item Tools](ItemTools.md) for setup and commands.
+
 **Waypoint** adds clickable chat coordinates, a movable navigation arrow and a
 world/dungeon map, with optional GoArrow atlas import. See [Waypoint](Waypoint.md)
 for controls, data sources and the UtilityBelt compatibility findings. This visual
 plugin requires no Start action or game-action permissions.
 
-Open **Plugins** on the login screen, **Game Play â†’ Plugins / UCM** in desktop
-options, **More â†’ Plugins / UCM** in VR, or type `/plugins`. Each plugin shows its
+Open **Plugins** on the login screen, **Game Play â†’ Manage Plugins** in desktop
+options, **More â†’ Manage Plugins** in VR, or type `/plugins`. Each plugin shows its
 version, requested actions, status, and profile controls. Enable grants its listed
-capabilities. Start is separate, available only after entering the world. Nothing
-automatically starts at login. A capability change requires enabling again.
+capabilities. Gameplay automation uses a separate Start action after entering the
+world. Local cosmetic services start when enabled and can run at the login screen.
+A capability change requires enabling again.
+
+**Open plugin folder** opens the exact `ClientPlugins/Installed` directory used
+by this client. Copy a plugin's folder there and press **Refresh** in the manager.
+Refresh stops old instances and reloads their manifests and scripts.
+
+### Reusable UCM profiles
+
+Open UCM's **Profiles** tab to choose a run setup and its linked files. A setup
+under `Saved/ClientPlugins/Profiles/ucm` now stores references, with six separate
+JSON profile folders beside it:
+
+- `Character`: combat equipment and targeting settings, buffs, summons, and vital recovery.
+- `Routes`: waypoints, follow targets, looping, and route movement settings.
+- `Loot`: loot rules, salvage workmanship groups, and looting settings.
+- `Monsters`: monster rules and the imported monster catalog.
+- `Metas`: activity states, imported meta programs, and their dependency library.
+- `Vendors`: vendor supply lists.
+
+For example, link `PlayerNameVOID` under Character in every hunt, and select a
+different Routes file for each hunt. Updating the summon in that Character file
+then applies to all those hunts. The activity switches (combat, buffing, looting,
+navigation, recovery, buff others, vendors, metas, and peace when idle) remain
+specific to each run setup.
+
+Each editing tab identifies its active shared file. Edits save to that file and
+affect every setup referencing it. **Save copy** creates and selects a separate
+file without overwriting an existing one; use it before making a variation.
+**Save setup as** keeps the same linked files under a new setup name. Choosing a
+profile stops the current run. **Start** and **Reload linked profiles** read the
+current files from disk; editing JSON externally requires a reload before running.
+A stale edit that conflicts with a newer shared file is rejected rather than
+silently overwriting the newer changes.
+
+Existing monolithic setups migrate when opened. Their original data is backed up
+under `Profiles/Legacy/ucm`, and generated names receive numeric suffixes when
+necessary. Existing legacy setups are not automatically deduplicated: use the
+selectors to link the shared Character, Loot, or Monsters file you want. Old
+standalone `LootProfiles` files remain selectable and are copied into `Profiles/Loot`
+on first use. Virindi source files are preserved; imports create linked native
+setups with independent copies for changed sections. Clearing an imported
+selection detaches it from this setup without erasing another setup's shared file.
+
+### Local cosmetic services
+
+The Windows client includes **local cosmetics API 1** for independently distributed
+Lua plugins. The API handles local weapon/shield rendering, validation boundaries,
+plugin controls and cleanup. Providers supply their own Lua, manifest-defined
+presets and bundled converter. See [Local cosmetics API](LocalCosmetics.md) for
+the manifest, companion protocol, mesh format and a source-independent example.
+
+Local providers declare `mode: local`, `service: local_cosmetics`, `service_api: 1`
+and both `local_cosmetics` and `local_tools`. The manager exposes the native-tool
+capability when enabling; companion programs run outside the Lua sandbox. No
+filesystem, native-loader, network or arbitrary process API is added to Lua.
+These services start when enabled, run alongside UCM, and restore original
+rendering and cancel pending work when disabled or reloaded.
+
+**AC-WoW Transmog** is a separate optional download using that API. The client
+release does not include its Lua package, WoW presets, converter, CASC reader or
+game files. Other authors can target the same released API without adding native
+Unreal modules. The current API supports rigid weapons/shields and compatible
+rigid or skinned body-slot replacements on Windows x64. Quest companion-tool
+execution is not supported.
 
 In desktop play, a compact **Mods bar** appears at the left edge. Each enabled
 plugin has a button: click it to show or hide that plugin's own window. Several
@@ -26,12 +94,12 @@ or `/ucm stop` to stop automation. The `+` button opens plugin management.
 Drag the bar or a window by its title strip. Positions are saved locally and
 clamped to the viewport when the window size changes. The bar and its windows
 hide with the desktop interface (Alt+Z by default) and are removed on logout.
-Disabled plugins are removed from the bar. In VR, use More â†’ Plugins / UCM.
+Disabled plugins are removed from the bar. In VR, use More â†’ Manage Plugins.
 
 UCM is **Unattended Combat Manager**. The 0.7 interface has Overview, Buffs, Buff others,
 Combat, Recovery, Route, Loot, Rules, Metas and Profiles pages. Desktop plugin
 windows can be resized using the lower-right grip; position and size are saved.
-In VR, More â†’ Plugins / UCM opens UCM directly, with a separate management button.
+In VR, More â†’ Manage Plugins opens UCM directly, with a separate management button.
 
 ### Display and controls
 
@@ -249,10 +317,10 @@ burden 100 collects lightweight valuables. **Use selected item's name and
 material** fills those fields without memorizing IDs; clear the name to collect
 all items of the material.
 
-**Save loot profile** stores rules alone under `Saved/ClientPlugins/LootProfiles`.
-Loading one copies its rules into the current UCM setup without replacing combat,
-buffs, recovery or navigation. Loading stops UCM. Whole UCM profiles also retain
-their own copy of loot rules. Loot-profile files are versioned UCM JSON, not VT
+**Save loot profile** stores reusable loot settings under `Saved/ClientPlugins/Profiles/Loot`. Vendor lists are independently linked under `Profiles/Vendors`.
+Loading one links it to the current UCM setup without replacing combat,
+buffs, recovery or navigation. Loading stops UCM. Other setups linked to the
+same file share subsequent edits. Loot-profile files are versioned UCM JSON, not VT
 `.utl` imports. Existing UCM prefix/minimum rules remain compatible.
 
 Public server workmanship is retained from Create/UpdateObject, including

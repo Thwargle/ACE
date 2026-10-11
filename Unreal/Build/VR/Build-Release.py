@@ -17,6 +17,7 @@ import zipfile
 
 
 LINUX_FIRST_RELEASE = 88
+LOCAL_COSMETICS_API = 'ACE.LocalCosmetics/1'
 LINUX_EXE = Path('ACUnreal/Binaries/Linux/ACUnreal')
 LINUX_LAUNCHER = Path('AC-Unreal.sh')
 LINUX_ROOTS = {'ACUnreal', 'Engine', 'ACUnreal.sh', 'AC-Unreal.sh', 'NOTICES.txt'}
@@ -44,6 +45,26 @@ def sha(path):
 
 def artifact(path):
     return {'file': path.name, 'bytes': path.stat().st_size, 'sha256': sha(path)}
+
+
+def verify_client_plugin_boundary(windows):
+    """The client ships the reusable API; optional transmog packages ship separately."""
+    exe = windows / 'ACUnreal/Binaries/Win64/ACUnreal.exe'
+    require(exe.is_file(), f'Missing Windows client: {exe}')
+    with exe.open('rb') as stream, mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as binary:
+        require(binary.find(LOCAL_COSMETICS_API.encode('utf-16-le')) >= 0,
+                'Windows client lacks the released local cosmetics API; rebuild ACEClient')
+    for path in windows.rglob('*'):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(windows)
+        parts = [part.lower() for part in rel.parts]
+        if 'saved' in parts:
+            continue  # User-installed packages/settings are already excluded from releases.
+        require('acwow' not in parts and path.name.lower() not in {'acwow.local.exe', 'acwow.uplugin'},
+                f'Optional AC-WoW Transmog files must ship separately: {rel}')
+        require(path.suffix.lower() not in {'.m2', '.skin', '.blp', '.acwm'},
+                f'Source or converted cosmetic asset in client release: {rel}')
 
 
 def verify_binary_version(path, version, *, linux=False):
@@ -176,6 +197,7 @@ def build_release(root, args):
     require(f'"{args.windows_version}"' in stamp, 'Windows version differs from source stamp')
     require(f'ReleaseNumber = {version};' in stamp, 'Updater release number differs from package')
     verify_binary_version(exe, args.windows_version)
+    verify_client_plugin_boundary(windows)
     require((windows / 'Update-Client.ps1').is_file(), 'Updater helper missing from Windows package')
     if args.linux_version:
         # Preflight before creating an immutable release directory or copying GBs.
@@ -222,6 +244,7 @@ def build_release(root, args):
         'createdUtc': datetime.now(timezone.utc).isoformat(), 'questVersion': manifest['version'],
         'questVersionCode': version, 'installerRevision': args.installer_revision,
         'windowsVersion': args.windows_version, 'apkSha256': sha(apk), 'windowsExeSha256': sha(exe),
+        'clientPluginApis': {'lua': 1, 'localCosmetics': 1, 'localCosmeticsPlatforms': ['Win64']},
         'gameDataIncluded': False, 'serverIncluded': False, 'savedSettingsIncluded': False,
         'headsetAcceptance': 'See RELEASE-NOTES.md; packaging alone is not live acceptance.',
         'archives': [{'name': p.name, 'bytes': p.stat().st_size, 'sha256': sha(p)} for p in archives],

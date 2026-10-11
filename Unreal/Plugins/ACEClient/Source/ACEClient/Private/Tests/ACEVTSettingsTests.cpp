@@ -277,8 +277,8 @@ bool FACEVTSettingsTest::RunTest(const FString&)
         auto S=Snapshot();S->SetNumberField(TEXT("health"),100);S->SetNumberField(TEXT("level"),200);S->SetNumberField(TEXT("combat_mode"),1);
         S->SetArrayField(TEXT("spells"),{});S->GetObjectField(TEXT("skills"))->SetObjectField(TEXT("54"),SettingsJSON(TEXT(R"({"current":400,"training":2})")));
         S->SetArrayField(TEXT("targets"),SettingsJSON(TEXT(R"({"v":[{"id":100,"name":"Target","distance":10,"resists":{"8":1.5,"16":0.5}},{"id":101,"name":"Other","distance":20}]})"))->GetArrayField(TEXT("v")));
-        auto Fire=SettingsJSON(TEXT(R"({"id":20,"name":"Fire Essence","type":0,"wcid":1000,"identified":true,"usable":true,"structure":20,"icon_effects":32,"int_properties":{"280":213,"369":150,"366":54,"367":350}})"));
-        auto Cold=SettingsJSON(TEXT(R"({"id":21,"name":"Cold Essence","type":0,"wcid":1001,"identified":true,"usable":true,"structure":20,"icon_effects":128,"int_properties":{"280":213,"369":180,"366":54,"367":350}})"));
+        auto Fire=SettingsJSON(TEXT(R"({"id":20,"name":"Fire Essence","type":0,"wcid":1000,"identified":true,"usable":true,"structure":20,"max_structure":50,"icon_effects":32,"int_properties":{"280":213,"369":150,"366":54,"367":350}})"));
+        auto Cold=SettingsJSON(TEXT(R"({"id":21,"name":"Cold Essence","type":0,"wcid":1001,"identified":true,"usable":true,"structure":20,"max_structure":50,"icon_effects":128,"int_properties":{"280":213,"369":180,"366":54,"367":350}})"));
         S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(Fire),MakeShared<FJsonValueObject>(Cold)});
         auto Choose=[&](){FACEPluginVM V;V.Load(Script,Error);return Step(V,S,Profile);};
         FACEPluginVM Pet;Pet.Load(Script,Error);auto I=Step(Pet,S,Profile);TestEqual(TEXT("Element suitability outranks pet level"),I->GetNumberField(TEXT("item")),20.);
@@ -301,7 +301,45 @@ bool FACEVTSettingsTest::RunTest(const FString&)
         S->GetArrayField(TEXT("targets"))[1]->AsObject()->SetBoolField(TEXT("line_of_sight"),false);TestFalse(TEXT("Wall-hidden monster does not satisfy density"),Choose()->HasField(TEXT("action")));S->GetArrayField(TEXT("targets"))[1]->AsObject()->SetBoolField(TEXT("line_of_sight"),true);
         Profile->SetNumberField(TEXT("pet_range_mode"),0);TestFalse(TEXT("Attack-distance range respected"),Choose()->HasField(TEXT("action")));Profile->SetNumberField(TEXT("pet_range_mode"),1);
         Profile->SetBoolField(TEXT("summon_pets"),false);TestFalse(TEXT("Summoning disabled"),Choose()->HasField(TEXT("action")));Profile->SetBoolField(TEXT("summon_pets"),true);
-        FACEPluginVM Timeout;Timeout.Load(Script,Error);Step(Timeout,S,Profile);S->SetNumberField(TEXT("time"),116);TestEqual(TEXT("Unconfirmed summon pauses its activity instead of consuming repeatedly"),Step(Timeout,S,Profile)->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
+        FACEPluginVM Timeout;Timeout.Load(Script,Error);Step(Timeout,S,Profile);S->SetNumberField(TEXT("time"),116);
+        TestFalse(TEXT("Unconfirmed summon does not disable other activities"),Step(Timeout,S,Profile)->HasField(TEXT("action")));
+        // Every retail tier/mastery uses its own advertised requirements, not a
+        // hardcoded minimum or a mandatory membership in the equipment pool.
+        Profile->SetArrayField(TEXT("weapon_items"),{});S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(Cold)});
+        S->SetObjectField(TEXT("char_ints"),MakeShared<FJsonObject>());
+        for(int32 Level:{15,30,50,80,100,125,150,180,200})for(int32 Mastery:{0,1,2,3})
+        {
+            auto Props=Cold->GetObjectField(TEXT("int_properties"));Props->SetNumberField(TEXT("369"),Level);Props->SetNumberField(TEXT("362"),Mastery);
+            S->GetObjectField(TEXT("char_ints"))->SetNumberField(TEXT("362"),Mastery);S->SetNumberField(TEXT("level"),Level);
+            TestEqual(TEXT("Essence casts at its exact level/mastery boundary with automatic pool"),Choose()->GetNumberField(TEXT("item")),21.);
+            S->SetNumberField(TEXT("level"),Level-1);TestFalse(TEXT("Essence above character level is excluded"),Choose()->HasField(TEXT("action")));
+        }
+        auto Props=Cold->GetObjectField(TEXT("int_properties"));S->SetNumberField(TEXT("level"),200);Props->SetNumberField(TEXT("280"),999);
+        TestEqual(TEXT("Custom summoning cooldown is recognized by skill requirement"),Choose()->GetNumberField(TEXT("item")),21.);
+        S->SetObjectField(TEXT("cooldowns"),SettingsJSON(TEXT(R"({"999":30})")));
+        TestFalse(TEXT("Custom cooldown prevents reuse"),Choose()->HasField(TEXT("action")));S->SetObjectField(TEXT("cooldowns"),MakeShared<FJsonObject>());
+        Props->RemoveField(TEXT("366"));Props->SetNumberField(TEXT("368"),54);
+        auto Skill=S->GetObjectField(TEXT("skills"))->GetObjectField(TEXT("54"));Skill->SetNumberField(TEXT("training"),3);Skill->SetNumberField(TEXT("current"),350);
+        TestEqual(TEXT("Specialization-only requirement supports exact skill boundary"),Choose()->GetNumberField(TEXT("item")),21.);
+        Skill->SetNumberField(TEXT("current"),349);TestFalse(TEXT("Specialization-only essence checks skill level too"),Choose()->HasField(TEXT("action")));Skill->SetNumberField(TEXT("current"),350);
+        Cold->SetNumberField(TEXT("structure"),0);TestFalse(TEXT("Exhausted essence is unavailable"),Choose()->HasField(TEXT("action")));
+        Cold->SetNumberField(TEXT("max_structure"),0);TestEqual(TEXT("Uncharged unlimited custom device is usable"),Choose()->GetNumberField(TEXT("item")),21.);
+        Cold->SetNumberField(TEXT("structure"),20);Cold->SetNumberField(TEXT("max_structure"),50);
+        Fire->SetNumberField(TEXT("structure"),20);S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(Fire),MakeShared<FJsonValueObject>(Cold)});
+        FACEPluginVM Fallback;Fallback.Load(Script,Error);auto First=Step(Fallback,S,Profile);S->SetNumberField(TEXT("action_serial"),2);S->SetNumberField(TEXT("action_error"),1);
+        auto Second=Step(Fallback,S,Profile);TestTrue(TEXT("Rejected summon falls back to a different eligible essence"),First->GetNumberField(TEXT("item"))!=Second->GetNumberField(TEXT("item")));
+        // Server acknowledgement can precede the spawn/cooldown messages.
+        // Keep fighting while that confirmation is pending.
+        Profile->SetNumberField(TEXT("approach_range"),60);Profile->SetNumberField(TEXT("radius"),30);
+        Profile->SetNumberField(TEXT("pet_min_targets"),1);Profile->SetStringField(TEXT("combat"),TEXT("melee"));
+        auto Sword=SettingsJSON(TEXT(R"({"id":40,"name":"Sword","type":1,"identified":true,"can_wield":true,"equipped":true,"damage":30,"damage_type":1})"));
+        S->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(Fire),MakeShared<FJsonValueObject>(Sword)});
+        for(auto T:S->GetArrayField(TEXT("targets"))) {T->AsObject()->SetNumberField(TEXT("distance"),1);T->AsObject()->SetBoolField(TEXT("identified"),true);}
+        S->SetNumberField(TEXT("action_error"),0);S->SetNumberField(TEXT("combat_mode"),2);
+        FACEPluginVM Pending;Pending.Load(Script,Error);
+        TestEqual(TEXT("Summon is submitted before continuing combat"),Step(Pending,S,Profile)->GetStringField(TEXT("action")),FString(TEXT("use_item")));
+        S->SetNumberField(TEXT("action_serial"),3);
+        TestEqual(TEXT("Unconfirmed pet spawn never stalls available combat"),Step(Pending,S,Profile)->GetStringField(TEXT("action")),FString(TEXT("attack")));
     }
     {
         TArray<FString> LocalIssues;auto Doc=SettingsJSON(TEXT(R"({"format":"usd","tables":[{"name":"Settings","columns":["Setting","Value"],"rows":[["BuffProfile_Prots",1],["BuffProfile-Prots","BPS"],["BuffProfile_Banes",3]]}]})"));
@@ -473,7 +511,9 @@ bool FACEVTSettingsTest::RunTest(const FString&)
         S->SetArrayField(TEXT("inventory"),SettingsJSON(TEXT(R"({"v":[{"id":20,"name":"Wand","type":32768,"identified":true,"can_wield":true,"equipped":true}]})"))->GetArrayField(TEXT("v")));
         S->SetArrayField(TEXT("targets"),SettingsJSON(TEXT(R"({"v":[{"id":100,"name":"Monster","distance":2,"identified":true}]})"))->GetArrayField(TEXT("v")));
         TArray<TSharedPtr<FJsonValue>> Spells,Effects;
-        const int32 Categories[]={42,642,643,636,637,638,116,78,40,96};
+        // DAT-verified in VoidCombat: Corruption=638, Destructive Curse=636,
+        // Corrosion=637. Keep this imported-profile chain in the same order.
+        const int32 Categories[]={42,642,643,638,636,637,116,78,40,96};
         for(int32 Cat:Categories){auto Spell=SettingsJSON(TEXT(R"({"power":100,"skill":400,"duration":120})"));Spell->SetNumberField(TEXT("category"),Cat);Spell->SetNumberField(TEXT("id"),Cat+1000);Spells.Add(MakeShared<FJsonValueObject>(Spell));}
         Spells.Add(MakeShared<FJsonValueObject>(SettingsJSON(TEXT(R"({"id":30,"category":117,"power":100,"skill":400})"))));S->SetArrayField(TEXT("spells"),Spells);
         FACEPluginVM VM;VM.Load(Script,Error);
@@ -488,7 +528,7 @@ bool FACEVTSettingsTest::RunTest(const FString&)
         TestEqual(TEXT("DOT is not refreshed early by ordinary debuff threshold"),Step(BeforeDOTExpiry,S,Profile)->GetNumberField(TEXT("spell")),30.);
         Effects[3]->AsObject()->SetNumberField(TEXT("expires"),100);S->SetArrayField(TEXT("debuffs"),Effects);
         FACEPluginVM AtDOTExpiry;AtDOTExpiry.Load(Script,Error);
-        TestEqual(TEXT("DOT is recast at expiry before normal damage"),Step(AtDOTExpiry,S,Profile)->GetNumberField(TEXT("spell")),1636.);
+        TestEqual(TEXT("DOT is recast at expiry before normal damage"),Step(AtDOTExpiry,S,Profile)->GetNumberField(TEXT("spell")),1638.);
         Effects[3]->AsObject()->SetNumberField(TEXT("expires"),500);
         Effects[7]->AsObject()->SetNumberField(TEXT("expires"),104);S->SetArrayField(TEXT("debuffs"),Effects);
         FACEPluginVM Refresh;Refresh.Load(Script,Error);TestEqual(TEXT("Gravity family refresh threshold honored"),Step(Refresh,S,Profile)->GetNumberField(TEXT("spell")),1078.);

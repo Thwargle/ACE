@@ -1,5 +1,6 @@
         void VendorPanel()
         {
+            SectionSelector(TEXT("Vendors"));
             Heading(TEXT("Vendor restocking"),TEXT("Open a vendor, add stock below, and set the total quantity to keep in inventory. Saved lists match this server, vendor and item across logins. With UCM running, visiting that vendor buys only the missing quantity. Route Use points can visit vendors automatically."));
             Add(Toggle(TEXT("vendor_restock"),TEXT("Automatically buy saved supplies"),TEXT("Redeems available trade notes when pyreals are short, splitting stacks as needed. Retained notes and notes in trade are excluded. Stops if funds, space or stock are insufficient.")));
             const TArray<TSharedPtr<FJsonValue>>* Saved=nullptr;
@@ -18,7 +19,7 @@
             Add(Button(TEXT("Refresh vendor stock"),[this](){Rebuild();}));
             auto* C=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();FACEWorldObject Vendor;
             if(!C||!C->GetOpenVendorGuid()||!C->GetWorldObject(C->GetOpenVendorGuid(),Vendor)){Add(Text(TEXT("Open a vendor in game, then refresh to choose supplies."),15,Muted));return;}
-            Heading(Vendor.Name,TEXT("Click an item to add it. Lists are saved with this UCM setup and with saved loot profiles."));
+            Heading(Vendor.Name,TEXT("Click an item to add it. Lists are saved to the linked Vendors profile."));
             for(const auto& Item:C->GetVendorMerchandise())
             {
                 const FString ItemName=ACERetailObjectNames::Name(Item);

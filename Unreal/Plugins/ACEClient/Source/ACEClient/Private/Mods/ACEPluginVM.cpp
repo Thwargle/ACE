@@ -1,6 +1,9 @@
 #include "ACEPluginVM.h"
 #include "ACEVTRegex.h"
 #include "ACEVTProfile.h"
+#include "Interfaces/IPluginManager.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include <string_view>
 extern "C" {
 #include "Lua/lua.h"
@@ -220,6 +223,16 @@ bool FACEPluginVM::Load(const FString& Source, FString& Error)
     lua_pushcfunction(State, Open);
     if (lua_pcall(State, 0, 0, 0) != LUA_OK) { Error = LuaError(State); return false; }
     lua_sethook(State, Budget, LUA_MASKCOUNT, 1000);
+    // One bounded rule evaluator is shared by UCM and Item Tools. Scripts still
+    // have no filesystem access; this is an engine-supplied API module.
+    FString Rules;
+    const auto Plugin=IPluginManager::Get().FindPlugin(TEXT("ACEClient"));
+    if(!Plugin||!FFileHelper::LoadFileToString(Rules,*(Plugin->GetBaseDir()/TEXT("ClientMods/loot_rules.lua")))||Rules.Len()>65536)
+    {Error=TEXT("Shared loot evaluator is missing or invalid");return false;}
+    FTCHARToUTF8 RuleUtf8(*Rules);
+    if(luaL_loadbufferx(State,RuleUtf8.Get(),RuleUtf8.Length(),"loot_rules","t")!=LUA_OK||lua_pcall(State,0,1,0)!=LUA_OK)
+    {Error=LuaError(State);lua_settop(State,0);return false;}
+    lua_setglobal(State,"lootmatch");
     FTCHARToUTF8 Utf8(*Source);
     if (luaL_loadbufferx(State, Utf8.Get(), Utf8.Length(), "plugin", "t") != LUA_OK || lua_pcall(State, 0, 1, 0) != LUA_OK)
     { Error = LuaError(State); lua_settop(State, 0); return false; }

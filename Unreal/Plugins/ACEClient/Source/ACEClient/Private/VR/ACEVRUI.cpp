@@ -501,7 +501,7 @@ void UACEVRComponent::CombatMessage(const FString& Text, const FString& Sender, 
 		if (ACECombatChat::ParseOutgoingSpellDamage(Text, Target, Damage, Critical))
 			CombatFeedback(Target, Damage, false, Critical);
 	}
-	if (Sender.IsEmpty() && ChatType == ACEChatMessageType::TransientInfo)
+	if (Sender.IsEmpty() && ACEChatMessageType::IsTransientNotice(ChatType))
 		ShowWorldNotice(Text, 0, 3, FLinearColor(FColor(255,225,75)));
 	if (Sender.IsEmpty() && ChatType == ACEChatMessageType::Broadcast && Text.Contains(TEXT(" gives you ")))
 		ShowWorldNotice(Text, 0, 1, FLinearColor(1.f,.8f,.35f));

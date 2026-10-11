@@ -493,6 +493,8 @@ struct ACECLIENT_API FACEObjectMotionState
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE|Movement")
 	int32 ActionCommand = 0;
+	/** True only for an action with a newly accepted network sequence stamp. */
+	bool bNewAction = false;
 
 	/** Playback speed for ActionCommand (usually 1). */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE|Movement")
@@ -519,11 +521,22 @@ struct ACECLIENT_API FACEObjectMotionState
 
 	UPROPERTY(BlueprintReadOnly, Category = "ACE|Movement")
 	float MoveToDistance = 0.6f;
+	float MoveToMinDistance = 0.f;
 
 	uint32 MoveToFlags = 0;
 	float MoveToSpeed = 1.f;
 	float MoveToRunRate = 1.f;
 	float MoveToWalkRunThreshold = 1.f;
+
+	float MoveToRemaining(float DistanceAc) const
+	{
+		// MovementParameters::get_command / towards_and_away: a negative
+		// distance requests retreat, rather than treating an overlap as arrival.
+		const bool Away = (MoveToFlags & 0x100u) != 0;
+		if ((!Away || (MoveToFlags & 0x200u)) && DistanceAc > MoveToDistance)
+			return DistanceAc - MoveToDistance;
+		return Away && DistanceAc < MoveToMinDistance ? DistanceAc - MoveToMinDistance : 0.f;
+	}
 
 	// Retail MoveToManager::GetCurrentDistance / Position::CylinderDistance.
 	// Inputs use one consistent unit (AC metres or Unreal centimetres).

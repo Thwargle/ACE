@@ -1,0 +1,51 @@
+{
+  "lua_api": 1,
+  "services": {
+    "local_cosmetics": {
+      "api": 1,
+      "platforms": [
+        "Win64"
+      ],
+      "permissions": [
+        "local_cosmetics",
+        "local_tools"
+      ],
+      "mesh_format": "ACWM/1",
+      "mesh_formats": [
+        "ACWM/1",
+        "ACWM/2",
+        "ACWM/3"
+      ],
+      "slots": [
+        "weapon",
+        "offhand",
+        "shield",
+        "head",
+        "shoulders",
+        "waist",
+        "back",
+        "chest",
+        "arms",
+        "hands",
+        "legs",
+        "feet"
+      ],
+      "companion_protocol": 1,
+      "features": [
+        "paperdoll",
+        "catalog",
+        "outfit",
+        "session_fit",
+        "model_thumbnails",
+        "catalog_search",
+        "catalog_4096",
+        "catalog_16384",
+        "body_attachments",
+        "skinned_body",
+        "apply_outfit",
+        "complete_catalog_scan",
+        "covered_part_replacement"
+      ]
+    }
+  }
+}

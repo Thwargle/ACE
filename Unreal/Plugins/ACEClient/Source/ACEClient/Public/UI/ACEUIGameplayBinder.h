@@ -280,6 +280,8 @@ public:
 	UFUNCTION()
 	void HandleEnchantmentsChanged();
 	UFUNCTION()
+	void HandleSpellLearned(int32 SpellId);
+	UFUNCTION()
 	void HandleLinkStatusChanged(const FACELinkStatus& Status);
 	UFUNCTION()
 	void HandleFriendNameCommitted(const FText& Text, ETextCommit::Type CommitMethod);
@@ -544,7 +546,11 @@ private:
 	/** Retail transient banner: yellow center-top info text ("You're too busy!") that fades. */
 	UPROPERTY()
 	TObjectPtr<UTextBlock> TransientInfoText;
-	double TransientInfoShownAt = 0.0;
+	UPROPERTY() TObjectPtr<USizeBox> TransientInfoBox;
+	UPROPERTY() TArray<TObjectPtr<UTextBlock>> TransientInfoLines;
+	TArray<double> TransientInfoTimes;
+	TSharedPtr<FACEUIElement> TransientInfoTemplate;
+	FVector2D TransientInfoScale = FVector2D::ZeroVector;
 	/** Retail VividTargetIndicator_Selected parent (resized to screen AABB). */
 	UPROPERTY()
 	TObjectPtr<UCanvasPanel> SelectionMarkerBox;
@@ -776,6 +782,7 @@ private:
 	UPROPERTY()
 	TArray<int32> SpellbookRowIds;
 	int32 SelectedSpellbookId = 0;
+	bool bRevealLearnedSpell = false;
 	/** One drawn line of the Components tab: a section heading or a component entry. */
 	struct FACEComponentRow
 	{
@@ -1343,6 +1350,7 @@ private:
 	 * selected stat can be raised/trained; darker (0x06004CB7 / 0x0600712C) when not.
 	 */
 	void SyncRaiseButtonChrome(bool bCanRaise1, bool bCanRaise10);
+	const TCHAR* GetStatSelectionFooter() const;
 	void SyncChatScrollbar(int32 Window = 0);
 	/** Show/hide + place ChatLogNewNonVisibleTextIndicator; jump-to-bottom on click. */
 	void SyncChatJumpIndicator();

@@ -78,6 +78,47 @@ bool FACEUCMRecoveryTest::RunTest(const FString&)
         TestTrue(TEXT("No available recovery method explains the problem"),Choose()->GetStringField(TEXT("status")).StartsWith(TEXT("Recovery unavailable")));
         State->SetNumberField(TEXT("stamina"),100);Settings->SetBoolField(TEXT("recovery"),false);TestFalse(TEXT("Recovery toggle remains authoritative"),Choose()->HasField(TEXT("action")));
     }
+    // Incoming hits can outweigh a successful heal before the next snapshot.
+    // Reevaluate the current HP every completion, including repeated below-threshold hits.
+    {
+        FACEPluginVM V;V.Load(Source,Error);auto State=Snapshot(),Settings=Profile();
+        auto Heal=Spells[TEXT("Heal Self II")],Low=Spells[TEXT("Heal Self I")];
+        Settings->SetStringField(TEXT("combat"),TEXT("magic"));Settings->SetNumberField(TEXT("health_threshold"),75);
+        State->SetArrayField(TEXT("spells"),{MakeShared<FJsonValueObject>(Heal),MakeShared<FJsonValueObject>(Low)});
+        State->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(RecoveryJson(TEXT(R"({"id":500,"name":"Rat","distance":5,"identified":true,"line_of_sight":true})")))});
+        for(int32 Attempt=0;Attempt<6;++Attempt)
+        {
+            State->SetNumberField(TEXT("health"),60-Attempt*5);State->SetNumberField(TEXT("time"),100+Attempt);
+            if(Attempt){State->SetNumberField(TEXT("action_serial"),Attempt);State->SetNumberField(TEXT("last_spell"),Heal->GetNumberField(TEXT("id")));State->SetBoolField(TEXT("last_spell_confirmed"),true);}
+            auto I=Step(V,State,Settings);
+            TestEqual(TEXT("Confirmed healing masked by damage keeps healing, never waits or attacks"),I->GetNumberField(TEXT("spell")),Heal->GetNumberField(TEXT("id")));
+            TestEqual(TEXT("Under-threshold recovery always targets self"),I->GetNumberField(TEXT("target")),1.);
+        }
+        State->SetNumberField(TEXT("action_serial"),6);State->SetNumberField(TEXT("time"),106);State->SetBoolField(TEXT("last_spell_confirmed"),false);
+        TestEqual(TEXT("Fizzle falls back to another healing tier immediately"),Step(V,State,Settings)->GetNumberField(TEXT("spell")),Low->GetNumberField(TEXT("id")));
+        State->SetArrayField(TEXT("spells"),{MakeShared<FJsonValueObject>(Heal)});
+        FACEPluginVM Fizzles;Fizzles.Load(Source,Error);State->SetNumberField(TEXT("time"),200);
+        Step(Fizzles,State,Settings);
+        for(int32 Attempt=0;Attempt<6;++Attempt)
+        {
+            State->SetNumberField(TEXT("time"),201+Attempt*2);State->SetNumberField(TEXT("action_serial"),7+Attempt);
+            State->SetNumberField(TEXT("last_spell"),Heal->GetNumberField(TEXT("id")));State->SetBoolField(TEXT("last_spell_confirmed"),false);
+            Step(Fizzles,State,Settings); // Reject this tier; retain its short retry delay.
+            State->SetNumberField(TEXT("time"),202+Attempt*2);
+            TestEqual(TEXT("Repeated fizzles never pause all healing"),Step(Fizzles,State,Settings)->GetNumberField(TEXT("spell")),Heal->GetNumberField(TEXT("id")));
+        }
+    }
+    {
+        FACEPluginVM V;V.Load(Source,Error);auto State=Snapshot(),Settings=Profile();
+        State->SetNumberField(TEXT("health"),20);State->SetNumberField(TEXT("max_health"),150);State->SetNumberField(TEXT("stamina"),150);State->SetNumberField(TEXT("max_stamina"),150);
+        Settings->SetNumberField(TEXT("health_threshold"),75);
+        State->SetArrayField(TEXT("spells"),{MakeShared<FJsonValueObject>(Spells[TEXT("Heal Self I")]),
+            MakeShared<FJsonValueObject>(Spells[TEXT("Stamina to Health Self I")]),MakeShared<FJsonValueObject>(Spells[TEXT("Stamina to Health Self II")]),
+            MakeShared<FJsonValueObject>(Spells[TEXT("Incantation of Stamina to Health Self")])});
+        TestEqual(TEXT("Emergency conversion uses the lowest tier covering the health deficit"),Step(V,State,Settings)->GetNumberField(TEXT("spell")),Spells[TEXT("Stamina to Health Self II")]->GetNumberField(TEXT("id")));
+        Settings->SetNumberField(TEXT("emergency_health_threshold"),0);FACEPluginVM Disabled;Disabled.Load(Source,Error);
+        TestEqual(TEXT("Emergency conversion can be disabled"),Step(Disabled,State,Settings)->GetNumberField(TEXT("spell")),Spells[TEXT("Heal Self I")]->GetNumberField(TEXT("id")));
+    }
     // Buff priority must not depend on DAT IDs or spellbook enumeration.
     // Match VT's opening sequence, then the remaining magic schools.
     for(bool Forced:{false,true})

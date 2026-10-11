@@ -40,7 +40,7 @@ void PreviewLegacy(const FString& Path)
 }
 void ImportPanel()
 {
-    Heading(TEXT("Virindi profile import"),TEXT("Read .utl loot rules, .nav routes, .met metas and .usd settings. Originals are never changed. Only fully supported conversions can be activated; unsupported data is retained in an import report. Supported /vt commands become /ucm actions. Each import saves a new native JSON setup under Profiles/ucm; repeated names receive numbered suffixes. Linked profiles are bundled. Decal plugins are not loaded."));
+    Heading(TEXT("Virindi profile import"),TEXT("Read .utl loot rules, .nav routes, .met metas and .usd settings. Originals are never changed. Only fully supported conversions can be activated; unsupported data is retained in an import report. Supported /vt commands become /ucm actions. Each import creates a linked setup under Profiles/ucm and separate reusable JSON profiles; repeated names receive numbered suffixes. Decal plugins are not loaded."));
     Add(Text(TEXT("File path (or copy files to Saved/ClientPlugins/ImportInbox)"),15,Muted));
     Add(SNew(SEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Text(FText::FromString(LegacyPath)).OnTextChanged_Lambda([this](const FText& V){LegacyPath=V.ToString();LegacyDocument.Reset();}));
     Add(Button(TEXT("Preview file"),[this](){PreviewLegacy(LegacyPath);}));

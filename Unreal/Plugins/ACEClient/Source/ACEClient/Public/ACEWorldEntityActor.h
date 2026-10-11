@@ -245,6 +245,8 @@ public:
 	float RemoteTurnRateDegrees = FMath::RadiansToDegrees(1.5f);
 	float RemoteWalkSpeedAc = 3.1199999f;
 	float RemoteRunSpeedAc = 4.f;
+	float RemoteBackSpeedAc = 1.56f;
+	float RemoteStickySeconds = 0.f;
 	uint32 ApproachTargetSetup = 0;
 	float ApproachTargetRadiusAc = 0.f, ApproachTargetHeightAc = 0.f;
 
@@ -269,6 +271,7 @@ public:
 protected:
 	/** Local player position is live; its world-object network echo can be stale. */
 	bool ResolveFacingTarget(int32 TargetGuid, FVector& Location) const;
+	bool ResolveMovementTarget(int32 TargetGuid, FVector& Location, float& Radius, float& Height);
 	/** Collision-constrained extrapolation; authoritative F748 teleports stay authoritative. */
 	FVector ResolvePredictedMovement(const FVector& From, const FVector& Destination, TOptional<bool> Grounded = {}) const;
 	float MovementRadius = 25.f;

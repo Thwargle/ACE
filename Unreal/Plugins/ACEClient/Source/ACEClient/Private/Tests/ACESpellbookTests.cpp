@@ -56,6 +56,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACESpellDataRevisionTest,"ACE.Network.SpellDat
 bool FACESpellDataRevisionTest::RunTest(const FString&)
 {
     FACESession Session;Session.State=EACESessionState::InWorld;
+    int32 LearnedCount=0, LastLearned=0;
+    Session.OnSpellLearned.AddLambda([&](int32 Id)
+    {
+        ++LearnedCount; LastLearned=Id;
+        TestTrue(TEXT("Learn notification follows the spellbook insertion"),Session.GetKnownSpells().Contains(Id));
+    });
     auto Deliver=[&](int32 Id,bool Remove=false)
     {
         FACEBinaryWriter W;W.WriteUInt16(Id);W.WriteUInt16(0);
@@ -64,8 +70,10 @@ bool FACESpellDataRevisionTest::RunTest(const FString&)
     };
     uint64 Before=Session.GetSpellDataRevision();Deliver(27);
     TestTrue(TEXT("Learning a spell invalidates an open book"),Session.GetSpellDataRevision()>Before && Session.GetKnownSpells().Contains(27));
+    TestEqual(TEXT("Learning reports the exact new spell"),LastLearned,27);
     Before=Session.GetSpellDataRevision();Deliver(27);Deliver(0);Deliver(999,true);
     TestEqual(TEXT("Duplicate and empty updates avoid redundant rebuilds"),Session.GetSpellDataRevision(),Before);
+    TestEqual(TEXT("Duplicate and empty updates do not reopen the spellbook"),LearnedCount,1);
     Deliver(27,true);
     TestTrue(TEXT("Forgetting a spell invalidates an open book"),Session.GetSpellDataRevision()>Before && Session.GetKnownSpells().IsEmpty());
     Before=Session.GetSpellDataRevision();Session.SendAddSpellToBar(27,0,0);
@@ -78,6 +86,11 @@ bool FACESpellDataRevisionTest::RunTest(const FString&)
     TestEqual(TEXT("Unchanged bank does not invalidate native book"),Session.GetSpellDataRevision(),Before);
     Session.ClearWorldState();
     TestTrue(TEXT("World reset invalidates all spell views"),Session.GetSpellDataRevision()>Before && Session.GetSpellBar(0).IsEmpty());
+    Session.State=EACESessionState::EnteringWorld; Deliver(28);
+    TestEqual(TEXT("Login population never opens the spellbook"),LearnedCount,1);
+    Session.State=EACESessionState::InWorld;
+    FACEBinaryWriter Truncated; Truncated.WriteUInt16(29); FACEBinaryReader R(Truncated.GetData()); Session.HandleMagicUpdateSpell(R);
+    TestEqual(TEXT("Truncated updates cannot select a spell"),LearnedCount,1);
     return !HasAnyErrors();
 }
 #endif

@@ -7,6 +7,7 @@
 #include "ACEScrollLearning.h"
 #include "ACEVendorPricing.h"
 #include "ACEVTObjectClass.h"
+#include "ACEPetDevice.h"
 #include "ACESession.h"
 #include "ACEOpcodes.h"
 #include "Engine/GameInstance.h"
@@ -102,6 +103,12 @@ void UACEPluginSubsystem::ObserveAppraisal(const FACEAppraisalInfo& Info)
         if(P->Id==TEXT("ucm")&&P->Running&&Info.ObjectGuid==CombatTarget)
         {P->NextAction=0;ScheduleDecisionWake(FPlatformTime::Seconds());}
     }
+    // A slow reply can arrive after RefreshActionWait expired the ID wait.
+    // It still makes the current opponent ready; do not wait for the idle poll.
+    // Never release a newer cast, equipment operation or other action's gate.
+    if(auto P=Find(TEXT("ucm"));P&&P->Running&&Info.ObjectGuid==CombatTarget
+        &&P->WaitAction.IsEmpty()&&!PendingSpell&&P->NextAction<=FPlatformTime::Seconds())
+    {P->NextDecision=0;ScheduleDecisionWake(FPlatformTime::Seconds());}
 }
 void UACEPluginSubsystem::UnbindCombatEvents()
 {
@@ -428,10 +435,29 @@ void UACEPluginSubsystem::RefreshAutomationData()
     for(auto It=AppraisalRequests.CreateIterator();It;++It)if(!Session->GetWorldObjects().Contains(It.Key()))
     {C->BackgroundAppraisals.Remove(It.Key());It.RemoveCurrent();}
     int32 Request=0;
-    // Identify the current opponent first, then inventory, without opening an ID panel.
+    // Identify the current opponent first, then look ahead while fighting.
+    // Keep the existing one-request-per-second budget; a new opponent should
+    // usually be assessed before the kill rather than stalling the handoff.
     auto Need=[&](int32 Id){const auto* A=Appraisals.Find(Id);return Now-AppraisalRequests.FindRef(Id)>(!A||!A->bSuccess?30:120);};
     const auto Sel=C->GetSelectedObject();
     if(UCM->Running && Sel.Guid && Need(Sel.Guid))Request=Sel.Guid;
+    if(!Request&&UCM->Running&&CombatTarget)
+    {
+        FACEPosition Player=C->GetPlayerPosition();
+        if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController()))PC->TryGetLocallyPredictedPosition(Player);
+        double Nearest=FMath::Square(FMath::Clamp(N(UCM->Profile,TEXT("approach_range"),60),0.,240.)*100.);
+        const uint32 Cell=uint32(Player.CellId);
+        for(const auto& Pair:Session->GetWorldObjects())
+        {
+            const auto& O=Pair.Value;
+            if(O.Guid==CombatTarget||!O.IsSelectableWorldObject()||!O.IsAttackable()||O.bIsPlayer||O.PetOwnerId
+                ||!(O.ItemType&ACEItemType::Creature)||DefeatedTargets.Contains(O.Guid)||!Need(O.Guid))continue;
+            const uint32 TargetCell=uint32(O.Position.CellId);
+            if((Cell>>16)!=(TargetCell>>16)&&((Cell&0xffff)>=0x100||(TargetCell&0xffff)>=0x100))continue;
+            const double Distance=FVector::DistSquared(Player.ToUnrealLocation(),O.Position.ToUnrealLocation());
+            if(Distance<Nearest||(Distance==Nearest&&(!Request||uint32(O.Guid)<uint32(Request)))){Nearest=Distance;Request=O.Guid;}
+        }
+    }
     if(!Request)for(const auto& Pair:Session->GetWorldObjects())
     {
         const auto& O=Pair.Value;if(IsOwnedPluginItem(O)&&Need(O.Guid)
@@ -559,9 +585,16 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
     Out->SetNumberField(TEXT("base_health"),V.HealthStart+V.HealthRanks+FMath::RoundToInt(V.Endurance/2.f));
     Out->SetNumberField(TEXT("base_stamina"),V.StaminaStart+V.StaminaRanks+V.Endurance);
     Out->SetNumberField(TEXT("base_mana"),V.ManaStart+V.ManaRanks+V.Self);
-    int FreeSlots=FMath::Max(0,(PlayerObject.ItemsCapacity>0?PlayerObject.ItemsCapacity:102)-C->GetPackItems(C->GetPlayerGuid()).Num());
+    const auto Packs=C->GetPlayerPacks();
+    TMap<int32,int32> PackCounts;PackCounts.Add(C->GetPlayerGuid(),0);
+    for(const auto& Pack:Packs)PackCounts.Add(Pack.Guid,0);
+    Session->GetPackItemCounts(PackCounts);
+    auto Free=[&](int32 Id,int32 Capacity){return Capacity==-1?MAX_int32:FMath::Max(0,Capacity-PackCounts.FindRef(Id));};
+    int FreeSlots=Free(C->GetPlayerGuid(),PlayerObject.ItemsCapacity!=0?PlayerObject.ItemsCapacity:102);
     Out->SetNumberField(TEXT("main_pack_slots"),FreeSlots);
-    for(const auto& Pack:C->GetPlayerPacks())FreeSlots+=FMath::Max(0,Pack.ItemsCapacity-C->GetPackItems(Pack.Guid).Num());
+    const auto OfferedPacks=C->GetTradeSelfItems();
+    for(const auto& Pack:Packs)if(!OfferedPacks.Contains(Pack.Guid))
+        FreeSlots=int32(FMath::Min(int64(MAX_int32),int64(FreeSlots)+Free(Pack.Guid,Pack.ItemsCapacity)));
     Out->SetNumberField(TEXT("pack_slots"),FreeSlots);Out->SetNumberField(TEXT("combat_mode"),V.CombatMode);
     Out->SetBoolField(TEXT("in_fellowship"),C->GetFellowship().bValid);
     Out->SetStringField(TEXT("world_name"),C->GetServerName());
@@ -579,7 +612,14 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         Members.Add(MakeShared<FJsonValueObject>(Member));
     }
     Fellow->SetArrayField(TEXT("members"),Members);Out->SetObjectField(TEXT("fellowship"),Fellow);
-    TArray<TSharedPtr<FJsonValue>> Packs;for(const auto& Pack:C->GetPlayerPacks()){auto Bag=MakeShared<FJsonObject>();Bag->SetNumberField(TEXT("id"),uint32(Pack.Guid));Bag->SetNumberField(TEXT("free"),FMath::Max(0,Pack.ItemsCapacity-C->GetPackItems(Pack.Guid).Num()));Packs.Add(MakeShared<FJsonValueObject>(Bag));}Out->SetArrayField(TEXT("packs"),Packs);
+    TArray<TSharedPtr<FJsonValue>> PackJson;
+    for(const auto& Pack:Packs)
+    {
+        if(OfferedPacks.Contains(Pack.Guid))continue;
+        auto Bag=MakeShared<FJsonObject>();Bag->SetNumberField(TEXT("id"),uint32(Pack.Guid));
+        Bag->SetNumberField(TEXT("free"),Free(Pack.Guid,Pack.ItemsCapacity));PackJson.Add(MakeShared<FJsonValueObject>(Bag));
+    }
+    Out->SetArrayField(TEXT("packs"),PackJson);
     TArray<TSharedPtr<FJsonValue>> Skills,UsableSkills;
     auto* Dat=GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
     for(const auto& Skill:V.Skills)
@@ -623,6 +663,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         J->SetBoolField(TEXT("targeted"),ACEItemUseable::IsTargeted(Item.ItemUseable));J->SetBoolField(TEXT("usable"),ACEInventoryRules::IsUsable(Item.ItemUseable));
         J->SetBoolField(TEXT("healing_kit"),(Item.ObjectDescriptionFlags&0x10000)!=0); // Retail Healer descriptor.
         const auto* A=Appraisals.Find(Item.Guid);J->SetBoolField(TEXT("identified"),A&&A->bSuccess);
+        J->SetBoolField(TEXT("pet_device"),ACEPetDevice::IsSummoningDevice(A));
         auto Ints=MakeShared<FJsonObject>(),Floats=MakeShared<FJsonObject>(),Strings=MakeShared<FJsonObject>();
         Ints->SetNumberField(TEXT("19"),Item.Value);Ints->SetNumberField(TEXT("5"),Item.Burden);Ints->SetNumberField(TEXT("131"),Item.MaterialType);
         Strings->SetStringField(TEXT("1"),ACERetailObjectNames::Name(Item));
@@ -748,6 +789,11 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
             if(C->GetSelectedObject().Guid==Obj.Guid&&C->GetSelectedObject().bShowHealth)J->SetNumberField(TEXT("health_fraction"),C->GetSelectedObject().HealthFraction);
             auto Resist=MakeShared<FJsonObject>();const auto* A=Appraisals.Find(Obj.Guid);
             J->SetBoolField(TEXT("identified"),A&&A->bSuccess);
+            // A failed background assessment has already answered. Use the
+            // ordinary neutral-resistance fallback, without asking twice at
+            // handoff; an unsuccessful assessment may be retried after 30s.
+            const double* Requested=AppraisalRequests.Find(Obj.Guid);
+            J->SetBoolField(TEXT("appraisal_recent"),A&&Requested&&Now-*Requested<30);
             if(A&&A->bSuccess)
             {
                 J->SetNumberField(TEXT("creature_type"),A->CreatureType);
@@ -844,6 +890,67 @@ bool UACEPluginSubsystem::HasClearCombatSight(const FACEWorldObject& Target) con
     FACEPluginSightQuery Sight(*World,PC?PC->GetPawn():nullptr);
     return Sight.Clear(P.ToUnrealLocation()+FVector(0,0,120),SightPoint(GetGameInstance()->GetSubsystem<UACEDatSubsystem>(),Target));
 }
+bool UACEPluginSubsystem::PrepareCombatAction(FACEClientPlugin& P,const TSharedPtr<FJsonObject>& I,int32 Mode)
+{
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Session=C->GetSession();
+    if(!Session)return false;
+    // ACE cancellation ends repeats, not a swing whose damage hooks are already
+    // queued. Keep both weapons equipped until the terminal AttackDone arrives.
+    const bool SameAttack=S(I,TEXT("action"))==TEXT("attack")&&Session->IsCombatModeConfirmed(Mode);
+    const bool Cancel=!SameAttack&&(Session->IsServerAttackInProgress()||(!PhysicalAttackOwner.IsEmpty()&&!Session->GetLastAttackError()));
+    if(!Cancel&&Session->IsCombatModeConfirmed(Mode))return true;
+    P.CombatTransitionIntent=MakeShared<FJsonObject>(*I);P.CombatTransitionMode=Mode;
+    P.CombatTransitionStarted=FPlatformTime::Seconds();P.CombatTransitionRequested=false;
+    P.WaitingAttackCancel=Cancel;P.AttackCancelRevision=Session->GetCombatEventRevision();
+    if(Cancel)
+    {
+        Session->SendCancelAttack();PhysicalAttackOwner.Empty();PhysicalAttackTarget=0;PhysicalAttackNextSendAt=0;
+        P.Status=TEXT("Waiting for the current attack to finish");
+    }
+    UpdateCombatTransition(P);
+    return false;
+}
+void UACEPluginSubsystem::UpdateCombatTransition(FACEClientPlugin& P)
+{
+    if(!P.CombatTransitionIntent)return;
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Session=C->GetSession();
+    auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
+    const double Now=FPlatformTime::Seconds();
+    bool IdleEnabled=false;P.Profile->TryGetBoolField(TEXT("mana_charges_when_off"),IdleEnabled);
+    const FString Action=S(P.CombatTransitionIntent,TEXT("action"));
+    const bool IdleMana=!P.Running&&P.Enabled&&P.Id==TEXT("ucm")&&IdleEnabled
+        &&IdleManaSession.Pin()==Session&&IdleManaPlayer==C->GetPlayerGuid()
+        &&(Action==TEXT("use_item")||Action==TEXT("apply_item"));
+    if((!P.Running&&!IdleMana)||!Session||C->GetSessionState()!=EACESessionState::InWorld
+        ||(!IdleMana&&(C->GetPlayerGuid()!=P.Player||C->GetServerName()!=P.Server))||(PC&&PC->IsWorldTransitionActive()))
+    {P.CombatTransitionIntent.Reset();return;}
+    if(Now-P.CombatTransitionStarted>=15)
+    {
+        auto I=P.CombatTransitionIntent;P.CombatTransitionIntent.Reset();P.NextAction=0;P.NextDecision=0;
+        if(IdleMana)IdleManaFailed=true;
+        ReportActivityFailure(P,I,P.WaitingAttackCancel?TEXT("Attack cancellation was not confirmed; equipment left unchanged")
+            :TEXT("Combat stance was not confirmed; action deferred"));return;
+    }
+    if(P.WaitingAttackCancel)
+    {
+        // AttackDone(0) only starts the next repeat's power bar. A terminal
+        // result after our cancel is required, including between dual-wield hits.
+        if(Session->GetCombatEventRevision()==P.AttackCancelRevision||Session->IsServerAttackInProgress()||!Session->GetLastAttackError())
+        {ScheduleDecisionWake(Now+.05);return;}
+        P.WaitingAttackCancel=false;
+    }
+    if(C->IsUseBusy()||PendingSpell){ScheduleDecisionWake(Now+.05);return;}
+    if(!P.CombatTransitionRequested&&!Session->IsCombatModeConfirmed(P.CombatTransitionMode))
+    {
+        P.CombatTransitionRevision=Session->GetCombatModeRevision();P.CombatTransitionRequested=true;
+        C->SendChangeCombatMode(P.CombatTransitionMode);
+        P.Status=TEXT("Waiting for the server combat stance");
+    }
+    if((P.CombatTransitionRequested&&Session->GetCombatModeRevision()==P.CombatTransitionRevision)||!Session->IsCombatModeConfirmed(P.CombatTransitionMode))
+    {ScheduleDecisionWake(Now+.05);return;}
+    auto I=P.CombatTransitionIntent;P.CombatTransitionIntent.Reset();P.NextAction=0;P.NextDecision=0;
+    Execute(P,I); // Revalidate the target, ownership and permissions after the wait.
+}
 void UACEPluginSubsystem::TrackActionWait(FACEClientPlugin& P,const FString& Action,int32 Item,int32 Value)
 {
     P.WaitAction=Action;P.WaitItem=Item;P.WaitValue=Value;
@@ -930,7 +1037,7 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
             if(!LexTryParseString(BagId,*Part)||!BagId||Items.Contains(int32(BagId))||!C->GetWorldObject(int32(BagId),Bag)||!LootItemAvailable(C,Bag)||ACEVTObjectClass::Classify(Bag)!=39||Bag.Structure<=0||Bag.Structure>=100||Bag.MaterialType<=0||(Material&&Material!=Bag.MaterialType)){ReportActivityFailure(P,I,TEXT("Salvage bags changed or are unavailable; no bags combined"));return true;}
             Material=Bag.MaterialType;Items.Add(int32(BagId));
         }
-        if(C->GetPlayerVitalsView().CombatMode!=1)C->SendChangeCombatMode(1);C->SendCreateTinkeringTool(Tool.Guid,Items);P.NextAction=Now+3;return true;
+        if(!PrepareCombatAction(P,I,1))return true;C->SendCreateTinkeringTool(Tool.Guid,Items);P.NextAction=Now+3;return true;
     }
     if(Action==TEXT("identify"))
     {
@@ -948,12 +1055,12 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
         bool Unequip=false,Offhand=false;I->TryGetBoolField(TEXT("unequip"),Unequip);I->TryGetBoolField(TEXT("offhand"),Offhand);
         if(Unequip)
         {
-            if(Owned&&Item.CurrentWieldedLocation)
-            {if(C->GetPlayerVitalsView().CombatMode!=1)C->SendChangeCombatMode(1);TrackActionWait(P,Action,Id,0);C->SendPutItemInContainer(Id,C->GetPlayerGuid(),0);P.NextAction=Now+2;}
+            if(Found&&IsOwnedPluginItem(Item)&&Item.CurrentWieldedLocation)
+            {if(!PrepareCombatAction(P,I,1))return true;TrackActionWait(P,Action,Id,0);C->SendPutItemInContainer(Id,C->GetPlayerGuid(),0);P.NextAction=Now+2;}
             return true;
         }
         const auto* A=Appraisals.Find(Id);
-        if(!Owned||!A||!A->bSuccess||!Wieldable(*A,C->GetPlayerVitalsView())){P.Status=TEXT("Equipment requirements unavailable or not met");return true;}
+        if(!Found||!IsOwnedPluginItem(Item)||!A||!A->bSuccess||!Wieldable(*A,C->GetPlayerVitalsView())){P.Status=TEXT("Equipment requirements unavailable or not met");return true;}
         // Ordinary equip honors the same automatic hand preference as retail
         // ItemHolder::DetermineUse. It is live object data, not an appraisal hint.
         if((Item.ObjectDescriptionFlags&ACEObjectDescFlag::WieldLeft)!=0)Offhand=true;
@@ -969,7 +1076,7 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
         }
         Mask &= Item.ValidLocations;
         if(Offhand&&(Item.ItemType&ACEItemType::MeleeWeapon)&&!(Item.ValidLocations&0x2000000))Mask=0x200000;
-        if(Mask){if(C->GetPlayerVitalsView().CombatMode!=1)C->SendChangeCombatMode(1);TrackActionWait(P,Action,Id,int32(Mask));C->SendGetAndWieldItem(Id,Mask);P.NextAction=Now+2;}
+        if(Mask){if(!PrepareCombatAction(P,I,1))return true;TrackActionWait(P,Action,Id,int32(Mask));C->SendGetAndWieldItem(Id,Mask);P.NextAction=Now+2;}
         return true;
     }
     if(Action==TEXT("salvage")||Action==TEXT("sell")||Action==TEXT("read"))
@@ -989,7 +1096,7 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
         {ReportActivityFailure(P,I,TEXT("Automatic salvage requires appraisal and skips tinkered or inscribed items"));return true;}
         if(ToolId<=0||ToolId>MAX_uint32||FMath::FloorToDouble(ToolId)!=ToolId||!C->GetWorldObject(int32(uint32(ToolId)),Tool)||!LootItemAvailable(C,Tool)||ACEVTObjectClass::Classify(Tool)!=40||Item.Guid==Tool.Guid||Item.ItemsCapacity>0||(ACEVTObjectClass::Classify(Item)==39&&Item.Structure>=100)||Item.MaterialType<1||Item.MaterialType>77||TArray<int>{3,9,56,65,72}.Contains(Item.MaterialType))
         {ReportActivityFailure(P,I,TEXT("Item is not salvageable or no owned Ust is available"));return true;}
-        if(C->GetPlayerVitalsView().CombatMode!=1)C->SendChangeCombatMode(1);
+        if(!PrepareCombatAction(P,I,1))return true;
         C->SendCreateTinkeringTool(Tool.Guid,{Id});P.NextAction=Now+3;return true;
     }
     if(Action==TEXT("store_item"))
@@ -1004,7 +1111,7 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
         if(!Owned||TargetId<=0||TargetId>MAX_uint32||FMath::FloorToDouble(TargetId)!=TargetId||!C->GetWorldObject(int32(uint32(TargetId)),Target)||!Target.IsSelectableWorldObject()||!Target.IsGiveOrCreatureTarget())
         {ReportActivityFailure(P,I,TEXT("Meta give requires an owned item and a valid recipient"));return true;}
         const int Amount=int(FMath::Clamp(N(I,TEXT("amount"),1),1.,double(FMath::Max(1,Item.StackSize))));
-        if(C->GetPlayerVitalsView().CombatMode!=1)C->SendChangeCombatMode(1);
+        if(!PrepareCombatAction(P,I,1))return true;
         C->SendGiveObjectRequest(Target.Guid,Id,Amount);P.NextAction=Now+3;return true;
     }
     if(Action==TEXT("apply_item"))
@@ -1024,7 +1131,7 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
                 PendingManaRefresh=true;
             }
             PendingResourceRefresh.Add(Id);PendingResourceRefresh.Add(Target.Guid);
-            if(C->GetPlayerVitalsView().CombatMode!=1)C->SendChangeCombatMode(1);TrackActionWait(P,TEXT("use"));C->SendUseWithTarget(Id,Target.Guid);P.NextAction=Now+3;
+            if(!PrepareCombatAction(P,I,1))return true;TrackActionWait(P,TEXT("use"));C->SendUseWithTarget(Id,Target.Guid);P.NextAction=Now+3;
         }
         else ReportActivityFailure(P,I,TEXT("Item or target is unavailable for use"));
         return true;
@@ -1039,8 +1146,9 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
             // devices accepted by UCM's pet policy, including custom essences.
             // PetDevice.ActOnUse has no peace-mode requirement.
             const auto* Appraisal=Appraisals.Find(Id);
-            const bool SummoningDevice=Appraisal&&Appraisal->bSuccess&&Appraisal->IntProperties.FindRef(280)==213;
-            if(!SummoningDevice&&C->GetPlayerVitalsView().CombatMode!=1)C->SendChangeCombatMode(1);
+            const bool SummoningDevice=ACEPetDevice::IsSummoningDevice(Appraisal);
+            if(SummoningDevice)PendingResourceRefresh.Add(Id);
+            if(!SummoningDevice&&!PrepareCombatAction(P,I,1))return true;
             TrackActionWait(P,TEXT("use"));
             if(ACEItemUseable::IsTargeted(Item.ItemUseable))C->SendUseWithTarget(Id,C->GetPlayerGuid());else C->SendUseItem(Id);
             P.NextAction=Now+3;
@@ -1055,7 +1163,7 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
             {
                 // Corpse Use/loot is valid while armed. Preserve the player's
                 // stance for both the loot action and a recorded corpse Use.
-                if(!Item.IsCorpse()&&C->GetPlayerVitalsView().CombatMode!=1)C->SendChangeCombatMode(1);
+                if(!Item.IsCorpse()&&!PrepareCombatAction(P,I,1))return true;
                 PC->BeginUseApproach(Id,Item.UseRadius);UseApproachOwner=P.Id;
                 TrackActionWait(P,Item.IsCorpse()?TEXT("open_corpse"):TEXT("use"),Id);
                 P.NextAction=Now+2;
@@ -1070,9 +1178,27 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
         if(Found && Item.ContainerId && Item.ContainerId==C->GetOpenExternalContainerGuid() && C->GetWorldObject(Item.ContainerId,Container) && Container.IsCorpse())
         {
             const int32 Amount=int32(FMath::Clamp(N(I,TEXT("amount"),FMath::Max(1,Item.StackSize)),1.,double(FMath::Max(1,Item.StackSize))));
+            const int32 Destination=C->FindPickupContainer(Id,0,Amount);
+            if(!Destination)
+            {
+                ReportActivityFailure(P,I,TEXT("No pack has space for this loot; waiting for inventory space"));
+                if(P.ActivityFailure)P.ActivityFailure->SetBoolField(TEXT("inventory_full"),true);
+                P.WaitAction.Empty();
+                return true;
+            }
             TrackActionWait(P,Action,Id,Item.StackSize);
-            if(Amount<Item.StackSize)C->SendStackableSplitToContainer(Id,C->GetPlayerGuid(),0,Amount);
-            else C->SendPutItemInContainer(Id,C->GetPlayerGuid(),0);
+            if(Amount<Item.StackSize)
+            {
+                // A partial pickup into a full pack must merge directly. Split
+                // creates a new stack and requires a free slot on the server.
+                int32 MergeTo=0;const auto Offered=C->GetTradeSelfItems();
+                for(const auto& Target:C->GetPackItems(Destination))
+                    if(C->IsOwnedInventoryItem(Target)&&!Offered.Contains(Target.Guid)
+                        &&ACEInventoryRules::MergeAmount(Item,Target)>=Amount){MergeTo=Target.Guid;break;}
+                if(MergeTo)C->SendStackableMerge(Id,MergeTo,Amount);
+                else C->SendStackableSplitToContainer(Id,Destination,0,Amount);
+            }
+            else C->SendPutItemInContainer(Id,Destination,0);
         }
         P.NextAction=Now+1;return true;
     }

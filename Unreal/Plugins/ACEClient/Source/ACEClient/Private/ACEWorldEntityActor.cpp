@@ -1102,6 +1102,31 @@ bool AACEWorldEntityActor::ResolveFacingTarget(int32 TargetGuid, FVector& Locati
 	return true;
 }
 
+bool AACEWorldEntityActor::ResolveMovementTarget(int32 TargetGuid, FVector& Location, float& Radius, float& Height)
+{
+	if (!ResolveFacingTarget(TargetGuid, Location)) return false;
+	auto* GI = GetGameInstance();
+	FACEWorldObject Target;
+	if (GI && GI->GetSubsystem<UACEClientSubsystem>()->GetWorldObject(TargetGuid, Target))
+	{
+		if (ApproachTargetSetup != uint32(Target.SetupId))
+		{
+			float Step, H, R; uint32 Anim;
+			if (auto* Dat = GI->GetSubsystem<UACEDatSubsystem>(); Dat && Dat->TryGetSetupPhysics(Target.SetupId, Step, H, R, Anim))
+			{
+				ApproachTargetSetup = Target.SetupId;
+				ApproachTargetRadiusAc = R; ApproachTargetHeightAc = H;
+			}
+		}
+		if (ApproachTargetSetup == uint32(Target.SetupId))
+		{
+			const float Scale = (Target.Scale > 0.f ? Target.Scale : 1.f) * WorldScale;
+			Radius = ApproachTargetRadiusAc * Scale; Height = ApproachTargetHeightAc * Scale;
+		}
+	}
+	return true;
+}
+
 void AACEWorldEntityActor::Tick(float DeltaTime)
 {
 	ACE_PROFILE_SCOPE(Remote);
@@ -1235,16 +1260,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			// turn + locomotion — integrate those here so remotes rotate/run continuously
 			// instead of jumping once per position packet (~180° at default turn rate).
 			FVector Velocity = FVector::ZeroVector;
-			if (RemoteMotion.StickyTargetGuid != 0)
-			{
-				FVector Target;
-				if (ResolveFacingTarget(RemoteMotion.StickyTargetGuid, Target))
-				{
-					const FVector Direction = (Target - RemotePredictLocation).GetSafeNormal2D();
-					if (!Direction.IsNearlyZero()) RemotePredictRotation = FACEPosition::QuatFromUnrealTravelDir2D(Direction);
-				}
-				else RemoteMotion.StickyTargetGuid = 0;
-			}
+
 			const bool bMoveTo = RemoteMotion.MovementType == 6 || RemoteMotion.MovementType == 7;
 			const bool bTurnTo = RemoteMotion.MovementType == 8 || RemoteMotion.MovementType == 9;
 
@@ -1336,47 +1352,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 					bHaveTarget = true;
 				}
 				if (RemoteMotion.MovementType == 6 && RemoteMotion.MoveToTargetGuid != 0)
-				{
-					if (UWorld* World = GetWorld())
-					{
-						if (UGameInstance* GI = World->GetGameInstance())
-						{
-							if (UACEClientSubsystem* Client = GI->GetSubsystem<UACEClientSubsystem>())
-							{
-								FACEWorldObject TargetObj;
-								if (Client->GetWorldObject(RemoteMotion.MoveToTargetGuid, TargetObj))
-								{
-									if (TargetObj.Position.IsValid())
-									{ TargetLoc = TargetObj.Position.ToUnrealLocation(WorldScale); bHaveTarget = true; }
-									if (ApproachTargetSetup != uint32(TargetObj.SetupId))
-									{
-										if (auto* Dat = GI->GetSubsystem<UACEDatSubsystem>())
-										{
-											float SetupStep, Height, Radius; uint32 Anim;
-											if (Dat->TryGetSetupPhysics(TargetObj.SetupId, SetupStep, Height, Radius, Anim))
-											{
-												ApproachTargetSetup = TargetObj.SetupId;
-												ApproachTargetRadiusAc = Radius; ApproachTargetHeightAc = Height;
-											}
-										}
-									}
-									if (ApproachTargetSetup == uint32(TargetObj.SetupId))
-									{
-										const float Scale = (TargetObj.Scale > 0.f ? TargetObj.Scale : 1.f) * WorldScale;
-										TargetRadius = ApproachTargetRadiusAc * Scale; TargetHeight = ApproachTargetHeightAc * Scale;
-									}
-								}
-								// WorldObjects retains the last network echo of our avatar;
-								// the session pose advances every local movement frame.
-								if (RemoteMotion.MoveToTargetGuid == Client->GetPlayerGuid() && Client->GetPlayerPosition().IsValid())
-								{
-									TargetLoc = Client->GetPlayerPosition().ToUnrealLocation(WorldScale);
-									bHaveTarget = true;
-								}
-							}
-						}
-					}
-				}
+					bHaveTarget = ResolveMovementTarget(RemoteMotion.MoveToTargetGuid, TargetLoc, TargetRadius, TargetHeight) || bHaveTarget;
 
 				if (bHaveTarget)
 				{
@@ -1393,20 +1369,29 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 						RemotePredictRotation = FACEPosition::QuatFromUnrealTravelDir2D(ToTarget / DistCm);
 					}
 					RemoteMotion.UpdateMoveToGait(RangeCm / WorldScale);
-					RemoteMotion.ForwardUnitsPerSecond = (RemoteMotion.bRunning ? RemoteRunSpeedAc : RemoteWalkSpeedAc)
-						* RemoteMotion.AnimPlayRate;
-					const float RemainingCm = RangeCm - FMath::Max(RemoteMotion.MoveToDistance, 0.f) * WorldScale;
-					if (RemainingCm > .01f && DistCm > SMALL_NUMBER)
+					const float RemainingCm = RemoteMotion.MoveToRemaining(RangeCm / WorldScale) * WorldScale;
+					const bool Retreat=RemainingCm<0.f;
+					const bool TurnAway=Retreat && !(RemoteMotion.MoveToFlags & 0x200u);
+					const float Forward=Retreat&&!TurnAway?-1.f:1.f;
+					if (TurnAway && DistCm>SMALL_NUMBER)
+						RemotePredictRotation=FACEPosition::QuatFromUnrealTravelDir2D(-ToTarget/DistCm);
+					// Retreat with both direction flags uses WalkBackwards, even
+					// when CanRun would normally select a forward running gait.
+					if (Retreat&&!TurnAway)
 					{
-						const FVector Dir = ToTarget / DistCm;
-						const float Speed = FMath::Max(RemoteMotion.ForwardUnitsPerSecond, 0.f);
-						Velocity = Dir * FMath::Min(Speed * WorldScale * GetActorScale3D().GetAbsMax(), RemainingCm / FMath::Max(Step, SMALL_NUMBER));
+						RemoteMotion.bRunning=false;
+						RemoteMotion.AnimPlayRate=FMath::Abs(RemoteMotion.MoveToSpeed);
+						RemoteMotion.ForwardCommand=0x0006;
+					}
+					const float Speed=(Forward<0.f?RemoteBackSpeedAc:RemoteMotion.bRunning?RemoteRunSpeedAc:RemoteWalkSpeedAc)*RemoteMotion.AnimPlayRate;
+					RemoteMotion.ForwardUnitsPerSecond=Forward*Speed;
+					if (FMath::Abs(RemainingCm) > .01f && DistCm > SMALL_NUMBER)
+					{
+						const FVector Dir = ToTarget / DistCm * (Retreat?-1.f:1.f);
+						Velocity = Dir * FMath::Min(Speed * WorldScale * GetActorScale3D().GetAbsMax(), FMath::Abs(RemainingCm) / FMath::Max(Step, SMALL_NUMBER));
+						RemoteMotion.bMoving=true;RemoteMotion.Forward=Forward;
 						if (Appearance)
-						{
-							Appearance->SetLocomotionInput(
-								1.f, 0.f, RemoteMotion.bRunning,
-								FMath::Max(0.05f, RemoteMotion.AnimPlayRate), true);
-						}
+							Appearance->SetLocomotionInput(Forward,0.f,RemoteMotion.bRunning,FMath::Max(.05f,RemoteMotion.AnimPlayRate),true);
 					}
 					else
 					{
@@ -1451,6 +1436,26 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 							FMath::Max(0.05f, RemoteMotion.AnimPlayRate), true);
 					}
 				}
+			}
+
+			if (RemoteMotion.StickyTargetGuid != 0)
+			{
+				FVector Target;
+				float Radius=0.f, Height=0.f;
+				if (RemoteStickySeconds > 0.f && ResolveMovementTarget(RemoteMotion.StickyTargetGuid, Target, Radius, Height))
+				{
+					const FVector Direction = (Target - RemotePredictLocation).GetSafeNormal2D();
+					if (!Direction.IsNearlyZero()) RemotePredictRotation = FACEPosition::QuatFromUnrealTravelDir2D(Direction);
+					// Retail StickyManager::adjust_offset maintains 0.3m between
+					// body edges, including backing away when the target moves in.
+					// The ordinary body sweep below validates this displacement.
+					const float Gap=FVector::Dist2D(Target,RemotePredictLocation)-GetMeleeBodyRadius()-Radius-.3f*WorldScale;
+					const float MaxSpeed=20.f*RemoteMotion.MoveToRunRate;
+					const float Limit=(MaxSpeed>.0002f?MaxSpeed:15.f)*WorldScale*Step;
+					Velocity=Direction*FMath::Clamp(Gap,-Limit,Limit)/FMath::Max(Step,SMALL_NUMBER);
+					RemoteStickySeconds=FMath::Max(0.f,RemoteStickySeconds-Step);
+				}
+				else RemoteMotion.StickyTargetGuid = 0;
 			}
 
 			RemotePredictLocation += Velocity * Step;
@@ -2263,13 +2268,16 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 				}
 				else
 				{
-					Appearance->PlayActionMotion(static_cast<int32>(Action), Motion.ActionSpeed, Motion.CurrentStyle, bHoldEmote);
+					Appearance->PlayActionMotion(static_cast<int32>(Action), Motion.ActionSpeed, Motion.CurrentStyle, bHoldEmote, Motion.bNewAction);
 				}
-				if (!bHoldEmote)
+				if (!bHoldEmote || Motion.bNewAction)
 				{
 					for (int32 I=0;I<Motion.ActionFollowups.Num();++I)
 					{
-						Appearance->QueueActionMotion(Motion.ActionFollowups[I], Motion.FollowupSpeed(I), Motion.CurrentStyle, false);
+						const uint32 Next = ACEMotion::NormalizeCommand(static_cast<uint32>(Motion.ActionFollowups[I]));
+						const uint32 Family = Next & 0xFF000000u;
+						const bool Hold = Family == 0x13000000u || Family == 0x42000000u || Family == 0x43000000u || ACEMotion::IsHeldRestCommand(Next);
+						Appearance->QueueActionMotion(Motion.ActionFollowups[I], Motion.FollowupSpeed(I), Motion.CurrentStyle, Hold);
 					}
 				}
 			}
@@ -2320,6 +2328,7 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 		}
 	}
 	RemoteMotion = Motion;
+	RemoteStickySeconds=Motion.StickyTargetGuid&&!bDeath?1.f:0.f;
 	if (bDeath)
 	{
 		PendingRemoteLanding.Reset();
@@ -2337,6 +2346,8 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 			FVector Velocity;
 			RemoteWalkSpeedAc = Dat->GetMotionVelocity(MotionTableId, 0x45000005, Motion.CurrentStyle, Velocity)
 				? Velocity.Size2D() : 3.1199999f;
+			RemoteBackSpeedAc = Dat->GetMotionVelocity(MotionTableId, 0x45000006, Motion.CurrentStyle, Velocity)
+				? Velocity.Size2D() : 1.56f;
 			RemoteRunSpeedAc = Dat->GetMotionVelocity(MotionTableId, 0x44000007, Motion.CurrentStyle, Velocity)
 				? Velocity.Size2D() : 4.f;
 			// Interpreted motion speed multiplies the actor's DAT cycle velocity.

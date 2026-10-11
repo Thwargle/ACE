@@ -914,6 +914,9 @@ void UACEUIGameplayBinder::RefreshSocialButtonLabels()
 		{ TEXT("TellButton"), TEXT("Tell"), true },
 		{ TEXT("RemoveButton"), TEXT("Remove"), true },
 		{ TEXT("AddButton"), TEXT("Add"), true },
+		{ TEXT("FriendNameLabel"), TEXT("Friend Name:"), false },
+		{ TEXT("FriendsLabel"), TEXT("Friend"), false },
+		{ TEXT("OnlineLabel"), TEXT("Status"), false },
 		{ TEXT("SquelchRemoveButton"), TEXT("Remove"), true },
 		{ TEXT("SquelchCharacterButton"), TEXT("Squelch Character"), true },
 		{ TEXT("SquelchAccountButton"), TEXT("Squelch Account"), true },
@@ -934,8 +937,13 @@ void UACEUIGameplayBinder::RefreshSocialButtonLabels()
 		if (UTextBlock* L = SocialButtonLabels[i])
 		{
 			L->SetJustification(Labels[i].bCentered ? ETextJustify::Center : ETextJustify::Left);
+			const bool FriendCaption = FCString::Strcmp(Labels[i].Element, TEXT("FriendsLabel")) == 0
+				|| FCString::Strcmp(Labels[i].Element, TEXT("OnlineLabel")) == 0
+				|| FCString::Strcmp(Labels[i].Element, TEXT("FriendNameLabel")) == 0;
+			// OnlineLabel is also present on the allegiance page. Resolve the
+			// friends heading under its own page so it does not inherit that visibility.
 			TSharedPtr<FACEUIElement> El = Manager->FindElementUnder(
-				TEXT("SocialPanel_Field"), Labels[i].Element);
+				FriendCaption ? TEXT("FriendsPage") : TEXT("SocialPanel_Field"), Labels[i].Element);
 			if (!El.IsValid())
 			{
 				El = Manager->FindElementByName(Labels[i].Element);

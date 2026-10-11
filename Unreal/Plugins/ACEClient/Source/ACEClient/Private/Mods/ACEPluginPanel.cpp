@@ -1,6 +1,7 @@
 #include "Mods/ACEPluginPanel.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEClientSubsystem.h"
+#include "ACEPlayerController.h"
 #include "ACEDatSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Engine/GameViewportClient.h"
@@ -55,7 +56,7 @@ namespace
         TSharedPtr<SVerticalBox> Body;
         TSharedPtr<SEditableTextBox> Name;
         TSharedPtr<SMultiLineEditableTextBox> Json;
-        FString Id, Search;
+        FString Id, Search, ManagerNotice;
         bool PluginOnly = false;
         void Add(TSharedRef<SWidget> W) { Body->AddSlot().AutoHeight().Padding(5)[W]; }
         void Save(const TSharedPtr<FACEClientPlugin>& P)
@@ -63,35 +64,88 @@ namespace
             Host->SaveProfile(P->Id, P->ProfileName, Host->ProfileJson(P->Id));
             if(Json)Json->SetText(FText::FromString(Host->ProfileJson(P->Id)));
         }
+        void Open(const FString& PluginId)
+        {
+            if(!Host.IsValid())return;
+            auto* GI=Host->GetGameInstance();
+            auto* Client=GI->GetSubsystem<UACEClientSubsystem>();
+            auto* PC=Cast<AACEPlayerController>(GI->GetFirstLocalPlayerController());
+            if(Client&&Client->GetSessionState()==EACESessionState::InWorld&&PC&&!PC->IsVRActive())
+            {
+                // The manager is a launcher. Each desktop tool has its own
+                // window; opening settings must not embed a second loot editor.
+                auto H=Host;
+                if(!H->IsPluginWindowOpen(PluginId))H->TogglePluginWindow(PluginId);
+                H->TogglePanel();
+                return;
+            }
+            // Login and VR use the same manager in a single panel.
+            Id=PluginId;Rebuild();
+        }
         void Rebuild()
         {
             Body->ClearChildren(); if (!Host.IsValid()) return;
-            if (!PluginOnly)
+            if (!PluginOnly && Id.IsEmpty())
             {
-                Add(Label(TEXT("Client plugins"), 28));
-                Add(Label(TEXT("Enable a plugin to grant its listed actions. Start is manual each session. Manual movement takes priority without stopping plugins. /ucm stop stops UCM; /plugins opens this panel."), 18));
-                Add(Button(TEXT("Reload installed plugins"), [this](){ Host->Discover(); Rebuild(); }));
+                auto Header=SNew(SHorizontalBox);
+                Header->AddSlot().FillWidth(1).VAlign(VAlign_Center)[Label(TEXT("Plugins"),26)];
+                Header->AddSlot().AutoWidth()[SNew(SButton).ButtonStyle(&PluginButtonStyle()).IsFocusable(false).ContentPadding(FMargin(12,6))
+                    .ToolTipText(FText::FromString(TEXT("Reload installed plugins. Running plugins will stop.")))
+                    .OnClicked_Lambda([this](){Host->Discover();ManagerNotice=Host->Notice;Rebuild();return FReply::Handled();})[Label(TEXT("Refresh"),16)]];
+                Add(Header);
+                auto BarControls=SNew(SHorizontalBox);
+                BarControls->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SCheckBox).Padding(FMargin(4,8))
+                    .IsChecked_Lambda([this](){return Host->IsPluginBarVisible()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+                    .OnCheckStateChanged_Lambda([this](ECheckBoxState S){Host->SetPluginBarVisible(S==ECheckBoxState::Checked);})[Label(TEXT("Show plugin bar"),16)]];
+                BarControls->AddSlot().AutoWidth()[SNew(SButton).ButtonStyle(&PluginButtonStyle()).IsFocusable(false).ContentPadding(FMargin(12,6))
+                    .Visibility_Lambda([this](){return Host->IsPluginBarMinimized()?EVisibility::Visible:EVisibility::Collapsed;})
+                    .OnClicked_Lambda([this](){Host->SetPluginBarVisible(true);Host->SetPluginBarMinimized(false);return FReply::Handled();})[Label(TEXT("Expand bar"),16)]];
+                Add(BarControls);
+                Add(Label(TEXT("Drop plugin folders into: ")+FPaths::ConvertRelativePathToFull(Host->UserDirectory()/TEXT("Installed")),14));
+                Add(Button(TEXT("Open plugin folder"),[this](){const FString Folder=FPaths::ConvertRelativePathToFull(Host->UserDirectory()/TEXT("Installed"));IFileManager::Get().MakeDirectory(*Folder,true);FPlatformProcess::ExploreFolder(*Folder);}));
                 for (auto P : Host->Plugins)
                 {
                     auto Row = SNew(SHorizontalBox);
-                    Row->AddSlot().FillWidth(1)[Button(P->Name + TEXT("  ") + P->Version, [this,P](){ Id=P->Id; Rebuild(); })];
-                    Row->AddSlot().AutoWidth().Padding(8,0)[SNew(SCheckBox).Padding(FMargin(6,10)).IsChecked_Lambda([P](){return P->Enabled?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
-                        .OnCheckStateChanged_Lambda([this,P](ECheckBoxState S){Host->SetEnabled(P->Id,S==ECheckBoxState::Checked);})[Label(TEXT("Enabled"))]];
-                    Add(Row);
-                    Add(Label(P->Description, 18));
-                    Add(Label(TEXT("Allowed actions: ") + FString::Join(P->Permissions, TEXT(", ")),18));
-                    Add(SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text_Lambda([P](){return FText::FromString(P->Status);}).AutoWrapText(true));
+                    FString Description=P->Description;
+                    if(P->Id==TEXT("ucm"))Description=TEXT("Combat, buffs, recovery, routes and looting.");
+                    else if(P->Id==TEXT("ucmmicro"))Description=TEXT("Quick toggles for UCM activities.");
+                    else if(P->Id==TEXT("looteditor"))Description=TEXT("Create and edit loot profiles.");
+                    else if(P->Id==TEXT("waypoint"))Description=TEXT("Direction arrow, world map and dungeon map.");
+                    Row->AddSlot().FillWidth(1).VAlign(VAlign_Center).Padding(0,0,12,0)
+                        [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[Label(P->Name,18)]
+                        +SVerticalBox::Slot().AutoHeight().Padding(0,4,0,0)[SNew(STextBlock).Text(FText::FromString(Description))
+                            .Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).ColorAndOpacity(FLinearColor(.6f,.68f,.75f)).AutoWrapText(true)]];
+                    const FString Capabilities=P->LocalService?(P->Permissions.Contains(TEXT("local_tools"))?TEXT("Local appearance and bundled native converter. Native tools run outside the Lua sandbox."):TEXT("Local cosmetic appearance only")):P->Permissions.IsEmpty()?TEXT("No game actions"):TEXT("Game actions: ")+FString::Join(P->Permissions,TEXT(", "));
+                    Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,12,0)[SNew(SCheckBox).Padding(4)
+                        .ToolTipText(FText::FromString(Capabilities))
+                        .IsChecked_Lambda([P](){return P->Enabled?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+                        .OnCheckStateChanged_Lambda([this,P](ECheckBoxState S){Host->SetEnabled(P->Id,S==ECheckBoxState::Checked);})[Label(TEXT("Enabled"),14)]];
+                    Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[SNew(SButton).Tag(FName(*(TEXT("PluginOpen.")+P->Id))).ButtonStyle(&PluginButtonStyle()).IsFocusable(false).ContentPadding(FMargin(14,8))
+                        .IsEnabled_Lambda([P](){return P->Enabled;})
+                        .OnClicked_Lambda([this,PluginId=P->Id](){Open(PluginId);return FReply::Handled();})[Label(TEXT("Open"),16)]];
+                    Add(SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.04f,.055f,.075f))
+                        .Padding(12).ToolTipText(FText::FromString(P->Name+TEXT(" ")+P->Version))[Row]);
                 }
+                if(Host->Plugins.IsEmpty())Add(Label(TEXT("No plugins installed."),16));
+                if(!ManagerNotice.IsEmpty())Add(Label(ManagerNotice,16));
+                return;
             }
-            if (Id.IsEmpty() && Host->Plugins.Num()) Id=Host->Plugins[0]->Id;
+            if(!PluginOnly)Add(Button(TEXT("Back to plugins"),[this](){Id.Empty();Rebuild();}));
             TSharedPtr<FACEClientPlugin> P;
             for (auto Candidate:Host->Plugins) if (Candidate->Id==Id) P=Candidate;
             if (!P) return;
+            if(P->LocalService)
+            {
+                Add(Label(P->Name,26));
+                Add(SNew(STextBlock).AutoWrapText(true).Visibility_Lambda([P](){return P->Running?EVisibility::Collapsed:EVisibility::Visible;}).Text_Lambda([P](){return FText::FromString(P->Status);}));
+                Add(Host->MakeLocalServicePanel(P->Id));return;
+            }
             Add(SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text_Lambda([H=Host](){return FText::FromString(H.IsValid()?H->Notice:FString());}).AutoWrapText(true));
             if(P->Id==TEXT("waypoint")){Add(SNew(SBox).HeightOverride(650)[Host->MakeWaypointPanel()]);return;}
             if(P->Id==TEXT("looteditor")){Add(SNew(SBox).HeightOverride(650)[Host->MakeUCMPanel(TEXT("Standalone loot"))]);return;}
             if(P->Id==TEXT("ucmmicro")){Add(Host->MakeUCMMicroPanel());return;}
             if(P->Id==TEXT("ucm")){Add(SNew(SBox).HeightOverride(650)[Host->MakeUCMPanel()]);return;}
+            if(P->Id==TEXT("itemtools")){Add(SNew(SBox).HeightOverride(650)[Host->MakeItemToolsPanel()]);return;}
             Add(Label(P->Name,26));
             Add(SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text_Lambda([P](){return FText::FromString(P->Status);}).AutoWrapText(true));
             auto Actions=SNew(SHorizontalBox);
@@ -184,7 +238,7 @@ namespace
     };
 }
 
-TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId) { if(PluginId==TEXT("ucm.log"))return MakeUCMLogPanel();if(PluginId==TEXT("ucmmicro"))return MakeUCMMicroPanel();if(PluginId==TEXT("waypoint") || PluginId==TEXT("waypoint.map"))return MakeWaypointPanel(PluginId.EndsWith(TEXT(".map")));if(PluginId==TEXT("looteditor"))return MakeUCMPanel(TEXT("Standalone loot"));if(PluginId==TEXT("ucm"))return MakeUCMPanel();return SNew(SACEPlugins).Host(this).PluginId(PluginId); }
+TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId) { if(PluginId==TEXT("itemtools"))return MakeItemToolsPanel(); if(PluginId==TEXT("ucm.log"))return MakeUCMLogPanel();if(PluginId==TEXT("ucmmicro"))return MakeUCMMicroPanel();if(PluginId==TEXT("waypoint") || PluginId==TEXT("waypoint.map"))return MakeWaypointPanel(PluginId.EndsWith(TEXT(".map")));if(PluginId==TEXT("looteditor"))return MakeUCMPanel(TEXT("Standalone loot"));if(PluginId==TEXT("ucm"))return MakeUCMPanel();return SNew(SACEPlugins).Host(this).PluginId(PluginId); }
 void UACEPluginSubsystem::TogglePanel()
 {
     if(auto* PC=GetGameInstance()->GetFirstLocalPlayerController())if(APawn* Pawn=PC->GetPawn())
@@ -195,9 +249,12 @@ void UACEPluginSubsystem::TogglePanel()
     auto* Viewport=GetGameInstance()->GetGameViewportClient(); if(!Viewport)return;
     if(DesktopPanel){Viewport->RemoveViewportWidgetContent(DesktopPanel.ToSharedRef());DesktopPanel.Reset();return;}
     DesktopPanel=SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Center)
-        [SNew(SBox).WidthOverride(840).HeightOverride(650)
+        [SNew(SBox).WidthOverride(740).HeightOverride(530)
         [SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.025f,.035f,.045f,1.f)).Padding(16)
-        [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[Button(TEXT("Close plugins"),[Weak=TWeakObjectPtr<UACEPluginSubsystem>(this)](){if(Weak.IsValid())Weak->TogglePanel();})]
+        [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)
+            [SNew(SButton).ButtonStyle(&PluginButtonStyle()).IsFocusable(false).ContentPadding(FMargin(10,3))
+                .ToolTipText(FText::FromString(TEXT("Close plugin manager")))
+                .OnClicked_Lambda([Weak=TWeakObjectPtr<UACEPluginSubsystem>(this)](){if(Weak.IsValid())Weak->TogglePanel();return FReply::Handled();})[Label(TEXT("X"),14)]]
         +SVerticalBox::Slot().FillHeight(1)[MakePanel()]]]];
     Viewport->AddViewportWidgetContent(DesktopPanel.ToSharedRef(),1600);
 }

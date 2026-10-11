@@ -3443,6 +3443,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         // preceding the inventory item, not an extra Use-target click.
         {
             TGuardValue<int32> KeepPrevious(Session.PreviousSelectedObjectGuid,Session.PreviousSelectedObjectGuid);
+            TGuardValue<int32> KeepRecipient(Session.GiveRecipientGuid,Session.GiveRecipientGuid);
             TGuardValue<uint32> KeepOptions(Session.CharacterOptions1,Session.CharacterOptions1 & ~0x04000000u);
             const auto SavedSelection=Session.SelectedObject;
             FACEWorldObject Gift;Gift.Guid=99110;Gift.Name=TEXT("Give stack");Gift.ItemType=ACEItemType::Misc;
@@ -3491,11 +3492,43 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Select(Gift.Guid);Give();
             TestTrue(TEXT("Selecting another gift reuses the returned recipient"),HasAction(ACEGameAction::GiveObjectRequest));
 
+            FACEWorldObject Pack;Pack.Guid=99112;Pack.ContainerId=Session.PlayerGuid;Pack.ItemType=ACEItemType::Container;
+            FACEWorldObject OtherGift=Gift;OtherGift.Guid=99113;OtherGift.ContainerId=Pack.Guid;
+            Session.WorldObjects.Add(Pack.Guid,Pack);Session.WorldObjects.Add(OtherGift.Guid,OtherGift);
+            Select(Recipient.Guid);Gameplay->SelectInventoryGuid(Session.PlayerGuid);
+            Gameplay->SelectInventoryGuid(Pack.Guid);Select(OtherGift.Guid);Select(Gift.Guid);
+            TestEqual(TEXT("Browsing main pack, backpack and other items preserves Give recipient"),Client->GetGiveRecipientGuid(),Recipient.Guid);
+            TestEqual(TEXT("Ordinary previous selection still tracks the actual inventory selection"),Client->GetPreviousSelectedObjectGuid(),OtherGift.Guid);
+            Give();TestTrue(TEXT("Give works after browsing inventory"),HasAction(ACEGameAction::GiveObjectRequest));
+            // Opening a shop selects its first merchandise entry automatically.
+            // That selection must not steal the merchant from the Give key.
+            {
+                TGuardValue<TArray<FACEWorldObject>> KeepStock(Session.VendorMerchandise,Session.VendorMerchandise);
+                TGuardValue<uint32> KeepTypes(Session.VendorItemTypes,MAX_uint32);
+                TGuardValue<int32> KeepMin(Session.VendorMinValue,-1),KeepMax(Session.VendorMaxValue,-1);
+                auto Merchant=Recipient;Merchant.ObjectDescriptionFlags|=ACEObjectDescFlag::Vendor;
+                auto Stock=OtherGift;Stock.ContainerId=Merchant.Guid;
+                Session.WorldObjects[Merchant.Guid]=Merchant;Session.WorldObjects[Stock.Guid]=Stock;
+                Session.WorldObjects[Gift.Guid].Value=100;Session.VendorMerchandise={Stock};
+                Select(Merchant.Guid);Gameplay->ShowVendorPanel(Merchant.Guid);
+                TestEqual(TEXT("Shop still selects its first stock item"),Client->GetSelectedObject().Guid,Stock.Guid);
+                Select(Gift.Guid);Gameplay->SelectedStackAmount=Gift.StackSize;Give();
+                TestEqual(TEXT("Shop browsing retains the merchant"),Client->GetGiveRecipientGuid(),Merchant.Guid);
+                TestTrue(TEXT("Give adds the carried item to the selected merchant's sell cart"),Gameplay->VendorSellCart.ContainsByPredicate([&](const auto& Entry){return Entry.Value==Gift.Guid&&Entry.Key==Gift.StackSize;}));
+                TestFalse(TEXT("Merchant Give follows retail selling instead of sending an NPC gift"),HasAction(ACEGameAction::GiveObjectRequest));
+                Gameplay->HideVendorPanel();Session.WorldObjects[Recipient.Guid]=Recipient;
+            }
+            Session.WorldObjects.Remove(Pack.Guid);Session.WorldObjects.Remove(OtherGift.Guid);
+
             Select(0);Select(Gift.Guid);Give();
             TestFalse(TEXT("Missing recipient sends no Give"),HasAction(ACEGameAction::GiveObjectRequest));
             TestEqual(TEXT("Missing recipient keeps the item selected"),Client->GetSelectedObject().Guid,Gift.Guid);
             TestTrue(TEXT("Missing recipient shows a target prompt"),Gameplay->TransientInfoText &&
                 Gameplay->TransientInfoText->GetText().ToString().Contains(TEXT("select a creature or a character")));
+            Select(Recipient.Guid);Select(Gift.Guid);Session.DeleteWorldObject(Recipient.Guid);
+            TestEqual(TEXT("A removed recipient is forgotten while an item is selected"),Client->GetGiveRecipientGuid(),0);
+            Session.WorldObjects.Add(Recipient.Guid,Recipient);Give();
+            TestFalse(TEXT("Reusing a deleted recipient GUID requires a new selection"),HasAction(ACEGameAction::GiveObjectRequest));
             for(int32 TargetGuid:{0,Session.PlayerGuid,99112})
             {
                 Select(TargetGuid);Select(Gift.Guid);Give();

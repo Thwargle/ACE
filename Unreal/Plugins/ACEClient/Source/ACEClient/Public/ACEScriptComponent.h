@@ -61,6 +61,7 @@ class ACECLIENT_API UACEScriptComponent : public UActorComponent
 	friend class FACEEntranceParticleTest;
 	friend class FACERetailWeatherTest;
 	friend class FACEVRRenderReplicationTest;
+	friend class FACEPluginCosmeticEffectsTest;
 
 public:
 	UACEScriptComponent();
@@ -143,6 +144,10 @@ public:
 	/** Stop every active PhysicsScript / particle emitter (portal-space cleanup). */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Effects")
 	void StopAllEffects();
+
+	/** Local replacement of this item's appearance; keeps effect lifetimes running.
+	 * Owners independently release suppression when their cosmetic is removed. */
+	void SetCosmeticParticlesHidden(UObject* Owner, bool bHidden);
 
 	/** End Launch / cast-gesture sparkle when the Cast one-shot finishes. Does not stop ShieldUp or EnchantUp. */
 	void StopCastGestureEffects();
@@ -394,6 +399,8 @@ private:
 	double ParticleTimeSinceUpdate = 0.0;
 	bool bWokeFromIdleTick = false;
 	TArray<FActiveEmitter> ActiveEmitters;
+	TSet<TWeakObjectPtr<UObject>> CosmeticParticleHideOwners;
+	bool bCosmeticParticlesHidden = false;
 	TArray<FScalarTween> Tweens;
 	TArray<FUvScroll> UvScrolls;
 	TArray<TWeakObjectPtr<UProceduralMeshComponent>> ParticlePool;

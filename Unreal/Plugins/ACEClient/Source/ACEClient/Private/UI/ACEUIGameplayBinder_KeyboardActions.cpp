@@ -121,10 +121,10 @@ void UACEUIGameplayBinder::PollAdditionalKeyboardActions(APlayerController* PC)
  if(Pressed(TEXT("SelectionGive")))
  {
   // CPlayerSystem::OnAction(SelectionGive): select a recipient, then an item.
-  // ItemHolder::AttemptPlaceIn3D uses that preceding selection directly and
-  // returns selection to the recipient; Give never enters Use targeting mode.
+  // Keep that recipient through inventory/stock browsing, then use retail's
+  // ItemHolder handoff and return selection to it. Never enter Use targeting.
   CancelPendingUseWith();
-  const int32 TargetGuid=Client->GetPreviousSelectedObjectGuid();
+  const int32 TargetGuid=Client->GetGiveRecipientGuid();
   FACEWorldObject Target;
   if(!Owned) PostInventorySystemMessage(TEXT("Select an item in your inventory to give."));
   else if(!TargetGuid || TargetGuid==Item.Guid || TargetGuid==Client->GetPlayerGuid()

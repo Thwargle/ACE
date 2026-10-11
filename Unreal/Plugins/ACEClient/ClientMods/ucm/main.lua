@@ -8,6 +8,7 @@ local route_blocks=0
 local navigation_paused,door_attempts=nil,{}
 local retries, until_time, corpses, item_attempts = {}, {}, {}, {}
 local route_pending, loot_pending, recovery_pending, buff_item_pending = nil, nil, nil, nil
+local loot_full=nil
 local monster_failures,monster_blacklist,combat_serial={},{},0
 local ghost_attempts,ghost_hp={},{ }
 local corpse_pending=nil
@@ -103,6 +104,15 @@ end
 local conversion_aliases={['Meditative Trance']='Stamina to Mana',['Rushed Recovery']='Stamina to Health',
  ['Energize Vitality']='Mana to Health',['Energize Vigor']='Mana to Stamina',['Cannibalize']='Health to Mana',['Self Sacrifice']='Health to Stamina'}
 local vital_ids={Health=2,Stamina=4,Mana=6}
+-- VT he.a/dg compare the expected conversion gain to a regular Heal Self.
+-- These are selection estimates; server results remain authoritative.
+local heal_amounts={17,25,32,45,67,87,115,135}
+local transfer_ratios={.9,1,1.1,1.2,1.35,1.5,1.75,1.75}
+local transfer_caps={50,100,150,200}
+local function health_gain(v,source)
+ local level=math.max(1,math.min(8,v.level or 1))
+ return source and math.min(transfer_caps[level] or math.huge,math.floor(source*transfer_ratios[level])) or heal_amounts[level]
+end
 local function recovery_spell(v)
  if not v.caster_target or (v.duration or 0)~=0 then return end
  local c=v.category
@@ -820,125 +830,12 @@ local function meta_work(s,p)
  return {action=action,item=item.id,target=target and target.id,amount=1,status='Meta: '..c.op..' '..item.name}
 
 end
--- Classic profile calculations use the item's innate cantrips, not the player's
--- temporary buffs. The identifiers below are the retail spell/quality mapping.
-local innate_bonus={
- [2598]={218103842,2},[2586]={218103842,4},[4661]={218103842,7},[6089]={218103842,10},
- [2604]={28,20},[2592]={28,40},[4667]={28,60},[6095]={28,80},
- [3251]={152,.01},[3250]={152,.03},[4670]={152,.05},[6098]={152,.07},
- [2603]={167772172,.03},[2591]={167772172,.05},[4666]={167772172,.07},[6094]={167772172,.09},
- [2600]={29,.03},[3985]={29,.04},[2588]={29,.05},[4663]={29,.07},[6091]={29,.09},
- [3201]={144,1.05},[3199]={144,1.1},[3202]={144,1.15},[3200]={144,1.2},[6086]={144,1.25},[6087]={144,1.3}
-}
-local function buffed_quality(item,key,float)
- local raw=(item[float and 'float_properties' or 'int_properties'] or {})[tostring(math.floor(key))]
- if raw==nil then return 0 end
- for _,id in ipairs(item.spell_ids or {}) do local bonus=innate_bonus[id];if bonus and bonus[1]==key then raw=key==144 and raw*bonus[2] or raw+bonus[2] end end
- return raw
-end
 local function corpse_owner_name(name)
  name=string.lower(name or '')
  while name:sub(1,1)=='+' do name=name:sub(2) end
  return name
 end
-local function condition_match(c,item,s,scan)
- if c.field=='legacy' then
-  local t,a=c.key,c.args
-  if t==6 then return false end -- Original Classic rule is retired and always fails.
-  if t==7 then return item.object_class==a[1] end
-  if t==17 then local palette=(item.palettes or {})[math.floor(a[1])+1];return palette~=nil and band(palette,0xffffff)==band(math.floor(a[2]),0xffffff) end
-  if t==1001 then return (s.main_pack_slots or 0)>=a[1] end
-  if t==1002 then return (s.level or 0)>=a[1] end
-  if t==1003 then return (s.level or 0)<=a[1] end
-  if t==1000 then local skill=(s.skills or {})[tostring(math.floor(a[2]))];return skill~=nil and skill.current>=a[1] end
-  if t==1004 then local skill=(s.skills or {})[tostring(math.floor(a[1]))];return skill~=nil and skill.base>=a[2] and skill.base<=a[3] end
-  if not item.identified then return nil end
-  if t==10 then return item.object_class==1 and (item.damage or 0)*(1-(item.variance or 0))>=a[1] end
-  if t==2007 then local total=0;for _,id in ipairs({370,371,372,373,374,375,376,379}) do total=total+((item.int_properties or {})[tostring(id)] or 0) end;return total>=a[1] end
-  if t==2003 or t==2005 then return buffed_quality(item,a[2],t==2005)>=a[1] end
-  if t==2001 then return item.object_class==9 and buffed_quality(item,218103842,false)+(buffed_quality(item,167772174,true)-1)*100/3+buffed_quality(item,204,false)>=a[1] end
-  if t==2000 or t==2006 or t==2008 then
-   if item.object_class~=1 then return false end
-   local variance=(item.float_properties or {})['167772171'] or 0;local damage=buffed_quality(item,218103842,false)
-   if t==2000 then return damage*(1-variance/2)>=a[1] end
-   local props=item.int_properties or {};local slots=math.max(0,10-(props['171'] or 0))-((props['179'] or 0)==0 and 1 or 0)
-   if (props['131'] or 0)==0 then slots=0 end
-   -- Expected damage with retail critical chance/multiplier. Reserve one tinker
-   -- for an imbue, then prioritize requested defenses before iron/granite.
-   local defense,offense=buffed_quality(item,29,true),buffed_quality(item,167772172,true)
-   local function dot(d,v) return d*(.9*(2-v)/2+.2) end
-   for _=1,math.min(10,slots) do
-    if t==2008 and defense<a[2] then defense=defense+.01
-    elseif t==2008 and offense<a[3] then offense=offense+.01
-    elseif dot(damage+25,variance)>=dot(damage+24,variance*.8) then damage=damage+1
-    else variance=variance*.8 end
-   end
-   return dot(damage+24,variance)>=a[1] and (t~=2008 or (defense>=a[2] and offense>=a[3]))
-  end
-  error('Unknown legacy loot requirement')
- end
- if c.field=='spells' then
-  if not item.identified then return nil end
-  local count=scan.spell_count or 0
-  local names=item.spell_names or {}
-  for index=scan.spell_index or 1,#names do
-   if not workavailable() then scan.spell_count=count;scan.spell_index=index;return 'pending' end
-   local name=names[index]
-   if literal_pattern(name,c.pattern or '') and ((c.exclude or '')=='' or not literal_pattern(name,c.exclude)) then
-    count=count+1
-    if count>=(c.value or 1) then scan.spell_count=nil;scan.spell_index=nil;return true end
-   end
-  end
-  scan.spell_count=nil;scan.spell_index=nil
-  return count>=(c.value or 1)
- end
- local props=item[c.field..'_properties'] or {};local value=props[tostring(math.floor(c.key))]
- if value==nil and not item.identified then return nil end
- if c.field=='string' then return literal_pattern(value or '',c.pattern or '') end
- if value==nil then if c.missing_zero then value=0 else return false end end
- local n=c.value or 0
- return (c.op=='ge' and value>=n) or (c.op=='le' and value<=n) or (c.op=='eq' and value==n) or (c.op=='ne' and value~=n) or (c.op=='bits' and (math.floor(value)&math.floor(n))~=0)
-end
--- Check public fields before appraising; native rules require missing properties to exist.
-
-local function rule_match(rule,item,s,scan)
- if rule.enabled==false then return false end
- local wanted=string.lower(rule.name or '')
- if wanted~='' then
-  local name=string.lower(item.name or '');local mode=rule.name_mode or 'prefix'
-  if mode=='exact' and name~=wanted then return false end
-  if mode=='prefix' and name:sub(1,#wanted)~=wanted then return false end
-  if mode=='contains' and not name:contains(wanted) then return false end
- end
- if (rule.material or 0)~=0 and item.material~=rule.material then return false end
- if (rule.type or 0)~=0 and band(item.type,rule.type)==0 then return false end
- local missing=scan.missing or false
- for _,field in ipairs({'value','workmanship','burden','rating'}) do
-  local lo,hi=rule['min_'..field] or 0,rule['max_'..field] or 0
-  if lo>0 or hi>0 then
-   local value=item[field=='rating' and 'damage_rating' or field]
-   if value==nil then missing=true
-   elseif value<lo or (hi>0 and value>hi) then return false end
-  end
- end
- local conditions=rule.conditions or {}
- -- Conditions are ANDed. Reject on inexpensive public/numeric properties before
- -- scanning spell names, regardless of the editor's display order.
- for phase=scan.phase or 1,2 do
- for index=scan.condition or 1,#conditions do
-  local c=conditions[index];local expensive=c.field=='spells' or c.field=='string'
-  if expensive==(phase==2) then
-  if not workavailable() then scan.phase=phase;scan.condition=index;scan.missing=missing;return 'pending' end
-  local match=condition_match(conditions[index],item,s,scan)
-  if match=='pending' then scan.phase=phase;scan.condition=index;scan.missing=missing;return 'pending'
-  elseif match==false then return false elseif match==nil then missing=true end
-  end
- end
- scan.condition=nil
- end
- if missing then if item.identified then return false else return nil end end
- return true
-end
+local rule_match=lootmatch
 local function equipment_mana(s,p,inventory,option)
  if not activity_ready('item_mana') then return end
  if mana_fill_pending then
@@ -987,6 +884,23 @@ local function equipment_mana(s,p,inventory,option)
  end
 end
 
+local function pet_device(v)
+ local q=v.int_properties or {}
+ return v.pet_device or q['280']==213 or q['366']==54 or q['368']==54 or (q['362'] or 0)>0 or (q['266'] or 0)>0
+end
+local function pet_eligible(s,v)
+ local q=v.int_properties or {};local skills=s.skills or {}
+ if not v.identified or not v.usable or not pet_device(v) then return false end
+ if ((v.max_structure or 0)>0 or q['92']~=nil) and (v.structure or 0)<=0 then return false end
+ if (q['369'] or 0)>(s.level or 0) or ((q['362'] or 0)~=0 and q['362']~=(s.char_ints or {})['362']) then return false end
+ for _,requirement in ipairs({{'366',2},{'368',3}}) do
+  local id=q[requirement[1]] or 0
+  if id~=0 then local skill=skills[tostring(math.floor(id))] or {}
+   if (skill.training or 0)<requirement[2] or (skill.current or 0)<(q['367'] or 0) then return false end
+  end
+ end
+ return ((s.cooldowns or {})[tostring(math.floor(q['280'] or 0))] or 0)<=0
+end
 local function refill_pet(s,p,inventory,option,eligible)
  if not activity_ready('pets') then return end
  if pet_refill_pending then
@@ -1003,7 +917,7 @@ local function refill_pet(s,p,inventory,option,eligible)
   -- ACE's Encapsulated Spirit recipe explicitly uses WCID 49485.
   if v.wcid==49485 and v.usable and not v.equipped and v.resource_available~=false then spirit=spirit or v end
   local props=v.int_properties or {}
-  if eligible(v) and v.identified and props['280']==213 and (v.max_structure or 0)>0
+  if eligible(v) and v.identified and pet_device(v) and (v.max_structure or 0)>0
    and (v.structure or 0)<v.max_structure and (v.structure or 0)<=option('summon_refill_charges',5) then device=device or v end
  end
  if spirit and device then
@@ -1101,7 +1015,7 @@ local function tick(s,p)
    local key=tostring(last_cast.target)..':'..last_cast.category;until_time[key]=nil
    if confirmed then retries[key]=nil end
   end
-  if s.action_error==0x400 or (last_cast.recovery and (s.action_error or 0)~=0) then
+  if s.action_error==0x400 then
    if last_cast.request and other_job and other_job.id==last_cast.request then
     other_job.unavailable[last_cast.id]=s.time+120
    else
@@ -1459,29 +1373,33 @@ local function tick(s,p)
  if recovery_pending then
   local v=recovery_pending.vital;local value=v==2 and s.health or v==4 and s.stamina or s.mana
   local failed=s.action_serial~=recovery_pending.serial and (s.action_error or 0)~=0
+  local spell_done=recovery_pending.spell and s.action_serial~=recovery_pending.serial and s.last_spell==recovery_pending.spell
+  local confirmed=spell_done and s.last_spell_confirmed==true
+  if spell_done and s.last_spell_confirmed==false then failed=true end
   -- Vital replication and UseDone may arrive in either order. The authoritative
   -- vital increase is enough; do not accumulate failures across successful uses.
-  if not failed and value>recovery_pending.before then item_attempts['recover'..v]=0;recovery_pending=nil
+  -- A confirmed heal can be smaller than damage received in the same network
+  -- batch. Net HP is not a cast-success test, nor a reason to disable healing.
+  if not failed and (confirmed or value>recovery_pending.before) then recovery_pending=nil
   elseif not failed and s.time<recovery_pending.expires then return result(nil,'Waiting for recovery result')
   else
    -- A rejected or unconfirmed preferred method yields to the other kind.
    -- Otherwise a bad kit could consume all retries without ever trying a heal.
    if recovery_pending.spell then
-    unavailable_spells[recovery_pending.spell]=math.max(unavailable_spells[recovery_pending.spell] or 0,s.time+30)
-    until_time['recover_spell'..v]=s.time+15
+    -- Back off only this failed tier briefly; other heals/conversions remain
+    -- eligible immediately. Missing components retain the explicit longer ban.
+    unavailable_spells[recovery_pending.spell]=math.max(unavailable_spells[recovery_pending.spell] or 0,s.time+1)
     catalog_snapshot=nil;by_id,spells=index_spells(s,option('skill_margin',30))
    elseif recovery_pending.item then until_time['recover_supply'..v]=s.time+15 end
-   if recovery_pending.handler then until_time[recovery_pending.handler]=s.time+15 end
+   if recovery_pending.handler and not recovery_pending.spell then until_time[recovery_pending.handler]=s.time+15 end
    recovery_pending=nil
   end
  end
  local recovery_missing={}
  local function recovery(vital,percent,threshold)
   if not activity_ready('recovery'..vital) then return end
-  if percent>=threshold then item_attempts['recover'..vital]=0;return end
-  if (item_attempts['recover'..vital] or 0)>=3 then return failed('Recovery failed repeatedly; check supplies, skill and components') end
+  if percent>=threshold then return end
   local function pending(handler)
-   item_attempts['recover'..vital]=(item_attempts['recover'..vital] or 0)+1
    recovery_pending={vital=vital,before=vital==2 and s.health or vital==4 and s.stamina or s.mana,expires=s.time+8,serial=s.action_serial,handler=handler}
   end
   local function can_prepare_spell()
@@ -1545,6 +1463,26 @@ local function tick(s,p)
   local function use_supply(best,handler)
    if best.healing_kit and option('kit_peace',false) and s.combat_mode~=1 then return {action='combat_mode',mode=1,status='Entering peace to use healing kit'} end
    pending(handler);recovery_pending.item=best.id;return {action='use_item',item=best.id,status='Recovering with '..best.name}
+  end
+  -- Health emergencies may spend stamina below its normal recovery reserve.
+  -- Choose the lowest eligible transfer tier that reaches the health threshold;
+  -- otherwise prefer the largest gain. Never override an imported handler order
+  -- or an explicit preference for supplies.
+  if vital==2 and percent<option('emergency_health_threshold',35) and (s.stamina or 0)>10
+   and not (p.recharge_handlers and option('use_imported_recovery_order',true))
+   and not option('recovery_supplies_first',false) and can_prepare_spell() then
+   local regular,conversion,gain=0,nil,0
+   local needed=math.max(1,math.ceil((s.max_health or 0)*threshold/100-(s.health or 0)))
+   for _,v in ipairs(spells) do
+    local destination,from=recovery_spell(v)
+    if destination==2 and from==0 then regular=math.max(regular,health_gain(v)) end
+    if destination==2 and from==4 then
+     local amount=health_gain(v,s.stamina)
+     if not conversion or (amount>=needed and gain<needed) or (amount>=needed and gain>=needed and v.power<conversion.power)
+      or (amount<needed and gain<needed and amount>gain) then conversion=v;gain=amount end
+    end
+   end
+   if conversion and gain>math.min(needed,regular) then return recover_cast(conversion) end
   end
   if p.recharge_handlers and option('use_imported_recovery_order',true) then
    local stance=s.combat_mode==8 and 1 or 2;local last
@@ -1831,18 +1769,16 @@ local function tick(s,p)
  else other_job=nil end
  local combat=activity_ready('combat') and option('combat','off') or 'off'
  if combat~='off' and not option('manual_combat',false) then combat='auto' end
- local pet_cooldown=(s.cooldowns or {})['213'] or 0
  activity='pets'
  local refill=refill_pet(s,p,inventory,option,weapon_allowed);if refill then return refill end
  if pet_pending then
-  if s.owned_pet or pet_cooldown>0 then pet_pending=nil
+  local cooldown=((s.cooldowns or {})[tostring(math.floor(pet_pending.cooldown))] or 0)>0
+  if s.owned_pet or cooldown then pet_pending=nil
   elseif ((s.action_serial or 0)~=pet_pending.serial and (s.action_error or 0)~=0) or s.time>pet_pending.deadline then
-   return failed('Pet summon was not confirmed; check charges and requirements')
-  else return result(nil,'Waiting for summoned pet or server cooldown') end
+   until_time['pet'..pet_pending.item]=s.time+30;pet_pending=nil
+  end -- Continue combat/recovery while waiting; do not submit another summon.
  end
- if activity_ready('pets') and not pet_refill_pending and combat~='off' and option('summon_pets',false) and not s.owned_pet and pet_cooldown<=0 then
-  local skill=(s.skills or {})['54'] or {}
-  if (skill.training or 0)>=2 then
+ if activity_ready('pets') and not pet_pending and not pet_refill_pending and combat~='off' and option('summon_pets',false) and not s.owned_pet then
    local pet_target,pet_rule,count=nil,nil,0
    local range=option('pet_range_mode',0)==1 and option('pet_range',5) or option('radius',30)
    for _,t in ipairs(s.targets or {}) do
@@ -1868,12 +1804,8 @@ local function tick(s,p)
     for _,v in ipairs(inventory) do local props=v.int_properties or {}
      -- VT's equipment list explicitly opts devices in. A native profile can
      -- instead select device classes through its equipment picker.
-     local selected=weapon_ids[v.id] or weapon_types[v.wcid]
-     local required_skill=(s.skills or {})[tostring(props['366'] or 54)] or skill
-     if selected and v.identified and v.usable and props['280']==213 and (v.structure or 0)>0
-      and (props['369'] or 0)<=(s.level or 0) and (props['367'] or 0)<=(required_skill.current or 0)
-      and ((props['368'] or 0)==0 or (((s.skills or {})[tostring(props['368'])] or {}).training or 0)>=3)
-      and ((props['362'] or 0)==0 or props['362']==(s.char_ints or {})['362']) then
+     local selected=weapon_ids[v.id] or weapon_types[v.wcid] or (#(p.weapons or {})==0 and #(p.weapon_items or {})==0)
+     if selected and pet_eligible(s,v) and s.time>=(until_time['pet'..v.id] or 0) then
       local damage=({[1]=4,[32]=8,[64]=64,[128]=16,[256]=32})[v.icon_effects] or 4
       local rank=resistance(pet_target,damage)
       if damage==preferred then rank=rank+1000000
@@ -1885,11 +1817,10 @@ local function tick(s,p)
     if best then
      -- Summoning devices can be used while armed. Keep the current stance;
      -- dropping to peace here unnecessarily removes combat defenses.
-     pet_pending={serial=s.action_serial or 0,deadline=s.time+15}
+     pet_pending={item=best.id,cooldown=(best.int_properties or {})['280'] or 0,serial=s.action_serial or 0,deadline=s.time+15}
      return {action='use_item',item=best.id,status='Summoning with '..best.name}
     end
    end
-  end
  end
  if combat=='off' then debuff_pending=nil;debuff_scan=nil;if locked_target then locked_target=nil;return result('cancel_attack','Combat disabled') end end
  local function loot()
@@ -1932,7 +1863,7 @@ local function tick(s,p)
     if s.container~=loot_pending.container then corpses[loot_pending.container]=s.time+30 end
     loot_pending=nil
    end
- if option('looting',false) and (#(p.loot_rules or {})>0 or option('read_unknown_scrolls',false)) then
+ if not loot_full and option('looting',false) and (#(p.loot_rules or {})>0 or option('read_unknown_scrolls',false)) then
   if s.container and s.container~=0 then
    if s.container_is_corpse==false then return result(nil,'Waiting for the open container to close') end
    if s.contents_ready==false then return result(nil,'Waiting for corpse item descriptions') end
@@ -2077,7 +2008,7 @@ local function tick(s,p)
   end
   end
  else inventory_salvage_scan={} end
- if option('looting',false) and (#(p.loot_rules or {})>0 or option('read_unknown_scrolls',false)) then
+ if not loot_full and option('looting',false) and (#(p.loot_rules or {})>0 or option('read_unknown_scrolls',false)) then
   for _,c in ipairs(s.corpses or {}) do if c.line_of_sight~=false and c.distance<=option('loot_range',15) and s.time>=(corpses[c.id] or 0) then
    if (c.ownership_available or option('loot_only_rare',false)) and not c.identified then return assess(c) end
    local permitted=true
@@ -2303,7 +2234,7 @@ local function tick(s,p)
  else debuff_scan=nil end
  if target and combat~='off' then
   locked_target=target.id
-  if not target.identified and s.targets and s.time>=(until_time['id'..target.id] or 0) then
+  if not target.identified and not target.appraisal_recent and s.targets and s.time>=(until_time['id'..target.id] or 0) then
    until_time['id'..target.id]=s.time+30;return {action='identify',item=target.id,status='Assessing '..target.name} end
   local plan=combat_plan(target,target_rule)
   local attack,weapon,mode,damage_override=plan.attack,plan.weapon,plan.mode,plan.damage
@@ -2463,7 +2394,7 @@ local function tick(s,p)
   local names={};for _,v in ipairs(recovery_missing) do names[#names+1]=v==2 and 'health' or v==4 and 'stamina' or 'mana' end
   return result(nil,'Recovery unavailable for '..table.concat(names,', ')..'; check skill buffer, components, supplies and imported handlers')
  end
- return result(nil,navigation_paused or (route_pending and (route_pending.kind=='pause' and 'Pausing on route' or 'Waiting for route action')) or (health_critical and 'Health critical; recovery unavailable, UCM remains active') or 'Ready - waiting for enabled activities')
+ return result(nil,navigation_paused or (route_pending and (route_pending.kind=='pause' and 'Pausing on route' or 'Waiting for route action')) or (health_critical and 'Health critical; recovery unavailable, UCM remains active') or (loot_full and 'Looting paused: inventory full; other activities remain active') or 'Ready - waiting for enabled activities')
 end
 
 local function pause_activity(s,name,reason)
@@ -2488,7 +2419,7 @@ local function pause_activity(s,name,reason)
  elseif name=='buffs' then buff_item_pending=nil
  elseif name=='buff_others' then other_job=nil
  elseif name=='combat' then locked_target=nil;debuff_pending=nil;debuff_scan=nil
- elseif name:sub(1,8)=='recovery' then recovery_pending=nil;item_attempts['recover'..name:sub(9)]=0
+ elseif name:sub(1,8)=='recovery' then recovery_pending=nil
  elseif name=='meta' then
   meta.pending=nil;meta.queue={};meta.turn=nil;meta.options={}
   meta.forcebuff=false;if forced_buff and forced_buff.request==0 then forced_buff=nil end
@@ -2507,8 +2438,16 @@ end
 local function run(s,p)
  if p.ucm_activity_failure then
   local failure=p.ucm_activity_failure
+  if failure.inventory_full and failure.activity=='loot' then
+   loot_full={revision=s.inventory_revision or 0,slots=s.pack_slots or 0}
+   -- No transfer was sent. Preserve already received salvage/sell jobs, which
+   -- can free space, and leave combat, recovery, buffs and navigation running.
+   loot_pending=nil;corpse_pending=nil;loot_scan={}
+   return result(nil,'Looting paused: inventory full; other activities remain active')
+  end
   return pause_activity(s,failure.activity,failure.status)
  end
+ if loot_full and (loot_full.revision~=(s.inventory_revision or 0) or (s.pack_slots or 0)>loot_full.slots) then loot_full=nil end
  -- The host switches navigation off when it receives pause_navigation. Only
  -- re-enabling that shared switch can resume; state/meta overrides cannot.
  if navigation_paused and p.navigation then
@@ -2662,7 +2601,7 @@ return function(s,p)
   route_trail={};route_returning=false;route_walking=false
   meta.pending=nil;meta.queue={};meta.forcebuff=false
   if meta.route then meta.route_changed=true end
-  route_pending=nil;loot_pending=nil;recovery_pending=nil;buff_item_pending=nil
+  route_pending=nil;loot_pending=nil;loot_full=nil;recovery_pending=nil;buff_item_pending=nil
   corpse_pending=nil;purchase_pending=nil;note_pending=nil;mana_refill_pending=nil;mana_fill_pending=nil;pet_refill_pending=nil;helper_pending=nil;debuff_pending=nil;debuff_scan=nil;pea_pending=nil;pet_pending=nil;dispel_pending=nil
   last_cast=nil;unavailable_spells={};forced_buff=nil;buff_skips={};other_job=nil
   loot_scan={};loot_jobs={};loot_job_pending=nil;combine_pending=nil;inventory_salvage_scan={};inventory_salvage_blocked={}

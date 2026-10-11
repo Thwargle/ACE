@@ -1007,10 +1007,18 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			auto* Alert=VR->WorldNotices.FindByPredicate([](const auto& N){return N.Kind==3;});
 			TestTrue(TEXT("Yellow server warning appears outside the closed retail UI"),Alert && Alert->Panel->IsVisible() && Alert->Text==TEXT("You are too busy!"));
 			if(Alert) TestTrue(TEXT("Warning remains below personal menus and cannot intercept clicks"),Alert->Panel->TranslucencySortPriority<VR->SettingsPanel->TranslucencySortPriority && Alert->Panel->GetCollisionEnabled()==ECollisionEnabled::NoCollision);
+			VR->CombatMessage(TEXT("Your skill is too low."), TEXT(""), ACEChatMessageType::ChatError);
+			TestTrue(TEXT("Retail wield failure also reaches the headset notice area"), VR->WorldNotices.ContainsByPredicate([](const auto& N)
+				{return N.Kind == 3 && N.Panel->IsVisible() && N.Text.Contains(TEXT("Your skill is too low."));}));
 			VR->bInventoryOpen=true;
 			for(auto& N:VR->WorldNotices) N.Panel->DestroyComponent(); VR->WorldNotices.Empty();
 			Actor->Destroy(); VR->Client->Session->WorldObjects.Remove(NPC.Guid);
 		}
+		VR->bInventoryOpen=false; VR->bUseDesktopMenu=false;
+		VR->Client->OnSpellLearned.Broadcast(2);
+		TestTrue(TEXT("Learning a spell reveals the retail spellbook in VR"),VR->bInventoryOpen && VR->bUseDesktopMenu
+			&& Gameplay->ActivePanelPage==TEXT("SpellManagementPanel_Field") && Gameplay->ActiveSpellPanelTab==TEXT("SpellbookPage"));
+		TestTrue(TEXT("VR learned spell is selected and visible"),Gameplay->SelectedSpellbookId==2 && Gameplay->SpellbookRowIds.Contains(2));
 		Gameplay->ShowPanelPage(TEXT("SpellManagementPanel_Field")); Gameplay->HandleNamedClick(TEXT("SpellbookTab"));
 		Gameplay->TickRefresh(); PaintRetail();
 		for (int32 TabIndex=1;TabIndex<=8;++TabIndex)

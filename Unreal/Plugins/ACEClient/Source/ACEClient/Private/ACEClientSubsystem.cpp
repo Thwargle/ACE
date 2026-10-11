@@ -21,7 +21,7 @@
 void UACEClientSubsystem::ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type)
 {
 	// Transient notices should not reappear after changing the HUD.
-	if (Type != ACEChatMessageType::TransientInfo)
+	if (!ACEChatMessageType::IsTransientNotice(Type))
 	{
 		if (ChatHistory.Num() >= 256) ChatHistory.RemoveAt(0);
 		ChatHistory.Add({Text.Left(16384), Sender.Left(256), Type});
@@ -199,6 +199,10 @@ void UACEClientSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	{
 		OnEnchantmentsChanged.Broadcast();
 	});
+	Session->OnSpellLearned.AddLambda([this](int32 SpellId)
+	{
+		OnSpellLearned.Broadcast(SpellId);
+	});
 	Session->OnLinkStatusChanged.AddLambda([this](const FACELinkStatus& Status)
 	{
 		OnLinkStatusChanged.Broadcast(Status);
@@ -308,11 +312,18 @@ bool UACEClientSubsystem::IsOwnedInventoryItem(const FACEWorldObject& Object) co
 
 int32 UACEClientSubsystem::ResolvePickupContainer(int32 ItemGuid, int32 OpenPackGuid, int32 Amount) const
 {
+	const int32 Container = FindPickupContainer(ItemGuid, OpenPackGuid, Amount);
+	// Manual pickup retains the server's authoritative error message.
+	return Container ? Container : GetPlayerGuid();
+}
+
+int32 UACEClientSubsystem::FindPickupContainer(int32 ItemGuid, int32 OpenPackGuid, int32 Amount) const
+{
 	const int32 Self = GetPlayerGuid();
 	if (!Session || !Self) return 0;
 	const auto& Objects = Session->GetWorldObjects();
 	const auto* Item = Objects.Find(ItemGuid);
-	if (!Item) return Self;
+	if (!Item) return 0;
 	Amount = Amount > 0 ? FMath::Min(Amount, FMath::Max(1, Item->StackSize)) : FMath::Max(1, Item->StackSize);
 	const auto Offered = GetTradeSelfItems();
 	const auto OtherOffers = GetTradePartnerItems();
@@ -344,6 +355,13 @@ int32 UACEClientSubsystem::ResolvePickupContainer(int32 ItemGuid, int32 OpenPack
 			&& ACEInventoryRules::MergeAmount(*Item, Other) >= Amount)
 			MergeContainers.Add(Other.ContainerId);
 	}
+	// ViewContents can arrive before ObjectCreate for an unopened side pack.
+	// Those entries already occupy slots even though their descriptions are pending.
+	for (int32 Container : Containers)
+		if (const auto* Contents = Session->GetContainerContents(Container))
+			for (const auto& Ref : *Contents)
+				if (!Objects.Contains(Ref.ItemGuid) && (Ref.ContainerType != 0) == bPackItem)
+					++Counts.FindOrAdd(Container);
 	// ItemHolder::AttemptToPlaceInContainer auto-merges across owned packs before
 	// looking for a free slot. This also permits pickup into an otherwise full bag.
 	for (int32 Container : Containers)
@@ -359,8 +377,7 @@ int32 UACEClientSubsystem::ResolvePickupContainer(int32 ItemGuid, int32 OpenPack
 	if (HasRoom(Preferred)) return Preferred;
 	for (int32 Container : Containers)
 		if (HasRoom(Container)) return Container;
-	// Let the server report the authoritative capacity error if no pack fits.
-	return Self;
+	return 0;
 }
 
 bool UACEClientSubsystem::SortInventoryItem(int32 Guid)
@@ -567,6 +584,11 @@ void UACEClientSubsystem::SelectObject(int32 ObjectGuid)
 	{
 		Session->SelectObject(ObjectGuid);
 	}
+}
+
+void UACEClientSubsystem::SelectInventoryObject(int32 ObjectGuid)
+{
+	if (Session) Session->SelectObject(ObjectGuid, true);
 }
 
 void UACEClientSubsystem::SendSetInscription(int32 ObjectGuid, const FString& Text)
@@ -1374,6 +1396,11 @@ FACESelectedObject UACEClientSubsystem::GetSelectedObject() const
 int32 UACEClientSubsystem::GetPreviousSelectedObjectGuid() const
 {
 	return Session ? Session->GetPreviousSelectedObjectGuid() : 0;
+}
+
+int32 UACEClientSubsystem::GetGiveRecipientGuid() const
+{
+	return Session ? Session->GetGiveRecipientGuid() : 0;
 }
 
 void UACEClientSubsystem::NotifyExitedPortalSpace()

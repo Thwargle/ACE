@@ -4,6 +4,34 @@
 
 namespace ACERetailChat
 {
+    // ChatInterface::BuildChatColorLookupTable and retail global_vars.h.
+    // UIElement_Text uses RGBAColor::GetColor32 (truncation to display bytes).
+    // Retail D3D disables sRGB writes; Slate expects a linear tint and gamma
+    // encodes its output. Decode the retail display color once to avoid pastel
+    // reds/greens and almost-white global chat in Unreal.
+    inline FLinearColor Color(int32 Type)
+    {
+        auto Display=[](float R,float G,float B)
+        { return FLinearColor(FColor(uint8(R*255.f),uint8(G*255.f),uint8(B*255.f))); };
+        switch (Type)
+        {
+        case 2: return Display(1.f,1.f,1.f);
+        case 3: case 10: case 19: case 31: return Display(1.f,1.f,.247f);
+        case 4: case 11: return Display(.824f,.824f,.392f);
+        case 5: return Display(1.f,.498f,1.f);
+        case 6: case 15: case 21: return Display(1.f,.247f,.247f);
+        case 7: case 17: return Display(.247f,.749f,1.f);
+        case 8: case 9: return Display(1.f,.588f,.588f);
+        case 12: return Display(.824f,.824f,.784f);
+        case 13: return Display(.247f,.863f,.863f);
+        case 14: case 27: case 28: case 29: case 30: case 32:
+            return Display(.706f,.863f,.941f);
+        case 18: case 33: return Display(.933f,.573f,.118f);
+        case 22: return Display(.96f,.459f,.447f);
+        case 26: return Display(1.f,0.f,0.f);
+        default: return Display(.5f,1.f,.498f);
+        }
+    }
     // gmChatOptionsUI::InitOptions / AddCheckboxBitfield64Option.
     inline constexpr uint64 MainWindowDefault = 0xFBFFFFFFull;
     inline constexpr uint64 FloatyDefaults[] = {4124ull, 265216ull, 0x80000ull, 2013265920ull};

@@ -1,6 +1,8 @@
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEVTProfile.h"
+#include "Mods/ACEUCMProfiles.h"
 #include "ACEUCMLootPresentation.h"
+#include "ACEPetDevice.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "UI/ACEUIResourceResolver.h"
@@ -102,6 +104,47 @@ namespace ACEUCMPanelPrivate
         {Add(Text(Title,20));if(!Description.IsEmpty())Add(Text(Description,15,Muted));}
         TSharedRef<SWidget> Tile(TSharedRef<SWidget> W)
         {return SNew(SBorder).BorderImage(White()).BorderBackgroundColor(Card).Padding(8)[W];}
+        TMap<FString,FString> SectionCopyNames;
+        void SectionSelector(const FString& Section, bool Full = false)
+        {
+            Add(SNew(SComboButton).ButtonStyle(&Style()).ContentPadding(8)
+                .ButtonContent()[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).ColorAndOpacity(Accent)
+                    .Text_Lambda([this,Section](){const FString Name=Host->UCMSectionName(Section);
+                        return FText::FromString(Section+TEXT(": ")+(Name.IsEmpty()?TEXT("Unsaved"):Name));})]
+                .OnGetMenuContent_Lambda([this,Section]()->TSharedRef<SWidget>{
+                    auto List=SNew(SVerticalBox);
+                    for(const auto& Name:Host->UCMSectionProfiles(Section))List->AddSlot().AutoHeight()[Button(Name,[this,Section,Name](){
+                        if(!CanLeaveLootRule())return;
+                        if(Host->SelectUCMSection(Section,Name)){LootDraft.Reset();ConditionDraft.Reset();StateIndex=0;ExpandedMonster=INDEX_NONE;}
+                        FSlateApplication::Get().DismissAllMenus();Rebuild();})];
+                    if(List->NumSlots()==0)List->AddSlot().AutoHeight()[Text(TEXT("No saved profiles yet. Save a copy in Profiles."),14,Muted)];
+                    return SNew(SBox).MaxDesiredHeight(240).MinDesiredWidth(280)[SNew(SScrollBox)+SScrollBox::Slot()[List]];
+                }));
+            if(!Full)return;
+            auto Row=SNew(SHorizontalBox);
+            Row->AddSlot().FillWidth(1)[SNew(SEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",16))
+                .Text(FText::FromString(SectionCopyNames.FindRef(Section))).HintText(FText::FromString(TEXT("New profile name")))
+                .OnTextChanged_Lambda([this,Section](const FText& Text){SectionCopyNames.Add(Section,Text.ToString());})];
+            Row->AddSlot().AutoWidth().Padding(6,0)[Button(TEXT("Save copy"),[this,Section](){
+                if(!CanLeaveLootRule())return;
+                if(Host->SaveUCMSectionAs(Section,SectionCopyNames.FindRef(Section))){LootDraft.Reset();ConditionDraft.Reset();}Rebuild();})];Add(Row);
+            Add(Text(TEXT("Saved/ClientPlugins/Profiles/")+Section+TEXT(". Changes affect every setup linked to this file."),13,Muted));
+        }
+        void LinkedProfilesPanel()
+        {
+            Heading(TEXT("Run setup"),TEXT("A setup links reusable files. Character contains combat, buffs, summons and recovery. Activity on/off switches belong to this setup. Changes save to the active linked file; use Save copy before making a variation."));
+            Add(SAssignNew(ProfileName,SEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text(FText::FromString(Plugin->ProfileName)));
+            Add(Button(TEXT("Save setup as"),[this](){if(!CanLeaveLootRule())return;Host->SaveProfile(Plugin->Id,ProfileName->GetText().ToString(),Host->ProfileJson(Plugin->Id));Rebuild();}));
+            Add(SNew(SComboButton).ButtonStyle(&Style()).ContentPadding(8).ButtonContent()[Text(TEXT("Load setup"),16)]
+                .OnGetMenuContent_Lambda([this]()->TSharedRef<SWidget>{auto List=SNew(SVerticalBox);
+                    for(const auto& Name:Host->UCMSectionProfiles(TEXT("ucm")))List->AddSlot().AutoHeight()[Button(Name,[this,Name](){
+                        if(!CanLeaveLootRule())return;if(Host->LoadProfile(Plugin->Id,Name)){LootDraft.Reset();ConditionDraft.Reset();StateIndex=0;ExpandedMonster=INDEX_NONE;}
+                        FSlateApplication::Get().DismissAllMenus();Rebuild();})];
+                    return SNew(SBox).MaxDesiredHeight(220)[SNew(SScrollBox)+SScrollBox::Slot()[List]];}));
+            Add(Button(TEXT("Reload linked profiles"),[this](){if(!CanLeaveLootRule())return;
+                if(Host->LoadProfile(Plugin->Id,Plugin->ProfileName)){LootDraft.Reset();ConditionDraft.Reset();StateIndex=0;ExpandedMonster=INDEX_NONE;}Rebuild();}));
+            for(const auto& Section:ACEUCMProfiles::Sections())SectionSelector(Section,true);
+        }
         TSharedRef<SWidget> Header()
         {
             if(EditorOnly)return SNew(SVerticalBox)
@@ -229,7 +272,7 @@ namespace ACEUCMPanelPrivate
             {
                 if(!Host->IsOwnedPluginItem(O)||(Consumables&&Seen.Contains(O.WeenieClassId)))continue;
                 const auto* A=Host->GetPluginAppraisals().Find(O.Guid);
-                const bool Pet=A&&A->bSuccess&&A->IntProperties.FindRef(280)==213;
+                const bool Pet=ACEPetDevice::IsSummoningDevice(A);
                 const bool Weapon=Pet||((O.ItemType&(ACEItemType::MeleeWeapon|ACEItemType::MissileWeapon|ACEItemType::Caster))!=0 && !(O.ValidLocations&0x800000))||((O.ItemType&ACEItemType::Armor)&&(O.ValidLocations&0x200000));
                 if(Consumables?Weapon||!ACEInventoryRulesUsable(O):!Weapon)continue;
                 Seen.Add(O.WeenieClassId);
@@ -395,7 +438,7 @@ namespace ACEUCMPanelPrivate
                 Add(SNew(SCheckBox)
                     .IsChecked_Lambda([this](){return Host->IsPluginBarVisible()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                     .OnCheckStateChanged_Lambda([this](ECheckBoxState State){Host->SetPluginBarVisible(State==ECheckBoxState::Checked);})
-                    .ToolTipText(FText::FromString(TEXT("Hide or show the plugin bar. Plugins keep running. Open Settings > Game Play > Plugins / UCM to restore it. This preference applies to every profile.")))
+                    .ToolTipText(FText::FromString(TEXT("Hide or show the plugin bar. Plugins keep running. Open Settings > Game Play > Manage Plugins to restore it. This preference applies to every profile.")))
                     [SNew(SBox).MinDesiredHeight(32).VAlign(VAlign_Center).Padding(8,0)[Text(TEXT("Show plugin bar"),16)]]);
                 if(!Plugin->Enabled)Add(Button(TEXT("Enable UCM capabilities"),[this](){Host->SetEnabled(Plugin->Id,true);Rebuild();}));
                 Add(Toggle(TEXT("suspend_world_rendering"),TEXT("Suspend 3D view while UCM runs"),TEXT("Desktop only. Keeps this interface, UCM and networking active while the world view is black. Turn this off or stop UCM to restore the view. Does not apply in VR.")));
@@ -419,6 +462,7 @@ namespace ACEUCMPanelPrivate
             }
             else if(Page==TEXT("Buffs"))
             {
+                SectionSelector(TEXT("Character"));
                 Heading(TEXT("Automatic buffing"),TEXT("Uses your highest usable sustained buffs for attributes, trained skills, protections and equipment."));
                 Add(Toggle(TEXT("buffing"),TEXT("Buff"),TEXT("Maintains buffs while UCM is running."),true));
                 ForceBuffControls();
@@ -453,6 +497,7 @@ namespace ACEUCMPanelPrivate
             else if(Page==TEXT("Vendors")){VendorPanel();}
             else if(Page==TEXT("Buff others"))
             {
+                SectionSelector(TEXT("Character"));
                 Heading(TEXT("Buff requests by tell"),TEXT("Players can request role-based buffs by tell while UCM and Buff are running."));
                 Add(Toggle(TEXT("buff_others"),TEXT("Accept buff requests"),TEXT("One request per player, up to eight queued. Your recovery and self buffs take priority.")));
                 Slider(TEXT("buff_other_range"),TEXT("Requester distance"),3,30,20,Accent,TEXT(" m"));
@@ -484,6 +529,7 @@ namespace ACEUCMPanelPrivate
             }
             else if(Page==TEXT("Combat"))
             {
+                SectionSelector(TEXT("Character"));
                 Heading(TEXT("Targeting & equipment"),TEXT("Auto ranks usable equipment and known attack spells against assessed resistances. Unknown resistances use neutral values; choose an element override when needed."));
                 Add(CombatToggle());
                 Heading(TEXT("Melee hands"),TEXT("Choose a default main hand and offhand. Monster rules can override these choices. Left-hand Tether reserves a weapon for the offhand; two-handed weapons cannot use a second weapon."));
@@ -535,6 +581,7 @@ namespace ACEUCMPanelPrivate
             }
             else if(Page==TEXT("Recovery"))
             {
+                SectionSelector(TEXT("Character"));
                 Add(Toggle(TEXT("mana_charges_when_off"),TEXT("Recharge equipment while UCM is stopped"),TEXT("Uses configured mana supplies only; does not start combat, buffs or navigation.")));
                 Heading(TEXT("Spell components"),TEXT("Imported pea recipes travel with the saved setup. Keep a Splitting Tool and the requested peas in inventory."));
                 Add(Toggle(TEXT("split_peas"),TEXT("Split component peas"),TEXT("Uses imported All Peas or named component choices and waits for inventory confirmation."),true));
@@ -564,6 +611,8 @@ namespace ACEUCMPanelPrivate
                             :TEXT("Spells first, then kits/consumables if unavailable or unsuccessful."));
                     }));
                 Slider(TEXT("health_threshold"),TEXT("Health"),1,95,65,FLinearColor(.95f,.25f,.3f));
+                Slider(TEXT("emergency_health_threshold"),TEXT("Emergency stamina-to-health below"),0,75,35,FLinearColor(.95f,.25f,.3f));
+                Add(Text(TEXT("Below this health percentage, prefer a stamina-to-health spell when it restores more than a regular heal. Uses the lowest sufficient tier. Zero disables; imported recovery order and supplies-first still take precedence."),12,Muted));
                 Slider(TEXT("stamina_threshold"),TEXT("Stamina"),1,95,50,FLinearColor(.95f,.7f,.15f));
                 Slider(TEXT("mana_threshold"),TEXT("Mana"),1,95,45,FLinearColor(.2f,.55f,1));
                 Slider(TEXT("kit_min_success"),TEXT("Minimum kit success chance"),0,100,0,Accent);
@@ -584,6 +633,7 @@ namespace ACEUCMPanelPrivate
             }
             else if(Page==TEXT("Route"))
             {
+                SectionSelector(TEXT("Routes"));
                 LibrarySelector(TEXT("nav"),TEXT("Navigation route"));
                 Heading(TEXT("Route editor"),TEXT("Record close points along a walkable path. Blue lines show the route in the world; amber points mark jumps. Record the next point after arriving through a portal."));
                 Add(Toggle(TEXT("navigation"),TEXT("Follow route"),TEXT("Start joins the nearest waypoint, then follows the route in order. Route edits stop the current run.")));
@@ -620,10 +670,12 @@ namespace ACEUCMPanelPrivate
             }
             else if(Page==TEXT("Loot"))
             {
+                SectionSelector(TEXT("Loot"));
                 LootPanel();
             }
             else if(Page==TEXT("Rules"))
             {
+                SectionSelector(TEXT("Monsters"));
                 Heading(TEXT("Monster rules"),TEXT("First matching name prefix wins. Higher priority targets are chosen first. Set an element when a server does not expose resistances."));
                 Add(SAssignNew(MonsterName,SEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).HintText(FText::FromString(TEXT("Monster name begins with…"))));
                 Add(Text(TEXT("Priority")));Add(SNew(SSpinBox<double>).MinValue(-100).MaxValue(100).Value(MonsterPriority).OnValueChanged_Lambda([this](double V){MonsterPriority=V;}));
@@ -645,6 +697,7 @@ namespace ACEUCMPanelPrivate
             }
             else if(Page==TEXT("Metas"))
             {
+                SectionSelector(TEXT("Metas"));
                 LibrarySelector(TEXT("met"),TEXT("Meta program"));
                 const TArray<TSharedPtr<FJsonValue>>* ImportedRules=nullptr;
                 if(P()->TryGetArrayField(TEXT("vt_meta"),ImportedRules))
@@ -698,12 +751,8 @@ namespace ACEUCMPanelPrivate
             else if(Page==TEXT("Legacy loot"))LegacyLootPanel();
             else
             {
-                LibraryPanel();
-                Heading(TEXT("Saved UCM setups"),TEXT("Save named setups for different characters or hunts. Advanced JSON exposes exclusions, monster ignores and state transitions."));
-                Add(SAssignNew(ProfileName,SEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text(FText::FromString(Plugin->ProfileName)));
-                Add(Button(TEXT("Save profile as"),[this](){Host->SaveProfile(Plugin->Id,ProfileName->GetText().ToString(),Host->ProfileJson(Plugin->Id));Rebuild();}));
-                TArray<FString> Files;IFileManager::Get().FindFiles(Files,*(Host->UserDirectory()/TEXT("Profiles/ucm/*.json")),true,false);Files.Sort();
-                for(auto File:Files){const FString Name=FPaths::GetBaseFilename(File);Add(Button(TEXT("Load ")+Name,[this,Name](){Host->LoadProfile(Plugin->Id,Name);LootDraft.Reset();Rebuild();}));}
+                LinkedProfilesPanel();
+                Add(Button(TEXT("Browse Virindi files"),[this](){Page=TEXT("Files");Rebuild();}));
                 Add(Button(TEXT("Advanced import / compatibility report"),[this](){Page=TEXT("Import tools");Rebuild();}));
                 Add(Button(ShowAdvancedProfile?TEXT("Hide advanced JSON"):TEXT("Edit advanced JSON"),[this](){ShowAdvancedProfile=!ShowAdvancedProfile;Rebuild();}));
                 if(!ShowAdvancedProfile)return;

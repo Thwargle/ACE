@@ -23,6 +23,8 @@
 #include "Slate/WidgetRenderer.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "Widgets/Input/SButton.h"
+#include "Widgets/Text/STextBlock.h"
 #include "ImageUtils.h"
 #include "RenderingThread.h"
 #include "Engine/GameViewportClient.h"
@@ -236,6 +238,7 @@ bool FACEPluginHostTest::RunTest(const FString&)
     P->Profile->SetArrayField(TEXT("vendor_rules"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"server":"Test","vendor_name":"Arcanist","vendor_wcid":2,"item_name":"Scarab","item_wcid":3,"quantity":100})")))});
     TestTrue(TEXT("Loot-only profile saved"),H->SaveLootProfile(TEXT("Copper_W7")));
     TestFalse(TEXT("Loot profile path traversal rejected"),H->SaveLootProfile(TEXT("../escape")));
+    TestTrue(TEXT("Separate loot variation created before editing"),H->SaveUCMSectionAs(TEXT("Loot"),TEXT("EmptyLoot")));
     TestTrue(TEXT("Other hunt saved"),H->SaveProfile(TEXT("ucm"),TEXT("Mage"),TEXT("{\"skill_margin\":45,\"loot_rules\":[]}")));
     P->Profile->SetStringField(TEXT("utl_source"),TEXT("Previous.utl"));P->Profile->SetBoolField(TEXT("loot_modified"),true);
     TestTrue(TEXT("Loot-only profile loads"),H->LoadLootProfile(TEXT("Copper_W7")));
@@ -243,7 +246,7 @@ bool FACEPluginHostTest::RunTest(const FString&)
     TestFalse(TEXT("Loading native rules clears previous UTL label"),P->Profile->HasField(TEXT("utl_source")));
     TestFalse(TEXT("Loaded rules are not labeled as local edits"),P->Profile->HasField(TEXT("loot_modified")));
     TestEqual(TEXT("Loot profile leaves unrelated settings alone"),P->Profile->GetNumberField(TEXT("skill_margin")),45.);
-    TestEqual(TEXT("Saved vendor supplies restored"),P->Profile->GetArrayField(TEXT("vendor_rules"))[0]->AsObject()->GetNumberField(TEXT("quantity")),100.);
+    TestFalse(TEXT("Selecting loot does not restore vendor settings from a different configuration"),P->Profile->HasField(TEXT("vendor_rules")));
     TestEqual(TEXT("Saved rules restored"),P->Profile->GetArrayField(TEXT("loot_rules")).Num(),1);
     TestFalse(TEXT("Missing loot profile rejected"),H->LoadLootProfile(TEXT("Missing")));
     TestEqual(TEXT("Failed load preserves active rules"),P->Profile->GetArrayField(TEXT("loot_rules")).Num(),1);
@@ -254,6 +257,7 @@ bool FACEPluginHostTest::RunTest(const FString&)
     const FString PreviousProfile=H->ProfileJson(TEXT("ucm"));
     TestTrue(TEXT("Salvage policy saves"),H->SaveProfile(TEXT("ucm"),TEXT("Mage"),TEXT(R"({"skill_margin":45,"loot_rules":[],"salvage_policy":{"default":[{"min":1,"max":10}],"materials":{"6":[{"min":7,"max":10}]},"values":{"6":10000}}})")));
     TestTrue(TEXT("Salvage policy exported with loot rules"),H->SaveLootProfile(TEXT("Combine")));
+    H->SelectUCMSection(TEXT("Loot"),TEXT("EmptyLoot"));
     H->SaveProfile(TEXT("ucm"),TEXT("Mage"),PreviousProfile);
     TestTrue(TEXT("Salvage policy restored"),H->LoadLootProfile(TEXT("Combine")));
     TestEqual(TEXT("Combining target survives save/load"),P->Profile->GetObjectField(TEXT("salvage_policy"))->GetObjectField(TEXT("values"))->GetNumberField(TEXT("6")),10000.);
@@ -511,6 +515,30 @@ bool FACEPluginHostTest::RunTest(const FString&)
     TestTrue(TEXT("Manager remains constructible while bar is hidden"),H->MakePanel()->GetVisibility()!=EVisibility::Collapsed);
     H->SetPluginBarVisible(true);
     TestTrue(TEXT("Overview can restore the existing bar"),Dock->Windows[TEXT("__bar")].Widget->GetVisibility()==EVisibility::Visible);
+    {
+        auto& Bar=Dock->Windows[TEXT("__bar")];
+        const auto Initial=Bar.Position;const auto Expanded=Bar.Size;
+        Ui->SetUiLocked(true);Dock->Move(TEXT("__bar"),FVector2D(40,60),true);
+        TestEqual(TEXT("Global UI lock prevents moving the plugin bar"),Bar.Position,Initial);
+        Ui->SetUiLocked(false);Dock->Move(TEXT("__bar"),FVector2D(40,60),true);
+        TestEqual(TEXT("Unlocked expanded bar can be moved"),Bar.Position,Initial+FVector2D(40,60));
+        H->SetPluginBarMinimized(true);
+        TestEqual(TEXT("Minimized bar is only an 18px handle"),Bar.Slot->GetOffset().Bottom,18.f);
+        TestEqual(TEXT("Minimizing retains expanded size"),Bar.Size,Expanded);
+        TestTrue(TEXT("Minimizing leaves automation and other windows untouched"),P->Running&&Dock->IsOpen(TEXT("monitor")));
+        Dock->Move(TEXT("__bar"),FVector2D(4000,4000),false);
+        TestEqual(TEXT("Compact handle can reach the bottom right without its hidden body blocking movement"),Bar.Position,Dock->ViewSize-FVector2D(62,18));
+        Dock->SaveOverlayLayout(); // Logout during a drag also persists the bar.
+        FString Saved;FFileHelper::LoadFileToString(Saved,*(Root/TEXT("settings.json")));
+        H->Settings=Json(*Saved);auto Restored=SNew(SACEPluginDesktop).Host(H);
+        TestTrue(TEXT("Collapsed state survives settings reload"),H->IsPluginBarMinimized());
+        TestEqual(TEXT("Collapsed position survives dock recreation"),Restored->Windows[TEXT("__bar")].Position,Bar.Position);
+        H->SetPluginBarMinimized(false);
+        TestEqual(TEXT("Expanding keeps saved position even when layout fits above the bottom edge"),Bar.Position,Dock->ViewSize-FVector2D(62,18));
+        TestTrue(TEXT("Expanded body fits onscreen"),Bar.Slot->GetOffset().Top+Bar.Slot->GetOffset().Bottom<=Dock->ViewSize.Y);
+        Bar.Position=Initial;Dock->Layout(Bar);Dock->Move(TEXT("__bar"),FVector2D::ZeroVector,true);
+        Ui->SetUiLocked(true);
+    }
     P->Running=false;Dock->Toggle(TEXT("ucm"));
     TestTrue(TEXT("Second click reopens its existing window"),Dock->IsOpen(TEXT("ucm")));
     Dock->Resize(TEXT("ucm"),FVector2D(-300,-150),true);
@@ -523,13 +551,26 @@ bool FACEPluginHostTest::RunTest(const FString&)
     if(FApp::CanEverRender())
     {
         // sRGB targets already encode linear colors. Avoid applying gamma twice.
-        auto Panel=SNew(SBorder).Padding(16)[H->MakePanel()];FWidgetRenderer Renderer(false,true);
+        auto Panel=SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
+            .BorderBackgroundColor(FLinearColor(.025f,.035f,.045f,1.f)).Padding(16)[H->MakePanel()];FWidgetRenderer Renderer(false,true);
+        int32 LootTitles=0,OpenButtons=0,EditorControls=0;
+        TFunction<void(TSharedRef<SWidget>)> InspectManager=[&](TSharedRef<SWidget> Widget)
+        {
+            if(Widget->GetTag().ToString().StartsWith(TEXT("PluginOpen.")))++OpenButtons;
+            if(Widget->GetTypeAsString()==TEXT("SSlider")||Widget->GetTypeAsString()==TEXT("SMultiLineEditableTextBox"))++EditorControls;
+            if(Widget->GetTypeAsString()==TEXT("STextBlock")&&StaticCastSharedRef<STextBlock>(Widget)->GetText().ToString()==TEXT("Loot Profile Editor"))++LootTitles;
+            auto* Children=Widget->GetChildren();for(int32 I=0;I<Children->Num();++I)InspectManager(Children->GetChildAt(I));
+        };
+        InspectManager(Panel);
+        TestEqual(TEXT("Manager provides an explicit open control for every plugin"),OpenButtons,H->Plugins.Num());
+        TestEqual(TEXT("Loot editor is listed once rather than embedded in manager"),LootTitles,1);
+        TestEqual(TEXT("Manager does not build plugin editors until requested"),EditorControls,0);
         FReadSurfaceDataFlags ReadFlags;ReadFlags.SetLinearToGamma(false);
-        auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(1000,900),TF_Bilinear,true);
-        for(int Pass=0;Pass<3;++Pass){Renderer.DrawWidget(Target,Panel,FVector2D(1000,900),0);FlushRenderingCommands();}
+        auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(740,530),TF_Bilinear,true);
+        for(int Pass=0;Pass<3;++Pass){Renderer.DrawWidget(Target,Panel,FVector2D(740,530),0);FlushRenderingCommands();}
         TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,ReadFlags);
-        TestEqual(TEXT("Plugin panel renders"),Pixels.Num(),900000);
-        TArray64<uint8> Png;FImageUtils::PNGCompressImageArray(1000,900,Pixels,Png);
+        TestEqual(TEXT("Plugin panel renders"),Pixels.Num(),740*530);
+        TArray64<uint8> Png;FImageUtils::PNGCompressImageArray(740,530,Pixels,Png);
         FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("Automation/Plugins.png")));
         Target->ReleaseResource();
         auto* DockTarget=FWidgetRenderer::CreateTargetFor(FVector2D(1280,720),TF_Bilinear,true);
@@ -545,6 +586,36 @@ bool FACEPluginHostTest::RunTest(const FString&)
         TestEqual(TEXT("Plugin bar and window render"),Pixels.Num(),1280*720);
         Png.Reset();FImageUtils::PNGCompressImageArray(1280,720,Pixels,Png);
         FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("Automation/PluginDock.png")));
+        TSharedPtr<SWidget> Handle,Minimize;
+        TFunction<void(TSharedRef<SWidget>)> FindBarControls=[&](TSharedRef<SWidget> Widget)
+        {
+            if(Widget->GetTag()==TEXT("PluginBarHandle"))Handle=Widget;
+            if(Widget->GetTag()==TEXT("PluginBarMinimize"))Minimize=Widget;
+            auto* Children=Widget->GetChildren();for(int32 I=0;I<Children->Num();++I)FindBarControls(Children->GetChildAt(I));
+        };
+        FindBarControls(Dock->Windows[TEXT("__bar")].Widget.ToSharedRef());
+        TestTrue(TEXT("Bar exposes a grip and minimize control"),Handle.IsValid()&&Minimize.IsValid());
+        if(Handle&&Minimize)
+        {
+            const auto G=Handle->GetCachedGeometry();const auto At=G.LocalToAbsolute(FVector2D(10,9));
+            const FPointerEvent Down(0,At,At,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState());
+            Ui->SetUiLocked(true);TestFalse(TEXT("Locked grip never captures mouse"),Handle->OnMouseButtonDown(G,Down).GetMouseCaptor().IsValid());
+            Ui->SetUiLocked(false);TestTrue(TEXT("Unlocked grip captures the frame for dragging"),Handle->OnMouseButtonDown(G,Down).GetMouseCaptor()==Dock->Windows[TEXT("__bar")].Widget);
+            Dock->Windows[TEXT("__bar")].Widget->OnMouseButtonUp(G,FPointerEvent(0,At,At,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
+            Ui->SetUiLocked(true);
+            auto ClickMinimize=[&]()
+            {
+                // FWidgetRenderer has no native window to acquire mouse capture.
+                // Invoke Slate's test click on the actual rendered button.
+                StaticCastSharedPtr<SButton>(Minimize)->SimulateClick();
+            };
+            ClickMinimize();TestTrue(TEXT("Minimize button works while UI is locked"),H->IsPluginBarMinimized());
+            for(int Pass=0;Pass<3;++Pass){Renderer.DrawWidget(DockTarget,Dock,FVector2D(1280,720),0);FlushRenderingCommands();}
+            Pixels.Reset();DockTarget->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,ReadFlags);
+            Png.Reset();FImageUtils::PNGCompressImageArray(1280,720,Pixels,Png);
+            FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("Automation/PluginDock-Minimized.png")));
+            ClickMinimize();TestFalse(TEXT("Compact handle restores the bar while locked"),H->IsPluginBarMinimized());
+        }
         DockTarget->ReleaseResource();
         {
             const FVector2D Size(270,360);auto Micro=H->MakeUCMMicroPanel();

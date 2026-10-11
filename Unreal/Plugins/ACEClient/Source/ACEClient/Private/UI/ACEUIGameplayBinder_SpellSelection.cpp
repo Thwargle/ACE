@@ -3,6 +3,41 @@
 #include "ACESession.h"
 #include "ACEPlayerController.h"
 #include "VR/ACEVRComponent.h"
+#include "ACEDatSubsystem.h"
+#include "ACESpellbookFilters.h"
+#include "UI/ACEUICanvasWidget.h"
+#include "UI/ACEUIResourceResolver.h"
+
+void UACEUIGameplayBinder::HandleSpellLearned(int32 SpellId)
+{
+	if (!Client || !Manager || !Canvas || SpellId <= 0) return;
+	const auto Session = Client->GetSession();
+	if (!Session || Session->GetState() != EACESessionState::InWorld || !Session->GetKnownSpells().Contains(SpellId)) return;
+	// Reveal the learned spell even if its school/level was unchecked. Retain
+	// all other filter choices instead of resetting the player's book filters.
+	if (auto* Dat = Canvas->GetResourceResolver() ? Canvas->GetResourceResolver()->GetDatSubsystem() : nullptr)
+	{
+		uint32 School = 0, Level = 0;
+		if (Dat->TryGetSpellSchoolAndLevel(SpellId, School, Level))
+		{
+			const uint32 OldSchools = SpellbookSchoolFilterMask, OldLevels = SpellbookLevelFilterMask;
+			if (School >= 1 && School <= 5) SpellbookSchoolFilterMask |= 1u << (School - 1);
+			if (Level >= 1 && Level <= 8) SpellbookLevelFilterMask |= 1u << (Level - 1);
+			if (OldSchools != SpellbookSchoolFilterMask || OldLevels != SpellbookLevelFilterMask)
+				Session->SendSpellbookFilters(ACESpellbookFilters::ToWire(
+					SpellbookSchoolFilterMask, SpellbookLevelFilterMask, Session->GetSpellbookFilters()));
+		}
+	}
+	SelectedSpellbookId = SpellId;
+	ShowPanelPage(TEXT("SpellManagementPanel_Field"));
+	SyncSpellPanelTab(TEXT("SpellbookPage"));
+	bRevealLearnedSpell = true;
+	RefreshSpellbookOverlays();
+	SyncSpellbookScrollbar();
+	if (PlayerController)
+		if (auto* VR = PlayerController->GetVRComponent(); VR && VR->IsActive())
+			VR->OpenRetailPanel(NAME_None);
+}
 
 void UACEUIGameplayBinder::SyncSpellTabSelection()
 {

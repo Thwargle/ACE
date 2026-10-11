@@ -79,7 +79,8 @@ bool FACEVRChatTest::RunTest(const FString&)
         FlushRenderingCommands();
     };
     auto* Binder = NewObject<UACEUIGameplayBinder>();
-    const FLinearColor SystemColor(.7f, .8f, .9f), TellColor(.95f, .7f, .4f);
+    // Native VR chat must retain retail's default/death green and incoming-tell yellow.
+    const FLinearColor SystemColor(FColor(127,255,126)), TellColor(FColor(255,255,62));
     for (int32 I = 0; I < 127; ++I)
         Binder->AppendChatLineToLog(0, FString::Printf(TEXT("Already formatted line %d"), I), SystemColor, FString());
     TestEqual(TEXT("Native history shares the bounded retail main buffer"), Binder->ChatDisplayLines[0].Num(), 120);

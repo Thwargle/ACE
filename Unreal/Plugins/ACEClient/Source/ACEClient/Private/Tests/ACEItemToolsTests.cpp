@@ -1,0 +1,185 @@
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+#include "Misc/FileHelper.h"
+#include "Interfaces/IPluginManager.h"
+#include "Serialization/JsonSerializer.h"
+#include "Mods/ACEPluginVM.h"
+#include "Mods/ACEPluginSubsystem.h"
+#include "Mods/ACEItemTools.h"
+#include "ACEClientSubsystem.h"
+#include "ACESession.h"
+#include "Engine/GameInstance.h"
+#include "Misc/ScopeExit.h"
+#include "Misc/Paths.h"
+#include "Sockets.h"
+#include "SocketSubsystem.h"
+#include "Protocol/ACEBinaryReader.h"
+#include "Protocol/ACEIsaac.h"
+#include "ACEOpcodes.h"
+
+namespace
+{
+TSharedPtr<FJsonObject> ITJson(const TCHAR* Source)
+{TSharedPtr<FJsonObject> O;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Source),O);return O;}
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEItemToolsTest,"ACE.Plugins.ItemTools.Transactions",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FACEItemToolsTest::RunTest(const FString&)
+{
+    FString Source,Error;
+    TestTrue(TEXT("Bundled policy exists"),FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/itemtools/main.lua"))));
+    auto Snapshot=[](){return ITJson(TEXT(R"({"time":100,"ready":true,"busy":false,"action_serial":0,"action_error":0,"container":0,"inventory":[{"id":10,"wcid":100,"name":"Gem","count":3,"transferable":true},{"id":11,"wcid":100,"name":"Gem","count":4,"transferable":true},{"id":12,"wcid":100,"name":"Gem","count":9,"transferable":false}],"it_objects":[{"id":20,"name":"Recipient","recipient":true,"player":true,"distance":2},{"id":30,"name":"Chest","chest":true,"distance":2,"identified":true,"locked":false}],"vendor":40,"it_currency":100,"vendor_uses_pyreals":true,"vendor_stock":[{"id":41,"name":"Scarab","wcid":200,"limit":1000,"room":100,"unit_value":10,"sell_rate":1}],"contents":[],"contents_ready":true})"));};
+    auto Profile=[](){return ITJson(TEXT(R"({"mode":"give","give_name":"Gem","target_id":20,"target_name":"Recipient","delay_ms":0,"chest_id":30,"chest_name":"Chest","chest_cycles":1,"chest_rules":[{"name":"Gem","action":"keep"}]})"));};
+    auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;Error.Empty();const bool OK=VM.Step(S,P,I,Error);TestTrue(*(FString(TEXT("Policy step: "))+Error),OK);return I?I:MakeShared<FJsonObject>();};
+    auto Action=[](auto I){return ACEItemTools::String(I,TEXT("action"));};
+    {
+        FACEPluginVM VM;TestTrue(TEXT("Item Tools policy loads"),VM.Load(Source,Error));auto S=Snapshot(),P=Profile();P->SetNumberField(TEXT("give_limit"),5);
+        auto I=Step(VM,S,P);TestEqual(TEXT("Give takes first stack"),I->GetNumberField(TEXT("amount")),3.);
+        S->SetNumberField(TEXT("action_serial"),1);TestFalse(TEXT("UseDone alone cannot confirm a transfer"),Step(VM,S,P)->HasField(TEXT("action")));
+        auto Inv=S->GetArrayField(TEXT("inventory"));Inv.RemoveAt(0);S->SetArrayField(TEXT("inventory"),Inv);
+        I=Step(VM,S,P);TestEqual(TEXT("Next pack is included and quantity is capped"),I->GetNumberField(TEXT("amount")),2.);
+        Inv[0]->AsObject()->SetNumberField(TEXT("count"),2);
+        TestEqual(TEXT("Partial stack confirmation completes run"),Action(Step(VM,S,P)),FString(TEXT("stop")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();Step(VM,S,P);S->SetNumberField(TEXT("time"),121);
+        TestTrue(TEXT("Unconfirmed transfer stops without giving again"),ACEItemTools::String(Step(VM,S,P),TEXT("status")).Contains(TEXT("not confirmed")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();Step(VM,S,P);S->SetNumberField(TEXT("action_serial"),1);S->SetNumberField(TEXT("action_error"),42);
+        TestTrue(TEXT("Server rejection is reported"),ACEItemTools::String(Step(VM,S,P),TEXT("status")).Contains(TEXT("Server rejected")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();S->GetArrayField(TEXT("it_objects"))[0]->AsObject()->SetNumberField(TEXT("distance"),8);
+        TestEqual(TEXT("Moved recipient gets no items"),Action(Step(VM,S,P)),FString(TEXT("stop")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("mode"),TEXT("profile"));
+        P->SetArrayField(TEXT("profile_rules"),{MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"name":"Gem","action":"keep","keep_up_to":10})")))});
+        TestEqual(TEXT("GiveVT keeps Keep # items in inventory"),Action(Step(VM,S,P)),FString(TEXT("stop")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("mode"),TEXT("profile"));
+        P->SetArrayField(TEXT("profile_rules"),{MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"name":"Gem","action":"keep","conditions":[{"field":"int","key":19,"op":"ge","value":100}]})")))});
+        TestEqual(TEXT("Missing properties request appraisal"),Action(Step(VM,S,P)),FString(TEXT("identify")));
+        auto Item=S->GetArrayField(TEXT("inventory"))[0]->AsObject();Item->SetBoolField(TEXT("identified"),true);Item->SetObjectField(TEXT("int_properties"),ITJson(TEXT("{\"19\":100}")));
+        TestEqual(TEXT("Appraisal resumes same rule"),Action(Step(VM,S,P)),FString(TEXT("it_give")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("mode"),TEXT("shop"));P->SetStringField(TEXT("buy_name"),TEXT("Scarab"));
+        auto I=Step(VM,S,P);TestEqual(TEXT("Unlimited buying uses affordable quantity"),I->GetNumberField(TEXT("amount")),10.);
+        auto Inv=S->GetArrayField(TEXT("inventory"));Inv.Add(MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"id":50,"name":"Scarab","wcid":200,"count":10,"transferable":true})"))));S->SetArrayField(TEXT("inventory"),Inv);S->SetNumberField(TEXT("it_currency"),0);
+        TestTrue(TEXT("Stops when funds exhausted"),ACEItemTools::String(Step(VM,S,P),TEXT("status")).Contains(TEXT("Insufficient currency")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("mode"),TEXT("restock"));P->SetNumberField(TEXT("vendor_id"),40);
+        P->SetArrayField(TEXT("restock"),{MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"name":"Scarab","wcid":200,"quantity":25})")))});
+        auto Inv=S->GetArrayField(TEXT("inventory"));Inv.Add(MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"id":60,"name":"Trade Note","wcid":300,"count":5,"transferable":true,"can_sell":true,"trade_note":true,"sell_unit":100})"))));S->SetArrayField(TEXT("inventory"),Inv);
+        auto I=Step(VM,S,P);TestEqual(TEXT("Restock splits the minimum funding notes"),Action(I),FString(TEXT("it_split")));TestEqual(TEXT("Only required note count"),I->GetNumberField(TEXT("amount")),2.);
+        Inv.Last()->AsObject()->SetNumberField(TEXT("count"),3);Inv.Add(MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"id":61,"name":"Trade Note","wcid":300,"count":2,"transferable":true,"can_sell":true,"trade_note":true,"sell_unit":100})"))));S->SetArrayField(TEXT("inventory"),Inv);
+        I=Step(VM,S,P);TestEqual(TEXT("Sells only the confirmed split"),I->GetNumberField(TEXT("item")),61.);
+        Inv.Pop();S->SetArrayField(TEXT("inventory"),Inv);
+        TestFalse(TEXT("Waits for funding currency before selling another note"),Step(VM,S,P)->HasField(TEXT("action")));S->SetNumberField(TEXT("it_currency"),300);
+        I=Step(VM,S,P);TestEqual(TEXT("Buys after confirmed note redemption"),Action(I),FString(TEXT("it_buy")));TestEqual(TEXT("Buys desired shortage"),I->GetNumberField(TEXT("amount")),25.);
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("mode"),TEXT("chest"));
+        TestEqual(TEXT("Chest opens before looting"),Action(Step(VM,S,P)),FString(TEXT("it_open")));
+        S->SetNumberField(TEXT("container"),30);S->SetArrayField(TEXT("contents"),{MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"id":70,"name":"Gem","wcid":100,"count":2})")))});
+        TestEqual(TEXT("Chest profile collects Keep item"),Action(Step(VM,S,P)),FString(TEXT("it_pickup")));
+        S->GetArrayField(TEXT("inventory"))[0]->AsObject()->SetNumberField(TEXT("count"),5);S->SetArrayField(TEXT("contents"),{});
+        TestEqual(TEXT("Confirmed merge closes chest"),Action(Step(VM,S,P)),FString(TEXT("it_close")));
+        S->SetNumberField(TEXT("container"),0);P->SetNumberField(TEXT("mule1_id"),20);P->SetStringField(TEXT("mule1_name"),TEXT("Recipient"));P->SetArrayField(TEXT("mule1_rules"),P->GetArrayField(TEXT("chest_rules")));
+        auto I=Step(VM,S,P);TestEqual(TEXT("Mule gets only newly acquired units"),I->GetNumberField(TEXT("amount")),2.);
+        S->GetArrayField(TEXT("inventory"))[0]->AsObject()->SetNumberField(TEXT("count"),3);
+        TestTrue(TEXT("One chest cycle completes"),ACEItemTools::String(Step(VM,S,P),TEXT("status")).Contains(TEXT("1 chest cycles")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("mode"),TEXT("chest"));P->SetStringField(TEXT("key_name"),TEXT("Gem"));P->SetArrayField(TEXT("chest_rules"),{});
+        S->GetArrayField(TEXT("it_objects"))[1]->AsObject()->SetBoolField(TEXT("locked"),true);
+        TestEqual(TEXT("Opener-only uses selected key"),Action(Step(VM,S,P)),FString(TEXT("it_key")));
+        S->SetNumberField(TEXT("action_serial"),1);
+        TestTrue(TEXT("Opener-only completes without taking loot"),ACEItemTools::String(Step(VM,S,P),TEXT("status")).Contains(TEXT("unlocking complete")));
+    }
+    // Exercise native ownership/range/capacity checks and retail packet layout
+    // using a loopback receiver; no test contacts a game server.
+    {
+        auto* GI=NewObject<UGameInstance>();GI->Init();ON_SCOPE_EXIT{GI->Shutdown();};
+        auto* C=GI->GetSubsystem<UACEClientSubsystem>();auto* H=GI->GetSubsystem<UACEPluginSubsystem>();
+        H->StorageRoot=FPaths::ProjectSavedDir()/TEXT("ItemToolsReview")/FGuid::NewGuid().ToString(EGuidFormats::Digits);H->Settings=MakeShared<FJsonObject>();
+        C->Session=MakeShared<FACESession>();auto& S=*C->Session;S.State=EACESessionState::InWorld;S.PlayerGuid=0x50000001;
+        S.PlayerVitals.bValid=true;S.PlayerVitals.Health=100;S.PlayerPosition.CellId=0x7D640001;
+        auto P=H->Find(TEXT("itemtools"));if(!TestTrue(TEXT("Native plugin exists"),P.IsValid()))return false;
+        P->Enabled=true;P->Running=false;
+        H->UpdateItemToolsCharacter();const FString FirstCharacter=P->ProfileName;
+        P->Profile->SetNumberField(TEXT("give_limit"),17);P->Profile->SetNumberField(TEXT("target_id"),20);P->Profile->SetStringField(TEXT("target_name"),TEXT("Recipient"));
+        TestTrue(TEXT("Character configuration saves"),H->SaveProfile(P->Id,P->ProfileName,H->ProfileJson(P->Id),false));
+        S.PlayerGuid++;H->UpdateItemToolsCharacter();TestEqual(TEXT("Another character gets own configuration"),ACEItemTools::Number(P->Profile,TEXT("give_limit")),0.);
+        S.PlayerGuid--;H->UpdateItemToolsCharacter();TestEqual(TEXT("Original character quantity is restored"),ACEItemTools::Number(P->Profile,TEXT("give_limit")),17.);
+        TestEqual(TEXT("Character profile identity persists"),P->ProfileName,FirstCharacter);
+        TestFalse(TEXT("Old recipient GUID is not restored across logins"),P->Profile->HasField(TEXT("target_id")));
+        TestEqual(TEXT("Recipient name remains visible"),ACEItemTools::String(P->Profile,TEXT("target_name")),FString(TEXT("Recipient")));
+        TestFalse(TEXT("Malformed restock data is rejected"),H->SaveProfile(P->Id,P->ProfileName,TEXT("{\"restock\":[4]}"),false));
+        FACEWorldObject Self;Self.Guid=S.PlayerGuid;Self.ItemsCapacity=1;Self.ContainersCapacity=7;S.WorldObjects.Add(Self.Guid,Self);
+        FACEWorldObject Item;Item.Guid=10;Item.WeenieClassId=100;Item.Name=TEXT("Gem");Item.ContainerId=Self.Guid;Item.StackSize=3;S.WorldObjects.Add(Item.Guid,Item);
+        FACEWorldObject Recipient;Recipient.Guid=20;Recipient.Name=TEXT("Recipient");Recipient.ItemType=ACEItemType::Creature;Recipient.bHasPosition=true;Recipient.bIsPlayer=true;Recipient.Position=S.PlayerPosition;S.WorldObjects.Add(Recipient.Guid,Recipient);
+        auto* Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);auto* Receiver=Sockets->CreateSocket(NAME_DGram,TEXT("ItemTools tests"),false);
+        auto Address=Sockets->CreateInternetAddr();bool Valid=false;Address->SetIp(TEXT("127.0.0.1"),Valid);Address->SetPort(0);
+        if(!TestTrue(TEXT("Loopback receiver binds"),Receiver&&Receiver->Bind(*Address)))return false;Receiver->GetAddress(*Address);
+        S.SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("ItemTools sender"),false);S.ServerC2SAddr=Address;S.IssacClient=MakeUnique<FACEIsaac>(123u);
+        ON_SCOPE_EXIT{S.SocketC2S->Close();Sockets->DestroySocket(S.SocketC2S);S.SocketC2S=nullptr;S.ServerC2SAddr.Reset();S.IssacClient.Reset();Receiver->Close();Sockets->DestroySocket(Receiver);};
+        auto CountAction=[&](uint32 Opcode){int32 Count=0;for(const auto& Packet:S.CachedC2SPackets){FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.ReadUInt32()==Opcode)++Count;}return Count;};
+        auto Give=ITJson(TEXT(R"({"action":"it_give","item":10,"target":20,"amount":2})"));
+        H->ExecuteItemTools(*P,Give);TestEqual(TEXT("Native giving uses retail GiveObject"),CountAction(ACEGameAction::GiveObjectRequest),1);
+        S.CachedC2SPackets.Reset();S.WorldObjects[10].Bonded=1;H->ExecuteItemTools(*P,Give);
+        TestEqual(TEXT("Bonded item cannot be given to player"),CountAction(ACEGameAction::GiveObjectRequest),0);
+        S.WorldObjects[20].bIsPlayer=false;H->ExecuteItemTools(*P,Give);
+        TestEqual(TEXT("NPC turn-ins may use bonded quest items"),CountAction(ACEGameAction::GiveObjectRequest),1);
+        S.CachedC2SPackets.Reset();S.WorldObjects[10].Bonded=0;S.WorldObjects[10].ObjectDescriptionFlags=ACEObjectDescFlag::Retained;H->ExecuteItemTools(*P,Give);
+        TestEqual(TEXT("Retained items are rechecked before sending"),CountAction(ACEGameAction::GiveObjectRequest),0);S.WorldObjects[10].ObjectDescriptionFlags=0;
+        FACEWorldObject Pack;Pack.Guid=50;Pack.ContainerId=Self.Guid;Pack.ItemType=ACEItemType::Container;Pack.ItemsCapacity=1;S.WorldObjects.Add(Pack.Guid,Pack);
+        TestTrue(TEXT("Empty pack can be transferred"),ACEItemTools::Transferable(C,Pack));
+        FACEWorldObject Stock;Stock.Guid=80;Stock.WeenieClassId=200;Stock.MaxStackSize=100;Stock.VendorQuantityAvailable=-1;
+        TestEqual(TEXT("Purchase capacity includes the empty side pack"),ACEItemTools::PurchaseRoom(C,Stock),100);
+        Stock.ItemType=ACEItemType::Container;Stock.MaxStackSize=1;
+        TestEqual(TEXT("Backpack purchases use pack slots"),ACEItemTools::PurchaseRoom(C,Stock),1);
+        S.WorldObjects[Self.Guid].ContainersCapacity=1;
+        TestEqual(TEXT("Full pack slots block backpack purchases"),ACEItemTools::PurchaseRoom(C,Stock),0);
+        FACEWorldObject Chest;Chest.Guid=30;Chest.bHasPosition=true;Chest.Position=S.PlayerPosition;Chest.ItemType=ACEItemType::Container;Chest.ItemUseable=0x20;Chest.ObjectDescriptionFlags=ACEObjectDescFlag::Openable;S.WorldObjects.Add(Chest.Guid,Chest);
+        FACEWorldObject Drop;Drop.Guid=31;Drop.ContainerId=30;Drop.Name=TEXT("Loot");Drop.StackSize=1;S.WorldObjects.Add(Drop.Guid,Drop);S.OpenExternalContainerGuid=30;
+        auto Pickup=ITJson(TEXT(R"({"action":"it_pickup","item":31,"target":30,"amount":1})"));H->ExecuteItemTools(*P,Pickup);
+        TestEqual(TEXT("Full main pack still permits chest pickup"),CountAction(ACEGameAction::PutItemInContainer),1);
+        for(const auto& Packet:S.CachedC2SPackets){FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.ReadUInt32()==ACEGameAction::PutItemInContainer){R.ReadUInt32();TestEqual(TEXT("Loot goes to secondary pack"),R.ReadUInt32(),50u);}}
+        S.CachedC2SPackets.Reset();Item.Guid=51;Item.ContainerId=50;S.WorldObjects.Add(Item.Guid,Item);H->ExecuteItemTools(*P,Pickup);
+        TestEqual(TEXT("All packs full prevents transfer"),CountAction(ACEGameAction::PutItemInContainer),0);
+        TestFalse(TEXT("Nonempty pack cannot be transferred"),ACEItemTools::Transferable(C,Pack));
+        auto UCM=H->Find(TEXT("ucm"));UCM->Running=true;UCM->Player=S.PlayerGuid;UCM->Server=C->GetServerName();P->Running=true;
+        H->Stop(P->Id,TEXT("Complete"));TestTrue(TEXT("UCM remains enabled after tool finishes"),UCM->Running);TestTrue(TEXT("UCM resets stale pending work on resume"),UCM->ResumeMetaPending);
+        P->Profile->SetBoolField(TEXT("auto_restock"),true);
+        P->Profile->SetArrayField(TEXT("restock"),{MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"name":"Scarab","wcid":200,"quantity":25})")))});
+        Stock.Name=TEXT("Scarab");Stock.ItemType=0;S.OpenVendorGuid=40;S.VendorMerchandise={Stock};H->ItemToolsLastVendor=0;
+        H->UpdateItemToolsCharacter();TestTrue(TEXT("Matching vendor starts opted-in restocking"),P->Running);
+        TestEqual(TEXT("Autobuy starts restock activity"),ACEItemTools::String(P->Profile,TEXT("mode")),FString(TEXT("restock")));
+        TestTrue(TEXT("Starting the tool preserves UCM run state"),UCM->Running);H->Stop(P->Id);
+        H->UpdateItemToolsCharacter();TestFalse(TEXT("Same open vendor cannot restart purchases in a loop"),P->Running);
+        P->Profile->SetBoolField(TEXT("auto_restock"),false);H->ItemToolsLastVendor=0;H->UpdateItemToolsCharacter();
+        TestFalse(TEXT("Vendor opening never starts purchases without opt-in"),P->Running);
+        UCM->Running=false;
+    }
+    {
+        // Worst-case nonmatching name filters must yield and eventually finish,
+        // rather than repeatedly restarting at the first inventory item.
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetStringField(TEXT("mode"),TEXT("profile"));
+        TArray<TSharedPtr<FJsonValue>> Rules,Inventory;
+        for(int32 N=0;N<1000;++N){auto R=MakeShared<FJsonObject>();R->SetStringField(TEXT("name"),FString::Printf(TEXT("No match %d"),N));R->SetStringField(TEXT("action"),TEXT("keep"));Rules.Add(MakeShared<FJsonValueObject>(R));}
+        for(int32 N=0;N<128;++N){auto R=ITJson(TEXT(R"({"name":"Gem","count":1,"transferable":true})"));R->SetNumberField(TEXT("id"),100+N);Inventory.Add(MakeShared<FJsonValueObject>(R));}
+        P->SetArrayField(TEXT("profile_rules"),Rules);S->SetArrayField(TEXT("inventory"),Inventory);
+        bool Complete=false;int32 Calls=0;
+        for(;Calls<160&&!Complete;++Calls){S->SetNumberField(TEXT("time"),100+Calls*.25);Complete=Action(Step(VM,S,P))==TEXT("stop");}
+        TestTrue(TEXT("128 items x 1000 rules finish cooperatively"),Complete);
+        TestTrue(TEXT("Large rule processing stays under sandbox memory cap"),VM.GetPeakMemoryUsage()<8*1024*1024);
+        AddInfo(FString::Printf(TEXT("Large profile scan: %d callbacks; peak %.2f MiB"),Calls,VM.GetPeakMemoryUsage()/1048576.));
+    }
+    return true;
+}
+#endif

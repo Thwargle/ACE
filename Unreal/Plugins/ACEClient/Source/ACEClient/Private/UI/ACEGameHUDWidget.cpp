@@ -1,4 +1,5 @@
 #include "UI/ACEGameHUDWidget.h"
+#include "ACERetailChat.h"
 #include "UI/ACERadarColors.h"
 #include "ACEHoverTooltipWidget.h"
 #include "UI/ACERetailTextBlock.h"
@@ -62,37 +63,9 @@ namespace
 	const FLinearColor HUDTextColor(0.92f, 0.89f, 0.80f, 1.f);
 	const FLinearColor GoldColor(0.87f, 0.74f, 0.35f, 1.f);
 	const FLinearColor LabelColor(0.72f, 0.68f, 0.56f, 1.f);
-	const FLinearColor ChatSystemColor(0.55f, 0.85f, 0.55f, 1.f);
-	const FLinearColor ChatSpeechColor(0.92f, 0.92f, 0.92f, 1.f);
-	const FLinearColor ChatTellColor(0.95f, 0.72f, 0.85f, 1.f);
-	const FLinearColor ChatCombatSelfColor(0.95f, 0.70f, 0.85f, 1.f);   // pink — Combat_Self
-	const FLinearColor ChatCombatEnemyColor(0.90f, 0.25f, 0.22f, 1.f); // red — Combat_Enemy
-	const FLinearColor ChatCombatColor(0.90f, 0.45f, 0.35f, 1.f);
-	const FLinearColor ChatMagicColor(0.55f, 0.75f, 0.95f, 1.f);
+	const FLinearColor ChatSystemColor = ACERetailChat::Color(ACEChatMessageType::Broadcast);
+	const FLinearColor ChatSpeechColor = ACERetailChat::Color(ACEChatMessageType::Speech);
 	const FLinearColor RadarBackColor(0.03f, 0.05f, 0.03f, 0.92f);
-
-	FLinearColor ColorForChatType(int32 ChatType)
-	{
-		switch (ChatType)
-		{
-		case ACEChatMessageType::Tell:
-		case ACEChatMessageType::OutgoingTell:
-			return ChatTellColor;
-		case ACEChatMessageType::CombatSelf:
-			return ChatCombatSelfColor;
-		case ACEChatMessageType::CombatEnemy:
-			return ChatCombatEnemyColor;
-		case ACEChatMessageType::Combat:
-			return ChatCombatColor;
-		case ACEChatMessageType::Magic:
-			return ChatMagicColor;
-		case ACEChatMessageType::System:
-		case ACEChatMessageType::Broadcast:
-			return ChatSystemColor;
-		default:
-			return ChatSpeechColor;
-		}
-	}
 
 	// --- Retail texture DIDs (Docs/UI/UIAssetManifest.csv) ---
 	// classic_statusbar / classic_vitals
@@ -4262,10 +4235,14 @@ void UACEGameHUDWidget::HandleChatMessage(const FString& Text, const FString& Se
 	{
 		return;
 	}
-	const FLinearColor Color = ColorForChatType(ChatType);
+	const FLinearColor Color = ACERetailChat::Color(ChatType);
 
 	// ServerMessage / combat GameEvents / WeenieError — no speaker name.
-	if (Sender.IsEmpty())
+	if (Sender.IsEmpty() || ACEChatMessageType::IsGlobalChannel(ChatType)
+		|| ChatType == ACEChatMessageType::Allegiance || ChatType == ACEChatMessageType::Fellowship
+		|| ChatType == ACEChatMessageType::Social || ChatType == ACEChatMessageType::SocialSend
+		|| ChatType == ACEChatMessageType::Channel || ChatType == ACEChatMessageType::ChannelSend
+		|| ChatType == ACEChatMessageType::Abuse || ChatType == ACEChatMessageType::Help)
 	{
 		AppendChatLine(Text, Color);
 		return;

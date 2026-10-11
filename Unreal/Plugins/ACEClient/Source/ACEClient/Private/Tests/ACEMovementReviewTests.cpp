@@ -578,7 +578,9 @@ bool FACEMovementReviewTest::RunTest(const FString&)
     for(int32 Frame=0;Frame<450;++Frame)App->TickComponent(1.f/30,LEVELTICK_All,nullptr);
     FACEObjectMotionState Ready;Ready.ForwardCommand=ACEMotion::Ready;Ready.CurrentStyle=Style;
     Actor->ApplyMotionState(Ready);
-    App->TickComponent(.1f,LEVELTICK_All,nullptr);
+    // Ready now plays the authored release link, which can last longer than
+    // one frame. It must finish on its own without movement canceling it.
+    for(int32 Frame=0;Frame<150;++Frame)App->TickComponent(1.f/30,LEVELTICK_All,nullptr);
     TestTrue(FString::Printf(TEXT("Server Ready releases missile %08X table %08X stance %08X"),Action,TableId,Style),
      App->AnimMode!=UACECharacterAppearanceComponent::EACEAnimMode::ActionOneShot);
    }
@@ -658,9 +660,9 @@ bool FACEMovementReviewTest::RunTest(const FString&)
  Session.WorldObjects.Add(Self.Guid,Self);
  float Step,HumanHeight,HumanRadius;uint32 Anim;
  TestTrue(TEXT("Read retail human body dimensions"),Dat->TryGetSetupPhysics(Self.SetupId,Step,HumanHeight,HumanRadius,Anim));
- for(float RatScale:{2.1f,2.5f})
+ for(const auto Fixture:{TPair<int32,float>(0x0200003D,2.1f),TPair<int32,float>(0x0200003D,2.5f),TPair<int32,float>(0x02001121,1.2f)})
  {
-  FACEWorldObject Rat;Rat.Guid=12348;Rat.SetupId=0x0200003D;Rat.Scale=RatScale;
+  FACEWorldObject Rat;Rat.Guid=12348;Rat.SetupId=Fixture.Key;Rat.Scale=Fixture.Value;
   Rat.ItemType=ACEItemType::Creature;Rat.bHasPosition=true;Rat.Position=Self.Position;
   Rat.Position.Location.Y-=2.f;
   auto* RatActor=World->SpawnActor<AACEWorldEntityActor>();RatActor->InitializeFromObject(Rat,100,false);
@@ -706,11 +708,57 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   TestEqual(TEXT("Interpreted combat retains server facing target"),RatActor->RemoteMotion.StickyTargetGuid,Self.Guid);
   for(FVector Offset:{FVector(-30,0,0),FVector(0,-30,0),FVector(0,30,0)})
   {
+   RatActor->SetActorLocation(RatFeet);RatActor->RemoteAnchorLocation=RatActor->RemotePredictLocation=RatFeet;
    Session.PlayerPosition.SetLocationFromUnreal(RatFeet+Offset,100);
-   for(int32 I=0;I<90;++I)RatActor->Tick(1.f/90);
+   ReceiveSticky(Self.Guid);
+   for(int32 I=0;I<45;++I)RatActor->Tick(1.f/90);
    TestTrue(TEXT("Stationary attack tracks nearby live player, not stale object echo"),FVector::DotProduct(RatActor->GetActorQuat().RotateVector(FVector::YAxisVector),Offset.GetSafeNormal())>.99);
-   TestTrue(TEXT("Combat facing does not pull monster inside player"),FVector::Dist2D(RatFeet,RatActor->GetActorLocation())<.1);
+   const float Gap=FVector::Dist2D(RatFeet+Offset,RatActor->GetActorLocation())-RatActor->GetMeleeBodyRadius()-HumanRadius*100;
+   TestTrue(TEXT("Retail sticky melee backs away to 0.3m body-edge spacing"),FMath::Abs(Gap-30.f)<.2f);
   }
+  // Sticky displacement uses the same authored body sweep as normal movement.
+  // A wall or another blocker behind the attacker must limit its retreat.
+  for(ECollisionChannel Channel:{ECC_WorldStatic,ECC_WorldDynamic})
+  {
+   RatActor->SetActorLocation(RatFeet);RatActor->SetActorRotation(FQuat::Identity);
+   RatActor->RemoteAnchorLocation=RatActor->RemotePredictLocation=RatFeet;
+   RatActor->RemotePredictRotation=FQuat::Identity;
+   Session.PlayerPosition.SetLocationFromUnreal(RatFeet+FVector(0,RatActor->GetMeleeBodyRadius()+HumanRadius*100+5,0),100);
+   float Rear=-RatActor->MovementSweepRadius*Fixture.Value;
+   if(!RatActor->MovementSpheresAc.IsEmpty())
+   {
+    Rear=MAX_flt;
+    for(const auto& S:RatActor->MovementSpheresAc)
+     Rear=FMath::Min(Rear,float(FACEPosition::AceVectorToUnreal(FVector(S.X,S.Y,S.Z),100*Fixture.Value).Y-S.W*100*Fixture.Value));
+   }
+   auto* Blocker=World->SpawnActor<AActor>();auto* Box=NewObject<UBoxComponent>(Blocker);
+   Blocker->SetRootComponent(Box);Box->SetBoxExtent(FVector(300,5,300));
+   Box->SetCollisionObjectType(Channel);Box->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+   Box->SetCollisionResponseToAllChannels(ECR_Block);Box->RegisterComponent();
+   Blocker->SetActorLocation(RatFeet+FVector(0,Rear-15,100));
+   ReceiveSticky(Self.Guid);
+   for(int32 I=0;I<45;++I)RatActor->Tick(1.f/90);
+   const float Retreat=RatFeet.Y-RatActor->GetActorLocation().Y;
+   TestTrue(TEXT("Melee spacing retreats only as far as its body can sweep"),Retreat>=0 && Retreat<10.2f);
+   Blocker->Destroy();
+  }
+  for(int32 I=0;I<91;++I)RatActor->Tick(1.f/90);
+  TestEqual(TEXT("Retail sticky expires after one second without another swing"),RatActor->RemoteMotion.StickyTargetGuid,0);
+  // The actual MoveTo packet carries a separate minimum distance. Both flags
+  // mean face the target while walking backward, rather than freezing in place.
+  RatActor->SetActorLocation(RatFeet);RatActor->RemoteAnchorLocation=RatActor->RemotePredictLocation=RatFeet;
+  const float BodyRadii=RatActor->GetMeleeBodyRadius()+HumanRadius*100;
+  Session.PlayerPosition.SetLocationFromUnreal(RatFeet+FVector(0,BodyRadii+5,0),100);
+  FACEBinaryWriter Move;Move.WriteUInt32(Rat.Guid);Move.WriteUInt16(0);Move.WriteUInt16(1);Move.WriteUInt16(0);Move.WriteUInt8(0);Move.Align();
+  Move.WriteUInt8(6);Move.WriteUInt8(0);Move.WriteUInt16(0x3c);Move.WriteUInt32(Self.Guid);
+  Move.WriteUInt32(Self.Position.CellId);Move.WriteFloat(Self.Position.Location.X);Move.WriteFloat(Self.Position.Location.Y);Move.WriteFloat(Self.Position.Location.Z);
+  Move.WriteUInt32(0x703);Move.WriteFloat(.6f);Move.WriteFloat(.3f);Move.WriteFloat(MAX_flt);Move.WriteFloat(1);Move.WriteFloat(1);Move.WriteFloat(0);Move.WriteFloat(1);
+  FACEBinaryReader MoveReader(Move.GetData());Session.HandleUpdateMotion(MoveReader);
+  TestEqual(TEXT("MoveTo retains the server minimum distance"),RatActor->RemoteMotion.MoveToMinDistance,.3f);
+  RatActor->Tick(1.f/60);
+  TestTrue(TEXT("MoveAway selects a backwards gait immediately"),RatActor->RemoteMotion.Forward<0 && RatActor->RemoteMotion.ForwardCommand==6);
+  for(int32 I=0;I<60;++I)RatActor->Tick(1.f/60);
+  TestTrue(TEXT("MoveAway retreats to the server minimum distance"),FMath::Abs(FVector::Dist2D(Session.PlayerPosition.ToUnrealLocation(100),RatActor->GetActorLocation())-BodyRadii-30)<.2f);
   ReceiveSticky(0);TestEqual(TEXT("Next ordinary motion releases combat facing"),RatActor->RemoteMotion.StickyTargetGuid,0);
   ReceiveSticky(Self.Guid);FACEObjectMotionState Dead;Dead.ActionCommand=ACEMotion::Dead;Dead.StickyTargetGuid=Self.Guid;RatActor->ApplyMotionState(Dead);
   TestEqual(TEXT("Death stops target tracking"),RatActor->RemoteMotion.StickyTargetGuid,0);

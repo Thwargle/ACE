@@ -1566,7 +1566,11 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		// passing 1 here left local feet at one third of the high-skill cadence.
 		if (FMath::Abs(Strafe) > FMath::Abs(Forward) + KINDA_SMALL_NUMBER)
 			return FMath::Abs(Strafe) * Client->GetSidestepSpeed(bRunning) / 1.25f;
-		return bRunning && !FMath::IsNearlyZero(Forward) ? Client->GetRunRate() : 1.f;
+		// Route arrival (and analog input) can request less than a full stride.
+		// CMotionInterp scales cycle speed by that input before the run modifier;
+		// use the same multiplier as prediction and RawMotionState.ForwardSpeed.
+		return !FMath::IsNearlyZero(Forward)
+			? FMath::Abs(Forward) * (bRunning ? Client->GetRunRate() : 1.f) : 1.f;
 	};
 	// Drive walk/run anim on the local player's appearance from the same axes we send to the server.
 	FTransform WalkingRootDelta = FTransform::Identity;
@@ -7586,12 +7590,15 @@ void AACEPlayerController::HandleMotionUpdate(int32 ObjectGuid, const FACEObject
 				const uint32 Hi = Full & 0xFF000000u;
 				// ChatPose / soul emotes hold final frame until locomotion (retail).
 				const bool bHoldEmote = Hi == 0x13000000u || Hi == 0x43000000u || Hi == 0x42000000u;
-				App->PlayActionMotion(Motion.ActionCommand, Motion.ActionSpeed, Motion.CurrentStyle, bHoldEmote);
-				if (!bHoldEmote)
+				App->PlayActionMotion(Motion.ActionCommand, Motion.ActionSpeed, Motion.CurrentStyle, bHoldEmote, Motion.bNewAction);
+				if (!bHoldEmote || Motion.bNewAction)
 				{
 					for (int32 I=0;I<Motion.ActionFollowups.Num();++I)
 					{
-						App->QueueActionMotion(Motion.ActionFollowups[I], Motion.FollowupSpeed(I), Motion.CurrentStyle, false);
+						const uint32 Next = ACEMotion::NormalizeCommand(static_cast<uint32>(Motion.ActionFollowups[I]));
+						const uint32 Family = Next & 0xFF000000u;
+						const bool Hold = Family == 0x13000000u || Family == 0x42000000u || Family == 0x43000000u || ACEMotion::IsHeldRestCommand(Next);
+						App->QueueActionMotion(Motion.ActionFollowups[I], Motion.FollowupSpeed(I), Motion.CurrentStyle, Hold);
 					}
 				}
 			}

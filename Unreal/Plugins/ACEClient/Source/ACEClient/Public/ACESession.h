@@ -55,6 +55,7 @@ DECLARE_MULTICAST_DELEGATE(FACEOnSquelchChanged);
 DECLARE_MULTICAST_DELEGATE(FACEOnHouseChanged);
 DECLARE_MULTICAST_DELEGATE(FACEOnBookChanged);
 DECLARE_MULTICAST_DELEGATE(FACEOnEnchantmentsChanged);
+DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnSpellLearned, int32 /*SpellId*/);
 DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnLinkStatusChanged, const FACELinkStatus&);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FACEOnNPCSpeech, int32, const FString&);
 DECLARE_MULTICAST_DELEGATE_ThreeParams(FACEOnHealthFeedback, int32, int32, uint32);
@@ -74,6 +75,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEDesktopHighlightTest;
 	friend class FACEPluginEquipmentTest;
 	friend class FACEPluginRequestsTest;
+	friend class FACEItemToolsTest;
     friend class FACEPluginRampRouteTest;
 	friend class FACEDeferredWorldAppearanceTest;
 	friend class FACEVRObserverProtocolTest;
@@ -89,6 +91,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEItemPresentationTest;
 	friend class FACESelectionToolbarTest;
 	friend class FACEChatParityTest;
+	friend class FACECombatChatTest;
 	friend class FACEPlayerModuleParityTest;
 	friend class FACEUILayoutCommandsTest;
 	friend class FACEUIInteractionParityTest;
@@ -187,6 +190,7 @@ public:
 	FACEOnHouseChanged OnHouseChanged;
 	FACEOnBookChanged OnBookChanged;
 	FACEOnEnchantmentsChanged OnEnchantmentsChanged;
+	FACEOnSpellLearned OnSpellLearned;
 	FACEOnLinkStatusChanged OnLinkStatusChanged;
 	FACEOnNPCSpeech OnNPCSpeech;
 	FACEOnCombatFeedback OnCombatFeedback;
@@ -240,6 +244,7 @@ public:
 	const FACEPlayerVitals& GetPlayerVitals() const { return PlayerVitals; }
 	const FACESelectedObject& GetSelectedObject() const { return SelectedObject; }
 	int32 GetPreviousSelectedObjectGuid() const { return PreviousSelectedObjectGuid; }
+	int32 GetGiveRecipientGuid() const { return GiveRecipientGuid; }
 
 	/** PropertyInt.EncumbranceVal (key 5). False until the server has sent it this session. */
 	bool TryGetPlayerEncumbrance(int32& OutEncumbrance) const
@@ -335,7 +340,7 @@ public:
 	const FString& GetLastMonarchTellSenderName() const { return LastMonarchTellSenderName; }
 
 	/** Client selection and retail health/item-mana subscription. Guid 0 clears. */
-	void SelectObject(int32 ObjectGuid);
+	void SelectObject(int32 ObjectGuid, bool bInventorySelection = false);
 
 	/** GameAction IdentifyObject (0x00C8) — opens appraisal. */
 	void SendIdentifyObject(int32 ObjectGuid);
@@ -488,6 +493,9 @@ public:
 	uint64 GetInventoryDataRevision() const { return InventoryDataRevision; }
 	bool IsServerAttackInProgress() const { return bServerAttackInProgress; }
 	uint32 GetLastAttackError() const { return LastAttackError; }
+	/** Automation must not mistake the optimistic UI stance for a server acknowledgment. */
+	bool IsCombatModeConfirmed(int32 Mode) const { return PendingCombatMode == 0 && PlayerVitals.CombatMode == Mode && PlayerVitals.StatQualityInts.FindRef(40) == Mode; }
+	uint32 GetCombatModeRevision() const { return CombatModeRevision; }
 
 	/** Owned character titles (from GameEvent CharacterTitle / UpdateTitle). */
 	const TArray<uint32>& GetCharacterTitleIds() const { return CharacterTitleIds; }
@@ -857,7 +865,7 @@ private:
 	void UpdateLinkStatusFromEcho(float ClientTimeSent, double ReceivedAt);
 	void UpsertWorldObject(const FACEWorldObject& Object, bool bForceRecreate = false);
 	void MaybeEnterWorldComplete();
-	void SetSelectedObjectInternal(const FACESelectedObject& Sel);
+	void SetSelectedObjectInternal(const FACESelectedObject& Sel, bool bInventorySelection = false);
 	/** Drop in-world state after a successful logoff (keep sockets / account session). */
 	void ClearWorldState();
 
@@ -1002,6 +1010,8 @@ private:
 	int32 SelectedManaQueryGuid = 0;
 	friend class FACESelectionManaTest;
 	int32 PreviousSelectedObjectGuid = 0;
+	// Inventory/merchant browsing must not replace the world recipient for Give.
+	int32 GiveRecipientGuid = 0;
 	TMap<int32, FACEWorldObject> WorldObjects;
 	/** containerGuid → ordered item refs from GameEvent ViewContents (0x0196). */
 	TMap<int32, TArray<FACEContainerItemRef>> ContainerContents;
@@ -1121,6 +1131,7 @@ private:
 	 * NonCombat PropertyInt during SwitchCombatStyles is deferred until this expires.
 	 */
 	uint32 PendingCombatMode = 0;
+	uint32 CombatModeRevision = 0;
 	double PendingCombatModeUntil = 0.0;
 	int32 DeferredServerCombatMode = INDEX_NONE;
 

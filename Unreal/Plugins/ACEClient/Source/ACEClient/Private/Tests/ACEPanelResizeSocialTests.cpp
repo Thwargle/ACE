@@ -293,6 +293,10 @@ bool FACEPanelResizeSocialTest::RunTest(const FString&)
         Session.Friends.Add(F);
     }
     Binder->SyncSocialPanelTab(TEXT("FriendsPage"));Binder->RefreshFriendsOverlays();Draw(TEXT("FriendsRetail"));
+    Binder->RefreshSocialButtonLabels();Draw(TEXT("FriendsRetailHeaders"));
+    for(const TCHAR* Caption:{TEXT("Friend"),TEXT("Status"),TEXT("Friend Name:")})
+        TestTrue(FString::Printf(TEXT("Friends panel exposes retail caption: %s"),Caption),Binder->SocialButtonLabels.ContainsByPredicate([&](const UTextBlock* T)
+        {return T&&T->GetVisibility()==ESlateVisibility::HitTestInvisible&&T->GetText().ToString()==Caption;}));
     TestEqual(TEXT("Friends sorts online before offline"),Binder->FriendRowGuids[0],70001);
     TestEqual(TEXT("Friend name excludes invented status suffix"),Binder->FriendRows[0]->GetText().ToString(),FString(TEXT("Friend 01")));
     TestEqual(TEXT("Friends row uses authored 24 pixel height"),Binder->FriendRowElements[0]->Height,24);

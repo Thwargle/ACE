@@ -100,7 +100,8 @@ void LootPanel()
         LootDraft=ACEUCMLootPresentation::Clone(Rules[LootEditIndex]->AsObject());LootDraftBaseline=LootDraftJson();
     }
     const FString Source=Str(P(),TEXT("utl_source")),Saved=Str(P(),TEXT("loot_profile"));
-    FString Name=!Source.IsEmpty()?FPaths::GetCleanFilename(Source):Saved;
+    FString Name=Host->UCMSectionName(TEXT("Loot"));
+    if(Name.IsEmpty())Name=!Source.IsEmpty()?FPaths::GetCleanFilename(Source):Saved;
     if(Name.IsEmpty())Name=Rules.IsEmpty()?TEXT("No loot profile"):TEXT("Custom rules in ")+Plugin->ProfileName;
     Add(Text(TEXT("Active: ")+Name+(Bool(P(),TEXT("loot_modified"))?TEXT(" (edited)"):TEXT("")),16,Accent));
     auto Menu=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
@@ -326,11 +327,13 @@ void LootSettings()
 }
 void LootProfileFiles()
 {
-    Heading(TEXT("Save / load loot rules"),TEXT("Reuse rules between hunts without changing buffs, combat or routes. Loading stops UCM; press Start when ready. Saved files are in Saved/ClientPlugins/LootProfiles."));
+    Heading(TEXT("Save / load loot rules"),TEXT("Reuse rules between hunts without changing buffs, combat or routes. Loading stops UCM; press Start when ready. Saved files are in Saved/ClientPlugins/Profiles/Loot. Edits update all setups linked to that file."));
     Add(SNew(SEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).HintText(FText::FromString(TEXT("Profile name, e.g. Copper_W7")))
         .Text(FText::FromString(LootProfileName)).OnTextChanged_Lambda([this](const FText& V){LootProfileName=V.ToString();}));
     Add(Button(TEXT("Save loot profile"),[this](){if(Host->SaveLootProfile(LootProfileName))Rebuild();}));
-    TArray<FString> Files;IFileManager::Get().FindFiles(Files,*(Host->UserDirectory()/TEXT("LootProfiles/*.json")),true,false);Files.Sort();
+    TArray<FString> Files=Host->UCMSectionProfiles(TEXT("Loot"));
+    TArray<FString> Legacy;IFileManager::Get().FindFiles(Legacy,*(Host->UserDirectory()/TEXT("LootProfiles/*.json")),true,false);
+    for(const auto& File:Legacy)Files.AddUnique(FPaths::GetBaseFilename(File));Files.Sort();
     for(const auto& File:Files){const FString Name=FPaths::GetBaseFilename(File);Add(Button(TEXT("Load ")+Name,[this,Name](){if(!CanLeaveLootRule())return;if(Host->LoadLootProfile(Name)){LootDraft.Reset();ConditionDraft.Reset();LootProfileName=Name;Rebuild();}}));}
 }
 

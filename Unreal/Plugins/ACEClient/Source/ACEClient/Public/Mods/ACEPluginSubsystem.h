@@ -6,6 +6,7 @@
 #include "Dom/JsonObject.h"
 #include "ACETypes.h"
 #include "Mods/ACEUCMLog.h"
+#include "Mods/ACEPluginLocalService.h"
 #include "ACEPluginSubsystem.generated.h"
 
 class FACEPluginVM;
@@ -17,13 +18,20 @@ struct FACEPluginRouteSegment { FVector Start,End; FLinearColor Color; float Thi
 
 struct FACEClientPlugin
 {
+    TSharedPtr<FJsonObject> ProfileLinks, ProfileBaseline;
     FString Id, Name, Version, Description, Directory, Status = TEXT("Stopped"), ProfileName = TEXT("Default");
     TArray<FString> Permissions;
     TSharedPtr<FJsonObject> Manifest, Profile;
     TSharedPtr<FACEPluginVM> VM;
     TSharedPtr<FJsonObject> ActivityFailure;
+    TSharedPtr<FJsonObject> CombatTransitionIntent;
+    double CombatTransitionStarted = 0;
+    int32 CombatTransitionMode = 0;
+    uint32 CombatTransitionRevision = 0, AttackCancelRevision = 0;
+    bool WaitingAttackCancel = false, CombatTransitionRequested = false;
     bool Enabled = false;
     bool Running = false;
+    bool LocalService = false, LocalServiceStopped = false;
     bool CanResumeMeta = false, ResumeMetaPending = false;
     uint32 VMSourceHash = 0, VMProfileHash = 0;
     TWeakPtr<class FACESession> VMSession;
@@ -50,6 +58,10 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEPluginRampRouteTest;
     friend class FACEUCMRouteRejoinTest;
     friend class FACEUCMLogTest;
+    friend class FACEItemToolsTest;
+    friend class FACEPluginLocalServiceTest;
+    friend class FACEPluginCosmeticsIntegrationTest;
+    friend class FACEPluginCosmeticsTest;
 public:
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
@@ -61,8 +73,17 @@ public:
     void StopAll(const FString& Reason, bool PreserveMeta = false);
     void Stop(const FString& Id, const FString& Reason = TEXT("Stopped"), bool PreserveMeta = false);
     void SetEnabled(const FString& Id, bool Enabled);
+    void RegisterLocalService(const FString& Id, const TSharedRef<FACEPluginLocalService>& Service);
+    void UnregisterLocalService(const FString& Id);
+    TSharedRef<SWidget> MakeLocalServicePanel(const FString& Id);
+    class UACEPluginCosmetics* GetLocalCosmetic(const FString& Id) const;
+    void ClaimLocalCosmetic(const FString& Id);
     bool SaveProfile(const FString& Id, const FString& Name, const FString& Json, bool bStopRunning = true);
     bool LoadProfile(const FString& Id, const FString& Name);
+    TArray<FString> UCMSectionProfiles(const FString& Section) const;
+    FString UCMSectionName(const FString& Section) const;
+    bool SelectUCMSection(const FString& Section, const FString& Name);
+    bool SaveUCMSectionAs(const FString& Section, const FString& Name);
     TSharedPtr<FJsonObject> InspectLegacyProfile(const FString& Path);
     bool SaveLegacyLoot(const FString& Name,const TSharedPtr<FJsonObject>& Document);
     bool ImportLegacyProfile(const FString& Path,const FString& Name);
@@ -84,9 +105,18 @@ public:
     void SavePluginWindowPosition(const FString& Id, const FVector2D& Position);
     bool IsPluginBarVisible() const;
     void SetPluginBarVisible(bool Visible);
+    bool IsPluginBarMinimized() const;
+    void SetPluginBarMinimized(bool Minimized);
+    bool IsPluginBarUnlocked() const;
     void TogglePanel();
     TSharedRef<SWidget> MakeUCMPanel(const FString& InitialPage=FString());
     TSharedRef<SWidget> MakeUCMMicroPanel();
+    TSharedRef<SWidget> MakeItemToolsPanel();
+    bool RunItemToolsCommand(const FString& Arguments);
+    bool StartItemTools(const FString& Mode);
+    bool SelectItemToolsObject(const FString& Key, const FString& Kind);
+    bool LoadItemToolsRules(const FString& Key, const FString& Filename);
+    TSharedPtr<FJsonObject> ItemToolsProgress;
     TSharedRef<SWidget> MakeUCMLogPanel();
     const FACEUCMLog& GetUCMLog() const { return UCMLog; }
     void ClearUCMLog();
@@ -122,6 +152,8 @@ public:
     bool ExecuteInventory(FACEClientPlugin& P, const TSharedPtr<FJsonObject>& Intent, const FString& Action);
     void TrackActionWait(FACEClientPlugin& P,const FString& Action,int32 Item=0,int32 Value=0);
     void RefreshActionWait(FACEClientPlugin& P);
+    bool PrepareCombatAction(FACEClientPlugin& P, const TSharedPtr<FJsonObject>& Intent, int32 Mode);
+    void UpdateCombatTransition(FACEClientPlugin& P);
     void DrawRoute();
     bool IsDrivingMovement() const { return !MovementOwner.IsEmpty()||!FastCastOwner.IsEmpty(); }
     bool IsFastBuffMovementActive() const { return !FastCastOwner.IsEmpty() && FastCastStarted; }
@@ -144,6 +176,17 @@ public:
     void ApplyMovement(AACEPlayerController* Controller, float& Forward, float& Right, float& Turn,
         bool Manual, bool Blocked, bool VR, const FVector& Facing, float MaxFrameTravel = 0.f);
 private:
+    void UpdateItemToolsCharacter();
+    TSharedPtr<FJsonObject> ItemToolsSnapshot();
+    bool ExecuteItemTools(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Intent);
+    FString ItemToolsCharacter;
+    int32 ItemToolsLastVendor=0;
+    TMap<FString,TSharedRef<FACEPluginLocalService>> LocalServices;
+    UPROPERTY() TMap<FString,TObjectPtr<class UACEPluginCosmetics>> LocalCosmetics;
+    void CreateLocalCosmetic(FACEClientPlugin& Plugin);
+    void ReleaseLocalCosmetics();
+    bool StartLocalService(FACEClientPlugin& Plugin);
+    void TickLocalServices();
     void UpdateRouteVisibility(const FACEPosition& Position, const TArray<TSharedPtr<FJsonValue>>& Route,
         const class FACEPluginSightQuery& Sight, const TSharedPtr<FJsonObject>& Snapshot);
     void RecordRouteMovement(const FACEPosition& Position, uint32 TeleportSequence);

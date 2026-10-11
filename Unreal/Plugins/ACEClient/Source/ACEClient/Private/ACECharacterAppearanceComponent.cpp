@@ -1129,17 +1129,23 @@ void UACECharacterAppearanceComponent::SetLocomotionInput(float Forward, float S
 			WalkingMotion.SetDirection(FMath::IsNearlyZero(Forward) ? 0 : Forward > 0.f ? 1 : -1,
 				[&](int8 From, int8 To, ACEWalkingMotion::FLink& Link)
 				{ return Dat->BuildWalkingLink(MotionTableId, From, To, PreferredStyle, Link); });
-	// Retail starts a new sidestep cycle immediately. Blending from an arbitrary
-	// idle phase for 0.28s made the body translate before the feet took a step.
-	const bool bLateral = FMath::Abs(Strafe) > FMath::Abs(Forward) && !FMath::IsNearlyZero(Strafe);
-	const bool bWasLateral = FMath::Abs(LocomotionStrafe) > FMath::Abs(LocomotionForward);
-	if (AnimMode == EACEAnimMode::Locomotion && bLateral
-		&& (!bWasLateral || FMath::Sign(Strafe) != FMath::Sign(LocomotionStrafe)))
+	// CMotionTable replaces the previous cyclic sequence at its starting frame.
+	// This applies to forward movement as well as sidesteps: repeated short nav
+	// segments otherwise spend most of their travel blending out of idle.
+	auto Direction = [](float F, float R) -> int8
+	{
+		if (FMath::IsNearlyZero(F) && FMath::IsNearlyZero(R)) return 0;
+		return FMath::Abs(R) > FMath::Abs(F) ? (R > 0.f ? 2 : -2) : (F > 0.f ? 1 : -1);
+	};
+	const int8 NewDirection = Direction(Forward, Strafe);
+	if (AnimMode == EACEAnimMode::Locomotion && NewDirection != 0
+		&& NewDirection != Direction(LocomotionForward, LocomotionStrafe))
 	{
 		AnimTime = DeferredPoseDeltaTime = 0.f;
 		StanceBlendFrom.Reset();
 		StanceBlendAlpha = 1.f;
 		bWasLocomotionMoving = true;
+		LastLocomotionFwdSign = FMath::Abs(NewDirection) == 1 ? NewDirection : 0;
 		ResetHookTracking();
 	}
 	// ActionOneShot still records loco so we resume the right cycle when the attack ends.
@@ -1288,7 +1294,7 @@ void UACECharacterAppearanceComponent::ApplyAnimatedPartsWithBlend(
 	}
 }
 
-void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, float PlayRate, int32 Style, bool bHoldFinalPose)
+void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, float PlayRate, int32 Style, bool bHoldFinalPose, bool bNewAction)
 {
 	// Remotes stuck in DefaultAnimLoop (missing Creature flag, etc.) must still play cast/attack.
 	if (AnimMode == EACEAnimMode::DefaultAnimLoop)
@@ -1329,13 +1335,19 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 		QueueActionMotion(static_cast<int32>(Cmd), PlayRate, Style, bHoldFinalPose);
 		return;
 	}
-	// Ignore duplicate while already playing OR holding the same action — Motion
-	// CommandList echoes were restarting playpossum from t=0 (looked fast, never held).
+	// State echoes must not restart held poses. A newly stamped action (e.g.
+	// another crafting ClapHands) is a distinct performance, even without movement.
 	if (AnimMode == EACEAnimMode::ActionOneShot && ActionCommand == Cmd)
 	{
-		return;
+		if (!bNewAction) return;
+		if (!bHoldActionFinal)
+		{
+			QueueActionMotion(Cmd, PlayRate, Style, bHoldFinalPose);
+			return;
+		}
 	}
-	const bool bFromEmote = AnimMode == EACEAnimMode::ActionOneShot && ACEIsEmoteSubstate(ActionCommand);
+	const bool bFromEmote = AnimMode == EACEAnimMode::ActionOneShot && ACEIsEmoteSubstate(ActionCommand)
+		&& !(bNewAction && ActionCommand == Cmd);
 	const bool bFromMissile = AnimMode == EACEAnimMode::ActionOneShot && ACEIsMissileSubstate(ActionCommand)
 		&& (ACEIsMissileSubstate(Cmd) || Cmd == ACEMotion::Ready);
 	if (AnimMode == EACEAnimMode::ActionOneShot && (ActionCommand & 0xFF000000u) == 0x80000000u
@@ -1434,6 +1446,7 @@ void UACECharacterAppearanceComponent::QueueActionMotion(int32 InActionCommand, 
 	{
 		Cmd = ACEMotion::ExpandPackedCommand(static_cast<uint16>(Cmd));
 	}
+	bHoldActionFinalAfterFinish = false; // A queued action must run before the final hold.
 	PendingActionCommands.Add(Cmd);
 	PendingActionPlayRates.Add(FMath::Max(0.05f, PlayRate));
 	uint32 St = static_cast<uint32>(Style);

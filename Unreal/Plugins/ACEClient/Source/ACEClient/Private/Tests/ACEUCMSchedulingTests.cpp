@@ -13,6 +13,38 @@ bool FACEUCMSchedulingTest::RunTest(const FString&)
  FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
  auto Snapshot=[&](){return Json(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"action_serial":0,"action_error":0,"container":0,"teleport_sequence":1,"position":{"cell":30998795,"x":30,"y":-34,"z":0},"spells":[],"targets":[],"inventory":[{"id":99,"wcid":99,"count":1,"type":1,"equipped":true,"identified":true,"can_wield":true,"weapon_skill":47,"damage":10,"name":"Sword"},{"id":51,"wcid":51,"name":"Potion","type":32,"identified":true,"usable":true,"count":5,"boost_vital":2,"boost":50}]})"));};
  auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+ // Full inventory suspends corpse pickup until inventory changes, without
+ // periodic failed transfers or suppressing combat, recovery and navigation.
+ {
+  FACEPluginVM VM;TestTrue(TEXT("Capacity policy loads"),VM.Load(Source,Error));auto S=Snapshot();
+  auto P=Json(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","looting":true,"loot_priority":true,"loot_rules":[{"action":"keep"}]})"));
+  S->SetNumberField(TEXT("inventory_revision"),1);S->SetNumberField(TEXT("pack_slots"),0);
+  S->SetNumberField(TEXT("container"),700);
+  S->SetArrayField(TEXT("contents"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":701,"wcid":701,"name":"Scroll","count":1,"identified":true})")))});
+  TestEqual(TEXT("Policy asks host for matching loot"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("loot")));
+  P->SetObjectField(TEXT("ucm_activity_failure"),Json(TEXT(R"({"activity":"loot","inventory_full":true,"status":"No pack has space"})")));
+  TestTrue(TEXT("Capacity reports a clear pause"),Step(VM,S,P)->GetStringField(TEXT("status")).Contains(TEXT("inventory full")));
+  P->RemoveField(TEXT("ucm_activity_failure"));S->SetNumberField(TEXT("container"),0);S->SetArrayField(TEXT("contents"),{});
+  S->SetArrayField(TEXT("corpses"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":700,"name":"Corpse","distance":1,"identified":true})")))});
+  for(int32 Time:{101,131,10000})
+  {
+   S->SetNumberField(TEXT("time"),Time);const auto I=Step(VM,S,P);
+   TestFalse(TEXT("Full packs do not reopen corpses on a retry timer"),I->HasField(TEXT("action")));
+   TestTrue(TEXT("Full inventory remains visible while otherwise idle"),I->GetStringField(TEXT("status")).Contains(TEXT("inventory full")));
+  }
+  P->SetStringField(TEXT("combat"),TEXT("melee"));
+  S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":500,"name":"Rat","distance":1,"identified":true,"line_of_sight":true})")))});
+  TestEqual(TEXT("Combat runs even with loot priority and every pack full"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+  P->SetBoolField(TEXT("recovery"),true);S->SetNumberField(TEXT("health"),10);
+  TestEqual(TEXT("Full inventory never blocks healing"),Step(VM,S,P)->GetNumberField(TEXT("item")),51.);
+  S->SetNumberField(TEXT("health"),100);S->SetNumberField(TEXT("action_serial"),1);S->SetArrayField(TEXT("targets"),{});P->SetStringField(TEXT("combat"),TEXT("off"));
+  Step(VM,S,P); // Release the old combat target.
+  P->SetBoolField(TEXT("navigation"),true);
+  P->SetArrayField(TEXT("route"),Json(TEXT(R"({"v":[{"cell":30998795,"x":40,"y":-34,"z":0}]})"))->GetArrayField(TEXT("v")));
+  TestEqual(TEXT("Route travel continues with looting paused"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("move")));
+  P->SetBoolField(TEXT("navigation"),false);S->SetNumberField(TEXT("pack_slots"),1);S->SetNumberField(TEXT("inventory_revision"),2);
+  TestEqual(TEXT("Space in any pack resumes looting without restarting UCM"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("open_corpse")));
+ }
  for(bool Recall:{false,true}) for(bool Boost:{false,true}) for(bool Arrives:{false,true})
  {
   FACEPluginVM VM;TestTrue(TEXT("Portal scheduling policy loads"),VM.Load(Source,Error));auto S=Snapshot();

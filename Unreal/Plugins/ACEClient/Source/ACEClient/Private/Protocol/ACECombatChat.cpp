@@ -24,7 +24,6 @@ namespace ACECombatChat
 		constexpr uint32 CondCriticalProtection = 0x1;
 		constexpr uint32 CondRecklessness = 0x2;
 		constexpr uint32 CondSneakAttack = 0x4;
-		constexpr uint32 CondOverpower = 0x8;
 	}
 
 	namespace
@@ -80,30 +79,33 @@ namespace ACECombatChat
 
 	FString DamageTypeName(uint32 DamageType)
 	{
-		switch (DamageType)
+		// AppraisalSystem::DamageTypeToString: only these flags have labels;
+		// combinations retain retail ordering and are separated by '/'.
+		static const struct { uint32 Mask; const TCHAR* Name; } Types[] = {
+			{1,TEXT("slashing")},{2,TEXT("piercing")},{4,TEXT("bludgeoning")},
+			{8,TEXT("cold")},{16,TEXT("fire")},{32,TEXT("acid")},
+			{64,TEXT("electrical")},{1024,TEXT("nether")},{0x10000000,TEXT("prismatic")}};
+		FString Out;
+		for (const auto& Type : Types) if (DamageType & Type.Mask)
 		{
-		case 0x1: return TEXT("slashing");
-		case 0x2: return TEXT("piercing");
-		case 0x4: return TEXT("bludgeoning");
-		case 0x8: return TEXT("cold");
-		case 0x10: return TEXT("fire");
-		case 0x20: return TEXT("acid");
-		case 0x40: return TEXT("electric");
-		case 0x80: return TEXT("health");
-		case 0x100: return TEXT("stamina");
-		case 0x200: return TEXT("mana");
-		case 0x400: return TEXT("nether");
-		default: return TEXT("untyped");
+			if (!Out.IsEmpty()) Out += TEXT("/");
+			Out += Type.Name;
 		}
+		return Out;
 	}
 
 	FString DamageLocationName(uint32 DamageLocation)
 	{
 		static const TCHAR* Names[] = {
 			TEXT("head"), TEXT("chest"), TEXT("abdomen"), TEXT("upper arm"), TEXT("lower arm"),
-			TEXT("hand"), TEXT("upper leg"), TEXT("lower leg"), TEXT("foot")
+			TEXT("hand"), TEXT("upper leg"), TEXT("lower leg"), TEXT("foot"), TEXT("horn"),
+			TEXT("front leg"), TEXT("unknown"), TEXT("front foot"), TEXT("rear leg"), TEXT("unknown"),
+			TEXT("rear foot"), TEXT("torso"), TEXT("tail"), TEXT("arm"), TEXT("leg"), TEXT("claw"),
+			TEXT("wings"), TEXT("breath"), TEXT("tentacle"), TEXT("upper tentacle"), TEXT("lower tentacle"),
+			TEXT("cloak"), TEXT("num")
 		};
-		return Names[FMath::Clamp(static_cast<int32>(DamageLocation), 0, 8)];
+		if (DamageLocation == MAX_uint32) return TEXT("undefined");
+		return DamageLocation < UE_ARRAY_COUNT(Names) ? Names[DamageLocation] : TEXT("unknown");
 	}
 
 	void GetAttackVerb(uint32 DamageType, float Percent, FString& OutSingular, FString& OutPlural)
@@ -177,25 +179,15 @@ namespace ACECombatChat
 		}
 	}
 
-	FString AppendAttackConditions(const FString& Base, uint64 AttackConditions)
+	static FString AttackPrefix(bool bCritical, uint64 Conditions, bool bDefender)
 	{
-		FString Out = Base;
-		if ((AttackConditions & CondCriticalProtection) != 0)
-		{
-			Out += TEXT(" Your augmented Critical Protection absorbs the severity of the critical strike!");
-		}
-		if ((AttackConditions & CondRecklessness) != 0)
-		{
-			Out += TEXT(" Recklessness!");
-		}
-		if ((AttackConditions & CondSneakAttack) != 0)
-		{
-			Out += TEXT(" Sneak Attack!");
-		}
-		if ((AttackConditions & CondOverpower) != 0)
-		{
-			Out += TEXT(" You overpowered your opponent!");
-		}
+		// ClientCombatSystem::HandleAttacker/DefenderNotificationEvent. The
+		// server decides which skills proc; retail only presents these flags.
+		FString Out = bCritical ? (bDefender ? TEXT("Critical hit! ") : TEXT("Critical hit!  ")) : TEXT("");
+		if (Conditions & CondSneakAttack) Out += TEXT("Sneak Attack! ");
+		if (Conditions & CondRecklessness) Out += bDefender ? TEXT("Reckless! ") : TEXT("Recklessness! ");
+		// Retail does not print condition 0x8 for physical hits. Magic hit text
+		// (including Overpower) arrives already formatted by the server.
 		return Out;
 	}
 
@@ -204,14 +196,14 @@ namespace ACECombatChat
 	{
 		FString Verb, Plural;
 		GetAttackVerb(DamageType, Percent, Verb, Plural);
-		const FString Type = DamageTypeName(DamageType);
-		FString Msg = FString::Printf(TEXT("You %s %s for %u points of %s damage!"),
-			*Verb, *DefenderName, Damage, *Type);
-		if (bCritical)
-		{
-			Msg = TEXT("Critical hit! ") + Msg;
-		}
-		return AppendAttackConditions(Msg, AttackConditions);
+		FString Type = DamageTypeName(DamageType);
+		if (!Type.IsEmpty()) Type += TEXT(" ");
+		FString Msg = AttackPrefix(bCritical, AttackConditions, false)
+			+ FString::Printf(TEXT("You %s %s for %u point%s of %sdamage!"),
+				*Verb, *DefenderName, Damage, Damage == 1 ? TEXT("") : TEXT("s"), *Type);
+		if (AttackConditions & CondCriticalProtection)
+			Msg += TEXT(" Your target's Critical Protection augmentation allows them to avoid your critical hit!");
+		return Msg;
 	}
 
 	FString FormatDefenderNotification(const FString& AttackerName, uint32 DamageType, float Percent,
@@ -219,15 +211,16 @@ namespace ACECombatChat
 	{
 		FString Verb, Plural;
 		GetAttackVerb(DamageType, Percent, Verb, Plural);
-		const FString Type = DamageTypeName(DamageType);
+		FString Type = DamageTypeName(DamageType);
+		if (!Type.IsEmpty()) Type += TEXT(" ");
 		const FString Loc = DamageLocationName(DamageLocation);
-		FString Msg = FString::Printf(TEXT("%s %s you in your %s for %u points of %s damage!"),
-			*AttackerName, *Plural, *Loc, Damage, *Type);
-		if (bCritical)
-		{
-			Msg = TEXT("Critical hit! ") + Msg;
-		}
-		return AppendAttackConditions(Msg, AttackConditions);
+		const FString Body = Loc.IsEmpty() ? TEXT("you") : TEXT("your ") + Loc;
+		FString Msg = AttackPrefix(bCritical, AttackConditions, true)
+			+ FString::Printf(TEXT("%s %s %s for %u point%s of %sdamage!"),
+				*AttackerName, *Plural, *Body, Damage, Damage == 1 ? TEXT("") : TEXT("s"), *Type);
+		if (AttackConditions & CondCriticalProtection)
+			Msg += TEXT(" Your Critical Protection augmentation allows you to avoid a critical hit!");
+		return Msg;
 	}
 
 	FString FormatEvasionAttacker(const FString& DefenderName)

@@ -35,9 +35,11 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("First wire action keeps its own speed"),Seen.ActionSpeed,.75f);
         TestEqual(TEXT("Follow-up wire action keeps its independent speed"),Seen.FollowupSpeed(0),1.5f);
         TestEqual(TEXT("Both first-time actions are delivered"),Seen.ActionFollowups.Num(),1);
+        TestTrue(TEXT("Newly stamped action permits replaying the same gesture"),Seen.bNewAction);
         Packet(2,0x7FFE,0x7FFF);
         TestEqual(TEXT("A newer movement packet does not replay old actions"),Seen.ActionCommand,0);
         TestTrue(TEXT("Repeated actions leave the follow-up queue empty"),Seen.ActionFollowups.IsEmpty());
+        TestFalse(TEXT("Duplicate stamps never request a replay"),Seen.bNewAction);
         Packet(3,0x7FFF,0);
         TestEqual(TEXT("Action stamp rollover keeps the new action"),Seen.ActionSpeed,1.5f);
         TestTrue(TEXT("Rollover does not replay the preceding action"),Seen.ActionFollowups.IsEmpty());

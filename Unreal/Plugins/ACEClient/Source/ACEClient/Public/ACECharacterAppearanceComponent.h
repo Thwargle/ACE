@@ -176,7 +176,7 @@ public:
 	 * Dead holds its final frame instead of returning to locomotion.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
-	void PlayActionMotion(int32 ActionCommand, float PlayRate = 1.f, int32 Style = 0, bool bHoldFinalPose = false);
+	void PlayActionMotion(int32 ActionCommand, float PlayRate = 1.f, int32 Style = 0, bool bHoldFinalPose = false, bool bNewAction = false);
 	/** A new local forward command replaces a casting substate, but not queued windup actions. */
 	void InterruptCastWithMovement();
 

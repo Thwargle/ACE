@@ -2354,7 +2354,7 @@ UProceduralMeshComponent* UACEScriptComponent::AcquireParticleMesh(uint32 GfxObj
 	Mesh->SetUsingAbsoluteLocation(true);
 	Mesh->SetUsingAbsoluteRotation(true);
 	Mesh->SetUsingAbsoluteScale(true);
-	Mesh->SetVisibility(true);
+	Mesh->SetVisibility(!bCosmeticParticlesHidden);
 	Mesh->SetHiddenInGame(false);
 	// Owner hide (portal-space loading) would otherwise suppress all child primitives.
 	Mesh->SetOwnerNoSee(false);
@@ -2480,6 +2480,7 @@ bool UACEScriptComponent::EnsureParticleBatch(FActiveEmitter& Emitter)
 	}
 	Batch->SetTranslucentSortPriority(Emitter.RenderSortPriority);
 	Batch->InitializeParticles(Emitter.Info.MaxParticles);
+	Batch->SetVisibility(!bCosmeticParticlesHidden && !Emitter.bDegraded);
 	Batch->RegisterComponent();
 	Emitter.Batch = Batch; Emitter.bInstanced = true;
 	// DrawMode came from GfxObjInfo. Do not infer billboarding from mesh bounds.
@@ -2533,7 +2534,7 @@ void UACEScriptComponent::ApplyParticleVisual(FActiveEmitter& Emitter, FActivePa
 				Mid->SetScalarParameterValue(TEXT("OpacityMul"), Opacity);
 			}
 		}
-	Mesh->SetVisibility(true);
+	Mesh->SetVisibility(!bCosmeticParticlesHidden && !Emitter.bDegraded);
 	Mesh->SetHiddenInGame(false);
 }
 
@@ -2808,10 +2809,10 @@ void UACEScriptComponent::SetEmitterDegraded(FActiveEmitter& Emitter, bool bDegr
 {
 	if (Emitter.bDegraded == bDegraded) return;
 	Emitter.bDegraded = bDegraded;
-	if (Emitter.Batch) Emitter.Batch->SetVisibility(!bDegraded);
+	if (Emitter.Batch) Emitter.Batch->SetVisibility(!bDegraded && !bCosmeticParticlesHidden);
 	for (auto& Particle : Emitter.Particles)
 	{
-		if (auto* Mesh = Particle.Mesh.Get()) Mesh->SetVisibility(!bDegraded);
+		if (auto* Mesh = Particle.Mesh.Get()) Mesh->SetVisibility(!bDegraded && !bCosmeticParticlesHidden);
 		// Retail resets ambient birth times while degraded, with no catch-up
 		// burst when the camera returns. Simulation resumes from the birth frame.
 		if (!bDegraded) Particle.Age = 0.f;
@@ -3087,7 +3088,7 @@ void UACEScriptComponent::TickParticleLights(bool bPresentationOnly)
 {
 	auto* Lights = GetWorld() ? GetWorld()->GetSubsystem<UACEEffectLightSubsystem>() : nullptr;
 	if (!Lights) return;
-	if (!bAllowInferredParticleLights || bEnvironmentWeather)
+	if (!bAllowInferredParticleLights || bEnvironmentWeather || bCosmeticParticlesHidden)
 	{
 		Lights->RemoveParticles(this);
 		return;
@@ -3183,6 +3184,28 @@ void UACEScriptComponent::StopEmitter(uint32 InstanceId, bool bDestroy)
 	if (ActiveEmitters.IsEmpty())
 		if (auto* Lights = GetWorld() ? GetWorld()->GetSubsystem<UACEEffectLightSubsystem>() : nullptr)
 			Lights->RemoveParticles(this);
+}
+
+void UACEScriptComponent::SetCosmeticParticlesHidden(UObject* Owner, bool bHidden)
+{
+	if (!Owner) return;
+	if (bHidden) CosmeticParticleHideOwners.Add(Owner);
+	else CosmeticParticleHideOwners.Remove(Owner);
+	for (auto It = CosmeticParticleHideOwners.CreateIterator(); It; ++It)
+		if (!It->IsValid()) It.RemoveCurrent();
+	const bool bHide = !CosmeticParticleHideOwners.IsEmpty();
+	if (bHide == bCosmeticParticlesHidden) return;
+	bCosmeticParticlesHidden = bHide;
+	// These components are not children of the weapon mesh. Preserve clocks and
+	// distance degradation; stopping scripts would lose persistent elemental FX.
+	for (auto& Emitter : ActiveEmitters)
+	{
+		const bool bVisible = !bHide && !Emitter.bDegraded;
+		if (Emitter.Batch) Emitter.Batch->SetVisibility(bVisible);
+		for (auto& Particle : Emitter.Particles)
+			if (auto* Mesh = Particle.Mesh.Get()) Mesh->SetVisibility(bVisible);
+	}
+	TickParticleLights();
 }
 
 void UACEScriptComponent::StopAllEffects()

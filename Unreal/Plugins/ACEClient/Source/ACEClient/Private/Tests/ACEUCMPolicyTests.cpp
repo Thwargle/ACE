@@ -65,8 +65,7 @@ bool FACEUCMFailureIsolationTest::RunTest(const FString&)
             TestEqual(TEXT("Recovery attempts remain bounded"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("use_item")));
             S->SetNumberField(TEXT("time"),101+16*Attempt);S->SetNumberField(TEXT("action_serial"),Attempt+1);S->SetNumberField(TEXT("action_error"),1);
             auto I=Step(VM,S,P);
-            TestEqual(TEXT("Failed recovery yields to combat or its own cooldown"),I->GetStringField(TEXT("action")),FString(Attempt==2?TEXT("activity_failed"):TEXT("attack")));
-            if(Attempt==2)TestEqual(TEXT("Health recovery failure is isolated from other vitals"),I->GetStringField(TEXT("activity")),FString(TEXT("recovery2")));
+            TestEqual(TEXT("Failed supply yields to combat during that method's cooldown"),I->GetStringField(TEXT("action")),FString(TEXT("attack")));
         }
         S->SetNumberField(TEXT("time"),134);
         TestEqual(TEXT("Recovery failure does not stop fighting at critical health"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));

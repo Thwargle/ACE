@@ -15,7 +15,6 @@ namespace ACECombatChat
 		uint32 Damage, uint32 DamageLocation, bool bCritical, uint64 AttackConditions);
 	FString FormatEvasionAttacker(const FString& DefenderName);
 	FString FormatEvasionDefender(const FString& AttackerName);
-	FString AppendAttackConditions(const FString& Base, uint64 AttackConditions);
 	// Magic damage is sent as system chat rather than the physical-hit event.
 	bool ParseOutgoingSpellDamage(const FString& Text, FString& Target, int32& Amount, bool& Critical);
 

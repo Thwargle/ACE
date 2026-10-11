@@ -25,6 +25,8 @@
 #include "ACEDesktopDisplay.h"
 #include "GameFramework/GameUserSettings.h"
 #include "ACESpellTargeting.h"
+#include "Protocol/ACECombatChat.h"
+#include "ACERetailChat.h"
 #include "HAL/PlatformProcess.h"
 #include "Components/EditableTextBox.h"
 #include "Components/CheckBox.h"
@@ -33,6 +35,7 @@
 #include "UI/ACEVideoSettingsWidget.h"
 #include "Components/ComboBoxString.h"
 #include "Components/ScrollBox.h"
+#include "Components/SizeBox.h"
 #include "Blueprint/WidgetTree.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
@@ -68,6 +71,7 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     auto& Session=*Client->Session; Session.State=EACESessionState::InWorld; Session.PlayerGuid=1234;
     FACEWorldObject Self; Self.Guid=1234; Self.Name=TEXT("UI regression"); Self.bIsPlayer=true; Self.ItemType=ACEItemType::Creature; Session.WorldObjects.Add(Self.Guid,Self);
     Session.OnChatMessage.AddLambda([Client](const FString& Text,const FString& Sender,int32 Type){Client->ReceiveChatMessage(Text,Sender,Type);});
+    Session.OnSpellLearned.AddLambda([Client](int32 Id){Client->OnSpellLearned.Broadcast(Id);});
     FACEBinaryWriter Welcome;Welcome.WriteString16L(TEXT("Welcome to Asheron's Call\n powered by ACEmulator"));Welcome.WriteInt32(ACEChatMessageType::Broadcast);
     FACEBinaryReader WelcomeReader(Welcome.GetData());Session.HandleServerMessage(WelcomeReader);
     FACEBinaryWriter Joined;Joined.WriteUInt32(0x051B);Joined.WriteString16L(TEXT("General"));
@@ -104,6 +108,114 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
         FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/TEXT("Automation/UIInteractions")/(FString(Name)+TEXT(".png"))));
     };
     Manager->ApplyEdgeAnchoredLayout(1600,900);
+
+    {
+        TGuardValue<uint64> MainFilter(Binder->MainChatTypeFilter,MAX_uint64);
+        TGuardValue<uint64> GlobalFilter(Binder->GlobalChatTypeFilter,MAX_uint64);
+        for (int32 Type=0;Type<34;++Type)
+        {
+            FACEBinaryWriter W;W.WriteString16L(FString::Printf(TEXT("Retail chat color %d"),Type));W.WriteInt32(Type);
+            FACEBinaryReader R(W.GetData());Session.HandleServerMessage(R);
+            TestTrue(TEXT("Live HUD retains the retail message color"),Binder->ChatDisplayLines[0].Last().Color.Equals(ACERetailChat::Color(Type)));
+            if (auto* Row=Cast<UTextBlock>(Binder->ChatLog->GetChildAt(Binder->ChatLog->GetChildrenCount()-1)))
+                TestTrue(TEXT("Painted chat label uses the same color as VR's shared history"),Row->GetColorAndOpacity().GetSpecifiedColor().Equals(ACERetailChat::Color(Type)));
+        }
+        Binder->ClearChatLog(0);
+        FACEBinaryWriter D;D.WriteString16L(TEXT("Your attack killed the Drudge!"));FACEBinaryReader R(D.GetData());Session.HandleCombatKillerNotification(R);
+        Client->ReceiveChatMessage(ACECombatChat::FormatAttackerNotification(TEXT("Drudge"),4,.2f,42,false,6),FString(),22);
+        Client->ReceiveChatMessage(ACECombatChat::FormatDefenderNotification(TEXT("Drudge"),4,.2f,12,1,false,6),FString(),21);
+        Client->ReceiveChatMessage(TEXT("Dirty Fighting! Player delivers a Bleeding Assault to Drudge!"),FString(),6);
+        Client->ReceiveChatMessage(TEXT("You cast Strength Self VII on yourself."),FString(),7);
+        Client->ReceiveChatMessage(TEXT("You have earned 1,000 experience!"),FString(),13);
+        Client->ReceiveChatMessage(TEXT("[General] Friend says, Hello!"),FString(),27);
+        auto ChatRoot=Manager->FindElementByName(TEXT("RootGameplay_FloatyMainChat_Field"));
+        if (ChatRoot)
+        {
+            const int32 OldResize=ChatRoot->UserResizeH,OldY=ChatRoot->Y;
+            ChatRoot->UserResizeH+=140;UACEUIElementManager::ApplyFloatyResizeLayout(ChatRoot);ChatRoot->Y-=140;
+            Draw(TEXT("RetailCombatChatColors"));
+            ChatRoot->UserResizeH=OldResize;UACEUIElementManager::ApplyFloatyResizeLayout(ChatRoot);ChatRoot->Y=OldY;
+        }
+        Binder->ClearChatLog(0);
+        for(double& Time:Binder->TransientInfoTimes) Time-=6.;Binder->TickTransientInfo();
+        const auto OriginalSkills=Binder->LastVitals.Skills;
+        Binder->ApplyCombatMode(int32(ACECombatMode::Melee));
+        auto Fill=Manager->FindElementByName(TEXT("basic_recklessness_fill"));
+        TestTrue(TEXT("Authored Recklessness band exists"),Fill.IsValid());
+        for(int32 Training:{0,1,2,3,1})
+        {
+            Binder->LastVitals.Skills.Reset();FACESkillInfo Skill;Skill.SkillId=50;Skill.AdvancementClass=Training;Binder->LastVitals.Skills.Add(Skill);
+            Binder->RefreshCombatPanelOverlays();
+            if(Fill) TestEqual(TEXT("Recklessness band follows trained/untrained state"),Fill->bVisible,Training>=2);
+        }
+        Binder->LastVitals.Skills=OriginalSkills;
+        const auto Stance=Session.GetCurrentStance();
+        Session.SetCurrentStance(ACEMotion::StanceDualWield);
+        TestEqual(TEXT("Dual wield charges at retail's 0.8 second period"),Binder->GetCombatPowerChargeDuration(),.8f);
+        Session.SetCurrentStance(ACEMotion::StanceSwordCombat);
+        TestEqual(TEXT("Single weapon charges at retail's one second period"),Binder->GetCombatPowerChargeDuration(),1.f);
+        Session.SetCurrentStance(Stance);
+        Binder->ApplyCombatMode(int32(ACECombatMode::NonCombat));
+    }
+
+    // Retail gmSpewBoxUI listens to LogTextType 26 independently of chat
+    // filtering. Exercise the wire handlers, subsystem relay and actual HUD.
+    const int32 BeforeFailures = Binder->ChatDisplayLines[0].Num();
+    const int32 BeforeHistory = Client->GetChatHistory().Num();
+    auto FailureEvent = [&](uint32 Event, uint32 Code, const TCHAR* Argument = nullptr)
+    {
+        FACEBinaryWriter W; W.WriteUInt32(1234); W.WriteUInt32(1); W.WriteUInt32(Event); W.WriteUInt32(Code);
+        if (Argument) W.WriteString16L(Argument);
+        FACEBinaryReader R(W.GetData()); Session.HandleGameEvent(R);
+    };
+    for (uint32 Code : {0x03F5u, 0x0420u, 0x0421u, 0x042Fu, 0x0468u, 0x04C7u, 0x0585u, 0x04FCu})
+    {
+        FailureEvent(ACEGameEvent::WeenieError, Code);
+        TestTrue(TEXT("Wield/use failure is visible at the top of the screen"), Binder->TransientInfoText && Binder->TransientInfoText->IsVisible());
+        if (Binder->TransientInfoText) TestEqual(TEXT("Banner keeps retail failure wording"),
+            Binder->TransientInfoText->GetText().ToString(), ACECombatChat::LookupWeenieError(Code));
+    }
+    FailureEvent(ACEGameEvent::WeenieErrorWithString, 0x04CB, TEXT("Summoning"));
+    TestEqual(TEXT("Named requirements expand in the notice area"), Binder->TransientInfoText->GetText().ToString(),
+        FString(TEXT("You must have Summoning specialized to use that item's magic.")));
+    FailureEvent(ACEGameEvent::UseDone, 0x0468);
+    TestEqual(TEXT("UseDone errors share the same banner"), Binder->TransientInfoText->GetText().ToString(), FString(TEXT("Your skill is too low.")));
+    TestEqual(TEXT("Notices do not appear in retail's default chat window"), Binder->ChatDisplayLines[0].Num(), BeforeFailures);
+    TestEqual(TEXT("Expired failures cannot replay when a HUD is recreated"), Client->GetChatHistory().Num(), BeforeHistory);
+    TestEqual(TEXT("Notice rows are bounded to the retail maximum"), Binder->TransientInfoLines.Num(), 4);
+    const FText PreviousSecond = Binder->TransientInfoLines[1]->GetText();
+    Binder->TransientInfoTimes[0] -= 4.5;
+    Binder->TickTransientInfo();
+    TestTrue(TEXT("A notice fades before expiring"), Binder->TransientInfoText->GetRenderOpacity() < 1.f);
+    FailureEvent(ACEGameEvent::UseDone, 0x0468);
+    TestEqual(TEXT("Repeating a failure refreshes it instead of pushing out other notices"), Binder->TransientInfoLines[1]->GetText().ToString(), PreviousSecond.ToString());
+    TestEqual(TEXT("Repeat resets the notice fade"), Binder->TransientInfoText->GetRenderOpacity(), 1.f);
+    const FString LastNotice = Binder->TransientInfoText->GetText().ToString();
+    FailureEvent(ACEGameEvent::WeenieErrorWithString, 0x050D, TEXT("Friend"));
+    FailureEvent(ACEGameEvent::WeenieErrorWithString, 0x0052, TEXT("Other Player"));
+    TestEqual(TEXT("System and magic errors keep their chat destinations"), Binder->ChatDisplayLines[0].Num(), BeforeFailures + 2);
+    TestEqual(TEXT("Ordinary chat does not replace action failure notices"), Binder->TransientInfoText->GetText().ToString(), LastNotice);
+    {
+        TGuardValue<uint64> Filter(Binder->GlobalChatTypeFilter, 0);
+        FailureEvent(ACEGameEvent::WeenieError, 0x0420);
+        TestEqual(TEXT("Chat filtering cannot suppress the notice area"), Binder->TransientInfoText->GetText().ToString(), FString(TEXT("Your level is too low.")));
+    }
+    Draw(TEXT("RetailFailureNotices"));
+    const auto VitalsPanel = Manager->FindElementByName(TEXT("RootGameplay_FloatyVitals_Field"));
+    const FVector2D NoticeOrigin = Canvas->GetCachedGeometry().AbsoluteToLocal(
+        Binder->TransientInfoBox->GetCachedGeometry().LocalToAbsolute(FVector2D::ZeroVector));
+    const float VitalsBottom = Canvas->LayoutToViewport(FVector2D(VitalsPanel->GetScreenOrigin())
+        + FVector2D(0, VitalsPanel->GetLayoutHeight())).Y;
+    TestTrue(TEXT("Top-center vitals cannot hide the newest failure notices"), NoticeOrigin.Y >= VitalsBottom);
+    auto* NoticeFont = CastChecked<UACERetailTextBlock>(Binder->TransientInfoText)->GetBitmapFont();
+    TestTrue(TEXT("Notice text uses the native retail font atlas"), NoticeFont && NoticeFont->Id == 0x40000001u);
+    for (double& Time : Binder->TransientInfoTimes) Time -= 6.0;
+    Binder->TickTransientInfo();
+    for (const auto& Line : Binder->TransientInfoLines) TestFalse(TEXT("Expired notices leave the viewport"), Line->IsVisible());
+    FACEBinaryWriter Banner; Banner.WriteString16L(TEXT("Still a banner"));
+    FACEBinaryReader BannerReader(Banner.GetData()); Session.HandleTransientString(BannerReader);
+    TestTrue(TEXT("Explicit transient strings still display after prior notices expire"), Binder->TransientInfoText->IsVisible());
+    TestEqual(TEXT("Transient string wording is intact"), Binder->TransientInfoText->GetText().ToString(), FString(TEXT("Still a banner")));
 
     // Real tab input, hotkey navigation, and the VR selection entry point share state.
     Session.SpellBars.SetNum(8);
@@ -252,6 +364,53 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     TestTrue(TEXT("Heal Other Cast button enables for another player"),CastButton->bActivatable); Draw(TEXT("HealOtherPlayerEnabled"));
     Session.SpellBars[1].Reset();
 
+    // Learn a spell beyond the first page using the actual sorted DAT book.
+    TArray<int32> BookSpells;
+    for (uint32 Id=1;Id<=500;++Id)
+    {
+        uint32 School=0,Level=0;
+        if (Dat->TryGetSpellSchoolAndLevel(Id,School,Level) && School>=1 && School<=5 && Level>=1 && Level<=8)
+            BookSpells.Add(Id);
+    }
+    BookSpells.Sort([&](int32 A,int32 B)
+    {
+        uint32 OA=0,OB=0; Dat->TryGetSpellDisplayOrder(A,OA); Dat->TryGetSpellDisplayOrder(B,OB);
+        return OA!=OB ? OA<OB : A<B;
+    });
+    if (!TestTrue(TEXT("Fixture has multiple pages of real spells"),BookSpells.Num()>40)) return false;
+    Session.KnownSpells=BookSpells;
+    const int32 NewSpell=Session.KnownSpells.Pop();
+    uint32 NewSchool=0,NewLevel=0; Dat->TryGetSpellSchoolAndLevel(NewSpell,NewSchool,NewLevel);
+    Binder->SpellbookSchoolFilterMask=0x1Fu & ~(1u<<(NewSchool-1));
+    Binder->SpellbookLevelFilterMask=0xFFu & ~(1u<<(NewLevel-1));
+    Binder->HandleNamedClick(TEXT("SpellComponentTab"));
+    Binder->ShowPanelPage(TEXT("InventoryPanel_Field"));
+    const int32 CombatSelection=Binder->SelectedCombatSpellSlot;
+    auto Learn=[&](int32 Id)
+    {
+        FACEBinaryWriter W; W.WriteUInt32(1234); W.WriteUInt32(1); W.WriteUInt32(ACEGameEvent::MagicUpdateSpell);
+        W.WriteUInt16(Id); W.WriteUInt16(0); FACEBinaryReader R(W.GetData()); Session.HandleGameEvent(R);
+    };
+    Learn(NewSpell);
+    TestEqual(TEXT("Learning opens spell management"),Binder->ActivePanelPage,FString(TEXT("SpellManagementPanel_Field")));
+    TestEqual(TEXT("Learning switches from components to the spellbook"),Binder->ActiveSpellPanelTab,FString(TEXT("SpellbookPage")));
+    TestEqual(TEXT("The new spell is selected"),Binder->SelectedSpellbookId,NewSpell);
+    TestTrue(TEXT("Selection scrolls beyond the first page"),Binder->SpellbookScrollOffset>0);
+    TestTrue(TEXT("Learned spell is present in visible rows"),Binder->SpellbookRowIds.Contains(NewSpell));
+    TestEqual(TEXT("Learning preserves the combat hotbar selection"),Binder->SelectedCombatSpellSlot,CombatSelection);
+    TestEqual(TEXT("The new spell's school is revealed"),Binder->SpellbookSchoolFilterMask,0x1Fu);
+    TestEqual(TEXT("The new spell's level is revealed"),Binder->SpellbookLevelFilterMask,0xFFu);
+    Draw(TEXT("NewlyLearnedSpell"));
+    const int32 LearnedRow=Binder->SpellbookRowIds.Find(NewSpell);
+    TestTrue(TEXT("New spell has the visible retail selection highlight"),LearnedRow!=INDEX_NONE && Binder->SpellbookRowSelections[LearnedRow]->IsVisible());
+    Binder->SpellbookScrollOffset=0; Binder->RefreshSpellbookOverlays();
+    TestEqual(TEXT("Reveal does not override later manual scrolling"),Binder->SpellbookScrollOffset,0);
+    Binder->ShowPanelPage(TEXT("InventoryPanel_Field")); Learn(NewSpell);
+    TestEqual(TEXT("Duplicate learn packets cannot steal the open panel"),Binder->ActivePanelPage,FString(TEXT("InventoryPanel_Field")));
+    const int32 EarlySpell=BookSpells[0]; Session.KnownSpells.Remove(EarlySpell);
+    Binder->SpellbookScrollOffset=100; Learn(EarlySpell);
+    TestTrue(TEXT("Learning near the beginning also scrolls the spell into view"),Binder->SpellbookRowIds.Contains(EarlySpell));
+
     // Retail gmSpellbookUI double-click appends via AddFavorite(-1, false),
     // rather than casting, replacing an occupied slot, or relocating a duplicate.
     Session.KnownSpells={41,42};
@@ -398,6 +557,61 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
         Draw(TEXT("ChatFontExtraLarge"));
         Video->DefaultsVideo();Video->ApplyInterfaceOptions();Binder->RefreshChatRowLayout(0);
         TestEqual(TEXT("Defaults restore original retail chat font"),Row->GetBitmapFont()->Id,0x40000000u);
+    }
+
+    // Retail separates skill-credit training from XP advancement, including the
+    // authored footer and its hit targets (gmSkillUI::DisplaySelectionFooter_Untrained).
+    {
+        const auto SavedVitals = Session.PlayerVitals;
+        ON_SCOPE_EXIT { Session.PlayerVitals = SavedVitals; Client->OnVitalsUpdated.Broadcast(SavedVitals); };
+        auto& Stats = Session.PlayerVitals;
+        Stats.bValid = true; Stats.AvailableSkillCredits = 100; Stats.AvailableExperience = 1000000;
+        FACESkillInfo Skill; Skill.SkillId = 39; Skill.Name = TEXT("Cooking"); Skill.AdvancementClass = 1;
+        Stats.Skills = {Skill};
+        Binder->SelectedSkillId = Skill.SkillId;
+        Binder->ShowPanelPage(TEXT("SkillManagementPanel_Field")); Binder->SyncSkillPanelTab(TEXT("SkillPage"));
+        Client->OnVitalsUpdated.Broadcast(Stats);
+        Draw(TEXT("SkillTrainingAvailable"));
+        const auto Training = Manager->FindElementUnder(TEXT("SkillPage"), TEXT("StatManagement_Footer_Text"));
+        const auto Meter = Manager->FindElementUnder(TEXT("SkillPage"), TEXT("StatManagement_Footer_Meter"));
+        if (!TestTrue(TEXT("Both native skill footer templates exist"), Training.IsValid() && Meter.IsValid())) return false;
+        auto Button = [](const TSharedPtr<FACEUIElement>& Footer, const TCHAR* Name)
+        {
+            const auto* Found = Footer->Children.FindByPredicate([Name](const auto& Child) { return Child->ElementName == Name; });
+            return Found ? *Found : TSharedPtr<FACEUIElement>();
+        };
+        const auto Train = Button(Training, TEXT("StatManagement_Footer_RaiseButton"));
+        const auto Train10 = Button(Training, TEXT("StatManagement_Footer_Raise10Button"));
+        const auto Raise10 = Button(Meter, TEXT("StatManagement_Footer_Raise10Button"));
+        if (!TestTrue(TEXT("Native skill arrows exist"), Train.IsValid() && Train10.IsValid() && Raise10.IsValid())) return false;
+        TestTrue(TEXT("Untrained skills show the text footer without an XP meter"), Training->bVisible && !Meter->bVisible);
+        TestFalse(TEXT("Training never shows a +10 arrow"), bool(Train10->bVisible));
+        TestFalse(TEXT("Hidden training +10 cannot activate"), Train10->bActivatable);
+        TestTrue(TEXT("Sufficient credits enable the single training arrow"), Train->bActivatable);
+        TestEqual(TEXT("Single training arrow uses retail's enabled artwork"), Train->ResolvePaintState(false,false,false)->ImageFileId, 0x06004CB6u);
+        TestEqual(TEXT("Training title is the skill name, without a level"), Binder->AttrFooterTitle->GetText().ToString(), Skill.Name);
+        int32 Cost = 0; Dat->TryGetSkillTrainedCost(Skill.SkillId, Cost);
+        TestTrue(TEXT("Fixture skill has a real training cost"), Cost > 0);
+        TestEqual(TEXT("Training displays the DAT skill-credit cost"), Binder->AttrFooterLine1Value->GetText().ToString(), FString::FromInt(Cost));
+        const uint32 BeforeTraining = Session.NextGameActionSequence;
+        Binder->HandleNamedClick(TEXT("StatManagement_Footer_Raise10Button"));
+        Binder->TryHandleOverlayClick(FVector2D(Train10->GetScreenOrigin()) + FVector2D(15,13), false);
+        TestEqual(TEXT("Neither named +10 input nor its hidden hit area can train"), Session.NextGameActionSequence, BeforeTraining);
+        TestTrue(TEXT("The text footer's single arrow accepts pointer input"),
+            Binder->TryHandleOverlayClick(FVector2D(Train->GetScreenOrigin()) + FVector2D(15,13), false));
+        TestEqual(TEXT("Single training click sends exactly one action"), Session.NextGameActionSequence, BeforeTraining + 1);
+        Stats.AvailableSkillCredits = Cost - 1; Client->OnVitalsUpdated.Broadcast(Stats);
+        Draw(TEXT("SkillTrainingInsufficient"));
+        TestFalse(TEXT("Insufficient credits disable training"), Train->bActivatable);
+        TestEqual(TEXT("Unaffordable training uses retail's disabled arrow"), Train->ResolvePaintState(false,false,false)->ImageFileId, 0x06004CB7u);
+        Binder->HandleNamedClick(TEXT("StatManagement_Footer_RaiseButton"));
+        TestEqual(TEXT("Unaffordable training sends no action"), Session.NextGameActionSequence, BeforeTraining + 1);
+        Stats.Skills[0].AdvancementClass = 2; Client->OnVitalsUpdated.Broadcast(Stats);
+        Draw(TEXT("SkillTrainedAdvancement"));
+        TestTrue(TEXT("Learning the skill switches to the XP meter footer"), !Training->bVisible && Meter->bVisible);
+        TestTrue(TEXT("Trained skills retain the +10 XP option"), Raise10->bVisible && Raise10->bActivatable);
+        Binder->HandleNamedClick(TEXT("StatManagement_Footer_Raise10Button"));
+        TestEqual(TEXT("Trained +10 still sends an advancement action"), Session.NextGameActionSequence, BeforeTraining + 2);
     }
 
     // Resizing, wheel, arrow buttons, thumb dragging and row identity use the real DAT tree.

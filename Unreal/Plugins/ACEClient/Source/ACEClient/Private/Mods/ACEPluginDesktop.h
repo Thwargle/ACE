@@ -28,6 +28,7 @@ private:
         FVector2D Position, Size;
         bool Open = true;
         bool MapOverlay = false;
+        bool PluginBar = false;
     };
     TWeakObjectPtr<UACEPluginSubsystem> Host;
     TSharedPtr<SConstraintCanvas> Canvas;
@@ -37,6 +38,7 @@ private:
     FVector2D ViewSize = FVector2D::ZeroVector;
     int32 TopOrder = 1;
     void Layout(FWindow& Window);
+    FVector2D DisplaySize(const FWindow& Window) const;
     void Move(const FString& Id, FVector2D Delta, bool Save);
     void Resize(const FString& Id, FVector2D Delta, bool Save);
     void Raise(const FString& Id);

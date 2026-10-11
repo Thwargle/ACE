@@ -15,6 +15,7 @@ namespace ACEOpcode
 	constexpr uint32 SoulEmote                      = 0x01E2;
 	constexpr uint32 InventoryRemoveObject          = 0x0024;
 	constexpr uint32 SetStackSize                   = 0x0197;
+	constexpr uint32 PlayerKilled                   = 0x019E;
 	constexpr uint32 PrivateUpdatePropertyInt       = 0x02CD;
 	constexpr uint32 PublicUpdatePropertyInt        = 0x02CE;
 	constexpr uint32 PrivateUpdatePropertyInt64     = 0x02CF;
@@ -182,7 +183,7 @@ namespace ACEChatMessageType
 	constexpr int32 Recall       = 0x17;
 	constexpr int32 Craft        = 0x18;
 	constexpr int32 Salvaging    = 0x19;
-	constexpr int32 ChatError    = 0x1A; // client-local feedback; filtered from logs by default in retail
+	constexpr int32 ChatError    = 0x1A; // retail gmSpewBoxUI notices; excluded from chat by default
 	constexpr int32 General      = 0x1B;
 	constexpr int32 Trade        = 0x1C;
 	constexpr int32 LFG          = 0x1D;
@@ -195,9 +196,13 @@ namespace ACEChatMessageType
 	}
 	/**
 	 * Client-internal (not a retail LogTextType): CommunicationTransientString
-	 * messages use a fading banner. WeenieErrors use their retail chat destination.
+	 * messages share the retail LogTextType 26 notice destination.
 	 */
 	constexpr int32 TransientInfo = 0x30;
+	inline bool IsTransientNotice(int32 Type)
+	{
+		return Type == ChatError || Type == TransientInfo;
+	}
 }
 
 /** Retail ChatChannel destination ids (GameAction ChatChannel 0x0147). */

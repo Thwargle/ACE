@@ -70,7 +70,7 @@ class ReleasePackagingTests(unittest.TestCase):
             archive.writestr('manifest.json', json.dumps(manifest))
             archive.writestr('AC-VR-arm64.apk', apk.read_bytes())
         put(self.root, 'Unreal/Saved/VRWindowsArchive/Windows/ACUnreal/Binaries/Win64/ACUnreal.exe',
-            b'MZ' + (display + '\0').encode('utf-16-le'))
+            b'MZ' + (display + '\0ACE.LocalCosmetics/1\0').encode('utf-16-le'))
         put(self.root, 'Unreal/Saved/VRWindowsArchive/Windows/Update-Client.ps1')
         put(self.root, 'Unreal/Saved/VRWindowsArchive/Windows/ACUnreal/Content/Paks/game.pak')
         put(self.root, 'Unreal/Build/VR/README-WINDOWS.txt')
@@ -100,6 +100,27 @@ class ReleasePackagingTests(unittest.TestCase):
         meta['windowsInstaller'] = build.artifact(installer)
         self.write_meta(release, meta)
         return release, meta
+
+    def test_optional_transmog_is_not_part_of_client_release(self):
+        self.fixture()
+        windows = self.root / 'Unreal/Saved/VRWindowsArchive/Windows'
+        put(windows, 'ACUnreal/Plugins/ACWoW/ACWoW.uplugin', '{}')
+        with self.assertRaisesRegex(ValueError, 'must ship separately'):
+            build.verify_client_plugin_boundary(windows)
+
+    def test_converted_cosmetic_assets_rejected_from_release(self):
+        self.fixture()
+        windows = self.root / 'Unreal/Saved/VRWindowsArchive/Windows'
+        put(windows, 'ACUnreal/Content/mesh.acwm')
+        with self.assertRaisesRegex(ValueError, 'cosmetic asset'):
+            build.verify_client_plugin_boundary(windows)
+
+    def test_release_requires_shared_cosmetic_api(self):
+        self.fixture()
+        windows = self.root / 'Unreal/Saved/VRWindowsArchive/Windows'
+        put(windows, 'ACUnreal/Binaries/Win64/ACUnreal.exe', b'MZ old client')
+        with self.assertRaisesRegex(ValueError, 'lacks the released local cosmetics API'):
+            build.verify_client_plugin_boundary(windows)
 
     def write_meta(self, release, meta):
         (release / 'release-manifest.json').write_text(json.dumps(meta), encoding='utf-8')
