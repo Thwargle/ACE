@@ -75,12 +75,64 @@ bool FACEPluginCompanionTest::RunTest(const FString&)
     TestTrue(TEXT("Chat drained independently per companion"),H->CompanionSnapshot(*P)->GetArrayField(TEXT("chat_events")).IsEmpty());
     H->Stop(P->Id);H->Start(P->Id);TestTrue(TEXT("Stop/start does not redeliver consumed chat"),H->CompanionSnapshot(*P)->GetArrayField(TEXT("chat_events")).IsEmpty());
     for(int I=0;I<140;++I)C->OnChatMessage.Broadcast(TEXT("quest line"),TEXT(""),ACEChatMessageType::System);
-    Snapshot=H->CompanionSnapshot(*P);TestEqual(TEXT("Chat ring bounded"),Snapshot->GetArrayField(TEXT("chat_events")).Num(),128);TestTrue(TEXT("Overflow is reported"),Snapshot->GetBoolField(TEXT("chat_gap")));
+    Snapshot=H->CompanionSnapshot(*P);TestEqual(TEXT("Lua batch stays bounded"),Snapshot->GetArrayField(TEXT("chat_events")).Num(),128);
+    TestFalse(TEXT("140-line burst no longer overflows"),Snapshot->GetBoolField(TEXT("chat_gap")));
+    TestEqual(TEXT("Unconsumed burst is pending"),Snapshot->GetNumberField(TEXT("chat_pending")),12.);
+    Snapshot=H->CompanionSnapshot(*P);TestEqual(TEXT("Next callback receives the rest"),Snapshot->GetArrayField(TEXT("chat_events")).Num(),12);
+    TestFalse(TEXT("Last page clears backlog flag"),Snapshot->GetBoolField(TEXT("chat_more")));
+    {
+        // ACE emits a separate SystemChat for every quest, all before the next
+        // Lua callback. Exercise the actual VM and two independent readers.
+        FACEClientPlugin Slow;Slow.Permissions={TEXT("chat")};Slow.ChatCursor=P->ChatCursor;
+        const FString Source=TEXT("local count=0; return function(s) assert(not s.chat_gap); for _,e in ipairs(s.chat_events) do count=count+1; assert(tonumber(string.sub(e.raw_text,6,10))==count); end; return {status=tostring(count)} end");
+        FACEPluginVM FastVM,SlowVM;TestTrue(TEXT("Burst readers load"),FastVM.Load(Source,Error)&&SlowVM.Load(Source,Error));
+        auto ReceiveQuest=[&](int32 I){C->OnChatMessage.Broadcast(FString::Printf(TEXT("quest%05d - 1 solves (1234567890)\"Quest message\" -1 0"),I),TEXT(""),ACEChatMessageType::System);};
+        for(int32 I=1;I<=20000;++I)ReceiveQuest(I);
+        auto Drain=[&](FACEClientPlugin& Reader,FACEPluginVM& ReaderVM,int32 Expected)
+        {
+            TSharedPtr<FJsonObject> Result;
+            for(int32 Page=0;Page<200;++Page)
+            {
+                const auto Batch=H->CompanionSnapshot(Reader);const auto& Events=Batch->GetArrayField(TEXT("chat_events"));
+                if(!TestTrue(TEXT("Burst page stays within the Lua event budget"),Events.Num()<=128))return false;
+                if(!TestTrue(TEXT("Quest parser receives every line once, in order, within VM limits"),ReaderVM.Step(Batch,Empty,Result,Error)))
+                {AddError(Error);return false;}
+                if(!Events.IsEmpty())TestEqual(TEXT("Cursor ends at delivered page, not latest receipt"),Batch->GetNumberField(TEXT("chat_serial")),Events.Last()->AsObject()->GetNumberField(TEXT("serial")));
+                TestEqual(TEXT("Latest received serial remains visible while paging"),Batch->GetNumberField(TEXT("chat_latest_serial")),double(H->PluginChatSerial));
+                if(!Batch->GetBoolField(TEXT("chat_more")))
+                {
+                    TestEqual(TEXT("Complete quest burst delivered"),Result->GetStringField(TEXT("status")),FString::FromInt(Expected));
+                    TestTrue(TEXT("Draining never redelivers the last page"),H->CompanionSnapshot(Reader)->GetArrayField(TEXT("chat_events")).IsEmpty());return true;
+                }
+            }
+            AddError(TEXT("Quest burst failed to drain"));return false;
+        };
+        if(!Drain(*P,FastVM,20000))return false;
+        ReceiveQuest(20001);
+        if(!Drain(Slow,SlowVM,20001)||!Drain(*P,FastVM,20001))return false;
+        for(int32 I=0;I<ACEPluginChatLimits::RetainedEvents+5;++I)C->OnChatMessage.Broadcast(TEXT("overflow"),TEXT(""),ACEChatMessageType::System);
+        TestEqual(TEXT("Native retention has a fixed event ceiling"),H->PluginChatEvents.Num(),ACEPluginChatLimits::RetainedEvents);
+        Snapshot=H->CompanionSnapshot(*P);
+        TestTrue(TEXT("Actual backlog loss reports a gap"),Snapshot->GetBoolField(TEXT("chat_gap")));
+        TestEqual(TEXT("Exact lost event count reported"),Snapshot->GetNumberField(TEXT("chat_dropped")),5.);
+        while(Snapshot->GetBoolField(TEXT("chat_more")))
+        {Snapshot=H->CompanionSnapshot(*P);TestFalse(TEXT("A gap is reported only on the affected page"),Snapshot->GetBoolField(TEXT("chat_gap")));}
+        const FString LongLine=FString::ChrN(4096,TCHAR(0x754C));
+        for(int32 I=0;I<600;++I)C->OnChatMessage.Broadcast(LongLine,TEXT(""),ACEChatMessageType::System);
+        TestTrue(TEXT("Long Unicode bursts obey native byte budget"),H->PluginChatTextBytes<=ACEPluginChatLimits::RetainedTextBytes&&H->PluginChatEvents.Num()<600);
+        Snapshot=H->CompanionSnapshot(*P);TestTrue(TEXT("Byte-budget overflow is also reported"),Snapshot->GetBoolField(TEXT("chat_gap")));
+        TestEqual(TEXT("Long Unicode messages are paged by UTF-8 bytes"),Snapshot->GetArrayField(TEXT("chat_events")).Num(),2);
+        FACEPluginVM LongVM;LongVM.Load(TEXT("return function(s) for _,e in ipairs(s.chat_events) do assert(#e.raw_text==12288) end; return {} end"),Error);
+        TSharedPtr<FJsonObject> Result;
+        TestTrue(TEXT("Unicode page fits real Lua heap"),LongVM.Step(Snapshot,Empty,Result,Error));
+        // Leave this backlog pending to verify character/server isolation below.
+    }
     TestTrue(TEXT("Companion output accepted"),H->ApplyCompanionOutput(*P,Output,Error));H->FlushPluginState(*P);
     TestTrue(TEXT("State saved"),IFileManager::Get().FileExists(*P->StatePath)&&!P->StateDirty);
     H->Stop(P->Id);H->Start(P->Id);TestEqual(TEXT("Stop/start restores quest count"),P->SavedState->GetObjectField(TEXT("quest"))->GetNumberField(TEXT("count")),12.);
     const FString FirstPath=P->StatePath;H->Stop(P->Id);Session.ServerName=TEXT("Another server");H->Start(P->Id);
     TestTrue(TEXT("Server-scoped state isolated"),P->StatePath!=FirstPath&&!P->SavedState->HasField(TEXT("quest")));
+    TestTrue(TEXT("Changing servers clears the unread chat backlog and byte accounting"),H->PluginChatEvents.IsEmpty()&&H->PluginChatTextBytes==0&&H->CompanionSnapshot(*P)->GetArrayField(TEXT("chat_events")).IsEmpty());
     H->Stop(P->Id);Session.ServerName=TEXT("Companion Test");Session.PlayerGuid++;H->Start(P->Id);
     TestTrue(TEXT("Character-scoped state isolated"),P->StatePath!=FirstPath&&!P->SavedState->HasField(TEXT("quest")));
     H->Stop(P->Id);Session.PlayerGuid--;H->Start(P->Id);
@@ -140,8 +192,16 @@ bool FACEPluginCompanionTest::RunTest(const FString&)
         TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
         TArray64<uint8> Png;FImageUtils::PNGCompressImageArray(540,720,Pixels,Png);FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("Companion-panel.png")));Target->ReleaseResource();
     }
-    H->TickCompanions();Session.State=EACESessionState::CharacterSelect;H->TickCompanions();
+    H->TickCompanions();C->OnChatMessage.Broadcast(TEXT("Unread before logout"),TEXT(""),ACEChatMessageType::System);
+    Session.State=EACESessionState::CharacterSelect;H->TickCompanions();
     TestFalse(TEXT("Logout stops companion"),P->Running);TestTrue(TEXT("Logout clears UI and markers"),P->PanelRows.IsEmpty()&&H->GetPluginMarkers().IsEmpty());
+    TestTrue(TEXT("Logout drops pending chat and resets reader cursor"),H->PluginChatEvents.IsEmpty()&&P->ChatCursor==H->PluginChatSerial);
+    Session.State=EACESessionState::InWorld;H->TickCompanions();
+    Snapshot=H->CompanionSnapshot(*P);TestFalse(TEXT("Same-character relog does not leave a phantom backlog"),Snapshot->GetBoolField(TEXT("chat_more")));
+    C->OnChatMessage.Broadcast(TEXT("New login quest"),TEXT(""),ACEChatMessageType::System);Snapshot=H->CompanionSnapshot(*P);
+    TestFalse(TEXT("Old unread pages are not reported as overflow on relog"),Snapshot->GetBoolField(TEXT("chat_gap")));
+    TestEqual(TEXT("New login receives only its own chat"),Snapshot->GetArrayField(TEXT("chat_events")).Num(),1);
+    if(!Snapshot->GetArrayField(TEXT("chat_events")).IsEmpty())TestEqual(TEXT("New login chat preserved"),Snapshot->GetArrayField(TEXT("chat_events"))[0]->AsObject()->GetStringField(TEXT("raw_text")),FString(TEXT("New login quest")));
     return true;
 }
 #endif

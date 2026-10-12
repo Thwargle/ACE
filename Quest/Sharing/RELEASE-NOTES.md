@@ -1,53 +1,46 @@
-# AC:Unreal / AC:VR release 109
+# AC:Unreal / AC:VR release 110
 
 Windows desktop, PC VR, native Linux x86_64, and standalone Quest share version
-**2026.10.11.109**. Android version code: 109. Quest installer revision: 7.
+**2026.10.12.110**. Android version code: 110. Quest installer revision: 7.
 
-## Lua plugin API 2
+## Retail movement, combat, and camera
 
-- Let companion plugins run alongside UCM, read chat independently, save state
-  across logins, exchange messages, and register commands.
-- Expose UCM's game snapshots and native action pipelines, reusable UCM and Item
-  Tools policies, profile services, target selection, and navigation services.
-- Add interactive plugin windows with tabs, sections, buttons, editable fields,
-  sliders, lists, progress indicators, icons, and local PNG images.
-- Let plugins place markers over world objects and on maps, and use the existing
-  navigation arrow. Include API documentation and working quest-tracker,
-  target-list, and API-workbench examples. Retain API 1 compatibility.
+- Align player turning, mouse-facing rate limits, movement hold flags, grounded
+  position updates, and airborne movement packets with retail behavior.
+- Correct melee/missile approach and rotation handling, manual attack/cast stop
+  ordering, missile readiness, and stale queued movement around combat actions.
+- Preserve held emote poses during strafing and turning. Use retail's pose and
+  transition checks for jumping instead of forcing the character to stand up.
+- Keep the camera's chosen heading when switching from left-button orbit to
+  right-button mouselook; turn the character toward that heading at retail speed.
+- Correct collision and cell transitions for open building passages, including
+  entrances and areas beneath walkways. The fix uses shared authored geometry
+  rules rather than a special exception for Bandit Castle.
 
-## UCM profiles and targeting
+## Chat and plugin API
 
-- Add New and Delete controls for independent Character, Route, Loot, Vendor,
-  and Monster profiles. New routes start empty.
-- Add New setup with Default profiles and Save current setup. Keep profile
-  selection available on the setup page without duplicate copy controls.
-- Import Virindi routes and loot files into named profiles while preserving
-  original files. Remove the duplicate route dropdown.
-- Rename Rules to Monsters, add the selected monster with default settings,
-  and group its settings in a collapsible section.
-- Move Protections and Banes to Buffs, and keep log access in the Log tab.
-- Restore acquisition of eligible monsters outside missile/spell attack range
-  but within target acquisition range, with approach and route-return handling.
+- Route pet-attack and killing-blow messages through the appropriate retail chat
+  filters in main, secondary, and VR chat windows.
+- Retain large chat bursts for Lua plugins instead of discarding messages beyond
+  the newest 128. Deliver ordered batches independently to each plugin, including
+  /myquests results with UCM disabled.
+- Bound the shared chat backlog at 32,768 events or 8 MiB of UTF-8 message text,
+  expose pending/overflow counts, and clear unread pages between logins.
+- Update API documentation and the quest-tracker example for paged chat delivery.
 
-## Item Tools and retail interface
+## Maintenance and upstream
 
-- Handle partial NPC item acceptance and busy-recipient responses, refresh
-  inventory after removals, and continue confirmed bulk transfers without
-  stalling on items such as Brown Rat Tails.
-- Restore quickslot selection borders and item cooldown indicators, including
-  shared cooldowns and server-reported cooldown state.
-- Correct chat-filter hit testing at different UI scales so category selections
-  apply to the intended main or secondary chat window.
-- Improve the shared local cosmetic host's fitting, previews, and catalog
-  handling for independently installed plugins. **AC-WoW Transmog, its provider,
-  converter, and model assets are excluded from this release.**
+- Merge ACEmulator/ACE master through 7715c052 (database version marker update).
+- Resolve shared plugin-source unity-build naming collisions and update regression
+  code to current Unreal APIs without the reported deprecation/float warnings.
+- Keep Windows, Linux, PC VR, and Quest source/version metadata synchronized.
+- **AC-WoW Transmog, its provider, converter, and model assets are excluded.**
 
 ## Installation and validation
 
-Windows, Linux, and Quest use shared sources and version checks. Release
-validation covers plugin APIs, UCM policies and profiles, Item Tools, chat,
-quickslots, and packaging boundaries. Linux and headset gameplay still require
-live acceptance; packaging alone is not live certification.
+Validation covers the changed movement, combat, emote, camera, collision, chat,
+plugin API, and packaging paths. Linux and headset gameplay require live acceptance;
+packaging and automated checks alone are not live gameplay certification.
 
 Installing an update closes the game. Accounts, settings, and DAT files are
 retained. Linux updates are downloaded and extracted manually. Game DAT files

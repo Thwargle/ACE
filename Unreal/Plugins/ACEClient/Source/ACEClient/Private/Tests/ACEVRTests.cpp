@@ -151,7 +151,7 @@ bool FACEVRMathTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Left eye sees the terrain ray through its doorway edge"),Mask.ContainsFromEye(FVector(300,151,100),FVector(0,-3.2,100)));
 	TestFalse(TEXT("Right eye keeps terrain behind its own doorway wall"),Mask.ContainsFromEye(FVector(300,151,100),FVector(0,3.2,100)));
 	TestFalse(TEXT("Portal terrain never covers the room floor before the door"),Mask.ContainsFromEye(FVector(50,0,100),FVector(0,-3.2,100)));
-	TestTrue(TEXT("A Touch stick at its measured gate reaches full movement speed"),FMath::IsNearlyEqual(ACEVRMath::DeadZone(FVector2D(0,.93),.2,.9).Y,1.));
+	TestTrue(TEXT("A Touch stick at its measured gate reaches full movement speed"),FMath::IsNearlyEqual(ACEVRMath::DeadZone(FVector2D(0,.93),.2f,.9f).Y,1.));
 	for (double X : {-.12,.12})
 	{
 		const FVector2D Input(X,.99), Output=ACEVRMath::AssistForward(Input,10);
@@ -303,7 +303,7 @@ bool FACEVRProtocolTest::RunTest(const FString& Parameters)
 	FACEBinaryWriter Ack; Ack.WriteUInt32(100); Ack.WriteUInt32(1); Ack.WriteUInt32(0xF7D0); Ack.WriteUInt32(1); Ack.WriteUInt32(7);
 	FACEBinaryReader AR(Ack.GetData()); Session.HandleGameEvent(AR);
 	TestTrue(TEXT("v1 feature ACK enables combat"), Session.SupportsVRCombat());
-	TestFalse(TEXT("Older servers do not receive unarmed extension attacks"), Session.SendVRCombat(2,0x12340001,0,0,300,FVector(0,0,1),FVector(.3,0,1),1,.1));
+	TestFalse(TEXT("Older servers do not receive unarmed extension attacks"), Session.SendVRCombat(2,0x12340001,0,0,300,FVector(0,0,1),FVector(.3,0,1),1,.1f));
 	// The current server advertises world membership as an additional bit.
 	// Capability negotiation must remain composable when optional features grow.
 	FACEBinaryWriter CurrentAck; CurrentAck.WriteUInt32(100); CurrentAck.WriteUInt32(2); CurrentAck.WriteUInt32(0xF7D0);
@@ -422,9 +422,9 @@ bool FACEVRProtocolTest::RunTest(const FString& Parameters)
 	InteriorCoords.Location.X+=24;
 	TestNotEqual(TEXT("Indoor coordinates track movement within a cell"),UACEUIGameplayBinder::FormatMapCoords(InteriorCoords,true),UACEUIGameplayBinder::FormatMapCoords(ExteriorCoords));
 	TestTrue(TEXT("Invalid position has no fabricated coordinates"),UACEUIGameplayBinder::FormatMapCoords(FACEPosition(),true).IsEmpty());
-	TestTrue(TEXT("Empty offhand can send a tracked punch"),Session.SendVRCombat(2,0x12340001,0,1,300,FVector(0,0,1),FVector(.3,0,1),1,.1));
+	TestTrue(TEXT("Empty offhand can send a tracked punch"),Session.SendVRCombat(2,0x12340001,0,1,300,FVector(0,0,1),FVector(.3,0,1),1,.1f));
 	TestFalse(TEXT("Unarmed capability never permits a weaponless spell"),Session.SendVRCombat(1,0x12340001,0,1,300,FVector(0,0,1),FVector(0,1,0),1,0));
-	TestFalse(TEXT("Unknown punch hand is rejected"),Session.SendVRCombat(2,0x12340001,0,2,300,FVector(0,0,1),FVector(.3,0,1),1,.1));
+	TestFalse(TEXT("Unknown punch hand is rejected"),Session.SendVRCombat(2,0x12340001,0,2,300,FVector(0,0,1),FVector(.3,0,1),1,.1f));
 	FACEWorldObject Self; Self.Guid = 100; Session.WorldObjects.Add(100, Self);
 	FACEWorldObject Bag; Bag.Guid = 201; Bag.ContainerId = 100; Session.WorldObjects.Add(201, Bag);
 	FACEWorldObject Item; Item.Guid = 202; Item.ContainerId = 201; Session.WorldObjects.Add(202, Item);
@@ -3192,7 +3192,7 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
             const FVector2D InspectSize(460,960);auto* InspectionTarget=FWidgetRenderer::CreateTargetFor(InspectSize,TF_Bilinear,true);
             for(int32 Pass=0;Pass<3;++Pass){Renderer.DrawWidget(InspectionTarget,Menu->GetInspectionWidget(),InspectSize,0);FlushRenderingCommands();}
             const auto SpellIcon=FindVRMenuControl(Menu->GetInspectionWidget(),TEXT("SpellInspectionIcon"));
-            TestTrue(TEXT("Spell inspection keeps the retail icon square instead of stretching across the row"),SpellIcon && SpellIcon->GetCachedGeometry().GetLocalSize().Equals(FVector2D(64,64),.01));
+            TestTrue(TEXT("Spell inspection keeps the retail icon square instead of stretching across the row"),SpellIcon && SpellIcon->GetCachedGeometry().GetLocalSize().Equals(FVector2D(64,64),.01f));
             TArray<FColor> InspectionPixels;InspectionTarget->GameThread_GetRenderTargetResource()->ReadPixels(InspectionPixels);TArray64<uint8> InspectionPNG;
             FImageUtils::PNGCompressImageArray(460,960,InspectionPixels,InspectionPNG);FFileHelper::SaveArrayToFile(InspectionPNG,*(Directory/TEXT("GameplaySpellInspection.png")));
 

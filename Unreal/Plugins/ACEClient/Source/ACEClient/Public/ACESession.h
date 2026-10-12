@@ -33,6 +33,7 @@ DECLARE_MULTICAST_DELEGATE(FACEOnPlayerTeleportStarted);
 DECLARE_MULTICAST_DELEGATE_ThreeParams(FACEOnPlayScriptId, int32 /*ObjectGuid*/, int32 /*PhysicsScriptId*/, float /*Intensity*/);
 DECLARE_MULTICAST_DELEGATE_ThreeParams(FACEOnPlayEffect, int32 /*ObjectGuid*/, int32 /*ScriptType*/, float /*Intensity*/);
 DECLARE_MULTICAST_DELEGATE_ThreeParams(FACEOnChatMessage, const FString& /*Text*/, const FString& /*Sender*/, int32 /*Type*/);
+DECLARE_MULTICAST_DELEGATE_FourParams(FACEOnRoutedChatMessage, const FString&, const FString&, int32 /*Type*/, int32 /*FilterType*/);
 DECLARE_MULTICAST_DELEGATE_ThreeParams(FACEOnPlayerTell, const FString&, const FString&, int32);
 DECLARE_MULTICAST_DELEGATE_OneParam(FACEOnVitalsUpdated, const FACEPlayerVitals&);
 DECLARE_MULTICAST_DELEGATE_TwoParams(FACEOnObjectHealth, int32 /*ObjectGuid*/, float /*HealthFraction*/);
@@ -68,6 +69,8 @@ DECLARE_MULTICAST_DELEGATE_FourParams(FACEOnCombatFeedback, const FString&, int3
 class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 {
 	friend class FACECollisionSizingTest;
+	friend class FACEPvPCombatParityTest;
+	friend class FACEEmoteTransitionTest;
 	friend class FACEPlayableOlthoiTest;
 	friend class FACEVRProtocolTest;
 	friend class FACEAmmoAttachmentTest;
@@ -124,6 +127,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACELedgeStairsTest;
 	friend class FACELedgeSafetyTest;
 	friend class FACEFortTethStairsTest;
+	friend class FACEBuildingPassageTest;
 	friend class FACERunSpeedParityTest;
 	friend class FACEWalkingStepTest;
 	friend class FACERetailPkStatusTest;
@@ -166,6 +170,8 @@ public:
 	FACEOnPlayScriptId OnPlayScriptId;
 	FACEOnPlayEffect OnPlayEffect;
 	FACEOnChatMessage OnChatMessage;
+	FACEOnRoutedChatMessage OnRoutedChatMessage;
+	void EmitChatMessage(const FString& Text, const FString& Sender, int32 Type, int32 FilterType = INDEX_NONE);
 	FACEOnPlayerTell OnPlayerTell;
 	FACEOnVitalsUpdated OnVitalsUpdated;
 	TFunction<void(FACEPlayerVitals&, const TArray<FACEActiveEnchantment>&)> StatResolver;
@@ -485,8 +491,8 @@ public:
 	/** Send locomotion. Speeds are typically ±1.0f. bRunning sets HoldKey::Run.
 	 *  bStandingLongJump sets ContactLongJump bit1 while charging a standing jump. */
 	void SendMoveToState(float Forward, float Strafe, float Turn, bool bRunning, bool bContact = true,
-		bool bStandingLongJump = false, bool bUniformVRMovement = false);
-	void SendAutonomousPosition(bool bContact = true);
+		bool bStandingLongJump = false, bool bUniformVRMovement = false, bool bMouseTurn = false);
+	void SendAutonomousPosition(bool bContact = true, bool bTrackedVR = false);
 	void SendStopMovement();
 	/** GameAction Use (0x36) — server approaches and activates (doors, etc.). */
 	void SendUseItem(int32 ObjectGuid);
@@ -626,6 +632,8 @@ public:
 	/** Last known MotionStance for this player (from server UpdateMotion). Sent in MoveToState. */
 	void SetCurrentStance(uint32 Stance);
 	uint32 GetCurrentStance() const { return CurrentStance; }
+	uint32 GetCurrentForwardCommand() const { return CurrentForwardCommand; }
+	void ClearHeldForwardCommand() { if (ACEMotion::IsHeldPoseSubstate(CurrentForwardCommand)) CurrentForwardCommand = ACEMotion::Ready; }
 
 	/** Retail AutoTarget: GUID of last creature that damaged us (DefenderNotification), or 0. */
 	int32 GetLastAttackerGuid() const { return LastAttackerGuid; }
@@ -641,7 +649,7 @@ public:
 	/** Keep sending AutonomousPosition while idle (Use approach hold at target). */
 	void SetForcePositionReporting(bool bForce) { bForcePositionReporting = bForce; }
 	/** Flush one AutonomousPosition immediately (before a follow-up Use at range). */
-	void FlushAutonomousPosition(bool bContact = true);
+	void FlushAutonomousPosition(bool bContact = true, bool bTrackedVR = false);
 	/** Update contact after local collision, before a same-frame VR action. */
 	void SetReportedContact(bool bContact) { bAutoPosContact = bContact; }
 
@@ -1132,6 +1140,7 @@ private:
 
 	/** Last MotionStance for this player — must be echoed in MoveToState CurrentStyle. */
 	uint32 CurrentStance = ACEMotion::StanceNonCombat;
+	uint32 CurrentForwardCommand = ACEMotion::Ready;
 
 	/** Creature that last damaged us (DefenderNotification name → GUID). */
 	int32 LastAttackerGuid = 0;

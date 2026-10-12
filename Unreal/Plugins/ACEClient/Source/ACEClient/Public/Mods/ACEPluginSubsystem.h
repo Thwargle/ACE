@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Containers/Ticker.h"
+#include "Containers/Deque.h"
 #include "Dom/JsonObject.h"
 #include "ACETypes.h"
 #include "Mods/ACEUCMLog.h"
@@ -16,6 +17,17 @@ class UGameViewportClient;
 struct FACEWaypointLandmark { FVector2D Coordinates; FString Name, Type; };
 struct FACEPluginRouteSegment { FVector Start,End; FLinearColor Color; float Thickness; };
 struct FACEPluginMarker { int32 Id=0; FString Shape; FLinearColor Color; bool World=true, Map=true; };
+namespace ACEPluginChatLimits
+{
+    constexpr int32 RetainedEvents=32768, RetainedTextBytes=8*1024*1024;
+    constexpr int32 BatchEvents=128, BatchTextBytes=64*1024;
+}
+struct FACEPluginChatEvent
+{
+    uint64 Serial=0;
+    int32 TextBytes=0;
+    TSharedPtr<FJsonValue> Value;
+};
 
 struct FACEClientPlugin
 {
@@ -43,7 +55,8 @@ struct FACEClientPlugin
     TSharedPtr<FJsonObject> SavedState;
     TArray<TSharedPtr<FJsonValue>> PanelRows, PluginEvents;
     TArray<FACEPluginMarker> Markers;
-    uint32 ChatCursor=0, PanelRevision=0;
+    uint64 ChatCursor=0;
+    uint32 PanelRevision=0;
     double NextStateSave=0, NextCommand=0;
     bool CanResumeMeta = false, ResumeMetaPending = false;
     uint32 VMSourceHash = 0, VMProfileHash = 0;
@@ -218,8 +231,9 @@ private:
     TWeakPtr<class FACESession> PluginChatSession;
     int32 PluginChatPlayer=0;
     FString PluginChatServer;
-    TArray<TSharedPtr<FJsonValue>> PluginChatEvents;
-    uint32 PluginChatSerial=0;
+    TDeque<FACEPluginChatEvent> PluginChatEvents;
+    int32 PluginChatTextBytes=0;
+    uint64 PluginChatSerial=0, PluginChatContextStartSerial=0;
     void StopCompanion(FACEClientPlugin& Plugin, const FString& Reason);
     void FlushPluginState(FACEClientPlugin& Plugin);
     TSharedPtr<FJsonObject> CompanionSnapshot(FACEClientPlugin& Plugin);

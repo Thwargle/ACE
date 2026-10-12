@@ -25,8 +25,10 @@ bool FACECombatChatTest::RunTest(const FString&)
     TestTrue(TEXT("Unknown server extensions retain default green"),ACERetailChat::Color(99).ToFColorSRGB()==Palette[0]);
 
     FACESession S;S.State=EACESessionState::InWorld;S.PlayerGuid=100;
-    FString Last;int32 Type=-1,Messages=0,Damage=0;
+    FString Last;int32 Type=-1,FilterType=-1,Messages=0,Damage=0;
     S.OnChatMessage.AddLambda([&](const FString& Text,const FString&,int32 T){Last=Text;Type=T;++Messages;});
+    S.OnRoutedChatMessage.AddLambda([&](const FString&,const FString&,int32 T,int32 Filter)
+        {TestEqual(TEXT("Routing preserves the original observer type"),T,Type);FilterType=Filter;});
     S.OnCombatFeedback.AddLambda([&](const FString&,int32 Amount,bool,bool){Damage=Amount;});
     auto Event=[&](uint32 Id,const FACEBinaryWriter& Body)
     {
@@ -42,7 +44,9 @@ bool FACECombatChatTest::RunTest(const FString&)
     FACEBinaryWriter Death;Death.WriteString16L(TEXT("Your attack killed the Drudge!"));
     for (uint32 Id:{ACEGameEvent::VictimNotification,ACEGameEvent::KillerNotification})
     {
-        Event(Id,Death);TestEqual(TEXT("Personal death notice uses Default, not a combat filter"),Type,0);
+        Event(Id,Death);TestEqual(TEXT("Personal death notice retains retail Default color/type"),Type,0);
+        TestEqual(TEXT("Killing blows route as outgoing combat; own death remains Gameplay"),FilterType,
+            Id==ACEGameEvent::KillerNotification?ACEChatMessageType::CombatSelf:ACEChatMessageType::Broadcast);
         TestEqual(TEXT("Server death wording is preserved"),Last,FString(TEXT("Your attack killed the Drudge!")));
     }
     PublicDeath(101,102);TestEqual(TEXT("Nearby deaths appear once"),Messages,3);

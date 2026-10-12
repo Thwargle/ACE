@@ -221,8 +221,8 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     TestTrue(TEXT("Moving the mouse down tilts the view down"),Boom->GetRelativeRotation().Pitch<-19);
     ACECameraSettings::SetMouseTurnSpeed(2.f);
     Boom->SetRelativeRotation(FRotator(-15,90,0));
-    Controller->ApplyMouseLookDelta(10,10,Boom);
-    TestTrue(TEXT("Changing speed immediately scales yaw"),FMath::IsNearlyEqual(Boom->GetRelativeRotation().Yaw,105.0,0.001));
+    Controller->ApplyMouseLookDelta(1,10,Boom);
+    TestTrue(TEXT("Changing speed immediately scales yaw below the turn limit"),FMath::IsNearlyEqual(Boom->GetRelativeRotation().Yaw,91.5,0.001));
     TestTrue(TEXT("Changing speed immediately scales pitch"),FMath::IsNearlyEqual(Boom->GetRelativeRotation().Pitch,-30.0,0.001));
     FConfigFile SavedCamera; SavedCamera.Read(GGameUserSettingsIni);
     float SavedSpeed=0; SavedCamera.GetFloat(TEXT("ACE.Camera"),TEXT("MouseTurnSpeed"),SavedSpeed);
@@ -238,8 +238,8 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     {
         ACECameraSettings::SetMouseInversion(X,Y);
         Boom->SetRelativeRotation(FRotator(-20,0,0));
-        Controller->ApplyMouseLookDelta(8,8,Boom);
-        TestTrue(TEXT("Mouse horizontal inversion is independent"),FMath::IsNearlyEqual(Boom->GetRelativeRotation().Yaw,X?-6.:6.,.01));
+        Controller->ApplyMouseLookDelta(2,8,Boom);
+        TestTrue(TEXT("Mouse horizontal inversion is independent"),FMath::IsNearlyEqual(Boom->GetRelativeRotation().Yaw,X?-1.5:1.5,.01));
         TestTrue(TEXT("Mouse vertical inversion is independent"),FMath::IsNearlyEqual(Boom->GetRelativeRotation().Pitch,Y?-14.:-26.,.01));
         FConfigFile Reload;Reload.Read(GGameUserSettingsIni);bool SavedX=false,SavedY=false;
         Reload.GetBool(TEXT("ACE.Camera"),TEXT("InvertMouseX"),SavedX);Reload.GetBool(TEXT("ACE.Camera"),TEXT("InvertMouseY"),SavedY);
@@ -651,8 +651,11 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     for (float Yaw : {0.f, 45.f, 180.f, 270.f, 450.f})
     {
         const float Turn=ACECameraRetail::FollowTurnDegrees(Yaw,1.f/60,true,true);
-        TestTrue(TEXT("Mouse forward keeps the player's back to the camera immediately"),
-            FMath::IsNearlyZero(FMath::UnwindDegrees(Yaw-Turn-90.f)));
+        const float Angle=FMath::UnwindDegrees(Yaw-90.f);
+        TestTrue(TEXT("Mouse facing cannot exceed retail's turn rate"),
+            FMath::Abs(Turn)<=FMath::RadiansToDegrees(3.375f)/60.f+.0001f);
+        TestTrue(TEXT("Mouse facing progresses toward the view without overshoot"),
+            FMath::Abs(FMath::UnwindDegrees(Angle-Turn))<=FMath::Abs(Angle)+.0001f);
     }
     TestEqual(TEXT("Orbit at rest does not turn the character"),ACECameraRetail::FollowTurnDegrees(180,1.f/60,false),0.f);
     float Yaw60=180, Yaw30=180;

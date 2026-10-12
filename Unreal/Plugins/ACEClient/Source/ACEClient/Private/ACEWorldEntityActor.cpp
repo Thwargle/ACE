@@ -1,4 +1,5 @@
 #include "ACEWorldEntityActor.h"
+#include "ACERetailTurn.h"
 #include "VR/ACEVRComponent.h"
 #include "VR/ACEVRRemoteAvatarComponent.h"
 #include "ACEProfiling.h"
@@ -1302,7 +1303,12 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 									{
 										FaceDir = TargetLoc - RemotePredictLocation;
 										FaceDir.Z = 0.f;
+										FACEPosition Facing;
+										Facing.SetAceFacingFromUnrealDir2D(FaceDir);
+										FaceDir = FACEPosition::UnrealDirFromAceHeadingDegrees(
+											Facing.GetAceHeadingDegrees() + RemoteMotion.MoveToDesiredHeading);
 									}
+									else FaceDir = FACEPosition::UnrealDirFromAceHeadingDegrees(RemoteMotion.TurnToFallbackHeading);
 								}
 							}
 						}
@@ -1321,15 +1327,13 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 				if (bHaveRemoteTurnFace && FaceDir.Normalize())
 				{
 					const FQuat Want = FACEPosition::QuatFromUnrealTravelDir2D(FaceDir);
-					const float TurnRate = FMath::Clamp(RemoteMotion.TurnToSpeed, 0.25f, 4.f);
-					RemotePredictRotation = FMath::QInterpTo(
-						RemotePredictRotation, Want, DeltaTime, TurnRate * 4.f);
+					RemotePredictRotation = ACERetailTurn::Advance(
+						RemotePredictRotation, Want, RemoteMotion.TurnToSpeed, DeltaTime);
 					if (Appearance)
 					{
 						Appearance->SetLocomotionInput(0.f, 0.f, false, 1.f);
 					}
-					const FVector CurFwd = RemotePredictRotation.RotateVector(FVector::YAxisVector).GetSafeNormal2D();
-					if (FVector::DotProduct(CurFwd, FaceDir) >= 0.995f)
+					if (RemotePredictRotation.Equals(Want, .000001f))
 					{
 						RemotePredictRotation = Want;
 						RemoteMotion.MovementType = 0;
@@ -1517,8 +1521,10 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			{
 				TargetRot = TargetRot * -1.f;
 			}
-			// MoveTo owns the desired facing, but turns are still displayed over time.
-			SetActorRotation(FQuat::Slerp(GetActorQuat(), TargetRot, Alpha).GetNormalized());
+			// TurnTo is already integrated at the authored angular speed. A second
+			// visual interpolation delays opponents' cast/attack facing behind retail.
+			SetActorRotation(bTurnTo ? TargetRot
+				: FQuat::Slerp(GetActorQuat(), TargetRot, Alpha).GetNormalized());
 		}
 	}
 
@@ -2412,7 +2418,10 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 							To.Z = 0.f;
 							if (To.Normalize())
 							{
-								RemoteTurnFaceDir = To;
+								FACEPosition Facing;
+								Facing.SetAceFacingFromUnrealDir2D(To);
+								RemoteTurnFaceDir = FACEPosition::UnrealDirFromAceHeadingDegrees(
+									Facing.GetAceHeadingDegrees() + Motion.MoveToDesiredHeading);
 								bHaveRemoteTurnFace = true;
 							}
 						}

@@ -27,6 +27,8 @@
 
 namespace
 {
+namespace ACEPluginPanelPrivate
+{
     FString Text(const TSharedPtr<FJsonObject>& O, const TCHAR* Key)
     { FString V; if (O) O->TryGetStringField(Key, V); return V; }
     TSharedRef<SWidget> Label(const FString& S, int Size = 20)
@@ -251,10 +253,13 @@ namespace
         }
     };
 }
+} // anonymous namespace
 
-TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId) { if(PluginId==TEXT("itemtools"))return MakeItemToolsPanel(); if(PluginId==TEXT("ucm.log"))return MakeUCMLogPanel();if(PluginId==TEXT("ucmmicro"))return MakeUCMMicroPanel();if(PluginId==TEXT("waypoint") || PluginId==TEXT("waypoint.map"))return MakeWaypointPanel(PluginId.EndsWith(TEXT(".map")));if(PluginId==TEXT("looteditor"))return MakeUCMPanel(TEXT("Standalone loot"));if(PluginId==TEXT("ucm"))return MakeUCMPanel();return SNew(SACEPlugins).Host(this).PluginId(PluginId); }
+TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId) {
+    using namespace ACEPluginPanelPrivate; if(PluginId==TEXT("itemtools"))return MakeItemToolsPanel(); if(PluginId==TEXT("ucm.log"))return MakeUCMLogPanel();if(PluginId==TEXT("ucmmicro"))return MakeUCMMicroPanel();if(PluginId==TEXT("waypoint") || PluginId==TEXT("waypoint.map"))return MakeWaypointPanel(PluginId.EndsWith(TEXT(".map")));if(PluginId==TEXT("looteditor"))return MakeUCMPanel(TEXT("Standalone loot"));if(PluginId==TEXT("ucm"))return MakeUCMPanel();return SNew(SACEPlugins).Host(this).PluginId(PluginId); }
 void UACEPluginSubsystem::TogglePanel()
 {
+    using namespace ACEPluginPanelPrivate;
     if(auto* PC=GetGameInstance()->GetFirstLocalPlayerController())if(APawn* Pawn=PC->GetPawn())
         if(auto* VR=Pawn->FindComponentByClass<UACEVRComponent>();VR && VR->IsActive())
         {

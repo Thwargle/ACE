@@ -52,6 +52,16 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
     auto Snapshot=H->PublicSnapshot(*P);
     for(const TCHAR* Field:{TEXT("inventory"),TEXT("spells"),TEXT("skills"),TEXT("targets"),TEXT("corpses"),TEXT("vendor_stock"),TEXT("fellowship"),TEXT("it_objects"),TEXT("packs"),TEXT("chat_events"),TEXT("events"),TEXT("capabilities")})TestTrue(FString(TEXT("Public snapshot includes "))+Field,Snapshot->HasField(Field));
     TestEqual(TEXT("Chat independent of UCM"),Snapshot->GetArrayField(TEXT("chat_events")).Num(),1);
+    for(int32 I=0;I<300;++I)C->OnChatMessage.Broadcast(FString::FromInt(I),TEXT(""),ACEChatMessageType::System);
+    int32 QuestLine=0;
+    for(int32 Count:{128,128,44})
+    {
+        const auto Batch=H->PublicSnapshot(*P);const auto& Events=Batch->GetArrayField(TEXT("chat_events"));
+        TestEqual(TEXT("API 2 receives bounded chat pages"),Events.Num(),Count);
+        TestFalse(TEXT("API 2 burst retains every event"),Batch->GetBoolField(TEXT("chat_gap")));
+        for(const auto& Event:Events)TestEqual(TEXT("Full automation snapshot preserves paged chat order"),Event->AsObject()->GetStringField(TEXT("raw_text")),FString::FromInt(QuestLine++));
+        TestEqual(TEXT("Public snapshot exposes remaining chat"),Batch->GetNumberField(TEXT("chat_pending")),double(300-QuestLine));
+    }
     FString Error;TSharedPtr<FJsonObject> Output;
     const auto UI=ParseAPI(TEXT(R"JSON({"state":{"kills":12},"ui":[
       {"id":"title","text":"Kill tasks & automation","size":24,"bold":true},

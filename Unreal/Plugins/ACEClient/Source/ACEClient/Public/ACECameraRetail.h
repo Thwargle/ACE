@@ -37,6 +37,9 @@ namespace ACECameraRetail
 	constexpr float BoomYawToFaceAcForward = 90.f;
 	// CameraSet's angle is 8 degrees, multiplied by the adjustment speed (40).
 	constexpr float NumpadOrbitDegreesPerSecond = 8.f * AdjustmentSpeed;
+	// CameraSet::Rotate caps mouse speed at 1.5, applies HoldRun, then the
+	// DAT TurnRight modifier supplies 1.5 rad/s (run contributes another 1.5).
+	constexpr float MouseTurnRadiansPerSecond = 1.5f * 1.5f * 1.5f;
 	inline float KeyboardPitchRate(float AdjustmentMultiplier, bool MouseTurning)
 	{
 		return NumpadOrbitDegreesPerSecond * AdjustmentMultiplier * (MouseTurning ? .25f : 1.f);
@@ -55,8 +58,9 @@ namespace ACECameraRetail
 	{
 		if (!bMoving) return 0.f;
 		const float Angle = FMath::UnwindDegrees(BoomYaw - BoomYawToFaceAcForward);
-		// Both mouse buttons face the view before translating, without an initial arc.
-		return bFaceCamera ? Angle : Angle * (1.f - FMath::Exp(-8.f * FMath::Max(0.f, DeltaSeconds)));
+		const float Limit = FMath::RadiansToDegrees(MouseTurnRadiansPerSecond) * FMath::Max(0.f, DeltaSeconds);
+		return bFaceCamera ? FMath::Clamp(Angle, -Limit, Limit)
+			: Angle * (1.f - FMath::Exp(-8.f * FMath::Max(0.f, DeltaSeconds)));
 	}
 
 	inline float HorizontalFovDegrees(float AspectWH, float GameFovDegrees = 90.f)

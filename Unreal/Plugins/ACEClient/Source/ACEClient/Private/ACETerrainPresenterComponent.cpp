@@ -3575,8 +3575,11 @@ void UACETerrainPresenterComponent::UpdateBuildingVisibility()
 		}
 	}
 	const bool bTerrainCollision = !bHideAllOutdoorTerrain;
-	// Town indoor: never fall back to LScape — that dumps the pawn through the shop to the street.
-	const bool bOutdoorTerrainCollide = (!bIndoorCollide && !bUnderTownLand)
+	// CEnvCell transit can include land through an outside portal under a bridge
+	// or archway. Indoor residency alone must not remove that authored support.
+	// Sealed rooms still have no land in their collision neighborhood.
+	const bool bOutdoorTerrainCollide = ((!bIndoorCollide || (Dat && bHavePlayerUe
+		&& ACECellTransit::UsesOutdoorGround(*Dat, CollideCell, PlayerUe, WorldScale))) && !bUnderTownLand)
 		|| (!bOccCollisionReady && !bTownLandblock);
 	// Outdoor shell pawn blocking is refreshed every tick in UpdateOutdoorEnvCollision
 	// (occupancy does not change while walking up to a doorway).

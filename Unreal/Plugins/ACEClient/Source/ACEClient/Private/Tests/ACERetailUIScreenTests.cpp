@@ -411,7 +411,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 TestEqual(TEXT("Fellowship leader and member markers override PK red with retail green"),
                     Gameplay->ResolveRadarColor(RadarNPC,&Fellow),ACERadarColor::BrightGreen);
                 if (Index!=INDEX_NONE)TestTrue(TEXT("Selected fellowship radar blip is bright green"),
-                    Gameplay->RadarBlips[Index]->BrushColor==FLinearColor::Green);
+                    Gameplay->RadarBlips[Index]->GetBrushColor()==FLinearColor::Green);
                 TestTrue(TEXT("Selection arrows use the same bright green fellowship color"),
                     Gameplay->ColorFromSelectionMarker(Gameplay->ResolveRadarColor(RadarNPC,&Fellow))==FLinearColor::Green);
             }
@@ -1584,6 +1584,10 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("Moving cancels a non-repeat attack once"),Session.CachedC2SPackets.Num(),1);
             for(const auto& Packet:Session.CachedC2SPackets)
             {FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);TestEqual(TEXT("Cancellation uses standard retail networking"),R.ReadUInt32(),ACEGameAction::CancelAttack);}
+            // Cancellation is a request; the prior attack remains pending until
+            // its server response, even when another combat mode is selected.
+            {FACEBinaryWriter W;W.WriteUInt32(Session.PlayerGuid);W.WriteUInt32(1);W.WriteUInt32(ACEGameEvent::AttackDone);W.WriteUInt32(0x36);
+             FACEBinaryReader R(W.GetData());Session.HandleGameEvent(R);Gameplay->TickCombatAutoAttack(0);}
             Gameplay->ApplyCombatMode(int32(ACECombatMode::Missile));Session.SetCurrentStance(ACEMotion::StanceBowCombat);
             Gameplay->TickCombatAutoAttack(0); // consume the preceding cancellation revision
             Session.CachedC2SPackets.Reset();Gameplay->BeginCombatPowerCharge(ACEAttackHeight::Medium,true);
@@ -1601,6 +1605,39 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 FACEBinaryWriter W;W.WriteUInt32(Session.PlayerGuid);W.WriteUInt32(1);W.WriteUInt32(Type);W.WriteUInt32(Error);
                 FACEBinaryReader R(W.GetData());Session.HandleGameEvent(R);Gameplay->TickCombatAutoAttack(0);
             };
+            for(int32 Mode:{int32(ACECombatMode::Melee),int32(ACECombatMode::Missile)})
+            {
+                Gameplay->CancelCombatAttack();CombatEvent(ACEGameEvent::AttackDone);
+                Gameplay->ApplyCombatMode(Mode);Gameplay->RequestedAttackPower=.5f;
+                Session.SetCurrentStance(Mode==int32(ACECombatMode::Missile)?ACEMotion::StanceBowCombat:ACEMotion::StanceSwordCombat);
+                Gameplay->BeginCombatPowerCharge(ACEAttackHeight::High,true);
+                Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-1.;
+                Gameplay->ReleaseCombatPowerCharge();Gameplay->TickCombatAutoAttack(0);
+                // Press while the first request has no reply. A delayed commence
+                // must neither erase this held charge nor send the second attack.
+                Gameplay->BeginCombatPowerCharge(ACEAttackHeight::Low,true);
+                Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-.3;
+                const double ManualStart=Gameplay->CombatPowerBuildStartTime;
+                CombatEvent(ACEGameEvent::CombatCommenceAttack);
+                TestEqual(TEXT("Delayed commence preserves held manual charge time"),Gameplay->CombatPowerBuildStartTime,ManualStart);
+                Gameplay->ReleaseCombatPowerCharge();Session.CachedC2SPackets.Reset();
+                Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-2.;Gameplay->TickCombatAutoAttack(0);
+                TestEqual(TEXT("Released second attack waits for prior server response"),Session.CachedC2SPackets.Num(),0);
+                TestTrue(TEXT("Deferred release remains queued"),Gameplay->bCombatAttackRequestPending);
+                CombatEvent(ACEGameEvent::AttackDone);
+                TestEqual(TEXT("Queued request rebuilds rather than firing on completion"),Session.CachedC2SPackets.Num(),0);
+                Gameplay->CombatPowerBuildStartTime=FPlatformTime::Seconds()-.6;Gameplay->TickCombatAutoAttack(0);
+                TestEqual(TEXT("Queued request sends exactly once after rebuilding"),Session.CachedC2SPackets.Num(),1);
+                for(const auto& Packet:Session.CachedC2SPackets)
+                {
+                    FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);
+                    TestEqual(TEXT("Queued attack preserves mode"),R.ReadUInt32(),Mode==int32(ACECombatMode::Missile)?ACEGameAction::TargetedMissileAttack:ACEGameAction::TargetedMeleeAttack);
+                    TestEqual(TEXT("Queued attack preserves target"),R.ReadUInt32(),uint32(Target.Guid));
+                    TestEqual(TEXT("Queued attack preserves height"),R.ReadUInt32(),uint32(ACEAttackHeight::Low));
+                    TestEqual(TEXT("Queued attack preserves released power"),R.ReadFloat(),.5f);
+                }
+                Gameplay->CancelCombatAttack();CombatEvent(ACEGameEvent::AttackDone);
+            }
             for(bool ReleaseBeforeDone:{false,true})
             {
                 Gameplay->CancelCombatAttack();Session.CachedC2SPackets.Reset();
@@ -4331,9 +4368,9 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             for(float Scale:{.5f,1.5f,3.f})
             {
                 Controller->MouseCursorWidget->SetCursorScale(Scale);CursorSlate->SlatePrepass(1.f);
-                TestTrue(TEXT("Cursor artwork scales independently of the UI"),CursorArt->GetBrush().ImageSize.Equals(FVector2f(Size*Scale),.01));
+                TestTrue(TEXT("Cursor artwork scales independently of the UI"),CursorArt->GetBrush().ImageSize.Equals(FVector2f(Size*Scale),.01f));
                 TestTrue(TEXT("Scaling preserves the precise cursor hotspot"),Slot && (Slot->GetPosition()-Size*Scale).Equals(FVector2D(-14,-14)*Scale,.01));
-                TestTrue(TEXT("Scaled software cursor retains centered bounds"),CursorSlate->GetDesiredSize().Equals(FVector2f(Size*Scale*2),.01));
+                TestTrue(TEXT("Scaled software cursor retains centered bounds"),CursorSlate->GetDesiredSize().Equals(FVector2f(Size*Scale*2),.01f));
             }
             Controller->MouseCursorWidget->SetCursorScale(1.f);
             Controller->ApplyRetailMouseCursor(true,true);

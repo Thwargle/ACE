@@ -36,6 +36,7 @@ class ACECLIENT_API UACEVRComponent : public UActorComponent
 	friend class FACERunSpeedParityTest;
 	friend class FACEVRWallContactTest;
 	friend class FACEFortTethStairsTest;
+	friend class FACEBuildingPassageTest;
 	friend class FACEAcademyCornerTest;
 	friend class FACEVRStairCeilingTest;
 	friend class FACELedgeSafetyTest;

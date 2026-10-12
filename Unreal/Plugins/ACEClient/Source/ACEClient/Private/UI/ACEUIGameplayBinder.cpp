@@ -470,7 +470,7 @@ void UACEUIGameplayBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEleme
 	}
 	if (Client)
 	{
-		Client->OnChatMessage.AddDynamic(this, &UACEUIGameplayBinder::HandleChatMessage);
+		Client->OnRoutedChatMessage.AddDynamic(this, &UACEUIGameplayBinder::HandleChatMessage);
 		Client->OnAppraisal.AddDynamic(this, &UACEUIGameplayBinder::HandleAppraisal);
 		Client->OnSelectionChanged.AddDynamic(this, &UACEUIGameplayBinder::HandleSelectionChanged);
 		Client->OnVitalsUpdated.AddDynamic(this, &UACEUIGameplayBinder::HandleVitalsUpdated);
@@ -513,7 +513,7 @@ void UACEUIGameplayBinder::Initialize(UACEClientSubsystem* InClient, UACEUIEleme
 	EnsureOverlays();
 	RefreshStatusIndicators();
 	if (Client) for (const auto& Message : Client->GetChatHistory())
-		HandleChatMessage(Message.Text, Message.Sender, Message.Type);
+		HandleChatMessage(Message.Text, Message.Sender, Message.Type, Message.FilterType);
 }
 
 void UACEUIGameplayBinder::Shutdown()
@@ -587,7 +587,7 @@ void UACEUIGameplayBinder::Shutdown()
 	}
 	if (Client && bBound)
 	{
-		Client->OnChatMessage.RemoveDynamic(this, &UACEUIGameplayBinder::HandleChatMessage);
+		Client->OnRoutedChatMessage.RemoveDynamic(this, &UACEUIGameplayBinder::HandleChatMessage);
 		Client->OnAppraisal.RemoveDynamic(this, &UACEUIGameplayBinder::HandleAppraisal);
 		Client->OnSelectionChanged.RemoveDynamic(this, &UACEUIGameplayBinder::HandleSelectionChanged);
 		Client->OnVitalsUpdated.RemoveDynamic(this, &UACEUIGameplayBinder::HandleVitalsUpdated);
@@ -2888,16 +2888,23 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 				// before the player pressed/held a different attack height.
 				bCombatRepeatActive = false;
 			}
-			bCombatPowerCharging = !Session->IsServerAttackInProgress()
-				&& (bCombatAttackRequestPending || (bCombatRepeatActive && bCombatAutoRepeat));
-			CombatPowerBuildStartTime = Now;
-			// Retail holds the requested mark through the swing, then starts a
-			// new build on AttackDone. Commence must not blank the visible bar.
-			CombatPowerOrAccuracy = Session->IsServerAttackInProgress() && !bCombatAttackRequestPending
-				? RequestedAttackPower : 0.f;
+			// HandleCommenceAttack preserves a new manual build. AttackDone also
+			// preserves a still-held build; a released request queued behind the
+			// previous attack starts again with its saved power when acknowledged.
+			const bool bKeepManualBuild = bCombatAttackRequestPending && bCombatPowerCharging
+				&& (Session->IsServerAttackInProgress() || bCombatAttackHeld);
+			if (!bKeepManualBuild)
+			{
+				bCombatPowerCharging = !Session->IsServerAttackInProgress()
+					&& (bCombatAttackRequestPending || (bCombatRepeatActive && bCombatAutoRepeat));
+				CombatPowerBuildStartTime = Now;
+				// Hold the requested mark through the swing and refill on AttackDone.
+				CombatPowerOrAccuracy = Session->IsServerAttackInProgress() && !bCombatAttackRequestPending
+					? RequestedAttackPower : 0.f;
+			}
 			// ClientCombatSystem::HandleAttackDone only replaces a server repeat when
 			// the desired slider power changed. Sending every second restarted melee turns.
-			if (!bCombatMovementBlocked && bCombatPowerCharging && bCombatRepeatActive && !bCombatAttackRequestPending
+			if (!bCombatMovementBlocked && IsCombatPoseReady() && bCombatPowerCharging && bCombatRepeatActive && !bCombatAttackRequestPending
 				&& !FMath::IsNearlyEqual(LastCombatAttackPower, RequestedAttackPower, .01f))
 			{
 				CombatPowerOrAccuracy = RequestedAttackPower;
@@ -2917,11 +2924,20 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 			}
 		}
 	}
-	if (bCombatMovementBlocked)
+	if (bCombatMovementBlocked || !IsCombatPoseReady())
 	{
 		bCombatPowerCharging = false;
 		CombatPowerOrAccuracy = 0.f;
+		bCombatAttackRequestPending = bCombatAttackHeld;
 		return;
+	}
+	// Retail UseTime retries a still-held request after Reload becomes Ready.
+	// Time spent waiting is not attack charge time.
+	if (!bCombatPowerCharging && bCombatAttackHeld && bCombatAttackRequestPending
+		&& (!Client || !Client->GetSession() || !Client->GetSession()->IsServerAttackInProgress()))
+	{
+		bCombatPowerCharging = true;
+		CombatPowerBuildStartTime = Now;
 	}
 	if (!bCombatPowerCharging) return;
 	const float T = GetCombatPowerChargeDuration();
@@ -2930,6 +2946,7 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 	if (!bCombatAttackRequestPending && bCombatRepeatActive)
 		CombatPowerOrAccuracy = FMath::Min(CombatPowerOrAccuracy, RequestedAttackPower);
 	if (bCombatAttackRequestPending && !bCombatAttackHeld
+		&& (!Client || !Client->GetSession() || !Client->GetSession()->IsServerAttackInProgress())
 		&& CombatPowerOrAccuracy >= ReleasedAttackPower - KINDA_SMALL_NUMBER)
 	{
 		bCombatAttackRequestPending = false;
@@ -2971,10 +2988,15 @@ void UACEUIGameplayBinder::BeginCombatPowerCharge(uint32 AttackHeight, bool bHel
 		return;
 	}
 	CombatAttackHeight = AttackHeight;
+	if (PlayerController)
+	{
+		PlayerController->PrepareManualCombat(true);
+		bCombatMovementBlocked = PlayerController->IsJumpAirborne();
+	}
 	bCombatAttackHeld = bHeld;
 	ReleasedAttackPower = RequestedAttackPower;
 	bCombatAttackRequestPending = true;
-	bCombatPowerCharging = !bCombatMovementBlocked;
+	bCombatPowerCharging = !bCombatMovementBlocked && IsCombatPoseReady();
 	CombatPowerBuildStartTime = FPlatformTime::Seconds();
 	CombatPowerOrAccuracy = 0.f;
 }
@@ -2982,7 +3004,7 @@ void UACEUIGameplayBinder::BeginCombatPowerCharge(uint32 AttackHeight, bool bHel
 void UACEUIGameplayBinder::ReleaseCombatPowerCharge()
 {
 	if (!bCombatAttackHeld) return;
-	if (bCombatMovementBlocked)
+	if (bCombatMovementBlocked || !IsCombatPoseReady())
 	{
 		bCombatAttackHeld = bCombatAttackRequestPending = bCombatPowerCharging = false;
 		return;
@@ -3080,10 +3102,24 @@ void UACEUIGameplayBinder::TryAutoTargetOnCombatEnter(int32 ExcludeGuid)
     else if (const int32 Nearest = PlayerController->FindNearbyTarget(true,0,ExcludeGuid))
         Client->SelectObject(Nearest);
 }
+bool UACEUIGameplayBinder::IsCombatPoseReady() const
+{
+	if (CombatMode != int32(ACECombatMode::Missile)) return true;
+	const auto Session = Client ? Client->GetSession() : nullptr;
+	if (!Session) return false;
+	// ClientCombatSystem::PlayerInReadyPosition(true) requires an interpreted
+	// Ready substate in a missile style. Reload/Aim cannot build a new shot.
+	const uint32 Style = Session->GetCurrentStance();
+	return Session->GetCurrentForwardCommand() == ACEMotion::Ready
+		&& (Style == ACEMotion::StanceBowCombat || Style == ACEMotion::StanceCrossbow
+			|| Style == ACEMotion::StanceSling || Style == ACEMotion::StanceThrownWeapon
+			|| Style == ACEMotion::StanceAtlatl || Style == ACEMotion::StanceThrownShield);
+}
+
 void UACEUIGameplayBinder::FireCombatAttack()
 {
 	if (PlayerController && PlayerController->IsVRActive()) return;
-	if (!Client)
+	if (!Client || !IsCombatPoseReady())
 	{
 		return;
 	}
@@ -3135,7 +3171,6 @@ void UACEUIGameplayBinder::FireCombatAttack()
 	}
 	else if (CombatMode == static_cast<int32>(ACECombatMode::Melee))
 	{
-		if (PlayerController) PlayerController->FaceWorldTarget(TargetGuid);
 		Client->SendTargetedMeleeAttack(TargetGuid, static_cast<int32>(CombatAttackHeight), CombatPowerOrAccuracy);
 	}
 	LastCombatAttackTarget = TargetGuid;
@@ -6187,8 +6222,9 @@ bool UACEUIGameplayBinder::TryHandleOverlayClick(FVector2D CanvasLocalPos, bool 
 	return false;
 }
 
-void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString& Sender, int32 ChatType)
+void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString& Sender, int32 ChatType, int32 FilterType)
 {
+	if (FilterType == INDEX_NONE) FilterType = ChatType;
 	// gmSpewBoxUI::RecvNotice_DisplayFinalStringInfo consumes LogTextType 26,
 	// including WeenieError/UseDone failures. Chat receives it independently only
 	// if explicitly enabled in that window's filter (retail defaults exclude it).
@@ -6226,7 +6262,8 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 
 	// Retail @filter global squelch — client-local errors always show.
 	if (ChatType != ACEChatMessageType::ChatError
-		&& (GlobalChatTypeFilter & (1ull << (static_cast<uint32>(ChatType) & 63))) == 0)
+		&& ((GlobalChatTypeFilter & (1ull << (static_cast<uint32>(ChatType) & 63))) == 0
+			|| (GlobalChatTypeFilter & (1ull << (static_cast<uint32>(FilterType) & 63))) == 0))
 	{
 		return;
 	}
@@ -6326,7 +6363,7 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 
 	// Main window honours the quick filter cycle; retail floaty windows use their
 	// own 64-bit type filters and only receive lines while visible.
-	if (PassesChatFilter(ChatType) && (MainChatTypeFilter & (1ull << (static_cast<uint32>(ChatType) & 63))) != 0)
+	if (PassesChatFilter(FilterType) && (MainChatTypeFilter & (1ull << (static_cast<uint32>(FilterType) & 63))) != 0)
 	{
 		AppendChatLineToLog(0, Line, Color, ClickSender);
 	}
@@ -6345,7 +6382,7 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 				continue;
 			}
 			if (FloatyChatFilters.IsValidIndex(W - 1)
-				&& (FloatyChatFilters[W - 1] & (1ull << (static_cast<uint32>(ChatType) & 63))) == 0)
+				&& (FloatyChatFilters[W - 1] & (1ull << (static_cast<uint32>(FilterType) & 63))) == 0)
 			{
 				continue;
 			}
@@ -6813,7 +6850,7 @@ bool UACEUIGameplayBinder::TrySendChatFromEntry(const FString* OverrideText, int
 						: nullptr;
 					if (App)
 					{
-						// Play enter link/cycle, then hold last frame until WASD (retail).
+						// Hold the forward pose; sidestep/turn are independent in retail.
 						App->PlayActionMotion(static_cast<int32>(MotionCmd), 1.f, 0, true);
 					}
 					UE_LOG(LogTemp, Log, TEXT("ACE ChatPose: '%s' → cmd='%s' motion=0x%08X"),

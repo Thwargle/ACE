@@ -169,6 +169,7 @@ void FACESession::Disconnect()
 	PlayerGuid = 0;
 	bLocalPlayerIsAdmin = false;
 	CurrentStance = ACEMotion::StanceNonCombat;
+	CurrentForwardCommand = ACEMotion::Ready;
 	bEnteredWorldSent = false;
 	PendingEnterCharacterId = 0;
 	bLoginCompleteSent = false;
@@ -316,6 +317,7 @@ void FACESession::ClearWorldState()
 	PreviousSelectedObjectGuid = 0;
 	GiveRecipientGuid = 0;
 	CurrentStance = ACEMotion::StanceNonCombat;
+	CurrentForwardCommand = ACEMotion::Ready;
 	bEnteredWorldSent = false;
 	PendingEnterCharacterId = 0;
 	bLoginCompleteSent = false;
@@ -417,7 +419,7 @@ void FACESession::Tick(float DeltaSeconds)
 	if (PendingEquipmentGuid && FPlatformTime::Seconds() >= PendingEquipmentUntil)
 	{
 		CancelEquipmentSwap();
-		OnChatMessage.Broadcast(TEXT("Equipment change timed out. Please try again."), TEXT(""), ACEChatMessageType::TransientInfo);
+		EmitChatMessage(TEXT("Equipment change timed out. Please try again."), TEXT(""), ACEChatMessageType::TransientInfo);
 	}
 
 	if (PendingCharacterMutation && FPlatformTime::Seconds() - CharacterMutationSentAt > 20.0)
@@ -554,8 +556,11 @@ void FACESession::TickPositionReporting(float DeltaSeconds)
 		// second timed report in the same frame; retain normal reporting if the
 		// tracking stream pauses or the headset is disabled.
 		const bool PoseReportsFeet=SupportsVRPoses() && FPlatformTime::Seconds()-LastVRPoseSent<.5;
-		if (!PoseReportsFeet && (CellOrContactChanged || (AutoPosTimer >= AutonomousPositionInterval
-			&& (PoseChanged || bMoving || bForcePositionReporting))))
+		// CommandInterpreter::SendPositionEvent requires ground contact. JumpPack
+		// and MoveToState describe airborne motion; rendering cannot inject extra
+		// airborne placement or unchanged-position heartbeats into retail combat.
+		if (!PoseReportsFeet && bAutoPosContact && (CellOrContactChanged
+			|| (AutoPosTimer >= AutonomousPositionInterval && PoseChanged)))
 		{
 			SendAutonomousPosition(bAutoPosContact);
 		}
@@ -1633,7 +1638,7 @@ void FACESession::HandleGameMessage(const TArray<uint8>& MessageBytes)
 		const int32 Victim = Reader.ReadInt32();
 		const int32 Killer = Reader.ReadInt32();
 		if (!Message.IsEmpty() && PlayerGuid != Victim && PlayerGuid != Killer)
-			OnChatMessage.Broadcast(Message, FString(), ACEChatMessageType::Broadcast);
+			EmitChatMessage(Message, FString(), ACEChatMessageType::Broadcast);
 		break;
 	}
 	case ACEOpcode::HearSpeech:
@@ -2408,11 +2413,18 @@ void FACESession::HandlePlayEffect(FACEBinaryReader& Reader)
 	OnPlayEffect.Broadcast(Guid, ScriptType, Intensity);
 }
 
+void FACESession::EmitChatMessage(const FString& Text, const FString& Sender, int32 Type, int32 FilterType)
+{
+	// Keep protocol categories intact for UCM/metas and third-party chat observers.
+	OnChatMessage.Broadcast(Text, Sender, Type);
+	OnRoutedChatMessage.Broadcast(Text, Sender, Type, FilterType == INDEX_NONE ? Type : FilterType);
+}
+
 void FACESession::HandleServerMessage(FACEBinaryReader& Reader)
 {
 	const FString Text = Reader.ReadString16L();
 	const int32 Type = Reader.CanRead(4) ? Reader.ReadInt32() : 0;
-	OnChatMessage.Broadcast(Text, TEXT(""), Type);
+	EmitChatMessage(Text, TEXT(""), Type);
 }
 
 void FACESession::HandleHearSpeech(FACEBinaryReader& Reader)
@@ -2426,10 +2438,10 @@ void FACESession::HandleHearSpeech(FACEBinaryReader& Reader)
 	if (IsSenderSquelched(SenderGuid,Sender,Type)) return;
 	if (Foreign && SenderGuid != PlayerGuid)
 	{
-		OnChatMessage.Broadcast(Sender+TEXT(" ")+ACEOlthoi::ForeignSpeech(SpeakerOlthoi),FString(),Type);
+		EmitChatMessage(Sender+TEXT(" ")+ACEOlthoi::ForeignSpeech(SpeakerOlthoi),FString(),Type);
 		return;
 	}
-	OnChatMessage.Broadcast(Text, Sender, Type);
+	EmitChatMessage(Text, Sender, Type);
 }
 
 void FACESession::HandleChannelBroadcast(FACEBinaryReader& Reader)
@@ -2452,7 +2464,7 @@ void FACESession::HandleChannelBroadcast(FACEBinaryReader& Reader)
 		if (ChannelId == ACEChatChannel::Patron) LastPatronTellSenderName = Sender;
 		if (ChannelId == ACEChatChannel::Monarch) LastMonarchTellSenderName = Sender;
 	}
-	OnChatMessage.Broadcast(Line, Sender, Type);
+	EmitChatMessage(Line, Sender, Type);
 }
 
 void FACESession::HandleSetTurbineChatChannels(FACEBinaryReader& Reader)
@@ -2530,7 +2542,7 @@ void FACESession::HandleTurbineChat(FACEBinaryReader& Reader)
 	}
 	const FString Line = FString::Printf(TEXT("[%s] %s says, \"%s\""), Tag, *Sender, *Text);
 	if (IsSenderSquelched(Speaker,Sender,ChannelLogType)) return;
-	OnChatMessage.Broadcast(Line, Sender, ChannelLogType);
+	EmitChatMessage(Line, Sender, ChannelLogType);
 }
 
 void FACESession::HandleHearRangedSpeech(FACEBinaryReader& Reader)
@@ -2548,10 +2560,10 @@ void FACESession::HandleHearRangedSpeech(FACEBinaryReader& Reader)
 	if (IsSenderSquelched(SenderGuid,Sender,Type)) return;
 	if (Foreign && SenderGuid != PlayerGuid)
 	{
-		OnChatMessage.Broadcast(Sender+TEXT(" ")+ACEOlthoi::ForeignSpeech(SpeakerOlthoi),FString(),Type);
+		EmitChatMessage(Sender+TEXT(" ")+ACEOlthoi::ForeignSpeech(SpeakerOlthoi),FString(),Type);
 		return;
 	}
-	OnChatMessage.Broadcast(Text, Sender, Type);
+	EmitChatMessage(Text, Sender, Type);
 }
 
 void FACESession::HandleSoulEmote(FACEBinaryReader& Reader)
@@ -2572,7 +2584,7 @@ void FACESession::HandleSoulEmote(FACEBinaryReader& Reader)
 	const bool SpeakerOlthoi = Sender.EndsWith(TEXT("&"));
 	const bool Foreign = ACEOlthoi::DecodeSpeaker(Sender,PlayerVitals.HeritageGroup,PlayerVitals.QualityBools.FindRef(129));
 	if (!IsSenderSquelched(SenderGuid,Sender,ACEChatMessageType::Emote))
-		OnChatMessage.Broadcast(Foreign ? ACEOlthoi::ForeignSpeech(SpeakerOlthoi) : Text, Sender, ACEChatMessageType::Emote);
+		EmitChatMessage(Foreign ? ACEOlthoi::ForeignSpeech(SpeakerOlthoi) : Text, Sender, ACEChatMessageType::Emote);
 }
 
 bool FACESession::RespondToConfirmation(uint32 Type, uint32 Context, bool Accept)
@@ -2675,7 +2687,7 @@ void FACESession::HandleGameEvent(FACEBinaryReader& Reader)
 		const FString Name=Reader.ReadString16L();
 		if (!Reader.CanRead(4)) break;
 		const FString Age=Reader.ReadString16L();
-		OnChatMessage.Broadcast(Name.IsEmpty() ? TEXT("You have played for ")+Age+TEXT(".") : Name+TEXT(" has played for ")+Age+TEXT("."),TEXT(""),ACEChatMessageType::System);
+		EmitChatMessage(Name.IsEmpty() ? TEXT("You have played for ")+Age+TEXT(".") : Name+TEXT(" has played for ")+Age+TEXT("."),TEXT(""),ACEChatMessageType::System);
 		break;
 	}
 	case ACEGameEvent::PlayerDescription:
@@ -2745,7 +2757,7 @@ void FACESession::HandleGameEvent(FACEBinaryReader& Reader)
 		if (Count > 4096) break;
 		TArray<FString> Names;
 		for (uint32 I=0; I<Count && Reader.CanRead(2); ++I) Names.Add(Reader.ReadString16L());
-		OnChatMessage.Broadcast(Names.IsEmpty() ? TEXT("No entries.") : FString::Join(Names,TEXT(", ")),
+		EmitChatMessage(Names.IsEmpty() ? TEXT("No entries.") : FString::Join(Names,TEXT(", ")),
 			FString(),ACEChatMessageType::System);
 		break;
 	}
@@ -2917,7 +2929,7 @@ void FACESession::HandleCombatVictimNotification(FACEBinaryReader& Reader)
 	const FString Msg = Reader.ReadString16L();
 	if (!Msg.IsEmpty())
 	{
-		OnChatMessage.Broadcast(Msg, TEXT(""), ACEChatMessageType::Broadcast);
+		EmitChatMessage(Msg, TEXT(""), ACEChatMessageType::Broadcast);
 	}
 }
 
@@ -2926,7 +2938,10 @@ void FACESession::HandleCombatKillerNotification(FACEBinaryReader& Reader)
 	const FString Msg = Reader.ReadString16L();
 	if (!Msg.IsEmpty())
 	{
-		OnChatMessage.Broadcast(Msg, TEXT(""), ACEChatMessageType::Broadcast);
+		// Retail renders this as Default (green). ACE also sends summon kills here.
+		// Route kill results with outgoing combat without hiding unrelated Default
+		// gameplay messages or the player's own death notice.
+		EmitChatMessage(Msg, TEXT(""), ACEChatMessageType::Broadcast, ACEChatMessageType::CombatSelf);
 	}
 }
 
@@ -2944,7 +2959,7 @@ void FACESession::HandleCombatAttackerNotification(FACEBinaryReader& Reader)
 	const uint64 Conditions = Reader.ReadUInt64();
 	const FString Msg = ACECombatChat::FormatAttackerNotification(
 		DefenderName, DamageType, Percent, Damage, bCritical, Conditions);
-	OnChatMessage.Broadcast(Msg, TEXT(""), ACEChatMessageType::CombatSelf);
+	EmitChatMessage(Msg, TEXT(""), ACEChatMessageType::CombatSelf);
 	OnCombatFeedback.Broadcast(DefenderName, static_cast<int32>(FMath::Min(Damage, uint32(MAX_int32))), false, bCritical);
 }
 
@@ -2964,7 +2979,7 @@ void FACESession::HandleCombatDefenderNotification(FACEBinaryReader& Reader)
 	Reader.Align();
 	const FString Msg = ACECombatChat::FormatDefenderNotification(
 		AttackerName, DamageType, Percent, Damage, DamageLocation, bCritical, Conditions);
-	OnChatMessage.Broadcast(Msg, TEXT(""), ACEChatMessageType::CombatEnemy);
+	EmitChatMessage(Msg, TEXT(""), ACEChatMessageType::CombatEnemy);
 
 	// Retail AutoTarget remembers the last attacker for 15s (name→GUID lookup).
 	if (!AttackerName.IsEmpty())
@@ -2986,7 +3001,7 @@ void FACESession::HandleCombatEvasionAttacker(FACEBinaryReader& Reader)
 {
 	const FString DefenderName = Reader.ReadString16L();
 	OnCombatFeedback.Broadcast(DefenderName, 0, false, false);
-	OnChatMessage.Broadcast(ACECombatChat::FormatEvasionAttacker(DefenderName), TEXT(""),
+	EmitChatMessage(ACECombatChat::FormatEvasionAttacker(DefenderName), TEXT(""),
 		ACEChatMessageType::CombatSelf);
 }
 
@@ -2994,7 +3009,7 @@ void FACESession::HandleCombatEvasionDefender(FACEBinaryReader& Reader)
 {
 	const FString AttackerName = Reader.ReadString16L();
 	OnCombatFeedback.Broadcast(AttackerName, 0, true, false);
-	OnChatMessage.Broadcast(ACECombatChat::FormatEvasionDefender(AttackerName), TEXT(""),
+	EmitChatMessage(ACECombatChat::FormatEvasionDefender(AttackerName), TEXT(""),
 		ACEChatMessageType::CombatEnemy);
 }
 
@@ -3035,7 +3050,7 @@ void FACESession::HandleWeenieError(FACEBinaryReader& Reader)
 	if (!Msg.IsEmpty())
 	{
 		// Retail HandleFailureEvent uses each message's chat destination.
-		OnChatMessage.Broadcast(Msg, TEXT(""), ACECombatChat::WeenieErrorChatType(Code));
+		EmitChatMessage(Msg, TEXT(""), ACECombatChat::WeenieErrorChatType(Code));
 	}
 }
 
@@ -3045,7 +3060,7 @@ void FACESession::ReportMoveToFailure(uint32 Error)
 	// Stop the controller's active approach before OnUseDone clears its state.
 	CancelPendingUse(TEXT("approach failed"));
 	const FString Message = ACECombatChat::LookupWeenieError(Error);
-	if (!Message.IsEmpty()) OnChatMessage.Broadcast(Message, TEXT(""), ACECombatChat::WeenieErrorChatType(Error));
+	if (!Message.IsEmpty()) EmitChatMessage(Message, TEXT(""), ACECombatChat::WeenieErrorChatType(Error));
 }
 
 void FACESession::HandleWeenieErrorWithString(FACEBinaryReader& Reader)
@@ -3063,7 +3078,7 @@ void FACESession::HandleWeenieErrorWithString(FACEBinaryReader& Reader)
 	const FString Msg = ACECombatChat::LookupWeenieErrorWithString(Code, Arg);
 	if (!Msg.IsEmpty())
 	{
-		OnChatMessage.Broadcast(Msg, TEXT(""), ACECombatChat::WeenieErrorChatType(Code));
+		EmitChatMessage(Msg, TEXT(""), ACECombatChat::WeenieErrorChatType(Code));
 	}
 }
 
@@ -3072,7 +3087,7 @@ void FACESession::HandleTransientString(FACEBinaryReader& Reader)
 	const FString Msg = Reader.ReadString16L();
 	if (!Msg.IsEmpty())
 	{
-		OnChatMessage.Broadcast(Msg, TEXT(""), ACEChatMessageType::TransientInfo);
+		EmitChatMessage(Msg, TEXT(""), ACEChatMessageType::TransientInfo);
 	}
 }
 
@@ -3105,7 +3120,7 @@ void FACESession::HandleTell(FACEBinaryReader& Reader)
 	{
 		// Retail preserves the incoming channel/color, but formats foreign
 		// speech as an action rather than a quoted tell (and no reply link).
-		OnChatMessage.Broadcast(Sender+TEXT(" ")+ACEOlthoi::ForeignSpeech(SpeakerOlthoi),FString(),Type);
+		EmitChatMessage(Sender+TEXT(" ")+ACEOlthoi::ForeignSpeech(SpeakerOlthoi),FString(),Type);
 		return;
 	}
 	if ((Type == ACEChatMessageType::Tell || Type == ACEChatMessageType::AdminTell)
@@ -3116,7 +3131,7 @@ void FACESession::HandleTell(FACEBinaryReader& Reader)
 		LastTellSenderName = Sender;
 		OnPlayerTell.Broadcast(Text,Sender,SenderId);
 	}
-	OnChatMessage.Broadcast(Text, Sender, Type);
+	EmitChatMessage(Text, Sender, Type);
 	if (const auto* NPC = WorldObjects.Find(SenderId); NPC && !NPC->bIsPlayer && (NPC->ItemType & ACEItemType::Creature))
 		OnNPCSpeech.Broadcast(SenderId, Text);
 }
@@ -4344,6 +4359,14 @@ void FACESession::SendSoulEmoteMotion(uint32 MotionCommand)
 		}
 	}
 
+	// RawMotionState::ApplyMotion puts substates in forward_command. They are
+	// not stamped actions, and must survive later sidestep/turn-only packets.
+	if (MotionCommand & 0x40000000u)
+	{
+		CurrentForwardCommand = ACEMotion::NormalizeCommand(MotionCommand);
+		SendMoveToState(0.f, 0.f, 0.f, false, bAutoPosContact);
+		return;
+	}
 	// PackedFlags: low 11 bits = RawMotionFlags; bits 11+ = CommandListLength.
 	constexpr uint32 CmdListLenShift = 11u;
 	uint32 PackedFlags = ACERawMotionFlags::CurrentHoldKey | ACERawMotionFlags::CurrentStyle
@@ -4781,7 +4804,7 @@ void FACESession::AdvanceEquipmentSwap()
         if(!Destination)
         {
             CancelEquipmentSwap();
-            OnChatMessage.Broadcast(TEXT("Not enough room in your packs to change equipment."),TEXT(""),ACEChatMessageType::TransientInfo);
+            EmitChatMessage(TEXT("Not enough room in your packs to change equipment."),TEXT(""),ACEChatMessageType::TransientInfo);
             return;
         }
 		SendPutItemInContainer(PendingEquipmentRemovals[0], Destination, 0);
@@ -4906,7 +4929,7 @@ void FACESession::SendGetAndWieldItem(int32 Guid, int64 Loc)
         if(!Destination)
         {
             CancelEquipmentSwap();
-            OnChatMessage.Broadcast(TEXT("Not enough room in your packs to change equipment."),TEXT(""),ACEChatMessageType::TransientInfo);
+            EmitChatMessage(TEXT("Not enough room in your packs to change equipment."),TEXT(""),ACEChatMessageType::TransientInfo);
             return;
         }
         ++Reserved.FindOrAdd(Destination);
@@ -6450,7 +6473,7 @@ void FACESession::CheckPendingUseTimeout(double Now)
 	// This releases only our UI gate; the server still validates each new action.
 	if (!bUseBusy || Now-UseStartedAt < 30.0) return;
 	CancelPendingUse(TEXT("completion timeout"));
-	OnChatMessage.Broadcast(TEXT("The interaction did not finish. Please try again."), TEXT(""), ACEChatMessageType::TransientInfo);
+	EmitChatMessage(TEXT("The interaction did not finish. Please try again."), TEXT(""), ACEChatMessageType::TransientInfo);
 }
 
 void FACESession::HandleUseDone(FACEBinaryReader& Reader)
@@ -6464,7 +6487,7 @@ void FACESession::HandleUseDone(FACEBinaryReader& Reader)
 		const FString Msg = ACECombatChat::LookupWeenieError(Err);
 		if (!Msg.IsEmpty())
 		{
-			OnChatMessage.Broadcast(Msg, TEXT(""), ACECombatChat::WeenieErrorChatType(Err));
+			EmitChatMessage(Msg, TEXT(""), ACECombatChat::WeenieErrorChatType(Err));
 		}
 	}
 }
@@ -8235,14 +8258,10 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 			return;
 		}
 		Motion.MoveToTargetGuid = static_cast<int32>(Reader.ReadUInt32());
+		Motion.TurnToFallbackHeading = Reader.ReadFloat();
+		Motion.TurnToFlags = Reader.ReadUInt32();
+		Motion.TurnToSpeed = Reader.ReadFloat();
 		Motion.MoveToDesiredHeading = Reader.ReadFloat();
-		Reader.ReadUInt32(); // MovementParams flags
-		Motion.TurnToSpeed = FMath::Max(0.05f, Reader.ReadFloat());
-		const float ParamHeading = Reader.ReadFloat();
-		if (!FMath::IsNearlyZero(ParamHeading))
-		{
-			Motion.MoveToDesiredHeading = ParamHeading;
-		}
 	}
 	else if (MovementType == 9) // TurnToHeading
 	{
@@ -8250,8 +8269,8 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 		{
 			return;
 		}
-		Reader.ReadUInt32(); // MovementParams flags
-		Motion.TurnToSpeed = FMath::Max(0.05f, Reader.ReadFloat());
+		Motion.TurnToFlags = Reader.ReadUInt32();
+		Motion.TurnToSpeed = Reader.ReadFloat();
 		Motion.MoveToDesiredHeading = Reader.ReadFloat();
 	}
 
@@ -8261,7 +8280,8 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 		|| !FMath::IsFinite(Motion.MoveToMinDistance)
 		|| !FMath::IsFinite(Motion.MoveToSpeed) || !FMath::IsFinite(Motion.MoveToRunRate)
 		|| !FMath::IsFinite(Motion.MoveToWalkRunThreshold) || !FMath::IsFinite(Motion.MoveToDesiredHeading)
-		|| !FMath::IsFinite(Motion.TurnToSpeed)) return;
+		|| !FMath::IsFinite(Motion.TurnToSpeed) || Motion.TurnToSpeed < 0.f
+		|| !FMath::IsFinite(Motion.TurnToFallbackHeading)) return;
 	if (DeferObjectPhysicsEvent(Guid, IncomingInstance, ACEOpcode::UpdateMotion, Reader, PayloadStart)) return;
 	// Commit only after the entire movement body has validated. A malformed
 	// update must not prevent a valid retransmission with the same timestamps.
@@ -8279,6 +8299,8 @@ void FACESession::HandleUpdateMotion(FACEBinaryReader& Reader)
 		// Retail acknowledges its own autonomous echo without restarting local
 		// movement. Remote players still need the same autonomous motion body.
 		if (bAutonomous) return;
+		if (Motion.MovementType == 0)
+			CurrentForwardCommand = ACEMotion::NormalizeCommand(Motion.ForwardCommand);
 	}
 	if(auto* Obj=WorldObjects.Find(Guid))
 	{Obj->ReceivedActionStamp=ActionStamp;Obj->bHasReceivedActionStamp=bHaveActionStamp;}
@@ -8417,7 +8439,7 @@ void FACESession::SendUseItem(int32 ObjectGuid)
 	// use their own server actions; only the server may grant/open the target door.
 	if (const FACEWorldObject* Object = WorldObjects.Find(ObjectGuid); Object && Object->IsDirectDoorUseBlocked())
 	{
-		OnChatMessage.Broadcast(TEXT("This door cannot be activated from here."), TEXT(""), ACEChatMessageType::TransientInfo);
+		EmitChatMessage(TEXT("This door cannot be activated from here."), TEXT(""), ACEChatMessageType::TransientInfo);
 		return;
 	}
 	FACEBinaryWriter W;
@@ -8630,12 +8652,13 @@ void FACESession::SetCurrentStance(uint32 Stance)
 	}
 	if ((Expanded & 0xFF000000u) == 0x80000000u)
 	{
+		if (CurrentStance != Expanded) ClearHeldForwardCommand();
 		CurrentStance = Expanded;
 	}
 }
 
 void FACESession::SendMoveToState(float Forward, float Strafe, float Turn, bool bRunning, bool bContact,
-	bool bStandingLongJump, bool bUniformVRMovement)
+	bool bStandingLongJump, bool bUniformVRMovement, bool bMouseTurn)
 {
 	if (State != EACESessionState::InWorld || bLogOffPending)
 	{
@@ -8680,6 +8703,12 @@ void FACESession::SendMoveToState(float Forward, float Strafe, float Turn, bool 
 		}
 		ForwardSpeed = FMath::Clamp(FMath::Abs(Forward), 0.f, 1.f);
 	}
+	else if (ACEMotion::IsHeldPoseSubstate(CurrentForwardCommand))
+	{
+		Flags |= ACERawMotionFlags::ForwardCommand | ACERawMotionFlags::ForwardHoldKey | ACERawMotionFlags::ForwardSpeed;
+		ForwardCommand = CurrentForwardCommand;
+		ForwardSpeed = 1.f;
+	}
 
 	if (!FMath::IsNearlyZero(Strafe))
 	{
@@ -8692,7 +8721,7 @@ void FACESession::SendMoveToState(float Forward, float Strafe, float Turn, bool 
 	{
 		Flags |= ACERawMotionFlags::TurnCommand | ACERawMotionFlags::TurnHoldKey | ACERawMotionFlags::TurnSpeed;
 		TurnCommand = ACEMotion::TurnRight;
-		TurnSpeed = FMath::Clamp(Turn, -1.f, 1.f);
+		TurnSpeed = FMath::Clamp(Turn, bMouseTurn ? -1.5f : -1.f, bMouseTurn ? 1.5f : 1.f);
 	}
 
 	FACEBinaryWriter W;
@@ -8703,13 +8732,13 @@ void FACESession::SendMoveToState(float Forward, float Strafe, float Turn, bool 
 	W.WriteUInt32(CurrentStance != 0 ? CurrentStance : ACEMotion::StanceNonCombat);
 
 	if (Flags & ACERawMotionFlags::ForwardCommand) W.WriteUInt32(ForwardCommand);
-	if (Flags & ACERawMotionFlags::ForwardHoldKey) W.WriteUInt32(ACEMotion::HoldKeyNone);
+	if (Flags & ACERawMotionFlags::ForwardHoldKey) W.WriteUInt32(ACEMotion::HoldKeyInvalid);
 	if (Flags & ACERawMotionFlags::ForwardSpeed) W.WriteFloat(ForwardSpeed);
 	if (Flags & ACERawMotionFlags::SideStepCommand) W.WriteUInt32(SidestepCommand);
-	if (Flags & ACERawMotionFlags::SideStepHoldKey) W.WriteUInt32(ACEMotion::HoldKeyNone);
+	if (Flags & ACERawMotionFlags::SideStepHoldKey) W.WriteUInt32(ACEMotion::HoldKeyInvalid);
 	if (Flags & ACERawMotionFlags::SideStepSpeed) W.WriteFloat(SidestepSpeed);
 	if (Flags & ACERawMotionFlags::TurnCommand) W.WriteUInt32(TurnCommand);
-	if (Flags & ACERawMotionFlags::TurnHoldKey) W.WriteUInt32(ACEMotion::HoldKeyNone);
+	if (Flags & ACERawMotionFlags::TurnHoldKey) W.WriteUInt32(bMouseTurn ? ACEMotion::HoldKeyRun : ACEMotion::HoldKeyInvalid);
 	if (Flags & ACERawMotionFlags::TurnSpeed) W.WriteFloat(TurnSpeed);
 
 	// Position
@@ -8741,8 +8770,12 @@ void FACESession::SendMoveToState(float Forward, float Strafe, float Turn, bool 
 	if (bUniformVRMovement) W.WriteUInt32(ACEVRLocomotion::MoveMarker);
 
 	SendGameAction(ACEGameAction::MoveToState, W.GetData(), ACEQueue::WeenieQueue);
-	// Keep AutonomousPosition flowing while airborne (Contact=0) even with zero axes —
-	// otherwise the server never gets landing poses and rubber-bands to the jump origin.
+	CurrentForwardCommand = ForwardCommand;
+	// Retail SendMovementEvent carries the current position and resets the
+	// periodic position timer. Do not immediately duplicate it with AutoPos.
+	AutoPosTimer = 0.f;
+	// Airborne physics remains active even with zero input. Ordinary position
+	// reports resume on landing; negotiated VR tracking reports its own feet.
 	bMoving = !FMath::IsNearlyZero(Forward) || !FMath::IsNearlyZero(Strafe)
 		|| !FMath::IsNearlyZero(Turn) || !bContact;
 	bAutoPosContact = bContact;
@@ -8771,13 +8804,15 @@ void FACESession::SendJump(float Extent, const FVector& LocalAceVelocity)
 
 void FACESession::SendStopMovement()
 {
+	ClearHeldForwardCommand();
 	// Retail CmdInterp::send_move_to_state derives contact from physics, not
 	// the input axes. Cancelling a use/route while falling is not a landing.
 	SendMoveToState(0.f, 0.f, 0.f, false, bAutoPosContact, false);
 }
 
-void FACESession::SendAutonomousPosition(bool bContact)
+void FACESession::SendAutonomousPosition(bool bContact, bool bTrackedVR)
 {
+	if (!bContact && !(bTrackedVR && (SupportsVRPoses() || SupportsVRCombat()))) return;
 	if (State != EACESessionState::InWorld || !PlayerPosition.IsValid() || bLogOffPending || bPositionReportingSuspended)
 	{
 		return;
@@ -8814,10 +8849,10 @@ void FACESession::SendAutonomousPosition(bool bContact)
 	AutoPosTimer = 0.f;
 }
 
-void FACESession::FlushAutonomousPosition(bool bContact)
+void FACESession::FlushAutonomousPosition(bool bContact, bool bTrackedVR)
 {
 	bAutoPosContact = bContact;
-	SendAutonomousPosition(bContact);
+	SendAutonomousPosition(bContact, bTrackedVR);
 	AutoPosTimer = 0.f;
 }
 

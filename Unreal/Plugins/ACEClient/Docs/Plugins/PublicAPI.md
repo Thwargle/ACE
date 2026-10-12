@@ -109,8 +109,16 @@ that the property is zero. Requests for new appraisals still require inventory.
 API 2 adds `api`, `unix_time`, `server`, `state`, `events`, `error`, `capabilities`,
 `plugins`, `automation_owner`, `profile_name`, `waiting_action`, `log`, and the
 lightweight nearby `objects` list. `chat_events` has independent per-plugin
-cursors and works with UCM disabled; `chat_gap` reports overflow. It is empty
-without chat permission, regardless of whether a full snapshot is requested.
+cursors and works with UCM disabled. Large bursts are delivered oldest first
+in batches of up to 128 events / 64 KiB of UTF-8 message text per callback;
+unread events remain queued for later callbacks. `chat_serial` advances only
+through the delivered batch, while `chat_latest_serial` identifies the latest
+received event. `chat_pending` and `chat_more` expose the remaining backlog.
+The shared backlog retains up to 32,768 events / 8 MiB of UTF-8 message text;
+`chat_gap` and `chat_dropped` report actual unread overflow, not pagination.
+See [companion chat delivery](Companions.md#callback-and-snapshot) for the field limits and
+session scope. Chat events are empty without chat permission, regardless of
+whether a full snapshot is requested.
 
 `action_error` remains the numeric server result associated with `action_serial`.
 `activity_failure` is a separate optional object with the native failure's

@@ -18,6 +18,8 @@ namespace ACECellTransit
 {
 	/** Restrict room BSP queries without discarding static objects crossing cells. */
 	void RestrictRoomCollision(UWorld& World, const TSet<uint32>& Cells, FCollisionQueryParams& Params);
+	/** Outdoor terrain, or an interior's authored outside aperture beneath the feet. */
+	bool UsesOutdoorGround(UACEDatSubsystem& Dat, uint32 CellId, const FVector& UnrealFeet, float WorldScale);
 	inline bool IsIndoorCell(uint32 CellId)
 	{
 		return (CellId & 0xFFFFu) >= 0x0100u;

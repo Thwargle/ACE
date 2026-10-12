@@ -74,7 +74,7 @@ bool FACESession::SendVRDrop(uint32 Cell, int32 Item, int32 SplitAmount, const F
 	W.WriteUInt32(1); W.WriteUInt32(6); W.WriteUInt32(++VRSequence); W.WriteUInt32(Cell);
 	W.WriteUInt32(TeleportSeq); W.WriteUInt32(Item); W.WriteUInt32(SplitAmount);
 	W.WriteFloat(OriginAc.X); W.WriteFloat(OriginAc.Y); W.WriteFloat(OriginAc.Z);
-	FlushAutonomousPosition(bAutoPosContact);
+	FlushAutonomousPosition(bAutoPosContact, true);
 	SendGameAction(0xF7D0, W.GetData(), ACEQueue::WeenieQueue);
 	return true;
 }
@@ -95,7 +95,7 @@ bool FACESession::SendVRPose(FACEVRPose Pose)
 	}
 	// Keep the authoritative feet report on the pose cadence. Independent
 	// timers can otherwise attach fresh hands to the previous position.
-	FlushAutonomousPosition(bAutoPosContact);
+	FlushAutonomousPosition(bAutoPosContact, true);
 	SendGameAction(0xF7D1, W.GetData(), ACEQueue::WeenieQueue);
 	LastVRPoseSent=FPlatformTime::Seconds();
 	if (VRPoseSequence == 1) Log(TEXT("VR pose stream started: head and both hands, 20 Hz"));
@@ -252,7 +252,7 @@ bool FACESession::SendVRCombat(uint32 Kind, uint32 Cell, int32 Weapon, int32 Sub
 	}
 	// Casting must report actual collision contact, not claim a midair player
 	// has landed. The controller refreshes this after resolving each movement step.
-	FlushAutonomousPosition(bAutoPosContact);
+	FlushAutonomousPosition(bAutoPosContact, true);
 	SendGameAction(0xF7D0, W.GetData(), ACEQueue::WeenieQueue);
 	return true;
 }

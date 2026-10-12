@@ -74,10 +74,24 @@ Snapshots include:
   `{serial,time,text,raw_text,sender,color}`. `text` includes rendered speaker
   wording; `raw_text` is the original message. `color` is the retail chat type.
   Events arrive regardless of visible chat-window filters and without running
-  UCM. The ring retains 128 messages, each truncated to 4,096 characters.
-  `chat_serial` is the current cursor; `chat_gap` reports overflow. Chat is not
-  persisted or replayed from previous logins. Separate plugins have separate
-  delivery cursors. Validate the sender/type before trusting progress messages.
+  UCM. Each callback delivers up to 128 events and 64 KiB of UTF-8 message text,
+  oldest first. Larger bursts (including `/myquests`) remain queued and arrive
+  automatically across subsequent callbacks; keep processing `chat_events` on
+  every callback instead of issuing the command again for each batch.
+  `chat_serial` is the last delivered event's cursor; `chat_latest_serial` is
+  the latest received serial. `chat_pending` counts queued events still to be
+  delivered to this plugin, and `chat_more` is true while that count is nonzero.
+  These describe the received backlog, not whether the server has finished
+  sending a command's response.
+  The shared backlog retains up to 32,768 events or 8 MiB of UTF-8 message text
+  (`text`, `raw_text`, and `sender`), whichever limit is reached first. Each
+  message field is truncated to 4,096 characters and the sender to 256.
+  `chat_gap` reports unread events lost to these limits; `chat_dropped` is the
+  number missed before the first event in this batch. Normal pagination does
+  not set `chat_gap`. Chat is not persisted or replayed from previous logins.
+  Separate plugins have separate delivery cursors; a faster reader does not
+  consume a slower reader's messages. Validate the sender/type before trusting
+  progress messages.
 - `events`: up to 64 queued clicks, local commands and plugin messages, consumed
   by this callback. Each has a global `serial`; gaps can represent other plugins'
   events. Oldest entries are replaced on overflow.

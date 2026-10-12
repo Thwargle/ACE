@@ -705,9 +705,9 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Final stationary drift reaches the server"),CountPositions(),++Reports);
     Sender.bAutoPosContact=false;
     Sender.TickPositionReporting(.01f);
-    TestEqual(TEXT("Loss of ground contact is reported without waiting a second"),CountPositions(),++Reports);
+    TestEqual(TEXT("Retail does not emit autonomous position while airborne"),CountPositions(),Reports);
     Sender.SendStopMovement();
-    TestTrue(TEXT("Cancelling input while airborne preserves position updates"),Sender.bMoving);
+    TestTrue(TEXT("Cancelling input while airborne retains airborne motion state"),Sender.bMoving);
     Sender.bMoving=false; Sender.bAutoPosContact=true;
     ++Sender.PlayerPosition.CellId;
     Sender.TickPositionReporting(.01f);
@@ -736,15 +736,24 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Repeated visible-state updates do not create a reporting loop"),CountPositions(),Reports);
     const uint32 BeforeLogout=Sender.NextPacketSequence;
     Sender.bAutoPosContact=false;Sender.RequestLogOff();
-    bool LogoutPosition=false;
+    bool LogoutPosition=false,AirbornePosition=false;
     for(const auto& Pair:Sender.CachedC2SPackets)
     {
         if(Pair.Key<BeforeLogout||Pair.Value.Payload.Num()<28)continue;
         FACEBinaryReader R(Pair.Value.Payload);R.Skip(24);
-        if(R.ReadUInt32()==ACEGameAction::AutonomousPosition)
-        {R.Skip(40);TestEqual(TEXT("Logout's final position does not manufacture a landing"),R.ReadUInt8(),uint8(0));LogoutPosition=true;}
+        const uint32 Action=R.ReadUInt32();
+        if(Action==ACEGameAction::AutonomousPosition)AirbornePosition=true;
+        if(Action==ACEGameAction::MoveToState)
+        {
+            TestEqual(TEXT("Logout stops every movement axis"),R.ReadUInt32(),
+                ACERawMotionFlags::CurrentHoldKey|ACERawMotionFlags::CurrentStyle);
+            R.Skip(8+32+8); // hold/style, position, timestamps
+            TestEqual(TEXT("Logout's final movement does not manufacture a landing"),R.ReadUInt8(),uint8(0));
+            LogoutPosition=true;
+        }
     }
-    TestTrue(TEXT("Logout flushes its final position"),LogoutPosition);
+    TestTrue(TEXT("Logout carries its final position in StopCompletely's movement packet"),LogoutPosition);
+    TestFalse(TEXT("Logout does not send a retail-forbidden airborne AutoPos"),AirbornePosition);
     Sender.ClearWorldState();
     TestFalse(TEXT("Relog clears the last character's position report"),Sender.bHaveReportedPosition);
     TestFalse(TEXT("Relog clears the previous portal reporting hold"),Sender.bPositionReportingSuspended);

@@ -646,22 +646,22 @@ void FACESession::HandleSalvageOperationsResult(FACEBinaryReader& Reader)
 	}
 	if (ResultLines.Num() == 0 && BadNames.Num() == 0)
 	{
-		OnChatMessage.Broadcast(TEXT("Salvaging Failed!"), TEXT(""), ACEChatMessageType::System);
+		EmitChatMessage(TEXT("Salvaging Failed!"), TEXT(""), ACEChatMessageType::System);
 		return;
 	}
 	for (const FString& Line : ResultLines)
 	{
-		OnChatMessage.Broadcast(Line, TEXT(""), ACEChatMessageType::System);
+		EmitChatMessage(Line, TEXT(""), ACEChatMessageType::System);
 	}
 	if (AugPct > 0)
 	{
-		OnChatMessage.Broadcast(
+		EmitChatMessage(
 			FString::Printf(TEXT("Your augmentation increases the amount of salvage obtained by %u%%!"), AugPct),
 			TEXT(""), ACEChatMessageType::System);
 	}
 	for (const FString& Name : BadNames)
 	{
-		OnChatMessage.Broadcast(
+		EmitChatMessage(
 			FString::Printf(TEXT("You were unable to salvage %s."), *Name),
 			TEXT(""), ACEChatMessageType::System);
 	}

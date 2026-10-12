@@ -432,7 +432,7 @@ bool FACEVRWallContactTest::RunTest(const FString&)
    VR->bActive=Tracked;VR->Settings->bRun=true;Session->SetLocalPosition(Seed);PC->PredictedPose=Seed;
    PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;PC->bJumpAirborne=false;PC->bStandingJumpLocked=false;PC->StepHoldSeconds=0;
    Pawn->SetActorLocationAndRotation(Seed.ToUnrealLocation()+FVector(0,0,90.75),Seed.ToUnrealQuat());
-   if(!Tracked)PC->PlayerInput->InputKey(FInputKeyParams(EKeys::W,IE_Pressed,1.,false));
+   if(!Tracked)PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));
    bool Reached=false;int32 Stalls=0,MaxStalls=0;
    for(int32 Frame=0;Frame<int32(Rate*8);++Frame)
    {
@@ -443,7 +443,7 @@ bool FACEVRWallContactTest::RunTest(const FString&)
     Stalls=FVector::Dist2D(Before,After)<.01?Stalls+1:0;MaxStalls=FMath::Max(MaxStalls,Stalls);
     if(Reverse?After.X<Base.X-150:After.X>Base.X+750){Reached=true;break;}
    }
-   if(!Tracked)PC->PlayerInput->InputKey(FInputKeyParams(EKeys::W,IE_Released,0.,false));
+   if(!Tracked)PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Released,0.f));
    AddInfo(FString::Printf(TEXT("Ramp seam rise=%.0f gap=%.2f lip=%.2f vr=%d reverse=%d fps=%.0f end=%s stalls=%d"),Rise,Gap,Lip,Tracked,Reverse,Rate,*(Pawn->GetActorLocation()-Base).ToString(),MaxStalls));
    TestTrue(TEXT("Ramp and flat seams can be crossed without jumping"),Reached);
    TestTrue(TEXT("Seam does not hold moving player in place"),MaxStalls<Rate*.25);
@@ -496,7 +496,7 @@ bool FACEVRWallContactTest::RunTest(const FString&)
    const auto Strafe=ACEInputBindings::Get(EKeys::E,0);
    auto StrafeKey=[&](bool Down){
     for(auto Key:TArray<FKey>{Strafe.Key,Strafe.bShift?EKeys::LeftShift:FKey(),Strafe.bCtrl?EKeys::LeftControl:FKey(),Strafe.bAlt?EKeys::LeftAlt:FKey(),Strafe.bCmd?EKeys::LeftCommand:FKey()})
-     if(Key.IsValid())PC->PlayerInput->InputKey(FInputKeyParams(Key,Down?IE_Pressed:IE_Released,Down?1.:0.,false));
+     if(Key.IsValid())PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(Key,Down?IE_Pressed:IE_Released,Down?1.f:0.f));
    };
    if(Tracked)VR->MoveStick=FVector2D(1,0);else StrafeKey(true);
    for(int32 Frame=0;Frame<FPS/4;++Frame)Tick();
@@ -564,8 +564,8 @@ bool FACEVRWallContactTest::RunTest(const FString&)
    }
    if(!Tracked)
    {
-    PC->PlayerInput->InputKey(FInputKeyParams(EKeys::W,IE_Pressed,1.,false));
-    if(!Run)PC->PlayerInput->InputKey(FInputKeyParams(EKeys::LeftShift,IE_Pressed,1.,false));
+    PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));
+    if(!Run)PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::LeftShift,IE_Pressed,1.f));
    }
    for(int Frame=0;Frame<(Jump?150:45);++Frame)
    {
@@ -587,8 +587,8 @@ bool FACEVRWallContactTest::RunTest(const FString&)
    }
    if(!Tracked)
    {
-    PC->PlayerInput->InputKey(FInputKeyParams(EKeys::W,IE_Released,0.,false));
-    PC->PlayerInput->InputKey(FInputKeyParams(EKeys::LeftShift,IE_Released,0.,false));
+    PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Released,0.f));
+    PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::LeftShift,IE_Released,0.f));
    }
    if(!Jump)TestEqual(*FString::Printf(TEXT("Reported swarm floor stays grounded: cell=%08X tracked=%d run=%d"),ReportedCell,Tracked,Run),Airborne,0);
    else

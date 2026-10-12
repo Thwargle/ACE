@@ -361,9 +361,10 @@ bool FACEChatParityTest::RunTest(const FString&)
     { const auto Bytes=LastAction(); if(TestTrue(TEXT("Point emote packet serialized"),Bytes.Num()>=50))
       { FACEBinaryReader R(Bytes);R.Skip(24);
         TestEqual(TEXT("Point uses MoveToState"),R.ReadUInt32(),ACEGameAction::MoveToState);
-        const uint32 Flags=R.ReadUInt32();TestEqual(TEXT("Point contains one emote"),Flags>>11,1u);
+        const uint32 Flags=R.ReadUInt32();TestEqual(TEXT("Point is a forward substate, not a queued action"),Flags>>11,0u);
+        TestTrue(TEXT("Point carries a forward command"),(Flags&ACERawMotionFlags::ForwardCommand)!=0);
         R.ReadUInt32();R.ReadUInt32();
-        TestEqual(TEXT("Point sends accepted retail PointState rather than its transition"),R.ReadUInt16(),uint16(0xf0)); } }
+        TestEqual(TEXT("Point sends accepted retail PointState rather than its transition"),R.ReadUInt32(),0x430000f0u); } }
     {
         // Route real Slate Enter/W events through an edit box and a registered
         // game viewport; merely checking that chat lost focus misses this bug.

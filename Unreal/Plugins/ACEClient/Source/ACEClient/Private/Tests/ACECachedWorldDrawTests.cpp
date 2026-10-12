@@ -141,7 +141,7 @@ bool FACEMobileShadowTest::RunTest(const FString&)
     {
         World->SendAllEndOfFrameUpdates(); Capture->CaptureScene(); FlushRenderingCommands();
         TArray<FColor> Pixels; Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
-        TArray<uint8> Png; FImageUtils::CompressImageArray(320,240,Pixels,Png);
+        TArray64<uint8> Png; FImageUtils::PNGCompressImageArray(320,240,Pixels,Png);
         const FString Path=FPaths::ProjectSavedDir()/TEXT("PerformanceShadowTests")/Name;
         FFileHelper::SaveArrayToFile(Png,*Path); return Pixels;
     };

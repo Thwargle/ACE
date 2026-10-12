@@ -39,9 +39,22 @@ bool FACERemoteMovementReplayTest::RunTest(const FString&)
   O.PhysicsState=ACEPhysicsState::Gravity;O.bHasPosition=true;O.Position=P;
   auto* A=World->SpawnActor<AACEWorldEntityActor>();A->InitializeFromObject(O,100,false);return A;
  };
- for(int FPS:{30,90,144})
+ for(int FPS:{30,90,144,240})
  {
   const float Dt=1.f/FPS;
+  {
+   auto* Turning=Spawn();FACEObjectMotionState Turn;
+   Turn.MovementType=9;Turn.MoveToDesiredHeading=179.f;Turn.TurnToSpeed=1.f;
+   const FQuat Before=Turning->GetActorQuat();Turning->ApplyMotionState(Turn);
+   TestTrue(TEXT("Remote server turn starts without a heading snap"),Turning->GetActorQuat().Equals(Before));
+   for(int I=0;I<FPS/2;++I)Turning->Tick(Dt);
+   TestTrue(TEXT("Remote player turn is 1.5 radians per second without additional visual lag"),
+    FMath::IsNearlyEqual(Before.AngularDistance(Turning->GetActorQuat()),.75,.0001));
+   for(int I=0;I<FPS*2;++I)Turning->Tick(Dt);
+   FACEPosition Expected=P;Expected.SetAceFacingFromUnrealDir2D(FACEPosition::UnrealDirFromAceHeadingDegrees(179.f));
+   TestTrue(TEXT("Remote turn arrives at the same heading as the local player"),Turning->GetActorQuat().Equals(Expected.ToUnrealQuat(),.00001));
+   Turning->Destroy();
+  }
   // F748 has its own sequence, not a newer VectorUpdate. A late airborne
   // position must not restart the already-running jump or replay its velocity.
   auto* A=Spawn();A->ApplyPhysicsVelocity(FVector(0,4,5));

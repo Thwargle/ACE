@@ -226,11 +226,11 @@ struct ACECLIENT_API FACEPosition
 		return ToUnrealQuat().RotateVector(FVector(-1.f, 0.f, 0.f));
 	}
 
-	/** ACE heading degrees: atan2(-dir.X, dir.Y) on AC forward (+Y in AC space). */
+	/** AFrame heading: clockwise from AC +Y, in [0, 360) degrees. */
 	float GetAceHeadingDegrees() const
 	{
 		const FVector Dir = GetAceForwardInAcSpace();
-		return FMath::RadiansToDegrees(FMath::Atan2(-Dir.X, Dir.Y));
+		return FMath::Fmod(FMath::RadiansToDegrees(FMath::Atan2(Dir.X, Dir.Y)) + 360.f, 360.f);
 	}
 
 	/**
@@ -572,7 +572,7 @@ struct ACECLIENT_API FACEObjectMotionState
 	UPROPERTY(BlueprintReadOnly, Category = "ACE|Movement")
 	bool bHaveMoveToTarget = false;
 
-	/** DesiredFacing from MoveToParameters (radians, AC heading). */
+	/** DesiredFacing from MovementParameters (degrees, AC heading). */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE|Movement")
 	float MoveToDesiredHeading = 0.f;
 
@@ -583,6 +583,9 @@ struct ACECLIENT_API FACEObjectMotionState
 	/** Turn speed for TurnToObject / TurnToHeading (MovementType 8/9). */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE|Movement")
 	float TurnToSpeed = 1.f;
+	/** TurnToObject carries an absolute fallback heading separately from its offset. */
+	float TurnToFallbackHeading = 0.f;
+	uint32 TurnToFlags = 0;
 
 	bool IsDeathMotion() const
 	{

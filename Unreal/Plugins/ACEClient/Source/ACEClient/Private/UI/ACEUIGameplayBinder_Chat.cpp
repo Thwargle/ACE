@@ -242,7 +242,8 @@ bool UACEUIGameplayBinder::PassesChatFilter(int32 ChatType) const
 		return ChatType == ACEChatMessageType::Combat
 			|| ChatType == ACEChatMessageType::CombatSelf
 			|| ChatType == ACEChatMessageType::CombatEnemy
-			|| ChatType == ACEChatMessageType::Magic;
+			|| ChatType == ACEChatMessageType::Magic
+			|| ChatType == ACEChatMessageType::Spellcasting;
 	case 3: // System
 		return ChatType == ACEChatMessageType::System
 			|| ChatType == ACEChatMessageType::Broadcast;

@@ -6,6 +6,12 @@
 #include "ACEDatSubsystem.h"
 #include "ACECharacterAppearanceComponent.h"
 #include "ACEWorldEntityActor.h"
+#include "ACEClientSubsystem.h"
+#include "ACEPlayerController.h"
+#include "ACESession.h"
+#include "Engine/LocalPlayer.h"
+#include "Sockets.h"
+#include "SocketSubsystem.h"
 #include "Components/SceneComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
@@ -106,6 +112,27 @@ bool FACEEmoteTransitionTest::RunTest(const FString&)
   };
   for (uint32 Pose : Poses)
   {
+   // RawMotionState and InterpretedMotionState keep sidestep/turn separate
+   // from the held forward substate, including during its entry link.
+   App->ClearActionMotion();App->SetLocomotionInput(0,0,false,1);
+   App->PlayActionMotion(Pose,1,Style,true);Tick();
+   const float BeforeStrafe=App->AnimTime;
+   App->SetLocomotionInput(0,1,true,1);
+   TestTrue(TEXT("Strafing does not queue a stand-up during emote entry"),
+    App->ActionCommand==Pose && App->AnimTime==BeforeStrafe && App->PendingActionCommands.IsEmpty());
+   for(int Frame=0;Frame<FMath::CeilToInt(12.f/Dt)&&!App->bHoldActionFinal;++Frame)Tick();
+   // The completed entry link hands off to its held cycle on the next tick.
+   Tick();
+   TArray<FTransform> Held;
+   for(int Part=0;Part<App->GetPartCount();++Part)Held.Add(App->GetPartMesh(Part)->GetRelativeTransform());
+   for(float Strafe:{-1.f,0.f,1.f})
+   {
+    App->SetLocomotionInput(0,Strafe,true,1);Tick();
+    TestTrue(TEXT("A held pose survives sidestep start/reverse/release"),App->ActionCommand==Pose&&App->bHoldActionFinal);
+    for(int Part=0;Part<Held.Num();++Part)
+     if(!TestTrue(FString::Printf(TEXT("Sidestep preserves pose %08X, setup %08X, part %d at %.0f Hz"),Pose,Setup,Part,1.f/Dt),
+      App->GetPartMesh(Part)->GetRelativeTransform().Equals(Held[Part],.0001)))return false;
+   }
    CheckTransition(Pose, ACEMotion::Ready, Direct(Pose, ACEMotion::Ready)->Anims, true);
    CheckTransition(Pose, ACEMotion::Ready, Direct(Pose, ACEMotion::Ready)->Anims, false);
   }
@@ -244,6 +271,80 @@ bool FACEEmoteTransitionTest::RunTest(const FString&)
  for (int32 Frame=0; Frame<900 && !App->bHoldActionFinal; ++Frame) App->TickComponent(1.f/90, LEVELTICK_All, nullptr);
  App->SetLocomotionInput(1, 0, true, 1);
  TestTrue(TEXT("Death finishes and cannot be cancelled by movement"), App->ActionCommand == ACEMotion::Dead && App->bHoldActionFinal);
+ // Controller jump policy and the actual outgoing movement writer must agree
+ // with the rendered pose, not just with an isolated animation helper.
+ auto* Client=GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
+ Session->State=EACESessionState::InWorld;Session->PlayerGuid=0x50000001;
+ FACEPosition Position;Position.CellId=0x7D640019;Position.Location=FVector(50,100,50);
+ Session->SetLocalPosition(Position);
+ auto* PC=World->SpawnActor<AACEPlayerController>();PC->Client=Client;
+ PC->SetPlayer(NewObject<ULocalPlayer>(GEngine));World->AddController(PC);
+ auto* Pawn=World->SpawnActor<APawn>();auto* Root=NewObject<USceneComponent>(Pawn);
+ Pawn->SetRootComponent(Root);Root->RegisterComponent();PC->Possess(Pawn);
+ auto* LocalApp=NewObject<UACECharacterAppearanceComponent>(Pawn);LocalApp->RegisterComponent();
+ LocalApp->ApplyWorldObject(Obj,100,false);
+ PC->PredictedPose=Position;PC->bHavePredictedPose=true;
+ auto* Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+ auto* Receiver=Sockets->CreateSocket(NAME_DGram,TEXT("Emote movement receiver"),false);
+ auto Address=Sockets->CreateInternetAddr();bool Valid=false;Address->SetIp(TEXT("127.0.0.1"),Valid);Address->SetPort(0);
+ ON_SCOPE_EXIT {Session->State=EACESessionState::Disconnected;if(Receiver){Receiver->Close();Sockets->DestroySocket(Receiver);}};
+ if(!Receiver||!Receiver->Bind(*Address))return false;
+ Receiver->GetAddress(*Address);Session->ServerC2SAddr=Address;
+ Session->SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("Emote movement sender"),false);
+ Session->IssacClient=MakeUnique<FACEIsaac>(123u);
+ auto WireForward=[&]()
+ {
+  if(!TestEqual(TEXT("One movement packet per input change"),Session->CachedC2SPackets.Num(),1))return 0u;
+  FACEBinaryReader R(Session->CachedC2SPackets.CreateConstIterator()->Value.Payload);R.Skip(24);
+  TestEqual(TEXT("Emotes and sidesteps use retail MoveToState"),R.ReadUInt32(),ACEGameAction::MoveToState);
+  const uint32 Flags=R.ReadUInt32();R.Skip(8);
+  TestEqual(TEXT("Held substates do not enter the one-shot action list"),Flags>>11,0u);
+  return (Flags&ACERawMotionFlags::ForwardCommand)?R.ReadUInt32():ACEMotion::Ready;
+ };
+ for(uint32 Pose:{ACEMotion::Sleeping,ACEMotion::Sitting,ACEMotion::Crouch,0x43000145u})
+ {
+  LocalApp->ClearActionMotion();LocalApp->SetLocomotionInput(0,0,false,1);LocalApp->SetHeldActionMotion(Pose,Style);
+  Session->CachedC2SPackets.Reset();Session->SendSoulEmoteMotion(Pose);
+  TestEqual(TEXT("Held pose is serialized as the retail forward command"),WireForward(),Pose);
+  for(float Strafe:{1.f,-1.f,0.f})
+  {
+   Session->CachedC2SPackets.Reset();Session->SendMoveToState(0,Strafe,.5f,true);
+   TestEqual(TEXT("Turn and sidestep packets retain the current pose"),WireForward(),Pose);
+  }
+  if(Pose!=0x43000145u)
+  {
+   Session->CachedC2SPackets.Reset();PC->BeginJumpCharge();PC->ReleaseJump(0,0);
+   TestFalse(TEXT("Resting pose cannot start a jump charge"),PC->bJumpCharging);
+   TestFalse(TEXT("Resting pose never becomes airborne"),PC->bJumpAirborne);
+   TestTrue(TEXT("Rejected jump sends neither a jump nor fabricated Ready"),Session->CachedC2SPackets.IsEmpty());
+   TestEqual(TEXT("Rejected jump leaves the rendered pose intact"),LocalApp->ActionCommand,Pose);
+   Session->SendMoveToState(1,0,0,true);LocalApp->SetLocomotionInput(1,0,true,1);
+   Session->CachedC2SPackets.Reset();PC->BeginJumpCharge();PC->ReleaseJump(1,0);
+   TestTrue(TEXT("Unfinished stand-up link still blocks jumping"),Session->CachedC2SPackets.IsEmpty()&&!PC->bJumpAirborne);
+   for(int Frame=0;Frame<1200&&LocalApp->ActionCommand;++Frame)LocalApp->TickComponent(1.f/90,LEVELTICK_All,nullptr);
+   TestFalse(TEXT("Completed get-up permits the next jump"),PC->IsJumpBlockedByMotion(false));
+  }
+  else
+  {
+   PC->BeginJumpCharge();
+   TestTrue(TEXT("Play Possum can charge without being forced to stand"),PC->bJumpCharging&&LocalApp->ActionCommand==Pose);
+   TestFalse(TEXT("A held emote is not a Ready standing-long-jump"),PC->bStandingJumpLocked);
+   PC->ReleaseJump(0,0);TestTrue(TEXT("Retail permits jumping from Play Possum"),PC->bJumpAirborne);
+   PC->bJumpAirborne=false;LocalApp->ClearJumpMotionIfAny(true,Session->GetCurrentForwardCommand());
+   for(int Frame=0;Frame<1200&&!LocalApp->bHoldActionFinal;++Frame)LocalApp->TickComponent(1.f/90,LEVELTICK_All,nullptr);
+   TestTrue(TEXT("Landing reapplies the preserved forward emote"),LocalApp->ActionCommand==Pose&&LocalApp->bHoldActionFinal);
+  }
+  Session->CachedC2SPackets.Reset();Session->SendStopMovement();
+  TestEqual(TEXT("Explicit Stop clears the forward pose"),WireForward(),ACEMotion::Ready);
+ }
+ // Release rechecks the current state: starting charge while Ready does not
+ // permit a jump if a lay-down arrives before the key is released.
+ LocalApp->ClearActionMotion();Session->CurrentForwardCommand=ACEMotion::Ready;
+ PC->BeginJumpCharge();LocalApp->SetHeldActionMotion(ACEMotion::Sleeping,Style);
+ Session->CurrentForwardCommand=ACEMotion::Sleeping;Session->CachedC2SPackets.Reset();PC->ReleaseJump(0,0);
+ TestTrue(TEXT("Pose change during charging rejects release without changing animation"),
+  !PC->bJumpAirborne&&Session->CachedC2SPackets.IsEmpty()&&LocalApp->ActionCommand==ACEMotion::Sleeping);
+ Pawn->Destroy();PC->Destroy();
  AddInfo(FString::Printf(TEXT("Verified %d DAT emote transitions across %d held poses, both human setups, at 30 and 90 Hz."), Cases, Poses.Num()));
  Actor->Destroy();
  return !HasAnyErrors();

@@ -21,6 +21,8 @@
 
 namespace
 {
+namespace ACEPluginPaperdollPrivate
+{
 FString Text(const TSharedPtr<FJsonObject>& O,const TCHAR* K,const FString& Default=FString())
 { FString V;return O&&O->TryGetStringField(K,V)?V:Default; }
 bool Ready(const TSharedPtr<FJsonObject>& O)
@@ -57,9 +59,11 @@ FString SearchTerms(const TSharedPtr<FJsonObject>& Item)
     return Result;
 }
 }
+} // anonymous namespace
 
 TSharedRef<SWidget> UACEPluginCosmetics::MakeCatalogIcon(TFunction<TSharedPtr<FJsonObject>()> Item,float Size)
 {
+    using namespace ACEPluginPaperdollPrivate;
     auto Icon=MakeShared<FCosmeticIcon>();TWeakObjectPtr<UACEPluginCosmetics> Self(this);
     return SNew(SBox).WidthOverride(Size).HeightOverride(Size)
         [SNew(SImage).Image_Lambda([Self,Item,Icon]()->const FSlateBrush*
@@ -101,6 +105,7 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakeCatalogIcon(TFunction<TSharedPtr<FJ
 
 TSharedRef<SWidget> UACEPluginCosmetics::MakeCatalogRow(TSharedPtr<FJsonObject> Item)
 {
+    using namespace ACEPluginPaperdollPrivate;
     return SNew(SHorizontalBox)
         +SHorizontalBox::Slot().AutoWidth().Padding(4)[MakeCatalogIcon([Item](){return Item;},48)]
         +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(8,2)[SNew(STextBlock).Text(FText::FromString(Text(Item,TEXT("name"))+(Ready(Item)?TEXT(""):TEXT(" — unavailable")))).ToolTipText(FText::FromString(Text(Item,TEXT("reason")))).AutoWrapText(true)];
@@ -108,6 +113,7 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakeCatalogRow(TSharedPtr<FJsonObject> 
 
 void UACEPluginCosmetics::UpdateCatalog(const FString& Json)
 {
+    using namespace ACEPluginPaperdollPrivate;
     TSharedPtr<FJsonObject> Root;const TArray<TSharedPtr<FJsonValue>>* Items=nullptr;
     if(!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json),Root)||!Root||!Root->TryGetArrayField(TEXT("items"),Items))
     {Tell(TEXT("Invalid item catalog response."));return;}
@@ -133,6 +139,7 @@ void UACEPluginCosmetics::UpdateCatalog(const FString& Json)
 
 void UACEPluginCosmetics::SelectSlot(const FString& Id)
 {
+    using namespace ACEPluginPaperdollPrivate;
     SelectedSlot=Id;SlotOptions.Empty();
     for(const auto& Item:Catalog)
         if(CanTarget(Item,Id)&&(bShowModelVariants||Text(Item,TEXT("kind"))!=TEXT("model"))
@@ -159,6 +166,7 @@ void UACEPluginCosmetics::SelectSlot(const FString& Id)
 
 void UACEPluginCosmetics::SelectCatalogItem(const TSharedPtr<FJsonObject>& Item)
 {
+    using namespace ACEPluginPaperdollPrivate;
     if(!CanTarget(Item,SelectedSlot))return;
     if(!Ready(Item)){Tell(Text(Item,TEXT("reason")));return;}
     SlotSelections.Add(SelectedSlot,Item);
@@ -170,6 +178,7 @@ void UACEPluginCosmetics::SelectCatalogItem(const TSharedPtr<FJsonObject>& Item)
 
 TSharedRef<SWidget> UACEPluginCosmetics::MakePaperdollPanel()
 {
+    using namespace ACEPluginPaperdollPrivate;
     TWeakObjectPtr<UACEPluginCosmetics> Self(this);auto Body=SNew(SVerticalBox);
     auto Add=[&](TSharedRef<SWidget> W){Body->AddSlot().AutoHeight().Padding(4)[W];};
     auto Button=[&](const FString& Caption,const FString& Operation)->TSharedRef<SWidget>

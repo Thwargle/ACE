@@ -185,7 +185,7 @@ private:
 	UFUNCTION() FEventReply HandleWindowMouseDown(FGeometry MyGeometry, const FPointerEvent& MouseEvent);
 	UFUNCTION() FEventReply HandleWindowMouseMove(FGeometry MyGeometry, const FPointerEvent& MouseEvent);
 	UFUNCTION() FEventReply HandleWindowMouseUp(FGeometry MyGeometry, const FPointerEvent& MouseEvent);
-	UFUNCTION() void HandleChatMessage(const FString& Text, const FString& Sender, int32 ChatType);
+	UFUNCTION() void HandleChatMessage(const FString& Text, const FString& Sender, int32 ChatType, int32 FilterType = -1);
 	UFUNCTION() void HandleChatCommitted(const FText& Text, ETextCommit::Type CommitMethod);
 	UFUNCTION() void OnSendClicked();
 	UFUNCTION() void OnChatTargetClicked();

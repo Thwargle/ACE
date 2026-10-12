@@ -1163,14 +1163,15 @@ void UACECharacterAppearanceComponent::SetLocomotionInput(float Forward, float S
 	{
 		RunBlend = 0.f;
 	}
-	// Moving removes the held cycle; authored entry/exit links still finish.
+	// Forward movement replaces the forward substate. Retail sidestep and turn
+	// are independent channels: a player can slide while holding Play Possum.
 	// Jump/Falling must NOT cancel: airborne + W still feeds locomotion axes for land resume,
 	// and clearing Falling mid-air made the run cycle play instead of the jump.
 	// Ignore analog/camera noise: IsNearlyZero cancelled *point* / *playpossum* on the next tick.
 	const bool bJumpHold = ActionCommand == 0x1000004bu // Jumpup
 		|| ActionCommand == 0x40000015u // Falling
 		|| ActionCommand == 0x4000001du; // JumpCharging
-	const bool bMoving = FMath::Abs(Forward) > 0.15f || FMath::Abs(Strafe) > 0.15f;
+	const bool bMoving = FMath::Abs(Forward) > 0.15f;
 	const bool bIdleTwitch = (ActionCommand >= 0x10000051u && ActionCommand <= 0x10000054u)
 		|| (ActionCommand >= 0x400000E4u && ActionCommand <= 0x400000E6u);
 	if ((bHoldActionFinal || bHoldActionFinalAfterFinish || bIdleTwitch) && AnimMode == EACEAnimMode::ActionOneShot
@@ -1469,8 +1470,7 @@ void UACECharacterAppearanceComponent::FinishMissileMotion()
 
 void UACECharacterAppearanceComponent::CancelHeldActionMotion()
 {
-	// Retail clears a held chat-pose when the player moves or jumps — the emote either
-	// froze on its last frame (bHoldActionFinal) or is still pending a hold.
+	// Explicit Ready or a new forward command replaces a held chat pose.
 	// Monster missile tables also contain zero-rate Aim/Reload endpoint cycles.
 	// A drudge has no Ready->Reload link, so that fallback never sets bFinished
 	// or bHoldActionFinal. The server's Ready must release it just like other holds.
@@ -1500,6 +1500,21 @@ void UACECharacterAppearanceComponent::CancelHeldActionMotion()
 		DeferredPoseDeltaTime = 0.f;
 		ResetHookTracking();
 	}
+}
+
+void UACECharacterAppearanceComponent::FinishEmoteMotion()
+{
+	if (AnimMode == EACEAnimMode::ActionOneShot && ActionCommand != ACEMotion::Dead
+		&& ACEMotion::IsHeldRestCommand(ActionCommand)) CancelHeldActionMotion();
+}
+
+bool UACECharacterAppearanceComponent::IsJumpBlockedByMotion(bool bCharging) const
+{
+	if (AnimMode != EACEAnimMode::ActionOneShot) return false;
+	if (bCharging) return ACEMotion::BlocksJumpCharge(ActionCommand);
+	// Retail pending_motions retains the source's jump error while standing up.
+	return ACEMotion::BlocksJumpRelease(ActionCommand)
+		|| (!bHoldActionFinal && bActionUsesStateTransition && ACEMotion::BlocksJumpRelease(ActionFromCommand));
 }
 
 void UACECharacterAppearanceComponent::QueueHeldActionAfterCurrent(int32 InActionCommand, int32 Style)
@@ -1553,7 +1568,7 @@ bool UACECharacterAppearanceComponent::BuildLandingRootTrack(ACELandingMotion::F
 		&& Dat->BuildTransitionRootTrack(MotionTableId, ActionFromCommand, ActionCommand, PreferredStyle, Out);
 }
 
-void UACECharacterAppearanceComponent::ClearJumpMotionIfAny(bool bLanded)
+void UACECharacterAppearanceComponent::ClearJumpMotionIfAny(bool bLanded, int32 ForwardPose)
 {
 	constexpr uint32 Jumpup = 0x1000004bu;
 	constexpr uint32 Falling = 0x40000015u;
@@ -1578,8 +1593,9 @@ void UACECharacterAppearanceComponent::ClearJumpMotionIfAny(bool bLanded)
 			// the kneel/recovery; Falling->Run/Walk supplies the moving landing.
 			const uint32 Destination = LocomotionForward > KINDA_SMALL_NUMBER
 				? (bLocomotionRunning ? 0x44000007u : 0x45000005u)
-				: LocomotionForward < -KINDA_SMALL_NUMBER ? 0x45000006u : ACEMotion::Ready;
-			PlayActionMotion(Destination, 1.f, PreferredStyle, false);
+				: LocomotionForward < -KINDA_SMALL_NUMBER ? 0x45000006u
+				: ACEMotion::IsHeldPoseSubstate(ForwardPose) ? ForwardPose : ACEMotion::Ready;
+			PlayActionMotion(Destination, 1.f, PreferredStyle, ACEMotion::IsHeldPoseSubstate(Destination));
 			ActionFromCommand = Falling;
 			bActionUsesStateTransition = true;
 			BeginPoseBlendFromCurrent(.06f);

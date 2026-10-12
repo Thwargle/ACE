@@ -197,12 +197,15 @@ public:
 
 	/** Clear airborne holds; an actual landing plays the DAT recovery into Ready/run. */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
-	void ClearJumpMotionIfAny(bool bLanded = false);
+	void ClearJumpMotionIfAny(bool bLanded = false, int32 ForwardPose = 0);
 	bool BuildLandingRootTrack(ACELandingMotion::FRootTrack& Out) const;
 
-	/** Cancel a held (or hold-pending) chat-pose emote — retail clears it on move/jump. */
+	/** Explicit Ready/forward movement replaces a held pose; strafe/turn do not. */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
 	void CancelHeldActionMotion();
+	void FinishEmoteMotion();
+	/** Includes the unfinished source link when checking jump release. */
+	bool IsJumpBlockedByMotion(bool bCharging) const;
 	/** Server Ready completes missile substates without interrupting a locally predicted jump/cast. */
 	void FinishMissileMotion();
 

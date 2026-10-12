@@ -404,6 +404,7 @@ namespace ACEQueue
 /** Motion / hold-key constants used for locomotion. */
 namespace ACEMotion
 {
+	constexpr uint32 HoldKeyInvalid     = 0x0; // inherit CurrentHoldKey
 	constexpr uint32 HoldKeyNone        = 0x1;
 	constexpr uint32 HoldKeyRun         = 0x2;
 	constexpr uint32 StanceHandCombat   = 0x8000003C;
@@ -919,6 +920,30 @@ namespace ACEMotion
 		const uint16 Low = static_cast<uint16>(Cmd);
 		return Low == DeadCommandU16 || Low == CrouchCommandU16
 			|| Low == SittingCommandU16 || Low == SleepingCommandU16;
+	}
+
+	inline bool IsHeldPoseSubstate(uint32 Cmd)
+	{
+		Cmd = NormalizeCommand(Cmd);
+		return Cmd != Dead && (Cmd & 0x40000000u) && IsHeldRestCommand(Cmd);
+	}
+
+	// CMotionInterp::charge_jump / jump_charge_is_allowed return error 72.
+	inline bool BlocksJumpCharge(uint32 Cmd)
+	{
+		Cmd = NormalizeCommand(Cmd);
+		return Cmd == 0x40000008u || (Cmd >= Crouch && Cmd <= Sleeping);
+	}
+
+	// CMotionInterp::motion_allows_jump returns an error, despite its name.
+	inline bool BlocksJumpRelease(uint32 Cmd)
+	{
+		Cmd = NormalizeCommand(Cmd);
+		return BlocksJumpCharge(Cmd)
+			|| (Cmd >= 0x1000006Fu && Cmd <= 0x10000078u)
+			|| (Cmd >= 0x10000128u && Cmd <= 0x10000131u)
+			|| (Cmd >= 0x40000016u && Cmd <= 0x40000018u)
+			|| (Cmd >= 0x4000001Eu && Cmd <= 0x40000039u);
 	}
 }
 

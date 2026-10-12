@@ -62,6 +62,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 {
 	GENERATED_BODY()
 	friend class FACERetailScreenTest;
+	friend class FACEPvPCombatParityTest;
 	friend class FACECharacterInfoParityTest;
 	friend class FACEVRRigTest;
 	friend class FACEVRProtocolTest;
@@ -103,7 +104,7 @@ public:
 	bool InspectSpellAt(FVector2D CanvasPoint);
 
 	UFUNCTION()
-	void HandleChatMessage(const FString& Text, const FString& Sender, int32 ChatType);
+	void HandleChatMessage(const FString& Text, const FString& Sender, int32 ChatType, int32 FilterType = -1);
 
 	UFUNCTION()
 	void HandleAppraisal(const FACEAppraisalInfo& Appraisal);
@@ -1561,6 +1562,7 @@ private:
 	void SyncInventoryButtonVisual();
 	void RefreshCombatPanelOverlays();
 	void TickCombatAutoAttack(float DeltaSeconds);
+	bool IsCombatPoseReady() const;
 	void FireCombatAttack();
 	void BeginCombatPowerCharge(uint32 AttackHeight, bool bHeld = false);
 	void ReleaseCombatPowerCharge();

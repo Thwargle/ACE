@@ -213,6 +213,31 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
    FMath::Abs(Yaw-FMath::RadiansToDegrees(1.5f)*(Run?1.5f:1.f))<.02f);
   Key(EKeys::D,false);if(!Run)Key(EKeys::LeftShift,false);
  }
+ // Leave-ground inherits the same interpreted backward/side speed as a run.
+ // Cover the direction missed by the forward-only arc tests below.
+ for(bool Run:{false,true})for(float Size:{.8f,1.2f})for(float Side:{-1.f,0.f,1.f})
+ {
+  VR->bActive=false;Session->bHasPlayerEncumbrance=false;Client->SetBurden(0);
+  Session->WorldObjects[Self.Guid].Scale=Size;Session->PlayerVitals.Stamina=500;Client->SetRunSkill(593);
+  PC->bJumpAirborne=false;PC->bStandingJumpLocked=false;PC->bRunning=Run;
+  PC->bJumpCharging=true;PC->JumpChargeExtent=.5f;PC->ReleaseJump(-1,Side);
+  const double Back=-3.12*.65*(Run?12.2257250946/4.:1.);
+  TestTrue(TEXT("Backward jump carries the retail run modifier independent of body size"),
+   FMath::Abs(PC->JumpLocalAceVelocity.Y-Back)<.00001);
+  TestTrue(TEXT("Diagonal back jump retains the capped sidestep component"),
+   FMath::Abs(PC->JumpLocalAceVelocity.X-Side*(Run?3.75:1.56))<.00001);
+ }
+ PC->bJumpAirborne=false;PC->bJumpCharging=false;PC->bStandingJumpLocked=false;
+ PC->ForwardAxis=PC->RightAxis=0;
+ Client->SetBurden(2.f);PC->BeginJumpCharge();
+ TestFalse(TEXT("Retail 200 percent burden gate prevents charging a jump"),PC->bJumpCharging);
+ Client->SetBurden(1.99f);PC->BeginJumpCharge();
+ TestTrue(TEXT("Just below 200 percent still permits jump charging"),PC->bJumpCharging);
+ Client->SetBurden(2.1f);PC->JumpChargeExtent=1.f;PC->ReleaseJump(1,0);
+ TestFalse(TEXT("Becoming overloaded during the charge does not predict a rejected jump"),PC->bJumpAirborne);
+ TestFalse(TEXT("Rejected jump releases standing-charge lock"),PC->bStandingJumpLocked);
+ TestFalse(TEXT("Rejected jump clears charge"),PC->bJumpCharging);
+ Client->SetBurden(0);
  // Retail CMotionInterp::get_state_velocity / CACQualities::InqJumpVelocity:
  // the airborne velocity is not scaled by creature size like grounded root motion.
  for(bool Tracked:{false,true})for(int Rate:{30,90,144})for(float Size:{1.f,1.1f})for(float Extent:{.25f,1.f})

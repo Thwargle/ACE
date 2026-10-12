@@ -325,12 +325,9 @@ float Value(const APlayerController* PC,FKey ActionKey)
  return Result;
 }
 float MovementAxis(const APlayerController* PC,FKey Positive,FKey Negative,const TMap<FKey,uint64>& PressOrder,
- FKey AdditionalPositive,FKey AdditionalNegative)
+ FKey AdditionalPositive,FKey AdditionalNegative,uint64 AfterPress)
 {
- const bool P=Down(PC,Positive)||(AdditionalPositive.IsValid()&&Down(PC,AdditionalPositive));
- const bool N=Down(PC,Negative)||(AdditionalNegative.IsValid()&&Down(PC,AdditionalNegative));
- if(!P||!N)return P?FMath::Max(Value(PC,Positive),AdditionalPositive.IsValid()?Value(PC,AdditionalPositive):0.f)
-  : N?-FMath::Max(Value(PC,Negative),AdditionalNegative.IsValid()?Value(PC,AdditionalNegative):0.f):0.f;
+ if(!PC)return 0.f;
  const FInputChord Modifiers(EKeys::Invalid,
   PC->IsInputKeyDown(EKeys::LeftShift)||PC->IsInputKeyDown(EKeys::RightShift),
   PC->IsInputKeyDown(EKeys::LeftControl)||PC->IsInputKeyDown(EKeys::RightControl),
@@ -347,6 +344,13 @@ float MovementAxis(const APlayerController* PC,FKey Positive,FKey Negative,const
   }
   return Order;
  };
+ auto ActiveValue=[&](FKey Key)
+ {
+  return Key.IsValid() && (!AfterPress || Latest(Key)>AfterPress) ? Value(PC,Key) : 0.f;
+ };
+ const float P=FMath::Max(ActiveValue(Positive),ActiveValue(AdditionalPositive));
+ const float N=FMath::Max(ActiveValue(Negative),ActiveValue(AdditionalNegative));
+ if(!P||!N)return P?P:-N;
  return FMath::Max(Latest(Positive),Latest(AdditionalPositive))>=FMath::Max(Latest(Negative),Latest(AdditionalNegative))?1.f:-1.f;
 }
 void BeginEdit(){Load();Draft=Live;DraftBlocked=LiveBlocked;DraftFileName=LiveFileName;bEditing=true;}

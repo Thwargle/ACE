@@ -18,15 +18,16 @@
 #include "Engine/World.h"
 #include "Engine/GameInstance.h"
 
-void UACEClientSubsystem::ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type)
+void UACEClientSubsystem::ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type, int32 FilterType)
 {
 	// Transient notices should not reappear after changing the HUD.
 	if (!ACEChatMessageType::IsTransientNotice(Type))
 	{
 		if (ChatHistory.Num() >= 256) ChatHistory.RemoveAt(0);
-		ChatHistory.Add({Text.Left(16384), Sender.Left(256), Type});
+		ChatHistory.Add({Text.Left(16384), Sender.Left(256), Type, FilterType});
 	}
 	OnChatMessage.Broadcast(Text, Sender, Type);
+	OnRoutedChatMessage.Broadcast(Text, Sender, Type, FilterType);
 }
 
 void UACEClientSubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -110,9 +111,9 @@ void UACEClientSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	{
 		OnPlayEffect.Broadcast(Guid, ScriptType, Intensity);
 	});
-	Session->OnChatMessage.AddLambda([this](const FString& Text, const FString& Sender, int32 Type)
+	Session->OnRoutedChatMessage.AddLambda([this](const FString& Text, const FString& Sender, int32 Type, int32 FilterType)
 	{
-		ReceiveChatMessage(Text, Sender, Type);
+		ReceiveChatMessage(Text, Sender, Type, FilterType);
 	});
 	Session->OnVitalsUpdated.AddLambda([this](const FACEPlayerVitals& Vitals)
 	{
@@ -482,11 +483,11 @@ void UACEClientSubsystem::SendMovement(float Forward, float Strafe, float Turn, 
 	SendMovementEx(Forward, Strafe, Turn, bRunning, false, true);
 }
 
-void UACEClientSubsystem::SendMovementEx(float Forward, float Strafe, float Turn, bool bRunning, bool bStandingLongJump, bool bContact, bool bUniformVRMovement)
+void UACEClientSubsystem::SendMovementEx(float Forward, float Strafe, float Turn, bool bRunning, bool bStandingLongJump, bool bContact, bool bUniformVRMovement, bool bMouseTurn)
 {
 	if (Session)
 	{
-		Session->SendMoveToState(Forward, Strafe, Turn, bRunning, bContact, bStandingLongJump, bUniformVRMovement);
+		Session->SendMoveToState(Forward, Strafe, Turn, bRunning, bContact, bStandingLongJump, bUniformVRMovement, bMouseTurn);
 	}
 }
 
@@ -1270,6 +1271,8 @@ bool UACEClientSubsystem::SendCastSpell(int32 SpellId, int32 CasterItemGuid)
 	const int32 PlayerGuid = Session->GetPlayerGuid();
 	int32 Target = 0;
 	if (!ResolveSpellCastTarget(SpellId, Sel.bValid ? Sel.Guid : 0, Target)) return false;
+	if (auto* Controller = GetWorld() ? Cast<AACEPlayerController>(GetWorld()->GetFirstPlayerController()) : nullptr)
+		Controller->PrepareManualCombat();
 
 	// Retail ClientMagicSystem sends the cast request without teleporting the
 	// player's heading. The server's TurnTo motion handles facing, and manual

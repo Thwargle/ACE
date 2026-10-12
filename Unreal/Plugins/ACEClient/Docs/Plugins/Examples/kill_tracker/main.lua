@@ -24,6 +24,7 @@ return function(s, p)
         {id="quests", text="Request /myquests", action="command", command="/myquests"}
     }
     if s.chat_gap then rows[#rows+1]={id="gap",text="Chat overflow: refresh quest status; some messages were missed."} end
+    if s.chat_more then rows[#rows+1]={id="pending",text="Reading chat: "..s.chat_pending.." messages remaining"} end
     if s.error ~= "" then rows[#rows+1]={id="error",text=string.sub(s.error,1,500)} end
     local markers, nearest, count = {}, nil, 0
     for _, o in ipairs(s.objects) do

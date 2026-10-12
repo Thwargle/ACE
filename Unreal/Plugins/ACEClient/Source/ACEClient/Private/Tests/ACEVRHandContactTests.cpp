@@ -126,7 +126,7 @@ bool FACEVRHandContactTest::RunTest(const FString&)
  ACEVRHandCollision::Move(World,Hand,FTransform(FVector(20,20,100)),Seed,Shapes,Query,&Surface);
  TestTrue(TEXT("Pulling out of a sharp mesh corner fully releases the hand"),!Hand.bContact && Hand.Pose.Equals(FTransform(FVector(20,20,100)),.02));
  // A held-contact gesture cannot repeatedly fire, or rearm from one quiet frame.
- Shapes.Add(Blade); Query.ClearIgnoredActors();
+ Shapes.Add(Blade); Query.ClearIgnoredSourceObjects();
  Box->SetBoxExtent(FVector(30,30,300)); Box->SetWorldLocation(FVector(80,0,100));
  Hand.Reset(); Move(FVector(0,-45,100),FRotator(0,30,0));
  for(int I=0;I<12;++I) Move(FVector(0,-45,100),FRotator(0,0,0));

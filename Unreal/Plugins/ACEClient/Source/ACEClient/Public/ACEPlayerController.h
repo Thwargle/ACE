@@ -32,6 +32,8 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 {
 	GENERATED_BODY()
 	friend class FACECollisionSizingTest;
+	friend class FACEPvPCombatParityTest;
+	friend class FACEEmoteTransitionTest;
 	friend class FACESelectionToolbarTest;
 	friend class UACEVRComponent;
 	friend class FACEVRRigTest;
@@ -53,6 +55,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACELedgeStairsTest;
 	friend class FACELedgeSafetyTest;
 	friend class FACEFortTethStairsTest;
+	friend class FACEBuildingPassageTest;
 	friend class FACERunSpeedParityTest;
 	friend class FACEWalkingStepTest;
 	friend class FACEMissingDatLoginTest;
@@ -187,8 +190,9 @@ public:
 	void InteractWithSelectedObject();
 	void InteractWithObject(int32 ObjectGuid);
 
-	/** Yaw the local pawn to face a world object (targeted spells / combat). */
-	void FaceWorldTarget(int32 TargetGuid);
+	/** Retail manual combat entry: clear held commands and send the stop before the action. */
+	void PrepareManualCombat(bool bFinishJump = false);
+	bool IsJumpAirborne() const { return bJumpAirborne; }
 
 	/** Exact server Position.CylinderDistance using Setup radius/height (returns edge distance in cm). */
 	float GetUseCylinderDistanceCm(const FACEWorldObject& Target, const FVector& SelfOriginCm,
@@ -277,6 +281,7 @@ protected:
 
 	float ForwardAxis = 0.f;
 	TMap<FKey,uint64> MovementKeyPressOrder;
+	uint64 MovementSuppressionSequence = 0;
 	uint64 MovementKeySequence = 0;
 	float RightAxis = 0.f;
 	float TurnAxis = 0.f;
@@ -284,6 +289,8 @@ protected:
 	bool bPluginFastBuffMovementSent = false;
 	float RightSent = 0.f;
 	float TurnSent = 0.f;
+	float MouseTurnReportSeconds = .5f;
+	bool bMouseTurnSent = false;
 	bool bRunning = true; // AC default: run; Shift holds walk
 	bool bRunningSent = true;
 	bool bUniformVRMovementSent = false;
@@ -329,8 +336,14 @@ protected:
 	FACEPosition PredictedPose;
 	/** Server-directed MoveToObject after Use (GameAction 0x36). */
 	bool bServerMoveToActive = false;
+	bool bServerTurnActive = false;
+	bool bServerControlledMotion = false;
+	FQuat ServerTurnHeading = FQuat::Identity;
+	float ServerTurnSpeed = 1.f;
+	void AdvanceServerTurn(FACEPosition& Pose, float Seconds);
 	int32 ServerMoveToTargetGuid = 0;
 	float ServerMoveToDistance = 0.6f;
+	float ServerMoveToSpeed = 1.f;
 	/** MoveTo FailDistance in AC units (melee charge default 15). 0 = no local fail check. */
 	float ServerMoveToFailDistance = 0.f;
 	FACEPosition ApproachStartPose;
@@ -475,6 +488,7 @@ protected:
 	void JumpPressed();
 	void JumpReleased();
 	void BeginJumpCharge();
+	bool IsJumpBlockedByMotion(bool bCharging) const;
 	void ReleaseJump(float Forward, float Right);
 	void SprintPressed();
 	void SprintReleased();

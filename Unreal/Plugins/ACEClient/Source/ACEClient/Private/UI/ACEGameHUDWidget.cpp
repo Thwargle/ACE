@@ -227,7 +227,7 @@ void UACEGameHUDWidget::NativeConstruct()
 	}
 	if (Client && !bChatDelegateBound)
 	{
-		Client->OnChatMessage.AddDynamic(this, &UACEGameHUDWidget::HandleChatMessage);
+		Client->OnRoutedChatMessage.AddDynamic(this, &UACEGameHUDWidget::HandleChatMessage);
 		Client->OnSelectionChanged.AddDynamic(this, &UACEGameHUDWidget::HandleSelectionChanged);
 		Client->OnAppraisal.AddDynamic(this, &UACEGameHUDWidget::HandleAppraisal);
 		bChatDelegateBound = true;
@@ -235,7 +235,7 @@ void UACEGameHUDWidget::NativeConstruct()
 
 	SetVisibility(ESlateVisibility::SelfHitTestInvisible);
 	if (Client) for (const auto& Message : Client->GetChatHistory())
-		HandleChatMessage(Message.Text, Message.Sender, Message.Type);
+		HandleChatMessage(Message.Text, Message.Sender, Message.Type, Message.FilterType);
 	EnsureArtApplied();
 }
 
@@ -261,7 +261,7 @@ void UACEGameHUDWidget::NativeDestruct()
 	SaveWindowLayout();
 	if (Client && bChatDelegateBound)
 	{
-		Client->OnChatMessage.RemoveDynamic(this, &UACEGameHUDWidget::HandleChatMessage);
+		Client->OnRoutedChatMessage.RemoveDynamic(this, &UACEGameHUDWidget::HandleChatMessage);
 		Client->OnSelectionChanged.RemoveDynamic(this, &UACEGameHUDWidget::HandleSelectionChanged);
 		Client->OnAppraisal.RemoveDynamic(this, &UACEGameHUDWidget::HandleAppraisal);
 		bChatDelegateBound = false;
@@ -4229,9 +4229,9 @@ void UACEGameHUDWidget::AppendChatLine(const FString& Line, const FLinearColor& 
 	}
 }
 
-void UACEGameHUDWidget::HandleChatMessage(const FString& Text, const FString& Sender, int32 ChatType)
+void UACEGameHUDWidget::HandleChatMessage(const FString& Text, const FString& Sender, int32 ChatType, int32 FilterType)
 {
-	if (!PassesChatFilter(ChatType))
+	if (!PassesChatFilter(FilterType == INDEX_NONE ? ChatType : FilterType))
 	{
 		return;
 	}
@@ -4330,7 +4330,8 @@ bool UACEGameHUDWidget::PassesChatFilter(int32 ChatType) const
 		return ChatType == ACEChatMessageType::Combat
 			|| ChatType == ACEChatMessageType::CombatEnemy
 			|| ChatType == ACEChatMessageType::CombatSelf
-			|| ChatType == ACEChatMessageType::Magic;
+			|| ChatType == ACEChatMessageType::Magic
+			|| ChatType == ACEChatMessageType::Spellcasting;
 	case 3: // System
 		return ChatType == ACEChatMessageType::System
 			|| ChatType == ACEChatMessageType::Broadcast;

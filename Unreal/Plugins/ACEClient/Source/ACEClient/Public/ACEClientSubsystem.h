@@ -12,6 +12,7 @@ struct FACEBufferedChatMessage
 {
 	FString Text, Sender;
 	int32 Type = 0;
+	int32 FilterType = INDEX_NONE;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FACESessionStateChangedDyn, EACESessionState, NewState);
@@ -29,6 +30,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FACESoundDyn, int32, ObjectGuid, 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FACEPlayScriptIdDyn, int32, ObjectGuid, int32, PhysicsScriptId, float, Intensity);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FACEPlayEffectDyn, int32, ObjectGuid, int32, ScriptType, float, Intensity);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FACEChatMessageDyn, const FString&, Text, const FString&, Sender, int32, ChatType);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_FourParams(FACERoutedChatMessageDyn, const FString&, Text, const FString&, Sender, int32, ChatType, int32, FilterType);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FACEVitalsUpdatedDyn, const FACEPlayerVitals&, Vitals);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FACEObjectHealthDyn, int32, ObjectGuid, float, HealthFraction);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FACEAppraisalDyn, const FACEAppraisalInfo&, Appraisal);
@@ -138,10 +140,13 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category = "ACE")
 	FACEChatMessageDyn OnChatMessage;
+	// UI routing is independent of the wire type/color retained for plugin observers.
+	UPROPERTY()
+	FACERoutedChatMessageDyn OnRoutedChatMessage;
 
 	// Retain server messages received before the gameplay HUD exists (world entry).
 	const TArray<FACEBufferedChatMessage>& GetChatHistory() const { return ChatHistory; }
-	void ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type);
+	void ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type, int32 FilterType = INDEX_NONE);
 	TArray<FACEBufferedChatMessage> ChatHistory;
 
 
@@ -229,7 +234,7 @@ public:
 
 	/** Same as SendMovement, with StandingLongJump and ground-contact bits. */
 	UFUNCTION(BlueprintCallable, Category = "ACE")
-	void SendMovementEx(float Forward, float Strafe, float Turn, bool bRunning, bool bStandingLongJump, bool bContact, bool bUniformVRMovement = false);
+	void SendMovementEx(float Forward, float Strafe, float Turn, bool bRunning, bool bStandingLongJump, bool bContact, bool bUniformVRMovement = false, bool bMouseTurn = false);
 
 	/** GameAction Jump (0xF61B) — Extent 0..1, velocity in ACE local space. */
 	UFUNCTION(BlueprintCallable, Category = "ACE")
@@ -304,7 +309,6 @@ public:
 	uint64 GetIdentifyRequestSerial() const { return IdentifyRequestSerial; }
 	int32 GetIdentifyRequestGuid() const { return IdentifyRequestGuid; }
 private:
-	float GetMovementBurden() const;
 	uint64 IdentifyRequestSerial = 0;
 	int32 IdentifyRequestGuid = 0;
 public:
@@ -731,6 +735,8 @@ public:
 	/** F/hand: merge into and select one compatible stack, or move to main pack if none fits. */
 	bool SortInventoryItem(int32 Guid);
 
+	/** Live load/capacity used by both locomotion speed and jump eligibility. */
+	float GetMovementBurden() const;
 	/** ACE MovementSystem.GetRunRate — used for client prediction speed. */
 	UFUNCTION(BlueprintPure, Category = "ACE|Movement")
 	float GetRunRate() const;

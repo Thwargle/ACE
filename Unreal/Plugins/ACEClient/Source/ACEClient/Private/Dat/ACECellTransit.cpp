@@ -190,14 +190,19 @@ namespace ACECellTransit
 			const uint32 Lb = LandblockKey(EnvCellId);
 			bool bCheckOutside = false;
 
-			for (const FACEDatCellPortal& Portal : Mesh->CellPortals)
+			const FVector LocalCenter = EnvCellLocalUnreal(*Mesh, EnvCellId, UnrealCenter, WorldScale);
+			for (int32 PortalIndex = 0; PortalIndex < Mesh->CellPortals.Num(); ++PortalIndex)
 			{
+				const FACEDatCellPortal& Portal = Mesh->CellPortals[PortalIndex];
 				if (Portal.IsOutsidePortal())
 				{
-					// Without portal planes, approximate: if sphere still intersects this cell
-					// while SeenOutside / we have an outside portal, allow outdoor seed.
-					if (SphereIntersectsEnvCell(Dat, EnvCellId, UnrealCenter, RadiusCm, WorldScale)
-						|| Mesh->SeesOutside())
+					// CEnvCell::find_transit_cells admits land only when a body sphere
+					// straddles a 0xFFFF portal plane. These include horizontal openings
+					// onto terrain beneath archways, not just vertical entrance doors.
+					if (Mesh->PortalApertureLocalNormals.IsValidIndex(PortalIndex)
+						&& !Mesh->PortalApertureLocalNormals[PortalIndex].IsNearlyZero()
+						&& FMath::Abs(FVector::DotProduct(Mesh->PortalApertureLocalNormals[PortalIndex], LocalCenter)
+							+ Mesh->PortalApertureLocalD[PortalIndex]) < RadiusCm + .0002f * WorldScale)
 					{
 						bCheckOutside = true;
 					}
@@ -444,6 +449,41 @@ namespace ACECellTransit
 		{
 			*bOutHitsInterior = bHitsInterior;
 		}
+	}
+
+	bool UsesOutdoorGround(UACEDatSubsystem& Dat, uint32 CellId, const FVector& UnrealFeet, float WorldScale)
+	{
+		if (!IsIndoorCell(CellId)) return true;
+		const auto* Mesh = Dat.FindEnvCellMesh(CellId, WorldScale);
+		if (!Mesh) return false;
+		const FVector LocalFeet = EnvCellLocalUnreal(*Mesh, CellId, UnrealFeet, WorldScale);
+		const FVector LocalUp = Mesh->GetCellLocalToLandblock(WorldScale).InverseTransformVectorNoScale(FVector::UpVector);
+		for (int32 Index = 0; Index < Mesh->CellPortals.Num(); ++Index)
+		{
+			if (!Mesh->CellPortals[Index].IsOutsidePortal()
+				|| !Mesh->PortalApertureLocalVerts.IsValidIndex(Index)
+				|| !Mesh->PortalApertureLocalNormals.IsValidIndex(Index)) continue;
+			const auto& Vertices = Mesh->PortalApertureLocalVerts[Index];
+			const FVector Normal = Mesh->PortalApertureLocalNormals[Index];
+			const double UpDot = FVector::DotProduct(Normal, LocalUp);
+			if (Vertices.Num() < 3 || UpDot >= -UE_KINDA_SMALL_NUMBER) continue;
+			// A downward 0xFFFF aperture is the room's open underside. Its floor
+			// belongs to CLandCell rather than EnvCell PhysicsBSP. Test the aperture,
+			// not room bounds or SeenOutside: vertical shop doors must not admit
+			// the plaza heightfield over a recessed ramp.
+			const FVector Projected = LocalFeet - LocalUp *
+				(FVector::DotProduct(Normal, LocalFeet - Vertices[0]) / UpDot);
+			bool Positive = false, Negative = false;
+			for (int32 Edge = 0; Edge < Vertices.Num(); ++Edge)
+			{
+				const FVector Delta = Vertices[(Edge + 1) % Vertices.Num()] - Vertices[Edge];
+				const double Side = FVector::DotProduct(FVector::CrossProduct(Delta.GetSafeNormal(), Projected - Vertices[Edge]), Normal);
+				Positive |= Side > .0002f * WorldScale;
+				Negative |= Side < -.0002f * WorldScale;
+			}
+			if (!(Positive && Negative)) return true;
+		}
+		return false;
 	}
 
 	bool ResolveTransitCellId(

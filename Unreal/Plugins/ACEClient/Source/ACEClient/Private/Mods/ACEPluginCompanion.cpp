@@ -19,6 +19,8 @@
 
 namespace
 {
+namespace ACEPluginCompanionPrivate
+{
     FString S(const TSharedPtr<FJsonObject>& O,const TCHAR* Key)
     {FString V;if(O)O->TryGetStringField(Key,V);return V;}
     double N(const TSharedPtr<FJsonObject>& O,const TCHAR* Key)
@@ -42,17 +44,26 @@ namespace
         if(const auto* C=Colors.Find(Name)){Out=*C;return true;}return false;
     }
 }
+} // anonymous namespace
 
 void UACEPluginSubsystem::UpdateCompanionChatContext()
 {
+    using namespace ACEPluginCompanionPrivate;
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     const int32 Player=(C->GetSessionState()==EACESessionState::InWorld||C->GetSessionState()==EACESessionState::EnteringWorld)?C->GetPlayerGuid():0;
     if(PluginChatSession.Pin()!=C->GetSession()||PluginChatPlayer!=Player||PluginChatServer!=C->GetServerName())
-    {PluginChatEvents.Reset();PluginChatSession=C->GetSession();PluginChatPlayer=Player;PluginChatServer=C->GetServerName();}
+    {
+        PluginChatEvents.Reset();PluginChatTextBytes=0;PluginChatContextStartSerial=PluginChatSerial;
+        // Logging back into the same character can reuse the session object.
+        // Abandoned pages belong to the old login, not this reader's backlog.
+        for(const auto& P:Plugins)P->ChatCursor=PluginChatContextStartSerial;
+        PluginChatSession=C->GetSession();PluginChatPlayer=Player;PluginChatServer=C->GetServerName();
+    }
 }
 
 void UACEPluginSubsystem::ObservePluginChat(const FString& Text,const FString& Sender,int32 Type)
 {
+    using namespace ACEPluginCompanionPrivate;
     UpdateCompanionChatContext();
     if(!PluginChatPlayer||!Plugins.ContainsByPredicate([](const auto& P){return P->HasPresentation()&&P->Enabled&&P->Permissions.Contains(TEXT("chat"));}))return;
     // Subscribe to the client feed at initialization, before its first world
@@ -61,13 +72,22 @@ void UACEPluginSubsystem::ObservePluginChat(const FString& Text,const FString& S
     if(Type==ACEChatMessageType::Tell)Line=FString::Printf(TEXT("%s tells you, \"%s\""),Sender.IsEmpty()?TEXT("Someone"):*Sender,*Text);
     else if(Type==ACEChatMessageType::Speech&&!Sender.IsEmpty())Line=Sender.Equals(TEXT("You"),ESearchCase::IgnoreCase)?FString::Printf(TEXT("You say, \"%s\""),*Text):FString::Printf(TEXT("%s says, \"%s\""),*Sender,*Text);
     else if(Type==ACEChatMessageType::Emote&&!Sender.IsEmpty())Line=Sender+TEXT(" ")+Text;
-    auto E=MakeShared<FJsonObject>();E->SetNumberField(TEXT("serial"),++PluginChatSerial);E->SetStringField(TEXT("text"),Line.Left(4096));
-    E->SetStringField(TEXT("raw_text"),Text.Left(4096));E->SetStringField(TEXT("sender"),Sender.Left(256));E->SetNumberField(TEXT("color"),Type);E->SetNumberField(TEXT("time"),FPlatformTime::Seconds());
-    if(PluginChatEvents.Num()>=128)PluginChatEvents.RemoveAt(0);PluginChatEvents.Add(MakeShared<FJsonValueObject>(E));
+    Line=Line.Left(4096);const FString Raw=Text.Left(4096),Speaker=Sender.Left(256);
+    const int32 Bytes=FTCHARToUTF8(*Line).Length()+FTCHARToUTF8(*Raw).Length()+FTCHARToUTF8(*Speaker).Length();
+    auto E=MakeShared<FJsonObject>();E->SetNumberField(TEXT("serial"),++PluginChatSerial);E->SetStringField(TEXT("text"),Line);
+    E->SetStringField(TEXT("raw_text"),Raw);E->SetStringField(TEXT("sender"),Speaker);E->SetNumberField(TEXT("color"),Type);E->SetNumberField(TEXT("time"),FPlatformTime::Seconds());
+    // Receive bursts independently of Lua's callback budget. A deque avoids
+    // shifting thousands of JSON references on every message once full.
+    while(!PluginChatEvents.IsEmpty()&&(PluginChatEvents.Num()>=ACEPluginChatLimits::RetainedEvents
+        ||PluginChatTextBytes+Bytes>ACEPluginChatLimits::RetainedTextBytes))
+    {PluginChatTextBytes-=PluginChatEvents.First().TextBytes;PluginChatEvents.PopFirst();}
+    PluginChatEvents.EmplaceLast(FACEPluginChatEvent{PluginChatSerial,Bytes,MakeShared<FJsonValueObject>(E)});
+    PluginChatTextBytes+=Bytes;
 }
 
 bool UACEPluginSubsystem::StartCompanion(FACEClientPlugin& P)
 {
+    using namespace ACEPluginCompanionPrivate;
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     if(!P.Enabled||C->GetSessionState()!=EACESessionState::InWorld||!C->GetPlayerGuid())
     {Notice=TEXT("Enable this companion and enter the world first.");return false;}
@@ -85,6 +105,7 @@ bool UACEPluginSubsystem::StartCompanion(FACEClientPlugin& P)
 
 bool UACEPluginSubsystem::InitializePluginState(FACEClientPlugin& P)
 {
+    using namespace ACEPluginCompanionPrivate;
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     UpdateCompanionChatContext();
     const bool NewCharacter=P.VMSession.Pin()!=C->GetSession()||P.Player!=C->GetPlayerGuid()||P.Server!=C->GetServerName();
@@ -99,13 +120,14 @@ bool UACEPluginSubsystem::InitializePluginState(FACEClientPlugin& P)
         {P.Status=TEXT("Cannot read saved state; original file preserved");return false;}
         P.SavedState=Loaded;
     }
-    if(NewCharacter)P.ChatCursor=PluginChatEvents.IsEmpty()?PluginChatSerial:uint32(N(PluginChatEvents[0]->AsObject(),TEXT("serial")))-1;
+    if(NewCharacter)P.ChatCursor=PluginChatContextStartSerial;
     P.NextStateSave=FPlatformTime::Seconds()+5;
     return true;
 }
 
 void UACEPluginSubsystem::FlushPluginState(FACEClientPlugin& P)
 {
+    using namespace ACEPluginCompanionPrivate;
     if(!P.StateDirty||!P.SavedState||P.StatePath.IsEmpty())return;
     IFileManager::Get().MakeDirectory(*FPaths::GetPath(P.StatePath),true);
     const FString Temp=P.StatePath+TEXT(".tmp");
@@ -116,6 +138,7 @@ void UACEPluginSubsystem::FlushPluginState(FACEClientPlugin& P)
 
 void UACEPluginSubsystem::StopCompanion(FACEClientPlugin& P,const FString& Reason)
 {
+    using namespace ACEPluginCompanionPrivate;
     FlushPluginState(P);P.Running=false;P.CompanionStopped=true;P.VM.Reset();
     P.Markers.Reset();P.PanelRows.Reset();P.PluginEvents.Reset();++P.PanelRevision;P.Status=Reason+(P.StateDirty?TEXT("; ")+P.CompanionError:FString());
     // Observational plugin lifecycle never cancels UCM movement, casts or attacks.
@@ -123,6 +146,7 @@ void UACEPluginSubsystem::StopCompanion(FACEClientPlugin& P,const FString& Reaso
 
 TSharedPtr<FJsonObject> UACEPluginSubsystem::CompanionSnapshot(FACEClientPlugin& P)
 {
+    using namespace ACEPluginCompanionPrivate;
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Out=MakeShared<FJsonObject>();
     FACEPosition Player=C->GetPlayerPosition();if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController()))PC->TryGetLocallyPredictedPosition(Player);
     Out->SetNumberField(TEXT("api"),P.Api);Out->SetNumberField(TEXT("unix_time"),FDateTime::UtcNow().ToUnixTimestamp());Out->SetNumberField(TEXT("time"),FPlatformTime::Seconds());Out->SetNumberField(TEXT("player"),uint32(C->GetPlayerGuid()));Out->SetStringField(TEXT("server"),C->GetServerName());
@@ -134,9 +158,25 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::CompanionSnapshot(FACEClientPlugin&
     TArray<TSharedPtr<FJsonValue>> Chat;
     if(P.Permissions.Contains(TEXT("chat")))
     {
-        for(const auto& E:PluginChatEvents)if(uint32(N(E->AsObject(),TEXT("serial")))>P.ChatCursor)Chat.Add(E);
-        Out->SetBoolField(TEXT("chat_gap"),!Chat.IsEmpty()&&N(Chat[0]->AsObject(),TEXT("serial"))>double(P.ChatCursor)+1);
-        Out->SetNumberField(TEXT("chat_serial"),PluginChatSerial);P.ChatCursor=PluginChatSerial;
+        uint64 Dropped=0;int32 Bytes=0;
+        if(!PluginChatEvents.IsEmpty())
+        {
+            const uint64 First=PluginChatEvents.First().Serial;
+            if(First>P.ChatCursor+1)Dropped=First-P.ChatCursor-1;
+            // Serials are contiguous within this character's retained deque.
+            // Index directly to this reader's cursor; do not rescan the backlog.
+            const int32 Start=P.ChatCursor<First?0:int32(FMath::Min<uint64>(P.ChatCursor-First+1,PluginChatEvents.Num()));
+            for(int32 I=Start;I<PluginChatEvents.Num()&&Chat.Num()<ACEPluginChatLimits::BatchEvents;++I)
+            {
+                const auto& E=PluginChatEvents[I];
+                if(!Chat.IsEmpty()&&Bytes+E.TextBytes>ACEPluginChatLimits::BatchTextBytes)break;
+                Chat.Add(E.Value);Bytes+=E.TextBytes;P.ChatCursor=E.Serial;
+            }
+        }
+        const uint64 Pending=PluginChatSerial>P.ChatCursor?PluginChatSerial-P.ChatCursor:0;
+        Out->SetBoolField(TEXT("chat_gap"),Dropped>0);Out->SetNumberField(TEXT("chat_dropped"),Dropped);
+        Out->SetNumberField(TEXT("chat_serial"),P.ChatCursor);Out->SetNumberField(TEXT("chat_latest_serial"),PluginChatSerial);
+        Out->SetNumberField(TEXT("chat_pending"),Pending);Out->SetBoolField(TEXT("chat_more"),Pending>0);
     }
     Out->SetArrayField(TEXT("chat_events"),Chat);
     // No inventory appraisals, spell indexing or visibility raycasts for companions.
@@ -165,6 +205,7 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::CompanionSnapshot(FACEClientPlugin&
 
 bool UACEPluginSubsystem::CompanionAction(FACEClientPlugin& P,const TSharedPtr<FJsonObject>& A,FString& Error)
 {
+    using namespace ACEPluginCompanionPrivate;
     const FString Kind=S(A,TEXT("action"));if(Kind.IsEmpty())return true;
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     if(!P.Enabled||!P.Running||C->GetSessionState()!=EACESessionState::InWorld||C->GetPlayerGuid()!=P.Player||C->GetServerName()!=P.Server)
@@ -200,6 +241,7 @@ bool UACEPluginSubsystem::CompanionAction(FACEClientPlugin& P,const TSharedPtr<F
 
 bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TSharedPtr<FJsonObject>& O,FString& Error)
 {
+    using namespace ACEPluginCompanionPrivate;
     // Validate the complete presentation before replacing the current one.
     const TSharedPtr<FJsonObject>* State=nullptr;const TArray<TSharedPtr<FJsonValue>> *Rows=nullptr,*Markers=nullptr,*Messages=nullptr;
     if(O->HasField(TEXT("state"))&&(!P.Permissions.Contains(TEXT("state"))||!O->TryGetObjectField(TEXT("state"),State)||FTCHARToUTF8(*Encode(*State)).Length()>65536))
@@ -243,6 +285,7 @@ bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TShared
 
 bool UACEPluginSubsystem::RunPluginCommand(const FString& Arguments)
 {
+    using namespace ACEPluginCompanionPrivate;
     FString Id,Text;Arguments.TrimStartAndEnd().Split(TEXT(" "),&Id,&Text);if(Id.IsEmpty())Id=Arguments.TrimStartAndEnd();
     auto P=Find(Id);
     if(!P||!P->HasPresentation()){Notice=TEXT("/plugin <companion-id> start | stop | <command text>");return false;}
@@ -254,6 +297,7 @@ bool UACEPluginSubsystem::RunPluginCommand(const FString& Arguments)
 
 void UACEPluginSubsystem::TickCompanions()
 {
+    using namespace ACEPluginCompanionPrivate;
     UpdateCompanionChatContext();
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     const bool InWorld=C->GetSessionState()==EACESessionState::InWorld;
@@ -278,6 +322,7 @@ void UACEPluginSubsystem::TickCompanions()
 
 TArray<FACEPluginMarker> UACEPluginSubsystem::GetPluginMarkers() const
 {
+    using namespace ACEPluginCompanionPrivate;
     TArray<FACEPluginMarker> Result;auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     if(C->GetSessionState()!=EACESessionState::InWorld)return Result;
     for(const auto& P:Plugins)if(P->HasPresentation()&&P->Running&&P->Enabled&&P->Player==C->GetPlayerGuid())for(const auto& M:P->Markers)
@@ -287,6 +332,7 @@ TArray<FACEPluginMarker> UACEPluginSubsystem::GetPluginMarkers() const
 
 void UACEPluginSubsystem::DrawPluginMarkers()
 {
+    using namespace ACEPluginCompanionPrivate;
     const double Now=FPlatformTime::Seconds();if(Now<NextPluginMarkerDraw)return;NextPluginMarkerDraw=Now+.1;
     const auto Markers=GetPluginMarkers();auto* W=GetWorld();
     if(!W||Markers.IsEmpty()){if(PluginMarkerMesh&&PluginMarkerMesh->GetNumSections())PluginMarkerMesh->ClearAllMeshSections();return;}

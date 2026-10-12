@@ -1,4 +1,5 @@
 #include "ACEPlayerController.h"
+#include "ACERetailTurn.h"
 #include "UI/ACERadarVisuals.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "VR/ACEVRLocomotion.h"
@@ -1026,13 +1027,14 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		&& ACEInputBindings::Pressed(this, ACEInputBindings::Action(TEXT("ToggleInterface"))))
 		SetDesktopInterfaceHidden(!bDesktopInterfaceHidden);
 	float F = 0.f, R = 0.f, T = 0.f;
-	F = ACEInputBindings::MovementAxis(this,EKeys::W,EKeys::S,MovementKeyPressOrder);
-	R = ACEInputBindings::MovementAxis(this,EKeys::E,EKeys::Q,MovementKeyPressOrder);
+	const uint64 MovementGeneration = MovementSuppressionSequence;
+	F = ACEInputBindings::MovementAxis(this,EKeys::W,EKeys::S,MovementKeyPressOrder,FKey(),FKey(),MovementGeneration);
+	R = ACEInputBindings::MovementAxis(this,EKeys::E,EKeys::Q,MovementKeyPressOrder,FKey(),FKey(),MovementGeneration);
 	if (bMouseForwardActive && !bChatFocused) F = 1.f;
 	// Retail mouse turning temporarily converts turn commands into sidesteps.
 	const bool bMouseFacing = bMouseLookActive && (bInstantMouseLookHeld || bMouseLookToggled || (IsUseMouseTurning() && IsInputKeyDown(EKeys::RightMouseButton)));
-	const float TurnKeys=ACEInputBindings::MovementAxis(this,EKeys::D,EKeys::A,MovementKeyPressOrder);
-	if(bMouseFacing)R=ACEInputBindings::MovementAxis(this,EKeys::E,EKeys::Q,MovementKeyPressOrder,EKeys::D,EKeys::A);else T=TurnKeys;
+	const float TurnKeys=ACEInputBindings::MovementAxis(this,EKeys::D,EKeys::A,MovementKeyPressOrder,FKey(),FKey(),MovementGeneration);
+	if(bMouseFacing)R=ACEInputBindings::MovementAxis(this,EKeys::E,EKeys::Q,MovementKeyPressOrder,EKeys::D,EKeys::A,MovementGeneration);else T=TurnKeys;
 	F = FMath::Clamp(F, -1.f, 1.f);
 	R = FMath::Clamp(R, -1.f, 1.f);
 	T = FMath::Clamp(T, -1.f, 1.f);
@@ -1074,9 +1076,13 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
         else if(GameHUDWidget)for(int32 Slot=0;Slot<9;++Slot)
             if(ACEInputBindings::Pressed(this,ACEInputBindings::Shortcut(Slot)))GameHUDWidget->ActivateHotbarSlot(Slot);
 	}
+	// A hotkey above may have started an attack/cast after these axes were sampled.
+	if (MovementGeneration != MovementSuppressionSequence) F=R=T=0.f;
 	if (!bVR && DatGameplayBinder)
+	{
 		DatGameplayBinder->SetCombatMovementBlocked(bJumpAirborne
 			|| (!bChatFocused && (!FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R))));
+	}
 
 	// Retail: F uses / picks up the selected object (same as the hand toolbar button).
 	if (!bChatFocused && ACEInputBindings::Pressed(this, ACEInputBindings::Action(TEXT("Pickup"))) && Client
@@ -1143,7 +1149,18 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		else if (ACEInputBindings::Pressed(this, EKeys::Apostrophe)) CycleNearbyTarget(true, 1);
 	}
 
-	if (!bChatFocused && ACEInputBindings::Down(this, ACEInputBindings::Action(TEXT("Stop")))) { F=R=T=0.f; bAutoRun=false; }
+	if (!bChatFocused && ACEInputBindings::Down(this, ACEInputBindings::Action(TEXT("Stop"))))
+	{
+		F=R=T=0.f; bAutoRun=false;
+		if (Client && Client->GetSession())
+		{
+			auto Session = Client->GetSession();
+			bForceMovementResend |= ACEMotion::IsHeldPoseSubstate(Session->GetCurrentForwardCommand());
+			Session->ClearHeldForwardCommand();
+		}
+		if (APawn* P = GetPawn())
+			if (auto* App = P->FindComponentByClass<UACECharacterAppearanceComponent>()) App->FinishEmoteMotion();
+	}
 	if (bVR) { VR->GetMovement(F, R, bRunning); T = 0.f; bAutoRun = false; }
 	bool bUniformVRMovement = bVR && Client->GetSession() && Client->GetSession()->SupportsUniformVRMovement();
 	if (bUniformVRMovement)
@@ -1160,6 +1177,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	}
 	// Manual input cancels server-directed MoveTo approach.
 	const bool bManualKeys = !FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R) || !FMath::IsNearlyZero(T);
+	if (bManualKeys) { bServerTurnActive = false; bServerControlledMotion = false; }
 	if (bManualKeys && (bServerMoveToActive || bAwaitingUseDone || ApproachUseSendCount > 0))
 	{
 		const bool bCancelUse = bAwaitingUseDone;
@@ -1220,7 +1238,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			const float Dot = ApproachTargetDir.IsNearlyZero()
 				? 1.f
 				: PoseForFacing.GetFacingDotUnreal2D(ApproachTargetDir);
-			constexpr float FaceDotMin = 0.997f; // ~4.4°; avoid stuck turning at doors
+			constexpr float FaceDotMin = 0.999999f;
 			const bool bFacing = bVR || Dot >= FaceDotMin;
 
 			if (UseApproachPhase == EACEUseApproachPhase::None)
@@ -1231,8 +1249,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			{
 				ApproachTurnSeconds += DeltaTime;
 			}
-			if (UseApproachPhase == EACEUseApproachPhase::Turning
-				&& (bFacing || ApproachTurnSeconds >= 1.25f))
+			if (UseApproachPhase == EACEUseApproachPhase::Turning && bFacing)
 			{
 				// Finish at the exact door heading, then lock that heading for the run.
 				PredictedPose = PoseForFacing;
@@ -1363,18 +1380,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			};
 			if (UseApproachPhase == EACEUseApproachPhase::Walking && bInUseRange)
 			{
-				// Snap facing and Use once in range — don't require FaceDot again (stuck doors).
-				if (!bFacing)
-				{
-					PredictedPose = PoseForFacing;
-					PredictedPose.SetAceFacingFromUnrealDir2D(ApproachTargetDir);
-					ApproachTargetDir = PredictedPose.GetAceForwardVector().GetSafeNormal2D();
-					if (APawn* P = GetPawn())
-					{
-						P->SetActorRotation(PredictedPose.ToUnrealQuat());
-					}
-					Client->SetReportedPosition(PredictedPose);
-				}
+				// Reaching use/charge distance stops translation. Facing continues
+				// at the retail turn rate; arrival cannot snap onto a moving target.
 				UseApproachPhase = EACEUseApproachPhase::Holding;
 				if (!bApproachMoveOnly && ApproachUseSendCount == 0 && Client)
 				{
@@ -1545,18 +1552,25 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
             PendingMouseTurnDegrees = ACECameraRetail::FollowTurnDegrees(Boom->GetRelativeRotation().Yaw,
                 DeltaTime, true, true);
     }
+	if (!FMath::IsNearlyZero(PendingMouseTurnDegrees))
+	{
+		bServerTurnActive = false;
+		bServerControlledMotion = false;
+	}
 
 	ForwardAxis = F;
 	RightAxis = R;
 	TurnAxis = T;
 
-	const bool bMouseTurnSend = (IsUseMouseTurning() || bInstantMouseLookHeld)
+	const bool bMouseTurnSend = bMouseFacing
 		&& FMath::Abs(PendingMouseTurnDegrees) > 0.01f;
-	// Retail's turn modifier is 1.5 rad/s; Run multiplies it by 1.5.
-	// Use the same rate for prediction and raw mouse-turn packet conversion.
-	const float TurnRateDegPerSec=FMath::RadiansToDegrees(1.5f)*(bRunning?1.5f:1.f);
+	// Mouse commands explicitly apply HoldRun; keyboard commands inherit the
+	// current hold key. The same raw speed drives prediction and the packet.
+	const float TurnRateDegPerSec=FMath::RadiansToDegrees(1.5f)*((bMouseFacing||bRunning)?1.5f:1.f);
 	const float ReportedTurn = bMouseTurnSend
-		? FMath::Clamp(PendingMouseTurnDegrees / FMath::Max(TurnRateDegPerSec*DeltaTime, KINDA_SMALL_NUMBER),-1.f,1.f) : T;
+		? FMath::Clamp(PendingMouseTurnDegrees / FMath::Max(TurnRateDegPerSec*DeltaTime, KINDA_SMALL_NUMBER),-1.5f,1.5f) : T;
+	MouseTurnReportSeconds += DeltaTime;
+	const bool bMouseTurnReport = (bMouseTurnSend || bMouseTurnSent) && MouseTurnReportSeconds >= .5f;
 	auto LocalAnimationRate = [&](float Forward, float Strafe)
 	{
 		if (bUniformVRMovement)
@@ -1637,27 +1651,27 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	// (otherwise SoftReconcile snaps idle airborne poses back to the ground).
 	// The network send threshold must not discard small local mouse turns.
 	bLocalPredicting = bMoving || !FMath::IsNearlyZero(PendingMouseTurnDegrees)
-		|| bServerMoveToActive || bJumpAirborne || bJumpCharging || bWalkingTransitionThisFrame || !LandingWorldAceVelocity.IsNearlyZero() || LandingRootTrack.IsActive()
+		|| bServerMoveToActive || bServerTurnActive || bJumpAirborne || bJumpCharging || bWalkingTransitionThisFrame || !LandingWorldAceVelocity.IsNearlyZero() || LandingRootTrack.IsActive()
 		|| (bVR && !VR->IsMovementBlocked());
 	const bool bChanged =
 		bForceMovementResend ||
 		!FMath::IsNearlyEqual(F, ForwardSent) ||
 		!FMath::IsNearlyEqual(R, RightSent) ||
-		!FMath::IsNearlyEqual(ReportedTurn, TurnSent) ||
+		(!(bMouseTurnSend || bMouseTurnSent) && !FMath::IsNearlyEqual(ReportedTurn, TurnSent)) ||
 		(bMoving != bWasMoving) ||
-		(bRunning != bRunningSent) ||
+		((bMoving || bJumpCharging) && bRunning != bRunningSent) ||
 		(bUniformVRMovement != bUniformVRMovementSent) ||
 		(bJumpCharging != bJumpChargeSent) ||
 		(bJumpAirborne != bJumpAirborneSent) ||
-		bMouseTurnSend;
+		bMouseTurnReport;
 	// After Use is in flight, MoveToState (F=1 leftover or axes-0) cancels CreateMoveToChain.
 	// Fast buff input must reach the server like physical movement, including
 	// the release after a result clears plugin ownership. Keep ordinary object
 	// approaches protected from unsolicited movement-chain cancellation.
 	const bool bSendFastBuffMovement = !bServerMoveToActive && !bAwaitingUseDone && ApproachUseSendCount == 0
 		&& (bPluginFastBuffMovement || bPluginFastBuffMovementSent);
-	const bool bFreezeMoveToState = !bSendFastBuffMovement && !bManualKeys && !bJumpAirborne && !bJumpCharging
-		&& (bAwaitingUseDone || ApproachUseSendCount > 0 || Client->IsUseBusy());
+	const bool bFreezeMoveToState = !bSendFastBuffMovement && !bManualKeys && !bMouseTurnSend && !bMouseTurnSent && !bJumpAirborne && !bJumpCharging
+		&& (bServerTurnActive || bAwaitingUseDone || ApproachUseSendCount > 0 || Client->IsUseBusy());
 
 	if (bFreezeMoveToState)
 	{
@@ -1665,7 +1679,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		{
 			Client->SetReportedPosition(PredictedPose);
 		}
-		Client->FlushAutonomousPosition(true);
+		// Session's retail position cadence reports progress. Per-frame AutoPos
+		// here made a 240 Hz client send four times as often as a 60 Hz client.
 		Client->SetForcePositionReporting(true);
 		if (bChanged)
 		{
@@ -1690,8 +1705,10 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			&& JumpChargeExtent > 0.05f;
 		if (bJumpAirborne)
 		{
-			// Contact=0 so the server keeps physics jump ownership; keep AutoPos flowing.
-			Client->SendMovementEx(0.f, 0.f, 0.f, bRunning, false, false);
+			// Contact=0 preserves JumpPack translation. Retail contact_allows_move
+			// still permits TurnRight/TurnLeft in the air, so observers must receive
+			// the same turn that local prediction applies during the jump.
+			Client->SendMovementEx(0.f, 0.f, ReportedTurn, bRunning, false, false, false, bMouseTurnSend);
 			Client->SetForcePositionReporting(true);
 		}
 		else if (bMoving || bJumpCharging || bMouseTurnSend)
@@ -1704,7 +1721,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			{
 				SendT = ReportedTurn;
 			}
-			Client->SendMovementEx(SendF, SendR, SendT, bRunning, bStandingLongJump, true, bUniformVRMovement);
+			Client->SendMovementEx(SendF, SendR, SendT, bRunning, bStandingLongJump, true, bUniformVRMovement, bMouseTurnSend);
 		}
 		else if (bServerMoveToActive || (Client && Client->IsUseBusy()))
 		{
@@ -1719,8 +1736,9 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			{
 				Client->SetReportedPosition(PredictedPose);
 			}
-			Client->FlushAutonomousPosition(true);
-			Client->StopMovement();
+			// StopCompletely carries the final pose in MoveToState and preserves
+			// RawState's hold key. A separate AutoPos duplicates that report.
+			Client->SendMovementEx(0.f, 0.f, 0.f, bRunning, false, true);
 			Client->SetForcePositionReporting(bWalkingTransitionThisFrame);
 		}
 		ForwardSent = F;
@@ -1728,6 +1746,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		TurnSent = ReportedTurn;
 		bRunningSent = bRunning;
 		bUniformVRMovementSent = bUniformVRMovement;
+		bMouseTurnSent = bMouseTurnSend;
+		MouseTurnReportSeconds = 0.f;
 		bWasMoving = bMoving;
 		bJumpChargeSent = bJumpCharging;
 		bJumpAirborneSent = bJumpAirborne;
@@ -1772,6 +1792,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			}
 
 			const uint32 SupportedStartCell = Pred.CellId;
+			AdvanceServerTurn(Pred, DeltaTime);
 			if (bVR && !VR->IsMovementBlocked())
 			{
 				Pred.SetAceFacingFromUnrealDir2D(VR->GetBodyForward());
@@ -1782,14 +1803,17 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			{
 				// Turn about AC +Z. Allowed mid-jump for visuals — arc uses JumpWorldAceVelocity.
 				float TurnInput = T;
-                const bool bFollowCamera = (IsUseMouseTurning() || bInstantMouseLookHeld) && !FMath::IsNearlyZero(PendingMouseTurnDegrees);
+                const bool bFollowCamera = bMouseFacing && !FMath::IsNearlyZero(PendingMouseTurnDegrees);
                 if (bFollowCamera)
                 {
                     TurnInput = PendingMouseTurnDegrees / FMath::Max(TurnRateDegPerSec * DeltaTime, KINDA_SMALL_NUMBER);
                     if (auto* Boom = P->FindComponentByClass<USpringArmComponent>())
                     {
                         FRotator Relative = Boom->GetRelativeRotation();
-                        Relative.Yaw -= PendingMouseTurnDegrees;
+                        // Preserve the world-space view while the character
+                        // catches up to a heading chosen with free orbit. Only
+                        // consume the angle actually turned this frame.
+                        Relative.Yaw = FMath::UnwindDegrees(Relative.Yaw - PendingMouseTurnDegrees);
                         Boom->SetRelativeRotation(Relative);
                     }
                 }
@@ -1809,11 +1833,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			{
 				FACEPosition FaceTarget = Pred;
 				FaceTarget.SetAceFacingFromUnrealDir2D(ApproachTargetDir);
-				const float Dot = Pred.GetFacingDotUnreal2D(ApproachTargetDir);
-				const float Alpha = (Dot < 0.5f)
-					? FMath::Clamp(DeltaTime * 6.f, 0.f, 1.f)
-					: FMath::Clamp(DeltaTime * 8.f, 0.f, 1.f);
-				const FQuat Blended = FQuat::Slerp(Pred.GetAcQuat(), FaceTarget.GetAcQuat(), Alpha).GetNormalized();
+				const FQuat Blended = ACERetailTurn::Advance(Pred.GetAcQuat(), FaceTarget.GetAcQuat(),
+					ServerMoveToSpeed * (bRunning ? 1.5f : 1.f), DeltaTime);
 				Pred.RotationW = Blended.W;
 				Pred.RotationXYZ = FVector(Blended.X, Blended.Y, Blended.Z);
 			}
@@ -1955,7 +1976,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				if (UACECharacterAppearanceComponent* App =
 					P->FindComponentByClass<UACECharacterAppearanceComponent>())
 				{
-					App->ClearJumpMotionIfAny(true);
+					App->ClearJumpMotionIfAny(true, Client->GetSession()->GetCurrentForwardCommand());
 					App->BuildLandingRootTrack(LandingRootTrack);
 					App->SetSuppressLocoIdleBlend(false);
 				}
@@ -2085,6 +2106,9 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					}
 				}
 
+				const bool bUseLandSupport = bTransitHasOutdoorLand && (!bIndoorPred || (WaterDat
+					&& ACECellTransit::UsesOutdoorGround(*WaterDat, PredictedPose.CellId, Desired, WorldScale)));
+
 				auto IsOutdoorTerrainHit = [](const FHitResult& Hit) -> bool
 				{
 					return Hit.Component.IsValid()
@@ -2104,7 +2128,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				// straddle re-adds it.
 				auto IsBlockingOutdoorTerrain = [&](const FHitResult& Hit, float X, float Y) -> bool
 				{
-					return IsOutdoorTerrainHit(Hit) && bTransitHasOutdoorLand && !bIndoorPred;
+					return IsOutdoorTerrainHit(Hit) && bUseLandSupport;
 				};
 
 				// Retail OBJECTINFO::validate_walkable: contact embeds waterDepth along the plane
@@ -2163,7 +2187,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					bMovementFilterOutdoor = bTransitHasOutdoorLand;
 					bMovementFilterIndoor = bIndoorPred;
 				}
-				if (!bIndoorPred && bTransitHasOutdoorLand)
+				if (bUseLandSupport)
 					FilterWadingTerrain(*World,WaterDat,P->GetActorLocation(),Desired,WorldScale,SweepParams);
 
 				// OBJECTINFO::get_walkable_z / CTransition::step_up use the
@@ -2230,7 +2254,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				const float RampDropCm = StepDownCm + WaterDepthDestCm;
 				if (!bJumpAirborne && HasLedgeSupport(*World, WaterDat,
 					Current-FVector(0,0,CapsuleHalfHeight), CapsuleRadius,
-					StepDownCm, WorldScale, (SupportedStartCell & 0xFFFFu)<0x100u, SweepParams))
+					StepDownCm, WorldScale, bUseLandSupport, SweepParams))
 					LedgeSupportParams = SweepParams;
 
 				// Desktop's step grace can hold feet on a nonexistent floor for
@@ -2241,7 +2265,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				// Retail CLandCell::find_env_collisions: Collided only when the *landblock*
 				// is EntirelyWater (get_block_water_type). Coastal cells that are fully
 				// flooded on a PartiallyWater block are walkable at 0.9 AC depth.
-				const bool bDestEntirelyWater = !bIndoorNow && WaterDat
+				const bool bDestEntirelyWater = bUseLandSupport && WaterDat
 					&& WaterDat->GetOutdoorBlockWaterType(Desired.X, Desired.Y, WorldScale) == 2;
 
 				auto CollectWalkableFeet = [&](float X, float Y, float NearFeetZ, float MaxUp, float MaxDown,
@@ -2340,10 +2364,10 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					}
 
 					// Outdoor DAT land+water — retail keeps the heightfield as real support
-					// everywhere while outdoor-resident, including under building footprints
-					// (the DAT terrain dips into basement mouths; there is no "lid" to fight).
+				// wherever land is in the transit set, including terrain exposed by
+				// an indoor cell's horizontal outside portal beneath a walkway.
 					// Raised walkables (stoops/stairs) still win below via the step preference.
-					if (!bIndoorNow && WaterDat)
+					if (bUseLandSupport && WaterDat)
 					{
 						float DatFeetZ = NearFeetZ;
 						FVector DatNormal;
@@ -2361,7 +2385,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						}
 					}
 
-					if (bIndoorNow)
+					if (bIndoorNow && !bUseLandSupport)
 					{
 						if (bHaveIndoorHit)
 						{
@@ -3039,6 +3063,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			// Snap feet to walkable mesh — skipped while airborne so jump arcs aren't crushed.
 			float GroundZ = Desired.Z;
 			bool bHaveGround = false;
+			bool bSupportHasLand = !bIndoor;
 			const float RampClimbCm = bIndoor
 				? (GetStepUpHeightCm() + 12.f)
 				: (GetStepUpHeightCm() + 28.f);
@@ -3084,7 +3109,9 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 								bSnapHasLand = true;
 							}
 						}
-						if (!bSnapHasLand || bIndoor)
+						bSupportHasLand = bSnapHasLand && ACECellTransit::UsesOutdoorGround(
+							*SnapDat, Pred.CellId, Desired, WorldScale);
+						if (!bSupportHasLand)
 						{
 							for (TActorIterator<AACELandblockActor> It(World); It; ++It)
 							{
@@ -3107,7 +3134,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						(void)bSnapHitsInterior;
 					}
 				}
-				if (!bIndoor)
+				if (bSupportHasLand)
 					FilterWadingTerrain(*World,GetGameInstance()->GetSubsystem<UACEDatSubsystem>(),
 						P->GetActorLocation(),Desired,WorldScale,Params);
 
@@ -3202,10 +3229,10 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						}
 					}
 
-					if (!bIndoor && SnapDat)
+					if (bSupportHasLand && SnapDat)
 					{
-						// Retail: heightfield support applies everywhere outdoors, including
-						// under building footprints. Raised walkables win via the step
+						// Retail: heightfield support applies to admitted land cells, even
+						// when an interior passage has no floor. Raised walkables win via the step
 						// preference below when clearly above grade.
 						float DatZ = FeetZ;
 						FVector DatNormal;
@@ -3228,7 +3255,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						GroundZ = BestIndoorZ;
 						bHaveGround = true;
 					}
-					else if (!bHaveGround && bIndoor)
+					else if (!bHaveGround && bIndoor && !bSupportHasLand)
 					{
 						if (StepHoldSeconds > 0.f)
 						{
@@ -3348,7 +3375,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                                 && !ACEBodySweep::IsCreatureBody(Contact)
                                 && HasLedgeSupport(*World,GetGameInstance()->GetSubsystem<UACEDatSubsystem>(),
                                     FVector(Desired.X,Desired.Y,GroundZ),CapsuleRadius,SnapStepDownCm,
-                                    WorldScale,!bIndoor,Params)) bHaveGround=true;
+                                    WorldScale,bSupportHasLand,Params)) bHaveGround=true;
                         }
                         for (int32 Retry=0; !bHaveGround && Retry<3; ++Retry)
                         {
@@ -3384,8 +3411,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			}
 
 			// Outdoor heightfield fallback when complex mesh traces miss.
-			// Retail: land support is valid everywhere while outdoor-resident.
-			if (!bJumpAirborne && !bHaveGround && !bIndoor)
+			// Retail: land support follows the collision cell list, not just residency.
+			if (!bJumpAirborne && !bHaveGround && bSupportHasLand)
 			{
 				if (UGameInstance* GI = GetGameInstance())
 				{
@@ -3417,7 +3444,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				&& (!bHaveGround || !HasLedgeSupport(*GetWorld(),
 					GetGameInstance()->GetSubsystem<UACEDatSubsystem>(),
 					FVector(Desired.X,Desired.Y,GroundZ), CapsuleRadius, SnapStepDownCm,
-					WorldScale, !bIndoor, LedgeSupportParams.GetValue())))
+					WorldScale, bSupportHasLand, LedgeSupportParams.GetValue())))
 			{
 				Desired = Current-FVector(0,0,CapsuleHalfHeight);
 				GroundZ = Desired.Z;
@@ -3945,7 +3972,7 @@ bool AACEPlayerController::UpdateMouseButtons(bool bRightDown, bool bLeftDown,
         MouseLookTravelPixels = 0.f;
         if (bRightClickEligible && (IsUseMouseTurning() || bInstantMouseLookHeld))
         {
-            if (bToggle) { bMouseLookToggled=!bMouseLookActive; SetMouseLookActive(bMouseLookToggled); }
+            if (bToggle) { bMouseLookToggled=!bMouseLookToggled; SetMouseLookActive(bMouseLookToggled); }
             else SetMouseLookActive(true);
         }
     }
@@ -4017,7 +4044,17 @@ void AACEPlayerController::ApplyMouseLookDelta(float DeltaX, float DeltaY, USpri
     const float DegreesPerPixel = ACECameraSettings::GetMouseDegreesPerPixel();
     if (ACECameraSettings::GetInvertMouseX()) DeltaX=-DeltaX;
     if (ACECameraSettings::GetInvertMouseY()) DeltaY=-DeltaY;
-    ApplyCameraOrbitDelta(Boom, DeltaX * DegreesPerPixel, -DeltaY * DegreesPerPixel);
+    float YawDegrees = DeltaX * DegreesPerPixel;
+    if (bInstantMouseLookHeld || bMouseLookToggled || bRightMouseWasDown)
+    {
+        // CameraSet::Rotate caps new mouse-facing input at the retail turn
+        // speed. Do this before adding it to the camera's existing orbit so
+        // excess mouse travel is discarded without losing a free-orbit view.
+        const float Limit = FMath::RadiansToDegrees(ACECameraRetail::MouseTurnRadiansPerSecond)
+            * FMath::Max(0.f, CameraInputFrameSeconds);
+        YawDegrees = FMath::Clamp(YawDegrees, -Limit, Limit);
+    }
+    ApplyCameraOrbitDelta(Boom, YawDegrees, -DeltaY * DegreesPerPixel);
 }
 
 void AACEPlayerController::ApplyCameraOrbitDelta(USpringArmComponent* Boom, float YawDegrees, float PitchDegrees)
@@ -4293,24 +4330,40 @@ void AACEPlayerController::JumpReleased()
 void AACEPlayerController::SprintPressed() { bRunning = false; } // Shift = walk
 void AACEPlayerController::SprintReleased() { bRunning = true; }
 
+bool AACEPlayerController::IsJumpBlockedByMotion(bool bCharging) const
+{
+	if (Client && Client->GetSession())
+	{
+		const uint32 Command = Client->GetSession()->GetCurrentForwardCommand();
+		if (bCharging ? ACEMotion::BlocksJumpCharge(Command) : ACEMotion::BlocksJumpRelease(Command)) return true;
+	}
+	const APawn* P = GetPawn();
+	const auto* App = P ? P->FindComponentByClass<UACECharacterAppearanceComponent>() : nullptr;
+	return App && App->IsJumpBlockedByMotion(bCharging);
+}
+
 void AACEPlayerController::BeginJumpCharge()
 {
 	if (!Client || Client->GetSessionState() != EACESessionState::InWorld || bJumpCharging)
 	{
 		return;
 	}
+	// CACQualities::CanJump is checked both when charging and at release.
+	// GetJumpHeight's minimum height is not permission to jump at 200% load.
+	if (Client->GetMovementBurden() >= 2.f)
+	{
+		Client->ReceiveChatMessage(TEXT("You are too encumbered to jump!"), FString(), ACEChatMessageType::ChatError);
+		return;
+	}
+	if (IsJumpBlockedByMotion(true))
+	{
+		Client->ReceiveChatMessage(TEXT("You can't jump from this position"), FString(), ACEChatMessageType::ChatError);
+		return;
+	}
 	bJumpCharging = true;
 	bJumpChargeSent = false; // force MoveToState with StandingLongJump
-	// Retail charge_jump may accumulate the next charge in flight without
-	// replacing Falling. The shared held-action cancellation also clears its
-	// pending/final pose, so only release an emote when charging on the ground.
-	if (APawn* P = GetPawn(); P && !bJumpAirborne)
-	{
-		if (UACECharacterAppearanceComponent* App = P->FindComponentByClass<UACECharacterAppearanceComponent>())
-		{
-			App->CancelHeldActionMotion();
-		}
-	}
+	// charge_jump preserves the current forward substate. It neither stands a
+	// resting player up nor removes an emote while building the jump power bar.
 	JumpChargeExtent = 0.f;
 	StandingJumpAimF = 0.f;
 	StandingJumpAimR = 0.f;
@@ -4319,7 +4372,8 @@ void AACEPlayerController::BeginJumpCharge()
 	// Retail charge_jump allows charging in flight; standing_longjump is only
 	// entered on walkable contact. Never change the current ballistic arc.
 	if (!bJumpAirborne)
-		bStandingJumpLocked = FMath::IsNearlyZero(ForwardAxis) && FMath::IsNearlyZero(RightAxis);
+		bStandingJumpLocked = Client->GetSession()->GetCurrentForwardCommand() == ACEMotion::Ready
+			&& FMath::IsNearlyZero(ForwardAxis) && FMath::IsNearlyZero(RightAxis) && FMath::IsNearlyZero(TurnAxis);
 	if (DatGameplayBinder)
 	{
 		DatGameplayBinder->SetJumpChargeFraction(0.f);
@@ -4358,6 +4412,22 @@ void AACEPlayerController::ReleaseJump(float Forward, float Right)
 		DatGameplayBinder->SetJumpChargeFraction(0.f);
 	}
 
+	if (Client->GetMovementBurden() >= 2.f)
+	{
+		bStandingJumpLocked = false;
+		StandingJumpAimF = StandingJumpAimR = 0.f;
+		Client->ReceiveChatMessage(TEXT("You are too encumbered to jump!"), FString(), ACEChatMessageType::ChatError);
+		return;
+	}
+
+	if (IsJumpBlockedByMotion(false))
+	{
+		bStandingJumpLocked = false;
+		StandingJumpAimF = StandingJumpAimR = 0.f;
+		Client->ReceiveChatMessage(TEXT("You can't jump from this position"), FString(), ACEChatMessageType::ChatError);
+		return;
+	}
+
 	// Standing jump: no aim → vertical only. W/S/Q/E at release with run (no Shift) uses
 	// run-scale forward jump — retail standing charge + W is a full forward jump, not walk/shift.
 	const bool bStandingAim = bStandingJumpLocked
@@ -4380,7 +4450,10 @@ void AACEPlayerController::ReleaseJump(float Forward, float Right)
 	}
 	else if (Forward < -KINDA_SMALL_NUMBER)
 	{
-		LocalVel.Y = -WalkAnimSpeed * 0.65f * FMath::Clamp(-Forward, 0.f, 1.f);
+		// Retail adjust_motion applies Run to negative WalkForward too; the
+		// jump inherits that interpreted velocity just like grounded movement.
+		LocalVel.Y = -WalkAnimSpeed * 0.65f * FMath::Clamp(-Forward, 0.f, 1.f)
+			* (!bStandingAim && bRunning ? Client->GetRunRate() : 1.f);
 	}
 	const float MaxSpeed = bStandingAim
 		? WalkAnimSpeed
@@ -4421,10 +4494,10 @@ void AACEPlayerController::ReleaseJump(float Forward, float Right)
 	}
 
 	Client->SendJump(Extent, LocalVel);
-	// Leave-ground MoveToState: Contact=0 so AutoPos / physics stay airborne-owned.
+	// Leave-ground MoveToState carries Contact=0. Retail leaves the airborne
+	// arc to JumpPack physics, resuming autonomous position reports on landing.
 	Client->SendMovementEx(0.f, 0.f, 0.f, bRunning, false, false);
 	Client->SetForcePositionReporting(true);
-	Client->FlushAutonomousPosition(false);
 	bJumpAirborne = true;
 	bJumpAirborneSent = true;
 	JumpAirborneSeconds = 0.f;
@@ -7151,8 +7224,11 @@ void AACEPlayerController::HandleVitalsUpdated(const FACEPlayerVitals& /*Vitals*
 void AACEPlayerController::ClearServerMoveTo()
 {
 	bServerMoveToActive = false;
+	bServerTurnActive = false;
+	bServerControlledMotion = false;
 	ServerMoveToTargetGuid = 0;
 	ServerMoveToDistance = 0.6f;
+	ServerMoveToSpeed = 1.f;
 	ServerMoveToFailDistance = 0.f;
 	bHaveApproachStartPose = false;
 	UseApproachPhase = EACEUseApproachPhase::None;
@@ -7276,10 +7352,11 @@ void AACEPlayerController::BeginUseApproach(int32 TargetGuid, float DistanceAc, 
 			// current pose before serializing that movement event; the separate
 			// autonomous-position queue cannot establish ordering ahead of Use.
 			if (bHavePredictedPose) Client->SetReportedPosition(PredictedPose);
-			Client->SendMovementEx(0.f, 0.f, 0.f, true, false, true);
+			if (Client->GetSession()) Client->GetSession()->ClearHeldForwardCommand();
+			Client->SendMovementEx(0.f, 0.f, 0.f, bRunning, false, !bJumpAirborne);
 			ForwardSent = RightSent = TurnSent = 0.f;
 			bWasMoving = false;
-			Client->FlushAutonomousPosition(true);
+			Client->FlushAutonomousPosition(!bJumpAirborne);
 			bAwaitingUseDone = true;
 			ApproachUseSendCount = 1;
 			bResendUseWhenInRange = false;
@@ -7453,40 +7530,48 @@ void AACEPlayerController::InteractWithObject(int32 ObjectGuid)
 	UE_LOG(LogTemp, Log, TEXT("ACE: Use guid=0x%08X name='%s'"), ObjectGuid, *Obj.Name);
 }
 
-void AACEPlayerController::FaceWorldTarget(int32 TargetGuid)
+void AACEPlayerController::PrepareManualCombat(bool bFinishJump)
 {
-	if (IsVRActive()) return;
-	if (!Client || TargetGuid == 0 || TargetGuid == Client->GetPlayerGuid())
+	if (!Client || IsVRActive()) return;
+	// StartAttackRequest finishes a pending jump charge, never an airborne arc.
+	if (bFinishJump)
 	{
-		return;
+		bJumpCharging = bStandingJumpLocked = false;
+		JumpChargeExtent = 0.f;
+		if (DatGameplayBinder) DatGameplayBinder->SetJumpChargeFraction(0.f);
 	}
-	FACEWorldObject Target;
-	if (!Client->GetWorldObject(TargetGuid, Target) || !Target.bHasPosition)
-	{
-		return;
-	}
-	FACEPosition Pose = bHavePredictedPose ? PredictedPose : Client->GetPlayerPosition();
-	if (!Pose.IsValid())
-	{
-		return;
-	}
-	const FVector Self = Pose.ToUnrealLocation(WorldScale);
-	const FVector Dest = Target.Position.ToUnrealLocation(WorldScale);
-	FVector To = Dest - Self;
-	To.Z = 0.f;
-	if (To.IsNearlyZero())
-	{
-		return;
-	}
-	Pose.SetAceFacingFromUnrealDir2D(To.GetSafeNormal());
-	PredictedPose = Pose;
-	bHavePredictedPose = true;
-	if (APawn* Possessed = GetPawn())
-	{
-		Possessed->SetActorRotation(Pose.ToUnrealQuat());
-	}
-	Client->SetReportedPosition(PredictedPose);
-	Client->FlushAutonomousPosition(true);
+	// CommandInterpreter::MaybeStopCompletely preserves server-owned actions.
+	if (bServerControlledMotion) return;
+	ClearServerMoveTo();
+	if (Client->GetSession()) Client->GetSession()->ClearHeldForwardCommand();
+	MovementSuppressionSequence = ++MovementKeySequence;
+	bAutoRun = bMouseForwardActive = false;
+	PreviousManualForward = 0.f;
+	ForwardAxis = RightAxis = TurnAxis = 0.f;
+	ForwardSent = RightSent = TurnSent = 0.f;
+	bWasMoving = bForceMovementResend = false;
+	bMouseTurnSent = false;
+	bRunningSent = bRunning;
+	bJumpChargeSent = bJumpCharging;
+	bJumpAirborneSent = bJumpAirborne;
+	PendingMouseTurnDegrees = 0.f;
+	if (bHavePredictedPose) Client->SetReportedPosition(PredictedPose);
+	if (APawn* P = GetPawn())
+		if (auto* Appearance = P->FindComponentByClass<UACECharacterAppearanceComponent>())
+		{
+			Appearance->SetWalkingTransitionsEnabled(false);
+			Appearance->SetLocomotionInput(0.f, 0.f, false);
+		}
+	Client->SendMovementEx(0.f, 0.f, 0.f, bRunning, bStandingJumpLocked, !bJumpAirborne);
+}
+
+void AACEPlayerController::AdvanceServerTurn(FACEPosition& Pose, float Seconds)
+{
+	if (!bServerTurnActive || IsVRActive()) return;
+	const FQuat Next = ACERetailTurn::Advance(Pose.GetAcQuat(), ServerTurnHeading, ServerTurnSpeed, Seconds);
+	Pose.RotationW = Next.W;
+	Pose.RotationXYZ = FVector(Next.X, Next.Y, Next.Z);
+	if (Next.Equals(ServerTurnHeading, .000001f)) bServerTurnActive = false;
 }
 
 void AACEPlayerController::BeginServerMoveTo(const FACEObjectMotionState& Motion)
@@ -7496,6 +7581,7 @@ void AACEPlayerController::BeginServerMoveTo(const FACEObjectMotionState& Motion
 	{
 		// Repeated server MoveTo updates must not restart Turning after the straight run begins.
 		ServerMoveToDistance = Motion.MoveToDistance;
+		ServerMoveToSpeed = FMath::Max(0.f, Motion.MoveToSpeed);
 		ServerMoveToFailDistance = Motion.MoveToFailDistance;
 		return;
 	}
@@ -7507,6 +7593,8 @@ void AACEPlayerController::BeginServerMoveTo(const FACEObjectMotionState& Motion
 	const bool bFire = bKeepMoveOnly ? false : (bResendUseWhenInRange || bKeepPickup);
 	// MoveToDistance can be negative (portal overlap UseRadius) — pass through unchanged.
 	BeginUseApproach(Motion.MoveToTargetGuid, Motion.MoveToDistance, bKeepPickup, bFire, ApproachPickupAmount);
+	bServerControlledMotion = true;
+	ServerMoveToSpeed = FMath::Max(0.f, Motion.MoveToSpeed);
 	ServerMoveToFailDistance = Motion.MoveToFailDistance;
 }
 
@@ -7516,23 +7604,32 @@ void AACEPlayerController::HandleMotionUpdate(int32 ObjectGuid, const FACEObject
 	{
 		return;
 	}
-	// TurnToObject is also sent for sticky melee. Apply it to local prediction;
-	// otherwise the next autonomous position overwrites the server's rotation.
-	if (Motion.MovementType == 8 && Motion.MoveToTargetGuid != 0)
+	bServerControlledMotion = true;
+	bAutoRun = false; // CommandInterpreter::LoseControlToServer
+	bServerTurnActive = false;
+	if (Motion.MovementType == 8 || Motion.MovementType == 9)
 	{
-		FaceWorldTarget(Motion.MoveToTargetGuid);
-	}
-	else if (Motion.MovementType == 9)
-	{
+		if (Motion.TurnToFlags & 0x10000u) ClearServerMoveTo();
+		bServerControlledMotion = true;
 		FACEPosition Pose = bHavePredictedPose ? PredictedPose : Client->GetPlayerPosition();
 		if (Pose.IsValid())
 		{
-			Pose.SetAceFacingFromUnrealDir2D(FACEPosition::UnrealDirFromAceHeadingDegrees(Motion.MoveToDesiredHeading));
-			PredictedPose = Pose;
-			bHavePredictedPose = true;
-			if (APawn* ControlledPawn = GetPawn()) ControlledPawn->SetActorRotation(Pose.ToUnrealQuat());
-			Client->SetReportedPosition(Pose);
-			Client->FlushAutonomousPosition(true);
+			float Heading = Motion.MoveToDesiredHeading;
+			if (Motion.MovementType == 8)
+			{
+				FACEWorldObject Target;
+				if (Client->GetWorldObject(Motion.MoveToTargetGuid, Target) && Target.bHasPosition)
+				{
+					const FVector Direction = Target.Position.ToUnrealLocation(WorldScale) - Pose.ToUnrealLocation(WorldScale);
+					if (!Direction.IsNearlyZero()) Pose.SetAceFacingFromUnrealDir2D(Direction);
+					Heading += Pose.GetAceHeadingDegrees();
+				}
+				else Heading = Motion.TurnToFallbackHeading;
+			}
+			Pose.SetAceFacingFromUnrealDir2D(FACEPosition::UnrealDirFromAceHeadingDegrees(Heading));
+			ServerTurnHeading = Pose.GetAcQuat();
+			ServerTurnSpeed = Motion.TurnToSpeed * (bRunningSent ? 1.5f : 1.f);
+			bServerTurnActive = true;
 		}
 	}
 	else if (Motion.MovementType == 6 && Motion.MoveToTargetGuid != 0)
@@ -7588,7 +7685,7 @@ void AACEPlayerController::HandleMotionUpdate(int32 ObjectGuid, const FACEObject
 					? ACEMotion::ExpandPackedCommand(static_cast<uint16>(Act))
 					: Act;
 				const uint32 Hi = Full & 0xFF000000u;
-				// ChatPose / soul emotes hold final frame until locomotion (retail).
+				// A held forward pose survives independent sidestep/turn commands.
 				const bool bHoldEmote = Hi == 0x13000000u || Hi == 0x43000000u || Hi == 0x42000000u;
 				App->PlayActionMotion(Motion.ActionCommand, Motion.ActionSpeed, Motion.CurrentStyle, bHoldEmote, Motion.bNewAction);
 				if (!bHoldEmote || Motion.bNewAction)
@@ -7607,6 +7704,7 @@ void AACEPlayerController::HandleMotionUpdate(int32 ObjectGuid, const FACEObject
 				// Ready is carried as a substate, not an action. In particular it
 				// completes Reload with the authored overhead nock/draw animation.
 				App->FinishMissileMotion();
+				App->FinishEmoteMotion();
 			}
 		}
 	}

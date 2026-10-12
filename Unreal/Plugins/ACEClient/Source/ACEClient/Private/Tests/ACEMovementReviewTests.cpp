@@ -522,7 +522,12 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   FACEObjectMotionState Turn;Turn.MovementType=9;Turn.MoveToDesiredHeading=123.f;
   PC->HandleMotionUpdate(Self.Guid,Turn);
   FACEPosition Expected=Arrival;Expected.SetAceFacingFromUnrealDir2D(FACEPosition::UnrealDirFromAceHeadingDegrees(123.f));
-  TestTrue(TEXT("Explicit server TurnToHeading still rotates the player"),Pawn->GetActorQuat().Equals(Expected.ToUnrealQuat(),.00001f));
+  TestTrue(TEXT("Server TurnToHeading does not instantly warp the player's facing"),Pawn->GetActorQuat().Equals(Arrival.ToUnrealQuat(),.00001f));
+  PC->PredictedPose=Arrival;PC->AdvanceServerTurn(PC->PredictedPose,.1f);
+  TestTrue(TEXT("Server turn advances by the retail DAT angular speed"),
+   FMath::IsNearlyEqual(Arrival.GetAcQuat().AngularDistance(PC->PredictedPose.GetAcQuat()),.15,.00001));
+  PC->AdvanceServerTurn(PC->PredictedPose,2.f);
+  TestTrue(TEXT("Explicit server TurnToHeading stops at its destination"),PC->PredictedPose.GetAcQuat().Equals(Expected.GetAcQuat(),.00001f));
   Session->OnPositionUpdate.Remove(Handle);Session->WorldObjects.Remove(Self.Guid);
   Session->State=EACESessionState::Disconnected;Session->PlayerGuid=0;Session->TeleportSeq=0;Session->ForcePositionSeq=0;
   PC->UnPossess();Pawn->Destroy();PC->Destroy();

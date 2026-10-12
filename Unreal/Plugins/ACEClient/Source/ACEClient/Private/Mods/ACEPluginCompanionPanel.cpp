@@ -29,6 +29,8 @@
 
 namespace
 {
+namespace ACEPluginCompanionPanelPrivate
+{
     FString S(const TSharedPtr<FJsonObject>& O,const TCHAR* K,const FString& D=FString())
     {FString V;return O->TryGetStringField(K,V)?V:D;}
     double N(const TSharedPtr<FJsonObject>& O,const TCHAR* K,double D=0)
@@ -166,5 +168,7 @@ namespace
         }
     };
 }
+} // anonymous namespace
 TSharedRef<SWidget> UACEPluginSubsystem::MakeCompanionPanel(const FString& Id)
-{return SNew(SACECompanionRows).Host(this).Id(Id);}
+{
+    using namespace ACEPluginCompanionPanelPrivate;return SNew(SACECompanionRows).Host(this).Id(Id);}

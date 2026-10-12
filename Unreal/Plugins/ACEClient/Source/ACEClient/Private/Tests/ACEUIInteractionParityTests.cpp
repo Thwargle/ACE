@@ -70,7 +70,7 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     auto* Client=NewObject<UACEClientSubsystem>(GI); Client->Session=MakeShared<FACESession>();
     auto& Session=*Client->Session; Session.State=EACESessionState::InWorld; Session.PlayerGuid=1234;
     FACEWorldObject Self; Self.Guid=1234; Self.Name=TEXT("UI regression"); Self.bIsPlayer=true; Self.ItemType=ACEItemType::Creature; Session.WorldObjects.Add(Self.Guid,Self);
-    Session.OnChatMessage.AddLambda([Client](const FString& Text,const FString& Sender,int32 Type){Client->ReceiveChatMessage(Text,Sender,Type);});
+    Session.OnRoutedChatMessage.AddLambda([Client](const FString& Text,const FString& Sender,int32 Type,int32 FilterType){Client->ReceiveChatMessage(Text,Sender,Type,FilterType);});
     Session.OnSpellLearned.AddLambda([Client](int32 Id){Client->OnSpellLearned.Broadcast(Id);});
     FACEBinaryWriter Welcome;Welcome.WriteString16L(TEXT("Welcome to Asheron's Call\n powered by ACEmulator"));Welcome.WriteInt32(ACEChatMessageType::Broadcast);
     FACEBinaryReader WelcomeReader(Welcome.GetData());Session.HandleServerMessage(WelcomeReader);
@@ -146,6 +146,67 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
             }
         }
         Binder->SaveFloatyChatSettings();
+    }
+
+    // Combat routing must use packet provenance, not the green Default color or
+    // English death-message wording. ACE sends player and pet kills identically.
+    {
+        TGuardValue<uint64> Global(Binder->GlobalChatTypeFilter,MAX_uint64);
+        TGuardValue<uint64> Main(Binder->MainChatTypeFilter,Binder->MainChatTypeFilter);
+        TGuardValue<TArray<uint64>> Floaty(Binder->FloatyChatFilters,Binder->FloatyChatFilters);
+        TGuardValue<int32> Quick(Binder->ChatFilterMode,0);
+        int32 Observed=0,ObservedType=-1;
+        const auto Handle=Session.OnChatMessage.AddLambda([&](const FString&,const FString&,int32 Type){++Observed;ObservedType=Type;});
+        ON_SCOPE_EXIT { Session.OnChatMessage.Remove(Handle); };
+        auto ResetLines=[&](){for(int32 W=0;W<5;++W) Binder->ChatDisplayLines[W].Reset();};
+        auto Send=[&](const TCHAR* Text,int32 Type,bool Kill=false,bool Victim=false)
+        {
+            FACEBinaryWriter Message;
+            Message.WriteUInt32(ACEOpcode::GameEvent);Message.WriteUInt32(Session.PlayerGuid);Message.WriteUInt32(1);
+            Message.WriteUInt32(Kill?ACEGameEvent::KillerNotification:ACEGameEvent::VictimNotification);
+            if(Kill||Victim) Message.WriteString16L(Text);
+            else {Message.Reset();Message.WriteUInt32(ACEOpcode::ServerMessage);Message.WriteString16L(Text);Message.WriteInt32(Type);}
+            Session.HandleGameMessage(Message.GetData());
+        };
+        for(int32 Window=0;Window<5;++Window)
+        {
+            Binder->MainChatTypeFilter=MAX_uint64;
+            for(auto& Mask:Binder->FloatyChatFilters) Mask=MAX_uint64;
+            (Window?Binder->FloatyChatFilters[Window-1]:Binder->MainChatTypeFilter)&=~0x600040ull;
+            for(int32 Type:{ACEChatMessageType::Combat,ACEChatMessageType::CombatSelf,ACEChatMessageType::CombatEnemy})
+            {
+                ResetLines();Send(TEXT("Fire Elemental hits Drudge for 42 points of fire damage!"),Type);
+                for(int32 W=0;W<5;++W) TestEqual(TEXT("Pet/creature attack respects each window's Combat setting"),Binder->ChatDisplayLines[W].Num(),W==Window?0:1);
+            }
+            for(const TCHAR* Death:{TEXT("Your attack killed the Drudge!"),TEXT("Pet kill wording supplied by server")})
+            {
+                ResetLines();const int32 Before=Observed;Send(Death,0,true);
+                TestEqual(TEXT("Hidden kill remains available once to plugin observers"),Observed,Before+1);
+                TestEqual(TEXT("Plugin kill type is not changed by UI filtering"),ObservedType,ACEChatMessageType::Broadcast);
+                for(int32 W=0;W<5;++W)
+                {
+                    TestEqual(TEXT("Player/summon killing blow obeys Combat in every window"),Binder->ChatDisplayLines[W].Num(),W==Window?0:1);
+                    if(W!=Window) TestTrue(TEXT("Kill keeps retail green color"),Binder->ChatDisplayLines[W].Last().Color.Equals(ACERetailChat::Color(0)));
+                }
+                const auto& Buffered=Client->GetChatHistory().Last();
+                TestEqual(TEXT("HUD replay retains kill routing metadata"),Buffered.FilterType,ACEChatMessageType::CombatSelf);
+                ResetLines();Binder->HandleChatMessage(Buffered.Text,Buffered.Sender,Buffered.Type,Buffered.FilterType);
+                TestEqual(TEXT("Replayed kill cannot bypass main-window Combat setting"),Binder->ChatDisplayLines[0].Num(),Window==0?0:1);
+            }
+            for(bool Victim:{false,true})
+            {
+                ResetLines();Send(Victim?TEXT("You have died!"):TEXT("Your summoning device does not have enough charges to function!"),0,false,Victim);
+                for(int32 W=0;W<5;++W) TestEqual(TEXT("Combat filtering preserves own death and gameplay notices"),Binder->ChatDisplayLines[W].Num(),1);
+            }
+        }
+        Binder->MainChatTypeFilter=MAX_uint64;for(auto& Mask:Binder->FloatyChatFilters) Mask=MAX_uint64;
+        Binder->ChatFilterMode=2;ResetLines();Send(TEXT("Pet killing blow"),0,true);
+        TestEqual(TEXT("Combat-only quick filter includes killing blows"),Binder->ChatDisplayLines[0].Num(),1);
+        ResetLines();Send(TEXT("Fire Elemental casts a spell"),ACEChatMessageType::Spellcasting);
+        TestEqual(TEXT("Combat/magic quick filter includes spellcasting"),Binder->ChatDisplayLines[0].Num(),1);
+        Binder->ChatFilterMode=0;Binder->GlobalChatTypeFilter&=~0x600040ull;
+        ResetLines();Send(TEXT("Global-filtered pet killing blow"),0,true);
+        for(int32 W=0;W<5;++W) TestEqual(TEXT("Global combat squelch also applies to routed kills"),Binder->ChatDisplayLines[W].Num(),0);
     }
 
     {

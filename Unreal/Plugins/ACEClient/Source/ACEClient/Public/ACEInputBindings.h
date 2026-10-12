@@ -45,7 +45,7 @@ ACECLIENT_API bool IsTextEntryFocused();
 // Retail CommandList: newest held direction wins; releasing it restores the
 // previously held direction. Preserve physical event order across remaps.
 ACECLIENT_API float MovementAxis(const APlayerController* PC, FKey Positive, FKey Negative,
- const TMap<FKey,uint64>& PressOrder,FKey AdditionalPositive=FKey(),FKey AdditionalNegative=FKey());
+ const TMap<FKey,uint64>& PressOrder,FKey AdditionalPositive=FKey(),FKey AdditionalNegative=FKey(),uint64 AfterPress=0);
 // Controller buttons can be held as modifiers in addition to Shift/Ctrl/Alt/Cmd.
 // Supply the controller when matching live input (including immediate UI actions).
 ACECLIENT_API bool Matches(FKey ActionKey, const FInputChord& Input, const APlayerController* PC=nullptr);
