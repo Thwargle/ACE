@@ -1,0 +1,15 @@
+{
+  "api": 1,
+  "mode": "companion",
+  "id": "kill_tracker",
+  "name": "Kill Task Tracker Example",
+  "short_name": "KT",
+  "version": "1.0.0",
+  "description": "Tracks server kill counts; select nearby targets or point the Waypoint arrow at them.",
+  "permissions": ["chat", "state", "ui", "markers", "waypoint", "commands"],
+  "settings": [
+    {"key": "monster", "type": "text", "label": "Monster name contains"},
+    {"key": "npc", "type": "text", "label": "Quest NPC name contains"},
+    {"key": "pattern", "type": "text", "label": "Server progress regex (capture count, then goal)"}
+  ]
+}

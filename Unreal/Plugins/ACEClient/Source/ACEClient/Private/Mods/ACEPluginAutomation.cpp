@@ -100,13 +100,13 @@ void UACEPluginSubsystem::ObserveAppraisal(const FACEAppraisalInfo& Info)
     {
         P->NextAction=FMath::Min(P->NextAction,P->ActionSentAt+.25);
         P->NextDecision=0;P->WaitAction.Empty();
-        if(P->Id==TEXT("ucm")&&P->Running&&Info.ObjectGuid==CombatTarget)
+        if(P->IsPolicy()&&P->Running&&Info.ObjectGuid==CombatTarget)
         {P->NextAction=0;ScheduleDecisionWake(FPlatformTime::Seconds());}
     }
     // A slow reply can arrive after RefreshActionWait expired the ID wait.
     // It still makes the current opponent ready; do not wait for the idle poll.
     // Never release a newer cast, equipment operation or other action's gate.
-    if(auto P=Find(TEXT("ucm"));P&&P->Running&&Info.ObjectGuid==CombatTarget
+    if(auto P=PolicyPlugin();P&&P->Running&&Info.ObjectGuid==CombatTarget
         &&P->WaitAction.IsEmpty()&&!PendingSpell&&P->NextAction<=FPlatformTime::Seconds())
     {P->NextDecision=0;ScheduleDecisionWake(FPlatformTime::Seconds());}
 }
@@ -121,7 +121,7 @@ void UACEPluginSubsystem::UnbindCombatEvents()
 }
 void UACEPluginSubsystem::WakeCombatDecision()
 {
-    auto P=Find(TEXT("ucm"));if(!P||!P->Running)return;
+    auto P=PolicyPlugin();if(!P||!P->Running)return;
     // Physical attack's retry throttle is not a server action lock. Release
     // only that delay; casts, inventory transfers and equipment still wait.
     if(PhysicalAttackOwner==P->Id&&P->WaitAction.IsEmpty()&&!PendingSpell
@@ -132,7 +132,7 @@ void UACEPluginSubsystem::ReleaseCombatTarget(int32 Guid)
 {
     if(!Guid||CombatTarget!=Guid)return;
     WakeCombatDecision();CombatTarget=0;
-    if(auto P=Find(TEXT("ucm"));P&&P->WaitAction==TEXT("identify")&&P->WaitItem==Guid)
+    if(auto P=PolicyPlugin();P&&P->WaitAction==TEXT("identify")&&P->WaitItem==Guid)
     {P->WaitAction.Empty();P->NextAction=0;}
     if(PhysicalAttackTarget==Guid){PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();PhysicalAttackNextSendAt=0;}
     // Do not clear PendingSpell: its untagged UseDone still belongs to that
@@ -418,13 +418,14 @@ void UACEPluginSubsystem::RefreshAutomationData()
         PendingSpell=0;PendingSpellOwner.Empty();FastCastOwner.Empty();PendingResourceRefresh.Empty();PendingManaRefresh=false;Debuffs.Empty();PendingDebuffCasts.Empty();InventoryRevision=MAX_uint64;++DataRevision;C->BackgroundAppraisals.Empty();
     }
     ExpireOffensiveCasts(FPlatformTime::Seconds());
-    auto UCM=Find(TEXT("ucm"));if(!UCM||!UCM->Enabled)return;
+    auto UCM=PolicyPlugin();if(!UCM||!UCM->Enabled)return;
     if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController()))
     {
         const bool Portal=PC->IsWorldTransitionActive();
         if(Portal!=MetaPortalSpace){MetaPortalSpace=Portal;auto E=MakeShared<FJsonObject>();E->SetNumberField(TEXT("serial"),++MetaPortalSerial);E->SetBoolField(TEXT("entered"),Portal);MetaPortalEvents.Add(MakeShared<FJsonValueObject>(E));if(MetaPortalEvents.Num()>32)MetaPortalEvents.RemoveAt(0);}
     }
     const double Now=FPlatformTime::Seconds();if(Now<NextAppraisalScan||Now-LastAppraisalRequest<1)return;
+    if(UCM->Api>=2&&!UCM->Permissions.Contains(TEXT("inventory")))return;
     // The empty scan is work too. Previously a fully appraised inventory fell
     // through here every frame because only a sent request advanced the clock.
     NextAppraisalScan=Now+1;
@@ -728,7 +729,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
     Out->SetArrayField(TEXT("inventory"),CachedInventory);
     Out->SetNumberField(TEXT("inventory_revision"),double(InventoryRevision));
     Out->SetNumberField(TEXT("appraisal_revision"),double(InventoryAppraisalRevision));
-    bool AcceptOthers=false;if(auto Plugin=Find(TEXT("ucm")))Plugin->Profile->TryGetBoolField(TEXT("buff_others"),AcceptOthers);
+    bool AcceptOthers=false;if(auto Plugin=PolicyPlugin())Plugin->Profile->TryGetBoolField(TEXT("buff_others"),AcceptOthers);
     if(!AcceptOthers)ClearBuffRequests();
     if(BuffRequests.Num())
     {
@@ -853,7 +854,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         FACEPluginSightQuery Sight(*World,PC?PC->GetPawn():nullptr);
         const FVector Eye=P.ToUnrealLocation()+FVector(0,0,120);
         Out->SetNumberField(TEXT("movement_blocked_serial"),MovementBlockedSerial);
-        if(auto UCM=Find(TEXT("ucm"));UCM&&UCM->Running&&bRouteJoinRequested)
+        if(auto UCM=PolicyPlugin();UCM&&UCM->Running&&bRouteJoinRequested)
         {
             const TArray<TSharedPtr<FJsonValue>>* Route=nullptr;
             if((RuntimeRoute?RuntimeRoute:UCM->Profile)->TryGetArrayField(TEXT("route"),Route))
@@ -918,7 +919,7 @@ void UACEPluginSubsystem::UpdateCombatTransition(FACEClientPlugin& P)
     const double Now=FPlatformTime::Seconds();
     bool IdleEnabled=false;P.Profile->TryGetBoolField(TEXT("mana_charges_when_off"),IdleEnabled);
     const FString Action=S(P.CombatTransitionIntent,TEXT("action"));
-    const bool IdleMana=!P.Running&&P.Enabled&&P.Id==TEXT("ucm")&&IdleEnabled
+    const bool IdleMana=!P.Running&&P.Enabled&&P.IsPolicy()&&P.Id==IdleManaOwner&&IdleEnabled
         &&IdleManaSession.Pin()==Session&&IdleManaPlayer==C->GetPlayerGuid()
         &&(Action==TEXT("use_item")||Action==TEXT("apply_item"));
     if((!P.Running&&!IdleMana)||!Session||C->GetSessionState()!=EACESessionState::InWorld
@@ -1241,7 +1242,7 @@ void UACEPluginSubsystem::RecordRouteAction(const FString& Type,float Charge)
 void UACEPluginSubsystem::DrawRoute()
 {
     TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginRoute);
-    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto P=Find(TEXT("ucm"));bool Show=true;
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto P=PolicyPlugin();bool Show=true;
     if(P)P->Profile->TryGetBoolField(TEXT("route_preview"),Show);
     if(!P||!P->Enabled||!Show||C->GetSessionState()!=EACESessionState::InWorld)
     {if(RouteMesh&&RouteMesh->GetNumSections())RouteMesh->ClearAllMeshSections();RouteSegments.Reset();RouteRebuiltAt=0;return;}
@@ -1434,7 +1435,7 @@ void UACEPluginSubsystem::ObserveMetaChat(const FString& Text,const FString& Sen
             {++DebuffRevision;LastDebuffTarget=int32(uint32(N(E,TEXT("target"))));LastDebuffSpell=int32(N(E,TEXT("spell")));PendingDebuffCasts.RemoveAt(Index);break;}
         }
     }
-    auto P=Find(TEXT("ucm"));if(!P||!P->Running||!P->Profile->HasField(TEXT("vt_meta")))return;
+    auto P=PolicyPlugin();if(!P||!P->Running||!P->Profile->HasField(TEXT("vt_meta")))return;
     FString Line=Text;
     // Decal chat conditions see the rendered line, including the speaker.
     // Channel messages are already formatted by the session decoder.

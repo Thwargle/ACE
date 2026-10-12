@@ -500,8 +500,13 @@ bool FACEObjectCreateParser::ParseWeenieHeader(FACEBinaryReader& Reader, FACEDec
 		if (!Need(4)) return false;
 		Out.MaterialType = static_cast<int32>(Reader.ReadUInt32());
 	}
-	if (WeenieFlags2 & Cooldown) { if (!Need(4)) return false; Reader.ReadUInt32(); }
-	if (WeenieFlags2 & CooldownDuration) { if (!Need(8)) return false; Reader.ReadDouble(); }
+	if (WeenieFlags2 & Cooldown) { if (!Need(4)) return false; Out.CooldownId = Reader.ReadInt32(); }
+	if (WeenieFlags2 & CooldownDuration)
+	{
+		if (!Need(8)) return false;
+		Out.CooldownDuration = Reader.ReadDouble();
+		if (!FMath::IsFinite(Out.CooldownDuration) || Out.CooldownDuration < 0.0) return false;
+	}
 	if (WeenieFlags2 & PetOwner) { if (!Need(4)) return false; Out.PetOwnerId = Reader.ReadInt32(); }
 
 	Reader.Align();

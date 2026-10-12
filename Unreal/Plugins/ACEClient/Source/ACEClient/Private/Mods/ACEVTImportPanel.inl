@@ -2,6 +2,21 @@ FString LegacyPath,LegacyName=TEXT("Imported"),LegacyFolder;
 TMap<FString,FString> LibraryErrors;
 TMap<FString,TArray<FString>> LibraryFiles;
 void RefreshLibrary(){for(const TCHAR* Ext:{TEXT("nav"),TEXT("met"),TEXT("utl"),TEXT("usd")})LibraryFiles.Add(Ext,Host->GetProfileFiles(Ext));}
+void SectionImportPanel()
+{
+    Add(Button(TEXT("Back to Profiles"),[this](){Page=TEXT("Profiles");Rebuild();}));
+    Heading(TEXT("Import vTank file"),TEXT("Choose a .nav route or .utl loot file. Each import creates and selects a separate profile named after the file. Existing names get a numbered suffix; your setup name and source files stay unchanged."));
+    Add(Text(TEXT("Import folder"),14,Muted));
+    Add(SNew(SEditableTextBox).Text(FText::FromString(LegacyFolder)).OnTextChanged_Lambda([this](const FText& Value){LegacyFolder=Value.ToString();}));
+    Add(Button(TEXT("Refresh folder"),[this](){if(Host->SetProfileFolder(LegacyFolder)){RefreshLibrary();Rebuild();}}));
+    int32 Count=0;
+    for(const FString Ext:{TEXT("nav"),TEXT("utl")})for(const auto& File:LibraryFiles.FindRef(Ext))
+    {
+        ++Count;Add(Button((Ext==TEXT("nav")?TEXT("Route: "):TEXT("Loot: "))+File,[this,File](){
+            if(!CanLeaveLootRule())return;if(Host->ImportUCMSection(File))ResetProfileEditors();Rebuild();}));
+    }
+    if(!Count)Add(Text(TEXT("No .nav or .utl files found. Copy files into this folder, then refresh."),15,Muted));
+}
 void LibrarySelector(const FString& Ext,const FString& Label)
 {
     Add(Text(Label,16,Muted));

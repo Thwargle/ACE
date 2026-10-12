@@ -1200,6 +1200,12 @@ struct ACECLIENT_API FACEWorldObject
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 IconUnderlayId = 0;
 
+	/** Shared cooldown group and full duration from the second PublicWeenieDesc header. */
+	UPROPERTY(BlueprintReadOnly, Category = "ACE")
+	int32 CooldownId = 0;
+	UPROPERTY(BlueprintReadOnly, Category = "ACE")
+	double CooldownDuration = 0.0;
+
 	/** PublicWeenieDesc UiEffects (ACE.Entity.Enum.UiEffects) — Magical / elemental icon tint. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 UiEffects = 0;

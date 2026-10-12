@@ -15,6 +15,7 @@
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SBorder.h"
+#include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
@@ -54,14 +55,15 @@ namespace
     private:
         TWeakObjectPtr<UACEPluginSubsystem> Host;
         TSharedPtr<SVerticalBox> Body;
+        TSharedPtr<SVerticalBox> SettingsBody;
         TSharedPtr<SEditableTextBox> Name;
         TSharedPtr<SMultiLineEditableTextBox> Json;
         FString Id, Search, ManagerNotice;
         bool PluginOnly = false;
-        void Add(TSharedRef<SWidget> W) { Body->AddSlot().AutoHeight().Padding(5)[W]; }
+        void Add(TSharedRef<SWidget> W) { (SettingsBody?SettingsBody:Body)->AddSlot().AutoHeight().Padding(5)[W]; }
         void Save(const TSharedPtr<FACEClientPlugin>& P)
         {
-            Host->SaveProfile(P->Id, P->ProfileName, Host->ProfileJson(P->Id));
+            Host->SaveProfile(P->Id, P->ProfileName, Host->ProfileJson(P->Id), !P->HasPresentation());
             if(Json)Json->SetText(FText::FromString(Host->ProfileJson(P->Id)));
         }
         void Open(const FString& PluginId)
@@ -84,7 +86,7 @@ namespace
         }
         void Rebuild()
         {
-            Body->ClearChildren(); if (!Host.IsValid()) return;
+            SettingsBody.Reset();Body->ClearChildren(); if (!Host.IsValid()) return;
             if (!PluginOnly && Id.IsEmpty())
             {
                 auto Header=SNew(SHorizontalBox);
@@ -151,6 +153,13 @@ namespace
             auto Actions=SNew(SHorizontalBox);
             Actions->AddSlot().FillWidth(1)[Button(TEXT("Start"),[this,P](){Host->Start(P->Id);})];
             Actions->AddSlot().FillWidth(1).Padding(8,0)[Button(TEXT("Stop"),[this,P](){Host->Stop(P->Id,TEXT("Stopped"),true);})]; Add(Actions);
+            if(P->HasPresentation())
+            {
+                Add(Host->MakeCompanionPanel(P->Id));
+                SettingsBody=SNew(SVerticalBox);
+                Body->AddSlot().AutoHeight().Padding(5)[SNew(SExpandableArea).InitiallyCollapsed(true)
+                    .HeaderContent()[Label(TEXT("Settings and profiles"),16)].BodyContent()[SettingsBody.ToSharedRef()]];
+            }
             Add(Label(TEXT("Profile name")));
             Add(SAssignNew(Name,SEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",20)).Text(FText::FromString(P->ProfileName)));
             TArray<FString> SavedProfiles; IFileManager::Get().FindFiles(SavedProfiles, *(Host->UserDirectory()/TEXT("Profiles")/P->Id/TEXT("*.json")),true,false);
@@ -172,6 +181,11 @@ namespace
                 {
                     Add(SNew(SCheckBox).Padding(FMargin(6,10)).IsChecked_Lambda([P,Key](){bool V=false;P->Profile->TryGetBoolField(Key,V);return V?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                         .OnCheckStateChanged_Lambda([this,P,Key](ECheckBoxState S){P->Profile->SetBoolField(Key,S==ECheckBoxState::Checked);Save(P);})[Label(Caption)]);
+                }
+                else if(Kind==TEXT("text"))
+                {
+                    Add(Label(Caption));Add(SNew(SEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text(FText::FromString(Text(P->Profile,*Key)))
+                        .OnTextCommitted_Lambda([this,P,Key](const FText& V,ETextCommit::Type){P->Profile->SetStringField(Key,V.ToString().Left(512));Save(P);}));
                 }
                 else if(Kind==TEXT("number"))
                 {
@@ -230,8 +244,8 @@ namespace
                     Add(SNew(SBox).HeightOverride(280)[SNew(SScrollBox)+SScrollBox::Slot()[List]]);
                 }
             }
-            Add(Label(TEXT("Advanced profile and state rules (JSON)"),24));
-            Add(Label(TEXT("Edit buffs, waypoints, and states here, then Apply profile. Invalid scripts stop with an error above. Profile changes stop automation."),18));
+            Add(Label(P->HasPresentation()?TEXT("Advanced settings (JSON)"):TEXT("Advanced profile and state rules (JSON)"),24));
+            Add(Label(P->HasPresentation()?TEXT("Configuration is separate from this character's saved plugin state. Apply changes here, then Start to resume."):TEXT("Edit buffs, waypoints, and states here, then Apply profile. Invalid scripts stop with an error above. Profile changes stop automation."),18));
             Add(SNew(SBox).HeightOverride(240)[SAssignNew(Json,SMultiLineEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text(FText::FromString(Host->ProfileJson(P->Id)))]);
             Add(Button(TEXT("Apply profile"),[this,P](){if(Host->SaveProfile(P->Id,Name->GetText().ToString(),Json->GetText().ToString()))Rebuild();}));
         }

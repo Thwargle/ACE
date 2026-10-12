@@ -666,6 +666,10 @@ private:
 	TArray<TObjectPtr<UBorder>> ShortcutSlotBgs;
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UBorder>> ShortcutNumberIcons;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UBorder>> ShortcutSelectedOverlays;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UBorder>> ShortcutCooldownOverlays;
 	UPROPERTY()
 	TArray<TObjectPtr<UTextBlock>> ShortcutSlotNumbers;
 	/** Retail spell slot backgrounds: blue numbered empty slots 1–9, brown afterward. */

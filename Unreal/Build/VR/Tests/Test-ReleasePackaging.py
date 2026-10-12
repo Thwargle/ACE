@@ -56,6 +56,8 @@ class ReleasePackagingTests(unittest.TestCase):
         display = f'2026.09.30.{version}'
         self.args = argparse.Namespace(quest_version=version, windows_version=display,
                                        linux_version=display if with_linux else None, installer_revision=6)
+        put(self.root, 'Unreal/Plugins/ACEClient/ClientMods/api.json',
+            json.dumps({'lua_api': 2, 'supported_lua_apis': [1, 2]}))
         put(self.root, 'Unreal/Plugins/ACEClient/Source/ACEClient/Public/ACEClientBuild.h',
             f'inline constexpr int32 ReleaseNumber = {version};\nconst auto Version = "{display}";')
         apk = put(self.root, 'Quest/Packaged/Android_ASTC/ACUnreal-arm64.apk', b'fixture APK')
@@ -107,6 +109,12 @@ class ReleasePackagingTests(unittest.TestCase):
         put(windows, 'ACUnreal/Plugins/ACWoW/ACWoW.uplugin', '{}')
         with self.assertRaisesRegex(ValueError, 'must ship separately'):
             build.verify_client_plugin_boundary(windows)
+
+    def test_release_reports_catalog_lua_api_versions(self):
+        self.fixture()
+        _, meta = self.assemble()
+        self.assertEqual(meta['clientPluginApis']['lua'], 2)
+        self.assertEqual(meta['clientPluginApis']['supportedLua'], [1, 2])
 
     def test_converted_cosmetic_assets_rejected_from_release(self):
         self.fixture()

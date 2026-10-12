@@ -371,6 +371,19 @@ public:
                 }
             }
         }
+        // Companion annotations use the same projection/orientation as the map.
+        if(Host.IsValid())for(const auto& M:Host->GetPluginMarkers())if(M.Map)
+        {
+            FACEWorldObject Object;auto* Client=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+            if(!Client->GetWorldObject(M.Id,Object))continue;
+            const bool Interior=(uint32(Object.Position.CellId)&65535)>=256;
+            if(Interior!=Dungeon||(Dungeon&&(uint32(Object.Position.CellId)>>16)!=Landblock))continue;
+            const auto At=Project(ACEWaypoint::Coordinates(Object.Position),Size);
+            if(At.X<0||At.Y<0||At.X>Size.X||At.Y>Size.Y)continue;
+            if(M.Shape==TEXT("!"))DrawText(Out,L+4,G,At,TEXT("!"),18,M.Color,true);
+            else if(M.Shape==TEXT("arrow"))DrawTriangle(Out,L+4,G,At+FVector2D(-6,-7),At+FVector2D(6,-7),At+FVector2D(0,5),M.Color);
+            else DrawLine(Out,L+4,G,{At+FVector2D(0,-6),At+FVector2D(6,0),At+FVector2D(0,6),At+FVector2D(-6,0),At+FVector2D(0,-6)},M.Color,2);
+        }
         if(Player.IsValid())
         {
             const auto P=Project(ACEWaypoint::Coordinates(Player),Size);const auto F=Player.GetAceForwardInAcSpace();

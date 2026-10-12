@@ -108,15 +108,21 @@ bool UACEPluginSubsystem::LoadItemToolsRules(const FString& Key,const FString& F
     return SaveProfile(P->Id,P->ProfileName,ProfileJson(P->Id),false);
 }
 
-TSharedPtr<FJsonObject> UACEPluginSubsystem::ItemToolsSnapshot()
+TSharedPtr<FJsonObject> UACEPluginSubsystem::ItemToolsSnapshot(FACEClientPlugin* Policy)
 {
-    auto S=MakeShared<FJsonObject>();auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Session=C->GetSession();
-    const double Now=FPlatformTime::Seconds();auto P=Find(TEXT("itemtools"));
-    S->SetNumberField(TEXT("time"),Now);S->SetBoolField(TEXT("ready"),!P||Now>=P->NextAction);
+    auto S=Policy?Snapshot():MakeShared<FJsonObject>();auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Session=C->GetSession();
+    const double Now=FPlatformTime::Seconds();auto Builtin=Find(TEXT("itemtools"));auto* P=Policy?Policy:Builtin.Get();
     auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
-    S->SetBoolField(TEXT("busy"),C->IsUseBusy()||PendingSpell||ConfirmedBuffAckAt||(PC&&(PC->IsWorldTransitionActive()||PC->IsUseApproachActive())));
-    S->SetObjectField(TEXT("position"),MakeShared<FJsonObject>());ExtendSnapshot(S);
+    if(!Policy)
+    {
+        S->SetNumberField(TEXT("time"),Now);S->SetBoolField(TEXT("ready"),!P||Now>=P->NextAction);
+        S->SetBoolField(TEXT("busy"),C->IsUseBusy()||PendingSpell||ConfirmedBuffAckAt||(PC&&(PC->IsWorldTransitionActive()||PC->IsUseApproachActive())));
+        S->SetObjectField(TEXT("position"),MakeShared<FJsonObject>());ExtendSnapshot(S);
+    }
     S->SetNumberField(TEXT("it_currency"),Session->GetVendorCurrencyCount());
+    S->SetNumberField(TEXT("it_failure_serial"),Session->GetInventoryFailureSerial());
+    S->SetNumberField(TEXT("it_failure_item"),uint32(Session->GetInventoryFailureItem()));
+    S->SetNumberField(TEXT("it_failure_error"),Session->GetInventoryFailureError());
     TArray<TSharedPtr<FJsonValue>> Targets,Inventory;
     FACEPosition Here=C->GetPlayerPosition();if(PC)PC->TryGetLocallyPredictedPosition(Here);
     for(const auto& V:S->GetArrayField(TEXT("inventory")))
@@ -165,8 +171,8 @@ bool UACEPluginSubsystem::ExecuteItemTools(FACEClientPlugin& P,const TSharedPtr<
 {
     const FString Action=String(I,TEXT("action"));
     if(!Action.StartsWith(TEXT("it_")))return false;
-    auto Fail=[&](const FString& Reason){Stop(P.Id,Reason);return true;};
-    if(P.Id!=TEXT("itemtools")||!P.Permissions.Contains(TEXT("inventory"))||!P.Permissions.Contains(TEXT("loot")))return Fail(TEXT("Item Tools actions are not enabled."));
+    auto Fail=[&](const FString& Reason){if(P.Api>=2)ReportActivityFailure(P,I,Reason);else Stop(P.Id,Reason);return true;};
+    if((P.Id!=TEXT("itemtools")&&P.Api<2)||!P.Permissions.Contains(TEXT("inventory"))||!P.Permissions.Contains(TEXT("loot")))return Fail(TEXT("Item Tools actions are not enabled."));
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Session=C->GetSession();
     if(!Session||C->GetSessionState()!=EACESessionState::InWorld)return Fail(TEXT("Character left the world."));
     auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());

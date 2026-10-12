@@ -14,6 +14,8 @@ struct ACECLIENT_API FACEDecodedObject
 	int32 IconId = 0;
 	int32 IconOverlayId = 0;
 	int32 IconUnderlayId = 0;
+	int32 CooldownId = 0;
+	double CooldownDuration = 0.0;
 	/** PublicWeenieDesc UiEffects flags (Magical blue glow, elemental tints, …). */
 	uint32 UiEffects = 0;
 	int32 ItemType = 0;

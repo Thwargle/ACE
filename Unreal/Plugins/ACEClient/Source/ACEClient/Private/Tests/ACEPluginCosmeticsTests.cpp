@@ -20,6 +20,12 @@
 #include "Engine/World.h"
 #include "Engine/Texture2D.h"
 #include "HAL/IConsoleManager.h"
+#include "Widgets/SWindow.h"
+#include "Widgets/Input/SEditableTextBox.h"
+#include "Widgets/Images/SImage.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Slate/WidgetRenderer.h"
+#include "RenderingThread.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPluginCosmeticsTest,"ACE.Plugins.CosmeticAPI",
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
@@ -86,6 +92,9 @@ bool FACEPluginCosmeticsTest::RunTest(const FString&)
     TestEqual(TEXT("Main hand and shield coexist"),Service->SlotRenderers.Num(),2);
     TestTrue(TEXT("Saved outfit restores both paperdoll model icons without a catalog"),Service->SlotSelections.Contains(TEXT("weapon"))&&Service->SlotSelections.Contains(TEXT("offhand")));
     TestEqual(TEXT("Saved icon uses the verified cache ID"),Service->SlotSelections[TEXT("weapon")]->GetStringField(TEXT("cacheId")),Id);
+    Receipt->SetStringField(TEXT("appearanceName"),TEXT("Worn Shortsword"));Receipt->SetStringField(TEXT("catalogId"),TEXT("item:25:1542:0"));
+    TestTrue(TEXT("Named saved outfit reloads"),Service->LoadVerified(OutfitJson()));
+    TestEqual(TEXT("Item name survives reload without loading the catalog first"),Service->SlotSelections[TEXT("weapon")]->GetStringField(TEXT("name")),FString(TEXT("Worn Shortsword")));
     auto* Previous=Service->RendererForSlot(TEXT("weapon"));
     Second->SetStringField(TEXT("directory"),Root);
     TestFalse(TEXT("One malformed outfit slot rejects the whole replacement"),Service->LoadVerified(OutfitJson()));
@@ -111,6 +120,59 @@ bool FACEPluginCosmeticsTest::RunTest(const FString&)
     TArray<TSharedPtr<FJsonValue>> Many;for(int32 I=0;I<18000;++I)Many.Add(Large->GetArrayField(TEXT("items"))[0]);
     Large->SetArrayField(TEXT("items"),Many);FString LargeJson;FJsonSerializer::Serialize(Large.ToSharedRef(),TJsonWriterFactory<>::Create(&LargeJson));
     Service->UpdateCatalog(LargeJson);TestEqual(TEXT("Complete catalog is not truncated at the old 16384 entry limit"),Service->Catalog.Num(),18000);
+    auto Missing=MakeShared<FJsonObject>();Missing->SetStringField(TEXT("id"),TEXT("item:6473:11840:0"));
+    Missing->SetStringField(TEXT("name"),TEXT("Armor of the Fang [Item 6473]"));Missing->SetStringField(TEXT("cacheId"),Id);
+    Missing->SetStringField(TEXT("sourceSlot"),TEXT("chest"));Missing->SetBoolField(TEXT("supported"),false);
+    Missing->SetStringField(TEXT("reason"),TEXT("Required local texture is missing"));
+    Missing->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueString>(TEXT("chest"))});
+    Large->SetArrayField(TEXT("items"),{MakeShared<FJsonValueObject>(Missing)});
+    FJsonSerializer::Serialize(Large.ToSharedRef(),TJsonWriterFactory<>::Create(&LargeJson));Service->UpdateCatalog(LargeJson);
+    Service->CatalogFilter=TEXT("6473");Service->SelectSlot(TEXT("chest"));
+    TestEqual(TEXT("Named missing item remains searchable by ID"),Service->SlotOptions.Num(),1);
+    Service->SelectCatalogItem(Missing);
+    TestFalse(TEXT("Missing item cannot overwrite a draft outfit"),Service->SlotSelections.Contains(TEXT("chest")));
+    TestTrue(TEXT("Missing item explains the unavailable asset"),Service->Status.Contains(TEXT("texture is missing")));
+    // Exercise the real searchable popup: typing must filter in place and must
+    // not silently change the outfit before Enter/click confirms a choice.
+    auto Named=MakeShared<FJsonObject>(*Missing);Named->SetBoolField(TEXT("supported"),true);
+    Named->SetStringField(TEXT("name"),TEXT("Armor of the Fang"));Named->SetStringField(TEXT("kind"),TEXT("item"));
+    auto SearchValues=MakeShared<FJsonObject>();SearchValues->SetStringField(TEXT("item"),TEXT("6473"));Named->SetObjectField(TEXT("values"),SearchValues);
+    auto Raw=MakeShared<FJsonObject>(*Named);Raw->SetStringField(TEXT("id"),TEXT("raw-model"));Raw->SetStringField(TEXT("kind"),TEXT("model"));Raw->SetStringField(TEXT("name"),TEXT("shirt_model"));
+    Large->SetArrayField(TEXT("items"),{MakeShared<FJsonValueObject>(Named),MakeShared<FJsonValueObject>(Raw)});
+    FJsonSerializer::Serialize(Large.ToSharedRef(),TJsonWriterFactory<>::Create(&LargeJson));Service->CatalogFilter.Empty();Service->UpdateCatalog(LargeJson);
+    TestEqual(TEXT("Unnamed model filenames are excluded by default"),Service->SlotOptions.Num(),1);
+    Service->bShowModelVariants=true;Service->SelectSlot(TEXT("chest"));TestEqual(TEXT("Advanced model variants remain accessible"),Service->SlotOptions.Num(),2);
+    Service->bShowModelVariants=false;Service->SelectSlot(TEXT("chest"));
+    auto Picker=Service->MakePaperdollPanel();auto Combo=Service->ItemCombo.Pin();
+    TestTrue(TEXT("Dropdown search includes item ID even though label omits it"),Service->ComboOptions->Num()==1&&(*Service->ComboOptions)[0]->Contains(TEXT("6473")));
+    if(FSlateApplication::IsInitialized()&&FApp::CanEverRender())
+    {
+        auto& Slate=FSlateApplication::Get();const auto OldFocus=Slate.GetUserFocusedWidget(0);
+        auto Window=SNew(SWindow).ClientSize(FVector2D(900,1200))[Picker];Slate.AddWindow(Window,false);
+        ON_SCOPE_EXIT{Combo->SetIsOpen(false);Slate.RequestDestroyWindow(Window);if(OldFocus)Slate.SetUserFocus(0,OldFocus);};
+        FWidgetRenderer Renderer;Renderer.DrawWidget(Window,FVector2D(900,1200));FlushRenderingCommands();
+        TFunction<TSharedPtr<SWidget>(TSharedRef<SWidget>,FName)> FindWidget;
+        FindWidget=[&](TSharedRef<SWidget> W,FName Type)->TSharedPtr<SWidget>
+        {
+            if(W->GetType()==Type)return W;
+            auto* Children=W->GetChildren();for(int32 I=0;I<Children->Num();++I)
+                if(auto Found=FindWidget(Children->GetChildAt(I),Type))return Found;
+            return nullptr;
+        };
+        auto OpenButton=FindWidget(Combo.ToSharedRef(),TEXT("SButton"));
+        if(OpenButton)Slate.SetUserFocus(0,OpenButton);
+        auto Key=[&](FKey K){Slate.ProcessKeyDownEvent(FKeyEvent(K,FModifierKeysState(),0,false,0,0));Slate.ProcessKeyUpEvent(FKeyEvent(K,FModifierKeysState(),0,false,0,0));};
+        Key(EKeys::Enter);
+        TestTrue(TEXT("Dropdown opens from the keyboard"),Combo->IsOpen());
+        const auto Focus=Slate.GetUserFocusedWidget(0);
+        TestTrue(TEXT("Opening dropdown puts typing focus in its search field"),Focus&&Focus->GetTypeAsString().Contains(TEXT("EditableText")));
+        for(TCHAR C:FString(TEXT("fang 6473")))Slate.ProcessKeyCharEvent(FCharacterEvent(C,FModifierKeysState(),0,false));
+        TestFalse(TEXT("Typing alone does not select or apply an appearance"),Service->SlotSelections.Contains(TEXT("chest")));
+        Key(EKeys::Enter);
+        TestTrue(TEXT("Enter selects the named item matching the typed name and item ID"),Service->SlotSelections.FindRef(TEXT("chest"))==Service->Catalog[0]);
+        TestFalse(TEXT("Committing a search result closes the dropdown"),Combo->IsOpen());
+    }
+    Service->CatalogFilter.Empty();Service->UpdateCatalog(CatalogJson);
     // A separate body cache proves ACWM/2 parsing and per-slot part restrictions.
     const FString BodyId=FGuid::NewGuid().ToString(EGuidFormats::Digits),BodyDir=Root/TEXT("cache")/BodyId;
     IFileManager::Get().MakeDirectory(*BodyDir,true);FFileHelper::SaveArrayToFile(Png,*(BodyDir/TEXT("texture-0.png")));
@@ -127,14 +189,15 @@ bool FACEPluginCosmeticsTest::RunTest(const FString&)
     auto* PreviousHead=Service->RendererForSlot(TEXT("head"));WriteBody(10);
     TestFalse(TEXT("Helmet cannot redirect itself to another body part"),Service->LoadVerified(OutfitJson()));
     TestTrue(TEXT("Invalid body replacement preserves current outfit"),Service->RendererForSlot(TEXT("head"))==PreviousHead);
-    auto WriteSkin=[&](int32 Bone,float Weight)
+    auto WriteSkin=[&](int32 Bone,float Weight,int32 V=3,int32 SkinPart=-1,bool BadReference=false)
     {
-        FBufferArchive B;int32 V=3,BindingCount=1,Part=9;B<<Magic<<V<<Count<<Sections;
+        FBufferArchive B;int32 BindingCount=1,Part=9;B<<Magic<<V<<Count<<Sections;
         for(const auto& Vertex:Vertices)for(float Value:Vertex)B<<Value;
         B<<BindingCount<<Part;float Zero=0,End=25;B<<Zero<<Zero<<Zero<<Zero<<Zero<<End;
+        if(V>=5){float Min=BadReference?20:-10,Max=10;B<<Min<<Min<<Min<<Max<<Max<<Max;}
         for(int32 Vertex=0;Vertex<3;++Vertex)for(int32 Influence=0;Influence<4;++Influence)
         {int32 Index=Influence==0?Bone:0;float Value=Influence==0?Weight:0;B<<Index<<Value;}
-        int32 SkinPart=-1;B<<SkinPart<<Blend<<Count<<I0<<I1<<I2;
+        B<<SkinPart<<Blend<<Count<<I0<<I1<<I2;
         FFileHelper::SaveArrayToFile(B,*(BodyDir/TEXT("mesh.acwm")));
     };
     WriteSkin(0,1);
@@ -143,6 +206,19 @@ bool FACEPluginCosmeticsTest::RunTest(const FString&)
     WriteSkin(1,1);TestFalse(TEXT("Out-of-range skin bone rejects entire outfit"),Service->LoadVerified(OutfitJson()));
     TestTrue(TEXT("Bad skin keeps previously applied outfit"),Service->RendererForSlot(TEXT("head"))==PreviousSkin);
     WriteSkin(0,.2f);TestFalse(TEXT("Incomplete skin influence sum is rejected"),Service->LoadVerified(OutfitJson()));
+    WriteSkin(0,1);
+    WriteSkin(0,1,4,16);
+    TestTrue(TEXT("Composite ACWM4 accepts a valid rigid section alongside skin data"),Service->LoadVerified(OutfitJson()));
+    TestEqual(TEXT("Composite rigid section keeps the head-local attachment"),Service->RendererForSlot(TEXT("head"))->Sections[0].BodyPart,16);
+    WriteSkin(0,1,4,10);
+    TestFalse(TEXT("Composite rigid sections still enforce their outfit slot"),Service->LoadVerified(OutfitJson()));
+    WriteSkin(0,1,3,16);
+    TestFalse(TEXT("Version 3 cannot silently interpret rigid section coordinates"),Service->LoadVerified(OutfitJson()));
+    WriteSkin(0,1,5);
+    TestTrue(TEXT("Anatomical ACWM5 loads reference body bounds"),Service->LoadVerified(OutfitJson()));
+    TestEqual(TEXT("Reference geometry reaches the fitting stage"),Service->RendererForSlot(TEXT("head"))->SkinBindings[0].ReferenceMax,FVector(10));
+    WriteSkin(0,1,5,-1,true);
+    TestFalse(TEXT("Inverted reference body bounds reject the whole outfit"),Service->LoadVerified(OutfitJson()));
     WriteSkin(0,1);
     TArray<TSharedPtr<FJsonValue>> Full{MakeShared<FJsonValueObject>(Receipt)};
     for(const TCHAR* Target:{TEXT("head"),TEXT("shoulders"),TEXT("chest"),TEXT("arms"),TEXT("hands"),TEXT("waist"),TEXT("legs"),TEXT("feet"),TEXT("back")})

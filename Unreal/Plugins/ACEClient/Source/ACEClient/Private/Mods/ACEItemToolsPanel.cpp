@@ -59,7 +59,20 @@ public:
                 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).IsEnabled_Lambda([this](){return Plugin->Running;})
                     [Button(TEXT("Stop"),[this](){Host->Stop(Plugin->Id,TEXT("Stopped by player"));})]]]
             +SVerticalBox::Slot().AutoHeight().Padding(0,8)[SNew(STextBlock).AutoWrapText(true).ColorAndOpacity(Accent)
-                .Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).Text_Lambda([this](){return FText::FromString(Plugin->Status+(Plugin->Running&&Host->ItemToolsProgress?FString::Printf(TEXT("  |  %.0f confirmed actions"),Number(Host->ItemToolsProgress,TEXT("operations"))):FString()));})]
+                .Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).Text_Lambda([this](){
+                    FString Progress;
+                    if(Plugin->Running&&Host->ItemToolsProgress)
+                    {
+                        const FString Mode=String(Plugin->Profile,TEXT("mode"));
+                        if(Mode==TEXT("give")||Mode==TEXT("profile"))
+                        {
+                            const double Done=Number(Host->ItemToolsProgress,TEXT("completed")),Total=Number(Host->ItemToolsProgress,TEXT("total"));
+                            Progress=Total>0?FString::Printf(TEXT("  |  %.0f / %.0f items given"),Done,Total):FString::Printf(TEXT("  |  %.0f items given"),Done);
+                        }
+                        else Progress=FString::Printf(TEXT("  |  %.0f confirmed actions"),Number(Host->ItemToolsProgress,TEXT("operations")));
+                    }
+                    return FText::FromString(Plugin->Status+Progress);
+                })]
             +SVerticalBox::Slot().AutoHeight().Padding(0,0,0,12)[Tabs]
             +SVerticalBox::Slot().FillHeight(1)[SAssignNew(Scroll,SScrollBox)+SScrollBox::Slot()
                 [SAssignNew(Body,SVerticalBox).IsEnabled_Lambda([this](){return !Plugin->Running;})]]

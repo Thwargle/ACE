@@ -1,0 +1,27 @@
+{
+  "api": 2,
+  "id": "api_workbench",
+  "name": "API Workbench",
+  "version": "1.0",
+  "mode": "automation",
+  "policy": "ucm",
+  "description": "Example custom automation using the same UCM policy, with its own controls and profile library.",
+  "permissions": [
+    "cast",
+    "combat",
+    "navigation",
+    "inventory",
+    "loot",
+    "say",
+    "fellowship",
+    "confirm",
+    "chat",
+    "state",
+    "ui",
+    "markers",
+    "waypoint",
+    "messaging",
+    "commands",
+    "profiles"
+  ]
+}

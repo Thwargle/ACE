@@ -13,6 +13,7 @@
 #include "ImageUtils.h"
 #include "RenderingThread.h"
 #include "Misc/App.h"
+#include "Widgets/Text/STextBlock.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMProfileStorageTest, "ACE.Plugins.LinkedProfiles",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -77,6 +78,61 @@ bool FACEUCMProfileStorageTest::RunTest(const FString&)
     FFileHelper::SaveStringToFile(TEXT("not json"),*(Root/TEXT("Profiles/Routes/Cave.json")));
     TestFalse(TEXT("Corrupt linked file prevents partial setup activation"),Load(Root,TEXT("Second"),Reload,ReloadLinks,Error));
     TestTrue(TEXT("Failed load keeps previously resolved profile"),FJsonValue::CompareEqual(FJsonValueObject(Reload),FJsonValueObject(Unchanged)));
+    TestEqual(TEXT("Protections belong to Character"),SectionFor(TEXT("protection_profile")),FString(TEXT("Character")));
+    TestEqual(TEXT("Custom banes belong to Character"),SectionFor(TEXT("bane_custom")),FString(TEXT("Character")));
+    {
+        auto* GI=NewObject<UGameInstance>();GI->Init();ON_SCOPE_EXIT{GI->Shutdown();};
+        auto* H=GI->GetSubsystem<UACEPluginSubsystem>();H->StorageRoot=Root/TEXT("Host");H->Settings=MakeShared<FJsonObject>();
+        TestTrue(TEXT("New setup creates Default references"),H->NewUCMSetup(TEXT("Hunt")));
+        auto P=H->Find(TEXT("ucm"));if(!P)return false;
+        for(const auto& Section:Sections())TestEqual(TEXT("New setup selects Default in every section"),H->UCMSectionName(Section),FString(TEXT("Default")));
+        TestTrue(TEXT("New Character profile"),H->NewUCMSection(TEXT("Character"),TEXT("Hero")));
+        P->Profile->SetNumberField(TEXT("protection_profile"),4);P->Profile->SetStringField(TEXT("bane_custom"),TEXT("BPS"));
+        TestTrue(TEXT("Save current setup"),H->SaveProfile(P->Id,P->ProfileName,H->ProfileJson(P->Id),false));
+        TestTrue(TEXT("New route creates empty file"),H->NewUCMSection(TEXT("Routes"),TEXT("OldPath")));
+        auto Point=MakeShared<FJsonObject>();Point->SetNumberField(TEXT("cell"),0x7d640001);Point->SetNumberField(TEXT("x"),1);Point->SetNumberField(TEXT("y"),2);Point->SetNumberField(TEXT("z"),3);
+        P->Profile->SetArrayField(TEXT("route"),{MakeShared<FJsonValueObject>(Point)});
+        TestTrue(TEXT("Save populated route"),H->SaveProfile(P->Id,P->ProfileName,H->ProfileJson(P->Id),false));
+        TestTrue(TEXT("Another new route starts blank"),H->NewUCMSection(TEXT("Routes"),TEXT("Blank")));
+        TestEqual(TEXT("New route never copies previous waypoints"),P->Profile->GetArrayField(TEXT("route")).Num(),0);
+        TestEqual(TEXT("Route creation preserves Character reference"),H->UCMSectionName(TEXT("Character")),FString(TEXT("Hero")));
+        TestFalse(TEXT("New cannot overwrite an existing profile"),H->NewUCMSection(TEXT("Routes"),TEXT("OldPath")));
+        H->SelectUCMSection(TEXT("Routes"),TEXT("OldPath"));TestEqual(TEXT("Original route remains intact"),P->Profile->GetArrayField(TEXT("route")).Num(),1);
+        const FString Folder=H->UserDirectory()/TEXT("ImportInbox");IFileManager::Get().MakeDirectory(*Folder,true);
+        const FString Nav=TEXT("uTank2 NAV 1.2\n2\n2\n0\n0\n0\n0.05\n0\n3\n0.01\n0\n0.05\n0\n1500\n");
+        FFileHelper::SaveStringToFile(Nav,*(Folder/TEXT("Loop.nav")));
+        TestTrue(TEXT("Folder import creates route section"),H->ImportUCMSection(TEXT("Loop.nav")));
+        TestEqual(TEXT("Import preserves setup name"),P->ProfileName,FString(TEXT("Hunt")));
+        TestEqual(TEXT("Import uses source file stem"),H->UCMSectionName(TEXT("Routes")),FString(TEXT("Loop")));
+        TestEqual(TEXT("Imported points loaded for world preview"),P->Profile->GetArrayField(TEXT("route")).Num(),2);
+        TestTrue(TEXT("Imported route has world preview"),P->Profile->GetBoolField(TEXT("route_preview")));
+        TestTrue(TEXT("Repeated import creates distinct file"),H->ImportUCMSection(TEXT("Loop.nav")));
+        TestEqual(TEXT("Repeated import adds suffix"),H->UCMSectionName(TEXT("Routes")),FString(TEXT("Loop_2")));
+        FString AfterImport;FFileHelper::LoadFileToString(AfterImport,*(Folder/TEXT("Loop.nav")));TestEqual(TEXT("Import leaves original nav unchanged"),AfterImport,Nav);
+        FFileHelper::SaveStringToFile(TEXT("UTL\r\n1\r\n1\r\nCopper\r\n\r\n0;1;12\r\n8\r\n6\r\n131\r\n"),*(Folder/TEXT("Copper.utl")));
+        TestTrue(TEXT("Folder import creates Loot section"),H->ImportUCMSection(TEXT("Copper.utl")));
+        TestEqual(TEXT("Loot import keeps selected route"),H->UCMSectionName(TEXT("Routes")),FString(TEXT("Loop_2")));
+        TestEqual(TEXT("Loot import names active profile"),H->UCMSectionName(TEXT("Loot")),FString(TEXT("Copper")));
+        TestEqual(TEXT("Loot rules loaded"),P->Profile->GetArrayField(TEXT("loot_rules")).Num(),1);
+        FFileHelper::SaveStringToFile(TEXT("bad nav"),*(Folder/TEXT("Broken.nav")));
+        TestFalse(TEXT("Broken import rejected without changing selected profile"),H->ImportUCMSection(TEXT("Broken.nav")));
+        TestEqual(TEXT("Failed import preserves active route"),H->UCMSectionName(TEXT("Routes")),FString(TEXT("Loop_2")));
+        TestTrue(TEXT("Second new setup"),H->NewUCMSetup(TEXT("Other")));
+        for(const auto& Section:Sections())TestEqual(TEXT("Second setup does not inherit previous choices"),H->UCMSectionName(Section),FString(TEXT("Default")));
+        TestTrue(TEXT("Share imported route between setups"),H->SelectUCMSection(TEXT("Routes"),TEXT("Loop_2")));
+        TestTrue(TEXT("Delete referenced route"),H->DeleteUCMSection(TEXT("Routes"),TEXT("Loop_2")));
+        TestEqual(TEXT("Active setup switches deleted route to Default"),H->UCMSectionName(TEXT("Routes")),FString(TEXT("Default")));
+        TestFalse(TEXT("Deleted profile leaves chooser"),H->UCMSectionProfiles(TEXT("Routes")).Contains(TEXT("Loop_2")));
+        TestTrue(TEXT("Other linked setup remains loadable"),H->LoadProfile(TEXT("ucm"),TEXT("Hunt")));
+        TestEqual(TEXT("Other setup references Default after delete"),H->UCMSectionName(TEXT("Routes")),FString(TEXT("Default")));
+        TestEqual(TEXT("Delete leaves unrelated Character intact"),H->UCMSectionName(TEXT("Character")),FString(TEXT("Hero")));
+        TestEqual(TEXT("Protections survive setup switches"),P->Profile->GetNumberField(TEXT("protection_profile")),4.);
+        TestEqual(TEXT("Custom banes survive setup switches"),P->Profile->GetStringField(TEXT("bane_custom")),FString(TEXT("BPS")));
+        TArray<FString> Backups;IFileManager::Get().FindFiles(Backups,*(H->UserDirectory()/TEXT("Profiles/Deleted/Routes/*.json")),true,false);
+        TestEqual(TEXT("Deleted file is recoverable"),Backups.Num(),1);
+        TestFalse(TEXT("Default cannot be deleted"),H->DeleteUCMSection(TEXT("Routes"),TEXT("Default")));
+        TestFalse(TEXT("New setup cannot overwrite Hunt"),H->NewUCMSetup(TEXT("Hunt")));
+    }
     return true;
 }
 
@@ -86,17 +142,41 @@ bool FACEUCMProfilePanelTest::RunTest(const FString&)
 {
     auto* GI=NewObject<UGameInstance>();GI->Init();ON_SCOPE_EXIT { GI->Shutdown(); };
     auto* Host=GI->GetSubsystem<UACEPluginSubsystem>();
+    auto CollectText=[](const TSharedRef<SWidget>& Root)
+    {
+        FString Result;TFunction<void(const TSharedRef<SWidget>&)> Visit;
+        Visit=[&](const TSharedRef<SWidget>& Widget){
+            if(Widget->GetType()==FName(TEXT("STextBlock")))Result+=StaticCastSharedRef<STextBlock>(Widget)->GetText().ToString()+TEXT("\n");
+            auto Children=Widget->GetChildren();for(int32 I=0;I<Children->Num();++I)Visit(Children->GetChildAt(I));
+        };Visit(Root);return Result;
+    };
     for(const auto& Plugin:Host->Plugins)if(Plugin->Id==TEXT("ucm"))
     {
         Plugin->ProfileName=TEXT("Olthoi_Hunt");Plugin->ProfileLinks=MakeShared<FJsonObject>();
         for(const auto& Section:ACEUCMProfiles::Sections())Plugin->ProfileLinks->SetStringField(Section,
             Section==TEXT("Character")?TEXT("PlayerNameVOID"):Section==TEXT("Routes")?TEXT("Olthoi120"):TEXT("Shared"));
     }
+    for(const TCHAR* Page:{TEXT("Buffs"),TEXT("Buff others"),TEXT("Combat"),TEXT("Recovery"),TEXT("Route"),TEXT("Loot"),TEXT("Vendors"),TEXT("Monsters"),TEXT("Metas")})
+    {
+        const FString Text=CollectText(Host->MakeUCMPanel(Page));
+        TestTrue(*(FString(Page)+TEXT(" has New profile")),Text.Contains(TEXT("+ New\n")));
+        TestTrue(*(FString(Page)+TEXT(" has Delete profile")),Text.Contains(TEXT("Delete\n")));
+        if(FString(Page)==TEXT("Route"))TestFalse(TEXT("Route has no duplicate import selector"),Text.Contains(TEXT("Navigation route\n")));
+        if(FString(Page)==TEXT("Monsters"))TestTrue(TEXT("Monsters can add current target"),Text.Contains(TEXT("Add selected monster")));
+        if(FString(Page)==TEXT("Buffs"))TestTrue(TEXT("Buffs includes protection choices"),Text.Contains(TEXT("Protections:"))&&Text.Contains(TEXT("Banes:")));
+    }
+    const FString Overview=CollectText(Host->MakeUCMPanel(TEXT("Overview")));
+    TestFalse(TEXT("Overview no longer includes Open Log"),Overview.Contains(TEXT("Open UCM Log")));
+    TestFalse(TEXT("Overview no longer includes protection selectors"),Overview.Contains(TEXT("Protections:"))||Overview.Contains(TEXT("Banes:")));
+    const FString SetupText=CollectText(Host->MakeUCMPanel(TEXT("Profiles")));
+    TestTrue(TEXT("Setup supports new and current-save controls"),SetupText.Contains(TEXT("New setup\n"))&&SetupText.Contains(TEXT("Save current setup")));
+    TestFalse(TEXT("Setup omits redundant save-copy controls"),SetupText.Contains(TEXT("Save copy"))||SetupText.Contains(TEXT("Save setup as")));
+    TestTrue(TEXT("Setup includes explicit vTank import"),SetupText.Contains(TEXT("Import vTank file")));
     if(FApp::CanEverRender())
     {
         FWidgetRenderer Renderer(false,true);
         const FString Folder=FPaths::ProjectSavedDir()/TEXT("UCMProfileReview/UI");IFileManager::Get().MakeDirectory(*Folder,true);
-        for(const TCHAR* Page:{TEXT("Profiles"),TEXT("Combat"),TEXT("Loot")})for(int Width:{780,460})
+        for(const TCHAR* Page:{TEXT("Profiles"),TEXT("Route"),TEXT("Buffs"),TEXT("Buff others"),TEXT("Combat"),TEXT("Recovery"),TEXT("Loot"),TEXT("Vendors"),TEXT("Monsters"),TEXT("Import vTank")})for(int Width:{780,460})
         {
             auto Panel=Host->MakeUCMPanel(Page);const FVector2D Size(Width,900);
             auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);

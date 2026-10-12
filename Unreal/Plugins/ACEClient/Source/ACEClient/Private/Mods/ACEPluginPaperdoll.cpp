@@ -12,6 +12,7 @@
 #include "Widgets/Layout/SGridPanel.h"
 #include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SNumericEntryBox.h"
 #include "Widgets/Text/STextBlock.h"
@@ -24,7 +25,7 @@ FString Text(const TSharedPtr<FJsonObject>& O,const TCHAR* K,const FString& Defa
 { FString V;return O&&O->TryGetStringField(K,V)?V:Default; }
 bool Ready(const TSharedPtr<FJsonObject>& O)
 { bool V=false;return O&&O->TryGetBoolField(TEXT("supported"),V)&&V; }
-TSharedRef<SWidget> Label(const FString& S)
+TSharedRef<SWidget> PaperdollLabel(const FString& S)
 { return SNew(STextBlock).Text(FText::FromString(S)).AutoWrapText(true); }
 bool CanTarget(const TSharedPtr<FJsonObject>& O,const FString& Target)
 {
@@ -47,6 +48,14 @@ struct FCosmeticIcon
     TStrongObjectPtr<UTexture2D> Texture;
     FSlateBrush Brush;
 };
+FString SearchTerms(const TSharedPtr<FJsonObject>& Item)
+{
+    FString Result=Text(Item,TEXT("name"));
+    const TSharedPtr<FJsonObject>* Values=nullptr;
+    if(Item&&Item->TryGetObjectField(TEXT("values"),Values))
+        for(const TCHAR* Key:{TEXT("item"),TEXT("model"),TEXT("display")})Result+=TEXT(" ")+Text(*Values,Key);
+    return Result;
+}
 }
 
 TSharedRef<SWidget> UACEPluginCosmetics::MakeCatalogIcon(TFunction<TSharedPtr<FJsonObject>()> Item,float Size)
@@ -55,10 +64,14 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakeCatalogIcon(TFunction<TSharedPtr<FJ
     return SNew(SBox).WidthOverride(Size).HeightOverride(Size)
         [SNew(SImage).Image_Lambda([Self,Item,Icon]()->const FSlateBrush*
         {
-            const FString Id=Text(Item(),TEXT("cacheId"));
-            if(Icon->Id!=Id)
+            const auto Entry=Item();
+            const FString ModelId=Text(Entry,TEXT("cacheId")),FallbackId=Text(Entry,TEXT("iconId"));
+            const FString Identity=ModelId+TEXT("|")+FallbackId;
+            if(Icon->Id!=Identity)
             {
-                Icon->Id=Id;Icon->Texture.Reset();Icon->Brush.SetResourceObject(nullptr);
+                Icon->Id=Identity;Icon->Texture.Reset();Icon->Brush.SetResourceObject(nullptr);
+                for(const FString& Id:{ModelId,FallbackId})
+                {
                 FGuid Guid;
                 if(Self.IsValid()&&FGuid::ParseExact(Id,EGuidFormats::Digits,Guid))
                 {
@@ -75,12 +88,14 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakeCatalogIcon(TFunction<TSharedPtr<FJ
                             {
                                 Icon->Brush.SetResourceObject(Icon->Texture.Get());Icon->Brush.DrawAs=ESlateBrushDrawType::Image;
                                 Icon->Brush.ImageSize=FVector2D(Icon->Texture->GetSizeX(),Icon->Texture->GetSizeY());
+                                break;
                             }
                         }
                     }
                 }
+                }
             }
-            return Icon->Texture.IsValid()?&Icon->Brush:FAppStyle::GetBrush(TEXT("NoBrush"));
+            return Icon->Texture.IsValid()?&Icon->Brush:FAppStyle::GetBrush(Entry?TEXT("Icons.Help"):TEXT("NoBrush"));
         })];
 }
 
@@ -88,7 +103,7 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakeCatalogRow(TSharedPtr<FJsonObject> 
 {
     return SNew(SHorizontalBox)
         +SHorizontalBox::Slot().AutoWidth().Padding(4)[MakeCatalogIcon([Item](){return Item;},48)]
-        +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(8,2)[Label(Text(Item,TEXT("name")))];
+        +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(8,2)[SNew(STextBlock).Text(FText::FromString(Text(Item,TEXT("name"))+(Ready(Item)?TEXT(""):TEXT(" — unavailable")))).ToolTipText(FText::FromString(Text(Item,TEXT("reason")))).AutoWrapText(true)];
 }
 
 void UACEPluginCosmetics::UpdateCatalog(const FString& Json)
@@ -100,7 +115,7 @@ void UACEPluginCosmetics::UpdateCatalog(const FString& Json)
     for(const auto& V:*Items)
     {
         auto O=V->AsObject();if(!O||Text(O,TEXT("name")).Len()>256||Text(O,TEXT("reason")).Len()>4096)continue;
-        FGuid Id;if(!Ready(O)||!FGuid::ParseExact(Text(O,TEXT("cacheId")),EGuidFormats::Digits,Id))continue;
+        FGuid Id;if(!FGuid::ParseExact(Text(O,TEXT("cacheId")),EGuidFormats::Digits,Id))continue;
         Catalog.Add(O);Available+=Ready(O)?1:0;
     }
     for(const auto& Pair:Previous)
@@ -108,31 +123,44 @@ void UACEPluginCosmetics::UpdateCatalog(const FString& Json)
         if(!Ready(Pair.Value))continue;
         SlotSelections.Add(Pair.Key,Pair.Value);
         for(const auto& Item:Catalog)
-            if((Text(Item,TEXT("id"))==Text(Pair.Value,TEXT("id"))||(!Text(Pair.Value,TEXT("cacheId")).IsEmpty()&&Text(Item,TEXT("cacheId"))==Text(Pair.Value,TEXT("cacheId"))))&&CanTarget(Item,Pair.Key))
+            if((Text(Item,TEXT("id"))==Text(Pair.Value,TEXT("id"))||(!Text(Pair.Value,TEXT("cacheId")).IsEmpty()&&Text(Item,TEXT("cacheId"))==Text(Pair.Value,TEXT("cacheId"))))&&Ready(Item)&&CanTarget(Item,Pair.Key))
             {SlotSelections.Add(Pair.Key,Item);break;}
     }
     int32 Remaining=0;Root->TryGetNumberField(TEXT("remaining"),Remaining);
-    CatalogStatus=FString::Printf(TEXT("%d ready appearances · %d candidates left to scan"),Available,Remaining);
+    CatalogStatus=FString::Printf(TEXT("%d available appearances · %d models left to scan"),Available,Remaining);
     SelectSlot(SelectedSlot);Tell(TEXT("Local item catalog loaded. Select a paperdoll slot, then an appearance."));
 }
 
 void UACEPluginCosmetics::SelectSlot(const FString& Id)
 {
     SelectedSlot=Id;SlotOptions.Empty();
-    for(const auto& Item:Catalog)if(Ready(Item)&&CanTarget(Item,Id)&&(CatalogFilter.IsEmpty()||Text(Item,TEXT("name")).Contains(CatalogFilter)))SlotOptions.Add(Item);
+    for(const auto& Item:Catalog)
+        if(CanTarget(Item,Id)&&(bShowModelVariants||Text(Item,TEXT("kind"))!=TEXT("model"))
+            &&(CatalogFilter.IsEmpty()||SearchTerms(Item).Contains(CatalogFilter)))SlotOptions.Add(Item);
     SlotOptions.Sort([](const auto& A,const auto& B){if(Ready(A)!=Ready(B))return Ready(A);return Text(A,TEXT("name"))<Text(B,TEXT("name"));});
-    if(ComboOptions)*ComboOptions=SlotOptions;
+    TSharedPtr<FString> SelectedOption;
+    if(ComboOptions&&ComboItems)
+    {
+        ComboOptions->Reset();ComboItems->Reset();
+        for(const auto& Item:SlotOptions)
+        {
+            auto Option=MakeShared<FString>(SearchTerms(Item));ComboOptions->Add(Option);ComboItems->Add(Option,Item);
+            if(Item==SlotSelections.FindRef(Id))SelectedOption=Option;
+        }
+    }
     if(auto Combo=ItemCombo.Pin())
     {
         Combo->RefreshOptions();
-        if(auto* Selected=SlotSelections.Find(Id))Combo->SetSelectedItem(*Selected);else Combo->ClearSelection();
+        Combo->ClearSelection();
+        if(SelectedOption)Combo->SetSelectedItem(SelectedOption);
     }
     if(auto* Selected=SlotSelections.Find(Id))SelectCatalogItem(*Selected);
 }
 
 void UACEPluginCosmetics::SelectCatalogItem(const TSharedPtr<FJsonObject>& Item)
 {
-    if(!Ready(Item)||!CanTarget(Item,SelectedSlot))return;
+    if(!CanTarget(Item,SelectedSlot))return;
+    if(!Ready(Item)){Tell(Text(Item,TEXT("reason")));return;}
     SlotSelections.Add(SelectedSlot,Item);
     const TSharedPtr<FJsonObject>* Values=nullptr;
     if(Item->TryGetObjectField(TEXT("values"),Values))
@@ -147,7 +175,7 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakePaperdollPanel()
     auto Button=[&](const FString& Caption,const FString& Operation)->TSharedRef<SWidget>
     {return SNew(SButton).IsFocusable(false).ContentPadding(8)
         .IsEnabled_Lambda([Self,Operation](){return Self.IsValid()&&(Operation==TEXT("off")||!Self->ToolProcess.IsValid());})
-        .OnClicked_Lambda([Self,Operation](){if(Self.IsValid())Self->QueueRequest(Operation);return FReply::Handled();})[Label(Caption)];};
+        .OnClicked_Lambda([Self,Operation](){if(Self.IsValid())Self->QueueRequest(Operation);return FReply::Handled();})[PaperdollLabel(Caption)];};
     Add(SNew(STextBlock).Text_Lambda([Self](){return FText::FromString(Self.IsValid()?Self->Status:TEXT("Unavailable"));}).AutoWrapText(true));
     Add(SNew(SHorizontalBox)
         +SHorizontalBox::Slot().FillWidth(1)[Button(TEXT("Find local ")+SourceLabel+TEXT(" installation"),TEXT("scan"))]
@@ -156,8 +184,8 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakePaperdollPanel()
     auto Installs=SNew(SVerticalBox);InstallationList=Installs;Add(Installs);
     for(const auto& Install:Installations)
         Installs->AddSlot().AutoHeight()[SNew(SButton).OnClicked_Lambda([Self,Install](){if(Self.IsValid())for(const TCHAR* K:{TEXT("root"),TEXT("product")})Self->Inputs[K]=Text(Install,K);return FReply::Handled();})
-            [Label(Text(Install,TEXT("product"))+TEXT(" — ")+Text(Install,TEXT("root")))]];
-    Add(Label(TEXT("Choose appearances for any slots, then Apply outfit to wear all changes together.")));
+            [PaperdollLabel(Text(Install,TEXT("product"))+TEXT(" — ")+Text(Install,TEXT("root")))]];
+    Add(PaperdollLabel(TEXT("Choose appearances for any slots, then Apply outfit to wear all changes together.")));
     auto Grid=SNew(SGridPanel).FillColumn(0,1).FillColumn(1,1).FillColumn(2,1);
     auto SelectedItem=[Self]()->TSharedPtr<FJsonObject>{return Self.IsValid()?Self->SlotSelections.FindRef(Self->SelectedSlot):nullptr;};
     Grid->AddSlot(1,1).RowSpan(5).HAlign(HAlign_Center).VAlign(VAlign_Center)
@@ -165,7 +193,7 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakePaperdollPanel()
             +SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)[MakeCatalogIcon(SelectedItem,180)]
             +SVerticalBox::Slot().AutoHeight().Padding(4)[SNew(STextBlock).Justification(ETextJustify::Center).AutoWrapText(true)
                 .Text_Lambda([SelectedItem](){return FText::FromString(SelectedItem()?Text(SelectedItem(),TEXT("name")):TEXT("Choose an appearance"));})]
-            +SVerticalBox::Slot().AutoHeight().Padding(4)[Label(TEXT("Local model preview"))]];
+            +SVerticalBox::Slot().AutoHeight().Padding(4)[PaperdollLabel(TEXT("Item icon / local model preview"))]];
     struct FSlot {const TCHAR* Id;int32 Column,Row;};
     const FSlot Slots[]={{TEXT("head"),1,0},{TEXT("shoulders"),0,1},{TEXT("back"),2,1},{TEXT("arms"),0,2},{TEXT("chest"),2,2},
         {TEXT("hands"),0,3},{TEXT("waist"),2,3},{TEXT("weapon"),0,4},{TEXT("offhand"),2,4},{TEXT("legs"),0,5},{TEXT("feet"),2,5}};
@@ -182,36 +210,40 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakePaperdollPanel()
     }
     Add(Grid);
     Add(SNew(STextBlock).Text_Lambda([Self](){return FText::FromString(Self.IsValid()?SlotName(Self->SelectedSlot)+TEXT(" appearance"):FString());}));
-    Add(SNew(SEditableTextBox).HintText(FText::FromString(TEXT("Search appearances by model name...")))
-        .Text(FText::FromString(CatalogFilter)).OnTextChanged_Lambda([Self](const FText& Value){if(Self.IsValid()){Self->CatalogFilter=Value.ToString();Self->SelectSlot(Self->SelectedSlot);}}));
-    TSharedPtr<SComboBox<TSharedPtr<FJsonObject>>> Combo;
-    TSharedPtr<TArray<TSharedPtr<FJsonObject>>> Options=MakeShared<TArray<TSharedPtr<FJsonObject>>>();ComboOptions=Options;
-    Add(SAssignNew(Combo,SComboBox<TSharedPtr<FJsonObject>>).OptionsSource(Options.Get()).MaxListHeight(300)
-        .OnGenerateWidget_Lambda([Self,Options](TSharedPtr<FJsonObject> O)->TSharedRef<SWidget>
+    TSharedPtr<SSearchableComboBox> Combo;
+    TSharedPtr<TArray<TSharedPtr<FString>>> Options=MakeShared<TArray<TSharedPtr<FString>>>();ComboOptions=Options;
+    TSharedPtr<TMap<TSharedPtr<FString>,TSharedPtr<FJsonObject>>> Items=MakeShared<TMap<TSharedPtr<FString>,TSharedPtr<FJsonObject>>>();ComboItems=Items;
+    Add(SAssignNew(Combo,SSearchableComboBox).OptionsSource(Options.Get()).MaxListHeight(420).SearchVisibility(EVisibility::Visible).bAlwaysSelectItem(true)
+        .OnGenerateWidget_Lambda([Self,Options,Items](TSharedPtr<FString> O)->TSharedRef<SWidget>
         {
-            if(!Self.IsValid())return Label(TEXT("Unavailable"));
-            return Self->MakeCatalogRow(O);
+            if(!Self.IsValid())return PaperdollLabel(TEXT("Unavailable"));
+            return Self->MakeCatalogRow(Items->FindRef(O));
         })
-        .OnSelectionChanged_Lambda([Self](TSharedPtr<FJsonObject> O,ESelectInfo::Type){if(Self.IsValid())Self->SelectCatalogItem(O);})
+        .OnSelectionChanged_Lambda([Self,Items](TSharedPtr<FString> O,ESelectInfo::Type Info)
+            {if(Self.IsValid()&&Info!=ESelectInfo::OnNavigation)Self->SelectCatalogItem(Items->FindRef(O));})
         [SNew(SHorizontalBox)+SHorizontalBox::Slot().AutoWidth().Padding(4)[MakeCatalogIcon(SelectedItem,48)]
             +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(STextBlock).AutoWrapText(true).Text_Lambda([Self](){if(!Self.IsValid())return FText();auto* Selected=Self->SlotSelections.Find(Self->SelectedSlot);
-            return FText::FromString(Selected?Text(*Selected,TEXT("name")):Self->SlotOptions.IsEmpty()?TEXT("No local candidates for this slot"):TEXT("Choose an appearance..."));})]]);
+            return FText::FromString(Selected?Text(*Selected,TEXT("name")):Self->SlotOptions.IsEmpty()?TEXT("No local candidates for this slot"):TEXT("Choose an item - type to search..."));})]]);
     ItemCombo=Combo;SelectSlot(SelectedSlot);
+    Add(SNew(SCheckBox).IsChecked_Lambda([Self](){return Self.IsValid()&&Self->bShowModelVariants?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+        .OnCheckStateChanged_Lambda([Self](ECheckBoxState State){if(Self.IsValid()){Self->bShowModelVariants=State==ECheckBoxState::Checked;Self->SelectSlot(Self->SelectedSlot);}})
+        [PaperdollLabel(TEXT("Include unnamed model variants"))]);
     Add(SNew(STextBlock).AutoWrapText(true).Text_Lambda([Self](){if(!Self.IsValid())return FText();auto* Selected=Self->SlotSelections.Find(Self->SelectedSlot);
         if(Selected)return FText::FromString(Self->SourceLabel+TEXT(" ")+Text(*Selected,TEXT("sourceSlot"))+TEXT(" → AC ")+SlotName(Self->SelectedSlot)+TEXT("\n")+Text(*Selected,TEXT("reason")));
         return FText::FromString(Self->SelectedSlot==TEXT("weapon")||Self->SelectedSlot==TEXT("offhand")?TEXT("Weapons, wands and unusual held objects can use an AC hand attachment. Equip the matching AC item; use Fit to adjust orientation."):
             Self->IsBodySlot(Self->SelectedSlot)?TEXT("Armor follows your animated body and replaces covered AC clothing. Use Fit to adjust placement."):TEXT("This slot needs a skinned clothing adapter. Only successfully converted appearances are listed."));}));
+    Add(Button(TEXT("Prepare model preview"),TEXT("preview")));
     Add(SNew(SButton).ContentPadding(10).IsEnabled_Lambda([Self](){if(!Self.IsValid()||Self->ToolProcess.IsValid())return false;
         return true;})
-        .OnClicked_Lambda([Self](){if(Self.IsValid())Self->QueueRequest(TEXT("apply-outfit"));return FReply::Handled();})[Label(TEXT("Apply outfit"))]);
+        .OnClicked_Lambda([Self](){if(Self.IsValid())Self->QueueRequest(TEXT("apply-outfit"));return FReply::Handled();})[PaperdollLabel(TEXT("Apply outfit"))]);
     Add(SNew(SButton).ContentPadding(6).IsEnabled_Lambda([Self](){return Self.IsValid()&&!Self->ToolProcess.IsValid()&&(Self->SelectedSlot==TEXT("weapon")||Self->SelectedSlot==TEXT("offhand")||Self->IsBodySlot(Self->SelectedSlot));})
-        .OnClicked_Lambda([Self](){if(Self.IsValid()){Self->SlotSelections.Remove(Self->SelectedSlot);Self->Tell(TEXT("Slot cleared from draft. Apply outfit to save your changes."));}return FReply::Handled();})[Label(TEXT("Clear selected slot from draft"))]);
+        .OnClicked_Lambda([Self](){if(Self.IsValid()){Self->SlotSelections.Remove(Self->SelectedSlot);Self->Tell(TEXT("Slot cleared from draft. Apply outfit to save your changes."));}return FReply::Handled();})[PaperdollLabel(TEXT("Clear selected slot from draft"))]);
     auto FitBody=SNew(SVerticalBox);
-    FitBody->AddSlot().AutoHeight()[Label(TEXT("Adjust the selected slot only. Changes apply for this session; reloading restores the converter's mount."))];
+    FitBody->AddSlot().AutoHeight()[PaperdollLabel(TEXT("Adjust the selected slot only. Changes apply for this session; reloading restores the converter's mount."))];
     const TCHAR* FitNames[]={TEXT("X (cm)"),TEXT("Y (cm)"),TEXT("Z (cm)"),TEXT("Pitch"),TEXT("Yaw"),TEXT("Roll"),TEXT("Scale")};
     for(int32 I=0;I<7;++I)
         FitBody->AddSlot().AutoHeight().Padding(2)[SNew(SHorizontalBox)
-            +SHorizontalBox::Slot().FillWidth(1)[Label(FitNames[I])]
+            +SHorizontalBox::Slot().FillWidth(1)[PaperdollLabel(FitNames[I])]
             +SHorizontalBox::Slot().FillWidth(1)[SNew(SNumericEntryBox<float>).MinValue(I==6?.01f:-500.f).MaxValue(I==6?10.f:500.f)
                 .IsEnabled_Lambda([Self](){return Self.IsValid()&&Self->RendererForSlot(Self->SelectedSlot)!=nullptr;})
                 .Value_Lambda([Self,I]()->TOptional<float>{if(!Self.IsValid())return {};auto* R=Self->RendererForSlot(Self->SelectedSlot);if(!R)return {};
@@ -219,19 +251,19 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakePaperdollPanel()
                 .OnValueCommitted_Lambda([Self,I](float V,ETextCommit::Type){if(!Self.IsValid()||!FMath::IsFinite(V))return;auto* R=Self->RendererForSlot(Self->SelectedSlot);if(!R)return;
                     FVector P=R->Fit.GetLocation();FRotator Q=R->Fit.Rotator();float S=R->Fit.GetScale3D().X;V=FMath::Clamp(V,I==6?.01f:-500.f,I==6?10.f:500.f);
                     if(I<3)P[I]=V;else if(I==3)Q.Pitch=V;else if(I==4)Q.Yaw=V;else if(I==5)Q.Roll=V;else S=V;R->SetFit(P,Q,S);})]];
-    Add(SNew(SExpandableArea).InitiallyCollapsed(true).HeaderContent()[Label(TEXT("Fit selected appearance"))].BodyContent()[FitBody]);
+    Add(SNew(SExpandableArea).InitiallyCollapsed(true).HeaderContent()[PaperdollLabel(TEXT("Fit selected appearance"))].BodyContent()[FitBody]);
     Add(SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1)[Button(TEXT("Discard changes / reload saved outfit"),TEXT("reload"))]
         +SHorizontalBox::Slot().FillWidth(1).Padding(4,0)[Button(TEXT("Restore AC appearance / cancel"),TEXT("off"))]);
     Add(SNew(STextBlock).AutoWrapText(true).Text_Lambda([Self](){return FText::FromString(Self.IsValid()?Self->CatalogStatus:FString());}));
     auto Advanced=SNew(SVerticalBox);
     for(const auto& Field:Fields)
     {
-        const FString Key=Text(Field,TEXT("key"));Advanced->AddSlot().AutoHeight().Padding(2)[Label(Text(Field,TEXT("label"),Key))];
+        const FString Key=Text(Field,TEXT("key"));Advanced->AddSlot().AutoHeight().Padding(2)[PaperdollLabel(Text(Field,TEXT("label"),Key))];
         Advanced->AddSlot().AutoHeight().Padding(2)[SNew(SEditableTextBox).Text_Lambda([Self,Key](){return FText::FromString(Self.IsValid()?Self->Inputs.FindRef(Key):FString());})
             .OnTextChanged_Lambda([Self,Key](const FText& V){if(Self.IsValid())Self->Inputs[Key]=V.ToString();})];
     }
     Advanced->AddSlot().AutoHeight().Padding(4)[SNew(SButton).IsEnabled_Lambda([Self](){return Self.IsValid()&&!Self->ToolProcess.IsValid();})
-        .OnClicked_Lambda([Self](){if(Self.IsValid()){Self->SlotSelections.Remove(Self->SelectedSlot);Self->QueueRequest(TEXT("convert"));}return FReply::Handled();})[Label(TEXT("Convert manual FileDataIDs"))]];
-    Add(SNew(SExpandableArea).InitiallyCollapsed(true).HeaderContent()[Label(TEXT("Advanced local source / manual conversion"))].BodyContent()[Advanced]);
+        .OnClicked_Lambda([Self](){if(Self.IsValid()){Self->SlotSelections.Remove(Self->SelectedSlot);Self->QueueRequest(TEXT("convert"));}return FReply::Handled();})[PaperdollLabel(TEXT("Convert manual FileDataIDs"))]];
+    Add(SNew(SExpandableArea).InitiallyCollapsed(true).HeaderContent()[PaperdollLabel(TEXT("Advanced local source / manual conversion"))].BodyContent()[Advanced]);
     return Body;
 }

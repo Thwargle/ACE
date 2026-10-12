@@ -4,6 +4,7 @@ local pending,queue,split,baseline=nil,nil,nil,nil
 local scans={}
 local completed,total,next_at,cycle,stage=0,0,0,0,'open'
 local operations=0
+local give_retry,give_retries=nil,0
 local received={}
 local refresh_at=0
 local chest_scan=1
@@ -29,9 +30,14 @@ local function usable(i) return i and i.transferable==true end
 local function issue(s,p,action,item,amount,target,kind)
  pending={kind=kind or action,id=item and item.id,amount=amount or 1,before=item and item.count or 0,
   name=item and item.name,wcid=item and item.wcid,serial=s.action_serial or 0,deadline=s.time+20,
+  failure_serial=s.it_failure_serial or 0,
   target=target,currency=s.it_currency or 0,
   funding=action=='it_sell' and (p.mode=='restock' or (p.mode=='shop' and (p.buy_name or '')~='')),
   owned=item and count(s.inventory,item.name,item.wcid) or 0}
+ if action=='it_give' then
+  local recipient=find(s.it_objects,target)
+  pending.recipient_name=recipient and recipient.name
+ end
  local r=status((action=='it_give' and 'Giving ' or action=='it_buy' and 'Buying ' or action=='it_sell' and 'Selling ' or action=='it_pickup' and 'Taking ' or action=='it_split' and 'Splitting ' or action=='it_key' and 'Unlocking with ' or 'Opening ')..(item and item.name or 'chest'),action)
  r.item=item and item.id;r.amount=amount;r.target=target;r.vendor=s.vendor;r.delay_ms=p.delay_ms or 250
  return r
@@ -101,7 +107,11 @@ return function(s,p)
  if not baseline then baseline={};for _,i in ipairs(inv) do baseline[i.id]=i.count or 1 end end
  if pending then
   local q=pending;local i=find(inv,q.id);local done=false
-  if q.kind=='it_give' or q.kind=='it_sell' then done=not i or (i.count or 1)<=q.before-q.amount
+  local given=math.min(q.amount,math.max(0,q.before-(i and (i.count or 1) or 0)))
+  -- Quest NPCs can consume one unit even when offered a whole stack.
+  -- Confirm only the amount actually removed; keep its remainder queued.
+  if q.kind=='it_give' then done=given>0
+  elseif q.kind=='it_sell' then done=not i or (i.count or 1)<=q.before-q.amount
   elseif q.kind=='it_buy' or q.kind=='it_pickup' then done=count(inv,q.name,q.wcid)>=q.owned+q.amount
   elseif q.kind=='it_split' then
    for _,v in ipairs(inv) do if not split.known[v.id] and v.name==split.name and v.wcid==split.wcid and v.count==split.amount then
@@ -118,7 +128,14 @@ return function(s,p)
   if done then
    operations=operations+1
    if q.kind=='it_key' then identified[q.target]=nil;refresh_at=s.time+2;if stage=='opener' then cycle=cycle+1 end end
-   if q.kind=='it_give' then completed=completed+q.amount;if queue then table.remove(queue,1) end end
+   if q.kind=='it_give' then
+    completed=completed+given;give_retries=0
+    if queue and queue[1] and queue[1].id==q.id then
+     queue[1].count=queue[1].count-given
+     if not i or queue[1].count<=0 then table.remove(queue,1) end
+    end
+    if received[q.id] then received[q.id]=math.max(0,received[q.id]-given) end
+   end
    if q.kind=='it_buy' then completed=completed+q.amount end
    if q.kind=='it_pickup' then
     -- Only units received by this run may be sent to mules, including merges.
@@ -129,11 +146,29 @@ return function(s,p)
     end end
    end
    pending=nil;next_at=s.time+math.max(0,math.min(5000,p.delay_ms or 250))/1000
+  elseif (s.it_failure_serial or 0)~=q.failure_serial and s.it_failure_item==q.id then
+   local err=s.it_failure_error or 0
+   -- ACE sends an item-specific rejection (often error 0) while an NPC
+   -- finishes its reward emotes, without a UseDone. Retry only explicit
+   -- rejections, never a timed-out/ambiguous transfer.
+   if q.kind~='it_give' or (err~=0 and err~=0x1d and err~=0x1e and err~=0x4ce) then
+    return stop('Server rejected '..q.kind:sub(4)..'; remaining items were not sent.')
+   end
+   give_retries=give_retries+1
+   if give_retries>6 then return stop('Recipient repeatedly rejected the gift. Remaining items are still in your packs.') end
+   pending=nil;give_retry=q;next_at=s.time+math.max(math.min(3,give_retries),math.min(5000,p.delay_ms or 250)/1000)
+   return status('Gift rejected; waiting to retry '..q.name..' ('..give_retries..'/6)')
   elseif (s.action_serial or 0)~=q.serial and (s.action_error or 0)~=0 then return stop('Server rejected '..q.kind:sub(4)..'; remaining items were not sent.')
   elseif s.time>=q.deadline then return stop('Transfer was not confirmed. Check recipient, range and space before restarting.')
   else return status('Waiting for confirmation: '..(q.name or 'chest')) end
  end
- if s.time<next_at or s.ready==false or s.busy or s.portal_space then return status('Waiting for game action') end
+ if s.time<next_at or s.ready==false or s.busy or s.portal_space then return status(give_retry and 'Waiting to retry gift: '..give_retry.name or 'Waiting for game action') end
+ if give_retry then
+  local q=give_retry;local item=find(inv,q.id);local recipient=find(s.it_objects,q.target)
+  if not usable(item) or item.name~=q.name or item.wcid~=q.wcid or item.count~=q.before then return stop('Item changed during gift retry; review inventory before restarting.') end
+  if not recipient or not recipient.recipient or recipient.name~=q.recipient_name or recipient.distance>5 or (recipient.player and item.bonded) then return stop('Recipient changed or moved away; remaining items are still in your packs.') end
+  give_retry=nil;return issue(s,p,'it_give',item,q.amount,q.target)
+ end
  if split and split.id then local i=find(inv,split.id);split=nil;if not usable(i) then return stop('Split item changed; sale cancelled.') end;return issue(s,p,'it_sell',i,i.count,s.vendor) end
  local mode=p.mode or 'give'
  if mode=='give' or mode=='profile' then
@@ -237,7 +272,7 @@ return function(s,p)
       local rule=evaluate(s,p[key..'_rules'] or {},item,key)
       if rule=='pending' then return status('Checking '..key..' profile') end
       if rule=='identify' then return assess(s,item) end
-      if keeps(rule) and (rule.keep_up_to or 0)==0 then local amount=math.min(received[item.id],item.count);received[item.id]=0;mule_scan[key]=1;return issue(s,p,'it_give',item,amount,target) end
+      if keeps(rule) and (rule.keep_up_to or 0)==0 then local amount=math.min(received[item.id],item.count);mule_scan[key]=1;return issue(s,p,'it_give',item,amount,target) end
      end end
     end
    end

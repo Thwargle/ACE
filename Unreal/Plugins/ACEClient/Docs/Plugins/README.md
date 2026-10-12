@@ -1,4 +1,4 @@
-# Client plugins â€” API 1 (preview)
+# Client plugins - API 2
 
 AC:Unreal hosts portable Lua plugins. The same source and native management panel
 are used on Windows, Linux, PC VR and standalone Quest. This is a new API, not a
@@ -15,8 +15,8 @@ world/dungeon map, with optional GoArrow atlas import. See [Waypoint](Waypoint.m
 for controls, data sources and the UtilityBelt compatibility findings. This visual
 plugin requires no Start action or game-action permissions.
 
-Open **Plugins** on the login screen, **Game Play â†’ Manage Plugins** in desktop
-options, **More â†’ Manage Plugins** in VR, or type `/plugins`. Each plugin shows its
+Open **Plugins** on the login screen, **Game Play → Manage Plugins** in desktop
+options, **More → Manage Plugins** in VR, or type `/plugins`. Each plugin shows its
 version, requested actions, status, and profile controls. Enable grants its listed
 capabilities. Gameplay automation uses a separate Start action after entering the
 world. Local cosmetic services start when enabled and can run at the login screen.
@@ -46,9 +46,21 @@ navigation, recovery, buff others, vendors, metas, and peace when idle) remain
 specific to each run setup.
 
 Each editing tab identifies its active shared file. Edits save to that file and
-affect every setup referencing it. **Save copy** creates and selects a separate
-file without overwriting an existing one; use it before making a variation.
-**Save setup as** keeps the same linked files under a new setup name. Choosing a
+affect every setup referencing it. **New** creates and selects a separate
+profile with default settings; a new route has no waypoints. **Delete** asks for
+confirmation, switches setups referencing that file to **Default**, and archives
+the removed file in `Profiles/Deleted`. Default profiles cannot be deleted.
+**New setup** uses the entered name and links all six sections to Default.
+**Save current setup** saves the active setup and its selected profiles without
+renaming it. The Profiles tab provides selectors for quickly changing that
+combination; creation and deletion live in the individual editing tabs.
+**Import vTank file** lists `.nav` and `.utl` files in the configured import folder.
+Import creates a separate Route or Loot profile with the file's name (with a
+numbered suffix for collisions), selects it, and keeps the setup name and source
+file unchanged. Use **Refresh folder** after adding files.
+Protections and Banes are in **Buffs** and save in Character. **Monsters** replaces
+Rules; **Add selected monster** starts an editable rule with automatic defaults.
+Sections can be collapsed, and the floating log opens from **Log**. Choosing a
 profile stops the current run. **Start** and **Reload linked profiles** read the
 current files from disk; editing JSON externally requires a reload before running.
 A stale edit that conflicts with a newer shared file is rejected rather than
@@ -94,17 +106,17 @@ or `/ucm stop` to stop automation. The `+` button opens plugin management.
 Drag the bar or a window by its title strip. Positions are saved locally and
 clamped to the viewport when the window size changes. The bar and its windows
 hide with the desktop interface (Alt+Z by default) and are removed on logout.
-Disabled plugins are removed from the bar. In VR, use More â†’ Manage Plugins.
+Disabled plugins are removed from the bar. In VR, use More → Manage Plugins.
 
 UCM is **Unattended Combat Manager**. The 0.7 interface has Overview, Buffs, Buff others,
 Combat, Recovery, Route, Loot, Rules, Metas and Profiles pages. Desktop plugin
 windows can be resized using the lower-right grip; position and size are saved.
-In VR, More â†’ Manage Plugins opens UCM directly, with a separate management button.
+In VR, More → Manage Plugins opens UCM directly, with a separate management button.
 
 ### Display and controls
 
 **UCM Log** is a separate movable, resizable desktop window. Open it with the
-**LOG** button on the plugin bar, **Open UCM Log** in Overview or UCM Micro, or
+**LOG** button on the plugin bar, **Open UCM Log** in UCM Micro, or
 `/ucm log`. The **Log** page inside UCM also works in VR. Closing the log does not
 stop UCM or recording. Window position and size are saved.
 
@@ -280,6 +292,14 @@ route leads around obstructions. Combat settings separate target acquisition,
 missile/spell firing distance and melee approach distance. Monster Rules can
 override attack distance (0 uses Combat settings). Sight is rechecked before
 each attack or offensive cast, using scaled setup heights for the target.
+Enable **Pursue targets outside attack range**, beside the acquisition slider,
+to leave the route for a visible monster and return after combat. Acquisition
+selects the monster immediately, before entering firing range. A positive
+acquisition distance is the search limit even when firing distance is larger;
+imported VT `ApproachDistance=0` retains stationary attack-radius selection.
+The Combat page shows the live effective search distance and target, including
+when pursuit is disabled or route priority prevents chasing. This also exposes
+range overrides from a meta or activity state.
 
 **Peace mode when idle** (Overview or Combat, off by default) switches to peace
 when no eligible combat target is nearby, including during route following.
@@ -446,6 +466,23 @@ modify UCM independently, copy its three files into a user plugin with a new ID.
 Press Reload installed plugins after editing source. A malformed manifest is
 skipped with a visible diagnostic. Invalid scripts stop only their own instance.
 
+## Public plugin API 2
+
+[Public API 2](PublicAPI.md) exposes the UCM/native gameplay pipeline under any
+plugin ID, optional reuse of the stock UCM/Item Tools policies, full snapshots,
+profile/import services, native tabs/sections/editable controls, DAT icons and
+bundled PNG artwork. The [API Workbench example](Examples/api_workbench/main.lua)
+shows a custom automation interface. API 1 plugins remain supported.
+
+## Companion plugins
+
+For kill trackers, Vsense-style target lists and helpers running beside UCM, use
+`mode: companion`. The [companion API guide](Companions.md) covers chat events,
+character-specific saved state, interactive rows, world/Waypoint map markers,
+NAV targets, local messages and native command bridges, with installable examples.
+API 2 adds declarative native widgets and bounded bundled PNG loading; arbitrary
+widget code remains outside the Lua sandbox.
+
 ## Minimal plugin
 
 `plugin.json`:
@@ -453,6 +490,7 @@ skipped with a visible diagnostic. Invalid scripts stop only their own instance.
 ```json
 {
   "api": 1,
+  "mode": "companion",
   "id": "vital_monitor",
   "name": "Vital Monitor",
   "short_name": "VIT",
@@ -477,9 +515,10 @@ return function(snapshot, profile)
 end
 ```
 
-Callbacks run at most twice per second on the game thread, only while running.
+Companion callbacks run at most twice per second on the game thread, only while running.
 They receive fresh data tables; mutating those tables does not modify game state
-or the saved profile. Return `nil` or one flat intent table. Local variables outside
+or the saved profile. Return `nil` or one intent table (the companion extension also
+accepts the structured fields documented in its guide). Local variables outside
 the function retain state until Stop. UCM metas can resume after an explicit Stop
 or a manual-movement pause: variables, the call stack and fired rules survive,
 ordinary state timers restart, and persistent timers include paused time. Changing
@@ -517,7 +556,7 @@ return {action="stop", status="Finished"} -- always permitted
 The host revalidates known spells and normal spell targeting. VR automation sends
 the same ordinary cast request as desktop, rather than merely selecting a VR spell.
 Attack validates the requested eligible monster and uses the existing melee/missile requests.
-Power is clamped to 0â€“1 and attack height to 1â€“3. Host throttles cast/attack requests
+Power is clamped to 0–1 and attack height to 1–3. Host throttles cast/attack requests
 to at most one per 3.5 seconds and route intents to at most two per second. Inspect
 `ready` before advancing action-specific state. These intervals are conservative;
 the server still controls cast success, range, components, equipment and attack
@@ -534,8 +573,9 @@ Manifest `settings` entries specify `key`, `label`, and `type`:
 Values are persisted in the profile. The same controls render in desktop and VR.
 The optional `tools` list can contain `spells` and `route`, adding the shared spell
 family/attack-spell chooser and waypoint recorder. The advanced JSON editor exposes
-other profile structures. Arbitrary widget code, texture loading, chat hooks,
-inter-plugin messaging and arbitrary custom widget code are not part of API 1 yet.
+other profile structures. API 2 adds native interactive widgets and bundled image
+loading; companion APIs supply chat events, persistent state and local messaging.
+Arbitrary native widget code remains outside the Lua sandbox.
 
 ## UCM state rules (metas)
 

@@ -46,6 +46,57 @@ bool FACEItemToolsTest::RunTest(const FString&)
         TestTrue(TEXT("Unconfirmed transfer stops without giving again"),ACEItemTools::String(Step(VM,S,P),TEXT("status")).Contains(TEXT("not confirmed")));
     }
     {
+        // ACE quest NPCs consume one unit per give, regardless of offered amount.
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetNumberField(TEXT("give_limit"),5);
+        S->GetArrayField(TEXT("it_objects"))[0]->AsObject()->SetBoolField(TEXT("player"),false);
+        auto I=Step(VM,S,P);auto Inv=S->GetArrayField(TEXT("inventory"));
+        for(int32 Given=1;Given<=5;++Given)
+        {
+            TestEqual(TEXT("Quest transfer is requested"),Action(I),FString(TEXT("it_give")));
+            auto Item=Inv[0]->AsObject();const int32 Left=int32(Item->GetNumberField(TEXT("count")))-1;
+            if(Left)Item->SetNumberField(TEXT("count"),Left);else Inv.RemoveAt(0);
+            S->SetArrayField(TEXT("inventory"),Inv);I=Step(VM,S,P);
+            TestEqual(TEXT("Counts only accepted quest units"),I->GetNumberField(TEXT("completed")),double(Given));
+            if(Given==1)TestEqual(TEXT("Remaining units in same stack stay queued"),I->GetNumberField(TEXT("item")),10.);
+            if(Given==3)TestEqual(TEXT("Continues into next pack stack"),I->GetNumberField(TEXT("item")),11.);
+        }
+        TestEqual(TEXT("Quest giving respects total limit"),Action(I),FString(TEXT("stop")));
+        TestEqual(TEXT("Does not consume beyond limit"),Inv[0]->AsObject()->GetNumberField(TEXT("count")),2.);
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();Step(VM,S,P);
+        S->SetNumberField(TEXT("it_failure_serial"),1);S->SetNumberField(TEXT("it_failure_item"),99);
+        TestFalse(TEXT("Unrelated item rejection cannot resend a pending gift"),Step(VM,S,P)->HasField(TEXT("action")));
+        for(int32 Attempt=1;Attempt<=7;++Attempt)
+        {
+            S->SetNumberField(TEXT("it_failure_serial"),Attempt+1);S->SetNumberField(TEXT("it_failure_item"),10);
+            auto I=Step(VM,S,P);
+            TestEqual(TEXT("Rejections never count as gifts"),I->GetNumberField(TEXT("completed")),0.);
+            if(Attempt==7)TestEqual(TEXT("Repeated rejections stop after six retries"),Action(I),FString(TEXT("stop")));
+            else
+            {
+                TestFalse(TEXT("Explicit rejection backs off before retry"),I->HasField(TEXT("action")));
+                TestFalse(TEXT("Same rejection cannot cause an immediate retry"),Step(VM,S,P)->HasField(TEXT("action")));
+                S->SetNumberField(TEXT("time"),100+Attempt*4);I=Step(VM,S,P);
+                TestEqual(TEXT("Retries explicitly rejected gift"),Action(I),FString(TEXT("it_give")));
+                TestEqual(TEXT("Retries same queued stack"),I->GetNumberField(TEXT("item")),10.);
+                TestFalse(TEXT("Old rejection cannot reject new attempt"),Step(VM,S,P)->HasField(TEXT("action")));
+            }
+        }
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();Step(VM,S,P);
+        S->SetNumberField(TEXT("it_failure_serial"),1);S->SetNumberField(TEXT("it_failure_item"),10);
+        Step(VM,S,P);S->SetNumberField(TEXT("time"),104);
+        S->GetArrayField(TEXT("it_objects"))[0]->AsObject()->SetNumberField(TEXT("distance"),8);
+        TestEqual(TEXT("Recipient moving away cancels rejected-gift retry"),Action(Step(VM,S,P)),FString(TEXT("stop")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();Step(VM,S,P);
+        S->SetNumberField(TEXT("it_failure_serial"),1);S->SetNumberField(TEXT("it_failure_item"),10);S->SetNumberField(TEXT("it_failure_error"),42);
+        TestTrue(TEXT("Known terminal inventory failure does not retry"),ACEItemTools::String(Step(VM,S,P),TEXT("status")).Contains(TEXT("Server rejected")));
+    }
+    {
         FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();Step(VM,S,P);S->SetNumberField(TEXT("action_serial"),1);S->SetNumberField(TEXT("action_error"),42);
         TestTrue(TEXT("Server rejection is reported"),ACEItemTools::String(Step(VM,S,P),TEXT("status")).Contains(TEXT("Server rejected")));
     }
@@ -135,6 +186,33 @@ bool FACEItemToolsTest::RunTest(const FString&)
         TestEqual(TEXT("Bonded item cannot be given to player"),CountAction(ACEGameAction::GiveObjectRequest),0);
         S.WorldObjects[20].bIsPlayer=false;H->ExecuteItemTools(*P,Give);
         TestEqual(TEXT("NPC turn-ins may use bonded quest items"),CountAction(ACEGameAction::GiveObjectRequest),1);
+        {
+            // Real server packet handlers -> native snapshot -> Lua. The busy
+            // reply contains no UseDone and must not mutate inventory.
+            FACEPluginVM VM;VM.Load(Source,Error);auto Settings=Profile();Settings->SetNumberField(TEXT("give_limit"),3);
+            auto Snap=[&](double Time){auto J=H->ItemToolsSnapshot();J->SetNumberField(TEXT("time"),Time);J->SetBoolField(TEXT("ready"),true);return J;};
+            auto I=Step(VM,Snap(100),Settings);TestEqual(TEXT("Native snapshot starts NPC give"),Action(I),FString(TEXT("it_give")));
+            FACEBinaryWriter Failure;Failure.WriteUInt32(10);Failure.WriteUInt32(0);FACEBinaryReader Failed(Failure.GetData());S.HandleInventoryServerSaveFailed(Failed);
+            TestEqual(TEXT("Rejected gift preserves inventory stack"),S.WorldObjects[10].StackSize,3);
+            I=Step(VM,Snap(100),Settings);TestTrue(TEXT("Real inventory rejection schedules retry"),ACEItemTools::String(I,TEXT("status")).Contains(TEXT("retry")));
+            I=Step(VM,Snap(101),Settings);TestEqual(TEXT("Real rejection resumes same gift"),Action(I),FString(TEXT("it_give")));
+            for(int32 Left=2;Left>=0;--Left)
+            {
+                if(Left)
+                {
+                    FACEBinaryWriter Count;Count.WriteUInt8(uint8(3-Left));Count.WriteUInt32(10);Count.WriteUInt32(Left);Count.WriteUInt32(0);
+                    FACEBinaryReader Update(Count.GetData());S.HandleSetStackSize(Update);
+                }
+                else
+                {
+                    FACEBinaryWriter Remove;Remove.WriteUInt32(10);FACEBinaryReader Update(Remove.GetData());S.HandleInventoryRemoveObject(Update);
+                }
+                I=Step(VM,Snap(102+3-Left),Settings);
+                TestEqual(TEXT("Replicated inventory change confirms actual units"),I->GetNumberField(TEXT("completed")),double(3-Left));
+                TestEqual(TEXT("Partial stack continues until exhausted"),Action(I),FString(Left?TEXT("it_give"):TEXT("stop")));
+            }
+            S.WorldObjects.Add(Item.Guid,Item);
+        }
         S.CachedC2SPackets.Reset();S.WorldObjects[10].Bonded=0;S.WorldObjects[10].ObjectDescriptionFlags=ACEObjectDescFlag::Retained;H->ExecuteItemTools(*P,Give);
         TestEqual(TEXT("Retained items are rechecked before sending"),CountAction(ACEGameAction::GiveObjectRequest),0);S.WorldObjects[10].ObjectDescriptionFlags=0;
         FACEWorldObject Pack;Pack.Guid=50;Pack.ContainerId=Self.Guid;Pack.ItemType=ACEItemType::Container;Pack.ItemsCapacity=1;S.WorldObjects.Add(Pack.Guid,Pack);

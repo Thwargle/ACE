@@ -1,0 +1,5 @@
+{
+  "monster": "Red Rat",
+  "npc": "Collector",
+  "pattern": "You have killed ([0-9]+) of ([0-9]+)"
+}

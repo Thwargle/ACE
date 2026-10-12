@@ -16,6 +16,8 @@ J VTCommand(const FString& Source,TArray<FString>& Issues)
     TArray<FString> Words;Command.ParseIntoArrayWS(Words);const FString Lower=Command.ToLower();
     if(Command.Len()>1024){Issues.Add(TEXT("Command exceeds 1024 characters"));return Out;}
     if(Command.IsEmpty()){Out->SetStringField(TEXT("op"),TEXT("noop"));return Out;}
+    if(Lower.StartsWith(TEXT("/plugin "))&&Words.Num()>=2&&Command.Len()<=520&&!Command.Contains(TEXT("\n"))&&!Command.Contains(TEXT("\r")))
+    {Out->SetStringField(TEXT("op"),TEXT("plugin"));Out->SetStringField(TEXT("text"),Command.Mid(8));return Out;}
     if(Lower==TEXT("/ucm tapjump")){Out->SetStringField(TEXT("op"),TEXT("jump"));Out->SetNumberField(TEXT("charge"),.1);return Out;}
     if(Lower==TEXT("/ucm reverseroute")||Lower==TEXT("/ucm reverseroutequery"))
     {Out->SetStringField(TEXT("op"),Lower.EndsWith(TEXT("query"))?TEXT("reverse_query"):TEXT("reverse_route"));return Out;}

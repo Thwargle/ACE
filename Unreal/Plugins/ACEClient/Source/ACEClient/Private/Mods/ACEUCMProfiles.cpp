@@ -218,4 +218,45 @@ bool SaveSectionAs(const FString& Root, const FString& Section, const FString& N
     { Error = TEXT("Profile already exists or could not be created. Choose a new name; edits save to the active profile."); return false; }
     return true;
 }
+bool EnsureDefaults(const FString& Root, const TSharedPtr<FJsonObject>& Defaults, FString& Error)
+{
+    if (!Defaults) { Error = TEXT("Cannot read bundled UCM defaults"); return false; }
+    for (const auto& Section : Sections())
+    {
+        if (IFileManager::Get().FileExists(*Path(Root, Section, TEXT("Default"))))
+        { if (!ReadSection(Root, Section, TEXT("Default"), Error)) return false; }
+        else if (!SaveSectionAs(Root, Section, TEXT("Default"), Defaults, Error)) return false;
+    }
+    return true;
+}
+bool DeleteSection(const FString& Root, const FString& Section, const FString& Name, FString& Error)
+{
+    if (!Sections().Contains(Section) || !SafeName(Name) || Name.Equals(TEXT("Default"), ESearchCase::IgnoreCase))
+    { Error = TEXT("The Default profile cannot be deleted. Choose a named profile."); return false; }
+    if (!ReadSection(Root, Section, TEXT("Default"), Error) || !ReadSection(Root, Section, Name, Error)) return false;
+    TMap<FString, TSharedPtr<FJsonObject>> Before, After;
+    for (const auto& Setup : List(Root, TEXT("ucm")))
+    {
+        const FString File = Path(Root, TEXT("ucm"), Setup); auto Manifest = Read(File);
+        if (!Manifest) { Error = TEXT("Cannot inspect setup before deleting shared profile: ") + Setup; return false; }
+        const TSharedPtr<FJsonObject>* Refs = nullptr;
+        if (!Manifest->HasField(TEXT("profile_refs"))) continue; // Legacy setup embeds its own data.
+        if (!Manifest->TryGetObjectField(TEXT("profile_refs"), Refs)) { Error = TEXT("Invalid setup: ") + Setup; return false; }
+        FString Linked; if (!(*Refs)->TryGetStringField(Section, Linked) || !Linked.Equals(Name, ESearchCase::IgnoreCase)) continue;
+        Before.Add(File, Manifest); auto Updated = Copy(Manifest);
+        Updated->GetObjectField(TEXT("profile_refs"))->SetStringField(Section, TEXT("Default")); After.Add(File, Updated);
+    }
+    TArray<FString> Applied;
+    auto Rollback = [&]() { for (const auto& File : Applied) Write(File, Before[File]); };
+    for (const auto& Entry : After)
+    {
+        if (!Write(Entry.Key, Entry.Value)) { Rollback(); Error = TEXT("Could not update linked setups; profile retained."); return false; }
+        Applied.Add(Entry.Key);
+    }
+    const FString Backup = Path(Root, TEXT("Deleted") / Section, Name + TEXT("_") + FGuid::NewGuid().ToString(EGuidFormats::Digits));
+    IFileManager::Get().MakeDirectory(*FPaths::GetPath(Backup), true);
+    if (!IFileManager::Get().Move(*Backup, *Path(Root, Section, Name), false, false))
+    { Rollback(); Error = TEXT("Could not archive deleted profile; linked setups were restored."); return false; }
+    return true;
+}
 }

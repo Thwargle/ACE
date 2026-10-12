@@ -165,6 +165,7 @@ def build_linux_archive(root, linux, release, version, display_version):
 
 
 def build_release(root, args):
+    api = json.loads((root / 'Unreal/Plugins/ACEClient/ClientMods/api.json').read_text(encoding='utf-8-sig'))
     quest = root / 'Quest'
     windows = root / 'Unreal/Saved/VRWindowsArchive/Windows'
     linux = root / 'Unreal/Saved/LinuxArchive/Linux'
@@ -244,7 +245,8 @@ def build_release(root, args):
         'createdUtc': datetime.now(timezone.utc).isoformat(), 'questVersion': manifest['version'],
         'questVersionCode': version, 'installerRevision': args.installer_revision,
         'windowsVersion': args.windows_version, 'apkSha256': sha(apk), 'windowsExeSha256': sha(exe),
-        'clientPluginApis': {'lua': 1, 'localCosmetics': 1, 'localCosmeticsPlatforms': ['Win64']},
+        'clientPluginApis': {'lua': api['lua_api'], 'supportedLua': api['supported_lua_apis'],
+                             'localCosmetics': 1, 'localCosmeticsPlatforms': ['Win64']},
         'gameDataIncluded': False, 'serverIncluded': False, 'savedSettingsIncluded': False,
         'headsetAcceptance': 'See RELEASE-NOTES.md; packaging alone is not live acceptance.',
         'archives': [{'name': p.name, 'bytes': p.stat().st_size, 'sha256': sha(p)} for p in archives],

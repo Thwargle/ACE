@@ -1,0 +1,11 @@
+{
+  "api": 1,
+  "mode": "companion",
+  "id": "vsense_example",
+  "name": "Nearby Targets Example",
+  "short_name": "VS",
+  "version": "1.0.0",
+  "description": "Click a nearby object's name to select it in the game.",
+  "permissions": ["ui"],
+  "settings": [{"key": "filter", "type": "text", "label": "Name contains"}]
+}

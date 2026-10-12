@@ -15,6 +15,7 @@ class AACEPlayerController;
 class UGameViewportClient;
 struct FACEWaypointLandmark { FVector2D Coordinates; FString Name, Type; };
 struct FACEPluginRouteSegment { FVector Start,End; FLinearColor Color; float Thickness; };
+struct FACEPluginMarker { int32 Id=0; FString Shape; FLinearColor Color; bool World=true, Map=true; };
 
 struct FACEClientPlugin
 {
@@ -32,12 +33,25 @@ struct FACEClientPlugin
     bool Enabled = false;
     bool Running = false;
     bool LocalService = false, LocalServiceStopped = false;
+    bool Companion = false, CompanionStopped = false, StateDirty = false;
+    int32 Api = 1;
+    bool IsPolicy() const { return Id==TEXT("ucm") || (Api>=2 && !Companion && !LocalService); }
+    bool HasPresentation() const { return Companion || Api>=2; }
+    double NextService = 0;
+    TArray<TSharedPtr<FJsonValue>> LogEntries;
+    FString StatePath, CompanionError;
+    TSharedPtr<FJsonObject> SavedState;
+    TArray<TSharedPtr<FJsonValue>> PanelRows, PluginEvents;
+    TArray<FACEPluginMarker> Markers;
+    uint32 ChatCursor=0, PanelRevision=0;
+    double NextStateSave=0, NextCommand=0;
     bool CanResumeMeta = false, ResumeMetaPending = false;
     uint32 VMSourceHash = 0, VMProfileHash = 0;
     TWeakPtr<class FACESession> VMSession;
     double NextAction = 0;
     double NextDecision = 0;
     FString WaitAction;
+    FString TargetingStatus;
     int32 WaitItem = 0, WaitValue = 0;
     uint32 WaitSerial = 0;
     double ActionSentAt = 0;
@@ -52,6 +66,8 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
 {
     GENERATED_BODY()
     friend class FACEPluginHostTest;
+    friend class FACEPluginCompanionTest;
+    friend class FACEPluginPublicAPITest;
     friend class FACEPluginEquipmentTest;
     friend class FACEPluginRequestsTest;
     friend class FACERunSpeedParityTest;
@@ -59,6 +75,8 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEUCMRouteRejoinTest;
     friend class FACEUCMLogTest;
     friend class FACEItemToolsTest;
+    friend class FACEUCMProfileStorageTest;
+    friend class FACEUCMProfilePanelTest;
     friend class FACEPluginLocalServiceTest;
     friend class FACEPluginCosmeticsIntegrationTest;
     friend class FACEPluginCosmeticsTest;
@@ -69,6 +87,12 @@ public:
     TArray<TSharedPtr<FACEClientPlugin>> Plugins;
     FString Notice;
     bool Start(const FString& Id);
+    bool RunPluginCommand(const FString& Arguments);
+    bool ClickPluginRow(const FString& Id, const FString& RowId);
+    bool ChangePluginControl(const FString& Id, const FString& ControlId, const TSharedPtr<FJsonValue>& Value);
+    UFUNCTION() void ObservePluginChat(const FString& Text, const FString& Sender, int32 Type);
+    TSharedRef<SWidget> MakeCompanionPanel(const FString& Id);
+    TArray<FACEPluginMarker> GetPluginMarkers() const;
     void ToggleUCM();
     void StopAll(const FString& Reason, bool PreserveMeta = false);
     void Stop(const FString& Id, const FString& Reason = TEXT("Stopped"), bool PreserveMeta = false);
@@ -84,6 +108,10 @@ public:
     FString UCMSectionName(const FString& Section) const;
     bool SelectUCMSection(const FString& Section, const FString& Name);
     bool SaveUCMSectionAs(const FString& Section, const FString& Name);
+    bool NewUCMSection(const FString& Section, const FString& Name);
+    bool DeleteUCMSection(const FString& Section, const FString& Name);
+    bool NewUCMSetup(const FString& Name);
+    bool ImportUCMSection(const FString& Filename);
     TSharedPtr<FJsonObject> InspectLegacyProfile(const FString& Path);
     bool SaveLegacyLoot(const FString& Name,const TSharedPtr<FJsonObject>& Document);
     bool ImportLegacyProfile(const FString& Path,const FString& Name);
@@ -176,8 +204,37 @@ public:
     void ApplyMovement(AACEPlayerController* Controller, float& Forward, float& Right, float& Turn,
         bool Manual, bool Blocked, bool VR, const FVector& Facing, float MaxFrameTravel = 0.f);
 private:
+    TSharedPtr<FACEClientPlugin> PolicyPlugin() const;
+    bool ValidatePublicProfile(const TSharedPtr<FJsonObject>& Profile) const;
+    bool InitializePluginState(FACEClientPlugin& Plugin);
+    bool ApplyPluginServices(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Output, FString& Error);
+    bool ValidatePluginUI(const TArray<TSharedPtr<FJsonValue>>& Rows, FString& Error) const;
+    void QueuePluginEvent(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Event);
+    TSharedPtr<FJsonObject> PublicSnapshot(FACEClientPlugin& Plugin);
+    bool ApplyPublicOutput(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Output, FString& Error);
+    bool StartCompanion(FACEClientPlugin& Plugin);
+    void TickCompanions();
+    void UpdateCompanionChatContext();
+    TWeakPtr<class FACESession> PluginChatSession;
+    int32 PluginChatPlayer=0;
+    FString PluginChatServer;
+    TArray<TSharedPtr<FJsonValue>> PluginChatEvents;
+    uint32 PluginChatSerial=0;
+    void StopCompanion(FACEClientPlugin& Plugin, const FString& Reason);
+    void FlushPluginState(FACEClientPlugin& Plugin);
+    TSharedPtr<FJsonObject> CompanionSnapshot(FACEClientPlugin& Plugin);
+    bool ApplyCompanionOutput(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Output, FString& Error);
+    bool CompanionAction(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Action, FString& Error);
+    void DrawPluginMarkers();
+    TWeakPtr<class FACESession> CompanionSession;
+    int32 CompanionPlayer=0;
+    FString CompanionServer;
+    uint32 PluginEventSerial=0;
+    double NextPluginMarkerDraw=0;
+    UPROPERTY(Transient) TObjectPtr<class UProceduralMeshComponent> PluginMarkerMesh;
+    UPROPERTY(Transient) TObjectPtr<AActor> PluginMarkerActor;
     void UpdateItemToolsCharacter();
-    TSharedPtr<FJsonObject> ItemToolsSnapshot();
+    TSharedPtr<FJsonObject> ItemToolsSnapshot(FACEClientPlugin* Policy = nullptr);
     bool ExecuteItemTools(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Intent);
     FString ItemToolsCharacter;
     int32 ItemToolsLastVendor=0;
@@ -338,6 +395,7 @@ private:
     TArray<TSharedPtr<FJsonValue>> CachedKnownSpellValues;
     uint64 CachedSpellRevision = MAX_uint64;
     TSharedPtr<class FACEPluginVM> IdleManaVM;
+    FString IdleManaOwner;
     TWeakPtr<class FACESession> IdleManaSession;
     uint32 IdleManaProfileHash=0;
     int32 IdleManaPlayer=0;

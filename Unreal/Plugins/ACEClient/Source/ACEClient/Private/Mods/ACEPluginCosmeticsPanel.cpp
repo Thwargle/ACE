@@ -9,7 +9,7 @@
 
 namespace
 {
-FString Field(const TSharedPtr<FJsonObject>& O,const TCHAR* Key,const FString& Default=FString())
+FString CosmeticPanelField(const TSharedPtr<FJsonObject>& O,const TCHAR* Key,const FString& Default=FString())
 { FString Value;return O&&O->TryGetStringField(Key,Value)?Value:Default; }
 #if PLATFORM_WINDOWS
 bool Name(const FString& Value)
@@ -29,24 +29,24 @@ bool UACEPluginCosmetics::Initialize(UACEPluginSubsystem* InHost,const FACEClien
     if(!Plugin.Manifest->TryGetObjectField(TEXT("cosmetics"),Config)) {Error=TEXT("Missing cosmetics configuration.");return false;}
     Configuration=*Config;
     Configuration->TryGetBoolField(TEXT("paperdoll"),bPaperdoll);
-    const FString Namespace=Field(Configuration,TEXT("cache_namespace")),Helper=Field(Configuration,TEXT("helper"));
+    const FString Namespace=CosmeticPanelField(Configuration,TEXT("cache_namespace")),Helper=CosmeticPanelField(Configuration,TEXT("helper"));
     if(!Name(Namespace)||Helper.IsEmpty()||!FPaths::IsRelative(Helper)||Helper.Contains(TEXT(".."))||Helper.Contains(TEXT(":"))||!Helper.EndsWith(TEXT(".exe")))
     {Error=TEXT("Use a safe cache namespace and a relative bundled .exe path.");return false;}
     HelperPath=FPaths::ConvertRelativePathToFull(PluginDirectory/Helper);
     CacheRoot=FPaths::Combine(FPlatformMisc::GetEnvironmentVariable(TEXT("LOCALAPPDATA")),Namespace);
     if(!FPaths::IsUnderDirectory(HelperPath,PluginDirectory)||!LocalFile(HelperPath)||!LocalFile(CacheRoot))
     {Error=TEXT("Companion tools and caches must use local paths without symlinks or junctions.");return false;}
-    SourceLabel=Field(Configuration,TEXT("source_label"),TEXT("source"));
+    SourceLabel=CosmeticPanelField(Configuration,TEXT("source_label"),TEXT("source"));
     const TArray<TSharedPtr<FJsonValue>>* Values=nullptr;
     if(!Configuration->TryGetArrayField(TEXT("fields"),Values)||Values->Num()>24||Values->IsEmpty())
     {Error=TEXT("Supply 1–24 converter fields.");return false;}
     TSet<FString> Options;
     for(const auto& Value:*Values)
     {
-        auto O=Value->AsObject();const FString Key=Field(O,TEXT("key")),Option=Field(O,TEXT("option"));
+        auto O=Value->AsObject();const FString Key=CosmeticPanelField(O,TEXT("key")),Option=CosmeticPanelField(O,TEXT("option"));
         if(!O||!Name(Key)||Inputs.Contains(Key)||!Option.StartsWith(TEXT("--"))||!Name(Option.Mid(2))||Options.Contains(Option))
         {Error=TEXT("Converter fields need unique keys and --option names.");return false;}
-        Inputs.Add(Key,Field(O,TEXT("default")));Options.Add(Option);Fields.Add(O);
+        Inputs.Add(Key,CosmeticPanelField(O,TEXT("default")));Options.Add(Option);Fields.Add(O);
     }
     if(Configuration->TryGetArrayField(TEXT("presets"),Values))
     {
@@ -91,7 +91,7 @@ void UACEPluginCosmetics::QueueRequest(const FString& Operation)
     PendingRequest=MakeShared<FJsonObject>();
     PendingRequest->SetStringField(TEXT("operation"),Operation);
     for(const auto& Pair:Inputs)PendingRequest->SetStringField(Pair.Key,Pair.Value.TrimStartAndEnd());
-    if(bPaperdoll && Operation==TEXT("convert"))
+    if(bPaperdoll && (Operation==TEXT("convert")||Operation==TEXT("preview")))
         if(auto* Selected=SlotSelections.Find(SelectedSlot);Selected&&Selected->IsValid())
             PendingRequest->SetObjectField(TEXT("catalog_item"),*Selected);
     if(bPaperdoll && Operation==TEXT("apply-outfit"))
@@ -99,8 +99,8 @@ void UACEPluginCosmetics::QueueRequest(const FString& Operation)
         auto Selections=MakeShared<FJsonObject>();
         for(const auto& Pair:SlotSelections)
         {
-            const FString Target=Pair.Key==TEXT("offhand") && Field(Pair.Value,TEXT("sourceSlot"))==TEXT("shield")?TEXT("shield"):Pair.Key;
-            Selections->SetStringField(Target,Field(Pair.Value,TEXT("cacheId")));
+            const FString Target=Pair.Key==TEXT("offhand") && CosmeticPanelField(Pair.Value,TEXT("sourceSlot"))==TEXT("shield")?TEXT("shield"):Pair.Key;
+            Selections->SetStringField(Target,CosmeticPanelField(Pair.Value,TEXT("cacheId")));
         }
         PendingRequest->SetObjectField(TEXT("selections"),Selections);
     }
@@ -110,14 +110,14 @@ void UACEPluginCosmetics::QueueRequest(const FString& Operation)
 
 bool UACEPluginCosmetics::ServiceExecute(const TSharedPtr<FJsonObject>& Intent,FString& Error)
 {
-    if(Field(Intent,TEXT("action"))!=TEXT("local_cosmetics")){Error=TEXT("Only local cosmetic requests are permitted");return false;}
-    FString Operation=Field(Intent,TEXT("operation"));TSharedPtr<FJsonObject> Request;
+    if(CosmeticPanelField(Intent,TEXT("action"))!=TEXT("local_cosmetics")){Error=TEXT("Only local cosmetic requests are permitted");return false;}
+    FString Operation=CosmeticPanelField(Intent,TEXT("operation"));TSharedPtr<FJsonObject> Request;
     if(Intent->HasField(TEXT("request")))
     {
         double Serial=0;
         if(!Intent->TryGetNumberField(TEXT("request"),Serial)||!PendingRequest||Serial!=RequestSerial)
         {Error=TEXT("Invalid or expired cosmetic request");return false;}
-        Request=PendingRequest;PendingRequest.Reset();Operation=Field(Request,TEXT("operation"));
+        Request=PendingRequest;PendingRequest.Reset();Operation=CosmeticPanelField(Request,TEXT("operation"));
     }
     else if(Operation!=TEXT("scan")&&Operation!=TEXT("reload"))
     {Error=TEXT("This operation requires a request from the cosmetic window");return false;}
@@ -126,7 +126,7 @@ bool UACEPluginCosmetics::ServiceExecute(const TSharedPtr<FJsonObject>& Intent,F
     if(Operation==TEXT("reload")){RunTool({TEXT("verify-active")},true);return true;}
     if(Operation==TEXT("scan"))
     {
-        TArray<FString> Args{TEXT("scan")};const FString Root=Field(Request,TEXT("root"));
+        TArray<FString> Args{TEXT("scan")};const FString Root=CosmeticPanelField(Request,TEXT("root"));
         if(!Root.IsEmpty())Args.Append({TEXT("--root"),Root});RunTool(Args);return true;
     }
     if(bPaperdoll && (Operation==TEXT("scan-items")||Operation==TEXT("catalog-items")))
@@ -135,13 +135,13 @@ bool UACEPluginCosmetics::ServiceExecute(const TSharedPtr<FJsonObject>& Intent,F
         for(const TCHAR* Key:{TEXT("root"),TEXT("product"),TEXT("listfile"),TEXT("filter")})
         {
             if(Operation==TEXT("catalog-items")&&FString(Key)!=TEXT("root")&&FString(Key)!=TEXT("product"))continue;
-            const FString Value=Field(Request,Key);if(!Value.IsEmpty())Args.Append({FString(TEXT("--"))+Key,Value});
+            const FString Value=CosmeticPanelField(Request,Key);if(!Value.IsEmpty())Args.Append({FString(TEXT("--"))+Key,Value});
         }
-        if(Field(Request,TEXT("root")).IsEmpty()){Tell(TEXT("Choose a local installation before scanning items."));return true;}
+        if(CosmeticPanelField(Request,TEXT("root")).IsEmpty()){Tell(TEXT("Choose a local installation before scanning items."));return true;}
         RunTool(Args);return true;
     }
     if(bPaperdoll && Operation==TEXT("clear-slot"))
-    {RunTool({TEXT("clear-slot"),TEXT("--slot"),Field(Request,TEXT("slot"))},true);return true;}
+    {RunTool({TEXT("clear-slot"),TEXT("--slot"),CosmeticPanelField(Request,TEXT("slot"))},true);return true;}
     if(bPaperdoll && Operation==TEXT("apply-outfit"))
     {
         const TSharedPtr<FJsonObject>* Selections=nullptr;
@@ -150,22 +150,29 @@ bool UACEPluginCosmetics::ServiceExecute(const TSharedPtr<FJsonObject>& Intent,F
         for(const auto& Pair:(*Selections)->Values)Args.Append({TEXT("--selection"),FString(*Pair.Key)+TEXT("=")+Pair.Value->AsString()});
         RunTool(Args,true);return true;
     }
+    if(bPaperdoll && Operation==TEXT("preview"))
+    {
+        const TSharedPtr<FJsonObject>* Item=nullptr;
+        if(!Request->TryGetObjectField(TEXT("catalog_item"),Item)){Tell(TEXT("Choose an appearance first."));return true;}
+        PreviewCacheId=CosmeticPanelField(*Item,TEXT("cacheId"));
+        RunTool({TEXT("prepare-appearance"),TEXT("--id"),PreviewCacheId});return true;
+    }
     if(Operation!=TEXT("convert")){Error=TEXT("Unknown cosmetic operation");return false;}
     const TSharedPtr<FJsonObject>* Entry=nullptr;
     if(bPaperdoll&&Request->TryGetObjectField(TEXT("catalog_item"),Entry))
     {
         bool Supported=false;(*Entry)->TryGetBoolField(TEXT("supported"),Supported);
-        if(!Supported){Tell(Field(*Entry,TEXT("reason"),TEXT("This appearance is not supported.")));return true;}
-        RunTool({TEXT("convert-select"),TEXT("--appearance"),Field(*Entry,TEXT("cacheId")),TEXT("--slot"),Field(Request,TEXT("slot"))},true);return true;
+        if(!Supported){Tell(CosmeticPanelField(*Entry,TEXT("reason"),TEXT("This appearance is not supported.")));return true;}
+        RunTool({TEXT("convert-select"),TEXT("--appearance"),CosmeticPanelField(*Entry,TEXT("cacheId")),TEXT("--slot"),CosmeticPanelField(Request,TEXT("slot"))},true);return true;
     }
     TArray<FString> Args{TEXT("convert-select")};
     for(const auto& O:Fields)
     {
         bool ScanOnly=false;O->TryGetBoolField(TEXT("scan_only"),ScanOnly);if(ScanOnly)continue;
-        const FString Key=Field(O,TEXT("key")),Value=Field(Request,*Key);bool Required=false;O->TryGetBoolField(TEXT("required"),Required);
+        const FString Key=CosmeticPanelField(O,TEXT("key")),Value=CosmeticPanelField(Request,*Key);bool Required=false;O->TryGetBoolField(TEXT("required"),Required);
         if(Value.IsEmpty())
-        {if(Required){Tell(TEXT("Enter ")+Field(O,TEXT("label"),Key)+TEXT(" before converting."));return true;}continue;}
-        Args.Append({Field(O,TEXT("option")),Field(O,TEXT("prefix"))+Value});
+        {if(Required){Tell(TEXT("Enter ")+CosmeticPanelField(O,TEXT("label"),Key)+TEXT(" before converting."));return true;}continue;}
+        Args.Append({CosmeticPanelField(O,TEXT("option")),CosmeticPanelField(O,TEXT("prefix"))+Value});
     }
     RunTool(Args,true);return true;
 }
@@ -176,15 +183,15 @@ void UACEPluginCosmetics::UpdateInstallations(const FString& Json)
     if(!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json),Result)||!Result||!Result->TryGetArrayField(TEXT("installations"),Found))
     {Tell(TEXT("Invalid installation discovery response."));return;}
     Installations.Reset();
-    for(const auto& Value:*Found)if(auto O=Value->AsObject();O&&!Field(O,TEXT("root")).IsEmpty()&&Installations.Num()<32)Installations.Add(O);
-    if(Installations.Num()==1)for(const TCHAR* Key:{TEXT("root"),TEXT("product")})if(Inputs.Contains(Key))Inputs[Key]=Field(Installations[0],Key);
+    for(const auto& Value:*Found)if(auto O=Value->AsObject();O&&!CosmeticPanelField(O,TEXT("root")).IsEmpty()&&Installations.Num()<32)Installations.Add(O);
+    if(Installations.Num()==1)for(const TCHAR* Key:{TEXT("root"),TEXT("product")})if(Inputs.Contains(Key))Inputs[Key]=CosmeticPanelField(Installations[0],Key);
     if(auto List=InstallationList.Pin())
     {
         List->ClearChildren();TWeakObjectPtr<UACEPluginCosmetics> Self(this);
         for(const auto& Install:Installations)
             List->AddSlot().AutoHeight().Padding(0,3)[SNew(SButton).IsFocusable(false)
-                .OnClicked_Lambda([Self,Install](){if(Self.IsValid())for(const TCHAR* Key:{TEXT("root"),TEXT("product")})if(Self->Inputs.Contains(Key))Self->Inputs[Key]=Field(Install,Key);return FReply::Handled();})
-                [Label(Field(Install,TEXT("product"))+TEXT(" ")+Field(Install,TEXT("version"))+TEXT(" — ")+Field(Install,TEXT("root")))]];
+                .OnClicked_Lambda([Self,Install](){if(Self.IsValid())for(const TCHAR* Key:{TEXT("root"),TEXT("product")})if(Self->Inputs.Contains(Key))Self->Inputs[Key]=CosmeticPanelField(Install,Key);return FReply::Handled();})
+                [Label(CosmeticPanelField(Install,TEXT("product"))+TEXT(" ")+CosmeticPanelField(Install,TEXT("version"))+TEXT(" — ")+CosmeticPanelField(Install,TEXT("root")))]];
     }
     Tell(Installations.IsEmpty()?TEXT("No usable ")+SourceLabel+TEXT(" installation found. Enter its local root folder and search again."):
         FString::Printf(TEXT("Found %d local installation(s). Choose one, then convert an appearance."),Installations.Num()));
@@ -206,13 +213,13 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakePanel()
     Add(Button(TEXT("Search local ")+SourceLabel+TEXT(" installations"),[Self](){Self->QueueRequest(TEXT("scan"));}));
     auto List=SNew(SVerticalBox);InstallationList=List;Add(List);
     for(const auto& Install:Installations)
-        List->AddSlot().AutoHeight().Padding(0,3)[Button(Field(Install,TEXT("product"))+TEXT(" — ")+Field(Install,TEXT("root")),[Self,Install](){for(const TCHAR* Key:{TEXT("root"),TEXT("product")})if(Self->Inputs.Contains(Key))Self->Inputs[Key]=Field(Install,Key);})];
+        List->AddSlot().AutoHeight().Padding(0,3)[Button(CosmeticPanelField(Install,TEXT("product"))+TEXT(" — ")+CosmeticPanelField(Install,TEXT("root")),[Self,Install](){for(const TCHAR* Key:{TEXT("root"),TEXT("product")})if(Self->Inputs.Contains(Key))Self->Inputs[Key]=CosmeticPanelField(Install,Key);})];
     for(const auto& Preset:Presets)
-        Add(Button(Field(Preset,TEXT("name")),[Self,Preset](){const TSharedPtr<FJsonObject>* Values=nullptr;if(Preset->TryGetObjectField(TEXT("values"),Values))for(auto& Pair:Self->Inputs){FString Value;if((*Values)->TryGetStringField(Pair.Key,Value))Pair.Value=Value;}}));
-    Add(Label(Field(Configuration,TEXT("help"))));
+        Add(Button(CosmeticPanelField(Preset,TEXT("name")),[Self,Preset](){const TSharedPtr<FJsonObject>* Values=nullptr;if(Preset->TryGetObjectField(TEXT("values"),Values))for(auto& Pair:Self->Inputs){FString Value;if((*Values)->TryGetStringField(Pair.Key,Value))Pair.Value=Value;}}));
+    Add(Label(CosmeticPanelField(Configuration,TEXT("help"))));
     for(const auto& O:Fields)
     {
-        const FString Key=Field(O,TEXT("key"));Add(Label(Field(O,TEXT("label"),Key)));
+        const FString Key=CosmeticPanelField(O,TEXT("key"));Add(Label(CosmeticPanelField(O,TEXT("label"),Key)));
         Add(SNew(SEditableTextBox).Text_Lambda([Self,Key](){return FText::FromString(Self.IsValid()?Self->Inputs.FindRef(Key):FString());})
             .OnTextChanged_Lambda([Self,Key](const FText& T){if(Self.IsValid())Self->Inputs[Key]=T.ToString();}));
     }

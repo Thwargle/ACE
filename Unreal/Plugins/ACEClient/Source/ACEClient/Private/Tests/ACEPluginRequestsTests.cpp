@@ -524,6 +524,56 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         TestFalse(TEXT("Culled room wall without cooked collision still blocks combat"),HiddenSight.Clear(Origin+FVector(0,0,120),Origin+FVector(-1000,0,120)));
         Room->Destroy();
     }
+    // Exercise real snapshot -> Lua -> controller dispatch. The policy-only
+    // route test could not detect that pursuit left the selected target unset.
+    {
+        const auto SavedPlugin=*P;const auto SavedObjects=Session.WorldObjects;
+        const auto SavedSelected=Session.SelectedObject;
+        const bool SavedBusy=Session.bUseBusy;const int32 SavedEquipment=Session.PendingEquipmentGuid;
+        Session.bUseBusy=false;Session.PendingEquipmentGuid=0;
+        auto* ChasePC=World->SpawnActor<AACEPlayerController>();auto* ChasePawn=World->SpawnActor<APawn>();
+        auto* ChaseRoot=NewObject<USceneComponent>(ChasePawn);ChasePawn->SetRootComponent(ChaseRoot);ChaseRoot->RegisterComponent();
+        ChasePawn->SetActorLocation(Origin);ChasePC->Possess(ChasePawn);
+        auto* Local=NewObject<ULocalPlayer>(GEngine);GI->AddLocalPlayer(Local,FPlatformUserId::CreateFromInternalId(0));ChasePC->SetPlayer(Local);
+        ON_SCOPE_EXIT {
+            *P=SavedPlugin;Session.WorldObjects=SavedObjects;Session.SelectedObject=SavedSelected;
+            Session.bUseBusy=SavedBusy;Session.PendingEquipmentGuid=SavedEquipment;
+            H->Appraisals.Remove(975);H->CombatTarget=0;H->MovementOwner.Empty();H->MoveExpires=0;
+            GI->RemoveLocalPlayer(Local);ChasePC->Destroy();ChasePawn->Destroy();
+        };
+        auto Json=[](const TCHAR* Text){TSharedPtr<FJsonObject> O;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text),O);return O;};
+        P->Profile=Json(TEXT(R"({"buffing":false,"recovery":false,"combat":"missile","manual_combat":true,"approach":true,"approach_range":60,"radius":6})"));
+        P->NextAction=0;P->CombatTransitionIntent.Reset();P->Permissions.AddUnique(TEXT("navigation"));P->Permissions.AddUnique(TEXT("combat"));
+        FACEWorldObject Enemy;Enemy.Guid=975;Enemy.Name=TEXT("Distant monster");Enemy.ItemType=ACEItemType::Creature;
+        Enemy.bHasPosition=true;Enemy.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;
+        Enemy.Position=Session.PlayerPosition;Enemy.Position.Location.Y+=60;
+        Session.WorldObjects.Reset();Session.WorldObjects.Add(Enemy.Guid,Enemy);
+        FACEAppraisalInfo Info;Info.bSuccess=true;H->Appraisals.Add(Enemy.Guid,Info);
+        auto Snapshot=H->Snapshot();
+        const auto& Targets=Snapshot->GetArrayField(TEXT("targets"));
+        if(!TestEqual(TEXT("Real world snapshot includes a monster at acquisition range"),Targets.Num(),1))return false;
+        TestEqual(TEXT("World distance uses metres"),Targets[0]->AsObject()->GetNumberField(TEXT("distance")),60.);
+        TestTrue(TEXT("Distant clear target passes physical sight query"),Targets[0]->AsObject()->GetBoolField(TEXT("line_of_sight")));
+        // Isolate equipment/ready state; world positions and sight are real.
+        Snapshot->SetNumberField(TEXT("health"),100);Snapshot->SetNumberField(TEXT("max_health"),100);
+        Snapshot->SetBoolField(TEXT("ready"),true);Snapshot->SetBoolField(TEXT("busy"),false);
+        Snapshot->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":99,"type":256,"equipped":true,"identified":true,"can_wield":true,"weapon_skill":48,"damage":10,"name":"Thrown weapon"})")))});
+        FString Script,Error;FFileHelper::LoadFileToString(Script,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+        FACEPluginVM VM;TestTrue(TEXT("Pursuit policy loads"),VM.Load(Script,Error));TSharedPtr<FJsonObject> Intent;
+        TestTrue(*Error,VM.Step(Snapshot,P->Profile,Intent,Error));if(!Intent)return false;
+        TestEqual(TEXT("Distant target requests pursuit before any shot"),Intent->GetStringField(TEXT("action")),FString(TEXT("move")));
+        TestFalse(TEXT("Pursuit fixture has no pending use or equipment request"),C->IsUseBusy());
+        TestFalse(TEXT("Pursuit fixture is out of portal space"),ChasePC->IsWorldTransitionActive());
+        H->Execute(*P,Intent);
+        TestEqual(TEXT("Pursuit selects monster in game before entering attack range"),C->GetSelectedObject().Guid,Enemy.Guid);
+        TestEqual(TEXT("Death/health wake follows the acquired monster"),H->CombatTarget,Enemy.Guid);
+        TestEqual(TEXT("Pursuit reaches controller steering"),H->MovementOwner,FString(TEXT("ucm")));
+        TestEqual(TEXT("Steering destination is the distant monster"),H->MoveTarget.Location,Enemy.Position.Location);
+        float F=0,R=0,T=0;H->ApplyMovement(ChasePC,F,R,T,false,false,false,FVector::ForwardVector,100.f);
+        TestTrue(TEXT("60m acquisition produces movement input"),!FMath::IsNearlyZero(F)||!FMath::IsNearlyZero(T));
+        Session.WorldObjects.Remove(Enemy.Guid);P->NextAction=0;H->Execute(*P,Intent);
+        TestTrue(TEXT("Despawned pursuit target cancels stale movement"),H->MovementOwner.IsEmpty());
+    }
     auto Point=[&](double X,const FString& Kind=TEXT("walk"))
     {auto O=MakeShared<FJsonObject>();O->SetNumberField(TEXT("cell"),0x01010001);O->SetNumberField(TEXT("x"),X);O->SetNumberField(TEXT("y"),0);O->SetNumberField(TEXT("z"),.2);O->SetStringField(TEXT("kind"),Kind);return MakeShared<FJsonValueObject>(O);};
     P->Profile->SetArrayField(TEXT("route"),{Point(0),Point(10)});H->RoutePoint=2;H->NextRouteCheck=0;H->DrawRoute();
@@ -1158,9 +1208,9 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             // It must retain the same transition safety without requiring Start.
             FACEWorldObject Stone;Stone.Guid=974;Stone.ContainerId=Session.PlayerGuid;
             Stone.ItemType=ACEItemType::ManaStone;Stone.ItemUseable=8;Session.WorldObjects.Add(974,Stone);
-            ON_SCOPE_EXIT{Session.WorldObjects.Remove(974);H->IdleManaSession.Reset();H->IdleManaPlayer=0;};
+            ON_SCOPE_EXIT{Session.WorldObjects.Remove(974);H->IdleManaSession.Reset();H->IdleManaPlayer=0;H->IdleManaOwner.Empty();};
             P->Enabled=true;P->Profile->SetBoolField(TEXT("mana_charges_when_off"),true);
-            H->IdleManaSession=C->GetSession();H->IdleManaPlayer=Session.PlayerGuid;
+            H->IdleManaSession=C->GetSession();H->IdleManaPlayer=Session.PlayerGuid;H->IdleManaOwner=P->Id;
             auto Recharge=MakeShared<FJsonObject>();Recharge->SetStringField(TEXT("action"),TEXT("use_item"));Recharge->SetNumberField(TEXT("item"),974);
             P->NextAction=0;H->Execute(*P,Recharge);const int32 BeforeUse=Count(ACEGameAction::Use);
             TestTrue(TEXT("Idle recharge can wait for peace without starting UCM"),P->CombatTransitionIntent.IsValid()&&!P->Running);

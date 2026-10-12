@@ -586,6 +586,9 @@ void UACEUIGameplayBinder::ToggleCharacterOption(int32 Option)
 
 bool UACEUIGameplayBinder::TryHandleOptionsListClick(FVector2D CanvasLocalPos)
 {
+	// Overlay input arrives in viewport pixels; DAT rows use layout coordinates.
+	// At non-default UI scale, mixing them toggles a different category/window.
+	if (Canvas) CanvasLocalPos = Canvas->ViewportToLayout(CanvasLocalPos);
 	if (ActiveOptionsTab == TEXT("ConfigPage")) return false;
 	if (ActivePanelPage != TEXT("OptionsPanel_Field") || !Manager
 		|| ActiveOptionsPage() == INDEX_NONE)
@@ -620,6 +623,7 @@ bool UACEUIGameplayBinder::TryHandleOptionsListClick(FVector2D CanvasLocalPos)
 
 bool UACEUIGameplayBinder::IsPointerOverOptionsList(FVector2D CanvasLocalPos) const
 {
+	if (Canvas) CanvasLocalPos = Canvas->ViewportToLayout(CanvasLocalPos);
 	if (ActivePanelPage != TEXT("OptionsPanel_Field") || !Manager
 		|| ActiveOptionsTab == TEXT("GameplayOptionsPage"))
 	{

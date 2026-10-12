@@ -60,6 +60,8 @@ class ACECLIENT_API UACEClientSubsystem : public UGameInstanceSubsystem, public 
 	friend class FACEPortalLifetimeTest;
 	friend class FACEPluginEquipmentTest;
 	friend class FACEPluginRequestsTest;
+    friend class FACEPluginCompanionTest;
+    friend class FACEPluginPublicAPITest;
 	friend class FACEItemToolsTest;
     friend class FACEPluginRampRouteTest;
 	GENERATED_BODY()

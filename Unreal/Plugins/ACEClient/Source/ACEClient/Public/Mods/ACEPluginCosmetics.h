@@ -4,7 +4,7 @@
 #include "UObject/Object.h"
 #include "Containers/Ticker.h"
 #include "Dom/JsonObject.h"
-#include "Widgets/Input/SComboBox.h"
+#include "Widgets/Input/SSearchableComboBox.h"
 #include "ACEPluginCosmetics.generated.h"
 
 class UProceduralMeshComponent;
@@ -16,6 +16,7 @@ class ACECLIENT_API UACEPluginCosmetics : public UObject
 {
     GENERATED_BODY()
     friend class FACELocalCosmeticsRenderTest;
+    friend class FACELocalCosmeticsBrowserTest;
     friend class FACELocalCosmeticsOutfitTest;
     friend class FACEPluginCosmeticsTest;
     friend class FACEPluginCosmeticsIntegrationTest;
@@ -48,8 +49,10 @@ private:
     FString SelectedSlot=TEXT("weapon");
     TArray<TSharedPtr<FJsonObject>> Catalog, SlotOptions;
     TMap<FString,TSharedPtr<FJsonObject>> SlotSelections;
-    TWeakPtr<SComboBox<TSharedPtr<FJsonObject>>> ItemCombo;
-    TSharedPtr<TArray<TSharedPtr<FJsonObject>>> ComboOptions;
+    TWeakPtr<SSearchableComboBox> ItemCombo;
+    TSharedPtr<TArray<TSharedPtr<FString>>> ComboOptions;
+    TSharedPtr<TMap<TSharedPtr<FString>,TSharedPtr<FJsonObject>>> ComboItems;
+    bool bShowModelVariants=false;
     FString CatalogStatus=TEXT("Scan local items to populate the slot dropdowns.");
     bool bPaperdoll=false;
     UPROPERTY(Transient) TMap<FString,TObjectPtr<UACEPluginCosmetics>> SlotRenderers;
@@ -66,6 +69,7 @@ private:
     TSharedPtr<FJsonObject> PendingRequest;
     uint32 RequestSerial=0;
     FString ToolCommand;
+    FString PreviewCacheId;
     bool Tick(float Dt);
     bool LoadVerified(const FString& Json);
     void RestoreOriginal();
@@ -75,11 +79,12 @@ private:
     void UpdateSkin();
     bool ReplaceCoveredParts(class APawn* Pawn);
     void HideOriginal(UPrimitiveComponent* Part);
-    struct FSkinBinding { int32 Part=0; FVector Pivot, End; FTransform ToPart; };
+    struct FSkinBinding { int32 Part=0; FVector Pivot, End, ReferenceMin=FVector::ZeroVector, ReferenceMax=FVector::ZeroVector; FMatrix ToPart=FMatrix::Identity, ToPartNormal=FMatrix::Identity; };
     struct FSkinWeight { int32 Bone=0; float Weight=0; };
     TArray<FSkinBinding> SkinBindings;
     TArray<FSkinWeight> SkinWeights;
-    TArray<FVector> SkinnedVertices,SkinnedNormals;
+    TArray<FVector> FittedVertices,FittedNormals,SkinnedVertices,SkinnedNormals;
+    TArray<int32> FittedBodyParts;
     TArray<FTransform> LastSkinPose;
     UPROPERTY(Transient) TArray<TObjectPtr<UProceduralMeshComponent>> BareParts;
     static bool IsBodySlot(const FString& Id);

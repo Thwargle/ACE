@@ -6,11 +6,13 @@
 #include "HAL/FileManager.h"
 #include "Engine/GameInstance.h"
 #include "Engine/TextureRenderTarget2D.h"
+#include "Engine/Texture2D.h"
 #include "Slate/WidgetRenderer.h"
 #include "Widgets/Layout/SDPIScaler.h"
 #include "RenderingThread.h"
 #include "ImageUtils.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Components/CanvasPanel.h"
 #include "Components/Border.h"
 #include "ACEDatSubsystem.h"
 #include "ACEClientSubsystem.h"
@@ -18,6 +20,7 @@
 #include "SocketSubsystem.h"
 #include "Sockets.h"
 #include "Protocol/ACEIsaac.h"
+#include "Protocol/ACEObjectCreateParser.h"
 #include "ACESession.h"
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
@@ -339,6 +342,100 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
         Session.WorldObjects[Item.Guid].ContainerId=Corpse.Guid;Binder->FinishManaStoneConfirmation(true);
         TestFalse(TEXT("Confirmation rechecks target eligibility"),HasAction(ACEGameAction::UseWithTarget,Stone.Guid));
         Session.WorldObjects[Item.Guid].ContainerId=Self.Guid;
+    }
+    {
+        // Cooldown qualities arrive in PublicWeenieDesc, without an appraisal.
+        FACEBinaryWriter Description;
+        Description.WriteUInt32(0x4010); // Usable, Container
+        Description.WriteString16L(TEXT("Summoning essence"));
+        Description.WriteUInt16(1); Description.WriteUInt16(0x11CB);
+        Description.WriteUInt32(ACEItemType::Gem); Description.WriteUInt32(0x04000000); Description.Align();
+        Description.WriteUInt32(0x06); // shared cooldown + duration
+        Description.WriteUInt32(8); Description.WriteUInt32(Self.Guid);
+        Description.WriteUInt32(213); Description.WriteDouble(120.0); Description.Align();
+        FACEBinaryWriter Create; Create.WriteUInt32(ACEOpcode::ObjectCreate); Create.WriteUInt32(900);
+        Create.WriteUInt8(0x11); Create.WriteUInt8(0); Create.WriteUInt8(0); Create.WriteUInt8(0);
+        Create.WriteUInt32(0); Create.WriteUInt32(0);
+        for (int32 I=0; I<ACEPhysicsTimeStamp::Count; ++I) Create.WriteUInt16(1);
+        Create.Align(); Create.WriteBytes(Description.GetData());
+        Session.HandleGameMessage(Create.GetData());
+        const auto* Essence = Session.WorldObjects.Find(900);
+        if (!TestNotNull(TEXT("Cooldown item is decoded from ObjectCreate"), Essence)) return false;
+        TestEqual(TEXT("Creation retains shared cooldown ID"), Essence->CooldownId, 213);
+        TestEqual(TEXT("Creation retains full cooldown duration"), Essence->CooldownDuration, 120.0);
+        FACEBinaryWriter Vendor; Vendor.WriteUInt32(901); Vendor.WriteBytes(Description.GetData());
+        FACEBinaryReader VendorReader(Vendor.GetData()); FACEDecodedObject VendorItem;
+        TestTrue(TEXT("Vendor description also parses cooldown metadata"), FACEObjectCreateParser::ParseGameDataOnly(VendorReader,VendorItem));
+        TestEqual(TEXT("Vendor shared cooldown ID is retained"),VendorItem.CooldownId,213);
+        TestEqual(TEXT("Vendor cooldown duration is retained"),VendorItem.CooldownDuration,120.0);
+        FACEWorldObject Second = *Essence; Second.Guid=901; Second.Name=TEXT("Second essence");
+        Session.WorldObjects.Add(Second.Guid,Second);
+        Session.ShortcutObjects.SetNumZeroed(18); Session.ShortcutObjects[0]=900; Session.ShortcutObjects[17]=901;
+        Binder->CombatMode=int32(ACECombatMode::NonCombat); Binder->PendingUseWithSourceGuid=0;
+        Binder->LastInvClickGuid=0; Session.bUseBusy=false; Session.CachedC2SPackets.Reset();
+        Binder->HandleNamedClick(TEXT("ShortcutBar_Shortcut1Button")); Binder->RefreshShortcutOverlays();
+        TestEqual(TEXT("Quickslot click selects its item"),Client->GetSelectedObject().Guid,900);
+        auto Visible = [](UBorder* B) { return B && B->GetVisibility()==ESlateVisibility::HitTestInvisible; };
+        TestTrue(TEXT("Selected quickslot draws its border"),Visible(Binder->ShortcutSelectedOverlays[0]));
+        TestTrue(TEXT("Quickslot selection uses retail item border art"),
+            Binder->ShortcutSelectedOverlays[0]->Background.GetResourceObject()==Resources->ResolveIconTexture(0x06004D09));
+        TestFalse(TEXT("Unselected quickslot has no border"),Visible(Binder->ShortcutSelectedOverlays[17]));
+        TestFalse(TEXT("Single click sends no use request"),HasAction(ACEGameAction::Use,900));
+        Binder->HandleNamedClick(TEXT("ShortcutBar_Shortcut1Button")); Binder->RefreshShortcutOverlays();
+        TestTrue(TEXT("Double click still sends the use request"),HasAction(ACEGameAction::Use,900));
+        TestFalse(TEXT("Use attempt does not fabricate a cooldown before confirmation"),Visible(Binder->ShortcutCooldownOverlays[0]));
+
+        FACEBinaryWriter Enchantment;
+        Enchantment.WriteUInt16(0x8000+213); Enchantment.WriteUInt16(1);
+        Enchantment.WriteUInt16(0); Enchantment.WriteUInt16(0); Enchantment.WriteUInt32(0);
+        Enchantment.WriteDouble(-61.0); Enchantment.WriteDouble(120.0); Enchantment.WriteUInt32(Self.Guid);
+        Enchantment.WriteFloat(0); Enchantment.WriteFloat(0); Enchantment.WriteDouble(0);
+        Enchantment.WriteUInt32(0x01000000); Enchantment.WriteUInt32(0); Enchantment.WriteFloat(0);
+        FACEBinaryReader EnchantmentReader(Enchantment.GetData()); Session.HandleMagicUpdateEnchantment(EnchantmentReader);
+        Binder->RefreshShortcutOverlays();
+        TestTrue(TEXT("Server cooldown draws on the used shortcut"),Visible(Binder->ShortcutCooldownOverlays[0]));
+        TestTrue(TEXT("Same cooldown also draws on a different essence in row two"),Visible(Binder->ShortcutCooldownOverlays[17]));
+        TestTrue(TEXT("Restored elapsed cooldown uses the retail 50 percent texture"),
+            Binder->ShortcutCooldownOverlays[0]->Background.GetResourceObject()==Resources->ResolveIconTexture(0x060067D3));
+        TestTrue(TEXT("Cooldown is clipped with the toolbar"),Binder->ShortcutCooldownOverlays[17]->GetParent()==Binder->ShortcutClipPanel.Get());
+        Draw(TEXT("QuickslotSelectedCooldown")); Draw(TEXT("QuickslotSelectedCooldown150"),1.5f);
+        auto* Timer=Session.ActiveEnchantments.FindByPredicate([](const auto& E){return E.SpellId==0x8000+213;});
+        if (!TestNotNull(TEXT("Server cooldown record exists"),Timer)) return false;
+        for (int32 Phase=1; Phase<=10; ++Phase)
+        {
+            Timer->StartTime=float((Phase-.5)*12.0-120.0);
+            TestEqual(TEXT("All ten retail cooldown phases progress with elapsed time"),
+                Session.GetItemCooldownPhase(Session.WorldObjects[900],Timer->ReceivedAt),Phase);
+        }
+        Timer->StartTime=0; TestEqual(TEXT("Initial full cooldown clamps to last texture"),Session.GetItemCooldownPhase(Second,Timer->ReceivedAt),10);
+        TestEqual(TEXT("Time alone expires cooldown without a remove event"),Session.GetItemCooldownPhase(Second,Timer->ReceivedAt+121),0);
+        Timer->StartTime=-121; Binder->RefreshShortcutOverlays();
+        TestFalse(TEXT("Expired cooldown disappears from the quickslot"),Visible(Binder->ShortcutCooldownOverlays[0]));
+        Timer->StartTime=-61;
+        FACEBinaryWriter Property; Property.WriteUInt8(1); Property.WriteUInt32(901); Property.WriteUInt32(280); Property.WriteInt32(214);
+        FACEBinaryReader PropertyReader(Property.GetData()); Session.HandlePublicUpdatePropertyInt(PropertyReader);
+        Binder->RefreshShortcutOverlays();
+        TestFalse(TEXT("Different live cooldown group is not affected"),Visible(Binder->ShortcutCooldownOverlays[17]));
+        FACEBinaryWriter Duration; Duration.WriteUInt8(1); Duration.WriteUInt32(900); Duration.WriteUInt32(167); Duration.WriteDouble(0);
+        FACEBinaryReader DurationReader(Duration.GetData()); Session.HandleUpdatePropertyFloat(DurationReader,true);
+        Binder->RefreshShortcutOverlays();
+        TestFalse(TEXT("Zero duration has no invalid cooldown display"),Visible(Binder->ShortcutCooldownOverlays[0]));
+        Session.WorldObjects[900].CooldownDuration=120;
+        Binder->LastInvClickGuid=0; Binder->HandleNamedClick(TEXT("ShortcutBar2_Shortcut9Button")); Binder->RefreshShortcutOverlays();
+        TestFalse(TEXT("Changing selection clears the previous slot border"),Visible(Binder->ShortcutSelectedOverlays[0]));
+        TestTrue(TEXT("Second-row selection draws the same border"),Visible(Binder->ShortcutSelectedOverlays[17]));
+        Client->SelectObject(0); Binder->RefreshShortcutOverlays();
+        TestFalse(TEXT("Deselect clears quickslot border"),Visible(Binder->ShortcutSelectedOverlays[17]));
+        Session.ShortcutObjects[0]=0; Binder->RefreshShortcutOverlays();
+        TestFalse(TEXT("Removing a shortcut clears its cooldown"),Visible(Binder->ShortcutCooldownOverlays[0]));
+        Session.ShortcutObjects[0]=900;
+        FACEBinaryWriter Remove; Remove.WriteUInt16(0x8000+213); Remove.WriteUInt16(1);
+        FACEBinaryReader RemoveReader(Remove.GetData()); Session.HandleMagicRemoveEnchantment(RemoveReader); Binder->RefreshShortcutOverlays();
+        TestFalse(TEXT("Server cooldown removal clears the overlay"),Visible(Binder->ShortcutCooldownOverlays[0]));
+        const auto ToolbarBody=Manager->FindElementByName(TEXT("ToolbarField")); ToolbarBody->bVisible=false;
+        Binder->RefreshShortcutOverlays();
+        TestEqual(TEXT("Hidden toolbar hides all shortcut indicators"),Binder->ShortcutClipPanel->GetVisibility(),ESlateVisibility::Collapsed);
+        ToolbarBody->bVisible=true;
     }
     return !HasAnyErrors();
 }

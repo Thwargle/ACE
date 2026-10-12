@@ -8035,6 +8035,10 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 		}
 		for (UBorder* B : ShortcutNumberIcons)
 			if (B) B->SetVisibility(ESlateVisibility::Collapsed);
+		for (UBorder* B : ShortcutSelectedOverlays)
+			if (B) B->SetVisibility(ESlateVisibility::Collapsed);
+		for (UBorder* B : ShortcutCooldownOverlays)
+			if (B) B->SetVisibility(ESlateVisibility::Collapsed);
 		for (UTextBlock* T : ShortcutSlotNumbers)
 		{
 			if (T) { T->SetVisibility(ESlateVisibility::Collapsed); }
@@ -8057,6 +8061,8 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 	const FVector2D Scale = Canvas->GetLastScale2D();
 	const FIntPoint BodyOrigin = Body->GetScreenOrigin();
 	const auto ShortcutSession = Client->GetSession();
+	const int32 SelectedGuid = LastSelection.bValid ? LastSelection.Guid : 0;
+	const double Now = FPlatformTime::Seconds();
 	auto PlaceShortcut = [&](UWidget* Widget, const TSharedPtr<FACEUIElement>& El, int32 ZOrder)
 	{
 		if (Widget->GetParent() != ShortcutClipPanel)
@@ -8078,6 +8084,8 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 		UBorder* Bg = EnsureIconBorder(ShortcutSlotBgs, ArrayIndex);
 		UBorder* Icon = EnsureIconBorder(ShortcutIcons, ArrayIndex);
 		UBorder* Number = EnsureIconBorder(ShortcutNumberIcons, ArrayIndex);
+		UBorder* Selected = EnsureIconBorder(ShortcutSelectedOverlays, ArrayIndex);
+		UBorder* Cooldown = EnsureIconBorder(ShortcutCooldownOverlays, ArrayIndex);
 		UTextBlock* Num = ShortcutSlotNumbers.IsValidIndex(ArrayIndex) ? ShortcutSlotNumbers[ArrayIndex] : nullptr;
 		if (Num) { Num->SetVisibility(ESlateVisibility::Collapsed); }
 		if (!El.IsValid() || !Icon || !Bg)
@@ -8085,6 +8093,8 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 			if (Icon) { Icon->SetVisibility(ESlateVisibility::Collapsed); }
 			if (Bg) { Bg->SetVisibility(ESlateVisibility::Collapsed); }
 			if (Number) Number->SetVisibility(ESlateVisibility::Collapsed);
+			if (Selected) Selected->SetVisibility(ESlateVisibility::Collapsed);
+			if (Cooldown) Cooldown->SetVisibility(ESlateVisibility::Collapsed);
 			return;
 		}
 		bool bAncestorsVisible = El->bVisible;
@@ -8099,6 +8109,8 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 			Icon->SetVisibility(ESlateVisibility::Collapsed);
 			Bg->SetVisibility(ESlateVisibility::Collapsed);
 			if (Number) Number->SetVisibility(ESlateVisibility::Collapsed);
+			if (Selected) Selected->SetVisibility(ESlateVisibility::Collapsed);
+			if (Cooldown) Cooldown->SetVisibility(ESlateVisibility::Collapsed);
 			return;
 		}
 		// Retail ItemSlot_Shortcut_01..09 / _10 (key 0) numbered empty backgrounds.
@@ -8136,6 +8148,21 @@ void UACEUIGameplayBinder::RefreshShortcutOverlays()
 			Number->SetVisibility(bHave && SlotIndex0 < 10 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 			SetIconDid(Number, SlotIndex0 < 9 ? 0x0600109E + SlotIndex0 : 0x060074D3);
 			PlaceShortcut(Number, El, 2);
+		}
+		const bool bSelected = bHave && Guid == SelectedGuid;
+		if (Selected) Selected->SetVisibility(bSelected ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+		if (Selected && bSelected)
+		{
+			SetIconDid(Selected, DidInvSlotSelected);
+			PlaceShortcut(Selected, El, 3);
+		}
+		const int32 Phase = Obj && ShortcutSession ? ShortcutSession->GetItemCooldownPhase(*Obj, Now) : 0;
+		if (Cooldown) Cooldown->SetVisibility(Phase > 0 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+		if (Cooldown && Phase > 0)
+		{
+			// Retail ItemSlot_Icon_Cooldown_10..100 from ItemSlot (0x21000037).
+			SetIconDid(Cooldown, 0x060067CEu + Phase);
+			PlaceShortcut(Cooldown, El, 4);
 		}
 	};
 	for (int32 i = 0; i < 18; ++i)

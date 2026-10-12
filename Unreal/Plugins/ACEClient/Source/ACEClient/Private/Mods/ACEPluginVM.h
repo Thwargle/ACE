@@ -9,7 +9,7 @@ class FACEPluginVM
 public:
     FACEPluginVM();
     ~FACEPluginVM();
-    bool Load(const FString& Source, FString& Error);
+    bool Load(const FString& Source, FString& Error, const FString& Policy = FString());
     bool Step(const TSharedPtr<FJsonObject>& Snapshot, const TSharedPtr<FJsonObject>& Profile,
         TSharedPtr<FJsonObject>& Intent, FString& Error);
     SIZE_T GetMemoryUsage() const { return Bytes; }

@@ -109,6 +109,45 @@ bool FACEUIInteractionParityTest::RunTest(const FString&)
     };
     Manager->ApplyEdgeAnchoredLayout(1600,900);
 
+    // Click the visible routing row, then deliver each wire LogTextType. Cover
+    // composite Combat/Magic groups, all five windows and scaled HUD coordinates.
+    {
+        TGuardValue<uint64> Global(Binder->GlobalChatTypeFilter,MAX_uint64);
+        TGuardValue<uint64> Main(Binder->MainChatTypeFilter,Binder->MainChatTypeFilter);
+        TGuardValue<TArray<uint64>> Floaty(Binder->FloatyChatFilters,Binder->FloatyChatFilters);
+        TGuardValue<int32> QuickFilter(Binder->ChatFilterMode,0);
+        for(int32 W=1;W<=4;++W) Manager->FindElementByName(FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"),W))->bVisible=true;
+        Binder->ShowPanelPage(TEXT("OptionsPanel_Field")); Binder->SyncOptionsPanelTab(TEXT("ChatPage"));
+        for(float Scale : {1.f,1.25f,2.f})
+        {
+            TGuardValue<float> ScaleX(Canvas->LastScaleX,Scale), ScaleY(Canvas->LastScaleY,Scale);
+            for(int32 Window=0;Window<5;++Window) for(int32 Group=Window?0:1;Group<UE_ARRAY_COUNT(ACERetailChat::FilterGroups);++Group)
+            {
+                Binder->MainChatTypeFilter=MAX_uint64;
+                for(auto& Mask:Binder->FloatyChatFilters) Mask=MAX_uint64;
+                const int32 Option=1000+Window*UE_ARRAY_COUNT(ACERetailChat::FilterGroups)+Group;
+                Binder->OptionsScrollOffset=0; Binder->RefreshOptionsOverlays();
+                while(!Binder->OptionRowOptions.Contains(Option) && Binder->OptionsScrollOffset<Binder->GetOptionsRowCount())
+                {++Binder->OptionsScrollOffset;Binder->RefreshOptionsOverlays();}
+                const auto List=Manager->FindElementUnder(TEXT("ChatPage"),TEXT("ChatOptionsListBox"));
+                const FVector2D Point=(FVector2D(List->GetScreenOrigin())+FVector2D(8,16*Binder->OptionRowOptions.Find(Option)+8))*Scale;
+                TestTrue(TEXT("Scaled routing row accepts the pointer"),Binder->TryHandleOptionsListClick(Point));
+                const uint64 Disabled=ACERetailChat::FilterGroups[Group].Mask;
+                TestEqual(TEXT("The clicked category is the disabled category"),Window?Binder->FloatyChatFilters[Window-1]:Binder->MainChatTypeFilter,MAX_uint64&~Disabled);
+                for(int32 Type=0;Type<=32;++Type)
+                {
+                    for(int32 W=0;W<5;++W) Binder->ChatDisplayLines[W].Reset();
+                    FACEBinaryWriter Message;Message.WriteString16L(FString::Printf(TEXT("Routing %d %d %d %.2f"),Window,Group,Type,Scale));Message.WriteInt32(Type);
+                    FACEBinaryReader Wire(Message.GetData());Session.HandleServerMessage(Wire);
+                    for(int32 W=0;W<5;++W) TestEqual(*FString::Printf(TEXT("Routing window %d group %d type %d destination %d scale %.2f"),Window,Group,Type,W,Scale),Binder->ChatDisplayLines[W].Num(),W==Window&&(Disabled&(1ull<<Type))?0:1);
+                }
+                Binder->TryHandleOptionsListClick(Point);
+                TestEqual(TEXT("Second click restores the group"),Window?Binder->FloatyChatFilters[Window-1]:Binder->MainChatTypeFilter,MAX_uint64);
+            }
+        }
+        Binder->SaveFloatyChatSettings();
+    }
+
     {
         TGuardValue<uint64> MainFilter(Binder->MainChatTypeFilter,MAX_uint64);
         TGuardValue<uint64> GlobalFilter(Binder->GlobalChatTypeFilter,MAX_uint64);

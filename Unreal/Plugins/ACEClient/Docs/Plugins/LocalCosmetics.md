@@ -158,7 +158,7 @@ ACWM/2 uses the same header/vertices with version `2`. Each section starts with
 an additional int32 body-part index before blend/count/indices. Allowed mappings:
 `head` → 16, `shoulders` → 10 and/or 13, `waist` → 0, `back` → 9. Other indices
 are rejected. Additional mappings: chest 0/9; arms 10/11/13/14; hands 12/15;
-legs 0–8; feet 3/4/7/8. Held slots require version 1; body slots accept 2 or 3. A shoulder
+legs 0–8; feet 3/4/7/8. Held slots require version 1; body slots accept 2, 3 or 4. A shoulder
 pair has sections for each arm, each following its own native animated component.
 Coordinates are relative to the target part in centimeters; human part geometry
 faces -Y. The receipt fit applies to every part in that slot. These mounts are
@@ -171,6 +171,35 @@ Weights must be finite, nonnegative and sum to one (tolerance .02); bone indices
 must be valid. Section part indices are -1. Source pivots and vertices use the
 same whole-body bind coordinate frame. The renderer fits bone spans to AC,
 updates only when the pose changes, and applies the receipt fit to the garment.
+
+ACWM/4 retains version 3's layout and permits rigid sections inside a skinned
+appearance. A section part of -1 uses the skin weights; a valid nonnegative part
+uses that AC part's local frame directly. Rigid vertices still carry valid weights
+for format validation. Rigid and skinned sections must not share vertices. This
+supports one garment containing cloth plus an attached buckle or decoration.
+
+ACWM/5 retains version 4's sections and weights. Each binding additionally stores
+six float32 values after pivot/end: reference minimum XYZ and maximum XYZ in its
+anatomical frame (Z along pivot-to-end; X is cross(+Y,Z), using +Z when parallel;
+Y is cross(Z,X)). Equal bounds opt out. Finite, ordered bounds are required.
+The renderer uses these bare reference-body bounds to fit girth and terminal
+parts against the wearer's bare AC anatomy, independent of equipped clothing.
+Joint lengths drive limbs; torso bounds drive waist/chest height. Penetrating
+cloth vertices are projected outside the bare surface once at attachment time,
+then rebound to the corresponding AC segmented part to retain that fit during
+animation. Foot surfaces fit against outward geometry and follow AC's separate
+toe parts. Adjacent joints use temporary bare reference geometry even if the
+cosmetic does not replace their clothing; those references are released after
+fitting. Legacy bindings without reference bounds retain four-weight skinning. Providers
+should supply sufficient cloth topology for the different body's contours.
+Rigid sections preserve their authored mounts. Normal fitting matrices are
+cached; anatomical fitting does not run on each animation tick.
+
+The paperdoll also accepts `prepare-appearance --id <cache id>` for a selected
+catalog entry. Its response is a verified receipt used to update that entry's
+model thumbnail; it does not activate or save the draft outfit. Named unavailable
+entries may retain a cache ID for diagnostics with `supported: false`; they are
+searchable, but cannot replace a draft selection.
 
 Overlays have no collision or replication. Replaced clothing and accessory parts
 are hidden only after a successful attachment. Shared bare underlays avoid overlap
@@ -195,7 +224,7 @@ provider checkout or proprietary assets are needed for core client tests.
 ## Paperdoll and local catalogs
 
 A provider can opt into the native slot picker with `cosmetics.paperdoll: true`.
-The shared interface draws slot buttons with model thumbnails, filters a searchable dropdown per selected slot,
+The shared interface draws slot buttons with thumbnails and a dropdown with an integrated, automatically focused search field per selected slot,
 remembers choices while switching slots, and provides per-slot session fit controls.
 Body slots accept compatible rigid or skinned armor; providers must not map
 unavailable armor silently to a hand.
@@ -209,9 +238,14 @@ on fields that must never be passed to manual `convert-select`.
 Catalog replies contain `items` and a `note`, with no entry-count truncation. Each item has `id`,
 `name` (at most 256 characters), `sourceSlot`, `targets` (supported renderer/body slot
 keys), `supported`, `reason`, `values` (declared converter field defaults), and a
-GUID `cacheId` for a converted model. Unsupported entries and entries without valid cache IDs are excluded from the
-picker. Providers retain failure diagnostics privately. A shield targets `shield`; it appears under the paperdoll's combined
+GUID `cacheId` for a converted model or provider conversion plan. Entries without valid cache IDs are excluded from the
+picker; unavailable named entries remain visible with their reason but cannot replace a draft selection. A shield targets `shield`; it appears under the paperdoll's combined
 offhand/shield button. Names and source-to-target mappings belong to the provider.
+Use the actual in-game item name in `name`. Optional `kind: "model"` marks raw source-model variants,
+hidden until **Include unnamed model variants** is checked; `kind: "item"` and omitted kinds are shown normally.
+Search matches name plus `values.item`, `values.model` and `values.display`, case-insensitively with multiple words.
+Filtering and keyboard navigation do not change the draft; clicking or Enter commits the choice.
+Receipts may include `appearanceName` and `catalogId` (up to 256 characters each) to preserve names on outfit reload.
 
 Choosing entries changes a draft, retaining choices across slots. **Apply outfit**
 invokes `apply-outfit --selection slot=cacheId` once for every selected slot; an
@@ -236,3 +270,7 @@ validated GUID/cache namespace; catalog entries cannot redirect image loads.
 Slots, dropdown rows and the main preview share this convention. Visible widgets
 own their texture lifetime; the full catalog does not eagerly decode thumbnails.
 No native provider registration or source-specific image code is required.
+An optional `iconId` references another GUID cache's `thumbnail.png` as a fallback while the wearable
+model has not been converted. The same local-path, PNG dimensions and byte limits apply. This lets many
+named items share one installed-game icon without duplicating files or converting every model in advance.
+Model thumbnails take precedence once prepared. The provider owns icon generation and source validation.

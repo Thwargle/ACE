@@ -4,6 +4,7 @@
 #include "Interfaces/IPluginManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Serialization/JsonSerializer.h"
 #include <string_view>
 extern "C" {
 #include "Lua/lua.h"
@@ -200,6 +201,53 @@ namespace
     }
     int PushArgument(lua_State* L)
     { PushObject(L, static_cast<const FJsonObject*>(lua_touserdata(L, 1)), 0); return 1; }
+
+    // Only explicit extension fields accept structured output. No metatables,
+    // functions, sparse/mixed arrays, cycles or unbounded native traversal.
+    TSharedPtr<FJsonValue> ReadOutput(lua_State* L,int Index,int Depth,int& Nodes,int& Bytes,FString& Error,bool ProfileData=false)
+    {
+        if(Depth>12||++Nodes>(ProfileData?32768:4096)){Error=TEXT("Structured output exceeds depth/node limit");return nullptr;}
+        Index=lua_absindex(L,Index);
+        switch(lua_type(L,Index))
+        {
+        case LUA_TBOOLEAN:return MakeShared<FJsonValueBoolean>(lua_toboolean(L,Index)!=0);
+        case LUA_TNUMBER:
+            if(FMath::IsFinite(lua_tonumber(L,Index)))return MakeShared<FJsonValueNumber>(lua_tonumber(L,Index));
+            break;
+        case LUA_TSTRING:
+        {
+            size_t Len=0;const char* Value=lua_tolstring(L,Index,&Len);Bytes+=int(Len);
+            if(Len>4096||Bytes>(ProfileData?262144:65536)){Error=TEXT("Structured output text exceeds limit");return nullptr;}
+            return MakeShared<FJsonValueString>(UTF8_TO_TCHAR(Value));
+        }
+        case LUA_TTABLE:
+        {
+            const size_t Length=lua_rawlen(L,Index);if(Length>(ProfileData?2048u:1024u)){Error=TEXT("Structured array exceeds limit");return nullptr;}
+            auto Object=MakeShared<FJsonObject>();TArray<TSharedPtr<FJsonValue>> Array;
+            if(Length)Array.SetNum(int32(Length));
+            lua_pushnil(L);
+            while(lua_next(L,Index))
+            {
+                FString Key;int ArrayIndex=-1;
+                if(Length&&lua_isinteger(L,-2)&&lua_tointeger(L,-2)>=1&&lua_tointeger(L,-2)<=int64(Length))ArrayIndex=int(lua_tointeger(L,-2))-1;
+                else if(!Length&&lua_type(L,-2)==LUA_TSTRING)
+                {size_t Len=0;const char* K=lua_tolstring(L,-2,&Len);Bytes+=int(Len);if(Len>128||Bytes>(ProfileData?262144:65536)){Error=TEXT("Structured key/text exceeds limit");return nullptr;}Key=UTF8_TO_TCHAR(K);}
+                else {Error=TEXT("Structured tables must be objects or dense arrays");return nullptr;}
+                auto Value=ReadOutput(L,-1,Depth+1,Nodes,Bytes,Error,ProfileData);if(!Value)return nullptr;
+                // Empty Lua arrays are ambiguous. Normalize documented collection keys.
+                static const TSet<FString> Collections={TEXT("children"),TEXT("options"),TEXT("route"),TEXT("loot_rules"),TEXT("monsters"),TEXT("states"),TEXT("buffs"),TEXT("weapons"),TEXT("weapon_items"),TEXT("consumables"),TEXT("vendor_rules"),TEXT("buff_commands"),TEXT("conditions"),TEXT("excluded_buffs"),TEXT("excluded_buff_spells"),TEXT("restock"),TEXT("profile_rules"),TEXT("chest_rules"),TEXT("mule1_rules"),TEXT("mule2_rules"),TEXT("assist_items"),TEXT("buff_items"),TEXT("item_buff_targets"),TEXT("recharge_handlers"),TEXT("pea_recipes"),TEXT("transitions"),TEXT("rules"),TEXT("requirements"),TEXT("extras")};
+                if(Value->Type==EJson::Object&&Value->AsObject()->Values.IsEmpty()
+                    &&Collections.Contains(Key))
+                    Value=MakeShared<FJsonValueArray>(TArray<TSharedPtr<FJsonValue>>{});
+                if(ArrayIndex>=0)Array[ArrayIndex]=Value;else Object->SetField(Key,Value);
+                lua_pop(L,1);
+            }
+            if(Length){for(const auto& Value:Array)if(!Value){Error=TEXT("Sparse output array");return nullptr;}return MakeShared<FJsonValueArray>(Array);}
+            return MakeShared<FJsonValueObject>(Object);
+        }
+        }
+        Error=TEXT("Unsupported structured output value");return nullptr;
+    }
 }
 
 FACEPluginVM::FACEPluginVM()
@@ -216,7 +264,7 @@ FACEPluginVM::FACEPluginVM()
     }, this);
 }
 FACEPluginVM::~FACEPluginVM() { if (State) lua_close(State); }
-bool FACEPluginVM::Load(const FString& Source, FString& Error)
+bool FACEPluginVM::Load(const FString& Source, FString& Error, const FString& Policy)
 {
     SpellIndexWork=0;Instructions=0;RegexWork=0;
     if (!State || Source.Len() > 256 * 1024) { Error = TEXT("Plugin exceeds source/memory limit"); return false; }
@@ -233,6 +281,22 @@ bool FACEPluginVM::Load(const FString& Source, FString& Error)
     if(luaL_loadbufferx(State,RuleUtf8.Get(),RuleUtf8.Length(),"loot_rules","t")!=LUA_OK||lua_pcall(State,0,1,0)!=LUA_OK)
     {Error=LuaError(State);lua_settop(State,0);return false;}
     lua_setglobal(State,"lootmatch");
+    if(!Policy.IsEmpty())
+    {
+        if(Policy!=TEXT("ucm")&&Policy!=TEXT("itemtools")){Error=TEXT("Unknown built-in policy module");return false;}
+        FString PolicySource;
+        if(!FFileHelper::LoadFileToString(PolicySource,*(Plugin->GetBaseDir()/TEXT("ClientMods")/Policy/TEXT("main.lua")))){Error=TEXT("Policy module unavailable");return false;}
+        FTCHARToUTF8 PolicyUTF8(*PolicySource);
+        if(luaL_loadbufferx(State,PolicyUTF8.Get(),PolicyUTF8.Length(),"builtinpolicy","t")!=LUA_OK||lua_pcall(State,0,1,0)!=LUA_OK||!lua_isfunction(State,-1))
+        {Error=LuaError(State);lua_settop(State,0);return false;}
+        lua_setglobal(State,"builtinpolicy");Instructions=0;
+        FString Defaults;TSharedPtr<FJsonObject> DefaultProfile;
+        if(FFileHelper::LoadFileToString(Defaults,*(Plugin->GetBaseDir()/TEXT("ClientMods")/Policy/TEXT("default.json")))&&FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Defaults),DefaultProfile))
+        {
+            lua_pushcfunction(State,PushArgument);lua_pushlightuserdata(State,DefaultProfile.Get());
+            if(lua_pcall(State,1,1,0)!=LUA_OK){Error=LuaError(State);return false;}lua_setglobal(State,"builtinprofile");
+        }
+    }
     FTCHARToUTF8 Utf8(*Source);
     if (luaL_loadbufferx(State, Utf8.Get(), Utf8.Length(), "plugin", "t") != LUA_OK || lua_pcall(State, 0, 1, 0) != LUA_OK)
     { Error = LuaError(State); lua_settop(State, 0); return false; }
@@ -279,6 +343,14 @@ bool FACEPluginVM::Step(const TSharedPtr<FJsonObject>& Snapshot, const TSharedPt
             Intent->SetNumberField(Key, Value);
         }
         else if (lua_isboolean(State, -1)) Intent->SetBoolField(Key, lua_toboolean(State, -1) != 0);
+        else if((Key==TEXT("state")||Key==TEXT("ui")||Key==TEXT("markers")||Key==TEXT("messages")||Key==TEXT("requests")||Key==TEXT("profile_patch"))&&lua_istable(State,-1))
+        {
+            int Nodes=0,OutputBytes=0;auto Value=ReadOutput(State,-1,0,Nodes,OutputBytes,Error,Key==TEXT("profile_patch")||Key==TEXT("requests"));
+            if(!Value){lua_settop(State,0);return false;}
+            // Lua's empty table has no array/object distinction.
+            if(Key!=TEXT("state")&&Key!=TEXT("profile_patch")&&Value->Type==EJson::Object&&Value->AsObject()->Values.IsEmpty())Value=MakeShared<FJsonValueArray>(TArray<TSharedPtr<FJsonValue>>{});
+            Intent->SetField(Key,Value);
+        }
         else if(Key==TEXT("runtime_route")&&lua_istable(State,-1))
         {
             // Narrow overlay output: no arbitrary nested Lua objects or cycles.

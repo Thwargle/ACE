@@ -19,6 +19,13 @@ zero for all matching items, then click **Start giving**. A partial final stack
 is supported. The transfer list is captured at Start so rewards from an NPC are
 not automatically fed back into the same run.
 
+Progress counts the units the server actually removes. Quest NPCs that accept
+one unit from a stack are offered the remainder until the requested total is
+reached. If the server explicitly rejects a gift while the recipient is busy,
+Item Tools waits and retries up to six times, with increasing pauses. It never
+retries an unconfirmed transfer just because it timed out. Repeated rejections
+stop Item Tools with an explanation and leave UCM running.
+
 Equipped, retained, offered items and nonempty containers are excluded. Items inside an
 offered container are also excluded. Bonded quest items may be given to NPCs,
 but cannot be given to players. Recipients must remain within five meters and

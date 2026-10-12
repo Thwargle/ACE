@@ -1,0 +1,316 @@
+#include "Mods/ACEPluginSubsystem.h"
+#include "ACEPluginVM.h"
+#include "ACEWaypoint.h"
+#include "ACEClientSubsystem.h"
+#include "ACEPlayerController.h"
+#include "ACEDatSubsystem.h"
+#include "ACEWorldPresenterComponent.h"
+#include "ACEWorldEntityActor.h"
+#include "ACESession.h"
+#include "Engine/GameInstance.h"
+#include "Engine/World.h"
+#include "GameFramework/GameModeBase.h"
+#include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Misc/SecureHash.h"
+#include "Serialization/JsonSerializer.h"
+#include "ProceduralMeshComponent.h"
+
+namespace
+{
+    FString S(const TSharedPtr<FJsonObject>& O,const TCHAR* Key)
+    {FString V;if(O)O->TryGetStringField(Key,V);return V;}
+    double N(const TSharedPtr<FJsonObject>& O,const TCHAR* Key)
+    {double V=0;if(O)O->TryGetNumberField(Key,V);return FMath::IsFinite(V)?V:0;}
+    int32 Id(const TSharedPtr<FJsonObject>& O,const TCHAR* Key)
+    {const double V=N(O,Key);return V>0&&V<=MAX_uint32&&V==FMath::FloorToDouble(V)?int32(uint32(V)):0;}
+    FString Encode(const TSharedPtr<FJsonObject>& O)
+    {FString Text;FJsonSerializer::Serialize(O.ToSharedRef(),TJsonWriterFactory<TCHAR,TCondensedJsonPrintPolicy<TCHAR>>::Create(&Text));return Text;}
+    bool List(const TSharedPtr<FJsonObject>& O,const TCHAR* Key,int32 Max,const TArray<TSharedPtr<FJsonValue>>*& Out)
+    {return O->TryGetArrayField(Key,Out)&&Out->Num()<=Max;}
+    bool SameArea(const FACEPosition& A,const FACEPosition& B)
+    {return A.IsValid()&&B.IsValid()&&((uint32(A.CellId)>>16)==(uint32(B.CellId)>>16)||((uint32(A.CellId)&65535)<256&&(uint32(B.CellId)&65535)<256));}
+    TSharedPtr<FJsonObject> Position(const FACEPosition& P)
+    {auto O=MakeShared<FJsonObject>();O->SetNumberField(TEXT("cell"),uint32(P.CellId));O->SetNumberField(TEXT("x"),P.Location.X);O->SetNumberField(TEXT("y"),P.Location.Y);O->SetNumberField(TEXT("z"),P.Location.Z);return O;}
+    void Event(TArray<TSharedPtr<FJsonValue>>& Queue,const TSharedPtr<FJsonObject>& O,uint32 Serial)
+    {O->SetNumberField(TEXT("serial"),Serial);if(Queue.Num()>=64)Queue.RemoveAt(0);Queue.Add(MakeShared<FJsonValueObject>(O));}
+    bool Color(const FString& Name,FLinearColor& Out)
+    {
+        static const TMap<FString,FLinearColor> Colors={{TEXT("green"),FLinearColor(.15f,1,.3f)},{TEXT("yellow"),FLinearColor(1,.8f,.1f)},
+            {TEXT("red"),FLinearColor(1,.15f,.1f)},{TEXT("blue"),FLinearColor(.15f,.6f,1)},{TEXT("white"),FLinearColor::White},{TEXT("purple"),FLinearColor(.8f,.3f,1)}};
+        if(const auto* C=Colors.Find(Name)){Out=*C;return true;}return false;
+    }
+}
+
+void UACEPluginSubsystem::UpdateCompanionChatContext()
+{
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    const int32 Player=(C->GetSessionState()==EACESessionState::InWorld||C->GetSessionState()==EACESessionState::EnteringWorld)?C->GetPlayerGuid():0;
+    if(PluginChatSession.Pin()!=C->GetSession()||PluginChatPlayer!=Player||PluginChatServer!=C->GetServerName())
+    {PluginChatEvents.Reset();PluginChatSession=C->GetSession();PluginChatPlayer=Player;PluginChatServer=C->GetServerName();}
+}
+
+void UACEPluginSubsystem::ObservePluginChat(const FString& Text,const FString& Sender,int32 Type)
+{
+    UpdateCompanionChatContext();
+    if(!PluginChatPlayer||!Plugins.ContainsByPredicate([](const auto& P){return P->HasPresentation()&&P->Enabled&&P->Permissions.Contains(TEXT("chat"));}))return;
+    // Subscribe to the client feed at initialization, before its first world
+    // maintenance tick. This is independent of UCM, appraisals and UI filters.
+    FString Line=Text;
+    if(Type==ACEChatMessageType::Tell)Line=FString::Printf(TEXT("%s tells you, \"%s\""),Sender.IsEmpty()?TEXT("Someone"):*Sender,*Text);
+    else if(Type==ACEChatMessageType::Speech&&!Sender.IsEmpty())Line=Sender.Equals(TEXT("You"),ESearchCase::IgnoreCase)?FString::Printf(TEXT("You say, \"%s\""),*Text):FString::Printf(TEXT("%s says, \"%s\""),*Sender,*Text);
+    else if(Type==ACEChatMessageType::Emote&&!Sender.IsEmpty())Line=Sender+TEXT(" ")+Text;
+    auto E=MakeShared<FJsonObject>();E->SetNumberField(TEXT("serial"),++PluginChatSerial);E->SetStringField(TEXT("text"),Line.Left(4096));
+    E->SetStringField(TEXT("raw_text"),Text.Left(4096));E->SetStringField(TEXT("sender"),Sender.Left(256));E->SetNumberField(TEXT("color"),Type);E->SetNumberField(TEXT("time"),FPlatformTime::Seconds());
+    if(PluginChatEvents.Num()>=128)PluginChatEvents.RemoveAt(0);PluginChatEvents.Add(MakeShared<FJsonValueObject>(E));
+}
+
+bool UACEPluginSubsystem::StartCompanion(FACEClientPlugin& P)
+{
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    if(!P.Enabled||C->GetSessionState()!=EACESessionState::InWorld||!C->GetPlayerGuid())
+    {Notice=TEXT("Enable this companion and enter the world first.");return false;}
+    if(P.Running)return true;
+    if(P.Api>=2&&!ValidatePublicProfile(P.Profile)){P.CompanionStopped=true;P.Status=TEXT("Invalid public profile structures");return false;}
+    if(!InitializePluginState(P)){P.CompanionStopped=true;return false;}
+    FString Source,Error;auto VM=MakeShared<FACEPluginVM>();
+    if(IFileManager::Get().FileSize(*(P.Directory/TEXT("main.lua")))>256*1024||!FFileHelper::LoadFileToString(Source,*(P.Directory/TEXT("main.lua")))||!VM->Load(Source,Error))
+    {P.CompanionStopped=true;P.Status=TEXT("Script load failed: ")+Error;return false;}
+    P.VM=VM;P.VMSession=C->GetSession();P.Player=C->GetPlayerGuid();P.Server=C->GetServerName();
+    P.Running=true;P.CompanionStopped=false;P.NextDecision=0;P.NextCommand=0;P.NextStateSave=FPlatformTime::Seconds()+5;
+    // Start with events received since entering this character, not a previous login.
+    P.Status=TEXT("Running");P.CompanionError.Empty();return true;
+}
+
+bool UACEPluginSubsystem::InitializePluginState(FACEClientPlugin& P)
+{
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    UpdateCompanionChatContext();
+    const bool NewCharacter=P.VMSession.Pin()!=C->GetSession()||P.Player!=C->GetPlayerGuid()||P.Server!=C->GetServerName();
+    FlushPluginState(P);
+    if(P.StateDirty){Notice=P.CompanionError;return false;}
+    const FString Character=FString::Printf(TEXT("%s_%08X"),*FMD5::HashAnsiString(*C->GetServerName()),uint32(C->GetPlayerGuid()));
+    P.StatePath=UserDirectory()/TEXT("State")/P.Id/(Character+TEXT(".json"));P.SavedState=MakeShared<FJsonObject>();
+    if(P.Permissions.Contains(TEXT("state"))&&IFileManager::Get().FileExists(*P.StatePath))
+    {
+        FString Text;TSharedPtr<FJsonObject> Loaded;
+        if(IFileManager::Get().FileSize(*P.StatePath)>65536||!FFileHelper::LoadFileToString(Text,*P.StatePath)||!FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text),Loaded))
+        {P.Status=TEXT("Cannot read saved state; original file preserved");return false;}
+        P.SavedState=Loaded;
+    }
+    if(NewCharacter)P.ChatCursor=PluginChatEvents.IsEmpty()?PluginChatSerial:uint32(N(PluginChatEvents[0]->AsObject(),TEXT("serial")))-1;
+    P.NextStateSave=FPlatformTime::Seconds()+5;
+    return true;
+}
+
+void UACEPluginSubsystem::FlushPluginState(FACEClientPlugin& P)
+{
+    if(!P.StateDirty||!P.SavedState||P.StatePath.IsEmpty())return;
+    IFileManager::Get().MakeDirectory(*FPaths::GetPath(P.StatePath),true);
+    const FString Temp=P.StatePath+TEXT(".tmp");
+    if(FFileHelper::SaveStringToFile(Encode(P.SavedState),*Temp,FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM)
+        &&IFileManager::Get().Move(*P.StatePath,*Temp,true,true))P.StateDirty=false;
+    else P.CompanionError=TEXT("Could not save plugin state; will retry");
+}
+
+void UACEPluginSubsystem::StopCompanion(FACEClientPlugin& P,const FString& Reason)
+{
+    FlushPluginState(P);P.Running=false;P.CompanionStopped=true;P.VM.Reset();
+    P.Markers.Reset();P.PanelRows.Reset();P.PluginEvents.Reset();++P.PanelRevision;P.Status=Reason+(P.StateDirty?TEXT("; ")+P.CompanionError:FString());
+    // Observational plugin lifecycle never cancels UCM movement, casts or attacks.
+}
+
+TSharedPtr<FJsonObject> UACEPluginSubsystem::CompanionSnapshot(FACEClientPlugin& P)
+{
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Out=MakeShared<FJsonObject>();
+    FACEPosition Player=C->GetPlayerPosition();if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController()))PC->TryGetLocallyPredictedPosition(Player);
+    Out->SetNumberField(TEXT("api"),P.Api);Out->SetNumberField(TEXT("unix_time"),FDateTime::UtcNow().ToUnixTimestamp());Out->SetNumberField(TEXT("time"),FPlatformTime::Seconds());Out->SetNumberField(TEXT("player"),uint32(C->GetPlayerGuid()));Out->SetStringField(TEXT("server"),C->GetServerName());
+    Out->SetObjectField(TEXT("position"),Position(Player));Out->SetNumberField(TEXT("selected"),uint32(C->GetSelectedObject().Guid));
+    const auto V=C->GetPlayerVitalsView();Out->SetNumberField(TEXT("health"),V.Health);Out->SetNumberField(TEXT("max_health"),V.MaxHealth);
+    Out->SetNumberField(TEXT("mana"),V.Mana);Out->SetNumberField(TEXT("max_mana"),V.MaxMana);Out->SetNumberField(TEXT("stamina"),V.Stamina);Out->SetNumberField(TEXT("max_stamina"),V.MaxStamina);
+    Out->SetObjectField(TEXT("state"),P.SavedState?P.SavedState:MakeShared<FJsonObject>());Out->SetStringField(TEXT("error"),P.CompanionError);P.CompanionError.Empty();
+    Out->SetArrayField(TEXT("events"),P.PluginEvents);P.PluginEvents.Reset();
+    TArray<TSharedPtr<FJsonValue>> Chat;
+    if(P.Permissions.Contains(TEXT("chat")))
+    {
+        for(const auto& E:PluginChatEvents)if(uint32(N(E->AsObject(),TEXT("serial")))>P.ChatCursor)Chat.Add(E);
+        Out->SetBoolField(TEXT("chat_gap"),!Chat.IsEmpty()&&N(Chat[0]->AsObject(),TEXT("serial"))>double(P.ChatCursor)+1);
+        Out->SetNumberField(TEXT("chat_serial"),PluginChatSerial);P.ChatCursor=PluginChatSerial;
+    }
+    Out->SetArrayField(TEXT("chat_events"),Chat);
+    // No inventory appraisals, spell indexing or visibility raycasts for companions.
+    TArray<TPair<double,const FACEWorldObject*>> Nearby;
+    if(auto Session=C->GetSession())for(const auto& Pair:Session->GetWorldObjects())
+    {
+        const auto& O=Pair.Value;if(O.Guid==C->GetPlayerGuid()||!O.IsSelectableWorldObject()||!SameArea(Player,O.Position))continue;
+        const double D=FVector::DistSquared(Player.ToUnrealLocation(),O.Position.ToUnrealLocation());
+        if(D<=FMath::Square(24000.))Nearby.Emplace(D,&O);
+    }
+    Nearby.Sort([](const auto& A,const auto& B){return A.Key==B.Key?uint32(A.Value->Guid)<uint32(B.Value->Guid):A.Key<B.Key;});
+    TArray<TSharedPtr<FJsonValue>> Objects;
+    Out->SetBoolField(TEXT("objects_truncated"),Nearby.Num()>512);
+    for(int I=0;I<FMath::Min(Nearby.Num(),512);++I)
+    {
+        const auto& O=*Nearby[I].Value;auto Row=MakeShared<FJsonObject>();Row->SetNumberField(TEXT("id"),uint32(O.Guid));Row->SetStringField(TEXT("name"),O.Name.Left(256));
+        Row->SetNumberField(TEXT("wcid"),O.WeenieClassId);Row->SetNumberField(TEXT("distance"),FMath::Sqrt(Nearby[I].Key)/100.);
+        Row->SetBoolField(TEXT("monster"),O.IsAttackable()&&!O.bIsPlayer&&!O.PetOwnerId&&(O.ItemType&ACEItemType::Creature)&&!O.bDying);
+        Row->SetBoolField(TEXT("player"),O.bIsPlayer);Row->SetBoolField(TEXT("corpse"),O.IsCorpse());Row->SetBoolField(TEXT("dead"),O.bDying);
+        Row->SetObjectField(TEXT("position"),Position(O.Position));Objects.Add(MakeShared<FJsonValueObject>(Row));
+    }
+    Out->SetArrayField(TEXT("objects"),Objects);
+    auto Peers=MakeShared<FJsonObject>();for(const auto& Other:Plugins){auto Info=MakeShared<FJsonObject>();Info->SetBoolField(TEXT("enabled"),Other->Enabled);Info->SetBoolField(TEXT("running"),Other->Running);Peers->SetObjectField(Other->Id,Info);}Out->SetObjectField(TEXT("plugins"),Peers);
+    return Out;
+}
+
+bool UACEPluginSubsystem::CompanionAction(FACEClientPlugin& P,const TSharedPtr<FJsonObject>& A,FString& Error)
+{
+    const FString Kind=S(A,TEXT("action"));if(Kind.IsEmpty())return true;
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    if(!P.Enabled||!P.Running||C->GetSessionState()!=EACESessionState::InWorld||C->GetPlayerGuid()!=P.Player||C->GetServerName()!=P.Server)
+    {Error=TEXT("Plugin is not active on this character");return false;}
+    const FString Permission=Kind==TEXT("select")?TEXT("ui"):Kind==TEXT("waypoint")?TEXT("waypoint"):Kind==TEXT("command")?TEXT("commands"):FString();
+    if(Permission.IsEmpty()||!P.Permissions.Contains(Permission)){Error=TEXT("Companion action not permitted: ")+Kind;return false;}
+    if(Kind==TEXT("select")||Kind==TEXT("waypoint"))
+    {
+        FACEWorldObject O;
+        const bool Found=C->GetWorldObject(Id(A,TEXT("target")),O),Owned=Found&&P.Api>=2&&Kind==TEXT("select")&&IsOwnedPluginItem(O);
+        if(!Found||(!Owned&&(!O.IsSelectableWorldObject()||!SameArea(C->GetPlayerPosition(),O.Position)
+            ||FVector::DistSquared(C->GetPlayerPosition().ToUnrealLocation(),O.Position.ToUnrealLocation())>FMath::Square(24000.))))
+        {Error=TEXT("Target is no longer nearby");return false;}
+        if(Kind==TEXT("select")){C->SelectObject(O.Guid);return true;}
+        if(!IsWaypointEnabled()){Error=TEXT("Enable Waypoint to show the navigation arrow");return false;}
+        const FVector2D Coordinates=ACEWaypoint::Coordinates(O.Position);const uint32 Dungeon=(uint32(O.Position.CellId)&65535)>=256?uint32(O.Position.CellId)>>16:0;
+        FVector2D Previous;uint32 PreviousDungeon=0;
+        if(!GetWaypoint(Previous,PreviousDungeon)||PreviousDungeon!=Dungeon||!Coordinates.Equals(Previous,.002))SetWaypoint(Coordinates,Dungeon);
+        return true;
+    }
+    if(FPlatformTime::Seconds()<P.NextCommand){Error=TEXT("Command rate limit (one per second)");return false;}
+    const FString Text=S(A,TEXT("text")).TrimStartAndEnd();FString Command,Arguments;
+    Text.Split(TEXT(" "),&Command,&Arguments);if(Command.IsEmpty())Command=Text;Command=Command.ToLower();Arguments=Arguments.TrimStartAndEnd();
+    if(Text.Len()>512||Text.Contains(TEXT("\n"))||Text.Contains(TEXT("\r"))){Error=TEXT("Invalid command");return false;}
+    P.NextCommand=FPlatformTime::Seconds()+1;
+    bool Ok=false;
+    if(Command==TEXT("/ucm")){auto Peer=Find(TEXT("ucm"));if(Peer&&Peer->Enabled)Ok=RunUCMCommand(Arguments);}
+    else if(Command==TEXT("/items")||Command==TEXT("/it")){auto Peer=Find(TEXT("itemtools"));if(Peer&&Peer->Enabled)Ok=RunItemToolsCommand(Arguments);}
+    else if(Command==TEXT("/myquests")&&Arguments.IsEmpty()){C->SendChatMessage(TEXT("/myquests"));return true;}
+    else {Error=TEXT("Supported commands: /ucm, /items, /it, /myquests");return false;}
+    if(!Ok)Error=Notice.IsEmpty()?TEXT("Command target must be enabled and configured"):Notice;return Ok;
+}
+
+bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TSharedPtr<FJsonObject>& O,FString& Error)
+{
+    // Validate the complete presentation before replacing the current one.
+    const TSharedPtr<FJsonObject>* State=nullptr;const TArray<TSharedPtr<FJsonValue>> *Rows=nullptr,*Markers=nullptr,*Messages=nullptr;
+    if(O->HasField(TEXT("state"))&&(!P.Permissions.Contains(TEXT("state"))||!O->TryGetObjectField(TEXT("state"),State)||FTCHARToUTF8(*Encode(*State)).Length()>65536))
+    {Error=TEXT("State requires state permission and an object of at most 64 KiB");return false;}
+    if(O->HasField(TEXT("ui")))
+    {
+        if(!P.Permissions.Contains(TEXT("ui"))||!List(O,TEXT("ui"),128,Rows)){Error=TEXT("UI requires ui permission and at most 128 rows");return false;}
+        if(!ValidatePluginUI(*Rows,Error))return false;
+    }
+    TArray<FACEPluginMarker> Parsed;
+    if(O->HasField(TEXT("markers")))
+    {
+        if(!P.Permissions.Contains(TEXT("markers"))||!List(O,TEXT("markers"),32,Markers)){Error=TEXT("Markers require markers permission and at most 32 entries");return false;}
+        for(const auto& V:*Markers)
+        {
+            if(V->Type!=EJson::Object){Error=TEXT("Invalid marker");return false;}const auto M=V->AsObject();FACEPluginMarker Result;Result.Id=Id(M,TEXT("id"));Result.Shape=S(M,TEXT("shape"));
+            if(!Result.Id||!TArray<FString>{TEXT("arrow"),TEXT("!"),TEXT("diamond")}.Contains(Result.Shape)||!Color(S(M,TEXT("color")),Result.Color)){Error=TEXT("Invalid marker ID, shape or color");return false;}
+            M->TryGetBoolField(TEXT("world"),Result.World);M->TryGetBoolField(TEXT("map"),Result.Map);Parsed.Add(Result);
+        }
+    }
+    if(O->HasField(TEXT("messages")))
+    {
+        if(!P.Permissions.Contains(TEXT("messaging"))||!List(O,TEXT("messages"),8,Messages)){Error=TEXT("Messaging requires permission and at most eight messages per tick");return false;}
+        for(const auto& V:*Messages)if(V->Type!=EJson::Object||S(V->AsObject(),TEXT("to")).Len()>64||S(V->AsObject(),TEXT("topic")).Len()>64||S(V->AsObject(),TEXT("text")).Len()>1024)
+        {Error=TEXT("Invalid plugin message");return false;}
+    }
+    if(State&&(!P.SavedState||!FJsonValue::CompareEqual(FJsonValueObject(P.SavedState),FJsonValueObject(*State)))){P.SavedState=*State;P.StateDirty=true;}
+    if(Rows&&!FJsonValue::CompareEqual(FJsonValueArray(P.PanelRows),FJsonValueArray(*Rows))){P.PanelRows=*Rows;++P.PanelRevision;}
+    if(Markers)P.Markers=MoveTemp(Parsed);
+    if(Messages)for(const auto& V:*Messages)
+    {
+        const auto M=V->AsObject();auto Peer=Find(S(M,TEXT("to")));
+        if(!Peer||!Peer->HasPresentation()||!Peer->Running||!Peer->Permissions.Contains(TEXT("messaging"))){P.CompanionError=TEXT("Message recipient is unavailable or lacks messaging permission");continue;}
+        auto E=MakeShared<FJsonObject>();E->SetStringField(TEXT("type"),TEXT("message"));E->SetStringField(TEXT("sender"),P.Id);E->SetStringField(TEXT("topic"),S(M,TEXT("topic")));E->SetStringField(TEXT("text"),S(M,TEXT("text")));Event(Peer->PluginEvents,E,++PluginEventSerial);
+    }
+    if(O->HasField(TEXT("status")))P.Status=S(O,TEXT("status"));
+    if(P.Companion&&S(O,TEXT("action"))==TEXT("stop")){StopCompanion(P,P.Status);return true;}
+    FString ActionError;if((P.Companion||S(O,TEXT("action"))==TEXT("command")||S(O,TEXT("action"))==TEXT("waypoint"))&&!CompanionAction(P,O,ActionError))P.CompanionError=ActionError;
+    return true;
+}
+
+bool UACEPluginSubsystem::RunPluginCommand(const FString& Arguments)
+{
+    FString Id,Text;Arguments.TrimStartAndEnd().Split(TEXT(" "),&Id,&Text);if(Id.IsEmpty())Id=Arguments.TrimStartAndEnd();
+    auto P=Find(Id);
+    if(!P||!P->HasPresentation()){Notice=TEXT("/plugin <companion-id> start | stop | <command text>");return false;}
+    if(Text==TEXT("start"))return Start(P->Id);
+    if(Text==TEXT("stop")){Stop(P->Id,TEXT("Stopped"));return true;}
+    if(!P->Enabled||!P->Running||Text.Len()>512){Notice=TEXT("Start the enabled companion before sending commands (512 characters maximum).");return false;}
+    auto E=MakeShared<FJsonObject>();E->SetStringField(TEXT("type"),TEXT("command"));E->SetStringField(TEXT("text"),Text);Event(P->PluginEvents,E,++PluginEventSerial);P->NextDecision=0;Notice=TEXT("Command sent to ")+P->Name;return true;
+}
+
+void UACEPluginSubsystem::TickCompanions()
+{
+    UpdateCompanionChatContext();
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    const bool InWorld=C->GetSessionState()==EACESessionState::InWorld;
+    const bool Changed=CompanionSession.Pin()!=C->GetSession()||CompanionPlayer!=C->GetPlayerGuid()||CompanionServer!=C->GetServerName();
+    for(const auto& P:Plugins)if(P->Companion)
+    {
+        if(Changed||!InWorld)
+        {
+            if(P->Running)StopCompanion(*P,TEXT("Waiting for character"));
+            if(Changed)P->CompanionStopped=false;
+        }
+        if(InWorld&&P->Enabled&&!P->Running&&!P->CompanionStopped)StartCompanion(*P);
+        if(!P->Running)continue;
+        const double Now=FPlatformTime::Seconds();if(Now<P->NextDecision)continue;P->NextDecision=Now+.5;
+        TSharedPtr<FJsonObject> Output;FString Error;
+        if(!P->VM->Step(P->Api>=2?PublicSnapshot(*P):CompanionSnapshot(*P),P->Profile,Output,Error)||(Output&&!(P->Api>=2?ApplyPublicOutput(*P,Output,Error):ApplyCompanionOutput(*P,Output,Error))))StopCompanion(*P,TEXT("Script error: ")+Error);
+        if(Now>=P->NextStateSave){FlushPluginState(*P);P->NextStateSave=Now+5;}
+    }
+    CompanionSession=C->GetSession();CompanionPlayer=InWorld?C->GetPlayerGuid():0;CompanionServer=C->GetServerName();
+    DrawPluginMarkers();
+}
+
+TArray<FACEPluginMarker> UACEPluginSubsystem::GetPluginMarkers() const
+{
+    TArray<FACEPluginMarker> Result;auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    if(C->GetSessionState()!=EACESessionState::InWorld)return Result;
+    for(const auto& P:Plugins)if(P->HasPresentation()&&P->Running&&P->Enabled&&P->Player==C->GetPlayerGuid())for(const auto& M:P->Markers)
+    {FACEWorldObject O;if(C->GetWorldObject(M.Id,O)&&O.IsSelectableWorldObject()&&!O.bDying&&SameArea(C->GetPlayerPosition(),O.Position)&&FVector::DistSquared(C->GetPlayerPosition().ToUnrealLocation(),O.Position.ToUnrealLocation())<=FMath::Square(24000.)){Result.Add(M);if(Result.Num()>=128)return Result;}}
+    return Result;
+}
+
+void UACEPluginSubsystem::DrawPluginMarkers()
+{
+    const double Now=FPlatformTime::Seconds();if(Now<NextPluginMarkerDraw)return;NextPluginMarkerDraw=Now+.1;
+    const auto Markers=GetPluginMarkers();auto* W=GetWorld();
+    if(!W||Markers.IsEmpty()){if(PluginMarkerMesh&&PluginMarkerMesh->GetNumSections())PluginMarkerMesh->ClearAllMeshSections();return;}
+    if(!PluginMarkerMesh||PluginMarkerMesh->GetWorld()!=W)
+    {
+        if(PluginMarkerActor)PluginMarkerActor->Destroy();PluginMarkerActor=W->SpawnActor<AActor>();if(!PluginMarkerActor)return;
+        PluginMarkerMesh=NewObject<UProceduralMeshComponent>(PluginMarkerActor);PluginMarkerActor->SetRootComponent(PluginMarkerMesh);
+        PluginMarkerMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);PluginMarkerMesh->SetCastShadow(false);PluginMarkerMesh->SetCanEverAffectNavigation(false);
+        PluginMarkerMesh->SetMaterial(0,GetGameInstance()->GetSubsystem<UACEDatSubsystem>()->GetVertexColorMaterial());PluginMarkerMesh->RegisterComponentWithWorld(W);
+    }
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();const FVector Origin=C->GetPlayerPosition().ToUnrealLocation();
+    const auto* PC=GetGameInstance()->GetFirstLocalPlayerController();const FVector Right=PC?PC->GetControlRotation().RotateVector(FVector::RightVector):FVector::RightVector;
+    const auto* Presenter=W->GetAuthGameMode()?W->GetAuthGameMode()->FindComponentByClass<UACEWorldPresenterComponent>():nullptr;
+    TArray<FVector> Vertices,Normals;TArray<FLinearColor> Colors;TArray<int32> Indices;
+    for(const auto& M:Markers)if(M.World)
+    {
+        FACEWorldObject O;if(!C->GetWorldObject(M.Id,O))continue;
+        FVector Center=O.Position.ToUnrealLocation()-Origin+FVector(0,0,220);
+        if(auto* Actor=Presenter?Presenter->FindEntityActor(M.Id):nullptr)Center=Actor->GetActorLocation()+FVector(0,0,FMath::Max(30.f,Actor->GetMeleeBodyHeight())+35)-Origin;
+        auto Tri=[&](FVector2D A,FVector2D B,FVector2D D){int Base=Vertices.Num();for(auto V:{A,B,D}){Vertices.Add(Center+Right*V.X+FVector::UpVector*V.Y);Normals.Add(FVector::ForwardVector);Colors.Add(M.Color);}Indices.Append({Base,Base+1,Base+2,Base+2,Base+1,Base});};
+        auto Rect=[&](float L,float B,float R,float T){Tri({L,B},{R,B},{R,T});Tri({L,B},{R,T},{L,T});};
+        if(M.Shape==TEXT("!")){Rect(-4,0,4,24);Rect(-4,-12,4,-5);}
+        else if(M.Shape==TEXT("arrow")){Rect(-4,0,4,22);Tri({-14,0},{14,0},{0,-16});}
+        else{Tri({0,16},{14,0},{0,-16});Tri({0,16},{0,-16},{-14,0});}
+    }
+    PluginMarkerMesh->SetWorldLocation(Origin);PluginMarkerMesh->CreateMeshSection_LinearColor(0,Vertices,Indices,Normals,{},Colors,{},false);
+}

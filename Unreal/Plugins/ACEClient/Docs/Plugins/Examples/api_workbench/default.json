@@ -1,0 +1,14 @@
+{
+  "buffing": false,
+  "combat": "off",
+  "recovery": false,
+  "looting": false,
+  "navigation": false,
+  "meta_enabled": false,
+  "buff_others": false,
+  "route_preview": true,
+  "approach_range": 60,
+  "range": 30,
+  "health_threshold": 75
+}
+

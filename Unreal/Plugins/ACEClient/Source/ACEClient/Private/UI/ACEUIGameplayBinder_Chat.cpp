@@ -1046,11 +1046,16 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 	{
 		return false;
 	}
-	if (Cmd == TEXT("plugins") || Cmd == TEXT("ucm") || Cmd == TEXT("items") || Cmd == TEXT("it"))
+	if (Cmd == TEXT("plugins") || Cmd == TEXT("plugin") || Cmd == TEXT("ucm") || Cmd == TEXT("items") || Cmd == TEXT("it"))
     {
         if (auto* Host=Client->GetGameInstance()->GetSubsystem<UACEPluginSubsystem>())
         {
-            if(Cmd==TEXT("items")||Cmd==TEXT("it"))
+            if(Cmd==TEXT("plugin"))
+            {
+                Host->RunPluginCommand(Args);
+                if(!Host->Notice.IsEmpty())AppendLocalChatLine(Host->Notice,ACEChatMessageType::System);
+            }
+            else if(Cmd==TEXT("items")||Cmd==TEXT("it"))
             {
                 Host->RunItemToolsCommand(Args);
                 if(!Host->Notice.IsEmpty())AppendLocalChatLine(Host->Notice,ACEChatMessageType::System);

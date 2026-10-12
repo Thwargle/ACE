@@ -89,7 +89,7 @@ void UACEPluginCosmetics::RunTool(const TArray<FString>& Arguments,bool bLoadAft
     // Arguments are constructed by the compiled adapter, never a Lua command line.
     // No shell is involved. Reject quotes/control characters; double terminal
     // backslashes so Windows cannot swallow the closing argument quote.
-    if(Arguments.IsEmpty() || (Arguments[0]!=TEXT("scan") && Arguments[0]!=TEXT("verify-active") && Arguments[0]!=TEXT("convert-select") && Arguments[0]!=TEXT("scan-items") && Arguments[0]!=TEXT("catalog-items") && Arguments[0]!=TEXT("clear-slot") && Arguments[0]!=TEXT("apply-outfit"))) return;
+    if(Arguments.IsEmpty() || (Arguments[0]!=TEXT("prepare-appearance") && Arguments[0]!=TEXT("scan") && Arguments[0]!=TEXT("verify-active") && Arguments[0]!=TEXT("convert-select") && Arguments[0]!=TEXT("scan-items") && Arguments[0]!=TEXT("catalog-items") && Arguments[0]!=TEXT("clear-slot") && Arguments[0]!=TEXT("apply-outfit"))) return;
     for(const FString& Arg:Arguments)
     {
         if(Arg.Len()>1024 || Arg.Contains(TEXT("\"")) || Arg.Contains(TEXT("\n")) || Arg.Contains(TEXT("\r"))) { Tell(TEXT("Invalid converter argument.")); return; }
@@ -147,6 +147,20 @@ void UACEPluginCosmetics::PollTool()
     bEnableAfterTool=false;
     if(ExitCode==0 && ToolCommand==TEXT("scan")) UpdateInstallations(ToolOutput);
     else if(ExitCode==0 && (ToolCommand==TEXT("scan-items")||ToolCommand==TEXT("catalog-items"))) UpdateCatalog(ToolOutput);
+    else if(ExitCode==0 && ToolCommand==TEXT("prepare-appearance"))
+    {
+        TSharedPtr<FJsonObject> Receipt;FString Id;FGuid Guid;
+        if(FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(ToolOutput),Receipt)&&Receipt&&Receipt->TryGetStringField(TEXT("id"),Id)&&FGuid::ParseExact(Id,EGuidFormats::Digits,Guid))
+        {
+            for(const auto& Item:Catalog)
+            {
+                FString Previous;Item->TryGetStringField(TEXT("cacheId"),Previous);
+                if(Previous==PreviewCacheId){Item->SetStringField(TEXT("cacheId"),Id);Item->SetStringField(TEXT("reason"),TEXT("Local model preview ready. Apply outfit to wear it."));}
+            }
+            Tell(TEXT("Preview ready; draft outfit is unchanged."));
+        }
+        else Tell(TEXT("Invalid appearance preview response."));
+    }
     else if(ExitCode==0 && LoadAfter)
     {
         if(!LoadVerified(ToolOutput)) { Tell(TEXT("Local cache could not be loaded; existing appearances retained. See the Output Log.")); }
@@ -181,7 +195,7 @@ bool UACEPluginCosmetics::LoadSingle(const FString& Json)
     FMemoryReader Reader(Bytes,true);
     uint32 Magic=0; int32 Version=0,VertexCount=0,SectionCount=0;
     Reader<<Magic<<Version<<VertexCount<<SectionCount;
-    if(Magic!=0x4d574341 || (!Body?Version!=1:(Version!=2&&Version!=3)) || VertexCount<1 || VertexCount>100000 || SectionCount<1 || SectionCount>64
+    if(Magic!=0x4d574341 || (!Body?Version!=1:(Version<2||Version>5)) || VertexCount<1 || VertexCount>100000 || SectionCount<1 || SectionCount>64
         || Reader.TotalSize()-Reader.Tell()<static_cast<int64>(VertexCount)*32) return false;
     Vertices.SetNum(VertexCount); Normals.SetNum(VertexCount); UVs.SetNum(VertexCount);
     for(int32 I=0;I<VertexCount;++I)
@@ -191,10 +205,10 @@ bool UACEPluginCosmetics::LoadSingle(const FString& Json)
         Vertices[I]=FVector(F[0],F[1],F[2]); Normals[I]=FVector(F[3],F[4],F[5]); UVs[I]=FVector2D(F[6],F[7]);
     }
     SkinBindings.Reset();SkinWeights.Reset();
-    if(Version==3)
+    if(Version>=3)
     {
         int32 BindCount=0;Reader<<BindCount;
-        if(BindCount<1||BindCount>4096||Reader.TotalSize()-Reader.Tell()<int64(BindCount)*28+int64(VertexCount)*32)return false;
+        if(BindCount<1||BindCount>4096||Reader.TotalSize()-Reader.Tell()<int64(BindCount)*(Version>=5?52:28)+int64(VertexCount)*32)return false;
         SkinBindings.SetNum(BindCount);
         for(auto& B:SkinBindings)
         {
@@ -202,6 +216,12 @@ bool UACEPluginCosmetics::LoadSingle(const FString& Json)
             if(B.Part<0||B.Part>16)return false;
             B.Pivot=FVector(F[0],F[1],F[2]);B.End=FVector(F[3],F[4],F[5]);
             if((B.End-B.Pivot).IsNearlyZero())return false;
+            if(Version>=5)
+            {
+                float R[6];for(float& V:R){Reader<<V;if(!FMath::IsFinite(V)||FMath::Abs(V)>10000)return false;}
+                B.ReferenceMin=FVector(R[0],R[1],R[2]);B.ReferenceMax=FVector(R[3],R[4],R[5]);
+                if(B.ReferenceMin.X>B.ReferenceMax.X||B.ReferenceMin.Y>B.ReferenceMax.Y||B.ReferenceMin.Z>B.ReferenceMax.Z)return false;
+            }
         }
         SkinWeights.SetNum(VertexCount*4);
         for(int32 V=0;V<VertexCount;++V)
@@ -229,7 +249,7 @@ bool UACEPluginCosmetics::LoadSingle(const FString& Json)
                 VerifiedSlot==TEXT("hands")?Part==12||Part==15:
                 VerifiedSlot==TEXT("legs")?Part>=0&&Part<=8:
                 VerifiedSlot==TEXT("feet")?Part==3||Part==4||Part==7||Part==8:false;
-            if(Version==3?Part!=-1:!ValidPart)return false;
+            if(Version>=3?(Part!=-1&&(Version<4||!ValidPart)):!ValidPart)return false;
         }
         if(Reader.TotalSize()-Reader.Tell()<8) return false;
         int32 Count=0; Reader<<Sections[S].Blend<<Count;
@@ -297,6 +317,8 @@ void UACEPluginCosmetics::RestoreOriginal()
         Part->DestroyComponent();
     }
     BareParts.Empty();LastSkinPose.Empty();
+    FittedVertices.Empty();FittedNormals.Empty();FittedBodyParts.Empty();
+    SkinnedVertices.Empty();SkinnedNormals.Empty();
     for(auto Part:BodyCosmetics)if(Part){if(Part==Cosmetic)Cosmetic=nullptr;Part->DestroyComponent();}
     BodyCosmetics.Empty();BodyPawn.Reset();
     if(Cosmetic) { Cosmetic->DestroyComponent(); Cosmetic=nullptr; }
@@ -484,13 +506,18 @@ bool UACEPluginCosmetics::LoadVerified(const FString& Json)
     {
         const auto O=Value->AsObject();const FString Id=O->GetStringField(TEXT("id")),Target=O->GetStringField(TEXT("slot"));
         const FString UiSlot=Target==TEXT("shield")?TEXT("offhand"):Target;
+        FString CatalogId,AppearanceName;O->TryGetStringField(TEXT("catalogId"),CatalogId);O->TryGetStringField(TEXT("appearanceName"),AppearanceName);
+        if(CatalogId.Len()>256)CatalogId.Empty();if(AppearanceName.Len()>256)AppearanceName.Empty();
         TSharedPtr<FJsonObject> Selection;
         for(const auto& Entry:Catalog)
-        {FString Cached;if(Entry->TryGetStringField(TEXT("cacheId"),Cached)&&Cached==Id){Selection=Entry;break;}}
+        {
+            FString Cached,EntryId;Entry->TryGetStringField(TEXT("cacheId"),Cached);Entry->TryGetStringField(TEXT("id"),EntryId);
+            if(Cached==Id||(!CatalogId.IsEmpty()&&EntryId==CatalogId)){Selection=Entry;Selection->SetStringField(TEXT("cacheId"),Id);break;}
+        }
         if(!Selection)
         {
-            Selection=MakeShared<FJsonObject>();Selection->SetStringField(TEXT("id"),Id);Selection->SetStringField(TEXT("cacheId"),Id);
-            Selection->SetStringField(TEXT("name"),TEXT("Saved ")+Target+TEXT(" appearance"));Selection->SetStringField(TEXT("sourceSlot"),Target);
+            Selection=MakeShared<FJsonObject>();Selection->SetStringField(TEXT("id"),CatalogId.IsEmpty()?Id:CatalogId);Selection->SetStringField(TEXT("cacheId"),Id);
+            Selection->SetStringField(TEXT("name"),AppearanceName.IsEmpty()?TEXT("Saved ")+Target+TEXT(" appearance"):AppearanceName);Selection->SetStringField(TEXT("sourceSlot"),Target);
             Selection->SetBoolField(TEXT("supported"),true);Selection->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueString>(Target)});
             Selection->SetStringField(TEXT("reason"),TEXT("Verified saved appearance. Choose a catalog item to replace it."));
         }

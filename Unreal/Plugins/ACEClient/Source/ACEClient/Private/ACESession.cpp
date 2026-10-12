@@ -1967,6 +1967,8 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecrea
 	Obj.IconId = Decoded.IconId;
 	Obj.IconOverlayId = Decoded.IconOverlayId;
 	Obj.IconUnderlayId = Decoded.IconUnderlayId;
+	Obj.CooldownId = Decoded.CooldownId;
+	Obj.CooldownDuration = Decoded.CooldownDuration;
 	Obj.UiEffects = static_cast<int32>(Decoded.UiEffects);
 	Obj.ContainerId = Decoded.ContainerId;
 	Obj.WielderId = Decoded.WielderId;
@@ -4083,7 +4085,12 @@ void FACESession::HandleUpdatePropertyFloat(FACEBinaryReader& Reader, bool bPubl
 	const int32 Guid = bPublic ? static_cast<int32>(Reader.ReadUInt32()) : PlayerGuid;
 	const int32 Key = static_cast<int32>(Reader.ReadUInt32());
 	const double Value = Reader.ReadDouble();
-	if (Guid != PlayerGuid || !FMath::IsFinite(Value)) return;
+	if (!FMath::IsFinite(Value)) return;
+	if (Key == 167 && Value >= 0.0) // PropertyFloat.CooldownDuration
+	{
+		if (FACEWorldObject* Object = WorldObjects.Find(Guid)) Object->CooldownDuration = Value;
+	}
+	if (Guid != PlayerGuid) return;
 	PlayerVitals.QualityDoubles.Add(Key, Value);
 	NotifyVitalsChanged();
 }
@@ -5399,6 +5406,22 @@ void FACESession::GetActiveEnchantments(TArray<FACEActiveEnchantment>& Out) cons
 	}
 }
 
+int32 FACESession::GetItemCooldownPhase(const FACEWorldObject& Object, double Now) const
+{
+	if (Object.CooldownId <= 0 || Object.CooldownId > 0x7fff
+		|| !FMath::IsFinite(Object.CooldownDuration) || Object.CooldownDuration <= 0.0) return 0;
+	// UIElement_UIItem::UpdateCooldownDisplay uses the shared cooldown registry,
+	// not use attempts or appraisal. Login restores StartTime as negative elapsed.
+	for (const FACEActiveEnchantment& E : ActiveEnchantments)
+	{
+		if (!E.bCooldown || E.SpellId != Object.CooldownId + 0x8000) continue;
+		const double Remaining = double(E.Duration) + E.StartTime - (Now - E.ReceivedAt);
+		if (FMath::IsFinite(Remaining) && Remaining > 0.0)
+			return 1 + FMath::FloorToInt(FMath::Clamp(Remaining / Object.CooldownDuration * 10.0, 0.0, 9.0));
+	}
+	return 0;
+}
+
 bool FACESession::TryGetVitaeMultiplier(float& OutMultiplier) const
 {
 	for (const FACEActiveEnchantment& E : ActiveEnchantments)
@@ -6179,6 +6202,8 @@ void FACESession::HandleApproachVendor(FACEBinaryReader& Reader)
 		Obj.IconId = Decoded.IconId;
 		Obj.IconOverlayId = Decoded.IconOverlayId;
 		Obj.IconUnderlayId = Decoded.IconUnderlayId;
+		Obj.CooldownId = Decoded.CooldownId;
+		Obj.CooldownDuration = Decoded.CooldownDuration;
 		Obj.UiEffects = static_cast<int32>(Decoded.UiEffects);
 		Obj.ItemType = Decoded.ItemType;
 		Obj.Value = Decoded.Value;
@@ -7040,10 +7065,9 @@ void FACESession::HandleInventoryServerSaveFailed(FACEBinaryReader& Reader)
 	const int32 ItemGuid = static_cast<int32>(Reader.ReadUInt32());
 	if (ItemGuid == PendingEquipmentGuid || PendingEquipmentRemovals.Contains(ItemGuid)) CancelEquipmentSwap();
 
-	if (Reader.CanRead(4))
-	{
-		Reader.ReadUInt32(); // WeenieError (TransientString already notifies the player)
-	}
+	InventoryFailureItem = ItemGuid;
+	InventoryFailureError = Reader.CanRead(4) ? Reader.ReadUInt32() : 0;
+	++InventoryFailureSerial;
 	Log(FString::Printf(TEXT("InventoryServerSaveFailed guid=0x%08X — retained server inventory"), ItemGuid));
 }
 
@@ -7152,6 +7176,9 @@ void FACESession::HandleInventoryRemoveObject(FACEBinaryReader& Reader)
 		return;
 	}
 	const int32 ItemGuid = static_cast<int32>(Reader.ReadUInt32());
+	// Whole-item turn-ins have no SetStackSize. Invalidate cached inventories
+	// just as partial-stack transfers do, before notifying observers.
+	++InventoryDataRevision;
 	int32 PrevContainer = 0;
 	int32 PrevPlacement = INDEX_NONE;
 	bool bPackSlots = false;
@@ -7333,6 +7360,10 @@ void FACESession::HandlePublicUpdatePropertyInt(FACEBinaryReader& Reader)
 		else if (Prop == 16) // PropertyInt.ItemUseable: quest/switch state can change it live.
 		{
 			Obj->ItemUseable = Value;
+		}
+		else if (Prop == 280) // PropertyInt.SharedCooldown
+		{
+			Obj->CooldownId = Value;
 		}
 		else if (Prop == 114) // PropertyInt.Attuned
 		{

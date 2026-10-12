@@ -16,6 +16,11 @@ void UACEPluginSubsystem::FlushUCMLog()
 void UACEPluginSubsystem::ClearUCMLog() { UCMLog.Clear();FlushUCMLog(); }
 void UACEPluginSubsystem::LogUCMEvent(const FACEClientPlugin& P,const FString& Message,EACEUCMLogLevel Level,const TSharedPtr<FJsonObject>& Intent)
 {
+    if(P.Api>=2)if(auto Current=Find(P.Id))
+    {
+        auto E=MakeShared<FJsonObject>();E->SetNumberField(TEXT("time"),FDateTime::UtcNow().ToUnixTimestamp());E->SetStringField(TEXT("text"),Message.Left(1024));E->SetNumberField(TEXT("level"),int32(Level));
+        if(Current->LogEntries.Num()>=200)Current->LogEntries.RemoveAt(0);Current->LogEntries.Add(MakeShared<FJsonValueObject>(E));
+    }
     if(P.Id!=TEXT("ucm"))return;
     FString Context=TEXT("Setup: ")+P.ProfileName.Left(128);
     const FString Route=Field(P.Profile,TEXT("nav_source"));
@@ -51,7 +56,7 @@ void UACEPluginSubsystem::LogUCMEvent(const FACEClientPlugin& P,const FString& M
 }
 void UACEPluginSubsystem::LogUCMIntent(FACEClientPlugin& P,const TSharedPtr<FJsonObject>& I)
 {
-    if(P.Id!=TEXT("ucm"))return;
+    if(!P.IsPolicy())return;
     const FString Action=Field(I,TEXT("action")),Status=Field(I,TEXT("status")),Activity=Field(I,TEXT("activity"));
     // Errors/stops are recorded by their host handlers, with the final reason.
     if(Action==TEXT("activity_failed")||Action==TEXT("pause_navigation")||Action==TEXT("stop"))return;

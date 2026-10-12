@@ -1,5 +1,6 @@
 -- UCM policy: all effects go through the public host's validated intents.
 local state, entered, point, locked_target = nil, 0, 1, nil
+local targeting_status
 local route_direction=1
 local route_join_pending,route_join_scan=true,nil
 local route_trail,route_walking,route_returning={},false,false
@@ -306,7 +307,7 @@ local function meta_command(c,s)
   if c.value then if not forced_buff then forced_buff={request=0,done={}};buff_plan=nil end
   elseif forced_buff and forced_buff.request==0 then forced_buff=nil;buff_plan=nil end
  elseif c.op=='echo' then meta.notice=c.text
- elseif c.op=='use' or c.op=='say' or c.op=='give' or c.op=='select' or c.op=='use_selected' or c.op=='combat_mode' or c.op=='logout' or c.op=='jump' or c.op=='load' or c.op=='recall' or c.op=='face' or c.op=='fellowship' or c.op=='confirm' or c.op=='attack_bar' then
+ elseif c.op=='plugin' or c.op=='use' or c.op=='say' or c.op=='give' or c.op=='select' or c.op=='use_selected' or c.op=='combat_mode' or c.op=='logout' or c.op=='jump' or c.op=='load' or c.op=='recall' or c.op=='face' or c.op=='fellowship' or c.op=='confirm' or c.op=='attack_bar' then
   if #meta.queue>=64 then return 'Meta command queue exceeds 64 actions' end
   meta.queue[#meta.queue+1]=c
  else return 'Unsupported meta command' end
@@ -790,6 +791,7 @@ local function meta_work(s,p)
  if c.op=='load' then meta.loading=true;return immediate({action='profile_load',profile=c.profile,kind=c.kind,status='Loading '..c.profile}) end
  if c.op=='recall' then meta.pending={serial=s.action_serial or 0,teleport=s.teleport_sequence or 0,deadline=s.time+60,portal=true};return immediate({action='recall',destination=c.destination,status='Recalling to '..c.destination}) end
  if c.op=='say' then return immediate({action='say',text=c.text,channel=c.channel,status='Meta chat'}) end
+ if c.op=='plugin' then return immediate({action='plugin_command',text=c.text,status='Meta plugin command'}) end
  if c.op=='attack_bar' then meta.options.power_percent=c.power*100;return immediate({action='attack_bar',power=c.power,status='Attack power updated'}) end
  if c.op=='combat_mode' then return immediate({action='combat_mode',mode=c.mode,status='Changing combat mode'}) end
  if c.op=='equip' or c.op=='identify' then return immediate({action=c.op,item=c.item_id,status='Meta: '..c.op}) end
@@ -976,8 +978,12 @@ local function tick(s,p)
   if a.distance~=b.distance then return a.distance<b.distance end
   return (a.angle or 180)<(b.angle or 180)
  end
+ -- Acquisition is independent of the distance at which a weapon can fire.
+ -- Imported VT ApproachDistance=0 retains its stationary attack-radius mode.
+ local acquisition=option('approach_range',60)
+ if acquisition<=0 then acquisition=option('radius',30) end
  local ring_count=0;local target_candidates={}
- for _,t in ipairs(s.targets or {}) do if not monster_blacklist[t.id] and t.line_of_sight~=false and t.distance>=option('minimum_range',0) and t.distance<=math.max(option('radius',30),option('approach_range',60)) and not contains(p.ignore_monsters,t.name) then
+ for _,t in ipairs(s.targets or {}) do if not monster_blacklist[t.id] and t.line_of_sight~=false and t.distance>=option('minimum_range',0) and t.distance<=acquisition and not contains(p.ignore_monsters,t.name) then
   local rule=monster_rule(t,p)
   if not rule.ignore and ring_enabled(rule) and t.distance<option('ring_range',5) then ring_count=ring_count+1 end
   local rank=rule.priority or 0
@@ -985,6 +991,9 @@ local function tick(s,p)
   if not rule.ignore and (rank>priority or (rank==priority and nearer(t,target))) then target=t;target_rule=rule;priority=rank end
  end end
  if not target and s.nearest~=0 and s.targets==nil then target={id=s.nearest,distance=s.distance or 0,resists={}} end
+ targeting_status=string.format('Search: %.0f m. %s',acquisition,target and string.format('%s: %.1f m.',target.name or 'Target',target.distance) or 'No visible eligible monsters.')
+ if not option('approach',true) then targeting_status=targeting_status..' Pursuit is off; only attacks within range.' end
+ if option('nav_priority',false) and option('navigation',false) then targeting_status=targeting_status..' Route has priority over combat.' end
  for _,r in ipairs(not forced_buff and current.transitions or {}) do
   local match=(r.when=='health_below' and hp<r.value) or (r.when=='mana_below' and mp<r.value) or (r.when=='stamina_below' and sp<r.value)
    or (r.when=='elapsed' and s.time-entered>=r.value) or (r.when=='no_targets' and not target)
@@ -2311,7 +2320,7 @@ local function tick(s,p)
   if target_rule and (target_rule.range or 0)>0 then range=target_rule.range end
   if target.distance>range then
    if target.distance<=option('approach_range',60) and option('approach',true) and target.cell then
-    return {action='move',cell=target.cell,x=target.x,y=target.y,z=target.z,status='Approaching '..(target.name or 'target')}
+    return {action='move',target=target.id,cell=target.cell,x=target.x,y=target.y,z=target.z,status='Approaching '..(target.name or 'target')}
    end
   elseif mode=='magic' and attack then
    local equipment=caster();if equipment then return equipment end
@@ -2573,6 +2582,7 @@ local function run(s,p)
  end
  local intent=(not forced_buff and not navigation_paused and meta_work(s,effective)) or tick(s,effective)
  if intent then
+  intent.targeting_status=targeting_status
   route_walking=intent.status and (intent.status:sub(1,9)=='Waypoint ' or intent.status=='Route complete') or false
   if intent.status~='Returning to route' then route_returning=false end
   if intent.action=='cast' then intent.fast_cast=effective.fast_cast_buffs~=false end
@@ -2590,6 +2600,7 @@ local function run(s,p)
 end
 
 return function(s,p)
+ targeting_status=nil
  activity_time=s.time;activity='meta'
  if p.ucm_resume then
   -- VT resets the ordinary state timer on Start, retaining the persistent timer,

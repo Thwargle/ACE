@@ -1,5 +1,5 @@
 {
-  "lua_api": 1,
+  "lua_api": 2,
   "services": {
     "local_cosmetics": {
       "api": 1,
@@ -14,7 +14,9 @@
       "mesh_formats": [
         "ACWM/1",
         "ACWM/2",
-        "ACWM/3"
+        "ACWM/3",
+        "ACWM/4",
+        "ACWM/5"
       ],
       "slots": [
         "weapon",
@@ -37,15 +39,627 @@
         "outfit",
         "session_fit",
         "model_thumbnails",
+        "shared_item_icons",
+        "inline_catalog_search",
+        "named_item_catalog",
         "catalog_search",
         "catalog_4096",
         "catalog_16384",
         "body_attachments",
         "skinned_body",
+        "anatomical_body_fit",
         "apply_outfit",
         "complete_catalog_scan",
         "covered_part_replacement"
       ]
     }
+  },
+  "companion_api": 1,
+  "companion": {
+    "mode": "companion",
+    "permissions": [
+      "chat",
+      "state",
+      "ui",
+      "markers",
+      "waypoint",
+      "messaging",
+      "commands"
+    ],
+    "features": [
+      "chat_events",
+      "character_state",
+      "clickable_rows",
+      "object_markers",
+      "waypoint_map_markers",
+      "waypoint_target",
+      "local_messages",
+      "native_commands"
+    ],
+    "limits": {
+      "tick_hz": 2,
+      "state_bytes": 65536,
+      "chat_events": 128,
+      "ui_rows": 128,
+      "markers": 32,
+      "inbox_events": 64,
+      "objects": 512
+    }
+  },
+  "supported_lua_apis": [
+    1,
+    2
+  ],
+  "public_api": {
+    "version": 2,
+    "modes": [
+      "automation",
+      "companion"
+    ],
+    "permissions": [
+      "cast",
+      "combat",
+      "navigation",
+      "inventory",
+      "loot",
+      "say",
+      "fellowship",
+      "confirm",
+      "chat",
+      "state",
+      "ui",
+      "markers",
+      "waypoint",
+      "messaging",
+      "commands",
+      "profiles",
+      "data"
+    ],
+    "policy_modules": [
+      "ucm",
+      "itemtools"
+    ],
+    "outputs": [
+      "action",
+      "status",
+      "state",
+      "ui",
+      "markers",
+      "messages",
+      "requests",
+      "profile_patch",
+      "runtime_route"
+    ],
+    "ui_controls": [
+      "text",
+      "button",
+      "checkbox",
+      "slider",
+      "number",
+      "input",
+      "select",
+      "progress",
+      "icon",
+      "image",
+      "row",
+      "column",
+      "section",
+      "tabs"
+    ],
+    "services": {
+      "profiles": [
+        "list",
+        "read",
+        "save",
+        "load",
+        "delete"
+      ],
+      "import": [
+        "list",
+        "inspect",
+        "convert",
+        "export_loot",
+        "activate"
+      ],
+      "route": [
+        "record"
+      ],
+      "force_buff": [
+        "start",
+        "cancel"
+      ],
+      "policy": [
+        "command"
+      ],
+      "waypoint": [
+        "set",
+        "clear"
+      ],
+      "window": [
+        "show",
+        "hide",
+        "toggle"
+      ],
+      "chat": [
+        "send"
+      ],
+      "log": [
+        "append",
+        "clear"
+      ]
+    },
+    "limits": {
+      "lua_heap_bytes": 8388608,
+      "instructions_per_callback": 250000,
+      "ui_controls": 256,
+      "ui_roots": 128,
+      "ui_depth": 8,
+      "ui_options": 256,
+      "service_requests_per_callback": 4,
+      "service_interval_seconds": 0.5,
+      "profile_bytes": 8388608,
+      "service_inbox_bytes": 393216,
+      "plugin_log_entries": 200,
+      "png_compressed_bytes": 2097152,
+      "png_dimension": 1024,
+      "png_cache_bytes": 16777216,
+      "service_result_bytes": 262144,
+      "structured_nodes": 32768,
+      "structured_array_entries": 2048
+    },
+    "actions": {
+      "cast": {
+        "permission": "cast",
+        "fields": [
+          "spell",
+          "target",
+          "fast_cast",
+          "activity"
+        ]
+      },
+      "attack": {
+        "permission": "combat",
+        "fields": [
+          "target",
+          "mode",
+          "height",
+          "power"
+        ]
+      },
+      "cancel_attack": {
+        "permission": "combat",
+        "fields": []
+      },
+      "combat_mode": {
+        "permission": "combat",
+        "fields": [
+          "mode"
+        ]
+      },
+      "attack_bar": {
+        "permission": "combat",
+        "fields": [
+          "power"
+        ]
+      },
+      "move": {
+        "permission": "navigation",
+        "fields": [
+          "cell",
+          "x",
+          "y",
+          "z",
+          "arrival_radius",
+          "coordinate_route",
+          "target"
+        ]
+      },
+      "face": {
+        "permission": "navigation",
+        "fields": [
+          "heading"
+        ]
+      },
+      "jump": {
+        "permission": "navigation",
+        "fields": [
+          "charge",
+          "heading",
+          "current_heading",
+          "forward",
+          "strafe",
+          "walk_jump"
+        ]
+      },
+      "recall": {
+        "permission": "navigation",
+        "fields": [
+          "destination"
+        ]
+      },
+      "use_world": {
+        "permission": "navigation",
+        "fields": [
+          "item"
+        ]
+      },
+      "select": {
+        "permission": "navigation",
+        "fields": [
+          "target"
+        ]
+      },
+      "logout": {
+        "permission": "navigation",
+        "fields": []
+      },
+      "equip": {
+        "permission": "inventory",
+        "fields": [
+          "item",
+          "offhand",
+          "unequip"
+        ]
+      },
+      "use_item": {
+        "permission": "inventory",
+        "fields": [
+          "item"
+        ]
+      },
+      "apply_item": {
+        "permission": "inventory",
+        "fields": [
+          "item",
+          "target"
+        ]
+      },
+      "identify": {
+        "permission": "inventory",
+        "fields": [
+          "item"
+        ]
+      },
+      "store_item": {
+        "permission": "inventory",
+        "fields": [
+          "item",
+          "target"
+        ]
+      },
+      "give": {
+        "permission": "inventory",
+        "fields": [
+          "item",
+          "target",
+          "amount"
+        ]
+      },
+      "merge": {
+        "permission": "inventory",
+        "fields": [
+          "item",
+          "target"
+        ]
+      },
+      "open_corpse": {
+        "permission": "loot",
+        "fields": [
+          "item"
+        ]
+      },
+      "close_corpse": {
+        "permission": "loot",
+        "fields": []
+      },
+      "loot": {
+        "permission": "loot",
+        "fields": [
+          "item",
+          "amount"
+        ]
+      },
+      "salvage": {
+        "permission": "loot",
+        "fields": [
+          "item",
+          "tool"
+        ]
+      },
+      "combine_salvage": {
+        "permission": "loot",
+        "fields": [
+          "tool",
+          "items"
+        ]
+      },
+      "sell": {
+        "permission": "loot",
+        "fields": [
+          "item"
+        ]
+      },
+      "read": {
+        "permission": "loot",
+        "fields": [
+          "item"
+        ]
+      },
+      "buy": {
+        "permission": "loot",
+        "fields": [
+          "vendor",
+          "item",
+          "count"
+        ]
+      },
+      "split_note": {
+        "permission": "loot",
+        "fields": [
+          "vendor",
+          "item",
+          "count"
+        ]
+      },
+      "sell_note": {
+        "permission": "loot",
+        "fields": [
+          "vendor",
+          "item",
+          "count"
+        ]
+      },
+      "fellowship": {
+        "permission": "fellowship",
+        "fields": [
+          "operation",
+          "name",
+          "target"
+        ]
+      },
+      "confirm": {
+        "permission": "confirm",
+        "fields": [
+          "type",
+          "context",
+          "accept"
+        ]
+      },
+      "say": {
+        "permission": "say",
+        "fields": [
+          "text",
+          "channel"
+        ]
+      },
+      "it_give": {
+        "permission": "inventory+loot",
+        "fields": [
+          "item",
+          "target",
+          "amount"
+        ]
+      },
+      "it_buy": {
+        "permission": "inventory+loot",
+        "fields": [
+          "vendor",
+          "item",
+          "amount"
+        ]
+      },
+      "it_sell": {
+        "permission": "inventory+loot",
+        "fields": [
+          "vendor",
+          "item",
+          "amount"
+        ]
+      },
+      "it_split": {
+        "permission": "inventory+loot",
+        "fields": [
+          "item",
+          "amount"
+        ]
+      },
+      "it_open": {
+        "permission": "inventory+loot",
+        "fields": [
+          "target"
+        ]
+      },
+      "it_key": {
+        "permission": "inventory+loot",
+        "fields": [
+          "item",
+          "target"
+        ]
+      },
+      "it_refresh_chest": {
+        "permission": "inventory+loot",
+        "fields": [
+          "target"
+        ]
+      },
+      "it_close": {
+        "permission": "inventory+loot",
+        "fields": [
+          "target"
+        ]
+      },
+      "it_pickup": {
+        "permission": "inventory+loot",
+        "fields": [
+          "item",
+          "target",
+          "amount"
+        ]
+      },
+      "profile_load": {
+        "permission": "profiles",
+        "fields": [
+          "kind",
+          "profile"
+        ]
+      },
+      "plugin_command": {
+        "permission": "commands or say",
+        "fields": [
+          "text"
+        ]
+      },
+      "buff_request_start": {
+        "permission": "say",
+        "fields": [
+          "request"
+        ]
+      },
+      "buff_request_done": {
+        "permission": "say",
+        "fields": [
+          "request",
+          "status"
+        ]
+      },
+      "force_buff_done": {
+        "permission": "cast",
+        "fields": [
+          "request",
+          "status"
+        ]
+      },
+      "pause_navigation": {
+        "permission": "navigation",
+        "fields": [
+          "status"
+        ]
+      },
+      "pause_loot_approach": {
+        "permission": "loot",
+        "fields": []
+      },
+      "activity_failed": {
+        "permission": "",
+        "fields": [
+          "activity",
+          "status"
+        ]
+      },
+      "notice": {
+        "permission": "",
+        "fields": [
+          "text"
+        ]
+      },
+      "stop": {
+        "permission": "",
+        "fields": [
+          "status",
+          "preserve_meta"
+        ]
+      },
+      "waypoint": {
+        "permission": "waypoint",
+        "fields": [
+          "target"
+        ]
+      },
+      "command": {
+        "permission": "commands",
+        "fields": [
+          "text"
+        ]
+      }
+    },
+    "snapshot_fields": [
+      "action_error",
+      "action_serial",
+      "appraisal_revision",
+      "base_health",
+      "base_mana",
+      "base_stamina",
+      "buff_request",
+      "burden_percent",
+      "busy",
+      "char_bools",
+      "char_doubles",
+      "char_ints",
+      "char_quads",
+      "char_strings",
+      "chat_events",
+      "chat_serial",
+      "combat_events",
+      "combat_mode",
+      "components_required",
+      "confirmations",
+      "container",
+      "container_is_corpse",
+      "contents",
+      "contents_ready",
+      "cooldowns",
+      "corpses",
+      "debuff_revision",
+      "debuff_spell",
+      "debuff_target",
+      "debuffs",
+      "distance",
+      "enchantments",
+      "fellowship",
+      "force_buff_only",
+      "force_buff_request",
+      "harmful_enchantments",
+      "heading",
+      "health",
+      "in_fellowship",
+      "inventory",
+      "inventory_revision",
+      "item_buffs",
+      "jumping",
+      "known_spells",
+      "last_spell",
+      "last_spell_confirmed",
+      "level",
+      "loot_approaching",
+      "main_pack_slots",
+      "mana",
+      "max_health",
+      "max_mana",
+      "max_stamina",
+      "movement_blocked_serial",
+      "moving",
+      "nearest",
+      "owned_pet",
+      "pack_slots",
+      "packs",
+      "player",
+      "portal_events",
+      "portal_serial",
+      "portal_space",
+      "position",
+      "pyreals",
+      "ready",
+      "route_motion",
+      "route_motion_overflow",
+      "route_objects",
+      "selected",
+      "server_position",
+      "skills",
+      "species_names",
+      "spells",
+      "stamina",
+      "targets",
+      "teleport_sequence",
+      "time",
+      "trained_skills",
+      "usable_skills",
+      "vendor",
+      "vendor_name",
+      "vendor_stock",
+      "vendor_trade_notes",
+      "vendor_uses_pyreals",
+      "vendor_wcid",
+      "world_name"
+    ]
   }
 }

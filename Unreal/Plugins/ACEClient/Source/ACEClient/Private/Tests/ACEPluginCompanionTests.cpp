@@ -1,0 +1,147 @@
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/AutomationTest.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
+#include "Interfaces/IPluginManager.h"
+#include "Mods/ACEPluginSubsystem.h"
+#include "Mods/ACEPluginVM.h"
+#include "Mods/ACEVTProfile.h"
+#include "ACEClientSubsystem.h"
+#include "ACESession.h"
+#include "Engine/Engine.h"
+#include "Engine/GameInstance.h"
+#include "Engine/World.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "Slate/WidgetRenderer.h"
+#include "ImageUtils.h"
+#include "RenderingThread.h"
+#include "ProceduralMeshComponent.h"
+#include "Widgets/Input/SButton.h"
+#include "Serialization/JsonSerializer.h"
+#include "HAL/FileManager.h"
+
+namespace
+{
+    TSharedPtr<FJsonObject> J(const TCHAR* Text)
+    {TSharedPtr<FJsonObject> O;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text),O);return O;}
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPluginCompanionTest,"ACE.Plugins.Companions",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEPluginCompanionTest::RunTest(const FString&)
+{
+    auto Empty=MakeShared<FJsonObject>();TSharedPtr<FJsonObject> Output;FString Error;
+    for(const TCHAR* Source:{TEXT("return function() local t={};t.x=t;return {state=t} end"),
+        TEXT("return function() return {state={x=0/0}} end"),TEXT("return function() return {state={x=function() end}} end"),
+        TEXT("return function() return {ui={[1]={id='a'},[3]={id='b'}}} end"),TEXT("return function() local t={};for i=1,1025 do t[i]=i end;return {ui=t} end")})
+    {FACEPluginVM VM;TestTrue(TEXT("Invalid-output fixture loads"),VM.Load(Source,Error));TestFalse(TEXT("Invalid structured output is bounded and rejected"),VM.Step(Empty,Empty,Output,Error));}
+    FACEPluginVM VM;TestTrue(TEXT("Structured fixture loads"),VM.Load(TEXT("return function(s) return {state={quest={count=12,goal=50}},ui={{id='target',text='Red Rat',action='select',target=12}},markers={},messages={}} end"),Error));
+    TestTrue(TEXT("Structured output works"),VM.Step(Empty,Empty,Output,Error));
+    TestEqual(TEXT("Nested state preserved"),Output->GetObjectField(TEXT("state"))->GetObjectField(TEXT("quest"))->GetNumberField(TEXT("count")),12.);
+    TestTrue(TEXT("Empty Lua table normalized as marker array"),Output->GetArrayField(TEXT("markers")).IsEmpty());
+
+    const auto Values=UWorld::InitializationValues().AllowAudioPlayback(false).RequiresHitProxies(false).CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false);
+    auto* W=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);
+    auto& Context=GEngine->CreateNewWorldContext(EWorldType::Game);auto* GI=NewObject<UGameInstance>(GEngine);W->SetGameInstance(GI);
+    Context.OwningGameInstance=GI;Context.SetCurrentWorld(W);GI->OnWorldChanged(nullptr,W);GI->Init();
+    auto* H=GI->GetSubsystem<UACEPluginSubsystem>();auto* C=GI->GetSubsystem<UACEClientSubsystem>();
+    const FString Root=FPaths::ProjectSavedDir()/TEXT("Automation/Companions")/FGuid::NewGuid().ToString(EGuidFormats::Digits);
+    H->StorageRoot=Root;H->Settings=MakeShared<FJsonObject>();
+    ON_SCOPE_EXIT {GI->Shutdown();GEngine->DestroyWorldContext(W);W->DestroyWorld(false);IFileManager::Get().DeleteDirectory(*Root,false,true);};
+    const FString Installed=Root/TEXT("Installed/test_tracker");IFileManager::Get().MakeDirectory(*Installed,true);
+    FFileHelper::SaveStringToFile(TEXT(R"({"api":1,"mode":"companion","id":"test_tracker","name":"Test Tracker","permissions":["chat","state","ui","markers","waypoint","messaging","commands"]})"),*(Installed/TEXT("plugin.json")));
+    FFileHelper::SaveStringToFile(TEXT("{}"),*(Installed/TEXT("default.json")));
+    FFileHelper::SaveStringToFile(TEXT("return function(s) return {status='active'} end"),*(Installed/TEXT("main.lua")));
+    H->Discover();auto P=H->Find(TEXT("test_tracker"));if(!TestTrue(TEXT("Companion manifest discovered"),P&&P->Companion))return false;
+    C->Session=MakeShared<FACESession>();auto& Session=*C->Session;Session.State=EACESessionState::InWorld;Session.PlayerGuid=0x50000001;Session.ServerName=TEXT("Companion Test");
+    Session.PlayerPosition.CellId=0x7D64000D;Session.PlayerPosition.Location=FVector(34,104,12);
+    Session.PlayerVitals.bValid=true;Session.PlayerVitals.Health=100;Session.PlayerVitals.MaxHealth=100;
+    FACEWorldObject Player;Player.Guid=Session.PlayerGuid;Player.Name=TEXT("Test character");Player.Position=Session.PlayerPosition;Player.bIsPlayer=true;Session.WorldObjects.Add(Player.Guid,Player);
+    FACEWorldObject Rat;Rat.Guid=12;Rat.Name=TEXT("Red Rat");Rat.ItemType=ACEItemType::Creature;Rat.bHasPosition=true;Rat.ObjectDescriptionFlags=ACEObjectDescFlag::Attackable;Rat.Position=Session.PlayerPosition;Rat.Position.Location.X+=5;Session.WorldObjects.Add(Rat.Guid,Rat);
+    H->SetEnabled(P->Id,true);
+    C->OnChatMessage.Broadcast(TEXT("Early quest response"),TEXT(""),ACEChatMessageType::System);
+    TestEqual(TEXT("Client feed records before first maintenance tick"),H->PluginChatEvents.Num(),1);
+    H->RefreshAutomationData();H->TickCompanions();
+    TestTrue(TEXT("Enabled companion starts automatically in world"),P->Running);
+    auto UCM=H->Find(TEXT("ucm"));H->SetEnabled(TEXT("ucm"),true);TestTrue(TEXT("UCM starts alongside companion"),H->Start(TEXT("ucm")));
+    TestTrue(TEXT("Starting UCM does not stop companion"),P->Running);
+    H->MovementOwner=TEXT("ucm");H->FastCastOwner=TEXT("ucm");
+    H->Stop(P->Id);TestTrue(TEXT("Stopping companion leaves UCM running and movement owned"),UCM->Running&&H->MovementOwner==TEXT("ucm")&&H->FastCastOwner==TEXT("ucm"));
+    H->Start(P->Id);H->Stop(TEXT("ucm"));
+    TestTrue(TEXT("UCM stop leaves tracker running"),P->Running);
+    C->OnChatMessage.Broadcast(TEXT("You have killed 12 of 50 Red Rats."),TEXT(""),ACEChatMessageType::System);
+    auto Snapshot=H->CompanionSnapshot(*P);TestEqual(TEXT("Quest chat works with UCM stopped"),Snapshot->GetArrayField(TEXT("chat_events")).Num(),1);
+    TestEqual(TEXT("Raw chat preserved"),Snapshot->GetArrayField(TEXT("chat_events"))[0]->AsObject()->GetStringField(TEXT("raw_text")),FString(TEXT("You have killed 12 of 50 Red Rats.")));
+    TestTrue(TEXT("Chat drained independently per companion"),H->CompanionSnapshot(*P)->GetArrayField(TEXT("chat_events")).IsEmpty());
+    H->Stop(P->Id);H->Start(P->Id);TestTrue(TEXT("Stop/start does not redeliver consumed chat"),H->CompanionSnapshot(*P)->GetArrayField(TEXT("chat_events")).IsEmpty());
+    for(int I=0;I<140;++I)C->OnChatMessage.Broadcast(TEXT("quest line"),TEXT(""),ACEChatMessageType::System);
+    Snapshot=H->CompanionSnapshot(*P);TestEqual(TEXT("Chat ring bounded"),Snapshot->GetArrayField(TEXT("chat_events")).Num(),128);TestTrue(TEXT("Overflow is reported"),Snapshot->GetBoolField(TEXT("chat_gap")));
+    TestTrue(TEXT("Companion output accepted"),H->ApplyCompanionOutput(*P,Output,Error));H->FlushPluginState(*P);
+    TestTrue(TEXT("State saved"),IFileManager::Get().FileExists(*P->StatePath)&&!P->StateDirty);
+    H->Stop(P->Id);H->Start(P->Id);TestEqual(TEXT("Stop/start restores quest count"),P->SavedState->GetObjectField(TEXT("quest"))->GetNumberField(TEXT("count")),12.);
+    const FString FirstPath=P->StatePath;H->Stop(P->Id);Session.ServerName=TEXT("Another server");H->Start(P->Id);
+    TestTrue(TEXT("Server-scoped state isolated"),P->StatePath!=FirstPath&&!P->SavedState->HasField(TEXT("quest")));
+    H->Stop(P->Id);Session.ServerName=TEXT("Companion Test");Session.PlayerGuid++;H->Start(P->Id);
+    TestTrue(TEXT("Character-scoped state isolated"),P->StatePath!=FirstPath&&!P->SavedState->HasField(TEXT("quest")));
+    H->Stop(P->Id);Session.PlayerGuid--;H->Start(P->Id);
+    TestEqual(TEXT("Original character restores persisted state"),P->SavedState->GetObjectField(TEXT("quest"))->GetNumberField(TEXT("count")),12.);
+    TestTrue(TEXT("UI restored"),H->ApplyCompanionOutput(*P,Output,Error));
+    TestTrue(TEXT("Click selects current nearby object"),H->ClickPluginRow(P->Id,TEXT("target")));TestEqual(TEXT("Game selection updated"),C->GetSelectedObject().Guid,12);
+    Session.WorldObjects.Remove(12);TestFalse(TEXT("Stale click cannot select removed object"),H->ClickPluginRow(P->Id,TEXT("target")));Session.WorldObjects.Add(12,Rat);
+    TestFalse(TEXT("Unknown row rejected"),H->ClickPluginRow(P->Id,TEXT("absent")));
+    TestTrue(TEXT("Duplicate rows rejected"),!H->ApplyCompanionOutput(*P,J(TEXT(R"({"ui":[{"id":"x","text":"a"},{"id":"x","text":"b"}]})")),Error));
+    auto Markers=J(TEXT(R"({"markers":[{"id":12,"shape":"arrow","color":"green"}],"action":"waypoint","target":12})"));
+    TestTrue(TEXT("Markers and waypoint accepted"),H->ApplyCompanionOutput(*P,Markers,Error));TestEqual(TEXT("Visible marker exists"),H->GetPluginMarkers().Num(),1);
+    H->NextPluginMarkerDraw=0;H->DrawPluginMarkers();
+    TestTrue(TEXT("World marker creates packaged-game geometry"),H->PluginMarkerMesh&&H->PluginMarkerMesh->GetProcMeshSection(0)&&H->PluginMarkerMesh->GetProcMeshSection(0)->ProcVertexBuffer.Num()>0);
+    if(H->PluginMarkerMesh)TestEqual(TEXT("Markers cannot block movement"),H->PluginMarkerMesh->GetCollisionEnabled(),ECollisionEnabled::NoCollision);
+    FVector2D Destination;uint32 LB=0;TestTrue(TEXT("Waypoint destination set"),H->GetWaypoint(Destination,LB));
+    Session.WorldObjects[12].bDying=true;TestTrue(TEXT("Dead object markers disappear"),H->GetPluginMarkers().IsEmpty());Session.WorldObjects[12].bDying=false;
+    auto Peer=MakeShared<FACEClientPlugin>();Peer->Id=TEXT("peer");Peer->Companion=true;Peer->Running=true;Peer->Enabled=true;Peer->Permissions={TEXT("messaging")};H->Plugins.Add(Peer);
+    TestTrue(TEXT("Message accepted"),H->ApplyCompanionOutput(*P,J(TEXT(R"({"messages":[{"to":"peer","topic":"kill","text":"12"}]})")),Error));
+    TestEqual(TEXT("Native sender cannot be spoofed"),Peer->PluginEvents[0]->AsObject()->GetStringField(TEXT("sender")),P->Id);
+    for(int I=0;I<80;++I)H->ApplyCompanionOutput(*P,J(TEXT(R"({"messages":[{"to":"peer","topic":"kill","text":"12"}]})")),Error);
+    TestEqual(TEXT("Message inbox bounded"),Peer->PluginEvents.Num(),64);
+    TestTrue(TEXT("Local command routed"),H->RunPluginCommand(TEXT("test_tracker reset")));Snapshot=H->CompanionSnapshot(*P);
+    TestTrue(TEXT("Local command arrives as event"),Snapshot->GetArrayField(TEXT("events")).ContainsByPredicate([](const auto& V){return V->AsObject()->GetStringField(TEXT("type"))==TEXT("command");}));
+    TArray<FString> Issues;auto Compiled=ACEVTProfile::CompileCommand(TEXT("/plugin test_tracker from_meta"),Issues);
+    TestTrue(TEXT("Native meta compiler accepts companion command"),Issues.IsEmpty()&&Compiled->GetStringField(TEXT("op"))==TEXT("plugin"));
+    FString UCMSource;FFileHelper::LoadFileToString(UCMSource,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    FACEPluginVM MetaVM;TestTrue(TEXT("UCM meta fixture loads"),MetaVM.Load(UCMSource,Error));
+    auto MetaProfile=J(TEXT(R"({"buffing":false,"combat":"off","navigation":false,"looting":false,"recovery":false,"meta_enabled":true})"));
+    MetaProfile->SetArrayField(TEXT("ucm_commands"),{MakeShared<FJsonValueObject>(Compiled)});
+    TestTrue(TEXT("UCM queues native plugin command"),MetaVM.Step(H->Snapshot(),MetaProfile,Output,Error));
+    if(TestTrue(TEXT("UCM emitted plugin intent"),Output&&Output->GetStringField(TEXT("action"))==TEXT("plugin_command")))H->Execute(*UCM,Output);
+    TestTrue(TEXT("Meta command reaches companion inbox"),P->PluginEvents.ContainsByPredicate([](const auto& V){FString Text;V->AsObject()->TryGetStringField(TEXT("text"),Text);return Text==TEXT("from_meta");}));
+    // Restore state-bearing output for the permission checks below.
+    VM.Step(Empty,Empty,Output,Error);
+    P->Permissions.Remove(TEXT("chat"));P->Permissions.Remove(TEXT("state"));P->Permissions.Remove(TEXT("waypoint"));
+    TestTrue(TEXT("No chat permission means no chat"),H->CompanionSnapshot(*P)->GetArrayField(TEXT("chat_events")).IsEmpty());
+    TestFalse(TEXT("No state permission rejects state"),H->ApplyCompanionOutput(*P,Output,Error));
+    TestFalse(TEXT("No waypoint permission rejects action"),H->CompanionAction(*P,J(TEXT(R"({"action":"waypoint","target":12})")),Error));
+    TestFalse(TEXT("Companion cannot cast or acquire movement ownership"),H->CompanionAction(*P,J(TEXT(R"({"action":"cast","spell":1})")),Error));
+    P->Permissions.Append({TEXT("state"),TEXT("chat"),TEXT("waypoint")});
+    Peer->Running=false;
+    const FString Base=IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir();
+    for(const TCHAR* Example:{TEXT("kill_tracker"),TEXT("vsense")})
+    {
+        FString Source,ProfileText;FFileHelper::LoadFileToString(Source,*(Base/TEXT("Docs/Plugins/Examples")/Example/TEXT("main.lua")));
+        FFileHelper::LoadFileToString(ProfileText,*(Base/TEXT("Docs/Plugins/Examples")/Example/TEXT("default.json")));
+        FACEPluginVM ExampleVM;TestTrue(TEXT("Shipped example loads"),ExampleVM.Load(Source,Error));
+        C->OnChatMessage.Broadcast(TEXT("You have killed 12 of 50 Red Rats."),TEXT(""),ACEChatMessageType::System);
+        Snapshot=H->CompanionSnapshot(*P);TestTrue(TEXT("Shipped example runs on native snapshot"),ExampleVM.Step(Snapshot,J(*ProfileText),Output,Error));
+        TestTrue(TEXT("Shipped example output accepted"),Output&&H->ApplyCompanionOutput(*P,Output,Error));
+    }
+    if(FApp::CanEverRender())
+    {
+        H->ApplyCompanionOutput(*P,J(TEXT(R"({"ui":[{"id":"rat","text":"Red Rat - 5 m","action":"select","target":12},{"id":"progress","text":"Kill task: 12 / 50"},{"id":"nav","text":"Point arrow to nearest Red Rat","action":"waypoint","target":12}]})")),Error);
+        FWidgetRenderer Renderer(false,true);auto Panel=H->MakePanel(P->Id);const FVector2D Size(540,720);auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
+        for(int I=0;I<3;++I){Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
+        TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
+        TArray64<uint8> Png;FImageUtils::PNGCompressImageArray(540,720,Pixels,Png);FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("Companion-panel.png")));Target->ReleaseResource();
+    }
+    H->TickCompanions();Session.State=EACESessionState::CharacterSelect;H->TickCompanions();
+    TestFalse(TEXT("Logout stops companion"),P->Running);TestTrue(TEXT("Logout clears UI and markers"),P->PanelRows.IsEmpty()&&H->GetPluginMarkers().IsEmpty());
+    return true;
+}
+#endif

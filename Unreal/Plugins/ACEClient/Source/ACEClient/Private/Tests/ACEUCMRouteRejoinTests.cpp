@@ -21,6 +21,42 @@ bool FACEUCMRouteRejoinTest::RunTest(const FString&)
     auto Profile=[&](){return Json(TEXT(R"({"buffing":false,"recovery":false,"combat":"missile","approach_range":60,"radius":6,"navigation":true,"route":[{"cell":30998795,"x":25,"y":0,"z":0},{"cell":30998795,"x":45,"y":0,"z":0}]})"));};
     auto Step=[&](FACEPluginVM& VM,const auto& S,const auto& P){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
     auto At=[](const auto& S,double X,double Y){auto Pos=S->GetObjectField(TEXT("position"));Pos->SetNumberField(TEXT("x"),X);Pos->SetNumberField(TEXT("y"),Y);S->SetNumberField(TEXT("time"),S->GetNumberField(TEXT("time"))+.5);};
+    for(const FString Mode:{TEXT("melee"),TEXT("missile"),TEXT("magic")})
+    {
+        FACEPluginVM VM;VM.Load(Script,Error);auto S=Snapshot(),P=Profile();
+        P->SetStringField(TEXT("combat"),Mode);P->SetBoolField(TEXT("manual_combat"),true);
+        S->SetBoolField(TEXT("components_required"),false);
+        auto Weapon=S->GetArrayField(TEXT("inventory"))[0]->AsObject();
+        Weapon->SetNumberField(TEXT("type"),Mode==TEXT("magic")?32768:Mode==TEXT("melee")?1:256);
+        S->SetArrayField(TEXT("spells"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":20,"name":"Acid Bolt","category":117,"school":1,"power":100,"skill":300})")))});
+        auto Enemy=Json(TEXT(R"({"id":50,"name":"Tusker Guard","identified":true,"distance":60,"cell":30998795,"x":30,"y":60,"z":0,"line_of_sight":true})"));
+        S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(Enemy)});
+        auto I=Step(VM,S,P);
+        TestEqual(*FString::Printf(TEXT("%s acquires at 60m before the firing/melee distance"),*Mode),I->GetStringField(TEXT("action")),FString(TEXT("move")));
+        TestEqual(TEXT("Pursuit identifies the selected mob before firing"),I->GetNumberField(TEXT("target")),50.);
+        TestTrue(TEXT("Live search diagnostics show the actual effective range"),I->GetStringField(TEXT("targeting_status")).Contains(TEXT("Search: 60 m")));
+        Enemy->SetNumberField(TEXT("distance"),1);At(S,30,59);I=Step(VM,S,P);
+        TestEqual(TEXT("Attacks once inside the weapon range"),I->GetStringField(TEXT("action")),FString(Mode==TEXT("magic")?TEXT("cast"):TEXT("attack")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Script,Error);auto S=Snapshot(),P=Profile();
+        P->SetBoolField(TEXT("navigation"),false);P->SetNumberField(TEXT("radius"),90);
+        auto Enemy=Json(TEXT(R"({"id":50,"name":"Tusker Guard","identified":true,"distance":61,"cell":30998795,"x":30,"y":61,"z":0,"line_of_sight":true})"));
+        S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(Enemy)});
+        TestFalse(TEXT("Long firing distance must not enlarge the explicit 60m acquisition radius"),Step(VM,S,P)->HasField(TEXT("action")));
+        P->SetNumberField(TEXT("approach_range"),0);
+        TestEqual(TEXT("VT stationary zero approach distance retains attack-radius selection"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("attack")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Script,Error);auto S=Snapshot(),P=Profile();
+        P->SetBoolField(TEXT("approach"),false);
+        S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":50,"name":"Tusker Guard","identified":true,"distance":60,"cell":30998795,"x":30,"y":60,"z":0,"line_of_sight":true})")))});
+        auto I=Step(VM,S,P);
+        TestFalse(TEXT("Explicit pursuit off never chases the distant mob"),I->HasField(TEXT("target")));
+        TestTrue(TEXT("Search diagnostics explain why acquisition is not a chase"),I->GetStringField(TEXT("targeting_status")).Contains(TEXT("Pursuit is off")));
+        P->SetBoolField(TEXT("approach"),true);I=Step(VM,S,P);
+        TestEqual(TEXT("Enabling pursuit takes effect without restarting the route"),I->GetNumberField(TEXT("target")),50.);
+    }
     for(bool Joined:{false,true})for(bool Legacy:{false,true})
     {
         FACEPluginVM VM;TestTrue(TEXT("UCM policy loads"),VM.Load(Script,Error));auto S=Snapshot(),P=Profile();

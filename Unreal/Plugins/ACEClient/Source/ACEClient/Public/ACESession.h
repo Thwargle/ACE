@@ -75,6 +75,8 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEDesktopHighlightTest;
 	friend class FACEPluginEquipmentTest;
 	friend class FACEPluginRequestsTest;
+    friend class FACEPluginCompanionTest;
+    friend class FACEPluginPublicAPITest;
 	friend class FACEItemToolsTest;
     friend class FACEPluginRampRouteTest;
 	friend class FACEDeferredWorldAppearanceTest;
@@ -259,6 +261,8 @@ public:
 
 	/** Active enchantments (attribute + skill + vitae + …); excludes cooldown entries. */
 	void GetActiveEnchantments(TArray<FACEActiveEnchantment>& Out) const;
+	/** Retail's ten cooldown icon phases; zero means no active server cooldown. Now is monotonic time. */
+	int32 GetItemCooldownPhase(const FACEWorldObject& Object, double Now) const;
 	/** Vitae StatModValue (1.0 = none). False when no Vitae enchantment is active. */
 	bool TryGetVitaeMultiplier(float& OutMultiplier) const;
 	int32 GetVitaeCpPool() const { return VitaeCpPool; }
@@ -330,6 +334,10 @@ public:
 	void SendGameActionU32(uint32 ActionType, uint32 Value);
 	void SendGameActionString(uint32 ActionType, const FString& Value);
 	void SendGameActionStringU32(uint32 ActionType, const FString& Value, uint32 Extra);
+	/** Explicit rejected inventory attempts; a successful UseDone is not a transfer acknowledgement. */
+	uint32 GetInventoryFailureSerial() const { return InventoryFailureSerial; }
+	int32 GetInventoryFailureItem() const { return InventoryFailureItem; }
+	uint32 GetInventoryFailureError() const { return InventoryFailureError; }
 	FString GetPlayerName() const;
 	bool IsAfk() const { return bAfkMode; }
 	void SetAfkLocal(bool bAfk) { bAfkMode = bAfk; }
@@ -798,6 +806,9 @@ private:
 	void HandleInventoryPutObjIn3D(FACEBinaryReader& Reader);
 	void HandlePickupEvent(FACEBinaryReader& Reader);
 	void HandleInventoryServerSaveFailed(FACEBinaryReader& Reader);
+	uint32 InventoryFailureSerial = 0;
+	int32 InventoryFailureItem = 0;
+	uint32 InventoryFailureError = 0;
 	void AdvanceEquipmentSwap();
 	void CancelEquipmentSwap();
     int32 FindEquipmentStowContainer(const TMap<int32, int32>& Reserved) const;

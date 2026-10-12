@@ -5,7 +5,7 @@
 TArray<TSharedPtr<FJsonValue>> UACEPluginSubsystem::BuffCommands() const
 {
     const TArray<TSharedPtr<FJsonValue>>* Commands=nullptr;
-    if(auto P=Find(TEXT("ucm"));P&&P->Profile->TryGetArrayField(TEXT("buff_commands"),Commands))return *Commands;
+    if(auto P=PolicyPlugin();P&&P->Profile->TryGetArrayField(TEXT("buff_commands"),Commands))return *Commands;
     TArray<TSharedPtr<FJsonValue>> Defaults;
     for(const TCHAR* Role:{TEXT("mage"),TEXT("heavy"),TEXT("missile"),TEXT("light"),TEXT("finesse"),TEXT("twohanded"),TEXT("unarmed"),TEXT("melee")})
     {
@@ -49,11 +49,11 @@ void UACEPluginSubsystem::NotifyBuffQueuePositions()
 
 void UACEPluginSubsystem::ObservePlayerTell(const FString& Text,const FString& Sender,int32 SenderId)
 {
-    auto P=Find(TEXT("ucm"));auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    auto P=PolicyPlugin();auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     bool Enabled=false,Buffing=true;
     if(!P||!P->Enabled||!P->Running||C->GetSessionState()!=EACESessionState::InWorld)return;
     P->Profile->TryGetBoolField(TEXT("buff_others"),Enabled);P->Profile->TryGetBoolField(TEXT("buffing"),Buffing);
-    if(!Enabled||!Buffing||SenderId==C->GetPlayerGuid()||uint32(SenderId)<0x50000001u||uint32(SenderId)>0x6fffffffu)return;
+    if((P->Api>=2&&!P->Permissions.Contains(TEXT("say")))||!Enabled||!Buffing||SenderId==C->GetPlayerGuid()||uint32(SenderId)<0x50000001u||uint32(SenderId)>0x6fffffffu)return;
     const FString Keyword=Text.TrimStartAndEnd().ToLower();FString Role;
     for(const auto& V:BuffCommands())
     {
