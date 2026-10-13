@@ -257,6 +257,20 @@ relative transform). Composing the other way rotates the landblock origin by the
 orientation and breaks containment for every rotated cell, which silently disables indoor
 residency (no interior collision, terrain lid never hides, basements unreachable).
 
+**Position precision at seams.** Retail `Position::localtolocal` applies a relative
+landblock offset to the cell-local frame. Keep Unreal world-coordinate conversions
+and their inverse scale in double precision until that offset has been removed.
+Movement endpoints, support probes, and outdoor terrain/water queries must also
+retain world XY precision; only the block-local terrain sample narrows to float.
+Float global intermediates quantize a Bandit Castle position in roughly 0.39 cm
+increments, larger than retail's 0.02 cm collision epsilon at the default scale;
+small wall slides and doorway-boundary samples can otherwise be lost. Network
+positions still use the existing cell-local float fields. `PositionPrecision`
+covers repeated small slides, landcell/block boundaries, and coordinate round
+trips at several landblocks and scales. `BuildingPassages` measures per-frame
+progress and support across the main gate and underpasses, including angled/edge
+lanes and 30–240 Hz desktop/VR walking and running.
+
 **Retail render modes** (`SmartBox::RenderNormalMode`): viewer in a land cell
 (`cellid & 0xFFFF < 0x100`) → full `LScape::draw` landscape pass; viewer indoor → **no
 landscape at all**, only `DrawInside(viewer_cell)` walking the portal graph (with the LScape

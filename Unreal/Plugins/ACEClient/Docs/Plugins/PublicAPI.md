@@ -25,7 +25,7 @@ stops UCM. Use companions for trackers and UI; automation for tools that actuall
 fight, navigate, equip, loot or cast. Closing either window does not stop it.
 
 Callbacks remain `return function(snapshot, profile) ... end`. The output can
-combine a game intent with `ui`, `state`, `markers`, `messages`, `requests`, and
+combine a game intent with `presentation`, `ui`, `state`, `markers`, `messages`, `requests`, and
 `profile_patch`. Return nil for no change. Explicit empty UI/marker/message/request
 arrays clear those lists; omitted presentation fields retain the previous display.
 The tables given to Lua are copies. To change native state, return an intent or a
@@ -36,6 +36,49 @@ second timer that slows it down. Companion callbacks are limited to 2 Hz. There
 is no permission to override casting delays, teleport, bypass collision or send
 raw packets. Each VM has 8 MiB and 250,000 instructions per callback. Use
 `workavailable()` to split large jobs across callbacks.
+
+## Plugin title and toolbar icon
+
+Every plugin can set a default display title and its own artwork in `plugin.json`:
+
+```json
+"presentation": { "title": "Kill Task Tracker", "icon": "tracker.png" }
+```
+
+Put the PNG at `images/tracker.png` inside that plugin's folder. It appears in
+Manage Plugins and the plugin bar. The full title appears on hover and in the
+window header. Standalone plugin windows do not repeat that title above the
+Start/Stop controls; authors do not need to add a title row to `ui`. The embedded
+login/VR manager keeps a heading to identify the selected plugin. Without a title,
+the manifest's `name` is used. Without a usable
+icon, the built-in emblem or generic extension sigil remains visible. Images
+keep their original aspect ratio inside the 26-pixel icon area; square transparent
+artwork is recommended.
+
+API 1 companions and API 2 plugins with `ui` permission may also return:
+
+```lua
+return function(s, p)
+  return {
+    presentation = {title="Kill Task Tracker - 12 / 50", icon="tracker.png"},
+    ui = {{id="progress", text="12 of 50 kills"}}
+  }
+end
+```
+
+Omitting `presentation` keeps the current values. Returning it replaces the
+runtime overrides: missing keys inherit the manifest defaults; `{}` restores
+both defaults. An empty title uses `name`; an empty icon uses the native emblem.
+Changes update open windows and the bar without restarting. Runtime overrides
+last until a character change or plugin reload; use the manifest for defaults
+that must appear before Lua starts. Metadata does not change the plugin's ID,
+permissions or saved files.
+
+Titles allow up to 80 characters on one line. Icons are PNG filenames only (up
+to 96 characters), with no paths or URLs. PNGs are limited to 2 MiB compressed and
+1024 by 1024 pixels. Toolbar and UI images share one cache per plugin: at most 32
+assets and 16 MiB decoded. Missing or invalid images use the fallback; use Refresh
+in Manage Plugins after replacing image files on disk.
 
 ## Reuse or replace the built-in policies
 
@@ -105,6 +148,12 @@ fellowship vitals, confirmations, portal events and combat results. Item Tools'
 transfer eligibility, vendor room/price and inventory failure fields are included
 as well. `identified=false` means a property may be unknown; it is not evidence
 that the property is zero. Requests for new appraisals still require inventory.
+
+Inventory entries expose `salvage_tool_available` for an owned Ust that is usable
+from its current pack and not offered in trade (including its containing pack).
+This remains true for a retained Ust: retention protects it from destruction,
+but does not prevent using the tool. `resource_available` keeps the stricter
+retention check for items being salvaged, sold or otherwise consumed.
 
 API 2 adds `api`, `unix_time`, `server`, `state`, `events`, `error`, `capabilities`,
 `plugins`, `automation_owner`, `profile_name`, `waiting_action`, `log`, and the

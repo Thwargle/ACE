@@ -44,9 +44,9 @@ namespace
         O->SetNumberField(TEXT("x"),P.Location.X);O->SetNumberField(TEXT("y"),P.Location.Y);O->SetNumberField(TEXT("z"),P.Location.Z);
         return O;
     }
-    bool LootItemAvailable(UACEClientSubsystem* Client,FACEWorldObject Item)
+    bool LootItemAvailable(UACEClientSubsystem* Client,FACEWorldObject Item,bool AllowRetained=false)
     {
-        if(!Client->IsOwnedInventoryItem(Item)||(Item.ObjectDescriptionFlags&ACEObjectDescFlag::Retained))return false;
+        if(!Client->IsOwnedInventoryItem(Item)||(!AllowRetained&&(Item.ObjectDescriptionFlags&ACEObjectDescFlag::Retained)))return false;
         for(int Depth=0;Depth<32;++Depth)
         {
             if(Item.WielderId||Item.ParentGuid||Item.CurrentWieldedLocation||Client->GetSession()->GetTradeSelfItems().Contains(Item.Guid))return false;
@@ -54,6 +54,13 @@ namespace
             if(!Client->GetWorldObject(Item.ContainerId,Item))return false;
         }
         return false;
+    }
+    bool SalvageToolAvailable(UACEClientSubsystem* Client,const FACEWorldObject& Item)
+    {
+        // Retained protects the tool from disposal, not from being used. WCID
+        // identifies the standard Ust even when a server omits its item category.
+        return (Item.WeenieClassId==ACEWeenieClass::TinkeringTool||ACEVTObjectClass::Classify(Item)==40)
+            && LootItemAvailable(Client,Item,true);
     }
     bool Wieldable(const FACEAppraisalInfo& A,const FACEPlayerVitals& V)
     {
@@ -130,9 +137,23 @@ void UACEPluginSubsystem::WakeCombatDecision()
 }
 void UACEPluginSubsystem::ReleaseCombatTarget(int32 Guid)
 {
-    if(!Guid||CombatTarget!=Guid)return;
-    WakeCombatDecision();CombatTarget=0;
-    if(auto P=PolicyPlugin();P&&P->WaitAction==TEXT("identify")&&P->WaitItem==Guid)
+    if(!Guid)return;
+    auto P=PolicyPlugin();
+    const bool DeferredTarget=P&&P->CombatTransitionIntent
+        &&(S(P->CombatTransitionIntent,TEXT("action"))==TEXT("attack")||S(P->CombatTransitionIntent,TEXT("action"))==TEXT("cast"))
+        &&int32(uint32(N(P->CombatTransitionIntent,TEXT("target"))))==Guid;
+    if(CombatTarget!=Guid&&PhysicalAttackTarget!=Guid&&!DeferredTarget)return;
+    // A server charge is not a pending Use. Otherwise Tick stays behind the
+    // approach gate even after the attack throttle was released on death.
+    if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController()))PC->EndCombatApproachTo(Guid);
+    if(DeferredTarget)
+    {
+        // This request has not been sent yet. Let policy choose recovery or a
+        // living target; PrepareCombatAction still honors real attack/stance ACKs.
+        P->CombatTransitionIntent.Reset();P->NextAction=0;
+    }
+    WakeCombatDecision();if(CombatTarget==Guid)CombatTarget=0;
+    if(P&&P->WaitAction==TEXT("identify")&&P->WaitItem==Guid)
     {P->WaitAction.Empty();P->NextAction=0;}
     if(PhysicalAttackTarget==Guid){PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();PhysicalAttackNextSendAt=0;}
     // Do not clear PendingSpell: its untagged UseDone still belongs to that
@@ -660,6 +681,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         const bool Equipped=Item.WielderId==C->GetPlayerGuid() || (Item.CurrentWieldedLocation && Item.ParentGuid==C->GetPlayerGuid());
         J->SetBoolField(TEXT("equipped"),Equipped);J->SetNumberField(TEXT("ammo_type"),Item.AmmoType);
         J->SetBoolField(TEXT("resource_available"),LootItemAvailable(C,Item));
+        J->SetBoolField(TEXT("salvage_tool_available"),SalvageToolAvailable(C,Item));
         J->SetNumberField(TEXT("equipped_slot"),uint32(Item.CurrentWieldedLocation));
         J->SetBoolField(TEXT("targeted"),ACEItemUseable::IsTargeted(Item.ItemUseable));J->SetBoolField(TEXT("usable"),ACEInventoryRules::IsUsable(Item.ItemUseable));
         J->SetBoolField(TEXT("healing_kit"),(Item.ObjectDescriptionFlags&0x10000)!=0); // Retail Healer descriptor.
@@ -951,6 +973,8 @@ void UACEPluginSubsystem::UpdateCombatTransition(FACEClientPlugin& P)
     {ScheduleDecisionWake(Now+.05);return;}
     auto I=P.CombatTransitionIntent;P.CombatTransitionIntent.Reset();P.NextAction=0;P.NextDecision=0;
     Execute(P,I); // Revalidate the target, ownership and permissions after the wait.
+    if(Action==TEXT("combat_mode")&&!P.CombatTransitionIntent)
+    {P.NextDecision=0;ScheduleDecisionWake(Now);}
 }
 void UACEPluginSubsystem::TrackActionWait(FACEClientPlugin& P,const FString& Action,int32 Item,int32 Value)
 {
@@ -1029,7 +1053,7 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
     if(Action==TEXT("combine_salvage"))
     {
         const double ToolId=N(I,TEXT("tool"));FACEWorldObject Tool;
-        if(ToolId<=0||ToolId>MAX_uint32||FMath::FloorToDouble(ToolId)!=ToolId||!C->GetWorldObject(int32(uint32(ToolId)),Tool)||!LootItemAvailable(C,Tool)||ACEVTObjectClass::Classify(Tool)!=40){ReportActivityFailure(P,I,TEXT("Salvage combining requires an available Ust"));return true;}
+        if(ToolId<=0||ToolId>MAX_uint32||FMath::FloorToDouble(ToolId)!=ToolId||!C->GetWorldObject(int32(uint32(ToolId)),Tool)||!SalvageToolAvailable(C,Tool)){ReportActivityFailure(P,I,TEXT("Salvage combining requires an available Ust"));return true;}
         TArray<FString> Parts;S(I,TEXT("items")).ParseIntoArray(Parts,TEXT(","));TArray<int32> Items;int32 Material=0;
         if(Parts.Num()<2||Parts.Num()>64){ReportActivityFailure(P,I,TEXT("Invalid salvage combine list"));return true;}
         for(const FString& Part:Parts)
@@ -1044,7 +1068,12 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
     {
         if(Found)
         {
-            TrackActionWait(P,Action,Id);
+            // Resistance appraisal is optional; combat has a neutral fallback.
+            // Inventory/corpse appraisal still gates rules and destructive uses.
+            const bool CombatAssessment=P.IsPolicy()&&S(I,TEXT("activity"))==TEXT("combat")
+                &&Item.IsAttackable()&&!Item.bIsPlayer&&!Item.PetOwnerId;
+            if(CombatAssessment)P.NextAction=Now;
+            else TrackActionWait(P,Action,Id);
             // Share the request ledger with the background inventory scanner so
             // it cannot immediately duplicate a policy-requested appraisal.
             LastAppraisalRequest=Now;AppraisalRequests.Add(Id,Now);C->RequestBackgroundAppraisal(Id);
@@ -1095,7 +1124,7 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
         const auto* SalvageAppraisal=Appraisals.Find(Id);
         if(!SalvageAppraisal||!SalvageAppraisal->bSuccess||SalvageAppraisal->IntProperties.FindRef(171)>0||!SalvageAppraisal->StringProperties.FindRef(8).IsEmpty())
         {ReportActivityFailure(P,I,TEXT("Automatic salvage requires appraisal and skips tinkered or inscribed items"));return true;}
-        if(ToolId<=0||ToolId>MAX_uint32||FMath::FloorToDouble(ToolId)!=ToolId||!C->GetWorldObject(int32(uint32(ToolId)),Tool)||!LootItemAvailable(C,Tool)||ACEVTObjectClass::Classify(Tool)!=40||Item.Guid==Tool.Guid||Item.ItemsCapacity>0||(ACEVTObjectClass::Classify(Item)==39&&Item.Structure>=100)||Item.MaterialType<1||Item.MaterialType>77||TArray<int>{3,9,56,65,72}.Contains(Item.MaterialType))
+        if(ToolId<=0||ToolId>MAX_uint32||FMath::FloorToDouble(ToolId)!=ToolId||!C->GetWorldObject(int32(uint32(ToolId)),Tool)||!SalvageToolAvailable(C,Tool)||Item.Guid==Tool.Guid||Item.ItemsCapacity>0||(ACEVTObjectClass::Classify(Item)==39&&Item.Structure>=100)||Item.MaterialType<1||Item.MaterialType>77||TArray<int>{3,9,56,65,72}.Contains(Item.MaterialType))
         {ReportActivityFailure(P,I,TEXT("Item is not salvageable or no owned Ust is available"));return true;}
         if(!PrepareCombatAction(P,I,1))return true;
         C->SendCreateTinkeringTool(Tool.Guid,{Id});P.NextAction=Now+3;return true;

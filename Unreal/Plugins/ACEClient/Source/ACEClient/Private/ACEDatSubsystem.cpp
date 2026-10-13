@@ -5493,15 +5493,15 @@ bool UACEDatSubsystem::ConsumeLandMeshReloadRequest(bool* bOutClearEnvCells)
 	return true;
 }
 
-bool UACEDatSubsystem::SampleOutdoorGroundZ(float UnrealX, float UnrealY, float WorldScale, float& OutUnrealZ, FVector* OutUnrealNormal)
+bool UACEDatSubsystem::SampleOutdoorGroundZ(double UnrealX, double UnrealY, float WorldScale, float& OutUnrealZ, FVector* OutUnrealNormal)
 {
 	if (WorldScale <= KINDA_SMALL_NUMBER)
 	{
 		return false;
 	}
 
-	const float GlobalX = -UnrealX / WorldScale;
-	const float GlobalY = UnrealY / WorldScale;
+	const double GlobalX = -UnrealX / WorldScale;
+	const double GlobalY = UnrealY / WorldScale;
 	const int32 Lbx = FMath::FloorToInt(GlobalX / FACELandblockMeshBuilder::LandblockSize);
 	const int32 Lby = FMath::FloorToInt(GlobalY / FACELandblockMeshBuilder::LandblockSize);
 	if (Lbx < 0 || Lbx > 255 || Lby < 0 || Lby > 255)
@@ -5534,14 +5534,14 @@ bool UACEDatSubsystem::SampleOutdoorGroundZ(float UnrealX, float UnrealY, float 
 	return true;
 }
 
-float UACEDatSubsystem::GetOutdoorWaterDepthCm(float UnrealX, float UnrealY, float WorldScale)
+float UACEDatSubsystem::GetOutdoorWaterDepthCm(double UnrealX, double UnrealY, float WorldScale)
 {
 	if (WorldScale <= KINDA_SMALL_NUMBER)
 	{
 		return 0.f;
 	}
-	const float GlobalX = -UnrealX / WorldScale;
-	const float GlobalY = UnrealY / WorldScale;
+	const double GlobalX = -UnrealX / WorldScale;
+	const double GlobalY = UnrealY / WorldScale;
 	const int32 Lbx = FMath::FloorToInt(GlobalX / FACELandblockMeshBuilder::LandblockSize);
 	const int32 Lby = FMath::FloorToInt(GlobalY / FACELandblockMeshBuilder::LandblockSize);
 	if (Lbx < 0 || Lbx > 255 || Lby < 0 || Lby > 255)
@@ -5564,14 +5564,14 @@ float UACEDatSubsystem::GetOutdoorWaterDepthCm(float UnrealX, float UnrealY, flo
 	return FACELandblockMeshBuilder::GetWaterDepthAc(*Mesh, LocalX, LocalY) * WorldScale;
 }
 
-uint8 UACEDatSubsystem::GetOutdoorBlockWaterType(float UnrealX, float UnrealY, float WorldScale)
+uint8 UACEDatSubsystem::GetOutdoorBlockWaterType(double UnrealX, double UnrealY, float WorldScale)
 {
 	if (WorldScale <= KINDA_SMALL_NUMBER)
 	{
 		return 0;
 	}
-	const float GlobalX = -UnrealX / WorldScale;
-	const float GlobalY = UnrealY / WorldScale;
+	const double GlobalX = -UnrealX / WorldScale;
+	const double GlobalY = UnrealY / WorldScale;
 	const int32 Lbx = FMath::FloorToInt(GlobalX / FACELandblockMeshBuilder::LandblockSize);
 	const int32 Lby = FMath::FloorToInt(GlobalY / FACELandblockMeshBuilder::LandblockSize);
 	if (Lbx < 0 || Lbx > 255 || Lby < 0 || Lby > 255)
@@ -5588,14 +5588,14 @@ uint8 UACEDatSubsystem::GetOutdoorBlockWaterType(float UnrealX, float UnrealY, f
 	return Mesh ? Mesh->BlockWaterType : 0;
 }
 
-uint8 UACEDatSubsystem::GetOutdoorCellWaterType(float UnrealX, float UnrealY, float WorldScale)
+uint8 UACEDatSubsystem::GetOutdoorCellWaterType(double UnrealX, double UnrealY, float WorldScale)
 {
 	if (WorldScale <= KINDA_SMALL_NUMBER)
 	{
 		return 0;
 	}
-	const float GlobalX = -UnrealX / WorldScale;
-	const float GlobalY = UnrealY / WorldScale;
+	const double GlobalX = -UnrealX / WorldScale;
+	const double GlobalY = UnrealY / WorldScale;
 	const int32 Lbx = FMath::FloorToInt(GlobalX / FACELandblockMeshBuilder::LandblockSize);
 	const int32 Lby = FMath::FloorToInt(GlobalY / FACELandblockMeshBuilder::LandblockSize);
 	if (Lbx < 0 || Lbx > 255 || Lby < 0 || Lby > 255)

@@ -7,6 +7,7 @@
 #include "Dom/JsonObject.h"
 #include "ACETypes.h"
 #include "Mods/ACEUCMLog.h"
+#include "Mods/ACELedger.h"
 #include "Mods/ACEPluginLocalService.h"
 #include "ACEPluginSubsystem.generated.h"
 
@@ -34,7 +35,10 @@ struct FACEClientPlugin
     TSharedPtr<FJsonObject> ProfileLinks, ProfileBaseline;
     FString Id, Name, Version, Description, Directory, Status = TEXT("Stopped"), ProfileName = TEXT("Default");
     TArray<FString> Permissions;
-    TSharedPtr<FJsonObject> Manifest, Profile;
+    TSharedPtr<FJsonObject> Manifest, Profile, Presentation;
+    TSharedPtr<class FACEPluginImageCache> Images;
+    FString DisplayTitle() const;
+    FString DisplayIcon() const;
     TSharedPtr<FACEPluginVM> VM;
     TSharedPtr<FJsonObject> ActivityFailure;
     TSharedPtr<FJsonObject> CombatTransitionIntent;
@@ -79,6 +83,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
 {
     GENERATED_BODY()
     friend class FACEPluginHostTest;
+    friend class FACELedgerTest;
     friend class FACEPluginCompanionTest;
     friend class FACEPluginPublicAPITest;
     friend class FACEPluginEquipmentTest;
@@ -97,8 +102,22 @@ public:
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
     void Discover();
+    TSharedPtr<class FACEPluginStyle> RetailPluginStyle;
+    static bool IsLedger(const FString& Id) { return Id==TEXT("supplyledger")||Id==TEXT("huntledger"); }
+    TSharedRef<SWidget> MakeLedgerPanel(const FString& Id);
+    const TArray<FACESupplyEntry>& GetSupplies() const { return LedgerSupplies; }
+    const FACEHuntLedger& GetHuntLedger() const { return HuntLedger; }
+    uint32 GetSupplyRevision() const { return SupplyRevision; }
+    void EditSupplySelection(bool Add);
+    void RemoveSupply(int32 Index);
+    void ResetHuntLedger();
+    bool LedgerOption(const FString& Id,const FString& Key,bool Default=false) const;
+    void SetLedgerOption(const FString& Id,const FString& Key,bool Value);
+    FVector2D LedgerSize(const FString& Id) const;
+    UFUNCTION() void ObserveLedgerVitals(const FACEPlayerVitals& Vitals);
     TArray<TSharedPtr<FACEClientPlugin>> Plugins;
     FString Notice;
+    FString SupplyNotice;
     bool Start(const FString& Id);
     bool RunPluginCommand(const FString& Arguments);
     bool ClickPluginRow(const FString& Id, const FString& RowId);
@@ -150,9 +169,9 @@ public:
     void SetPluginBarMinimized(bool Minimized);
     bool IsPluginBarUnlocked() const;
     void TogglePanel();
-    TSharedRef<SWidget> MakeUCMPanel(const FString& InitialPage=FString());
+    TSharedRef<SWidget> MakeUCMPanel(const FString& InitialPage=FString(), bool bShowTitle=true);
     TSharedRef<SWidget> MakeUCMMicroPanel();
-    TSharedRef<SWidget> MakeItemToolsPanel();
+    TSharedRef<SWidget> MakeItemToolsPanel(bool bShowTitle=true);
     bool RunItemToolsCommand(const FString& Arguments);
     bool StartItemTools(const FString& Mode);
     bool SelectItemToolsObject(const FString& Key, const FString& Kind);
@@ -162,7 +181,7 @@ public:
     const FACEUCMLog& GetUCMLog() const { return UCMLog; }
     void ClearUCMLog();
     FString UCMLogSaveError;
-    TSharedRef<SWidget> MakeWaypointPanel(bool bMap=false, bool bArrowOnly=false);
+    TSharedRef<SWidget> MakeWaypointPanel(bool bMap=false, bool bArrowOnly=false, bool bShowTitle=true);
     TSharedRef<SWidget> MakeWaypointMapIcon();
     TSharedRef<SWidget> MakeWaypointDungeonOverlay();
     bool IsWaypointMapUnlocked() const;
@@ -217,6 +236,15 @@ public:
     void ApplyMovement(AACEPlayerController* Controller, float& Forward, float& Right, float& Turn,
         bool Manual, bool Blocked, bool VR, const FVector& Facing, float MaxFrameTravel = 0.f);
 private:
+    void UpdateLedgers();
+    bool UpdateLedgerCharacter();
+    void SaveSupplies();
+    TArray<FACESupplyEntry> LedgerSupplies;
+    FACEHuntLedger HuntLedger;
+    FString LedgerCharacter;
+    uint64 SupplyInventoryRevision=MAX_uint64;
+    uint32 SupplyRevision=0;
+
     TSharedPtr<FACEClientPlugin> PolicyPlugin() const;
     bool ValidatePublicProfile(const TSharedPtr<FJsonObject>& Profile) const;
     bool InitializePluginState(FACEClientPlugin& Plugin);

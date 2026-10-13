@@ -228,26 +228,26 @@ public:
 	 * UnrealXY are world positions; OutUnrealZ is absolute world Z for feet on the terrain.
 	 * Indoor movement should ignore outdoor-terrain hits rather than refusing samples here.
 	 */
-	bool SampleOutdoorGroundZ(float UnrealX, float UnrealY, float WorldScale, float& OutUnrealZ, FVector* OutUnrealNormal = nullptr);
+	bool SampleOutdoorGroundZ(double UnrealX, double UnrealY, float WorldScale, float& OutUnrealZ, FVector* OutUnrealNormal = nullptr);
 
 	/**
 	 * Retail water-depth sink in Unreal cm (0 if dry / mesh missing).
 	 * Same discrete depths as ACE ObjCell.get_water_depth.
 	 */
-	float GetOutdoorWaterDepthCm(float UnrealX, float UnrealY, float WorldScale);
+	float GetOutdoorWaterDepthCm(double UnrealX, double UnrealY, float WorldScale);
 
 	/**
 	 * Retail LandblockStruct.water_type for the landblock containing XY:
 	 * 0=NotWater, 1=PartiallyWater, 2=EntirelyWater.
 	 */
-	uint8 GetOutdoorBlockWaterType(float UnrealX, float UnrealY, float WorldScale);
+	uint8 GetOutdoorBlockWaterType(double UnrealX, double UnrealY, float WorldScale);
 
 	/**
 	 * Per 24×24 outdoor cell water type (LandCell.WaterType). Used by
 	 * get_water_depth (0 / 0.1 / 0.45 / 0.9 AC). Walk blocking uses
 	 * GetOutdoorBlockWaterType — retail get_block_water_type().
 	 */
-	uint8 GetOutdoorCellWaterType(float UnrealX, float UnrealY, float WorldScale);
+	uint8 GetOutdoorCellWaterType(double UnrealX, double UnrealY, float WorldScale);
 
 	/** True when landblock-local Unreal XY sits under a building interior footprint. */
 	bool IsUnderBuildingInterior(uint32 LandblockId, float LocalUnrealX, float LocalUnrealY, float WorldScale);

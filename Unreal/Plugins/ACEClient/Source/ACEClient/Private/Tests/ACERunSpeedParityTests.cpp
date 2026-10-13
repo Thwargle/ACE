@@ -124,34 +124,61 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
  App->InterruptCastWithMovement();
  TestEqual(TEXT("Movement does not truncate a queued scarab windup action"),App->ActionCommand,0x1000006Fu);
  App->ClearActionMotion();
- // A pending cast marks the session use-busy. Plugin bumps must still send
- // both movement edges, just as a physical backward key would.
+ // A pending cast marks the session use-busy. A complete native buff cycle
+ // must cancel cast substates without translating even at low frame rates.
  {
   auto* Plugins=GI->GetSubsystem<UACEPluginSubsystem>();VR->bActive=false;
   FACEPosition Pose;Pose.CellId=0x01010001;Pose.SetLocationFromUnreal(StartFeet,100);
   Pose.SetAceFacingFromUnrealDir2D(FVector::XAxisVector);Session->SetLocalPosition(Pose);
   PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;
   Pawn->SetActorLocationAndRotation(StartFeet+FVector(0,0,88),Pose.ToUnrealQuat());
-  Session->bUseBusy=true;Session->bMoving=false;
-  Plugins->PendingSpell=123;Plugins->PendingSpellAt=FPlatformTime::Seconds();
-  Plugins->PendingSpellConfirmed=false;Plugins->PendingSpellFizzled=false;
-  Plugins->FastCastOwner=TEXT("ucm");Plugins->FastCastStarted=true;
-  Plugins->FastCastStartedAt=FPlatformTime::Seconds();Plugins->FastCastMovementApplied=false;
-  App->PlayActionMotion(0x40000034,2.f,ACEMotion::StanceMagic);
+  Session->bUseBusy=true;Session->bMoving=false;Session->ApplyServerCombatMode(8);Session->SetCurrentStance(ACEMotion::StanceMagic);
+  Session->PlayerVitals.bValid=true;Session->PlayerVitals.RunSkillCurrent=800;
+  Session->PlayerVitals.Stamina=Session->PlayerVitals.MaxStamina=500;
+  auto ArmTap=[&]()
+  {
+   Plugins->PendingSpell=123;Plugins->PendingSpellAt=FPlatformTime::Seconds();
+   Plugins->PendingSpellConfirmed=false;Plugins->PendingSpellFizzled=false;
+   Plugins->FastCastOwner=TEXT("ucm");Plugins->FastCastStarted=true;
+   Plugins->FastCastStartedAt=FPlatformTime::Seconds();Plugins->FastCastMovementApplied=false;
+  };
+  for(int32 Rate:{10,30,60,90,144,240})
+  {
+   const FVector Before=Pawn->GetActorLocation();
+   for(int32 Buff=0;Buff<40;++Buff)
+   {
+    ArmTap();App->PlayActionMotion(0x40000034,2.f,ACEMotion::StanceMagic);
+    PC->PlayerTick(1.f/Rate);
+    TestTrue(TEXT("Buff tap consumed while session is use-busy"),Plugins->FastCastMovementApplied);
+    TestEqual(TEXT("Fast buff edge interrupts local casting substate"),App->ActionCommand,0u);
+    TestEqual(TEXT("Fast buff never sets a held backward axis"),PC->ForwardAxis,0.f);
+    TestFalse(TEXT("Release reaches session in the same frame"),Session->bMoving);
+    // Neither a lost result nor additional render frames may move the player.
+    for(int32 Frame=0;Frame<4;++Frame)PC->PlayerTick(1.f/Rate);
+   }
+   TestTrue(FString::Printf(TEXT("40 buffs at %d Hz leave the player in place"),Rate),
+    Pawn->GetActorLocation().Equals(Before,.01));
+  }
+  ArmTap();App->PlayActionMotion(0x1000006F,2.f,ACEMotion::StanceMagic);
   PC->PlayerTick(1.f/90);
-  TestTrue(TEXT("Fast buff movement reaches session while cast is use-busy"),Session->bMoving);
-  TestEqual(TEXT("Fast buff edge interrupts local casting substate"),App->ActionCommand,0u);
+  TestEqual(TEXT("Tap does not skip a scarab windup action"),App->ActionCommand,0x1000006Fu);
+  App->ClearActionMotion();
+  ArmTap();float F=0,R=0,T=0;
+  Plugins->ApplyMovement(PC,F,R,T,false,true,false,FVector::ForwardVector);
+  TestFalse(TEXT("Blocked UI cannot dispatch a tap"),Plugins->FastCastMovementApplied);
   Plugins->FastCastStartedAt=FPlatformTime::Seconds()-.13;
-  PC->PlayerTick(1.f/90);
-  TestFalse(TEXT("Pulse expiration sends release while spell result is missing"),Session->bMoving);
-  TestEqual(TEXT("Pulse expiration clears local movement"),PC->ForwardAxis,0.f);
-  // Completion can clear ownership between controller ticks. Its release
-  // must not be swallowed by the ordinary object-use movement freeze.
-  Plugins->FastCastOwner=TEXT("ucm");Plugins->FastCastStarted=true;
-  Plugins->FastCastStartedAt=FPlatformTime::Seconds();PC->PlayerTick(1.f/90);
-  Plugins->FastCastOwner.Empty();Plugins->FastCastStarted=false;
-  PC->PlayerTick(1.f/90);
-  TestFalse(TEXT("Asynchronous completion also sends the release"),Session->bMoving);
+  Plugins->ApplyMovement(PC,F,R,T,false,false,false,FVector::ForwardVector);
+  TestTrue(TEXT("Unblocking cannot replay an expired tap"),!Plugins->FastCastMovementApplied&&Plugins->FastCastOwner.IsEmpty());
+  ArmTap();F=1;
+  Plugins->ApplyMovement(PC,F,R,T,true,false,false,FVector::ForwardVector);
+  TestTrue(TEXT("Manual movement overrides the tap"),F==1&&!Plugins->FastCastMovementApplied&&Plugins->FastCastOwner.IsEmpty());
+  PC->bJumpCharging=true;TestFalse(TEXT("Tap cannot interrupt jump charge"),PC->TryFastBuffTap());PC->bJumpCharging=false;
+  PC->bJumpAirborne=true;TestFalse(TEXT("Tap cannot interrupt a jump"),PC->TryFastBuffTap());PC->bJumpAirborne=false;
+  PC->bEnterWorldLoading=true;TestFalse(TEXT("Tap cannot run during portal loading"),PC->TryFastBuffTap());PC->bEnterWorldLoading=false;
+  PC->bServerMoveToActive=true;TestFalse(TEXT("Tap cannot interrupt a use approach"),PC->TryFastBuffTap());PC->bServerMoveToActive=false;
+  Session->SetCurrentStance(ACEMotion::StanceNonCombat);
+  TestFalse(TEXT("Tap cannot report a stale non-magic stance while buffing"),PC->TryFastBuffTap());
+  Session->SetCurrentStance(ACEMotion::StanceMagic);
   Session->bUseBusy=false;Plugins->PendingSpell=0;PC->PlayerTick(1.f/90);
  }
  struct FCase { int32 Skill; float Scale,Burden; int32 Stamina; double Speed; };

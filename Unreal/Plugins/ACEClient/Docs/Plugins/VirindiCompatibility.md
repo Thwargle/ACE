@@ -1,5 +1,99 @@
 # Virindi compatibility review
 
+## Fast buffs without backward travel — 2026-10-12
+
+Rechecked VT `gj.cs` (spell words/result state transitions), `u.cs` (Backward
+input), and `hr.cs`/`hg.cs` (key press/release bookkeeping). VT starts Backward
+on eligible spell words and releases it when the cast ends; it does not request
+a fixed backward distance. Retail `CommandInterpreter::HandleKeyboardCommand`
+applies and sends each edge immediately through `SendMovementEvent`.
+
+UCM previously converted this into up to 120 ms of held movement. Even words
+and a result in the same network batch forced a complete movement frame, so
+successive buffs translated the character toward nearby portals. The native
+implementation now taps and releases in the same update, before integrating
+movement. Both ordinary MoveToState packets carry the same position, facing,
+stance, and movement stamps. This is a stationary adaptation of VT's input
+technique, not a claim that VT itself uses a zero-duration key hold. Spell
+eligibility, server acknowledgments, busy retries, windups, and manual input
+priority remain intact. Blocked or stale taps are discarded.
+
+Regression coverage checks the packet pair, delayed/coalesced/missing results,
+40-buff cycles at 10/30/60/90/144/240 Hz without accumulated player translation,
+and jump, portal, manual-input, and UI guards. A live dungeon run remains the
+acceptance check for server latency and portal proximity.
+
+Validation: Windows Editor build succeeded. `RunSpeed`, `RouteAndTellRequests`,
+`HostAndPanel`, `EquipmentBuffCycle`, `Recovery`, and `PvPCombat` passed.
+The combined report is `Saved/UCMFastBuffTapReview/summary.json`; the request
+suite retains its existing 24 missing-position fixture warnings. Quest shared
+sources were synchronized and checked; no packaged release was produced.
+
+## Target handoff, route return, and idle looting — 2026-10-12
+
+Follow-up on the reported multi-second handoff: the server's combat MoveTo
+shares the controller's use-approach state. Death released UCM's physical
+retry gate, but that remaining approach still blocked its next decision.
+UCM now releases the movement-only approach to its defeated target on health,
+death motion, or removal. It leaves other destinations, pickups, and real
+UseDone waits intact. An unsent attack/cast waiting for a stance change is
+also discarded when its target dies, so it cannot hold the policy until an
+obsolete request is ready. Pending casts and equipment changes still honor
+server acknowledgments; this does not shorten server swing or recoil timing.
+The real-policy/loopback regression reproduced the blocked handoff before
+the fix, and now covers approaches plus unanswered/successful/failed appraisal
+in melee, missile, and magic. Reports: `Saved/UCMHandoffReview`.
+The Windows Editor rebuild and all six targeted suites passed:
+`RouteAndTellRequests`, `TargetHandoff`, `Recovery`, `SchedulingParity`,
+`HostAndPanel`, and `RetailParity.PvPCombat`. The requests fixture retains its
+24 existing missing-position JSON warnings. Quest source is synchronized.
+The reported live-server five-second pause still needs in-game confirmation;
+this pass does not claim to reproduce its exact wall-clock duration.
+
+Compared the supplied VT decompile's `uTank2/cLogic.cs` rule ordering and
+`SchedulePoke`, `cm.cs` idle-peace rule, and `ca.cs` waypoint advancement.
+VT applies idle peace as a prerequisite of ordinary loot actions/approach,
+after normal recovery and attack selection. Its route cursor consumes reached
+walk points in one evaluation rather than waiting an idle poll at each point.
+Priority looting remains an explicit override, not evidence that an area is safe.
+
+UCM's corresponding changes:
+
+- Monster appraisal no longer reserves the action gate while its response is
+  pending. A short scheduled continuation uses the existing neutral-resistance
+  fallback; later appraisal improves selection. Equipment and loot appraisal
+  remain blocking because their requirements and rules depend on those values.
+- `continue_work` now actually schedules its 50 ms continuation. Canceling an
+  obsolete attack and confirming an idle stance no longer add a generic 500 ms
+  action delay. Outstanding casts, equipment changes, and server attack/stance
+  acknowledgments retain their existing synchronization.
+- Idle peace is checked before looting, including opening a corpse and taking
+  items from an already open corpse. Visible living monsters within acquisition
+  range prevent this transition, including ignored monsters and manual combat.
+  Recovery and required buffs still run first. This proximity guard is UCM's
+  explicit safety policy rather than a claim that VT's last-resort rule uses it.
+- Return paths use the configured waypoint tolerance, capped at 80 cm, instead
+  of demanding a 40 cm target and a 20 cm route corridor. The 3D corridor retains
+  floor separation and the observed path's bends. Reached walk points advance
+  in a bounded loop; use, pause, jump, portal, and checkpoint actions retain
+  their own conditions. Native and imported routes share this behavior.
+- Arrival is latched until another movement intent arrives, so a small position
+  correction cannot restart steering toward a point the player just reached.
+
+Automated coverage exercises the host/network handoff in all three combat modes,
+unanswered appraisal, recovery priority, idle peace on/off, nearby monsters,
+corpse opening/pickup, route return, and native/imported route advancement.
+Live-server unattended behavior remains an acceptance check.
+
+Validation: Windows Editor build succeeded; nine targeted suites passed:
+`LongCombatRouteRejoin`, `Recovery`, `RouteAndTellRequests`, `RouteJoin`,
+`SchedulingParity`, `TargetHandoff`, `UCM`, `UCMLog`, and `RetailParity.PvPCombat`.
+The 2,048-point route fixture now expects both already-reached points to advance
+in one decision. `RouteAndTellRequests` also emitted 24 missing-position JSON
+fixture warnings. Reports are in `Saved/UCMFlowReview/Results` and the corrected
+route-only rerun in `Saved/UCMFlowReview/Retry`. Quest source is synchronized;
+no new release or live Linux/headset gameplay validation was performed.
+
 ## Combat action synchronization — 2026-10-11
 
 Compared ACE's `Player_Magic`, `Player_Melee` and `Player_Combat` handlers with

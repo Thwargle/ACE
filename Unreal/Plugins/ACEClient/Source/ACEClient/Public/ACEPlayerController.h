@@ -44,6 +44,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
     friend class FACEAvatarMotionTest;
     friend class FACEAcademyCornerTest;
     friend class FACEPluginRampRouteTest;
+    friend class FACEPluginRequestsTest;
 	friend class FACEVRStairCeilingTest;
 	friend class FACEVRInteriorNetworkTest;
 	friend class FACERetailWorldEntryTest;
@@ -78,6 +79,7 @@ public:
 	bool IsVRActive() const;
     void QueuePluginJump(float Charge,float Heading,float Forward,float Strafe=0,bool Walk=false);
     void CancelPluginJump();
+    bool TryFastBuffTap();
     bool IsPluginJumpPending() const {return bPluginJumpQueued || bJumpAirborne;}
     bool bPluginJumpQueued=false;
     float PluginJumpCharge=0,PluginJumpHeading=0,PluginJumpForward=1,PluginJumpStrafe=0;
@@ -161,6 +163,8 @@ public:
 
 	/** Stop Holding Use retries (e.g. after ApproachVendor opens the vendor UI). */
 	void EndUseApproach();
+	/** Release only the movement-only approach to a defeated combat target. */
+	void EndCombatApproachTo(int32 TargetGuid);
 	bool IsUseApproachActive() const { return bServerMoveToActive; }
 	/** GameEvent UseDone — release local approach so idle StopMovement cannot cancel the chain. */
 	void HandleUseDone(uint32 Error);
@@ -286,7 +290,6 @@ protected:
 	float RightAxis = 0.f;
 	float TurnAxis = 0.f;
 	float ForwardSent = 0.f;
-	bool bPluginFastBuffMovementSent = false;
 	float RightSent = 0.f;
 	float TurnSent = 0.f;
 	float MouseTurnReportSeconds = .5f;

@@ -1,3 +1,4 @@
+#include "Mods/ACEPluginStyle.h"
 #include "Mods/ACEPluginCosmetics.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "Engine/GameInstance.h"
@@ -16,7 +17,7 @@ bool Name(const FString& Value)
 { if(Value.IsEmpty()||Value.Len()>64)return false;for(TCHAR C:Value)if(!FChar::IsAlnum(C)&&C!='_'&&C!='-')return false;return true; }
 #endif
 TSharedRef<SWidget> Label(const FString& Text)
-{ return SNew(STextBlock).Text(FText::FromString(Text)).AutoWrapText(true); }
+{ return SNew(SACEPluginText).Text(FText::FromString(Text)).AutoWrapText(true); }
 }
 
 bool UACEPluginCosmetics::Initialize(UACEPluginSubsystem* InHost,const FACEClientPlugin& Plugin,FString& Error)
@@ -189,7 +190,7 @@ void UACEPluginCosmetics::UpdateInstallations(const FString& Json)
     {
         List->ClearChildren();TWeakObjectPtr<UACEPluginCosmetics> Self(this);
         for(const auto& Install:Installations)
-            List->AddSlot().AutoHeight().Padding(0,3)[SNew(SButton).IsFocusable(false)
+            List->AddSlot().AutoHeight().Padding(0,3)[SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false)
                 .OnClicked_Lambda([Self,Install](){if(Self.IsValid())for(const TCHAR* Key:{TEXT("root"),TEXT("product")})if(Self->Inputs.Contains(Key))Self->Inputs[Key]=CosmeticPanelField(Install,Key);return FReply::Handled();})
                 [Label(CosmeticPanelField(Install,TEXT("product"))+TEXT(" ")+CosmeticPanelField(Install,TEXT("version"))+TEXT(" — ")+CosmeticPanelField(Install,TEXT("root")))]];
     }
@@ -206,10 +207,10 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakePanel()
     TWeakObjectPtr<UACEPluginCosmetics> Self(this);auto Body=SNew(SVerticalBox);
     auto Add=[&](TSharedRef<SWidget> W){Body->AddSlot().AutoHeight().Padding(4)[W];};
     auto Button=[&](const FString& Caption,TFunction<void()> Action,bool bDuringWork=false)->TSharedRef<SWidget>
-    {return SNew(SButton).IsFocusable(false).ContentPadding(8).IsEnabled_Lambda([Self,bDuringWork](){return Self.IsValid()&&(bDuringWork||!Self->ToolProcess.IsValid());})
+    {return SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false).ContentPadding(8).IsEnabled_Lambda([Self,bDuringWork](){return Self.IsValid()&&(bDuringWork||!Self->ToolProcess.IsValid());})
         .OnClicked_Lambda([Self,Action](){if(Self.IsValid())Action();return FReply::Handled();})[Label(Caption)];};
     Add(Label(TEXT("Local appearance only · one weapon or shield · disable in Plugins to restore AC gear")));
-    Add(SNew(STextBlock).AutoWrapText(true).Text_Lambda([Self](){return FText::FromString(Self.IsValid()?Self->Status:TEXT("Unavailable"));}));
+    Add(SNew(SACEPluginText).AutoWrapText(true).Text_Lambda([Self](){return FText::FromString(Self.IsValid()?Self->Status:TEXT("Unavailable"));}));
     Add(Button(TEXT("Search local ")+SourceLabel+TEXT(" installations"),[Self](){Self->QueueRequest(TEXT("scan"));}));
     auto List=SNew(SVerticalBox);InstallationList=List;Add(List);
     for(const auto& Install:Installations)
@@ -220,7 +221,7 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakePanel()
     for(const auto& O:Fields)
     {
         const FString Key=CosmeticPanelField(O,TEXT("key"));Add(Label(CosmeticPanelField(O,TEXT("label"),Key)));
-        Add(SNew(SEditableTextBox).Text_Lambda([Self,Key](){return FText::FromString(Self.IsValid()?Self->Inputs.FindRef(Key):FString());})
+        Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Text_Lambda([Self,Key](){return FText::FromString(Self.IsValid()?Self->Inputs.FindRef(Key):FString());})
             .OnTextChanged_Lambda([Self,Key](const FText& T){if(Self.IsValid())Self->Inputs[Key]=T.ToString();}));
     }
     Add(Button(TEXT("Convert and wear"),[Self](){Self->QueueRequest(TEXT("convert"));}));

@@ -6,6 +6,46 @@ loader for Decal DLLs or Virindi View Services assemblies.
 
 ## Users
 
+**Supply Ledger** is a compact inventory counter inspired by Virindi's Comps HUD.
+Select an owned item and click **+** to track its item type across all packs,
+including equipped stacks. Each row has its own **-** button, so an out-of-stock
+item can still be removed. Lists are
+saved separately for each character and server. Zero-count entries remain visible.
+Each row uses the selected item's inventory icon, including its overlays and
+item-type background. Its artwork is retained when the item runs out.
+
+**Hunt Ledger** shows XP and luminance earned in the last five minutes, the average
+per hour, and totals since login or **Reset run**. Hourly rates use actual elapsed
+run time; the first few seconds are naturally less representative. Spending XP or
+luminance does not subtract from earned totals. Luminance at the server's cap
+cannot be counted unless the server reports a gain. Closing the window keeps the
+run tracking. Logging into a character starts a fresh run.
+
+Both ledgers work independently of UCM. The game radar lock/unlock icon controls
+all plugin windows. Locked ledgers hide their title bars and editing controls.
+Hold **Left Control** to temporarily show those controls and move pinned windows;
+release it to restore the lock. Rebind **Quick-show pinned windows (hold)** in
+Keyboard settings. Drag Supply Ledger's bottom-right corner while unlocked to
+resize it. Its width and list height survive pinning and logins, along with position,
+visibility and the permanent UI lock.
+Enable or disable the ledgers
+in **Manage Plugins**. Five-minute history uses a fixed-size buffer.
+
+The plugin bar uses original 26-pixel vector emblems; hover for the full plugin name and
+status. Its grip still moves when the UI is unlocked, and its minus button
+collapses it to a line. Hide or restore the bar with **Show plugin bar** in
+**Settings > Game Play > Manage Plugins**. Plugin windows share retail DAT bitmap labels, inventory
+artwork, dark backgrounds, gold borders and red buttons. Text entry retains Slate's
+native caret, selection and IME behavior. Standalone windows use their title bar
+for the plugin name, including UCM, Loot Profile Editor, Item Tools and Waypoint;
+the content begins with status, controls or help instead of a repeated heading.
+
+Each bundled plugin has its own emblem (tapers for Supply Ledger, an hourglass
+and rising chart for Hunt Ledger). Icons retain square proportions at every UI
+scale. Third-party plugins can supply a PNG icon and a display title through
+[plugin presentation metadata](PublicAPI.md#plugin-title-and-toolbar-icon); an
+extension sigil is used when no valid custom icon is available.
+
 **Item Tools** provides bulk giving, vendor buy/sell, GiveVT-style profile
 transfers, keyed chest collection/distribution, and character-specific supply
 restocking. See [Item Tools](ItemTools.md) for setup and commands.

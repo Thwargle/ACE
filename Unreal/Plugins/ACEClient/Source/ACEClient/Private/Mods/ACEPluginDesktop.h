@@ -11,6 +11,7 @@ class SVerticalBox;
 class SACEPluginDesktop : public SCompoundWidget
 {
     friend class FACEPluginHostTest;
+    friend class FACELedgerTest;
     friend class FACEUCMLogTest;
 public:
     SLATE_BEGIN_ARGS(SACEPluginDesktop) {} SLATE_ARGUMENT(UACEPluginSubsystem*, Host) SLATE_END_ARGS()
@@ -26,6 +27,7 @@ private:
         TSharedPtr<SWidget> Widget;
         SConstraintCanvas::FSlot* Slot = nullptr;
         FVector2D Position, Size;
+        FString LedgerId;
         bool Open = true;
         bool MapOverlay = false;
         bool PluginBar = false;

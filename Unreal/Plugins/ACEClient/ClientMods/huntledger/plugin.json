@@ -1,0 +1,8 @@
+{
+  "api": 1,
+  "id": "huntledger",
+  "name": "Hunt Ledger",
+  "version": "1.0.0",
+  "description": "Live XP and luminance totals, five-minute gains and hourly rates. Reset at the start of each hunt.",
+  "permissions": []
+}

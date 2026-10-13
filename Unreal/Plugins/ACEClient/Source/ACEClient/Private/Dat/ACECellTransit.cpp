@@ -243,8 +243,8 @@ namespace ACECellTransit
 		{
 			const int32 BlockX = FMath::FloorToInt(AceCenter.X / LandblockSize);
 			const int32 BlockY = FMath::FloorToInt(AceCenter.Y / LandblockSize);
-			const float LocalX = AceCenter.X - static_cast<float>(BlockX) * LandblockSize;
-			const float LocalY = AceCenter.Y - static_cast<float>(BlockY) * LandblockSize;
+			const double LocalX = AceCenter.X - static_cast<double>(BlockX) * LandblockSize;
+			const double LocalY = AceCenter.Y - static_cast<double>(BlockY) * LandblockSize;
 			const int32 CellX = FMath::Clamp(FMath::FloorToInt(LocalX / LandCellSize), 0, 7);
 			const int32 CellY = FMath::Clamp(FMath::FloorToInt(LocalY / LandCellSize), 0, 7);
 			return MakeLandCellId(BlockX, BlockY, CellX, CellY);
@@ -289,7 +289,9 @@ namespace ACECellTransit
 
 	FVector UnrealToAceGlobal(const FVector& UnrealPos, float WorldScale)
 	{
-		const float InvScale = (WorldScale > KINDA_SMALL_NUMBER) ? (1.f / WorldScale) : 1.f;
+		// Match FACEPosition: a float reciprocal shifts far-world portal and
+		// landcell boundaries even when the FVector itself is double precision.
+		const double InvScale = (WorldScale > KINDA_SMALL_NUMBER) ? (1. / WorldScale) : 1.;
 		return FVector(-UnrealPos.X * InvScale, UnrealPos.Y * InvScale, UnrealPos.Z * InvScale);
 	}
 
@@ -341,10 +343,10 @@ namespace ACECellTransit
 		};
 
 		// Sphere may span landblock edges — walk a small ACE AABB in landcell units.
-		const float MinX = AceCenter.X - AceRadius;
-		const float MaxX = AceCenter.X + AceRadius;
-		const float MinY = AceCenter.Y - AceRadius;
-		const float MaxY = AceCenter.Y + AceRadius;
+		const double MinX = AceCenter.X - AceRadius;
+		const double MaxX = AceCenter.X + AceRadius;
+		const double MinY = AceCenter.Y - AceRadius;
+		const double MaxY = AceCenter.Y + AceRadius;
 
 		const int32 MinBX = FMath::FloorToInt(MinX / LandblockSize);
 		const int32 MaxBX = FMath::FloorToInt(MaxX / LandblockSize);

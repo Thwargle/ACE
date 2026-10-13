@@ -591,12 +591,26 @@ void UACEUIElementManager::SetUiLocked(bool bLocked)
 		return;
 	}
 	bUiLocked = bLocked;
-	if (bUiLocked)
+	if (IsUiLocked())
 	{
 		CancelPointerCapture();
 	}
 	SyncLockedChromeVisibility();
 	SaveFloatyLayout();
+}
+
+void UACEUIElementManager::SetQuickShowUi(bool bShow)
+{
+	if (bQuickShowUi == bShow) return;
+	bQuickShowUi = bShow;
+	if (IsUiLocked())
+	{
+		// Commit a drag before hiding its handle; the permanent lock preference
+		// is deliberately untouched by this temporary hold action.
+		SaveFloatyLayout();
+		CancelPointerCapture();
+	}
+	SyncLockedChromeVisibility();
 }
 
 void UACEUIElementManager::SyncLockedChromeVisibility()
@@ -605,7 +619,7 @@ void UACEUIElementManager::SyncLockedChromeVisibility()
 	{
 		return;
 	}
-	SyncLockedChromeRecursive(SyntheticRoot, bUiLocked);
+	SyncLockedChromeRecursive(SyntheticRoot, IsUiLocked());
 }
 
 TSharedPtr<FACEUIElement> UACEUIElementManager::FindFloatyRoot(const TSharedPtr<FACEUIElement>& Element)
@@ -687,7 +701,7 @@ bool UACEUIElementManager::IsFloatyResizeHandle(const TSharedPtr<FACEUIElement>&
 
 EMouseCursor::Type UACEUIElementManager::GetWindowCursor(FVector2D ViewportPos, FVector2D ViewportSize) const
 {
-	if (bUiLocked) return EMouseCursor::Default;
+	if (IsUiLocked()) return EMouseCursor::Default;
 	int32 X = 0, Y = 0;
 	if (!ViewportToCanvas(ViewportPos, ViewportSize, X, Y) && !CaptureElement) return EMouseCursor::Default;
 	const auto Hit = CaptureElement ? CaptureElement : HitTestCanvas(X, Y);
@@ -892,8 +906,8 @@ TSharedPtr<FACEUIElement> UACEUIElementManager::HitTestCanvas(int32 CanvasX, int
         const auto Parent=Window->Parent.Pin();
         const FIntPoint O=Parent ? Parent->GetScreenOrigin() : FIntPoint::ZeroValue;
         const auto Hit=Window->HitTestInParentSpace(CanvasX-O.X,CanvasY-O.Y);
-        if (bUiLocked && (IsFloatyDragHandle(Hit) || IsFloatyResizeHandle(Hit))) return Window;
-        if (!bUiLocked && FindFloatyRoot(Window))
+        if (IsUiLocked() && (IsFloatyDragHandle(Hit) || IsFloatyResizeHandle(Hit))) return Window;
+        if (!IsUiLocked() && FindFloatyRoot(Window))
         {
             // Buttons, slots and resize grips keep priority over title/drag art.
             const bool bControl = Hit && (Hit->Type == ACEUI::ElementType::Button
@@ -925,7 +939,7 @@ TSharedPtr<FACEUIElement> UACEUIElementManager::HitTestCanvas(int32 CanvasX, int
 		if (TSharedPtr<FACEUIElement> Hit =
 			SyntheticRoot->Children[i]->HitTestInParentSpace(CanvasX, CanvasY))
 		{
-			if (bUiLocked && (IsFloatyDragHandle(Hit) || IsFloatyResizeHandle(Hit)))
+			if (IsUiLocked() && (IsFloatyDragHandle(Hit) || IsFloatyResizeHandle(Hit)))
 			{
 				if (const auto Floaty = FindFloatyRoot(Hit)) return Floaty;
 				return Hit->Parent.Pin();
@@ -956,7 +970,7 @@ void UACEUIElementManager::NotifyMouseMove(FVector2D ViewportPos, FVector2D View
 		return;
 	}
 
-	if (ResizeFloaty.IsValid() && !bUiLocked && bResizeChat)
+	if (ResizeFloaty.IsValid() && !IsUiLocked() && bResizeChat)
 	{
 		const int32 Dx=Cx-ResizeGrabCanvasX, Dy=Cy-ResizeGrabCanvasY;
 		if (FMath::Abs(Dx)>2 || FMath::Abs(Dy)>2) bDragMoved=true;
@@ -969,7 +983,7 @@ void UACEUIElementManager::NotifyMouseMove(FVector2D ViewportPos, FVector2D View
 		ResizeFloaty->RecomputeLayoutOffset(); ApplyFloatyResizeLayout(ResizeFloaty);
 		HoverElement=ResizeFloaty; return;
 	}
-	if (ResizeFloaty.IsValid() && !bUiLocked)
+	if (ResizeFloaty.IsValid() && !IsUiLocked())
 	{
 		const int32 Dy = Cy - ResizeGrabCanvasY;
 		if (FMath::Abs(Dy) > 2)
@@ -993,7 +1007,7 @@ void UACEUIElementManager::NotifyMouseMove(FVector2D ViewportPos, FVector2D View
 		return;
 	}
 
-	if (DragFloaty.IsValid() && !bUiLocked)
+	if (DragFloaty.IsValid() && !IsUiLocked())
 	{
 		const int32 Dx = Cx - DragGrabCanvasX;
 		const int32 Dy = Cy - DragGrabCanvasY;
@@ -1076,7 +1090,7 @@ void UACEUIElementManager::NotifyMouseDown(FVector2D ViewportPos, FVector2D View
 			FocusElement = Hit;
 		}
 
-		if (!bUiLocked && Button == EKeys::LeftMouseButton && IsFloatyResizeHandle(Hit))
+		if (!IsUiLocked() && Button == EKeys::LeftMouseButton && IsFloatyResizeHandle(Hit))
 		{
 			TSharedPtr<FACEUIElement> Floaty = FindFloatyRoot(Hit);
 			if (Floaty.IsValid() && !IsFixedSizeFloaty(Floaty->ElementName))
@@ -1108,7 +1122,7 @@ void UACEUIElementManager::NotifyMouseDown(FVector2D ViewportPos, FVector2D View
 					|| Floaty->ElementName == TEXT("RootGameplay_FloatyEnvPanel_Field");
 			}
 		}
-		else if (!bUiLocked && Button == EKeys::LeftMouseButton && IsFloatyDragHandle(Hit))
+		else if (!IsUiLocked() && Button == EKeys::LeftMouseButton && IsFloatyDragHandle(Hit))
 		{
 			if (TSharedPtr<FACEUIElement> Floaty = FindFloatyRoot(Hit))
 			{

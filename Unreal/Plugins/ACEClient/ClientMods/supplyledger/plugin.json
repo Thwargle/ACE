@@ -1,0 +1,8 @@
+{
+  "api": 1,
+  "id": "supplyledger",
+  "name": "Supply Ledger",
+  "version": "1.0.0",
+  "description": "Track selected inventory supplies across all packs. Pin a compact item counter anywhere on your screen.",
+  "permissions": []
+}

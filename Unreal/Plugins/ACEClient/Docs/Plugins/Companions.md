@@ -198,3 +198,7 @@ writes are not exposed. Automation plugins can continue to use the existing
 `ucmcommand()` parser for supported meta adapters. Companion messages carry data,
 and the receiving plugin chooses what to do with it.
 
+
+## Titles and icons
+
+With `ui` permission, API 1 companions can return `presentation={title="Quest Tracker", icon="tracker.png"}` alongside their rows. The same object in `plugin.json` supplies defaults before startup. See [presentation metadata](PublicAPI.md#plugin-title-and-toolbar-icon) for asset limits and reset behavior.

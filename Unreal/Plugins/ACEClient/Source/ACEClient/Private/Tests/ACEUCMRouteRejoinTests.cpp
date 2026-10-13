@@ -127,6 +127,32 @@ bool FACEUCMRouteRejoinTest::RunTest(const FString&)
         TestEqual(TEXT("Only an off-route excursion retraces the departure point"),I->GetStringField(TEXT("status")).StartsWith(TEXT("Returning")),!OnRoute);
     }
 
+    for(bool Legacy:{false,true})
+    {
+        FACEPluginVM VM;VM.Load(Script,Error);auto S=Snapshot(),P=Profile();
+        P->SetStringField(TEXT("combat"),TEXT("off"));
+        for(const auto& V:P->GetArrayField(TEXT("route"))){V->AsObject()->SetBoolField(TEXT("legacy"),Legacy);V->AsObject()->SetBoolField(TEXT("walk_first"),true);}
+        At(S,25,0);
+        auto I=Step(VM,S,P);
+        TestEqual(TEXT("Reached entry immediately aims for the next waypoint"),I->GetNumberField(TEXT("x")),45.);
+        P->SetBoolField(TEXT("reverse_route"),true);At(S,44.5,0);
+        I=Step(VM,S,P);
+        TestEqual(TEXT("Reached route end reverses without another idle poll"),I->GetNumberField(TEXT("x")),25.);
+    }
+    for(double Offset:{.3,.6})
+    {
+        FACEPluginVM VM;VM.Load(Script,Error);auto S=Snapshot(),P=Profile();
+        S->SetObjectField(TEXT("route_visible"),Json(TEXT(R"({"1":false,"2":true})")));
+        Step(VM,S,P);
+        auto Target=Json(TEXT(R"({"id":50,"name":"Rat","identified":true,"distance":20,"cell":30998795,"x":30,"y":10,"z":0,"line_of_sight":true})"));
+        S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(Target)});Step(VM,S,P);
+        At(S,30,10);Target->SetNumberField(TEXT("distance"),0);Step(VM,S,P);
+        S->SetArrayField(TEXT("targets"),{});Step(VM,S,P);Step(VM,S,P);
+        At(S,30,Offset);auto I=Step(VM,S,P);
+        TestEqual(TEXT("Near the departure point resumes forward instead of circling its exact center"),I->GetNumberField(TEXT("x")),45.);
+        TestTrue(TEXT("Rejoined route continues in the same decision"),I->GetStringField(TEXT("status")).StartsWith(TEXT("Waypoint ")));
+    }
+
     const auto Values=UWorld::InitializationValues().AllowAudioPlayback(false).RequiresHitProxies(false)
         .CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false);
     auto* World=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);

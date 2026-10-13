@@ -1,4 +1,5 @@
 #include "Mods/ACEPluginSubsystem.h"
+#include "Mods/ACEPluginPresentation.h"
 #include "Mods/ACEPluginCastMotion.h"
 #include "ACEPluginVM.h"
 #include "ACEVTProfile.h"
@@ -252,6 +253,7 @@ void UACEPluginSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Collection.InitializeDependency<UACEClientSubsystem>();
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnAppraisalObserved.AddDynamic(this,&UACEPluginSubsystem::ObserveAppraisal);
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnChatMessage.AddDynamic(this,&UACEPluginSubsystem::ObservePluginChat);
+    GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnVitalsUpdated.AddDynamic(this,&UACEPluginSubsystem::ObserveLedgerVitals);
     Settings = Read(UserDirectory() / TEXT("settings.json"));
     if (!Settings) Settings = MakeShared<FJsonObject>();
     UCMLog.Load(UserDirectory()/TEXT("ucm-log.json"));
@@ -267,6 +269,7 @@ void UACEPluginSubsystem::Deinitialize()
     if(PluginMarkerActor){PluginMarkerActor->Destroy();PluginMarkerActor=nullptr;PluginMarkerMesh=nullptr;}
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnAppraisalObserved.RemoveDynamic(this,&UACEPluginSubsystem::ObserveAppraisal);
     GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnChatMessage.RemoveDynamic(this,&UACEPluginSubsystem::ObservePluginChat);
+    GetGameInstance()->GetSubsystem<UACEClientSubsystem>()->OnVitalsUpdated.RemoveDynamic(this,&UACEPluginSubsystem::ObserveLedgerVitals);
     if(auto S=ObservedSession.Pin()){S->OnUseDone.Remove(UseDoneHandle);S->OnPlayerTell.Remove(TellHandle);S->OnChatMessage.Remove(MetaChatHandle);S->OnCombatFeedback.Remove(CombatFeedbackHandle);}
     StopAll(TEXT("Client closing")); ReleaseLocalCosmetics(); FTSTicker::GetCoreTicker().RemoveTicker(Ticker);
     FlushUCMLog();
@@ -296,6 +299,9 @@ void UACEPluginSubsystem::Discover()
             const FString Id = String(M, TEXT("id"));
             if (!M || !SafeName(Id) || Find(Id) || (Number(M, TEXT("api")) != 1 && Number(M, TEXT("api")) != 2))
             { Notice += TEXT("Skipped invalid, duplicate, or incompatible plugin: ") + Dir + TEXT("\n"); continue; }
+            const TSharedPtr<FJsonObject>* Presentation=nullptr;FString PresentationError;
+            if(M->HasField(TEXT("presentation"))&&(!M->TryGetObjectField(TEXT("presentation"),Presentation)||!ACEPluginPresentation::Valid(*Presentation,PresentationError)))
+            {Notice+=TEXT("Invalid presentation for ")+Id+TEXT(": ")+PresentationError+TEXT("\n");continue;}
             auto P = MakeShared<FACEClientPlugin>(); P->Id = Id; P->Manifest = M; P->Api=int32(Number(M,TEXT("api"),1));
             P->Name = String(M, TEXT("name"), Id); P->Version = String(M, TEXT("version"));
             P->Description = String(M, TEXT("description")); P->Directory = Root / Dir;
@@ -323,7 +329,7 @@ void UACEPluginSubsystem::Discover()
             P->Permissions.Sort();
             const FString Grant = FString::Join(P->Permissions, TEXT(","));
             P->Enabled = String(Settings, *Id) == TEXT("enabled:") + Grant;
-            if((Id==TEXT("looteditor")||Id==TEXT("waypoint")||Id==TEXT("ucmmicro"))&&!Settings->HasField(Id))P->Enabled=true;
+            if((Id==TEXT("looteditor")||Id==TEXT("waypoint")||Id==TEXT("ucmmicro")||IsLedger(Id))&&!Settings->HasField(Id))P->Enabled=true;
             P->Profile = Read(P->Directory / TEXT("default.json"));
             if (!P->Profile) P->Profile = MakeShared<FJsonObject>();
             Plugins.Add(P);
@@ -358,7 +364,7 @@ bool UACEPluginSubsystem::Start(const FString& Id)
     if(P && P->Running)return true;
     if (!P || !P->Enabled || C->GetSessionState() != EACESessionState::InWorld || !C->GetPlayerVitalsView().bValid || (C->GetPlayerVitalsView().Health <= 0 && !P->Profile->HasField(TEXT("vt_meta"))))
     { Notice = TEXT("Enable the plugin and log into a living character before starting."); return false; }
-    if(Id==TEXT("looteditor")||Id==TEXT("waypoint")||Id==TEXT("ucmmicro")){Notice=TEXT("This plugin has no automation to start. Open its window from the plugin bar.");return false;}
+    if(Id==TEXT("looteditor")||Id==TEXT("waypoint")||Id==TEXT("ucmmicro")||IsLedger(Id)){Notice=TEXT("This plugin has no automation to start. Open its window from the plugin bar.");return false;}
     if(P->Api>=2&&!ValidatePublicProfile(P->Profile)){Notice=TEXT("Invalid automation profile structures");return false;}
     if (Id == TEXT("ucm") && !P->Running && P->ProfileLinks && !P->ProfileLinks->Values.IsEmpty())
     {
@@ -1019,7 +1025,7 @@ bool UACEPluginSubsystem::Tick(float)
     if(FPlatformTime::Seconds()>=NextMaintenanceAt)
     {
         NextMaintenanceAt=FPlatformTime::Seconds()+.5;
-        UpdateDesktopDock();RefreshAutomationData();DrawRoute();
+        UpdateLedgers();UpdateDesktopDock();RefreshAutomationData();DrawRoute();
     }
     auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     UpdateItemToolsCharacter();
@@ -1126,6 +1132,7 @@ bool UACEPluginSubsystem::Tick(float)
         // Idle/blocked policies need not rebuild world sight and inventory every frame.
         bool ContinueWork=false;if(Intent)Intent->TryGetBoolField(TEXT("continue_work"),ContinueWork);
         P->NextDecision=FPlatformTime::Seconds()+(ContinueWork?.05:.25);
+        if(ContinueWork)ScheduleDecisionWake(FMath::Max(P->NextDecision,P->NextAction));
     }
     return true;
 }
@@ -1324,8 +1331,8 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         if(C->GetWorldObject(Id,Target)&&(Target.IsSelectableWorldObject()||IsOwnedPluginItem(Target)))C->SelectObject(Id);
         else ReportActivityFailure(P,I,TEXT("Meta selection target disappeared"));return;
     }
-    if(Action==TEXT("cancel_attack")){PhysicalAttackUntil=Now+2;PhysicalAttackNextSendAt=0;CombatTarget=0;C->GetSession()->SendCancelAttack();return;}
-    if(Action==TEXT("combat_mode")){const int Mode=int(Number(I,TEXT("mode")));if(Mode==1||Mode==2||Mode==4||Mode==8)PrepareCombatAction(P,I,Mode);return;}
+    if(Action==TEXT("cancel_attack")){PhysicalAttackUntil=Now+2;PhysicalAttackNextSendAt=0;CombatTarget=0;C->GetSession()->SendCancelAttack();P.NextAction=Now;return;}
+    if(Action==TEXT("combat_mode")){const int Mode=int(Number(I,TEXT("mode")));if(Mode==1||Mode==2||Mode==4||Mode==8)if(PrepareCombatAction(P,I,Mode))P.NextAction=Now;return;}
     if(Action==TEXT("attack_bar")){if(PC)PC->SetPluginAttackPower(Number(I,TEXT("power")));return;}
     if(Action==TEXT("logout")){Stop(P.Id,TEXT("Logged out by meta"));C->Logout();return;}
     if(Action==TEXT("recall"))
@@ -1372,6 +1379,10 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         // Stay inside the policy's arrival radius. A fixed 70cm host stop
         // stranded routes configured with a smaller NavCloseStopRange.
         MoveArrivalRadius = FMath::Clamp(float(Number(I,TEXT("arrival_radius"),.8)) * 100.f,1.f,500.f) * .875f;
+        // A fresh policy request may legitimately revisit the same coordinate.
+        // Between decisions, latch arrival so a small correction cannot turn
+        // the player back toward the waypoint that was just reached.
+        bMoveArrived=false;
         FaceHeading.Reset();MovementOwner = P.Id; MoveTarget = Dest; MoveExpires = Now + 1.5; return;
     }
     MovementOwner.Empty(); MoveExpires = 0;
@@ -1490,19 +1501,24 @@ void UACEPluginSubsystem::ApplyMovement(AACEPlayerController* PC, float& F, floa
     }
     if(!FastCastOwner.IsEmpty())
     {
-        // Bound the bump independently of cast completion and network latency.
-        // Expire from the words, so UI/jump blocking cannot defer a stale bump.
-        // A coalesced result still gets one edge within this short window.
+        // VT's words/result callbacks press/release Backward as input events.
+        // Do not convert that into held locomotion: even one integrated frame
+        // moves the caster, and a complete buff cycle can back into a portal.
         if(!PendingSpell || FPlatformTime::Seconds()-PendingSpellAt>30
-            || (FastCastStarted && (FPlatformTime::Seconds()-FastCastStartedAt>=ACEPluginCastMotion::BackwardPulseSeconds
-                || PendingSpellFizzled || (PendingSpellConfirmed&&FastCastMovementApplied))))
+            || (FastCastStarted && (FPlatformTime::Seconds()-FastCastStartedAt>=ACEPluginCastMotion::TapRequestSeconds
+                || PendingSpellFizzled || FastCastMovementApplied)))
         {FastCastOwner.Empty();FastCastStarted=false;CompleteConfirmedBuff();return;}
         else
         {
-            // Use the normal movement/collision/network path, never inject keys
-            // or alter spell speed. Chat, UI blocking and jumps suspend the input.
+            // Send both ordinary movement edges before prediction can advance.
+            // Late/missing results can never extend the tap or keep a key held.
             if(FastCastStarted&&!Blocked&&PC&&PC->GetPawn())
-            {F=-1;R=T=0;FastCastMovementApplied=true;CompleteConfirmedBuff();}return;
+            {
+                F=R=T=0;
+                FastCastMovementApplied=PC->TryFastBuffTap();
+                if(FastCastMovementApplied){FastCastOwner.Empty();FastCastStarted=false;CompleteConfirmedBuff();}
+            }
+            return;
         }
     }
     if (MovementOwner.IsEmpty()) return;
@@ -1530,7 +1546,7 @@ void UACEPluginSubsystem::ApplyMovement(AACEPlayerController* PC, float& F, floa
         return;
     }
     const FVector Delta = MoveTarget.ToUnrealLocation() - Location;
-    if (Delta.Size() < MoveArrivalRadius || Delta.Size2D() < 1.)
+    if (bMoveArrived || Delta.Size() < MoveArrivalRadius || Delta.Size2D() < 1.)
     {
         F=R=T=0;
         if (!bMoveArrived && Delta.Size() < MoveArrivalRadius)

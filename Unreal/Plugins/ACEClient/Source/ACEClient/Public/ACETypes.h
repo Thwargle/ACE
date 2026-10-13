@@ -86,8 +86,12 @@ struct ACECLIENT_API FACEPosition
 		const uint32 Cell = static_cast<uint32>(CellId);
 		const uint32 LandblockX = (Cell >> 24) & 0xFF;
 		const uint32 LandblockY = (Cell >> 16) & 0xFF;
-		const float GlobalX = (LandblockX * 192.f) + Location.X;
-		const float GlobalY = (LandblockY * 192.f) + Location.Y;
+		// Retail retains cell-local coordinates. UE uses a world-space FVector,
+		// so keep its double precision until the block origin is removed again.
+		// A float global intermediate rounds away sub-centimetre wall slides and
+		// can put a doorway sample on the opposite side of its portal plane.
+		const double GlobalX = (LandblockX * 192.) + Location.X;
+		const double GlobalY = (LandblockY * 192.) + Location.Y;
 		return AceVectorToUnreal(FVector(GlobalX, GlobalY, Location.Z), Scale);
 	}
 
@@ -147,11 +151,11 @@ struct ACECLIENT_API FACEPosition
 		const uint32 Cell = static_cast<uint32>(CellId);
 		const uint32 LandblockX = (Cell >> 24) & 0xFF;
 		const uint32 LandblockY = (Cell >> 16) & 0xFF;
-		const float GlobalX = -UnrealLoc.X / Scale;
-		const float GlobalY = UnrealLoc.Y / Scale;
-		const float GlobalZ = UnrealLoc.Z / Scale;
-		Location.X = GlobalX - LandblockX * 192.f;
-		Location.Y = GlobalY - LandblockY * 192.f;
+		const double GlobalX = -UnrealLoc.X / Scale;
+		const double GlobalY = UnrealLoc.Y / Scale;
+		const double GlobalZ = UnrealLoc.Z / Scale;
+		Location.X = GlobalX - LandblockX * 192.;
+		Location.Y = GlobalY - LandblockY * 192.;
 		Location.Z = GlobalZ;
 		NormalizeOutdoorLandblock();
 	}

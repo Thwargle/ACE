@@ -277,7 +277,7 @@ bool ExportRetailKeymapFile(const FString& Path,FString& Error)
  {
   // This desktop presentation control has no retail action. Keep it in the
   // local input settings; exporting a retail keymap must still work by default.
-  if(A.Key==Action(TEXT("ToggleInterface"))||A.Key==Action(TEXT("ToggleUCM")))continue;
+  if(A.Key==Action(TEXT("ToggleInterface"))||A.Key==Action(TEXT("ToggleUCM"))||A.Key==Action(TEXT("QuickShowUI")))continue;
   const FString* Name=Names.Find(A.Key);
   if(!Name)
   {for(int32 I=0;I<3;++I)if(Get(A.Key,I).Key.IsValid()){Error=FString::Printf(TEXT("%s has no retail keymap action. Clear it before exporting."),A.Label);return false;}continue;}
@@ -302,7 +302,7 @@ bool ExportRetailKeymapFile(const FString& Path,FString& Error)
   Order.AddUnique(B.Group);Groups.FindOrAdd(B.Group)+=FString::Printf(TEXT("  DoNothing [ \"\" [ %d %s ] 0x%X ]\n"),Control->StartsWith(TEXT("DIMOFS_"))?1:0,**Control,Mask);
  }
  FString Text=TEXT("\"User Defined Keymap\" [ 00000000-0000-0000-0000-000000000000 ]\nDevices [ Keyboard [ GUID_SysKeyboard ] Mouse [ GUID_SysMouse ] ]\nMetaKeys [ 1 [ 0 DIK_LSHIFT ] 2 [ 0 DIK_LCONTROL ] 2 [ 0 DIK_RCONTROL ] 3 [ 0 DIK_LMENU ] 3 [ 0 DIK_RMENU ] 4 [ 0 DIK_LWIN ] 4 [ 0 DIK_RWIN ] ]\nBindings [\n");
- Text=TEXT("# AC:Unreal's Show / hide interface binding is stored separately in local settings.\n")+Text;
+ Text=TEXT("# AC:Unreal's interface, UCM and quick-show bindings are stored separately in local settings.\n")+Text;
  for(const auto& Group:Order)Text+=Group+TEXT(" [\n")+Groups[Group]+TEXT("]\n");Text+=TEXT("]\n");
  IFileManager::Get().MakeDirectory(*FPaths::GetPath(Path),true);
  if(!FFileHelper::SaveStringToFile(Text,*Path,FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))

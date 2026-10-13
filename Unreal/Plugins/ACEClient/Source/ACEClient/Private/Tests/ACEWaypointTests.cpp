@@ -33,6 +33,10 @@ bool FACEWaypointCoordinatesTest::RunTest(const FString&)
     TestTrue(TEXT("West is left when facing north"),FMath::IsNearlyEqual(ACEWaypoint::RelativeBearing(Origin,{-1,0},North),-UE_DOUBLE_PI/2));
     TestTrue(TEXT("Behind points down"),FMath::IsNearlyEqual(FMath::Abs(ACEWaypoint::RelativeBearing(Origin,{0,-1},North)),UE_DOUBLE_PI));
     TestTrue(TEXT("Facing east makes north left"),ACEWaypoint::RelativeBearing(Origin,{0,1},{1,0})<0);
+    TestTrue(TEXT("No destination: north-facing compass points up"),FMath::IsNearlyZero(ACEWaypoint::NorthBearing({0,1})));
+    TestTrue(TEXT("No destination: turning east rotates north left"),FMath::IsNearlyEqual(ACEWaypoint::NorthBearing({1,0}),-UE_DOUBLE_PI/2));
+    TestTrue(TEXT("No destination: turning south rotates north behind"),FMath::IsNearlyEqual(FMath::Abs(ACEWaypoint::NorthBearing({0,-1})),UE_DOUBLE_PI));
+    TestTrue(TEXT("No destination: turning west rotates north right"),FMath::IsNearlyEqual(ACEWaypoint::NorthBearing({-1,0}),UE_DOUBLE_PI/2));
     FACEPosition A;A.CellId=int32(0x7D640001);A.Location=FVector(191,80,0);
     FACEPosition B=A;B.CellId=int32(0x7E640001);B.Location.X=1;
     TestTrue(TEXT("Landblock transition remains two metres"),FMath::IsNearlyEqual((ACEWaypoint::Coordinates(B)-ACEWaypoint::Coordinates(A)).Size()*240.,2.,.0001));

@@ -12,6 +12,8 @@ namespace ACEWaypoint
     FString MarkerLabel(const FString& Name);
     FVector2D Coordinates(const FACEPosition& Position);
     double RelativeBearing(FVector2D From, FVector2D To, FVector2D Forward);
+    inline double NorthBearing(FVector2D Forward)
+    {return RelativeBearing(FVector2D::ZeroVector,FVector2D(0,1),Forward);}
     // Screen basis: north-up by default, or the normalized facing vector up.
     inline FVector2D ToMap(FVector2D Delta,FVector2D Up)
     {return {Delta.X*Up.Y-Delta.Y*Up.X,-FVector2D::DotProduct(Delta,Up)};}

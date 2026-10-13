@@ -200,7 +200,8 @@ bool FACEUCMRouteJoinTest::RunTest(const FString&)
         FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();TArray<TSharedPtr<FJsonValue>> Points;
         for(int I=0;I<2048;++I){auto Point=ParseUCM(TEXT(R"({"cell":2103705613,"x":0,"y":97,"z":12})"));Point->SetNumberField(TEXT("x"),I);Points.Add(MakeShared<FJsonValueObject>(Point));}P->SetArrayField(TEXT("route"),Points);S->GetObjectField(TEXT("position"))->SetNumberField(TEXT("x"),2000.5);
         TSharedPtr<FJsonObject> I;for(int Tick=0;Tick<10;++Tick){I=Step(VM,S,P);if(I->GetStringField(TEXT("status"))!=TEXT("Finding nearest route waypoint"))break;}
-        TestEqual(TEXT("Maximum route joins without exceeding instruction budget"),I->GetNumberField(TEXT("route_point")),2002.);
+        TestEqual(TEXT("Maximum route joins and skips both reached points within the instruction budget"),I->GetNumberField(TEXT("route_point")),2003.);
+        TestEqual(TEXT("Maximum route continues toward the first point outside arrival tolerance"),I->GetNumberField(TEXT("x")),2002.);
     }
     return true;
 }
@@ -240,7 +241,11 @@ bool FACEUCMPolicyTest::RunTest(const FString&)
         FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("idle_peace"),true);P->SetBoolField(TEXT("looting"),true);S->SetNumberField(TEXT("combat_mode"),8);
         Array(P,TEXT("loot_rules"),TEXT(R"({"values":[{"action":"keep"}]})"));
         Array(S,TEXT("corpses"),TEXT(R"({"values":[{"id":700,"name":"Corpse","distance":5,"line_of_sight":true}]})"));
-        TestEqual(TEXT("Idle peace does not force stance change before corpse looting"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("open_corpse")));
+        auto Idle=Check(VM,S,P);
+        TestEqual(TEXT("Enabled idle peace precedes looting in a clear area"),Idle->GetStringField(TEXT("action")),FString(TEXT("combat_mode")));
+        TestEqual(TEXT("Clear-area looting requests peace stance"),Idle->GetNumberField(TEXT("mode")),1.);
+        S->SetNumberField(TEXT("combat_mode"),1);
+        TestEqual(TEXT("Corpse looting continues after peace is confirmed"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("open_corpse")));
         S->SetBoolField(TEXT("busy"),true);TestFalse(TEXT("Idle toggle does not interrupt pending game action"),Check(VM,S,P)->HasField(TEXT("action")));
     }
     {
@@ -718,6 +723,15 @@ bool FACEUCMInventorySalvageTest::RunTest(const FString&)
         if(Protection==7)Item->SetNumberField(TEXT("object_class"),39);
         for(int Tick=0;Tick<2;++Tick)TestFalse(TEXT("Existing possessions remain protected without opt-in or when excluded"),Step(VM,S,P)->HasField(TEXT("action")));
     }
+    for(bool Available:{true,false})
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Tool=S->GetArrayField(TEXT("inventory"))[0]->AsObject();
+        Tool->SetBoolField(TEXT("resource_available"),false);Tool->SetBoolField(TEXT("retained"),true);
+        Tool->SetNumberField(TEXT("object_class"),0);Tool->SetBoolField(TEXT("salvage_tool_available"),Available);
+        Step(VM,S,P);auto I=Step(VM,S,P);
+        TestEqual(TEXT("UCM uses explicit native Ust eligibility instead of retention/category"),I->GetStringField(TEXT("action")),FString(Available?TEXT("salvage"):TEXT("activity_failed")));
+        if(Available)TestEqual(TEXT("Automatically detected retained tool is selected"),I->GetNumberField(TEXT("tool")),9.);
+    }
     {
         FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Item=S->GetArrayField(TEXT("inventory"))[1]->AsObject();
         Item->SetBoolField(TEXT("identified"),false);
@@ -744,6 +758,7 @@ bool FACEUCMInventorySalvageTest::RunTest(const FString&)
     {
         FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("salvage_inventory"),false);P->SetBoolField(TEXT("salvage_combine"),true);
         S->SetArrayField(TEXT("inventory"),ParseUCM(TEXT(R"({"v":[{"id":9,"object_class":40},{"id":30,"object_class":39,"material":59,"structure":60,"workmanship":6.9,"value":100},{"id":31,"object_class":39,"material":59,"structure":60,"workmanship":6,"value":100},{"id":32,"object_class":39,"material":59,"structure":20,"workmanship":7,"value":100},{"id":33,"object_class":39,"material":61,"structure":20,"workmanship":6,"value":100},{"id":34,"object_class":39,"material":59,"structure":100,"workmanship":6,"value":100},{"id":35,"object_class":39,"material":59,"structure":20,"workmanship":6,"value":100,"retained":true},{"id":36,"object_class":39,"material":59,"structure":20,"workmanship":6,"value":100,"resource_available":false}]})"))->GetArrayField(TEXT("v")));
+        auto Tool=S->GetArrayField(TEXT("inventory"))[0]->AsObject();Tool->SetBoolField(TEXT("resource_available"),false);Tool->SetBoolField(TEXT("salvage_tool_available"),true);
         if(Mode>0)P->SetObjectField(TEXT("salvage_policy"),ParseUCM(TEXT(R"({"default":[{"min":1,"max":6},{"min":7,"max":8},{"min":9,"max":9},{"min":10,"max":10}],"values":{"59":10000}})")));
         if(Mode==2)P->GetObjectField(TEXT("salvage_policy"))->GetObjectField(TEXT("values"))->SetNumberField(TEXT("59"),0);
         if(Mode==3)P->GetObjectField(TEXT("salvage_policy"))->SetObjectField(TEXT("materials"),ParseUCM(TEXT(R"({"59":[{"min":1,"max":6},{"min":6.5,"max":10}]})")));

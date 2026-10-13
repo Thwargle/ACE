@@ -15,6 +15,7 @@ works, and clicking ordinary sender text retains its existing tell behavior.
 Coordinates are N/S first, E/W second, case insensitive. The manual Go field
 accepts the same format; malformed or out-of-range coordinates are rejected.
 
+With no destination selected, the floating arrow points north, including in dungeons.
 The shaded arrow rotates relative to the player's facing: up is ahead, right is
 right, left is left, and down is behind. The text above it is the **current player
 position**, with the destination below. Distance is horizontal metres, with an
@@ -24,7 +25,8 @@ server position packet. Map units follow the ACE coordinate constructor / common
 Decal coordinate conversion: global metres / 240 - 101.95.
 
 Distance and the floating desktop arrow can be hidden independently. To move the
-arrow, unlock the game UI, clear Lock arrow position, and drag the arrow area. The
+arrow, unlock the game UI with the radar lock icon, or hold **Quick-show pinned
+windows** (Left Control by default), and drag the arrow area. The
 arrow has no background, frame or title bar, and does not intercept clicks while
 locked. Its
 position is stored through the same plugin window persistence as other plugins.

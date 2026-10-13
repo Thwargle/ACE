@@ -1,3 +1,4 @@
+#include "Mods/ACEPluginPresentation.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEPluginVM.h"
 #include "ACEWaypoint.h"
@@ -120,7 +121,7 @@ bool UACEPluginSubsystem::InitializePluginState(FACEClientPlugin& P)
         {P.Status=TEXT("Cannot read saved state; original file preserved");return false;}
         P.SavedState=Loaded;
     }
-    if(NewCharacter)P.ChatCursor=PluginChatContextStartSerial;
+    if(NewCharacter){P.ChatCursor=PluginChatContextStartSerial;P.Presentation.Reset();}
     P.NextStateSave=FPlatformTime::Seconds()+5;
     return true;
 }
@@ -243,6 +244,13 @@ bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TShared
 {
     using namespace ACEPluginCompanionPrivate;
     // Validate the complete presentation before replacing the current one.
+    const TSharedPtr<FJsonObject>* Presentation=nullptr;
+    if(O->HasField(TEXT("presentation")))
+    {
+        if(!P.Permissions.Contains(TEXT("ui"))||!O->TryGetObjectField(TEXT("presentation"),Presentation))
+        {Error=TEXT("presentation requires ui permission and an object");return false;}
+        if(!ACEPluginPresentation::Valid(*Presentation,Error))return false;
+    }
     const TSharedPtr<FJsonObject>* State=nullptr;const TArray<TSharedPtr<FJsonValue>> *Rows=nullptr,*Markers=nullptr,*Messages=nullptr;
     if(O->HasField(TEXT("state"))&&(!P.Permissions.Contains(TEXT("state"))||!O->TryGetObjectField(TEXT("state"),State)||FTCHARToUTF8(*Encode(*State)).Length()>65536))
     {Error=TEXT("State requires state permission and an object of at most 64 KiB");return false;}
@@ -268,6 +276,7 @@ bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TShared
         for(const auto& V:*Messages)if(V->Type!=EJson::Object||S(V->AsObject(),TEXT("to")).Len()>64||S(V->AsObject(),TEXT("topic")).Len()>64||S(V->AsObject(),TEXT("text")).Len()>1024)
         {Error=TEXT("Invalid plugin message");return false;}
     }
+    if(Presentation)P.Presentation=*Presentation;
     if(State&&(!P.SavedState||!FJsonValue::CompareEqual(FJsonValueObject(P.SavedState),FJsonValueObject(*State)))){P.SavedState=*State;P.StateDirty=true;}
     if(Rows&&!FJsonValue::CompareEqual(FJsonValueArray(P.PanelRows),FJsonValueArray(*Rows))){P.PanelRows=*Rows;++P.PanelRevision;}
     if(Markers)P.Markers=MoveTemp(Parsed);

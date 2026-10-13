@@ -343,12 +343,12 @@ bool FACEPluginVM::Step(const TSharedPtr<FJsonObject>& Snapshot, const TSharedPt
             Intent->SetNumberField(Key, Value);
         }
         else if (lua_isboolean(State, -1)) Intent->SetBoolField(Key, lua_toboolean(State, -1) != 0);
-        else if((Key==TEXT("state")||Key==TEXT("ui")||Key==TEXT("markers")||Key==TEXT("messages")||Key==TEXT("requests")||Key==TEXT("profile_patch"))&&lua_istable(State,-1))
+        else if((Key==TEXT("presentation")||Key==TEXT("state")||Key==TEXT("ui")||Key==TEXT("markers")||Key==TEXT("messages")||Key==TEXT("requests")||Key==TEXT("profile_patch"))&&lua_istable(State,-1))
         {
             int Nodes=0,OutputBytes=0;auto Value=ReadOutput(State,-1,0,Nodes,OutputBytes,Error,Key==TEXT("profile_patch")||Key==TEXT("requests"));
             if(!Value){lua_settop(State,0);return false;}
             // Lua's empty table has no array/object distinction.
-            if(Key!=TEXT("state")&&Key!=TEXT("profile_patch")&&Value->Type==EJson::Object&&Value->AsObject()->Values.IsEmpty())Value=MakeShared<FJsonValueArray>(TArray<TSharedPtr<FJsonValue>>{});
+            if(Key!=TEXT("presentation")&&Key!=TEXT("state")&&Key!=TEXT("profile_patch")&&Value->Type==EJson::Object&&Value->AsObject()->Values.IsEmpty())Value=MakeShared<FJsonValueArray>(TArray<TSharedPtr<FJsonValue>>{});
             Intent->SetField(Key,Value);
         }
         else if(Key==TEXT("runtime_route")&&lua_istable(State,-1))

@@ -1,4 +1,6 @@
 #include "Mods/ACEPluginPanel.h"
+#include "Mods/ACEPluginPresentation.h"
+#include "Mods/ACEPluginStyle.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
@@ -32,15 +34,8 @@ namespace ACEPluginPanelPrivate
     FString Text(const TSharedPtr<FJsonObject>& O, const TCHAR* Key)
     { FString V; if (O) O->TryGetStringField(Key, V); return V; }
     TSharedRef<SWidget> Label(const FString& S, int Size = 20)
-    { return SNew(STextBlock).Text(FText::FromString(S)).Font(FCoreStyle::GetDefaultFontStyle("Regular", Size)).AutoWrapText(true); }
-    const FButtonStyle& PluginButtonStyle()
-    {
-        static const FButtonStyle Style=FButtonStyle()
-            .SetNormal(FSlateRoundedBoxBrush(FLinearColor(.05f,.07f,.10f,1),5.f,FLinearColor(.50f,.39f,.19f,1),1.f))
-            .SetHovered(FSlateRoundedBoxBrush(FLinearColor(.12f,.16f,.22f,1),5.f,FLinearColor(.9f,.7f,.3f,1),2.f))
-            .SetPressed(FSlateRoundedBoxBrush(FLinearColor(.2f,.15f,.06f,1),5.f));
-        return Style;
-    }
+    { return SNew(SACEPluginText).Text(FText::FromString(S)).Font(FCoreStyle::GetDefaultFontStyle("Regular", Size)).AutoWrapText(true); }
+    const FButtonStyle& PluginButtonStyle() {return FACEPluginStyle::Current()->Button;}
     TSharedRef<SWidget> Button(const FString& S, TFunction<void()> Fn)
     { return SNew(SButton).ButtonStyle(&PluginButtonStyle()).IsFocusable(false).ContentPadding(FMargin(12,8)).OnClicked_Lambda([Fn](){ Fn(); return FReply::Handled(); })[Label(S)]; }
 
@@ -50,7 +45,7 @@ namespace ACEPluginPanelPrivate
         SLATE_BEGIN_ARGS(SACEPlugins) {} SLATE_ARGUMENT(UACEPluginSubsystem*, Host) SLATE_ARGUMENT(FString, PluginId) SLATE_END_ARGS()
         void Construct(const FArguments& Args)
         {
-            Host = Args._Host; Id = Args._PluginId; PluginOnly = !Id.IsEmpty();
+            Host = Args._Host; FACEPluginStyle::Use(Args._Host); Id = Args._PluginId; PluginOnly = !Id.IsEmpty();
             ChildSlot[SNew(SScrollBox) + SScrollBox::Slot()[SAssignNew(Body, SVerticalBox)]];
             Rebuild();
         }
@@ -98,7 +93,7 @@ namespace ACEPluginPanelPrivate
                     .OnClicked_Lambda([this](){Host->Discover();ManagerNotice=Host->Notice;Rebuild();return FReply::Handled();})[Label(TEXT("Refresh"),16)]];
                 Add(Header);
                 auto BarControls=SNew(SHorizontalBox);
-                BarControls->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SCheckBox).Padding(FMargin(4,8))
+                BarControls->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).Padding(FMargin(4,8))
                     .IsChecked_Lambda([this](){return Host->IsPluginBarVisible()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                     .OnCheckStateChanged_Lambda([this](ECheckBoxState S){Host->SetPluginBarVisible(S==ECheckBoxState::Checked);})[Label(TEXT("Show plugin bar"),16)]];
                 BarControls->AddSlot().AutoWidth()[SNew(SButton).ButtonStyle(&PluginButtonStyle()).IsFocusable(false).ContentPadding(FMargin(12,6))
@@ -110,25 +105,26 @@ namespace ACEPluginPanelPrivate
                 for (auto P : Host->Plugins)
                 {
                     auto Row = SNew(SHorizontalBox);
+                    Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,8,0)[SNew(SACEPluginBadge).Plugin(P)];
                     FString Description=P->Description;
                     if(P->Id==TEXT("ucm"))Description=TEXT("Combat, buffs, recovery, routes and looting.");
                     else if(P->Id==TEXT("ucmmicro"))Description=TEXT("Quick toggles for UCM activities.");
                     else if(P->Id==TEXT("looteditor"))Description=TEXT("Create and edit loot profiles.");
                     else if(P->Id==TEXT("waypoint"))Description=TEXT("Direction arrow, world map and dungeon map.");
                     Row->AddSlot().FillWidth(1).VAlign(VAlign_Center).Padding(0,0,12,0)
-                        [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[Label(P->Name,18)]
-                        +SVerticalBox::Slot().AutoHeight().Padding(0,4,0,0)[SNew(STextBlock).Text(FText::FromString(Description))
-                            .Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).ColorAndOpacity(FLinearColor(.6f,.68f,.75f)).AutoWrapText(true)]];
+                        [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text_Lambda([P]{return FText::FromString(P->DisplayTitle());})]
+                        +SVerticalBox::Slot().AutoHeight().Padding(0,4,0,0)[SNew(SACEPluginText).Text(FText::FromString(Description))
+                            .Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).ColorAndOpacity(FLinearColor(.7f,.63f,.49f)).AutoWrapText(true)]];
                     const FString Capabilities=P->LocalService?(P->Permissions.Contains(TEXT("local_tools"))?TEXT("Local appearance and bundled native converter. Native tools run outside the Lua sandbox."):TEXT("Local cosmetic appearance only")):P->Permissions.IsEmpty()?TEXT("No game actions"):TEXT("Game actions: ")+FString::Join(P->Permissions,TEXT(", "));
-                    Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,12,0)[SNew(SCheckBox).Padding(4)
+                    Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,12,0)[SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).Padding(4)
                         .ToolTipText(FText::FromString(Capabilities))
                         .IsChecked_Lambda([P](){return P->Enabled?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                         .OnCheckStateChanged_Lambda([this,P](ECheckBoxState S){Host->SetEnabled(P->Id,S==ECheckBoxState::Checked);})[Label(TEXT("Enabled"),14)]];
                     Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[SNew(SButton).Tag(FName(*(TEXT("PluginOpen.")+P->Id))).ButtonStyle(&PluginButtonStyle()).IsFocusable(false).ContentPadding(FMargin(14,8))
                         .IsEnabled_Lambda([P](){return P->Enabled;})
                         .OnClicked_Lambda([this,PluginId=P->Id](){Open(PluginId);return FReply::Handled();})[Label(TEXT("Open"),16)]];
-                    Add(SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.04f,.055f,.075f))
-                        .Padding(12).ToolTipText(FText::FromString(P->Name+TEXT(" ")+P->Version))[Row]);
+                    Add(SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.06f,.035f,.014f))
+                        .Padding(12).ToolTipText_Lambda([P]{return FText::FromString(P->DisplayTitle()+TEXT(" ")+P->Version);})[Row]);
                 }
                 if(Host->Plugins.IsEmpty())Add(Label(TEXT("No plugins installed."),16));
                 if(!ManagerNotice.IsEmpty())Add(Label(ManagerNotice,16));
@@ -140,18 +136,19 @@ namespace ACEPluginPanelPrivate
             if (!P) return;
             if(P->LocalService)
             {
-                Add(Label(P->Name,26));
-                Add(SNew(STextBlock).AutoWrapText(true).Visibility_Lambda([P](){return P->Running?EVisibility::Collapsed:EVisibility::Visible;}).Text_Lambda([P](){return FText::FromString(P->Status);}));
+                if(!PluginOnly)Add(SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",26)).Text_Lambda([P]{return FText::FromString(P->DisplayTitle());}));
+                Add(SNew(SACEPluginText).AutoWrapText(true).Visibility_Lambda([P](){return P->Running?EVisibility::Collapsed:EVisibility::Visible;}).Text_Lambda([P](){return FText::FromString(P->Status);}));
                 Add(Host->MakeLocalServicePanel(P->Id));return;
             }
-            Add(SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text_Lambda([H=Host](){return FText::FromString(H.IsValid()?H->Notice:FString());}).AutoWrapText(true));
+            Add(SNew(SACEPluginText).Visibility_Lambda([H=Host]{return H.IsValid()&&!H->Notice.IsEmpty()?EVisibility::Visible:EVisibility::Collapsed;}).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text_Lambda([H=Host](){return FText::FromString(H.IsValid()?H->Notice:FString());}).AutoWrapText(true));
+            if(UACEPluginSubsystem::IsLedger(P->Id)){Add(Host->MakeLedgerPanel(P->Id));return;}
             if(P->Id==TEXT("waypoint")){Add(SNew(SBox).HeightOverride(650)[Host->MakeWaypointPanel()]);return;}
             if(P->Id==TEXT("looteditor")){Add(SNew(SBox).HeightOverride(650)[Host->MakeUCMPanel(TEXT("Standalone loot"))]);return;}
             if(P->Id==TEXT("ucmmicro")){Add(Host->MakeUCMMicroPanel());return;}
             if(P->Id==TEXT("ucm")){Add(SNew(SBox).HeightOverride(650)[Host->MakeUCMPanel()]);return;}
             if(P->Id==TEXT("itemtools")){Add(SNew(SBox).HeightOverride(650)[Host->MakeItemToolsPanel()]);return;}
-            Add(Label(P->Name,26));
-            Add(SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text_Lambda([P](){return FText::FromString(P->Status);}).AutoWrapText(true));
+            if(!PluginOnly)Add(SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",26)).Text_Lambda([P]{return FText::FromString(P->DisplayTitle());}));
+            Add(SNew(SACEPluginText).Visibility_Lambda([P]{return P->Status.IsEmpty()?EVisibility::Collapsed:EVisibility::Visible;}).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text_Lambda([P](){return FText::FromString(P->Status);}).AutoWrapText(true));
             auto Actions=SNew(SHorizontalBox);
             Actions->AddSlot().FillWidth(1)[Button(TEXT("Start"),[this,P](){Host->Start(P->Id);})];
             Actions->AddSlot().FillWidth(1).Padding(8,0)[Button(TEXT("Stop"),[this,P](){Host->Stop(P->Id,TEXT("Stopped"),true);})]; Add(Actions);
@@ -163,7 +160,7 @@ namespace ACEPluginPanelPrivate
                     .HeaderContent()[Label(TEXT("Settings and profiles"),16)].BodyContent()[SettingsBody.ToSharedRef()]];
             }
             Add(Label(TEXT("Profile name")));
-            Add(SAssignNew(Name,SEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",20)).Text(FText::FromString(P->ProfileName)));
+            Add(SAssignNew(Name,SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",20)).Text(FText::FromString(P->ProfileName)));
             TArray<FString> SavedProfiles; IFileManager::Get().FindFiles(SavedProfiles, *(Host->UserDirectory()/TEXT("Profiles")/P->Id/TEXT("*.json")),true,false);
             SavedProfiles.Sort();
             for(const FString& File:SavedProfiles)
@@ -181,18 +178,18 @@ namespace ACEPluginPanelPrivate
                 const FString Key=Text(O,TEXT("key")), Kind=Text(O,TEXT("type")), Caption=Text(O,TEXT("label"));
                 if(Kind==TEXT("bool"))
                 {
-                    Add(SNew(SCheckBox).Padding(FMargin(6,10)).IsChecked_Lambda([P,Key](){bool V=false;P->Profile->TryGetBoolField(Key,V);return V?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+                    Add(SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).Padding(FMargin(6,10)).IsChecked_Lambda([P,Key](){bool V=false;P->Profile->TryGetBoolField(Key,V);return V?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                         .OnCheckStateChanged_Lambda([this,P,Key](ECheckBoxState S){P->Profile->SetBoolField(Key,S==ECheckBoxState::Checked);Save(P);})[Label(Caption)]);
                 }
                 else if(Kind==TEXT("text"))
                 {
-                    Add(Label(Caption));Add(SNew(SEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text(FText::FromString(Text(P->Profile,*Key)))
+                    Add(Label(Caption));Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text(FText::FromString(Text(P->Profile,*Key)))
                         .OnTextCommitted_Lambda([this,P,Key](const FText& V,ETextCommit::Type){P->Profile->SetStringField(Key,V.ToString().Left(512));Save(P);}));
                 }
                 else if(Kind==TEXT("number"))
                 {
                     double V=0,Min=0,Max=1000;P->Profile->TryGetNumberField(Key,V);O->TryGetNumberField(TEXT("min"),Min);O->TryGetNumberField(TEXT("max"),Max);
-                    Add(Label(Caption));Add(SNew(SSpinBox<double>).Font(FCoreStyle::GetDefaultFontStyle("Regular",20)).MinValue(Min).MaxValue(Max).Value(V)
+                    Add(Label(Caption));Add(SNew(SSpinBox<double>).Style(&FACEPluginStyle::Current()->Spin).Font(FCoreStyle::GetDefaultFontStyle("Regular",20)).MinValue(Min).MaxValue(Max).Value(V)
                         .OnValueCommitted_Lambda([this,P,Key](double N,ETextCommit::Type){P->Profile->SetNumberField(Key,N);Save(P);}));
                 }
                 else if(Kind==TEXT("choice"))
@@ -223,7 +220,7 @@ namespace ACEPluginPanelPrivate
                 {
                     Add(Label(TEXT("Buff families and attack spell"),24));
                     Add(Label(TEXT("Toggle a Self buff to maintain its family. UCM chooses the strongest known version within your magic skill margin. Choose an attack spell for magic combat."),18));
-                    Add(SNew(SEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",20)).HintText(FText::FromString(TEXT("Filter known spells; press Enter"))).Text(FText::FromString(Search))
+                    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",20)).HintText(FText::FromString(TEXT("Filter known spells; press Enter"))).Text(FText::FromString(Search))
                         .OnTextCommitted_Lambda([this](const FText& V,ETextCommit::Type){Search=V.ToString();Rebuild();}));
                     auto List=SNew(SVerticalBox);auto* C=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto* D=Host->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
                     const TArray<TSharedPtr<FJsonValue>>* Buffs=nullptr;P->Profile->TryGetArrayField(TEXT("buffs"),Buffs);
@@ -255,11 +252,22 @@ namespace ACEPluginPanelPrivate
 }
 } // anonymous namespace
 
-TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId) {
-    using namespace ACEPluginPanelPrivate; if(PluginId==TEXT("itemtools"))return MakeItemToolsPanel(); if(PluginId==TEXT("ucm.log"))return MakeUCMLogPanel();if(PluginId==TEXT("ucmmicro"))return MakeUCMMicroPanel();if(PluginId==TEXT("waypoint") || PluginId==TEXT("waypoint.map"))return MakeWaypointPanel(PluginId.EndsWith(TEXT(".map")));if(PluginId==TEXT("looteditor"))return MakeUCMPanel(TEXT("Standalone loot"));if(PluginId==TEXT("ucm"))return MakeUCMPanel();return SNew(SACEPlugins).Host(this).PluginId(PluginId); }
+TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId)
+{
+    FACEPluginStyle::Use(this);
+    // Named panels live inside the desktop frame, which already supplies their title.
+    if(IsLedger(PluginId))return MakeLedgerPanel(PluginId);
+    if(PluginId==TEXT("itemtools"))return MakeItemToolsPanel(false);
+    if(PluginId==TEXT("ucm.log"))return MakeUCMLogPanel();
+    if(PluginId==TEXT("ucmmicro"))return MakeUCMMicroPanel();
+    if(PluginId==TEXT("waypoint")||PluginId==TEXT("waypoint.map"))return MakeWaypointPanel(PluginId.EndsWith(TEXT(".map")),false,false);
+    if(PluginId==TEXT("looteditor"))return MakeUCMPanel(TEXT("Standalone loot"),false);
+    if(PluginId==TEXT("ucm"))return MakeUCMPanel(FString(),false);
+    return SNew(ACEPluginPanelPrivate::SACEPlugins).Host(this).PluginId(PluginId);
+}
 void UACEPluginSubsystem::TogglePanel()
 {
-    using namespace ACEPluginPanelPrivate;
+    using namespace ACEPluginPanelPrivate;FACEPluginStyle::Use(this);
     if(auto* PC=GetGameInstance()->GetFirstLocalPlayerController())if(APawn* Pawn=PC->GetPawn())
         if(auto* VR=Pawn->FindComponentByClass<UACEVRComponent>();VR && VR->IsActive())
         {
@@ -269,7 +277,7 @@ void UACEPluginSubsystem::TogglePanel()
     if(DesktopPanel){Viewport->RemoveViewportWidgetContent(DesktopPanel.ToSharedRef());DesktopPanel.Reset();return;}
     DesktopPanel=SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Center)
         [SNew(SBox).WidthOverride(740).HeightOverride(530)
-        [SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.025f,.035f,.045f,1.f)).Padding(16)
+        [SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Frame).Padding(16)
         [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)
             [SNew(SButton).ButtonStyle(&PluginButtonStyle()).IsFocusable(false).ContentPadding(FMargin(10,3))
                 .ToolTipText(FText::FromString(TEXT("Close plugin manager")))
@@ -280,5 +288,5 @@ void UACEPluginSubsystem::TogglePanel()
 TSharedRef<SWidget> UACEPluginPanel::RebuildWidget()
 {
     if(auto* GI=GetWorld()?GetWorld()->GetGameInstance():nullptr) if(auto* Host=GI->GetSubsystem<UACEPluginSubsystem>())return Host->MakePanel();
-    return SNew(STextBlock).Text(FText::FromString(TEXT("Plugin manager unavailable")));
+    return SNew(SACEPluginText).Text(FText::FromString(TEXT("Plugin manager unavailable")));
 }

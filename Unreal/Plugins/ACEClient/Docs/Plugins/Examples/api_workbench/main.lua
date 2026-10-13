@@ -32,6 +32,8 @@ return function(s,p)
   end
   -- This is the same module used by UCM. Replace this call to write your own policy.
   local out=builtinpolicy(s,p) or {}
+  -- Optional live window/bar title; a PNG can be supplied as icon='workbench.png'.
+  out.presentation={title='API Workbench'}
   out.profile_patch=patch
   out.requests=requests
   out.ui={

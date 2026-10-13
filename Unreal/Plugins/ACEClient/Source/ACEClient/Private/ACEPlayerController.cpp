@@ -890,6 +890,10 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	auto* VR = GetPawn() ? GetPawn()->FindComponentByClass<UACEVRComponent>() : nullptr;
 	const bool bVR = VR && VR->IsActive();
 	if (DesktopPointer) DesktopPointer->Update(!bVR);
+	if (Client) if (auto* Manager=Client->GetUIElementManager())
+		Manager->SetQuickShowUi(!bVR && Client->GetSessionState()==EACESessionState::InWorld
+			&& FSlateApplication::IsInitialized() && FSlateApplication::Get().IsActive()
+			&& ACEInputBindings::Down(this,ACEInputBindings::Action(TEXT("QuickShowUI"))));
 	if (IsLocalController())
 	{
 		int32 Width=0,Height=0; GetViewportSize(Width,Height);
@@ -1665,12 +1669,9 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		(bJumpAirborne != bJumpAirborneSent) ||
 		bMouseTurnReport;
 	// After Use is in flight, MoveToState (F=1 leftover or axes-0) cancels CreateMoveToChain.
-	// Fast buff input must reach the server like physical movement, including
-	// the release after a result clears plugin ownership. Keep ordinary object
-	// approaches protected from unsolicited movement-chain cancellation.
-	const bool bSendFastBuffMovement = !bServerMoveToActive && !bAwaitingUseDone && ApproachUseSendCount == 0
-		&& (bPluginFastBuffMovement || bPluginFastBuffMovementSent);
-	const bool bFreezeMoveToState = !bSendFastBuffMovement && !bManualKeys && !bMouseTurnSend && !bMouseTurnSent && !bJumpAirborne && !bJumpCharging
+	// Fast buffs send a synchronous press/release in TryFastBuffTap. They never
+	// leave a held axis whose release could be swallowed by this use freeze.
+	const bool bFreezeMoveToState = !bManualKeys && !bMouseTurnSend && !bMouseTurnSent && !bJumpAirborne && !bJumpCharging
 		&& (bServerTurnActive || bAwaitingUseDone || ApproachUseSendCount > 0 || Client->IsUseBusy());
 
 	if (bFreezeMoveToState)
@@ -1753,7 +1754,6 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		bJumpAirborneSent = bJumpAirborne;
 	}
 
-	bPluginFastBuffMovementSent = bPluginFastBuffMovement;
 	// Resolve support, cell transitions and body sweeps together at a bounded
 	// physics interval. Subdividing only the lateral sweep still sampled stairs
 	// at the far end of a 50-70ms headset frame, lifting the body onto furniture
@@ -2126,14 +2126,14 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				// of the set solely via residency: once the point is inside an EnvCell's
 				// cell BSP, the seed is indoor and land is omitted unless an outside portal
 				// straddle re-adds it.
-				auto IsBlockingOutdoorTerrain = [&](const FHitResult& Hit, float X, float Y) -> bool
+				auto IsBlockingOutdoorTerrain = [&](const FHitResult& Hit, double X, double Y) -> bool
 				{
 					return IsOutdoorTerrainHit(Hit) && bUseLandSupport;
 				};
 
 				// Retail OBJECTINFO::validate_walkable: contact embeds waterDepth along the plane
 				// (zDist = dist / N.z). Flat land → SurfaceZ - depth; slopes scale by 1/Nz.
-				auto ApplyRetailWaterDepth = [WaterDat, this](float X, float Y, float SurfaceZ, float NormalZ) -> float
+				auto ApplyRetailWaterDepth = [WaterDat, this](double X, double Y, float SurfaceZ, float NormalZ) -> float
 				{
 					if (!WaterDat)
 					{
@@ -2268,7 +2268,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				const bool bDestEntirelyWater = bUseLandSupport && WaterDat
 					&& WaterDat->GetOutdoorBlockWaterType(Desired.X, Desired.Y, WorldScale) == 2;
 
-				auto CollectWalkableFeet = [&](float X, float Y, float NearFeetZ, float MaxUp, float MaxDown,
+				auto CollectWalkableFeet = [&](double X, double Y, float NearFeetZ, float MaxUp, float MaxDown,
 					float& BestIndoorZ, bool& bHaveIndoorHit, float& BestOutdoorZ, bool& bHaveOutdoorHit)
 				{
 					const float TraceTop = NearFeetZ + MaxUp + .5f;
@@ -2333,7 +2333,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					}
 				};
 
-				auto SampleFeetZ = [&](float X, float Y, float NearFeetZ, float MaxUp, float MaxDown, float& OutFeetZ,
+				auto SampleFeetZ = [&](double X, double Y, float NearFeetZ, float MaxUp, float MaxDown, float& OutFeetZ,
 					bool bUseRing = true) -> bool
 				{
 					float BestIndoorZ = -TNumericLimits<float>::Max();
@@ -2425,7 +2425,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				// Use one support predicate for the destination and ledge tangent.
 				// Offset rays alone can see floor behind an unsupported foot; the
 				// lower sphere validates edge contact without blocking narrow treads.
-				auto SampleWalkingFeet = [&](float X, float Y, float& OutFeetZ)
+				auto SampleWalkingFeet = [&](double X, double Y, float& OutFeetZ)
 				{
 					bool bFound = SampleFeetZ(X,Y,FeetNow,RampClimbCm,RampDropCm,OutFeetZ,false);
 					float SphereZ = FeetNow;
@@ -2551,7 +2551,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 							bool bHaveLand = false;
 							const float LandMaxUp = bIndoorNow ? (StepUpCm + 12.f) : (StepUpCm + 28.f);
 							const float LandMaxDown = CapsuleHalfHeight + StepUpCm + 16.f;
-							auto TryLandAt = [&](float X, float Y) -> bool
+							auto TryLandAt = [&](double X, double Y) -> bool
 							{
 								float Z = 0.f;
 								if (!bIndoorNow)
@@ -2749,8 +2749,10 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				// try sliding along the ledge tangent instead of hard XY freeze.
 				// All grounded input paths share this check, including Use-approach
 				// and sub-centimeter room-scale corrections.
-				float EndX = Desired.X;
-				float EndY = Desired.Y;
+				// Preserve FVector precision through support queries and sweeps;
+				// float world XY rounds away small movement at distant landblocks.
+				double EndX = Desired.X;
+				double EndY = Desired.Y;
 				// Retail CLandCell::find_env_collisions → Collided on EntirelyWater *landblocks*.
 				if (bDestEntirelyWater)
 				{
@@ -3145,7 +3147,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                     FVector(Desired.X,Desired.Y,FeetZ),GetPlayerCollisionBody(),SnapStepDownCm,Params,SphereGroundZ);
 				const float TraceTop = FeetZ + RampClimbCm + .5f;
 				TArray<FHitResult> Hits;
-				auto CollectGroundHits = [&](float X, float Y)
+				auto CollectGroundHits = [&](double X, double Y)
 				{
 					const FVector S(X, Y, TraceTop);
 					// Cap depth to StepDownHeight (+ waterDepth at dest) — unlimited traces
@@ -7264,6 +7266,17 @@ void AACEPlayerController::EndUseApproach()
 	ClearServerMoveTo();
 }
 
+void AACEPlayerController::EndCombatApproachTo(int32 TargetGuid)
+{
+	// Server combat MoveTo shares the use-approach controller. A dying target
+	// can remain in awareness until its death animation finishes; it is no
+	// longer a destination. Do not cancel a real Use/Give/pickup acknowledgment.
+	if (TargetGuid && bServerMoveToActive && ServerMoveToTargetGuid == TargetGuid
+		&& bApproachMoveOnly && !bResendUseWhenInRange && !bApproachPickupIntoInventory
+		&& !bAwaitingUseDone && ApproachUseSendCount == 0 && Client && !Client->IsUseBusy())
+		ClearServerMoveTo();
+}
+
 void AACEPlayerController::HandleMoveToFailed(uint32 /*Error*/)
 {
 	if (!bServerMoveToActive) return;
@@ -8316,6 +8329,28 @@ void AACEPlayerController::ShowCharacterCreationUI()
     // not perform another input-mode handoff when character creation opens.
     if(IsVRActive()){ApplyInWorldInputMode();return;}
     FInputModeGameAndUI Mode;Mode.SetWidgetToFocus(DatCanvasWidget->TakeWidget());Mode.SetHideCursorDuringCapture(false);Mode.SetLockMouseToViewportBehavior(DesktopMouseLockMode());SetInputMode(Mode);bShowMouseCursor=true;
+}
+
+bool AACEPlayerController::TryFastBuffTap()
+{
+    if (!GetPawn() || IsWorldTransitionActive() || bJumpAirborne || bJumpCharging
+        || bServerMoveToActive || bServerTurnActive || bAwaitingUseDone || ApproachUseSendCount > 0)
+        return false;
+    auto* C = Client ? Client.Get() : GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    if (!C || !C->GetSession() || C->GetSession()->GetState() != EACESessionState::InWorld
+        || C->GetSession()->GetCurrentStance() != ACEMotion::StanceMagic)
+        return false;
+
+    // Retail CommandInterpreter::HandleKeyboardCommand applies and reports each
+    // key edge immediately. A press/release in the same update can replace the
+    // cast substate without a physics step between them. Never hold Backward
+    // until a later frame/result; that made native fast buffs translate the pawn.
+    if (bHavePredictedPose) C->SetReportedPosition(PredictedPose);
+    C->SendMovementEx(-1.f, 0.f, 0.f, bRunning, false, true);
+    if (auto* Appearance = GetPawn()->FindComponentByClass<UACECharacterAppearanceComponent>())
+        Appearance->InterruptCastWithMovement();
+    C->SendMovementEx(0.f, 0.f, 0.f, bRunning, false, true);
+    return true;
 }
 
 void AACEPlayerController::QueuePluginJump(float Charge,float Heading,float Forward,float Strafe,bool Walk)

@@ -146,7 +146,7 @@ bool FACEUCMProfilePanelTest::RunTest(const FString&)
     {
         FString Result;TFunction<void(const TSharedRef<SWidget>&)> Visit;
         Visit=[&](const TSharedRef<SWidget>& Widget){
-            if(Widget->GetType()==FName(TEXT("STextBlock")))Result+=StaticCastSharedRef<STextBlock>(Widget)->GetText().ToString()+TEXT("\n");
+            if((Widget->GetType()==FName(TEXT("STextBlock"))||Widget->GetType()==FName(TEXT("SACEPluginText"))))Result+=StaticCastSharedRef<STextBlock>(Widget)->GetText().ToString()+TEXT("\n");
             auto Children=Widget->GetChildren();for(int32 I=0;I<Children->Num();++I)Visit(Children->GetChildAt(I));
         };Visit(Root);return Result;
     };

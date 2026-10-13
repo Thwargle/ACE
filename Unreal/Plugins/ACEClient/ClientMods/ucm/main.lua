@@ -982,7 +982,10 @@ local function tick(s,p)
  -- Imported VT ApproachDistance=0 retains its stationary attack-radius mode.
  local acquisition=option('approach_range',60)
  if acquisition<=0 then acquisition=option('radius',30) end
- local ring_count=0;local target_candidates={}
+ local ring_count=0;local target_candidates={};local nearby_monsters=false
+ for _,t in ipairs(s.targets or {}) do
+  if t.distance<=acquisition and t.line_of_sight~=false and (t.health_fraction or 1)>0 then nearby_monsters=true;break end
+ end
  for _,t in ipairs(s.targets or {}) do if not monster_blacklist[t.id] and t.line_of_sight~=false and t.distance>=option('minimum_range',0) and t.distance<=acquisition and not contains(p.ignore_monsters,t.name) then
   local rule=monster_rule(t,p)
   if not rule.ignore and ring_enabled(rule) and t.distance<option('ring_range',5) then ring_count=ring_count+1 end
@@ -1011,7 +1014,9 @@ local function tick(s,p)
   return result('pause_loot_approach','Pausing corpse approach for combat')
  end
  if s.busy or s.ready==false or s.jumping then return result(nil,s.jumping and 'Following jump arc' or 'Waiting for game action') end
- if locked_target and (not target or option('combat','off')=='off') then locked_target=nil;return result('cancel_attack','No unobstructed combat target; continuing other activities') end
+ if locked_target and (not target or option('combat','off')=='off') then
+  locked_target=nil;return {action='cancel_attack',status='No unobstructed combat target; continuing other activities',continue_work=true}
+ end
  if last_cast and (s.action_serial or 0)~=last_cast.serial and s.last_spell==last_cast.id then
   local confirmed=(s.action_error or 0)==0 and s.last_spell_confirmed~=false
   if confirmed and forced_buff and last_cast.force_cycle==forced_buff then
@@ -1196,8 +1201,8 @@ local function tick(s,p)
   return failed('No usable casting equipment; add a wand, staff or orb')
  end
  local function idle_stance()
-  if not target and option('idle_peace',false) and (s.combat_mode or 1)~=1 then
-   return {action='combat_mode',mode=1,status='Resting in peace mode'}
+  if not target and not nearby_monsters and option('idle_peace',false) and (s.combat_mode or 1)~=1 then
+   return {action='combat_mode',mode=1,status='Resting in peace mode',continue_work=true}
   end
  end
  local function route_door(destination)
@@ -1267,13 +1272,15 @@ local function tick(s,p)
    local ax,ay,az=world(route_trail[1]);local bx,by,bz=world(destination);local x,y,z=world(s.position)
    local dx,dy,dz=bx-ax,by-ay,bz-az;local length=dx*dx+dy*dy+dz*dz
    local t=length>0 and ((x-ax)*dx+(y-ay)*dy+(z-az)*dz)/length or -1
-   if t>=0 and t<=1 and (x-ax-t*dx)^2+(y-ay-t*dy)^2+(z-az-t*dz)^2<=.2^2 then route_trail={} end
+   local radius=math.min(option('waypoint_radius',.8),.8)
+   if t>=0 and t<=1 and (x-ax-t*dx)^2+(y-ay-t*dy)^2+(z-az-t*dz)^2<=radius^2 then route_trail={} end
   end
   while #route_trail>0 do
    local back=route_trail[#route_trail]
-   if distance(s.position,back)<=.45 then table.remove(route_trail)
+   local radius=math.min(option('waypoint_radius',.8),.8)
+   if distance(s.position,back)<=radius then table.remove(route_trail)
    else route_returning=true;local door=route_door(back);if door then return door end
-    return {action='move',cell=back.cell,x=back.x,y=back.y,z=back.z,arrival_radius=.4,status='Returning to route'} end
+    return {action='move',cell=back.cell,x=back.x,y=back.y,z=back.z,arrival_radius=radius,status='Returning to route'} end
   end
   route_returning=false;route_walking=true
   if route_join_pending then
@@ -1307,6 +1314,10 @@ local function tick(s,p)
    -- first spatial anchor. They are not independent destinations to skip.
    point=(scan.point==scan.first) and 1 or (scan.point or 1);route_join_pending=false;route_join_scan=nil
   end
+  -- VT advances reached walk points in the same decision. Leaving the old
+  -- steering target active for an idle tick can turn back toward that point.
+  -- Bound duplicate/looping points; route actions still execute individually.
+  for _=1,math.min(#route+1,64) do
   if point>#route or point<1 then
    if p.reverse_route and #route>1 then route_direction=-route_direction;point=point>#route and #route-1 or 2
    elseif p.loop_route then point=point<1 and #route or 1
@@ -1348,7 +1359,9 @@ local function tick(s,p)
    if not object then return failed('Route object is not visible; select it and record Use again') end
    route_pending={kind=kind,time=s.time,serial=s.action_serial,teleport=s.teleport_sequence};return {action='use_world',item=object.id,status='Using '..object.name}
   end
-  point=point+route_direction;return result(nil,'Waypoint reached')
+  point=point+route_direction
+  end
+  return {status='Advancing reached waypoints',continue_work=true}
  end
  end
  -- Confirm the vital actually improved. A failed kit or fizzle must not loop forever.
@@ -1966,7 +1979,7 @@ local function tick(s,p)
    if job.action=='salvage' then
     if not salvage_candidate(item) or salvage_protected(item) then table.remove(loot_jobs,index);return result(nil,'Keeping protected or unsalvageable item: '..item.name) end
     if not item.identified then return assess(item) end
-    for _,i in ipairs(inventory) do if i.object_class==40 and i.resource_available~=false then tool=i.id;break end end
+    for _,i in ipairs(inventory) do if (i.salvage_tool_available==true or (i.salvage_tool_available==nil and i.object_class==40 and i.resource_available~=false)) then tool=i.id;break end end
     if not tool then return failed('Salvage rule requires an Ust') end
    end
    loot_job_pending={index=index,id=item.id,action=job.action,serial=s.action_serial or 0,deadline=s.time+15}
@@ -2040,6 +2053,10 @@ local function tick(s,p)
  -- LootPriorityBoost. An open corpse or pending receipt must not enable it.
  -- Keep loot_pending intact across combat so the server transfer is reconciled
  -- once, rather than requesting the item again or losing its follow-up rule.
+ -- Idle peace is a precondition of ordinary loot in VT, not an activity that
+ -- must wait until all corpses are emptied. Nearby living monsters retain
+ -- combat stance even when combat is disabled or loot priority is enabled.
+ local idle=idle_stance();if idle then return idle end
  if option('loot_priority',false) then local action=loot();if action then return action end end
  if option('nav_priority',false) then
   -- Keep clear-area looting from being starved by a continuous route, without
@@ -2244,7 +2261,7 @@ local function tick(s,p)
  if target and combat~='off' then
   locked_target=target.id
   if not target.identified and not target.appraisal_recent and s.targets and s.time>=(until_time['id'..target.id] or 0) then
-   until_time['id'..target.id]=s.time+30;return {action='identify',item=target.id,status='Assessing '..target.name} end
+   until_time['id'..target.id]=s.time+30;return {action='identify',item=target.id,status='Assessing '..target.name,continue_work=true} end
   local plan=combat_plan(target,target_rule)
   local attack,weapon,mode,damage_override=plan.attack,plan.weapon,plan.mode,plan.damage
   if not weapon and plan.unassessed then return assess(plan.unassessed) end
@@ -2364,7 +2381,7 @@ local function tick(s,p)
   local policy=p.salvage_policy or {default={{min=1,max=6},{min=7,max=8},{min=9,max=9},{min=10,max=10}}}
   local groups,tool={},nil
   for _,item in ipairs(inventory) do
-   if item.object_class==40 and item.resource_available~=false then tool=item.id end
+   if (item.salvage_tool_available==true or (item.salvage_tool_available==nil and item.object_class==40 and item.resource_available~=false)) then tool=item.id end
    if item.object_class==39 and not item.equipped and not item.retained and item.resource_available~=false and (item.material or 0)>0 and (item.structure or 0)>0 and item.structure<100 and item.workmanship then
     local ranges=(policy.materials or {})[vt_string(item.material)] or policy.default or {};local index=#ranges+1
     for n,range in ipairs(ranges) do if range.min>item.workmanship then index=n-1;break elseif item.workmanship<=range.max then index=n;break end end

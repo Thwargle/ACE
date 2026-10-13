@@ -1,3 +1,4 @@
+#include "Mods/ACEPluginStyle.h"
 #include "Mods/ACEWaypoint.h"
 #include "ACEDungeonMapContours.h"
 #include "Mods/ACEWaypointTiles.h"
@@ -41,7 +42,7 @@ bool UACEPluginSubsystem::IsWaypointUnlocked() const
 {
     auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     const auto* Manager=Client?Client->GetUIElementManager():nullptr;
-    return !WaypointOption(TEXT("locked"),false) && (!Manager || !Manager->IsUiLocked());
+    return !Manager || !Manager->IsUiLocked();
 }
 bool UACEPluginSubsystem::IsWaypointMapUnlocked() const
 {
@@ -144,15 +145,10 @@ const TArray<FACEWaypointLandmark>& UACEPluginSubsystem::GetWaypointLocations()
 
 namespace
 {
-const FLinearColor Accent(.15f,.78f,1),Ink(.9f,.94f,1),Muted(.5f,.62f,.73f);
-const FSlateBrush& Background(){static FSlateRoundedBoxBrush B(FLinearColor(.015f,.024f,.04f),8.f);return B;}
-TSharedRef<STextBlock> WaypointLabel(const FString& S,int Size=16){return SNew(STextBlock).Text(FText::FromString(S)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size)).ColorAndOpacity(Ink).AutoWrapText(true);}
-const FButtonStyle& ButtonStyle()
-{
-    static FButtonStyle B=FButtonStyle().SetNormal(FSlateRoundedBoxBrush(FLinearColor(.035f,.085f,.13f),5.f))
-        .SetHovered(FSlateRoundedBoxBrush(FLinearColor(.07f,.23f,.32f),5.f,Accent,1.f))
-        .SetPressed(FSlateRoundedBoxBrush(FLinearColor(.025f,.14f,.22f),5.f));return B;
-}
+const FLinearColor Accent(1,.76f,.25f),Ink(.94f,.9f,.8f),Muted(.65f,.59f,.45f);
+const FSlateBrush& Background(){return FACEPluginStyle::Current()->Background;}
+TSharedRef<STextBlock> WaypointLabel(const FString& S,int Size=16){return SNew(SACEPluginText).Text(FText::FromString(S)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size)).ColorAndOpacity(Ink).AutoWrapText(true);}
+const FButtonStyle& ButtonStyle() {return FACEPluginStyle::Current()->Button;}
 TSharedRef<SButton> WaypointButton(const FString& S,TFunction<void()> Click)
 {return SNew(SButton).IsFocusable(false).ButtonStyle(&ButtonStyle()).ContentPadding(FMargin(12,8)).OnClicked_Lambda([Click]{Click();return FReply::Handled();})[WaypointLabel(S)];}
 void Text(FSlateWindowElementList& Out,int L,const FGeometry& G,FVector2D At,const FString& S,int Size,FLinearColor Color,bool Center=false)
@@ -188,7 +184,7 @@ class SWaypointArrow : public SLeafWidget
 {
 public:
     SLATE_BEGIN_ARGS(SWaypointArrow){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_END_ARGS()
-    void Construct(const FArguments& A){Host=A._Host;SetVisibility(EVisibility::HitTestInvisible);}
+    void Construct(const FArguments& A){Host=A._Host;FACEPluginStyle::Use(A._Host);SetVisibility(EVisibility::HitTestInvisible);}
     FVector2D ComputeDesiredSize(float)const override{return FVector2D(260,190);}
     void Tick(const FGeometry& G,double T,float D)override{SLeafWidget::Tick(G,T,D);Invalidate(EInvalidateWidgetReason::Paint);}
     int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& Out,int32 L,const FWidgetStyle&,bool)const override
@@ -202,13 +198,13 @@ public:
         const bool OtherDungeon=Active && Dungeon && Dungeon!=(uint32(P.CellId)&0xFFFF0000);
         const double Distance=Active?(Target-Current).Size()*240.:0;
         const FVector F=P.GetAceForwardInAcSpace();
-        const double Angle=Active?ACEWaypoint::RelativeBearing(Current,Target,{F.X,F.Y}):0;
+        const double Angle=Active&&!OtherDungeon?ACEWaypoint::RelativeBearing(Current,Target,{F.X,F.Y}):ACEWaypoint::NorthBearing({F.X,F.Y});
         auto Rotate=[&](FVector2D V){return Center+FVector2D(V.X*FMath::Cos(Angle)-V.Y*FMath::Sin(Angle),(V.X*FMath::Sin(Angle)+V.Y*FMath::Cos(Angle))*.8);};
         const auto Tip=Rotate({0,-48}),Left=Rotate({-28,30}),Right=Rotate({28,30}),Ridge=Rotate({0,13});
         const auto Color=Active&&!OtherDungeon?Accent:Muted;
         Triangle(Out,L+1,G,Tip,Left,Ridge,Color*.55f);Triangle(Out,L+1,G,Tip,Ridge,Right,Color);
         Line(Out,L+2,G,{Tip,Left,Ridge,Right,Tip},Color,1.5f);
-        FString Caption=!Active?TEXT("Choose a destination"):OtherDungeon?TEXT("Destination in another dungeon"):Distance<3?TEXT("Arrived"):TEXT("To ")+ACEWaypoint::Format(Target);
+        FString Caption=!Active?TEXT("North"):OtherDungeon?TEXT("Destination in another dungeon"):Distance<3?TEXT("Arrived"):TEXT("To ")+ACEWaypoint::Format(Target);
         Text(Out,L+2,G,{W*.5,132},Caption,13,Ink,true);
         if(Active && !OtherDungeon && H->WaypointOption(TEXT("distance")))Text(Out,L+2,G,{W*.5,154},FString::Printf(TEXT("%.0f m remaining"),Distance),14,Accent,true);
         return L+2;
@@ -223,7 +219,7 @@ public:
     SLATE_BEGIN_ARGS(SWaypointMap){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(bool,Overlay) SLATE_END_ARGS()
     void Construct(const FArguments& A)
     {
-        Host=A._Host;Overlay=A._Overlay;SetClipping(EWidgetClipping::ClipToBounds);
+        Host=A._Host;FACEPluginStyle::Use(A._Host);Overlay=A._Overlay;SetClipping(EWidgetClipping::ClipToBounds);
         if(Host.IsValid())
         {Resources.Reset(NewObject<UACEUIResourceResolver>());Resources->Initialize(Host->GetGameInstance()->GetSubsystem<UACEDatSubsystem>());MapTexture.Reset(Resources->ResolveTexture(0x0600127D));MapBrush.SetResourceObject(MapTexture.Get());MapBrush.DrawAs=ESlateBrushDrawType::Image;}
         if(Overlay)Zoom=PinnedWorldZoom;
@@ -484,13 +480,14 @@ private:
 class SWaypointPanel : public SCompoundWidget
 {
 public:
-    SLATE_BEGIN_ARGS(SWaypointPanel){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(bool,Map) SLATE_END_ARGS()
+    SLATE_BEGIN_ARGS(SWaypointPanel):_ShowTitle(true){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(bool,Map) SLATE_ARGUMENT(bool,ShowTitle) SLATE_END_ARGS()
     void Construct(const FArguments& A)
     {
-        Host=A._Host;
-        auto Body=SNew(SVerticalBox);Body->AddSlot().AutoHeight()[WaypointLabel(A._Map?TEXT("Explore Dereth"):TEXT("Waypoint"),26)];
+        Host=A._Host;FACEPluginStyle::Use(A._Host);
+        ShowTitle=A._ShowTitle;
+        auto Body=SNew(SVerticalBox);if(ShowTitle)Body->AddSlot().AutoHeight()[WaypointLabel(A._Map?TEXT("Explore Dereth"):TEXT("Waypoint"),26)];
         auto Input=SNew(SHorizontalBox);
-        Input->AddSlot().FillWidth(1)[SAssignNew(Entry,SEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).HintText(FText::FromString(TEXT("42.0N, 33.6E")))
+        Input->AddSlot().FillWidth(1)[SAssignNew(Entry,SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).HintText(FText::FromString(TEXT("42.0N, 33.6E")))
             .OnTextCommitted_Lambda([this](const FText& T,ETextCommit::Type Type){if(Type==ETextCommit::OnEnter)Navigate(T.ToString());})];
         Input->AddSlot().AutoWidth().Padding(8,0)[WaypointButton(TEXT("Go"),[this]{Navigate(Entry->GetText().ToString());})];
         Input->AddSlot().AutoWidth().Padding(4,0)[WaypointButton(TEXT("Clear"),[this]{if(Host.IsValid())Host->ClearWaypoint();})];
@@ -511,14 +508,14 @@ public:
                 .Value_Lambda([this](){return Host.IsValid()?Host->WaypointMapOpacity():1.f;})
                 .OnValueChanged_Lambda([this](float Value){if(Host.IsValid())Host->SetWaypointMapOpacity(Value);})];
             Body->AddSlot().AutoHeight()[WaypointLabel(TEXT("The pinned map follows you, automatically switches between overworld and interior layouts, and stays visible when this window closes. Both views share the same position and size. Use the game UI lock/unlock icon to move, resize or zoom it. Uncheck Pin to hide it."),13)];
-            Body->AddSlot().AutoHeight().Padding(0,6)[SNew(SEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).HintText(FText::FromString(TEXT("Filter locations by name"))).OnTextChanged_Lambda([this](const FText& T){if(Map)Map->SetSearch(T.ToString());})];
+            Body->AddSlot().AutoHeight().Padding(0,6)[SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).HintText(FText::FromString(TEXT("Filter locations by name"))).OnTextChanged_Lambda([this](const FText& T){if(Map)Map->SetSearch(T.ToString());})];
             Body->AddSlot().FillHeight(1).Padding(0,10)[SAssignNew(Map,SWaypointMap).Host(Host.Get())];
             Body->AddSlot().AutoHeight()[SNew(SHorizontalBox)
                 +SHorizontalBox::Slot().AutoWidth()[WaypointButton(TEXT("+"),[this]{Map->ChangeZoom(1.5,Map->GetCachedGeometry().GetLocalSize()*.5);})]
                 +SHorizontalBox::Slot().AutoWidth().Padding(5,0)[WaypointButton(TEXT("−"),[this]{Map->ChangeZoom(1/1.5,Map->GetCachedGeometry().GetLocalSize()*.5);})]
                 +SHorizontalBox::Slot().AutoWidth()[WaypointButton(TEXT("Center on me"),[this]{Map->CenterOnPlayer();})]
                 +SHorizontalBox::Slot().AutoWidth().Padding(5,0)[WaypointButton(TEXT("Reset view"),[this]{Map->ResetView();})]];
-            Body->AddSlot().AutoHeight().Padding(0,8)[WaypointButton(TEXT("Waypoint settings"),[this]{if(Host.IsValid())ChildSlot[Host->MakeWaypointPanel()];})];
+            Body->AddSlot().AutoHeight().Padding(0,8)[WaypointButton(TEXT("Waypoint settings"),[this]{if(Host.IsValid())ChildSlot[Host->MakeWaypointPanel(false,false,ShowTitle)];})];
             Body->AddSlot().AutoHeight().Padding(0,8)[WaypointLabel(TEXT("Drag to pan · Scroll to zoom · Click to navigate\nTowns and nearby portals. Atlas detail appears when zoomed in or searched. Dungeon floors near your elevation are brighter."),13)];
         }
         else
@@ -526,29 +523,29 @@ public:
             Body->AddSlot().AutoHeight()[SNew(SBox).HeightOverride(190)[SNew(SWaypointArrow).Host(Host.Get())]];
             Body->AddSlot().AutoHeight().Padding(0,8)[Check(TEXT("distance"),TEXT("Show distance to destination"),true)];
             Body->AddSlot().AutoHeight()[Check(TEXT("arrow"),TEXT("Show floating arrow"),true)];
-            Body->AddSlot().AutoHeight().Padding(0,8)[Check(TEXT("locked"),TEXT("Lock arrow position"),false)];
-            Body->AddSlot().AutoHeight()[WaypointButton(TEXT("Open map"),[this]{if(Host.IsValid())ChildSlot[Host->MakeWaypointPanel(true)];})];
+            Body->AddSlot().AutoHeight().Padding(0,8)[WaypointLabel(TEXT("Use the game UI lock or hold Quick-show pinned windows to move the arrow."),13)];
+            Body->AddSlot().AutoHeight()[WaypointButton(TEXT("Open map"),[this]{if(Host.IsValid())ChildSlot[Host->MakeWaypointPanel(true,false,ShowTitle)];})];
             Body->AddSlot().AutoHeight().Padding(0,12)[WaypointLabel(TEXT("GoArrow atlas (optional)"),18)];
-            Body->AddSlot().AutoHeight()[SAssignNew(AtlasPath,SEditableTextBox).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).HintText(FText::FromString(TEXT("Full path to GoArrow locations.xml")))];
+            Body->AddSlot().AutoHeight()[SAssignNew(AtlasPath,SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).HintText(FText::FromString(TEXT("Full path to GoArrow locations.xml")))];
             Body->AddSlot().AutoHeight().Padding(0,6)[WaypointButton(TEXT("Import locations"),[this]{if(Host.IsValid()){Host->ImportWaypointLocations(AtlasPath->GetText().ToString().TrimStartAndEnd());Status=Host->Notice;}})];
             Body->AddSlot().AutoHeight().Padding(0,12)[WaypointLabel(TEXT("Click coordinates in chat or enter them above. The arrow shows your current coordinates. Unlock the game UI and drag its title to move it; its position is saved."),15)];
         }
-        Body->AddSlot().AutoHeight()[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).ColorAndOpacity(Accent).AutoWrapText(true)
+        Body->AddSlot().AutoHeight()[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).ColorAndOpacity(Accent).AutoWrapText(true)
             .Text_Lambda([this]{return FText::FromString(Status);})];
         TSharedRef<SWidget> Content=Body;
         if(!A._Map)Content=SNew(SScrollBox)+SScrollBox::Slot()[Body];
         ChildSlot[SNew(SBorder).BorderImage(&Background()).Padding(18)[Content]];
     }
 private:
-    TWeakObjectPtr<UACEPluginSubsystem> Host;TSharedPtr<SEditableTextBox> Entry,AtlasPath;TSharedPtr<SWaypointMap> Map;FString Status;
+    TWeakObjectPtr<UACEPluginSubsystem> Host;TSharedPtr<SEditableTextBox> Entry,AtlasPath;TSharedPtr<SWaypointMap> Map;FString Status;bool ShowTitle=true;
     void Navigate(const FString& S){if(Host.IsValid())Status=Host->SetWaypoint(S)?TEXT("Destination set"):Host->Notice;}
     TSharedRef<SWidget> Check(const FString& Key,const FString& Caption,bool Default)
-    {return SNew(SCheckBox).Padding(6).IsChecked_Lambda([this,Key,Default]{return Host.IsValid()&&Host->WaypointOption(Key,Default)?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+    {return SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).Padding(6).IsChecked_Lambda([this,Key,Default]{return Host.IsValid()&&Host->WaypointOption(Key,Default)?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
         .OnCheckStateChanged_Lambda([this,Key](ECheckBoxState V){if(Host.IsValid())Host->SetWaypointOption(Key,V==ECheckBoxState::Checked);})[WaypointLabel(Caption)];}
 };
 }
-TSharedRef<SWidget> UACEPluginSubsystem::MakeWaypointPanel(bool bMap,bool bArrowOnly)
-{if(bArrowOnly)return SNew(SWaypointArrow).Host(this);return SNew(SWaypointPanel).Host(this).Map(bMap);}
+TSharedRef<SWidget> UACEPluginSubsystem::MakeWaypointPanel(bool bMap,bool bArrowOnly,bool bShowTitle)
+{if(bArrowOnly)return SNew(SWaypointArrow).Host(this);return SNew(SWaypointPanel).Host(this).Map(bMap).ShowTitle(bShowTitle);}
 TSharedRef<SWidget> UACEPluginSubsystem::MakeWaypointMapIcon(){return SNew(SWaypointMapIcon);}
 TSharedRef<SWidget> UACEPluginSubsystem::MakeWaypointDungeonOverlay()
 {
@@ -559,7 +556,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeWaypointDungeonOverlay()
         +SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Top)[SNew(SButton).IsFocusable(false).ContentPadding(FMargin(5,1))
             .ToolTipText(FText::FromString(TEXT("Minimize / restore map; direction arrow stays visible")))
             .OnClicked_Lambda([H](){if(H.IsValid())H->SetWaypointOption(TEXT("map_minimized"),!H->WaypointOption(TEXT("map_minimized"),false));return FReply::Handled();})
-            [SNew(STextBlock).Text_Lambda([H](){return FText::FromString(H.IsValid()&&H->WaypointOption(TEXT("map_minimized"),false)?TEXT("Map +"):TEXT("−"));})]];
+            [SNew(SACEPluginText).Text_Lambda([H](){return FText::FromString(H.IsValid()&&H->WaypointOption(TEXT("map_minimized"),false)?TEXT("Map +"):TEXT("−"));})]];
 }
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -613,6 +610,29 @@ bool FACEWaypointOverlayTest::RunTest(const FString&)
         TestTrue(TEXT("Leaving interior discards stale floor geometry"),Map->Floors.IsEmpty()&&Map->CellCount==0);
         P.CellId=0x01430171;C->GetSession()->SetLocalPosition(P);Map->Tick(Geometry,Time++,.016f);
         TestEqual(TEXT("Returning inside restores interior zoom"),Map->Zoom,InteriorZoom);
+    }
+    if(FApp::CanEverRender())
+    {
+        const FVector2D ArrowSize(290,190);FWidgetRenderer Renderer(false,true);
+        auto Arrow=SNew(SWaypointArrow).Host(Host);auto* Target=FWidgetRenderer::CreateTargetFor(ArrowSize,TF_Bilinear,true);
+        TArray<FColor> First;
+        for(int32 Turn=0;Turn<2;++Turn)
+        {
+            FACEPosition P;P.CellId=0x01430171;P.Location=FVector(49,-75,0);
+            P.RotationW=FMath::Cos(Turn*UE_DOUBLE_PI/4);P.RotationXYZ=FVector(0,0,FMath::Sin(Turn*UE_DOUBLE_PI/4));
+            C->GetSession()->SetLocalPosition(P);
+            ++GFrameCounter;Renderer.DrawWidget(Target,Arrow,ArrowSize,0);FlushRenderingCommands();
+            TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
+            if(Turn==0)First=Pixels;
+            else
+            {
+                int Changed=0;for(int Y=25;Y<110;++Y)for(int X=90;X<200;++X)if(Pixels[Y*290+X]!=First[Y*290+X])++Changed;
+                TestTrue(TEXT("Floating north arrow visibly rotates when turning in a dungeon without a destination"),Changed>100);
+            }
+            TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(290,190,Pixels,PNG);
+            FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/TEXT("Automation")/FString::Printf(TEXT("Waypoint-Compass-%d.png"),Turn)));
+        }
+        Target->ReleaseResource();
     }
     if(FParse::Param(FCommandLine::Get(),TEXT("WaypointRender")))
     {

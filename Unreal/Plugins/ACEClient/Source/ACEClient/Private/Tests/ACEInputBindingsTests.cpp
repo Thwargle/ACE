@@ -90,6 +90,13 @@ bool FACEInputBindingsTest::RunTest(const FString&)
   Hold({EKeys::W});TestTrue(TEXT("Gameplay resumes after retail editing"),ACEInputBindings::Down(PC,EKeys::W));
   Slate.RequestDestroyWindow(Window);if(PreviousFocus)Slate.SetKeyboardFocus(PreviousFocus);
  }
+ const auto QuickShow=ACEInputBindings::Action(TEXT("QuickShowUI"));
+ Hold({EKeys::LeftControl});TestTrue(TEXT("Left Control quick-shows pinned windows by default"),ACEInputBindings::Down(PC,QuickShow));
+ Hold({});TestFalse(TEXT("Releasing hold ends quick-show"),ACEInputBindings::Down(PC,QuickShow));
+ ACEInputBindings::BeginEdit();ACEInputBindings::Set(QuickShow,0,FInputChord(EKeys::F11));ACEInputBindings::Commit();
+ Hold({EKeys::LeftControl});TestFalse(TEXT("Rebinding removes the original quick-show key"),ACEInputBindings::Down(PC,QuickShow));
+ Hold({EKeys::F11});TestTrue(TEXT("Rebound hold quick-shows pinned windows"),ACEInputBindings::Down(PC,QuickShow));
+ ACEInputBindings::Reload();TestTrue(TEXT("Quick-show binding persists"),ACEInputBindings::Down(PC,QuickShow));
  // Shipped DAT gmDefaultMap (14000000) and DefaultMap (14000002),
  // rather than the later WASD bindings that were invented by this client.
  Hold({EKeys::X});TestTrue(TEXT("Retail X moves backward"),ACEInputBindings::Down(PC,EKeys::S));
@@ -202,6 +209,7 @@ bool FACEInputBindingsTest::RunTest(const FString&)
  TestTrue(TEXT("Exported file reloads"),RoundTrip.bSuccess);
  TestEqual(TEXT("Toggle Chat Entry is rebindable and survives keymap export/import"),ACEInputBindings::Get(ACEInputBindings::Action(TEXT("ToggleChat")),0).Key,EKeys::F12);
  TestTrue(TEXT("Retail keymap import retains the local interface shortcut"),ACEInputBindings::Get(ToggleInterface,0)==FInputChord(EKeys::Z,false,false,true,false));
+ TestTrue(TEXT("Retail keymap import retains local quick-show binding"),ACEInputBindings::Get(QuickShow,0)==FInputChord(EKeys::LeftControl));
  TestTrue(TEXT("Save and load preserve modifier bindings"),ACEInputBindings::Get(EKeys::Q,1)==FInputChord(EKeys::A,false,false,true,false));
  TestFalse(TEXT("Save and load preserve unbound actions without invalid empty control records"),ACEInputBindings::Get(EKeys::W,0).Key.IsValid());
  TestEqual(TEXT("Save and load preserve mouse bindings"),ACEInputBindings::Get(EKeys::NumLock,0).Key,EKeys::ThumbMouseButton);

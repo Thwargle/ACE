@@ -3,9 +3,9 @@
 
 namespace ACEPluginCastMotion
 {
-    // A short command edge replaces the casting substate. Never tie movement
-    // duration to a server result/watchdog: delayed results must not cause travel.
-    constexpr double BackwardPulseSeconds = 0.12;
+    // Discard a tap blocked by UI/airborne movement instead of replaying it later.
+    // This bounds request freshness, not how long a backward key is held.
+    constexpr double TapRequestSeconds = 0.12;
     // VT MySpell.IsInstantCast eligibility. Ordinary item/other buffs retain
     // their casting animation.
     inline bool FastBuff(uint32 School,uint32 Power,uint32 Flags,double Duration)

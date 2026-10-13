@@ -67,8 +67,9 @@ public:
 	bool SetElementVisibleByName(const FString& ElementName, bool bVisible);
 
 	/** Global floaty lock (retail LockUI). When true, frames use *_Locked art and drag is disabled. */
-	bool IsUiLocked() const { return bUiLocked; }
+	bool IsUiLocked() const { return bUiLocked && !bQuickShowUi; }
 	void SetUiLocked(bool bLocked);
+	void SetQuickShowUi(bool bShow);
 	void ToggleUiLocked() { SetUiLocked(!bUiLocked); }
 
 	/** Apply locked/unlocked chrome visibility under all floaties. */
@@ -133,6 +134,7 @@ private:
 	TMap<uint32, FElementFactory> Factories;
 	int32 CaptureRefCount = 0;
 	bool bUiLocked = true;
+	bool bQuickShowUi = false;
 	uint32 NextFloatyZ = 1000;
 
 	TSharedPtr<FACEUIElement> DragFloaty;

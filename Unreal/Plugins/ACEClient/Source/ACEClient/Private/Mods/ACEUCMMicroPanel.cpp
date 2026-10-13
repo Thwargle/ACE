@@ -1,3 +1,4 @@
+#include "Mods/ACEPluginStyle.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -9,6 +10,7 @@
 
 TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
 {
+    FACEPluginStyle::Use(this);
     const TWeakObjectPtr<UACEPluginSubsystem> Host(this);
     const auto UCM=[Host]() -> TSharedPtr<FACEClientPlugin>
     {if(Host.IsValid())for(auto P:Host->Plugins)if(P->Id==TEXT("ucm"))return P;return nullptr;};
@@ -16,10 +18,10 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
     const auto Row=[Rows](const TCHAR* Label,TFunction<bool()> Read,TFunction<void(bool)> Write)
     {
         Rows->AddSlot().AutoHeight().Padding(2,4)
-        [SNew(SCheckBox).IsFocusable(false).ClickMethod(EButtonClickMethod::MouseDown)
+        [SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).IsFocusable(false).ClickMethod(EButtonClickMethod::MouseDown)
             .IsChecked_Lambda([Read](){return Read()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
             .OnCheckStateChanged_Lambda([Write](ECheckBoxState State){Write(State==ECheckBoxState::Checked);})
-            [SNew(STextBlock).Text(FText::FromString(Label)).Font(FCoreStyle::GetDefaultFontStyle("Regular",15))]];
+            [SNew(SACEPluginText).Text(FText::FromString(Label)).Font(FCoreStyle::GetDefaultFontStyle("Regular",15))]];
     };
     Row(TEXT("UCM running"),[UCM](){auto P=UCM();return P&&P->Running;},[Host,UCM](bool On)
     {if(Host.IsValid())if(auto P=UCM()){if(On)Host->Start(P->Id);else Host->Stop(P->Id,TEXT("Stopped"),true);}});
@@ -43,12 +45,11 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
             Host->SaveProfile(P->Id,P->ProfileName,Host->ProfileJson(P->Id),false);
         });
     }
-    Rows->AddSlot().AutoHeight().Padding(2,6)[SNew(STextBlock).AutoWrapText(true)
+    Rows->AddSlot().AutoHeight().Padding(2,6)[SNew(SACEPluginText).AutoWrapText(true)
         .Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
         .Text_Lambda([UCM](){auto P=UCM();return FText::FromString(P?P->Status:TEXT("Enable UCM in Plugins."));})];
-    Rows->AddSlot().AutoHeight().Padding(2,4)[SNew(SButton).IsFocusable(false).Text(FText::FromString(TEXT("Open UCM Log")))
+    Rows->AddSlot().AutoHeight().Padding(2,4)[SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false).Text(FText::FromString(TEXT("Open UCM Log")))
         .OnClicked_Lambda([Host](){if(Host.IsValid())Host->TogglePluginWindow(TEXT("ucm.log"));return FReply::Handled();})];
-    return SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-        .BorderBackgroundColor(FLinearColor(.012f,.018f,.03f)).Padding(10)
+    return SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Background).Padding(10)
         [SNew(SScrollBox)+SScrollBox::Slot()[Rows]];
 }

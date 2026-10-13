@@ -1,3 +1,4 @@
+#include "Mods/ACEPluginStyle.h"
 #include "Mods/ACEPluginCosmetics.h"
 #include "Serialization/JsonSerializer.h"
 #include "Widgets/Images/SImage.h"
@@ -28,7 +29,7 @@ FString Text(const TSharedPtr<FJsonObject>& O,const TCHAR* K,const FString& Defa
 bool Ready(const TSharedPtr<FJsonObject>& O)
 { bool V=false;return O&&O->TryGetBoolField(TEXT("supported"),V)&&V; }
 TSharedRef<SWidget> PaperdollLabel(const FString& S)
-{ return SNew(STextBlock).Text(FText::FromString(S)).AutoWrapText(true); }
+{ return SNew(SACEPluginText).Text(FText::FromString(S)).AutoWrapText(true); }
 bool CanTarget(const TSharedPtr<FJsonObject>& O,const FString& Target)
 {
     const TArray<TSharedPtr<FJsonValue>>* Values=nullptr;
@@ -108,7 +109,7 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakeCatalogRow(TSharedPtr<FJsonObject> 
     using namespace ACEPluginPaperdollPrivate;
     return SNew(SHorizontalBox)
         +SHorizontalBox::Slot().AutoWidth().Padding(4)[MakeCatalogIcon([Item](){return Item;},48)]
-        +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(8,2)[SNew(STextBlock).Text(FText::FromString(Text(Item,TEXT("name"))+(Ready(Item)?TEXT(""):TEXT(" — unavailable")))).ToolTipText(FText::FromString(Text(Item,TEXT("reason")))).AutoWrapText(true)];
+        +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(8,2)[SNew(SACEPluginText).Text(FText::FromString(Text(Item,TEXT("name"))+(Ready(Item)?TEXT(""):TEXT(" — unavailable")))).ToolTipText(FText::FromString(Text(Item,TEXT("reason")))).AutoWrapText(true)];
 }
 
 void UACEPluginCosmetics::UpdateCatalog(const FString& Json)
@@ -182,17 +183,17 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakePaperdollPanel()
     TWeakObjectPtr<UACEPluginCosmetics> Self(this);auto Body=SNew(SVerticalBox);
     auto Add=[&](TSharedRef<SWidget> W){Body->AddSlot().AutoHeight().Padding(4)[W];};
     auto Button=[&](const FString& Caption,const FString& Operation)->TSharedRef<SWidget>
-    {return SNew(SButton).IsFocusable(false).ContentPadding(8)
+    {return SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false).ContentPadding(8)
         .IsEnabled_Lambda([Self,Operation](){return Self.IsValid()&&(Operation==TEXT("off")||!Self->ToolProcess.IsValid());})
         .OnClicked_Lambda([Self,Operation](){if(Self.IsValid())Self->QueueRequest(Operation);return FReply::Handled();})[PaperdollLabel(Caption)];};
-    Add(SNew(STextBlock).Text_Lambda([Self](){return FText::FromString(Self.IsValid()?Self->Status:TEXT("Unavailable"));}).AutoWrapText(true));
+    Add(SNew(SACEPluginText).Text_Lambda([Self](){return FText::FromString(Self.IsValid()?Self->Status:TEXT("Unavailable"));}).AutoWrapText(true));
     Add(SNew(SHorizontalBox)
         +SHorizontalBox::Slot().FillWidth(1)[Button(TEXT("Find local ")+SourceLabel+TEXT(" installation"),TEXT("scan"))]
         +SHorizontalBox::Slot().FillWidth(1).Padding(4,0)[Button(TEXT("Scan all local items"),TEXT("scan-items"))]
         +SHorizontalBox::Slot().FillWidth(1)[Button(TEXT("Load last catalog"),TEXT("catalog-items"))]);
     auto Installs=SNew(SVerticalBox);InstallationList=Installs;Add(Installs);
     for(const auto& Install:Installations)
-        Installs->AddSlot().AutoHeight()[SNew(SButton).OnClicked_Lambda([Self,Install](){if(Self.IsValid())for(const TCHAR* K:{TEXT("root"),TEXT("product")})Self->Inputs[K]=Text(Install,K);return FReply::Handled();})
+        Installs->AddSlot().AutoHeight()[SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).OnClicked_Lambda([Self,Install](){if(Self.IsValid())for(const TCHAR* K:{TEXT("root"),TEXT("product")})Self->Inputs[K]=Text(Install,K);return FReply::Handled();})
             [PaperdollLabel(Text(Install,TEXT("product"))+TEXT(" — ")+Text(Install,TEXT("root")))]];
     Add(PaperdollLabel(TEXT("Choose appearances for any slots, then Apply outfit to wear all changes together.")));
     auto Grid=SNew(SGridPanel).FillColumn(0,1).FillColumn(1,1).FillColumn(2,1);
@@ -200,7 +201,7 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakePaperdollPanel()
     Grid->AddSlot(1,1).RowSpan(5).HAlign(HAlign_Center).VAlign(VAlign_Center)
         [SNew(SVerticalBox)
             +SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)[MakeCatalogIcon(SelectedItem,180)]
-            +SVerticalBox::Slot().AutoHeight().Padding(4)[SNew(STextBlock).Justification(ETextJustify::Center).AutoWrapText(true)
+            +SVerticalBox::Slot().AutoHeight().Padding(4)[SNew(SACEPluginText).Justification(ETextJustify::Center).AutoWrapText(true)
                 .Text_Lambda([SelectedItem](){return FText::FromString(SelectedItem()?Text(SelectedItem(),TEXT("name")):TEXT("Choose an appearance"));})]
             +SVerticalBox::Slot().AutoHeight().Padding(4)[PaperdollLabel(TEXT("Item icon / local model preview"))]];
     struct FSlot {const TCHAR* Id;int32 Column,Row;};
@@ -209,16 +210,16 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakePaperdollPanel()
     for(const auto& S:Slots)
     {
         FString Id=S.Id;
-        Grid->AddSlot(S.Column,S.Row).Padding(3).VAlign(VAlign_Center)[SNew(SButton).IsFocusable(false).ContentPadding(FMargin(8,10))
-            .ButtonColorAndOpacity_Lambda([Self,Id](){return Self.IsValid()&&Self->SelectedSlot==Id?FLinearColor(.12f,.45f,.55f):FLinearColor(.12f,.15f,.19f);})
+        Grid->AddSlot(S.Column,S.Row).Padding(3).VAlign(VAlign_Center)[SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false).ContentPadding(FMargin(8,10))
+            .ButtonColorAndOpacity_Lambda([Self,Id](){return Self.IsValid()&&Self->SelectedSlot==Id?FLinearColor(1,.75f,.3f):FLinearColor(.6f,.5f,.3f);})
             .OnClicked_Lambda([Self,Id](){if(Self.IsValid())Self->SelectSlot(Id);return FReply::Handled();})
             [SNew(SHorizontalBox)
                 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[MakeCatalogIcon([Self,Id](){return Self.IsValid()?Self->SlotSelections.FindRef(Id):nullptr;},44)]
                 +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(6,0)
-                    [SNew(STextBlock).AutoWrapText(true).Text(FText::FromString(SlotName(Id)))]]];
+                    [SNew(SACEPluginText).AutoWrapText(true).Text(FText::FromString(SlotName(Id)))]]];
     }
     Add(Grid);
-    Add(SNew(STextBlock).Text_Lambda([Self](){return FText::FromString(Self.IsValid()?SlotName(Self->SelectedSlot)+TEXT(" appearance"):FString());}));
+    Add(SNew(SACEPluginText).Text_Lambda([Self](){return FText::FromString(Self.IsValid()?SlotName(Self->SelectedSlot)+TEXT(" appearance"):FString());}));
     TSharedPtr<SSearchableComboBox> Combo;
     TSharedPtr<TArray<TSharedPtr<FString>>> Options=MakeShared<TArray<TSharedPtr<FString>>>();ComboOptions=Options;
     TSharedPtr<TMap<TSharedPtr<FString>,TSharedPtr<FJsonObject>>> Items=MakeShared<TMap<TSharedPtr<FString>,TSharedPtr<FJsonObject>>>();ComboItems=Items;
@@ -231,21 +232,21 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakePaperdollPanel()
         .OnSelectionChanged_Lambda([Self,Items](TSharedPtr<FString> O,ESelectInfo::Type Info)
             {if(Self.IsValid()&&Info!=ESelectInfo::OnNavigation)Self->SelectCatalogItem(Items->FindRef(O));})
         [SNew(SHorizontalBox)+SHorizontalBox::Slot().AutoWidth().Padding(4)[MakeCatalogIcon(SelectedItem,48)]
-            +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(STextBlock).AutoWrapText(true).Text_Lambda([Self](){if(!Self.IsValid())return FText();auto* Selected=Self->SlotSelections.Find(Self->SelectedSlot);
+            +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)[SNew(SACEPluginText).AutoWrapText(true).Text_Lambda([Self](){if(!Self.IsValid())return FText();auto* Selected=Self->SlotSelections.Find(Self->SelectedSlot);
             return FText::FromString(Selected?Text(*Selected,TEXT("name")):Self->SlotOptions.IsEmpty()?TEXT("No local candidates for this slot"):TEXT("Choose an item - type to search..."));})]]);
     ItemCombo=Combo;SelectSlot(SelectedSlot);
-    Add(SNew(SCheckBox).IsChecked_Lambda([Self](){return Self.IsValid()&&Self->bShowModelVariants?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+    Add(SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).IsChecked_Lambda([Self](){return Self.IsValid()&&Self->bShowModelVariants?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
         .OnCheckStateChanged_Lambda([Self](ECheckBoxState State){if(Self.IsValid()){Self->bShowModelVariants=State==ECheckBoxState::Checked;Self->SelectSlot(Self->SelectedSlot);}})
         [PaperdollLabel(TEXT("Include unnamed model variants"))]);
-    Add(SNew(STextBlock).AutoWrapText(true).Text_Lambda([Self](){if(!Self.IsValid())return FText();auto* Selected=Self->SlotSelections.Find(Self->SelectedSlot);
+    Add(SNew(SACEPluginText).AutoWrapText(true).Text_Lambda([Self](){if(!Self.IsValid())return FText();auto* Selected=Self->SlotSelections.Find(Self->SelectedSlot);
         if(Selected)return FText::FromString(Self->SourceLabel+TEXT(" ")+Text(*Selected,TEXT("sourceSlot"))+TEXT(" → AC ")+SlotName(Self->SelectedSlot)+TEXT("\n")+Text(*Selected,TEXT("reason")));
         return FText::FromString(Self->SelectedSlot==TEXT("weapon")||Self->SelectedSlot==TEXT("offhand")?TEXT("Weapons, wands and unusual held objects can use an AC hand attachment. Equip the matching AC item; use Fit to adjust orientation."):
             Self->IsBodySlot(Self->SelectedSlot)?TEXT("Armor follows your animated body and replaces covered AC clothing. Use Fit to adjust placement."):TEXT("This slot needs a skinned clothing adapter. Only successfully converted appearances are listed."));}));
     Add(Button(TEXT("Prepare model preview"),TEXT("preview")));
-    Add(SNew(SButton).ContentPadding(10).IsEnabled_Lambda([Self](){if(!Self.IsValid()||Self->ToolProcess.IsValid())return false;
+    Add(SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).ContentPadding(10).IsEnabled_Lambda([Self](){if(!Self.IsValid()||Self->ToolProcess.IsValid())return false;
         return true;})
         .OnClicked_Lambda([Self](){if(Self.IsValid())Self->QueueRequest(TEXT("apply-outfit"));return FReply::Handled();})[PaperdollLabel(TEXT("Apply outfit"))]);
-    Add(SNew(SButton).ContentPadding(6).IsEnabled_Lambda([Self](){return Self.IsValid()&&!Self->ToolProcess.IsValid()&&(Self->SelectedSlot==TEXT("weapon")||Self->SelectedSlot==TEXT("offhand")||Self->IsBodySlot(Self->SelectedSlot));})
+    Add(SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).ContentPadding(6).IsEnabled_Lambda([Self](){return Self.IsValid()&&!Self->ToolProcess.IsValid()&&(Self->SelectedSlot==TEXT("weapon")||Self->SelectedSlot==TEXT("offhand")||Self->IsBodySlot(Self->SelectedSlot));})
         .OnClicked_Lambda([Self](){if(Self.IsValid()){Self->SlotSelections.Remove(Self->SelectedSlot);Self->Tell(TEXT("Slot cleared from draft. Apply outfit to save your changes."));}return FReply::Handled();})[PaperdollLabel(TEXT("Clear selected slot from draft"))]);
     auto FitBody=SNew(SVerticalBox);
     FitBody->AddSlot().AutoHeight()[PaperdollLabel(TEXT("Adjust the selected slot only. Changes apply for this session; reloading restores the converter's mount."))];
@@ -263,15 +264,15 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakePaperdollPanel()
     Add(SNew(SExpandableArea).InitiallyCollapsed(true).HeaderContent()[PaperdollLabel(TEXT("Fit selected appearance"))].BodyContent()[FitBody]);
     Add(SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1)[Button(TEXT("Discard changes / reload saved outfit"),TEXT("reload"))]
         +SHorizontalBox::Slot().FillWidth(1).Padding(4,0)[Button(TEXT("Restore AC appearance / cancel"),TEXT("off"))]);
-    Add(SNew(STextBlock).AutoWrapText(true).Text_Lambda([Self](){return FText::FromString(Self.IsValid()?Self->CatalogStatus:FString());}));
+    Add(SNew(SACEPluginText).AutoWrapText(true).Text_Lambda([Self](){return FText::FromString(Self.IsValid()?Self->CatalogStatus:FString());}));
     auto Advanced=SNew(SVerticalBox);
     for(const auto& Field:Fields)
     {
         const FString Key=Text(Field,TEXT("key"));Advanced->AddSlot().AutoHeight().Padding(2)[PaperdollLabel(Text(Field,TEXT("label"),Key))];
-        Advanced->AddSlot().AutoHeight().Padding(2)[SNew(SEditableTextBox).Text_Lambda([Self,Key](){return FText::FromString(Self.IsValid()?Self->Inputs.FindRef(Key):FString());})
+        Advanced->AddSlot().AutoHeight().Padding(2)[SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Text_Lambda([Self,Key](){return FText::FromString(Self.IsValid()?Self->Inputs.FindRef(Key):FString());})
             .OnTextChanged_Lambda([Self,Key](const FText& V){if(Self.IsValid())Self->Inputs[Key]=V.ToString();})];
     }
-    Advanced->AddSlot().AutoHeight().Padding(4)[SNew(SButton).IsEnabled_Lambda([Self](){return Self.IsValid()&&!Self->ToolProcess.IsValid();})
+    Advanced->AddSlot().AutoHeight().Padding(4)[SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).IsEnabled_Lambda([Self](){return Self.IsValid()&&!Self->ToolProcess.IsValid();})
         .OnClicked_Lambda([Self](){if(Self.IsValid()){Self->SlotSelections.Remove(Self->SelectedSlot);Self->QueueRequest(TEXT("convert"));}return FReply::Handled();})[PaperdollLabel(TEXT("Convert manual FileDataIDs"))]];
     Add(SNew(SExpandableArea).InitiallyCollapsed(true).HeaderContent()[PaperdollLabel(TEXT("Advanced local source / manual conversion"))].BodyContent()[Advanced]);
     return Body;

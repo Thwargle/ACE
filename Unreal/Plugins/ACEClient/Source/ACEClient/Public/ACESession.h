@@ -81,6 +81,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
     friend class FACEPluginCompanionTest;
     friend class FACEPluginPublicAPITest;
 	friend class FACEItemToolsTest;
+    friend class FACELedgerTest;
     friend class FACEPluginRampRouteTest;
 	friend class FACEDeferredWorldAppearanceTest;
 	friend class FACEVRObserverProtocolTest;

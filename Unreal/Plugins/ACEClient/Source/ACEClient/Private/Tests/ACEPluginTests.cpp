@@ -426,6 +426,8 @@ bool FACEPluginHostTest::RunTest(const FString&)
     auto* Ui=GI->GetSubsystem<UACEClientSubsystem>()->GetUIElementManager();
     Ui->SetUiLocked(false);
     TestTrue(TEXT("Global unlock icon overrides retired pinned map lock preference"),H->IsWaypointMapUnlocked());
+    H->SetWaypointOption(TEXT("locked"),true);
+    TestTrue(TEXT("Global unlock overrides retired arrow lock preference"),H->IsWaypointUnlocked());
     Ui->SetUiLocked(true);
     H->SavePluginWindowPosition(TEXT("waypoint.dungeon"),FVector2D(800,100));
     H->SavePluginWindowPosition(TEXT("waypoint.dungeon.size"),FVector2D(300,300));
@@ -439,6 +441,7 @@ bool FACEPluginHostTest::RunTest(const FString&)
         H->SavePluginWindowPosition(TEXT("waypoint.arrow"),FVector2D(2100,800));
         H->SavePluginWindowPosition(TEXT("waypoint.dungeon"),FVector2D(1800,700));
         auto LoginDock=SNew(SACEPluginDesktop).Host(H);H->DesktopDock=LoginDock;
+        Ui->SetQuickShowUi(true);
         for(const TCHAR* Id:{TEXT("waypoint.arrow"),TEXT("waypoint.dungeon")})
         {
             auto& Window=LoginDock->Windows[Id];const auto Saved=H->GetPluginWindowPosition(Id,FVector2D::ZeroVector);
@@ -451,6 +454,7 @@ bool FACEPluginHostTest::RunTest(const FString&)
             LoginDock->Move(Id,FVector2D(-20,30),false); // Logout before mouse-up.
         }
         LoginDock->Resize(TEXT("waypoint.dungeon"),FVector2D(40,50),false);
+        Ui->SetQuickShowUi(false);
         H->RemoveDesktopDock();
         FString DiskSettings;TestTrue(TEXT("Overlay settings are written to disk"),FFileHelper::LoadFileToString(DiskSettings,*(Root/TEXT("settings.json"))));
         H->Settings=Json(*DiskSettings);
@@ -527,20 +531,24 @@ bool FACEPluginHostTest::RunTest(const FString&)
         TestEqual(TEXT("Minimizing retains expanded size"),Bar.Size,Expanded);
         TestTrue(TEXT("Minimizing leaves automation and other windows untouched"),P->Running&&Dock->IsOpen(TEXT("monitor")));
         Dock->Move(TEXT("__bar"),FVector2D(4000,4000),false);
-        TestEqual(TEXT("Compact handle can reach the bottom right without its hidden body blocking movement"),Bar.Position,Dock->ViewSize-FVector2D(62,18));
+        TestEqual(TEXT("Compact handle can reach the bottom right without its hidden body blocking movement"),Bar.Position,Dock->ViewSize-FVector2D(38,18));
         Dock->SaveOverlayLayout(); // Logout during a drag also persists the bar.
         FString Saved;FFileHelper::LoadFileToString(Saved,*(Root/TEXT("settings.json")));
         H->Settings=Json(*Saved);auto Restored=SNew(SACEPluginDesktop).Host(H);
         TestTrue(TEXT("Collapsed state survives settings reload"),H->IsPluginBarMinimized());
         TestEqual(TEXT("Collapsed position survives dock recreation"),Restored->Windows[TEXT("__bar")].Position,Bar.Position);
         H->SetPluginBarMinimized(false);
-        TestEqual(TEXT("Expanding keeps saved position even when layout fits above the bottom edge"),Bar.Position,Dock->ViewSize-FVector2D(62,18));
+        TestEqual(TEXT("Expanding keeps saved position even when layout fits above the bottom edge"),Bar.Position,Dock->ViewSize-FVector2D(38,18));
         TestTrue(TEXT("Expanded body fits onscreen"),Bar.Slot->GetOffset().Top+Bar.Slot->GetOffset().Bottom<=Dock->ViewSize.Y);
         Bar.Position=Initial;Dock->Layout(Bar);Dock->Move(TEXT("__bar"),FVector2D::ZeroVector,true);
         Ui->SetUiLocked(true);
     }
     P->Running=false;Dock->Toggle(TEXT("ucm"));
     TestTrue(TEXT("Second click reopens its existing window"),Dock->IsOpen(TEXT("ucm")));
+    const auto LockedSize=Dock->Windows[TEXT("ucm")].Size;
+    Dock->Resize(TEXT("ucm"),FVector2D(-300,-150),true);
+    TestEqual(TEXT("Shared UI lock prevents plugin resizing"),Dock->Windows[TEXT("ucm")].Size,LockedSize);
+    Ui->SetUiLocked(false);
     Dock->Resize(TEXT("ucm"),FVector2D(-300,-150),true);
     TestTrue(TEXT("Window resize respects minimum bounds"),Dock->Windows[TEXT("ucm")].Size.X>=400);
     TestEqual(TEXT("Window size is persisted"),H->GetPluginWindowPosition(TEXT("ucm.size"),FVector2D::ZeroVector),Dock->Windows[TEXT("ucm")].Size);
@@ -558,13 +566,44 @@ bool FACEPluginHostTest::RunTest(const FString&)
         {
             if(Widget->GetTag().ToString().StartsWith(TEXT("PluginOpen.")))++OpenButtons;
             if(Widget->GetTypeAsString()==TEXT("SSlider")||Widget->GetTypeAsString()==TEXT("SMultiLineEditableTextBox"))++EditorControls;
-            if(Widget->GetTypeAsString()==TEXT("STextBlock")&&StaticCastSharedRef<STextBlock>(Widget)->GetText().ToString()==TEXT("Loot Profile Editor"))++LootTitles;
+            if((Widget->GetTypeAsString()==TEXT("STextBlock")||Widget->GetTypeAsString()==TEXT("SACEPluginText"))&&StaticCastSharedRef<STextBlock>(Widget)->GetText().ToString()==TEXT("Loot Profile Editor"))++LootTitles;
             auto* Children=Widget->GetChildren();for(int32 I=0;I<Children->Num();++I)InspectManager(Children->GetChildAt(I));
         };
         InspectManager(Panel);
         TestEqual(TEXT("Manager provides an explicit open control for every plugin"),OpenButtons,H->Plugins.Num());
         TestEqual(TEXT("Loot editor is listed once rather than embedded in manager"),LootTitles,1);
         TestEqual(TEXT("Manager does not build plugin editors until requested"),EditorControls,0);
+        auto VisibleText=[](const TSharedRef<SWidget>& Root)
+        {
+            TArray<FString> Labels;
+            TFunction<void(TSharedRef<SWidget>)> Visit=[&](TSharedRef<SWidget> W)
+            {
+                if(!W->GetVisibility().IsVisible())return;
+                if(W->GetType()==TEXT("SACEPluginText")||W->GetType()==TEXT("STextBlock"))Labels.Add(StaticCastSharedRef<STextBlock>(W)->GetText().ToString());
+                auto* Children=W->GetChildren();for(int32 I=0;I<Children->Num();++I)Visit(Children->GetChildAt(I));
+            };Visit(Root);return Labels;
+        };
+        for(const TCHAR* Id:{TEXT("ucm"),TEXT("looteditor"),TEXT("itemtools"),TEXT("waypoint"),TEXT("waypoint.map"),TEXT("ucmmicro"),TEXT("ucm.log"),TEXT("supplyledger"),TEXT("huntledger")})
+        {
+            const auto Labels=VisibleText(H->MakePanel(Id));
+            for(const TCHAR* Title:{TEXT("UCM"),TEXT("Loot Profile Editor"),TEXT("Item Tools"),TEXT("Waypoint"),TEXT("Explore Dereth"),TEXT("UCM Micro"),TEXT("UCM Log"),TEXT("Supply Ledger"),TEXT("Hunt Ledger")})
+                TestFalse(FString(Id)+TEXT(" has no duplicate content heading: ")+Title,Labels.Contains(Title));
+            if(FString(Id)==TEXT("ucm"))TestTrue(TEXT("Compact UCM header keeps setup and Start"),Labels.Contains(TEXT("Start"))&&Labels.Contains(TEXT("Setup: ")+P->ProfileName));
+            if(FString(Id)==TEXT("looteditor"))TestTrue(TEXT("Loot editor keeps its tabs"),Labels.Contains(TEXT("Loot rules"))&&Labels.Contains(TEXT("Vendors")));
+            if(FString(Id)==TEXT("itemtools"))TestTrue(TEXT("Item Tools keeps stop and task controls"),Labels.Contains(TEXT("Stop"))&&Labels.Contains(TEXT("Give")));
+        }
+        TestTrue(TEXT("Embedded UCM retains a heading without a frame"),VisibleText(H->MakeUCMPanel()).Contains(TEXT("UCM")));
+        TestTrue(TEXT("Embedded loot editor retains its heading"),VisibleText(H->MakeUCMPanel(TEXT("Standalone loot"))).Contains(TEXT("Loot Profile Editor")));
+        TestTrue(TEXT("Embedded Item Tools retains its heading"),VisibleText(H->MakeItemToolsPanel()).Contains(TEXT("Item Tools")));
+        TestTrue(TEXT("Embedded map retains its heading"),VisibleText(H->MakeWaypointPanel(true)).Contains(TEXT("Explore Dereth")));
+        auto MapPanel=H->MakePanel(TEXT("waypoint.map"));TSharedPtr<SButton> Switch;
+        TFunction<void(TSharedRef<SWidget>)> FindMapSwitch=[&](TSharedRef<SWidget> W)
+        {
+            if(W->GetType()==TEXT("SButton")&&VisibleText(W).Contains(TEXT("Waypoint settings")))Switch=StaticCastSharedRef<SButton>(W);
+            auto* Children=W->GetChildren();for(int32 I=0;I<Children->Num();++I)FindMapSwitch(Children->GetChildAt(I));
+        };FindMapSwitch(MapPanel);
+        if(TestTrue(TEXT("Map settings switch is available"),Switch.IsValid()))
+        {Switch->SimulateClick();TestFalse(TEXT("Switching map to settings does not reintroduce a heading"),VisibleText(MapPanel).Contains(TEXT("Waypoint")));}
         FReadSurfaceDataFlags ReadFlags;ReadFlags.SetLinearToGamma(false);
         auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(740,530),TF_Bilinear,true);
         for(int Pass=0;Pass<3;++Pass){Renderer.DrawWidget(Target,Panel,FVector2D(740,530),0);FlushRenderingCommands();}
@@ -641,7 +680,7 @@ bool FACEPluginHostTest::RunTest(const FString&)
         }
         for(bool Map:{false,true})for(int Width:{780,450})
         {
-            const FVector2D Size(Width,760);auto Widget=H->MakeWaypointPanel(Map);
+            const FVector2D Size(Width,760);auto Widget=H->MakeWaypointPanel(Map,false,false);
             auto* WaypointTarget=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
             for(int Pass=0;Pass<3;++Pass){Renderer.DrawWidget(WaypointTarget,Widget,Size,0);FlushRenderingCommands();}
             Pixels.Reset();WaypointTarget->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,ReadFlags);
@@ -654,7 +693,7 @@ bool FACEPluginHostTest::RunTest(const FString&)
         {
             const int Height=Page==TEXT("Loot editor")?1800:(Page==TEXT("Recovery")||Page==TEXT("Combat"))?2400:760;
             if(Page==TEXT("Vendors"))P->Profile->SetArrayField(TEXT("vendor_rules"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"server":"Test","vendor_name":"Master Arcanist","vendor_wcid":2,"item_name":"Platinum Scarab","item_wcid":3,"quantity":100})")))});
-            auto PageWidget=H->MakeUCMPanel(Page);const FVector2D Size(Width,Height);
+            auto PageWidget=H->MakeUCMPanel(Page,false);const FVector2D Size(Width,Height);
             auto* PageTarget=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
             for(int Pass=0;Pass<3;++Pass){Renderer.DrawWidget(PageTarget,PageWidget,Size,0);FlushRenderingCommands();}
             Pixels.Reset();PageTarget->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,ReadFlags);

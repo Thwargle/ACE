@@ -6,6 +6,9 @@
 #include "Interfaces/IPluginManager.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "Mods/ACEPluginVM.h"
+#include "Mods/ACEPluginPresentation.h"
+#include "Mods/ACEPluginDesktop.h"
+#include "Widgets/Text/STextBlock.h"
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
 #include "Engine/Engine.h"
@@ -37,10 +40,12 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
     H->StorageRoot=Root;H->Settings=MakeShared<FJsonObject>();
     ON_SCOPE_EXIT {GI->Shutdown();GEngine->DestroyWorldContext(W);W->DestroyWorld(false);IFileManager::Get().DeleteDirectory(*Root,false,true);};
     const FString Installed=Root/TEXT("Installed/thirdparty");IFileManager::Get().MakeDirectory(*Installed,true);
-    FFileHelper::SaveStringToFile(TEXT(R"({"api":2,"mode":"automation","policy":"ucm","id":"thirdparty","name":"API Workbench","permissions":["cast","combat","navigation","inventory","loot","fellowship","confirm","say","chat","state","ui","markers","waypoint","messaging","commands","profiles"]})"),*(Installed/TEXT("plugin.json")));
+    FFileHelper::SaveStringToFile(TEXT(R"({"api":2,"mode":"automation","policy":"ucm","id":"thirdparty","name":"API Workbench","presentation":{"title":"Quest Tracker","icon":"tracker.png"},"permissions":["cast","combat","navigation","inventory","loot","fellowship","confirm","say","chat","state","ui","markers","waypoint","messaging","commands","profiles"]})"),*(Installed/TEXT("plugin.json")));
     FFileHelper::SaveStringToFile(TEXT(R"({"combat":"off","buffing":false,"recovery":false,"looting":false,"navigation":false})"),*(Installed/TEXT("default.json")));
     FFileHelper::SaveStringToFile(TEXT("assert(type(builtinpolicy)=='function' and type(builtinprofile)=='table');return function(s,p) return {status='custom'} end"),*(Installed/TEXT("main.lua")));
     H->Discover();auto P=H->Find(TEXT("thirdparty"));if(!TestTrue(TEXT("API 2 discovered"),P&&P->Api==2&&P->IsPolicy()))return false;
+    TestEqual(TEXT("Manifest title is visible before starting Lua"),P->DisplayTitle(),FString(TEXT("Quest Tracker")));
+    TestEqual(TEXT("Manifest supplies custom toolbar artwork"),P->DisplayIcon(),FString(TEXT("tracker.png")));
     C->Session=MakeShared<FACESession>();auto& Session=*C->Session;Session.State=EACESessionState::InWorld;Session.PlayerGuid=0x50000001;Session.ServerName=TEXT("Public API Test");
     Session.PlayerPosition.CellId=0x7D64000D;Session.PlayerPosition.Location=FVector(34,104,12);Session.PlayerVitals.bValid=true;Session.PlayerVitals.Health=100;Session.PlayerVitals.MaxHealth=100;
     FACEWorldObject Player;Player.Guid=Session.PlayerGuid;Player.Name=TEXT("API character");Player.Position=Session.PlayerPosition;Player.bIsPlayer=true;Session.WorldObjects.Add(Player.Guid,Player);
@@ -63,6 +68,31 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
         TestEqual(TEXT("Public snapshot exposes remaining chat"),Batch->GetNumberField(TEXT("chat_pending")),double(300-QuestLine));
     }
     FString Error;TSharedPtr<FJsonObject> Output;
+    FACEPluginVM Presentation;
+    TestTrue(TEXT("Lua presentation script loads"),Presentation.Load(TEXT("return function() return {presentation={title='Quest Tracker - 12 kills',icon='active.png'}} end"),Error));
+    TestTrue(TEXT("Lua decoder exposes presentation output"),Presentation.Step(Snapshot,P->Profile,Output,Error));
+    TestTrue(TEXT("Lua presentation applies"),Output&&H->ApplyPublicOutput(*P,Output,Error));
+    TestEqual(TEXT("Lua overrides the title"),P->DisplayTitle(),FString(TEXT("Quest Tracker - 12 kills")));
+    TestEqual(TEXT("Lua overrides the toolbar icon"),P->DisplayIcon(),FString(TEXT("active.png")));
+    TestTrue(TEXT("Other outputs retain presentation"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"status":"Counting"})")),Error));
+    TestEqual(TEXT("Omitted presentation is unchanged"),P->DisplayTitle(),FString(TEXT("Quest Tracker - 12 kills")));
+    TestFalse(TEXT("Icon path traversal refused"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"title":"Bad","icon":"../secret.png"}})")),Error));
+    TestEqual(TEXT("Invalid presentation is atomic"),P->DisplayTitle(),FString(TEXT("Quest Tracker - 12 kills")));
+    P->Permissions.Remove(TEXT("ui"));
+    TestFalse(TEXT("Runtime presentation requires UI permission"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"title":"Bad"}})")),Error));P->Permissions.Add(TEXT("ui"));
+    TestTrue(TEXT("Empty presentation script loads"),Presentation.Load(TEXT("return function() return {presentation={}} end"),Error));
+    TestTrue(TEXT("Empty Lua presentation remains an object"),Presentation.Step(Snapshot,P->Profile,Output,Error));
+    TestTrue(TEXT("Empty presentation restores manifest defaults"),Output&&H->ApplyPublicOutput(*P,Output,Error));
+    TestEqual(TEXT("Default title restored"),P->DisplayTitle(),FString(TEXT("Quest Tracker")));
+    IFileManager::Get().MakeDirectory(*(Installed/TEXT("images")),true);
+    TArray<FColor> IconPixels;IconPixels.Init(FColor(240,170,35),32*16);TArray64<uint8> IconPng;
+    FImageUtils::PNGCompressImageArray(32,16,IconPixels,IconPng);FFileHelper::SaveArrayToFile(IconPng,*(Installed/TEXT("images/tracker.png")));
+    P->Images=MakeShared<FACEPluginImageCache>();auto* IconTexture=P->Images->Load(P->Directory,P->DisplayIcon());
+    TestTrue(TEXT("Plugin PNG loads with original proportions"),IconTexture&&IconTexture->GetSizeX()==32&&IconTexture->GetSizeY()==16);
+    TestTrue(TEXT("Toolbar and UI share decoded textures"),IconTexture&&P->Images->Load(P->Directory,P->DisplayIcon())==IconTexture);
+    TestNull(TEXT("Missing icon falls back without breaking plugin"),P->Images->Load(P->Directory,TEXT("missing.png")));
+    TestNull(TEXT("Windows alternate streams cannot be icon paths"),P->Images->Load(P->Directory,TEXT("tracker.png:evil.png")));
+    Error.Reset();
     const auto UI=ParseAPI(TEXT(R"JSON({"state":{"kills":12},"ui":[
       {"id":"title","text":"Kill tasks & automation","size":24,"bold":true},
       {"id":"tabs","type":"tabs","children":[{"id":"tracker","type":"column","text":"Tracker","children":[
@@ -145,6 +175,34 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
     {
         H->ApplyPublicOutput(*P,UI,Error);FWidgetRenderer Renderer(false,true);auto Panel=H->MakePanel(P->Id);const FVector2D Size(740,880);auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
         for(int I=0;I<3;++I){Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
+        TestTrue(TEXT("Title can change with the window already open"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"title":"Live quest progress"}})")),Error));
+        for(int32 I=0;I<3;++I){++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
+        int32 TitleCount=0;TFunction<void(TSharedRef<SWidget>)> CountTitles=[&](TSharedRef<SWidget> Widget)
+        {
+            if(!Widget->GetVisibility().IsVisible())return;
+            if(Widget->GetType()==TEXT("SACEPluginText")&&StaticCastSharedRef<STextBlock>(Widget)->GetText().ToString()==TEXT("Live quest progress"))++TitleCount;
+            auto* Children=Widget->GetChildren();for(int32 I=0;I<Children->Num();++I)CountTitles(Children->GetChildAt(I));
+        };CountTitles(Panel);TestEqual(TEXT("Standalone plugin content does not duplicate its window title"),TitleCount,0);
+        H->SetWaypointOption(TEXT("arrow"),false);H->SetWaypointOption(TEXT("dungeon_overlay"),false);
+        H->SavePluginWindowPosition(P->Id,FVector2D(50,10));H->SavePluginWindowPosition(P->Id+TEXT(".size"),FVector2D(680,860));
+        auto Desktop=SNew(SACEPluginDesktop).Host(H);Desktop->Toggle(P->Id);
+        for(int32 I=0;I<3;++I){++GFrameCounter;Renderer.DrawWidget(Target,Desktop,Size,0);FlushRenderingCommands();}
+        TitleCount=0;CountTitles(Desktop);TestEqual(TEXT("Plugin window shows its title exactly once in the frame"),TitleCount,1);
+        H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"title":"Updated tracker title"}})")),Error);
+        for(int32 I=0;I<3;++I){++GFrameCounter;Renderer.DrawWidget(Target,Desktop,Size,0);FlushRenderingCommands();}
+        TitleCount=0;CountTitles(Desktop);TestEqual(TEXT("Open frame no longer displays the old title"),TitleCount,0);
+        H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"title":"Live quest progress"}})")),Error);
+        for(int32 I=0;I<3;++I){++GFrameCounter;Renderer.DrawWidget(Target,Desktop,Size,0);FlushRenderingCommands();}
+        TitleCount=0;CountTitles(Desktop);TestEqual(TEXT("Title bar updates live without adding a content heading"),TitleCount,1);
+        TArray<FColor> DesktopPixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(DesktopPixels);
+        TArray64<uint8> DesktopPng;FImageUtils::PNGCompressImageArray(740,880,DesktopPixels,DesktopPng);
+        FFileHelper::SaveArrayToFile(DesktopPng,*(FPaths::ProjectSavedDir()/TEXT("PublicAPI-window.png")));
+        auto Badge=SNew(SACEPluginBadge).Plugin(P);Renderer.DrawWidget(Target,Badge,FVector2D(26,26),0);FlushRenderingCommands();
+        TestEqual(TEXT("Custom plugin icon uses aspect-preserving scale widget"),Badge->GetChildren()->GetChildAt(0)->GetChildren()->GetChildAt(0)->GetType(),FName(TEXT("SScaleBox")));
+        H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"icon":"missing.png"}})")),Error);
+        ++GFrameCounter;Renderer.DrawWidget(Target,Badge,FVector2D(26,26),0);FlushRenderingCommands();
+        TestEqual(TEXT("Unavailable image displays native plugin emblem"),Badge->GetChildren()->GetChildAt(0)->GetChildren()->GetChildAt(0)->GetType(),FName(TEXT("SACEPluginIcon")));
+        Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();
         TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
         TArray64<uint8> Png;FImageUtils::PNGCompressImageArray(740,880,Pixels,Png);FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("PublicAPI-panel.png")));Target->ReleaseResource();
     }

@@ -75,7 +75,8 @@
       "waypoint_map_markers",
       "waypoint_target",
       "local_messages",
-      "native_commands"
+      "native_commands",
+      "presentation"
     ],
     "limits": {
       "tick_hz": 2,
@@ -132,7 +133,8 @@
       "messages",
       "requests",
       "profile_patch",
-      "runtime_route"
+      "runtime_route",
+      "presentation"
     ],
     "ui_controls": [
       "text",
@@ -670,5 +672,22 @@
       "vendor_wcid",
       "world_name"
     ]
+  },
+  "presentation": {
+    "manifest": "presentation",
+    "output": "presentation",
+    "permission": "ui (runtime only)",
+    "fields": {
+      "title": "single-line string; max 80 characters; empty uses manifest name",
+      "icon": "PNG filename in plugin images/; max 96 characters; empty uses native emblem"
+    },
+    "limits": {
+      "compressed_bytes": 2097152,
+      "max_dimension": 1024,
+      "cached_images": 32,
+      "decoded_bytes": 16777216
+    },
+    "reset": "Empty object restores manifest defaults; omitted output retains runtime overrides",
+    "aspect": "fit, centered, 26-pixel icon area"
   }
 }

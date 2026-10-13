@@ -13,6 +13,40 @@ bool FACEUCMSchedulingTest::RunTest(const FString&)
  FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
  auto Snapshot=[&](){return Json(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"action_serial":0,"action_error":0,"container":0,"teleport_sequence":1,"position":{"cell":30998795,"x":30,"y":-34,"z":0},"spells":[],"targets":[],"inventory":[{"id":99,"wcid":99,"count":1,"type":1,"equipped":true,"identified":true,"can_wield":true,"weapon_skill":47,"damage":10,"name":"Sword"},{"id":51,"wcid":51,"name":"Potion","type":32,"identified":true,"usable":true,"count":5,"boost_vital":2,"boost":50}]})"));};
  auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+ for(bool IdlePeace:{false,true})for(bool LootFirst:{false,true})for(bool Open:{false,true})
+ {
+  FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot();
+  auto P=Json(TEXT(R"({"buffing":false,"recovery":true,"combat":"melee","looting":true,"loot_rules":[{"action":"keep"}]})"));
+  P->SetBoolField(TEXT("idle_peace"),IdlePeace);P->SetBoolField(TEXT("loot_priority"),LootFirst);
+  S->SetNumberField(TEXT("combat_mode"),8);
+  S->SetArrayField(TEXT("corpses"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":700,"name":"Corpse","distance":1,"identified":true})")))});
+  if(Open){S->SetNumberField(TEXT("container"),700);S->SetArrayField(TEXT("contents"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":701,"wcid":701,"name":"Scroll","count":1,"identified":true})")))});}
+  auto I=Step(VM,S,P);
+  TestEqual(TEXT("Idle peace precedes corpse approach and pickup only when enabled"),I->GetStringField(TEXT("action")),FString(IdlePeace?TEXT("combat_mode"):Open?TEXT("loot"):TEXT("open_corpse")));
+  if(IdlePeace)
+  {
+   TestEqual(TEXT("Clear area requests peace"),I->GetNumberField(TEXT("mode")),1.);
+   S->SetNumberField(TEXT("combat_mode"),1);
+   TestEqual(TEXT("Confirmed peace continues looting"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(Open?TEXT("loot"):TEXT("open_corpse")));
+  }
+ }
+ for(bool CombatEnabled:{false,true})for(bool Ignored:{false,true})
+ {
+  FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot();
+  auto P=Json(TEXT(R"({"buffing":false,"recovery":true,"combat":"melee","looting":true,"idle_peace":true,"loot_priority":true,"loot_rules":[{"action":"keep"}]})"));
+  if(!CombatEnabled)P->SetStringField(TEXT("combat"),TEXT("off"));
+  if(Ignored)P->SetArrayField(TEXT("ignore_monsters"),{MakeShared<FJsonValueString>(TEXT("Rat"))});
+  S->SetNumberField(TEXT("combat_mode"),8);
+  S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":500,"name":"Rat","distance":1,"identified":true,"line_of_sight":true})")))});
+  S->SetArrayField(TEXT("corpses"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":700,"name":"Corpse","distance":1,"identified":true})")))});
+  TestEqual(TEXT("Nearby monster keeps combat stance during priority/manual-combat looting"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("open_corpse")));
+ }
+ {
+  FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot();
+  auto P=Json(TEXT(R"({"buffing":false,"recovery":true,"combat":"melee","looting":true,"idle_peace":true})"));
+  S->SetNumberField(TEXT("combat_mode"),8);S->SetNumberField(TEXT("health"),10);
+  TestEqual(TEXT("Healing remains ahead of idle peace and looting"),Step(VM,S,P)->GetNumberField(TEXT("item")),51.);
+ }
  // Full inventory suspends corpse pickup until inventory changes, without
  // periodic failed transfers or suppressing combat, recovery and navigation.
  {

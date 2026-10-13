@@ -1,4 +1,8 @@
 #include "Mods/ACEPluginDesktop.h"
+#include "Mods/ACEPluginPresentation.h"
+#include "Mods/ACEPluginStyle.h"
+#include "Mods/ACEPluginIcon.h"
+#include "Widgets/Images/SImage.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
@@ -17,32 +21,25 @@
 namespace
 {
     const FString BarId = TEXT("__bar");
-    const FSlateBrush& FrameBrush()
-    {
-        static const FSlateRoundedBoxBrush Brush(FLinearColor(.025f,.035f,.045f,1),6.f,FLinearColor(.18f,.35f,.46f,1),1.f);
-        return Brush;
-    }
-    const FButtonStyle& DockButtonStyle()
-    {
-        static const FButtonStyle Style = FButtonStyle()
-            .SetNormal(FSlateRoundedBoxBrush(FLinearColor(.06f,.07f,.08f,1),2.f,FLinearColor(.4f,.34f,.2f,1),1.f))
-            .SetHovered(FSlateRoundedBoxBrush(FLinearColor(.17f,.19f,.22f,1),2.f,FLinearColor(1,.8f,.3f,1),2.f))
-            .SetPressed(FSlateRoundedBoxBrush(FLinearColor(.28f,.22f,.08f,1),2.f));
-        return Style;
-    }
+    const FSlateBrush& FrameBrush(){return FACEPluginStyle::Current()->Frame;}
+    const FButtonStyle& DockButtonStyle(){return FACEPluginStyle::Current()->DockButton;}
+    TSharedRef<SWidget> DockIcon(const FString& Id)
+    {return SNew(SBox).WidthOverride(26).HeightOverride(26)[SNew(SACEPluginIcon).Id(Id)];}
     TSharedRef<STextBlock> Caption(const FString& Text, int32 Size = 12)
-    { return SNew(STextBlock).Text(FText::FromString(Text)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size)); }
+    { return SNew(SACEPluginText).Text(FText::FromString(Text)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size)); }
 
     class SPluginFrame : public SCompoundWidget
     {
     public:
-        SLATE_BEGIN_ARGS(SPluginFrame) : _Frameless(false), _Minimized(false) {}
-            SLATE_ARGUMENT(FString, Title)
+        SLATE_BEGIN_ARGS(SPluginFrame) : _Frameless(false), _CompactWhenLocked(false), _Minimized(false) {}
+            SLATE_ATTRIBUTE(FString, Title)
             SLATE_ARGUMENT(bool, Frameless)
             SLATE_ARGUMENT(TFunction<void(FVector2D,bool)>, Move)
             SLATE_ARGUMENT(TFunction<void(FVector2D,bool)>, Resize)
             SLATE_ARGUMENT(TFunction<void()>, Raise)
             SLATE_ARGUMENT(TFunction<void()>, Close)
+            SLATE_ARGUMENT(bool, CompactWhenLocked)
+            SLATE_ATTRIBUTE(bool, Locked)
             SLATE_ARGUMENT(TFunction<bool()>, CanManipulate)
             SLATE_ATTRIBUTE(bool, Minimized)
             SLATE_ARGUMENT(TFunction<void()>, ToggleMinimized)
@@ -50,7 +47,9 @@ namespace
         SLATE_END_ARGS()
         void Construct(const FArguments& Args)
         {
+            Retail=FACEPluginStyle::Current();
             Move = Args._Move; Resize = Args._Resize; Raise = Args._Raise;
+            Locked=Args._Locked;
             Frameless=Args._Frameless;
             CanManipulate=Args._CanManipulate;
             if(Frameless){ChildSlot[Args._Content.Widget];return;}
@@ -64,19 +63,21 @@ namespace
                 Title->AddSlot().AutoWidth()[SNew(SButton).Tag(TEXT("PluginBarMinimize")).ButtonStyle(&DockButtonStyle()).IsFocusable(false).ContentPadding(FMargin(5,0))
                     .ToolTipText_Lambda([Mini=Args._Minimized](){return FText::FromString(Mini.Get()?TEXT("Expand plugin bar"):TEXT("Minimize plugin bar"));})
                     .OnClicked_Lambda([Toggle=Args._ToggleMinimized](){Toggle();return FReply::Handled();})
-                    [SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Bold",12))
+                    [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Bold",12))
                         .Text_Lambda([Mini=Args._Minimized](){return FText::FromString(Mini.Get()?TEXT("+"):TEXT("-"));})]];
             }
-            else Title->AddSlot().FillWidth(1).VAlign(VAlign_Center)[Caption(Args._Title)];
+            else Title->AddSlot().FillWidth(1).VAlign(VAlign_Center)[SNew(SACEPluginText).Text_Lambda([Title=Args._Title]{return FText::FromString(Title.Get());}).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))];
             if (Args._Close) Title->AddSlot().AutoWidth()[SNew(SButton).IsFocusable(false).ButtonStyle(&DockButtonStyle())
                 .ToolTipText(FText::FromString(TEXT("Hide window (plugin keeps running)")))
                 .OnClicked_Lambda([Close=Args._Close](){Close();return FReply::Handled();})[Caption(TEXT("X"))]];
             ChildSlot[SNew(SBorder).BorderImage(&FrameBrush()).Padding(IsBar?0:3)
                 [SNew(SVerticalBox)
                 +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(IsBar?18:24)
+                    .Tag(Args._CompactWhenLocked?FName(TEXT("LedgerHeader")):FName(NAME_None))
+                    .Visibility_Lambda([Lock=Locked,Ledger=Args._CompactWhenLocked]{return Ledger&&Lock.Get(false)?EVisibility::Collapsed:EVisibility::Visible;})
                     [SNew(SBorder).Tag(IsBar?TEXT("PluginBarHandle"):TEXT("PluginWindowHandle")).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-                    .BorderBackgroundColor(FLinearColor(.035f,.065f,.09f,1)).Padding(IsBar?0:3)
-                    .ToolTipText_Lambda([this](){return FText::FromString(CanManipulate&&!CanManipulate()?TEXT("Unlock the UI to move"):TEXT("Drag to move"));})
+                    .BorderBackgroundColor(FLinearColor(.025f,.012f,.004f,1)).Padding(IsBar?0:3)
+                    .ToolTipText_Lambda([this](){return FText::FromString(CanManipulate&&!CanManipulate()?TEXT("Unlock the UI or hold Quick-show pinned windows to move"):TEXT("Drag to move"));})
                     .Cursor_Lambda([this](){return CanManipulate&&!CanManipulate()?EMouseCursor::Default:EMouseCursor::CardinalCross;})
                     .OnMouseButtonDown_Lambda([this](const FGeometry&, const FPointerEvent& E)
                     {
@@ -86,12 +87,15 @@ namespace
                     })[Title]]]
                 +SVerticalBox::Slot().FillHeight(1)[SNew(SBox).Padding(0,IsBar?0:3)
                     .Visibility_Lambda([Mini=Args._Minimized](){return Mini.Get(false)?EVisibility::Collapsed:EVisibility::Visible;})[Args._Content.Widget]]
-                +SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)[SNew(SBorder).Padding(FMargin(12,2)).Visibility(Resize?EVisibility::Visible:EVisibility::Collapsed)
+                +SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)[SNew(SBorder).Padding(FMargin(12,2)).Visibility_Lambda([this]{return Resize&&(!CanManipulate||CanManipulate())?EVisibility::Visible:EVisibility::Collapsed;})
                     .ToolTipText(FText::FromString(TEXT("Drag to resize"))).Cursor(EMouseCursor::ResizeSouthEast)
-                    .OnMouseButtonDown_Lambda([this](const FGeometry&,const FPointerEvent& E){if(E.GetEffectingButton()!=EKeys::LeftMouseButton)return FReply::Unhandled();Resizing=true;return FReply::Handled().CaptureMouse(SharedThis(this));})[Caption(TEXT("◢"))]]]];
+                    .OnMouseButtonDown_Lambda([this](const FGeometry&,const FPointerEvent& E){if(E.GetEffectingButton()!=EKeys::LeftMouseButton||(CanManipulate&&!CanManipulate()))return FReply::Unhandled();Resizing=true;return FReply::Handled().CaptureMouse(SharedThis(this));})[Caption(TEXT("◢"))]]]];
         }
-        virtual FReply OnPreviewMouseButtonDown(const FGeometry&,const FPointerEvent&) override
-        { if(Raise)Raise();return FReply::Unhandled(); }
+        virtual FReply OnPreviewMouseButtonDown(const FGeometry&,const FPointerEvent& E) override
+        {
+            if(Raise)Raise();
+            return FReply::Unhandled();
+        }
         virtual FReply OnMouseButtonDown(const FGeometry& G,const FPointerEvent& E) override
         {
             if(!Frameless||E.GetEffectingButton()!=EKeys::LeftMouseButton||(CanManipulate&&!CanManipulate()))return FReply::Unhandled();
@@ -116,21 +120,23 @@ namespace
         virtual void OnMouseCaptureLost(const FCaptureLostEvent& E) override
         { if(Dragging)Move(FVector2D::ZeroVector,true);if(Resizing&&Resize)Resize(FVector2D::ZeroVector,true);Dragging=Resizing=false;SCompoundWidget::OnMouseCaptureLost(E); }
     private:
+        TSharedPtr<FACEPluginStyle> Retail;
         bool Dragging=false,Resizing=false,Frameless=false;
         TFunction<void(FVector2D,bool)> Move,Resize;
         TFunction<void()> Raise;
+        TAttribute<bool> Locked;
         TFunction<bool()> CanManipulate;
     };
 }
 
 void SACEPluginDesktop::Construct(const FArguments& Args)
 {
-    Host=Args._Host;
+    Host=Args._Host;FACEPluginStyle::Use(Args._Host);
     SetVisibility(EVisibility::SelfHitTestInvisible);
     SetClipping(EWidgetClipping::ClipToBounds);
     ChildSlot[SAssignNew(Canvas,SConstraintCanvas)];
     FWindow Bar;
-    Bar.Position=Host->GetPluginWindowPosition(BarId,FVector2D(8,80));Bar.Size=FVector2D(62,120);Bar.PluginBar=true;
+    Bar.Position=Host->GetPluginWindowPosition(BarId,FVector2D(8,80));Bar.Size=FVector2D(38,120);Bar.PluginBar=true;
     Bar.Widget=SNew(SPluginFrame)
         .Minimized_Lambda([H=Host](){return H.IsValid()&&H->IsPluginBarMinimized();})
         .ToggleMinimized([H=Host](){if(H.IsValid())H->SetPluginBarMinimized(!H->IsPluginBarMinimized());})
@@ -147,7 +153,17 @@ FVector2D SACEPluginDesktop::DisplaySize(const FWindow& W) const
 {
     if(Host.IsValid())
     {
-        if(W.PluginBar&&Host->IsPluginBarMinimized())return FVector2D(62,18);
+        if(!W.LedgerId.IsEmpty())
+        {
+            auto Size=Host->LedgerSize(W.LedgerId);
+            if(W.LedgerId==TEXT("supplyledger"))
+            {
+                Size.X=W.Size.X;
+                if(W.Size.Y>0)Size.Y=W.Size.Y+(Host->IsPluginBarUnlocked()?68:0);
+            }
+            return Size;
+        }
+        if(W.PluginBar&&Host->IsPluginBarMinimized())return FVector2D(38,18);
         if(W.MapOverlay&&Host->WaypointOption(TEXT("map_minimized"),false))return FVector2D(70,26);
     }
     return W.Size;
@@ -175,6 +191,7 @@ void SACEPluginDesktop::Tick(const FGeometry& G,double Time,float Delta)
         Map->Widget->SetVisibility(!P.IsValid()?EVisibility::Collapsed:EVisibility::Visible);
         Layout(*Map); // Minimize without replacing the saved expanded size.
     }
+    for(auto& Pair:Windows)if(!Pair.Value.LedgerId.IsEmpty())Layout(Pair.Value);
     if(!G.GetLocalSize().Equals(ViewSize))
     {ViewSize=G.GetLocalSize();for(auto& Pair:Windows)Layout(Pair.Value);}
 }
@@ -182,7 +199,7 @@ void SACEPluginDesktop::Move(const FString& Id,FVector2D Delta,bool Save)
 {
     if(auto* W=Windows.Find(Id))
     {
-        if(W->PluginBar&&!Delta.IsNearlyZero()&&(!Host.IsValid()||!Host->IsPluginBarUnlocked()))return;
+        if(!Delta.IsNearlyZero()&&(!Host.IsValid()||!Host->IsPluginBarUnlocked()))return;
         if(!Delta.IsNearlyZero())
         {
             const auto Offset=W->Slot->GetOffset();W->Position=FVector2D(Offset.Left,Offset.Top)+Delta;
@@ -195,16 +212,27 @@ void SACEPluginDesktop::Move(const FString& Id,FVector2D Delta,bool Save)
 void SACEPluginDesktop::SaveOverlayLayout()
 {
     if(!Host.IsValid())return;
-    for(const TCHAR* Id:{TEXT("__bar"),TEXT("waypoint.arrow"),TEXT("waypoint.dungeon")})if(const auto* W=Windows.Find(Id))
+    for(const TCHAR* Id:{TEXT("__bar"),TEXT("waypoint.arrow"),TEXT("waypoint.dungeon"),TEXT("supplyledger"),TEXT("huntledger")})if(const auto* W=Windows.Find(Id))
     {
         Host->SavePluginWindowPosition(Id,W->Position);
-        if(FString(Id)==TEXT("waypoint.dungeon"))Host->SavePluginWindowPosition(FString(Id)+TEXT(".size"),W->Size);
+        if(FString(Id)==TEXT("waypoint.dungeon")||FString(Id)==TEXT("supplyledger"))Host->SavePluginWindowPosition(FString(Id)+TEXT(".size"),W->Size);
     }
 }
 void SACEPluginDesktop::Resize(const FString& Id,FVector2D Delta,bool Save)
 {
+    if(!Delta.IsNearlyZero()&&(!Host.IsValid()||!Host->IsPluginBarUnlocked()))return;
     if(auto* W=Windows.Find(Id))
-    {W->Size+=Delta;const double MinWidth=Id==TEXT("ucmmicro")?240.:Id==TEXT("waypoint.dungeon")?220.:400.;W->Size.X=FMath::Clamp(W->Size.X,MinWidth,FMath::Max(MinWidth,ViewSize.X));const double MinHeight=Id==TEXT("ucmmicro")?290.:Id==TEXT("waypoint.map")?640.:Id==TEXT("waypoint.dungeon")?220.:320.;W->Size.Y=FMath::Clamp(W->Size.Y,MinHeight,FMath::Max(MinHeight,ViewSize.Y));Layout(*W);
+    {
+     if(Id==TEXT("supplyledger"))
+     {
+         // Persist the list area; pinning only hides the editor chrome.
+         const double Chrome=Host->IsPluginBarUnlocked()?68.:0.;
+         const FVector2D Size=DisplaySize(*W)+Delta;
+         W->Size=FVector2D(FMath::Clamp(Size.X,140.,FMath::Max(140.,ViewSize.X)),
+             FMath::Clamp(Size.Y-Chrome,40.,FMath::Max(40.,ViewSize.Y-Chrome)));
+         Layout(*W);if(Save)Host->SavePluginWindowPosition(Id+TEXT(".size"),W->Size);return;
+     }
+     W->Size+=Delta;const double MinWidth=Id==TEXT("ucmmicro")?240.:Id==TEXT("waypoint.dungeon")?220.:400.;W->Size.X=FMath::Clamp(W->Size.X,MinWidth,FMath::Max(MinWidth,ViewSize.X));const double MinHeight=Id==TEXT("ucmmicro")?290.:Id==TEXT("waypoint.map")?640.:Id==TEXT("waypoint.dungeon")?220.:320.;W->Size.Y=FMath::Clamp(W->Size.Y,MinHeight,FMath::Max(MinHeight,ViewSize.Y));Layout(*W);
      if(Save&&Host.IsValid())Host->SavePluginWindowPosition(Id+TEXT(".size"),W->Size);}
 }
 void SACEPluginDesktop::Raise(const FString& Id)
@@ -216,6 +244,7 @@ void SACEPluginDesktop::Hide(const FString& Id)
     if(auto* W=Windows.Find(Id))
     {
         const bool Focused=W->Widget->HasKeyboardFocus()||W->Widget->HasFocusedDescendants();
+        if(Host.IsValid()&&!W->LedgerId.IsEmpty())Host->SetLedgerOption(Id,TEXT("visible"),false);
         W->Open=false;W->Widget->SetVisibility(EVisibility::Collapsed);
         if(Focused)FSlateApplication::Get().SetAllUserFocusToGameViewport();
     }
@@ -226,25 +255,30 @@ void SACEPluginDesktop::Toggle(const FString& Id)
     TSharedPtr<FACEClientPlugin> Plugin;
     for(auto P:Host->Plugins)if((P->Id==Id || (Id.StartsWith(TEXT("waypoint."))&&P->Id==TEXT("waypoint")) || (Id==TEXT("ucm.log")&&P->Id==TEXT("ucm")))&&(P->Enabled||Id==TEXT("ucm.log")))Plugin=P;
     if(!Plugin)return;
+    FACEPluginStyle::Use(Host.Get());
     if(auto* W=Windows.Find(Id))
     {
         if(W->Open)Hide(Id);
-        else {W->Open=true;W->Widget->SetVisibility(EVisibility::Visible);Raise(Id);}
+        else {if(!W->LedgerId.IsEmpty())Host->SetLedgerOption(Id,TEXT("visible"),true);W->Open=true;W->Widget->SetVisibility(EVisibility::Visible);Raise(Id);}
         return;
     }
     FWindow W;W.Position=Host->GetPluginWindowPosition(Id,FVector2D(84+24*(Windows.Num()-1),80+24*(Windows.Num()-1)));W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(780,700));
     const bool Arrow=Id==TEXT("waypoint.arrow");
     const bool Dungeon=Id==TEXT("waypoint.dungeon");
     W.MapOverlay=Dungeon;
+    const bool Ledger=UACEPluginSubsystem::IsLedger(Id);
+    if(Ledger){W.LedgerId=Id;W.Size=Id==TEXT("supplyledger")?Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(200,0)):Host->LedgerSize(Id);Host->SetLedgerOption(Id,TEXT("visible"),true);}
     if(Id==TEXT("ucmmicro"))W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(270,360));
     if(Id==TEXT("ucm.log"))W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(700,440));
     if(Arrow)W.Size=FVector2D(290,225);
     if(Dungeon)W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(420,420));
-    W.Widget=SNew(SPluginFrame).Title(Id==TEXT("ucm.log")?TEXT("UCM Log"):Arrow?TEXT("Waypoint · drag when unlocked"):Id==TEXT("waypoint.map")?TEXT("Waypoint Map"):Plugin->Name)
+    W.Widget=SNew(SPluginFrame).Title_Lambda([Id,Arrow,Plugin](){return Id==TEXT("ucm.log")?TEXT("UCM Log"):Arrow?TEXT("Waypoint · drag when unlocked"):Id==TEXT("waypoint.map")?TEXT("Waypoint Map"):Plugin->DisplayTitle();})
         .Frameless(Arrow||Dungeon)
-        .CanManipulate([this,Dungeon,Arrow](){return Dungeon?Host->IsWaypointMapUnlocked():!Arrow||Host->IsWaypointUnlocked();})
-        .Move([this,Id,Arrow,Dungeon](FVector2D D,bool Save){if(Save||(Dungeon?Host->IsWaypointMapUnlocked():!Arrow||Host->IsWaypointUnlocked()))Move(Id,D,Save);})
-        .Resize(Arrow?TFunction<void(FVector2D,bool)>():TFunction<void(FVector2D,bool)>([this,Id,Dungeon](FVector2D D,bool Save){if(Save||!Dungeon||Host->IsWaypointMapUnlocked())Resize(Id,D,Save);}))
+        .CompactWhenLocked(Ledger)
+        .Locked_Lambda([H=Host]{return H.IsValid()&&!H->IsPluginBarUnlocked();})
+        .CanManipulate([H=Host]{return H.IsValid()&&H->IsPluginBarUnlocked();})
+        .Move([this,Id](FVector2D D,bool Save){Move(Id,D,Save);})
+        .Resize((Arrow||(Ledger&&Id!=TEXT("supplyledger")))?TFunction<void(FVector2D,bool)>():TFunction<void(FVector2D,bool)>([this,Id](FVector2D D,bool Save){Resize(Id,D,Save);}))
         .Raise([this,Id](){Raise(Id);}).Close([this,Id,Arrow](){Hide(Id);if(Arrow)Host->SetWaypointOption(TEXT("arrow"),false);})[Dungeon?Host->MakeWaypointDungeonOverlay():Arrow?Host->MakeWaypointPanel(false,true):Host->MakePanel(Id)];
     if(Dungeon)W.Widget->SetVisibility(EVisibility::Collapsed); // Tick validates the current cell before showing it.
     if(Arrow)W.Widget->SetVisibility(TAttribute<EVisibility>::CreateLambda([H=Host](){return H.IsValid()&&H->WaypointOption(TEXT("arrow"))?(H->IsWaypointUnlocked()?EVisibility::Visible:EVisibility::HitTestInvisible):EVisibility::Collapsed;}));
@@ -253,6 +287,8 @@ void SACEPluginDesktop::Toggle(const FString& Id)
 void SACEPluginDesktop::Refresh()
 {
     if(!Host.IsValid())return;
+    FACEPluginStyle::Use(Host.Get());
+    for(const auto& P:Host->Plugins)if(P->Enabled&&UACEPluginSubsystem::IsLedger(P->Id)&&Host->LedgerOption(P->Id,TEXT("visible"))&&!IsOpen(P->Id))Toggle(P->Id);
     Windows.FindChecked(BarId).Widget->SetVisibility(Host->IsPluginBarVisible()?EVisibility::Visible:EVisibility::Collapsed);
     Layout(Windows.FindChecked(BarId));
     FString Next;TSet<FString> Enabled;
@@ -273,14 +309,13 @@ void SACEPluginDesktop::Refresh()
     for(auto It=Windows.CreateIterator();It;++It)if(It.Key()!=BarId&&!Enabled.Contains(It.Key()))
     {Hide(It.Key());Canvas->RemoveSlot(It.Value().Widget.ToSharedRef());It.RemoveCurrent();}
     Buttons->ClearChildren();
-    Buttons->AddSlot().AutoHeight().Padding(1)[SNew(SBox).HeightOverride(34)
+    Buttons->AddSlot().AutoHeight().Padding(1)[SNew(SBox).HeightOverride(32)
         [SNew(SButton).ButtonStyle(&DockButtonStyle()).IsFocusable(false).HAlign(HAlign_Center)
         .ToolTipText(FText::FromString(TEXT("Manage plugins")))
         .OnClicked_Lambda([this](){if(Host.IsValid())Host->TogglePanel();return FReply::Handled();})[Caption(TEXT("+"),18)]]];
     for(auto P:Host->Plugins)if(P->Enabled)
     {
-        FString Short;P->Manifest->TryGetStringField(TEXT("short_name"),Short);if(Short.IsEmpty())Short=P->Id.ToUpper();Short=Short.Left(P->Id==TEXT("ucmmicro")?5:4);
-        Buttons->AddSlot().AutoHeight().Padding(1)[SNew(SBox).HeightOverride(42)
+        Buttons->AddSlot().AutoHeight().Padding(1)[SNew(SBox).HeightOverride(32)
             [SNew(SButton).ButtonStyle(&DockButtonStyle()).IsFocusable(false).HAlign(HAlign_Center).ContentPadding(2)
             .ToolTipText_Lambda([this,P]()
             {
@@ -289,29 +324,25 @@ void SACEPluginDesktop::Refresh()
                     TSharedPtr<FACEClientPlugin> UCM;bool Looting=false;
                     if(Host.IsValid())for(auto Plugin:Host->Plugins)if(Plugin->Id==TEXT("ucm")){UCM=Plugin;break;}
                     if(UCM)UCM->Profile->TryGetBoolField(TEXT("looting"),Looting);
-                    return FText::FromString(P->Name+TEXT("\nClick to open/close the editor. This does not toggle looting.\nUCM looting: ")
+                    return FText::FromString(P->DisplayTitle()+TEXT("\nClick to open/close the editor. This does not toggle looting.\nUCM looting: ")
                         +(Looting?TEXT("enabled"):TEXT("disabled"))+(UCM&&UCM->Running?TEXT(" (UCM running)"):TEXT(" (UCM stopped)")));
                 }
-                return FText::FromString(P->Name+TEXT("\nClick to show/hide\n")+P->Status);
+                if(UACEPluginSubsystem::IsLedger(P->Id))return FText::FromString(P->DisplayTitle()+TEXT("\nClick to show/hide. Unlock the UI or hold Quick-show pinned windows to move and resize."));
+                return FText::FromString(P->DisplayTitle()+TEXT("\nClick to show/hide\n")+P->Status);
             })
             .OnClicked_Lambda([this,Id=P->Id](){Toggle(Id);return FReply::Handled();})
-            [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
-                [SNew(STextBlock).Text(FText::FromString(Short)).Font(FCoreStyle::GetDefaultFontStyle("Bold",12))
-                .ColorAndOpacity_Lambda([this,Id=P->Id](){return IsOpen(Id)?FSlateColor(FLinearColor(1,.8f,.25f)):FSlateColor(FLinearColor::White);})]
-            +SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)[SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",8))
-                .Text_Lambda([this,P](){return FText::FromString(P->Id==TEXT("looteditor")?TEXT("EDITOR"):P->Running?TEXT("RUN"):IsOpen(P->Id)?TEXT("OPEN"):TEXT("HIDDEN"));})
-                .ColorAndOpacity_Lambda([P](){return FSlateColor(P->Running?FLinearColor(.3f,1,.4f):FLinearColor(.7f,.7f,.7f));})]]]];
+            [SNew(SACEPluginBadge).Plugin(P)]]];
     }
-    if(Enabled.Contains(TEXT("ucm")))Buttons->AddSlot().AutoHeight().Padding(1)[SNew(SBox).HeightOverride(34)
+    if(Enabled.Contains(TEXT("ucm")))Buttons->AddSlot().AutoHeight().Padding(1)[SNew(SBox).HeightOverride(32)
         [SNew(SButton).ButtonStyle(&DockButtonStyle()).IsFocusable(false).ToolTipText(FText::FromString(TEXT("UCM activity and problem log")))
-        .OnClicked_Lambda([this](){Toggle(TEXT("ucm.log"));return FReply::Handled();})[Caption(TEXT("LOG"))]]];
-    if(Host->IsWaypointEnabled())Buttons->AddSlot().AutoHeight().Padding(1)[SNew(SBox).HeightOverride(42)
+        .OnClicked_Lambda([this](){Toggle(TEXT("ucm.log"));return FReply::Handled();})[DockIcon(TEXT("ucm.log"))]]];
+    if(Host->IsWaypointEnabled())Buttons->AddSlot().AutoHeight().Padding(1)[SNew(SBox).HeightOverride(32)
         [SNew(SButton).ButtonStyle(&DockButtonStyle()).IsFocusable(false).ToolTipText(FText::FromString(TEXT("Waypoint world / dungeon map")))
-        .OnClicked_Lambda([this](){Toggle(TEXT("waypoint.map"));return FReply::Handled();})[Host->MakeWaypointMapIcon()]]];
-    auto& Bar=Windows.FindChecked(BarId);Bar.Size.Y=18+36;
-    for(auto P:Host->Plugins)if(P->Enabled)Bar.Size.Y+=44;
-    if(Enabled.Contains(TEXT("ucm")))Bar.Size.Y+=36;
-    if(Host->IsWaypointEnabled())Bar.Size.Y+=44;
+        .OnClicked_Lambda([this](){Toggle(TEXT("waypoint.map"));return FReply::Handled();})[DockIcon(TEXT("waypoint.map"))]]];
+    auto& Bar=Windows.FindChecked(BarId);Bar.Size.Y=18+34;
+    for(auto P:Host->Plugins)if(P->Enabled)Bar.Size.Y+=34;
+    if(Enabled.Contains(TEXT("ucm")))Bar.Size.Y+=34;
+    if(Host->IsWaypointEnabled())Bar.Size.Y+=34;
     Layout(Bar);
 }
 
