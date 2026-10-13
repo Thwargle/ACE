@@ -26,6 +26,10 @@
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
 #include "Misc/ScopeExit.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+#include "Sockets.h"
+#include "SocketSubsystem.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERunSpeedParityTest,"ACE.RetailParity.RunSpeed",
  EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
@@ -45,7 +49,9 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
  Context.OwningGameInstance=GI;Context.SetCurrentWorld(World);GI->Init();
  auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();auto* Client=GI->GetSubsystem<UACEClientSubsystem>();
  auto Session=Client->GetSession();
- if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+ FString DatDir=TEXT("C:/Turbine/Asheron's Call");
+ FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDir);
+ if(!Dat->LoadDatDirectory(DatDir))return false;
 
  // Independent evidence: measure the position frames from the retail human
  // RunForward animation, rather than deriving expected travel from our helper.
@@ -124,6 +130,86 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
  App->InterruptCastWithMovement();
  TestEqual(TEXT("Movement does not truncate a queued scarab windup action"),App->ActionCommand,0x1000006Fu);
  App->ClearActionMotion();
+ // Retail TakeControlFromServer reapplies the whole command state even if
+ // a cast arrives after strafe/turn were sent. A wire-level replay catches
+ // the race that axis-only tests miss, as well as a swallowed key release.
+ {
+  auto* Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+  auto* Receiver=Sockets->CreateSocket(NAME_DGram,TEXT("Cast movement receiver"),false);
+  ON_SCOPE_EXIT {if(Receiver){Receiver->Close();Sockets->DestroySocket(Receiver);}};
+  auto Address=Sockets->CreateInternetAddr();bool Valid=false;
+  Address->SetIp(TEXT("127.0.0.1"),Valid);Address->SetPort(0);
+  if(!Receiver||!Receiver->Bind(*Address))return false;
+  Receiver->GetAddress(*Address);
+  Session->SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("Cast movement sender"),false);
+  Session->ServerC2SAddr=Address;Session->IssacClient=MakeUnique<FACEIsaac>(123u);
+  ON_SCOPE_EXIT {
+   Session->SocketC2S->Close();Sockets->DestroySocket(Session->SocketC2S);Session->SocketC2S=nullptr;
+   Session->CachedC2SPackets.Reset();Session->IssacClient.Reset();
+  };
+  auto CheckMovement=[&](bool Side,bool Turn)
+  {
+   if(!TestEqual(TEXT("One retail movement update per command transition"),Session->CachedC2SPackets.Num(),1))return;
+   const auto& Bytes=Session->CachedC2SPackets.CreateConstIterator()->Value.Payload;
+   FACEBinaryReader Reader(Bytes);Reader.Skip(24);
+   TestEqual(TEXT("Control handoff uses MoveToState"),Reader.ReadUInt32(),ACEGameAction::MoveToState);
+   const uint32 Flags=Reader.ReadUInt32();
+   TestEqual(TEXT("Packet contains the current sidestep"),bool(Flags&ACERawMotionFlags::SideStepCommand),Side);
+   TestEqual(TEXT("Packet contains the current turn"),bool(Flags&ACERawMotionFlags::TurnCommand),Turn);
+   TestEqual(TEXT("Slide-cast does not fabricate action commands"),Flags>>11,0u);
+   // Standard movement payload ends with four physics stamps and contact.
+   FACEBinaryReader Tail(Bytes);Tail.Skip(Bytes.Num()-12);
+   Tail.ReadUInt16();
+   TestEqual(TEXT("Movement acknowledges the newest server control stamp"),Tail.ReadUInt16(),Session->ServerControlSeq);
+  };
+  VR->bActive=false;Session->ApplyServerCombatMode(8);Session->SetCurrentStance(ACEMotion::StanceMagic);
+  Session->PlayerVitals.bValid=true;Session->PlayerVitals.RunSkillCurrent=593;
+  Session->PlayerVitals.Health=Session->PlayerVitals.MaxHealth=500;
+  Session->PlayerVitals.Stamina=Session->PlayerVitals.MaxStamina=500;
+  FACEPosition Pose;Pose.CellId=0x01010001;Pose.SetLocationFromUnreal(StartFeet,100);
+  Pose.SetAceFacingFromUnrealDir2D(FVector::XAxisVector);
+  for(int32 Rate:{30,60,144,240})for(int32 Mode:{0,1,2})for(bool Late:{false,true})
+  {
+   const bool Side=Mode!=1,Turn=Mode!=0;
+   PC->PredictedPose=Pose;PC->bHavePredictedPose=true;PC->bHaveLastServerPose=false;
+   Session->SetLocalPosition(Pose);Pawn->SetActorLocationAndRotation(StartFeet+FVector(0,0,88),Pose.ToUnrealQuat());
+   PC->bJumpAirborne=PC->bStandingJumpLocked=false;
+   auto Press=[&](bool Down){if(Side)Key(EKeys::C,Down);if(Turn)Key(EKeys::A,Down);};
+   FACEObjectMotionState Cast;Cast.CurrentStyle=ACEMotion::StanceMagic;Cast.ActionCommand=0x40000034;
+   auto ReceiveCast=[&]{++Session->ServerControlSeq;PC->HandleMotionUpdate(Self.Guid,Cast);};
+   if(!Late)ReceiveCast();
+   Press(true);PC->PlayerTick(1.f/Rate);
+   if(Late)ReceiveCast();
+   else {Press(false);PC->PlayerTick(1.f/Rate);ReceiveCast();Press(true);}
+   Session->CachedC2SPackets.Reset();
+   const FVector Before=Pawn->GetActorLocation();const FQuat Facing=Pawn->GetActorQuat();
+   Session->bUseBusy=true;
+   PC->PlayerTick(1.f/Rate);
+   CheckMovement(Side,Turn);
+   TestFalse(TEXT("Strafe/turn claims server movement control"),PC->bServerControlledMotion);
+   TestEqual(TEXT("Control handoff preserves the unfinished cast link while sliding"),App->ActionCommand,0x40000034u);
+   if(Side)TestTrue(TEXT("Strafing continues immediately after the cast update"),FVector::Dist2D(Before,Pawn->GetActorLocation())>1.);
+   if(Turn)TestFalse(TEXT("Turning continues immediately after the cast update"),Pawn->GetActorQuat().Equals(Facing,.00001));
+   Session->CachedC2SPackets.Reset();PC->PlayerTick(1.f/Rate);
+   TestTrue(TEXT("Unchanged held input is not resent every render frame"),Session->CachedC2SPackets.IsEmpty());
+   Press(false);Session->CachedC2SPackets.Reset();PC->PlayerTick(1.f/Rate);
+   CheckMovement(false,false);
+   TestFalse(TEXT("Releasing movement while cast is pending stops server movement"),Session->bMoving);
+   Session->CachedC2SPackets.Reset();PC->PlayerTick(1.f/Rate);
+   TestTrue(TEXT("Pending cast does not repeatedly send a release"),Session->CachedC2SPackets.IsEmpty());
+   Session->bUseBusy=false;
+  }
+  // Strafe alone must not discard locally controlled emotes. Reclaiming
+  // movement control must also preserve unfinished authored actions.
+  PC->bServerControlledMotion=false;App->SetHeldActionMotion(0x43000145u,ACEMotion::StanceNonCombat);
+  Key(EKeys::C,true);PC->PlayerTick(1.f/90);
+  TestEqual(TEXT("Locally controlled Play Possum still slides"),App->ActionCommand,0x43000145u);
+  Key(EKeys::C,false);PC->PlayerTick(1.f/90);App->ClearActionMotion();
+  FACEObjectMotionState Power;Power.CurrentStyle=ACEMotion::StanceMagic;Power.ActionCommand=0x1000006F;
+  PC->HandleMotionUpdate(Self.Guid,Power);Key(EKeys::C,true);PC->PlayerTick(1.f/90);
+  TestEqual(TEXT("Movement handoff preserves the scarab windup action"),App->ActionCommand,0x1000006Fu);
+  Key(EKeys::C,false);PC->PlayerTick(1.f/90);App->ClearActionMotion();
+ }
  // A pending cast marks the session use-busy. A complete native buff cycle
  // must cancel cast substates without translating even at low frame rates.
  {

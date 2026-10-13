@@ -289,6 +289,12 @@
           "item"
         ]
       },
+      "close_vendor": {
+        "permission": "navigation",
+        "fields": [
+          "vendor"
+        ]
+      },
       "select": {
         "permission": "navigation",
         "fields": [

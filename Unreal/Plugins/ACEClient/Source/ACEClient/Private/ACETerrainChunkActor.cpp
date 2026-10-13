@@ -115,7 +115,8 @@ void AACETerrainChunkActor::SetLandEnvCellFloorPriority(bool bEnable, UACEDatSub
 			}
 		}
 	}
-	TerrainMesh->MarkRenderStateDirty();
+	// MID parameter changes retain the terrain proxy and GPU buffers. SetMaterial
+	// already invalidates the proxy if the fallback replaces a material.
 }
 
 void AACETerrainChunkActor::SetIndoorScenerySuppressed(bool bSuppress, const TArray<int32>& HideBuildingInfoIndices,

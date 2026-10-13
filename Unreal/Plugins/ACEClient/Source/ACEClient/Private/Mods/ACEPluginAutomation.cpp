@@ -1229,6 +1229,13 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
         return true;
     }
     if(Action==TEXT("close_corpse")){if(C->GetOpenExternalContainerGuid())C->SendNoLongerViewingContents(C->GetOpenExternalContainerGuid());return true;}
+    if(Action==TEXT("close_vendor"))
+    {
+        const int32 Vendor=C->GetOpenVendorGuid();
+        if(Vendor&&N(I,TEXT("vendor"))==uint32(Vendor))C->SendNoLongerViewingContents(Vendor);
+        else if(Vendor)ReportActivityFailure(P,I,TEXT("Vendor changed before closing"));
+        return true;
+    }
     if(Action==TEXT("loot"))
     {
         FACEWorldObject Container;

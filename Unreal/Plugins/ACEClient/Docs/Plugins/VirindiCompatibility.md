@@ -1,5 +1,74 @@
 # Virindi compatibility review
 
+## Meta, routing and vendor follow-up — 2026-10-13
+
+Compared the local VT decompile's `hn.cs` state machine, `ff.cs` embedded
+routes, `da.cs` independent profile storage, `ca.cs` route advancement,
+`v.cs` OpenVendor waypoint and `uTank2/cLogic.cs` / `cr.cs` activity and
+recharge ordering with the importer, native host, UCM policy and tests.
+Vendor restocking is UCM functionality built around those route interactions;
+the VT core reviewed here does not contain the entire Virindi Item Tool suite.
+
+Corrections in this pass:
+
+- NAV type 5 now retains **Open/Close Vendor** semantics. Zero means close the
+  current vendor, not Use object zero. Opening is confirmed by the observed
+  vendor GUID rather than a generic UseDone. Previously converted type-5 Use
+  waypoints are recognized at runtime, so existing profiles also benefit.
+- Restocking completes before the route proceeds to Close Vendor. Purchases
+  larger than a stock batch continue from replicated inventory counts. A
+  one-item resale listing no longer hides a larger stocked listing of the same
+  item. Turning restocking off cancels its outstanding purchase wait.
+- Once the host's real use/transfer locks clear, vital recovery runs ahead of
+  vendor opening, purchase and trade-note waits. An unrelated recovery UseDone
+  or error cannot confirm/fail a vendor transaction. Inventory quantities,
+  split identity, sale proceeds and bounded timeouts remain the checks.
+- Pausing obstructed navigation no longer freezes the meta state machine or
+  watchdog. Its recovery state can continue, and a new explicit EnableNav
+  command can retry the route. A previously active navigation override alone
+  cannot undo the pause.
+- The public Lua API includes `close_vendor` with the current vendor GUID and
+  navigation permission. It sends ordinary NoLongerViewingContents and refuses
+  to close a different vendor if the selection changed.
+
+Remaining material gaps, not claims of parity:
+
+- Public quest metas still request missing adapters such as `/mt loot` and
+  `/mt lootp` for named quest objects, named `/mt cast`, `/r`, arbitrary key
+  simulation, login queues, and other plugins' commands. Missing companion
+  USD/UTL/MET files, species databases, unresolved templates and malformed
+  source commands also prevent activation. Imports continue to report these
+  issues rather than silently dropping the requested behavior.
+- General crafting/ammunition manufacture, all assistance-item types,
+  automatic fellowship management and jiggle/helper options remain incomplete.
+  Existing component splitting, summon refills and equipment mana maintenance
+  do not cover the whole original suite.
+- Classic color-tolerance requirements, arbitrary loot expressions and User
+  actions remain unsupported; full external multi-client integrations are not
+  replaced by the local plugin messaging API.
+- Ordinary NPC/meta Use waits and the single pending-recovery record still
+  have broader scheduling limits than VT's independent rules. They need
+  action-specific completion correlation before unrelated game actions can
+  safely overlap their waits. This pass removes the vendor-specific blocking
+  paths, not every pending-action gap described in the earlier reviews.
+
+Validation: Windows Editor build succeeded. All 14 targeted suites passed,
+including new `VirindiWorkflows` and the native `RouteAndTellRequests` packet
+checks (the latter reports 34 warnings from fixtures without player positions).
+Coverage includes new and previously imported vendor waypoints, multi-batch
+buying, note splits/sales, healing during waits, unrelated acknowledgments,
+stale vendor closure, blocked-route recovery, linked meta dependencies and
+Aun Ralirea startup. Reports are in `Saved/UCMProfileRefresh/ParityFinalTests`.
+
+Fresh corpus results: **226/227** installed profiles supported, **52/91** public
+meta collection files supported, **88/88** public NAV files supported; no parse
+errors. The installed exception remains `Unlimited_IBControl.met` with external
+integration requirements. Reports are in the same review directory under
+`ParityMetaCorpus`, `ParityRouteCorpus`, and each isolated user's
+`Saved/Logs/vt-native-compatibility.json`. These are conversion and automated
+workflow results, not completed live quests. Quest shared sources are synced;
+Linux/Quest packaged gameplay and live-server timing remain unverified here.
+
 ## Fast buffs without backward travel — 2026-10-12
 
 Rechecked VT `gj.cs` (spell words/result state transitions), `u.cs` (Backward
@@ -809,3 +878,35 @@ new armor and death invalidation, manual transfer receipts, physical/spell targe
 handoff, actual DAT attack heights, elemental weapon switching, custom-server
 resistance overrides and weapon-dependent attack power. Offline tests do not
 measure live server latency or certify an overnight hunting run.
+
+
+## October 13: independent profiles and meta navigation
+
+Reviewed the supplied vTank decompilation: `PluginCore.cs` settings loadchar and
+profile selectors, `da.cs` character/navigation storage, and `ff.cs` embedded
+route actions. VT keeps character, loot and meta selections separate. An embedded
+route replaces the current navigation contents; loading character or loot data
+does not clear it. UCM's native `profile_load` previously cleared RuntimeRoute
+for every dependency load, while Lua kept its embedded route. This split left
+the navigation policy without matching native route geometry after a USD/UTL load.
+Only NAV/MET loads now invalidate that native route.
+
+UCM now stores one current selection and independently reusable Character,
+Routes, Loot, Monsters, Metas and Vendors files. Imports export embedded routes
+and validated dependencies to named profiles; meta execution selects those
+references without stopping automation. Repeated loading reuses them, including
+user edits. This named export is a UCM convenience: VT's embedded-route action
+clears its filename and replaces in-memory navigation. Source files are preserved.
+
+Regression coverage exercises migration and selection persistence, shared edits,
+native/Lua route consistency, per-monster default inheritance, and profile UI at
+wide and narrow sizes. The optional `-UCMMetaFixture=<folder>` test runs the supplied
+AunRalirea.met/.usd/.utl graph through conversion, Lua and native profile loads.
+Offline startup coverage does not certify a completed live Aun Ralirea quest.
+
+The supplied Aun Ralirea meta intentionally begins with an empty route after
+loading AunRalirea.usd and AunRalirea.utl. It requires a fellowship `!start`
+message and at least 10 Town Network Portal Gems before transitioning to its
+travel state. Regression coverage injects those conditions and verifies both
+the selected Route profile and native route geometry. Importing the meta makes
+its routes available immediately; it does not bypass this authored start gate.

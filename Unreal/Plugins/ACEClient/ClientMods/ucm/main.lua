@@ -74,6 +74,12 @@ local function contains(list,id) for _,v in ipairs(list or {}) do if v==id then 
 local function vt_string(value) if type(value)=='number' then return string.format('%.15g',value) end;return tostring(value) end
 local function allowed(list,id) return not list or #list==0 or contains(list,id) end
 local function band(a,b) return (a or 0)&b end
+local function route_kind(v)
+ -- Earlier imports flattened NAV OpenVendor into Use. Only type 5 encoded
+ -- both a GUID and name; preserve those saved routes without requiring import.
+ if v.legacy and v.kind=='use' and v.object_id~=nil and v.object_name~=nil and not v.object_class then return 'vendor' end
+ return v.kind or 'walk'
+end
 local function salvage_candidate(item)
  local material=item.material or 0
  return not item.equipped and not item.retained and item.resource_available~=false
@@ -313,7 +319,13 @@ local meta_expression
 local function meta_command(c,s)
  if c.op=='stop' then return 'Stopped by UCM command'
  elseif c.op=='start' or c.op=='noop' then return -- Already executing within an explicitly started run.
- elseif c.op=='option' then meta.options[c.key]=c.value
+ elseif c.op=='option' then
+  meta.options[c.key]=c.value
+  -- An explicit meta recovery command can retry navigation, just like the
+  -- player's switch. Merely continuing the old meta must not clear a pause.
+  if c.key=='navigation' and c.value and navigation_paused then
+   navigation_paused=nil;route_blocks=0;door_attempts={};route_join_pending=true;route_join_scan=nil
+  end
  elseif c.op=='reverse_route' then route_direction=-route_direction;meta.notice='Nav backwards is: '..tostring(route_direction<0)
  elseif c.op=='reverse_query' then meta.notice='Nav backwards is: '..tostring(route_direction<0)
  elseif c.op=='state' then meta_state(c.state,s)
@@ -621,9 +633,13 @@ local function monster_rule(t,p)
    matches=type(value)=='string' and string.lower(t.name)==string.lower(value) or (type(value)~='string' and truth(value))
   end
   if r.default then rule=r
-  elseif matches or (not r.expression and ((r.exact and string.lower(t.name)==string.lower(r.name or '')) or (not r.exact and string.lower(t.name):sub(1,#(r.name or ''))==string.lower(r.name or '')))) then return r end
+  elseif matches or (not r.expression and ((r.exact and string.lower(t.name)==string.lower(r.name or '')) or (not r.exact and string.lower(t.name):sub(1,#(r.name or ''))==string.lower(r.name or '')))) then rule=r;break end
  end
- return rule
+ -- Inherit without mutating saved rules; an explicit zero priority is valid.
+ local effective={};for k,v in pairs(rule) do effective[k]=v end
+ if effective.priority==nil then effective.priority=p.monster_default_priority or 0 end
+ if (effective.range or 0)<=0 then effective.range=p.monster_default_range or 0 end
+ return effective
 end
 local function meta_condition(c,s,p)
  local t,v,q=c.type,c.value,c.properties or {}
@@ -679,7 +695,7 @@ local function meta_action(a,s,p)
  elseif t==2 then return meta_command(a.command,s)
  elseif t==3 then for _,c in ipairs(a.children) do local e=meta_action(c,s,p);if e then return e end end
  elseif t==4 then
-  meta.route=a.route;point=1;route_direction=1;route_pending=nil;route_join_pending=true;route_join_scan=nil;meta.route_revision=meta.route_revision+1;meta.route_changed=true
+  meta.route=a.route;meta.route_profile=a.route_profile;point=1;route_direction=1;route_pending=nil;route_join_pending=true;route_join_scan=nil;meta.route_revision=meta.route_revision+1;meta.route_changed=true
   route_trail={};route_returning=false;route_walking=false
  elseif t==5 then
   if #meta.stack>=128 then return 'Meta call stack exceeds 128 entries' end
@@ -944,6 +960,114 @@ local function refill_pet(s,p,inventory,option,eligible)
  end
 end
 
+local function vendor_work(s,p,inventory,option)
+ -- Restock exact saved stock identities at an open vendor; never guess by GUID
+ -- across logins. Wait for server inventory replication before buying again.
+ -- Recovery may run while waiting. Its untagged UseDone/errors cannot confirm
+ -- or reject a vendor transaction; quantities and deadlines are authoritative.
+ local stock_counts
+ local function stock_count(wcid,name)
+  if not stock_counts then
+   stock_counts={};for _,v in ipairs(inventory) do if v.wcid and v.name then
+    local names=stock_counts[v.wcid] or {};stock_counts[v.wcid]=names;names[v.name]=(names[v.name] or 0)+(v.count or 1)
+   end end
+  end
+  return stock_counts[wcid] and stock_counts[wcid][name] or 0
+ end
+ if activity_ready('vendors') then
+ if note_pending then
+  local q=note_pending
+  if not option('vendor_restock',false) or s.vendor~=q.vendor or not s.vendor_uses_pyreals then
+   note_pending=nil;return result(nil,'Trade note redemption cancelled: vendor or restocking changed')
+  end
+  if s.time>=q.deadline then
+   return failed('Trade note redemption not confirmed: check inventory space and vendor messages')
+  end
+  local source
+  for _,v in ipairs(inventory) do if v.id==q.id then source=v;break end end
+  if not source then for _,v in ipairs(s.vendor_trade_notes or {}) do if v.id==q.id then source=v;break end end end
+  if q.phase=='split' then
+   local candidate
+   for _,v in ipairs(s.vendor_trade_notes or {}) do
+    if not q.known[v.id] and v.wcid==q.wcid and v.name==q.name and v.count==q.count and v.unit_value==q.unit_value then
+     if candidate then return failed('Trade note split is ambiguous; no notes sold') end
+     candidate=v
+    end
+   end
+   if source and source.count==q.before-q.count and candidate then
+    q.phase='sell';q.id=candidate.id;q.deadline=s.time+15;q.serial=s.action_serial or 0;q.known=nil
+    q.money=s.pyreals or 0
+    return {action='sell_note',vendor=q.vendor,item=q.id,count=q.count,status='Redeeming '..q.count..' '..q.name..' for supplies'}
+   end
+   return result(nil,'Waiting for trade note split')
+  end
+  -- Require both sides of the transaction. Replication may deliver the money
+  -- before the sold object disappears, or vice versa.
+  if not source and (s.pyreals or 0)>=q.money+q.count*q.unit_value then note_pending=nil
+  else return result(nil,'Waiting for trade note proceeds') end
+ end
+ if purchase_pending then
+  local q=purchase_pending
+  if not option('vendor_restock',false) or (s.vendor or 0)~=q.vendor then
+   purchase_pending=nil;return result(nil,'Purchase wait cancelled: vendor or restocking changed')
+  end
+  if stock_count(q.wcid,q.name)>=q.expected then purchase_pending=nil
+  elseif s.time>=q.deadline then
+   return failed('Purchase not confirmed: check currency, pack space and vendor stock')
+  else return result(nil,'Waiting for purchased '..q.name) end
+ end
+ if option('vendor_restock',false) and (s.vendor or 0)~=0 then
+  local stock={}
+  for _,v in ipairs(s.vendor_stock or {}) do if v.limit>0 then local names=stock[v.wcid] or {};stock[v.wcid]=names;if not names[v.name] or v.limit>names[v.name].limit then names[v.name]=v end end end
+  for _,r in ipairs(p.vendor_rules or {}) do
+   if r.enabled~=false and r.server==s.world_name and r.vendor_wcid==s.vendor_wcid and r.vendor_name==s.vendor_name then
+    local have=stock_count(r.item_wcid,r.item_name)
+    if have<r.quantity then
+     local v=stock[r.item_wcid] and stock[r.item_wcid][r.item_name]
+     if v then
+      local count=math.min(r.quantity-have,v.limit)
+      local cost=v.unit_value and math.max(1,math.ceil(v.unit_value*(v.sell_rate or 1)*count-.1))
+      if cost and s.vendor_uses_pyreals and (s.pyreals or 0)<cost then
+       local deficit=cost-(s.pyreals or 0);local candidates,total={},0;local reserved={}
+       for _,rule in ipairs(p.vendor_rules or {}) do
+        if rule.enabled~=false and rule.server==s.world_name and rule.vendor_wcid==s.vendor_wcid and rule.vendor_name==s.vendor_name then reserved[rule.item_wcid]=true end
+       end
+       for _,note in ipairs(s.vendor_trade_notes or {}) do
+        if not reserved[note.wcid] and note.unit_value>0 and note.count>0 then
+         candidates[#candidates+1]=note;total=total+note.unit_value*note.count
+        end
+       end
+       if total<deficit then return failed('Not enough pyreals or redeemable trade notes for '..r.item_name) end
+       -- Prefer a denomination covering the shortfall with the least change.
+       -- Otherwise redeem the largest available contribution and reassess.
+       table.sort(candidates,function(a,b)
+        local ac=math.min(a.count,math.ceil(deficit/a.unit_value))*a.unit_value
+        local bc=math.min(b.count,math.ceil(deficit/b.unit_value))*b.unit_value
+        if (ac>=deficit)~=(bc>=deficit) then return ac>=deficit end
+        if ac~=bc then if ac>=deficit then return ac<bc else return ac>bc end end
+        return a.id<b.id
+       end)
+       local note=candidates[1];local amount=math.min(note.count,math.ceil(deficit/note.unit_value))
+       note_pending={phase=amount<note.count and 'split' or 'sell',id=note.id,wcid=note.wcid,name=note.name,
+        unit_value=note.unit_value,count=amount,before=note.count,money=s.pyreals or 0,vendor=s.vendor,deadline=s.time+15,serial=s.action_serial or 0}
+       if amount<note.count then
+        note_pending.known={};for _,item in ipairs(inventory) do note_pending.known[item.id]=true end
+        for _,item in ipairs(s.vendor_trade_notes or {}) do note_pending.known[item.id]=true end
+        return {action='split_note',vendor=s.vendor,item=note.id,count=amount,status='Splitting '..amount..' '..note.name..' for supplies'}
+       end
+       return {action='sell_note',vendor=s.vendor,item=note.id,count=amount,status='Redeeming '..amount..' '..note.name..' for supplies'}
+      end
+      purchase_pending={wcid=r.item_wcid,name=r.item_name,expected=have+count,deadline=s.time+15,serial=s.action_serial or 0,vendor=s.vendor}
+      return {action='buy',vendor=s.vendor,item=v.id,count=count,status='Restocking '..r.item_name..' ('..have..' / '..r.quantity..')'}
+     end
+     return failed('Saved restock item is not available: '..r.item_name)
+    end
+   end
+  end
+ end
+ end -- vendor activity
+end
+
 local function tick(s,p)
  if not state then state=p.initial_state or 'Default';entered=s.time end
  local hp,sp,mp=pct(s.health,s.max_health),pct(s.stamina or 0,s.max_stamina or 1),pct(s.mana,s.max_mana)
@@ -1056,12 +1180,19 @@ local function tick(s,p)
   end
   last_cast=nil
  end
+ local route_wait
  if route_pending and route_pending.kind~='pause' and not forced_buff then
    activity='navigation'
    local route=p.route or {};local v=route[point]
    if not v then return failed('Route changed during an action') end
-   local kind=v.kind or 'walk'
-   if kind=='jump' then
+   local kind=route_kind(v)
+   if kind=='vendor' then
+    -- VT OpenVendor tests VendorId, not the unrelated UseDone stream. ID 0
+    -- is Close Vendor, and closing is confirmed by the same observed state.
+    if (s.vendor or 0)==route_pending.vendor then route_pending=nil;point=point+route_direction
+    elseif s.time-route_pending.time>30 then return pause_navigation('vendor did not open or close')
+    else route_wait='Waiting for vendor' end
+   elseif kind=='jump' then
     if s.time-route_pending.time>2 and not s.jumping then route_pending=nil;point=point+route_direction end
    elseif kind=='portal' or kind=='recall' then
     local nextpoint=route[point+route_direction]
@@ -1074,112 +1205,13 @@ local function tick(s,p)
    -- Portal arrival is confirmed by teleport sequence/position, never by a
    -- generic UseDone. While the host is free, VT's recharge/combat rules still
    -- run ahead of navigation. Do not let a missing portal monopolize them.
-   if kind~='portal' and kind~='recall' then return result(nil,'Waiting for route action') end
+   if kind~='portal' and kind~='recall' and kind~='vendor' then return result(nil,'Waiting for route action') end
   end
  local by_id,spells=index_spells(s,option('skill_margin',30));local trained={}
  for _,id in ipairs(s.trained_skills or {}) do trained[id]=true end
  for _,id in ipairs(s.usable_skills or {}) do trained[id]=true end
  local inventory=s.inventory or {}
- -- Restock exact saved stock identities at an open vendor; never guess by GUID
- -- across logins. Wait for server inventory replication before buying again.
- local stock_counts
- local function stock_count(wcid,name)
-  if not stock_counts then
-   stock_counts={};for _,v in ipairs(inventory) do if v.wcid and v.name then
-    local names=stock_counts[v.wcid] or {};stock_counts[v.wcid]=names;names[v.name]=(names[v.name] or 0)+(v.count or 1)
-   end end
-  end
-  return stock_counts[wcid] and stock_counts[wcid][name] or 0
- end
- if activity_ready('vendors') then
- if note_pending then
-  local q=note_pending
-  if not option('vendor_restock',false) or s.vendor~=q.vendor or not s.vendor_uses_pyreals then
-   note_pending=nil;return result(nil,'Trade note redemption cancelled: vendor or restocking changed')
-  end
-  if s.time>=q.deadline or ((s.action_serial or 0)~=q.serial and (s.action_error or 0)~=0) then
-   return failed('Trade note redemption not confirmed: check inventory space and vendor messages')
-  end
-  local source
-  for _,v in ipairs(inventory) do if v.id==q.id then source=v;break end end
-  if not source then for _,v in ipairs(s.vendor_trade_notes or {}) do if v.id==q.id then source=v;break end end end
-  if q.phase=='split' then
-   local candidate
-   for _,v in ipairs(s.vendor_trade_notes or {}) do
-    if not q.known[v.id] and v.wcid==q.wcid and v.name==q.name and v.count==q.count and v.unit_value==q.unit_value then
-     if candidate then return failed('Trade note split is ambiguous; no notes sold') end
-     candidate=v
-    end
-   end
-   if source and source.count==q.before-q.count and candidate then
-    q.phase='sell';q.id=candidate.id;q.deadline=s.time+15;q.serial=s.action_serial or 0;q.known=nil
-    q.money=s.pyreals or 0
-    return {action='sell_note',vendor=q.vendor,item=q.id,count=q.count,status='Redeeming '..q.count..' '..q.name..' for supplies'}
-   end
-   return result(nil,'Waiting for trade note split')
-  end
-  -- Require both sides of the transaction. Replication may deliver the money
-  -- before the sold object disappears, or vice versa.
-  if not source and (s.pyreals or 0)>=q.money+q.count*q.unit_value then note_pending=nil
-  else return result(nil,'Waiting for trade note proceeds') end
- end
- if purchase_pending then
-  local q=purchase_pending
-  if stock_count(q.wcid,q.name)>=q.expected then purchase_pending=nil
-  elseif s.time>=q.deadline or (s.vendor or 0)~=q.vendor or ((s.action_serial or 0)~=q.serial and (s.action_error or 0)~=0) then
-   return failed('Purchase not confirmed: check currency, pack space and vendor stock')
-  else return result(nil,'Waiting for purchased '..q.name) end
- end
- if option('vendor_restock',false) and (s.vendor or 0)~=0 then
-  local stock={}
-  for _,v in ipairs(s.vendor_stock or {}) do if v.limit>0 then local names=stock[v.wcid] or {};stock[v.wcid]=names;names[v.name]=v end end
-  for _,r in ipairs(p.vendor_rules or {}) do
-   if r.enabled~=false and r.server==s.world_name and r.vendor_wcid==s.vendor_wcid and r.vendor_name==s.vendor_name then
-    local have=stock_count(r.item_wcid,r.item_name)
-    if have<r.quantity then
-     local v=stock[r.item_wcid] and stock[r.item_wcid][r.item_name]
-     if v then
-      local count=math.min(r.quantity-have,v.limit)
-      local cost=v.unit_value and math.max(1,math.ceil(v.unit_value*(v.sell_rate or 1)*count-.1))
-      if cost and s.vendor_uses_pyreals and (s.pyreals or 0)<cost then
-       local deficit=cost-(s.pyreals or 0);local candidates,total={},0;local reserved={}
-       for _,rule in ipairs(p.vendor_rules or {}) do
-        if rule.enabled~=false and rule.server==s.world_name and rule.vendor_wcid==s.vendor_wcid and rule.vendor_name==s.vendor_name then reserved[rule.item_wcid]=true end
-       end
-       for _,note in ipairs(s.vendor_trade_notes or {}) do
-        if not reserved[note.wcid] and note.unit_value>0 and note.count>0 then
-         candidates[#candidates+1]=note;total=total+note.unit_value*note.count
-        end
-       end
-       if total<deficit then return failed('Not enough pyreals or redeemable trade notes for '..r.item_name) end
-       -- Prefer a denomination covering the shortfall with the least change.
-       -- Otherwise redeem the largest available contribution and reassess.
-       table.sort(candidates,function(a,b)
-        local ac=math.min(a.count,math.ceil(deficit/a.unit_value))*a.unit_value
-        local bc=math.min(b.count,math.ceil(deficit/b.unit_value))*b.unit_value
-        if (ac>=deficit)~=(bc>=deficit) then return ac>=deficit end
-        if ac~=bc then if ac>=deficit then return ac<bc else return ac>bc end end
-        return a.id<b.id
-       end)
-       local note=candidates[1];local amount=math.min(note.count,math.ceil(deficit/note.unit_value))
-       note_pending={phase=amount<note.count and 'split' or 'sell',id=note.id,wcid=note.wcid,name=note.name,
-        unit_value=note.unit_value,count=amount,before=note.count,money=s.pyreals or 0,vendor=s.vendor,deadline=s.time+15,serial=s.action_serial or 0}
-       if amount<note.count then
-        note_pending.known={};for _,item in ipairs(inventory) do note_pending.known[item.id]=true end
-        for _,item in ipairs(s.vendor_trade_notes or {}) do note_pending.known[item.id]=true end
-        return {action='split_note',vendor=s.vendor,item=note.id,count=amount,status='Splitting '..amount..' '..note.name..' for supplies'}
-       end
-       return {action='sell_note',vendor=s.vendor,item=note.id,count=amount,status='Redeeming '..amount..' '..note.name..' for supplies'}
-      end
-      purchase_pending={wcid=r.item_wcid,name=r.item_name,expected=have+count,deadline=s.time+15,serial=s.action_serial or 0,vendor=s.vendor}
-      return {action='buy',vendor=s.vendor,item=v.id,count=count,status='Restocking '..r.item_name..' ('..have..' / '..r.quantity..')'}
-     end
-     return failed('Saved restock item is not available: '..r.item_name)
-    end
-   end
-  end
- end
- end -- vendor activity
+
  local usable_names={};for _,v in ipairs(inventory) do if v.usable and v.name then usable_names[v.name]=v end end
  local weapon_types,weapon_ids={},{ }
  for _,v in ipairs(p.weapons or {}) do weapon_types[v]=true end
@@ -1340,7 +1372,7 @@ local function tick(s,p)
    elseif p.reverse_route then point=1
    else return result(nil,'Route complete') end
   end
-  local v=route[point];local kind=v.kind or 'walk'
+  local v=route[point];local kind=route_kind(v)
   if distance(s.position,v)<=option('waypoint_radius',.8) then route_blocks=0 end
   if (not v.legacy or v.walk_first) and distance(s.position,v)>option('waypoint_radius',.8) then
    local door=route_door(v);if door then return door end
@@ -1359,6 +1391,20 @@ local function tick(s,p)
    route_pending={kind=kind,time=s.time,serial=s.action_serial,teleport=s.teleport_sequence};return cast(s,by_id[v.spell],s.player,'Recalling on route')
   end
   if kind=='command' then local e=meta_command(v.command,s);if e then if e=='Stopped by UCM command' then return result('stop',e) end;return failed(e) end;point=point+route_direction;return result(nil,'Route command completed') end
+  if kind=='vendor' then
+   local id=v.object_id or 0
+   if (s.vendor or 0)~=id then
+    if id==0 then
+     route_pending={kind=kind,time=s.time,vendor=0}
+     return {action='close_vendor',vendor=s.vendor,status='Closing vendor'}
+    end
+    local object
+    for _,o in ipairs(s.route_objects or {}) do if o.id==id and o.object_class==25 then object=o;break end end
+    if not object then return pause_navigation('recorded vendor is not visible') end
+    route_pending={kind=kind,time=s.time,vendor=id}
+    return {action='use_world',item=id,status='Opening '..object.name}
+   end
+  end
   if kind=='jump' then route_pending={kind=kind,time=s.time};return {action='jump',heading=v.heading or 0,current_heading=v.current_heading,charge=v.charge or .5,forward=v.forward or 1,strafe=v.strafe or 0,walk_jump=v.walk_jump,status='Charging route jump'} end
   if kind=='portal' or kind=='use' then
    if kind=='portal' and not v.legacy and not route[point+route_direction] then return failed('Record a destination point after the portal') end
@@ -1599,6 +1645,10 @@ local function tick(s,p)
    or recovery(6,mp,not target and math.max(option('idle_mana_threshold',0),option('mana_threshold',45)) or option('mana_threshold',45))
   if action then return action end
  end
+ -- Vendor waits never outrank VT's vital recovery. Keep the route at the
+ -- vendor until restocking finishes, so a later Close Vendor cannot race Buy.
+ if route_wait then return result(nil,route_wait) end
+ local vendor=vendor_work(s,p,inventory,option);if vendor then return vendor end
  -- Even without a ready heal, keep fighting; stopping here abandons the player.
  local health_critical=hp<option('stop_health',15)
  -- VT c4/c8/cx only dispel temporary elemental vulnerabilities, not every
@@ -2533,8 +2583,9 @@ local function run(s,p)
   return pause_activity(s,failure.activity,failure.status)
  end
  if loot_full and (loot_full.revision~=(s.inventory_revision or 0) or (s.pack_slots or 0)>loot_full.slots) then loot_full=nil end
- -- The host switches navigation off when it receives pause_navigation. Only
- -- re-enabling that shared switch can resume; state/meta overrides cannot.
+ -- The host switches navigation off when it receives pause_navigation. An
+ -- explicit UI toggle or a new meta enable command can retry; stale overrides
+ -- from the previous state must not silently resume the blocked route.
  if navigation_paused and p.navigation then
    navigation_paused=nil;route_blocks=0;door_attempts={}
    route_join_pending=true;route_join_scan=nil;meta.options.navigation=nil
@@ -2576,7 +2627,7 @@ local function run(s,p)
  elseif request==0 and forced_buff and forced_buff.request~=0 then forced_buff=nil;buff_plan=nil end
  local effective=meta_profile(s,p)
  activity='meta'
- local error=activity_ready('meta') and not navigation_paused and (not forced_buff or forced_buff.request==0) and meta_tick(s,effective)
+ local error=activity_ready('meta') and (not forced_buff or forced_buff.request==0) and meta_tick(s,effective)
  if error then
   if error=='Stopped by UCM command' then local out=result('stop',error);out.preserve_meta=true;return out end
   return failed(error)
@@ -2656,7 +2707,7 @@ local function run(s,p)
   if locked_target then monster_blacklist[locked_target]=s.time+30;locked_target=nil end
   if #route_trail==0 then route_join_pending=true;route_join_scan=nil end
  end
- local intent=(not forced_buff and not navigation_paused and meta_work(s,effective)) or tick(s,effective)
+ local intent=(not forced_buff and meta_work(s,effective)) or tick(s,effective)
  if intent then
   intent.targeting_status=targeting_status
   route_walking=intent.status and (intent.status:sub(1,9)=='Waypoint ' or intent.status=='Route complete') or false
@@ -2668,7 +2719,7 @@ local function run(s,p)
   intent.route_track_movement=effective.navigation and #route>0 and not route_walking and not route_returning and (not route_pending or route_pending.kind=='pause') or false
   if p.vt_meta then intent.meta_state=meta.name end
   if meta.route_changed then
-   intent.runtime_route=meta.route.route;intent.runtime_loop_route=effective.loop_route==true;intent.runtime_reverse_route=effective.reverse_route==true
+   intent.runtime_route=meta.route.route;intent.runtime_route_profile=meta.route_profile;intent.runtime_loop_route=effective.loop_route==true;intent.runtime_reverse_route=effective.reverse_route==true
    meta.route_changed=false
   end
  end

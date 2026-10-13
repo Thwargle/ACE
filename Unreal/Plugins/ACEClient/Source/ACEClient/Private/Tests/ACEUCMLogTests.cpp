@@ -50,6 +50,7 @@ bool FACEUCMLogTest::RunTest(const FString&)
     FACEPosition Pos;Pos.CellId=0x01D9010B;Pos.Location=FVector(34.8,-34.5,0);Session->SetLocalPosition(Pos);
     auto P=H->Find(TEXT("ucm"));if(!TestTrue(TEXT("UCM is available"),P.IsValid())){GI->Shutdown();return false;}
     P->Enabled=true;P->Running=true;P->Profile=MakeShared<FJsonObject>();P->ProfileName=TEXT("RedRatCave");
+    P->ProfileLinks=MakeShared<FJsonObject>();P->ProfileLinks->SetStringField(TEXT("Character"),TEXT("RatHunter"));P->ProfileLinks->SetStringField(TEXT("Routes"),TEXT("RedRatCave"));
     P->Profile->SetStringField(TEXT("nav_source"),TEXT("RedRatCave.nav"));H->RoutePoint=4;
     H->LogUCMEvent(*P,TEXT("UCM started"));
     auto Intent=MakeShared<FJsonObject>();Intent->SetStringField(TEXT("activity"),TEXT("navigation"));
@@ -61,7 +62,7 @@ bool FACEUCMLogTest::RunTest(const FString&)
     Intent->SetStringField(TEXT("action"),TEXT("pause_navigation"));Intent->SetStringField(TEXT("status"),TEXT("Navigation paused: door remains closed after three attempts. UCM remains active; enable Follow route to retry"));
     H->Execute(*P,Intent);
     TestTrue(TEXT("Navigation pause is logged without stopping UCM"),P->Running&&H->UCMLog.GetLastProblem()->Message.Contains(TEXT("door remains closed")));
-    TestTrue(TEXT("Failure identifies route and waypoint"),H->UCMLog.GetLastProblem()->Context.Contains(TEXT("RedRatCave.nav"))&&H->UCMLog.GetLastProblem()->Context.Contains(TEXT("Waypoint 4")));
+    TestTrue(TEXT("Failure identifies selected profiles and waypoint"),H->UCMLog.GetLastProblem()->Context.Contains(TEXT("Character: RatHunter"))&&H->UCMLog.GetLastProblem()->Context.Contains(TEXT("Route: RedRatCave"))&&H->UCMLog.GetLastProblem()->Context.Contains(TEXT("Waypoint 4")));
     TestTrue(TEXT("Failure identifies actual cell and location"),H->UCMLog.GetLastProblem()->Context.Contains(TEXT("01D9010B")));
     H->ReportActivityFailure(*P,Intent,TEXT("Route action timed out"));
     TestTrue(TEXT("Native action failures are recorded"),H->UCMLog.GetLastProblem()->Message.Contains(TEXT("Route action timed out")));

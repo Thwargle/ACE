@@ -10,7 +10,7 @@ Start with [API Workbench](Examples/api_workbench/main.lua), its
 [default profile](Examples/api_workbench/default.json). Copy that directory into
 `Saved/ClientPlugins/Installed`, refresh Manage Plugins, enable its permissions,
 then Start. The example's activities start off. It has its own profiles and does
-not edit the built-in UCM setup. The machine-readable action/field catalog is
+not edit the built-in UCM configuration. The machine-readable action/field catalog is
 [`ClientMods/api.json`](../../ClientMods/api.json).
 
 ## Lifecycle and ownership
@@ -189,7 +189,8 @@ cover:
 - `cast` with spell/target and optional `fast_cast`; attack (`mode` 2 melee or 4
   missile, `height` 1-3, `power` 0-1), `cancel_attack`, `combat_mode`, `attack_bar`.
 - `move` with AC `cell,x,y,z`, metre `arrival_radius`, optional pursuit `target`;
-  `face`, `jump`, `recall`, `use_world`, `select`, `logout`.
+  `face`, `jump`, `recall`, `use_world`, `close_vendor` (current vendor GUID),
+  `select`, `logout`.
 - `identify`, `equip` (`offhand`/`unequip`), `use_item`, `apply_item`, `store_item`,
   `give`, `merge`.
 - `open_corpse`, `close_corpse`, `loot`, `salvage`, `combine_salvage`, `read`,
@@ -296,7 +297,7 @@ keys. Plugin chat/messages and this inbox are separate bounded streams.
   consumption of force_buff_request/force_buff_only and force_buff_done yourself.
 - **policy**: command with text such as `/ucm jump`; compiles into your own driver's
   command queue, using the same meta adapters. Requires commands. This does not
-  enable UCM or edit its setup. Execution retains each action's permissions.
+  enable UCM or edit its configuration. Execution retains each action's permissions.
 - **waypoint**: set with coordinate text or clear. Uses the existing NAV destination.
 - **window**: show/hide/toggle your own desktop window. Does not stop your plugin.
 - **chat**: send text, optional recipient for tell or channel=2048 for fellowship;

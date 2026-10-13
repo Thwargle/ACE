@@ -115,6 +115,9 @@ bool FACECachedWorldDrawTest::RunTest(const FString&)
         auto* Land=Chunk?nullptr:World->SpawnActor<AACELandblockActor>();
         auto* TerrainChunk=Chunk?World->SpawnActor<AACETerrainChunkActor>():nullptr;
         auto* TerrainMesh=Chunk?TerrainChunk->TerrainMesh.Get():Land->TerrainMesh.Get();
+        auto* TerrainMaterial=UMaterialInstanceDynamic::Create(Dat->EnsureAceLandMaterialBase(),TerrainMesh);
+        TerrainMesh->SetMaterial(0,TerrainMaterial);
+        TerrainMesh->CreateMeshSection(0,Vertices,{0,2,1,0,3,2,0,1,2,0,2,3},{},{},{},{},false);
         auto* Scenery=NewObject<UProceduralMeshComponent>(TerrainMesh->GetOwner());
         Scenery->SetupAttachment(TerrainMesh);Scenery->bPreferCachedDraws=true;
         Scenery->SetCollisionEnabled(ECollisionEnabled::NoCollision);Scenery->SetCastShadow(false);
@@ -132,6 +135,27 @@ bool FACECachedWorldDrawTest::RunTest(const FString&)
             const auto After=Render();
             TestTrue(TEXT("Terrain retains its attached scenery buffers"),Scenery->SceneProxy==SceneryProxy);
             TestTrue(TEXT("Hiding terrain leaves the independently visible building unchanged"),After==Before);
+        }
+        // The indoor floor-priority switch affects even outdoor landblocks without
+        // buildings. It changes a MID scalar, not geometry or material identity.
+        Capture->ShowOnlyComponents.Reset();Capture->ShowOnlyComponents.Add(TerrainMesh);
+        Render();
+        auto* TerrainProxy=TerrainMesh->SceneProxy;
+        TestNotNull(TEXT("Terrain geometry has a resident render proxy"),TerrainProxy);
+        for(bool Priority:{true,false,true,false})
+        {
+            if(Chunk)TerrainChunk->SetLandEnvCellFloorPriority(Priority,Dat,true);
+            else Land->SetLandEnvCellFloorPriority(Priority,Dat,true);
+            TestFalse(TEXT("Doorway depth priority does not rebuild terrain buffers"),TerrainMesh->IsRenderStateDirty());
+            TestEqual(TEXT("Doorway retains the authored floor-depth adjustment"),
+                TerrainMaterial->K2_GetScalarParameterValue(TEXT("LandDepthBias")),Priority?.25f:0.f);
+            const auto RetainedPixels=Render();
+            TestTrue(TEXT("Crossing retains the terrain render proxy"),TerrainMesh->SceneProxy==TerrainProxy);
+            // Compare with the former rebuild path: retaining buffers must not
+            // change the visible result of the new material parameter.
+            TerrainMesh->MarkRenderStateDirty();
+            TestTrue(TEXT("Parameter-only update matches rebuilt terrain pixels"),Render()==RetainedPixels);
+            TerrainProxy=TerrainMesh->SceneProxy;
         }
         Capture->ShowOnlyComponents.Reset();
         if(Chunk)TerrainChunk->Destroy();else Land->Destroy();

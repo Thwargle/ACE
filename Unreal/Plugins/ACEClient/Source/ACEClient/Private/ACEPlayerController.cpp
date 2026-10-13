@@ -1190,7 +1190,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		if (Client->GetSession()) Client->GetSession()->ClearHeldForwardCommand();
 		if (GetPawn()) if (auto* App=GetPawn()->FindComponentByClass<UACECharacterAppearanceComponent>()) App->FinishEmoteMotion();
 	}
-	if (bManualKeys) { bServerTurnActive = false; bServerControlledMotion = false; }
+	if (bManualKeys) ReclaimManualMovement();
 	if (bManualKeys && (bServerMoveToActive || bAwaitingUseDone || ApproachUseSendCount > 0))
 	{
 		const bool bCancelUse = bAwaitingUseDone;
@@ -1567,8 +1567,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
     }
 	if (!FMath::IsNearlyZero(PendingMouseTurnDegrees))
 	{
-		bServerTurnActive = false;
-		bServerControlledMotion = false;
+		ReclaimManualMovement();
 	}
 
 	ForwardAxis = F;
@@ -1681,6 +1680,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	// Fast buffs send a synchronous press/release in TryFastBuffTap. They never
 	// leave a held axis whose release could be swallowed by this use freeze.
 	const bool bFreezeMoveToState = !bManualKeys && !bMouseTurnSend && !bMouseTurnSent && !bJumpAirborne && !bJumpCharging
+		&& !bManualMovementCommandSent
 		&& (bServerTurnActive || bAwaitingUseDone || ApproachUseSendCount > 0 || Client->IsUseBusy());
 
 	if (bFreezeMoveToState)
@@ -1754,6 +1754,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		ForwardSent = F;
 		RightSent = R;
 		TurnSent = ReportedTurn;
+		bManualMovementCommandSent = bManualKeys || bMouseTurnSend;
 		bRunningSent = bRunning;
 		bUniformVRMovementSent = bUniformVRMovement;
 		bMouseTurnSent = bMouseTurnSend;
@@ -6163,6 +6164,7 @@ void AACEPlayerController::InvalidateMovementAfterTeleport(bool bAirborneArrival
 	// CommandInterpreter::PlayerTeleported cancels autorun. Physical held keys
 	// are sampled normally next tick; cached pre-portal axes must not survive.
 	bAutoRun = false;
+	bManualMovementCommandSent = false;
 	ForwardAxis = RightAxis = TurnAxis = 0.f;
 	// Re-seed MotionStance from CombatMode before StopMovement so MoveToState does not
 	// echo NonCombat and wipe HandCombat/Magic after portal arrival.
@@ -7321,6 +7323,7 @@ void AACEPlayerController::BeginUseApproach(int32 TargetGuid, float DistanceAc, 
 	{
 		return;
 	}
+	bManualMovementCommandSent = false; // The use approach now owns the pending stop.
 	if (bServerMoveToActive && ServerMoveToTargetGuid == TargetGuid)
 	{
 		// A repeated double-click must not toggle the object or reset its charge
@@ -7560,6 +7563,23 @@ void AACEPlayerController::InteractWithObject(int32 ObjectGuid)
 	UE_LOG(LogTemp, Log, TEXT("ACE: Use guid=0x%08X name='%s'"), ObjectGuid, *Obj.Name);
 }
 
+void AACEPlayerController::ReclaimManualMovement()
+{
+	// Retail CommandInterpreter::TakeControlFromServer stops the server's
+	// forward substate and reapplies ALL held command lists, including turn
+	// and sidestep. Comparing axes alone misses a cast arriving while those
+	// keys are already held: its ServerControl stamp still needs acknowledging.
+	if (bServerControlledMotion)
+	{
+		bForceMovementResend = true;
+		// StopObjectCompletely removes cyclic states, not unfinished links.
+		// Our cast one-shot already returns to locomotion at the link's end;
+		// allow the independent sidestep/turn channels to move in the meantime.
+	}
+	bServerTurnActive = false;
+	bServerControlledMotion = false;
+}
+
 void AACEPlayerController::PrepareManualCombat(bool bFinishJump)
 {
 	if (!Client || IsVRActive()) return;
@@ -7575,6 +7595,7 @@ void AACEPlayerController::PrepareManualCombat(bool bFinishJump)
 	ClearServerMoveTo();
 	if (Client->GetSession()) Client->GetSession()->ClearHeldForwardCommand();
 	MovementSuppressionSequence = ++MovementKeySequence;
+	bManualMovementCommandSent = false;
 	bAutoRun = bMouseForwardActive = false;
 	PreviousManualForward = 0.f;
 	ForwardAxis = RightAxis = TurnAxis = 0.f;
@@ -7635,6 +7656,7 @@ void AACEPlayerController::HandleMotionUpdate(int32 ObjectGuid, const FACEObject
 		return;
 	}
 	bServerControlledMotion = true;
+	bManualMovementCommandSent = false;
 	bAutoRun = false; // CommandInterpreter::LoseControlToServer
 	if (ACEMotion::NormalizeCommand(Motion.ForwardCommand)==0x4000001cu
 		|| ACEMotion::NormalizeCommand(Motion.ActionCommand)==0x4000001cu)

@@ -1,49 +1,31 @@
 FString LegacyPath,LegacyName=TEXT("Imported"),LegacyFolder;
-TMap<FString,FString> LibraryErrors;
+FString ImportExtension=TEXT("utl");
 TMap<FString,TArray<FString>> LibraryFiles;
 void RefreshLibrary(){for(const TCHAR* Ext:{TEXT("nav"),TEXT("met"),TEXT("utl"),TEXT("usd")})LibraryFiles.Add(Ext,Host->GetProfileFiles(Ext));}
+void ImportHome()
+{
+    Heading(TEXT("Import"),TEXT("Choose a vTank file to create reusable profiles. Meta imports include referenced files and embedded routes. Keep dependency files together in the import folder."));
+    for(const auto& Entry:TArray<TPair<FString,FString>>{
+        {TEXT("utl"),TEXT("Import vTank Loot Profile (*.utl)")},{TEXT("nav"),TEXT("Import vTank Route (*.nav)")},
+        {TEXT("met"),TEXT("Import vTank Meta (*.met)")},{TEXT("usd"),TEXT("Import vTank Character Settings (*.usd)")}})
+        Add(Button(Entry.Value,[this,Ext=Entry.Key](){ImportExtension=Ext;RefreshLibrary();Page=TEXT("Import vTank");Rebuild();}));
+    Add(Button(TEXT("Compatibility preview / reports"),[this](){Page=TEXT("Import tools");Rebuild();}));
+}
 void SectionImportPanel()
 {
-    Add(Button(TEXT("Back to Profiles"),[this](){Page=TEXT("Profiles");Rebuild();}));
-    Heading(TEXT("Import vTank file"),TEXT("Choose a .nav route or .utl loot file. Each import creates and selects a separate profile named after the file. Existing names get a numbered suffix; your setup name and source files stay unchanged."));
+    Add(Button(TEXT("Back to Import"),[this](){Page=TEXT("Import");Rebuild();}));
+    Heading(TEXT("Import vTank file (*.")+ImportExtension+TEXT(")"),TEXT("Creates and selects profiles named after the file. Existing names receive a numbered suffix. Original files are kept."));
     Add(Text(TEXT("Import folder"),14,Muted));
     Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Text(FText::FromString(LegacyFolder)).OnTextChanged_Lambda([this](const FText& Value){LegacyFolder=Value.ToString();}));
     Add(Button(TEXT("Refresh folder"),[this](){if(Host->SetProfileFolder(LegacyFolder)){RefreshLibrary();Rebuild();}}));
     int32 Count=0;
-    for(const FString Ext:{TEXT("nav"),TEXT("utl")})for(const auto& File:LibraryFiles.FindRef(Ext))
+    for(const auto& File:LibraryFiles.FindRef(ImportExtension))
     {
-        ++Count;Add(Button((Ext==TEXT("nav")?TEXT("Route: "):TEXT("Loot: "))+File,[this,File](){
-            if(!CanLeaveLootRule())return;if(Host->ImportUCMSection(File))ResetProfileEditors();Rebuild();}));
+        ++Count;Add(Button(File,[this,File](){
+            if(!CanLeaveLootRule())return;
+            if((ImportExtension==TEXT("nav")||ImportExtension==TEXT("utl"))?Host->ImportUCMSection(File):Host->SelectProfileFile(File))ResetProfileEditors();Rebuild();}));
     }
-    if(!Count)Add(Text(TEXT("No .nav or .utl files found. Copy files into this folder, then refresh."),15,Muted));
-}
-void LibrarySelector(const FString& Ext,const FString& Label)
-{
-    Add(Text(Label,16,Muted));
-    Add(SNew(SComboButton).ButtonStyle(&Style()).ContentPadding(8).ButtonContent()[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).ColorAndOpacity(Ink)
-        .Text_Lambda([this,Ext](){const FString Source=Str(P(),*(Ext+TEXT("_source")));if(!Source.IsEmpty())return FText::FromString(FPaths::GetCleanFilename(Source));
-            if(Ext==TEXT("utl")&&!Str(P(),TEXT("loot_profile")).IsEmpty())return FText::FromString(Str(P(),TEXT("loot_profile")));
-            const TArray<TSharedPtr<FJsonValue>>* Entries=nullptr;const TCHAR* Key=Ext==TEXT("nav")?TEXT("route"):Ext==TEXT("met")?TEXT("vt_meta"):Ext==TEXT("usd")?TEXT("usd_keys"):TEXT("loot_rules");
-            return FText::FromString(P()->TryGetArrayField(Key,Entries)&&Entries->Num()?TEXT("Custom / saved in this setup"):TEXT("[None] — choose from folder"));})]
-        .OnGetMenuContent_Lambda([this,Ext]()->TSharedRef<SWidget>{
-            auto List=SNew(SVerticalBox);
-            List->AddSlot().AutoHeight()[Button(TEXT("[None]"),[this,Ext](){if(Host->ClearProfileFile(Ext))LibraryErrors.Remove(Ext);else LibraryErrors.Add(Ext,Host->Notice);FSlateApplication::Get().DismissAllMenus();Rebuild();})];
-            for(const auto& File:LibraryFiles.FindOrAdd(Ext))List->AddSlot().AutoHeight()[Button(File,[this,Ext,File](){if(Host->SelectProfileFile(File))LibraryErrors.Remove(Ext);else LibraryErrors.Add(Ext,Host->Notice);FSlateApplication::Get().DismissAllMenus();Rebuild();})];
-            if(LibraryFiles.FindOrAdd(Ext).IsEmpty())List->AddSlot().AutoHeight()[Text(TEXT("No .")+Ext+TEXT(" files in this folder"),14,Muted)];
-            return SNew(SBox).MaxDesiredHeight(280).MinDesiredWidth(280)[SNew(SScrollBox)+SScrollBox::Slot()[List]];
-        }));
-    const FString Source=Str(P(),*(Ext+TEXT("_source")));
-    if(!Source.IsEmpty())Add(Text(TEXT("Loaded: ")+Source,12,Accent));
-    if(const FString* Error=LibraryErrors.Find(Ext))Add(Text(*Error,14,FLinearColor(1,.55f,.3f)));
-}
-void LibraryPanel()
-{
-    Heading(TEXT("Profile library"),TEXT("Choose to load. Refresh after changing files, then choose again to reload."));
-    Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).Padding(8).Text(FText::FromString(LegacyFolder)).HintText(FText::FromString(TEXT("Folder containing .nav, .met, .utl and .usd files")))
-        .OnTextChanged_Lambda([this](const FText& V){LegacyFolder=V.ToString();}));
-    Add(Button(TEXT("Refresh folder"),[this](){if(Host->SetProfileFolder(LegacyFolder)){RefreshLibrary();Rebuild();}}));
-    LibrarySelector(TEXT("nav"),TEXT("Navigation"));LibrarySelector(TEXT("met"),TEXT("Meta"));LibrarySelector(TEXT("utl"),TEXT("Loot"));
-    LibrarySelector(TEXT("usd"),TEXT("Character settings"));
+    if(!Count)Add(Text(TEXT("No .")+ImportExtension+TEXT(" files found. Copy files into this folder, then refresh."),15,Muted));
 }
 TSharedPtr<FJsonObject> LegacyDocument,LegacyConverted;
 TArray<FString> LegacyIssues;
@@ -55,7 +37,7 @@ void PreviewLegacy(const FString& Path)
 }
 void ImportPanel()
 {
-    Heading(TEXT("Virindi profile import"),TEXT("Read .utl loot rules, .nav routes, .met metas and .usd settings. Originals are never changed. Only fully supported conversions can be activated; unsupported data is retained in an import report. Supported /vt commands become /ucm actions. Each import creates a linked setup under Profiles/ucm and separate reusable JSON profiles; repeated names receive numbered suffixes. Decal plugins are not loaded."));
+    Heading(TEXT("Virindi profile import"),TEXT("Read .utl loot rules, .nav routes, .met metas and .usd settings. Originals are never changed. Only fully supported conversions can be activated; unsupported data is retained in an import report. Supported /vt commands become /ucm actions. Imports create separate reusable profiles; repeated names receive numbered suffixes. Decal plugins are not loaded."));
     Add(Text(TEXT("File path (or copy files to Saved/ClientPlugins/ImportInbox)"),15,Muted));
     Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Text(FText::FromString(LegacyPath)).OnTextChanged_Lambda([this](const FText& V){LegacyPath=V.ToString();LegacyDocument.Reset();}));
     Add(Button(TEXT("Preview file"),[this](){PreviewLegacy(LegacyPath);}));

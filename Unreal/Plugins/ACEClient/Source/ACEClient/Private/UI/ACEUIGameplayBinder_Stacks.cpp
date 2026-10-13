@@ -60,6 +60,17 @@ void UACEUIGameplayBinder::UpdateInventoryContainerDropFeedback(FVector2D Canvas
 			Canvas->SetOverlayOrder(PaperDollDragTargetIcon, Manager->FindElementByName(Owner), 120004);
 		}
 	};
+	if (OpenSalvageToolGuid)
+	{
+		for (UBorder* Cell : SalvageItemBackgrounds)
+		{
+			if (!Cell || !Cell->IsVisible() || !Canvas->IsWidgetExposedAt(Cell, Absolute)) continue;
+			// Match the drop's ownership, material and retained-item rules. Empty
+			// squares have backgrounds too, even though they have no item icon yet.
+			Mark(Cell, CanAddItemToSalvageQueue(InvDragGuid), false, TEXT("SalvagePanel"));
+			return;
+		}
+	}
 	for (int32 I=0; I<PackSlotBgs.Num() && I<PackSlotGuids.Num(); ++I)
 	{
 		auto* Cell=PackSlotBgs[I].Get();

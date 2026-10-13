@@ -2,6 +2,8 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 #include "Misc/Paths.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Misc/FileHelper.h"
 #include "HAL/FileManager.h"
 #include "Engine/GameInstance.h"
@@ -31,7 +33,9 @@ bool FACESalvageTest::RunTest(const FString&)
     TGuardValue<uint64> FrameGuard(GFrameCounter, GFrameCounter);
     auto* GI = NewObject<UGameInstance>();
     auto* Dat = NewObject<UACEDatSubsystem>(GI);
-    if (!TestTrue(TEXT("Retail DAT opens"), Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+    FString DatDirectory = TEXT("C:/Turbine/Asheron's Call");
+    FParse::Value(FCommandLine::Get(), TEXT("RetailDatDir="), DatDirectory);
+    if (!TestTrue(TEXT("Retail DAT opens"), Dat->LoadDatDirectory(DatDirectory))) return false;
     ON_SCOPE_EXIT { Dat->Deinitialize(); };
     auto* Resources = NewObject<UACEUIResourceResolver>(); Resources->Initialize(Dat);
     auto* Manager = NewObject<UACEUIElementManager>(); Manager->Initialize();
@@ -132,6 +136,47 @@ bool FACESalvageTest::RunTest(const FString&)
 
     AddItem(1000, 64); AddItem(1001, 61);
     Binder->RefreshInventoryOverlays();
+    // Exercise the same drag update used by desktop Slate input. The destination
+    // includes empty squares; eligibility must agree with the eventual drop.
+    auto CheckDragMarker = [&](int32 Guid, bool Accept, int32 CellIndex, float DPI)
+    {
+        Draw(TEXT("BeforeDrag"), DPI);
+        const auto* CellSlot = Cast<UCanvasPanelSlot>(Binder->SalvageItemBackgrounds[CellIndex]->Slot);
+        if (!TestNotNull(TEXT("Salvage destination has a positioned square"), CellSlot)) return;
+        const FVector2D Point = CellSlot->GetPosition() + CellSlot->GetSize() * .5;
+        Binder->InvDragGuid = Guid; Binder->InvDragIconDid = Session.WorldObjects[Guid].IconId;
+        Binder->bInvDragPending = true; Binder->bInvDragActive = true;
+        const int32 Before = Binder->SalvageQueueGuids.Num();
+        Binder->UpdateInventoryDrag(Point);
+        auto* Marker = Binder->PaperDollDragTargetIcon.Get();
+        if (TestNotNull(TEXT("Salvage hover has a drag marker"), Marker))
+        {
+            TestEqual(TEXT("Salvage marker is visible"), Marker->GetVisibility(), ESlateVisibility::HitTestInvisible);
+            TestTrue(TEXT("Salvage marker uses retail accept/reject art"), Marker->Background.GetResourceObject()
+                == Resources->ResolveIconTexture(Accept ? 0x060011F9 : 0x060011F8));
+            const auto* MarkerSlot = Cast<UCanvasPanelSlot>(Marker->Slot);
+            TestTrue(TEXT("Marker follows hovered square position and size at this DPI"), MarkerSlot
+                && MarkerSlot->GetPosition().Equals(CellSlot->GetPosition(), .01)
+                && MarkerSlot->GetSize().Equals(CellSlot->GetSize(), .01));
+        }
+        TestEqual(TEXT("Hover never queues or destroys items"), Binder->SalvageQueueGuids.Num(), Before);
+        // Keep the offscreen fixture's simulated pointer in place: the live HUD
+        // tick would otherwise replace it with the OS cursor position.
+        Canvas->SetGameplayBinder(nullptr);
+        Draw(Accept ? TEXT("AcceptDrag") : TEXT("RejectDrag"), DPI);
+        Canvas->SetGameplayBinder(Binder);
+        if (Marker) TestEqual(TEXT("Rendered salvage marker stays visible"), Marker->GetVisibility(), ESlateVisibility::HitTestInvisible);
+        Binder->UpdateInventoryDrag(Canvas->LayoutToViewport(FVector2D(20, 20)));
+        if (Marker) TestEqual(TEXT("Leaving salvage clears the marker"), Marker->GetVisibility(), ESlateVisibility::Collapsed);
+        Binder->CancelInventoryDrag();
+        if (Marker) TestEqual(TEXT("Cancel clears drag feedback"), Marker->GetVisibility(), ESlateVisibility::Collapsed);
+    };
+    for (float DPI : {1.f, 1.5f})
+    {
+        CheckDragMarker(1000, true, 0, DPI);
+        CheckDragMarker(200, false, Binder->SalvageVisibleSlots - 1, DPI);
+    }
+    Draw(TEXT("AfterDrag"));
     const int32 SourceSlot = Binder->InventorySlotGuids.Find(1000);
     if (!TestTrue(TEXT("Salvage source has a visible inventory slot"), Binder->InventorySlots.IsValidIndex(SourceSlot))) return false;
     UObject* const OriginalForeground = Binder->InventorySlots[SourceSlot]->Background.GetResourceObject();
@@ -148,7 +193,10 @@ bool FACESalvageTest::RunTest(const FString&)
     Binder->AddItemToSalvageQueue(1000);
     TestFalse(TEXT("Duplicate is rejected"), Binder->AddItemToSalvageQueue(1000));
     TestFalse(TEXT("Single material option rejects iron after steel"), Binder->CanAddItemToSalvageQueue(1001));
+    CheckDragMarker(1000, false, 0, 1.f);
+    CheckDragMarker(1001, false, 1, 1.f);
     Session.CharacterOptions2 |= 0x80;
+    CheckDragMarker(1001, true, 1, 1.f);
     TestTrue(TEXT("Retail SalvageMultiple flag allows iron after steel"), Binder->AddItemToSalvageQueue(1001));
     AddItem(1002, 64); Session.WorldObjects[1002].ObjectDescriptionFlags = ACEObjectDescFlag::Retained;
     AddItem(1003, 64); Session.WorldObjects[1003].WielderId = 1234;

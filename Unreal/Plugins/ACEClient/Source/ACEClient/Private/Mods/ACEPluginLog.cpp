@@ -22,8 +22,8 @@ void UACEPluginSubsystem::LogUCMEvent(const FACEClientPlugin& P,const FString& M
         if(Current->LogEntries.Num()>=200)Current->LogEntries.RemoveAt(0);Current->LogEntries.Add(MakeShared<FJsonValueObject>(E));
     }
     if(P.Id!=TEXT("ucm"))return;
-    FString Context=TEXT("Setup: ")+P.ProfileName.Left(128);
-    const FString Route=Field(P.Profile,TEXT("nav_source"));
+    FString Context=TEXT("Character: ")+Field(P.ProfileLinks,TEXT("Character")).Left(128);
+    FString Route=Field(P.ProfileLinks,TEXT("Routes"));if(Route.IsEmpty())Route=Field(P.Profile,TEXT("nav_source"));
     if(!Route.IsEmpty())Context+=TEXT(" | Route: ")+FPaths::GetCleanFilename(Route).Left(128);
     Context+=FString::Printf(TEXT(" | Waypoint %d"),RoutePoint);
     if(!P.MetaState.IsEmpty())Context+=TEXT(" | Meta: ")+P.MetaState.Left(128);

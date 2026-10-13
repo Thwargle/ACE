@@ -216,7 +216,7 @@ J Convert(const J& D,TArray<FString>& Issues)
             const double LX=X-BX*192,LY=Y-BY*192;
             Q->SetNumberField(TEXT("cell"),uint32((BX<<24)|(BY<<16)|(FMath::Clamp(int(LX/24),0,7)*8+FMath::Clamp(int(LY/24),0,7)+1)));
             Q->SetNumberField(TEXT("x"),LX);Q->SetNumberField(TEXT("y"),LY);Q->SetNumberField(TEXT("z"),N(P,TEXT("z"))*240);
-            const TCHAR* Kinds[]={TEXT("walk"),TEXT("portal"),TEXT("recall"),TEXT("pause"),TEXT("command"),TEXT("use"),TEXT("portal"),TEXT("use"),TEXT("checkpoint"),TEXT("jump")};
+            const TCHAR* Kinds[]={TEXT("walk"),TEXT("portal"),TEXT("recall"),TEXT("pause"),TEXT("command"),TEXT("vendor"),TEXT("portal"),TEXT("use"),TEXT("checkpoint"),TEXT("jump")};
             Q->SetStringField(TEXT("kind"),Kinds[Type]);Q->SetBoolField(TEXT("legacy"),true);Q->SetBoolField(TEXT("walk_first"),Type==0||Type==1||Type==8);
             const auto Args=P->GetArrayField(TEXT("args"));
             auto NumberArg=[&](int Index,double Min,double Max){double V=0;if(!Args.IsValidIndex(Index)||!LexTryParseString(V,*Args[Index]->AsString())||!FMath::IsFinite(V)||V<Min||V>Max)Issues.Add(FString::Printf(TEXT("Waypoint %d: invalid argument %d."),Route.Num()+1,Index+1));return V;};

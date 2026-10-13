@@ -5,8 +5,79 @@ network behavior, controls, DAT content, and interface design. Graphical fidelit
 work follows feature completion. A feature is not complete merely because its
 button exists, its opcode has a constant, or a focused regression test passes.
 
-This is the working acceptance record, most recently reviewed on 2026-10-12. The client
+This is the working acceptance record, most recently reviewed on 2026-10-13. The client
 is **not yet a feature-complete retail replacement**.
+
+## Cast movement control handoff: 2026-10-13
+
+Reviewed retail `CommandInterpreter::HandleKeyboardCommand`,
+`TakeControlFromServer`, `MaybeStopCompletely`, and `UseTime`, plus
+`CMotionInterp::StopCompletely` and `CMotionTable::StopObjectCompletely`.
+Taking control reapplies the held forward, sidestep, and turn command lists;
+it is not conditional on the axes changing since the last outgoing packet.
+
+The desktop controller previously cleared its server-control flag without
+resending unchanged strafe/turn input. If a cast arrived after those keys
+were pressed, the server's new control stamp was never acknowledged by a
+movement command until another axis changed. Strafe, turn, and mouse facing
+now share the handoff and force one ordinary MoveToState. Subsequent
+unchanged frames do not send additional commands. Retail's
+`CSequence::remove_cyclic_anims` preserves unfinished links: a strafe/turn
+handoff keeps the cast entry animation playing while movement resumes,
+rather than truncating the link or waiting for it before allowing movement.
+
+A manual movement release now reaches the server even while Use is busy.
+Previously the use-wait branch could absorb the release and update its
+"sent" cache despite sending nothing. New server motion, use approaches,
+manual combat stops, and teleports reset that release ownership. Windup
+actions and locally controlled held emotes retain their existing behavior;
+spell requests, projectile release, damage, and cooldown timing are unchanged.
+
+`ACE.RetailParity.RunSpeed` now replays strafe, turn, and combined commands
+with early/late cast delivery at 30/60/144/240 Hz, checks actual MoveToState
+payloads and server-control stamps, verifies immediate translation/rotation,
+and covers release during a pending cast. It also checks that Play Possum
+can still slide and that taking control does not discard a scarab windup.
+Windows editor and Linux Development builds passed. RunSpeed, PvPCombat,
+and EmoteTransitions passed on Windows with no warnings. RunSpeed also
+passed natively under Linux/WSL Vulkan with one non-failing console-lookup
+performance diagnostic from the movement stress fixture. Evidence is in
+`Saved/CastMovementReview`. Quest source synchronization reports zero
+differences. These are deterministic input/network replays; live PvP under
+variable server latency still needs in-game confirmation.
+
+## Salvage drag feedback and doorway rendering: 2026-10-13
+
+Salvage now shows the retail ItemSlot accept/reject artwork on the hovered
+square, including empty slots. The preview uses `CanAddItemToSalvageQueue`,
+the same ownership, retained-item, duplicate, tool, and material rules as the
+drop operation. Hover only previews; it never queues or destroys an item.
+The regression covers accept/reject icons, single/multiple material settings,
+duplicate rejection, position/size at 100% and 150% Slate DPI, leaving the list,
+and cancellation. The DAT path override permits the same test on Linux.
+
+Found another global doorway render invalidation after the residency fixes:
+`SetLandEnvCellFloorPriority` changed a material scalar and then explicitly
+rebuilt the terrain proxy. Indoor occupancy changes that scalar across the
+surrounding outdoor blocks, including those without buildings. Both individual
+landblocks and terrain chunks now retain uploaded geometry for these parameter
+updates. Actual material replacements still invalidate normally through
+`SetMaterial`; the floor-depth values, collision, and visibility remain intact.
+The rendered regression repeatedly toggles priority, checks retained proxies,
+and compares pixels against the former forced-rebuild path.
+
+Windows editor and Linux Development builds passed. Salvage, CachedWorldDraws,
+EntranceTransitions, and ResidentTerrainCollision passed on Windows/D3D12 and
+native Linux/Vulkan under WSL with lavapipe. Evidence and renders are in
+`Saved/SalvageDoorwayReview`. Linux had two non-failing diagnostic warnings in
+the entrance fixture. The Linux test runner exits with status 1 after exporting
+successful results because `-TestExit` calls Unreal's forced Unix exit; results
+were checked in the JSON report rather than inferred from that exit status.
+The final salvage render fixture also passed on both platforms with its
+simulated pointer held in place for screenshots. The Linux build caught misleading indentation in
+the pending UCM Micro start/stop callback; explicit braces fix it without a
+behavior change. These checks verify behavior and eliminate a demonstrated
+rebuild path; they do not establish frame times on the reporter's GPU/driver.
 
 ## F-key stack overflow consolidation: 2026-10-12
 

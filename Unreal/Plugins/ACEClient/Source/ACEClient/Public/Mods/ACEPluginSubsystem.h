@@ -95,6 +95,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEItemToolsTest;
     friend class FACEUCMProfileStorageTest;
     friend class FACEUCMProfilePanelTest;
+    friend class FACEUCMSharedMetaTest;
     friend class FACEPluginLocalServiceTest;
     friend class FACEPluginCosmeticsIntegrationTest;
     friend class FACEPluginCosmeticsTest;
@@ -142,7 +143,8 @@ public:
     bool SaveUCMSectionAs(const FString& Section, const FString& Name);
     bool NewUCMSection(const FString& Section, const FString& Name);
     bool DeleteUCMSection(const FString& Section, const FString& Name);
-    bool NewUCMSetup(const FString& Name);
+    bool InitializeUCMSelection();
+    bool MaterializeUCMMetaProfiles(const TSharedPtr<FJsonObject>& Profile, const FString& Name);
     bool ImportUCMSection(const FString& Filename);
     TSharedPtr<FJsonObject> InspectLegacyProfile(const FString& Path);
     bool SaveLegacyLoot(const FString& Name,const TSharedPtr<FJsonObject>& Document);

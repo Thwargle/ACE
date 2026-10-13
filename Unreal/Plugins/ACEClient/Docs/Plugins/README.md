@@ -73,52 +73,47 @@ Refresh stops old instances and reloads their manifests and scripts.
 
 ### Reusable UCM profiles
 
-Open UCM's **Profiles** tab to choose a run setup and its linked files. A setup
-under `Saved/ClientPlugins/Profiles/ucm` now stores references, with six separate
-JSON profile folders beside it:
+Open **Overview → Configuration** to select independent profiles and enable
+their activities. There is no named Setup to create or save. The current six
+selections and activity switches persist in `Saved/ClientPlugins/ucm-selection.json`.
+Reusable files live under `Saved/ClientPlugins/Profiles`:
 
-- `Character`: combat equipment and targeting settings, buffs, summons, and vital recovery.
-- `Routes`: waypoints, follow targets, looping, and route movement settings.
-- `Loot`: loot rules, salvage workmanship groups, and looting settings.
-- `Monsters`: monster rules and the imported monster catalog.
-- `Metas`: activity states, imported meta programs, and their dependency library.
+- `Character`: combat equipment, targeting defaults, buffs, summons and recovery.
+- `Routes`: waypoints, following, looping and route movement settings.
+- `Loot`: loot rules, salvage groups and looting settings.
+- `Monsters`: per-monster rules and the imported monster catalog.
+- `Metas`: state programs, imported metas and dependency references.
 - `Vendors`: vendor supply lists.
 
-For example, link `PlayerNameVOID` under Character in every hunt, and select a
-different Routes file for each hunt. Updating the summon in that Character file
-then applies to all those hunts. The activity switches (combat, buffing, looting,
-navigation, recovery, buff others, vendors, metas, and peace when idle) remain
-specific to each run setup.
+Keep a Character profile such as `PlayerNameVOID` selected and swap the Route or
+Meta for the next hunt. Edits save to the selected file. **New** and **Delete**
+are in each editing tab; new routes start empty. Deletion retains a backup in
+`Profiles/Deleted` and switches affected selections to Default. Default files
+cannot be deleted. Activity toggles remain independent of the selected files.
 
-Each editing tab identifies its active shared file. Edits save to that file and
-affect every setup referencing it. **New** creates and selects a separate
-profile with default settings; a new route has no waypoints. **Delete** asks for
-confirmation, switches setups referencing that file to **Default**, and archives
-the removed file in `Profiles/Deleted`. Default profiles cannot be deleted.
-**New setup** uses the entered name and links all six sections to Default.
-**Save current setup** saves the active setup and its selected profiles without
-renaming it. The Profiles tab provides selectors for quickly changing that
-combination; creation and deletion live in the individual editing tabs.
-**Import vTank file** lists `.nav` and `.utl` files in the configured import folder.
-Import creates a separate Route or Loot profile with the file's name (with a
-numbered suffix for collisions), selects it, and keeps the setup name and source
-file unchanged. Use **Refresh folder** after adding files.
-Protections and Banes are in **Buffs** and save in Character. **Monsters** replaces
-Rules; **Add selected monster** starts an editable rule with automatic defaults.
-Sections can be collapsed, and the floating log opens from **Log**. Choosing a
-profile stops the current run. **Start** and **Reload linked profiles** read the
-current files from disk; editing JSON externally requires a reload before running.
-A stale edit that conflicts with a newer shared file is rejected rather than
-silently overwriting the newer changes.
+**Import** has separate **Import vTank Loot Profile (*.utl)** and
+**Import vTank Route (*.nav)** buttons, plus Meta and Character imports.
+Files come from the configured import folder (initially `ImportInbox`). Refresh
+after adding files. Imported profiles use the source filename with a suffix for
+name collisions. Original files are unchanged. Meta dependencies and embedded
+routes become named profiles, including empty routes used to clear navigation.
+The meta selects them when its rules execute; Overview follows those changes.
+Editing a dependency or exported route updates subsequent use of that profile.
+Embedded routes are refreshed from their named files when the meta is loaded
+or UCM starts. Stop/Start retains meta progress when the configuration is unchanged.
 
-Existing monolithic setups migrate when opened. Their original data is backed up
-under `Profiles/Legacy/ucm`, and generated names receive numeric suffixes when
-necessary. Existing legacy setups are not automatically deduplicated: use the
-selectors to link the shared Character, Loot, or Monsters file you want. Old
-standalone `LootProfiles` files remain selectable and are copied into `Profiles/Loot`
-on first use. Virindi source files are preserved; imports create linked native
-setups with independent copies for changed sections. Clearing an imported
-selection detaches it from this setup without erasing another setup's shared file.
+Protections and Banes are in **Buffs**, saved in Character. **Monsters** offers
+name search and collapsible panels. New rules inherit the Character profile's
+**Combat** defaults for Priority and Attack Range. Both use whole-number sliders;
+uncheck **use Combat default** to override a monster. Explicit zero priority is
+valid. A global attack range of zero uses the weapon-mode attack range.
+
+Selecting a profile manually stops the run. Start reloads shared files from disk;
+conflicting stale edits are rejected. Older setups migrate automatically while
+preserving the last selection and all independently saved profiles. Original
+monolithic data is backed up under `Profiles/Legacy/ucm`; old manifests remain
+available for compatibility but no new named setups are required or created.
+Legacy `LootProfiles` files are copied into `Profiles/Loot` on first use.
 
 ### Local cosmetic services
 
@@ -154,7 +149,7 @@ hide with the desktop interface (Alt+Z by default) and are removed on logout.
 Disabled plugins are removed from the bar. In VR, use More → Manage Plugins.
 
 UCM is **Unattended Combat Manager**. The 0.7 interface has Overview, Buffs, Buff others,
-Combat, Recovery, Route, Loot, Rules, Metas and Profiles pages. Desktop plugin
+Combat, Recovery, Route, Loot, Vendors, Monsters, Metas, Import and Log pages. Desktop plugin
 windows can be resized using the lower-right grip; position and size are saved.
 In VR, More → Manage Plugins opens UCM directly, with a separate management button.
 
@@ -167,7 +162,7 @@ stop UCM or recording. Window position and size are saved.
 
 The log keeps the latest **1,000 events**, replacing the oldest. It records local
 timestamps, activity changes, route recovery attempts, pauses and errors, with
-the setup, route, waypoint and location where available. Unchanged polling
+the Character and Route profiles, waypoint and location where available. Unchanged polling
 statuses are skipped. **Problems only** filters warnings/errors; **Copy log**
 copies the visible history. Scroll back to pause following, or enable **Follow
 latest** to return to new messages. The latest problem remains visible even if
@@ -196,7 +191,8 @@ moving on to direct attacks. Per-monster rules can override these settings.
 ### UCM Micro, combat and route recovery
 
 **UCM Micro** is a compact companion window on the plugin bar and in plugin
-management. Its checkboxes control the same active UCM profile: running,
+management. A full-width **Start UCM / Stop UCM** button controls the run.
+Its checkboxes control the current activities:
 buffing, combat, looting, navigation, vital recovery, buff requests, vendor
 restocking, metas, and peace while idle. Closing Micro does not stop UCM.
 UCM still needs its normal permissions; Micro grants no additional capabilities.
@@ -245,7 +241,7 @@ Health, stamina and mana each have a recovery slider. UCM prefers eligible Life 
 then assessed supplies (including healing kits and potions). Enable **Prefer kits
 and consumables** on the Recovery tab to reverse this order. Unavailable or failed
 methods fall back to the other kind; failed methods cool down for 15 seconds.
-Changing this toggle overrides imported recovery order and saves with the setup.
+Changing this toggle overrides imported recovery order and saves with the Character profile.
 The status below it shows the active preference; **Use imported recovery order**
 can explicitly restore the imported priorities. Stamina to Mana is allowed only with sufficient
 stamina. It observes replicated vital increases and server action failures before retrying.
@@ -383,9 +379,9 @@ material** fills those fields without memorizing IDs; clear the name to collect
 all items of the material.
 
 **Save loot profile** stores reusable loot settings under `Saved/ClientPlugins/Profiles/Loot`. Vendor lists are independently linked under `Profiles/Vendors`.
-Loading one links it to the current UCM setup without replacing combat,
-buffs, recovery or navigation. Loading stops UCM. Other setups linked to the
-same file share subsequent edits. Loot-profile files are versioned UCM JSON, not VT
+Loading one changes the current Loot selection without replacing combat,
+buffs, recovery or navigation. Loading stops UCM. Every use of the same shared
+file sees subsequent edits. Loot-profile files are versioned UCM JSON, not VT
 `.utl` imports. Existing UCM prefix/minimum rules remain compatible.
 
 Public server workmanship is retained from Create/UpdateObject, including
@@ -413,8 +409,8 @@ override activities, and add ordered transitions. Current conditions are vital
 thresholds, elapsed time, target availability and route completion. This is a
 bounded UCM rule system, not the full VT expression language.
 
-Named profiles contain all these settings. Save As creates a copy; Load selects
-one. Activity/range/threshold edits are live. Loading a profile or editing routes
+Independent profiles contain these settings. Select them from Overview or
+their editing tabs. Activity/range/threshold edits are live. Loading a profile or editing routes
 and state rules stops the run. Manual movement overrides plugin steering without
 stopping UCM or resetting its activities. Turn Combat off and Loot on to fight
 manually with automatic looting. Steering can resume on the next plugin decision
@@ -477,7 +473,7 @@ from the active converted rules. The document editor exposes all 31 Classic
 requirement types, priority, actions and counts, custom expressions, RGB/tolerance
 values, palette slots, and extra file blocks. Unknown requirement bodies are
 retained in a raw editor. Save a separate copy; **Save copy and apply to active
-loot** validates compatibility before changing only the current setup's loot
+loot** validates compatibility before changing only the current Loot profile
 rules and salvage policy. Other hunt settings remain intact. Import/compatibility
 also opens files that cannot be activated.
 
@@ -870,16 +866,15 @@ before visiting a vendor if you intend to process its queued Sell rules.
 
 ## UCM folder library and compact controls
 
-Profiles now browses `.nav`, `.met` and `.utl` files directly from a chosen
-folder. Set the folder once, then Refresh after adding or modifying files. Select
-a filename to validate and load it; select it again to reload edits. Route and
-Meta tabs also have selectors. Current filenames and source paths are shown.
-Each selection is independent, persisted with the current UCM setup and stops
-automation before switching. Unsupported files leave the previous setup intact.
-`[None]` clears that selection. Loaded nav points immediately feed the existing
-world route overlay and enable Follow route; press Start to begin moving. You can
-turn Follow route off independently. Original files are
-never rewritten. Meta dependencies are resolved alongside their source file.
+**Import** browses `.nav`, `.met`, `.utl` and `.usd` files by type from a chosen
+folder. Set the folder once, then Refresh after adding files. Selecting a filename
+validates it and creates named native profiles. Existing names receive a suffix.
+Choose those profiles in Overview or their editing tabs; these selections persist
+and manual switching stops automation. Unsupported imports leave the previous
+configuration intact. Select Default for an empty/default profile. Imported nav
+points feed the world overlay and enable Follow route; press Start to move.
+Original files are never rewritten. Meta dependencies are resolved alongside
+their source file and the meta selects them when its rules execute.
 
 Buff is automatic by default. The Buffs tab shows compact toggles, skill margin
 and refresh threshold; **Edit buff exceptions** reveals the searchable family
@@ -916,8 +911,8 @@ quantity to keep in inventory. Enable **Automatically buy saved supplies**.
 While UCM runs, opening that vendor buys the difference, including when a route
 Use point visits it. This does not generate a route to the vendor: record the
 walk and Use points as usual. Lists match server, vendor name/class, and item
-name/class rather than temporary object IDs. They are saved with the UCM setup;
-Save/Load Loot Profile also includes them. Old loot profiles clear the supply list.
+name/class rather than temporary object IDs. They are saved in the selected
+Vendors profile, independently of Loot and the other profiles.
 Purchases use the regular client Buy protocol and wait for inventory confirmation.
 When pyreals are insufficient, UCM redeems accepted trade notes for the shortfall.
 Partial stacks are split first; only the confirmed new stack is sold. UCM waits

@@ -283,7 +283,7 @@ J VTNode(int32 Type,const V& Data,bool Action,TArray<FString>& Issues,int32 Dept
             if(R.At==Blob.Len()) {Route=MakeShared<FJsonObject>();Route->SetArrayField(TEXT("route"),{});Route->SetBoolField(TEXT("loop_route"),false);Route->SetBoolField(TEXT("reverse_route"),false);}
             else if(auto Nav=Read(Blob.Mid(R.At),TEXT("nav"),Error)){TArray<FString> Problems;Route=Convert(Nav,Problems);for(const auto& P:Problems)Issues.AddUnique(TEXT("Embedded route ")+Name+TEXT(": ")+P);}
             if(!R.Error.IsEmpty()||!Error.IsEmpty()||!Route)Issues.AddUnique(TEXT("Invalid embedded route: ")+Name+TEXT(" ")+R.Error+Error);
-            else Out->SetObjectField(TEXT("route"),Route);
+            else { Out->SetObjectField(TEXT("route"),Route); Out->SetStringField(TEXT("route_name"),Name); }
             Out->RemoveField(TEXT("value"));return Out;
         }
     }

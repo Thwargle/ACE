@@ -290,6 +290,9 @@ protected:
 	// Held input predating server Reading must not reclaim control every frame.
 	uint64 ReadingMovementSequence = 0;
 	uint64 MovementKeySequence = 0;
+	// A locally issued movement command still needs its release while Use is busy.
+	bool bManualMovementCommandSent = false;
+	void ReclaimManualMovement();
 	float RightAxis = 0.f;
 	float TurnAxis = 0.f;
 	float ForwardSent = 0.f;

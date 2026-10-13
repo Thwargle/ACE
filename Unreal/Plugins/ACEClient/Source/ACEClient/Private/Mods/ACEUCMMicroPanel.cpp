@@ -23,8 +23,22 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
             .OnCheckStateChanged_Lambda([Write](ECheckBoxState State){Write(State==ECheckBoxState::Checked);})
             [SNew(SACEPluginText).Text(FText::FromString(Label)).Font(FCoreStyle::GetDefaultFontStyle("Regular",15))]];
     };
-    Row(TEXT("UCM running"),[UCM](){auto P=UCM();return P&&P->Running;},[Host,UCM](bool On)
-    {if(Host.IsValid())if(auto P=UCM()){if(On)Host->Start(P->Id);else Host->Stop(P->Id,TEXT("Stopped"),true);}});
+    Rows->AddSlot().AutoHeight().Padding(2,4)[SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button)
+        .IsFocusable(false).HAlign(HAlign_Center).ContentPadding(FMargin(8,8))
+        .OnClicked_Lambda([Host,UCM]()
+        {
+            if(Host.IsValid())
+            {
+                if(auto P=UCM())
+                {
+                    if(P->Running)Host->Stop(P->Id,TEXT("Stopped"),true);
+                    else Host->Start(P->Id);
+                }
+            }
+            return FReply::Handled();
+        })
+        [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",18))
+            .Text_Lambda([UCM](){auto P=UCM();return FText::FromString(P&&P->Running?TEXT("Stop UCM"):TEXT("Start UCM"));})]];
     for(const auto& Entry:TArray<TPair<FString,FString>>{
         {TEXT("buffing"),TEXT("Buffing")},{TEXT("combat"),TEXT("Combat")},
         {TEXT("looting"),TEXT("Looting")},{TEXT("navigation"),TEXT("Navigation")},
@@ -48,8 +62,10 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
     Rows->AddSlot().AutoHeight().Padding(2,6)[SNew(SACEPluginText).AutoWrapText(true)
         .Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
         .Text_Lambda([UCM](){auto P=UCM();return FText::FromString(P?P->Status:TEXT("Enable UCM in Plugins."));})];
-    Rows->AddSlot().AutoHeight().Padding(2,4)[SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false).Text(FText::FromString(TEXT("Open UCM Log")))
-        .OnClicked_Lambda([Host](){if(Host.IsValid())Host->TogglePluginWindow(TEXT("ucm.log"));return FReply::Handled();})];
+    Rows->AddSlot().AutoHeight().Padding(2,4)[SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false)
+        .HAlign(HAlign_Center).ContentPadding(FMargin(8,8))
+        .OnClicked_Lambda([Host](){if(Host.IsValid())Host->TogglePluginWindow(TEXT("ucm.log"));return FReply::Handled();})
+        [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",15)).Text(FText::FromString(TEXT("Open UCM Log")))]];
     return SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Background).Padding(10)
         [SNew(SScrollBox)+SScrollBox::Slot()[Rows]];
 }

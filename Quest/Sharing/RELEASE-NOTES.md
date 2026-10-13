@@ -1,50 +1,48 @@
-# AC:Unreal / AC:VR release 112
+# AC:Unreal / AC:VR release 113
 
 Windows desktop, PC VR, native Linux x86_64, and standalone Quest share version
-**2026.10.12.112**. Android version code: 112. Quest installer revision: 9.
+**2026.10.13.113**. Android version code: 113. Quest installer revision: 9.
 
-## UCM
+## UCM profiles and interface
 
-- Preserve equipment buff timers across login so restarting UCM can honor buffs
-  that are still active, with invalidation when equipment or ownership changes.
-- Improve target handoff after a kill without applying the previous target's
-  retry delay to the next target.
-- Correct automatic melee attack heights, enable automatic attack power by
-  default, and use monster elemental preferences when choosing weapons.
-- Pause automated inventory actions around manual item drags and equipment
-  changes to prevent conflicting moves and items disappearing until relog.
-- Improve scroll-learning confirmation and retry handling, including eligible
-  unread scrolls already in inventory. Wait for Peace mode before reading.
+- Replace named setups with independent Character, Route, Loot, Vendors, Metas,
+  and Monsters profiles, selected together from Overview's Configuration panel.
+  Remember the current selections and migrate existing setup selections.
+- Rename Profiles to Import and separate the vTank loot and route import actions.
+- Add monster search and consistent expandable rule panels. Monster priority and
+  attack range use whole-number controls with shared defaults and per-monster
+  overrides.
+- Give UCM Micro a full-width Start UCM / Stop UCM button.
 
-## Movement and rendering
+## vTank compatibility and automation
 
-- Reduce catches and stalls at indoor/outdoor boundaries, including bridge
-  underpasses and building entrances. Reuse collision bodies and render state
-  instead of repeatedly rebuilding them during visibility transitions.
-- Keep scenery rendering stable when terrain visibility changes. These fixes
-  apply globally and have regression coverage on Windows and native Linux.
-- Restore held scroll-reading animation behavior and stop existing movement
-  when reading starts; a fresh movement input can interrupt the action.
+- Import embedded meta routes and supported profile dependencies into reusable
+  shared profiles. Preserve authored start conditions and existing user edits.
+- Keep the active route when metas load character or loot settings; replace it
+  only when loading navigation or meta data.
+- Improve legacy vendor waypoint handling, restock batches, purchase limits,
+  trade-note funding, and confirmation handling. Allow vital recovery while
+  waiting at vendors and keep other UCM activities available if routing fails.
+- Expose vendor closing through the Lua plugin API.
+- Compatibility testing covers supported local and public meta/route fixtures;
+  external plugin integrations that are not supported remain reported as such.
 
-## Inventory and interface
+## Movement, rendering, and inventory
 
-- Dragging the main pack or a backpack onto a closed vendor opens the shop and
-  adds eligible contents to Sell. Offers wait for the matching vendor reply.
-- The F key can fill a stack to its maximum and leave the remainder in its
-  original pack. Combined-stack selection follows confirmed server updates.
-- Remove unrelated waypoint-coordinate notices and empty footer space from
-  default plugin windows.
-- Add Hunt Ledger's estimated time to the next level below the totals, using
-  the current run's XP rate and remaining level XP.
-- Keep Supply and Hunt Ledger contents in place when locking hides their
-  headers or Quick-show restores them, including near the screen edge.
+- Fix intermittent casting movement locks when using strafe and turn inputs.
+  Manual movement correctly reclaims control and sends its release state while
+  preserving unfinished cast links and normal spell timing.
+- Avoid unnecessary terrain render-state rebuilds on indoor/outdoor transitions,
+  reducing doorway and underpass stalls across the world, including Linux.
+- Show the retail green accept and red blocked indicators when dragging items
+  over salvage slots, using the same eligibility checks as the actual drop.
 
 ## Installation and validation
 
 - **AC-WoW Transmog, its provider, converter, and model assets are excluded.**
-- Automated checks cover the changed UCM, inventory, UI, movement, rendering,
-  and packaging paths. Native Linux transition regressions were exercised;
-  live-server gameplay and headset acceptance remain separate checks.
+- Automated checks cover UCM profiles, meta/vendor workflows, casting movement,
+  salvage feedback, transition rendering, packaging, and updates. Live-server
+  PvP under latency and headset acceptance remain separate checks.
 - Updates preserve accounts, settings, profiles, and DAT files. Linux updates
   are downloaded and extracted manually. Game DAT files and a server are not
   included.

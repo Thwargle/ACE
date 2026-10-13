@@ -191,7 +191,9 @@ void AACELandblockActor::SetLandEnvCellFloorPriority(bool bEnable, UACEDatSubsys
 			}
 		}
 	}
-	TerrainMesh->MarkRenderStateDirty();
+	// MID scalar updates enqueue their own uniform-buffer update. Rebuilding the
+	// scene proxy reuploads every terrain buffer across the ring at a doorway.
+	// The fallback SetMaterial above handles actual material replacement itself.
 }
 
 void AACELandblockActor::SetIndoorScenerySuppressed(bool bSuppress, const TArray<int32>& HideBuildingInfoIndices)

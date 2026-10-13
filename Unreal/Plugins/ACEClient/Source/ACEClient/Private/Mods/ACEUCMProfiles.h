@@ -2,10 +2,14 @@
 #include "CoreMinimal.h"
 #include "Dom/JsonObject.h"
 
-// Disk representation is a run manifest plus independently reusable sections.
+// One current selection plus independently reusable profiles. Named manifests
+// are read only for migration from older clients.
 // Lua and existing editors continue to consume one resolved object.
 namespace ACEUCMProfiles
 {
+    inline FString ActiveName() { return TEXT("__active"); }
+    bool SaveSelection(const FString& Root, const TSharedPtr<FJsonObject>& Profile,
+        const TSharedPtr<FJsonObject>& Links, FString& Error);
     const TArray<FString>& Sections();
     FString SectionFor(const FString& Key);
     bool SafeName(const FString& Name);

@@ -83,7 +83,7 @@ bool FACEUCMProfileStorageTest::RunTest(const FString&)
     {
         auto* GI=NewObject<UGameInstance>();GI->Init();ON_SCOPE_EXIT{GI->Shutdown();};
         auto* H=GI->GetSubsystem<UACEPluginSubsystem>();H->StorageRoot=Root/TEXT("Host");H->Settings=MakeShared<FJsonObject>();
-        TestTrue(TEXT("New setup creates Default references"),H->NewUCMSetup(TEXT("Hunt")));
+        TestTrue(TEXT("Initial selection creates Default references"),H->InitializeUCMSelection());
         auto P=H->Find(TEXT("ucm"));if(!P)return false;
         for(const auto& Section:Sections())TestEqual(TEXT("New setup selects Default in every section"),H->UCMSectionName(Section),FString(TEXT("Default")));
         TestTrue(TEXT("New Character profile"),H->NewUCMSection(TEXT("Character"),TEXT("Hero")));
@@ -102,7 +102,7 @@ bool FACEUCMProfileStorageTest::RunTest(const FString&)
         const FString Nav=TEXT("uTank2 NAV 1.2\n2\n2\n0\n0\n0\n0.05\n0\n3\n0.01\n0\n0.05\n0\n1500\n");
         FFileHelper::SaveStringToFile(Nav,*(Folder/TEXT("Loop.nav")));
         TestTrue(TEXT("Folder import creates route section"),H->ImportUCMSection(TEXT("Loop.nav")));
-        TestEqual(TEXT("Import preserves setup name"),P->ProfileName,FString(TEXT("Hunt")));
+        TestEqual(TEXT("Import keeps a single current selection"),P->ProfileName,ActiveName());
         TestEqual(TEXT("Import uses source file stem"),H->UCMSectionName(TEXT("Routes")),FString(TEXT("Loop")));
         TestEqual(TEXT("Imported points loaded for world preview"),P->Profile->GetArrayField(TEXT("route")).Num(),2);
         TestTrue(TEXT("Imported route has world preview"),P->Profile->GetBoolField(TEXT("route_preview")));
@@ -117,21 +117,32 @@ bool FACEUCMProfileStorageTest::RunTest(const FString&)
         FFileHelper::SaveStringToFile(TEXT("bad nav"),*(Folder/TEXT("Broken.nav")));
         TestFalse(TEXT("Broken import rejected without changing selected profile"),H->ImportUCMSection(TEXT("Broken.nav")));
         TestEqual(TEXT("Failed import preserves active route"),H->UCMSectionName(TEXT("Routes")),FString(TEXT("Loop_2")));
-        TestTrue(TEXT("Second new setup"),H->NewUCMSetup(TEXT("Other")));
-        for(const auto& Section:Sections())TestEqual(TEXT("Second setup does not inherit previous choices"),H->UCMSectionName(Section),FString(TEXT("Default")));
-        TestTrue(TEXT("Share imported route between setups"),H->SelectUCMSection(TEXT("Routes"),TEXT("Loop_2")));
+        TestTrue(TEXT("Selection reloads across restart"),H->InitializeUCMSelection());
+        TestEqual(TEXT("Restart retains chosen route"),H->UCMSectionName(TEXT("Routes")),FString(TEXT("Loop_2")));
+        TestEqual(TEXT("No new named setups are created"),List(H->UserDirectory(),TEXT("ucm")).Num(),0);
         TestTrue(TEXT("Delete referenced route"),H->DeleteUCMSection(TEXT("Routes"),TEXT("Loop_2")));
         TestEqual(TEXT("Active setup switches deleted route to Default"),H->UCMSectionName(TEXT("Routes")),FString(TEXT("Default")));
         TestFalse(TEXT("Deleted profile leaves chooser"),H->UCMSectionProfiles(TEXT("Routes")).Contains(TEXT("Loop_2")));
-        TestTrue(TEXT("Other linked setup remains loadable"),H->LoadProfile(TEXT("ucm"),TEXT("Hunt")));
-        TestEqual(TEXT("Other setup references Default after delete"),H->UCMSectionName(TEXT("Routes")),FString(TEXT("Default")));
+        TestTrue(TEXT("Current selection remains loadable"),H->LoadProfile(TEXT("ucm"),ActiveName()));
+        TestEqual(TEXT("Current selection references Default after delete"),H->UCMSectionName(TEXT("Routes")),FString(TEXT("Default")));
         TestEqual(TEXT("Delete leaves unrelated Character intact"),H->UCMSectionName(TEXT("Character")),FString(TEXT("Hero")));
         TestEqual(TEXT("Protections survive setup switches"),P->Profile->GetNumberField(TEXT("protection_profile")),4.);
         TestEqual(TEXT("Custom banes survive setup switches"),P->Profile->GetStringField(TEXT("bane_custom")),FString(TEXT("BPS")));
         TArray<FString> Backups;IFileManager::Get().FindFiles(Backups,*(H->UserDirectory()/TEXT("Profiles/Deleted/Routes/*.json")),true,false);
         TestEqual(TEXT("Deleted file is recoverable"),Backups.Num(),1);
         TestFalse(TEXT("Default cannot be deleted"),H->DeleteUCMSection(TEXT("Routes"),TEXT("Default")));
-        TestFalse(TEXT("New setup cannot overwrite Hunt"),H->NewUCMSetup(TEXT("Hunt")));
+        TestTrue(TEXT("Active selection is saved outside legacy setup folder"),IFileManager::Get().FileExists(*(H->UserDirectory()/TEXT("ucm-selection.json"))));
+        H->StorageRoot=Root/TEXT("Migration");H->Settings=MakeShared<FJsonObject>();
+        IFileManager::Get().MakeDirectory(*(H->StorageRoot/TEXT("Profiles/ucm")),true);
+        auto LegacyProfile=Copy(P->Profile);LegacyProfile->SetNumberField(TEXT("skill_margin"),27);FString LegacyText;
+        FJsonSerializer::Serialize(LegacyProfile.ToSharedRef(),TJsonWriterFactory<>::Create(&LegacyText));
+        FFileHelper::SaveStringToFile(LegacyText,*(H->StorageRoot/TEXT("Profiles/ucm/LastHunt.json")));
+        H->Settings->SetStringField(TEXT("ucm.profile"),TEXT("LastHunt"));
+        TestTrue(TEXT("Last selected legacy setup migrates automatically"),H->InitializeUCMSelection());
+        TestEqual(TEXT("Migration retains character settings"),P->Profile->GetNumberField(TEXT("skill_margin")),27.);
+        TestEqual(TEXT("Migrated Character is independently selectable"),H->UCMSectionName(TEXT("Character")),FString(TEXT("LastHunt")));
+        TestTrue(TEXT("Legacy original is backed up"),IFileManager::Get().FileExists(*(H->StorageRoot/TEXT("Profiles/Legacy/ucm/LastHunt.json"))));
+        TestEqual(TEXT("Migration saves active selection key"),P->ProfileName,ActiveName());
     }
     return true;
 }
@@ -168,17 +179,29 @@ bool FACEUCMProfilePanelTest::RunTest(const FString&)
     const FString Overview=CollectText(Host->MakeUCMPanel(TEXT("Overview")));
     TestFalse(TEXT("Overview no longer includes Open Log"),Overview.Contains(TEXT("Open UCM Log")));
     TestFalse(TEXT("Overview no longer includes protection selectors"),Overview.Contains(TEXT("Protections:"))||Overview.Contains(TEXT("Banes:")));
-    const FString SetupText=CollectText(Host->MakeUCMPanel(TEXT("Profiles")));
-    TestTrue(TEXT("Setup supports new and current-save controls"),SetupText.Contains(TEXT("New setup\n"))&&SetupText.Contains(TEXT("Save current setup")));
-    TestFalse(TEXT("Setup omits redundant save-copy controls"),SetupText.Contains(TEXT("Save copy"))||SetupText.Contains(TEXT("Save setup as")));
-    TestTrue(TEXT("Setup includes explicit vTank import"),SetupText.Contains(TEXT("Import vTank file")));
+    TestTrue(TEXT("Overview calls section Configuration"),Overview.Contains(TEXT("Configuration")));
+    TestFalse(TEXT("Overview removes setup header and plugin bar preference"),Overview.Contains(TEXT("Setup:"))||Overview.Contains(TEXT("Show plugin bar")));
+    for(const auto& Section:ACEUCMProfiles::Sections())TestTrue(TEXT("Overview contains all six profile selectors"),Overview.Contains(Section+TEXT(": ")));
+    const FString ImportText=CollectText(Host->MakeUCMPanel(TEXT("Import")));
+    TestFalse(TEXT("Import removes setups and JSON editor"),ImportText.Contains(TEXT("New setup"))||ImportText.Contains(TEXT("Save current setup"))||ImportText.Contains(TEXT("Edit advanced JSON")));
+    TestTrue(TEXT("Distinct loot and route import actions"),ImportText.Contains(TEXT("Import vTank Loot Profile (*.utl)"))&&ImportText.Contains(TEXT("Import vTank Route (*.nav)")));
+    auto UCM=Host->Find(TEXT("ucm"));auto Micro=Host->MakeUCMMicroPanel();
+    TestTrue(TEXT("Micro starts with full width Start UCM action"),CollectText(Micro).Contains(TEXT("Start UCM")));
+    UCM->Running=true;TestTrue(TEXT("Micro action updates to Stop UCM"),CollectText(Micro).Contains(TEXT("Stop UCM")));UCM->Running=false;
+    TestFalse(TEXT("Micro removes running checkbox"),CollectText(Micro).Contains(TEXT("UCM running")));
+    auto Rat=MakeShared<FJsonObject>();Rat->SetStringField(TEXT("name"),TEXT("Brown Rat"));UCM->Profile->SetArrayField(TEXT("monsters"),{MakeShared<FJsonValueObject>(Rat)});
+    const FString Monsters=CollectText(Host->MakeUCMPanel(TEXT("Monsters")));
+    TestTrue(TEXT("Monster rules inherit global defaults"),Monsters.Contains(TEXT("Priority: use Combat default"))&&Monsters.Contains(TEXT("Attack Range: use Combat default")));
+    TestTrue(TEXT("Monster search and name action exist"),Monsters.Contains(TEXT("Search"))&&Monsters.Contains(TEXT("Add monster by name")));
+    const FString Combat=CollectText(Host->MakeUCMPanel(TEXT("Combat")));
+    TestTrue(TEXT("Combat exposes both profile defaults"),Combat.Contains(TEXT("Default monster priority"))&&Combat.Contains(TEXT("Default monster attack range")));
     if(FApp::CanEverRender())
     {
         FWidgetRenderer Renderer(false,true);
         const FString Folder=FPaths::ProjectSavedDir()/TEXT("UCMProfileReview/UI");IFileManager::Get().MakeDirectory(*Folder,true);
-        for(const TCHAR* Page:{TEXT("Profiles"),TEXT("Route"),TEXT("Buffs"),TEXT("Buff others"),TEXT("Combat"),TEXT("Recovery"),TEXT("Loot"),TEXT("Vendors"),TEXT("Monsters"),TEXT("Import vTank")})for(int Width:{780,460})
+        for(const TCHAR* Page:{TEXT("Overview"),TEXT("Import"),TEXT("Micro"),TEXT("Route"),TEXT("Buffs"),TEXT("Buff others"),TEXT("Combat"),TEXT("Recovery"),TEXT("Loot"),TEXT("Vendors"),TEXT("Monsters"),TEXT("Import vTank")})for(int Width:{780,460})
         {
-            auto Panel=Host->MakeUCMPanel(Page);const FVector2D Size(Width,900);
+            auto Panel=FString(Page)==TEXT("Micro")?Host->MakeUCMMicroPanel():Host->MakeUCMPanel(Page);const FVector2D Size(Width,900);
             auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
             for(int Pass=0;Pass<3;++Pass){Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
             TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);

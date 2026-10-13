@@ -105,7 +105,7 @@ void LootPanel()
     const FString Source=Str(P(),TEXT("utl_source")),Saved=Str(P(),TEXT("loot_profile"));
     FString Name=Host->UCMSectionName(TEXT("Loot"));
     if(Name.IsEmpty())Name=!Source.IsEmpty()?FPaths::GetCleanFilename(Source):Saved;
-    if(Name.IsEmpty())Name=Rules.IsEmpty()?TEXT("No loot profile"):TEXT("Custom rules in ")+Plugin->ProfileName;
+    if(Name.IsEmpty())Name=Rules.IsEmpty()?TEXT("No loot profile"):TEXT("Custom rules in ")+Host->UCMSectionName(TEXT("Loot"));
     Add(Text(TEXT("Active: ")+Name+(Bool(P(),TEXT("loot_modified"))?TEXT(" (edited)"):TEXT("")),16,Accent));
     auto Menu=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
     Menu->AddSlot()[LootTool(TEXT("Rules"),[this](){ShowLootOptions=false;ShowLootFiles=false;Rebuild();})];
@@ -345,7 +345,7 @@ void LootSettings()
 }
 void LootProfileFiles()
 {
-    Heading(TEXT("Save / load loot rules"),TEXT("Reuse rules between hunts without changing buffs, combat or routes. Loading stops UCM; press Start when ready. Saved files are in Saved/ClientPlugins/Profiles/Loot. Edits update all setups linked to that file."));
+    Heading(TEXT("Save / load loot rules"),TEXT("Reuse rules between hunts without changing buffs, combat or routes. Loading stops UCM; press Start when ready. Saved files are in Saved/ClientPlugins/Profiles/Loot. Edits save to the selected shared file."));
     Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).HintText(FText::FromString(TEXT("Profile name, e.g. Copper_W7")))
         .Text(FText::FromString(LootProfileName)).OnTextChanged_Lambda([this](const FText& V){LootProfileName=V.ToString();}));
     Add(Button(TEXT("Save loot profile"),[this](){if(Host->SaveLootProfile(LootProfileName))Rebuild();}));

@@ -37,6 +37,8 @@
   "approach": true,
   "approach_range": 60,
   "melee_range": 2,
+  "monster_default_priority": 0,
+  "monster_default_range": 0,
   "weapons": [],
   "consumables": [],
   "excluded_buffs": [],

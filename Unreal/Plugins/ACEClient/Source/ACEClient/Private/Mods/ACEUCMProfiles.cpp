@@ -34,11 +34,13 @@ namespace
             && IFileManager::Get().Move(*Path, *Temp, true, true);
     }
     FString Path(const FString& Root, const FString& Section, const FString& Name)
-    { return Root / TEXT("Profiles") / Section / (Name + TEXT(".json")); }
+    { return Section == TEXT("ucm") && Name == ActiveName() ? Root / TEXT("ucm-selection.json")
+        : Root / TEXT("Profiles") / Section / (Name + TEXT(".json")); }
     TSharedPtr<FJsonObject> ReadSection(const FString& Root, const FString& Section, const FString& Name, FString& Error)
     {
         auto Part = SafeName(Name) ? Read(Path(Root, Section, Name)) : nullptr;
         if (!Part) { Error = TEXT("Cannot load ") + Section + TEXT(" profile: ") + Name; return nullptr; }
+        if(Section==TEXT("Metas")){Part->RemoveField(TEXT("vt_revision"));Part->RemoveField(TEXT("vt_loaded_kind"));}
         for (const auto& Pair : Part->Values) if (SectionFor(FString(Pair.Key)) != Section)
         { Error = Section + TEXT(" profile contains a setting from another section: ") + FString(Pair.Key); return nullptr; }
         return Part;
@@ -67,7 +69,7 @@ FString SectionFor(const FString& Key)
     // another hunt's activities when their settings are edited.
     static const TSet<FString> Run = {TEXT("buffing"), TEXT("combat"), TEXT("recovery"), TEXT("navigation"),
         TEXT("looting"), TEXT("buff_others"), TEXT("vendor_restock"), TEXT("meta_enabled"), TEXT("idle_peace"),
-        TEXT("import_source"), TEXT("ucm_format_version"), TEXT("loot_revision")};
+        TEXT("import_source"), TEXT("ucm_format_version"), TEXT("loot_revision"), TEXT("vt_revision"), TEXT("vt_loaded_kind")};
     if (Run.Contains(Key)) return TEXT("ucm");
     if (Key == TEXT("monsters") || Key == TEXT("monster_catalog")) return TEXT("Monsters");
     if (Key.StartsWith(TEXT("vendor_"))) return TEXT("Vendors");
@@ -229,13 +231,31 @@ bool EnsureDefaults(const FString& Root, const TSharedPtr<FJsonObject>& Defaults
     }
     return true;
 }
+bool SaveSelection(const FString& Root, const TSharedPtr<FJsonObject>& Profile,
+    const TSharedPtr<FJsonObject>& Links, FString& Error)
+{
+    if (!Profile || !Links || Links->Values.Num() != Sections().Num()) { Error=TEXT("Incomplete profile selection"); return false; }
+    for (const auto& Section:Sections())
+    {
+        FString Name;
+        if (!Links->TryGetStringField(Section,Name) || !ReadSection(Root,Section,Name,Error)) return false;
+    }
+    auto Selection=MakeShared<FJsonObject>();
+    Selection->SetNumberField(TEXT("ucm_setup_version"),2); // Retain the validated legacy serialization version.
+    Selection->SetObjectField(TEXT("profile_refs"),Copy(Links));
+    Selection->SetObjectField(TEXT("run"),Extract(Profile,TEXT("ucm")));
+    if (!Write(Path(Root,TEXT("ucm"),ActiveName()),Selection)) { Error=TEXT("Cannot save current profile selection"); return false; }
+    return true;
+}
 bool DeleteSection(const FString& Root, const FString& Section, const FString& Name, FString& Error)
 {
     if (!Sections().Contains(Section) || !SafeName(Name) || Name.Equals(TEXT("Default"), ESearchCase::IgnoreCase))
     { Error = TEXT("The Default profile cannot be deleted. Choose a named profile."); return false; }
     if (!ReadSection(Root, Section, TEXT("Default"), Error) || !ReadSection(Root, Section, Name, Error)) return false;
     TMap<FString, TSharedPtr<FJsonObject>> Before, After;
-    for (const auto& Setup : List(Root, TEXT("ucm")))
+    auto Selections=List(Root,TEXT("ucm"));
+    if (IFileManager::Get().FileExists(*Path(Root,TEXT("ucm"),ActiveName()))) Selections.Add(ActiveName());
+    for (const auto& Setup : Selections)
     {
         const FString File = Path(Root, TEXT("ucm"), Setup); auto Manifest = Read(File);
         if (!Manifest) { Error = TEXT("Cannot inspect setup before deleting shared profile: ") + Setup; return false; }
@@ -245,6 +265,36 @@ bool DeleteSection(const FString& Root, const FString& Section, const FString& N
         FString Linked; if (!(*Refs)->TryGetStringField(Section, Linked) || !Linked.Equals(Name, ESearchCase::IgnoreCase)) continue;
         Before.Add(File, Manifest); auto Updated = Copy(Manifest);
         Updated->GetObjectField(TEXT("profile_refs"))->SetStringField(Section, TEXT("Default")); After.Add(File, Updated);
+    }
+    // Meta dependencies are references too. Otherwise reloading a meta would
+    // recreate a route/profile that the user had just deliberately deleted.
+    for(const auto& MetaName:List(Root,TEXT("Metas")))
+    {
+        if(Section==TEXT("Metas")&&MetaName.Equals(Name,ESearchCase::IgnoreCase))continue;
+        const FString File=Path(Root,TEXT("Metas"),MetaName);auto Original=ReadSection(Root,TEXT("Metas"),MetaName,Error);if(!Original)return false;
+        auto Updated=Copy(Original);bool Changed=false;
+        const TSharedPtr<FJsonObject>* Refs=nullptr;
+        if(Updated->TryGetObjectField(TEXT("meta_profile_refs"),Refs))for(const auto& Pair:(*Refs)->Values)
+        {
+            if(Pair.Value->Type!=EJson::Object)continue;
+            auto Ref=Pair.Value->AsObject();FString Linked;
+            if(Ref->TryGetStringField(Section,Linked)&&Linked.Equals(Name,ESearchCase::IgnoreCase))
+            {Ref->SetStringField(Section,TEXT("Default"));Changed=true;}
+        }
+        if(Section==TEXT("Routes"))
+        {
+            TFunction<void(const TSharedPtr<FJsonValue>&,int32)> Visit;
+            Visit=[&](const TSharedPtr<FJsonValue>& Value,int32 Depth){
+                if(Depth>64)return;
+                if(Value->Type==EJson::Array){for(const auto& Child:Value->AsArray())Visit(Child,Depth+1);}
+                else if(Value->Type==EJson::Object){auto Object=Value->AsObject();FString Linked;
+                    if(Object->TryGetStringField(TEXT("route_profile"),Linked)&&Linked.Equals(Name,ESearchCase::IgnoreCase))
+                    {Object->SetStringField(TEXT("route_profile"),TEXT("Default"));Changed=true;}
+                    for(const auto& Pair:Object->Values)Visit(Pair.Value,Depth+1);}
+            };
+            Visit(MakeShared<FJsonValueObject>(Updated),0);
+        }
+        if(Changed){Before.Add(File,Original);After.Add(File,Updated);}
     }
     TArray<FString> Applied;
     auto Rollback = [&]() { for (const auto& File : Applied) Write(File, Before[File]); };

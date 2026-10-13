@@ -21,6 +21,25 @@ bool FACEUCMRouteRejoinTest::RunTest(const FString&)
     auto Profile=[&](){return Json(TEXT(R"({"buffing":false,"recovery":false,"combat":"missile","approach_range":60,"radius":6,"navigation":true,"route":[{"cell":30998795,"x":25,"y":0,"z":0},{"cell":30998795,"x":45,"y":0,"z":0}]})"));};
     auto Step=[&](FACEPluginVM& VM,const auto& S,const auto& P){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
     auto At=[](const auto& S,double X,double Y){auto Pos=S->GetObjectField(TEXT("position"));Pos->SetNumberField(TEXT("x"),X);Pos->SetNumberField(TEXT("y"),Y);S->SetNumberField(TEXT("time"),S->GetNumberField(TEXT("time"))+.5);};
+    for(bool Override:{false,true})
+    {
+        FACEPluginVM VM;VM.Load(Script,Error);auto S=Snapshot(),P=Profile();
+        P->SetBoolField(TEXT("navigation"),false);P->SetBoolField(TEXT("manual_combat"),true);
+        P->SetNumberField(TEXT("monster_default_priority"),5);P->SetNumberField(TEXT("monster_default_range"),12);
+        auto Rule=Json(TEXT(R"({"name":"Rat"})"));
+        if(Override){Rule->SetNumberField(TEXT("priority"),0);Rule->SetNumberField(TEXT("range"),6);}
+        P->SetArrayField(TEXT("monsters"),{MakeShared<FJsonValueObject>(Rule)});
+        auto Rat=Json(TEXT(R"({"id":50,"name":"Rat","identified":true,"distance":10,"cell":30998795,"x":30,"y":10,"z":0,"line_of_sight":true})"));
+        S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(Rat)});
+        auto I=Step(VM,S,P);
+        TestEqual(TEXT("Monster override wins, otherwise uses profile attack range"),I->GetStringField(TEXT("action")),FString(Override?TEXT("move"):TEXT("attack")));
+        TestEqual(TEXT("Inheritance never writes defaults into saved rule"),Rule->HasField(TEXT("priority")),Override);
+        FACEPluginVM Ranking;Ranking.Load(Script,Error);
+        auto Other=Json(TEXT(R"({"id":51,"name":"Tusker","identified":true,"distance":11,"cell":30998795,"x":30,"y":11,"z":0,"line_of_sight":true})"));
+        S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(Rat),MakeShared<FJsonValueObject>(Other)});
+        I=Step(Ranking,S,P);
+        TestEqual(TEXT("Explicit zero priority overrides positive global default"),I->GetNumberField(TEXT("target")),Override?51.:50.);
+    }
     for(const FString Mode:{TEXT("melee"),TEXT("missile"),TEXT("magic")})
     {
         FACEPluginVM VM;VM.Load(Script,Error);auto S=Snapshot(),P=Profile();

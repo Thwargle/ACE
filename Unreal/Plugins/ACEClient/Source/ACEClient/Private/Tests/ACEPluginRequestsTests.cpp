@@ -178,6 +178,20 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         TestTrue(TEXT("Sold-out stock cannot send a purchase"),!HasPurchase());
         P->Running=true;Session.OpenVendorGuid=0;H->ExecuteInventory(*P,Buy,TEXT("buy"));
         TestTrue(TEXT("Closed vendor cannot send a purchase"),!HasPurchase());
+        Session.CachedC2SPackets.Reset();Session.OpenVendorGuid=500;
+        auto Close=MakeShared<FJsonObject>();Close->SetNumberField(TEXT("vendor"),501);
+        H->ExecuteInventory(*P,Close,TEXT("close_vendor"));
+        TestEqual(TEXT("Stale vendor close cannot close a different shop"),Session.OpenVendorGuid,500);
+        TestEqual(TEXT("Stale close sends no packet"),Session.CachedC2SPackets.Num(),0);
+        Close->SetNumberField(TEXT("vendor"),500);H->ExecuteInventory(*P,Close,TEXT("close_vendor"));
+        TestEqual(TEXT("Vendor close updates observed state"),Session.OpenVendorGuid,0);
+        TestEqual(TEXT("Close sends one retail request"),Session.CachedC2SPackets.Num(),1);
+        for(const auto& Packet:Session.CachedC2SPackets)
+        {
+            FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);
+            TestEqual(TEXT("Close uses NoLongerViewingContents"),R.ReadUInt32(),ACEGameAction::NoLongerViewingContents);
+            TestEqual(TEXT("Close identifies exact vendor"),R.ReadUInt32(),500u);
+        }
         P->Running=true;Session.WorldObjects.Remove(Vendor.Guid);Session.VendorMerchandise.Empty();
         {
             const int32 OldMode=Session.PlayerVitals.CombatMode;
