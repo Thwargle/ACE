@@ -272,7 +272,9 @@ bool FACELauncherViewportTest::RunTest(const FString&)
         TestTrue(TEXT("Login controls are fully within the live viewport"),First.X>=0 && First.Y>=0 && Last.X<=Screen.GetLocalSize().X+1 && Last.Y<=Screen.GetLocalSize().Y+1);
     }
     auto* Dat=World->GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
-    TestTrue(TEXT("Character-list handoff has retail UI data"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
+    // The launched client's background loader owns these resources. Reloading
+    // them synchronously here invalidates the live UI's font/texture references.
+    if (!TestTrue(TEXT("Character-list handoff has retail UI data"),Dat && Dat->IsDatReady())) return false;
     PC->ShowCharacterSelectUI({},TEXT("Regression fixture"));
     TestNotNull(TEXT("Successful login creates character selection"),PC->DatCharSelectBinder.Get());
     TestNull(TEXT("Successful login removes the account launcher"),PC->LoginWidget.Get());

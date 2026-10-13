@@ -71,6 +71,7 @@ public:
             +SVerticalBox::Slot().FillHeight(1)[SAssignNew(Scroll,SScrollBox)+SScrollBox::Slot()
                 [SAssignNew(Body,SVerticalBox).IsEnabled_Lambda([this](){return !Plugin->Running;})]]
             +SVerticalBox::Slot().AutoHeight().Padding(0,10,0,0)[SNew(SACEPluginText).AutoWrapText(true).ColorAndOpacity(Muted)
+                .Visibility_Lambda([this](){return Host.IsValid()&&!Host->Notice.IsEmpty()?EVisibility::Visible:EVisibility::Collapsed;})
                 .Font(FCoreStyle::GetDefaultFontStyle("Regular",12)).Text_Lambda([this](){return FText::FromString(Host.IsValid()?Host->Notice:FString());})]]];
         Rebuild();
     }

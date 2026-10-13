@@ -51,6 +51,11 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
     ON_SCOPE_EXIT { IFileManager::Get().DeleteDirectory(*ProfileRoot,false,true); };
     C->Session=MakeShared<FACESession>();auto& Session=*C->Session;
     Session.State=EACESessionState::InWorld;Session.PlayerGuid=0x50000001;
+    auto ConfirmPut=[&](int32 Item,int32 Container)
+    {
+        FACEBinaryWriter W;W.WriteUInt32(Item);W.WriteUInt32(Container);W.WriteInt32(0);W.WriteInt32(0);
+        FACEBinaryReader R(W.GetData());Session.HandleInventoryPutObjInContainer(R);
+    };
     {
         FACEBinaryWriter Login;Login.WriteUInt32(0x97);Login.WriteUInt32(1);
         auto Header=[&](){Login.WriteUInt16(1);Login.WriteUInt16(1);};
@@ -692,7 +697,7 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             TestEqual(TEXT("Unconfirmed pickup retains throttle"),P->NextAction,Deadline);
             FACEAppraisalInfo OtherID;OtherID.ObjectGuid=123456;H->ObserveAppraisal(OtherID);
             TestEqual(TEXT("Unrelated appraisal cannot release a pickup"),P->NextAction,Deadline);
-            Session.WorldObjects[871].ContainerId=Session.PlayerGuid;H->RefreshActionWait(*P);
+            ConfirmPut(871,Session.PlayerGuid);H->RefreshActionWait(*P);
             TestTrue(TEXT("Ownership confirmation removes fixed one-second pickup delay"),P->NextAction<=P->ActionSentAt+.25);
             TestEqual(TEXT("Confirmation wakes next policy decision"),P->NextDecision,0.);
             Session.WorldObjects[871].ContainerId=870;
@@ -743,6 +748,7 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             auto Pickup=MakeShared<FJsonObject>();Pickup->SetStringField(TEXT("action"),TEXT("loot"));Pickup->SetNumberField(TEXT("item"),Drop.Guid);
             auto CheckPickup=[&](int32 Destination,int32 Amount,int32 MergeTo=0)
             {
+                const auto BeforeObjects=Session.WorldObjects;const auto BeforeContents=Session.ContainerContents;
                 Session.OpenExternalContainerGuid=Corpse.Guid;Session.CachedC2SPackets.Reset();Pickup->SetNumberField(TEXT("amount"),Amount);
                 H->ExecuteInventory(*P,Pickup,TEXT("loot"));
                 TestEqual(TEXT("Available pack emits exactly one transfer"),Session.CachedC2SPackets.Num(),1);
@@ -754,6 +760,8 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
                     TestEqual(TEXT("Loot routes to the available pack or compatible stack"),R.ReadUInt32(),uint32(MergeTo?MergeTo:Destination));
                     if(MergeTo)TestEqual(TEXT("Merge transfers only the requested quantity"),R.ReadInt32(),Amount);
                 }
+                ConfirmPut(Drop.Guid,Destination);
+                Session.WorldObjects=BeforeObjects;Session.ContainerContents=BeforeContents;
             };
             for(int32 Destination:{882,883})
             {
@@ -775,7 +783,7 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             CheckPickup(883,20,893); // A compatible stack is usable even with every slot full.
             CheckPickup(883,5,893);  // Partial loot uses the same destination search.
             Session.TradeSelfItems.Add(883);TestEqual(TEXT("Packs offered in trade cannot receive automated loot"),C->FindPickupContainer(Drop.Guid,0),0);Session.TradeSelfItems.Reset();
-            Session.WorldObjects[882].ItemsCapacity=-1;Merge.StackSize=100;CheckPickup(882,20);
+            Session.WorldObjects[882].ItemsCapacity=-1;Session.WorldObjects[893].StackSize=100;CheckPickup(882,20);
             CheckPickup(882,5);
         }
         // Finish the prior synthetic pickup/equipment operations before testing
@@ -938,6 +946,14 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
                 TestTrue(*Error,VM.Step(State,Settings,Intent,Error));
                 TestFalse(TEXT("Confirmed bane advances instead of repeating"),Intent->HasField(TEXT("spell")));
                 if(Forced)TestEqual(TEXT("Force Buff completes after item result"),Intent->GetStringField(TEXT("action")),FString(TEXT("force_buff_done")));
+                // A new process has no Lua completion history. Only restored
+                // server-confirmed timers must prevent an unnecessary cycle.
+                H->DataPlayer=Session.PlayerGuid;H->DataServer=C->GetServerName();H->ItemBuffDeaths=Session.PlayerVitals.NumDeaths;
+                H->SaveItemBuffTimers();H->ItemBuffs.Empty();H->LoadItemBuffTimers();
+                State->SetArrayField(TEXT("item_buffs"),H->ItemBuffs);State->SetNumberField(TEXT("force_buff_request"),0);
+                FACEPluginVM Relog;TestTrue(*Error,Relog.Load(Source,Error));
+                TestTrue(*Error,Relog.Step(State,Settings,Intent,Error));
+                TestFalse(TEXT("Fresh UCM after login does not repeat an unexpired bane"),Intent->HasField(TEXT("spell")));
                 State->SetNumberField(TEXT("force_buff_request"),0);State->SetNumberField(TEXT("time"),FPlatformTime::Seconds()+Duration+1);
                 TestTrue(*Error,VM.Step(State,Settings,Intent,Error));TestTrue(TEXT("Bane becomes eligible again when its timer expires"),Intent->HasField(TEXT("spell")));
             }
@@ -956,6 +972,28 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
                     H->ItemBuffs[0]->AsObject()->GetNumberField(TEXT("duration")),Duration*(1.+.2*Augments));
             }
             Session.PlayerVitals.StatQualityInts.Add(238,OldDurationAug);
+            // Use actual confirmed item timers across a new login/VM. Character
+            // buffs remain authoritative server enchantments, not cached guesses.
+            H->DataPlayer=Session.PlayerGuid;H->DataServer=C->GetServerName();
+            H->ItemBuffDeaths=Session.PlayerVitals.NumDeaths;
+            Begin(Armor.Guid);Chat(Armor.Name);H->ObserveUseDone(0);
+            auto RelogObjects=MoveTemp(Session.WorldObjects);
+            H->SaveItemBuffTimers();H->ItemBuffs.Empty();H->LoadItemBuffTimers();
+            TestEqual(TEXT("Owned item timer survives logout cleanup and delayed inventory creates"),H->ItemBuffs.Num(),1);
+            Session.WorldObjects=MoveTemp(RelogObjects);
+            Begin(Session.PlayerGuid);Chat(Armor.Name);H->ObserveUseDone(0);
+            const double OriginalExpiry=H->ItemBuffs[0]->AsObject()->GetNumberField(TEXT("expires"));
+            H->SaveItemBuffTimers();H->ItemBuffs.Empty();H->LoadItemBuffTimers();
+            TestEqual(TEXT("Confirmed armor timer survives relog"),H->ItemBuffs.Num(),1);
+            if(H->ItemBuffs.Num())TestTrue(TEXT("Relog retains remaining time without extending the spell"),
+                FMath::Abs(H->ItemBuffs[0]->AsObject()->GetNumberField(TEXT("expires"))-OriginalExpiry)<.01);
+            auto NewArmor=Armor;NewArmor.Guid=979;Session.WorldObjects.Add(NewArmor.Guid,NewArmor);
+            H->ValidateItemBuffTimers();TestTrue(TEXT("Newly equipped armor needs its own banes"),H->ItemBuffs.IsEmpty());
+            Session.WorldObjects.Remove(NewArmor.Guid);
+            H->LoadItemBuffTimers();++Session.PlayerVitals.NumDeaths;H->ValidateItemBuffTimers();
+            TestTrue(TEXT("Death invalidates saved item-buff estimates"),H->ItemBuffs.IsEmpty());
+            H->LoadItemBuffTimers();TestTrue(TEXT("Invalidated timers cannot reappear on next login"),H->ItemBuffs.IsEmpty());
+            --Session.PlayerVitals.NumDeaths;H->ItemBuffDeaths=Session.PlayerVitals.NumDeaths;
         }
     }
     {
@@ -1012,6 +1050,26 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             Session.ServerC2SAddr.Reset();Session.IssacClient.Reset();Receiver->Close();Sockets->DestroySocket(Receiver);Session.CachedC2SPackets.Reset();
             GI->RemoveLocalPlayer(Local);BuffPC->Destroy();BuffPawn->Destroy();
         };
+        {
+            FACEWorldObject Scroll;Scroll.Guid=979;Scroll.ContainerId=Session.PlayerGuid;Scroll.ItemType=8192;Scroll.SpellDID=6150;
+            Session.WorldObjects.Add(Scroll.Guid,Scroll);P->Permissions.Add(TEXT("loot"));
+            auto Read=MakeShared<FJsonObject>();Read->SetStringField(TEXT("action"),TEXT("read"));Read->SetNumberField(TEXT("item"),Scroll.Guid);
+            auto UseCount=[&](){int32 Count=0;for(const auto& Packet:Session.CachedC2SPackets){FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);if(R.CanRead(4)&&R.ReadUInt32()==ACEGameAction::Use)++Count;}return Count;};
+            for(int Mode:{2,4,8})
+            {
+                P->CombatTransitionIntent.Reset();P->NextAction=0;Session.ClearPendingUse();Session.PendingCombatMode=0;
+                Session.ApplyServerCombatMode(Mode);Session.CachedC2SPackets.Reset();
+                H->Execute(*P,Read);
+                TestEqual(TEXT("Scroll use waits for peace acknowledgment in every combat mode"),UseCount(),0);
+                TestTrue(TEXT("Read intent survives the stance transition"),P->CombatTransitionIntent.IsValid());
+                Session.ApplyServerCombatMode(1);H->UpdateCombatTransition(*P);
+                TestEqual(TEXT("Confirmed peace sends exactly one scroll Use"),UseCount(),1);
+                TestTrue(TEXT("Scroll reading keeps the real server use gate"),Session.IsUseBusy());
+                TestEqual(TEXT("Read follows UseDone rather than only a fixed timer"),P->WaitAction,FString(TEXT("use")));
+                H->Execute(*P,Read);TestEqual(TEXT("Pending read cannot be duplicated"),UseCount(),1);
+            }
+            Session.ClearPendingUse();Session.WorldObjects.Remove(Scroll.Guid);Session.CachedC2SPackets.Reset();P->WaitAction.Empty();P->NextAction=0;
+        }
         auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();int32 Focus=0,Self=0;
         for(uint32 Id=1;Id<7000&&(!Focus||!Self);++Id)
         {FString Name;uint32 Icon;if(Dat->TryGetSpellInfo(Id,Name,Icon)){if(Name==TEXT("Focus Self I"))Focus=Id;if(Name==TEXT("Willpower Self I"))Self=Id;}}
@@ -1047,6 +1105,18 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             return Result;
         };
         const int32 InitialMoves=MovementPackets().Num();
+        {
+            FACEWorldObject Weapon;Weapon.Guid=978;Weapon.ContainerId=Session.PlayerGuid;Weapon.ItemType=ACEItemType::MeleeWeapon;
+            Session.WorldObjects.Add(Weapon.Guid,Weapon);
+            Session.SendPutItemInContainer(Weapon.Guid,Session.PlayerGuid,0);
+            const int32 Before=CastCount();H->Execute(*P,Intent(Focus));
+            TestTrue(TEXT("A manual weapon move waits for containment before UCM sends a competing action"),
+                Session.IsInventoryTransferPending()&&CastCount()==Before&&!H->PendingSpell);
+            ConfirmPut(Weapon.Guid,Session.PlayerGuid);
+            TestFalse(TEXT("Server receipt promptly releases manual inventory arbitration"),H->InventoryInteractionPending());
+            TestTrue(TEXT("Weapon remains owned after its move"),C->IsOwnedInventoryItem(Session.WorldObjects[Weapon.Guid]));
+            Session.WorldObjects.Remove(Weapon.Guid);
+        }
         H->Execute(*P,Intent(Focus));TestTrue(TEXT("Buff dispatch enables result-driven pipeline"),H->PendingBuffResultDriven&&H->PendingSpell==Focus);
         H->ObserveMetaChat(TEXT("words"),TEXT("Caster"),ACEChatMessageType::Spellcasting);Result(Focus);
         TestEqual(TEXT("Coalesced buff result waits for the cancellation movement edge"),H->PendingSpell,Focus);
@@ -1297,6 +1367,12 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             FACEWorldObject Weapon;Weapon.Guid=973;Weapon.Name=TEXT("Test offhand");Weapon.ItemType=ACEItemType::MeleeWeapon;
             Weapon.WielderId=Session.PlayerGuid;Weapon.CurrentWieldedLocation=ACEEquipMask::Shield;
             Session.WorldObjects.Add(973,Weapon);ON_SCOPE_EXIT{Session.WorldObjects.Remove(973);};
+            const int32 PreviousCapacity=Session.WorldObjects[Session.PlayerGuid].ItemsCapacity;
+            Session.WorldObjects[Session.PlayerGuid].ItemsCapacity=1;
+            FACEWorldObject Filler;Filler.Guid=976;Filler.ContainerId=Session.PlayerGuid;Session.WorldObjects.Add(Filler.Guid,Filler);
+            FACEWorldObject Pack;Pack.Guid=977;Pack.ContainerId=Session.PlayerGuid;Pack.ItemType=ACEItemType::Container;Pack.ItemsCapacity=24;
+            Session.WorldObjects.Add(Pack.Guid,Pack);
+            ON_SCOPE_EXIT{Session.WorldObjects.Remove(976);Session.WorldObjects.Remove(977);Session.ContainerContents.Remove(977);Session.WorldObjects[Session.PlayerGuid].ItemsCapacity=PreviousCapacity;};
             auto Remove=MakeShared<FJsonObject>();Remove->SetStringField(TEXT("action"),TEXT("equip"));
             Remove->SetStringField(TEXT("activity"),TEXT("recovery"));Remove->SetNumberField(TEXT("item"),973);Remove->SetBoolField(TEXT("unequip"),true);
             ModeReply(2);Session.bServerAttackInProgress=true;Session.LastAttackError=0;
@@ -1311,6 +1387,13 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
             TestEqual(TEXT("Completed swing still waits for peace acknowledgment"),Count(ACEGameAction::PutItemInContainer),BeforeRemove);
             ModeReply(1);H->UpdateCombatTransition(*P);
             TestEqual(TEXT("Owned offhand is removed only after both confirmations"),Count(ACEGameAction::PutItemInContainer),BeforeRemove+1);
+            for(const auto& Packet:Session.CachedC2SPackets)
+            {
+                FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);
+                if(R.CanRead(12)&&R.ReadUInt32()==ACEGameAction::PutItemInContainer&&R.ReadUInt32()==973)
+                    TestEqual(TEXT("UCM puts the weapon in a side pack when the main pack is full"),R.ReadUInt32(),977u);
+            }
+            ConfirmPut(973,977);
             Session.bUseBusy=false;P->WaitAction.Empty();P->NextAction=0;
             H->Execute(*P,Intent(Focus));P->CombatTransitionStarted=FPlatformTime::Seconds()-16;
             H->UpdateCombatTransition(*P);

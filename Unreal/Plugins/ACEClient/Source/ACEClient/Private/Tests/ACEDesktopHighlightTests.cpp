@@ -25,6 +25,14 @@
 #include "Slate/SceneViewport.h"
 #include "Slate/SGameLayerManager.h"
 #include "Framework/Application/SlateApplication.h"
+#include "UI/ACEUIGameplayBinder.h"
+#include "UI/ACEUICanvasWidget.h"
+#include "UI/ACEUIElementManager.h"
+#include "Protocol/ACEBinaryReader.h"
+#include "Protocol/ACEBinaryWriter.h"
+#include "Sockets.h"
+#include "SocketSubsystem.h"
+#include "IPAddress.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEDesktopHighlightTest,"ACE.Input.DesktopHighlights",
  EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
@@ -86,6 +94,78 @@ bool FACEDesktopHighlightTest::RunTest(const FString&)
   PRAGMA_ENABLE_DEPRECATION_WARNINGS
   ON_SCOPE_EXIT {PC->Player=nullptr;Context->GameViewport=SavedViewport;Viewport->Viewport=nullptr;Slate.SetCursorPos(SavedCursor);PC->bMouseLookActive=true;};
   PC->bMouseLookActive=false;
+  {
+   // Retail world-drop path, including the main backpack's player GUID.
+   // The closed shop must receive Use before its reply can populate Sell.
+   const auto SavedObjects=Session->WorldObjects;
+   ON_SCOPE_EXIT {Session->WorldObjects=SavedObjects;Session->OpenVendorGuid=0;PC->EndUseApproach();Session->bUseBusy=false;};
+   auto* Sockets=ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
+   Session->SocketC2S=Sockets->CreateSocket(NAME_DGram,TEXT("World vendor drag"),false);
+   Session->ServerC2SAddr=Sockets->CreateInternetAddr();bool AddressValid=false;
+   Session->ServerC2SAddr->SetIp(TEXT("127.0.0.1"),AddressValid);Session->ServerC2SAddr->SetPort(9);
+   Session->IssacClient=MakeUnique<FACEIsaac>(123u);
+   auto* Manager=NewObject<UACEUIElementManager>();Manager->Initialize();
+   auto* Canvas=NewObject<UACEUICanvasWidget>();Canvas->Initialize();Canvas->InitializeCanvas(Manager);Canvas->TakeWidget();
+   auto* Binder=NewObject<UACEUIGameplayBinder>();Binder->Client=Client;Binder->PlayerController=PC;Binder->Canvas=Canvas;
+   Layers->Geometry=FGeometry::MakeRoot(FVector2D(1600,900),FSlateLayoutTransform());
+   FACEWorldObject Self;Self.Guid=Session->PlayerGuid;Self.ItemType=ACEItemType::Creature;Self.bIsPlayer=true;
+   FACEWorldObject Pack;Pack.Guid=600;Pack.ContainerId=Self.Guid;Pack.ItemType=ACEItemType::Container;Pack.ItemsCapacity=24;
+   FACEWorldObject Bread;Bread.Guid=601;Bread.ContainerId=Self.Guid;Bread.ItemType=ACEItemType::Food;Bread.Value=120;Bread.StackSize=12;
+   FACEWorldObject Retained=Bread;Retained.Guid=602;Retained.ObjectDescriptionFlags=ACEObjectDescFlag::Retained;
+   FACEWorldObject Bound=Bread;Bound.Guid=603;Bound.Attuned=1;
+   for(const auto& Item:{Self,Pack,Bread,Retained,Bound})Session->WorldObjects.Add(Item.Guid,Item);
+   Session->WorldObjects[Object.Guid].ObjectDescriptionFlags|=ACEObjectDescFlag::Vendor;
+   auto Actions=[&](uint32 Action)
+   {
+    int Count=0;for(const auto& Pair:Session->CachedC2SPackets)
+    {FACEBinaryReader R(Pair.Value.Payload);R.Skip(24);if(R.CanRead(4)&&R.ReadUInt32()==Action)++Count;}
+    return Count;
+   };
+   auto Drop=[&](int32 Guid,FVector2D Point=FVector2D(800,450))
+   {
+    Binder->InvDragGuid=Guid;Binder->InvDragAmount=1;Binder->InvDragSourcePack=Self.Guid;
+    Binder->bInvDragPending=true;Binder->bInvDragActive=true;
+    TestTrue(TEXT("Inventory release consumes the world drop"),Binder->TryFinishInventoryDrag(Point));
+   };
+   auto Reply=[&](int32 Vendor)
+   {
+    FACEBinaryWriter W;W.WriteUInt32(Vendor);W.WriteUInt32(ACEItemType::Food);
+    W.WriteInt32(-1);W.WriteInt32(-1);W.WriteUInt32(1);W.WriteFloat(1);W.WriteFloat(1);
+    W.WriteUInt32(0);W.WriteUInt32(0);W.WriteString16L(TEXT(""));W.WriteUInt32(0);
+    FACEBinaryReader R(W.GetData());Session->HandleApproachVendor(R);Binder->HandleVendorOpened(Vendor);Session->bUseBusy=false;
+   };
+   for(int32 Source:{Self.Guid,Pack.Guid})
+   {
+    for(int32 Id:{Bread.Guid,Retained.Guid,Bound.Guid})Session->WorldObjects[Id].ContainerId=Source;
+    Binder->HideVendorPanel();Session->bUseBusy=false;Session->CachedC2SPackets.Reset();
+    Drop(Source);
+    TestEqual(TEXT("Closed vendor receives one ordinary Use"),Actions(ACEGameAction::Use),1);
+    TestEqual(TEXT("Pending pack retains the world vendor identity"),Binder->PendingVendorSellTargetGuid,Object.Guid);
+    TestTrue(TEXT("No cart is staged before the server's vendor reply"),Binder->VendorSellCart.IsEmpty());
+    Reply(Object.Guid);
+    TestEqual(TEXT("ApproachVendor opens the dropped-on vendor"),Binder->OpenVendorGuid,Object.Guid);
+    TestEqual(TEXT("Pack drop selects Sell"),Binder->ActiveVendorPage,2);
+    TestEqual(TEXT("Bulk drop excludes the pack, bound and retained items"),Binder->VendorSellCart.Num(),1);
+    TestTrue(TEXT("Bulk drop includes the complete stack despite a one-unit selection"),
+     Binder->VendorSellCart.ContainsByPredicate([&](const auto& Entry){return Entry.Value==Bread.Guid&&Entry.Key==12;}));
+    Reply(Object.Guid);Drop(Source);
+    TestEqual(TEXT("Open-vendor drop and repeated reply preserve one cart row"),Binder->VendorSellCart.Num(),1);
+    TestEqual(TEXT("An already open vendor needs no second Use"),Actions(ACEGameAction::Use),1);
+    TestEqual(TEXT("Drag does not send Sell"),Actions(ACEGameAction::Sell),0);
+    TestEqual(TEXT("Drag never sends GiveObject"),Actions(ACEGameAction::GiveObjectRequest),0);
+   }
+   Binder->HideVendorPanel();Session->bUseBusy=false;Drop(Pack.Guid);Reply(Object.Guid+1);
+   TestTrue(TEXT("A different vendor reply cannot inherit the pending pack"),Binder->VendorSellCart.IsEmpty());
+   Reply(Object.Guid);TestTrue(TEXT("An unrelated reply retires the old offer"),Binder->VendorSellCart.IsEmpty());
+   Binder->HideVendorPanel();Session->bUseBusy=false;Drop(Pack.Guid);Binder->HideVendorPanel();Reply(Object.Guid);
+   TestTrue(TEXT("Closing cancels a delayed bulk offer"),Binder->VendorSellCart.IsEmpty());
+   Binder->HideVendorPanel();Session->CachedC2SPackets.Reset();Session->bUseBusy=true;Drop(Pack.Guid);
+   TestEqual(TEXT("Busy use does not retain an unsent sale"),Binder->PendingVendorSellGuid,0);
+   TestEqual(TEXT("Busy use does not send a second Use"),Actions(ACEGameAction::Use),0);
+   Session->bUseBusy=false;Drop(Self.Guid,FVector2D(1350,700));
+   Session->WorldObjects[Object.Guid].ObjectDescriptionFlags&=~ACEObjectDescFlag::Vendor;Drop(Self.Guid);
+   TestTrue(TEXT("Main pack over ground or a non-vendor never moves/gives/drops the player"),Session->CachedC2SPackets.IsEmpty());
+  }
   for(float Scale:{1.f,1.5f,2.f})
   {
    Layers->Geometry=FGeometry::MakeRoot(FVector2D(1600,900)/Scale,FSlateLayoutTransform(Scale,FVector2D(120,75)));

@@ -163,6 +163,46 @@ bool FACEVTAdaptersTest::RunTest(const FString&)
             TestEqual(*FString::Printf(TEXT("Known, too difficult, duplicate, or disabled scroll case %d uses skip"),Case),Intent->GetStringField(TEXT("action")),FString(TEXT("close_corpse")));
         }
     }
+    // An owned unknown scroll can survive a busy response or a previous run.
+    // UseDone alone is not evidence that its spell was learned.
+    for(bool BusyError:{false,true})
+    {
+        FACEPluginVM Reads;Reads.Load(Script,Error);
+        auto Snap=AdapterJSON(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"mana":100,"max_mana":100,"position":{"cell":2139029505,"x":84,"y":84,"z":12},"action_serial":0,"action_error":0,"container":0,"inventory":[{"id":99,"wcid":500,"name":"Scroll","object_class":42,"spell":6150,"scroll_can_learn":true,"resource_available":true,"count":1}],"known_spells":[]})"));
+        auto Profile=AdapterJSON(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","looting":true,"read_unknown_scrolls":true})"));
+        auto Step=[&](){TestTrue(TEXT("Scroll retry policy executes"),Reads.Step(Snap,Profile,Intent,Error));return Intent&&Intent->HasField(TEXT("action"))?Intent->GetStringField(TEXT("action")):FString();};
+        TestEqual(TEXT("Restart recovers an unread carried scroll"),Step(),FString(TEXT("read")));
+        Snap->SetNumberField(TEXT("action_serial"),1);Snap->SetNumberField(TEXT("action_error"),BusyError?0x3c:0);
+        TestTrue(TEXT("A use completion cannot discard an unlearned scroll"),Step().IsEmpty());
+        Snap->SetNumberField(TEXT("time"),101);Step();
+        Snap->SetNumberField(TEXT("time"),104);
+        TestEqual(TEXT("Rejected or unconfirmed read is retried"),Step(),FString(TEXT("read")));
+        Snap->SetArrayField(TEXT("known_spells"),{MakeShared<FJsonValueNumber>(6150)});
+        TestTrue(TEXT("Learning confirmation prevents another read even before removal arrives"),Step().IsEmpty());
+        Snap->SetNumberField(TEXT("time"),200);TestTrue(TEXT("Known carried copy is never consumed again"),Step().IsEmpty());
+
+        FACEPluginVM Bounded;Bounded.Load(Script,Error);Snap->SetArrayField(TEXT("known_spells"),{});Snap->SetNumberField(TEXT("action_serial"),0);
+        for(int Attempt=1;Attempt<=3;++Attempt)
+        {
+            Snap->SetNumberField(TEXT("time"),200+Attempt*10);Bounded.Step(Snap,Profile,Intent,Error);
+            TestEqual(TEXT("Bounded retry sends a read"),Intent->GetStringField(TEXT("action")),FString(TEXT("read")));
+            Snap->SetNumberField(TEXT("action_serial"),Attempt);Snap->SetNumberField(TEXT("action_error"),0x3c);
+            Bounded.Step(Snap,Profile,Intent,Error);
+        }
+        TestEqual(TEXT("Third failure is reported without stopping UCM"),Intent->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
+        Snap->SetNumberField(TEXT("time"),300);Bounded.Step(Snap,Profile,Intent,Error);
+        TestFalse(TEXT("Repeatedly rejected scroll cannot create an endless loop"),Intent->HasField(TEXT("action")));
+        for(const FString Exclusion:{TEXT("retained"),TEXT("equipped"),TEXT("unavailable"),TEXT("unlearnable"),TEXT("disabled")})
+        {
+            FACEPluginVM Excluded;Excluded.Load(Script,Error);auto S2=MakeShared<FJsonObject>(*Snap);auto P2=MakeShared<FJsonObject>(*Profile);
+            auto Item=MakeShared<FJsonObject>(*Snap->GetArrayField(TEXT("inventory"))[0]->AsObject());S2->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(Item)});
+            if(Exclusion==TEXT("disabled"))P2->SetBoolField(TEXT("read_unknown_scrolls"),false);
+            else if(Exclusion==TEXT("unavailable"))Item->SetBoolField(TEXT("resource_available"),false);
+            else if(Exclusion==TEXT("unlearnable"))Item->SetBoolField(TEXT("scroll_can_learn"),false);
+            else Item->SetBoolField(Exclusion,true);
+            Excluded.Step(S2,P2,Intent,Error);TestFalse(TEXT("Protected or unauthorized inventory scroll stays untouched"),Intent->HasField(TEXT("action")));
+        }
+    }
     for(const FString Action:{TEXT("salvage"),TEXT("sell"),TEXT("read")})
     {
         FACEPluginVM Loot;Loot.Load(Script,Error);

@@ -47,10 +47,19 @@
 #include "ImageUtils.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "ShaderCompiler.h"
 
 namespace
 {
+    FString InteriorTestDatDirectory()
+    {
+        FString Directory=TEXT("C:/Turbine/Asheron's Call");
+        FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),Directory);
+        return Directory;
+    }
+
     struct FScopedEffectLightSettings
     {
         IConsoleVariable* Budget = IConsoleManager::Get().FindConsoleVariable(TEXT("ace.FXLightBudget"));
@@ -96,6 +105,44 @@ namespace
     };
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEResidentTerrainCollisionTest, "ACE.RetailParity.ResidentTerrainCollision",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACEResidentTerrainCollisionTest::RunTest(const FString&)
+{
+    FInteriorTestWorld Fixture;
+    for(bool Chunk:{false,true})
+    {
+        auto* Land=Chunk?nullptr:Fixture.World->SpawnActor<AACELandblockActor>();
+        auto* TerrainChunk=Chunk?Fixture.World->SpawnActor<AACETerrainChunkActor>():nullptr;
+        auto* Mesh=Chunk?TerrainChunk->TerrainMesh.Get():Land->TerrainMesh.Get();
+        Mesh->bUseAsyncCooking=false;
+        Mesh->CreateMeshSection_LinearColor(0,{FVector(-200,-200,0),FVector(-200,200,0),FVector(200,200,0),FVector(200,-200,0)},
+            {0,2,1,0,3,2},{},{},{},{},true);
+        TestTrue(TEXT("Terrain body is cooked before entering a building"),Mesh->BodyInstance.IsValidBodyInstance());
+        const auto Body=Mesh->BodyInstance.GetPhysicsActor();
+        for(bool Active:{false,true,false,true})
+        {
+            if(Chunk){TerrainChunk->SetOutdoorTerrainCollisionEnabled(Active);TerrainChunk->SetOutdoorTerrainHiddenInGame(!Active);}
+            else {Land->SetOutdoorTerrainCollisionEnabled(Active);Land->SetOutdoorTerrainHiddenInGame(!Active);}
+            TestTrue(TEXT("Terrain keeps the same cooked body at indoor/outdoor transitions"),
+                Mesh->BodyInstance.IsValidBodyInstance() && Mesh->BodyInstance.GetPhysicsActor()==Body);
+            FHitResult Hit;FCollisionQueryParams Query(SCENE_QUERY_STAT(ResidentTerrain),true);
+            for(ECollisionChannel Channel:{ECC_Pawn,ECC_Camera})
+                TestEqual(TEXT("Terrain channel queries honor residency"),Fixture.World->LineTraceSingleByChannel(
+                    Hit,FVector(0,0,100),FVector(0,0,-100),Channel,Query),Active);
+            FCollisionObjectQueryParams Objects(ECC_WorldStatic);
+            TestEqual(TEXT("Inactive terrain also stays out of object queries"),Fixture.World->LineTraceSingleByObjectType(
+                Hit,FVector(0,0,100),FVector(0,0,-100),Objects,Query),Active);
+            TestEqual(TEXT("Capsule ground support honors residency"),Fixture.World->SweepSingleByChannel(
+                Hit,FVector(0,0,188),FVector(0,0,78),FQuat::Identity,ECC_Pawn,FCollisionShape::MakeCapsule(48,88),Query),Active);
+            if(!Active)for(int32 Channel=0;Channel<ECC_OverlapAll_Deprecated;++Channel)
+                TestEqual(TEXT("Inactive terrain cannot generate physical contacts"),Mesh->GetCollisionResponseToChannel(ECollisionChannel(Channel)),ECR_Ignore);
+        }
+        if(Chunk)TerrainChunk->Destroy();else Land->Destroy();
+    }
+    return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEAmbientEntranceTest, "ACE.Audio.OutdoorEntrances",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEAmbientEntranceTest::RunTest(const FString& Parameters)
@@ -132,7 +179,7 @@ bool FACEAmbientEntranceTest::RunTest(const FString& Parameters)
 
     FInteriorTestWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if (!TestTrue(TEXT("Retail DAT loads"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+    if (!TestTrue(TEXT("Retail DAT loads"),Dat->LoadDatDirectory(InteriorTestDatDirectory()))) return false;
     int32 Exits=0;
     for(uint32 Key:{0x7D640000u,0xC88C0000u,0x09050000u})
     {
@@ -174,7 +221,7 @@ bool FACEBridgeEntryCollisionTest::RunTest(const FString& Parameters)
 {
     FInteriorTestWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if(!Dat || !Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+    if(!Dat || !Dat->LoadDatDirectory(InteriorTestDatDirectory()))return false;
     // Empyrean Rescue's three scripted bridge spans, plus a non-scripted platform.
     // Compare login (occupied before scenery builds) with portal approach (scenery
     // builds while its room is outside the collision neighborhood).
@@ -247,6 +294,30 @@ bool FACEBridgeEntryCollisionTest::RunTest(const FString& Parameters)
                     TestEqual(*FString::Printf(TEXT("%08X portal bridge support matches login on visit %d"),CellId,Visit),Supported,SupportedPoints.Num());
                     TestTrue(TEXT("A player capsule finds walkable support after portal entry"),CapsuleSupport>10);
                     AddInfo(FString::Printf(TEXT("Bridge %08X visit %d support %d/%d"),CellId,Visit,Supported,SupportedPoints.Num()));
+                    TArray<UPrimitiveComponent*> Components;
+                    Room->GetComponents(Components);
+                    for(AACERegionSceneryActor* Scenery:Room->AnimatedStabs)
+                    {TArray<UPrimitiveComponent*> Parts;Scenery->GetComponents(Parts);Components.Append(Parts);}
+                    TArray<TPair<FBodyInstance*,FPhysicsActorHandle>> Bodies;
+                    for(auto* Component:Components)
+                    {
+                        if(auto* Instances=Cast<UInstancedStaticMeshComponent>(Component))
+                        {for(auto* Body:Instances->GetInstanceBodies())if(Body && Body->IsValidBodyInstance())Bodies.Emplace(Body,Body->GetPhysicsActor());}
+                        else if(Component->BodyInstance.IsValidBodyInstance())Bodies.Emplace(&Component->BodyInstance,Component->BodyInstance.GetPhysicsActor());
+                    }
+                    Room->SetEnvCellCollisionActive(false);
+                    // Check at the inactive boundary too: allocator reuse can conceal
+                    // destroying and recreating the same body on the next visit.
+                    int32 Missing=0;
+                    for(auto* Component:Components)
+                        if(auto* Instances=Cast<UInstancedStaticMeshComponent>(Component))
+                            Missing+=Instances->GetInstanceCount()-Instances->GetInstanceBodies().Num();
+                    TestEqual(TEXT("Inactive furniture retains its instance bodies"),Missing,0);
+                    if(Missing==0)for(const auto& Body:Bodies)
+                        TestTrue(TEXT("Leaving a cell retains cooked physics bodies"),Body.Key->IsValidBodyInstance() && Body.Key->GetPhysicsActor()==Body.Value);
+                    Room->SetEnvCellCollisionActive(true);
+                    if(Missing==0)for(const auto& Body:Bodies)
+                        TestTrue(TEXT("Re-entering a cell reuses its physics bodies"),Body.Key->GetPhysicsActor()==Body.Value);
                     Room->SetEnvCellCollisionActive(false);
                 }
             }
@@ -262,7 +333,7 @@ bool FACERetailInteriorStreamingTest::RunTest(const FString& Parameters)
 {
     FInteriorTestWorld Fixture;
     auto* Dat = Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if (!Dat || !Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat || !Dat->LoadDatDirectory(InteriorTestDatDirectory())) return false;
     Dat->GetOrCreateTexturedMaterial(0x08000708);
     // World Composition supplies a baked landscape. Repeated outdoor visibility
     // refreshes must keep the procedural support actor's terrain suppressed.
@@ -616,7 +687,7 @@ bool FACEParticleDistanceTest::RunTest(const FString& Parameters)
     auto* Lights=Fixture.World->GetSubsystem<UACEEffectLightSubsystem>();
     if (!TestNotNull(TEXT("Particle distance fixture has a world light budget"),Lights)) return false;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if (!Dat || !Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat || !Dat->LoadDatDirectory(InteriorTestDatDirectory())) return false;
     auto* View=Fixture.World->SpawnActor<ACameraActor>();
     auto* PC=Fixture.World->SpawnActor<AACEPlayerController>();
     Fixture.World->AddController(PC);
@@ -779,7 +850,7 @@ bool FACERetailRuntimeCostTest::RunTest(const FString& Parameters)
 {
     FInteriorTestWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if (!Dat || !Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat || !Dat->LoadDatDirectory(InteriorTestDatDirectory())) return false;
     TArray<AACEWorldEntityActor*> Actors;
     for (int32 I=0;I<64;++I)
     {
@@ -829,7 +900,7 @@ bool FACERetailParticleTimingTest::RunTest(const FString& Parameters)
 
     FInteriorTestWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if (!Dat || !Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat || !Dat->LoadDatDirectory(InteriorTestDatDirectory())) return false;
     const auto* Info=Dat->GetParticleEmitterInfo(0x320005A8);
     if (!TestNotNull(TEXT("Authored wand emitter exists"),Info)) return false;
     auto* Owner=Fixture.World->SpawnActor<AActor>();
@@ -1370,7 +1441,7 @@ bool FACEInteractionEffectsTest::RunTest(const FString&)
 {
     FInteriorTestWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if (!Dat || !Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    if (!Dat || !Dat->LoadDatDirectory(InteriorTestDatDirectory())) return false;
     auto* View=Fixture.World->SpawnActor<ACameraActor>();View->SetActorLocation(FVector(-300,0,100));
     View->GetCameraComponent()->SetFieldOfView(70);
     auto* PC=Fixture.World->SpawnActor<APlayerController>();Fixture.World->AddController(PC);
@@ -1526,7 +1597,7 @@ bool FACEDoorwayGeometryCacheTest::RunTest(const FString& Parameters)
 {
     FInteriorTestWorld Fixture;
     auto* Dat = Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if (!TestTrue(TEXT("Retail data loads"), Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+    if (!TestTrue(TEXT("Retail data loads"), Dat->LoadDatDirectory(InteriorTestDatDirectory()))) return false;
     auto* Cache = IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Render.CacheDoorwayGeometry"));
     const int32 Previous = Cache->GetInt();
     ON_SCOPE_EXIT { Cache->Set(Previous, ECVF_SetByCode); };
@@ -1677,7 +1748,7 @@ bool FACESetupMetadataCacheTest::RunTest(const FString& Parameters)
 {
     FInteriorTestWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
-    if (!TestTrue(TEXT("Retail data loads"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
+    if (!TestTrue(TEXT("Retail data loads"),Dat->LoadDatDirectory(InteriorTestDatDirectory()))) return false;
     auto* Cache=IConsoleManager::Get().FindConsoleVariable(TEXT("ace.Dat.CacheSetupMetadata"));
     const int32 Previous=Cache->GetInt(); ON_SCOPE_EXIT { Cache->Set(Previous,ECVF_SetByCode); };
     FACEDatDatabase Portal;

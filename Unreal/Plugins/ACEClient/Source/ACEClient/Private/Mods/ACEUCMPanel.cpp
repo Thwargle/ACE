@@ -71,6 +71,7 @@ namespace ACEUCMPanelPrivate
                 +SVerticalBox::Slot().AutoHeight().Padding(0,12)[Tabs()]
                 +SVerticalBox::Slot().FillHeight(1)[SAssignNew(BodyScroll,SScrollBox)+SScrollBox::Slot()[SAssignNew(Body,SVerticalBox)]]
                 +SVerticalBox::Slot().AutoHeight().Padding(0,8)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).ColorAndOpacity(Muted)
+                    .Visibility_Lambda([H=Host](){return H.IsValid()&&!H->Notice.IsEmpty()?EVisibility::Visible:EVisibility::Collapsed;})
                     .AutoWrapText(true).Text_Lambda([H=Host](){return FText::FromString(H.IsValid()?H->Notice:FString());})]]];
             Rebuild();
         }
@@ -623,7 +624,7 @@ namespace ACEUCMPanelPrivate
                 Slider(TEXT("monster_blacklist_seconds"),TEXT("Skip unreachable target for"),0,600,120,Accent,TEXT(" s"));
                 Add(Text(TEXT("Acquisition is the maximum search distance; 0 uses attack range for imported stationary setups. Enable pursuit to approach a visible monster before firing. Walls and closed doors exclude targets. Route priority and meta/state settings can override normal combat; the live search status above shows the settings in effect."),15,Muted));
                 Slider(TEXT("power_percent"),TEXT("Attack power / accuracy"),0,100,50);
-                Add(Toggle(TEXT("auto_attack_power"),TEXT("Automatic attack power"),TEXT("Chooses power for the weapon's attack pattern and damage element.")));
+                Add(Toggle(TEXT("auto_attack_power"),TEXT("Automatic attack power"),TEXT("Chooses power for the weapon's attack pattern and damage element."),true));
                 Add(Toggle(TEXT("use_recklessness"),TEXT("Use Recklessness"),TEXT("Keeps automatic power in the Recklessness range when the skill is usable.")));
                 Add(Toggle(TEXT("ring"),TEXT("Use ring spells"),TEXT("For nearby groups. Imported monster rules keep their individual ring choices.")));
                 Slider(TEXT("ring_range"),TEXT("Ring target distance"),1,15,5,Accent,TEXT(" m"));

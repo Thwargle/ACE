@@ -5,8 +5,133 @@ network behavior, controls, DAT content, and interface design. Graphical fidelit
 work follows feature completion. A feature is not complete merely because its
 button exists, its opcode has a constant, or a focused regression test passes.
 
-This is the working acceptance record, most recently reviewed on 2026-10-09. The client
+This is the working acceptance record, most recently reviewed on 2026-10-12. The client
 is **not yet a feature-complete retail replacement**.
+
+## F-key stack overflow consolidation: 2026-10-12
+
+Retail `ItemHolder::AttemptAutoMerge` requires the whole selected quantity to
+fit, whereas `AttemptMerge` caps a direct merge at the destination's remaining
+capacity. ACE `Player.DoHandleActionStackableMerge` supports partial transfers
+and sends a count update for each surviving stack. At the user's request, F/hand
+sorting now prefers a whole-stack merge but falls back to that capacity-limited
+transfer when no whole-stack destination fits. This intentionally extends the
+retail automatic-selection behavior using the ordinary StackableMerge packet.
+
+For example, 15,137 and 15,000 pyreals become 5,137 and 25,000. The destination's
+advertised maximum is used for every item type; 25,000 is not hard-coded.
+Both stacks stay in their packs and quantities remain server-authoritative.
+Repeated presses wait for both replies, including reversed arrival order. A full
+stack cannot spill back into the remainder on another F press. Selection stays
+on the destination, and existing full-merge preference and no-match pickup
+behavior remain intact.
+
+Validation: Windows Development editor build passed. UIScreens, InventoryOrder
+and SelectionToolbar passed in `Saved/StackOverflowReview/Tests`, including
+the 30,137-pyreal case in both reply orders, a 100-item maximum, whole-merge
+preference, duplicate-input suppression and full-stack/remainder follow-ups.
+Shared Unreal/Quest source matches. No live-server merge was performed.
+
+## Pack drops onto closed world vendors: 2026-10-12
+
+Retail `ItemHolder::AttemptPlaceIn3D` dispatches vendor drops to
+`ClientUISystem::AttemptSellToVendor`: send ordinary Use when the shop is closed,
+remember both vendor and item, and wait for `Handle_VendorInfo`. Only a matching
+vendor reply invokes `VendorSellUI::AddItemToSell`, which opens Sell and expands
+the pack through `gmVendorUI::AddItem` with individual acceptability filtering.
+It stages an offer; it does not submit a Sell transaction.
+
+Our main-backpack guard returned before world targeting because the main pack
+uses the player GUID. Main packs now reach the shared world-drop path, while
+remaining ineligible for giving/dropping/moving the player. Side packs retain
+the same flow. Pending offers record the vendor identity, including the Give
+hotkey path; unrelated replies and closing the panel cannot populate another
+shop. Contents still use the authoritative vendor filters and full stack sizes.
+
+Validation: Windows Development editor build passed. `DesktopHighlights`
+exercised captured-pointer main/side-pack drops, the Use packet and replayed
+ApproachVendor reply, repeated/open-shop drops, protected contents, cancellation,
+busy use and mismatched replies. `UIScreens` passed its existing vendor, inventory,
+partial-stack and Give-key checks. Both suites reported zero errors/warnings in
+`Saved/VendorWorldDropReview/Tests`. Shared Unreal/Quest source matches. Live-server
+verification remains; these were local protocol and rendered UI regressions.
+
+## Scroll reading and held movement: 2026-10-12
+
+Retail `ItemHolder::Use` sends the ordinary inventory Use event and marks the
+interface busy. `ACSmartBox::HandleNetBlob` passes authoritative motion to
+`CommandInterpreter::LoseControlToServer`; `UseTime` does not reapply held
+movement while motions are pending. A fresh press can explicitly take control
+through `TakeControlFromServer`. This is not an unconditional movement lock.
+`CMotionTable::GetObjectSequence` treats Reading (0x4000001c) as a substate
+with entry, held pose and return-to-Ready links. ACE `Scroll.ActOnUse` changes
+to peace, plays Reading, consumes an eligible scroll and learns its spell,
+returns to Ready, and releases busy state; `Player.TryUseItem` schedules UseDone.
+
+The client previously replayed held forward input each frame and treated
+Reading as a short gesture. It now suspends input held before server Reading,
+clears autorun/mouse-forward and stale plugin steering, and retains the reading
+pose until completion. A new desktop movement press may reclaim control and
+exit the pose, matching retail. Rejection/timeout clears the pending-use gate.
+
+UCM now waits for a confirmed peace stance before reading and tracks UseDone.
+With Read unknown scrolls enabled, eligible carried scrolls are recovered after
+an interrupted pickup or restart. Known spells and protected items are skipped;
+unconfirmed reads retry with backoff, at most three times per item per run.
+UseDone success alone never marks a spell learned. Repeated failures retain the
+scroll, report the problem and leave other activities running. Imported
+Read/Sell/Salvage rules alone still do not consume pre-existing possessions.
+
+Validation: the Windows Development editor build passed. ScrollLearning,
+LegacyAdapters, RouteAndTellRequests and SchedulingParity passed in
+`Saved/ScrollReadingReview/Tests`; EmoteTransitions passed in
+`Saved/ScrollReadingReview/Final` after correcting its input fixture and adding
+stale-approach coverage. The request fixture emitted 34 JSON snapshot warnings,
+with no test errors. Real human DAT transitions were checked at 30/90 Hz, plus
+Reading completion at 60 Hz, without a live server consumption session.
+Shared Unreal/Quest source synchronization reports no differences.
+
+## Indoor/outdoor transition residency: 2026-10-12
+
+Reviewed the two Bandit Castle underpasses reported at BDD20033 and BDD2003C
+against retail `CPhysicsObj::change_cell`, `CEnvCell::init_static_objects`, and
+the shared Unreal occupancy/visibility paths. Retail retains a loaded cell's
+static objects across visits. Our building shells already retained bodies, but
+room BSP, furniture, scripted bridge supports, and exterior terrain still
+destroyed/recreated bodies at collision-residency changes. Scripted supports also
+disabled and recooked their physics sections. The baseline regression reproduced
+36 body-retention failures.
+
+Room and furniture collision now uses actor filters on retained bodies. Terrain
+retains its cooked body with queries disabled and every physical response ignored
+while outside the player's collision neighborhood. Real ray, object, and capsule
+queries verify both active support and inactive exclusion. Decorations without
+PhysicsBSP still never create instance bodies. Unloading an actor still releases
+its resources; retaining residency does not mean keeping every visited room.
+
+PView visibility also recreated procedural render proxies and uploaded their
+vertex/index buffers again. Stable cached meshes now use Unreal's scene visibility
+update, including its lighting/ray-tracing bookkeeping. Geometry and material
+changes still rebuild normally. Terrain-only visibility no longer invalidates
+every attached scenery mesh through the default child propagation. Pixel comparisons
+cover actor hiding, component visibility, independently visible attached scenery,
+restoring visibility, geometry edits, and hidden-body shadows.
+
+The crossing fixture includes both supplied lines extended past their thresholds,
+both directions, walking/running, desktop/VR, and 15/30/60/144/240 FPS: 640 cases per
+platform. A moving desktop camera exercises view occupancy separately from the
+player. No Bandit Castle identifiers or coordinates are used by the runtime fix.
+Tests accept `-RetailDatDir=` to run against the same DAT content on Linux.
+
+Evidence is under `Saved/BanditTransitionReview`: Windows baseline body-retention
+failures, development builds for Windows/Linux, and eight passing suites on each
+platform in `FinalWindows` and `FinalLinux`. Linux runs the native executable under
+WSL with Vulkan/lavapipe software rendering. This verifies Linux collision and
+render behavior, not frame-time performance on the reporter's graphics driver;
+the visible live-client stall still needs confirmation on that machine.
+The final attached-scenery change also passed `CachedWorldDraws`,
+`EntranceTransitions`, and `ResidentTerrainCollision` again on both platforms
+(`SceneryWindows` / `SceneryLinux`).
 
 ## Enchantment panels after death: 2026-10-09
 

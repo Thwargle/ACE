@@ -2,11 +2,14 @@
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
 #include "Misc/Paths.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Misc/ConfigCacheIni.h"
 #include "ACEInputBindings.h"
 #include "VR/ACEVRComponent.h"
 #include "VR/ACEVRSettings.h"
 #include "Camera/CameraComponent.h"
+#include "Camera/PlayerCameraManager.h"
 #include "Components/InputComponent.h"
 #include "ACEDatSubsystem.h"
 #include "ACEClientSubsystem.h"
@@ -73,8 +76,11 @@ bool FACEBuildingPassageTest::RunTest(const FString&)
  auto& Context=GEngine->CreateNewWorldContext(EWorldType::Game);auto* GI=NewObject<UGameInstance>(GEngine);World->SetGameInstance(GI);
  Context.OwningGameInstance=GI;Context.SetCurrentWorld(World);GI->OnWorldChanged(nullptr,World);GI->Init();
  ON_SCOPE_EXIT {GI->Shutdown();GEngine->DestroyWorldContext(World);World->DestroyWorld(false);};
+ World->Tick(LEVELTICK_TimeOnly,.01f);
  auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
- if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+ FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");
+ FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+ if(!Dat->LoadDatDirectory(DatDirectory))return false;
  auto* Client=GI->GetSubsystem<UACEClientSubsystem>();auto Session=Client->GetSession();
  auto* Host=World->SpawnActor<AActor>();auto* Terrain=NewObject<UACETerrainPresenterComponent>(Host);Host->AddInstanceComponent(Terrain);
  Terrain->Client=Client;Terrain->bHasKnownCell=true;
@@ -97,6 +103,8 @@ bool FACEBuildingPassageTest::RunTest(const FString&)
   }
  }
  auto* PC=World->SpawnActor<AACEPlayerController>();PC->Client=Client;PC->SetPlayer(NewObject<ULocalPlayer>(GEngine));World->AddController(PC);
+ if(!PC->PlayerCameraManager)
+ {PC->PlayerCameraManager=World->SpawnActor<APlayerCameraManager>();PC->PlayerCameraManager->InitializeFor(PC);}
  auto* Pawn=World->SpawnActor<APawn>();auto* Capsule=NewObject<UCapsuleComponent>(Pawn);Capsule->InitCapsuleSize(48,88);
  Pawn->SetRootComponent(Capsule);Pawn->AddInstanceComponent(Capsule);Capsule->RegisterComponent();Pawn->SetActorEnableCollision(false);PC->Possess(Pawn);
  PC->PlayerInput=NewObject<UPlayerInput>(PC);PC->SetupInputComponent();PC->bRetailCursorInstalled=true;
@@ -124,7 +132,10 @@ bool FACEBuildingPassageTest::RunTest(const FString&)
   {FVector(12,87,186),FVector(-20,81,186)},
   {FVector(-29,102,186),FVector(-44,102,186)},
   {FVector(-29,66,186),FVector(-44,66,186)},
-  {FVector(-54,77,186),FVector(-54,91,186)}};
+  {FVector(-54,77,186),FVector(-54,91,186)},
+  // Exact Linux report: extend past both marked thresholds, not just their midpoint.
+  {FVector(160.224840-192,65.180409,186.004980),FVector(151.825741-192,64.759366,186.004980)},
+  {FVector(191.567615-192,84.093197,186.004980),FVector(180.375562-192,84.138113,186.004980)}};
  // These cells have no authored floor polygons: their horizontal outside
  // portals deliberately retain the terrain. A sphere clear of every outside
  // plane must not admit land merely because the room can see outside.
@@ -151,7 +162,7 @@ bool FACEBuildingPassageTest::RunTest(const FString&)
   TestEqual(TEXT("Gate containment retains the side of a near-portal point"),Dat->IsPointInsideEnvCell(At.CellId,At.ToUnrealLocation(100),100),Inside);
  }
  Client->SetRunSkill(400);
- for(const auto& OriginalPath:Paths)for(bool Reverse:{false,true})for(bool Tracked:{false,true})for(bool Running:{false,true})for(float Dt:{1.f/30,1.f/60,1.f/144,1.f/240})
+ for(const auto& OriginalPath:Paths)for(bool Reverse:{false,true})for(bool Tracked:{false,true})for(bool Running:{false,true})for(float Dt:{1.f/15,1.f/30,1.f/60,1.f/144,1.f/240})
  {
   const TPair<FVector,FVector> Path=Reverse?TPair<FVector,FVector>(OriginalPath.Value,OriginalPath.Key):OriginalPath;
   VR->bActive=Tracked;VR->Settings->bRun=Running;
@@ -165,16 +176,23 @@ bool FACEBuildingPassageTest::RunTest(const FString&)
   if(!Running){PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::LeftShift,IE_Pressed,1.f));PC->PlayerInput->ProcessInputStack({},Dt,false);}
   const FVector Start=Pose.ToUnrealLocation(100);double Progress=0;int32 IndoorFrames=0,AirFrames=0,SlowFrames=0;
   const double ExpectedStep=Client->GetLocomotionSpeed(Running)*100*Dt;
-  double MaxGroundError=0;float StreamTime=0;
+  double MaxGroundError=0,MaxTransitionMs=0;float StreamTime=0;
   for(int Frame=0;Frame<FMath::CeilToInt(12.f/Dt)&&Progress<FVector::Distance(Path.Key,Path.Value)*100;++Frame)
   {
    ++GFrameCounter;
    VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,175-Capsule->GetScaledCapsuleHalfHeight()),Direction.Rotation());
    const FVector Before=PC->PredictedPose.ToUnrealLocation(100);const uint32 BeforeCell=PC->PredictedPose.CellId;
+   const double FrameStart=FPlatformTime::Seconds();
    VR->MoveStick=FVector2D(0,1);PC->PlayerTick(Dt);
+   if(!Tracked)
+   {
+    FMinimalViewInfo View;View.Location=PC->PredictedPose.ToUnrealLocation(100)+FVector(0,0,210)-Direction*300;
+    View.Rotation=Direction.Rotation();View.FOV=90;PC->PlayerCameraManager->SetCameraCachePOV(View);
+   }
    StreamTime+=Dt;
    if(StreamTime>=.1f){StreamTime=0;if(!ACECellTransit::IsIndoorCell(Terrain->LastKnownCellId))Terrain->UpdateOutdoorEnvCollision();}
    Terrain->UpdateCameraVisibility();
+   MaxTransitionMs=FMath::Max(MaxTransitionMs,(FPlatformTime::Seconds()-FrameStart)*1000);
    IndoorFrames+=ACECellTransit::IsIndoorCell(PC->PredictedPose.CellId)?1:0;AirFrames+=PC->bJumpAirborne?1:0;
    Progress=FVector::DotProduct(PC->PredictedPose.ToUnrealLocation(100)-Start,Direction);
    const double Step=FVector::DotProduct(PC->PredictedPose.ToUnrealLocation(100)-Before,Direction);
@@ -193,7 +211,7 @@ bool FACEBuildingPassageTest::RunTest(const FString&)
   VR->MoveStick=FVector2D::ZeroVector;
   const FVector End=PC->PredictedPose.ToUnrealLocation(100);
   const FString Case=FString::Printf(TEXT("Passage %s -> %s tracked=%d run=%d hz=%.0f"),*Path.Key.ToString(),*Path.Value.ToString(),Tracked,Running,1.f/Dt);
-  AddInfo(FString::Printf(TEXT("%s: travel=%.2fm indoor=%d air=%d groundError=%.3f"),*Case,Progress/100,IndoorFrames,AirFrames,MaxGroundError));
+  AddInfo(FString::Printf(TEXT("%s: travel=%.2fm indoor=%d air=%d groundError=%.3f maxFrameMs=%.3f"),*Case,Progress/100,IndoorFrames,AirFrames,MaxGroundError,MaxTransitionMs));
   TestTrue(*(Case+TEXT(" crosses completely")),Progress>=FVector::Distance(Path.Key,Path.Value)*100-20);
   TestTrue(*(Case+TEXT(" enters its interior cells")),IndoorFrames>0);
   TestEqual(*(Case+TEXT(" stays supported")),AirFrames,0);

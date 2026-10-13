@@ -9,6 +9,7 @@
   "attack_spell": 0,
   "radius": 30,
   "power": 0.5,
+  "auto_attack_power": true,
   "height": 2,
   "navigation": false,
   "loop_route": false,

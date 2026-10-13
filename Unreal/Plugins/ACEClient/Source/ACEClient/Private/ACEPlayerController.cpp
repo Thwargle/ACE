@@ -1031,7 +1031,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		&& ACEInputBindings::Pressed(this, ACEInputBindings::Action(TEXT("ToggleInterface"))))
 		SetDesktopInterfaceHidden(!bDesktopInterfaceHidden);
 	float F = 0.f, R = 0.f, T = 0.f;
-	const uint64 MovementGeneration = MovementSuppressionSequence;
+	const uint64 MovementGeneration = FMath::Max(MovementSuppressionSequence, ReadingMovementSequence);
 	F = ACEInputBindings::MovementAxis(this,EKeys::W,EKeys::S,MovementKeyPressOrder,FKey(),FKey(),MovementGeneration);
 	R = ACEInputBindings::MovementAxis(this,EKeys::E,EKeys::Q,MovementKeyPressOrder,FKey(),FKey(),MovementGeneration);
 	if (bMouseForwardActive && !bChatFocused) F = 1.f;
@@ -1081,7 +1081,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
             if(ACEInputBindings::Pressed(this,ACEInputBindings::Shortcut(Slot)))GameHUDWidget->ActivateHotbarSlot(Slot);
 	}
 	// A hotkey above may have started an attack/cast after these axes were sampled.
-	if (MovementGeneration != MovementSuppressionSequence) F=R=T=0.f;
+	if (MovementGeneration != FMath::Max(MovementSuppressionSequence, ReadingMovementSequence)) F=R=T=0.f;
 	if (!bVR && DatGameplayBinder)
 	{
 		DatGameplayBinder->SetCombatMovementBlocked(bJumpAirborne
@@ -1166,6 +1166,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 			if (auto* App = P->FindComponentByClass<UACECharacterAppearanceComponent>()) App->FinishEmoteMotion();
 	}
 	if (bVR) { VR->GetMovement(F, R, bRunning); T = 0.f; bAutoRun = false; }
+	if (bVR && ReadingMovementSequence) F=R=T=0.f;
 	bool bUniformVRMovement = bVR && Client->GetSession() && Client->GetSession()->SupportsUniformVRMovement();
 	if (bUniformVRMovement)
 	{
@@ -1181,6 +1182,14 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	}
 	// Manual input cancels server-directed MoveTo approach.
 	const bool bManualKeys = !FMath::IsNearlyZero(F) || !FMath::IsNearlyZero(R) || !FMath::IsNearlyZero(T);
+	if (bManualKeys && ReadingMovementSequence)
+	{
+		// A new press may interrupt server control (CommandInterpreter::TakeControlFromServer).
+		// Stop the reading pose too; never slide forward while still displaying it.
+		ReadingMovementSequence = 0;
+		if (Client->GetSession()) Client->GetSession()->ClearHeldForwardCommand();
+		if (GetPawn()) if (auto* App=GetPawn()->FindComponentByClass<UACECharacterAppearanceComponent>()) App->FinishEmoteMotion();
+	}
 	if (bManualKeys) { bServerTurnActive = false; bServerControlledMotion = false; }
 	if (bManualKeys && (bServerMoveToActive || bAwaitingUseDone || ApproachUseSendCount > 0))
 	{
@@ -1498,7 +1507,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
         const FVector Facing = bVR ? VR->GetBodyForward() : (GetPawn() ? GetPawn()->GetActorForwardVector() : FVector::ForwardVector);
         bPluginFastBuffMovement=Plugins->IsFastBuffMovementActive();
         Plugins->ApplyMovement(this, F, R, T, bManualKeys || bSpaceDown,
-            (!bVR && bChatFocused) || (bVR && VR->IsMovementBlocked()) || bJumpAirborne || bServerMoveToActive, bVR, Facing,
+            (!bVR && bChatFocused) || (bVR && VR->IsMovementBlocked()) || bJumpAirborne || bServerMoveToActive || ReadingMovementSequence!=0, bVR, Facing,
             Client->GetLocomotionSpeed(bRunning) * GetLocalCreatureScale() * WorldScale * DeltaTime);
         bPluginDrivingMovement=Plugins->IsDrivingMovement();
     }
@@ -7225,6 +7234,7 @@ void AACEPlayerController::HandleVitalsUpdated(const FACEPlayerVitals& /*Vitals*
 
 void AACEPlayerController::ClearServerMoveTo()
 {
+	ReadingMovementSequence = 0;
 	bServerMoveToActive = false;
 	bServerTurnActive = false;
 	bServerControlledMotion = false;
@@ -7254,6 +7264,9 @@ void AACEPlayerController::ClearServerMoveTo()
 
 void AACEPlayerController::HandleUseDone(uint32 /*Error*/)
 {
+	if (ReadingMovementSequence && GetPawn())
+		if (auto* App=GetPawn()->FindComponentByClass<UACECharacterAppearanceComponent>()) App->FinishEmoteMotion();
+	ReadingMovementSequence = 0;
 	bAwaitingUseDone = false;
 	if (bServerMoveToActive && !bApproachPickupIntoInventory)
 	{
@@ -7266,6 +7279,10 @@ void AACEPlayerController::EndUseApproach()
 	ClearServerMoveTo();
 }
 
+bool AACEPlayerController::IsInventoryInteractionActive() const
+{
+    return DatGameplayBinder&&DatGameplayBinder->IsInventoryInteractionActive();
+}
 void AACEPlayerController::EndCombatApproachTo(int32 TargetGuid)
 {
 	// Server combat MoveTo shares the use-approach controller. A dying target
@@ -7619,6 +7636,23 @@ void AACEPlayerController::HandleMotionUpdate(int32 ObjectGuid, const FACEObject
 	}
 	bServerControlledMotion = true;
 	bAutoRun = false; // CommandInterpreter::LoseControlToServer
+	if (ACEMotion::NormalizeCommand(Motion.ForwardCommand)==0x4000001cu
+		|| ACEMotion::NormalizeCommand(Motion.ActionCommand)==0x4000001cu)
+	{
+		const uint64 PreviousReadingSequence=ReadingMovementSequence;
+		ClearServerMoveTo(); // Reading supersedes approach; preserve the pending Use itself.
+		bServerControlledMotion=true;
+		ReadingMovementSequence=PreviousReadingSequence?PreviousReadingSequence:++MovementKeySequence;
+		bMouseForwardActive=false;
+		ForwardAxis=RightAxis=TurnAxis=ForwardSent=RightSent=TurnSent=0.f;
+		bWasMoving=bForceMovementResend=false;
+		if (GetPawn()) if (auto* App=GetPawn()->FindComponentByClass<UACECharacterAppearanceComponent>())
+		{
+			App->SetWalkingTransitionsEnabled(false);
+			App->SetLocomotionInput(0.f,0.f,false);
+		}
+	}
+	else if (Motion.MovementType==0 && !Client->IsUseBusy()) ReadingMovementSequence=0;
 	bServerTurnActive = false;
 	if (Motion.MovementType == 8 || Motion.MovementType == 9)
 	{

@@ -1,0 +1,11221 @@
+{
+  "source": "http://auth.virindi.net/plugins/gamedb/get2.php?date=0&dbver=9",
+  "monsters": {
+    "A'nekshay": [
+      32,
+      4,
+      8,
+      2,
+      1,
+      64,
+      16
+    ],
+    "A'nekshay Temple Guardian": [
+      32,
+      4,
+      8,
+      2,
+      1,
+      64,
+      16
+    ],
+    "A'nekshay Temple Servant": [
+      32,
+      4,
+      8,
+      2,
+      1,
+      64,
+      16
+    ],
+    "Abhorrent Eater": [
+      1,
+      2,
+      8,
+      16,
+      64,
+      32,
+      4
+    ],
+    "Abominable Snowman": [
+      8,
+      1,
+      4
+    ],
+    "Abyssal Child": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Abyssal Shadow": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Abyssal Totem": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Accursed Miner": [
+      4,
+      1,
+      2
+    ],
+    "Acidic Coral Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Acidic Diamond Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Acolyte of Breath": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Acolyte of Storms": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Acolyte of Wind": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Adept of Acid": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Adept of Fire": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Adept of Frost": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Adept of Lightning": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Adolescent Ash Gromnie": [
+      1,
+      2,
+      4
+    ],
+    "Adolescent Azure Gromnie": [
+      1,
+      2,
+      4
+    ],
+    "Adolescent Ivory Gromnie": [
+      1,
+      2,
+      4
+    ],
+    "Adolescent Rust Gromnie": [
+      1,
+      2,
+      4
+    ],
+    "Adult Reedshark": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Aerbax": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Aerfalle's Weakened Apprentice": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Afessa Sclavus Soldier": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Afesse Sclavus": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Affliction Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Aggregate Crystalline Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Aggressive Swarm": [
+      1
+    ],
+    "Agitated Desert Phyntos Swarm": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "Altered Drudge": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Altered Olthoi": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Amploth Raider": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Ancient Aqueous Knight": [
+      1,
+      2,
+      4
+    ],
+    "Ancient Coral Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Ancient Luminary Knight": [
+      1,
+      2,
+      4
+    ],
+    "Ancient Magma Golem": [
+      16,
+      4,
+      2,
+      1
+    ],
+    "Ancient Mu-miyah": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Ancient Mud Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Ancient Sandstone Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Ancient Tenebrous Knight": [
+      1,
+      2,
+      4
+    ],
+    "Ancient Water Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Annihilator": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Apostate Excavation Foreman": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Apostate Excavation Master": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Apostate Master": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Apostate Nexus Hollow Minion": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "Apostate Nexus Master": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Apostate Sapper": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Apostate Servant": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Apozim": [
+      64,
+      1,
+      2
+    ],
+    "Aqueous Golem": [
+      64,
+      8,
+      16,
+      32,
+      1,
+      4,
+      2
+    ],
+    "Archfiend": [
+      4,
+      1,
+      2
+    ],
+    "Ardent Moar": [
+      1,
+      2,
+      4
+    ],
+    "Ardent Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Armored Skeleton": [
+      4,
+      1,
+      2
+    ],
+    "Armored Skeleton Lord": [
+      4,
+      1,
+      2
+    ],
+    "Armored Tusker": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Artifex of the Living Darkness": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Artifex of the Singularity": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Ascendant Drudge": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Ascendant Tumerok": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Ash Gromnie": [
+      1,
+      2,
+      4
+    ],
+    "Ashen Bones": [
+      4,
+      1,
+      2
+    ],
+    "Ashen Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Ashris Niffis": [
+      1,
+      16,
+      32
+    ],
+    "Aspect of Avarice": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Aspect of Rage": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Aspect of Torment": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Assailer": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Assassin": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Aste Sclavus": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Aste Sclavus Lord": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Aste Soul Harrier": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Astis Niffis": [
+      1,
+      16,
+      32
+    ],
+    "Astyrrian": [
+      32,
+      1,
+      2
+    ],
+    "Atlan's Crafting Golem": [
+      16,
+      4,
+      2,
+      1
+    ],
+    "Augmented Drudge": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Augmented Olthoi": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Augmented Tumerok": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Aun Elder Shaman": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Aun Herbalist": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Aun Hunter": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Aun Itealuan": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Aun Nualuan": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Aun Ralirea": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Auroch Bull": [
+      1
+    ],
+    "Auroch Cow": [
+      1
+    ],
+    "Auroch Fire Bull": [
+      1
+    ],
+    "Auroch Fire Cow": [
+      1
+    ],
+    "Auroch Fire Yearling": [
+      1
+    ],
+    "Auroch Yearling": [
+      1
+    ],
+    "Avalanche": [
+      1,
+      2,
+      4
+    ],
+    "Avarice": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Azael Zefir": [
+      64,
+      16,
+      1
+    ],
+    "Azaxis": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Azure Gromnie": [
+      1,
+      2,
+      4
+    ],
+    "Baby Penguin": [
+      8,
+      1,
+      4,
+      2
+    ],
+    "Baby Thrungus": [
+      1,
+      4,
+      2
+    ],
+    "Badlands Siraluun": [
+      16,
+      4,
+      32
+    ],
+    "Bak'tshay": [
+      32,
+      4,
+      8,
+      2,
+      1,
+      64,
+      16
+    ],
+    "Bak'tshay Guard": [
+      32,
+      4,
+      8,
+      2,
+      1,
+      64,
+      16
+    ],
+    "Bak'tshay Lady": [
+      32,
+      4,
+      8,
+      2,
+      1,
+      64,
+      16
+    ],
+    "Bak'tshay Servant": [
+      32,
+      4,
+      8,
+      2,
+      1,
+      64,
+      16
+    ],
+    "Bak'tshay Slave": [
+      32,
+      4,
+      8,
+      2,
+      1,
+      64,
+      16
+    ],
+    "Bak'tshay Soldier": [
+      32,
+      4,
+      8,
+      2,
+      1,
+      64,
+      16
+    ],
+    "Banderling Aggressor": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Antagonist": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Bandit": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Berserker": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Breeder": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Captain": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Champion": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Chief": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Crusher": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Enforcer": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Guard": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Hierophant": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Leader": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Mangler": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Mauler": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Ogre": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Paragon": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Predator": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Raider": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Raider Guardian": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Raver": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Rogue": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Savage": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Scalper": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Scout": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Slayer": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Smasher": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Striker": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banderling Thrasher": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Bandit": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Bandit Lord": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Bandit Mage": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Bandit Mana Hunter": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Bane Grievver": [
+      1,
+      2,
+      4
+    ],
+    "Banished Banderling": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Banished Drudge": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Banished Grievver": [
+      1,
+      2,
+      4
+    ],
+    "Banished Lugian": [
+      64,
+      32,
+      1,
+      2,
+      4,
+      16,
+      8
+    ],
+    "Banished Monouga": [
+      16,
+      32,
+      2
+    ],
+    "Banished Mu-miyah": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Banished Olthoi": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Banished Phyntos Wasp": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "Banished Shadow": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Banished Tumerok": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Banished Tusker": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Barbaric Mukkir": [
+      2,
+      4,
+      1
+    ],
+    "Barker Mosswart": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Baron of Colier": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Basalt Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Battered Doll": [
+      16,
+      4,
+      1,
+      64,
+      8,
+      32,
+      2
+    ],
+    "Battle Lord Gregor": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Beaten Doll": [
+      16,
+      4,
+      1,
+      64,
+      8,
+      32,
+      2
+    ],
+    "Befouled Doll": [
+      16,
+      4,
+      1,
+      64,
+      8,
+      32,
+      2
+    ],
+    "Behemoth of Tenkarrdun": [
+      16,
+      4,
+      2,
+      1
+    ],
+    "Benek Niffis": [
+      1,
+      16,
+      32
+    ],
+    "Biaka": [
+      4,
+      16,
+      64,
+      2,
+      1,
+      8,
+      32
+    ],
+    "Bile Grievver": [
+      1,
+      2,
+      4
+    ],
+    "Black Bunny": [
+      1
+    ],
+    "Black Coral Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Black Coral Golem Viceroy": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Black Morel Thrungus": [
+      1,
+      4,
+      2
+    ],
+    "Black Phyntos Hive": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Black Phyntos Swarm": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "Black Phyntos Wasp": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "Black Rabbit": [
+      1
+    ],
+    "Black Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Blessed Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Blight Lictor": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Blight Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Blight Revenant": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Blight Spirit": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Blighted Ardent Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Blighted Bane Grievver": [
+      1,
+      2,
+      4
+    ],
+    "Blighted Coral Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Blighted Coral Golem Viceroy": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Blighted Dire Ursuin": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Blighted Hoary Armoredillo": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Blighted Oak Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Blighted Pyreal Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Blighted Sotiris Hollow Minion": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "Blighted Verdant Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Blizzard": [
+      1,
+      2,
+      4
+    ],
+    "Bloated Eater": [
+      1,
+      2,
+      8,
+      16,
+      64,
+      32,
+      4
+    ],
+    "Blockade Guard": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Blood Curse Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Blood Fiend": [
+      4,
+      1,
+      2
+    ],
+    "Blood Shreth": [
+      16,
+      4,
+      32
+    ],
+    "Blood Shrethlet": [
+      16,
+      4,
+      32
+    ],
+    "Bloodstone": [
+      4,
+      2,
+      1
+    ],
+    "Bloodstone Crystal Stockpile": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Bloodstone Fragment": [
+      4,
+      2,
+      1
+    ],
+    "Bloodstone Shard": [
+      4,
+      2,
+      1
+    ],
+    "Bloodthirsty Monouga": [
+      16,
+      32,
+      2
+    ],
+    "Blue Phyntos Wasp": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "Bokrok Lugian": [
+      64,
+      32,
+      1,
+      2,
+      4,
+      16,
+      8
+    ],
+    "Bone Scourge": [
+      4,
+      1,
+      2
+    ],
+    "Bound Coral Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Bound Crystal Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Bound Light Falatacot": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Bound Pyre Champion": [
+      4,
+      1,
+      2
+    ],
+    "Bound Spectral Handmaiden": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Brass Gromnie": [
+      1,
+      2,
+      4
+    ],
+    "Brigand": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Brilliant Crystal": [
+      4,
+      2,
+      1
+    ],
+    "Broken Doll": [
+      16,
+      4,
+      1,
+      64,
+      8,
+      32,
+      2
+    ],
+    "Broken Fragment": [
+      4,
+      2,
+      1
+    ],
+    "Bronze Armoredillo": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Bronze Armoredillo Pup": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Bronze Gauntlet Heavy Scout": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Bronze Gauntlet Knight": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Bronze Golem Kachi": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Bronze Golem Samurai": [
+      64,
+      32,
+      16,
+      8,
+      1,
+      4,
+      2
+    ],
+    "Bronze Golem Sekkou": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Bronze Statue of Ben Ten": [
+      32,
+      64,
+      8,
+      16,
+      4,
+      1,
+      2
+    ],
+    "Bronze Statue of Thorsten Cragstone": [
+      32,
+      64,
+      8,
+      16,
+      4,
+      1,
+      2
+    ],
+    "Bronze Statue of a Sclavus": [
+      32,
+      64,
+      8,
+      16,
+      4,
+      1,
+      2
+    ],
+    "Bronze Statue of a Zharalim": [
+      32,
+      64,
+      8,
+      16,
+      4,
+      1,
+      2
+    ],
+    "Brood Mother": [
+      1,
+      2,
+      4
+    ],
+    "Brown Armoredillo": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Brown Armoredillo Pup": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Brown Bunny": [
+      1
+    ],
+    "Brown Mouse": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Brown Rabbit": [
+      1
+    ],
+    "Brumal": [
+      8,
+      1,
+      2
+    ],
+    "Brutish Monouga": [
+      16,
+      32,
+      2
+    ],
+    "Buillic": [
+      64,
+      1,
+      2
+    ],
+    "Bur Lizk": [
+      16,
+      64,
+      2,
+      1
+    ],
+    "Burning Pillar": [
+      4,
+      2,
+      1
+    ],
+    "Burning Sands Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Burrowing Grievver": [
+      1,
+      2,
+      4
+    ],
+    "Burun Ruuk Adept": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Burun Ruuk Adherent": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Burun Ruuk Fiend": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Burun Ruuk Lout": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Burun Ruuk Scamp": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Burun Ruuk Seer": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Burun Ruuk Soothsayer": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Bushi Gatekeeper": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Canescent Mattekar": [
+      8,
+      2,
+      4,
+      32,
+      1,
+      16,
+      64
+    ],
+    "Captain Waliknua": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Carenzi Burrower": [
+      4,
+      16,
+      64,
+      1,
+      8,
+      32,
+      2
+    ],
+    "Carenzi Pouchling": [
+      4,
+      16,
+      64,
+      1,
+      8,
+      32,
+      2
+    ],
+    "Carenzi Sentry": [
+      4,
+      16,
+      64,
+      1,
+      8,
+      32,
+      2
+    ],
+    "Carenzi Stalker": [
+      4,
+      16,
+      64,
+      1,
+      8,
+      32,
+      2
+    ],
+    "Carnivorous Carenzi": [
+      4,
+      16,
+      64,
+      1,
+      8,
+      32,
+      2
+    ],
+    "Carrion Shreth": [
+      16,
+      4,
+      32
+    ],
+    "Carrion Shrethlet": [
+      16,
+      4,
+      32
+    ],
+    "Caustic": [
+      64,
+      1,
+      2
+    ],
+    "Cave Penguin": [
+      8,
+      1,
+      4,
+      2
+    ],
+    "Chained Tusker": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Champion Bullgara": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Change": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Chaos": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Chaos Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Charge": [
+      32,
+      1,
+      2
+    ],
+    "Charged Defender": [
+      16,
+      32,
+      64,
+      1,
+      4,
+      2
+    ],
+    "Charged Pillar": [
+      4,
+      2,
+      1
+    ],
+    "Charred Skeleton": [
+      4,
+      1,
+      2
+    ],
+    "Chick": [
+      1
+    ],
+    "Chicken": [
+      1
+    ],
+    "Chief Grogbash": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Chilled Defender": [
+      64,
+      32,
+      8,
+      4,
+      1,
+      2,
+      16
+    ],
+    "Chilly the Snowman": [
+      8,
+      1,
+      4
+    ],
+    "Chimera": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Chomu Disciple": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Chomu Sclavus": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Chomu Sclavus Lord": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Claude the Dark Archmage": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Claw Master Gatekeeper": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Clay Golem Kachi": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Clay Golem Samurai": [
+      4,
+      16,
+      8,
+      64,
+      32,
+      1,
+      2
+    ],
+    "Clay Golem Sekkou": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Cold One": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Commander Jared Kurth": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Conflagration": [
+      1,
+      2,
+      4
+    ],
+    "Contagion Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Contained Rift": [
+      1,
+      4,
+      2
+    ],
+    "Copper Cog Heavy Scout": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Copper Cog Knight": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Copper Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Copper Golem Kingpin": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Copper Gromnie": [
+      1,
+      2,
+      4
+    ],
+    "Coral Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Coral Tower": [
+      1
+    ],
+    "Corroding Crystalline Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Corroding Pillar": [
+      4,
+      2,
+      1
+    ],
+    "Corrosion Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Corrupt Bulwark": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Corrupt Conflagration": [
+      1,
+      2,
+      4
+    ],
+    "Corrupt Lugian": [
+      64,
+      32,
+      1,
+      2,
+      4,
+      16,
+      8
+    ],
+    "Corrupt Minion": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Corrupt Minion of Rage": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Corrupt Rager": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Corrupt Slayer": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Corrupt Sorcerer": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Corrupted Coral Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Corrupted Dread": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Corrupted Grave Frost": [
+      8,
+      1,
+      2
+    ],
+    "Corrupted Gravestone": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Corrupted Maiden": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Coruscating Mukkir": [
+      2,
+      4,
+      1
+    ],
+    "Cosseted Doll": [
+      16,
+      4,
+      1,
+      64,
+      8,
+      32,
+      2
+    ],
+    "Cow": [
+      1
+    ],
+    "Cowardly Snowman": [
+      8,
+      1,
+      4
+    ],
+    "Cracked Stone Tablet": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Creeper Mosswart": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Creeping Margul": [
+      4,
+      16,
+      64,
+      2,
+      1,
+      8,
+      32
+    ],
+    "Crude Monouga": [
+      16,
+      32,
+      2
+    ],
+    "Cruel Monouga": [
+      16,
+      32,
+      2
+    ],
+    "Crystal Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Crystal Golem Imperator": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Crystal Lord": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Crystal Minion": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Crystal Moiety": [
+      4,
+      2,
+      1
+    ],
+    "Crystal Shard": [
+      4,
+      2,
+      1
+    ],
+    "Crystal Shard Sentinel": [
+      4,
+      2,
+      1
+    ],
+    "Crystal Spur": [
+      4,
+      2,
+      1
+    ],
+    "Crystalline Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Cultist": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Cunning Monouga": [
+      16,
+      32,
+      2
+    ],
+    "Cursed Bones": [
+      4,
+      1,
+      2
+    ],
+    "Cursed Foreman": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Cursed Marionette": [
+      16,
+      1,
+      2,
+      4
+    ],
+    "Cursed Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Cutthroat": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Daimyo Idah": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Damaged Glacial Golem": [
+      8,
+      4,
+      2,
+      1
+    ],
+    "Damned Marionette": [
+      16,
+      1,
+      2,
+      4
+    ],
+    "Darcusch the Barbarian": [
+      4,
+      2,
+      8,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Dark Bobo": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Dark Crystal Spire": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Dark Guardian": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Dark Leech": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Dark Magus": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Dark Marionette": [
+      16,
+      1,
+      2,
+      4
+    ],
+    "Dark Master": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Dark Myrmidon": [
+      4,
+      1,
+      2
+    ],
+    "Dark Remoran": [
+      4,
+      1,
+      2
+    ],
+    "Dark Revenant": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Dark Sorcerer": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Dark Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Dark Zefir": [
+      64,
+      16,
+      1
+    ],
+    "Dazzling Crystal": [
+      4,
+      2,
+      1
+    ],
+    "DeathTail": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Decaying Ruschk Laktar": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Decaying Warrior": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Deep-sea Lava Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Defiled Doll": [
+      16,
+      4,
+      1,
+      64,
+      8,
+      32,
+      2
+    ],
+    "Degenerate Mukkir": [
+      2,
+      4,
+      1
+    ],
+    "Degenerate Shadow": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Degenerate Shadow Commander": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Demon Swarm Clawbearer": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Demon Swarm Matron": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Depraved Mukkir": [
+      2,
+      4,
+      1
+    ],
+    "Depraved Shadow": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Depraved Shadow Commander": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Desecrated Doll": [
+      16,
+      4,
+      1,
+      64,
+      8,
+      32,
+      2
+    ],
+    "Desert Bunny": [
+      1
+    ],
+    "Desert Cactus": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Desert Phyntos Swarm": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "Desert Rabbit": [
+      1
+    ],
+    "Desert Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Desolation Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Despair Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Destroyer Grievver": [
+      1,
+      2,
+      4
+    ],
+    "Devastator": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Devourer Margul": [
+      4,
+      16,
+      64,
+      2,
+      1,
+      8,
+      32
+    ],
+    "Diamond Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Diamond Golem Suzerain": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Diamond Lord": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Diaphanous Nephol Golem": [
+      16,
+      64,
+      32,
+      8,
+      1,
+      2,
+      4
+    ],
+    "Dire Champion Banderling": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Dire Champion Drudge": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Dire Champion Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Dire Champion Monouga": [
+      16,
+      32,
+      2
+    ],
+    "Dire Champion Shadow": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Dire Champion Virindi": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Dire Mattekar": [
+      8,
+      2,
+      4,
+      32,
+      1,
+      16,
+      64
+    ],
+    "Dire Mattie": [
+      8,
+      2,
+      4,
+      32,
+      1,
+      16,
+      64
+    ],
+    "Dire Ursuin": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Direland Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Discorporate Rynthid of Blind Rage": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Discorporate Rynthid of Consuming Torment": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Discorporate Rynthid of Rage": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Discorporate Rynthid of Torment": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Diseased Phyntos Wasp": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "Disgraced Nanjou Shou-jen": [
+      32,
+      64,
+      8,
+      16
+    ],
+    "Disobedience": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Doomed Spirit": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Doomshark": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Door": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Dread Idol": [
+      1,
+      8,
+      4
+    ],
+    "Dread Mattekar": [
+      8,
+      2,
+      4,
+      32,
+      1,
+      16,
+      64
+    ],
+    "Dread Ursuin": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Dreadful Ursuin": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Dream Marauder": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Drudge Bloodletter": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Drudge Cabalist": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Drudge Lurker": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Drudge Mystic": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Drudge Prowler": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Drudge Ravener": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Drudge Robber": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Drudge Robber Baron": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Drudge Sage": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Drudge Seraph": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Drudge Seraph Mystic": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Drudge Servant": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Drudge Skulker": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Drudge Slave": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Drudge Slinker": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Drudge Sneaker": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Drudge Stalker": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Drudge Vagabond": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Dual Fragment": [
+      4,
+      2,
+      1
+    ],
+    "Duplicitous Simulacrum": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "Dusk Zefir": [
+      64,
+      16,
+      1
+    ],
+    "Dust Golem": [
+      16,
+      64,
+      8,
+      32,
+      2,
+      4,
+      1
+    ],
+    "Eater": [
+      1,
+      2,
+      8,
+      16,
+      64,
+      32,
+      4
+    ],
+    "Ebon Gromnie": [
+      1,
+      2,
+      4
+    ],
+    "Ebon Mattekar": [
+      8,
+      2,
+      4,
+      32,
+      1,
+      16,
+      64
+    ],
+    "Ebon Rift": [
+      1,
+      4,
+      2
+    ],
+    "Egg": [
+      32,
+      64,
+      8,
+      16,
+      4,
+      1,
+      2
+    ],
+    "Elaniwood Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Elemental Protector": [
+      1,
+      2,
+      4
+    ],
+    "Elite Guardian": [
+      16,
+      8
+    ],
+    "Ember": [
+      16,
+      1,
+      2
+    ],
+    "Empowered Despair Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Empowered Hatred Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Empowered Sorrow Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Engorged Eater": [
+      1,
+      2,
+      8,
+      16,
+      64,
+      32,
+      4
+    ],
+    "Enku Zefir": [
+      64,
+      16,
+      1
+    ],
+    "Enoki Thrungus": [
+      1,
+      4,
+      2
+    ],
+    "Enraged Ancient Soul": [
+      8,
+      32,
+      4,
+      64,
+      16,
+      1,
+      2
+    ],
+    "Enraged Shadow": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Ensorcelled Weapon": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Enthralled Idolator": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Enthralled Zealot": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Entropy Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Esper Ursuin": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Essa Sclavus": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Essa Sclavus Lord": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Essa Soul Harrier": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Ethereal Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Exhumed Bones Piles": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Extas Lugian": [
+      64,
+      32,
+      1,
+      2,
+      4,
+      16,
+      8
+    ],
+    "Extas Raider": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Eyestalk of T'thuun": [
+      1,
+      8,
+      2
+    ],
+    "Faisi Disciple": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Faisi Sclavus": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Faisi Sclavus Lord": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Falatacot Blood Elder": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Falatacot Consort": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Falatacot Prison Warden": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Fallen Crystal Shard": [
+      4,
+      2,
+      1
+    ],
+    "Fallen Drudge": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Fallen Margul": [
+      4,
+      16,
+      64,
+      2,
+      1,
+      8,
+      32
+    ],
+    "Fallen Marionette": [
+      16,
+      1,
+      2,
+      4
+    ],
+    "Fallen Mite": [
+      2,
+      1,
+      4,
+      8,
+      32,
+      16,
+      64
+    ],
+    "Fallen Rift": [
+      1,
+      4,
+      2
+    ],
+    "Fallen Rock": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Fallen Shadow": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Fallen Tumerok": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "False Morel Thrungus": [
+      1,
+      4,
+      2
+    ],
+    "Famished Eater": [
+      1,
+      2,
+      8,
+      16,
+      64,
+      32,
+      4
+    ],
+    "Fanatical Mukkir": [
+      2,
+      4,
+      1
+    ],
+    "Fanatical Mukkir Ward Guardian": [
+      2,
+      4,
+      1
+    ],
+    "Female Tusker": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Feral Carenzi": [
+      4,
+      16,
+      64,
+      1,
+      8,
+      32,
+      2
+    ],
+    "Ferocious Monouga": [
+      16,
+      32,
+      2
+    ],
+    "Ferocious Ursuin": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Field Ursuin": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Field Ursuin Cub": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Fiery Defender": [
+      16,
+      1,
+      64,
+      4,
+      2,
+      32
+    ],
+    "Filthy Mattekar": [
+      8,
+      2,
+      4,
+      32,
+      1,
+      16,
+      64
+    ],
+    "Fire Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Fire Morel Thrungus": [
+      1,
+      4,
+      2
+    ],
+    "Fire Shreth": [
+      16,
+      4,
+      32
+    ],
+    "Fire Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Firestorm": [
+      16,
+      1,
+      2
+    ],
+    "Fiun Abayar": [
+      64,
+      8,
+      16,
+      1,
+      32,
+      2,
+      4
+    ],
+    "Fiun Assistant": [
+      64,
+      8,
+      16,
+      1,
+      32,
+      2,
+      4
+    ],
+    "Flame Guardian": [
+      16,
+      1,
+      2
+    ],
+    "Flamma": [
+      16,
+      1,
+      2
+    ],
+    "Flare": [
+      16,
+      1,
+      2
+    ],
+    "Fleshless Warrior": [
+      4,
+      1,
+      2
+    ],
+    "Flicker": [
+      16,
+      1,
+      2
+    ],
+    "Floeshark": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Follower of Deewain": [
+      64,
+      32,
+      4,
+      2,
+      16,
+      1,
+      8
+    ],
+    "Forge Golem": [
+      16,
+      64,
+      32,
+      4,
+      2,
+      1
+    ],
+    "Forge Guardian": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Fortress Barrier": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Foul Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Fouled Remoran": [
+      4,
+      1,
+      2
+    ],
+    "Fractured Glacial Golem": [
+      8,
+      4,
+      2,
+      1
+    ],
+    "Fragment": [
+      4,
+      2,
+      1
+    ],
+    "Freezing Mist Golem": [
+      16,
+      64,
+      32,
+      8,
+      1,
+      2,
+      4
+    ],
+    "Frenzied Fiun": [
+      64,
+      8,
+      16,
+      1,
+      32,
+      2,
+      4
+    ],
+    "Freshwater Armoredillo": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Frigid Ice Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Frigid Mist Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Frost": [
+      8,
+      1,
+      2
+    ],
+    "Frost Golem": [
+      8,
+      64,
+      16,
+      32
+    ],
+    "Frozen Crystal": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Frozen Dread": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Frozen Gearknight": [
+      8
+    ],
+    "Frozen Glacial Golem": [
+      8,
+      4,
+      2,
+      1
+    ],
+    "Frozen Ice Golem": [
+      8,
+      4,
+      2,
+      1
+    ],
+    "Frozen Wight": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Frozen Wight Archer": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Frozen Wight Captain": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Frozen Wight High Acolyte": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Frozen Wight Sorcerer": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Gaerlan": [
+      1,
+      4,
+      2
+    ],
+    "Gauloth Shreth": [
+      16,
+      4,
+      32
+    ],
+    "Gelid": [
+      8,
+      1,
+      2
+    ],
+    "Ghastly Priestess": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Ghost Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Giant Imprisoned Monouga": [
+      16,
+      32,
+      2
+    ],
+    "Giant Jungle Phyntos Wasp": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "Giant Mite": [
+      2,
+      1,
+      4,
+      8,
+      32,
+      16,
+      64
+    ],
+    "Gigas Lugian": [
+      64,
+      32,
+      1,
+      2,
+      4,
+      16,
+      8
+    ],
+    "Gigas Raider": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Glacial Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Glacial Golem Margrave": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Gladiator Diemos": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Glissnal Nefane": [
+      1,
+      16,
+      32
+    ],
+    "Glissnal Niffis": [
+      1,
+      16,
+      32
+    ],
+    "Glissnal Niffling": [
+      1,
+      16,
+      32
+    ],
+    "Glissnal Sleech": [
+      1,
+      16,
+      32
+    ],
+    "Gloom Drudge": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Glormigoth": [
+      1,
+      2,
+      4
+    ],
+    "Gnawer Shreth": [
+      16,
+      4,
+      32
+    ],
+    "Gnawer Shrethlet": [
+      16,
+      4,
+      32
+    ],
+    "Gold Gear Heavy Scout": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Gold Gear Knight": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Gold Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Gold Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Gold Niffis": [
+      1,
+      16,
+      32
+    ],
+    "Gold Phyntos Wasp": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "Gold Remoran": [
+      4,
+      1,
+      2
+    ],
+    "Gold Shallows Shredder": [
+      2,
+      1,
+      4
+    ],
+    "Goldenback Tusker": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Gotrok Aetherium Miner": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Gotrok Amploth": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Gotrok Extas": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Gotrok Extias": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Gotrok Fortress Guard": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Gotrok Gigas": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Gotrok Juggernaut": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Gotrok Laigus": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Gotrok Ligias": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Gotrok Lithos": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Gotrok Mining Foreman": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Gotrok Montok": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Gotrok Obeloth": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Gotrok Ornost": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Gotrok Tiatus": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Gotrok Titan": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Gout": [
+      16,
+      1,
+      2
+    ],
+    "Graal Margul": [
+      4,
+      16,
+      64,
+      2,
+      1,
+      8,
+      32
+    ],
+    "Gragghk": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Granite Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Grave Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Great Cave Penguin": [
+      8,
+      1,
+      4,
+      2
+    ],
+    "Great Devourer": [
+      2,
+      1,
+      4
+    ],
+    "Great Elariwood Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Great Mattekar": [
+      8,
+      2,
+      4,
+      32,
+      1,
+      16,
+      64
+    ],
+    "Great Mattie": [
+      8,
+      2,
+      4,
+      32,
+      1,
+      16,
+      64
+    ],
+    "Great Revenant": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Great Skeleton": [
+      4,
+      1,
+      2
+    ],
+    "Greater Mu-miyah": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Greater Penumbral Horror": [
+      1,
+      2,
+      4
+    ],
+    "Green Phyntos Wasp": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "Grey Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Grievver Shredder": [
+      1,
+      2,
+      4
+    ],
+    "Grievver Violator": [
+      1,
+      2,
+      4
+    ],
+    "Grimy Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Guardian Armoredillo": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Guardian Mu-miyah": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Guardian Statue": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Guardian of Diemos": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Guardian of the Lost Light": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Guardian of the Monolith": [
+      16,
+      1,
+      2
+    ],
+    "Guardian of the Ritual": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Guardian of the Singularity": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Gurog Guardian": [
+      8,
+      32,
+      1,
+      2,
+      4,
+      16,
+      64
+    ],
+    "Gurog Henchman": [
+      8,
+      32,
+      1,
+      2,
+      4,
+      16,
+      64
+    ],
+    "Gurog Minion": [
+      8,
+      32,
+      1,
+      2,
+      4,
+      16,
+      64
+    ],
+    "Gurog Soldier": [
+      8,
+      32,
+      1,
+      2,
+      4,
+      16,
+      64
+    ],
+    "Guruk Basher": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Guruk Beast": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Guruk Behemoth": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Guruk Boor": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Guruk Brute": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Guruk Colossus": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Guruk Crusher": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Guruk Destroyer": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Guruk Heavy": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Guruk Miscreant": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Guruk Smasher": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Harraag": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Harrower Grievver": [
+      1,
+      2,
+      4
+    ],
+    "Harvest Reaper": [
+      4,
+      1,
+      2
+    ],
+    "Hastar the Misbegotten": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Hatred Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Hea Apostate Shock Trooper": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Hea Apostate Warlord": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Hea Champion": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Hea Drumspeaker": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Hea Elder Shaman": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Hea Hunter": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Hea Itealuan": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Hea Kanokeh": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Hea Karenua": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Hea Nualuan": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Hea Runner": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Hea Shaman": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Hea Temenua": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Hea Tnakarea": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Hea Tuperea": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Hea Warrior": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Hea Windreave": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Heavy Drudge Prowler": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Helcan Margul": [
+      4,
+      16,
+      64,
+      2,
+      1,
+      8,
+      32
+    ],
+    "Hellfire": [
+      16,
+      1,
+      2
+    ],
+    "Hellion": [
+      4,
+      16,
+      64,
+      2,
+      1,
+      8,
+      32
+    ],
+    "Hellion Mukkir": [
+      2,
+      4,
+      1
+    ],
+    "High Acolyte": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "High Mu-miyah": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "High Priestess Xik Minru": [
+      4,
+      1,
+      2
+    ],
+    "High Tumerok": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Highwayman": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Hoarfrost": [
+      8,
+      1,
+      2
+    ],
+    "Hoary Armoredillo": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Hoary Mattekar": [
+      8,
+      2,
+      4,
+      32,
+      1,
+      16,
+      64
+    ],
+    "Hollow Reaver": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "Horned Chittick": [
+      1,
+      2,
+      4
+    ],
+    "Horrible Mu-miyah": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Horrid Remoran": [
+      4,
+      1,
+      2
+    ],
+    "Horripal": [
+      8,
+      1,
+      2
+    ],
+    "Hunter Shreth": [
+      16,
+      4,
+      32
+    ],
+    "Hunter Shrethlet": [
+      16,
+      4,
+      32
+    ],
+    "Hyem": [
+      8,
+      1,
+      2
+    ],
+    "Ice Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Idol": [
+      1,
+      8,
+      4
+    ],
+    "Illu Sclavus": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Illu Sclavus Soldier": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Imp": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Imperial Mu-miyah": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Incalescent Crystalline Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Incalescent Pillar": [
+      4,
+      2,
+      1
+    ],
+    "Incendiary Knight": [
+      1,
+      2,
+      4
+    ],
+    "Individuality": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Infected Assailer": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Infernal Zefir": [
+      64,
+      16,
+      1
+    ],
+    "Inferno": [
+      16,
+      1,
+      2
+    ],
+    "Infested Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Inflamed Ursuin": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Infused Blood Golem": [
+      16,
+      32,
+      64,
+      4,
+      2,
+      8,
+      1
+    ],
+    "Infused Empyrean Blood Golem": [
+      16,
+      32,
+      64,
+      1,
+      8,
+      2,
+      4
+    ],
+    "Injured Olthoi": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Inner Chamber Guardian": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Innocent Doll": [
+      16,
+      4,
+      1,
+      64,
+      8,
+      32,
+      2
+    ],
+    "Innocuous Doll": [
+      16,
+      4,
+      1,
+      64,
+      8,
+      32,
+      2
+    ],
+    "Insatiable Eater": [
+      1,
+      2,
+      8,
+      16,
+      64,
+      32,
+      4
+    ],
+    "Insidious Monouga": [
+      16,
+      32,
+      2
+    ],
+    "Intense Aggregate Crystalline Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Intense Corroding Crystalline Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Intense Incalescent Crystalline Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Intense Incalescent Pillar": [
+      4,
+      2,
+      1
+    ],
+    "Intense Shivering Crystalline Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Intense Shivering Pillar": [
+      4,
+      2,
+      1
+    ],
+    "Invading Bronze Gauntlet Knight": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Invading Bronze Gauntlet Phalanx": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Invading Copper Cog Knight": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Invading Copper Cog Phalanx": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Invading Iron Blade Knight": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Invading Iron Blade Phalanx": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Invading Iron Blade Squire": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Invading Silver Scope Phalanx": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Invading Silver Scope Squire": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Iorik Eye Stalk": [
+      1,
+      8,
+      2
+    ],
+    "Iorik Tendril": [
+      1,
+      8,
+      2
+    ],
+    "Iorik Tentacle": [
+      1,
+      8,
+      2
+    ],
+    "Iron Blade Heavy Scout": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Iron Blade Knight": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Iron Blade Lord": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Iron Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Iron Golem Kachi": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Iron Golem Samurai": [
+      32,
+      64,
+      16,
+      8,
+      1,
+      4,
+      2
+    ],
+    "Iron Golem Sekkou": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Iron Spined Chittick": [
+      1,
+      2,
+      4
+    ],
+    "Island Armoredillo": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Ivory Gromnie": [
+      1,
+      2,
+      4
+    ],
+    "Jade Gromnie": [
+      1,
+      2,
+      4
+    ],
+    "Jelly Thrungus": [
+      1,
+      4,
+      2
+    ],
+    "Jibrit Zefir": [
+      64,
+      16,
+      1
+    ],
+    "Jungle Phyntos Wasp": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "Jungle Reaver": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "K'nath An'dras": [
+      2,
+      64,
+      8,
+      32
+    ],
+    "K'nath B'orret": [
+      2,
+      64,
+      8,
+      32
+    ],
+    "K'nath D'Nob": [
+      2,
+      64,
+      8,
+      32
+    ],
+    "K'nath I'km": [
+      2,
+      64,
+      8,
+      32
+    ],
+    "K'nath La'nal": [
+      2,
+      64,
+      8,
+      32
+    ],
+    "K'nath N'aes": [
+      2,
+      64,
+      8,
+      32
+    ],
+    "K'nath N'gell": [
+      2,
+      64,
+      8,
+      32
+    ],
+    "K'nath N'osaj": [
+      2,
+      64,
+      8,
+      32
+    ],
+    "K'nath S'hirc": [
+      2,
+      64,
+      8,
+      32
+    ],
+    "K'nath S'tath": [
+      2,
+      64,
+      8,
+      32
+    ],
+    "K'nath T'aed": [
+      2,
+      64,
+      8,
+      32
+    ],
+    "K'nath T'amt": [
+      2,
+      64,
+      8,
+      32
+    ],
+    "K'nath Thea'reh": [
+      2,
+      64,
+      8,
+      32
+    ],
+    "K'nath X'ela": [
+      2,
+      64,
+      8,
+      32
+    ],
+    "K'nath Z'bog": [
+      2,
+      64,
+      8,
+      32
+    ],
+    "Kazyk Ri T'thuunixis": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Kerthump the Ear Taker": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Kilif Zefir": [
+      64,
+      16,
+      1
+    ],
+    "Killagurg": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Killer Phyntos Drone": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "Killer Phyntos Hive": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Killer Phyntos Soldier": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "Killer Phyntos Swarm": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "Kirit Zefir": [
+      64,
+      16,
+      1
+    ],
+    "Kithless Siraluun": [
+      16,
+      4,
+      32
+    ],
+    "Korgluuk of Bur": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Kroktok Lugian": [
+      64,
+      32,
+      1,
+      2,
+      4,
+      16,
+      8
+    ],
+    "Lacerator": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Lady Aerfalle": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Lady Saliane": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Lady Tairla Mhoire": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Laigus Lugian": [
+      64,
+      32,
+      1,
+      2,
+      4,
+      16,
+      8
+    ],
+    "Laigus Raider": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Large Blight Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Lesser Acolyte": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Lesser Mu-miyah": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Lesser Void Knight": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Lich": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Lich Lord": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Lich Oppressor": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Lich Overseer": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Limestone Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Linvak Ursuin": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Listris Nefane": [
+      1,
+      16,
+      32
+    ],
+    "Listris Niffis": [
+      1,
+      16,
+      32
+    ],
+    "Listris Niffling": [
+      1,
+      16,
+      32
+    ],
+    "Listris Sleech": [
+      1,
+      16,
+      32
+    ],
+    "Lithos Lugian": [
+      64,
+      32,
+      1,
+      2,
+      4,
+      16,
+      8
+    ],
+    "Lithos Raider": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Littoral Siraluun": [
+      16,
+      4,
+      32
+    ],
+    "Lord Cynreft Mhoire": [
+      4,
+      1,
+      2
+    ],
+    "Lord Hendrel": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Lord Kastellar": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Lord Trimere": [
+      4,
+      1,
+      2
+    ],
+    "Lothus Guardian of Torment": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Lugian Juggernaut": [
+      64,
+      32,
+      1,
+      2,
+      4,
+      16,
+      8
+    ],
+    "Lugian Warlord": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Luminary Knight": [
+      1,
+      2,
+      4
+    ],
+    "Lunnum": [
+      64,
+      8,
+      16,
+      1,
+      32,
+      2,
+      4
+    ],
+    "Mad Cow": [
+      1
+    ],
+    "Maelstrom": [
+      1,
+      2,
+      4
+    ],
+    "Maelstrom Shadow": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Magma Golem": [
+      16,
+      4,
+      2,
+      1
+    ],
+    "Magma Golem Exarch": [
+      16,
+      4,
+      2,
+      1
+    ],
+    "Magshuth Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Maguth Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Male Tusker": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Malevolent Zefir": [
+      64,
+      16,
+      1
+    ],
+    "Malignant Marionette": [
+      16,
+      1,
+      2,
+      4
+    ],
+    "Malus Shreth": [
+      16,
+      4,
+      32
+    ],
+    "Mana Barrier": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Mangy Carenzi": [
+      4,
+      16,
+      64,
+      1,
+      8,
+      32,
+      2
+    ],
+    "Maniacal Fiun": [
+      64,
+      8,
+      16,
+      1,
+      32,
+      2,
+      4
+    ],
+    "Manuaka": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Marae Ursuin": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Marionette": [
+      16,
+      1,
+      2,
+      4
+    ],
+    "Marsh Siraluun": [
+      16,
+      4,
+      32
+    ],
+    "Martinate Simulacrum": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "Martinate Simulacrum Magician": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "Martinate Virindi Inquisitor": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Masonry Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Master Archer": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Master Bloodstone": [
+      4,
+      2,
+      1
+    ],
+    "Master Bloodstone Satellite": [
+      4,
+      2,
+      1
+    ],
+    "Master Mage": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Master Soldier": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Master of the Pack": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Master's Acolyte": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Mercenary": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Merciless Monouga": [
+      16,
+      32,
+      2
+    ],
+    "Miasma": [
+      64,
+      1,
+      2
+    ],
+    "Mighty Oak Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Minik Ra T'thuunixis": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Minion Leader": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "Mire Phyntos Wasp": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "Miry Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Misshapen Mite": [
+      2,
+      1,
+      4,
+      8,
+      32,
+      16,
+      64
+    ],
+    "Missile Defender": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Mist Golem": [
+      16,
+      64,
+      32,
+      8,
+      1,
+      2,
+      4
+    ],
+    "Mite Digger": [
+      2,
+      1,
+      4,
+      8,
+      32,
+      16,
+      64
+    ],
+    "Mite Scamp": [
+      2,
+      1,
+      4,
+      8,
+      32,
+      16,
+      64
+    ],
+    "Mite Scion": [
+      2,
+      1,
+      4,
+      8,
+      32,
+      16,
+      64
+    ],
+    "Mite Sentry": [
+      2,
+      1,
+      4,
+      8,
+      32,
+      16,
+      64
+    ],
+    "Mite Snippet": [
+      2,
+      1,
+      4,
+      8,
+      32,
+      16,
+      64
+    ],
+    "Mite Squib": [
+      2,
+      1,
+      4,
+      8,
+      32,
+      16,
+      64
+    ],
+    "Mite Squire": [
+      2,
+      1,
+      4,
+      8,
+      32,
+      16,
+      64
+    ],
+    "Moarsman Adherent of T'thuun": [
+      1,
+      2,
+      4
+    ],
+    "Moarsman Guard": [
+      1,
+      2,
+      4
+    ],
+    "Moarsman Priest of T'thuun": [
+      1,
+      2,
+      4
+    ],
+    "Moarsman Prior": [
+      1,
+      2,
+      4
+    ],
+    "Mogshuth Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Moguth Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Monstrous Mite": [
+      2,
+      1,
+      4,
+      8,
+      32,
+      16,
+      64
+    ],
+    "Mosswart Agitator": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mosswart Chief": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mosswart Clinger": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mosswart Cringer": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mosswart Elder": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mosswart Fanatic": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mosswart Feeder": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mosswart Gladiator": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mosswart Idolator": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mosswart Mire-Witch": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mosswart Muck Stalker": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mosswart Scavenger": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mosswart Scrounger": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mosswart Shaman": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mosswart Soul Trapper": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mosswart Swamp Lord": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mosswart Townsfolk": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mosswart Zealot": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mottled Carenzi": [
+      4,
+      16,
+      64,
+      1,
+      8,
+      32,
+      2
+    ],
+    "Mountain Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Mowen Udaun": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Mox": [
+      64,
+      1,
+      2
+    ],
+    "Mu-miyah Champion": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Mu-miyah Channeller": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Mu-miyah Grand Vizier": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Mu-miyah Guardian": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Mu-miyah Lord": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Mu-miyah Sentinel": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Mu-miyah Slave Master": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Mu-miyah Soldier": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Mu-miyah Soothsayer": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Mu-miyah Vizier": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Muck Glutton": [
+      1,
+      2,
+      4
+    ],
+    "Mucky Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Mud Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Mud Golem Sludge Lord": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Mudlurk Mosswart": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Mudmouth": [
+      8,
+      64,
+      32,
+      16,
+      4,
+      2,
+      1
+    ],
+    "Mukkir": [
+      2,
+      4,
+      1
+    ],
+    "Mukkir Aspect of Grael": [
+      2,
+      4,
+      1
+    ],
+    "Mukkir Draktehn": [
+      2,
+      4,
+      1
+    ],
+    "Mukkir Kartak": [
+      2,
+      4,
+      1
+    ],
+    "Mukkir Laktar": [
+      2,
+      4,
+      1
+    ],
+    "Mukkir Progenitor": [
+      2,
+      4,
+      1
+    ],
+    "Murk Drudge": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Mutated Mite": [
+      2,
+      1,
+      4,
+      8,
+      32,
+      16,
+      64
+    ],
+    "Nalif Zefir": [
+      64,
+      16,
+      1
+    ],
+    "Narrow Rift": [
+      1,
+      4,
+      2
+    ],
+    "Nightmare Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Nightmarish Doll": [
+      16,
+      4,
+      1,
+      64,
+      8,
+      32,
+      2
+    ],
+    "Nightmarish Marionette": [
+      16,
+      1,
+      2,
+      4
+    ],
+    "Nivinizk T'thuunixis": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Noble Remains": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Nomad Mu-miyah": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "North Armory Captain": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Northern Black Claw Raider": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Nubilous Golem": [
+      64,
+      16,
+      32,
+      1,
+      2,
+      4
+    ],
+    "Oak Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Oak Target Drudge": [
+      1
+    ],
+    "Obeloth Lugian": [
+      64,
+      32,
+      1,
+      2,
+      4,
+      16,
+      8
+    ],
+    "Obeloth Raider": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Obliterator": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Obsidian Chittick": [
+      1,
+      2,
+      4
+    ],
+    "Obsidian Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Obsidian Golem Noble": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Obsidian Sentient Fragment": [
+      4,
+      2,
+      1
+    ],
+    "Old Bones": [
+      4,
+      1,
+      2
+    ],
+    "Olthoi Brood Matron": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Brood Queen Elder": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Drone": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Egg": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Olthoi Elder Brood Matron": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Eviscerator": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Eviscerator Grub": [
+      4,
+      2,
+      1
+    ],
+    "Olthoi Gardener": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Grub": [
+      4,
+      2,
+      1
+    ],
+    "Olthoi Harvester": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Keeper": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Lancer": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Larvae": [
+      4,
+      2,
+      1
+    ],
+    "Olthoi Legionary": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Mutilator": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Needler": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Nettler": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Noble": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Noble Grub": [
+      4,
+      2,
+      1
+    ],
+    "Olthoi Nymph": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Nymph Grub": [
+      4,
+      2,
+      1
+    ],
+    "Olthoi Piercer": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Primordial": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Progenitor": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Ripper": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Sentinel": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Servant": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Slasher": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Slayer": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Soldier": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Soldier Grub": [
+      4,
+      2,
+      1
+    ],
+    "Olthoi Swarm Drone": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Swarm Eviscerator": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Swarm Guardian": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Swarm Legionary": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Swarm Mutilator": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Swarm Noble": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Swarm Nymph": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Swarm Soldier": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Swarm Worker": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Warrior": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Olthoi Worker": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Opor Niffis": [
+      1,
+      16,
+      32
+    ],
+    "Outcast Lord": [
+      16,
+      32,
+      2
+    ],
+    "Outcast Monouga": [
+      16,
+      32,
+      2
+    ],
+    "Pallid Moar": [
+      1,
+      2,
+      4
+    ],
+    "Pallid Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Pandemic Child": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Pandemonium Shadow": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Panumbral Soldier": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Panumbris Shadow": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Paradox-touched Olthoi Eviscerator": [
+      4,
+      2,
+      1
+    ],
+    "Paradox-touched Olthoi Eviscerator Grub": [
+      4,
+      2,
+      1
+    ],
+    "Paradox-touched Olthoi Eviscerator Nymph": [
+      4,
+      2,
+      1
+    ],
+    "Paradox-touched Olthoi Flyer Nymph": [
+      4,
+      2,
+      1
+    ],
+    "Paradox-touched Olthoi Lacerator": [
+      4,
+      2,
+      1
+    ],
+    "Paradox-touched Olthoi Lancer": [
+      4,
+      2,
+      1
+    ],
+    "Paradox-touched Olthoi Noble": [
+      4,
+      2,
+      1
+    ],
+    "Paradox-touched Olthoi Noble Grub": [
+      4,
+      2,
+      1
+    ],
+    "Paradox-touched Olthoi Noble Nymph": [
+      4,
+      2,
+      1
+    ],
+    "Paradox-touched Olthoi Queen": [
+      4,
+      2,
+      1
+    ],
+    "Paradox-touched Olthoi Ripper": [
+      4,
+      2,
+      1
+    ],
+    "Paradox-touched Olthoi Sentinel": [
+      4,
+      2,
+      1
+    ],
+    "Paradox-touched Olthoi Slasher": [
+      4,
+      2,
+      1
+    ],
+    "Paradox-touched Olthoi Swarm Eviscerator": [
+      4,
+      2,
+      1
+    ],
+    "Paradox-touched Olthoi Ward Guardian": [
+      4,
+      2,
+      1
+    ],
+    "Paradox-touched Olthoi Warrior": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Paradox-touched Olthoi Warrior Nymph": [
+      4,
+      2,
+      1
+    ],
+    "Parfal Nefane": [
+      1,
+      16,
+      32
+    ],
+    "Parfal Niffis": [
+      1,
+      16,
+      32
+    ],
+    "Parfal Sleech": [
+      1,
+      16,
+      32
+    ],
+    "Paroxysm Shadow": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Patrician Kilkitris": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Patrician Phaerix": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Peerless Drudge": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Penguin Guardian": [
+      8,
+      1,
+      4,
+      2
+    ],
+    "Penumbral Horror": [
+      1,
+      2,
+      4
+    ],
+    "Pestilence Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Phantasm": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Phantom": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Pile O' Bones": [
+      4,
+      1,
+      2
+    ],
+    "Pillar of Fire": [
+      16,
+      1,
+      2
+    ],
+    "Pillar of Frost": [
+      1,
+      2,
+      4
+    ],
+    "Plasma Golem": [
+      64,
+      16,
+      32,
+      1,
+      2,
+      4
+    ],
+    "Plate Armoredillo": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Plated Tusker": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Platinum Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Platinum Golem Mountain King": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Poacher": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Polar Ursuin": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Portal Keeper": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Portal Pillar": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Primeval Skeleton": [
+      4,
+      1,
+      2
+    ],
+    "Pristine Doll": [
+      16,
+      4,
+      1,
+      64,
+      8,
+      32,
+      2
+    ],
+    "Puffball Thrungus": [
+      1,
+      4,
+      2
+    ],
+    "Pugnacious Monouga": [
+      16,
+      32,
+      2
+    ],
+    "Pumpkin Buffer": [
+      1
+    ],
+    "Pumpkin Kin": [
+      1
+    ],
+    "Pumpkin Lord": [
+      1
+    ],
+    "Putrid Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Pyre Champion": [
+      4,
+      1,
+      2
+    ],
+    "Pyre Minion": [
+      4,
+      1,
+      2
+    ],
+    "Pyre Skeleton": [
+      4,
+      1,
+      2
+    ],
+    "Pyreal Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Pyreal Target Drudge": [
+      1
+    ],
+    "Quiddity Rift": [
+      1,
+      4,
+      2
+    ],
+    "Rabid Carenzi": [
+      4,
+      16,
+      64,
+      1,
+      8,
+      32,
+      2
+    ],
+    "Rabid Eater": [
+      1,
+      2,
+      8,
+      16,
+      64,
+      32,
+      4
+    ],
+    "Radiant Blood Crystal Array": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Radiant Crystal": [
+      4,
+      2,
+      1
+    ],
+    "Rage Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Raging Corrupt Sorcerer": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Raging Rynthid Sorcerer": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Raging Ursuin": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Raider Juggernaut": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Raider Justicar": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Raider Prefect": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Rampager": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Rank Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Ravager": [
+      4,
+      16,
+      64,
+      1,
+      8,
+      32,
+      2
+    ],
+    "Raven Augur": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Raven Conscript": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Raven Hunter": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Ravenous Eater": [
+      1,
+      2,
+      8,
+      16,
+      64,
+      32,
+      4
+    ],
+    "Reaper": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Red Phyntos Drone": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "Red Phyntos Wasp": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "Red Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Reedshark Elder": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Reedshark Hunter": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Reedshark Pup": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Reedshark Ravager": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Reedshark Seeker": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Reedshark Slasher": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Reedshark Stripling": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Reinforced Door": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Relic Bones": [
+      4,
+      1,
+      2
+    ],
+    "Relic Watchman": [
+      4,
+      1,
+      2
+    ],
+    "Remoran Corsair": [
+      4,
+      1,
+      2
+    ],
+    "Remoran Raker": [
+      4,
+      1,
+      2
+    ],
+    "Remoran Sand Stalker": [
+      4,
+      1,
+      2
+    ],
+    "Remoran Sea Raptor": [
+      4,
+      1,
+      2
+    ],
+    "Rendeath Shreth": [
+      16,
+      4,
+      32
+    ],
+    "Renegade Adept Shaman": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Renegade Elite Trooper": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Renegade Virindi": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Repugnant Eater": [
+      1,
+      2,
+      8,
+      16,
+      64,
+      32,
+      4
+    ],
+    "Reshalra": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Revenant": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Revenant Antiquary": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Revenant Lord": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Revered Tumerok Shaman": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Rickety Scarecrow": [
+      8,
+      1,
+      2,
+      4
+    ],
+    "Rift of Blind Rage": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Rift of Consuming Torment": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Rift of Rage": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Rift of Torment": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Risen Knight": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Risen Lord": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Risen Soldier": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Rock": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Rock Wall": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Rough Monouga": [
+      16,
+      32,
+      2
+    ],
+    "Royal Inquisitor": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Royal Olthoi Guardian": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Royal Prison Warden": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Royal Thaumaturge": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Royal Vivimancer": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Rufous Grievver": [
+      1,
+      2,
+      4
+    ],
+    "Ruschk Draktehn": [
+      4,
+      2,
+      8,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Ruschk Haktar": [
+      4,
+      2,
+      8,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Ruschk Kartak": [
+      4,
+      2,
+      8,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Ruschk Laktar": [
+      4,
+      2,
+      8,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Ruschk Sadist": [
+      4,
+      2,
+      8,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Ruschk Warlord": [
+      4,
+      2,
+      8,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Russet Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Rust Gromnie": [
+      1,
+      2,
+      4
+    ],
+    "Rynthid Berserker": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Rynthid Crystal": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Rynthid Minion": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Rynthid Minion of Rage": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Rynthid Rager": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Rynthid Ravager": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Rynthid Slayer": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Rynthid Sorcerer": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Sable Gromnie": [
+      1,
+      2,
+      4
+    ],
+    "Sahkurea": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Samurai Gatekeeper": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Sanctum Warding Crystal": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Sand Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Sand Lurker": [
+      2,
+      1,
+      4
+    ],
+    "Sandstone Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Sandy Armoredillo": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Sandy Armoredillo Pup": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Sapphire Golem": [
+      2,
+      32,
+      4,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Sarcophagus": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Sata Sclavus": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Sata Sclavus Lord": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Savage Carenzi": [
+      4,
+      16,
+      64,
+      1,
+      8,
+      32,
+      2
+    ],
+    "Sawato Bandit": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Scathisa": [
+      32,
+      1,
+      2
+    ],
+    "Scavenger Ursuin": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Schism": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Scintilla": [
+      32,
+      1,
+      2
+    ],
+    "Sclavus Acolyte of T'thuun": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Sclavus Guard": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Scold": [
+      16,
+      4,
+      2,
+      1
+    ],
+    "Scold Chunk": [
+      16,
+      4,
+      2,
+      1
+    ],
+    "Scold Lump": [
+      16,
+      4,
+      2,
+      1
+    ],
+    "Scoriscant": [
+      1,
+      2,
+      4
+    ],
+    "Scourge": [
+      64,
+      1,
+      2
+    ],
+    "Scrawed Grievver": [
+      1,
+      2,
+      4
+    ],
+    "Scummy Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Se Sclavus": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Seared Skeleton": [
+      4,
+      1,
+      2
+    ],
+    "Sentient Crystal Shard": [
+      4,
+      2,
+      1
+    ],
+    "Sentient Fragment": [
+      4,
+      2,
+      1
+    ],
+    "Sephal Nefane": [
+      1,
+      16,
+      32
+    ],
+    "Sephal Niffis": [
+      1,
+      16,
+      32
+    ],
+    "Sewer Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Shade of Bael'Zharon": [
+      8,
+      1,
+      4,
+      2
+    ],
+    "Shade of Lord Rytheran's Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Shadow": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Shadow Child": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Shadow Engineer": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Shadow Flyer": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Shadow Lieutenant": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Shadow Nightmare": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Shadow Phantom": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Shadow Proctor": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Shadow Spectre": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Shadow Sprite": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Shadow Vortex": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Shadow Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Shadow Wraith": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Shadow's Breath": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Shadow-touched Virindi Paradox": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Shadow-touched Virindi Quidiox": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Shadowy Pillar": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Shady Scarecrow": [
+      8,
+      1,
+      2,
+      4
+    ],
+    "Shallow Rift": [
+      1,
+      4,
+      2
+    ],
+    "Shallows Destroyer": [
+      2,
+      1,
+      4
+    ],
+    "Shallows Devourer": [
+      2,
+      1,
+      4
+    ],
+    "Shallows Gorger": [
+      2,
+      1,
+      4
+    ],
+    "Shallows Lurker": [
+      2,
+      1,
+      4
+    ],
+    "Shallows Shark": [
+      2,
+      1,
+      4
+    ],
+    "Shallows Shredder": [
+      2,
+      1,
+      4
+    ],
+    "Shallows Slayer": [
+      2,
+      1,
+      4
+    ],
+    "Shambling Adherent": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Shambling Archivist": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Shambling Ruschk Chieftain": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Shambling Undead Ruschk": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Shifty Scarecrow": [
+      8,
+      1,
+      2,
+      4
+    ],
+    "Shivering Crystalline Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Shivering Pillar": [
+      4,
+      2,
+      1
+    ],
+    "Shivver": [
+      8,
+      1,
+      2
+    ],
+    "Shogshuth Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Shoguth Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Shore Armoredillo": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Shroud Cabal Forager": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Shroud Cabal Forager Captain": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Shroud Cabal Raider": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Shroud Cabal Raider Captain": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Siessa Sclavus": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Siessa Sclavus Soldier": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Silt Lurker": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Silver Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Silver Scope Heavy Scout": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Silver Scope Knight": [
+      32,
+      64,
+      4,
+      2,
+      8,
+      16,
+      1
+    ],
+    "Silver Tusker": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Simulacrum Doppelganger": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "Simulacrum Emulat": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "Simulacrum Mimic": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "Simulacrum Shifter": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "Singular Virindi Director": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Sinister Shadow": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Sir Bellas": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Sirrocco": [
+      1,
+      2,
+      4
+    ],
+    "Sishalti Eye Stalk": [
+      1,
+      8,
+      2
+    ],
+    "Sishalti Tendril": [
+      1,
+      8,
+      2
+    ],
+    "Sishalti Tentacle": [
+      1,
+      8,
+      2
+    ],
+    "Skeletal Champion": [
+      4,
+      1,
+      2
+    ],
+    "Skeletal Hero": [
+      4,
+      1,
+      2
+    ],
+    "Skeletal Mate": [
+      4,
+      1,
+      2
+    ],
+    "Skeleton": [
+      4,
+      1,
+      2
+    ],
+    "Skeleton Bone Knight": [
+      4,
+      1,
+      2
+    ],
+    "Skeleton Bone Lord": [
+      4,
+      1,
+      2
+    ],
+    "Skeleton Captain": [
+      4,
+      1,
+      2
+    ],
+    "Skeleton Lord": [
+      4,
+      1,
+      2
+    ],
+    "Skeleton Warrior": [
+      4,
+      1,
+      2
+    ],
+    "Skeleton Wraith": [
+      4,
+      1,
+      2
+    ],
+    "Slithayr Eye Stalk": [
+      1,
+      8,
+      2
+    ],
+    "Slithayr Tendril": [
+      1,
+      8,
+      2
+    ],
+    "Slithayr Tentacle": [
+      1,
+      8,
+      2
+    ],
+    "Slithis Eye Stalk": [
+      1,
+      8,
+      2
+    ],
+    "Slithis Tendril": [
+      1,
+      8,
+      2
+    ],
+    "Slithis Tentacle": [
+      1,
+      8,
+      2
+    ],
+    "Small Coral Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Small Magma Golem": [
+      16,
+      4,
+      2,
+      1
+    ],
+    "Small Sand Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Small Sandstone Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Small Shadow Child": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Snow Tusker": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Snow Tusker Leader": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Snow Tusker Warrior": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Snow Tuskie": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Snowman": [
+      8,
+      1,
+      4
+    ],
+    "Snowy Mattekar": [
+      8,
+      2,
+      4,
+      32,
+      1,
+      16,
+      64
+    ],
+    "Sodden Cadaver": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Sodden Undead Ruschk": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Soiled Doll": [
+      16,
+      4,
+      1,
+      64,
+      8,
+      32,
+      2
+    ],
+    "Soldier": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Sorrow Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Sotiris Hollow Minion": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "Soul Hunter": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Southern Black Claw Raider": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Spark": [
+      32,
+      1,
+      2
+    ],
+    "Sparkling Dual Fragment": [
+      4,
+      2,
+      1
+    ],
+    "Sparring Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Spawn": [
+      1,
+      2,
+      4
+    ],
+    "Spawn Watcher": [
+      1,
+      2,
+      4
+    ],
+    "Spawnling": [
+      1,
+      2,
+      4
+    ],
+    "Specter": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Spectral Archer": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Spectral Blade Adept": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Spectral Blade Master": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Spectral Bloodmage": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Spectral Bushi": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Spectral Claw Adept": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Spectral Claw Master": [
+      4,
+      8,
+      1,
+      32,
+      64,
+      16,
+      2
+    ],
+    "Spectral Dread": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Spectral Handmaiden": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Spectral Minion": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Spectral Nanjou Shou-jen": [
+      4,
+      8,
+      1,
+      32,
+      64,
+      16,
+      2
+    ],
+    "Spectral Samurai": [
+      16,
+      64,
+      32,
+      1,
+      4,
+      8,
+      2
+    ],
+    "Spectral Voidmage": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Spectral Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Spiked Grievver": [
+      1,
+      2,
+      4
+    ],
+    "Spiny Armoredillo": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Spiny Chittick": [
+      1,
+      2,
+      4
+    ],
+    "Spirit": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Spirit Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Stalking Margul": [
+      4,
+      16,
+      64,
+      2,
+      1,
+      8,
+      32
+    ],
+    "Stasis Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Static": [
+      32,
+      1,
+      2
+    ],
+    "Stinging Chittick": [
+      1,
+      2,
+      4
+    ],
+    "Stomper": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Stone Fists": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Stony Armoredillo": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Stony Armoredillo Pup": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Storage Crate": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Strand Siraluun": [
+      16,
+      4,
+      32
+    ],
+    "Straw Target Drudge": [
+      1
+    ],
+    "Strife Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Stringent": [
+      64,
+      1,
+      2
+    ],
+    "Subtle Simulacrum": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "Sufut Zefir": [
+      64,
+      16,
+      1
+    ],
+    "Sulthis Eye Stalk": [
+      1,
+      8,
+      2
+    ],
+    "Sulthis Tendril": [
+      1,
+      8,
+      2
+    ],
+    "Sulthis Tentacle": [
+      1,
+      8,
+      2
+    ],
+    "Suspicious Scarecrow": [
+      8,
+      1,
+      2,
+      4
+    ],
+    "Swamp Gromnie": [
+      1,
+      2,
+      4
+    ],
+    "Swamp King": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Swamp Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Swarm Demon": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Swarthy Mattekar": [
+      8,
+      2,
+      4,
+      32,
+      1,
+      16,
+      64
+    ],
+    "Synnast": [
+      32,
+      1,
+      2
+    ],
+    "Tainted Carenzi": [
+      4,
+      16,
+      64,
+      1,
+      8,
+      32,
+      2
+    ],
+    "Tamed Armoredillo": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Tamed Reaper": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Tan Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Tanada Nanjou Shou-jen": [
+      32,
+      64,
+      8,
+      16
+    ],
+    "Telumiat Hollow Minion": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "Tempest Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Tendril of T'thuun": [
+      1,
+      8,
+      2
+    ],
+    "Tenebrous Rift": [
+      1,
+      4,
+      2
+    ],
+    "Tenebrous Shadow": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Tenkarrdun Hellfire": [
+      16,
+      1,
+      2
+    ],
+    "Tentacle of T'thuun": [
+      1,
+      8,
+      2
+    ],
+    "Tenuous Nephol Golem": [
+      16,
+      64,
+      32,
+      8,
+      1,
+      2,
+      4
+    ],
+    "Terebrous Hollow Minion": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "Terrible Monouga": [
+      16,
+      32,
+      2
+    ],
+    "The Auditor": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "The Black Breath": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "The Chicken": [
+      1
+    ],
+    "The Crafter": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "The Gatekeeper": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "The Guardian Spirit": [
+      1
+    ],
+    "The Master": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "The Sage": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "The Unknown Warrior": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Theral": [
+      1,
+      2,
+      4
+    ],
+    "Thief": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Thief of Dreams": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Thralled Guruk Spore Seeker": [
+      16,
+      2,
+      1,
+      8,
+      4,
+      64,
+      32
+    ],
+    "Three Eyed Snowman": [
+      8,
+      1,
+      4
+    ],
+    "Thrungus": [
+      1,
+      4,
+      2
+    ],
+    "Thug": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Thug Boss": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Tiatus Lugian": [
+      64,
+      32,
+      1,
+      2,
+      4,
+      16,
+      8
+    ],
+    "Tiatus Overseer": [
+      64,
+      32,
+      1,
+      2,
+      4,
+      16,
+      8
+    ],
+    "Tiatus Raider": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Tiatus Smithy": [
+      64,
+      32,
+      1,
+      2,
+      4,
+      16,
+      8
+    ],
+    "Tidal Siraluun": [
+      16,
+      4,
+      32
+    ],
+    "Timber Siraluun": [
+      16,
+      4,
+      32
+    ],
+    "Tiny": [
+      8,
+      1,
+      4,
+      2
+    ],
+    "Tiofor Ursuin": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Tiofor Ursuin Cub": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Titanium Armoredillo": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "Tormented Imperial Consort": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Tormented Shadow": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Tormenter": [
+      4,
+      1,
+      2
+    ],
+    "Tortured Servant": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Tortured Spirit": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Tower Guardian": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Townsperson": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Transcendent Tumerok": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tremendous Monouga": [
+      16,
+      32,
+      2
+    ],
+    "True Believer": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Truffle Thrungus": [
+      1,
+      4,
+      2
+    ],
+    "Trusted Tusker": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Tsuric": [
+      1,
+      2,
+      4
+    ],
+    "Tthuun Pillar": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Tukora Commander": [
+      64,
+      32,
+      1,
+      2,
+      4,
+      16,
+      8
+    ],
+    "Tukora Lieutenant": [
+      64,
+      32,
+      1,
+      2,
+      4,
+      16,
+      8
+    ],
+    "Tumerok Champion": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumerok Champion Renegade": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumerok Commander": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumerok Controller": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumerok Fighter": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumerok Gladiator": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumerok High Priest": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumerok Lieutenant": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumerok Major": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumerok Officer": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumerok Priest": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumerok Scout": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumerok Standard Bearer": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumerok Taskmaster": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumerok Trooper": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumerok War Monger": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumerok Warrior": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumerok Worker": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Tumideon Hollow Minion": [
+      16,
+      1,
+      2,
+      32,
+      4,
+      8,
+      64
+    ],
+    "Tundra Mattekar": [
+      8,
+      2,
+      4,
+      32,
+      1,
+      16,
+      64
+    ],
+    "Turbid Nephol Golem": [
+      16,
+      64,
+      32,
+      8,
+      1,
+      2,
+      4
+    ],
+    "Tusker Crimsonback": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Tusker Guard": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Tusker Kin": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Tusker Liberator": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Tusker Minion": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Tusker Redeemer": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Tusker Slave": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Tusker Sycophant": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Tusker Worshipper": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Tuskie Gunner": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Tuskie Launcher": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Tuskie Thrower": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Tuskie Tosser": [
+      8,
+      2,
+      4,
+      16,
+      32,
+      1,
+      64
+    ],
+    "Twisted Shadow": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Two Headed Snowman": [
+      8,
+      1,
+      4
+    ],
+    "Uber Penguin": [
+      8,
+      1,
+      4,
+      2
+    ],
+    "Ulgrim": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Ulu Sclavus": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Ulu Sclavus Lord": [
+      16,
+      1,
+      2,
+      8
+    ],
+    "Umbral Mukkir": [
+      2,
+      4,
+      1
+    ],
+    "Umbral Rift": [
+      1,
+      4,
+      2
+    ],
+    "Umbris Elite": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Umbris Elite Commander": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Umbris Shadow": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Unchained Knight": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Unconquered Drudge": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Undead": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Undead Captain": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Undead Curator": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Undead Lieutenant": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Undead Miner": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Undead Minion": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Unruly Monouga": [
+      16,
+      32,
+      2
+    ],
+    "Unstable Magma Golem": [
+      16,
+      4,
+      2,
+      1
+    ],
+    "Unstable Master Bloodstone Satellite": [
+      4,
+      2,
+      1
+    ],
+    "Unstable Rift": [
+      1,
+      4,
+      2
+    ],
+    "Untamed Siraluun": [
+      16,
+      4,
+      32
+    ],
+    "Ursuin Slasher": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Ursuin Slasher Cub": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Ursuin Slicer": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Utelari": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Vapor Golem": [
+      16,
+      64,
+      32,
+      8,
+      1,
+      2,
+      4
+    ],
+    "Venomous Grievver": [
+      1,
+      2,
+      4
+    ],
+    "Verdant Moar": [
+      1,
+      2,
+      4
+    ],
+    "Verdant Moarsman": [
+      1,
+      2,
+      4
+    ],
+    "Veteran Reedshark": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Viamontian Commander": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Viamontian Counselor": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Viamontian Hand": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Viamontian Knight": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Viamontian Lord": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Viamontian Mage": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Viamontian Man-at-Arms": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Viamontian Mercenary": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Viamontian Tribune": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Viamontian War Wizard": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Viamontian Warcaster": [
+      64,
+      1,
+      2,
+      4
+    ],
+    "Vile Mukkir": [
+      2,
+      4,
+      1
+    ],
+    "Vira al-Quain'ah's Skeleton": [
+      4,
+      1,
+      2
+    ],
+    "Vira al-Quain'ah's Spectre": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Vira al-Quain'ah's Zombie": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Virindi Adjudicator": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Archmage of Dream": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Artificer": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Collector": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Consul": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Desecrator": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Director": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Dreamslayer": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Executor": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Fulguris": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Inquisitor": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Master": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Monitor": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Observer": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Paradox": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Profane": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Profatrix": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Puppet": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Quidiox": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Servant": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virindi Signat": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      16,
+      64
+    ],
+    "Virtuous Doll": [
+      16,
+      4,
+      1,
+      64,
+      8,
+      32,
+      2
+    ],
+    "Virulence": [
+      64,
+      1,
+      2
+    ],
+    "Virulent Grievver": [
+      1,
+      2,
+      4
+    ],
+    "Void": [
+      4,
+      2,
+      1,
+      32,
+      64,
+      16,
+      8
+    ],
+    "Void Knight": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Void Lord": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Voltaic Crystalline Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Voltaic Pillar": [
+      4,
+      2,
+      1
+    ],
+    "Voltarc": [
+      32,
+      1,
+      2
+    ],
+    "Voracious Eater": [
+      1,
+      2,
+      8,
+      16,
+      64,
+      32,
+      4
+    ],
+    "Vorous Shreth": [
+      16,
+      4,
+      32
+    ],
+    "Wall of Ice": [
+      8,
+      4,
+      2,
+      1,
+      32,
+      64
+    ],
+    "War Armoredillo": [
+      1,
+      2,
+      32,
+      4,
+      16,
+      64,
+      8
+    ],
+    "War Mattekar": [
+      8,
+      2,
+      4,
+      32,
+      1,
+      16,
+      64
+    ],
+    "War Reaper": [
+      16,
+      1,
+      64,
+      32,
+      2,
+      4,
+      8
+    ],
+    "Warlock of the Blood": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Warrior Corthos": [
+      64,
+      32,
+      1,
+      2,
+      4,
+      16,
+      8
+    ],
+    "Wasteland Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Water Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Water Wisp": [
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Wave Golem": [
+      64,
+      8,
+      16,
+      32,
+      1,
+      4,
+      2
+    ],
+    "West Armory Captain": [
+      8,
+      1,
+      2,
+      4,
+      32,
+      64,
+      16
+    ],
+    "White Mattekar": [
+      8,
+      2,
+      4,
+      32,
+      1,
+      16,
+      64
+    ],
+    "White Mattie": [
+      8,
+      2,
+      4,
+      32,
+      1,
+      16,
+      64
+    ],
+    "White Mouse": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "White Phyntos Wasp": [
+      4,
+      1,
+      2,
+      32,
+      8,
+      16,
+      64
+    ],
+    "White Rat": [
+      4,
+      64,
+      1,
+      2,
+      16,
+      32,
+      8
+    ],
+    "Wight": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Wight Blade Sorcerer": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Wight Captain": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Wild Monouga": [
+      16,
+      32,
+      2
+    ],
+    "Wily Monouga": [
+      16,
+      32,
+      2
+    ],
+    "Withered Banderling Hierophant": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Withered Banderling Paragon": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Withered Drudge Seraph": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Withered Drudge Seraph Mystic": [
+      8,
+      4,
+      1,
+      32,
+      16,
+      2,
+      64
+    ],
+    "Withered Raider Justicar": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Withered Raider Prefect": [
+      64,
+      32,
+      2,
+      1,
+      4
+    ],
+    "Withered Revered Tumerok Shaman": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Withered Transcendent Tumerok": [
+      1,
+      2,
+      16,
+      32,
+      4,
+      64,
+      8
+    ],
+    "Wood Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Wood Target Drudge": [
+      1
+    ],
+    "Woodland Ursuin": [
+      8,
+      2,
+      1,
+      4,
+      32,
+      64,
+      16
+    ],
+    "Worm Feast": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Wretched": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Wretched Child": [
+      8,
+      1,
+      4,
+      64,
+      2,
+      32,
+      16
+    ],
+    "Young Banderling": [
+      64,
+      8,
+      16,
+      1,
+      2,
+      4,
+      32
+    ],
+    "Young Mosswart": [
+      8,
+      4,
+      64,
+      32,
+      1,
+      16,
+      2
+    ],
+    "Young Olthoi Queen": [
+      4,
+      2,
+      1,
+      16,
+      8,
+      64,
+      32
+    ],
+    "Zharalim": [
+      8,
+      2,
+      4,
+      1,
+      32,
+      64,
+      16
+    ],
+    "Zirconium Golem": [
+      4,
+      32,
+      2,
+      16,
+      8,
+      64,
+      1
+    ],
+    "Zofrit Zefir": [
+      64,
+      16,
+      1
+    ],
+    "Zombie": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Zombie Mage": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ],
+    "Zrikux": [
+      8,
+      32,
+      1,
+      4,
+      64,
+      2,
+      16
+    ]
+  }
+}

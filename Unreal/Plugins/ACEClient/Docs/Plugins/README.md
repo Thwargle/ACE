@@ -20,9 +20,14 @@ run time; the first few seconds are naturally less representative. Spending XP o
 luminance does not subtract from earned totals. Luminance at the server's cap
 cannot be counted unless the server reports a gain. Closing the window keeps the
 run tracking. Logging into a character starts a fresh run.
+The **Next level (est.)** line below the totals uses remaining level XP and the
+average XP rate for the current run. It waits for XP gains after a reset and
+shows **Max level** at the level cap.
 
 Both ledgers work independently of UCM. The game radar lock/unlock icon controls
 all plugin windows. Locked ledgers hide their title bars and editing controls.
+The visible contents stay at the same screen position when the header is hidden
+or restored, including when a window is lined up near the bottom of the screen.
 Hold **Left Control** to temporarily show those controls and move pinned windows;
 release it to restore the lock. Rebind **Quick-show pinned windows (hold)** in
 Keyboard settings. Drag Supply Ledger's bottom-right corner while unlocked to

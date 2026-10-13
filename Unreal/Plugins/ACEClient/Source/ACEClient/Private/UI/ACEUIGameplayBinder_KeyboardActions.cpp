@@ -141,14 +141,14 @@ void UACEUIGameplayBinder::PollAdditionalKeyboardActions(APlayerController* PC)
     if(OpenVendorGuid==TargetGuid) AddInventoryGuidToVendorSellCart(Item.Guid,Amount);
     else if(PlayerController)
     {
-     PendingVendorSellGuid=Item.Guid;PendingVendorSellAmount=Amount;
+     PendingVendorSellTargetGuid=TargetGuid;PendingVendorSellGuid=Item.Guid;PendingVendorSellAmount=Amount;
      PlayerController->InteractWithObject(TargetGuid);
     }
    }
    else if(!TryOpenTradeForDraggedItem(Target,Item.Guid,Amount))
    {
     if(PlayerController)PlayerController->BeginUseApproach(TargetGuid,Target.UseRadius>0?Target.UseRadius:.6f,false,false);
-    PendingVendorSellGuid=0;VendorSellCart.Reset();VendorSellSelectedGuid=0;
+    PendingVendorSellGuid=PendingVendorSellTargetGuid=0;VendorSellCart.Reset();VendorSellSelectedGuid=0;
     Client->SendGiveObjectRequest(TargetGuid,Item.Guid,Amount);
    }
    Client->SelectObject(TargetGuid);

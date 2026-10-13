@@ -132,7 +132,7 @@ void UACEPluginSubsystem::WakeCombatDecision()
     // Physical attack's retry throttle is not a server action lock. Release
     // only that delay; casts, inventory transfers and equipment still wait.
     if(PhysicalAttackOwner==P->Id&&P->WaitAction.IsEmpty()&&!PendingSpell
-        &&P->NextAction==PhysicalAttackNextSendAt)P->NextAction=0;
+        &&(P->NextAction==PhysicalAttackNextSendAt||P->NextAction<=FPlatformTime::Seconds()))P->NextAction=0;
     P->NextDecision=0;ScheduleDecisionWake(FPlatformTime::Seconds());
 }
 void UACEPluginSubsystem::ReleaseCombatTarget(int32 Guid)
@@ -308,7 +308,7 @@ void UACEPluginSubsystem::CompletePendingAction(uint32 Error)
     {
         uint32 School,Power,Category,Flags;double Duration;
         auto* D=GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
-        if(D->TryGetPluginSpellInfo(PendingSpell,School,Power,Category,Flags,Duration) && (Flags&4) && Duration>0)
+        if(D->TryGetPluginSpellInfo(PendingSpell,School,Power,Category,Flags,Duration) && School==3 && (Flags&4) && Duration>0)
         {
             // VT MySpell.EffectiveDurationS and ACE EnchantmentManager apply
             // +20% per IncreasedSpellDuration augmentation to cast buffs.
@@ -318,11 +318,25 @@ void UACEPluginSubsystem::CompletePendingAction(uint32 Error)
             // Item enchantments are not in the player's enchantment list. Only
             // record confirmed casts, never assume a request was successful.
             auto E=MakeShared<FJsonObject>();E->SetNumberField(TEXT("target"),uint32(PendingSpellTarget));
+            E->SetNumberField(TEXT("spell"),PendingSpell);
             E->SetNumberField(TEXT("category"),Category);E->SetNumberField(TEXT("power"),Power);
             E->SetNumberField(TEXT("expires"),FPlatformTime::Seconds()+Duration);
             E->SetNumberField(TEXT("duration"),Duration);
+            FACEWorldObject BuffItem;
+            E->SetBoolField(TEXT("owned"),PendingSpellTarget==Client->GetPlayerGuid()
+                ||(Client->GetWorldObject(PendingSpellTarget,BuffItem)&&IsOwnedPluginItem(BuffItem)));
+            uint32 TargetFlags=0,TargetType=0;bool Projectile=false;
+            if(PendingSpellTarget==Client->GetPlayerGuid()&&D->TryGetRetailSpellTargeting(PendingSpell,TargetFlags,TargetType,Projectile)
+                &&(TargetType&(ACEItemType::Armor|ACEItemType::Clothing)))
+            {
+                TArray<TSharedPtr<FJsonValue>> Equipment;
+                for(const auto& Pair:Client->GetSession()->GetWorldObjects())if(Pair.Value.WielderId==PendingSpellTarget&&(Pair.Value.ItemType&TargetType))
+                    Equipment.Add(MakeShared<FJsonValueNumber>(uint32(Pair.Key)));
+                E->SetArrayField(TEXT("equipment"),Equipment);
+            }
             ItemBuffs.RemoveAll([&](const auto& Old){return N(Old->AsObject(),TEXT("target"))==uint32(PendingSpellTarget)&&N(Old->AsObject(),TEXT("category"))==Category;});
             ItemBuffs.Add(MakeShared<FJsonValueObject>(E));
+            SaveItemBuffTimers();
         }
     }
     PendingSpell=PendingSpellTarget=0;
@@ -415,6 +429,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Session=C->GetSession();
     if(!Session || C->GetSessionState()!=EACESessionState::InWorld)
     {
+        SaveItemBuffTimers();
         CombatTarget=0;DefeatedTargets.Empty();LastCombatVitals=FIntVector(-1,-1,-1);
         ConfirmedBuffAckAt=BuffRetryAt=0;ConfirmedBuffOwner.Empty();DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();PendingBuffResultDriven=false;
         DataPlayer=0;Appraisals.Empty();CorpseFirstSeen.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();CachedInventory.Empty();ClearBuffRequests();
@@ -422,6 +437,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
     }
     if(DataPlayer!=C->GetPlayerGuid()||DataServer!=C->GetServerName()||ObservedSession.Pin()!=Session)
     {
+        SaveItemBuffTimers();
         UnbindCombatEvents();CombatTarget=0;DefeatedTargets.Empty();LastCombatVitals=FIntVector(-1,-1,-1);
         ConfirmedBuffAckAt=BuffRetryAt=0;ConfirmedBuffOwner.Empty();DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();PendingBuffResultDriven=false;
         if(auto Old=ObservedSession.Pin()){Old->OnUseDone.Remove(UseDoneHandle);Old->OnPlayerTell.Remove(TellHandle);Old->OnChatMessage.Remove(MetaChatHandle);Old->OnCombatFeedback.Remove(CombatFeedbackHandle);}
@@ -436,6 +452,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
         PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();CombatOutcomes.Empty();OffensiveCasts.Empty();
         TellHandle=Session->OnPlayerTell.AddUObject(this,&UACEPluginSubsystem::ObservePlayerTell);ClearBuffRequests();
         DataPlayer=C->GetPlayerGuid();DataServer=C->GetServerName();NextAppraisalScan=0;Appraisals.Empty();CachedSpeciesNames.Reset();CorpseFirstSeen.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();
+        LoadItemBuffTimers();
         PendingSpell=0;PendingSpellOwner.Empty();FastCastOwner.Empty();PendingResourceRefresh.Empty();PendingManaRefresh=false;Debuffs.Empty();PendingDebuffCasts.Empty();InventoryRevision=MAX_uint64;++DataRevision;C->BackgroundAppraisals.Empty();
     }
     ExpireOffensiveCasts(FPlatformTime::Seconds());
@@ -807,6 +824,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
             if(DefeatedTargets.Contains(Obj.Guid))continue;
             const FVector Delta=Obj.Position.ToUnrealLocation()-P.ToUnrealLocation();
             J->SetNumberField(TEXT("attack_height"),ACEPluginCombat::AttackHeight(*Dat,Obj,P));
+            J->SetArrayField(TEXT("preferred_elements"),ACEPluginCombat::PreferredElements(Obj.Name));
             J->SetNumberField(TEXT("angle"),FMath::Abs(FMath::FindDeltaAngleDegrees(N(Out,TEXT("heading")),double(Delta.Rotation().Yaw))));
             if(C->GetSelectedObject().Guid==Obj.Guid&&C->GetSelectedObject().bShowHealth&&C->GetSelectedObject().HealthFraction<=0)continue;
             if(C->GetSelectedObject().Guid==Obj.Guid&&C->GetSelectedObject().bShowHealth)J->SetNumberField(TEXT("health_fraction"),C->GetSelectedObject().HealthFraction);
@@ -899,7 +917,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         }
     }
     Out->SetArrayField(TEXT("targets"),Targets);Out->SetArrayField(TEXT("corpses"),Corpses);Out->SetArrayField(TEXT("contents"),Contents);Out->SetArrayField(TEXT("route_objects"),RouteObjects);
-    ItemBuffs.RemoveAll([Now](const auto& E){return N(E->AsObject(),TEXT("expires"))<=Now;});Out->SetArrayField(TEXT("item_buffs"),ItemBuffs);
+    ValidateItemBuffTimers();Out->SetArrayField(TEXT("item_buffs"),ItemBuffs);
     Debuffs.RemoveAll([&](const auto& E){return N(E->AsObject(),TEXT("expires"))<=Now||!Session->GetWorldObjects().Contains(int32(uint32(N(E->AsObject(),TEXT("target")))));});Out->SetArrayField(TEXT("debuffs"),Debuffs);
     PendingDebuffCasts.RemoveAll([Now](const auto& E){return Now-N(E->AsObject(),TEXT("sent"))>30;});
     Out->SetNumberField(TEXT("debuff_revision"),DebuffRevision);Out->SetNumberField(TEXT("debuff_target"),uint32(LastDebuffTarget));Out->SetNumberField(TEXT("debuff_spell"),LastDebuffSpell);
@@ -962,7 +980,7 @@ void UACEPluginSubsystem::UpdateCombatTransition(FACEClientPlugin& P)
         {ScheduleDecisionWake(Now+.05);return;}
         P.WaitingAttackCancel=false;
     }
-    if(C->IsUseBusy()||PendingSpell){ScheduleDecisionWake(Now+.05);return;}
+    if(C->IsUseBusy()||PendingSpell||InventoryInteractionPending()){ScheduleDecisionWake(Now+.05);return;}
     if(!P.CombatTransitionRequested&&!Session->IsCombatModeConfirmed(P.CombatTransitionMode))
     {
         P.CombatTransitionRevision=Session->GetCombatModeRevision();P.CombatTransitionRequested=true;
@@ -1086,7 +1104,12 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
         if(Unequip)
         {
             if(Found&&IsOwnedPluginItem(Item)&&Item.CurrentWieldedLocation)
-            {if(!PrepareCombatAction(P,I,1))return true;TrackActionWait(P,Action,Id,0);C->SendPutItemInContainer(Id,C->GetPlayerGuid(),0);P.NextAction=Now+2;}
+            {
+                const int32 Destination=C->FindPickupContainer(Id,0);
+                if(!Destination){ReportActivityFailure(P,I,TEXT("No pack has room to put away this weapon"));return true;}
+                if(!PrepareCombatAction(P,I,1))return true;
+                TrackActionWait(P,Action,Id,0);C->SendPutItemInContainer(Id,Destination,0);P.NextAction=Now+2;
+            }
             return true;
         }
         const auto* A=Appraisals.Find(Id);
@@ -1114,7 +1137,11 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
         if(!Owned||!LootItemAvailable(C,Item))
         {ReportActivityFailure(P,I,TEXT("Loot action requires an unequipped, unretained owned item outside trade"));return true;}
         if(Action==TEXT("read"))
-        {if(ACEVTObjectClass::Classify(Item)!=42){ReportActivityFailure(P,I,TEXT("Read rule requires a spell scroll"));return true;}C->SendUseItem(Id);P.NextAction=Now+3;return true;}
+        {
+            if(ACEVTObjectClass::Classify(Item)!=42){ReportActivityFailure(P,I,TEXT("Read rule requires a spell scroll"));return true;}
+            if(!PrepareCombatAction(P,I,1))return true;
+            TrackActionWait(P,TEXT("use"),Id);C->SendUseItem(Id);P.NextAction=Now+3;return true;
+        }
         if(Action==TEXT("sell"))
         {
             const int32 Vendor=C->GetOpenVendorGuid();if(!Vendor){ReportActivityFailure(P,I,TEXT("A vendor must be open to sell loot"));return true;}

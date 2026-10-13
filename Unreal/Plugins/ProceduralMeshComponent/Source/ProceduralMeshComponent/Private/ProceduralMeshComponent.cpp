@@ -5,6 +5,8 @@
 #include "BodySetupEnums.h"
 #include "PrimitiveViewRelevance.h"
 #include "PrimitiveSceneProxy.h"
+#include "PrimitiveSceneInfo.h"
+#include "Engine/World.h"
 #include "MaterialDomain.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialRenderProxy.h"
@@ -42,6 +44,56 @@ DECLARE_CYCLE_STAT(TEXT("Get ProcMesh Elements"), STAT_ProcMesh_GetMeshElements,
 DECLARE_CYCLE_STAT(TEXT("Update Collision"), STAT_ProcMesh_UpdateCollision, STATGROUP_ProceduralMesh);
 
 DEFINE_LOG_CATEGORY_STATIC(LogProceduralComponent, Log, All);
+
+bool UProceduralMeshComponent::UpdateResidentVisibility()
+{
+	// Geometry/material changes still use the ordinary rebuild path. Only stable
+	// resident meshes in game worlds can use UE's draw-visibility update; editor
+	// visibility has separate rules and remains on the engine's default path.
+	if (!bPreferCachedDraws || !GetWorld() || !GetWorld()->IsGameWorld()
+		|| !SceneProxy || IsRenderStateDirty()) return false;
+	const bool bDraw = IsVisible() && !bHiddenInGame && (!GetOwner() || !GetOwner()->IsHidden());
+	FPrimitiveSceneProxy* Proxy = SceneProxy;
+	ENQUEUE_RENDER_COMMAND(ACEUpdateResidentVisibility)([Proxy, bDraw](FRHICommandListImmediate&)
+	{
+		// Newly registered proxies can still be pending insertion into the scene.
+		// Set their initial flag directly; the full update requires a scene index.
+		if (const FPrimitiveSceneInfo* Info = Proxy->GetPrimitiveSceneInfo(); Info && Info->IsIndexValid())
+		{
+			FPrimitiveSceneProxy* Proxies[] = {Proxy};
+			Proxy->GetScene().UpdatePrimitivesIsDrawn_RenderThread(MakeArrayView(Proxies), bDraw);
+		}
+		else Proxy->SetIsDrawn_RenderThread(bDraw);
+	});
+	return true;
+}
+
+void UProceduralMeshComponent::OnActorVisibilityChanged()
+{
+	if (!UpdateResidentVisibility()) Super::OnActorVisibilityChanged();
+}
+
+void UProceduralMeshComponent::OnVisibilityChanged()
+{
+	if (!UpdateResidentVisibility()) Super::OnVisibilityChanged();
+}
+
+void UProceduralMeshComponent::OnHiddenInGameChanged()
+{
+	if (!UpdateResidentVisibility()) Super::OnHiddenInGameChanged();
+}
+
+void UProceduralMeshComponent::SetMeshDrawVisible(bool bDrawVisible)
+{
+	// UE's public setters use DirtyOnly even with propagation=false. Update this
+	// component's flags and invoke its hooks without traversing attached scenery.
+	const bool bVisibilityChanged = GetVisibleFlag() != bDrawVisible;
+	const bool bHiddenChanged = bool(bHiddenInGame) == bDrawVisible;
+	SetVisibleFlag(bDrawVisible);
+	bHiddenInGame = !bDrawVisible;
+	if (bVisibilityChanged) OnVisibilityChanged();
+	if (bHiddenChanged) OnHiddenInGameChanged();
+}
 
 static TAutoConsoleVariable<int32> CVarRayTracingProceduralMesh(
 	TEXT("r.RayTracing.Geometry.ProceduralMeshes"),

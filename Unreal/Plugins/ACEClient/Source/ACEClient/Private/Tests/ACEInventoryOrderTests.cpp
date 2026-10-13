@@ -61,6 +61,13 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
         for(int32 I=0;I<FMath::Min(Actual.Num(),Expected.Num());++I)
             TestEqual(FString::Printf(TEXT("Server inventory position %d"),I),Actual[I].Guid,Expected[I]);
     };
+    Session.SendPutItemInContainer(1,10,0);
+    TestTrue(TEXT("Inventory move remains pending until its own server receipt"),Session.IsInventoryTransferPending());
+    Contains(2,100,1);
+    TestTrue(TEXT("Unrelated inventory receipt does not release a manual move"),Session.IsInventoryTransferPending());
+    Contains(1,10,0);
+    TestFalse(TEXT("Confirmed containment releases inventory arbitration"),Session.IsInventoryTransferPending());
+    Contains(1,100,0);
     // Two drags outstanding at once; ACK order is authoritative, without duplicate shifts.
     {
         auto Pickup=Item(500,900,0); Pickup.WeenieClassId=42; Pickup.MaxStackSize=100; Pickup.StackSize=12;

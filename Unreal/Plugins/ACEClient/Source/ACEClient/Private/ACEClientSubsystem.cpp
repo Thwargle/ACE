@@ -427,18 +427,30 @@ void UACEClientSubsystem::TickInventorySort(float DeltaTime)
 	if (!bHaveSource) { SortSourceGuid=0; return; }
 	TArray<FACEWorldObject> Candidates=GetPackItems(SortPlayerGuid);
 	for (const auto& Pack:GetPlayerPacks()) Candidates.Append(GetPackItems(Pack.Guid));
+	const int32 SourceSize=FMath::Max(1,Source.StackSize);
+	const FACEWorldObject* MergeTarget=nullptr;
+	const FACEWorldObject* PartialTarget=nullptr;
 	for (const auto& Target:Candidates)
 	{
 		if (!IsOwnedInventoryItem(Target) || Offered.Contains(Target.Guid)) continue;
 		const int32 Amount=ACEInventoryRules::MergeAmount(Source,Target);
-		// ItemHolder::AttemptAutoMerge requires room for the entire selected
-		// stack, unlike an explicit drag onto a partially full stack.
-		if (Amount<FMath::Max(1,Source.StackSize)) continue;
-		SortMergeTargetGuid=Target.Guid; SortWaitSeconds=0;
-		SortExpectedSource=FMath::Max(1,Source.StackSize)-Amount;
-		SortExpectedTarget=FMath::Max(1,Target.StackSize)+Amount;
-		SendStackableMerge(Source.Guid,Target.Guid,Amount);
-		SelectObject(Target.Guid); // ItemHolder::AttemptMerge selects the survivor immediately.
+		if (Amount<=0) continue;
+		// Prefer retail's whole-stack auto-merge. If none fits, allow the same
+		// capacity-limited transfer as a direct drag, keeping the remainder in place.
+		if (Amount==SourceSize) { MergeTarget=&Target; break; }
+		// A completed stack is already consolidated. Repeated F must not pour
+		// it back into the remainder and endlessly swap the two stacks' sizes.
+		if (!PartialTarget && SourceSize<Source.MaxStackSize) PartialTarget=&Target;
+	}
+	if (!MergeTarget) MergeTarget=PartialTarget;
+	if (MergeTarget)
+	{
+		const int32 Amount=ACEInventoryRules::MergeAmount(Source,*MergeTarget);
+		SortMergeTargetGuid=MergeTarget->Guid; SortWaitSeconds=0;
+		SortExpectedSource=SourceSize-Amount;
+		SortExpectedTarget=FMath::Max(1,MergeTarget->StackSize)+Amount;
+		SendStackableMerge(Source.Guid,MergeTarget->Guid,Amount);
+		SelectObject(MergeTarget->Guid); // ItemHolder::AttemptMerge selects the destination immediately.
 		return;
 	}
 	SendPutItemInContainer(Source.Guid,SortPlayerGuid,0);

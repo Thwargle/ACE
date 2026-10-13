@@ -5001,6 +5001,11 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		&& (SourcePack == OpenLootContainerGuid || SourcePack == OpenLootSelectedPackGuid);
 	CancelInventoryDrag();
 
+	// A swap may have begun before mouse-down. Never submit a second weapon
+	// relocation while its dequip/wield acknowledgments are still outstanding.
+	if(Client && (bWasDragging||bDoubleClick))if(auto Session=Client->GetSession();Session&&Session->IsEquipmentSwapPending())
+	{AppendLocalChatLine(TEXT("Wait for the equipment change to finish, then move the item."),ACEChatMessageType::TransientInfo);return true;}
+
 	if (!Client)
 	{
 		return true;
@@ -5162,8 +5167,10 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 			return true;
 		}
 	}
-	// Main backpack supports shortcuts and bulk offers, never moving the player.
-	if (Guid == Client->GetPlayerGuid()) return true;
+	// Retail ItemHolder::AttemptPlaceIn3D permits the main backpack as a bulk
+	// vendor offer. Resolve that world drop before excluding physical player moves.
+	if (Guid == Client->GetPlayerGuid())
+		return IsPointerOverInventoryPanel(CanvasLocalPos) ? true : DropInventoryInWorld(Guid, Amount, Absolute);
 
 	// Paper doll → wield into that slot (or complete dual-use / mana stone on self).
 	FString DollName;
@@ -5341,157 +5348,168 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 
 	if (TryDropInExternalContainer(Guid, Amount, Absolute)) return true;
 
-	// Outside inventory panel → give to world target, vendor sell cart, or drop.
-	if (!IsPointerOverInventoryPanel(CanvasLocalPos))
-	{
-		FACEWorldObject Obj;
-		if (!Client->GetWorldObject(Guid, Obj))
-		{
-			return true;
-		}
-
-		if (PlayerController && PlayerController->IsPickupApproachActive())
-		{
-			PostInventorySystemMessage(TEXT("You're too busy!"));
-			return true;
-		}
-
-		if (PlayerController && Canvas)
-		{
-			// Drag release under mouse capture: convert slate absolute → viewport local for deproject.
-			// Deprojection needs viewport pixels, not DPI-scaled widget coordinates.
-			FVector2D ViewportLocal = FVector2D::ZeroVector, ViewportWidgetPosition;
-			if (!PlayerController->IsVRActive()) USlateBlueprintLibrary::AbsoluteToViewport(PlayerController, Absolute,
-				ViewportLocal, ViewportWidgetPosition);
-			// Resolve the release ray only. Captured drags leave the cached cursor hit
-			// at the press location; a miss means ground, never the old selection.
-			AACEWorldEntityActor* Target = PlayerController->PickWorldEntityAtScreenPosition(ViewportLocal.X, ViewportLocal.Y);
-
-			auto ResolveGiveTargetObj = [&](AACEWorldEntityActor* Candidate, FACEWorldObject& OutObj) -> bool
-			{
-				if (!Candidate)
-				{
-					return false;
-				}
-				return Client->GetWorldObject(Candidate->GetACEGuid(), OutObj)
-					&& OutObj.IsGiveOrCreatureTarget();
-			};
-
-			FACEWorldObject TargetObj;
-			bool bGiveTarget = ResolveGiveTargetObj(Target, TargetObj);
-
-
-			if (Target || bGiveTarget)
-			{
-				const int32 TargetGuid = bGiveTarget ? TargetObj.Guid
-					: (Target ? Target->GetACEGuid() : 0);
-				const bool bHaveTarget = TargetGuid != 0
-					&& (bGiveTarget || Client->GetWorldObject(TargetGuid, TargetObj));
-				if (bHaveTarget && TargetGuid == Client->GetPlayerGuid())
-				{
-					if ((Obj.ItemType & ACEItemType::ManaStone) || ACEItemUseable::IsTargeted(Obj.ItemUseable))
-					{
-						if (!PendingUseWithSourceGuid) PendingUseWithSourceGuid = Guid;
-						TryCompletePendingUseWithTarget(TargetGuid);
-					}
-					else MoveInventoryAmount(Guid, TargetGuid, 0, Amount);
-					return true;
-				}
-				if (bHaveTarget && PlayerController->IsVRActive())
-				{
-					const APawn* Pawn = PlayerController->GetPawn();
-					const auto* Capsule = Pawn ? Pawn->FindComponentByClass<UCapsuleComponent>() : nullptr;
-					const float Radius = TargetObj.UseRadius > 0.f ? TargetObj.UseRadius : .6f;
-					if (!Capsule || PlayerController->GetUseCylinderDistanceCm(TargetObj,
-						Pawn->GetActorLocation() - FVector(0, 0, Capsule->GetScaledCapsuleHalfHeight()),
-						TargetObj.Position.ToUnrealLocation(PlayerController->WorldScale)) > Radius * PlayerController->WorldScale + 5.f)
-					{
-						PostInventorySystemMessage(TEXT("Move closer before giving or using an item on that target."));
-						return true;
-					}
-				}
-				if (bHaveTarget && TargetObj.IsVendor())
-				{
-					if (OpenVendorGuid == TargetGuid)
-					{
-						AddInventoryGuidToVendorSellCart(Guid, Amount);
-						return true;
-					}
-					PendingVendorSellGuid = Guid;
-					PendingVendorSellAmount = Amount;
-					PlayerController->InteractWithObject(TargetGuid);
-					return true;
-				}
-				if (bHaveTarget && TryOpenTradeForDraggedItem(TargetObj, Guid, Amount)) return true;
-				if (bHaveTarget && MergeInventoryAmount(Guid, TargetGuid, Amount)) return true;
-				if (bHaveTarget && !bGiveTarget && (TargetObj.ItemType & ACEItemType::Container))
-				{
-					if (TargetGuid == OpenLootContainerGuid || TargetGuid == OpenLootSelectedPackGuid)
-						MoveInventoryAmount(Guid, TargetGuid, 0, Amount);
-					else PostInventorySystemMessage(TEXT("You must open the container first."));
-					return true;
-				}
-				if (bGiveTarget)
-				{
-					const int32 Amt = Amount;
-					// Give is not a vendor sell — clear any leftover sell cart / pending drag-sell.
-					PendingVendorSellGuid = 0;
-					VendorSellCart.Reset();
-					VendorSellSelectedGuid = 0;
-					// Approach without Use — server CreateMoveToChain + GiveObjectRequest completes hand-off.
-					float DistAc = TargetObj.UseRadius;
-					if (DistAc == 0.f)
-					{
-						DistAc = 0.6f;
-					}
-					PlayerController->BeginUseApproach(TargetGuid, DistAc,
-						/*bPickupIntoInventory*/ false, /*bFireActionWhenInRange*/ false);
-					Client->SendGiveObjectRequest(TargetGuid, Guid, Amt);
-					return true;
-				}
-				// Drag item onto world object → UseWithTarget (keys, dyes, alchemy).
-				// Never UseWithTarget for NPCs/creatures — those are GiveObjectRequest turn-ins.
-				if (TargetGuid != 0
-					&& !TargetObj.IsGiveOrCreatureTarget()
-					&& (TargetObj.ItemType & ACEItemType::Creature) == 0
-					&& !TargetObj.bIsPlayer)
-				{
-					Client->SendUseWithTarget(Guid, TargetGuid);
-					PendingUseWithSourceGuid = 0;
-					SyncPendingUseCursor();
-					return true;
-				}
-				// Creature/NPC that failed give classification — still attempt Give.
-				if (TargetGuid != 0
-					&& ((TargetObj.ItemType & ACEItemType::Creature) != 0
-						|| TargetObj.bIsPlayer || TargetObj.IsVendor()))
-				{
-					const int32 Amt = Amount;
-					PendingVendorSellGuid = 0;
-					VendorSellCart.Reset();
-					VendorSellSelectedGuid = 0;
-					float DistAc = TargetObj.UseRadius;
-					if (DistAc == 0.f)
-					{
-						DistAc = 0.6f;
-					}
-					PlayerController->BeginUseApproach(TargetGuid, DistAc,
-						/*bPickupIntoInventory*/ false, /*bFireActionWhenInRange*/ false);
-					Client->SendGiveObjectRequest(TargetGuid, Guid, Amt);
-					return true;
-				}
-			}
-		}
-
-		// Releasing a tracked inventory drag over empty world uses the same
-		// server-authoritative drop/split action as the desktop client.
-		DropInventoryAmount(Guid,Amount);
-		return true;
-	}
+	if (!IsPointerOverInventoryPanel(CanvasLocalPos)) return DropInventoryInWorld(Guid, Amount, Absolute);
 
 	// A cancelled drag cannot arm a subsequent double-click use.
 	LastInvClickGuid = 0;
 	LastInvClickTime = 0.0;
+	return true;
+}
+
+bool UACEUIGameplayBinder::DropInventoryInWorld(int32 Guid, int32 Amount, const FVector2D& Absolute)
+{
+	FACEWorldObject Obj;
+	if (!Client->GetWorldObject(Guid, Obj))
+	{
+		return true;
+	}
+
+	if (PlayerController && PlayerController->IsPickupApproachActive())
+	{
+		PostInventorySystemMessage(TEXT("You're too busy!"));
+		return true;
+	}
+
+	if (PlayerController && Canvas)
+	{
+		// Drag release under mouse capture: convert slate absolute → viewport local for deproject.
+		// Deprojection needs viewport pixels, not DPI-scaled widget coordinates.
+		FVector2D ViewportLocal = FVector2D::ZeroVector, ViewportWidgetPosition;
+		if (!PlayerController->IsVRActive()) USlateBlueprintLibrary::AbsoluteToViewport(PlayerController, Absolute,
+			ViewportLocal, ViewportWidgetPosition);
+		// Resolve the release ray only. Captured drags leave the cached cursor hit
+		// at the press location; a miss means ground, never the old selection.
+		AACEWorldEntityActor* Target = PlayerController->PickWorldEntityAtScreenPosition(ViewportLocal.X, ViewportLocal.Y);
+
+		auto ResolveGiveTargetObj = [&](AACEWorldEntityActor* Candidate, FACEWorldObject& OutObj) -> bool
+		{
+			if (!Candidate)
+			{
+				return false;
+			}
+			return Client->GetWorldObject(Candidate->GetACEGuid(), OutObj)
+				&& OutObj.IsGiveOrCreatureTarget();
+		};
+
+		FACEWorldObject TargetObj;
+		bool bGiveTarget = ResolveGiveTargetObj(Target, TargetObj);
+
+
+		if (Target || bGiveTarget)
+		{
+			const int32 TargetGuid = bGiveTarget ? TargetObj.Guid
+				: (Target ? Target->GetACEGuid() : 0);
+			const bool bHaveTarget = TargetGuid != 0
+				&& (bGiveTarget || Client->GetWorldObject(TargetGuid, TargetObj));
+			// Main backpack is a bulk vendor selection, never the player object to give or move.
+			if (Guid == Client->GetPlayerGuid() && (!bHaveTarget || !TargetObj.IsVendor())) return true;
+			if (bHaveTarget && TargetGuid == Client->GetPlayerGuid())
+			{
+				if ((Obj.ItemType & ACEItemType::ManaStone) || ACEItemUseable::IsTargeted(Obj.ItemUseable))
+				{
+					if (!PendingUseWithSourceGuid) PendingUseWithSourceGuid = Guid;
+					TryCompletePendingUseWithTarget(TargetGuid);
+				}
+				else MoveInventoryAmount(Guid, TargetGuid, 0, Amount);
+				return true;
+			}
+			if (bHaveTarget && PlayerController->IsVRActive())
+			{
+				const APawn* Pawn = PlayerController->GetPawn();
+				const auto* Capsule = Pawn ? Pawn->FindComponentByClass<UCapsuleComponent>() : nullptr;
+				const float Radius = TargetObj.UseRadius > 0.f ? TargetObj.UseRadius : .6f;
+				if (!Capsule || PlayerController->GetUseCylinderDistanceCm(TargetObj,
+					Pawn->GetActorLocation() - FVector(0, 0, Capsule->GetScaledCapsuleHalfHeight()),
+					TargetObj.Position.ToUnrealLocation(PlayerController->WorldScale)) > Radius * PlayerController->WorldScale + 5.f)
+				{
+					PostInventorySystemMessage(TEXT("Move closer before giving or using an item on that target."));
+					return true;
+				}
+			}
+			if (bHaveTarget && TargetObj.IsVendor())
+			{
+				if (OpenVendorGuid == TargetGuid)
+				{
+					AddInventoryGuidToVendorSellCart(Guid, Amount);
+					return true;
+				}
+				if (Client->IsUseBusy())
+				{
+					PostInventorySystemMessage(TEXT("You're too busy!"));
+					return true;
+				}
+				PendingVendorSellTargetGuid = TargetGuid;
+				PendingVendorSellGuid = Guid;
+				PendingVendorSellAmount = Amount;
+				PlayerController->InteractWithObject(TargetGuid);
+				return true;
+			}
+			if (bHaveTarget && TryOpenTradeForDraggedItem(TargetObj, Guid, Amount)) return true;
+			if (bHaveTarget && MergeInventoryAmount(Guid, TargetGuid, Amount)) return true;
+			if (bHaveTarget && !bGiveTarget && (TargetObj.ItemType & ACEItemType::Container))
+			{
+				if (TargetGuid == OpenLootContainerGuid || TargetGuid == OpenLootSelectedPackGuid)
+					MoveInventoryAmount(Guid, TargetGuid, 0, Amount);
+				else PostInventorySystemMessage(TEXT("You must open the container first."));
+				return true;
+			}
+			if (bGiveTarget)
+			{
+				const int32 Amt = Amount;
+				// Give is not a vendor sell — clear any leftover sell cart / pending drag-sell.
+				PendingVendorSellGuid = PendingVendorSellTargetGuid = 0;
+				VendorSellCart.Reset();
+				VendorSellSelectedGuid = 0;
+				// Approach without Use — server CreateMoveToChain + GiveObjectRequest completes hand-off.
+				float DistAc = TargetObj.UseRadius;
+				if (DistAc == 0.f)
+				{
+					DistAc = 0.6f;
+				}
+				PlayerController->BeginUseApproach(TargetGuid, DistAc,
+					/*bPickupIntoInventory*/ false, /*bFireActionWhenInRange*/ false);
+				Client->SendGiveObjectRequest(TargetGuid, Guid, Amt);
+				return true;
+			}
+			// Drag item onto world object → UseWithTarget (keys, dyes, alchemy).
+			// Never UseWithTarget for NPCs/creatures — those are GiveObjectRequest turn-ins.
+			if (TargetGuid != 0
+				&& !TargetObj.IsGiveOrCreatureTarget()
+				&& (TargetObj.ItemType & ACEItemType::Creature) == 0
+				&& !TargetObj.bIsPlayer)
+			{
+				Client->SendUseWithTarget(Guid, TargetGuid);
+				PendingUseWithSourceGuid = 0;
+				SyncPendingUseCursor();
+				return true;
+			}
+			// Creature/NPC that failed give classification — still attempt Give.
+			if (TargetGuid != 0
+				&& ((TargetObj.ItemType & ACEItemType::Creature) != 0
+					|| TargetObj.bIsPlayer || TargetObj.IsVendor()))
+			{
+				const int32 Amt = Amount;
+				PendingVendorSellGuid = PendingVendorSellTargetGuid = 0;
+				VendorSellCart.Reset();
+				VendorSellSelectedGuid = 0;
+				float DistAc = TargetObj.UseRadius;
+				if (DistAc == 0.f)
+				{
+					DistAc = 0.6f;
+				}
+				PlayerController->BeginUseApproach(TargetGuid, DistAc,
+					/*bPickupIntoInventory*/ false, /*bFireActionWhenInRange*/ false);
+				Client->SendGiveObjectRequest(TargetGuid, Guid, Amt);
+				return true;
+			}
+		}
+	}
+
+	if (Guid == Client->GetPlayerGuid()) return true;
+
+	// Releasing a tracked inventory drag over empty world uses the same
+	// server-authoritative drop/split action as the desktop client.
+	DropInventoryAmount(Guid,Amount);
 	return true;
 }
 
@@ -13945,7 +13963,7 @@ void UACEUIGameplayBinder::ShowExternalContainer(int32 Guid)
 	ExtItemScrollOffset = 0;
 	ExtPackScrollOffset = 0;
 	OpenVendorGuid = 0;
-	PendingVendorSellGuid = 0;
+	PendingVendorSellGuid = PendingVendorSellTargetGuid = 0;
 	VendorSellCart.Reset();
 	VendorBuyCart.Reset();
 	bTradeOpen = false;
@@ -14042,7 +14060,7 @@ void UACEUIGameplayBinder::HideVendorPanel()
 	OpenVendorGuid = 0;
 	VendorSelectedGuid = 0;
 	VendorSellSelectedGuid = 0;
-	PendingVendorSellGuid = 0;
+	PendingVendorSellGuid = PendingVendorSellTargetGuid = 0;
 	VendorBuyCart.Reset();
 	VendorSellCart.Reset();
 	CloseVendorFilterDropdown();
@@ -14833,7 +14851,7 @@ void UACEUIGameplayBinder::ShowTradePanel(int32 PartnerGuid)
 	OpenVendorGuid = 0;
 	OpenSalvageToolGuid = 0;
 	SalvageQueueGuids.Reset();
-	PendingVendorSellGuid = 0;
+	PendingVendorSellGuid = PendingVendorSellTargetGuid = 0;
 	VendorSellCart.Reset();
 	VendorBuyCart.Reset();
 	SyncEnvPanelMode();
@@ -14908,14 +14926,15 @@ void UACEUIGameplayBinder::HandleVendorOpened(int32 Guid)
 	{
 		ShowVendorPanel(Guid);
 	}
-	if (PendingVendorSellGuid != 0)
-	{
-		const int32 SellGuid = PendingVendorSellGuid;
-		const int32 SellAmount = PendingVendorSellAmount;
-		PendingVendorSellGuid = 0;
-		PendingVendorSellAmount = INDEX_NONE;
+	// ClientUISystem::Handle_VendorInfo consumes an offer only for the vendor
+	// originally dropped on; an unrelated/late reply must not populate its cart.
+	const int32 SellGuid = PendingVendorSellGuid;
+	const int32 SellAmount = PendingVendorSellAmount;
+	const int32 SellTarget = PendingVendorSellTargetGuid;
+	PendingVendorSellGuid = PendingVendorSellTargetGuid = 0;
+	PendingVendorSellAmount = INDEX_NONE;
+	if (SellGuid != 0 && Guid == SellTarget)
 		AddInventoryGuidToVendorSellCart(SellGuid, SellAmount);
-	}
 }
 
 void UACEUIGameplayBinder::HandleTradeStateChanged(int32 EventType)

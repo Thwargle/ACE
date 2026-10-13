@@ -2,6 +2,7 @@
 #include "Mods/ACEPluginSubsystem.h"
 #include "Mods/ACEPluginStyle.h"
 #include "ACEClientSubsystem.h"
+#include "ACEDatSubsystem.h"
 #include "ACESession.h"
 #include "Engine/GameInstance.h"
 #include "Misc/SecureHash.h"
@@ -90,8 +91,8 @@ void UACEPluginSubsystem::SetLedgerOption(const FString& Id,const FString& Key,b
 FVector2D UACEPluginSubsystem::LedgerSize(const FString& Id) const
 {
     const bool Locked=!IsPluginBarUnlocked();
-    return Id==TEXT("supplyledger")?FVector2D(200,14+FMath::Clamp(LedgerSupplies.Num(),1,15)*26+(Locked?0:68+(SupplyNotice.IsEmpty()?0:28)))
-        :FVector2D(290,Locked?104:154);
+    return Id==TEXT("supplyledger")?FVector2D(200,14+FMath::Clamp(LedgerSupplies.Num(),1,15)*26+(Locked?0:ACELedger::SupplyEditorHeight+(SupplyNotice.IsEmpty()?0:28)))
+        :FVector2D(290,130+(Locked?0:ACELedger::HuntEditorHeight));
 }
 
 namespace
@@ -158,7 +159,33 @@ namespace
                     Body->AddSlot().AutoHeight().Padding(3,3)[R];
                 };
                 Row(TEXT(""),-1);Row(TEXT("Last 5 min"),0);Row(TEXT("Per hour"),1);Row(TEXT("Total"),2);
+                auto Estimate=SNew(SHorizontalBox);
+                Estimate->AddSlot().FillWidth(1)[Label(TEXT("Next level (est.)"))];
+                Estimate->AddSlot().AutoWidth().HAlign(HAlign_Right)[SNew(SACEPluginText).Tag(TEXT("HuntNextLevel"))
+                    .Font(FCoreStyle::GetDefaultFontStyle("Regular",12)).Text_Lambda([H=Host]
+                    {
+                        auto* GI=H.IsValid()?H->GetGameInstance():nullptr;
+                        auto* C=GI?GI->GetSubsystem<UACEClientSubsystem>():nullptr;
+                        auto* Dat=GI?GI->GetSubsystem<UACEDatSubsystem>():nullptr;
+                        if(!C||!Dat)return FText::FromString(TEXT("--"));
+                        const auto& V=C->GetPlayerVitalsView();int64 Needed=0,Threshold=0;
+                        if(!V.bValid||V.Level<=0||!V.QualityInt64s.Contains(1)||!Dat->TryGetXpToNextLevel(V.TotalExperience,V.Level,Needed))
+                            return FText::FromString(TEXT("--"));
+                        if(Needed==0)
+                        {
+                            Dat->TryGetXpToNextLevel(0,V.Level,Threshold);
+                            return FText::FromString(Threshold==0?TEXT("Max level"):TEXT("Leveling..."));
+                        }
+                        const double Seconds=H->GetHuntLedger().SecondsToLevel(Needed,FPlatformTime::Seconds());
+                        if(Seconds<0)return FText::FromString(TEXT("Waiting for XP"));
+                        if(Seconds<60)return FText::FromString(TEXT("<1m"));
+                        if(Seconds>=86400)return FText::FromString(FString::Printf(TEXT("%.0fd %02dh"),FMath::FloorToDouble(Seconds/86400),int32(FMath::Fmod(Seconds/3600.,24.))));
+                        const int32 Minutes=FMath::CeilToInt(Seconds/60.);
+                        return FText::FromString(Minutes>=60?FString::Printf(TEXT("%dh %02dm"),Minutes/60,Minutes%60):FString::Printf(TEXT("%dm"),Minutes));
+                    })];
+                Body->AddSlot().AutoHeight().Padding(3,3)[Estimate];
                 Body->SetToolTipText(FText::FromString(FString(TEXT("Last 5 min: gains in the rolling five-minute window. Per hour: average since login or Reset. Spending XP/luminance does not subtract earned totals. Closing this window keeps tracking."))
+                    +TEXT(" Next level estimates the remaining time using your average XP rate since login or Reset.")
                     +(Locked?TEXT("\nUse the game UI lock or hold Quick-show pinned windows to move and edit this HUD."):TEXT(""))));
                 if(!Locked)Body->AddSlot().AutoHeight()[Button(TEXT("Reset run"),TEXT("Clear totals and begin a new estimate now"),[H=Host]{if(H.IsValid())H->ResetHuntLedger();})];
             }

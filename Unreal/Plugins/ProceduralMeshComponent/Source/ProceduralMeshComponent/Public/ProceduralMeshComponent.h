@@ -324,6 +324,12 @@ public:
 
 	//~ Begin UPrimitiveComponent Interface.
 	UE_API virtual FPrimitiveSceneProxy* CreateSceneProxy() override;
+	/** Resident terrain/rooms retain their uploaded geometry across PView changes. */
+	UE_API virtual void OnActorVisibilityChanged() override;
+	UE_API virtual void OnVisibilityChanged() override;
+	UE_API virtual void OnHiddenInGameChanged() override;
+	/** Change this mesh's draw flags without invalidating independently visible attached scenery. */
+	UE_API void SetMeshDrawVisible(bool bDrawVisible);
 	UE_API virtual class UBodySetup* GetBodySetup() override;
 	UE_API virtual UMaterialInterface* GetMaterialFromCollisionFaceIndex(int32 FaceIndex, int32& SectionIndex) const override;
 	//~ End UPrimitiveComponent Interface.
@@ -341,6 +347,7 @@ public:
 	//~ Begin USceneComponent Interface.
 
 private:
+	UE_API bool UpdateResidentVisibility();
 
 	/** Update LocalBounds member from the local box of each section */
 	UE_API void UpdateLocalBounds();

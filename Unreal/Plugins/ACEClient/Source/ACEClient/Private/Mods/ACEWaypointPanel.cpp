@@ -88,7 +88,10 @@ void UACEPluginSubsystem::SetWaypoint(FVector2D Point,uint32 Dungeon)
     {
         P->Profile->SetNumberField(TEXT("east"),Point.X);P->Profile->SetNumberField(TEXT("north"),Point.Y);
         P->Profile->SetNumberField(TEXT("dungeon_landblock"),Dungeon);P->Profile->SetBoolField(TEXT("arrow"),true);
-        SaveProfile(P->Id,P->ProfileName,ProfileJson(P->Id),false);Notice=TEXT("Waypoint: ")+ACEWaypoint::Format(Point);
+        // The arrow/map already display the destination. Do not broadcast it
+        // through Notice, which also appears in unrelated plugin windows.
+        const FString PreviousNotice=Notice;
+        if(SaveProfile(P->Id,P->ProfileName,ProfileJson(P->Id),false))Notice=PreviousNotice;
     }
 }
 bool UACEPluginSubsystem::GetWaypoint(FVector2D& Point,uint32& Dungeon) const

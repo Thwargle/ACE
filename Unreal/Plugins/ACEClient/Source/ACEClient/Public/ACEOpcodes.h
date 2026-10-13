@@ -919,7 +919,7 @@ namespace ACEMotion
 		}
 		const uint16 Low = static_cast<uint16>(Cmd);
 		return Low == DeadCommandU16 || Low == CrouchCommandU16
-			|| Low == SittingCommandU16 || Low == SleepingCommandU16;
+			|| Low == SittingCommandU16 || Low == SleepingCommandU16 || Low == 0x001c; // Reading: server ends this substate with Ready.
 	}
 
 	inline bool IsHeldPoseSubstate(uint32 Cmd)

@@ -1843,14 +1843,67 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         Client->SortInventoryItem(Client->GetSelectedObject().Guid);
         LastWire(ACEGameAction::PutItemInContainer,{uint32(Match2.Guid),uint32(Player.Guid),0});
         TestEqual(TEXT("Moving without a match retains selection"),Client->GetSelectedObject().Guid,Match2.Guid);
-        // Auto merge must not partially fill a stack and then scatter the remainder.
+        // If no whole-stack merge fits, fill one stack and retain the remainder.
         Session.WorldObjects[Match2.Guid].StackSize=99;
+        Session.CachedC2SPackets.Reset();
         Session.WorldObjects.Add(Stack.Guid,Stack); Client->SortInventoryItem(Stack.Guid);
-        LastWire(ACEGameAction::PutItemInContainer,{uint32(Stack.Guid),uint32(Player.Guid),0});
+        LastWire(ACEGameAction::StackableMerge,{uint32(Stack.Guid),uint32(Match2.Guid),1});
+        TestEqual(TEXT("Partial merge waits for server source count"),Session.WorldObjects[Stack.Guid].StackSize,5);
+        TestEqual(TEXT("Partial merge waits for server target count"),Session.WorldObjects[Match2.Guid].StackSize,99);
+        Session.WorldObjects[Stack.Guid].StackSize=4;Session.WorldObjects[Match2.Guid].StackSize=100;
+        Client->TickInventorySort(.1f);
+        TestEqual(TEXT("Partial merge completes without removing the remainder"),Client->SortSourceGuid,0);
+
+        // Prefer a whole-stack merge even if a partially full candidate comes first.
+        Session.WorldObjects[Stack.Guid]=Stack;
+        Match.StackSize=99;Session.WorldObjects.Add(Match.Guid,Match);
         Session.WorldObjects[Match2.Guid].StackSize=20;
-        Session.WorldObjects.Add(Stack.Guid,Stack); Client->SortInventoryItem(Stack.Guid);
+        Session.CachedC2SPackets.Reset();Client->SortInventoryItem(Stack.Guid);
+        LastWire(ACEGameAction::StackableMerge,{uint32(Stack.Guid),uint32(Match2.Guid),5});
         Session.CachedC2SPackets.Reset(); Client->TickInventorySort(9.f);
         TestEqual(TEXT("Missing server confirmation times out without more inventory actions"),Session.CachedC2SPackets.Num(),0);
+        Session.WorldObjects.Remove(Match.Guid);
+
+        auto StackReply=[&](int32 Guid,int32 Count)
+        {
+            FACEBinaryWriter W;W.WriteUInt8(1);W.WriteUInt32(Guid);W.WriteUInt32(Count);W.WriteUInt32(Count);
+            FACEBinaryReader R(W.GetData());Session.HandleSetStackSize(R);
+        };
+        auto SentMerge=[&]()
+        {
+            for(const auto& Packet:Session.CachedC2SPackets)
+            {
+                FACEBinaryReader R(Packet.Value.Payload);R.Skip(24);
+                if(R.CanRead(4)&&R.ReadUInt32()==ACEGameAction::StackableMerge)return true;
+            }
+            return false;
+        };
+        for(bool TargetFirst:{false,true})
+        {
+            Stack.Name=TEXT("Pyreal");Stack.ItemType=ACEItemType::Money;Stack.WeenieClassId=273;
+            Stack.StackSize=15137;Stack.MaxStackSize=25000;
+            Match2=Stack;Match2.Guid=9103;Match2.ContainerId=Pack.Guid;Match2.StackSize=15000;
+            Session.WorldObjects[Stack.Guid]=Stack;Session.WorldObjects[Match2.Guid]=Match2;
+            Session.CachedC2SPackets.Reset();Client->SelectObject(Stack.Guid);Client->SortInventoryItem(Stack.Guid);
+            LastWire(ACEGameAction::StackableMerge,{uint32(Stack.Guid),uint32(Match2.Guid),10000});
+            const int32 BeforeReply=Session.CachedC2SPackets.Num();
+            Client->SortInventoryItem(Client->GetSelectedObject().Guid);
+            TestEqual(TEXT("Repeated F does not duplicate a partial merge"),Session.CachedC2SPackets.Num(),BeforeReply);
+            StackReply(TargetFirst?Match2.Guid:Stack.Guid,TargetFirst?25000:5137);
+            Client->TickInventorySort(.1f);
+            TestTrue(TEXT("Partial merge waits for both quantities in either reply order"),Client->SortSourceGuid!=0);
+            StackReply(TargetFirst?Stack.Guid:Match2.Guid,TargetFirst?5137:25000);
+            Client->TickInventorySort(.1f);
+            TestEqual(TEXT("Both stack updates release the merge guard"),Client->SortSourceGuid,0);
+            TestEqual(TEXT("Overflow keeps every pyreal"),Session.WorldObjects[Stack.Guid].StackSize+Session.WorldObjects[Match2.Guid].StackSize,30137);
+            TestEqual(TEXT("Remainder stays in its original pack"),Session.WorldObjects[Stack.Guid].ContainerId,Player.Guid);
+            TestEqual(TEXT("Filled stack stays in its original backpack"),Session.WorldObjects[Match2.Guid].ContainerId,Pack.Guid);
+            TestEqual(TEXT("Filled destination remains selected"),Client->GetSelectedObject().Guid,Match2.Guid);
+            Session.CachedC2SPackets.Reset();Client->SortInventoryItem(Client->GetSelectedObject().Guid);
+            TestFalse(TEXT("F on a full stack never splits it back into the remainder"),SentMerge());
+            Session.CachedC2SPackets.Reset();Client->SortInventoryItem(Stack.Guid);
+            TestFalse(TEXT("F on the remainder skips the already-full destination"),SentMerge());
+        }
         for(int32 Guid:{Stack.Guid,Match.Guid,Match2.Guid,Pack.Guid}) Session.WorldObjects.Remove(Guid);
         Client->SelectObject(0);
         };

@@ -81,6 +81,7 @@ bool FACESession::Connect(const FACELoginCredentials& Credentials)
 
 void FACESession::Disconnect()
 {
+	PendingInventoryTransfers.Reset();
 	GiveRecipientGuid = 0;
 	Confirmations.Reset();
 	LastServerPacketAt = 0.0;
@@ -416,6 +417,8 @@ bool FACESession::HasConnectionTimedOut(double Now) const
 void FACESession::Tick(float DeltaSeconds)
 {
 	ACE_PROFILE_SCOPE(Network);
+	for(auto It=PendingInventoryTransfers.CreateIterator();It;++It)
+		if(State!=EACESessionState::InWorld||FPlatformTime::Seconds()>=It.Value())It.RemoveCurrent();
 	if (PendingEquipmentGuid && FPlatformTime::Seconds() >= PendingEquipmentUntil)
 	{
 		CancelEquipmentSwap();
@@ -4642,6 +4645,7 @@ void FACESession::SendPutItemInContainer(int32 ItemGuid, int32 ContainerGuid, in
 	W.WriteUInt32(static_cast<uint32>(ContainerGuid));
 	W.WriteInt32(Placement);
 	SendGameAction(ACEGameAction::PutItemInContainer, W.GetData(), ACEQueue::WeenieQueue);
+	PendingInventoryTransfers.Add(ItemGuid,FPlatformTime::Seconds()+5.);
 }
 
 void FACESession::SendStackableMerge(int32 MergeFromGuid, int32 MergeToGuid, int32 Amount)
@@ -4948,6 +4952,7 @@ void FACESession::SendDropItem(int32 ItemGuid)
 	FACEBinaryWriter W;
 	W.WriteUInt32(static_cast<uint32>(ItemGuid));
 	SendGameAction(ACEGameAction::DropItem, W.GetData(), ACEQueue::WeenieQueue);
+	PendingInventoryTransfers.Add(ItemGuid,FPlatformTime::Seconds()+5.);
 }
 
 void FACESession::SendGiveObjectRequest(int32 TargetGuid, int32 ItemGuid, int32 Amount)
@@ -6798,6 +6803,7 @@ void FACESession::HandleInventoryPutObjInContainer(FACEBinaryReader& Reader)
 	const int32 ContainerGuid = static_cast<int32>(Reader.ReadUInt32());
 	const int32 Placement = Reader.ReadInt32();
 	const int32 ContainerType = Reader.ReadInt32();
+	PendingInventoryTransfers.Remove(ItemGuid);
 
 	int32 PrevContainer = 0;
 	int32 PrevPlacement = INDEX_NONE;
@@ -7028,6 +7034,7 @@ void FACESession::HandleInventoryPutObjIn3D(FACEBinaryReader& Reader)
 		return;
 	}
 	const int32 ItemGuid = static_cast<int32>(Reader.ReadUInt32());
+	PendingInventoryTransfers.Remove(ItemGuid);
 	FACEPosition SpawnPos;
 	bool bHavePos = false;
 	int32 PrevContainer = 0;
@@ -7199,6 +7206,7 @@ void FACESession::HandleInventoryRemoveObject(FACEBinaryReader& Reader)
 		return;
 	}
 	const int32 ItemGuid = static_cast<int32>(Reader.ReadUInt32());
+	PendingInventoryTransfers.Remove(ItemGuid);
 	// Whole-item turn-ins have no SetStackSize. Invalidate cached inventories
 	// just as partial-stack transfers do, before notifying observers.
 	++InventoryDataRevision;

@@ -62,6 +62,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 {
 	GENERATED_BODY()
 	friend class FACERetailScreenTest;
+	friend class FACEDesktopHighlightTest;
 	friend class FACEPvPCombatParityTest;
 	friend class FACECharacterInfoParityTest;
 	friend class FACEVRRigTest;
@@ -180,6 +181,7 @@ public:
 	bool TryFinishScrollbarDrag();
 	bool IsScrollbarDragActive() const;
 	bool IsInventoryDragActive() const { return bInvDragActive; }
+	bool IsInventoryInteractionActive() const { return bInvDragPending; }
 	bool IsSpellDragActive() const { return bSpellDragActive; }
 	void CancelPointerGestures();
 	void SelectVRSpell(int32 Spell);
@@ -846,6 +848,7 @@ private:
 	int32 VendorSellScrollOffset = 0;
 	/** After Use-on-vendor, add this inventory guid to the sell cart when ApproachVendor arrives. */
 	int32 PendingVendorSellGuid = 0;
+	int32 PendingVendorSellTargetGuid = 0;
 	int32 PendingVendorSellAmount = INDEX_NONE;
 	/** Retail offers a new server-created stack, never a partial quantity of the source GUID. */
 	struct FInventoryStackSplit
@@ -1433,6 +1436,7 @@ private:
 	void AddSelectedVendorItemToBuyCart();
 	void BuyVendorCartItem();
 	void SellVendorCart(bool bSelectedOnly = false);
+	bool DropInventoryInWorld(int32 Guid, int32 Amount, const FVector2D& Absolute);
 	void AddInventoryGuidToVendorSellCart(int32 Guid, int32 Amount = INDEX_NONE);
 	bool CanStageVendorSellItem(int32 Guid) const;
 	bool CanMoveInventoryAmountToContainer(int32 Guid, int32 Container, int32 Amount, int32 MergeTarget = 0) const;

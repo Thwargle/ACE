@@ -773,3 +773,39 @@ Saved/Automation (rule IDs, exact palette behavior, comparisons and advanced
 requirements). Automatic height/skill selection and the Micro panel are UCM
 convenience features; outgoing actions still use ordinary client movement,
 equipment and targeted attack messages.
+
+## October 12: relog timers, inventory arbitration and combat decisions
+
+Confirmed self/owned item-enchantment timers now persist per character and
+server, with UTC expiration so logging out cannot extend them. This follows
+VT's `dm.cs` persistence of confirmed item casts. Character enchantments still
+come from the server. Expired timers, changed death counts and newly worn armor
+invalidate the appropriate estimates; Force Buff remains an explicit refresh.
+Buffs cast before timer persistence was installed cannot be reconstructed.
+
+UCM yields while an inventory drag or container/drop request is outstanding and
+resumes after its server receipt (with a bounded timeout for missing replies).
+Dragging during an already-started equipment swap leaves the item unchanged.
+Automated weapon removal chooses a pack with capacity, including side packs.
+Physical attack retransmission throttling no longer blocks unrelated policy
+decisions; target-death notifications wake combat, while spell, stance and
+equipment acknowledgments remain required.
+
+Automatic heights use the retail wire values High=1, Medium=2, Low=3, selected
+from the monster's scaled DAT bounds and relative elevation. Automatic attack
+power defaults on and uses VT's `hi.cs` weapon/thrust/slash rules; explicit power
+settings remain available. Standard ACE appraisal packets omit elemental
+resistances. The bundled `ucm/monster-elements.json` therefore supplies ordered
+preferences for 1,470 named monsters, derived from VT GameInfoDB's species and
+monster overrides (`e0.cs`, `gv.cs`). Weapon and ammunition selection uses those
+preferences only when server appraisal provides no resistances; explicit monster
+rules still override automatic choices. Unknown creatures retain neutral
+resistances. The reproducible converter is `Unreal/Build/Import-VTMonsterElements.py`;
+the catalog records its public source URL. This is a fallback database, not a
+claim to know custom-server resistances that were never transmitted.
+
+Regression coverage includes a fresh Lua VM using restored bane timers, expiry,
+new armor and death invalidation, manual transfer receipts, physical/spell target
+handoff, actual DAT attack heights, elemental weapon switching, custom-server
+resistance overrides and weapon-dependent attack power. Offline tests do not
+measure live server latency or certify an overnight hunting run.

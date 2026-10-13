@@ -14,6 +14,7 @@
 #include "Interfaces/IPluginManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/SecureHash.h"
 #include "HAL/FileManager.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -262,6 +263,7 @@ void UACEPluginSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 }
 void UACEPluginSubsystem::Deinitialize()
 {
+    SaveItemBuffTimers();
     RestoreWorldRendering();
     UnbindCombatEvents();
     if(RouteMesh){RouteMesh->DestroyComponent();RouteMesh=nullptr;}
@@ -279,6 +281,74 @@ void UACEPluginSubsystem::Deinitialize()
     DesktopPanel.Reset(); Plugins.Reset(); Super::Deinitialize();
 }
 FString UACEPluginSubsystem::UserDirectory() const { return StorageRoot.IsEmpty() ? FPaths::ProjectSavedDir() / TEXT("ClientPlugins") : StorageRoot; }
+void UACEPluginSubsystem::SaveItemBuffTimers()
+{
+    if(!DataPlayer)return;
+    const double Now=FPlatformTime::Seconds(),UTC=FDateTime::UtcNow().ToUnixTimestampDecimal();
+    auto Saved=MakeShared<FJsonObject>();Saved->SetNumberField(TEXT("deaths"),ItemBuffDeaths);
+    TArray<TSharedPtr<FJsonValue>> Entries;
+    for(const auto& Value:ItemBuffs)
+    {
+        const auto E=Value->AsObject();double Expiry=0;
+        if(!E||!E->TryGetNumberField(TEXT("expires"),Expiry)||Expiry<=Now||!E->HasField(TEXT("spell")))continue;
+        // The world object list may already be gone during logout. Ownership
+        // was checked when the server confirmed the cast, while it was present.
+        bool Owned=false;if(!E->TryGetBoolField(TEXT("owned"),Owned)||!Owned)continue;
+        auto Copy=MakeShared<FJsonObject>(*E);Copy->RemoveField(TEXT("expires"));Copy->SetNumberField(TEXT("expires_utc"),UTC+Expiry-Now);
+        Entries.Add(MakeShared<FJsonValueObject>(Copy));if(Entries.Num()==256)break;
+    }
+    Saved->SetArrayField(TEXT("buffs"),Entries);
+    Write(UserDirectory()/TEXT("BuffTimers")/(FMD5::HashAnsiString(*DataServer)+FString::Printf(TEXT(".%08X.json"),uint32(DataPlayer))),Saved);
+}
+void UACEPluginSubsystem::LoadItemBuffTimers()
+{
+    ItemBuffs.Empty();
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    ItemBuffDeaths=C->GetPlayerVitalsView().NumDeaths;
+    const auto Saved=Read(UserDirectory()/TEXT("BuffTimers")/(FMD5::HashAnsiString(*DataServer)+FString::Printf(TEXT(".%08X.json"),uint32(DataPlayer))));
+    double Deaths=0;const TArray<TSharedPtr<FJsonValue>>* Entries=nullptr;
+    if(!Saved||!Saved->TryGetNumberField(TEXT("deaths"),Deaths)||Deaths!=ItemBuffDeaths||!Saved->TryGetArrayField(TEXT("buffs"),Entries)||Entries->Num()>256)return;
+    const double Now=FPlatformTime::Seconds(),UTC=FDateTime::UtcNow().ToUnixTimestampDecimal();
+    auto* Dat=GetGameInstance()->GetSubsystem<UACEDatSubsystem>();
+    for(const auto& Value:*Entries)
+    {
+        if(Value->Type!=EJson::Object)continue;const auto E=Value->AsObject();
+        double Expiry=0,Spell=0,Target=0,Duration=0;uint32 School=0,Power=0,Category=0,Flags=0;
+        if(!E->TryGetNumberField(TEXT("expires_utc"),Expiry)||!FMath::IsFinite(Expiry)||Expiry<=UTC||Expiry>UTC+7*86400
+            ||!E->TryGetNumberField(TEXT("spell"),Spell)||!E->TryGetNumberField(TEXT("target"),Target)
+            ||!FMath::IsFinite(Spell)||Spell<1||Spell>MAX_uint32||Spell!=FMath::FloorToDouble(Spell)
+            ||!FMath::IsFinite(Target)||Target<1||Target>MAX_uint32||Target!=FMath::FloorToDouble(Target)
+            ||!Dat->TryGetPluginSpellInfo(uint32(Spell),School,Power,Category,Flags,Duration)||School!=3||!(Flags&4)||Duration<=0)continue;
+        // Item GUIDs and timers are scoped to this character and server. Never
+        // persist other-player requests or use estimates for character buffs.
+        // Equipped item creates can follow login. Lua still requires the
+        // matching owned/equipped target before using any saved item timer.
+        bool Owned=false;if(!E->TryGetBoolField(TEXT("owned"),Owned)||!Owned)continue;
+        auto Copy=MakeShared<FJsonObject>(*E);Copy->RemoveField(TEXT("expires_utc"));Copy->SetNumberField(TEXT("expires"),Now+Expiry-UTC);
+        Copy->SetNumberField(TEXT("category"),Category);Copy->SetNumberField(TEXT("power"),Power);
+        ItemBuffs.Add(MakeShared<FJsonValueObject>(Copy));
+    }
+    ValidateItemBuffTimers();
+}
+void UACEPluginSubsystem::ValidateItemBuffTimers()
+{
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Session=C->GetSession();
+    if(!Session||DataPlayer!=C->GetPlayerGuid())return;
+    if(ItemBuffDeaths!=C->GetPlayerVitalsView().NumDeaths)
+    {ItemBuffs.Empty();ItemBuffDeaths=C->GetPlayerVitalsView().NumDeaths;SaveItemBuffTimers();return;}
+    const double Now=FPlatformTime::Seconds();
+    ItemBuffs.RemoveAll([&](const auto& Value)
+    {
+        const auto E=Value->AsObject();const int32 Target=int32(uint32(Number(E,TEXT("target"))));
+        if(Number(E,TEXT("expires"))<=Now)return true;
+        const TArray<TSharedPtr<FJsonValue>>* Equipment=nullptr;
+        if(Target==DataPlayer&&E->TryGetArrayField(TEXT("equipment"),Equipment))
+            for(const auto& Pair:Session->GetWorldObjects())
+                if(Pair.Value.WielderId==DataPlayer&&(Pair.Value.ItemType&(ACEItemType::Armor|ACEItemType::Clothing))
+                    &&!Equipment->ContainsByPredicate([&](const auto& Id){return Id->AsNumber()==double(uint32(Pair.Key));}))return true;
+        return false;
+    });
+}
 TSharedPtr<FACEClientPlugin> UACEPluginSubsystem::Find(const FString& Id) const
 { for (const auto& P : Plugins) if (P->Id == Id) return P; return nullptr; }
 void UACEPluginSubsystem::Discover()
@@ -981,7 +1051,7 @@ void UACEPluginSubsystem::UpdateBuffDispatch()
         if(Now-PendingSpellAt>=5){CompletePendingAction(0x001D);return;}
         if(!C->GetSession()||C->GetSessionState()!=EACESessionState::InWorld||C->GetPlayerGuid()!=Owner->Player||C->GetServerName()!=Owner->Server||C->GetPlayerVitalsView().Health<=0)return;
         auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
-        if(C->IsUseBusy()||(PC&&PC->IsWorldTransitionActive()))return;
+        if(C->IsUseBusy()||InventoryInteractionPending()||(PC&&PC->IsWorldTransitionActive()))return;
         int32 Target=0;
         if(!C->GetKnownSpells().Contains(PendingSpell)||!ResolvePluginSpellTarget(PendingSpell,PendingSpellTarget,Target)||Target!=PendingSpellTarget)
         {CompletePendingAction(0x001D);return;}
@@ -1013,6 +1083,12 @@ void UACEPluginSubsystem::UpdateWorldRendering()
         // continue at their normal cadence; never pause or throttle the game.
         Viewport->bDisableWorldRendering=true;
     }
+}
+bool UACEPluginSubsystem::InventoryInteractionPending() const
+{
+    auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController());
+    return (PC&&PC->IsInventoryInteractionActive())||(C->GetSession()&&C->GetSession()->IsInventoryTransferPending());
 }
 bool UACEPluginSubsystem::Tick(float)
 {
@@ -1083,6 +1159,11 @@ bool UACEPluginSubsystem::Tick(float)
         { Stop(P->Id, TEXT("Stopped: character died, changed, or left world")); continue; }
         if(P->IsPolicy())if(auto Items=Find(TEXT("itemtools"));Items&&Items->Running)
         {P->Status=TEXT("Paused while Item Tools runs");continue;}
+        if(InventoryInteractionPending())
+        {
+            if(MovementOwner==P->Id){MovementOwner.Empty();MoveExpires=0;}
+            P->Status=TEXT("Waiting for inventory interaction");ScheduleDecisionWake(FPlatformTime::Seconds()+.05);continue;
+        }
         if(P->CombatTransitionIntent){UpdateCombatTransition(*P);continue;}
         if(DeferredBuffIntent&&DeferredBuffOwner==P->Id)
         {
@@ -1131,8 +1212,8 @@ bool UACEPluginSubsystem::Tick(float)
         if(P->Api>=2 && FPlatformTime::Seconds()>=P->NextStateSave){FlushPluginState(*P);P->NextStateSave=FPlatformTime::Seconds()+5;}
         // Idle/blocked policies need not rebuild world sight and inventory every frame.
         bool ContinueWork=false;if(Intent)Intent->TryGetBoolField(TEXT("continue_work"),ContinueWork);
-        P->NextDecision=FPlatformTime::Seconds()+(ContinueWork?.05:.25);
-        if(ContinueWork)ScheduleDecisionWake(FMath::Max(P->NextDecision,P->NextAction));
+        P->NextDecision=FPlatformTime::Seconds()+(ContinueWork||CombatTarget?.05:.25);
+        if(ContinueWork||CombatTarget||!PhysicalAttackOwner.IsEmpty())ScheduleDecisionWake(FMath::Max(P->NextDecision,P->NextAction));
     }
     return true;
 }
@@ -1181,6 +1262,7 @@ void UACEPluginSubsystem::ReportActivityFailure(FACEClientPlugin& P, const TShar
 }
 void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObject>& I)
 {
+    if(InventoryInteractionPending())return;
     // Only another validated buff may overlap the previous buff's recoil.
     // Hold other policy intents without stepping Lua again until its untagged
     // UseDone is drained, including force-buff completion and equipment changes.
@@ -1455,12 +1537,14 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         // Re-evaluate policy immediately without restarting the same attack.
         if(PhysicalAttackOwner==P.Id&&PhysicalAttackTarget==Target&&PhysicalAttackMode==Mode
             &&PhysicalAttackHeight==Height&&FMath::IsNearlyEqual(PhysicalAttackPower,Power,.001f)&&Now<PhysicalAttackNextSendAt)
-        {P.NextAction=PhysicalAttackNextSendAt;return;}
+        {P.NextAction=Now;return;}
         PhysicalAttackTarget=Target;PhysicalAttackOwner=P.Id;PhysicalAttackUntil=Now+30;
         PhysicalAttackMode=Mode;PhysicalAttackHeight=Height;PhysicalAttackPower=Power;PhysicalAttackNextSendAt=Now+3.5;
         if (Mode == 2) C->SendTargetedMeleeAttack(Target, Height, Power); else C->SendTargetedMissileAttack(Target, Height, Power);
         PC->ShowPluginAttack(Target, Height, Power);
-        P.NextAction = Now + 3.5;
+        // Throttle duplicate network attacks above, not the entire policy.
+        // Death and vital updates must be able to choose a different action.
+        P.NextAction = Now;
     }
     else ReportActivityFailure(P,I, TEXT("Unknown action: ") + Action);
 }

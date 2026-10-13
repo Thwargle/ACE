@@ -112,8 +112,9 @@ void AACELandblockActor::ApplyDesiredOutdoorTerrainState()
 	const bool bHide = bWantTerrainHidden;
 	if (TerrainMesh->bHiddenInGame != bHide || TerrainMesh->IsVisible() == bHide)
 	{
-		TerrainMesh->SetHiddenInGame(bHide);
-		TerrainMesh->SetVisibility(!bHide);
+		// Only terrain changes visibility. The default DirtyOnly propagation also
+		// rebuilds every attached building/scenery proxy at an indoor boundary.
+		TerrainMesh->SetMeshDrawVisible(!bHide);
 	}
 	if (TerrainMesh->CastShadow)
 	{
@@ -121,16 +122,15 @@ void AACELandblockActor::ApplyDesiredOutdoorTerrainState()
 	}
 	// Indoor: never let the heightfield support the pawn. Async cook / mesh re-apply
 	// used to flip QueryAndPhysics back on while the mesh stayed hidden.
-	if (!bWantTerrainCollision)
-	{
-		TerrainMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		TerrainMesh->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
-	}
-	else
-	{
-		TerrainMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-		TerrainMesh->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
-	}
+	// Keep the cooked heightfield resident across doorways. NoCollision toggles
+	// destroy/recreate Chaos bodies. PhysicsOnly with every response ignored keeps
+	// the body allocated, excludes channel AND object queries, and produces no
+	// physical contacts. Restore the outdoor filters when land is in transit again.
+	FCollisionResponseContainer Responses(bWantTerrainCollision ? ECR_Block : ECR_Ignore);
+	Responses.SetResponse(ECC_Visibility, ECR_Ignore);
+	TerrainMesh->SetCollisionResponseToChannels(Responses);
+	TerrainMesh->SetCollisionEnabled(bWantTerrainCollision
+		? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::PhysicsOnly);
 }
 
 void AACELandblockActor::SetLandPortalLookOut(bool bLookOut)

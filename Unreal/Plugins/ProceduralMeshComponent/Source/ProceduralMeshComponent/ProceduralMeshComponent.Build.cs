@@ -19,6 +19,7 @@ namespace UnrealBuildTool.Rules
 					"PhysicsCore"
 				}
 				);
+			PrivateDependencyModuleNames.Add("Renderer");
 
 			PrivateIncludePathModuleNames.AddRange(
 				new string[]

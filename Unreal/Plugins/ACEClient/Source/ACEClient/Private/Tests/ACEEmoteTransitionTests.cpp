@@ -8,6 +8,8 @@
 #include "ACEWorldEntityActor.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
+#include "ACEInputBindings.h"
+#include "GameFramework/PlayerInput.h"
 #include "ACESession.h"
 #include "Engine/LocalPlayer.h"
 #include "Sockets.h"
@@ -344,6 +346,32 @@ bool FACEEmoteTransitionTest::RunTest(const FString&)
  Session->CurrentForwardCommand=ACEMotion::Sleeping;Session->CachedC2SPackets.Reset();PC->ReleaseJump(0,0);
  TestTrue(TEXT("Pose change during charging rejects release without changing animation"),
   !PC->bJumpAirborne&&Session->CachedC2SPackets.IsEmpty()&&LocalApp->ActionCommand==ACEMotion::Sleeping);
+ // Reading is a server-owned substate, not a short gesture followed by running.
+ LocalApp->ClearActionMotion();LocalApp->SetLocomotionInput(1,0,true,1);
+ const FKey ForwardKey=ACEInputBindings::Get(EKeys::W,0).Key;
+ PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(ForwardKey,IE_Pressed,1.f));
+ PC->PlayerInput->ProcessInputStack({},.016f,false);
+ TestTrue(TEXT("Fixture presses the configured forward binding"),ACEInputBindings::Down(PC,EKeys::W));
+ PC->MovementKeyPressOrder.Add(ForwardKey,++PC->MovementKeySequence);PC->bAutoRun=true;
+ PC->bServerMoveToActive=true;PC->ServerMoveToTargetGuid=123;PC->ServerMoveToFailDistance=15.f;
+ FACEObjectMotionState Reading;Reading.ForwardCommand=0x1c;Reading.ActionCommand=0x4000001c;Reading.CurrentStyle=Style;
+ Session->CachedC2SPackets.Reset();PC->HandleMotionUpdate(Session->PlayerGuid,Reading);
+ TestTrue(TEXT("Server reading clears autorun and suspends already-held movement"),!PC->bAutoRun&&PC->ReadingMovementSequence>0);
+ TestFalse(TEXT("An old approach cannot keep walking through Reading"),PC->bServerMoveToActive);
+ auto Forward=[&](){return ACEInputBindings::MovementAxis(PC,EKeys::W,EKeys::S,PC->MovementKeyPressOrder,FKey(),FKey(),PC->ReadingMovementSequence);};
+ TestEqual(TEXT("Holding forward cannot steal server reading control every frame"),Forward(),0.f);
+ TestEqual(TEXT("Reading immediately stops recorded locomotion"),LocalApp->LocomotionForward,0.f);
+ TestTrue(TEXT("Accepting server reading does not send a cancelling movement packet"),Session->CachedC2SPackets.IsEmpty());
+ for(int Frame=0;Frame<600;++Frame)LocalApp->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+ TestTrue(TEXT("Reading remains posed until the server completes it"),LocalApp->ActionCommand==0x4000001cu&&LocalApp->bHoldActionFinal);
+ PC->MovementKeyPressOrder.Add(ForwardKey,++PC->MovementKeySequence);
+ TestTrue(TEXT("A fresh movement press can explicitly reclaim control like retail"),Forward()>0.f);
+ PC->HandleUseDone(0);
+ TestEqual(TEXT("Use completion releases the suspended movement generation"),PC->ReadingMovementSequence,uint64(0));
+ for(int Frame=0;Frame<600&&LocalApp->ActionCommand;++Frame)LocalApp->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+ TestEqual(TEXT("Completion plays reading-to-ready and leaves no stuck pose"),LocalApp->ActionCommand,0u);
+ PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(ForwardKey,IE_Released,0.f));
+ PC->PlayerInput->ProcessInputStack({},.016f,false);
  Pawn->Destroy();PC->Destroy();
  AddInfo(FString::Printf(TEXT("Verified %d DAT emote transitions across %d held poses, both human setups, at 30 and 90 Hz."), Cases, Poses.Num()));
  Actor->Destroy();

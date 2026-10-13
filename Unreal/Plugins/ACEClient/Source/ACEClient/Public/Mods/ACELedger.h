@@ -15,6 +15,7 @@ struct FACESupplyEntry
 
 namespace ACELedger
 {
+    inline constexpr double HeaderHeight=24., SupplyEditorHeight=68., HuntEditorHeight=50.;
     inline bool IsOwned(const FACEWorldObject& Item,int32 Player,const TMap<int32,FACEWorldObject>& Objects)
     {
         if(!Player||Item.Guid==Player)return false;
@@ -66,4 +67,7 @@ struct FACEHuntLedger
     }
     double Elapsed(double Now) const { return FMath::Max(0.,Now-Started); }
     int64 PerHour(int64 Total,double Now) const {return Elapsed(Now)>=1 ? int64(double(Total)*3600./Elapsed(Now)) : 0;}
+    // Use the unrounded run rate; spending XP does not change earned XP.
+    double SecondsToLevel(int64 Needed,double Now) const
+    { return Needed<=0 ? 0. : XP>0&&Elapsed(Now)>=1 ? double(Needed)*Elapsed(Now)/double(XP) : -1.; }
 };

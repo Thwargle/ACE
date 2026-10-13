@@ -23,12 +23,12 @@ bool FACEUCMDetourTest::RunTest(const FString&)
     S->SetObjectField(TEXT("route_visible"),Json(TEXT(R"({"1":false,"2":true})")));
     TestEqual(TEXT("Join chooses visible waypoint over closer wall-separated point"),Step(VM)->GetNumberField(TEXT("x")),45.);
     S->RemoveField(TEXT("route_visible"));
-    const auto Target=Json(TEXT(R"({"id":50,"name":"Red Rat","identified":true,"distance":1,"cell":30998795,"x":40,"y":-40,"z":0,"attack_height":1,"line_of_sight":true})"));
+    const auto Target=Json(TEXT(R"({"id":50,"name":"Red Rat","identified":true,"distance":1,"cell":30998795,"x":40,"y":-40,"z":0,"attack_height":3,"line_of_sight":true})"));
     S->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(Target)});
     for(FVector2D At:{FVector2D(34.804504,-34.515625),FVector2D(34.804504,-37),FVector2D(34.804504,-40),FVector2D(40,-40)})
     {
         auto Pos=S->GetObjectField(TEXT("position"));Pos->SetNumberField(TEXT("x"),At.X);Pos->SetNumberField(TEXT("y"),At.Y);S->SetNumberField(TEXT("time"),S->GetNumberField(TEXT("time"))+1);
-        TestEqual(TEXT("Low creature uses low attack"),Step(VM)->GetNumberField(TEXT("height")),1.);
+        TestEqual(TEXT("Low creature uses retail low attack value"),Step(VM)->GetNumberField(TEXT("height")),double(ACEAttackHeight::Low));
     }
     S->SetArrayField(TEXT("targets"),{});
     auto I=Step(VM);TestEqual(TEXT("Stops the completed attack before returning"),I->GetStringField(TEXT("action")),FString(TEXT("cancel_attack")));
@@ -61,13 +61,45 @@ bool FACEUCMDetourTest::RunTest(const FString&)
             FACEWorldObject Creature;ACECreatureFixtures::Apply(Creature,Index);Creature.Position=Player;
             const int32 Height=ACEPluginCombat::AttackHeight(*Dat,Creature,Player);
             AddInfo(FString::Printf(TEXT("%s auto height %d"),Model.Name,Height));
-            TestEqual(*(FString(Model.Name)+TEXT(" selects correct attack quadrant")),Height,++Index);
+            const int32 Expected[]={ACEAttackHeight::Low,ACEAttackHeight::Medium,ACEAttackHeight::High};
+            TestEqual(*(FString(Model.Name)+TEXT(" selects correct attack quadrant")),Height,Expected[Index++]);
             Creature.Position.Location.Z+=3;
-            TestEqual(TEXT("Elevated targets use high attack regardless of species"),ACEPluginCombat::AttackHeight(*Dat,Creature,Player),3);
+            TestEqual(TEXT("Elevated targets use high attack regardless of species"),ACEPluginCombat::AttackHeight(*Dat,Creature,Player),int32(ACEAttackHeight::High));
         }
     }
     GI->Shutdown();
     return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMElementSelectionTest,"ACE.Plugins.ElementAndPowerSelection",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMElementSelectionTest::RunTest(const FString&)
+{
+    auto Json=[](const TCHAR* Text){TSharedPtr<FJsonObject> O;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text),O);return O;};
+    FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    auto S=Json(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"spells":[],"skills":{"44":{"training":3,"current":300}},"targets":[{"id":50,"name":"Rat","identified":true,"distance":1,"attack_height":3,"line_of_sight":true,"resists":{"8":0.5,"16":2}}],"inventory":[{"id":90,"name":"Flaming sword","type":1,"weapon_skill":44,"identified":true,"can_wield":true,"equipped":true,"equipped_slot":1048576,"damage_type":8,"damage":30},{"id":91,"name":"Cold sword","type":1,"weapon_skill":44,"identified":true,"can_wield":true,"damage_type":16,"damage":30}]})"));
+    auto P=Json(TEXT(R"({"buffing":false,"recovery":false,"looting":false,"combat":"auto"})"));
+    auto Step=[&](){FACEPluginVM VM;TestTrue(TEXT("Combat policy loads"),VM.Load(Source,Error));TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
+    TestEqual(TEXT("Cold vulnerability wins over equipped fire sword"),Step()->GetNumberField(TEXT("item")),91.);
+    auto Items=S->GetArrayField(TEXT("inventory"));Items[0]->AsObject()->SetBoolField(TEXT("equipped"),false);Items[1]->AsObject()->SetBoolField(TEXT("equipped"),true);
+    Items[1]->AsObject()->SetNumberField(TEXT("equipped_slot"),ACEEquipMask::MeleeWeapon);
+    auto Attack=Step();TestEqual(TEXT("Chosen elemental sword uses automatic full power by default"),Attack->GetNumberField(TEXT("power")),1.);
+    TestEqual(TEXT("Rat is attacked low on the wire"),Attack->GetNumberField(TEXT("height")),double(ACEAttackHeight::Low));
+    auto Target=S->GetArrayField(TEXT("targets"))[0]->AsObject();Target->SetObjectField(TEXT("resists"),Json(TEXT(R"({"8":2,"16":0.5})")));
+    TestEqual(TEXT("Different target resistances switch back to fire sword"),Step()->GetNumberField(TEXT("item")),90.);
+    Target->SetArrayField(TEXT("preferred_elements"),ACEPluginCombat::PreferredElements(TEXT("Snow Tusker")));
+    Target->SetObjectField(TEXT("resists"),Json(TEXT("{}")));
+    TestEqual(TEXT("Stock server without resistance fields uses VT Snow Tusker fire preference"),Step()->GetNumberField(TEXT("item")),90.);
+    Target->SetObjectField(TEXT("resists"),Json(TEXT(R"({"8":0.5,"16":2})")));
+    TestEqual(TEXT("Custom server resistance data takes precedence over stock catalog"),Step()->GetStringField(TEXT("action")),FString(TEXT("attack")));
+    TestTrue(TEXT("Unknown monsters have no invented elemental preferences"),ACEPluginCombat::PreferredElements(TEXT("Unregistered Custom Monster")).IsEmpty());
+    Target->SetObjectField(TEXT("resists"),Json(TEXT(R"({"1":0.5,"2":2})")));
+    S->SetArrayField(TEXT("inventory"),{Items[1]});auto Weapon=Items[1]->AsObject();Weapon->SetNumberField(TEXT("damage_type"),3);
+    TestEqual(TEXT("Dual-damage sword uses thrust power for piercing weakness"),Step()->GetNumberField(TEXT("power")),.2);
+    Target->SetObjectField(TEXT("resists"),Json(TEXT(R"({"1":2,"2":0.5})")));Weapon->SetNumberField(TEXT("weapon_type"),1);
+    TestEqual(TEXT("Dagger uses VT's half-power slash instead of thrust"),Step()->GetNumberField(TEXT("power")),.5);
+    P->SetBoolField(TEXT("auto_attack_power"),false);P->SetNumberField(TEXT("power"),.7);
+    TestEqual(TEXT("Explicit manual power remains supported"),Step()->GetNumberField(TEXT("power")),.7);
+    return !HasAnyErrors();
 }
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMBlockedRouteTest,"ACE.Plugins.BlockedRouteSafety",
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)

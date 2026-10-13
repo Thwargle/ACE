@@ -32,6 +32,7 @@ local inventory_salvage_scan={}
 local inventory_salvage_blocked={}
 local loot_jobs={}
 local loot_job_pending=nil
+local scroll_reads={}
 local combine_pending=nil
 -- An operational failure belongs to one activity, never the whole scheduler.
 -- Cooldowns prevent a failing high-priority activity starving combat/recovery.
@@ -94,6 +95,21 @@ local function element(spell)
  return 0
 end
 local function resistance(t,damage) return t and t.resists and t.resists[tostring(math.floor(damage))] or 1 end
+-- Standard ACE appraisals omit elemental resistances. Like VT's GameInfoDB,
+-- use named-monster/species preferences only when the server supplied none.
+local function element_preference(t,damage)
+ if t.resists and next(t.resists) then return 0 end
+ for index,e in ipairs(t.preferred_elements or {}) do if e==damage then return 16-index end end
+ return 0
+end
+local function preferred_damage(t,mask)
+ local damage,value,preference=0,-1,-1
+ for _,e in ipairs(damage_elements) do if band(mask,e)~=0 then
+  local rank=element_preference(t,e);local resist=resistance(t,e)
+  if rank>preference or (rank==preference and resist>value) then damage=e;value=resist;preference=rank end
+ end end
+ return damage,value,preference
+end
 local function cast(s,v,target,status)
  last_cast={id=v.id,category=v.category,target=target,serial=s.action_serial or 0}
  return {action='cast',spell=v.id,target=target,status=status}
@@ -1847,6 +1863,11 @@ local function tick(s,p)
  if combat=='off' then debuff_pending=nil;debuff_scan=nil;if locked_target then locked_target=nil;return result('cancel_attack','Combat disabled') end end
  local function loot()
  if not activity_ready('loot') then return end
+ local learned={}
+ for _,spell in ipairs(s.spells or {}) do if spell.known~=false then learned[spell.id]=true end end
+ for _,id in ipairs(s.known_spells or {}) do learned[id]=true end
+ local present_scrolls={};for _,item in ipairs(inventory) do present_scrolls[item.id]=true end
+ for id in pairs(scroll_reads) do if not present_scrolls[id] then scroll_reads[id]=nil end end
  if corpse_pending then
   if s.container==corpse_pending.id then item_attempts['corpse'..corpse_pending.id]=0;corpse_pending=nil
   elseif s.time<corpse_pending.deadline and not ((s.action_serial or 0)~=corpse_pending.serial and (s.action_error or 0)~=0) then return result(nil,'Approaching / waiting for corpse to open')
@@ -1897,10 +1918,8 @@ local function tick(s,p)
    for _,v in ipairs(contents) do signature=signature..':'..v.id..':'..v.count..':'..tostring(v.identified) end
    if loot_scan.signature~=signature then loot_scan={signature=signature,item=1,rule=1} end
    local owned,owned_names={},{};for _,v in ipairs(inventory) do owned[v.wcid]=(owned[v.wcid] or 0)+(v.count or 1);local name=v.name or '';owned_names[name]=(owned_names[name] or 0)+(v.count or 1) end
-   local learned,carried_scrolls={},{}
+   local carried_scrolls={}
    if option('read_unknown_scrolls',false) then
-    for _,spell in ipairs(s.spells or {}) do if spell.known~=false then learned[spell.id]=true end end
-    for _,id in ipairs(s.known_spells or {}) do learned[id]=true end
     for _,v in ipairs(inventory) do if v.object_class==42 and (v.spell or 0)>0 then carried_scrolls[v.spell]=true end end
    end
    local pending_appraisals=0
@@ -1961,20 +1980,48 @@ local function tick(s,p)
    corpses[s.container]=s.time+300;return {action='close_corpse',status='Loot complete'}
   end
  end
- -- Existing possessions require the explicit inventory salvage option below.
- -- Importing a loot profile alone must never queue them for destruction.
+ -- Only the explicit unknown-scroll option authorizes reading carried scrolls.
+ -- This also recovers a pickup interrupted by a busy reply, restart or logout.
+ -- Imported Read/Salvage/Sell rules alone never act on existing possessions.
+ if option('looting',false) and option('read_unknown_scrolls',false) and (not s.container or s.container==0) then
+  local queued={};for _,job in ipairs(loot_jobs) do queued[job.id]=true end
+  for _,item in ipairs(inventory) do
+   local retry=scroll_reads[item.id]
+   if item.object_class==42 and item.scroll_can_learn and (item.spell or 0)>0 and not learned[item.spell]
+    and not item.equipped and not item.retained and item.resource_available~=false and not queued[item.id]
+    and (not retry or (retry.attempts<3 and s.time>=retry.after)) and #loot_jobs<128 then
+    loot_jobs[#loot_jobs+1]={id=item.id,count=item.count or 1,action='read',wcid=item.wcid}
+    queued[item.id]=true
+   end
+  end
+ end
  if loot_job_pending then
   local job=loot_job_pending;local exists=false;for _,i in ipairs(inventory) do if i.id==job.id then exists=true end end
-  if not exists then table.remove(loot_jobs,job.index);loot_job_pending=nil
+  if job.spell and (s.action_serial or 0)~=job.serial and not s.busy then job.completed_at=job.completed_at or s.time end
+  if not exists or (job.spell and learned[job.spell]) then table.remove(loot_jobs,job.index);loot_job_pending=nil
+  elseif job.spell and (((s.action_serial or 0)~=job.serial and (s.action_error or 0)~=0) or s.time>=job.deadline or (job.completed_at and s.time>=job.completed_at+1)) then
+   -- Scroll Use is safe to retry after completion: the server rejects known
+   -- spells before consuming a second copy. Never infer learning from UseDone.
+   local retry=scroll_reads[job.id];retry.after=s.time+2*retry.attempts
+   loot_jobs[job.index].retry_after=retry.after;loot_job_pending=nil
+   if retry.attempts>=3 then
+    table.remove(loot_jobs,job.index)
+    return failed('Scroll reading was not confirmed after three attempts; keeping the scroll and continuing other activities')
+   end
+   return result(nil,'Scroll reading was not confirmed; retrying after the current action')
   elseif (s.action_serial or 0)~=job.serial and (s.action_error or 0)~=0 then return failed('Loot '..job.action..' was rejected by the server')
   elseif s.time>=job.deadline then return failed('Loot '..job.action..' did not complete; item remains in inventory')
   else return result(nil,'Waiting for loot '..job.action) end
  end
  if not s.container or s.container==0 then
-  for index,job in ipairs(loot_jobs) do if job.action~='sell' or (s.vendor or 0)~=0 then
+  for index,job in ipairs(loot_jobs) do if (job.action~='sell' or (s.vendor or 0)~=0) and s.time>=(job.retry_after or 0) then
    local item;for _,i in ipairs(inventory) do if i.id==job.id and i.wcid==job.wcid then item=i;break end end
    if not item then table.remove(loot_jobs,index);return result(nil,'Queued loot item is no longer present') end
    if item.equipped or (item.count or 1)~=job.count then return failed('Queued loot item was equipped or its stack changed; review loot rules') end
+   local scroll_spell=job.action=='read' and (item.spell or 0)>0 and item.spell or nil
+   if scroll_spell and (learned[scroll_spell] or item.scroll_can_learn==false) then
+    table.remove(loot_jobs,index);return result(nil,'Keeping known or currently unlearnable scroll: '..item.name)
+   end
    local tool
    if job.action=='salvage' then
     if not salvage_candidate(item) or salvage_protected(item) then table.remove(loot_jobs,index);return result(nil,'Keeping protected or unsalvageable item: '..item.name) end
@@ -1982,7 +2029,10 @@ local function tick(s,p)
     for _,i in ipairs(inventory) do if (i.salvage_tool_available==true or (i.salvage_tool_available==nil and i.object_class==40 and i.resource_available~=false)) then tool=i.id;break end end
     if not tool then return failed('Salvage rule requires an Ust') end
    end
-   loot_job_pending={index=index,id=item.id,action=job.action,serial=s.action_serial or 0,deadline=s.time+15}
+   if scroll_spell then
+    local retry=scroll_reads[item.id] or {attempts=0,after=0};retry.attempts=retry.attempts+1;scroll_reads[item.id]=retry
+   end
+   loot_job_pending={index=index,id=item.id,action=job.action,spell=scroll_spell,serial=s.action_serial or 0,deadline=s.time+(scroll_spell and 45 or 15)}
    return {action=job.action,item=item.id,tool=tool,status=job.action..': '..item.name}
   end end
  end
@@ -2158,16 +2208,18 @@ local function tick(s,p)
   -- the configured minimum applies (counted only from ring-enabled rules).
   if streak_spell and (not bolt_enabled or streak_score>best_score) then attack=streak_spell;best_score=streak_score end
   if ring and (ring_count>=option('ring_min_targets',4) or (not bolt_enabled and not streak_enabled and ring_count>0)) then attack=ring;best_score=ring_score end
-  local weapon,score,best_skill=nil,-1,-1
+  local weapon,score,best_skill,best_preference=nil,-1,-1,-1
   local unassessed,unassessed_ammo
-  local ammo_scores,ammo_elements,unknown_ammo={},{},{}
+  local ammo_scores,ammo_elements,ammo_preferences,unknown_ammo={},{},{},{}
   for _,a in ipairs(combat_inventory) do if band(a.slots,0x800000)~=0 then
    local kind=a.ammo_type or 0
    if not a.identified then unknown_ammo[kind]=a end
    if a.identified and a.can_wield and (not damage_override or damage_override==0 or band(a.damage_type,damage_override)~=0) then
     local rank=(a.damage or 0)*resistance(target,a.damage_type or 2)
+    local preference=element_preference(target,a.damage_type or 2)
     if a.equipped then rank=rank*1.01 end
-    if rank>(ammo_scores[kind] or -1) then ammo_scores[kind]=rank;ammo_elements[kind]=a.damage_type or 2 end
+    if preference>(ammo_preferences[kind] or -1) or (preference==(ammo_preferences[kind] or -1) and rank>(ammo_scores[kind] or -1)) then
+     ammo_scores[kind]=rank;ammo_elements[kind]=a.damage_type or 2;ammo_preferences[kind]=preference end
    end
   end end
   for _,v in ipairs(combat_inventory) do
@@ -2180,8 +2232,10 @@ local function tick(s,p)
    end
    if not v.identified and allowed and (melee or missile or caster) then unassessed=v end
    if v.identified and v.can_wield and allowed and (explicit or (target_combat=='auto' and (melee or missile or (caster and attack))) or (target_combat=='melee' and melee) or (target_combat=='missile' and missile) or (target_combat=='magic' and caster)) then
-    local damage=v.damage_type or 0;local resist=damage==0 and 1 or 0
-    for _,e in ipairs(damage_elements) do if band(damage,e)~=0 then resist=math.max(resist,resistance(target,e)) end end
+    local damage=v.damage_type or 0
+    local _,resist,preference=preferred_damage(target,damage)
+    if damage==0 then resist=1;preference=0 end
+    if damage_override and damage_override~=0 then resist=resistance(target,damage_override);preference=0 end
     local value=caster and best_score or ((v.damage or 0)*(1-(v.variance or 0)*.5)*math.max(1,v.damage_mod or 1)*resist/(1+(v.weapon_time or 0)/100))
     if caster and attack and band(damage,element(attack))~=0 then value=value*math.max(1,v.element_mod or 1) end
     local launcher=missile and (v.ammo_type or 0)~=0
@@ -2189,9 +2243,13 @@ local function tick(s,p)
      local ammo_score=ammo_scores[v.ammo_type] or -1
      unassessed_ammo=unknown_ammo[v.ammo_type] or unassessed_ammo
      value=ammo_score<0 and -1 or ammo_score*math.max(1,v.damage_mod or 1)/(1+(v.weapon_time or 0)/100)
+     preference=element_preference(target,ammo_elements[v.ammo_type])
     end
+    if caster then preference=0 end
     if (v.slayer or 0)~=0 and v.slayer==target.creature_type then value=value*math.max(1,v.slayer_mod or 1) end
-    if v.equipped then value=value*1.01 end
+    -- Offhand equipment is not already in the requested main-hand slot.
+    -- Favor only the actual main hand on otherwise equivalent loadouts.
+    if v.equipped and band(v.equipped_slot,0x200000)==0 then value=value*1.01 end
     -- Bows/launchers inherit the ammunition's element. Their own piercing
     -- profile must not reject a requested fire/acid/etc. arrow loadout.
     if not explicit and damage_override and damage_override~=0 and not caster and not launcher and damage~=0 and band(damage,damage_override)==0 then value=-1 end
@@ -2200,7 +2258,7 @@ local function tick(s,p)
     local skill_id=caster and attack and combat_school_skill[attack.school] or v.weapon_skill
     local rank=trained_skill(s,skill_id)
     if target_combat~='auto' then rank=0 end
-    if value>=0 and (rank>best_skill or (rank==best_skill and value>score)) then weapon=v;score=value;best_skill=rank end
+    if value>=0 and (rank>best_skill or (rank==best_skill and (preference>best_preference or (preference==best_preference and value>score)))) then weapon=v;score=value;best_skill=rank;best_preference=preference end
    end
   end
   local mode=weapon and (band(weapon.type,0x8000)~=0 and 'magic' or band(weapon.type,0x100)~=0 and 'missile' or 'melee') or target_combat
@@ -2209,7 +2267,7 @@ local function tick(s,p)
    if mode=='magic' and attack then debuff_element=element(attack)
    elseif mode=='missile' and weapon and (weapon.ammo_type or 0)~=0 then
     debuff_element=ammo_elements[weapon.ammo_type]
-   elseif weapon then local best=-1;for _,e in ipairs(damage_elements) do if band(weapon.damage_type,e)~=0 and resistance(target,e)>best then debuff_element=e;best=resistance(target,e) end end end
+   elseif weapon then debuff_element=preferred_damage(target,weapon.damage_type) end
   end
   local categories=debuff_categories(target_rule,debuff_element)
   local confirmed=effect_index[target.id] or {}
@@ -2293,7 +2351,7 @@ local function tick(s,p)
   if weapon and mode=='melee' and secondary_request~=nil and band(weapon.slots,0x2000000)==0 then
    local requested=secondary_request
    local current,shield,secondary,unknown
-   local rank=-1
+   local rank,best_preference=-1,-1
    for _,v in ipairs(inventory) do
     if v.equipped and band(v.equipped_slot,0x200000)~=0 then current=v end
     local melee=band(v.type,1)~=0 and band(v.slots,0x2000000)==0
@@ -2305,9 +2363,9 @@ local function tick(s,p)
       if requested>3 then secondary=v
       elseif armor and not shield then shield=v
       elseif melee then
-       local resistance_score=0;for _,e in ipairs(damage_elements) do if band(v.damage_type,e)~=0 then resistance_score=math.max(resistance_score,resistance(target,e)) end end
+       local _,resistance_score,preference=preferred_damage(target,v.damage_type)
        local value=(v.damage or 0)*(1-(v.variance or 0)*.5)*resistance_score/(1+(v.weapon_time or 0)/100)
-       if not secondary or (v.auto_wield_left and not secondary.auto_wield_left) or ((v.auto_wield_left==true)==(secondary.auto_wield_left==true) and value>rank) then secondary=v;rank=value end
+       if not secondary or (v.auto_wield_left and not secondary.auto_wield_left) or ((v.auto_wield_left==true)==(secondary.auto_wield_left==true) and (preference>best_preference or (preference==best_preference and value>rank))) then secondary=v;rank=value;best_preference=preference end
       end
      end
     end
@@ -2321,13 +2379,14 @@ local function tick(s,p)
    elseif current then return equip(current,false,true) end
   end
   if mode=='missile' and weapon and (weapon.ammo_type or 0)~=0 then
-   local ammo,rank,unknown_ammo=nil,-1,nil
+   local ammo,rank,unknown_ammo,best_preference=nil,-1,nil,-1
    for _,v in ipairs(inventory) do if band(v.slots,0x800000)~=0 and v.ammo_type==weapon.ammo_type and not v.identified then unknown_ammo=v end end
    for _,v in ipairs(inventory) do if band(v.slots,0x800000)~=0 and v.ammo_type==weapon.ammo_type and v.can_wield then
     local value=(v.damage or 1)*resistance(target,v.damage_type or 2)
+    local preference=element_preference(target,v.damage_type or 2)
     if damage_override and damage_override~=0 and band(v.damage_type,damage_override)==0 then value=-1 end
     if v.equipped then value=value*1.01 end
-    if value>rank then ammo=v;rank=value end
+    if value>=0 and (preference>best_preference or (preference==best_preference and value>rank)) then ammo=v;rank=value;best_preference=preference end
    end end
    if not ammo and unknown_ammo then return assess(unknown_ammo) end
    if not ammo then return failed('No usable ammunition for this weapon') end
@@ -2346,11 +2405,11 @@ local function tick(s,p)
   elseif mode=='melee' or mode=='missile' then
    local power=option('power_percent',nil)
    power=power and power/100 or option('power',.5)
-   if option('auto_attack_power',false) and weapon then
+   if option('auto_attack_power',true) and weapon then
     power=1
     if mode=='melee' then
      local damage=damage_override
-     if not damage or damage==0 then local best=-1;for _,e in ipairs(damage_elements) do if band(weapon.damage_type,e)~=0 and resistance(target,e)>best then damage=e;best=resistance(target,e) end end end
+     if not damage or damage==0 then damage=preferred_damage(target,weapon.damage_type) end
      local secondary='none';for _,v in ipairs(inventory) do if v.equipped and band(v.equipped_slot,0x200000)~=0 then secondary=band(v.type,1)~=0 and 'melee' or 'shield';break end end
      local dual=weapon.damage_type==3;local multi=band(weapon.attack_type,0x40)~=0
      if weapon.weapon_type==1 and secondary~='melee' then power=damage==1 and dual and .5 or 0
@@ -2632,7 +2691,7 @@ return function(s,p)
   route_pending=nil;loot_pending=nil;loot_full=nil;recovery_pending=nil;buff_item_pending=nil
   corpse_pending=nil;purchase_pending=nil;note_pending=nil;mana_refill_pending=nil;mana_fill_pending=nil;pet_refill_pending=nil;helper_pending=nil;debuff_pending=nil;debuff_scan=nil;pea_pending=nil;pet_pending=nil;dispel_pending=nil
   last_cast=nil;unavailable_spells={};forced_buff=nil;buff_skips={};other_job=nil
-  loot_scan={};loot_jobs={};loot_job_pending=nil;combine_pending=nil;inventory_salvage_scan={};inventory_salvage_blocked={}
+  loot_scan={};loot_jobs={};loot_job_pending=nil;scroll_reads={};combine_pending=nil;inventory_salvage_scan={};inventory_salvage_blocked={}
   retries={};until_time={};item_attempts={};corpses={};monster_failures={};monster_blacklist={};ghost_attempts={};ghost_hp={}
   follow_path={};follow_target=nil;follow_teleport=nil
   activity_pauses={}

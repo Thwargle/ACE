@@ -3,6 +3,8 @@
 #include "Misc/ScopeExit.h"
 #include "Misc/ConfigCacheIni.h"
 #include "Misc/Paths.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Misc/FileHelper.h"
 #include "ACEInputBindings.h"
 #include "ACEPlayerController.h"
@@ -47,7 +49,9 @@ bool FACEEntranceTransitionTest::RunTest(const FString&)
  // A nonzero clock lets GetPlayerViewPoint use the camera cache in this fixture.
  World->Tick(LEVELTICK_TimeOnly,.01f);
  auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();auto* Client=GI->GetSubsystem<UACEClientSubsystem>();
- if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+ FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");
+ FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+ if(!Dat->LoadDatDirectory(DatDirectory))return false;
  auto Session=Client->GetSession();
  auto* Host=World->SpawnActor<AActor>();auto* Terrain=NewObject<UACETerrainPresenterComponent>(Host);
  Host->AddInstanceComponent(Terrain);Terrain->Client=Client;Terrain->bHasKnownCell=true;
@@ -93,16 +97,16 @@ bool FACEEntranceTransitionTest::RunTest(const FString&)
 
  // Camera PView can hide outside pixels while the feet still need land support.
  Land->SetOutdoorTerrainCollisionEnabled(true);Land->SetOutdoorTerrainHiddenInGame(true);
- TestTrue(TEXT("Hiding exterior pixels does not remove outdoor support"),Land->TerrainMesh->IsCollisionEnabled());
+ TestTrue(TEXT("Hiding exterior pixels does not remove outdoor support"),Land->TerrainMesh->IsQueryCollisionEnabled());
  Land->SetOutdoorTerrainHiddenInGame(false);
- TestTrue(TEXT("Showing exterior pixels preserves support"),Land->TerrainMesh->IsCollisionEnabled());
+ TestTrue(TEXT("Showing exterior pixels preserves support"),Land->TerrainMesh->IsQueryCollisionEnabled());
  Land->SetOutdoorTerrainCollisionEnabled(false);Land->SetOutdoorTerrainHiddenInGame(false);
- TestFalse(TEXT("Looking outside from indoors does not enable outdoor support"),Land->TerrainMesh->IsCollisionEnabled());
+ TestFalse(TEXT("Looking outside from indoors does not enable outdoor support"),Land->TerrainMesh->IsQueryCollisionEnabled());
  auto* Chunk=World->SpawnActor<AACETerrainChunkActor>();
  Chunk->SetOutdoorTerrainCollisionEnabled(true);Chunk->SetOutdoorTerrainHiddenInGame(true);
- TestTrue(TEXT("Chunk PView cannot disable outdoor collision"),Chunk->TerrainMesh->IsCollisionEnabled());
+ TestTrue(TEXT("Chunk PView cannot disable outdoor collision"),Chunk->TerrainMesh->IsQueryCollisionEnabled());
  Chunk->SetOutdoorTerrainCollisionEnabled(false);Chunk->SetOutdoorTerrainHiddenInGame(false);
- TestFalse(TEXT("Chunk look-out cannot enable indoor terrain collision"),Chunk->TerrainMesh->IsCollisionEnabled());
+ TestFalse(TEXT("Chunk look-out cannot enable indoor terrain collision"),Chunk->TerrainMesh->IsQueryCollisionEnabled());
  Chunk->Destroy();
 
  // Filters must update without destroying unrelated scenery's physics bodies.

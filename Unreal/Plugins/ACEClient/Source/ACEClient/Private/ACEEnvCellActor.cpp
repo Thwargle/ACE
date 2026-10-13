@@ -53,7 +53,11 @@ AACEEnvCellActor::AACEEnvCellActor()
 	CellCollisionMesh->SetupAttachment(Root);
 	CellCollisionMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	CellCollisionMesh->SetCollisionObjectType(ECC_WorldStatic);
-	CellCollisionMesh->SetCollisionResponseToAllChannels(ECR_Block);
+	CellCollisionMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
+	CellCollisionMesh->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+	CellCollisionMesh->SetCollisionResponseToChannel(ECC_Camera, ECR_Block);
+	CellCollisionMesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+	CellCollisionMesh->CanCharacterStepUpOn = ECB_Yes;
 	CellCollisionMesh->SetVisibility(false);
 	CellCollisionMesh->SetHiddenInGame(true);
 	CellCollisionMesh->SetCastShadow(false);
@@ -98,7 +102,7 @@ bool AACEEnvCellActor::EnsureCollisionCooked(bool bWalkableDrawMesh, bool bAllow
 		Dat->RequestEnvCellMesh(static_cast<uint32>(EnvCellId), WorldScale);
 		return false;
 	}
-	const FACEBuiltEnvCellMesh Mesh = *MeshPtr;
+	const FACEBuiltEnvCellMesh& Mesh = *MeshPtr;
 
 	int32 CollSection = 0;
 	if (CellCollisionMesh)
@@ -136,6 +140,10 @@ bool AACEEnvCellActor::EnsureCollisionCooked(bool bWalkableDrawMesh, bool bAllow
 		// recooking the growing triangle mesh for each draw-surface group on entry.
 		if (!Combined.IsEmpty())
 		{
+			// CEnvCell keeps resident geometry when the player changes cells. Actor
+			// collision filters gate participation; the cooked body survives visits.
+			CellCollisionMesh->bAlwaysCreatePhysicsState = true;
+			CellCollisionMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 			CellCollisionMesh->CreateMeshSection_LinearColor(CollSection++,
 				Combined.Vertices, Combined.Triangles, {}, {}, {}, {}, true);
 		}
@@ -175,82 +183,19 @@ void AACEEnvCellActor::SetEnvCellCollisionActive(bool bActive, bool bWalkableDra
 	bAppliedCollisionActive = bActive;
 	bAppliedWalkableDrawMesh = bWalkableDrawMesh;
 	SetActorEnableCollision(bActive);
-	// Indoor occupancy walks PhysicsBSP. Stab furniture collides when the cell is active
-	// (retail CEnvCell::FindObjCollisions). Draw mesh stays non-blocking.
-	if (CellMesh)
-	{
-		CellMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		CellMesh->CanCharacterStepUpOn = ECB_No;
-	}
-	if (CellCollisionMesh)
-	{
-		CellCollisionMesh->SetCollisionEnabled(
-			bActive ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
-		if (bActive)
-		{
-			CellCollisionMesh->SetCollisionObjectType(ECC_WorldStatic);
-			CellCollisionMesh->SetCollisionResponseToAllChannels(ECR_Ignore);
-			CellCollisionMesh->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
-			CellCollisionMesh->SetCollisionResponseToChannel(ECC_Camera, ECR_Block);
-			CellCollisionMesh->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
-			CellCollisionMesh->CanCharacterStepUpOn = ECB_Yes;
-		}
-	}
+	// SetActorEnableCollision updates the filters for every resident body, including
+	// ISM instances. Switching component modes here destroys/recreates those bodies;
+	// ConfigurePartCollision(false) also discards and recooks scripted stab sections.
+	// Draw geometry and empty PhysicsBSP decorations remain non-colliding.
 	ApplyStabPawnCollision(bActive);
 }
 
 void AACEEnvCellActor::ApplyStabPawnCollision(bool bEnable)
 {
-	const ECollisionEnabled::Type Mode = bEnable
-		? ECollisionEnabled::QueryAndPhysics
-		: ECollisionEnabled::NoCollision;
+	// Attached actors do not inherit their owner's collision-enabled flag.
 	for (AACERegionSceneryActor* Scenery : AnimatedStabs)
 	{
-		if (!Scenery)
-		{
-			continue;
-		}
-		Scenery->SetActorEnableCollision(bEnable);
-		if (UACECharacterAppearanceComponent* App = Scenery->Appearance)
-		{
-			App->ConfigurePartCollision(bEnable, false);
-		}
-	}
-	for (const auto& Pair : StaticObjectHisms)
-	{
-		if (!Pair.Value)
-		{
-			continue;
-		}
-		// Empty PhysicsBSP is deliberately non-colliding. Enabling ISM physics with
-		// no BodySetup leaves its body array empty while marking the state created;
-		// a later AddInstance then inserts beyond that array (Yaraq 7D630112 crash).
-		const bool bHasCollision = Pair.Value->GetBodySetup() != nullptr;
-		Pair.Value->SetCollisionEnabled(bHasCollision ? Mode : ECollisionEnabled::NoCollision);
-		if (bEnable && bHasCollision)
-		{
-			Pair.Value->SetCollisionObjectType(ECC_WorldStatic);
-			Pair.Value->SetCollisionResponseToAllChannels(ECR_Ignore);
-			Pair.Value->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
-			Pair.Value->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
-			Pair.Value->CanCharacterStepUpOn = ECB_No;
-		}
-	}
-	for (UProceduralMeshComponent* Proc : StaticObjectMeshes)
-	{
-		if (!Proc)
-		{
-			continue;
-		}
-		Proc->SetCollisionEnabled(Mode);
-		if (bEnable)
-		{
-			Proc->SetCollisionObjectType(ECC_WorldStatic);
-			Proc->SetCollisionResponseToAllChannels(ECR_Ignore);
-			Proc->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
-			Proc->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
-			Proc->CanCharacterStepUpOn = ECB_No;
-		}
+		if (Scenery) Scenery->SetActorEnableCollision(bEnable);
 	}
 }
 
@@ -644,12 +589,15 @@ UInstancedStaticMeshComponent* AACEEnvCellActor::GetOrCreateStaticHism(
 	Hism->InstanceEndCullDistance = 0.f;
 	Hism->bUseAsOccluder = false;
 	Hism->bUseDefaultCollision = false;
-	Hism->SetCollisionEnabled(bAppliedCollisionActive && StaticMesh->GetBodySetup()
+	// Empty PhysicsBSP must never create an ISM physics state (no instance-body
+	// array would exist for subsequent AddInstance calls).
+	Hism->bAlwaysCreatePhysicsState = StaticMesh->GetBodySetup() != nullptr;
+	Hism->SetCollisionEnabled(StaticMesh->GetBodySetup()
 		? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
 	Hism->SetCollisionObjectType(ECC_WorldStatic);
 	Hism->SetCollisionResponseToAllChannels(ECR_Ignore);
 	Hism->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
-	Hism->SetCollisionResponseToChannel(ECC_Camera, ECR_Block);
+	Hism->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
 	Hism->SetCollisionResponseToChannel(ECC_Visibility, ECR_Ignore);
 	Hism->CanCharacterStepUpOn = ECB_No;
 	Hism->SetCastShadow(false);
@@ -727,11 +675,8 @@ bool AACEEnvCellActor::TrySpawnOneStaticObject(UACEDatSubsystem* Dat, const FACE
 			Scenery->ScriptComponent->SetComponentTickEnabled(false);
 			Scenery->ScriptComponent->StopAllSounds();
 		}
+		if (Scenery->Appearance) Scenery->Appearance->ConfigurePartCollision(true, false);
 		Scenery->SetActorEnableCollision(bAppliedCollisionActive);
-		if (bAppliedCollisionActive && Scenery->Appearance)
-		{
-			Scenery->Appearance->ConfigurePartCollision(true, false);
-		}
 		TArray<UProceduralMeshComponent*> Parts;
 		Scenery->GetComponents(Parts);
 		for (auto* Part : Parts) for (int32 I = 0; I < Part->GetNumMaterials(); ++I)
@@ -757,6 +702,7 @@ bool AACEEnvCellActor::TrySpawnOneStaticObject(UACEDatSubsystem* Dat, const FACE
 		return true;
 	}
 	Proc->SetupAttachment(GetRootComponent());
+	Proc->bAlwaysCreatePhysicsState = true;
 	Proc->RegisterComponent();
 	Proc->bUseAsyncCooking = !bAppliedCollisionActive;
 	Proc->SetCastShadow(false);
@@ -778,17 +724,12 @@ bool AACEEnvCellActor::TrySpawnOneStaticObject(UACEDatSubsystem* Dat, const FACE
 		Proc->SetMaterial(I, Dat->GetUniformInteriorMaterial(Proc->GetMaterial(I)));
 	Proc->bUseComplexAsSimpleCollision = true;
 	Proc->CanCharacterStepUpOn = ECB_No;
-	Proc->SetCollisionEnabled(bAppliedCollisionActive
-		? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
+	Proc->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	Proc->SetCollisionObjectType(ECC_WorldStatic);
 	Proc->SetCollisionResponseToAllChannels(ECR_Ignore);
 	Proc->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
-	Proc->SetCollisionResponseToChannel(ECC_Camera, ECR_Block);
+	Proc->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
 	Proc->SetCollisionResponseToChannel(ECC_Visibility, ECR_Ignore);
-	if (bAppliedCollisionActive)
-	{
-		Proc->RecreatePhysicsState();
-	}
 	Proc->SetRelativeTransform(RelXform);
 	Proc->LDMaxDrawDistance = 0.f;
 	Proc->SetCachedMaxDrawDistance(0.f);

@@ -201,6 +201,7 @@ public:
     uint64 WaypointLocationsRevision=0;
     void RecordRouteAction(const FString& Type, float Charge = .5f);
     void RefreshAutomationData();
+    bool InventoryInteractionPending() const;
     const TMap<int32, FACEAppraisalInfo>& GetPluginAppraisals() const { return Appraisals; }
     uint64 DataRevision = 0;
     UFUNCTION() void ObserveAppraisal(const FACEAppraisalInfo& Info);
@@ -414,6 +415,10 @@ private:
     TSet<int32> PendingResourceRefresh;
     double PendingSpellAt = 0;
     TArray<TSharedPtr<FJsonValue>> ItemBuffs;
+    void SaveItemBuffTimers();
+    void LoadItemBuffTimers();
+    void ValidateItemBuffTimers();
+    int32 ItemBuffDeaths = 0;
     TArray<TSharedPtr<FJsonValue>> Debuffs, PendingDebuffCasts;
     uint32 DebuffRevision=0;
     int32 LastDebuffTarget=0,LastDebuffSpell=0;

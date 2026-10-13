@@ -501,6 +501,8 @@ public:
 
 	/** True while a Use / UseWithTarget is outstanding (cleared by UseDone 0x01C7). */
 	bool IsUseBusy() const { return bUseBusy || PendingEquipmentGuid != 0; }
+	bool IsEquipmentSwapPending() const { return PendingEquipmentGuid != 0; }
+	bool IsInventoryTransferPending() const { return !PendingInventoryTransfers.IsEmpty(); }
 	bool IsPendingWorldUse(int32 Guid) const { return bUseBusy && UseSourceGuid == Guid && UseTargetGuid == 0 && PendingEquipmentGuid == 0; }
 	/** Cancel only an outstanding direct world interaction when its approach stops. */
 	void CancelWorldUseApproach();
@@ -822,6 +824,7 @@ private:
 	void CancelEquipmentSwap();
     int32 FindEquipmentStowContainer(const TMap<int32, int32>& Reserved) const;
 	int32 PendingEquipmentGuid = 0;
+	TMap<int32,double> PendingInventoryTransfers;
 	uint32 PendingEquipmentCombatMode = 0;
 	bool bPendingEquipmentWieldSent = false;
 	int64 PendingEquipmentLocation = 0;

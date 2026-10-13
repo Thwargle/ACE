@@ -4,6 +4,8 @@
 #include "ACECharacterAppearanceComponent.h"
 #include "ACEWorldEntityActor.h"
 #include "ACESkyDomeActor.h"
+#include "ACELandblockActor.h"
+#include "ACETerrainChunkActor.h"
 #include "ProceduralMeshComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/DirectionalLightComponent.h"
@@ -83,6 +85,21 @@ bool FACECachedWorldDrawTest::RunTest(const FString&)
             ++Stage;
         };
         Compare(TEXT("Initial"), true);
+        auto* ResidentProxy = Mesh->SceneProxy;
+        auto CheckResident = [&]()
+        {
+            if(UseCache)
+            {
+                TestFalse(TEXT("Visibility does not schedule a geometry rebuild"),Mesh->IsRenderStateDirty());
+                TestTrue(TEXT("Visibility retains uploaded terrain/room geometry"),Mesh->SceneProxy==ResidentProxy);
+            }
+        };
+        Owner->SetActorHiddenInGame(true);CheckResident();Compare(TEXT("Hidden room actor"), false);CheckResident();
+        Owner->SetActorHiddenInGame(false);CheckResident();Compare(TEXT("Restored room actor"), true);CheckResident();
+        Mesh->SetHiddenInGame(true);CheckResident();Compare(TEXT("Hidden terrain"), false);CheckResident();
+        Mesh->SetVisibility(false);CheckResident();Compare(TEXT("Hidden terrain visibility"), false);CheckResident();
+        Mesh->SetHiddenInGame(false);CheckResident();Compare(TEXT("Terrain still invisible"), false);CheckResident();
+        Mesh->SetVisibility(true);CheckResident();Compare(TEXT("Restored terrain"), true);CheckResident();
         Mesh->SetWorldLocation(FVector(0,12,7)); Compare(TEXT("Moved"), true);
         Material->SetScalarParameterValue(TEXT("EmissiveStrength"), .22f); Compare(TEXT("Material parameter"), true);
         Mesh->SetMeshSectionVisible(0, false); Compare(TEXT("Hidden section"), false);
@@ -90,6 +107,34 @@ bool FACECachedWorldDrawTest::RunTest(const FString&)
         TArray<FVector> Smaller = Vertices; for (auto& V : Smaller) { V.Y*=.5f; V.Z*=.5f; }
         Mesh->UpdateMeshSection(0, Smaller, {}, {}, {}, {}); Compare(TEXT("Vertex edit"), true);
         Mesh->ClearMeshSection(0); Compare(TEXT("Cleared"), false);
+    }
+    // Hiding only terrain must preserve the uploaded building/furniture meshes
+    // attached to that root, and leave their independently controlled draw visible.
+    for(bool Chunk:{false,true})
+    {
+        auto* Land=Chunk?nullptr:World->SpawnActor<AACELandblockActor>();
+        auto* TerrainChunk=Chunk?World->SpawnActor<AACETerrainChunkActor>():nullptr;
+        auto* TerrainMesh=Chunk?TerrainChunk->TerrainMesh.Get():Land->TerrainMesh.Get();
+        auto* Scenery=NewObject<UProceduralMeshComponent>(TerrainMesh->GetOwner());
+        Scenery->SetupAttachment(TerrainMesh);Scenery->bPreferCachedDraws=true;
+        Scenery->SetCollisionEnabled(ECollisionEnabled::NoCollision);Scenery->SetCastShadow(false);
+        Scenery->RegisterComponent();Scenery->SetMaterial(0,Material);
+        Scenery->CreateMeshSection(0,Vertices,{0,2,1,0,3,2,0,1,2,0,2,3},{},{},{},{},false);
+        Capture->ShowOnlyComponents.Reset();Capture->ShowOnlyComponents.Add(Scenery);
+        const auto Before=Render();auto* SceneryProxy=Scenery->SceneProxy;
+        TestNotNull(TEXT("Attached scenery has uploaded geometry"),SceneryProxy);
+        int32 VisiblePixels=0;for(const auto& Pixel:Before)VisiblePixels+=FMath::Max3(Pixel.R,Pixel.G,Pixel.B)>20;
+        TestTrue(TEXT("Attached scenery is actually visible before terrain changes"),VisiblePixels>100);
+        for(bool Hidden:{true,false})
+        {
+            if(Chunk)TerrainChunk->SetOutdoorTerrainHiddenInGame(Hidden);else Land->SetOutdoorTerrainHiddenInGame(Hidden);
+            TestFalse(TEXT("Terrain visibility does not rebuild attached scenery"),Scenery->IsRenderStateDirty());
+            const auto After=Render();
+            TestTrue(TEXT("Terrain retains its attached scenery buffers"),Scenery->SceneProxy==SceneryProxy);
+            TestTrue(TEXT("Hiding terrain leaves the independently visible building unchanged"),After==Before);
+        }
+        Capture->ShowOnlyComponents.Reset();
+        if(Chunk)TerrainChunk->Destroy();else Land->Destroy();
     }
     return true;
 }

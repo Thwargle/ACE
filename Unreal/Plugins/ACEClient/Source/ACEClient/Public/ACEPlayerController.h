@@ -166,6 +166,7 @@ public:
 	/** Release only the movement-only approach to a defeated combat target. */
 	void EndCombatApproachTo(int32 TargetGuid);
 	bool IsUseApproachActive() const { return bServerMoveToActive; }
+	bool IsInventoryInteractionActive() const;
 	/** GameEvent UseDone — release local approach so idle StopMovement cannot cancel the chain. */
 	void HandleUseDone(uint32 Error);
 	void HandleMoveToFailed(uint32 Error);
@@ -286,6 +287,8 @@ protected:
 	float ForwardAxis = 0.f;
 	TMap<FKey,uint64> MovementKeyPressOrder;
 	uint64 MovementSuppressionSequence = 0;
+	// Held input predating server Reading must not reclaim control every frame.
+	uint64 ReadingMovementSequence = 0;
 	uint64 MovementKeySequence = 0;
 	float RightAxis = 0.f;
 	float TurnAxis = 0.f;

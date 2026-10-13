@@ -72,7 +72,7 @@ namespace
                 .OnClicked_Lambda([Close=Args._Close](){Close();return FReply::Handled();})[Caption(TEXT("X"))]];
             ChildSlot[SNew(SBorder).BorderImage(&FrameBrush()).Padding(IsBar?0:3)
                 [SNew(SVerticalBox)
-                +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(IsBar?18:24)
+                +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(IsBar?18:ACELedger::HeaderHeight)
                     .Tag(Args._CompactWhenLocked?FName(TEXT("LedgerHeader")):FName(NAME_None))
                     .Visibility_Lambda([Lock=Locked,Ledger=Args._CompactWhenLocked]{return Ledger&&Lock.Get(false)?EVisibility::Collapsed:EVisibility::Visible;})
                     [SNew(SBorder).Tag(IsBar?TEXT("PluginBarHandle"):TEXT("PluginWindowHandle")).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
@@ -86,6 +86,7 @@ namespace
                         Dragging=true;return FReply::Handled().CaptureMouse(SharedThis(this));
                     })[Title]]]
                 +SVerticalBox::Slot().FillHeight(1)[SNew(SBox).Padding(0,IsBar?0:3)
+                    .Tag(Args._CompactWhenLocked?FName(TEXT("LedgerContent")):FName(NAME_None))
                     .Visibility_Lambda([Mini=Args._Minimized](){return Mini.Get(false)?EVisibility::Collapsed:EVisibility::Visible;})[Args._Content.Widget]]
                 +SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)[SNew(SBorder).Padding(FMargin(12,2)).Visibility_Lambda([this]{return Resize&&(!CanManipulate||CanManipulate())?EVisibility::Visible:EVisibility::Collapsed;})
                     .ToolTipText(FText::FromString(TEXT("Drag to resize"))).Cursor(EMouseCursor::ResizeSouthEast)
@@ -159,7 +160,7 @@ FVector2D SACEPluginDesktop::DisplaySize(const FWindow& W) const
             if(W.LedgerId==TEXT("supplyledger"))
             {
                 Size.X=W.Size.X;
-                if(W.Size.Y>0)Size.Y=W.Size.Y+(Host->IsPluginBarUnlocked()?68:0);
+                if(W.Size.Y>0)Size.Y=W.Size.Y+(Host->IsPluginBarUnlocked()?ACELedger::SupplyEditorHeight:0);
             }
             return Size;
         }
@@ -171,13 +172,21 @@ FVector2D SACEPluginDesktop::DisplaySize(const FWindow& W) const
 void SACEPluginDesktop::Layout(FWindow& W)
 {
     const FVector2D Display=DisplaySize(W);
+    const bool LockedLedger=!W.LedgerId.IsEmpty()&&Host.IsValid()&&!Host->IsPluginBarUnlocked();
+    const double HeaderOffset=LockedLedger?ACELedger::HeaderHeight:0.;
+    // Saved placement describes the expanded window. Remove the header above
+    // the content, and clamp against that same footprint in both lock states.
+    // Otherwise both collapsing the header and bottom-edge clamping move rows.
+    FVector2D Expanded=Display;
+    if(LockedLedger)Expanded.Y+=W.LedgerId==TEXT("supplyledger")
+        ?ACELedger::SupplyEditorHeight+((W.Size.Y<=0&&!Host->SupplyNotice.IsEmpty())?28:0):ACELedger::HuntEditorHeight;
     if(ViewSize.X<=0||ViewSize.Y<=0)
-    {W.Slot->SetOffset(FMargin(W.Position.X,W.Position.Y,Display.X,Display.Y));return;}
-    const FVector2D Size(FMath::Min(Display.X,ViewSize.X),FMath::Min(Display.Y,ViewSize.Y));
+    {W.Slot->SetOffset(FMargin(W.Position.X,W.Position.Y+HeaderOffset,Display.X,Display.Y));return;}
+    const FVector2D Size(FMath::Min(Display.X,ViewSize.X),FMath::Min(Display.Y,FMath::Max(0.,ViewSize.Y-HeaderOffset)));
     // Fit the rendered window without overwriting the user's saved placement
     // during login, minimization or a temporary viewport size change.
     const FVector2D At(FMath::Clamp(W.Position.X,0.,FMath::Max(0.,ViewSize.X-Size.X)),
-        FMath::Clamp(W.Position.Y,0.,FMath::Max(0.,ViewSize.Y-Size.Y)));
+        FMath::Clamp(W.Position.Y,0.,FMath::Max(0.,ViewSize.Y-Expanded.Y))+HeaderOffset);
     W.Slot->SetOffset(FMargin(At.X,At.Y,Size.X,Size.Y));
 }
 void SACEPluginDesktop::Tick(const FGeometry& G,double Time,float Delta)
@@ -226,7 +235,7 @@ void SACEPluginDesktop::Resize(const FString& Id,FVector2D Delta,bool Save)
      if(Id==TEXT("supplyledger"))
      {
          // Persist the list area; pinning only hides the editor chrome.
-         const double Chrome=Host->IsPluginBarUnlocked()?68.:0.;
+         const double Chrome=Host->IsPluginBarUnlocked()?ACELedger::SupplyEditorHeight:0.;
          const FVector2D Size=DisplaySize(*W)+Delta;
          W->Size=FVector2D(FMath::Clamp(Size.X,140.,FMath::Max(140.,ViewSize.X)),
              FMath::Clamp(Size.Y-Chrome,40.,FMath::Max(40.,ViewSize.Y-Chrome)));
