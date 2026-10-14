@@ -17,6 +17,8 @@
 #include "RenderingThread.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECharacterManagementTest,"ACE.RetailParity.CharacterManagement",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -50,7 +52,9 @@ bool FACECharacterManagementTest::RunTest(const FString&)
     TestFalse(TEXT("In-world deletion rejected"),Session.BuildCharacterMutation(First.CharacterId,false,Bytes));
 
     auto* GI=NewObject<UGameInstance>(); auto* Dat=NewObject<UACEDatSubsystem>(GI);
-    if (!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))) return false;
+    FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");
+    FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+    if (!Dat->LoadDatDirectory(DatDirectory)) return false;
     auto* Resources=NewObject<UACEUIResourceResolver>(); Resources->Initialize(Dat);
     auto* Manager=NewObject<UACEUIElementManager>(); Manager->Initialize();
     auto* Layout=NewObject<UACEUILayoutResolver>(); Layout->Initialize(Dat,Manager);
@@ -97,6 +101,63 @@ bool FACECharacterManagementTest::RunTest(const FString&)
     TestTrue(TEXT("Credits advances without changing session"),Binder->CreditsText && Binder->CreditsText->Y<600);
     Binder->TryHandleOverlayClick(FVector2D(400,300)); TestFalse(TEXT("Click exits credits"),Binder->bCredits);
     TestEqual(TEXT("Credits preserves selected character"),Binder->SelectedCharacterId,Second.CharacterId);
+    Binder->Shutdown(); Canvas->SetCharSelectBinder(nullptr);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECharacterScreenRenderingTest,"ACE.RetailParity.CharacterScreenRendering",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACECharacterScreenRenderingTest::RunTest(const FString&)
+{
+    if (!FApp::CanEverRender()) { AddError(TEXT("Character screen regression requires rendering.")); return false; }
+    auto* GI=NewObject<UGameInstance>(); auto* Dat=NewObject<UACEDatSubsystem>(GI);
+    FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");
+    FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+    if (!TestTrue(TEXT("Retail DAT opens"),Dat->LoadDatDirectory(DatDirectory))) return false;
+    auto* Resources=NewObject<UACEUIResourceResolver>(); Resources->Initialize(Dat);
+    auto* Manager=NewObject<UACEUIElementManager>(); Manager->Initialize();
+    auto* Layout=NewObject<UACEUILayoutResolver>(); Layout->Initialize(Dat,Manager);
+    if (!TestTrue(TEXT("Retail character layout loads"),Layout->LoadLayout(0x21000004))) return false;
+    auto* Canvas=NewObject<UACEUICanvasWidget>(); Canvas->Initialize();
+    Canvas->InitializeCanvas(Manager); Canvas->SetResourceResolver(Resources); auto Slate=Canvas->TakeWidget();
+    FACECharacterInfo Character; Character.CharacterId=0x50000011; Character.Name=TEXT("Adventurer");
+    auto* Binder=NewObject<UACEUICharSelectBinder>();
+    Binder->Initialize(nullptr,Manager,Canvas,nullptr,{Character},TEXT("Rendering test")); Canvas->SetCharSelectBinder(Binder);
+    FWidgetRenderer Renderer(true,true);
+    TArray<FColor> Reference;
+    // The reference is native retail size. Larger screens must translate the
+    // same artwork without clipping it to the ownership-only synthetic root.
+    for (const FIntPoint Size : {FIntPoint(800,600),FIntPoint(1280,720),FIntPoint(1920,1080),
+        FIntPoint(2400,1200),FIntPoint(2560,1440),FIntPoint(3440,1440),FIntPoint(3840,2160),
+        FIntPoint(800,1800),FIntPoint(1100,900),FIntPoint(800,600)})
+    {
+        auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(Size),TF_Bilinear,true);
+        for (int Pass=0;Pass<4;++Pass)
+        {
+            Renderer.DrawWidget(Target,Slate,FVector2D(Size),0.f); FlushRenderingCommands();
+            Canvas->NativeTick(Canvas->GetCachedGeometry(),0.f);
+        }
+        TArray<FColor> Pixels; Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
+        if (!TestEqual(TEXT("Capture has the requested dimensions"),Pixels.Num(),Size.X*Size.Y)) continue;
+        const FIntPoint Offset((Size.X-800)/2,(Size.Y-600)/2);
+        TArray<FColor> Panel; Panel.Reserve(800*600);
+        for (int Y=0;Y<600;++Y) for (int X=0;X<800;++X) Panel.Add(Pixels[(Y+Offset.Y)*Size.X+X+Offset.X]);
+        if (Reference.IsEmpty())
+        {
+            Reference=Panel;
+            int32 ArtworkPixels=0;
+            for (const FColor& Color : Reference) if (Color.R+int32(Color.G)+Color.B>90) ++ArtworkPixels;
+            TestTrue(TEXT("Reference contains the retail panel artwork"),ArtworkPixels>300000);
+        }
+        int32 Changed=0;
+        for (int I=0;I<Panel.Num();++I)
+            if (FMath::Max3(FMath::Abs(int32(Panel[I].R)-Reference[I].R),FMath::Abs(int32(Panel[I].G)-Reference[I].G),
+                FMath::Abs(int32(Panel[I].B)-Reference[I].B))>4) ++Changed;
+        TestTrue(*FString::Printf(TEXT("%dx%d preserves centered retail artwork (%d changed pixels)"),Size.X,Size.Y,Changed),Changed<1000);
+        TArray64<uint8> PNG; FImageUtils::PNGCompressImageArray(Size.X,Size.Y,Pixels,PNG);
+        FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/FString::Printf(
+            TEXT("Automation/RetailParity/CharacterSelect%dx%d.png"),Size.X,Size.Y)));
+    }
     Binder->Shutdown(); Canvas->SetCharSelectBinder(nullptr);
     return true;
 }

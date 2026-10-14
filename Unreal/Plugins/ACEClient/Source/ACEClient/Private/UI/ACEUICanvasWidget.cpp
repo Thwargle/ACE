@@ -475,7 +475,11 @@ void UACEUICanvasWidget::SyncElementRecursive(
 	// LayoutDesc merges sometimes place children outside their parent. Test the
 	// reflowed position: right-anchored controls retain their authored X/Y when
 	// a window narrows, but their edge offsets move them back inside the parent.
-	if (TSharedPtr<FACEUIElement> Parent = Element->Parent.Pin())
+	// The synthetic root only owns the screen roots; its authored 800x600 box
+	// is not a clipping region. Centered character screens can lie entirely
+	// outside that box on large displays and are clipped to the viewport above.
+	if (TSharedPtr<FACEUIElement> Parent = Element->Parent.Pin();
+		Parent.IsValid() && Parent != Manager->GetSyntheticRoot())
 	{
 		if (Element->Width > 0 && Element->Height > 0
 			&& (Element->GetDrawX() >= Parent->Width || Element->GetDrawY() >= Parent->Height
