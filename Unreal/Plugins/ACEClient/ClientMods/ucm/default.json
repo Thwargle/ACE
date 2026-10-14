@@ -3,7 +3,7 @@
   "fast_cast_buffs": true,
   "buffs": [],
   "skill_margin": 30,
-  "refresh_seconds": 60,
+  "refresh_seconds": 300,
   "combat": "off",
   "idle_peace": false,
   "attack_spell": 0,

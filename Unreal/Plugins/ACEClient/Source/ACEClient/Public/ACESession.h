@@ -118,6 +118,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACERetailNetworkTest;
 	friend class FACECustomObjectReplicationTest;
 	friend class FACECustomWorldPresentationTest;
+	friend class FACEHouseHookAnimationTest;
 	friend class FACELoginHandshakeTest;
 	friend class FACEGDLEInteractionTransportTest;
 	friend class FACERetailNetworkWeatherTest;
@@ -541,6 +542,8 @@ public:
 	uint64 GetHouseProfileRevision() const { return HouseOfferRevision; }
 	const TArray<int32>& GetHousePaymentItems(bool bRent) const { return bRent ? HouseRentItems : HouseBuyItems; }
 	bool StageHousePayment(int32 Guid, bool bRent);
+	bool CanStageHousePayment(int32 Guid, bool bRent) const;
+	void PruneHousePaymentItems();
 	void RemoveHousePayment(int32 Guid, bool bRent);
 	int64 GetHousePaymentAmount(int32 Wcid, bool bRent) const;
 	bool CanPayHouse(bool bRent) const;
@@ -797,6 +800,7 @@ private:
 	void HandleHouseData(FACEBinaryReader& Reader);
 	void HandleHouseProfile(FACEBinaryReader& Reader);
 	bool IsHousePaymentOwned(int32 Guid) const;
+	TArray<int32> CollectHousePaymentItems(int32 Guid, bool bRent) const;
 	void HandleHouseStatus(FACEBinaryReader& Reader);
 	void HandleBookDataResponse(FACEBinaryReader& Reader);
 	void HandleBookPageDataResponse(FACEBinaryReader& Reader);

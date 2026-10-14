@@ -305,13 +305,13 @@ bool FACEUCMPolicyTest::RunTest(const FString&)
         P->SetBoolField(TEXT("buffing"),true);P->SetBoolField(TEXT("navigation"),true);P->SetBoolField(TEXT("looting"),true);P->SetStringField(TEXT("combat"),TEXT("magic"));
         Array(P,TEXT("route"),TEXT(R"({"values":[{"cell":2103705613,"x":25,"y":110,"z":12}]})"));
         Array(P,TEXT("loot_rules"),TEXT(R"({"values":[{"action":"salvage","min_workmanship":7}]})"));
-        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":11,"category":1,"power":100,"skill":300,"school":4,"duration":300,"self_buff":true},{"id":12,"category":102,"power":100,"skill":300,"school":2,"duration":300,"self_buff":true},{"id":13,"category":154,"power":100,"skill":300,"school":3,"duration":300,"beneficial":true,"target_type":1},{"id":201,"category":117,"power":100,"skill":300,"school":4},{"id":202,"category":121,"power":200,"skill":300,"school":4}]})"));
+        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":11,"category":1,"power":100,"skill":300,"school":4,"duration":300,"self_buff":true},{"id":12,"category":115,"power":100,"skill":300,"school":2,"duration":300,"self_buff":true},{"id":13,"category":154,"power":100,"skill":300,"school":3,"duration":300,"beneficial":true,"target_type":1},{"id":201,"category":117,"power":100,"skill":300,"school":4},{"id":202,"category":121,"power":200,"skill":300,"school":4}]})"));
         Array(S,TEXT("targets"),TEXT(R"({"values":[{"id":500,"name":"Monster","distance":20,"identified":true,"line_of_sight":false,"resists":{"8":0.1,"32":1.5}}]})"));
         TArray<TSharedPtr<FJsonValue>> Confirmed;int Serial=0;
         for(int Spell:{11,12,13})
         {
             auto I=Check(VM,S,P);TestEqual(TEXT("Integrated run casts creature/life/item buffs before hunting"),I->GetNumberField(TEXT("spell")),double(Spell));
-            auto Buff=ParseUCM(TEXT(R"({"target":1,"power":100,"expires":1000})"));Buff->SetNumberField(TEXT("category"),Spell==11?1:Spell==12?102:154);Confirmed.Add(MakeShared<FJsonValueObject>(Buff));S->SetArrayField(TEXT("item_buffs"),Confirmed);
+            auto Buff=ParseUCM(TEXT(R"({"target":1,"power":100,"expires":1000})"));Buff->SetNumberField(TEXT("category"),Spell==11?1:Spell==12?115:154);Confirmed.Add(MakeShared<FJsonValueObject>(Buff));S->SetArrayField(TEXT("item_buffs"),Confirmed);
             S->SetNumberField(TEXT("action_serial"),++Serial);S->SetNumberField(TEXT("last_spell"),Spell);S->SetNumberField(TEXT("time"),100+Serial*4);
         }
         TestEqual(TEXT("Integrated run follows route past an occluded monster"),Check(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("move")));
@@ -336,7 +336,9 @@ bool FACEUCMPolicyTest::RunTest(const FString&)
         FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("buffing"),true);
         Array(S,TEXT("usable_skills"),TEXT(R"({"values":[24]})"));
         Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":77,"category":77,"power":100,"skill":300,"school":4,"duration":300,"self_buff":true}]})"));
-        TestEqual(TEXT("Innate usable Run skill receives its buff without being trained"),Check(VM,S,P)->GetNumberField(TEXT("spell")),77.);
+        TestFalse(TEXT("Innate usable Run skill is not automatically buffed without training"),Check(VM,S,P)->HasField(TEXT("spell")));
+        Array(P,TEXT("buffs"),TEXT(R"({"values":[77]})"));
+        TestEqual(TEXT("An explicit Run buff overrides the automatic training filter"),Check(VM,S,P)->GetNumberField(TEXT("spell")),77.);
     }
     {
         FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
@@ -372,9 +374,9 @@ bool FACEUCMPolicyTest::RunTest(const FString&)
     }
     {
         FACEPluginVM VM;Start(VM);auto S=Snapshot(),P=Profile();
-        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":11,"name":"Strength Self","category":1,"power":100,"skill":300,"school":4,"duration":300,"self_buff":true},{"id":12,"name":"Armor Self","category":102,"power":100,"skill":300,"school":2,"duration":300,"self_buff":true},{"id":13,"name":"Blood Drinker","category":154,"power":100,"skill":300,"school":3,"duration":300,"beneficial":true,"target_type":1},{"id":14,"category":3,"power":100,"skill":300,"school":4,"duration":300,"self_buff":true}]})"));
+        Array(S,TEXT("spells"),TEXT(R"({"values":[{"id":11,"name":"Strength Self","category":1,"power":100,"skill":300,"school":4,"duration":300,"self_buff":true},{"id":12,"name":"Armor Self","category":115,"power":100,"skill":300,"school":2,"duration":300,"self_buff":true},{"id":13,"name":"Blood Drinker","category":154,"power":100,"skill":300,"school":3,"duration":300,"beneficial":true,"target_type":1},{"id":14,"category":3,"power":100,"skill":300,"school":4,"duration":300,"self_buff":true}]})"));
         Array(P,TEXT("excluded_buffs"),TEXT(R"({"values":[3]})"));
-        Array(S,TEXT("enchantments"),TEXT(R"({"values":[{"category":1,"power":100,"remaining":1000},{"category":102,"power":100,"remaining":1000}]})"));
+        Array(S,TEXT("enchantments"),TEXT(R"({"values":[{"category":1,"power":100,"remaining":1000},{"category":115,"power":100,"remaining":1000}]})"));
         Array(S,TEXT("item_buffs"),TEXT(R"({"values":[{"target":1,"category":154,"power":100,"expires":2000}]})"));
         S->SetNumberField(TEXT("force_buff_request"),1);int Serial=0;
         for(int Id:{11,12,13})
@@ -465,6 +467,10 @@ bool FACEUCMPolicyTest::RunTest(const FString&)
             Spells.Add(MakeShared<FJsonValueObject>(Spell));
         }
         S->SetArrayField(TEXT("spells"),Spells);
+        // Special families are maintained only when explicitly requested.
+        TArray<TSharedPtr<FJsonValue>> Selected;
+        for(int Id=1;Id<=100;++Id)Selected.Add(MakeShared<FJsonValueNumber>(Id));
+        P->SetArrayField(TEXT("buffs"),Selected);
         auto Inventory=S->GetArrayField(TEXT("inventory"));
         Inventory.Add(MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":100,"name":"Scarab","count":100})"))));S->SetArrayField(TEXT("inventory"),Inventory);
         auto I=Check(VM,S,P);

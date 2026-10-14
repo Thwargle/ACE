@@ -67,7 +67,7 @@ public:
 	bool UsesOnOffMotion() const
 	{
 		if (IsCorpse()) return false;
-		if (IsDoor() || IsOpenable())
+		if (IsDoor() || (!bIsHouseHook && IsOpenable()))
 		{
 			return true;
 		}
@@ -75,7 +75,7 @@ public:
 		{
 			return true;
 		}
-		if ((ItemType & ACEItemType::Container) != 0 && MotionTableId != 0)
+		if (!bIsHouseHook && (ItemType & ACEItemType::Container) != 0 && MotionTableId != 0)
 		{
 			return true;
 		}
@@ -85,6 +85,7 @@ public:
 			|| InitialMotionCommand == static_cast<int32>(ACEMotion::Off);
 	}
 	bool IsCorpse() const { return (ObjectDescriptionFlags & ACEObjectDescFlag::Corpse) != 0; }
+	bool HasReceivedDeathMotion() const { return bReceivedDeathMotion; }
 	/** PK or PK Lite — pawn-pawn collision; NPK / Free walk through other players. */
 	bool IsPkOrPkLite() const { return ACEPlayerKillerStatus::FlagsBlockPlayers(ObjectDescriptionFlags); }
 
@@ -180,6 +181,7 @@ public:
 
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 ItemType = 0;
+	bool bIsHouseHook = false;
 
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 InitialMotionCommand = 0;

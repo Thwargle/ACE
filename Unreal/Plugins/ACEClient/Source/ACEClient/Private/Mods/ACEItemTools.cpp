@@ -70,7 +70,7 @@ bool UACEPluginSubsystem::RunItemToolsCommand(const FString& Arguments)
     if(Command==TEXT("stop")){Stop(TEXT("itemtools"),TEXT("Stopped by player"));return true;}
     if(Command==TEXT("recomp"))return StartItemTools(TEXT("restock"));
     if(TArray<FString>{TEXT("give"),TEXT("shop"),TEXT("profile"),TEXT("chest"),TEXT("restock")}.Contains(Command))return StartItemTools(Command);
-    Notice=TEXT("/items [give | shop | profile | chest | restock | stop]. /it recomp is also supported.");return false;
+    Notice=TEXT("/acueitems [give | shop | profile | chest | restock | stop].");return false;
 }
 
 bool UACEPluginSubsystem::SelectItemToolsObject(const FString& Key,const FString& Kind)

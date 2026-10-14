@@ -4,6 +4,7 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "ACETypes.h"
 #include "ACEOpcodes.h"
+#include "ACEFrameDiagnostics.h"
 #include "ACEClientSubsystem.generated.h"
 
 class FACESession;
@@ -787,6 +788,8 @@ public:
 	bool IsOwnedInventoryItem(const FACEWorldObject& Object) const;
 private:
 	void TickInventorySort(float DeltaTime);
+	FACEFrameReportGate FrameReportGate;
+	double LastFrameReportTime = 0;
 	void TickWorldObjectVisibility(float DeltaTime);
 	float VisibilityUpdateSeconds = 0.f;
 	uint32 VisibilityPlayerCell = 0;

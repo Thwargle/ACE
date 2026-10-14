@@ -62,44 +62,80 @@ int64 FACESession::GetHousePaymentAmount(int32 Wcid,bool bRent) const
 	for(int32 Guid:GetHousePaymentItems(bRent)) if(IsHousePaymentOwned(Guid))
 	{
 		const auto& Item=WorldObjects.FindChecked(Guid);
-		// ACCWeenieObject::GetHousePayment treats promissory notes as pyreal value.
+		// ACE HousePayment accepts promissory notes at their full stack value.
 		if(Wcid==273 && (Item.ItemType&ACEItemType::PromissoryNote)) Total+=FMath::Max(0,Item.Value);
 		else if(Item.WeenieClassId==Wcid) Total+=FMath::Max(1,Item.StackSize);
 	}
 	return Total;
 }
 
-bool FACESession::StageHousePayment(int32 Guid,bool bRent)
+TArray<int32> FACESession::CollectHousePaymentItems(int32 Guid,bool bRent) const
 {
-	if(State!=EACESessionState::InWorld || !HouseOffer.LordGuid || (bRent ? !HouseOffer.OwnerGuid : HouseOffer.OwnerGuid!=0)) return false;
-	// Retail recursively expands packs, including the main backpack, into accepted items.
+	TArray<int32> Items;
+	if(State!=EACESessionState::InWorld || !HouseOffer.LordGuid || (bRent ? !HouseOffer.OwnerGuid : HouseOffer.OwnerGuid!=0)) return Items;
+	TMap<int32,int64> Remaining;
+	for(const auto& Cost : bRent ? HouseOffer.Rent : HouseOffer.Buy)
+		Remaining.Add(Cost.Wcid,int64(Cost.Required)-Cost.Paid-GetHousePaymentAmount(Cost.Wcid,bRent));
+	const auto& Cart=GetHousePaymentItems(bRent);
+	// Share validation between the drag marker and the drop. Recursively expand
+	// packs without staging duplicate, equipped, foreign or already-paid items.
 	TSet<int32> Visited;
-	TFunction<bool(int32)> Add=[&](int32 Id)
+	TFunction<void(int32)> Visit=[&](int32 Id)
 	{
-		if(Visited.Contains(Id)) return false;
+		if(Visited.Contains(Id)) return;
 		Visited.Add(Id);
-		if(Id!=PlayerGuid && !IsHousePaymentOwned(Id)) return false;
-		bool Added=false;
-		if(const auto* Contents=ContainerContents.Find(Id))
-		{
-			for(const auto& Ref:*Contents) Added=Add(Ref.ItemGuid)||Added;
-			// gmSlumlordUI::AddItem never offers a nonempty container itself.
-			if(!Contents->IsEmpty()) return Added;
-		}
+		if(Id!=PlayerGuid && !IsHousePaymentOwned(Id)) return;
 		const auto* Item=WorldObjects.Find(Id);
-		if(!Item || Id==PlayerGuid) return Added;
-		auto& Cart=bRent?HouseRentItems:HouseBuyItems;
-		if(Cart.Contains(Id)) return Added;
-		const int32 Wcid=(Item->ItemType&ACEItemType::PromissoryNote)?273:Item->WeenieClassId;
-		const auto& Requirements=bRent?HouseOffer.Rent:HouseOffer.Buy;
-		for(const auto& P:Requirements)
-			if(P.Wcid==Wcid && int64(P.Required)>P.Paid+GetHousePaymentAmount(Wcid,bRent))
-			{Cart.Add(Id); return true;}
-		return Added;
+		if(!Item) return;
+		TArray<int32> Contents;
+		if(Id==PlayerGuid || Item->ItemsCapacity!=0 || Item->ContainersCapacity!=0
+			|| (Item->ItemType&ACEItemType::Container) || ContainerContents.Contains(Id))
+		{
+			// Use the inventory's reconciled view, including ObjectCreate-only bags
+			// and newly received main-pack items. ViewContents is not always sent for
+			// owned bags; requiring that cache made a visibly full bag look empty here.
+			GetPackItemGuids(Id,Contents);
+			if(Id==PlayerGuid)
+			{
+				TArray<int32> Packs; GetPlayerPackGuids(Packs); Contents.Append(Packs);
+			}
+			else if(const auto* Refs=ContainerContents.Find(Id))
+				for(const auto& Ref:*Refs) Contents.AddUnique(Ref.ItemGuid);
+		}
+		if(!Contents.IsEmpty())
+		{
+			for(int32 Child:Contents) Visit(Child);
+			return; // gmSlumlordUI::AddItem never offers a nonempty container itself.
+		}
+		if(Id==PlayerGuid || Cart.Contains(Id)) return;
+		const bool Note=(Item->ItemType&ACEItemType::PromissoryNote)!=0;
+		const int32 Wcid=Note?273:Item->WeenieClassId;
+		auto* Needed=Remaining.Find(Wcid);
+		const int64 Amount=Note?FMath::Max(0,Item->Value):FMath::Max(1,Item->StackSize);
+		if(Needed && *Needed>0 && Amount>0)
+		{ Items.Add(Id); *Needed-=Amount; }
 	};
-	return Add(Guid);
+	Visit(Guid);
+	return Items;
 }
 
+bool FACESession::CanStageHousePayment(int32 Guid,bool bRent) const
+{
+	return !CollectHousePaymentItems(Guid,bRent).IsEmpty();
+}
+
+bool FACESession::StageHousePayment(int32 Guid,bool bRent)
+{
+	const auto Items=CollectHousePaymentItems(Guid,bRent);
+	(bRent?HouseRentItems:HouseBuyItems).Append(Items);
+	return !Items.IsEmpty();
+}
+
+void FACESession::PruneHousePaymentItems()
+{
+	for(auto* Cart : {&HouseBuyItems,&HouseRentItems})
+		Cart->RemoveAll([this](int32 Guid){ return !IsHousePaymentOwned(Guid); });
+}
 void FACESession::RemoveHousePayment(int32 Guid,bool bRent)
 {
 	(bRent?HouseRentItems:HouseBuyItems).Remove(Guid);
@@ -109,9 +145,8 @@ bool FACESession::CanPayHouse(bool bRent) const
 {
 	if(State!=EACESessionState::InWorld || !HouseOffer.LordGuid || (bRent ? !HouseOffer.OwnerGuid : HouseOffer.OwnerGuid!=0)) return false;
 	const auto& Cart=GetHousePaymentItems(bRent);
-	if(!Cart.ContainsByPredicate([this](int32 Guid){return IsHousePaymentOwned(Guid);})) return false;
 	// Retail accepts partial maintenance; a purchase needs every requirement covered.
-	if(bRent) return true;
+	if(bRent) return Cart.ContainsByPredicate([this](int32 Guid){return IsHousePaymentOwned(Guid);});
 	for(const auto& P:HouseOffer.Buy)
 		if(int64(P.Required)>P.Paid+GetHousePaymentAmount(P.Wcid,false)) return false;
 	return true;

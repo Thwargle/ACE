@@ -40,7 +40,7 @@ return function(s, p)
         end
     end
     if nearest then rows[#rows+1]={id="navigate",text="Point arrow to nearest "..key,action="waypoint",target=nearest.id} end
-    -- /plugin kill_tracker reset is local; nothing is sent to server chat.
+    -- /acueplugin kill_tracker reset is local; nothing is sent to server chat.
     for _, e in ipairs(s.events) do
         if e.type == "command" and e.text == "reset" then saved.tasks[key]=nil; changed=true end
     end

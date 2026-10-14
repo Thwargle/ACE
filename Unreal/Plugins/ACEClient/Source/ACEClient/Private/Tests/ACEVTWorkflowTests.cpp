@@ -90,6 +90,35 @@ bool FACEVTWorkflowTest::RunTest(const FString&)
   S->SetNumberField(TEXT("time"),109);
   TestEqual(TEXT("Explicit meta navigation enable retries route"),Action(Step(VM,S,P)),FString(TEXT("move")));
  }
+ {
+  auto P=Json(TEXT(R"({"buffing":false,"recovery":false,"combat":"off","navigation":false,"looting":false,"vt_meta":[
+   {"state":"Default","condition":{"type":1},"action":{"type":3,"children":[
+    {"type":2,"command":{"op":"load","profile":"quest.usd","kind":"usd"}},
+    {"type":2,"command":{"op":"option","key":"looting","value":true}},
+    {"type":3,"children":[{"type":2,"command":{"op":"load","profile":"quest.utl","kind":"utl"}},
+     {"type":2,"command":{"op":"option","key":"navigation","value":true}}]},
+    {"type":4,"route_profile":"Quest_Path","route":{"route":[{"cell":2139029505,"x":100,"y":84,"z":12}]}},
+    {"type":11,"key":"looting","boolean":true,"scale":1,"properties":{"v":"loot_enabled"}},
+    {"type":1,"value":"Running"}]}},
+   {"state":"Running","condition":{"type":26,"expression":{"op":"call","name":"getvar","args":[{"op":"literal","value":"loot_enabled"}]}},"action":{"type":1,"value":"Verified"}}
+  ]})"));
+  auto S=Snapshot();FACEPluginVM VM;VM.Load(Script,Error);
+  auto I=Step(VM,S,P);
+  TestEqual(TEXT("Meta first loads character settings"),Action(I),FString(TEXT("profile_load")));
+  TestEqual(TEXT("Later state change waits for load"),I->GetStringField(TEXT("meta_state")),FString(TEXT("Default")));
+  TestFalse(TEXT("Later embedded route waits for load"),I->HasField(TEXT("runtime_route")));
+  P->SetBoolField(TEXT("ucm_resume"),true);I=Step(VM,S,P);P->RemoveField(TEXT("ucm_resume"));
+  TestEqual(TEXT("Resume retries an unacknowledged local profile load"),Action(I),FString(TEXT("profile_load")));
+  P->SetNumberField(TEXT("vt_revision"),1);P->SetStringField(TEXT("vt_loaded_kind"),TEXT("usd"));
+  S->SetNumberField(TEXT("time"),100.3);I=Step(VM,S,P);
+  TestEqual(TEXT("Nested actions load loot second"),I->GetStringField(TEXT("profile")),FString(TEXT("quest.utl")));
+  P->SetNumberField(TEXT("vt_revision"),2);P->SetStringField(TEXT("vt_loaded_kind"),TEXT("utl"));
+  S->SetNumberField(TEXT("time"),100.6);I=Step(VM,S,P);
+  TestEqual(TEXT("Options after USD are retained and visible to later rules"),I->GetStringField(TEXT("meta_state")),FString(TEXT("Verified")));
+  TestTrue(TEXT("Embedded route installs after dependency loads"),I->HasField(TEXT("runtime_route")));
+  S->SetNumberField(TEXT("time"),101);I=Step(VM,S,P);
+  TestEqual(TEXT("Navigation enabled after loads starts walking"),Action(I),FString(TEXT("move")));
+ }
  return true;
 }
 #endif

@@ -465,7 +465,10 @@ bool FACEDatMotionPlayer::EvaluateAnimData(
 		FrameF = High - TimeSeconds * Rate;
 	}
 
-	if (OutCrossedHooks)
+	// A zero-rate cycle is a pose, not a new traversal of its starting frame.
+	// Retail CSequence::update_internal cannot cross hook edges without frame
+	// progress. Replaying these hooks can undo a door's completed fade/NoDraw.
+	if (OutCrossedHooks && Rate > SMALL_NUMBER)
 	{
 		auto RawFrameAtTime = [Low, High, SignedRate](float T)
 		{
@@ -693,6 +696,42 @@ bool FACEDatMotionPlayer::EvaluateLink(uint32 FromCommand, uint32 ToCommand, flo
 	// The cached table owns these immutable clips; casting/death poses need no per-frame copy.
 	return EvaluateAnimSequence(Link->Anims, TimeSeconds, NumParts, OutPartTransforms, WorldScale, OutAnimatedPartCount,
 		false, &bOutFinished, PreviousTimeSeconds, OutCrossedHooks);
+}
+
+bool FACEDatMotionPlayer::EvaluateStateMotion(uint32 From, uint32 To, float Time, bool bStartInCycle, int32 Parts,
+	TArray<FTransform>& Out, float Scale, int32& Count, bool& bTransitionFinished,
+	const float* Previous, TArray<FACEDatAnimationHook>* Hooks) const
+{
+	Count = 0;
+	bTransitionFinished = false;
+	if (Hooks) Hooks->Reset();
+	if (!bReady) return false;
+	const auto* Link = FindLink(From, To, 0);
+	const auto* Cycle = FindCycle(To, 0);
+	float LinkDuration = 0.f;
+	if (Link)
+		for (const auto& Clip : Link->Anims) LinkDuration += GetAnimDataDuration(Clip);
+	// CMotionTable::GetObjectSequence appends the destination cycle after its
+	// linkage. Holding the last link frame freezes animated On states, such as
+	// housing crystals; looping the link instead would replay their activation.
+	bTransitionFinished = bStartInCycle || Time >= LinkDuration;
+	if (Link && (!bTransitionFinished || !Cycle || Cycle->Anims.IsEmpty()))
+	{
+		const float HeldPrevious = LinkDuration;
+		return EvaluateAnimSequence(Link->Anims, bStartInCycle ? LinkDuration : Time, Parts, Out, Scale, Count,
+			false, nullptr, bStartInCycle ? &HeldPrevious : Previous, Hooks);
+	}
+	if (!Cycle || Cycle->Anims.IsEmpty()) return false;
+	TArray<FACEDatAnimationHook> LinkHooks;
+	if (Hooks && Link && !bStartInCycle && (!Previous || *Previous < LinkDuration))
+		EvaluateAnimSequence(Link->Anims, LinkDuration, Parts, Out, Scale, Count, false, nullptr, Previous, &LinkHooks);
+	const float CycleStart = bStartInCycle ? 0.f : LinkDuration;
+	const float CycleTime = Time - CycleStart;
+	const float PreviousCycleTime = Previous ? *Previous - CycleStart : 0.f;
+	const float* CyclePrevious = Previous && PreviousCycleTime >= 0.f ? &PreviousCycleTime : nullptr;
+	const bool Ok = EvaluateAnimSequence(Cycle->Anims, CycleTime, Parts, Out, Scale, Count, true, nullptr, CyclePrevious, Hooks);
+	if (Hooks && !LinkHooks.IsEmpty()) Hooks->Insert(LinkHooks, 0);
+	return Ok;
 }
 
 bool FACEDatMotionPlayer::EvaluateAnimation(uint32 AnimationId, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount, bool bLoop,

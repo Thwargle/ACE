@@ -1,4 +1,5 @@
 #include "UI/ACEUIElementManager.h"
+#include "ACERuntimeOptions.h"
 #include "UI/ACERetailUILayout.h"
 #include "HAL/IConsoleManager.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
@@ -383,57 +384,32 @@ void UACEUIElementManager::ApplyEdgeAnchoredLayout(int32 ViewportWidth, int32 Vi
 					Root->LayoutAuthoredW, Root->LayoutAuthoredH, Root->Width, Root->Height);
 			}
 
-			// Retail UpdateForParentSizeChange clamps the runtime box back into the
-			// parent — a floaty (dragged or reflowed) must never end up unreachable
-			// offscreen. Adjust UserDrag so the correction persists into saves.
+			// Apply the same preference during reflow and active pointer drags.
+			if (ACERuntimeOptions::Get(TEXT("ConstrainUIWindows")) <= .5f) continue;
 			for (const TSharedPtr<FACEUIElement>& Child : Root->Children)
 			{
-				if (!Child.IsValid() || !Child->bVisible
-					|| Child->Width <= 0 || Child->Height <= 0
-					|| Child == DragFloaty || Child == ResizeFloaty)
-				{
-					continue;
-				}
-				// A saved/resized floaty may exceed the logical viewport after a
-				// DPI increase or window shrink. Moving it to Y=0 cannot expose
-				// its bottom controls; reduce its height and reflow the content
-				// before clamping its position (also while the UI is locked).
-				if (Child->Height > Vh && Child->ElementName.StartsWith(TEXT("RootGameplay_Floaty"))
-					&& !IsFixedSizeFloaty(Child->ElementName))
-				{
-					if (Child->AuthoredHeight < 0) Child->AuthoredHeight = Child->Height;
-					Child->UserResizeH = Vh - Child->AuthoredHeight;
-					ApplyFloatyResizeLayout(Child);
-				}
-				const int32 DrawX = Child->GetDrawX();
-				const int32 DrawY = Child->GetDrawY();
-				int32 DeltaX = 0;
-				int32 DeltaY = 0;
-				if (DrawX + Child->Width > Vw)
-				{
-					DeltaX = Vw - (DrawX + Child->Width);
-				}
-				if (DrawX + DeltaX < 0)
-				{
-					DeltaX = -DrawX;
-				}
-				if (DrawY + Child->Height > Vh)
-				{
-					DeltaY = Vh - (DrawY + Child->Height);
-				}
-				if (DrawY + DeltaY < 0)
-				{
-					DeltaY = -DrawY;
-				}
-				if (DeltaX != 0 || DeltaY != 0)
-				{
-					Child->UserDragX += DeltaX;
-					Child->UserDragY += DeltaY;
-					Child->RecomputeLayoutOffset();
-				}
+				if (Child && Child->bVisible) ConstrainWindow(Child, FIntPoint(Vw,Vh));
 			}
 		}
 	}
+}
+
+void UACEUIElementManager::ConstrainWindow(const TSharedPtr<FACEUIElement>& Window, FIntPoint ViewSize)
+{
+    if (!Window || Window->Width<=0 || Window->Height<=0 || ViewSize.X<=0 || ViewSize.Y<=0
+        || ACERuntimeOptions::Get(TEXT("ConstrainUIWindows"))<=.5f) return;
+    // Shrinking the viewport/UI scale must leave bottom controls accessible.
+    if (Window->Height>ViewSize.Y && Window->ElementName.StartsWith(TEXT("RootGameplay_Floaty"))
+        && !IsFixedSizeFloaty(Window->ElementName))
+    {
+        if (Window->AuthoredHeight<0) Window->AuthoredHeight=Window->Height;
+        Window->UserResizeH=ViewSize.Y-Window->AuthoredHeight;
+        ApplyFloatyResizeLayout(Window);
+    }
+    const int32 X=Window->GetDrawX(),Y=Window->GetDrawY();
+    Window->UserDragX+=FMath::Clamp(X,0,FMath::Max(0,ViewSize.X-Window->Width))-X;
+    Window->UserDragY+=FMath::Clamp(Y,0,FMath::Max(0,ViewSize.Y-Window->Height))-Y;
+    Window->RecomputeLayoutOffset();
 }
 
 bool UACEUIElementManager::ViewportToCanvas(
@@ -981,6 +957,7 @@ void UACEUIElementManager::NotifyMouseMove(FVector2D ViewportPos, FVector2D View
 		if (bResizeLeft) ResizeFloaty->UserDragX=ResizeStartUserDragX-(NewW-W-ResizeStartUserW);
 		if (bResizeTop) ResizeFloaty->UserDragY=ResizeStartUserDragY-(NewH-H-ResizeStartUserH);
 		ResizeFloaty->RecomputeLayoutOffset(); ApplyFloatyResizeLayout(ResizeFloaty);
+		ConstrainWindow(ResizeFloaty,GetScreenLayoutSize());
 		HoverElement=ResizeFloaty; return;
 	}
 	if (ResizeFloaty.IsValid() && !IsUiLocked())
@@ -1003,6 +980,7 @@ void UACEUIElementManager::NotifyMouseMove(FVector2D ViewportPos, FVector2D View
 			ResizeFloaty->RecomputeLayoutOffset();
 		}
 		ApplyFloatyResizeLayout(ResizeFloaty);
+		ConstrainWindow(ResizeFloaty,GetScreenLayoutSize());
 		HoverElement = ResizeFloaty;
 		return;
 	}
@@ -1018,6 +996,7 @@ void UACEUIElementManager::NotifyMouseMove(FVector2D ViewportPos, FVector2D View
 		DragFloaty->UserDragX = DragStartUserX + Dx;
 		DragFloaty->UserDragY = DragStartUserY + Dy;
 		DragFloaty->RecomputeLayoutOffset();
+		ConstrainWindow(DragFloaty,GetScreenLayoutSize());
 		HoverElement = DragFloaty;
 		return;
 	}
@@ -1353,6 +1332,7 @@ bool UACEUIElementManager::ImportScreenLayout(const FString& Text, FString& Erro
 	if (Size.X <= 0 || Size.Y <= 0) { Error = TEXT("UI layouts can only be loaded while playing a character."); return false; }
 	CancelPointerCapture();
 	ApplyEdgeAnchoredLayout(Size.X, Size.Y);
+    const bool Constrain=ACERuntimeOptions::Get(TEXT("ConstrainUIWindows"))>.5f;
 	for (const auto& Rect : Rects)
 	{
 		// Unreal always renders the world to the full viewport, particularly in VR.
@@ -1363,17 +1343,17 @@ bool UACEUIElementManager::ImportScreenLayout(const FString& Text, FString& Erro
 			if (Rect.Tag != Window.Tag) continue;
 			const auto Node = FindElementByName(Window.Element);
 			if (!Node) break;
-			const int32 W = FMath::Clamp(Rect.W, Node->MinWidth, FMath::Max(Node->MinWidth, FMath::Min(Node->MaxWidth, Size.X)));
+			const int32 W = FMath::Clamp(Rect.W, Node->MinWidth, FMath::Max(Node->MinWidth, Constrain?FMath::Min(Node->MaxWidth, Size.X):Node->MaxWidth));
 			const int32 H = IsFixedSizeFloaty(Node->ElementName) ? Node->Height
-				: FMath::Clamp(Rect.H, Node->MinHeight, FMath::Max(Node->MinHeight, FMath::Min(Node->MaxHeight, Size.Y)));
+				: FMath::Clamp(Rect.H, Node->MinHeight, FMath::Max(Node->MinHeight, Constrain?FMath::Min(Node->MaxHeight, Size.Y):Node->MaxHeight));
 			if (Node->AuthoredWidth < 0) Node->AuthoredWidth = Node->LayoutAuthoredW >= 0 ? Node->LayoutAuthoredW : Node->Width;
 			if (Node->AuthoredHeight < 0) Node->AuthoredHeight = Node->LayoutAuthoredH >= 0 ? Node->LayoutAuthoredH : Node->Height;
 			Node->UserResizeW = W - Node->AuthoredWidth;
 			Node->UserResizeH = H - Node->AuthoredHeight;
 			ApplyFloatyResizeLayout(Node);
 			// Clamp hidden windows too, so opening one later cannot strand it offscreen.
-			const int32 X = FMath::Clamp(Rect.X, 0, FMath::Max(0, Size.X - Node->Width));
-			const int32 Y = FMath::Clamp(Rect.Y, 0, FMath::Max(0, Size.Y - Node->Height));
+			const int32 X = Constrain?FMath::Clamp(Rect.X, 0, FMath::Max(0, Size.X - Node->Width)):Rect.X;
+			const int32 Y = Constrain?FMath::Clamp(Rect.Y, 0, FMath::Max(0, Size.Y - Node->Height)):Rect.Y;
 			Node->UserDragX += X - Node->GetDrawX();
 			Node->UserDragY += Y - Node->GetDrawY();
 			Node->RecomputeLayoutOffset();

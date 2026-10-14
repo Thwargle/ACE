@@ -37,7 +37,7 @@ public:
     FEditableTextBoxStyle Edit;
     FComboButtonStyle Combo;
     FSpinBoxStyle Spin;
-    FSlateBrush Frame, Background;
+    FSlateBrush Frame, Background, TitleBackground, SectionFrame, SectionHeader;
     FACEDatFont Font;
     TObjectPtr<UTexture2D> Atlas=nullptr;
     bool TintAtlas=false;

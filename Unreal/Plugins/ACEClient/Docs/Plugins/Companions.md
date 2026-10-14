@@ -176,19 +176,19 @@ on a subsequent callback. Sender identity is assigned by native code. Messages
 are local, not chat/network packets; delivery to a stopped recipient reports an
 error instead of starting it. Avoid message echoes.
 
-Players can type `/plugin my_tracker <text>` to queue
-`{type="command",text=...}`. `/plugin my_tracker start` and `stop` control its
+Players can type `/acueplugin my_tracker <text>` to queue
+`{type="command",text=...}`. `/acueplugin my_tracker start` and `stop` control its
 lifecycle. Text is capped at 512 characters. These commands are not sent to the
-server. Plugin IDs are case sensitive. The same `/plugin <id> <text>` syntax is
+server. Plugin IDs are case sensitive. The same `/acueplugin <id> <text>` syntax is
 supported by UCM meta command actions and `ucmcommand()`, using UCM's existing
 `say` capability for local command delivery.
 
 The `commands` bridge accepts one command per second:
 
-- `/ucm ...`: existing native adapter, for example `start`, `stop`, `forcebuff`,
+- `/acueucm ...`: existing native adapter, for example `start`, `stop`, `forcebuff`,
   `enablecombat true`, `nav load <file>`, or `setmetastate <state>`.
-  `/ucm help` lists the supported commands. UCM must be enabled.
-- `/items give|shop|profile|chest|restock|stop`, or `/it recomp`: existing Item
+  `/acueucm help` lists the supported commands. UCM must be enabled.
+- `/acueitems give|shop|profile|chest|restock|stop`: existing Item
   Tools jobs using its configured recipient, profiles and normal permissions.
   Item Tools must be enabled; it pauses UCM during inventory jobs as usual.
 - `/myquests`: sends that exact server query; the results arrive via chat.

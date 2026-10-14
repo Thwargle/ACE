@@ -70,11 +70,17 @@ bool FACEUCMSharedMetaTest::RunTest(const FString&)
     H->Execute(*P,Json(TEXT(R"({"action":"profile_load","activity":"meta","kind":"met","profile":"quest.met"})")));
     TestEqual(TEXT("Self-load uses editable meta rather than stale conversion"),P->Profile->GetArrayField(TEXT("vt_meta")).Num(),1);
     TestFalse(TEXT("Loading a meta deliberately invalidates previous native route"),H->RuntimeRoute.IsValid());
+    TMap<FString,int32> Counts;for(const auto& Section:Sections())Counts.Add(Section,H->UCMSectionProfiles(Section).Num());
+    TestTrue(TEXT("Repeat meta import reuses complete graph"),H->SaveImportedProfile(TEXT("Quest"),Profile,TEXT("Quest.met")));
+    TestTrue(TEXT("Importing dependency on its own reuses named file"),H->ReuseUCMImport(TEXT("quest.utl")));
+    TestEqual(TEXT("Dependency import retains edited native loot"),P->Profile->GetArrayField(TEXT("loot_rules"))[0]->AsObject()->GetStringField(TEXT("label")),FString(TEXT("Edited Copper")));
+    for(const auto& Section:Sections())TestEqual(TEXT("Repeated imports create no duplicate section files"),H->UCMSectionProfiles(Section).Num(),Counts[Section]);
     TestTrue(TEXT("Delete embedded route like any shared profile"),H->DeleteUCMSection(TEXT("Routes"),RouteName));
     TestFalse(TEXT("Loading the meta does not resurrect deleted route"),H->UCMSectionProfiles(TEXT("Routes")).Contains(RouteName));
     TestEqual(TEXT("Embedded reference switches to Default"),P->Profile->GetArrayField(TEXT("vt_meta"))[0]->AsObject()->GetObjectField(TEXT("action"))->GetStringField(TEXT("route_profile")),FString(TEXT("Default")));
     TestTrue(TEXT("Delete referenced character profile"),H->DeleteUCMSection(TEXT("Character"),TEXT("quest")));
     TestEqual(TEXT("Dependency reference switches to Default"),P->Profile->GetObjectField(TEXT("meta_profile_refs"))->GetObjectField(TEXT("quest.usd"))->GetStringField(TEXT("Character")),FString(TEXT("Default")));
+    TestTrue(TEXT("Deleted dependency is available for reimport, not aliased to Default"),H->ImportedUCMProfiles(TEXT("quest.usd"))->Values.IsEmpty());
 
     // Exercise the user's complete source graph through conversion, the Lua VM
     // and the native host; keep the fixture optional on other developers' PCs.
@@ -103,6 +109,8 @@ bool FACEUCMSharedMetaTest::RunTest(const FString&)
             auto TickProfile=Copy(P->Profile);TickProfile->RemoveField(TEXT("vt_library"));
             if(!TestTrue(TEXT("Aun Ralirea policy tick succeeds"),VM.Step(Snapshot,TickProfile,Intent,Error))){AddError(Error);break;}
             if(!Intent)continue;FString Op;Intent->TryGetStringField(TEXT("action"),Op);
+            if(Tick<12){FString Status,State;Intent->TryGetStringField(TEXT("status"),Status);Intent->TryGetStringField(TEXT("meta_state"),State);
+                AddInfo(FString::Printf(TEXT("Aun tick %d: %s, %s, state %s, route update %d"),Tick,*Op,*Status,*State,Intent->HasField(TEXT("runtime_route"))));}
             if(Intent->HasField(TEXT("runtime_route")))++Routes;
             if(Op==TEXT("profile_load"))++Loads;
             H->Execute(*P,Intent);

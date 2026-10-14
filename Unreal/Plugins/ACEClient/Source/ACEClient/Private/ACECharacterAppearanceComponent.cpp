@@ -1082,13 +1082,18 @@ void UACECharacterAppearanceComponent::ConfigurePartCollision(bool bBlocking, bo
 
 void UACECharacterAppearanceComponent::InterruptCastWithMovement()
 {
-	// CMotionTable::GetObjectSequence replaces cyclic substates on a new
-	// forward/back command. Sidestep/turn are modifiers and leave the gesture
-	// playing. PowerUp is an Action, whose authored link must finish normally.
+	// CMotionTable::GetObjectSequence / CSequence::remove_cyclic_anims retain
+	// unfinished links. Only the held cyclic tail can disappear immediately.
+	// Sidestep/turn are modifiers; neither they nor a fast-buff tap truncate
+	// the authored cast entry or queued PowerUp actions.
 	if(AnimMode==EACEAnimMode::ActionOneShot && ACEIsMagicCastCommand(ActionCommand))
 	{
-		ACEStopCastGestureIfLeaving(GetOwner(),true,false);
-		ClearActionMotion();
+		bHoldActionFinalAfterFinish = false;
+		if (bHoldActionFinal)
+		{
+			ACEStopCastGestureIfLeaving(GetOwner(),true,false);
+			ClearActionMotion();
+		}
 	}
 }
 
@@ -1330,7 +1335,8 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 		|| (ActionCommand >= 0x1000012Bu && ActionCommand <= 0x10000134u);
 	// Scarab windups own HighFrame particle tiers (frame 9/19/29…). Never cut them short
 	// when the cast gesture arrives — queue it (and chained PowerUps) instead.
-	if (AnimMode == EACEAnimMode::ActionOneShot && bCurPowerUp
+	if (AnimMode == EACEAnimMode::ActionOneShot && !bHoldActionFinal
+		&& (bCurPowerUp || ACEIsMagicCastCommand(ActionCommand))
 		&& (bMagicCastGesture || bMagicPowerUp) && ActionCommand != Cmd)
 	{
 		QueueActionMotion(static_cast<int32>(Cmd), PlayRate, Style, bHoldFinalPose);
@@ -1811,6 +1817,7 @@ void UACECharacterAppearanceComponent::PlayDoorMotion(int32 ToCommandU16)
 	DoorFromCommand = From;
 	DoorToCommand = To;
 	bDoorHoldFinal = false;
+	bDoorStartsInCycle = false;
 	bSuppressNextHookDispatch = false;
 	AnimTime = 0.f;
 	DeferredPoseDeltaTime = 0.f;
@@ -1833,6 +1840,7 @@ void UACECharacterAppearanceComponent::SetDoorHeldCommand(int32 CommandU16)
 	DoorFromCommand = (Cmd == ACEMotion::On) ? ACEMotion::Off : ACEMotion::On;
 	DoorToCommand = Cmd;
 	bDoorHoldFinal = true;
+	bDoorStartsInCycle = true;
 	bSuppressNextHookDispatch = true;
 	AnimTime = 1000.f;
 	ResetHookTracking();
@@ -1870,7 +1878,6 @@ void UACECharacterAppearanceComponent::SetDoorHeldCommand(int32 CommandU16)
 	TArray<FTransform> Animated;
 	int32 AnimatedCount = 0;
 	bool bFinished = false;
-	bool bUsedLink = true;
 	TArray<FACEDatAnimationHook> HeldHooks;
 	bool bOk = Dat->EvaluateMotionLink(
 		static_cast<uint32>(MotionTableId), DoorFromCommand, DoorToCommand, AnimTime,
@@ -1878,10 +1885,9 @@ void UACECharacterAppearanceComponent::SetDoorHeldCommand(int32 CommandU16)
 		nullptr, &HeldHooks, ACEMotion::StanceNonCombat);
 	if (!bOk)
 	{
-		bUsedLink = false;
-		// Do not loop On/Off cycles — a large AnimTime must clamp to the final closed/open frame.
+		// A zero-rate destination cycle holds its authored initial frame.
 		bOk = Dat->EvaluateMotionCommand(
-			static_cast<uint32>(MotionTableId), DoorToCommand, AnimTime,
+			static_cast<uint32>(MotionTableId), DoorToCommand, 0.f,
 			PartMeshes.Num(), Animated, WorldScale, AnimatedCount,
 			nullptr, &HeldHooks, ACEMotion::StanceNonCombat, /*bLoop*/ false);
 	}
@@ -1894,6 +1900,12 @@ void UACECharacterAppearanceComponent::SetDoorHeldCommand(int32 CommandU16)
 		}
 		return;
 	}
+	// An already settled object starts in the destination cycle. Keep the link's
+	// completed visual hooks below, but not its pose or historical sounds/effects.
+	AnimTime = 0.f;
+	DeferredPoseDeltaTime = 0.f;
+	Dat->EvaluateStateMotion(static_cast<uint32>(MotionTableId), DoorFromCommand, DoorToCommand,
+		AnimTime, true, PartMeshes.Num(), Animated, WorldScale, AnimatedCount, bFinished);
 	for (int32 i = 0; i < PartMeshes.Num(); ++i)
 	{
 		if (i < AnimatedCount && Animated.IsValidIndex(i))
@@ -1911,12 +1923,9 @@ void UACECharacterAppearanceComponent::SetDoorHeldCommand(int32 CommandU16)
 		}
 	}
 	RecookPartPhysics();
-	const uint64 HeldTrackKey = bUsedLink
-		? ((2ull << 60) | static_cast<uint64>(HashCombine(GetTypeHash(DoorFromCommand), GetTypeHash(DoorToCommand))))
-		: ((3ull << 60) | static_cast<uint64>(DoorToCommand));
-	CommitHookTime(HeldTrackKey, AnimTime);
-	// Keep suppress so the first DoorTransition tick cannot replay On-clip NoDraw/Transparent.
-	bSuppressNextHookDispatch = true;
+	// The next tick starts fresh cycle hooks. EvaluateStateMotion skips historical
+	// link hooks for this object, so its live cycle must not be suppressed as well.
+	bSuppressNextHookDispatch = false;
 	// A late ObjectCreate arrives in a settled state. Apply the completed visual
 	// hooks from its transition, without replaying sounds or particle bursts.
 	if (UACEScriptComponent* Scripts = GetOwner()->FindComponentByClass<UACEScriptComponent>())
@@ -2001,10 +2010,10 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 	if (bReusePose) Swap(Animated, TickPoseScratch);
 	ON_SCOPE_EXIT { if (bReusePose) Swap(Animated, TickPoseScratch); };
 
-	if (!(AnimMode == EACEAnimMode::DoorTransition && bDoorHoldFinal)
-		&& !(AnimMode == EACEAnimMode::ActionOneShot && bHoldActionFinal))
+	if (!(AnimMode == EACEAnimMode::ActionOneShot && bHoldActionFinal))
 	{
-		const float Rate = (AnimMode == EACEAnimMode::ActionOneShot) ? ActionPlayRate : LocomotionPlayRate;
+		const float Rate = AnimMode == EACEAnimMode::DoorTransition ? 1.f
+			: (AnimMode == EACEAnimMode::ActionOneShot) ? ActionPlayRate : LocomotionPlayRate;
 		AnimTime += DeltaTime * Rate;
 	}
 	UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
@@ -2266,26 +2275,9 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 		const float* PreviousTime = bSuppressNextHookDispatch
 			? &SuppressedPreviousTime
 			: GetPreviousHookTime(LinkTrackKey, AnimTime);
-		bool bOk = Dat->EvaluateMotionLink(
-			static_cast<uint32>(MotionTableId), DoorFromCommand, DoorToCommand, AnimTime,
-			PartMeshes.Num(), Animated, WorldScale, AnimatedCount, bFinished, PreviousTime, &Hooks,
-			ACEMotion::StanceNonCombat);
-		if (!bOk)
-		{
-			// Fallback: evaluate Cycles entry for On/Off if Links missing.
-			const float EvalTime = bDoorHoldFinal ? 1000.f : AnimTime;
-			ActiveEvalTime = EvalTime;
-			SuppressedPreviousTime = EvalTime;
-			ActiveTrackKey = (3ull << 60) | static_cast<uint64>(DoorToCommand);
-			PreviousTime = bSuppressNextHookDispatch
-				? &SuppressedPreviousTime
-				: GetPreviousHookTime(ActiveTrackKey, EvalTime);
-			bOk = Dat->EvaluateMotionCommand(
-				static_cast<uint32>(MotionTableId), DoorToCommand, EvalTime,
-				PartMeshes.Num(), Animated, WorldScale, AnimatedCount, PreviousTime, &Hooks,
-				ACEMotion::StanceNonCombat, /*bLoop*/ false);
-			bFinished = bDoorHoldFinal || AnimTime > 2.f;
-		}
+		const bool bOk = Dat->EvaluateStateMotion(
+			static_cast<uint32>(MotionTableId), DoorFromCommand, DoorToCommand, AnimTime, bDoorStartsInCycle,
+			PartMeshes.Num(), Animated, WorldScale, AnimatedCount, bFinished, PreviousTime, &Hooks);
 		if (bOk)
 		{
 			CommitHookTime(ActiveTrackKey, ActiveEvalTime);
@@ -2315,11 +2307,8 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 			{
 				RecookPartPhysics();
 			}
-			// Held On/Off must not re-dispatch end-clip NoDraw every tick (pedestal vanished).
-			if (!bDoorHoldFinal || bJustFinished)
-			{
-				DispatchCrossedHooks(Hooks);
-			}
+			// The evaluator crosses link hooks only once, then dispatches cycle hooks.
+			DispatchCrossedHooks(Hooks);
 		}
 		return;
 	}

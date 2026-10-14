@@ -7,12 +7,16 @@
 #include "HAL/FileManager.h"
 #include "Engine/GameInstance.h"
 #include "ACEDatSubsystem.h"
+#include "ACERuntimeOptions.h"
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
 #include "UI/ACERetailUILayout.h"
 #include "UI/ACEUIElementManager.h"
 #include "UI/ACEUILayoutResolver.h"
 #include "UI/ACEUIGameplayBinder.h"
+#include "UI/ACEVideoSettingsWidget.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/CheckBox.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUILayoutCommandsTest, "ACE.RetailParity.UILayoutCommands",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -21,6 +25,21 @@ bool FACEUILayoutCommandsTest::RunTest(const FString&)
     using namespace ACERetailUILayout;
     TGuardValue<FString> SettingsPath(GGameUserSettingsIni, FPaths::ProjectSavedDir()/TEXT("Automation/UILayoutPreferencesFixture.ini"));
     FConfigFile Preferences; Preferences.NoSave = true; GConfig->SetFile(GGameUserSettingsIni, &Preferences);
+    {
+        auto* Video=NewObject<UACEVideoSettingsWidget>();Video->Initialize();auto Slate=Video->TakeWidget();
+        auto* Bounds=Cast<UCheckBox>(Video->WidgetTree->FindWidget(TEXT("ConstrainUIWindows")));
+        if(TestNotNull(TEXT("Options exposes shared game/plugin window bounds"),Bounds))
+        {
+            TestTrue(TEXT("Window bounds defaults to enabled"),Bounds->IsChecked());
+            Bounds->SetIsChecked(false);Video->ApplyInterfaceOptions();
+            TestEqual(TEXT("Apply saves allowing offscreen windows"),ACERuntimeOptions::Get(TEXT("ConstrainUIWindows")),0.f);
+            auto* Reopened=NewObject<UACEVideoSettingsWidget>();Reopened->Initialize();auto ReopenedSlate=Reopened->TakeWidget();
+            auto* Restored=Cast<UCheckBox>(Reopened->WidgetTree->FindWidget(TEXT("ConstrainUIWindows")));
+            TestTrue(TEXT("Reopened options restores saved bounds preference"),Restored&&!Restored->IsChecked());
+            Bounds->SetIsChecked(true);Video->ResetVideo();TestFalse(TEXT("Reset discards unsaved bounds change"),Bounds->IsChecked());
+            Video->DefaultsVideo();TestTrue(TEXT("Defaults restore bounds protection"),Bounds->IsChecked());Video->ApplyInterfaceOptions();
+        }
+    }
     FString Name, Error;
     TestTrue(TEXT("No argument means retail default file"), NamedFile(TEXT(""), Name, Error));
     TestEqual(TEXT("Default file"), Name, FString(TEXT("UI-Default.txt")));
@@ -175,6 +194,34 @@ bool FACEUILayoutCommandsTest::RunTest(const FString&)
     TestEqual(TEXT("UI commands create no server packets"), Session.CachedC2SPackets.Num(), 0);
     TestTrue(TEXT("Missing layout command is handled locally"), Binder->TryDispatchChatCommand(TEXT("/loadui no_such_layout")));
     Binder->TryDispatchChatCommand(TEXT("/lockui")); TestFalse(TEXT("Retail lock command toggles"), Manager->IsUiLocked());
+    if(RadarGrip)
+    {
+        // Pointer capture remains live outside the viewport on Windows/Linux.
+        const FVector2D View(1920,1080);
+        const auto Drag=[&](FVector2D Delta)
+        {
+            Manager->BringFloatyToFront(Radar);
+            const FVector2D Start=FVector2D(RadarGrip->GetScreenOrigin())+FVector2D(RadarGrip->Width,RadarGrip->Height)*.5;
+            Manager->NotifyMouseDown(Start,View,EKeys::LeftMouseButton);
+            Manager->NotifyMouseMove(Start+Delta,View);
+            Manager->NotifyMouseUp(Start+Delta,View,EKeys::LeftMouseButton);
+        };
+        Drag(FVector2D(-5000,-5000));
+        TestEqual(TEXT("Constrained retail drag stops at top/left edges"),FIntPoint(Radar->GetDrawX(),Radar->GetDrawY()),FIntPoint::ZeroValue);
+        Drag(FVector2D(5000,5000));
+        TestEqual(TEXT("Constrained retail drag includes the whole window"),FIntPoint(Radar->GetDrawX()+Radar->Width,Radar->GetDrawY()+Radar->Height),FIntPoint(1920,1080));
+        ACERuntimeOptions::Set(TEXT("ConstrainUIWindows"),0);
+        Drag(FVector2D(-2500,-1500));const FIntPoint Offscreen(Radar->GetDrawX(),Radar->GetDrawY());
+        TestTrue(TEXT("Disabled bounds allow offscreen retail placement"),Offscreen.X<0&&Offscreen.Y<0);
+        Manager->ApplyEdgeAnchoredLayout(1920,1080);
+        TestEqual(TEXT("Reflow respects allowed offscreen placement"),FIntPoint(Radar->GetDrawX(),Radar->GetDrawY()),Offscreen);
+        const FString FreeLayout=Manager->ExportScreenLayout();
+        Manager->ImportScreenLayout(FreeLayout,Error);
+        TestEqual(TEXT("Allowed offscreen placement survives layout import"),FIntPoint(Radar->GetDrawX(),Radar->GetDrawY()),Offscreen);
+        ACERuntimeOptions::Set(TEXT("ConstrainUIWindows"),1);
+        Manager->ApplyEdgeAnchoredLayout(1920,1080);
+        TestEqual(TEXT("Enabling bounds recovers retail windows"),FIntPoint(Radar->GetDrawX(),Radar->GetDrawY()),FIntPoint::ZeroValue);
+    }
     return true;
 }
 #endif

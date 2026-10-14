@@ -1295,6 +1295,9 @@ struct ACECLIENT_API FACEWorldObject
 
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	float Scale = 1.f;
+	/** PublicWeenieDesc has HookItemTypes: this container displays a house-hook item. */
+	UPROPERTY(BlueprintReadOnly, Category = "ACE")
+	bool bIsHouseHook = false;
 	float Friction = .95f;
 
 	/** Retail physics/model scale is server-authored, including custom weenies. */
@@ -1441,7 +1444,9 @@ struct ACECLIENT_API FACEWorldObject
 	{
 		// Corpses are containers with a creature MTable, not animated chests.
 		if (IsCorpse()) return false;
-		if (IsDoor() || IsOpenable())
+		// Hook containers are Openable too, but display the item's own animation.
+		// Only an explicit On/Off motion may put a hooked decoration in that state.
+		if (IsDoor() || (!bIsHouseHook && IsOpenable()))
 		{
 			return true;
 		}
@@ -1450,7 +1455,7 @@ struct ACECLIENT_API FACEWorldObject
 		{
 			return true;
 		}
-		if ((ItemType & ACEItemType::Container) != 0 && MotionTableId != 0)
+		if (!bIsHouseHook && (ItemType & ACEItemType::Container) != 0 && MotionTableId != 0)
 		{
 			return true;
 		}

@@ -12,6 +12,7 @@
 #include "ACEPluginSubsystem.generated.h"
 
 class FACEPluginVM;
+namespace ACEUCMPanelPrivate { class FACEUCMImportUITest; }
 class SWidget;
 class AACEPlayerController;
 class UGameViewportClient;
@@ -96,6 +97,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEUCMProfileStorageTest;
     friend class FACEUCMProfilePanelTest;
     friend class FACEUCMSharedMetaTest;
+    friend class ACEUCMPanelPrivate::FACEUCMImportUITest;
     friend class FACEPluginLocalServiceTest;
     friend class FACEPluginCosmeticsIntegrationTest;
     friend class FACEPluginCosmeticsTest;
@@ -146,6 +148,9 @@ public:
     bool InitializeUCMSelection();
     bool MaterializeUCMMetaProfiles(const TSharedPtr<FJsonObject>& Profile, const FString& Name);
     bool ImportUCMSection(const FString& Filename);
+    TSharedPtr<FJsonObject> ImportedUCMProfiles(const FString& Source) const;
+    bool RememberUCMImport(const FString& Source, const TSharedPtr<FJsonObject>& Links);
+    bool ReuseUCMImport(const FString& Source);
     TSharedPtr<FJsonObject> InspectLegacyProfile(const FString& Path);
     bool SaveLegacyLoot(const FString& Name,const TSharedPtr<FJsonObject>& Document);
     bool ImportLegacyProfile(const FString& Path,const FString& Name);
@@ -163,12 +168,16 @@ public:
     TSharedRef<SWidget> MakePanel(const FString& PluginId = FString());
     void TogglePluginWindow(const FString& Id);
     bool IsPluginWindowOpen(const FString& Id) const;
+    bool WasPluginWindowOpen(const FString& Id) const;
+    void SavePluginWindowVisibility(const FString& Id, bool Open);
     FVector2D GetPluginWindowPosition(const FString& Id, const FVector2D& Default) const;
     void SavePluginWindowPosition(const FString& Id, const FVector2D& Position);
     bool IsPluginBarVisible() const;
     void SetPluginBarVisible(bool Visible);
     bool IsPluginBarMinimized() const;
     void SetPluginBarMinimized(bool Minimized);
+    bool IsPluginBarHorizontal() const;
+    void SetPluginBarHorizontal(bool Horizontal);
     bool IsPluginBarUnlocked() const;
     void TogglePanel();
     TSharedRef<SWidget> MakeUCMPanel(const FString& InitialPage=FString(), bool bShowTitle=true);

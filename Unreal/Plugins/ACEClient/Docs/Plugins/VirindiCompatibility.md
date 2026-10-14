@@ -1,5 +1,60 @@
 # Virindi compatibility review
 
+## Import and meta execution review — 2026-10-13
+
+Compared the supplied VT decompile's `hn.cs` rule scheduler, `f.cs` All action,
+`h2.cs` chat command action, `ff.cs` embedded route loader and
+`uTank2/PluginCore.cs` settings/nav command handlers. VT runs an ordered action
+list synchronously: a settings load is complete before the next option command.
+UCM now waits for the native profile-load acknowledgement before continuing
+nested actions or evaluating later rules. Empty embedded routes also send a
+native route update while otherwise idle, so a meta can clear an old path.
+
+Imports reuse existing named native profiles by source, including dependencies
+exported from metas. Import All processes files between UI frames and preserves
+the active selection; compatibility failures remain visible in a bounded,
+clearable report. Unsupported commands still prevent conversion. This review
+does not claim support for every public meta or Decal plugin dependency.
+
+Regression coverage includes repeated and mixed-case imports, edited profiles,
+anonymous-profile migration, nested USD/UTL loads followed by options and routes,
+and the supplied Aun Ralirea source graph through conversion, Lua and native loads.
+
+## Self and other buff review — 2026-10-13
+
+Compared VT `eq.cs` (selection and timers), `fz.cs`/`gw.cs` (refresh grouping),
+`gj.cs`/`u.cs` (fast-cast word trigger and movement release), `dm.cs`,
+`uTank2/MySpell.cs`, and `uTank2.Resources.defaultsettings.usd`. Animation review
+used retail `CMotionTable::GetObjectSequence` and `CSequence::remove_cyclic_anims`.
+
+- Automatic self buffs now select ordinary attribute, regeneration, protection,
+  trained-skill and equipment families. Untrained usable skills, fellowship
+  spells and arbitrary beneficial custom families are not silently added.
+  Explicit inclusions remain supported. UCM retains automatic weapon auras,
+  whereas VT also supports explicit item bindings.
+- New profiles use VT's 300-second refresh default. Existing explicit settings
+  remain unchanged. Starting a buff adds the default 30-second grouping window
+  for 30 seconds. Both spell and consumable maintenance cap oversized windows
+  at half duration; server-reported augmented durations are available to the policy.
+- Matching result chat can precede the character enchantment packet. A bounded
+  two-second grace prevents an immediate duplicate of that exact spell without
+  masking dispels or delaying a newly available stronger tier. Character buffs
+  still use authoritative enchantments, and item timers still require confirmation.
+- Other requests use `buff_skill_margin`, spell-ID family exclusions and selected
+  protections/banes; they no longer inherit the combat castability buffer or choose
+  fellowship spells. Each explicit request confirms its casts once; remote buff
+  registries are not available and are not guessed.
+- The fast-buff backward press/release still occurs in one update without held
+  travel. It removes only a held casting tail. Unfinished cast links and following
+  scarab actions survive, including rapid successive casts, matching retail's
+  sequence removal rules.
+
+Regression coverage: `ACE.Plugins.BuffParity`, `Decisions`, `Recovery`,
+`CharacterSettings`, `RouteAndTellRequests`, `SchedulingParity`, and
+`ACE.RetailParity.RunSpeed`. These cover policy timing, server-result handling,
+real DAT spells, queue failures, and movement packets; a live visual comparison
+with retail remains separate from the automated checks.
+
 ## Meta, routing and vendor follow-up — 2026-10-13
 
 Compared the local VT decompile's `hn.cs` state machine, `ff.cs` embedded
@@ -492,12 +547,12 @@ below still apply. Live server and headset validation remains outstanding.
 
 ## Native UCM commands and saved conversions — 2026-10-05
 
-The supported `/vt` command adapters also accept `/ucm` with the same arguments:
+The supported `/vt` command adapters also accept `/acueucm` with the same arguments:
 `jump`, `tapjump`, `start`, `stop`, `forcebuff`, `cancelforcebuff`, `echo`,
 `setmetastate`, `mexec`, `opt set`, `enablecombat`, `enablebuffing`, `enablenav`,
 `enablelooting`, and `meta/nav/loot/looting/settings load`. For example,
 `/vt jump 90 true 600 strafeleft` imports as
-`/ucm jump 90 true 600 strafeleft`. `/ucm help` lists the chat syntax.
+`/acueucm jump 90 true 600 strafeleft`. `/acueucm help` lists the chat syntax.
 The command compiler is shared by chat, NAV command waypoints, MET actions and
 command-producing expressions. The old Lua `vtcommand` API remains an alias of
 `ucmcommand`, so previously saved profiles continue to work. No commands are sent
@@ -518,7 +573,7 @@ Loot, Monsters, Metas and Vendors files. Imported meta dependencies (including
 cyclic references) are compiled into the Metas file; their original names remain
 library lookup keys. See the README's reusable UCM profiles section for migration
 and sharing behavior.
-Command text stored in compiled actions uses `/ucm`; item names, chat payloads
+Command text stored in compiled actions uses `/acueucm`; item names, chat payloads
 and chat-matching expressions are preserved. Command-producing expression
 prefixes are converted without stripping concatenation whitespace; dynamically
 assembled legacy commands remain accepted by the shared compiler.

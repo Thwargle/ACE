@@ -1,5 +1,6 @@
 #include "ACEVTProfile.h"
 #include "ACEVTRegex.h"
+#include "ACEClientChatCommands.h"
 #include "String/LexFromString.h"
 
 namespace ACEVTProfile
@@ -182,14 +183,18 @@ bool IsSupportedPattern(const FString& Pattern)
 FString NativeCommand(const FString& Text)
 {
     FString Command=Text.TrimStartAndEnd();
+    Command=ACEClientChatCommands::CanonicalLine(Command);
+    // Use the established parser spelling while normalizing VT subcommands.
+    if(Command.StartsWith(TEXT("/acueucm")) && (Command.Len()==8 || FChar::IsWhitespace(Command[8])))
+        Command=TEXT("/ucm")+Command.Mid(8);
     // Only replace the command token; quoted chat text and item names are data.
     if(Command.Len()>=3&&Command.Left(3).Equals(TEXT("/vt"),ESearchCase::IgnoreCase)
         &&(Command.Len()==3||FChar::IsWhitespace(Command[3])))Command=TEXT("/ucm")+Command.Mid(3);
-    if((Command.Equals(TEXT("/og summon off"),ESearchCase::IgnoreCase)||Command.Equals(TEXT("/og summon false"),ESearchCase::IgnoreCase)))return TEXT("/ucm opt set SummonPets false");
-    if((Command.Equals(TEXT("/og summon on"),ESearchCase::IgnoreCase)||Command.Equals(TEXT("/og summon true"),ESearchCase::IgnoreCase)))return TEXT("/ucm opt set SummonPets true");
+    if((Command.Equals(TEXT("/og summon off"),ESearchCase::IgnoreCase)||Command.Equals(TEXT("/og summon false"),ESearchCase::IgnoreCase)))return TEXT("/acueucm opt set SummonPets false");
+    if((Command.Equals(TEXT("/og summon on"),ESearchCase::IgnoreCase)||Command.Equals(TEXT("/og summon true"),ESearchCase::IgnoreCase)))return TEXT("/acueucm opt set SummonPets true");
     for(const auto& Alias:TArray<TPair<FString,FString>>{{TEXT("/ucm settings loadchar "),TEXT("/ucm settings load ")},{TEXT("/ucm lootprofile load "),TEXT("/ucm looting load ")}})
-        if(Command.StartsWith(Alias.Key,ESearchCase::IgnoreCase))return Alias.Value+Command.Mid(Alias.Key.Len());
-    return Command;
+        if(Command.StartsWith(Alias.Key,ESearchCase::IgnoreCase))return ACEClientChatCommands::CanonicalLine(Alias.Value+Command.Mid(Alias.Key.Len()));
+    return ACEClientChatCommands::CanonicalLine(Command);
 }
 #include "ACEVTMeta.inl"
 #include "ACEVTSettings.inl"

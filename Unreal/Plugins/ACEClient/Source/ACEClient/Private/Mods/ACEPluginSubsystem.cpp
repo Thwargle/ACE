@@ -44,26 +44,15 @@ namespace
         return FFileHelper::SaveStringToFile(Encode(O), *Temp, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM)
             && IFileManager::Get().Move(*Path, *Temp, true, true);
     }
-    FString WriteNewCopy(const FString& Folder,const FString& Name,const TSharedPtr<FJsonObject>& Object)
-    {
-        FString Stem;
-        for(TCHAR Ch:Name.Left(48))Stem.AppendChar(FChar::IsAlnum(Ch)||Ch=='_'||Ch=='-'?Ch:'_');
-        if(Stem.IsEmpty())Stem=TEXT("Imported");
-        IFileManager::Get().MakeDirectory(*Folder,true);
-        const FString Json=Encode(Object);
-        for(int32 Copy=1;Copy<=10000;++Copy)
-        {
-            const FString Candidate=Stem+(Copy==1?FString():FString::Printf(TEXT("_%d"),Copy));
-            const FString Path=Folder/(Candidate+TEXT(".json"));
-            if(IFileManager::Get().FileExists(*Path))continue;
-            // Exclusive creation also protects a copy created by another process.
-            if(FFileHelper::SaveStringToFile(Json,*Path,FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM,&IFileManager::Get(),FILEWRITE_NoReplaceExisting))return Candidate;
-            if(!IFileManager::Get().FileExists(*Path))return FString();
-        }
-        return FString();
-    }
     FString String(const TSharedPtr<FJsonObject>& O, const TCHAR* Key, const FString& Default = FString())
     { FString V; return O && O->TryGetStringField(Key, V) ? V : Default; }
+    FString UCMImportPath(const FString& Source)
+    {
+        const FString Full=FPaths::ConvertRelativePathToFull(Source),Folder=FPaths::GetPath(Full),Filename=FPaths::GetCleanFilename(Full);
+        TArray<FString> Files;IFileManager::Get().FindFiles(Files,*(Folder/TEXT("*")),true,false);
+        for(const auto& File:Files)if(File.Equals(Filename,ESearchCase::IgnoreCase))return Folder/File;
+        return Full;
+    }
     double Number(const TSharedPtr<FJsonObject>& O, const TCHAR* Key, double Default = 0)
     { double V; return O && O->TryGetNumberField(Key, V) && FMath::IsFinite(V) ? V : Default; }
     int32 Guid(const TSharedPtr<FJsonObject>& O, const TCHAR* Key, uint32 Default = 0)
@@ -506,8 +495,8 @@ bool UACEPluginSubsystem::RunUCMCommand(const FString& Arguments)
     if(Args.Equals(TEXT("stop"),ESearchCase::IgnoreCase)){Stop(TEXT("ucm"),TEXT("Stopped"),true);Notice=TEXT("UCM stopped.");return true;}
     if(Args.Equals(TEXT("start"),ESearchCase::IgnoreCase))return Start(TEXT("ucm"));
     if(Args.Equals(TEXT("help"),ESearchCase::IgnoreCase))
-    {Notice=TEXT("/ucm start | stop | log | forcebuff | cancelforcebuff | jump <heading> <true/false> <milliseconds> [forward/strafeleft/straferight] | tapjump | opt set <option> <value> | enablecombat/enablebuffing/enablenav/enablelooting <true/false> | meta/nav/loot/looting/settings load <file> | setmetastate <state> | mexec <expression> | echo <text>");return true;}
-    TArray<FString> Issues;const auto Command=ACEVTProfile::CompileCommand(TEXT("/ucm ")+Args,Issues);
+    {Notice=TEXT("/acueucm start | stop | log | forcebuff | cancelforcebuff | jump <heading> <true/false> <milliseconds> [forward/strafeleft/straferight] | tapjump | opt set <option> <value> | enablecombat/enablebuffing/enablenav/enablelooting <true/false> | meta/nav/loot/looting/settings load <file> | setmetastate <state> | mexec <expression> | echo <text>");return true;}
+    TArray<FString> Issues;const auto Command=ACEVTProfile::CompileCommand(TEXT("/acueucm ")+Args,Issues);
     if(!Command||Issues.Num()){Notice=FString::Join(Issues,TEXT("\n"));return false;}
     auto P=Find(TEXT("ucm"));if(!P||!P->Enabled){Notice=TEXT("Enable UCM before using its commands.");return false;}
     const FString Op=String(Command,TEXT("op"));
@@ -538,7 +527,7 @@ bool UACEPluginSubsystem::RunUCMCommand(const FString& Arguments)
         bUCMCommandOnly=true; // A manual jump must not also start hunting or looting.
     }
     UCMCommands.Add(MakeShared<FJsonValueObject>(Command));P->NextDecision=0;
-    Notice=TEXT("Queued ")+ACEVTProfile::NativeCommand(TEXT("/ucm ")+Args);return true;
+    Notice=TEXT("Queued ")+ACEVTProfile::NativeCommand(TEXT("/acueucm ")+Args);return true;
 }
 void UACEPluginSubsystem::CancelForceBuff()
 {
@@ -701,6 +690,7 @@ bool UACEPluginSubsystem::InitializeUCMSelection()
         if(Refs->Values.IsEmpty()&&!ACEUCMProfiles::Save(UserDirectory(),Legacy,Old,Refs,nullptr,Notice,ValidUCMProfile))return false;
     }
     const FString Previous=String(Settings,TEXT("ucm.profile"),TEXT("Default"));
+    if(!ACEUCMProfiles::MigrateAnonymousImports(UserDirectory(),Notice))return false;
     if(IFileManager::Get().FileExists(*(UserDirectory()/TEXT("ucm-selection.json"))))return LoadProfile(P->Id,ACEUCMProfiles::ActiveName());
     if(IFileManager::Get().FileExists(*(UserDirectory()/TEXT("Profiles/ucm")/(Previous+TEXT(".json")))))return LoadProfile(P->Id,Previous);
     for(const auto& Section:ACEUCMProfiles::Sections())
@@ -713,6 +703,7 @@ bool UACEPluginSubsystem::ImportUCMSection(const FString& Filename)
     auto P=Find(TEXT("ucm"));const FString Ext=FPaths::GetExtension(Filename).ToLower();
     if(!P||(Ext!=TEXT("nav")&&Ext!=TEXT("utl"))||Filename!=FPaths::GetCleanFilename(Filename)||!GetProfileFiles(Ext).Contains(Filename))
     {Notice=TEXT("Choose a .nav or .utl file from the import folder.");return false;}
+    if(!ImportedUCMProfiles(GetProfileFolder()/Filename)->Values.IsEmpty())return ReuseUCMImport(GetProfileFolder()/Filename);
     TArray<FString> Issues;auto Converted=ACEVTProfile::ConvertFile(GetProfileFolder()/Filename,Issues);
     if(!Converted||Issues.Num()){Notice=TEXT("Cannot import ")+Filename+TEXT(": ")+FString::Join(Issues,TEXT("\n"));return false;}
     const FString Section=Ext==TEXT("nav")?TEXT("Routes"):TEXT("Loot");
@@ -724,7 +715,57 @@ bool UACEPluginSubsystem::ImportUCMSection(const FString& Filename)
     const FString Name=ACEUCMProfiles::UniqueName(UserDirectory(),Section,FPaths::GetBaseFilename(Filename));
     if(!ACEUCMProfiles::SaveSectionAs(UserDirectory(),Section,Name,O,Notice))return false;
     if(!SelectUCMSection(Section,Name)){IFileManager::Get().Delete(*(UserDirectory()/TEXT("Profiles")/Section/(Name+TEXT(".json"))));return false;}
+    auto Refs=MakeShared<FJsonObject>();Refs->SetStringField(Section,Name);
+    if(!RememberUCMImport(GetProfileFolder()/Filename,Refs))return false;
     Notice=TEXT("Imported ")+Filename+TEXT(" as ")+Section+TEXT(": ")+Name+TEXT(". Original file unchanged.");return true;
+}
+
+TSharedPtr<FJsonObject> UACEPluginSubsystem::ImportedUCMProfiles(const FString& Source) const
+{
+    const FString Full=UCMImportPath(Source);
+    auto Result=MakeShared<FJsonObject>();auto Index=Read(UserDirectory()/TEXT("import-index.json"));
+    const TSharedPtr<FJsonObject>* Entry=nullptr;
+    if(Index&&Index->TryGetObjectField(Full,Entry))for(const auto& Pair:(*Entry)->Values)
+        if(Pair.Value->Type==EJson::String&&!Pair.Value->AsString().Equals(TEXT("Default"),ESearchCase::IgnoreCase)
+            &&ACEUCMProfiles::Sections().Contains(FString(Pair.Key))&&ACEUCMProfiles::SafeName(Pair.Value->AsString())
+            &&IFileManager::Get().FileExists(*(UserDirectory()/TEXT("Profiles")/FString(Pair.Key)/(Pair.Value->AsString()+TEXT(".json")))))
+            Result->Values.Add(Pair.Key,Pair.Value);
+    // Adopt imports made before the index existed, including dependencies
+    // exported by a meta. Never confuse same-named files in different folders.
+    const FString Ext=FPaths::GetExtension(Source).ToLower();
+    const FString Section=Ext==TEXT("nav")?TEXT("Routes"):Ext==TEXT("utl")?TEXT("Loot"):Ext==TEXT("met")?TEXT("Metas"):TEXT("Character");
+    if(!Result->HasField(Section))for(const auto& Name:UCMSectionProfiles(Section))
+    {
+        auto Part=Read(UserDirectory()/TEXT("Profiles")/Section/(Name+TEXT(".json")));
+        const FString Original=String(Part,*(Ext+TEXT("_source")));if(Original.IsEmpty())continue;
+        const FString Candidate=Original==FPaths::GetCleanFilename(Original)?GetProfileFolder()/Original:Original;
+        if(FPaths::IsSamePath(Full,UCMImportPath(Candidate)))
+        {Result->SetStringField(Section,Name);break;}
+    }
+    // A deleted primary profile cannot be considered imported just because
+    // a companion section (such as Monsters from a USD) still exists.
+    if(!Result->HasField(Section))Result->Values.Empty();
+    return Result;
+}
+bool UACEPluginSubsystem::RememberUCMImport(const FString& Source,const TSharedPtr<FJsonObject>& Links)
+{
+    const FString Path=UserDirectory()/TEXT("import-index.json"),Full=UCMImportPath(Source);
+    auto Index=Read(Path);if(!Index)Index=MakeShared<FJsonObject>();
+    auto Refs=ImportedUCMProfiles(Source);for(const auto& Pair:Links->Values)Refs->Values.Add(Pair.Key,Pair.Value);
+    const TSharedPtr<FJsonObject>* Existing=nullptr;
+    if(Index->TryGetObjectField(Full,Existing)&&FJsonValue::CompareEqual(FJsonValueObject(*Existing),FJsonValueObject(Refs)))return true;
+    Index->SetObjectField(Full,Refs);
+    if(!Write(Path,Index)){Notice=TEXT("Could not save the import index.");return false;}return true;
+}
+bool UACEPluginSubsystem::ReuseUCMImport(const FString& Source)
+{
+    auto P=Find(TEXT("ucm"));if(!P)return false;
+    const auto Refs=ImportedUCMProfiles(Source);if(Refs->Values.IsEmpty())return false;
+    auto O=P->Profile,Links=P->ProfileLinks;
+    for(const auto& Pair:Refs->Values)if(!ACEUCMProfiles::Select(UserDirectory(),FString(Pair.Key),Pair.Value->AsString(),O,Links,Notice))return false;
+    if(!ValidUCMProfile(O)){Notice=TEXT("Previously imported profile contains invalid settings; current selection was kept.");return false;}
+    if(!ACEUCMProfiles::SaveSelection(UserDirectory(),O,Links,Notice)||!LoadProfile(P->Id,ACEUCMProfiles::ActiveName()))return false;
+    Notice=TEXT("Already imported: ")+FPaths::GetCleanFilename(Source)+TEXT(". Selected existing profiles; your edits were kept.");return true;
 }
 
 TSharedPtr<FJsonObject> UACEPluginSubsystem::InspectLegacyProfile(const FString& Path)
@@ -766,6 +807,23 @@ bool UACEPluginSubsystem::SelectProfileFile(const FString& Filename)
 {
     const auto P=Find(TEXT("ucm"));const FString Ext=FPaths::GetExtension(Filename).ToLower();
     if(!P||Filename!=FPaths::GetCleanFilename(Filename)||!GetProfileFiles(Ext).Contains(Filename))return false;
+    if(Ext==TEXT("nav")||Ext==TEXT("utl"))
+    {
+        if(!ImportUCMSection(Filename))return false;
+        // Explicit route selection is ready to follow on Start. Shared route
+        // data and inactive meta dependencies do not own the activity switch.
+        // Bulk imports restore the previous selection and switches per file.
+        bool Navigation=false;P->Profile->TryGetBoolField(TEXT("navigation"),Navigation);
+        if(Ext==TEXT("nav")&&!Navigation)
+        {
+            const FString ImportNotice=Notice;
+            auto Updated=MakeShared<FJsonObject>(*P->Profile);Updated->SetBoolField(TEXT("navigation"),true);
+            if(!SaveProfile(P->Id,P->ProfileName,Encode(Updated)))return false;
+            Notice=ImportNotice;
+        }
+        return true;
+    }
+    if(!ImportedUCMProfiles(GetProfileFolder()/Filename)->Values.IsEmpty())return ReuseUCMImport(GetProfileFolder()/Filename);
     TArray<FString> Issues;const auto Converted=ACEVTProfile::ConvertFile(GetProfileFolder()/Filename,Issues);
     if(!Converted||Issues.Num()){Notice=TEXT("Cannot load ")+Filename+TEXT(": ")+(Issues.Num()?FString::Join(Issues,TEXT("\n")):TEXT("Invalid profile"));return false;}
     auto Updated=MakeShared<FJsonObject>(*P->Profile);
@@ -814,12 +872,13 @@ bool UACEPluginSubsystem::ClearProfileFile(const FString& Ext)
 bool UACEPluginSubsystem::ImportLegacyProfile(const FString& Path,const FString& Name)
 {
     auto P=Find(TEXT("ucm"));if(!P||!SafeName(Name)){Notice=TEXT("Choose an import name using letters, numbers, _ or - (maximum 64).");return false;}
+    if(!ImportedUCMProfiles(Path)->Values.IsEmpty())return ReuseUCMImport(Path);
     auto D=InspectLegacyProfile(Path);if(!D)return false;
     TArray<FString> Issues;auto Converted=ACEVTProfile::ConvertFile(Path,Issues);
     auto Archive=MakeShared<FJsonObject>();Archive->SetObjectField(TEXT("document"),D);Archive->SetObjectField(TEXT("converted"),Converted);
     TArray<TSharedPtr<FJsonValue>> Warnings;for(const auto& Issue:Issues)Warnings.Add(MakeShared<FJsonValueString>(Issue));Archive->SetArrayField(TEXT("issues"),Warnings);
-    const FString Report=WriteNewCopy(UserDirectory()/TEXT("Imports"),Name,Archive);
-    if(Report.IsEmpty()){Notice=TEXT("Could not save import report.");return false;}
+    const FString Report=Name+TEXT("_")+FMD5::HashAnsiString(*FPaths::ConvertRelativePathToFull(Path)).Left(12);
+    if(!Write(UserDirectory()/TEXT("Imports")/(Report+TEXT(".json")),Archive)){Notice=TEXT("Could not save import report.");return false;}
     if(Issues.Num()){Notice=FString::Printf(TEXT("%d compatibility issues. Original data and report saved in Imports/%s.json; active settings were not changed."),Issues.Num(),*Report);return false;}
     auto Updated=MakeShared<FJsonObject>();Updated->Values=P->Profile->Values;
     const FString Kind=FPaths::GetExtension(Path).ToLower();
@@ -830,12 +889,14 @@ bool UACEPluginSubsystem::ImportLegacyProfile(const FString& Path,const FString&
 }
 bool UACEPluginSubsystem::SaveImportedProfile(const FString& Name,const TSharedPtr<FJsonObject>& Profile,const FString& Source)
 {
+    if(!ImportedUCMProfiles(Source)->Values.IsEmpty())return ReuseUCMImport(Source);
     Profile->SetStringField(TEXT("import_source"),FPaths::ConvertRelativePathToFull(Source));
     Profile->SetNumberField(TEXT("ucm_format_version"),1);
     if(!ValidUCMProfile(Profile)||Encode(Profile).Len()>8*1024*1024){Notice=TEXT("Converted profile exceeds UCM limits.");return false;}
     auto P = Find(TEXT("ucm")); if (!P) return false;
     auto O = ACEUCMProfiles::Copy(Profile);
     auto Links = P->ProfileLinks ? ACEUCMProfiles::Copy(P->ProfileLinks) : MakeShared<FJsonObject>();
+    auto ImportedLinks=MakeShared<FJsonObject>();
     const bool NewMeta=!FJsonValue::CompareEqual(FJsonValueObject(ACEUCMProfiles::Extract(O,TEXT("Metas"))),FJsonValueObject(ACEUCMProfiles::Extract(P->Profile,TEXT("Metas"))));
     const FString MetaName=NewMeta?ACEUCMProfiles::UniqueName(UserDirectory(),TEXT("Metas"),Name):String(Links,TEXT("Metas"),Name);
     if(!MaterializeUCMMetaProfiles(O,MetaName))return false;
@@ -847,8 +908,10 @@ bool UACEPluginSubsystem::SaveImportedProfile(const FString& Name,const TSharedP
         const FString PartName = Section==TEXT("Metas")&&NewMeta?MetaName:ACEUCMProfiles::UniqueName(UserDirectory(), Section, Name);
         if (!ACEUCMProfiles::SaveSectionAs(UserDirectory(), Section, PartName, O, Notice)) return false;
         Links->SetStringField(Section, PartName);
+        ImportedLinks->SetStringField(Section,PartName);
     }
     if (!ACEUCMProfiles::SaveSelection(UserDirectory(), O, Links, Notice) || !LoadProfile(TEXT("ucm"), ACEUCMProfiles::ActiveName())) return false;
+    if(!RememberUCMImport(Source,ImportedLinks))return false;
     Notice = TEXT("Imported profiles: ") + Name + TEXT(". Original files are unchanged. Press Start to run."); return true;
 }
 bool UACEPluginSubsystem::MaterializeUCMMetaProfiles(const TSharedPtr<FJsonObject>& Profile,const FString& Name)
@@ -933,11 +996,13 @@ bool UACEPluginSubsystem::MaterializeUCMMetaProfiles(const TSharedPtr<FJsonObjec
                 // not a replacement NAV path or UTL rule set.
                 if(Section!=Primary&&(Ext!=TEXT("usd")||Section!=TEXT("Monsters")||!Data->HasField(TEXT("monsters"))))continue;
                 FString Part=String(FileRefs,*Section);
+                if(Part.IsEmpty())Part=String(ImportedUCMProfiles(FPaths::GetPath(FPaths::ConvertRelativePathToFull(String(Profile,TEXT("met_source"))))/File),*Section);
+                if(!Part.IsEmpty())FileRefs->SetStringField(Section,Part);
                 if(!ACEUCMProfiles::List(UserDirectory(),Section).Contains(Part))
                 {
                     Part=Allocate(Section,Stem);auto Resolved=ACEUCMProfiles::Copy(Defaults);
                     for(const auto& Pair:Data->Values)Resolved->Values.Add(Pair.Key,Pair.Value);
-                    Resolved->SetStringField(Ext+TEXT("_source"),File);
+                    Resolved->SetStringField(Ext+TEXT("_source"),FPaths::GetPath(FPaths::ConvertRelativePathToFull(String(Profile,TEXT("met_source"))))/File);
                     if(Section==TEXT("Metas")){Routes(Resolved,Part);Resolved->SetObjectField(TEXT("vt_library"),*Library);}
                     Pending.Add({Section,Part,Resolved});FileRefs->SetStringField(Section,Part);
                 }
@@ -956,6 +1021,8 @@ bool UACEPluginSubsystem::MaterializeUCMMetaProfiles(const TSharedPtr<FJsonObjec
         {for(const auto& File:Written)IFileManager::Get().Delete(*File);return false;}
         Written.Add(UserDirectory()/TEXT("Profiles")/Entry.Section/(Entry.Name+TEXT(".json")));
     }
+    for(const auto& Pair:Refs->Values)if(FString(Pair.Key)!=RootFile)
+        if(!RememberUCMImport(FPaths::GetPath(FPaths::ConvertRelativePathToFull(String(Profile,TEXT("met_source"))))/FString(Pair.Key),Pair.Value->AsObject()))return false;
     Profile->SetObjectField(TEXT("meta_profile_refs"),Refs);return true;
 }
 bool UACEPluginSubsystem::SaveLootProfile(const FString& Name)
@@ -1093,6 +1160,7 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::Snapshot()
         if (!E.bBeneficial || E.bCooldown) continue;
         auto A = MakeShared<FJsonObject>(); A->SetNumberField(TEXT("id"), E.SpellId); A->SetNumberField(TEXT("category"), E.SpellCategory);
         A->SetNumberField(TEXT("power"), E.PowerLevel);
+        A->SetNumberField(TEXT("duration"), E.Duration);
         A->SetNumberField(TEXT("remaining"), E.Duration < 0 ? 1.e9 : FMath::Max(0., E.Duration + E.StartTime - (FPlatformTime::Seconds() - E.ReceivedAt)));
         Enchantments.Add(MakeShared<FJsonValueObject>(A));
     }
@@ -1532,7 +1600,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
             const bool GlobalOption=Kind==TEXT("usd")&&Section!=TEXT("Character")&&Section!=TEXT("Monsters")&&Section!=TEXT("Metas");
             if((!Shared||Section==TEXT("ucm")||GlobalOption)&&(Kind!=TEXT("nav")||Pair.Key!=TEXT("navigation")))Updated->Values.Add(Pair.Key,Pair.Value);
         }
-        Updated->SetStringField(Kind+TEXT("_source"),Name);
+        if(!Shared)Updated->SetStringField(Kind+TEXT("_source"),Name);
         Updated->SetNumberField(TEXT("vt_revision"),Number(P.Profile,TEXT("vt_revision"))+1);Updated->SetStringField(TEXT("vt_loaded_kind"),Kind);
         if(Kind==TEXT("usd")){auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();if(Client&&Client->GetSession())Client->GetSession()->SendCancelAttack();}
         if(Shared&&!ACEUCMProfiles::Save(UserDirectory(),ACEUCMProfiles::ActiveName(),Updated,Links,BeforeLoad,Notice,ValidUCMProfile)){ReportActivityFailure(P,I,Notice);return;}

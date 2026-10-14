@@ -6,12 +6,16 @@
 #include "ACEPlayerController.h"
 #include "ACESession.h"
 #include "ACEClientBuild.h"
+#include "ACEFrameDiagnostics.h"
+#include "ACERuntimeOptions.h"
+#include "UI/ACEVideoSettingsWidget.h"
 #include "ACEWorldEntityActor.h"
 #include "ACECharacterAppearanceComponent.h"
 #include "Components/SceneComponent.h"
 #include "EngineUtils.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/App.h"
 #include "HAL/FileManager.h"
 
 bool UACEUIGameplayBinder::TryDispatchMiscCommand(const FString& Cmd, const FString& Args)
@@ -21,13 +25,22 @@ bool UACEUIGameplayBinder::TryDispatchMiscCommand(const FString& Cmd, const FStr
     auto Error=[this](const FString& Text) { AppendLocalChatLine(Text,ACEChatMessageType::ChatError); };
     auto Print=[this](const FString& Text) { AppendLocalChatLine(Text,ACEChatMessageType::System); };
     if (Cmd==TEXT("fillcomps")) { FillVendorComponents(Args); return true; }
-    if (Cmd==TEXT("aceobject"))
+    if (Cmd==TEXT("acueperf"))
+    {
+        for(const FString& Line:ACEFrameDiagnostics::Describe(Client->GetWorld(),FApp::GetDeltaTime()*1000))
+        {
+            Print(Line);
+            UE_LOG(LogTemp,Display,TEXT("ACE performance report: %s"),*Line);
+        }
+        return true;
+    }
+    if (Cmd==TEXT("acueobject"))
     {
         // Local-only report: users can share a chat screenshot without locating logs.
         FACEWorldObject Object;
         if (!Client->GetWorldObject(Client->GetSelectedObject().Guid, Object))
         {
-            Error(TEXT("Select a world object, then type /aceobject to display its placement details."));
+            Error(TEXT("Select a world object, then type /acueobject to display its placement details."));
             return true;
         }
         Print(FString::Printf(TEXT("Object report %s: %s [%08X / WCID %d]"),
@@ -84,9 +97,11 @@ bool UACEUIGameplayBinder::TryDispatchMiscCommand(const FString& Cmd, const FStr
         Print(Client->IsCharacterOptionSet(0x05) ? TEXT("Always daylight outdoors enabled.") : TEXT("Always daylight outdoors disabled."));
         return true;
     }
-    if (Cmd==TEXT("framerate"))
+    if (Cmd==TEXT("fps") || Cmd==TEXT("framerate"))
     {
-        if (PlayerController) PlayerController->ConsoleCommand(TEXT("stat FPS"),true);
+        ACERuntimeOptions::Set(TEXT("ShowFrameRate"),ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f ? 0.f : 1.f);
+        ACERuntimeOptions::Apply();
+        if (auto* Video=Cast<UACEVideoSettingsWidget>(VideoSettings)) Video->RefreshFrameRateOption();
         return true;
     }
     if (Cmd==TEXT("version"))

@@ -13,6 +13,8 @@ namespace
 {
 namespace ACEPluginPublicAPIPrivate
 {
+    // Explicit local S/N declarations avoid overload collisions with the
+    // automation host when Unreal combines these sources in a unity build.
     FString S(const TSharedPtr<FJsonObject>& O,const TCHAR* K,const FString& D=FString())
     {FString V;return O&&O->TryGetStringField(K,V)?V:D;}
     double N(const TSharedPtr<FJsonObject>& O,const TCHAR* K,double D=0)
@@ -38,7 +40,7 @@ namespace ACEPluginPublicAPIPrivate
 
 TSharedPtr<FACEClientPlugin> UACEPluginSubsystem::PolicyPlugin() const
 {
-    using namespace ACEPluginPublicAPIPrivate;
+    using namespace ACEPluginPublicAPIPrivate; using ACEPluginPublicAPIPrivate::S; using ACEPluginPublicAPIPrivate::N;
     // There is one gameplay driver. Observers never change its profile context.
     for(const auto& P:Plugins)if(P->Running&&P->Enabled&&P->IsPolicy())return P;
     if(auto Idle=Find(IdleManaOwner);Idle&&Idle->Enabled&&Idle->IsPolicy())return Idle;
@@ -47,7 +49,7 @@ TSharedPtr<FACEClientPlugin> UACEPluginSubsystem::PolicyPlugin() const
 
 void UACEPluginSubsystem::QueuePluginEvent(FACEClientPlugin& P,const TSharedPtr<FJsonObject>& E)
 {
-    using namespace ACEPluginPublicAPIPrivate;
+    using namespace ACEPluginPublicAPIPrivate; using ACEPluginPublicAPIPrivate::S; using ACEPluginPublicAPIPrivate::N;
     E->SetNumberField(TEXT("serial"),++PluginEventSerial);
     int32 Bytes=FTCHARToUTF8(*Encode(E)).Length();
     for(const auto& V:P.PluginEvents)Bytes+=FTCHARToUTF8(*Encode(V->AsObject())).Length();
@@ -58,7 +60,7 @@ void UACEPluginSubsystem::QueuePluginEvent(FACEClientPlugin& P,const TSharedPtr<
 
 TSharedPtr<FJsonObject> UACEPluginSubsystem::PublicSnapshot(FACEClientPlugin& P)
 {
-    using namespace ACEPluginPublicAPIPrivate;
+    using namespace ACEPluginPublicAPIPrivate; using ACEPluginPublicAPIPrivate::S; using ACEPluginPublicAPIPrivate::N;
     auto Common=CompanionSnapshot(P);
     auto Result=(!P.Companion||P.Permissions.Contains(TEXT("data")))?ItemToolsSnapshot(&P):MakeShared<FJsonObject>();
     // Preserve the extended position (global coordinates) and merge observer data.
@@ -76,7 +78,7 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::PublicSnapshot(FACEClientPlugin& P)
 
 bool UACEPluginSubsystem::ApplyPublicOutput(FACEClientPlugin& P,const TSharedPtr<FJsonObject>& O,FString& Error)
 {
-    using namespace ACEPluginPublicAPIPrivate;
+    using namespace ACEPluginPublicAPIPrivate; using ACEPluginPublicAPIPrivate::S; using ACEPluginPublicAPIPrivate::N;
     if(O->HasField(TEXT("runtime_route"))&&!P.Permissions.Contains(TEXT("navigation")))
     {Error=TEXT("runtime_route requires navigation permission");return false;}
     if(B(O,TEXT("helper_updates"),false)&&!P.Permissions.Contains(TEXT("fellowship")))
@@ -105,7 +107,7 @@ bool UACEPluginSubsystem::ApplyPublicOutput(FACEClientPlugin& P,const TSharedPtr
 
 bool UACEPluginSubsystem::ValidatePluginUI(const TArray<TSharedPtr<FJsonValue>>& Rows,FString& Error) const
 {
-    using namespace ACEPluginPublicAPIPrivate;
+    using namespace ACEPluginPublicAPIPrivate; using ACEPluginPublicAPIPrivate::S; using ACEPluginPublicAPIPrivate::N;
     TSet<FString> Ids;int Count=0;
     TFunction<bool(const TArray<TSharedPtr<FJsonValue>>&,int)> Visit;
     Visit=[&](const TArray<TSharedPtr<FJsonValue>>& Children,int Depth)
@@ -150,7 +152,7 @@ bool UACEPluginSubsystem::ValidatePluginUI(const TArray<TSharedPtr<FJsonValue>>&
 
 bool UACEPluginSubsystem::ClickPluginRow(const FString& Plugin,const FString& Id)
 {
-    using namespace ACEPluginPublicAPIPrivate;
+    using namespace ACEPluginPublicAPIPrivate; using ACEPluginPublicAPIPrivate::S; using ACEPluginPublicAPIPrivate::N;
     auto P=Find(Plugin);if(!P||!P->Running||!P->Enabled||!P->HasPresentation()||!P->Permissions.Contains(TEXT("ui")))return false;
     auto R=Control(P->PanelRows,Id);if(!R||!B(R,TEXT("enabled")))return false;
     const FString Type=S(R,TEXT("type"),S(R,TEXT("action")).IsEmpty()?TEXT("text"):TEXT("button"));
@@ -167,7 +169,7 @@ bool UACEPluginSubsystem::ClickPluginRow(const FString& Plugin,const FString& Id
 
 bool UACEPluginSubsystem::ChangePluginControl(const FString& Plugin,const FString& Id,const TSharedPtr<FJsonValue>& Value)
 {
-    using namespace ACEPluginPublicAPIPrivate;
+    using namespace ACEPluginPublicAPIPrivate; using ACEPluginPublicAPIPrivate::S; using ACEPluginPublicAPIPrivate::N;
     auto P=Find(Plugin);if(!P||!P->Running||!P->Enabled||!P->Permissions.Contains(TEXT("ui"))||!Value)return false;
     auto R=Control(P->PanelRows,Id);if(!R||!B(R,TEXT("enabled")))return false;
     auto Accepted=Value;const FString Type=S(R,TEXT("type"));
@@ -186,12 +188,15 @@ bool UACEPluginSubsystem::ChangePluginControl(const FString& Plugin,const FStrin
     }
     else return false;
     R->SetField(TEXT("value"),Accepted);
+    // All open views should see the accepted (possibly snapped/clamped) value.
+    // A revision updates retained controls; it no longer replaces the panel.
+    ++P->PanelRevision;
     auto E=MakeShared<FJsonObject>();E->SetStringField(TEXT("type"),TEXT("change"));E->SetStringField(TEXT("id"),Id);E->SetField(TEXT("value"),Accepted);QueuePluginEvent(*P,E);return true;
 }
 
 bool UACEPluginSubsystem::ApplyPluginServices(FACEClientPlugin& P,const TSharedPtr<FJsonObject>& O,FString& Error)
 {
-    using namespace ACEPluginPublicAPIPrivate;
+    using namespace ACEPluginPublicAPIPrivate; using ACEPluginPublicAPIPrivate::S; using ACEPluginPublicAPIPrivate::N;
     const TArray<TSharedPtr<FJsonValue>>* Requests=nullptr;
     if(!O->HasField(TEXT("requests")))return true;
     if(!O->TryGetArrayField(TEXT("requests"),Requests)||Requests->Num()>4){Error=TEXT("At most four service requests per callback");return false;}

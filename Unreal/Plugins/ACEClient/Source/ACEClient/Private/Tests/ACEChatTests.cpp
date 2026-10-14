@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "ACEClientSubsystem.h"
+#include "ACEClientChatCommands.h"
 #include "ACEInputBindings.h"
 #include "Misc/ConfigCacheIni.h"
 #include "ACESession.h"
@@ -313,16 +314,31 @@ bool FACEChatParityTest::RunTest(const FString&)
     // the selected prop, request an appraisal, or broadcast diagnostic data.
     Client->SelectObject(0);
     Session.CachedC2SPackets.Reset();
-    TestTrue(TEXT("Object report handles missing selection locally"),Binder->TryDispatchChatCommand(TEXT("/aceobject")));
+    TestTrue(TEXT("Object report handles missing selection locally"),Binder->TryDispatchChatCommand(TEXT("/acueobject")));
     FACEWorldObject Crystal; Crystal.Guid=0x71001001; Crystal.Name=TEXT("Tou-Tou");
     Crystal.WeenieClassId=1050067; Crystal.SetupId=0x02001AC5; Crystal.MotionTableId=0x090001FC;
     Crystal.ItemType=ACEItemType::Creature; Crystal.Scale=.75f;
     Session.WorldObjects.Add(Crystal.Guid,Crystal); Client->SelectObject(Crystal.Guid);
     Session.CachedC2SPackets.Reset();
-    TestTrue(TEXT("Object report handles unloaded world actors"),Binder->TryDispatchChatCommand(TEXT("/aceobject")));
+    TestTrue(TEXT("Object report handles unloaded world actors"),Binder->TryDispatchChatCommand(TEXT("/acueobject")));
     TestEqual(TEXT("Object report never sends diagnostics or an action to the server"),Session.CachedC2SPackets.Num(),0);
     TestEqual(TEXT("Object report preserves the selected crystal"),Client->GetSelectedObject().Guid,Crystal.Guid);
     Client->SelectObject(0); Session.WorldObjects.Remove(Crystal.Guid);
+
+    Session.CachedC2SPackets.Reset();
+    TestTrue(TEXT("Performance report is a recognized local command"),Binder->TryDispatchChatCommand(TEXT("/acueperf")));
+    for(const TCHAR* Command:{TEXT("@ACUEPERF"),TEXT("/aceperf"),TEXT("/aceobject"),TEXT("/acuehelp"),TEXT("/acueplugin"),TEXT("/plugin"),TEXT("/acueucm help"),TEXT("/ucm help"),TEXT("/acueitems help"),TEXT("/items help"),TEXT("/it help"),TEXT("/acueunknown")})
+        TestTrue(*(FString(TEXT("Client command stays local: "))+Command),Binder->TryDispatchChatCommand(Command));
+    TestEqual(TEXT("Performance diagnostics never broadcast to the server"),Session.CachedC2SPackets.Num(),0);
+    TestEqual(TEXT("Only the command token changes"),ACEClientChatCommands::CanonicalLine(TEXT("/UCM\techo /ucm start")),FString(TEXT("/acueucm\techo /ucm start")));
+    TestEqual(TEXT("Server command names stay unchanged"),ACEClientChatCommands::CanonicalLine(TEXT("/acehelp")),FString(TEXT("/acehelp")));
+    TestEqual(TEXT("Retail FPS command stays unchanged"),ACEClientChatCommands::CanonicalLine(TEXT("/fps")),FString(TEXT("/fps")));
+    TestEqual(TEXT("Similar names are not aliases"),ACEClientChatCommands::CanonicalLine(TEXT("/ucmfoo stop")),FString(TEXT("/ucmfoo stop")));
+    TestEqual(TEXT("Manager command uses client prefix"),ACEClientChatCommands::CanonicalLine(TEXT("/plugins")),FString(TEXT("/acueplugins")));
+    Binder->TryDispatchChatCommand(TEXT("/acehelp"));
+    { const auto Bytes=LastAction(); if(TestTrue(TEXT("Server help packet serialized"),Bytes.Num()>=30)) { FACEBinaryReader R(Bytes);R.Skip(24);
+      TestEqual(TEXT("Server help still uses Talk"),R.ReadUInt32(),ACEGameAction::Talk);
+      TestEqual(TEXT("Server ACE help remains available"),R.ReadString16L(),FString(TEXT("@acehelp"))); } }
 
     Session.CachedC2SPackets.Reset(); Binder->LastOutgoingTellName.Reset();
     Binder->TryDispatchChatCommand(TEXT("/rt not a reply"));

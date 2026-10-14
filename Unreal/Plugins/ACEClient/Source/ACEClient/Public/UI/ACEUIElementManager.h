@@ -120,6 +120,7 @@ public:
 	FACEUIElementHit OnElementActivated;
 
 private:
+    void ConstrainWindow(const TSharedPtr<FACEUIElement>& Window, FIntPoint ViewSize);
 	mutable TMap<FString, TArray<TSharedPtr<FACEUIElement>>> NameLookupIndex;
 	mutable bool bNameLookupIndexValid = false;
 	mutable uint64 NameLookupRevision = 0;

@@ -47,14 +47,19 @@ bool FACEVTAdaptersTest::RunTest(const FString&)
     }
     for(const FString Args:{TEXT("start"),TEXT("stop"),TEXT("jump 90 true 600 strafeleft"),TEXT("tapjump"),TEXT("forcebuff"),TEXT("cancelforcebuff"),TEXT("echo Some message"),TEXT("setmetastate Test state"),TEXT("mexec 1+2"),TEXT("opt set AttackDistance 0.2"),TEXT("enablecombat true"),TEXT("enablebuffing false"),TEXT("enablenav true"),TEXT("enablelooting false"),TEXT("nav load Walk home"),TEXT("meta load Example"),TEXT("loot load Rings"),TEXT("looting load Rings"),TEXT("settings load Mage")})
     {
-        TArray<FString> OldIssues,NewIssues;auto Old=ACEVTProfile::CompileCommand(TEXT("/vt ")+Args,OldIssues);auto New=ACEVTProfile::CompileCommand(TEXT("/ucm ")+Args,NewIssues);
+        TArray<FString> OldIssues,NewIssues;auto Old=ACEVTProfile::CompileCommand(TEXT("/vt ")+Args,OldIssues);auto New=ACEVTProfile::CompileCommand(TEXT("/acueucm ")+Args,NewIssues);
         TestEqual(*(Args+TEXT(" legacy accepted")),OldIssues.Num(),0);TestEqual(*(Args+TEXT(" native accepted")),NewIssues.Num(),0);
         FString OldJson,NewJson;FJsonSerializer::Serialize(Old.ToSharedRef(),TJsonWriterFactory<>::Create(&OldJson));FJsonSerializer::Serialize(New.ToSharedRef(),TJsonWriterFactory<>::Create(&NewJson));
         TestEqual(*(Args+TEXT(" identical native instruction")),OldJson,NewJson);
-        TestTrue(TEXT("Converted command uses UCM namespace"),Old->GetStringField(TEXT("source_command")).StartsWith(TEXT("/ucm ")));
+        TestTrue(TEXT("Converted command uses client namespace"),Old->GetStringField(TEXT("source_command")).StartsWith(TEXT("/acueucm ")));
+        TArray<FString> AliasIssues;auto Alias=ACEVTProfile::CompileCommand(TEXT("/ucm ")+Args,AliasIssues);FString AliasJson;
+        FJsonSerializer::Serialize(Alias.ToSharedRef(),TJsonWriterFactory<>::Create(&AliasJson));
+        TestEqual(*(Args+TEXT(" old UCM alias accepted")),AliasIssues.Num(),0);
+        TestEqual(*(Args+TEXT(" old UCM alias keeps behavior")),AliasJson,NewJson);
     }
     TestEqual(TEXT("Prefix lookalike is not rewritten"),ACEVTProfile::NativeCommand(TEXT("/vtank jump")),FString(TEXT("/vtank jump")));
-    TestEqual(TEXT("Case-insensitive command conversion"),ACEVTProfile::NativeCommand(TEXT(" /VT jump 90 false 1000 ")),FString(TEXT("/ucm jump 90 false 1000")));
+    TestEqual(TEXT("Case-insensitive command conversion"),ACEVTProfile::NativeCommand(TEXT(" /VT jump 90 false 1000 ")),FString(TEXT("/acueucm jump 90 false 1000")));
+    TestEqual(TEXT("Native prefix lookalike is not rewritten"),ACEVTProfile::NativeCommand(TEXT("/acueucmfoo jump")),FString(TEXT("/acueucmfoo jump")));
     TMap<FString,FString> Captures;
     TestTrue(TEXT("Empty regex is a valid match-all filter"),ACEVTRegex::Match(TEXT(""),TEXT("A spell"),Captures,Error));
     TestTrue(TEXT("Named chat capture with escaped punctuation"),ACEVTRegex::Match(TEXT("^\\[Fellowship\\] (?<speaker>.+) says, \"!start\"$"),TEXT("[Fellowship] Test Player says, \"!start\""),Captures,Error));
@@ -127,7 +132,7 @@ bool FACEVTAdaptersTest::RunTest(const FString&)
     FFileHelper::SaveStringToFile(CommandMetaFile(TEXT("/vt meta load A")),*(Folder/TEXT("B.met")));
     auto Graph=ACEVTProfile::ConvertFile(Folder/TEXT("A.met"),Issues);TestEqual(TEXT("Cyclic dependencies compile once"),Issues.Num(),0);
     TestEqual(TEXT("Two named profiles archived"),Graph->GetObjectField(TEXT("vt_library"))->Values.Num(),2);
-    TestEqual(TEXT("Linked profile command migrated"),Graph->GetObjectField(TEXT("vt_library"))->GetObjectField(TEXT("b.met"))->GetArrayField(TEXT("vt_meta"))[0]->AsObject()->GetObjectField(TEXT("action"))->GetStringField(TEXT("value")),FString(TEXT("/ucm meta load A")));
+    TestEqual(TEXT("Linked profile command migrated"),Graph->GetObjectField(TEXT("vt_library"))->GetObjectField(TEXT("b.met"))->GetArrayField(TEXT("vt_meta"))[0]->AsObject()->GetObjectField(TEXT("action"))->GetStringField(TEXT("value")),FString(TEXT("/acueucm meta load A")));
     FFileHelper::SaveStringToFile(CommandMetaFile(TEXT("/vt meta load Missing")),*(Folder/TEXT("B.met")));
     ACEVTProfile::ConvertFile(Folder/TEXT("A.met"),Issues);TestTrue(TEXT("Missing transitive dependency blocks activation"),Issues.Num()>0);
     TArray<FString> Bad;ACEVTProfile::CompileCommand(TEXT("/vt meta load ../outside"),Bad);TestTrue(TEXT("Profile reference cannot escape its import folder"),Bad.Num()>0);

@@ -67,7 +67,7 @@ bool FACEUCMRestockTest::RunTest(const FString&)
     FACEPluginVM Restocked;Restocked.Load(Script,Error);Step(Restocked);TestEqual(TEXT("Normal character can cast after restocking components"),I->GetStringField(TEXT("action")),FString(TEXT("cast")));
     TArray<FString> Issues;
     auto Command=ACEVTProfile::CompileCommand(TEXT("/og summon off"),Issues);TestEqual(TEXT("Octagram pet command has adapter"),Issues.Num(),0);
-    TestEqual(TEXT("Canonical command uses UCM namespace"),Command->GetStringField(TEXT("source_command")),FString(TEXT("/ucm opt set SummonPets false")));
+    TestEqual(TEXT("Canonical command uses client namespace"),Command->GetStringField(TEXT("source_command")),FString(TEXT("/acueucm opt set SummonPets false")));
     TestFalse(TEXT("Pet summoning disabled"),Command->GetBoolField(TEXT("value")));
     ACEVTProfile::CompileCommand(TEXT("/og unsupported"),Issues);TestTrue(TEXT("Unknown commands still rejected"),!Issues.IsEmpty());
     auto D=RestockJSON(TEXT(R"({"format":"usd","tables":[{"name":"Settings","columns":["Setting","Value"],"rows":[["AutoFellowManagement",false],["DoJiggle",false],["ManaChargesWhenOff",true],["ManaStoneLootCount",8],["ManaTankMinimumMana",3000],["GhostMonsterSpellAttemptCount",20],["StaminaToHealthMultiplier",0.5],["GhostDeleteHPTrackerSeconds",600]]}]})"));

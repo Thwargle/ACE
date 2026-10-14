@@ -49,7 +49,8 @@ bool FACEAnimationLifetimeTest::RunTest(const FString&)
   TestTrue(TEXT("One-shot links still finish and hold their forward/reverse endpoint"),Finished && Later[0].Equals(Initial[0],.00001));
  }
  Clip.Framerate=0;
- Player.EvaluateAnimData(Clip,0,1,Initial,100,Count);
+ Player.EvaluateAnimData(Clip,0,1,Initial,100,Count,true,nullptr,nullptr,&InitialHooks);
+ TestTrue(TEXT("Zero-rate pose does not replay its first frame's effect hooks"),InitialHooks.IsEmpty());
  Player.EvaluateAnimData(Clip,86400,1,Later,100,Count);
  TestTrue(TEXT("Zero-rate held pose is unchanged"),Later[0].Equals(Initial[0],.00001));
  // The final fractional frame blends into the first until the exact boundary.
@@ -60,6 +61,39 @@ bool FACEAnimationLifetimeTest::RunTest(const FString&)
  TestTrue(TEXT("Last fractional frame approaches the first continuously"),
   FVector::Dist(Initial[0].GetLocation(),Later[0].GetLocation())<.15
   && Initial[0].GetRotation().AngularDistance(Later[0].GetRotation())<.001);
+
+ // Item state links run once, then continue in a separately authored cycle.
+ // Hook IDs distinguish transition sounds/effects from repeating cycle hooks.
+ Player.bReady=true;
+ Player.MotionTable->DefaultStyle=0x8000003d;
+ FACEDatMotionData Link,Cycle;
+ Clip.LowFrame=0; Clip.HighFrame=3; Clip.Framerate=4; Link.Anims.Add(Clip);
+ Clip.LowFrame=4; Clip.HighFrame=7; Cycle.Anims.Add(Clip);
+ Player.MotionTable->Links.FindOrAdd(0x003d000c).Add(0x4000000b,Link);
+ Player.MotionTable->Cycles.Add(0x003d000b,Cycle);
+ bool TransitionFinished=false;
+ float Before=.5f;
+ Player.EvaluateStateMotion(0x4000000c,0x4000000b,1.125f,false,1,Later,100,Count,TransitionFinished,&Before,&LaterHooks);
+ TestTrue(TEXT("State enters its cycle after one link duration"),TransitionFinished);
+ TestEqual(TEXT("A boundary tick includes remaining link and first cycle hooks"),LaterHooks.Num(),2);
+ if(LaterHooks.Num()==2)
+ {
+  TestEqual(TEXT("Final link hook retains ordering"),LaterHooks[0].Id,3u);
+  TestEqual(TEXT("Cycle starts with its own hook"),LaterHooks[1].Id,4u);
+ }
+ Before=1.125f;
+ Player.EvaluateStateMotion(0x4000000c,0x4000000b,1.5f,false,1,Later,100,Count,TransitionFinished,&Before,&LaterHooks);
+ TestEqual(TEXT("Subsequent tick only dispatches cycle hooks"),LaterHooks.Num(),2);
+ for(const auto& Hook:LaterHooks) TestTrue(TEXT("Activation effects are not replayed"),Hook.Id>=4);
+ Before=1.75f;
+ Player.EvaluateStateMotion(0x4000000c,0x4000000b,2.f,false,1,Later,100,Count,TransitionFinished,&Before,&LaterHooks);
+ TestTrue(TEXT("Cycle hooks repeat at the authored boundary"),LaterHooks.Num()==1 && LaterHooks[0].Id==4);
+ Before=0;
+ Player.EvaluateStateMotion(0x4000000c,0x4000000b,.25f,true,1,Later,100,Count,TransitionFinished,&Before,&LaterHooks);
+ TestTrue(TEXT("Already active item skips historical transition hooks"),LaterHooks.Num()==1 && LaterHooks[0].Id==5);
+ Player.MotionTable->Cycles.Reset();
+ Player.EvaluateStateMotion(0x4000000c,0x4000000b,.25f,true,1,Later,100,Count,TransitionFinished,&Before,&LaterHooks);
+ TestTrue(TEXT("Missing cycle holds link endpoint without replaying hooks"),LaterHooks.IsEmpty());
 
  // Isolate only the old/new frame reduction. These are CPU microbenchmarks,
  // not total frame time or a native-headset FPS measurement; no timing asserts.

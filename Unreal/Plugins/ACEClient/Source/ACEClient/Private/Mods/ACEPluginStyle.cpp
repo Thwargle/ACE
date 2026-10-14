@@ -8,6 +8,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/Texture2D.h"
 #include "Brushes/SlateRoundedBoxBrush.h"
+#include "Brushes/SlateColorBrush.h"
 #include "Styling/CoreStyle.h"
 #include "Rendering/DrawElements.h"
 
@@ -59,6 +60,10 @@ void FACEPluginStyle::InitializeArtwork()
 {
     const FLinearColor Gold(.65f,.43f,.15f),Ivory(.94f,.89f,.76f);
     Frame=FSlateRoundedBoxBrush(FLinearColor(.008f,.006f,.003f,.96f),0.f,Gold,2.f);
+    const FLinearColor TitleColor(.025f,.012f,.004f,1);
+    TitleBackground=FSlateColorBrush(TitleColor);
+    SectionFrame=FSlateRoundedBoxBrush(TitleColor,0.f,Gold,2.f);
+    SectionHeader=FSlateColorBrush(FLinearColor(Gold.R,Gold.G,Gold.B,.25f));
     Background=*Image(0x06004CC2);
     if(!Background.GetResourceObject())Background=FSlateRoundedBoxBrush(FLinearColor(.005f,.004f,.002f,.96f),0.f);
     Button=FCoreStyle::Get().GetWidgetStyle<FButtonStyle>("Button");

@@ -116,6 +116,19 @@ These are the same bounded helpers used by UCM. A command returned by
 `ucmcommand()` is a policy command record, not a host intent: pass it to a
 policy-command request or process the record in your own Lua code.
 
+`spellindex(spells, inventory, time, skill_margin, unavailable_until, components_required)`
+returns `by_id, supplied, usable, groups`. The first two are keyed by spell ID;
+`usable` retains all eligible tiers in snapshot order. `groups` provides the
+same records as `offense` (non-beneficial usable spells), `instant_self`
+(usable caster-targeted spells with zero duration), `other_buffs` (usable
+beneficial timed spells that are neither caster-targeted nor self buffs),
+and `by_category[category]` (all usable spells in that family). `buffs` contains
+known self buffs and beneficial timed Item Enchantment spells, including those
+blocked by skill, supplies or retry delay, so a policy can apply its separate
+buff margin and report unavailable families. Groups retain every tier and
+reference the original records; they do not choose which spell to cast.
+Indexing remains subject to the per-callback native work and memory limits.
+
 ## Permissions and snapshots
 
 Declare only the permissions you need. Enable in Manage Plugins grants that
@@ -148,6 +161,11 @@ fellowship vitals, confirmations, portal events and combat results. Item Tools'
 transfer eligibility, vendor room/price and inventory failure fields are included
 as well. `identified=false` means a property may be unknown; it is not evidence
 that the property is zero. Requests for new appraisals still require inventory.
+
+Beneficial `enchantments` include `duration` (the server's full duration, including
+augmentation bonuses) and `remaining` (time left now). Permanent effects have a
+negative duration. Use remaining time and power/category to decide whether a
+refresh is needed; base spell duration alone does not describe the active timer.
 
 Inventory entries expose `salvage_tool_available` for an owned Ust that is usable
 from its current pack and not offered in trade (including its containing pack).
@@ -243,13 +261,16 @@ Progress is a fraction 0-1. Select takes up to 256 string options. Number and
 slider accept min/max/step; native code clamps/snaps the returned value.
 
 Buttons default to `{type="click",id=...}` events. Optional `action` is event,
-select, waypoint or command; a command button uses `command="/ucm ..."`. Native
+select, waypoint or command; a command button uses `command="/acueucm ..."`. Native
 buttons revalidate their current target at click time. Inputs and other editable
 controls emit `{type="change",id=...,value=...}`. Input commits on Enter/focus loss;
 `live=true` also emits while typing. Input is capped at 1,024 characters. The host
-preserves focused text editing while new layouts are pending, so avoid replacing
-a focused control's value every callback. Handle events and return the updated
-value yourself. Event delivery does not automatically save configuration.
+reuses controls with the same `id` and `type` across callbacks. Text, progress,
+and other rows keep updating during mouselook or while a dropdown is open.
+Use stable IDs: removing a control or changing its type replaces that control.
+Focused text edits are preserved; an open select keeps its current options until
+it closes. Handle events and return the updated value yourself. Event delivery
+does not automatically save configuration.
 
 `icon` uses a numeric DAT `icon` ID (available on inventory/spell records).
 `image` uses `asset="my_icon.png"` from your own plugin's `images` folder. No
@@ -295,7 +316,7 @@ keys. Plugin chat/messages and this inbox are separate bounded streams.
 - **force_buff**: start or cancel, automation/cast only. Start optionally accepts
   only=true for a buff-only cycle. Pair with the shipped policy or implement
   consumption of force_buff_request/force_buff_only and force_buff_done yourself.
-- **policy**: command with text such as `/ucm jump`; compiles into your own driver's
+- **policy**: command with text such as `/acueucm jump`; compiles into your own driver's
   command queue, using the same meta adapters. Requires commands. This does not
   enable UCM or edit its configuration. Execution retains each action's permissions.
 - **waypoint**: set with coordinate text or clear. Uses the existing NAV destination.
@@ -328,8 +349,8 @@ object actions, existing NAV arrow targets, object-attached world markers,
 Waypoint-map annotations, and local plugin-to-plugin messages. Markers are on the
 Waypoint map, not the retail compass. The receiving plugin chooses what messages
 mean; sending a message cannot grant permissions or start its automation.
-`/plugin <id> start|stop|<text>` works for API 2 automation as well as companions.
-The `/ucm` command bridge intentionally controls built-in UCM; use the policy
+`/acueplugin <id> start|stop|<text>` works for API 2 automation as well as companions.
+The `/acueucm` command bridge intentionally controls built-in UCM; use the policy
 service when the command should belong to your own automation plugin instead.
 
 ## Validation and portability

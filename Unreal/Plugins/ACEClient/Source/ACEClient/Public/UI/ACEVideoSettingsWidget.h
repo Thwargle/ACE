@@ -28,6 +28,7 @@ public:
  void ApplyInterfaceOptions();
  void ApplyRuntimeOptions();
  UFUNCTION() void ResetVideo();
+ void RefreshFrameRateOption();
  UFUNCTION() void DefaultsVideo();
  bool HasPendingChanges() const;
  float GetPreviewFieldOfView() const;
@@ -56,6 +57,7 @@ private:
  UPROPERTY() TObjectPtr<UCheckBox> VSync;
  UPROPERTY() TObjectPtr<UCheckBox> ShowFrameRate;
  UPROPERTY() TObjectPtr<UCheckBox> ObjectGlow;
+ UPROPERTY() TObjectPtr<UCheckBox> ConstrainUIWindows;
  UPROPERTY() TObjectPtr<USlider> MouseTurnSpeed;
  UPROPERTY() TObjectPtr<UCheckBox> InvertMouseX;
  UPROPERTY() TObjectPtr<UCheckBox> InvertMouseY;

@@ -1,4 +1,5 @@
 #include "UI/ACEGameHUDWidget.h"
+#include "ACERuntimeOptions.h"
 #include "ACERetailChat.h"
 #include "UI/ACERadarColors.h"
 #include "ACEHoverTooltipWidget.h"
@@ -4156,9 +4157,11 @@ FEventReply UACEGameHUDWidget::HandleWindowMouseMove(FGeometry MyGeometry, const
 	FVector2D NewTopLeft = Virtual - DragGrabOffset;
 	FVector2D VirtMin, VirtMax;
 	GetVirtualScreenBounds(VirtMin, VirtMax);
-	const float Margin = 24.f;
-	NewTopLeft.X = FMath::Clamp(NewTopLeft.X, VirtMin.X - Window.Size.X + Margin, VirtMax.X - Margin);
-	NewTopLeft.Y = FMath::Clamp(NewTopLeft.Y, VirtMin.Y - Window.Size.Y + Margin, VirtMax.Y - Margin);
+	if (ACERuntimeOptions::Get(TEXT("ConstrainUIWindows"))>.5f)
+	{
+		NewTopLeft.X = FMath::Clamp(NewTopLeft.X, VirtMin.X, FMath::Max(VirtMin.X,VirtMax.X-Window.Size.X));
+		NewTopLeft.Y = FMath::Clamp(NewTopLeft.Y, VirtMin.Y, FMath::Max(VirtMin.Y,VirtMax.Y-Window.Size.Y));
+	}
 	Window.Offset = NewTopLeft - Window.DefaultTopLeft;
 	return UWidgetBlueprintLibrary::Handled();
 }
@@ -4405,6 +4408,16 @@ void UACEGameHUDWidget::ApplyLetterboxLayout()
 	LastScale = Scale;
 	LastLetterboxOffset = FVector2D(OffsetX, OffsetY);
 	LastViewportSize = ViewportSize;
+	if (ACERuntimeOptions::Get(TEXT("ConstrainUIWindows"))>.5f)
+	{
+		FVector2D Min,Max;GetVirtualScreenBounds(Min,Max);
+		for(auto& Window:Windows)
+		{
+			const FVector2D At=Window.DefaultTopLeft+Window.Offset;
+			Window.Offset=FVector2D(FMath::Clamp(At.X,Min.X,FMath::Max(Min.X,Max.X-Window.Size.X)),
+				FMath::Clamp(At.Y,Min.Y,FMath::Max(Min.Y,Max.Y-Window.Size.Y)))-Window.DefaultTopLeft;
+		}
+	}
 
 	auto PlaceRect = [&](UWidget* Widget, float VX, float VY, float VW, float VH)
 	{

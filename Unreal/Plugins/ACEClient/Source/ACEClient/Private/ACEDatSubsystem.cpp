@@ -3766,8 +3766,12 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateResolvedMaterial(
 
 	if (!Decoded.bHasPixels || Decoded.Width <= 0 || Decoded.Height <= 0)
 	{
-		if (Decoded.bIsSolid && (Decoded.bUsesAlpha || bObjectUsesAlpha) && !Decoded.bFullyTransparent)
+		if (Decoded.bIsSolid && !Decoded.bFullyTransparent)
 		{
+			// Solid surfaces need the same swatch as GetOrCreateTexturedMaterial,
+			// including opaque surfaces with wrapped UVs or appearance overrides.
+			// Otherwise lighting/examination conversion can sample the vertex-color
+			// shader's unused white texture instead of the authored ColorValue.
 			Decoded.Width = 1;
 			Decoded.Height = 1;
 			Decoded.bHasPixels = true;
@@ -3858,6 +3862,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateResolvedMaterial(
 UMaterialInterface* UACEDatSubsystem::CreateExaminationMaterial(UMaterialInterface* Source, UObject* Outer)
 {
 	if (!Source) return nullptr;
+	if (Source->GetMaterial() == GetVertexColorMaterial()->GetMaterial()) return Source;
 	for (const auto& Entry : ExaminationMaterialBases)
 		if (Source->GetMaterial()==Entry.Value) return Source;
 	UTexture* Texture=nullptr;
@@ -3898,6 +3903,9 @@ void UACEDatSubsystem::UpdateWorldObjectLighting(UMaterialInstanceDynamic* Mater
 UMaterialInterface* UACEDatSubsystem::GetWorldObjectMaterial(UMaterialInterface* Source)
 {
 	if (!Source) return nullptr;
+	// The vertex-color fallback exposes an unused default ACETexture. It is
+	// not textured geometry and must retain its vertex-color shader.
+	if (Source->GetMaterial() == GetVertexColorMaterial()->GetMaterial()) return Source;
 	const EBlendMode Blend = Source->GetBlendMode();
 	if (Blend != BLEND_Opaque && Blend != BLEND_Masked) return Source;
 	float Emission = 1.f;
@@ -3921,6 +3929,7 @@ UMaterialInterface* UACEDatSubsystem::GetWorldObjectMaterial(UMaterialInterface*
 UMaterialInterface* UACEDatSubsystem::GetUniformInteriorMaterial(UMaterialInterface* Source)
 {
 	if (!Source) return nullptr;
+	if (Source->GetMaterial() == GetVertexColorMaterial()->GetMaterial()) return Source;
 	if (const auto* Cached = InteriorObjectMaterials.Find(Source)) if (auto* Existing = Cached->Get()) return Existing;
 	const EBlendMode Blend = Source->GetBlendMode();
 	if (Blend != BLEND_Opaque && Blend != BLEND_Masked) return Source;
@@ -8133,6 +8142,15 @@ bool UACEDatSubsystem::EvaluateMotionLink(uint32 MotionTableId, uint32 FromComma
 	}
 	return MotionPlayer->EvaluateLink(FromCommand, ToCommand, TimeSeconds, NumParts, OutPartTransforms, WorldScale, OutAnimatedPartCount, bOutFinished,
 		PreviousTimeSeconds, OutCrossedHooks, PreferredStyle);
+}
+
+bool UACEDatSubsystem::EvaluateStateMotion(uint32 Table, uint32 From, uint32 To, float Time, bool bStartInCycle, int32 Parts,
+	TArray<FTransform>& Out, float Scale, int32& Count, bool& bTransitionFinished,
+	const float* Previous, TArray<FACEDatAnimationHook>* Hooks) const
+{
+	Count = 0; bTransitionFinished = false;
+	return bPortalLoaded && MotionPlayer && Table != 0 && MotionPlayer->SetMotionTable(Table)
+		&& MotionPlayer->EvaluateStateMotion(From, To, Time, bStartInCycle, Parts, Out, Scale, Count, bTransitionFinished, Previous, Hooks);
 }
 
 bool UACEDatSubsystem::EvaluateAnimationLoop(uint32 AnimationId, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount,

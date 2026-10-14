@@ -109,6 +109,9 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
  DesktopScale->Rename(TEXT("DesktopUIScale"));
  for(int32 Percent=100;Percent<=300;Percent+=25) DesktopScale->AddOption(FString::Printf(TEXT("%d%%"),Percent));
  UACEHoverTooltipWidget::SetWidgetTooltip(DesktopScale, FText::FromString(TEXT("Scales the desktop interface in 25% steps. Limited to fit the window; VR uses its own panel scale. 200% and 300% give whole-pixel enlargement of native artwork.")));
+ ConstrainUIWindows=WidgetTree->ConstructWidget<UCheckBox>(UCheckBox::StaticClass(),TEXT("ConstrainUIWindows"));
+ ConstrainUIWindows->SetWidgetStyle(RoundToggle);ConstrainUIWindows->SetContent(Label(TEXT("Keep UI windows on screen")));Box->AddChild(Fixed(ConstrainUIWindows,272,20));
+ UACEHoverTooltipWidget::SetWidgetTooltip(ConstrainUIWindows,FText::FromString(TEXT("Keep game and plugin windows inside the game interface. Turn off to allow dragging windows beyond its edges. Apply to bring offscreen windows back into view.")));
  CursorScale=WidgetTree->ConstructWidget<USlider>(USlider::StaticClass(),TEXT("CursorScale"));
  CursorScale->SetWidgetStyle(RuntimeSlider); CursorScale->SetMinValue(.5f); CursorScale->SetMaxValue(3.f); CursorScale->SetStepSize(.25f); CursorScale->MouseUsesStep=true;
  CursorScale->OnValueChanged.AddDynamic(this,&UACEVideoSettingsWidget::ChangeCursorScale);
@@ -227,10 +230,16 @@ void UACEVideoSettingsWidget::ResetVideo()
  CursorScale->SetValue(ACERuntimeOptions::Get(TEXT("CursorScale")));
  CursorScaleLabel->SetText(FText::FromString(FString::Printf(TEXT("%d%%"),FMath::RoundToInt(CursorScale->GetValue()*100.f))));
  ObjectGlow->SetIsChecked(ACERuntimeOptions::Get(TEXT("ObjectGlow"))>.5f);
- ShowFrameRate->SetIsChecked(ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f);
+ ConstrainUIWindows->SetIsChecked(ACERuntimeOptions::Get(TEXT("ConstrainUIWindows"))>.5f);
+ RefreshFrameRateOption();
  ChatFontFace->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontFace"))));
  ChatFontSize->SetSelectedIndex(FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontSize"))));
  ScreenshotDirectory->SetText(FText::FromString(ACEScreenshotSettings::GetDirectory()));
+}
+void UACEVideoSettingsWidget::RefreshFrameRateOption()
+{
+ // Chat toggles only this setting, leaving other unapplied options intact.
+ if(ShowFrameRate)ShowFrameRate->SetIsChecked(ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f);
 }
 UWidget* UACEVideoSettingsWidget::GenerateOption(FString Option)
 {
@@ -281,6 +290,7 @@ bool UACEVideoSettingsWidget::HasPendingChanges() const
   || InvertMouseY->IsChecked()!=ACECameraSettings::GetInvertMouseY()
   || DesktopScale->GetSelectedIndex()!=FMath::RoundToInt((ACERuntimeOptions::Get(TEXT("DesktopUIScale"))-1.f)*4.f)
   || ObjectGlow->IsChecked()!=(ACERuntimeOptions::Get(TEXT("ObjectGlow"))>.5f)
+  || ConstrainUIWindows->IsChecked()!=(ACERuntimeOptions::Get(TEXT("ConstrainUIWindows"))>.5f)
   || ShowFrameRate->IsChecked()!=(ACERuntimeOptions::Get(TEXT("ShowFrameRate"))>.5f)
   || ChatFontFace->GetSelectedIndex()!=FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontFace")))
   || ChatFontSize->GetSelectedIndex()!=FMath::RoundToInt(ACERuntimeOptions::Get(TEXT("ChatFontSize")))
@@ -326,6 +336,7 @@ void UACEVideoSettingsWidget::ApplyInterfaceOptions()
  if(DesktopScale->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("DesktopUIScale"),1.f+DesktopScale->GetSelectedIndex()*.25f);
  if(CursorScale) ACERuntimeOptions::Set(TEXT("CursorScale"),CursorScale->GetValue());
  ACERuntimeOptions::Set(TEXT("ObjectGlow"),ObjectGlow->IsChecked()?1.f:0.f);
+ ACERuntimeOptions::Set(TEXT("ConstrainUIWindows"),ConstrainUIWindows->IsChecked()?1.f:0.f);
  ACERuntimeOptions::Set(TEXT("ShowFrameRate"),ShowFrameRate->IsChecked()?1.f:0.f);
  if(ChatFontFace->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("ChatFontFace"),ChatFontFace->GetSelectedIndex());
  if(ChatFontSize->GetSelectedIndex()>=0) ACERuntimeOptions::Set(TEXT("ChatFontSize"),ChatFontSize->GetSelectedIndex());
@@ -368,6 +379,7 @@ void UACEVideoSettingsWidget::DefaultsVideo()
  ToggleMouseLook->SetIsChecked(false);
  CursorScale->SetValue(1.f); ChangeCursorScale(1.f);
  ObjectGlow->SetIsChecked(true);
+ ConstrainUIWindows->SetIsChecked(true);
  ShowFrameRate->SetIsChecked(false);
  ChatFontFace->SetSelectedIndex(2); ChatFontSize->SetSelectedIndex(1);
  ScreenshotDirectory->SetText(FText::FromString(ACEScreenshotSettings::DefaultDirectory()));

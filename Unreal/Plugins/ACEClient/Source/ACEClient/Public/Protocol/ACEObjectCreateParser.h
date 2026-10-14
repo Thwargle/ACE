@@ -38,6 +38,8 @@ struct ACECLIENT_API FACEDecodedObject
 	int32 MaterialType = 0;
 	float SalvageWorkmanship = -1.f;
 	int32 ObjectDescriptionFlags = 0;
+	/** HookItemTypes identifies the hook container, unlike HookType on hookable items. */
+	bool bIsHouseHook = false;
 	int32 SetupId = 0;
 	int32 MotionTableId = 0;
 	int32 SoundTableId = 0;

@@ -2,6 +2,8 @@
 #include "UI/ACEUICanvasWidget.h"
 #include "UI/ACEUIElementManager.h"
 #include "UI/ACERetailTextBlock.h"
+#include "UI/ACEUIResourceResolver.h"
+#include "Dat/ACEDatTextLayout.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
 #include "ACESession.h"
@@ -48,6 +50,7 @@ void UACEUIGameplayBinder::RefreshHouseOffer()
 	if(!OpenHouseLord) return;
 	if(S->GetState()!=EACESessionState::InWorld || OpenVendorGuid || OpenLootContainerGuid || bTradeOpen || OpenSalvageToolGuid
 		|| IsBeyondContainerUseRadius(OpenHouseLord)) { CloseHouseOffer(); return; }
+	S->PruneHousePaymentItems();
 	if(HousePaymentSplit.SourceGuid)
 	{
 		const int32 NewGuid=FindCompletedInventoryStackSplit(HousePaymentSplit);
@@ -67,19 +70,34 @@ void UACEUIGameplayBinder::RefreshHouseOffer()
 	const FLinearColor Ink(.92f,.92f,.88f);
 	PlaceTextOnElement(HouseOfferLabels[0],TEXT("HouseBuyTab"),TEXT("Buy"),10,Ink,120010,true);
 	PlaceTextOnElement(HouseOfferLabels[1],TEXT("HouseMaintenanceTab"),TEXT("Maintenance"),10,Ink,120010,true);
-	PlaceTextOnElement(HouseOfferLabels[2],Manager->FindElementByName(Prefix+TEXT("_HouseOwner")),
-		TEXT("Owner: ")+(P.OwnerName.IsEmpty()?TEXT("None"):P.OwnerName),10,Ink,120010);
-	FString Required;
+	const auto Owner=Manager->FindElementByName(Prefix+TEXT("_HouseOwner"));
+	const auto Button=Manager->FindElementByName(Prefix+TEXT("_Button"));
+	const FString OwnerText=TEXT("Owner: ")+(P.OwnerName.IsEmpty()?TEXT("None"):P.OwnerName);
+	FString VisibleOwner=OwnerText;
+	if(Owner && Button)
+	{
+		// The shared environment panel can be narrowed to 410px. Keep the owner
+		// label out of the payment button, and retain the full name on hover.
+		Owner->Width=FMath::Max(1,FMath::Min(150,Button->GetScreenOrigin().X-Owner->GetScreenOrigin().X-4));
+		Owner->bTextOneLine=true;
+		FACEDatFont Font;
+		if(Canvas->GetResourceResolver()->ResolveFont(Owner->FontId,Font))
+			VisibleOwner=ACEDatText::Ellipsize(Font,OwnerText,Owner->Width);
+	}
+	PlaceTextOnElement(HouseOfferLabels[2],Owner,VisibleOwner,10,Ink,120010);
+	SetRetailTooltip(HouseOfferLabels[2],FText::FromString(OwnerText));
+	TArray<FString> Requirements;
 	for(const auto& Pay:bHouseRentTab?P.Rent:P.Buy)
 	{
 		const FString Name=Pay.Required==1?Pay.Name:Pay.PluralName.IsEmpty()?Pay.Name+TEXT("s"):Pay.PluralName;
-		if(bHouseRentTab) Required+=FString::Printf(TEXT("%lld/%d %s\n"),
-			FMath::Min<int64>(Pay.Required,Pay.Paid+S->GetHousePaymentAmount(Pay.Wcid,true)),Pay.Required,*Name);
-		else Required+=FString::Printf(TEXT("%d %s\n"),Pay.Required,*Name);
+		if(bHouseRentTab) Requirements.Add(FString::Printf(TEXT("%lld/%d %s"),
+			FMath::Min<int64>(Pay.Required,Pay.Paid+S->GetHousePaymentAmount(Pay.Wcid,true)),Pay.Required,*Name));
+		else Requirements.Add(FString::Printf(TEXT("%d %s"),Pay.Required,*Name));
 	}
-	if(bHouseRentTab && P.bMaintenanceFree) Required+=TEXT("Maintenance is free this period.\n");
+	// HousePaymentList::ComposeText uses a comma-separated, wrapped paragraph.
+	// One line per item overflowed the native 87px requirements field.
+	const FString Required=FString::Join(Requirements,TEXT(", "));
 	PlaceTextOnElement(HouseOfferLabels[3],Manager->FindElementByName(Prefix+TEXT("RequirementsText")),Required,10,Ink,120010);
-	const auto Button=Manager->FindElementByName(Prefix+TEXT("_Button"));
 	const bool Enabled=S->CanPayHouse(bHouseRentTab) && !HousePaymentSplit.SourceGuid;
 	if(Button) { Button->bActivatable=Enabled; Button->bGhosted=!Enabled; }
 	PlaceTextOnElement(HouseOfferLabels[4],Button,bHouseRentTab?TEXT("Pay Maintenance"):TEXT("Buy House"),10,
@@ -160,8 +178,7 @@ void UACEUIGameplayBinder::StageHouseItem(int32 Guid,int32 Amount)
 	if(Client->GetWorldObject(Guid,Item) && Amount>0 && Amount<Item.StackSize)
 	{
 		// Validate first, then wait for a server-confirmed split before staging its new ID.
-		if(!Client->GetSession()->StageHousePayment(Guid,bHouseRentTab)) return;
-		Client->GetSession()->RemoveHousePayment(Guid,bHouseRentTab);
+		if(!Client->GetSession()->CanStageHousePayment(Guid,bHouseRentTab)) return;
 		TrackInventoryStackSplit(HousePaymentSplit,Item,Amount);
 		Client->SendStackableSplitToContainer(Guid,Item.ContainerId,0,Amount);
 	}

@@ -22,6 +22,9 @@
 #include "UI/ACEUIGameplayBinder.h"
 #include "Components/Border.h"
 #include "Components/TextBlock.h"
+#include "Components/CanvasPanelSlot.h"
+#include "Widgets/Layout/SDPIScaler.h"
+#include "UI/ACERetailTextBlock.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEHousingTest,"ACE.RetailParity.Housing",
 	EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
@@ -31,7 +34,7 @@ bool FACEHousingTest::RunTest(const FString&)
 	auto* GI=NewObject<UGameInstance>();
 	auto* Client=NewObject<UACEClientSubsystem>(GI); Client->Session=MakeShared<FACESession>();
 	auto& S=*Client->Session; S.PlayerGuid=1234; S.State=EACESessionState::InWorld;
-	FACEWorldObject Self; Self.Guid=1234; Self.Name=TEXT("Housing regression"); S.WorldObjects.Add(1234,Self);
+	FACEWorldObject Self; Self.Guid=1234; Self.Name=TEXT("Housing regression"); Self.ItemsCapacity=120;Self.ContainersCapacity=7;S.WorldObjects.Add(1234,Self);
 	// Independent fixture from HouseProfile::Pack / CM_House::RecvNotice_HouseProfile.
 	auto Profile=[&](int32 Owner,int32 Type=1)
 	{
@@ -103,9 +106,10 @@ bool FACEHousingTest::RunTest(const FString&)
 	FWidgetRenderer Renderer(true,true);
 	auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(1600,900),TF_Bilinear,true);
 	const FString Art=FPaths::ProjectSavedDir()/TEXT("Automation/Housing"); IFileManager::Get().MakeDirectory(*Art,true);
-	auto Draw=[&](const TCHAR* Name)
+	auto Draw=[&](const TCHAR* Name,float Scale=1.f)
 	{
-		for(int I=0;I<4;++I){++GFrameCounter;Canvas->NativeTick(Canvas->GetCachedGeometry(),0);Renderer.DrawWidget(Target,Slate,FVector2D(1600,900),0);FlushRenderingCommands();}
+		const TSharedRef<SWidget> Scaled=SNew(SDPIScaler).DPIScale(Scale)[Slate];
+		for(int I=0;I<4;++I){++GFrameCounter;Canvas->NativeTick(Canvas->GetCachedGeometry(),0);Renderer.DrawWidget(Target,Scaled,FVector2D(1600,900),0);FlushRenderingCommands();}
 		TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
 		TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(1600,900,Pixels,PNG);FFileHelper::SaveArrayToFile(PNG,*(Art/(FString(Name)+TEXT(".png"))));
 	};
@@ -151,8 +155,8 @@ bool FACEHousingTest::RunTest(const FString&)
 	TestTrue(TEXT("Partial maintenance shows paid and staged count"),Binder->HouseOfferLabels[3]->GetText().ToString().Contains(TEXT("110/1000 Pyreals")));
 	Binder->OnElementActivated(Manager->FindElementByName(TEXT("HouseMaintenance_Button")));
 	TestFalse(TEXT("Owner needs no proxy confirmation"),Binder->bHousePaymentConfirm);
-	const auto* Rent=S.CachedC2SPackets.Find(S.NextPacketSequence-1);
-	if(TestNotNull(TEXT("Rent sends packet"),Rent)){FACEBinaryReader R(Rent->Payload);R.Skip(24);TestEqual(TEXT("RentHouse opcode"),R.ReadUInt32(),0x221u);}
+	const auto* RentPacket=S.CachedC2SPackets.Find(S.NextPacketSequence-1);
+	if(TestNotNull(TEXT("Rent sends packet"),RentPacket)){FACEBinaryReader R(RentPacket->Payload);R.Skip(24);TestEqual(TEXT("RentHouse opcode"),R.ReadUInt32(),0x221u);}
 	// Splits must arrive from the server before their new object IDs can be paid.
 	Binder->StageHouseItem(200,4);
 	TestEqual(TEXT("Partial payment tracks a pending split"),Binder->HousePaymentSplit.SourceGuid,200);
@@ -191,6 +195,126 @@ bool FACEHousingTest::RunTest(const FString&)
 	Binder->CloseHouseOffer();
 	TestFalse(TEXT("Closing collapses native housing panel"),bool(Manager->FindElementByName(TEXT("Slumlord"))->bVisible));
 	TestEqual(TEXT("Closing clears server offer context"),S.GetHouseProfile().LordGuid,0);
+	Binder->HideVendorPanel();Load(0);S.WorldObjects[200].StackSize=1000;Binder->RefreshHouseOffer();
+	Binder->ShowPanelPage(TEXT("InventoryPanel_Field"));Binder->RefreshInventoryOverlays();Draw(TEXT("InventoryBeforeDrop"));
+	const int32 ItemIndex=Binder->InventorySlotGuids.IndexOfByKey(200);
+	if(TestTrue(TEXT("Payment item is displayed in inventory"),Binder->InventorySlots.IsValidIndex(ItemIndex)))
+	{
+		const auto Geometry=Canvas->GetCachedGeometry();
+		const auto ItemGeometry=Binder->InventorySlots[ItemIndex]->GetCachedGeometry();
+		const auto From=ItemGeometry.LocalToAbsolute(ItemGeometry.GetLocalSize()*.5f);
+		const auto Destination=Manager->FindElementByName(TEXT("HouseBuyItemsList"));
+		const auto To=Geometry.LocalToAbsolute(Canvas->LayoutToViewport(FVector2D(Destination->GetScreenOrigin())+FVector2D(16,16)));
+		Canvas->NativeOnMouseButtonDown(Geometry,FPointerEvent(0,From,From,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
+		TestEqual(TEXT("Real mouse press starts dragging currency"),Binder->InvDragGuid,200);
+		Canvas->NativeOnMouseMove(Geometry,FPointerEvent(0,To,From,{EKeys::LeftMouseButton},EKeys::Invalid,0,FModifierKeysState()));
+		TestTrue(TEXT("Currency drag becomes active"),Binder->bInvDragActive);
+		TestTrue(TEXT("Crystal displays accepted drop marker"),Binder->PaperDollDragTargetIcon && Binder->PaperDollDragTargetIcon->IsVisible());
+		Canvas->NativeOnMouseButtonUp(Geometry,FPointerEvent(0,To,To,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
+		TestTrue(TEXT("Mouse release into crystal stages currency"),S.HouseBuyItems.Contains(200));
+	}
+	// Exercise the visible hit targets after scaling, narrowing and moving the
+	// shared crystal window. Do not bypass mouse-down or force bInvDragActive.
+	Add(300,1,1);S.WorldObjects[300].ItemType=ACEItemType::Container;S.WorldObjects[300].ItemsCapacity=24;
+	Add(301,273,200,300);Add(302,111,2,300);Add(303,999,1);
+	Add(304,2621,3,300);S.WorldObjects[304].ItemType=ACEItemType::PromissoryNote;
+	S.WorldObjects[304].Name=TEXT("Trade Note (250,000)");S.WorldObjects[304].Value=750000;
+	// ACE can send owned bag contents through ObjectCreate/ContainerId without
+	// a ViewContents list. Inventory displays these items and housing must too.
+	S.ContainerContents.Remove(300);
+	const auto Env=Manager->FindElementByName(TEXT("RootGameplay_FloatyEnvPanel_Field"));
+	Env->AuthoredWidth=610;Env->UserResizeW=-200;Env->UserDragX=-60;Env->RecomputeLayoutOffset();
+	UACEUIElementManager::ApplyFloatyResizeLayout(Env);
+	for(const bool Rent : {false,true})
+	{
+		Load(Rent?1234:0);S.HouseOffer.OwnerName=TEXT("An unusually long house owner's character name");Binder->RefreshHouseOffer();
+		Binder->SelectedPackGuid=1234;Binder->RefreshInventoryOverlays();Draw(Rent?TEXT("NarrowMaintenance"):TEXT("NarrowBuy"),1.25f);
+		const auto Close=Manager->FindElementByName(TEXT("CloseSlumlordButton"));
+		TestTrue(TEXT("Resized crystal close button remains inside the window"),Close->GetScreenOrigin().X+Close->Width<=Env->GetScreenOrigin().X+Env->Width);
+		TestTrue(TEXT("Resized crystal close button remains clickable"),Canvas->IsElementExposedAt(Close,Canvas->LayoutToViewport(FVector2D(Close->GetScreenOrigin())+FVector2D(10,10))));
+		const auto* CloseArt=Canvas->ImageWidgets.Find(Close->InstanceId);
+		TestTrue(TEXT("Resized crystal close button is painted at its anchored position"),CloseArt && (*CloseArt)->IsVisible());
+		const auto Destination=Manager->FindElementByName(Rent?TEXT("HouseMaintenanceItemsList"):TEXT("HouseBuyItemsList"));
+		const auto Geometry=Canvas->GetCachedGeometry();
+		const auto To=Geometry.LocalToAbsolute(Canvas->LayoutToViewport(FVector2D(Destination->GetScreenOrigin())+FVector2D(16,16)));
+		auto Drag=[&](int32 Guid,bool Accept,bool Pack=false)
+		{
+			Binder->SelectedPackGuid=1234;Binder->RefreshInventoryOverlays();Draw(TEXT("BeforeScaledDrag"),1.25f);
+			const int32 Index=Pack?Binder->PackSlotGuids.IndexOfByKey(Guid):Binder->InventorySlotGuids.IndexOfByKey(Guid);
+			const auto& Slots=Pack?Binder->PackSlots:Binder->InventorySlots;
+			if(!TestTrue(TEXT("Drag fixture is visible"),Slots.IsValidIndex(Index)))return;
+			const auto ItemGeometry=Slots[Index]->GetCachedGeometry();
+			const auto From=ItemGeometry.LocalToAbsolute(ItemGeometry.GetLocalSize()*.5f);
+			Canvas->NativeOnMouseButtonDown(Geometry,FPointerEvent(0,From,From,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
+			TestEqual(TEXT("Scaled press selects intended item"),Binder->InvDragGuid,Guid);
+			Canvas->NativeOnMouseMove(Geometry,FPointerEvent(0,To,From,{EKeys::LeftMouseButton},EKeys::Invalid,0,FModifierKeysState()));
+			if(TestNotNull(TEXT("Crystal drag feedback exists"),Binder->PaperDollDragTargetIcon.Get()))
+			{
+				TestTrue(TEXT("Crystal drag feedback is visible"),Binder->PaperDollDragTargetIcon->IsVisible());
+				TestTrue(TEXT("Crystal uses retail accept/reject artwork"),Binder->PaperDollDragTargetIcon->Background.GetResourceObject()
+					==Resources->ResolveIconTexture(Accept?0x060011F9:0x060011F8));
+			}
+			Canvas->NativeOnMouseButtonUp(Geometry,FPointerEvent(0,To,To,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
+			TestEqual(TEXT("Scaled drop honors payment eligibility"),S.GetHousePaymentItems(Rent).Contains(Guid),Accept && !Pack);
+		};
+		Drag(303,false);Drag(200,true);
+		// Server movement/deletion removes stale offers and prevents submitting them.
+		S.WorldObjects[200].ContainerId=0;Binder->RefreshHouseOffer();
+		TestFalse(TEXT("Moved payment is pruned from cart"),S.GetHousePaymentItems(Rent).Contains(200));S.WorldObjects[200].ContainerId=1234;
+		TestTrue(TEXT("Backpack with eligible payments accepts a drop"),S.CanStageHousePayment(300,Rent));
+		Drag(300,true,true);
+		TestTrue(TEXT("Nested currency staged"),S.GetHousePaymentItems(Rent).Contains(301));
+		TestEqual(TEXT("Backpack only stages requested item types"),S.GetHousePaymentItems(Rent).Contains(302),!Rent);
+		TestTrue(TEXT("Whole bag parses MMD notes without ViewContents"),S.GetHousePaymentItems(Rent).Contains(304));
+		TestEqual(TEXT("MMD stack contributes its whole pyreal value"),S.GetHousePaymentAmount(273,Rent),int64(750200));
+		TestTrue(TEXT("Matching bag contents enable payment"),S.CanPayHouse(Rent));
+		TestEqual(TEXT("Staging leaves the note in its physical bag"),S.WorldObjects[304].ContainerId,300);
+		const auto Owner=Manager->FindElementByName(Rent?TEXT("HouseMaintenance_HouseOwner"):TEXT("HouseBuy_HouseOwner"));
+		const auto Button=Manager->FindElementByName(Rent?TEXT("HouseMaintenance_Button"):TEXT("HouseBuy_Button"));
+		TestTrue(TEXT("Long owner label stays clear of payment button"),Owner->GetScreenOrigin().X+Owner->Width<=Button->GetScreenOrigin().X);
+		Draw(Rent?TEXT("NarrowMaintenancePaid"):TEXT("NarrowBuyPaid"),1.25f);
+		Load(Rent?1234:0);Binder->RefreshHouseOffer();
+		S.WorldObjects[304].ContainerId=1234;
+		Drag(304,true);
+		TestEqual(TEXT("Direct MMD drag stages full stack value"),S.GetHousePaymentAmount(273,Rent),int64(750000));
+		S.WorldObjects[304].ContainerId=300;
+		Load(Rent?1234:0);Binder->RefreshHouseOffer();
+		(Rent?S.HouseOffer.Rent:S.HouseOffer.Buy)[0].Required=800000;
+		TArray<FACEContainerItemRef> MainContents;
+		S.ContainerContents.RemoveAndCopyValue(1234,MainContents);
+		Drag(1234,true,true);
+		TestTrue(TEXT("Main backpack expands loose currency without a contents list"),S.GetHousePaymentItems(Rent).Contains(200));
+		TestTrue(TEXT("Main backpack also scans notes inside carried bags"),S.GetHousePaymentItems(Rent).Contains(304));
+		TestFalse(TEXT("Main backpack never offers unrelated items"),S.GetHousePaymentItems(Rent).Contains(303));
+		S.ContainerContents.Add(1234,MoveTemp(MainContents));
+	}
+	Env->UserResizeW=0;Env->UserDragX=0;Env->RecomputeLayoutOffset();UACEUIElementManager::ApplyFloatyResizeLayout(Env);
+	S.House.bQueried=true;S.House.bOwned=true;S.House.HouseType=1;
+	S.House.Buy=S.HouseOffer.Buy;S.House.Rent={{1000,100,273,TEXT("Pyreal"),TEXT("Pyreals")}};
+	S.House.BuyTime=1700000000;S.House.RentTime=1750000000;
+	Binder->ShowPanelPage(TEXT("WorldPanel_Field"));Binder->SyncWorldPanelTab(TEXT("HousePage"));Draw(TEXT("HousingTab"));
+	TestEqual(TEXT("Retail housing paragraph font"),Binder->HouseTextElements[0]->FontId,0x40000000u);
+	TestEqual(TEXT("Retail housing paragraphs are centered"),Binder->HouseTextElements[0]->TextHorizontalJustification,1u);
+	TestEqual(TEXT("Retail housing paragraph spacing"),Binder->HouseTextElements[0]->TextMargins.Bottom,8.f);
+	TestTrue(TEXT("Unpaid maintenance uses retail yellow"),Binder->HouseTextRows.ContainsByPredicate([](const UTextBlock* Text)
+		{return Text->GetText().ToString().StartsWith(TEXT("Warning!")) && Text->GetColorAndOpacity().GetSpecifiedColor()==FLinearColor::Yellow;}));
+	S.House.bMaintenanceFree=true;Binder->RefreshWorldOverlays();Draw(TEXT("HousingPaid"),1.25f);
+	TestTrue(TEXT("Paid maintenance uses retail green"),Binder->HouseTextRows.ContainsByPredicate([](const UTextBlock* Text)
+		{return Text->GetText().ToString().StartsWith(TEXT("The maintenance has already")) && Text->GetColorAndOpacity().GetSpecifiedColor()==FLinearColor::Green;}));
+	S.PlayerVitals.StatQualityInts.Add(199,int32(FDateTime::UtcNow().ToUnixTimestamp()));Binder->RefreshWorldOverlays();
+	TestTrue(TEXT("Housing shows landscape purchase cooldown"),Binder->HouseTextRows.ContainsByPredicate([](const UTextBlock* Text)
+		{return Text->GetText().ToString().StartsWith(TEXT("You may buy another landscape house at"));}));
+	const auto HousePage=Manager->FindElementByName(TEXT("HousePage"));
+	const auto HouseList=Manager->FindElementUnder(TEXT("HousePage"),TEXT("HouseTextListBox"));
+	HousePage->Height=150;Binder->RefreshWorldHousePage(HousePage);
+	TestTrue(TEXT("Small housing panel has scrollable paragraphs"),Binder->HouseMaxScrollOffset>0);
+	TestTrue(TEXT("Scaled housing list accepts its visible mouse position"),Binder->IsPointerOverHouseList(Canvas->LayoutToViewport(FVector2D(HouseList->GetScreenOrigin())+FVector2D(16,16))));
+	for(int32 I=0;I<40;++I) Binder->ScrollHouseList(-1);
+	TestEqual(TEXT("Housing scroll reaches the final paragraph"),Binder->HouseScrollOffset,Binder->HouseMaxScrollOffset);
+	TestFalse(TEXT("Scrolled-off first paragraph is hidden"),bool(Binder->HouseTextElements[0]->bVisible));
+	TestTrue(TEXT("Purchase cooldown remains reachable in short windows"),bool(Binder->HouseTextElements.Last()->bVisible));
+	Load(0,4);S.HouseOffer.Buy.Reset();Binder->RefreshHouseOffer();
+	TestTrue(TEXT("Zero-cost dwelling remains purchasable like retail"),S.CanPayHouse(false));
 	return !HasAnyErrors();
 }
 #endif

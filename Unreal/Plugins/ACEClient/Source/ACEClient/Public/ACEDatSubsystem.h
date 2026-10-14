@@ -384,6 +384,9 @@ public:
 	bool EvaluateWalkingLink(const ACEWalkingMotion::FLink& Link, int32 Parts, TArray<FTransform>& Out, float Scale, int32& Count, TArray<FACEDatAnimationHook>& Hooks) const;
 	bool EvaluateMotionLink(uint32 MotionTableId, uint32 FromCommand, uint32 ToCommand, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount, bool& bOutFinished,
 		const float* PreviousTimeSeconds = nullptr, TArray<FACEDatAnimationHook>* OutCrossedHooks = nullptr, uint32 PreferredStyle = 0) const;
+	bool EvaluateStateMotion(uint32 Table, uint32 From, uint32 To, float Time, bool bStartInCycle, int32 Parts,
+		TArray<FTransform>& Out, float Scale, int32& Count, bool& bTransitionFinished,
+		const float* Previous = nullptr, TArray<FACEDatAnimationHook>* Hooks = nullptr) const;
 	/** Loop a raw Animation DID (Setup DefaultAnimation / lifestones). */
 	bool EvaluateAnimationLoop(uint32 AnimationId, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount,
 		const float* PreviousTimeSeconds = nullptr, TArray<FACEDatAnimationHook>* OutCrossedHooks = nullptr,

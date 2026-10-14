@@ -1,4 +1,5 @@
 #include "ACERetailChat.h"
+#include "ACEClientChatCommands.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "Mods/ACEWaypoint.h"
 #include "ACERuntimeOptions.h"
@@ -1047,21 +1048,22 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 	{
 		return false;
 	}
-	if (Cmd == TEXT("plugins") || Cmd == TEXT("plugin") || Cmd == TEXT("ucm") || Cmd == TEXT("items") || Cmd == TEXT("it"))
+	Cmd=ACEClientChatCommands::CanonicalName(Cmd);
+	if (Cmd == TEXT("acueplugins") || Cmd == TEXT("acueplugin") || Cmd == TEXT("acueucm") || Cmd == TEXT("acueitems"))
     {
         if (auto* Host=Client->GetGameInstance()->GetSubsystem<UACEPluginSubsystem>())
         {
-            if(Cmd==TEXT("plugin"))
+            if(Cmd==TEXT("acueplugin"))
             {
                 Host->RunPluginCommand(Args);
                 if(!Host->Notice.IsEmpty())AppendLocalChatLine(Host->Notice,ACEChatMessageType::System);
             }
-            else if(Cmd==TEXT("items")||Cmd==TEXT("it"))
+            else if(Cmd==TEXT("acueitems"))
             {
                 Host->RunItemToolsCommand(Args);
                 if(!Host->Notice.IsEmpty())AppendLocalChatLine(Host->Notice,ACEChatMessageType::System);
             }
-            else if(Cmd==TEXT("ucm"))
+            else if(Cmd==TEXT("acueucm"))
             {
                 Host->RunUCMCommand(Args);
                 if(!Host->Notice.IsEmpty())AppendLocalChatLine(Host->Notice,ACEChatMessageType::System);
@@ -1071,6 +1073,12 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
         return true;
     }
     if (TryDispatchMiscCommand(Cmd,Args)) return true;
+    if(Cmd==TEXT("acuehelp")){Cmd=TEXT("help");Args=TEXT("acue");}
+    else if(Cmd.StartsWith(TEXT("acue")))
+    {
+        AppendLocalChatLine(TEXT("Unknown AC:Unreal command. Use /acuehelp to list client commands."),ACEChatMessageType::ChatError);
+        return true;
+    }
 	if (Cmd == TEXT("friends_add")) { Cmd=TEXT("friends"); Args=TEXT("add ")+Args; }
 	if (Cmd == TEXT("friends_remove")) { Cmd=TEXT("friends"); Args=TEXT("remove ")+Args; }
 	if (Cmd == TEXT("hou")) Cmd=TEXT("house");
@@ -1876,7 +1884,7 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 	if (Cmd == TEXT("help") || Cmd == TEXT("house_help") || Cmd == TEXT("allegiance_help")
 		|| Cmd == TEXT("fellowship_help"))
 	{
-		const FString Topic = (Cmd == TEXT("help")) ? Args.ToLower() : Cmd;
+		const FString Topic = (Cmd == TEXT("help")) ? ACEClientChatCommands::CanonicalName(Args) : Cmd;
 		static const TMap<FString,FString> MiscHelp = {
 			{TEXT("lockui"),TEXT("/lockui toggles whether UI windows can be moved and resized.")},
 			{TEXT("saveui"),TEXT("/saveui [name] saves window positions and sizes to Saved/UILayouts/<name>.txt. With no name, use UI-Default.txt. Names may have 1-16 characters; quote spaces. UI scale, keybinds, chat filters and VR comfort settings are not changed.")},
@@ -1888,7 +1896,14 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 			{TEXT("birth"),TEXT("/birth displays when your character was created.")},
 			{TEXT("day"),TEXT("/day toggles Always daylight outdoors.")},
 			{TEXT("endurance"),TEXT("/endurance explains Endurance and Strength regeneration, stamina and resistance bonuses.")},
-			{TEXT("framerate"),TEXT("/framerate toggles the frame rate display.")},
+			{TEXT("fps"),TEXT("/fps or /framerate toggles the Show FPS overlay setting.")},
+			{TEXT("acueperf"),TEXT("/acueperf shows local frame timings and creature/effect counts, and writes them to the client log.")},
+			{TEXT("acueobject"),TEXT("/acueobject reports the selected object's placement and model details locally.")},
+			{TEXT("acueplugins"),TEXT("/acueplugins opens Manage Plugins.")},
+			{TEXT("acueplugin"),TEXT("/acueplugin <id> start|stop|<text> controls a Lua plugin or sends it a local command.")},
+			{TEXT("acueucm"),TEXT("/acueucm opens UCM. Use /acueucm help for its automation commands.")},
+			{TEXT("acueitems"),TEXT("/acueitems opens Item Tools. Commands: give, shop, profile, chest, restock, stop.")},
+			{TEXT("framerate"),TEXT("/fps or /framerate toggles the Show FPS overlay setting.")},
 			{TEXT("loc"),TEXT("/loc displays your exact cell, coordinates and facing.")},
 			{TEXT("pkl"),TEXT("/pkl or /pklite asks the server to enter Player Killer Lite mode.")},
 			{TEXT("pklite"),TEXT("/pklite or /pkl asks the server to enter Player Killer Lite mode.")},
@@ -1902,6 +1917,13 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 			AppendLocalChatLine(*Help,ACEChatMessageType::Help);
 			return true;
 		}
+		if(Topic==TEXT("acue") || Topic==TEXT("acuehelp"))
+		{
+			PrintHelpLines({TEXT("AC:Unreal client commands use /acue (or @acue) prefixes:"),
+				TEXT("/acueperf | /acueobject | /acueplugins | /acueplugin <id> <command> | /acueucm help | /acueitems"),
+				TEXT("Use /help <command> for details. Previous plugin spellings remain compatibility aliases for saved tools and metas.")});
+			return true;
+		}
 		if (Topic.IsEmpty() || Topic == TEXT("commands"))
 		{
 			PrintHelpLines({
@@ -1911,9 +1933,10 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 				TEXT("Channels: @join/@leave <general|trade|lfg|roleplay|society|allegiance>"),
 				TEXT("Recall: @ls @mp @house recall @house mansion_recall @ah"),
 				TEXT("UI layouts: @saveui [name] @loadui [name] @saveautoui @loadautoui @lockui"),
-				TEXT("Miscellaneous: @fillcomps @age @birth @day @endurance @framerate @loc @pklite (@pkl) @version @loadfile @log @title"),
+				TEXT("Miscellaneous: @fillcomps @age @birth @day @endurance @fps (@framerate) @loc @pklite (@pkl) @version @loadfile @log @title"),
 				TEXT("Other: @filter @unfilter @messagetypes @clear @title @log @emotes @afk @die @friends"),
 				TEXT("Help: @help commands | @house_help | @allegiance_help | @acehelp (server)"),
+				TEXT("AC:Unreal: @acuehelp | @acueperf | @acueobject | @acueplugins | @acueplugin | @acueucm | @acueitems"),
 			});
 			return true;
 		}

@@ -472,13 +472,14 @@ void UACEUICanvasWidget::SyncElementRecursive(
 	const int32 ElX1 = FMath::RoundToInt(static_cast<float>(OriginLogical.X + Element->Width) * LastScaleX);
 	const int32 ElY1 = FMath::RoundToInt(static_cast<float>(OriginLogical.Y + Element->Height) * LastScaleY);
 
-	// LayoutDesc merges sometimes place children outside their parent (e.g. ChatLog_RightEndCap
-	// at x=397 under a 306-wide ChatPanelTextEntry). Skip painting those orphans.
+	// LayoutDesc merges sometimes place children outside their parent. Test the
+	// reflowed position: right-anchored controls retain their authored X/Y when
+	// a window narrows, but their edge offsets move them back inside the parent.
 	if (TSharedPtr<FACEUIElement> Parent = Element->Parent.Pin())
 	{
 		if (Element->Width > 0 && Element->Height > 0
-			&& (Element->X >= Parent->Width || Element->Y >= Parent->Height
-				|| Element->X + Element->Width <= 0 || Element->Y + Element->Height <= 0))
+			&& (Element->GetDrawX() >= Parent->Width || Element->GetDrawY() >= Parent->Height
+				|| Element->GetDrawX() + Element->Width <= 0 || Element->GetDrawY() + Element->Height <= 0))
 		{
 			return;
 		}

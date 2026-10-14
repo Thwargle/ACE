@@ -8,8 +8,11 @@
 #include "Mods/ACEPluginDesktop.h"
 #include "Mods/ACEPluginCastMotion.h"
 #include "Mods/ACEVTProfile.h"
+#include "Mods/ACEUCMProfiles.h"
 #include "ACEOpcodes.h"
+#include "ACERuntimeOptions.h"
 #include "ACEClientSubsystem.h"
+#include "ACEDatSubsystem.h"
 #include "ACESession.h"
 #include "UI/ACEUIElementManager.h"
 #include "Engine/GameInstance.h"
@@ -22,6 +25,7 @@
 #include "Misc/App.h"
 #include "Slate/WidgetRenderer.h"
 #include "Widgets/Layout/SBorder.h"
+#include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Text/STextBlock.h"
@@ -96,6 +100,33 @@ bool FACEPluginVMTest::RunTest(const FString&)
         end
     )"),Error));
     TestTrue(TEXT("Index combines stacks, respects skill/known/cooldown/supplies and shares records"),SpellCatalog.Step(Empty,Empty,Intent,Error));
+    FACEPluginVM SpellGroups;
+    TestTrue(TEXT("Partitioned spell index fixture loads"),SpellGroups.Load(TEXT(R"(
+        return function()
+          local spells={
+            {id=1,category=1,self_buff=true,beneficial=true,caster_target=true,duration=300,power=100,skill=200},
+            {id=2,category=1,self_buff=true,beneficial=true,caster_target=true,duration=300,power=180,skill=200},
+            {id=3,category=1,beneficial=true,duration=300,power=100,skill=200},
+            {id=4,category=67,beneficial=true,caster_target=true,duration=0,power=100,skill=200},
+            {id=5,category=117,power=100,skill=200},
+            {id=6,category=117,power=50,skill=200},
+            {id=7,category=115,school=3,beneficial=true,duration=300,power=100,skill=200,components_known=false},
+            {id=8,category=117,power=150,skill=200,known=false},
+            {id=9,category=117,power=140,skill=200}}
+          local index,supplied,usable,g=spellindex(spells,{},100,30,{[9]=110})
+          assert(#usable==5 and #g.buffs==3 and g.buffs[2]==spells[2] and g.buffs[3]==spells[7])
+          assert(#g.instant_self==1 and g.instant_self[1]==spells[4])
+          assert(#g.other_buffs==1 and g.other_buffs[1]==spells[3])
+          assert(#g.offense==2 and g.offense[1]==spells[5] and g.offense[2]==spells[6])
+          assert(#g.by_category[117]==2 and g.by_category[117][2]==spells[6])
+          assert(index[8]==spells[8] and not supplied[7] and not g.by_category[115])
+          local _,_,_,eligible=spellindex(spells,{},120,0,{},false)
+          assert(#eligible.by_category[1]==3 and #eligible.by_category[117]==3)
+          assert(#eligible.other_buffs==2 and eligible.other_buffs[2]==spells[7])
+          return {status='partitioned'}
+        end
+    )"),Error));
+    TestTrue(TEXT("Partitions preserve record identity, order, lower tiers, eligibility and blocked buff candidates"),SpellGroups.Step(Empty,Empty,Intent,Error));
     FACEPluginVM IndexLoop;
     TestTrue(TEXT("Native index budget fixture loads"),IndexLoop.Load(TEXT("local spells={};for i=1,1000 do spells[i]={id=i} end;return function() for i=1,200 do spellindex(spells,{},0,0,{}) end end"),Error));
     TestFalse(TEXT("Repeated native indexing cannot bypass work quota"),IndexLoop.Step(Empty,Empty,Intent,Error));
@@ -164,8 +195,14 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPluginHostTest,"ACE.Plugins.HostAndPanel",
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACEPluginHostTest::RunTest(const FString&)
 {
+    const float PreviousBounds=ACERuntimeOptions::Get(TEXT("ConstrainUIWindows"));
+    ON_SCOPE_EXIT{ACERuntimeOptions::Set(TEXT("ConstrainUIWindows"),PreviousBounds);};
+    ACERuntimeOptions::Set(TEXT("ConstrainUIWindows"),1);
     auto* GI=NewObject<UGameInstance>(); GI->Init();
     auto* H=GI->GetSubsystem<UACEPluginSubsystem>();
+    FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+    if(FApp::CanEverRender()&&FPaths::DirectoryExists(DatDirectory))
+        TestTrue(TEXT("Render plugin UI using retail fonts and artwork"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(DatDirectory));
     {
         auto* Viewport=NewObject<UGameViewportClient>(GEngine);
         for(bool Previous:{false,true})
@@ -262,6 +299,7 @@ bool FACEPluginHostTest::RunTest(const FString&)
     TestTrue(TEXT("Salvage policy restored"),H->LoadLootProfile(TEXT("Combine")));
     TestEqual(TEXT("Combining target survives save/load"),P->Profile->GetObjectField(TEXT("salvage_policy"))->GetObjectField(TEXT("values"))->GetNumberField(TEXT("6")),10000.);
     H->SaveProfile(TEXT("ucm"),TEXT("Mage"),PreviousProfile);
+    const FString SavedCharacterProfile=H->UCMSectionName(TEXT("Character"));
     H->Discover();P=H->Find(TEXT("ucm"));
     TestTrue(TEXT("Waypoint discovered and ready without automation"),H->IsWaypointEnabled());
     TestTrue(TEXT("Chat/manual waypoint accepted"),H->SetWaypoint(TEXT("42.0N, 33.6E")));
@@ -292,28 +330,34 @@ bool FACEPluginHostTest::RunTest(const FString&)
     TestTrue(TEXT("Editor requests no game actions"),H->Find(TEXT("looteditor"))->Permissions.IsEmpty());
     TestTrue(TEXT("Capability grant persists"),P->Enabled);
     TestFalse(TEXT("Reload never resumes automation"),P->Running);
-    TestEqual(TEXT("Selected profile persists"),P->ProfileName,FString(TEXT("Mage")));
+    TestEqual(TEXT("Active configuration persists"),P->ProfileName,ACEUCMProfiles::ActiveName());
+    TestEqual(TEXT("Selected character profile persists"),H->UCMSectionName(TEXT("Character")),SavedCharacterProfile);
     TestEqual(TEXT("Profile values persist"),P->Profile->GetNumberField(TEXT("skill_margin")),45.);
     const FString BeforeImport=H->ProfileJson(TEXT("ucm"));
     const FString SourcePath=Root/TEXT("source.utl");
     FFileHelper::SaveStringToFile(TEXT("UTL\n1\n1\nUnsupported skip\n\n0;0;999\n4\nabc\n"),*SourcePath);
     TestFalse(TEXT("Unsupported import refused"),H->ImportLegacyProfile(SourcePath,TEXT("Unsupported")));
     TestEqual(TEXT("Failed import preserves active profile"),H->ProfileJson(TEXT("ucm")),BeforeImport);
-    TestTrue(TEXT("Blocked import saves full compatibility archive"),IFileManager::Get().FileExists(*(Root/TEXT("Imports/Unsupported.json"))));
+    TArray<FString> Reports;IFileManager::Get().FindFiles(Reports,*(Root/TEXT("Imports/Unsupported_*.json")),true,false);
+    TestEqual(TEXT("Blocked import saves full compatibility archive"),Reports.Num(),1);
     FFileHelper::SaveStringToFile(TEXT("UTL\n1\n1\nKeep ring\n\n0;1;1\n7\nRing\n1\n"),*SourcePath);
     TestTrue(TEXT("Supported import applied"),H->ImportLegacyProfile(SourcePath,TEXT("Imported")));
     TestEqual(TEXT("Import retains unrelated settings"),P->Profile->GetNumberField(TEXT("skill_margin")),45.);
     TestFalse(TEXT("Import stays stopped"),P->Running);
     FString Original,FirstCopy,SecondCopy;FFileHelper::LoadFileToString(Original,*SourcePath);
-    FFileHelper::LoadFileToString(FirstCopy,*(Root/TEXT("Profiles/ucm/Imported.json")));
-    TestTrue(TEXT("Repeated import creates another copy"),H->ImportLegacyProfile(SourcePath,TEXT("Imported")));
-    TestEqual(TEXT("Copy receives unique name"),P->ProfileName,FString(TEXT("Imported_2")));
-    FFileHelper::LoadFileToString(SecondCopy,*(Root/TEXT("Profiles/ucm/Imported.json")));
+    TestEqual(TEXT("Import selects its native loot profile"),H->UCMSectionName(TEXT("Loot")),FString(TEXT("Imported")));
+    TestTrue(TEXT("Imported loot is saved separately"),FFileHelper::LoadFileToString(FirstCopy,*(Root/TEXT("Profiles/Loot/Imported.json"))));
+    TestTrue(TEXT("Switch away before importing another copy"),H->SelectUCMSection(TEXT("Loot"),TEXT("EmptyLoot")));
+    TestTrue(TEXT("Repeated import reuses the existing profile"),H->ImportLegacyProfile(SourcePath,TEXT("Imported")));
+    TestEqual(TEXT("Repeat selects the original profile"),H->UCMSectionName(TEXT("Loot")),FString(TEXT("Imported")));
+    TestFalse(TEXT("Repeat does not create a numbered duplicate"),IFileManager::Get().FileExists(*(Root/TEXT("Profiles/Loot/Imported_2.json"))));
+    TestTrue(TEXT("Original native loot file remains readable"),FFileHelper::LoadFileToString(SecondCopy,*(Root/TEXT("Profiles/Loot/Imported.json"))));
     TestEqual(TEXT("Previous native copy preserved byte for byte"),FirstCopy,SecondCopy);
     FFileHelper::LoadFileToString(SecondCopy,*SourcePath);TestEqual(TEXT("Legacy source untouched"),Original,SecondCopy);
-    TestTrue(TEXT("Earlier report preserved alongside new report"),IFileManager::Get().FileExists(*(Root/TEXT("Imports/Imported_2.json"))));
+    Reports.Reset();IFileManager::Get().FindFiles(Reports,*(Root/TEXT("Imports/Imported_*.json")),true,false);
+    TestEqual(TEXT("Reimport keeps one source report"),Reports.Num(),1);
     FFileHelper::SaveStringToFile(TEXT("invalid source no longer required"),*SourcePath);
-    TestTrue(TEXT("Imported copy reloads without a valid legacy source"),H->LoadProfile(TEXT("ucm"),TEXT("Imported")));
+    TestTrue(TEXT("Imported copy reloads without a valid legacy source"),H->SelectUCMSection(TEXT("Loot"),TEXT("Imported")));
     FFileHelper::SaveStringToFile(Original,*SourcePath);
     TestTrue(TEXT("Native echo command works"),H->RunUCMCommand(TEXT("echo /vt jump is literal chat text")));
     TestEqual(TEXT("Echo body is not rewritten"),H->Notice,FString(TEXT("/vt jump is literal chat text")));
@@ -332,9 +376,10 @@ bool FACEPluginHostTest::RunTest(const FString&)
     TestEqual(TEXT("Database health retained in native copy"),MonsterProfile->GetObjectField(TEXT("monster_catalog"))->GetObjectField(TEXT("Olthoi Warrior"))->GetNumberField(TEXT("max_health")),2500.);
     FString UnchangedDatabase;FFileHelper::LoadFileToString(UnchangedDatabase,*(Root/TEXT("GameInfoDB.UGD")));TestEqual(TEXT("Game information source remains unchanged"),UnchangedDatabase,MonsterDatabase);
     TestTrue(TEXT("Folder browser lists loot files without importing"),H->GetProfileFiles(TEXT("utl")).Contains(TEXT("source.utl")));
+    TestTrue(TEXT("Switch away before direct folder import"),H->SelectUCMSection(TEXT("Loot"),TEXT("EmptyLoot")));
     TestTrue(TEXT("Direct folder selection works"),H->SelectProfileFile(TEXT("source.utl")));
     TestEqual(TEXT("Active source is recorded"),P->Profile->GetStringField(TEXT("utl_source")),Root/TEXT("source.utl"));
-    TestEqual(TEXT("Direct selection creates a named native copy"),P->ProfileName,FString(TEXT("source_ucm")));
+    TestEqual(TEXT("Direct selection reuses the named native profile"),H->UCMSectionName(TEXT("Loot")),FString(TEXT("Imported")));
     const FString Loaded=H->ProfileJson(TEXT("ucm"));
     FFileHelper::SaveStringToFile(TEXT("invalid"),*(Root/TEXT("broken.met")));
     TestFalse(TEXT("Unsupported file cannot replace active configuration"),H->SelectProfileFile(TEXT("broken.met")));
@@ -349,6 +394,9 @@ bool FACEPluginHostTest::RunTest(const FString&)
     TestTrue(TEXT("Loaded route immediately enables world preview"),P->Profile->GetBoolField(TEXT("route_preview")));
     TestTrue(TEXT("Selected route is ready to follow when Start is pressed"),P->Profile->GetBoolField(TEXT("navigation")));
     TestFalse(TEXT("Selecting a route does not start movement before Start"),P->Running);
+    TestTrue(TEXT("Navigation can be disabled independently"),H->RunUCMCommand(TEXT("enablenav false")));
+    TestTrue(TEXT("Selecting the same imported route succeeds"),H->SelectProfileFile(TEXT("Walk home.NAV")));
+    TestTrue(TEXT("Reselecting a route also enables navigation"),P->Profile->GetBoolField(TEXT("navigation")));
     FFileHelper::SaveStringToFile(TEXT("uTank2 NAV 1.2\n1\n1\n0\n0.02\n0\n0.05\n0\n"),*(Root/TEXT("Other.nav")));
     TestTrue(TEXT("Switching to another navigation profile succeeds"),H->SelectProfileFile(TEXT("Other.nav")));
     TestEqual(TEXT("Switching replaces rather than appends old waypoints"),P->Profile->GetArrayField(TEXT("route")).Num(),1);
@@ -506,6 +554,45 @@ bool FACEPluginHostTest::RunTest(const FString&)
     TestTrue(TEXT("Multiple independent plugin windows can be open"),H->IsPluginWindowOpen(TEXT("ucm"))&&H->IsPluginWindowOpen(TEXT("monitor")));
     P->Running=true;Dock->Toggle(TEXT("ucm"));
     TestTrue(TEXT("Hiding a plugin does not stop it or hide another"),P->Running&&!Dock->IsOpen(TEXT("ucm"))&&Dock->IsOpen(TEXT("monitor")));
+    {
+        Dock->Toggle(TEXT("ucm.log"));
+        Ui->SetUiLocked(false);
+        Dock->Move(TEXT("monitor"),FVector2D(20,30),false);
+        Dock->Resize(TEXT("monitor"),FVector2D(-100,-100),false);
+        const auto Position=Dock->Windows[TEXT("monitor")].Position,Size=Dock->Windows[TEXT("monitor")].Size;
+        Dock->SaveOverlayLayout();
+        FString Saved;TestTrue(TEXT("Window visibility is written to disk"),FFileHelper::LoadFileToString(Saved,*(Root/TEXT("settings.json"))));
+        H->Settings=Json(*Saved);auto Restored=SNew(SACEPluginDesktop).Host(H);
+        TestTrue(TEXT("Login restores open custom plugin and UCM log windows"),Restored->IsOpen(TEXT("monitor"))&&Restored->IsOpen(TEXT("ucm.log")));
+        TestFalse(TEXT("Login preserves an explicitly closed UCM window"),Restored->IsOpen(TEXT("ucm")));
+        TestEqual(TEXT("Logout mid-drag saves third-party window position"),Restored->Windows[TEXT("monitor")].Position,Position);
+        TestEqual(TEXT("Logout mid-resize saves third-party window size"),Restored->Windows[TEXT("monitor")].Size,Size);
+        Second->Enabled=false;Restored->Refresh();
+        TestTrue(TEXT("Disabling hides UI without clearing its login preference"),!Restored->IsOpen(TEXT("monitor"))&&H->WasPluginWindowOpen(TEXT("monitor")));
+        auto Disabled=SNew(SACEPluginDesktop).Host(H);TestFalse(TEXT("Disabled plugin cannot reopen at login"),Disabled->IsOpen(TEXT("monitor")));
+        Second->Enabled=true;Restored->Refresh();TestTrue(TEXT("Re-enabling restores its saved open window"),Restored->IsOpen(TEXT("monitor")));
+        Restored->Toggle(TEXT("monitor"));Restored->Toggle(TEXT("ucm.log"));
+        auto Closed=SNew(SACEPluginDesktop).Host(H);TestFalse(TEXT("Explicitly closed custom/log windows stay closed"),Closed->IsOpen(TEXT("monitor"))||Closed->IsOpen(TEXT("ucm.log")));
+        // Continue the original dock fixture without changing its intended state.
+        H->SavePluginWindowVisibility(TEXT("monitor"),true);Dock->Hide(TEXT("ucm.log"));
+        Ui->SetUiLocked(true);
+    }
+    {
+        const auto Geometry=FGeometry::MakeRoot(FVector2D(1920,1080),FSlateLayoutTransform(1.5f));
+        auto& W=Dock->Windows[TEXT("monitor")];const auto OriginalPlacement=W.Position;
+        Ui->SetUiLocked(false);
+        ACERuntimeOptions::Set(TEXT("ConstrainUIWindows"),0);Dock->Tick(Geometry,4,.016f);
+        Dock->Move(TEXT("monitor"),FVector2D(-3000,-2000),true);
+        TestTrue(TEXT("Unrestrained plugins can be dragged beyond either viewport edge"),W.Slot->GetOffset().Left<0&&W.Slot->GetOffset().Top<0);
+        const auto Offscreen=W.Position;
+        Dock->Tick(Geometry,5,.016f);TestEqual(TEXT("Layout does not undo allowed offscreen placement"),W.Position,Offscreen);
+        ACERuntimeOptions::Set(TEXT("ConstrainUIWindows"),1);Dock->Tick(Geometry,6,.016f);
+        TestTrue(TEXT("Enabling bounds recovers an offscreen window immediately"),W.Slot->GetOffset().Left>=0&&W.Slot->GetOffset().Top>=0);
+        Dock->Move(TEXT("monitor"),FVector2D(5000,5000),false);
+        const auto Bounds=W.Slot->GetOffset();
+        TestTrue(TEXT("Plugin drag remains entirely inside the logical DPI viewport"),Bounds.Left+Bounds.Right<=1920&&Bounds.Top+Bounds.Bottom<=1080);
+        W.Position=OriginalPlacement;Dock->Layout(W);Dock->Move(TEXT("monitor"),FVector2D::ZeroVector,true);Ui->SetUiLocked(true);
+    }
     TestTrue(TEXT("Plugin bar is visible by default"),H->IsPluginBarVisible());
     H->SetPluginBarVisible(false);
     TestTrue(TEXT("Hiding bar removes its entire frame and hit targets"),Dock->Windows[TEXT("__bar")].Widget->GetVisibility()==EVisibility::Collapsed);
@@ -542,6 +629,26 @@ bool FACEPluginHostTest::RunTest(const FString&)
         TestTrue(TEXT("Expanded body fits onscreen"),Bar.Slot->GetOffset().Top+Bar.Slot->GetOffset().Bottom<=Dock->ViewSize.Y);
         Bar.Position=Initial;Dock->Layout(Bar);Dock->Move(TEXT("__bar"),FVector2D::ZeroVector,true);
         Ui->SetUiLocked(true);
+    }
+    {
+        auto& Bar=Dock->Windows[TEXT("__bar")];const auto Position=Bar.Position;
+        const int32 Count=Dock->Buttons->NumSlots();
+        TestFalse(TEXT("Plugin bar defaults to vertical"),H->IsPluginBarHorizontal());
+        H->SetPluginBarHorizontal(true);
+        TestTrue(TEXT("Orientation updates the existing icon row and scroll direction"),Dock->Buttons->GetOrientation()==Orient_Horizontal&&Dock->BarScroll->GetOrientation()==Orient_Horizontal);
+        TestEqual(TEXT("Horizontal orientation preserves every icon"),Dock->Buttons->NumSlots(),Count);
+        TestEqual(TEXT("Horizontal bar keeps square icon cells"),Bar.Size,FVector2D(4+34*Count,52));
+        TestEqual(TEXT("Rotating the bar keeps its saved position"),Bar.Position,Position);
+        TestTrue(TEXT("Rotating the bar keeps automation and other windows active"),P->Running&&Dock->IsOpen(TEXT("monitor")));
+        FString Saved;TestTrue(TEXT("Orientation saves to disk"),FFileHelper::LoadFileToString(Saved,*(Root/TEXT("settings.json"))));
+        H->Settings=Json(*Saved);auto Restored=SNew(SACEPluginDesktop).Host(H);
+        TestTrue(TEXT("Horizontal bar restores across login"),H->IsPluginBarHorizontal()&&Restored->Buttons->GetOrientation()==Orient_Horizontal);
+        H->SetPluginBarMinimized(true);
+        TestEqual(TEXT("Horizontal bar minimizes to a short handle"),Dock->DisplaySize(Bar),FVector2D(70,18));
+        H->SetPluginBarHorizontal(false);
+        TestEqual(TEXT("Changing orientation while minimized updates the handle"),Dock->DisplaySize(Bar),FVector2D(38,18));
+        H->SetPluginBarMinimized(false);
+        TestEqual(TEXT("Returning to vertical restores one column"),Bar.Size,FVector2D(38,18+34*Count));
     }
     P->Running=false;Dock->Toggle(TEXT("ucm"));
     TestTrue(TEXT("Second click reopens its existing window"),Dock->IsOpen(TEXT("ucm")));
@@ -588,7 +695,7 @@ bool FACEPluginHostTest::RunTest(const FString&)
             const auto Labels=VisibleText(H->MakePanel(Id));
             for(const TCHAR* Title:{TEXT("UCM"),TEXT("Loot Profile Editor"),TEXT("Item Tools"),TEXT("Waypoint"),TEXT("Explore Dereth"),TEXT("UCM Micro"),TEXT("UCM Log"),TEXT("Supply Ledger"),TEXT("Hunt Ledger")})
                 TestFalse(FString(Id)+TEXT(" has no duplicate content heading: ")+Title,Labels.Contains(Title));
-            if(FString(Id)==TEXT("ucm"))TestTrue(TEXT("Compact UCM header keeps setup and Start"),Labels.Contains(TEXT("Start"))&&Labels.Contains(TEXT("Setup: ")+P->ProfileName));
+            if(FString(Id)==TEXT("ucm"))TestTrue(TEXT("Compact UCM header keeps Start and status"),Labels.Contains(TEXT("Start"))&&Labels.Contains(P->Status)&&!Labels.Contains(TEXT("Setup: ")+P->ProfileName));
             if(FString(Id)==TEXT("looteditor"))TestTrue(TEXT("Loot editor keeps its tabs"),Labels.Contains(TEXT("Loot rules"))&&Labels.Contains(TEXT("Vendors")));
             if(FString(Id)==TEXT("itemtools"))TestTrue(TEXT("Item Tools keeps stop and task controls"),Labels.Contains(TEXT("Stop"))&&Labels.Contains(TEXT("Give")));
         }
@@ -625,6 +732,12 @@ bool FACEPluginHostTest::RunTest(const FString&)
         TestEqual(TEXT("Plugin bar and window render"),Pixels.Num(),1280*720);
         Png.Reset();FImageUtils::PNGCompressImageArray(1280,720,Pixels,Png);
         FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("Automation/PluginDock.png")));
+        H->SetPluginBarHorizontal(true);
+        for(int Pass=0;Pass<3;++Pass){Renderer.DrawWidget(DockTarget,Dock,FVector2D(1280,720),0);FlushRenderingCommands();}
+        Pixels.Reset();DockTarget->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,ReadFlags);
+        Png.Reset();FImageUtils::PNGCompressImageArray(1280,720,Pixels,Png);
+        FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("Automation/PluginDock-Horizontal.png")));
+        H->SetPluginBarHorizontal(false);
         TSharedPtr<SWidget> Handle,Minimize;
         TFunction<void(TSharedRef<SWidget>)> FindBarControls=[&](TSharedRef<SWidget> Widget)
         {
@@ -663,10 +776,10 @@ bool FACEPluginHostTest::RunTest(const FString&)
             TArray<TSharedRef<SCheckBox>> Toggles;
             TFunction<void(TSharedRef<SWidget>)> Visit=[&](TSharedRef<SWidget> Widget)
             {if(Widget->GetTypeAsString()==TEXT("SCheckBox"))Toggles.Add(StaticCastSharedRef<SCheckBox>(Widget));auto* Children=Widget->GetChildren();for(int I=0;I<Children->Num();++I)Visit(Children->GetChildAt(I));};
-            Visit(Micro);TestEqual(TEXT("Micro includes run and all major activity toggles"),Toggles.Num(),10);
-            if(Toggles.Num()==10)
+            Visit(Micro);TestEqual(TEXT("Micro includes all nine activity toggles below its Start/Stop button"),Toggles.Num(),9);
+            if(Toggles.Num()==9)
             {
-                auto Loot=Toggles[3];const bool Before=Loot->IsChecked();const auto Geometry=Loot->GetCachedGeometry();const FVector2D At=Geometry.LocalToAbsolute(Geometry.GetLocalSize()*.5);
+                auto Loot=Toggles[2];const bool Before=Loot->IsChecked();const auto Geometry=Loot->GetCachedGeometry();const FVector2D At=Geometry.LocalToAbsolute(Geometry.GetLocalSize()*.5);
                 Loot->OnMouseButtonDown(Geometry,FPointerEvent(0,At,At,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
                 Loot->OnMouseButtonUp(Geometry,FPointerEvent(0,At,At,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
                 bool Enabled=false;P->Profile->TryGetBoolField(TEXT("looting"),Enabled);

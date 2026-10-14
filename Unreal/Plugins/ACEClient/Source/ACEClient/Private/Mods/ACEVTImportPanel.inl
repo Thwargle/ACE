@@ -1,10 +1,50 @@
-FString LegacyPath,LegacyName=TEXT("Imported"),LegacyFolder;
+FString LegacyPath,LegacyName,LegacyFolder,ImportLog;
+TArray<FString> ImportQueue;
+TSharedPtr<FJsonObject> ImportPreviousProfile,ImportPreviousLinks;
+int32 ImportTotal=0,ImportSucceeded=0;
+void LogImport(const FString& Message)
+{
+    ImportLog+=(ImportLog.IsEmpty()?TEXT(""):TEXT("\n"))+Message.Left(2000);
+    if(ImportLog.Len()>16000)ImportLog=ImportLog.Right(16000);
+}
+void BeginImport(const FString& Extension=FString())
+{
+    if(ImportQueue.Num()||!CanLeaveLootRule())return;
+    if(!Host->SetProfileFolder(LegacyFolder))return;
+    RefreshLibrary();
+    for(const TCHAR* Ext:{TEXT("usd"),TEXT("utl"),TEXT("nav"),TEXT("met")})
+        if(Extension.IsEmpty()||Extension==Ext)ImportQueue.Append(LibraryFiles.FindRef(Ext));
+    ImportTotal=ImportQueue.Num();ImportSucceeded=0;
+    if(!ImportTotal){LogImport(TEXT("No supported files found in the import folder."));return;}
+    ImportPreviousProfile=ACEUCMProfiles::Copy(P());ImportPreviousLinks=ACEUCMProfiles::Copy(Plugin->ProfileLinks);
+    Host->Stop(Plugin->Id);LogImport(FString::Printf(TEXT("Importing %d files..."),ImportTotal));
+}
+void ProcessImport()
+{
+    const FString File=ImportQueue[0];ImportQueue.RemoveAt(0);
+    const bool Success=Host->SelectProfileFile(File);if(Success)++ImportSucceeded;
+    LogImport(File+TEXT(": ")+Host->Notice);RenderedProfile=P();
+    // Each file is imported between UI frames. Restore the current selection
+    // before returning, so closing the window mid-batch cannot change a hunt.
+    if(ACEUCMProfiles::SaveSelection(Host->UserDirectory(),ImportPreviousProfile,ImportPreviousLinks,Host->Notice))
+        Host->LoadProfile(Plugin->Id,ACEUCMProfiles::ActiveName());
+    else LogImport(Host->Notice);
+    RenderedProfile=P();
+    if(ImportQueue.IsEmpty())
+    {
+        ImportPreviousProfile.Reset();ImportPreviousLinks.Reset();ResetProfileEditors();
+        LogImport(FString::Printf(TEXT("Finished: %d imported or already available, %d failed. Choose profiles in Overview."),ImportSucceeded,ImportTotal-ImportSucceeded));
+        Rebuild();
+    }
+}
 FString ImportExtension=TEXT("utl");
 TMap<FString,TArray<FString>> LibraryFiles;
 void RefreshLibrary(){for(const TCHAR* Ext:{TEXT("nav"),TEXT("met"),TEXT("utl"),TEXT("usd")})LibraryFiles.Add(Ext,Host->GetProfileFiles(Ext));}
 void ImportHome()
 {
     Heading(TEXT("Import"),TEXT("Choose a vTank file to create reusable profiles. Meta imports include referenced files and embedded routes. Keep dependency files together in the import folder."));
+    Add(SNew(SBox).IsEnabled_Lambda([this](){return ImportQueue.IsEmpty();})[Button(TEXT("Import all files"),[this](){BeginImport();})]);
+    Add(Text(Host->GetProfileFolder(),14,Muted));
     for(const auto& Entry:TArray<TPair<FString,FString>>{
         {TEXT("utl"),TEXT("Import vTank Loot Profile (*.utl)")},{TEXT("nav"),TEXT("Import vTank Route (*.nav)")},
         {TEXT("met"),TEXT("Import vTank Meta (*.met)")},{TEXT("usd"),TEXT("Import vTank Character Settings (*.usd)")}})
@@ -14,16 +54,17 @@ void ImportHome()
 void SectionImportPanel()
 {
     Add(Button(TEXT("Back to Import"),[this](){Page=TEXT("Import");Rebuild();}));
-    Heading(TEXT("Import vTank file (*.")+ImportExtension+TEXT(")"),TEXT("Creates and selects profiles named after the file. Existing names receive a numbered suffix. Original files are kept."));
+    Heading(TEXT("Import vTank file (*.")+ImportExtension+TEXT(")"),TEXT("Creates profiles named after the file. Files already imported select their existing profiles and keep your edits. Original files are kept."));
     Add(Text(TEXT("Import folder"),14,Muted));
     Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Text(FText::FromString(LegacyFolder)).OnTextChanged_Lambda([this](const FText& Value){LegacyFolder=Value.ToString();}));
     Add(Button(TEXT("Refresh folder"),[this](){if(Host->SetProfileFolder(LegacyFolder)){RefreshLibrary();Rebuild();}}));
+    Add(SNew(SBox).IsEnabled_Lambda([this](){return ImportQueue.IsEmpty();})[Button(TEXT("Import all .")+ImportExtension+TEXT(" files"),[this](){BeginImport(ImportExtension);})]);
     int32 Count=0;
     for(const auto& File:LibraryFiles.FindRef(ImportExtension))
     {
-        ++Count;Add(Button(File,[this,File](){
+        ++Count;Add(SNew(SBox).IsEnabled_Lambda([this](){return ImportQueue.IsEmpty();})[Button(File,[this,File](){
             if(!CanLeaveLootRule())return;
-            if((ImportExtension==TEXT("nav")||ImportExtension==TEXT("utl"))?Host->ImportUCMSection(File):Host->SelectProfileFile(File))ResetProfileEditors();Rebuild();}));
+            if(Host->SelectProfileFile(File))ResetProfileEditors();LogImport(Host->Notice);Rebuild();})]);
     }
     if(!Count)Add(Text(TEXT("No .")+ImportExtension+TEXT(" files found. Copy files into this folder, then refresh."),15,Muted));
 }
@@ -32,12 +73,13 @@ TArray<FString> LegacyIssues;
 void PreviewLegacy(const FString& Path)
 {
     LegacyPath=Path;LegacyDocument=Host->InspectLegacyProfile(Path);LegacyIssues.Reset();LegacyConverted.Reset();
+    LegacyName=FPaths::GetBaseFilename(Path);for(auto& Ch:LegacyName)if(!FChar::IsAlnum(Ch)&&Ch!='_'&&Ch!='-')Ch='_';LegacyName.LeftInline(64);
     if(LegacyDocument)LegacyConverted=ACEVTProfile::ConvertFile(Path,LegacyIssues);
     Rebuild();
 }
 void ImportPanel()
 {
-    Heading(TEXT("Virindi profile import"),TEXT("Read .utl loot rules, .nav routes, .met metas and .usd settings. Originals are never changed. Only fully supported conversions can be activated; unsupported data is retained in an import report. Supported /vt commands become /ucm actions. Imports create separate reusable profiles; repeated names receive numbered suffixes. Decal plugins are not loaded."));
+    Heading(TEXT("Virindi profile import"),TEXT("Read .utl loot rules, .nav routes, .met metas and .usd settings. Originals are never changed. Unsupported data is retained in an import report. Reimporting selects the existing named profiles and keeps your edits."));
     Add(Text(TEXT("File path (or copy files to Saved/ClientPlugins/ImportInbox)"),15,Muted));
     Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).Text(FText::FromString(LegacyPath)).OnTextChanged_Lambda([this](const FText& V){LegacyPath=V.ToString();LegacyDocument.Reset();}));
     Add(Button(TEXT("Preview file"),[this](){PreviewLegacy(LegacyPath);}));

@@ -80,7 +80,7 @@ bool FACEVTSettingsTest::RunTest(const FString&)
     {
         FACEPluginVM VM;VM.Load(Script,Error);auto S=Snapshot();S->SetNumberField(TEXT("health"),100);
         auto B=SettingsJSON(TEXT(R"({"buffing":true,"auto_buffs":false,"recovery":false,"combat":"off","excluded_buff_spells":[102],"buffs":[102],"buff_items":[{"name":"Blessing Gem","spell":103}]})"));
-        auto Spells=SettingsJSON(TEXT(R"({"values":[{"id":102,"name":"Excluded exemplar","category":1,"known":false},{"id":104,"name":"Strength","category":1,"power":100,"skill":300,"self_buff":true,"duration":300},{"id":103,"name":"Blessing","category":999,"power":100,"known":false,"flags":4}]})"));
+        auto Spells=SettingsJSON(TEXT(R"({"values":[{"id":102,"name":"Excluded exemplar","category":1,"known":false},{"id":104,"name":"Strength","category":1,"power":100,"skill":300,"self_buff":true,"duration":300},{"id":103,"name":"Blessing","category":999,"power":100,"duration":300,"known":false,"flags":4}]})"));
         S->SetArrayField(TEXT("spells"),Spells->GetArrayField(TEXT("values")));auto Inventory=S->GetArrayField(TEXT("inventory"));Inventory.Add(MakeShared<FJsonValueObject>(SettingsJSON(TEXT(R"({"id":9,"name":"Blessing Gem","type":0,"usable":true})"))));S->SetArrayField(TEXT("inventory"),Inventory);
         TestEqual(TEXT("Unknown exclusion exemplar excludes the entire known family; gem remains usable"),Step(VM,S,B)->GetNumberField(TEXT("item")),9.);
         S->SetNumberField(TEXT("action_serial"),1);TestFalse(TEXT("UseDone alone cannot confirm a gem buff"),Step(VM,S,B)->HasField(TEXT("action")));

@@ -11,8 +11,13 @@ J VTProperties(const V& Value)
 }
 J VTCommand(const FString& Source,TArray<FString>& Issues)
 {
-    auto Out=MakeShared<FJsonObject>();const FString Command=NativeCommand(Source);
+    auto Out=MakeShared<FJsonObject>();FString Command=NativeCommand(Source);
     Out->SetStringField(TEXT("source_command"),Command);
+    // Parse both new and saved legacy commands through the same grammar; keep
+    // the canonical acue spelling in serialized actions and diagnostic output.
+    for(const auto& Alias:TArray<TPair<FString,FString>>{{TEXT("/acueucm"),TEXT("/ucm")},{TEXT("/acueplugin"),TEXT("/plugin")}})
+        if(Command.StartsWith(Alias.Key) && (Command.Len()==Alias.Key.Len() || FChar::IsWhitespace(Command[Alias.Key.Len()])))
+        {Command=Alias.Value+Command.Mid(Alias.Key.Len());break;}
     TArray<FString> Words;Command.ParseIntoArrayWS(Words);const FString Lower=Command.ToLower();
     if(Command.Len()>1024){Issues.Add(TEXT("Command exceeds 1024 characters"));return Out;}
     if(Command.IsEmpty()){Out->SetStringField(TEXT("op"),TEXT("noop"));return Out;}

@@ -149,7 +149,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
 	void SetPreferredStyle(int32 Style);
 
-	/** Server On/Off door transition via MotionTable Links (one-shot, holds final pose). */
+	/** Server On/Off item transition, followed by the motion table's held or animated cycle. */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
 	void PlayDoorMotion(int32 ToCommandU16);
 
@@ -161,13 +161,13 @@ public:
 	/** Teleport reuses the avatar, but not departed locomotion, action queues or pose blends. */
 	void ResetMotionForTeleport();
 
-	/** Seed held door pose without replaying (ObjectCreate already On/Off). */
+	/** Start the current On/Off cycle without replaying activation (ObjectCreate already On/Off). */
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
 	void SetDoorHeldCommand(int32 CommandU16);
 
 	/** True while held/animating toward Motion::On (door/chest open). */
 	bool IsDoorHeldOpen() const { return DoorToCommand == ACEMotion::On; }
-	/** True after On/Off reached its last frame (not mid-transition). */
+	/** True after the On/Off transition has finished, including animated destination cycles. */
 	bool IsDoorHoldFinal() const { return bDoorHoldFinal; }
 
 	/**
@@ -328,6 +328,7 @@ protected:
 	uint32 DoorFromCommand = ACEMotion::Off;
 	uint32 DoorToCommand = ACEMotion::Off;
 	bool bDoorHoldFinal = false;
+	bool bDoorStartsInCycle = false;
 	/** Weenie 16919 doorpedestal — Off clip last frame is empty/NoDraw. */
 	void ApplyBindPartTransforms();
 	bool bSuppressNextHookDispatch = false;

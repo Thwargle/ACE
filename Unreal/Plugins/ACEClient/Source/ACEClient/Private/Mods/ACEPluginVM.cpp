@@ -45,6 +45,10 @@ namespace
     {lua_getfield(L,Index,Key);const double Value=lua_isnumber(L,-1)?lua_tonumber(L,-1):Default;lua_pop(L,1);return Value;}
     bool NotFalse(lua_State* L,int Index,const char* Key)
     {lua_getfield(L,Index,Key);const bool Value=lua_isnil(L,-1)||lua_toboolean(L,-1);lua_pop(L,1);return Value;}
+    bool BoolField(lua_State* L,int Index,const char* Key)
+    {lua_getfield(L,Index,Key);const bool Value=lua_toboolean(L,-1)!=0;lua_pop(L,1);return Value;}
+    void AppendSpell(lua_State* L,int Array,int Spell)
+    {lua_pushvalue(L,Spell);lua_rawseti(L,Array,lua_rawlen(L,Array)+1);}
     // Index snapshot tables without copying spell records or spending the Lua
     // instruction quota repeatedly walking the full book. Native work is also
     // bounded per decision; arbitrary plugins cannot bypass the work limit.
@@ -73,6 +77,16 @@ namespace
         lua_newtable(L);const int ById=lua_gettop(L);
         lua_newtable(L);const int Supplied=lua_gettop(L);
         lua_newtable(L);const int Usable=lua_gettop(L);int UsableCount=0;
+        // The fourth result partitions the same records, retaining their order
+        // and every tier. Policy still chooses the spell; these are only views.
+        // Buff candidates deliberately retain blocked spells so the policy can
+        // explain missing components/skills and honor its separate buff margin.
+        lua_newtable(L);const int Groups=lua_gettop(L);
+        lua_newtable(L);const int Buffs=lua_gettop(L);
+        lua_newtable(L);const int InstantSelf=lua_gettop(L);
+        lua_newtable(L);const int Offense=lua_gettop(L);
+        lua_newtable(L);const int OtherBuffs=lua_gettop(L);
+        lua_newtable(L);const int Categories=lua_gettop(L);
         for(size_t I=1;I<=Count;++I)
         {
             if(++SpellIndexWork>131072)return luaL_error(L,"spell index work limit exceeded");
@@ -93,11 +107,30 @@ namespace
             }
             lua_pop(L,1);lua_pushvalue(L,Id);lua_pushboolean(L,HasSupply);lua_rawset(L,Supplied);
             lua_pushvalue(L,Id);lua_rawget(L,5);const double Unavailable=lua_tonumber(L,-1);lua_pop(L,1);
-            if(HasSupply&&NotFalse(L,Spell,"known")&&Now>=Unavailable&&NumberField(L,Spell,"skill")>=NumberField(L,Spell,"power")+Margin)
-            {lua_pushvalue(L,Spell);lua_rawseti(L,Usable,++UsableCount);}
+            const bool Known=NotFalse(L,Spell,"known"),Beneficial=BoolField(L,Spell,"beneficial"),Caster=BoolField(L,Spell,"caster_target"),SelfBuff=BoolField(L,Spell,"self_buff");
+            const double Duration=NumberField(L,Spell,"duration");
+            if(Known&&(SelfBuff||(Beneficial&&NumberField(L,Spell,"school")==3&&Duration>0)))AppendSpell(L,Buffs,Spell);
+            if(HasSupply&&Known&&Now>=Unavailable&&NumberField(L,Spell,"skill")>=NumberField(L,Spell,"power")+Margin)
+            {
+                lua_pushvalue(L,Spell);lua_rawseti(L,Usable,++UsableCount);
+                if(Caster&&Duration==0)AppendSpell(L,InstantSelf,Spell);
+                if(!Beneficial)AppendSpell(L,Offense,Spell);
+                if(Beneficial&&!Caster&&!SelfBuff&&Duration>0)AppendSpell(L,OtherBuffs,Spell);
+                lua_getfield(L,Spell,"category");
+                if(lua_isnumber(L,-1))
+                {
+                    lua_pushvalue(L,-1);lua_rawget(L,Categories);
+                    if(lua_isnil(L,-1))
+                    {lua_pop(L,1);lua_newtable(L);lua_pushvalue(L,-2);lua_pushvalue(L,-2);lua_rawset(L,Categories);}
+                    AppendSpell(L,lua_gettop(L),Spell);lua_pop(L,1);
+                }
+                lua_pop(L,1);
+            }
             lua_pop(L,2);
         }
-        return 3;
+        lua_setfield(L,Groups,"by_category");lua_setfield(L,Groups,"other_buffs");
+        lua_setfield(L,Groups,"offense");lua_setfield(L,Groups,"instant_self");lua_setfield(L,Groups,"buffs");
+        return 4;
     }
     void PushJson(lua_State* L, const FJsonValue* V, int Depth);
     void PushObject(lua_State* L, const FJsonObject* O, int Depth)

@@ -6,8 +6,8 @@ It uses the client plugin bar, modern resizable controls and the normal server
 protocol. It does not load Decal or VVS assemblies.
 
 Open **Plugins**, enable **Item Tools**, then click **ITEM** on the plugin bar.
-`/items` also opens its window. Closing the window leaves an active job running;
-use **Stop** or `/items stop` to end it. Movement and window placement use the
+`/acueitems` also opens its window. Closing the window leaves an active job running;
+use **Stop** or `/acueitems stop` to end it. Movement and window placement use the
 normal plugin desktop controls.
 
 ## Give
@@ -81,9 +81,9 @@ starts when a newly opened vendor stocks something in the list; enable this only
 when automatic purchases are wanted. Missing stock is reported after available
 supplies have been processed.
 
-Manual command: `/items restock`. The original `/it recomp` spelling is also
-accepted. Other commands are `/items give`, `/items shop`, `/items profile`,
-`/items chest`, and `/items stop`.
+Manual command: `/acueitems restock`. The original `/it recomp` spelling is also
+accepted. Other commands are `/acueitems give`, `/acueitems shop`, `/acueitems profile`,
+`/acueitems chest`, and `/acueitems stop`.
 
 ## Coordination and validation
 

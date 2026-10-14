@@ -21,6 +21,7 @@ struct FObjectPacket
 	float X = 10.f;
 	bool bPosition = true;
 	float Workmanship = -1.f;
+	bool HouseHook = false;
 };
 
 void WriteAppearance(FACEBinaryWriter& W, uint16 Part)
@@ -46,12 +47,14 @@ TArray<uint8> ObjectPacket(const FObjectPacket& P, uint32 Opcode = ACEOpcode::Ob
 	for (int32 I = 0; I < ACEPhysicsTimeStamp::Count; ++I)
 		W.WriteUInt16(I == ACEPhysicsTimeStamp::Instance ? P.Instance : P.Sequence);
 	W.Align();
-	W.WriteUInt32((P.Container ? 0x4000u : 0u) | (P.Workmanship>=0 ? 0x01000000u : 0u));
+	W.WriteUInt32((P.Container ? 0x4000u : 0u) | (P.Workmanship>=0 ? 0x01000000u : 0u)
+		| (P.HouseHook ? 0x20000000u : 0u));
 	W.WriteString16L(TEXT("Server-authored object"));
 	W.WriteUInt16(1); W.WriteUInt16(1); // WCID and icon have packed known type prefixes.
 	W.WriteUInt32(ACEItemType::Misc); W.WriteUInt32(P.DescriptionFlags); W.Align();
 	if (P.Container) W.WriteUInt32(P.Container);
 	if (P.Workmanship>=0) W.WriteFloat(P.Workmanship);
+	if (P.HouseHook) W.WriteUInt32(0xFFFFFFFFu);
 	W.Align();
 	return W.GetData();
 }
@@ -61,6 +64,18 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECustomObjectReplicationTest, "ACE.RetailPar
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACECustomObjectReplicationTest::RunTest(const FString&)
 {
+	{
+		FACESession HookSession;
+		FObjectPacket Hook; Hook.HouseHook=true; Hook.Setup=0x02001632; Hook.Placement=103;
+		Hook.DescriptionFlags=ACEObjectDescFlag::Openable;
+		HookSession.HandleGameMessage(ObjectPacket(Hook));
+		TestTrue(TEXT("PublicWeenieDesc retains house-hook identity"),HookSession.WorldObjects[Hook.Guid].bIsHouseHook);
+		TestFalse(TEXT("Openable hook does not imply a closed chest animation"),HookSession.WorldObjects[Hook.Guid].UsesOnOffMotion());
+		Hook.HouseHook=false;
+		HookSession.HandleGameMessage(ObjectPacket(Hook,ACEOpcode::UpdateObject));
+		TestFalse(TEXT("Replacement descriptor clears previous hook identity"),HookSession.WorldObjects[Hook.Guid].bIsHouseHook);
+		TestTrue(TEXT("Ordinary openable containers retain chest animation"),HookSession.WorldObjects[Hook.Guid].UsesOnOffMotion());
+	}
 	// ACSmartBox queues F74C for absent objects and newer incarnations, then
 	// replays after CreateObject. Exercise actual wire parsing and presentation.
 	{

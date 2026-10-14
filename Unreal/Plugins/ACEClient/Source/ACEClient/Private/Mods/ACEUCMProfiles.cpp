@@ -85,8 +85,17 @@ FString SectionFor(const FString& Key)
 }
 TSharedPtr<FJsonObject> Copy(const TSharedPtr<FJsonObject>& Object)
 {
-    TSharedPtr<FJsonObject> Result;
-    FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Encode(Object)), Result);
+    if(!Object)return nullptr;
+    TFunction<TSharedPtr<FJsonValue>(const TSharedPtr<FJsonValue>&)> Clone;
+    Clone=[&](const TSharedPtr<FJsonValue>& Value)->TSharedPtr<FJsonValue>
+    {
+        if(Value->Type==EJson::Object)return MakeShared<FJsonValueObject>(Copy(Value->AsObject()));
+        if(Value->Type==EJson::Array){TArray<TSharedPtr<FJsonValue>> Values;Values.Reserve(Value->AsArray().Num());for(const auto& Item:Value->AsArray())Values.Add(Clone(Item));return MakeShared<FJsonValueArray>(Values);}
+        // Scalar JSON values are immutable; only objects/arrays need ownership.
+        return Value;
+    };
+    auto Result=MakeShared<FJsonObject>();
+    for(const auto& Pair:Object->Values)Result->Values.Add(Pair.Key,Clone(Pair.Value));
     return Result;
 }
 TSharedPtr<FJsonObject> Extract(const TSharedPtr<FJsonObject>& Profile, const FString& Section)
@@ -247,11 +256,12 @@ bool SaveSelection(const FString& Root, const TSharedPtr<FJsonObject>& Profile,
     if (!Write(Path(Root,TEXT("ucm"),ActiveName()),Selection)) { Error=TEXT("Cannot save current profile selection"); return false; }
     return true;
 }
-bool DeleteSection(const FString& Root, const FString& Section, const FString& Name, FString& Error)
+static bool RelocateSection(const FString& Root, const FString& Section, const FString& Name, const FString& Replacement, bool Rename, FString& Error)
 {
     if (!Sections().Contains(Section) || !SafeName(Name) || Name.Equals(TEXT("Default"), ESearchCase::IgnoreCase))
     { Error = TEXT("The Default profile cannot be deleted. Choose a named profile."); return false; }
-    if (!ReadSection(Root, Section, TEXT("Default"), Error) || !ReadSection(Root, Section, Name, Error)) return false;
+    if (!SafeName(Replacement)||(!Rename&&!ReadSection(Root, Section, Replacement, Error)) || !ReadSection(Root, Section, Name, Error)) return false;
+    if(Rename&&IFileManager::Get().FileExists(*Path(Root,Section,Replacement))){Error=TEXT("Destination profile exists");return false;}
     TMap<FString, TSharedPtr<FJsonObject>> Before, After;
     auto Selections=List(Root,TEXT("ucm"));
     if (IFileManager::Get().FileExists(*Path(Root,TEXT("ucm"),ActiveName()))) Selections.Add(ActiveName());
@@ -264,13 +274,13 @@ bool DeleteSection(const FString& Root, const FString& Section, const FString& N
         if (!Manifest->TryGetObjectField(TEXT("profile_refs"), Refs)) { Error = TEXT("Invalid setup: ") + Setup; return false; }
         FString Linked; if (!(*Refs)->TryGetStringField(Section, Linked) || !Linked.Equals(Name, ESearchCase::IgnoreCase)) continue;
         Before.Add(File, Manifest); auto Updated = Copy(Manifest);
-        Updated->GetObjectField(TEXT("profile_refs"))->SetStringField(Section, TEXT("Default")); After.Add(File, Updated);
+        Updated->GetObjectField(TEXT("profile_refs"))->SetStringField(Section, Replacement); After.Add(File, Updated);
     }
     // Meta dependencies are references too. Otherwise reloading a meta would
     // recreate a route/profile that the user had just deliberately deleted.
     for(const auto& MetaName:List(Root,TEXT("Metas")))
     {
-        if(Section==TEXT("Metas")&&MetaName.Equals(Name,ESearchCase::IgnoreCase))continue;
+        if(!Rename&&Section==TEXT("Metas")&&MetaName.Equals(Name,ESearchCase::IgnoreCase))continue;
         const FString File=Path(Root,TEXT("Metas"),MetaName);auto Original=ReadSection(Root,TEXT("Metas"),MetaName,Error);if(!Original)return false;
         auto Updated=Copy(Original);bool Changed=false;
         const TSharedPtr<FJsonObject>* Refs=nullptr;
@@ -279,7 +289,7 @@ bool DeleteSection(const FString& Root, const FString& Section, const FString& N
             if(Pair.Value->Type!=EJson::Object)continue;
             auto Ref=Pair.Value->AsObject();FString Linked;
             if(Ref->TryGetStringField(Section,Linked)&&Linked.Equals(Name,ESearchCase::IgnoreCase))
-            {Ref->SetStringField(Section,TEXT("Default"));Changed=true;}
+            {Ref->SetStringField(Section,Replacement);Changed=true;}
         }
         if(Section==TEXT("Routes"))
         {
@@ -289,12 +299,24 @@ bool DeleteSection(const FString& Root, const FString& Section, const FString& N
                 if(Value->Type==EJson::Array){for(const auto& Child:Value->AsArray())Visit(Child,Depth+1);}
                 else if(Value->Type==EJson::Object){auto Object=Value->AsObject();FString Linked;
                     if(Object->TryGetStringField(TEXT("route_profile"),Linked)&&Linked.Equals(Name,ESearchCase::IgnoreCase))
-                    {Object->SetStringField(TEXT("route_profile"),TEXT("Default"));Changed=true;}
+                    {Object->SetStringField(TEXT("route_profile"),Replacement);Changed=true;}
                     for(const auto& Pair:Object->Values)Visit(Pair.Value,Depth+1);}
             };
             Visit(MakeShared<FJsonValueObject>(Updated),0);
         }
         if(Changed){Before.Add(File,Original);After.Add(File,Updated);}
+    }
+    const FString IndexPath=Root/TEXT("import-index.json");
+    if(Rename&&Section==TEXT("Loot"))
+    {const FString File=Path(Root,Section,Name);auto Original=ReadSection(Root,Section,Name,Error);auto Updated=Copy(Original);
+     Updated->SetStringField(TEXT("loot_profile"),Replacement);Before.Add(File,Original);After.Add(File,Updated);}
+    if(auto Index=Read(IndexPath))
+    {
+        auto Updated=Copy(Index);bool Changed=false;
+        for(auto& Pair:Updated->Values)if(Pair.Value->Type==EJson::Object)
+        {auto Ref=Pair.Value->AsObject();FString Linked;if(Ref->TryGetStringField(Section,Linked)&&Linked==Name)
+            {if(Rename)Ref->SetStringField(Section,Replacement);else Ref->RemoveField(Section);Changed=true;}}
+        if(Changed){Before.Add(IndexPath,Index);After.Add(IndexPath,Updated);}
     }
     TArray<FString> Applied;
     auto Rollback = [&]() { for (const auto& File : Applied) Write(File, Before[File]); };
@@ -303,10 +325,29 @@ bool DeleteSection(const FString& Root, const FString& Section, const FString& N
         if (!Write(Entry.Key, Entry.Value)) { Rollback(); Error = TEXT("Could not update linked setups; profile retained."); return false; }
         Applied.Add(Entry.Key);
     }
-    const FString Backup = Path(Root, TEXT("Deleted") / Section, Name + TEXT("_") + FGuid::NewGuid().ToString(EGuidFormats::Digits));
+    const FString Backup = Rename?Path(Root,Section,Replacement):Path(Root, TEXT("Deleted") / Section, Name + TEXT("_") + FGuid::NewGuid().ToString(EGuidFormats::Digits));
     IFileManager::Get().MakeDirectory(*FPaths::GetPath(Backup), true);
     if (!IFileManager::Get().Move(*Backup, *Path(Root, Section, Name), false, false))
     { Rollback(); Error = TEXT("Could not archive deleted profile; linked setups were restored."); return false; }
+    return true;
+}
+bool DeleteSection(const FString& Root,const FString& Section,const FString& Name,FString& Error)
+{return RelocateSection(Root,Section,Name,TEXT("Default"),false,Error);}
+bool MigrateAnonymousImports(const FString& Root,FString& Error)
+{
+    for(const auto& Section:Sections())for(const auto& Name:List(Root,Section))
+    {
+        if(Name!=TEXT("Imported")&&!(Name.StartsWith(TEXT("Imported_"))&&Name.Mid(9).IsNumeric()))continue;
+        auto Part=ReadSection(Root,Section,Name,Error),Default=ReadSection(Root,Section,TEXT("Default"),Error);
+        if(!Part||!Default)return false;
+        auto Content=Copy(Part),DefaultContent=Copy(Default);
+        Content->RemoveField(TEXT("loot_profile"));DefaultContent->RemoveField(TEXT("loot_profile"));
+        const bool Unchanged=Equal(Content,DefaultContent);
+        FString Stem;for(const TCHAR* Key:{TEXT("usd_source"),TEXT("nav_source"),TEXT("utl_source"),TEXT("met_source")})
+        {FString Source;if(Part->TryGetStringField(Key,Source)&&!Source.IsEmpty()){Stem=FPaths::GetBaseFilename(Source);break;}}
+        if(Stem.IsEmpty())Stem=TEXT("Recovered_")+Section;
+        if(!RelocateSection(Root,Section,Name,Unchanged?TEXT("Default"):UniqueName(Root,Section,Stem),!Unchanged,Error))return false;
+    }
     return true;
 }
 }

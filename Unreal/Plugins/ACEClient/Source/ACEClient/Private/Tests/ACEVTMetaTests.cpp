@@ -127,7 +127,7 @@ bool FACEVTMetaTest::RunTest(const FString&)
         auto CommandDoc=MetaDocument({RuleMeta(1,8,NumMeta(0),PropsMeta(JSONMeta(TEXT(R"({"e":"`/vt echo ` + `Argument /vt jump text`"})"))),TEXT("Default"))});
         auto CommandProfile=Base(ACEVTProfile::Convert(CommandDoc,Issues));TestEqual(TEXT("Command expression migration compiles"),Issues.Num(),0);
         auto Expression=CommandProfile->GetArrayField(TEXT("vt_meta"))[0]->AsObject()->GetObjectField(TEXT("action"))->GetObjectField(TEXT("expression"));
-        TestEqual(TEXT("Command prefix changes but keeps separator"),Expression->GetObjectField(TEXT("left"))->GetStringField(TEXT("value")),FString(TEXT("/ucm echo ")));
+        TestEqual(TEXT("Command prefix changes but keeps separator"),Expression->GetObjectField(TEXT("left"))->GetStringField(TEXT("value")),FString(TEXT("/acueucm echo ")));
         TestEqual(TEXT("Command argument is not rewritten"),Expression->GetObjectField(TEXT("right"))->GetStringField(TEXT("value")),FString(TEXT("Argument /vt jump text")));
         FACEPluginVM Commands;Commands.Load(Script,Error);TestTrue(TEXT("Converted dynamic command executes"),Commands.Step(Snap,CommandProfile,Intent,Error));
         if(Intent)TestEqual(TEXT("Dynamic echo has correct payload"),Intent->GetStringField(TEXT("text")),FString(TEXT("Argument /vt jump text")));

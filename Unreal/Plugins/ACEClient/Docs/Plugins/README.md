@@ -4,7 +4,27 @@ AC:Unreal hosts portable Lua plugins. The same source and native management pane
 are used on Windows, Linux, PC VR and standalone Quest. This is a new API, not a
 loader for Decal DLLs or Virindi View Services assemblies.
 
+## Client chat commands
+
+Commands specific to AC:Unreal use the `acue` prefix. Type `/acuehelp` for the
+list: `/acueperf` (performance report), `/acueobject` (selected object report),
+`/acueplugins` (Manage Plugins), `/acueplugin <id> <command>`, `/acueucm`, and
+`/acueitems`. Chat also accepts `@` in place of `/`.
+
+Use these names in new Lua plugins, meta commands, examples, and help text.
+The older `/aceperf`, `/aceobject`, `/plugins`, `/plugin`, `/ucm`, `/items`, and
+`/it` spellings remain compatibility aliases for existing tools and saved metas.
+Retail commands such as `/fps` and `/saveui`, and server commands such as
+`/acehelp` and `/myquests`, keep their original names.
+
 ## Users
+
+Plugin windows remember whether they were open or closed at logout, including
+custom Lua windows and the UCM log. Their positions and sizes are restored too;
+opening a window does not start its automation. Disabled plugins stay hidden.
+**Options > Config > Keep UI windows on screen** applies to both game and plugin
+windows. It is enabled by default. Disable it to allow offscreen placement;
+enable it again to bring windows back inside the game interface.
 
 **Supply Ledger** is a compact inventory counter inspired by Virindi's Comps HUD.
 Select an owned item and click **+** to track its item type across all packs,
@@ -39,11 +59,21 @@ in **Manage Plugins**. Five-minute history uses a fixed-size buffer.
 The plugin bar uses original 26-pixel vector emblems; hover for the full plugin name and
 status. Its grip still moves when the UI is unlocked, and its minus button
 collapses it to a line. Hide or restore the bar with **Show plugin bar** in
-**Settings > Game Play > Manage Plugins**. Plugin windows share retail DAT bitmap labels, inventory
+**Settings > Game Play > Manage Plugins**. In the same manager, **Horizontal plugin bar**
+switches between a horizontal row and the default vertical column. The orientation
+is saved across logins and keeps the icons square, including when the bar must scroll.
+Plugin windows share retail DAT bitmap labels, inventory
 artwork, dark backgrounds, gold borders and red buttons. Text entry retains Slate's
 native caret, selection and IME behavior. Standalone windows use their title bar
 for the plugin name, including UCM, Loot Profile Editor, Item Tools and Waypoint;
 the content begins with status, controls or help instead of a repeated heading.
+
+UCM's main activity section starts expanded in Buffs, Buff others, Combat and
+Recovery; secondary sections start collapsed and keep your expansion choices while
+the window is open. Buff exceptions are edited directly inside their section.
+Combat groups targeting, melee hands, spellcasting, summons and equipment separately.
+**Monster defaults** provides fallback priority and range for rules without overrides;
+a zero range uses the normal melee or missile/spell distance.
 
 Each bundled plugin has its own emblem (tapers for Supply Ledger, an hourglass
 and rising chart for Hunt Ledger). Icons retain square proportions at every UI
@@ -61,7 +91,7 @@ for controls, data sources and the UtilityBelt compatibility findings. This visu
 plugin requires no Start action or game-action permissions.
 
 Open **Plugins** on the login screen, **Game Play → Manage Plugins** in desktop
-options, **More → Manage Plugins** in VR, or type `/plugins`. Each plugin shows its
+options, **More → Manage Plugins** in VR, or type `/acueplugins`. Each plugin shows its
 version, requested actions, status, and profile controls. Enable grants its listed
 capabilities. Gameplay automation uses a separate Start action after entering the
 world. Local cosmetic services start when enabled and can run at the login screen.
@@ -141,7 +171,7 @@ In desktop play, a compact **Mods bar** appears at the left edge. Each enabled
 plugin has a button: click it to show or hide that plugin's own window. Several
 windows can stay open together. Gold text indicates an open window; `RUN` marks
 a running plugin. Closing a window does not stop its plugin. Use its Stop control
-or `/ucm stop` to stop automation. The `+` button opens plugin management.
+or `/acueucm stop` to stop automation. The `+` button opens plugin management.
 
 Drag the bar or a window by its title strip. Positions are saved locally and
 clamped to the viewport when the window size changes. The bar and its windows
@@ -157,7 +187,7 @@ In VR, More → Manage Plugins opens UCM directly, with a separate management bu
 
 **UCM Log** is a separate movable, resizable desktop window. Open it with the
 **LOG** button on the plugin bar, **Open UCM Log** in UCM Micro, or
-`/ucm log`. The **Log** page inside UCM also works in VR. Closing the log does not
+`/acueucm log`. The **Log** page inside UCM also works in VR. Closing the log does not
 stop UCM or recording. Window position and size are saved.
 
 The log keeps the latest **1,000 events**, replacing the oldest. It records local
@@ -224,8 +254,10 @@ configured magic-skill margin. The Buffs tab has separate Creature, Life and Ite
 Magic selectors: **Automatic highest** (default), or an exact level I–VIII.
 Explicit tiers still require the learned spell, sufficient skill and components;
 unavailable families are skipped. These settings also apply to buff requests,
-while recovery independently chooses its highest usable spell. Untrained skills that the retail DAT says are
-usable (such as Run/Jump) are also eligible. Other skill buffs require training.
+while recovery independently chooses its highest usable spell. Automatic skill
+buffs require training, as in vTank. Use **Include** under Buff exceptions to
+add an untrained skill or another sustained buff family explicitly. Fellowship
+spells require explicit inclusion and membership in a fellowship.
 Self-buffing targets the player once per item-spell family: banes and
 Impenetrability cover worn armor, and weapon auras apply to the character.
 It does not repeat those casts on inventory items or weapons in the combat pool.
@@ -236,6 +268,20 @@ and continue the cycle; no cast is treated as successful merely because it was s
 A server missing-components response excludes that tier temporarily and tries a
 lower supplied tier. If no tier remains, UCM continues with other families. Force Buff reports
 when unavailable or failed buffs were skipped instead of claiming full success.
+
+New Character profiles refresh five minutes before expiry; existing profiles keep
+their configured **Rebuff before expiry** value. Once a buff starts, the refresh
+window widens by 30 seconds for 30 seconds to group nearby expirations, as in
+vTank. Short-duration buffs and consumables cap the window at half their duration
+so a fresh buff does not immediately become due again. **Refresh buffs while idle**
+is a separate, optional earlier top-off and is disabled by default.
+Character buffs use server enchantments, including those received at login;
+confirmed item-only buffs retain character/server-scoped timers across relogs.
+Force Buff explicitly ignores remaining times. A new buff-other request casts
+the requested set once; duplicate queued requests do not restart it. Other-player
+casts use the buff skill buffer and family/protection/bane exclusions, and need
+server confirmation before advancing. The client cannot inspect another player's
+complete active enchantment registry, so it does not assume their existing buffs.
 
 Health, stamina and mana each have a recovery slider. UCM prefers eligible Life Magic recovery spells,
 then assessed supplies (including healing kits and potions). Enable **Prefer kits
@@ -415,9 +461,9 @@ and state rules stops the run. Manual movement overrides plugin steering without
 stopping UCM or resetting its activities. Turn Combat off and Loot on to fight
 manually with automatic looting. Steering can resume on the next plugin decision
 after manual input ends. Stop UCM through its interface, UCM Micro, the bound
-Start / Stop hotkey, or `/ucm stop`. Death, logout, character changes, disabling
+Start / Stop hotkey, or `/acueucm stop`. Death, logout, character changes, disabling
 and reloading still stop automation. Closing its window does not stop it.
-Only one plugin can run at a time. Commands `/ucm start` and `/ucm stop` remain.
+Only one plugin can run at a time. Commands `/acueucm start` and `/acueucm stop` remain.
 
 ## Automatic vital recovery
 
@@ -868,13 +914,24 @@ before visiting a vendor if you intend to process its queued Sell rules.
 
 **Import** browses `.nav`, `.met`, `.utl` and `.usd` files by type from a chosen
 folder. Set the folder once, then Refresh after adding files. Selecting a filename
-validates it and creates named native profiles. Existing names receive a suffix.
+validates it and creates named native profiles. **Import all files** imports the
+whole folder; each file-type page can also import all files of that type. Bulk
+imports preserve your current profile selection, continue past unsupported files,
+and report each result in a scrollable, clearable area capped at 16,000 characters.
+Reimporting the same source selects its existing profiles and preserves native
+edits; meta dependencies reuse those same files. Different sources with colliding
+names receive a suffix. To replace a converted profile from its source, delete
+that native profile first and import again. Old anonymous `Imported` profiles
+are renamed from their source filename, or to `Recovered_<section>` when no source
+name exists; unchanged defaults are consolidated into Default.
 Choose those profiles in Overview or their editing tabs; these selections persist
 and manual switching stops automation. Unsupported imports leave the previous
 configuration intact. Select Default for an empty/default profile. Imported nav
 points feed the world overlay and enable Follow route; press Start to move.
 Original files are never rewritten. Meta dependencies are resolved alongside
-their source file and the meta selects them when its rules execute.
+their source file and the meta selects them when its rules execute. Character,
+loot and navigation loads finish before later meta commands run, including
+nested action lists. This preserves options set immediately after a load.
 
 Buff is automatic by default. The Buffs tab shows compact toggles, skill margin
 and refresh threshold; **Edit buff exceptions** reveals the searchable family

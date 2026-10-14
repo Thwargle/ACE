@@ -176,6 +176,7 @@ void AACEWorldEntityActor::InitializeFromObject(const FACEWorldObject& Object, f
 	WeenieClassId = Object.WeenieClassId;
 	MotionTableId = Object.MotionTableId;
 	ItemType = Object.ItemType;
+	bIsHouseHook = Object.bIsHouseHook;
 	InitialMotionCommand = Object.InitialMotionCommand;
 	ObjectDescriptionFlags = Object.ObjectDescriptionFlags;
 	bAllowsDeadPoseInteraction = Object.AllowsDeadPoseInteraction();
@@ -2212,7 +2213,7 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 			Appearance->SetPreferredStyle(Motion.CurrentStyle);
 		}
 		const int32 Cmd = Motion.ForwardCommand;
-		const bool bDoorCmd = UsesOnOffMotion()
+		const bool bDoorCmd = (UsesOnOffMotion() || bIsHouseHook)
 			&& (Cmd == ACEMotion::OnCommandU16 || Cmd == ACEMotion::OffCommandU16
 				|| Cmd == static_cast<int32>(ACEMotion::On) || Cmd == static_cast<int32>(ACEMotion::Off));
 		if (bDoorCmd)

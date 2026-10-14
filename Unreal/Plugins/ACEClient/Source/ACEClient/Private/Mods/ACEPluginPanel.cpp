@@ -100,6 +100,10 @@ namespace ACEPluginPanelPrivate
                     .Visibility_Lambda([this](){return Host->IsPluginBarMinimized()?EVisibility::Visible:EVisibility::Collapsed;})
                     .OnClicked_Lambda([this](){Host->SetPluginBarVisible(true);Host->SetPluginBarMinimized(false);return FReply::Handled();})[Label(TEXT("Expand bar"),16)]];
                 Add(BarControls);
+                Add(SNew(SCheckBox).Tag(TEXT("PluginBarHorizontal")).Style(&FACEPluginStyle::Current()->Check).Padding(FMargin(4,8))
+                    .ToolTipText(FText::FromString(TEXT("Arrange plugin icons in a horizontal row. Uncheck for a vertical column. Saved across logins.")))
+                    .IsChecked_Lambda([this](){return Host->IsPluginBarHorizontal()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
+                    .OnCheckStateChanged_Lambda([this](ECheckBoxState S){Host->SetPluginBarHorizontal(S==ECheckBoxState::Checked);})[Label(TEXT("Horizontal plugin bar"),16)]);
                 Add(Label(TEXT("Drop plugin folders into: ")+FPaths::ConvertRelativePathToFull(Host->UserDirectory()/TEXT("Installed")),14));
                 Add(Button(TEXT("Open plugin folder"),[this](){const FString Folder=FPaths::ConvertRelativePathToFull(Host->UserDirectory()/TEXT("Installed"));IFileManager::Get().MakeDirectory(*Folder,true);FPlatformProcess::ExploreFolder(*Folder);}));
                 for (auto P : Host->Plugins)

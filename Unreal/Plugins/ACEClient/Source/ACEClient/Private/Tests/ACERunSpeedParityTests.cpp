@@ -125,10 +125,23 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
  // SetLocomotionInput is deliberately shared with remote presentation;
  // only the local command edge may interrupt a server casting substate.
  App->InterruptCastWithMovement();
- TestEqual(TEXT("New local forward command replaces casting substate"),App->ActionCommand,0u);
+ TestEqual(TEXT("New local forward command preserves the unfinished cast link"),App->ActionCommand,0x40000034u);
+ App->bHoldActionFinal=true;
+ App->InterruptCastWithMovement();
+ TestEqual(TEXT("New local forward command removes the held casting tail"),App->ActionCommand,0u);
  App->PlayActionMotion(0x1000006F,2.f,ACEMotion::StanceMagic);
  App->InterruptCastWithMovement();
  TestEqual(TEXT("Movement does not truncate a queued scarab windup action"),App->ActionCommand,0x1000006Fu);
+ App->ClearActionMotion();
+ App->PlayActionMotion(0x40000034,2.f,ACEMotion::StanceMagic);
+ App->QueueActionMotion(0x1000006F,2.f,ACEMotion::StanceMagic);
+ App->InterruptCastWithMovement();
+ TestEqual(TEXT("Fast buff movement retains the following scarab action"),App->PendingActionCommands.Num(),1);
+ App->ClearActionMotion();
+ App->PlayActionMotion(0x40000034,2.f,ACEMotion::StanceMagic);
+ App->PlayActionMotion(0x1000006F,2.f,ACEMotion::StanceMagic);
+ TestEqual(TEXT("A quick next buff cannot truncate the preceding cast link"),App->ActionCommand,0x40000034u);
+ TestEqual(TEXT("The next windup waits behind the unfinished cast link"),App->PendingActionCommands.Num(),1);
  App->ClearActionMotion();
  // Retail TakeControlFromServer reapplies the whole command state even if
  // a cast arrives after strafe/turn were sent. A wire-level replay catches
@@ -233,10 +246,10 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
    const FVector Before=Pawn->GetActorLocation();
    for(int32 Buff=0;Buff<40;++Buff)
    {
-    ArmTap();App->PlayActionMotion(0x40000034,2.f,ACEMotion::StanceMagic);
+    ArmTap();App->ClearActionMotion();App->PlayActionMotion(0x40000034,2.f,ACEMotion::StanceMagic);
     PC->PlayerTick(1.f/Rate);
     TestTrue(TEXT("Buff tap consumed while session is use-busy"),Plugins->FastCastMovementApplied);
-    TestEqual(TEXT("Fast buff edge interrupts local casting substate"),App->ActionCommand,0u);
+    TestEqual(TEXT("Fast buff edge preserves the unfinished local cast link"),App->ActionCommand,0x40000034u);
     TestEqual(TEXT("Fast buff never sets a held backward axis"),PC->ForwardAxis,0.f);
     TestFalse(TEXT("Release reaches session in the same frame"),Session->bMoving);
     // Neither a lost result nor additional render frames may move the player.
@@ -245,7 +258,7 @@ bool FACERunSpeedParityTest::RunTest(const FString&)
    TestTrue(FString::Printf(TEXT("40 buffs at %d Hz leave the player in place"),Rate),
     Pawn->GetActorLocation().Equals(Before,.01));
   }
-  ArmTap();App->PlayActionMotion(0x1000006F,2.f,ACEMotion::StanceMagic);
+  ArmTap();App->ClearActionMotion();App->PlayActionMotion(0x1000006F,2.f,ACEMotion::StanceMagic);
   PC->PlayerTick(1.f/90);
   TestEqual(TEXT("Tap does not skip a scarab windup action"),App->ActionCommand,0x1000006Fu);
   App->ClearActionMotion();

@@ -1137,9 +1137,9 @@ private:
 	TObjectPtr<UTextBlock> MapDateTimeLabel;
 	UPROPERTY()
 	TArray<TObjectPtr<UTextBlock>> HouseTextRows;
+	TArray<TSharedPtr<FACEUIElement>> HouseTextElements;
 	int32 HouseScrollOffset = 0;
-	/** Suppresses HouseQuery spam while the housing tab stays open. */
-	double LastHouseQueryAt = 0.0;
+	int32 HouseMaxScrollOffset = 0;
 	/** Abuse / Urgent Assistance wizard page (1..3). */
 	int32 AbuseWizardPage = 1;
 	int32 UrgentWizardPage = 1;

@@ -13,6 +13,68 @@ namespace
 TSharedPtr<FJsonObject> RecoveryJson(const TCHAR* Text)
 {TSharedPtr<FJsonObject> O;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text),O);return O;}
 }
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMFullBookTest,"ACE.Plugins.FullSpellbookTransitions",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
+bool FACEUCMFullBookTest::RunTest(const FString&)
+{
+    FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
+    auto* Dat=NewObject<UACEDatSubsystem>(NewObject<UGameInstance>());
+    if(!TestTrue(TEXT("Retail DAT opens for full spellbook regression"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+    ON_SCOPE_EXIT{Dat->Deinitialize();};
+    TArray<TSharedPtr<FJsonValue>> Book,Active;
+    TSet<uint32> Categories;
+    for(uint32 Id=1;Id<7000;++Id)
+    {
+        FString Name;uint32 Icon=0,School=0,Power=0,Category=0,Flags=0,Level=0,TargetFlags=0,TargetType=0;double Duration=0;bool Projectile=false;
+        TMap<FString,int32> Counts;
+        if(!Dat->TryGetSpellInfo(Id,Name,Icon)||!Dat->TryGetPluginSpellInfo(Id,School,Power,Category,Flags,Duration)
+            ||!Dat->TryGetSpellSchoolAndLevel(Id,School,Level)||Level==0||Level>8||!Dat->TryGetPluginSpellScarabs(Id,Counts))continue;
+        Dat->TryGetRetailSpellTargeting(Id,TargetFlags,TargetType,Projectile);
+        auto V=MakeShared<FJsonObject>();V->SetNumberField(TEXT("id"),Id);V->SetStringField(TEXT("name"),Name);
+        V->SetNumberField(TEXT("school"),School);V->SetNumberField(TEXT("category"),Category);V->SetNumberField(TEXT("power"),Power);
+        V->SetNumberField(TEXT("skill"),600);V->SetNumberField(TEXT("flags"),Flags);V->SetNumberField(TEXT("level"),Level);
+        V->SetNumberField(TEXT("duration"),Duration);V->SetNumberField(TEXT("target_type"),TargetType);V->SetBoolField(TEXT("projectile"),Projectile);
+        V->SetBoolField(TEXT("known"),true);V->SetBoolField(TEXT("components_known"),true);
+        V->SetBoolField(TEXT("caster_target"),(Flags&8)!=0);V->SetBoolField(TEXT("beneficial"),(Flags&4)!=0);
+        V->SetBoolField(TEXT("self_buff"),(Flags&12)==12&&Duration>0);
+        auto Scarabs=MakeShared<FJsonObject>();for(const auto& Count:Counts)Scarabs->SetNumberField(Count.Key,Count.Value);V->SetObjectField(TEXT("scarabs"),Scarabs);
+        Book.Add(MakeShared<FJsonValueObject>(V));
+        if(!Categories.Contains(Category))
+        {
+            Categories.Add(Category);auto E=RecoveryJson(TEXT(R"({"power":10000,"remaining":3600,"duration":7200})"));
+            E->SetNumberField(TEXT("category"),Category);Active.Add(MakeShared<FJsonValueObject>(E));
+        }
+    }
+    AddInfo(FString::Printf(TEXT("Full retail spellbook: %d spells"),Book.Num()));
+    TestTrue(TEXT("Fixture exercises thousands of spells"),Book.Num()>2000);
+    for(bool Buffing:{false,true})for(const TCHAR* Combat:{TEXT("magic"),TEXT("melee"),TEXT("missile")})
+    {
+        auto S=RecoveryJson(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"ready":true,"busy":false,"action_serial":0,"action_error":0,"combat_mode":8,"components_required":false,"position":{"cell":2103705613,"x":25,"y":97,"z":12},"trained_skills":[31,32,33,34,43],"skills":{"31":{"training":3,"current":600},"32":{"training":3,"current":600},"33":{"training":3,"current":600},"34":{"training":3,"current":600},"43":{"training":3,"current":600}},"targets":[{"id":500,"name":"Rat","distance":5,"health_fraction":1,"line_of_sight":true,"identified":true}],"inventory":[{"id":99,"name":"Orb","type":32768,"equipped":true,"identified":true,"can_wield":true},{"id":98,"name":"Sword","type":1,"damage":20,"damage_type":1,"skill":45,"identified":true,"can_wield":true},{"id":97,"name":"Atlatl","type":256,"damage":20,"damage_type":2,"skill":47,"identified":true,"can_wield":true}]})"));
+        auto P=RecoveryJson(TEXT(R"({"recovery":true,"health_threshold":75,"buff_skill_margin":30,"skill_margin":30,"navigation":false,"looting":false,"debuffs":[],"use_vulnerability":false})"));
+        S->SetArrayField(TEXT("spells"),Book);S->SetArrayField(TEXT("enchantments"),Active);
+        P->SetBoolField(TEXT("buffing"),Buffing);P->SetStringField(TEXT("combat"),Combat);
+        FACEPluginVM VM;if(!TestTrue(TEXT("Full-book policy loads"),VM.Load(Source,Error)))continue;
+        for(int Tick=0;Tick<4;++Tick)
+        {
+            S->SetNumberField(TEXT("time"),100+Tick*20);S->SetNumberField(TEXT("health"),Tick==1?20:100);
+            S->SetNumberField(TEXT("action_serial"),Tick);
+            S->SetBoolField(TEXT("last_spell_confirmed"),Tick>0);
+            TSharedPtr<FJsonObject> I;const bool Worked=VM.Step(S,P,I,Error);
+            if(!TestTrue(*FString::Printf(TEXT("Full book %s buffing=%d tick=%d fits budget: %s"),Combat,Buffing,Tick,*Error),Worked))break;
+            if(!TestTrue(TEXT("Full-book decision emits an action"),I.IsValid()&&I->HasField(TEXT("action"))))break;
+            if(Tick==1)TestEqual(TEXT("Low health still preempts combat"),I->GetNumberField(TEXT("target")),1.);
+            else
+            {
+                const FString Action=I->GetStringField(TEXT("action"));
+                TestTrue(TEXT("Healthy fully buffed character proceeds to combat"),Action==TEXT("cast")||Action==TEXT("attack")||Action==TEXT("equip"));
+                if(Action==TEXT("cast"))TestEqual(TEXT("Attack targets the monster, not a redundant self buff"),I->GetNumberField(TEXT("target")),500.);
+            }
+            if(I->HasField(TEXT("spell")))S->SetNumberField(TEXT("last_spell"),I->GetNumberField(TEXT("spell")));
+        }
+    }
+    return true;
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMRecoveryTest,"ACE.Plugins.Recovery",
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)
 bool FACEUCMRecoveryTest::RunTest(const FString&)
@@ -149,7 +211,7 @@ bool FACEUCMRecoveryTest::RunTest(const FString&)
             double Actual=0;Intent->TryGetNumberField(TEXT("spell"),Actual);
             TestEqual(*(TEXT("Casting support buffs precede ordinary buffs: ")+Spell->GetStringField(TEXT("name"))),Actual,Spell->GetNumberField(TEXT("id")));
             auto E=MakeShared<FJsonObject>();E->SetNumberField(TEXT("id"),Actual);E->SetNumberField(TEXT("category"),Order[Index]);
-            E->SetNumberField(TEXT("power"),Spell->GetNumberField(TEXT("power")));E->SetNumberField(TEXT("remaining"),300);
+            E->SetNumberField(TEXT("power"),Spell->GetNumberField(TEXT("power")));E->SetNumberField(TEXT("remaining"),Spell->GetNumberField(TEXT("duration"))-1);
             Enchantments.Add(MakeShared<FJsonValueObject>(E));State->SetArrayField(TEXT("enchantments"),Enchantments);
             State->SetNumberField(TEXT("action_serial"),Index+1);State->SetNumberField(TEXT("last_spell"),Actual);State->SetNumberField(TEXT("time"),101+Index);
         }
@@ -179,7 +241,7 @@ bool FACEUCMRecoveryTest::RunTest(const FString&)
         for(int School:{2,3,4})
         {
             auto Spell=RecoveryJson(TEXT(R"({"power":100,"skill":500,"duration":300,"self_buff":true})"));
-            Spell->SetNumberField(TEXT("id"),School);Spell->SetNumberField(TEXT("category"),School+100);Spell->SetNumberField(TEXT("school"),School);
+            Spell->SetNumberField(TEXT("id"),School);Spell->SetNumberField(TEXT("category"),School==2?101:School==3?160:1);Spell->SetNumberField(TEXT("school"),School);
             Book.Add(MakeShared<FJsonValueObject>(Spell));
         }
         S->SetArrayField(TEXT("spells"),Book);FACEPluginVM Policy;Policy.Load(Source,Error);
@@ -340,7 +402,7 @@ bool FACEUCMRecoveryTest::RunTest(const FString&)
     {
         auto State=Snapshot(),Settings=Profile();State->SetNumberField(TEXT("force_buff_request"),1);
         auto Bad=RecoveryJson(TEXT(R"({"id":1,"name":"Failing buff","category":1,"school":4,"duration":300,"skill":500,"power":100,"self_buff":true})"));
-        auto Good=RecoveryJson(TEXT(R"({"id":2,"name":"Working buff","category":2,"school":2,"duration":300,"skill":500,"power":100,"self_buff":true})"));
+        auto Good=RecoveryJson(TEXT(R"({"id":2,"name":"Working buff","category":101,"school":2,"duration":300,"skill":500,"power":100,"self_buff":true})"));
         State->SetArrayField(TEXT("spells"),{MakeShared<FJsonValueObject>(Bad),MakeShared<FJsonValueObject>(Good)});
         FACEPluginVM Policy;Policy.Load(Source,Error);
         for(int32 Attempt=0;Attempt<3;++Attempt)

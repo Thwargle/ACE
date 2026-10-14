@@ -60,6 +60,17 @@ void UACEUIGameplayBinder::UpdateInventoryContainerDropFeedback(FVector2D Canvas
 			Canvas->SetOverlayOrder(PaperDollDragTargetIcon, Manager->FindElementByName(Owner), 120004);
 		}
 	};
+	if (OpenHouseLord && HitHouseItemList(CanvasLocalPos))
+	{
+		for (UBorder* Cell : HouseOfferBackgrounds)
+		{
+			if (!Cell || !Cell->IsVisible() || !Canvas->IsWidgetExposedAt(Cell, Absolute)) continue;
+			const auto Session=Client->GetSession();
+			Mark(Cell, !HousePaymentSplit.SourceGuid && Session && Session->CanStageHousePayment(InvDragGuid,bHouseRentTab),
+				false, TEXT("Slumlord"));
+			return;
+		}
+	}
 	if (OpenSalvageToolGuid)
 	{
 		for (UBorder* Cell : SalvageItemBackgrounds)

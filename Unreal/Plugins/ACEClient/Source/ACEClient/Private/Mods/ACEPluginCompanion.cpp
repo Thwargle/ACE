@@ -1,6 +1,7 @@
 #include "Mods/ACEPluginPresentation.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "ACEPluginVM.h"
+#include "ACEClientChatCommands.h"
 #include "ACEWaypoint.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
@@ -22,6 +23,8 @@ namespace
 {
 namespace ACEPluginCompanionPrivate
 {
+    // Callers use explicit local S/N declarations: a unity translation unit
+    // can also contain the automation host's identically named helpers.
     FString S(const TSharedPtr<FJsonObject>& O,const TCHAR* Key)
     {FString V;if(O)O->TryGetStringField(Key,V);return V;}
     double N(const TSharedPtr<FJsonObject>& O,const TCHAR* Key)
@@ -49,7 +52,7 @@ namespace ACEPluginCompanionPrivate
 
 void UACEPluginSubsystem::UpdateCompanionChatContext()
 {
-    using namespace ACEPluginCompanionPrivate;
+    using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     const int32 Player=(C->GetSessionState()==EACESessionState::InWorld||C->GetSessionState()==EACESessionState::EnteringWorld)?C->GetPlayerGuid():0;
     if(PluginChatSession.Pin()!=C->GetSession()||PluginChatPlayer!=Player||PluginChatServer!=C->GetServerName())
@@ -64,7 +67,7 @@ void UACEPluginSubsystem::UpdateCompanionChatContext()
 
 void UACEPluginSubsystem::ObservePluginChat(const FString& Text,const FString& Sender,int32 Type)
 {
-    using namespace ACEPluginCompanionPrivate;
+    using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     UpdateCompanionChatContext();
     if(!PluginChatPlayer||!Plugins.ContainsByPredicate([](const auto& P){return P->HasPresentation()&&P->Enabled&&P->Permissions.Contains(TEXT("chat"));}))return;
     // Subscribe to the client feed at initialization, before its first world
@@ -88,7 +91,7 @@ void UACEPluginSubsystem::ObservePluginChat(const FString& Text,const FString& S
 
 bool UACEPluginSubsystem::StartCompanion(FACEClientPlugin& P)
 {
-    using namespace ACEPluginCompanionPrivate;
+    using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     if(!P.Enabled||C->GetSessionState()!=EACESessionState::InWorld||!C->GetPlayerGuid())
     {Notice=TEXT("Enable this companion and enter the world first.");return false;}
@@ -106,7 +109,7 @@ bool UACEPluginSubsystem::StartCompanion(FACEClientPlugin& P)
 
 bool UACEPluginSubsystem::InitializePluginState(FACEClientPlugin& P)
 {
-    using namespace ACEPluginCompanionPrivate;
+    using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     UpdateCompanionChatContext();
     const bool NewCharacter=P.VMSession.Pin()!=C->GetSession()||P.Player!=C->GetPlayerGuid()||P.Server!=C->GetServerName();
@@ -128,7 +131,7 @@ bool UACEPluginSubsystem::InitializePluginState(FACEClientPlugin& P)
 
 void UACEPluginSubsystem::FlushPluginState(FACEClientPlugin& P)
 {
-    using namespace ACEPluginCompanionPrivate;
+    using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     if(!P.StateDirty||!P.SavedState||P.StatePath.IsEmpty())return;
     IFileManager::Get().MakeDirectory(*FPaths::GetPath(P.StatePath),true);
     const FString Temp=P.StatePath+TEXT(".tmp");
@@ -139,7 +142,7 @@ void UACEPluginSubsystem::FlushPluginState(FACEClientPlugin& P)
 
 void UACEPluginSubsystem::StopCompanion(FACEClientPlugin& P,const FString& Reason)
 {
-    using namespace ACEPluginCompanionPrivate;
+    using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     FlushPluginState(P);P.Running=false;P.CompanionStopped=true;P.VM.Reset();
     P.Markers.Reset();P.PanelRows.Reset();P.PluginEvents.Reset();++P.PanelRevision;P.Status=Reason+(P.StateDirty?TEXT("; ")+P.CompanionError:FString());
     // Observational plugin lifecycle never cancels UCM movement, casts or attacks.
@@ -147,7 +150,7 @@ void UACEPluginSubsystem::StopCompanion(FACEClientPlugin& P,const FString& Reaso
 
 TSharedPtr<FJsonObject> UACEPluginSubsystem::CompanionSnapshot(FACEClientPlugin& P)
 {
-    using namespace ACEPluginCompanionPrivate;
+    using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Out=MakeShared<FJsonObject>();
     FACEPosition Player=C->GetPlayerPosition();if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController()))PC->TryGetLocallyPredictedPosition(Player);
     Out->SetNumberField(TEXT("api"),P.Api);Out->SetNumberField(TEXT("unix_time"),FDateTime::UtcNow().ToUnixTimestamp());Out->SetNumberField(TEXT("time"),FPlatformTime::Seconds());Out->SetNumberField(TEXT("player"),uint32(C->GetPlayerGuid()));Out->SetStringField(TEXT("server"),C->GetServerName());
@@ -206,7 +209,7 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::CompanionSnapshot(FACEClientPlugin&
 
 bool UACEPluginSubsystem::CompanionAction(FACEClientPlugin& P,const TSharedPtr<FJsonObject>& A,FString& Error)
 {
-    using namespace ACEPluginCompanionPrivate;
+    using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     const FString Kind=S(A,TEXT("action"));if(Kind.IsEmpty())return true;
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     if(!P.Enabled||!P.Running||C->GetSessionState()!=EACESessionState::InWorld||C->GetPlayerGuid()!=P.Player||C->GetServerName()!=P.Server)
@@ -228,21 +231,21 @@ bool UACEPluginSubsystem::CompanionAction(FACEClientPlugin& P,const TSharedPtr<F
         return true;
     }
     if(FPlatformTime::Seconds()<P.NextCommand){Error=TEXT("Command rate limit (one per second)");return false;}
-    const FString Text=S(A,TEXT("text")).TrimStartAndEnd();FString Command,Arguments;
+    const FString Text=ACEClientChatCommands::CanonicalLine(S(A,TEXT("text")).TrimStartAndEnd());FString Command,Arguments;
     Text.Split(TEXT(" "),&Command,&Arguments);if(Command.IsEmpty())Command=Text;Command=Command.ToLower();Arguments=Arguments.TrimStartAndEnd();
     if(Text.Len()>512||Text.Contains(TEXT("\n"))||Text.Contains(TEXT("\r"))){Error=TEXT("Invalid command");return false;}
     P.NextCommand=FPlatformTime::Seconds()+1;
     bool Ok=false;
-    if(Command==TEXT("/ucm")){auto Peer=Find(TEXT("ucm"));if(Peer&&Peer->Enabled)Ok=RunUCMCommand(Arguments);}
-    else if(Command==TEXT("/items")||Command==TEXT("/it")){auto Peer=Find(TEXT("itemtools"));if(Peer&&Peer->Enabled)Ok=RunItemToolsCommand(Arguments);}
+    if(Command==TEXT("/acueucm")){auto Peer=Find(TEXT("ucm"));if(Peer&&Peer->Enabled)Ok=RunUCMCommand(Arguments);}
+    else if(Command==TEXT("/acueitems")){auto Peer=Find(TEXT("itemtools"));if(Peer&&Peer->Enabled)Ok=RunItemToolsCommand(Arguments);}
     else if(Command==TEXT("/myquests")&&Arguments.IsEmpty()){C->SendChatMessage(TEXT("/myquests"));return true;}
-    else {Error=TEXT("Supported commands: /ucm, /items, /it, /myquests");return false;}
+    else {Error=TEXT("Supported commands: /acueucm, /acueitems, /myquests");return false;}
     if(!Ok)Error=Notice.IsEmpty()?TEXT("Command target must be enabled and configured"):Notice;return Ok;
 }
 
 bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TSharedPtr<FJsonObject>& O,FString& Error)
 {
-    using namespace ACEPluginCompanionPrivate;
+    using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     // Validate the complete presentation before replacing the current one.
     const TSharedPtr<FJsonObject>* Presentation=nullptr;
     if(O->HasField(TEXT("presentation")))
@@ -294,10 +297,10 @@ bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TShared
 
 bool UACEPluginSubsystem::RunPluginCommand(const FString& Arguments)
 {
-    using namespace ACEPluginCompanionPrivate;
+    using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     FString Id,Text;Arguments.TrimStartAndEnd().Split(TEXT(" "),&Id,&Text);if(Id.IsEmpty())Id=Arguments.TrimStartAndEnd();
     auto P=Find(Id);
-    if(!P||!P->HasPresentation()){Notice=TEXT("/plugin <companion-id> start | stop | <command text>");return false;}
+    if(!P||!P->HasPresentation()){Notice=TEXT("/acueplugin <companion-id> start | stop | <command text>");return false;}
     if(Text==TEXT("start"))return Start(P->Id);
     if(Text==TEXT("stop")){Stop(P->Id,TEXT("Stopped"));return true;}
     if(!P->Enabled||!P->Running||Text.Len()>512){Notice=TEXT("Start the enabled companion before sending commands (512 characters maximum).");return false;}
@@ -306,7 +309,7 @@ bool UACEPluginSubsystem::RunPluginCommand(const FString& Arguments)
 
 void UACEPluginSubsystem::TickCompanions()
 {
-    using namespace ACEPluginCompanionPrivate;
+    using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     UpdateCompanionChatContext();
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     const bool InWorld=C->GetSessionState()==EACESessionState::InWorld;
@@ -331,7 +334,7 @@ void UACEPluginSubsystem::TickCompanions()
 
 TArray<FACEPluginMarker> UACEPluginSubsystem::GetPluginMarkers() const
 {
-    using namespace ACEPluginCompanionPrivate;
+    using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     TArray<FACEPluginMarker> Result;auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     if(C->GetSessionState()!=EACESessionState::InWorld)return Result;
     for(const auto& P:Plugins)if(P->HasPresentation()&&P->Running&&P->Enabled&&P->Player==C->GetPlayerGuid())for(const auto& M:P->Markers)
@@ -341,7 +344,7 @@ TArray<FACEPluginMarker> UACEPluginSubsystem::GetPluginMarkers() const
 
 void UACEPluginSubsystem::DrawPluginMarkers()
 {
-    using namespace ACEPluginCompanionPrivate;
+    using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     const double Now=FPlatformTime::Seconds();if(Now<NextPluginMarkerDraw)return;NextPluginMarkerDraw=Now+.1;
     const auto Markers=GetPluginMarkers();auto* W=GetWorld();
     if(!W||Markers.IsEmpty()){if(PluginMarkerMesh&&PluginMarkerMesh->GetNumSections())PluginMarkerMesh->ClearAllMeshSections();return;}

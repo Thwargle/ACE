@@ -222,7 +222,7 @@ private:
         {
             Heading(TEXT("Character supplies"),TEXT("Set the total quantity to keep across all packs. Buys only the shortage from the open vendor. This list is saved separately for each character and server."));
             Toggle(TEXT("auto_restock"),TEXT("Restock automatically when a matching vendor opens"));Toggle(TEXT("redeem_notes"),TEXT("Redeem trade notes to fund restocking"),true);
-            RestockList();Start(TEXT("restock"),TEXT("Buy missing supplies"));Add(Text(TEXT("Chat command: /items restock  (also /it recomp)"),12,Muted));
+            RestockList();Start(TEXT("restock"),TEXT("Buy missing supplies"));Add(Text(TEXT("Chat command: /acueitems restock"),12,Muted));
         }
     }
 };

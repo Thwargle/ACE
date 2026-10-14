@@ -37,6 +37,12 @@ public:
 	bool EvaluateLink(uint32 FromCommand, uint32 ToCommand, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount, bool& bOutFinished,
 		const float* PreviousTimeSeconds = nullptr, TArray<FACEDatAnimationHook>* OutCrossedHooks = nullptr, uint32 PreferredStyle = 0) const;
 
+	/** Retail item state: play the link once, then the destination cycle (including zero-rate holds).
+	 *  An object received already in that state starts directly in its cycle. */
+	bool EvaluateStateMotion(uint32 From, uint32 To, float Time, bool bStartInCycle, int32 Parts,
+		TArray<FTransform>& Out, float Scale, int32& Count, bool& bTransitionFinished,
+		const float* Previous = nullptr, TArray<FACEDatAnimationHook>* Hooks = nullptr) const;
+
 	/** Retail GetObjectSequence: direct state link, otherwise leave through the style's default before entering the target. */
 	bool EvaluateTransition(uint32 FromCommand, uint32 ToCommand, float TimeSeconds, int32 NumParts, TArray<FTransform>& OutPartTransforms, float WorldScale, int32& OutAnimatedPartCount, bool& bOutFinished,
 		const float* PreviousTimeSeconds = nullptr, TArray<FACEDatAnimationHook>* OutCrossedHooks = nullptr, uint32 PreferredStyle = 0) const;

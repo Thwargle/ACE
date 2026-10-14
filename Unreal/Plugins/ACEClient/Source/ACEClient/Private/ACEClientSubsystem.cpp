@@ -17,6 +17,11 @@
 #include "UI/ACEUIResourceResolver.h"
 #include "Engine/World.h"
 #include "Engine/GameInstance.h"
+#include "HAL/IConsoleManager.h"
+#include "Misc/App.h"
+
+static TAutoConsoleVariable<int32> CVarACEFrameHitches(TEXT("ace.Performance.Hitches"),1,
+	TEXT("Log up to 20 slow gameplay frames per session, at least 10 seconds apart. No capture or GPU readback."));
 
 void UACEClientSubsystem::ReceiveChatMessage(const FString& Text, const FString& Sender, int32 Type, int32 FilterType)
 {
@@ -244,6 +249,16 @@ void UACEClientSubsystem::Deinitialize()
 
 void UACEClientSubsystem::Tick(float DeltaTime)
 {
+	const double Now=FPlatformTime::Seconds();
+	const double FrameMs=LastFrameReportTime>0 ? (Now-LastFrameReportTime)*1000 : 0;
+	LastFrameReportTime=Now;
+	UWorld* World=GetWorld();
+	const auto* PC=World?Cast<AACEPlayerController>(World->GetFirstPlayerController()):nullptr;
+	const bool bGameplay=CVarACEFrameHitches.GetValueOnGameThread()!=0 && FApp::HasFocus()
+		&& Session && Session->GetState()==EACESessionState::InWorld && PC && !PC->IsWorldTransitionActive();
+	if(FrameReportGate.Update(Now,FrameMs,bGameplay))
+		for(const FString& Line:ACEFrameDiagnostics::Describe(World,FrameMs))
+			UE_LOG(LogTemp,Display,TEXT("ACE slow frame: %s"),*Line);
 	if (Session)
 	{
 		Session->Tick(DeltaTime);

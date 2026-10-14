@@ -4,6 +4,7 @@
 #include "UI/ACEUIElementManager.h"
 #include "UI/ACERetailMap.h"
 #include "UI/ACEUIResourceResolver.h"
+#include "UI/ACEUILayoutResolver.h"
 #include "Dat/ACEDatTextLayout.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
@@ -20,7 +21,6 @@ namespace
 	static const FLinearColor WorldInk(0.16f, 0.12f, 0.06f, 1.f);
 	static const FLinearColor WorldDim(0.38f, 0.30f, 0.18f, 1.f);
 	constexpr int32 WorldTabHeight = 25;
-	constexpr int32 HouseRowHeight = 15;
 	constexpr int32 WorldZ = 100000;
 	/**
 	 * The Dereth map art covers the full 255-landblock grid: 204 map units of
@@ -48,10 +48,10 @@ namespace
 	{
 		if (UnixSeconds <= 0)
 		{
-			return TEXT("unknown");
+			return TEXT("N/A");
 		}
 		const FDateTime Time = FDateTime::FromUnixTimestamp(UnixSeconds);
-		return FText::AsDate(Time, EDateTimeStyle::Medium, FText::GetInvariantTimeZone()).ToString();
+		return FText::AsDateTime(Time, EDateTimeStyle::Short, EDateTimeStyle::Medium).ToString();
 	}
 }
 
@@ -152,7 +152,6 @@ void UACEUIGameplayBinder::SyncWorldPanelTab(const FString& PageName)
 	{
 		// Housing state is push-only after login; ask again whenever the tab opens.
 		Client->SendHouseQuery();
-		LastHouseQueryAt = FPlatformTime::Seconds();
 	}
 	RefreshWorldOverlays();
 }
@@ -294,158 +293,108 @@ void UACEUIGameplayBinder::RefreshWorldMapPage(const TSharedPtr<FACEUIElement>& 
 
 void UACEUIGameplayBinder::RefreshWorldHousePage(const TSharedPtr<FACEUIElement>& Page)
 {
-	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(TEXT("HousePage"),
-		TEXT("HouseTextListBox"));
-	if (!ListEl.IsValid())
-	{
-		for (UTextBlock* T : HouseTextRows) { if (T) { T->SetVisibility(ESlateVisibility::Collapsed); } }
-		return;
-	}
-	ListEl->X = 5;
-	ListEl->Y = 5;
-	ListEl->Width = FMath::Max(80, Page->Width - 10);
-	ListEl->Height = FMath::Max(HouseRowHeight, Page->Height - 10);
-
-	// Re-poll slowly while the tab stays open so rent payments show up as they land.
-	const double Now = FPlatformTime::Seconds();
-	if (Client && Now - LastHouseQueryAt > 10.0)
-	{
-		Client->SendHouseQuery();
-		LastHouseQueryAt = Now;
-	}
-
+	const auto List = Manager->FindElementUnder(TEXT("HousePage"), TEXT("HouseTextListBox"));
+	if (!List || !Canvas->GetResourceResolver()) return;
+	// The retail list's bottom edge is fixed to its original 600px parent.
+	// Fit the viewport, but keep the paragraph template's font, alignment and gaps.
+	List->Width = FMath::Max(1, Page->Width - List->X - 5);
+	List->Height = FMath::Max(1, Page->Height - List->Y - 5);
 	const FACEHouseInfo Info = Client->GetHouseInfo();
-	const FLinearColor HouseInk(0.92f,0.92f,0.88f);
-	const FLinearColor HouseDim(0.65f,0.65f,0.60f);
-	TArray<TPair<FString, FLinearColor>> Lines;
-	FACEDatFont Font;
-	Canvas->GetResourceResolver()->ResolveFont(0x40000002, Font);
-	auto Add = [&](const FString& Text, const FLinearColor& Color)
+	TArray<TPair<FString,FLinearColor>> Paragraphs;
+	auto Add = [&](FString Text, FLinearColor Color = FLinearColor::White)
+	{ Paragraphs.Emplace(MoveTemp(Text), Color); };
+	auto Payments = [](const TArray<FACEHousePayment>& Costs, bool bRent)
 	{
-		const FLinearColor Ink = Color == WorldInk ? HouseInk : Color == WorldDim ? HouseDim : Color;
-		if (Text.IsEmpty() || !Font.Id) { Lines.Emplace(Text, Ink); return; }
-		for (const auto& Line : ACEDatText::Layout(Font, Text, ListEl->Width - 12, false))
-			Lines.Emplace(Text.Mid(Line.Begin, Line.End - Line.Begin), Ink);
+		TArray<FString> Parts;
+		for (const auto& Cost : Costs)
+		{
+			const FString Name = Cost.Required == 1 ? Cost.Name : Cost.PluralName.IsEmpty() ? Cost.Name + TEXT("s") : Cost.PluralName;
+			Parts.Add(bRent ? FString::Printf(TEXT("%d/%d %s"), Cost.Paid, Cost.Required, *Name)
+				: FString::Printf(TEXT("%d %s"), Cost.Required, *Name));
+		}
+		return FString::Join(Parts, TEXT(", "));
 	};
-	if (!Info.bQueried)
-	{
-		Add(TEXT("Querying dwelling status..."), WorldDim);
-	}
-	else if (!Info.bOwned)
-	{
-		Add(TEXT("You do not currently own a house."), WorldInk);
-	}
+	// gmHouseUI::DisplayHouseData: each call adds a centered, auto-height
+	// HouseTextEntryTemplate (white/green/yellow, with an 8px paragraph gap).
+	if (!Info.bQueried) Add(TEXT("Querying dwelling status..."));
+	else if (!Info.bOwned) Add(TEXT("You do not currently own a house."));
 	else
 	{
-        if (!Info.Buy.IsEmpty())
-        {
-            Add(TEXT("The purchase price for this dwelling is:"), WorldInk);
-            TArray<FString> Payments;
-            for (const FACEHousePayment& Pay : Info.Buy)
-                Payments.Add(FString::Printf(TEXT("%d %s"), Pay.Required,
-                    *(Pay.Required != 1 && !Pay.PluralName.IsEmpty() ? Pay.PluralName : Pay.Name)));
-            Add(FString::Join(Payments, TEXT(", ")), WorldInk);
-            Add(FString(), WorldInk);
-        }
-        if (!Info.Rent.IsEmpty())
-        {
-            Add(TEXT("Rent:"), WorldInk);
-            TArray<FString> Payments;
-            for (const FACEHousePayment& Pay : Info.Rent)
-                Payments.Add(FString::Printf(TEXT("%d/%d %s"), Pay.Paid, Pay.Required,
-                    *(Pay.Required != 1 && !Pay.PluralName.IsEmpty() ? Pay.PluralName : Pay.Name)));
-            Add(FString::Join(Payments, TEXT(", ")), WorldInk);
-            Add(FString(), WorldInk);
-        }
-        Add(FString::Printf(TEXT("Bought: %s"), *FormatUnixDate(Info.BuyTime)), WorldInk);
-        const int64 Interval = Info.HouseType == 4 ? RentIntervalSeconds * 3 : RentIntervalSeconds;
-        const bool bPaid = Info.bMaintenanceFree || !Info.Rent.ContainsByPredicate(
-            [](const FACEHousePayment& Pay) { return Pay.Paid < Pay.Required; });
-        Add(FString::Printf(TEXT("This maintenance period ends: %s"),
-            *FormatUnixDate(Info.RentTime + Interval)), WorldInk);
-        Add(FString::Printf(TEXT("Maintenance is next due: %s"),
-            *FormatUnixDate(Info.RentTime + Interval * (bPaid ? 2 : 1))), WorldInk);
-        const FString Coords = FormatMapCoords(Info.Position);
-        if (Info.HouseType != 4 && !Coords.IsEmpty())
-            Add(FString::Printf(TEXT("Location: %s"), *Coords), WorldInk);
-        Add(FString(), WorldInk);
-        Add(bPaid
-            ? TEXT("The maintenance has already been paid for this period. You may not prepay next period's maintenance.")
-            : TEXT("You have not paid your maintenance costs for this period."),
-            bPaid ? FLinearColor(.45f,1.f,.45f) : FLinearColor(1.f,.35f,.25f));
+		Add(TEXT("The purchase price for this dwelling is:\n") + Payments(Info.Buy, false));
+		Add(TEXT("Rent:\n") + Payments(Info.Rent, true));
+		Add(TEXT("Bought: ") + FormatUnixDate(Info.BuyTime));
+		const int64 Interval = Info.HouseType == 4 ? RentIntervalSeconds * 3 : RentIntervalSeconds;
+		const bool Paid = Info.bMaintenanceFree || !Info.Rent.ContainsByPredicate(
+			[](const FACEHousePayment& Cost) { return Cost.Paid < Cost.Required; });
+		Add(TEXT("This maintenance period ends: ") + FormatUnixDate(Info.RentTime + Interval));
+		Add(TEXT("Maintenance is next due: ") + FormatUnixDate(Info.RentTime + Interval * (Paid ? 2 : 1)));
+		const FString Coords = FormatMapCoords(Info.Position);
+		if (Info.HouseType != 4 && !Coords.IsEmpty()) Add(TEXT("Location: ") + Coords);
+		Add(Paid ? TEXT("The maintenance has already been paid for this period. You may not prepay next period's maintenance.")
+			: FString::Printf(TEXT("Warning!  You have not paid your maintenance costs for the last %d day maintenance period.  Please pay these costs by this deadline or you will lose your house, and all your items within it."), Info.HouseType == 4 ? 90 : 30),
+			Paid ? FLinearColor::Green : FLinearColor::Yellow);
+	}
+	if (Info.bQueried)
+	{
+		const int64 Purchased = Client->GetPlayerVitalsView().StatQualityInts.FindRef(199); // HousePurchaseTimestamp
+		const int64 NextPurchase = Purchased + RentIntervalSeconds;
+		if (NextPurchase <= FDateTime::UtcNow().ToUnixTimestamp())
+			Add(Info.bOwned ? TEXT("You may buy another house immediately after you abandon this one.")
+				: TEXT("You may buy another house immediately."));
+		else Add(TEXT("You may buy another landscape house at ") + FormatUnixDate(NextPurchase)
+			+ TEXT(". This restriction does not apply to apartments."));
 	}
 
-	const int32 VisibleRows = FMath::Max(1, ListEl->Height / HouseRowHeight);
-	HouseScrollOffset = FMath::Clamp(HouseScrollOffset, 0, FMath::Max(0, Lines.Num() - VisibleRows));
-	const FIntPoint Origin = ListEl->GetScreenOrigin();
-	while (HouseTextRows.Num() < VisibleRows)
+	while (HouseTextRows.Num() < Paragraphs.Num())
 	{
-		UTextBlock* L = Canvas->WidgetTree->ConstructWidget<UTextBlock>(UACERetailTextBlock::StaticClass());
-		L->SetJustification(ETextJustify::Left);
-		L->SetVisibility(ESlateVisibility::Collapsed);
-		HouseTextRows.Add(L);
+		HouseTextRows.Add(Canvas->WidgetTree->ConstructWidget<UACERetailTextBlock>());
+		HouseTextElements.Add(UACEUILayoutResolver::LoadTemplate(0x21000025, 0x100001E7));
 	}
-	for (int32 Row = 0; Row < HouseTextRows.Num(); ++Row)
+	int32 Height = 0;
+	for (int32 I = 0; I < Paragraphs.Num(); ++I)
 	{
-		UTextBlock* Label = HouseTextRows[Row];
-		if (!Label)
-		{
-			continue;
-		}
-		const int32 Index = HouseScrollOffset + Row;
-		if (Row >= VisibleRows || !Lines.IsValidIndex(Index) || Lines[Index].Key.IsEmpty())
-		{
-			Label->SetVisibility(ESlateVisibility::Collapsed);
-			continue;
-		}
-		Label->SetText(FText::FromString(Lines[Index].Key));
-		Label->SetColorAndOpacity(FSlateColor(Lines[Index].Value));
-		Label->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), 8));
-		CastChecked<UACERetailTextBlock>(Label)->SetRetailElement(Canvas->GetResourceResolver(), nullptr, FVector2D(1,1), ListEl->Width - 12, false);
-		Label->SetVisibility(ESlateVisibility::HitTestInvisible);
-		if (Label->GetParent() != Canvas->GetElementLayer())
-		{
-			Canvas->GetElementLayer()->AddChild(Label);
-		}
-		if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(Label->Slot))
-		{
-			Slot->SetAnchors(FAnchors(0.f, 0.f));
-			Slot->SetPosition(FVector2D(static_cast<float>(Origin.X + 6),
-				static_cast<float>(Origin.Y + Row * HouseRowHeight)));
-			Slot->SetSize(FVector2D(static_cast<float>(ListEl->Width - 10), HouseRowHeight));
-			Canvas->SetOverlayOrder(Label, Manager->FindElementByName(TEXT("RootGameplay_FloatyPanel_Field")), WorldZ + 2 + Row);
-		}
+		const auto Row = HouseTextElements[I];
+		if (!Row) continue;
+		Row->Parent = List;
+		Row->X = 0; Row->Y = Height;
+		Row->Width = FMath::Max(1, FMath::Min(280, List->Width));
+		FACEDatFont Font;
+		Canvas->GetResourceResolver()->ResolveFont(Row->FontId, Font);
+		Row->Height = FMath::Max(1, ACEDatText::Layout(Font, Paragraphs[I].Key,
+			Row->Width - Row->TextMargins.Left - Row->TextMargins.Right, false).Num()) * FMath::Max(1, int32(Font.MaxCharHeight))
+			+ Row->TextMargins.Top + Row->TextMargins.Bottom;
+		Height += Row->Height;
+	}
+	HouseMaxScrollOffset = FMath::Max(0, Height - List->Height);
+	HouseScrollOffset = FMath::Clamp(HouseScrollOffset, 0, HouseMaxScrollOffset);
+	for (int32 I = 0; I < HouseTextRows.Num(); ++I)
+	{
+		auto* Text = HouseTextRows[I].Get();
+		const auto Row = HouseTextElements[I];
+		if (!Paragraphs.IsValidIndex(I) || !Row)
+		{ Text->SetVisibility(ESlateVisibility::Collapsed); continue; }
+		Row->Y -= HouseScrollOffset;
+		Row->bVisible = Row->Y + Row->Height > 0 && Row->Y < List->Height;
+		PlaceTextOnElement(Text, Row, Paragraphs[I].Key, 10, Paragraphs[I].Value, WorldZ + 2);
+		// The row template supplies multiple indexed colors; SetTextWithFont in
+		// retail selects the color per paragraph, not the template's first color.
+		Text->SetColorAndOpacity(Paragraphs[I].Value);
 	}
 }
 
 bool UACEUIGameplayBinder::IsPointerOverHouseList(FVector2D CanvasLocalPos) const
 {
-	if (ActivePanelPage != TEXT("WorldPanel_Field") || ActiveWorldTab != TEXT("HousePage") || !Manager)
-	{
-		return false;
-	}
-	TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(TEXT("HousePage"),
-		TEXT("HouseTextListBox"));
-	if (!ListEl.IsValid() || !ListEl->bVisible)
-	{
-		return false;
-	}
-	const FIntPoint O = ListEl->GetScreenOrigin();
-	return CanvasLocalPos.X >= O.X && CanvasLocalPos.X < O.X + ListEl->Width
-		&& CanvasLocalPos.Y >= O.Y && CanvasLocalPos.Y < O.Y + ListEl->Height;
+	return ActivePanelPage == TEXT("WorldPanel_Field") && ActiveWorldTab == TEXT("HousePage") && Manager && Canvas
+		&& Canvas->IsElementExposedAt(Manager->FindElementUnder(TEXT("HousePage"), TEXT("HouseTextListBox")), CanvasLocalPos);
 }
 
 bool UACEUIGameplayBinder::ScrollHouseList(float WheelDelta)
 {
-	if (ActivePanelPage != TEXT("WorldPanel_Field") || ActiveWorldTab != TEXT("HousePage"))
-	{
-		return false;
-	}
-	HouseScrollOffset = FMath::Max(0, HouseScrollOffset + (WheelDelta > 0.f ? -3 : 3));
+	if (ActivePanelPage != TEXT("WorldPanel_Field") || ActiveWorldTab != TEXT("HousePage")) return false;
+	HouseScrollOffset = FMath::Clamp(HouseScrollOffset + (WheelDelta > 0.f ? -48 : 48), 0, HouseMaxScrollOffset);
 	RefreshWorldOverlays();
 	return true;
 }
-
 bool UACEUIGameplayBinder::HandleWorldNamedClick(const FString& Name)
 {
 	if (Name == TEXT("MapTab") && ActivePanelPage == TEXT("WorldPanel_Field"))

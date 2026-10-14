@@ -156,8 +156,18 @@ bool FACEPluginCompanionTest::RunTest(const FString&)
     TestEqual(TEXT("Message inbox bounded"),Peer->PluginEvents.Num(),64);
     TestTrue(TEXT("Local command routed"),H->RunPluginCommand(TEXT("test_tracker reset")));Snapshot=H->CompanionSnapshot(*P);
     TestTrue(TEXT("Local command arrives as event"),Snapshot->GetArrayField(TEXT("events")).ContainsByPredicate([](const auto& V){return V->AsObject()->GetStringField(TEXT("type"))==TEXT("command");}));
-    TArray<FString> Issues;auto Compiled=ACEVTProfile::CompileCommand(TEXT("/plugin test_tracker from_meta"),Issues);
+    TArray<FString> Issues;auto Compiled=ACEVTProfile::CompileCommand(TEXT("/acueplugin test_tracker from_meta"),Issues);
     TestTrue(TEXT("Native meta compiler accepts companion command"),Issues.IsEmpty()&&Compiled->GetStringField(TEXT("op"))==TEXT("plugin"));
+    auto Legacy=ACEVTProfile::CompileCommand(TEXT("/plugin test_tracker from_meta"),Issues);
+    TestTrue(TEXT("Saved companion command uses the same adapter"),Issues.IsEmpty()&&Legacy->GetStringField(TEXT("op"))==TEXT("plugin")&&Legacy->GetStringField(TEXT("source_command"))==Compiled->GetStringField(TEXT("source_command")));
+    P->Permissions.Add(TEXT("commands"));
+    auto Items=H->Find(TEXT("itemtools"));const bool ItemsEnabled=Items&&Items->Enabled;if(Items)Items->Enabled=true;
+    for(const TCHAR* Text:{TEXT("/acueucm help"),TEXT("/ucm help"),TEXT("/acueitems stop"),TEXT("/items stop"),TEXT("/it stop")})
+    {
+        P->NextCommand=0;auto Action=MakeShared<FJsonObject>();Action->SetStringField(TEXT("action"),TEXT("command"));Action->SetStringField(TEXT("text"),Text);
+        TestTrue(*(FString(TEXT("Companion command bridge accepts "))+Text),H->CompanionAction(*P,Action,Error));
+    }
+    if(Items)Items->Enabled=ItemsEnabled;
     FString UCMSource;FFileHelper::LoadFileToString(UCMSource,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
     FACEPluginVM MetaVM;TestTrue(TEXT("UCM meta fixture loads"),MetaVM.Load(UCMSource,Error));
     auto MetaProfile=J(TEXT(R"({"buffing":false,"combat":"off","navigation":false,"looting":false,"recovery":false,"meta_enabled":true})"));

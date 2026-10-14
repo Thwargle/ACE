@@ -2009,6 +2009,7 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecrea
 	Obj.SoundTableId = Decoded.SoundTableId;
 	Obj.PhysicsEffectTableId = Decoded.PhysicsEffectTableId;
 	Obj.ItemType = Decoded.ItemType;
+	Obj.bIsHouseHook = Decoded.bIsHouseHook;
 	Obj.Scale = Decoded.Scale > 0.f ? Decoded.Scale : 1.f;
 	Obj.Friction = FMath::IsFinite(Decoded.Friction) ? FMath::Clamp(Decoded.Friction,0.f,1.f) : .95f;
 	Obj.Position = Decoded.Position;
@@ -6234,6 +6235,7 @@ void FACESession::HandleApproachVendor(FACEBinaryReader& Reader)
 		Obj.CooldownDuration = Decoded.CooldownDuration;
 		Obj.UiEffects = static_cast<int32>(Decoded.UiEffects);
 		Obj.ItemType = Decoded.ItemType;
+		Obj.bIsHouseHook = Decoded.bIsHouseHook;
 		Obj.Value = Decoded.Value;
 		Obj.Burden = Decoded.Burden;
 		// Retail gmVendorUI::BuySingleItem requests one when the shop entry has

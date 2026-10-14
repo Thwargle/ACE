@@ -26,6 +26,7 @@ local dispel_pending=nil
 local last_cast, unavailable_spells = nil, {}
 local forced_buff=nil
 local buff_skips={}
+local buff_recast_until=0
 local other_job=nil
 local loot_scan={}
 local inventory_salvage_scan={}
@@ -151,13 +152,13 @@ local function recovery_spell(v)
 end
 -- Host regex matching has bounded input, stack, match time and per-tick work.
 local function literal_pattern(text,pattern) return regextest(text,pattern) end
-local catalog_snapshot,catalog_margin,catalog_by_id,catalog_supplied,catalog_usable
+local catalog_snapshot,catalog_margin,catalog_by_id,catalog_supplied,catalog_usable,catalog_groups
 local function index_spells(s,margin)
  if catalog_snapshot~=s or (margin and catalog_margin~=margin) then
   catalog_snapshot=s;catalog_margin=margin or 30
-  catalog_by_id,catalog_supplied,catalog_usable=spellindex(s.spells or {},s.inventory or {},s.time,catalog_margin,unavailable_spells,s.components_required~=false)
+  catalog_by_id,catalog_supplied,catalog_usable,catalog_groups=spellindex(s.spells or {},s.inventory or {},s.time,catalog_margin,unavailable_spells,s.components_required~=false)
  end
- return catalog_by_id,catalog_usable
+ return catalog_by_id,catalog_usable,catalog_groups
 end
 local function spell_supplied(s,spell)
  index_spells(s)
@@ -190,28 +191,37 @@ local function buff_skipped(s,target,category)
  local key=tostring(target)..':'..category
  return s.time<(buff_skips[key] or 0) or (forced_buff and forced_buff.skipped and forced_buff.skipped[key])
 end
+-- VT eq.b/g maintain ordinary attributes, trained skills, regeneration,
+-- protections and configured equipment buffs, not every beneficial spell in
+-- the spellbook (which also includes fellowship and special-purpose spells).
+local automatic_buff_families={}
+for _,c in ipairs({1,3,5,7,9,11,93,95,97,101,103,105,107,109,111,113,115,
+ 152,154,156,158,160,162,164,166,168,170,172,174,195,695}) do automatic_buff_families[c]=true end
+local function buff_refresh_window(s,p,duration)
+ local refresh=math.max(10,p.refresh_seconds or 300)
+ -- VT fz/gw: after starting a buff, include near-expiring neighbours for 30s.
+ if s.time<buff_recast_until then refresh=refresh+30 end
+ return duration and duration>0 and math.min(refresh,duration*.5) or refresh
+end
 -- A side-effect-free buff plan is shared by NeedBuff and the casting policy.
 local function compute_buff(s,p)
  local trained={};for _,id in ipairs(s.trained_skills or {}) do trained[id]=true end
- for _,id in ipairs(s.usable_skills or {}) do trained[id]=true end
  -- Index selections once. Scanning long imported buff/exclusion lists for every
  -- spell made a fully learned spellbook exhaust the sandbox's tick budget.
  local selected,excluded={},{}
  for _,id in ipairs(p.buffs or {}) do selected[id]=true end
  for _,id in ipairs(p.excluded_buffs or {}) do excluded[id]=true end
  local excluded_ids={};for _,id in ipairs(p.excluded_buff_spells or {}) do excluded_ids[id]=true end
- local families={}
- if next(selected) or next(excluded_ids) then for _,v in ipairs(s.spells or {}) do
-  if excluded_ids[v.id] then excluded[v.category]=true end
-  if selected[v.id] then families[v.category]=true end
- end end
  local by_id=index_spells(s)
- local best,order,blocked,active,confirmed,item_best,item_blocked={},{},{},{},{},{},{};local refresh=math.max(10,p.refresh_seconds or 60)
+ local families={}
+ for id in pairs(excluded_ids) do local v=by_id[id];if v then excluded[v.category]=true end end
+ for id in pairs(selected) do local v=by_id[id];if v then families[v.category]=true end end
+ local best,order,blocked,active,confirmed,item_best,item_blocked={},{},{},{},{},{},{}
  local eligibility={}
  local item_targets=p.item_buff_targets and #p.item_buff_targets>0
  local margin=p.buff_skill_margin or p.skill_margin or 30
  local tiers={[2]=p.life_buff_level or 0,[3]=p.item_buff_level or 0,[4]=p.creature_buff_level or 0}
- for _,v in ipairs(s.spells or {}) do
+ for _,v in ipairs(catalog_groups.buffs) do
   if item_targets and v.known~=false and v.beneficial and v.school==3 and (v.duration or 0)>0 and (v.skill or 0)>=v.power+margin and buff_tier(v,p) and not excluded[v.category] then
    if not item_best[v.category] or item_best[v.category].power<v.power then
     if s.time<(unavailable_spells[v.id] or 0) or not catalog_supplied[v.id] then item_blocked[v.category]=true
@@ -222,12 +232,14 @@ local function compute_buff(s,p)
    and (v.caster_target or band(v.target_type,0x8107)~=0))) then
   local eligible=eligibility[v.category]
   if eligible==nil then
-   local skill=skill_categories[v.category];eligible=((p.auto_buffs~=false and (not skill or trained[skill]) and buff_element_enabled(p,v)) or families[v.category])==true
+   local skill=skill_categories[v.category]
+   eligible=((p.auto_buffs~=false and (skill and trained[skill] or automatic_buff_families[v.category]) and buff_element_enabled(p,v)) or families[v.category])==true
    eligibility[v.category]=eligible
   end
   -- Automatic maintenance uses sustained buffs. Burst spells such as Tusker
   -- Leap (10 seconds) are only included when explicitly selected.
-  if eligible and ((v.duration or 300)>=300 or selected[v.id]) and not excluded[v.category] and (not best[v.category] or v.power>best[v.category].power) then
+  if eligible and (band(v.flags,0x2000)==0 or (families[v.category] and s.in_fellowship))
+   and ((v.duration or 300)>=300 or selected[v.id]) and not excluded[v.category] and (not best[v.category] or v.power>best[v.category].power) then
    local tier=tiers[v.school] or 0
    if (tier~=0 and v.level~=tier) or (v.skill or 0)<v.power+margin
     or s.time<(unavailable_spells[v.id] or 0) or not catalog_supplied[v.id] then blocked[v.category]=v
@@ -245,9 +257,9 @@ local function compute_buff(s,p)
  for _,category in ipairs(order) do if not casting_buff_family[category] then ordered[#ordered+1]=category end end
  order=ordered
  -- A configured refresh window must never make a freshly cast short buff stale.
- local function refresh_window(duration) return duration and duration>0 and math.min(refresh,duration*.5) or refresh end
+ local function refresh_window(duration) return buff_refresh_window(s,p,duration) end
  for _,e in ipairs(s.enchantments or {}) do local v=by_id[e.id] or best[e.category]
-  if e.remaining>refresh_window(v and v.duration) then active[e.category]=math.max(active[e.category] or 0,e.power) end
+  if e.remaining>refresh_window(e.duration or (v and v.duration)) then active[e.category]=math.max(active[e.category] or 0,e.power) end
  end
  for _,e in ipairs(s.item_buffs or {}) do local v=best[e.category] or item_best[e.category]
   if e.expires-s.time>refresh_window(e.duration or (v and v.duration)) then local k=tostring(e.target)..':'..e.category;confirmed[k]=math.max(confirmed[k] or 0,e.power) end
@@ -299,7 +311,7 @@ end
 -- or inventory across ticks.
 local buff_plan
 local function next_buff(s,p)
- local keys={'auto_buffs','buffs','excluded_buffs','excluded_buff_spells','item_buff_targets','buff_items','skill_margin','buff_skill_margin','refresh_seconds','creature_buff_level','life_buff_level','item_buff_level'}
+ local keys={'auto_buffs','buffs','excluded_buffs','excluded_buff_spells','item_buff_targets','buff_items','skill_margin','buff_skill_margin','refresh_seconds','creature_buff_level','life_buff_level','item_buff_level','protection_profile','bane_profile','protection_custom','bane_custom'}
  local same=buff_plan and buff_plan.snapshot==s
  if same then for _,k in ipairs(keys) do if buff_plan.options[k]~=p[k] then same=false;break end end end
  if not same then
@@ -338,6 +350,7 @@ local function meta_command(c,s)
  elseif c.op=='plugin' or c.op=='use' or c.op=='say' or c.op=='give' or c.op=='select' or c.op=='use_selected' or c.op=='combat_mode' or c.op=='logout' or c.op=='jump' or c.op=='load' or c.op=='recall' or c.op=='face' or c.op=='fellowship' or c.op=='confirm' or c.op=='attack_bar' then
   if #meta.queue>=64 then return 'Meta command queue exceeds 64 actions' end
   meta.queue[#meta.queue+1]=c
+  if c.op=='load' then meta.awaiting_load=true end
  else return 'Unsupported meta command' end
 end
 local meta_vars={}
@@ -708,7 +721,7 @@ local function meta_action(a,s,p)
  elseif t==9 then meta.watchdog={state=q.s,radius=q.r,seconds=q.t,next=s.time+q.t/10,samples={}}
  elseif t==10 then meta.watchdog=nil
  elseif t==11 then
-  local defaults={combat='off',buffing=true,navigation=false,looting=false,autostack=false,meta_enabled=true,idle_peace=false,open_doors=false,stop_on_death=false,autocram=false,nav_priority=false,radius=30,approach_range=60,waypoint_radius=.8,refresh_seconds=60,height=2,mana_threshold=45,health_threshold=65,stamina_threshold=50,door_range=2,
+  local defaults={combat='off',buffing=true,navigation=false,looting=false,autostack=false,meta_enabled=true,idle_peace=false,open_doors=false,stop_on_death=false,autocram=false,nav_priority=false,radius=30,approach_range=60,waypoint_radius=.8,refresh_seconds=300,height=2,mana_threshold=45,health_threshold=65,stamina_threshold=50,door_range=2,
    item_mana=true,item_mana_threshold=20,read_unknown_scrolls=false,buff_skill_margin=p.skill_margin or 30,skill_margin=30,
    loot_fellow_corpses=false,loot_all_corpses=false,auto_attack_power=false,use_recklessness=false,idle_buff_topoff=false,idle_buff_seconds=1200,
    idle_health_threshold=0,idle_stamina_threshold=0,idle_mana_threshold=0,loot_range=15,loot_priority=false,loot_only_rare=false,salvage_combine=false,follow_corners=false,target_lock=true,
@@ -723,7 +736,7 @@ local function meta_action(a,s,p)
  elseif t==12 then
   local value=meta_expression(a.expression,s)
   if a.boolean then value=truth(value) and 'true' or 'false' end
-  return meta_command(ucmcommand('/ucm opt set '..q.o..' '..tostring(value)),s)
+  return meta_command(ucmcommand('/acueucm opt set '..q.o..' '..tostring(value)),s)
  else return 'Unsupported meta action '..t end
 end
 local function meta_profile(s,p)
@@ -733,6 +746,21 @@ local function meta_profile(s,p)
  if meta.forcebuff then effective.buffing=true end
  if p.vt_meta then effective.states=nil;effective.initial_state='Default' end
  return effective
+end
+-- VT applies load commands synchronously. Native profile I/O is acknowledged
+-- on the next snapshot, so suspend the remaining All actions at that boundary.
+local function meta_actions(a,s,p)
+ meta.actions=meta.actions or {}
+ if a then meta.actions[#meta.actions+1]=a end
+ while #meta.actions>0 do
+  local next_action=table.remove(meta.actions,1)
+  if next_action.type==3 then
+   for i=#next_action.children,1,-1 do table.insert(meta.actions,1,next_action.children[i]) end
+  else
+   local err=meta_action(next_action,s,meta_profile(s,p));if err then return err end
+   if meta.awaiting_load then return end
+  end
+ end
 end
 local function meta_tick(s,p)
  meta_active_profile=p
@@ -749,11 +777,20 @@ local function meta_tick(s,p)
    route_trail={};route_returning=false;route_walking=false
   end
   meta.loading=false
+  meta.awaiting_load=false
+  meta.profile_load=nil
  end
- if meta.loading then return end
+ if meta.loading or meta.awaiting_load then return end
+ -- Recompute after an acknowledged USD clears the previous option overrides.
+ p=meta_profile(s,p);meta_active_profile=p
  if not meta.entered then meta_state('Default',s) end
  if p.stop_on_death and (s.health or 0)<=0 then return 'Stopped on death' end
- if not p.vt_meta or p.meta_enabled==false then return end
+ if not p.vt_meta then return end
+ if meta.actions and #meta.actions>0 then
+  local err=meta_actions(nil,s,p);if err then return err end
+  if meta.awaiting_load then return end
+ end
+ if meta_profile(s,p).meta_enabled==false then return end
  local w=meta.watchdog
  if w and s.time>=w.next then
   w.next=s.time+w.seconds/10;w.samples[#w.samples+1]=s.position
@@ -768,9 +805,9 @@ local function meta_tick(s,p)
  local before=meta.name
  for i,r in ipairs(p.vt_meta) do
   if r.state==meta.name and not meta.fired[i] and meta_condition(r.condition,s,meta_profile(s,p)) then
-   meta.fired[i]=true;local e=meta_action(r.action,s,p);if e then return e end
+   meta.fired[i]=true;local e=meta_actions(r.action,s,p);if e then return e end
    -- State changes, including a transition to the same state, rearm on the next tick.
-   if meta.name~=before or not meta.fired[i] then break end
+   if meta.awaiting_load or meta.name~=before or not meta.fired[i] then break end
   end
  end
 end
@@ -820,7 +857,7 @@ local function meta_work(s,p)
  if s.busy or s.ready==false or s.jumping then return result(nil,'Waiting to run meta command') end
  local c=meta.queue[1]
  local function immediate(intent) table.remove(meta.queue,1);return intent end
- if c.op=='load' then meta.loading=true;return immediate({action='profile_load',profile=c.profile,kind=c.kind,status='Loading '..c.profile}) end
+ if c.op=='load' then meta.loading=true;meta.profile_load=c;return immediate({action='profile_load',profile=c.profile,kind=c.kind,status='Loading '..c.profile}) end
  if c.op=='recall' then meta.pending={serial=s.action_serial or 0,teleport=s.teleport_sequence or 0,deadline=s.time+60,portal=true};return immediate({action='recall',destination=c.destination,status='Recalling to '..c.destination}) end
  if c.op=='say' then return immediate({action='say',text=c.text,channel=c.channel,status='Meta chat'}) end
  if c.op=='plugin' then return immediate({action='plugin_command',text=c.text,status='Meta plugin command'}) end
@@ -1167,7 +1204,12 @@ local function tick(s,p)
    -- watchdog no longer applies. Fizzles retry promptly but retain the bounded
    -- attempt count; they must not mark a forced family complete.
    local key=tostring(last_cast.target)..':'..last_cast.category;until_time[key]=nil
-   if confirmed then retries[key]=nil end
+   if confirmed then
+    retries[key]=nil
+    -- Result chat and the enchantment update may be in different packets.
+    -- Allow the authoritative timer to arrive instead of immediately recasting.
+    if last_cast.buff then until_time['buffack'..last_cast.target..':'..last_cast.id]=s.time+2 end
+   end
   end
   if s.action_error==0x400 then
    if last_cast.request and other_job and other_job.id==last_cast.request then
@@ -1207,7 +1249,7 @@ local function tick(s,p)
    -- run ahead of navigation. Do not let a missing portal monopolize them.
    if kind~='portal' and kind~='recall' and kind~='vendor' then return result(nil,'Waiting for route action') end
   end
- local by_id,spells=index_spells(s,option('skill_margin',30));local trained={}
+ local by_id,spells,spell_groups=index_spells(s,option('skill_margin',30));local trained={}
  for _,id in ipairs(s.trained_skills or {}) do trained[id]=true end
  for _,id in ipairs(s.usable_skills or {}) do trained[id]=true end
  local inventory=s.inventory or {}
@@ -1473,7 +1515,7 @@ local function tick(s,p)
     -- Back off only this failed tier briefly; other heals/conversions remain
     -- eligible immediately. Missing components retain the explicit longer ban.
     unavailable_spells[recovery_pending.spell]=math.max(unavailable_spells[recovery_pending.spell] or 0,s.time+1)
-    catalog_snapshot=nil;by_id,spells=index_spells(s,option('skill_margin',30))
+    catalog_snapshot=nil;by_id,spells,spell_groups=index_spells(s,option('skill_margin',30))
    elseif recovery_pending.item then until_time['recover_supply'..v]=s.time+15 end
    if recovery_pending.handler and not recovery_pending.spell then until_time[recovery_pending.handler]=s.time+15 end
    recovery_pending=nil
@@ -1557,7 +1599,7 @@ local function tick(s,p)
    and not option('recovery_supplies_first',false) and can_prepare_spell() then
    local regular,conversion,gain=0,nil,0
    local needed=math.max(1,math.ceil((s.max_health or 0)*threshold/100-(s.health or 0)))
-   for _,v in ipairs(spells) do
+   for _,v in ipairs(spell_groups.instant_self) do
     local destination,from=recovery_spell(v)
     if destination==2 and from==0 then regular=math.max(regular,health_gain(v)) end
     if destination==2 and from==4 then
@@ -1588,7 +1630,7 @@ local function tick(s,p)
       local source=kind:sub(1,6)=='Health' and hp or kind:sub(1,7)=='Stamina' and sp or mp
       local reserve=kind:sub(1,6)=='Health' and option('health_threshold',65) or kind:sub(1,7)=='Stamina' and option('stamina_threshold',50) or option('mana_threshold',45)
       if not conversion or source>(vital==2 and 10 or reserve) then
-       for _,v in ipairs(spells) do
+       for _,v in ipairs(spell_groups.instant_self) do
         local destination,from=recovery_spell(v)
         local regular=destination==vital and (from==0 or (vital==6 and from==4 and source_ready(from)))
         local handler_source=kind:sub(1,6)=='Health' and 2 or kind:sub(1,7)=='Stamina' and 4 or 6
@@ -1600,7 +1642,7 @@ local function tick(s,p)
       if best and conversion and vital==2 then
        local healing,heal_power=0,-1
        local amounts={['Heal Self I']=17,['Heal Self II']=25,['Heal Self III']=32,['Heal Self IV']=45,['Heal Self V']=67,['Heal Self VI']=87,["Adja's Intervention"]=115,['Incantation of Heal Self']=135}
-       for _,v in ipairs(spells) do local destination,from=recovery_spell(v);if destination==2 and from==0 and v.power>heal_power then heal_power=v.power;healing=amounts[v.name] or 10 end end
+       for _,v in ipairs(spell_groups.instant_self) do local destination,from=recovery_spell(v);if destination==2 and from==0 and v.power>heal_power then heal_power=v.power;healing=amounts[v.name] or 10 end end
        local multiplier=kind=='Stamina to Health' and option('stamina_health_multiplier',1) or option('mana_health_multiplier',1)
        local source_value=kind=='Stamina to Health' and s.stamina or math.max(0,s.mana-30)
        local ratio,cap=1.75,math.huge
@@ -1626,7 +1668,7 @@ local function tick(s,p)
   local supply=best;best=nil
   if supply and option('recovery_supplies_first',false) then return use_supply(supply) end
   local best_rank=0;local casting_available=can_prepare_spell()
-  for _,v in ipairs(spells) do
+  for _,v in ipairs(spell_groups.instant_self) do
    local destination,from=recovery_spell(v)
    if destination==vital and source_ready(from) and casting_available then
     -- VT Regular Spell uses Stamina to Mana; direct Mana Boost is fallback.
@@ -1674,7 +1716,7 @@ local function tick(s,p)
   if option('dispel_self',false) then
    local chorizite=false;for _,v in ipairs(inventory) do if v.name=='Chorizite' and (v.count or 1)>0 then chorizite=true;break end end
    local best
-   if chorizite then for _,v in ipairs(spells) do
+   if chorizite then for _,v in ipairs(spell_groups.by_category[250] or {}) do
     if v.category==250 and v.school==2 and v.caster_target and v.power>=lowest_vulnerability and (not best or v.power>best.power) then best=v end
    end end
    if best then local equipment=caster();if equipment then return equipment end;pending_dispel();return cast(s,best,s.player,'Dispelling elemental vulnerabilities') end
@@ -1714,7 +1756,7 @@ local function tick(s,p)
    end
    if recipient then
     local best
-    for _,spell in ipairs(spells) do
+    for _,spell in ipairs(spell_groups.by_category[77+index*2] or {}) do
      if spell.category==77+index*2 and not spell.caster_target and spell.beneficial and (spell.duration or 0)==0 and band(spell.flags,0x2000)==0
       and (not best or spell.power>best.power) then best=spell end
     end
@@ -1748,6 +1790,7 @@ local function tick(s,p)
   -- Missing components or rejected families must not stop the rest of a run.
   if v then
    local key=tostring(id)..':'..v.category
+   if not forced_buff and s.time<(until_time['buffack'..id..':'..v.id] or 0) then return result(nil,'Waiting for buff timer update') end
    if s.time<(until_time[key] or 0) then return result(nil,'Waiting for buff confirmation') end
    if mp<option('stop_mana',10) then return failed('Mana too low to buff; configure recovery') end
    local equipment=caster()
@@ -1758,14 +1801,16 @@ local function tick(s,p)
    end
    if equipment then return equipment end
    retries[key]=(retries[key] or 0)+1;until_time[key]=s.time+12
+   buff_recast_until=s.time+30;buff_plan=nil
    local action=cast(s,v,id,(forced_buff and 'Force Buff: ' or 'Buffing: ')..(v.name or tostring(v.id)))
+   last_cast.buff=true
    if forced_buff then last_cast.force_cycle=forced_buff;last_cast.power=v.power end
    return action
   end
   for _,b in ipairs(p.buff_items or {}) do
    local spell=by_id[b.spell];local item=usable_names[b.name]
    if spell and item and (band(spell.flags,0x2000)==0 or s.in_fellowship) then
-    local active,before=false,0;for _,e in ipairs(s.enchantments or {}) do if e.category==spell.category and e.power>=spell.power then before=math.max(before,e.remaining);if e.remaining>(refresh or option('refresh_seconds',60)) then active=true end end end
+    local active,before=false,0;for _,e in ipairs(s.enchantments or {}) do if e.category==spell.category and e.power>=spell.power then before=math.max(before,e.remaining);if e.remaining>buff_refresh_window(s,settings,e.duration or spell.duration) then active=true end end end
     local needed=forced_buff and not forced_buff.done['item'..b.name] or (not forced_buff and not active)
     if needed and (item_attempts['buffitem'..b.name] or 0)<3 then
      local key='buffitem'..b.name
@@ -1821,16 +1866,21 @@ local function tick(s,p)
   -- These are retail item buff families; DAT target masks determine which
   -- of the requester's server-known equipped items can receive each spell.
   for _,c in ipairs({152,154,156,158,160,162,164,166,168,170,172,174,195}) do wanted[c]=true end
-  local best={}
-  for _,v in ipairs(spells) do
+  local best,excluded={},{ }
+  for _,category in ipairs(p.excluded_buffs or {}) do excluded[category]=true end
+  for _,spell in ipairs(p.excluded_buff_spells or {}) do if by_id[spell] then excluded[by_id[spell].category]=true end end
+  local _,_,buff_groups=index_spells(s,option('buff_skill_margin',option('skill_margin',30)))
+  for _,v in ipairs(buff_groups.other_buffs) do
    if wanted[v.category] and buff_tier(v,p) and v.beneficial and not v.caster_target and not v.self_buff and (v.duration or 0)>0 and s.time>=(job.unavailable[v.id] or 0)
-    and not contains(p.excluded_buffs,v.category) and (not best[v.category] or v.power>best[v.category].power) then best[v.category]=v end
+    and band(v.flags,0x2000)==0 and not excluded[v.category] and buff_element_enabled(p,v)
+    and (not best[v.category] or v.power>best[v.category].power) then best[v.category]=v end
   end
   local categories={};for c in pairs(wanted) do categories[#categories+1]=c end;table.sort(categories)
   for _,category in ipairs(categories) do
    local v=best[category]
-   if not v then job.failed['family'..category]='unavailable family '..category
-   else
+   if not v and not excluded[category] and buff_element_enabled(p,{category=category}) then job.failed['family'..category]='unavailable family '..category
+   elseif v then
+    job.failed['family'..category]=nil
     local targets={request.player}
     if v.school==3 then
      targets={}
@@ -1882,7 +1932,7 @@ local function tick(s,p)
     local attack_element=pet_rule.damage_type or option('damage_type',0)
     if attack_element==0 then
      local score=-1
-     for _,v in ipairs(spells) do local e=element(v);local rank=(v.power or 0)*resistance(pet_target,e)
+     for _,v in ipairs(spell_groups.offense) do local e=element(v);local rank=(v.power or 0)*resistance(pet_target,e)
       if e~=0 and not v.beneficial and rank>score then attack_element=e;score=rank end
      end
      if combat~='magic' then for _,v in ipairs(inventory) do if v.equipped and (band(v.type,1)~=0 or band(v.slots,0x800000)~=0) then
@@ -2167,7 +2217,7 @@ local function tick(s,p)
  activity='combat'
  local attack_spells,combat_inventory,best_debuffs,attack_indices={},{},{},{}
  if target and combat~='off' then
- for _,v in ipairs(spells) do
+ for _,v in ipairs(spell_groups.offense) do
   if element(v)~=0 and not v.beneficial and v.category~=636 and v.category~=637 and v.category~=638 then
    local key=tostring(v.category)..':'..tostring(band(v.flags,0x1000))
    -- An explicit spell choice must survive family compaction.
@@ -2557,6 +2607,7 @@ local function pause_activity(s,name,reason)
  elseif name:sub(1,8)=='recovery' then recovery_pending=nil
  elseif name=='meta' then
   meta.pending=nil;meta.queue={};meta.turn=nil;meta.options={}
+  meta.actions={};meta.loading=false;meta.awaiting_load=false;meta.profile_load=nil
   meta.forcebuff=false;if forced_buff and forced_buff.request==0 then forced_buff=nil end
  end
  -- Shared preparation can fail inside several activities. Release exhausted
@@ -2627,7 +2678,7 @@ local function run(s,p)
  elseif request==0 and forced_buff and forced_buff.request~=0 then forced_buff=nil;buff_plan=nil end
  local effective=meta_profile(s,p)
  activity='meta'
- local error=activity_ready('meta') and (not forced_buff or forced_buff.request==0) and meta_tick(s,effective)
+ local error=activity_ready('meta') and (not forced_buff or forced_buff.request==0) and meta_tick(s,p)
  if error then
   if error=='Stopped by UCM command' then local out=result('stop',error);out.preserve_meta=true;return out end
   return failed(error)
@@ -2708,6 +2759,9 @@ local function run(s,p)
   if #route_trail==0 then route_join_pending=true;route_join_scan=nil end
  end
  local intent=(not forced_buff and meta_work(s,effective)) or tick(s,effective)
+ -- Empty embedded routes clear native navigation even when the resulting
+ -- configuration has no combat, movement or inventory action to emit.
+ if not intent and meta.route_changed then intent=result(nil,'Navigation route updated') end
  if intent then
   intent.targeting_status=targeting_status
   route_walking=intent.status and (intent.status:sub(1,9)=='Waypoint ' or intent.status=='Route complete') or false
@@ -2737,11 +2791,14 @@ return function(s,p)
   entered=s.time;locked_target=nil;route_blocks=0;blocked_serial=nil
   route_join_pending=true;route_join_scan=nil
   route_trail={};route_returning=false;route_walking=false
-  meta.pending=nil;meta.queue={};meta.forcebuff=false
+  local loads={}
+  if meta.profile_load and (p.vt_revision or 0)==meta.profile_revision then loads[#loads+1]=meta.profile_load end
+  for _,command in ipairs(meta.queue) do if command.op=='load' then loads[#loads+1]=command end end
+  meta.pending=nil;meta.queue=loads;meta.loading=false;meta.awaiting_load=#loads>0;meta.profile_load=nil;meta.forcebuff=false
   if meta.route then meta.route_changed=true end
   route_pending=nil;loot_pending=nil;loot_full=nil;recovery_pending=nil;buff_item_pending=nil
   corpse_pending=nil;purchase_pending=nil;note_pending=nil;mana_refill_pending=nil;mana_fill_pending=nil;pet_refill_pending=nil;helper_pending=nil;debuff_pending=nil;debuff_scan=nil;pea_pending=nil;pet_pending=nil;dispel_pending=nil
-  last_cast=nil;unavailable_spells={};forced_buff=nil;buff_skips={};other_job=nil
+  last_cast=nil;unavailable_spells={};forced_buff=nil;buff_skips={};buff_recast_until=0;other_job=nil
   loot_scan={};loot_jobs={};loot_job_pending=nil;scroll_reads={};combine_pending=nil;inventory_salvage_scan={};inventory_salvage_blocked={}
   retries={};until_time={};item_attempts={};corpses={};monster_failures={};monster_blacklist={};ghost_attempts={};ghost_hp={}
   follow_path={};follow_target=nil;follow_teleport=nil
@@ -2754,11 +2811,17 @@ return function(s,p)
   -- Host rejections arrive already formatted; ordinary policy failures are
   -- isolated here once, after the deciding function has unwound.
   if intent.action=='activity_failed' and not p.ucm_activity_failure then
+   local original=intent
    intent=pause_activity(s,intent.activity,intent.status)
+   -- Isolating a failed combat/recovery action must not discard a meta's
+   -- already-decided route update (especially an empty route) or live status.
+   for _,key in ipairs({'runtime_route','runtime_route_profile','runtime_loop_route','runtime_reverse_route','meta_state','route_point','route_join_pending','route_track_movement','targeting_status','helper_updates'}) do
+    if original[key]~=nil then intent[key]=original[key] end
+   end
   end
  end
  buff_plan=nil -- do not retain the previous full snapshot across callbacks
- catalog_snapshot=nil;catalog_by_id=nil;catalog_supplied=nil;catalog_usable=nil
+ catalog_snapshot=nil;catalog_by_id=nil;catalog_supplied=nil;catalog_usable=nil;catalog_groups=nil
  object_snapshot=nil -- references keep IDs; the full world snapshot can be collected
  -- Expression helpers only need these during a callback. Retaining the profile
  -- kept an entire LootSnob rule tree alive while the host marshalled the next
