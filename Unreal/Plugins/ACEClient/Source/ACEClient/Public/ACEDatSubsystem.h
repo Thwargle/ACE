@@ -25,6 +25,7 @@ class UStaticMeshComponent;
 class UACEUIResourceResolver;
 class UMaterialParameterCollection;
 struct FStreamableHandle;
+class ISceneViewExtension;
 
 UCLASS(Config=Engine)
 class ACECLIENT_API UACEDatSubsystem : public UGameInstanceSubsystem, public FTickableGameObject
@@ -48,6 +49,7 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UACEUIResourceResolver> SharedUiResources;
 	TSharedPtr<FStreamableHandle> RuntimeMaterialPreload;
 	bool bRuntimeMaterialPreloadStarted = false;
+	TSharedPtr<ISceneViewExtension, ESPMode::ThreadSafe> RetailParticleView;
 public:
 	void UntrackRuntimeTexture(UTexture2D* Tex);
 	/** Count + byte LRU trim for textures/setup caches. Safe to call often. */

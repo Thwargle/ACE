@@ -68,6 +68,14 @@ namespace
     }
     bool ValidUCMProfile(const TSharedPtr<FJsonObject>& O)
     {
+        // Panels replace roots and also edit nested rules in place. Cache an
+        // owned, validated snapshot and compare contents, never pointer identity.
+        // This skips thousands of rule checks for a route/monster/character edit
+        // without accepting a modified rule or a newly loaded external file.
+        static thread_local TSharedPtr<FJsonObject> ValidatedLoot;
+        const auto LootValue=O->TryGetField(TEXT("loot_rules"));
+        const bool SameLoot=LootValue&&ValidatedLoot&&FJsonValue::CompareEqual(
+            *LootValue,*ValidatedLoot->TryGetField(TEXT("loot_rules")));
         for(const TCHAR* Key:{TEXT("monster_default_priority"),TEXT("monster_default_range")})if(O->HasField(Key))
         {double V=0;if(!O->TryGetNumberField(Key,V)||!FMath::IsFinite(V)||V<(FString(Key)==TEXT("monster_default_priority")?-100:0)||V>100||FMath::FloorToDouble(V)!=V)return false;}
         for(const TCHAR* Key:{TEXT("melee_weapon"),TEXT("melee_secondary_equip")})if(O->HasField(Key))
@@ -86,6 +94,7 @@ namespace
         // Validate structures consumed by native widgets, not only the script.
         for(const TCHAR* Key:{TEXT("route"),TEXT("states"),TEXT("loot_rules"),TEXT("monsters"),TEXT("buff_commands"),TEXT("assist_items"),TEXT("buff_items"),TEXT("item_buff_targets"),TEXT("recharge_handlers"),TEXT("pea_recipes"),TEXT("vendor_rules")})
         {
+            if(SameLoot&&FCString::Strcmp(Key,TEXT("loot_rules"))==0)continue;
             if(!O->HasField(Key))continue;
             const TArray<TSharedPtr<FJsonValue>>* Values=nullptr;
             if(!O->TryGetArrayField(Key,Values)||Values->Num()>((FString(Key)==TEXT("loot_rules")||FString(Key)==TEXT("route"))?2048:512))return false;
@@ -162,7 +171,7 @@ namespace
             }
         }
         const TArray<TSharedPtr<FJsonValue>>* Loot=nullptr;
-        if(O->TryGetArrayField(TEXT("loot_rules"),Loot))for(const auto& V:*Loot)
+        if(!SameLoot&&O->TryGetArrayField(TEXT("loot_rules"),Loot))for(const auto& V:*Loot)
         {
             const auto R=V->AsObject();
             for(const TCHAR* K:{TEXT("name"),TEXT("label")})if(FTCHARToUTF8(*String(R,K)).Length()>256)return false;
@@ -211,6 +220,11 @@ namespace
                 const double Lo=Number(R,*(FString(TEXT("min_"))+Field)),Hi=Number(R,*(FString(TEXT("max_"))+Field));
                 if(Hi>0&&Hi<Lo)return false;
             }
+        }
+        if(LootValue&&!SameLoot)
+        {
+            auto Snapshot=MakeShared<FJsonObject>();Snapshot->SetField(TEXT("loot_rules"),LootValue);
+            ValidatedLoot=ACEUCMProfiles::Copy(Snapshot);
         }
         return true;
     }
@@ -434,9 +448,14 @@ bool UACEPluginSubsystem::Start(const FString& Id)
         TSharedPtr<FJsonObject> Reloaded, Links;
         if (!ACEUCMProfiles::Load(UserDirectory(), P->ProfileName, Reloaded, Links, Notice)) return false;
         if (!ValidUCMProfile(Reloaded)) { Notice = TEXT("Invalid linked UCM profile; Start cancelled"); return false; }
-        auto Before=ACEUCMProfiles::Copy(Reloaded);
-        if(!MaterializeUCMMetaProfiles(Reloaded,String(Links,TEXT("Metas"),TEXT("Imported")))
-            ||!ACEUCMProfiles::Save(UserDirectory(),ACEUCMProfiles::ActiveName(),Reloaded,Links,Before,Notice,ValidUCMProfile))return false;
+        // Starting an ordinary hunt only reads the selected files. Imported
+        // metas may materialize dependencies and therefore still need a save.
+        if(Reloaded->HasField(TEXT("vt_meta")))
+        {
+            auto Before=ACEUCMProfiles::Copy(Reloaded);
+            if(!MaterializeUCMMetaProfiles(Reloaded,String(Links,TEXT("Metas"),TEXT("Imported")))
+                ||!ACEUCMProfiles::Save(UserDirectory(),ACEUCMProfiles::ActiveName(),Reloaded,Links,Before,Notice,ValidUCMProfile))return false;
+        }
         // Keep the VM and stable JSON ordering when only re-reading unchanged
         // files, so Stop/Resume still resumes an imported meta in place.
         if (!FJsonValue::CompareEqual(FJsonValueObject(P->Profile), FJsonValueObject(Reloaded))) P->Profile = Reloaded;
@@ -458,7 +477,8 @@ bool UACEPluginSubsystem::Start(const FString& Id)
     if (IFileManager::Get().FileSize(*Path) > 256 * 1024 || !FFileHelper::LoadFileToString(Source, *Path))
     { P->Status = TEXT("Cannot read main.lua (maximum 256 KiB)"); LogUCMEvent(*P,P->Status,EACEUCMLogLevel::Error);return false; }
     if(P->Api>=2 && !InitializePluginState(*P))return false;
-    const uint32 SourceHash=GetTypeHash(Source),ProfileHash=GetTypeHash(Encode(P->Profile));
+    const uint32 SourceHash=GetTypeHash(Source);
+    const uint32 ProfileHash=P->Profile->HasField(TEXT("vt_meta"))?GetTypeHash(Encode(P->Profile)):0;
     const bool Resume=P->CanResumeMeta&&P->VM.IsValid()&&P->VMSession.Pin()==C->GetSession()
         &&P->Player==C->GetPlayerGuid()&&P->Server==C->GetServerName()
         &&P->VMSourceHash==SourceHash&&P->VMProfileHash==ProfileHash;
@@ -585,6 +605,25 @@ bool UACEPluginSubsystem::SaveProfile(const FString& Id, const FString& Name, co
     auto P = Find(Id); TSharedPtr<FJsonObject> O;
     if (!P || !SafeName(Name) || Json.Len() > 8 * 1024 * 1024 || !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), O) || !O)
     { Notice = TEXT("Use a profile name of letters, numbers, _ or -, and valid JSON (maximum 8 MiB)."); return false; }
+    return SaveProfileData(Id,Name,O,bStopRunning);
+}
+bool UACEPluginSubsystem::SaveCurrentProfile(const FString& Id, bool bStopRunning)
+{
+    auto P=Find(Id);if(!P||!P->Profile)return false;
+    // Native UCM controls already edited JSON objects. Save only replaces root
+    // fields, so an owned root is enough; the rollback baseline remains deep-owned.
+    // Avoid formatting, parsing and cloning every unchanged loot condition.
+    // Shared-profile Save enforces the resolved 8 MiB limit before writing.
+    if(Id==TEXT("ucm"))
+    {
+        auto Candidate=MakeShared<FJsonObject>();Candidate->Values=P->Profile->Values;
+        return SaveProfileData(Id,P->ProfileName,Candidate,bStopRunning);
+    }
+    return SaveProfile(Id,P->ProfileName,ProfileJson(Id),bStopRunning);
+}
+bool UACEPluginSubsystem::SaveProfileData(const FString& Id, const FString& Name, TSharedPtr<FJsonObject> O, bool bStopRunning)
+{
+    auto P=Find(Id);if(!P||!O||!SafeName(Name))return false;
     if(Id==TEXT("ucm")&&!ValidUCMProfile(O)){Notice=TEXT("Invalid UCM profile: check rule types, name lengths (256 bytes), nonnegative values and minimum/maximum ranges. Routes/states must contain objects and item/spell lists numeric IDs.");return false;}
     if(P->Api>=2&&!ValidatePublicProfile(O)){Notice=TEXT("Invalid public profile structures");return false;}
     if(Id==TEXT("itemtools")&&!ValidItemToolsProfile(O)){Notice=TEXT("Invalid Item Tools quantities or loot rules.");return false;}
@@ -1048,7 +1087,7 @@ bool UACEPluginSubsystem::LoadLootProfile(const FString& Name)
     return SelectUCMSection(TEXT("Loot"), Name);
 }
 
-void UACEPluginSubsystem::RecordWaypoint(const FString& Id)
+void UACEPluginSubsystem::RecordWaypoint(const FString& Id, const TSharedPtr<FJsonObject>& Details)
 {
     auto P = Find(Id); auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     if (!P || C->GetSessionState() != EACESessionState::InWorld) { Notice = TEXT("Enter the world before recording a waypoint"); return; }
@@ -1057,8 +1096,10 @@ void UACEPluginSubsystem::RecordWaypoint(const FString& Id)
     const TArray<TSharedPtr<FJsonValue>>* Old = nullptr; TArray<TSharedPtr<FJsonValue>> Points;
     if (P->Profile->TryGetArrayField(TEXT("route"), Old)) Points = *Old;
     if (Points.Num() >= 2048) { Notice = TEXT("Route limit: 2048 waypoints"); return; }
-    Points.Add(MakeShared<FJsonValueObject>(Position(Pos))); P->Profile->SetArrayField(TEXT("route"), Points);
-    SaveProfile(Id, P->ProfileName, Encode(P->Profile));
+    auto Point=Position(Pos);
+    if(Details)for(const auto& Field:Details->Values)Point->Values.Add(Field.Key,Field.Value);
+    Points.Add(MakeShared<FJsonValueObject>(Point)); P->Profile->SetArrayField(TEXT("route"), Points);
+    SaveCurrentProfile(Id,true);
 }
 void UACEPluginSubsystem::AddBuff(const FString& Id, int32 SpellId)
 {

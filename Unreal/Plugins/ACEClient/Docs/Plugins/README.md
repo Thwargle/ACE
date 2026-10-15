@@ -991,3 +991,65 @@ spell and server rejection checks remain active.
 `ManaChargesWhenOff`. It only uses the configured equipment-mana supplies and
 never runs hunting, buffing, navigation or metas. Disable it to stop background
 recharging. Repeated failures suspend it until restarting UCM or changing setup.
+
+## Large loot profiles and UI interaction performance
+
+Starting UCM and editing routes, monsters or activity settings previously
+revalidated every selected loot rule, including when looting was disabled.
+Repeated pattern compilation, whole-profile JSON round trips and duplicate
+waypoint saves made those unrelated controls stall with large loot profiles.
+
+Pattern validation now uses a bounded cache of exact patterns and diagnostics.
+Unchanged loot rules reuse an owned validation snapshot after a full content
+comparison; in-place edits and changed files still receive full validation.
+Native UCM controls save their existing JSON objects directly, and route actions
+save the position and action details together. Starting an ordinary hunt reads
+the selected profiles without saving them again. Imported metas retain dependency
+materialization, saving and resume checks. Shared-file refresh, conflict detection,
+size limits and transactional writes remain enforced.
+
+Windows host-side measurements with a 1,638-rule profile (7,007 conditions,
+2,668 pattern references, 304 unique patterns), with looting disabled:
+
+- Start: 235 ms before, 60 ms after.
+- Add waypoint: 416 ms before, 69 ms after.
+- Save a new monster: 213 ms before, 69 ms after.
+
+With looting enabled the revised operations measured 64, 72 and 75 ms,
+respectively. These are local host-action measurements, not live-server UI
+frame-time guarantees; large profile reads and saves still have a cost.
+
+Validation: the Win64 Development editor build and ten focused automation tests
+passed, covering large real/generated profiles, cache eviction, invalid edits,
+shared-profile conflicts, settings UI, route actions and meta resume. The route
+fixture emitted missing-position JSON warnings but no test errors. Local reports
+are under `Saved/LootProfileInteractionReview/{Before,Final,UIAndSynthetic}`.
+The reusable benchmark is `ACE.Plugins.LootProfileInteraction`; optionally pass
+`-UCMLootProfile=<file>` to read a real profile into isolated test storage.
+
+## Void combat eligibility and count controls
+
+Automatic combat can select a usable wand for enabled Void curses even when
+no direct-damage Void spell is eligible. Previously the loadout planner rejected
+the wand before reaching the curse pass. After confirming the enabled curses,
+a curse-only loadout waits for their timers and refreshes them when due. Known
+spells, components, skill buffer, equipment requirements and element overrides
+still determine eligibility. With a usable direct attack, combat continues
+casting it between curse refreshes.
+
+If no attack spell is usable, the status identifies the spell eligibility checks
+instead of reporting missing equipment. Combat failure reasons remain visible
+during the retry cooldown rather than reverting to generic waiting text.
+
+Minimum ring targets is an integer count from 1 to 10, without a percent sign.
+Global and per-monster priority sliders run from -1 (ignore) to 10. Existing
+imported values are preserved; editing a slider uses its displayed range.
+
+Validation: Win64 Development editor build and eight focused automation tests
+passed. Coverage includes actual retail Void spell metadata, native spell and
+inventory snapshots, direct attacks, all three curse families, curse-only
+refreshes, eligibility failures and UI ranges. Reports are under
+`Saved/VoidCombatReview/{CurseBefore,Final,Verified}`. The curse-only rejection
+was reproduced before the fix; normal full-spellbook casting already passed.
+The reporting player's exact configuration has not been verified on a live
+server.

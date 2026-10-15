@@ -168,7 +168,7 @@ private:
 	struct FActiveScript
 	{
 		uint32 Id = 0;
-		/** PlayScript enum when started via PlayEffect; 0 for direct PhysicsScript DID. */
+		/** PlayScript enum or direct PhysicsScript DID; 0 for ordinary default scripts. */
 		uint32 SourcePlayScript = 0;
 		TArray<FACEDatPhysicsScriptEntry> Entries;
 		double StartTime = 0.0;
@@ -287,6 +287,8 @@ private:
 	void CreateEmitter(const FACEDatAnimationHook& Hook, bool bBlocking, float Intensity, uint32 SourcePlayScript = 0);
 	void ResolveEmitterParent(FActiveEmitter& Emitter) const;
 	void StartDefaultScripts(bool bIsDoor);
+	/** Map a hook's numbered slot to its active visual instance. */
+	uint32 ResolveEmitterSlot(uint32 SlotId, uint32 SourcePlayScript) const;
 	void StopEmitter(uint32 InstanceId, bool bDestroy);
 	void TickScripts(float DeltaTime);
 	void TickParticleSimulation(float DeltaTime);

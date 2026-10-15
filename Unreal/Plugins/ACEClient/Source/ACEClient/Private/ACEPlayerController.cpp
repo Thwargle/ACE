@@ -1677,11 +1677,15 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 		(bJumpAirborne != bJumpAirborneSent) ||
 		bMouseTurnReport;
 	// After Use is in flight, MoveToState (F=1 leftover or axes-0) cancels CreateMoveToChain.
+	// Inventory requests do not set IsUseBusy. Their server-directed approach
+	// still reports progress through AutonomousPosition, like retail's
+	// MoveToManager / CommandInterpreter::SendPositionEvent. Translating its
+	// walk/arrival into a new input command cancels the pending pickup/give.
 	// Fast buffs send a synchronous press/release in TryFastBuffTap. They never
 	// leave a held axis whose release could be swallowed by this use freeze.
 	const bool bFreezeMoveToState = !bManualKeys && !bMouseTurnSend && !bMouseTurnSent && !bJumpAirborne && !bJumpCharging
 		&& !bManualMovementCommandSent
-		&& (bServerTurnActive || bAwaitingUseDone || ApproachUseSendCount > 0 || Client->IsUseBusy());
+		&& (bServerMoveToActive || bServerTurnActive || bAwaitingUseDone || ApproachUseSendCount > 0 || Client->IsUseBusy());
 
 	if (bFreezeMoveToState)
 	{

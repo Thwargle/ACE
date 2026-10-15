@@ -875,6 +875,48 @@ bool FACEPluginEquipmentTest::RunTest(const FString&)
             if(Intent)TestEqual(TEXT("Admin and summoned-pet kills approach without enabling others' corpses"),Intent->GetStringField(TEXT("action")),FString(TEXT("open_corpse")));
         }
     }
+    // Exercise the native spell and inventory snapshots with real Void data,
+    // including high-bit item GUIDs, selected equipment and component stacks.
+    auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
+    if(!TestTrue(TEXT("DAT loads for native Void snapshot"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+    FACESkillInfo Void;Void.SkillId=43;Void.AdvancementClass=3;Void.Current=500;
+    FACESkillInfo War;War.SkillId=34;War.AdvancementClass=1;War.Current=600;
+    Session.PlayerVitals.Skills={Void,War};Session.PlayerVitals.bValid=true;
+    Session.PlayerVitals.Health=Session.PlayerVitals.MaxHealth=100;
+    Session.PlayerVitals.Stamina=Session.PlayerVitals.MaxStamina=100;
+    Session.PlayerVitals.Mana=Session.PlayerVitals.MaxMana=100;
+    Add(WandA,ACEItemType::Caster,ACEEquipMask::Held,true);
+    for(uint32 Family:{640u,636u})
+    {
+        uint32 SpellId=0;
+        for(uint32 Id=1;Id<6500;++Id)
+        {
+            uint32 School,Power,Category,Flags;double Duration;
+            if(Dat->TryGetPluginSpellInfo(Id,School,Power,Category,Flags,Duration)&&School==5&&Category==Family&&Power<=300){SpellId=Id;break;}
+        }
+        if(!TestTrue(TEXT("Native fixture finds a real Void spell"),SpellId!=0))continue;
+        Session.KnownSpells={int32(SpellId)};TMap<FString,int32> Scarabs;
+        TestTrue(TEXT("Native Void components are known"),Dat->TryGetPluginSpellScarabs(SpellId,Scarabs));
+        int32 SupplyId=1000;
+        for(const auto& Pair:Scarabs)
+        {
+            FACEWorldObject Item;Item.Guid=SupplyId++;Item.Name=Pair.Key;Item.StackSize=100;
+            Item.ContainerId=Session.PlayerGuid;Item.ItemType=ACEItemType::SpellComponents;Session.UpsertWorldObject(Item);
+        }
+        auto Native=H->Snapshot();
+        Native->SetArrayField(TEXT("targets"),{MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":500,"name":"Void target","identified":true,"distance":10,"line_of_sight":true})")))});
+        auto Profile=ParseUCM(TEXT(R"({"combat":"auto","buffing":false,"recovery":false,"looting":false,"debuff_destructive":true})"));
+        Profile->SetBoolField(TEXT("debuff_destructive"),Family==636);
+        Profile->SetArrayField(TEXT("weapon_items"),{MakeShared<FJsonValueNumber>(uint32(WandA))});
+        FACEPluginVM NativeVM;TestTrue(TEXT("Native Void policy loads"),NativeVM.Load(Source,Error));
+        TestTrue(*Error,NativeVM.Step(Native,Profile,Intent,Error));
+        if(TestTrue(TEXT("Native Void snapshot yields an intent"),Intent.IsValid()))
+        {
+            FString Action;Intent->TryGetStringField(TEXT("action"),Action);
+            TestEqual(*FString::Printf(TEXT("Native Void family %u: %s"),Family,*Intent->GetStringField(TEXT("status"))),Action,FString(TEXT("cast")));
+            if(Action==TEXT("cast"))TestEqual(TEXT("Native Void chooses its known spell"),uint32(Intent->GetNumberField(TEXT("spell"))),SpellId);
+        }
+    }
     return true;
 }
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMLootMemoryTest,"ACE.Plugins.LootMemory",
@@ -1222,6 +1264,87 @@ bool FACEUCMVoidCombatTest::RunTest(const FString&)
     auto* Dat=NewObject<UACEDatSubsystem>(NewObject<UGameInstance>());
     if (!TestTrue(TEXT("Retail spells load"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))) return false;
     ON_SCOPE_EXIT { Dat->Deinitialize(); };
+    // Use the actual DAT flags, spell families and component requirements. The
+    // hand-authored fixtures below cannot catch errors at that boundary.
+    TArray<TSharedPtr<FJsonValue>> RetailVoid;
+    TMap<FString,int32> Supplies;
+    for(uint32 Id=1;Id<6500;++Id)
+    {
+        uint32 School=0,Power=0,Category=0,Flags=0,Icon=0,TargetFlags=0,TargetType=0;double Duration=0;bool Projectile=false;
+        if(!Dat->TryGetPluginSpellInfo(Id,School,Power,Category,Flags,Duration)||School!=5||Category<636||Category>643)continue;
+        FString Name;Dat->TryGetSpellInfo(Id,Name,Icon);Dat->TryGetRetailSpellTargeting(Id,TargetFlags,TargetType,Projectile);
+        auto Spell=MakeShared<FJsonObject>();Spell->SetNumberField(TEXT("id"),Id);Spell->SetStringField(TEXT("name"),Name);
+        Spell->SetNumberField(TEXT("school"),School);Spell->SetNumberField(TEXT("power"),Power);Spell->SetNumberField(TEXT("category"),Category);
+        Spell->SetNumberField(TEXT("flags"),Flags);Spell->SetNumberField(TEXT("duration"),Duration);Spell->SetNumberField(TEXT("skill"),500);
+        Spell->SetBoolField(TEXT("known"),true);Spell->SetBoolField(TEXT("beneficial"),(Flags&4)!=0);Spell->SetBoolField(TEXT("caster_target"),(Flags&8)!=0);
+        Spell->SetBoolField(TEXT("projectile"),Projectile);Spell->SetNumberField(TEXT("target_type"),TargetType);
+        auto Scarabs=MakeShared<FJsonObject>();TMap<FString,int32> Requirements;
+        const bool Known=Dat->TryGetPluginSpellScarabs(Id,Requirements);Spell->SetBoolField(TEXT("components_known"),Known);
+        TestTrue(*FString::Printf(TEXT("%s has known components"),*Name),Known);
+        for(const auto& Part:Requirements){Scarabs->SetNumberField(Part.Key,Part.Value);Supplies.FindOrAdd(Part.Key)=100;}
+        Spell->SetObjectField(TEXT("scarabs"),Scarabs);RetailVoid.Add(MakeShared<FJsonValueObject>(Spell));
+    }
+    TestTrue(TEXT("Retail Void spell catalog is populated"),RetailVoid.Num()>30);
+    for(bool OnlyCurses:{false,true})for(bool Rings:{false,true})for(bool Dots:{false,true})
+    {
+        if(OnlyCurses&&!Dots)continue;
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot();
+        auto Book=RetailVoid;
+        if(OnlyCurses)Book.RemoveAll([](const auto& V){return V->AsObject()->GetNumberField(TEXT("category"))>638;});
+        S->SetArrayField(TEXT("spells"),Book);S->SetBoolField(TEXT("components_required"),true);
+        S->SetObjectField(TEXT("skills"),ParseUCM(TEXT(R"({"43":{"current":500,"training":3},"34":{"current":0,"training":1}})")));
+        auto Inventory=S->GetArrayField(TEXT("inventory"));
+        for(const auto& Supply:Supplies)
+        {
+            auto Item=MakeShared<FJsonObject>();Item->SetNumberField(TEXT("id"),1000+Inventory.Num());
+            Item->SetStringField(TEXT("name"),Supply.Key);Item->SetNumberField(TEXT("count"),Supply.Value);Inventory.Add(MakeShared<FJsonValueObject>(Item));
+        }
+        S->SetArrayField(TEXT("inventory"),Inventory);
+        auto P=ParseUCM(TEXT(R"({"buffing":false,"recovery":false,"combat":"auto","looting":false,"weapon_items":[50],"damage_type":0})"));
+        P->SetBoolField(TEXT("ring"),Rings);
+        for(const auto* Option:Options)P->SetBoolField(Option,Dots);
+        TArray<TSharedPtr<FJsonValue>> Effects;
+        for(int32 Step=0;Step<(Dots?4:1);++Step)
+        {
+            TSharedPtr<FJsonObject> Intent;TestTrue(*Error,VM.Step(S,P,Intent,Error));
+            if(!TestTrue(TEXT("Retail Void combat produces an intent"),Intent.IsValid()))break;
+            FString Action;Intent->TryGetStringField(TEXT("action"),Action);
+            if(OnlyCurses&&Step==3)
+            {
+                TestTrue(TEXT("Active curses wait for expiry without disabling combat"),Action.IsEmpty());
+                TestTrue(TEXT("Curse-only wait explains the active timers"),Intent->GetStringField(TEXT("status")).Contains(TEXT("Void curses active")));
+                S->SetNumberField(TEXT("time"),140);S->SetArrayField(TEXT("debuffs"),{});
+                TestTrue(*Error,VM.Step(S,P,Intent,Error));
+                if(Intent){Intent->TryGetStringField(TEXT("action"),Action);TestEqual(TEXT("Expired curses resume casting without a restart"),Action,FString(TEXT("cast")));}
+                break;
+            }
+            if(!TestEqual(*FString::Printf(TEXT("Retail Void casts (rings=%d dots=%d step=%d): %s"),Rings,Dots,Step,*Intent->GetStringField(TEXT("status"))),Action,FString(TEXT("cast"))))break;
+            uint32 School,Power,Category,Flags;double Duration;
+            Dat->TryGetPluginSpellInfo(uint32(Intent->GetNumberField(TEXT("spell"))),School,Power,Category,Flags,Duration);
+            if(Dots&&Step<3)TestEqual(TEXT("Retail Void cycles all three curse families"),Category,uint32(Categories[Step]));
+            else TestTrue(TEXT("After curses, Void casts a direct attack"),Category==639||Category==640);
+            auto Effect=MakeShared<FJsonObject>();Effect->SetNumberField(TEXT("target"),500);Effect->SetNumberField(TEXT("category"),Category);
+            Effect->SetNumberField(TEXT("power"),Power);Effect->SetNumberField(TEXT("expires"),100+Duration);
+            Effects.Add(MakeShared<FJsonValueObject>(Effect));S->SetArrayField(TEXT("debuffs"),Effects);
+            S->SetNumberField(TEXT("time"),101+Step);S->SetNumberField(TEXT("action_serial"),Step+1);
+        }
+    }
+    // Skill, supplies and explicit switches remain gates for curse-only builds.
+    for(int32 Blocker=0;Blocker<3;++Blocker)
+    {
+        auto S=Snapshot();auto Book=RetailVoid;
+        Book.RemoveAll([](const auto& V){return V->AsObject()->GetNumberField(TEXT("category"))!=636;});
+        S->SetArrayField(TEXT("spells"),Book);S->SetBoolField(TEXT("components_required"),Blocker==1);
+        auto P=ParseUCM(TEXT(R"({"buffing":false,"recovery":false,"combat":"auto","looting":false,"debuff_destructive":true})"));
+        if(Blocker==0)P->SetBoolField(TEXT("debuff_destructive"),false);
+        if(Blocker==2)P->SetNumberField(TEXT("skill_margin"),1000);
+        FACEPluginVM VM;VM.Load(Source,Error);TSharedPtr<FJsonObject> Intent;TestTrue(*Error,VM.Step(S,P,Intent,Error));
+        if(!TestTrue(TEXT("Unavailable attack yields an explanation"),Intent.IsValid()))continue;
+        TestEqual(TEXT("Unavailable curse never bypasses eligibility"),Intent->GetStringField(TEXT("action")),FString(TEXT("activity_failed")));
+        TestTrue(TEXT("Missing attack is distinguished from missing equipment"),Intent->GetStringField(TEXT("status")).Contains(TEXT("No usable attack spell")));
+        S->SetNumberField(TEXT("time"),101);TestTrue(*Error,VM.Step(S,P,Intent,Error));
+        if(Intent)TestTrue(TEXT("Combat failure remains visible during retry cooldown"),Intent->GetStringField(TEXT("status")).Contains(TEXT("No usable attack spell")));
+    }
     bool Verified[3]={};
     for(uint32 Id=1;Id<6500;++Id)
     {

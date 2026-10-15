@@ -96,6 +96,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEUCMLogTest;
     friend class FACEItemToolsTest;
     friend class FACEUCMProfileStorageTest;
+    friend class FACEUCMLootLatencyTest;
     friend class FACEUCMProfilePanelTest;
     friend class FACEUCMSharedMetaTest;
     friend class ACEUCMPanelPrivate::FACEUCMImportUITest;
@@ -139,6 +140,7 @@ public:
     class UACEPluginCosmetics* GetLocalCosmetic(const FString& Id) const;
     void ClaimLocalCosmetic(const FString& Id);
     bool SaveProfile(const FString& Id, const FString& Name, const FString& Json, bool bStopRunning = true);
+    bool SaveCurrentProfile(const FString& Id, bool bStopRunning = true);
     bool LoadProfile(const FString& Id, const FString& Name);
     TArray<FString> UCMSectionProfiles(const FString& Section) const;
     FString UCMSectionName(const FString& Section) const;
@@ -242,13 +244,14 @@ public:
     void CancelForceBuff();
     bool IsForceBuffRequested() const { return ForceBuffRequest!=0; }
 
-    void RecordWaypoint(const FString& Id);
+    void RecordWaypoint(const FString& Id, const TSharedPtr<FJsonObject>& Details = nullptr);
     void AddBuff(const FString& Id, int32 SpellId);
     TSharedPtr<FJsonObject> Snapshot();
     /** Called before the normal prediction/network pipeline; never teleports the pawn. */
     void ApplyMovement(AACEPlayerController* Controller, float& Forward, float& Right, float& Turn,
         bool Manual, bool Blocked, bool VR, const FVector& Facing, float MaxFrameTravel = 0.f);
 private:
+    bool SaveProfileData(const FString& Id, const FString& Name, TSharedPtr<FJsonObject> Profile, bool bStopRunning);
     void UpdateLedgers();
     bool UpdateLedgerCharacter();
     void SaveSupplies();

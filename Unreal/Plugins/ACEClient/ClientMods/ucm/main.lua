@@ -38,10 +38,11 @@ local combine_pending=nil
 -- An operational failure belongs to one activity, never the whole scheduler.
 -- Cooldowns prevent a failing high-priority activity starving combat/recovery.
 local activity,activity_time,activity_pauses='meta',0,{}
+local activity_pause_reasons={}
 local function activity_ready(name)
  local until_at=activity_pauses[name]
  if until_at and activity_time<until_at then return false end
- activity_pauses[name]=nil;activity=name;return true
+ activity_pauses[name]=nil;activity_pause_reasons[name]=nil;activity=name;return true
 end
 local function failed(reason)
  return {action='activity_failed',activity=activity,status=reason}
@@ -2329,8 +2330,21 @@ local function tick(s,p)
   local ring,ring_score,streak_spell,streak_score=nil,-1,nil,-1
   local arc,arc_score=nil,-1
   local use_ring=ring_enabled(target_rule)
+  -- Void damage-over-time spells are attacks in their own right. Requiring a
+  -- bolt/streak first rejected the wand before the enabled curse pass could run.
+  local dot_attack,dot_score,dot_skill=nil,-1,-1
+  if not damage_override or damage_override==0 or damage_override==1024 then
+   for _,family in ipairs({{636,'debuff_destructive'},{637,'debuff_corrosion'},{638,'debuff_corruption'}}) do
+    local v=best_debuffs[family[1]]
+    if v and wanted(target_rule,family[2]) then
+     local rank=trained_skill(s,combat_school_skill[v.school]);local score=v.power*resistance(target,1024)
+     if rank>dot_skill or (rank==dot_skill and score>dot_score) then dot_attack=v;dot_score=score;dot_skill=rank end
+    end
+   end
+  end
   local magic_skill=-1
   if target_combat=='auto' then
+   magic_skill=dot_skill
    for _,v in ipairs(attack_spells) do
     local e=element(v)
     if e~=0 and not v.beneficial and (not damage_override or damage_override==0 or damage_override==e)
@@ -2359,7 +2373,10 @@ local function tick(s,p)
   -- the configured minimum applies (counted only from ring-enabled rules).
   if streak_spell and (not bolt_enabled or streak_score>best_score) then attack=streak_spell;best_score=streak_score end
   if ring and (ring_count>=option('ring_min_targets',4) or (not bolt_enabled and not streak_enabled and ring_count>0)) then attack=ring;best_score=ring_score end
+  local casting_attack=attack or dot_attack
+  local casting_score=attack and best_score or dot_score
   local weapon,score,best_skill,best_preference=nil,-1,-1,-1
+  local usable_caster=false
   local unassessed,unassessed_ammo
   local ammo_scores,ammo_elements,ammo_preferences,unknown_ammo={},{},{},{}
   for _,a in ipairs(combat_inventory) do if band(a.slots,0x800000)~=0 then
@@ -2381,14 +2398,15 @@ local function tick(s,p)
     if not explicit and main_hand>0 then allowed=v.id==main_hand end
     if v.auto_wield_left then allowed=false end
    end
+   if caster and allowed and v.identified and v.can_wield then usable_caster=true end
    if not v.identified and allowed and (melee or missile or caster) then unassessed=v end
-   if v.identified and v.can_wield and allowed and (explicit or (target_combat=='auto' and (melee or missile or (caster and attack))) or (target_combat=='melee' and melee) or (target_combat=='missile' and missile) or (target_combat=='magic' and caster)) then
+   if v.identified and v.can_wield and allowed and (explicit or (target_combat=='auto' and (melee or missile or (caster and casting_attack))) or (target_combat=='melee' and melee) or (target_combat=='missile' and missile) or (target_combat=='magic' and caster)) then
     local damage=v.damage_type or 0
     local _,resist,preference=preferred_damage(target,damage)
     if damage==0 then resist=1;preference=0 end
     if damage_override and damage_override~=0 then resist=resistance(target,damage_override);preference=0 end
-    local value=caster and best_score or ((v.damage or 0)*(1-(v.variance or 0)*.5)*math.max(1,v.damage_mod or 1)*resist/(1+(v.weapon_time or 0)/100))
-    if caster and attack and band(damage,element(attack))~=0 then value=value*math.max(1,v.element_mod or 1) end
+    local value=caster and casting_score or ((v.damage or 0)*(1-(v.variance or 0)*.5)*math.max(1,v.damage_mod or 1)*resist/(1+(v.weapon_time or 0)/100))
+    if caster and casting_attack and band(damage,element(casting_attack))~=0 then value=value*math.max(1,v.element_mod or 1) end
     local launcher=missile and (v.ammo_type or 0)~=0
     if launcher then
      local ammo_score=ammo_scores[v.ammo_type] or -1
@@ -2406,7 +2424,7 @@ local function tick(s,p)
     if not explicit and damage_override and damage_override~=0 and not caster and not launcher and damage~=0 and band(damage,damage_override)==0 then value=-1 end
     -- Compare usable skill first, then damage within that skill. A wand's
     -- spell damage is not comparable to a sword's per-swing damage.
-    local skill_id=caster and attack and combat_school_skill[attack.school] or v.weapon_skill
+    local skill_id=caster and casting_attack and combat_school_skill[casting_attack.school] or v.weapon_skill
     local rank=trained_skill(s,skill_id)
     if target_combat~='auto' then rank=0 end
     if value>=0 and (rank>best_skill or (rank==best_skill and (preference>best_preference or (preference==best_preference and value>score)))) then weapon=v;score=value;best_skill=rank;best_preference=preference end
@@ -2415,7 +2433,7 @@ local function tick(s,p)
   local mode=weapon and (band(weapon.type,0x8000)~=0 and 'magic' or band(weapon.type,0x100)~=0 and 'missile' or 'melee') or target_combat
   local debuff_element=damage_override
   if not debuff_element or debuff_element==0 then
-   if mode=='magic' and attack then debuff_element=element(attack)
+   if mode=='magic' and casting_attack then debuff_element=element(casting_attack)
    elseif mode=='missile' and weapon and (weapon.ammo_type or 0)~=0 then
     debuff_element=ammo_elements[weapon.ammo_type]
    elseif weapon then debuff_element=preferred_damage(target,weapon.damage_type) end
@@ -2423,7 +2441,7 @@ local function tick(s,p)
   local categories=debuff_categories(target_rule,debuff_element)
   local confirmed=effect_index[target.id] or {}
   local needs=missing_debuff(target,categories)
-  return {attack=attack,weapon=weapon,unassessed=unassessed,unassessed_ammo=unassessed_ammo,mode=mode,categories=categories,confirmed=confirmed,needs=needs,damage=damage_override}
+  return {attack=attack,dot_only=not attack and dot_attack~=nil,missing_attack=usable_caster and not casting_attack and (target_combat=='auto' or target_combat=='magic'),weapon=weapon,unassessed=unassessed,unassessed_ammo=unassessed_ammo,mode=mode,categories=categories,confirmed=confirmed,needs=needs,damage=damage_override}
  end
  -- Keep an in-flight debuff on its recipient until the server answers. A new
  -- higher-priority spawn must not make UseDone look like successful debuffing.
@@ -2475,6 +2493,7 @@ local function tick(s,p)
   local attack,weapon,mode,damage_override=plan.attack,plan.weapon,plan.mode,plan.damage
   if not weapon and plan.unassessed then return assess(plan.unassessed) end
   if not weapon and plan.unassessed_ammo then return assess(plan.unassessed_ammo) end
+  if not weapon and plan.missing_attack then return failed('No usable attack spell; check learned spells, skill buffer, components, selected element and enabled Void curses/rings') end
   if not weapon and s.inventory then return failed('No eligible combat loadout; check weapon requirements, damage type and ammunition') end
   local categories,confirmed=plan.categories,plan.confirmed
   for _,category in ipairs(categories) do
@@ -2553,6 +2572,8 @@ local function tick(s,p)
    local equipment=caster();if equipment then return equipment end
    ghost_attempts[target.id]=(ghost_attempts[target.id] or 0)+1
    return cast(s,attack,target.id,'Casting '..(attack.name or 'attack'))
+  elseif mode=='magic' and plan.dot_only then
+   return result(nil,'Void curses active; waiting for their timers before refreshing')
   elseif mode=='melee' or mode=='missile' then
    local power=option('power_percent',nil)
    power=power and power/100 or option('power',.5)
@@ -2630,6 +2651,9 @@ local function tick(s,p)
   local names={};for _,v in ipairs(recovery_missing) do names[#names+1]=v==2 and 'health' or v==4 and 'stamina' or 'mana' end
   return result(nil,'Recovery unavailable for '..table.concat(names,', ')..'; check skill buffer, components, supplies and imported handlers')
  end
+ if target and option('combat','off')~='off' and activity_pauses.combat and activity_pause_reasons.combat then
+  return result(nil,'Combat paused: '..activity_pause_reasons.combat..'. Retrying in '..math.max(1,math.ceil(activity_pauses.combat-s.time))..' seconds')
+ end
  return result(nil,navigation_paused or (route_pending and (route_pending.kind=='pause' and 'Pausing on route' or 'Waiting for route action')) or (health_critical and 'Health critical; recovery unavailable, UCM remains active') or (loot_full and 'Looting paused: inventory full; other activities remain active') or 'Ready - waiting for enabled activities')
 end
 
@@ -2639,6 +2663,7 @@ local function pause_activity(s,name,reason)
  -- a script whose later commands may depend on the rejected operation.
  local delay=name=='meta' and math.huge or (name=='combat' or name:sub(1,8)=='recovery') and 5 or 30
  activity_pauses[name]=s.time+delay
+ activity_pause_reasons[name]=reason
  if name=='vendors' then note_pending=nil;purchase_pending=nil
  elseif name=='loot' then
   if loot_pending then corpses[loot_pending.container]=s.time+30 end
@@ -2858,7 +2883,7 @@ return function(s,p)
   loot_scan={};loot_jobs={};loot_job_pending=nil;scroll_reads={};combine_pending=nil;inventory_salvage_scan={};inventory_salvage_blocked={}
   retries={};until_time={};item_attempts={};corpses={};monster_failures={};monster_blacklist={};ghost_attempts={};ghost_hp={}
   follow_path={};follow_target=nil;follow_teleport=nil
-  activity_pauses={}
+  activity_pauses={};activity_pause_reasons={}
  end
  buff_plan=nil
  local intent=run(s,p)

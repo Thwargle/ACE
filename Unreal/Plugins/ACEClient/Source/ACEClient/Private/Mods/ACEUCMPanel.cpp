@@ -118,7 +118,7 @@ namespace ACEUCMPanelPrivate
         void Save(bool Stop=false)
         {
             const auto Edited=P();
-            if(!Host->SaveProfile(Plugin->Id,Plugin->ProfileName,Host->ProfileJson(Plugin->Id),Stop)){Rebuild();return;}
+            if(!Host->SaveCurrentProfile(Plugin->Id,Stop)){Rebuild();return;}
             bool ExternalChange=false;
             // Keep the objects bound to this panel alive after saving. Other
             // panels still see a new root and refresh their own controls.
@@ -284,9 +284,9 @@ namespace ACEUCMPanelPrivate
             V->AddSlot().AutoHeight()[SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1)[Text(Caption,18)]
                 +SHorizontalBox::Slot().AutoWidth()[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Bold",18)).ColorAndOpacity(Color)
                     .Text_Lambda([this,Key,Default,Unit](){return FText::FromString(FString::Printf(TEXT("%.0f%s"),Num(P(),Key,Default),*Unit));})]];
-            V->AddSlot().AutoHeight().Padding(0,5)[SNew(SSlider).Style(&SliderStyle()).MinValue(Min).MaxValue(Max).StepSize(1).SliderHandleColor(FLinearColor::White).SliderBarColor(FLinearColor::White)
+            V->AddSlot().AutoHeight().Padding(0,5)[SNew(SSlider).Tag(FName(Key)).Style(&SliderStyle()).MinValue(Min).MaxValue(Max).StepSize(1).MouseUsesStep(true).SliderHandleColor(FLinearColor::White).SliderBarColor(FLinearColor::White)
                 .Value_Lambda([this,Key,Default](){return float(Num(P(),Key,Default));})
-                .OnValueChanged_Lambda([this,Key](float N){P()->SetNumberField(Key,N);})
+                .OnValueChanged_Lambda([this,Key](float N){P()->SetNumberField(Key,FMath::RoundToInt(N));})
                 .OnMouseCaptureEnd_Lambda([this](){Save();}).OnControllerCaptureEnd_Lambda([this](){Save();})];Add(Tile(V));
         }
         void Choices(const TCHAR* Key,const TArray<FString>& Values)
@@ -440,7 +440,7 @@ namespace ACEUCMPanelPrivate
             Box->AddSlot().AutoHeight()[SNew(SHorizontalBox)+SHorizontalBox::Slot().FillWidth(1)[Text(Caption,16)]
                 +SHorizontalBox::Slot().AutoWidth()[SNew(SACEPluginText).ColorAndOpacity(Accent)
                     .Text_Lambda([Value,Unit](){return FText::FromString(FString::FromInt(FMath::RoundToInt(Value()))+Unit);})]];
-            Box->AddSlot().AutoHeight().Padding(0,6)[SNew(SSlider).Style(&SliderStyle()).MinValue(Min).MaxValue(Max).StepSize(1)
+            Box->AddSlot().AutoHeight().Padding(0,6)[SNew(SSlider).Tag(FName(Key)).Style(&SliderStyle()).MinValue(Min).MaxValue(Max).StepSize(1).MouseUsesStep(true)
                 .IsEnabled(DefaultKey.IsEmpty()||Override).Value_Lambda(Value)
                 .OnValueChanged_Lambda([Current,Key](float N){Current()->SetNumberField(Key,FMath::RoundToInt(N));})
                 .OnMouseCaptureEnd_Lambda([this](){Save();}).OnControllerCaptureEnd_Lambda([this](){Save();})];Add(Tile(Box));
@@ -450,7 +450,7 @@ namespace ACEUCMPanelPrivate
             Add(Text(TEXT("Monster name begins with"),14,Muted));
             Add(SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Text(FText::FromString(Str(Rule,TEXT("name"))))
                 .OnTextCommitted_Lambda([this,Rule](const FText& Value,ETextCommit::Type){const FString Name=Value.ToString().TrimStartAndEnd();if(!Name.IsEmpty()&&Name.Len()<=256){Rule->SetStringField(TEXT("name"),Name);Save();Rebuild();}}));
-            IntegerSetting(Rule,TEXT("priority"),TEXT("Priority"),-100,100,TEXT(""),TEXT("monster_default_priority"));
+            IntegerSetting(Rule,TEXT("priority"),TEXT("Priority"),-1,10,TEXT(""),TEXT("monster_default_priority"));
             IntegerSetting(Rule,TEXT("range"),TEXT("Attack Range"),0,100,TEXT(" m"),TEXT("monster_default_range"));
             Add(Text(TEXT("Combat mode"),14,Muted));
             auto Modes=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
@@ -685,7 +685,7 @@ namespace ACEUCMPanelPrivate
                 Heading(TEXT("Spellcasting"),TEXT("Configure attack spells, rings, arcs and debuffs."));
                 Add(Toggle(TEXT("ring"),TEXT("Use ring spells"),TEXT("For nearby groups. Imported monster rules keep their individual ring choices.")));
                 Slider(TEXT("ring_range"),TEXT("Ring target distance"),1,15,5,Accent,TEXT(" m"));
-                Slider(TEXT("ring_min_targets"),TEXT("Minimum ring targets"),1,20,4);
+                Slider(TEXT("ring_min_targets"),TEXT("Minimum ring targets"),1,10,4,Accent,TEXT(""));
                 const int32 Arcs=FMath::Clamp(int32(Num(P(),TEXT("use_arcs"),1)),1,3);
                 const TCHAR* ArcNames[]={TEXT(""),TEXT("Prefer bolts"),TEXT("Prefer arcs at range"),TEXT("Prefer arcs")};
                 Add(LiveButton([this,ArcNames](){return FString(ArcNames[FMath::Clamp(int(Num(P(),TEXT("use_arcs"),1)),1,3)]);},[this](){P()->SetNumberField(TEXT("use_arcs"),int(Num(P(),TEXT("use_arcs"),1))%3+1);Save();}));
@@ -710,7 +710,7 @@ namespace ACEUCMPanelPrivate
                 Slider(TEXT("pet_range"),TEXT("Custom pet distance"),1,240,5,Accent,TEXT(" m"));
                 Slider(TEXT("pet_min_targets"),TEXT("Minimum nearby monsters"),1,20,1);
                 Heading(TEXT("Monster defaults"),TEXT("Fallbacks for monsters without an explicit rule override. Higher priority is attacked first; negative priority ignores a monster. Leave range at 0 to use the melee or missile / spell attack distance."));
-                IntegerSetting(P(),TEXT("monster_default_priority"),TEXT("Default monster priority"),-100,100,TEXT(""));
+                IntegerSetting(P(),TEXT("monster_default_priority"),TEXT("Default monster priority"),-1,10,TEXT(""));
                 IntegerSetting(P(),TEXT("monster_default_range"),TEXT("Default monster attack range"),0,100,TEXT(" m"));
                 Add(Text(TEXT("Monster rules inherit these defaults unless overridden. Range 0 uses the melee or missile / spell distance above."),14,Muted));
                 Inventory(false);

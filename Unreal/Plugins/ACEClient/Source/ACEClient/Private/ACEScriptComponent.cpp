@@ -74,6 +74,17 @@ namespace
 		return ScriptType >= 0x5Bu && ScriptType <= 0x66u;
 	}
 
+	uint32 AetheriaSlotScope(uint32 Source)
+	{
+		// Keep the five sustained surge visuals independent of spell-animation
+		// slots 5..9. This is renderer isolation, not a change to the DAT's motion,
+		// emission interval or lifetime. Enum and direct-DID playback share a scope
+		// so a new proc replaces the old one instead of accumulating copies.
+		if (Source >= 0xA2u && Source <= 0xA6u) return Source;
+		if (Source >= 0x3300125Bu && Source <= 0x3300125Fu) return 0xA2u + Source - 0x3300125Bu;
+		return 0;
+	}
+
 	bool IsPhysicsScriptDid(uint32 Id)
 	{
 		return (Id & 0xFF000000u) == 0x33000000u;
@@ -722,7 +733,8 @@ void UACEScriptComponent::PlayScriptInternal(
 
 	FActiveScript Active;
 	Active.Id = ScriptId;
-	Active.SourcePlayScript = SourcePlayScript;
+	Active.SourcePlayScript = SourcePlayScript != 0 ? SourcePlayScript
+		: (AetheriaSlotScope(ScriptId) != 0 ? ScriptId : 0);
 	Active.Entries = Script->Entries;
 	Active.Entries.StableSort([](const FACEDatPhysicsScriptEntry& A, const FACEDatPhysicsScriptEntry& B)
 	{
@@ -1369,10 +1381,10 @@ void UACEScriptComponent::ExecuteHook(
 		CreateEmitter(Hook, Hook.Type == EACEAnimationHookType::CreateBlockingParticle, Intensity, SourcePlayScript);
 		break;
 	case EACEAnimationHookType::DestroyParticle:
-		StopEmitter(Hook.Id, true);
+		StopEmitter(ResolveEmitterSlot(Hook.Id, SourcePlayScript), true);
 		break;
 	case EACEAnimationHookType::StopParticle:
-		StopEmitter(Hook.Id, false);
+		StopEmitter(ResolveEmitterSlot(Hook.Id, SourcePlayScript), false);
 		break;
 	case EACEAnimationHookType::CallPES:
 	{
@@ -2162,9 +2174,10 @@ void UACEScriptComponent::CreateEmitter(
 	const uint32 SlotId = Hook.SecondaryId;
 	if (SlotId != 0)
 	{
-		if (bBlocking && ActiveEmitters.ContainsByPredicate([SlotId](const FActiveEmitter& E)
-			{ return E.InstanceId == SlotId; })) return;
-		StopEmitter(SlotId, true);
+		const uint32 ExistingId = ResolveEmitterSlot(SlotId, SourcePlayScript);
+		if (bBlocking && ActiveEmitters.ContainsByPredicate([ExistingId](const FActiveEmitter& E)
+			{ return E.InstanceId == ExistingId; })) return;
+		StopEmitter(ExistingId, true);
 	}
 	UACEDatSubsystem* Dat = GetDat();
 	const FACEDatParticleEmitterInfo* Source = Dat ? Dat->GetParticleEmitterInfo(Hook.Id) : nullptr;
@@ -2212,7 +2225,7 @@ void UACEScriptComponent::CreateEmitter(
 		FACEPosition::AceQuatToUnreal(HookR.W, FVector(HookR.X, HookR.Y, HookR.Z)),
 		NewHookLocal, FVector::OneVector);
 	const int32 NewPartIndex = (Hook.PartIndex == 0xFFFFFFFFu) ? -1 : static_cast<int32>(Hook.PartIndex);
-	const uint32 NewInstanceId = SlotId != 0 ? SlotId : NextEmitterId++;
+	const uint32 NewInstanceId = SlotId != 0 && AetheriaSlotScope(SourcePlayScript) == 0 ? SlotId : NextEmitterId++;
 
 	FActiveEmitter Emitter;
 	Emitter.InstanceId = NewInstanceId;
@@ -3104,6 +3117,15 @@ void UACEScriptComponent::TickParticleLights(bool bPresentationOnly)
 	if (!bPresentationOnly) Lights->SubmitParticles(this, Requests);
 }
 
+uint32 UACEScriptComponent::ResolveEmitterSlot(uint32 SlotId, uint32 SourcePlayScript) const
+{
+	const uint32 Scope = AetheriaSlotScope(SourcePlayScript);
+	if (Scope == 0 || SlotId == 0) return SlotId;
+	const FActiveEmitter* Emitter = ActiveEmitters.FindByPredicate([SlotId, Scope](const FActiveEmitter& E)
+	{ return E.SlotId == SlotId && AetheriaSlotScope(E.SourcePlayScript) == Scope; });
+	return Emitter ? Emitter->InstanceId : 0;
+}
+
 void UACEScriptComponent::StopEmitter(uint32 InstanceId, bool bDestroy)
 {
 	if (InstanceId == 0) return;
@@ -3113,8 +3135,8 @@ void UACEScriptComponent::StopEmitter(uint32 InstanceId, bool bDestroy)
 	for (int32 Index = ActiveEmitters.Num() - 1; Index >= 0; --Index)
 	{
 		FActiveEmitter& Emitter = ActiveEmitters[Index];
-		// CreateParticle's emitter_id is a per-object slot, distinct from its
-		// emitter-info DAT id. StopParticle/DestroyParticle address that slot.
+		// Hook slots are resolved before entering here; the unique instance ID
+		// also keeps isolated surges' particle lights separate from cast lights.
 		if (Emitter.InstanceId != InstanceId)
 		{
 			continue;

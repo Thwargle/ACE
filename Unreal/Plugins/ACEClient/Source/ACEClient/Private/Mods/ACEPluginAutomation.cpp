@@ -1288,19 +1288,14 @@ void UACEPluginSubsystem::RecordRouteAction(const FString& Type,float Charge)
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();FACEWorldObject Obj;
     if((Type==TEXT("portal")||Type==TEXT("use")) && (!C->GetWorldObject(C->GetSelectedObject().Guid,Obj)||!Obj.IsSelectableWorldObject()))
     {Notice=TEXT("Select a portal, door or device before recording Use");return;}
-    auto Existing=Find(TEXT("ucm"));const TArray<TSharedPtr<FJsonValue>>* Before=nullptr;
-    const int32 Count=Existing&&Existing->Profile->TryGetArrayField(TEXT("route"),Before)?Before->Num():0;
-    RecordWaypoint(TEXT("ucm"));auto P=Find(TEXT("ucm"));if(!P)return;
-    const TArray<TSharedPtr<FJsonValue>>* Points=nullptr;if(!P->Profile->TryGetArrayField(TEXT("route"),Points)||Points->Num()!=Count+1)return;
-    auto Point=Points->Last()->AsObject();Point->SetStringField(TEXT("kind"),Type);
+    auto Point=MakeShared<FJsonObject>();Point->SetStringField(TEXT("kind"),Type);
     if(Type==TEXT("portal")||Type==TEXT("use"))
     {
-        if(!C->GetWorldObject(C->GetSelectedObject().Guid,Obj)||!Obj.IsSelectableWorldObject()){Notice=TEXT("Select a portal, door or device before recording Use");return;}
         Point->SetNumberField(TEXT("wcid"),Obj.WeenieClassId);Point->SetStringField(TEXT("object_name"),Obj.Name);
     }
     Point->SetNumberField(TEXT("charge"),Charge);
     if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController()))Point->SetNumberField(TEXT("heading"),PC->GetPawn()?PC->GetPawn()->GetActorRotation().Yaw:0);
-    SaveProfile(P->Id,P->ProfileName,ProfileJson(P->Id),false);
+    RecordWaypoint(TEXT("ucm"),Point);
 }
 void UACEPluginSubsystem::DrawRoute()
 {

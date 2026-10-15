@@ -287,52 +287,98 @@ bool FACEParticlePresentationTest::RunTest(const FString&)
         TestTrue(Case+TEXT("finite surge finishes rather than becoming permanent"),LastSurgeFrame<2099);
         AddInfo(Case+FString::Printf(TEXT("complete DAT lifetime including particle tail: %.2f seconds"),float(LastSurgeFrame)/60));
 
-        // Retail ParticleManager::CreateParticleEmitter (0x0051B6C0) destroys an
-        // occupied numbered slot, regardless of the old effect's source. Human
-        // MagicPowerUp08 (030005A0, frames 39..59) reuses every surge slot (5..9).
-        // Do not protect Aetheria with a custom lifetime or separate slot namespace.
+        // Full level-8 windups reuse every surge slot (5..9). The earlier test
+        // incorrectly accepted losing the surge here. Compare both casting
+        // bodies against an idle DAT-driven reference through natural expiry.
         LocalAppearance->ClearActionMotion();Remote->Appearance->ClearActionMotion();
-        LocalFX->StopAllEffects();RemoteFX->StopAllEffects();
-        LocalFX->PlayEffect(Surge,1.f);RemoteFX->PlayEffect(Surge,1.f);
+        LocalFX->StopAllEffects();RemoteFX->StopAllEffects();FX->StopAllEffects();
+        LocalFX->PlayEffect(Surge,1.f);RemoteFX->PlayEffect(Surge,1.f);FX->PlayEffect(Surge,1.f);
         const auto* InitialSurge=LocalFX->ActiveEmitters.FindByPredicate([Surge](const auto& E){return E.SourcePlayScript==Surge;});
         if(!TestNotNull(Case+TEXT("surge creates its DAT slot"),InitialSurge))return false;
-        const uint32 Slot=InitialSurge->InstanceId;
-        int32 ReplacedFrame=INDEX_NONE;
-        for(int32 Frame=0;Frame<300;++Frame)
+        const uint32 Slot=InitialSurge->SlotId;
+        bool SameLifetime=true,SamePopulation=true,Visible=true,SameAge=true,CastOverlap=false;
+        int32 LastCastingFrame=0,OrbitSamples=0;
+        double MaxCastingOrbitError=0;
+        for(int32 Frame=0;Frame<2100;++Frame)
         {
-            if(Frame==60)
+            if(Frame==60 || Frame==240 || Frame==420 || Frame==600)
             {
                 LocalAppearance->PlayActionMotion(0x10000076,2.f,0x80000049);
                 Remote->Appearance->PlayActionMotion(0x10000076,2.f,0x80000049);
+                LocalAppearance->QueueActionMotion(0x40000032,2.f,0x80000049);
+                Remote->Appearance->QueueActionMotion(0x40000032,2.f,0x80000049);
             }
+            // Cancel one cast and refresh the local body while the surge runs.
+            if(Frame==500) LocalAppearance->ClearActionMotion();
+            if(Frame==510) { LocalFX->InitializeFromObject(Human,100);LocalFX->NotifyAppearanceReady(); }
             LocalAppearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
             Remote->Appearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+            FX->TickComponent(1.f/60,LEVELTICK_All,nullptr);
             LocalFX->TickComponent(1.f/60,LEVELTICK_All,nullptr);RemoteFX->TickComponent(1.f/60,LEVELTICK_All,nullptr);
-            const auto* OwnSlot=LocalFX->ActiveEmitters.FindByPredicate([Slot](const auto& E){return E.InstanceId==Slot;});
-            const auto* OtherSlot=RemoteFX->ActiveEmitters.FindByPredicate([Slot](const auto& E){return E.InstanceId==Slot;});
-            if(OwnSlot && OwnSlot->SourcePlayScript==0)
+            const auto* ReferenceSurge=FX->ActiveEmitters.FindByPredicate([Surge](const auto& E){return E.SourcePlayScript==Surge;});
+            const auto* OwnSurge=LocalFX->ActiveEmitters.FindByPredicate([Surge](const auto& E){return E.SourcePlayScript==Surge;});
+            if(OwnSurge) LastCastingFrame=Frame;
+            for(auto* CastingFX:{LocalFX,RemoteFX})
             {
-                TestTrue(Case+TEXT("windup replaces the same slot on local and remote bodies"),OtherSlot && OtherSlot->SourcePlayScript==0
-                    && OtherSlot->AuthoredEmitterId==OwnSlot->AuthoredEmitterId);
-                ReplacedFrame=Frame;
-                break;
+                const auto* CastingSurge=CastingFX->ActiveEmitters.FindByPredicate([Surge](const auto& E){return E.SourcePlayScript==Surge;});
+                SameLifetime &= (CastingSurge!=nullptr)==(ReferenceSurge!=nullptr);
+                if(!CastingSurge || !ReferenceSurge) continue;
+                SamePopulation &= CastingSurge->Particles.Num()==ReferenceSurge->Particles.Num();
+                SameAge &= FMath::IsNearlyEqual(CastingSurge->Age,ReferenceSurge->Age,.001f);
+                if(CastingSurge->Batch) Visible &= CastingSurge->Batch->IsVisible() && !CastingSurge->Batch->bHiddenInGame;
+                for(const auto& P:CastingSurge->Particles) if(P.Mesh.IsValid()) Visible &= P.Mesh->IsVisible() && !P.Mesh->bHiddenInGame;
+                CastOverlap |= CastingFX->ActiveEmitters.ContainsByPredicate([Slot](const auto& E){return E.SlotId==Slot && E.SourcePlayScript==0;});
+                if(Frame%30==0) for(const auto& P:CastingSurge->Particles)
+                {
+                    const float T=P.Age+float(CastingFX->ParticleTimeSinceUpdate);
+                    const FVector Anchor=P.bParentLocal ? CastingFX->GetParticleStartFrame(*CastingSurge).GetLocation() : P.StartOrigin;
+                    const FVector Orbit=FACEPosition::AceVectorToUnreal(FVector(P.C.X*FMath::Cos(P.B.X*T),
+                        P.C.Y*FMath::Sin(P.B.Y*T),P.C.Z*FMath::Cos(P.B.Z*T)),100);
+                    MaxCastingOrbitError=FMath::Max(MaxCastingOrbitError,FVector::Distance(P.Position,Anchor+P.Offset+T*P.A+Orbit));
+                    ++OrbitSamples;
+                }
+            }
+            if(Surge==0xA2 && Frame==480 && OwnSurge)
+            {
+                View->SetActorRotation((LocalAppearance->GetPartMesh(9)->GetComponentLocation()-View->GetActorLocation()).Rotation());
+                SaveCapture(*OwnSurge,480);
             }
         }
-        TestTrue(Case+TEXT("authored windup replaces surge before its normal expiry"),ReplacedFrame>=60 && ReplacedFrame<300);
-        AddInfo(Case+FString::Printf(TEXT("retail windup replaces slot %u after %.2f seconds"),Slot,float(ReplacedFrame-60)/60));
-        LocalAppearance->QueueActionMotion(0x40000032,2.f,0x80000049);
-        for(int32 Frame=0;Frame<1800;++Frame)
-        {
-            LocalAppearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
-            LocalFX->TickComponent(1.f/60,LEVELTICK_All,nullptr);
-        }
-        TestTrue(Case+TEXT("authored hooks and lifetimes finish the complete windup/cast"),LocalFX->ActiveEmitters.IsEmpty());
+        TestTrue(Case+TEXT("full windups, releases and cancellation preserve the complete surge lifetime"),SameLifetime);
+        TestTrue(Case+TEXT("casting preserves every authored surge particle"),SamePopulation);
+        TestTrue(Case+TEXT("casting does not restart or extend the surge clock"),SameAge);
+        TestTrue(Case+TEXT("surge particles remain visible while casting"),Visible);
+        TestTrue(Case+TEXT("surge continues its DAT orbit throughout casting"),OrbitSamples>20 && MaxCastingOrbitError<.05);
+        TestTrue(Case+TEXT("cast visuals and surge coexist even when their authored slots collide"),CastOverlap);
+        TestEqual(Case+TEXT("casting surge expires at the same frame as the idle baseline"),LastCastingFrame,LastSurgeFrame);
+        TestTrue(Case+TEXT("surge and cast particles all finish naturally"),LocalFX->ActiveEmitters.IsEmpty() && RemoteFX->ActiveEmitters.IsEmpty());
 
-        // Setup default scripts and animation hooks share source zero. Retail
-        // never destroys those merely because a cast animation completes.
+        // Reprocs refresh only their own visual, including direct-DID playback.
+        LocalFX->PlayEffect(Surge,1.f);
+        LocalFX->TickComponent(.5f,LEVELTICK_All,nullptr);
+        FACEDatAnimationHook CastHook; CastHook.Type=EACEAnimationHookType::CreateParticle;
+        CastHook.Id=0x32000122; CastHook.SecondaryId=Slot; CastHook.PartIndex=0xFFFFFFFFu;
+        LocalFX->DispatchAnimationHook(CastHook);
+        const uint32 ScriptId=0x3300125Bu+(Surge-0xA2u);
+        LocalFX->PlayScriptId(ScriptId,1.f);
+        const uint32 EmitterId=0x320009D1u+(Surge-0xA2u);
+        int32 SurgeCount=0;
+        for(const auto& E:LocalFX->ActiveEmitters) if(E.AuthoredEmitterId==EmitterId) ++SurgeCount;
+        TestEqual(Case+TEXT("a reproc replaces its previous surge without stacking"),SurgeCount,1);
+        TestTrue(Case+TEXT("a reproc does not remove the casting emitter"),LocalFX->ActiveEmitters.ContainsByPredicate(
+            [Slot](const auto& E){return E.InstanceId==Slot && E.SourcePlayScript==0;}));
+        FACEDatAnimationHook StopHook; StopHook.Type=EACEAnimationHookType::StopParticle; StopHook.Id=Slot;
+        LocalFX->DispatchAnimationHook(StopHook);
+        StopHook.Type=EACEAnimationHookType::DestroyParticle; LocalFX->DispatchAnimationHook(StopHook);
+        TestTrue(Case+TEXT("cast stop/destroy hooks leave the surge running"),LocalFX->ActiveEmitters.ContainsByPredicate(
+            [EmitterId](const auto& E){return E.AuthoredEmitterId==EmitterId && !E.bStopped;}));
+        LocalFX->ExecuteHook(StopHook,1.f,0,ScriptId);
+        TestFalse(Case+TEXT("a surge's own destroy hook still works"),LocalFX->ActiveEmitters.ContainsByPredicate(
+            [EmitterId](const auto& E){return E.AuthoredEmitterId==EmitterId;}));
+
+        // Direct/default-script entry points receive the same protection.
         LocalAppearance->ClearActionMotion();
         LocalFX->StopAllEffects();RemoteFX->StopAllEffects();
-        const uint32 ScriptId=0x3300125Bu+(Surge-0xA2u);
         LocalFX->PlayScriptInternal(ScriptId,1.f,0,0.f);RemoteFX->PlayScriptInternal(ScriptId,1.f,0,0.f);
         LocalAppearance->PlayActionMotion(0x40000032,2.f,0x80000049);
         for(int32 Frame=0;Frame<360;++Frame)
@@ -340,7 +386,6 @@ bool FACEParticlePresentationTest::RunTest(const FString&)
             LocalAppearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
             LocalFX->TickComponent(1.f/60,LEVELTICK_All,nullptr);RemoteFX->TickComponent(1.f/60,LEVELTICK_All,nullptr);
         }
-        const uint32 EmitterId=0x320009D1u+(Surge-0xA2u);
         const auto* OwnById=LocalFX->ActiveEmitters.FindByPredicate([EmitterId](const auto& E){return E.AuthoredEmitterId==EmitterId;});
         const auto* OtherById=RemoteFX->ActiveEmitters.FindByPredicate([EmitterId](const auto& E){return E.AuthoredEmitterId==EmitterId;});
         TestTrue(Case+TEXT("cast completion preserves independent default-script effects"),OwnById && OtherById);

@@ -16,6 +16,11 @@
 	"Installed": false,
 	"Modules": [
 		{
+			"Name": "ACERetailRender",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit"
+		},
+		{
 			"Name": "ACEOpenXR",
 			"Type": "Runtime",
 			"LoadingPhase": "PostConfigInit",

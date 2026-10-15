@@ -14,6 +14,7 @@
 #include "RenderingThread.h"
 #include "Misc/App.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Widgets/Input/SSlider.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUCMProfileStorageTest, "ACE.Plugins.LinkedProfiles",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
@@ -205,8 +206,26 @@ bool FACEUCMProfilePanelTest::RunTest(const FString&)
     const FString Monsters=CollectText(Host->MakeUCMPanel(TEXT("Monsters")));
     TestTrue(TEXT("Monster rules inherit global defaults"),Monsters.Contains(TEXT("Priority: use Combat default"))&&Monsters.Contains(TEXT("Attack Range: use Combat default")));
     TestTrue(TEXT("Monster search and name action exist"),Monsters.Contains(TEXT("Search"))&&Monsters.Contains(TEXT("Add monster by name")));
-    const FString Combat=CollectText(Host->MakeUCMPanel(TEXT("Combat")));
+    UCM->Profile->SetNumberField(TEXT("ring_min_targets"),4);
+    auto CombatPanel=Host->MakeUCMPanel(TEXT("Combat"));
+    const FString Combat=CollectText(CombatPanel);
     TestTrue(TEXT("Combat exposes both profile defaults"),Combat.Contains(TEXT("Default monster priority"))&&Combat.Contains(TEXT("Default monster attack range")));
+    TestTrue(TEXT("Ring count displays a whole number without percent"),Combat.Contains(TEXT("Minimum ring targets\n4\n")));
+    TMap<FName,TSharedPtr<SSlider>> Sliders;
+    TFunction<void(const TSharedRef<SWidget>&)> CollectSliders=[&](const TSharedRef<SWidget>& Widget)
+    {
+        if(Widget->GetType()==FName(TEXT("SSlider")))Sliders.Add(Widget->GetTag(),StaticCastSharedRef<SSlider>(Widget));
+        auto Children=Widget->GetChildren();for(int32 I=0;I<Children->Num();++I)CollectSliders(Children->GetChildAt(I));
+    };
+    CollectSliders(CombatPanel);CollectSliders(Host->MakeUCMPanel(TEXT("Monsters")));
+    for(const TCHAR* Key:{TEXT("ring_min_targets"),TEXT("monster_default_priority"),TEXT("priority")})
+    {
+        const auto* Slider=Sliders.Find(FName(Key));
+        if(!TestTrue(TEXT("Count/priority control is present"),Slider!=nullptr))continue;
+        TestEqual(TEXT("Count and priority sliders stop at ten"),(*Slider)->GetMaxValue(),10.f);
+        TestEqual(TEXT("Priority retains ignore while ring count starts at one"),(*Slider)->GetMinValue(),FString(Key)==TEXT("ring_min_targets")?1.f:-1.f);
+        TestEqual(TEXT("Count and priority controls use integer increments"),(*Slider)->GetStepSize(),1.f);
+    }
     if(FApp::CanEverRender())
     {
         FWidgetRenderer Renderer(false,true);

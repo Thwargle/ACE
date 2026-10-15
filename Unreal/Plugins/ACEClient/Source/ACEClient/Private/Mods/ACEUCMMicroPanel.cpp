@@ -56,7 +56,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
             if(!Host.IsValid())return;auto P=UCM();if(!P)return;
             if(Key==TEXT("combat")){P->Profile->SetStringField(Key,On?TEXT("auto"):TEXT("off"));P->Profile->SetBoolField(TEXT("manual_combat"),false);}
             else P->Profile->SetBoolField(Key,On);
-            Host->SaveProfile(P->Id,P->ProfileName,Host->ProfileJson(P->Id),false);
+            Host->SaveCurrentProfile(P->Id,false);
         });
     }
     Rows->AddSlot().AutoHeight().Padding(2,6)[SNew(SACEPluginText).AutoWrapText(true)

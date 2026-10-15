@@ -159,7 +159,10 @@ bool Save(const FString& Root, const FString& Name, TSharedPtr<FJsonObject>& Pro
 {
     if (!SafeName(Name) || !Profile) { Error = TEXT("Invalid UCM setup name or data"); return false; }
     auto NextLinks = Links ? Copy(Links) : MakeShared<FJsonObject>();
-    auto Resolved = Copy(Profile);
+    // Only top-level section replacement happens below. Nested edits already
+    // belong to the candidate; cloning every loot condition again is unnecessary.
+    TSharedPtr<FJsonObject> Resolved = MakeShared<FJsonObject>();
+    Resolved->Values = Profile->Values;
     TMap<FString, TSharedPtr<FJsonObject>> Writes, Previous;
     for (const auto& Section : Sections())
     {

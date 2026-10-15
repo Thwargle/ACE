@@ -1,5 +1,6 @@
 #include "ACEVTRegex.h"
 #include "Containers/StringConv.h"
+#include "Containers/LruCache.h"
 #if UE_ENABLE_ICU
 THIRD_PARTY_INCLUDES_START
 #include <unicode/uregex.h>
@@ -9,6 +10,13 @@ THIRD_PARTY_INCLUDES_END
 namespace ACEVTRegex
 {
 #if UE_ENABLE_ICU
+// Validation is a property of the exact pattern, not the current profile or
+// whether looting is enabled. Keep only diagnostics here, not ICU matchers:
+// large loot profiles have more unique patterns than the hot matcher cache.
+static thread_local TLruCache<FString,FString> ValidationCache(4096);
+#if WITH_DEV_AUTOMATION_TESTS
+static thread_local uint64 ValidationCompilations=0;
+#endif
 static URegularExpression* Compile(const FString& Input,FString& Error,FString* Normalized=nullptr)
 {
     FString Pattern;bool InClass=false;
@@ -113,12 +121,41 @@ bool Validate(const FString& Pattern,FString& Error)
 {
     Error.Empty();
 #if UE_ENABLE_ICU
-    if(auto* Regex=Compile(Pattern,Error)){uregex_close(Regex);return true;}
+    if(const auto* Cached=ValidationCache.FindAndTouch(Pattern))
+    {Error=*Cached;return Error.IsEmpty();}
+#if WITH_DEV_AUTOMATION_TESTS
+    ++ValidationCompilations;
+#endif
+    auto* Regex=Compile(Pattern,Error);
+    const bool Valid=Regex!=nullptr;
+    if(Regex)uregex_close(Regex);
+    // Bound memory as well as entry count. Oversized input still goes through
+    // the original validator, but cannot occupy a long-lived cache entry.
+    if(Pattern.Len()<=2048)ValidationCache.Add(Pattern,Error);
+    return Valid;
 #else
     Error=TEXT("This build lacks ICU regex support");
-#endif
     return false;
+#endif
 }
+#if WITH_DEV_AUTOMATION_TESTS
+uint64 ValidationCompilationsForTests()
+{
+#if UE_ENABLE_ICU
+    return ValidationCompilations;
+#else
+    return 0;
+#endif
+}
+int32 ValidationCacheEntriesForTests()
+{
+#if UE_ENABLE_ICU
+    return ValidationCache.Num();
+#else
+    return 0;
+#endif
+}
+#endif
 bool Match(const FString& Pattern,const FString& Text,TMap<FString,FString>& Captures,FString& Error)
 {
     Captures.Empty();Error.Empty();if(Text.Len()>4096){Error=TEXT("Regex input exceeds 4096 characters");return false;}

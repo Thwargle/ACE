@@ -6,6 +6,7 @@
 #include "ACEDatSubsystem.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
+#include "ACEInputBindings.h"
 #include "ACESession.h"
 #include "ACELandblockActor.h"
 #include "ACEWorldEntityActor.h"
@@ -166,7 +167,32 @@ bool FACEWorldLootPlacementTest::RunTest(const FString&)
             PC->InteractWithSelectedObject();
             TestEqual(TEXT("Player may retry F after the server rejects pickup"),CountAction(ACEGameAction::PutItemInContainer),2);
         }
-        else TestTrue(TEXT("Server-directed pickup reaches the table from the reported side"),PC->UseApproachPhase==AACEPlayerController::EACEUseApproachPhase::Holding);
+        else
+        {
+            TestTrue(TEXT("Server-directed pickup reaches the table from the reported side"),PC->UseApproachPhase==AACEPlayerController::EACEUseApproachPhase::Holding);
+            TestEqual(TEXT("Pickup approach cannot cancel the server inventory chain with MoveToState"),CountAction(ACEGameAction::MoveToState),0);
+            // A pickup has an inventory ACK, not the UseDone gate. Include the
+            // arrival and idle transition while that confirmation is delayed.
+            for(int32 Frame=0;Frame<120;++Frame)PC->PlayerTick(1.f/60);
+            TestEqual(TEXT("Waiting for pickup confirmation never sends an artificial stop"),CountAction(ACEGameAction::MoveToState),0);
+            TestEqual(TEXT("One F press remains one pickup through arrival"),CountAction(ACEGameAction::PutItemInContainer),1);
+            TestTrue(TEXT("Arrival still reports the final position to the server"),CountAction(ACEGameAction::AutonomousPosition)>0);
+            if(Guid==0x71003003)
+            {
+                // Explicit movement must still take control from the server.
+                FACEObjectMotionState Approach;Approach.MovementType=6;Approach.MoveToTargetGuid=Token.Guid;Approach.MoveToDistance=1.2f;
+                PC->HandleMotionUpdate(Self.Guid,Approach);
+                const FKey ForwardKey=ACEInputBindings::Get(EKeys::W,0).Key;
+                PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(ForwardKey,IE_Pressed,1.f));
+                PC->PlayerInput->ProcessInputStack({},1.f/60,false);
+                PC->MovementKeyPressOrder.Add(ForwardKey,++PC->MovementKeySequence);
+                const int32 BeforeManual=CountAction(ACEGameAction::MoveToState);
+                PC->PlayerTick(1.f/60);
+                TestFalse(TEXT("Manual movement cancels a pending pickup approach"),PC->bServerMoveToActive);
+                TestTrue(TEXT("Manual cancellation still sends its movement command"),CountAction(ACEGameAction::MoveToState)>BeforeManual);
+                PC->PlayerInput->FlushPressedKeys();PC->MovementKeyPressOrder.Reset();
+            }
+        }
         FACEBinaryWriter Ack;Ack.WriteUInt32(Token.Guid);Ack.WriteUInt32(Self.Guid);Ack.WriteInt32(0);Ack.WriteInt32(0);
         FACEBinaryReader AckReader(Ack.GetData());Session->HandleInventoryPutObjInContainer(AckReader);
         TestEqual(TEXT("Server confirmation places the token in inventory"),Session->WorldObjects[Token.Guid].ContainerId,Self.Guid);

@@ -1076,6 +1076,11 @@ bool FACEDatTextureResolver::ResolveSurfaceWithAppearance(uint32 SurfaceId, int3
 	}
 
 	Out.bAdditive = EnumHasAnyFlags(Surf.Type, EACESurfaceType::Additive);
+	// D3DPolyRender::SetSurface uses ONE/ONE for additive-only images, even
+	// if their file format contains alpha. bUsesAlpha is a material classification
+	// (and includes Additive), so it cannot identify the source blend factor.
+	if (Out.bAdditive && !bClipMap && !EnumHasAnyFlags(Surf.Type, EACESurfaceType::Alpha | EACESurfaceType::InvAlpha))
+		for (FColor& C : Out.Pixels) C.A = 255;
 	// ACViewer PremultiplyAlpha on A only: a *= (1 - Translucency). Soft glass (lifestones)
 	// needs this; ClipMap holes already have A=0 and stay holes.
 	// Additive rain curtains (0x080000C5 Translucency=0.5) must NOT be halved — Unreal

@@ -1,0 +1,21 @@
+#include "/Engine/Private/Common.ush"
+
+Texture2D SceneTexture;
+Texture2D ParticleTexture;
+SamplerState LinearSampler;
+float4 SceneUV;
+float4 ParticleUV;
+float4 OutputRect;
+float ParticleGamma;
+
+void MainPS(float4 ScreenUV : TEXCOORD0, float4 Position : SV_POSITION, out float4 OutColor : SV_Target0)
+{
+    float2 UV = (Position.xy - OutputRect.xy) * OutputRect.zw;
+    float4 Scene = SceneTexture.SampleLevel(LinearSampler, UV * SceneUV.xy + SceneUV.zw, 0);
+    float3 Particles = ParticleTexture.SampleLevel(LinearSampler, UV * ParticleUV.xy + ParticleUV.zw, 0).rgb;
+    // Retail D3D9 disables sRGB sampling/writes and blends SRCALPHA/ONE or
+    // ONE/ONE directly into the display buffer. Keep per-channel saturation;
+    // filmic highlight compression would change both hue and apparent density.
+    float3 Background = pow(max(Scene.rgb, 0), 1.0 / ParticleGamma);
+    OutColor = float4(pow(saturate(Background + max(Particles, 0)), ParticleGamma), Scene.a);
+}

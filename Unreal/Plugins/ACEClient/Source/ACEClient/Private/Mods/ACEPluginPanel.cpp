@@ -60,7 +60,7 @@ namespace ACEPluginPanelPrivate
         void Add(TSharedRef<SWidget> W) { (SettingsBody?SettingsBody:Body)->AddSlot().AutoHeight().Padding(5)[W]; }
         void Save(const TSharedPtr<FACEClientPlugin>& P)
         {
-            Host->SaveProfile(P->Id, P->ProfileName, Host->ProfileJson(P->Id), !P->HasPresentation());
+            Host->SaveCurrentProfile(P->Id, !P->HasPresentation());
             if(Json)Json->SetText(FText::FromString(Host->ProfileJson(P->Id)));
         }
         void Open(const FString& PluginId)

@@ -1295,13 +1295,14 @@ bool FACERetailParticleTimingTest::RunTest(const FString& Parameters)
                         RT->GameThread_GetRenderTargetResource()->ReadFloat16Pixels(Linear);
                         float Peak=0.f; for(const auto& Pixel:Linear) Peak=FMath::Max(Peak,Pixel.R.GetFloat());
                         const float Display=Fade*float(Alpha)/255.f;
-                        const float Expected=Display<=.04045f ? Display/12.92f : FMath::Pow((Display+.055f)/1.055f,2.4f);
+                        // Alpha is a blend weight, never an sRGB color to decode.
+                        const float Expected=MobileLDR ? Display*Display : Display;
                         TestTrue(FString::Printf(TEXT("Particle gain preserves alpha=%u fade=%.1f: captured peak %.4f expected %.4f"),Alpha,Fade,Peak,CaptureValue(Expected*Brightness)),FMath::Abs(Peak-CaptureValue(Expected*Brightness))<.012f);
                         Mid->SetScalarParameterValue(TEXT("ParticleBrightness"),1.f);
                         Capture->CaptureScene(); FlushRenderingCommands();
                         RT->GameThread_GetRenderTargetResource()->ReadFloat16Pixels(Linear);
                         Peak=0; for(const auto& Pixel:Linear) Peak=FMath::Max(Peak,Pixel.R.GetFloat());
-                        TestTrue(TEXT("Unity gain retains retail source modulation"),FMath::Abs(Peak-CaptureValue(Expected))<.012f);
+                        TestTrue(TEXT("Unity gain retains the source blend weight"),FMath::Abs(Peak-CaptureValue(Expected))<.012f);
                         Mid->SetScalarParameterValue(TEXT("ParticleBrightness"),Brightness);
                         const FQuat Facing=Card->GetComponentQuat();
                         Card->SetWorldRotation(Facing*FQuat(FVector::UpVector,PI));

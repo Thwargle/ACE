@@ -30,7 +30,7 @@ public class ACEClient : ModuleRules
 			"ImageWrapper",
 			"Landscape"
 		});
-		PrivateDependencyModuleNames.AddRange(new string[] { "RenderCore", "RHI", "HTTP", "XmlParser", "AssetRegistry" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "RenderCore", "RHI", "HTTP", "XmlParser", "AssetRegistry", "ACERetailRender" });
 		AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenSSL", "ICU");
 		if (Target.Platform == UnrealTargetPlatform.Linux)
 		{

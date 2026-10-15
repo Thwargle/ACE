@@ -64,6 +64,7 @@ class ACECLIENT_API UACEClientSubsystem : public UGameInstanceSubsystem, public 
 	friend class FACEUIWorkloadTest;
 	friend class FACEPluginEquipmentTest;
 	friend class FACEPluginRequestsTest;
+	friend class FACEUCMLootLatencyTest;
     friend class FACEPluginCompanionTest;
     friend class FACEPluginPublicAPITest;
 	friend class FACEItemToolsTest;

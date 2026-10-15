@@ -4,6 +4,7 @@
 #include "ACESession.h"
 #include "Dat/ACEStreamingBudget.h"
 #include "ACELoginSettings.h"
+#include "ACERetailParticleView.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "VR/ACEVRWidgetComponent.h"
 #include "VR/ACEVRPointerVisuals.h"
@@ -395,6 +396,10 @@ namespace
 		}
 
 		Mat->MaterialDomain = MD_Surface;
+		// Reserve the desktop AfterDOF buffer for additive particle colors.
+		// Other DAT transparency remains in the world pass. Mobile/VR continue
+		// their native composition because the view does not enable our flag.
+		Mat->TranslucencyPass = bRetailParticle ? MTP_AfterDOF : MTP_BeforeDOF;
 		Mat->TwoSided = bTwoSided;
 		const bool bLitWorld = bWorldLit
 			&& (Kind == EACEAceMaterialKind::Opaque || Kind == EACEAceMaterialKind::Masked);
@@ -841,19 +846,18 @@ namespace
             }
             if (bRetailParticle)
             {
-                // Retail D3DPolyRender modulates texture RGB and SRCALPHA with
-                // sRGB sampling/writes disabled. A 30% glow is 0.3 in display
-                // space, not 0.3 linear (which displays as 0.58 and hides stars).
-                // Keep the shared sRGB texture usable by the sky material, but
-                // evaluate the particle's source contribution in display space.
-                // A modest output gain improves visibility in the linear scene
-                // without clipping sprite colors or changing the authored fade.
+                // D3DPolyRender::SetSurface uses SRCALPHA/ONE for Alpha|Additive.
+                // Enabled desktop views accumulate display-space source colors
+                // in the reserved particle pass, then composite after tone mapping.
+                // Cancel pre-exposure here so exposure cannot tint/scale that data.
+                // Mobile LDR already blends in display space; raw HDR captures
+                // and other views retain their ordinary linear contribution.
                 auto* Brightness = NewObject<UMaterialExpressionScalarParameter>(Mat);
                 Brightness->ParameterName = TEXT("ParticleBrightness");
                 Brightness->DefaultValue = 1.f;
                 auto* Source = NewObject<UMaterialExpressionCustom>(Mat);
                 Source->OutputType = CMOT_Float3;
-                Source->Code = TEXT("float3 t=lerp(T*12.92,1.055*pow(max(T,0.0),1.0/2.4)-0.055,step(0.0031308,T)); float3 c=saturate(t*D*L)*saturate(A*O); return max(B,0.0)*lerp(c/12.92,pow((c+0.055)/1.055,2.4),step(0.04045,c));");
+                Source->Code = TEXT("float3 t=lerp(T*12.92,1.055*pow(max(T,0.0),1.0/2.4)-0.055,step(0.0031308,T)); float3 c=saturate(t*D*L)*saturate(A*O);\n#if OUTPUT_GAMMA_SPACE\nreturn c*c*max(B,0.0);\n#else\nif ((View.PostVolumeUserFlags & 1073741824) != 0) return c * max(B,0.0) * View.OneOverPreExposure;\nreturn T*D*L*saturate(A*O)*max(B,0.0);\n#endif\n");
                 const auto Input = [&](const TCHAR* Name, UMaterialExpression* Expression, int32 Index=0)
                 { FCustomInput I; I.InputName=Name; I.Input.Expression=Expression; I.Input.OutputIndex=Index; Source->Inputs.Add(I); };
                 Input(TEXT("T"),Sample); Input(TEXT("D"),DiffuseStrength); Input(TEXT("L"),EmissiveStrength);
@@ -864,7 +868,7 @@ namespace
                 EditorOnly->ExpressionCollection.AddExpression(Source);
                 EditorOnly->ExpressionCollection.AddExpression(One);
                 EditorOnly->EmissiveColor.Expression=Source;
-                // Alpha is already included above, before conversion to linear.
+                // Alpha is already included in the source contribution above.
                 EditorOnly->Opacity.Expression=One; EditorOnly->Opacity.OutputIndex=0;
             }
             if (bSurfaceShadow)
@@ -1115,6 +1119,7 @@ void UACEDatSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 void UACEDatSubsystem::Deinitialize()
 {
+	RetailParticleView.Reset();
 	if (RuntimeMaterialPreload) RuntimeMaterialPreload->CancelHandle();
 	RuntimeMaterialPreload.Reset();
 	bRuntimeMaterialPreloadStarted = false;
@@ -2920,7 +2925,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceOutdoorLitMaskedMaterialBase()
 
 UMaterialInterface* UACEDatSubsystem::EnsureAceUnlitTranslucentMaterialBase()
 {
-	static constexpr int32 TransMatVersion = 10;
+	static constexpr int32 TransMatVersion = 11;
 	static int32 AppliedTransMatVersion = 0;
 	if (AppliedTransMatVersion != TransMatVersion)
 	{
@@ -2933,12 +2938,11 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceUnlitTranslucentMaterialBase()
 		return TranslucentMaterialBase;
 	}
 
-	// Unlit often ignores the Opacity pin. Multiply emissive by OpacityMul so particle
-	// StartTrans (fog cards 0.80) actually fades instead of painting opaque white sheets.
+	// The blend stage applies OpacityMul; multiplying emissive as well squares it.
 	TranslucentMaterialBase = CreateAceOverlayMaterial(
-		TEXT("M_ACEUnlitTranslucent_v10"), EACEAceMaterialKind::Translucent,
+		TEXT("M_ACEUnlitTranslucent_v11"), EACEAceMaterialKind::Translucent,
 		/*bDisableFog*/ false, /*bDisableDepthTest*/ false, /*bForceUvWrap*/ false,
-		/*bEmissiveTimesOpacity*/ true, /*bTwoSided*/ false, /*bWorldLit*/ false,
+		/*bEmissiveTimesOpacity*/ false, /*bTwoSided*/ false, /*bWorldLit*/ false,
         /*bOpacityTexAlphaOnly*/ false, /*bEmissiveTimesTexAlpha*/ false,
         /*bStaticVertexLighting*/ false, /*bExaminationLighting*/ false, /*bSurfaceShadow*/ true);
 	if (TranslucentMaterialBase)
@@ -2952,7 +2956,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceUnlitTranslucentMaterialBase()
 
 UMaterialInterface* UACEDatSubsystem::EnsureAceUnlitAdditiveMaterialBase()
 {
-	static constexpr int32 AddMatVersion = 9;
+	static constexpr int32 AddMatVersion = 10;
 	static int32 AppliedAddMatVersion = 0;
 	if (AppliedAddMatVersion != AddMatVersion)
 	{
@@ -2966,9 +2970,9 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceUnlitAdditiveMaterialBase()
 	}
 
 	AdditiveMaterialBase = CreateAceOverlayMaterial(
-		TEXT("M_ACEUnlitAdditive_v9"), EACEAceMaterialKind::Additive,
+		TEXT("M_ACEUnlitAdditive_v10"), EACEAceMaterialKind::Additive,
 		/*bDisableFog*/ false, /*bDisableDepthTest*/ false, /*bForceUvWrap*/ false,
-		/*bEmissiveTimesOpacity*/ true, /*bTwoSided*/ false);
+		/*bEmissiveTimesOpacity*/ false, /*bTwoSided*/ false);
 	if (AdditiveMaterialBase)
 	{
 		UE_LOG(LogTemp, Log, TEXT("ACEDat: created runtime Unlit additive ACETexture material (overlays)"));
@@ -2980,7 +2984,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceUnlitAdditiveMaterialBase()
 
 UMaterialInterface* UACEDatSubsystem::EnsureAceBatchedParticleMaterialBase(bool bAdditive)
 {
-	return CreateAceOverlayMaterial(bAdditive ? TEXT("M_ACEBatchedParticleAdditive_v1") : TEXT("M_ACEBatchedParticleTranslucent_v1"),
+	return CreateAceOverlayMaterial(bAdditive ? TEXT("M_ACEBatchedParticleAdditive_v3") : TEXT("M_ACEBatchedParticleTranslucent_v1"),
 		bAdditive ? EACEAceMaterialKind::Additive : EACEAceMaterialKind::Translucent,
 		false, false, false, false, false, false, bAdditive, false, false, false, false, false, bAdditive, true);
 }
@@ -3000,7 +3004,7 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceParticleTranslucentMaterialBase()
 
 UMaterialInterface* UACEDatSubsystem::EnsureAceParticleAdditiveMaterialBase()
 {
-	static constexpr int32 ParticleAddMatVersion = 7;
+	static constexpr int32 ParticleAddMatVersion = 9;
 	static int32 AppliedParticleAddMatVersion = 0;
 	if (AppliedParticleAddMatVersion != ParticleAddMatVersion)
 	{
@@ -3013,12 +3017,11 @@ UMaterialInterface* UACEDatSubsystem::EnsureAceParticleAdditiveMaterialBase()
 		return ParticleAdditiveMaterialBase;
 	}
 
-	// Apply authored translucency/texture alpha in retail display color space,
-	// then convert the source contribution for Unreal's linear framebuffer.
+	// Apply authored translucency/texture alpha once in the framebuffer's color space.
 	// The mesh builder emits the authored back face. A two-sided material would
 	// render both copies from either view and double the additive contribution.
 	ParticleAdditiveMaterialBase = CreateAceOverlayMaterial(
-		TEXT("M_ACEUnlitParticleAdditive_v7"), EACEAceMaterialKind::Additive,
+		TEXT("M_ACEUnlitParticleAdditive_v9"), EACEAceMaterialKind::Additive,
 		/*bDisableFog*/ false, /*bDisableDepthTest*/ false, /*bForceUvWrap*/ false,
 		/*bEmissiveTimesOpacity*/ false, /*bTwoSided*/ false, /*bWorldLit*/ false,
 		/*bOpacityTexAlphaOnly*/ true, /*bEmissiveTimesTexAlpha*/ false,
@@ -3549,6 +3552,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateStaticMeshMaterial(uint32 Surfa
 
 UMaterialInterface* UACEDatSubsystem::GetOrCreateParticleMaterial(uint32 SurfaceId)
 {
+	if (!RetailParticleView) RetailParticleView = CreateACERetailParticleView(GetWorld());
 	if (SurfaceId == 0 || !TextureResolver)
 	{
 		return nullptr;
@@ -3609,16 +3613,12 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateParticleMaterial(uint32 Surface
 	{
 		// Never GetOrCreateUTexture here — that path strips A when bUsesAlpha is false
 		// (DXT5 / Image-only sprites with holes only in the pixel A channel).
-		TArray<FColor> Pix = Decoded.Pixels;
-		// Retail additive-only surfaces use ONE/ONE. Keep their RGB intact and
-		// alpha opaque; synthesizing luma alpha darkens every colored texel twice.
-		// Explicit Alpha and ClipMap surfaces retain their authored alpha channel.
-		if (Decoded.bAdditive && !Decoded.bUsesAlpha)
-			for (FColor& P : Pix) P.A = 255;
+		// The resolver handles ONE/ONE versus SRCALPHA/ONE using the raw
+		// surface flags; bUsesAlpha also classifies additive materials.
         // Retail ImgTex caps at four levels; RenderDeviceD3D uses linear min/mag
         // with point mip selection. Extra 2x2/1x1 levels erase small star shapes.
 		if (UTexture2D* SpriteTex = FACEDatTextureResolver::CreateTransientRgbaWithMips(
-			Decoded.Width, Decoded.Height, Pix, /*bUsesAlpha*/ true,
+			Decoded.Width, Decoded.Height, Decoded.Pixels, /*bUsesAlpha*/ true,
 			TA_Wrap, TA_Wrap, /*bPremultiplyAlpha*/ false, /*bDilateRgbIntoTransparent*/ false,
             /*MaxMipLevels*/ 4, /*Filter*/ TF_Bilinear))
 		{

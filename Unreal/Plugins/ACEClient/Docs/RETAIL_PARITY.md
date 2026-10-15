@@ -3103,3 +3103,103 @@ scroll consumption session was performed.
 Validation: Development editor build succeeded. ScrollLearning, LegacyAdapters, and RouteAndTellRequests passed (three tests, zero errors). The broader request fixture emits 24 missing-position JSON warnings from its existing snapshots; the new scroll snapshots initialize position. Evidence: Saved/ScrollReview/build.log and Saved/ScrollReview/Tests/index.json.
 
 Release v105 validation: the packaged Windows client passed 15 focused suites, including chess, Olthoi previews/targeting/chat, enchantment panels, plugin requests, VR menus, and updater behavior. The packaged chess fixture now makes its loopback sender nonblocking and closes it on scope exit, matching live session socket ownership; otherwise the following subsystem tick could block on an idle test socket. One chat clipboard run failed while Windows denied clipboard access; the final run passed. See Saved/ReleaseValidation/v105.
+
+### Aetheria during casting (2026-10-14)
+
+Human MagicPowerUp08 (`030005A0`) creates emitters in slots 5–9, which
+overlap all five Aetheria surge scripts (`3300125B`–`3300125F`). The prior
+particle test accepted that windup destroying a surge. A complete cast now
+has to preserve its visual through the same natural expiry as an idle body.
+
+The available retail decompile's `ParticleManager::CreateParticleEmitter`
+(`0051B6C0`) replaces occupied slots; it does not establish the reported
+retail behavior of surges surviving casts. The UE renderer therefore makes
+an explicit compatibility exception: each Aetheria kind owns isolated slots.
+It still uses the DAT's emitters, orbit, birth intervals and lifetimes. No
+timer is restarted by casting and no enchantment-duration approximation is
+used. A new proc replaces only its previous visual, including when enum and
+direct-script messages are mixed. Ordinary effect slots retain their existing
+replacement/stop behavior.
+
+`ACE.Rendering.ParticlePresentation` compares all five surges on local and
+remote casting bodies with an idle reference, including repeated full windups,
+release, cancellation, appearance refresh, explicit stop/destroy hooks and
+reprocs. Before the fix, casts ended these effects after about two seconds;
+their DAT-driven idle lifetimes are approximately 16–29 seconds. This is not
+evidence of identical retail internals; live client comparison remains required.
+
+Validation: Windows Development editor build succeeded. ParticlePresentation,
+ParticleTiming and ParticleBatchLifetime passed with zero errors. ParticleTiming
+emits two existing unresolved PlayEffect `0x41` fixture warnings. The presentation
+test also samples the authored orbit during casting and verifies exact expiry
+against the idle reference. Evidence: `Saved/AetheriaCastingReview/Before` and
+`Saved/AetheriaCastingReview/After`.
+
+### Desktop particle brightness and color (2026-10-14)
+
+Retail `RenderDeviceD3D` disables both `D3DRS_SRGBWRITEENABLE` and
+`D3DSAMP_SRGBTEXTURE`. `D3DPolyRender::SetSurface` (`0059C4D0`) uses
+SRCALPHA/ONE for Alpha|Additive and ONE/ONE for additive-only surfaces.
+These contributions accumulate in display color space, with channel saturation.
+Unreal's linear scene blending followed by filmic tone mapping changes that
+result, even when source texture colors and particle lifetimes are correct.
+
+Desktop SDR views now retain additive particle contributions in the AfterDOF
+buffer and composite them after tone mapping. Source alpha/fade is applied once,
+pre-exposure is canceled, and overlapping glows use retail's display-space sum.
+Other DAT transparency uses the world pass; world lighting and tone mapping
+remain intact. The isolated pass preserves opaque depth occlusion. It requires
+separate translucency and disables depth of field for these views so the engine
+cannot precompose the reserved buffer. AC gameplay normally has DOF disabled.
+The new shader module loads at PostConfigInit; the normal material bake must
+regenerate runtime parents before packaging, and Quest source sync includes the
+shader directory.
+
+The final-output GPU regression exposed what earlier white/HDR-only checks
+missed: with filmic processing, white measured approximately 0.729 instead of
+1.0, and RGB (128,32,224) became (0.227,0.005,0.651). The corrected output is
+approximately (0.502,0.125,0.878), including with filmic processing enabled.
+Coverage includes pooled and batched sprites, colored backgrounds, overlapping
+layers, alpha/fade values, foreground occlusion, FXAA/TAA/TSR, and actual DAT
+surfaces for the Emissary, island portal and Tower Guardian's sword. Additive-only
+surfaces ignore unused texture alpha, while Alpha|Additive preserves it.
+
+Validation: Windows Development editor build succeeded; all 11 focused rendering,
+particle, material-packaging and VR widget tests passed with zero errors. The
+fixtures emitted two unresolved PlayEffect `0x41` warnings and one transient-world
+actor cleanup warning. Evidence: `Saved/ParticleColorReview/final-build.log` and
+`Saved/ParticleColorReview/Final/index.json`. Aetheria casting/lifetime regression
+remains green. No live side-by-side retail session was performed in this pass.
+
+Limits: this composite targets desktop SDR. HDR output, stereo VR, mobile,
+raw HDR captures, debug views and views without separate translucency retain
+their existing native composition. Mobile LDR already blends in display space.
+Linux/Quest builds, HDR/VR visual comparisons, translucent-surface interleaving
+and exact retail texture-filtering parity were not validated by these pixel tests.
+
+### Pickup approach cancellation (2026-10-15)
+
+Retail `ACCWeenieObject::UIAttemptPutInContainer` sends the inventory request
+once. Server-directed movement then uses the normal MoveTo path and
+`CommandInterpreter::SendPositionEvent` to report progress; arriving is not a
+new player movement command. ACE's `GameActionMoveToState.Handle` cancels an
+active `CreateMoveToChain` when a new movement command arrives.
+
+The desktop controller protected ordinary Use approaches from those commands,
+but missed inventory approaches because they do not set the UseDone busy flag.
+The regression reproduced two unsolicited MoveToState packets while walking to
+and arriving at a token. Those packets could cancel pickup, leaving the player
+beside the item until F was pressed again. The movement-send gate now covers
+every active server approach. Position reports continue normally, and explicit
+movement still cancels the approach. Inventory contents still change only after
+the server confirms the transfer; no pickup retry or range override was added.
+
+`ACE.RetailParity.WorldLootPlacement` checks the real outgoing action packets,
+arrival with delayed confirmation, a single pickup request, position reporting,
+manual movement cancellation, and blocked approaches using retail castle data.
+Evidence is under `Saved/PickupApproachReview/{Before,After}`.
+
+Validation: Win64 Development editor build succeeded. WorldLootPlacement,
+WorldEntry, InteractionRecovery, PvPCombat and EmoteTransitions passed with no
+test errors. This was isolated packet/geometry testing, not a live-server run;
+Linux and Quest binaries were not built in this pass.
