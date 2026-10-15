@@ -81,6 +81,26 @@ void UACEPluginSubsystem::SetWaypointMapOpacity(float Value)
     if(auto P=Find(TEXT("waypoint")))
     {P->Profile->SetNumberField(TEXT("map_opacity"),FMath::Clamp(Value,.1f,1.f));SaveProfile(P->Id,P->ProfileName,ProfileJson(P->Id),false);}
 }
+namespace
+{
+FString WaypointZoomKey(bool Overlay,bool Dungeon)
+{return FString(TEXT("waypoint.zoom."))+(Overlay?TEXT("pinned."):TEXT("window."))+(Dungeon?TEXT("dungeon"):TEXT("world"));}
+double DefaultWaypointZoom(bool Overlay,bool Dungeon){return Dungeon?3.5:(Overlay?8.:1.);}
+}
+double UACEPluginSubsystem::WaypointMapZoom(bool Overlay,bool Dungeon) const
+{
+    const double Default=DefaultWaypointZoom(Overlay,Dungeon);double Value=Default;
+    if(Settings)Settings->TryGetNumberField(WaypointZoomKey(Overlay,Dungeon),Value);
+    return FMath::IsFinite(Value)?FMath::Clamp(Value,.6,48.):Default;
+}
+void UACEPluginSubsystem::SetWaypointMapZoom(bool Overlay,bool Dungeon,double Value)
+{
+    if(!FMath::IsFinite(Value))return;
+    Value=FMath::Clamp(Value,.6,48.);
+    if(Value==WaypointMapZoom(Overlay,Dungeon))return;
+    if(!Settings)Settings=MakeShared<FJsonObject>();
+    Settings->SetNumberField(WaypointZoomKey(Overlay,Dungeon),Value);SaveSettings();
+}
 void UACEPluginSubsystem::SetWaypoint(FVector2D Point,uint32 Dungeon)
 {
     if(!IsWaypointEnabled() || !FMath::IsFinite(Point.X) || !FMath::IsFinite(Point.Y) || FMath::Abs(Point.X)>102 || FMath::Abs(Point.Y)>102)return;
@@ -149,7 +169,6 @@ const TArray<FACEWaypointLandmark>& UACEPluginSubsystem::GetWaypointLocations()
 namespace
 {
 const FLinearColor Accent(1,.76f,.25f),Ink(.94f,.9f,.8f),Muted(.65f,.59f,.45f);
-const FSlateBrush& Background(){return FACEPluginStyle::Current()->Background;}
 TSharedRef<STextBlock> WaypointLabel(const FString& S,int Size=16){return SNew(SACEPluginText).Text(FText::FromString(S)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size)).ColorAndOpacity(Ink).AutoWrapText(true);}
 const FButtonStyle& ButtonStyle() {return FACEPluginStyle::Current()->Button;}
 TSharedRef<SButton> WaypointButton(const FString& S,TFunction<void()> Click)
@@ -187,7 +206,7 @@ class SWaypointArrow : public SLeafWidget
 {
 public:
     SLATE_BEGIN_ARGS(SWaypointArrow){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_END_ARGS()
-    void Construct(const FArguments& A){Host=A._Host;FACEPluginStyle::Use(A._Host);SetVisibility(EVisibility::HitTestInvisible);}
+    void Construct(const FArguments& A){Host=A._Host;FACEPluginStyle::Use(A._Host,TEXT("waypoint.arrow"));SetVisibility(EVisibility::HitTestInvisible);}
     FVector2D ComputeDesiredSize(float)const override{return FVector2D(260,190);}
     void Tick(const FGeometry& G,double T,float D)override{SLeafWidget::Tick(G,T,D);Invalidate(EInvalidateWidgetReason::Paint);}
     int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& Out,int32 L,const FWidgetStyle&,bool)const override
@@ -219,21 +238,32 @@ class SWaypointMap : public SLeafWidget
 {
     friend class FACEWaypointOverlayTest;
 public:
-    SLATE_BEGIN_ARGS(SWaypointMap){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(bool,Overlay) SLATE_END_ARGS()
+    SLATE_BEGIN_ARGS(SWaypointMap):_Host(nullptr),_Overlay(false){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(bool,Overlay) SLATE_END_ARGS()
     void Construct(const FArguments& A)
     {
-        Host=A._Host;FACEPluginStyle::Use(A._Host);Overlay=A._Overlay;SetClipping(EWidgetClipping::ClipToBounds);
+        Host=A._Host;Retail=FACEPluginStyle::Use(A._Host,A._Overlay?TEXT("waypoint.dungeon"):TEXT("waypoint.map"));Overlay=A._Overlay;SetClipping(EWidgetClipping::ClipToBounds);
         if(Host.IsValid())
         {Resources.Reset(NewObject<UACEUIResourceResolver>());Resources->Initialize(Host->GetGameInstance()->GetSubsystem<UACEDatSubsystem>());MapTexture.Reset(Resources->ResolveTexture(0x0600127D));MapBrush.SetResourceObject(MapTexture.Get());MapBrush.DrawAs=ESlateBrushDrawType::Image;}
-        if(Overlay)Zoom=PinnedWorldZoom;
+        Zoom=Host.IsValid()?Host->WaypointMapZoom(Overlay,false):DefaultWaypointZoom(Overlay,false);
         SetToolTipText(FText::FromString(Overlay?TEXT("Drag to move • Bottom-right corner to resize • Wheel to zoom • Configure in the map window"):TEXT("Drag to pan • Wheel to zoom • Click a marker or map position to navigate")));
     }
     FVector2D ComputeDesiredSize(float)const override{return FVector2D(560,450);}
     void SetSearch(const FString& Value){Search=Value.Left(128);NextMarkers=0;}
-    void ResetView(){Zoom=Dungeon?3.5:1;Pan=FVector2D::ZeroVector;Invalidate(EInvalidateWidgetReason::Paint);}
+    void ResetView()
+    {
+        Zoom=DefaultWaypointZoom(Overlay,Dungeon);Pan=FVector2D::ZeroVector;
+        if(Host.IsValid())Host->SetWaypointMapZoom(Overlay,Dungeon,Zoom);
+        if(Overlay)CenterOnPlayer();Invalidate(EInvalidateWidgetReason::Paint);
+    }
     void CenterOnPlayer(){if(Host.IsValid()){const auto P=Host->WaypointPlayerPosition();if(P.IsValid()){const auto C=ACEWaypoint::Coordinates(P);Pan=-(Project(C,LastSize)-LastSize*.5-Pan);}}}
     void ChangeZoom(double Factor,FVector2D Cursor)
-    {const double Old=Zoom;Zoom=FMath::Clamp(Zoom*Factor,.6,48.);Pan=Cursor-LastSize*.5-(Cursor-LastSize*.5-Pan)*(Zoom/Old);if(Overlay){(Dungeon?PinnedDungeonZoom:PinnedWorldZoom)=Zoom;CenterOnPlayer();}Invalidate(EInvalidateWidgetReason::Paint);}
+    {
+        if(!FMath::IsFinite(Factor)||Factor<=0)return;
+        const double Old=Zoom;Zoom=FMath::Clamp(Zoom*Factor,.6,48.);
+        Pan=Cursor-LastSize*.5-(Cursor-LastSize*.5-Pan)*(Zoom/Old);
+        if(Host.IsValid())Host->SetWaypointMapZoom(Overlay,Dungeon,Zoom);
+        if(Overlay)CenterOnPlayer();Invalidate(EInvalidateWidgetReason::Paint);
+    }
     FReply OnMouseWheel(const FGeometry& G,const FPointerEvent& E)override{LastSize=G.GetLocalSize();ChangeZoom(FMath::Pow(1.25,E.GetWheelDelta()),G.AbsoluteToLocal(E.GetScreenSpacePosition()));return FReply::Handled();}
     FReply OnMouseButtonDown(const FGeometry& G,const FPointerEvent& E)override
     {if(Overlay||E.GetEffectingButton()!=EKeys::LeftMouseButton)return FReply::Unhandled();Press=Last=G.AbsoluteToLocal(E.GetScreenSpacePosition());Dragged=false;return FReply::Handled().CaptureMouse(SharedThis(this));}
@@ -266,8 +296,8 @@ public:
         const bool Inside=(uint32(Player.CellId)&65535)>=256;
         const bool NextDungeon=Overlay?Inside:H->WaypointOption(TEXT("dungeon"),false);
         if(Dungeon!=NextDungeon || (NextDungeon && (LB!=Landblock || Inside!=WasInside)))
-        {Dungeon=NextDungeon;Landblock=LB;WasInside=Inside;NextMarkers=0;NextCellRetry=0;Floors.Reset();Contours=FACEDungeonMapContours();Environments.Reset();CellIndex=0;CellCount=0;ResetView();
-         if(Overlay)Zoom=Dungeon?PinnedDungeonZoom:PinnedWorldZoom;
+        {Dungeon=NextDungeon;Landblock=LB;WasInside=Inside;NextMarkers=0;NextCellRetry=0;Floors.Reset();Contours=FACEDungeonMapContours();Environments.Reset();CellIndex=0;CellCount=0;
+         Zoom=H->WaypointMapZoom(Overlay,Dungeon);Pan=FVector2D::ZeroVector;Invalidate(EInvalidateWidgetReason::Paint);
          if(Dungeon)CenterOnPlayer();}
         // The overlay may first open indoors or before the portal DAT is ready.
         if(!Dungeon&&!MapTexture.IsValid()&&Resources.IsValid()&&T>=NextMapRetry)
@@ -309,7 +339,7 @@ public:
         auto DrawText=[Opacity](FSlateWindowElementList& O,int Layer,const FGeometry& Geo,FVector2D At,const FString& S,int Size,FLinearColor Color,bool Center=false){Color.A*=Opacity;Text(O,Layer,Geo,At,S,Size,Color,Center);};
         auto DrawTriangle=[Opacity](FSlateWindowElementList& O,int Layer,const FGeometry& Geo,FVector2D A,FVector2D B,FVector2D C,FLinearColor Color){Color.A*=Opacity;Triangle(O,Layer,Geo,A,B,C,Color);};
         const FVector2D Size=G.GetLocalSize();
-        if(!Overlay)FSlateDrawElement::MakeBox(Out,L,G.ToPaintGeometry(),&Background(),ESlateDrawEffect::None,FLinearColor(.015f,.024f,.04f));
+        if(!Overlay)FSlateDrawElement::MakeBox(Out,L,G.ToPaintGeometry(),&Retail->Background,ESlateDrawEffect::None,FLinearColor(.015f,.024f,.04f)*Retail->Background.TintColor.GetSpecifiedColor());
         Out.PushClip(FSlateClippingZone(G));
         if(!Dungeon && MapTexture.IsValid())
         {
@@ -365,7 +395,7 @@ public:
                 if(Hovered||!Labels.ContainsByPredicate([&](const FBox2D& Other){return Other.Intersect(Box);}))
                 {
                     Labels.Add(Box);
-                    if(!Overlay)FSlateDrawElement::MakeBox(Out,L+3,G.ToPaintGeometry(Box.GetSize(),FSlateLayoutTransform(Box.Min)),&Background(),ESlateDrawEffect::None,FLinearColor(0,0,0,.85f));
+                    if(!Overlay)FSlateDrawElement::MakeBox(Out,L+3,G.ToPaintGeometry(Box.GetSize(),FSlateLayoutTransform(Box.Min)),&Retail->Background,ESlateDrawEffect::None,FLinearColor(0,0,0,.85f)*Retail->Background.TintColor.GetSpecifiedColor());
                     DrawText(Out,L+4,G,At,Label,13,Ink);
                 }
             }
@@ -408,12 +438,13 @@ private:
     struct FMarker{FVector2D Point;FString Name;bool Portal=false,Detailed=false;mutable FVector2D LabelSize=FVector2D(-1,-1);};
     struct FFloor{TArray<FVector2D> Points;double Z=0;};
     TWeakObjectPtr<UACEPluginSubsystem> Host;
+    TSharedPtr<FACEPluginStyle> Retail;
     TStrongObjectPtr<UACEUIResourceResolver> Resources;TStrongObjectPtr<UTexture2D> MapTexture;FSlateBrush MapBrush;
     FACEWaypointTiles Tiles;
     TArray<FMarker> Markers;mutable TArray<int32> PaintedMarkers;TArray<FFloor> Floors;FACEDungeonMapContours Contours;TMap<uint32,FACEDatEnvironment> Environments;
     FACEPosition Player;FVector2D Pan=FVector2D::ZeroVector,Press,Last,Hover=FVector2D(-100,-100),LastSize=FVector2D(560,450);
     FVector2D MapUp=FVector2D(0,1);
-    double Zoom=1,PinnedWorldZoom=8,PinnedDungeonZoom=3.5,NextMarkers=0,NextCellRetry=0,NextMapRetry=0;bool Dragged=false,Dungeon=false,WasInside=false,Overlay=false;FString Search;uint32 Landblock=0,CellIndex=0,CellCount=0;
+    double Zoom=1,NextMarkers=0,NextCellRetry=0,NextMapRetry=0;bool Dragged=false,Dungeon=false,WasInside=false,Overlay=false;FString Search;uint32 Landblock=0,CellIndex=0,CellCount=0;
     FVector2D Center()const{return Dungeon?ACEWaypoint::Coordinates(FACEPositionForCenter()):FVector2D::ZeroVector;}
     FACEPosition FACEPositionForCenter()const{FACEPosition P;P.CellId=int32(Landblock|0x100);P.Location=FVector(96,96,0);return P;}
     double PixelsPerUnit(FVector2D Size)const{return FMath::Min(Size.X,Size.Y)*Zoom/(Dungeon?1.5:204.);}
@@ -486,7 +517,7 @@ public:
     SLATE_BEGIN_ARGS(SWaypointPanel):_ShowTitle(true){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(bool,Map) SLATE_ARGUMENT(bool,ShowTitle) SLATE_END_ARGS()
     void Construct(const FArguments& A)
     {
-        Host=A._Host;FACEPluginStyle::Use(A._Host);
+        Host=A._Host;const auto PanelStyle=FACEPluginStyle::Use(A._Host,A._Map?TEXT("waypoint.map"):TEXT("waypoint"));
         ShowTitle=A._ShowTitle;
         auto Body=SNew(SVerticalBox);if(ShowTitle)Body->AddSlot().AutoHeight()[WaypointLabel(A._Map?TEXT("Explore Dereth"):TEXT("Waypoint"),26)];
         auto Input=SNew(SHorizontalBox);
@@ -537,7 +568,7 @@ public:
             .Text_Lambda([this]{return FText::FromString(Status);})];
         TSharedRef<SWidget> Content=Body;
         if(!A._Map)Content=SNew(SScrollBox)+SScrollBox::Slot()[Body];
-        ChildSlot[SNew(SBorder).BorderImage(&Background()).Padding(18)[Content]];
+        ChildSlot[SNew(SBorder).BorderImage(&PanelStyle->Background).Padding(18)[Content]];
     }
 private:
     TWeakObjectPtr<UACEPluginSubsystem> Host;TSharedPtr<SEditableTextBox> Entry,AtlasPath;TSharedPtr<SWaypointMap> Map;FString Status;bool ShowTitle=true;
@@ -597,6 +628,10 @@ bool FACEWaypointOverlayTest::RunTest(const FString&)
     ON_SCOPE_EXIT{GI->Shutdown();};
     auto* Host=GI->GetSubsystem<UACEPluginSubsystem>();
     auto* C=GI->GetSubsystem<UACEClientSubsystem>();
+    double OriginalZoom[2][2];
+    for(int O=0;O<2;++O)for(int D=0;D<2;++D)
+    {OriginalZoom[O][D]=Host->WaypointMapZoom(O!=0,D!=0);Host->SetWaypointMapZoom(O!=0,D!=0,DefaultWaypointZoom(O!=0,D!=0));}
+    ON_SCOPE_EXIT{for(int O=0;O<2;++O)for(int D=0;D<2;++D)Host->SetWaypointMapZoom(O!=0,D!=0,OriginalZoom[O][D]);};
     TSharedPtr<FACEClientPlugin> Plugin;
     for(const auto& Entry:Host->Plugins)if(Entry->Id==TEXT("waypoint"))Plugin=Entry;
     if(!Plugin||!C->GetSession())return false;
@@ -629,6 +664,18 @@ bool FACEWaypointOverlayTest::RunTest(const FString&)
         TestTrue(TEXT("Leaving interior discards stale floor geometry"),Map->Floors.IsEmpty()&&Map->CellCount==0);
         P.CellId=0x01430171;C->GetSession()->SetLocalPosition(P);Map->Tick(Geometry,Time++,.016f);
         TestEqual(TEXT("Returning inside restores interior zoom"),Map->Zoom,InteriorZoom);
+        auto Reopened=SNew(SWaypointMap).Host(Host).Overlay(true);Reopened->Tick(Geometry,Time++,.016f);
+        TestEqual(TEXT("Reopening pinned map indoors restores zoom"),Reopened->Zoom,InteriorZoom);
+        P.CellId=0x7D640014;C->GetSession()->SetLocalPosition(P);Reopened->Tick(Geometry,Time++,.016f);
+        TestEqual(TEXT("Reopened map retains separate outdoor zoom"),Reopened->Zoom,WorldZoom);
+        Plugin->Profile->SetBoolField(TEXT("dungeon"),false);
+        auto Window=SNew(SWaypointMap).Host(Host);Window->Tick(Geometry,Time++,.016f);Window->ChangeZoom(2,{40,40});
+        auto ReopenedWindow=SNew(SWaypointMap).Host(Host);ReopenedWindow->Tick(Geometry,Time++,.016f);
+        TestEqual(TEXT("Normal map also retains its own zoom"),ReopenedWindow->Zoom,2.);
+        TestEqual(TEXT("Normal map does not overwrite pinned zoom"),Host->WaypointMapZoom(true,false),WorldZoom);
+        ReopenedWindow->ResetView();
+        TestEqual(TEXT("Explicit Reset view saves the default zoom"),Host->WaypointMapZoom(false,false),1.);
+        TestEqual(TEXT("Reset view preserves the other map's zoom"),Host->WaypointMapZoom(true,false),WorldZoom);
     }
     if(FApp::CanEverRender())
     {

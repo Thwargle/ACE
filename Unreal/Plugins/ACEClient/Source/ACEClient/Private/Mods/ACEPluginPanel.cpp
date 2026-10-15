@@ -2,6 +2,9 @@
 #include "Mods/ACEPluginPresentation.h"
 #include "Mods/ACEPluginStyle.h"
 #include "Mods/ACEPluginSubsystem.h"
+#include "Mods/ACEPluginDesktop.h"
+#include "Mods/ACEPluginOrder.h"
+#include "Mods/ACEPluginIcon.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
 #include "ACEDatSubsystem.h"
@@ -45,18 +48,49 @@ namespace ACEPluginPanelPrivate
         SLATE_BEGIN_ARGS(SACEPlugins) {} SLATE_ARGUMENT(UACEPluginSubsystem*, Host) SLATE_ARGUMENT(FString, PluginId) SLATE_END_ARGS()
         void Construct(const FArguments& Args)
         {
-            Host = Args._Host; FACEPluginStyle::Use(Args._Host); Id = Args._PluginId; PluginOnly = !Id.IsEmpty();
+            Host = Args._Host; Id = Args._PluginId; FACEPluginStyle::Use(Args._Host,Id.IsEmpty()?TEXT("__manager"):Id); PluginOnly = !Id.IsEmpty();
             ChildSlot[SNew(SScrollBox) + SScrollBox::Slot()[SAssignNew(Body, SVerticalBox)]];
             Rebuild();
         }
+        virtual void Tick(const FGeometry& G,double T,float D) override
+        {
+            SCompoundWidget::Tick(G,T,D);
+            if(Retail&&!ArtworkReady)
+            {
+                Retail->Refresh();ArtworkReady=Retail->HasDatArtwork();
+                if(ArtworkReady)
+                {
+                    // Repaint the existing controls once when DAT loading ends.
+                    // Their brush addresses stay the same, so Slate cannot detect
+                    // this resource change from the checkbox's image attribute.
+                    TFunction<void(SWidget&)> Refresh=[&](SWidget& W){W.Invalidate(EInvalidateWidgetReason::Layout|EInvalidateWidgetReason::Paint);
+                        if(auto* C=W.GetChildren())for(int32 I=0;I<C->Num();++I)Refresh(C->GetChildAt(I).Get());};
+                    Refresh(*this);
+                }
+            }
+            if(Host.IsValid()&&Id.IsEmpty()&&OrderRevision!=Host->GetPluginOrderRevision())OrderRows();
+        }
     private:
         TWeakObjectPtr<UACEPluginSubsystem> Host;
+        TSharedPtr<FACEPluginStyle> Retail;
+        bool ArtworkReady=false;
         TSharedPtr<SVerticalBox> Body;
+        TSharedPtr<SVerticalBox> PluginRows;
+        TMap<FString,TSharedRef<SWidget>> RowsById;
+        uint32 OrderRevision=0;
         TSharedPtr<SVerticalBox> SettingsBody;
         TSharedPtr<SEditableTextBox> Name;
         TSharedPtr<SMultiLineEditableTextBox> Json;
         FString Id, Search, ManagerNotice;
         bool PluginOnly = false;
+        void OrderRows()
+        {
+            OrderRevision=Host->GetPluginOrderRevision();if(!PluginRows)return;
+            // Reattach existing cards; preserve their controls and the manager's scroll position.
+            PluginRows->ClearChildren();
+            for(const auto& PluginId:Host->PluginDisplayOrder())if(auto* Row=RowsById.Find(PluginId))
+                PluginRows->AddSlot().AutoHeight().Padding(5)[*Row];
+        }
         void Add(TSharedRef<SWidget> W) { (SettingsBody?SettingsBody:Body)->AddSlot().AutoHeight().Padding(5)[W]; }
         void Save(const TSharedPtr<FACEClientPlugin>& P)
         {
@@ -83,12 +117,12 @@ namespace ACEPluginPanelPrivate
         }
         void Rebuild()
         {
-            SettingsBody.Reset();Body->ClearChildren(); if (!Host.IsValid()) return;
+            SettingsBody.Reset();PluginRows.Reset();RowsById.Reset();Body->ClearChildren(); if (!Host.IsValid()) return;
+            Retail=FACEPluginStyle::Use(Host.Get(),Id.IsEmpty()?TEXT("__manager"):Id);ArtworkReady=Retail->HasDatArtwork();
             if (!PluginOnly && Id.IsEmpty())
             {
                 auto Header=SNew(SHorizontalBox);
-                Header->AddSlot().FillWidth(1).VAlign(VAlign_Center)[Label(TEXT("Plugins"),26)];
-                Header->AddSlot().AutoWidth()[SNew(SButton).ButtonStyle(&PluginButtonStyle()).IsFocusable(false).ContentPadding(FMargin(12,6))
+                Header->AddSlot().FillWidth(1).HAlign(HAlign_Right)[SNew(SButton).ButtonStyle(&PluginButtonStyle()).IsFocusable(false).ContentPadding(FMargin(12,6))
                     .ToolTipText(FText::FromString(TEXT("Reload installed plugins. Running plugins will stop.")))
                     .OnClicked_Lambda([this](){Host->Discover();ManagerNotice=Host->Notice;Rebuild();return FReply::Handled();})[Label(TEXT("Refresh"),16)]];
                 Add(Header);
@@ -100,15 +134,23 @@ namespace ACEPluginPanelPrivate
                     .Visibility_Lambda([this](){return Host->IsPluginBarMinimized()?EVisibility::Visible:EVisibility::Collapsed;})
                     .OnClicked_Lambda([this](){Host->SetPluginBarVisible(true);Host->SetPluginBarMinimized(false);return FReply::Handled();})[Label(TEXT("Expand bar"),16)]];
                 Add(BarControls);
+                Add(Host->MakePluginWindowControls(FString()));
                 Add(SNew(SCheckBox).Tag(TEXT("PluginBarHorizontal")).Style(&FACEPluginStyle::Current()->Check).Padding(FMargin(4,8))
                     .ToolTipText(FText::FromString(TEXT("Arrange plugin icons in a horizontal row. Uncheck for a vertical column. Saved across logins.")))
                     .IsChecked_Lambda([this](){return Host->IsPluginBarHorizontal()?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                     .OnCheckStateChanged_Lambda([this](ECheckBoxState S){Host->SetPluginBarHorizontal(S==ECheckBoxState::Checked);})[Label(TEXT("Horizontal plugin bar"),16)]);
                 Add(Label(TEXT("Drop plugin folders into: ")+FPaths::ConvertRelativePathToFull(Host->UserDirectory()/TEXT("Installed")),14));
                 Add(Button(TEXT("Open plugin folder"),[this](){const FString Folder=FPaths::ConvertRelativePathToFull(Host->UserDirectory()/TEXT("Installed"));IFileManager::Get().MakeDirectory(*Folder,true);FPlatformProcess::ExploreFolder(*Folder);}));
+                Body->AddSlot().AutoHeight()[SAssignNew(PluginRows,SVerticalBox)];
                 for (auto P : Host->Plugins)
                 {
                     auto Row = SNew(SHorizontalBox);
+                    Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,6,0)
+                        [SNew(SButton).Tag(FName(*(TEXT("PluginOrderGrip.")+P->Id))).ButtonStyle(&FACEPluginStyle::Current()->DockButton)
+                            .ContentPadding(2).IsFocusable(false).AllowDragDrop(true).Cursor(EMouseCursor::GrabHand)
+                            .ToolTipText(FText::FromString(TEXT("Drag to reorder plugins in the manager and icon bar. Unlock or hold Quick-show first.")))
+                            .OnSlateButtonDragDetected_Lambda([H=Host,PluginId=P->Id](const FGeometry&,const FPointerEvent&){return ACEPluginOrder::BeginDrag(H.Get(),PluginId,TEXT("__manager"));})
+                            [SNew(SBox).WidthOverride(14).HeightOverride(24)[SNew(SACEPluginIcon).Id(TEXT("plugin.grip"))]]];
                     Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,8,0)[SNew(SACEPluginBadge).Plugin(P)];
                     FString Description=P->Description;
                     if(P->Id==TEXT("ucm"))Description=TEXT("Combat, buffs, recovery, routes and looting.");
@@ -120,16 +162,21 @@ namespace ACEPluginPanelPrivate
                         +SVerticalBox::Slot().AutoHeight().Padding(0,4,0,0)[SNew(SACEPluginText).Text(FText::FromString(Description))
                             .Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).ColorAndOpacity(FLinearColor(.7f,.63f,.49f)).AutoWrapText(true)]];
                     const FString Capabilities=P->LocalService?(P->Permissions.Contains(TEXT("local_tools"))?TEXT("Local appearance and bundled native converter. Native tools run outside the Lua sandbox."):TEXT("Local cosmetic appearance only")):P->Permissions.IsEmpty()?TEXT("No game actions"):TEXT("Game actions: ")+FString::Join(P->Permissions,TEXT(", "));
-                    Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,12,0)[SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check).Padding(4)
+                    Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,12,0)[SNew(SCheckBox).Tag(FName(*(TEXT("PluginEnabled.")+P->Id))).Style(&FACEPluginStyle::Current()->Check).Padding(4)
                         .ToolTipText(FText::FromString(Capabilities))
                         .IsChecked_Lambda([P](){return P->Enabled?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})
                         .OnCheckStateChanged_Lambda([this,P](ECheckBoxState S){Host->SetEnabled(P->Id,S==ECheckBoxState::Checked);})[Label(TEXT("Enabled"),14)]];
                     Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[SNew(SButton).Tag(FName(*(TEXT("PluginOpen.")+P->Id))).ButtonStyle(&PluginButtonStyle()).IsFocusable(false).ContentPadding(FMargin(14,8))
                         .IsEnabled_Lambda([P](){return P->Enabled;})
                         .OnClicked_Lambda([this,PluginId=P->Id](){Open(PluginId);return FReply::Handled();})[Label(TEXT("Open"),16)]];
-                    Add(SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.06f,.035f,.014f))
-                        .Padding(12).ToolTipText_Lambda([P]{return FText::FromString(P->DisplayTitle()+TEXT(" ")+P->Version);})[Row]);
+                    RowsById.Add(P->Id,SNew(SACEPluginOrderTarget).Host(Host.Get()).Id(P->Id).LockId(TEXT("__manager")).Tag(FName(*(TEXT("PluginManagerOrder.")+P->Id)))
+                        [SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(FLinearColor(.06f,.035f,.014f))
+                        .Padding(12).ToolTipText_Lambda([P]{return FText::FromString(P->DisplayTitle()+TEXT(" ")+P->Version);})
+                        [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[Row]
+                            // Align settings with the title, after the grip and icon columns.
+                            +SVerticalBox::Slot().AutoHeight().Padding(58,8,0,0)[Host->MakePluginWindowControls(P->Id)]]]);
                 }
+                OrderRows();
                 if(Host->Plugins.IsEmpty())Add(Label(TEXT("No plugins installed."),16));
                 if(!ManagerNotice.IsEmpty())Add(Label(ManagerNotice,16));
                 return;
@@ -258,7 +305,7 @@ namespace ACEPluginPanelPrivate
 
 TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId)
 {
-    FACEPluginStyle::Use(this);
+    FACEPluginStyle::Use(this,PluginId);
     // Named panels live inside the desktop frame, which already supplies their title.
     if(IsLedger(PluginId))return MakeLedgerPanel(PluginId);
     if(PluginId==TEXT("itemtools"))return MakeItemToolsPanel(false);
@@ -278,15 +325,12 @@ void UACEPluginSubsystem::TogglePanel()
             VR->OpenPluginManager(); return;
         }
     auto* Viewport=GetGameInstance()->GetGameViewportClient(); if(!Viewport)return;
-    if(DesktopPanel){Viewport->RemoveViewportWidgetContent(DesktopPanel.ToSharedRef());DesktopPanel.Reset();return;}
-    DesktopPanel=SNew(SBox).HAlign(HAlign_Center).VAlign(VAlign_Center)
-        [SNew(SBox).WidthOverride(740).HeightOverride(530)
-        [SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Frame).Padding(16)
-        [SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)
-            [SNew(SButton).ButtonStyle(&PluginButtonStyle()).IsFocusable(false).ContentPadding(FMargin(10,3))
-                .ToolTipText(FText::FromString(TEXT("Close plugin manager")))
-                .OnClicked_Lambda([Weak=TWeakObjectPtr<UACEPluginSubsystem>(this)](){if(Weak.IsValid())Weak->TogglePanel();return FReply::Handled();})[Label(TEXT("X"),14)]]
-        +SVerticalBox::Slot().FillHeight(1)[MakePanel()]]]];
+    if(DesktopPanel)
+    {
+        DesktopPanel->SaveOverlayLayout();SavePluginWindowVisibility(TEXT("__manager"),false);
+        Viewport->RemoveViewportWidgetContent(DesktopPanel.ToSharedRef());DesktopPanel.Reset();return;
+    }
+    DesktopPanel=SNew(SACEPluginDesktop).Host(this).ManagerOnly(true);
     Viewport->AddViewportWidgetContent(DesktopPanel.ToSharedRef(),1600);
 }
 TSharedRef<SWidget> UACEPluginPanel::RebuildWidget()

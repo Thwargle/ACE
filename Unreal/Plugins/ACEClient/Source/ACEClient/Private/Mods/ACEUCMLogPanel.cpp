@@ -20,7 +20,7 @@ namespace
         SLATE_BEGIN_ARGS(SACEUCMLogPanel) {} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_END_ARGS()
         void Construct(const FArguments& Args)
         {
-            Host=Args._Host;FACEPluginStyle::Use(Args._Host);
+            Host=Args._Host;FACEPluginStyle::Use(Args._Host,TEXT("ucm.log"));
             auto Controls=SNew(SHorizontalBox);
             Controls->AddSlot().AutoWidth().Padding(0,0,12,0)[SNew(SCheckBox).Style(&FACEPluginStyle::Current()->Check)
                 .IsChecked_Lambda([this]{return ProblemsOnly?ECheckBoxState::Checked:ECheckBoxState::Unchecked;})

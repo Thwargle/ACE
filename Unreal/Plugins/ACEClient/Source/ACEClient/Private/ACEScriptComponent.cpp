@@ -3096,7 +3096,13 @@ void UACEScriptComponent::TickParticleLights(bool bPresentationOnly)
 			if (Weight > KINDA_SMALL_NUMBER) Position = Acc / Weight;
 		}
 		if (Weight < .01f) continue;
-		if (bMissile) Position = Entity->GetActorLocation();
+		// A held weapon's illumination belongs to its current emitter hook.
+		// World-space sparks intentionally remain behind as they age; using their
+		// centroid makes the scene light trail the weapon and jump at each birth.
+		// Keep that authored particle motion, but follow the live hand/weapon frame
+		// on both simulation and presentation ticks (also during turns).
+		if (bWielded) Position = GetEmitterTransform(Emitter).GetLocation();
+		else if (bMissile) Position = Entity->GetActorLocation();
 		if (bPresentationOnly)
 		{
 			Lights->UpdateParticlePosition(this, Emitter.InstanceId, Position);

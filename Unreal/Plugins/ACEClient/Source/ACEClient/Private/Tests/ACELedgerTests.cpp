@@ -73,11 +73,14 @@ bool FACELedgerTest::RunTest(const FString&)
     GI->GetSubsystem<UACEClientSubsystem>()->SelectObject(11);H->EditSupplySelection(true);
     TestEqual(TEXT("Adding the selected item retains its actual inventory icon"),H->GetSupplies()[0].Icon,0x0600262A);
     TestEqual(TEXT("Native ledger refreshes from inventory revisions"),H->GetSupplies()[0].Count,int64(49));
+    H->ToggleSupplyName(0);
     Session->PlayerGuid=2;H->UpdateLedgers();TestEqual(TEXT("Second character has a separate list"),H->GetSupplies().Num(),0);
     Session->PlayerGuid=1;H->UpdateLedgers();TestEqual(TEXT("Returning to a character restores its list"),H->GetSupplies().Num(),1);
     FString Saved;TestTrue(TEXT("Supply selection persists to disk"),FFileHelper::LoadFileToString(Saved,*(H->StorageRoot/TEXT("settings.json"))));
     TestTrue(TEXT("Supplies are keyed by character"),Saved.Contains(TEXT("supplies.")+FirstCharacter)&&Saved.Contains(TEXT("Prismatic Taper")));
     TestEqual(TEXT("Item artwork survives character reload"),H->GetSupplies()[0].Icon,0x0600262A);
+    TestFalse(TEXT("Icon-only preference survives character reload"),H->AreSupplyNamesVisible());
+    H->ToggleSupplyName(0);
     TestEqual(TEXT("Item background type survives character reload"),H->GetSupplies()[0].ItemType,4096);
     H->SetWaypointOption(TEXT("arrow"),false);H->SetWaypointOption(TEXT("dungeon_overlay"),false);
     for(const TCHAR* Id:{TEXT("supplyledger"),TEXT("huntledger")})
@@ -85,7 +88,9 @@ bool FACELedgerTest::RunTest(const FString&)
         auto P=H->Find(Id);if(!TestTrue(TEXT("HUD is discoverable"),P.IsValid()))continue;P->Enabled=true;
         H->SetLedgerOption(Id,TEXT("visible"),true);H->SavePluginWindowPosition(Id,FVector2D(80,80));
     }
+    H->SavePluginWindowPosition(TEXT("huntledger.size"),FVector2D(290,180));
     auto Dock=SNew(SACEPluginDesktop).Host(H);Dock->Tick(FGeometry::MakeRoot(FVector2D(1400,900),FSlateLayoutTransform()),1,.016f);
+    TestEqual(TEXT("Legacy fixed Hunt Ledger height does not gain duplicate editor chrome"),Dock->DisplaySize(Dock->Windows[TEXT("huntledger")]).Y,180.);
     TestTrue(TEXT("Saved HUD visibility restores without UCM running"),Dock->IsOpen(TEXT("supplyledger"))&&Dock->IsOpen(TEXT("huntledger")));
     TestEqual(TEXT("Supply HUD defaults to a compact width"),Dock->DisplaySize(Dock->Windows[TEXT("supplyledger")]).X,200.);
     const auto InitialSize=Dock->DisplaySize(Dock->Windows[TEXT("supplyledger")]);
@@ -196,10 +201,102 @@ bool FACELedgerTest::RunTest(const FString&)
         for(int32 Pass=0;Pass<3;++Pass){++GFrameCounter;Renderer.DrawWidget(Target,Dock,Size,0);FlushRenderingCommands();}
         TestTrue(TEXT("Bottom-edge clamping keeps supply content fixed when pinning"),SupplyContent->GetCachedGeometry().GetAbsolutePosition().Equals(BottomSupply,.01f));
         TestTrue(TEXT("Bottom-edge clamping keeps hunt content fixed when pinning"),HuntContent->GetCachedGeometry().GetAbsolutePosition().Equals(BottomHunt,.01f));
+        // Independent pinning and opacity work without the global interface lock.
+        Manager->SetUiLocked(false);
+        auto Draw=[&]{for(int32 Pass=0;Pass<3;++Pass){++GFrameCounter;Renderer.DrawWidget(Target,Dock,Size,0);FlushRenderingCommands();}};
+        auto Click=[&](TSharedPtr<SWidget> Button)
+        {
+            // Exercise the button's activation delegate without inventing mouse capture
+            // for this offscreen widget tree.
+            const FKeyEvent Accept(EKeys::Enter,FModifierKeysState(),0,false,0,0);
+            Button->OnKeyDown(Button->GetCachedGeometry(),Accept);
+            Button->OnKeyUp(Button->GetCachedGeometry(),Accept);
+        };
+        Draw();
+        const auto IndependentAnchor=SupplyContent->GetCachedGeometry().GetAbsolutePosition();
+        H->SetPluginWindowPinned(TEXT("supplyledger"),true);Draw();
+        TestTrue(TEXT("Local pin keeps supply content anchored"),SupplyContent->GetCachedGeometry().GetAbsolutePosition().Equals(IndependentAnchor,.01f));
+        TestFalse(TEXT("Local pin locks manipulation even with interface unlocked"),H->CanManipulatePluginWindow(TEXT("supplyledger")));
+        TestTrue(TEXT("Other plugin remains movable"),H->CanManipulatePluginWindow(TEXT("huntledger")));
+        auto SupplyStyle=FACEPluginStyle::Use(H,TEXT("supplyledger"));auto HuntStyle=FACEPluginStyle::Use(H,TEXT("huntledger"));
+        TestEqual(TEXT("Pinned outer frame is transparent"),SupplyStyle->Frame.TintColor.GetSpecifiedColor().A,0.f);
+        TestEqual(TEXT("Pinned frame outline is transparent"),SupplyStyle->Frame.OutlineSettings.Color.GetSpecifiedColor().A,0.f);
+        FACESupplyEntry Second=E;Second.ClassId=20632;Second.Name=TEXT("Second supply");H->LedgerSupplies.Add(Second);H->SaveSupplies();Draw();
+        const auto Name=FindTagged(Dock,TEXT("SupplyName.0")),Icon=FindTagged(Dock,TEXT("SupplyIcon.1")),Count=FindTagged(Dock,TEXT("SupplyCount.0"));
+        if(!TestTrue(TEXT("Supply row exposes name/icon/count"),Name&&Icon&&Count))return false;
+        const auto CountAnchor=Count->GetCachedGeometry().GetAbsolutePosition();
+        const auto NameToggleSize=Dock->DisplaySize(Dock->Windows[TEXT("supplyledger")]);
+        const uint32 Revision=H->GetSupplyRevision();Click(Name);Draw();
+        TestFalse(TEXT("Clicking the item name hides its label"),Name->GetVisibility().IsVisible());
+        TestFalse(TEXT("Clicking one name also hides every other name"),FindTagged(Dock,TEXT("SupplyName.1"))->GetVisibility().IsVisible());
+        TestEqual(TEXT("Name toggle does not rebuild the ledger"),H->GetSupplyRevision(),Revision);
+        TestTrue(TEXT("Count retains its widget and stays visible"),Count==FindTagged(Dock,TEXT("SupplyCount.0"))&&Count->GetVisibility().IsVisible());
+        TestTrue(TEXT("Hiding names leaves the count in exactly the same place"),Count->GetCachedGeometry().GetAbsolutePosition().Equals(CountAnchor,.01f));
+        TestEqual(TEXT("Name toggle never resizes the window"),Dock->DisplaySize(Dock->Windows[TEXT("supplyledger")]),NameToggleSize);
+        Click(Icon);Draw();TestTrue(TEXT("Clicking a different icon restores all names"),Name->GetVisibility().IsVisible()&&FindTagged(Dock,TEXT("SupplyName.1"))->GetVisibility().IsVisible());
+        TestTrue(TEXT("Restoring names also preserves the count position"),Count->GetCachedGeometry().GetAbsolutePosition().Equals(CountAnchor,.01f));
+        H->SetPluginWindowOpacity(TEXT("huntledger"),.25f);Draw();
+        TestTrue(TEXT("Unrelated window has its own opacity"),FMath::IsNearlyEqual(HuntStyle->Frame.TintColor.GetSpecifiedColor().A,.24f));
+        TestEqual(TEXT("Opacity leaves foreground widgets opaque"),Count->GetRenderOpacity(),1.f);
+        TestEqual(TEXT("Opacity leaves item artwork opaque"),SupplyStyle->ItemImage(E,true)->TintColor.GetSpecifiedColor().A,1.f);
+        TestTrue(TEXT("Opacity leaves existing widget tree intact"),Count==FindTagged(Dock,TEXT("SupplyCount.0")));
+        H->SetPluginWindowOpacity(TEXT("ucm"),.4f);
+        TestEqual(TEXT("Related UCM log inherits the chosen opacity"),H->GetPluginWindowOpacity(TEXT("ucm.log")),.4f);
+        Manager->SetQuickShowUi(true);Draw();
+        TestTrue(TEXT("Quick-show restores a locally pinned window's controls"),H->CanManipulatePluginWindow(TEXT("supplyledger")));
+        TestTrue(TEXT("Quick-show restores the local frame"),SupplyStyle->Frame.TintColor.GetSpecifiedColor().A>0);
+        Dock->Resize(TEXT("supplyledger"),FVector2D(-10000,-10000),true);
+        TestEqual(TEXT("Supply supports a narrow icon counter"),Dock->Windows[TEXT("supplyledger")].Size.X,72.);
+        Dock->Windows[TEXT("supplyledger")].Position=FVector2D(80,80);H->ToggleSupplyName(0);H->LedgerSupplies[0].Count=8544;
+        Manager->SetQuickShowUi(false);Draw();
+        auto CompactCount=FindTagged(Dock,TEXT("SupplyCount.0"));
+        const auto CounterBounds=CompactCount->GetCachedGeometry();const auto FrameBounds=Dock->Windows[TEXT("supplyledger")].Widget->GetCachedGeometry();
+        TestTrue(TEXT("Four-digit count fits inside compact frame"),CounterBounds.GetAbsolutePosition().X+CounterBounds.GetAbsoluteSize().X<=FrameBounds.GetAbsolutePosition().X+FrameBounds.GetAbsoluteSize().X);
+        TestTrue(TEXT("Compact count is fully allocated"),CounterBounds.GetLocalSize().X>=CompactCount->GetDesiredSize().X);
+        const auto ListBounds=FindTagged(Dock,TEXT("SupplyRows"))->GetCachedGeometry();
+        TestTrue(TEXT("Scrollbar never covers digits in the narrow ledger"),CounterBounds.GetAbsolutePosition().X+CounterBounds.GetAbsoluteSize().X<=ListBounds.GetAbsolutePosition().X+ListBounds.GetAbsoluteSize().X);
+        PNG.Reset();FImageUtils::PNGCompressImageArray(Target->SizeX,Target->SizeY,[&]{TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);return Pixels;}(),PNG);
+        FFileHelper::SaveArrayToFile(PNG,*(H->StorageRoot/TEXT("plugin-windows-compact.png")));
+        while(!H->GetSupplies().IsEmpty())H->RemoveSupply(0);
+        Draw();
+        const auto SupplyWindow=Dock->Windows[TEXT("supplyledger")].Widget.ToSharedRef();
+        TestEqual(TEXT("Empty pinned ledger keeps only the add control"),CountControls(SupplyWindow,TEXT("LedgerEdit")),1);
+        TestEqual(TEXT("Empty pinned ledger still hides the header"),CountControls(SupplyWindow,TEXT("LedgerHeader")),0);
+        auto Add=FindTagged(SupplyWindow,TEXT("LedgerEdit"));
+        if(!TestTrue(TEXT("Empty pinned ledger exposes add"),Add.IsValid()))return false;
+        const auto AddBounds=Add->GetCachedGeometry(),EmptyBounds=SupplyWindow->GetCachedGeometry();
+        TestTrue(TEXT("Add control fits the minimum-size pinned ledger"),AddBounds.GetAbsolutePosition().Y>=EmptyBounds.GetAbsolutePosition().Y&&
+            AddBounds.GetAbsolutePosition().Y+AddBounds.GetAbsoluteSize().Y<=EmptyBounds.GetAbsolutePosition().Y+EmptyBounds.GetAbsoluteSize().Y);
+        PNG.Reset();FImageUtils::PNGCompressImageArray(Target->SizeX,Target->SizeY,[&]{TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);return Pixels;}(),PNG);
+        FFileHelper::SaveArrayToFile(PNG,*(H->StorageRoot/TEXT("plugin-windows-empty.png")));
+        GI->GetSubsystem<UACEClientSubsystem>()->SelectObject(11);Click(Add);Draw();
+        TestEqual(TEXT("Pinned add button tracks the selected item"),H->GetSupplies().Num(),1);
+        TestEqual(TEXT("Populated pinned ledger hides the add interface again"),CountControls(SupplyWindow,TEXT("LedgerEdit")),0);
+        TestFalse(TEXT("Removing and adding supplies retains global names preference"),H->AreSupplyNamesVisible());
+        H->SetWaypointMapZoom(true,false,12.);H->SetWaypointMapZoom(true,true,4.5);
+        H->SetWaypointMapZoom(false,false,2.);H->SetWaypointMapZoom(false,true,6.);
+        Dock->SaveOverlayLayout();const auto SavedPosition=Dock->Windows[TEXT("supplyledger")].Position;
+        FString AppearanceSaved;FFileHelper::LoadFileToString(AppearanceSaved,*(H->StorageRoot/TEXT("settings.json")));
+        TSharedPtr<FJsonObject> Restored;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(AppearanceSaved),Restored);H->Settings=Restored;
+        TestTrue(TEXT("Pin survives settings reload"),H->IsPluginWindowPinned(TEXT("supplyledger")));
+        TestEqual(TEXT("Opacity survives settings reload"),H->GetPluginWindowOpacity(TEXT("huntledger")),.25f);
+        H->LedgerCharacter.Empty();H->UpdateLedgers();
+        TestEqual(TEXT("Disk reload restores the tracked supply list"),H->GetSupplies().Num(),1);
+        TestFalse(TEXT("Disk reload restores the ledger-wide name toggle"),H->AreSupplyNamesVisible());
+        TestEqual(TEXT("Disk reload retains actual item artwork"),H->GetSupplies()[0].Icon,0x0600262A);
+        TestEqual(TEXT("Disk reload recounts the current inventory"),H->GetSupplies()[0].Count,int64(49));
+        TestEqual(TEXT("Pinned outdoor zoom survives disk reload"),H->WaypointMapZoom(true,false),12.);
+        TestEqual(TEXT("Pinned indoor zoom survives disk reload"),H->WaypointMapZoom(true,true),4.5);
+        TestEqual(TEXT("Window outdoor zoom survives disk reload"),H->WaypointMapZoom(false,false),2.);
+        TestEqual(TEXT("Window indoor zoom survives disk reload"),H->WaypointMapZoom(false,true),6.);
+        auto DiskDock=SNew(SACEPluginDesktop).Host(H);
+        TestEqual(TEXT("Disk reload restores window position"),DiskDock->Windows[TEXT("supplyledger")].Position,SavedPosition);
+        TestEqual(TEXT("Disk reload restores compact width"),DiskDock->DisplaySize(DiskDock->Windows[TEXT("supplyledger")]).X,72.);
+        TestTrue(TEXT("Plugin bar has an options gear"),FindTagged(DiskDock,TEXT("PluginOptions")).IsValid());
         auto Icons=SNew(SHorizontalBox);
-        for(const TCHAR* Id:{TEXT("ucm"),TEXT("ucmmicro"),TEXT("looteditor"),TEXT("itemtools"),TEXT("waypoint"),TEXT("waypoint.map"),TEXT("ucm.log"),TEXT("supplyledger"),TEXT("huntledger"),TEXT("transmog"),TEXT("custom")})
+        for(const TCHAR* Id:{TEXT("plugin.options"),TEXT("ucm"),TEXT("ucmmicro"),TEXT("looteditor"),TEXT("itemtools"),TEXT("waypoint"),TEXT("waypoint.map"),TEXT("ucm.log"),TEXT("supplyledger"),TEXT("huntledger"),TEXT("transmog"),TEXT("custom")})
             Icons->AddSlot().AutoWidth()[SNew(SBox).WidthOverride(70).HeightOverride(50)[SNew(SACEPluginIcon).Id(Id)]];
-        Renderer.DrawWidget(Target,Icons,FVector2D(770,50),0);FlushRenderingCommands();
+        Renderer.DrawWidget(Target,Icons,FVector2D(840,50),0);FlushRenderingCommands();
         PNG.Reset();FImageUtils::PNGCompressImageArray(Target->SizeX,Target->SizeY,[&]{TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);return Pixels;}(),PNG);
         FFileHelper::SaveArrayToFile(PNG,*(H->StorageRoot/TEXT("plugin-icons.png")));
         auto Labels=SNew(SVerticalBox);

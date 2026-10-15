@@ -23,13 +23,15 @@ class FACEPluginStyle : public FGCObject
 {
 public:
     explicit FACEPluginStyle(UACEUIResourceResolver* InResolver);
-    static TSharedRef<FACEPluginStyle> Use(UACEPluginSubsystem* Host);
+    static TSharedRef<FACEPluginStyle> Use(UACEPluginSubsystem* Host,const FString& WindowId=FString());
     static TSharedRef<FACEPluginStyle> Current();
     virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
     virtual FString GetReferencerName() const override {return TEXT("ACEPluginStyle");}
     const FSlateBrush* Image(uint32 Id);
     const FSlateBrush* ItemImage(const FACESupplyEntry& Item,bool Foreground);
     void Refresh();
+    bool HasDatArtwork() const {return DatArtworkLoaded;}
+    bool SetWindowAppearance(float Opacity,bool Frameless);
     TSharedPtr<FACEPluginFont> Typeface(int32 Size);
     FButtonStyle Button,DockButton;
     FSliderStyle Slider;
@@ -47,6 +49,10 @@ private:
     TMap<uint32,TSharedPtr<FSlateBrush>> Images;
     TMap<FString,TSharedPtr<FSlateBrush>> ItemImages;
     TMap<int32,TSharedPtr<FACEPluginFont>> Fonts;
+    FSlateBrush OriginalFrame,OriginalBackground,OriginalTitle,OriginalSectionFrame,OriginalSectionHeader;
+    float BackgroundOpacity=-1;
+    bool HideFrame=false;
+    bool DatArtworkLoaded=false;
 };
 
 /** Native DAT bitmap text with cached wrapping; no generated text textures. */

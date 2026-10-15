@@ -68,6 +68,7 @@ public:
 
 	/** Global floaty lock (retail LockUI). When true, frames use *_Locked art and drag is disabled. */
 	bool IsUiLocked() const { return bUiLocked && !bQuickShowUi; }
+	bool IsQuickShowUi() const { return bQuickShowUi; }
 	void SetUiLocked(bool bLocked);
 	void SetQuickShowUi(bool bShow);
 	void ToggleUiLocked() { SetUiLocked(!bUiLocked); }

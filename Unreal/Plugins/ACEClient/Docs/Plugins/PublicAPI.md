@@ -74,6 +74,25 @@ last until a character change or plugin reload; use the manifest for defaults
 that must appear before Lua starts. Metadata does not change the plugin's ID,
 permissions or saved files.
 
+Plugins can also supply window defaults in the manifest or runtime presentation:
+
+```lua
+presentation = {
+  title = "Kill Task Tracker",
+  window = {opacity = 0.35, pinned = true}
+}
+```
+
+`window.opacity` is a number from 0 to 1. It fades backgrounds and borders only;
+text, item icons and interactive controls remain readable. `window.pinned` hides
+the outer frame and background and locks the window's position, keeping its
+contents at the same screen position. Hold the rebindable **Quick-show pinned
+windows** key (Left Control by default) to restore the header and resize controls.
+Runtime changes require `ui` permission and update existing widgets without
+rebuilding their controls. Player overrides in Manage Plugins take precedence
+over these defaults; **Use this opacity for all plugins** overrides every plugin's
+opacity. Omitted window fields inherit manifest defaults, just like title/icon.
+
 Titles allow up to 80 characters on one line. Icons are PNG filenames only (up
 to 96 characters), with no paths or URLs. PNGs are limited to 2 MiB compressed and
 1024 by 1024 pixels. Toolbar and UI images share one cache per plugin: at most 32

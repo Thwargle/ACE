@@ -10,7 +10,24 @@ void SACEPluginIcon::Construct(const FArguments& Args)
     auto Fill=[&](std::initializer_list<FVector2D> Points,FLinearColor Color)
     {Line(Points,Color);Paths.Last().Filled=true;};
     const FString& Id=Args._Id;
-    if(Id==TEXT("ucm")) // Two blades around a warding rune.
+    if(Id==TEXT("plugin.options")) // Gold eight-tooth gear around a teal hub.
+    {
+        FPath Gear;Gear.Color=Gold;
+        for(int32 I=0;I<=32;++I)
+        {
+            const double Angle=(I-.5)*PI/16,Radius=(I%4<2)?13.:10.;
+            Gear.Points.Add(FVector2D(16+Radius*FMath::Cos(Angle),16+Radius*FMath::Sin(Angle)));
+        }
+        Paths.Add(MoveTemp(Gear));
+        FPath Hub;Hub.Color=Teal;
+        for(int32 I=0;I<=16;++I){const double Angle=I*PI/8;Hub.Points.Add(FVector2D(16+5*FMath::Cos(Angle),16+5*FMath::Sin(Angle)));}
+        Paths.Add(MoveTemp(Hub));Fill({{16,13},{19,16},{16,19},{13,16}},Paper);
+    }
+    else if(Id==TEXT("plugin.grip"))
+    {
+        for(int X:{9,21})for(int Y:{6,16,26})Fill({{X-2.,Y-2.},{X+2.,Y-2.},{X+2.,Y+2.},{X-2.,Y+2.}},Gold);
+    }
+    else if(Id==TEXT("ucm")) // Two blades around a warding rune.
     {
         Fill({{5,3},{10,6},{24,24},{22,26},{7,9}},Paper);
         Fill({{27,3},{22,6},{8,24},{10,26},{25,9}},Gold);

@@ -6,6 +6,8 @@
 #include "Mods/ACEPluginVM.h"
 #include "Mods/ACEPluginSubsystem.h"
 #include "Mods/ACEPluginDesktop.h"
+#include "Mods/ACEPluginOrder.h"
+#include "Mods/ACEPluginStyle.h"
 #include "Mods/ACEPluginCastMotion.h"
 #include "Mods/ACEVTProfile.h"
 #include "Mods/ACEUCMProfiles.h"
@@ -15,6 +17,7 @@
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
 #include "UI/ACEUIElementManager.h"
+#include "UI/ACEUIResourceResolver.h"
 #include "Engine/GameInstance.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "HAL/FileManager.h"
@@ -202,7 +205,56 @@ bool FACEPluginHostTest::RunTest(const FString&)
     auto* H=GI->GetSubsystem<UACEPluginSubsystem>();
     FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
     if(FApp::CanEverRender()&&FPaths::DirectoryExists(DatDirectory))
-        TestTrue(TEXT("Render plugin UI using retail fonts and artwork"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(DatDirectory));
+    {
+        // The login Plugins tab can be built before background DAT loading finishes.
+        // Keep that exact widget alive: opening another plugin used to hide the bug.
+        auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
+        TestFalse(TEXT("Initial plugin panel starts before DAT artwork is ready"),Dat->IsDatReady());
+        const auto FirstPlugin=H->Plugins[0];const bool WasEnabled=FirstPlugin->Enabled;FirstPlugin->Enabled=true;
+        ON_SCOPE_EXIT{FirstPlugin->Enabled=WasEnabled;};
+        auto Panel=H->MakePanel();auto Style=H->WindowPluginStyles.FindChecked(TEXT("__manager"));
+        TestTrue(TEXT("Unloaded checkbox artwork has distinct checked/unchecked fallbacks"),
+            Style->Check.CheckedImage.GetResourceName()!=Style->Check.UncheckedImage.GetResourceName()
+            ||Style->Check.CheckedImage.GetResourceObject()!=Style->Check.UncheckedImage.GetResourceObject());
+        TArray<TSharedRef<SCheckBox>> Checks;
+        TFunction<void(TSharedRef<SWidget>)> FindChecks=[&](TSharedRef<SWidget> W)
+        {if(W->GetType()==TEXT("SCheckBox"))Checks.Add(StaticCastSharedRef<SCheckBox>(W));auto* C=W->GetChildren();for(int32 I=0;I<C->Num();++I)FindChecks(C->GetChildAt(I));};
+        FindChecks(Panel);
+        if(TestTrue(TEXT("Initial manager has checked and unchecked controls"),Checks.Num()>=2))
+        {
+            const auto* PluginCheck=Checks.FindByPredicate([&](const auto& C){return C->GetTag()==FName(*(TEXT("PluginEnabled.")+FirstPlugin->Id));});
+            if(!TestNotNull(TEXT("Enabled plugin has a summary checkbox"),PluginCheck))return false;
+            TestTrue(TEXT("Summary checkbox reads enabled state on its first draw"),(*PluginCheck)->IsChecked());
+            const FVector2D Size(740,530);FWidgetRenderer Renderer(false,true);
+            auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
+            auto Draw=[&](){for(int32 Pass=0;Pass<3;++Pass){++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,.016f);FlushRenderingCommands();}};
+            Draw();
+            TestTrue(TEXT("Render plugin UI using retail fonts and artwork"),Dat->LoadDatDirectory(DatDirectory));
+            Draw(); // No Use(), Open, Refresh button or panel reconstruction.
+            auto* Resources=GI->GetSubsystem<UACEClientSubsystem>()->GetUIResourceResolver();
+            TestTrue(TEXT("Existing checked brush refreshes when DAT becomes ready"),Style->Check.CheckedImage.GetResourceObject()==Resources->ResolveTexture(0x0600191A));
+            TestTrue(TEXT("Existing unchecked brush refreshes when DAT becomes ready"),Style->Check.UncheckedImage.GetResourceObject()==Resources->ResolveTexture(0x0600191F));
+            TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
+            auto GreenPixels=[&](const TSharedRef<SCheckBox>& Check)
+            {
+                const auto& G=Check->GetCachedGeometry();const auto At=Panel->GetCachedGeometry().AbsoluteToLocal(G.GetAbsolutePosition());int32 Count=0;
+                for(int32 Y=FMath::Max(0,FMath::FloorToInt(At.Y));Y<FMath::Min(530,FMath::CeilToInt(At.Y+G.GetLocalSize().Y));++Y)
+                    for(int32 X=FMath::Max(0,FMath::FloorToInt(At.X));X<FMath::Min(740,FMath::CeilToInt(At.X+24));++X)
+                    {const auto C=Pixels[Y*740+X];if(C.G>120&&int32(C.G)>int32(C.R)+40&&int32(C.G)>int32(C.B)+40)++Count;}
+                return Count;
+            };
+            TestTrue(TEXT("Initial enabled plugin draws its green retail marker without reopening"),GreenPixels(*PluginCheck)>20);
+            TestTrue(TEXT("Initial global checkbox also draws its green marker"),GreenPixels(Checks[0])>20);
+            TestEqual(TEXT("Initial unchecked control remains visually empty"),GreenPixels(Checks[1]),0);
+            TArray<TSharedRef<SCheckBox>> Original=Checks;Checks.Reset();FindChecks(Panel);
+            TestTrue(TEXT("Artwork arrival preserves the existing controls"),Checks==Original);
+            TArray64<uint8> Png;FImageUtils::PNGCompressImageArray(740,530,Pixels,Png);
+            IFileManager::Get().MakeDirectory(*(FPaths::ProjectSavedDir()/TEXT("Automation")),true);
+            FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("Automation/PluginManager-InitialArtwork.png")));
+            Target->ReleaseResource();
+        }
+        else TestTrue(TEXT("Load retail artwork"),Dat->LoadDatDirectory(DatDirectory));
+    }
     {
         auto* Viewport=NewObject<UGameViewportClient>(GEngine);
         for(bool Previous:{false,true})
@@ -657,22 +709,85 @@ bool FACEPluginHostTest::RunTest(const FString&)
     TestEqual(TEXT("Shared UI lock prevents plugin resizing"),Dock->Windows[TEXT("ucm")].Size,LockedSize);
     Ui->SetUiLocked(false);
     Dock->Resize(TEXT("ucm"),FVector2D(-300,-150),true);
-    TestTrue(TEXT("Window resize respects minimum bounds"),Dock->Windows[TEXT("ucm")].Size.X>=400);
+    TestTrue(TEXT("Window resize respects reduced minimum bounds"),Dock->Windows[TEXT("ucm")].Size.X>=96);
     TestEqual(TEXT("Window size is persisted"),H->GetPluginWindowPosition(TEXT("ucm.size"),FVector2D::ZeroVector),Dock->Windows[TEXT("ucm")].Size);
     Dock->Resize(TEXT("ucm"),FVector2D(300,150),false);
     Dock->Toggle(TEXT("monitor"));
     H->SetEnabled(TEXT("monitor"),false);Dock->Refresh();Dock->Toggle(TEXT("monitor"));
     TestFalse(TEXT("Disabled plugin window cannot open"),Dock->IsOpen(TEXT("monitor")));
+    {
+        Ui->SetUiLocked(false);
+        const auto ExecutionOrder=H->Plugins;
+        auto Manager=SNew(SACEPluginDesktop).Host(H).ManagerOnly(true);
+        Manager->Tick(FGeometry::MakeRoot(FVector2D(1400,900),FSlateLayoutTransform()),1,.016f);
+        TestTrue(TEXT("Plugin Manager opens through the shared window frame"),Manager->IsOpen(TEXT("__manager")));
+        TestEqual(TEXT("Manager has no duplicate launcher bar"),Manager->Windows.Num(),1);
+        Manager->Move(TEXT("__manager"),FVector2D(70,35),true);
+        Manager->Resize(TEXT("__manager"),FVector2D(100,80),true);
+        const auto Position=Manager->Windows[TEXT("__manager")].Position,Size=Manager->Windows[TEXT("__manager")].Size;
+        H->SetPluginWindowPinned(TEXT("__manager"),true);
+        Manager->Move(TEXT("__manager"),FVector2D(100,100),true);Manager->Resize(TEXT("__manager"),FVector2D(100,100),true);
+        TestEqual(TEXT("Pinned manager cannot move"),Manager->Windows[TEXT("__manager")].Position,Position);
+        TestEqual(TEXT("Pinned manager cannot resize"),Manager->Windows[TEXT("__manager")].Size,Size);
+        TestFalse(TEXT("Pinned manager grip cannot initiate ordering"),ACEPluginOrder::BeginDrag(H,TEXT("huntledger"),TEXT("__manager")).IsEventHandled());
+        Ui->SetQuickShowUi(true);
+        TestTrue(TEXT("Quick-show allows manager reordering"),ACEPluginOrder::BeginDrag(H,TEXT("huntledger"),TEXT("__manager")).IsEventHandled());
+        Ui->SetQuickShowUi(false);H->SetPluginWindowPinned(TEXT("__manager"),false);
+        TFunction<TSharedPtr<SWidget>(TSharedRef<SWidget>,FName)> FindTag=[&](TSharedRef<SWidget> W,FName Tag)->TSharedPtr<SWidget>
+        {if(W->GetTag()==Tag)return W;auto* Children=W->GetChildren();for(int32 I=0;I<Children->Num();++I)if(auto Found=FindTag(Children->GetChildAt(I),Tag))return Found;return nullptr;};
+        auto Grip=FindTag(Manager,TEXT("PluginOrderGrip.huntledger"));
+        auto TargetRow=FindTag(Manager,TEXT("PluginManagerOrder.supplyledger"));
+        auto PreservedCard=FindTag(Manager,TEXT("PluginOpen.huntledger"));
+        if(TestTrue(TEXT("Manager exposes a grip and a full-row drop target"),Grip&&TargetRow))
+        {
+            const auto G=FGeometry::MakeRoot(FVector2D(500,100),FSlateLayoutTransform());
+            const FPointerEvent Mouse(0,FVector2D(10,90),FVector2D(10,90),{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState());
+            const auto Drag=Grip->OnDragDetected(G,Mouse).GetDragDropContent();
+            if(TestTrue(TEXT("Manager grip starts a plugin drag"),Drag.IsValid()))
+            {
+                TestTrue(TEXT("Drop on lower half moves after target"),TargetRow->OnDrop(G,FDragDropEvent(Mouse,Drag)).IsEventHandled());
+                auto Order=H->PluginDisplayOrder();TestEqual(TEXT("Manager drop sets shared order"),Order.IndexOfByKey(TEXT("huntledger")),Order.IndexOfByKey(TEXT("supplyledger"))+1);
+                // Process the same deferred tick used by live manager ordering.
+                TFunction<void(TSharedRef<SWidget>)> TickTree=[&](TSharedRef<SWidget> W){W->Tick(G,2,.016f);auto* Children=W->GetChildren();for(int32 I=0;I<Children->Num();++I)TickTree(Children->GetChildAt(I));};TickTree(Manager);
+                TestTrue(TEXT("Ordering preserves existing manager controls"),PreservedCard==FindTag(Manager,TEXT("PluginOpen.huntledger")));
+            }
+        }
+        Dock->Refresh();H->SetPluginBarHorizontal(true);Dock->Refresh();
+        auto BarButton=FindTag(Dock,TEXT("PluginBarButton.huntledger")),BarTarget=FindTag(Dock,TEXT("PluginBarOrder.supplyledger"));
+        if(TestTrue(TEXT("Bar icons support dragging in horizontal layout"),BarButton&&BarTarget))
+        {
+            const auto G=FGeometry::MakeRoot(FVector2D(32,32),FSlateLayoutTransform());
+            const FPointerEvent Mouse(0,FVector2D(2,16),FVector2D(2,16),{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState());
+            auto Drag=BarButton->OnDragDetected(G,Mouse).GetDragDropContent();
+            if(TestTrue(TEXT("Bar icon starts ordering rather than opening its window"),Drag.IsValid()))
+            {
+                Ui->SetUiLocked(true);TestFalse(TEXT("Locking during drag cancels reordering"),BarTarget->OnDrop(G,FDragDropEvent(Mouse,Drag)).IsEventHandled());Ui->SetUiLocked(false);
+                TestTrue(TEXT("Left-half drop moves before horizontal icon"),BarTarget->OnDrop(G,FDragDropEvent(Mouse,Drag)).IsEventHandled());
+            }
+        }
+        TestTrue(TEXT("UI ordering never changes plugin execution ordering"),H->Plugins==ExecutionOrder);
+        const auto Order=H->PluginDisplayOrder();
+        TestEqual(TEXT("Bar ordering is reflected in manager order"),Order.IndexOfByKey(TEXT("huntledger")),Order.IndexOfByKey(TEXT("supplyledger"))-1);
+        H->SetPluginWindowPinned(TEXT("__manager"),true);Manager->SaveOverlayLayout();
+        FString Saved;FFileHelper::LoadFileToString(Saved,*(Root/TEXT("settings.json")));H->Settings=Json(*Saved);
+        TestTrue(TEXT("Shared plugin order survives disk reload"),H->PluginDisplayOrder()==Order);
+        auto Reopened=SNew(SACEPluginDesktop).Host(H).ManagerOnly(true);
+        TestEqual(TEXT("Manager position survives reload"),Reopened->Windows[TEXT("__manager")].Position,Position);
+        TestEqual(TEXT("Manager size survives reload"),Reopened->Windows[TEXT("__manager")].Size,Size);
+        TestTrue(TEXT("Manager pin survives reload"),H->IsPluginWindowPinned(TEXT("__manager")));
+        TestFalse(TEXT("Unknown plugin cannot corrupt order"),H->MovePluginInOrder(TEXT("missing"),TEXT("ucm"),false));
+        H->SetPluginWindowPinned(TEXT("__manager"),false);H->SetPluginBarHorizontal(false);Dock->Refresh();
+    }
     if(FApp::CanEverRender())
     {
         // sRGB targets already encode linear colors. Avoid applying gamma twice.
-        auto Panel=SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush"))
-            .BorderBackgroundColor(FLinearColor(.025f,.035f,.045f,1.f)).Padding(16)[H->MakePanel()];FWidgetRenderer Renderer(false,true);
+        auto Panel=SNew(SACEPluginDesktop).Host(H).ManagerOnly(true);FWidgetRenderer Renderer(false,true);
         int32 LootTitles=0,OpenButtons=0,EditorControls=0;
         TFunction<void(TSharedRef<SWidget>)> InspectManager=[&](TSharedRef<SWidget> Widget)
         {
             if(Widget->GetTag().ToString().StartsWith(TEXT("PluginOpen.")))++OpenButtons;
-            if(Widget->GetTypeAsString()==TEXT("SSlider")||Widget->GetTypeAsString()==TEXT("SMultiLineEditableTextBox"))++EditorControls;
+            if((Widget->GetTypeAsString()==TEXT("SSlider")&&!Widget->GetTag().ToString().StartsWith(TEXT("PluginOpacity.")))
+                ||Widget->GetTypeAsString()==TEXT("SMultiLineEditableTextBox"))++EditorControls;
             if((Widget->GetTypeAsString()==TEXT("STextBlock")||Widget->GetTypeAsString()==TEXT("SACEPluginText"))&&StaticCastSharedRef<STextBlock>(Widget)->GetText().ToString()==TEXT("Loot Profile Editor"))++LootTitles;
             auto* Children=Widget->GetChildren();for(int32 I=0;I<Children->Num();++I)InspectManager(Children->GetChildAt(I));
         };
@@ -699,6 +814,9 @@ bool FACEPluginHostTest::RunTest(const FString&)
             if(FString(Id)==TEXT("looteditor"))TestTrue(TEXT("Loot editor keeps its tabs"),Labels.Contains(TEXT("Loot rules"))&&Labels.Contains(TEXT("Vendors")));
             if(FString(Id)==TEXT("itemtools"))TestTrue(TEXT("Item Tools keeps stop and task controls"),Labels.Contains(TEXT("Stop"))&&Labels.Contains(TEXT("Give")));
         }
+        const auto ManagerLabels=VisibleText(Panel);
+        TestEqual(TEXT("Manager has one title in its window header"),ManagerLabels.FilterByPredicate([](const FString& S){return S==TEXT("Plugin Manager");}).Num(),1);
+        TestFalse(TEXT("Manager has no duplicate Plugins content heading"),ManagerLabels.Contains(TEXT("Plugins")));
         TestTrue(TEXT("Embedded UCM retains a heading without a frame"),VisibleText(H->MakeUCMPanel()).Contains(TEXT("UCM")));
         TestTrue(TEXT("Embedded loot editor retains its heading"),VisibleText(H->MakeUCMPanel(TEXT("Standalone loot"))).Contains(TEXT("Loot Profile Editor")));
         TestTrue(TEXT("Embedded Item Tools retains its heading"),VisibleText(H->MakeItemToolsPanel()).Contains(TEXT("Item Tools")));

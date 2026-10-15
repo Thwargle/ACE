@@ -39,7 +39,7 @@ The desktop overlay hides with Alt+Z and is removed on logout.
   normal map window. It follows the player's predicted position and automatically
   switches between overworld terrain and transparent dungeon/building outlines.
   Both views share the saved position, size and visibility; existing dungeon pins
-  carry over. Each view retains its own zoom while the overlay is open. Clear Pin
+  carry over. Each view saves its own zoom across closing the map and relogging. Clear Pin
   to hide both views; reopen the globe window to change these options.
 - Use the pinned map's **+ / −** buttons to zoom in or out around the player,
   including while the UI is locked. They work in both overworld and interior views.
@@ -55,6 +55,8 @@ The desktop overlay hides with Alt+Z and is removed on logout.
   Saved arrow and map positions are retained across temporary viewport changes.
 - Left drag pans. Mouse wheel zooms around the cursor; + and - zoom at the center.
 - Center on me centers without discarding the zoom. Reset view restores the overview.
+- The full map also saves separate indoor and outdoor zoom levels, independently
+  of the pinned map. Reset view saves the default zoom for the current view only.
 - Click a marker or map location to set a destination.
 - Towns, Portals and POIs control marker categories. The name filter restricts markers.
 - Labels appear when zoomed in, or by hovering a marker. Detailed atlas markers

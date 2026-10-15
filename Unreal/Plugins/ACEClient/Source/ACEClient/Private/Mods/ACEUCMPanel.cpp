@@ -72,7 +72,7 @@ namespace ACEUCMPanelPrivate
         SLATE_BEGIN_ARGS(SUCMPanel):_ShowTitle(true){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(FString,InitialPage) SLATE_ARGUMENT(bool,ShowTitle) SLATE_END_ARGS()
         void Construct(const FArguments& A)
         {
-            Host=A._Host;ShowTitle=A._ShowTitle;FACEPluginStyle::Use(A._Host);if(!A._InitialPage.IsEmpty())Page=A._InitialPage;for(auto P:Host->Plugins)if(P->Id==TEXT("ucm"))Plugin=P;
+            Host=A._Host;ShowTitle=A._ShowTitle;FACEPluginStyle::Use(A._Host,A._InitialPage==TEXT("Standalone loot")?TEXT("looteditor"):TEXT("ucm"));if(!A._InitialPage.IsEmpty())Page=A._InitialPage;for(auto P:Host->Plugins)if(P->Id==TEXT("ucm"))Plugin=P;
             if(!Plugin)return;
             if(Page==TEXT("Rules"))Page=TEXT("Monsters");
             if(Page==TEXT("Profiles"))Page=TEXT("Import");
@@ -152,7 +152,7 @@ namespace ACEUCMPanelPrivate
             if(!Description.IsEmpty())Add(Text(Description,15,Muted));
         }
         TSharedRef<SWidget> Tile(TSharedRef<SWidget> W)
-        {return SNew(SBorder).BorderImage(White()).BorderBackgroundColor(Card).Padding(8)[W];}
+        {return SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->SectionFrame).Padding(8)[W];}
         TMap<FString,FString> SectionNewNames;
         FString CreatingSection,DeletingSection,DeletingName,MonsterSearch,MonsterFilter;
         void ResetProfileEditors(){LootDraft.Reset();ConditionDraft.Reset();StateIndex=0;ExpandedMonster=INDEX_NONE;}
@@ -580,6 +580,7 @@ namespace ACEUCMPanelPrivate
         }
         void Rebuild()
         {
+            if(!Host.IsValid())return;FACEPluginStyle::Use(Host.Get(),EditorOnly?TEXT("looteditor"):TEXT("ucm"));
             RenderedProfile=P();
             SectionBody.Reset();Body->ClearChildren();Brushes.Empty();
             if(Page==TEXT("Log"))

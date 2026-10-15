@@ -15,7 +15,7 @@ class SACEPluginDesktop : public SCompoundWidget
     friend class FACELedgerTest;
     friend class FACEUCMLogTest;
 public:
-    SLATE_BEGIN_ARGS(SACEPluginDesktop) {} SLATE_ARGUMENT(UACEPluginSubsystem*, Host) SLATE_END_ARGS()
+    SLATE_BEGIN_ARGS(SACEPluginDesktop):_Host(nullptr),_ManagerOnly(false){} SLATE_ARGUMENT(UACEPluginSubsystem*, Host) SLATE_ARGUMENT(bool,ManagerOnly) SLATE_END_ARGS()
     void Construct(const FArguments& Args);
     void Refresh();
     void Toggle(const FString& Id);
@@ -28,7 +28,8 @@ private:
         TSharedPtr<SWidget> Widget;
         SConstraintCanvas::FSlot* Slot = nullptr;
         FVector2D Position, Size;
-        FString LedgerId;
+        FString Id,LedgerId;
+        bool HiddenChrome=false;
         bool Open = true;
         bool MapOverlay = false;
         bool PluginBar = false;
@@ -42,6 +43,7 @@ private:
     FVector2D ViewSize = FVector2D::ZeroVector;
     int32 TopOrder = 1;
     bool ConstrainWindows = true;
+    bool ManagerOnly = false;
     void Layout(FWindow& Window);
     FVector2D DisplaySize(const FWindow& Window) const;
     void Move(const FString& Id, FVector2D Delta, bool Save);

@@ -10,7 +10,7 @@
 
 TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
 {
-    FACEPluginStyle::Use(this);
+    FACEPluginStyle::Use(this,TEXT("ucmmicro"));
     const TWeakObjectPtr<UACEPluginSubsystem> Host(this);
     const auto UCM=[Host]() -> TSharedPtr<FACEClientPlugin>
     {if(Host.IsValid())for(auto P:Host->Plugins)if(P->Id==TEXT("ucm"))return P;return nullptr;};

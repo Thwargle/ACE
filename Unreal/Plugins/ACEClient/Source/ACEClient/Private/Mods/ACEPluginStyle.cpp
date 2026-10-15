@@ -13,15 +13,17 @@
 #include "Rendering/DrawElements.h"
 
 namespace { TWeakPtr<FACEPluginStyle> CurrentStyle; }
-TSharedRef<FACEPluginStyle> FACEPluginStyle::Use(UACEPluginSubsystem* Host)
+TSharedRef<FACEPluginStyle> FACEPluginStyle::Use(UACEPluginSubsystem* Host,const FString& WindowId)
 {
-    if(!Host->RetailPluginStyle)
+    auto& Style=WindowId.IsEmpty()?Host->RetailPluginStyle:Host->WindowPluginStyles.FindOrAdd(WindowId);
+    if(!Style)
     {
         auto* C=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
-        Host->RetailPluginStyle=MakeShared<FACEPluginStyle>(C?C->GetUIResourceResolver():nullptr);
+        Style=MakeShared<FACEPluginStyle>(C?C->GetUIResourceResolver():nullptr);
     }
-    Host->RetailPluginStyle->Refresh();
-    CurrentStyle=Host->RetailPluginStyle;return Host->RetailPluginStyle.ToSharedRef();
+    Style->Refresh();
+    if(!WindowId.IsEmpty())Style->SetWindowAppearance(Host->GetPluginWindowOpacity(WindowId),Host->IsPluginWindowChromeHidden(WindowId));
+    CurrentStyle=Style;return Style.ToSharedRef();
 }
 TSharedRef<FACEPluginStyle> FACEPluginStyle::Current()
 {
@@ -54,10 +56,13 @@ const FSlateBrush* FACEPluginStyle::ItemImage(const FACESupplyEntry& Item,bool F
 FACEPluginStyle::FACEPluginStyle(UACEUIResourceResolver* InResolver):Resolver(InResolver) { InitializeArtwork(); }
 void FACEPluginStyle::Refresh()
 {
-    if(!Atlas&&Resolver&&Resolver->GetDatSubsystem()&&Resolver->GetDatSubsystem()->IsDatReady())InitializeArtwork();
+    // A font atlas is not proof that checkbox/slider images have resolved.
+    // The login manager can be constructed before asynchronous DAT loading ends.
+    if(!DatArtworkLoaded&&Resolver&&Resolver->GetDatSubsystem()&&Resolver->GetDatSubsystem()->IsDatReady())InitializeArtwork();
 }
 void FACEPluginStyle::InitializeArtwork()
 {
+    DatArtworkLoaded=Resolver&&Resolver->GetDatSubsystem()&&Resolver->GetDatSubsystem()->IsDatReady();
     const FLinearColor Gold(.65f,.43f,.15f),Ivory(.94f,.89f,.76f);
     Frame=FSlateRoundedBoxBrush(FLinearColor(.008f,.006f,.003f,.96f),0.f,Gold,2.f);
     const FLinearColor TitleColor(.025f,.012f,.004f,1);
@@ -77,11 +82,15 @@ void FACEPluginStyle::InitializeArtwork()
     DockButton.SetNormal(FSlateRoundedBoxBrush(FLinearColor(.008f,.005f,.002f,.9f),0.f,FLinearColor(.4f,.26f,.09f),1.f));
     Check=FCoreStyle::Get().GetWidgetStyle<FCheckBoxStyle>("Checkbox");
     auto Small=[this](uint32 Id){auto B=*Image(Id);B.ImageSize=FVector2D(14,14);return B;};
-    Check.SetUncheckedImage(Small(0x0600191F)).SetUncheckedHoveredImage(Small(0x0600191F)).SetUncheckedPressedImage(Small(0x0600191F))
-        .SetCheckedImage(Small(0x0600191A)).SetCheckedHoveredImage(Small(0x0600191A)).SetCheckedPressedImage(Small(0x0600191A));
+    // Keep Slate's distinct states until each retail image is available. Empty
+    // image brushes paint identical squares for both enabled and disabled states.
+    const auto Unchecked=Small(0x0600191F),Checked=Small(0x0600191A);
+    if(Unchecked.GetResourceObject())Check.SetUncheckedImage(Unchecked).SetUncheckedHoveredImage(Unchecked).SetUncheckedPressedImage(Unchecked);
+    if(Checked.GetResourceObject())Check.SetCheckedImage(Checked).SetCheckedHoveredImage(Checked).SetCheckedPressedImage(Checked);
     auto Handle=*Image(0x06001286);Handle.ImageSize=FVector2D(12,20);
-    Slider=FSliderStyle().SetBarThickness(4).SetNormalBarImage(*Image(0x06001285)).SetHoveredBarImage(*Image(0x06001285))
-        .SetNormalThumbImage(Handle).SetHoveredThumbImage(Handle);
+    Slider=FCoreStyle::Get().GetWidgetStyle<FSliderStyle>("Slider");Slider.SetBarThickness(4);
+    if(const auto* Bar=Image(0x06001285);Bar->GetResourceObject())Slider.SetNormalBarImage(*Bar).SetHoveredBarImage(*Bar);
+    if(Handle.GetResourceObject())Slider.SetNormalThumbImage(Handle).SetHoveredThumbImage(Handle);
     Edit=FCoreStyle::Get().GetWidgetStyle<FEditableTextBoxStyle>("NormalEditableTextBox");
     FSlateRoundedBoxBrush Well(FLinearColor(.012f,.008f,.004f),0.f,Gold,1.f);
     Edit.SetBackgroundImageNormal(Well).SetBackgroundImageHovered(Well).SetBackgroundImageFocused(Well).SetBackgroundImageReadOnly(Well).SetForegroundColor(Ivory);
@@ -89,6 +98,27 @@ void FACEPluginStyle::InitializeArtwork()
     Spin=FCoreStyle::Get().GetWidgetStyle<FSpinBoxStyle>("SpinBox");Spin.SetBackgroundBrush(Well).SetHoveredBackgroundBrush(Well)
         .SetActiveFillBrush(Well).SetInactiveFillBrush(Well).SetForegroundColor(Ivory);
     if(Resolver&&Resolver->ResolveFont(0x40000000,Font))Atlas=Resolver->ResolveFontAtlas(Font.ForegroundSurfaceDataID,TintAtlas);
+    OriginalFrame=Frame;OriginalBackground=Background;OriginalTitle=TitleBackground;
+    OriginalSectionFrame=SectionFrame;OriginalSectionHeader=SectionHeader;
+    const float Previous=BackgroundOpacity;BackgroundOpacity=-1;
+    if(Previous>=0)SetWindowAppearance(Previous,HideFrame);
+}
+bool FACEPluginStyle::SetWindowAppearance(float Opacity,bool Frameless)
+{
+    Opacity=FMath::Clamp(Opacity,0.f,1.f);
+    if(BackgroundOpacity==Opacity&&HideFrame==Frameless)return false;
+    BackgroundOpacity=Opacity;HideFrame=Frameless;
+    auto Fade=[](FSlateBrush& To,const FSlateBrush& From,float Alpha)
+    {
+        To=From;auto Color=From.TintColor.GetSpecifiedColor();Color.A*=Alpha;To.TintColor=Color;
+        Color=From.OutlineSettings.Color.GetSpecifiedColor();Color.A*=Alpha;To.OutlineSettings.Color=Color;
+    };
+    Fade(Frame,OriginalFrame,Frameless?0.f:Opacity);
+    Fade(Background,OriginalBackground,Frameless?0.f:Opacity);
+    Fade(TitleBackground,OriginalTitle,Opacity);
+    Fade(SectionFrame,OriginalSectionFrame,Opacity);
+    Fade(SectionHeader,OriginalSectionHeader,Opacity);
+    return true;
 }
 TSharedPtr<FACEPluginFont> FACEPluginStyle::Typeface(int32 Size)
 {

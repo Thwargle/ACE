@@ -69,11 +69,25 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
     }
     FString Error;TSharedPtr<FJsonObject> Output;
     FACEPluginVM Presentation;
-    TestTrue(TEXT("Lua presentation script loads"),Presentation.Load(TEXT("return function() return {presentation={title='Quest Tracker - 12 kills',icon='active.png'}} end"),Error));
+    TestTrue(TEXT("Lua presentation script loads"),Presentation.Load(TEXT("return function() return {presentation={title='Quest Tracker - 12 kills',icon='active.png',window={opacity=0.35,pinned=true}}} end"),Error));
     TestTrue(TEXT("Lua decoder exposes presentation output"),Presentation.Step(Snapshot,P->Profile,Output,Error));
     TestTrue(TEXT("Lua presentation applies"),Output&&H->ApplyPublicOutput(*P,Output,Error));
     TestEqual(TEXT("Lua overrides the title"),P->DisplayTitle(),FString(TEXT("Quest Tracker - 12 kills")));
     TestEqual(TEXT("Lua overrides the toolbar icon"),P->DisplayIcon(),FString(TEXT("active.png")));
+    TestEqual(TEXT("Lua supplies window opacity"),H->GetPluginWindowOpacity(P->Id),.35f);
+    TestTrue(TEXT("Lua can request a pinned window"),H->IsPluginWindowPinned(P->Id));
+    H->SetPluginWindowOpacity(P->Id,.6f);H->SetPluginWindowPinned(P->Id,false);
+    TestEqual(TEXT("Player opacity overrides plugin request"),H->GetPluginWindowOpacity(P->Id),.6f);
+    TestFalse(TEXT("Player can unpin a plugin-pinned window"),H->IsPluginWindowPinned(P->Id));
+    H->SetPluginWindowOpacity(FString(),.2f);H->SetPluginOpacityGlobal(true);
+    TestEqual(TEXT("Global override wins over user and plugin values"),H->GetPluginWindowOpacity(P->Id),.2f);
+    H->SetPluginOpacityGlobal(false);H->ResetPluginWindowOpacity(P->Id);
+    TestEqual(TEXT("Clearing override restores plugin opacity"),H->GetPluginWindowOpacity(P->Id),.35f);
+    for(const TCHAR* Invalid:{TEXT(R"({"presentation":{"window":{"opacity":2}}})"),TEXT(R"({"presentation":{"window":{"opacity":-0.1}}})"),
+        TEXT(R"({"presentation":{"window":{"pinned":"yes"}}})"),TEXT(R"({"presentation":{"window":{"width":10}}})")})
+        TestFalse(TEXT("Invalid window requests are rejected"),H->ApplyPublicOutput(*P,ParseAPI(Invalid),Error));
+    TestEqual(TEXT("Rejected appearance preserves previous output"),H->GetPluginWindowOpacity(P->Id),.35f);
+    H->SetPluginWindowOpacity(FString(),1.f);
     TestTrue(TEXT("Other outputs retain presentation"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"status":"Counting"})")),Error));
     TestEqual(TEXT("Omitted presentation is unchanged"),P->DisplayTitle(),FString(TEXT("Quest Tracker - 12 kills")));
     TestFalse(TEXT("Icon path traversal refused"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"title":"Bad","icon":"../secret.png"}})")),Error));

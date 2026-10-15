@@ -1,4 +1,5 @@
 #include "Mods/ACEPluginSubsystem.h"
+#include "Mods/ACEPluginDesktop.h"
 #include "Mods/ACEPluginPresentation.h"
 #include "Mods/ACEPluginCastMotion.h"
 #include "ACEPluginVM.h"
@@ -282,6 +283,7 @@ void UACEPluginSubsystem::Deinitialize()
     StopAll(TEXT("Client closing")); ReleaseLocalCosmetics(); FTSTicker::GetCoreTicker().RemoveTicker(Ticker);
     FlushUCMLog();
     FTSTicker::GetCoreTicker().RemoveTicker(DecisionWakeTicker);DecisionWakeTicker.Reset();
+    if (DesktopPanel) DesktopPanel->SaveOverlayLayout();
     if (DesktopPanel) if (auto* V = GetGameInstance()->GetGameViewportClient()) V->RemoveViewportWidgetContent(DesktopPanel.ToSharedRef());
     RemoveDesktopDock();
     DesktopPanel.Reset(); Plugins.Reset(); Super::Deinitialize();
@@ -359,6 +361,7 @@ TSharedPtr<FACEClientPlugin> UACEPluginSubsystem::Find(const FString& Id) const
 { for (const auto& P : Plugins) if (P->Id == Id) return P; return nullptr; }
 void UACEPluginSubsystem::Discover()
 {
+    ++PluginOrderRevision;
     RemoveDesktopDock();
     StopAll(TEXT("Reloading plugins")); ReleaseLocalCosmetics(); Plugins.Reset(); Notice.Empty();
     CompanionSession.Reset();CompanionPlayer=0;CompanionServer.Empty();

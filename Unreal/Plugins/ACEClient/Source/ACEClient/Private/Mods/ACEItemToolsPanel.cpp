@@ -35,7 +35,7 @@ public:
     SLATE_BEGIN_ARGS(SItemToolsPanel):_ShowTitle(true){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(FString,Page) SLATE_ARGUMENT(bool,ShowTitle) SLATE_END_ARGS()
     void Construct(const FArguments& Args)
     {
-        Host=Args._Host;FACEPluginStyle::Use(Args._Host);Page=Args._Page.IsEmpty()?TEXT("Give"):Args._Page;
+        Host=Args._Host;FACEPluginStyle::Use(Args._Host,TEXT("itemtools"));Page=Args._Page.IsEmpty()?TEXT("Give"):Args._Page;
         for(const auto& P:Host->Plugins)if(P->Id==TEXT("itemtools"))Plugin=P;
         if(!Plugin)return;
         auto Tabs=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
@@ -88,7 +88,7 @@ private:
     void Add(TSharedRef<SWidget> Widget){Body->AddSlot().AutoHeight().Padding(0,0,0,12)[Widget];}
     void Heading(const FString& Title,const FString& Help){Add(Text(Title,20));Add(Text(Help,14,Muted));}
     TSharedRef<SWidget> Tile(TSharedRef<SWidget> Widget)
-    {return SNew(SBorder).BorderImage(FCoreStyle::Get().GetBrush("WhiteBrush")).BorderBackgroundColor(Card).Padding(10)[Widget];}
+    {return SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->SectionFrame).Padding(10)[Widget];}
     void Pick(const FString& Key,const FString& Kind,const FString& Label)
     {
         auto Row=SNew(SVerticalBox);
@@ -188,6 +188,7 @@ private:
     }
     void Rebuild()
     {
+        if(!Host.IsValid())return;FACEPluginStyle::Use(Host.Get(),TEXT("itemtools"));
         Body->ClearChildren();
         if(Page==TEXT("Give"))
         {

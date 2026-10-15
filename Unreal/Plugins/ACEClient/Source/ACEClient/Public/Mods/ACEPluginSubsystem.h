@@ -108,6 +108,7 @@ public:
     virtual void Deinitialize() override;
     void Discover();
     TSharedPtr<class FACEPluginStyle> RetailPluginStyle;
+    TMap<FString,TSharedPtr<class FACEPluginStyle>> WindowPluginStyles;
     static bool IsLedger(const FString& Id) { return Id==TEXT("supplyledger")||Id==TEXT("huntledger"); }
     TSharedRef<SWidget> MakeLedgerPanel(const FString& Id);
     const TArray<FACESupplyEntry>& GetSupplies() const { return LedgerSupplies; }
@@ -115,10 +116,13 @@ public:
     uint32 GetSupplyRevision() const { return SupplyRevision; }
     void EditSupplySelection(bool Add);
     void RemoveSupply(int32 Index);
+    void ToggleSupplyName(int32 Index);
+    bool AreSupplyNamesVisible() const { return SupplyNamesVisible; }
     void ResetHuntLedger();
     bool LedgerOption(const FString& Id,const FString& Key,bool Default=false) const;
     void SetLedgerOption(const FString& Id,const FString& Key,bool Value);
     FVector2D LedgerSize(const FString& Id) const;
+    double LedgerChromeHeight(const FString& Id, bool Hidden) const;
     UFUNCTION() void ObserveLedgerVitals(const FACEPlayerVitals& Vitals);
     TArray<TSharedPtr<FACEClientPlugin>> Plugins;
     FString Notice;
@@ -175,12 +179,27 @@ public:
     void SavePluginWindowVisibility(const FString& Id, bool Open);
     FVector2D GetPluginWindowPosition(const FString& Id, const FVector2D& Default) const;
     void SavePluginWindowPosition(const FString& Id, const FVector2D& Position);
+    float GetPluginWindowOpacity(const FString& Id = FString()) const;
+    void SetPluginWindowOpacity(const FString& Id, float Opacity, bool Persist = true);
+    void ResetPluginWindowOpacity(const FString& Id);
+    bool HasPluginWindowOpacity(const FString& Id) const;
+    bool IsPluginOpacityGlobal() const;
+    void SetPluginOpacityGlobal(bool Global);
+    bool IsPluginWindowPinned(const FString& Id) const;
+    void SetPluginWindowPinned(const FString& Id, bool Pinned);
+    bool IsPluginQuickShow() const;
+    bool IsPluginWindowChromeHidden(const FString& Id) const;
+    bool CanManipulatePluginWindow(const FString& Id) const;
+    TSharedRef<SWidget> MakePluginWindowControls(const FString& Id);
     bool IsPluginBarVisible() const;
     void SetPluginBarVisible(bool Visible);
     bool IsPluginBarMinimized() const;
     void SetPluginBarMinimized(bool Minimized);
     bool IsPluginBarHorizontal() const;
     void SetPluginBarHorizontal(bool Horizontal);
+    TArray<FString> PluginDisplayOrder() const;
+    bool MovePluginInOrder(const FString& Id, const FString& Target, bool After);
+    uint32 GetPluginOrderRevision() const { return PluginOrderRevision; }
     bool IsPluginBarUnlocked() const;
     void TogglePanel();
     TSharedRef<SWidget> MakeUCMPanel(const FString& InitialPage=FString(), bool bShowTitle=true);
@@ -209,6 +228,8 @@ public:
     void SetWaypointOption(const FString& Key,bool Value);
     float WaypointMapOpacity() const;
     void SetWaypointMapOpacity(float Value);
+    double WaypointMapZoom(bool Overlay, bool Dungeon) const;
+    void SetWaypointMapZoom(bool Overlay, bool Dungeon, double Value);
     void ClearWaypoint();
     bool ImportWaypointLocations(const FString& Path);
     const TArray<FACEWaypointLandmark>& GetWaypointLocations();
@@ -254,8 +275,9 @@ private:
     bool SaveProfileData(const FString& Id, const FString& Name, TSharedPtr<FJsonObject> Profile, bool bStopRunning);
     void UpdateLedgers();
     bool UpdateLedgerCharacter();
-    void SaveSupplies();
+    void SaveSupplies(bool Rebuild=true);
     TArray<FACESupplyEntry> LedgerSupplies;
+    bool SupplyNamesVisible=true;
     FACEHuntLedger HuntLedger;
     FString LedgerCharacter;
     uint64 SupplyInventoryRevision=MAX_uint64;
@@ -338,7 +360,8 @@ private:
     void ScheduleDecisionWake(double ReadyAt);
     bool RunDecisionWake(float DeltaTime);
     bool CanPauseLootApproach(const FACEClientPlugin& P) const;
-    TSharedPtr<SWidget> DesktopPanel;
+    uint32 PluginOrderRevision = 0;
+    TSharedPtr<class SACEPluginDesktop> DesktopPanel;
     TSharedPtr<class SACEPluginDesktop> DesktopDock;
     void UpdateDesktopDock();
     void RemoveDesktopDock();

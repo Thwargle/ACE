@@ -8,7 +8,7 @@ loader for Decal DLLs or Virindi View Services assemblies.
 
 Commands specific to AC:Unreal use the `acue` prefix. Type `/acuehelp` for the
 list: `/acueperf` (performance report), `/acueobject` (selected object report),
-`/acueplugins` (Manage Plugins), `/acueplugin <id> <command>`, `/acueucm`, and
+`/acueplugins` (Plugin Manager), `/acueplugin <id> <command>`, `/acueucm`, and
 `/acueitems`. Chat also accepts `@` in place of `/`.
 
 Use these names in new Lua plugins, meta commands, examples, and help text.
@@ -26,6 +26,16 @@ opening a window does not start its automation. Disabled plugins stay hidden.
 windows. It is enabled by default. Disable it to allow offscreen placement;
 enable it again to bring windows back inside the game interface.
 
+**Plugin Manager > Background opacity** sets the default for plugin windows with
+a slider and percentage readout. Drag to preview; release to save.
+Check **Use this opacity for all plugins** to override every individual value, or
+leave it unchecked to use each plugin's own value. Each plugin card has an opacity
+control and **Use plugin/default** to clear your override. Text, icons and controls
+stay fully readable. Changes update open windows without closing their menus.
+The header's **Pin** button (also available in Plugin Manager) hides the outer
+frame and background and locks the window in place. Quick-show temporarily
+restores the frame. Window sizes can be reduced for compact HUDs.
+
 **Supply Ledger** is a compact inventory counter inspired by Virindi's Comps HUD.
 Select an owned item and click **+** to track its item type across all packs,
 including equipped stacks. Each row has its own **-** button, so an out-of-stock
@@ -33,6 +43,10 @@ item can still be removed. Lists are
 saved separately for each character and server. Zero-count entries remain visible.
 Each row uses the selected item's inventory icon, including its overlays and
 item-type background. Its artwork is retained when the item runs out.
+Click any row's name or icon to show or hide all item names together. Counts stay
+visible in the same position; resize the window to bring them closer to the icons.
+Hover an icon to read its item name. This preference is saved with the character's
+supply list. An empty ledger keeps its **+** add control visible even when pinned.
 
 **Hunt Ledger** shows XP and luminance earned in the last five minutes, the average
 per hour, and totals since login or **Reset run**. Hourly rates use actual elapsed
@@ -54,14 +68,20 @@ Keyboard settings. Drag Supply Ledger's bottom-right corner while unlocked to
 resize it. Its width and list height survive pinning and logins, along with position,
 visibility and the permanent UI lock.
 Enable or disable the ledgers
-in **Manage Plugins**. Five-minute history uses a fixed-size buffer.
+in **Plugin Manager**. Five-minute history uses a fixed-size buffer.
 
 The plugin bar uses original 26-pixel vector emblems; hover for the full plugin name and
-status. Its grip still moves when the UI is unlocked, and its minus button
+status. Its **gear** opens Plugin Manager. Its grip still moves when the UI is unlocked, and its minus button
 collapses it to a line. Hide or restore the bar with **Show plugin bar** in
-**Settings > Game Play > Manage Plugins**. In the same manager, **Horizontal plugin bar**
+**Settings > Game Play > Plugin Manager**. In the same manager, **Horizontal plugin bar**
 switches between a horizontal row and the default vertical column. The orientation
 is saved across logins and keeps the icons square, including when the bar must scroll.
+Drag an icon to reorder it, or drag the six-dot grip to the left of a plugin's
+icon in Plugin Manager. A gold insertion line marks the drop position. Both views
+share one saved order; changing it does not change plugin execution order. Unlock
+the UI or hold Quick-show before dragging. Plugin Manager itself uses the same
+movable, resizable, pinnable frame as other windows, and remembers its position,
+size, pin and open/closed state across logins.
 Plugin windows share retail DAT bitmap labels, inventory
 artwork, dark backgrounds, gold borders and red buttons. Text entry retains Slate's
 native caret, selection and IME behavior. Standalone windows use their title bar
@@ -80,6 +100,10 @@ and rising chart for Hunt Ledger). Icons retain square proportions at every UI
 scale. Third-party plugins can supply a PNG icon and a display title through
 [plugin presentation metadata](PublicAPI.md#plugin-title-and-toolbar-icon); an
 extension sigil is used when no valid custom icon is available.
+
+Waypoint map zoom is saved separately for indoor and outdoor views, both in the
+pinned minimap and the full map window. Closing a map or relogging restores its
+zoom along with saved plugin positions, sizes, visibility, opacity and pin preferences.
 
 **Item Tools** provides bulk giving, vendor buy/sell, GiveVT-style profile
 transfers, keyed chest collection/distribution, and character-specific supply

@@ -27,6 +27,8 @@ bool UACEPluginSubsystem::UpdateLedgerCharacter()
     const FString Key=FMD5::HashAnsiString(*C->GetServerName())+FString::Printf(TEXT(".%08X"),uint32(Player));
     if(Key==LedgerCharacter)return true;
     LedgerCharacter=Key;LedgerSupplies.Reset();++SupplyRevision;SupplyInventoryRevision=MAX_uint64;
+    SupplyNamesVisible=true;
+    const bool HasNamePreference=Settings&&Settings->TryGetBoolField(TEXT("supplies.names.")+Key,SupplyNamesVisible);
     const TArray<TSharedPtr<FJsonValue>>* Rows=nullptr;
     if(Settings&&Settings->TryGetArrayField(TEXT("supplies.")+Key,Rows))for(const auto& Row:*Rows)
     {
@@ -34,6 +36,8 @@ bool UACEPluginSubsystem::UpdateLedgerCharacter()
         O->TryGetNumberField(TEXT("class"),Entry.ClassId);O->TryGetNumberField(TEXT("icon"),Entry.Icon);O->TryGetStringField(TEXT("name"),Entry.Name);
         O->TryGetNumberField(TEXT("overlay"),Entry.Overlay);O->TryGetNumberField(TEXT("underlay"),Entry.Underlay);
         O->TryGetNumberField(TEXT("effects"),Entry.Effects);O->TryGetNumberField(TEXT("item_type"),Entry.ItemType);
+        // Migrate the old per-row preference to one choice for the entire ledger.
+        bool ShowName=true;if(!HasNamePreference&&O->TryGetBoolField(TEXT("show_name"),ShowName)&&!ShowName)SupplyNamesVisible=false;
         if(!Entry.Name.IsEmpty())LedgerSupplies.Add(Entry);
     }
     ResetHuntLedger();return true;
@@ -55,7 +59,7 @@ void UACEPluginSubsystem::UpdateLedgers()
     SupplyInventoryRevision=S->GetInventoryDataRevision();
     ACELedger::Count(LedgerSupplies,C->GetPlayerGuid(),S->GetWorldObjects());
 }
-void UACEPluginSubsystem::SaveSupplies()
+void UACEPluginSubsystem::SaveSupplies(bool Rebuild)
 {
     if(LedgerCharacter.IsEmpty())return;
     if(!Settings)Settings=MakeShared<FJsonObject>();
@@ -67,7 +71,10 @@ void UACEPluginSubsystem::SaveSupplies()
         O->SetNumberField(TEXT("effects"),E.Effects);O->SetNumberField(TEXT("item_type"),E.ItemType);
         Rows.Add(MakeShared<FJsonValueObject>(O));
     }
-    Settings->SetArrayField(TEXT("supplies.")+LedgerCharacter,Rows);SaveSettings();++SupplyRevision;SupplyInventoryRevision=MAX_uint64;
+    Settings->SetArrayField(TEXT("supplies.")+LedgerCharacter,Rows);
+    Settings->SetBoolField(TEXT("supplies.names.")+LedgerCharacter,SupplyNamesVisible);SaveSettings();
+    if(!Rebuild)return;
+    ++SupplyRevision;SupplyInventoryRevision=MAX_uint64;
     UpdateLedgers();
 }
 void UACEPluginSubsystem::EditSupplySelection(bool Add)
@@ -84,15 +91,24 @@ void UACEPluginSubsystem::EditSupplySelection(bool Add)
 }
 void UACEPluginSubsystem::RemoveSupply(int32 Index)
 {if(LedgerSupplies.IsValidIndex(Index)){LedgerSupplies.RemoveAt(Index);SaveSupplies();}}
+void UACEPluginSubsystem::ToggleSupplyName(int32 Index)
+{if(LedgerSupplies.IsValidIndex(Index)){SupplyNamesVisible=!SupplyNamesVisible;SaveSupplies(false);}}
 bool UACEPluginSubsystem::LedgerOption(const FString& Id,const FString& Key,bool Default) const
 {bool V;return Settings&&Settings->TryGetBoolField(Id+TEXT(".")+Key,V)?V:Default;}
 void UACEPluginSubsystem::SetLedgerOption(const FString& Id,const FString& Key,bool Value)
 {if(!Settings)Settings=MakeShared<FJsonObject>();Settings->SetBoolField(Id+TEXT(".")+Key,Value);SaveSettings();}
 FVector2D UACEPluginSubsystem::LedgerSize(const FString& Id) const
 {
-    const bool Locked=!IsPluginBarUnlocked();
-    return Id==TEXT("supplyledger")?FVector2D(200,14+FMath::Clamp(LedgerSupplies.Num(),1,15)*26+(Locked?0:ACELedger::SupplyEditorHeight+(SupplyNotice.IsEmpty()?0:28)))
-        :FVector2D(290,130+(Locked?0:ACELedger::HuntEditorHeight));
+    const bool Locked=IsPluginWindowChromeHidden(Id);
+    return Id==TEXT("supplyledger")?FVector2D(200,14+FMath::Clamp(LedgerSupplies.Num(),1,15)*26+LedgerChromeHeight(Id,Locked))
+        :FVector2D(290,130+LedgerChromeHeight(Id,Locked));
+}
+double UACEPluginSubsystem::LedgerChromeHeight(const FString& Id,bool Hidden) const
+{
+    if(Id!=TEXT("supplyledger"))return Hidden?0:ACELedger::HuntEditorHeight;
+    if(Hidden&&!LedgerSupplies.IsEmpty())return 0;
+    // Empty pinned ledgers retain their add control, but not the title bar.
+    return ACELedger::SupplyEditorHeight-(Hidden?ACELedger::HeaderHeight:0)+(SupplyNotice.IsEmpty()?0:28);
 }
 
 namespace
@@ -102,9 +118,9 @@ namespace
     public:
         SLATE_BEGIN_ARGS(SACELedgerPanel){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(FString,Id) SLATE_END_ARGS()
         void Construct(const FArguments& A)
-        {Host=A._Host;Id=A._Id;Style=FACEPluginStyle::Use(A._Host);ChildSlot[SAssignNew(Body,SVerticalBox)];Rebuild();}
+        {Host=A._Host;Id=A._Id;Style=FACEPluginStyle::Use(A._Host,Id);ChildSlot[SAssignNew(Body,SVerticalBox)];Rebuild();}
         virtual void Tick(const FGeometry& G,double T,float D) override
-        {SCompoundWidget::Tick(G,T,D);if(Host.IsValid()&&(Revision!=Host->GetSupplyRevision()||Locked!=!Host->IsPluginBarUnlocked()))Rebuild();UpdateHuntText();}
+        {SCompoundWidget::Tick(G,T,D);if(Host.IsValid()&&(Revision!=Host->GetSupplyRevision()||Locked!=Host->IsPluginWindowChromeHidden(Id)))Rebuild();UpdateHuntText();}
     private:
         TWeakObjectPtr<UACEPluginSubsystem> Host;FString Id;
         TSharedPtr<FACEPluginStyle> Style;TSharedPtr<SVerticalBox> Body;
@@ -161,28 +177,38 @@ namespace
         {return SNew(SButton).Tag(Text==TEXT("Reset run")?TEXT("LedgerReset"):TEXT("LedgerEdit")).IsFocusable(false).ButtonStyle(&Style->Button).ContentPadding(FMargin(8,3)).ToolTipText(FText::FromString(Tip)).OnClicked_Lambda([Action]{Action();return FReply::Handled();})[Label(Text)];}
         void Rebuild()
         {
-            if(!Host.IsValid())return;FACEPluginStyle::Use(Host.Get());Revision=Host->GetSupplyRevision();Locked=!Host->IsPluginBarUnlocked();Body->ClearChildren();UpdateHuntText();
+            if(!Host.IsValid())return;FACEPluginStyle::Use(Host.Get(),Id);Revision=Host->GetSupplyRevision();Locked=Host->IsPluginWindowChromeHidden(Id);Body->ClearChildren();UpdateHuntText();
             if(Id==TEXT("supplyledger"))
             {
-                auto Rows=SNew(SVerticalBox);const auto& LedgerSupplies=Host->GetSupplies();
-                if(LedgerSupplies.IsEmpty())Rows->AddSlot().AutoHeight()[Label(Locked?TEXT("No tracked supplies"):TEXT("Select an inventory item, then +"))];
+                auto Rows=SNew(SVerticalBox).Tag(TEXT("SupplyRows"));const auto& LedgerSupplies=Host->GetSupplies();
+                if(LedgerSupplies.IsEmpty())Rows->AddSlot().AutoHeight()[SNew(SACEPluginText)
+                    .Text(FText::FromString(TEXT("Select item\nthen +"))).Font(FCoreStyle::GetDefaultFontStyle("Regular",10))];
                 for(int32 I=0;I<LedgerSupplies.Num();++I)
                 {
                     auto Row=SNew(SHorizontalBox).ToolTipText(FText::FromString(LedgerSupplies[I].Name+(Locked?TEXT("\nUse the game UI lock or hold Quick-show pinned windows to move and edit this HUD."):TEXT(""))));
                     const auto& Supply=LedgerSupplies[I];
-                    Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[SNew(SBox).WidthOverride(22).HeightOverride(22)
+                    auto Toggle=[H=Host,I]{if(H.IsValid())H->ToggleSupplyName(I);return FReply::Handled();};
+                    Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[SNew(SButton).Tag(FName(*FString::Printf(TEXT("SupplyIcon.%d"),I)))
+                        .ButtonStyle(&FCoreStyle::Get().GetWidgetStyle<FButtonStyle>("NoBorder")).ContentPadding(0).IsFocusable(false)
+                        .ToolTipText(FText::FromString(Supply.Name+TEXT("\nClick icon or name to toggle all item names. Resize the window to move the counts.")))
+                        .OnClicked_Lambda(Toggle)[SNew(SBox).WidthOverride(22).HeightOverride(22)
                         [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)[SNew(SOverlay)
                         +SOverlay::Slot()[SNew(SImage).Image(Style->ItemImage(Supply,false))]
-                        +SOverlay::Slot()[SNew(SImage).Image(Style->ItemImage(Supply,true))]]]];
-                    Row->AddSlot().FillWidth(1).VAlign(VAlign_Center).Padding(4,0)[SNew(SBox).Clipping(EWidgetClipping::ClipToBounds)[Label(LedgerSupplies[I].Name)]];
+                        +SOverlay::Slot()[SNew(SImage).Image(Style->ItemImage(Supply,true))]]]]];
+                    Row->AddSlot().FillWidth(1).VAlign(VAlign_Center).Padding(4,0)[SNew(SButton).Tag(FName(*FString::Printf(TEXT("SupplyName.%d"),I)))
+                        .ButtonStyle(&FCoreStyle::Get().GetWidgetStyle<FButtonStyle>("NoBorder")).ContentPadding(0).IsFocusable(false).HAlign(HAlign_Left)
+                        .Clipping(EWidgetClipping::ClipToBounds).OnClicked_Lambda(Toggle)
+                        .Visibility_Lambda([H=Host]{return H.IsValid()&&H->AreSupplyNamesVisible()?EVisibility::Visible:EVisibility::Hidden;})
+                        [Label(Supply.Name)]];
                     Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
+                        .Tag(FName(*FString::Printf(TEXT("SupplyCount.%d"),I)))
                         .Text_Lambda([H=Host,I]{return FText::AsNumber(H.IsValid()&&H->GetSupplies().IsValidIndex(I)?H->GetSupplies()[I].Count:0);})];
                     if(!Locked)Row->AddSlot().AutoWidth().Padding(4,0)[Button(TEXT("-"),TEXT("Remove this item from the ledger"),[H=Host,I]{if(H.IsValid())H->RemoveSupply(I);})];
                     Rows->AddSlot().AutoHeight().Padding(2,2)[Row];
                 }
-                Body->AddSlot().FillHeight(1)[SNew(SScrollBox)+SScrollBox::Slot()[Rows]];
+                Body->AddSlot().FillHeight(1)[SNew(SScrollBox).ScrollBarThickness(FVector2D(4,4)).ScrollBarPadding(0)+SScrollBox::Slot()[Rows]];
                 Body->SetToolTipText(FText::FromString(Locked?TEXT("Use the game UI lock or hold Quick-show pinned windows to move and edit this HUD."):TEXT("Track selected items across your inventory.")));
-                if(!Locked)
+                if(!Locked||LedgerSupplies.IsEmpty())
                 {
                     Body->AddSlot().AutoHeight().HAlign(HAlign_Left)[Button(TEXT("+"),TEXT("Track the selected inventory item"),[H=Host]{if(H.IsValid())H->EditSupplySelection(true);})];
                     Body->AddSlot().AutoHeight()[SNew(SACEPluginText).AutoWrapText(true).Font(FCoreStyle::GetDefaultFontStyle("Regular",10))

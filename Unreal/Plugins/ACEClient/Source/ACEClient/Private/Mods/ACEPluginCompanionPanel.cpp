@@ -54,7 +54,7 @@ namespace ACEPluginCompanionPanelPrivate
     public:
         SLATE_BEGIN_ARGS(SACECompanionRows){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(FString,Id) SLATE_END_ARGS()
         void Construct(const FArguments& Args)
-        {Host=Args._Host;FACEPluginStyle::Use(Args._Host);Id=Args._Id;ChildSlot[SAssignNew(Rows,SVerticalBox)];Refresh();}
+        {Host=Args._Host;Id=Args._Id;FACEPluginStyle::Use(Args._Host,Id);ChildSlot[SAssignNew(Rows,SVerticalBox)];Refresh();}
         void Tick(const FGeometry& G,double Time,float Delta) override {SCompoundWidget::Tick(G,Time,Delta);Refresh();}
     private:
         struct FRow
@@ -150,7 +150,9 @@ namespace ACEPluginCompanionPanelPrivate
                     if(Type==TEXT("section"))
                     {
                         if(!Expanded.Contains(Key))Expanded.Add(Key,B(R,TEXT("expanded"),true));
-                        Content=SNew(SExpandableArea).InitiallyCollapsed(!Expanded[Key]).OnAreaExpansionChanged_Lambda([this,Key](bool Open){Expanded.Add(Key,Open);}).HeaderContent()[Label(R)].BodyContent()[Node->Vertical.ToSharedRef()];
+                        const auto Theme=FACEPluginStyle::Current();
+                        Content=SNew(SExpandableArea).BorderImage(&Theme->SectionHeader).BodyBorderImage(&Theme->TitleBackground)
+                            .InitiallyCollapsed(!Expanded[Key]).OnAreaExpansionChanged_Lambda([this,Key](bool Open){Expanded.Add(Key,Open);}).HeaderContent()[Label(R)].BodyContent()[Node->Vertical.ToSharedRef()];
                     }
                     else Content=Node->Vertical.ToSharedRef();
                 }
@@ -245,6 +247,7 @@ namespace ACEPluginCompanionPanelPrivate
             }
             if(Last.Pin()==P&&Revision==P->PanelRevision)
             {Pending.RemoveAll([](const auto& Node){return !Node->Sync||Node->Sync();});return;}
+            FACEPluginStyle::Use(Host.Get(),Id);
             if(Last.Pin()!=P){Controls.Reset();Resolver.Reset();Expanded.Reset();Tabs.Reset();}
             Last=P;Revision=P->PanelRevision;Visited.Reset();Pending.Reset();
             TArray<TSharedPtr<SWidget>> Next;

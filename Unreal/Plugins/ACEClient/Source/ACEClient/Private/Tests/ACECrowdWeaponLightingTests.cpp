@@ -84,6 +84,38 @@ bool FACECrowdWeaponLightingTest::RunTest(const FString&)
     }
     AddInfo(FString::Printf(TEXT("64 real Acid Staff effects: %d particles; %d lit weapons; %d allocated lights; %.4f ms for submissions, presentation lighting and shared pool per frame (128 samples, CPU only)"),
         Particles, LuminousWeapons, Lights->GetAllocatedLightCount(), (FPlatformTime::Seconds() - Start) * 1000 / 128));
+    // Held illumination follows the hook even when old world-space sparks are
+    // behind the wielder. Exercise both 30 Hz lifecycle updates and render-only
+    // frames, at real Dereth coordinate magnitudes and while turning.
+    for(int32 I=1;I<Weapons.Num();++I)Weapons[I]->ScriptComponent->StopAllEffects();
+    auto* MovingFX=Weapons[0]->ScriptComponent.Get();
+    for(int32 Fps:{30,60,144})
+    {
+        double MaxError=0;int32 Samples=0;
+        for(int32 Frame=0;Frame<Fps;++Frame)
+        {
+            const double T=double(Frame)/Fps;
+            Weapons[0]->SetActorLocationAndRotation(FVector(-2800000+T*700,2400000+T*180,100+T*60),FRotator(0,T*140,0));
+            MovingFX->TickParticleSimulation(1.f/Fps);Lights->RefreshLights(1.f/Fps);
+            for(const auto& Emitter:MovingFX->ActiveEmitters)
+                if(auto* Light=Lights->FindParticleLight(MovingFX,Emitter.InstanceId))
+                {++Samples;MaxError=FMath::Max(MaxError,FVector::Distance(Light->GetComponentLocation(),MovingFX->GetEmitterTransform(Emitter).GetLocation()));}
+        }
+        TestTrue(FString::Printf(TEXT("Held glow is sampled while running at %d Hz"),Fps),Samples>=Fps);
+        TestTrue(FString::Printf(TEXT("Held glow follows the current hook without trailing at %d Hz (error %.6f cm)"),Fps,MaxError),MaxError<.01);
+    }
+    // Finite bursts keep illuminating the held weapon while their last sparks
+    // fade, even after emission stops. Stopping is not detaching the weapon.
+    for(const auto& Emitter:MovingFX->ActiveEmitters)MovingFX->StopEmitter(Emitter.InstanceId,false);
+    Weapons[0]->AddActorWorldOffset(FVector(120,40,0));
+    MovingFX->TickParticleSimulation(1.f/144);Lights->RefreshLights(1.f/144);
+    int32 FadingLights=0;
+    for(const auto& Emitter:MovingFX->ActiveEmitters)if(auto* Light=Lights->FindParticleLight(MovingFX,Emitter.InstanceId))
+    {
+        ++FadingLights;
+        TestTrue(TEXT("Fading held-weapon illumination stays attached"),Light->GetComponentLocation().Equals(MovingFX->GetEmitterTransform(Emitter).GetLocation(),.01));
+    }
+    TestTrue(TEXT("Finite held-weapon burst retains a fading light"),FadingLights>0);
     // The persistent SetLight hook must not escape the cap when particle scripts stop ticking.
     auto* FX = Weapons[0]->ScriptComponent.Get();
     for (auto* Weapon : Weapons) Weapon->ScriptComponent->StopAllEffects();

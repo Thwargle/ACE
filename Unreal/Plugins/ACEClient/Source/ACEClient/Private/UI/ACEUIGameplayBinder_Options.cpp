@@ -270,7 +270,7 @@ void UACEUIGameplayBinder::RefreshOptionsOverlays()
 			{ TEXT("GameplayOptions_Help_Button"), TEXT("Help") },
 			{ TEXT("GameplayOptions_UrgentAssistance_Button"), TEXT("Urgent Assistance") },
 			{ TEXT("GameplayOptions_ReportAbuse_Button"), TEXT("Report Abuse") },
-            { TEXT("GameplayOptions_Plugins_Button"), TEXT("Manage Plugins") },
+            { TEXT("GameplayOptions_Plugins_Button"), TEXT("Plugin Manager") },
 		};
 		if(auto First=Manager->FindElementUnder(ActiveOptionsTab,Buttons[0].Key))if(auto Parent=First->Parent.Pin())
         {

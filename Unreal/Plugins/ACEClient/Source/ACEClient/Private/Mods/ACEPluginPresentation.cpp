@@ -37,9 +37,22 @@ bool ACEPluginPresentation::Valid(const TSharedPtr<FJsonObject>& O,FString& Erro
     if(!O){Error=TEXT("presentation must be an object");return false;}
     for(const auto& Pair:O->Values)
     {
+        if(Pair.Key==TEXT("window"))
+        {
+            const TSharedPtr<FJsonObject>* Window=nullptr;
+            if(!Pair.Value->TryGetObject(Window)){Error=TEXT("presentation.window must be an object");return false;}
+            for(const auto& Field:(*Window)->Values)
+            {
+                double Opacity=0;bool Pinned=false;
+                if(Field.Key==TEXT("opacity")&&Field.Value->Type==EJson::Number&&Field.Value->TryGetNumber(Opacity)&&FMath::IsFinite(Opacity)&&Opacity>=0&&Opacity<=1)continue;
+                if(Field.Key==TEXT("pinned")&&Field.Value->Type==EJson::Boolean&&Field.Value->TryGetBool(Pinned))continue;
+                Error=TEXT("presentation.window accepts opacity (0..1) and pinned (boolean)");return false;
+            }
+            continue;
+        }
         FString Text;
         if((Pair.Key!=TEXT("title")&&Pair.Key!=TEXT("icon"))||!Pair.Value->TryGetString(Text))
-        {Error=TEXT("presentation accepts title and icon strings");return false;}
+        {Error=TEXT("presentation accepts title/icon strings and window appearance");return false;}
         if(Pair.Key==TEXT("title"))
         {
             if(Text.Len()>80){Error=TEXT("Plugin title is limited to 80 characters");return false;}

@@ -1,39 +1,41 @@
-# AC:Unreal / AC:VR release 117
+# AC:Unreal / AC:VR release 118
 
 Windows desktop, PC VR, native Linux x86_64, and standalone Quest share version
-**2026.10.15.117**. Android version code: 117. Quest installer revision: 9.
+**2026.10.15.118**. Android version code: 118. Quest installer revision: 9.
 
-## UCM and plugin performance
+## Plugin windows and controls
 
-- Reduce stalls when starting UCM, adding waypoints, or editing monster settings
-  with a large loot profile selected, including while looting is disabled.
-- Reuse unchanged loot-rule validation, cache regex validation, and avoid repeated
-  whole-profile JSON conversions and duplicate saves.
-- Allow automatic Void combat to select a wand when usable curses are available
-  without an eligible direct-damage spell. Refresh curses according to their timers.
-- Keep combat failure details visible during retry delays.
-- Show minimum ring targets as a whole-number count from 1 to 10, without a percent
-  sign. Global and per-monster priority controls now range from -1 (ignore) to 10.
-  Existing imported values are preserved until edited.
+- Add background/frame opacity sliders with live previews and percentage readouts.
+  Apply one value to every plugin or use per-plugin settings; text and icons remain readable.
+- Pin plugin windows without their outer frame or background. Quick-show restores
+  movement and resize controls without shifting the contents. Allow smaller windows.
+- Add a gear icon to open Plugin Manager. Its window now has one title bar and
+  supports moving, resizing, pinning, and saved open/closed state like other plugins.
+- Drag plugin bar icons or Plugin Manager row grips to reorder plugins. The saved
+  display order is shared by both views and does not change plugin execution order.
+- Fix enabled checkboxes appearing empty on the initial draw while retail artwork
+  loads. Refresh existing controls without rebuilding the window or closing menus.
+- Expose opacity and pin defaults through Lua plugin presentation metadata, with
+  player preferences taking precedence.
 
-## Pickup and effects
+## Ledgers, maps, and effects
 
-- Keep F-key pickup active through the server-directed approach and arrival.
-  Remove unsolicited movement commands that could cancel pickup and require a
-  second press. Deliberate movement still cancels the approach.
-- Preserve Aetheria surge emitters when spellcasting reuses numbered particle
-  slots. Keep authored effect timing, orbit, and explicit stop/destroy behavior.
-- Correct desktop SDR additive-particle blending after tone mapping so brightness,
-  color, and overlapping glows better match retail. Apply alpha only once and
-  preserve RGB for additive-only surfaces.
+- Toggle every Supply Ledger item name together by clicking a row name or icon.
+  Keep counts visible and in place; resize the window for a compact icon-only view.
+- Keep the add-item control available when an empty Supply Ledger is pinned.
+- Save supply lists, name visibility, plugin layout and pin preferences, and
+  separate indoor/outdoor zoom levels for both the full and pinned waypoint maps.
+- Keep held-weapon glow lighting attached to the current emitter position while
+  moving or turning, including the light fade after an emitter stops.
 
-## Installation and validation
+## Validation and known limitations
 
+- Extend the offline wasp stress fixture with configurable crowds and spell volleys,
+  real movement and charged jumps, resolution control, and corrected frame timing.
+  Windows testing reproduced brief large-volley stalls, but not the reported sustained
+  1-2 FPS collapse. Bulk particle initialization remains a known performance issue.
 - **AC-WoW Transmog, its provider, converter and model assets are excluded.**
-- Updates preserve accounts, settings, profiles and DAT files. Linux updates
-  are downloaded and extracted manually. Game DAT files and a server are not
-  included.
-- Automated checks cover the changed behavior. Controlled timing measurements
-  do not establish live FPS gains. Desktop particle composition targets SDR;
-  HDR, stereo VR and mobile retain their respective rendering paths. Packaging
-  and offline checks do not establish live-server or physical-headset acceptance.
+- Updates preserve accounts, settings, profiles and DAT files. Linux updates are
+  downloaded and extracted manually. Game DAT files and a server are not included.
+- Builds and automated checks do not establish live-server, Linux desktop, or
+  physical-headset acceptance.

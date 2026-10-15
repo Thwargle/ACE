@@ -1899,7 +1899,7 @@ bool UACEUIGameplayBinder::TryDispatchChatCommand(const FString& Message, UEdita
 			{TEXT("fps"),TEXT("/fps or /framerate toggles the Show FPS overlay setting.")},
 			{TEXT("acueperf"),TEXT("/acueperf shows local frame timings and creature/effect counts, and writes them to the client log.")},
 			{TEXT("acueobject"),TEXT("/acueobject reports the selected object's placement and model details locally.")},
-			{TEXT("acueplugins"),TEXT("/acueplugins opens Manage Plugins.")},
+			{TEXT("acueplugins"),TEXT("/acueplugins opens Plugin Manager.")},
 			{TEXT("acueplugin"),TEXT("/acueplugin <id> start|stop|<text> controls a Lua plugin or sends it a local command.")},
 			{TEXT("acueucm"),TEXT("/acueucm opens UCM. Use /acueucm help for its automation commands.")},
 			{TEXT("acueitems"),TEXT("/acueitems opens Item Tools. Commands: give, shop, profile, chest, restock, stop.")},

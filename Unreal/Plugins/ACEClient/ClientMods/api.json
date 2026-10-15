@@ -685,7 +685,12 @@
     "permission": "ui (runtime only)",
     "fields": {
       "title": "single-line string; max 80 characters; empty uses manifest name",
-      "icon": "PNG filename in plugin images/; max 96 characters; empty uses native emblem"
+      "icon": "PNG filename in plugin images/; max 96 characters; empty uses native emblem",
+      "window": {
+        "opacity": "number 0..1; background/frame only; foreground controls remain readable",
+        "pinned": "boolean; hide outer frame and lock position; Quick-show temporarily restores controls",
+        "precedence": "Player overrides take priority; force-global opacity overrides all plugin opacity requests"
+      }
     },
     "limits": {
       "compressed_bytes": 2097152,
