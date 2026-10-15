@@ -219,7 +219,7 @@ bool FACELedgerTest::RunTest(const FString&)
         TestFalse(TEXT("Local pin locks manipulation even with interface unlocked"),H->CanManipulatePluginWindow(TEXT("supplyledger")));
         TestTrue(TEXT("Other plugin remains movable"),H->CanManipulatePluginWindow(TEXT("huntledger")));
         auto SupplyStyle=FACEPluginStyle::Use(H,TEXT("supplyledger"));auto HuntStyle=FACEPluginStyle::Use(H,TEXT("huntledger"));
-        TestEqual(TEXT("Pinned outer frame is transparent"),SupplyStyle->Frame.TintColor.GetSpecifiedColor().A,0.f);
+        TestEqual(TEXT("Pinned window retains its background"),SupplyStyle->Frame.TintColor.GetSpecifiedColor().A,.96f);
         TestEqual(TEXT("Pinned frame outline is transparent"),SupplyStyle->Frame.OutlineSettings.Color.GetSpecifiedColor().A,0.f);
         FACESupplyEntry Second=E;Second.ClassId=20632;Second.Name=TEXT("Second supply");H->LedgerSupplies.Add(Second);H->SaveSupplies();Draw();
         const auto Name=FindTagged(Dock,TEXT("SupplyName.0")),Icon=FindTagged(Dock,TEXT("SupplyIcon.1")),Count=FindTagged(Dock,TEXT("SupplyCount.0"));
@@ -237,6 +237,17 @@ bool FACELedgerTest::RunTest(const FString&)
         TestTrue(TEXT("Restoring names also preserves the count position"),Count->GetCachedGeometry().GetAbsolutePosition().Equals(CountAnchor,.01f));
         H->SetPluginWindowOpacity(TEXT("huntledger"),.25f);Draw();
         TestTrue(TEXT("Unrelated window has its own opacity"),FMath::IsNearlyEqual(HuntStyle->Frame.TintColor.GetSpecifiedColor().A,.24f));
+        H->SetPluginWindowOpacity(TEXT("supplyledger"),.5f);Draw();
+        const float PinnedBackground=SupplyStyle->Background.TintColor.GetSpecifiedColor().A;
+        TestTrue(TEXT("Pinned window honors its own opacity"),FMath::IsNearlyEqual(SupplyStyle->Frame.TintColor.GetSpecifiedColor().A,.48f));
+        H->SetPluginWindowOpacity(TEXT(""),.75f);H->SetPluginOpacityGlobal(true);Draw();
+        TestEqual(TEXT("Global opacity applies to pinned backgrounds"),SupplyStyle->Frame.TintColor.GetSpecifiedColor().A,.72f,.0001f);
+        TestEqual(TEXT("Global opacity applies to unpinned backgrounds"),HuntStyle->Frame.TintColor.GetSpecifiedColor().A,.72f,.0001f);
+        TestEqual(TEXT("Global opacity does not restore a pinned border"),SupplyStyle->Frame.OutlineSettings.Color.GetSpecifiedColor().A,0.f);
+        H->SetPluginOpacityGlobal(false);H->SetPluginWindowOpacity(TEXT(""),1.f);Draw();
+        TestTrue(TEXT("Disabling global override restores both window opacities"),
+            FMath::IsNearlyEqual(SupplyStyle->Frame.TintColor.GetSpecifiedColor().A,.48f)&&
+            FMath::IsNearlyEqual(HuntStyle->Frame.TintColor.GetSpecifiedColor().A,.24f));
         TestEqual(TEXT("Opacity leaves foreground widgets opaque"),Count->GetRenderOpacity(),1.f);
         TestEqual(TEXT("Opacity leaves item artwork opaque"),SupplyStyle->ItemImage(E,true)->TintColor.GetSpecifiedColor().A,1.f);
         TestTrue(TEXT("Opacity leaves existing widget tree intact"),Count==FindTagged(Dock,TEXT("SupplyCount.0")));
@@ -244,7 +255,13 @@ bool FACELedgerTest::RunTest(const FString&)
         TestEqual(TEXT("Related UCM log inherits the chosen opacity"),H->GetPluginWindowOpacity(TEXT("ucm.log")),.4f);
         Manager->SetQuickShowUi(true);Draw();
         TestTrue(TEXT("Quick-show restores a locally pinned window's controls"),H->CanManipulatePluginWindow(TEXT("supplyledger")));
-        TestTrue(TEXT("Quick-show restores the local frame"),SupplyStyle->Frame.TintColor.GetSpecifiedColor().A>0);
+        TestTrue(TEXT("Quick-show restores the local frame outline"),SupplyStyle->Frame.OutlineSettings.Color.GetSpecifiedColor().A>0);
+        TestTrue(TEXT("Quick-show preserves background opacity"),FMath::IsNearlyEqual(SupplyStyle->Frame.TintColor.GetSpecifiedColor().A,.48f));
+        TestEqual(TEXT("Quick-show preserves inner background opacity"),SupplyStyle->Background.TintColor.GetSpecifiedColor().A,PinnedBackground);
+        H->SetPluginWindowPinned(TEXT("supplyledger"),false);Manager->SetQuickShowUi(false);Draw();
+        TestTrue(TEXT("Unpinning preserves background opacity"),FMath::IsNearlyEqual(SupplyStyle->Frame.TintColor.GetSpecifiedColor().A,.48f));
+        TestEqual(TEXT("Unpinning preserves inner background opacity"),SupplyStyle->Background.TintColor.GetSpecifiedColor().A,PinnedBackground);
+        H->SetPluginWindowPinned(TEXT("supplyledger"),true);Manager->SetQuickShowUi(true);Draw();
         Dock->Resize(TEXT("supplyledger"),FVector2D(-10000,-10000),true);
         TestEqual(TEXT("Supply supports a narrow icon counter"),Dock->Windows[TEXT("supplyledger")].Size.X,72.);
         Dock->Windows[TEXT("supplyledger")].Position=FVector2D(80,80);H->ToggleSupplyName(0);H->LedgerSupplies[0].Count=8544;
@@ -255,6 +272,17 @@ bool FACELedgerTest::RunTest(const FString&)
         TestTrue(TEXT("Compact count is fully allocated"),CounterBounds.GetLocalSize().X>=CompactCount->GetDesiredSize().X);
         const auto ListBounds=FindTagged(Dock,TEXT("SupplyRows"))->GetCachedGeometry();
         TestTrue(TEXT("Scrollbar never covers digits in the narrow ledger"),CounterBounds.GetAbsolutePosition().X+CounterBounds.GetAbsoluteSize().X<=ListBounds.GetAbsolutePosition().X+ListBounds.GetAbsoluteSize().X);
+        // Sample empty space inside the actual pinned window, away from item artwork
+        // and controls, so a visible backdrop is verified beyond brush properties.
+        auto BackgroundAlpha=[&](float Opacity)
+        {
+            H->SetPluginWindowOpacity(TEXT("supplyledger"),Opacity);Draw();
+            TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
+            const FVector2D Sample=FrameBounds.GetAbsolutePosition()+FVector2D(6,FrameBounds.GetAbsoluteSize().Y-6);
+            return Pixels[FMath::FloorToInt(Sample.Y)*Target->SizeX+FMath::FloorToInt(Sample.X)].A;
+        };
+        const uint8 ClearAlpha=BackgroundAlpha(0.f),HalfAlpha=BackgroundAlpha(.5f),FullAlpha=BackgroundAlpha(1.f);
+        TestTrue(TEXT("Pinned background renders from transparent through half to full opacity"),ClearAlpha<5&&HalfAlpha>100&&HalfAlpha<150&&FullAlpha>230);
         PNG.Reset();FImageUtils::PNGCompressImageArray(Target->SizeX,Target->SizeY,[&]{TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);return Pixels;}(),PNG);
         FFileHelper::SaveArrayToFile(PNG,*(H->StorageRoot/TEXT("plugin-windows-compact.png")));
         while(!H->GetSupplies().IsEmpty())H->RemoveSupply(0);

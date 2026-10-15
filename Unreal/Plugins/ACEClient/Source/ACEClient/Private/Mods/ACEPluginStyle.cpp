@@ -113,8 +113,14 @@ bool FACEPluginStyle::SetWindowAppearance(float Opacity,bool Frameless)
         To=From;auto Color=From.TintColor.GetSpecifiedColor();Color.A*=Alpha;To.TintColor=Color;
         Color=From.OutlineSettings.Color.GetSpecifiedColor();Color.A*=Alpha;To.OutlineSettings.Color=Color;
     };
-    Fade(Frame,OriginalFrame,Frameless?0.f:Opacity);
-    Fade(Background,OriginalBackground,Frameless?0.f:Opacity);
+    // Pinning hides chrome, not the backdrop behind the window's contents.
+    Fade(Frame,OriginalFrame,Opacity);
+    if(Frameless)
+    {
+        auto Outline=Frame.OutlineSettings.Color.GetSpecifiedColor();Outline.A=0.f;
+        Frame.OutlineSettings.Color=Outline;
+    }
+    Fade(Background,OriginalBackground,Opacity);
     Fade(TitleBackground,OriginalTitle,Opacity);
     Fade(SectionFrame,OriginalSectionFrame,Opacity);
     Fade(SectionHeader,OriginalSectionHeader,Opacity);

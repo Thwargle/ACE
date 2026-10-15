@@ -32,9 +32,10 @@ Check **Use this opacity for all plugins** to override every individual value, o
 leave it unchecked to use each plugin's own value. Each plugin card has an opacity
 control and **Use plugin/default** to clear your override. Text, icons and controls
 stay fully readable. Changes update open windows without closing their menus.
-The header's **Pin** button (also available in Plugin Manager) hides the outer
-frame and background and locks the window in place. Quick-show temporarily
-restores the frame. Window sizes can be reduced for compact HUDs.
+The header's **Pin** button (also available in Plugin Manager) hides the title bar
+and border and locks the window in place. Background opacity applies whether the
+window is pinned or unpinned. Quick-show temporarily restores the frame without
+changing the background. Window sizes can be reduced for compact HUDs.
 
 **Supply Ledger** is a compact inventory counter inspired by Virindi's Comps HUD.
 Select an owned item and click **+** to track its item type across all packs,

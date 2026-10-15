@@ -85,8 +85,9 @@ presentation = {
 
 `window.opacity` is a number from 0 to 1. It fades backgrounds and borders only;
 text, item icons and interactive controls remain readable. `window.pinned` hides
-the outer frame and background and locks the window's position, keeping its
-contents at the same screen position. Hold the rebindable **Quick-show pinned
+the title bar and border and locks the window's position, keeping its contents at
+the same screen position. The background retains the configured opacity whether
+pinned or unpinned. Hold the rebindable **Quick-show pinned
 windows** key (Left Control by default) to restore the header and resize controls.
 Runtime changes require `ui` permission and update existing widgets without
 rebuilding their controls. Player overrides in Manage Plugins take precedence
