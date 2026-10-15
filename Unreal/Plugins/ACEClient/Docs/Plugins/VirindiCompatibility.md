@@ -965,3 +965,34 @@ message and at least 10 Town Network Portal Gems before transitioning to its
 travel state. Regression coverage injects those conditions and verifies both
 the selected Route profile and native route geometry. Importing the meta makes
 its routes available immediately; it does not bypass this authored start gate.
+
+## October 14: meta selection, diagnostics and monster exclusions
+
+Rechecked `hn.cs` (ordered rules and state changes), `ff.cs` (embedded routes),
+`d1.cs` and `f7.cs` (monster rules and target eligibility), and PluginCore's
+meta controls. Explicitly selecting or reusing an imported meta now enables its
+rules, including when the prior selection had metas disabled. Start still
+respects a subsequent explicit disable. Bulk import keeps the original active
+selection and switches. Negative monster priority now excludes that monster,
+including previously imported profiles and ring-target counts.
+
+The Metas tab shows the active state, pending conditions, inventory counts for
+item conditions, and linked character/monster/loot/meta files. It provides
+Restart from Default and Go to state controls. Diagnostics describe conditions
+without evaluating expressions again; evaluation can have side effects. An
+empty meta route no longer tells the user to record a route. Live profile edits
+supersede older session option overrides for the edited fields.
+
+The local AunRalirea.usd fixture explicitly gives `<DEFAULT>` priority 2 with
+attacks enabled and Aun Ralirea priority 4. This differs from the author's help
+text saying it only attacks Aun Ralirea; UCM preserves the file's actual values.
+For an Aun-only hunt, edit the linked Monsters profile's default rule to Ignore
+or a negative priority, and retain the positive Aun rule. Configure your own
+weapon/wand in the linked Character profile: imported equipment GUIDs belong
+to the original character. The meta still requires `!start` in fellowship chat
+and 10 Town Network Portal Gems. Its turn-in is manual, as authored.
+
+The optional real-file regression now replays town-network cells, both hunting
+routes (711 and 796 points), the five-minute fallback, quest-item detection,
+NPC approach and the final empty route through Lua and the native host. These
+are offline state/route checks, not a live traversal or completed quest claim.

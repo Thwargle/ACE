@@ -74,7 +74,7 @@ struct FACEClientPlugin
     uint32 WaitSerial = 0;
     double ActionSentAt = 0;
     int32 Player = 0;
-    FString Server,MetaState;
+    FString Server,MetaState,MetaStatus;
     FString LoggedActivity, LoggedRouteStatus;
 };
 
@@ -84,6 +84,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
 {
     GENERATED_BODY()
     friend class FACEPluginHostTest;
+    friend class FACEUIWorkloadTest;
     friend class FACELedgerTest;
     friend class FACEPluginCompanionTest;
     friend class FACEPluginPublicAPITest;
@@ -277,6 +278,14 @@ private:
     void StopCompanion(FACEClientPlugin& Plugin, const FString& Reason);
     void FlushPluginState(FACEClientPlugin& Plugin);
     TSharedPtr<FJsonObject> CompanionSnapshot(FACEClientPlugin& Plugin);
+    // A synchronous observer pass shares read-only native data, never Lua
+    // tables, reader cursors, events or state. Discard after any action/request.
+    struct FCompanionReadBatch
+    {
+        TSharedPtr<FJsonObject> Data, Objects;
+        void Reset() { Data.Reset(); Objects.Reset(); }
+    };
+    FCompanionReadBatch* CompanionReadBatch = nullptr;
     bool ApplyCompanionOutput(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Output, FString& Error);
     bool CompanionAction(FACEClientPlugin& Plugin, const TSharedPtr<FJsonObject>& Action, FString& Error);
     void DrawPluginMarkers();

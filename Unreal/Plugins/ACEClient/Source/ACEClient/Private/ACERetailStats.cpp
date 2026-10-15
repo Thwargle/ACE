@@ -78,7 +78,10 @@ void UACEDatSubsystem::RecomputePlayerStats(FACEPlayerVitals& V, const TArray<FA
 			return FMath::RoundToInt((static_cast<double>(Info->FormulaW) + A * Info->FormulaX + B * Info->FormulaY) / Info->FormulaZ);
 		};
 		if (!Name.IsEmpty()) { Skill.Name = Name; }
-		int32 Innate = Skill.InitLevel + Skill.Ranks + FMath::Max(0, V.StatQualityInts.FindRef(0x16D)); // Jack of All Trades
+		int32 Innate = Skill.InitLevel + Skill.Ranks + FMath::Max(0, V.StatQualityInts.FindRef(0x16D)); // LumAugAllSkills
+		// ACE also grants Enlightenment to trained/specialized skills, before
+		// vitae, just as its extra health bonus is included in the vital below.
+		if (Skill.AdvancementClass >= 2) { Innate += FMath::Max(0, V.StatQualityInts.FindRef(390)); }
 		const bool Magic = Skill.SkillId == 31 || Skill.SkillId == 32 || Skill.SkillId == 33 || Skill.SkillId == 34 || Skill.SkillId == 43;
 		const bool Melee = Skill.SkillId == 41 || Skill.SkillId == 44 || Skill.SkillId == 45 || Skill.SkillId == 46 || Skill.SkillId == 49;
 		if ((Magic && V.StatQualityInts.FindRef(0x12E) > 0) || (Melee && V.StatQualityInts.FindRef(0x12C) > 0)

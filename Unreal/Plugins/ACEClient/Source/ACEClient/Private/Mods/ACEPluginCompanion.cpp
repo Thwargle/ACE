@@ -18,6 +18,7 @@
 #include "Misc/SecureHash.h"
 #include "Serialization/JsonSerializer.h"
 #include "ProceduralMeshComponent.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 namespace
 {
@@ -150,12 +151,13 @@ void UACEPluginSubsystem::StopCompanion(FACEClientPlugin& P,const FString& Reaso
 
 TSharedPtr<FJsonObject> UACEPluginSubsystem::CompanionSnapshot(FACEClientPlugin& P)
 {
+    TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginObserverSnapshot);
     using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();auto Out=MakeShared<FJsonObject>();
     FACEPosition Player=C->GetPlayerPosition();if(auto* PC=Cast<AACEPlayerController>(GetGameInstance()->GetFirstLocalPlayerController()))PC->TryGetLocallyPredictedPosition(Player);
     Out->SetNumberField(TEXT("api"),P.Api);Out->SetNumberField(TEXT("unix_time"),FDateTime::UtcNow().ToUnixTimestamp());Out->SetNumberField(TEXT("time"),FPlatformTime::Seconds());Out->SetNumberField(TEXT("player"),uint32(C->GetPlayerGuid()));Out->SetStringField(TEXT("server"),C->GetServerName());
     Out->SetObjectField(TEXT("position"),Position(Player));Out->SetNumberField(TEXT("selected"),uint32(C->GetSelectedObject().Guid));
-    const auto V=C->GetPlayerVitalsView();Out->SetNumberField(TEXT("health"),V.Health);Out->SetNumberField(TEXT("max_health"),V.MaxHealth);
+    const auto& V=C->GetPlayerVitalsView();Out->SetNumberField(TEXT("health"),V.Health);Out->SetNumberField(TEXT("max_health"),V.MaxHealth);
     Out->SetNumberField(TEXT("mana"),V.Mana);Out->SetNumberField(TEXT("max_mana"),V.MaxMana);Out->SetNumberField(TEXT("stamina"),V.Stamina);Out->SetNumberField(TEXT("max_stamina"),V.MaxStamina);
     Out->SetObjectField(TEXT("state"),P.SavedState?P.SavedState:MakeShared<FJsonObject>());Out->SetStringField(TEXT("error"),P.CompanionError);P.CompanionError.Empty();
     Out->SetArrayField(TEXT("events"),P.PluginEvents);P.PluginEvents.Reset();
@@ -184,25 +186,40 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::CompanionSnapshot(FACEClientPlugin&
     }
     Out->SetArrayField(TEXT("chat_events"),Chat);
     // No inventory appraisals, spell indexing or visibility raycasts for companions.
-    TArray<TPair<double,const FACEWorldObject*>> Nearby;
-    if(auto Session=C->GetSession())for(const auto& Pair:Session->GetWorldObjects())
+    if(CompanionReadBatch && CompanionReadBatch->Objects)
     {
-        const auto& O=Pair.Value;if(O.Guid==C->GetPlayerGuid()||!O.IsSelectableWorldObject()||!SameArea(Player,O.Position))continue;
-        const double D=FVector::DistSquared(Player.ToUnrealLocation(),O.Position.ToUnrealLocation());
-        if(D<=FMath::Square(24000.))Nearby.Emplace(D,&O);
+        Out->SetField(TEXT("objects"),CompanionReadBatch->Objects->Values[TEXT("objects")]);
+        Out->SetBoolField(TEXT("objects_truncated"),CompanionReadBatch->Objects->GetBoolField(TEXT("objects_truncated")));
     }
-    Nearby.Sort([](const auto& A,const auto& B){return A.Key==B.Key?uint32(A.Value->Guid)<uint32(B.Value->Guid):A.Key<B.Key;});
-    TArray<TSharedPtr<FJsonValue>> Objects;
-    Out->SetBoolField(TEXT("objects_truncated"),Nearby.Num()>512);
-    for(int I=0;I<FMath::Min(Nearby.Num(),512);++I)
+    else
     {
-        const auto& O=*Nearby[I].Value;auto Row=MakeShared<FJsonObject>();Row->SetNumberField(TEXT("id"),uint32(O.Guid));Row->SetStringField(TEXT("name"),O.Name.Left(256));
-        Row->SetNumberField(TEXT("wcid"),O.WeenieClassId);Row->SetNumberField(TEXT("distance"),FMath::Sqrt(Nearby[I].Key)/100.);
-        Row->SetBoolField(TEXT("monster"),O.IsAttackable()&&!O.bIsPlayer&&!O.PetOwnerId&&(O.ItemType&ACEItemType::Creature)&&!O.bDying);
-        Row->SetBoolField(TEXT("player"),O.bIsPlayer);Row->SetBoolField(TEXT("corpse"),O.IsCorpse());Row->SetBoolField(TEXT("dead"),O.bDying);
-        Row->SetObjectField(TEXT("position"),Position(O.Position));Objects.Add(MakeShared<FJsonValueObject>(Row));
+        TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginNearbyObjects);
+        TArray<TPair<double,const FACEWorldObject*>> Nearby;
+        if(auto Session=C->GetSession())for(const auto& Pair:Session->GetWorldObjects())
+        {
+            const auto& O=Pair.Value;if(O.Guid==C->GetPlayerGuid()||!O.IsSelectableWorldObject()||!SameArea(Player,O.Position))continue;
+            const double D=FVector::DistSquared(Player.ToUnrealLocation(),O.Position.ToUnrealLocation());
+            if(D<=FMath::Square(24000.))Nearby.Emplace(D,&O);
+        }
+        Nearby.Sort([](const auto& A,const auto& B){return A.Key==B.Key?uint32(A.Value->Guid)<uint32(B.Value->Guid):A.Key<B.Key;});
+        TArray<TSharedPtr<FJsonValue>> Objects;
+        Out->SetBoolField(TEXT("objects_truncated"),Nearby.Num()>512);
+        for(int I=0;I<FMath::Min(Nearby.Num(),512);++I)
+        {
+            const auto& O=*Nearby[I].Value;auto Row=MakeShared<FJsonObject>();Row->SetNumberField(TEXT("id"),uint32(O.Guid));Row->SetStringField(TEXT("name"),O.Name.Left(256));
+            Row->SetNumberField(TEXT("wcid"),O.WeenieClassId);Row->SetNumberField(TEXT("distance"),FMath::Sqrt(Nearby[I].Key)/100.);
+            Row->SetBoolField(TEXT("monster"),O.IsAttackable()&&!O.bIsPlayer&&!O.PetOwnerId&&(O.ItemType&ACEItemType::Creature)&&!O.bDying);
+            Row->SetBoolField(TEXT("player"),O.bIsPlayer);Row->SetBoolField(TEXT("corpse"),O.IsCorpse());Row->SetBoolField(TEXT("dead"),O.bDying);
+            Row->SetObjectField(TEXT("position"),Position(O.Position));Objects.Add(MakeShared<FJsonValueObject>(Row));
+        }
+        Out->SetArrayField(TEXT("objects"),Objects);
+        if(CompanionReadBatch)
+        {
+            CompanionReadBatch->Objects=MakeShared<FJsonObject>();
+            CompanionReadBatch->Objects->SetField(TEXT("objects"),Out->Values[TEXT("objects")]);
+            CompanionReadBatch->Objects->SetBoolField(TEXT("objects_truncated"),Nearby.Num()>512);
+        }
     }
-    Out->SetArrayField(TEXT("objects"),Objects);
     auto Peers=MakeShared<FJsonObject>();for(const auto& Other:Plugins){auto Info=MakeShared<FJsonObject>();Info->SetBoolField(TEXT("enabled"),Other->Enabled);Info->SetBoolField(TEXT("running"),Other->Running);Peers->SetObjectField(Other->Id,Info);}Out->SetObjectField(TEXT("plugins"),Peers);
     return Out;
 }
@@ -309,6 +326,9 @@ bool UACEPluginSubsystem::RunPluginCommand(const FString& Arguments)
 
 void UACEPluginSubsystem::TickCompanions()
 {
+    TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginObservers);
+    FCompanionReadBatch Batch;
+    TGuardValue<FCompanionReadBatch*> ReadGuard(CompanionReadBatch,&Batch);
     using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     UpdateCompanionChatContext();
     auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
@@ -325,7 +345,14 @@ void UACEPluginSubsystem::TickCompanions()
         if(!P->Running)continue;
         const double Now=FPlatformTime::Seconds();if(Now<P->NextDecision)continue;P->NextDecision=Now+.5;
         TSharedPtr<FJsonObject> Output;FString Error;
-        if(!P->VM->Step(P->Api>=2?PublicSnapshot(*P):CompanionSnapshot(*P),P->Profile,Output,Error)||(Output&&!(P->Api>=2?ApplyPublicOutput(*P,Output,Error):ApplyCompanionOutput(*P,Output,Error))))StopCompanion(*P,TEXT("Script error: ")+Error);
+        bool Ok=P->VM->Step(P->Api>=2?PublicSnapshot(*P):CompanionSnapshot(*P),P->Profile,Output,Error);
+        // Commands and services can change selection, inventory, policy or
+        // session context synchronously, including nested snapshot consumers.
+        const bool Mutates=Output && (Output->HasField(TEXT("action")) || Output->HasField(TEXT("requests")) || Output->HasField(TEXT("profile_patch")));
+        if(Mutates)Batch.Reset();
+        if(Ok&&Output)Ok=P->Api>=2?ApplyPublicOutput(*P,Output,Error):ApplyCompanionOutput(*P,Output,Error);
+        if(Mutates)Batch.Reset();
+        if(!Ok)StopCompanion(*P,TEXT("Script error: ")+Error);
         if(Now>=P->NextStateSave){FlushPluginState(*P);P->NextStateSave=Now+5;}
     }
     CompanionSession=C->GetSession();CompanionPlayer=InWorld?C->GetPlayerGuid():0;CompanionServer=C->GetServerName();

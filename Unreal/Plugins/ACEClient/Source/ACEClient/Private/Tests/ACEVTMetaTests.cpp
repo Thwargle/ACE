@@ -33,6 +33,19 @@ bool FACEVTMetaTest::RunTest(const FString&)
     auto Snap=JSONMeta(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"mana":100,"max_mana":100,"nearest":0,"position":{"cell":2139029505,"x":84,"y":84,"z":12},"inventory":[],"action_serial":0,"teleport_sequence":0,"chat_serial":0,"portal_serial":0})"));
     auto Base=[](J P){P->SetStringField(TEXT("combat"),TEXT("off"));P->SetBoolField(TEXT("buffing"),false);P->SetBoolField(TEXT("recovery"),false);return P;};
     {
+        auto P=Base(ACEVTProfile::Convert(MetaDocument({
+            RuleMeta(1,2,NumMeta(0),StrMeta(TEXT("/vt opt set EnableMeta true")),TEXT("Default")),
+            RuleMeta(6,1,NumMeta(10),StrMeta(TEXT("Done")),TEXT("Default"))}),Issues));
+        auto S=MakeShared<FJsonObject>(*Snap);FACEPluginVM VM;VM.Load(Script,Error);
+        TestTrue(TEXT("Meta enables its own rules"),VM.Step(S,P,Intent,Error));
+        P->SetBoolField(TEXT("meta_enabled"),false);P->SetNumberField(TEXT("loot_revision"),1);S->SetNumberField(TEXT("time"),111);
+        TestTrue(TEXT("Live UI pause supersedes the old meta option"),VM.Step(S,P,Intent,Error));
+        if(Intent){TestEqual(TEXT("Paused meta does not transition"),Intent->GetStringField(TEXT("meta_state")),FString(TEXT("Default")));TestTrue(TEXT("Diagnostics explain disabled execution"),Intent->GetStringField(TEXT("meta_status")).Contains(TEXT("paused")));}
+        P->SetBoolField(TEXT("meta_enabled"),true);P->SetNumberField(TEXT("loot_revision"),2);
+        TestTrue(TEXT("UI resume processes the pending timer"),VM.Step(S,P,Intent,Error));
+        if(Intent)TestEqual(TEXT("Resumed meta transitions normally"),Intent->GetStringField(TEXT("meta_state")),FString(TEXT("Done")));
+    }
+    {
         const FString Checks=TEXT("istrue[2]==1&&istrue[0]==0&&istrue[`text`]==0&&isfalse[0]==1&&isfalse[`text`]==0&&isfalse[getcharstringprop[999]]==1")
             TEXT("&&iif[1,3,4]==3&&iif[`text`,3,4]==4&&iif[1,false,true]==false")
             TEXT("&&round[2.5]==2&&round[3.5]==4&&round[-1.5]==-2&&round[-2.5]==-2&&round[2.6]==3")
@@ -183,7 +196,7 @@ bool FACEVTMetaTest::RunTest(const FString&)
     TestEqual(TEXT("Expression and call enter Worker"),Intent->GetStringField(TEXT("meta_state")),FString(TEXT("Worker")));
     Snap->SetNumberField(TEXT("time"),101);VM.Step(Snap,P,Intent,Error);TestEqual(TEXT("Timer waits"),Intent->GetStringField(TEXT("meta_state")),FString(TEXT("Worker")));
     Snap->SetNumberField(TEXT("time"),102);VM.Step(Snap,P,Intent,Error);TestEqual(TEXT("Return resumes supplied state"),Intent->GetStringField(TEXT("meta_state")),FString(TEXT("Done")));
-    VM.Step(Snap,P,Intent,Error);TestEqual(TEXT("Option changes affect policy"),Intent->GetStringField(TEXT("status")),FString(TEXT("Record a route to begin navigation")));
+    VM.Step(Snap,P,Intent,Error);TestEqual(TEXT("Empty route from a meta shows its state instead of recording advice"),Intent->GetStringField(TEXT("status")),FString(TEXT("Meta Done: waiting for a route or trigger")));
     TestFalse(TEXT("Transient option does not mutate saved profile"),P->HasField(TEXT("navigation")));
     // Unsupported operations must invalidate the whole import, even in unused states.
     ACEVTProfile::Convert(MetaDocument({RuleMeta(1,2,NumMeta(0),StrMeta(TEXT("/mf login OtherCharacter")),TEXT("Unused"))}),Issues);

@@ -2024,10 +2024,21 @@ bool AACEWorldEntityActor::ClampLocationToGround(FVector& InOutLocation, const F
 		+ FMath::Max(0.f, WaterDepthCm);
 	const float Delta = InOutLocation.Z - GroundZ;
 	const bool bPortalFx = IsRetailPortalEffectSetup(static_cast<uint32>(SetupId));
-	// Re-seat feet onto the surface when we're near it, or when we've sunk beneath it. Large
-	// positive gaps (jumping, flying, higher dungeon floors) are left to the server F748.
-	// MaxDrop must cover the full Band — a 1.25 AC drop cap inside a 2.5 AC band left remotes
-	// permanently floating in the dead zone.
+	// CPhysicsObj::enter_world places the supplied frame and resolves contact;
+	// Gravity alone does not authorize projecting an item onto terrain below it.
+	// Loose items can rest on tables/shelves whose collision has not streamed yet.
+	// Preserve their server elevation, including during position smoothing. Keep
+	// the existing penetration/slope support for items already touching the floor.
+	if (!bPortalFx && Delta > SkinCm)
+	{
+		// An item's wide resting mesh can still intersect an uphill slope even
+		// when its origin clears it. This support pass only lifts; it never drops
+		// an elevated origin down to terrain beneath a table or platform.
+		SupportDroppedItem(InOutLocation, Rotation ? *Rotation : GetActorQuat());
+		return true;
+	}
+	// Keep the existing ground seating band for portal artwork. Other props only
+	// resolve penetration/contact here; their elevation comes from the server.
 	const float MaxDropCm = BandCm;
 	if (Delta < -0.5f)
 	{

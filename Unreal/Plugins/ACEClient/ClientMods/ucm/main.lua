@@ -651,6 +651,9 @@ local function monster_rule(t,p)
  -- Inherit without mutating saved rules; an explicit zero priority is valid.
  local effective={};for k,v in pairs(rule) do effective[k]=v end
  if effective.priority==nil then effective.priority=p.monster_default_priority or 0 end
+ -- VT f7 rejects a negative priority before equipment/attack evaluation.
+ -- Apply at runtime too so already imported profiles gain the same behavior.
+ if effective.priority<0 then effective.ignore=true end
  if (effective.range or 0)<=0 then effective.range=p.monster_default_range or 0 end
  return effective
 end
@@ -747,6 +750,44 @@ local function meta_profile(s,p)
  if p.vt_meta then effective.states=nil;effective.initial_state='Default' end
  return effective
 end
+-- Diagnostics must not evaluate conditions a second time: expressions can
+-- mutate variables or queue game actions. Describe the next rules instead.
+local function meta_condition_text(c,s,depth)
+ if depth>5 or not workavailable() then return 'additional conditions' end
+ local t,v,q=c.type,c.value,c.properties or {}
+ if t==2 or t==3 or t==21 then
+  local parts={};for i,n in ipairs(c.children or {}) do
+   if i>4 then parts[#parts+1]='...';break end
+   parts[#parts+1]=meta_condition_text(n,s,depth+1)
+  end
+  return (t==21 and 'not ' or '')..'('..table.concat(parts,t==3 and ' OR ' or ' AND ')..')'
+ end
+ if t==4 or t==28 then return 'chat matching '..tostring(t==4 and v or q.p):sub(1,180) end
+ if t==11 or t==12 then
+  local count=0;for _,i in ipairs(s.inventory or {}) do if string.lower(i.name or '')==string.lower(q.n or '') then count=count+(i.count or 1) end end
+  return string.format('%s %s %d (have %d)',q.n or 'item',t==11 and '<=' or '>=',q.c or 0,count)
+ end
+ if t==6 or t==22 then return tostring(v)..' seconds in this state' end
+ if t==13 then return string.format('%d monsters matching %s within %.1f m',q.c or 0,q.n or '',q.r or 0) end
+ if t==14 then return string.format('%d monsters of priority %d within %.1f m',q.c or 0,q.p or 0,q.r or 0) end
+ if t==16 then return string.format('no monsters within %.1f m',q.r or 0) end
+ if t==17 or t==18 then return string.format('%s 0x%08X',t==17 and 'landblock' or 'cell',math.floor(v)&0xffffffff) end
+ local names={[0]='never',[1]='always',[5]='free pack slots',[7]='route complete',[8]='death',[9]='vendor open',[10]='vendor closed',
+  [15]='buffs needed',[19]='enter portal space',[20]='leave portal space',[23]='spell duration',[24]='burden',[25]='distance from route',[26]='expression'}
+ return names[t] or ('condition '..tostring(t))
+end
+local function meta_status(s,p)
+ if p.meta_enabled==false then return 'Meta paused; enable Run imported meta to process its rules.' end
+ if meta.loading or meta.awaiting_load then return 'Loading referenced profile before continuing meta actions.' end
+ local pending={};local total=0
+ for i,r in ipairs(p.vt_meta or {}) do
+  if not workavailable() then return 'Meta '..meta.name..': waiting for its next rule.' end
+  if r.state==meta.name and not meta.fired[i] then
+  total=total+1;if #pending<3 then pending[#pending+1]=meta_condition_text(r.condition,s,0) end
+ end end
+ if #pending==0 then return 'No pending rules in '..meta.name..'.' end
+ return ('Waiting in '..meta.name..': '..table.concat(pending,'; OR ')..(total>3 and '; ...' or '')):sub(1,1600)
+end
 -- VT applies load commands synchronously. Native profile I/O is acknowledged
 -- on the next snapshot, so suspend the remaining All actions at that boundary.
 local function meta_actions(a,s,p)
@@ -764,6 +805,16 @@ local function meta_actions(a,s,p)
 end
 local function meta_tick(s,p)
  meta_active_profile=p
+ -- Profile controls edit the base profile while imported commands keep a
+ -- session-local overlay. An explicit UI change must supersede an older
+ -- command, rather than leaving a working-looking checkbox with no effect.
+ if meta.saved_options and meta.saved_revision~=(p.loot_revision or 0) then for key in pairs(meta.options) do
+  if meta.saved_options[key]~=p[key] then meta.options[key]=nil end
+ end end
+ meta.saved_options={};for key,value in pairs(p) do
+  if type(value)~='table' then meta.saved_options[key]=value end
+ end
+ meta.saved_revision=p.loot_revision or 0
  if meta.profile_revision~=(p.vt_revision or 0) then
   local first=meta.profile_revision==nil;meta.profile_revision=p.vt_revision or 0
   if not first and p.vt_loaded_kind=='usd' then
@@ -2771,7 +2822,12 @@ local function run(s,p)
   intent.route_point=point
   intent.route_join_pending=route_join_pending
   intent.route_track_movement=effective.navigation and #route>0 and not route_walking and not route_returning and (not route_pending or route_pending.kind=='pause') or false
-  if p.vt_meta then intent.meta_state=meta.name end
+  if p.vt_meta then
+   intent.meta_state=meta.name;intent.meta_status=meta_status(s,effective)
+   if intent.status=='Record a route to begin navigation' then
+    intent.status=effective.meta_enabled==false and 'Meta paused; enable Run imported meta' or ('Meta '..meta.name..': waiting for a route or trigger')
+   end
+  end
   if meta.route_changed then
    intent.runtime_route=meta.route.route;intent.runtime_route_profile=meta.route_profile;intent.runtime_loop_route=effective.loop_route==true;intent.runtime_reverse_route=effective.reverse_route==true
    meta.route_changed=false
@@ -2815,7 +2871,7 @@ return function(s,p)
    intent=pause_activity(s,intent.activity,intent.status)
    -- Isolating a failed combat/recovery action must not discard a meta's
    -- already-decided route update (especially an empty route) or live status.
-   for _,key in ipairs({'runtime_route','runtime_route_profile','runtime_loop_route','runtime_reverse_route','meta_state','route_point','route_join_pending','route_track_movement','targeting_status','helper_updates'}) do
+   for _,key in ipairs({'runtime_route','runtime_route_profile','runtime_loop_route','runtime_reverse_route','meta_state','meta_status','route_point','route_join_pending','route_track_movement','targeting_status','helper_updates'}) do
     if original[key]~=nil then intent[key]=original[key] end
    end
   end

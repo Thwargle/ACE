@@ -53,14 +53,15 @@ bool FACEAnimationLifetimeTest::RunTest(const FString&)
  TestTrue(TEXT("Zero-rate pose does not replay its first frame's effect hooks"),InitialHooks.IsEmpty());
  Player.EvaluateAnimData(Clip,86400,1,Later,100,Count);
  TestTrue(TEXT("Zero-rate held pose is unchanged"),Later[0].Equals(Initial[0],.00001));
- // The final fractional frame blends into the first until the exact boundary.
- // The old .999 threshold wrapped slightly early and snapped that tiny interval.
+ // Sequence boundaries switch authored frames, not crossfade unrelated part
+ // poses. Keep the final frame until the exact boundary (no early .999 wrap).
  Clip.Framerate=4;
  Player.EvaluateAnimData(Clip,.9999f,1,Initial,100,Count);
- Player.EvaluateAnimData(Clip,1.f,1,Later,100,Count);
- TestTrue(TEXT("Last fractional frame approaches the first continuously"),
-  FVector::Dist(Initial[0].GetLocation(),Later[0].GetLocation())<.15
-  && Initial[0].GetRotation().AngularDistance(Later[0].GetRotation())<.001);
+ Player.EvaluateAnimData(Clip,.75f,1,Later,100,Count);
+ TestTrue(TEXT("Last fractional frame retains the final authored pose"),Initial[0].Equals(Later[0],.00001));
+ Player.EvaluateAnimData(Clip,1.f,1,Initial,100,Count);
+ Player.EvaluateAnimData(Clip,0.f,1,Later,100,Count);
+ TestTrue(TEXT("Exact cycle boundary switches to the first authored pose"),Initial[0].Equals(Later[0],.00001));
 
  // Item state links run once, then continue in a separately authored cycle.
  // Hook IDs distinguish transition sounds/effects from repeating cycle hooks.

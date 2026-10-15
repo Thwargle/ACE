@@ -149,9 +149,11 @@ bool FACELedgerTest::RunTest(const FString&)
         if(!TestTrue(TEXT("Hunt ledger shows an estimate below totals"),Estimate.IsValid()))return false;
         TestTrue(TEXT("Live estimate uses remaining level XP and earned run rate"),Estimate->GetText().ToString().StartsWith(TEXT("1h")));
         Session->PlayerVitals.Level=100000;
+        ++GFrameCounter;Renderer.DrawWidget(Target,Dock,Size,0);FlushRenderingCommands();
         TestEqual(TEXT("Level cap is reported instead of a fabricated time"),Estimate->GetText().ToString(),FString(TEXT("Max level")));
         Session->PlayerVitals.Level=100;
         const auto BeforeReset=H->HuntLedger;H->ResetHuntLedger();
+        ++GFrameCounter;Renderer.DrawWidget(Target,Dock,Size,0);FlushRenderingCommands();
         TestEqual(TEXT("UI waits for fresh gains after Reset run"),Estimate->GetText().ToString(),FString(TEXT("Waiting for XP")));
         H->HuntLedger=BeforeReset;
         TestTrue(TEXT("Unlocked ledger offers add/remove"),CountControls(Dock,TEXT("LedgerEdit"))>0);

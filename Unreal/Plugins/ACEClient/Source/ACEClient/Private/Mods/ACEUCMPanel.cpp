@@ -709,7 +709,7 @@ namespace ACEUCMPanelPrivate
                 Add(LiveButton([this](){return Num(P(),TEXT("pet_range_mode"))==1?TEXT("Pet range: custom"):TEXT("Pet range: attack distance");},[this](){P()->SetNumberField(TEXT("pet_range_mode"),Num(P(),TEXT("pet_range_mode"))==1?0:1);Save();}));
                 Slider(TEXT("pet_range"),TEXT("Custom pet distance"),1,240,5,Accent,TEXT(" m"));
                 Slider(TEXT("pet_min_targets"),TEXT("Minimum nearby monsters"),1,20,1);
-                Heading(TEXT("Monster defaults"),TEXT("Fallbacks for monsters without an explicit rule override. Higher priority is attacked first. Leave range at 0 to use the melee or missile / spell attack distance."));
+                Heading(TEXT("Monster defaults"),TEXT("Fallbacks for monsters without an explicit rule override. Higher priority is attacked first; negative priority ignores a monster. Leave range at 0 to use the melee or missile / spell attack distance."));
                 IntegerSetting(P(),TEXT("monster_default_priority"),TEXT("Default monster priority"),-100,100,TEXT(""));
                 IntegerSetting(P(),TEXT("monster_default_range"),TEXT("Default monster attack range"),0,100,TEXT(" m"));
                 Add(Text(TEXT("Monster rules inherit these defaults unless overridden. Range 0 uses the melee or missile / spell distance above."),14,Muted));
@@ -849,11 +849,40 @@ namespace ACEUCMPanelPrivate
                 const TArray<TSharedPtr<FJsonValue>>* ImportedRules=nullptr;
                 if(P()->TryGetArrayField(TEXT("vt_meta"),ImportedRules))
                 {
-                    Heading(TEXT("Imported Virindi meta"),TEXT("Ordered rules, calls, timers, variables and embedded routes. Referenced profiles are available in Overview. Start/Stop preserves the current run; choosing another meta starts fresh."));
+                    Heading(TEXT("Imported Virindi meta"),TEXT("The meta loads its referenced character, monster, loot and route profiles when their actions run. Some metas wait for a chat command or required items before choosing a route. Start/Stop resumes the current run."));
                     Add(Toggle(TEXT("meta_enabled"),TEXT("Run imported meta"),TEXT("Meta rules can change activity settings and replace the active navigation route."),true));
-                    Add(SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Bold",18)).Text_Lambda([this](){return FText::FromString(TEXT("Current state: ")+(Plugin->Running?Plugin->MetaState:TEXT("Stopped")));}));
+                    Add(SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Bold",18)).Text_Lambda([this](){return FText::FromString(TEXT("Current state: ")+(Plugin->MetaState.IsEmpty()?TEXT("Default"):Plugin->MetaState)+(Plugin->Running?TEXT(""):TEXT(" (stopped)")));}));
+                    Add(SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",15)).ColorAndOpacity(Ink).AutoWrapText(true)
+                        .Text_Lambda([this](){return FText::FromString(Plugin->MetaStatus);}));
                     TMap<FString,int32> Counts;for(const auto& R:*ImportedRules)++Counts.FindOrAdd(Str(R->AsObject(),TEXT("state")));
+                    Counts.FindOrAdd(TEXT("Default"));
                     TArray<FString> Names;Counts.GenerateKeyArray(Names);Names.Sort();
+                    auto Controls=SNew(SHorizontalBox);
+                    Controls->AddSlot().FillWidth(1)[Button(TEXT("Restart from Default"),[this](){
+                        const bool WasRunning=Plugin->Running;
+                        if(Host->SelectUCMSection(TEXT("Metas"),Host->UCMSectionName(TEXT("Metas")))&&WasRunning)Host->Start(TEXT("ucm"));
+                    })];
+                    Controls->AddSlot().FillWidth(1).Padding(6,0,0,0)[SNew(SComboButton).ComboButtonStyle(&FACEPluginStyle::Current()->Combo).ButtonStyle(&Style())
+                        .IsEnabled_Lambda([this](){return Plugin->Running;}).ButtonContent()[Text(TEXT("Go to state..."))]
+                        .OnGetMenuContent_Lambda([this,Names]()->TSharedRef<SWidget>{
+                            auto List=SNew(SVerticalBox);
+                            for(const auto& Name:Names)List->AddSlot().AutoHeight()[Button(Name,[this,Name](){Host->RunUCMCommand(TEXT("setmetastate ")+Name);FSlateApplication::Get().DismissAllMenus();})];
+                            return SNew(SBox).MaxDesiredHeight(300)[SNew(SScrollBox)+SScrollBox::Slot()[List]];
+                        })];
+                    Add(Controls);
+                    Heading(TEXT("Referenced profiles"),TEXT("These shared files are used automatically by the meta. Edit them in their own tabs; their original vTank filenames remain linked."));
+                    const TSharedPtr<FJsonObject>* Refs=nullptr;
+                    if(P()->TryGetObjectField(TEXT("meta_profile_refs"),Refs))
+                    {
+                        TArray<FString> Files;for(const auto& Ref:(*Refs)->Values)Files.Add(FString(Ref.Key));Files.Sort();
+                        for(const auto& File:Files)
+                        {
+                            TArray<FString> Parts;
+                            for(const auto& Part:(*Refs)->GetObjectField(File)->Values)Parts.Add(FString(Part.Key)+TEXT(": ")+Part.Value->AsString());
+                            Parts.Sort();Add(Text(File+TEXT(" → ")+FString::Join(Parts,TEXT(", ")),15));
+                        }
+                    }
+                    Heading(TEXT("States"),TEXT("Rules execute once per state entry, in their original order. Empty routes deliberately stop navigation until another rule loads a route."));
                     for(const auto& Name:Names)Add(Text(FString::Printf(TEXT("%s — %d rules"),*Name,Counts[Name]),16));
                     Add(Button(TEXT("Remove loaded meta"),[this](){Host->ClearProfileFile(TEXT("met"));Rebuild();}));
                     return;
@@ -1137,6 +1166,18 @@ bool FACEUCMImportUITest::RunTest(const FString&)
     TestTrue(TEXT("Selection indicator does not resize button"),BeforeSize.Equals(Fire->GetDesiredSize(),.01f));
     auto Cold=FindButton(Panel,TEXT("Cold"));Cold->SimulateClick();Fire->SimulateClick();
     TestEqual(TEXT("Repeated changes use live profile bindings"),Plugin->Profile->GetNumberField(TEXT("damage_type")),8.);
+    auto Rule=MakeShared<FJsonObject>();Rule->SetStringField(TEXT("state"),TEXT("Default"));
+    auto Condition=MakeShared<FJsonObject>();Condition->SetNumberField(TEXT("type"),1);
+    auto Action=MakeShared<FJsonObject>();Action->SetNumberField(TEXT("type"),0);
+    Rule->SetObjectField(TEXT("condition"),Condition);Rule->SetObjectField(TEXT("action"),Action);
+    Plugin->Profile->SetArrayField(TEXT("vt_meta"),{MakeShared<FJsonValueObject>(Rule)});
+    if(!TestTrue(TEXT("Save test meta"),Host->SaveUCMSectionAs(TEXT("Metas"),TEXT("UITest"))))return false;
+    Panel->Page=TEXT("Metas");Panel->Rebuild();
+    auto Restart=FindButton(Panel,TEXT("Restart from Default"));
+    if(TestTrue(TEXT("Imported meta has restart control"),Restart.IsValid()))Restart->SimulateClick();
+    TestFalse(TEXT("Restarting a stopped meta does not unexpectedly start UCM"),Plugin->Running);
+    TestTrue(TEXT("Restart keeps meta execution enabled for the next Start"),Plugin->Profile->GetBoolField(TEXT("meta_enabled")));
+    TestTrue(TEXT("Restart clears prior state diagnostics"),Plugin->MetaState.IsEmpty()&&Plugin->MetaStatus.IsEmpty());
     return true;
 }
 }

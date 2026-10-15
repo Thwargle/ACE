@@ -35,6 +35,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACEPvPCombatParityTest;
 	friend class FACEEmoteTransitionTest;
 	friend class FACESelectionToolbarTest;
+	friend class FACEWorldLootPlacementTest;
 	friend class UACEVRComponent;
 	friend class FACEVRRigTest;
 	friend class FACEVRInteriorTest;

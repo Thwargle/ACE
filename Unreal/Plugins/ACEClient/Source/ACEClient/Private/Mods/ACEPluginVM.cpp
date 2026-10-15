@@ -5,6 +5,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonSerializer.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 #include <string_view>
 extern "C" {
 #include "Lua/lua.h"
@@ -342,16 +343,23 @@ bool FACEPluginVM::Load(const FString& Source, FString& Error, const FString& Po
 bool FACEPluginVM::Step(const TSharedPtr<FJsonObject>& Snapshot, const TSharedPtr<FJsonObject>& Profile,
     TSharedPtr<FJsonObject>& Intent, FString& Error)
 {
+    TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginLuaStep);
     Intent.Reset();RegexWork=0;SpellIndexWork=0;Instructions=0;
     lua_settop(State, 0);
     lua_sethook(State, Budget, LUA_MASKCOUNT, 1000);
     lua_rawgeti(State, LUA_REGISTRYINDEX, Function);
-    for (const auto* Object : {Snapshot.Get(), Profile.Get()})
     {
-        lua_pushcfunction(State, PushArgument); lua_pushlightuserdata(State, const_cast<FJsonObject*>(Object));
-        if (lua_pcall(State, 1, 1, 0) != LUA_OK) { Error = LuaError(State); return false; }
+        TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginLuaInputs);
+        for (const auto* Object : {Snapshot.Get(), Profile.Get()})
+        {
+            lua_pushcfunction(State, PushArgument); lua_pushlightuserdata(State, const_cast<FJsonObject*>(Object));
+            if (lua_pcall(State, 1, 1, 0) != LUA_OK) { Error = LuaError(State); return false; }
+        }
     }
-    if (lua_pcall(State, 2, 1, 0) != LUA_OK) { Error = LuaError(State); return false; }
+    {
+        TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginLuaCallback);
+        if (lua_pcall(State, 2, 1, 0) != LUA_OK) { Error = LuaError(State); return false; }
+    }
     if (lua_isnil(State, -1)) return true;
     if (!lua_istable(State, -1)) { Error = TEXT("Tick must return nil or an intent table"); return false; }
     Intent = MakeShared<FJsonObject>();

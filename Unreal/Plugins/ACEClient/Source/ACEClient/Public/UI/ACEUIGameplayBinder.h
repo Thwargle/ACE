@@ -79,6 +79,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEPanelResizeSocialTest;
 	friend class FACEInventoryUICostTest;
 	friend class FACEGameplayRefreshTest;
+	friend class FACEUIWorkloadTest;
 	friend class FACESalvageTest;
 	friend class FACEHousingTest;
 	friend class FACEChessTest;
@@ -826,6 +827,11 @@ private:
 	uint32 SpellbookSchoolFilterMask = 0x1Fu;
 	uint32 SpellbookLevelFilterMask = 0xFFu;
 	int32 SpellbookFilteredCount = 0;
+	const TArray<int32>& FilteredSpellbook(class UACEDatSubsystem* Dat);
+	TArray<int32> SpellbookKnownCache, SpellbookOrderCache;
+	TWeakObjectPtr<class UACEDatSubsystem> SpellbookOrderDat;
+	uint32 SpellbookOrderSchools = MAX_uint32, SpellbookOrderLevels = MAX_uint32;
+	bool bSpellbookOrderDatReady = false;
 	/** Brief pressed flash (light green DID) after a filter toggle. */
 	FString SpellbookFilterPressedName;
 	double SpellbookFilterPressedUntil = 0.0;

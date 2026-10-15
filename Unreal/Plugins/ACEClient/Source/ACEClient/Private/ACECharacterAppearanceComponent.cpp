@@ -71,18 +71,6 @@ static bool ACEIsEmoteSubstate(uint32 Command)
 		&& ACEMotion::IsHeldRestCommand(Command);
 }
 
-static void ACEStopCastGestureIfLeaving(AActor* Owner, bool bLeavingCast, bool bStayingInCast)
-{
-	if (!bLeavingCast || bStayingInCast || !Owner)
-	{
-		return;
-	}
-	if (UACEScriptComponent* Scripts = Owner->FindComponentByClass<UACEScriptComponent>())
-	{
-		Scripts->StopCastGestureEffects();
-	}
-}
-
 UACECharacterAppearanceComponent::UACECharacterAppearanceComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
@@ -1091,7 +1079,6 @@ void UACECharacterAppearanceComponent::InterruptCastWithMovement()
 		bHoldActionFinalAfterFinish = false;
 		if (bHoldActionFinal)
 		{
-			ACEStopCastGestureIfLeaving(GetOwner(),true,false);
 			ClearActionMotion();
 		}
 	}
@@ -2160,7 +2147,8 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 			&& !(bChatPoseAction && AnimTime < 3.f);
 		if ((bFinished || bGiveUpFailed) && !bHoldActionFinal)
 		{
-			const bool bLeavingCast = ACEIsMagicCastCommand(ActionCommand);
+			// Retail CSequence executes the authored particle hooks. Completing an
+			// animation does not discard unrelated emitters or their remaining tails.
 			if (bIsDead && bOk && bFinished)
 			{
 				// Keep the final death frame until ObjectDelete / corpse replace.
@@ -2226,7 +2214,6 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 				DeferredPoseDeltaTime = 0.f;
 				bSuppressNextHookDispatch = false;
 				ResetHookTracking();
-				ACEStopCastGestureIfLeaving(GetOwner(), bLeavingCast, bNextCast);
 			}
 			else if (QueuedHoldAction != 0)
 			{
@@ -2235,7 +2222,6 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 				QueuedHoldAction = 0;
 				QueuedHoldStyle = 0;
 				SetHeldActionMotion(static_cast<int32>(Next), static_cast<int32>(NextStyle));
-				ACEStopCastGestureIfLeaving(GetOwner(), bLeavingCast, ACEIsMagicCastCommand(Next));
 			}
 			else
 			{
@@ -2256,7 +2242,6 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 				{
 					AnimMode = EACEAnimMode::Locomotion;
 				}
-				ACEStopCastGestureIfLeaving(GetOwner(), bLeavingCast, false);
 			}
 		}
 		return;

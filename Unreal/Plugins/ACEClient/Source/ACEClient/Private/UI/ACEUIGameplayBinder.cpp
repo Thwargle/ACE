@@ -10044,6 +10044,49 @@ void UACEUIGameplayBinder::RefreshSpellbookChromeLabels()
 	}
 }
 
+const TArray<int32>& UACEUIGameplayBinder::FilteredSpellbook(UACEDatSubsystem* Dat)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACESpellbookOrdering);
+	const auto Session = Client ? Client->GetSession() : nullptr;
+	static const TArray<int32> Empty;
+	const auto& Known = Session ? Session->GetKnownSpells() : Empty;
+	const bool Ready = Dat && Dat->IsDatReady();
+	if (SpellbookKnownCache == Known && SpellbookOrderDat.Get() == Dat
+		&& bSpellbookOrderDatReady == Ready && SpellbookOrderSchools == SpellbookSchoolFilterMask
+		&& SpellbookOrderLevels == SpellbookLevelFilterMask) return SpellbookOrderCache;
+	SpellbookOrderDat = Dat; bSpellbookOrderDatReady = Ready;
+	SpellbookOrderSchools = SpellbookSchoolFilterMask; SpellbookOrderLevels = SpellbookLevelFilterMask;
+	SpellbookKnownCache = Known;
+	SpellbookOrderCache = Known;
+	auto& Spells = SpellbookOrderCache;
+	Spells.RemoveAll([&](int32 SpellId)
+	{
+		uint32 School = 0, Level = 1;
+		if (Dat)
+		{
+			Dat->TryGetSpellSchoolAndLevel(static_cast<uint32>(SpellId), School, Level);
+		}
+		const bool bSchoolOk = (School >= 1 && School <= 5)
+			? ((SpellbookSchoolFilterMask & (1u << (School - 1))) != 0)
+			: true;
+		const bool bLevelOk = (Level >= 1 && Level <= 8)
+			? ((SpellbookLevelFilterMask & (1u << (Level - 1))) != 0)
+			: true;
+		return !(bSchoolOk && bLevelOk);
+	});
+	Spells.Sort([&](int32 A, int32 B)
+	{
+		uint32 Oa = 0, Ob = 0;
+		if (Dat)
+		{
+			Dat->TryGetSpellDisplayOrder(static_cast<uint32>(A), Oa);
+			Dat->TryGetSpellDisplayOrder(static_cast<uint32>(B), Ob);
+		}
+		return Oa != Ob ? Oa < Ob : A < B;
+	});
+	return SpellbookOrderCache;
+}
+
 void UACEUIGameplayBinder::RefreshSpellbookOverlays()
 {
 	if (!Client || !Manager || !Canvas || !Canvas->WidgetTree
@@ -10080,32 +10123,7 @@ void UACEUIGameplayBinder::RefreshSpellbookOverlays()
 	{
 		return;
 	}
-	TArray<int32> Spells = Client->GetKnownSpells();
-	Spells.RemoveAll([&](int32 SpellId)
-	{
-		uint32 School = 0, Level = 1;
-		if (Dat)
-		{
-			Dat->TryGetSpellSchoolAndLevel(static_cast<uint32>(SpellId), School, Level);
-		}
-		const bool bSchoolOk = (School >= 1 && School <= 5)
-			? ((SpellbookSchoolFilterMask & (1u << (School - 1))) != 0)
-			: true;
-		const bool bLevelOk = (Level >= 1 && Level <= 8)
-			? ((SpellbookLevelFilterMask & (1u << (Level - 1))) != 0)
-			: true;
-		return !(bSchoolOk && bLevelOk);
-	});
-	Spells.Sort([&](int32 A, int32 B)
-	{
-		uint32 Oa = 0, Ob = 0;
-		if (Dat)
-		{
-			Dat->TryGetSpellDisplayOrder(static_cast<uint32>(A), Oa);
-			Dat->TryGetSpellDisplayOrder(static_cast<uint32>(B), Ob);
-		}
-		return Oa != Ob ? Oa < Ob : A < B;
-	});
+	const auto& Spells = FilteredSpellbook(Dat);
 	SpellbookFilteredCount = Spells.Num();
 	const FIntPoint Origin = ListEl->GetScreenOrigin();
 	const int32 RowH = SpellbookTemplate().Height();

@@ -92,6 +92,13 @@ bool FACEUCMSharedMetaTest::RunTest(const FString&)
             TestEqual(TEXT("Copy original fixture into isolated import folder"),IFileManager::Get().Copy(*(Inbox/(FString(TEXT("AunRalirea."))+Ext)),*(Fixture/(FString(TEXT("AunRalirea."))+Ext))),COPY_OK);
         if(!TestTrue(TEXT("Aun Ralirea imports successfully"),H->SelectProfileFile(TEXT("AunRalirea.met")))){AddError(H->Notice);return false;}
         TestEqual(TEXT("All Aun Ralirea rules preserved"),P->Profile->GetArrayField(TEXT("vt_meta")).Num(),47);
+        const FString MetaName=H->UCMSectionName(TEXT("Metas"));
+        P->Profile->SetBoolField(TEXT("meta_enabled"),false);
+        TestTrue(TEXT("Selecting an already imported meta succeeds"),H->SelectUCMSection(TEXT("Metas"),MetaName));
+        TestTrue(TEXT("Selecting a meta explicitly enables its rules"),P->Profile->GetBoolField(TEXT("meta_enabled")));
+        P->Profile->SetBoolField(TEXT("meta_enabled"),false);
+        TestTrue(TEXT("Repeat import selects the existing meta"),H->SelectProfileFile(TEXT("AunRalirea.met")));
+        TestTrue(TEXT("Reusing an import also enables its rules"),P->Profile->GetBoolField(TEXT("meta_enabled")));
         FString Script,Error;FFileHelper::LoadFileToString(Script,*(P->Directory/TEXT("main.lua")));
         FACEPluginVM VM;if(!TestTrue(TEXT("Lua policy loads"),VM.Load(Script,Error)))return false;
         auto Snapshot=Json(TEXT(R"({"time":100,"player":1,"health":100,"max_health":100,"stamina":100,"max_stamina":100,"mana":100,"max_mana":100,"position":{"cell":2139029505,"x":84,"y":84,"z":12},"inventory":[],"action_serial":0,"teleport_sequence":0,"chat_serial":0,"portal_serial":0,"chat_events":[],"commands":[]})"));
@@ -103,7 +110,7 @@ bool FACEUCMSharedMetaTest::RunTest(const FString&)
                 TestTrue(TEXT("Aun intentionally clears navigation before its fellowship start command"),H->RuntimeRoute&&H->RuntimeRoute->GetArrayField(TEXT("route")).IsEmpty());
                 Snapshot->SetArrayField(TEXT("inventory"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":99,"name":"Town Network Portal Gem","count":10,"identified":true})")))});
                 Snapshot->SetNumberField(TEXT("chat_serial"),1);
-                Snapshot->SetArrayField(TEXT("chat_events"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"serial":1,"text":"[Fellowship] Tester says, \"!start\""})")))});
+                Snapshot->SetArrayField(TEXT("chat_events"),{MakeShared<FJsonValueObject>(Json(TEXT(R"({"serial":1,"text":"[Fellowship] You say, \"!start\""})")))});
             }
             Snapshot->SetNumberField(TEXT("time"),100+Tick*.3);TSharedPtr<FJsonObject> Intent;
             auto TickProfile=Copy(P->Profile);TickProfile->RemoveField(TEXT("vt_library"));
@@ -113,6 +120,13 @@ bool FACEUCMSharedMetaTest::RunTest(const FString&)
                 AddInfo(FString::Printf(TEXT("Aun tick %d: %s, %s, state %s, route update %d"),Tick,*Op,*Status,*State,Intent->HasField(TEXT("runtime_route"))));}
             if(Intent->HasField(TEXT("runtime_route")))++Routes;
             if(Op==TEXT("profile_load"))++Loads;
+            if(Tick==9)
+            {
+                TestFalse(TEXT("Waiting meta never asks the user to record a route"),Intent->GetStringField(TEXT("status")).Contains(TEXT("Record a route")));
+                const FString Wait=Intent->GetStringField(TEXT("meta_status"));
+                TestTrue(TEXT("Start trigger appears in meta diagnostics"),Wait.Contains(TEXT("!start")));
+                TestTrue(TEXT("Required inventory appears in meta diagnostics"),Wait.Contains(TEXT("Town Network Portal Gem"))&&Wait.Contains(TEXT("have 0")));
+            }
             H->Execute(*P,Intent);
         }
         TestTrue(TEXT("Real meta activates embedded route"),Routes>0);
@@ -121,6 +135,42 @@ bool FACEUCMSharedMetaTest::RunTest(const FString&)
         TestTrue(TEXT("Actual route selection appears in chooser"),H->UCMSectionName(TEXT("Routes")).StartsWith(TEXT("AunRalirea")));
         TestEqual(TEXT("Displayed route matches native route after meta starts"),P->Profile->GetArrayField(TEXT("route")).Num(),H->RuntimeRoute?H->RuntimeRoute->GetArrayField(TEXT("route")).Num():-1);
         AddInfo(FString::Printf(TEXT("Aun Ralirea: %d profile loads, %d route activations, %d named routes"),Loads,Routes,H->UCMSectionProfiles(TEXT("Routes")).Num()));
+        // Replay the quest's actual location/inventory state changes. This
+        // verifies route handoffs and source settings without teleporting a
+        // live player, claiming a quest reward, or altering their profiles.
+        auto Replay=[&](uint32 Cell,const TCHAR* State=nullptr,double Seconds=.3)
+        {
+            Snapshot->SetNumberField(TEXT("time"),Snapshot->GetNumberField(TEXT("time"))+Seconds);
+            Snapshot->GetObjectField(TEXT("position"))->SetNumberField(TEXT("cell"),Cell);
+            auto TickProfile=Copy(P->Profile);TickProfile->RemoveField(TEXT("vt_library"));
+            if(State){auto Command=MakeShared<FJsonObject>();Command->SetStringField(TEXT("op"),TEXT("state"));Command->SetStringField(TEXT("state"),State);TickProfile->SetArrayField(TEXT("ucm_commands"),{MakeShared<FJsonValueObject>(Command)});}
+            TSharedPtr<FJsonObject> Intent;
+            if(!TestTrue(TEXT("Quest state executes without script failure"),VM.Step(Snapshot,TickProfile,Intent,Error))){AddError(Error);return;}
+            if(Intent)H->Execute(*P,Intent);
+        };
+        auto Points=[&](){return H->RuntimeRoute?H->RuntimeRoute->GetArrayField(TEXT("route")).Num():-1;};
+        Replay(23855548);TestEqual(TEXT("TN arrival loads first town-network segment"),Points(),18);
+        Replay(23855644);TestEqual(TEXT("TN interior loads next segment"),Points(),8);
+        Replay(459077);TestEqual(TEXT("Exit cell loads search approach"),Points(),29);
+        Replay(498466838);Replay(498466838);TestEqual(TEXT("Search landblock activates Back route"),Points(),129);
+        Replay(498466838,TEXT("Hunting"));
+        TestEqual(TEXT("First hunting state loads complete route"),Points(),711);
+        TestEqual(TEXT("First hunting route enters its monitor state"),P->MetaState,FString(TEXT("Default2")));
+        Replay(498466838,nullptr,301);TestEqual(TEXT("Five-minute timeout enters alternate return"),P->MetaState,FString(TEXT("Back2")));
+        Replay(498466838);TestEqual(TEXT("Alternate return installs its route"),Points(),133);
+        Replay(498466838,TEXT("Hunting2"));
+        TestEqual(TEXT("Second hunting state loads complete route"),Points(),796);
+        TestEqual(TEXT("Second hunting route enters its monitor state"),P->MetaState,FString(TEXT("Default3")));
+        auto Items=Snapshot->GetArrayField(TEXT("inventory"));Items.Add(MakeShared<FJsonValueObject>(Json(TEXT(R"({"id":100,"name":"Clay Figurine","count":1,"identified":true})"))));Snapshot->SetArrayField(TEXT("inventory"),Items);
+        Replay(498466838);TestEqual(TEXT("Looted quest item starts turn-in"),P->MetaState,FString(TEXT("TurnIn")));
+        Replay(498466838);TestEqual(TEXT("Turn-in begins with its recall route"),Points(),2);
+        Replay(459077);TestEqual(TEXT("Turn-in selects the quest-specific town route"),Points(),21);
+        Replay(263782409);TestEqual(TEXT("Turn-in loads complete NPC approach"),Points(),87);
+        Items.Pop();Snapshot->SetArrayField(TEXT("inventory"),Items);
+        Replay(263782409);Replay(263782409);
+        TestEqual(TEXT("Author's manual turn-in completion enters Finished"),P->MetaState,FString(TEXT("Finished")));
+        TestEqual(TEXT("Finished deliberately clears native navigation"),Points(),0);
+        TestFalse(TEXT("Finished does not prompt for route recording"),P->Status.Contains(TEXT("Record a route")));
     }
     return true;
 }

@@ -41,13 +41,15 @@ The desktop overlay hides with Alt+Z and is removed on logout.
   Both views share the saved position, size and visibility; existing dungeon pins
   carry over. Each view retains its own zoom while the overlay is open. Clear Pin
   to hide both views; reopen the globe window to change these options.
-- Use the pinned map's **− / Map +** button to minimize or restore it without
+- Use the pinned map's **+ / −** buttons to zoom in or out around the player,
+  including while the UI is locked. They work in both overworld and interior views.
+- Use the separate **Map − / Map +** button to minimize or restore it without
   hiding the direction arrow. Its expanded size and position are retained.
   **Pinned map opacity** in the globe window adjusts the terrain, lines, markers,
   and border together; this preference and minimized state are saved.
 - **Player facing up** rotates both maps with the character; off keeps north up.
 - Use the game UI's **lock/unlock icon** to lock the pinned map (click-through,
-  except for its minimize/restore button)
+  except for its zoom and minimize/restore buttons)
   or unlock it to drag, resize from its bottom-right corner, or zoom with the
   wheel. Position, size, pinned mode and orientation survive logout and restart.
   Saved arrow and map positions are retained across temporary viewport changes.

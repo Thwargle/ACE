@@ -1775,6 +1775,7 @@ void FACESession::HandlePlayerCreate(FACEBinaryReader& Reader)
 	{
 		Existing->bIsSelf = true;
 		Existing->bIsPlayer = true;
+		if (ApplyPlayerInventoryCapacity(*Existing)) ++InventoryDataRevision;
 		AdoptPlayerPhysicsTimestamps(*Existing);
 	}
 	if (!bLoginCompleteSent)
@@ -1905,6 +1906,7 @@ void FACESession::UpsertWorldObject(const FACEWorldObject& Object, bool bForceRe
 			}
 		}
 	}
+	ApplyPlayerInventoryCapacity(Merged);
 	WorldObjects.Add(Merged.Guid, Merged);
 	if (Merged.Guid == PlayerGuid) AdoptPlayerPhysicsTimestamps(Merged);
 	ReconcileOpenContainerOwnership();
@@ -7095,6 +7097,9 @@ void FACESession::HandleInventoryServerSaveFailed(FACEBinaryReader& Reader)
 		return;
 	}
 	const int32 ItemGuid = static_cast<int32>(Reader.ReadUInt32());
+	// A rejection completes this inventory request too. Leaving it pending
+	// needlessly blocks another hand/F attempt until the timeout expires.
+	PendingInventoryTransfers.Remove(ItemGuid);
 	if (ItemGuid == PendingEquipmentGuid || PendingEquipmentRemovals.Contains(ItemGuid)) CancelEquipmentSwap();
 
 	InventoryFailureItem = ItemGuid;
@@ -8866,8 +8871,31 @@ void FACESession::FlushAutonomousPosition(bool bContact, bool bTrackedVR)
 	AutoPosTimer = 0.f;
 }
 
+bool FACESession::ApplyPlayerInventoryCapacity(FACEWorldObject& Object) const
+{
+	if (!PlayerGuid || Object.Guid != PlayerGuid) return false;
+	bool Changed = false;
+	auto Apply = [&](int32 Property, int32& Capacity)
+	{
+		if (const int32* Value = PlayerVitals.StatQualityInts.Find(Property); Value && Capacity != *Value)
+		{
+			Capacity = *Value;
+			Changed = true;
+		}
+	};
+	// ACE grants the pack augmentation with a private ContainersCapacity update.
+	// Keep the inventory/UI/pickup view in sync, including PlayerDescription and
+	// CreateObject arriving in either order. The server supplies the final capacity;
+	// adding AugmentationExtraPackSlot here would count the bonus twice.
+	Apply(6, Object.ItemsCapacity);
+	Apply(7, Object.ContainersCapacity);
+	return Changed;
+}
+
 void FACESession::NotifyVitalsChanged()
 {
+	if (FACEWorldObject* Self = WorldObjects.Find(PlayerGuid); Self && ApplyPlayerInventoryCapacity(*Self))
+		++InventoryDataRevision;
 	if (StatResolver) { StatResolver(PlayerVitals, ActiveEnchantments); }
 	OnVitalsUpdated.Broadcast(PlayerVitals);
 }

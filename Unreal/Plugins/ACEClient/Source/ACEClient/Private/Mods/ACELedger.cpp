@@ -104,18 +104,64 @@ namespace
         void Construct(const FArguments& A)
         {Host=A._Host;Id=A._Id;Style=FACEPluginStyle::Use(A._Host);ChildSlot[SAssignNew(Body,SVerticalBox)];Rebuild();}
         virtual void Tick(const FGeometry& G,double T,float D) override
-        {SCompoundWidget::Tick(G,T,D);if(Host.IsValid()&&(Revision!=Host->GetSupplyRevision()||Locked!=!Host->IsPluginBarUnlocked()))Rebuild();}
+        {SCompoundWidget::Tick(G,T,D);if(Host.IsValid()&&(Revision!=Host->GetSupplyRevision()||Locked!=!Host->IsPluginBarUnlocked()))Rebuild();UpdateHuntText();}
     private:
         TWeakObjectPtr<UACEPluginSubsystem> Host;FString Id;
         TSharedPtr<FACEPluginStyle> Style;TSharedPtr<SVerticalBox> Body;
         uint32 Revision=0;bool Locked=false;
+        FText HuntText[3][2], HuntEstimate;
+        int64 HuntSecond=-1,HuntXP=-1,HuntLum=-1,CharacterXP=-1;
+        double HuntStarted=-1;int32 HuntLevel=-1;bool HuntValid=false;
+        FText EstimateHuntLevel() const
+        {
+            auto* GI=Host.IsValid()?Host->GetGameInstance():nullptr;
+            auto* C=GI?GI->GetSubsystem<UACEClientSubsystem>():nullptr;
+            auto* Dat=GI?GI->GetSubsystem<UACEDatSubsystem>():nullptr;
+            if(!C||!Dat)return FText::FromString(TEXT("--"));
+            const auto& V=C->GetPlayerVitalsView();int64 Needed=0,Threshold=0;
+            if(!V.bValid||V.Level<=0||!V.QualityInt64s.Contains(1)||!Dat->TryGetXpToNextLevel(V.TotalExperience,V.Level,Needed))
+                return FText::FromString(TEXT("--"));
+            if(Needed==0)
+            {
+                Dat->TryGetXpToNextLevel(0,V.Level,Threshold);
+                return FText::FromString(Threshold==0?TEXT("Max level"):TEXT("Leveling..."));
+            }
+            const double Seconds=Host->GetHuntLedger().SecondsToLevel(Needed,FPlatformTime::Seconds());
+            if(Seconds<0)return FText::FromString(TEXT("Waiting for XP"));
+            if(Seconds<60)return FText::FromString(TEXT("<1m"));
+            if(Seconds>=86400)return FText::FromString(FString::Printf(TEXT("%.0fd %02dh"),FMath::FloorToDouble(Seconds/86400),int32(FMath::Fmod(Seconds/3600.,24.))));
+            const int32 Minutes=FMath::CeilToInt(Seconds/60.);
+            return FText::FromString(Minutes>=60?FString::Printf(TEXT("%dh %02dm"),Minutes/60,Minutes%60):FString::Printf(TEXT("%dm"),Minutes));
+        }
+        void UpdateHuntText()
+        {
+            if(Id!=TEXT("huntledger")||!Host.IsValid())return;
+            auto* C=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+            if(!C)return;
+            const auto& V=C->GetPlayerVitalsView();const auto& L=Host->GetHuntLedger();
+            const double Now=FPlatformTime::Seconds();const int64 Second=FMath::FloorToInt64(Now);
+            const bool Valid=V.bValid&&V.QualityInt64s.Contains(1);
+            if(HuntSecond==Second&&HuntXP==L.XP&&HuntLum==L.Lum&&HuntStarted==L.Started
+                &&CharacterXP==V.TotalExperience&&HuntLevel==V.Level&&HuntValid==Valid)return;
+            HuntSecond=Second;HuntXP=L.XP;HuntLum=L.Lum;HuntStarted=L.Started;
+            CharacterXP=V.TotalExperience;HuntLevel=V.Level;HuntValid=Valid;
+            const auto Recent=L.LastFiveMinutes(Now);
+            for(int32 Lum=0;Lum<2;++Lum)
+            {
+                const int64 Total=Lum?L.Lum:L.XP;
+                HuntText[0][Lum]=FText::AsNumber(Lum?Recent.Lum:Recent.XP);
+                HuntText[1][Lum]=FText::AsNumber(L.PerHour(Total,Now));
+                HuntText[2][Lum]=FText::AsNumber(Total);
+            }
+            HuntEstimate=EstimateHuntLevel();
+        }
         TSharedRef<SWidget> Label(const FString& Text)
         {return SNew(SACEPluginText).Text(FText::FromString(Text)).Font(FCoreStyle::GetDefaultFontStyle("Regular",12));}
         TSharedRef<SWidget> Button(const FString& Text,const FString& Tip,TFunction<void()> Action)
         {return SNew(SButton).Tag(Text==TEXT("Reset run")?TEXT("LedgerReset"):TEXT("LedgerEdit")).IsFocusable(false).ButtonStyle(&Style->Button).ContentPadding(FMargin(8,3)).ToolTipText(FText::FromString(Tip)).OnClicked_Lambda([Action]{Action();return FReply::Handled();})[Label(Text)];}
         void Rebuild()
         {
-            if(!Host.IsValid())return;FACEPluginStyle::Use(Host.Get());Revision=Host->GetSupplyRevision();Locked=!Host->IsPluginBarUnlocked();Body->ClearChildren();
+            if(!Host.IsValid())return;FACEPluginStyle::Use(Host.Get());Revision=Host->GetSupplyRevision();Locked=!Host->IsPluginBarUnlocked();Body->ClearChildren();UpdateHuntText();
             if(Id==TEXT("supplyledger"))
             {
                 auto Rows=SNew(SVerticalBox);const auto& LedgerSupplies=Host->GetSupplies();
@@ -149,12 +195,10 @@ namespace
                 {
                     auto R=SNew(SHorizontalBox);R->AddSlot().FillWidth(1)[Label(Caption)];
                     for(bool Lum:{false,true})R->AddSlot().FillWidth(1).HAlign(HAlign_Right)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
-                        .Text_Lambda([H=Host,Metric,Lum]
+                        .Text_Lambda([this,Metric,Lum]
                         {
-                            if(Metric<0)return FText::FromString(Lum?TEXT("Luminance"):TEXT("XP"));
-                            if(!H.IsValid())return FText::GetEmpty();const auto& L=H->GetHuntLedger();const double Now=FPlatformTime::Seconds();
-                            if(Metric==0){const auto Recent=L.LastFiveMinutes(Now);return FText::AsNumber(Lum?Recent.Lum:Recent.XP);}
-                            const int64 Total=Lum?L.Lum:L.XP;return FText::AsNumber(Metric==1?L.PerHour(Total,Now):Total);
+                            if(Metric<0){static const FText XP=FText::FromString(TEXT("XP")),Luminance=FText::FromString(TEXT("Luminance"));return Lum?Luminance:XP;}
+                            return HuntText[Metric][Lum?1:0];
                         })];
                     Body->AddSlot().AutoHeight().Padding(3,3)[R];
                 };
@@ -162,27 +206,7 @@ namespace
                 auto Estimate=SNew(SHorizontalBox);
                 Estimate->AddSlot().FillWidth(1)[Label(TEXT("Next level (est.)"))];
                 Estimate->AddSlot().AutoWidth().HAlign(HAlign_Right)[SNew(SACEPluginText).Tag(TEXT("HuntNextLevel"))
-                    .Font(FCoreStyle::GetDefaultFontStyle("Regular",12)).Text_Lambda([H=Host]
-                    {
-                        auto* GI=H.IsValid()?H->GetGameInstance():nullptr;
-                        auto* C=GI?GI->GetSubsystem<UACEClientSubsystem>():nullptr;
-                        auto* Dat=GI?GI->GetSubsystem<UACEDatSubsystem>():nullptr;
-                        if(!C||!Dat)return FText::FromString(TEXT("--"));
-                        const auto& V=C->GetPlayerVitalsView();int64 Needed=0,Threshold=0;
-                        if(!V.bValid||V.Level<=0||!V.QualityInt64s.Contains(1)||!Dat->TryGetXpToNextLevel(V.TotalExperience,V.Level,Needed))
-                            return FText::FromString(TEXT("--"));
-                        if(Needed==0)
-                        {
-                            Dat->TryGetXpToNextLevel(0,V.Level,Threshold);
-                            return FText::FromString(Threshold==0?TEXT("Max level"):TEXT("Leveling..."));
-                        }
-                        const double Seconds=H->GetHuntLedger().SecondsToLevel(Needed,FPlatformTime::Seconds());
-                        if(Seconds<0)return FText::FromString(TEXT("Waiting for XP"));
-                        if(Seconds<60)return FText::FromString(TEXT("<1m"));
-                        if(Seconds>=86400)return FText::FromString(FString::Printf(TEXT("%.0fd %02dh"),FMath::FloorToDouble(Seconds/86400),int32(FMath::Fmod(Seconds/3600.,24.))));
-                        const int32 Minutes=FMath::CeilToInt(Seconds/60.);
-                        return FText::FromString(Minutes>=60?FString::Printf(TEXT("%dh %02dm"),Minutes/60,Minutes%60):FString::Printf(TEXT("%dm"),Minutes));
-                    })];
+                    .Font(FCoreStyle::GetDefaultFontStyle("Regular",12)).Text_Lambda([this]{return HuntEstimate;})];
                 Body->AddSlot().AutoHeight().Padding(3,3)[Estimate];
                 Body->SetToolTipText(FText::FromString(FString(TEXT("Last 5 min: gains in the rolling five-minute window. Per hour: average since login or Reset. Spending XP/luminance does not subtract earned totals. Closing this window keeps tracking."))
                     +TEXT(" Next level estimates the remaining time using your average XP rate since login or Reset.")

@@ -510,7 +510,7 @@ public:
             Body->AddSlot().AutoHeight()[SNew(SSlider).MinValue(.1f).MaxValue(1.f)
                 .Value_Lambda([this](){return Host.IsValid()?Host->WaypointMapOpacity():1.f;})
                 .OnValueChanged_Lambda([this](float Value){if(Host.IsValid())Host->SetWaypointMapOpacity(Value);})];
-            Body->AddSlot().AutoHeight()[WaypointLabel(TEXT("The pinned map follows you, automatically switches between overworld and interior layouts, and stays visible when this window closes. Both views share the same position and size. Use the game UI lock/unlock icon to move, resize or zoom it. Uncheck Pin to hide it."),13)];
+            Body->AddSlot().AutoHeight()[WaypointLabel(TEXT("The pinned map follows you, automatically switches between overworld and interior layouts, and stays visible when this window closes. Both views share the same position and size. Use + and − to zoom, even while locked. Unlock the game UI to move, resize or use wheel zoom. Uncheck Pin to hide it."),13)];
             Body->AddSlot().AutoHeight().Padding(0,6)[SNew(SEditableTextBox).Style(&FACEPluginStyle::Current()->Edit).Font(FCoreStyle::GetDefaultFontStyle("Regular",16)).HintText(FText::FromString(TEXT("Filter locations by name"))).OnTextChanged_Lambda([this](const FText& T){if(Map)Map->SetSearch(T.ToString());})];
             Body->AddSlot().FillHeight(1).Padding(0,10)[SAssignNew(Map,SWaypointMap).Host(Host.Get())];
             Body->AddSlot().AutoHeight()[SNew(SHorizontalBox)
@@ -553,13 +553,29 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeWaypointMapIcon(){return SNew(SWayp
 TSharedRef<SWidget> UACEPluginSubsystem::MakeWaypointDungeonOverlay()
 {
     const TWeakObjectPtr<UACEPluginSubsystem> H(this);
+    const auto Map=SNew(SWaypointMap).Host(this).Overlay(true)
+        .Visibility_Lambda([H](){return !H.IsValid()||H->WaypointOption(TEXT("map_minimized"),false)?EVisibility::Collapsed:H->IsWaypointMapUnlocked()?EVisibility::Visible:EVisibility::HitTestInvisible;});
+    const auto Style=FACEPluginStyle::Current();
+    auto ZoomButton=[H,Map,Style](const TCHAR* Symbol,const TCHAR* Tooltip,double Factor)->TSharedRef<SWidget>
+    {
+        return SNew(SBox).WidthOverride(26).HeightOverride(26)
+            .Visibility_Lambda([H](){return !H.IsValid()||H->WaypointOption(TEXT("map_minimized"),false)?EVisibility::Collapsed:EVisibility::Visible;})
+            [SNew(SButton).IsFocusable(false).ButtonStyle(&Style->DockButton).ContentPadding(0)
+                .HAlign(HAlign_Center).VAlign(VAlign_Center).ToolTipText(FText::FromString(Tooltip))
+                .OnClicked_Lambda([Map,Factor](){Map->ChangeZoom(Factor,Map->GetCachedGeometry().GetLocalSize()*.5);return FReply::Handled();})
+                [SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Bold",16)).ColorAndOpacity(Ink).Text(FText::FromString(Symbol))]];
+    };
     return SNew(SOverlay)
-        +SOverlay::Slot()[SNew(SWaypointMap).Host(this).Overlay(true)
-            .Visibility_Lambda([H](){return !H.IsValid()||H->WaypointOption(TEXT("map_minimized"),false)?EVisibility::Collapsed:H->IsWaypointMapUnlocked()?EVisibility::Visible:EVisibility::HitTestInvisible;})]
-        +SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Top)[SNew(SButton).IsFocusable(false).ContentPadding(FMargin(5,1))
-            .ToolTipText(FText::FromString(TEXT("Minimize / restore map; direction arrow stays visible")))
-            .OnClicked_Lambda([H](){if(H.IsValid())H->SetWaypointOption(TEXT("map_minimized"),!H->WaypointOption(TEXT("map_minimized"),false));return FReply::Handled();})
-            [SNew(SACEPluginText).Text_Lambda([H](){return FText::FromString(H.IsValid()&&H->WaypointOption(TEXT("map_minimized"),false)?TEXT("Map +"):TEXT("−"));})]];
+        +SOverlay::Slot()[Map]
+        +SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Top)
+        [SNew(SHorizontalBox)
+            +SHorizontalBox::Slot().AutoWidth()[ZoomButton(TEXT("+"),TEXT("Zoom in"),1.25)]
+            +SHorizontalBox::Slot().AutoWidth()[ZoomButton(TEXT("−"),TEXT("Zoom out"),1/1.25)]
+            +SHorizontalBox::Slot().AutoWidth()[SNew(SBox).HeightOverride(26)
+                [SNew(SButton).IsFocusable(false).ButtonStyle(&Style->DockButton).ContentPadding(FMargin(5,1))
+                    .ToolTipText(FText::FromString(TEXT("Minimize / restore map; direction arrow stays visible")))
+                    .OnClicked_Lambda([H](){if(H.IsValid())H->SetWaypointOption(TEXT("map_minimized"),!H->WaypointOption(TEXT("map_minimized"),false));return FReply::Handled();})
+                    [SNew(SACEPluginText).Text_Lambda([H](){return FText::FromString(H.IsValid()&&H->WaypointOption(TEXT("map_minimized"),false)?TEXT("Map +"):TEXT("Map −"));})]]]];
 }
 
 #if WITH_DEV_AUTOMATION_TESTS

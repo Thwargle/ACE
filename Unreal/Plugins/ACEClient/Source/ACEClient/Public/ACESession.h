@@ -96,6 +96,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEBarberTest;
 	friend class FACEItemPresentationTest;
 	friend class FACESelectionToolbarTest;
+	friend class FACEWorldLootPlacementTest;
 	friend class FACEChatParityTest;
 	friend class FACECombatChatTest;
 	friend class FACEPlayerModuleParityTest;
@@ -138,9 +139,11 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACECameraEdgeTest;
 	friend class FACERetailParticleTimingTest;
 	friend class FACERetailStatsTest;
+	friend class FACEAugmentationTest;
 	friend class FACERetailInventoryOrderTest;
 	friend class FACEEquippedLookupTest;
 	friend class FACEInventoryUICostTest;
+	friend class FACEUIWorkloadTest;
 
 public:
 	FACESession();
@@ -761,6 +764,7 @@ private:
 	void HandlePrivateUpdateAttribute2ndLevel(FACEBinaryReader& Reader);
 	void HandlePrivateUpdateSkill(FACEBinaryReader& Reader);
 	void HandlePrivateUpdatePropertyInt(FACEBinaryReader& Reader);
+	bool ApplyPlayerInventoryCapacity(FACEWorldObject& Object) const;
 	void HandlePrivateUpdatePropertyInt64(FACEBinaryReader& Reader, bool bPublic = false);
 	void HandleUpdatePropertyFloat(FACEBinaryReader& Reader, bool bPublic);
 	void HandleUpdatePropertyString(FACEBinaryReader& Reader, bool bPublic);

@@ -7517,9 +7517,13 @@ void AACEPlayerController::InteractWithObject(int32 ObjectGuid)
 
 	if (Obj.IsWorldLootable())
 	{
-		// Retail hand/F on ground loot: approach, then PutItemInContainer at range.
-		BeginUseApproach(ObjectGuid, DistAc, /*bPickupIntoInventory*/ true);
-		UE_LOG(LogTemp, Log, TEXT("ACE: Pickup approach guid=0x%08X name='%s'"), ObjectGuid, *Obj.Name);
+		// ACCWeenieObject::UIAttemptPutInContainer sends the inventory request
+		// immediately. The server supplies any MoveTo and completes the pickup.
+		// Pre-walking here could stall against furniture without ever sending F's
+		// request, and bypassed server use distances and inventory failure replies.
+		if (Client->IsUseBusy() || (Client->GetSession() && Client->GetSession()->IsInventoryTransferPending())) return;
+		SendInventoryPickup(ObjectGuid);
+		UE_LOG(LogTemp, Log, TEXT("ACE: Pickup requested guid=0x%08X name='%s'"), ObjectGuid, *Obj.Name);
 		return;
 	}
 

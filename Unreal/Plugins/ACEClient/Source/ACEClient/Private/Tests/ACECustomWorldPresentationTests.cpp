@@ -43,7 +43,11 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
     TestTrue(TEXT("Gravity-free custom object keeps its elevated server origin"),Entity->GetActorLocation().Equals(Authored,.01));
     Object.PhysicsState=ACEPhysicsState::Gravity;
     Entity->Destroy(); Entity=World->SpawnActor<AACEWorldEntityActor>(); Entity->InitializeFromObject(Object,100,false);
-    TestTrue(TEXT("Ordinary gravity loot still seats on its floor"),Entity->GetActorLocation().Z < Authored.Z-100);
+    TestTrue(TEXT("Gravity alone cannot lower a loose item's server placement"),Entity->GetActorLocation().Equals(Authored,.01));
+    Entity->Destroy();Object.Position.Location.Z=.005;
+    Entity=World->SpawnActor<AACEWorldEntityActor>();Entity->InitializeFromObject(Object,100,false);
+    TestTrue(TEXT("Loot already touching its floor retains contact skin"),FMath::IsNearlyEqual(Entity->GetActorLocation().Z,Authored.Z-149,.01));
+    Object.Position.Location.Z=1.5;
     Entity->Destroy();
     Object.PhysicsState=0;
     FTransform Actual;

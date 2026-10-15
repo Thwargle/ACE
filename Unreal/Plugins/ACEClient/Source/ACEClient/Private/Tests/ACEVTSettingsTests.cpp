@@ -108,6 +108,11 @@ bool FACEVTSettingsTest::RunTest(const FString&)
         Targets[2]->AsObject()->SetBoolField(TEXT("line_of_sight"),true);Targets[2]->AsObject()->SetNumberField(TEXT("distance"),6);TestEqual(TEXT("Ring distance uses strict boundary"),Choose()->GetNumberField(TEXT("spell")),20.);
         Targets[2]->AsObject()->SetNumberField(TEXT("distance"),3);Targets[2]->AsObject()->SetStringField(TEXT("name"),TEXT("No ring"));TestEqual(TEXT("Only ring-enabled monster rules count"),Choose()->GetNumberField(TEXT("spell")),20.);
         Targets[2]->AsObject()->SetStringField(TEXT("name"),TEXT("Ignored"));TestEqual(TEXT("Ignored monsters do not count"),Choose()->GetNumberField(TEXT("spell")),20.);
+        auto Negative=SettingsJSON(TEXT(R"({"name":"Negative","exact":true,"priority":-1,"bolt":true,"streak":true,"ring":true,"ignore":false})"));
+        auto MonsterRules=B->GetArrayField(TEXT("monsters"));MonsterRules.Add(MakeShared<FJsonValueObject>(Negative));B->SetArrayField(TEXT("monsters"),MonsterRules);
+        Targets[2]->AsObject()->SetStringField(TEXT("name"),TEXT("Negative"));TestEqual(TEXT("Negative priority excludes even ring-enabled monsters"),Choose()->GetNumberField(TEXT("spell")),20.);
+        S->SetArrayField(TEXT("targets"),{Targets[2]});TestFalse(TEXT("Negative priority is never attacked when it is the only target"),Choose()->HasField(TEXT("action")));
+        S->SetArrayField(TEXT("targets"),Targets);
         Targets[2]->AsObject()->SetStringField(TEXT("name"),TEXT("Target"));Items.Last()->AsObject()->SetNumberField(TEXT("count"),0);TestEqual(TEXT("Missing ring scarab falls back to ordinary attack"),Choose()->GetNumberField(TEXT("spell")),20.);
         Items.Last()->AsObject()->SetNumberField(TEXT("count"),10);
         auto Rule=B->GetArrayField(TEXT("monsters"))[0]->AsObject();Rule->SetBoolField(TEXT("bolt"),false);S->SetArrayField(TEXT("targets"),{Targets[0]});TestEqual(TEXT("Ring-only profile attacks one nearby target"),Choose()->GetNumberField(TEXT("spell")),21.);

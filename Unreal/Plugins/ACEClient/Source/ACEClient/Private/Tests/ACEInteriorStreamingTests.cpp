@@ -706,11 +706,28 @@ bool FACEParticleDistanceTest::RunTest(const FString& Parameters)
     if (!TestTrue(TEXT("Test uses the actual particle camera lookup"),FX->GetParticleViewLocation(Camera))) return false;
     FACEDatAnimationHook Glow; Glow.Type=EACEAnimationHookType::CreateParticle; Glow.Id=0x3200075A; Glow.SecondaryId=1;
     Owner->SetActorLocation(Camera+FVector(1000000,0,0));
+    FACEDatAnimationHook FiniteInitial=Glow; FiniteInitial.Id=0x320006F2;
+    FX->CreateEmitter(FiniteInitial,false,1.f);
+    auto& Initial=FX->ActiveEmitters[0];
+    if(!TestEqual(TEXT("Finite initial particle exists even when born out of range"),Initial.Particles.Num(),1))return false;
+    const FVector InitialOrigin=Initial.Particles[0].StartOrigin;
+    FX->TickEmitters(.2f);
+    Owner->SetActorLocation(Camera+FVector(100,0,0)); FX->TickEmitters(.1f);
+    if(TestEqual(TEXT("Unexpired initial particle survives first visibility"),Initial.Particles.Num(),1))
+    {
+        TestTrue(TEXT("Deferred graphics retain original finite age"),FMath::IsNearlyEqual(Initial.Particles[0].Age,.3f));
+        TestTrue(TEXT("Deferred graphics retain original birth frame"),Initial.Particles[0].StartOrigin.Equals(InitialOrigin));
+        TestTrue(TEXT("First visibility allocates graphics for remaining particle lifetime"),
+            Initial.Particles[0].Mesh.IsValid() || Initial.Particles[0].InstanceIndex>=0);
+    }
+    FX->StopAllEffects(); Owner->SetActorLocation(Camera+FVector(1000000,0,0));
     FX->CreateEmitter(Glow,false,1.f);
     if (!TestEqual(TEXT("Distant ambient script slot retained"),FX->ActiveEmitters.Num(),1)) return false;
     auto& Far=FX->ActiveEmitters[0];
     AddInfo(FString::Printf(TEXT("Authored pillar particle degrade distance %.2f meters"),Far.MaxDegradeDistance));
-    TestTrue(TEXT("Distant initial population deferred without allocating a batch"),Far.bDegraded && !Far.Batch && Far.Particles.IsEmpty());
+    TestTrue(TEXT("Distant initial population retains state without GPU allocation"),Far.bDegraded && !Far.Batch
+        && Far.Particles.Num()==Far.Info.InitialParticles
+        && !Far.Particles.ContainsByPredicate([](const auto& P){return P.Mesh.IsValid() || P.InstanceIndex>=0;}));
     FX->UpdateEffectTickInterval();
     TestEqual(TEXT("Only suspended infinite ambience uses a slower range check"),FX->GetComponentTickInterval(),.1f);
     FX->SetUvVelocity(0,.1f,0.f);
@@ -743,6 +760,30 @@ bool FACEParticleDistanceTest::RunTest(const FString& Parameters)
     Culling->Set(1,ECVF_SetByCode); FX->TickEmitters(1.f/30.f);
     FX->StopEmitter(1,false); FX->TickEmitters(1.f/30.f);
     TestTrue(TEXT("Stopped degraded ambient emitter cannot leak"),FX->ActiveEmitters.IsEmpty());
+    // Retail UpdateParticles ages finite tails while hidden, and pauses (rather
+    // than resets) the accumulated lifetime of persistent ambient particles.
+    for(const bool Finite : {true,false})
+    {
+        Owner->SetActorLocation(Camera+FVector(100,0,0)); FX->CreateEmitter(Glow,false,1.f);
+        auto& Tail=FX->ActiveEmitters[0];
+        Tail.Info.TotalParticles=Finite?1:0; Tail.Info.TotalSeconds=0;
+        Tail.Info.Lifespan=10; Tail.Info.MaxParticles=1;
+        FX->SpawnParticle(Tail);
+        if(!TestEqual(TEXT("Distance regression starts with a real particle"),Tail.Particles.Num(),1))return false;
+        Tail.Particles[0].Life=10; Tail.Particles[0].Age=2;
+        if(Finite)FX->StopEmitter(Tail.InstanceId,false);
+        Owner->SetActorLocation(Camera+FVector(1000000,0,0)); FX->TickEmitters(.5f);
+        TestEqual(TEXT("Crossing draw distance preserves living particles"),Tail.Particles.Num(),1);
+        if(Tail.Particles.Num()==1)
+        {
+            TestEqual(TEXT("Only finite particles age while degraded"),Tail.Particles[0].Age,Finite?2.5f:2.f);
+            Owner->SetActorLocation(Camera+FVector(100,0,0)); FX->TickEmitters(.1f);
+            TestTrue(TEXT("Returning resumes existing age without restarting or truncating"),
+                FMath::IsNearlyEqual(Tail.Particles[0].Age,Finite?2.6f:2.1f));
+        }
+        FX->StopAllEffects();
+    }
+    Owner->SetActorLocation(Camera+FVector(1000000,0,0));
     // Both finite budgets expire offscreen; returning cannot replay old combat FX.
     for (const bool Timed : {true,false})
     {
@@ -901,8 +942,12 @@ bool FACERetailParticleTimingTest::RunTest(const FString& Parameters)
     FInteriorTestWorld Fixture;
     auto* Dat=Fixture.GI->GetSubsystem<UACEDatSubsystem>();
     if (!Dat || !Dat->LoadDatDirectory(InteriorTestDatDirectory())) return false;
-    const auto* Info=Dat->GetParticleEmitterInfo(0x320005A8);
-    if (!TestNotNull(TEXT("Authored wand emitter exists"),Info)) return false;
+    const auto* CachedInfo=Dat->GetParticleEmitterInfo(0x320005A8);
+    if (!TestNotNull(TEXT("Authored wand emitter exists"),CachedInfo)) return false;
+    // Loading other emitters can relocate the DAT cache. Keep the expected
+    // values independent of that cache throughout this multi-emitter fixture.
+    const FACEDatParticleEmitterInfo AuthoredWand=*CachedInfo;
+    const auto* Info=&AuthoredWand;
     auto* Owner=Fixture.World->SpawnActor<AActor>();
     auto* Root=NewObject<USceneComponent>(Owner); Owner->SetRootComponent(Root); Root->RegisterComponent();
     auto* FX=NewObject<UACEScriptComponent>(Owner); Owner->AddInstanceComponent(FX); FX->RegisterComponent();
@@ -918,6 +963,52 @@ bool FACERetailParticleTimingTest::RunTest(const FString& Parameters)
     FX->TickEmitters(.015f);
     TestEqual(TEXT("Next authored interval emits one particle"),E.TotalBorn,2);
     if (E.Particles.Num()>1) TestEqual(TEXT("Subsequent birth also starts at age zero"),E.Particles.Last().Age,0.f);
+    FX->StopAllEffects();
+    // UpdateParticles emits before StopEmitter checks total_seconds. A hitch
+    // may pass the deadline, but still produces at most the final single birth.
+    auto& Deadline=FX->ActiveEmitters.AddDefaulted_GetRef(); Deadline.Info=*Info;
+    Deadline.Info.EmitterType=1; Deadline.Info.Birthrate=.02;
+    Deadline.Info.TotalSeconds=.1; Deadline.Info.TotalParticles=0; Deadline.Info.MaxParticles=3;
+    FX->TickEmitters(.2f);
+    TestEqual(TEXT("Deadline-crossing tick retains retail's last emission"),Deadline.TotalBorn,1);
+    TestTrue(TEXT("Deadline stops subsequent births"),Deadline.bStopped);
+    FX->StopAllEffects();
+    auto& Hitch=FX->ActiveEmitters.AddDefaulted_GetRef(); Hitch.Info=*Info;
+    Hitch.Info.Lifespan=10; Hitch.Info.LifespanRand=0; Hitch.Info.TotalSeconds=10;
+    Hitch.Info.TotalParticles=1; Hitch.Info.MaxParticles=1; FX->SpawnParticle(Hitch);
+    FX->TickComponent(1.f,LEVELTICK_All,nullptr);
+    if(TestEqual(TEXT("Hitch retains a long-lived particle"),Hitch.Particles.Num(),1))
+        TestEqual(TEXT("Particle clock does not discard time above 250 ms"),Hitch.Particles[0].Age,1.f);
+    FX->StopAllEffects();
+    auto& Trail=FX->ActiveEmitters.AddDefaulted_GetRef(); Trail.Info=*Info;
+    Trail.Info.EmitterType=2; Trail.Info.Birthrate=1; Trail.Info.MaxParticles=10;
+    Trail.Info.TotalParticles=10; Trail.Info.TotalSeconds=0;
+    Trail.LastEmissionOrigin=Owner->GetActorLocation();
+    for(int32 I=0;I<8;++I)
+    {
+        Owner->SetActorLocation(FVector(I%2?0:60,0,0)); FX->TickEmitters(.04f);
+    }
+    TestEqual(TEXT("Sub-threshold back-and-forth motion does not emit a trail"),Trail.TotalBorn,0);
+    Owner->SetActorLocation(FVector(100,0,0)); FX->TickEmitters(.04f);
+    TestEqual(TEXT("Distance threshold equality does not emit"),Trail.TotalBorn,0);
+    Owner->SetActorLocation(FVector(101,0,0)); FX->TickEmitters(.04f);
+    TestEqual(TEXT("Net displacement beyond authored threshold emits once"),Trail.TotalBorn,1);
+    Owner->SetActorLocation(FVector(161,0,0)); FX->TickEmitters(.04f);
+    TestEqual(TEXT("Next displacement is measured from the last birth"),Trail.TotalBorn,1);
+    FX->StopAllEffects(); Owner->SetActorLocation(FVector::ZeroVector);
+    auto& ZeroLife=FX->ActiveEmitters.AddDefaulted_GetRef(); ZeroLife.Info=*Info;
+    ZeroLife.Info.Lifespan=0; ZeroLife.Info.LifespanRand=0; ZeroLife.Info.MaxParticles=1;
+    ZeroLife.Info.StartScale=2; ZeroLife.Info.FinalScale=.5; ZeroLife.Info.ScaleRand=0;
+    ZeroLife.Info.StartTrans=0; ZeroLife.Info.FinalTrans=1; ZeroLife.Info.TransRand=0;
+    FX->SpawnParticle(ZeroLife);
+    if(TestEqual(TEXT("Zero-lifespan birth is evaluated once"),ZeroLife.Particles.Num(),1))
+    {
+        const auto& Particle=ZeroLife.Particles[0];
+        TestEqual(TEXT("Zero authored lifespan is not artificially extended"),Particle.Life,0.f);
+        TestTrue(TEXT("Zero-lifespan Init uses the final scale"),Particle.Mesh.IsValid() && Particle.Mesh->GetComponentScale().Equals(FVector(.5)));
+        if(auto* Mid=Particle.Mesh.IsValid()?Cast<UMaterialInstanceDynamic>(Particle.Mesh->GetMaterial(0)):nullptr)
+            TestEqual(TEXT("Zero-lifespan Init uses the final opacity"),Mid->K2_GetScalarParameterValue(TEXT("OpacityMul")),0.f);
+    }
     FX->StopAllEffects();
     // Reverse release order reproduces interleaved glow/spark reuse. Neither
     // particle should lose its geometry or private material to the other.
@@ -935,6 +1026,21 @@ bool FACERetailParticleTimingTest::RunTest(const FString& Parameters)
     FACEWorldObject Object; Object.SetupId=0x02000001;
     FX->InitializeFromObject(Object,100);
     FACEDatAnimationHook Hook; Hook.Type=EACEAnimationHookType::CreateParticle; Hook.Id=0x320005A8; Hook.SecondaryId=1;
+    // Actual DAT values exceed the old arbitrary lifetime and total-birth caps.
+    for(uint32 Id : {0x32000455u,0x3200088Au,0x320008EEu,0x320008F2u,0x320006F2u})
+    {
+        Hook.Id=Id; FX->CreateEmitter(Hook,false,1.f);
+        const auto* Authored=Dat->GetParticleEmitterInfo(Id);
+        if(TestEqual(TEXT("Long-lived/large-total DAT emitter creates"),FX->ActiveEmitters.Num(),1))
+        {
+            const auto& Actual=FX->ActiveEmitters[0];
+            TestEqual(TEXT("Total birth count is independent of concurrent mesh budget"),Actual.Info.TotalParticles,Authored->TotalParticles);
+            TestEqual(TEXT("Authored lifespan is not capped at two minutes"),Actual.Info.Lifespan,Authored->Lifespan);
+            TestEqual(TEXT("Long emission interval remains authored"),Actual.Info.Birthrate,Authored->Birthrate);
+        }
+        FX->StopAllEffects();
+    }
+    Hook.Id=0x320005A8;
     FX->CreateEmitter(Hook, false, 1.f);
     if (TestEqual(TEXT("Wand emitter created through hook path"),FX->ActiveEmitters.Num(),1))
     {
@@ -1134,8 +1240,7 @@ bool FACERetailParticleTimingTest::RunTest(const FString& Parameters)
                     {
                         float OutputGain=0.f;
                         Emitter.Particles[0].Mesh->GetMaterial(0)->GetScalarParameterValue(TEXT("ParticleBrightness"),OutputGain);
-                        TestEqual(TEXT("Sparkles brighten independently of the stationary halo"),OutputGain,
-                            Emitter.AuthoredEmitterId==0x32000802 ? 1.8f : 1.f);
+                        TestEqual(TEXT("Moving and stationary particles retain authored brightness"),OutputGain,1.f);
                         UTexture* Texture=nullptr;
                         Emitter.Particles[0].Mesh->GetMaterial(0)->GetTextureParameterValue(TEXT("ACETexture"),Texture);
                         auto* Sprite=Cast<UTexture2D>(Texture);
@@ -1378,6 +1483,13 @@ bool FACERetailParticleTimingTest::RunTest(const FString& Parameters)
     const int32 BeforeBlocking=FX->ActiveEmitters.Num();
     FX->CreateEmitter(Hook,true,1.f);
     TestEqual(TEXT("Blocking create does not replace an occupied slot"),FX->ActiveEmitters.Num(),BeforeBlocking);
+    Hook.Id=0x32FFFFFFu;
+    FX->CreateEmitter(Hook,true,1.f);
+    TestEqual(TEXT("Blocking create does not resolve invalid data over an occupied slot"),FX->ActiveEmitters.Num(),BeforeBlocking);
+    AddExpectedError(TEXT("CreateEmitter missing PE 0x32FFFFFF"),EAutomationExpectedErrorFlags::Contains,1);
+    FX->CreateEmitter(Hook,false,1.f);
+    TestFalse(TEXT("Failed normal create still destroys its old numbered slot, as in retail"),
+        FX->ActiveEmitters.ContainsByPredicate([](const auto& Emitter){return Emitter.InstanceId==1;}));
     // ScriptManager runs complete scripts in arrival order. A hitch crossing
     // the first script's end must execute its last hook before the next one's first.
     FX->StopAllEffects();

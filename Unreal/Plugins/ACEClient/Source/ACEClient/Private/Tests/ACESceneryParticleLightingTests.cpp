@@ -81,7 +81,9 @@ bool FACESceneryParticleLightingTest::RunTest(const FString&)
         auto* FX=Scenery->ScriptComponent.Get();
         if(!TestEqual(TEXT("Placed snow script starts immediately"),FX->ActiveEmitters.Num(),1))return false;
         auto& Emitter=FX->ActiveEmitters[0];
-        TestTrue(TEXT("Distant snow is degraded before its first allocation"),Emitter.bDegraded && Emitter.Particles.IsEmpty());
+        TestTrue(TEXT("Distant snow retains initial state without allocating graphics"),Emitter.bDegraded && !Emitter.Batch
+            && Emitter.Particles.Num()==Emitter.Info.InitialParticles
+            && !Emitter.Particles.ContainsByPredicate([](const auto& P){return P.Mesh.IsValid() || P.InstanceIndex>=0;}));
         TestTrue(TEXT("Emitter starts at the authored scenery frame"),Emitter.LastOrigin.Equals(FX->GetEmitterTransform(Emitter).GetLocation(),.01));
         TestTrue(TEXT("Scenery retains its authored scale"),Scenery->GetActorScale3D().Equals(FVector(1.3f),.001));
         View->SetActorLocation(Scenery->GetActorLocation());PC->PlayerCameraManager->UpdateCamera(0.f);

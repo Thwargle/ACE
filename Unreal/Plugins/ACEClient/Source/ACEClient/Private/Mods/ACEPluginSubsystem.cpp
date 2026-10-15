@@ -19,6 +19,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "ProceduralMeshComponent.h"
+#include "ProfilingDebugging/CpuProfilerTrace.h"
 
 namespace
 {
@@ -544,6 +545,7 @@ void UACEPluginSubsystem::Stop(const FString& Id, const FString& Reason, bool Pr
         if(P->Companion){StopCompanion(*P,Reason);return;}
         if(P->HasPresentation()){FlushPluginState(*P);P->Markers.Reset();P->PanelRows.Reset();P->PluginEvents.Reset();++P->PanelRevision;}
         P->TargetingStatus.Empty();
+        P->MetaStatus.Empty();if(!PreserveMeta)P->MetaState.Empty();
         if(P->LocalService)
         {
             if(const auto* Service=LocalServices.Find(Id)) (*Service)->Stop();
@@ -637,6 +639,7 @@ bool UACEPluginSubsystem::SelectUCMSection(const FString& Section, const FString
     if (!ValidUCMProfile(O)) { Notice = TEXT("Invalid shared profile data"); return false; }
     auto Before=ACEUCMProfiles::Copy(O);
     if(Section==TEXT("Metas")&&!MaterializeUCMMetaProfiles(O,Name))return false;
+    if(Section==TEXT("Metas")&&O->HasField(TEXT("vt_meta")))O->SetBoolField(TEXT("meta_enabled"),true);
     // Selection replaces a reference, never overwrites the previously selected file.
     if (!ACEUCMProfiles::Save(UserDirectory(), ACEUCMProfiles::ActiveName(), O, Links, Before, Notice, ValidUCMProfile)) return false;
     Stop(P->Id, TEXT("Profile changed; press Start to resume"));
@@ -763,6 +766,7 @@ bool UACEPluginSubsystem::ReuseUCMImport(const FString& Source)
     const auto Refs=ImportedUCMProfiles(Source);if(Refs->Values.IsEmpty())return false;
     auto O=P->Profile,Links=P->ProfileLinks;
     for(const auto& Pair:Refs->Values)if(!ACEUCMProfiles::Select(UserDirectory(),FString(Pair.Key),Pair.Value->AsString(),O,Links,Notice))return false;
+    if(Refs->HasField(TEXT("Metas"))&&O->HasField(TEXT("vt_meta")))O->SetBoolField(TEXT("meta_enabled"),true);
     if(!ValidUCMProfile(O)){Notice=TEXT("Previously imported profile contains invalid settings; current selection was kept.");return false;}
     if(!ACEUCMProfiles::SaveSelection(UserDirectory(),O,Links,Notice)||!LoadProfile(P->Id,ACEUCMProfiles::ActiveName()))return false;
     Notice=TEXT("Already imported: ")+FPaths::GetCleanFilename(Source)+TEXT(". Selected existing profiles; your edits were kept.");return true;
@@ -1068,6 +1072,9 @@ void UACEPluginSubsystem::AddBuff(const FString& Id, int32 SpellId)
 }
 TSharedPtr<FJsonObject> UACEPluginSubsystem::Snapshot()
 {
+    TRACE_CPUPROFILER_EVENT_SCOPE(ACEPluginSnapshotCommon);
+    if(CompanionReadBatch && CompanionReadBatch->Data)
+        return MakeShared<FJsonObject>(*CompanionReadBatch->Data);
     auto O = MakeShared<FJsonObject>(); auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     auto* D = GetGameInstance()->GetSubsystem<UACEDatSubsystem>(); const auto& V = C->GetPlayerVitalsView();
     O->SetNumberField(TEXT("time"), FPlatformTime::Seconds());
@@ -1173,6 +1180,12 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::Snapshot()
     O->SetNumberField(TEXT("nearest"), uint32(Target));
     if (Target && C->GetWorldObject(Target, Obj)) O->SetNumberField(TEXT("distance"), FVector::Distance(Pos.ToUnrealLocation(), Obj.Position.ToUnrealLocation()) / 100.);
     ExtendSnapshot(O);
+    if(CompanionReadBatch)
+    {
+        CompanionReadBatch->Data=O;
+        // Item Tools and PublicSnapshot add fields to their own root object.
+        return MakeShared<FJsonObject>(*O);
+    }
     return O;
 }
 void UACEPluginSubsystem::CheckPendingSpellTimeout()
@@ -1497,6 +1510,7 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
     const FString MetaState=String(I,TEXT("meta_state"));
     LogUCMIntent(P,I);
     if(!MetaState.IsEmpty())P.MetaState=MetaState;
+    if(I->HasTypedField<EJson::String>(TEXT("meta_status")))P.MetaStatus=String(I,TEXT("meta_status")).Left(1600);
     const FString Status = String(I, TEXT("status")); if (!Status.IsEmpty()) P.Status = Status;
     if(I->HasTypedField<EJson::String>(TEXT("targeting_status")))P.TargetingStatus=String(I,TEXT("targeting_status"));
     const FString Action = String(I, TEXT("action"));

@@ -582,7 +582,12 @@ bool FACEDatMotionPlayer::EvaluateAnimData(
 	{
 		if (NextIndex > High)
 		{
-			NextIndex = Low;
+			// Retail CSequence advances to the next node at the frame boundary.
+			// The first frame need not continue this part's last pose: scenery
+			// can reset interchangeable parts (windmill blades cover a quarter
+			// turn). Blending that reset makes them sweep backwards each cycle.
+			// Smooth within a clip, but hold its final frame until the wrap.
+			NextIndex = High;
 		}
 	}
 	else

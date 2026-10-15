@@ -703,32 +703,6 @@ void UACEScriptComponent::StopPlayScriptEffects(uint32 SourcePlayScript)
 	}
 }
 
-void UACEScriptComponent::StopCastGestureEffects()
-{
-	StopPlayScriptEffects(0x04u); // Launch
-	for (int32 i = ActiveEmitters.Num() - 1; i >= 0; --i)
-	{
-		FActiveEmitter& Emitter = ActiveEmitters[i];
-		// Animation CreateParticle (SourcePlayScript 0) is the hand sparkle on CastSpell /
-		// PowerUp. Retail StopParticle fires at clip end — destroy here so leftover life
-		// (clamped up to 120s) cannot hang on the pawn.
-		if (Emitter.SourcePlayScript != 0)
-		{
-			continue;
-		}
-		for (FActiveParticle& Particle : Emitter.Particles)
-		{
-			ReleaseParticleVisual(Emitter, Particle);
-		}
-		if (Emitter.Batch)
-		{
-			Emitter.Batch->DestroyComponent();
-			Emitter.Batch = nullptr;
-		}
-		ActiveEmitters.RemoveAtSwap(i, 1, EAllowShrinking::No);
-	}
-}
-
 void UACEScriptComponent::PlayScriptInternal(
 	uint32 ScriptId, float Intensity, int32 Depth, float Delay, uint32 SourcePlayScript)
 {
@@ -1284,8 +1258,8 @@ void UACEScriptComponent::TickComponent(
 	}
 	// Unreal's first tick after interval cancellation can include the old idle
 	// period. Newly started combat effects must age only by the current frame.
-	const float Dt = FMath::Clamp(bWokeFromIdleTick && GetWorld()
-		? FMath::Min(DeltaTime, GetWorld()->GetDeltaSeconds()) : DeltaTime, 0.f, .25f);
+	const float Dt = FMath::Max(0.f, SafeFloat(bWokeFromIdleTick && GetWorld()
+		? FMath::Min(DeltaTime, GetWorld()->GetDeltaSeconds()) : DeltaTime));
 	bWokeFromIdleTick = false;
 	CleanupFinishedAudio();
 	// Empty distant components must reach the idle-disable path below. Returning
@@ -2183,6 +2157,15 @@ FVector UACEScriptComponent::ResolveHookOffsetLocal(const FActiveEmitter& Emitte
 void UACEScriptComponent::CreateEmitter(
 	const FACEDatAnimationHook& Hook, bool bBlocking, float Intensity, uint32 SourcePlayScript)
 {
+	// ParticleManager::CreateParticleEmitter removes the occupied slot before
+	// SetInfo/SetParenting can fail. Blocking creates leave that slot untouched.
+	const uint32 SlotId = Hook.SecondaryId;
+	if (SlotId != 0)
+	{
+		if (bBlocking && ActiveEmitters.ContainsByPredicate([SlotId](const FActiveEmitter& E)
+			{ return E.InstanceId == SlotId; })) return;
+		StopEmitter(SlotId, true);
+	}
 	UACEDatSubsystem* Dat = GetDat();
 	const FACEDatParticleEmitterInfo* Source = Dat ? Dat->GetParticleEmitterInfo(Hook.Id) : nullptr;
 	if (!Source)
@@ -2201,30 +2184,23 @@ void UACEScriptComponent::CreateEmitter(
 		return;
 	}
 
-	auto SanitizeInfo = [this](FACEDatParticleEmitterInfo& Info)
+	auto SanitizeInfo = [](FACEDatParticleEmitterInfo& Info)
 	{
 		Info.MaxParticles = FMath::Clamp(Info.MaxParticles, 0, MaxParticlesPerEmitter);
 		Info.InitialParticles = FMath::Clamp(Info.InitialParticles, 0, Info.MaxParticles);
-		Info.TotalParticles = Info.TotalParticles <= 0
-			? 0 : FMath::Clamp(Info.TotalParticles, 0, MaxParticlesPerEmitter);
-		Info.Birthrate = FMath::Clamp(Info.Birthrate, 0.0, 512.0);
-        // ParticleEmitterInfo owns timing, particle type, parent space and lifespan.
-        // Altering these to compensate for the mesh renderer changes the animation.
-        Info.Lifespan = FMath::Clamp(Info.Lifespan, 0.01, bEnvironmentWeather ? 3600.0 : 120.0);
-        Info.LifespanRand = FMath::Clamp(Info.LifespanRand, 0.0, 120.0);
+		// The simultaneous render budget is independent of the emitter's total
+		// births or duration. Retail DAT includes 800-birth bursts and day-long
+		// ambience; clamping either to a buffer limit changes their animation.
+		Info.TotalParticles = FMath::Max(0, Info.TotalParticles);
+		Info.Birthrate = FMath::IsFinite(Info.Birthrate) ? FMath::Max(0.0, Info.Birthrate) : 0.0;
+		Info.Lifespan = FMath::IsFinite(Info.Lifespan) ? FMath::Max(0.0, Info.Lifespan) : 0.0;
+		Info.LifespanRand = FMath::IsFinite(Info.LifespanRand) ? FMath::Max(0.0, Info.LifespanRand) : 0.0;
 	};
 
 	// Retail ParticleManager keys emitters by the hook's per-object slot, not
 	// the emitter-info DID. A normal create destroys the old slot immediately;
 	// a blocking create leaves an occupied slot alone. Slot zero always allocates.
 	const uint32 EmitterInfoId = Hook.Id;
-	const uint32 SlotId = Hook.SecondaryId;
-	if (SlotId != 0)
-	{
-		if (bBlocking && ActiveEmitters.ContainsByPredicate([SlotId](const FActiveEmitter& E)
-			{ return E.InstanceId == SlotId; })) return;
-		StopEmitter(SlotId, true);
-	}
 	if (ActiveEmitters.Num() >= MaxEmitters) return;
 	const FQuat4f HookR = Hook.Frame.GetRotation();
 	const FVector3f HookT = Hook.Frame.GetTranslation();
@@ -2271,18 +2247,16 @@ void UACEScriptComponent::CreateEmitter(
 	Emitter.PartIndex = NewPartIndex;
 	ResolveEmitterParent(Emitter);
 	Emitter.LastOrigin = GetEmitterTransform(Emitter).GetLocation();
+	Emitter.LastEmissionOrigin = Emitter.LastOrigin;
 	ActiveEmitters.Add(MoveTemp(Emitter));
 	WakeEffectTick();
 	FActiveEmitter& Added = ActiveEmitters.Last();
 	FVector ViewLocation;
 	if (GetParticleViewLocation(ViewLocation) && ShouldDegradeEmitter(Added, ViewLocation))
 	{
-		// Keep the script/slot alive, but do not allocate hundreds of distant
-		// particle meshes and lights just because their landblock streamed in.
+		// InitEnd still creates the initial particles, with their original birth
+		// frame and lifetime. Defer only GPU resources until they become visible.
 		Added.bDegraded = true;
-		Added.bInitialParticlesPending = true;
-		Added.TotalBorn = Added.Info.InitialParticles;
-		return;
 	}
 	int32 Born = 0;
 	for (int32 i = 0; i < Added.Info.InitialParticles; ++i)
@@ -2475,7 +2449,7 @@ bool UACEScriptComponent::EnsureParticleBatch(FActiveEmitter& Emitter)
 		auto* Mid = UMaterialInstanceDynamic::Create(Base, Batch);
 		Mid->CopyMaterialUniformParameters(Source);
 		Mid->SetScalarParameterValue(TEXT("OpacityMul"), 1.f);
-		Mid->SetScalarParameterValue(TEXT("ParticleBrightness"), Emitter.Info.ParticleType == 1 ? 1.f : 1.8f);
+		Mid->SetScalarParameterValue(TEXT("ParticleBrightness"), 1.f);
 		Batch->SetMaterial(I, Mid);
 	}
 	Batch->SetTranslucentSortPriority(Emitter.RenderSortPriority);
@@ -2514,6 +2488,19 @@ void UACEScriptComponent::ReleaseParticleVisual(FActiveEmitter& Emitter, FActive
 void UACEScriptComponent::ApplyParticleVisual(FActiveEmitter& Emitter, FActiveParticle& Particle,
 	const FQuat& Rotation, const FVector& Scale, float Opacity)
 {
+	if (Emitter.bDegraded) return;
+	if (Particle.InstanceIndex < 0 && !Particle.Mesh.IsValid())
+	{
+		if (EnsureParticleBatch(Emitter))
+		{
+			Particle.InstanceIndex = Emitter.Batch->AddParticle(FTransform(Rotation,Particle.Position,Scale),Opacity);
+			return;
+		}
+		Particle.Mesh = AcquireParticleMesh(Emitter.Info.GfxObjId,Emitter.bBlocking,Emitter.RenderSortPriority);
+		if (auto* Mesh=Particle.Mesh.Get())
+			for (int32 I=0; I<Mesh->GetNumMaterials(); ++I)
+				if (auto* Mid=EnsurePrivateMaterialInstance(Mesh,I)) Mid->SetScalarParameterValue(TEXT("ParticleBrightness"),1.f);
+	}
 	if (Particle.InstanceIndex >= 0 && Emitter.Batch)
 	{
 		const FTransform Xform(Rotation, Particle.Position, Scale);
@@ -2545,17 +2532,6 @@ void UACEScriptComponent::SpawnParticle(FActiveEmitter& Emitter)
 	{
 		return;
 	}
-	UProceduralMeshComponent* Mesh = nullptr;
-	const bool bInstanced = EnsureParticleBatch(Emitter);
-	if (!bInstanced)
-	{
-		Mesh = AcquireParticleMesh(Emitter.Info.GfxObjId, Emitter.bBlocking, Emitter.RenderSortPriority);
-		if (!Mesh)
-		{
-			return;
-		}
-	}
-
 	auto Range = [this](float Min, float Max)
 	{
 		Min = SafeFloat(Min);
@@ -2583,23 +2559,10 @@ void UACEScriptComponent::SpawnParticle(FActiveEmitter& Emitter)
 	Particle.StartOrigin = StartFrameWorld.GetLocation();
 	Particle.StartRotation = StartFrameRot;
 	Particle.bWieldedGfx = IsWieldedItemFx();
-	// Make the moving sparks easier to see without enlarging/brightening the
-	// stationary halo. Reset on every birth because pooled meshes can be shared.
-	if (Mesh)
-		for (int32 Mi=0; Mi<Mesh->GetNumMaterials(); ++Mi)
-			if (auto* Mid=EnsurePrivateMaterialInstance(Mesh,Mi))
-				Mid->SetScalarParameterValue(TEXT("ParticleBrightness"),
-					!bEnvironmentWeather && Particle.Type != 1 ? 1.8f : 1.f);
-
 	// OffsetDir / random disc are in StartFrame (part) ACE space — match ACE GetRandomOffset.
 	// Project out of OffsetDir so fountain (0,0,1) births on a horizontal disc, not a sphere.
-	// Unitize OffsetDir for the projection only (retail vectors are already unit; this stops
-	// near-zero authored dirs from collapsing into an isotropic spray).
-	FVector OffsetDirAce(Emitter.Info.OffsetDir);
-	if (!OffsetDirAce.Normalize())
-	{
-		OffsetDirAce = FVector::ZeroVector;
-	}
+	// GetRandomOffset uses the authored direction directly, without normalizing it.
+	const FVector OffsetDirAce(Emitter.Info.OffsetDir);
 	FVector RandomAngle(
 		Random.FRandRange(-1.f, 1.f),
 		Random.FRandRange(-1.f, 1.f),
@@ -2715,7 +2678,7 @@ void UACEScriptComponent::SpawnParticle(FActiveEmitter& Emitter)
 	// Retail Init evaluates Update at t=0, including swarm/implode displacement.
 	if (Particle.Type==5) Particle.Position+=FACEPosition::AceVectorToUnreal(FVector(C.X,0,C.Z),WorldScale);
 	if (Particle.Type==7) Particle.Position+=C;
-	Particle.Life = FMath::Max(0.01f, static_cast<float>(Emitter.Info.Lifespan)
+	Particle.Life = FMath::Max(0.f, static_cast<float>(Emitter.Info.Lifespan)
 		+ Range(-static_cast<float>(Emitter.Info.LifespanRand), static_cast<float>(Emitter.Info.LifespanRand)));
 	// ParticleEmitter::EmitParticle calls ParticleEmitterInfo::GetRandom* before
 	// Particle::Init: independent endpoint rolls with retail's 0.1..10 scale clamp.
@@ -2725,7 +2688,6 @@ void UACEScriptComponent::SpawnParticle(FActiveEmitter& Emitter)
 	Particle.FinalScale = FMath::Clamp(SafeFloat(Emitter.Info.FinalScale, 1.f) + Range(-ScaleRand, ScaleRand), .1f, 10.f);
 	Particle.StartTrans = FMath::Clamp(SafeFloat(Emitter.Info.StartTrans) + Range(-TransRand, TransRand), 0.f, 1.f);
 	Particle.FinalTrans = FMath::Clamp(SafeFloat(Emitter.Info.FinalTrans) + Range(-TransRand, TransRand), 0.f, 1.f);
-	Particle.Mesh = Mesh;
 	Particle.InstanceIndex = INDEX_NONE;
 
 	Particle.StartRotation = BirthRotation;
@@ -2733,19 +2695,16 @@ void UACEScriptComponent::SpawnParticle(FActiveEmitter& Emitter)
 	Particle.bHoldStill = false;
 	const FQuat MeshFacing = GetParticleDrawRotation(Particle.Position, BirthRotation, Particle.DrawMode);
 
+	// Retail evaluates Update at birth, including the final endpoints when life=0.
+	const float BirthScale = Particle.Life > 0.f ? Particle.StartScale : Particle.FinalScale;
+	const float BirthTrans = Particle.Life > 0.f ? Particle.StartTrans : Particle.FinalTrans;
 	const float Opacity = FMath::Clamp(
-		(1.f - Particle.StartTrans) * (IsRetailPortalFxSetup(SetupId) ? 1.f - ObjectTranslucency : 1.f), 0.f, 1.f);
-	if (bInstanced && Emitter.Batch)
-	{
-		Particle.InstanceIndex = Emitter.Batch->AddParticle(
-			FTransform(MeshFacing, Particle.Position, FVector(Particle.StartScale)), Opacity);
-	}
-	else
-	{
-		ApplyParticleVisual(Emitter, Particle, MeshFacing, FVector(Particle.StartScale), Opacity);
-	}
+		(1.f - BirthTrans) * (IsRetailPortalFxSetup(SetupId) ? 1.f - ObjectTranslucency : 1.f), 0.f, 1.f);
+	ApplyParticleVisual(Emitter, Particle, MeshFacing, FVector(BirthScale), Opacity);
 	Emitter.Particles.Add(MoveTemp(Particle));
 	++Emitter.TotalBorn;
+	Emitter.LastEmissionOrigin = GetEmitterTransform(Emitter).GetLocation();
+	Emitter.TimeSinceEmit = 0.f;
 }
 
 void UACEScriptComponent::TickParticleSimulation(float DeltaTime)
@@ -2813,9 +2772,8 @@ void UACEScriptComponent::SetEmitterDegraded(FActiveEmitter& Emitter, bool bDegr
 	for (auto& Particle : Emitter.Particles)
 	{
 		if (auto* Mesh = Particle.Mesh.Get()) Mesh->SetVisibility(!bDegraded && !bCosmeticParticlesHidden);
-		// Retail resets ambient birth times while degraded, with no catch-up
-		// burst when the camera returns. Simulation resumes from the birth frame.
-		if (!bDegraded) Particle.Age = 0.f;
+		// Persistent particles retain accumulated lifetime while their update
+		// timestamp advances offscreen. Returning must not restart their orbit/fade.
 	}
 }
 
@@ -2896,7 +2854,7 @@ void UACEScriptComponent::ApplyParticlePose(FActiveEmitter& Emitter, FActivePart
 
 	const float Alpha = Particle.bHoldStill
 		? 0.f
-		: FMath::Clamp(Particle.Age / Particle.Life, 0.f, 1.f);
+		: (Particle.Age < Particle.Life ? Particle.Age / Particle.Life : 1.f);
 	const float Scale = FMath::Lerp(Particle.StartScale, Particle.FinalScale, Alpha);
 	const float Trans = FMath::Lerp(Particle.StartTrans, Particle.FinalTrans, Alpha);
 	FQuat Facing = Particle.bParentLocal ? ParentRot : Particle.StartRotation;
@@ -2963,8 +2921,14 @@ void UACEScriptComponent::TickEmitters(float DeltaTime)
 		const FTransform Anchor = GetEmitterTransform(Emitter);
 		const FVector EmitterOrigin = Anchor.GetLocation();
 		const FVector ParentDelta = EmitterOrigin - Emitter.LastOrigin;
-		const float TravelAc = ParentDelta.Size() / WorldScale;
+		const double DisplacementSquared = FVector::DistSquared(EmitterOrigin, Emitter.LastEmissionOrigin)
+			/ FMath::Square(FMath::Max(1.f, WorldScale));
 		Emitter.LastOrigin = EmitterOrigin;
+		Emitter.TimeSinceEmit += DeltaTime;
+		const bool bTimed = (Emitter.Info.EmitterType & 1) != 0;
+		const bool bPerMeter = !bTimed && (Emitter.Info.EmitterType & 2) != 0;
+		const bool bEmissionDue = bTimed ? Emitter.TimeSinceEmit > Emitter.Info.Birthrate
+			: bPerMeter && DisplacementSquared > FMath::Square(Emitter.Info.Birthrate);
 		const bool bDegrade = bHasView && ShouldDegradeEmitter(Emitter, ViewLocation);
 		const bool bFinite = Emitter.Info.TotalSeconds > 0.0 || Emitter.Info.TotalParticles > 0;
 		SetEmitterDegraded(Emitter, bDegrade);
@@ -2972,19 +2936,28 @@ void UACEScriptComponent::TickEmitters(float DeltaTime)
 		{
 			if (bFinite || Emitter.bStopped)
 			{
-				for (auto& Particle : Emitter.Particles) ReleaseParticleVisual(Emitter, Particle);
-				Emitter.Particles.Reset();
-				const bool bTimed = (Emitter.Info.EmitterType & 1) != 0;
-				const bool bPerMeter = !bTimed && (Emitter.Info.EmitterType & 2) != 0;
-				Emitter.TimeSinceEmit += bTimed ? DeltaTime : (bPerMeter ? TravelAc : 0.f);
-				if (!Emitter.bStopped && (bTimed || bPerMeter) && Emitter.TimeSinceEmit > Emitter.Info.Birthrate)
+				// Retail ages existing finite particles while hidden. A short range
+				// excursion must not erase their remaining tail or restart it later.
+				for (int32 I=Emitter.Particles.Num()-1; I>=0; --I)
+				{
+					auto& Particle=Emitter.Particles[I];
+					Particle.Age += DeltaTime;
+					if (Particle.Age >= Particle.Life)
+					{
+						ReleaseParticleVisual(Emitter,Particle);
+						Emitter.Particles.RemoveAtSwap(I,1,EAllowShrinking::No);
+					}
+				}
+				if (!Emitter.bStopped && bEmissionDue && Emitter.Particles.Num() < Emitter.Info.MaxParticles
+					&& (Emitter.Info.TotalParticles <= 0 || Emitter.TotalBorn < Emitter.Info.TotalParticles))
 				{
 					++Emitter.TotalBorn;
 					Emitter.TimeSinceEmit = 0.f;
+					Emitter.LastEmissionOrigin = EmitterOrigin;
 				}
 				Emitter.bStopped |= (Emitter.Info.TotalSeconds > 0.0 && Emitter.Age > Emitter.Info.TotalSeconds)
 					|| (Emitter.Info.TotalParticles > 0 && Emitter.TotalBorn >= Emitter.Info.TotalParticles);
-				if (Emitter.bStopped)
+				if (Emitter.bStopped && Emitter.Particles.IsEmpty())
 				{
 					if (Emitter.Batch) Emitter.Batch->DestroyComponent();
 					ActiveEmitters.RemoveAtSwap(EmitterIndex, 1, EAllowShrinking::No);
@@ -2993,18 +2966,6 @@ void UACEScriptComponent::TickEmitters(float DeltaTime)
 			// No transforms, buffer uploads, or light updates for distant effects.
 			continue;
 		}
-		if (Emitter.bInitialParticlesPending)
-		{
-			Emitter.bInitialParticlesPending = false;
-			// Finite effects keep their elapsed lifetime/emission count. Ambient
-			// effects get their initial population only upon first entering range.
-			if (!bFinite && !Emitter.bStopped)
-			{
-				Emitter.TotalBorn = 0;
-				for (int32 I = 0; I < Emitter.Info.InitialParticles; ++I) SpawnParticle(Emitter);
-			}
-		}
-
 		// Neither the parent nor camera changes inside this simulation loop. Keep
 		// the cache local: later emitters and same-frame hand/camera motion must
 		// resolve fresh frames, and world-space particles retain their birth frame.
@@ -3013,11 +2974,6 @@ void UACEScriptComponent::TickEmitters(float DeltaTime)
 		{
 			FActiveParticle& Particle = Emitter.Particles[ParticleIndex];
 			Particle.Age += DeltaTime;
-			if (Particle.InstanceIndex < 0 && !Particle.Mesh.IsValid())
-			{
-				Emitter.Particles.RemoveAtSwap(ParticleIndex, 1, EAllowShrinking::No);
-				continue;
-			}
 			if (Particle.Age >= Particle.Life)
 			{
 				if (Particle.bHoldStill && !Emitter.bStopped)
@@ -3040,13 +2996,9 @@ void UACEScriptComponent::TickEmitters(float DeltaTime)
 		// ParticleEmitter::UpdateParticles updates existing particles before emitting.
 		// EmitParticle records the current time, so a hitch produces one new birth,
 		// not a backlog burst or a newborn already aged by this frame's delta.
-		if (!Emitter.bStopped && (Emitter.Info.TotalSeconds <= 0.0 || Emitter.Age <= Emitter.Info.TotalSeconds))
+		if (!Emitter.bStopped)
 		{
-			const bool bTimed = (Emitter.Info.EmitterType & 1) != 0;
-			const bool bPerMeter = !bTimed && (Emitter.Info.EmitterType & 2) != 0;
-			Emitter.TimeSinceEmit += bTimed ? DeltaTime : (bPerMeter ? TravelAc : 0.f);
-			const float Interval = FMath::Max(0.f, static_cast<float>(Emitter.Info.Birthrate));
-			if ((bTimed || bPerMeter) && Emitter.TimeSinceEmit > Interval
+			if (bEmissionDue
 				&& Emitter.Particles.Num() < Emitter.Info.MaxParticles
 				&& (Emitter.Info.TotalParticles <= 0 || Emitter.TotalBorn < Emitter.Info.TotalParticles))
 			{
@@ -3055,7 +3007,8 @@ void UACEScriptComponent::TickEmitters(float DeltaTime)
 				if (Emitter.TotalBorn > Before) Emitter.TimeSinceEmit = 0.f;
 			}
 		}
-		else if (Emitter.Info.TotalSeconds > 0.0 && Emitter.Age > Emitter.Info.TotalSeconds)
+		// StopEmitter is evaluated after this tick's emission in retail.
+		if (Emitter.Info.TotalSeconds > 0.0 && Emitter.Age > Emitter.Info.TotalSeconds)
 		{
 			Emitter.bStopped = true;
 		}

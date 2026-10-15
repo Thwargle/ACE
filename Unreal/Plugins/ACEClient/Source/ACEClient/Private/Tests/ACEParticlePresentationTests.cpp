@@ -238,45 +238,114 @@ bool FACEParticlePresentationTest::RunTest(const FString&)
                 Emitter.Age == Age && Emitter.Particles[0].Age == ParticleAge && Emitter.TotalBorn == Born && FX->Random.GetCurrentSeed() == Seed);
         }
     }
-    // Compare the local plain pawn with a remote entity, using complete DAT effects
-    // and real casting motions. Cleanup must not erase the independent surge slot.
+    // Compare the production player pawn with a remote entity. Cast cleanup and
+    // appearance refreshes must preserve independent, server-triggered effects.
     FX->StopAllEffects();Human.MotionTableId=0x09000001;Human.bIsSelf=true;
-    auto* LocalPawn=World->SpawnActor<APawn>();
-    auto* LocalRoot=NewObject<USceneComponent>(LocalPawn);LocalPawn->AddInstanceComponent(LocalRoot);
-    LocalPawn->SetRootComponent(LocalRoot);LocalRoot->RegisterComponent();
-    auto* LocalAppearance=NewObject<UACECharacterAppearanceComponent>(LocalPawn);
-    LocalPawn->AddInstanceComponent(LocalAppearance);LocalAppearance->RegisterComponent();
+    auto* PawnClass=LoadClass<APawn>(nullptr,TEXT("/Script/ACUnreal.ACUnrealPawn"));
+    if(!TestNotNull(TEXT("Production player pawn class loads"),PawnClass))return false;
+    auto* LocalPawn=World->SpawnActor<APawn>(PawnClass);
+    auto* LocalAppearance=LocalPawn->FindComponentByClass<UACECharacterAppearanceComponent>();
+    auto* LocalFX=LocalPawn->FindComponentByClass<UACEScriptComponent>();
+    if(!TestTrue(TEXT("Player pawn has appearance and effect components"),LocalAppearance && LocalFX))return false;
     LocalAppearance->ApplyWorldObject(Human,100,false);
-    auto* LocalFX=NewObject<UACEScriptComponent>(LocalPawn);LocalPawn->AddInstanceComponent(LocalFX);LocalFX->RegisterComponent();
     LocalFX->InitializeFromObject(Human,100);LocalFX->NotifyAppearanceReady();
     Human.bIsSelf=false;
     auto* Remote=World->SpawnActor<AACEWorldEntityActor>();Remote->InitializeFromObject(Human,100,true);
     auto* RemoteFX=Remote->ScriptComponent.Get();
-    LocalFX->StopAllEffects();RemoteFX->StopAllEffects();
-    LocalFX->Random.Initialize(42);RemoteFX->Random.Initialize(42);
-    LocalFX->PlayEffect(0xA2,1.f);RemoteFX->PlayEffect(0xA2,1.f);
-    int32 LastSurgeFrame=0;
-    for (int32 Frame=0;Frame<1500;++Frame)
+    Culling->Set(1, ECVF_SetByCode);
+    LocalPawn->SetActorLocation(Origin);Remote->SetActorLocation(Origin);
+    View->SetActorLocation(Origin+FVector(-350,0,180));
+    PC->PlayerCameraManager->UpdateCamera(0.f);
+    for(uint32 Surge=0xA2;Surge<=0xA6;++Surge)
     {
-        if(Frame==60) LocalAppearance->PlayActionMotion(0x400000d3,1.f,0x80000049);
-        if(Frame==120) { LocalAppearance->ClearActionMotion();LocalFX->StopCastGestureEffects(); }
-        if(Frame==240) LocalAppearance->PlayActionMotion(0x40000032,1.f,0x80000049);
-        LocalAppearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
-        if(Frame==180) { LocalFX->InitializeFromObject(Human,100);LocalFX->NotifyAppearanceReady(); }
-        LocalFX->TickScripts(1.f/60);RemoteFX->TickScripts(1.f/60);
-        LocalFX->TickParticleSimulation(1.f/60);RemoteFX->TickParticleSimulation(1.f/60);
-        const auto* OwnSurge=LocalFX->ActiveEmitters.FindByPredicate([](const auto& E){return E.SourcePlayScript==0xA2;});
-        const auto* OtherSurge=RemoteFX->ActiveEmitters.FindByPredicate([](const auto& E){return E.SourcePlayScript==0xA2;});
-        if(OwnSurge)LastSurgeFrame=Frame;
-        if(Frame%60==59)
+        const FString Case=FString::Printf(TEXT("Surge 0x%X: "),Surge);
+        LocalAppearance->ClearActionMotion();
+        LocalFX->StopAllEffects();RemoteFX->StopAllEffects();
+        LocalFX->Random.Initialize(42);RemoteFX->Random.Initialize(42);
+        LocalFX->PlayEffect(Surge,1.f);RemoteFX->PlayEffect(Surge,1.f);
+        int32 LastSurgeFrame=0;
+        for (int32 Frame=0;Frame<2100;++Frame)
         {
-            TestEqual(TEXT("Local cast cleanup and appearance refresh preserve surge lifetime"),OwnSurge!=nullptr,OtherSurge!=nullptr);
-            if(OwnSurge && OtherSurge)TestEqual(TEXT("Local surge retains the same visible particle count"),OwnSurge->Particles.Num(),OtherSurge->Particles.Num());
+            if(Frame==60) LocalAppearance->PlayActionMotion(0x400000d3,1.f,0x80000049);
+            if(Frame==120) LocalAppearance->ClearActionMotion();
+            if(Frame==240) LocalAppearance->PlayActionMotion(0x40000032,1.f,0x80000049);
+            LocalAppearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+            if(Frame==180) { LocalFX->InitializeFromObject(Human,100);LocalFX->NotifyAppearanceReady(); }
+            if(Frame%60==0) {LocalAppearance->SetAppearanceVisible(true);LocalFX->RestoreMeshVisuals();}
+            LocalFX->TickComponent(1.f/60,LEVELTICK_All,nullptr);RemoteFX->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+            const auto* OwnSurge=LocalFX->ActiveEmitters.FindByPredicate([Surge](const auto& E){return E.SourcePlayScript==Surge;});
+            const auto* OtherSurge=RemoteFX->ActiveEmitters.FindByPredicate([Surge](const auto& E){return E.SourcePlayScript==Surge;});
+            if(OwnSurge)LastSurgeFrame=Frame;
+            if(Frame%60==59)
+            {
+                TestEqual(Case+TEXT("local cast cleanup and appearance refresh preserve surge lifetime"),OwnSurge!=nullptr,OtherSurge!=nullptr);
+                if(OwnSurge && OtherSurge)TestEqual(Case+TEXT("local surge retains the same visible particle count"),OwnSurge->Particles.Num(),OtherSurge->Particles.Num());
+                if(OwnSurge && OwnSurge->Batch) TestTrue(Case+TEXT("local surge batch stays visible"),OwnSurge->Batch->IsVisible() && !OwnSurge->Batch->bHiddenInGame);
+            }
         }
+        TestTrue(Case+TEXT("DAT surge survives the reported first few seconds"),LastSurgeFrame>600);
+        TestTrue(Case+TEXT("finite surge finishes rather than becoming permanent"),LastSurgeFrame<2099);
+        AddInfo(Case+FString::Printf(TEXT("complete DAT lifetime including particle tail: %.2f seconds"),float(LastSurgeFrame)/60));
+
+        // Retail ParticleManager::CreateParticleEmitter (0x0051B6C0) destroys an
+        // occupied numbered slot, regardless of the old effect's source. Human
+        // MagicPowerUp08 (030005A0, frames 39..59) reuses every surge slot (5..9).
+        // Do not protect Aetheria with a custom lifetime or separate slot namespace.
+        LocalAppearance->ClearActionMotion();Remote->Appearance->ClearActionMotion();
+        LocalFX->StopAllEffects();RemoteFX->StopAllEffects();
+        LocalFX->PlayEffect(Surge,1.f);RemoteFX->PlayEffect(Surge,1.f);
+        const auto* InitialSurge=LocalFX->ActiveEmitters.FindByPredicate([Surge](const auto& E){return E.SourcePlayScript==Surge;});
+        if(!TestNotNull(Case+TEXT("surge creates its DAT slot"),InitialSurge))return false;
+        const uint32 Slot=InitialSurge->InstanceId;
+        int32 ReplacedFrame=INDEX_NONE;
+        for(int32 Frame=0;Frame<300;++Frame)
+        {
+            if(Frame==60)
+            {
+                LocalAppearance->PlayActionMotion(0x10000076,2.f,0x80000049);
+                Remote->Appearance->PlayActionMotion(0x10000076,2.f,0x80000049);
+            }
+            LocalAppearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+            Remote->Appearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+            LocalFX->TickComponent(1.f/60,LEVELTICK_All,nullptr);RemoteFX->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+            const auto* OwnSlot=LocalFX->ActiveEmitters.FindByPredicate([Slot](const auto& E){return E.InstanceId==Slot;});
+            const auto* OtherSlot=RemoteFX->ActiveEmitters.FindByPredicate([Slot](const auto& E){return E.InstanceId==Slot;});
+            if(OwnSlot && OwnSlot->SourcePlayScript==0)
+            {
+                TestTrue(Case+TEXT("windup replaces the same slot on local and remote bodies"),OtherSlot && OtherSlot->SourcePlayScript==0
+                    && OtherSlot->AuthoredEmitterId==OwnSlot->AuthoredEmitterId);
+                ReplacedFrame=Frame;
+                break;
+            }
+        }
+        TestTrue(Case+TEXT("authored windup replaces surge before its normal expiry"),ReplacedFrame>=60 && ReplacedFrame<300);
+        AddInfo(Case+FString::Printf(TEXT("retail windup replaces slot %u after %.2f seconds"),Slot,float(ReplacedFrame-60)/60));
+        LocalAppearance->QueueActionMotion(0x40000032,2.f,0x80000049);
+        for(int32 Frame=0;Frame<1800;++Frame)
+        {
+            LocalAppearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+            LocalFX->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+        }
+        TestTrue(Case+TEXT("authored hooks and lifetimes finish the complete windup/cast"),LocalFX->ActiveEmitters.IsEmpty());
+
+        // Setup default scripts and animation hooks share source zero. Retail
+        // never destroys those merely because a cast animation completes.
+        LocalAppearance->ClearActionMotion();
+        LocalFX->StopAllEffects();RemoteFX->StopAllEffects();
+        const uint32 ScriptId=0x3300125Bu+(Surge-0xA2u);
+        LocalFX->PlayScriptInternal(ScriptId,1.f,0,0.f);RemoteFX->PlayScriptInternal(ScriptId,1.f,0,0.f);
+        LocalAppearance->PlayActionMotion(0x40000032,2.f,0x80000049);
+        for(int32 Frame=0;Frame<360;++Frame)
+        {
+            LocalAppearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+            LocalFX->TickComponent(1.f/60,LEVELTICK_All,nullptr);RemoteFX->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+        }
+        const uint32 EmitterId=0x320009D1u+(Surge-0xA2u);
+        const auto* OwnById=LocalFX->ActiveEmitters.FindByPredicate([EmitterId](const auto& E){return E.AuthoredEmitterId==EmitterId;});
+        const auto* OtherById=RemoteFX->ActiveEmitters.FindByPredicate([EmitterId](const auto& E){return E.AuthoredEmitterId==EmitterId;});
+        TestTrue(Case+TEXT("cast completion preserves independent default-script effects"),OwnById && OtherById);
+        if(OwnById && OtherById)TestEqual(Case+TEXT("default-script effect retains its authored particle population"),OwnById->Particles.Num(),OtherById->Particles.Num());
     }
-    TestTrue(TEXT("DAT surge survives the reported first few seconds"),LastSurgeFrame>600);
-    TestTrue(TEXT("Finite surge finishes rather than becoming permanent"),LastSurgeFrame<1499);
-    AddInfo(FString::Printf(TEXT("Complete DAT surge lifetime including particle tail: %.2f seconds"),float(LastSurgeFrame)/60));
     LocalFX->StopAllEffects();LocalPawn->Destroy();RemoteFX->StopAllEffects();Remote->Destroy();
     return !HasAnyErrors();
 }

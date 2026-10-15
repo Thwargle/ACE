@@ -149,9 +149,6 @@ public:
 	 * Owners independently release suppression when their cosmetic is removed. */
 	void SetCosmeticParticlesHidden(UObject* Owner, bool bHidden);
 
-	/** End Launch / cast-gesture sparkle when the Cast one-shot finishes. Does not stop ShieldUp or EnchantUp. */
-	void StopCastGestureEffects();
-
 	/** Restore OpacityMul / appearance after StopAllEffects or portal reveal. */
 	void RestoreMeshVisuals();
 
@@ -216,7 +213,6 @@ private:
 		bool bVRHandFeedback = false;
 		float MaxDegradeDistance = 100.f;
 		bool bDegraded = false;
-		bool bInitialParticlesPending = false;
 		uint32 InstanceId = 0;
 		/** ParticleEmitterInfo DID (0x32…). */
 		uint32 AuthoredEmitterId = 0;
@@ -243,8 +239,9 @@ private:
 		bool bShapeVerticalSprite = false;
 		bool bShapeHwCube = false;
 		FVector LastOrigin = FVector::ZeroVector;
+		FVector LastEmissionOrigin = FVector::ZeroVector;
 		float Age = 0.f;
-		/** Seconds (or meters traveled) since last EmitParticle — retail emits at most once per update. */
+		/** Seconds since last EmitParticle — retail emits at most once per update. */
 		float TimeSinceEmit = 0.f;
 		int32 TotalBorn = 0;
 		bool bStopped = false;

@@ -777,8 +777,8 @@ bool FACEMovementReviewTest::RunTest(const FString&)
  TestEqual(TEXT("MoveTo without UseSpheres still measures point distance"),Range.ApproachDistance(FVector(0,0,3),.5,2,.5,1),3.f);
  Client->Session=SavedSession;
  // A hanging sign's initial placement honors Stuck, and so must the following
- // correction ticks. Ordinary loose items with Gravity still settle onto the
- // same floor; unanchored no-gravity props retain server-authored elevation.
+ // correction ticks. Loose items with Gravity can also rest on tables or
+ // shelves; a terrain/floor below them must not replace their server height.
  auto* FloorActor=World->SpawnActor<AActor>();
  auto* Floor=NewObject<UProceduralMeshComponent>(FloorActor);FloorActor->SetRootComponent(Floor);Floor->RegisterComponent();
  Floor->SetCollisionObjectType(ECC_WorldStatic);Floor->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
@@ -796,8 +796,8 @@ bool FACEMovementReviewTest::RunTest(const FString&)
   Sign->RemoteAnchorLocation=Sign->RemotePredictLocation;Sign->RemotePredictRotation=FQuat::Identity;Sign->bHaveRemotePredict=true;
   for(int Frame=0;Frame<30;++Frame)Sign->Tick(1.f/60);
   TestTrue(Stuck ? TEXT("Hanging sign retains its authored height during correction")
-   : Gravity ? TEXT("Loose item with Gravity still settles to the floor") : TEXT("No-gravity prop retains its authored height during correction"),
-   FMath::IsNearlyEqual(Sign->GetActorLocation().Z,Stuck||!Gravity?150.:1.,.01));
+   : Gravity ? TEXT("Elevated loose item retains server placement during correction") : TEXT("No-gravity prop retains its authored height during correction"),
+   FMath::IsNearlyEqual(Sign->GetActorLocation().Z,150.,.01));
  }
  Sign->Destroy();
  // Real Rithwic Smithy data: Stuck + Gravity + HasPhysicsBSP, no motion table.
