@@ -996,3 +996,20 @@ The optional real-file regression now replays town-network cells, both hunting
 routes (711 and 796 points), the five-minute fallback, quest-item detection,
 NPC approach and the final empty route through Lua and the native host. These
 are offline state/route checks, not a live traversal or completed quest claim.
+
+## Automatic mana-stone filling
+
+Checked the supplied vTank `hv.cs` loot classifier, `dy.cs` mana-source queue,
+`a0.cs` refill action, and `defaultsettings.usd`. VT evaluates normal loot first,
+then automatically takes unwanted magical items with workmanship and at least
+`ManaTankMinimumMana` (default 1,000). Tinkering and inscriptions exclude donors.
+Demand is the number of empty configured stones minus queued mana donors. Only
+confirmed loot receipts enter the donor queue; existing inventory is not treated
+as disposable junk. UCM now follows that flow without a manual source pool,
+including empty loot profiles, Skip/NoLoot and excess KeepUpTo items. Its ordinary
+owned-item, trade, retained-item and equipment protections still apply.
+
+`ACE.Plugins.ResourceMaintenance` covers pickup confirmation, same-WCID carried
+items, donor demand, appraisal, minimum mana, loot-rule precedence, post-pickup
+protection changes, filling, and recharging equipped items. These are offline
+policy checks, not a live server hunt.

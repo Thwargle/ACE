@@ -142,6 +142,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACERetailStatsTest;
 	friend class FACEAugmentationTest;
 	friend class FACERetailInventoryOrderTest;
+	friend class FACEClosedContainerLifetimeTest;
 	friend class FACEEquippedLookupTest;
 	friend class FACEInventoryUICostTest;
 	friend class FACEUIWorkloadTest;
@@ -720,6 +721,11 @@ private:
 	void HandleObjectDelete(FACEBinaryReader& Reader);
 	void DeleteWorldObject(int32 Guid);
 	TMap<int32, double> ObjectVisibilityDeadlines;
+	// Retail AddContentsToDestructionQueue: closed loot has a 25-second grace,
+	// independently of world visibility (contained items have no world cell).
+	TMap<int32, double> ClosedContainerItemDeadlines;
+	double NextClosedContainerExpiryAt = 0.;
+	void ExpireClosedContainerItems(double Now);
 	struct FPendingObjectPhysicsEvent
 	{
 		uint32 Opcode = 0;

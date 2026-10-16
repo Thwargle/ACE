@@ -1,5 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Protocol/ACELoginErrors.h"
 #include "ACELoginProfile.h"
 #include "ACELoginSettings.h"
@@ -8,6 +10,7 @@
 #include "ACEClientBuild.h"
 #include "ACEPlayerController.h"
 #include "ACEDatSubsystem.h"
+#include "UI/ACERetailTextBlock.h"
 #include "TimerManager.h"
 #include "Blueprint/GameViewportSubsystem.h"
 #include "Blueprint/WidgetLayoutLibrary.h"
@@ -19,6 +22,7 @@
 #include "Components/ScrollBox.h"
 #include "Components/Border.h"
 #include "Components/CheckBox.h"
+#include "Components/PanelWidget.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -100,11 +104,21 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
 {
     const auto Values=UWorld::InitializationValues().AllowAudioPlayback(false).RequiresHitProxies(false).CreatePhysicsScene(false).CreateNavigation(false).CreateAISystem(false);
     auto* World=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);
-    GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
-    auto* GI=NewObject<UGameInstance>(GEngine); World->SetGameInstance(GI); GI->Init();
+    auto* GI=NewObject<UGameInstance>(GEngine); GI->InitializeStandalone();
+    GI->GetWorldContext()->SetCurrentWorld(World);World->SetGameInstance(GI);
     TStrongObjectPtr<UACELoginWidget> Owner(CreateWidget<UACELoginWidget>(GI,UACELoginWidget::StaticClass())); auto* W=Owner.Get();
     W->ProfilePath=FPaths::ProjectSavedDir()/TEXT("Automation/Launcher/Widget-")+FGuid::NewGuid().ToString()+TEXT(".dat");
     auto Slate=W->TakeWidget();
+    W->SetUseDatIntroBackdrop(true);
+    TestEqual(TEXT("Launcher stays black when the intro/game world exists after logout"),W->BackdropBorder->GetBrushColor(),FLinearColor::Black);
+    auto* RetailTitle=Cast<UACERetailTextBlock>(W->ServerTitle);
+    TestNotNull(TEXT("Launcher titles use the retail font renderer"),RetailTitle);
+    auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
+    FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");
+    FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+    TestTrue(TEXT("Retail launcher art loads after the form is constructed"),Dat->LoadDatDirectory(DatDirectory));
+    W->NativeTick(W->GetCachedGeometry(),.3f);
+    TestTrue(TEXT("Already constructed labels acquire their DAT font without rebuilding"),RetailTitle&&RetailTitle->GetBitmapFont());
     TestTrue(TEXT("Fresh installation has no developer server or account supplied"),W->Profile.Servers.IsEmpty() && W->Profile.Accounts.IsEmpty());
     W->RunAction(TEXT("newserver")); W->NameBox->SetText(FText::FromString(TEXT("Dereth · Home")));
     W->HostBox->SetText(FText::FromString(TEXT("home.example.invalid"))); W->RunAction(TEXT("saveserver"));
@@ -117,6 +131,10 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     W->RunAction(TEXT("gdle")); W->RunAction(TEXT("saveserver"));
     TestEqual(TEXT("Accounts are shared when switching to a new server"),W->AccountBox->GetText().ToString(),FString(TEXT("Archer")));
     TestEqual(TEXT("Every saved account is offered on each server"),W->AccountList->GetChildrenCount(),2);
+    W->RunAction(TEXT("accounts"));
+    TestEqual(TEXT("Account management has its own page"),W->Pages->GetActiveWidgetIndex(),6);
+    TestEqual(TEXT("Account manager lists the same saved accounts"),W->ManagedAccountList->GetChildrenCount(),2);
+    W->RunAction(TEXT("play"));
     TestTrue(TEXT("Selected GDLE type stored"),W->Profile.SelectedServer()->bGDLE);
     W->RunAction(TEXT("selectserver"),HomeId);
     TestEqual(TEXT("Switching servers preserves the chosen identity"),W->AccountBox->GetText().ToString(),FString(TEXT("Archer")));
@@ -159,27 +177,64 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
             TStrongObjectPtr<UTextureRenderTarget2D> Target(FWidgetRenderer::CreateTargetFor(FVector2D(Size),TF_Bilinear,false));
             for (int Pass=0;Pass<5;++Pass) { Renderer.DrawWidget(Target.Get(),Slate,FVector2D(Size),0.f); FlushRenderingCommands(); W->NativeTick(W->GetCachedGeometry(),0); }
             TestTrue(TEXT("Responsive dashboard fits horizontal viewport"),W->DashboardSize->GetCachedGeometry().GetAbsoluteSize().X<=Size.X+1);
+            // List rows may scroll; navigation, form fields and actions may not.
+            // Check the actual rendered allocation, including long errors below it.
+            TFunction<void(UWidget*,float)> CheckActions=[&](UWidget* Widget,float Bottom)
+            {
+                if(!Widget || !Widget->IsVisible() || Cast<UScrollBox>(Widget)) return;
+                if(Cast<UButton>(Widget) || Cast<UEditableTextBox>(Widget))
+                {
+                    const auto& G=Widget->GetCachedGeometry();
+                    const FVector2D P=G.GetAbsolutePosition(), S=G.GetAbsoluteSize();
+                    TestTrue(FString::Printf(TEXT("%s: %s stays fully visible without scrolling"),Name,*Widget->GetName()),
+                        S.X>10 && S.Y>10 && P.X>=0 && P.Y>=0 && P.X+S.X<=Size.X+1 && P.Y+S.Y<=Bottom+1);
+                }
+                if(auto* Panel=Cast<UPanelWidget>(Widget)) for(auto* Child:Panel->GetAllChildren()) CheckActions(Child,Bottom);
+            };
+            const auto& Dashboard=W->DashboardSize->GetCachedGeometry();
+            CheckActions(W->Pages->GetActiveWidget(),Dashboard.GetAbsolutePosition().Y+Dashboard.GetAbsoluteSize().Y);
+            for(const auto& Button:W->NavigationButtons) CheckActions(Button.Get(),Size.Y);
+            CheckActions(W->FooterSize,Size.Y);
+            if(W->Pages->GetActiveWidgetIndex()==0)
+            {
+                TestTrue(TEXT("Saved server list retains room for a row"),W->ServerList->GetCachedGeometry().GetAbsoluteSize().Y>=25);
+                TestTrue(TEXT("Saved account list retains room for a row"),W->AccountList->GetCachedGeometry().GetAbsoluteSize().Y>=25);
+            }
             TArray<FColor> Pixels; FReadSurfaceDataFlags ReadFlags; ReadFlags.SetLinearToGamma(true); Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,ReadFlags);
             TArray64<uint8> PNG; FImageUtils::PNGCompressImageArray(Size.X,Size.Y,Pixels,PNG);
             FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/TEXT("Automation/Launcher")/(FString(Name)+TEXT(".png"))));
         };
-        W->SetStatus(TEXT("Ready to return to Dereth.")); Capture(TEXT("Desktop"),FIntPoint(1600,1000));
+        W->SetStatus(FString()); Capture(TEXT("Desktop"),FIntPoint(1600,1000));
+        W->RunAction(TEXT("accounts"));Capture(TEXT("Accounts"),FIntPoint(1100,900));
+        Capture(TEXT("AccountsNarrow"),FIntPoint(650,1000));W->RunAction(TEXT("play"));
         Capture(TEXT("VR"),FIntPoint(1100,900));
-        TestTrue(TEXT("Status remains visible on headset"),W->StatusText->GetCachedGeometry().GetAbsolutePosition().Y>750 && W->StatusText->GetCachedGeometry().GetAbsolutePosition().Y<880);
+        TestEqual(TEXT("Idle status leaves room for the login panel"),W->StatusText->GetParent()->GetVisibility(),ESlateVisibility::Collapsed);
         TestTrue(TEXT("Launch has a visible laid-out button"),W->LoginButton->GetCachedGeometry().GetLocalSize().Y>20);
         TestTrue(TEXT("Launch fits inside headset panel without scrolling"),W->LoginButton->GetCachedGeometry().GetAbsolutePosition().Y+W->LoginButton->GetCachedGeometry().GetLocalSize().Y<900);
         Capture(TEXT("Window720p"),FIntPoint(1280,720));
         Capture(TEXT("Desktop4K"),FIntPoint(3840,2160));
         Capture(TEXT("Narrow"),FIntPoint(650,1000));
+        Capture(TEXT("SmallWindow"),FIntPoint(800,600));
+        const auto SavedAccounts=W->Profile.Accounts;
+        for(int32 I=0;I<40;++I) W->Profile.Accounts.Add({FString::FromInt(I),FString::Printf(TEXT("Saved adventurer %d"),I),TEXT("fixture")});
+        W->RefreshAccounts(); Capture(TEXT("ManyAccounts720p"),FIntPoint(1280,720));
+        W->Profile.Accounts=SavedAccounts; W->RefreshAccounts();
         W->SetStatus(ACELoginErrors::Character(1));
         Capture(TEXT("LoginRejectedVR"),FIntPoint(1100,900));
         TestTrue(TEXT("Account-in-use guidance wraps within the VR panel"),W->StatusText->GetCachedGeometry().GetAbsoluteSize().X<1100);
         TestTrue(TEXT("Full error guidance remains inside the headset panel"),W->StatusText->GetCachedGeometry().GetAbsolutePosition().Y+W->StatusText->GetCachedGeometry().GetAbsoluteSize().Y<900);
         Capture(TEXT("LoginRejected720p"),FIntPoint(1280,720));
         Capture(TEXT("LoginRejectedNarrow"),FIntPoint(650,1000));
+        W->RunAction(TEXT("removeaccount")); Capture(TEXT("ConfirmationNarrow"),FIntPoint(650,1000)); W->RunAction(TEXT("cancelremove"));
         W->RunAction(TEXT("browser")); W->RunAction(TEXT("directoryselect"),HomeId); Capture(TEXT("Browser"),FIntPoint(1100,900));
+        Capture(TEXT("BrowserNarrow"),FIntPoint(650,1000));
         W->RunAction(TEXT("editserver")); Capture(TEXT("Editor"),FIntPoint(1100,900));
+        Capture(TEXT("Editor720p"),FIntPoint(1280,720)); Capture(TEXT("EditorNarrow"),FIntPoint(650,1000));
         W->RunAction(TEXT("files")); Capture(TEXT("Files"),FIntPoint(1100,900));
+        W->FileProblem->SetText(FText::FromString(TEXT("Missing client_portal.dat and client_cell_1.dat. Choose the folder containing your Asheron's Call game data to continue.")));
+        W->FileProblem->SetVisibility(ESlateVisibility::HitTestInvisible);
+        Capture(TEXT("MissingFiles720p"),FIntPoint(1280,720)); Capture(TEXT("MissingFilesNarrow"),FIntPoint(650,1000));
+        W->RunAction(TEXT("plugins")); Capture(TEXT("Plugins"),FIntPoint(1100,900));
         // This offscreen fixture does not mount the widget in a player screen.
         W->Updater=GI->GetSubsystem<UACEUpdateSubsystem>();
         if (!TestNotNull(TEXT("Game instance owns the updater"),W->Updater.Get())) return false;
@@ -214,6 +269,7 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         TestFalse(TEXT("Notice prevents launching into a server"),W->LoginButton->GetIsEnabled());
         Capture(TEXT("UpdateClosureNoticeVR"),FIntPoint(1100,900));
         Capture(TEXT("UpdateClosureNotice720p"),FIntPoint(1280,720));
+        Capture(TEXT("UpdateClosureNoticeNarrow"),FIntPoint(650,1000));
         W->RunAction(TEXT("cancelupdate"));
         TestEqual(TEXT("Cancel button dismisses the scheduled install"),W->Updater->State,EACEUpdateState::Ready);
         // Render the longer Quest instructions on the shared headset surface.
@@ -262,8 +318,13 @@ bool FACELauncherViewportTest::RunTest(const FString&)
     const FGeometry Screen=UWidgetLayoutLibrary::GetPlayerScreenWidgetGeometry(PC);
     const FGeometry Lobby=W->GetCachedGeometry();
     TestTrue(TEXT("Lobby receives the full screen allocation"),Lobby.GetAbsoluteSize().Equals(Screen.GetAbsoluteSize(),2));
-    for (UWidget* Control : TArray<UWidget*>{W->AccountBox,W->PasswordBox,W->LoginButton,W->StatusText})
+    for (UWidget* Control : TArray<UWidget*>{W->ServerTitle,W->AccountList,W->LoginButton,W->StatusText})
     {
+        if(Control==W->StatusText && W->StatusText->GetText().IsEmpty())
+        {
+            TestEqual(TEXT("Idle status does not reserve a blank footer"),W->StatusText->GetParent()->GetVisibility(),ESlateVisibility::Collapsed);
+            continue;
+        }
         const FGeometry Geometry=Control->GetCachedGeometry();
         const FVector2D Size=Geometry.GetLocalSize();
         const FVector2D First=Screen.AbsoluteToLocal(Geometry.LocalToAbsolute(FVector2D::ZeroVector));

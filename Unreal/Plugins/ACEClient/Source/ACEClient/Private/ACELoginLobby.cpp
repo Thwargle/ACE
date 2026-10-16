@@ -1,4 +1,7 @@
 #include "ACELoginWidget.h"
+#include "UI/ACERetailTextBlock.h"
+#include "UI/ACEUIFontStyles.h"
+#include "UI/ACEUIResourceResolver.h"
 #include "Mods/ACEPluginPanel.h"
 #include "ACELoginSettings.h"
 #include "ACEClientBuild.h"
@@ -19,6 +22,11 @@
 #include "Components/ScrollBoxSlot.h"
 #include "Components/ScaleBox.h"
 #include "Components/ScaleBoxSlot.h"
+#include "Components/StackBox.h"
+#include "Components/StackBoxSlot.h"
+#include "Components/Image.h"
+#include "Components/Overlay.h"
+#include "Components/OverlaySlot.h"
 #include "Components/SizeBox.h"
 #include "Components/SizeBoxSlot.h"
 #include "Components/TextBlock.h"
@@ -46,23 +54,26 @@
 
 namespace
 {
-	const FLinearColor Ink(.018f, .024f, .035f, 1);
-	const FLinearColor Surface(.036f, .047f, .065f, 1);
-	const FLinearColor Tile(.065f, .083f, .11f, 1);
-	const FLinearColor Gold(.78f, .57f, .25f, 1);
-	const FLinearColor Muted(.49f, .57f, .67f, 1);
-	const FLinearColor LobbyTextColor(.88f, .9f, .92f, 1);
+	const FLinearColor Ink(.008f, .006f, .003f, 1);
+	const FLinearColor Surface(.018f, .014f, .009f, 1);
+	const FLinearColor Tile(.045f, .036f, .025f, 1);
+	const FLinearColor Gold(.36f, .27f, .14f, 1);
+	const FLinearColor Muted(.58f, .54f, .46f, 1);
+	const FLinearColor LobbyTextColor(.88f, .85f, .77f, 1);
 	void ButtonStyle(UButton* Button, bool Accent)
 	{
+		const auto* Action=Cast<UACELoginActionButton>(Button);
+		const bool Primary=Action && (Action->Action==TEXT("launch") || Action->Action==TEXT("downloadupdate") || Action->Action==TEXT("installupdate"));
+		const FLinearColor Active=Primary?FLinearColor(.055f,.085f,.045f,1):FLinearColor(.105f,.079f,.041f,1);
 		FButtonStyle Style;
-		Style.SetNormal(FSlateRoundedBoxBrush(Accent ? Gold : Tile, 7.f));
-		Style.SetHovered(FSlateRoundedBoxBrush(Accent ? FLinearColor(.96f,.73f,.36f,1) : FLinearColor(.11f,.16f,.21f,1), 7.f));
-		Style.SetPressed(FSlateRoundedBoxBrush(Accent ? Gold * .8f : Surface, 7.f));
-		Style.SetDisabled(FSlateRoundedBoxBrush(Surface, 7.f));
-		Style.SetNormalPadding(FMargin(14,10)); Style.SetPressedPadding(FMargin(14,10));
+		Style.SetNormal(FSlateRoundedBoxBrush(Accent ? Active : Tile, 0.f, Accent ? Gold : FLinearColor(.14f,.115f,.075f,1), 1.f));
+		Style.SetHovered(FSlateRoundedBoxBrush(FLinearColor(.12f,.10f,.065f,1), 0.f, FLinearColor(.6f,.49f,.29f,1), 1.f));
+		Style.SetPressed(FSlateRoundedBoxBrush(Ink, 0.f, Gold, 1.f));
+		Style.SetDisabled(FSlateRoundedBoxBrush(Surface, 0.f, FLinearColor(.07f,.06f,.04f,1), 1.f));
+		Style.SetNormalPadding(FMargin(14,7)); Style.SetPressedPadding(FMargin(14,7));
 		Button->SetStyle(Style);
 		if (auto* Size=Cast<USizeBox>(Button->GetContent()))
-			if (auto* Caption=Cast<UTextBlock>(Size->GetContent())) Caption->SetColorAndOpacity(Accent?Ink:LobbyTextColor);
+			if (auto* Caption=Cast<UTextBlock>(Size->GetContent())) Caption->SetColorAndOpacity(LobbyTextColor);
 	}
 	void AddLine(UVerticalBox* Box, UWidget* Child, float Bottom = 12)
 	{
@@ -79,9 +90,15 @@ void UACELoginActionButton::HandleAction()
 
 UTextBlock* UACELoginWidget::Label(const FString& String, int32 Size, bool bMuted)
 {
-	auto* T = WidgetTree->ConstructWidget<UTextBlock>();
+	auto* T = WidgetTree->ConstructWidget<UACERetailTextBlock>();
 	T->SetText(FText::FromString(String));
 	T->SetFont(FCoreStyle::GetDefaultFontStyle(Size >= 26 ? TEXT("Bold") : TEXT("Regular"), Size));
+	// The authored serif glyphs match the rest of the client. Until DAT is
+	// available, UACERetailTextBlock keeps its readable engine-font fallback.
+	const int32 Pixels=Size>=26?30:FMath::Clamp(Size,12,24);
+	T->SetFontOverride(ACEUIFontStyles::FontIdForStyleName((Size>=26?FString(TEXT("fancyfont")):FString(TEXT("basefont")))+FString::FromInt(Pixels)));
+	if(auto* GI=GetGameInstance())if(auto* Dat=GI->GetSubsystem<UACEDatSubsystem>())
+		T->SetRetailElement(Dat->GetUiResources(),nullptr,FVector2D(1.25),0,false);
 	T->SetColorAndOpacity(bMuted ? Muted : LobbyTextColor);
 	T->SetAutoWrapText(true);
 	T->SetVisibility(ESlateVisibility::HitTestInvisible);
@@ -95,7 +112,7 @@ UACELoginActionButton* UACELoginWidget::ActionButton(const FString& Title, const
 	B->OnClicked.AddDynamic(B, &UACELoginActionButton::HandleAction);
 	ButtonStyle(B, bAccent);
 	auto* T = Label(Title, 18); T->SetAutoWrapText(false); T->SetTextOverflowPolicy(ETextOverflowPolicy::Ellipsis);
-	T->SetJustification(ETextJustify::Center); T->SetColorAndOpacity(bAccent ? Ink : LobbyTextColor);
+	T->SetJustification(ETextJustify::Center);
 	auto* Size = WidgetTree->ConstructWidget<USizeBox>(); Size->SetMinDesiredHeight(26);
 	Size->SetContent(T); Cast<USizeBoxSlot>(T->Slot)->SetVerticalAlignment(VAlign_Center);
 	B->SetContent(Size);
@@ -107,10 +124,10 @@ UEditableTextBox* UACELoginWidget::Field(UVerticalBox* Parent, const FString& Ti
 	AddLine(Parent, Label(Title, 16, true), 5);
 	auto* Box = WidgetTree->ConstructWidget<UEditableTextBox>(UEditableTextBox::StaticClass(), Name);
 	FEditableTextBoxStyle Style = Box->GetWidgetStyle();
-	Style.SetBackgroundImageNormal(FSlateRoundedBoxBrush(Ink, 6.f));
-	Style.SetBackgroundImageHovered(FSlateRoundedBoxBrush(Tile, 6.f));
-	Style.SetBackgroundImageFocused(FSlateRoundedBoxBrush(Ink, 6.f, Gold, 1.5f));
-	Style.SetForegroundColor(LobbyTextColor); Style.SetPadding(FMargin(12,10));
+	Style.SetBackgroundImageNormal(FSlateRoundedBoxBrush(Ink, 0.f, Muted, 1.f));
+	Style.SetBackgroundImageHovered(FSlateRoundedBoxBrush(Surface, 0.f, Gold, 1.f));
+	Style.SetBackgroundImageFocused(FSlateRoundedBoxBrush(Ink, 0.f, Gold, 2.f));
+	Style.SetForegroundColor(LobbyTextColor); Style.SetPadding(FMargin(12,7));
 	Style.SetTextStyle(FTextBlockStyle().SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),20)).SetColorAndOpacity(LobbyTextColor));
 	Box->SetWidgetStyle(Style); Box->SetIsPassword(bSecret); Box->SetClearKeyboardFocusOnCommit(true);
 	Box->SetSelectAllTextWhenFocused(true);
@@ -139,29 +156,53 @@ void UACELoginWidget::EnsureDefaultLayout()
 	BackdropBorder->SetBrush(FSlateRoundedBoxBrush(Ink,0.f)); BackdropBorder->SetPadding(FMargin(0));
 	auto* BackSlot = Canvas->AddChildToCanvas(BackdropBorder); BackSlot->SetAnchors(FAnchors(0,0,1,1)); BackSlot->SetOffsets(FMargin(0));
 	SetUseDatIntroBackdrop(bUseDatIntroBackdrop);
-	auto* Scroll = WidgetTree->ConstructWidget<UScrollBox>();
-	Scroll->SetConsumeMouseWheel(EConsumeMouseWheel::WhenScrollingPossible);
-	Scroll->SetScrollbarThickness(FVector2D(9,9));
-	auto* ScrollSlot = Canvas->AddChildToCanvas(Scroll); ScrollSlot->SetAnchors(FAnchors(0,0,1,1)); ScrollSlot->SetOffsets(FMargin(24,24,24,108));
 	DashboardSize = WidgetTree->ConstructWidget<USizeBox>(); DashboardSize->SetWidthOverride(1052);
-	auto* DashboardSlot = Cast<UScrollBoxSlot>(Scroll->AddChild(DashboardSize)); DashboardSlot->SetHorizontalAlignment(HAlign_Center);
+	// The shell never scrolls. Only the bounded server/account/directory lists do.
+	auto* DashboardSlot = Canvas->AddChildToCanvas(DashboardSize); DashboardSlot->SetAnchors(FAnchors(.5f,0,.5f,1));
+	DashboardSlot->SetOffsets(FMargin(-526,24,1052,64));
 	auto* Root = WidgetTree->ConstructWidget<UVerticalBox>(); DashboardSize->SetContent(Root);
-	auto* Header = WidgetTree->ConstructWidget<UWrapBox>(); Header->SetInnerSlotPadding(FVector2D(10,10)); AddLine(Root, Header, 24);
+	auto* Heading = WidgetTree->ConstructWidget<UHorizontalBox>(); AddLine(Root,Heading,16);
 #if PLATFORM_ANDROID
 	auto* Brand = Label(TEXT("AC:VR"), 34);
 #else
 	auto* Brand = Label(TEXT("AC:Unreal"), 34);
 #endif
-	auto* BrandSize=WidgetTree->ConstructWidget<USizeBox>(); BrandSize->SetWidthOverride(245); BrandSize->SetContent(Brand); Header->AddChildToWrapBox(BrandSize);
-	for (const auto& Item : TArray<TPair<FString,FString>>{{TEXT("Play"),TEXT("play")},{TEXT("Browse servers"),TEXT("browser")},{TEXT("Game files"),TEXT("files")},{TEXT("Quit"),TEXT("quit")}})
-		Header->AddChildToWrapBox(ActionButton(Item.Key,Item.Value));
-	UpdateNavButton=ActionButton(TEXT("Updates"),TEXT("updates")); Header->AddChildToWrapBox(UpdateNavButton);
-	Header->AddChildToWrapBox(ActionButton(TEXT("Plugins"),TEXT("plugins")));
-	Pages = WidgetTree->ConstructWidget<UWidgetSwitcher>(); AddLine(Root, Pages, 16);
+	Heading->AddChildToHorizontalBox(Brand)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+	auto* QuitSlot=Heading->AddChildToHorizontalBox(ActionButton(TEXT("Quit"),TEXT("quit")));
+	QuitSlot->SetHorizontalAlignment(HAlign_Right); QuitSlot->SetVerticalAlignment(VAlign_Top);
+	auto* Header = WidgetTree->ConstructWidget<UWrapBox>(); Header->SetInnerSlotPadding(FVector2D(8,8)); AddLine(Root, Header, 18);
+	for (const auto& Item : TArray<TPair<FString,FString>>{{TEXT("Play"),TEXT("play")},{TEXT("Accounts"),TEXT("accounts")},{TEXT("Browse servers"),TEXT("browser")},{TEXT("Game files"),TEXT("files")}})
+	{
+		auto* Button=ActionButton(Item.Key,Item.Value); Header->AddChildToWrapBox(Button); NavigationButtons.Add(Button);
+	}
+	UpdateNavButton=ActionButton(TEXT("Updates"),TEXT("updates")); Header->AddChildToWrapBox(UpdateNavButton); NavigationButtons.Add(UpdateNavButton);
+	auto* PluginsButton=ActionButton(TEXT("Plugins"),TEXT("plugins")); Header->AddChildToWrapBox(PluginsButton); NavigationButtons.Add(PluginsButton);
+	Pages = WidgetTree->ConstructWidget<UWidgetSwitcher>(); Root->AddChildToVerticalBox(Pages)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	auto Card = [&](UVerticalBox*& Content) -> UBorder*
 	{
-		auto* B = WidgetTree->ConstructWidget<UBorder>(); B->SetBrush(FSlateRoundedBoxBrush(Surface,12.f)); B->SetPadding(FMargin(24));
-		Content = WidgetTree->ConstructWidget<UVerticalBox>(); B->SetContent(Content); return B;
+		auto* B = WidgetTree->ConstructWidget<UBorder>(); B->SetBrush(FSlateRoundedBoxBrush(Surface,0.f,Gold,1.f)); B->SetPadding(FMargin(0));
+		auto* Layers=WidgetTree->ConstructWidget<UOverlay>(); B->SetContent(Layers);
+		auto* Frame=WidgetTree->ConstructWidget<UCanvasPanel>(); auto* FrameSlot=Layers->AddChildToOverlay(Frame);
+		FrameSlot->SetHorizontalAlignment(HAlign_Fill); FrameSlot->SetVerticalAlignment(VAlign_Fill); Frame->SetVisibility(ESlateVisibility::HitTestInvisible);
+		// The character creator's authored bronze frame, with corners at native
+		// proportions and only the straight edge strips stretched.
+		auto Art=[&](uint32 Id,FAnchors Anchors,FMargin Offsets)
+		{
+			auto* Image=WidgetTree->ConstructWidget<UImage>(); LobbyArtwork.Add(Image,Id);
+			Image->SetVisibility(ESlateVisibility::HitTestInvisible);
+			auto* ArtSlot=Frame->AddChildToCanvas(Image); ArtSlot->SetAnchors(Anchors); ArtSlot->SetOffsets(Offsets);
+			Image->SetOpacity(0); // The flat border remains usable before DAT loads.
+		};
+		Art(0x06004CC7,FAnchors(0,0,1,0),FMargin(34,0,34,7));
+		Art(0x06004CC7,FAnchors(0,1,1,1),FMargin(34,-7,34,7));
+		Art(0x06004CB8,FAnchors(0,0,0,1),FMargin(0,34,5,34));
+		Art(0x06004CB8,FAnchors(1,0,1,1),FMargin(-5,34,5,34));
+		Art(0x06004CC3,FAnchors(0,0),FMargin(0,0,34,34));
+		Art(0x06004CC4,FAnchors(1,0),FMargin(-34,0,34,34));
+		Art(0x06004CC5,FAnchors(0,1),FMargin(0,-34,34,34));
+		Art(0x06004CC6,FAnchors(1,1),FMargin(-34,-34,34,34));
+		Content = WidgetTree->ConstructWidget<UVerticalBox>(); auto* ContentSlot=Layers->AddChildToOverlay(Content);
+		ContentSlot->SetPadding(FMargin(22)); ContentSlot->SetHorizontalAlignment(HAlign_Fill); ContentSlot->SetVerticalAlignment(VAlign_Fill); return B;
 	};
 	auto Row = [&](UVerticalBox* Parent, const TArray<TPair<FString,FString>>& Buttons)
 	{
@@ -169,17 +210,17 @@ void UACELoginWidget::EnsureDefaultLayout()
 		for (const auto& Item : Buttons) R->AddChildToWrapBox(ActionButton(Item.Key, Item.Value));
 	};
 	// Play: two cards on desktop/headset; a stacked layout in narrow windows.
-	auto* Play = WidgetTree->ConstructWidget<UWrapBox>(); PlayLayout=Play; Play->SetExplicitWrapSize(true); Play->SetWrapSize(1028); Play->SetInnerSlotPadding(FVector2D(20,20)); Pages->AddChild(Play);
-	SidebarSize = WidgetTree->ConstructWidget<USizeBox>(); SidebarSize->SetWidthOverride(280); Play->AddChildToWrapBox(SidebarSize);
+	auto* Play = WidgetTree->ConstructWidget<UStackBox>(); PlayLayout=Play; Play->SetOrientation(Orient_Horizontal); Pages->AddChild(Play);
+	SidebarSize = WidgetTree->ConstructWidget<USizeBox>(); SidebarSize->SetWidthOverride(280); Play->AddChildToStackBox(SidebarSize)->SetPadding(FMargin(0,0,20,0));
 	UVerticalBox* Sidebar; SidebarSize->SetContent(Card(Sidebar));
 	AddLine(Sidebar,Label(TEXT("YOUR SERVERS"),16,true),16);
 	ServerList = WidgetTree->ConstructWidget<UScrollBox>(); ServerList->SetScrollbarThickness(FVector2D(8,8));
-	auto* ServerHeight = WidgetTree->ConstructWidget<USizeBox>(); ServerHeight->SetHeightOverride(338); ServerHeight->SetContent(ServerList); AddLine(Sidebar,ServerHeight,16);
+	auto* ServerSlot=Sidebar->AddChildToVerticalBox(ServerList); ServerSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); ServerSlot->SetPadding(FMargin(0,0,0,16));
 	AddLine(Sidebar,ActionButton(TEXT("+ Custom server"),TEXT("newserver")),8);
 	AddLine(Sidebar,ActionButton(TEXT("Browse directory"),TEXT("browser")),0);
-	DetailSize = WidgetTree->ConstructWidget<USizeBox>(); DetailSize->SetWidthOverride(752); Play->AddChildToWrapBox(DetailSize);
+	DetailSize = WidgetTree->ConstructWidget<USizeBox>(); Play->AddChildToStackBox(DetailSize)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	UVerticalBox* Details; DetailSize->SetContent(Card(Details));
-	ServerTitle=Label(TEXT("Choose your world"),30); AddLine(Details,ServerTitle,5);
+	ServerTitle=Label(TEXT("Choose your world"),22); AddLine(Details,ServerTitle,5);
 	ServerDetail=Label(TEXT("Save a server or discover one in the directory."),16,true); AddLine(Details,ServerDetail,14);
 	ServerDescription=Label(TEXT(""),18); AddLine(Details,ServerDescription,14);
 	auto* Links=WidgetTree->ConstructWidget<UWrapBox>(); Links->SetInnerSlotPadding(FVector2D(8,8)); AddLine(Details,Links,16);
@@ -189,15 +230,9 @@ void UACELoginWidget::EnsureDefaultLayout()
 	Links->AddChildToWrapBox(ActionButton(TEXT("Remove"),TEXT("removeserver")));
 	AddLine(Details,Label(TEXT("Accounts"),16,true),8);
 	AccountList=WidgetTree->ConstructWidget<UScrollBox>(); AccountList->SetScrollbarThickness(FVector2D(8,8));
-	auto* AccountHeight=WidgetTree->ConstructWidget<USizeBox>(); AccountHeight->SetHeightOverride(122); AccountHeight->SetContent(AccountList); AddLine(Details,AccountHeight);
-	auto* Credentials=WidgetTree->ConstructWidget<UHorizontalBox>(); AddLine(Details,Credentials,0);
-	auto* UserColumn=WidgetTree->ConstructWidget<UVerticalBox>(); auto* UserSlot=Credentials->AddChildToHorizontalBox(UserColumn);
-	UserSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); UserSlot->SetPadding(FMargin(0,0,16,0));
-	auto* PasswordColumn=WidgetTree->ConstructWidget<UVerticalBox>(); Credentials->AddChildToHorizontalBox(PasswordColumn)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
-	AccountBox=Field(UserColumn,TEXT("Username"),TEXT("AccountBox")); PasswordBox=Field(PasswordColumn,TEXT("Password"),TEXT("PasswordBox"),true);
-	Row(Details,{{TEXT("Save account"),TEXT("saveaccount")},{TEXT("New account"),TEXT("newaccount")},{TEXT("Remove account"),TEXT("removeaccount")}});
+	auto* AccountSlot=Details->AddChildToVerticalBox(AccountList); AccountSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); AccountSlot->SetPadding(FMargin(0,0,0,12));
 	LoginButton=ActionButton(TEXT("Launch"),TEXT("launch"),FString(),true); AddLine(Details,LoginButton,8);
-	AddLine(Details,Label(PLATFORM_LINUX ? TEXT("Account names are saved. Enter your password again after restarting.") : TEXT("Accounts are saved securely on this device."),14,true),0);
+	AddLine(Details,Label(PLATFORM_LINUX ? TEXT("Account names are saved. Enter your password on the Accounts tab after restarting.") : TEXT("Accounts are saved securely on this device."),14,true),0);
 	// Server editor: explicit save/cancel avoids sending credentials to an edited endpoint by accident.
 	UVerticalBox* Edit; Pages->AddChild(Card(Edit));
 	AddLine(Edit,Label(TEXT("Server details"),30),18);
@@ -221,7 +256,7 @@ void UACELoginWidget::EnsureDefaultLayout()
 	SearchBox=Field(Browser,TEXT("Search names, descriptions or addresses"),TEXT("ServerSearch"));
 	SearchBox->OnTextChanged.AddDynamic(this,&UACELoginWidget::OnSearchChanged);
 	BrowserList=WidgetTree->ConstructWidget<UScrollBox>(); BrowserList->SetScrollbarThickness(FVector2D(10,10));
-	auto* BrowserHeight=WidgetTree->ConstructWidget<USizeBox>(); BrowserHeight->SetHeightOverride(235); BrowserHeight->SetContent(BrowserList); AddLine(Browser,BrowserHeight,14);
+	auto* BrowserSlot=Browser->AddChildToVerticalBox(BrowserList); BrowserSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); BrowserSlot->SetPadding(FMargin(0,0,0,14));
 	BrowserDetail=Label(TEXT("Refresh to load the public server directory."),18); AddLine(Browser,BrowserDetail,16);
 	Row(Browser,{{TEXT("Add to my servers"),TEXT("import")},{TEXT("Refresh"),TEXT("refresh")},{TEXT("Website"),TEXT("browserwebsite")},{TEXT("Discord"),TEXT("browserdiscord")}});
 	AddLine(Browser,Label(TEXT("Directory maintained by acresources / Servers.xml. Adding a server does not connect to it."),14,true),0);
@@ -252,16 +287,18 @@ void UACELoginWidget::EnsureDefaultLayout()
 		.SetUncheckedImage(FSlateNoResource()).SetCheckedImage(FSlateNoResource())
 		.SetUncheckedHoveredImage(FSlateRoundedBoxBrush(Tile,4.f)).SetCheckedHoveredImage(FSlateRoundedBoxBrush(Tile,4.f))
 		.SetUncheckedPressedImage(FSlateRoundedBoxBrush(Ink,4.f)).SetCheckedPressedImage(FSlateRoundedBoxBrush(Ink,4.f));
-	AutoUpdateStyle.SetForegroundColor(LobbyTextColor).SetHoveredForegroundColor(Gold).SetPressedForegroundColor(Gold)
-		.SetCheckedForegroundColor(Gold).SetCheckedHoveredForegroundColor(LobbyTextColor).SetCheckedPressedForegroundColor(Gold);
+	AutoUpdateStyle.SetForegroundColor(LobbyTextColor).SetHoveredForegroundColor(LobbyTextColor).SetPressedForegroundColor(LobbyTextColor)
+		.SetCheckedForegroundColor(LobbyTextColor).SetCheckedHoveredForegroundColor(LobbyTextColor).SetCheckedPressedForegroundColor(LobbyTextColor);
 	AutoUpdateStyle.SetPadding(FMargin(0,6)); AutoUpdateCheckBox->SetWidgetStyle(AutoUpdateStyle);
 	auto* AutoUpdateRow=WidgetTree->ConstructWidget<UHorizontalBox>(); AutoUpdateCheckBox->SetContent(AutoUpdateRow);
 	auto* IndicatorSize=WidgetTree->ConstructWidget<USizeBox>(); IndicatorSize->SetWidthOverride(28); IndicatorSize->SetHeightOverride(28);
 	AutoUpdateRow->AddChildToHorizontalBox(IndicatorSize)->SetVerticalAlignment(VAlign_Center);
 	auto* Indicator=WidgetTree->ConstructWidget<UBorder>(); Indicator->SetBrush(FSlateRoundedBoxBrush(Ink,3.f,Gold,2.f));
 	Indicator->SetPadding(FMargin(0)); Indicator->SetVerticalAlignment(VAlign_Center); IndicatorSize->SetContent(Indicator);
-	AutoUpdateMark=Label(TEXT("\u2713"),22); AutoUpdateMark->SetAutoWrapText(false); AutoUpdateMark->SetJustification(ETextJustify::Center);
-	AutoUpdateMark->SetColorAndOpacity(Gold); AutoUpdateMark->SetRenderOpacity(0); Indicator->SetContent(AutoUpdateMark);
+	AutoUpdateMark=WidgetTree->ConstructWidget<UTextBlock>(); AutoUpdateMark->SetText(FText::FromString(TEXT("\u2713")));
+	AutoUpdateMark->SetFont(FCoreStyle::GetDefaultFontStyle(TEXT("Regular"),22));
+	AutoUpdateMark->SetAutoWrapText(false); AutoUpdateMark->SetJustification(ETextJustify::Center);
+	AutoUpdateMark->SetColorAndOpacity(LobbyTextColor); AutoUpdateMark->SetRenderOpacity(0); Indicator->SetContent(AutoUpdateMark);
 	auto* AutoUpdateCaption=AutoUpdateRow->AddChildToHorizontalBox(Label(TEXT("Automatically download and install updates"),18));
 	AutoUpdateCaption->SetPadding(FMargin(10,0,0,0)); AutoUpdateCaption->SetVerticalAlignment(VAlign_Center);
 	AutoUpdateCaption->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
@@ -285,7 +322,21 @@ void UACELoginWidget::EnsureDefaultLayout()
 	UpdateInstallHelp=Label(PLATFORM_LINUX?TEXT("Extract each release into a new folder. Saved settings and DAT files are kept separately."):ACEUpdates::InstallationNotice(PLATFORM_ANDROID),18,true); AddLine(Updates,UpdateInstallHelp);
 	Row(Updates,{{TEXT("Release notes"),TEXT("updatenotes")},{TEXT("Back to play"),TEXT("play")}});
 	auto* PluginPanel=WidgetTree->ConstructWidget<UACEPluginPanel>();
-	auto* PluginSize=WidgetTree->ConstructWidget<USizeBox>(); PluginSize->SetHeightOverride(600); PluginSize->SetContent(PluginPanel); Pages->AddChild(PluginSize);
+	Pages->AddChild(PluginPanel);
+	UVerticalBox* Accounts; Pages->AddChild(Card(Accounts));
+	AddLine(Accounts,Label(TEXT("Manage accounts"),30));
+	AddLine(Accounts,Label(TEXT("Save your login details here, then choose an account on Play."),18,true));
+	ManagedAccountList=WidgetTree->ConstructWidget<UScrollBox>(); ManagedAccountList->SetScrollbarThickness(FVector2D(8,8));
+	auto* ManagedSlot=Accounts->AddChildToVerticalBox(ManagedAccountList); ManagedSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); ManagedSlot->SetPadding(FMargin(0,0,0,12));
+	auto* Credentials=WidgetTree->ConstructWidget<UHorizontalBox>(); AddLine(Accounts,Credentials,0);
+	auto* UserColumn=WidgetTree->ConstructWidget<UVerticalBox>(); auto* UserSlot=Credentials->AddChildToHorizontalBox(UserColumn);
+	UserSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); UserSlot->SetPadding(FMargin(0,0,16,0));
+	auto* PasswordColumn=WidgetTree->ConstructWidget<UVerticalBox>(); Credentials->AddChildToHorizontalBox(PasswordColumn)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+	AccountBox=Field(UserColumn,TEXT("Username"),TEXT("AccountBox"));
+	PasswordBox=Field(PasswordColumn,TEXT("Password"),TEXT("PasswordBox"),true);
+	Row(Accounts,{{TEXT("Save account"),TEXT("saveaccount")},{TEXT("New account"),TEXT("newaccount")},{TEXT("Remove account"),TEXT("removeaccount")}});
+	AddLine(Accounts,Label(PLATFORM_LINUX ? TEXT("Passwords are kept for this session only. Enter them here after restarting.") : TEXT("Accounts are saved securely on this device."),14,true));
+	Row(Accounts,{{TEXT("Back to play"),TEXT("play")}});
 	// Inline destructive-action confirmation is also fully usable with VR pointers.
 	FooterSize=WidgetTree->ConstructWidget<USizeBox>(); FooterSize->SetWidthOverride(1028);
 	auto* FooterSlot=Canvas->AddChildToCanvas(FooterSize); FooterSlot->SetAnchors(FAnchors(.5f,1)); FooterSlot->SetAlignment(FVector2D(.5f,1)); FooterSlot->SetPosition(FVector2D(0,-18)); FooterSlot->SetAutoSize(true);
@@ -293,8 +344,9 @@ void UACELoginWidget::EnsureDefaultLayout()
 	UVerticalBox* Confirmation; ConfirmPanel=Card(Confirmation); AddLine(Footer,ConfirmPanel);
 	ConfirmText=Label(TEXT(""),18); AddLine(Confirmation,ConfirmText);
 	Row(Confirmation,{{TEXT("Remove"),TEXT("confirmremove")},{TEXT("Keep"),TEXT("cancelremove")}}); ConfirmPanel->SetVisibility(ESlateVisibility::Collapsed);
-	auto* StatusBorder=WidgetTree->ConstructWidget<UBorder>(); StatusBorder->SetBrush(FSlateRoundedBoxBrush(Ink,7.f)); StatusBorder->SetPadding(FMargin(12,10));
-	StatusText=Label(TEXT("Ready"),18); StatusBorder->SetContent(StatusText); AddLine(Footer,StatusBorder,0);
+	auto* StatusBorder=WidgetTree->ConstructWidget<UBorder>(); StatusBorder->SetBrush(FSlateRoundedBoxBrush(Ink,0.f)); StatusBorder->SetPadding(FMargin(12,10));
+	StatusText=Label(TEXT(""),18); StatusBorder->SetContent(StatusText); AddLine(Footer,StatusBorder,0);
+	StatusBorder->SetVisibility(ESlateVisibility::Collapsed);
 	auto* BuildLabel=Label(FString::Printf(TEXT("Version %s"),ACEClientBuild::Version),16);
 	BuildLabel->SetJustification(ETextJustify::Right); AddLine(Footer,BuildLabel,0);
 	// Retained for Blueprint/test compatibility; retail DAT owns character selection.
@@ -327,7 +379,7 @@ void UACELoginWidget::NativeConstruct()
 		FString Cached, Error;
 		if (IFileManager::Get().FileSize(*ACELoginProfile::DirectoryCachePath()) <= 2*1024*1024
 			&& FFileHelper::LoadFileToString(Cached,*ACELoginProfile::DirectoryCachePath())) ACELoginProfile::ParseDirectory(Cached,Directory,Error);
-		SetStatus(TEXT("Select a server and account, then launch."));
+		SetStatus(FString());
 		ValidateGameFiles();
 	}
 #if PLATFORM_LINUX
@@ -359,6 +411,21 @@ void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 	if (UpdatePollTime<=0)
 	{
 		UpdatePollTime=.25f;
+		// The launcher can open before the asynchronous DAT load completes.
+		// Install the retail fonts once ready without rebuilding the form.
+		if(!bRetailFontsReady)if(auto* GI=GetGameInstance())if(auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();Dat&&Dat->IsDatReady())
+		{
+			WidgetTree->ForEachWidget([Dat](UWidget* Widget)
+			{
+				if(auto* Text=Cast<UACERetailTextBlock>(Widget))
+					Text->SetRetailElement(Dat->GetUiResources(),nullptr,FVector2D(1.25),0,false);
+			});
+			for(const auto& Art:LobbyArtwork) if(auto* Texture=Dat->GetUiResources()->ResolveTexture(Art.Value))
+			{
+				Art.Key->SetBrushFromTexture(Texture); Art.Key->SetOpacity(.65f);
+			}
+			bRetailFontsReady=true;
+		}
 		if (Updater)
 		{
 			Updater->PollInstall();
@@ -369,19 +436,36 @@ void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 		}
 		RefreshUpdateControls();
 	}
-	// Scale text and pointer targets together. The same design fits a 720p window,
-	// a high-DPI/fullscreen desktop, and the dedicated 1100x900 headset surface.
+	if(StyledPage!=Pages->GetActiveWidgetIndex())
+	{
+		StyledPage=Pages->GetActiveWidgetIndex();
+		const int32 PageForTab[]={0,6,2,3,4,5};
+		for(int32 I=0;I<NavigationButtons.Num();++I) ButtonStyle(NavigationButtons[I],PageForTab[I]==StyledPage);
+	}
+	// Scale the whole layout together, allowing a narrower stacked Play page.
+	// Do not impose a minimum scale that would push controls off small screens.
 	const FVector2D View=Geometry.GetLocalSize();
-	const float Scale=FMath::Clamp(float(FMath::Min(View.X/1100.,View.Y/900.)),.7f,2.5f);
+	if(View.X<=0 || View.Y<=0) return;
+	const float Scale=FMath::Clamp(float(FMath::Min(View.X/800.,View.Y/960.)),.1f,2.5f);
 	if (ResponsiveScale && !FMath::IsNearlyEqual(ResponsiveScale->GetUserSpecifiedScale(),Scale)) ResponsiveScale->SetUserSpecifiedScale(Scale);
-	const float Width=FMath::Clamp(float(View.X)/Scale-72.f,280.f,1160.f);
+	const float Width=FMath::Clamp(float(View.X)/Scale-48.f,280.f,1160.f);
 	if (DashboardSize && !FMath::IsNearlyEqual(Width,LayoutWidth,1.f))
 	{
 		LayoutWidth=Width; DashboardSize->SetWidthOverride(Width); FooterSize->SetWidthOverride(Width);
-		PlayLayout->SetWrapSize(Width);
 		const bool Narrow=Width<900.f;
-		SidebarSize->SetWidthOverride(Narrow?Width:280.f); DetailSize->SetWidthOverride(Narrow?Width:Width-301.f);
+		PlayLayout->SetOrientation(Narrow?Orient_Vertical:Orient_Horizontal);
+		SidebarSize->SetWidthOverride(Narrow?Width:280.f);
+		if(Narrow) SidebarSize->SetHeightOverride(320); else SidebarSize->ClearHeightOverride();
+		Cast<UStackBoxSlot>(SidebarSize->Slot)->SetPadding(Narrow?FMargin(0,0,0,16):FMargin(0,0,20,0));
 	}
+	// Reserve the actual footer height; errors and confirmation buttons must
+	// never cover Launch or require scrolling the main page to reach it.
+	if (DashboardSize && FooterSize)
+		if (auto* DashboardSlot=Cast<UCanvasPanelSlot>(DashboardSize->Slot))
+		{
+			const FMargin Offsets(-Width*.5f,24,Width,FooterSize->GetDesiredSize().Y+34.f);
+			if(DashboardSlot->GetOffsets()!=Offsets) DashboardSlot->SetOffsets(Offsets);
+		}
 }
 
 void UACELoginWidget::OnAutoUpdateChanged(bool bChecked)
@@ -403,7 +487,7 @@ void UACELoginWidget::RefreshUpdateControls()
 	FString Text=Updater->Message;
 	if (State==EACEUpdateState::Downloading) Text+=FString::Printf(TEXT(" %.0f%%"),Updater->Progress()*100);
 	if (UpdateText->GetText().ToString()!=Text) UpdateText->SetText(FText::FromString(Text));
-	UpdateText->SetColorAndOpacity(State==EACEUpdateState::InstallNotice?Gold:LobbyTextColor);
+	UpdateText->SetColorAndOpacity(LobbyTextColor);
 	UpdateInstallHelp->SetVisibility(State==EACEUpdateState::Ready || State==EACEUpdateState::InstallNotice || State==EACEUpdateState::Installing?ESlateVisibility::Collapsed:ESlateVisibility::HitTestInvisible);
 	UpdateProgress->SetPercent(State==EACEUpdateState::Ready || State==EACEUpdateState::InstallNotice || State==EACEUpdateState::Installing?1.f:Updater->Progress());
 	CheckUpdateButton->SetIsEnabled(!Busy && State!=EACEUpdateState::Checking);
@@ -461,10 +545,13 @@ void UACELoginWidget::SelectServer(const FString& Id)
 
 void UACELoginWidget::RefreshAccounts()
 {
-	AccountList->ClearChildren();
-	for (const auto& A:Profile.Accounts)
-		Cast<UScrollBoxSlot>(AccountList->AddChild(ActionButton(A.Username,TEXT("selectaccount"),A.Id,A.Id==Profile.SelectedAccountId)))->SetPadding(FMargin(0,0,0,6));
-	if (!AccountList->GetChildrenCount()) AccountList->AddChild(Label(TEXT("Enter an account below to save your first login."),18,true));
+	for(auto* List:{AccountList.Get(),ManagedAccountList.Get()})
+	{
+		List->ClearChildren();
+		for (const auto& A:Profile.Accounts)
+			Cast<UScrollBoxSlot>(List->AddChild(ActionButton(A.Username,TEXT("selectaccount"),A.Id,A.Id==Profile.SelectedAccountId)))->SetPadding(FMargin(0,0,0,6));
+		if (!List->GetChildrenCount()) List->AddChild(Label(TEXT("Add a login on the Accounts tab."),18,true));
+	}
 }
 
 bool UACELoginWidget::StoreAccount()
@@ -503,7 +590,7 @@ void UACELoginWidget::DoLogin()
 	// deferred, so portal readiness alone can still lead to an empty world.
 	if (!ValidateGameFiles()) return;
 	if (!Profile.SelectedServer()) { SetStatus(TEXT("Choose a server first.")); return; }
-	if (!StoreAccount()) return;
+	if (!StoreAccount()) { Pages->SetActiveWidgetIndex(6); return; }
 	const auto* S=Profile.SelectedServer();
 	if (Client && S)
 	{
@@ -608,6 +695,7 @@ void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 		return;
 	}
 	if (Action==TEXT("plugins")) { Pages->SetActiveWidgetIndex(5); return; }
+	if (Action==TEXT("accounts")) { Pages->SetActiveWidgetIndex(6); return; }
 	if (Action==TEXT("updates")) { Pages->SetActiveWidgetIndex(4); RefreshUpdateControls(); return; }
 	if (Updater)
 	{

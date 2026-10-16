@@ -116,6 +116,8 @@ void FACESession::Disconnect()
 	ChessBoardGuid = 0; ChessJoinPendingUntil = 0.0;
 	WorldObjects.Reset();
 	ObjectVisibilityDeadlines.Reset();
+	ClosedContainerItemDeadlines.Reset();
+	NextClosedContainerExpiryAt = 0.;
 	PendingObjectPhysicsEvents.Reset();
 	PendingObjectPhysicsBytes = 0;
 	LastObjectPhysicsExpiryAt = 0.;
@@ -245,6 +247,8 @@ void FACESession::RequestLogOff()
 void FACESession::ClearWorldState()
 {
 	ObjectVisibilityDeadlines.Reset();
+	ClosedContainerItemDeadlines.Reset();
+	NextClosedContainerExpiryAt = 0.;
 	PendingObjectPhysicsEvents.Reset();
 	PendingObjectPhysicsBytes = 0;
 	LastObjectPhysicsExpiryAt = 0.;
@@ -482,6 +486,9 @@ void FACESession::Tick(float DeltaSeconds)
 	}
 
 	PollSockets();
+	// Process ownership/reopen receipts before retiring closed-container records.
+	// This runs even when UCM or world rendering is stopped.
+	ExpireClosedContainerItems(FPlatformTime::Seconds());
 	// Let a queued completion win over the fallback timeout.
 	CheckPendingUseTimeout(FPlatformTime::Seconds());
 	MaintainReceivePort(FPlatformTime::Seconds());
@@ -628,6 +635,13 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 	}
 
 	const bool bEncrypted = EnumHasAnyFlags(Flags, EACEPacketHeaderFlags::EncryptedChecksum);
+	// Retail SharedNet::ProcessNewSeqNum rejects already received encrypted
+	// sequences before decrypting them. Their ISAAC key was consumed on first
+	// receipt; searching again advances the key window and emits false CRC errors.
+	// Standalone NAKs reuse the current sequence and still need to be serviced.
+	const auto SequenceFlags = Flags & ~(EACEPacketHeaderFlags::EncryptedChecksum | EACEPacketHeaderFlags::Retransmission);
+	if (bEncrypted && Sequence != 0 && SequenceFlags != EACEPacketHeaderFlags::RequestRetransmit
+		&& (Sequence <= LastReceivedPacketSequence || OutOfOrderS2CPackets.Contains(Sequence))) return;
 	if (bEncrypted && !IssacServer && State == EACESessionState::AwaitConnectRequest)
 	{
 		// UDP can deliver an encrypted auth rejection before the cleartext seed
@@ -2249,6 +2263,7 @@ void FACESession::HandleObjectDelete(FACEBinaryReader& Reader)
 void FACESession::DeleteWorldObject(int32 Guid)
 {
 	ObjectVisibilityDeadlines.Remove(Guid);
+	ClosedContainerItemDeadlines.Remove(Guid);
 	// ObjectDelete = leave the 3D world. Keep WorldObjects only for items the player still
 	// owns (main pack / side pack / wielded). Do NOT keep corpse/chest ViewContents rows or
 	// arbitrary ContainerId — that hid lifestones/chests after false inventory parses.
@@ -2315,6 +2330,7 @@ void FACESession::DeleteWorldObject(int32 Guid)
 void FACESession::MaintainWorldObjectVisibility(double Now, TFunctionRef<bool(int32)> IsCellInPVS)
 {
 	ExpireObjectPhysicsEvents(Now);
+	ExpireClosedContainerItems(Now);
 	if (PlayerGuid == 0) return;
 	// Retail CPhysicsObj::prepare_to_leave_visibility and CObjectMaint::UseTime
 	// retain lost objects for 25 seconds. Servers then forget the observer without
@@ -4988,6 +5004,7 @@ void FACESession::SendNoLongerViewingContents(int32 ContainerGuid)
 	{
 		OpenVendorGuid = 0;
 	}
+	ClearContainerContents(ContainerGuid);
 }
 
 void FACESession::SendBuyItems(int32 VendorGuid, const TArray<TPair<int32, int32>>& AmountAndObjectId)
@@ -6070,6 +6087,9 @@ void FACESession::HandleViewContents(FACEBinaryReader& Reader)
 		Entry.ItemGuid = static_cast<int32>(Reader.ReadUInt32());
 		Entry.ContainerType = static_cast<int32>(Reader.ReadUInt32());
 		Items.Add(Entry);
+		// Retail OnViewContents removes the newly accessible items from the
+		// destruction queue, including descriptions that have not arrived yet.
+		ClosedContainerItemDeadlines.Remove(Entry.ItemGuid);
 
 		// Keep ObjectCreate records consistent when ViewContents arrives first or without Container flag.
 		if (FACEWorldObject* Existing = WorldObjects.Find(Entry.ItemGuid))
@@ -6117,6 +6137,12 @@ void FACESession::HandleViewContents(FACEBinaryReader& Reader)
 
 	if (!bIsPlayerInventory)
 	{
+		if (OpenExternalContainerGuid && OpenExternalContainerGuid != RootGuid)
+		{
+			const int32 Previous = OpenExternalContainerGuid;
+			OnCloseGroundContainer.Broadcast(Previous);
+			ClearContainerContents(Previous);
+		}
 		OpenExternalContainerGuid = RootGuid;
 		OnViewContentsExternal.Broadcast(RootGuid);
 	}
@@ -6151,8 +6177,47 @@ void FACESession::ClearContainerContents(int32 ContainerGuid)
 		TArray<FACEContainerItemRef> Contents;
 		ContainerContents.RemoveAndCopyValue(ContainerGuid, Contents);
 		for (const auto& Ref : Contents)
-			if (Ref.ContainerType != 0 && Ref.ItemGuid != ContainerGuid) ClearContainerContents(Ref.ItemGuid);
+		{
+			if (!Ref.ItemGuid || Ref.ItemGuid == ContainerGuid || Ref.ItemGuid == PlayerGuid) continue;
+			// ACE deliberately sends no ObjectDelete for leftover loot on close.
+			// Match ClientUISystem::SetGroundObject / CObjectMaint::AddObjectToBeDestroyed
+			// instead of retaining every corpse's descriptors for the entire login.
+			const double Deadline = FPlatformTime::Seconds() + 25.;
+			ClosedContainerItemDeadlines.Add(Ref.ItemGuid, Deadline);
+			if (!NextClosedContainerExpiryAt || Deadline < NextClosedContainerExpiryAt) NextClosedContainerExpiryAt = Deadline;
+			if (Ref.ContainerType != 0) ClearContainerContents(Ref.ItemGuid);
+		}
 	}
+}
+
+void FACESession::ExpireClosedContainerItems(double Now)
+{
+	if (ClosedContainerItemDeadlines.IsEmpty() || Now < NextClosedContainerExpiryAt) return;
+	NextClosedContainerExpiryAt = 0.;
+	TArray<int32> Expired;
+	for (auto It = ClosedContainerItemDeadlines.CreateIterator(); It; ++It)
+	{
+		if (Now < It.Value())
+		{
+			if (!NextClosedContainerExpiryAt || It.Value() < NextClosedContainerExpiryAt) NextClosedContainerExpiryAt = It.Value();
+			continue;
+		}
+		const int32 Guid = It.Key();
+		It.RemoveCurrent();
+		const auto* Object = WorldObjects.Find(Guid);
+		if (!Object) continue;
+		// UIQueue ownership may arrive after SmartboxQueue closes/deletes the
+		// corpse. Recheck live ownership, including whole bags and equipped items,
+		// before forgetting anything. A refreshed world drop also remains visible.
+		const int32 Root = ResolveContainerRoot(Guid);
+		if ((PlayerGuid && (Root == PlayerGuid || Object->WielderId == PlayerGuid || Object->ParentGuid == PlayerGuid))
+			|| TradeSelfItems.Contains(Guid) || TradePartnerItems.Contains(Guid)
+			|| (!Object->ContainerId && (Object->bHasPosition || Object->ParentGuid || Object->WielderId))) continue;
+		Expired.Add(Guid);
+	}
+	// Evaluate every ownership chain before deleting parents. Broadcast ordinary
+	// object removal so selection, presentation and plugin appraisal caches retire.
+	for (int32 Guid : Expired) DeleteWorldObject(Guid);
 }
 
 bool FACESession::CanVendorBuyItem(const FACEWorldObject& Item) const

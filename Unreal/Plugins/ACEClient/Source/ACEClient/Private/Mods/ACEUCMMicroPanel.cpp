@@ -59,9 +59,6 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
             Host->SaveCurrentProfile(P->Id,false);
         });
     }
-    Rows->AddSlot().AutoHeight().Padding(2,6)[SNew(SACEPluginText).AutoWrapText(true)
-        .Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
-        .Text_Lambda([UCM](){auto P=UCM();return FText::FromString(P?P->Status:TEXT("Enable UCM in Plugins."));})];
     Rows->AddSlot().AutoHeight().Padding(2,4)[SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false)
         .HAlign(HAlign_Center).ContentPadding(FMargin(8,8))
         .OnClicked_Lambda([Host](){if(Host.IsValid())Host->TogglePluginWindow(TEXT("ucm.log"));return FReply::Handled();})

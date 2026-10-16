@@ -229,6 +229,8 @@ namespace ACEUCMPanelPrivate
                 Grid->AddSlot(LootNarrow?0:Index%2,LootNarrow?Index:Index/2)[Tile(CardBox)];++Index;
             }
             Add(Grid);
+            Add(Toggle(TEXT("loot_priority"),TEXT("Prioritize loot"),TEXT("Finish nearby corpses before selecting another combat target.")));
+            Add(Toggle(TEXT("nav_priority"),TEXT("Prioritize navigation"),TEXT("Prefer route navigation over combat. Recovery, buffs and prioritized looting still take precedence.")));
             Add(Toggle(TEXT("idle_peace"),TEXT("Peace mode when idle"),TEXT("Enter peace mode when no nearby monsters need attention.")));
             Add(Toggle(TEXT("suspend_world_rendering"),TEXT("Suspend 3D view while UCM runs"),TEXT("Desktop only. Keeps UCM, networking and the interface active.")));
         }
@@ -376,25 +378,6 @@ namespace ACEUCMPanelPrivate
             }
         }
         bool ACEInventoryRulesUsable(const FACEWorldObject& O)const{return !(O.ItemUseable&1)&&!(O.ItemType&(ACEItemType::Container|ACEItemType::SpellComponents|ACEItemType::Money));}
-        void ManaSources()
-        {
-            Heading(TEXT("Mana source items"),TEXT("Only checked individual items may be consumed to fill empty stones. Equipped and retained items are excluded. An empty selection consumes nothing."));
-            Add(Button(TEXT("Refresh inventory"),[this](){Rebuild();}));
-            Add(Button(TEXT("Clear mana source selection"),[this](){P()->SetArrayField(TEXT("mana_source_items"),{});Save();Rebuild();}));
-            auto* C=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
-            for(const auto& O:C->GetWorldObjects())
-            {
-                const auto* A=Host->GetPluginAppraisals().Find(O.Guid);
-                if(!Host->IsOwnedPluginItem(O)||O.WielderId||O.CurrentWieldedLocation
-                    ||(O.ObjectDescriptionFlags&ACEObjectDescFlag::Retained)||(O.ItemType&(ACEItemType::ManaStone|ACEItemType::Container))
-                    ||!A||!A->bSuccess||A->IntProperties.FindRef(107)<=0||A->IntProperties.FindRef(108)<=0)continue;
-                const uint32 Id=uint32(O.Guid);
-                auto Row=SNew(SHorizontalBox);Row->AddSlot().AutoWidth()[Icon(O.IconId)];
-                Row->AddSlot().FillWidth(1).Padding(8,0).VAlign(VAlign_Center)[Text(FString::Printf(TEXT("%s - %d mana"),*ACERetailObjectNames::Name(O),A->IntProperties.FindRef(107)))];
-                Row->AddSlot().AutoWidth()[ChoiceButton(TEXT("Allow consumption"),[this,Id](){return Has(TEXT("mana_source_items"),Id);},[this,Id](){ToggleId(TEXT("mana_source_items"),Id);})];
-                Add(Tile(Row));
-            }
-        }
         void MonsterEquipment(const TSharedPtr<FJsonObject>& Rule,bool Offhand,bool DefaultMelee=false)
         {
             const TCHAR* Key=DefaultMelee?(Offhand?TEXT("melee_secondary_equip"):TEXT("melee_weapon")):(Offhand?TEXT("secondary_equip"):TEXT("weapon"));
@@ -765,8 +748,8 @@ namespace ACEUCMPanelPrivate
                 Add(Toggle(TEXT("mana_charges_when_off"),TEXT("Recharge equipment while UCM is stopped"),TEXT("Uses configured mana supplies only; does not start combat, buffs or navigation.")));
                 Add(Toggle(TEXT("item_mana"),TEXT("Recharge equipment"),TEXT("Use filled mana stones / charges on the player when equipped item mana is low."),true));
                 Slider(TEXT("item_mana_threshold"),TEXT("Equipment mana threshold"),0,99,20,FLinearColor(.2f,.55f,1),TEXT("%"));
-                Add(Toggle(TEXT("fill_mana_stones"),TEXT("Automatically fill empty mana stones"),TEXT("Consumes only the individual mana source items selected below. Filled stones can then recharge all equipped gear through the player.")));
-                ManaSources();
+                Add(Toggle(TEXT("fill_mana_stones"),TEXT("Automatically fill empty mana stones"),TEXT("While looting, pick up unwanted magical items to fill empty stones. Loot rules take precedence. Tinkered, inscribed, retained and equipped items are excluded; existing inventory is left alone.")));
+                Slider(TEXT("mana_tank_minimum"),TEXT("Minimum mana in source loot"),0,10000,1000,Accent,TEXT(""));
                 Inventory(true);
             }
             else if(Page==TEXT("Route"))
@@ -781,7 +764,6 @@ namespace ACEUCMPanelPrivate
                 Option(TEXT("route_preview"),TEXT("Show route in world"),TEXT("Updates as points are added or edited."),true);
                 Option(TEXT("follow_corners"),TEXT("Follow around corners"),TEXT("Imported follow routes retain the target player's observed path."));
                 Option(TEXT("loop_route"),TEXT("Loop route"),TEXT("Repeat from the first point when the route finishes."));
-                Option(TEXT("nav_priority"),TEXT("Prefer navigation over combat"),TEXT("Recovery, buffing and nearby looting still run before navigation."));
                 Option(TEXT("reverse_route"),TEXT("Reverse at route ends"),TEXT("VT Linear mode: walk back along the same points. Takes priority over Loop."));Add(Options);
                 auto Buttons=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(5,5));
                 Buttons->AddSlot()[Button(TEXT("+ Walk here"),[this](){Host->RecordRouteAction(TEXT("walk"));Rebuild();})];

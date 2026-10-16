@@ -15,6 +15,7 @@ local ghost_attempts,ghost_hp={},{ }
 local corpse_pending=nil
 local mana_refill_pending=nil
 local mana_fill_pending,pet_refill_pending=nil,nil
+local mana_sources={} -- only junk whose corpse-to-inventory receipt was confirmed
 local helper_pending=nil
 local debuff_pending=nil
 local debuff_scan=nil
@@ -732,7 +733,7 @@ local function meta_action(a,s,p)
    kit_min_success=0,kits_in_magic=true,kit_peace=false,helper_health_threshold=0,helper_stamina_threshold=0,helper_mana_threshold=0,
    helper_health_range=74.5,helper_stamina_range=74.5,helper_mana_range=40,ring_range=5,ring_min_targets=4,debuff_refresh=5,debuff_fallback=false,
    split_peas=true,component_critical=4,component_normal=20,component_idle=20,fast_cast_buffs=true,switch_debuff_wand=true,
-   summon_pets=false,pet_range_mode=0,pet_range=5,pet_min_targets=1,refill_summons=false,summon_refill_charges=5,fill_mana_stones=false,
+   summon_pets=false,pet_range_mode=0,pet_range=5,pet_min_targets=1,refill_summons=false,summon_refill_charges=5,fill_mana_stones=false,mana_tank_minimum=1000,
    protection_profile=2,bane_profile=2,protection_custom='ALL',bane_custom='ALL',target_select=1,target_angle_range=5,minimum_range=0,monster_attempts=4,monster_blacklist_seconds=120,corpse_attempts=30,corpse_blacklist_seconds=200,use_arcs=1,arc_range=5,debuff_each_first=1}
   local v=meta.options[a.key];if v==nil then v=p[a.key] end;if v==nil then v=defaults[a.key] end
   if a.key=='combat' then v=v~='off' end
@@ -959,6 +960,35 @@ local function corpse_owner_name(name)
  return name
 end
 local rule_match=lootmatch
+-- VT hv classifies ordinary loot first, then dy accepts otherwise unwanted
+-- magical loot with workmanship and ManaTankMinimumMana (default 1000).
+-- It queues only items it actually looted, never arbitrary carried equipment.
+local function mana_source_candidate(v,p,option)
+ local ints=v.int_properties or {}
+ if not v.identified or v.equipped or v.retained or salvage_protected(v)
+  or band(v.type,0x80200)~=0 or band(v.icon_effects or ints['218103824'],1)==0
+  or (v.workmanship or ints['105'] or 0)<=0 or (v.max_mana or 0)<=0
+  or (v.mana or 0)<math.max(1,option('mana_tank_minimum',1000)) then return false end
+ if contains(p.weapon_items,v.id) or contains(p.weapons,v.wcid) or contains(p.consumables,v.wcid)
+  or contains(p.item_buff_targets,v.id) or v.id==p.melee_weapon or v.id==p.melee_secondary_equip then return false end
+ for _,b in ipairs(p.buff_items or {}) do if b.name==v.name then return false end end
+ for _,a in ipairs(p.assist_items or {}) do if a.name==v.name then return false end end
+ return true
+end
+local function empty_mana_stone(v,p)
+ return v.identified and v.usable and v.mana_empty and band(v.type,0x80000)~=0
+  and allowed(p.consumables,v.wcid)
+end
+local function mana_source_demand(inventory,p,option)
+ if not option('fill_mana_stones',false) or mana_fill_pending then return 0 end
+ local empty,reserved=0,0
+ for _,v in ipairs(inventory) do
+  if empty_mana_stone(v,p) then empty=empty+1 end
+  local q=mana_sources[v.id]
+  if q and q.wcid==v.wcid and q.count==(v.count or 1) and v.resource_available~=false and mana_source_candidate(v,p,option) then reserved=reserved+1 end
+ end
+ return math.max(0,empty-reserved)
+end
 local function equipment_mana(s,p,inventory,option)
  if not activity_ready('item_mana') then return end
  if mana_fill_pending then
@@ -992,14 +1022,17 @@ local function equipment_mana(s,p,inventory,option)
   end
  end
  if option('fill_mana_stones',false) and s.time>=(until_time.mana_fill or 0) then
-  local stone,source
-  local sources={};for _,id in ipairs(p.mana_source_items or {}) do sources[id]=true end
+  local stone,source;local present={}
   for _,v in ipairs(inventory) do
-   if v.identified and v.usable and v.mana_empty and band(v.type,0x80000)~=0 and allowed(p.consumables,v.wcid) then stone=stone or v end
-   -- Explicit individual items, never all items of the same weenie class.
-   if sources[v.id] and v.identified and not v.equipped and not v.retained and v.resource_available~=false
-    and (v.mana or 0)>0 and (v.max_mana or 0)>0 and band(v.type,0x80200)==0 then source=source or v end
+   if empty_mana_stone(v,p) then stone=stone or v end
+   local q=mana_sources[v.id]
+   if q then
+    present[v.id]=true
+    if q.wcid==v.wcid and q.count==(v.count or 1) and v.resource_available~=false and mana_source_candidate(v,p,option) then source=source or v
+    else mana_sources[v.id]=nil end -- A player changed/protected the item after pickup.
+   end
   end
+  for id in pairs(mana_sources) do if not present[id] then mana_sources[id]=nil end end
   if stone and source and stone.id~=source.id then
    mana_fill_pending={stone=stone.id,source=source.id,serial=s.action_serial or 0,deadline=s.time+15}
    return {action='apply_item',item=stone.id,target=source.id,status='Filling '..stone.name..' from '..source.name..' (consumes item)'}
@@ -2053,12 +2086,15 @@ local function tick(s,p)
       received=i
      end end
      if not received then return failed('Loot was merged or changed; review inventory before applying a destructive rule') end
-     loot_jobs[#loot_jobs+1]={id=received.id,count=loot_pending.amount,action=loot_pending.after,wcid=loot_pending.wcid}
+     if loot_pending.after=='mana_source' then
+      mana_sources[received.id]={count=loot_pending.amount,wcid=loot_pending.wcid}
+     else loot_jobs[#loot_jobs+1]={id=received.id,count=loot_pending.amount,action=loot_pending.after,wcid=loot_pending.wcid} end
     end
     if s.container~=loot_pending.container then corpses[loot_pending.container]=s.time+30 end
     loot_pending=nil
    end
- if not loot_full and option('looting',false) and (#(p.loot_rules or {})>0 or option('read_unknown_scrolls',false)) then
+ local need_mana_source=mana_source_demand(inventory,p,option)>0
+ if not loot_full and option('looting',false) and (#(p.loot_rules or {})>0 or option('read_unknown_scrolls',false) or option('fill_mana_stones',false)) then
   if s.container and s.container~=0 then
    if s.container_is_corpse==false then return result(nil,'Waiting for the open container to close') end
    if s.contents_ready==false then return result(nil,'Waiting for corpse item descriptions') end
@@ -2082,7 +2118,7 @@ local function tick(s,p)
    end
    while loot_scan.item<=#contents do
     local item=contents[loot_scan.item]
-    local item_rules=rules
+    local item_rules=rules;local resolved=true
     -- VT considers learnable unknown scrolls before the user's loot rules.
     -- Carried copies suppress duplicates while a new scroll waits to be read.
     if option('read_unknown_scrolls',false) and item.object_class==42 and item.scroll_can_learn and (item.spell or 0)>0 and not learned[item.spell] and not carried_scrolls[item.spell] then
@@ -2105,7 +2141,7 @@ local function tick(s,p)
       if (item_attempts[key] or 0)>=3 and s.time>=(until_time[key] or 0) then return failed('Unable to appraise loot; check appraisal skills') end
       -- VT's ID queue advances while earlier replies are pending. Preserve
       -- first-match rule order for this item, but keep examining other items.
-      loot_scan.waiting=true
+      loot_scan.waiting=true;resolved=false
       if pending_appraisals<4 and s.time>=(until_time[key] or 0) then
        item_attempts[key]=(item_attempts[key] or 0)+1;until_time[key]=s.time+10
        loot_scan.item=loot_scan.item+1;loot_scan.rule=1
@@ -2124,6 +2160,24 @@ local function tick(s,p)
       break
      end
      loot_scan.rule=loot_scan.rule+1
+    end
+    -- NoLoot/Skip and satisfied KeepUpTo rules are mana-donor candidates in
+    -- VT, after normal loot and scroll handling. One junk item per empty stone.
+    if resolved and need_mana_source and band(item.icon_effects or (item.int_properties or {})['218103824'],1)~=0
+     and not item.retained and not item.equipped and band(item.type,0x80200)==0 then
+     if not item.identified then
+      local key='id'..item.id;loot_scan.waiting=true
+      if (item_attempts[key] or 0)>=3 and s.time>=(until_time[key] or 0) then return failed('Unable to appraise mana-source loot') end
+      if pending_appraisals<4 and s.time>=(until_time[key] or 0) then
+       item_attempts[key]=(item_attempts[key] or 0)+1;until_time[key]=s.time+10
+       loot_scan.item=loot_scan.item+1;loot_scan.rule=1
+       return {action='identify',item=item.id,status='Inspecting '..item.name..' for mana stone filling'}
+      end
+     elseif mana_source_candidate(item,p,option) then
+      local before={};for _,v in ipairs(inventory) do before[v.id]=true end
+      loot_scan={};loot_pending={container=s.container,before=before,amount=1,id=item.id,count=item.count,wcid=item.wcid,expected=(owned[item.wcid] or 0)+1,expires=s.time+10,after='mana_source'}
+      return {action='loot',item=item.id,amount=1,status='Looting '..item.name..' to fill an empty mana stone'}
+     end
     end
     loot_scan.item=loot_scan.item+1;loot_scan.rule=1
    end
@@ -2232,7 +2286,7 @@ local function tick(s,p)
   end
   end
  else inventory_salvage_scan={} end
- if not loot_full and option('looting',false) and (#(p.loot_rules or {})>0 or option('read_unknown_scrolls',false)) then
+ if not loot_full and option('looting',false) and (#(p.loot_rules or {})>0 or option('read_unknown_scrolls',false) or need_mana_source) then
   for _,c in ipairs(s.corpses or {}) do if c.line_of_sight~=false and c.distance<=option('loot_range',15) and s.time>=(corpses[c.id] or 0) then
    if (c.ownership_available or option('loot_only_rare',false)) and not c.identified then return assess(c) end
    local permitted=true
@@ -2880,7 +2934,7 @@ return function(s,p)
   route_pending=nil;loot_pending=nil;loot_full=nil;recovery_pending=nil;buff_item_pending=nil
   corpse_pending=nil;purchase_pending=nil;note_pending=nil;mana_refill_pending=nil;mana_fill_pending=nil;pet_refill_pending=nil;helper_pending=nil;debuff_pending=nil;debuff_scan=nil;pea_pending=nil;pet_pending=nil;dispel_pending=nil
   last_cast=nil;unavailable_spells={};forced_buff=nil;buff_skips={};buff_recast_until=0;other_job=nil
-  loot_scan={};loot_jobs={};loot_job_pending=nil;scroll_reads={};combine_pending=nil;inventory_salvage_scan={};inventory_salvage_blocked={}
+  loot_scan={};loot_jobs={};loot_job_pending=nil;mana_sources={};scroll_reads={};combine_pending=nil;inventory_salvage_scan={};inventory_salvage_blocked={}
   retries={};until_time={};item_attempts={};corpses={};monster_failures={};monster_blacklist={};ghost_attempts={};ghost_hp={}
   follow_path={};follow_target=nil;follow_teleport=nil
   activity_pauses={};activity_pause_reasons={}

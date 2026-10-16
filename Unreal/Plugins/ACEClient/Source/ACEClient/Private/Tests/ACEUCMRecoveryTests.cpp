@@ -1,5 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "Misc/FileHelper.h"
 #include "Misc/ScopeExit.h"
 #include "Interfaces/IPluginManager.h"
@@ -19,7 +21,8 @@ bool FACEUCMFullBookTest::RunTest(const FString&)
 {
     FString Source,Error;FFileHelper::LoadFileToString(Source,*(IPluginManager::Get().FindPlugin(TEXT("ACEClient"))->GetBaseDir()/TEXT("ClientMods/ucm/main.lua")));
     auto* Dat=NewObject<UACEDatSubsystem>(NewObject<UGameInstance>());
-    if(!TestTrue(TEXT("Retail DAT opens for full spellbook regression"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+    FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+    if(!TestTrue(TEXT("Retail DAT opens for full spellbook regression"),Dat->LoadDatDirectory(DatDirectory)))return false;
     ON_SCOPE_EXIT{Dat->Deinitialize();};
     TArray<TSharedPtr<FJsonValue>> Book,Active;
     TSet<uint32> Categories;
@@ -84,7 +87,8 @@ bool FACEUCMRecoveryTest::RunTest(const FString&)
     auto Profile=[](){return RecoveryJson(TEXT(R"({"buffing":false,"recovery":true,"combat":"off","skill_margin":30})"));};
     auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;TestTrue(*Error,VM.Step(S,P,I,Error));return I?I:MakeShared<FJsonObject>();};
     auto* Dat=NewObject<UACEDatSubsystem>(NewObject<UGameInstance>());
-    if(!TestTrue(TEXT("Retail DAT opens for real recovery spell metadata"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+    FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+    if(!TestTrue(TEXT("Retail DAT opens for real recovery spell metadata"),Dat->LoadDatDirectory(DatDirectory)))return false;
     ON_SCOPE_EXIT{Dat->Deinitialize();};
     TMap<FString,TSharedPtr<FJsonObject>> Spells;
     for(uint32 Id=1;Id<7000;++Id)
@@ -458,29 +462,111 @@ bool FACEUCMResourcesTest::RunTest(const FString&)
         S->SetNumberField(TEXT("time"),132);S->SetNumberField(TEXT("action_error"),0);
         TestEqual(TEXT("Refill can retry after backoff"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("apply_item")));
     }
+    const auto PrepareLoot=[&](auto S,auto P)
     {
-        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("refill_summons"),false);P->SetBoolField(TEXT("fill_mana_stones"),true);P->SetBoolField(TEXT("item_mana"),true);
-        auto I=Step(VM,S,P);TestEqual(TEXT("Empty stone fills via normal targeted use"),I->GetStringField(TEXT("action")),FString(TEXT("apply_item")));
-        TestEqual(TEXT("Only specifically selected item is consumed"),I->GetNumberField(TEXT("target")),31.);
-        S->SetNumberField(TEXT("time"),101);S->SetNumberField(TEXT("action_serial"),1);
+        P->SetBoolField(TEXT("refill_summons"),false);P->SetBoolField(TEXT("fill_mana_stones"),true);P->SetBoolField(TEXT("looting"),true);
+        P->RemoveField(TEXT("mana_source_items")); // No manual pool and no loot profile required.
+        auto Inv=S->GetArrayField(TEXT("inventory"));auto Donor=Inv[3];Inv.RemoveAt(3);
+        Donor->AsObject()->SetNumberField(TEXT("count"),1);Donor->AsObject()->SetNumberField(TEXT("icon_effects"),1);Donor->AsObject()->SetNumberField(TEXT("workmanship"),7);
+        S->SetArrayField(TEXT("inventory"),Inv);S->SetArrayField(TEXT("contents"),{Donor});S->SetNumberField(TEXT("container"),700);S->SetBoolField(TEXT("container_is_corpse"),true);
+        return Donor;
+    };
+    const auto ReceiveLoot=[&](FACEPluginVM& VM,auto S,auto P,auto Donor)
+    {
+        auto Inv=S->GetArrayField(TEXT("inventory"));Inv.Add(Donor);S->SetArrayField(TEXT("inventory"),Inv);
+        S->SetArrayField(TEXT("contents"),{});S->SetNumberField(TEXT("container"),0);S->SetNumberField(TEXT("time"),101);
+        Step(VM,S,P); // Confirm the exact new inventory item before any consumption.
+    };
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Donor=PrepareLoot(S,P);
+        P->SetBoolField(TEXT("item_mana"),true);
+        auto I=Step(VM,S,P);TestEqual(TEXT("Junk is automatically looted without a source pool or loot rules"),I->GetStringField(TEXT("action")),FString(TEXT("loot")));
+        TestEqual(TEXT("Only one donor is needed for one empty stone"),I->GetNumberField(TEXT("amount")),1.);
+        S->SetNumberField(TEXT("container"),0);S->SetArrayField(TEXT("contents"),{});
+        TestFalse(TEXT("Closing the corpse does not authorize destroying a carried same-WCID ring"),Step(VM,S,P)->HasField(TEXT("action")));
+        ReceiveLoot(VM,S,P,Donor);
+        I=Step(VM,S,P);TestEqual(TEXT("Empty stone fills via normal targeted use"),I->GetStringField(TEXT("action")),FString(TEXT("apply_item")));
+        TestEqual(TEXT("Only the confirmed junk pickup is consumed"),I->GetNumberField(TEXT("target")),31.);
+        S->SetNumberField(TEXT("time"),102);S->SetNumberField(TEXT("action_serial"),1);
         TestFalse(TEXT("Stone filling waits for actual contents"),Step(VM,S,P)->HasField(TEXT("action")));
         auto Stone=S->GetArrayField(TEXT("inventory"))[2]->AsObject();Stone->SetNumberField(TEXT("mana"),5000);Stone->SetBoolField(TEXT("mana_empty"),false);
+        auto Inv=S->GetArrayField(TEXT("inventory"));Inv.Pop();S->SetArrayField(TEXT("inventory"),Inv);
         I=Step(VM,S,P);TestEqual(TEXT("Newly filled stone recharges gear through player-targeting use"),I->GetStringField(TEXT("action")),FString(TEXT("use_item")));
         TestEqual(TEXT("Uses the filled stone"),I->GetNumberField(TEXT("item")),30.);
-        S->GetArrayField(TEXT("inventory"))[5]->AsObject()->SetNumberField(TEXT("mana"),100);
+        Inv[4]->AsObject()->SetNumberField(TEXT("mana"),100);
         TestFalse(TEXT("Full gear does not consume another charge"),Step(VM,S,P)->HasField(TEXT("action")));
     }
-    for(int Case=0;Case<6;++Case)
     {
-        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetBoolField(TEXT("refill_summons"),false);P->SetBoolField(TEXT("fill_mana_stones"),true);
-        auto Inv=S->GetArrayField(TEXT("inventory"));auto Donor=Inv[3]->AsObject();
-        if(Case==0)P->SetArrayField(TEXT("mana_source_items"),{});
-        if(Case==1)Donor->SetBoolField(TEXT("equipped"),true);
-        if(Case==2)Donor->SetBoolField(TEXT("retained"),true);
-        if(Case==3)Donor->SetBoolField(TEXT("resource_available"),false);
-        if(Case==4)Inv[2]->AsObject()->SetBoolField(TEXT("mana_empty"),false);
-        if(Case==5)Donor->SetBoolField(TEXT("identified"),false);
-        TestFalse(TEXT("No unselected/equipped/retained/traded/unidentified donor or nonempty stone is consumed"),Step(VM,S,P)->HasField(TEXT("action")));
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Donor=PrepareLoot(S,P);
+        TestEqual(TEXT("First donor is requested"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("loot")));
+        auto Inv=S->GetArrayField(TEXT("inventory"));Inv.Add(Donor);S->SetArrayField(TEXT("inventory"),Inv);
+        auto Extra=RecoveryJson(TEXT(R"({"id":34,"wcid":34,"name":"Extra junk","type":8,"count":1,"identified":true,"icon_effects":1,"workmanship":8,"mana":10000,"max_mana":10000})"));
+        S->SetArrayField(TEXT("contents"),{MakeShared<FJsonValueObject>(Extra)});
+        TestEqual(TEXT("Enough donors closes the corpse without over-collecting, even without loot rules"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("close_corpse")));
+        TestEqual(TEXT("The reserved donor still fills the stone"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("apply_item")));
+    }
+    for(int Case=0;Case<12;++Case)
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Donor=PrepareLoot(S,P);
+        TestEqual(TEXT("Acquire source for post-pickup protection check"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("loot")));
+        ReceiveLoot(VM,S,P,Donor);auto Item=Donor->AsObject();
+        if(Case==0)P->SetBoolField(TEXT("fill_mana_stones"),false);
+        if(Case==1)Item->SetBoolField(TEXT("equipped"),true);
+        if(Case==2)Item->SetBoolField(TEXT("retained"),true);
+        if(Case==3)Item->SetBoolField(TEXT("resource_available"),false);
+        if(Case==4)S->GetArrayField(TEXT("inventory"))[2]->AsObject()->SetBoolField(TEXT("mana_empty"),false);
+        if(Case==5)Item->SetBoolField(TEXT("identified"),false);
+        if(Case==6)Item->SetObjectField(TEXT("int_properties"),RecoveryJson(TEXT(R"({"171":1})")));
+        if(Case==7)Item->SetObjectField(TEXT("string_properties"),RecoveryJson(TEXT(R"({"8":"Player"})")));
+        if(Case==8)Item->SetNumberField(TEXT("count"),2);
+        if(Case==9)Item->SetNumberField(TEXT("wcid"),999);
+        if(Case==10)P->SetArrayField(TEXT("weapon_items"),{MakeShared<FJsonValueNumber>(31)});
+        if(Case==11)P->SetNumberField(TEXT("mana_tank_minimum"),6000);
+        TestFalse(*FString::Printf(TEXT("Changed/protected pickup is not consumed (case %d)"),Case),Step(VM,S,P)->HasField(TEXT("action")));
+    }
+    for(int Case=0;Case<9;++Case)
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Item=PrepareLoot(S,P)->AsObject();
+        if(Case==0)Item->SetNumberField(TEXT("mana"),999);
+        if(Case==1)Item->SetNumberField(TEXT("workmanship"),0);
+        if(Case==2)Item->SetNumberField(TEXT("icon_effects"),0);
+        if(Case==3)Item->SetObjectField(TEXT("int_properties"),RecoveryJson(TEXT(R"({"171":1})")));
+        if(Case==4)Item->SetObjectField(TEXT("string_properties"),RecoveryJson(TEXT(R"({"8":"Player"})")));
+        if(Case==5)Item->SetBoolField(TEXT("retained"),true);
+        if(Case==6)Item->SetNumberField(TEXT("max_mana"),0);
+        if(Case==7)Item->SetNumberField(TEXT("type"),524288);
+        if(Case==8)P->SetNumberField(TEXT("mana_tank_minimum"),5001);
+        TestEqual(*FString::Printf(TEXT("Unsuitable junk remains on corpse (case %d)"),Case),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("close_corpse")));
+    }
+    for(const FString Action:{TEXT("keep"),TEXT("skip"),TEXT("limit")})
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Donor=PrepareLoot(S,P);
+        auto Rule=RecoveryJson(TEXT(R"({"action":"keep"})"));
+        if(Action==TEXT("skip"))Rule->SetStringField(TEXT("action"),Action);
+        if(Action==TEXT("limit"))Rule->SetNumberField(TEXT("keep_up_to"),1); // Already carrying a same-WCID ring.
+        P->SetArrayField(TEXT("loot_rules"),{MakeShared<FJsonValueObject>(Rule)});
+        TestEqual(TEXT("Keep or otherwise unwanted mana loot is picked up"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("loot")));
+        ReceiveLoot(VM,S,P,Donor);auto I=Step(VM,S,P);
+        if(Action==TEXT("keep"))TestFalse(TEXT("Keep takes precedence over automatic mana filling"),I->HasField(TEXT("action")));
+        else TestEqual(TEXT("VT NoLoot and excess KeepUpTo can supply stones"),I->GetStringField(TEXT("action")),FString(TEXT("apply_item")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();auto Donor=PrepareLoot(S,P);
+        Donor->AsObject()->SetBoolField(TEXT("identified"),false);
+        TestEqual(TEXT("Magical junk is appraised before being selected"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("identify")));
+        Donor->AsObject()->SetBoolField(TEXT("identified"),true);Donor->AsObject()->SetNumberField(TEXT("mana"),1000);
+        TestEqual(TEXT("VT default minimum includes exactly 1000 mana"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("loot")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();PrepareLoot(S,P);
+        S->SetArrayField(TEXT("contents"),{});S->SetNumberField(TEXT("container"),0);
+        S->SetArrayField(TEXT("corpses"),{MakeShared<FJsonValueObject>(RecoveryJson(TEXT(R"({"id":700,"name":"Corpse","distance":2})")))});
+        TestEqual(TEXT("Empty stones enable corpse search with no loot profile"),Step(VM,S,P)->GetStringField(TEXT("action")),FString(TEXT("open_corpse")));
+    }
+    {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();
+        P->SetBoolField(TEXT("refill_summons"),false);P->SetBoolField(TEXT("fill_mana_stones"),true);
+        TestFalse(TEXT("Legacy manual source IDs never authorize consuming existing possessions"),Step(VM,S,P)->HasField(TEXT("action")));
     }
     return !HasAnyErrors();
 }

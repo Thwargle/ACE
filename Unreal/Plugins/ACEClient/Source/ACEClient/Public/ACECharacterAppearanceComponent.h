@@ -49,6 +49,8 @@ public:
 	bool HasAuthoredPhysicsGeometry() const;
 	void UpdateCellLighting(uint32 CellId);
 	UPROPERTY() TArray<TObjectPtr<UMaterialInstanceDynamic>> WorldLightingInstances;
+	/** Keep shared source assets alive while this appearance uses private lighting copies. */
+	UPROPERTY() TArray<TObjectPtr<class UMaterialInterface>> AppearanceSourceMaterials;
 	bool bWorldLightingInterior = false;
 	UACECharacterAppearanceComponent();
 

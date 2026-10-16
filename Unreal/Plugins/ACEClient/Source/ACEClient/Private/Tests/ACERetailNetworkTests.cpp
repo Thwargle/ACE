@@ -363,6 +363,26 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     const auto P3=Packet(3,EACEPacketHeaderFlags::BlobFragments,Fragment(2,1,0,NameMessage(TEXT("Between fragments"))));
     const auto P4=Packet(4,EACEPacketHeaderFlags::BlobFragments,Fragment(1,2,1,Tail));
     auto Deliver=[](FACESession& S,const TArray<uint8>& Bytes){ S.HandleDatagram(Bytes.GetData(),Bytes.Num(),true); };
+    {
+        FACESession Duplicates; Duplicates.IssacServer=MakeUnique<FACECryptoSystem>(123);
+        FACEIsaac Keys(123); int32 CrcFailures=0;
+        Duplicates.OnLog.AddLambda([&](const FString& Line){CrcFailures+=Line.Contains(TEXT("CRC failed"));});
+        auto Encrypted=[&](uint32 Seq)
+        {
+            const auto Flags=EACEPacketHeaderFlags::EncryptedChecksum;
+            FACEBinaryWriter W;W.WriteUInt32(Seq);W.WriteUInt32(uint32(Flags));
+            W.WriteUInt32(FACESession::HeaderHash32(Seq,Flags,0,0,0,1)+Keys.Next());
+            W.WriteUInt16(0);W.WriteUInt16(0);W.WriteUInt16(0);W.WriteUInt16(1);return W.GetData();
+        };
+        const auto E2=Encrypted(2),E3=Encrypted(3),E4=Encrypted(4);
+        Deliver(Duplicates,E2);
+        const uint32 ExpectedKey=Duplicates.IssacServer->CurrentKey;
+        for(int32 I=0;I<600;++I)Deliver(Duplicates,E2);
+        TestEqual(TEXT("Retransmitted duplicates do not advance the checksum stream"),Duplicates.IssacServer->CurrentKey,ExpectedKey);
+        Deliver(Duplicates,E4);Deliver(Duplicates,E4);Deliver(Duplicates,E3);
+        TestEqual(TEXT("Already buffered encrypted packets are also discarded before CRC"),CrcFailures,0);
+        TestEqual(TEXT("Missing encrypted data still drains in order"),Duplicates.LastReceivedPacketSequence,4u);
+    }
     FACESession Ordered;
     Deliver(Ordered,P4); Deliver(Ordered,P3);
     TestEqual(TEXT("Out-of-order packets do not mutate partial messages"),Ordered.PartialFragments.Num(),0);

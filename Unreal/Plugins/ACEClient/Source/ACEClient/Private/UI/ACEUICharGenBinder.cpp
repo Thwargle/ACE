@@ -167,6 +167,8 @@ void UACEUICharGenBinder::Refresh()
         Show(TEXT("ClothesButton"),!SpecialBody);Show(TEXT("NoseSpin"),!SpecialBody);Show(TEXT("MouthSpin"),!SpecialBody);
         if(auto Skin=Find(TEXT("SkinSpin")))Skin->Y=SpecialBody?(bBarber?88:90):(bBarber?176:180);
         for(uint32 Id:{0x1000030au,0x1000030bu})if(auto Arrow=Child(Find(TEXT("EyesSpin")),Id))Arrow->bVisible=!SpecialBody;
+        // gmCGAppearancePage hides Skin's style arrows: its only control is shade.
+        for(uint32 Id:{0x1000030au,0x1000030bu})if(auto Arrow=Child(Find(TEXT("SkinSpin")),Id))Arrow->bVisible=false;
         const FString Prefix=Model.Selection.Heritage==6?TEXT("ID_CharGen_GearText_"):TEXT("ID_CharGen_OlthoiText_");
         Label(TEXT("HairSpin"),Model.Text(SpecialBody?Prefix+TEXT("HairButton"):TEXT("ID_CharGen_HairStyle")));
         Label(TEXT("EyesSpin"),Model.Text(SpecialBody?Prefix+TEXT("EyesButton"):TEXT("ID_CharGen_Eyes")));
@@ -180,7 +182,11 @@ void UACEUICharGenBinder::Refresh()
         double Hue=ColorField==0?Model.Selection.HairHue:(ColorField>=2&&ColorField<=4)?Model.Selection.SkinHue:ColorField>=5?Model.Selection.GearHue[ColorField-5]:0;
         if(auto Thumb=Child(Find(TEXT("GradientScroll")),1))Thumb->Y=FMath::RoundToInt(Hue*64.);
         FString Desc=Model.Sex()->Name; if(ColorField>=5){int I=ColorField-5;if(Model.Sex()->Gear[I].IsValidIndex(Model.Selection.GearStyle[I]))Desc=Model.Sex()->Gear[I][Model.Selection.GearStyle[I]].Name;}
-        auto TextBox=Find(TEXT("AppearanceTextBox"));if(TextBox)ScrollText(TextBox,Model.Strings.FindRef(TextBox->TextEntryId));RefreshColors();
+        auto TextBox=Find(TEXT("AppearanceTextBox"));
+        if(TextBox)ScrollText(TextBox,Model.Selection.Heritage>=12
+            ? TEXT("Select Body Style, Eyes, or Markings to choose what the color wheel changes.\n\nBody Style: use the arrows to choose a body, choose a color swatch, and drag the center slider to adjust its shade.\n\nEyes: choose one of the six color swatches.\n\nMarkings: drag the center shade slider.\n\nUse the zoom and rotate controls to inspect your character.")
+            : Model.Strings.FindRef(TextBox->TextEntryId));
+        RefreshColors();
     }
     if(Page==5)
     {
@@ -478,7 +484,10 @@ bool UACEUICharGenBinder::KeyChar(const FCharacterEvent& E)
 void UACEUICharGenBinder::RefreshPreview(float Delta)
 {
     bool ShowPreview=Page==4||Page==6;if(PreviewImage)PreviewImage->SetVisibility(ShowPreview?ESlateVisibility::HitTestInvisible:ESlateVisibility::Collapsed);
-    if(Preview)if(auto* App=Preview->FindComponentByClass<UACECharacterAppearanceComponent>())App->SetComponentTickEnabled(ShowPreview&&(Page==6||bClothes));
+    // gmCGAppearancePage::ZoomOut starts the full-body idle, including on Face.
+    // The held rest frame is authored for the zoomed-in head examination only.
+    const bool Animate=Page==6||Zoom>0.f;
+    if(Preview)if(auto* App=Preview->FindComponentByClass<UACECharacterAppearanceComponent>())App->SetComponentTickEnabled(ShowPreview&&Animate);
     if(!ShowPreview||!Controller)return;
     UWorld* World=Controller->GetWorld();if(!World)return;
     if(!Preview)
@@ -513,9 +522,8 @@ void UACEUICharGenBinder::RefreshPreview(float Delta)
         PreviewImage=Canvas->WidgetTree->ConstructWidget<UACECaptureImage>();Canvas->GetElementLayer()->AddChild(PreviewImage);PreviewImage->SetBrushResourceObject(Target);bPreviewDirty=true;
     }
     auto App=Preview->FindComponentByClass<UACECharacterAppearanceComponent>();
-    if(bPreviewDirty&&App)
+    if(App&&(bPreviewDirty||bPreviewWasAnimated!=Animate))
     {
-        const bool Animate=Page==6||bClothes;
         FACEWorldObject Object;
         if(bBarber?BuildBarberPreview(Object):Model.BuildAppearance(Object,Page==4&&!bClothes))
         {

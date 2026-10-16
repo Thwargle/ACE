@@ -1,5 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 #include "ACECharacterCreation.h"
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
@@ -41,7 +43,8 @@
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailCharacterCreationTest,"ACE.RetailParity.CharacterCreationData",EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
 bool FACERetailCharacterCreationTest::RunTest(const FString&)
 {
-    auto GI=NewObject<UGameInstance>();auto Dat=NewObject<UACEDatSubsystem>(GI);if(!Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")))return false;
+    FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+    auto GI=NewObject<UGameInstance>();auto Dat=NewObject<UACEDatSubsystem>(GI);if(!Dat->LoadDatDirectory(DatDirectory))return false;
     FACECharacterCreation Model;FString Error;if(!TestTrue(*Error,Model.Load(*Dat->GetPortalDat(),Error))){AddError(Error);return false;}
     TestEqual(TEXT("All retail heritages decoded"),Model.Heritages.Num(),13);TestEqual(TEXT("Retail starting areas"),Model.StartAreas.Num(),5);
     // Export decoded garment parts, replacement textures and every shade/palette
@@ -161,7 +164,8 @@ bool FACERetailCharacterCreationScreenTest::RunTest(const FString& Parameters)
 {
     UWorld::InitializationValues Values;Values.AllowAudioPlayback(false).RequiresHitProxies(false).CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false);
     auto World=UWorld::CreateWorld(EWorldType::Game,false,NAME_None,nullptr,true,ERHIFeatureLevel::Num,&Values);GEngine->CreateNewWorldContext(EWorldType::Game).SetCurrentWorld(World);
-    auto GI=NewObject<UGameInstance>(GEngine);World->SetGameInstance(GI);GI->Init();auto Dat=GI->GetSubsystem<UACEDatSubsystem>();Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"));
+    FString DatDirectory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),DatDirectory);
+    auto GI=NewObject<UGameInstance>(GEngine);World->SetGameInstance(GI);GI->Init();auto Dat=GI->GetSubsystem<UACEDatSubsystem>();Dat->LoadDatDirectory(DatDirectory);
     auto Resources=NewObject<UACEUIResourceResolver>();Resources->Initialize(Dat);auto Manager=NewObject<UACEUIElementManager>();Manager->Initialize();auto Layout=NewObject<UACEUILayoutResolver>();Layout->Initialize(Dat,Manager);Layout->LoadLayout(0x21000038);
     auto Client=NewObject<UACEClientSubsystem>(GI);Client->Session=MakeShared<FACESession>();Client->UIElementManager=Manager;Client->UIResourceResolver=Resources;
     auto PC=World->SpawnActor<AACEPlayerController>();auto Canvas=NewObject<UACEUICanvasWidget>();Canvas->Initialize();Canvas->InitializeCanvas(Manager);Canvas->SetResourceResolver(Resources);auto Slate=Canvas->TakeWidget();auto Binder=NewObject<UACEUICharGenBinder>();
@@ -174,11 +178,11 @@ bool FACERetailCharacterCreationScreenTest::RunTest(const FString& Parameters)
     PC->PlayerCameraManager->InitializeFor(PC);
     World->AddController(PC);
     TestEqual(TEXT("Fixture exercises the gameplay camera"),World->GetFirstPlayerController(),static_cast<APlayerController*>(PC));
-    Binder->Model.SelectHeritage(1);Binder->Model.SelectSex(1);Binder->bClothes=true;Binder->SetPage(4);Binder->RefreshPreview(1.f/30);
+    Binder->Model.SelectHeritage(1);Binder->Model.SelectSex(1);Binder->bClothes=true;Binder->Zoom=1.f;Binder->SetPage(4);Binder->RefreshPreview(1.f/30);
     auto Appearance=Binder->Preview->FindComponentByClass<UACECharacterAppearanceComponent>();
     const uint32 PreviewAnim=Binder->Model.MappedAsset(0x25000010,0x10000006);
     TestTrue(TEXT("Preview is beyond world animation culling distance"),FVector::DistSquared(Binder->Preview->GetActorLocation(),PC->PlayerCameraManager->GetCameraLocation())>FMath::Square(8000.f));
-    for(float Time:{0.f,.2f,.5f})
+    for(float Time:{0.f,.2f,.5f,1.f,3.f,7.f,12.f})
     {
         Appearance->SetPreviewAnimation(PreviewAnim,true);Appearance->TickComponent(Time,LEVELTICK_All,nullptr);
         TArray<FTransform> Expected;int32 Count=0;
@@ -199,6 +203,9 @@ bool FACERetailCharacterCreationScreenTest::RunTest(const FString& Parameters)
         {
             Canvas->NativeTick(Canvas->GetCachedGeometry(),1.f/30);
             World->Tick(LEVELTICK_All,1.f/30);
+            // This fixture has no begun-play game world. Explicitly advance the
+            // examination actor so screenshots exercise motion, not frame zero.
+            if(Appearance->IsComponentTickEnabled())Appearance->TickComponent(1.f/30,LEVELTICK_All,nullptr);
             if(GShaderCompilingManager)GShaderCompilingManager->FinishAllCompilation();
             Renderer.DrawWidget(Target,Slate,FVector2D(1600,1200),1.f/30);
             FlushRenderingCommands();
@@ -260,6 +267,17 @@ bool FACERetailCharacterCreationScreenTest::RunTest(const FString& Parameters)
     if(Parameters==TEXT("Preview"))
     {
         Capture(4);Capture(6);
+        Binder->SetPage(4);Binder->Activate(Manager->FindElementByName(TEXT("FaceButton")));Binder->RefreshPreview(0.f);
+        TestFalse(TEXT("Face close-up holds the retail rest pose"),Appearance->IsComponentTickEnabled());
+        Binder->Activate(Manager->FindElementByName(TEXT("ZoomOut")));Binder->RefreshPreview(0.f);
+        TestTrue(TEXT("Zooming out on Face starts the full-body idle like retail"),Appearance->IsComponentTickEnabled());
+        TestEqual(TEXT("Full-body Face view uses the authored idle instead of the close-up rest clip"),Binder->PreviewAnimationId,PreviewAnim);
+        Capture(4);
+        IFileManager::Get().Copy(*(FPaths::ProjectSavedDir()/TEXT("Automation/RetailParity/CreatorFaceZoomOut.png")),
+            *(FPaths::ProjectSavedDir()/TEXT("Automation/RetailParity/CharacterCreation4.png")));
+        Binder->Activate(Manager->FindElementByName(TEXT("ClothesButton")));Binder->RefreshPreview(0.f);
+        Binder->Activate(Manager->FindElementByName(TEXT("ZoomIn")));Binder->RefreshPreview(0.f);
+        TestFalse(TEXT("Zooming in on Clothes holds the same retail face pose"),Appearance->IsComponentTickEnabled());
         Binder->Shutdown();Canvas->SetCharGenBinder(nullptr);GI->Shutdown();
         GEngine->DestroyWorldContext(World);World->DestroyWorld(false);
         return true;
@@ -295,6 +313,70 @@ bool FACERetailCharacterCreationScreenTest::RunTest(const FString& Parameters)
     InputWindow->SetContent(SNullWidget::NullWidget);FSlateApplication::Get().RequestDestroyWindow(InputWindow);
     const auto Refresh=[&](){Canvas->NativeTick(Canvas->GetCachedGeometry(),1.f/30);};
     const auto Click=[&](TSharedPtr<FACEUIElement> E){if(!TestTrue(TEXT("Mouse target exists"),E.IsValid()))return;Refresh();FVector2D P=Canvas->LayoutToViewport(FVector2D(E->GetScreenOrigin())+FVector2D(E->Width*.5f,E->Height*.5f));const auto& Geometry=Canvas->GetCachedGeometry();P=Geometry.LocalToAbsolute(P);TSet<FKey> Buttons;Buttons.Add(EKeys::LeftMouseButton);FPointerEvent Down(0,P,P,Buttons,EKeys::LeftMouseButton,0,FModifierKeysState());auto Reply=Canvas->NativeOnMouseButtonDown(Geometry,Down);TestTrue(TEXT("Creation click retains keyboard focus"),Reply.GetUserFocusRecepient()==Slate);Canvas->NativeOnMouseButtonUp(Geometry,FPointerEvent(0,P,P,TSet<FKey>(),EKeys::LeftMouseButton,0,FModifierKeysState()));Refresh();};
+    const auto DragShade=[&](double Shade)
+    {
+        Refresh();
+        const auto Gradient=Manager->FindElementByName(TEXT("GradientScroll"));
+        if(!TestTrue(TEXT("Shade slider exists"),Gradient.IsValid()))return;
+        const auto& Geometry=Canvas->GetCachedGeometry();
+        const auto Position=[&](double Value){return Geometry.LocalToAbsolute(Canvas->LayoutToViewport(FVector2D(Gradient->GetScreenOrigin())+FVector2D(Gradient->Width*.5,10+Value*64)));};
+        const FVector2D Start=Position(.5),End=Position(Shade);
+        TSet<FKey> Buttons;Buttons.Add(EKeys::LeftMouseButton);
+        TestTrue(TEXT("Shade drag captures the pointer"),Canvas->NativeOnMouseButtonDown(Geometry,FPointerEvent(0,Start,Start,Buttons,EKeys::LeftMouseButton,0,FModifierKeysState())).IsEventHandled());
+        Canvas->NativeOnMouseMove(Geometry,FPointerEvent(0,End,Start,Buttons,EKeys::Invalid,0,FModifierKeysState()));
+        Canvas->NativeOnMouseButtonUp(Geometry,FPointerEvent(0,End,End,TSet<FKey>(),EKeys::LeftMouseButton,0,FModifierKeysState()));
+        Refresh();
+    };
+    const auto PreviewPixels=[&]()
+    {
+        Binder->RefreshPreview(1.f); // Finish camera movement before comparing colors.
+        if(GShaderCompilingManager)GShaderCompilingManager->FinishAllCompilation();
+        Binder->Capture->CaptureScene();FlushRenderingCommands();
+        TArray<FColor> Pixels;Binder->Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);return Pixels;
+    };
+    for(uint32 Heritage:{12u,13u})
+    {
+        Binder->Model.SelectHeritage(Heritage);Binder->Model.SelectSex(1);Binder->bDirty=Binder->bPreviewDirty=true;Binder->bClothes=false;Binder->Zoom=0.f;Binder->SetPage(4);Refresh();
+        Binder->Model.Selection.HairStyle=1;Binder->bPreviewDirty=true;Refresh();
+        for(const auto& Field:TArray<TPair<FString,int32>>{{TEXT("HairSpin"),0},{TEXT("EyesSpin"),1},{TEXT("SkinSpin"),4}})
+        {
+            Click(Manager->FindElementByName(Field.Key));
+            TestEqual(*FString::Printf(TEXT("Olthoi %u %s opens its color controls"),Heritage,*Field.Key),Binder->ColorField,Field.Value);
+            const int32 Num=Binder->Model.ColorSamples(Field.Value).Num();
+            TestTrue(TEXT("Retail Olthoi palette choices are available"),Num>0&&Num<=9);
+            for(int32 I=0;I<Num;++I)
+            {
+                Click(Manager->FindElementByName(FString::Printf(TEXT("ColorSpot%d"),I+1)));
+                if(Field.Value==0)TestEqual(TEXT("Every Olthoi body swatch is selectable"),Binder->Model.Selection.HairColor,uint32(I));
+                if(Field.Value==1)TestEqual(TEXT("Every Olthoi eye swatch is selectable"),Binder->Model.Selection.EyeColor,uint32(I));
+            }
+            if(Field.Value!=1)
+            {
+                for(double Shade:{0.,1.})
+                {
+                    DragShade(Shade);
+                    TestEqual(TEXT("Olthoi body/marking slider reaches both retail endpoints"),Field.Value==0?Binder->Model.Selection.HairHue:Binder->Model.Selection.SkinHue,Shade);
+                }
+            }
+            const auto SetEndpoint=[&](bool Last)
+            {
+                if(Field.Value==1)Click(Manager->FindElementByName(Last?TEXT("ColorSpot6"):TEXT("ColorSpot1")));
+                else DragShade(Last?1.:0.);
+            };
+            SetEndpoint(false);const auto Before=PreviewPixels();const uint64 BeforeHash=Appearance->GetAppliedAppearanceHash();
+            SetEndpoint(true);const auto After=PreviewPixels();
+            TestNotEqual(TEXT("Every Olthoi color channel reaches the rendered appearance"),BeforeHash,Appearance->GetAppliedAppearanceHash());
+            int32 ChangedPixels=0;
+            for(int32 I=0;I<FMath::Min(Before.Num(),After.Num());++I)if(Before[I]!=After[I])++ChangedPixels;
+            AddInfo(FString::Printf(TEXT("Olthoi %u %s: %d changed preview pixels"),Heritage,*Field.Key,ChangedPixels));
+            // The retail melee Olthoi textures 06006E93..97 contain no indices
+            // in the skin/marking range 0..191. gmCG3DView still applies that
+            // range and serializes its shade; do not recolor its body instead.
+            if(Heritage!=12||Field.Value!=4)
+                TestTrue(*FString::Printf(TEXT("Olthoi %u %s visibly changes its rendered palette"),Heritage,*Field.Key),ChangedPixels>20);
+        }
+    }
+    Binder->Model.SelectHeritage(1);Binder->bDirty=Binder->bPreviewDirty=true;
     Click(Manager->FindElementByName(TEXT("CGAppearanceButton")));Click(Manager->FindElementByName(TEXT("ClothesButton")));
     Click(Manager->FindElementByName(TEXT("ShirtSpin")));TestEqual(TEXT("Shirt label selects shirt color controls"),Binder->ColorField,6);
     const auto ShirtColors=Binder->Model.GearColors(1);

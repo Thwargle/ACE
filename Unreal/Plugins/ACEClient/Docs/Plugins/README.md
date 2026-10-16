@@ -321,6 +321,18 @@ Filled mana stones/charges can replenish low equipped-item mana. Empty supply
 pools permit automatic selection; adding supply types restricts the pool.
 Assessments are refreshed periodically, so equipment mana is not instantaneous.
 
+**Automatically fill empty mana stones** picks up otherwise unwanted magical
+corpse loot when **Enable Looting** is on; it needs no source-item pool or loot
+profile. Normal loot actions take precedence. Like vTank, Skip/NoLoot and items
+beyond a KeepUpTo limit can supply stones. The item must have workmanship,
+positive maximum mana, and at least **Minimum mana in source loot** (1,000 by
+default; imported ManaTankMinimumMana is honored). Tinkered, inscribed, retained,
+equipped and configured equipment/supplies are excluded. UCM takes one donor per
+empty stone, confirms the pickup, and rechecks its identity and protections before
+using the stone. It never scans pre-existing possessions for destruction; the old
+manual source list is ignored. Stopping/restarting UCM abandons pending donor jobs.
+
+
 ### Combat and items
 
 Choose melee, missile, magic, or auto. Inventory appraisals provide requirements,

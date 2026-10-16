@@ -88,7 +88,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ACE")
 	void SetStatus(const FString& Msg);
 
-	/** Hide the opaque login fill so DAT Intro splash (0x21000001) shows behind the card. */
+	/** Keep the launcher backdrop opaque, including when returning from the game. */
 	void SetUseDatIntroBackdrop(bool bUse);
 
 protected:
@@ -103,16 +103,20 @@ protected:
 	bool bEditingGDLE = false;
 	bool bRefreshingDirectory = false;
 	float LayoutWidth = 0;
+	int32 StyledPage = INDEX_NONE;
 	TSharedPtr<class IHttpRequest, ESPMode::ThreadSafe> DirectoryRequest;
 	UPROPERTY() TObjectPtr<class UWidgetSwitcher> Pages;
 	UPROPERTY() TObjectPtr<class UScaleBox> ResponsiveScale;
-	UPROPERTY() TObjectPtr<class UWrapBox> PlayLayout;
+	UPROPERTY() TObjectPtr<class UStackBox> PlayLayout;
+	UPROPERTY() TArray<TObjectPtr<UACELoginActionButton>> NavigationButtons;
+	UPROPERTY() TMap<TObjectPtr<class UImage>, uint32> LobbyArtwork;
 	UPROPERTY() TObjectPtr<class USizeBox> DashboardSize;
 	UPROPERTY() TObjectPtr<class USizeBox> FooterSize;
 	UPROPERTY() TObjectPtr<class USizeBox> SidebarSize;
 	UPROPERTY() TObjectPtr<class USizeBox> DetailSize;
 	UPROPERTY() TObjectPtr<UScrollBox> ServerList;
 	UPROPERTY() TObjectPtr<UScrollBox> AccountList;
+	UPROPERTY() TObjectPtr<UScrollBox> ManagedAccountList;
 	UPROPERTY() TObjectPtr<UScrollBox> BrowserList;
 	UPROPERTY() TObjectPtr<UTextBlock> ServerTitle;
 	UPROPERTY() TObjectPtr<UTextBlock> ServerDetail;
@@ -222,6 +226,7 @@ protected:
 	 *  don't spam it every frame. */
 	bool bForcedZeroSizePrepass = false;
 	bool bUseDatIntroBackdrop = false;
+	bool bRetailFontsReady = false;
 	bool bLoginSettingsLoaded = false;
 	bool bLoginEntriesDirty = false;
 	double LastLoginEditTime = 0.0;

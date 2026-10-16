@@ -738,6 +738,7 @@ private:
 	// Entries cannot move with TMap growth while a renderer is consuming their parts.
 	TMap<uint64, TSharedPtr<const FACEBuiltSetupMesh>> SetupMeshCache;
 	friend class FACECreatureSpawnCacheTest;
+	friend class FACEResolvedAppearanceCacheTest;
 	struct FAppearanceMeshEntry
 	{
 		uint32 SetupId = 0;
@@ -1018,6 +1019,12 @@ private:
 
 	UPROPERTY(Transient)
 	TMap<uint64, TObjectPtr<UTexture2D>> ResolvedTextureCache;
+	// The strong caches retain a bounded recent working set. Weak lookups also
+	// reuse assets still owned by visible actors after that retention is evicted.
+	TMap<uint64, TWeakObjectPtr<UMaterialInstanceDynamic>> LiveResolvedMaterials;
+	TMap<uint64, TWeakObjectPtr<UTexture2D>> LiveResolvedTextures;
+	TMap<uint64, uint64> ResolvedCacheLastUse;
+	uint64 ResolvedCacheClock = 0;
 
 	int32 AppliedSurfaceUnpackVersion = 0;
 	bool bLandMeshReloadRequested = false;

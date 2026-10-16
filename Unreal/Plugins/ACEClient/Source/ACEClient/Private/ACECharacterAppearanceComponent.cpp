@@ -589,6 +589,7 @@ void UACECharacterAppearanceComponent::ClearAppearance()
 {
 	WalkingMotion.Reset();
 	WorldLightingInstances.Reset(); bWorldLightingInterior=false;
+	AppearanceSourceMaterials.Reset();
 	if (AActor* Owner = GetOwner())
 		if (auto* Scripts = Owner->FindComponentByClass<UACEScriptComponent>()) Scripts->StopAllEffects();
 	for (UProceduralMeshComponent* P : PartMeshes)
@@ -785,6 +786,7 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	{
 		MotionTableId = static_cast<int32>(DefaultMT);
 	}
+	AppearanceSourceMaterials.Reset();
 	if (bUseWorldLighting)
 	{
 		WorldLightingInstances.Reset();
@@ -795,6 +797,7 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 			if (Part) for (int32 I = 0; I < Part->GetNumMaterials(); ++I)
 			{
 				auto* Source=Part->GetMaterial(I);
+				if (Source) AppearanceSourceMaterials.AddUnique(Source);
 				auto* WorldMaterial=Dat->GetWorldObjectMaterial(Source);
 				if (WorldMaterial && WorldMaterial!=Source)
 				{

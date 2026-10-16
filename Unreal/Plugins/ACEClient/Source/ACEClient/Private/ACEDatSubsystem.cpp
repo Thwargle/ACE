@@ -1296,6 +1296,10 @@ void UACEDatSubsystem::ClearLoadedState()
 		}
 	}
 	ResolvedTextureCache.Reset();
+	LiveResolvedMaterials.Reset();
+	LiveResolvedTextures.Reset();
+	ResolvedCacheLastUse.Reset();
+	ResolvedCacheClock = 0;
 	MotionPlayer.Reset();
 	Builder.Reset();
 	LandBuilder.Reset();
@@ -1642,6 +1646,7 @@ bool UACEDatSubsystem::EnsureLoaded()
 			LookOutLandMaterialCache.Reset();
 			LandTextureCache.Reset();
 			ResolvedMaterialCache.Reset();
+			LiveResolvedMaterials.Reset();
 			TexturedMaterialBase = nullptr;
 			LandMaterialBase = nullptr;
 			LandLookOutMaterialBase = nullptr;
@@ -3737,12 +3742,18 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateResolvedMaterial(
 		Key = HashCombine(Key, GetTypeHash(Ap.PartId));
 	}
 
+	ResolvedCacheLastUse.Add(Key, ++ResolvedCacheClock);
 	if (const TObjectPtr<UMaterialInstanceDynamic>* Found = ResolvedMaterialCache.Find(Key))
 	{
 		if (*Found)
 		{
 			return Found->Get();
 		}
+	}
+	if (auto* Material = LiveResolvedMaterials.FindRef(Key).Get())
+	{
+		ResolvedMaterialCache.Add(Key, Material);
+		return Material;
 	}
 
 	FACEDatSurfaceRenderFlags SurfaceFlags;
@@ -3754,7 +3765,11 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateResolvedMaterial(
 		auto* Opaque = GetOrCreateTexturedMaterial(SurfaceId);
 		// Remember the classification too: resolving a cached surface copies its
 		// pixel array, which must not repeat for every same-setup body refresh.
-		if (auto* Cached = Cast<UMaterialInstanceDynamic>(Opaque)) ResolvedMaterialCache.Add(Key, Cached);
+		if (auto* Cached = Cast<UMaterialInstanceDynamic>(Opaque))
+		{
+			ResolvedMaterialCache.Add(Key, Cached);
+			LiveResolvedMaterials.Add(Key, Cached);
+		}
 		return Opaque; // Opaque models still share the existing material instance.
 	}
 	FACEDatDecodedSurface Decoded;
@@ -3792,6 +3807,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateResolvedMaterial(
 	{
 		Tex = TexFound->Get();
 	}
+	if (!Tex) Tex = LiveResolvedTextures.FindRef(Key).Get();
 	if (!Tex)
 	{
 		Tex = FACEDatTextureResolver::CreateTransientRgbaWithMips(
@@ -3802,8 +3818,9 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateResolvedMaterial(
 			return GetVertexColorMaterial();
 		}
 		Tex->Rename(nullptr, this);
-		ResolvedTextureCache.Add(Key, Tex);
 	}
+	ResolvedTextureCache.Add(Key, Tex);
+	LiveResolvedTextures.Add(Key, Tex);
 
 	UMaterialInterface* Base = EnsureAceUnlitTexturedMaterialBase();
 	if (Decoded.bAdditive && !bObjectUsesAlpha)
@@ -3855,6 +3872,7 @@ UMaterialInterface* UACEDatSubsystem::GetOrCreateResolvedMaterial(
 	MID->SetVectorParameterValue(TEXT("UVOffset"), FLinearColor(0.f, 0.f, 0.f, 0.f));
 	ApplyDistanceFogToMid(MID);
 	ResolvedMaterialCache.Add(Key, MID);
+	LiveResolvedMaterials.Add(Key, MID);
 	MID->SetScalarParameterValue(TEXT("OpacityMul"), ObjectOpacity);
 	return MID;
 }
@@ -7724,40 +7742,30 @@ void UACEDatSubsystem::TrimSetupStaticMeshCache(int32 MaxEntries)
 
 void UACEDatSubsystem::TrimResolvedTextureCache(int32 MaxEntries)
 {
-	if (MaxEntries < 64)
+	MaxEntries = FMath::Max(64, MaxEntries);
+	auto OldestKeys = [&](const auto& Cache)
 	{
-		MaxEntries = 64;
-	}
-	const int32 Over = ResolvedTextureCache.Num() - MaxEntries;
-	if (Over <= 0)
-	{
-		return;
-	}
-	TArray<uint64> Keys;
-	ResolvedTextureCache.GetKeys(Keys);
-	const int32 RemoveCount = FMath::Min(Over, Keys.Num());
-	for (int32 i = 0; i < RemoveCount; ++i)
-	{
-		if (UTexture2D* Tex = ResolvedTextureCache.FindRef(Keys[i]).Get())
+		TArray<uint64> Keys;
+		if (Cache.Num() > MaxEntries)
 		{
-			Tex->RemoveFromRoot();
+			Cache.GetKeys(Keys);
+			Keys.Sort([&](uint64 A, uint64 B) { return ResolvedCacheLastUse.FindRef(A) < ResolvedCacheLastUse.FindRef(B); });
+			Keys.SetNum(Cache.Num() - MaxEntries);
 		}
-		ResolvedTextureCache.Remove(Keys[i]);
-	}
-	// Drop MIDs that referenced trimmed textures — next resolve rebuilds.
-	const int32 MatOver = ResolvedMaterialCache.Num() - MaxEntries;
-	if (MatOver > 0)
+		return Keys;
+	};
+	for (uint64 Key : OldestKeys(ResolvedTextureCache))
 	{
-		TArray<uint64> MatKeys;
-		ResolvedMaterialCache.GetKeys(MatKeys);
-		const int32 MatRemove = FMath::Min(MatOver, MatKeys.Num());
-		for (int32 i = 0; i < MatRemove; ++i)
-		{
-			ResolvedMaterialCache.Remove(MatKeys[i]);
-		}
+		if (auto* Texture = ResolvedTextureCache.FindRef(Key).Get()) Texture->RemoveFromRoot();
+		ResolvedTextureCache.Remove(Key);
 	}
-	UE_LOG(LogTemp, Log, TEXT("ACEDat: trimmed resolved texture cache by %d (now %d)"),
-		RemoveCount, ResolvedTextureCache.Num());
+	// Material-only classifications need their own bound, even when the texture
+	// cache is below its limit. Eviction must not forget live crowd resources.
+	for (uint64 Key : OldestKeys(ResolvedMaterialCache)) ResolvedMaterialCache.Remove(Key);
+	for (auto It=LiveResolvedTextures.CreateIterator(); It; ++It) if (!It.Value().IsValid()) It.RemoveCurrent();
+	for (auto It=LiveResolvedMaterials.CreateIterator(); It; ++It) if (!It.Value().IsValid()) It.RemoveCurrent();
+	for (auto It=ResolvedCacheLastUse.CreateIterator(); It; ++It)
+		if (!ResolvedTextureCache.Contains(It.Key()) && !ResolvedMaterialCache.Contains(It.Key())) It.RemoveCurrent();
 }
 
 void UACEDatSubsystem::TrimTextureResolverCaches(int32 MaxTextures, int32 MaxDecodedSurfaces, int64 MaxBytes)

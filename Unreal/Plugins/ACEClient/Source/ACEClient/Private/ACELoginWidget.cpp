@@ -33,11 +33,9 @@ void UACECharacterRowButton::HandleClicked()
 
 namespace
 {
-	// Subdued, modern palette — no neon diagnostic colors.
-	const FLinearColor ACEBackdropColor(0.02f, 0.02f, 0.03f, 1.f);
-	const FLinearColor ACERowColor(0.14f, 0.15f, 0.19f, 1.f);
-	const FLinearColor ACERowSelectedColor(0.20f, 0.38f, 0.62f, 1.f);
-	const FLinearColor ACETextColor(0.88f, 0.89f, 0.92f, 1.f);
+	const FLinearColor ACERowColor(0.025f, 0.012f, 0.004f, 1.f);
+	const FLinearColor ACERowSelectedColor(0.19f, 0.002f, 0.001f, 1.f);
+	const FLinearColor ACETextColor(0.94f, 0.89f, 0.76f, 1.f);
 }
 
 void UACELoginWidget::SelectCharacterIndex(int32 Index)
@@ -210,17 +208,10 @@ void UACELoginWidget::SetUseDatIntroBackdrop(bool bUse)
 	{
 		return;
 	}
-	if (bUse)
-	{
-		// Fully transparent but still hit-tests so clicks don't fall through to the world.
-		BackdropBorder->SetBrushColor(FLinearColor(0.f, 0.f, 0.f, 0.f));
-		BackdropBorder->SetVisibility(ESlateVisibility::Visible);
-	}
-	else
-	{
-		BackdropBorder->SetBrushColor(ACEBackdropColor);
-		BackdropBorder->SetVisibility(ESlateVisibility::Visible);
-	}
+	// The launcher owns its backdrop even after logout, when the gameplay world
+	// or intro actor may still be present. Character selection has its own scene.
+	BackdropBorder->SetBrushColor(FLinearColor::Black);
+	BackdropBorder->SetVisibility(ESlateVisibility::Visible);
 }
 
 void UACELoginWidget::SetStatus(const FString& Msg)
@@ -228,5 +219,7 @@ void UACELoginWidget::SetStatus(const FString& Msg)
 	if (StatusText)
 	{
 		StatusText->SetText(FText::FromString(Msg));
+		if (auto* Container=Cast<UBorder>(StatusText->GetParent()))
+			Container->SetVisibility(Msg.IsEmpty()?ESlateVisibility::Collapsed:ESlateVisibility::Visible);
 	}
 }
