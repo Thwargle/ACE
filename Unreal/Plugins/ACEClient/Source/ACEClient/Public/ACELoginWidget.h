@@ -130,6 +130,7 @@ protected:
 	UPROPERTY() TObjectPtr<UEditableTextBox> DiscordBox;
 	UPROPERTY() TObjectPtr<UEditableTextBox> SearchBox;
 	UPROPERTY() TObjectPtr<UEditableTextBox> DatBox;
+	UPROPERTY() TObjectPtr<UEditableTextBox> AccountAliasBox;
 	UPROPERTY() TObjectPtr<UBorder> ConfirmPanel;
 	UPROPERTY() TObjectPtr<UTextBlock> ConfirmText;
 	UPROPERTY() TObjectPtr<UButton> ACETypeButton;

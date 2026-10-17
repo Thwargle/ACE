@@ -1,6 +1,7 @@
 #include "ACEFrameDiagnostics.h"
 #include "ACEClientBuild.h"
 #include "ACEClientSubsystem.h"
+#include "ACESession.h"
 #include "ACEWorldEntityActor.h"
 #include "ACEScriptComponent.h"
 #include "ACEParticleUpdateSubsystem.h"
@@ -47,5 +48,6 @@ TArray<FString> ACEFrameDiagnostics::Describe(UWorld* World,double FrameMs)
  Lines.Add(FString::Printf(TEXT("creatures=%d dying=%d corpses=%d projectiles=%d; emitters=%d degraded=%d particles=%d effectLights=%d; batches=%d vertices=%lld UCM=%d"),
   Creatures,Dying,Corpses,Projectiles,Emitters,Degraded,Particles,FX?FX->GetVisibleLightCount():0,
   Updates?Updates->GetLastBatchCount():0,Updates?Updates->GetLastVertexCount():0,UCM));
+ if(Client)if(auto Session=Client->GetSession())Lines.Add(Session->DescribeNetworkPump());
  return Lines;
 }

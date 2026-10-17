@@ -166,7 +166,7 @@ return function(s,p)
  if give_retry then
   local q=give_retry;local item=find(inv,q.id);local recipient=find(s.it_objects,q.target)
   if not usable(item) or item.name~=q.name or item.wcid~=q.wcid or item.count~=q.before then return stop('Item changed during gift retry; review inventory before restarting.') end
-  if not recipient or not recipient.recipient or recipient.name~=q.recipient_name or recipient.distance>5 or (recipient.player and item.bonded) then return stop('Recipient changed or moved away; remaining items are still in your packs.') end
+  if not recipient or not recipient.recipient or recipient.name~=q.recipient_name or recipient.distance>5 or (recipient.player and item.attuned) then return stop('Recipient changed or moved away; remaining items are still in your packs.') end
   give_retry=nil;return issue(s,p,'it_give',item,q.amount,q.target)
  end
  if split and split.id then local i=find(inv,split.id);split=nil;if not usable(i) then return stop('Split item changed; sale cancelled.') end;return issue(s,p,'it_sell',i,i.count,s.vendor) end
@@ -182,7 +182,7 @@ return function(s,p)
   while #queue>0 do
    if not workavailable() then return status('Checking transfer profile') end
    local q=queue[1];local item=find(inv,q.id)
-   if not usable(item) or (isplayer and item.bonded) then table.remove(queue,1)
+   if not usable(item) or (isplayer and item.attuned) then table.remove(queue,1)
    else
     local amount=math.min(q.count,item.count)
     if mode=='profile' then
@@ -268,7 +268,7 @@ return function(s,p)
     local target,isplayer=give_target(s,p,key)
     if (p[key..'_id'] or 0)~=0 then
      if not target then return stop('Recipient '..key..' moved away; chest loot remains in your packs.') end
-     for index=mule_scan[key],#inv do local item=inv[index];mule_scan[key]=index;if (received[item.id] or 0)>0 and usable(item) and not (isplayer and item.bonded) then
+     for index=mule_scan[key],#inv do local item=inv[index];mule_scan[key]=index;if (received[item.id] or 0)>0 and usable(item) and not (isplayer and item.attuned) then
       local rule=evaluate(s,p[key..'_rules'] or {},item,key)
       if rule=='pending' then return status('Checking '..key..' profile') end
       if rule=='identify' then return assess(s,item) end

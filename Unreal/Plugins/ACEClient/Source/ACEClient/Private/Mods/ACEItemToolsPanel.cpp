@@ -181,7 +181,7 @@ private:
             {
                 Owned.FindOrAdd(Pair.Value.WeenieClassId)+=FMath::Max(1,Pair.Value.StackSize);
                 FACEWorldObject Target;const bool IsPlayer=Client()->GetWorldObject(Guid(P(),TEXT("target_id")),Target)&&Target.bIsPlayer;
-                if(Transferable(Client(),Pair.Value)&&(!IsPlayer||!Pair.Value.Bonded))GiveCounts.FindOrAdd(ACERetailObjectNames::Name(Pair.Value))+=FMath::Max(1,Pair.Value.StackSize);
+                if(Transferable(Client(),Pair.Value)&&(!IsPlayer||!Pair.Value.Attuned))GiveCounts.FindOrAdd(ACERetailObjectNames::Name(Pair.Value))+=FMath::Max(1,Pair.Value.StackSize);
             }
         for(const auto& I:Client()->GetVendorMerchandise())Stocked.Add(I.WeenieClassId);
         if(CharacterProfile!=Plugin->ProfileName){CharacterProfile=Plugin->ProfileName;Rebuild();}

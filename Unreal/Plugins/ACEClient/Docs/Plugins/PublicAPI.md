@@ -182,6 +182,14 @@ transfer eligibility, vendor room/price and inventory failure fields are include
 as well. `identified=false` means a property may be unknown; it is not evidence
 that the property is zero. Requests for new appraisals still require inventory.
 
+Item `icon` fields contain full DAT texture IDs for rendering. In
+`int_properties`, the Decal compatibility keys `218103809` (Icon), `218103849`
+(IconOverlay), and `218103850` (IconUnderlay) instead contain the packed texture
+index, without the `0x06000000` type prefix. Imported vTank rules compare these
+indices; for example, the level-4 overlay is `27703`, not `0x06006C37`.
+These public fields are available before appraisal. Extended custom texture
+indices retain all 24 index bits.
+
 Beneficial `enchantments` include `duration` (the server's full duration, including
 augmentation bonuses) and `remaining` (time left now). Permanent effects have a
 negative duration. Use remaining time and power/category to decide whether a

@@ -130,7 +130,7 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::ItemToolsSnapshot(FACEClientPlugin*
         auto J=MakeShared<FJsonObject>(*V->AsObject());FACEWorldObject Item;
         if(C->GetWorldObject(Guid(J,TEXT("id")),Item))
         {
-            const bool Allowed=Transferable(C,Item);J->SetBoolField(TEXT("transferable"),Allowed);J->SetBoolField(TEXT("bonded"),Item.Bonded!=0);
+            const bool Allowed=Transferable(C,Item);J->SetBoolField(TEXT("transferable"),Allowed);J->SetBoolField(TEXT("attuned"),Item.Attuned!=0);
             J->SetBoolField(TEXT("can_sell"),Allowed&&Session->CanVendorBuyItem(Item));
             J->SetBoolField(TEXT("trade_note"),Item.ItemType==ACEItemType::PromissoryNote);
             J->SetNumberField(TEXT("sell_unit"),ACEVendorPricing::VendorBuyPayout(Item,1,C->GetVendorBuyRate()));
@@ -190,7 +190,7 @@ bool UACEPluginSubsystem::ExecuteItemTools(FACEClientPlugin& P,const TSharedPtr<
     {if(C->GetOpenExternalContainerGuid()==TargetId)C->SendNoLongerViewingContents(TargetId);return true;}
     if(Action==TEXT("it_give"))
     {
-        if(!Found||!Transferable(C,Item)||Amount>FMath::Max(1,Item.StackSize)||!Nearby()||TargetId==C->GetPlayerGuid()||Target.IsVendor()||!Target.IsGiveOrCreatureTarget()||(Target.bIsPlayer&&Item.Bonded!=0))return Fail(TEXT("Item or recipient changed; transfer stopped."));
+        if(!Found||!Transferable(C,Item)||Amount>FMath::Max(1,Item.StackSize)||!Nearby()||TargetId==C->GetPlayerGuid()||Target.IsVendor()||!Target.IsGiveOrCreatureTarget()||(Target.bIsPlayer&&Item.Attuned!=0))return Fail(TEXT("Item or recipient changed; transfer stopped."));
         if(PC){PC->BeginUseApproach(TargetId,Target.UseRadius>0?Target.UseRadius:.6f,false,false);UseApproachOwner=P.Id;}
         C->SendGiveObjectRequest(TargetId,Id,Amount);
     }

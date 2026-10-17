@@ -1,5 +1,6 @@
 #include "Protocol/ACEObjectCreateParser.h"
 #include "ACEOpcodes.h"
+#include "ACEAppearanceComposition.h"
 
 namespace ACEPhysicsDescFlags
 {
@@ -132,7 +133,7 @@ bool FACEObjectCreateParser::ParseModelData(FACEBinaryReader& Reader, FACEObjDes
 		Sub.Offset = static_cast<int32>(OffsetByte) * 8;
 		const int32 Length = LengthByte == 0 ? 256 : static_cast<int32>(LengthByte);
 		Sub.NumColors = Length * 8;
-		Out.SubPalettes.Add(Sub);
+		ACEAppearanceComposition::AddSubPalette(Out, Sub);
 	}
 	for (uint8 i = 0; i < NumTextures; ++i)
 	{
@@ -144,7 +145,7 @@ bool FACEObjectCreateParser::ParseModelData(FACEBinaryReader& Reader, FACEObjDes
 		Tex.PartIndex = Reader.ReadUInt8();
 		Tex.OldTexture = static_cast<int32>(ReadPackedKnown(Reader, 0x05000000));
 		Tex.NewTexture = static_cast<int32>(ReadPackedKnown(Reader, 0x05000000));
-		Out.TextureChanges.Add(Tex);
+		ACEAppearanceComposition::AddTextureChange(Out, Tex);
 	}
 	for (uint8 i = 0; i < NumAnimParts; ++i)
 	{
@@ -155,7 +156,7 @@ bool FACEObjectCreateParser::ParseModelData(FACEBinaryReader& Reader, FACEObjDes
 		FACEObjDescAnimPartChange Part;
 		Part.PartIndex = Reader.ReadUInt8();
 		Part.PartId = static_cast<int32>(ReadPackedKnown(Reader, 0x01000000));
-		Out.AnimPartChanges.Add(Part);
+		ACEAppearanceComposition::AddAnimPartChange(Out, Part);
 	}
 	Reader.Align();
 	return true;

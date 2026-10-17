@@ -138,6 +138,7 @@ bool FACERemoteMovementReplayTest::RunTest(const FString&)
   // root and its selection capsule, not just a collision-constrained predictor.
   auto* Wall=Box(FVector(0,200,200),FVector(400,10,200));
   A=Spawn();FACEPosition Correction=P;Correction.Location.Y+=4;A->ApplyACEPosition(Correction);
+  TestTrue(TEXT("A normal position packet initially interpolates rather than teleporting"),A->GetActorLocation().Y-Origin.Y<190);
   double MaxY=0,MaxPickError=0;
   for(int I=0;I<FPS;++I)
   {
@@ -146,12 +147,29 @@ bool FACERemoteMovementReplayTest::RunTest(const FString&)
    const FVector Expected=A->GetActorTransform().TransformPosition(A->CollisionProxy->GetRelativeLocation());
    MaxPickError=FMath::Max(MaxPickError,FVector::Distance(Pick,Expected));
   }
-  TestTrue(TEXT("A normal server correction cannot carry the displayed player through a wall"),MaxY<190);
+  TestTrue(TEXT("Blocked correction resynchronizes to the authoritative side of the wall"),FMath::Abs(MaxY-400)<1);
   TestTrue(TEXT("Selection capsule follows the displayed actor throughout reconciliation"),MaxPickError<.01);
   FHitResult PickHit;const FVector PickCenter=A->CollisionProxy->GetComponentLocation();
   World->LineTraceSingleByChannel(PickHit,PickCenter-FVector(200,0,0),PickCenter+FVector(200,0,0),ECC_Visibility);
   TestTrue(TEXT("A selection ray hits the corrected visual body rather than the cached server position"),PickHit.GetActor()==A);
   A->Destroy();Wall->Destroy();
+
+  // Server contact on a different story: collision must not hold the visible
+  // body on its old platform while targeting/radar use the new position.
+  auto* Platform=Box(FVector(0,0,290),FVector(400,400,10));
+  for(bool Player : {true,false})for(bool Falling : {true,false})
+  {
+   A=Spawn();A->bIsPlayer=Player;
+   FACEPosition Upper=P;Upper.Location.Z+=3;Upper.TeleportSequence=1;
+   if(Falling)A->ApplyACEPosition(Upper);
+   FACEPosition Contact=Falling?P:Upper;Contact.TeleportSequence=Falling?1:0;
+   A->ApplyACEPosition(Contact);
+   for(int I=0;I<FPS;++I)A->Tick(Dt);
+   TestTrue(TEXT("Player/monster corrections recover from both sides of an obstructing floor"),
+    FMath::Abs(A->GetActorLocation().Z-Contact.ToUnrealLocation(100).Z)<2);
+   A->Destroy();
+  }
+  Platform->Destroy();
 
   // Use the real 20 Hz pose buffer at rendering cadence. Applying another
   // locomotion filter must not add a speed-dependent trailing body offset.

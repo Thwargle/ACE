@@ -17,13 +17,14 @@
 void UACEUIGameplayBinder::CycleKeyboardSelection(const FString& Kind,int32 Direction)
 {
  if(!Client)return;
- const auto Position=Client->GetPlayerPosition();
+ auto Position=Client->GetPlayerPosition();
+ if(PlayerController)PlayerController->TryGetLocallyPredictedPosition(Position);
  const auto Origin=Position.ToUnrealLocation(1.f);
  const auto Fellow=Client->GetFellowship();
  TArray<FACEWorldObject> Objects=Client->GetWorldObjects();
  Objects.RemoveAll([&](const FACEWorldObject& O)
  {
-  if(!O.IsSelectableWorldObject() || (Kind!=TEXT("CompassItem") && !Client->IsWorldObjectVisible(O)))return true;
+  if(!O.IsSelectableWorldObject())return true;
   const auto Delta=O.Position.ToUnrealLocation(1.f)-Origin;
   if(Kind==TEXT("Fellow"))return !Fellow.Members.ContainsByPredicate([&](const FACEFellowshipMember& M){return M.Guid==O.Guid;});
   if(!Position.IsValid() || Delta.SizeSquared2D()>FMath::Square(ACERadarVisuals::RangeAc(uint32(Position.CellId))))return true;

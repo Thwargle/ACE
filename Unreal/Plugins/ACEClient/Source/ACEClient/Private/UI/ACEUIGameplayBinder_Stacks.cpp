@@ -108,9 +108,16 @@ bool UACEUIGameplayBinder::TryDropInExternalContainer(int32 Guid, int32 Amount, 
 {
 	if (!Client || !Canvas || !Manager || !OpenLootContainerGuid) return false;
 	for (int32 I = 0; I < ExtPackSlots.Num() && I < ExtPackGuids.Num(); ++I)
-		if (ExtPackSlots[I] && ExtPackGuids[I] && ExtPackSlots[I]->IsVisible() && Canvas->IsWidgetExposedAt(ExtPackSlots[I], Absolute))
+		if (ExtPackSlots[I] && ExtPackSlots[I]->IsVisible() && Canvas->IsWidgetExposedAt(ExtPackSlots[I], Absolute))
 		{
-			MoveInventoryAmount(Guid, ExtPackGuids[I], 0, Amount);
+			if (ExtPackGuids[I]) MoveInventoryAmount(Guid, ExtPackGuids[I], 0, Amount);
+			else
+			{
+				FACEWorldObject Item;
+				if (Client->GetWorldObject(Guid, Item) && ((Item.ItemType & ACEItemType::Container)
+					|| (Item.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot)))
+					MoveInventoryAmount(Guid, OpenLootContainerGuid, I - 1 + ExtPackScrollOffset, Amount);
+			}
 			return true;
 		}
 	const int32 Container = OpenLootSelectedPackGuid ? OpenLootSelectedPackGuid : OpenLootContainerGuid;

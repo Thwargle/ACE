@@ -1,5 +1,89 @@
 # Retail parity regression tests
 
+## Tailored clothing layers
+
+`ACE.RetailParity.TailoringLayers` decodes the actual Hoary Mattekar Over-robe
+and Pathwarden Scale Hauberk clothing tables, sends overlapping appearances
+through F745/F625, reverses the server's layer order, and removes the garments.
+It checks every resulting mesh part, uncovered setup defaults, cache fingerprints,
+texture replacement scope, and full/partial dye precedence using actual DAT colors.
+`CharacterCreationData`, `CustomObjectReplication`, `AppearancePlacement`,
+`StreamingCost`, and `ResolvedAppearanceCache` cover the adjacent paths.
+
+Retail references: `ObjDesc::UnPack`, `AddSubpalette` (005AB970),
+`RemoveDuplicateTextureMapChange` (005AB6B0), `RemoveDuplicateAnimPartChange`
+(005AB720), `Subpalette::replaces` (005AD830), `Subpalette::supercedes` (005AD870),
+`CPartArray::DoObjDescChanges` (00519210), and `SmartBox::UpdateVisualDesc`
+(00451F40). Full 2048-color replacements suppress partial overrides; another
+full replacement can replace them. Different overlapping partial ranges remain
+ordered. The same insertion rules now apply to wire descriptions and character
+creation's clothing composition. Preview merging also preserves the creature's
+base palette, matching `ObjDesc::operator+=` (005AC0A0).
+
+The server supplies the worn character's composed appearance. Top/Bottom tool
+priority is resolved there; the client must preserve that result rather than
+sort by equipment slots, item names, or inventory order. These fixtures verify
+that contract, but cannot establish the cause of an unspecified live outfit's
+overlap or verify every server's tailoring rules.
+
+Validation on 2026-10-16: editor build and all six suites above passed using
+Windows D3D12 with `-RenderOffscreen`; the front/side armor captures were reviewed.
+Report: `Saved/Automation/TailoringReview`. Shared Quest sources were synchronized
+and checked for differences; no Quest binary was built for this review.
+
+## Dungeon and inventory regressions
+
+- `ACE.RetailParity.RemoteMovementReplay` checks server corrections obstructed by walls and floors, for both players and monsters at 30–240 FPS. It also retains jump, stair, jitter and VR pose coverage. `ACE.RetailParity.RemoteSupport` checks ordinary collision and ground support. Retail reference: `InterpolationManager::adjust_offset`, `NodeCompleted`, and `UseTime`.
+- `ACE.RetailParity.DungeonInterfaces` checks keyboard targeting in culled dungeon rooms and at the radar boundary, plus the 18 category names and masks from `VendorItemsUI::OpenVendor`.
+- `ACE.RetailParity.InventoryOrder` checks external-container backpack discovery with either ordering of `ViewContents` and object creation. `ACE.RetailParity.UIScreens` renders installed and empty chest pack slots.
+- `ACE.Plugins.ItemTools.Transactions` gives all 14 salvage bags across packs, distinguishes bonded from attuned items, and confirms note proceeds through real inventory updates before purchasing supplies.
+- `ACE.Performance.WaspVisibility` sweeps resident portal visibility through the reported wasp rooms and all Glenden Wood Dungeon cells. This measures portal traversal, not end-to-end FPS or visual correctness.
+- `ace.PerfScene glenden` is an offline rendered benchmark at the authored Glenden Wood drop with a moving, rotating camera. It does not connect to a server or reproduce a full dungeon traversal.
+
+Validation on 2026-10-16: all seven suites above passed, including rendered
+`UIScreens`. The visibility sweep covered 572,436 camera samples (maximum
+0.692 ms). The Windows D3D12 Glenden entrance run, with eight synthetic NPCs at
+1920×1080, averaged 250.90 FPS over 7,527 sampled frames; p99 was 4.945 ms and
+the slowest frame was 28.430 ms. These checks did not reproduce the reported
+1 FPS room or establish the cause of the intermittent white polygons. Raw
+benchmark output was removed after analysis.
+
+## Wasp dungeon under network lag
+
+`ACE.Network.WaspDungeonLag` runs deterministic virtual-time cases at 0, 200,
+2,000 and 23,000 ms RTT over loopback UDP with encrypted checksums. Each case
+sends 7,200 cast messages from 120 wasps and 15 authoritative player corrections,
+including jitter, reordered arrivals, delayed recovery and duplicates. Assertions
+cover bounded dispatch, complete ordered delivery, visible position correction,
+and preservation of local facing. It can run with `-NullRHI`; frame-rate validation
+uses the rendered check below.
+
+From the repository root, after building `ACUnrealEditor`:
+
+```powershell
+& 'C:/Program Files/Epic Games/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe' 'C:/dev/ACE/Unreal/ACUnreal.uproject' -unattended -NullRHI -nosound '-ExecCmds=Automation RunTests ACE.Network.WaspDungeonLag' '-TestExit=Automation Test Queue Empty' '-ReportExportPath=C:/dev/ACE/Unreal/Saved/Automation/WaspNetworkLag'
+& Unreal/Build/Tests/Test-WaspNetworkLag.ps1 -OutputRoot C:/dev/ACE/Unreal/Saved/WaspLagRun
+```
+
+Use a fresh output directory for each run. This Windows D3D12 check renders the
+actual Phyntos dungeon near cell `0143015F`, with 120 wasps, keyboard movement,
+jumps, frost volleys and combat chat. It compares matching no-lag and 23-second
+RTT runs (11.5 seconds of incoming delay), with 80 ms jitter and 800 ms recovery
+delay every 97th packet. The synthetic server sends actual position and motion
+messages through the normal receive/dispatch path. Frost projectile effects
+maintain the same visual workload in both runs.
+
+Default acceptance limits are 60 average FPS, p99 at most 33.34 ms, and no frame
+above 150 ms. The lag run must also remain within 25% + 1 ms of baseline mean
+frame time and 50% + 2 ms of baseline p99, while demonstrating position correction,
+packet recovery, movement and jumping. Thresholds, sample duration, resolution and
+lag settings are script parameters. A failed assertion exits with an error.
+Reports contain frame times, network workload and movement counters; heavyweight
+traces and screenshots are disabled. These tests exercise a synthetic server
+workload and do not establish performance for every live-server event.
+
+## Retail parity suite
+
 Run from `C:/dev/ACE` in PowerShell after building `ACUnrealEditor`:
 
 ```powershell
@@ -9,8 +93,8 @@ Run from `C:/dev/ACE` in PowerShell after building `ACUnrealEditor`:
 `-RetailDatDir="path"` overrides the test default `C:/Turbine/Asheron's Call`.
 The fixture comparisons require the same DAT version used to generate the fixtures.
 
-For GPU coverage, replace `-NullRHI` with `-RenderOffscreen`. The full suite contains
-25 tests. The material, font, weather, UI, Yaraq scene, and runtime actor checks
+For GPU coverage, replace `-NullRHI` with `-RenderOffscreen`. The material, font,
+weather, UI, Yaraq scene, and runtime actor checks
 perform GPU checks with that option and write PNGs under `Saved/Automation/RetailParity`. Inspect the report
 test states: Unreal can return process exit code zero even when an assertion fails.
 

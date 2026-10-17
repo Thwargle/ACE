@@ -1345,7 +1345,6 @@ void UACEWorldPresenterComponent::HandlePositionUpdate(int32 ObjectGuid, const F
 	{
 		if (*Found)
 		{
-			(*Found)->ApplyACEPosition(Position);
 			FACEWorldObject Live;
 			if (Client && Client->GetWorldObject(ObjectGuid, Live))
 			{
@@ -1354,8 +1353,13 @@ void UACEWorldPresenterComponent::HandlePositionUpdate(int32 ObjectGuid, const F
 				if (!ShouldStreamObject(Live))
 				{
 					DestroySpawnedGuid(ObjectGuid);
+					return;
 				}
+				if (Live.ParentGuid == 0 && ((*Found)->IsAttachedToParent() || (*Found)->GetParentGuid() != 0))
+					(*Found)->InitializeFromObject(Live, WorldScale, /*bApplyDatAppearance*/ false);
+				(*Found)->ApplyPositionPlacement(Live.PlacementId);
 			}
+			(*Found)->ApplyACEPosition(Position);
 		}
 		return;
 	}
@@ -1364,6 +1368,10 @@ void UACEWorldPresenterComponent::HandlePositionUpdate(int32 ObjectGuid, const F
 	{
 		if (Pending.Guid == ObjectGuid)
 		{
+			// Queue entries may still contain an inventory/held placement from
+			// before the drop. Carry the accepted descriptor through spawn as well.
+			FACEWorldObject Live;
+			if (Client && Client->GetWorldObject(ObjectGuid, Live)) Pending = MoveTemp(Live);
 			Pending.Position = Position;
 			Pending.bHasPosition = true;
 			return;

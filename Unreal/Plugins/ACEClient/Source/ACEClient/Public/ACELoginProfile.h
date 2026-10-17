@@ -12,7 +12,9 @@ struct FACELoginServer
 
 struct FACELoginAccount
 {
-	FString Id, Username, Password;
+	FString Id, Username, Password, Alias;
+	/** Alias labels this local entry; authentication always uses Username. */
+	FString DisplayName() const;
 };
 
 struct FACELoginSettings

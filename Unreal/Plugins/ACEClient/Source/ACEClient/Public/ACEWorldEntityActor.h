@@ -34,6 +34,8 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "ACE")
 	void ApplyACEPosition(const FACEPosition& Position);
+	/** Apply a server placement pose before resolving world contact and selection bounds. */
+	void ApplyPositionPlacement(int32 PlacementId);
 
 	/** World-space point for spatial SFX (capsule center, not stale root). */
 	FVector GetSoundEmitLocation() const;
@@ -331,6 +333,11 @@ protected:
 	FQuat RemotePredictRotation = FQuat::Identity;
 	/** Last authoritative F748 location — used to clamp runaway drift. */
 	FVector RemoteAnchorLocation = FVector::ZeroVector;
+	/** A confirmed correction must not remain stuck on a different floor forever. */
+	bool bRemoteCorrectionPending = false;
+	int32 RemoteCorrectionFrames = 0;
+	float RemoteCorrectionRequested = 0.f;
+	float RemoteCorrectionBlocked = 0.f;
 	FACEObjectMotionState RemoteMotion;
 
 	/** Frozen Unreal XY face direction for TurnToObject / TurnToHeading (set once per packet). */

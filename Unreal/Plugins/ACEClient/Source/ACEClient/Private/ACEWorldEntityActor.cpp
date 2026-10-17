@@ -1497,6 +1497,7 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			// the riser after transporting only XY past its rounded edge.
 			if (bClampToGround && DisplayMovement.Z < 0) DisplayMovement.Z = 0;
 			FVector NextLoc = InterpolateRemoteLocation(RemotePredictLocation,DeltaTime,DisplayMovement);
+			const FVector RequestedLocation = NextLoc;
 			// Always seat Z for grounded remotes within the band — continuous XY integrate
 			// used to leave feet floating between sparse F748s.
 			// Match initial placement: Stuck signs/wall props retain the server's Z
@@ -1514,6 +1515,29 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 				// The displayed point lags prediction. Never copy its terrain Z
 				// into a prediction at different XY on a hill.
 				ClampLocationToGround(NextLoc,&RemotePredictRotation);
+			}
+			if (Creature && bRemoteCorrectionPending)
+			{
+				// Retail InterpolationManager checks progress every five physics frames
+				// and SetPositionSimple resynchronizes when its correction queue fails.
+				// Measure the correction actually requested by our smoothed presenter;
+				// ordinary extrapolated locomotion must never authorize crossing a wall.
+				RemoteCorrectionRequested += FVector::Distance(RequestedLocation, GetActorLocation() + DisplayMovement);
+				RemoteCorrectionBlocked += FVector::Distance(RequestedLocation, NextLoc);
+				if (FVector::DistSquared(NextLoc, RemotePredictLocation) < FMath::Square(.05f * WorldScale))
+					bRemoteCorrectionPending = false;
+				else if (++RemoteCorrectionFrames >= 5)
+				{
+					if (RemoteCorrectionRequested > .0002f * WorldScale
+						&& RemoteCorrectionBlocked >= RemoteCorrectionRequested * .7f
+						&& FVector::DistSquared(NextLoc, RemoteAnchorLocation) >= FMath::Square(.2f * WorldScale))
+					{
+						NextLoc = RemotePredictLocation = RemoteAnchorLocation;
+						bRemoteCorrectionPending = false;
+					}
+					RemoteCorrectionFrames = 0;
+					RemoteCorrectionRequested = RemoteCorrectionBlocked = 0.f;
+				}
 			}
 			SetActorLocation(NextLoc);
 
@@ -2074,6 +2098,16 @@ void AACEWorldEntityActor::RefreshActorTickEnabled()
 	SetActorTickEnabled(bNeed);
 }
 
+void AACEWorldEntityActor::ApplyPositionPlacement(int32 PlacementId)
+{
+	if (Appearance && Appearance->ApplyPositionPlacement(PlacementId))
+	{
+		const bool bWorldCollide = ParentGuid == 0 && !bIsSelf && !IsEthereal()
+			&& !IsCorpse() && (PhysicsState & ACEPhysicsState::Missile) == 0;
+		ConfigureWorldCollision(bWorldCollide);
+	}
+}
+
 void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position)
 {
 	if (bAttachedToParent || ParentGuid != 0)
@@ -2131,6 +2165,17 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position)
 	if (Creature && Position.bIsGrounded && !bHavePhysicsVelocity && bClampToGround)
 		ClampLocationToGround(NewLocation);
 	RemoteAnchorLocation = NewLocation;
+	if (bSnap)
+		bRemoteCorrectionPending = false;
+	else if (Creature && !bHaveVRPresentation && Position.bIsGrounded)
+	{
+		if (!bRemoteCorrectionPending)
+		{
+			RemoteCorrectionFrames = 0;
+			RemoteCorrectionRequested = RemoteCorrectionBlocked = 0.f;
+		}
+		bRemoteCorrectionPending = FVector::DistSquared(GetActorLocation(), NewLocation) >= FMath::Square(.05f * WorldScale);
+	}
 	// Retail InterpolationManager completes position corrections within 0.05 AC.
 	// Keep sub-tolerance noise out of the predictor (especially sideways drift
 	// when running alongside someone). Larger corrections remain authoritative.

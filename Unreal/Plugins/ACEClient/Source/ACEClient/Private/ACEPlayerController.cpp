@@ -8169,7 +8169,8 @@ void AACEPlayerController::CycleNearbyTarget(bool bEnemies, int32 Direction)
 int32 AACEPlayerController::FindNearbyTarget(bool bEnemies, int32 Direction, int32 ExcludeGuid) const
 {
 	if (!Client) return 0;
-	const FACEPosition PlayerPosition=Client->GetPlayerPosition();
+	FACEPosition PlayerPosition=Client->GetPlayerPosition();
+	TryGetLocallyPredictedPosition(PlayerPosition);
 	if (!PlayerPosition.IsValid()) return 0;
 	const FVector Origin = PlayerPosition.ToUnrealLocation(1.f);
 	const double RangeSquared=FMath::Square(ACERadarVisuals::RangeAc(uint32(PlayerPosition.CellId)));
@@ -8181,15 +8182,14 @@ int32 AACEPlayerController::FindNearbyTarget(bool bEnemies, int32 Direction, int
 	{
 		return !Obj.IsSelectableWorldObject()
 			|| FVector::DistSquaredXY(Obj.Position.ToUnrealLocation(1.f),Origin)>RangeSquared
-			|| !Client->IsWorldObjectVisible(Obj)
 			|| Obj.Guid == Client->GetPlayerGuid() || Obj.Guid == ExcludeGuid
 			|| (bEnemies ? (!ACECombatTargeting::CanAttack(Obj, SelfObject) || Obj.PetOwnerId != 0 || Obj.IsVendor())
 				: (Obj.bIsPlayer || (Obj.ItemType & ACEItemType::Creature) != 0))
 			|| (bEnemies && Fellowship.Members.ContainsByPredicate([&](const auto& Member) { return Member.Guid == Obj.Guid; }));
 	});
 	// CPlayerSystem::SelectNext limits candidates by planar radar radius first,
-	// then orders them by planar distance plus weighted height. Cached visibility
-	// alone must never make a previously encountered distant monster eligible.
+	// then orders them by planar distance plus weighted height. Retail's object
+	// visibility table is server awareness, not the camera's drawing frustum.
 	auto Distance = [&](const FACEWorldObject& Obj)
 	{
 		const FVector Delta = Obj.Position.ToUnrealLocation(1.f)-Origin;

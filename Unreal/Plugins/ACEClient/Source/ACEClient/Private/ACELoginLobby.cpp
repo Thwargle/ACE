@@ -325,9 +325,11 @@ void UACELoginWidget::EnsureDefaultLayout()
 	Pages->AddChild(PluginPanel);
 	UVerticalBox* Accounts; Pages->AddChild(Card(Accounts));
 	AddLine(Accounts,Label(TEXT("Manage accounts"),30));
-	AddLine(Accounts,Label(TEXT("Save your login details here, then choose an account on Play."),18,true));
+	AddLine(Accounts,Label(TEXT("Use New account to save another login, even with the same username. Choose an account on Play."),18,true));
 	ManagedAccountList=WidgetTree->ConstructWidget<UScrollBox>(); ManagedAccountList->SetScrollbarThickness(FVector2D(8,8));
 	auto* ManagedSlot=Accounts->AddChildToVerticalBox(ManagedAccountList); ManagedSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); ManagedSlot->SetPadding(FMargin(0,0,0,12));
+	AccountAliasBox=Field(Accounts,TEXT("Alias (optional)"),TEXT("AccountAliasBox"));
+	AccountAliasBox->SetHintText(FText::FromString(TEXT("For example: Conquest main or Coldeve crafter")));
 	auto* Credentials=WidgetTree->ConstructWidget<UHorizontalBox>(); AddLine(Accounts,Credentials,0);
 	auto* UserColumn=WidgetTree->ConstructWidget<UVerticalBox>(); auto* UserSlot=Credentials->AddChildToHorizontalBox(UserColumn);
 	UserSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); UserSlot->SetPadding(FMargin(0,0,16,0));
@@ -538,6 +540,7 @@ void UACELoginWidget::SelectServer(const FString& Id)
 	if (!A && !Profile.Accounts.IsEmpty()) A=&Profile.Accounts[0];
 	Profile.SelectedAccountId=A?A->Id:FString();
 	AccountBox->SetText(FText::FromString(A?A->Username:TEXT(""))); PasswordBox->SetText(FText::FromString(A?A->Password:TEXT("")));
+	AccountAliasBox->SetText(FText::FromString(A?A->Alias:TEXT("")));
 	Profile.Host=S?S->Host:FString(); Profile.Port=S?FString::FromInt(S->Port):TEXT("9000");
 	Profile.Account=A?A->Username:FString(); Profile.Password=A?A->Password:FString();
 	RefreshServers(); RefreshAccounts(); bLoginEntriesDirty=true;
@@ -549,7 +552,11 @@ void UACELoginWidget::RefreshAccounts()
 	{
 		List->ClearChildren();
 		for (const auto& A:Profile.Accounts)
-			Cast<UScrollBoxSlot>(List->AddChild(ActionButton(A.Username,TEXT("selectaccount"),A.Id,A.Id==Profile.SelectedAccountId)))->SetPadding(FMargin(0,0,0,6));
+		{
+			auto* Button=ActionButton(A.DisplayName(),TEXT("selectaccount"),A.Id,A.Id==Profile.SelectedAccountId);
+			Button->SetToolTipText(FText::FromString(A.DisplayName()));
+			Cast<UScrollBoxSlot>(List->AddChild(Button))->SetPadding(FMargin(0,0,0,6));
+		}
 		if (!List->GetChildrenCount()) List->AddChild(Label(TEXT("Add a login on the Accounts tab."),18,true));
 	}
 }
@@ -557,16 +564,20 @@ void UACELoginWidget::RefreshAccounts()
 bool UACELoginWidget::StoreAccount()
 {
 	const FString User=AccountBox->GetText().ToString().TrimStartAndEnd(), Secret=PasswordBox->GetText().ToString();
+	const FString Alias=AccountAliasBox->GetText().ToString().TrimStartAndEnd();
 	if (User.IsEmpty() || User.Len()>128 || Secret.IsEmpty() || Secret.Len()>256 || User.Contains(TEXT(":")))
 	{ SetStatus(TEXT("Enter a username and password. Usernames cannot contain a colon.")); return false; }
+	if (Alias.Len()>100 || Alias.Contains(TEXT("\n")) || Alias.Contains(TEXT("\r")))
+	{ SetStatus(TEXT("Enter an alias of up to 100 characters on one line.")); return false; }
 	auto* A=Profile.Accounts.FindByPredicate([&](const auto& E){return E.Id==Profile.SelectedAccountId;});
-	if (!A) A=Profile.Accounts.FindByPredicate([&](const auto& E){return E.Username==User && E.Password==Secret;});
+	// New account always creates an independent entry. Matching credentials can
+	// belong to different aliases; only selection by ID is an edit operation.
 	if (!A)
 	{
 		if (Profile.Accounts.Num()>=512) { SetStatus(TEXT("Remove an unused account before adding another.")); return false; }
 		A=&Profile.Accounts.AddDefaulted_GetRef(); A->Id=FGuid::NewGuid().ToString();
 	}
-	A->Username=User; A->Password=Secret; Profile.SelectedAccountId=A->Id;
+	A->Username=User; A->Password=Secret; A->Alias=Alias; Profile.SelectedAccountId=A->Id;
 	Profile.Account=User; Profile.Password=Secret; bLoginEntriesDirty=true; SaveLoginEntries(); RefreshAccounts(); return !bLoginEntriesDirty;
 }
 
@@ -732,6 +743,7 @@ void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 	else if (Action==TEXT("newaccount"))
 	{
 		Profile.SelectedAccountId.Reset(); Profile.Account.Reset(); Profile.Password.Reset();
+		AccountAliasBox->SetText(FText::GetEmpty());
 		AccountBox->SetText(FText::GetEmpty()); PasswordBox->SetText(FText::GetEmpty()); RefreshAccounts(); bLoginEntriesDirty=true;
 	}
 	else if (Action==TEXT("removeserver") || Action==TEXT("removeaccount"))

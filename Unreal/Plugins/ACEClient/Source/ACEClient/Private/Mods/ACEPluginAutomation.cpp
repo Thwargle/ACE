@@ -708,7 +708,12 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         Ints->SetNumberField(TEXT("19"),Item.Value);Ints->SetNumberField(TEXT("5"),Item.Burden);Ints->SetNumberField(TEXT("131"),Item.MaterialType);
         Strings->SetStringField(TEXT("1"),ACERetailObjectNames::Name(Item));
         // Public description aliases used by Decal; these are not server property IDs.
-        const TPair<int64,int64> PublicInts[]={{218103808,Item.WeenieClassId},{218103809,Item.IconId},{218103810,uint32(Item.ContainerId)},{218103811,uint32(Item.Position.CellId)>>16},{218103812,Item.ItemsCapacity},{218103813,Item.ContainersCapacity},{218103814,FMath::Max(1,Item.StackSize)},{218103815,Item.MaxStackSize},{218103816,Item.SpellDID},{218103818,uint32(Item.WielderId)},{218103819,Item.CurrentWieldedLocation},{218103821,Item.ClothingPriority},{218103822,Item.ValidLocations},{218103823,Item.CombatUse},{218103824,Item.UiEffects},{218103825,Item.AmmoType},{218103826,Item.ItemUseable},{218103834,uint32(Item.ItemType)},{218103835,uint32(Item.ObjectDescriptionFlags)},{218103849,Item.IconOverlayId},{218103850,Item.IconUnderlayId}};
+        // VT g6.e stores the packed icon/overlay/underlay indices from PublicWeenieDesc.
+        // Our parser adds the texture DID prefix for rendering. Remove it only for
+        // these aliases (e.g. a level-4 overlay is 27703, not 0x06006C37). Keep all
+        // 24 index bits for custom DATs, and leave the native/rendering IDs intact.
+        auto IconIndex=[](int32 Id){return uint32(Id)&0x00ffffffu;};
+        const TPair<int64,int64> PublicInts[]={{218103808,Item.WeenieClassId},{218103809,IconIndex(Item.IconId)},{218103810,uint32(Item.ContainerId)},{218103811,uint32(Item.Position.CellId)>>16},{218103812,Item.ItemsCapacity},{218103813,Item.ContainersCapacity},{218103814,FMath::Max(1,Item.StackSize)},{218103815,Item.MaxStackSize},{218103816,Item.SpellDID},{218103818,uint32(Item.WielderId)},{218103819,Item.CurrentWieldedLocation},{218103821,Item.ClothingPriority},{218103822,Item.ValidLocations},{218103823,Item.CombatUse},{218103824,Item.UiEffects},{218103825,Item.AmmoType},{218103826,Item.ItemUseable},{218103834,uint32(Item.ItemType)},{218103835,uint32(Item.ObjectDescriptionFlags)},{218103849,IconIndex(Item.IconOverlayId)},{218103850,IconIndex(Item.IconUnderlayId)}};
         for(const auto& Pair:PublicInts)Ints->SetNumberField(FString::Printf(TEXT("%lld"),Pair.Key),Pair.Value);
         if(Item.SalvageWorkmanship>=0)Floats->SetNumberField(TEXT("167772169"),Item.SalvageWorkmanship);
         if(A&&A->bSuccess)

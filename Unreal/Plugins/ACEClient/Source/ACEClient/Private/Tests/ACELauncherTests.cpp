@@ -62,16 +62,24 @@ bool FACELauncherDirectoryTest::RunTest(const FString&)
     P.MigrateLegacy(); P.MigrateLegacy();
     TestEqual(TEXT("Migration creates one saved server"),P.Servers.Num(),1);
     TestEqual(TEXT("Migration preserves one account without duplication"),P.Accounts.Num(),1);
+    TestTrue(TEXT("Legacy accounts need no alias"),P.Accounts[0].Alias.IsEmpty());
+    TestEqual(TEXT("Accounts without aliases display their username"),P.Accounts[0].DisplayName(),P.Account);
     FACELoginSettings AccountOnly; AccountOnly.Account=TEXT("saved without server"); AccountOnly.Password=TEXT("fixture"); AccountOnly.MigrateLegacy();
     TestTrue(TEXT("An old account survives even if no host was saved"),AccountOnly.Servers.IsEmpty() && AccountOnly.Accounts.Num()==1);
     P.DatDirectory=TEXT("C:/Fixture game data"); P.Servers.Append(Servers);
-    P.Accounts.Add({TEXT("alternate"),TEXT("other"),TEXT("other-secret")});
+    P.Accounts[0].Alias=TEXT("Conquest main");
+    P.Accounts.Add({TEXT("alternate"),P.Account,TEXT("other-secret"),TEXT("Coldeve crafter")});
     const FString Path=FPaths::ProjectSavedDir()/TEXT("Automation/Launcher/Profile-")+FGuid::NewGuid().ToString()+TEXT(".dat");
     TestTrue(TEXT("Multiple profiles save"),ACELoginSettings::Save(P,Path));
     FACELoginSettings Restored; TestTrue(TEXT("Multiple profiles load"),ACELoginSettings::Load(Restored,Path));
     TestEqual(TEXT("Server list persists"),Restored.Servers.Num(),3);
     TestTrue(TEXT("Published ports survive profile save and reload"),Restored.Servers[1].Port==9010 && Restored.Servers[2].Port==9047);
     TestEqual(TEXT("Alternate accounts persist"),Restored.Accounts.Num(),2);
+    TestTrue(TEXT("Same username keeps separate saved identities"),Restored.Accounts[0].Username==Restored.Accounts[1].Username
+        && Restored.Accounts[0].Id!=Restored.Accounts[1].Id);
+    TestEqual(TEXT("Primary alias survives restart"),Restored.Accounts[0].Alias,FString(TEXT("Conquest main")));
+    TestEqual(TEXT("Alternate alias survives restart"),Restored.Accounts[1].Alias,FString(TEXT("Coldeve crafter")));
+    TestEqual(TEXT("Alias and actual username appear together"),Restored.Accounts[1].DisplayName(),FString(TEXT("Coldeve crafter (legacy)")));
     TestEqual(TEXT("DAT folder persists"),Restored.DatDirectory,P.DatDirectory);
 #if PLATFORM_LINUX
     TestTrue(TEXT("Linux retains account selection without saving passwords"),Restored.SelectedAccountId==P.SelectedAccountId && Restored.Password.IsEmpty() && Restored.Accounts[0].Password.IsEmpty() && Restored.Accounts[1].Password.IsEmpty());
@@ -80,6 +88,7 @@ bool FACELauncherDirectoryTest::RunTest(const FString&)
     TestFalse(TEXT("Linux profile contains no alternate password"),SavedProfile.Contains(TEXT("other-secret")));
 #else
     TestTrue(TEXT("Active account and password survive restart"),Restored.SelectedAccountId==P.SelectedAccountId && Restored.Accounts[0].Password==P.Password);
+    TestEqual(TEXT("Same username retains its alternate password"),Restored.Accounts[1].Password,FString(TEXT("other-secret")));
 #endif
     TestFalse(TEXT("New launcher profiles do not opt into automatic updates"),Restored.bAutoUpdate);
     P.bAutoUpdate=true;
@@ -124,12 +133,35 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     W->HostBox->SetText(FText::FromString(TEXT("home.example.invalid"))); W->RunAction(TEXT("saveserver"));
     TestEqual(TEXT("Custom server saved from form"),W->Profile.Servers.Num(),1);
     const FString HomeId=W->Profile.SelectedServerId;
-    W->AccountBox->SetText(FText::FromString(TEXT("Adventurer"))); W->PasswordBox->SetText(FText::FromString(TEXT("fixture-password"))); W->RunAction(TEXT("saveaccount"));
-    W->RunAction(TEXT("newaccount")); W->AccountBox->SetText(FText::FromString(TEXT("Archer"))); W->PasswordBox->SetText(FText::FromString(TEXT("fixture-two"))); W->RunAction(TEXT("saveaccount"));
+    W->AccountBox->SetText(FText::FromString(TEXT("Adventurer"))); W->PasswordBox->SetText(FText::FromString(TEXT("fixture-password")));
+    W->AccountAliasBox->SetText(FText::FromString(TEXT("Conquest main"))); W->RunAction(TEXT("saveaccount"));
+    const FString FirstAccountId=W->Profile.SelectedAccountId;
+    W->RunAction(TEXT("newaccount"));
+    TestTrue(TEXT("New account clears the alias as well as credentials"),W->AccountAliasBox->GetText().IsEmpty() && W->AccountBox->GetText().IsEmpty() && W->PasswordBox->GetText().IsEmpty());
+    W->AccountBox->SetText(FText::FromString(TEXT("Adventurer"))); W->PasswordBox->SetText(FText::FromString(TEXT("fixture-two")));
+    W->AccountAliasBox->SetText(FText::FromString(TEXT("Coldeve crafter"))); W->RunAction(TEXT("saveaccount"));
+    const FString SecondAccountId=W->Profile.SelectedAccountId;
     TestEqual(TEXT("Second identity does not overwrite first"),W->Profile.Accounts.Num(),2);
+    TestTrue(TEXT("Matching usernames still have distinct identity IDs"),FirstAccountId!=SecondAccountId);
+    W->RunAction(TEXT("selectaccount"),FirstAccountId);
+    TestEqual(TEXT("Selecting first duplicate restores its password"),W->PasswordBox->GetText().ToString(),FString(TEXT("fixture-password")));
+    TestEqual(TEXT("Selecting first duplicate restores its alias"),W->AccountAliasBox->GetText().ToString(),FString(TEXT("Conquest main")));
+    W->AccountAliasBox->SetText(FText::FromString(TEXT(" Conquest adventurer "))); W->RunAction(TEXT("saveaccount"));
+    TestEqual(TEXT("Alias edit preserves account identity"),W->Profile.SelectedAccountId,FirstAccountId);
+    TestEqual(TEXT("Alias edit trims surrounding spaces"),W->Profile.Accounts[0].Alias,FString(TEXT("Conquest adventurer")));
+    TestEqual(TEXT("Alias edit leaves other duplicate untouched"),W->Profile.Accounts[1].Alias,FString(TEXT("Coldeve crafter")));
+    W->RunAction(TEXT("newaccount"));
+    W->AccountBox->SetText(FText::FromString(TEXT("Adventurer"))); W->PasswordBox->SetText(FText::FromString(TEXT("fixture-two")));
+    W->AccountAliasBox->SetText(FText::FromString(TEXT("Same credentials, another label"))); W->RunAction(TEXT("saveaccount"));
+    TestEqual(TEXT("New entry never merges by matching username and password"),W->Profile.Accounts.Num(),3);
+    W->RunAction(TEXT("removeaccount")); W->RunAction(TEXT("confirmremove"));
+    TestEqual(TEXT("Deleting an identical login removes only that entry"),W->Profile.Accounts.Num(),2);
+    W->RunAction(TEXT("selectaccount"),SecondAccountId);
+    TestEqual(TEXT("Selecting second duplicate restores its password"),W->PasswordBox->GetText().ToString(),FString(TEXT("fixture-two")));
     W->RunAction(TEXT("newserver")); W->NameBox->SetText(FText::FromString(TEXT("A second world"))); W->HostBox->SetText(FText::FromString(TEXT("second.invalid")));
     W->RunAction(TEXT("gdle")); W->RunAction(TEXT("saveserver"));
-    TestEqual(TEXT("Accounts are shared when switching to a new server"),W->AccountBox->GetText().ToString(),FString(TEXT("Archer")));
+    TestEqual(TEXT("Accounts are shared when switching to a new server"),W->AccountBox->GetText().ToString(),FString(TEXT("Adventurer")));
+    TestEqual(TEXT("Server switch retains selected alias"),W->AccountAliasBox->GetText().ToString(),FString(TEXT("Coldeve crafter")));
     TestEqual(TEXT("Every saved account is offered on each server"),W->AccountList->GetChildrenCount(),2);
     W->RunAction(TEXT("accounts"));
     TestEqual(TEXT("Account management has its own page"),W->Pages->GetActiveWidgetIndex(),6);
@@ -137,9 +169,17 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     W->RunAction(TEXT("play"));
     TestTrue(TEXT("Selected GDLE type stored"),W->Profile.SelectedServer()->bGDLE);
     W->RunAction(TEXT("selectserver"),HomeId);
-    TestEqual(TEXT("Switching servers preserves the chosen identity"),W->AccountBox->GetText().ToString(),FString(TEXT("Archer")));
+    TestEqual(TEXT("Switching servers preserves the chosen identity"),W->Profile.SelectedAccountId,SecondAccountId);
     W->RunAction(TEXT("selectaccount"),W->Profile.Accounts[1].Id);
-    TestEqual(TEXT("Account selection restores alternate"),W->AccountBox->GetText().ToString(),FString(TEXT("Archer")));
+    TestEqual(TEXT("Account selection keeps authentication username rather than alias"),W->Profile.Account,FString(TEXT("Adventurer")));
+    for(auto* List:{W->AccountList.Get(),W->ManagedAccountList.Get()})
+    {
+        auto* Button=Cast<UACELoginActionButton>(List->GetChildAt(1));
+        auto* Size=Button?Cast<USizeBox>(Button->GetContent()):nullptr;
+        auto* Title=Size?Cast<UTextBlock>(Size->GetContent()):nullptr;
+        TestTrue(TEXT("Play and Accounts rows display alias with username"),Title&&Title->GetText().ToString()==TEXT("Coldeve crafter (Adventurer)"));
+        TestTrue(TEXT("Rows distinguish duplicate usernames by stable ID"),Button&&Button->Value==SecondAccountId);
+    }
     W->RunAction(TEXT("removeaccount")); W->RunAction(TEXT("cancelremove"));
     TestEqual(TEXT("Cancelled removal keeps accounts"),W->Profile.Accounts.Num(),2);
     W->Profile.Servers[0].Description.Reset(); W->SelectServer(HomeId);
@@ -162,6 +202,9 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         Reloaded->ProfilePath=W->ProfilePath;
         auto ReloadedSlate=Reloaded->TakeWidget();
         TestTrue(TEXT("Reopened launcher restores the checked checkbox"),Reloaded->AutoUpdateCheckBox->IsChecked());
+        TestEqual(TEXT("Reopened launcher selects the same duplicate account"),Reloaded->Profile.SelectedAccountId,SecondAccountId);
+        TestEqual(TEXT("Reopened launcher restores alias"),Reloaded->AccountAliasBox->GetText().ToString(),FString(TEXT("Coldeve crafter")));
+        TestEqual(TEXT("Reopened launcher restores the correct password"),Reloaded->PasswordBox->GetText().ToString(),FString(TEXT("fixture-two")));
         Reloaded->NativeDestruct();
     }
     W->AutoUpdateCheckBox->SetIsChecked(false);
@@ -206,6 +249,7 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         };
         W->SetStatus(FString()); Capture(TEXT("Desktop"),FIntPoint(1600,1000));
         W->RunAction(TEXT("accounts"));Capture(TEXT("Accounts"),FIntPoint(1100,900));
+        Capture(TEXT("Accounts720p"),FIntPoint(1280,720));Capture(TEXT("AccountsSmallWindow"),FIntPoint(800,600));
         Capture(TEXT("AccountsNarrow"),FIntPoint(650,1000));W->RunAction(TEXT("play"));
         Capture(TEXT("VR"),FIntPoint(1100,900));
         TestEqual(TEXT("Idle status leaves room for the login panel"),W->StatusText->GetParent()->GetVisibility(),ESlateVisibility::Collapsed);
@@ -286,7 +330,8 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     TestEqual(TEXT("Removing a server keeps shared accounts"),W->Profile.Accounts.Num(),1);
     FACELoginSettings Saved; TestTrue(TEXT("Actions survive restart"),ACELoginSettings::Load(Saved,W->ProfilePath));
     TestTrue(TEXT("Server deletion preserves the remaining shared identity after restart"),Saved.Accounts.Num()==1 && Saved.Account==TEXT("Adventurer"));
-    TestFalse(TEXT("Removed alternate cannot reappear"),Saved.Accounts.ContainsByPredicate([](const auto& A){return A.Username==TEXT("Archer");}));
+    TestFalse(TEXT("Removed alternate cannot reappear"),Saved.Accounts.ContainsByPredicate([&](const auto& A){return A.Id==SecondAccountId;}));
+    TestTrue(TEXT("Same-username survivor keeps its identity and alias"),Saved.Accounts[0].Id==FirstAccountId && Saved.Accounts[0].Alias==TEXT("Conquest adventurer"));
     W->NativeDestruct(); IFileManager::Get().Delete(*W->ProfilePath,false,true);
     Owner.Reset(); GI->Shutdown(); GEngine->DestroyWorldContext(World); World->DestroyWorld(false);
     return true;

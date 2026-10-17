@@ -1,46 +1,52 @@
-# AC:Unreal / AC:VR release 120
+# AC:Unreal / AC:VR release 121
 
 Windows desktop, PC VR, native Linux x86_64, and standalone Quest share version
-**2026.10.16.120**. Android version code: 120. Quest installer revision: 9.
+**2026.10.16.121**. Android version code: 121. Quest installer revision: 9.
 
-## Login and character creation
+## Login and profiles
 
-- Replace the login screen's red buttons with quiet neutral controls, ivory text,
-  retail bronze frame artwork, and a muted green Launch button.
-- Fit the main login interface without scrolling, including narrow windows and
-  error messages. Server, account, and directory lists scroll within their panels.
-- Keep login backgrounds black after logout, put Quit at the top right, and move
-  credential editing to the Accounts tab. Remove the redundant welcome message.
-- Use the retail full-body idle when zoomed out in character creation, and the
-  held rest pose for close-up inspection. Clarify Olthoi body, eye and markings
-  color controls and hide unsupported skin-style arrows.
+- Add an optional alias for each saved account. Separate account entries can use
+  the same username with different passwords or aliases.
+- Preserve each account's identity when editing or selecting it for a server.
 
-## UCM
+## World and retail behavior
 
-- Fill empty mana stones from suitable unwanted magical loot picked up by UCM;
-  no manually selected donor pool is needed. Normal loot rules take precedence,
-  and protected items and existing carried equipment are excluded.
-- Expose the minimum mana required in source loot, with a default of 1,000.
-- Put Prioritize loot and Prioritize navigation together on Overview.
-- Remove constantly changing action text from UCM Micro; the main UCM window
-  continues to show the current action.
+- Recover remote players and monsters whose server position corrections were
+  blocked by dungeon walls, stairs, or floors, leaving their models in the wrong place.
+- Allow keyboard targeting of eligible off-screen targets and targets in culled
+  dungeon rooms throughout the existing targeting range.
+- Apply the server's ground-placement pose when items are dropped, including
+  shields and bracelets. Preserve the custom VR drop behavior.
+- Match retail vendor category names and item groupings.
+- Show installed backpacks and available backpack slots in external containers,
+  including house chests.
+- Match retail full-palette override precedence and appearance merging for
+  clothing. Preserve server-supplied body-part and texture layering order.
 
-## Performance and networking
+## UCM and Item Tools
 
-- Retire stale contents of closed loot containers after the retail grace period,
-  preventing discarded corpse loot from accumulating during long hunting runs.
-- Reuse materials and textures still held by visible characters when bounded
-  caches turn over, reducing repeated appearance rebuilds in crowded scenes.
-- Reject already-received encrypted packets before checksum-key processing,
-  matching retail duplicate handling without disrupting ordered packet delivery.
+- Correct the icon and overlay values exposed to imported vTank loot rules, so
+  rules can distinguish aetheria and cloak levels correctly, including custom icons.
+- Allow transfer of bonded, non-attuned salvage and items across all packs;
+  continue excluding attuned, retained, equipped, or offered items.
+- Confirm vendor note proceeds against live inventory before restocking, so
+  selling a trade note can continue into purchasing the missing supplies.
+
+## Network recovery
+
+- Bound ordered gameplay packet processing when delayed packets release a backlog,
+  while keeping transport acknowledgements responsive and preserving packet order.
+- Add receive/dispatch timing and backlog details to `/acueperf` diagnostics.
+- Add simulated wasp-dungeon lag tests through 23 seconds of round-trip latency,
+  plus dungeon visibility and blocked-position regression coverage.
 
 ## Compatibility and validation limits
 
 - **AC-WoW Transmog, its provider, converter and model assets are excluded.**
 - Updates preserve accounts, settings, profiles and DAT files. Linux updates are
   downloaded and extracted manually. Game DAT files and a server are not included.
-- Regression tests reproduce the corrected cache, stale-loot and duplicate-packet
-  behavior. The reported Hoshino event crash and multi-hour UCM freeze have not
-  been reproduced end to end; this release does not claim those reports resolved.
-- Builds and automated checks do not establish physical-headset or live-event
-  acceptance.
+- The repeatable Glenden Wood 1 FPS room and intermittent white polygons have
+  not been reproduced end to end. The network changes address confirmed backlog
+  processing behavior; this release does not claim every reported dungeon stall fixed.
+- Automated checks and packaging do not establish physical-headset or live-event
+  acceptance, or reproduce the unspecified live tailoring outfit.

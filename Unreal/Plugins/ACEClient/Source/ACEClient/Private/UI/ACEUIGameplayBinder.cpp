@@ -1,4 +1,5 @@
 #include "UI/ACEUIGameplayBinder.h"
+#include "UI/ACERetailVendorCategories.h"
 #include "ACERetailChat.h"
 #include "ACESpellbookFilters.h"
 #include "UI/ACERadarColors.h"
@@ -3091,7 +3092,7 @@ void UACEUIGameplayBinder::TryAutoTargetOnCombatEnter(int32 ExcludeGuid)
             && Client->GetWorldObject(Guid,Obj) && Obj.IsSelectableWorldObject()
             && Client->GetSession()->IsCombatTarget(Guid)
             && !Obj.IsVendor()
-            && !Obj.PetOwnerId && Client->IsWorldObjectVisible(Obj)
+            && !Obj.PetOwnerId
             && !Fellowship.Members.ContainsByPredicate([&](const auto& M) { return M.Guid==Guid; });
     };
     if (Eligible(Client->GetSelectedObject().Guid)) return;
@@ -12542,8 +12543,17 @@ uint64 UACEUIGameplayBinder::HashLootOverlayState() const
 	}
 	const int32 ContGuid = OpenLootSelectedPackGuid != 0 ? OpenLootSelectedPackGuid : OpenLootContainerGuid;
 	TArray<FACEWorldObject> Items = Client->GetPackItems(ContGuid);
-	// The pack strip still shows the root's containers while browsing a nested pack.
-	if (ContGuid != OpenLootContainerGuid) Items.Append(Client->GetPackItems(OpenLootContainerGuid));
+	// Pack-slot items are deliberately absent from GetPackItems' ordinary grid.
+	TArray<int32> Packs;
+	if (const auto Session = Client->GetSession()) Session->GetContainerPackGuids(OpenLootContainerGuid, Packs);
+	for (int32 Guid : Packs)
+	{
+		FACEWorldObject Pack;
+		if (Client->GetWorldObject(Guid, Pack)) Items.Add(Pack);
+	}
+	FACEWorldObject Root;
+	if (Client->GetWorldObject(OpenLootContainerGuid, Root))
+		H = HashCombine(H, GetTypeHash(Root.ContainersCapacity));
 	H = HashCombine(H, GetTypeHash(Items.Num()));
 	for (const FACEWorldObject& O : Items)
 	{
@@ -14216,43 +14226,22 @@ void UACEUIGameplayBinder::RefreshVendorButtonLabels()
 	}
 }
 
+
 FString UACEUIGameplayBinder::VendorFilterLabel() const
 {
-	switch (VendorItemTypeFilter)
-	{
-	case 1: return TEXT("Weapons");
-	case 2: return TEXT("Armor");
-	case 3: return TEXT("Clothing");
-	case 4: return TEXT("Jewelry");
-	case 5: return TEXT("Misc");
-	default: return TEXT("All");
-	}
+	static_assert(VendorFilterCount == UE_ARRAY_COUNT(ACERetailVendorCategories::Categories));
+	return ACERetailVendorCategories::Categories[FMath::Clamp(VendorItemTypeFilter,0,VendorFilterCount-1)].Name;
 }
 
 bool UACEUIGameplayBinder::VendorItemMatchesFilter(const FACEWorldObject& O, int32 FilterIndex) const
 {
-	switch (FilterIndex)
-	{
-	case 1: // Weapons
-		return (O.ItemType & (ACEItemType::MeleeWeapon | ACEItemType::MissileWeapon | ACEItemType::Caster)) != 0;
-	case 2: // Armor
-		return (O.ItemType & ACEItemType::Armor) != 0;
-	case 3: // Clothing
-		return (O.ItemType & ACEItemType::Clothing) != 0;
-	case 4: // Jewelry
-		return (O.ItemType & ACEItemType::Jewelry) != 0;
-	case 5: // Misc
-		return (O.ItemType & (ACEItemType::MeleeWeapon | ACEItemType::MissileWeapon | ACEItemType::Caster
-			| ACEItemType::Armor | ACEItemType::Clothing | ACEItemType::Jewelry)) == 0;
-	default:
-		return true;
-	}
+	return FilterIndex >= 0 && FilterIndex < VendorFilterCount
+		&& (uint32(O.ItemType) & ACERetailVendorCategories::Categories[FilterIndex].Mask) != 0;
 }
 
 void UACEUIGameplayBinder::RebuildVendorVisibleFilters()
 {
 	VendorVisibleFilterIndices.Reset();
-	VendorVisibleFilterIndices.Add(0);
 	// Use the live profiles during this query; do not duplicate names and appearance
 	// arrays whenever an open dropdown checks which categories are available.
 	const auto Session = Client && OpenVendorGuid != 0 ? Client->GetSession() : nullptr;
@@ -14267,7 +14256,7 @@ void UACEUIGameplayBinder::RebuildVendorVisibleFilters()
 			Items = Fallback;
 		}
 	}
-	for (int32 FilterId = 1; FilterId < VendorFilterCount; ++FilterId)
+	for (int32 FilterId = 0; FilterId < VendorFilterCount; ++FilterId)
 	{
 		for (const FACEWorldObject& O : Items)
 		{
@@ -14280,7 +14269,7 @@ void UACEUIGameplayBinder::RebuildVendorVisibleFilters()
 	}
 	if (!VendorVisibleFilterIndices.Contains(VendorItemTypeFilter))
 	{
-		VendorItemTypeFilter = 0;
+		VendorItemTypeFilter = VendorVisibleFilterIndices.IsEmpty() ? 0 : VendorVisibleFilterIndices[0];
 	}
 }
 
@@ -15089,16 +15078,17 @@ void UACEUIGameplayBinder::RefreshExternalContainerOverlays()
 	TSharedPtr<FACEUIElement> PackList = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("ContainerList"));
 	TSharedPtr<FACEUIElement> RootIconEl = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("Container"));
 	TArray<FACEWorldObject> Nested;
+	TArray<int32> PackGuids;
+	if (const auto Session = Client->GetSession()) Session->GetContainerPackGuids(OpenLootContainerGuid, PackGuids);
+	for (int32 Guid : PackGuids)
 	{
-		TArray<FACEWorldObject> All = Client->GetPackItems(OpenLootContainerGuid);
-		for (const FACEWorldObject& O : All)
-		{
-			if ((O.ItemType & ACEItemType::Container) != 0 || O.ItemsCapacity > 0 || O.ContainersCapacity > 0)
-			{
-				Nested.Add(O);
-			}
-		}
+		FACEWorldObject Pack;
+		if (Client->GetWorldObject(Guid, Pack)) Nested.Add(Pack);
 	}
+	FACEWorldObject RootContainer;
+	Client->GetWorldObject(OpenLootContainerGuid, RootContainer);
+	const int32 PackCapacity = FMath::Max(Nested.Num(), RootContainer.ContainersCapacity < 0
+		? Nested.Num() + 1 : RootContainer.ContainersCapacity);
 	if (RootIconEl.IsValid())
 	{
 		UBorder* Bg = EnsureIconBorder(ExtItemSlotBgs, 0); // reuse pool index for root pack bg via pack path
@@ -15127,7 +15117,7 @@ void UACEUIGameplayBinder::RefreshExternalContainerOverlays()
 	{
 		const FIntPoint Origin = PackList->GetScreenOrigin();
 		const int32 MaxVis = FMath::Max(1, PackList->Width / Cell);
-		ExtPackScrollOffset = FMath::Clamp(ExtPackScrollOffset, 0, FMath::Max(0, Nested.Num() - MaxVis));
+		ExtPackScrollOffset = FMath::Clamp(ExtPackScrollOffset, 0, FMath::Max(0, PackCapacity - MaxVis));
 		ExtPackGuids.SetNum(1 + MaxVis);
 		for (int32 i = 0; i < MaxVis; ++i)
 		{
@@ -15135,24 +15125,26 @@ void UACEUIGameplayBinder::RefreshExternalContainerOverlays()
 			UBorder* Bg = EnsureIconBorder(ExtPackSlotBgs, i);
 			if (!Icon) { continue; }
 			const int32 Idx = i + ExtPackScrollOffset;
-			if (!Nested.IsValidIndex(Idx))
+			if (Idx >= PackCapacity)
 			{
 				Icon->SetVisibility(ESlateVisibility::Collapsed);
 				if (Bg) { Bg->SetVisibility(ESlateVisibility::Collapsed); }
 				ExtPackGuids[i + 1] = 0;
 				continue;
 			}
-			ExtPackGuids[i + 1] = Nested[Idx].Guid;
-			SetItemSlotForeground(Icon, &Nested[Idx]);
-			SetItemSlotBackground(Bg, &Nested[Idx]);
+			const FACEWorldObject* Pack = Nested.IsValidIndex(Idx) ? &Nested[Idx] : nullptr;
+			ExtPackGuids[i + 1] = Pack ? Pack->Guid : 0;
+			if (Pack) SetItemSlotForeground(Icon, Pack);
+			else SetIconDid(Icon, DidEmptyPackSlot);
+			SetItemSlotBackground(Bg, Pack);
 			if (Bg)
 			{
 				Bg->SetVisibility(ESlateVisibility::HitTestInvisible);
 				PlaceCell(Bg, static_cast<float>(Origin.X + i * Cell), static_cast<float>(Origin.Y), OverlayZ);
 			}
 			Icon->SetVisibility(ESlateVisibility::HitTestInvisible);
-			Icon->SetRenderOpacity(ContGuid == Nested[Idx].Guid ? 1.f : 0.55f);
-			SetRetailTooltip(Icon, FText::FromString(ACERetailObjectNames::Name(Nested[Idx])));
+			Icon->SetRenderOpacity(!Pack || ContGuid == Pack->Guid ? 1.f : 0.55f);
+			SetRetailTooltip(Icon, Pack ? FText::FromString(ACERetailObjectNames::Name(*Pack)) : FText::FromString(TEXT("Empty pack slot")));
 			PlaceCell(Icon,
 				static_cast<float>(Origin.X + i * Cell),
 				static_cast<float>(Origin.Y),
@@ -15358,13 +15350,11 @@ void UACEUIGameplayBinder::RefreshVendorOverlays()
 		{
 			Items = Client->GetPackItems(OpenVendorGuid);
 		}
-		if (VendorItemTypeFilter != 0)
+		RebuildVendorVisibleFilters();
+		Items.RemoveAll([&](const FACEWorldObject& O)
 		{
-			Items.RemoveAll([&](const FACEWorldObject& O)
-			{
-				return !VendorItemMatchesFilter(O, VendorItemTypeFilter);
-			});
-		}
+			return !VendorItemMatchesFilter(O, VendorItemTypeFilter);
+		});
 	}
 
 	PlaceVendorFilterCaption();

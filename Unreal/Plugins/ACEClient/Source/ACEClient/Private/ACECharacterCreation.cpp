@@ -1,4 +1,5 @@
 #include "ACECharacterCreation.h"
+#include "ACEAppearanceComposition.h"
 #include "Dat/ACEDatDatabase.h"
 #include "Protocol/ACEBinaryWriter.h"
 #include "Protocol/ACEWindows1252.h"
@@ -32,17 +33,17 @@ struct FCGReader
     {
         FACEObjDesc D; Align(); if(U8()!=0x11)Ok=false; uint8 NP=U8(),NT=U8(),NA=U8();
         if(NP)D.PaletteBaseId=Packed(0x04000000);
-        for(int I=0;I<NP&&Ok;++I) { FACEObjDescSubPalette V; V.SubPaletteId=Packed(0x04000000); V.Offset=U8()*8; uint8 L=U8(); V.NumColors=(L?L:256)*8; D.SubPalettes.Add(V); }
-        for(int I=0;I<NT&&Ok;++I) { FACEObjDescTextureChange V; V.PartIndex=U8(); V.OldTexture=Packed(0x05000000); V.NewTexture=Packed(0x05000000); D.TextureChanges.Add(V); }
-        for(int I=0;I<NA&&Ok;++I) { FACEObjDescAnimPartChange V; V.PartIndex=U8(); V.PartId=Packed(0x01000000); D.AnimPartChanges.Add(V); } Align(); return D;
+        for(int I=0;I<NP&&Ok;++I) { FACEObjDescSubPalette V; V.SubPaletteId=Packed(0x04000000); V.Offset=U8()*8; uint8 L=U8(); V.NumColors=(L?L:256)*8; ACEAppearanceComposition::AddSubPalette(D,V); }
+        for(int I=0;I<NT&&Ok;++I) { FACEObjDescTextureChange V; V.PartIndex=U8(); V.OldTexture=Packed(0x05000000); V.NewTexture=Packed(0x05000000); ACEAppearanceComposition::AddTextureChange(D,V); }
+        for(int I=0;I<NA&&Ok;++I) { FACEObjDescAnimPartChange V; V.PartIndex=U8(); V.PartId=Packed(0x01000000); ACEAppearanceComposition::AddAnimPartChange(D,V); } Align(); return D;
     }
 };
 void Merge(FACEObjDesc& Out,const FACEObjDesc& In)
 {
-    if(In.PaletteBaseId)Out.PaletteBaseId=In.PaletteBaseId;
-    Out.SubPalettes.Append(In.SubPalettes);
-    for(const auto& T:In.TextureChanges) { Out.TextureChanges.RemoveAll([&](const auto& V){return V.PartIndex==T.PartIndex && V.OldTexture==T.OldTexture;}); Out.TextureChanges.Add(T); }
-    for(const auto& T:In.AnimPartChanges) { Out.AnimPartChanges.RemoveAll([&](const auto& V){return V.PartIndex==T.PartIndex;}); Out.AnimPartChanges.Add(T); }
+    // ObjDesc::operator+= (005AC0A0) preserves the character's base palette.
+    for(const auto& P:In.SubPalettes) ACEAppearanceComposition::AddSubPalette(Out,P);
+    for(const auto& T:In.TextureChanges) ACEAppearanceComposition::AddTextureChange(Out,T);
+    for(const auto& P:In.AnimPartChanges) ACEAppearanceComposition::AddAnimPartChange(Out,P);
 }
 }
 
@@ -233,8 +234,8 @@ bool FACECharacterCreation::ApplyClothing(uint32 Table,uint32 Setup,uint32 Color
 {
     if(Table==0)return true; TArray<uint8>B; if(!Database||!Database->ReadFile(Table,B))return false; FCGReader R(B);R.U32(); uint16 N=R.U16();R.U16();
     FACEObjDesc Added;
-    for(int I=0;I<N&&R.Ok;++I) {uint32 Key=R.U32(),C=R.Count(false);for(uint32 J=0;J<C&&R.Ok;++J){uint32 Part=R.U32(),Model=R.U32(); if(Key==Setup){FACEObjDescAnimPartChange A;A.PartIndex=Part;A.PartId=Model;Added.AnimPartChanges.Add(A);}uint32 T=R.Count(false);for(uint32 K=0;K<T&&R.Ok;++K){uint32 Old=R.U32(),New=R.U32();if(Key==Setup){FACEObjDescTextureChange A;A.PartIndex=Part;A.OldTexture=Old;A.NewTexture=New;Added.TextureChanges.Add(A);}}}}
-    N=R.U16();R.U16();for(int I=0;I<N&&R.Ok;++I){uint32 Key=R.U32();R.U32();if(Colors)Colors->Add(Key);uint32 C=R.Count(false);for(uint32 J=0;J<C&&R.Ok;++J){TArray<FIntPoint> Ranges;uint32 T=R.Count(false);for(uint32 K=0;K<T&&R.Ok;++K){int32 A=R.U32(),L=R.U32();Ranges.Add(FIntPoint(A,L));}uint32 Set=R.U32();if(!ClothingPalSets.FindOrAdd(Table).Contains(Key))ClothingPalSets[Table].Add(Key,Set);if(Key==Color&&!Colors){uint32 Pal=Palette(Set,Shade);for(auto Range:Ranges){FACEObjDescSubPalette A;A.SubPaletteId=Pal;A.Offset=Range.X;A.NumColors=Range.Y;Added.SubPalettes.Add(A);}}}}
+    for(int I=0;I<N&&R.Ok;++I) {uint32 Key=R.U32(),C=R.Count(false);for(uint32 J=0;J<C&&R.Ok;++J){uint32 Part=R.U32(),Model=R.U32(); if(Key==Setup){FACEObjDescAnimPartChange A;A.PartIndex=Part;A.PartId=Model;ACEAppearanceComposition::AddAnimPartChange(Added,A);}uint32 T=R.Count(false);for(uint32 K=0;K<T&&R.Ok;++K){uint32 Old=R.U32(),New=R.U32();if(Key==Setup){FACEObjDescTextureChange A;A.PartIndex=Part;A.OldTexture=Old;A.NewTexture=New;ACEAppearanceComposition::AddTextureChange(Added,A);}}}}
+    N=R.U16();R.U16();for(int I=0;I<N&&R.Ok;++I){uint32 Key=R.U32();R.U32();if(Colors)Colors->Add(Key);uint32 C=R.Count(false);for(uint32 J=0;J<C&&R.Ok;++J){TArray<FIntPoint> Ranges;uint32 T=R.Count(false);for(uint32 K=0;K<T&&R.Ok;++K){int32 A=R.U32(),L=R.U32();Ranges.Add(FIntPoint(A,L));}uint32 Set=R.U32();if(!ClothingPalSets.FindOrAdd(Table).Contains(Key))ClothingPalSets[Table].Add(Key,Set);if(Key==Color&&!Colors){uint32 Pal=Palette(Set,Shade);for(auto Range:Ranges){FACEObjDescSubPalette A;A.SubPaletteId=Pal;A.Offset=Range.X;A.NumColors=Range.Y;ACEAppearanceComposition::AddSubPalette(Added,A);}}}}
     if(R.Ok&&!Colors)Merge(Desc,Added);return R.Ok;
 }
 TArray<uint32> FACECharacterCreation::GearColors(int32 Slot) const
@@ -255,7 +256,7 @@ bool FACECharacterCreation::BuildAppearance(FACEWorldObject& Object,bool bHideHe
     if(S->Eyes.IsValidIndex(Selection.Eyes))Merge(Object.Appearance,Bald?S->Eyes[Selection.Eyes].BaldDesc:S->Eyes[Selection.Eyes].Desc);
     if(S->Nose.IsValidIndex(Selection.Nose))Merge(Object.Appearance,S->Nose[Selection.Nose].Desc);
     if(S->Mouth.IsValidIndex(Selection.Mouth))Merge(Object.Appearance,S->Mouth[Selection.Mouth].Desc);
-    auto Pal=[&](uint32 Id,int32 Offset,int32 Count){if(Id){FACEObjDescSubPalette P;P.SubPaletteId=Id;P.Offset=Offset;P.NumColors=Count;Object.Appearance.SubPalettes.Add(P);}};
+    auto Pal=[&](uint32 Id,int32 Offset,int32 Count){if(Id){FACEObjDescSubPalette P;P.SubPaletteId=Id;P.Offset=Offset;P.NumColors=Count;ACEAppearanceComposition::AddSubPalette(Object.Appearance,P);}};
     Pal(Palette(S->SkinPalSet,Selection.SkinHue),0,192);if(S->HairColors.IsValidIndex(Selection.HairColor))Pal(Palette(S->HairColors[Selection.HairColor],Selection.HairHue),192,64);if(S->EyeColors.IsValidIndex(Selection.EyeColor))Pal(S->EyeColors[Selection.EyeColor],256,64);
     return true;
 }

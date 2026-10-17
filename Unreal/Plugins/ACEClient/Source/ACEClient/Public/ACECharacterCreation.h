@@ -88,6 +88,7 @@ public:
 private:
     friend class FACERetailCharacterCreationTest;
     friend class FACEAppearancePlacementTest;
+    friend class FACETailoringLayersTest;
     friend class FACECustomWorldPresentationTest;
     friend class FACERetailWorldEntryTest;
     void ResetSkills();

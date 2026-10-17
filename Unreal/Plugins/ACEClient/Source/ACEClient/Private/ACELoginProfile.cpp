@@ -2,6 +2,11 @@
 #include "XmlFile.h"
 #include "Misc/Paths.h"
 
+FString FACELoginAccount::DisplayName() const
+{
+	return Alias.IsEmpty() ? Username : Alias + TEXT(" (") + Username + TEXT(")");
+}
+
 void FACELoginSettings::MigrateLegacy()
 {
 	if (bProfileFormat) return;

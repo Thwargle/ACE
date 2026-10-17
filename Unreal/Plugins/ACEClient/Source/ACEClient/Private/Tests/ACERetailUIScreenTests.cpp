@@ -2948,7 +2948,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Forward pack move has retail insertion order"),Gameplay->PackSlotGuids[2],61003);
         {
             FACEWorldObject Chest; Chest.Guid=62000; Chest.ItemType=ACEItemType::Container;
-            Chest.ItemsCapacity=24; Chest.IconId=0x06004CF7; Chest.Name=TEXT("Loot background fixture");
+            Chest.ContainersCapacity=2; Chest.ItemsCapacity=24; Chest.IconId=0x06004CF7; Chest.Name=TEXT("Loot background fixture");
             Session.UpsertWorldObject(Chest);
             FACEWorldObject NestedPack=Chest; NestedPack.Guid=62001; NestedPack.ContainerId=Chest.Guid;
             Session.UpsertWorldObject(NestedPack);
@@ -2956,6 +2956,11 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Packs in an external container retain their own retail background"),
                 !Gameplay->ExtPackSlotBgs.IsEmpty() && Gameplay->ExtPackSlotBgs[0]->GetVisibility()!=ESlateVisibility::Collapsed
                 && Gameplay->ExtPackSlotBgs[0]->Background.GetResourceObject()==Resources->ResolveItemBackground(ACEItemType::Container,0));
+            TestTrue(TEXT("Housing chest displays an empty slot beside its installed bag"),
+                Gameplay->ExtPackSlots.Num()>2 && Gameplay->ExtPackSlots[2]->IsVisible() && Gameplay->ExtPackGuids[2]==0);
+            Session.ContainerContents.Add(Chest.Guid,{{NestedPack.Guid,1}});
+            Gameplay->LastLootOverlayHash=~uint64(0);Gameplay->RefreshExternalContainerOverlays();
+            TestEqual(TEXT("ViewContents pack tags do not hide installed chest bags"),Gameplay->ExtPackGuids[1],NestedPack.Guid);
             Gameplay->OpenLootSelectedPackGuid=NestedPack.Guid;
             Gameplay->RefreshExternalContainerOverlays();
             NestedPack.IconUnderlayId=0x060010F9; Session.UpsertWorldObject(NestedPack);
@@ -3864,15 +3869,20 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestEqual(TEXT("Retail consumable stock starts at one unit"),Gameplay->SelectedStackAmount,1);
             const FString SavedCurrency=Session.VendorCurrencyName;
             const int32 SavedCurrencyCount=Session.VendorCurrencyCount;
-            Session.VendorCurrencyName=TEXT("Stipends");Session.VendorCurrencyCount=10;
+            const uint32 SavedCurrencyWeenie=Session.VendorCurrencyWeenie;
+            Session.VendorCurrencyWeenie=76542;Session.VendorCurrencyName=TEXT("Stipends");Session.VendorCurrencyCount=10;
+            FACEWorldObject Stipends;Stipends.Guid=99225;Stipends.WeenieClassId=76542;Stipends.ContainerId=Session.PlayerGuid;
+            Stipends.StackSize=10;Stipends.MaxStackSize=100;Session.UpsertWorldObject(Stipends);
             Gameplay->HandleVendorOpened(99122);
             if(TestNotNull(TEXT("Vendor currency caption exists"),Gameplay->VendorItemCostLabel.Get()))
             {
                 TestTrue(TEXT("Vendor displays its alternate currency"),Gameplay->VendorItemCostLabel->GetText().ToString().Contains(TEXT("Stipends. You have 10")));
-                Session.VendorCurrencyCount=9;Gameplay->HandleVendorOpened(99122);
+                Session.VendorCurrencyCount=9;
+                FACEBinaryWriter Balance;Balance.WriteUInt8(1);Balance.WriteUInt32(Stipends.Guid);Balance.WriteUInt32(9);Balance.WriteUInt32(9);
+                FACEBinaryReader BalanceUpdate(Balance.GetData());Session.HandleSetStackSize(BalanceUpdate);Gameplay->HandleVendorOpened(99122);
                 TestTrue(TEXT("A balance-only vendor reply refreshes the caption"),Gameplay->VendorItemCostLabel->GetText().ToString().Contains(TEXT("Stipends. You have 9")));
             }
-            const uint32 SavedCurrencyWeenie=Session.VendorCurrencyWeenie;
+            Session.WorldObjects.Remove(Stipends.Guid);++Session.InventoryDataRevision;
             Session.VendorCurrencyWeenie=76543;Session.VendorCurrencyName=TEXT("Grisly Meats");
             Session.VendorCurrencyCount=9;
             FACEWorldObject Currency;Currency.Guid=99224;Currency.WeenieClassId=76543;
@@ -3906,6 +3916,7 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             Session.VendorMerchandise[0].WeenieClassId=1050067;
             Session.VendorCurrencyName.Empty();
             Gameplay->VendorBuyCart.Reset();Gameplay->SetVendorPage(0);Gameplay->HandleVendorOpened(99122);
+            Gameplay->SetVendorItemTypeFilter(10); // retail Spell Components category
             CaptureScreen(TEXT("GameplayCustomPyrealVendor"));
             {
                 const auto& Geo=Gameplay->VendorItemSlots[0]->GetCachedGeometry();

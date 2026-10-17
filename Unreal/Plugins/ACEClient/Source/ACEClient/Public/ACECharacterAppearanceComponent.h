@@ -69,6 +69,8 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
 	bool ApplyWorldObject(const FACEWorldObject& Object, float InWorldScale = 100.f, bool bEnablePartCollision = false);
+	/** PositionPack placement changes unanimated part frames without rebuilding geometry or effects. */
+	bool ApplyPositionPlacement(int32 PlacementId);
 
 	UFUNCTION(BlueprintCallable, Category = "ACE|Appearance")
 	void ClearAppearance();

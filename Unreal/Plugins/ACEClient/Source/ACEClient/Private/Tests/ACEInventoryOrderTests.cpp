@@ -207,6 +207,8 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Early/late bag create receives corpse membership"),Session.WorldObjects[701].ContainerId,700);
         TestEqual(TEXT("Early/late item create receives nested bag membership"),Session.WorldObjects[702].ContainerId,701);
         Check(701,{702}); Check(700,{703});
+        TArray<int32> Packs; Session.GetContainerPackGuids(700,Packs);
+        TestTrue(TEXT("External pack strip includes installed bags in both packet orders"),Packs==TArray<int32>{701});
         View(800,{});
         FACEBinaryWriter Close; Close.WriteUInt32(700); FACEBinaryReader C(Close.GetData()); Session.HandleCloseGroundContainer(C);
         TestEqual(TEXT("Old corpse close does not revoke the new corpse"),Session.OpenExternalContainerGuid,800);

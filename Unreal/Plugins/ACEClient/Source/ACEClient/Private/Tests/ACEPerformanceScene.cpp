@@ -11,7 +11,9 @@
 #include "ACEWorldEntityActor.h"
 #include "ACEScriptComponent.h"
 #include "ACECreatureFixtures.h"
+#include "ACEWaspLagLink.h"
 #include "ACEInputBindings.h"
+#include "UI/ACEUIGameplayBinder.h"
 #include "GameFramework/PlayerInput.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
@@ -45,6 +47,10 @@ static void ACEPerfApplySnowTusker(FACEWorldObject& Object)
 class FACEPerformanceScene : public TSharedFromThis<FACEPerformanceScene>
 {
 public:
+ ~FACEPerformanceScene()
+ {
+  if(LagSession){LagSession->OnPositionUpdate.Remove(LagPositionHandle);LagSession->OnMotionUpdate.Remove(LagMotionHandle);}
+ }
  static void Start(const TArray<FString>& Args,UWorld* World)
  {
   if(!World || !World->GetGameInstance())return;
@@ -68,7 +74,7 @@ public:
    return;
   }
   const FString Scene=Args.Num()?Args[0]:TEXT("outdoor");
-  if(Scene!=TEXT("outdoor") && Scene!=TEXT("indoor") && Scene!=TEXT("effects") && Scene!=TEXT("caul") && Scene!=TEXT("swarm") && Scene!=TEXT("wasps") && Scene!=TEXT("frozen") && Scene!=TEXT("frozen-tuskers"))return;
+  if(Scene!=TEXT("outdoor") && Scene!=TEXT("indoor") && Scene!=TEXT("effects") && Scene!=TEXT("caul") && Scene!=TEXT("swarm") && Scene!=TEXT("wasps") && Scene!=TEXT("frozen") && Scene!=TEXT("frozen-tuskers") && Scene!=TEXT("glenden"))return;
   UE_LOG(LogTemp,Display,TEXT("ACE PerfScene preparing %s"),*Scene);
   // The login path intentionally defers cell DAT indexing. This offline setup
   // phase is outside the timed sample and needs both databases immediately.
@@ -96,6 +102,12 @@ public:
     Spawn.CellId=0x0143015F;Spawn.Location=FVector(43.304642,-68.413086,-.002981);
     Spawn.RotationW=.898748f;Spawn.RotationXYZ=FVector(0,0,-.438466);
    }
+   if(!Dat->GetOrBuildEnvCellMesh(Spawn.CellId,100))return;
+  }
+  else if(Scene==TEXT("glenden"))
+  {
+   // Authored Glenden Wood Dungeon drop, from ACViewer Locations.txt.
+   Spawn.CellId=0x01E3033D;Spawn.Location=FVector(161,-150,0);
    if(!Dat->GetOrBuildEnvCellMesh(Spawn.CellId,100))return;
   }
   else if(Scene==TEXT("indoor"))
@@ -138,14 +150,20 @@ public:
   Client->OnEnteredWorld.Broadcast(Self.Guid,Spawn);
   // A static camera benchmark has no walking input. Keep the reported cell
   // while the asynchronous dungeon loads instead of predicting a fall in it.
-  if(Scene==TEXT("wasps"))PC->bSyncPossessedPawn=false;
-  int32 Count=Scene==TEXT("frozen")?0:Scene==TEXT("frozen-tuskers")?12:Scene==TEXT("swarm")?64:Scene==TEXT("indoor")?8:32;
+  if(Scene==TEXT("wasps") || Scene==TEXT("glenden"))PC->bSyncPossessedPawn=false;
+  int32 Count=Scene==TEXT("frozen")?0:Scene==TEXT("frozen-tuskers")?12:Scene==TEXT("swarm")?64:(Scene==TEXT("indoor") || Scene==TEXT("glenden"))?8:32;
   if(Scene==TEXT("wasps"))
   {
    FParse::Value(FCommandLine::Get(),TEXT("ACEPerfWaspCount="),Count);Count=FMath::Clamp(Count,1,128);
    FParse::Value(FCommandLine::Get(),TEXT("ACEPerfVolleyInterval="),Run->VolleyInterval);
    Run->VolleyInterval=FMath::Clamp(Run->VolleyInterval,.5f,3.f);
    Run->bPlayerMotion=FParse::Param(FCommandLine::Get(),TEXT("ACEPerfPlayerMotion"));
+   Run->bCombatChat=FParse::Param(FCommandLine::Get(),TEXT("ACEPerfCombatChat"));
+   Run->bConfigPanel=FParse::Param(FCommandLine::Get(),TEXT("ACEPerfConfigPanel"));
+   FParse::Value(FCommandLine::Get(),TEXT("ACEPerfCastingSeconds="),Run->CastingSeconds);
+   Run->CastingSeconds=FMath::Clamp(Run->CastingSeconds,0.f,1800.f);
+   FParse::Value(FCommandLine::Get(),TEXT("ACEPerfVolleyWasps="),Run->VolleyWasps);
+   Run->VolleyWasps=FMath::Clamp(Run->VolleyWasps,1,Count);
    Run->PlayerOrigin=Spawn.ToUnrealLocation(100);
   }
   for(int32 I=0;I<Count;++I)
@@ -168,7 +186,7 @@ public:
     NPC.Position.Location=Spawn.Location+FVector(-2-(I%8)*.5,-1.5+(I/8-1.5)*.5,0);
     Run->Wasps.Add(NPC);
    }
-   if(Scene!=TEXT("indoor") && Scene!=TEXT("swarm") && Scene!=TEXT("wasps"))
+   if(Scene!=TEXT("indoor") && Scene!=TEXT("glenden") && Scene!=TEXT("swarm") && Scene!=TEXT("wasps"))
    {
     const FVector P=NPC.Position.ToUnrealLocation(100);float Z=0;
     if(Dat->SampleOutdoorGroundZ(P.X,P.Y,100,Z))NPC.Position.Location.Z=Z/100;
@@ -177,6 +195,33 @@ public:
    Session->WorldObjects.Add(NPC.Guid,NPC);Client->OnObjectCreated.Broadcast(NPC);
    if(Scene==TEXT("frozen-tuskers"))Run->SnowCreatures.Add(NPC);
   }
+  if(Scene==TEXT("wasps") && FParse::Param(FCommandLine::Get(),TEXT("ACEPerfNetworkLag")))
+  {
+   Run->LagSession=Session;Run->LagLink=MakeUnique<FACEWaspLagLink>(*Session);
+   if(!Run->LagLink->Open()){UE_LOG(LogTemp,Error,TEXT("Wasp lag loopback transport failed"));return;}
+   FParse::Value(FCommandLine::Get(),TEXT("ACEPerfLagRttMs="),Run->LagLink->RttMs);
+   FParse::Value(FCommandLine::Get(),TEXT("ACEPerfLagJitterMs="),Run->LagLink->JitterMs);
+   FParse::Value(FCommandLine::Get(),TEXT("ACEPerfLagRecoveryMs="),Run->LagLink->RecoveryMs);
+   Run->LagLink->RttMs=FMath::Clamp(Run->LagLink->RttMs,0.,30000.);
+   Run->LagLink->JitterMs=FMath::Clamp(Run->LagLink->JitterMs,0.,2000.);
+   Run->LagLink->RecoveryMs=FMath::Clamp(Run->LagLink->RecoveryMs,0.,10000.);
+   Run->LagLink->RecoveryEvery=Run->LagLink->RecoveryMs>0?97:0;
+   Run->bPlayerMotion=true;if(Run->CastingSeconds<=0)Run->CastingSeconds=60;
+   const TWeakPtr<FACEPerformanceScene> WeakRun=Run;
+   Run->LagPositionHandle=Session->OnPositionUpdate.AddLambda([WeakRun](int32 Guid,const FACEPosition& P)
+   {
+    auto R=WeakRun.Pin();if(!R || Guid!=R->LagSession->PlayerGuid)return;
+    auto* Controller=Cast<AACEPlayerController>(R->World->GetFirstPlayerController());
+    if(!Controller || !Controller->GetPawn())return;
+    ++R->LagCorrections;
+    // Multicast observers may run before the controller. Inspect the applied
+    // server anchor on the next ticker pass, after world/input processing.
+    R->LagPendingPosition=P;R->LagPendingForce=R->LagSession->GetForcePositionSeq();
+    R->LagBeforeCorrection=Controller->GetPawn()->GetActorLocation();R->bLagCorrectionPending=true;
+   });
+   Run->LagMotionHandle=Session->OnMotionUpdate.AddLambda([WeakRun](int32 Guid,const FACEObjectMotionState&)
+   {if(auto R=WeakRun.Pin();R && Guid>0x7100F000 && Guid<=0x7100F080)++R->LagCasts;});
+  }
   Run->Camera=World->SpawnActor<ACameraActor>();
   const FVector Center=Spawn.ToUnrealLocation(100);
   const FVector Forward=FACEPosition::AceVectorToUnreal(FVector(Scene==TEXT("wasps")?-1:1,0,0),1);
@@ -184,7 +229,7 @@ public:
   // through the model and hides much of the measured scene. Keep outdoor runs
   // behind/above it, looking over the synthetic crowd. The indoor eye sits
   // just in front of the avatar, still inside the same authored room.
-  const bool Interior=Scene==TEXT("indoor") || Scene==TEXT("swarm") || Scene==TEXT("wasps");
+  const bool Interior=Scene==TEXT("indoor") || Scene==TEXT("glenden") || Scene==TEXT("swarm") || Scene==TEXT("wasps");
   FVector Eye=Interior ? Center+Forward*100+FVector(0,0,170)
    : Center-Forward*900+FVector(0,0,600);
   const FVector LookAt=Center+Forward*800+FVector(0,0,100);
@@ -207,7 +252,8 @@ public:
   PC->SetViewTarget(Run->Camera.Get());
   Run->StartTime=FPlatformTime::Seconds();
   FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([Run](float){return Run->Tick();}));
-  UE_LOG(LogTemp,Display,TEXT("ACE PerfScene %s: %d synthetic NPCs, 45-second warmup, %d-second sample."),*Scene,Count,Scene==TEXT("wasps")?60:30);
+  UE_LOG(LogTemp,Display,TEXT("ACE PerfScene %s: %d synthetic NPCs, 45-second warmup, %.0f-second sample."),*Scene,Count,
+   Scene==TEXT("wasps")?(Run->CastingSeconds>0?Run->CastingSeconds:60.f):30.f);
  }
 private:
  TWeakObjectPtr<UWorld> World;
@@ -233,12 +279,56 @@ private:
  bool bWaspCorpses=false;
  bool bWaspFlightReported=false;
  float VolleyInterval=3;
+ float CastingSeconds=0;
+ int32 VolleyWasps=128,VolleyOffset=0;
+ bool bCombatChat=false,bConfigPanel=false,bPanelOpened=false;
+ double LastChat=0;
  bool bPlayerMotion=false,bMotionStarted=false,bWasAirborne=false;
  FVector PlayerOrigin=FVector::ZeroVector,PreviousPlayerPosition=FVector::ZeroVector;
  TSet<FKey> HeldKeys;
  int32 JumpCount=0,AirborneFrames=0,MovementFrames=0,MotionTarget=0,VolleyCount=0;
  double TravelCm=0,MaxHeightCm=0;
  FString MovementCSV=TEXT("elapsed_s,wall_ms,phase,airborne,x_cm,y_cm,z_cm\n");
+ TSharedPtr<FACESession> LagSession;
+ TUniquePtr<FACEWaspLagLink> LagLink;
+ FDelegateHandle LagPositionHandle,LagMotionHandle;
+ uint16 LagPositionStamp=0,LagCastStamp=0,LagForceStamp=0;
+ double LastLagPositions=0,LastLagCorrection=0,LagLargestCorrection=0;
+ int32 LagCorrections=0,LagCorrectionErrors=0,LagCasts=0,LagPeakBuffered=0;
+ FACEPosition LagPendingPosition;
+ FVector LagBeforeCorrection=FVector::ZeroVector;
+ uint16 LagPendingForce=0;
+ bool bLagCorrectionPending=false;
+ void TickLagTraffic(double Now,double Elapsed)
+ {
+  if(!LagLink || Elapsed<15)return;
+  if(bLagCorrectionPending)
+  {
+   auto* PC=Cast<AACEPlayerController>(World->GetFirstPlayerController());
+   if(PC && PC->GetPawn())
+   {
+    LagCorrectionErrors+=PC->LastAppliedForcePositionSeq!=LagPendingForce
+     || !PC->LastServerPose.ToUnrealLocation(100).Equals(LagPendingPosition.ToUnrealLocation(100),.01);
+    LagLargestCorrection=FMath::Max(LagLargestCorrection,FVector::Dist(LagBeforeCorrection,PC->GetPawn()->GetActorLocation()));
+   }
+   else ++LagCorrectionErrors;
+   bLagCorrectionPending=false;
+  }
+  if(Now-LastLagPositions>=1)
+  {
+   LastLagPositions=Now;++LagPositionStamp;
+   for(const auto& Wasp:Wasps)LagLink->Queue(FACEWaspLagLink::Position(Wasp.Guid,Wasp.Position,LagPositionStamp),Now);
+  }
+  if(Now-LastLagCorrection>=4)
+  {
+   LastLagCorrection=Now;++LagForceStamp;
+   // The server rejects a predicted move and returns the position it knew
+   // when this reply was generated. Delivery uses the configured link delay.
+   LagLink->Queue(FACEWaspLagLink::Position(LagSession->PlayerGuid,LagSession->PlayerPosition,LagForceStamp,LagForceStamp),Now);
+  }
+  LagLink->Advance(Now);
+  LagPeakBuffered=FMath::Max(LagPeakBuffered,LagLink->BufferedGameplay());
+ }
  void SetMovementKeys(AACEPlayerController* PC,const TArray<FKey>& Actions)
  {
   TSet<FKey> Desired;
@@ -300,7 +390,8 @@ private:
   if(Wasps.IsEmpty())return;
   // Warm shaders/meshes first, then compare idle, casts, stopped casts and death
   // in the same process. Movement is opt-in; no network traffic is sent.
-  const int32 Phase=bSampling?FMath::Clamp(int32((Now-SampleStartTime)/15),0,3):(Elapsed>20 && Elapsed<35?1:0);
+  const int32 Phase=CastingSeconds>0 ? (Elapsed>20?1:0)
+   : bSampling?FMath::Clamp(int32((Now-SampleStartTime)/15),0,3):(Elapsed>20 && Elapsed<35?1:0);
   if(Phase!=WaspPhase)
   {
    WaspPhase=Phase;UE_LOG(LogTemp,Display,TEXT("ACE PerfScene wasps phase=%d"),Phase);
@@ -349,23 +440,30 @@ private:
   if(Phase!=1 || Now-LastVolley<VolleyInterval)return;
   for(auto& Bolt:FrostBolts)if(Bolt.IsValid())Bolt->Destroy();
   FrostBolts.Reset();LastVolley=Now;bVolleyImpacted=false;if(bSampling)++VolleyCount;
+  ++LagCastStamp;
   for(TActorIterator<AACEWorldEntityActor> It(World.Get());It;++It)
-   if(It->ACEGuid>0x7100F000 && It->ACEGuid<=0x7100F000+Wasps.Num())
+   if(It->ACEGuid>0x7100F000 && It->ACEGuid<=0x7100F000+Wasps.Num()
+    && (It->ACEGuid-0x7100F001+Wasps.Num()-VolleyOffset)%Wasps.Num()<VolleyWasps)
    {
-    FACEObjectMotionState Cast;Cast.CurrentStyle=ACEMotion::StanceNonCombat;
-    Cast.ActionCommand=0x400000D3;Cast.bNewAction=true;It->ApplyMotionState(Cast);
+    if(LagLink)LagLink->Queue(FACEWaspLagLink::Cast(It->ACEGuid,LagCastStamp),Now);
+    else
+    {
+     FACEObjectMotionState Cast;Cast.CurrentStyle=ACEMotion::StanceNonCombat;
+     Cast.ActionCommand=0x400000D3;Cast.bNewAction=true;It->ApplyMotionState(Cast);
+    }
    }
-  for(int32 I=0;I<Wasps.Num()*3;++I)
+  for(int32 I=0;I<VolleyWasps*3;++I)
   {
    // ACE weenie 1503, used by both Frost Bolt IV and Frost Volley IV.
    FACEWorldObject Bolt;Bolt.Guid=0x71010000+I;Bolt.Name=TEXT("Frost Bolt");
    Bolt.SetupId=0x020003F4;Bolt.SoundTableId=0x20000036;Bolt.PhysicsEffectTableId=0x34000006;
-   Bolt.Scale=.4f;Bolt.PhysicsState=166728;Bolt.Position=Wasps[I/3].Position;
+   Bolt.Scale=.4f;Bolt.PhysicsState=166728;Bolt.Position=Wasps[(VolleyOffset+I/3)%Wasps.Num()].Position;
    Bolt.Position.Location+=FVector(0,(I%3-1)*.25,1.2);Bolt.bHasPosition=true;
    Bolt.Velocity=FVector(8,0,0);Bolt.bHasVelocity=true;
    auto* Actor=World->SpawnActor<AACEWorldEntityActor>();Actor->InitializeFromObject(Bolt,100,true);
    Actor->ScriptComponent->PlayEffect(4,1);FrostBolts.Add(Actor);
   }
+  VolleyOffset=(VolleyOffset+VolleyWasps)%Wasps.Num();
  }
  // Alternate inside one process to reduce startup/GPU-clock/background noise.
  // This mode is opt-in and applies only to the disconnected swarm fixture.
@@ -385,9 +483,26 @@ private:
   const double Ms=FApp::GetDeltaTime()*1000;
   TickWasps(Now,Elapsed);
   TickPlayerMotion(Elapsed,Ms);
+  TickLagTraffic(Now,Elapsed);
   if(FParse::Param(FCommandLine::Get(),TEXT("ACEPerfCameraMotion")))
    Camera->SetActorLocation(CameraOrigin+FVector(8*FMath::Sin(Elapsed),8*FMath::Cos(Elapsed),2*FMath::Sin(2*Elapsed)));
+  if(Scene==TEXT("glenden"))
+  {
+   Camera->SetActorLocation(CameraOrigin+FVector(80*FMath::Sin(Elapsed*.4),80*FMath::Cos(Elapsed*.4),20*FMath::Sin(Elapsed)));
+   Camera->SetActorRotation(FRotator(15*FMath::Sin(Elapsed*.5),Elapsed*30,0));
+  }
   auto* PC=World->GetFirstPlayerController();
+  if(auto* Controller=Cast<AACEPlayerController>(PC);Elapsed>15 && Controller && Controller->DatGameplayBinder)
+  {
+   auto* Binder=Controller->DatGameplayBinder.Get();
+   if(bConfigPanel && !bPanelOpened)
+   {Binder->ToggleGameplayPanel(TEXT("OptionsPanel_Field"),TEXT("ConfigPage"));bPanelOpened=true;}
+   if(bCombatChat && Now-LastChat>.1)
+   {
+    LastChat=Now;
+    for(int32 I=0;I<8;++I)Binder->HandleChatMessage(I%2?TEXT("You evade White Phyntos Wasp!"):TEXT("You resist the spell cast by White Phyntos Wasp"),TEXT(""),0);
+   }
+  }
   PC->SetViewTarget(bPlayerMotion && bMotionStarted ? Cast<AActor>(PC->GetPawn()) : Camera.Get());
   if(!bControlledView && Elapsed>=5 && bControlResolution)
   {
@@ -439,14 +554,17 @@ private:
    IFileManager::Get().MakeDirectory(*Directory,true);
    // Screenshot readback/encoding is diagnostic work, not gameplay. It can
    // stall for seconds on a first ES3.1 capture, so finish it before sampling.
-   FACERenderAudit::Collect(World.Get()).Log();
-   FScreenshotRequest::RequestScreenshot(Directory/TEXT("scene.png"),true,false);
+   if(!FParse::Param(FCommandLine::Get(),TEXT("ACEPerfNoCapture")))
+   {
+    FACERenderAudit::Collect(World.Get()).Log();
+    FScreenshotRequest::RequestScreenshot(Directory/TEXT("scene.png"),true,false);
+   }
    return true;
   }
   if(!bSampling && Elapsed>=45)
   {
    bSampling=true;SampleStartTime=Now;
-   if(!FTraceAuxiliary::IsConnected())
+   if(!FTraceAuxiliary::IsConnected() && !FParse::Param(FCommandLine::Get(),TEXT("ACEPerfNoTrace")))
    {
     const FString TracePath=Directory/FString::Printf(TEXT("scene-%s.utrace"),*FDateTime::UtcNow().ToString(TEXT("%Y%m%d-%H%M%S")));
     GEngine->Exec(World.Get(),*FString::Printf(TEXT("Trace.File \"%s\" cpu,gpu,frame,bookmark"),*TracePath));
@@ -471,13 +589,13 @@ private:
    Frames.Add(Ms);
    if(!Wasps.IsEmpty())WaspFrames[WaspPhase].Add(Ms);
   }
-  if(!bSampling || Now-SampleStartTime<(Wasps.IsEmpty()?30:60))return true;
+  if(!bSampling || Now-SampleStartTime<(CastingSeconds>0?CastingSeconds:Wasps.IsEmpty()?30:60))return true;
   if(bPlayerMotion)
   {
    SetMovementKeys(Cast<AACEPlayerController>(PC),{});
    FFileHelper::SaveStringToFile(MovementCSV,*(Directory/TEXT("movement.csv")));
    const FString Motion=FString::Printf(TEXT("{\"wasps\":%d,\"volleys\":%d,\"projectiles\":%d,\"jumps\":%d,\"airborne_frames\":%d,\"frames\":%d,\"travel_m\":%.3f,\"max_jump_height_cm\":%.3f}"),
-    Wasps.Num(),VolleyCount,VolleyCount*Wasps.Num()*3,JumpCount,AirborneFrames,MovementFrames,TravelCm/100,MaxHeightCm);
+    Wasps.Num(),VolleyCount,VolleyCount*VolleyWasps*3,JumpCount,AirborneFrames,MovementFrames,TravelCm/100,MaxHeightCm);
    FFileHelper::SaveStringToFile(Motion,*(Directory/TEXT("movement-summary.json")));
    UE_LOG(LogTemp,Display,TEXT("ACE PerfScene movement %s"),*Motion);
   }
@@ -491,6 +609,14 @@ private:
   const FString Summary=FString::Printf(TEXT("{\"scene\":\"%s\",\"synthetic\":true,\"width\":%.0f,\"height\":%.0f,\"frames\":%d,\"mean_ms\":%.3f,\"p50_ms\":%.3f,\"p95_ms\":%.3f,\"p99_ms\":%.3f,\"mean_fps\":%.2f}"),
    *Scene,Size.X,Size.Y,Frames.Num(),Total/Frames.Num(),Percentile(.5),Percentile(.95),Percentile(.99),1000*Frames.Num()/Total);
   FFileHelper::SaveStringToFile(Summary,*(Directory/TEXT("summary.json")));
+  if(LagLink)
+  {
+   const FString Lag=FString::Printf(TEXT("{\"rtt_ms\":%.0f,\"jitter_ms\":%.0f,\"recovery_ms\":%.0f,\"queued\":%u,\"sent\":%u,\"recovered\":%u,\"duplicates\":%u,\"send_errors\":%d,\"peak_buffered\":%d,\"casts_received\":%d,\"corrections_received\":%d,\"correction_errors\":%d,\"largest_correction_cm\":%.3f,\"max_frame_ms\":%.3f}"),
+    LagLink->RttMs,LagLink->JitterMs,LagLink->RecoveryMs,LagLink->Queued,LagLink->Sent,LagLink->Recovered,LagLink->Duplicates,
+    LagLink->SendErrors,LagPeakBuffered,LagCasts,LagCorrections,LagCorrectionErrors,LagLargestCorrection,Frames.Last());
+   FFileHelper::SaveStringToFile(Lag,*(Directory/TEXT("network-lag.json")));
+   UE_LOG(LogTemp,Display,TEXT("ACE PerfScene network lag %s"),*Lag);
+  }
   if(!Wasps.IsEmpty())
   {
    FString Phases=TEXT("[");
@@ -521,7 +647,7 @@ private:
  }
 };
 static FAutoConsoleCommandWithWorldAndArgs GACEPerfScene(TEXT("ace.PerfScene"),
- TEXT("Disconnected development benchmark: outdoor, indoor, effects, caul, swarm, wasps (idle/cast/stop/death), frozen or frozen-tuskers (spawn/death/corpse cycles). Writes Saved/Performance after 75 seconds (wasps: 105). -ACEPerfCleanView hides HUD; -ACEPerfResolution=WxH overrides 1920x1080. Wasps: -ACEPerfPlayerMotion exercises keyboard movement/jumps, -ACEPerfWaspCount=32 (1-128), -ACEPerfVolleyInterval=3 (.5-3 seconds)."),
+ TEXT("Disconnected development benchmark: outdoor, indoor, glenden (dungeon camera sweep), effects, caul, swarm, wasps (idle/cast/stop/death), frozen or frozen-tuskers (spawn/death/corpse cycles). Writes Saved/Performance after 75 seconds (wasps: 105). -ACEPerfCleanView hides HUD; -ACEPerfResolution=WxH overrides 1920x1080. Wasps: -ACEPerfPlayerMotion exercises keyboard movement/jumps, -ACEPerfWaspCount=32 (1-128), -ACEPerfVolleyInterval=3 (.5-3 seconds), -ACEPerfVolleyWasps limits each staggered volley, -ACEPerfCastingSeconds runs sustained casts instead of phases. -ACEPerfCombatChat floods combat messages; -ACEPerfConfigPanel opens Options."),
  FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&FACEPerformanceScene::Start));
 #endif
 

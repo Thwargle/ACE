@@ -32,6 +32,7 @@ class ACECLIENT_API UACEWorldPresenterComponent : public UActorComponent
 	friend class FACEDeferredWorldAppearanceTest;
 	friend class FACECustomWorldPresentationTest;
 	friend class FACEHouseHookAnimationTest;
+	friend class FACEGroundItemPlacementTest;
 
 public:
 	UACEWorldPresenterComponent();

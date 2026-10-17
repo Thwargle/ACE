@@ -21,9 +21,9 @@
 #include "HAL/IConsoleManager.h"
 
 static TAutoConsoleVariable<float> CVarNetworkPumpMs(TEXT("ace.Network.PumpBudgetMs"),.5f,
-	TEXT("Dispatch budget per socket per frame in milliseconds. A packet finishes atomically; 0 disables the time bound."));
+	TEXT("Budget for each socket receive pass and the ordered gameplay pass, in milliseconds. A packet finishes atomically; 0 disables the time bound."));
 static TAutoConsoleVariable<int32> CVarNetworkPumpPackets(TEXT("ace.Network.PumpMaxPackets"),128,
-	TEXT("Maximum datagrams dispatched per socket per frame."));
+	TEXT("Maximum packets per socket receive pass and per ordered gameplay pass."));
 
 FACESession::FACESession() = default;
 
@@ -579,11 +579,12 @@ void FACESession::TickPositionReporting(float DeltaSeconds)
 
 void FACESession::PollSockets()
 {
+	const double ReceiveStart = FPlatformTime::Seconds();
 	uint8 Buffer[2048];
 	int32 BytesRead = 0;
 	TSharedRef<FInternetAddr> FromAddr = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM)->CreateInternetAddr();
 
-		auto Drain = [&](FSocket* Sock, bool bS2C)
+	auto Drain = [&](FSocket* Sock, bool bS2C)
 	{
 		if (!Sock)
 		{
@@ -609,8 +610,32 @@ void FACESession::PollSockets()
 		}
 	};
 
-	Drain(SocketC2S, false);
-	Drain(SocketS2C, true);
+	{
+		// Keep transport replies responsive while gameplay is catching up. Retail
+		// SharedNet reads nonblocking sockets under a time limit and hands blobs
+		// to receive queues; recovering a gap cannot bypass our frame budget.
+		TGuardValue<bool> DeferDispatch(bDeferOrderedDispatch, true);
+		Drain(SocketC2S, false);
+		Drain(SocketS2C, true);
+	}
+	const double DispatchStart = FPlatformTime::Seconds();
+	LastNetworkReceiveMs = (DispatchStart - ReceiveStart) * 1000.0;
+	// This must also run when both sockets are idle: a deferred contiguous
+	// backlog needs no additional datagram to make progress.
+	DrainOutOfOrderS2C();
+	LastNetworkDispatchMs = (FPlatformTime::Seconds() - DispatchStart) * 1000.0;
+}
+
+FString FACESession::DescribeNetworkPump() const
+{
+	const double Now = FPlatformTime::Seconds();
+	double Oldest = Now;
+	for (const auto& Pair : OutOfOrderS2CPackets) Oldest = FMath::Min(Oldest, Pair.Value.ReceivedAt);
+	const uint32 Next = LastReceivedPacketSequence + 1;
+	const bool WaitingForGap = !OutOfOrderS2CPackets.IsEmpty()
+		&& !OutOfOrderS2CPackets.Contains(Next) && !RejectedS2CPackets.Contains(Next);
+	return FString::Printf(TEXT("network receive=%.2f ms dispatch=%.2f ms; buffered=%d oldest=%.2f s missing=%u (last pump)"),
+		LastNetworkReceiveMs, LastNetworkDispatchMs, OutOfOrderS2CPackets.Num(), FMath::Max(0.0, Now - Oldest), WaitingForGap ? Next : 0);
 }
 
 void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CSocket*/)
@@ -902,7 +927,6 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 	for (uint32 Rejected : RejectedSequences)
 		if (Rejected > LastReceivedPacketSequence && RequestedS2CPackets.Contains(Rejected)
 			&& !OutOfOrderS2CPackets.Contains(Rejected)) RejectedS2CPackets.Add(Rejected);
-	if (!RejectedSequences.IsEmpty()) DrainOutOfOrderS2C();
 
 	if (EnumHasAnyFlags(Flags, EACEPacketHeaderFlags::Disconnect))
 	{
@@ -943,21 +967,19 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 		return; // duplicate / already handled
 	}
 
-	const uint32 Desired = LastReceivedPacketSequence + 1;
-	if (Sequence > Desired)
+	// Queue even the missing packet itself so it shares the same dispatch limit
+	// as the backlog it releases. Do not overwrite a packet already retained.
+	if (!OutOfOrderS2CPackets.Contains(Sequence))
 	{
-		FPendingS2CPacket& Pending = OutOfOrderS2CPackets.FindOrAdd(Sequence);
+		FPendingS2CPacket& Pending = OutOfOrderS2CPackets.Add(Sequence);
 		Pending.Flags = Flags;
 		Pending.Fragments = MoveTemp(Fragments);
 		Pending.ServerTicks = ServerTicks;
 		Pending.ReceivedAt = ReceivedAt;
-
-		RequestMissingS2CPackets(FPlatformTime::Seconds());
-		return;
 	}
-
-	ProcessOrderedS2CPacket(Sequence, Flags, Fragments, ServerTicks, ReceivedAt);
-	DrainOutOfOrderS2C();
+	if (!bDeferOrderedDispatch) DrainOutOfOrderS2C();
+	// Tick requests missing packets once after the receive/dispatch passes;
+	// scanning a large backlog for every newly received packet is quadratic.
 }
 
 void FACESession::ProcessOrderedS2CPacket(uint32 Sequence, EACEPacketHeaderFlags Flags,
@@ -1003,8 +1025,14 @@ void FACESession::RequestMissingS2CPackets(double Now)
 
 void FACESession::DrainOutOfOrderS2C()
 {
-	for (;;)
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_OrderedNetworkDispatch);
+	const double Start = FPlatformTime::Seconds();
+	const double Budget = FMath::Max(0.f, CVarNetworkPumpMs.GetValueOnGameThread()) * .001;
+	const int32 MaxPackets = FMath::Max(1, CVarNetworkPumpPackets.GetValueOnGameThread());
+	for (int32 Packets = 0; Packets < MaxPackets; ++Packets)
 	{
+		// Always permit one atomic packet, then yield the rest to later frames.
+		if (Packets > 0 && Budget > 0 && FPlatformTime::Seconds() - Start >= Budget) break;
 		const uint32 Seq = LastReceivedPacketSequence + 1;
 		if (!OutOfOrderS2CPackets.Contains(Seq) && RejectedS2CPackets.Remove(Seq))
 		{
@@ -1013,9 +1041,9 @@ void FACESession::DrainOutOfOrderS2C()
 			Log(FString::Printf(TEXT("Server cannot retransmit packet %u; continuing received updates"), Seq));
 			continue;
 		}
-		const FPendingS2CPacket* Pending = OutOfOrderS2CPackets.Find(Seq);
+		FPendingS2CPacket* Pending = OutOfOrderS2CPackets.Find(Seq);
 		if (!Pending) break;
-		FPendingS2CPacket Copy = *Pending;
+		FPendingS2CPacket Copy = MoveTemp(*Pending);
 		OutOfOrderS2CPackets.Remove(Seq);
 		ProcessOrderedS2CPacket(Seq, Copy.Flags, Copy.Fragments, Copy.ServerTicks, Copy.ReceivedAt);
 	}
@@ -7304,13 +7332,16 @@ void FACESession::HandleInventoryRemoveObject(FACEBinaryReader& Reader)
 
 int32 FACESession::GetVendorCurrencyCount() const
 {
-	if (!VendorCurrencyWeenie) return VendorCurrencyCount;
 	if (VendorPurseRevision == InventoryDataRevision && VendorPurseWeenie == VendorCurrencyWeenie) return VendorPurseCount;
 	int64 Count = 0;
 	for (const auto& Pair : WorldObjects)
 	{
 		const auto& Item = Pair.Value;
-		if (uint32(Item.WeenieClassId) != VendorCurrencyWeenie || Item.WielderId || Item.CurrentWieldedLocation) continue;
+		// A zero alternate-currency WCID means ordinary Pyreals. The count in
+		// ApproachVendor is only a snapshot and cannot confirm note redemption.
+		const bool Currency = VendorCurrencyWeenie ? uint32(Item.WeenieClassId) == VendorCurrencyWeenie
+			: (Item.ItemType & ACEItemType::Money) != 0;
+		if (!Currency || Item.WielderId || Item.CurrentWieldedLocation) continue;
 		int32 Container = Item.ContainerId;
 		TSet<int32> Seen;
 		while (Container && Container != PlayerGuid && !Seen.Contains(Container))
@@ -7823,6 +7854,11 @@ void FACESession::GetPackItemGuids(int32 ContainerGuid, TArray<int32>& Out) cons
 
 void FACESession::GetPlayerPackGuids(TArray<int32>& Out) const
 {
+	GetContainerPackGuids(PlayerGuid, Out);
+}
+
+void FACESession::GetContainerPackGuids(int32 ContainerGuid, TArray<int32>& Out) const
+{
 	Out.Reset();
 	TSet<int32> Seen;
 	// Retail side slots = UseBackpackSlot items (Container + Foci) ordered by PlacementPosition.
@@ -7830,7 +7866,7 @@ void FACESession::GetPlayerPackGuids(TArray<int32>& Out) const
 	// reconcile PlacementPosition before these IDs are sorted for presentation.
 	constexpr int32 ContainerType_Container = 1;
 	constexpr int32 ContainerType_Foci = 2;
-	if (const TArray<FACEContainerItemRef>* Contents = ContainerContents.Find(PlayerGuid))
+	if (const TArray<FACEContainerItemRef>* Contents = ContainerContents.Find(ContainerGuid))
 	{
 		for (const FACEContainerItemRef& Ref : *Contents)
 		{
@@ -7858,11 +7894,11 @@ void FACESession::GetPlayerPackGuids(TArray<int32>& Out) const
 		{
 			continue;
 		}
-		const bool bOnPlayer = Obj.ContainerId == PlayerGuid || Obj.ParentGuid == PlayerGuid;
+		const bool bInContainer = Obj.ContainerId == ContainerGuid || Obj.ParentGuid == ContainerGuid;
 		const bool bIsPack = Obj.ItemsCapacity > 0 || Obj.ContainersCapacity > 0
 			|| (Obj.ItemType & ACEItemType::Container) != 0
 			|| (Obj.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot) != 0;
-		if (bOnPlayer && bIsPack && Obj.CurrentWieldedLocation == 0 && Obj.Guid != PlayerGuid)
+		if (bInContainer && bIsPack && Obj.CurrentWieldedLocation == 0 && Obj.Guid != ContainerGuid)
 		{
 			Out.Add(Obj.Guid);
 		}
@@ -7953,10 +7989,9 @@ void FACESession::HandleUpdatePosition(FACEBinaryReader& Reader)
 		Pos.Velocity.Z = Reader.ReadFloat();
 		Pos.bHasVelocity = true;
 	}
-	if (PosFlags & HasPlacementID)
-	{
-		Reader.ReadUInt32();
-	}
+	// PositionPack::UnPack defaults an omitted placement to zero. Do not keep
+	// an inventory/held pose when the server supplies the dropped item's frame.
+	const int32 PlacementId = (PosFlags & HasPlacementID) ? static_cast<int32>(Reader.ReadUInt32()) : 0;
 	if (Pos.Location.ContainsNaN() || Pos.RotationXYZ.ContainsNaN()
 		|| !FMath::IsFinite(Pos.RotationW) || Pos.Velocity.ContainsNaN()) return;
 	if (Reader.CanRead(8))
@@ -7991,6 +8026,11 @@ void FACESession::HandleUpdatePosition(FACEBinaryReader& Reader)
 			Obj->PhysicsTimestamps[ACEPhysicsTimeStamp::ForcePosition] = IncomingForce;
 			Obj->Position = Pos;
 			Obj->bHasPosition = true;
+			Obj->PlacementId = PlacementId;
+			// SmartBox::HandleReceivedPosition unsets the physics parent before
+			// applying placement. Inventory ownership is still resolved by UI events.
+			Obj->ParentGuid = 0;
+			Obj->ParentLocation = 0;
 		}
 
 		if (Guid == PlayerGuid)

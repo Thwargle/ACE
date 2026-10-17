@@ -183,9 +183,12 @@ bool FACEItemToolsTest::RunTest(const FString&)
         auto Give=ITJson(TEXT(R"({"action":"it_give","item":10,"target":20,"amount":2})"));
         H->ExecuteItemTools(*P,Give);TestEqual(TEXT("Native giving uses retail GiveObject"),CountAction(ACEGameAction::GiveObjectRequest),1);
         S.CachedC2SPackets.Reset();S.WorldObjects[10].Bonded=1;H->ExecuteItemTools(*P,Give);
-        TestEqual(TEXT("Bonded item cannot be given to player"),CountAction(ACEGameAction::GiveObjectRequest),0);
+        TestEqual(TEXT("Bonded items remain transferable to players in retail"),CountAction(ACEGameAction::GiveObjectRequest),1);
+        S.CachedC2SPackets.Reset();S.WorldObjects[10].Attuned=1;H->ExecuteItemTools(*P,Give);
+        TestEqual(TEXT("Attuned items cannot be given to players"),CountAction(ACEGameAction::GiveObjectRequest),0);
         S.WorldObjects[20].bIsPlayer=false;H->ExecuteItemTools(*P,Give);
-        TestEqual(TEXT("NPC turn-ins may use bonded quest items"),CountAction(ACEGameAction::GiveObjectRequest),1);
+        TestEqual(TEXT("NPC turn-ins may use attuned quest items"),CountAction(ACEGameAction::GiveObjectRequest),1);
+        S.WorldObjects[10].Attuned=0;
         {
             // Real server packet handlers -> native snapshot -> Lua. The busy
             // reply contains no UseDone and must not mutate inventory.
@@ -212,6 +215,50 @@ bool FACEItemToolsTest::RunTest(const FString&)
                 TestEqual(TEXT("Partial stack continues until exhausted"),Action(I),FString(Left?TEXT("it_give"):TEXT("stop")));
             }
             S.WorldObjects.Add(Item.Guid,Item);
+        }
+        {
+            const auto SavedObjects=S.WorldObjects;
+            S.WorldObjects[20].bIsPlayer=true;
+            FACEWorldObject Bag;Bag.Guid=90;Bag.ContainerId=Self.Guid;Bag.ItemType=ACEItemType::Container;Bag.ItemsCapacity=24;S.WorldObjects.Add(Bag.Guid,Bag);
+            for(int N=0;N<14;++N)
+            {
+                FACEWorldObject Salvage;Salvage.Guid=100+N;Salvage.ContainerId=N<8?Self.Guid:Bag.Guid;
+                Salvage.Name=TEXT("Steel Salvage (100)");Salvage.ItemType=0x40000000;
+                Salvage.StackSize=1;Salvage.Bonded=N<8?0:1;S.WorldObjects.Add(Salvage.Guid,Salvage);
+            }
+            ++S.InventoryDataRevision;
+            FACEPluginVM VM;VM.Load(Source,Error);auto Settings=Profile();Settings->SetStringField(TEXT("give_name"),TEXT("Steel Salvage (100)"));
+            auto Snap=[&](double Time){auto J=H->ItemToolsSnapshot();J->SetNumberField(TEXT("time"),Time);J->SetBoolField(TEXT("ready"),true);return J;};
+            for(int N=0;N<14;++N)
+            {
+                auto I=Step(VM,Snap(200+N),Settings);
+                if(!TestEqual(TEXT("All fourteen salvage bags across packs are offered"),Action(I),FString(TEXT("it_give"))))break;
+                FACEBinaryWriter Remove;Remove.WriteUInt32(int32(I->GetNumberField(TEXT("item"))));FACEBinaryReader Update(Remove.GetData());S.HandleInventoryRemoveObject(Update);
+            }
+            auto I=Step(VM,Snap(215),Settings);
+            TestEqual(TEXT("Give-all finishes after all fourteen confirmations"),I->GetNumberField(TEXT("completed")),14.);
+            S.WorldObjects=SavedObjects;++S.InventoryDataRevision;
+        }
+        {
+            // A real Pyreal update must unblock the Lua note-redemption state.
+            FACEWorldObject Coins;Coins.Guid=95;Coins.ContainerId=Self.Guid;Coins.ItemType=ACEItemType::Money;
+            Coins.StackSize=100;Coins.MaxStackSize=25000;S.UpsertWorldObject(Coins);
+            S.VendorCurrencyWeenie=0;S.VendorCurrencyCount=0;
+            FACEPluginVM VM;VM.Load(Source,Error);auto J=Snapshot(),Settings=Profile();
+            Settings->SetStringField(TEXT("mode"),TEXT("restock"));Settings->SetNumberField(TEXT("vendor_id"),40);
+            Settings->SetArrayField(TEXT("restock"),{MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"name":"Scarab","wcid":200,"quantity":25})")))});
+            auto Inv=J->GetArrayField(TEXT("inventory"));
+            Inv.Add(MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"id":96,"name":"Trade Note","count":1,"transferable":true,"can_sell":true,"trade_note":true,"sell_unit":200})"))));
+            J->SetArrayField(TEXT("inventory"),Inv);J->SetNumberField(TEXT("it_currency"),S.GetVendorCurrencyCount());
+            TestEqual(TEXT("Ordinary vendor counts live owned Pyreals"),S.GetVendorCurrencyCount(),100);
+            TestEqual(TEXT("Restock redeems a note for the shortage"),Action(Step(VM,J,Settings)),FString(TEXT("it_sell")));
+            Inv.Pop();J->SetArrayField(TEXT("inventory"),Inv);
+            TestFalse(TEXT("Note removal alone does not confirm its proceeds"),Step(VM,J,Settings)->HasField(TEXT("action")));
+            FACEBinaryWriter Count;Count.WriteUInt8(1);Count.WriteUInt32(Coins.Guid);Count.WriteUInt32(300);Count.WriteUInt32(300);
+            FACEBinaryReader Update(Count.GetData());S.HandleSetStackSize(Update);
+            J->SetNumberField(TEXT("it_currency"),H->ItemToolsSnapshot()->GetNumberField(TEXT("it_currency")));
+            TestEqual(TEXT("Native currency acknowledgement advances restock to buying"),Action(Step(VM,J,Settings)),FString(TEXT("it_buy")));
+            S.WorldObjects.Remove(Coins.Guid);++S.InventoryDataRevision;
         }
         S.CachedC2SPackets.Reset();S.WorldObjects[10].Bonded=0;S.WorldObjects[10].ObjectDescriptionFlags=ACEObjectDescFlag::Retained;H->ExecuteItemTools(*P,Give);
         TestEqual(TEXT("Retained items are rechecked before sending"),CountAction(ACEGameAction::GiveObjectRequest),0);S.WorldObjects[10].ObjectDescriptionFlags=0;

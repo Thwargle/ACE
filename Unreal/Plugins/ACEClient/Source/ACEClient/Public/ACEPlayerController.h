@@ -31,6 +31,9 @@ UCLASS()
 class ACECLIENT_API AACEPlayerController : public APlayerController
 {
 	GENERATED_BODY()
+	friend class FACEPerformanceScene;
+	friend class FACEWaspNetworkLagTest;
+	friend class FACEDungeonInterfacesTest;
 	friend class FACECollisionSizingTest;
 	friend class FACEPvPCombatParityTest;
 	friend class FACEEmoteTransitionTest;

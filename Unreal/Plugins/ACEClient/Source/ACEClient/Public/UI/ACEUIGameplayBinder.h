@@ -62,6 +62,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 {
 	GENERATED_BODY()
 	friend class FACERetailScreenTest;
+	friend class FACEDungeonInterfacesTest;
 	friend class FACEDesktopHighlightTest;
 	friend class FACEPvPCombatParityTest;
 	friend class FACECharacterInfoParityTest;
@@ -1459,7 +1460,7 @@ private:
 	FString VendorFilterLabel() const;
 	bool VendorItemMatchesFilter(const FACEWorldObject& O, int32 FilterIndex) const;
 	void RebuildVendorVisibleFilters();
-	static constexpr int32 VendorFilterCount = 6;
+	static constexpr int32 VendorFilterCount = 18;
 	void ShowTradePanel(int32 PartnerGuid);
 	void HideTradePanel(bool bNotifyServer);
 	void SyncEnvPanelMode();

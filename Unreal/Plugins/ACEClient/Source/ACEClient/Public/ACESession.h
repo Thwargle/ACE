@@ -79,6 +79,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEPluginEquipmentTest;
 	friend class FACEPluginRequestsTest;
 	friend class FACEUCMLootLatencyTest;
+	friend class FACEPluginLootIconsTest;
     friend class FACEPluginCompanionTest;
     friend class FACEPluginPublicAPITest;
 	friend class FACEItemToolsTest;
@@ -114,11 +115,16 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEVRStairCeilingTest;
 	friend class FACEVRInteriorNetworkTest;
 	friend class FACEPerformanceScene;
+	friend class FACEWaspLagLink;
+	friend class FACEWaspNetworkLagTest;
+	friend class FACEDungeonInterfacesTest;
 	friend class FACENetworkPumpBudgetTest;
 	friend class FACERetailInteriorStreamingTest;
 	friend class FACERetailCombatProtocolTest;
 	friend class FACERetailNetworkTest;
+	friend class FACEGroundItemPlacementTest;
 	friend class FACECustomObjectReplicationTest;
+	friend class FACETailoringLayersTest;
 	friend class FACECustomWorldPresentationTest;
 	friend class FACEHouseHookAnimationTest;
 	friend class FACELoginHandshakeTest;
@@ -281,6 +287,8 @@ public:
 	int32 GetVitaeCpPool() const { return VitaeCpPool; }
 	int32 GetDeathLevel() const { return DeathLevel; }
 	FACELinkStatus GetLinkStatus() const;
+	/** On-demand /acueperf detail; times cover the most recent receive/dispatch pass. */
+	FString DescribeNetworkPump() const;
 	/** GameAction PingRequest (0x01E9) — LinkStatus panel RTT. */
 	void SendPingRequest();
 
@@ -311,6 +319,7 @@ public:
 	void GetPlayerPacks(TArray<FACEWorldObject>& Out) const;
 	/** Same ordered pack IDs as GetPlayerPacks; query afresh after session changes. */
 	void GetPlayerPackGuids(TArray<int32>& Out) const;
+	void GetContainerPackGuids(int32 ContainerGuid, TArray<int32>& Out) const;
 
 	/** GameAction Talk (0x0015) — local chat / @commands. */
 	void SendTalk(const FString& Message);
@@ -1011,6 +1020,10 @@ private:
 	double LastRequestForRetransmitTime = 0.0;
 	TMap<uint32, FCachedC2SPacket> CachedC2SPackets;
 	TMap<uint32, FPendingS2CPacket> OutOfOrderS2CPackets;
+	/** Socket receipt handles transport first; ordered gameplay has its own bounded pass. */
+	bool bDeferOrderedDispatch = false;
+	double LastNetworkReceiveMs = 0.0;
+	double LastNetworkDispatchMs = 0.0;
 	TSet<uint32> RequestedS2CPackets;
 	TSet<uint32> RejectedS2CPackets;
 	float AutoPosTimer = 0.f;

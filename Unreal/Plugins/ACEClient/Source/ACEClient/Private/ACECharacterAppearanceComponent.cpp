@@ -306,6 +306,31 @@ bool UACECharacterAppearanceComponent::GetPartsCastShadow() const
 	return false;
 }
 
+bool UACECharacterAppearanceComponent::ApplyPositionPlacement(int32 PlacementId)
+{
+	// Retail SmartBox::HandleReceivedPosition only sets placement when HasAnims
+	// is false. A position correction must not replace a creature/prop animation.
+	if (!bHasMesh || AppliedPlacementId == PlacementId || bPlayIdleMotion
+		|| ActionCommand != 0 || bPreviewAnimation || bVRPoseControlled) return false;
+	UGameInstance* GI = GetWorld() ? GetWorld()->GetGameInstance() : nullptr;
+	UACEDatSubsystem* Dat = GI ? GI->GetSubsystem<UACEDatSubsystem>() : nullptr;
+	if (!Dat) return false;
+	const auto Built = Dat->GetOrBuildSetupAppearanceShared(SetupId, Appearance, WorldScale, PlacementId);
+	if (!Built || Built->Parts.Num() != BindTransforms.Num()) return false;
+	for (int32 Index = 0; Index < BindTransforms.Num(); ++Index)
+	{
+		BindTransforms[Index] = Built->Parts[Index].BindTransform;
+		// Static parts do not tick when they become visible again, so update
+		// hidden parts too. Keep their mesh sections, materials and script state.
+		if (PartMeshes.IsValidIndex(Index) && PartMeshes[Index])
+			PartMeshes[Index]->SetRelativeTransform(BindTransforms[Index]);
+	}
+	bHeldKeepPlacementPose = false;
+	AppliedPlacementId = PlacementId;
+	++AppearanceRevision; // Ground-support bounds depend on these part transforms.
+	return true;
+}
+
 void UACECharacterAppearanceComponent::ApplyPartTransform(int32 PartIndex, const FTransform& AnimOrBind)
 {
 	if (bVRPoseControlled) return;

@@ -67,6 +67,8 @@ bool FACERetailCharacterCreationTest::RunTest(const FString&)
     TestTrue(TEXT("Language strings read directly from language DAT"),Model.LoadStrings(Dat->GetDatDirectory()));
     TestTrue(TEXT("Retail heritage prose available"),Model.Text(TEXT("ID_CharGen_AluvianText")).Len()>100);
     TestEqual(TEXT("Retail name case and prefix exceptions"),Model.FormatName(TEXT("mCArthur o'NEILL IV")),FString(TEXT("McArthur o'Neill IV")));
+    TestEqual(TEXT("Retail lowercases capitals inside an ordinary word"),Model.FormatName(TEXT("ThwargleX")),FString(TEXT("Thwarglex")));
+    TestEqual(TEXT("Retail preserves a separate Roman-numeral suffix"),Model.FormatName(TEXT("Thwargle X")),FString(TEXT("Thwargle X")));
     TestEqual(TEXT("Retail filters unsupported punctuation and duplicate separators"),Model.FormatName(TEXT("  ALICE--BOB123  ")),FString(TEXT("Alice-Bob")));
     TestFalse(TEXT("Name input rejects numbers"),Model.IsNameCharacter('7'));
     Model.SelectHeritage(1);Model.SelectSex(1);Model.Selection.HairStyle=2;Model.Selection.Eyes=1;Model.Selection.SkinHue=.37;

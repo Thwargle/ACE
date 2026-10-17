@@ -73,6 +73,7 @@ namespace ACELoginSettings
 			{
 				auto J = MakeShared<FJsonObject>();
 				J->SetStringField(TEXT("id"), A.Id);
+				J->SetStringField(TEXT("alias"), A.Alias);
                 J->SetStringField(TEXT("username"), A.Username); J->SetStringField(TEXT("password"), PLATFORM_LINUX ? FString() : A.Password);
 				Accounts.Add(MakeShared<FJsonValueObject>(J));
 			}
@@ -183,6 +184,8 @@ namespace ACELoginSettings
 				const TSharedPtr<FJsonObject>* J = nullptr; FACELoginAccount A;
 				if (!V->TryGetObject(J) || !(*J)->TryGetStringField(TEXT("id"), A.Id) || A.Id.IsEmpty() || AccountIds.Contains(A.Id)
 					|| !(*J)->TryGetStringField(TEXT("username"), A.Username) || !(*J)->TryGetStringField(TEXT("password"), A.Password)) return false;
+				// Optional for existing saved logins; identity remains the entry ID.
+				(*J)->TryGetStringField(TEXT("alias"), A.Alias);
 #if PLATFORM_LINUX
                 A.Password.Reset();
 #endif
@@ -190,7 +193,7 @@ namespace ACELoginSettings
 				// Upgrade any early server-scoped profile without losing alternate
 				// passwords. Only exact duplicates can safely be combined.
 				const auto* Duplicate = Version == 2 ? Loaded.Accounts.FindByPredicate([&](const auto& E)
-					{ return E.Username == A.Username && E.Password == A.Password; }) : nullptr;
+					{ return E.Username == A.Username && E.Password == A.Password && E.Alias == A.Alias; }) : nullptr;
 				if (Duplicate)
 				{
 					if (Loaded.SelectedAccountId == A.Id) Loaded.SelectedAccountId = Duplicate->Id;
