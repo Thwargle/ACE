@@ -708,6 +708,7 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	if (bHasMesh
 		&& SetupId == NewSetupId
 		&& AppliedPlacementId == PlacementId
+		&& (!Object.bHasServerPhysicsDescription || MotionTableId == Object.MotionTableId)
 		&& AppliedAppearanceHash == AppearanceHash
 		&& FMath::IsNearlyEqual(AppliedTranslucencyKey, TranslucencyKey)
 		&& FMath::IsNearlyEqual(AppliedWorldScale, InWorldScale)
@@ -719,6 +720,10 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 		if (Object.IsCorpse() && MotionTableId != 0)
 		{
 			SetHeldActionMotion(ACEMotion::Dead, ACEMotion::StanceNonCombat);
+		}
+		else if (!bHeld && MotionTableId != 0 && ACEMotion::IsHeldRestCommand(Object.InitialMotionCommand))
+		{
+			SetHeldActionMotion(Object.InitialMotionCommand,Object.InitialMotionStyle ? Object.InitialMotionStyle : ACEMotion::StanceNonCombat);
 		}
 		const bool bCreatureLikeEarly = Object.bIsPlayer || Object.bIsSelf
 			|| (Object.ItemType & ACEItemType::Creature) != 0;
@@ -807,7 +812,10 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	{
 		return false;
 	}
-	if (MotionTableId == 0)
+	// Retail set_description replaces the setup's default table even when the
+	// server sends no table (zero). Resting decorative bodies must keep their
+	// placement instead of acquiring the human setup's standing idle animation.
+	if (MotionTableId == 0 && !Object.bHasServerPhysicsDescription)
 	{
 		MotionTableId = static_cast<int32>(DefaultMT);
 	}

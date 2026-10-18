@@ -106,11 +106,23 @@ function Capture-Phase([string]$Name, [string]$Expected) {
     $invalid = @($lines | Where-Object {
         $_ -match 'APP_EVENT_STATE_ON_PAUSE|APP_EVENT_STATE_ON_STOP|APP_EVENT_STATE_BACKGROUND|ACE VR frame timings:.*(?:world=0|menus=1)'
     })
+    $refreshRates = @($samples | ForEach-Object {
+        if ($_ -match 'FPS=\d+/(\d+)') { [int]$Matches[1] }
+    } | Sort-Object -Unique)
+    $resolutionScales = @($samples | ForEach-Object {
+        if ($_ -match '(?:^|,)SF=([\d.]+)') { [double]$Matches[1] }
+    } | Sort-Object -Unique)
+    $displayMatches = $refreshRates.Count -eq 1 -and $resolutionScales.Count -eq 1
+    if ($displayMatches -and $state.phases.Count -gt 0) {
+        $displayMatches = $refreshRates[0] -eq $state.phases[0].refreshHz[0] -and
+            $resolutionScales[0] -eq $state.phases[0].resolutionScales[0]
+    }
     $phase = [ordered]@{name=$Name; value=$Expected; start=$start; end=$end; samples=$samples.Count;
-        valid=($samples.Count -ge ($Seconds - 2) -and $invalid.Count -eq 0)}
+        refreshHz=$refreshRates; resolutionScales=$resolutionScales;
+        valid=($samples.Count -ge ($Seconds - 2) -and $invalid.Count -eq 0 -and $displayMatches)}
     $state.phases += $phase
     Save-State
-    if (!$phase.valid) { throw "Interrupted $Name capture. Partial samples saved but excluded from comparison." }
+    if (!$phase.valid) { throw "Interrupted or mismatched $Name capture (check refresh rate and resolution scale). Samples saved but excluded from comparison." }
     Assert-Visible
     Write-Host "$Name saved: $($samples.Count) samples."
 }

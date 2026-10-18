@@ -1029,6 +1029,7 @@ bool FACEUCMLootTest::RunTest(const FString&)
             S->SetArrayField(TEXT("corpses"),{MakeShared<FJsonValueObject>(ParseUCM(TEXT(R"({"id":700,"name":"Corpse","distance":2})")))});
             S->SetArrayField(TEXT("inventory"),{Ust,MakeShared<FJsonValueObject>(Item)});
             auto I=Check(VM,S,P);TestEqual(TEXT("Final corpse item retains its salvage action after auto-close"),I->GetStringField(TEXT("action")),FString(TEXT("salvage")));
+            TestEqual(TEXT("Confirmed final pickup remembers an auto-closed corpse"),I->GetNumberField(TEXT("completed_corpse")),700.);
             TestEqual(TEXT("Only the newly acquired item is salvaged"),I->GetNumberField(TEXT("item")),701.);
             TestFalse(TEXT("Salvage is issued once while its result is pending"),Check(VM,S,P)->HasField(TEXT("action")));
             S->SetArrayField(TEXT("inventory"),{Ust});TestFalse(TEXT("Completed salvage job is not replayed"),Check(VM,S,P)->HasField(TEXT("action")));
@@ -1053,6 +1054,10 @@ bool FACEUCMLootTest::RunTest(const FString&)
     {
         FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();P->SetArrayField(TEXT("loot_rules"),{MakeShared<FJsonValueObject>(MakeShared<FJsonObject>())});
         S->SetBoolField(TEXT("contents_ready"),false);TestFalse(TEXT("Late descriptions are not mistaken for empty corpse"),Check(VM,S,P)->HasField(TEXT("action")));
+        S->SetNumberField(TEXT("time"),S->GetNumberField(TEXT("time"))+21);
+        auto Timeout=Check(VM,S,P);
+        TestEqual(TEXT("Missing descriptions cannot hang the scheduler indefinitely"),Timeout->GetStringField(TEXT("action")),FString(TEXT("close_corpse")));
+        TestFalse(TEXT("Timed-out corpse is not marked fully looted"),Timeout->HasField(TEXT("completed")));
         S->SetBoolField(TEXT("contents_ready"),true);S->SetBoolField(TEXT("container_is_corpse"),false);
         TestFalse(TEXT("Loot rules do not take items from other containers"),Check(VM,S,P)->HasField(TEXT("action")));
     }

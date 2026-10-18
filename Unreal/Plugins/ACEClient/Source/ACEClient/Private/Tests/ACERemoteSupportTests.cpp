@@ -83,7 +83,9 @@ bool FACERemoteSupportTest::RunTest(const FString&)
  {
   auto* Obstacle=Box(FVector(0,200,LowCeiling?10:150),FVector(400,90,LowCeiling?10:150));
   AActor* Ceiling=LowCeiling?Box(FVector(0,250,195),FVector(400,300,10)):nullptr;
-  for(int FPS:{30,90,144})
+  // Include the reported 2-5 FPS hitch interval: repeated blocked substeps
+  // must still stop at the wall without climbing it or bypassing headroom.
+  for(int FPS:{2,5,30,90,144})
   {
    auto* Blocked=World->SpawnActor<AACEWorldEntityActor>();Blocked->InitializeFromObject(O,100,false);
    Blocked->RemoteMotion.bMoving=true;Blocked->RemoteMotion.Forward=1;Blocked->RemoteMotion.ForwardUnitsPerSecond=4;

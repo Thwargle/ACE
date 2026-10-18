@@ -43,6 +43,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeUCMMicroPanel()
         {TEXT("buffing"),TEXT("Buffing")},{TEXT("combat"),TEXT("Combat")},
         {TEXT("looting"),TEXT("Looting")},{TEXT("navigation"),TEXT("Navigation")},
         {TEXT("recovery"),TEXT("Vital recovery")},{TEXT("buff_others"),TEXT("Buff others")},
+        {TEXT("summon_pets"),TEXT("Summoning")},
         {TEXT("vendor_restock"),TEXT("Vendor restocking")},{TEXT("meta_enabled"),TEXT("Metas")},{TEXT("idle_peace"),TEXT("Peace when idle")}})
     {
         const FString Key=Entry.Key;

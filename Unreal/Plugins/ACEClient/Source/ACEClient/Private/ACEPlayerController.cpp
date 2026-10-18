@@ -1,4 +1,5 @@
 #include "ACEPlayerController.h"
+#include "ACEProfiling.h"
 #include "ACERetailTurn.h"
 #include "UI/ACERadarVisuals.h"
 #include "Mods/ACEPluginSubsystem.h"
@@ -109,21 +110,25 @@ EMouseLockMode DesktopMouseLockMode()
 // support: its convex edge can touch the side of the foot over an open drop.
 // Center support within StepDown still permits normal stair/ramp descent.
 bool HasLedgeSupport(UWorld& World, UACEDatSubsystem* Dat, const FVector& Feet,
-    float Radius, float StepDown, float Scale, bool bOutdoor, const FCollisionQueryParams& Params)
+    float Radius, float StepDown, float Scale, bool bOutdoor, const FCollisionQueryParams& Params, int32 SphereCount)
 {
     float SupportZ;
     if (ACEBodySweep::FindFootSupport(World, Feet, Radius, StepDown, Params,
-        SupportZ, 1.f, false, true)) return true;
+        SupportZ, 1.f, false, true, nullptr, true, SphereCount)) return true;
+    // A failed polygon footprint must not be overridden by a center ray
+    // spanning both retail step-down attempts. CheckWalkable probes only one
+    // half-step from the rejected rim contact.
+    const float WalkableDown=ACEBodySweep::StepDownProbeDistance(Radius,SphereCount,StepDown);
     TArray<FHitResult> Hits;
     ACEBodySweep::TraceGround(World, Hits, Feet + FVector(0,0,1.f),
-        Feet - FVector(0,0,StepDown + .5f), Params);
+        Feet - FVector(0,0,WalkableDown + .5f), Params);
     for (const FHitResult& Hit : Hits)
         if (Hit.bBlockingHit && !ACEBodySweep::IsCreatureBody(Hit)
-            && Hit.ImpactNormal.Z >= .6641741f && Hit.ImpactPoint.Z >= Feet.Z-StepDown)
+            && Hit.ImpactNormal.Z >= .6641741f && Hit.ImpactPoint.Z >= Feet.Z-WalkableDown)
             return true;
     FVector Normal;
     return bOutdoor && Dat && Dat->SampleOutdoorGroundZ(Feet.X,Feet.Y,Scale,SupportZ,&Normal)
-        && Normal.Z >= .6641741f && SupportZ <= Feet.Z+1.f && SupportZ >= Feet.Z-StepDown;
+        && Normal.Z >= .6641741f && SupportZ <= Feet.Z+1.f && SupportZ >= Feet.Z-WalkableDown;
 }
 
 // The rendered water sheet remains at the heightfield plane. Retail body
@@ -886,6 +891,7 @@ void AACEPlayerController::UpdateFrameRateOverlay()
 
 void AACEPlayerController::PlayerTick(float DeltaTime)
 {
+	ACE_PROFILE_SCOPE(Player);
 	Super::PlayerTick(DeltaTime);
 	auto* VR = GetPawn() ? GetPawn()->FindComponentByClass<UACEVRComponent>() : nullptr;
 	const bool bVR = VR && VR->IsActive();
@@ -1773,8 +1779,20 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 	// at the far end of a 50-70ms headset frame, lifting the body onto furniture
 	// or dropping its floor before it actually reached the doorway.
 	const float MovementFrameTime = DeltaTime;
-	const int32 MovementSteps = bVR && (bMoving || bJumpAirborne)
+	int32 MovementSteps = bVR && (bMoving || bJumpAirborne)
 		? FMath::Clamp(FMath::CeilToInt(MovementFrameTime * 90.f), 1, 24) : 1;
+	// CTransition::calc_num_steps limits ordinary travel to one lower-sphere
+	// radius per insertion. Support must be sampled at those intermediate poses,
+	// not just at two supported endpoints on opposite sides of a cliff/gap.
+	if(!bVR && bMoving && !bJumpAirborne)
+	{
+		const float ForwardSpeed=(F<0.f ? Client->GetLocomotionSpeed(false)
+			* (bRunning?Client->GetRunRate():1.f)*.65f : Client->GetLocomotionSpeed(bRunning));
+		const FVector Travel(FMath::Abs(R)*Client->GetSidestepSpeed(bRunning)*MovementFrameTime,
+			FMath::Abs(F)*ForwardSpeed*WalkingCycleSeconds,0.f);
+		const float Distance=(Travel.Size()+WalkingRootDelta.GetTranslation().Size())*GetLocalCreatureScale()*WorldScale;
+		MovementSteps=FMath::Max(1,FMath::CeilToInt(Distance/FMath::Max(1.f,GetPlayerCollisionBody().Radii[0])));
+	}
 	DeltaTime = MovementFrameTime / MovementSteps;
 	// Residency can change between substeps, but the world cannot stream new
 	// components in the middle of this synchronous movement loop. Reuse the
@@ -2261,14 +2279,14 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				const float RampClimbCm = bIndoorNow
 					? (StepUpCm + 12.f)
 					: (StepUpCm + 28.f);
-				// Retail CheckWalkable / StepDownHeight (~0.5 AC). Add waterDepth only when wet.
+				// Retail CheckWalkable / Setup StepDownHeight. Add waterDepth only when wet.
 				const float StepDownCm = GetStepDownHeightCm();
 				const float WaterDepthDestCm = WaterDat
 					? WaterDat->GetOutdoorWaterDepthCm(Desired.X, Desired.Y, WorldScale) : 0.f;
 				const float RampDropCm = StepDownCm + WaterDepthDestCm;
 				if (!bJumpAirborne && HasLedgeSupport(*World, WaterDat,
 					Current-FVector(0,0,CapsuleHalfHeight), CapsuleRadius,
-					StepDownCm, WorldScale, bUseLandSupport, SweepParams))
+					StepDownCm, WorldScale, bUseLandSupport, SweepParams,Shape.Count))
 					LedgeSupportParams = SweepParams;
 
 				// Desktop's step grace can hold feet on a nonexistent floor for
@@ -2441,7 +2459,8 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				// lower sphere validates edge contact without blocking narrow treads.
 				auto SampleWalkingFeet = [&](double X, double Y, float& OutFeetZ)
 				{
-					bool bFound = SampleFeetZ(X,Y,FeetNow,RampClimbCm,RampDropCm,OutFeetZ,false);
+					const float WalkableDown=ACEBodySweep::StepDownProbeDistance(Shape.Radii[0],Shape.Count,RampDropCm);
+					bool bFound = SampleFeetZ(X,Y,FeetNow,RampClimbCm,WalkableDown,OutFeetZ,false);
 					float SphereZ = FeetNow;
 					if (ACEBodySweep::FindBodyFootSupport(*World,FVector(X,Y,FeetNow),Shape,
 						RampDropCm,SweepParams,SphereZ,RampClimbCm,bFound && OutFeetZ<=FeetNow,true)
@@ -3391,7 +3410,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                                 && !ACEBodySweep::IsCreatureBody(Contact)
                                 && HasLedgeSupport(*World,GetGameInstance()->GetSubsystem<UACEDatSubsystem>(),
                                     FVector(Desired.X,Desired.Y,GroundZ),CapsuleRadius,SnapStepDownCm,
-                                    WorldScale,bSupportHasLand,Params)) bHaveGround=true;
+                                    WorldScale,bSupportHasLand,Params,GetPlayerCollisionBody().Count)) bHaveGround=true;
                         }
                         for (int32 Retry=0; !bHaveGround && Retry<3; ++Retry)
                         {
@@ -3460,7 +3479,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				&& (!bHaveGround || !HasLedgeSupport(*GetWorld(),
 					GetGameInstance()->GetSubsystem<UACEDatSubsystem>(),
 					FVector(Desired.X,Desired.Y,GroundZ), CapsuleRadius, SnapStepDownCm,
-					WorldScale, bSupportHasLand, LedgeSupportParams.GetValue())))
+					WorldScale, bSupportHasLand, LedgeSupportParams.GetValue(),GetPlayerCollisionBody().Count)))
 			{
 				Desired = Current-FVector(0,0,CapsuleHalfHeight);
 				GroundZ = Desired.Z;
@@ -3578,7 +3597,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 								const FVector RecoveredFeet=Recovered-FVector(0,0,CapsuleHalfHeight);
 								if (!bJumpAirborne && LedgeSupportParams.IsSet()
 									&& !HasLedgeSupport(*GetWorld(),Dat,RecoveredFeet,CapsuleRadius,
-										SnapStepDownCm,WorldScale,true,LedgeSupportParams.GetValue()))
+										SnapStepDownCm,WorldScale,true,LedgeSupportParams.GetValue(),Body.Count))
 								{
 									Desired.X=Current.X;Desired.Y=Current.Y;
 									GroundZ=Current.Z-CapsuleHalfHeight;
@@ -7026,7 +7045,7 @@ float AACEPlayerController::GetStepUpHeightCm() const
 
 float AACEPlayerController::GetStepDownHeightCm() const
 {
-	// Retail PartArray.GetStepDownHeight = Setup.StepDownHeight * Scale.Z (~0.5 AC).
+	// Retail PartArray.GetStepDownHeight = Setup.StepDownHeight * Scale.Z.
 	// Used for CheckWalkable / precipice — do not inflate like client StepUp.
 	float StepAc = 0.5f;
 	if (Client)
@@ -7044,13 +7063,13 @@ float AACEPlayerController::GetStepDownHeightCm() const
 					if (Dat->TryGetSetupPhysics(static_cast<uint32>(Self.SetupId), IgnoredUp, IgnoredH, IgnoredR, IgnoredAnim, &SetupStepDown))
 					{
 						const float Scale = Self.Scale > KINDA_SMALL_NUMBER ? Self.Scale : 1.f;
-						StepAc = FMath::Clamp(SetupStepDown * Scale, 0.15f, 1.0f);
+						StepAc = FMath::Max(0.f, SetupStepDown * Scale);
 					}
 				}
 			}
 		}
 	}
-	return FMath::Clamp(StepAc * WorldScale, 15.f, 100.f);
+	return StepAc * WorldScale;
 }
 
 float AACEPlayerController::GetUseCylinderDistanceCm(

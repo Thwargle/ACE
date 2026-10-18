@@ -1,4 +1,5 @@
 #include "UI/ACEUIGameplayBinder.h"
+#include "Mods/ACEPluginSubsystem.h"
 #include "UI/ACERetailVendorCategories.h"
 #include "ACERetailChat.h"
 #include "ACESpellbookFilters.h"
@@ -653,7 +654,19 @@ void UACEUIGameplayBinder::SetRetailTooltip(UWidget* Widget, const FText& Text)
 	UACEHoverTooltipWidget::SetWidgetTooltip(Widget, Text, UACEHoverTooltipWidget::ObjectTemplate);
 }
 
-void UACEUIGameplayBinder::TickRefresh()
+void UACEUIGameplayBinder::RefreshDesktopHUD()
+{
+	if (!bBound || !Canvas || !Manager) return;
+	Manager->BeginNameLookupPass();
+	ON_SCOPE_EXIT { if (Manager) Manager->EndNameLookupPass(); };
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshVitalsOverlays); RefreshVitalsOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshRadarOverlays); RefreshRadarOverlays(); }
+	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshShortcutOverlays); RefreshShortcutOverlays(); }
+	RefreshEffectsOverlays(true);
+	RefreshEffectsOverlays(false);
+}
+
+void UACEUIGameplayBinder::TickRefresh(bool bRefreshDesktopHUD)
 {
 	if (!PendingScreenshotFilename.IsEmpty() && FPlatformTime::Seconds() - ScreenshotRequestTime > 10.0)
 		FinishGameplayScreenshot();
@@ -690,8 +703,6 @@ void UACEUIGameplayBinder::TickRefresh()
 	}
 	TickTransientInfo();
 	TickSelectionFlash();
-	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshVitalsOverlays); RefreshVitalsOverlays(); }
-	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshRadarOverlays); RefreshRadarOverlays(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshSelectionOverlay); RefreshSelectionOverlay(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshExaminationOverlay); RefreshExaminationOverlay(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshInventoryOverlays); RefreshInventoryOverlays(); }
@@ -719,12 +730,10 @@ void UACEUIGameplayBinder::TickRefresh()
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshBookOverlays); RefreshBookOverlays(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshMiniGameOverlays); RefreshMiniGameOverlays(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshChatChromeOverlays); RefreshChatChromeOverlays(); }
-	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshShortcutOverlays); RefreshShortcutOverlays(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshSkillTabLabels); RefreshSkillTabLabels(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshPanelTitleOverlay); RefreshPanelTitleOverlay(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshCombatPanelOverlays); RefreshCombatPanelOverlays(); }
-	RefreshEffectsOverlays(true);
-	RefreshEffectsOverlays(false);
+	if (bRefreshDesktopHUD) RefreshDesktopHUD();
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshVitaePanelOverlays); RefreshVitaePanelOverlays(); }
 	{ TRACE_CPUPROFILER_EVENT_SCOPE(RefreshLinkStatusPanelOverlays); RefreshLinkStatusPanelOverlays(); }
 	TickStatusPanels(FApp::GetDeltaTime());
@@ -1005,6 +1014,13 @@ void UACEUIGameplayBinder::OnElementActivated(TSharedPtr<FACEUIElement> Element)
 			for (TSharedPtr<FACEUIElement> Cur = Element; Cur.IsValid(); Cur = Cur->Parent.Pin())
 			{
 				const FString& N = Cur->ElementName;
+				if (N == TEXT("ChatLogNewNonVisibleTextIndicator"))
+				{
+					if (auto* Log=GetChatLogWidget(ChatWindow)) Log->ScrollToEnd();
+					bFloatyChatStickToBottom[ChatWindow-1]=true;
+					SyncChatJumpIndicator(ChatWindow);
+					return;
+				}
 				if (N == TEXT("SendButton"))
 				{
 					TrySendChatFromEntry(nullptr, ChatWindow);
@@ -3084,12 +3100,18 @@ void UACEUIGameplayBinder::TryAutoTargetOnCombatEnter(int32 ExcludeGuid)
         || (CombatMode != int32(ACECombatMode::Melee) && CombatMode != int32(ACECombatMode::Missile))) return;
     bCombatAutoTarget = Client->IsCharacterOptionSet(0x0D);
     if (!bCombatAutoTarget) return;
+    FACEPosition PlayerPosition = Client->GetPlayerPosition();
+    PlayerController->TryGetLocallyPredictedPosition(PlayerPosition);
+    if (!PlayerPosition.IsValid()) return;
+    const FVector Origin = PlayerPosition.ToUnrealLocation(1.f);
+    const double RangeSquared = FMath::Square(ACERadarVisuals::RangeAc(uint32(PlayerPosition.CellId)));
     const auto Fellowship = Client->GetFellowship();
     auto Eligible = [&](int32 Guid)
     {
         FACEWorldObject Obj;
         return Guid && Guid != ExcludeGuid && Guid != Client->GetPlayerGuid()
             && Client->GetWorldObject(Guid,Obj) && Obj.IsSelectableWorldObject()
+            && FVector::DistSquaredXY(Obj.Position.ToUnrealLocation(1.f),Origin) <= RangeSquared
             && Client->GetSession()->IsCombatTarget(Guid)
             && !Obj.IsVendor()
             && !Obj.PetOwnerId
@@ -3098,7 +3120,9 @@ void UACEUIGameplayBinder::TryAutoTargetOnCombatEnter(int32 ExcludeGuid)
     if (Eligible(Client->GetSelectedObject().Guid)) return;
     const auto Session = Client->GetSession();
     const int32 Attacker = Session->GetLastAttackerGuid();
-    if (Eligible(Attacker) && FPlatformTime::Seconds()-Session->GetLastAttackerTimeSeconds()<15.)
+    // Retaliate on combat entry only. After a kill, choose the nearest eligible
+    // creature in radar range, even when a farther creature attacked recently.
+    if (!ExcludeGuid && Eligible(Attacker) && FPlatformTime::Seconds()-Session->GetLastAttackerTimeSeconds()<15.)
         Client->SelectObject(Attacker);
     else if (const int32 Nearest = PlayerController->FindNearbyTarget(true,0,ExcludeGuid))
         Client->SelectObject(Nearest);
@@ -4502,7 +4526,7 @@ bool UACEUIGameplayBinder::HitTestInventorySlot(FVector2D Absolute, int32& OutGu
 	return TestArray(InventorySlots) || TestArray(InventorySlotBgs);
 }
 
-bool UACEUIGameplayBinder::HitTestPackSlot(FVector2D Absolute, int32& OutPackGuid) const
+bool UACEUIGameplayBinder::HitTestPackSlot(FVector2D Absolute, int32& OutPackGuid, bool IncludeEmpty) const
 {
 	OutPackGuid = 0;
 	for (int32 i = 0; i < PackSlots.Num() && i < PackSlotGuids.Num(); ++i)
@@ -4515,7 +4539,7 @@ bool UACEUIGameplayBinder::HitTestPackSlot(FVector2D Absolute, int32& OutPackGui
 		if (Canvas->IsWidgetExposedAt(Border, Absolute))
 		{
 			OutPackGuid = PackSlotGuids[i];
-			return OutPackGuid != 0;
+			return IncludeEmpty || OutPackGuid != 0;
 		}
 	}
 	return false;
@@ -5282,9 +5306,12 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 
 	// Pack tab → move into that pack (or rearrange side packs onto player placement).
 	int32 PackGuid = 0;
-	if (HitTestPackSlot(Absolute, PackGuid))
+	if (HitTestPackSlot(Absolute, PackGuid, true))
 	{
-		if (DragPackSlot != INDEX_NONE)
+		FACEWorldObject SourceBag;
+        const bool HaveSourceBag = Client->GetWorldObject(Guid, SourceBag);
+		if (DragPackSlot != INDEX_NONE || (HaveSourceBag && ((SourceBag.ItemType & ACEItemType::Container) != 0
+            || (SourceBag.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot) != 0)))
 		{
 			int32 DestPlacement = 0;
 			for (int32 i = 0; i < PackSlots.Num() && i < PackSlotGuids.Num(); ++i)
@@ -5300,8 +5327,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 					break;
 				}
 			}
-			FACEWorldObject SourceBag;
-            if (Client->GetWorldObject(Guid, SourceBag) && SourceBag.PlacementPosition >= 0
+            if (HaveSourceBag && SourceBag.ContainerId == Client->GetPlayerGuid() && SourceBag.PlacementPosition >= 0
                 && SourceBag.PlacementPosition < DestPlacement) --DestPlacement;
             Client->SendPutItemInContainer(Guid, Client->GetPlayerGuid(), FMath::Max(0, DestPlacement));
 			return true;
@@ -6382,7 +6408,9 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 
 	// Main window honours the quick filter cycle; retail floaty windows use their
 	// own 64-bit type filters and only receive lines while visible.
-	if (PassesChatFilter(FilterType) && (MainChatTypeFilter & (1ull << (static_cast<uint32>(FilterType) & 63))) != 0)
+	const auto* Plugins = Client ? Client->GetGameInstance()->GetSubsystem<UACEPluginSubsystem>() : nullptr;
+	const uint8 PluginHidden = Plugins ? Plugins->FilterPluginChatWindows(Text, Sender, ChatType) : 0;
+	if (!(PluginHidden & 1) && PassesChatFilter(FilterType) && (MainChatTypeFilter & (1ull << (static_cast<uint32>(FilterType) & 63))) != 0)
 	{
 		AppendChatLineToLog(0, Line, Color, ClickSender);
 	}
@@ -6394,6 +6422,7 @@ void UACEUIGameplayBinder::HandleChatMessage(const FString& Text, const FString&
 	{
 		for (int32 W = 1; W <= NumFloatyChats; ++W)
 		{
+			if (PluginHidden & (1u << W)) continue;
 			TSharedPtr<FACEUIElement> Root = Manager->FindElementByName(
 				FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"), W));
 			if (!Root.IsValid() || !Root->bVisible)
@@ -6983,9 +7012,10 @@ bool UACEUIGameplayBinder::ScrollChatLog(float PixelDelta, int32 Window)
     if (Window==0)
     {
         bChatStickToBottom=Stick; ChatStickEndOffset=Stick ? MaxOffset : -1.f;
-        SyncChatJumpIndicator();
+        bPendingChatScrollToEnd=false;
     }
     else bFloatyChatStickToBottom[Window-1]=Stick;
+    SyncChatJumpIndicator(Window);
     SyncChatScrollbar(Window);
     return true;
 }
@@ -7026,38 +7056,41 @@ void UACEUIGameplayBinder::SyncChatScrollbar(int32 Window)
     SyncDatScrollbar(Bar,Frac,ViewH/(ViewH+MaxOffset));
 }
 
-void UACEUIGameplayBinder::SyncChatJumpIndicator()
+void UACEUIGameplayBinder::SyncChatJumpIndicator(int32 Window)
 {
-	if (!Manager || !ChatLog)
+	auto* Log=GetChatLogWidget(Window);
+	if (!Manager || !Log)
 	{
 		return;
 	}
-	TSharedPtr<FACEUIElement> Indicator = Manager->FindElementUnder(
-		TEXT("RootGameplay_FloatyMainChat_Field"), TEXT("ChatLogNewNonVisibleTextIndicator"));
-	if (!Indicator.IsValid())
-	{
-		Indicator = Manager->FindElementByName(TEXT("ChatLogNewNonVisibleTextIndicator"));
-	}
+	const FString Root=Window ? FString::Printf(TEXT("RootGameplay_FloatyChat%d_Field"),Window) : TEXT("RootGameplay_FloatyMainChat_Field");
+	TSharedPtr<FACEUIElement> Indicator = Manager->FindElementUnder(Root, TEXT("ChatLogNewNonVisibleTextIndicator"));
 	if (!Indicator.IsValid())
 	{
 		return;
 	}
-	const float MaxOffset = FMath::Max(0.f, ChatLog->GetScrollOffsetOfEnd());
-	const bool bShow = !bChatStickToBottom && MaxOffset > KINDA_SMALL_NUMBER;
+	const float MaxOffset = FMath::Max(0.f, Log->GetScrollOffsetOfEnd());
+	const bool Stick=Window==0 ? bChatStickToBottom : bFloatyChatStickToBottom[Window-1];
+	const bool bShow = !Stick && MaxOffset > KINDA_SMALL_NUMBER;
+	// ChatInterface selects state 1 explicitly; this field has no default
+	// image, so visibility alone leaves a blank but clickable rectangle.
+	Indicator->bUseExplicitState = true;
+	Indicator->DefaultState = bShow ? 1 : 13;
 	Indicator->bVisible = bShow;
 	if (!bShow)
 	{
 		return;
 	}
 	// Left gutter of ChatLog (UMG text is inset by 16px). Negative X is orphan-culled.
-	TSharedPtr<FACEUIElement> ChatLogEl = Manager->FindElementUnder(
-		TEXT("RootGameplay_FloatyMainChat_Field"), TEXT("ChatLog"));
+	TSharedPtr<FACEUIElement> ChatLogEl = Manager->FindElementUnder(Root, TEXT("ChatLog"));
 	if (ChatLogEl.IsValid())
 	{
 		Indicator->X = 0;
 		Indicator->Y = FMath::Max(0, ChatLogEl->Height - 16);
 		Indicator->Width = 16;
 		Indicator->Height = 16;
+		Indicator->EdgeAnchorX = Indicator->EdgeAnchorY = 0;
+		Indicator->RecomputeLayoutOffset();
 	}
 }
 

@@ -76,6 +76,50 @@ bool FACERetailStatsTest::RunTest(const FString& Parameters)
     FACEBinaryReader RemoveGearReader(RemoveGear.GetData()); Session.HandlePrivateUpdatePropertyInt(RemoveGearReader);
     TestEqual(TEXT("Unequipping health rating refreshes immediately"),V.MaxHealth,10050);
 
+    // ACE's Call of Leadership V (5122) sends a secondary-attribute additive,
+    // category 0x261, key MaxHealth=1, value +10. Exercise the wire handlers and
+    // every subsequent recalculation, not just a pre-populated modifier array.
+    V.HealthStart=633; V.HealthRanks=0; V.Endurance=100; V.Health=683;
+    auto Horn = [&](uint16 Id, uint32 Power, float Bonus, double Elapsed=0.)
+    {
+        FACEBinaryWriter Packet;
+        Packet.WriteUInt16(Id); Packet.WriteUInt16(1);
+        Packet.WriteUInt16(0x261); Packet.WriteUInt16(1);
+        Packet.WriteUInt32(Power); Packet.WriteDouble(Elapsed); Packet.WriteDouble(1800.);
+        Packet.WriteUInt32(0x50000002); // another fellowship member
+        Packet.WriteFloat(0); Packet.WriteFloat(0); Packet.WriteDouble(0);
+        Packet.WriteUInt32(0x9002); Packet.WriteUInt32(1); Packet.WriteFloat(Bonus);
+        Packet.WriteUInt32(0);
+        FACEBinaryReader Reader(Packet.GetData()); Session.HandleMagicUpdateEnchantment(Reader);
+    };
+    auto Health = [&](int32 Current)
+    {
+        FACEBinaryWriter Packet; Packet.WriteUInt8(1); Packet.WriteUInt32(2); Packet.WriteUInt32(Current);
+        FACEBinaryReader Reader(Packet.GetData()); Session.HandlePrivateUpdateAttribute2ndLevel(Reader);
+    };
+    auto RemoveHorn = [&](uint16 Id)
+    {
+        FACEBinaryWriter Packet; Packet.WriteUInt16(Id); Packet.WriteUInt16(1);
+        FACEBinaryReader Reader(Packet.GetData()); Session.HandleMagicRemoveEnchantment(Reader);
+    };
+    Session.NotifyVitalsChanged();
+    TestEqual(TEXT("Horn reproduction starts at 683 maximum health"),V.MaxHealth,683);
+    Horn(5122,400,10);
+    TestEqual(TEXT("Fellowship horn raises max health before healing arrives"),V.MaxHealth,693);
+    Health(693);
+    TestEqual(TEXT("Full health remains 693/693 after the server vital update"),V.MaxHealth,693);
+    Health(540); Session.NotifyVitalsChanged();
+    TestEqual(TEXT("Horn max health persists after damage and unrelated stat refreshes"),V.MaxHealth,693);
+    Horn(5133,175,2);
+    TestEqual(TEXT("Weaker fellowship horns do not stack with the strongest"),V.MaxHealth,693);
+    RemoveHorn(5122);
+    TestEqual(TEXT("Removing the strongest horn restores the remaining weaker bonus"),V.MaxHealth,685);
+    RemoveHorn(5133);
+    TestEqual(TEXT("Horn expiry removes the bonus without retaining a high-water mark"),V.MaxHealth,683);
+    Horn(5122,400,10,-600.);
+    TestEqual(TEXT("A restored partially elapsed horn still applies its full bonus"),V.MaxHealth,693);
+    Session.ActiveEnchantments.Reset(); Session.NotifyVitalsChanged();
+
     for (int32 Kind=0; Kind<4; ++Kind)
     {
         auto Cost=[&](int32 Spent, int32 Ranks) {

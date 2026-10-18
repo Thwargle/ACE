@@ -191,7 +191,8 @@ namespace ACEPluginPanelPrivate
                 Add(SNew(SACEPluginText).AutoWrapText(true).Visibility_Lambda([P](){return P->Running?EVisibility::Collapsed:EVisibility::Visible;}).Text_Lambda([P](){return FText::FromString(P->Status);}));
                 Add(Host->MakeLocalServicePanel(P->Id));return;
             }
-            Add(SNew(SACEPluginText).Visibility_Lambda([H=Host]{return H.IsValid()&&!H->Notice.IsEmpty()?EVisibility::Visible:EVisibility::Collapsed;}).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text_Lambda([H=Host](){return FText::FromString(H.IsValid()?H->Notice:FString());}).AutoWrapText(true));
+            // Notice is shared action feedback, not this plugin's title or status.
+            // Each plugin supplies its own feedback inside its panel.
             if(UACEPluginSubsystem::IsLedger(P->Id)){Add(Host->MakeLedgerPanel(P->Id));return;}
             if(P->Id==TEXT("waypoint")){Add(SNew(SBox).HeightOverride(650)[Host->MakeWaypointPanel()]);return;}
             if(P->Id==TEXT("looteditor")){Add(SNew(SBox).HeightOverride(650)[Host->MakeUCMPanel(TEXT("Standalone loot"))]);return;}
@@ -199,15 +200,21 @@ namespace ACEPluginPanelPrivate
             if(P->Id==TEXT("ucm")){Add(SNew(SBox).HeightOverride(650)[Host->MakeUCMPanel()]);return;}
             if(P->Id==TEXT("itemtools")){Add(SNew(SBox).HeightOverride(650)[Host->MakeItemToolsPanel()]);return;}
             if(!PluginOnly)Add(SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",26)).Text_Lambda([P]{return FText::FromString(P->DisplayTitle());}));
-            Add(SNew(SACEPluginText).Visibility_Lambda([P]{return P->Status.IsEmpty()?EVisibility::Collapsed:EVisibility::Visible;}).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text_Lambda([P](){return FText::FromString(P->Status);}).AutoWrapText(true));
-            auto Actions=SNew(SHorizontalBox);
-            Actions->AddSlot().FillWidth(1)[Button(TEXT("Start"),[this,P](){Host->Start(P->Id);})];
-            Actions->AddSlot().FillWidth(1).Padding(8,0)[Button(TEXT("Stop"),[this,P](){Host->Stop(P->Id,TEXT("Stopped"),true);})]; Add(Actions);
+            Add(SNew(SACEPluginText).Visibility_Lambda([P]{return P->Status.IsEmpty()||!P->ShowStatus()?EVisibility::Collapsed:EVisibility::Visible;}).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text_Lambda([P](){return FText::FromString(P->Status);}).AutoWrapText(true));
+            auto Actions=SNew(SHorizontalBox).Visibility_Lambda([P]{return P->DisplayControls()==TEXT("none")?EVisibility::Collapsed:EVisibility::Visible;});
+            Actions->AddSlot().FillWidth(1)[SNew(SButton).Tag(TEXT("PluginStartToggle")).ButtonStyle(&PluginButtonStyle()).IsFocusable(false).ContentPadding(FMargin(12,8))
+                .OnClicked_Lambda([this,P](){if(P->DisplayControls()==TEXT("toggle")&&P->Running)Host->Stop(P->Id,TEXT("Stopped"),true);else Host->Start(P->Id);return FReply::Handled();})
+                [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",20)).Text_Lambda([P]{return FText::FromString(P->DisplayControls()==TEXT("toggle")&&P->Running?P->DisplayStopLabel():P->DisplayStartLabel());})]];
+            Actions->AddSlot().FillWidth(1).Padding(8,0)[SNew(SButton).Tag(TEXT("PluginStop")).ButtonStyle(&PluginButtonStyle()).IsFocusable(false).ContentPadding(FMargin(12,8))
+                .Visibility_Lambda([P]{return P->DisplayControls()==TEXT("start_stop")?EVisibility::Visible:EVisibility::Collapsed;})
+                .OnClicked_Lambda([this,P](){Host->Stop(P->Id,TEXT("Stopped"),true);return FReply::Handled();})
+                [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",20)).Text_Lambda([P]{return FText::FromString(P->DisplayStopLabel());})]]; Add(Actions);
             if(P->HasPresentation())
             {
                 Add(Host->MakeCompanionPanel(P->Id));
                 SettingsBody=SNew(SVerticalBox);
-                Body->AddSlot().AutoHeight().Padding(5)[SNew(SExpandableArea).InitiallyCollapsed(true)
+                Body->AddSlot().AutoHeight().Padding(5)[SNew(SExpandableArea).Tag(TEXT("PluginSettings")).InitiallyCollapsed(true)
+                    .Visibility_Lambda([P]{return P->ShowSettings()?EVisibility::Visible:EVisibility::Collapsed;})
                     .HeaderContent()[Label(TEXT("Settings and profiles"),16)].BodyContent()[SettingsBody.ToSharedRef()]];
             }
             Add(Label(TEXT("Profile name")));

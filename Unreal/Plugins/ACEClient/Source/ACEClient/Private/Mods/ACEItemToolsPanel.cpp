@@ -203,6 +203,7 @@ private:
             Heading(TEXT("Vendor exchange"),TEXT("Open a vendor and select its stock to buy. Choose an inventory item to sell for funding, or leave the buy item empty to sell only."));
             Pick(TEXT("buy"),TEXT("stock"),TEXT("Buy from vendor"));Pick(TEXT("sell"),TEXT("item"),TEXT("Sell / fund purchases with"));
             Quantity(TEXT("buy_limit"),TEXT("Units to buy (0 = until funds or space run out)"));Toggle(TEXT("redeem_notes"),TEXT("Redeem trade notes when more pyreals are needed"),true);
+            Toggle(TEXT("server_bank"),TEXT("Use server bank for purchases (server validates funds; skips note sales)"));
             Start(TEXT("shop"),TEXT("Start vendor exchange"));
         }
         else if(Page==TEXT("Profiles"))
@@ -223,6 +224,7 @@ private:
         {
             Heading(TEXT("Character supplies"),TEXT("Set the total quantity to keep across all packs. Buys only the shortage from the open vendor. This list is saved separately for each character and server."));
             Toggle(TEXT("auto_restock"),TEXT("Restock automatically when a matching vendor opens"));Toggle(TEXT("redeem_notes"),TEXT("Redeem trade notes to fund restocking"),true);
+            Toggle(TEXT("server_bank"),TEXT("Use server bank for purchases (server validates funds; skips note sales)"));
             RestockList();Start(TEXT("restock"),TEXT("Buy missing supplies"));Add(Text(TEXT("Chat command: /acueitems restock"),12,Muted));
         }
     }

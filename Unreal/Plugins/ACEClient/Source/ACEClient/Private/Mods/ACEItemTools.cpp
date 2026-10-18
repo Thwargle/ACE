@@ -198,7 +198,8 @@ bool UACEPluginSubsystem::ExecuteItemTools(FACEClientPlugin& P,const TSharedPtr<
     {
         if(!Vendor||Vendor!=Guid(I,TEXT("vendor")))return Fail(TEXT("Vendor changed; purchase stopped."));
         const auto Stock=C->GetVendorMerchandise();const auto* V=Stock.FindByPredicate([&](const auto& O){return O.Guid==Id;});
-        if(!V||Amount>ACEInventoryRules::VendorPurchaseLimit(*V)||ACEVendorPricing::VendorSellCost(*V,Amount,C->GetVendorSellRate())>uint32(FMath::Max(0,Session->GetVendorCurrencyCount())))return Fail(TEXT("Vendor stock or currency changed; purchase stopped."));
+        bool ServerBank=false;P.Profile->TryGetBoolField(TEXT("server_bank"),ServerBank);
+        if(!V||Amount>ACEInventoryRules::VendorPurchaseLimit(*V)||(!ServerBank&&ACEVendorPricing::VendorSellCost(*V,Amount,C->GetVendorSellRate())>uint32(FMath::Max(0,Session->GetVendorCurrencyCount()))))return Fail(TEXT("Vendor stock or currency changed; purchase stopped."));
         if(PurchaseRoom(C,*V)<Amount)return Fail(TEXT("Inventory space changed; purchase stopped."));
         C->SendBuyItems(Vendor,{{Amount,Id}});
     }

@@ -69,6 +69,9 @@ namespace ACEVisibleObjectPick
             Seen.Add(Entity); Params.AddIgnoredActor(Entity);
             if (!Entity->IsHidden() && Entity->IsCellVisible() && Entity->GetACEGuid() != 0
                 && (Entity->ObjectDescriptionFlags & ACEObjectDescFlag::UiHidden) == 0
+                && !(Entity->ACEName.IsEmpty() && !Entity->bIsPlayer && (Entity->ObjectDescriptionFlags & ACEObjectDescFlag::Stuck)
+                    && !(Entity->ObjectDescriptionFlags & (ACEObjectDescFlag::Attackable | ACEObjectDescFlag::Vendor | ACEObjectDescFlag::Door | ACEObjectDescFlag::LifeStone))
+                    && !(Entity->ItemType & (ACEItemType::Creature | ACEItemType::Portal | ACEItemType::LifeStone)))
                 && (Entity->PhysicsState & (ACEPhysicsState::Missile | ACEPhysicsState::ParticleEmitter | ACEPhysicsState::NoDraw)) == 0
                 && (!Entity->bReceivedDeathMotion || Entity->IsCorpse())) Candidates.Add(Entity);
         }

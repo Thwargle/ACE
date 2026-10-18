@@ -149,8 +149,8 @@ void UACEVRComponent::UpdatePanels(float Dt)
 	const bool ShowMain = Available && Widget && (!InWorld || (bInventoryOpen && bUseDesktopMenu) || bSettingsOpen) && (!bTextKeyboardOpen || UsesPlatformKeyboard() || !InWorld);
 	// Gameplay state must continue to process vendor/trade/attack events while
 	// menus are closed, but a native-only HUD consumes no desktop render target.
-	if (InWorld && PC->DatCanvasWidget) PC->DatCanvasWidget->TickGameplayState();
 	const bool NeedsRetailDraw = ShowMain || (InWorld && Settings->bShowWristSpellBar && GetCombatMode() == ACECombatMode::Magic);
+	if (InWorld && PC->DatCanvasWidget) PC->DatCanvasWidget->TickGameplayState(NeedsRetailDraw);
 	RetailPanel->SetVisibility(Available && Widget && NeedsRetailDraw);
 	RetailPanel->SetComponentTickEnabled(Available && Widget && NeedsRetailDraw);
 	RetailPanel->SetRenderInMainPass(ShowMain);

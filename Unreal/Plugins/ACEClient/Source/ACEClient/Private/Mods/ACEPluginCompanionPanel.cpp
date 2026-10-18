@@ -17,6 +17,7 @@
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/Layout/SWidgetSwitcher.h"
+#include "Widgets/SOverlay.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SSlider.h"
@@ -216,6 +217,33 @@ namespace ACEPluginCompanionPanelPrivate
             }
             else if(Type==TEXT("progress"))
                 Content=SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[Label(R)]+SVerticalBox::Slot().AutoHeight().Padding(0,4)[SNew(SProgressBar).Percent_Lambda([R](){return TOptional<float>(FMath::Clamp(N(R,TEXT("value")),0.,1.));}).FillColorAndOpacity_Lambda([R](){return Color(S(R,TEXT("color")));})];
+            else if(Type==TEXT("item_icon"))
+            {
+                if(!Resolver.IsValid()&&Host.IsValid()){Resolver.Reset(NewObject<UACEUIResourceResolver>(Host.Get()));Resolver->Initialize(Host->GetGameInstance()->GetSubsystem<UACEDatSubsystem>());}
+                auto Background=MakeShared<FSlateBrush>(),Foreground=MakeShared<FSlateBrush>();
+                auto Back=SNew(SImage).Image_Lambda([Background]()->const FSlateBrush*{return &Background.Get();});
+                auto Front=SNew(SImage).Image_Lambda([Foreground]()->const FSlateBrush*{return &Foreground.Get();});
+                Node->Sync=[this,R,Background,Foreground,Back,Front]()
+                {
+                    if(!Resolver.IsValid()||!Resolver->GetDatSubsystem()||!Resolver->GetDatSubsystem()->IsDatReady())return false;
+                    const double Size=FMath::Clamp(N(R,TEXT("size"),32),16.,128.);
+                    auto Update=[Size](const auto& Brush,const auto& Widget,UTexture2D* Texture)
+                    {
+                        if(Brush->GetResourceObject()!=Texture||Brush->ImageSize!=FVector2D(Size,Size))
+                        {Brush->SetResourceObject(Texture);Brush->DrawAs=ESlateBrushDrawType::Image;Brush->ImageSize=FVector2D(Size,Size);Widget->Invalidate(EInvalidateWidgetReason::Layout|EInvalidateWidgetReason::Paint);}
+                    };
+                    // Same compositors as the inventory and Supply Ledger, including
+                    // the square type background, underlay, overlay and enchantments.
+                    Update(Background,Back,Resolver->ResolveItemBackground(uint32(N(R,TEXT("item_type"))),uint32(N(R,TEXT("underlay")))));
+                    Update(Foreground,Front,Resolver->ResolveItemForeground(uint32(N(R,TEXT("icon"))),uint32(N(R,TEXT("overlay"))),uint32(N(R,TEXT("effects")))));
+                    return true;
+                };
+                Content=SNew(SHorizontalBox)+SHorizontalBox::Slot().AutoWidth()[SNew(SBox)
+                    .WidthOverride_Lambda([R](){return FOptionalSize(FMath::Clamp(N(R,TEXT("size"),32),16.,128.));})
+                    .HeightOverride_Lambda([R](){return FOptionalSize(FMath::Clamp(N(R,TEXT("size"),32),16.,128.));})
+                    [SNew(SOverlay)+SOverlay::Slot()[Back]+SOverlay::Slot()[Front]]]
+                    +SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center).Padding(6,0)[Label(R)];
+            }
             else if(Type==TEXT("icon")||Type==TEXT("image"))
             {
                 if(!Resolver.IsValid()&&Host.IsValid()){Resolver.Reset(NewObject<UACEUIResourceResolver>(Host.Get()));Resolver->Initialize(Host->GetGameInstance()->GetSubsystem<UACEDatSubsystem>());}

@@ -35,12 +35,12 @@ namespace ACELedgeSlide
         const FVector2D SlideStart=bSlideFromCurrent ? Start : Edge;
         const FVector2D Remaining=bSlideFromCurrent ? Move : Move*(1-Low);
         const FVector2D Tangent=Remaining-Outward*FMath::Max(0.0,FVector2D::DotProduct(Remaining,Outward));
-        if (FVector2D::DotProduct(Tangent,Move)<=0) return Edge;
+        if (FVector2D::DotProduct(Tangent,Move)<=0) return SlideStart;
         for (double Amount : {1.0,0.5,0.25})
         {
             const FVector2D End=SlideStart+Tangent*Amount;
             if (Supported(End)) return End;
         }
-        return Edge;
+        return SlideStart;
     }
 }

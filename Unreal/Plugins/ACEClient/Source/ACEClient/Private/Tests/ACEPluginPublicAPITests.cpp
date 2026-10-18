@@ -8,7 +8,17 @@
 #include "Mods/ACEPluginVM.h"
 #include "Mods/ACEPluginPresentation.h"
 #include "Mods/ACEPluginDesktop.h"
+#include "Mods/ACEPluginStyle.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Widgets/Input/SButton.h"
+#include "Widgets/Images/SImage.h"
+#include "Widgets/SOverlay.h"
+#include "UI/ACEUIGameplayBinder.h"
+#include "UI/ACEUICanvasWidget.h"
+#include "UI/ACEUIResourceResolver.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/ScrollBox.h"
+#include "ACEDatSubsystem.h"
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
 #include "Engine/Engine.h"
@@ -68,6 +78,47 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
         TestEqual(TEXT("Public snapshot exposes remaining chat"),Batch->GetNumberField(TEXT("chat_pending")),double(300-QuestLine));
     }
     FString Error;TSharedPtr<FJsonObject> Output;
+    {
+        FACEPluginVM FilterScript;
+        TestTrue(TEXT("Chat-filter Lua loads"),FilterScript.Load(TEXT("return function() return {chat_filters={{id='quests',contains=' solves (',sender='',chat_type=6,window=0,seconds=10}}} end"),Error));
+        TestTrue(TEXT("Lua decodes declarative chat filters"),FilterScript.Step(Snapshot,P->Profile,Output,Error));
+        TestFalse(TEXT("Read-only chat permission alone cannot hide messages"),H->ApplyPublicOutput(*P,Output,Error));
+        P->Permissions.Add(TEXT("chat_filter"));
+        TestTrue(TEXT("Opt-in display filters are accepted"),H->ApplyPublicOutput(*P,Output,Error));
+        const FString Dump=TEXT("samplequest - 1 solves (12345)\"Quest\" -1 0");
+        TestEqual(TEXT("Quest dump is hidden in main chat only"),int32(H->FilterPluginChatWindows(Dump,TEXT(""),6)),1);
+        TestEqual(TEXT("Other message types remain visible"),int32(H->FilterPluginChatWindows(Dump,TEXT(""),3)),0);
+        TestEqual(TEXT("Player messages cannot match server-only filter"),int32(H->FilterPluginChatWindows(Dump,TEXT("Friend"),6)),0);
+        TestEqual(TEXT("Unrelated server output remains visible"),int32(H->FilterPluginChatWindows(TEXT("Bonus XP active"),TEXT(""),6)),0);
+        auto* Chat=NewObject<UACEUIGameplayBinder>(GI);Chat->Client=C;
+        Chat->Canvas=NewObject<UACEUICanvasWidget>(GI);Chat->Canvas->WidgetTree=NewObject<UWidgetTree>(Chat->Canvas);
+        Chat->ChatLog=NewObject<UScrollBox>(Chat->Canvas);Chat->MainChatTypeFilter=~uint64(0);Chat->GlobalChatTypeFilter=~uint64(0);
+        C->OnChatMessage.Broadcast(Dump,TEXT(""),6);
+        Chat->HandleChatMessage(Dump,TEXT(""),6);
+        TestEqual(TEXT("Filtered response never creates a visible chat row"),Chat->ChatLog->GetChildrenCount(),0);
+        const auto Read=H->PublicSnapshot(*P)->GetArrayField(TEXT("chat_events"));
+        TestTrue(TEXT("Hidden response still reaches Lua intact"),Read.Num()==1&&Read[0]->AsObject()->GetStringField(TEXT("raw_text"))==Dump);
+        C->OnChatMessage.Broadcast(TEXT("Bonus XP active"),TEXT(""),6);
+        Chat->HandleChatMessage(TEXT("Bonus XP active"),TEXT(""),6);
+        TestEqual(TEXT("Unrelated server output is drawn normally"),Chat->ChatLog->GetChildrenCount(),1);
+        TestFalse(TEXT("Invalid replacement is rejected"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"chat_filters":[{"id":"bad","window":5,"contains":"x"}]})")),Error));
+        TestEqual(TEXT("Invalid replacement retains active filters"),int32(H->FilterPluginChatWindows(Dump,TEXT(""),6)),1);
+        P->ChatFilters[0].Expires=FPlatformTime::Seconds()-1;
+        TestEqual(TEXT("Expired filters stop hiding immediately"),int32(H->FilterPluginChatWindows(Dump,TEXT(""),6)),0);
+        H->ApplyPublicOutput(*P,Output,Error);H->Stop(P->Id);
+        TestTrue(TEXT("Stopping removes every filter owned by that plugin"),P->ChatFilters.IsEmpty());H->Start(P->Id);
+        H->ApplyPublicOutput(*P,Output,Error);Session.PlayerGuid++;
+        TestEqual(TEXT("Previous character filters cannot hide current chat"),int32(H->FilterPluginChatWindows(Dump,TEXT(""),6)),0);
+        H->UpdateCompanionChatContext();TestTrue(TEXT("Character transition clears filter registrations"),P->ChatFilters.IsEmpty());Session.PlayerGuid--;H->UpdateCompanionChatContext();
+        H->ApplyPublicOutput(*P,Output,Error);
+        TestTrue(TEXT("Explicit empty list clears filters"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"chat_filters":[]})")),Error)&&P->ChatFilters.IsEmpty());
+        for(const TCHAR* Bad:{TEXT(R"({"chat_filters":[{"id":"x","chat_type":6}]})"),TEXT(R"({"chat_filters":[{"id":"x","contains":"a","seconds":301}]})"),TEXT(R"({"chat_filters":[{"id":"x","contains":"a"},{"id":"x","contains":"b"}]})")})
+            TestFalse(TEXT("Malformed or unbounded display rules rejected"),H->ApplyPublicOutput(*P,ParseAPI(Bad),Error));
+        TestTrue(TEXT("Literal exact/prefix filters accepted"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"chat_filters":[{"id":"bonus","prefix":"BONUS","exact":"Bonus active","window":4,"case_sensitive":false}]})")),Error));
+        TestEqual(TEXT("Extra window mask and case-insensitive conjunction work"),int32(H->FilterPluginChatWindows(TEXT("Bonus active"),TEXT(""),6)),16);
+        TestEqual(TEXT("Partial exact matches do not hide other lines"),int32(H->FilterPluginChatWindows(TEXT("Bonus active tomorrow"),TEXT(""),6)),0);
+        H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"chat_filters":[]})")),Error);
+    }
     FACEPluginVM Presentation;
     TestTrue(TEXT("Lua presentation script loads"),Presentation.Load(TEXT("return function() return {presentation={title='Quest Tracker - 12 kills',icon='active.png',window={opacity=0.35,pinned=true}}} end"),Error));
     TestTrue(TEXT("Lua decoder exposes presentation output"),Presentation.Step(Snapshot,P->Profile,Output,Error));
@@ -120,6 +171,10 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
         {"id":"buttons","type":"row","children":[{"id":"rat","type":"button","text":"Select Red Rat","action":"select","target":12},{"id":"refresh","type":"button","text":"Refresh tasks"}]}]},
         {"id":"library","type":"column","text":"Profiles","children":[{"id":"note","text":"Named routes, loot rules and settings are reusable."}]}]}]})JSON"));
     TestTrue(TEXT("All structured controls validate"),H->ApplyPublicOutput(*P,UI,Error));
+    TestTrue(TEXT("Item icon metadata accepted"),H->ValidatePluginUI(ParseAPI(TEXT(R"({"ui":[{"id":"item","type":"item_icon","icon":100663297,"overlay":0,"underlay":0,"effects":1,"item_type":1}]})"))->GetArrayField(TEXT("ui")),Error));
+    TestFalse(TEXT("Item icon metadata cannot wrap negative IDs"),H->ValidatePluginUI(ParseAPI(TEXT(R"({"ui":[{"id":"item","type":"item_icon","effects":-1}]})"))->GetArrayField(TEXT("ui")),Error));
+    TestFalse(TEXT("Invalid control mode rejected"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"controls":"invalid"}})")),Error));
+    TestFalse(TEXT("Settings visibility must be boolean"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"settings":"false"}})")),Error));
     TestTrue(TEXT("Nested selection works"),H->ClickPluginRow(P->Id,TEXT("rat")));TestEqual(TEXT("Native target selected"),C->GetSelectedObject().Guid,12);
     TestTrue(TEXT("Checkbox change accepted"),H->ChangePluginControl(P->Id,TEXT("combat"),MakeShared<FJsonValueBoolean>(false)));
     TestTrue(TEXT("Slider snaps and clamps"),H->ChangePluginControl(P->Id,TEXT("range"),MakeShared<FJsonValueNumber>(999)));
@@ -179,6 +234,18 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
     TestTrue(TEXT("Documented author example loads"),Workbench.Load(Source,Error,TEXT("ucm")));P->PluginEvents.Reset();P->ResumeMetaPending=false;
     TestTrue(TEXT("Documented author example executes"),Workbench.Step(H->PublicSnapshot(*P),ParseAPI(*Defaults),Output,Error));
     if(Output){TestTrue(TEXT("Documented author UI/output accepted"),H->ApplyPublicOutput(*P,Output,Error));TestFalse(TEXT("Empty patch does not restart route/buff work"),P->ResumeMetaPending);}
+    {
+        FACEPluginVM ChatTools;const FString Folder=FPaths::GetPath(Example)/TEXT("chat_tools");
+        FFileHelper::LoadFileToString(Source,*(Folder/TEXT("main.lua")));FFileHelper::LoadFileToString(Defaults,*(Folder/TEXT("default.json")));
+        TestTrue(TEXT("Chat Tools example loads"),ChatTools.Load(Source,Error));
+        auto ChatState=ParseAPI(TEXT(R"JSON({"time":10,"events":[],"chat_events":[{"color":0,"sender":"","raw_text":"quest - 1 solves (123)"}]})JSON"));
+        if(!TestTrue(TEXT("Chat Tools example reads quest dump"),ChatTools.Step(ChatState,ParseAPI(*Defaults),Output,Error)))AddError(Error);
+        if(Output){TestTrue(TEXT("Chat Tools example output validates"),H->ApplyPublicOutput(*P,Output,Error));TestEqual(TEXT("Example polling starts disabled"),Output->GetArrayField(TEXT("requests")).Num(),0);}
+        ChatState=ParseAPI(TEXT(R"({"time":12,"events":[{"type":"click","id":"quests"}],"chat_events":[]})"));
+        TestTrue(TEXT("Chat Tools example handles an on-demand command"),ChatTools.Step(ChatState,ParseAPI(*Defaults),Output,Error));
+        if(Output)TestTrue(TEXT("Command response filtering precedes quest request"),Output->GetArrayField(TEXT("chat_filters")).Num()==1&&Output->GetArrayField(TEXT("requests")).Num()==1&&Output->GetArrayField(TEXT("requests"))[0]->AsObject()->GetStringField(TEXT("text"))==TEXT("/myquests"));
+        H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"chat_filters":[]})")),Error);
+    }
     FACEPluginVM Empty;TestTrue(TEXT("Empty collections script loads"),Empty.Load(TEXT("return function() return {profile_patch={route={},loot_rules={}},ui={{id='empty',type='select',options={}}},requests={}} end"),Error));
     TestTrue(TEXT("Empty Lua collections decode"),Empty.Step(Snapshot,Off,Output,Error));
     if(Output)TestTrue(TEXT("Empty route/rules/UI lists validate"),H->ApplyPublicOutput(*P,Output,Error));
@@ -189,6 +256,61 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
     {
         H->ApplyPublicOutput(*P,UI,Error);FWidgetRenderer Renderer(false,true);auto Panel=H->MakePanel(P->Id);const FVector2D Size(740,880);auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
         for(int I=0;I<3;++I){Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
+        TFunction<TSharedPtr<SWidget>(TSharedRef<SWidget>,FName)> FindVisible;
+        FindVisible=[&](TSharedRef<SWidget> Widget,FName Tag)->TSharedPtr<SWidget>
+        {
+            if(!Widget->GetVisibility().IsVisible())return nullptr;
+            if(Widget->GetTag()==Tag)return Widget;
+            auto* Children=Widget->GetChildren();for(int32 I=0;I<Children->Num();++I)if(auto Found=FindVisible(Children->GetChildAt(I),Tag))return Found;
+            return nullptr;
+        };
+        const auto StartButton=FindVisible(Panel,TEXT("PluginStartToggle"));
+        TestTrue(TEXT("Default plugin controls retain separate Start and Stop"),StartButton&&FindVisible(Panel,TEXT("PluginStop")));
+        TestTrue(TEXT("Default plugin retains settings and profiles"),FindVisible(Panel,TEXT("PluginSettings")).IsValid());
+        TestTrue(TEXT("Runtime control options accepted"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"controls":"toggle","start_label":"Resume tracker","stop_label":"Pause tracker","settings":false}})")),Error));
+        Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();
+        TestFalse(TEXT("Toggle removes the separate Stop button"),FindVisible(Panel,TEXT("PluginStop")).IsValid());
+        TestFalse(TEXT("Settings opt-out hides the complete section"),FindVisible(Panel,TEXT("PluginSettings")).IsValid());
+        TestTrue(TEXT("Presentation changes preserve existing controls"),StartButton==FindVisible(Panel,TEXT("PluginStartToggle")));
+        if(StartButton)
+        {
+            auto Toggle=StaticCastSharedPtr<SButton>(StartButton);Toggle->SimulateClick();
+            TestFalse(TEXT("Running toggle stops the plugin"),P->Running);Toggle->SimulateClick();
+            TestTrue(TEXT("Stopped toggle starts the plugin"),P->Running);
+            const auto Text=StaticCastSharedRef<STextBlock>(Toggle->GetChildren()->GetChildAt(0));
+            TestEqual(TEXT("Toggle uses the running label"),Text->GetText().ToString(),FString(TEXT("Pause tracker")));
+        }
+        H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"controls":"none","settings":false,"status":false}})")),Error);
+        ++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();
+        TestFalse(TEXT("HUD plugins can hide all native lifecycle buttons"),FindVisible(Panel,TEXT("PluginStartToggle")).IsValid()||FindVisible(Panel,TEXT("PluginStop")).IsValid());
+        H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{}})")),Error);
+        ++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();
+        TestTrue(TEXT("Empty presentation restores default controls and settings"),FindVisible(Panel,TEXT("PluginStop"))&&FindVisible(Panel,TEXT("PluginSettings")));
+        H->ApplyPublicOutput(*P,UI,Error);
+        {
+            auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();TestTrue(TEXT("Inventory icon test loads DAT artwork"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
+            FACESupplyEntry Item;Item.Icon=0x06004CF7;Item.ItemType=ACEItemType::Container;Item.Overlay=0x06006C37;Item.Underlay=0x060010F9;Item.Effects=1;
+            auto Row=MakeShared<FJsonObject>();Row->SetStringField(TEXT("id"),TEXT("inventory_icon"));Row->SetStringField(TEXT("type"),TEXT("item_icon"));
+            Row->SetNumberField(TEXT("icon"),uint32(Item.Icon));Row->SetNumberField(TEXT("item_type"),uint32(Item.ItemType));Row->SetNumberField(TEXT("overlay"),uint32(Item.Overlay));Row->SetNumberField(TEXT("effects"),Item.Effects);
+            Row->SetNumberField(TEXT("underlay"),uint32(Item.Underlay));
+            auto IconOutput=MakeShared<FJsonObject>();IconOutput->SetArrayField(TEXT("ui"),{MakeShared<FJsonValueObject>(Row)});
+            TestTrue(TEXT("Inventory artwork control applies"),H->ApplyPublicOutput(*P,IconOutput,Error));
+            auto Icons=H->MakeCompanionPanel(P->Id);TSharedPtr<SWidget> Layers;
+            TFunction<void(TSharedRef<SWidget>)> FindLayers=[&](TSharedRef<SWidget> Widget){if(Widget->GetType()==TEXT("SOverlay"))Layers=Widget;auto* Ch=Widget->GetChildren();for(int32 I=0;I<Ch->Num();++I)FindLayers(Ch->GetChildAt(I));};FindLayers(Icons);
+            if(TestTrue(TEXT("Item icon contains both retail layers"),Layers&&Layers->GetChildren()->Num()==2))
+            {
+                const auto Theme=FACEPluginStyle::Use(H,P->Id);
+                auto Reference=SNew(SOverlay)+SOverlay::Slot()[SNew(SImage).Image(Theme->ItemImage(Item,false))]+SOverlay::Slot()[SNew(SImage).Image(Theme->ItemImage(Item,true))];
+                auto* IconTarget=FWidgetRenderer::CreateTargetFor(FVector2D(32,32),TF_Bilinear,true);
+                TArray<FColor> Expected,Actual;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);
+                Renderer.DrawWidget(IconTarget,Reference,FVector2D(32,32),0);FlushRenderingCommands();IconTarget->GameThread_GetRenderTargetResource()->ReadPixels(Expected,Flags);
+                Renderer.DrawWidget(IconTarget,Layers.ToSharedRef(),FVector2D(32,32),0);FlushRenderingCommands();IconTarget->GameThread_GetRenderTargetResource()->ReadPixels(Actual,Flags);
+                TestTrue(TEXT("Lua item artwork matches Supply Ledger pixels including effects and overlay"),Actual.Num()==1024&&Actual==Expected);
+                TestTrue(TEXT("Rendered icon contains visible artwork"),Actual.ContainsByPredicate([](const FColor& C){return C.R>32||C.G>32||C.B>32;}));
+                TArray64<uint8> Png;FImageUtils::PNGCompressImageArray(32,32,Actual,Png);FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("PublicAPI-item-icon.png")));IconTarget->ReleaseResource();
+            }
+            H->ApplyPublicOutput(*P,UI,Error);
+        }
         TestTrue(TEXT("Title can change with the window already open"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"title":"Live quest progress"}})")),Error));
         for(int32 I=0;I<3;++I){++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
         int32 TitleCount=0;TFunction<void(TSharedRef<SWidget>)> CountTitles=[&](TSharedRef<SWidget> Widget)

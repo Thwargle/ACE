@@ -25,7 +25,7 @@ stops UCM. Use companions for trackers and UI; automation for tools that actuall
 fight, navigate, equip, loot or cast. Closing either window does not stop it.
 
 Callbacks remain `return function(snapshot, profile) ... end`. The output can
-combine a game intent with `presentation`, `ui`, `state`, `markers`, `messages`, `requests`, and
+combine a game intent with `presentation`, `ui`, `chat_filters`, `state`, `markers`, `messages`, `requests`, and
 `profile_patch`. Return nil for no change. Explicit empty UI/marker/message/request
 arrays clear those lists; omitted presentation fields retain the previous display.
 The tables given to Lua are copies. To change native state, return an intent or a
@@ -68,7 +68,7 @@ end
 
 Omitting `presentation` keeps the current values. Returning it replaces the
 runtime overrides: missing keys inherit the manifest defaults; `{}` restores
-both defaults. An empty title uses `name`; an empty icon uses the native emblem.
+all defaults. An empty title uses `name`; an empty icon uses the native emblem.
 Changes update open windows and the bar without restarting. Runtime overrides
 last until a character change or plugin reload; use the manifest for defaults
 that must appear before Lua starts. Metadata does not change the plugin's ID,
@@ -99,6 +99,101 @@ to 96 characters), with no paths or URLs. PNGs are limited to 2 MiB compressed a
 1024 by 1024 pixels. Toolbar and UI images share one cache per plugin: at most 32
 assets and 16 MiB decoded. Missing or invalid images use the fallback; use Refresh
 in Manage Plugins after replacing image files on disk.
+
+## Native window controls
+
+The manifest's `presentation` object and runtime `presentation` output accept:
+
+```lua
+presentation = {
+  controls = "toggle",       -- "start_stop" (default), "toggle", or "none"
+  start_label = "Start tracker", stop_label = "Pause tracker",
+  settings = false,          -- hide the complete Settings and profiles section
+  status = false             -- optional: hide the host's status text too
+}
+```
+
+The toggle starts/stops the actual plugin; labels follow its running state.
+Labels are single-line strings of at most 40 characters; empty strings use
+Start/Stop. `settings` and `status` default to true. Defaults and overrides use
+the same inheritance/reset rules as title/icon. Changes preserve the open
+window and its control identities. These options apply to custom plugin panels;
+specialized built-in panels keep their own layout. Companions auto-start when
+enabled, making `controls="none"` useful for passive HUDs. Hiding settings only
+changes presentation; it does not remove the profile API or change permissions.
+
+## Read and filter chat
+
+`chat` permission already provides `snapshot.chat_events`, including `raw_text`,
+formatted `text`, `sender`, `color` (chat message type), `time`, and `serial`.
+Use these events to parse server-specific responses without hiding a chat window.
+
+The separate **`chat_filter` permission** allows display-only filtering. Return a
+`chat_filters` array to replace your plugin's active rules:
+
+```lua
+chat_filters = {{
+  id = "quest_dump", contains = " solves (", sender = "", chat_type = 0,
+  window = 0
+}}
+```
+
+This matches ACE/GDLe-format `/myquests` rows in main chat. It does not hide other
+Broadcast messages. Custom server formats may require different literals. The
+matching uses incoming `raw_text` before speaker/timestamp decoration. Rules run
+natively before a row is drawn, so a response does not flash until the next Lua
+callback. Hidden messages still reach **all** plugin readers and an enabled chat
+log file. Filtering never changes server state or messages, chat window settings,
+or existing chat history.
+
+Each rule has a unique `id` (1–64 characters) and at least one nonempty `contains`,
+`prefix`, or `exact` string (each at most 256 characters). All supplied tests must
+match. Optional `sender` is an exact match; `sender=""` restricts matching to
+messages with no sender. `case_sensitive` defaults to false. `chat_type` optionally
+matches a numeric message type, 0–63. `window` is 0 for main chat, 1–4 for extra
+windows, or -1/omitted for all five. `seconds` optionally expires the rule after
+more than 0 and at most 300 seconds; omitting it keeps the rule until cleared.
+Matching is literal, not Lua-pattern or regular-expression matching.
+
+At most 32 rules may be registered per plugin. Omitted `chat_filters` retains
+them; `{}` clears them. A replacement is validated before applying any of its
+rules. Stop, disable, reload, logout, or character change removes that plugin's
+filters. One plugin cannot remove another plugin's rules. Any matching active
+rule can hide a line in its chosen window.
+
+For outgoing custom server commands, API 2 already supports the separate `say`
+permission and `requests={{id="bonus",service="chat",operation="send",text="/bonus"}}`.
+This sends text to the server; it does not grant local shell access. `/b` and
+`/fship` can be sent the same way. Register filters in the same output or before
+the request so the first response is covered. Sending is limited to once per
+second; use `events` result records to check acceptance.
+
+See the runnable [Chat Tools example](Examples/chat_tools/main.lua) and its
+[manifest](Examples/chat_tools/plugin.json): optional two-minute quest polling,
+on-demand server commands, readable responses, and no native Start/Stop or
+Settings and profiles section.
+
+## Inventory-style icons
+
+Use `item_icon` for the same square background and composited artwork as the
+inventory and Supply Ledger. The original `icon` control remains a plain DAT icon.
+
+```lua
+local item = s.inventory[1]
+local row = {
+  id="supply", type="item_icon", size=32, text=item.name,
+  icon=item.icon, item_type=item.type,
+  overlay=item.icon_overlay, underlay=item.icon_underlay, effects=item.ui_effects
+}
+```
+
+Full inventory snapshots now expose `icon_overlay`, `icon_underlay`, and
+`ui_effects` alongside `icon` and `type`. A companion needs `data` permission for
+that full snapshot. Item icon fields are unsigned 32-bit numbers; texture IDs
+include the `0x06000000` prefix. `size` is 16–128 pixels (default 32); optional
+appearance fields default to zero. The native compositor applies the type
+background, underlay, icon, overlay, and enchantment effects in inventory order.
+Returning new values updates the retained icon rather than rebuilding its row.
 
 ## Reuse or replace the built-in policies
 

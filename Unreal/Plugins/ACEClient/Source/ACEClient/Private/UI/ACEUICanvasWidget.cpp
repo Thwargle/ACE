@@ -93,7 +93,7 @@ void UACEUICanvasWidget::SetResourceResolver(UACEUIResourceResolver* InResolver)
 
 void UACEUICanvasWidget::SetGameplayBinder(UACEUIGameplayBinder* InBinder)
 {
-	if (GameplayBinder != InBinder) LastGameplayTickFrame = MAX_uint64;
+	if (GameplayBinder != InBinder) LastGameplayTickFrame = LastDesktopHUDTickFrame = MAX_uint64;
 	GameplayBinder = InBinder;
 }
 
@@ -154,12 +154,24 @@ void UACEUICanvasWidget::NativeConstruct()
 	SyncElementWidgets();
 }
 
-void UACEUICanvasWidget::TickGameplayState()
+void UACEUICanvasWidget::TickGameplayState(bool bRefreshDesktopHUD)
 {
-	if (!GameplayBinder || LastGameplayTickFrame == GFrameCounter) return;
+	if (!GameplayBinder) return;
+	if (LastGameplayTickFrame == GFrameCounter)
+	{
+		// A menu can become visible after VR already serviced gameplay this frame.
+		// Catch its presentation up before drawing without replaying gameplay work.
+		if (bRefreshDesktopHUD && LastDesktopHUDTickFrame != GFrameCounter)
+		{
+			LastDesktopHUDTickFrame = GFrameCounter;
+			GameplayBinder->RefreshDesktopHUD();
+		}
+		return;
+	}
 	// Either callback may run first. Mark before refreshing to cover reentry as well.
 	LastGameplayTickFrame = GFrameCounter;
-	GameplayBinder->TickRefresh();
+	if (bRefreshDesktopHUD) LastDesktopHUDTickFrame = GFrameCounter;
+	GameplayBinder->TickRefresh(bRefreshDesktopHUD);
 }
 
 void UACEUICanvasWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)

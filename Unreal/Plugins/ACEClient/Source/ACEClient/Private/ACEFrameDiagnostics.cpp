@@ -1,4 +1,5 @@
 #include "ACEFrameDiagnostics.h"
+#include "ACEProfiling.h"
 #include "ACEClientBuild.h"
 #include "ACEClientSubsystem.h"
 #include "ACESession.h"
@@ -49,5 +50,7 @@ TArray<FString> ACEFrameDiagnostics::Describe(UWorld* World,double FrameMs)
   Creatures,Dying,Corpses,Projectiles,Emitters,Degraded,Particles,FX?FX->GetVisibleLightCount():0,
   Updates?Updates->GetLastBatchCount():0,Updates?Updates->GetLastVertexCount():0,UCM));
  if(Client)if(auto Session=Client->GetSession())Lines.Add(Session->DescribeNetworkPump());
+ const FString Costs=ACEProfiling::DescribeLastFrame();
+ if(!Costs.IsEmpty())Lines.Add(Costs);
  return Lines;
 }

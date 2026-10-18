@@ -26,6 +26,7 @@ class ACECLIENT_API UACETerrainPresenterComponent : public UActorComponent
 	GENERATED_BODY()
 	friend class FACERetailInteriorStreamingTest;
 	friend class FACEFortTethStairsTest;
+	friend class FACEMansionEdgesTest;
 	friend class FACEBuildingPassageTest;
 	friend class FACEEntranceTransitionTest;
 	friend class FACEVRInteriorNetworkTest;

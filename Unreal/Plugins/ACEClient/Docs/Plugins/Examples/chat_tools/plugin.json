@@ -1,0 +1,10 @@
+{
+  "api": 2,
+  "mode": "companion",
+  "id": "chat_tools",
+  "name": "Chat Tools",
+  "version": "1.0",
+  "description": "Read server responses and filter quest dumps without hiding chat windows.",
+  "permissions": ["chat", "chat_filter", "ui", "say", "profiles"],
+  "presentation": {"controls": "none", "settings": false, "status": false}
+}

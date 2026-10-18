@@ -21,10 +21,23 @@ namespace
         if(P.Manifest&&P.Manifest->TryGetObjectField(TEXT("presentation"),Defaults))(*Defaults)->TryGetStringField(Key,Text);
         return Text;
     }
+    bool Flag(const FACEClientPlugin& P,const TCHAR* Key)
+    {
+        bool Result=true;
+        if(P.Presentation&&P.Presentation->TryGetBoolField(Key,Result))return Result;
+        const TSharedPtr<FJsonObject>* Defaults=nullptr;
+        if(P.Manifest&&P.Manifest->TryGetObjectField(TEXT("presentation"),Defaults))(*Defaults)->TryGetBoolField(Key,Result);
+        return Result;
+    }
 }
 FString FACEClientPlugin::DisplayTitle() const
 {const FString Title=Value(*this,TEXT("title"));return Title.IsEmpty()?Name:Title;}
 FString FACEClientPlugin::DisplayIcon() const {return Value(*this,TEXT("icon"));}
+FString FACEClientPlugin::DisplayControls() const {const auto V=Value(*this,TEXT("controls"));return V.IsEmpty()?TEXT("start_stop"):V;}
+FString FACEClientPlugin::DisplayStartLabel() const {const auto V=Value(*this,TEXT("start_label"));return V.IsEmpty()?TEXT("Start"):V;}
+FString FACEClientPlugin::DisplayStopLabel() const {const auto V=Value(*this,TEXT("stop_label"));return V.IsEmpty()?TEXT("Stop"):V;}
+bool FACEClientPlugin::ShowSettings() const {return Flag(*this,TEXT("settings"));}
+bool FACEClientPlugin::ShowStatus() const {return Flag(*this,TEXT("status"));}
 
 bool ACEPluginPresentation::ValidAsset(const FString& Asset)
 {
@@ -37,6 +50,24 @@ bool ACEPluginPresentation::Valid(const TSharedPtr<FJsonObject>& O,FString& Erro
     if(!O){Error=TEXT("presentation must be an object");return false;}
     for(const auto& Pair:O->Values)
     {
+        if(Pair.Key==TEXT("settings")||Pair.Key==TEXT("status"))
+        {
+            if(Pair.Value->Type==EJson::Boolean)continue;
+            Error=TEXT("presentation settings/status must be booleans");return false;
+        }
+        if(Pair.Key==TEXT("controls"))
+        {
+            FString Mode;
+            if(Pair.Value->TryGetString(Mode)&&(Mode==TEXT("start_stop")||Mode==TEXT("toggle")||Mode==TEXT("none")))continue;
+            Error=TEXT("presentation.controls must be start_stop, toggle or none");return false;
+        }
+        if(Pair.Key==TEXT("start_label")||Pair.Key==TEXT("stop_label"))
+        {
+            FString Label;
+            if(!Pair.Value->TryGetString(Label)||Label.Len()>40){Error=TEXT("Start/Stop labels must be strings of at most 40 characters");return false;}
+            for(TCHAR Ch:Label)if(FChar::IsControl(Ch)){Error=TEXT("Start/Stop labels must be a single line");return false;}
+            continue;
+        }
         if(Pair.Key==TEXT("window"))
         {
             const TSharedPtr<FJsonObject>* Window=nullptr;
@@ -52,7 +83,7 @@ bool ACEPluginPresentation::Valid(const TSharedPtr<FJsonObject>& O,FString& Erro
         }
         FString Text;
         if((Pair.Key!=TEXT("title")&&Pair.Key!=TEXT("icon"))||!Pair.Value->TryGetString(Text))
-        {Error=TEXT("presentation accepts title/icon strings and window appearance");return false;}
+        {Error=TEXT("Unknown presentation field or invalid field type");return false;}
         if(Pair.Key==TEXT("title"))
         {
             if(Text.Len()>80){Error=TEXT("Plugin title is limited to 80 characters");return false;}

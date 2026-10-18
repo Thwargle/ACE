@@ -17,7 +17,8 @@
     },
     {
       "Name": "ACEWorldBake",
-      "Enabled": true
+      "Enabled": true,
+      "TargetAllowList": [ "Editor" ]
     },
     {
       "Name": "EditorScriptingUtilities",
@@ -30,6 +31,7 @@
     {
       "Name": "Interchange",
       "Enabled": true,
+      "TargetAllowList": [ "Editor" ],
       "SupportedTargetPlatforms": [
         "Win64",
         "Linux",

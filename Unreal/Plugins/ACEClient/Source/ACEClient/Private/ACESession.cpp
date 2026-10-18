@@ -2067,6 +2067,7 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecrea
 	Obj.ParentGuid = Decoded.ParentGuid;
 	Obj.ParentLocation = Decoded.ParentLocation;
 	Obj.PlacementId = Decoded.PlacementId;
+	Obj.bHasServerPhysicsDescription = Decoded.bHasPhysicsTimestamps;
 	Obj.ClothingPriority = Decoded.ClothingPriority;
 	Obj.CurrentWieldedLocation = static_cast<int64>(Decoded.CurrentWieldedLocation);
 	Obj.ValidLocations = static_cast<int64>(Decoded.ValidLocations);
@@ -4272,7 +4273,7 @@ void FACESession::SelectObject(int32 ObjectGuid, bool bInventorySelection)
 		{
 			// UIHidden weenies remain rendered (pedestals/hooks), but retail never
 			// accepts them as a mouse, hotkey or programmatic world selection.
-			if (Obj.IsUiHidden()) return;
+			if (Obj.IsUiHidden() || Obj.IsUnnamedDecoration()) return;
 			Sel.Guid = ObjectGuid;
 			Sel.Name = Obj.Name;
 			Sel.bValid = true;
@@ -7604,10 +7605,10 @@ void FACESession::HandlePublicUpdateInstanceId(FACEBinaryReader& Reader)
 	{
 		if (Prop == 2) // PropertyInstanceId.Container
 		{
-			// ContainId is the ordered membership notification. Preserve the old
-			// list until it arrives; changing ContainerId here loses the source pack
-			// and shifts the destination a second time during reconciliation.
-			if (Value != 0) return;
+			// The ordered inventory event owns removal and insertion, including
+			// Container=0 before a gift/drop. Clearing ownership here loses the
+			// source placement, leaving gaps and duplicate indices on later drags.
+			if (Value != 0 || (PlayerGuid && ResolveContainerRoot(Guid) == PlayerGuid)) return;
 			Obj->ContainerId = Value;
 		}
 		else if (Prop == 3) // PropertyInstanceId.Wielder

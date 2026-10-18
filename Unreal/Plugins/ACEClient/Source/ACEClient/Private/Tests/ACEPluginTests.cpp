@@ -894,8 +894,8 @@ bool FACEPluginHostTest::RunTest(const FString&)
             TArray<TSharedRef<SCheckBox>> Toggles;
             TFunction<void(TSharedRef<SWidget>)> Visit=[&](TSharedRef<SWidget> Widget)
             {if(Widget->GetTypeAsString()==TEXT("SCheckBox"))Toggles.Add(StaticCastSharedRef<SCheckBox>(Widget));auto* Children=Widget->GetChildren();for(int I=0;I<Children->Num();++I)Visit(Children->GetChildAt(I));};
-            Visit(Micro);TestEqual(TEXT("Micro includes all nine activity toggles below its Start/Stop button"),Toggles.Num(),9);
-            if(Toggles.Num()==9)
+            Visit(Micro);TestEqual(TEXT("Micro includes all ten activity toggles below its Start/Stop button"),Toggles.Num(),10);
+            if(Toggles.Num()==10)
             {
                 auto Loot=Toggles[2];const bool Before=Loot->IsChecked();const auto Geometry=Loot->GetCachedGeometry();const FVector2D At=Geometry.LocalToAbsolute(Geometry.GetLocalSize()*.5);
                 Loot->OnMouseButtonDown(Geometry,FPointerEvent(0,At,At,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));

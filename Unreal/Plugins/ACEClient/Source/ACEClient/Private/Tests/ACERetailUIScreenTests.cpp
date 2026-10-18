@@ -498,6 +498,18 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             const float Browsing=Log->GetScrollOffset(); Gameplay->AppendChatLineToLog(W,LongChat,FLinearColor::White,FString());
             CaptureScreen(FString::Printf(TEXT("Chat%dScrolled"),W));
             TestTrue(TEXT("New messages preserve the browsed position"),FMath::Abs(Log->GetScrollOffset()-Browsing)<1.f);
+            const auto JumpIndicator=Manager->FindElementUnder(Name,TEXT("ChatLogNewNonVisibleTextIndicator"));
+            if(TestTrue(TEXT("Every chat has the retail jump-to-bottom arrow"),JumpIndicator.IsValid()))
+            {
+                Gameplay->SyncChatJumpIndicator(W);
+                TestTrue(TEXT("Unread messages show the arrow in their own chat window"),JumpIndicator->bVisible);
+                const auto* ArrowMedia=JumpIndicator->ResolvePaintState(false,false,false);
+                TestTrue(TEXT("Visible arrow selects its retail artwork rather than a blank default"),ArrowMedia && ArrowMedia->bHasMedia && ArrowMedia->ImageFileId==0x06005F0E);
+                const auto ArrowOrigin=JumpIndicator->GetScreenOrigin(),LogOrigin=LogEl->GetScreenOrigin();
+                TestTrue(TEXT("Arrow remains in the text gutter after resizing"),ArrowOrigin.X==LogOrigin.X && ArrowOrigin.Y>=LogOrigin.Y && ArrowOrigin.Y+16<=LogOrigin.Y+LogEl->Height);
+                Gameplay->ScrollChatLog(100000,W);
+                TestFalse(TEXT("Returning to the bottom hides that window's arrow"),JumpIndicator->bVisible);
+            }
             Manager->SaveFloatyLayout();
             Root->UserResizeW=0; Root->UserResizeH=0; UACEUIElementManager::ApplyFloatyResizeLayout(Root);
             Manager->LoadFloatyLayout();
@@ -2947,6 +2959,29 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
         AcknowledgeReorder(61003,1,true);
         TestEqual(TEXT("Forward pack move has retail insertion order"),Gameplay->PackSlotGuids[2],61003);
         {
+            FACEWorldObject GroundPack;GroundPack.Guid=61999;GroundPack.Name=TEXT("Dropped backpack");
+            GroundPack.ItemType=ACEItemType::Container;GroundPack.ObjectDescriptionFlags=ACEObjectDescFlag::Openable;
+            GroundPack.bHasPosition=true;GroundPack.Position=Session.PlayerPosition;Session.UpsertWorldObject(GroundPack);
+            CaptureScreen(TEXT("GameplayGroundPackDropTargets"));
+            int32 Empty=INDEX_NONE;
+            for(int32 I=1;I<Gameplay->PackSlots.Num();++I)
+                if(Gameplay->PackSlots[I]->IsVisible() && Gameplay->PackSlotGuids[I]==0){Empty=I;break;}
+            TestTrue(TEXT("Ground pack fixture has an empty side slot"),Empty!=INDEX_NONE);
+            for(int32 TargetIndex:{1,Empty})if(TargetIndex!=INDEX_NONE)
+            {
+                Session.PendingInventoryTransfers.Reset();Session.CachedC2SPackets.Reset();
+                const auto& Geometry=Gameplay->PackSlots[TargetIndex]->GetCachedGeometry();
+                const auto Absolute=Geometry.LocalToAbsolute(Geometry.GetLocalSize()*.5);
+                Gameplay->InvDragGuid=GroundPack.Guid;Gameplay->InvDragAmount=1;
+                Gameplay->InvDragSourcePack=0;Gameplay->InvDragSourceSlot=INDEX_NONE;Gameplay->InvDragPackSlotIndex=INDEX_NONE;
+                Gameplay->bInvDragPending=true;Gameplay->bInvDragActive=true;Gameplay->bInvDoubleClickPending=false;
+                Gameplay->TryFinishInventoryDrag(Canvas->GetCachedGeometry().AbsoluteToLocal(Absolute));
+                TestTrue(TEXT("Ground backpack can be dropped on an occupied or empty side slot"),HasAction(ACEGameAction::PutItemInContainer));
+                LastWire(ACEGameAction::PutItemInContainer,{uint32(GroundPack.Guid),uint32(Player.Guid),uint32(TargetIndex-1)});
+            }
+            Session.PendingInventoryTransfers.Reset();Session.WorldObjects.Remove(GroundPack.Guid);
+        }
+        {
             FACEWorldObject Chest; Chest.Guid=62000; Chest.ItemType=ACEItemType::Container;
             Chest.ContainersCapacity=2; Chest.ItemsCapacity=24; Chest.IconId=0x06004CF7; Chest.Name=TEXT("Loot background fixture");
             Session.UpsertWorldObject(Chest);
@@ -3093,6 +3128,43 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 Session.LastAttackerGuid=80011;Session.LastAttackerTimeSeconds=FPlatformTime::Seconds();
                 Gameplay->TryAutoTargetOnCombatEnter();
                 TestEqual(TEXT("Retail recent-attacker preference precedes nearest-target fallback"),Client->GetSelectedObject().Guid,80011);
+                const auto AutoTargetObjects=Session.WorldObjects;
+                for(int32 Combat:{2,4}) for(uint32 Cell:{0xDA55001Du,0x0143014Fu})
+                {
+                    Gameplay->CombatMode=Combat;
+                    Session.PlayerPosition=Position;Session.PlayerPosition.CellId=Cell;
+                    Session.WorldObjects=AutoTargetObjects;
+                    for(auto& Pair:Session.WorldObjects)Pair.Value.Position.CellId=Cell;
+                    const float RadarRange=Cell==0xDA55001Du ? 75.f : 25.f;
+                    const FString Context=FString::Printf(TEXT(" (mode %d, cell %08X)"),Combat,Cell);
+                    auto RecentAttacker=Session.WorldObjects[80011];RecentAttacker.Guid=80013;
+                    RecentAttacker.Position.Location.X=Position.Location.X+RadarRange;
+                    Session.WorldObjects.Add(RecentAttacker.Guid,RecentAttacker);
+                    Session.LastAttackerGuid=RecentAttacker.Guid;Session.LastAttackerTimeSeconds=FPlatformTime::Seconds();
+                    auto RetargetAfterDeath=[&]()
+                    {
+                        Client->SelectObject(80010);
+                        Session.WorldObjects[80010].bDying=true;
+                        Client->SelectObject(0);Gameplay->TickCombatAutoAttack(.016f);
+                        Session.WorldObjects[80010].bDying=false;
+                    };
+                    RetargetAfterDeath();
+                    TestEqual(TEXT("Post-kill retarget chooses nearest instead of farther recent attacker")+Context,Client->GetSelectedObject().Guid,80011);
+                    Client->SelectObject(0);Gameplay->TryAutoTargetOnCombatEnter();
+                    TestEqual(TEXT("Combat entry may retaliate against an attacker exactly at radar range")+Context,Client->GetSelectedObject().Guid,80013);
+                    Session.WorldObjects[80013].Position.Location.X+=.1f;
+                    Client->SelectObject(0);Gameplay->TryAutoTargetOnCombatEnter();
+                    TestEqual(TEXT("Combat entry rejects recent attackers outside radar range")+Context,Client->GetSelectedObject().Guid,80010);
+                    RetargetAfterDeath();
+                    TestEqual(TEXT("Post-kill retarget rejects recent attackers outside radar range")+Context,Client->GetSelectedObject().Guid,80011);
+                    Session.WorldObjects[80011].Position.Location.X=Position.Location.X-15.f;
+                    RetargetAfterDeath();
+                    TestEqual(TEXT("Post-kill retarget includes the nearest creature behind the player")+Context,Client->GetSelectedObject().Guid,80011);
+                    Session.WorldObjects[80011].bDying=true;
+                    RetargetAfterDeath();
+                    TestFalse(TEXT("Post-kill retarget stays empty when only off-radar or ineligible creatures remain")+Context,Client->GetSelectedObject().bValid);
+                }
+                Session.WorldObjects=AutoTargetObjects;Session.PlayerPosition=Position;
             };
             CheckAutoTarget();
             // Keep the input sequence out of the already-large screen test's optimizer unit.

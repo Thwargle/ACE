@@ -1326,6 +1326,8 @@ struct ACECLIENT_API FACEWorldObject
 	/** ACE Placement (RightHandCombat=1, …) — drives weapon Setup part frames when held. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
 	int32 PlacementId = 0;
+	/** Full server PhysicsDesc owns animation-table selection, including zero. Local previews use setup defaults. */
+	bool bHasServerPhysicsDescription = false;
 
 	/** PropertyInt.PlacementPosition — slot order inside a pack (0..ItemsCapacity-1). */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE")
@@ -1444,6 +1446,9 @@ struct ACECLIENT_API FACEWorldObject
 	{
 		// Corpses are containers with a creature MTable, not animated chests.
 		if (IsCorpse()) return false;
+		// Authored remains can be ordinary containers, with Dead/Sleeping in
+		// Movement rather than the Corpse descriptor. Preserve that explicit pose.
+		if (ACEMotion::IsHeldRestCommand(InitialMotionCommand)) return false;
 		// Hook containers are Openable too, but display the item's own animation.
 		// Only an explicit On/Off motion may put a hooked decoration in that state.
 		if (IsDoor() || (!bIsHouseHook && IsOpenable()))
@@ -1473,10 +1478,16 @@ struct ACECLIENT_API FACEWorldObject
 			&& (ObjectDescriptionFlags & ACEObjectDescFlag::Attackable) == 0;
 	}
 	bool IsGameBoard() const { return (static_cast<uint32>(ItemType) & 0x80000000u) != 0; }
+	bool IsUnnamedDecoration() const
+	{
+		return Name.IsEmpty() && (ObjectDescriptionFlags & ACEObjectDescFlag::Stuck) != 0
+			&& !bIsPlayer && !IsAttackable() && !IsVendor() && !IsDoor() && !IsLifeStone()
+			&& (ItemType & (ACEItemType::Creature | ACEItemType::Portal)) == 0;
+	}
 	bool IsSelectableWorldObject() const
 	{
 		return Guid != 0 && bHasPosition && ContainerId == 0 && WielderId == 0 && ParentGuid == 0
-			&& !IsUiHidden()
+			&& !IsUiHidden() && !IsUnnamedDecoration()
 			&& (!bDying || IsCorpse())
 			&& (PhysicsState & (ACEPhysicsState::Missile | ACEPhysicsState::ParticleEmitter | ACEPhysicsState::NoDraw)) == 0;
 	}
@@ -1498,7 +1509,7 @@ struct ACECLIENT_API FACEWorldObject
 		{
 			return false;
 		}
-		if (IsDoor() || IsLifeStone() || IsCorpse() || IsOpenable() || IsGameBoard())
+		if (IsDoor() || IsLifeStone() || IsCorpse() || IsGameBoard())
 		{
 			return false;
 		}

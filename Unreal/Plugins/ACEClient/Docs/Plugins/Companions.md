@@ -3,6 +3,10 @@
 For richer UI, full read snapshots, profile/import services and independent
 automation, see [Public API 2](PublicAPI.md). The API 1 examples below still work.
 
+Both APIs also support opt-in [chat display filters](PublicAPI.md#read-and-filter-chat),
+[native button/settings visibility](PublicAPI.md#native-window-controls), and
+[inventory-style item icons](PublicAPI.md#inventory-style-icons).
+
 ## Companion lifecycle
 
 Use `"mode": "companion"` for quest trackers, nearby-object lists and other

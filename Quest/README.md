@@ -61,11 +61,49 @@ visible with menus closed, then run from this directory:
 ```
 
 This records baseline, changed, and restored intervals for a live console variable.
-It rejects sleep/loading/menu interruptions and checkpoints the original setting
+It rejects sleep/loading/menu interruptions and changes in refresh rate or
+resolution scale, and checkpoints the original setting
 and restoration status in `Performance/Comparison-*/comparison.json`. Check that
 file if the host exits unexpectedly. Do not use it for settings that require a
-restart or actor recreation, such as GPU timestamps or actor draw caching. Keep
+restart, such as GPU timestamps or shader permutations. Actor draw caching supports
+live comparisons from v76 onward. Keep
 screenshots, rendering audits, builds, and other heavy work outside sample windows.
 `Tools/Summarize-VrApi.py` summarizes the saved log with the report's process ID
-and time interval; use `--min-samples` to reject incomplete captures. Runtime App
+and time interval; use `--min-samples` to reject incomplete captures and
+`--expected-hz` / `--expected-scale` to require the reference display settings.
+The summarizer also rejects a refresh-rate or scale change within an interval.
+Run `python Tests/Test-VrApiSummary.py` to check the capture parser. Runtime App
 durations are not GPU-only timings or frame-time percentiles.
+
+### Standalone check, 2026-10-17
+
+Quest 3 was tested with the offline `ace.PerfScene outdoor` fixture: 32 NPCs,
+45 seconds of warmup, 30 seconds of sampling, 4128 x 2208 stereo target and
+runtime resolution scale 0.80. Initial 90 Hz runs measured 50.39 FPS on v88 and
+50.42 on released v121. The old fixture also enabled tracing, so these are not
+a precise version-to-version speedup measurement. Neither reached 90 FPS.
+
+At matching 72 Hz/0.80 settings, released v121 measured 48.27 FPS and the local
+candidate 50.95 FPS. Temperatures were 51–54 C and CPU clocks varied between
+1920 and 2208 MHz; this small FPS difference cannot be attributed solely to the
+code changes. A repeat lost OpenXR visibility during sampling and was excluded.
+The released indoor fixture measured 55.43 FPS with eight NPCs at 72 Hz.
+
+The CPU traces do verify eliminated work: with controllers untracked, six arm
+render proxies were recreated per frame (3312 in 552 frames); the candidate had
+none in its subsequent trace. Desktop radar, shortcut, vitals and effect overlays
+now defer presentation while only the native VR HUD is displayed. Gameplay
+processing continues, and opening a desktop menu or wrist spell bar catches up
+before drawing. Animated primitive/light-interaction updates and uniform-buffer
+work remain significant. Retesting cached actor draw commands showed no gain,
+so that default was retained.
+
+Windows editor and Android packages built successfully. `ACE.VR.RigAndMenus`
+and `ACE.Performance.GameplayRefresh` passed, including tracking recovery and
+same-frame HUD catch-up; all six VrApi parser tests passed. The local candidate
+was installed on the headset without publishing a release. Temporary device
+captures were removed after analysis. Local trace payloads were also removed;
+summary files and logs remain in `Performance/20261017-Standalone` and
+`Performance/Comparison-20261017-041629-858`. Automatic approval review blocked
+removing the complete directories. These results do not
+establish live combat performance or a sustained 90 FPS target.

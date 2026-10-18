@@ -9,6 +9,8 @@
 #include "UI/ACEUILayoutResolver.h"
 #include "UI/ACEUIResourceResolver.h"
 #include "UI/ACEUIGameplayBinder.h"
+#include "UI/ACEUIElement.h"
+#include "Components/CanvasPanel.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEGameplayRefreshTest, "ACE.Performance.GameplayRefresh",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
@@ -45,6 +47,18 @@ bool FACEGameplayRefreshTest::RunTest(const FString&)
     TestTrue(TEXT("VR then Native refreshes only once"), Binder->bPendingChatRefocus);
     ++GFrameCounter; Native();
     TestFalse(TEXT("Returning to desktop continues refreshing"), Binder->bPendingChatRefocus);
+    const auto Toolbar = Manager->FindElementByName(TEXT("ToolbarField"));
+    if (!TestTrue(TEXT("Desktop shortcut presentation exists"), Toolbar.IsValid() && Binder->ShortcutClipPanel)) return false;
+    const bool ToolbarWasVisible = Toolbar->bVisible;
+    Toolbar->bVisible = true; ++GFrameCounter; Native();
+    TestTrue(TEXT("Desktop HUD shows the shortcut panel"), Binder->ShortcutClipPanel->IsVisible());
+    Toolbar->bVisible = false; ++GFrameCounter; QueueWork(); Canvas->TickGameplayState(false);
+    TestFalse(TEXT("Native-only VR still services queued gameplay work"), Binder->bPendingChatRefocus);
+    TestTrue(TEXT("Native-only VR defers unused desktop presentation"), Binder->ShortcutClipPanel->IsVisible());
+    QueueWork(); Native();
+    TestFalse(TEXT("Opening desktop presentation catches up in the same frame"), Binder->ShortcutClipPanel->IsVisible());
+    TestTrue(TEXT("Presentation catch-up does not replay gameplay work"), Binder->bPendingChatRefocus);
+    Toolbar->bVisible = ToolbarWasVisible;
     Canvas->SetGameplayBinder(nullptr); ++GFrameCounter; VR(); Native();
     Canvas->SetGameplayBinder(Binder); QueueWork(); VR();
     TestFalse(TEXT("Missing binder does not consume the new binder's tick"), Binder->bPendingChatRefocus);

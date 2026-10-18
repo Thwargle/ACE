@@ -13,6 +13,8 @@ p.add_argument('--start', default='00:00:00')
 p.add_argument('--end', default='23:59:59.999')
 p.add_argument('--min-samples', type=int, default=1,
                help='Reject interrupted/empty captures instead of reporting a partial average.')
+p.add_argument('--expected-hz', type=int, help='Require the same refresh rate as the reference run.')
+p.add_argument('--expected-scale', type=float, help='Require the same resolution scale as the reference run.')
 a = p.parse_args()
 rows = []
 for line in a.log.read_text(encoding='utf-8-sig', errors='replace').splitlines():
@@ -30,6 +32,14 @@ for line in a.log.read_text(encoding='utf-8-sig', errors='replace').splitlines()
 if len(rows) < max(1, a.min_samples):
     raise SystemExit(f'Only {len(rows)} matching app samples; need {max(1, a.min_samples)}. '
                      'Check headset visibility, PID and capture interval.')
+rates = sorted({row['refreshHz'] for row in rows})
+scales = sorted({row['scale'] for row in rows})
+if len(rates) != 1 or len(scales) != 1:
+    raise SystemExit(f'Display settings changed during capture: refreshHz={rates}, scale={scales}. '
+                     'Capture a stable interval before comparing performance.')
+if (a.expected_hz is not None and rates != [a.expected_hz]
+        or a.expected_scale is not None and scales != [a.expected_scale]):
+    raise SystemExit(f'Display settings differ from reference: refreshHz={rates}, scale={scales}.')
 means = {}
 invalid = []
 for key in rows[0]:

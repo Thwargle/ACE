@@ -69,6 +69,7 @@ public:
 	bool UsesOnOffMotion() const
 	{
 		if (IsCorpse()) return false;
+		if (ACEMotion::IsHeldRestCommand(InitialMotionCommand)) return false;
 		if (IsDoor() || (!bIsHouseHook && IsOpenable()))
 		{
 			return true;

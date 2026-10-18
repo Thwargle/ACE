@@ -174,9 +174,16 @@ void UACEPluginSubsystem::ObserveTargetMotion(int32 Guid,const FACEObjectMotionS
         ReleaseCombatTarget(Guid);
 }
 void UACEPluginSubsystem::ObserveTargetDeleted(int32 Guid)
-{DefeatedTargets.Remove(Guid);ReleaseCombatTarget(Guid);}
+{CorpseFirstSeen.Remove(Guid);DefeatedTargets.Remove(Guid);ReleaseCombatTarget(Guid);}
 void UACEPluginSubsystem::ObserveTargetCreated(const FACEWorldObject& Object)
-{DefeatedTargets.Remove(Object.Guid);}
+{
+    DefeatedTargets.Remove(Object.Guid);
+    // VT fo retains opened corpse IDs across Stop and visibility releases,
+    // but a new corpse at a different position can reuse an old ID.
+    if(const auto* Record=LootedCorpses.Find(Object.Guid);Record&&Object.bHasPosition)
+        if(!Object.IsCorpse()||Object.Position.CellId!=Record->Position.CellId
+            ||!Object.Position.Location.Equals(Record->Position.Location,.01))LootedCorpses.Remove(Object.Guid);
+}
 void UACEPluginSubsystem::ObserveCombatVitals(const FACEPlayerVitals& Vitals)
 {
     const FIntVector Current(Vitals.Health,Vitals.Stamina,Vitals.Mana);
@@ -432,7 +439,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
         SaveItemBuffTimers();
         CombatTarget=0;DefeatedTargets.Empty();LastCombatVitals=FIntVector(-1,-1,-1);
         ConfirmedBuffAckAt=BuffRetryAt=0;ConfirmedBuffOwner.Empty();DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();PendingBuffResultDriven=false;
-        DataPlayer=0;Appraisals.Empty();CorpseFirstSeen.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();CachedInventory.Empty();ClearBuffRequests();
+        DataPlayer=0;Appraisals.Empty();CorpseFirstSeen.Empty();LootedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();CachedInventory.Empty();ClearBuffRequests();
         PendingSpell=0;PendingSpellOwner.Empty();FastCastOwner.Empty();PendingManaRefresh=false;PendingResourceRefresh.Empty();Debuffs.Empty();PendingDebuffCasts.Empty();OffensiveCasts.Empty();InventoryRevision=MAX_uint64;C->BackgroundAppraisals.Empty();return;
     }
     if(DataPlayer!=C->GetPlayerGuid()||DataServer!=C->GetServerName()||ObservedSession.Pin()!=Session)
@@ -451,7 +458,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
         CombatVitalsHandle=Session->OnVitalsUpdated.AddUObject(this,&UACEPluginSubsystem::ObserveCombatVitals);
         PhysicalAttackTarget=0;PhysicalAttackOwner.Empty();CombatOutcomes.Empty();OffensiveCasts.Empty();
         TellHandle=Session->OnPlayerTell.AddUObject(this,&UACEPluginSubsystem::ObservePlayerTell);ClearBuffRequests();
-        DataPlayer=C->GetPlayerGuid();DataServer=C->GetServerName();NextAppraisalScan=0;Appraisals.Empty();CachedSpeciesNames.Reset();CorpseFirstSeen.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();
+        DataPlayer=C->GetPlayerGuid();DataServer=C->GetServerName();NextAppraisalScan=0;Appraisals.Empty();CachedSpeciesNames.Reset();CorpseFirstSeen.Empty();LootedCorpses.Empty();AppraisalRequests.Empty();ItemBuffs.Empty();
         LoadItemBuffTimers();
         PendingSpell=0;PendingSpellOwner.Empty();FastCastOwner.Empty();PendingResourceRefresh.Empty();PendingManaRefresh=false;Debuffs.Empty();PendingDebuffCasts.Empty();InventoryRevision=MAX_uint64;++DataRevision;C->BackgroundAppraisals.Empty();
     }
@@ -471,6 +478,11 @@ void UACEPluginSubsystem::RefreshAutomationData()
     // left awareness or inventory; refreshed mana/requirements must not stay stale.
     for(auto It=Appraisals.CreateIterator();It;++It)if(!Session->GetWorldObjects().Contains(It.Key()))It.RemoveCurrent();
     for(auto It=CorpseFirstSeen.CreateIterator();It;++It)if(!Session->GetWorldObjects().Contains(It.Key()))It.RemoveCurrent();
+    for(auto It=LootedCorpses.CreateIterator();It;++It)
+    {
+        if(Session->GetWorldObjects().Contains(It.Key()))It.Value().LastSeen=Now;
+        else if(Now-It.Value().LastSeen>=3600)It.RemoveCurrent();
+    }
     for(auto It=AppraisalRequests.CreateIterator();It;++It)if(!Session->GetWorldObjects().Contains(It.Key()))
     {C->BackgroundAppraisals.Remove(It.Key());It.RemoveCurrent();}
     int32 Request=0;
@@ -676,6 +688,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
     {
         auto J=MakeShared<FJsonObject>();J->SetNumberField(TEXT("id"),uint32(Item.Guid));J->SetNumberField(TEXT("wcid"),Item.WeenieClassId);
         J->SetStringField(TEXT("name"),ACERetailObjectNames::Name(Item));J->SetNumberField(TEXT("type"),uint32(Item.ItemType));J->SetNumberField(TEXT("icon"),uint32(Item.IconId));
+        J->SetNumberField(TEXT("icon_overlay"),uint32(Item.IconOverlayId));J->SetNumberField(TEXT("icon_underlay"),uint32(Item.IconUnderlayId));J->SetNumberField(TEXT("ui_effects"),uint32(Item.UiEffects));
         J->SetNumberField(TEXT("object_class"),ACEVTObjectClass::Classify(Item));
         J->SetNumberField(TEXT("material"),Item.MaterialType);J->SetNumberField(TEXT("value"),Item.Value);J->SetNumberField(TEXT("count"),FMath::Max(1,Item.StackSize));
         J->SetNumberField(TEXT("max_stack"),Item.MaxStackSize);J->SetNumberField(TEXT("container"),uint32(Item.ContainerId));
@@ -751,7 +764,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
             J->SetNumberField(TEXT("boost_vital"),A->IntProperties.FindRef(89));J->SetNumberField(TEXT("boost"),A->IntProperties.FindRef(90));
             if(const double* HealMod=A->FloatProperties.Find(100))J->SetNumberField(TEXT("heal_mod"),*HealMod);
             J->SetNumberField(TEXT("mana"),A->IntProperties.FindRef(107));J->SetNumberField(TEXT("max_mana"),A->IntProperties.FindRef(108));
-            J->SetBoolField(TEXT("mana_empty"),!A->IntProperties.Contains(107));
+            J->SetBoolField(TEXT("mana_empty"),A->IntProperties.FindRef(107)<=0);
             if(const auto* Rating=A->IntProperties.Find(307))J->SetNumberField(TEXT("damage_rating"),*Rating);
             J->SetNumberField(TEXT("armor"),A->IntProperties.FindRef(28));
             J->SetNumberField(TEXT("spell"),Item.SpellDID);
@@ -810,7 +823,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         // rather than requiring appraisal or a known shield WCID.
         if(ACEVTObjectClass::Classify(Obj)==2)
         {if(Obj.WielderId)ArmoredParents.Add(Obj.WielderId);if(Obj.ParentGuid)ArmoredParents.Add(Obj.ParentGuid);}
-        if(Obj.PetOwnerId==C->GetPlayerGuid()&&!Obj.IsCorpse())OwnedPet=true;
+        if(Obj.PetOwnerId==C->GetPlayerGuid()&&Obj.bHasPosition&&!Obj.bDying&&!Obj.IsCorpse()&&!Obj.bPhysicsDescriptionPending)OwnedPet=true;
         if(Obj.IsCorpse()&&!CorpseFirstSeen.Contains(Obj.Guid))CorpseFirstSeen.Add(Obj.Guid,Now);
         if(C->GetOpenExternalContainerGuid() && Obj.ContainerId==C->GetOpenExternalContainerGuid()){Contents.Add(ItemJson(Obj));continue;}
         if(!Obj.IsSelectableWorldObject() || FVector::DistSquared(Obj.Position.ToUnrealLocation(),P.ToUnrealLocation())>FMath::Square(24000.))continue;
@@ -852,6 +865,7 @@ void UACEPluginSubsystem::ExtendSnapshot(const TSharedPtr<FJsonObject>& Out)
         else if(Obj.IsCorpse())
         {
             const auto* Info=Appraisals.Find(Obj.Guid);J->SetBoolField(TEXT("identified"),Info&&Info->bSuccess);
+            J->SetBoolField(TEXT("looted"),LootedCorpses.Contains(Obj.Guid));
             J->SetBoolField(TEXT("ownership_available"),true);J->SetNumberField(TEXT("observed_age"),FMath::Max(0.,Now-CorpseFirstSeen.FindRef(Obj.Guid)));
             if(Info&&Info->bSuccess)
             {
@@ -1233,7 +1247,17 @@ bool UACEPluginSubsystem::ExecuteInventory(FACEClientPlugin& P,const TSharedPtr<
         }
         return true;
     }
-    if(Action==TEXT("close_corpse")){if(C->GetOpenExternalContainerGuid())C->SendNoLongerViewingContents(C->GetOpenExternalContainerGuid());return true;}
+    if(Action==TEXT("close_corpse"))
+    {
+        const int32 Guid=C->GetOpenExternalContainerGuid();FACEWorldObject Corpse;
+        bool Completed=false;I->TryGetBoolField(TEXT("completed"),Completed);
+        if(Guid)
+        {
+            if(Completed&&C->GetWorldObject(Guid,Corpse)&&Corpse.IsCorpse())LootedCorpses.Add(Guid,{Corpse.Position,FPlatformTime::Seconds()});
+            C->SendNoLongerViewingContents(Guid);
+        }
+        return true;
+    }
     if(Action==TEXT("close_vendor"))
     {
         const int32 Vendor=C->GetOpenVendorGuid();

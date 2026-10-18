@@ -31,6 +31,15 @@ struct FACEPluginChatEvent
     TSharedPtr<FJsonValue> Value;
 };
 
+struct FACEPluginChatFilter
+{
+    FString Id, Contains, Prefix, Exact, Sender;
+    int32 ChatType=INDEX_NONE;
+    uint8 Windows=0x1f;
+    bool HasSender=false, CaseSensitive=false;
+    double Expires=0;
+};
+
 struct FACEClientPlugin
 {
     TSharedPtr<FJsonObject> ProfileLinks, ProfileBaseline;
@@ -40,6 +49,11 @@ struct FACEClientPlugin
     TSharedPtr<class FACEPluginImageCache> Images;
     FString DisplayTitle() const;
     FString DisplayIcon() const;
+    FString DisplayControls() const;
+    FString DisplayStartLabel() const;
+    FString DisplayStopLabel() const;
+    bool ShowSettings() const;
+    bool ShowStatus() const;
     TSharedPtr<FACEPluginVM> VM;
     TSharedPtr<FJsonObject> ActivityFailure;
     TSharedPtr<FJsonObject> CombatTransitionIntent;
@@ -61,6 +75,7 @@ struct FACEClientPlugin
     TArray<TSharedPtr<FJsonValue>> PanelRows, PluginEvents;
     TArray<FACEPluginMarker> Markers;
     uint64 ChatCursor=0;
+    TArray<FACEPluginChatFilter> ChatFilters;
     uint32 PanelRevision=0;
     double NextStateSave=0, NextCommand=0;
     bool CanResumeMeta = false, ResumeMetaPending = false;
@@ -133,6 +148,9 @@ public:
     bool ClickPluginRow(const FString& Id, const FString& RowId);
     bool ChangePluginControl(const FString& Id, const FString& ControlId, const TSharedPtr<FJsonValue>& Value);
     UFUNCTION() void ObservePluginChat(const FString& Text, const FString& Sender, int32 Type);
+    // Display-only mask: raw chat still reaches every reader and the chat log file.
+    uint8 FilterPluginChatWindows(const FString& Text, const FString& Sender, int32 Type) const;
+    bool ValidatePluginChatFilters(const TArray<TSharedPtr<FJsonValue>>& Values, TArray<FACEPluginChatFilter>& Filters, FString& Error) const;
     TSharedRef<SWidget> MakeCompanionPanel(const FString& Id);
     TArray<FACEPluginMarker> GetPluginMarkers() const;
     void ToggleUCM();
@@ -405,6 +423,8 @@ private:
     TMap<int32, FACEAppraisalInfo> Appraisals;
     TSharedPtr<FJsonObject> CachedSpeciesNames;
     TMap<int32, double> CorpseFirstSeen;
+    struct FLootedCorpse { FACEPosition Position; double LastSeen=0; };
+    TMap<int32, FLootedCorpse> LootedCorpses;
     TMap<int32, double> AppraisalRequests;
     TArray<TSharedPtr<FJsonValue>> CachedInventory;
     uint64 InventoryRevision = MAX_uint64, InventoryAppraisalRevision = MAX_uint64;

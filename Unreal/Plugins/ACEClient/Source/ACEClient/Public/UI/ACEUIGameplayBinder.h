@@ -74,6 +74,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEVRChatTest;
 	friend class AACEPlayerController;
 	friend class FACEChatParityTest;
+	friend class FACEPluginPublicAPITest;
 	friend class FACEEmoteTest;
 	friend class FACEUILayoutCommandsTest;
 	friend class FACEUIInteractionParityTest;
@@ -103,7 +104,9 @@ public:
 	void SetCombatSpellBar(int32 Tab);
 
 	/** Called each canvas tick after layout sync. */
-	void TickRefresh();
+	void TickRefresh(bool bRefreshDesktopHUD = true);
+	/** Presentation only; native VR HUDs do not consume these desktop overlays. */
+	void RefreshDesktopHUD();
 	bool InspectSpellAt(FVector2D CanvasPoint);
 
 	UFUNCTION()
@@ -1368,7 +1371,7 @@ private:
 	const TCHAR* GetStatSelectionFooter() const;
 	void SyncChatScrollbar(int32 Window = 0);
 	/** Show/hide + place ChatLogNewNonVisibleTextIndicator; jump-to-bottom on click. */
-	void SyncChatJumpIndicator();
+	void SyncChatJumpIndicator(int32 Window = 0);
 	/** Parse @/ slash commands (@ls, @tell, @e, …). Returns true if handled (do not Talk). */
 	bool TryDispatchMiscCommand(const FString& Cmd, const FString& Args);
 	bool TryDispatchUILayoutCommand(const FString& Cmd, const FString& Args);
@@ -1650,7 +1653,7 @@ private:
 	void ExpandCombatFloatyForWideContent();
 	void ExpandEnvFloatyForWideContent();
 	bool HitTestInventorySlot(FVector2D Absolute, int32& OutGuid, int32& OutSlotIndex) const;
-	bool HitTestPackSlot(FVector2D Absolute, int32& OutPackGuid) const;
+	bool HitTestPackSlot(FVector2D Absolute, int32& OutPackGuid, bool IncludeEmpty = false) const;
 	bool HitTestDollSlot(FVector2D Absolute, FString& OutSlotName, int64& OutMask) const;
 	void PostInventorySystemMessage(const FString& Text);
 	/** Show the retail-style yellow center-top transient banner. */

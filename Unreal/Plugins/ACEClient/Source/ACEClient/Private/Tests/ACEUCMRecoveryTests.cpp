@@ -466,6 +466,7 @@ bool FACEUCMResourcesTest::RunTest(const FString&)
     {
         P->SetBoolField(TEXT("refill_summons"),false);P->SetBoolField(TEXT("fill_mana_stones"),true);P->SetBoolField(TEXT("looting"),true);
         P->RemoveField(TEXT("mana_source_items")); // No manual pool and no loot profile required.
+        P->SetArrayField(TEXT("consumables"),{MakeShared<FJsonValueNumber>(999)}); // Other supplies must not exclude empty stones.
         auto Inv=S->GetArrayField(TEXT("inventory"));auto Donor=Inv[3];Inv.RemoveAt(3);
         Donor->AsObject()->SetNumberField(TEXT("count"),1);Donor->AsObject()->SetNumberField(TEXT("icon_effects"),1);Donor->AsObject()->SetNumberField(TEXT("workmanship"),7);
         S->SetArrayField(TEXT("inventory"),Inv);S->SetArrayField(TEXT("contents"),{Donor});S->SetNumberField(TEXT("container"),700);S->SetBoolField(TEXT("container_is_corpse"),true);
@@ -490,6 +491,7 @@ bool FACEUCMResourcesTest::RunTest(const FString&)
         S->SetNumberField(TEXT("time"),102);S->SetNumberField(TEXT("action_serial"),1);
         TestFalse(TEXT("Stone filling waits for actual contents"),Step(VM,S,P)->HasField(TEXT("action")));
         auto Stone=S->GetArrayField(TEXT("inventory"))[2]->AsObject();Stone->SetNumberField(TEXT("mana"),5000);Stone->SetBoolField(TEXT("mana_empty"),false);
+        P->RemoveField(TEXT("consumables")); // Gear recharge retains its separate selected-consumable policy.
         auto Inv=S->GetArrayField(TEXT("inventory"));Inv.Pop();S->SetArrayField(TEXT("inventory"),Inv);
         I=Step(VM,S,P);TestEqual(TEXT("Newly filled stone recharges gear through player-targeting use"),I->GetStringField(TEXT("action")),FString(TEXT("use_item")));
         TestEqual(TEXT("Uses the filled stone"),I->GetNumberField(TEXT("item")),30.);

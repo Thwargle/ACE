@@ -136,6 +136,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACELoadingTransitionTest;
 	friend class FACELedgeStairsTest;
 	friend class FACELedgeSafetyTest;
+	friend class FACEMansionEdgesTest;
 	friend class FACEFortTethStairsTest;
 	friend class FACEBuildingPassageTest;
 	friend class FACERunSpeedParityTest;

@@ -82,11 +82,13 @@ void UACEUIGameplayBinder::UpdateInventoryContainerDropFeedback(FVector2D Canvas
 			return;
 		}
 	}
-	for (int32 I=0; I<PackSlotBgs.Num() && I<PackSlotGuids.Num(); ++I)
+	FACEWorldObject DragItem;const bool DragIsPack=Client->GetWorldObject(InvDragGuid,DragItem)
+        && ((DragItem.ItemType & ACEItemType::Container) || (DragItem.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot));
+	for (int32 I=0; I<PackSlots.Num() && I<PackSlotGuids.Num(); ++I)
 	{
-		auto* Cell=PackSlotBgs[I].Get();
+		auto* Cell=PackSlotBgs.IsValidIndex(I) && PackSlotBgs[I] && PackSlotBgs[I]->IsVisible() ? PackSlotBgs[I].Get() : PackSlots[I].Get();
 		if (!Cell || !Cell->IsVisible() || !Canvas->IsWidgetExposedAt(Cell,Absolute)) continue;
-		const bool Reorder = InvDragPackSlotIndex != INDEX_NONE && InvDragGuid != Client->GetPlayerGuid();
+		const bool Reorder = (InvDragPackSlotIndex != INDEX_NONE || DragIsPack) && InvDragGuid != Client->GetPlayerGuid();
 		const int32 Container = Reorder ? Client->GetPlayerGuid() : PackSlotGuids[I];
 		Mark(Cell, CanMoveInventoryAmountToContainer(InvDragGuid,Container,Amount), !Reorder, TEXT("InventoryPanel_Field"));
 		return;

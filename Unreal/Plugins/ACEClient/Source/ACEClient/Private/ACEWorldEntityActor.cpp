@@ -982,6 +982,7 @@ void AACEWorldEntityActor::UpdateHeldAttachmentPose()
 
 FVector AACEWorldEntityActor::ResolvePredictedMovement(const FVector& From, const FVector& Destination, TOptional<bool> Grounded) const
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_RemoteCollision);
 	if (!GetWorld() || IsCorpse() || (PhysicsState & ACEPhysicsState::Missile)
 		|| (!bIsPlayer && !(ItemType & ACEItemType::Creature))) return Destination;
 	const float Scale = GetActorScale3D().GetAbsMax();
@@ -1065,6 +1066,11 @@ FVector AACEWorldEntityActor::ResolvePredictedMovement(const FVector& From, cons
 			if(Blocked && !Stepped)Resolved=ACEBodySweep::SlideGrounded(*GetWorld(),Position,Next+Offset,Hit,Shape,Query)-Offset;
 			if(FollowGround && !Support(FVector2D(Resolved)))break;
 			if(FollowGround && !Stepped && Sample(FVector2D(Resolved),Ground))Resolved.Z=Ground+1.f;
+			// No actor or collision geometry can move during this synchronous
+			// loop. Once a substep makes no progress, retrying the same step up
+			// to 32 times cannot free it. Long frames otherwise multiply the
+			// cost of every creature trapped against a wall or crowded doorway.
+			if((Resolved+Offset).Equals(Position,.001f))break;
 			Position=Resolved+Offset;
 		}
 		return Position-Offset;
@@ -1643,6 +1649,7 @@ void AACEWorldEntityActor::EndRemoteVRRoot()
 
 bool AACEWorldEntityActor::TraceGroundZ(const FVector& AtLocation, float& OutGroundZ, bool bCreatureSupport) const
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_RemoteGround);
 	UWorld* World = GetWorld();
 	if (!World)
 	{

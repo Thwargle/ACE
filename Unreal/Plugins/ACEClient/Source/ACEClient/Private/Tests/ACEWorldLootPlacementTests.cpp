@@ -199,6 +199,16 @@ bool FACEWorldLootPlacementTest::RunTest(const FString&)
         TestFalse(TEXT("Confirmation clears the pending transfer"),Session->IsInventoryTransferPending());
         PC->ClearServerMoveTo();Session->PendingInventoryTransfers.Reset();Session->WorldObjects.Remove(Token.Guid);Entity->Destroy();
     }
+    {
+        FACEWorldObject Bag;Bag.Guid=0x71003100;Bag.Name=TEXT("Backpack");Bag.ItemType=ACEItemType::Container;
+        Bag.ObjectDescriptionFlags=ACEObjectDescFlag::Openable;Bag.ItemUseable=32;Bag.bHasPosition=true;
+        Bag.Position=Session->PlayerPosition;Bag.Position.Location.X+=2;
+        Session->WorldObjects.Add(Bag.Guid,Bag);Client->SelectObject(Bag.Guid);Session->CachedC2SPackets.Reset();
+        PC->InteractWithSelectedObject();
+        TestEqual(TEXT("F picks up a portable openable backpack"),CountAction(ACEGameAction::PutItemInContainer),1);
+        TestEqual(TEXT("F does not open a backpack left on the ground"),CountAction(ACEGameAction::Use),0);
+        Session->PendingInventoryTransfers.Reset();Session->WorldObjects.Remove(Bag.Guid);
+    }
     PC->UnPossess();Pawn->Destroy();PC->Destroy();
     return !HasAnyErrors();
 }

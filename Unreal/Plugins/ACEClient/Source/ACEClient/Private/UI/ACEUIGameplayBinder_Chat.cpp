@@ -600,7 +600,7 @@ void UACEUIGameplayBinder::RefreshChatRowLayout(int32 Window)
 		: TEXT("RootGameplay_FloatyMainChat_Field");
 	const auto LogEl = Manager->FindElementUnder(Root, TEXT("ChatLog"));
 	if (!Log || !LogEl) return;
-	const float Width = FMath::Max(1.f, float(LogEl->Width) - (Window ? 4.f : 18.f));
+	const float Width = FMath::Max(1.f, float(LogEl->Width) - 18.f);
 	const FVector2D Scale = Canvas->GetLastScale2D();
 	const uint32 FontId = ACERuntimeOptions::ChatFontId();
 	if (ChatRowWidths[Window] == Width && ChatRowScales[Window] == Scale && ChatRowFontIds[Window] == FontId) return;
@@ -689,11 +689,19 @@ void UACEUIGameplayBinder::AppendChatLineToLog(int32 Window, const FString& Line
 	CastChecked<UACERetailTextBlock>(Row)->SetRetailElement(Canvas->GetResourceResolver(), nullptr,
 		ChatRowScales[Window], ChatRowWidths[Window], false);
 	Log->AddChild(Row);
+	// At the history cap, removing the oldest row shifts every later row up.
+	// Preserve the reader's visible line instead of preserving a pixel offset
+	// into a different set of messages. This applies to all five chat windows.
+	const bool Stick = Window == 0 ? bChatStickToBottom : bFloatyChatStickToBottom[Window-1];
+	float ReadingOffset = Log->GetScrollOffset();
+	bool Trimmed = false;
 	if (Window <= 0)
 	{
 		++ChatLineCount;
 		while (ChatLineCount > MaxChatLines && Log->GetChildrenCount() > 0)
 		{
+			ReadingOffset -= Log->GetChildAt(0)->GetDesiredSize().Y;
+			Trimmed = true;
 			Log->RemoveChildAt(0);
 			--ChatLineCount;
 		}
@@ -713,11 +721,14 @@ void UACEUIGameplayBinder::AppendChatLineToLog(int32 Window, const FString& Line
 		++Count;
 		while (Count > MaxChatLines && Log->GetChildrenCount() > 0)
 		{
+			ReadingOffset -= Log->GetChildAt(0)->GetDesiredSize().Y;
+			Trimmed = true;
 			Log->RemoveChildAt(0);
 			--Count;
 		}
 		if (bFloatyChatStickToBottom[Window-1]) Log->ScrollToEnd();
 	}
+	if (!Stick && Trimmed) Log->SetScrollOffset(FMath::Max(0.f,ReadingOffset));
 	if (!ClickSender.IsEmpty())
 	{
 		ChatRowSenders.Add({ Row, ClickSender, Window });
@@ -754,7 +765,7 @@ void UACEUIGameplayBinder::PlaceFloatyChatOverlays()
 			if (bOn && LogEl.IsValid())
 			{
 				Log->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
-				Canvas->PlaceWidgetAtElement(Log, LogEl, 100530, FMargin(2.f, 2.f, 2.f, 2.f));
+				Canvas->PlaceWidgetAtElement(Log, LogEl, 100530, FMargin(16.f, 2.f, 2.f, 2.f));
 				RefreshChatRowLayout(W);
 				if (bFloatyChatStickToBottom[W-1])
 				{
@@ -762,6 +773,7 @@ void UACEUIGameplayBinder::PlaceFloatyChatOverlays()
 					if (FMath::Abs(Log->GetScrollOffset()-End)>.5f) Log->SetScrollOffset(End);
 				}
 				SyncChatScrollbar(W);
+				SyncChatJumpIndicator(W);
 			}
 			else
 			{

@@ -104,6 +104,9 @@ bool FACEPluginLootIconsTest::RunTest(const FString&)
         if(!TestEqual(TEXT("Native corpse contains fixture item"),Contents.Num(),1))return false;
         auto Record=Contents[0]->AsObject();const auto Ints=Record->GetObjectField(TEXT("int_properties"));
         TestEqual(TEXT("Rendering icon retains the full texture DID"),Record->GetNumberField(TEXT("icon")),double(0x06001234));
+        TestEqual(TEXT("Lua item icons receive the full overlay DID"),Record->GetNumberField(TEXT("icon_overlay")),double(Item.IconOverlayId));
+        TestEqual(TEXT("Lua item icons receive the full underlay DID"),Record->GetNumberField(TEXT("icon_underlay")),double(Item.IconUnderlayId));
+        TestEqual(TEXT("Lua item icons receive inventory enchantment effects"),Record->GetNumberField(TEXT("ui_effects")),double(uint32(Item.UiEffects)));
         TestEqual(TEXT("Decal Icon is its packed index"),Ints->GetNumberField(TEXT("218103809")),double(0x1234));
         TestEqual(TEXT("Decal level overlay is its packed index"),Ints->GetNumberField(TEXT("218103849")),double(Level?27699+Level:0));
         auto Intent=Decision(State);if(!Intent)return false;
@@ -126,6 +129,37 @@ bool FACEPluginLootIconsTest::RunTest(const FString&)
     if(TestEqual(TEXT("Custom item moves into native inventory snapshot"),Inventory.Num(),1))
         TestEqual(TEXT("Inventory uses the same Decal icon conversion"),Inventory[0]->AsObject()->GetObjectField(TEXT("int_properties"))->GetNumberField(TEXT("218103849")),double(0x23456));
     TestEqual(TEXT("Native overlay DID remains intact"),Session->WorldObjects[Custom.Guid].IconOverlayId,int32(0x06023456));
+    Custom.ItemType=ACEItemType::ManaStone;Session->WorldObjects[Custom.Guid]=Custom;
+    FACEAppraisalInfo StoneInfo;StoneInfo.bSuccess=true;StoneInfo.IntProperties.Add(107,0);
+    Host->Appraisals.Add(Custom.Guid,StoneInfo);++Session->InventoryDataRevision;
+    State=Host->Snapshot();
+    TestTrue(TEXT("An explicit zero mana quality is an empty stone"),State->GetArrayField(TEXT("inventory"))[0]->AsObject()->GetBoolField(TEXT("mana_empty")));
+    Corpse.Name=TEXT("Corpse");Corpse.bHasPosition=true;Corpse.Position=Session->PlayerPosition;
+    Session->WorldObjects[Corpse.Guid]=Corpse;
+    FACEClientPlugin Plugin;Plugin.Id=TEXT("ucm");
+    auto Close=MakeShared<FJsonObject>();Close->SetBoolField(TEXT("completed"),true);
+    Host->ExecuteInventory(Plugin,Close,TEXT("close_corpse"));
+    TestTrue(TEXT("Completed corpse recorded outside the Lua VM"),Host->LootedCorpses.Contains(Corpse.Guid));
+    Host->ObserveTargetDeleted(Corpse.Guid);Session->WorldObjects.Remove(Corpse.Guid);
+    TestTrue(TEXT("Visibility release does not forget a looted corpse"),Host->LootedCorpses.Contains(Corpse.Guid));
+    Host->ObserveTargetCreated(Corpse);Session->WorldObjects.Add(Corpse.Guid,Corpse);
+    TestTrue(TEXT("Returning to the same corpse preserves history"),Host->LootedCorpses.Contains(Corpse.Guid));
+    State=Host->Snapshot();const auto& Seen=State->GetArrayField(TEXT("corpses"));
+    if(TestEqual(TEXT("Native snapshot includes completed corpse"),Seen.Num(),1))
+        TestTrue(TEXT("A fresh UCM VM receives completed-corpse history"),Seen[0]->AsObject()->GetBoolField(TEXT("looted")));
+    Corpse.Position.Location.X+=1;Host->ObserveTargetCreated(Corpse);
+    TestFalse(TEXT("Reused GUID at a new position is eligible again"),Host->LootedCorpses.Contains(Corpse.Guid));
+    Plugin.Profile=MakeShared<FJsonObject>();Plugin.Permissions.Add(TEXT("loot"));
+    auto Completed=MakeShared<FJsonObject>();Completed->SetNumberField(TEXT("completed_corpse"),uint32(Corpse.Guid));
+    Host->Execute(Plugin,Completed);
+    TestTrue(TEXT("Confirmed last-item receipt records a corpse already closed by the server"),Host->LootedCorpses.Contains(Corpse.Guid));
+    FACEWorldObject Pet;Pet.Guid=40;Pet.ItemType=ACEItemType::Creature;Pet.bHasPosition=true;
+    Pet.Position=Session->PlayerPosition;Pet.PetOwnerId=Self.Guid;Session->WorldObjects.Add(Pet.Guid,Pet);
+    TestTrue(TEXT("Living pet blocks replacement"),Host->Snapshot()->GetBoolField(TEXT("owned_pet")));
+    Session->WorldObjects[Pet.Guid].bDying=true;
+    TestFalse(TEXT("Death animation no longer blocks the next eligible summon"),Host->Snapshot()->GetBoolField(TEXT("owned_pet")));
+    Session->WorldObjects[Pet.Guid].bDying=false;Session->WorldObjects[Pet.Guid].bHasPosition=false;
+    TestFalse(TEXT("Retained positionless pet record does not block summoning forever"),Host->Snapshot()->GetBoolField(TEXT("owned_pet")));
     return true;
 }
 #endif

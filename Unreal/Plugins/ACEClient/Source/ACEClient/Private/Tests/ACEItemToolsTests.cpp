@@ -33,6 +33,18 @@ bool FACEItemToolsTest::RunTest(const FString&)
     auto Step=[&](FACEPluginVM& VM,auto S,auto P){TSharedPtr<FJsonObject> I;Error.Empty();const bool OK=VM.Step(S,P,I,Error);TestTrue(*(FString(TEXT("Policy step: "))+Error),OK);return I?I:MakeShared<FJsonObject>();};
     auto Action=[](auto I){return ACEItemTools::String(I,TEXT("action"));};
     {
+        FACEPluginVM VM;VM.Load(Source,Error);auto S=Snapshot(),P=Profile();
+        P->SetStringField(TEXT("mode"),TEXT("shop"));P->SetStringField(TEXT("buy_name"),TEXT("Scarab"));P->SetNumberField(TEXT("buy_wcid"),200);
+        P->SetNumberField(TEXT("buy_limit"),5);P->SetBoolField(TEXT("server_bank"),true);S->SetNumberField(TEXT("it_currency"),0);
+        TestEqual(TEXT("Bank purchases send a normal server-validated buy without physical coins"),Action(Step(VM,S,P)),FString(TEXT("it_buy")));
+        S->SetNumberField(TEXT("action_serial"),1);
+        TestTrue(TEXT("Bank purchase requires actual item receipt"),Action(Step(VM,S,P)).IsEmpty());
+        auto Inv=S->GetArrayField(TEXT("inventory"));Inv.Add(MakeShared<FJsonValueObject>(ITJson(TEXT(R"({"id":50,"wcid":200,"name":"Scarab","count":5,"transferable":true})"))));
+        S->SetArrayField(TEXT("inventory"),Inv);
+        auto Result=Step(VM,S,P);TestEqual(TEXT("Supplies confirm a bank purchase without a coin decrease"),Action(Result),FString(TEXT("stop")));
+        TestTrue(TEXT("Bank purchase completes successfully"),ACEItemTools::String(Result,TEXT("status")).Contains(TEXT("Complete")));
+    }
+    {
         FACEPluginVM VM;TestTrue(TEXT("Item Tools policy loads"),VM.Load(Source,Error));auto S=Snapshot(),P=Profile();P->SetNumberField(TEXT("give_limit"),5);
         auto I=Step(VM,S,P);TestEqual(TEXT("Give takes first stack"),I->GetNumberField(TEXT("amount")),3.);
         S->SetNumberField(TEXT("action_serial"),1);TestFalse(TEXT("UseDone alone cannot confirm a transfer"),Step(VM,S,P)->HasField(TEXT("action")));
@@ -216,6 +228,7 @@ bool FACEItemToolsTest::RunTest(const FString&)
             }
             S.WorldObjects.Add(Item.Guid,Item);
         }
+        for(const TCHAR* SalvageName:{TEXT("Steel Salvage (100)"),TEXT("Green Garnet Salvage (100)")})
         {
             const auto SavedObjects=S.WorldObjects;
             S.WorldObjects[20].bIsPlayer=true;
@@ -223,20 +236,25 @@ bool FACEItemToolsTest::RunTest(const FString&)
             for(int N=0;N<14;++N)
             {
                 FACEWorldObject Salvage;Salvage.Guid=100+N;Salvage.ContainerId=N<8?Self.Guid:Bag.Guid;
-                Salvage.Name=TEXT("Steel Salvage (100)");Salvage.ItemType=0x40000000;
+                Salvage.Name=SalvageName;Salvage.ItemType=0x40000000;
                 Salvage.StackSize=1;Salvage.Bonded=N<8?0:1;S.WorldObjects.Add(Salvage.Guid,Salvage);
             }
             ++S.InventoryDataRevision;
-            FACEPluginVM VM;VM.Load(Source,Error);auto Settings=Profile();Settings->SetStringField(TEXT("give_name"),TEXT("Steel Salvage (100)"));
+            FACEPluginVM VM;VM.Load(Source,Error);auto Settings=Profile();Settings->SetStringField(TEXT("give_name"),SalvageName);
+            Settings->SetNumberField(TEXT("give_limit"),0);Settings->SetNumberField(TEXT("delay_ms"),250);
             auto Snap=[&](double Time){auto J=H->ItemToolsSnapshot();J->SetNumberField(TEXT("time"),Time);J->SetBoolField(TEXT("ready"),true);return J;};
             for(int N=0;N<14;++N)
             {
-                auto I=Step(VM,Snap(200+N),Settings);
+                auto I=Step(VM,Snap(200+N*0.25),Settings);
                 if(!TestEqual(TEXT("All fourteen salvage bags across packs are offered"),Action(I),FString(TEXT("it_give"))))break;
+                TestEqual(TEXT("Each salvage bag counts as one item"),I->GetNumberField(TEXT("amount")),1.);
                 FACEBinaryWriter Remove;Remove.WriteUInt32(int32(I->GetNumberField(TEXT("item"))));FACEBinaryReader Update(Remove.GetData());S.HandleInventoryRemoveObject(Update);
+                TestFalse(TEXT("Acknowledging a transfer starts the configured pause"),Step(VM,Snap(200+N*0.25),Settings)->HasField(TEXT("action")));
+                if(N<13)TestFalse(TEXT("250 ms delay prevents an early second transfer"),Step(VM,Snap(200+N*0.25+0.125),Settings)->HasField(TEXT("action")));
             }
             auto I=Step(VM,Snap(215),Settings);
             TestEqual(TEXT("Give-all finishes after all fourteen confirmations"),I->GetNumberField(TEXT("completed")),14.);
+            TestEqual(TEXT("Give-all stops cleanly"),Action(I),FString(TEXT("stop")));
             S.WorldObjects=SavedObjects;++S.InventoryDataRevision;
         }
         {
@@ -266,6 +284,13 @@ bool FACEItemToolsTest::RunTest(const FString&)
         TestTrue(TEXT("Empty pack can be transferred"),ACEItemTools::Transferable(C,Pack));
         FACEWorldObject Stock;Stock.Guid=80;Stock.WeenieClassId=200;Stock.MaxStackSize=100;Stock.VendorQuantityAvailable=-1;
         TestEqual(TEXT("Purchase capacity includes the empty side pack"),ACEItemTools::PurchaseRoom(C,Stock),100);
+        Stock.Name=TEXT("Scarab");Stock.Value=10;S.OpenVendorGuid=40;S.VendorMerchandise={Stock};S.VendorSellRate=1;
+        auto Buy=ITJson(TEXT(R"({"action":"it_buy","vendor":40,"item":80,"amount":5})"));
+        S.CachedC2SPackets.Reset();H->ExecuteItemTools(*P,Buy);
+        TestEqual(TEXT("Ordinary purchases still require physical currency"),CountAction(ACEGameAction::Buy),0);
+        P->Profile->SetBoolField(TEXT("server_bank"),true);H->ExecuteItemTools(*P,Buy);
+        TestEqual(TEXT("Server bank opt-in reaches native Buy without inventing coins"),CountAction(ACEGameAction::Buy),1);
+        P->Profile->SetBoolField(TEXT("server_bank"),false);S.CachedC2SPackets.Reset();
         Stock.ItemType=ACEItemType::Container;Stock.MaxStackSize=1;
         TestEqual(TEXT("Backpack purchases use pack slots"),ACEItemTools::PurchaseRoom(C,Stock),1);
         S.WorldObjects[Self.Guid].ContainersCapacity=1;

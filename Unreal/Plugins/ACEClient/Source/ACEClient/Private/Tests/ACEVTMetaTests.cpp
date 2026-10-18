@@ -183,6 +183,22 @@ bool FACEVTMetaTest::RunTest(const FString&)
         auto EquipProfile=Base(ACEVTProfile::Convert(MetaDocument({RuleMeta(1,7,NumMeta(0),PropsMeta(JSONMeta(TEXT(R"({"e":"actiontryequipanywand[]"})"))),TEXT("Default"))}),Issues));
         Wand->SetBoolField(TEXT("equipped"),false);FACEPluginVM EquipVM;EquipVM.Load(Script,Error);EquipVM.Step(S,EquipProfile,Intent,Error);
         if(Intent)TestEqual(TEXT("Equip expression takes equipment step"),Intent->GetStringField(TEXT("action")),FString(TEXT("equip")));
+        auto Inventory=S->GetArrayField(TEXT("inventory"));
+        Inventory.Add(MakeShared<FJsonValueObject>(JSONMeta(TEXT(R"({"id":20,"wcid":20,"name":"Essence","type":128,"identified":true,"pet_device":true})"))));
+        S->SetArrayField(TEXT("inventory"),Inventory);
+        for(uint32 Selected:{20u,999u})
+        {
+            EquipProfile->SetArrayField(TEXT("weapon_items"),{MakeShared<FJsonValueNumber>(Selected)});
+            FACEPluginVM PetPool;TestTrue(TEXT("Meta pet-pool policy loads"),PetPool.Load(Script,Error));
+            TestTrue(TEXT("Meta equipment expression executes"),PetPool.Step(S,EquipProfile,Intent,Error));
+            if(!TestTrue(TEXT("Meta returns an intent"),Intent.IsValid()))continue;
+            if(Selected==20)
+            {
+                TestEqual(TEXT("Essence-only selection permits a meta to equip a wand"),Intent->GetStringField(TEXT("action")),FString(TEXT("equip")));
+                TestEqual(TEXT("Meta equips the wand, not the essence"),Intent->GetNumberField(TEXT("item")),8.);
+            }
+            else TestFalse(TEXT("Missing weapon selection stays restrictive for metas"),Intent->HasField(TEXT("action")));
+        }
     }
     // Real typed meta table -> compiler -> sandbox. Calls preserve ordered actions,
     // timers fire once per state entry, expressions use the VT bracket syntax.

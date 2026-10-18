@@ -391,11 +391,11 @@ void UACEPluginSubsystem::Discover()
             if (Permissions) for (const auto& V : *Permissions)
             {
                 const FString Permission = V->AsString();
-                if (Permission != TEXT("profiles") && Permission != TEXT("data") && Permission != TEXT("chat") && Permission != TEXT("state") && Permission != TEXT("ui") && Permission != TEXT("markers") && Permission != TEXT("waypoint") && Permission != TEXT("messaging") && Permission != TEXT("commands") && Permission != TEXT("local_tools") && Permission != TEXT("local_cosmetics") && Permission != TEXT("cast") && Permission != TEXT("combat") && Permission != TEXT("navigation") && Permission != TEXT("inventory") && Permission != TEXT("loot") && Permission != TEXT("say") && Permission != TEXT("fellowship") && Permission != TEXT("confirm")) Valid = false;
+                if (Permission != TEXT("profiles") && Permission != TEXT("data") && Permission != TEXT("chat") && Permission != TEXT("chat_filter") && Permission != TEXT("state") && Permission != TEXT("ui") && Permission != TEXT("markers") && Permission != TEXT("waypoint") && Permission != TEXT("messaging") && Permission != TEXT("commands") && Permission != TEXT("local_tools") && Permission != TEXT("local_cosmetics") && Permission != TEXT("cast") && Permission != TEXT("combat") && Permission != TEXT("navigation") && Permission != TEXT("inventory") && Permission != TEXT("loot") && Permission != TEXT("say") && Permission != TEXT("fellowship") && Permission != TEXT("confirm")) Valid = false;
                 else P->Permissions.AddUnique(Permission);
             }
             if(P->Companion)for(const auto& Permission:P->Permissions)
-                if(!TArray<FString>{TEXT("chat"),TEXT("state"),TEXT("ui"),TEXT("markers"),TEXT("waypoint"),TEXT("messaging"),TEXT("commands"),TEXT("profiles"),TEXT("data"),TEXT("say")}.Contains(Permission))Valid=false;
+                if(!TArray<FString>{TEXT("chat"),TEXT("chat_filter"),TEXT("state"),TEXT("ui"),TEXT("markers"),TEXT("waypoint"),TEXT("messaging"),TEXT("commands"),TEXT("profiles"),TEXT("data"),TEXT("say")}.Contains(Permission))Valid=false;
             if(P->LocalService)
             {
                 if(Number(M,TEXT("service_api"))!=1 || !P->Permissions.Contains(TEXT("local_cosmetics"))) Valid=false;
@@ -563,6 +563,7 @@ void UACEPluginSubsystem::Stop(const FString& Id, const FString& Reason, bool Pr
 {
     if (auto P = Find(Id))
     {
+        P->ChatFilters.Reset();
         const bool OwnsPolicy=P->IsPolicy()&&(P->Running||PolicyPlugin()==P);
         if(OwnsPolicy){RestoreWorldRendering();bTrackRouteMovement=false;RouteMovementSamples.Reset();bRouteMovementOverflow=false;}
         if(P->Companion){StopCompanion(*P,Reason);return;}
@@ -1552,6 +1553,17 @@ void UACEPluginSubsystem::Execute(FACEClientPlugin& P, const TSharedPtr<FJsonObj
         RuntimeRoute->SetBoolField(TEXT("loop_route"),Loop);RuntimeRoute->SetBoolField(TEXT("reverse_route"),Reverse);
     }
     const FString MetaState=String(I,TEXT("meta_state"));
+    if(P.Id==TEXT("ucm") && P.Permissions.Contains(TEXT("loot")))
+    {
+        const double Completed=Number(I,TEXT("completed_corpse"));
+        if(Completed>0 && Completed<=MAX_uint32 && FMath::FloorToDouble(Completed)==Completed)
+            if(auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>())
+            {
+                FACEWorldObject Corpse;
+                if(Client->GetWorldObject(int32(uint32(Completed)),Corpse)&&Corpse.IsCorpse())
+                    LootedCorpses.Add(Corpse.Guid,{Corpse.Position,FPlatformTime::Seconds()});
+            }
+    }
     LogUCMIntent(P,I);
     if(!MetaState.IsEmpty())P.MetaState=MetaState;
     if(I->HasTypedField<EJson::String>(TEXT("meta_status")))P.MetaStatus=String(I,TEXT("meta_status")).Left(1600);

@@ -666,6 +666,11 @@ bool FACECameraEdgeTest::RunTest(const FString& Parameters)
     auto Support=[](const FVector2D& P) { return P.X <= 0; };
     const FVector2D Straight=ACELedgeSlide::Resolve(FVector2D(-1,0),FVector2D(10,0),Support);
     TestTrue(TEXT("Head-on edge input does not bounce sideways"),Straight.X<=0 && FMath::Abs(Straight.Y)<0.001);
+    FVector2D LocalEdge(-1,0);
+    for(int32 I=0; I<20; ++I)
+        LocalEdge=ACELedgeSlide::Resolve(LocalEdge,FVector2D(10,0),Support,true);
+    TestTrue(TEXT("Rejected local edge steps retain the previous contact instead of creeping outward"),
+        LocalEdge.Equals(FVector2D(-1,0),.001));
     FVector2D At(-1,0);
     for (int32 I=0; I<100; ++I)
     {

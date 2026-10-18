@@ -16,6 +16,7 @@
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/EditableTextBox.h"
+#include "Components/NativeWidgetHost.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/ScrollBox.h"
@@ -47,6 +48,8 @@
 #include "Misc/Paths.h"
 #include "Styling/CoreStyle.h"
 #include "Widgets/SWidget.h"
+#include "Widgets/SLeafWidget.h"
+#include "Rendering/DrawElements.h"
 #if PLATFORM_WINDOWS
 #include "Windows/WindowsHWrapper.h"
 #include <shobjidl.h>
@@ -60,6 +63,33 @@ namespace
 	const FLinearColor Gold(.36f, .27f, .14f, 1);
 	const FLinearColor Muted(.58f, .54f, .46f, 1);
 	const FLinearColor LobbyTextColor(.88f, .85f, .77f, 1);
+	// Draw with Slate primitives so the eye works before DAT loads and in packages.
+	class SPasswordVisibilityIcon : public SLeafWidget
+	{
+	public:
+		SLATE_BEGIN_ARGS(SPasswordVisibilityIcon) {} SLATE_ATTRIBUTE(bool, Revealed) SLATE_END_ARGS()
+		void Construct(const FArguments& Args)
+		{
+			Revealed=Args._Revealed;
+			for(int32 I=0;I<=32;++I){const float T=I/32.f;Outline.Add(FVector2D(2+20*T,10-6*FMath::Sin(PI*T)));}
+			for(int32 I=32;I>=0;--I){const float T=I/32.f;Outline.Add(FVector2D(2+20*T,10+6*FMath::Sin(PI*T)));}
+			for(int32 I=0;I<=24;++I){const float A=2*PI*I/24.f;Pupil.Add(FVector2D(12+3*FMath::Cos(A),10+3*FMath::Sin(A)));}
+		}
+		FVector2D ComputeDesiredSize(float) const override {return FVector2D(24,20);}
+		int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& Out,int32 Layer,const FWidgetStyle& Style,bool Enabled) const override
+		{
+			const double Scale=FMath::Min(G.GetLocalSize().X/24.,G.GetLocalSize().Y/20.);
+			const auto Art=G.MakeChild(FVector2D(24,20),FSlateLayoutTransform(Scale,(G.GetLocalSize()-FVector2D(24,20)*Scale)*.5));
+			const auto Effect=ShouldBeEnabled(Enabled)?ESlateDrawEffect::None:ESlateDrawEffect::DisabledEffect;
+			const auto Color=LobbyTextColor*Style.GetColorAndOpacityTint();
+			for(const auto* Path:{&Outline,&Pupil})FSlateDrawElement::MakeLines(Out,Layer,Art.ToPaintGeometry(),*Path,Effect,Color,true,1.6f);
+			if(Revealed.Get())FSlateDrawElement::MakeLines(Out,Layer,Art.ToPaintGeometry(),{FVector2D(3,2),FVector2D(21,18)},Effect,Color,true,1.8f);
+			return Layer;
+		}
+	private:
+		TAttribute<bool> Revealed;
+		TArray<FVector2D> Outline,Pupil;
+	};
 	void ButtonStyle(UButton* Button, bool Accent)
 	{
 		const auto* Action=Cast<UACELoginActionButton>(Button);
@@ -336,6 +366,17 @@ void UACELoginWidget::EnsureDefaultLayout()
 	auto* PasswordColumn=WidgetTree->ConstructWidget<UVerticalBox>(); Credentials->AddChildToHorizontalBox(PasswordColumn)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	AccountBox=Field(UserColumn,TEXT("Username"),TEXT("AccountBox"));
 	PasswordBox=Field(PasswordColumn,TEXT("Password"),TEXT("PasswordBox"),true);
+	PasswordBox->RemoveFromParent();
+	auto* PasswordRow=WidgetTree->ConstructWidget<UHorizontalBox>(); AddLine(PasswordColumn,PasswordRow);
+	PasswordRow->AddChildToHorizontalBox(PasswordBox)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+	PasswordVisibilityButton=ActionButton(TEXT(""),TEXT("togglepassword"));
+	auto EyeStyle=PasswordVisibilityButton->GetStyle(); EyeStyle.SetNormalPadding(FMargin(8)); EyeStyle.SetPressedPadding(FMargin(8)); PasswordVisibilityButton->SetStyle(EyeStyle);
+	auto* Eye=WidgetTree->ConstructWidget<UNativeWidgetHost>(); Eye->SetVisibility(ESlateVisibility::HitTestInvisible);
+	Eye->SetContent(SNew(SPasswordVisibilityIcon).Revealed_Lambda([Box=TWeakObjectPtr<UEditableTextBox>(PasswordBox)](){return Box.IsValid()&&!Box->GetIsPassword();}));
+	PasswordVisibilityButton->SetContent(Eye);
+	auto* EyeWidth=WidgetTree->ConstructWidget<USizeBox>(); EyeWidth->SetWidthOverride(44); EyeWidth->SetContent(PasswordVisibilityButton);
+	PasswordRow->AddChildToHorizontalBox(EyeWidth)->SetPadding(FMargin(8,0,0,0));
+	SetPasswordVisible(false);
 	Row(Accounts,{{TEXT("Save account"),TEXT("saveaccount")},{TEXT("New account"),TEXT("newaccount")},{TEXT("Remove account"),TEXT("removeaccount")}});
 	AddLine(Accounts,Label(PLATFORM_LINUX ? TEXT("Passwords are kept for this session only. Enter them here after restarting.") : TEXT("Accounts are saved securely on this device."),14,true));
 	Row(Accounts,{{TEXT("Back to play"),TEXT("play")}});
@@ -526,6 +567,7 @@ void UACELoginWidget::RefreshServers()
 
 void UACELoginWidget::SelectServer(const FString& Id)
 {
+	SetPasswordVisible(false);
 	const FString AccountId = Profile.SelectedAccountId;
 	Profile.SelectedServerId=Id; Profile.SelectedAccountId=AccountId;
 	const auto* S=Profile.SelectedServer();
@@ -596,6 +638,7 @@ void UACELoginWidget::EditServer(bool bNew)
 
 void UACELoginWidget::DoLogin()
 {
+	SetPasswordVisible(false);
 	if (Updater && Updater->IsBusy()) { SetStatus(TEXT("Finish or cancel the update before logging in.")); return; }
 	// Check both files before authenticating: the cell index is deliberately
 	// deferred, so portal readiness alone can still lead to an empty world.
@@ -697,8 +740,22 @@ bool UACELoginWidget::ValidateGameFiles()
 	return false;
 }
 
+void UACELoginWidget::SetPasswordVisible(bool bVisible)
+{
+	if(PasswordBox)PasswordBox->SetIsPassword(!bVisible);
+	if(PasswordVisibilityButton)
+	{
+		PasswordVisibilityButton->SetToolTipText(FText::FromString(bVisible?TEXT("Hide password"):TEXT("Show password")));
+		if(auto* Eye=Cast<UNativeWidgetHost>(PasswordVisibilityButton->GetContent()))
+			if(auto Icon=Eye->GetContent())Icon->Invalidate(EInvalidateWidgetReason::Paint);
+	}
+}
+
 void UACELoginWidget::RunAction(const FString& Action, const FString& Value)
 {
+	if(Action==TEXT("togglepassword")){SetPasswordVisible(PasswordBox&&PasswordBox->GetIsPassword());return;}
+	// Reveal is temporary UI state, never a saved account preference.
+	if(Action==TEXT("play")||Action==TEXT("plugins")||Action==TEXT("updates")||Action==TEXT("files")||Action==TEXT("browser")||Action==TEXT("launch")||Action==TEXT("newaccount"))SetPasswordVisible(false);
 	if (Action==TEXT("quit"))
 	{
 		SaveLoginEntries();

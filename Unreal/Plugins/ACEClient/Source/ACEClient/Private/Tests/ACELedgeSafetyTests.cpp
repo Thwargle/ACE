@@ -16,6 +16,7 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/InputComponent.h"
+#include "ProceduralMeshComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
@@ -97,12 +98,20 @@ bool FACELedgeSafetyTest::RunTest(const FString&)
    if(!Run)PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::LeftShift,IE_Pressed,1.f));
   }
   PC->PlayerInput->ProcessInputStack({},Dt,false);
-  int32 AirFrames=0;
-  for(int32 I=0;I<FMath::CeilToInt(1.8f/Dt);++I){Tick(Dt);AirFrames+=PC->bJumpAirborne?1:0;}
+  int32 AirFrames=0,ReportedAirFrames=0;
+  for(int32 I=0;I<FMath::CeilToInt(1.8f/Dt);++I)
+  {
+   Tick(Dt);AirFrames+=PC->bJumpAirborne?1:0;ReportedAirFrames+=Session->bAutoPosContact?0:1;
+  }
   const FVector End=Pawn->GetActorLocation()-Origin-FVector(0,0,Half);
   TestEqual(*FString::Printf(TEXT("Walking/running stays grounded at ledge: pitch=%.0f vr=%d run=%d dt=%.3f end=%s"),Pitch,Tracked,Run,Dt,*End.ToString()),AirFrames,0);
+  TestEqual(TEXT("Blocked ledge never reports an invisible fall to the server"),ReportedAirFrames,0);
+  TestTrue(TEXT("Reported position agrees with the visible pawn's feet at the ledge"),
+   Session->GetPlayerPosition().ToUnrealLocation(100).Equals(Pawn->GetActorLocation()-FVector(0,0,Half),1.));
   AddInfo(FString::Printf(TEXT("Ledge matrix pitch=%.0f vr=%d run=%d dt=%.3f end=%s"),Pitch,Tracked,Run,Dt,*End.ToString()));
   TestTrue(*FString::Printf(TEXT("Ledge prevention permits approach pitch=%.0f vr=%d run=%d dt=%.3f"),Pitch,Tracked,Run,Dt),Pawn->GetActorLocation().X>Start.X+50);
+  if (Pitch==0.f)
+   TestTrue(TEXT("Grounded ledge position stays within retail's half-radius footprint"),End.X<=200+Radius*.5f+.5f);
   const double EdgeX=Pawn->GetActorLocation().X;
   if(Tracked) VR->MoveStick=FVector2D(0,-1);
   else
@@ -155,6 +164,21 @@ bool FACELedgeSafetyTest::RunTest(const FString&)
  for(int32 I=0;I<120;++I){Tick(1.f/30);SlideAir+=PC->bJumpAirborne?1:0;}
  TestEqual(TEXT("Wall slide cannot redirect a grounded move past its floor"),SlideAir,0);
  Wall->Destroy();
+ // A low-FPS frame can have supported endpoints on opposite sides of a gap.
+ // Checking only the destination must not turn walking into a jump.
+ auto* FarPlatform=Box(FVector(480,0,0),FVector(200,200,50));
+ for(bool Tracked:{false,true})for(float Dt:{1.f/90,.1f})
+ {
+  Place(Origin+FVector(210,0,50),Tracked);VR->Settings->bRun=true;
+  if(Tracked)VR->MoveStick=FVector2D(0,1);
+  else PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));
+  PC->PlayerInput->ProcessInputStack({},Dt,false);
+  for(int32 I=0;I<20;++I)Tick(Dt);
+  TestTrue(*FString::Printf(TEXT("Walking cannot bridge an open gap vr=%d dt=%.4f"),Tracked,Dt),
+   Pawn->GetActorLocation().X<=Origin.X+200+Radius*.5f+.5f);
+  TestFalse(TEXT("Blocked gap crossing retains ground contact"),PC->bJumpAirborne);
+ }
+ FarPlatform->Destroy();
  // A real Jump explicitly clears grounded contact and must still cross the edge.
  for(bool Tracked:{false,true})
  {
@@ -164,6 +188,48 @@ bool FACELedgeSafetyTest::RunTest(const FString&)
   TestTrue(TEXT("Intentional jump travels beyond the ledge"),Pawn->GetActorLocation().X>Origin.X+260);
   Place(Origin+FVector(500,0,400),Tracked);Tick(1.f/90);
   TestTrue(TEXT("Initially unsupported portal/spawn position can fall"),PC->bJumpAirborne);
+ }
+ // A real collision mesh must use retail's half-radius polygon footprint,
+ // rather than accepting the full sphere's larger rounded contact region.
+ Platform->Destroy();
+ auto* MeshOwner=World->SpawnActor<AActor>();
+ auto* Mesh=NewObject<UProceduralMeshComponent>(MeshOwner);MeshOwner->SetRootComponent(Mesh);
+ Mesh->bUseAsyncCooking=false;Mesh->SetCollisionResponseToAllChannels(ECR_Block);Mesh->RegisterComponent();
+ Mesh->CreateMeshSection(0,{FVector(-200,-200,50),FVector(200,-200,50),FVector(200,200,50),FVector(-200,200,50)},
+  {0,2,1,0,3,2},{},{},{},{},true);
+ MeshOwner->SetActorLocation(Origin);
+ float SupportZ=0;
+ TestTrue(TEXT("Retail footprint accepts a center 23 cm past a flat edge"),
+  ACEBodySweep::FindFootSupport(*World,Origin+FVector(223,0,50),48,50,Query,SupportZ,1,false,true));
+ TestTrue(TEXT("Supported flat polygon retains its plane instead of rolling down the rounded rim"),
+  FMath::IsNearlyEqual(SupportZ,float(Origin.Z+50),.1f));
+ TestFalse(TEXT("Retail footprint rejects a center 25 cm past a flat edge"),
+  ACEBodySweep::FindFootSupport(*World,Origin+FVector(225,0,50),48,50,Query,SupportZ,1,false,true));
+ auto* LowerFloor=Box(FVector(400,0,-80),FVector(300,200,10));
+ TestFalse(TEXT("Balcony below a rejected roof rim cannot override its half-step walkability check"),
+  ACEBodySweep::FindFootSupport(*World,Origin+FVector(225,0,50),48,150,Query,SupportZ,1,false,true));
+ TestTrue(TEXT("Two-sphere body can descend to a clear floor within authored full step-down"),
+  ACEBodySweep::FindFootSupport(*World,Origin+FVector(300,0,50),48,150,Query,SupportZ,1,false,true));
+ TestTrue(TEXT("Clear descent reaches the actual lower floor"),FMath::IsNearlyEqual(SupportZ,float(Origin.Z-70),.1f));
+ TestFalse(TEXT("Single-sphere body uses half-radius probe when authored step-down exceeds its diameter"),
+  ACEBodySweep::FindFootSupport(*World,Origin+FVector(300,0,50),48,150,Query,SupportZ,1,false,true,nullptr,true,1));
+ LowerFloor->Destroy();
+ Mesh->ComponentTags.Add(TEXT("ACEOutdoorTerrain"));
+ TestTrue(TEXT("Terrain supports the vertical low point inside the plateau"),
+  ACEBodySweep::FindFootSupport(*World,Origin+FVector(199,0,50),48,50,Query,SupportZ,1,false,true));
+ TestFalse(TEXT("Terrain rim behind the player is not support beyond the cliff"),
+  ACEBodySweep::FindFootSupport(*World,Origin+FVector(201,0,50),48,50,Query,SupportZ,1,false,true));
+ for(bool Tracked:{false,true})for(float Dt:{1.f/90,.1f})
+ {
+  Place(Origin+FVector(180,0,50),Tracked);VR->Settings->bRun=true;
+  if(Tracked)VR->MoveStick=FVector2D(0,1);
+  else PC->PlayerInput->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::W,IE_Pressed,1.f));
+  PC->PlayerInput->ProcessInputStack({},Dt,false);
+  int32 LostContact=0;
+  for(int32 I=0;I<30;++I){Tick(Dt);LostContact+=(!Session->bAutoPosContact || PC->bJumpAirborne)?1:0;}
+  TestTrue(TEXT("Terrain cliff stops the player while the vertical low point is still supported"),
+   Pawn->GetActorLocation().X<=Origin.X+200.1);
+  TestEqual(TEXT("Terrain edge keeps visual and reported ground contact"),LostContact,0);
  }
  return !HasAnyErrors();
 }

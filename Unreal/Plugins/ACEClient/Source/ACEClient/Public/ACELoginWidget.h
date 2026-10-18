@@ -131,6 +131,7 @@ protected:
 	UPROPERTY() TObjectPtr<UEditableTextBox> SearchBox;
 	UPROPERTY() TObjectPtr<UEditableTextBox> DatBox;
 	UPROPERTY() TObjectPtr<UEditableTextBox> AccountAliasBox;
+	UPROPERTY() TObjectPtr<UButton> PasswordVisibilityButton;
 	UPROPERTY() TObjectPtr<UBorder> ConfirmPanel;
 	UPROPERTY() TObjectPtr<UTextBlock> ConfirmText;
 	UPROPERTY() TObjectPtr<UButton> ACETypeButton;
@@ -153,6 +154,7 @@ protected:
 	void RefreshUpdateControls();
 	void RefreshServers();
 	void RefreshAccounts();
+	void SetPasswordVisible(bool bVisible);
 	void SelectServer(const FString& Id);
 	void EditServer(bool bNew);
 	bool StoreAccount();

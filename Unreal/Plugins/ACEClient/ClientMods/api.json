@@ -59,6 +59,7 @@
     "mode": "companion",
     "permissions": [
       "chat",
+      "chat_filter",
       "state",
       "ui",
       "markers",
@@ -68,6 +69,7 @@
     ],
     "features": [
       "chat_events",
+      "chat_filters",
       "chat_pagination",
       "character_state",
       "clickable_rows",
@@ -111,6 +113,7 @@
       "fellowship",
       "confirm",
       "chat",
+      "chat_filter",
       "state",
       "ui",
       "markers",
@@ -129,6 +132,7 @@
       "status",
       "state",
       "ui",
+      "chat_filters",
       "markers",
       "messages",
       "requests",
@@ -146,6 +150,7 @@
       "select",
       "progress",
       "icon",
+      "item_icon",
       "image",
       "row",
       "column",
@@ -201,6 +206,7 @@
       "ui_roots": 128,
       "ui_depth": 8,
       "ui_options": 256,
+      "chat_filters": 32,
       "service_requests_per_callback": 4,
       "service_interval_seconds": 0.5,
       "profile_bytes": 8388608,
@@ -685,6 +691,11 @@
     "permission": "ui (runtime only)",
     "fields": {
       "title": "single-line string; max 80 characters; empty uses manifest name",
+      "controls": "start_stop (default), toggle, or none; native lifecycle controls",
+      "start_label": "single-line string; max 40 characters; empty uses Start",
+      "stop_label": "single-line string; max 40 characters; empty uses Stop",
+      "settings": "boolean; show Settings and profiles section; default true",
+      "status": "boolean; show native status text; default true",
       "icon": "PNG filename in plugin images/; max 96 characters; empty uses native emblem",
       "window": {
         "opacity": "number 0..1; background/frame only; foreground controls remain readable",
@@ -700,5 +711,20 @@
     },
     "reset": "Empty object restores manifest defaults; omitted output retains runtime overrides",
     "aspect": "fit, centered, 26-pixel icon area"
+  },
+  "chat_filters": {
+    "permission": "chat_filter",
+    "output": "chat_filters",
+    "limit": 32,
+    "fields": {"id":"unique string, 1..64 characters", "contains":"literal substring, max 256", "prefix":"literal prefix, max 256", "exact":"literal complete raw_text, max 256", "sender":"optional exact sender; empty matches server output", "chat_type":"optional integer 0..63", "window":"-1/all or 0/main or 1..4/extra", "case_sensitive":"boolean; default false", "seconds":"optional expiration, >0 and <=300"},
+    "matching": "All supplied fields must match; at least one nonempty contains/prefix/exact is required",
+    "lifetime": "Omitted retains; empty array clears; stop/disable/reload/logout/character change clears",
+    "scope": "Incoming display only; raw plugin chat_events and chat log files remain intact"
+  },
+  "item_icon": {
+    "fields": ["icon", "overlay", "underlay", "effects", "item_type", "size", "text"],
+    "appearance": "Unsigned 32-bit values; complete texture DIDs; same compositors as inventory/Supply Ledger",
+    "snapshot_fields": ["icon", "icon_overlay", "icon_underlay", "ui_effects", "type"],
+    "size": "16..128 pixels; default 32"
   }
 }

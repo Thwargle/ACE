@@ -108,6 +108,21 @@ public:
   {
    // Authored Glenden Wood Dungeon drop, from ACViewer Locations.txt.
    Spawn.CellId=0x01E3033D;Spawn.Location=FVector(161,-150,0);
+   if(FParse::Param(FCommandLine::Get(),TEXT("ACEPerfGlendenHall")))
+   {
+    // Corridor in the reported video (approximately 79.40N, 100.73W).
+    // Resolve its real DAT volume rather than retaining the entrance cell.
+    const auto Info=Dat->GetLandblockInfo(0x01E30000);
+    if(!Info.IsValid())return;
+    for(uint32 I=0;I<Info->NumCells;++I)Dat->GetOrBuildEnvCellMesh(0x01E30100+I,100);
+    Spawn.Location=FVector(100,-60,.005);
+    uint32 Cell=0;
+    for(uint32 I=0;I<Info->NumCells && !Cell;++I)
+     if(Dat->IsPointInsideEnvCell(0x01E30100+I,Spawn.ToUnrealLocation(100)+FVector(0,0,100),100))Cell=0x01E30100+I;
+    if(!Cell)
+    {UE_LOG(LogTemp,Error,TEXT("Glenden hallway fixture is outside a DAT cell"));return;}
+    Spawn.CellId=Cell;
+   }
    if(!Dat->GetOrBuildEnvCellMesh(Spawn.CellId,100))return;
   }
   else if(Scene==TEXT("indoor"))
@@ -152,7 +167,8 @@ public:
   // while the asynchronous dungeon loads instead of predicting a fall in it.
   if(Scene==TEXT("wasps") || Scene==TEXT("glenden"))PC->bSyncPossessedPawn=false;
   int32 Count=Scene==TEXT("frozen")?0:Scene==TEXT("frozen-tuskers")?12:Scene==TEXT("swarm")?64:(Scene==TEXT("indoor") || Scene==TEXT("glenden"))?8:32;
-  if(Scene==TEXT("wasps"))
+  Run->bCrowdMotion=FParse::Param(FCommandLine::Get(),TEXT("ACEPerfCrowdMotion"));
+  if(Scene==TEXT("wasps") || (Scene==TEXT("glenden") && Run->bCrowdMotion))
   {
    FParse::Value(FCommandLine::Get(),TEXT("ACEPerfWaspCount="),Count);Count=FMath::Clamp(Count,1,128);
    FParse::Value(FCommandLine::Get(),TEXT("ACEPerfVolleyInterval="),Run->VolleyInterval);
@@ -176,7 +192,7 @@ public:
     ACECreatureFixtures::Apply(NPC,I);
     NPC.Position.Location=Spawn.Location+FVector((I%8-3.5)*.45,(I/8-3.5)*.45,0);
    }
-   if(Scene==TEXT("wasps"))
+   if(Scene==TEXT("wasps") || (Scene==TEXT("glenden") && Run->bCrowdMotion))
    {
     ACECreatureFixtures::Apply(NPC,2);NPC.SoundTableId=0x2000000E;NPC.PhysicsEffectTableId=0x34000022;
     // WCID 7105: clothing 10000564, White (61), shade .5.
@@ -195,7 +211,7 @@ public:
    Session->WorldObjects.Add(NPC.Guid,NPC);Client->OnObjectCreated.Broadcast(NPC);
    if(Scene==TEXT("frozen-tuskers"))Run->SnowCreatures.Add(NPC);
   }
-  if(Scene==TEXT("wasps") && FParse::Param(FCommandLine::Get(),TEXT("ACEPerfNetworkLag")))
+  if(!Run->Wasps.IsEmpty() && FParse::Param(FCommandLine::Get(),TEXT("ACEPerfNetworkLag")))
   {
    Run->LagSession=Session;Run->LagLink=MakeUnique<FACEWaspLagLink>(*Session);
    if(!Run->LagLink->Open()){UE_LOG(LogTemp,Error,TEXT("Wasp lag loopback transport failed"));return;}
@@ -253,7 +269,7 @@ public:
   Run->StartTime=FPlatformTime::Seconds();
   FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([Run](float){return Run->Tick();}));
   UE_LOG(LogTemp,Display,TEXT("ACE PerfScene %s: %d synthetic NPCs, 45-second warmup, %.0f-second sample."),*Scene,Count,
-   Scene==TEXT("wasps")?(Run->CastingSeconds>0?Run->CastingSeconds:60.f):30.f);
+   Run->CastingSeconds>0?Run->CastingSeconds:Run->Wasps.IsEmpty()?30.f:60.f);
  }
 private:
  TWeakObjectPtr<UWorld> World;
@@ -284,6 +300,8 @@ private:
  bool bCombatChat=false,bConfigPanel=false,bPanelOpened=false;
  double LastChat=0;
  bool bPlayerMotion=false,bMotionStarted=false,bWasAirborne=false;
+ bool bCrowdMotion=false;
+ double LastCrowdMotion=0;
  FVector PlayerOrigin=FVector::ZeroVector,PreviousPlayerPosition=FVector::ZeroVector;
  TSet<FKey> HeldKeys;
  int32 JumpCount=0,AirborneFrames=0,MovementFrames=0,MotionTarget=0,VolleyCount=0;
@@ -388,6 +406,16 @@ private:
  void TickWasps(double Now,double Elapsed)
  {
   if(Wasps.IsEmpty())return;
+  if(bCrowdMotion && Elapsed>15 && Now-LastCrowdMotion>=1)
+  {
+   LastCrowdMotion=Now;
+   FACEObjectMotionState Approach;
+   Approach.CurrentStyle=ACEMotion::StanceNonCombat;Approach.MovementType=6;
+   Approach.MoveToTargetGuid=0x7100F000;Approach.MoveToSpeed=1;
+   Approach.MoveToRunRate=1;Approach.MoveToFlags=0x65;
+   for(TActorIterator<AACEWorldEntityActor> It(World.Get());It;++It)
+    if(It->ACEGuid>0x7100F000 && It->ACEGuid<=0x7100F000+Wasps.Num())It->ApplyMotionState(Approach);
+  }
   // Warm shaders/meshes first, then compare idle, casts, stopped casts and death
   // in the same process. Movement is opt-in; no network traffic is sent.
   const int32 Phase=CastingSeconds>0 ? (Elapsed>20?1:0)

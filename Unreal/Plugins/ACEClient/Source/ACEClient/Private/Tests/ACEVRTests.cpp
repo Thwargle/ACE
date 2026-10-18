@@ -2029,6 +2029,24 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			VR->Head->SetRelativeRotation(FRotator::ZeroRotator);
 			for (int32 Frame=0;Frame<90;++Frame) VR->UpdateArms(1.f/90);
 			PollHands(); VR->UpdateArms();
+			// Untracked controllers must hide arms once, without recreating their
+			// render proxies on every subsequent headset frame.
+			const bool WasTracking = VR->bTracking, WasEntering = PC->bEnterWorldLoading, WasRevealing = PC->bWorldRevealActive;
+			VR->bTracking = true; PC->bEnterWorldLoading = PC->bWorldRevealActive = false;
+			VR->UpdateArms(); World->SendAllEndOfFrameUpdates(); FlushRenderingCommands();
+			TestTrue(TEXT("Tracking fixture has a live arm render state"), App->GetPartMesh(10)->IsVisible() && App->GetPartMesh(10)->IsRenderStateCreated());
+			Controllers.Connected = false; PollHands(); VR->UpdateArms();
+			World->SendAllEndOfFrameUpdates(); FlushRenderingCommands();
+			for (int32 Frame = 0; Frame < 3; ++Frame) VR->UpdateArms(1.f / 90.f);
+			for (int32 Part = 10; Part <= 15; ++Part)
+			{
+				TestFalse(TEXT("Untracked arm remains hidden"), App->GetPartMesh(Part)->IsVisible());
+				TestFalse(TEXT("Unchanged tracking does not recreate the arm render proxy"), App->GetPartMesh(Part)->IsRenderStateDirty());
+			}
+			Controllers.Connected = true; PollHands(); VR->UpdateArms();
+			for (int32 Part = 10; Part <= 15; ++Part)
+				TestTrue(TEXT("Tracking recovery reveals the arm immediately"), App->GetPartMesh(Part)->IsVisible());
+			VR->bTracking = WasTracking; PC->bEnterWorldLoading = WasEntering; PC->bWorldRevealActive = WasRevealing;
 			Wand.SetupId = 0x0200017C; Wand.ParentGuid = 100; Wand.ParentLocation = 1;
 			VR->Client->Session->WorldObjects[Wand.Guid] = Wand;
 			auto* WandActor = World->SpawnActor<AACEWorldEntityActor>(); WandActor->InitializeFromObject(Wand, 100, true);

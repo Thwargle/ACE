@@ -337,6 +337,19 @@ bool FACECustomObjectReplicationTest::RunTest(const FString&)
 	TestEqual(TEXT("Recreated world placement supersedes retained inventory ownership"), Session.WorldObjects[P.Guid].ContainerId, 0);
 
 	// Custom scenery can be physically visible while excluded from the UI.
+	{
+		FACEWorldObject Remains;Remains.Guid=1000;Remains.bHasPosition=true;Remains.ItemType=ACEItemType::Container;
+		Remains.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck|ACEObjectDescFlag::Openable;
+		Remains.InitialMotionCommand=ACEMotion::Dead;Remains.MotionTableId=0x09000001;
+		TestFalse(TEXT("An explicit remains pose is not replaced by chest Off"),Remains.UsesOnOffMotion());
+		TestFalse(TEXT("Nameless stuck scenery has no world UI selection"),Remains.IsSelectableWorldObject());
+		Remains.Name=TEXT("Quest remains");
+		TestTrue(TEXT("Named interactive remains stay selectable"),Remains.IsSelectableWorldObject());
+		Remains.ObjectDescriptionFlags=ACEObjectDescFlag::Openable;Remains.ItemType=ACEItemType::Container;
+		TestTrue(TEXT("An openable dropped backpack can be picked up"),Remains.IsWorldLootable());
+		Remains.ObjectDescriptionFlags|=ACEObjectDescFlag::Stuck;
+		TestFalse(TEXT("A fixed chest is still not portable"),Remains.IsWorldLootable());
+	}
 	Session.ClearWorldState(); P = FObjectPacket();
 	P.DescriptionFlags = ACEObjectDescFlag::UiHidden; Create();
 	TestTrue(TEXT("Create preserves server UIHidden flag"), Session.WorldObjects[P.Guid].IsUiHidden());

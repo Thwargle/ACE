@@ -158,6 +158,33 @@ bool FACEGroundItemPlacementTest::RunTest(const FString&)
     TestTrue(TEXT("Position placement does not replace an active animation frame"),Before.Equals(After,.001));
     TestEqual(TEXT("Position correction does not restart animated prop geometry or effects"),AnimatedApp->GetAppearanceRevision(),AnimatedRevision);
     Presenter->DestroySpawnedGuid(Animated.Guid);
+    // Retail set_description clears a setup default MTable when the server
+    // supplies zero. All authored human placements must remain static then.
+    TArray<uint8> HumanBytes;FACEDatSetupModel HumanSetup;
+    Dat->GetPortalDat()->ReadFile(0x02000001,HumanBytes);FACEDatCursor HumanCursor(HumanBytes);
+    if(!TestTrue(TEXT("Human decoration setup loads"),ACEDatUnpack::UnpackSetupModel(HumanCursor,HumanSetup)))return false;
+    FACEWorldObject Decoration;Decoration.Guid=++Guid;Decoration.SetupId=0x02000001;Decoration.ItemType=ACEItemType::Misc;
+    Decoration.bHasPosition=true;Decoration.Position=Animated.Position;Decoration.bHasServerPhysicsDescription=true;
+    Decoration.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck;
+    for(const auto& Placement:HumanSetup.PlacementFrames)
+    {
+        Decoration.PlacementId=Placement.Key;Session->WorldObjects.Add(Decoration.Guid,Decoration);
+        Presenter->SpawnOrUpdateEntity(Decoration,true);auto* DecoEntity=Presenter->FindEntityActor(Decoration.Guid);
+        if(!TestNotNull(TEXT("Decorative body actor exists"),DecoEntity))return false;
+        auto* DecoApp=DecoEntity->Appearance.Get();DecoApp->TickComponent(.5f,LEVELTICK_All,nullptr);
+        DecoApp->ApplyWorldObject(Decoration,100,true);DecoApp->TickComponent(.5f,LEVELTICK_All,nullptr);
+        TestFalse(TEXT("No server animation table means no standing idle"),DecoApp->bPlayIdleMotion);
+        for(int32 Part=0;Part<Placement.Value.Num();++Part)
+        {
+            const auto& Frame=Placement.Value[Part];const auto Q=Frame.GetRotation();
+            const FTransform Expected(FACEPosition::AceQuatToUnreal(Q.W,FVector(Q.X,Q.Y,Q.Z)),
+                FACEPosition::AceVectorToUnreal(FVector(Frame.GetTranslation()),100),FVector::OneVector);
+            FTransform Actual;
+            TestTrue(*FString::Printf(TEXT("Human placement %u part %d survives ticks and refresh"),Placement.Key,Part),
+                DecoApp->GetPartCurrentTransform(Part,Actual)&&Actual.Equals(Expected,.002));
+        }
+    }
+    Presenter->DestroySpawnedGuid(Decoration.Guid);
     return true;
 }
 #endif

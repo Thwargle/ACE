@@ -357,7 +357,9 @@ namespace ACEUCMPanelPrivate
         {
             auto* C=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();TSet<int32> Seen;
             const TCHAR* Key=Consumables?TEXT("consumables"):TEXT("weapon_items");
-            Heading(Consumables?TEXT("Recovery items"):TEXT("Equipment pool"),TEXT("An empty list allows automatic selection. Add individual weapons or supply types to restrict the pool. Refresh updates this list after inventory changes."));
+            Heading(Consumables?TEXT("Recovery items"):TEXT("Equipment pool"),Consumables
+                ?TEXT("An empty list allows automatic selection. Add supply types to restrict the pool. Refresh updates this list after inventory changes.")
+                :TEXT("Select weapons to restrict automatic equipment selection. Selecting only essences leaves weapon selection automatic. In a selected pool, only selected essences are summoned or refilled. An empty pool allows automatic selection of both. Refresh updates this list after inventory changes."));
             Add(Button(TEXT("Refresh inventory"),[this](){Rebuild();}));
             for(const auto& O:C->GetWorldObjects())
             {
@@ -687,7 +689,7 @@ namespace ACEUCMPanelPrivate
                 for(int I=0;I<9;++I)Elements->AddSlot()[ChoiceButton(Names[I],[this,I](){return Num(P(),TEXT("damage_type"))==(I==8?1024:I?1<<(I-1):0)||(I==8&&Num(P(),TEXT("damage_type"))==128);},[this,I](){P()->SetNumberField(TEXT("damage_type"),I==8?1024:I?1<<(I-1):0);Save();})];Add(Elements);
                 AttackSpellControls();
                 Heading(TEXT("Summoned pets"),TEXT("Add essences to the equipment list below. Uses server requirements, remaining charges and cooldowns."));
-                Add(Toggle(TEXT("summon_pets"),TEXT("Summon combat pets"),TEXT("Choose an eligible essence for nearby monsters; keep an existing pet active.")));
+                Add(Toggle(TEXT("summon_pets"),TEXT("Enable Summoning"),TEXT("Summon an eligible essence for nearby monsters when its cooldown expires. Works with Combat disabled; keeps an existing pet active.")));
                 Add(Toggle(TEXT("refill_summons"),TEXT("Refill summon essences"),TEXT("Use Encapsulated Spirit from your inventory to refill low-charge essences in the equipment pool. Works independently of automatic summoning.")));
                 Slider(TEXT("summon_refill_charges"),TEXT("Refill at or below remaining charges"),0,50,5,Accent,TEXT(" charges"));
                 Add(LiveButton([this](){return Num(P(),TEXT("pet_range_mode"))==1?TEXT("Pet range: custom"):TEXT("Pet range: attack distance");},[this](){P()->SetNumberField(TEXT("pet_range_mode"),Num(P(),TEXT("pet_range_mode"))==1?0:1);Save();}));

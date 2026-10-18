@@ -119,7 +119,7 @@ bool UACEPluginSubsystem::ValidatePluginUI(const TArray<TSharedPtr<FJsonValue>>&
             auto R=V->AsObject();const FString Id=S(R,TEXT("id")),Type=S(R,TEXT("type"),S(R,TEXT("action")).IsEmpty()?TEXT("text"):TEXT("button"));
             if(Id.IsEmpty()||Id.Len()>64||Ids.Contains(Id)||S(R,TEXT("text")).Len()>4096||S(R,TEXT("tooltip")).Len()>1024)
             {Error=TEXT("UI controls need unique IDs and bounded text");return false;}Ids.Add(Id);
-            if(!TArray<FString>{TEXT("text"),TEXT("button"),TEXT("checkbox"),TEXT("slider"),TEXT("number"),TEXT("input"),TEXT("select"),TEXT("progress"),TEXT("icon"),TEXT("image"),TEXT("row"),TEXT("column"),TEXT("section"),TEXT("tabs")}.Contains(Type))
+            if(!TArray<FString>{TEXT("text"),TEXT("button"),TEXT("checkbox"),TEXT("slider"),TEXT("number"),TEXT("input"),TEXT("select"),TEXT("progress"),TEXT("icon"),TEXT("item_icon"),TEXT("image"),TEXT("row"),TEXT("column"),TEXT("section"),TEXT("tabs")}.Contains(Type))
             {Error=TEXT("Unknown UI control: ")+Type;return false;}
             const FString Action=S(R,TEXT("action"));
             if(!Action.IsEmpty()&&!TArray<FString>{TEXT("event"),TEXT("select"),TEXT("waypoint"),TEXT("command")}.Contains(Action))
@@ -131,6 +131,16 @@ bool UACEPluginSubsystem::ValidatePluginUI(const TArray<TSharedPtr<FJsonValue>>&
             }
             if(Type==TEXT("icon"))
             {const double Icon=N(R,TEXT("icon"));if(Icon<0||Icon>MAX_uint32||Icon!=FMath::FloorToDouble(Icon)){Error=TEXT("Invalid DAT icon ID");return false;}}
+            if(Type==TEXT("item_icon"))
+            {
+                for(const TCHAR* Field:{TEXT("icon"),TEXT("overlay"),TEXT("underlay"),TEXT("effects"),TEXT("item_type")})
+                {
+                    if(!R->HasField(Field))continue;
+                    double Value=0;
+                    if(!R->HasTypedField<EJson::Number>(Field)||!R->TryGetNumberField(Field,Value)||!FMath::IsFinite(Value)||Value<0||Value>MAX_uint32||Value!=FMath::FloorToDouble(Value))
+                    {Error=TEXT("Item icon fields must be unsigned 32-bit integers");return false;}
+                }
+            }
             if(Type==TEXT("image"))
             {const FString Asset=S(R,TEXT("asset"));if(Asset.IsEmpty()||Asset.Len()>128||Asset!=FPaths::GetCleanFilename(Asset)||!Asset.EndsWith(TEXT(".png"))){Error=TEXT("Images must name a PNG in this plugin's images folder");return false;}}
             if(Type==TEXT("select"))

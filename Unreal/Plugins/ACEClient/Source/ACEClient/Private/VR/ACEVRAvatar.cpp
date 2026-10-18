@@ -73,7 +73,9 @@ void UACEVRComponent::UpdateArms(float Dt)
 				Part->SetOwnerNoSee(HeadPart || (!Settings->bShowBody && !Arm));
 				// Nonhuman player setups retain their authored animation and
 				// body/shadow. They cannot use human IK, but are still avatars.
-				Part->SetVisibility(Visible, false);
+				// The arm solver below owns tracked-arm visibility. Revealing these
+				// first dirties all six render proxies every frame when hands are lost.
+				if (!Human || I < 10 || I > 15) Part->SetVisibility(Visible, false);
 				Part->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 			}
 		}
@@ -117,8 +119,8 @@ void UACEVRComponent::UpdateArms(float Dt)
 		FVector ElbowBind = FVector::ZeroVector;
 		const bool HasArm = Human && UpperPart >= 0 && App->GetPartBindTransform(UpperPart, UpperBind)
 			&& App->GetPartBindTransform(LowerPart, LowerBind) && App->GetPartBindTransform(HandPart, HandBind);
-		if (HasArm)
-			for (int32 I : {UpperPart, LowerPart, HandPart}) if (auto* M = App->GetPartMesh(I)) M->SetVisibility(Tracked, false);
+		if (Human)
+			for (int32 I : {UpperPart, LowerPart, HandPart}) if (auto* M = App->GetPartMesh(I)) M->SetVisibility(HasArm ? Tracked : Visible, false);
 		if (!Tracked) continue;
 		FVector Shoulder = BodyFrame.TransformPosition(FVector(-8.f, Left ? -18.f : 18.f, -25.f));
 		FVector Hand = GripPose.GetLocation();

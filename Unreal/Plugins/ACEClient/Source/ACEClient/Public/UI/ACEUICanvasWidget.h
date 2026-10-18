@@ -57,7 +57,7 @@ public:
 	void SetGameplayBinder(UACEUIGameplayBinder* InBinder);
 	bool IsGameplayCanvas() const { return GameplayBinder != nullptr; }
 	/** Refresh once per engine frame, from either Slate or VR with the canvas hidden. */
-	void TickGameplayState();
+	void TickGameplayState(bool bRefreshDesktopHUD = true);
 	void SetCharSelectBinder(UACEUICharSelectBinder* InBinder);
 	void SetCharGenBinder(UACEUICharGenBinder* InBinder) { CharGenBinder=InBinder; SetIsFocusable(InBinder != nullptr); }
 	UACEUICharGenBinder* GetCharGenBinder() const { return CharGenBinder; }
@@ -109,6 +109,7 @@ protected:
 
 private:
 	uint64 LastGameplayTickFrame = MAX_uint64;
+	uint64 LastDesktopHUDTickFrame = MAX_uint64;
 	int32 PressedPointer = INDEX_NONE;
 	bool bVRPointerVisible = false, bVRPointerDown = false;
 	FBox2D VRPointerBounds;

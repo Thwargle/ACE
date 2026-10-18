@@ -73,7 +73,7 @@ local function purchase(s,p,stock,amount)
  if amount<=0 then return stop('No inventory space or vendor stock available. Other plugins may continue.') end
  local function cost(n) return math.max(1,math.ceil((stock.sell_rate or 1)*(stock.unit_value or 0)*n-.1)) end
  local funds=s.it_currency or 0
- if cost(amount)>funds then
+ if cost(amount)>funds and not p.server_bank then
   local seller
   for _,i in ipairs(s.inventory or {}) do
    local chosen=p.sell_name and p.sell_name~='' and i.name==p.sell_name
@@ -123,8 +123,13 @@ return function(s,p)
    local chest=find(s.it_objects,q.target)
    done=chest and chest.locked==false or s.container==q.target or ((s.action_serial or 0)~=q.serial and (s.action_error or 0)==0)
   end
-  if done and q.funding and (s.it_currency or 0)<=q.currency then done=false end
-  if done and q.kind=='it_buy' and (s.it_currency or 0)>=q.currency then done=false end
+  if done and q.funding and (s.it_currency or 0)<=q.currency then
+   if s.time>=q.deadline then return stop('Sale completed, but no inventory currency arrived. If this server banks sale proceeds, enable Use server bank for purchases; no more payment items were sold.') end
+   done=false
+  end
+  -- Bank servers debit currency outside inventory. The requested supply receipt
+  -- confirms the purchase; an untagged UseDone alone never does.
+  if done and q.kind=='it_buy' and not p.server_bank and (s.it_currency or 0)>=q.currency then done=false end
   if done then
    operations=operations+1
    if q.kind=='it_key' then identified[q.target]=nil;refresh_at=s.time+2;if stage=='opener' then cycle=cycle+1 end end

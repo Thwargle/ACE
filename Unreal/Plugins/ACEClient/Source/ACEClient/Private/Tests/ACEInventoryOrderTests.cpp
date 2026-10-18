@@ -382,6 +382,34 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Wand swap restores magic unless player explicitly leaves combat"),Session.PlayerVitals.CombatMode,
             int32(CancelCombat?ACECombatMode::NonCombat:ACECombatMode::Magic));
     }
+    // Bulk gifts may clear the Container quality on the physics queue before
+    // the ordered remove event. Follow removal with real reorder ACKs.
+    for(bool HasList:{false,true})
+    {
+        Session.ClearWorldState();Session.PlayerGuid=100;Session.State=EACESessionState::InWorld;
+        for(int32 Bag:{10,20})
+        {
+            Session.UpsertWorldObject(Item(Bag,100,Bag==10?0:1,true));
+            TArray<FACEContainerItemRef> Refs;
+            for(int32 Index=0;Index<14;++Index)
+            {
+                const int32 Id=Bag*100+Index;Session.UpsertWorldObject(Item(Id,Bag,Index));Refs.Add({Id,0});
+            }
+            if(HasList)Session.ContainerContents.Add(Bag,Refs);
+            for(int32 Index=0;Index<14;Index+=2)
+            {
+                FACEBinaryWriter Property;Property.WriteUInt8(1);Property.WriteInt32(Bag*100+Index);Property.WriteUInt32(2);Property.WriteInt32(0);
+                FACEBinaryReader PR(Property.GetData());Session.HandlePublicUpdateInstanceId(PR);
+                FACEBinaryWriter Remove;Remove.WriteInt32(Bag*100+Index);
+                FACEBinaryReader RemovalReader(Remove.GetData());Session.HandleInventoryRemoveObject(RemovalReader);
+            }
+            TArray<int32> Expected;for(int32 Index=1;Index<14;Index+=2)Expected.Add(Bag*100+Index);
+            Check(Bag,Expected);
+            for(int32 Index=0;Index<Expected.Num();++Index)
+                TestEqual(TEXT("Bulk removal leaves dense authoritative placements"),Session.WorldObjects[Expected[Index]].PlacementPosition,Index);
+            Contains(Bag*100+13,Bag,2);Expected.Remove(Bag*100+13);Expected.Insert(Bag*100+13,2);Check(Bag,Expected);
+        }
+    }
     Session.SocketC2S->Close(); Sockets->DestroySocket(Session.SocketC2S); Session.SocketC2S=nullptr;
     Receiver->Close(); Sockets->DestroySocket(Receiver);
     return true;

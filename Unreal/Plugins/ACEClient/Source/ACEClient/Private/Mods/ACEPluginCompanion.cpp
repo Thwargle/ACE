@@ -61,7 +61,7 @@ void UACEPluginSubsystem::UpdateCompanionChatContext()
         PluginChatEvents.Reset();PluginChatTextBytes=0;PluginChatContextStartSerial=PluginChatSerial;
         // Logging back into the same character can reuse the session object.
         // Abandoned pages belong to the old login, not this reader's backlog.
-        for(const auto& P:Plugins)P->ChatCursor=PluginChatContextStartSerial;
+        for(const auto& P:Plugins){P->ChatCursor=PluginChatContextStartSerial;P->ChatFilters.Reset();}
         PluginChatSession=C->GetSession();PluginChatPlayer=Player;PluginChatServer=C->GetServerName();
     }
 }
@@ -125,7 +125,7 @@ bool UACEPluginSubsystem::InitializePluginState(FACEClientPlugin& P)
         {P.Status=TEXT("Cannot read saved state; original file preserved");return false;}
         P.SavedState=Loaded;
     }
-    if(NewCharacter){P.ChatCursor=PluginChatContextStartSerial;P.Presentation.Reset();}
+    if(NewCharacter){P.ChatCursor=PluginChatContextStartSerial;P.Presentation.Reset();P.ChatFilters.Reset();}
     P.NextStateSave=FPlatformTime::Seconds()+5;
     return true;
 }
@@ -145,7 +145,7 @@ void UACEPluginSubsystem::StopCompanion(FACEClientPlugin& P,const FString& Reaso
 {
     using namespace ACEPluginCompanionPrivate; using ACEPluginCompanionPrivate::S; using ACEPluginCompanionPrivate::N;
     FlushPluginState(P);P.Running=false;P.CompanionStopped=true;P.VM.Reset();
-    P.Markers.Reset();P.PanelRows.Reset();P.PluginEvents.Reset();++P.PanelRevision;P.Status=Reason+(P.StateDirty?TEXT("; ")+P.CompanionError:FString());
+    P.Markers.Reset();P.PanelRows.Reset();P.PluginEvents.Reset();P.ChatFilters.Reset();++P.PanelRevision;P.Status=Reason+(P.StateDirty?TEXT("; ")+P.CompanionError:FString());
     // Observational plugin lifecycle never cancels UCM movement, casts or attacks.
 }
 
@@ -279,6 +279,14 @@ bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TShared
         if(!P.Permissions.Contains(TEXT("ui"))||!List(O,TEXT("ui"),128,Rows)){Error=TEXT("UI requires ui permission and at most 128 rows");return false;}
         if(!ValidatePluginUI(*Rows,Error))return false;
     }
+    const TArray<TSharedPtr<FJsonValue>>* ChatFilters=nullptr;
+    TArray<FACEPluginChatFilter> ParsedFilters;
+    if(O->HasField(TEXT("chat_filters")))
+    {
+        if(!P.Permissions.Contains(TEXT("chat_filter"))||!List(O,TEXT("chat_filters"),32,ChatFilters))
+        {Error=TEXT("chat_filters requires chat_filter permission and at most 32 rules");return false;}
+        if(!ValidatePluginChatFilters(*ChatFilters,ParsedFilters,Error))return false;
+    }
     TArray<FACEPluginMarker> Parsed;
     if(O->HasField(TEXT("markers")))
     {
@@ -297,6 +305,7 @@ bool UACEPluginSubsystem::ApplyCompanionOutput(FACEClientPlugin& P,const TShared
         {Error=TEXT("Invalid plugin message");return false;}
     }
     if(Presentation)P.Presentation=*Presentation;
+    if(ChatFilters)P.ChatFilters=MoveTemp(ParsedFilters);
     if(State&&(!P.SavedState||!FJsonValue::CompareEqual(FJsonValueObject(P.SavedState),FJsonValueObject(*State)))){P.SavedState=*State;P.StateDirty=true;}
     if(Rows&&!FJsonValue::CompareEqual(FJsonValueArray(P.PanelRows),FJsonValueArray(*Rows))){P.PanelRows=*Rows;++P.PanelRevision;}
     if(Markers)P.Markers=MoveTemp(Parsed);
