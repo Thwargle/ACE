@@ -91,6 +91,7 @@ void FACESession::Disconnect()
 	PreHandshakeDatagrams.Reset();
 	ConnectionError.Reset();
 	VRCapabilities = VRSequence = VRPoseSequence = 0; VRPoses.Reset(); VRSpellProfiles.Reset();
+	bVRDiscoveryRequested = false;
 	bLocalVRFeedback = false; LastVRPoseSent = -100.;
 	VRRecoverySequence = VRRecoveryTeleport = 0; VRRecoveryReadyAt = 0; VRRecoveryDuration = 0;
 	VRCastSequence=VRCastEpoch=VRCastPhase=VRAimCastSequence=0; VRAimUntil=VRCastReadyAt=VRNextAim=0; VRCastDuration=0;
@@ -253,6 +254,7 @@ void FACESession::ClearWorldState()
 	PendingObjectPhysicsBytes = 0;
 	LastObjectPhysicsExpiryAt = 0.;
 	VRCapabilities = VRSequence = VRPoseSequence = 0; VRPoses.Reset(); VRSpellProfiles.Reset();
+	bVRDiscoveryRequested = false;
 	bLocalVRFeedback = false; LastVRPoseSent = -100.;
 	VRRecoverySequence = VRRecoveryTeleport = 0; VRRecoveryReadyAt = 0; VRRecoveryDuration = 0;
 	VRCastSequence=VRCastEpoch=VRCastPhase=VRAimCastSequence=0; VRAimUntil=VRCastReadyAt=VRNextAim=0; VRCastDuration=0;
@@ -2162,9 +2164,10 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecrea
 
 	UpsertWorldObject(Obj, bForceRecreate);
 	ReplayObjectPhysicsEvents(Obj.Guid);
-	Log(FString::Printf(TEXT("ObjectCreate '%s' guid=0x%08X setup=0x%08X parent=0x%08X loc=%d animParts=%d"),
+	Log(FString::Printf(TEXT("ObjectCreate '%s' guid=0x%08X setup=0x%08X parent=0x%08X loc=%d animParts=%d wcid=%d type=0x%08X desc=0x%08X physics=0x%08X placement=%d motionTable=0x%08X motion=0x%08X style=0x%08X usable=0x%08X"),
 		*Obj.Name, Obj.Guid, Obj.SetupId, Obj.ParentGuid, Obj.ParentLocation,
-		Obj.Appearance.AnimPartChanges.Num()));
+		Obj.Appearance.AnimPartChanges.Num(), Obj.WeenieClassId, Obj.ItemType, Obj.ObjectDescriptionFlags,
+		Obj.PhysicsState, Obj.PlacementId, Obj.MotionTableId, Obj.InitialMotionCommand, Obj.InitialMotionStyle, Obj.ItemUseable));
 	MaybeEnterWorldComplete();
 }
 
@@ -4683,7 +4686,6 @@ void FACESession::SendPutItemInContainer(int32 ItemGuid, int32 ContainerGuid, in
 		{
 			const auto& Other = Pair.Value;
 			if (Other.Guid != ItemGuid && Other.ContainerId == ContainerGuid
-				&& Other.CurrentWieldedLocation == 0 && Other.WielderId == 0 && Other.ParentGuid == 0
 				&& IsPackSlotItem(Other) == IsPackSlotItem(*Item)) ++Count;
 		}
 		Placement = FMath::Clamp(Placement, 0, Count);
@@ -6666,8 +6668,9 @@ void FACESession::ShiftContainerPlacementsAfterRemove(int32 ContainerGuid, int32
 	for (TPair<int32, FACEWorldObject>& Pair : WorldObjects)
 	{
 		FACEWorldObject& Obj = Pair.Value;
-		if (Obj.ContainerId != ContainerGuid
-			|| Obj.CurrentWieldedLocation != 0 || Obj.WielderId != 0 || Obj.ParentGuid != 0)
+		// ContainerId remains authoritative until the ordered inventory receipt,
+		// even if a physics attachment for another pending equip arrived first.
+		if (Obj.ContainerId != ContainerGuid)
 		{
 			continue;
 		}
@@ -6694,7 +6697,6 @@ void FACESession::ShiftContainerPlacementsForInsert(int32 ContainerGuid, int32 I
 	{
 		const auto& Other = Pair.Value;
 		if (Other.Guid != ItemGuid && Other.ContainerId == ContainerGuid
-			&& Other.CurrentWieldedLocation == 0 && Other.WielderId == 0 && Other.ParentGuid == 0
 			&& IsPackSlotItem(Other) == bPackSlots) ++Count;
 	}
 	if (const auto* Refs = ContainerContents.Find(ContainerGuid))
@@ -6712,8 +6714,7 @@ void FACESession::ShiftContainerPlacementsForInsert(int32 ContainerGuid, int32 I
 		{
 			continue;
 		}
-		if (Obj.ContainerId != ContainerGuid
-			|| Obj.CurrentWieldedLocation != 0 || Obj.WielderId != 0 || Obj.ParentGuid != 0)
+		if (Obj.ContainerId != ContainerGuid)
 		{
 			continue;
 		}
@@ -7052,10 +7053,19 @@ void FACESession::HandleWieldItem(FACEBinaryReader& Reader)
 	}
 	if (FACEWorldObject* Obj = WorldObjects.Find(ItemGuid))
 	{
+		// ACCWeenieObject::ServerSaysMoveItem removes the source ID before
+		// changing ownership. Keep the remaining pack indices dense, just as
+		// RemoveContent/IDList::RemoveByID does in retail.
+		const int32 PrevContainer = Obj->ContainerId;
+		const int32 PrevPlacement = Obj->PlacementPosition;
+		const bool bPackSlots = IsPackSlotItem(*Obj);
 		Obj->CurrentWieldedLocation = Location;
 		Obj->WielderId = PlayerGuid;
 		Obj->ContainerId = 0;
+		Obj->PlacementPosition = INDEX_NONE;
 		RemoveFromContainerLists(ItemGuid);
+		ShiftContainerPlacementsAfterRemove(PrevContainer, PrevPlacement, bPackSlots);
+		RestampContainerListPlacements(PrevContainer);
 
 		// Held/selectable gear needs Physics Parent + ParentLocation for the 3D attach.
 		// Clothing/armor stay ParentLocation.None and update the wearer via ObjDescEvent.
@@ -7224,16 +7234,8 @@ void FACESession::HandlePickupEvent(FACEBinaryReader& Reader)
 		{
 			Obj->WielderId = 0;
 			Obj->CurrentWieldedLocation = 0;
-			// ContainId follows real dequips. Preserve their existing pack fallback.
-			if (bWasEquipped && Obj->ContainerId == 0 && PlayerGuid != 0)
-			{
-				Obj->ContainerId = PlayerGuid;
-				RemoveFromContainerLists(ItemGuid);
-				if (TArray<FACEContainerItemRef>* Contents = ContainerContents.Find(PlayerGuid))
-				{
-					FACEContainerItemRef Ref; Ref.ItemGuid = ItemGuid; Contents->Add(Ref);
-				}
-			}
+			// This is a visual detach, not a move into the main backpack.
+			// ContainId supplies the actual destination and insertion index.
 		}
 	}
 	// Ammo remains equipped until authoritative ContainId/wield/remove updates.
@@ -7288,13 +7290,19 @@ void FACESession::HandleParentEvent(FACEBinaryReader& Reader)
 				Obj->PlacementId = HeldPlacement;
 			}
 		}
-		Obj->ContainerId = 0;
+		// Physics attachment can precede the ordered wield event. Preserve our
+		// source membership so that event can compact the correct backpack.
+		const bool bInOwnedPack = PlayerGuid && Obj->ContainerId && ResolveContainerRoot(ChildGuid) == PlayerGuid;
+		if (!bInOwnedPack)
+		{
+			Obj->ContainerId = 0;
+			RemoveFromContainerLists(ChildGuid);
+		}
 		Obj->bHasPosition = false; // world origin comes from parent attachment
 		if (ParentGuid == PlayerGuid)
 		{
 			Obj->WielderId = PlayerGuid;
 		}
-		RemoveFromContainerLists(ChildGuid);
 		OnObjectCreated.Broadcast(*Obj);
 	}
 }
@@ -7614,7 +7622,7 @@ void FACESession::HandlePublicUpdateInstanceId(FACEBinaryReader& Reader)
 		else if (Prop == 3) // PropertyInstanceId.Wielder
 		{
 			Obj->WielderId = Value;
-			if (Value != 0)
+			if (Value != 0 && !(PlayerGuid && Obj->ContainerId && ResolveContainerRoot(Guid) == PlayerGuid))
 			{
 				Obj->ContainerId = 0;
 			}
@@ -7697,8 +7705,7 @@ void FACESession::GetPackItemCounts(TMap<int32, int32>& InOutCounts) const
 	for (const auto& Pair : WorldObjects)
 	{
 		const auto& O = Pair.Value;
-		if (!ScanContainers.Contains(O.ContainerId) || O.CurrentWieldedLocation != 0
-			|| O.WielderId != 0 || O.ParentGuid != 0) continue;
+		if (!ScanContainers.Contains(O.ContainerId)) continue;
 		if (O.ContainerId == PlayerGuid && (MainSeen.Contains(O.Guid) || IsPack(O))) continue;
 		++InOutCounts.FindChecked(O.ContainerId);
 	}
@@ -7790,8 +7797,7 @@ void FACESession::GetPackItemGuids(int32 ContainerGuid, TArray<int32>& Out) cons
 			{
 				continue;
 			}
-			if (Obj.ContainerId == PlayerGuid && Obj.CurrentWieldedLocation == 0 && Obj.WielderId == 0
-				&& Obj.ParentGuid == 0 && !IsPackObject(Obj))
+			if (Obj.ContainerId == PlayerGuid && !IsPackObject(Obj))
 			{
 				Out.Add(Obj.Guid);
 			}
@@ -7821,8 +7827,7 @@ void FACESession::GetPackItemGuids(int32 ContainerGuid, TArray<int32>& Out) cons
 			}
 			Seen.Add(Ref.ItemGuid);
 		}
-		// ViewContents encounter order can drift from PlacementPosition after local
-		// Put/ContainId shifts — grid cells key off PP (BuildSparsePackSlotGuids).
+		// Inventory receipts maintain the dense placement order used by the grid.
 		SortInventoryGuidsByPlacement(Out, WorldObjects);
 		return;
 	}
@@ -7835,8 +7840,9 @@ void FACESession::GetPackItemGuids(int32 ContainerGuid, TArray<int32>& Out) cons
 		{
 			continue;
 		}
-		if (Obj.ContainerId == ContainerGuid && Obj.CurrentWieldedLocation == 0 && Obj.WielderId == 0
-			&& Obj.ParentGuid == 0)
+		// Physical attachment may arrive before the ordered wield receipt.
+		// Until then, match the authoritative list path above and retain this ID.
+		if (Obj.ContainerId == ContainerGuid)
 		{
 			const bool bIsPack = Obj.ItemsCapacity > 0 || Obj.ContainersCapacity > 0
 				|| (Obj.ItemType & ACEItemType::Container) != 0

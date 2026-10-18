@@ -1,4 +1,5 @@
 #include "Mods/ACEPluginSubsystem.h"
+#include "Mods/ACEAutoCraft.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "ACEPlayerController.h"
@@ -1459,6 +1460,12 @@ void UACEPluginSubsystem::DrawRoute()
 
 void UACEPluginSubsystem::ObserveMetaChat(const FString& Text,const FString& Sender,int32 Type)
 {
+    if(Type==0x18&&Sender.IsEmpty()&&AutoCraft&&AutoCraft->Pending&&AutoCraft->Preparation.IsEmpty())
+        if(auto Craft=Find(TEXT("autocraft"));Craft&&Craft->Running&&AutoCraft->Catalog.Recipes.IsValidIndex(AutoCraft->PendingRecipe))
+        {
+            const auto& R=AutoCraft->Catalog.Recipes[AutoCraft->PendingRecipe];
+            if(!R.FailMessage.IsEmpty()&&Text.TrimStartAndEnd()==R.FailMessage.TrimStartAndEnd())AutoCraft->FailureMessage=true;
+        }
     ObserveOffensiveSpellChat(Text,Sender,Type);
     if(Sender.IsEmpty()&&Type==0&&Text.TrimStartAndEnd()==TEXT("Your missile attack hit the environment."))RecordCombatOutcome(false);
     // VT starts its backward input when the local spell words arrive, not when

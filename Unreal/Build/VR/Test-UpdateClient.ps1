@@ -11,7 +11,14 @@ $fakeSource = Join-Path $testRoot 'Fixture.cs'
 @'
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 class Fixture {
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)]
+    static extern IntPtr CreateWindowEx(int exStyle, string cls, string title, int style,
+        int x, int y, int width, int height, IntPtr parent, IntPtr menu, IntPtr instance, IntPtr param);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window, int command);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] static extern bool DestroyWindow(IntPtr window);
     static int Main(string[] args) {
         foreach (string arg in args) {
             if (arg.StartsWith("/DIR=")) {
@@ -20,6 +27,15 @@ class Fixture {
                 return 0;
             }
         }
+        // Like Unreal, the game's first ShowWindow must not inherit SW_HIDE
+        // from the hidden update helper. Verify OS visibility, not script text.
+        var window = CreateWindowEx(0, "STATIC", "Update restart test", 0x00CF0000,
+            0, 0, 160, 80, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero);
+        if (window == IntPtr.Zero) return 2;
+        ShowWindow(window, 1);
+        var visible = IsWindowVisible(window);
+        DestroyWindow(window);
+        File.WriteAllText(Path.Combine(Environment.CurrentDirectory,"game-window-visible.txt"),visible.ToString());
         File.WriteAllLines(Path.Combine(Environment.CurrentDirectory,"game-args.txt"),args);
         return 0;
     }
@@ -44,6 +60,7 @@ foreach ($mode in @('Desktop','VR')) {
     while (!(Test-Path -LiteralPath $argsFile) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
     $expected = if ($mode -eq 'VR') { '-vr' } else { '-nohmd' }
     if ((Get-Content -LiteralPath $argsFile -Raw).Trim() -ne $expected) { throw 'Wrong restart mode.' }
+    if ((Get-Content -LiteralPath (Join-Path $gameRoot 'game-window-visible.txt') -Raw).Trim() -ne 'True') { throw 'Restarted game window is hidden.' }
     $installerArgs = Get-Content -LiteralPath (Join-Path $gameRoot 'installer-args.txt')
     if ($installerArgs -notcontains '/ACPORTABLE=1' -or $installerArgs -notcontains "/DIR=$gameRoot") { throw 'Portable install path/arguments were not preserved.' }
 }
@@ -51,4 +68,4 @@ $before = (Get-Item -LiteralPath (Join-Path $gameRoot 'installer-args.txt')).Las
 & $powerShell -NoProfile -ExecutionPolicy Bypass -File $helper -Installer $fixture -ExpectedSha256 ('0' * 64) -InstallDirectory $gameRoot -GameProcessId 2147483647 -NoDialogs
 if ($LASTEXITCODE -ne 1) { throw 'Invalid payload was accepted.' }
 if ((Get-Item -LiteralPath (Join-Path $gameRoot 'installer-args.txt')).LastWriteTimeUtc -ne $before) { throw 'Invalid installer was executed.' }
-Write-Host "PASS: desktop/VR restart, quoted portable install path, and corrupt-payload rejection. Fixtures: $testRoot"
+Write-Host "PASS: visible desktop/VR restart, quoted portable install path, and corrupt-payload rejection. Fixtures: $testRoot"

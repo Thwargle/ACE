@@ -171,6 +171,7 @@ public:
 		, MaterialRelevance(Component->GetMaterialRelevance(GetScene().GetShaderPlatform()))
 		, bCachedDraws(Component->bPreferCachedDraws && GACECachedWorldDraws.GetValueOnGameThread() != 0
 			&& !ProceduralMeshViewFacing::IsViewFacing(Component->ViewFacingMode))
+		, bDisableOcclusionQueries(Component->bDisableOcclusionQueries)
 		, ViewFacingMode(Component->ViewFacingMode)
 		, ViewFacingSortCenter(Component->ViewFacingSortCenter)
 	{
@@ -547,7 +548,7 @@ public:
 
 	virtual bool CanBeOccluded() const override
 	{
-		return !MaterialRelevance.bDisableDepthTest;
+		return !bDisableOcclusionQueries && !MaterialRelevance.bDisableDepthTest;
 	}
 
 	virtual uint32 GetMemoryFootprint(void) const
@@ -651,6 +652,7 @@ private:
 
 	FMaterialRelevance MaterialRelevance;
 	bool bCachedDraws;
+	bool bDisableOcclusionQueries;
 	uint32 ViewFacingMode;
 	FVector ViewFacingSortCenter;
 };

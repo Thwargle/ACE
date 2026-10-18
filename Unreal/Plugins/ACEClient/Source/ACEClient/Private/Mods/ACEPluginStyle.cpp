@@ -138,13 +138,12 @@ TSharedPtr<FACEPluginFont> FACEPluginStyle::Typeface(int32 Size)
 void SACEPluginText::Construct(const FArguments& A)
 {
     Retail=FACEPluginStyle::Current();Wrap=A._AutoWrapText;WrapAt=A._WrapTextAt;Justification=A._Justification;
-    STextBlock::Construct(A);Face=Retail->Typeface(GetFont().Size);SetClipping(EWidgetClipping::ClipToBounds);
+    STextBlock::Construct(A);SetClipping(EWidgetClipping::ClipToBounds);
 }
 float SACEPluginText::BitmapScale() const
 {
-    // Each authored serif stem can be only one texel wide. Never shrink an
-    // atlas to fit its line height: nearest sampling can erase those stems.
-    return FMath::Max(1.f,float(GetFont().Size)*1.333333f/FMath::Max(1u,Face->Font.MaxCharHeight));
+    // Match Slate's point-to-pixel conversion, including sizes between DAT fonts.
+    return FMath::Max(1.f,float(GetFont().Size))*1.333333f/FMath::Max(1u,Face->Font.MaxCharHeight);
 }
 void SACEPluginText::Layout(float Available) const
 {
@@ -155,7 +154,11 @@ void SACEPluginText::Layout(float Available) const
 }
 bool SACEPluginText::CanDrawNative() const
 {
-    if(!Face->Atlas){Face=Retail->Typeface(GetFont().Size);CachedWidth=-1;}
+    // Bound font attributes are evaluated after Construct, and can change while
+    // a Lua control keeps its Slate identity. Refresh both glyphs and wrapping.
+    const int32 Size=GetFont().Size;
+    if(!Face||FaceSize!=Size||!Face->Atlas)
+    {Face=Retail->Typeface(Size);FaceSize=Size;CachedWidth=-1;CheckedGlyphs.Reset();NativeGlyphs=true;}
     if(!Face->Atlas)return false;
     const FString Text=GetText().ToString();
     if(Text!=CheckedGlyphs)

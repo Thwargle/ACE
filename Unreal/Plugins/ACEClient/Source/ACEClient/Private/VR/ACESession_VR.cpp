@@ -203,6 +203,18 @@ void FACESession::RequestVRCapabilities(bool bLocalVR)
 		bLocalVRFeedback = true;
 		SendVRSubscriptions();
 	}
+	if (!VRCapabilities)
+	{
+		// Vanilla ACE handles PingRequest and ignores its payload. Discover the
+		// extension once without sending an unknown action on ordinary shards.
+		// Extension servers recognize the optional ACUE/version trailer and reply
+		// with capabilities; only then may refreshes use the extension opcode.
+		if (bVRDiscoveryRequested) return;
+		bVRDiscoveryRequested = true;
+		FACEBinaryWriter Discovery; Discovery.WriteUInt32(0x45554341); Discovery.WriteUInt32(1);
+		SendGameAction(ACEGameAction::PingRequest, Discovery.GetData(), ACEQueue::UIQueue);
+		return;
+	}
 	FACEBinaryWriter W; W.WriteUInt32(1); W.WriteUInt32(0);
 	SendGameAction(0xF7D0, W.GetData(), ACEQueue::WeenieQueue);
 }

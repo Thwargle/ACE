@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "ACESession.h"
+#include "ACEInventoryRules.h"
 #include "Protocol/ACEBinaryReader.h"
 #include "Protocol/ACEBinaryWriter.h"
 #include "Sockets.h"
@@ -410,6 +411,90 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
             Contains(Bag*100+13,Bag,2);Expected.Remove(Bag*100+13);Expected.Insert(Bag*100+13,2);Check(Bag,Expected);
         }
     }
+    // A wield removes an ID from retail's dense container list. Physics parent
+    // and quality updates can arrive first, but must not lose that source slot.
+    for (bool HasList : {false, true}) for (int32 EarlyMessage : {0, 1, 2})
+    {
+        Session.ClearWorldState(); Session.PlayerGuid=100; Session.State=EACESessionState::InWorld;
+        Session.UpsertWorldObject(Item(100,0,INDEX_NONE));
+        Session.UpsertWorldObject(Item(10,100,0,true));
+        TArray<FACEContainerItemRef> Refs;
+        for (int32 Index=0; Index<5; ++Index)
+        {
+            Session.UpsertWorldObject(Item(1000+Index,10,Index)); Refs.Add({1000+Index,0});
+        }
+        if (HasList) Session.ContainerContents.Add(10,Refs);
+        if (EarlyMessage==1)
+        {
+            FACEBinaryWriter W; W.WriteUInt32(100); W.WriteUInt32(1001);
+            W.WriteInt32(1); W.WriteInt32(1); W.WriteUInt16(0); W.WriteUInt16(1);
+            FACEBinaryReader R(W.GetData()); Session.HandleParentEvent(R);
+        }
+        if (EarlyMessage==2)
+        {
+            FACEBinaryWriter W; W.WriteUInt8(1); W.WriteUInt32(1001); W.WriteUInt32(3); W.WriteUInt32(100);
+            FACEBinaryReader R(W.GetData()); Session.HandlePublicUpdateInstanceId(R);
+        }
+        TestEqual(TEXT("Attachment preserves source container until ordered wield"),Session.WorldObjects[1001].ContainerId,10);
+        Check(10,{1000,1001,1002,1003,1004});
+        FACEBinaryWriter Wield; Wield.WriteUInt32(1001); Wield.WriteInt32(int32(ACEEquipMask::Held));
+        FACEBinaryReader WR(Wield.GetData()); Session.HandleWieldItem(WR);
+        Check(10,{1000,1002,1003,1004});
+        TestEqual(TEXT("Wield closes the source placement gap"),Session.WorldObjects[1002].PlacementPosition,1);
+        TestEqual(TEXT("Equipped item no longer has an inventory index"),Session.WorldObjects[1001].PlacementPosition,INDEX_NONE);
+        // ACE sends physics Pickup before dequip containment. It must not insert
+        // a temporary main-pack item (and shift unrelated items a second time).
+        Session.UpsertWorldObject(Item(2000,100,0));
+        Session.UpsertWorldObject(Item(2001,100,1));
+        FACEBinaryWriter Pickup; Pickup.WriteUInt32(1001); Pickup.WriteUInt16(0); Pickup.WriteUInt16(2);
+        FACEBinaryReader PR(Pickup.GetData()); Session.HandlePickupEvent(PR);
+        TestEqual(TEXT("Visual detach waits for server destination"),Session.WorldObjects[1001].ContainerId,0);
+        Contains(1001,10,2);
+        Check(10,{1000,1002,1001,1003,1004}); Check(100,{2000,2001});
+        TestEqual(TEXT("Dequip does not compact unrelated main-pack slots"),Session.WorldObjects[2001].PlacementPosition,1);
+        // Reorder after equipping/dequipping, then consume an item and reorder again.
+        Contains(1004,10,1); Check(10,{1000,1004,1002,1001,1003});
+        FACEBinaryWriter Remove; Remove.WriteUInt32(1002);
+        FACEBinaryReader RemoveReader(Remove.GetData()); Session.HandleInventoryRemoveObject(RemoveReader);
+        Contains(1003,10,0); Check(10,{1003,1000,1004,1001});
+        const TArray<int32> Expected = {1003,1000,1004,1001};
+        for (int32 Index=0; Index<Expected.Num(); ++Index)
+            TestEqual(TEXT("Subsequent drags retain dense placement indices"),Session.WorldObjects[Expected[Index]].PlacementPosition,Index);
+    }
+    // Both weapons can receive physical attachment before either ordered wield.
+    // Compact the second pending item's source position when the first leaves.
+    Session.ClearWorldState(); Session.PlayerGuid=100;
+    for (int32 Index=0; Index<4; ++Index) Session.UpsertWorldObject(Item(3000+Index,100,Index));
+    Session.WorldObjects[3000].ParentGuid=100;
+    Session.WorldObjects[3002].ParentGuid=100;
+    for (const auto& Equipped : {TPair<int32,int64>(3000,ACEEquipMask::MeleeWeapon),TPair<int32,int64>(3002,ACEEquipMask::Shield)})
+    {
+        FACEBinaryWriter Wield; Wield.WriteUInt32(Equipped.Key); Wield.WriteInt32(int32(Equipped.Value));
+        FACEBinaryReader WieldReader(Wield.GetData()); Session.HandleWieldItem(WieldReader);
+    }
+    TestEqual(TEXT("Concurrent attachments do not leave gaps"),Session.WorldObjects[3003].PlacementPosition,1);
+    Check(100,{3001,3003});
+
+    // A bulk transfer completes while D is being dragged (mouse-down index 3).
+    // Drops must still insert before the item actually under the cursor.
+    Session.ClearWorldState(); Session.PlayerGuid=100; Session.State=EACESessionState::InWorld;
+    for (int32 Index=0; Index<6; ++Index) Session.UpsertWorldObject(Item(4000+Index,100,Index));
+    for (int32 Id : {4000,4001})
+    {
+        FACEBinaryWriter W; W.WriteUInt32(Id);
+        FACEBinaryReader Removal(W.GetData()); Session.HandleInventoryRemoveObject(Removal);
+    }
+    TArray<int32> CurrentItems; Session.GetPackItemGuids(100,CurrentItems);
+    const int32 DropIndex=ACEInventoryRules::DropInsertionIndex(CurrentItems,4003,4005,true);
+    TestEqual(TEXT("Drop resolves source and target after intervening transfers"),DropIndex,2);
+    Send(4003,100,DropIndex); Contains(4003,100,DropIndex);
+    Check(100,{4002,4004,4003,4005});
+    Session.GetPackItemGuids(100,CurrentItems);
+    TestEqual(TEXT("Self drop cancels by ID even after source slot changed"),ACEInventoryRules::DropInsertionIndex(CurrentItems,4003,4003,true),INDEX_NONE);
+    TestEqual(TEXT("A disappeared destination cancels safely"),ACEInventoryRules::DropInsertionIndex(CurrentItems,4003,4000,true),INDEX_NONE);
+    TestEqual(TEXT("Empty-cell drop appends after source removal"),ACEInventoryRules::DropInsertionIndex(CurrentItems,4003,0,true),3);
+    TestEqual(TEXT("Partial stack keeps its source slot"),ACEInventoryRules::DropInsertionIndex(CurrentItems,4003,4005,false),3);
+    TestEqual(TEXT("Cross-pack drop does not remove a destination slot"),ACEInventoryRules::DropInsertionIndex(CurrentItems,5000,4005,true),3);
     Session.SocketC2S->Close(); Sockets->DestroySocket(Session.SocketC2S); Session.SocketC2S=nullptr;
     Receiver->Close(); Sockets->DestroySocket(Receiver);
     return true;

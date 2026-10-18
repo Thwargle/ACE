@@ -35,15 +35,21 @@ bool FACEVRObserverProtocolTest::RunTest(const FString& Parameters)
         return Last ? Session.CachedC2SPackets[Last].Payload : TArray<uint8>();
     };
     auto Hello=LastPayload();
-    if (!TestTrue(TEXT("Desktop world entry sends a capability request"),Hello.Num()>=36)) return false;
+    if (!TestEqual(TEXT("Discovery has a fixed eight-byte trailer"),Hello.Num(),36)) return false;
     FACEBinaryReader HelloWire(Hello); HelloWire.Skip(24);
-    TestEqual(TEXT("Hello uses the extension action"),HelloWire.ReadUInt32(),0xF7D0u);
-    TestEqual(TEXT("Legacy hello stays eight bytes"),HelloWire.Remaining(),8);
-    TestEqual(TEXT("Hello version"),HelloWire.ReadUInt32(),1u);
-    TestEqual(TEXT("Hello kind"),HelloWire.ReadUInt32(),0u);
+    TestEqual(TEXT("Discovery uses stock ACE's supported ping action"),HelloWire.ReadUInt32(),ACEGameAction::PingRequest);
+    TestEqual(TEXT("Discovery marker"),HelloWire.ReadUInt32(),0x45554341u);
+    TestEqual(TEXT("Discovery version"),HelloWire.ReadUInt32(),1u);
     const uint32 NextSequence=Session.NextGameActionSequence;
     Session.MaybeEnterWorldComplete();
     TestEqual(TEXT("Completed entry does not poll or resubscribe per frame"),Session.NextGameActionSequence,NextSequence);
+    // Ordinary ACE replies only with PingResponse. Repeated headset refreshes
+    // must never fall back to sending the unsupported F7D0 action.
+    FACEBinaryWriter Ping; for(uint32 V:{100u,1u,ACEGameEvent::PingResponse}) Ping.WriteUInt32(V);
+    FACEBinaryReader PingWire(Ping.GetData()); Session.HandleGameEvent(PingWire);
+    Session.CachedC2SPackets.Reset();
+    for(int32 I=0;I<20;++I) Session.RequestVRCapabilities(false);
+    TestTrue(TEXT("Unsupported servers receive no extension probes or repeated pings"),Session.CachedC2SPackets.IsEmpty());
 
     auto Ack=[&](uint32 Flags,uint32 Version=1)
     {
@@ -106,12 +112,19 @@ bool FACEVRObserverProtocolTest::RunTest(const FString& Parameters)
     Session.bMoving=true;Session.AutoPosTimer=Session.AutonomousPositionInterval;
     Session.Tick(.02f);
     TestEqual(TEXT("Active tracking does not send duplicate timed feet reports"),Session.NextGameActionSequence,AfterPose);
-    Session.LastVRPoseSent=-100.;Session.Tick(.02f);
+    // Timed retail movement reports resume on landing; unchanged airborne
+    // positions deliberately do not generate normal AutonomousPosition actions.
+    Session.LastVRPoseSent=-100.;Session.bAutoPosContact=true;Session.Tick(.02f);
     auto Fallback=LastPayload();FACEBinaryReader FallbackWire(Fallback);FallbackWire.Skip(24);
     TestEqual(TEXT("Paused tracking resumes normal movement reports"),FallbackWire.ReadUInt32(),ACEGameAction::AutonomousPosition);
     Ack(262143u,2);
     TestFalse(TEXT("Unknown protocol version does not enable tracking"),Session.SupportsVRPoses());
     TestTrue(TEXT("Unknown protocol version sends no subscription"),Session.CachedC2SPackets.IsEmpty());
+    Session.RequestVRCapabilities(true);
+    TestTrue(TEXT("Unsupported protocol does not trigger a legacy hello"),Session.CachedC2SPackets.IsEmpty());
+    Session.ClearWorldState(); Session.State=EACESessionState::InWorld;
+    Session.RequestVRCapabilities(false);
+    TestEqual(TEXT("New character can discover capabilities again"),Session.CachedC2SPackets.Num(),1);
     return true;
 }
 #endif

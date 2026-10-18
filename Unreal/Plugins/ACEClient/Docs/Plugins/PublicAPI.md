@@ -380,6 +380,9 @@ image, row, column, section and tabs. Containers use `children`; tabs use each
 child's text as its tab title. Sections have `expanded`; their expansion state
 and selected tab are retained while the window is open. Common options are text,
 tooltip, enabled, padding, size (font/icon), bold and color (green/red/yellow/blue).
+Text `size` is a point size from 10 to 36 (default 16), including intermediate
+sizes such as 11, 13 and 15. Updating it on an existing control takes effect
+without replacing the control or losing focus in neighboring inputs.
 Progress is a fraction 0-1. Select takes up to 256 string options. Number and
 slider accept min/max/step; native code clamps/snaps the returned value.
 

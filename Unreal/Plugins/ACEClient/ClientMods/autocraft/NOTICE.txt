@@ -1,0 +1,12 @@
+Auto Craft recipe catalog
+
+Derived from ACEmulator/ACE-World-16PY-Patches, release v0.9.296,
+which combines ACE-World-16PY with ACE-World-16PY-Patches.
+Upstream source: https://github.com/ACEmulator/ACE-World-16PY-Patches
+Release: https://github.com/ACEmulator/ACE-World-16PY-Patches/releases/tag/v0.9.296
+License: GNU Affero General Public License, version 3 (see LICENSE).
+
+Changes: converted the SQL cookbook, recipe and item properties to a compact
+production-only JSON catalog for AC:Unreal; added category and chain metadata.
+Generator: Unreal/Tools/Generate-CraftingCatalog.py in the AC:Unreal source tree.
+The catalog records the upstream version and SHA-256 of its source SQL export.

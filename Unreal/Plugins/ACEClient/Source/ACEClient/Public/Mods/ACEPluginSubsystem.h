@@ -110,6 +110,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEUCMRouteRejoinTest;
     friend class FACEUCMLogTest;
     friend class FACEItemToolsTest;
+    friend class FACEAutoCraftTest;
     friend class FACEUCMProfileStorageTest;
     friend class FACEUCMLootLatencyTest;
     friend class FACEPluginLootIconsTest;
@@ -229,6 +230,13 @@ public:
     bool SelectItemToolsObject(const FString& Key, const FString& Kind);
     bool LoadItemToolsRules(const FString& Key, const FString& Filename);
     TSharedPtr<FJsonObject> ItemToolsProgress;
+    // Built-in crafting keeps the large recipe catalog out of per-tick Lua snapshots.
+    TSharedPtr<struct FACEAutoCraftState> AutoCraft;
+    TSharedRef<SWidget> MakeAutoCraftPanel(bool bShowTitle=true);
+    void RefreshAutoCraft(bool Force=false);
+    bool StartAutoCraft();
+    void TickAutoCraft();
+    void PauseAutoCraft();
     TSharedRef<SWidget> MakeUCMLogPanel();
     const FACEUCMLog& GetUCMLog() const { return UCMLog; }
     void ClearUCMLog();

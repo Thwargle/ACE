@@ -2885,10 +2885,13 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 					}
 				}
 
-				FVector Resolved = End;
 				FVector BounceNormalUe = FVector::ZeroVector;
 				bool bHaveBounceNormal = false;
 				if (!bJumpAirborne) End.Z=FMath::Max(End.Z,Start.Z);
+				// A turn-only step can skip every lateral sweep. Retain the
+				// clamped start height, not the pre-clamp terrain point, until the
+				// body-aware ground snap below resolves its vertical support.
+				FVector Resolved = End;
 				const FVector PathGoal = End;
 				if (bJumpAirborne)
 				{
@@ -3386,7 +3389,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                         const FVector SupportCenter(Center.X,Center.Y,GroundZ+CapsuleHalfHeight);
                         const auto Snap = ACEBodySweep::MoveAirborne(*World, Center,
                             SupportCenter,
-                            GetPlayerCollisionBody(),Params,true,FloorZ);
+                            GetPlayerCollisionBody(),Params,true,FloorZ,true);
                         Desired.X=Snap.Position.X; Desired.Y=Snap.Position.Y;
                         GroundZ=Snap.Position.Z-CapsuleHalfHeight;
                         // An unobstructed sweep reaching the already validated
@@ -3433,7 +3436,7 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
                             const FVector ResolvedCenter(Desired.X,Desired.Y,GroundZ+CapsuleHalfHeight);
                             const FVector ResolvedTarget(Desired.X,Desired.Y,ResolvedSupportZ+CapsuleHalfHeight);
                             const auto Contact=ACEBodySweep::MoveAirborne(*World,ResolvedCenter,ResolvedTarget,
-                                GetPlayerCollisionBody(),Params,true,FloorZ);
+                                GetPlayerCollisionBody(),Params,true,FloorZ,true);
                             Desired.X=Contact.Position.X; Desired.Y=Contact.Position.Y;
                             GroundZ=Contact.Position.Z-CapsuleHalfHeight;
                             bHaveGround=Contact.bLanded || Contact.Position.Equals(ResolvedTarget,.01f);
@@ -3587,8 +3590,10 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 									|| !TerrainHit.bStartPenetrating || TerrainHit.PenetrationDepth<=.05f
 									|| TerrainHit.Normal.Z<=.0871557f || !TerrainHit.GetComponent()
 									|| !TerrainHit.GetComponent()->ComponentHasTag(TEXT("ACEOutdoorTerrain"))) break;
-								const FVector Next=ACEBodySweep::Recover(*GetWorld(),Recovered,
-									TerrainHit.Normal*(TerrainHit.PenetrationDepth+.2f),TerrainHit,Body,TerrainParams);
+								const FVector Push=TerrainHit.Normal*(TerrainHit.PenetrationDepth+.2f);
+								const FVector Next=bJumpAirborne
+									? ACEBodySweep::Recover(*GetWorld(),Recovered,Push,TerrainHit,Body,TerrainParams)
+									: ACEBodySweep::RecoverGrounded(*GetWorld(),Recovered,Push,TerrainHit,Body,TerrainParams);
 								if (Next.Equals(Recovered,.01f)) break;
 								Recovered=Next;
 							}

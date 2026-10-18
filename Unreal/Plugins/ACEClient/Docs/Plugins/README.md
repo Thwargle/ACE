@@ -19,6 +19,12 @@ Retail commands such as `/fps` and `/saveui`, and server commands such as
 
 ## Users
 
+**[Auto Craft](AutoCraft.md)** is a separate plugin with searchable category,
+item and recipe selectors, quantity or Max available, ingredient preparation,
+and Make / Pause / Stop controls. Enable it in Plugin Manager and open its
+mortar-and-pestle icon. The bundled production catalog covers 4,744 output items;
+preferences are saved per character and server.
+
 Plugin windows remember whether they were open or closed at logout, including
 custom Lua windows and the UCM log. Their positions and sizes are restored too;
 opening a window does not start its automation. Disabled plugins stay hidden.

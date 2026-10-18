@@ -111,15 +111,29 @@ bool FACEInventoryUICostTest::RunTest(const FString&)
     TestTrue(TEXT("Vendor quantity changes remain immediate"), Before != Binder->HashVendorOverlayState());
     Session->VendorMerchandise[0].ItemType = ACEItemType::MeleeWeapon;
     Binder->RebuildVendorVisibleFilters();
-    TestTrue(TEXT("New merchandise category is visible immediately"), Binder->VendorVisibleFilterIndices == TArray<int32>({0,1,5}));
+    TestTrue(TEXT("Miscellaneous and Weapons are visible immediately in retail order"), Binder->VendorVisibleFilterIndices == TArray<int32>({8,12}));
     Session->VendorMerchandise.Reset(); Session->WorldObjects[4000].ContainerId = 900;
     Session->WorldObjects[4000].ItemType = ACEItemType::Armor;
     Binder->RebuildVendorVisibleFilters();
-    TestTrue(TEXT("Vendor without merchandise profiles uses container fallback"), Binder->VendorVisibleFilterIndices == TArray<int32>({0,2}));
+    TestTrue(TEXT("Vendor without merchandise profiles uses container fallback for Armor"), Binder->VendorVisibleFilterIndices == TArray<int32>({0}));
     Binder->OpenVendorGuid = 0; Binder->RebuildVendorVisibleFilters();
-    TestTrue(TEXT("Closed vendor retains only All"), Binder->VendorVisibleFilterIndices == TArray<int32>({0}));
+    TestTrue(TEXT("Closed vendor has no available categories"), Binder->VendorVisibleFilterIndices.IsEmpty());
 
     Session->WorldObjects.Reset(); Session->ContainerContents.Reset(); CheckCounts();
+    // A drag can outlive several inventory receipts. Both main and external
+    // grids must resolve the current source and destination IDs at mouse-up.
+    for (int32 Container : {123, 900})
+    {
+        for (int32 I=0; I<4; ++I) Session->WorldObjects.Add(9000+I,MakeItem(9000+I,Container,I));
+        TestEqual(TEXT("Full stack drop inserts before the current target"),Binder->ResolveInventoryDropPlacement(9000,20,Container,9003),2);
+        TestEqual(TEXT("Partial stack retains its original slot"),Binder->ResolveInventoryDropPlacement(9000,5,Container,9003),3);
+        Session->WorldObjects.Remove(9001);
+        TestEqual(TEXT("Intervening transfer changes the drop index immediately"),Binder->ResolveInventoryDropPlacement(9000,20,Container,9003),1);
+        TestEqual(TEXT("Empty cell appends the moved stack"),Binder->ResolveInventoryDropPlacement(9000,20,Container,0),2);
+        Session->WorldObjects.Remove(9003);
+        TestEqual(TEXT("Removed drop target cancels the move"),Binder->ResolveInventoryDropPlacement(9000,20,Container,9003),INDEX_NONE);
+        Session->WorldObjects.Reset();
+    }
     const int64 Slots[] = {0, ACEEquipMask::Held, ACEEquipMask::MeleeWeapon, ACEEquipMask::MissileWeapon,
         ACEEquipMask::TwoHanded, ACEEquipMask::MissileAmmo, ACEEquipMask::Shield};
     // Compare against the existing array resolver across ownership, right-hand

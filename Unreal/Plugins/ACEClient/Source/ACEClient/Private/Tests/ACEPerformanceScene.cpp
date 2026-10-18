@@ -108,7 +108,8 @@ public:
   {
    // Authored Glenden Wood Dungeon drop, from ACViewer Locations.txt.
    Spawn.CellId=0x01E3033D;Spawn.Location=FVector(161,-150,0);
-   if(FParse::Param(FCommandLine::Get(),TEXT("ACEPerfGlendenHall")))
+   if(FParse::Param(FCommandLine::Get(),TEXT("ACEPerfGlendenHall"))
+    || FParse::Param(FCommandLine::Get(),TEXT("ACEPerfGlendenFlash")))
    {
     // Corridor in the reported video (approximately 79.40N, 100.73W).
     // Resolve its real DAT volume rather than retaining the entrance cell.
@@ -116,6 +117,8 @@ public:
     if(!Info.IsValid())return;
     for(uint32 I=0;I<Info->NumCells;++I)Dat->GetOrBuildEnvCellMesh(0x01E30100+I,100);
     Spawn.Location=FVector(100,-60,.005);
+    // v122 flashing.mp4: stationary camera orbit at 79.60N, 100.74W.
+    if(FParse::Param(FCommandLine::Get(),TEXT("ACEPerfGlendenFlash")))Spawn.Location=FVector(98.4,-12,.005);
     uint32 Cell=0;
     for(uint32 I=0;I<Info->NumCells && !Cell;++I)
      if(Dat->IsPointInsideEnvCell(0x01E30100+I,Spawn.ToUnrealLocation(100)+FVector(0,0,100),100))Cell=0x01E30100+I;
@@ -281,6 +284,8 @@ private:
  double StartTime=0;
  double LastEffectTime=0;
  bool bSampling=false, bWarmupCapture=false, bControlledView=false;
+ double LastFlashCapture=0;
+ int32 FlashCapture=0;
  double SampleStartTime=0;
  uint64 PreviousFrame=uint64(-1);
  TArray<double> Frames;
@@ -518,6 +523,20 @@ private:
   {
    Camera->SetActorLocation(CameraOrigin+FVector(80*FMath::Sin(Elapsed*.4),80*FMath::Cos(Elapsed*.4),20*FMath::Sin(Elapsed)));
    Camera->SetActorRotation(FRotator(15*FMath::Sin(Elapsed*.5),Elapsed*30,0));
+   if(FParse::Param(FCommandLine::Get(),TEXT("ACEPerfGlendenFlash")))
+   {
+    // Use a fixed eye to isolate changing portal admission from player collision.
+    Camera->SetActorLocation(CameraOrigin);
+    Camera->SetActorRotation(FRotator(-10,Elapsed*30,0));
+    if(Elapsed>20 && Elapsed<32 && Now-LastFlashCapture>.1
+     && !FParse::Param(FCommandLine::Get(),TEXT("ACEPerfNoCapture")))
+    {
+     LastFlashCapture=Now;
+     const FString CapturePath=FPaths::ProjectSavedDir()/TEXT("Performance/glenden/flash");
+     IFileManager::Get().MakeDirectory(*CapturePath,true);
+     FScreenshotRequest::RequestScreenshot(CapturePath/FString::Printf(TEXT("%04d.png"),FlashCapture++),false,false);
+    }
+   }
   }
   auto* PC=World->GetFirstPlayerController();
   if(auto* Controller=Cast<AACEPlayerController>(PC);Elapsed>15 && Controller && Controller->DatGameplayBinder)

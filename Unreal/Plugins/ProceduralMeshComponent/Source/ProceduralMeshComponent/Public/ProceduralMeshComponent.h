@@ -164,6 +164,12 @@ public:
 	UPROPERTY()
 	bool bPreferCachedDraws = false;
 
+	/** Skip temporal hardware occlusion for geometry whose visibility is already
+	 * resolved by portals for the current view. Set before registration; changing
+	 * this on a registered mesh requires MarkRenderStateDirty(). */
+	UPROPERTY()
+	bool bDisableOcclusionQueries = false;
+
 	/** Authored draw mode: 1 rigid, 2 viewer-facing, 3..5 axis-constrained.
 	 * Applied per view by the renderer; component/collision transforms stay intact. */
 	UE_API void SetViewFacing(uint32 Mode, const FVector& SortCenter);

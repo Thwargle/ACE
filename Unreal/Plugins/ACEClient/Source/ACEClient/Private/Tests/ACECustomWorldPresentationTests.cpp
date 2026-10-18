@@ -205,6 +205,38 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
     }
     Floor->Destroy();
 
+    // Named decorative bodies use the same held pose as lootable corpses,
+    // without requiring the Corpse flag or making UIHidden scenery selectable.
+    FACECharacterCreation Humans; FString HumanError;
+    if (!TestTrue(TEXT("Retail character definitions load"),Humans.Load(*Dat->GetPortalDat(),HumanError))) return false;
+    Humans.SelectHeritage(1);
+    for (uint32 Sex : {1u,2u})
+    {
+        if (!TestTrue(TEXT("Retail human body is available"),Humans.SelectSex(Sex))) continue;
+        FACEWorldObject Body=Object; Body.Name=TEXT("Decorative remains");
+        Body.SetupId=Humans.Sex()->Setup; Body.MotionTableId=Humans.Sex()->Motion;
+        Body.ItemType=ACEItemType::Container; Body.ItemUseable=0x20;
+        Body.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck|ACEObjectDescFlag::Openable|ACEObjectDescFlag::UiHidden;
+        Body.InitialMotionCommand=ACEMotion::Dead; Body.InitialMotionStyle=ACEMotion::StanceNonCombat;
+        Body.bHasServerPhysicsDescription=true;
+        auto* BodyActor=World->SpawnActor<AACEWorldEntityActor>(); BodyActor->InitializeFromObject(Body,100,true);
+        TArray<FTransform> DeadPose; int32 Count=0;
+        TestTrue(TEXT("Retail DAT supplies held dead pose"),Dat->EvaluateMotionCommand(Body.MotionTableId,
+            ACEMotion::Dead,1000,BodyActor->Appearance->GetPartCount(),DeadPose,100,Count,nullptr,nullptr,ACEMotion::StanceNonCombat,false));
+        for (int32 Pass=0;Pass<2;++Pass)
+        {
+            for(int32 Frame=0;Frame<60;++Frame) BodyActor->Appearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+            for(int32 Part=0;Part<Count;++Part)
+                TestTrue(TEXT("Decorative body retains retail dead part pose"),BodyActor->Appearance->GetPartCurrentTransform(Part,Actual)
+                    && Actual.GetLocation().Equals(DeadPose[Part].GetLocation(),.01)
+                    && Actual.GetRotation().Equals(DeadPose[Part].GetRotation(),.001));
+            BodyActor->InitializeFromObject(Body,100,true);
+        }
+        TestFalse(TEXT("Decorative body remains visible"),BodyActor->IsHidden());
+        TestFalse(TEXT("Named UIHidden body stays out of target cycling"),Body.IsSelectableWorldObject());
+        BodyActor->Destroy();
+    }
+
     // Real setup 020014CA has a zero-height placement but a 2 m idle part
     // offset in 09000198/03000B5E. The weenie need not be a creature/lifestone.
     Object.SetupId=0x020014CA; Object.MotionTableId=0x09000198;

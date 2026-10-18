@@ -10,6 +10,14 @@ Spell icons retain the retail power-level background, beneficial/harmful mask co
 
 ## Start the client
 
+Extension discovery uses the standard ACE PingRequest with an optional eight-byte
+trailer (`ACUE`, followed by version 1 as a little-endian uint32). Ordinary ACE
+servers ignore the trailer and return their normal ping response; no custom
+action is sent until the server advertises capabilities. Discovery runs once per
+character entry. Servers using the older VR extension must update the
+`GameActionPingRequest` handler from this repository to support this discovery.
+The existing capability response, subscriptions and VR action formats are unchanged.
+
 1. Connect the Rift and both Touch controllers in the Meta PC software.
 2. Start SteamVR and complete its room setup. Select **SteamVR as the current OpenXR runtime** in SteamVR settings. Wait until SteamVR actually detects the headset and controllers; having SteamVR open or selecting the runtime alone is insufficient. If using a Quest through the Meta PC runtime, enter its PC/Link connection before launching the game.
 3. Keep the complete `Unreal/PackagedVR/Windows` directory together. Double-click the adjacent **`Launch-VR.bat`**, which handles PowerShell's script policy for this process only and checks the startup log for VR activation. The package requires the existing retail DAT installation; it does not include DAT files.

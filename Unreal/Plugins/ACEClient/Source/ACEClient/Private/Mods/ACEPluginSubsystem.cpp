@@ -364,6 +364,7 @@ void UACEPluginSubsystem::Discover()
     ++PluginOrderRevision;
     RemoveDesktopDock();
     StopAll(TEXT("Reloading plugins")); ReleaseLocalCosmetics(); Plugins.Reset(); Notice.Empty();
+    AutoCraft.Reset();
     CompanionSession.Reset();CompanionPlayer=0;CompanionServer.Empty();
     const auto Plugin = IPluginManager::Get().FindPlugin(TEXT("ACEClient"));
     TArray<FString> Roots; if (Plugin) Roots.Add(Plugin->GetBaseDir() / TEXT("ClientMods"));
@@ -438,6 +439,7 @@ void UACEPluginSubsystem::ToggleUCM()
 }
 bool UACEPluginSubsystem::Start(const FString& Id)
 {
+    if(Id==TEXT("autocraft"))return StartAutoCraft();
     auto P = Find(Id); auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     if(P && P->LocalService) return StartLocalService(*P);
     if(P && P->Companion) return StartCompanion(*P);
@@ -584,8 +586,8 @@ void UACEPluginSubsystem::Stop(const FString& Id, const FString& Reason, bool Pr
             auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
             if (C && C->GetSession()) C->GetSession()->SendCancelAttack();
         }
-        if(Id==TEXT("itemtools")&&P->Running)if(auto UCM=Find(TEXT("ucm"));UCM&&UCM->Running)
-        {UCM->ResumeMetaPending=true;UCM->NextDecision=0;UCM->NextAction=0;UCM->Status=TEXT("Resuming after Item Tools");}
+        if((Id==TEXT("itemtools")||Id==TEXT("autocraft"))&&P->Running)if(auto UCM=Find(TEXT("ucm"));UCM&&UCM->Running)
+        {UCM->ResumeMetaPending=true;UCM->NextDecision=0;UCM->NextAction=0;UCM->Status=TEXT("Resuming after inventory job");}
         P->CanResumeMeta=PreserveMeta&&P->IsPolicy()&&P->VM.IsValid()&&P->Profile->HasField(TEXT("vt_meta"));
         P->CombatTransitionIntent.Reset();P->Running = false;P->WaitAction.Empty();P->ResumeMetaPending=false;if(!P->CanResumeMeta)P->VM.Reset();P->Status=Reason;
         if(OwnsPolicy)if(auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>())C->SetPluginFellowshipUpdates(false);
@@ -1365,6 +1367,7 @@ bool UACEPluginSubsystem::Tick(float)
     }
     auto* C = GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
     UpdateItemToolsCharacter();
+    TickAutoCraft();
     TickCompanions();
     UpdateBuffDispatch();
     CheckPendingSpellTimeout();
@@ -1413,12 +1416,14 @@ bool UACEPluginSubsystem::Tick(float)
         else if(!Enabled){P->CombatTransitionIntent.Reset();IdleManaVM.Reset();IdleManaFailed=false;}
     }
     else if(!IdlePolicy){if(auto Previous=Find(IdleManaOwner))Previous->CombatTransitionIntent.Reset();IdleManaOwner.Empty();IdleManaVM.Reset();IdleManaFailed=false;}
-    for (const auto& P : Plugins) if (P->Running && !P->LocalService && !P->Companion)
+    for (const auto& P : Plugins) if (P->Running && !P->LocalService && !P->Companion && P->Id!=TEXT("autocraft"))
     {
         if (C->GetSessionState() != EACESessionState::InWorld || C->GetPlayerGuid() != P->Player || C->GetServerName() != P->Server || (C->GetPlayerVitalsView().Health <= 0 && !P->Profile->HasField(TEXT("vt_meta"))))
         { Stop(P->Id, TEXT("Stopped: character died, changed, or left world")); continue; }
         if(P->IsPolicy())if(auto Items=Find(TEXT("itemtools"));Items&&Items->Running)
         {P->Status=TEXT("Paused while Item Tools runs");continue;}
+        if(P->IsPolicy())if(auto Craft=Find(TEXT("autocraft"));Craft&&Craft->Running)
+        {P->Status=TEXT("Paused while Auto Craft runs");continue;}
         if(InventoryInteractionPending())
         {
             if(MovementOwner==P->Id){MovementOwner.Empty();MoveExpires=0;}

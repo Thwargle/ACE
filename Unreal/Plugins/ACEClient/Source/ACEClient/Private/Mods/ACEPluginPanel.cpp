@@ -199,6 +199,7 @@ namespace ACEPluginPanelPrivate
             if(P->Id==TEXT("ucmmicro")){Add(Host->MakeUCMMicroPanel());return;}
             if(P->Id==TEXT("ucm")){Add(SNew(SBox).HeightOverride(650)[Host->MakeUCMPanel()]);return;}
             if(P->Id==TEXT("itemtools")){Add(SNew(SBox).HeightOverride(650)[Host->MakeItemToolsPanel()]);return;}
+            if(P->Id==TEXT("autocraft")){Add(SNew(SBox).HeightOverride(650)[Host->MakeAutoCraftPanel()]);return;}
             if(!PluginOnly)Add(SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",26)).Text_Lambda([P]{return FText::FromString(P->DisplayTitle());}));
             Add(SNew(SACEPluginText).Visibility_Lambda([P]{return P->Status.IsEmpty()||!P->ShowStatus()?EVisibility::Collapsed:EVisibility::Visible;}).Font(FCoreStyle::GetDefaultFontStyle("Regular",18)).Text_Lambda([P](){return FText::FromString(P->Status);}).AutoWrapText(true));
             auto Actions=SNew(SHorizontalBox).Visibility_Lambda([P]{return P->DisplayControls()==TEXT("none")?EVisibility::Collapsed:EVisibility::Visible;});
@@ -316,6 +317,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId)
     // Named panels live inside the desktop frame, which already supplies their title.
     if(IsLedger(PluginId))return MakeLedgerPanel(PluginId);
     if(PluginId==TEXT("itemtools"))return MakeItemToolsPanel(false);
+    if(PluginId==TEXT("autocraft"))return MakeAutoCraftPanel(false);
     if(PluginId==TEXT("ucm.log"))return MakeUCMLogPanel();
     if(PluginId==TEXT("ucmmicro"))return MakeUCMMicroPanel();
     if(PluginId==TEXT("waypoint")||PluginId==TEXT("waypoint.map"))return MakeWaypointPanel(PluginId.EndsWith(TEXT(".map")),false,false);

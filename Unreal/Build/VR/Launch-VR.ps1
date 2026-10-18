@@ -15,7 +15,7 @@ Write-Host 'SteamVR must show the headset as connected before the game starts. O
 $logDirectory = Join-Path $env:LOCALAPPDATA 'ACUnreal/Saved/Logs'
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 $logPath = Join-Path $logDirectory ('VR-launch-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '.log')
-$gameProcess = Start-Process -FilePath $gameExecutable -ArgumentList @('-vr', "-abslog=`"$logPath`"") -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -PassThru
+$gameProcess = Start-Process -FilePath $gameExecutable -ArgumentList @('-vr', "-abslog=`"$logPath`"") -WorkingDirectory $PSScriptRoot -WindowStyle Normal -PassThru
 $deadline = (Get-Date).AddSeconds(30)
 while ((Get-Date) -lt $deadline) {
     $startupLog = if (Test-Path -LiteralPath $logPath) { Get-Content -LiteralPath $logPath -Raw -ErrorAction SilentlyContinue } else { '' }

@@ -66,6 +66,7 @@ public:
 private:
     TSharedPtr<FACEPluginStyle> Retail;
     mutable TSharedPtr<FACEPluginFont> Face;
+    mutable int32 FaceSize=INDEX_NONE;
     TAttribute<bool> Wrap;
     TAttribute<float> WrapAt;
     TAttribute<ETextJustify::Type> Justification;

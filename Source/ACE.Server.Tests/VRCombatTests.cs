@@ -10,6 +10,25 @@ namespace ACE.Server.Tests
     public class VRCombatTests
     {
         [TestMethod]
+        public void CapabilityDiscoveryRequiresTheExactOptInPingTrailer()
+        {
+            bool Recognized(byte[] bytes) => Network.GameAction.Actions.GameActionPingRequest.IsExtensionDiscovery(
+                new BinaryReader(new MemoryStream(bytes)));
+            byte[] Request(uint marker, uint version)
+            {
+                using var stream = new MemoryStream(); using var writer = new BinaryWriter(stream);
+                writer.Write(marker); writer.Write(version); return stream.ToArray();
+            }
+            Assert.IsFalse(Recognized(Array.Empty<byte>()), "Retail pings must not opt into extensions.");
+            Assert.IsTrue(Recognized(Request(0x45554341, 1)));
+            Assert.IsFalse(Recognized(Request(0x45554341, 2)), "Unknown discovery versions remain ordinary pings.");
+            Assert.IsFalse(Recognized(Request(0, 1)));
+            var truncated = Request(0x45554341, 1); Array.Resize(ref truncated, 7);
+            Assert.IsFalse(Recognized(truncated));
+            Array.Resize(ref truncated, 9); Assert.IsFalse(Recognized(truncated));
+        }
+
+        [TestMethod]
         public void MissileReleaseRequiresDrawOnlyForBows()
         {
             var shot = new VRCombatRequest { Amount = 1, Duration = 0 };

@@ -176,30 +176,39 @@ bool FACEObjectCreateParser::ParsePhysicsData(FACEBinaryReader& Reader, FACEDeco
 	{
 		if (!Reader.CanRead(4)) return false;
 		const uint32 MoveLen = Reader.ReadUInt32();
-		if (!Reader.CanRead(static_cast<int32>(MoveLen) + 4)) return false;
+		if (MoveLen > MAX_int32 - 4 || !Reader.CanRead(static_cast<int32>(MoveLen) + 4)) return false;
 		const int32 MoveStart = Reader.Tell();
+		FACEBinaryReader Motion(Reader.GetData() + MoveStart, static_cast<int32>(MoveLen));
 		// InterpretedState: door On/Off resting pose, corpse Dead hold, etc.
-		if (MoveLen >= 8 && Reader.CanRead(static_cast<int32>(MoveLen)))
+		if (MoveLen >= 8)
 		{
-			const uint8 MovementType = Reader.ReadUInt8();
-			Reader.ReadUInt8(); // motion flags
-			const uint16 PackedStyle = Reader.ReadUInt16();
+			const uint8 MovementType = Motion.ReadUInt8();
+			Motion.ReadUInt8(); // motion flags
+			const uint16 PackedStyle = Motion.ReadUInt16();
 			Out.InitialMotionStyle = static_cast<int32>(PackedStyle);
-			if (MovementType == 0 && Reader.CanRead(4))
+			if (MovementType == 0)
 			{
-				const uint32 Packed = Reader.ReadUInt32();
+				const uint32 Packed = Motion.ReadUInt32();
 				const uint32 MFlags = Packed & 0x7Fu;
 				auto ReadU16Flag = [&](uint32 Flag, uint16& OutVal)
 				{
-					if ((MFlags & Flag) != 0 && Reader.CanRead(2))
+					if ((MFlags & Flag) != 0)
 					{
-						OutVal = Reader.ReadUInt16();
+						if (!Motion.CanRead(2)) return false;
+						OutVal = Motion.ReadUInt16();
 					}
+					return true;
 				};
 				uint16 StyleOverride = 0;
 				uint16 ForwardCommand = 0;
-				ReadU16Flag(0x01u, StyleOverride);
-				ReadU16Flag(0x02u, ForwardCommand);
+				uint16 IgnoredCommand = 0;
+				if (!ReadU16Flag(0x01u, StyleOverride) || !ReadU16Flag(0x02u, ForwardCommand)
+					|| !ReadU16Flag(0x08u, IgnoredCommand) || !ReadU16Flag(0x20u, IgnoredCommand)) return false;
+				for (uint32 SpeedFlag : {0x04u, 0x10u, 0x40u})
+					if (MFlags & SpeedFlag)
+					{
+						if (!Motion.CanRead(4) || !FMath::IsFinite(Motion.ReadFloat())) return false;
+					}
 				if (StyleOverride != 0)
 				{
 					Out.InitialMotionStyle = static_cast<int32>(StyleOverride);
@@ -211,6 +220,18 @@ bool FACEObjectCreateParser::ParsePhysicsData(FACEBinaryReader& Reader, FACEDeco
 					|| ACEMotion::IsHeldRestCommand(ForwardCommand))
 				{
 					Out.InitialMotionCommand = static_cast<int32>(ForwardCommand);
+				}
+				// Retail InterpretedMotionState::UnPack also reads the five-bit
+				// MotionItem list. A resting body may put Dead/Sleeping here while
+				// ForwardCommand remains Ready. Skipping it leaves a standing idle.
+				const uint32 CommandCount = (Packed >> 7) & 0x1Fu;
+				if (!Motion.CanRead(static_cast<int32>(CommandCount * 8))) return false;
+				for (uint32 I = 0; I < CommandCount; ++I)
+				{
+					const uint16 Command = Motion.ReadUInt16();
+					Motion.ReadUInt16(); // action stamp / autonomous bit
+					if (!FMath::IsFinite(Motion.ReadFloat())) return false;
+					if (ACEMotion::IsHeldRestCommand(Command)) Out.InitialMotionCommand = Command;
 				}
 			}
 		}

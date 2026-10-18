@@ -2,6 +2,7 @@
 #include "Misc/AutomationTest.h"
 #include "ACESession.h"
 #include "ACEOpcodes.h"
+#include "Protocol/ACEObjectCreateParser.h"
 #include "UI/ACEAppraisalUsage.h"
 
 namespace
@@ -22,6 +23,8 @@ struct FObjectPacket
 	bool bPosition = true;
 	float Workmanship = -1.f;
 	bool HouseHook = false;
+	TArray<uint8> Movement;
+	int32 MotionTable = 0;
 };
 
 void WriteAppearance(FACEBinaryWriter& W, uint16 Part)
@@ -35,14 +38,23 @@ TArray<uint8> ObjectPacket(const FObjectPacket& P, uint32 Opcode = ACEOpcode::Ob
 	FACEBinaryWriter W;
 	W.WriteUInt32(Opcode); W.WriteUInt32(P.Guid);
 	WriteAppearance(W, P.Part);
-	W.WriteUInt32(0x020081u | (P.bPosition ? 0x8000u : 0u)); // Setup, Scale, Placement, optional Position
-	W.WriteUInt32(P.PhysicsState); W.WriteUInt32(P.Placement);
+	W.WriteUInt32(0x81u | (P.Movement.IsEmpty() ? 0x20000u : 0x10000u)
+		| (P.bPosition ? 0x8000u : 0u) | (P.MotionTable ? 2u : 0u));
+	W.WriteUInt32(P.PhysicsState);
+	if (P.Movement.IsEmpty()) W.WriteUInt32(P.Placement);
+	else
+	{
+		W.WriteUInt32(P.Movement.Num());
+		for (uint8 Byte : P.Movement) W.WriteUInt8(Byte);
+		W.WriteUInt32(0); // IsAutonomous
+	}
 	if (P.bPosition)
 	{
 		W.WriteUInt32(0x7D640014u);
 		W.WriteFloat(P.X); W.WriteFloat(20.f); W.WriteFloat(30.f);
 		W.WriteFloat(1.f); W.WriteFloat(0.f); W.WriteFloat(0.f); W.WriteFloat(0.f);
 	}
+	if (P.MotionTable) W.WriteUInt32(P.MotionTable);
 	W.WriteUInt32(P.Setup); W.WriteFloat(P.Scale);
 	for (int32 I = 0; I < ACEPhysicsTimeStamp::Count; ++I)
 		W.WriteUInt16(I == ACEPhysicsTimeStamp::Instance ? P.Instance : P.Sequence);
@@ -58,6 +70,42 @@ TArray<uint8> ObjectPacket(const FObjectPacket& P, uint32 Opcode = ACEOpcode::Ob
 	W.Align();
 	return W.GetData();
 }
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEInitialRestingMotionTest, "ACE.RetailParity.InitialRestingMotion",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACEInitialRestingMotionTest::RunTest(const FString&)
+{
+	for (uint16 Command : {ACEMotion::DeadCommandU16, ACEMotion::SleepingCommandU16, ACEMotion::SittingCommandU16})
+	{
+		FObjectPacket P; P.MotionTable=0x09000001;
+		P.DescriptionFlags=ACEObjectDescFlag::Stuck|ACEObjectDescFlag::UiHidden;
+		FACEBinaryWriter M;
+		M.WriteUInt8(0); M.WriteUInt8(0); M.WriteUInt16(0x3D);
+		M.WriteUInt32(0x7F | (1u<<7)); // all optional fields, one queued action
+		M.WriteUInt16(0x3D); M.WriteUInt16(3); M.WriteUInt16(0); M.WriteUInt16(0);
+		M.WriteFloat(1); M.WriteFloat(1); M.WriteFloat(1);
+		M.WriteUInt16(Command); M.WriteUInt16(1); M.WriteFloat(1); M.Align();
+		P.Movement=M.GetData();
+		FACESession Session; Session.State=EACESessionState::InWorld;
+		Session.HandleGameMessage(ObjectPacket(P));
+		const auto* Object=Session.WorldObjects.Find(P.Guid);
+		if (!TestNotNull(TEXT("Queued rest packet creates a world object"),Object)) continue;
+		TestEqual(TEXT("Initial queued pose survives Ready forward command"),Object->InitialMotionCommand,int32(Command));
+		TestEqual(TEXT("Movement parsing retains following motion table"),Object->MotionTableId,P.MotionTable);
+		TestEqual(TEXT("Movement parsing retains following position"),Object->Position.Location.X,double(P.X));
+		TestTrue(TEXT("Named decoration keeps server UIHidden"),Object->IsUiHidden());
+		TestFalse(TEXT("Named decoration is excluded from keyboard selection"),Object->IsSelectableWorldObject());
+		Session.SelectObject(P.Guid);
+		TestFalse(TEXT("Named decoration is rejected by direct selection"),Session.SelectedObject.bValid);
+		// Truncate inside the action. Physics and PublicWeenieDesc bytes after the
+		// declared block must not be consumed to complete the missing command.
+		P.Movement.SetNum(P.Movement.Num()-4);
+		const auto Bytes=ObjectPacket(P);
+		FACEBinaryReader R(Bytes); R.ReadUInt32(); FACEDecodedObject Decoded;
+		TestFalse(TEXT("Truncated motion cannot borrow bytes from the physics description"),FACEObjectCreateParser::Parse(R,Decoded));
+	}
+	return true;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECustomObjectReplicationTest, "ACE.RetailParity.CustomObjectReplication",

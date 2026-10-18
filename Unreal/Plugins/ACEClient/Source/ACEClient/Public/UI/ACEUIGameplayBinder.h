@@ -892,6 +892,7 @@ private:
 	void MoveInventoryAmount(int32 Guid, int32 Container, int32 Placement, int32 Amount);
 	bool MergeInventoryAmount(int32 Guid, int32 TargetGuid, int32 Amount);
 	bool TryDropInExternalContainer(int32 Guid, int32 Amount, FVector2D Absolute);
+	int32 ResolveInventoryDropPlacement(int32 Guid, int32 Amount, int32 Container, int32 TargetGuid) const;
 	/** Dual-use: source item waiting for a target click (GameAction UseWithTarget). */
 	int32 PendingUseWithSourceGuid = 0;
 	TSet<int32> KeyboardOpenedCorpses;
@@ -932,6 +933,8 @@ private:
 	TObjectPtr<UTextBlock> VendorFilterText;
 	UPROPERTY()
 	TArray<TObjectPtr<UTextBlock>> VendorFilterDropdownLabels;
+	UPROPERTY()
+	TArray<TObjectPtr<UBorder>> VendorFilterDropdownRows;
 	UPROPERTY()
 	TArray<TObjectPtr<UTextBlock>> VendorTabLabels;
 	UPROPERTY()

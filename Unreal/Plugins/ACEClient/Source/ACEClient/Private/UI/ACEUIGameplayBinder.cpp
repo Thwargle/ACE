@@ -66,6 +66,7 @@
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Styling/CoreStyle.h"
+#include "Brushes/SlateRoundedBoxBrush.h"
 #include "UI/ACEUIFontStyles.h"
 #include "Dat/ACEDatTextLayout.h"
 #include "Misc/App.h"
@@ -5014,7 +5015,6 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 	const int32 Amount = bHaveDraggedItem ? FMath::Clamp(InvDragAmount > 0 ? InvDragAmount : GetSelectedItemAmount(Guid),
 		1, FMath::Max(1, DraggedItem.StackSize)) : 0;
 	const int32 SourcePack = InvDragSourcePack;
-	const int32 SourceSlot = InvDragSourceSlot;
 	const int32 DragPackSlot = InvDragPackSlotIndex;
 	const int32 ShortcutSource = InvDragShortcutSlot;
 	const bool bWasDragging = bInvDragActive;
@@ -5349,7 +5349,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 	if (HitTestInventorySlot(Absolute, DestGuid, DestSlot))
 	{
 		// Returning a drag to its source cell cancels it; it cannot arm a double-click.
-		if (DestSlot == SourceSlot && (SourcePack == 0 || SourcePack == SelectedPackGuid))
+		if (DestGuid == Guid)
 		{
 			LastInvClickGuid = 0;
 			LastInvClickTime = 0.0;
@@ -5357,9 +5357,7 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 		}
 		const int32 Container = SelectedPackGuid != 0 ? SelectedPackGuid
 			: (SourcePack != 0 ? SourcePack : Client->GetPlayerGuid());
-		// Removing the source shifts a later occupied destination one place left.
-		const int32 InsertSlot = DestSlot - ((Amount == FMath::Max(1, DraggedItem.StackSize) && SourcePack == Container && SourceSlot >= 0
-			&& SourceSlot < DestSlot && DestGuid != 0) ? 1 : 0);
+		const int32 InsertSlot = ResolveInventoryDropPlacement(Guid, Amount, Container, DestGuid);
 		const auto FinishLootPut = [&]()
 		{
 			if (bLootSource)
@@ -5367,8 +5365,8 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 				PlayLocalPickupMotion(PlayerController);
 			}
 		};
-		if (!MergeInventoryAmount(Guid, DestGuid, Amount))
-			MoveInventoryAmount(Guid, Container, FMath::Max(0, InsertSlot), Amount);
+		if (InsertSlot != INDEX_NONE && !MergeInventoryAmount(Guid, DestGuid, Amount))
+			MoveInventoryAmount(Guid, Container, InsertSlot, Amount);
 		FinishLootPut();
 		return true;
 	}
@@ -14361,6 +14359,8 @@ void UACEUIGameplayBinder::CloseVendorFilterDropdown()
 	{
 		if (L) { L->SetVisibility(ESlateVisibility::Collapsed); }
 	}
+	for (UBorder* Row : VendorFilterDropdownRows)
+		if (Row) Row->SetVisibility(ESlateVisibility::Collapsed);
 }
 
 void UACEUIGameplayBinder::RefreshVendorFilterDropdown()
@@ -14421,8 +14421,26 @@ void UACEUIGameplayBinder::RefreshVendorFilterDropdown()
 		Canvas->GetElementLayer()->AddChild(L);
 		VendorFilterDropdownLabels.Add(L);
 	}
+	while (VendorFilterDropdownRows.Num() < Rows)
+	{
+		auto* Row = Canvas->WidgetTree->ConstructWidget<UBorder>();
+		Row->SetPadding(FMargin(0.f));
+		Row->SetBrush(FSlateRoundedBoxBrush(FLinearColor::Transparent, 0.f,
+			FLinearColor(.45f, .32f, .14f, .65f), 1.f));
+		Canvas->GetElementLayer()->AddChild(Row);
+		VendorFilterDropdownRows.Add(Row);
+	}
 	for (int32 i = 0; i < Rows; ++i)
 	{
+		UBorder* Row = VendorFilterDropdownRows[i];
+		Row->SetVisibility(ESlateVisibility::HitTestInvisible);
+		if (auto* Slot = Cast<UCanvasPanelSlot>(Row->Slot))
+		{
+			Slot->SetAnchors(FAnchors(0.f, 0.f));
+			Slot->SetPosition(FVector2D(X, Y + static_cast<float>(i * RowH) * SY));
+			Slot->SetSize(FVector2D(W, static_cast<float>(RowH) * SY));
+			Canvas->SetOverlayOrder(Row, nullptr, DropZ + 1);
+		}
 		UTextBlock* L = VendorFilterDropdownLabels[i];
 		const int32 FilterId = VendorVisibleFilterIndices.IsValidIndex(i)
 			? VendorVisibleFilterIndices[i] : i;
@@ -14438,7 +14456,7 @@ void UACEUIGameplayBinder::RefreshVendorFilterDropdown()
 			Slot->SetAnchors(FAnchors(0.f, 0.f));
 			Slot->SetPosition(FVector2D(X + 4.f * SX, Y + static_cast<float>(i * RowH) * SY));
 			Slot->SetSize(FVector2D(W - 8.f * SX, static_cast<float>(RowH) * SY));
-			Canvas->SetOverlayOrder(L, nullptr, DropZ + 1);
+			Canvas->SetOverlayOrder(L, nullptr, DropZ + 2);
 		}
 	}
 	for (int32 i = Rows; i < VendorFilterDropdownLabels.Num(); ++i)
@@ -14448,6 +14466,8 @@ void UACEUIGameplayBinder::RefreshVendorFilterDropdown()
 			VendorFilterDropdownLabels[i]->SetVisibility(ESlateVisibility::Collapsed);
 		}
 	}
+	for (int32 i = Rows; i < VendorFilterDropdownRows.Num(); ++i)
+		VendorFilterDropdownRows[i]->SetVisibility(ESlateVisibility::Collapsed);
 }
 
 bool UACEUIGameplayBinder::TryHandleVendorFilterDropdownClick(FVector2D Absolute)
@@ -14603,6 +14623,8 @@ void UACEUIGameplayBinder::HideVendorTextOverlays()
 	};
 	for (UTextBlock* L : VendorTabLabels) { Hide(L); }
 	for (UTextBlock* L : VendorFilterDropdownLabels) { Hide(L); }
+	for (UBorder* Row : VendorFilterDropdownRows)
+		if (Row) Row->SetVisibility(ESlateVisibility::Collapsed);
 	Hide(VendorItemNameLabel);
 	Hide(VendorItemCostLabel);
 	Hide(VendorBuyCostLabel);

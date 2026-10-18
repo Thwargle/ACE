@@ -37,6 +37,10 @@ AACEEnvCellActor::AACEEnvCellActor()
 
 	CellMesh = CreateDefaultSubobject<UProceduralMeshComponent>(TEXT("CellMesh"));
 	CellMesh->bPreferCachedDraws = true;
+	// PView already selects room shells from this frame's eye and portal apertures.
+	// Reusing a previous GPU occlusion result can hide a newly admitted room for
+	// a frame, exposing the sky through its doorway while the camera turns.
+	CellMesh->bDisableOcclusionQueries = true;
 	CellMesh->SetupAttachment(Root);
 	CellMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	CellMesh->SetCastShadow(false);

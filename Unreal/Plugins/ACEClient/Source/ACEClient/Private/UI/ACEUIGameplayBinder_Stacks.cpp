@@ -106,6 +106,17 @@ void UACEUIGameplayBinder::UpdateInventoryContainerDropFeedback(FVector2D Canvas
 	}
 }
 
+int32 UACEUIGameplayBinder::ResolveInventoryDropPlacement(int32 Guid, int32 Amount, int32 Container, int32 TargetGuid) const
+{
+	FACEWorldObject Source;
+	if (!Client || !Client->GetWorldObject(Guid, Source)) return INDEX_NONE;
+	const auto Session = Client->GetSession();
+	if (!Session) return INDEX_NONE;
+	TArray<int32> Items;
+	Session->GetPackItemGuids(Container, Items);
+	return ACEInventoryRules::DropInsertionIndex(Items, Guid, TargetGuid, Amount >= FMath::Max(1, Source.StackSize));
+}
+
 bool UACEUIGameplayBinder::TryDropInExternalContainer(int32 Guid, int32 Amount, FVector2D Absolute)
 {
 	if (!Client || !Canvas || !Manager || !OpenLootContainerGuid) return false;
@@ -129,11 +140,8 @@ bool UACEUIGameplayBinder::TryDropInExternalContainer(int32 Guid, int32 Amount, 
 			if (ExtItemGuids[I] == Guid) return true;
 			if (!MergeInventoryAmount(Guid, ExtItemGuids[I], Amount))
 			{
-				FACEWorldObject Source;
-				int32 Place = I + ExtItemScrollOffset;
-				if (Client->GetWorldObject(Guid, Source) && Source.ContainerId == Container
-					&& Source.PlacementPosition >= 0 && Source.PlacementPosition < Place && Amount >= Source.StackSize) --Place;
-				MoveInventoryAmount(Guid, Container, Place, Amount);
+				const int32 Place = ResolveInventoryDropPlacement(Guid, Amount, Container, ExtItemGuids[I]);
+				if (Place != INDEX_NONE) MoveInventoryAmount(Guid, Container, Place, Amount);
 			}
 			return true;
 		}

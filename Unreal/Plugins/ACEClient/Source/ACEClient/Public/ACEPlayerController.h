@@ -59,6 +59,7 @@ class ACECLIENT_API AACEPlayerController : public APlayerController
 	friend class FACEPortalRetirementTest;
 	friend class FACELedgeStairsTest;
 	friend class FACELedgeSafetyTest;
+	friend class FACESlopeContactTest;
 	friend class FACEMansionEdgesTest;
 	friend class FACEFortTethStairsTest;
 	friend class FACEBuildingPassageTest;

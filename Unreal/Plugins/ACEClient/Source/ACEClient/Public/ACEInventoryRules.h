@@ -12,6 +12,19 @@ enum class EACEOwnedItemUse : uint8
 
 namespace ACEInventoryRules
 {
+    // Retail drops insert before the target ID, or append over an empty cell.
+    // Resolve against the current list: transfers can compact it during a drag.
+    // INDEX_NONE cancels a self-drop or a drop onto an item that has disappeared.
+    inline int32 DropInsertionIndex(const TArray<int32>& Items, int32 SourceGuid, int32 TargetGuid, bool bWholeStack)
+    {
+        if (SourceGuid == TargetGuid) return INDEX_NONE;
+        int32 Index = TargetGuid ? Items.IndexOfByKey(TargetGuid) : Items.Num();
+        if (Index == INDEX_NONE) return INDEX_NONE;
+        const int32 Source = Items.IndexOfByKey(SourceGuid);
+        if (bWholeStack && Source != INDEX_NONE && Source < Index) --Index;
+        return Index;
+    }
+
     // Vendor stock is a unit count, not a stack count. An unlimited supply does
     // not make a non-stackable item stackable (armor and weapons stay at one).
     inline int32 VendorPurchaseLimit(const FACEWorldObject& Stock)

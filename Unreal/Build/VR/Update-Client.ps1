@@ -35,7 +35,11 @@ try {
     if ($setup.ExitCode -ne 0) { throw "The installer returned code $($setup.ExitCode). See installer.log in this folder." }
     'Update installed successfully.' | Set-Content -LiteralPath $logPath
     $gameArgs = if ($Mode -eq 'VR') { '-vr' } else { '-nohmd' }
-    Start-Process -FilePath $gameExe -ArgumentList $gameArgs -WorkingDirectory $installRoot -WindowStyle Hidden
+    # The updater is hidden, but the restarted game is an interactive window.
+    # SW_HIDE is inherited by Unreal's first ShowWindow and leaves a live,
+    # rendering client with no visible window after an otherwise successful update.
+    $restarted = Start-Process -FilePath $gameExe -ArgumentList $gameArgs -WorkingDirectory $installRoot -WindowStyle Normal -PassThru
+    "Restarted $Mode client (PID $($restarted.Id)) with a visible window." | Add-Content -LiteralPath $logPath
 } catch {
     $message = $_.Exception.Message
     $message | Set-Content -LiteralPath $logPath

@@ -83,6 +83,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
     friend class FACEPluginCompanionTest;
     friend class FACEPluginPublicAPITest;
 	friend class FACEItemToolsTest;
+    friend class FACEAutoCraftTest;
     friend class FACELedgerTest;
     friend class FACEPluginRampRouteTest;
 	friend class FACEDeferredWorldAppearanceTest;
@@ -124,6 +125,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACERetailNetworkTest;
 	friend class FACEGroundItemPlacementTest;
 	friend class FACECustomObjectReplicationTest;
+	friend class FACEInitialRestingMotionTest;
 	friend class FACETailoringLayersTest;
 	friend class FACECustomWorldPresentationTest;
 	friend class FACEHouseHookAnimationTest;
@@ -136,6 +138,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACELoadingTransitionTest;
 	friend class FACELedgeStairsTest;
 	friend class FACELedgeSafetyTest;
+	friend class FACESlopeContactTest;
 	friend class FACEMansionEdgesTest;
 	friend class FACEFortTethStairsTest;
 	friend class FACEBuildingPassageTest;
@@ -980,6 +983,7 @@ private:
 	/** Encrypted replies can arrive before ConnectRequest supplies ISAAC seeds. */
 	TArray<TArray<uint8>> PreHandshakeDatagrams;
 	uint32 VRCapabilities = 0;
+	bool bVRDiscoveryRequested = false;
 	bool bLocalVRFeedback = false;
 	int32 VRMissileWeapon = 0;
 	float VRMissileSpeed = 0.f;

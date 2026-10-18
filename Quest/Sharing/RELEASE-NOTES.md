@@ -1,67 +1,52 @@
-# AC:Unreal / AC:VR release 122
+# AC:Unreal / AC:VR release 123
 
 Windows desktop, PC VR, native Linux x86_64, and standalone Quest share version
-**2026.10.17.122**. Android version code: 122. Quest installer revision: 9.
+**2026.10.18.123**. Android version code: 123. Quest installer revision: 9.
 
-## UCM and inventory
+## Auto Craft
 
-- Separate summoning essences from weapon selection so selecting an essence does
-  not exclude usable wands or interrupt combat. Prioritize essence appraisal and
-  allow automatic summoning with Combat disabled, including a UCM Micro toggle.
-- Recover from missing corpse contents and containers that close after the final
-  pickup. Preserve completed-corpse history across UCM Stop/Start.
-- Fill empty mana stones from eligible junk without requiring those items in the
-  consumables pool; preserve confirmed source-item and mana checks.
-- Preserve backpack slot order after bulk transfers and subsequent item drags.
-- Restore keyboard pickup and pack-slot drops of portable backpacks on the ground.
-- Add an explicit Item Tools option for servers that pay vendors from a custom
-  bank. Explain missing inventory proceeds instead of repeatedly selling notes.
+- Add a separate optional Auto Craft plugin with its own icon and Plugin Manager checkbox.
+- Search categories and recipes, choose a quantity or Max available, and optionally
+  make missing intermediate ingredients from materials in the character's packs.
+- Show available inventory, missing materials and tools, batch quantities and
+  space requirements before starting. Save selections per character and server.
+- Confirm inventory changes before advancing; support pause/resume, stopping,
+  stack preparation and safe coordination with UCM and other inventory automation.
+- Include 11,199 production recipe pairs covering 4,744 output item IDs from the
+  standard ACE World database. Server-specific recipes and item-modification-only
+  actions such as tailoring are outside this manufacturing catalog.
 
-## World, targeting and chat
+## Inventory and movement
 
-- Improve cliff, roof and stair support checks using retail polygon footprints,
-  terrain support and step-down rules; prevent unsupported outward edge creep.
-- Preserve authored decorative poses when the server supplies no motion table,
-  and exclude unnamed fixed decoration from selection and examination.
-- After a kill, select the nearest eligible creature within radar range.
-- Preserve the chat reading position while messages arrive or old history expires,
-  including scrollbar dragging and unread indicators in extra chat windows.
+- Preserve dense backpack order when equipping and dequipping, including early
+  weapon attachment packets. Do not invent a main-pack move during visual detach.
+- Resolve drag destinations against current item IDs after transfers change the
+  inventory. Keep partial-stack, cross-pack and empty-cell drops consistent.
+- Keep inventory slot counts consistent with the displayed list while equips are pending.
+- Correct grounded slope recovery so turning or casting does not introduce
+  sideways movement down walkable slopes.
 
-## Login and plugin development
+## Rendering, plugins and updates
 
-- Add an eye button to show or hide the saved-account password while editing it.
-- Remove the shared host notice from the top of unrelated plugin windows.
-- Add permission-gated Lua chat filtering by window, sender, type and text, while
-  keeping messages available to plugin readers. Include a documented example.
-- Let custom plugins choose separate, toggle or hidden Start/Stop controls,
-  customize their labels, and optionally hide Settings and profiles.
-- Expose composite inventory item icons with backgrounds, underlays, overlays
-  and enchantment effects through the Lua UI API.
+- Avoid stale GPU occlusion results hiding dungeon room shells as the camera
+  moves through doorways; retain current-frame portal visibility checks.
+- Parse queued resting motions in initial object descriptions so decorative
+  bodies can retain their authored dead, sleeping or sitting poses.
+- Honor plugin text-size overrides and add separators to vendor category rows.
+- Discover optional VR protocol support through the standard ping action, avoiding
+  unhandled 0xF7D0 warnings on ordinary ACE servers. Servers offering the optional
+  VR extension need the accompanying updated ping handler.
+- Restart the Windows client visibly after updates in desktop and VR modes;
+  keep the installer itself unattended.
 
-## Performance and diagnostics
+## Validation limits
 
-- Exclude unused default engine plugins and editor import pipelines from game
-  packages, avoiding a Niagara type-registration crash found in release testing.
-- Batch rejected crowd contacts during floor support checks and stop repeating
-  identical blocked movement steps. A synthetic 120-creature hallway comparison
-  improved from about 30 to 40 FPS on the development machine.
-- Add per-frame CPU subsystem timings to `/acueperf` and slow-frame reports,
-  plus moving-crowd and prolonged simulated-lag regression coverage.
-- Avoid repeated VR arm render-proxy updates when controllers are untracked.
-- Defer hidden desktop HUD presentation in native VR and refresh it when shown.
-- Strengthen Quest performance capture validation for refresh-rate and resolution
-  changes. These changes do not establish a sustained 90 FPS target.
-
-## Compatibility and validation limits
-
-- **AC-WoW Transmog, its provider, converter and model assets are excluded.**
-- Updates preserve accounts, settings, profiles and DAT files. Linux updates are
-  downloaded and extracted manually. Game DAT files and a server are not included.
-- The full live-server dungeon/Hoshino freeze and leftover-process crash reports
-  remain unconfirmed. The ten-minute synthetic crowd/lag test stayed around
-  32-34 FPS, but it does not reproduce every live server's workload.
-- Custom-bank purchasing and multiplayer collision behavior still require live
-  acceptance. Automated tests and packaging are not physical-headset acceptance.
-- Added packet-level tests for the standard fellowship horn health bonus,
-  including damage, refresh, stacking and expiry. The reported Conquest
-  693/683 display has not been reproduced and is not claimed fixed.
+- Automated tests cover inventory order, drag placement, crafting, slope contact,
+  dungeon visibility, initial resting poses, plugin UI and updater restart behavior.
+- The exact custom-server Dead Adventurer selection report remains unresolved;
+  added object diagnostics support further investigation. Not every selectable
+  decoration or reported ghost-process crash is claimed fixed by this release.
+- Live-server and physical-headset acceptance remain separate from build and
+  automated-test success. No new sustained Quest FPS claim is made.
+- Updates preserve saved accounts, profiles, settings and DAT files. Game DATs,
+  server files and optional AC-WoW Transmog assets are excluded from client packages.

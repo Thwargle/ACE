@@ -72,6 +72,14 @@ void SACEPluginIcon::Construct(const FArguments& Args)
         Line({{8,12},{16,8},{24,12},{24,21},{16,25},{8,21},{8,12},{16,16},{24,12}},Paper);
         Line({{16,16},{16,25}},Gold);
     }
+    else if(Id==TEXT("autocraft")) // Mortar, pestle and a small crafting spark.
+    {
+        Fill({{5,14},{27,14},{24,24},{20,28},{11,28},{7,24}},Teal);
+        Line({{4,14},{28,14},{25,23},{20,28},{11,28},{7,23},{4,14}},Gold);
+        Fill({{18,16},{15,13},{23,3},{27,6}},Paper);
+        Line({{9,29},{23,29}},Gold);
+        Line({{7,2},{7,10}},Gold);Line({{3,6},{11,6}},Gold);
+    }
     else if(Id==TEXT("waypoint")) // Trail terminating in a north needle.
     {
         Line({{3,28},{10,28},{10,21},{18,21},{18,14}},Gold);

@@ -6,7 +6,9 @@
 #include "ACESkyDomeActor.h"
 #include "ACELandblockActor.h"
 #include "ACETerrainChunkActor.h"
+#include "ACEEnvCellActor.h"
 #include "ProceduralMeshComponent.h"
+#include "PrimitiveSceneProxy.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Engine/DirectionalLight.h"
@@ -108,6 +110,29 @@ bool FACECachedWorldDrawTest::RunTest(const FString&)
         Mesh->UpdateMeshSection(0, Smaller, {}, {}, {}, {}); Compare(TEXT("Vertex edit"), true);
         Mesh->ClearMeshSection(0); Compare(TEXT("Cleared"), false);
     }
+    // Portal admission must take effect immediately: old hardware occlusion
+    // results cannot suppress a room after PView exposes its doorway. Verify
+    // both render paths and that explicit portal hiding still removes pixels.
+    for (bool UseCache : {false, true})
+    {
+        auto* Room = World->SpawnActor<AACEEnvCellActor>();
+        auto* RoomMesh = Room->CellMesh.Get();
+        RoomMesh->bPreferCachedDraws = UseCache;
+        RoomMesh->SetMaterial(0, Material);
+        RoomMesh->CreateMeshSection(0, Vertices, {0,2,1,0,3,2,0,1,2,0,2,3}, {}, {}, {}, {}, false);
+        Capture->ShowOnlyComponents.Reset(); Capture->ShowOnlyComponents.Add(RoomMesh);
+        const auto VisiblePixels = Render();
+        if (TestNotNull(TEXT("Room has a render proxy"), RoomMesh->SceneProxy))
+            TestFalse(TEXT("Portal room cannot reuse stale GPU occlusion"), RoomMesh->SceneProxy->CanBeOccluded());
+        int32 Lit = 0; for (const auto& Pixel : VisiblePixels) Lit += FMath::Max3(Pixel.R,Pixel.G,Pixel.B)>20;
+        TestTrue(TEXT("Admitted room draws its wall"), Lit>100);
+        RoomMesh->SetMeshDrawVisible(false);
+        Lit = 0; for (const auto& Pixel : Render()) Lit += FMath::Max3(Pixel.R,Pixel.G,Pixel.B)>20;
+        TestEqual(TEXT("PView can still hide the room"), Lit, 0);
+        RoomMesh->SetMeshDrawVisible(true);
+        TestTrue(TEXT("Readmitted room restores its wall"), Render()==VisiblePixels);
+        Capture->ShowOnlyComponents.Reset(); Room->Destroy();
+    }
     // Hiding only terrain must preserve the uploaded building/furniture meshes
     // attached to that root, and leave their independently controlled draw visible.
     for(bool Chunk:{false,true})
@@ -142,6 +167,7 @@ bool FACECachedWorldDrawTest::RunTest(const FString&)
         Render();
         auto* TerrainProxy=TerrainMesh->SceneProxy;
         TestNotNull(TEXT("Terrain geometry has a resident render proxy"),TerrainProxy);
+        if (TerrainProxy) TestTrue(TEXT("Outdoor terrain retains hardware occlusion"), TerrainProxy->CanBeOccluded());
         for(bool Priority:{true,false,true,false})
         {
             if(Chunk)TerrainChunk->SetLandEnvCellFloorPriority(Priority,Dat,true);

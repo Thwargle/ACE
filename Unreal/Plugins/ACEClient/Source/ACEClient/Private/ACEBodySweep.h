@@ -535,6 +535,23 @@ namespace ACEBodySweep
         return RecoverEmbedded(World,From,Capsule,Params);
     }
 
+    // Ground support is a vertical adjustment (OBJECTINFO::validate_walkable,
+    // CTransition::step_down). A normal-directed recovery on a walkable slope
+    // adds downhill XY on every ground snap. Try the equivalent vertical
+    // clearance first, still checking the crown and neighboring solids. Keep
+    // ordinary recovery when a ceiling prevents it or the contact is a wall.
+    inline FVector RecoverGrounded(UWorld& World, const FVector& From, const FVector& Push,
+        const FHitResult& Hit, const FACECollisionBody& Body, const FCollisionQueryParams& Params)
+    {
+        if (!IsUpperBodyContact(Hit) && !IsCreatureBody(Hit) && Hit.Normal.Z>=.6641741f && Push.Z>0.f)
+        {
+            const double Clearance=FMath::Max(double(Hit.PenetrationDepth+.2f),FVector::DotProduct(Push,Hit.Normal));
+            const FVector Up=RecoverAlong(World,From,FVector(0,0,Clearance/Hit.Normal.Z),Hit,Body,Params);
+            if (!Up.Equals(From,.01f)) return Up;
+        }
+        return Recover(World,From,Push,Hit,Body,Params);
+    }
+
     // CTransition::transitional_insert/check_walkable split descents longer
     // than the lower sphere's diameter. Single-sphere bodies use half a radius.
     inline float StepDownProbeDistance(float Radius, int32 SphereCount, float Distance)
@@ -819,7 +836,8 @@ namespace ACEBodySweep
     // A jump collides with all faces, including a roof touched only by the lower
     // sphere. Center rays and 2D wall slides cannot validate this path.
     inline FAirborneMove MoveAirborne(UWorld& World, const FVector& From, const FVector& To,
-        const FACECollisionBody& Capsule, const FCollisionQueryParams& Params, bool bFalling, float LandingZ=.0871557f)
+        const FACECollisionBody& Capsule, const FCollisionQueryParams& Params, bool bFalling, float LandingZ=.0871557f,
+        bool bGroundedStepDown=false)
     {
         FAirborneMove Result{From};
         FVector Remaining=To-From;
@@ -895,8 +913,10 @@ namespace ACEBodySweep
                 // the same time-zero hit and gravity never moves the body.
                 if (!Normal.IsNearlyZero())
                 {
-                    const FVector Recovered = Recover(World, Start,
-                        Normal * (Hit.PenetrationDepth + .5f), Hit, Capsule, AirParams);
+                    const FVector Push=Normal*(Hit.PenetrationDepth+.5f);
+                    const FVector Recovered = bGroundedStepDown
+                        ? RecoverGrounded(World,Start,Push,Hit,Capsule,AirParams)
+                        : Recover(World,Start,Push,Hit,Capsule,AirParams);
                     if (!Recovered.Equals(Start, .01f))
                     {
                         Result.Position = Recovered;
@@ -935,7 +955,11 @@ namespace ACEBodySweep
                 }
                 break;
             }
-            Result.Position=Hit.Location+Normal*.1f;
+            // Contact skin must not turn a vertical grounded snap into lateral
+            // travel. Airborne wall/roof slides retain their contact normal.
+            const FVector Skin=bGroundedStepDown && !IsUpperBodyContact(Hit) && Normal.Z>=.6641741f
+                ? FVector(0,0,.1f/Normal.Z) : Normal*.1f;
+            Result.Position=Hit.Location+Skin;
             if (bFalling && !IsUpperBodyContact(Hit) && Normal.Z>=LandingZ && Remaining.Z<0.f)
             { Result.bLanded=true; break; }
             Remaining*=1.f-Hit.Time;
