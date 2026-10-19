@@ -16,6 +16,12 @@ signing certificate and a newer version code. The player may need to grant the
 app permission to request installations. The USB updater remains the fallback
 for headset OS versions that do not expose that permission or confirmation UI.
 
+Linux v124 and later download and verify the native tar.gz, then run the included
+Python 3 helper to install and restart. It validates archive members, preserves
+Saved/DAT/plugin data, waits for the requesting process, and rolls back failures.
+Older Linux clients need one manual extraction to acquire this helper. The
+installation must be writable and `/usr/bin/python3` must be available.
+
 ## Publishing a newer version
 
 1. Increment `ACEClientBuild::ReleaseNumber` and the Quest Android StoreVersion
@@ -24,7 +30,7 @@ for headset OS versions that do not expose that permission or confirmation UI.
    VersionDisplayName. Windows desktop, PC VR, Quest, and the Windows installer
    must show the same version. Both build scripts run `Test-ReleaseVersion.ps1`
    to reject mismatches before compiling; release assembly also checks the APK.
-2. Build and test Windows and Quest. Keep the Quest package ID and signing key.
+2. Build and test Windows, Linux and Quest. Keep the Quest package ID and signing key.
 3. Run `Quest/Build-SharePackage.ps1`, `Build-Release.py`, and
    `Build-WindowsInstaller.ps1` with the new release number.
 4. Run `Stage-WebsiteRelease.py` against the completed release directory. It

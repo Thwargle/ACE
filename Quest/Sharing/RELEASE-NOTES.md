@@ -1,52 +1,56 @@
-# AC:Unreal / AC:VR release 123
+# AC:Unreal / AC:VR release 124
 
 Windows desktop, PC VR, native Linux x86_64, and standalone Quest share version
-**2026.10.18.123**. Android version code: 123. Quest installer revision: 9.
+**2026.10.19.124**. Android version code: 124. Quest installer revision: 9.
 
-## Auto Craft
+## Inventory, vendors and world objects
 
-- Add a separate optional Auto Craft plugin with its own icon and Plugin Manager checkbox.
-- Search categories and recipes, choose a quantity or Max available, and optionally
-  make missing intermediate ingredients from materials in the character's packs.
-- Show available inventory, missing materials and tools, batch quantities and
-  space requirements before starting. Save selections per character and server.
-- Confirm inventory changes before advancing; support pause/resume, stopping,
-  stack preparation and safe coordination with UCM and other inventory automation.
-- Include 11,199 production recipe pairs covering 4,744 output item IDs from the
-  standard ACE World database. Server-specific recipes and item-modification-only
-  actions such as tailoring are outside this manufacturing catalog.
+- Preserve the server's item order in side packs, including login snapshots that
+  arrive before the backpack itself. Keep unresolved item slots in their original
+  positions as descriptions arrive.
+- Prevent unsolicited inventory snapshots from being treated as newly opened
+  ground containers and discarding another pack's contents.
+- Keep renewed vendor item descriptions alive after reopening a shop, preventing
+  old cleanup timers from turning listed merchandise into "Unknown" items.
+- Fall back to the authored resting pose when a corpse's motion table has no
+  requested On/Off transition, instead of displaying an upright bind pose.
 
-## Inventory and movement
+## Hunt Ledger
 
-- Preserve dense backpack order when equipping and dequipping, including early
-  weapon attachment packets. Do not invent a main-pack move during visual detach.
-- Resolve drag destinations against current item IDs after transfers change the
-  inventory. Keep partial-stack, cross-pack and empty-cell drops consistent.
-- Keep inventory slot counts consistent with the displayed list while equips are pending.
-- Correct grounded slope recovery so turning or casting does not introduce
-  sideways movement down walkable slopes.
+- Count the first luminance reward when login omits an initial zero balance,
+  including characters who unlock luminance during the session.
+- Show available XP and luminance separately from earnings, mark a full luminance
+  balance with "(cap)", and show "--" while waiting for a starting balance.
+- Track credited luminance directly from server balance updates. Spending does
+  not subtract earnings; bonuses and sharing are already reflected in the credits.
+- Keep the reset button clear of the resize handle.
 
-## Rendering, plugins and updates
+## Linux updates and shutdown
 
-- Avoid stale GPU occlusion results hiding dungeon room shells as the camera
-  moves through doorways; retain current-frame portal visibility checks.
-- Parse queued resting motions in initial object descriptions so decorative
-  bodies can retain their authored dead, sleeping or sitting poses.
-- Honor plugin text-size overrides and add separators to vendor category rows.
-- Discover optional VR protocol support through the standard ping action, avoiding
-  unhandled 0xF7D0 warnings on ordinary ACE servers. Servers offering the optional
-  VR extension need the accompanying updated ping handler.
-- Restart the Windows client visibly after updates in desktop and VR modes;
-  keep the installer itself unattended.
+- Download, verify, install and restart Linux updates from the launcher with the
+  included Python 3 helper. Preserve saved settings, DAT files and user plugins.
+- Validate archive paths and executable versions, wait for the requesting client
+  to exit, and restore previous files if installation fails.
+- Stop repeated automatic installation attempts after a failed update until the
+  player checks again. Close other clients using the same installation first.
+- Allow 45 seconds for requested exit or fatal-error cleanup, then terminate a
+  stuck process. Normal gameplay, minimization and loss of focus do not trigger it.
+- **Upgrading from v123 or earlier on Linux still requires one manual extraction.**
+  The new installer becomes available after launching v124. It requires
+  `/usr/bin/python3` and a writable installation folder.
 
-## Validation limits
+## Validation and remaining limits
 
-- Automated tests cover inventory order, drag placement, crafting, slope contact,
-  dungeon visibility, initial resting poses, plugin UI and updater restart behavior.
-- The exact custom-server Dead Adventurer selection report remains unresolved;
-  added object diagnostics support further investigation. Not every selectable
-  decoration or reported ghost-process crash is claimed fixed by this release.
-- Live-server and physical-headset acceptance remain separate from build and
-  automated-test success. No new sustained Quest FPS claim is made.
-- Updates preserve saved accounts, profiles, settings and DAT files. Game DATs,
-  server files and optional AC-WoW Transmog assets are excluded from client packages.
+- Regression coverage includes side-pack order, vendor description lifetime,
+  supplied corpse fixtures, luminance packets and UI, updater rollback and restart,
+  and bounded Linux shutdown. Platform packaging does not establish live playtest
+  or physical-headset acceptance.
+- The exact custom-server decoration selection mismatch remains unresolved.
+  Usable quest bodies remain interactive; this release does not hide all corpses.
+- The Linux safeguard addresses hangs during exit/fatal cleanup. The original
+  cause of every reported ghost process has not been reproduced.
+- Luminance blocked by its cap or deposited into an unreported custom bank cannot
+  be measured from balance updates. The reported all-session zero has not been
+  reproduced on a live server; no custom `/lph` commands are issued.
+- Game DATs, server files, saved accounts/settings and optional AC-WoW Transmog
+  assets are excluded from client downloads. No new sustained Quest FPS claim is made.

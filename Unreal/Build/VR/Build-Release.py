@@ -127,6 +127,7 @@ def build_linux_archive(root, linux, release, version, display_version):
     verify_binary_version(linux / LINUX_EXE, display_version, linux=True)
     files = linux_payload(linux)
     files += [(root / source, name) for source, name in (
+        ('Unreal/Build/VR/Update-Client.py', 'Update-Client.py'),
         ('Unreal/Build/VR/README-LINUX.txt', 'README-LINUX.txt'),
         ('Quest/Sharing/RELEASE-NOTES.md', 'RELEASE-NOTES.md'), ('LICENSE', 'LICENSE'))]
     for path, _ in files:

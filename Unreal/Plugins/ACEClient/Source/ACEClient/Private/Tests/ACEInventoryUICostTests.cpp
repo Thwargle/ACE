@@ -164,13 +164,13 @@ bool FACEInventoryUICostTest::RunTest(const FString&)
     auto Arrived = MakeItem(8002, 200, 3); Session->WorldObjects.Add(8002, Arrived);
     AddRef(200, 8001); AddRef(200, 8002); AddRef(200, 8003, 1);
     TArray<int32> Ids; Session->GetPackItemGuids(200, Ids);
-    TestTrue(TEXT("Pending item follows ordered creates and pending pack is excluded"), Ids == TArray<int32>({8002,8001}));
+    TestTrue(TEXT("Pending item retains its wire position and pending pack is excluded"), Ids == TArray<int32>({8001,8002}));
     TArray<FACEWorldObject> Copied; Session->GetPackItems(200, Copied);
     if (TestEqual(TEXT("Both resolved and pending inventory slots survive"), Copied.Num(), 2))
     {
-        TestEqual(TEXT("Pending item retains placeholder name"), Copied[1].Name, FString::Printf(TEXT("Item 0x%08X"), 8001));
-        TestEqual(TEXT("Pending item's container survives"), Copied[1].ContainerId, 200);
-        TestEqual(TEXT("Full snapshot still includes appearance data"), Copied[0].Appearance.AnimPartChanges.Num(), 16);
+        TestEqual(TEXT("Pending item retains placeholder name"), Copied[0].Name, FString::Printf(TEXT("Item 0x%08X"), 8001));
+        TestEqual(TEXT("Pending item's container survives"), Copied[0].ContainerId, 200);
+        TestEqual(TEXT("Full snapshot still includes appearance data"), Copied[1].Appearance.AnimPartChanges.Num(), 16);
     }
     Session->WorldObjects.Add(8001, MakeItem(8001, 200, 1));
     Session->GetPackItemGuids(200, Ids);

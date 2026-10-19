@@ -101,7 +101,7 @@ FVector2D UACEPluginSubsystem::LedgerSize(const FString& Id) const
 {
     const bool Locked=IsPluginWindowChromeHidden(Id);
     return Id==TEXT("supplyledger")?FVector2D(200,14+FMath::Clamp(LedgerSupplies.Num(),1,15)*26+LedgerChromeHeight(Id,Locked))
-        :FVector2D(290,130+LedgerChromeHeight(Id,Locked));
+        :FVector2D(290,164+LedgerChromeHeight(Id,Locked));
 }
 double UACEPluginSubsystem::LedgerChromeHeight(const FString& Id,bool Hidden) const
 {
@@ -125,9 +125,10 @@ namespace
         TWeakObjectPtr<UACEPluginSubsystem> Host;FString Id;
         TSharedPtr<FACEPluginStyle> Style;TSharedPtr<SVerticalBox> Body;
         uint32 Revision=0;bool Locked=false;
-        FText HuntText[3][2], HuntEstimate;
+        FText HuntText[4][2], HuntEstimate;
         int64 HuntSecond=-1,HuntXP=-1,HuntLum=-1,CharacterXP=-1;
-        double HuntStarted=-1;int32 HuntLevel=-1;bool HuntValid=false;
+        int64 AvailableXP=-1,AvailableLum=-1,MaximumLum=-1;
+        double HuntStarted=-1;int32 HuntLevel=-1;bool HuntValid=false,LumKnown=false;
         FText EstimateHuntLevel() const
         {
             auto* GI=Host.IsValid()?Host->GetGameInstance():nullptr;
@@ -157,18 +158,27 @@ namespace
             const auto& V=C->GetPlayerVitalsView();const auto& L=Host->GetHuntLedger();
             const double Now=FPlatformTime::Seconds();const int64 Second=FMath::FloorToInt64(Now);
             const bool Valid=V.bValid&&V.QualityInt64s.Contains(1);
+            const bool HasLum=V.bValid&&(V.bHasLuminanceBalance||V.QualityInt64s.Contains(6));
             if(HuntSecond==Second&&HuntXP==L.XP&&HuntLum==L.Lum&&HuntStarted==L.Started
-                &&CharacterXP==V.TotalExperience&&HuntLevel==V.Level&&HuntValid==Valid)return;
+                &&CharacterXP==V.TotalExperience&&HuntLevel==V.Level&&HuntValid==Valid
+                &&AvailableXP==V.AvailableExperience&&AvailableLum==V.AvailableLuminance&&MaximumLum==V.MaximumLuminance&&LumKnown==HasLum)return;
             HuntSecond=Second;HuntXP=L.XP;HuntLum=L.Lum;HuntStarted=L.Started;
             CharacterXP=V.TotalExperience;HuntLevel=V.Level;HuntValid=Valid;
+            AvailableXP=V.AvailableExperience;AvailableLum=V.AvailableLuminance;MaximumLum=V.MaximumLuminance;LumKnown=HasLum;
             const auto Recent=L.LastFiveMinutes(Now);
+            const FText Unknown=FText::FromString(TEXT("--"));
             for(int32 Lum=0;Lum<2;++Lum)
             {
                 const int64 Total=Lum?L.Lum:L.XP;
-                HuntText[0][Lum]=FText::AsNumber(Lum?Recent.Lum:Recent.XP);
-                HuntText[1][Lum]=FText::AsNumber(L.PerHour(Total,Now));
-                HuntText[2][Lum]=FText::AsNumber(Total);
+                const bool Known=Lum?L.HasLum:L.HasXP;
+                HuntText[0][Lum]=Known?FText::AsNumber(Lum?Recent.Lum:Recent.XP):Unknown;
+                HuntText[1][Lum]=Known?FText::AsNumber(L.PerHour(Total,Now)):Unknown;
+                HuntText[2][Lum]=Known?FText::AsNumber(Total):Unknown;
             }
+            HuntText[3][0]=V.bValid?FText::AsNumber(AvailableXP):Unknown;
+            HuntText[3][1]=HasLum?FText::AsNumber(AvailableLum):Unknown;
+            if(HasLum&&MaximumLum>0&&AvailableLum>=MaximumLum)
+                HuntText[3][1]=FText::Format(FText::FromString(TEXT("{0} (cap)")),HuntText[3][1]);
             HuntEstimate=EstimateHuntLevel();
         }
         TSharedRef<SWidget> Label(const FString& Text)
@@ -221,6 +231,7 @@ namespace
                 {
                     auto R=SNew(SHorizontalBox);R->AddSlot().FillWidth(1)[Label(Caption)];
                     for(bool Lum:{false,true})R->AddSlot().FillWidth(1).HAlign(HAlign_Right)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
+                        .Tag(Lum&&Metric>=0?FName(*FString::Printf(TEXT("HuntLuminance%d"),Metric)):NAME_None)
                         .Text_Lambda([this,Metric,Lum]
                         {
                             if(Metric<0){static const FText XP=FText::FromString(TEXT("XP")),Luminance=FText::FromString(TEXT("Luminance"));return Lum?Luminance:XP;}
@@ -229,12 +240,14 @@ namespace
                     Body->AddSlot().AutoHeight().Padding(3,3)[R];
                 };
                 Row(TEXT(""),-1);Row(TEXT("Last 5 min"),0);Row(TEXT("Per hour"),1);Row(TEXT("Total"),2);
+                Row(TEXT("Available"),3);
                 auto Estimate=SNew(SHorizontalBox);
                 Estimate->AddSlot().FillWidth(1)[Label(TEXT("Next level (est.)"))];
                 Estimate->AddSlot().AutoWidth().HAlign(HAlign_Right)[SNew(SACEPluginText).Tag(TEXT("HuntNextLevel"))
                     .Font(FCoreStyle::GetDefaultFontStyle("Regular",12)).Text_Lambda([this]{return HuntEstimate;})];
                 Body->AddSlot().AutoHeight().Padding(3,3)[Estimate];
                 Body->SetToolTipText(FText::FromString(FString(TEXT("Last 5 min: gains in the rolling five-minute window. Per hour: average since login or Reset. Spending XP/luminance does not subtract earned totals. Closing this window keeps tracking."))
+                    +TEXT(" Available shows your current spendable balance, not earnings. Luminance counts increases credited by the server, after bonuses and sharing. Rewards blocked by the cap or deposited in an unreported custom bank cannot be measured from this balance. -- means no baseline has arrived yet.")
                     +TEXT(" Next level estimates the remaining time using your average XP rate since login or Reset.")
                     +(Locked?TEXT("\nUse the game UI lock or hold Quick-show pinned windows to move and edit this HUD."):TEXT(""))));
                 if(!Locked)Body->AddSlot().AutoHeight()[Button(TEXT("Reset run"),TEXT("Clear totals and begin a new estimate now"),[H=Host]{if(H.IsValid())H->ResetHuntLedger();})];

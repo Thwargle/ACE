@@ -237,6 +237,37 @@ bool FACECustomWorldPresentationTest::RunTest(const FString&)
         BodyActor->Destroy();
     }
 
+    // User-provided WCIDs 13370453 and 41803 share 090001A0: its Ready
+    // cycle is frame zero of 03000397 at zero FPS (already lying down).
+    // The Chest receives Off, which that table does not implement; the quest
+    // creature is remotely usable and must not be mistaken for slain loot.
+    for(bool Chest:{true,false})
+    {
+        FACEWorldObject Body=Object; Body.bHasServerPhysicsDescription=true;
+        Body.WeenieClassId=Chest?13370453:41803; Body.Name=Chest?TEXT("Dead Adventurer"):TEXT("Corpse of Celestial Hand Agent");
+        Body.SetupId=Chest?0x0200004E:0x02000001; Body.MotionTableId=0x090001A0;
+        Body.ItemType=Chest?ACEItemType::Container:ACEItemType::Creature;
+        Body.ItemUseable=Chest?48:32; Body.PhysicsState=Chest?1052:6292492;
+        Body.ObjectDescriptionFlags=ACEObjectDescFlag::Stuck | (Chest?ACEObjectDescFlag::Openable:0);
+        Body.InitialMotionCommand=Chest?ACEMotion::OffCommandU16:0;
+        Body.InitialMotionStyle=ACEMotion::StanceNonCombat;
+        auto* Actor=World->SpawnActor<AACEWorldEntityActor>(); Actor->InitializeFromObject(Body,100,true);
+        TArray<FTransform> Pose;int32 Count=0;
+        TestTrue(TEXT("Supplied corpse table default loads"),Dat->EvaluateIdleMotion(Body.MotionTableId,0,Actor->Appearance->GetPartCount(),Pose,100,Count));
+        TestTrue(TEXT("Retail corpse idle has head near the floor"),Pose.IsValidIndex(16) && Pose[16].GetLocation().Z<20);
+        for(int32 Pass=0;Pass<3;++Pass)
+        {
+            for(int32 Frame=0;Frame<60;++Frame) Actor->Appearance->TickComponent(1.f/60,LEVELTICK_All,nullptr);
+            for(int32 Part=0;Part<Count;++Part)
+                TestTrue(TEXT("Supplied weenie retains authored corpse pose"),Actor->Appearance->GetPartCurrentTransform(Part,Actual)
+                    && Actual.GetLocation().Equals(Pose[Part].GetLocation(),.01) && Actual.GetRotation().Equals(Pose[Part].GetRotation(),.001));
+            Actor->InitializeFromObject(Body,100,true);
+            if(Chest) Actor->Appearance->PlayDoorMotion(ACEMotion::OnCommandU16);
+        }
+        if(!Chest) TestTrue(TEXT("Quest reward corpse remains interactable"),Body.IsSelectableWorldObject() && Body.AllowsDeadPoseInteraction());
+        Actor->Destroy();
+    }
+
     // Real setup 020014CA has a zero-height placement but a 2 m idle part
     // offset in 09000198/03000B5E. The weenie need not be a creature/lifestone.
     Object.SetupId=0x020014CA; Object.MotionTableId=0x09000198;

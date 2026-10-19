@@ -49,6 +49,7 @@ class ReleasePackagingTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix='ac-release-tests-')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name) / 'repo'
+        put(self.root, 'Unreal/Build/VR/Update-Client.py', '# Linux update helper fixture')
         self.site = Path(self.temp.name) / 'site'
         self.linux = self.root / 'Unreal/Saved/LinuxArchive/Linux'
 

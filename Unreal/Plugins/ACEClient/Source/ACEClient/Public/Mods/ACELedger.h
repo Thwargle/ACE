@@ -52,7 +52,9 @@ struct FACEHuntLedger
         int64 GainXP=0,GainLum=0;
         if(V.QualityInt64s.Contains(1))
         { if(HasXP)GainXP=FMath::Max<int64>(0,V.TotalExperience-PreviousXP); PreviousXP=V.TotalExperience;HasXP=true; }
-        if(V.QualityInt64s.Contains(6))
+        // Login can omit a zero balance. Wait for a complete description (or an
+        // explicit balance), not just bValid: attribute packets can arrive first.
+        if(V.bHasLuminanceBalance||V.QualityInt64s.Contains(6))
         { if(HasLum)GainLum=FMath::Max<int64>(0,V.AvailableLuminance-PreviousLum);PreviousLum=V.AvailableLuminance;HasLum=true; }
         XP+=GainXP;Lum+=GainLum;
         if(!GainXP&&!GainLum)return;

@@ -1074,9 +1074,11 @@ struct ACECLIENT_API FACEPlayerVitals
 	/** PropertyInt64.TotalExperience / AvailableExperience. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int64 TotalExperience = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int64 AvailableExperience = 0;
-	/** PropertyInt64.AvailableLuminance / MaximumLuminance (0 when not enlightened). */
+	/** PropertyInt64.AvailableLuminance / MaximumLuminance (0 before luminance is unlocked). */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int64 AvailableLuminance = 0;
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int64 MaximumLuminance = 0;
+	/** A complete login description also establishes a zero balance when the optional quality is absent. */
+	bool bHasLuminanceBalance = false;
 
 	/** Run skill current (init + ranks + Quickness formula) — feeds prediction speed. */
 	UPROPERTY(BlueprintReadOnly, Category = "ACE") int32 RunSkillCurrent = 0;

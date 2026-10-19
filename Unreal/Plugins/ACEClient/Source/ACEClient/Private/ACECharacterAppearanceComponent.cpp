@@ -1916,11 +1916,14 @@ void UACECharacterAppearanceComponent::SetDoorHeldCommand(int32 CommandU16)
 	}
 	if (!bOk)
 	{
-		if (Cmd == ACEMotion::Off)
-		{
-			ApplyBindPartTransforms();
-			RestoreClosedVisuals();
-		}
+		// CMotionTable rejects unsupported commands without replacing the
+		// default state. Corpse-looking chests can use a human MTable with no
+		// On/Off cycle at all; restoring the setup bind pose makes them stand.
+		AnimMode = EACEAnimMode::Locomotion;
+		AnimTime = 0.f;
+		ResetHookTracking();
+		if (Dat->EvaluateIdleMotion(MotionTableId, 0.f, PartMeshes.Num(), Animated, WorldScale, AnimatedCount))
+			for (int32 I=0; I<AnimatedCount; ++I) ApplyPartTransform(I, Animated[I]);
 		return;
 	}
 	// An already settled object starts in the destination cycle. Keep the link's
@@ -2330,6 +2333,14 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 			}
 			// The evaluator crosses link hooks only once, then dispatches cycle hooks.
 			DispatchCrossedHooks(Hooks);
+		}
+		else
+		{
+			// A live unsupported On/Off must not trap the object in a failed
+			// door evaluator forever. Resume its authored idle on the next tick.
+			AnimMode = EACEAnimMode::Locomotion;
+			AnimTime = 0.f;
+			ResetHookTracking();
 		}
 		return;
 	}

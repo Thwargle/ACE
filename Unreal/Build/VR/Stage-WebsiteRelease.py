@@ -67,8 +67,8 @@ def stage_release(root, release, site, *, replace_unpublished=False):
     public['updates'] = {'schema': 1, 'windows': items['windows'], 'quest': items['questApk']}
     if 'linux' in items:
         public['linuxVersion'] = meta['linuxVersion']
-        # Linux clients use this platform-specific entry for a manual browser
-        # download. No installer/helper exists on Linux; never reuse Windows.
+        # v124+ verifies and installs this archive through the Linux helper;
+        # older clients open it in a browser for a manual upgrade.
         public['updates']['linux'] = items['linux']
     out = site / f'downloads/ac/v{version}'
     copies = [(release / entry['file'], out / entry['file'], entry['sha256']) for entry in items.values()]

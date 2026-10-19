@@ -31,6 +31,7 @@ class ACECLIENT_API UACEUpdateSubsystem : public UGameInstanceSubsystem
 {
     GENERATED_BODY()
 public:
+    virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
     void Check(bool bAutomatic = false);
     void Download();
@@ -62,6 +63,7 @@ private:
     bool bChecked = false;
     bool bAutoUpdateEnabled = false;
     bool bAutoUpdatePaused = false;
+    bool bPreviousInstallFailed = false;
     bool bAutoDownloadStarted = false;
     bool bAutoInstallStarted = false;
     double NextAutomaticCheck = 0;

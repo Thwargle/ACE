@@ -189,8 +189,17 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
     TestNotNull(TEXT("Updates page provides a real checkbox"),W->AutoUpdateCheckBox.Get());
     TestFalse(TEXT("Checkbox starts unchecked"),W->AutoUpdateCheckBox->IsChecked());
 #if PLATFORM_LINUX
-    TestFalse(TEXT("Linux hides unsupported automatic installation"),W->AutoUpdateCheckBox->IsVisible());
-    TestFalse(TEXT("Linux launcher keeps installation manual"),W->Updater->IsAutoUpdateEnabled());
+    TestTrue(TEXT("Linux exposes supported automatic installation"),W->AutoUpdateCheckBox->IsVisible());
+    TestFalse(TEXT("Linux automatic updates are opt-in"),W->Updater->IsAutoUpdateEnabled());
+    W->AutoUpdateCheckBox->SetIsChecked(true);
+    W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(true);
+    FACELoginSettings UpdatePreference;
+    TestTrue(TEXT("Linux checking enables and persists automatic updates"),W->Updater->IsAutoUpdateEnabled()
+        && ACELoginSettings::Load(UpdatePreference,W->ProfilePath) && UpdatePreference.bAutoUpdate);
+    W->AutoUpdateCheckBox->SetIsChecked(false);
+    W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(false);
+    TestTrue(TEXT("Linux unchecking disables and persists automatic updates"),!W->Updater->IsAutoUpdateEnabled()
+        && ACELoginSettings::Load(UpdatePreference,W->ProfilePath) && !UpdatePreference.bAutoUpdate);
 #else
     W->AutoUpdateCheckBox->SetIsChecked(true);
     W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(true);
@@ -286,14 +295,12 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         W->Updater->State=EACEUpdateState::Available;
         W->Updater->Message=TEXT("A new version is available (320 MB).");
         W->RunAction(TEXT("updates")); Capture(TEXT("UpdatesVR"),FIntPoint(1100,900));
-#if !PLATFORM_LINUX
         TestTrue(TEXT("Auto-update checkbox has a usable headset hit target"),W->AutoUpdateCheckBox->GetCachedGeometry().GetLocalSize().Y>=26);
         W->AutoUpdateCheckBox->SetIsChecked(true);
         W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(true);
         Capture(TEXT("AutoUpdateEnabledVR"),FIntPoint(1100,900));
         W->AutoUpdateCheckBox->SetIsChecked(false);
         W->AutoUpdateCheckBox->OnCheckStateChanged.Broadcast(false);
-#endif
         Capture(TEXT("Updates720p"),FIntPoint(1280,720));
         TestTrue(TEXT("Download update is available in the shared VR/desktop lobby"),W->DownloadUpdateButton->IsVisible());
         TestFalse(TEXT("Install remains hidden until verification"),W->InstallUpdateButton->IsVisible());
@@ -301,11 +308,6 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         TestFalse(TEXT("Cannot log in while replacing client files"),W->LoginButton->GetIsEnabled());
         W->Updater->State=EACEUpdateState::Ready; W->Updater->Message=FString(TEXT("Update ready. "))+ACEUpdates::InstallationNotice(PLATFORM_ANDROID);
         W->RefreshUpdateControls(); Capture(TEXT("UpdateReadyVR"),FIntPoint(1100,900));
-#if PLATFORM_LINUX
-        TestFalse(TEXT("Linux never displays an install action"),W->InstallUpdateButton->IsVisible());
-        W->RunAction(TEXT("installupdate")); W->RefreshUpdateControls();
-        TestEqual(TEXT("Linux cannot schedule an installation through the action router"),W->Updater->State,EACEUpdateState::Ready);
-#else
         TestTrue(TEXT("Verified update presents install action"),W->InstallUpdateButton->IsVisible());
         W->RunAction(TEXT("installupdate")); W->RefreshUpdateControls();
         TestEqual(TEXT("Manual installation opens the closure notice"),W->Updater->State,EACEUpdateState::InstallNotice);
@@ -320,7 +322,6 @@ bool FACELauncherWidgetTest::RunTest(const FString&)
         W->Updater->State=EACEUpdateState::Installing;
         W->Updater->Message=ACEUpdates::InstallationNotice(true);
         W->RefreshUpdateControls(); Capture(TEXT("QuestUpdateClosureNotice"),FIntPoint(1100,900));
-#endif
         W->Updater->Cancel(); W->RefreshUpdateControls();
 
     }

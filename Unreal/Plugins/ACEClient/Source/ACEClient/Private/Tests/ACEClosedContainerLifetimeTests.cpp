@@ -18,6 +18,7 @@ bool FACEClosedContainerLifetimeTest::RunTest(const FString&)
     };
     auto View=[&](int32 Guid,const TArray<FACEContainerItemRef>& Refs)
     {
+        if(Guid!=701) Session.BeginPendingUse(Guid,0); // Requested ground container; 701 is nested metadata.
         FACEBinaryWriter W;W.WriteUInt32(Guid);W.WriteUInt32(Refs.Num());
         for(const auto& Ref:Refs){W.WriteUInt32(Ref.ItemGuid);W.WriteUInt32(Ref.ContainerType);}
         FACEBinaryReader R(W.GetData());Session.HandleViewContents(R);
@@ -80,6 +81,42 @@ bool FACEClosedContainerLifetimeTest::RunTest(const FString&)
     Session.UpsertWorldObject(Dropped);
     Expire(FPlatformTime::Seconds()+26);
     TestTrue(TEXT("A fresh world drop survives the old container deadline"),Session.WorldObjects.Contains(703));
+    Session.ClearWorldState();Session.PlayerGuid=100;
+
+    // ApproachVendor carries its own PublicWeenieDesc records, not a later
+    // CreateObject. Reopening within the old close's 25-second grace must
+    // renew those records, or the shop keeps icons that select as "Unknown".
+    Session.State=EACESessionState::InWorld;
+    auto Vendor=[&](const TArray<int32>& Stock)
+    {
+        FACEBinaryWriter W;
+        W.WriteUInt32(900);W.WriteUInt32(ACEItemType::Misc);
+        W.WriteUInt32(0);W.WriteUInt32(100000);W.WriteUInt32(1);
+        W.WriteFloat(.9f);W.WriteFloat(1.f);W.WriteUInt32(0);
+        W.WriteUInt32(0);W.WriteString16L(TEXT(""));W.WriteUInt32(Stock.Num());
+        for(int32 Guid:Stock)
+        {
+            W.WriteUInt32(0xFFFFFFFFu);W.WriteUInt32(Guid);
+            W.WriteUInt32(8); // PublicWeenieDesc Value present
+            W.WriteString16L(TEXT("Vendor component"));W.WriteUInt16(273);W.WriteUInt16(0x11CB);
+            W.WriteUInt32(ACEItemType::Misc);W.WriteUInt32(0);W.Align();
+            W.WriteUInt32(50);W.Align();
+        }
+        FACEBinaryReader R(W.GetData());Session.HandleApproachVendor(R);
+        TestEqual(TEXT("Vendor snapshot fully decoded"),R.Remaining(),0);
+    };
+    Vendor({901,902});Session.SendNoLongerViewingContents(900);
+    Vendor({901,903}); // one returning listing, one new, one no longer sold
+    Expire(FPlatformTime::Seconds()+26);
+    FACEWorldObject Stock;
+    TestTrue(TEXT("Reopened vendor retains returning item details"),Session.GetWorldObject(901,Stock));
+    TestEqual(TEXT("Reopened vendor retains purchase value"),Stock.Value,50);
+    Session.SelectObject(901);
+    TestEqual(TEXT("Returning stock selects by name without reopening again"),Session.SelectedObject.Name,FString(TEXT("Vendor component")));
+    TestTrue(TEXT("New vendor stock survives old cleanup"),Session.WorldObjects.Contains(903));
+    TestFalse(TEXT("Stock absent from refreshed vendor still expires"),Session.WorldObjects.Contains(902));
+    Session.SendNoLongerViewingContents(900);Expire(FPlatformTime::Seconds()+26);
+    TestTrue(TEXT("Closing refreshed vendor still releases all stock descriptors"),Session.WorldObjects.IsEmpty());
     Session.ClearWorldState();Session.PlayerGuid=100;
 
     auto MeasureInventory=[&](const TCHAR* Phase)

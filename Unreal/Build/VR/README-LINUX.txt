@@ -37,10 +37,16 @@ Saved data normally lives under ~/.config/Epic/ACUnreal/Saved/.
 Never share another player's Saved folder.
 
 UPDATES AND HELP
-The login screen checks for Linux releases and opens the Linux download in your
-browser. Close the game, download and extract the new archive into a new folder,
-then launch its AC-Unreal.sh. Saved settings are stored separately; keep your
-DAT backup. In-game automatic installation is not available on Linux.
+The login screen downloads and verifies Linux releases. Choose Install and
+restart to update this installation and reopen the game. Python 3 (/usr/bin/python3)
+and a writable installation folder are required. Close other clients using the
+same installation first. Saved settings, DAT files and user plugins are retained.
+Automatic updates are optional and only run in the launcher, never during play.
+Older releases without the update helper need one manual archive extraction.
+If installation fails, the previous files are restored and the client reports
+the error on its next launch. Update results are in Saved/Updates.
+Linux allows 45 seconds for requested exit/fatal-error cleanup before terminating
+a stuck process. This does not monitor frame rate, window focus or minimization.
 SHA256SUMS.txt contains release file hashes. From a folder containing the archive
 and checksum file, use sha256sum --ignore-missing -c SHA256SUMS.txt.
 See RELEASE-NOTES.md for validation and remaining preview limitations.

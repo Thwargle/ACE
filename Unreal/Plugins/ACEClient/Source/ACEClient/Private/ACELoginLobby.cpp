@@ -335,21 +335,16 @@ void UACELoginWidget::EnsureDefaultLayout()
 	AutoUpdateCheckBox->SetIsChecked(false);
 	AutoUpdateCheckBox->OnCheckStateChanged.AddDynamic(this,&UACELoginWidget::OnAutoUpdateChanged);
 	AddLine(Updates,AutoUpdateCheckBox,8);
-#if PLATFORM_LINUX
-	AutoUpdateCheckBox->SetVisibility(ESlateVisibility::Collapsed);
-	AddLine(Updates,Label(TEXT("Linux updates are downloaded in your browser. Close the game and extract the new archive before launching it."),16,true));
-#else
 	AddLine(Updates,Label(TEXT("Off by default. When enabled, checks every 15 minutes in the launcher and updates before you log in. Never interrupts gameplay. Cancel pauses automatic updates until the next app launch or Check now."),16,true));
-#endif
 	UpdateText=Label(TEXT("Checking for updates..."),20); AddLine(Updates,UpdateText,20);
 	UpdateProgress=WidgetTree->ConstructWidget<UProgressBar>(); UpdateProgress->SetFillColorAndOpacity(Gold);
 	auto* ProgressSize=WidgetTree->ConstructWidget<USizeBox>(); ProgressSize->SetHeightOverride(16); ProgressSize->SetContent(UpdateProgress); AddLine(Updates,ProgressSize,20);
 	auto* UpdateActions=WidgetTree->ConstructWidget<UWrapBox>(); UpdateActions->SetInnerSlotPadding(FVector2D(10,10)); AddLine(Updates,UpdateActions,20);
 	CheckUpdateButton=ActionButton(TEXT("Check now"),TEXT("checkupdate")); UpdateActions->AddChildToWrapBox(CheckUpdateButton);
-	DownloadUpdateButton=ActionButton(PLATFORM_LINUX?TEXT("Open Linux download"):TEXT("Download update"),TEXT("downloadupdate"),FString(),true); UpdateActions->AddChildToWrapBox(DownloadUpdateButton);
+	DownloadUpdateButton=ActionButton(TEXT("Download update"),TEXT("downloadupdate"),FString(),true); UpdateActions->AddChildToWrapBox(DownloadUpdateButton);
 	InstallUpdateButton=ActionButton(PLATFORM_ANDROID?TEXT("Install"):TEXT("Install and restart"),TEXT("installupdate"),FString(),true); UpdateActions->AddChildToWrapBox(InstallUpdateButton);
 	CancelUpdateButton=ActionButton(TEXT("Cancel update"),TEXT("cancelupdate")); UpdateActions->AddChildToWrapBox(CancelUpdateButton);
-	UpdateInstallHelp=Label(PLATFORM_LINUX?TEXT("Extract each release into a new folder. Saved settings and DAT files are kept separately."):ACEUpdates::InstallationNotice(PLATFORM_ANDROID),18,true); AddLine(Updates,UpdateInstallHelp);
+	UpdateInstallHelp=Label(ACEUpdates::InstallationNotice(PLATFORM_ANDROID),18,true); AddLine(Updates,UpdateInstallHelp);
 	Row(Updates,{{TEXT("Release notes"),TEXT("updatenotes")},{TEXT("Back to play"),TEXT("play")}});
 	auto* PluginPanel=WidgetTree->ConstructWidget<UACEPluginPanel>();
 	Pages->AddChild(PluginPanel);
@@ -425,9 +420,6 @@ void UACELoginWidget::NativeConstruct()
 		SetStatus(FString());
 		ValidateGameFiles();
 	}
-#if PLATFORM_LINUX
-	Profile.bAutoUpdate=false;
-#endif
 	AutoUpdateCheckBox->SetIsChecked(Profile.bAutoUpdate);
 	if (Updater) { Updater->SetAutoUpdateEnabled(Profile.bAutoUpdate); Updater->Check(true); }
 	RefreshUpdateControls();
@@ -535,7 +527,7 @@ void UACELoginWidget::RefreshUpdateControls()
 	UpdateProgress->SetPercent(State==EACEUpdateState::Ready || State==EACEUpdateState::InstallNotice || State==EACEUpdateState::Installing?1.f:Updater->Progress());
 	CheckUpdateButton->SetIsEnabled(!Busy && State!=EACEUpdateState::Checking);
 	DownloadUpdateButton->SetVisibility(Available && !Busy && State!=EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
-	InstallUpdateButton->SetVisibility(!PLATFORM_LINUX && State==EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
+	InstallUpdateButton->SetVisibility(State==EACEUpdateState::Ready?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
 	CancelUpdateButton->SetVisibility(State==EACEUpdateState::Downloading || State==EACEUpdateState::Verifying || State==EACEUpdateState::InstallNotice?ESlateVisibility::Visible:ESlateVisibility::Collapsed);
 	AutoUpdateCheckBox->SetIsEnabled(State!=EACEUpdateState::Installing);
 	LoginButton->SetIsEnabled(!Busy && Profile.SelectedServer()!=nullptr);

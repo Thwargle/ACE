@@ -3806,6 +3806,7 @@ void FACESession::HandlePlayerDescription(FACEBinaryReader& Reader)
 
 	Vitals.RecomputeMaxVitals();
 	Vitals.bValid = true;
+	Vitals.bHasLuminanceBalance = true;
 	PlayerVitals = Vitals;
 	Log(FString::Printf(TEXT("PlayerDescription: L%d H%d/%d S%d/%d M%d/%d run=%d skills=%d spells=%d"),
 		Vitals.Level, Vitals.Health, Vitals.MaxHealth, Vitals.Stamina, Vitals.MaxStamina,
@@ -4142,7 +4143,7 @@ void FACESession::HandlePrivateUpdatePropertyInt64(FACEBinaryReader& Reader, boo
 	PlayerVitals.QualityInt64s.Add(Key, Value);
 	if (Key == 1) PlayerVitals.TotalExperience = Value;
 	else if (Key == 2) PlayerVitals.AvailableExperience = Value;
-	else if (Key == 6) PlayerVitals.AvailableLuminance = Value;
+	else if (Key == 6) { PlayerVitals.AvailableLuminance = Value; PlayerVitals.bHasLuminanceBalance = true; }
 	else if (Key == 7) PlayerVitals.MaximumLuminance = Value;
 	NotifyVitalsChanged();
 }
@@ -6140,6 +6141,12 @@ void FACESession::HandleViewContents(FACEBinaryReader& Reader)
 	// because ACE sends root/bag ViewContents before the corresponding creates.
 	const int32 RootGuid = ResolveContainerRoot(ContainerGuid);
 	bool bIsPlayerInventory = (RootGuid == PlayerGuid);
+	// ViewContents is also unsolicited inventory metadata at login. Retail
+	// ClientUISystem::OnViewContents only opens the requested ground object.
+	// In particular, bag A and B may arrive before PlayerDescription and their
+	// CreateObjects: treating B as a new ground container discarded A's order.
+	const FACEWorldObject* RootObject = WorldObjects.Find(RootGuid);
+	const bool bWorldContainer = RootObject && RootObject->bHasPosition && !RootObject->ContainerId;
 	if (!bIsPlayerInventory)
 	{
 		TArray<FACEWorldObject> Packs;
@@ -6166,7 +6173,7 @@ void FACESession::HandleViewContents(FACEBinaryReader& Reader)
 		return;
 	}
 
-	if (!bIsPlayerInventory)
+	if (!bIsPlayerInventory && (bWorldContainer || IsPendingWorldUse(RootGuid)))
 	{
 		if (OpenExternalContainerGuid && OpenExternalContainerGuid != RootGuid)
 		{
@@ -6353,6 +6360,10 @@ void FACESession::HandleApproachVendor(FACEBinaryReader& Reader)
 		Obj.ObjectDescriptionFlags = Decoded.ObjectDescriptionFlags;
 		Obj.PetOwnerId = Decoded.PetOwnerId;
 		Obj.ContainerId = VendorGuid;
+		// gmVendorUI::OpenVendor removes each advertised item from the deferred
+		// destruction queue. A previous shop/corpse close must not erase this
+		// renewed description while its merchandise icon is still displayed.
+		ClosedContainerItemDeadlines.Remove(Obj.Guid);
 		WorldObjects.Add(Obj.Guid, Obj);
 		VendorMerchandise.Add(Obj);
 		FACEContainerItemRef Ref;
@@ -7827,8 +7838,9 @@ void FACESession::GetPackItemGuids(int32 ContainerGuid, TArray<int32>& Out) cons
 			}
 			Seen.Add(Ref.ItemGuid);
 		}
-		// Inventory receipts maintain the dense placement order used by the grid.
-		SortInventoryGuidsByPlacement(Out, WorldObjects);
+		// ACCObjectMaint::ViewObjectContents preserves wire order in IDList.
+		// Missing descriptions still reserve their exact position; sorting by
+		// cached qualities would move those IDs as CreateObject packets arrive.
 		return;
 	}
 

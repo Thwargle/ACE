@@ -196,6 +196,7 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
         };
         auto View=[&](int32 Container,TArray<FACEContainerItemRef> Refs)
         {
+            if (Container != 701) Session.BeginPendingUse(Container,0);
             FACEBinaryWriter W; W.WriteUInt32(Container); W.WriteUInt32(Refs.Num());
             for (const auto& Ref:Refs) {W.WriteUInt32(Ref.ItemGuid); W.WriteUInt32(Ref.ContainerType);}
             FACEBinaryReader R(W.GetData()); Session.HandleViewContents(R);
@@ -495,6 +496,36 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Empty-cell drop appends after source removal"),ACEInventoryRules::DropInsertionIndex(CurrentItems,4003,0,true),3);
     TestEqual(TEXT("Partial stack keeps its source slot"),ACEInventoryRules::DropInsertionIndex(CurrentItems,4003,4005,false),3);
     TestEqual(TEXT("Cross-pack drop does not remove a destination slot"),ACEInventoryRules::DropInsertionIndex(CurrentItems,5000,4005,true),3);
+    // UIQueue bag snapshots can precede all SmartboxQueue descriptions and
+    // PlayerDescription. Preserve both lists, including reverse GUID order.
+    Session.ClearWorldState(); Session.PlayerGuid=100;
+    auto View=[&](int32 Bag,const TArray<FACEContainerItemRef>& Refs)
+    {
+        FACEBinaryWriter W; W.WriteInt32(Bag); W.WriteUInt32(Refs.Num());
+        for(const auto& Ref:Refs){W.WriteInt32(Ref.ItemGuid);W.WriteInt32(Ref.ContainerType);}
+        FACEBinaryReader R(W.GetData()); Session.HandleViewContents(R);
+    };
+    View(10,{{109,0},{103,0},{107,0}});
+    View(20,{{209,0},{203,0},{207,0}});
+    TestEqual(TEXT("Unsolicited pack snapshots do not open ground containers"),Session.OpenExternalContainerGuid,0);
+    Check(10,{109,103,107}); Check(20,{209,203,207});
+    Session.ContainerContents.Add(100,{{10,1},{20,1}}); Session.ApplyPlayerInventoryProfile();
+    for(int32 Bag:{10,20})
+    {
+        Session.UpsertWorldObject(Item(Bag,100,INDEX_NONE,true));
+        // The middle item arrives first; absent descriptions must not move.
+        Session.UpsertWorldObject(Item(Bag*10+3,Bag,INDEX_NONE));
+        Check(Bag,{Bag*10+9,Bag*10+3,Bag*10+7});
+        Contains(Bag*10+7,Bag,0);
+        Check(Bag,{Bag*10+7,Bag*10+9,Bag*10+3});
+        Session.UpsertWorldObject(Item(Bag*10+9,Bag,INDEX_NONE));
+        Session.UpsertWorldObject(Item(Bag*10+7,Bag,INDEX_NONE));
+        Check(Bag,{Bag*10+7,Bag*10+9,Bag*10+3});
+        TArray<int32> Ordered;Session.GetPackItemGuids(Bag,Ordered);
+        const int32 Position=ACEInventoryRules::DropInsertionIndex(Ordered,Bag*10+3,Bag*10+9,true);
+        Send(Bag*10+3,Bag,Position);Contains(Bag*10+3,Bag,Position);
+        Check(Bag,{Bag*10+7,Bag*10+3,Bag*10+9});
+    }
     Session.SocketC2S->Close(); Sockets->DestroySocket(Session.SocketC2S); Session.SocketC2S=nullptr;
     Receiver->Close(); Sockets->DestroySocket(Receiver);
     return true;

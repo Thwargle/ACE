@@ -13,6 +13,7 @@
 #include "HAL/PlatformProcess.h"
 #include "Misc/App.h"
 #include "Misc/Paths.h"
+#include "Misc/FileHelper.h"
 #include "Misc/ScopeLock.h"
 #include "Interfaces/IPluginManager.h"
 #include "Engine/GameInstance.h"
@@ -154,19 +155,34 @@ void UACEUpdateSubsystem::Cancel()
     State = bVerified ? EACEUpdateState::Ready : Release.Number > ACEClientBuild::ReleaseNumber ? EACEUpdateState::Available : EACEUpdateState::Idle;
     Message = bAutoUpdateEnabled ? TEXT("Update cancelled. Automatic updates are paused until you restart the app or choose Check now. You can keep playing.") : TEXT("Update cancelled. You can keep playing or try again.");
 }
+void UACEUpdateSubsystem::Initialize(FSubsystemCollectionBase& Collection)
+{
+    Super::Initialize(Collection);
+#if PLATFORM_LINUX
+    FString Result;
+    const FString ResultFile = CacheDirectory() / TEXT("linux-update-result.txt");
+    if (FFileHelper::LoadFileToString(Result, *ResultFile))
+    {
+        if (Result.StartsWith(TEXT("Linux update failed:")))
+        {
+            bPreviousInstallFailed = true;
+            Fail(Result.TrimStartAndEnd());
+        }
+        IFileManager::Get().Delete(*ResultFile);
+    }
+#endif
+}
 void UACEUpdateSubsystem::Deinitialize() { Cancel(); Super::Deinitialize(); }
 
 void UACEUpdateSubsystem::SetAutoUpdateEnabled(bool bEnabled)
 {
-#if PLATFORM_LINUX
-    // Linux archives are replaced by the player after exiting the client.
-    bEnabled = false;
-#endif
     if (bAutoUpdateEnabled == bEnabled) return;
     bAutoUpdateEnabled = bEnabled;
     if (!bEnabled && (State == EACEUpdateState::InstallNotice
         || (bAutoDownloadStarted && (State == EACEUpdateState::Downloading || State == EACEUpdateState::Verifying)))) Cancel();
-    bAutoUpdatePaused = false;
+    // Loading a saved opt-in after Initialize must not erase an installation
+    // failure and immediately close the recovered client for another attempt.
+    bAutoUpdatePaused = bPreviousInstallFailed;
     bAutoDownloadStarted = bAutoInstallStarted = false;
     NextAutomaticCheck = 0;
 }
@@ -224,7 +240,7 @@ void UACEUpdateSubsystem::Check(bool bAutomatic)
     const double Now = FPlatformTime::Seconds();
     if (bAutomatic && (GIsEditor || FApp::IsUnattended() || bAutoUpdatePaused
         || (bChecked && (!bAutoUpdateEnabled || Now < NextAutomaticCheck)))) return;
-    ResetRequest(); bChecked = true; bAutoUpdatePaused = false;
+    ResetRequest(); bChecked = true; bAutoUpdatePaused = false; bPreviousInstallFailed = false;
     bAutoDownloadStarted = bAutoInstallStarted = false;
     NextAutomaticCheck = Now + 15 * 60;
     Release = {}; State = EACEUpdateState::Checking; Message = TEXT("Checking for updates...");
@@ -251,11 +267,6 @@ void UACEUpdateSubsystem::Check(bool bAutomatic)
 void UACEUpdateSubsystem::Download()
 {
     if (IsBusy() || !CanUseLobby() || Release.Number <= ACEClientBuild::ReleaseNumber) return;
-#if PLATFORM_LINUX
-    if (GIsEditor || FApp::IsUnattended()) return;
-    FPlatformProcess::LaunchURL(*Release.DownloadURL(), nullptr, nullptr);
-    Message = TEXT("Linux download opened in your browser. Close the game, extract the new archive, and run AC-Unreal.sh. Saved settings are kept.");
-#else
     ResetRequest(); State = EACEUpdateState::Downloading; Message = TEXT("Downloading update...");
     IFileManager::Get().MakeDirectory(*CacheDirectory(), true);
     uint64 Total = 0, Free = 0;
@@ -277,7 +288,6 @@ void UACEUpdateSubsystem::Download()
         VerifyDownload(PayloadPath() + TEXT(".part"), false);
     });
     if (!Request->ProcessRequest()) { Body->Close(); Request.Reset(); Fail(TEXT("Could not start the download. Please try again.")); }
-#endif
 }
 
 void UACEUpdateSubsystem::VerifyDownload(const FString& Path, bool bCached)
@@ -308,9 +318,6 @@ void UACEUpdateSubsystem::VerifyDownload(const FString& Path, bool bCached)
 
 void UACEUpdateSubsystem::Install(bool bVR)
 {
-#if PLATFORM_LINUX
-    Message = TEXT("On Linux, close the game and extract the new archive, then run AC-Unreal.sh. Saved settings are kept.");
-#else
     if (State != EACEUpdateState::Ready || !CanUseLobby()) return;
     bAutoInstallStarted = true; // Manual attempts must not be repeated by the automatic poll either.
     bInstallVR = bVR;
@@ -318,7 +325,6 @@ void UACEUpdateSubsystem::Install(bool bVR)
     const double Now = FPlatformTime::Seconds();
     InstallAt = Now + 8.;
     AdvanceInstallNotice(Now); // Give the message time to render and be read before closing the game.
-#endif
 }
 
 bool UACEUpdateSubsystem::AdvanceInstallNotice(double Now)
@@ -345,6 +351,32 @@ void UACEUpdateSubsystem::LaunchInstaller()
         else Message = TEXT("The headset could not open the installer. Try again, or use the USB updater from thwargle.com.");
         return;
     }
+#elif PLATFORM_LINUX
+    FString Root = FPaths::ConvertRelativePathToFull(FString(FPlatformProcess::BaseDir()) / TEXT("../../.."));
+    FPaths::CollapseRelativeDirectories(Root);
+    const FString Script = Root / TEXT("Update-Client.py");
+    const FString Helper = CacheDirectory() / TEXT("Update-Client.py");
+    const FString Result = CacheDirectory() / TEXT("linux-update-result.txt");
+    const FString Python = TEXT("/usr/bin/python3");
+    if (!FPaths::FileExists(Python))
+    { Fail(TEXT("Automatic Linux updates require Python 3. Install python3, then try again.")); return; }
+    // CreateProc tokenizes quoted arguments; reject delimiter characters rather
+    // than passing an ambiguous path. No command shell is involved.
+    for (const FString& Path : {Root, Helper, PayloadPath(), Result})
+        if (Path.Contains(TEXT("\"")) || Path.Contains(TEXT("\n")) || Path.Contains(TEXT("\r")))
+        { Fail(TEXT("Move the installation to a path without quotes or newlines before updating.")); return; }
+    const FString Probe = Root / TEXT(".ac-update-write-check");
+    if (!FPaths::FileExists(Root / TEXT("AC-Unreal.sh")) || !FFileHelper::SaveStringToFile(TEXT(""), *Probe))
+    { Fail(TEXT("The installation folder is not writable. Move the game to a folder you own, then update.")); return; }
+    IFileManager::Get().Delete(*Probe);
+    if (IFileManager::Get().Copy(*Helper, *Script, true, true) != COPY_OK)
+    { Fail(TEXT("The Linux update helper is missing. Install a complete release archive once to restore it.")); return; }
+    const FString Args = FString::Printf(TEXT("\"%s\" --archive \"%s\" --sha256 %s --release %d --root \"%s\" --pid %u --result \"%s\""),
+        *Helper, *PayloadPath(), *Release.Sha256, Release.Number, *Root, FPlatformProcess::GetCurrentProcessId(), *Result);
+    auto Handle = FPlatformProcess::CreateProc(*Python, *Args, true, true, true, nullptr, 0, *CacheDirectory(), nullptr);
+    if (!Handle.IsValid()) { Fail(TEXT("Could not start the Linux updater. Please try again.")); return; }
+    FPlatformProcess::CloseProc(Handle); State = EACEUpdateState::Installing;
+    FPlatformMisc::RequestExit(false); return;
 #elif PLATFORM_WINDOWS
     const FString Root = FPaths::ConvertRelativePathToFull(FString(FPlatformProcess::BaseDir()) / TEXT("../../.."));
     const FString Script = Root / TEXT("Update-Client.ps1");
@@ -359,7 +391,7 @@ void UACEUpdateSubsystem::LaunchInstaller()
     FPlatformProcess::CloseProc(Handle); State = EACEUpdateState::Installing;
     FPlatformMisc::RequestExit(false); return;
 #endif
-#if !PLATFORM_WINDOWS
+#if !PLATFORM_WINDOWS && !PLATFORM_LINUX
     Fail(TEXT("In-game installation is not available on this platform."));
 #endif
 }
@@ -393,14 +425,6 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUpdateNoticeTest, "ACE.Updates.Installation
 bool FACEUpdateNoticeTest::RunTest(const FString&)
 {
     auto* Updater=NewObject<UACEUpdateSubsystem>(NewObject<UGameInstance>());
-#if PLATFORM_LINUX
-    Updater->State=EACEUpdateState::Ready;
-    Updater->Install(false);
-    TestEqual(TEXT("Linux does not schedule an in-game installer"),Updater->State,EACEUpdateState::Ready);
-    TestTrue(TEXT("Linux explains manual archive replacement"),Updater->Message.Contains(TEXT("extract the new archive")));
-    TestFalse(TEXT("Linux manual update guidance does not block login"),Updater->IsBusy());
-    return true;
-#else
     Updater->Release.Number=ACEClientBuild::ReleaseNumber+1;
     Updater->State=EACEUpdateState::Verifying;
     Updater->Install(false);
@@ -430,24 +454,19 @@ bool FACEUpdateNoticeTest::RunTest(const FString&)
     TestEqual(TEXT("Opting out cancels a pending automatic install"),Updater->State,EACEUpdateState::Ready);
     TestFalse(TEXT("Opt-out cannot leave a queued installation"),Updater->AdvanceInstallNotice(Deadline+60));
     return true;
-#endif
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEAutoUpdateTest, "ACE.Updates.AutomaticLobbyPolicy",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACEAutoUpdateTest::RunTest(const FString&)
 {
+    auto* Recovered=NewObject<UACEUpdateSubsystem>(NewObject<UGameInstance>());
+    Recovered->bPreviousInstallFailed=true;
+    Recovered->Fail(TEXT("Linux update failed: simulated failure"));
+    Recovered->SetAutoUpdateEnabled(true);
+    TestEqual(TEXT("Saved auto-update preference cannot retry a failed installation on restart"),
+        Recovered->TakeAutomaticAction(100,true),EACEAutoUpdateAction::None);
     auto* Updater=NewObject<UACEUpdateSubsystem>(NewObject<UGameInstance>());
-#if PLATFORM_LINUX
-    Updater->SetAutoUpdateEnabled(true);
-    TestFalse(TEXT("Linux does not enable unsupported automatic installation"),Updater->IsAutoUpdateEnabled());
-    Updater->Release.Number=ACEClientBuild::ReleaseNumber+1;
-    Updater->State=EACEUpdateState::Available;
-    TestEqual(TEXT("Linux never downloads without a browser action"),Updater->TakeAutomaticAction(100,true),EACEAutoUpdateAction::None);
-    Updater->State=EACEUpdateState::Ready;
-    TestEqual(TEXT("Linux never starts an OS installer"),Updater->TakeAutomaticAction(100,true),EACEAutoUpdateAction::None);
-    return true;
-#else
     Updater->Release.Number=ACEClientBuild::ReleaseNumber+1;
     Updater->State=EACEUpdateState::Available;
     TestFalse(TEXT("Automatic updates default off"),Updater->IsAutoUpdateEnabled());
@@ -494,7 +513,6 @@ bool FACEAutoUpdateTest::RunTest(const FString&)
     Updater->Release.Number=ACEClientBuild::ReleaseNumber+1;
     TestEqual(TEXT("Turning the checkbox off leaves installation manual"),Updater->TakeAutomaticAction(5000,true),EACEAutoUpdateAction::None);
     return true;
-#endif
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEUpdateManifestTest, "ACE.Updates.ManifestIntegrityAndCancellation",

@@ -28,5 +28,5 @@ Get-Content -LiteralPath $log -Tail 25
 if ($code -ne 0) { throw "Linux packaging failed (exit $code). See $log" }
 $binary = Join-Path $package 'ACUnreal\Binaries\Linux\ACUnreal'
 if (!(Test-Path -LiteralPath $binary)) { throw "Linux package is missing its native executable: $binary" }
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'AC-Unreal.sh'), (Join-Path $PSScriptRoot 'README-LINUX.txt') -Destination $package -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'AC-Unreal.sh'), (Join-Path $PSScriptRoot 'README-LINUX.txt'), (Join-Path $PSScriptRoot 'Update-Client.py') -Destination $package -Force
 Write-Host "AC:Unreal native Linux x86_64 build ready in $package. Build log: $log"
