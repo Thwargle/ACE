@@ -59,8 +59,9 @@ const FACEDatGfxObj* FACESetupMeshBuilder::FindOrLoadGfxObj(uint32 GfxObjId)
 				const uint32 Mode = Degrade.ReadU32(Ok);
 				if (Index == 0) CloseModel = Model;
 				if (Index == 0 && Mode >= 1 && Mode <= 5) Parsed.DrawMode = Mode;
-				Degrade.ReadF32(Ok); Degrade.ReadF32(Ok); // minimum / ideal
+				const float Min = Degrade.ReadF32(Ok), Ideal = Degrade.ReadF32(Ok);
 				const float Max = Degrade.ReadF32(Ok);
+				Parsed.DistanceLevels.Add({Model, Mode, Min, Ideal, Max});
 				// Retail uses the last drawable level (the final entry is the null
 				// sentinel), or the first level for one/two-entry tables.
 				if (Index == (Count <= 2 ? 0u : Count - 2) && FMath::IsFinite(Max))
@@ -85,6 +86,7 @@ const FACEDatGfxObj* FACESetupMeshBuilder::FindOrLoadGfxObj(uint32 GfxObjId)
 						Close.DIDDegrade = Parsed.DIDDegrade;
 						Close.DrawMode = Parsed.DrawMode;
 						Close.MaxDegradeDistance = Parsed.MaxDegradeDistance;
+						Close.DistanceLevels = MoveTemp(Parsed.DistanceLevels);
 						Parsed = MoveTemp(Close);
 					}
 				}
@@ -93,6 +95,31 @@ const FACEDatGfxObj* FACESetupMeshBuilder::FindOrLoadGfxObj(uint32 GfxObjId)
 		}
 	}
 	return &GfxCache.Add(GfxObjId, MoveTemp(Parsed));
+}
+
+void FACESetupMeshBuilder::AppendDistanceLevels(const FACEDatGfxObj& Close, int32 PartIndex,
+    const FACEObjDesc* Appearance, float WorldScale, FACEBuiltSetupPart& OutPart)
+{
+    for (int32 I = 0; I < Close.DistanceLevels.Num(); ++I)
+    {
+        FACEBuiltSetupLevel& Level = OutPart.DistanceLevels.AddDefaulted_GetRef();
+        static_cast<FACEDatGfxLevel&>(Level) = Close.DistanceLevels[I];
+        if (I == 0 || !Level.GfxObjId) continue;
+        // These IDs already identify a particular level. Resolving their own
+        // degrade table again would silently turn every level into the close mesh.
+        TArray<uint8> Blob;
+        if (!(Portal && Portal->ReadFile(Level.GfxObjId, Blob))
+            && !(HighRes && HighRes->ReadFile(Level.GfxObjId, Blob))) continue;
+        FACEDatCursor Cursor(Blob);
+        FACEDatGfxObj Gfx;
+        if (!ACEDatUnpack::UnpackGfxObj(Cursor, Gfx)) continue;
+        // CPhysicsPart shares the close model's customized surfaces across all
+        // levels. Distant impostors must keep the same dyes and texture remaps.
+        Gfx.Surfaces = Close.Surfaces;
+        FACEBuiltSetupPart Draw;
+        AppendGfxObjLocal(Gfx, PartIndex, Appearance, WorldScale, Draw);
+        Level.Sections = MoveTemp(Draw.Sections);
+    }
 }
 
 void FACESetupMeshBuilder::AppendGfxObjLocal(const FACEDatGfxObj& Gfx, int32 PartIndex,
@@ -250,7 +277,7 @@ bool FACESetupMeshBuilder::GetHoldingLocation(uint32 SetupId, int32 ParentLocati
 	return false;
 }
 
-bool FACESetupMeshBuilder::BuildGfxObjOnly(uint32 GfxObjId, const FACEObjDesc& Appearance, float WorldScale, FACEBuiltSetupMesh& OutMesh)
+bool FACESetupMeshBuilder::BuildGfxObjOnly(uint32 GfxObjId, const FACEObjDesc& Appearance, float WorldScale, FACEBuiltSetupMesh& OutMesh, bool bDistanceLevels)
 {
 	// A bare GfxObj (0x01xxxxxx) used directly as a SetupId — the AC client wraps these in a
 	// single-part "simple setup" (CPhysicsObj / CreateSimpleSetup). Many static world props
@@ -272,6 +299,7 @@ bool FACESetupMeshBuilder::BuildGfxObjOnly(uint32 GfxObjId, const FACEObjDesc& A
 	const FACEObjDesc* AppearancePtr = Appearance.HasVisualOverrides() ? &Appearance : nullptr;
 	AppendGfxObjLocal(*Gfx, 0, AppearancePtr, WorldScale, Part);
 	AppendGfxObjPhysicsLocal(*Gfx, WorldScale, Part);
+	if (bDistanceLevels) AppendDistanceLevels(*Gfx, 0, AppearancePtr, WorldScale, Part);
 	OutMesh.Parts.Add(MoveTemp(Part));
 
 	const bool bOk = OutMesh.Parts.Num() > 0;
@@ -282,7 +310,7 @@ bool FACESetupMeshBuilder::BuildGfxObjOnly(uint32 GfxObjId, const FACEObjDesc& A
 	return bOk;
 }
 
-bool FACESetupMeshBuilder::BuildSetupWithAppearance(uint32 SetupId, const FACEObjDesc& Appearance, float WorldScale, FACEBuiltSetupMesh& OutMesh, int32 PlacementId)
+bool FACESetupMeshBuilder::BuildSetupWithAppearance(uint32 SetupId, const FACEObjDesc& Appearance, float WorldScale, FACEBuiltSetupMesh& OutMesh, int32 PlacementId, bool bDistanceLevels)
 {
 	OutMesh = FACEBuiltSetupMesh();
 	if (!Portal || SetupId == 0)
@@ -297,7 +325,7 @@ bool FACESetupMeshBuilder::BuildSetupWithAppearance(uint32 SetupId, const FACEOb
 	// "tiny floating triangles" bug on life stones / statues / forges).
 	if ((SetupId & 0xFF000000) == 0x01000000)
 	{
-		return BuildGfxObjOnly(SetupId, Appearance, WorldScale, OutMesh);
+		return BuildGfxObjOnly(SetupId, Appearance, WorldScale, OutMesh, bDistanceLevels);
 	}
 
 	TArray<uint8> Blob;
@@ -403,6 +431,7 @@ bool FACESetupMeshBuilder::BuildSetupWithAppearance(uint32 SetupId, const FACEOb
 				}
 				// Retail collision comes from PhysicsPolygons, not alpha-filtered draw meshes.
 				AppendGfxObjPhysicsLocal(*Gfx, WorldScale, Part);
+				if (bDistanceLevels) AppendDistanceLevels(*Gfx, PartIndex, AppearancePtr, WorldScale, Part);
 			}
 		}
 

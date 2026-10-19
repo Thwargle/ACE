@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "Async/TaskGraphInterfaces.h"
 #include "ACEEffectLightSubsystem.h"
 #include "Camera/CameraActor.h"
 #include "Camera/PlayerCameraManager.h"
@@ -12,9 +13,11 @@
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/Pawn.h"
 #include "HAL/FileManager.h"
 #include "HAL/IConsoleManager.h"
 #include "HAL/PlatformTime.h"
+#include "HAL/PlatformProcess.h"
 #include "ImageUtils.h"
 #include "Materials/MaterialInterface.h"
 #include "Misc/App.h"
@@ -298,6 +301,59 @@ bool FACECrowdLightSelectionTest::RunTest(const FString&)
     return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACELocalHeldLightTest, "ACE.Rendering.CrowdEffectLighting.LocalHeldWeapons",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+bool FACELocalHeldLightTest::RunTest(const FString&)
+{
+    using namespace ACECrowdLightingTests;
+    FBudgetScope Budget;
+    if (!TestTrue(TEXT("Light budgets exist"), Budget.IsValid())) return false;
+    FWorld F;
+    auto* Pawn = F.World->SpawnActor<APawn>();
+    auto* Root = NewObject<USceneComponent>(Pawn);
+    Pawn->AddInstanceComponent(Root); Pawn->SetRootComponent(Root); Root->RegisterComponent();
+    F.PC->Possess(Pawn); F.PC->SetViewTarget(F.View);
+    auto Main = F.Source(FVector(100, -50, 100));
+    auto Off = F.Source(FVector(100, 50, 100));
+    Main.Owner->AttachToActor(Pawn, FAttachmentTransformRules::KeepWorldTransform);
+    Off.Owner->AttachToActor(Pawn, FAttachmentTransformRules::KeepWorldTransform);
+    Off.Request.Color = FLinearColor(.1f, .3f, 1.f);
+    TArray<FSource> Crowd;
+    for (int32 I = 0; I < 32; ++I) Crowd.Add(F.Source(FVector(I, 0, 50)));
+    // Seed the pool with closer, incumbent scenery/remote effects before equipping.
+    Budget.Set(8); F.SubmitAll(Crowd); F.Lights->RefreshLights(.05f);
+    for (int32 Limit : {8, 4, 2})
+    {
+        Budget.Set(Limit);
+        for (float Side : {-1.f, 1.f})
+        {
+            F.SetView(FVector(0, Side * 70, 80));
+            F.SubmitAll(Crowd); F.Submit(Main); F.Submit(Off); F.Lights->RefreshLights(.05f);
+            TestTrue(TEXT("Main hand keeps illumination among closer effects"), F.Lights->IsParticleSelected(Main.Component, 1));
+            TestTrue(TEXT("Offhand has equal priority among closer effects"), F.Lights->IsParticleSelected(Off.Component, 1));
+            TestEqual(TEXT("Held priority stays inside the configured light cap"), F.Lights->GetVisibleLightCount(), Limit);
+            TestTrue(TEXT("Both hands still share the crowd energy bound"), F.TotalIntensity() <= 12.001f);
+        }
+    }
+    // An invisible black overlay must neither replace the colored emitter nor
+    // consume an overlap share that dims every other source.
+    auto Black = Off.Request; Black.EmitterId = 2; Black.Color = FLinearColor::Black;
+    Black.Position = F.View->GetActorLocation();
+    TArray<FACEEffectLightRequest> Mixed{Off.Request, Black};
+    F.Lights->SubmitParticles(Off.Component, Mixed); F.Submit(Main); F.Lights->RefreshLights(.05f);
+    TestTrue(TEXT("Black overlay cannot take the offhand's light"), F.Lights->IsParticleSelected(Off.Component, 1));
+    TestFalse(TEXT("Black overlay receives no scene light"), F.Lights->IsParticleSelected(Off.Component, 2));
+    F.Lights->SetScriptLight(Off.Component, true, Black); F.Lights->RefreshLights(.05f);
+    TestTrue(TEXT("An invalid black hook cannot suppress live colored particles"), F.Lights->IsParticleSelected(Off.Component, 1));
+    // Dropping the item returns it to ordinary proximity selection.
+    Off.Owner->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+    F.SetView(FVector::ZeroVector); F.SubmitAll(Crowd); F.Submit(Main); F.Submit(Off); F.Lights->RefreshLights(.05f);
+    TestFalse(TEXT("Dropped items no longer reserve a local held slot"), F.Lights->IsParticleSelected(Off.Component, 1));
+    Budget.Set(0); F.Submit(Main); F.Lights->RefreshLights(.05f);
+    TestEqual(TEXT("Disabling effect lights also disables held lights"), F.Lights->GetVisibleLightCount(), 0);
+    return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECrowdLightWorldIsolationTest, "ACE.Rendering.CrowdEffectLighting.WorldIsolation",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACECrowdLightWorldIsolationTest::RunTest(const FString&)
@@ -421,6 +477,18 @@ bool FACECrowdLightSurfaceTest::RunTest(const FString&)
     Receiver->SetMobility(EComponentMobility::Movable); Receiver->SetStaticMesh(Plane); Receiver->SetMaterial(0, Material);
     Receiver->SetCollisionEnabled(ECollisionEnabled::NoCollision); Receiver->SetCastShadow(false);
     Receiver->SetWorldScale3D(FVector(8.f)); Receiver->RegisterComponent();
+    // Packaged builds defer the mesh proxy while its PSOs compile. This test
+    // captures inside one automation tick, so service completion tasks before
+    // measuring light instead of accidentally comparing three empty frames.
+    const double ReadyDeadline=FPlatformTime::Seconds()+5.;
+    do
+    {
+        FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);
+        F.World->SendAllEndOfFrameUpdates(); FlushRenderingCommands();
+        if (Receiver->GetSceneProxy() && !Receiver->IsPSOPrecaching()) break;
+        FPlatformProcess::SleepNoStats(.001f);
+    } while (FPlatformTime::Seconds()<ReadyDeadline);
+    if (!TestTrue(TEXT("Receiver is ready before measuring illumination"),Receiver->GetSceneProxy()!=nullptr && !Receiver->IsPSOPrecaching())) return false;
     constexpr int32 Size = 128;
     auto* Target = NewObject<UTextureRenderTarget2D>(ReceiverActor);
     Target->InitCustomFormat(Size, Size, PF_FloatRGBA, false);

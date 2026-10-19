@@ -350,11 +350,10 @@ void UACELoginWidget::EnsureDefaultLayout()
 	Pages->AddChild(PluginPanel);
 	UVerticalBox* Accounts; Pages->AddChild(Card(Accounts));
 	AddLine(Accounts,Label(TEXT("Manage accounts"),30));
-	AddLine(Accounts,Label(TEXT("Use New account to save another login, even with the same username. Choose an account on Play."),18,true));
+	AddLine(Accounts,Label(TEXT("Drag the grip beside an account to reorder. Use New account to add another login, even with the same username."),18,true));
 	ManagedAccountList=WidgetTree->ConstructWidget<UScrollBox>(); ManagedAccountList->SetScrollbarThickness(FVector2D(8,8));
 	auto* ManagedSlot=Accounts->AddChildToVerticalBox(ManagedAccountList); ManagedSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); ManagedSlot->SetPadding(FMargin(0,0,0,12));
 	AccountAliasBox=Field(Accounts,TEXT("Alias (optional)"),TEXT("AccountAliasBox"));
-	AccountAliasBox->SetHintText(FText::FromString(TEXT("For example: Conquest main or Coldeve crafter")));
 	auto* Credentials=WidgetTree->ConstructWidget<UHorizontalBox>(); AddLine(Accounts,Credentials,0);
 	auto* UserColumn=WidgetTree->ConstructWidget<UVerticalBox>(); auto* UserSlot=Credentials->AddChildToHorizontalBox(UserColumn);
 	UserSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill)); UserSlot->SetPadding(FMargin(0,0,16,0));
@@ -442,6 +441,8 @@ void UACELoginWidget::NativeDestruct()
 void UACELoginWidget::NativeTick(const FGeometry& Geometry, float Dt)
 {
 	Super::NativeTick(Geometry,Dt);
+	if (bAccountOrderDirty) RefreshAccounts();
+	TickAccountDrag(Dt);
 	UpdatePollTime-=Dt;
 	if (UpdatePollTime<=0)
 	{
@@ -582,17 +583,47 @@ void UACELoginWidget::SelectServer(const FString& Id)
 
 void UACELoginWidget::RefreshAccounts()
 {
+	bAccountOrderDirty=false;
 	for(auto* List:{AccountList.Get(),ManagedAccountList.Get()})
 	{
+		const float ScrollOffset=List->GetScrollOffset();
 		List->ClearChildren();
 		for (const auto& A:Profile.Accounts)
 		{
 			auto* Button=ActionButton(A.DisplayName(),TEXT("selectaccount"),A.Id,A.Id==Profile.SelectedAccountId);
+			Button->bAccountDragHandle=List==ManagedAccountList;
 			Button->SetToolTipText(FText::FromString(A.DisplayName()));
 			Cast<UScrollBoxSlot>(List->AddChild(Button))->SetPadding(FMargin(0,0,0,6));
 		}
 		if (!List->GetChildrenCount()) List->AddChild(Label(TEXT("Add a login on the Accounts tab."),18,true));
+		List->SetScrollOffset(ScrollOffset);
 	}
+}
+
+bool UACELoginWidget::CanReorderAccounts() const
+{
+	return Pages && Pages->GetActiveWidgetIndex()==6 && PendingRemoval.IsEmpty();
+}
+
+bool UACELoginWidget::MoveAccountInOrder(const FString& Id, const FString& TargetId, bool bAfter)
+{
+	if (!CanReorderAccounts() || Id==TargetId) return false;
+	const int32 From=Profile.Accounts.IndexOfByPredicate([&](const auto& A){return A.Id==Id;});
+	const int32 Target=Profile.Accounts.IndexOfByPredicate([&](const auto& A){return A.Id==TargetId;});
+	if (From==INDEX_NONE || Target==INDEX_NONE) return false;
+	int32 To=Target+(bAfter?1:0);
+	if (From<To) --To;
+	if (From==To) return false;
+	// Move the entire identity; usernames need not be unique. Leave selection
+	// and any unsaved form edits alone, and use the existing profile format.
+	FACELoginAccount Account=MoveTemp(Profile.Accounts[From]);
+	Profile.Accounts.RemoveAt(From);
+	Profile.Accounts.Insert(MoveTemp(Account),To);
+	bLoginEntriesDirty=true;
+	SaveLoginEntries();
+	// Rebuild both lists after the drop callback has finished using the row.
+	bAccountOrderDirty=true;
+	return true;
 }
 
 bool UACELoginWidget::StoreAccount()

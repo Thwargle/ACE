@@ -106,6 +106,13 @@ void UACECharacterAppearanceComponent::EnsureMeshRoot()
 	MeshRoot->SetRelativeRotation(FRotator(0.f, MeshFacingYawDegrees, 0.f));
 }
 
+void UACECharacterAppearanceComponent::SetPreviewCapture(bool bEnabled)
+{
+	bPreviewCapture = bEnabled;
+	for (UProceduralMeshComponent* Part : PartMeshes)
+		if (Part) Part->SetForceHighestDetail(bPreviewCapture || bLocalPlayerAppearance);
+}
+
 float UACECharacterAppearanceComponent::GetVisualHeightCm() const
 {
 	FBox VisualBounds(ForceInit);
@@ -113,7 +120,7 @@ float UACECharacterAppearanceComponent::GetVisualHeightCm() const
 	{
 		if (Part && Part->IsRegistered() && Part->GetNumSections() > 0)
 		{
-			VisualBounds += Part->Bounds.GetBox();
+			VisualBounds += Part->GetHighestDetailBounds().GetBox();
 		}
 	}
 	return VisualBounds.IsValid ? VisualBounds.GetSize().Z : 0.f;
@@ -126,7 +133,7 @@ bool UACECharacterAppearanceComponent::GetVisualWorldBounds(FBox& OutBox) const
 	{
 		if (Part && Part->IsRegistered() && Part->GetNumSections() > 0)
 		{
-			OutBox += Part->Bounds.GetBox();
+			OutBox += Part->GetHighestDetailBounds().GetBox();
 		}
 	}
 	return OutBox.IsValid != 0;
@@ -639,6 +646,7 @@ void UACECharacterAppearanceComponent::ClearAppearance()
 	AppliedTranslucencyKey = -1.f;
 	AppliedWorldScale = 0.f;
 	AppliedPartCollision = false;
+	AppliedDistanceLevels = false;
 	LocomotionForward = 0.f;
 	LocomotionStrafe = 0.f;
 	LocomotionPlayRate = 1.f;
@@ -660,7 +668,11 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 {
 	ACE_PROFILE_SCOPE(Appearance);
 	WorldScale = InWorldScale;
+	bLocalPlayerAppearance = Object.bIsSelf;
+	for (UProceduralMeshComponent* Part : PartMeshes)
+		if (Part) Part->SetForceHighestDetail(bLocalPlayerAppearance || bPreviewCapture);
 	const int32 NewSetupId = Object.SetupId;
+	const bool bCreatureLike = (Object.ItemType & ACEItemType::Creature) != 0 || Object.bIsPlayer || Object.bIsSelf;
 	int32 PlacementId = Object.PlacementId;
 	const bool bUsesOnOff = Object.UsesOnOffMotion();
 	const bool bHeld = Object.ParentGuid != 0 && Object.ParentLocation != 0;
@@ -712,7 +724,8 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 		&& AppliedAppearanceHash == AppearanceHash
 		&& FMath::IsNearlyEqual(AppliedTranslucencyKey, TranslucencyKey)
 		&& FMath::IsNearlyEqual(AppliedWorldScale, InWorldScale)
-		&& AppliedPartCollision == bEnablePartCollision)
+		&& AppliedPartCollision == bEnablePartCollision
+		&& AppliedDistanceLevels == bCreatureLike)
 	{
 		MotionTableId = Object.MotionTableId != 0 ? Object.MotionTableId : MotionTableId;
 		DefaultAnimationId = Object.DefaultAnimationId != 0 ? Object.DefaultAnimationId : DefaultAnimationId;
@@ -760,8 +773,6 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	}
 	bHasMesh = false;
 	const bool bIsCorpse = Object.IsCorpse();
-	const bool bCreatureLike = (Object.ItemType & ACEItemType::Creature) != 0
-		|| Object.bIsPlayer || Object.bIsSelf;
 	bPlayIdleMotion = bIsCorpse || bCreatureLike || bUsesOnOff;
 	SetComponentTickEnabled(bPlayIdleMotion);
 
@@ -783,7 +794,8 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	}
 
 	const double BuildStart = FPlatformTime::Seconds();
-	const auto SharedBuilt = Dat->GetOrBuildSetupAppearanceShared(static_cast<uint32>(SetupId), Appearance, WorldScale, PlacementId);
+	const auto SharedBuilt = Dat->GetOrBuildSetupAppearanceShared(static_cast<uint32>(SetupId), Appearance, WorldScale, PlacementId,
+		/*bDistanceLevels*/ bCreatureLike);
 	if (!SharedBuilt || SharedBuilt->Parts.Num() == 0)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("ACEAppearance: failed Setup 0x%08X for '%s'"), SetupId, *Object.Name);
@@ -804,6 +816,7 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	for (int32 i = 0; i < Built.Parts.Num(); ++i)
 	{
 		Meshes.Add(PartMeshes[i]);
+		PartMeshes[i]->SetForceHighestDetail(Object.bIsSelf || bPreviewCapture);
 	}
 
 	uint32 DefaultMT = 0;
@@ -931,6 +944,7 @@ bool UACECharacterAppearanceComponent::ApplyWorldObject(const FACEWorldObject& O
 	AppliedTranslucencyKey = TranslucencyKey;
 	AppliedWorldScale = InWorldScale;
 	AppliedPartCollision = bEnablePartCollision;
+	AppliedDistanceLevels = bCreatureLike;
 
 	// Doors/chests: apply held On/Off AFTER the mesh exists. Calling SetDoorHeldCommand earlier
 	// returned without posing, leaving the Setup bind pose (chests often look permanently open).
@@ -1062,7 +1076,7 @@ void UACECharacterAppearanceComponent::ConfigurePartCollision(bool bBlocking, bo
 			if (!Section) continue;
 			const bool bPhysics = Proc->ComponentTags.Contains(
 				FName(*FString::Printf(TEXT("ACEPhysicsSection_%d"), Index)));
-			const bool bCollide = bBlocking ? bPhysics : (!bPhysics && (bQueryVisibilityOnly || bSelectOnMesh));
+			const bool bCollide = bBlocking ? bPhysics : (!bPhysics && Proc->IsHighestDetailSection(Index) && (bQueryVisibilityOnly || bSelectOnMesh));
 			if (Section->bEnableCollision != bCollide)
 			{
 				FProcMeshSection Updated = *Section;

@@ -1,5 +1,34 @@
 # Retail parity regression tests
 
+## Carried weapon illumination (2026-10-19)
+
+`ACE.Rendering.DualWieldLighting` uses actual DAT Flaming, Frost and Lightning
+Nekodes plus the Quintessence Sickle, attached to both human holding locations.
+It checks moving/turning, swapping hands and a camera nearest the Sickle's black
+overlay. Before the fix that overlay won the light slot: the Sickle illuminated
+zero of 240 measured frames in either hand. Black effects now remain visible
+particles without claiming scene lights. Carried-light color uses the texture's
+hue independently of its dark padding; authored luminosity and live particle
+opacity still control intensity.
+
+Rendered captures isolate neutral receivers from particle sprites and verify
+simultaneous fire and purple Sickle contributions. `CrowdEffectLighting.LocalHeldWeapons`
+checks both local held actors among 32 nearer effects, desktop/mobile-sized
+budgets, camera changes, dropping, black overlays and disabling lighting.
+The existing global light-count and overlapping-intensity caps remain enforced.
+
+Retail `CPartArray::InitLights` and `CObjCell::add_dynamic_to_global_lights`
+process each object's lights without a main-hand exception. Our inferred
+particle illumination remains a bounded scene-light approximation; these tests
+do not claim exact retail photometric matching.
+
+Validation: Windows editor build, all nine `ACE.Rendering.DualWieldLighting`,
+`CrowdWeaponLighting` and `CrowdEffectLighting` tests, and
+`ACE.RetailParity.SceneryParticleLighting` pass. The 64-weapon fixture retained
+eight lights and measured 0.0406 ms/frame for lighting work (CPU-only fixture,
+not a live gameplay FPS measurement). Quest shared sources pass the sync check.
+Reports are in `Saved/OffhandProbe`; no release was published.
+
 ## Lua chat filters and window controls (2026-10-17)
 
 `ACE.Plugins.PublicAPI` checks permission-gated chat filters, per-window masks,
@@ -801,3 +830,26 @@ generated upload mip byte-for-byte, then recreates the texture resource.
 `ACE.VR.RigAndMenus` checks hold-X options, tap inventory, and cancellation when
 tracking is lost. The packaged Windows executable passes the latter two suites,
 `TextureBudget`, and `AcademyCorners` in `Saved/Automation/v54Packaged`.
+## Armor distance rendering
+
+`ACE.RetailParity.ArmorDistance` audits every clothing table in the installed
+portal DAT and checks each distinct part's authored detail levels, draw modes,
+thresholds, close-model surface mapping, and independent collision geometry.
+The standard DAT covers 1,917 tables, 15,803 table/setup combinations, 3,261 part
+roots, and 5,046 detail levels. It also exercises male/female Celdon combinations,
+over-robe layering (including intentionally hidden body parts), local-player and
+paperdoll detail, and scale-aware distance selection.
+
+Offscreen Celdon captures at 3, 9, 40 and 90 meters are compared pixel-for-pixel
+with single-level reference meshes, then the camera returns to 3 meters to check
+restored detail and color without a geometry/animation rebuild. Captures are
+written to `Saved/Automation/ArmorDistance-*.png`.
+
+Retail references: `CPhysicsPart.cpp` `LoadGfxObjArray` (0050DCF0),
+`UpdateViewerDistance` (0050E030), `Draw` (shared customized surface array), and
+`GfxObjDegradeInfo.cpp` `get_degrade` (0051E4B0). The local player's part stays at
+level zero; other characters select their own part levels using authored ideal
+distances. Tests also cover the reference bias/offset formula and exact boundary
+semantics. No armor-name, clothing-family, or item-ID rendering exceptions are
+used. Existing placement, tailoring, appearance cache, and dual-wield lighting
+regressions should run alongside this test when changing the shared renderer.

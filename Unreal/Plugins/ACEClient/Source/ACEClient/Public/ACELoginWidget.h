@@ -22,8 +22,11 @@ class UACELoginActionButton : public UButton
 	GENERATED_BODY()
 public:
 	FString Action, Value;
+	bool bAccountDragHandle = false;
 	UPROPERTY() TWeakObjectPtr<UACELoginWidget> Owner;
 	UFUNCTION() void HandleAction();
+protected:
+	virtual TSharedRef<SWidget> RebuildWidget() override;
 };
 
 /** A single clickable character-list row. Carries its own list index so a shared OnClicked
@@ -55,6 +58,8 @@ class ACECLIENT_API UACELoginWidget : public UUserWidget
 
 public:
 	void RunAction(const FString& Action, const FString& Value = FString());
+	bool CanReorderAccounts() const;
+	bool MoveAccountInOrder(const FString& Id, const FString& TargetId, bool bAfter);
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
@@ -154,6 +159,8 @@ protected:
 	void RefreshUpdateControls();
 	void RefreshServers();
 	void RefreshAccounts();
+	void TickAccountDrag(float DeltaTime);
+	bool bAccountOrderDirty = false;
 	void SetPasswordVisible(bool bVisible);
 	void SelectServer(const FString& Id);
 	void EditServer(bool bNew);

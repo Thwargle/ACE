@@ -7,6 +7,7 @@
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/Pawn.h"
 #include "HAL/IConsoleManager.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 
@@ -27,6 +28,7 @@ namespace
 	{
 		return !Request.Position.ContainsNaN() && FMath::IsFinite(Request.Color.R)
 			&& FMath::IsFinite(Request.Color.G) && FMath::IsFinite(Request.Color.B) && FMath::IsFinite(Request.Color.A)
+			&& Request.Color.GetLuminance() > KINDA_SMALL_NUMBER
 			&& FMath::IsFinite(Request.Intensity) && Request.Intensity > 0.f
 			&& FMath::IsFinite(Request.Radius) && Request.Radius > 0.f;
 	}
@@ -274,6 +276,8 @@ UPointLightComponent* UACEEffectLightSubsystem::CreatePoolLight()
 void UACEEffectLightSubsystem::SelectLights(int32 Budget, const FVector* ViewPosition, float MaxDistance)
 {
 	TArray<FChoice> Candidates;
+	const APlayerController* PC = GetWorld()->GetFirstPlayerController();
+	const APawn* LocalPawn = PC ? PC->GetPawn() : nullptr;
 	for (const auto& Pair : Sources)
 	{
 		if (!IsSourceUsable(Pair.Key.Get())) continue;
@@ -284,6 +288,10 @@ void UACEEffectLightSubsystem::SelectLights(int32 Budget, const FVector* ViewPos
 			Choice.Key = {Pair.Key, Request.EmitterId, bScript};
 			Choice.Request = Request;
 			Choice.Order = Pair.Value.Order;
+			// Both carried weapons get first claim on the existing pool. Camera
+			// offset or a nearby torch must not leave just the offhand unlit.
+			Choice.bLocalHeld = LocalPawn && Pair.Key->GetOwner() != LocalPawn
+				&& Pair.Key->GetOwner()->IsAttachedTo(LocalPawn);
 			Choice.Rank = ViewPosition ? FVector::Distance(Request.Position, *ViewPosition) : 0.;
 			if (Assignments.Contains(Choice.Key)) Choice.Rank *= .85;
 			Candidates.Add(Choice);
@@ -295,6 +303,7 @@ void UACEEffectLightSubsystem::SelectLights(int32 Budget, const FVector* ViewPos
 	}
 	Candidates.Sort([](const FChoice& A, const FChoice& B)
 	{
+		if (A.bLocalHeld != B.bLocalHeld) return A.bLocalHeld;
 		if (A.Rank != B.Rank) return A.Rank < B.Rank;
 		if (A.Order != B.Order) return A.Order < B.Order;
 		if (A.Key.bScript != B.Key.bScript) return A.Key.bScript;

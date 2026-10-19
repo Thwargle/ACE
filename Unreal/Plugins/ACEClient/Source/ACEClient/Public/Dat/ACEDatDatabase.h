@@ -39,6 +39,7 @@ public:
 	uint64 GetSourceFingerprint() const;
 
 private:
+	friend class FACEArmorDistanceTest;
 	/** Serializes KeptHandle Seek/Read — concurrent ReadFile from workers is otherwise racy. */
 	mutable FCriticalSection IoMutex;
 	bool ReadHeader(IFileHandle* Handle);

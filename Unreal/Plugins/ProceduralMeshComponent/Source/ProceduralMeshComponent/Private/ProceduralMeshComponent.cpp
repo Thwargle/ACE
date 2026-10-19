@@ -170,10 +170,14 @@ public:
 		, BodySetup(Component->GetBodySetup())
 		, MaterialRelevance(Component->GetMaterialRelevance(GetScene().GetShaderPlatform()))
 		, bCachedDraws(Component->bPreferCachedDraws && GACECachedWorldDraws.GetValueOnGameThread() != 0
+			&& Component->DistanceLevels.IsEmpty()
 			&& !ProceduralMeshViewFacing::IsViewFacing(Component->ViewFacingMode))
 		, bDisableOcclusionQueries(Component->bDisableOcclusionQueries)
 		, ViewFacingMode(Component->ViewFacingMode)
 		, ViewFacingSortCenter(Component->ViewFacingSortCenter)
+		, DistanceLevels(Component->DistanceLevels)
+		, DistanceUnitsPerMeter(Component->DistanceUnitsPerMeter)
+		, bForceHighestDetail(Component->bForceHighestDetail)
 	{
 		TRACE_CPUPROFILER_EVENT_SCOPE(ACE_ProcMeshCreateProxy);
 		const bool bTracePath = GACETraceProxyRebuilds.GetValueOnGameThread() != 0;
@@ -447,9 +451,16 @@ public:
 			Collector.RegisterOneFrameMaterialProxy(WireframeMaterialInstance);
 		}
 
-		// Iterate over sections
-		for (const FProcMeshProxySection* Section : Sections)
+		TArray<int32, TInlineAllocator<4>> ViewLevels;
+		for (const FSceneView* View : Views)
+			ViewLevels.Add(DistanceLevels.IsEmpty() ? INDEX_NONE : ProceduralMeshDistanceLOD::Select(DistanceLevels,
+				ProceduralMeshDistanceLOD::Distance(FTransform(GetLocalToWorld()), ViewFacingSortCenter,
+					View->ViewLocation, DistanceUnitsPerMeter), bForceHighestDetail));
+		// Each view chooses from immutable buffers; camera motion never rebuilds
+		// the body or resets animation/material hooks on the game thread.
+		for (int32 SectionIndex = 0; SectionIndex < Sections.Num(); ++SectionIndex)
 		{
+			const FProcMeshProxySection* Section = Sections[SectionIndex];
 			if (Section != nullptr && Section->bSectionVisible && Section->RenderIndexCount > 0)
 			{
 				FMaterialRenderProxy* MaterialProxy = bWireframe ? WireframeMaterialInstance : Section->Material->GetRenderProxy();
@@ -460,6 +471,9 @@ public:
 					if (VisibilityMap & (1 << ViewIndex))
 					{
 						const FSceneView* View = Views[ViewIndex];
+						const int32 Level = ViewLevels[ViewIndex];
+						if (Level != INDEX_NONE && !ProceduralMeshDistanceLOD::ContainsSection(DistanceLevels[Level], SectionIndex)) continue;
+						const uint32 DrawMode = bForceHighestDetail ? 1 : Level != INDEX_NONE ? DistanceLevels[Level].DrawMode : ViewFacingMode;
 						// Draw the mesh.
 						FMeshBatch& Mesh = Collector.AllocateMesh();
 						FMeshBatchElement& BatchElement = Mesh.Elements[0];
@@ -468,10 +482,10 @@ public:
 						Mesh.VertexFactory = &Section->VertexFactory;
 						Mesh.MaterialRenderProxy = MaterialProxy;
 
-						if (ProceduralMeshViewFacing::IsViewFacing(ViewFacingMode))
+						if (ProceduralMeshViewFacing::IsViewFacing(DrawMode))
 						{
 							const FTransform Draw = ProceduralMeshViewFacing::DrawTransform(
-								FTransform(GetLocalToWorld()), ViewFacingSortCenter, ViewFacingMode, View->ViewLocation);
+								FTransform(GetLocalToWorld()), ViewFacingSortCenter, DrawMode, View->ViewLocation);
 							auto& Uniform = Collector.AllocateOneFrameResource<FDynamicPrimitiveUniformBuffer>();
 							FPrimitiveUniformShaderParametersBuilder Builder;
 							BuildUniformShaderParameters(Builder);
@@ -583,9 +597,17 @@ public:
 		checkf(Views.IsValidIndex(FirstActiveViewIndex), TEXT("There should be at least one active view when calling GetDynamicRayTracingInstances(...)."));
 
 		const FSceneView* FirstActiveView = Views[FirstActiveViewIndex];
+		const int32 Level = DistanceLevels.IsEmpty() ? INDEX_NONE : ProceduralMeshDistanceLOD::Select(DistanceLevels,
+			ProceduralMeshDistanceLOD::Distance(FTransform(GetLocalToWorld()), ViewFacingSortCenter,
+				FirstActiveView->ViewLocation, DistanceUnitsPerMeter), bForceHighestDetail);
+		const uint32 DrawMode = bForceHighestDetail ? 1 : Level != INDEX_NONE ? DistanceLevels[Level].DrawMode : ViewFacingMode;
+		const FTransform Draw = ProceduralMeshViewFacing::IsViewFacing(DrawMode)
+			? ProceduralMeshViewFacing::DrawTransform(FTransform(GetLocalToWorld()), ViewFacingSortCenter, DrawMode, FirstActiveView->ViewLocation)
+			: FTransform(GetLocalToWorld());
 
 		for (int32 SegmentIndex = 0; SegmentIndex < Sections.Num(); ++SegmentIndex)
 		{
+			if (Level != INDEX_NONE && !ProceduralMeshDistanceLOD::ContainsSection(DistanceLevels[Level], SegmentIndex)) continue;
 			const FProcMeshProxySection* Section = Sections[SegmentIndex];
 			if (Section != nullptr && Section->bSectionVisible && Section->RenderIndexCount > 0)
 			{
@@ -597,7 +619,7 @@ public:
 
 					FRayTracingInstance RayTracingInstance;
 					RayTracingInstance.Geometry = &Section->RayTracingGeometry;
-					RayTracingInstance.InstanceTransforms.Add(GetLocalToWorld());
+					RayTracingInstance.InstanceTransforms.Add(Draw.ToMatrixWithScale());
 
 					uint32 SectionIdx = 0;
 					FMeshBatch MeshBatch;
@@ -617,6 +639,7 @@ public:
 					FDynamicPrimitiveUniformBuffer& DynamicPrimitiveUniformBuffer = Collector.AllocateOneFrameResource<FDynamicPrimitiveUniformBuffer>();
 					FPrimitiveUniformShaderParametersBuilder Builder;
 					BuildUniformShaderParameters(Builder);
+					Builder.LocalToWorld(Draw.ToMatrixWithScale()).PreviousLocalToWorld(Draw.ToMatrixWithScale());
 					DynamicPrimitiveUniformBuffer.Set(Collector.GetRHICommandList(), Builder);
 
 					BatchElement.PrimitiveUniformBufferResource = &DynamicPrimitiveUniformBuffer.UniformBuffer;
@@ -655,6 +678,9 @@ private:
 	bool bDisableOcclusionQueries;
 	uint32 ViewFacingMode;
 	FVector ViewFacingSortCenter;
+	TArray<FProcMeshDistanceLevel> DistanceLevels;
+	float DistanceUnitsPerMeter;
+	bool bForceHighestDetail;
 };
 
 //////////////////////////////////////////////////////////////////////////
@@ -975,6 +1001,7 @@ void UProceduralMeshComponent::ClearMeshSection(int32 SectionIndex)
 
 void UProceduralMeshComponent::ClearAllMeshSections()
 {
+	DistanceLevels.Reset();
 	ProcMeshSections.Empty();
 	UpdateLocalBounds();
 	UpdateCollision();
@@ -1118,6 +1145,21 @@ void UProceduralMeshComponent::SetProcMeshSection(int32 SectionIndex, const FPro
 	MarkRenderStateDirty(); // New section requires recreating scene proxy
 }
 
+void UProceduralMeshComponent::SetDistanceLevels(TArray<FProcMeshDistanceLevel> Levels, float UnitsPerMeter)
+{
+	DistanceLevels = MoveTemp(Levels);
+	DistanceUnitsPerMeter = FMath::Max(UE_SMALL_NUMBER, UnitsPerMeter);
+	UpdateBounds();
+	MarkRenderStateDirty();
+}
+
+void UProceduralMeshComponent::SetForceHighestDetail(bool bForce)
+{
+	if (bForceHighestDetail == bForce) return;
+	bForceHighestDetail = bForce;
+	MarkRenderStateDirty();
+}
+
 void UProceduralMeshComponent::SetViewFacing(uint32 Mode, const FVector& SortCenter)
 {
 	if (ViewFacingMode == Mode && ViewFacingSortCenter == SortCenter) return;
@@ -1128,10 +1170,20 @@ void UProceduralMeshComponent::SetViewFacing(uint32 Mode, const FVector& SortCen
 	MarkRenderStateDirty();
 }
 
+FBoxSphereBounds UProceduralMeshComponent::GetHighestDetailBounds() const
+{
+	if (DistanceLevels.IsEmpty()) return Bounds;
+	FBox Box(ForceInit);
+	for (int32 I = 0; I < ProcMeshSections.Num(); ++I)
+		if (IsHighestDetailSection(I)) Box += ProcMeshSections[I].SectionLocalBox;
+	return FBoxSphereBounds(Box).TransformBy(GetComponentTransform());
+}
+
 FBoxSphereBounds UProceduralMeshComponent::CalcBounds(const FTransform& LocalToWorld) const
 {
 	FBoxSphereBounds Ret(LocalBounds.TransformBy(LocalToWorld));
-	if (ProceduralMeshViewFacing::IsViewFacing(ViewFacingMode))
+	if (ProceduralMeshViewFacing::IsViewFacing(ViewFacingMode)
+		|| DistanceLevels.ContainsByPredicate([](const auto& L) { return ProceduralMeshViewFacing::IsViewFacing(L.DrawMode); }))
 	{
 		// A thin card's original AABB cannot cull its rotated draw frame. Enclose
 		// every rotation about the part origin, including off-center giant models.

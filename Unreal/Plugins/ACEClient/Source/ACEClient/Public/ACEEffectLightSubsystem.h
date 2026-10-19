@@ -68,6 +68,7 @@ private:
 		FACEEffectLightRequest Request;
 		double Rank = 0;
 		uint64 Order = 0;
+		bool bLocalHeld = false;
 	};
 
 	FSourceState& FindOrAddSource(UActorComponent* Source);

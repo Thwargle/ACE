@@ -86,6 +86,7 @@ public:
     static FString FormatName(const FString& Name);
     static bool IsNameCharacter(TCHAR C);
 private:
+	friend class FACEArmorDistanceTest;
     friend class FACERetailCharacterCreationTest;
     friend class FACEAppearancePlacementTest;
     friend class FACETailoringLayersTest;

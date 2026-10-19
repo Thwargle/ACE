@@ -2251,7 +2251,8 @@ void UACEScriptComponent::CreateEmitter(
 	Emitter.EmissiveBoost = 1.f;
 	if (Dat && bAllowInferredParticleLights && !bEnvironmentWeather && !IsBloodSplatter(SourcePlayScript))
 	{
-		Dat->TryEstimateGfxLight(DrawId, Emitter.LightColor, Emitter.LightLum);
+		if (!Dat->TryEstimateGfxLight(DrawId, Emitter.LightColor, Emitter.LightLum))
+			Emitter.LightLum = 0.f;
 	}
 
 	Emitter.HookFrame = NewHookFrame;
@@ -3112,6 +3113,16 @@ void UACEScriptComponent::TickParticleLights(bool bPresentationOnly)
 		Request.EmitterId = Emitter.InstanceId;
 		Request.Position = Position;
 		Request.Color = Emitter.LightColor;
+		if (bWielded)
+		{
+			// The texture estimate supplies the hue. Dark/transparent padding in
+			// small spark textures must not attenuate carried illumination again:
+			// its strength already comes from authored luminosity and live opacity.
+			const float Peak = FMath::Max3(Request.Color.R, Request.Color.G, Request.Color.B);
+			if (Peak <= KINDA_SMALL_NUMBER) { Requests.Pop(EAllowShrinking::No); continue; }
+			Request.Color /= Peak;
+			Request.Color.A = 1.f;
+		}
 		Request.Radius = bWielded ? 320.f : 480.f;
 		Request.bPortal = bPortal;
 		const float Strength = Emitter.LightLum * Weight;

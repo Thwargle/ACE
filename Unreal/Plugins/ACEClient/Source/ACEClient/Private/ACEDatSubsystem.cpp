@@ -4590,7 +4590,14 @@ namespace
    +Appearance.TextureChanges.GetAllocatedSize()+Appearance.AnimPartChanges.GetAllocatedSize();
   for (const auto& Part : Mesh.Parts)
   {
-   Bytes+=Part.Sections.GetAllocatedSize()+Part.Portals.GetAllocatedSize();
+   Bytes+=Part.Sections.GetAllocatedSize()+Part.Portals.GetAllocatedSize()+Part.DistanceLevels.GetAllocatedSize();
+   for (const auto& Level : Part.DistanceLevels)
+   {
+    Bytes+=Level.Sections.GetAllocatedSize();
+    for (const auto& Section : Level.Sections)
+     Bytes+=Section.Vertices.GetAllocatedSize()+Section.Triangles.GetAllocatedSize()+Section.Normals.GetAllocatedSize()
+      +Section.UVs.GetAllocatedSize()+Section.VertexColors.GetAllocatedSize();
+   }
    for (const auto& Portal : Part.Portals) Bytes+=Portal.Vertices.GetAllocatedSize();
    for (const auto& Section : Part.Sections)
     Bytes+=Section.Vertices.GetAllocatedSize()+Section.Triangles.GetAllocatedSize()+Section.Normals.GetAllocatedSize()
@@ -4601,16 +4608,17 @@ namespace
 }
 
 TSharedPtr<const FACEBuiltSetupMesh> UACEDatSubsystem::GetOrBuildSetupAppearanceShared(uint32 SetupId,
- const FACEObjDesc& Appearance, float WorldScale, int32 PlacementId)
+ const FACEObjDesc& Appearance, float WorldScale, int32 PlacementId, bool bDistanceLevels)
 {
  if (!EnsureLoaded() || !Builder || SetupId == 0) return nullptr;
- if (!Appearance.HasVisualOverrides()) return GetOrBuildSetupMeshShared(SetupId, WorldScale, PlacementId);
+ if (!bDistanceLevels && !Appearance.HasVisualOverrides()) return GetOrBuildSetupMeshShared(SetupId, WorldScale, PlacementId);
  // ObjDesc hashes are accelerators, not identity: compare every field on a hit.
- const uint64 Key=MakeSetupCacheKey(SetupId, WorldScale, PlacementId) ^ Appearance.GetContentHash();
+ const uint64 Key=MakeSetupCacheKey(SetupId, WorldScale, PlacementId) ^ Appearance.GetContentHash()
+  ^ (bDistanceLevels ? 0x9E3779B97F4A7C15ull : 0ull);
  if (auto* Entry=AppearanceMeshCache.Find(Key))
  {
   if (Entry->SetupId==SetupId && Entry->WorldScale==WorldScale && Entry->PlacementId==PlacementId
-   && SameAppearance(Entry->Appearance,Appearance))
+   && Entry->bDistanceLevels==bDistanceLevels && SameAppearance(Entry->Appearance,Appearance))
   {
    Entry->LastUse=++AppearanceMeshUse;
    return Entry->Mesh;
@@ -4619,7 +4627,7 @@ TSharedPtr<const FACEBuiltSetupMesh> UACEDatSubsystem::GetOrBuildSetupAppearance
   AppearanceMeshCache.Remove(Key);
  }
  FACEBuiltSetupMesh Built;
- if (!Builder->BuildSetupWithAppearance(SetupId,Appearance,WorldScale,Built,PlacementId)) return nullptr;
+ if (!Builder->BuildSetupWithAppearance(SetupId,Appearance,WorldScale,Built,PlacementId,bDistanceLevels)) return nullptr;
  auto Mesh=MakeShared<FACEBuiltSetupMesh>(MoveTemp(Built));
  const SIZE_T Bytes=AppearanceMeshBytes(*Mesh,Appearance)+sizeof(FAppearanceMeshEntry);
  constexpr SIZE_T Budget=PLATFORM_ANDROID ? 8*1024*1024 : 32*1024*1024;
@@ -4634,6 +4642,7 @@ TSharedPtr<const FACEBuiltSetupMesh> UACEDatSubsystem::GetOrBuildSetupAppearance
   AppearanceMeshCache.Remove(OldestKey);
  }
  FAppearanceMeshEntry Entry;
+ Entry.bDistanceLevels=bDistanceLevels;
  Entry.SetupId=SetupId;Entry.WorldScale=WorldScale;Entry.PlacementId=PlacementId;Entry.Appearance=Appearance;
  Entry.Mesh=Mesh;Entry.LastUse=++AppearanceMeshUse;Entry.Bytes=Bytes;
  AppearanceMeshCache.Add(Key,MoveTemp(Entry));AppearanceMeshCacheBytes+=Bytes;
@@ -5052,8 +5061,13 @@ bool UACEDatSubsystem::ApplySetupParts(const TArray<UProceduralMeshComponent*>& 
 		Proc->bUseAsyncCooking = false;
 		int32 SectionIndex = 0;
 		TArray<UMaterialInterface*> SectionMaterials;
+		TArray<FProcMeshDistanceLevel> DistanceLevels;
 
-		for (const FACEBuiltMeshSection& Sec : Part.Sections)
+		for (int32 LevelIndex = 0; LevelIndex < FMath::Max(1, Part.DistanceLevels.Num()); ++LevelIndex)
+		{
+		const int32 FirstSection = SectionIndex;
+		const auto& Sections = LevelIndex == 0 ? Part.Sections : Part.DistanceLevels[LevelIndex].Sections;
+		for (const FACEBuiltMeshSection& Sec : Sections)
 		{
 			if (Sec.IsEmpty())
 			{
@@ -5136,6 +5150,13 @@ bool UACEDatSubsystem::ApplySetupParts(const TArray<UProceduralMeshComponent*>& 
 			SectionMaterials.Add(Mat);
 			++SectionIndex;
 		}
+		if (Part.DistanceLevels.IsValidIndex(LevelIndex))
+		{
+			const auto& L = Part.DistanceLevels[LevelIndex];
+			DistanceLevels.Add({L.MinDistance, L.IdealDistance, L.MaxDistance, L.DrawMode, FirstSection, SectionIndex-FirstSection});
+		}
+		}
+		Proc->SetDistanceLevels(MoveTemp(DistanceLevels), WorldScale);
 		for (int32 i = 0; i < SectionMaterials.Num(); ++i)
 		{
 			if (SectionMaterials[i])
@@ -8386,8 +8407,12 @@ bool UACEDatSubsystem::TryEstimateGfxLight(uint32 GfxObjId, FLinearColor& OutCol
 	}
 	OutColor.A = 1.f;
 	const float Lum = OutColor.GetLuminance();
-	if (Lum < 0.08f && OutLuminosity < 0.2f)
+	// Luminous means self-lit, not necessarily light-emitting. Black mesh
+	// overlays (e.g. Quintessence Sickle) must never claim the source's light
+	// ahead of its colored sparks merely because they are nearer the camera.
+	if (Lum <= KINDA_SMALL_NUMBER || (Lum < 0.08f && OutLuminosity < 0.2f))
 	{
+		OutLuminosity = 0.f;
 		return CacheEstimate(false);
 	}
 	if (Lum > 0.02f)

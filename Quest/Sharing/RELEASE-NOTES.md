@@ -1,56 +1,42 @@
-# AC:Unreal / AC:VR release 124
+# AC:Unreal / AC:VR release 125
 
 Windows desktop, PC VR, native Linux x86_64, and standalone Quest share version
-**2026.10.19.124**. Android version code: 124. Quest installer revision: 9.
+**2026.10.19.125**. Android version code: 125. Quest installer revision: 9.
 
-## Inventory, vendors and world objects
+## Weapon lighting
 
-- Preserve the server's item order in side packs, including login snapshots that
-  arrive before the backpack itself. Keep unresolved item slots in their original
-  positions as descriptions arrive.
-- Prevent unsolicited inventory snapshots from being treated as newly opened
-  ground containers and discarding another pack's contents.
-- Keep renewed vendor item descriptions alive after reopening a shop, preventing
-  old cleanup timers from turning listed merchandise into "Unknown" items.
-- Fall back to the authored resting pose when a corpse's motion table has no
-  requested On/Off transition, instead of displaying an upright bind pose.
+- Give both locally held weapons priority within the existing effect-light budget,
+  keeping nearby scenery and camera position from suppressing offhand illumination.
+- Ignore black, non-emitting overlays when estimating particle light. Preserve the
+  hue of small spark effects without dimming illumination a second time because
+  their textures contain dark padding, including the Quintessence Sickle effect.
+- Keep the existing desktop/mobile light limits and overlapping-light intensity cap.
 
-## Hunt Ledger
+## Armor distance rendering
 
-- Count the first luminance reward when login omits an initial zero balance,
-  including characters who unlock luminance during the session.
-- Show available XP and luminance separately from earnings, mark a full luminance
-  balance with "(cap)", and show "--" while waiting for a starting balance.
-- Track credited luminance directly from server balance updates. Spending does
-  not subtract earnings; bonuses and sharing are already reflected in the credits.
-- Keep the reset button clear of the resize handle.
+- Use the retail DAT's authored model levels and distance thresholds for character
+  armor, including per-view distance, object scale, and billboard draw modes.
+- Preserve clothing layers, dyes, texture replacements, and the highest-detail
+  collision geometry as other characters change visual detail with distance.
+- Keep the local player and character previews at highest detail. No item-specific
+  Celdon override is used.
 
-## Linux updates and shutdown
+## Accounts
 
-- Download, verify, install and restart Linux updates from the launcher with the
-  included Python 3 helper. Preserve saved settings, DAT files and user plugins.
-- Validate archive paths and executable versions, wait for the requesting client
-  to exit, and restore previous files if installation fails.
-- Stop repeated automatic installation attempts after a failed update until the
-  player checks again. Close other clients using the same installation first.
-- Allow 45 seconds for requested exit or fatal-error cleanup, then terminate a
-  stuck process. Normal gameplay, minimization and loss of focus do not trigger it.
-- **Upgrading from v123 or earlier on Linux still requires one manual extraction.**
-  The new installer becomes available after launching v124. It requires
-  `/usr/bin/python3` and a writable installation folder.
+- Drag the six-dot grip at the left of an Accounts row to reorder saved accounts.
+  An insertion marker shows the destination; long lists scroll near their edges.
+- Save the order automatically and use it on Play. Preserve account identity,
+  aliases, passwords, selection, and unfinished form edits, including duplicate usernames.
+- Remove the example placeholder from the optional account alias input.
 
-## Validation and remaining limits
+## Validation and limits
 
-- Regression coverage includes side-pack order, vendor description lifetime,
-  supplied corpse fixtures, luminance packets and UI, updater rollback and restart,
-  and bounded Linux shutdown. Platform packaging does not establish live playtest
-  or physical-headset acceptance.
-- The exact custom-server decoration selection mismatch remains unresolved.
-  Usable quest bodies remain interactive; this release does not hide all corpses.
-- The Linux safeguard addresses hangs during exit/fatal cleanup. The original
-  cause of every reported ghost process has not been reproduced.
-- Luminance blocked by its cap or deposited into an unreported custom bank cannot
-  be measured from balance updates. The reported all-session zero has not been
-  reproduced on a live server; no custom `/lph` commands are issued.
-- Game DATs, server files, saved accounts/settings and optional AC-WoW Transmog
-  assets are excluded from client downloads. No new sustained Quest FPS claim is made.
+- Regression coverage includes dual-wield lighting, light budgets, authored armor
+  tables and rendered distance comparisons, clothing layers, and account drag/save behavior.
+- The exact reported Celdon close-up mismatch was not reproduced; its existing
+  close geometry already matched the retail DAT. This release adds general
+  authored distance-level handling rather than claiming that specific case was reproduced.
+- Packaging and automated tests do not establish live-server or physical-headset
+  acceptance. No new sustained Quest frame-rate claim is made.
+- Game DATs, server files, saved accounts/settings, and optional AC-WoW Transmog
+  assets are excluded from client downloads.

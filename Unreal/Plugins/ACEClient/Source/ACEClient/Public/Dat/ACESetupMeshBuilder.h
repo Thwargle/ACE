@@ -33,6 +33,13 @@ struct FACEBuiltSetupPortal
 	FVector Normal = FVector::ZeroVector; // Polygon normal before CBldPortal sidedness.
 };
 
+struct FACEBuiltSetupLevel : FACEDatGfxLevel
+{
+	// Level zero shares FACEBuiltSetupPart::Sections. Other levels have draw
+	// geometry only; physics and attachment transforms always use level zero.
+	TArray<FACEBuiltMeshSection> Sections;
+};
+
 struct FACEBuiltSetupPart
 {
 	uint32 GfxObjId = 0;
@@ -43,6 +50,7 @@ struct FACEBuiltSetupPart
 	FTransform BindTransform = FTransform::Identity;
 	TArray<FACEBuiltMeshSection> Sections;
 	TArray<FACEBuiltSetupPortal> Portals;
+	TArray<FACEBuiltSetupLevel> DistanceLevels;
 };
 
 struct FACEBuiltSetupMesh
@@ -79,7 +87,7 @@ public:
 	}
 
 	bool BuildSetup(uint32 SetupId, float WorldScale, FACEBuiltSetupMesh& OutMesh, int32 PlacementId = 0);
-	bool BuildSetupWithAppearance(uint32 SetupId, const FACEObjDesc& Appearance, float WorldScale, FACEBuiltSetupMesh& OutMesh, int32 PlacementId = 0);
+	bool BuildSetupWithAppearance(uint32 SetupId, const FACEObjDesc& Appearance, float WorldScale, FACEBuiltSetupMesh& OutMesh, int32 PlacementId = 0, bool bDistanceLevels = false);
 	bool GetHoldingLocation(uint32 SetupId, int32 ParentLocation, int32& OutPartIndex, FTransform3f& OutFrame);
 	void TrimGfxCache(int32 MaxEntries);
 	bool LoadGfxObj(uint32 GfxObjId, FACEDatGfxObj& Out);
@@ -87,7 +95,8 @@ public:
 private:
 	/** Internal build borrows immutable decoded geometry; the public copy API remains available. */
 	const FACEDatGfxObj* FindOrLoadGfxObj(uint32 GfxObjId);
-	bool BuildGfxObjOnly(uint32 GfxObjId, const FACEObjDesc& Appearance, float WorldScale, FACEBuiltSetupMesh& OutMesh);
+	bool BuildGfxObjOnly(uint32 GfxObjId, const FACEObjDesc& Appearance, float WorldScale, FACEBuiltSetupMesh& OutMesh, bool bDistanceLevels);
+	void AppendDistanceLevels(const FACEDatGfxObj& Close, int32 PartIndex, const FACEObjDesc* Appearance, float WorldScale, FACEBuiltSetupPart& OutPart);
 	void AppendGfxObjLocal(const FACEDatGfxObj& Gfx, int32 PartIndex, const FACEObjDesc* Appearance, float WorldScale, FACEBuiltSetupPart& OutPart);
 	/** Emit invisible collision-only sections from GfxObj PhysicsPolygons (retail HasPhysics). */
 	void AppendGfxObjPhysicsLocal(const FACEDatGfxObj& Gfx, float WorldScale, FACEBuiltSetupPart& OutPart);

@@ -58,6 +58,7 @@ class ACECLIENT_API UACEScriptComponent : public UActorComponent
 	friend class FACESnowTuskerPerformanceTest;
 	friend class FACECreatureSpawnCacheTest;
 	friend class FACECrowdWeaponLightingTest;
+	friend class FACEDualWieldLightingTest;
 	friend class FACEEntranceParticleTest;
 	friend class FACERetailWeatherTest;
 	friend class FACEVRRenderReplicationTest;

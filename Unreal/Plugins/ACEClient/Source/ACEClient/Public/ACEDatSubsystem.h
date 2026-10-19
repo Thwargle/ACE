@@ -169,7 +169,7 @@ public:
 
 	bool BuildSetupAppearance(uint32 SetupId, const FACEObjDesc& Appearance, float WorldScale, FACEBuiltSetupMesh& OutMesh, int32 PlacementId = 0);
 	/** Immutable geometry shared across identical creatures/corpses; materials and animation remain per actor. */
-	TSharedPtr<const FACEBuiltSetupMesh> GetOrBuildSetupAppearanceShared(uint32 SetupId, const FACEObjDesc& Appearance, float WorldScale, int32 PlacementId = 0);
+	TSharedPtr<const FACEBuiltSetupMesh> GetOrBuildSetupAppearanceShared(uint32 SetupId, const FACEObjDesc& Appearance, float WorldScale, int32 PlacementId = 0, bool bDistanceLevels = false);
 
 	UFUNCTION(BlueprintCallable, Category = "ACE|DAT")
 	bool ApplySetupToProceduralMesh(UProceduralMeshComponent* ProcMesh, int32 SetupId, float WorldScale = 1.f, bool bEnableCollision = false, int32 PlacementId = 0, bool bForceDrawCollision = false, bool bIndoorStairCollision = false, bool bOutdoorLit = false, bool bReverseFaces = false);
@@ -741,6 +741,7 @@ private:
 	friend class FACEResolvedAppearanceCacheTest;
 	struct FAppearanceMeshEntry
 	{
+		bool bDistanceLevels = false;
 		uint32 SetupId = 0;
 		float WorldScale = 0;
 		int32 PlacementId = 0;
