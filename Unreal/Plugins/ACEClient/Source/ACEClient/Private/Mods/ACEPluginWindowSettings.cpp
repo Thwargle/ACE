@@ -12,6 +12,8 @@
 
 namespace
 {
+    FString OpacityWindow(const FString& Id)
+    {return Id==TEXT("waypoint.dungeon")?TEXT("waypoint.map"):Id;}
     FString WindowOwner(const FString& Id)
     {return Id==TEXT("ucm.log")?TEXT("ucm"):Id.StartsWith(TEXT("waypoint."))?TEXT("waypoint"):Id;}
     TSharedPtr<FJsonValue> WindowDefault(const UACEPluginSubsystem* Host,const FString& Id,const TCHAR* Key)
@@ -38,27 +40,34 @@ void UACEPluginSubsystem::SetPluginOpacityGlobal(bool Global)
 }
 float UACEPluginSubsystem::GetPluginWindowOpacity(const FString& Id) const
 {
+    const FString Window=OpacityWindow(Id);
     double Value=1.;if(Settings)Settings->TryGetNumberField(TEXT("_plugin_opacity"),Value);
     if(!Id.IsEmpty()&&!IsPluginOpacityGlobal())
     {
-        if(!(Settings&&(Settings->TryGetNumberField(TEXT("_window_opacity.")+Id,Value)
-            ||Settings->TryGetNumberField(TEXT("_window_opacity.")+WindowOwner(Id),Value))))
-            if(auto Default=WindowDefault(this,Id,TEXT("opacity")))Default->TryGetNumber(Value);
+        if(!(Settings&&(Settings->TryGetNumberField(TEXT("_window_opacity.")+Window,Value)
+            ||Settings->TryGetNumberField(TEXT("_window_opacity.")+WindowOwner(Window),Value))))
+        {
+            if(auto Default=WindowDefault(this,Window,TEXT("opacity")))Default->TryGetNumber(Value);
+            // Preserve older Waypoint profiles until a shared window preference
+            // is set. The normal and pinned maps now use the same opacity.
+            if(Window==TEXT("waypoint.map"))if(auto P=Find(TEXT("waypoint")))
+                P->Profile->TryGetNumberField(TEXT("map_opacity"),Value);
+        }
     }
     return FMath::IsFinite(Value)?float(FMath::Clamp(Value,0.,1.)):1.f;
 }
 bool UACEPluginSubsystem::HasPluginWindowOpacity(const FString& Id) const
-{return Settings&&Settings->HasTypedField<EJson::Number>(TEXT("_window_opacity.")+Id);}
+{return Settings&&Settings->HasTypedField<EJson::Number>(TEXT("_window_opacity.")+OpacityWindow(Id));}
 void UACEPluginSubsystem::SetPluginWindowOpacity(const FString& Id,float Opacity,bool Persist)
 {
     if(!FMath::IsFinite(Opacity))return;
     if(!Settings)Settings=MakeShared<FJsonObject>();
-    const FString Key=Id.IsEmpty()?TEXT("_plugin_opacity"):TEXT("_window_opacity.")+Id;
+    const FString Key=Id.IsEmpty()?TEXT("_plugin_opacity"):TEXT("_window_opacity.")+OpacityWindow(Id);
     Settings->SetNumberField(Key,FMath::Clamp(Opacity,0.f,1.f));
     if(Persist)SaveSettings();
 }
 void UACEPluginSubsystem::ResetPluginWindowOpacity(const FString& Id)
-{if(Settings&&HasPluginWindowOpacity(Id)){Settings->RemoveField(TEXT("_window_opacity.")+Id);SaveSettings();}}
+{if(Settings&&HasPluginWindowOpacity(Id)){Settings->RemoveField(TEXT("_window_opacity.")+OpacityWindow(Id));SaveSettings();}}
 bool UACEPluginSubsystem::IsPluginWindowPinned(const FString& Id) const
 {
     bool Pinned=false;if(Settings&&Settings->TryGetBoolField(TEXT("_window_pin.")+Id,Pinned))return Pinned;

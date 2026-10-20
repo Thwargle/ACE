@@ -1684,5 +1684,5 @@ float UACEClientSubsystem::GetSidestepSpeed(bool bRunning) const
 
 void UACEClientSubsystem::RequestBackgroundAppraisal(int32 Guid)
 {
-    if(Session && Guid){BackgroundAppraisals.Add(Guid);Session->SendIdentifyObject(Guid);}
+    if(Session && Guid){BackgroundAppraisals.Add(Guid);Session->SendIdentifyObject(Guid, true);}
 }

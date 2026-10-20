@@ -7,6 +7,7 @@
 #include "ACEDatSubsystem.h"
 #include "ACEEnvCellActor.h"
 #include "ACELandblockActor.h"
+#include "ACETerrainPresenterComponent.h"
 #include "Dat/ACECellTransit.h"
 #include "ACEHoverTooltipWidget.h"
 #include "Dat/ACEEnvCellMeshBuilder.h"
@@ -135,6 +136,7 @@ bool FACEVRInteriorTest::RunTest(const FString&)
  }
  TestTrue(TEXT("Actual reported interior supplies collision test paths"),Paths>=8);
  const FVector YaraqOrigin=FACEPosition::AceVectorToUnreal(FVector(125*192,100*192,0),100);
+ auto* TerrainPolicy=NewObject<UACETerrainPresenterComponent>(Pawn);
  for(uint32 Id=0x7D640100;Id<=0x7D640114;++Id)
  {
   if(!Dat->GetOrBuildEnvCellMesh(Id,100))continue;
@@ -170,7 +172,9 @@ bool FACEVRInteriorTest::RunTest(const FString&)
     for(int32 I=0;I<80 && FVector::DotProduct(Pawn->GetActorLocation()-Door,Normal)*Direction<100;++I)
     {
      const FVector Before=Pawn->GetActorLocation();
-     for(auto* Land:Lands)Land->SetOutdoorTerrainCollisionEnabled(!ACECellTransit::IsIndoorCell(PC->PredictedPose.CellId));
+     // Match the production presenter's building policy. Disabling all land
+     // during an indoor substep manufactured a missing floor at its doorway.
+     for(auto* Land:Lands)Land->SetOutdoorTerrainCollisionEnabled(TerrainPolicy->NeedsExteriorTerrain(PC->PredictedPose.CellId));
      VR->Head->SetWorldLocationAndRotation(Before+FVector(0,0,175-Half),(Normal*Direction).Rotation());VR->MoveStick=FVector2D(0,1);PC->PlayerTick(Dt);
      const FVector After=Pawn->GetActorLocation();
      const float Ratio=FVector::DotProduct(After-Before,Normal)*Direction/(Client->GetLocomotionSpeed(true)*100*Dt);

@@ -19,6 +19,28 @@ Retail commands such as `/fps` and `/saveui`, and server commands such as
 
 ## Users
 
+**Third Eye** is an optional bundled spawn watcher inspired by
+[Virindi Sense](http://virindi.net/wiki/index.php/Virindi_Sense). Enable it in
+Plugin Manager and open the eye icon. On **Setup**, enter a name or use **Add
+selected**, choosing exact name or partial name matching. Matching ignores letter
+case and treats punctuation literally. Entries can be disabled or removed.
+**Detected** lists current matches nearest first, with distances, click-to-select,
+and a Waypoint arrow button. Search and page through crowded results; long watch
+lists are paginated too. Page controls stay compact and page sizes adapt to the
+window height, without a scrollbar. Range, alerts and markers live on **Options**.
+Long row names stay on one line; hover to read the full name. It uses the nearest 512 selectable objects already known to the
+client, within the same area and at most 240 metres; it cannot discover distant
+server spawns. The panel reports when that awareness list is truncated.
+
+Green local chat alerts announce new matches and combine large bursts. A short
+absence does not repeat the same alert. Optional world and Waypoint-map markers
+show up to 32 nearest matches. **Watch for matches** pauses detection, alerts and
+markers while retaining the editable list. The list, range, alert and marker
+preferences save per character and server. Third Eye runs alongside UCM, starts
+when enabled on login, and continues with its window closed. It never moves,
+attacks, appraises, or sends chat to the server. Disable it in Plugin Manager to
+remove its icon and stop it.
+
 **[Auto Craft](AutoCraft.md)** is a separate plugin with searchable category,
 item and recipe selectors, quantity or Max available, ingredient preparation,
 and Make / Pause / Stop controls. Enable it in Plugin Manager and open its
@@ -257,6 +279,25 @@ Its checkboxes control the current activities:
 buffing, combat, looting, navigation, vital recovery, buff requests, vendor
 restocking, metas, and peace while idle. Closing Micro does not stop UCM.
 UCM still needs its normal permissions; Micro grants no additional capabilities.
+
+Micro also has **F** (Force Buff), **CF** (Cancel Force Buff), **FC** (Follow
+Character), and **C** (Corners). Select another player before enabling FC, then
+start UCM. Disabling FC also disables navigation so an old route cannot take
+over unexpectedly. Corners follows observed positions in order, including
+positions received during casting/equipment waits; it does not skip ahead to a
+nearby later segment. The same follow controls are available on the Route tab.
+Only positions known to the client can be followed; losing the target pauses
+following, and an overflow of the bounded movement history pauses navigation.
+
+The fixed-size **Current status** area shows the pending spell, equipment
+switch, or wait condition without resizing Micro. Hover for the full text.
+The main UCM window shows the same status. Missing cast confirmations have a
+bounded timeout; a missing final buff acknowledgment retains and revalidates
+the queued next action instead of silently discarding it.
+
+Both manual and UCM launcher changes stow incompatible equipped arrows,
+quarrels, or darts before wielding the replacement. Each removal waits for
+server confirmation, and matching ammunition stays equipped.
 
 In **Keyboard Layout → UI**, bind **UCM Start / Stop** to a keyboard, mouse,
 or controller button. It is unbound initially to avoid replacing an existing

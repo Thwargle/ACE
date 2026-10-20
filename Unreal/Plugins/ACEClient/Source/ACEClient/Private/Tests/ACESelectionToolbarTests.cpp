@@ -59,6 +59,10 @@ bool FACESelectionToolbarTest::RunTest(const FString&)
     Item.Structure = 75; Item.MaxStructure = 100;
     Session.WorldObjects.Add(Item.Guid, Item);
     auto* Binder = NewObject<UACEUIGameplayBinder>(); Binder->Initialize(Client, Manager, Canvas, nullptr);
+    // Exercise both rows independently of the user's persisted one-row layout.
+    const auto Toolbar = Manager->FindElementByName(TEXT("RootGameplay_FloatyToolbar_Field"));
+    Toolbar->UserResizeH = 132 - Toolbar->AuthoredHeight;
+    UACEUIElementManager::ApplyFloatyResizeLayout(Toolbar);
     Canvas->SetGameplayBinder(Binder);
     ON_SCOPE_EXIT { Binder->Shutdown(); Canvas->SetGameplayBinder(nullptr); Manager->Shutdown(); };
     const auto SelectionHandle = Session.OnSelectionChanged.AddLambda(

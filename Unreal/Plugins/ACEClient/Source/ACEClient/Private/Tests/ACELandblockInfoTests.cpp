@@ -91,7 +91,9 @@ bool FACELandblockInfoTest::RunTest(const FString&)
         // stair/post and fort locations. Do not merely compare a query to itself.
         const struct { uint32 Cell; FVector Local; TArray<uint32> Cells; bool Interior; } Samples[] = {
             {0x7D64001C, FVector(95, 95, 46), {0x7D64001C}, false},
-            {0xC6A901AE, FVector(19.925781, 21.117188, 43.084137), {0xC6A901AE, 0xC6A90001}, true},
+            // The sphere is wholly inside this room; its outside portal plane
+            // no longer admits unrelated terrain solely from SeenOutside.
+            {0xC6A901AE, FVector(19.925781, 21.117188, 43.084137), {0xC6A901AE}, true},
             {0xE454001E, FVector(79.808594, 133.745117, 21.761185), {0xE454001E}, false},
             {0x25810019, FVector(85.27, 23.52, 221), {0x25810019, 0x2581001A}, false}};
         for (const auto& Sample : Samples)

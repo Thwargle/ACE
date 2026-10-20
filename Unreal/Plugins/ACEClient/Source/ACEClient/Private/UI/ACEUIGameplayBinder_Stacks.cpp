@@ -15,6 +15,7 @@ bool UACEUIGameplayBinder::CanMoveInventoryAmountToContainer(int32 Guid, int32 C
 	if (!Client || !Guid || !Container || Guid == Client->GetPlayerGuid() || Guid == Container
 		|| !Client->GetWorldObject(Guid, Item) || !Client->GetWorldObject(Container, Destination)
 		|| Client->GetTradeSelfItems().Contains(Guid) || Client->GetTradeSelfItems().Contains(Container)) return false;
+	if (!ACEInventoryRules::CheckHookStatus(Item, Destination)) return false;
 	Amount = Amount > 0 ? FMath::Min(Amount, FMath::Max(1, Item.StackSize)) : FMath::Max(1, Item.StackSize);
 	const bool bPack = ACEInventoryRules::IsContainer(Item) || (Item.ItemType & ACEItemType::Container)
 		|| (Item.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot);
@@ -84,6 +85,27 @@ void UACEUIGameplayBinder::UpdateInventoryContainerDropFeedback(FVector2D Canvas
 	}
 	FACEWorldObject DragItem;const bool DragIsPack=Client->GetWorldObject(InvDragGuid,DragItem)
         && ((DragItem.ItemType & ACEItemType::Container) || (DragItem.ObjectDescriptionFlags & ACEObjectDescFlag::RequiresPackSlot));
+	if (OpenLootContainerGuid)
+	{
+		for (int32 I=0; I<ExtPackSlotBgs.Num() && I<ExtPackGuids.Num(); ++I)
+		{
+			auto* Cell=ExtPackSlotBgs[I].Get();
+			if (!Cell || !Cell->IsVisible() || !Canvas->IsWidgetExposedAt(Cell,Absolute)) continue;
+			Mark(Cell, CanMoveInventoryAmountToContainer(InvDragGuid,ExtPackGuids[I],Amount),
+				true, TEXT("RootGameplay_FloatyEnvPanel_Field"));
+			return;
+		}
+		const int32 Container=OpenLootSelectedPackGuid ? OpenLootSelectedPackGuid : OpenLootContainerGuid;
+		for (int32 I=0; I<ExtItemSlotBgs.Num(); ++I)
+		{
+			auto* Cell=ExtItemSlotBgs[I].Get();
+			if (!Cell || !Cell->IsVisible() || !Canvas->IsWidgetExposedAt(Cell,Absolute)) continue;
+			const int32 Target=ExtItemGuids.IsValidIndex(I) ? ExtItemGuids[I] : 0;
+			Mark(Cell, !DragIsPack && CanMoveInventoryAmountToContainer(InvDragGuid,Container,Amount,Target),
+				false, TEXT("RootGameplay_FloatyEnvPanel_Field"));
+			return;
+		}
+	}
 	for (int32 I=0; I<PackSlots.Num() && I<PackSlotGuids.Num(); ++I)
 	{
 		auto* Cell=PackSlotBgs.IsValidIndex(I) && PackSlotBgs[I] && PackSlotBgs[I]->IsVisible() ? PackSlotBgs[I].Get() : PackSlots[I].Get();
@@ -120,6 +142,15 @@ int32 UACEUIGameplayBinder::ResolveInventoryDropPlacement(int32 Guid, int32 Amou
 bool UACEUIGameplayBinder::TryDropInExternalContainer(int32 Guid, int32 Amount, FVector2D Absolute)
 {
 	if (!Client || !Canvas || !Manager || !OpenLootContainerGuid) return false;
+	FACEWorldObject SourceObject, ContainerObject;
+	const int32 Destination=OpenLootSelectedPackGuid ? OpenLootSelectedPackGuid : OpenLootContainerGuid;
+	if (!Client->GetWorldObject(Guid,SourceObject) || !Client->GetWorldObject(Destination,ContainerObject)) return false;
+	// The same hook rule drives both drag feedback and the eventual drop.
+	if (!ACEInventoryRules::CheckHookStatus(SourceObject,ContainerObject))
+	{
+		const auto List=Manager->FindElementUnder(TEXT("ExternalContainer"),TEXT("Ext_Container_ItemList"));
+		return List && Canvas->IsElementExposedAt(List,Canvas->GetCachedGeometry().AbsoluteToLocal(Absolute));
+	}
 	for (int32 I = 0; I < ExtPackSlots.Num() && I < ExtPackGuids.Num(); ++I)
 		if (ExtPackSlots[I] && ExtPackSlots[I]->IsVisible() && Canvas->IsWidgetExposedAt(ExtPackSlots[I], Absolute))
 		{

@@ -38,6 +38,7 @@ FString FACEClientPlugin::DisplayStartLabel() const {const auto V=Value(*this,TE
 FString FACEClientPlugin::DisplayStopLabel() const {const auto V=Value(*this,TEXT("stop_label"));return V.IsEmpty()?TEXT("Stop"):V;}
 bool FACEClientPlugin::ShowSettings() const {return Flag(*this,TEXT("settings"));}
 bool FACEClientPlugin::ShowStatus() const {return Flag(*this,TEXT("status"));}
+bool FACEClientPlugin::ScrollPanel() const {return Flag(*this,TEXT("scroll"));}
 
 bool ACEPluginPresentation::ValidAsset(const FString& Asset)
 {
@@ -50,10 +51,10 @@ bool ACEPluginPresentation::Valid(const TSharedPtr<FJsonObject>& O,FString& Erro
     if(!O){Error=TEXT("presentation must be an object");return false;}
     for(const auto& Pair:O->Values)
     {
-        if(Pair.Key==TEXT("settings")||Pair.Key==TEXT("status"))
+        if(Pair.Key==TEXT("settings")||Pair.Key==TEXT("status")||Pair.Key==TEXT("scroll"))
         {
             if(Pair.Value->Type==EJson::Boolean)continue;
-            Error=TEXT("presentation settings/status must be booleans");return false;
+            Error=TEXT("presentation settings/status/scroll must be booleans");return false;
         }
         if(Pair.Key==TEXT("controls"))
         {

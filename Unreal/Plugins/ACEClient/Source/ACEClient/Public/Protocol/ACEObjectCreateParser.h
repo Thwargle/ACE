@@ -40,12 +40,16 @@ struct ACECLIENT_API FACEDecodedObject
 	int32 ObjectDescriptionFlags = 0;
 	/** HookItemTypes identifies the hook container, unlike HookType on hookable items. */
 	bool bIsHouseHook = false;
+	uint32 HookItemTypes = 0;
+	uint16 HookType = 0;
+	int32 HouseOwnerId = 0;
 	int32 SetupId = 0;
 	int32 MotionTableId = 0;
 	int32 SoundTableId = 0;
 	int32 PhysicsEffectTableId = 0;
 	float Scale = 1.f;
 	float Friction = .95f;
+	float Elasticity = .05f;
 	FACEPosition Position;
 	bool bHasPosition = false;
 	bool bIsPlayer = false;

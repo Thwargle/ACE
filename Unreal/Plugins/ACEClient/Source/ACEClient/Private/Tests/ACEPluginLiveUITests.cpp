@@ -20,6 +20,8 @@
 #include "Widgets/SVirtualWindow.h"
 #include "Input/HittestGrid.h"
 #include "Widgets/Layout/SBorder.h"
+#include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SConstraintCanvas.h"
 #include "Widgets/Layout/SExpandableArea.h"
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/Input/SEditableTextBox.h"
@@ -156,6 +158,136 @@ bool FACEPluginLiveUITest::RunTest(const FString&)
     TestTrue(TEXT("Live size change refreshes the bitmap face and layout"),SmallText->GetDesiredSize().Y>OriginalSize.Y*2);
     P->PanelRows[0]->AsObject()->SetNumberField(TEXT("size"),11);++P->PanelRevision;Frame();Frame();
     TestTrue(TEXT("Shrinking restores the original metrics"),SmallText->GetDesiredSize().Equals(OriginalSize,.02f));
+    // Real Lua tab controls: selection must survive ordinary snapshots and
+    // reordering, and have a shape cue independent of bitmap font tinting.
+    TSharedPtr<FJsonObject> TabData;
+    FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(FString(TEXT(R"({"ui":[{"id":"views","type":"tabs","children":[
+      {"id":"detected","type":"column","text":"Detected","children":[{"id":"result","text":"Nearby creatures"}]},
+      {"id":"settings","type":"column","text":"Settings","children":[{"id":"setting","text":"Detection options"}]}]}]})"))),TabData);
+    P->PanelRows=TabData->GetArrayField(TEXT("ui"));++P->PanelRevision;Frame();Frame();
+    auto Tab=[&](const TCHAR* Id){return StaticCastSharedPtr<SACEPluginTab>(Find(Panel,FName(*(FString(TEXT("PluginTab.views."))+Id)),true));};
+    auto Detected=Tab(TEXT("detected")),Settings=Tab(TEXT("settings"));
+    if(!TestTrue(TEXT("Lua tabs use shared selected navigation controls"),Detected&&Settings))return false;
+    const auto TabSize=Settings->GetDesiredSize();
+    TestTrue(TEXT("First Lua tab is visibly selected on initial draw"),Detected->IsSelected()&&!Settings->IsSelected());
+    Settings->SimulateClick();Frame();
+    TestTrue(TEXT("Click moves selection to exactly one Lua tab"),Settings->IsSelected()&&!Detected->IsSelected());
+    Detected->OnMouseEnter(Detected->GetCachedGeometry(),FPointerEvent());Frame();
+    TestTrue(TEXT("Hovering another tab preserves the active tab"),Settings->IsSelected()&&!Detected->IsSelected());
+    auto Underline=[&](const TSharedPtr<SACEPluginTab>& Button)
+    {
+        TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
+        const auto& G=Button->GetCachedGeometry();const auto At=G.GetAbsolutePosition()+FVector2D(G.GetLocalSize().X*.5,G.GetLocalSize().Y-2);
+        return Pixels[FMath::Clamp(FMath::FloorToInt(At.Y),0,479)*640+FMath::Clamp(FMath::FloorToInt(At.X),0,639)];
+    };
+    const FColor ActiveLine=Underline(Settings),HoverLine=Underline(Detected);
+    TestTrue(TEXT("Selected tab has a bright gold underline unlike a hovered inactive tab"),ActiveLine.R>200&&ActiveLine.G>130&&ActiveLine.B<150&&int32(ActiveLine.R)>int32(HoverLine.R)+80);
+    RetailStyle->SetWindowAppearance(0.f,true);Frame();
+    TestEqual(TEXT("Pinned/transparent windows retain the selected-tab marker"),Underline(Settings),ActiveLine);
+    RetailStyle->SetWindowAppearance(1.f,false);Detected->OnMouseLeave(FPointerEvent());
+    auto Pages=P->PanelRows[0]->AsObject()->GetArrayField(TEXT("children"));Pages[1]->AsObject()->SetStringField(TEXT("text"),TEXT("Settings updated"));++P->PanelRevision;Frame();
+    TestTrue(TEXT("Live Lua snapshots retain selected tab identity"),Tab(TEXT("settings"))==Settings&&Settings->IsSelected());
+    TestEqual(TEXT("Live snapshots update tab labels"),StaticCastSharedPtr<STextBlock>(Find(Settings.ToSharedRef(),TEXT("SACEPluginText"),false))->GetText().ToString(),FString(TEXT("Settings updated")));
+    Pages[1]->AsObject()->SetStringField(TEXT("text"),TEXT("Settings"));Pages.Swap(0,1);P->PanelRows[0]->AsObject()->SetArrayField(TEXT("children"),Pages);++P->PanelRevision;Frame();
+    Settings=Tab(TEXT("settings"));Detected=Tab(TEXT("detected"));
+    TestTrue(TEXT("Reordering tab pages keeps the selected page by ID"),Settings->IsSelected()&&!Detected->IsSelected());
+    TestTrue(TEXT("Selected state does not change tab dimensions"),Settings->GetDesiredSize().Equals(TabSize,.01f));
+    TArray<FColor> TabPixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(TabPixels);TArray64<uint8> TabPng;
+    FImageUtils::PNGCompressImageArray(640,480,TabPixels,TabPng);FFileHelper::SaveArrayToFile(TabPng,*(FPaths::ProjectSavedDir()/TEXT("PluginTabs-Lua.png")));
+    Pages.RemoveAt(0);P->PanelRows[0]->AsObject()->SetArrayField(TEXT("children"),Pages);++P->PanelRevision;Frame();
+    TestTrue(TEXT("Removing selected page selects a remaining tab"),Tab(TEXT("detected"))->IsSelected());
+
+    // Use the actual Lua/companion renderer: all its labels share the same
+    // text widget as native panels. Narrow columns must not add mid-word lines,
+    // including after a retained label changes text, size or available width.
+    TSharedPtr<FJsonObject> WrapData;
+    FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(FString(TEXT(R"({"ui":[{"id":"wraprow","type":"row","children":[
+      {"id":"word","text":"Summoning"}, {"id":"phrase","text":"Mana stones"},
+      {"id":"explicit","text":"Start\nStop"}, {"id":"fallback","text":"Summoning"}]}]})"))),WrapData);
+    if(!TestTrue(TEXT("Wrapping fixture parsed"),WrapData.IsValid()))return false;
+    P->PanelRows=WrapData->GetArrayField(TEXT("ui"));++P->PanelRevision;
+    // Pick a Latin letter absent from this DAT instead of assuming a particular
+    // language is missing (retail's font includes Cyrillic and Greek glyphs).
+    uint16 FallbackCode=0;
+    for(uint16 Code=0x1E00;Code<0x1F00;++Code)
+        if(FChar::IsAlpha(TCHAR(Code))&&!RetailStyle->Typeface(16)->Font.IndexByUnicode.Contains(Code)){FallbackCode=Code;break;}
+    if(!TestTrue(TEXT("Fallback fixture has an unsupported Latin letter"),FallbackCode!=0))return false;
+    P->PanelRows[0]->AsObject()->GetArrayField(TEXT("children"))[3]->AsObject()->SetStringField(TEXT("text"),TEXT("Summ")+FString::Chr(TCHAR(FallbackCode))+TEXT("oning"));
+    float PanelWidth=620;
+    Window->SetContent(SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left)
+        [SNew(SBox).WidthOverride_Lambda([&PanelWidth]{return PanelWidth;})[Panel]]);
+    Frame();Frame();Frame();
+    auto WrapLabel=[&](const TCHAR* Id){return StaticCastSharedPtr<STextBlock>(Find(Control(Id).ToSharedRef(),TEXT("SACEPluginText"),false));};
+    const auto Word=WrapLabel(TEXT("word")),Phrase=WrapLabel(TEXT("phrase")),Explicit=WrapLabel(TEXT("explicit")),Fallback=WrapLabel(TEXT("fallback"));
+    const float LineHeight=Word->GetDesiredSize().Y,FallbackHeight=Fallback->GetDesiredSize().Y;
+    TestFalse(TEXT("International label exercises the Slate fallback font"),RetailStyle->Typeface(16)->Font.IndexByUnicode.Contains(FallbackCode));
+    TestTrue(TEXT("Wide phrase occupies one native line"),FMath::IsNearlyEqual(float(Phrase->GetDesiredSize().Y),LineHeight,.02f));
+    PanelWidth=200;Frame();Frame();Frame();
+    TestTrue(TEXT("An oversized native word retains one line"),FMath::IsNearlyEqual(float(Word->GetDesiredSize().Y),LineHeight,.02f));
+    TestTrue(TEXT("Multiword labels wrap at the space"),FMath::IsNearlyEqual(float(Phrase->GetDesiredSize().Y),LineHeight*2,.02f));
+    TestTrue(TEXT("Explicit line breaks remain intact"),FMath::IsNearlyEqual(float(Explicit->GetDesiredSize().Y),LineHeight*2,.02f));
+    TestTrue(TEXT("Fallback font also keeps oversized words together"),FMath::IsNearlyEqual(float(Fallback->GetDesiredSize().Y),FallbackHeight,.02f));
+    const auto WrapRows=P->PanelRows[0]->AsObject()->GetArrayField(TEXT("children"));
+    WrapRows[0]->AsObject()->SetStringField(TEXT("text"),TEXT("Automatically"));WrapRows[0]->AsObject()->SetNumberField(TEXT("size"),24);++P->PanelRevision;Frame();Frame();Frame();
+    TestTrue(TEXT("Live text and font changes keep the same label"),WrapLabel(TEXT("word"))==Word);
+    TestTrue(TEXT("Larger updated word stays on one line"),FMath::IsNearlyEqual(float(Word->GetDesiredSize().Y),32.f,.02f));
+    PanelWidth=620;Frame();Frame();Frame();
+    TestTrue(TEXT("Widening restores multiword labels to one line"),FMath::IsNearlyEqual(float(Phrase->GetDesiredSize().Y),LineHeight,.02f));
+    // Detach callbacks that reference fixture-local width before it goes away.
+    Window->SetContent(Content);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEPluginFontRasterTest,"ACE.Plugins.FontRaster",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FACEPluginFontRasterTest::RunTest(const FString&)
+{
+    if(!FApp::CanEverRender()||!FSlateApplication::IsInitialized())return true;
+    auto* GI=NewObject<UGameInstance>();GI->Init();ON_SCOPE_EXIT{GI->Shutdown();};
+    FString Directory=TEXT("C:/Turbine/Asheron's Call");FParse::Value(FCommandLine::Get(),TEXT("RetailDatDir="),Directory);
+    if(!TestTrue(TEXT("Load bitmap fonts for thin-stroke rendering"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(Directory)))return false;
+    const auto Style=FACEPluginStyle::Use(GI->GetSubsystem<UACEPluginSubsystem>());
+    auto Canvas=SNew(SConstraintCanvas);
+    const int32 Sizes[]={11,13,15,16,18,24};
+    for(int32 Row=0;Row<UE_ARRAY_COUNT(Sizes);++Row)
+    {
+        for(int32 I=0;I<16;++I)
+            Canvas->AddSlot().Offset(FMargin(16+I*16+I/16.f,16+Row*56,14,44)).Alignment(FVector2D::ZeroVector)
+                [SNew(SACEPluginText).Text(FText::FromString(TEXT("l"))).Font(FCoreStyle::GetDefaultFontStyle("Regular",Sizes[Row])).ColorAndOpacity(FLinearColor::White)];
+        Canvas->AddSlot().Offset(FMargin(310,8+Row*56,470,44)).Alignment(FVector2D::ZeroVector)
+            [SNew(SButton).ButtonStyle(&Style->Button).HAlign(HAlign_Left).ContentPadding(FMargin(8,4))
+                [SNew(SACEPluginText).Text(FText::FromString(FString::Printf(TEXT("%d: Add selected | little details"),Sizes[Row])))
+                    .Font(FCoreStyle::GetDefaultFontStyle("Regular",Sizes[Row])).ColorAndOpacity(FLinearColor::White)]];
+    }
+    FWidgetRenderer Renderer(false,true);
+    for(float UIScale:{.75f,1.f,1.25f,1.5f})
+    {
+        const FVector2D Size=FVector2D(800,352)*UIScale;
+        auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);Target->ClearColor=FLinearColor::Transparent;
+        ON_SCOPE_EXIT{Target->ReleaseResource();};
+        ++GFrameCounter;Renderer.DrawWidget(Target,Canvas,UIScale,Size,0);FlushRenderingCommands();
+        TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);
+        if(!TestTrue(TEXT("Read plugin glyph coverage"),Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags)))return false;
+        for(int32 Row=0;Row<UE_ARRAY_COUNT(Sizes);++Row)
+        {
+            uint64 Least=MAX_uint64,Most=0;
+            for(int32 I=0;I<16;++I)
+            {
+                uint64 Coverage=0;
+                const double X=(16+I*16+I/16.)*UIScale,Y=(16+Row*56)*UIScale;
+                for(int32 Py=FMath::FloorToInt(Y);Py<FMath::CeilToInt(Y+44*UIScale);++Py)
+                    for(int32 Px=FMath::FloorToInt(X);Px<FMath::CeilToInt(X+14*UIScale);++Px)Coverage+=Pixels[Py*int32(Size.X)+Px].A;
+                Least=FMath::Min(Least,Coverage);Most=FMath::Max(Most,Coverage);
+            }
+            AddInfo(FString::Printf(TEXT("Size %d UI %.2f: thin-stroke coverage %llu..%llu (%.3f)"),Sizes[Row],UIScale,Least,Most,double(Least)/FMath::Max(uint64(1),Most)));
+            // Subpixel strokes naturally vary below native size, but position
+            // must not halve their coverage as rounded scaled quads used to do.
+            const double MinimumRatio=UIScale<1.f?.62:.82;
+            TestTrue(*FString::Printf(TEXT("Size %d at UI %.2f retains thin strokes across pixel phases"),Sizes[Row],UIScale),Most>0&&Least>=Most*MinimumRatio);
+        }
+        TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(int32(Size.X),int32(Size.Y),Pixels,PNG);
+        FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/FString::Printf(TEXT("PluginFontRaster-%d.png"),FMath::RoundToInt(UIScale*100))));
+    }
     return true;
 }
 #endif

@@ -109,18 +109,26 @@ presentation = {
   controls = "toggle",       -- "start_stop" (default), "toggle", or "none"
   start_label = "Start tracker", stop_label = "Pause tracker",
   settings = false,          -- hide the complete Settings and profiles section
-  status = false             -- optional: hide the host's status text too
+  status = false,            -- optional: hide the host's status text too
+  scroll = false             -- optional: paginated panel without host scrolling
 }
 ```
 
 The toggle starts/stops the actual plugin; labels follow its running state.
 Labels are single-line strings of at most 40 characters; empty strings use
-Start/Stop. `settings` and `status` default to true. Defaults and overrides use
+Start/Stop. `settings`, `status` and `scroll` default to true. Defaults and overrides use
 the same inheritance/reset rules as title/icon. Changes preserve the open
 window and its control identities. These options apply to custom plugin panels;
 specialized built-in panels keep their own layout. Companions auto-start when
 enabled, making `controls="none"` useful for passive HUDs. Hiding settings only
 changes presentation; it does not remove the profile API or change permissions.
+
+With `scroll=false`, the host allocates the remaining window height to the custom
+UI and does not create a scroll box. While that panel is displayed, snapshots
+include `panel={width=...,height=...}` in logical UI units, updated on resize.
+Paginated plugins can use this to choose how many rows fit; provide a fallback
+before the panel's first layout. The last measured size remains when closed.
+Plugins are responsible for fitting their controls into this space.
 
 ## Read and filter chat
 
@@ -380,6 +388,15 @@ image, row, column, section and tabs. Containers use `children`; tabs use each
 child's text as its tab title. Sections have `expanded`; their expansion state
 and selected tab are retained while the window is open. Common options are text,
 tooltip, enabled, padding, size (font/icon), bold and color (green/red/yellow/blue).
+Rows normally divide their width equally. Use `compact=true` on a row to size
+all its children to their content, or `auto_width=true` on individual children
+to reserve just their natural width while siblings fill the remainder. Row
+children align vertically at the center. Labels accept `wrap=false` to remain
+on one line and clip within their control; use a tooltip for full long names.
+Tabs use the shared navigation style: dark inactive backgrounds, with a brighter
+background and gold underline on the selected page. Selection follows the page
+ID through live updates and reordering. Use `tabs` for page navigation so custom
+plugins receive the same selected-state treatment as the built-in interfaces.
 Text `size` is a point size from 10 to 36 (default 16), including intermediate
 sizes such as 11, 13 and 15. Updating it on an existing control takes effect
 without replacing the control or losing focus in neighboring inputs.
@@ -450,6 +467,11 @@ keys. Plugin chat/messages and this inbox are separate bounded streams.
 - **chat**: send text, optional recipient for tell or channel=2048 for fellowship;
   otherwise local/server-command text. Requires say; one send per second, at most
   500 characters, one line. For `/myquests`, the commands bridge still works.
+- **notice**: show text in local chat, prefixed with the plugin's manifest name,
+  using retail's green broadcast color. Requires ui; 1–500 characters on one line.
+  This display-only service sends no server packet and does not change the host's
+  global notice. It shares the four-request / half-second service budget. Read
+  the result event and retry a rate-limited notice if delivery matters.
 - **log**: append text and optional level, or clear. snapshot.log contains the last
   200 entries. API 2 also logs native activity errors/status milestones there.
   This is a session ring, not an unbounded disk log. Use bounded state for any

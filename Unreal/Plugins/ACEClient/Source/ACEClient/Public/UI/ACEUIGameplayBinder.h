@@ -1550,6 +1550,7 @@ private:
 	/** Derethian calendar string from raw PortalYearTicks (hour phased via SkyDesc). */
 	FString FormatDerethDateTime(double GameTicks) const;
 	void EnsureSocialEntryBoxes();
+	int32 GetExternalContainerItemCapacity() const;
 	void SyncExternalContainerScrollbars();
 	void RefreshAttributeOverlays();
 	void RefreshSkillOverlays();

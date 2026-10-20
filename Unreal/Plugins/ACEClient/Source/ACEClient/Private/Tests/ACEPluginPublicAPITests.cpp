@@ -175,6 +175,8 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
     TestFalse(TEXT("Item icon metadata cannot wrap negative IDs"),H->ValidatePluginUI(ParseAPI(TEXT(R"({"ui":[{"id":"item","type":"item_icon","effects":-1}]})"))->GetArrayField(TEXT("ui")),Error));
     TestFalse(TEXT("Invalid control mode rejected"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"controls":"invalid"}})")),Error));
     TestFalse(TEXT("Settings visibility must be boolean"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"settings":"false"}})")),Error));
+    TestFalse(TEXT("Scroll policy must be boolean"),H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"scroll":"false"}})")),Error));
+    TestFalse(TEXT("Row sizing must be boolean"),H->ValidatePluginUI(ParseAPI(TEXT(R"({"ui":[{"id":"row","type":"row","compact":"yes"}]})"))->GetArrayField(TEXT("ui")),Error));
     TestTrue(TEXT("Nested selection works"),H->ClickPluginRow(P->Id,TEXT("rat")));TestEqual(TEXT("Native target selected"),C->GetSelectedObject().Guid,12);
     TestTrue(TEXT("Checkbox change accepted"),H->ChangePluginControl(P->Id,TEXT("combat"),MakeShared<FJsonValueBoolean>(false)));
     TestTrue(TEXT("Slider snaps and clamps"),H->ChangePluginControl(P->Id,TEXT("range"),MakeShared<FJsonValueNumber>(999)));
@@ -283,9 +285,19 @@ bool FACEPluginPublicAPITest::RunTest(const FString&)
         H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"controls":"none","settings":false,"status":false}})")),Error);
         ++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();
         TestFalse(TEXT("HUD plugins can hide all native lifecycle buttons"),FindVisible(Panel,TEXT("PluginStartToggle")).IsValid()||FindVisible(Panel,TEXT("PluginStop")).IsValid());
+        H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"ui":[{"id":"pagination_probe","type":"input","text":"Draft","value":"Retain this"}]})")),Error);
+        ++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();
+        const auto RetainedInput=FindVisible(Panel,TEXT("PluginControl.pagination_probe"));
+        TestTrue(TEXT("Default host still scrolls"),FindVisible(Panel,TEXT("PluginScroll")).IsValid());
+        H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{"controls":"none","settings":false,"status":false,"scroll":false}})")),Error);
+        for(int I=0;I<3;++I){++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();}
+        TestFalse(TEXT("Paginated host removes scroll box"),FindVisible(Panel,TEXT("PluginScroll")).IsValid());
+        TestTrue(TEXT("Changing scroll policy retains live controls"),RetainedInput&&FindVisible(Panel,TEXT("PluginControl.pagination_probe"))==RetainedInput);
+        TestTrue(TEXT("Available panel size reaches Lua snapshots"),H->PublicSnapshot(*P)->HasTypedField<EJson::Object>(TEXT("panel"))&&P->PanelSize.Y>0&&P->PanelSize.Y<=Size.Y);
         H->ApplyPublicOutput(*P,ParseAPI(TEXT(R"({"presentation":{}})")),Error);
         ++GFrameCounter;Renderer.DrawWidget(Target,Panel,Size,0);FlushRenderingCommands();
         TestTrue(TEXT("Empty presentation restores default controls and settings"),FindVisible(Panel,TEXT("PluginStop"))&&FindVisible(Panel,TEXT("PluginSettings")));
+        TestTrue(TEXT("Default scrolling restored without replacing controls"),FindVisible(Panel,TEXT("PluginScroll"))&&FindVisible(Panel,TEXT("PluginControl.pagination_probe"))==RetainedInput);
         H->ApplyPublicOutput(*P,UI,Error);
         {
             auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();TestTrue(TEXT("Inventory icon test loads DAT artwork"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));

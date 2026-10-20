@@ -3043,13 +3043,14 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 				Desired.Z = Resolved.Z - CapsuleHalfHeight; // feet; capsule center after ground snap
 				Pred.SetLocationFromUnreal(Desired, WorldScale);
 
-				// Airborne: retail PhysicsObj.handle_all_collisions bounce (DefaultElasticity 0.05).
+				// Airborne: retail PhysicsObj.handle_all_collisions uses the object's elasticity.
 				if (bJumpAirborne)
 				{
 					const float BlockedZ = Resolved.Z - PathGoal.Z;
-					if (BlockedZ < -2.f && JumpWorldAceVelocity.Z > 0.f)
+					if (!bHaveBounceNormal && BlockedZ < -2.f && JumpWorldAceVelocity.Z > 0.f)
 					{
-						// Ceiling: kill upward component (inelastic on Z into soffit).
+						// Fallback only when the support query supplied no contact normal.
+						// A real ceiling contact takes the same retail bounce as a wall.
 						JumpWorldAceVelocity.Z = 0.f;
 					}
 					if (bHaveBounceNormal)
@@ -3058,9 +3059,13 @@ void AACEPlayerController::PlayerTick(float DeltaTime)
 						FVector VelUe(-JumpWorldAceVelocity.X, JumpWorldAceVelocity.Y, JumpWorldAceVelocity.Z);
 						const FVector N = BounceNormalUe.GetSafeNormal();
 						const float CollisionAngle = FVector::DotProduct(VelUe, N);
-						if (CollisionAngle < 0.f)
+						const auto PhysicsSession = Client->GetSession();
+						const auto* PhysicsSelf = PhysicsSession ? PhysicsSession->GetWorldObjects().Find(Client->GetPlayerGuid()) : nullptr;
+						if (PhysicsSelf && (PhysicsSelf->PhysicsState & ACEPhysicsState::Inelastic))
+							JumpWorldAceVelocity = FVector::ZeroVector;
+						else if (CollisionAngle < 0.f)
 						{
-							constexpr float Elasticity = 0.05f; // PhysicsGlobals.DefaultElasticity
+							const float Elasticity = PhysicsSelf ? PhysicsSelf->GetValidElasticity() : .05f;
 							VelUe += N * (-CollisionAngle * (Elasticity + 1.f));
 							JumpWorldAceVelocity = FVector(-VelUe.X, VelUe.Y, VelUe.Z);
 						}

@@ -12,8 +12,10 @@ struct FACEFrameReportGate
  bool Update(double Now,double FrameMs,bool bGameplay)
  {
   if(!bGameplay){bReady=false;return false;}
-  if(!bReady){bReady=true;ReadyAt=Now+10;return false;}
-  if(!FMath::IsFinite(FrameMs) || FrameMs<100 || Now<ReadyAt || Now<NextReportAt || Reports>=20)return false;
+  // Portal/loading frames are excluded by bGameplay. Keep only a short settle
+  // period: first-room streaming hitches can happen seconds after arrival.
+  if(!bReady){bReady=true;ReadyAt=Now+1;return false;}
+  if(!FMath::IsFinite(FrameMs) || FrameMs<50 || Now<ReadyAt || Now<NextReportAt || Reports>=20)return false;
   ++Reports;NextReportAt=Now+10;return true;
  }
 };

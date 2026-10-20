@@ -1443,13 +1443,16 @@ local function tick(s,p)
   local idle=idle_stance();if idle then return idle end
   if (p.follow_name or '')~='' or (p.follow_id or 0)~=0 then
    local follow
-   for _,o in ipairs(s.route_objects or {}) do if o.id==p.follow_id or o.name==p.follow_name then follow=o;break end end
+   for _,o in ipairs(s.route_objects or {}) do
+    if ((p.follow_name or '')~='' and o.name==p.follow_name) or ((p.follow_name or '')=='' and o.id==p.follow_id) then follow=o;break end
+   end
    if not follow then return result(nil,'Waiting for follow target to enter range') end
-   if follow.distance<=option('follow_distance',3) then return result(nil,'Following '..follow.name) end
+   -- Being close through a wall is not the same as reaching the next footstep.
+   if (not option('follow_corners',false) or #follow_path<=1) and follow.distance<=option('follow_distance',3) then return result(nil,'Following '..follow.name) end
    local aim=option('follow_corners',false) and follow_path[1] or follow
    aim=aim or follow
    local door=route_door(aim);if door then return door end
-   return {action='move',cell=aim.cell,x=aim.x,y=aim.y,z=aim.z,status='Following '..follow.name}
+   return {action='move',cell=aim.cell,x=aim.x,y=aim.y,z=aim.z,arrival_radius=option('follow_corners',false) and .15 or nil,status='Following '..follow.name}
   end
   if meta.route_changed then return result(nil,'Loading route geometry') end
   local route=p.route or {};if #route==0 then return result(nil,'Record a route to begin navigation') end
@@ -2859,22 +2862,41 @@ local function run(s,p)
  -- Retain the followed player's observed path even while combat/actions pause walking.
  if effective.follow_corners and effective.navigation then
   local target
-  for _,o in ipairs(s.route_objects or {}) do if o.id==effective.follow_id or o.name==effective.follow_name then target=o;break end end
+  for _,o in ipairs(s.route_objects or {}) do
+   if ((effective.follow_name or '')~='' and o.name==effective.follow_name) or ((effective.follow_name or '')=='' and o.id==effective.follow_id) then target=o;break end
+  end
   if not target or target.id~=follow_target or follow_teleport~=s.teleport_sequence then follow_path={} end
   follow_target=target and target.id;follow_teleport=s.teleport_sequence
   if target then
-   local last=follow_path[#follow_path]
-   if last and distance(last,target)>50 then follow_path={} end
-   if #follow_path==0 or distance(follow_path[#follow_path],target)>=.096 then
-    if #follow_path>=512 then return pause_navigation('follow path exceeded 512 points') end
-    follow_path[#follow_path+1]=target
+   local function remember(observation)
+    local last=follow_path[#follow_path]
+    if last and distance(last,observation)>50 then follow_path={} end
+    if #follow_path>0 and distance(follow_path[#follow_path],observation)<.096 then return end
+    local at={cell=observation.cell,x=observation.x,y=observation.y,z=observation.z}
+    -- Compress only collinear observations; preserve turns, stairs and loops.
+    local replace=false
+    if #follow_path>=2 then
+     local ax,ay,az=world(follow_path[#follow_path-1]);local bx,by,bz=world(follow_path[#follow_path]);local cx,cy,cz=world(at)
+     local dx,dy,dz=cx-ax,cy-ay,cz-az;local length=dx*dx+dy*dy+dz*dz
+     local t=length>0 and ((bx-ax)*dx+(by-ay)*dy+(bz-az)*dz)/length or 0
+     replace=length<=36 and t>0 and t<1 and (bx-ax-t*dx)^2+(by-ay-t*dy)^2+(bz-az-t*dz)^2<=.02^2
+    end
+    if replace then follow_path[#follow_path]=at
+    else
+     if #follow_path>=512 then return pause_navigation('follow path exceeded 512 points') end
+     follow_path[#follow_path+1]=at
+    end
    end
-   local px,py,pz=world(s.position)
-   for i=#follow_path,2,-1 do
-    local ax,ay,az=world(follow_path[i-1]);local bx,by,bz=world(follow_path[i]);local dx,dy,dz=bx-ax,by-ay,bz-az
-    local length=dx*dx+dy*dy+dz*dz;local t=length>0 and math.max(0,math.min(1,((px-ax)*dx+(py-ay)*dy+(pz-az)*dz)/length)) or 0
-    if (px-ax-t*dx)^2+(py-ay-t*dy)^2+(pz-az-t*dz)^2<2.4^2 then for j=1,i-1 do table.remove(follow_path,1) end;break end
+   -- Network observations are collected even while the host is waiting for a
+   -- cast/equipment acknowledgment and deliberately does not run the policy.
+   if s.follow_motion_target==target.id then
+    if s.follow_motion_overflow then return pause_navigation('follow movement history exceeded its limit') end
+    for _,at in ipairs(s.follow_motion or {}) do local limit=remember(at);if limit then return limit end end
    end
+   local limit=remember(target);if limit then return limit end
+   -- Never search backwards for a nearby later segment: adjacent hallways and
+   -- returning leaders can be close in space but far apart along the path.
+   while #follow_path>1 and distance(s.position,follow_path[1])<=.15 do table.remove(follow_path,1) end
   end
  else follow_path={};follow_target=nil end
  local route=effective.route or {}

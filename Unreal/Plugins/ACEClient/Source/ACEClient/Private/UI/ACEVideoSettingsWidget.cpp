@@ -78,8 +78,11 @@ TSharedRef<SWidget> UACEVideoSettingsWidget::RebuildWidget()
    .SetDownArrowPadding(FMargin(0)).SetContentPadding(FMargin(2,0,0,0)).SetMenuBorderBrush(Background).SetMenuBorderPadding(FMargin(2));
   C->SetWidgetStyle(Style); C->SetContentPadding(FMargin(0));
   auto Items=C->GetItemStyle();
+  const auto Selected=Brush(0x060012B4,FVector2D(103,18),true);
   Items.SetEvenRowBackgroundBrush(Background).SetOddRowBackgroundBrush(Background)
-   .SetEvenRowBackgroundHoveredBrush(Background).SetOddRowBackgroundHoveredBrush(Background);
+   .SetEvenRowBackgroundHoveredBrush(Selected).SetOddRowBackgroundHoveredBrush(Selected)
+   .SetActiveBrush(Selected).SetActiveHoveredBrush(Selected).SetInactiveBrush(Selected).SetInactiveHoveredBrush(Selected)
+   .SetSelectorFocusedBrush(Selected).SetTextColor(FLinearColor::White).SetSelectedTextColor(FLinearColor::White);
   C->SetItemStyle(Items); C->OnGenerateWidgetEvent.BindDynamic(this,&UACEVideoSettingsWidget::GenerateOption);
   Row(Name,C); return C;
  };

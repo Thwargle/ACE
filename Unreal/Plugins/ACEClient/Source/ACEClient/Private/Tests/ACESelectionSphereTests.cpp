@@ -55,6 +55,7 @@ bool FACESelectionSphereTest::RunTest(const FString&)
     for (int32 Index=0; Index<2; ++Index)
     {
         FACEWorldObject Reward; Reward.Guid=0x71001000+Index; Reward.bHasPosition=true;
+        Reward.Name=TEXT("Named quest reward");
         Reward.ItemType=Index ? ACEItemType::Creature : ACEItemType::Misc;
         Reward.SetupId=Index ? 0x02000AAD : 0x02001B99;
         Reward.MotionTableId=Index ? 0x09000221 : 0x09000001;

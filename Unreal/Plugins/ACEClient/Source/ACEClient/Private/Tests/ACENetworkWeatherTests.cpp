@@ -163,17 +163,19 @@ bool FACERetailNetworkWeatherTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("New server handshake replaces the old rainy night"),Sky->ActiveGroup.DayName,FString(TEXT("Clear")));
     TestFalse(TEXT("New server noon does not inherit stars"),StarsVisible());
 
-    // Reordered TimeSync must include time spent waiting for a missing packet.
+    // TimeSync includes time spent waiting for the bounded dispatch pass.
+    // A UDP gap itself must not hold the synchronized clock back.
     const auto Earlier = SyncPacket(Seq++,RainNight);
     const uint32 QueuedSeq=Seq++;
     const auto Later = SyncPacket(QueuedSeq,RainNoon);
+    Session->bDeferOrderedDispatch=true;
     Deliver(Later);
-    if (!TestTrue(TEXT("Later time sync waits for the earlier packet"), Session->OutOfOrderS2CPackets.Contains(QueuedSeq))) return false;
+    if (!TestTrue(TEXT("Deferred time sync retains its packet receipt"), Session->OutOfOrderS2CPackets.Contains(QueuedSeq))) return false;
     const double Arrival = Session->OutOfOrderS2CPackets.FindChecked(QueuedSeq).ReceivedAt;
     Session->OutOfOrderS2CPackets.FindChecked(QueuedSeq).ReceivedAt -= 12.0;
-    Deliver(Earlier); Sky->Tick(.016f);
+    Deliver(Earlier);Session->bDeferOrderedDispatch=false;Session->DrainOutOfOrderS2C();Sky->Tick(.016f);
     TestTrue(TEXT("A queued sync retains its receipt time"),Session->PortalYearTicksRealtime<=Arrival-12.0);
-    TestTrue(TEXT("Waiting for packet order cannot freeze the game clock"),Client->GetGameTimeTicks()>=RainNoon+12.0);
+    TestTrue(TEXT("Waiting for dispatch cannot freeze the game clock"),Client->GetGameTimeTicks()>=RainNoon+12.0);
     auto Bad = SyncPacket(Seq,RainNight); Bad[8]^=1; Deliver(Bad);
     TestEqual(TEXT("Invalid encrypted checksum cannot change weather time"),Session->PortalYearTicksAtConnect,RainNoon);
     Sync(std::numeric_limits<double>::quiet_NaN());

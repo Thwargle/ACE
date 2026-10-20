@@ -243,11 +243,12 @@ bool FACEAvatarMotionTest::RunTest(const FString&)
   TestTrue(TEXT("Release after landing starts a fresh airborne animation"),PC->bJumpAirborne && App->ActionCommand==0x40000015u && App->AnimTime==0.f && !App->bHoldActionFinal);
   App->ClearJumpMotionIfAny();ReferenceActor->Destroy();
  }
- // Grounded jump charging must still cancel a held retail emote.
+ // CMotionInterp::charge_jump rejects Sleeping (0x41000014). Charging
+ // must neither stand the character up nor bypass the resting-motion gate.
  VR->bActive=false;PC->bJumpAirborne=false;PC->bJumpCharging=false;
  App->SetHeldActionMotion(ACEMotion::Sleeping);PC->JumpPressed();
- TestTrue(TEXT("Grounded jump charging starts the authored emote exit"),App->ActionCommand==ACEMotion::Ready
-  && App->ActionFromCommand==ACEMotion::Sleeping && !App->bHoldActionFinal && PC->bJumpCharging);
+ TestTrue(TEXT("Sleeping blocks jump charge without changing the held pose"),App->ActionCommand==ACEMotion::Sleeping
+  && App->bHoldActionFinal && !PC->bJumpCharging);
  PC->UnPossess();Pawn->Destroy();PC->Destroy();Session->State=EACESessionState::Disconnected;
  return !HasAnyErrors();
 }

@@ -49,7 +49,7 @@ namespace ACEPluginPanelPrivate
         void Construct(const FArguments& Args)
         {
             Host = Args._Host; Id = Args._PluginId; FACEPluginStyle::Use(Args._Host,Id.IsEmpty()?TEXT("__manager"):Id); PluginOnly = !Id.IsEmpty();
-            ChildSlot[SNew(SScrollBox) + SScrollBox::Slot()[SAssignNew(Body, SVerticalBox)]];
+            Body=SNew(SVerticalBox);
             Rebuild();
         }
         virtual void Tick(const FGeometry& G,double T,float D) override
@@ -69,6 +69,7 @@ namespace ACEPluginPanelPrivate
                 }
             }
             if(Host.IsValid()&&Id.IsEmpty()&&OrderRevision!=Host->GetPluginOrderRevision())OrderRows();
+            if(auto P=DisplayedPlugin();P&&P->ScrollPanel()!=Scrollable)SetScrolling(P->ScrollPanel());
         }
     private:
         TWeakObjectPtr<UACEPluginSubsystem> Host;
@@ -83,6 +84,23 @@ namespace ACEPluginPanelPrivate
         TSharedPtr<SMultiLineEditableTextBox> Json;
         FString Id, Search, ManagerNotice;
         bool PluginOnly = false;
+        bool Scrollable=true;
+        TSharedPtr<SScrollBox> Scroll;
+        SVerticalBox::FSlot* CompanionSlot=nullptr;
+        TSharedPtr<FACEClientPlugin> DisplayedPlugin() const
+        {
+            if(Host.IsValid())for(const auto& P:Host->Plugins)if(P->Id==Id)return P;
+            return nullptr;
+        }
+        void SetScrolling(bool Value)
+        {
+            Scrollable=Value;
+            ChildSlot[SNullWidget::NullWidget];if(Scroll)Scroll->ClearChildren();Scroll.Reset();
+            if(Scrollable)ChildSlot[SAssignNew(Scroll,SScrollBox).Tag(TEXT("PluginScroll"))+SScrollBox::Slot()[Body.ToSharedRef()]];
+            else ChildSlot[Body.ToSharedRef()];
+            if(CompanionSlot){if(Scrollable)CompanionSlot->SetAutoHeight();else CompanionSlot->SetFillHeight(1);}
+            SetClipping(EWidgetClipping::ClipToBounds);
+        }
         void OrderRows()
         {
             OrderRevision=Host->GetPluginOrderRevision();if(!PluginRows)return;
@@ -117,7 +135,10 @@ namespace ACEPluginPanelPrivate
         }
         void Rebuild()
         {
-            SettingsBody.Reset();PluginRows.Reset();RowsById.Reset();Body->ClearChildren(); if (!Host.IsValid()) return;
+            CompanionSlot=nullptr;SettingsBody.Reset();PluginRows.Reset();RowsById.Reset();Body->ClearChildren(); if (!Host.IsValid()) return;
+            // Paginated plugins receive the available height, with no wheel
+            // scrolling or scrollbar. Keep the manager's normal scrolling.
+            auto Display=DisplayedPlugin();SetScrolling(!Display||Display->ScrollPanel());
             Retail=FACEPluginStyle::Use(Host.Get(),Id.IsEmpty()?TEXT("__manager"):Id);ArtworkReady=Retail->HasDatArtwork();
             if (!PluginOnly && Id.IsEmpty())
             {
@@ -212,7 +233,8 @@ namespace ACEPluginPanelPrivate
                 [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",20)).Text_Lambda([P]{return FText::FromString(P->DisplayStopLabel());})]]; Add(Actions);
             if(P->HasPresentation())
             {
-                Add(Host->MakeCompanionPanel(P->Id));
+                Body->AddSlot().Expose(CompanionSlot).Padding(5)[Host->MakeCompanionPanel(P->Id)];
+                if(Scrollable)CompanionSlot->SetAutoHeight();else CompanionSlot->SetFillHeight(1);
                 SettingsBody=SNew(SVerticalBox);
                 Body->AddSlot().AutoHeight().Padding(5)[SNew(SExpandableArea).Tag(TEXT("PluginSettings")).InitiallyCollapsed(true)
                     .Visibility_Lambda([P]{return P->ShowSettings()?EVisibility::Visible:EVisibility::Collapsed;})

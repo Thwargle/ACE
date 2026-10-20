@@ -80,6 +80,8 @@ bool FACERetailFontDataTest::RunTest(const FString& Parameters)
     TestNull(TEXT("BOM does not paint a question mark"),ACEDatText::FindChar(Font,0xFEFF));
     TestEqual(TEXT("Tabs have a space advance"),ACEDatText::Advance(Font,9),ACEDatText::Advance(Font,32));
     TestEqual(TEXT("CRLF preserves the same wrapping as LF"),ACEDatText::Layout(Font,TEXT("aa\r\nbb"),20,false).Num(),2);
+    TestEqual(TEXT("Narrow retail CRLF layout matches LF without an extra line"),
+        ACEDatText::Layout(Font,TEXT("aaaa\r\nbbbb\n"),1,false).Num(),ACEDatText::Layout(Font,TEXT("aaaa\nbbbb\n"),1,false).Num());
     TestEqual(TEXT("Empty text has zero width"), Renderer.MeasureWidth(Font, TEXT("")), 0);
     auto Lines = ACEDatText::Layout(Font, TEXT("aa bb"), 12, false);
     TestEqual(TEXT("Wraps at the word boundary"), Lines.Num(), 2);
@@ -89,6 +91,30 @@ bool FACERetailFontDataTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Next word begins at its first letter"), Lines[1].Begin, 3);
     }
     TestEqual(TEXT("Oversized word wraps by glyph"), ACEDatText::Layout(Font, TEXT("aaaa"), 10, false).Num(), 2);
+    const auto WholeWord = ACEDatText::Layout(Font, TEXT("aaaa"), 10, false, false);
+    TestEqual(TEXT("Plugin word policy keeps oversized words on one line"), WholeWord.Num(), 1);
+    TestEqual(TEXT("Oversized word retains its natural width"), WholeWord[0].Width, 20);
+    const auto Phrase = ACEDatText::Layout(Font, TEXT("aa aaaa bb"), 10, false, false);
+    TestEqual(TEXT("Words either side of an oversized word still wrap"), Phrase.Num(), 3);
+    if (Phrase.Num() == 3)
+    {
+        TestEqual(TEXT("Oversized middle word starts at its boundary"), Phrase[1].Begin, 3);
+        TestEqual(TEXT("Oversized middle word remains intact"), Phrase[1].Width, 20);
+        TestEqual(TEXT("Following word starts on a new line"), Phrase[2].Begin, 8);
+    }
+    TestEqual(TEXT("Plugin explicit newlines and final empty line are retained"), ACEDatText::Layout(Font, TEXT("aaaa\r\nbbbb\n"), 1, false, false).Num(), 3);
+    TestEqual(TEXT("Plugin nonbreaking space does not split a label"), ACEDatText::Layout(Font, TEXT("aa\u00A0bb"), 1, false, false).Num(), 1);
+    // Exercise widths smaller than one glyph, just below word width, and wide
+    // enough for the complete title. No soft break may split an English word.
+    for (const FString Label : {TEXT("Automatically fill empty mana stones"), TEXT("Summoning"),
+        TEXT("Settings and profiles"), TEXT("Unattended Combat Manager"), TEXT("Maximum units to give (0=all)")})
+        for (int32 Limit = 1; Limit <= 180; ++Limit)
+        {
+            const auto Wrapped = ACEDatText::Layout(Font, Label, Limit, false, false);
+            for (int32 I = 1; I < Wrapped.Num(); ++I)
+                TestFalse(*FString::Printf(TEXT("%s at width %d keeps word boundaries"), *Label, Limit),
+                    FChar::IsAlpha(Label[Wrapped[I].Begin - 1]) && FChar::IsAlpha(Label[Wrapped[I].Begin]));
+        }
     TestEqual(TEXT("Explicit final newline preserves empty line"), ACEDatText::Layout(Font, TEXT("a\nb\n"), 100, false).Num(), 3);
     TestEqual(TEXT("Retail one-line property suppresses wrapping"), ACEDatText::Layout(Font, TEXT("aaaa"), 10, true).Num(), 1);
     Font.Chars[0].HorizontalOffsetBefore = 128;

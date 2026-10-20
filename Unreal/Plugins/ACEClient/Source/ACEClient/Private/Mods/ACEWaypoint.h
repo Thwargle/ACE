@@ -1,10 +1,14 @@
 #pragma once
 #include "CoreMinimal.h"
 #include "ACETypes.h"
+class FJsonObject;
 
 namespace ACEWaypoint
 {
     struct FLink { int32 Begin=0, End=0; FVector2D Coordinates; };
+    struct FRoutePoint { FACEPosition Position; int32 Index=0; bool Connect=false,Current=false; };
+    // Map-only route geometry: no world actors, ground traces or distance culling.
+    TArray<FRoutePoint> MapRoute(const TSharedPtr<FJsonObject>& Route,const FACEPosition& Player,bool Dungeon,int32 Current);
     // Coordinates are signed E/W (X), N/S (Y), in the retail map's 240m units.
     TArray<FLink> FindCoordinates(const FString& Text);
     bool Parse(const FString& Text, FVector2D& Out);

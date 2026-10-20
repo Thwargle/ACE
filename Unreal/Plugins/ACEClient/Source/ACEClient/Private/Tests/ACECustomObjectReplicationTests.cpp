@@ -4,6 +4,7 @@
 #include "ACEOpcodes.h"
 #include "Protocol/ACEObjectCreateParser.h"
 #include "UI/ACEAppraisalUsage.h"
+#include "ACEInventoryRules.h"
 
 namespace
 {
@@ -19,10 +20,14 @@ struct FObjectPacket
 	int32 Container = 0;
 	int32 Placement = 0;
 	float Scale = 1.f;
+	TOptional<float> Elasticity;
 	float X = 10.f;
 	bool bPosition = true;
 	float Workmanship = -1.f;
 	bool HouseHook = false;
+	uint16 HookType = 0;
+	uint32 HookItems = 0;
+	uint32 HouseOwner = 0;
 	TArray<uint8> Movement;
 	int32 MotionTable = 0;
 };
@@ -39,7 +44,7 @@ TArray<uint8> ObjectPacket(const FObjectPacket& P, uint32 Opcode = ACEOpcode::Ob
 	W.WriteUInt32(Opcode); W.WriteUInt32(P.Guid);
 	WriteAppearance(W, P.Part);
 	W.WriteUInt32(0x81u | (P.Movement.IsEmpty() ? 0x20000u : 0x10000u)
-		| (P.bPosition ? 0x8000u : 0u) | (P.MotionTable ? 2u : 0u));
+		| (P.bPosition ? 0x8000u : 0u) | (P.MotionTable ? 2u : 0u) | (P.Elasticity.IsSet() ? 0x200u : 0u));
 	W.WriteUInt32(P.PhysicsState);
 	if (P.Movement.IsEmpty()) W.WriteUInt32(P.Placement);
 	else
@@ -56,17 +61,21 @@ TArray<uint8> ObjectPacket(const FObjectPacket& P, uint32 Opcode = ACEOpcode::Ob
 	}
 	if (P.MotionTable) W.WriteUInt32(P.MotionTable);
 	W.WriteUInt32(P.Setup); W.WriteFloat(P.Scale);
+	if (P.Elasticity.IsSet()) W.WriteFloat(P.Elasticity.GetValue());
 	for (int32 I = 0; I < ACEPhysicsTimeStamp::Count; ++I)
 		W.WriteUInt16(I == ACEPhysicsTimeStamp::Instance ? P.Instance : P.Sequence);
 	W.Align();
 	W.WriteUInt32((P.Container ? 0x4000u : 0u) | (P.Workmanship>=0 ? 0x01000000u : 0u)
-		| (P.HouseHook ? 0x20000000u : 0u));
+		| (P.HouseHook ? 0x20000000u : 0u) | (P.HookType ? 0x10000000u : 0u)
+		| (P.HouseOwner ? 0x02000000u : 0u));
 	W.WriteString16L(TEXT("Server-authored object"));
 	W.WriteUInt16(1); W.WriteUInt16(1); // WCID and icon have packed known type prefixes.
 	W.WriteUInt32(ACEItemType::Misc); W.WriteUInt32(P.DescriptionFlags); W.Align();
 	if (P.Container) W.WriteUInt32(P.Container);
 	if (P.Workmanship>=0) W.WriteFloat(P.Workmanship);
-	if (P.HouseHook) W.WriteUInt32(0xFFFFFFFFu);
+	if (P.HouseOwner) W.WriteUInt32(P.HouseOwner);
+	if (P.HouseHook) W.WriteUInt32(P.HookItems);
+	if (P.HookType) W.WriteUInt16(P.HookType);
 	W.Align();
 	return W.GetData();
 }
@@ -112,16 +121,50 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACECustomObjectReplicationTest, "ACE.RetailPar
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACECustomObjectReplicationTest::RunTest(const FString&)
 {
+	// PhysicsDesc elasticity is optional; retail defaults to .05 and clamps
+	// supplied values to [0, .1]. Test the real create/update wire path.
+	{
+		FACESession PhysicsSession; FObjectPacket P;
+		PhysicsSession.HandleGameMessage(ObjectPacket(P));
+		TestEqual(TEXT("Omitted elasticity retains retail default"),PhysicsSession.WorldObjects[P.Guid].Elasticity,.05f);
+		for (float Value : {0.f,.08f,-1.f,2.f})
+		{
+			P.Elasticity=Value;
+			PhysicsSession.HandleGameMessage(ObjectPacket(P,ACEOpcode::UpdateObject));
+			TestEqual(TEXT("Object replacement uses server restitution within retail bounds"),
+				PhysicsSession.WorldObjects[P.Guid].GetValidElasticity(),FMath::Clamp(Value,0.f,.1f));
+		}
+		P.Elasticity=.08f;
+		PhysicsSession.HandleGameMessage(ObjectPacket(P));
+		TestEqual(TEXT("Duplicate create cannot overwrite existing physics constants"),PhysicsSession.WorldObjects[P.Guid].Elasticity,.1f);
+	}
 	{
 		FACESession HookSession;
 		FObjectPacket Hook; Hook.HouseHook=true; Hook.Setup=0x02001632; Hook.Placement=103;
+		Hook.HookType=2; Hook.HookItems=ACEItemType::Misc; Hook.HouseOwner=0x5000123;
 		Hook.DescriptionFlags=ACEObjectDescFlag::Openable;
 		HookSession.HandleGameMessage(ObjectPacket(Hook));
 		TestTrue(TEXT("PublicWeenieDesc retains house-hook identity"),HookSession.WorldObjects[Hook.Guid].bIsHouseHook);
 		TestFalse(TEXT("Openable hook does not imply a closed chest animation"),HookSession.WorldObjects[Hook.Guid].UsesOnOffMotion());
-		Hook.HouseHook=false;
+		const auto& Container=HookSession.WorldObjects[Hook.Guid];
+		TestEqual(TEXT("Hook type survives the descriptor"),Container.HookType,Hook.HookType);
+		TestEqual(TEXT("Hook item mask survives the descriptor"),Container.HookItemTypes,Hook.HookItems);
+		TestEqual(TEXT("Hook owner survives the descriptor"),uint32(Container.HouseOwnerId),Hook.HouseOwner);
+		FACEWorldObject Item; Item.ItemType=ACEItemType::Misc; Item.HookType=2;
+		TestTrue(TEXT("Compatible owned hook accepts item"),ACEInventoryRules::CheckHookStatus(Item,Container));
+		Item.HookType=1;
+		TestFalse(TEXT("Wrong hook orientation rejects item"),ACEInventoryRules::CheckHookStatus(Item,Container));
+		Item.HookType=2;Item.ItemType=ACEItemType::Container;
+		TestFalse(TEXT("Wrong item type rejects item"),ACEInventoryRules::CheckHookStatus(Item,Container));
+		Item.ItemType=ACEItemType::Misc;
+		FACEWorldObject Unowned=Container;Unowned.HouseOwnerId=0;
+		TestFalse(TEXT("Unowned house rejects hook item"),ACEInventoryRules::CheckHookStatus(Item,Unowned));
+		Hook.HouseHook=false;Hook.HookType=0;Hook.HouseOwner=0;
 		HookSession.HandleGameMessage(ObjectPacket(Hook,ACEOpcode::UpdateObject));
 		TestFalse(TEXT("Replacement descriptor clears previous hook identity"),HookSession.WorldObjects[Hook.Guid].bIsHouseHook);
+		TestEqual(TEXT("Replacement clears stale hook type"),HookSession.WorldObjects[Hook.Guid].HookType,uint16(0));
+		TestEqual(TEXT("Replacement clears stale hook item mask"),HookSession.WorldObjects[Hook.Guid].HookItemTypes,0u);
+		TestEqual(TEXT("Replacement clears stale house owner"),HookSession.WorldObjects[Hook.Guid].HouseOwnerId,0);
 		TestTrue(TEXT("Ordinary openable containers retain chest animation"),HookSession.WorldObjects[Hook.Guid].UsesOnOffMotion());
 	}
 	// ACSmartBox queues F74C for absent objects and newer incarnations, then

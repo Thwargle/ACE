@@ -12,6 +12,22 @@ bool FACEDungeonMapContoursTest::RunTest(const FString&)
  auto Seam=[](const FACEDungeonMapContours& Map,double X)
  {double Length=0;for(const auto& E:Map.Lines)if(FMath::IsNearlyEqual(E.A.X,X,.001)&&FMath::IsNearlyEqual(E.B.X,X,.001))Length+=(E.B-E.A).Size();return Length;};
  {
+  FACEDungeonMapContours Map;
+  Floor(Map,0,10,0,3);Floor(Map,0,10,7,10);Floor(Map,0,3,3,7);Floor(Map,7,10,3,7);
+  Map.AddPolygon({{0,0,0},{0,0,3},{10,0,3},{10,0,0}}); // wall
+  Map.AddPolygon({{0,0,3},{0,10,3},{10,10,3},{10,0,3}}); // ceiling
+  TestEqual(TEXT("Only the four walkable floor rectangles produce fill triangles"),Map.Triangles.Num(),8);
+  double Area=0;bool PitCovered=false;
+  for(const auto& T:Map.Triangles)
+  {
+   Area+=FVector::CrossProduct(T.B-T.A,T.C-T.A).Size()*.5;
+   const FVector P(5,5,0);
+   if(FVector::CrossProduct(T.B-T.A,P-T.A).Z>=0&&FVector::CrossProduct(T.C-T.B,P-T.B).Z>=0&&FVector::CrossProduct(T.A-T.C,P-T.C).Z>=0)PitCovered=true;
+  }
+  TestEqual(TEXT("Floor fill preserves the area around a pit"),Area,84.);
+  TestFalse(TEXT("No fill triangle covers the pit"),PitCovered);
+ }
+ {
   FACEDungeonMapContours Map;Floor(Map,0,10,0,10);Floor(Map,10,20,0,10);Finish(Map);
   TestEqual(TEXT("Open adjoining cells do not draw their shared border"),Seam(Map,10),0.);
   double Length=0;for(const auto& E:Map.Lines)Length+=(E.B-E.A).Size();

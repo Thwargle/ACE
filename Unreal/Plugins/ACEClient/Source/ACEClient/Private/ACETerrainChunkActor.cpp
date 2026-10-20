@@ -90,9 +90,10 @@ void AACETerrainChunkActor::SetLandEnvCellFloorPriority(bool bEnable, UACEDatSub
 	{
 		return;
 	}
-	// Keep rendered ground at the collision surface; only break coplanar ties.
+	// Match individual landblocks: put terrain behind the .0025 AC interior
+	// floor bias, otherwise chunked terrain wins the same coplanar depth tie.
 	(void)bIndoorLookOut;
-	const float Bias = bEnable ? 0.25f : 0.f;
+	const float Bias = bEnable ? WorldScale * .005f : 0.f;
 	const int32 Num = TerrainMesh->GetNumSections();
 	if (AppliedLandDepthBias == Bias && AppliedLandDepthBiasSections == Num)
 	{

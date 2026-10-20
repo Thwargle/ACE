@@ -112,6 +112,7 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     for (int32 Type : {ACEItemType::Misc, ACEItemType::Creature})
     {
         FACEWorldObject Reward = Corpse; Reward.Guid = 600 + Type;
+		Reward.Name=TEXT("Named quest reward");
         Reward.ItemType = Type; Reward.bHasPosition = true; Reward.ItemUseable = 32;
         Reward.ObjectDescriptionFlags = ACEObjectDescFlag::Stuck;
         DeathSession.UpsertWorldObject(Reward); DeathSession.SelectObject(Reward.Guid);
@@ -383,10 +384,79 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Already buffered encrypted packets are also discarded before CRC"),CrcFailures,0);
         TestEqual(TEXT("Missing encrypted data still drains in order"),Duplicates.LastReceivedPacketSequence,4u);
     }
+    // Retail orders WOrderHdr events per owner, not UDP packets. In particular,
+    // event 2 can arrive complete before the last fragment of event 1.
+    {
+        FACESession Events;Events.PlayerGuid=1;
+        FACEWorldObject FirstOwner;FirstOwner.Guid=1;Events.UpsertWorldObject(FirstOwner);
+        FACEWorldObject SecondOwner;SecondOwner.Guid=2;Events.UpsertWorldObject(SecondOwner);
+        TArray<FString> Seen;
+        Events.OnChatMessage.AddLambda([&](const FString& Text,const FString&,int32){Seen.Add(Text);});
+        auto Event=[](uint32 Owner,uint32 Stamp,const TCHAR* Text)
+        {
+            FACEBinaryWriter W;W.WriteUInt32(ACEOpcode::GameEvent);W.WriteUInt32(Owner);W.WriteUInt32(Stamp);
+            W.WriteUInt32(ACEGameEvent::CommunicationTransientString);W.WriteString16L(Text);return W.GetData();
+        };
+        const auto First=Event(1,1,TEXT("First"));TArray<uint8> FirstHead,FirstTail;
+        FirstHead.Append(First.GetData(),12);FirstTail.Append(First.GetData()+12,First.Num()-12);
+        Deliver(Events,Packet(3,EACEPacketHeaderFlags::BlobFragments,Fragment(300,1,0,Event(1,2,TEXT("Second")))));
+        Deliver(Events,Packet(4,EACEPacketHeaderFlags::BlobFragments,Fragment(200,2,0,FirstHead)));
+        TestTrue(TEXT("Complete later event waits for an earlier fragmented event"),Seen.IsEmpty());
+        Deliver(Events,Packet(5,EACEPacketHeaderFlags::BlobFragments,Fragment(400,1,0,Event(2,1,TEXT("Other owner")))));
+        TestTrue(TEXT("One blocked owner does not block another owner"),Seen==TArray<FString>{TEXT("Other owner")});
+        Deliver(Events,Packet(6,EACEPacketHeaderFlags::BlobFragments,Fragment(500,1,0,NameMessage(TEXT("World progresses")))));
+        TestEqual(TEXT("Unordered world updates pass both the packet gap and event gap"),Events.ServerName,FString(TEXT("World progresses")));
+        Deliver(Events,Packet(2,EACEPacketHeaderFlags::BlobFragments,Fragment(200,2,1,FirstTail)));
+        TestTrue(TEXT("Late fragment releases ordered events in exact order"),Seen==TArray<FString>{TEXT("Other owner"),TEXT("First"),TEXT("Second")});
+        Deliver(Events,Packet(7,EACEPacketHeaderFlags::BlobFragments,Fragment(600,1,0,Event(1,2,TEXT("Duplicate")))));
+        TestEqual(TEXT("Duplicate event stamp cannot replay a transaction under a new blob ID"),Seen.Num(),3);
+        TestEqual(TEXT("Delivered event bytes are reclaimed"),Events.PendingGameEventBytes,0);
+        Events.ResetReceivedMessages();
+        Deliver(Events,Packet(8,EACEPacketHeaderFlags::BlobFragments,Fragment(700,1,0,Event(1,1,TEXT("Relogged")))));
+        TestEqual(TEXT("A new login accepts the restarted event sequence"),Seen.Last(),FString(TEXT("Relogged")));
+        Deliver(Events,Packet(9,EACEPacketHeaderFlags::BlobFragments,Fragment(800,1,0,Event(3,1,TEXT("Created late")))));
+        TestEqual(TEXT("Unknown owner holds its ordered event"),Seen.Last(),FString(TEXT("Relogged")));
+        FACEWorldObject LateOwner;LateOwner.Guid=3;Events.UpsertWorldObject(LateOwner);Events.DrainOutOfOrderS2C();
+        TestEqual(TEXT("Creating the owner releases its pending events"),Seen.Last(),FString(TEXT("Created late")));
+    }
+    // WTimeStamper rejects stale qualities, shares private/public stamps and
+    // accepts wrapping byte timestamps. Invalid bodies cannot consume a stamp.
+    {
+        FACESession Stats;Stats.PlayerGuid=1;
+        auto Stat=[](bool Public,uint8 Stamp,uint32 Key,int32 Value)
+        {
+            FACEBinaryWriter W;W.WriteUInt32(Public?ACEOpcode::PublicUpdatePropertyInt:ACEOpcode::PrivateUpdatePropertyInt);
+            W.WriteUInt8(Stamp);if(Public)W.WriteUInt32(1);W.WriteUInt32(Key);W.WriteInt32(Value);return W.GetData();
+        };
+        Stats.ReceiveGameMessage(Stat(false,3,25,100));
+        Stats.ReceiveGameMessage(Stat(true,2,25,50));
+        TestEqual(TEXT("Late public retransmission cannot roll back a newer private level"),Stats.PlayerVitals.Level,100);
+        Stats.ReceiveGameMessage(Stat(true,4,25,101));
+        Stats.ReceiveGameMessage(Stat(false,3,25,70));
+        TestEqual(TEXT("Private/public qualities share one timestamp history"),Stats.PlayerVitals.StatQualityInts[25],101);
+        Stats.ReceiveGameMessage(Stat(false,254,24,10));
+        Stats.ReceiveGameMessage(Stat(false,0,24,20));
+        Stats.ReceiveGameMessage(Stat(false,255,24,15));
+        TestEqual(TEXT("Byte timestamp wrap retains the new value"),Stats.PlayerVitals.StatQualityInts[24],20);
+        auto TruncatedStat=Stat(false,5,25,102);TruncatedStat.Pop();Stats.ReceiveGameMessage(TruncatedStat);
+        Stats.ReceiveGameMessage(Stat(false,5,25,102));
+        TestEqual(TEXT("Malformed property cannot suppress its valid retransmission"),Stats.PlayerVitals.Level,102);
+        Stats.ReceiveGameMessage(Stat(false,5,25,103));
+        TestEqual(TEXT("Retail permits equal property stamps"),Stats.PlayerVitals.Level,103);
+        FACEWorldObject Stack;Stack.Guid=1;Stack.StackSize=10;Stack.MaxStackSize=100;Stats.WorldObjects.Add(1,Stack);
+        FACEBinaryWriter StackUpdate;StackUpdate.WriteUInt32(ACEOpcode::SetStackSize);StackUpdate.WriteUInt8(8);
+        StackUpdate.WriteUInt32(1);StackUpdate.WriteUInt32(20);StackUpdate.WriteUInt32(200);
+        Stats.ReceiveGameMessage(StackUpdate.GetData());
+        Stats.ReceiveGameMessage(Stat(true,7,12,5));
+        TestEqual(TEXT("StackSize and public int updates share the retail stack stamp"),Stats.WorldObjects[1].StackSize,20);
+        Stats.ReceiveGameMessage(Stat(true,9,12,25));
+        Stats.ReceiveGameMessage(StackUpdate.GetData());
+        TestEqual(TEXT("Old stack notification cannot restore a consumed stack"),Stats.WorldObjects[1].StackSize,25);
+    }
     FACESession Ordered;
     Deliver(Ordered,P4); Deliver(Ordered,P3);
-    TestEqual(TEXT("Out-of-order packets do not mutate partial messages"),Ordered.PartialFragments.Num(),0);
-    TestTrue(TEXT("Out-of-order packets cannot dispatch world messages"),Ordered.ServerName.IsEmpty());
+    TestEqual(TEXT("Received fragments assemble despite an unrelated packet gap"),Ordered.PartialFragments.Num(),1);
+    TestEqual(TEXT("Complete unordered messages do not wait for a missing packet"),Ordered.ServerName,FString(TEXT("Between fragments")));
     Deliver(Ordered,P2);
     TestEqual(TEXT("Message completes at its ordered final fragment, after intervening messages"),Ordered.ServerName,FString(TEXT("Assembled last")));
     TestEqual(TEXT("Contiguous packet cursor drains the reordered stream"),Ordered.LastReceivedPacketSequence,4u);
@@ -491,7 +561,7 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     Deliver(MultipleGaps,P2);
     TestEqual(TEXT("Late retransmission is preserved while draining a rejected hole"),MultipleGaps.PartialFragments.Num(),0);
     TestEqual(TEXT("Mixed retransmission and rejection drain all later packets"),MultipleGaps.LastReceivedPacketSequence,6u);
-    TestEqual(TEXT("Later gameplay remains current"),MultipleGaps.ServerName,FString(TEXT("After both gaps")));
+    TestEqual(TEXT("Unordered blobs dispatch on completion, independently of packet holes"),MultipleGaps.ServerName,FString(TEXT("Assembled last")));
 
     FACESession SkipLater;
     Deliver(SkipLater,P3);
@@ -520,9 +590,9 @@ bool FACERetailNetworkTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Unauthenticated TimeSync cannot change sky/weather time"),Invalid.PortalYearTicksAtConnect,50.0);
     FACEBinaryWriter Time3; Time3.WriteDouble(2000.0);
     Deliver(Invalid,Packet(3,EACEPacketHeaderFlags::TimeSync,Time3.GetData()));
-    TestEqual(TEXT("Early TimeSync waits for the contiguous packet stream"),Invalid.PortalYearTicksAtConnect,50.0);
+    TestEqual(TEXT("Authenticated TimeSync does not wait for a packet gap"),Invalid.PortalYearTicksAtConnect,2000.0);
     Deliver(Invalid,Packet(2,EACEPacketHeaderFlags::TimeSync,Time.GetData()));
-    TestEqual(TEXT("TimeSync drains in chronological packet order"),Invalid.PortalYearTicksAtConnect,2000.0);
+    TestEqual(TEXT("Late TimeSync cannot replace a newer clock sample"),Invalid.PortalYearTicksAtConnect,2000.0);
 
     FACESession Login; Login.State=EACESessionState::CharacterSelect;
     FACECharacterInfo Character; Character.CharacterId=1234; Character.Name=TEXT("Fixture");

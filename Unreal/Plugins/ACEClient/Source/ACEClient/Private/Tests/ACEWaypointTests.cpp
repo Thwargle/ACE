@@ -2,6 +2,42 @@
 #include "Misc/AutomationTest.h"
 #include "Mods/ACEWaypoint.h"
 #include "UI/ACERetailTextBlock.h"
+#include "Serialization/JsonSerializer.h"
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEWaypointRouteTest,"ACE.Plugins.Waypoint.Route",
+    EAutomationTestFlags::EditorContext|EAutomationTestFlags::EngineFilter)
+bool FACEWaypointRouteTest::RunTest(const FString&)
+{
+    auto Profile=MakeShared<FJsonObject>();TArray<TSharedPtr<FJsonValue>> Points;
+    auto Add=[&](uint32 Cell,double X,double Y,const FString& Kind=TEXT("walk"))
+    {auto O=MakeShared<FJsonObject>();O->SetNumberField(TEXT("cell"),Cell);O->SetNumberField(TEXT("x"),X);O->SetNumberField(TEXT("y"),Y);O->SetNumberField(TEXT("z"),0);O->SetStringField(TEXT("kind"),Kind);Points.Add(MakeShared<FJsonValueObject>(O));return O;};
+    FACEPosition Player;Player.CellId=0x01430171;Player.Location=FVector(49,-75,0);
+    Add(0x01430171,49,-75);Add(0x01430172,55,-75,TEXT("jump"));Add(0x01430173,55,-85,TEXT("portal"));Add(0x01430174,90,0);
+    Add(0x021B0146,50,50);Add(0x01430171,60,60,TEXT("recall"));Add(0x01430171,70,70);
+    Points.Add(MakeShared<FJsonValueObject>(MakeShared<FJsonObject>()));Add(0x01430171,80,80);
+    Profile->SetArrayField(TEXT("route"),Points);
+    auto Route=ACEWaypoint::MapRoute(Profile,Player,true,2);
+    if(!TestEqual(TEXT("Only this dungeon's positioned waypoints are drawn"),Route.Num(),7))return false;
+    TestTrue(TEXT("Current destination is highlighted and preserves route numbering"),Route[1].Current&&Route[1].Index==2);
+    TestTrue(TEXT("Adjacent rooms and jumps connect"),Route[1].Connect&&Route[2].Connect);
+    TestFalse(TEXT("Portal breaks the line"),Route[3].Connect);
+    TestFalse(TEXT("Other dungeon breaks the line"),Route[4].Connect);
+    TestFalse(TEXT("Recall breaks the line"),Route[5].Connect);
+    TestFalse(TEXT("Unpositioned actions never draw a line through the map origin"),Route[6].Connect);
+    Profile->SetBoolField(TEXT("loop_route"),true);Route=ACEWaypoint::MapRoute(Profile,Player,true,2);
+    TestTrue(TEXT("Loop links the last point back to the first"),Route.Num()==8&&Route.Last().Connect&&Route.Last().Index==1&&!Route.Last().Current);
+    Profile->SetBoolField(TEXT("reverse_route"),true);
+    TestEqual(TEXT("Back-and-forth routes do not add a false closing leg"),ACEWaypoint::MapRoute(Profile,Player,true,2).Num(),7);
+    Points.Reset();auto Legacy=Add(0x02430001,-143,-75);Legacy->SetBoolField(TEXT("legacy"),true);Profile->SetArrayField(TEXT("route"),Points);
+    Route=ACEWaypoint::MapRoute(Profile,Player,true,1);
+    TestTrue(TEXT("Imported NAV rebases across nominal indoor landblock edges"),Route.Num()==1&&Route[0].Position.CellId==Player.CellId&&Route[0].Position.Location.Equals(FVector(49,-75,0)));
+    Points.Reset();Add(0x7D640001,191,80);Add(0x7E640001,1,80);Add(0x7D640100,10,10);Add(0x80640001,1,80);Profile->SetArrayField(TEXT("route"),Points);
+    Player.CellId=0x7D640001;Route=ACEWaypoint::MapRoute(Profile,Player,false,4);
+    TestTrue(TEXT("World map shows distant route legs, including across landblocks"),Route.Num()==3&&Route[1].Connect&&Route[2].Current);
+    TestTrue(TEXT("World route crosses a landblock boundary continuously"),FMath::IsNearlyEqual((ACEWaypoint::Coordinates(Route[1].Position)-ACEWaypoint::Coordinates(Route[0].Position)).Size()*240,2.,.001));
+    TestFalse(TEXT("World map excludes interior legs without bridging them"),Route[2].Connect);
+    return true;
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEWaypointCoordinatesTest,"ACE.Plugins.Waypoint.CoordinatesAndHeading",
     EAutomationTestFlags::EditorContext|EAutomationTestFlags::ClientContext|EAutomationTestFlags::EngineFilter)

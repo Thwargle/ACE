@@ -62,6 +62,7 @@ private:
     friend class FACEAnimationLifetimeTest;
     friend class FACEEmoteTransitionTest;
     friend class FACEArcheryMotionTest;
+    friend class FACEAttackHeightMotionTest;
 #endif
 	const FACEDatAnimation* LoadAnimation(uint32 AnimId) const;
 	const FACEDatMotionData* FindCycle(uint32 MotionCommand, uint32 PreferredStyle) const;

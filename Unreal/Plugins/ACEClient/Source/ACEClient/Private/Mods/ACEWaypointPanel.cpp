@@ -58,6 +58,12 @@ FACEPosition UACEPluginSubsystem::WaypointPlayerPosition() const
     if(auto* PC=Cast<AACEPlayerController>(GI->GetFirstLocalPlayerController()))if(PC->TryGetLocallyPredictedPosition(P))return P;
     if(auto* Client=GI->GetSubsystem<UACEClientSubsystem>())P=Client->GetPlayerPosition();return P;
 }
+TArray<ACEWaypoint::FRoutePoint> UACEPluginSubsystem::GetWaypointMapRoute(bool Dungeon) const
+{
+    const auto P=PolicyPlugin();const auto* Client=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+    if(!P||!P->Enabled||!Client||Client->GetSessionState()!=EACESessionState::InWorld)return {};
+    return ACEWaypoint::MapRoute(RuntimeRoute?RuntimeRoute:P->Profile,WaypointPlayerPosition(),Dungeon,RoutePoint);
+}
 bool UACEPluginSubsystem::WaypointOption(const FString& Key,bool Default) const
 {auto P=Find(TEXT("waypoint"));bool B;return P && P->Profile->TryGetBoolField(Key,B)?B:Default;}
 void UACEPluginSubsystem::SetWaypointOption(const FString& Key,bool Value)
@@ -71,16 +77,9 @@ bool UACEPluginSubsystem::SetWaypoint(const FString& Text)
     SetWaypoint(Point);return true;
 }
 float UACEPluginSubsystem::WaypointMapOpacity() const
-{
-    double Value=1;if(auto P=Find(TEXT("waypoint")))P->Profile->TryGetNumberField(TEXT("map_opacity"),Value);
-    return FMath::IsFinite(Value)?FMath::Clamp(float(Value),.1f,1.f):1.f;
-}
+{return GetPluginWindowOpacity(TEXT("waypoint.map"));}
 void UACEPluginSubsystem::SetWaypointMapOpacity(float Value)
-{
-    if(!FMath::IsFinite(Value))return;
-    if(auto P=Find(TEXT("waypoint")))
-    {P->Profile->SetNumberField(TEXT("map_opacity"),FMath::Clamp(Value,.1f,1.f));SaveProfile(P->Id,P->ProfileName,ProfileJson(P->Id),false);}
-}
+{SetPluginWindowOpacity(TEXT("waypoint.map"),Value);}
 namespace
 {
 FString WaypointZoomKey(bool Overlay,bool Dungeon)
@@ -244,7 +243,9 @@ public:
         Host=A._Host;Retail=FACEPluginStyle::Use(A._Host,A._Overlay?TEXT("waypoint.dungeon"):TEXT("waypoint.map"));Overlay=A._Overlay;SetClipping(EWidgetClipping::ClipToBounds);
         if(Host.IsValid())
         {Resources.Reset(NewObject<UACEUIResourceResolver>());Resources->Initialize(Host->GetGameInstance()->GetSubsystem<UACEDatSubsystem>());MapTexture.Reset(Resources->ResolveTexture(0x0600127D));MapBrush.SetResourceObject(MapTexture.Get());MapBrush.DrawAs=ESlateBrushDrawType::Image;}
-        Zoom=Host.IsValid()?Host->WaypointMapZoom(Overlay,false):DefaultWaypointZoom(Overlay,false);
+        if(Host.IsValid())
+        {Player=Host->WaypointPlayerPosition();Dungeon=Overlay?((uint32(Player.CellId)&65535)>=256):Host->WaypointOption(TEXT("dungeon"),false);}
+        Zoom=Host.IsValid()?Host->WaypointMapZoom(Overlay,Dungeon):DefaultWaypointZoom(Overlay,Dungeon);
         SetToolTipText(FText::FromString(Overlay?TEXT("Drag to move • Bottom-right corner to resize • Wheel to zoom • Configure in the map window"):TEXT("Drag to pan • Wheel to zoom • Click a marker or map position to navigate")));
     }
     FVector2D ComputeDesiredSize(float)const override{return FVector2D(560,450);}
@@ -287,6 +288,9 @@ public:
     void Tick(const FGeometry& G,double T,float D)override
     {
         SLeafWidget::Tick(G,T,D);LastSize=G.GetLocalSize();auto* H=Host.Get();if(!H)return;Player=H->WaypointPlayerPosition();
+        // Reused/hidden panels can outlive another view changing the saved zoom.
+        const double SavedZoom=H->WaypointMapZoom(Overlay,Dungeon);
+        if(Zoom!=SavedZoom){Pan*=SavedZoom/Zoom;Zoom=SavedZoom;}
         const auto PreviousCenter=Unproject(LastSize*.5,LastSize);
         const auto Facing=Player.GetAceForwardInAcSpace();
         const auto NextUp=H->WaypointOption(TEXT("heading_up"),false)&&Player.IsValid()?FVector2D(Facing.X,Facing.Y).GetSafeNormal():FVector2D(0,1);
@@ -296,7 +300,7 @@ public:
         const bool Inside=(uint32(Player.CellId)&65535)>=256;
         const bool NextDungeon=Overlay?Inside:H->WaypointOption(TEXT("dungeon"),false);
         if(Dungeon!=NextDungeon || (NextDungeon && (LB!=Landblock || Inside!=WasInside)))
-        {Dungeon=NextDungeon;Landblock=LB;WasInside=Inside;NextMarkers=0;NextCellRetry=0;Floors.Reset();Contours=FACEDungeonMapContours();Environments.Reset();CellIndex=0;CellCount=0;
+        {Dungeon=NextDungeon;Landblock=LB;WasInside=Inside;NextMarkers=0;NextCellRetry=0;NextRoute=0;Floors.Reset();Fill.Reset();Route.Reset();Contours=FACEDungeonMapContours();Environments.Reset();CellIndex=0;CellCount=0;
          Zoom=H->WaypointMapZoom(Overlay,Dungeon);Pan=FVector2D::ZeroVector;Invalidate(EInvalidateWidgetReason::Paint);
          if(Dungeon)CenterOnPlayer();}
         // The overlay may first open indoors or before the portal DAT is ready.
@@ -330,16 +334,18 @@ public:
             Tiles.Update(Dat->GetDatDirectory(),Visible,PixelsPerUnit(LastSize)*DisplayScale);
         }
         if(T>NextMarkers){NextMarkers=T+1;RefreshMarkers();}
+        if(!H->WaypointOption(TEXT("show_route"),true)){Route.Reset();NextRoute=0;}
+        else if(T>=NextRoute){NextRoute=T+.25;Route=H->GetWaypointMapRoute(Dungeon);}
         Invalidate(EInvalidateWidgetReason::Paint);
     }
     int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& Out,int32 L,const FWidgetStyle&,bool)const override
     {
         const float Opacity=Overlay&&Host.IsValid()?Host->WaypointMapOpacity():1.f;
-        auto DrawLine=[Opacity](FSlateWindowElementList& O,int Layer,const FGeometry& Geo,const TArray<FVector2D>& Points,FLinearColor Color,float Width=1.f){Color.A*=Opacity;Line(O,Layer,Geo,Points,Color,Width);};
-        auto DrawText=[Opacity](FSlateWindowElementList& O,int Layer,const FGeometry& Geo,FVector2D At,const FString& S,int Size,FLinearColor Color,bool Center=false){Color.A*=Opacity;Text(O,Layer,Geo,At,S,Size,Color,Center);};
-        auto DrawTriangle=[Opacity](FSlateWindowElementList& O,int Layer,const FGeometry& Geo,FVector2D A,FVector2D B,FVector2D C,FLinearColor Color){Color.A*=Opacity;Triangle(O,Layer,Geo,A,B,C,Color);};
         const FVector2D Size=G.GetLocalSize();
-        if(!Overlay)FSlateDrawElement::MakeBox(Out,L,G.ToPaintGeometry(),&Retail->Background,ESlateDrawEffect::None,FLinearColor(.015f,.024f,.04f)*Retail->Background.TintColor.GetSpecifiedColor());
+        // Frameless maps still need a backdrop. Fade only the background;
+        // outlines, labels and position markers must remain readable.
+        if(Overlay)FSlateDrawElement::MakeBox(Out,L,G.ToPaintGeometry(),FCoreStyle::Get().GetBrush("WhiteBrush"),ESlateDrawEffect::None,FLinearColor(0,0,0,Opacity));
+        else FSlateDrawElement::MakeBox(Out,L,G.ToPaintGeometry(),&Retail->Background,ESlateDrawEffect::None,FLinearColor(.015f,.024f,.04f)*Retail->Background.TintColor.GetSpecifiedColor());
         Out.PushClip(FSlateClippingZone(G));
         if(!Dungeon && MapTexture.IsValid())
         {
@@ -355,49 +361,46 @@ public:
         }
         if(Dungeon)
         {
+            if(Host.IsValid()&&Host->WaypointOption(TEXT("fill_dungeon"),false))PaintFill(Out,L+1,G);
             for(const auto& Floor:Floors)
             {
                 const bool Current=FMath::Abs(Floor.Z-Player.Location.Z)<4;
-                TArray<FVector2D> Points;for(auto V:Floor.Points)Points.Add(Project(V,Size));if(Points.Num()>1){DrawLine(Out,L+1,G,Points,Current?FLinearColor(.25f,.72f,.82f):FLinearColor(.12f,.2f,.27f),Current?1.5f:1.f);}
+                TArray<FVector2D> Points;for(auto V:Floor.Points)Points.Add(Project(V,Size));if(Points.Num()>1){Line(Out,L+2,G,Points,Current?FLinearColor(.25f,.72f,.82f):FLinearColor(.12f,.2f,.27f),Current?1.5f:1.f);}
             }
-            if(!CellCount)DrawText(Out,L+2,G,{16,16},TEXT("Enter a dungeon or building to see its layout."),16,Muted);
-            else if(CellIndex<CellCount || !Contours.IsComplete())DrawText(Out,L+2,G,{16,16},FString::Printf(TEXT("Loading layout: %u / %u"),CellIndex,CellCount),14,Muted);
+            if(!CellCount)Text(Out,L+2,G,{16,16},TEXT("Enter a dungeon or building to see its layout."),16,Muted);
+            else if(CellIndex<CellCount || !Contours.IsComplete())Text(Out,L+2,G,{16,16},FString::Printf(TEXT("Loading layout: %u / %u"),CellIndex,CellCount),14,Muted);
         }
-        PaintedMarkers.Reset();TArray<FBox2D,TInlineAllocator<64>> Labels;
+        PaintRoute(Out,L+3,G);
+        PaintedMarkers.Reset();
         for(int32 Index=0;Index<Markers.Num();++Index)
         {
             const auto& M=Markers[Index];
-            if(M.Detailed && Zoom<3 && Search.IsEmpty())continue;
+            if(M.Detailed && !M.Portal && Zoom<3 && Search.IsEmpty())continue;
             const auto P=Project(M.Point,Size);if(P.X<0||P.Y<0||P.X>Size.X||P.Y>Size.Y)continue;
-            // Declutter labels only. Nearby portals remain visible and clickable.
+            // Keep every visible portal and its name, even in crowded hubs.
             PaintedMarkers.Add(Index);
             const FLinearColor Color=M.Portal?FLinearColor(.85f,.5f,1):FLinearColor(1,.8f,.4f);
-            DrawLine(Out,L+2,G,{P+FVector2D(0,-5),P+FVector2D(5,0),P+FVector2D(0,5),P+FVector2D(-5,0),P+FVector2D(0,-5)},Color,2);
+            Line(Out,L+2,G,{P+FVector2D(0,-5),P+FVector2D(5,0),P+FVector2D(0,5),P+FVector2D(-5,0),P+FVector2D(0,-5)},Color,2);
             const bool Hovered=(Hover-P).Size()<14;
-            if(Zoom>=3 || Hovered)
+            if(M.Portal || Zoom>=3 || Hovered)
             {
                 const FString Label=Hovered?M.Name:ACEWaypoint::MarkerLabel(M.Name);
                 if(M.LabelSize.X<0)M.LabelSize=FSlateApplication::Get().GetRenderer()->GetFontMeasureService()->Measure(ACEWaypoint::MarkerLabel(M.Name),FCoreStyle::GetDefaultFontStyle("Regular",13));
                 const FVector2D Padding(2,1),BoxSize=(Hovered?FSlateApplication::Get().GetRenderer()->GetFontMeasureService()->Measure(Label,FCoreStyle::GetDefaultFontStyle("Regular",13)):M.LabelSize)+Padding*2;
-                const FVector2D MaxOrigin=Size-BoxSize-FVector2D(2,2);
-                if(MaxOrigin.X<2||MaxOrigin.Y<2)continue;
+                // An oversized label still draws, clipped by the map bounds,
+                // instead of disappearing when the map is resized or hovered.
+                const FVector2D MaxOrigin(FMath::Max(2.,Size.X-BoxSize.X-2),FMath::Max(2.,Size.Y-BoxSize.Y-2));
                 FVector2D Origin=P+FVector2D(8,-8)-Padding;
                 Origin.X=FMath::Clamp(Origin.X,2.,MaxOrigin.X);
                 Origin.Y=FMath::Clamp(Origin.Y,2.,MaxOrigin.Y);
-                // Keep complete labels in view and leave space for north at every heading.
+                // Leave space for north when there is room, without hiding names.
                 const FBox2D CompassArea({Size.X-72,0},{Size.X,72});
-                if(CompassArea.Intersect(FBox2D(Origin,Origin+BoxSize)))
-                {
-                    Origin.Y=74;
-                    if(Origin.Y>MaxOrigin.Y)continue;
-                }
+                if(MaxOrigin.Y>=74&&CompassArea.Intersect(FBox2D(Origin,Origin+BoxSize)))Origin.Y=74;
                 const FVector2D At=Origin+Padding;const FBox2D Box(Origin,Origin+BoxSize);
-                if(Hovered||!Labels.ContainsByPredicate([&](const FBox2D& Other){return Other.Intersect(Box);}))
-                {
-                    Labels.Add(Box);
-                    if(!Overlay)FSlateDrawElement::MakeBox(Out,L+3,G.ToPaintGeometry(Box.GetSize(),FSlateLayoutTransform(Box.Min)),&Retail->Background,ESlateDrawEffect::None,FLinearColor(0,0,0,.85f)*Retail->Background.TintColor.GetSpecifiedColor());
-                    DrawText(Out,L+4,G,At,Label,13,Ink);
-                }
+                // Do not suppress overlapping labels: their visibility must not
+                // depend on object iteration order, camera heading or hover.
+                if(!Overlay)FSlateDrawElement::MakeBox(Out,L+3,G.ToPaintGeometry(Box.GetSize(),FSlateLayoutTransform(Box.Min)),&Retail->Background,ESlateDrawEffect::None,FLinearColor(0,0,0,.85f)*Retail->Background.TintColor.GetSpecifiedColor());
+                Text(Out,L+4,G,At,Label,13,Ink);
             }
         }
         // Companion annotations use the same projection/orientation as the map.
@@ -406,42 +409,44 @@ public:
             FACEWorldObject Object;auto* Client=Host->GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
             if(!Client->GetWorldObject(M.Id,Object))continue;
             const bool Interior=(uint32(Object.Position.CellId)&65535)>=256;
-            if(Interior!=Dungeon||(Dungeon&&(uint32(Object.Position.CellId)>>16)!=Landblock))continue;
+            if(Interior!=Dungeon||(Dungeon&&(uint32(Object.Position.CellId)&0xffff0000)!=Landblock))continue;
             const auto At=Project(ACEWaypoint::Coordinates(Object.Position),Size);
             if(At.X<0||At.Y<0||At.X>Size.X||At.Y>Size.Y)continue;
-            if(M.Shape==TEXT("!"))DrawText(Out,L+4,G,At,TEXT("!"),18,M.Color,true);
-            else if(M.Shape==TEXT("arrow"))DrawTriangle(Out,L+4,G,At+FVector2D(-6,-7),At+FVector2D(6,-7),At+FVector2D(0,5),M.Color);
-            else DrawLine(Out,L+4,G,{At+FVector2D(0,-6),At+FVector2D(6,0),At+FVector2D(0,6),At+FVector2D(-6,0),At+FVector2D(0,-6)},M.Color,2);
+            if(M.Shape==TEXT("!"))Text(Out,L+4,G,At,TEXT("!"),18,M.Color,true);
+            else if(M.Shape==TEXT("arrow"))Triangle(Out,L+4,G,At+FVector2D(-6,-7),At+FVector2D(6,-7),At+FVector2D(0,5),M.Color);
+            else Line(Out,L+4,G,{At+FVector2D(0,-6),At+FVector2D(6,0),At+FVector2D(0,6),At+FVector2D(-6,0),At+FVector2D(0,-6)},M.Color,2);
         }
         if(Player.IsValid())
         {
             const auto P=Project(ACEWaypoint::Coordinates(Player),Size);const auto F=Player.GetAceForwardInAcSpace();
             const auto Forward=ACEWaypoint::ToMap({F.X,F.Y},MapUp);const FVector2D Right(-Forward.Y,Forward.X);
-            DrawTriangle(Out,L+4,G,P+Forward*10,P-Forward*7+Right*6,P-Forward*7-Right*6,Accent);
+            Triangle(Out,L+4,G,P+Forward*10,P-Forward*7+Right*6,P-Forward*7-Right*6,Accent);
         }
         FVector2D Destination;uint32 TargetLB=0;
         if(Host.IsValid()&&Host->GetWaypoint(Destination,TargetLB)&&(!TargetLB || (Dungeon&&TargetLB==Landblock)))
         {
-            const auto P=Project(Destination,Size);DrawLine(Out,L+4,G,{P+FVector2D(-8,-8),P+FVector2D(8,8)},FLinearColor::White,2);DrawLine(Out,L+4,G,{P+FVector2D(-8,8),P+FVector2D(8,-8)},FLinearColor::White,2);
+            const auto P=Project(Destination,Size);Line(Out,L+4,G,{P+FVector2D(-8,-8),P+FVector2D(8,8)},FLinearColor::White,2);Line(Out,L+4,G,{P+FVector2D(-8,8),P+FVector2D(8,-8)},FLinearColor::White,2);
         }
         const auto North=ACEWaypoint::ToMap({0,1},MapUp);const FVector2D Compass(Size.X-36,36);
-        DrawLine(Out,L+4,G,{Compass,Compass+North*15},Ink,2);DrawText(Out,L+4,G,Compass+North*23,TEXT("N"),12,Ink,true);
-        if(!Dungeon&&Tiles.IsLoading())DrawText(Out,L+4,G,{12,Size.Y-22},TEXT("Loading terrain detail…"),13,Ink);
+        Line(Out,L+4,G,{Compass,Compass+North*15},Ink,2);Text(Out,L+4,G,Compass+North*23,TEXT("N"),12,Ink,true);
+        if(!Dungeon&&Tiles.IsLoading())Text(Out,L+4,G,{12,Size.Y-22},TEXT("Loading terrain detail…"),13,Ink);
         if(Overlay)
         {
-            DrawLine(Out,L+5,G,{{1,Size.Y-1},{1,1},{Size.X-1,1}},FLinearColor(.78f,.65f,.36f),1);
-            DrawLine(Out,L+5,G,{{Size.X-1,1},{Size.X-1,Size.Y-1},{1,Size.Y-1}},FLinearColor(.32f,.23f,.10f),1);
+            Line(Out,L+5,G,{{1,Size.Y-1},{1,1},{Size.X-1,1}},FLinearColor(.78f,.65f,.36f),1);
+            Line(Out,L+5,G,{{Size.X-1,1},{Size.X-1,Size.Y-1},{1,Size.Y-1}},FLinearColor(.32f,.23f,.10f),1);
         }
         Out.PopClip();return L+5;
     }
 private:
     struct FMarker{FVector2D Point;FString Name;bool Portal=false,Detailed=false;mutable FVector2D LabelSize=FVector2D(-1,-1);};
     struct FFloor{TArray<FVector2D> Points;double Z=0;};
+    struct FFill{FVector2D A,B,C;double Z=0;};
     TWeakObjectPtr<UACEPluginSubsystem> Host;
     TSharedPtr<FACEPluginStyle> Retail;
     TStrongObjectPtr<UACEUIResourceResolver> Resources;TStrongObjectPtr<UTexture2D> MapTexture;FSlateBrush MapBrush;
     FACEWaypointTiles Tiles;
     TArray<FMarker> Markers;mutable TArray<int32> PaintedMarkers;TArray<FFloor> Floors;FACEDungeonMapContours Contours;TMap<uint32,FACEDatEnvironment> Environments;
+    TArray<FFill> Fill;TArray<ACEWaypoint::FRoutePoint> Route;double NextRoute=0;
     FACEPosition Player;FVector2D Pan=FVector2D::ZeroVector,Press,Last,Hover=FVector2D(-100,-100),LastSize=FVector2D(560,450);
     FVector2D MapUp=FVector2D(0,1);
     double Zoom=1,NextMarkers=0,NextCellRetry=0,NextMapRetry=0;bool Dragged=false,Dungeon=false,WasInside=false,Overlay=false;FString Search;uint32 Landblock=0,CellIndex=0,CellCount=0;
@@ -450,6 +455,46 @@ private:
     double PixelsPerUnit(FVector2D Size)const{return FMath::Min(Size.X,Size.Y)*Zoom/(Dungeon?1.5:204.);}
     FVector2D Project(FVector2D P,FVector2D Size)const{return Size*.5+Pan+ACEWaypoint::ToMap((P-Center())*PixelsPerUnit(Size),MapUp);}
     FVector2D Unproject(FVector2D P,FVector2D Size)const{return Center()+ACEWaypoint::FromMap((P-Size*.5-Pan)/PixelsPerUnit(Size),MapUp);}
+    void PaintFill(FSlateWindowElementList& Out,int32 L,const FGeometry& G)const
+    {
+        const auto Size=G.GetLocalSize();const FBox2D View(FVector2D::ZeroVector,Size);
+        TArray<FSlateVertex> Vertices;TArray<SlateIndex> Indices;
+        const auto Resource=FSlateApplication::Get().GetRenderer()->GetResourceHandle(*FCoreStyle::Get().GetBrush("WhiteBrush"));
+        auto Flush=[&]{if(Vertices.IsEmpty())return;FSlateDrawElement::MakeCustomVerts(Out,L,Resource,Vertices,Indices,nullptr,0,0);Vertices.Reset();Indices.Reset();};
+        // Distant floors first; the current elevation stays legible where rooms overlap.
+        for(bool Current:{false,true})
+        {
+            const FColor Color=(Current?FLinearColor(.055f,.24f,.34f):FLinearColor(.025f,.065f,.095f)).ToFColor(false);
+            for(const auto& F:Fill)
+            {
+                if((FMath::Abs(F.Z-Player.Location.Z)<4)!=Current)continue;
+                const FVector2D Points[]={Project(F.A,Size),Project(F.B,Size),Project(F.C,Size)};
+                FBox2D Bounds(ForceInit);for(const auto& P:Points)Bounds+=P;if(!Bounds.Intersect(View))continue;
+                if(Vertices.Num()+3>60000)Flush();
+                for(const auto& P:Points){Indices.Add(SlateIndex(Vertices.Num()));Vertices.Add(FSlateVertex::Make<ESlateVertexRounding::Disabled>(G.GetAccumulatedRenderTransform(),FVector2f(P),FVector2f(.5f,.5f),Color));}
+            }
+            Flush();
+        }
+    }
+    void PaintRoute(FSlateWindowElementList& Out,int32 L,const FGeometry& G)const
+    {
+        const auto Size=G.GetLocalSize();TArray<FVector2D> Path;
+        auto Flush=[&]{if(Path.Num()>1)Line(Out,L,G,Path,Accent,2);Path.Reset();};
+        for(const auto& Point:Route)
+        {
+            const auto At=Project(ACEWaypoint::Coordinates(Point.Position),Size);
+            if(!Point.Connect)Flush();Path.Add(At);
+        }
+        Flush();
+        const FLinearColor Active(.3f,1.f,.45f);
+        for(int32 I=0;I<Route.Num();++I)if(Route[I].Current)
+        {
+            const auto At=Project(ACEWaypoint::Coordinates(Route[I].Position),Size);
+            if(I>0&&Route[I].Connect)Line(Out,L,G,{Project(ACEWaypoint::Coordinates(Route[I-1].Position),Size),At},Active,2.5f);
+            TArray<FVector2D> Ring;for(int32 J=0;J<=20;++J){const double Angle=J*UE_DOUBLE_PI/10;Ring.Add(At+FVector2D(FMath::Cos(Angle),FMath::Sin(Angle))*7);}
+            Line(Out,L,G,Ring,Active,2);Text(Out,L,G,At+FVector2D(10,6),FString::FromInt(Route[I].Index),12,Active);
+        }
+    }
     void PaintTile(FSlateWindowElementList& Out,int32 L,const FGeometry& G,const FBox2D& Bounds,const FSlateBrush& Brush)const
     {
         const auto Size=G.GetLocalSize();
@@ -505,7 +550,10 @@ private:
                 TArray<FVector> Points;
                 for(auto Vertex:Poly->VertexIds)if(const auto* V=Structure->Vertices.Find(uint16(Vertex)))Points.Add(FVector(Cell.Orientation.RotateVector(V->Origin)+Cell.Origin));
                 if(Points.Num()!=Poly->VertexIds.Num())continue;
-                Contours.AddPolygon(Points);
+                const int32 First=Contours.Triangles.Num();Contours.AddPolygon(Points);
+                auto Coordinate=[&](FVector V){FACEPosition P;P.CellId=int32(Landblock|0x100);P.Location=V;return ACEWaypoint::Coordinates(P);};
+                for(int32 I=First;I<Contours.Triangles.Num();++I)
+                {const auto& T=Contours.Triangles[I];Fill.Add({Coordinate(T.A),Coordinate(T.B),Coordinate(T.C),(T.A.Z+T.B.Z+T.C.Z)/3});}
             }
         }
     }
@@ -534,11 +582,16 @@ public:
             Controls->AddSlot().AutoWidth()[Check(TEXT("portals"),TEXT("Portals"),true)];
             Controls->AddSlot().AutoWidth()[Check(TEXT("pois"),TEXT("POIs"),true)];
             Body->AddSlot().AutoHeight()[Controls];
+            Body->AddSlot().AutoHeight()[SNew(SHorizontalBox)
+                +SHorizontalBox::Slot().AutoWidth()[Check(TEXT("fill_dungeon"),TEXT("Fill walkable areas"),false)]
+                +SHorizontalBox::Slot().AutoWidth()[Check(TEXT("show_route"),TEXT("Show active route"),true)]];
             Body->AddSlot().AutoHeight().Padding(0,6)[Check(TEXT("heading_up"),TEXT("Player facing up (off: north up)"),false)];
             Body->AddSlot().AutoHeight()[Check(TEXT("dungeon_overlay"),TEXT("Pin map to interface"),false)];
             Body->AddSlot().AutoHeight()[Check(TEXT("map_minimized"),TEXT("Minimize pinned map (keep direction arrow)"),false)];
-            Body->AddSlot().AutoHeight().Padding(0,6)[WaypointLabel(TEXT("Pinned map opacity"),14)];
-            Body->AddSlot().AutoHeight()[SNew(SSlider).MinValue(.1f).MaxValue(1.f)
+            Body->AddSlot().AutoHeight().Padding(0,6)[WaypointLabel(TEXT("Map background opacity"),14)];
+            Body->AddSlot().AutoHeight()[SNew(SSlider).Style(&PanelStyle->Slider).MinValue(0.f).MaxValue(1.f)
+                .IsEnabled_Lambda([this](){return Host.IsValid()&&!Host->IsPluginOpacityGlobal();})
+                .ToolTipText(FText::FromString(TEXT("Shared with Waypoint Map background opacity in Plugin Manager. The global plugin opacity overrides this setting.")))
                 .Value_Lambda([this](){return Host.IsValid()?Host->WaypointMapOpacity():1.f;})
                 .OnValueChanged_Lambda([this](float Value){if(Host.IsValid())Host->SetWaypointMapOpacity(Value);})];
             Body->AddSlot().AutoHeight()[WaypointLabel(TEXT("The pinned map follows you, automatically switches between overworld and interior layouts, and stays visible when this window closes. Both views share the same position and size. Use + and − to zoom, even while locked. Unlock the game UI to move, resize or use wheel zoom. Uncheck Pin to hide it."),13)];
@@ -618,6 +671,9 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakeWaypointDungeonOverlay()
 #include "Engine/TextureRenderTarget2D.h"
 #include "ImageUtils.h"
 #include "RenderingThread.h"
+#include "Widgets/SVirtualWindow.h"
+#include "Input/HittestGrid.h"
+#include "Types/PaintArgs.h"
 namespace
 {
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACEWaypointOverlayTest,"ACE.Plugins.Waypoint.PinnedDungeon",
@@ -628,6 +684,18 @@ bool FACEWaypointOverlayTest::RunTest(const FString&)
     ON_SCOPE_EXIT{GI->Shutdown();};
     auto* Host=GI->GetSubsystem<UACEPluginSubsystem>();
     auto* C=GI->GetSubsystem<UACEClientSubsystem>();
+    const bool OriginalGlobal=Host->IsPluginOpacityGlobal();
+    Host->SetPluginOpacityGlobal(false);
+    const bool HadMapOpacity=Host->HasPluginWindowOpacity(TEXT("waypoint.map"));
+    const float OriginalOpacity=Host->WaypointMapOpacity(),OriginalGlobalOpacity=Host->GetPluginWindowOpacity(TEXT(""));
+    ON_SCOPE_EXIT
+    {
+        Host->SetPluginOpacityGlobal(false);
+        if(HadMapOpacity)Host->SetWaypointMapOpacity(OriginalOpacity);else Host->ResetPluginWindowOpacity(TEXT("waypoint.map"));
+        Host->SetPluginWindowOpacity(TEXT(""),OriginalGlobalOpacity);
+        Host->SetPluginOpacityGlobal(OriginalGlobal);
+    };
+    Host->SetWaypointMapOpacity(1.f);
     double OriginalZoom[2][2];
     for(int O=0;O<2;++O)for(int D=0;D<2;++D)
     {OriginalZoom[O][D]=Host->WaypointMapZoom(O!=0,D!=0);Host->SetWaypointMapZoom(O!=0,D!=0,DefaultWaypointZoom(O!=0,D!=0));}
@@ -664,7 +732,9 @@ bool FACEWaypointOverlayTest::RunTest(const FString&)
         TestTrue(TEXT("Leaving interior discards stale floor geometry"),Map->Floors.IsEmpty()&&Map->CellCount==0);
         P.CellId=0x01430171;C->GetSession()->SetLocalPosition(P);Map->Tick(Geometry,Time++,.016f);
         TestEqual(TEXT("Returning inside restores interior zoom"),Map->Zoom,InteriorZoom);
-        auto Reopened=SNew(SWaypointMap).Host(Host).Overlay(true);Reopened->Tick(Geometry,Time++,.016f);
+        auto Reopened=SNew(SWaypointMap).Host(Host).Overlay(true);
+        TestEqual(TEXT("Opening indoors uses saved zoom even before the first tick"),Reopened->Zoom,InteriorZoom);
+        Reopened->Tick(Geometry,Time++,.016f);
         TestEqual(TEXT("Reopening pinned map indoors restores zoom"),Reopened->Zoom,InteriorZoom);
         P.CellId=0x7D640014;C->GetSession()->SetLocalPosition(P);Reopened->Tick(Geometry,Time++,.016f);
         TestEqual(TEXT("Reopened map retains separate outdoor zoom"),Reopened->Zoom,WorldZoom);
@@ -672,6 +742,10 @@ bool FACEWaypointOverlayTest::RunTest(const FString&)
         auto Window=SNew(SWaypointMap).Host(Host);Window->Tick(Geometry,Time++,.016f);Window->ChangeZoom(2,{40,40});
         auto ReopenedWindow=SNew(SWaypointMap).Host(Host);ReopenedWindow->Tick(Geometry,Time++,.016f);
         TestEqual(TEXT("Normal map also retains its own zoom"),ReopenedWindow->Zoom,2.);
+        Window->Tick(Geometry,Time++,.016f);const auto Center=Window->Unproject(Geometry.GetLocalSize()*.5,Geometry.GetLocalSize());
+        ReopenedWindow->ChangeZoom(1.25,{40,40});Window->Tick(Geometry,Time++,.016f);
+        TestEqual(TEXT("An already-open view follows the latest saved zoom"),Window->Zoom,2.5);
+        TestTrue(TEXT("Restoring a changed zoom keeps the panned center"),Window->Unproject(Geometry.GetLocalSize()*.5,Geometry.GetLocalSize()).Equals(Center,.0001));
         TestEqual(TEXT("Normal map does not overwrite pinned zoom"),Host->WaypointMapZoom(true,false),WorldZoom);
         ReopenedWindow->ResetView();
         TestEqual(TEXT("Explicit Reset view saves the default zoom"),Host->WaypointMapZoom(false,false),1.);
@@ -700,6 +774,36 @@ bool FACEWaypointOverlayTest::RunTest(const FString&)
         }
         Target->ReleaseResource();
     }
+    if(FApp::CanEverRender())
+    {
+        // Inspect submitted text, not just marker diamonds. Town Network-style
+        // clusters must keep every portal name through zoom, hover and refresh.
+        const FString Names[]={TEXT("Portal to Holtburg"),TEXT("Portal to Yaraq"),TEXT("Portal to a dungeon with a very long name")};
+        for(bool Pinned:{false,true})for(double Zoom:{.6,3.5,48.})for(bool HeadingUp:{false,true})for(const auto Size:{FVector2D(260,320),FVector2D(90,48)})
+        {
+            auto View=SNew(SWaypointMap).Host(Host).Overlay(Pinned);
+            View->Dungeon=true;View->Landblock=0x01430000;View->CellCount=View->CellIndex=1;
+            View->Player=View->FACEPositionForCenter();View->Zoom=Zoom;View->MapUp=HeadingUp?FVector2D(.6,.8):FVector2D(0,1);
+            View->Markers={{View->Unproject(Size*.5,Size),Names[0],true},
+                {View->Unproject(Size*.5+FVector2D(1,1),Size),Names[1],true,true},
+                {View->Unproject({Size.X-4,6},Size),Names[2],true},
+                {View->Unproject({-100,-100},Size),TEXT("Off-map portal"),true}};
+            auto Window=SNew(SVirtualWindow).Size(Size);FHittestGrid Grid;
+            const auto Geometry=FGeometry::MakeRoot(Size,FSlateLayoutTransform());
+            for(int32 Pass=0;Pass<3;++Pass)
+            {
+                if(Pass==1)View->Hover=Size*.5;
+                if(Pass==2){View->Markers.Swap(0,2);View->Hover=FVector2D(-100,-100);}
+                FSlateWindowElementList Elements(Window);
+                View->OnPaint(FPaintArgs(&View.Get(),Grid,FVector2D::ZeroVector,0,0),Geometry,FSlateRect(0,0,Size.X,Size.Y),Elements,0,FWidgetStyle(),true);
+                TArray<FString> Drawn;
+                for(const auto& Element:Elements.GetUncachedDrawElements().Get<uint8(EElementType::ET_Text)>())Drawn.Add(Element.GetText());
+                for(const auto& Name:Names)TestTrue(TEXT("Every on-map portal name is submitted even when labels overlap"),Drawn.Contains(Name)||Drawn.Contains(ACEWaypoint::MarkerLabel(Name)));
+                TestFalse(TEXT("Off-map portal labels remain clipped to the visible map"),Drawn.Contains(TEXT("Off-map portal")));
+                TestEqual(TEXT("All on-map portals remain selectable"),View->PaintedMarkers.Num(),3);
+            }
+        }
+    }
     if(FParse::Param(FCommandLine::Get(),TEXT("WaypointRender")))
     {
         auto* Dat=GI->GetSubsystem<UACEDatSubsystem>();
@@ -708,6 +812,7 @@ bool FACEWaypointOverlayTest::RunTest(const FString&)
         while(Dat->IsDatLoading()&&FPlatformTime::Seconds()<Deadline)
         {FTaskGraphInterface::Get().ProcessThreadUntilIdle(ENamedThreads::GameThread);FPlatformProcess::Sleep(.005f);}
         if(!TestTrue(TEXT("Load real dungeon geometry"),Dat->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call"))))return false;
+        Host->SetWaypointMapZoom(true,true,3.5);
         FACEPosition P;P.CellId=0x01430171;P.Location=FVector(49,-75,0);
         P.RotationW=FMath::Cos(.4);P.RotationXYZ=FVector(0,0,FMath::Sin(.4));C->GetSession()->SetLocalPosition(P);
         const FVector2D Size(420,420);FWidgetRenderer Renderer(false,true);
@@ -731,10 +836,51 @@ bool FACEWaypointOverlayTest::RunTest(const FString&)
             AddInfo(FString::Printf(TEXT("Dungeon %08X: %d floor edges -> %d contour segments"),uint32(P.CellId),Overlay->Contours.InputEdgeCount(),Overlay->Contours.Lines.Num()));
             TArray<FColor> Pixels;FReadSurfaceDataFlags Flags;Flags.SetLinearToGamma(false);
             Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
+            int32 Black=0;for(const auto& Pixel:Pixels)if(Pixel==FColor::Black)++Black;
+            TestTrue(TEXT("Pinned dungeon has an opaque black backdrop at full opacity"),Black>Pixels.Num()*3/4);
+            const auto FullPixels=Pixels;
+            Host->SetWaypointMapOpacity(.4f);
+            TestEqual(TEXT("Pinned map shares the normal map background setting"),Host->GetPluginWindowOpacity(TEXT("waypoint.dungeon")),.4f);
+            Renderer.DrawWidget(Target,Overlay,Size,.016f);FlushRenderingCommands();
+            Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
+            int32 FadedBlack=0,Foreground=0,StableForeground=0;
+            for(int32 I=0;I<Pixels.Num();++I)
+            {
+                const auto Pixel=Pixels[I];
+                if(Pixel.R==0&&Pixel.G==0&&Pixel.B==0&&FMath::Abs(int32(Pixel.A)-102)<=2)++FadedBlack;
+                if(FullPixels[I].G>80&&FullPixels[I].A==255)
+                {++Foreground;if(Pixel.R==FullPixels[I].R&&Pixel.G==FullPixels[I].G&&Pixel.B==FullPixels[I].B)++StableForeground;}
+            }
+            TestTrue(TEXT("Opacity slider fades the black backdrop"),FadedBlack>Pixels.Num()*3/4);
+            TestTrue(TEXT("Wireframes and labels retain their brightness"),Foreground>20&&StableForeground>Foreground*.98);
+            Host->SetPluginWindowOpacity(TEXT(""),0.f,false);Host->SetPluginOpacityGlobal(true);
+            Renderer.DrawWidget(Target,Overlay,Size,.016f);FlushRenderingCommands();
+            Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
             int32 Transparent=0;for(const auto& Pixel:Pixels)if(Pixel.A==0)++Transparent;
-            TestTrue(TEXT("Pinned layout leaves the game visible behind its lines"),Transparent>Pixels.Num()*3/4);
+            TestTrue(TEXT("Global zero opacity removes the pinned backdrop"),Transparent>Pixels.Num()*3/4);
+            Host->SetPluginOpacityGlobal(false);Host->SetWaypointMapOpacity(1.f);
+            Renderer.DrawWidget(Target,Overlay,Size,.016f);FlushRenderingCommands();
+            Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
             TArray64<uint8> Png;FImageUtils::PNGCompressImageArray(420,420,Pixels,Png);
             FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("Automation")/FString::Printf(TEXT("Waypoint-Pinned-%s.png"),Facing?TEXT("Facing"):TEXT("North"))));
+            Plugin->Profile->SetBoolField(TEXT("fill_dungeon"),true);
+            Overlay->NextRoute=TNumericLimits<double>::Max();
+            // Use the same route projection as live UCM without running automation.
+            Overlay->Route.Reset();
+            for(int32 I=0;I<4;++I)
+            {ACEWaypoint::FRoutePoint Point;Point.Position=P;Point.Position.Location+=FVector((I%2)*12-6,(I/2)*12-6,0);Point.Index=I+1;Point.Connect=I>0;Point.Current=I==2;Overlay->Route.Add(Point);}
+            Renderer.DrawWidget(Target,Overlay,Size,.016f);FlushRenderingCommands();
+            Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels,Flags);
+            int32 Blue=0,Green=0;for(const auto& Pixel:Pixels)
+            {if(Pixel.B>Pixel.G&&Pixel.G>Pixel.R*2&&Pixel.B>20)++Blue;if(Pixel.G>180&&Pixel.R<140&&Pixel.B<160)++Green;}
+            TestTrue(TEXT("Optional blue fill visibly covers walkable dungeon floors"),Blue>Pixels.Num()/10);
+            TestTrue(TEXT("Route's active waypoint visibly highlights green"),Green>20);
+            FImageUtils::PNGCompressImageArray(420,420,Pixels,Png);
+            FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("Automation")/FString::Printf(TEXT("Waypoint-Filled-Route-%s.png"),Facing?TEXT("Facing"):TEXT("North"))));
+            TestTrue(TEXT("Current route waypoint is inside the rendered fixture"),FBox2D(FVector2D::ZeroVector,Size).IsInside(Overlay->Project(ACEWaypoint::Coordinates(Overlay->Route[2].Position),Size)));
+            Plugin->Profile->SetBoolField(TEXT("show_route"),false);Overlay->Tick(Geometry,Time+=.016,.016f);
+            TestTrue(TEXT("Hiding routes clears the overlay immediately"),Overlay->Route.IsEmpty());
+            Plugin->Profile->SetBoolField(TEXT("show_route"),true);Plugin->Profile->SetBoolField(TEXT("fill_dungeon"),false);
             P.CellId=0x7D640014;P.Location=FVector(60,78,12);C->GetSession()->SetLocalPosition(P);
             Overlay->Tick(Geometry,Time+=.016,.016f);
             TestTrue(TEXT("Pinned overworld resolves retail overview after leaving dungeon"),!Overlay->Dungeon&&Overlay->MapTexture.IsValid());
@@ -746,7 +892,7 @@ bool FACEWaypointOverlayTest::RunTest(const FString&)
             FFileHelper::SaveArrayToFile(Png,*(FPaths::ProjectSavedDir()/TEXT("Automation")/FString::Printf(TEXT("Waypoint-Pinned-World-%s.png"),Facing?TEXT("Facing"):TEXT("North"))));
             P.CellId=0x01430171;P.Location=FVector(49,-75,0);C->GetSession()->SetLocalPosition(P);
         }
-        // Nearby portals must all survive label decluttering, including those
+        // Nearby portals must all remain visible, including those
         // inside the same 12px screen bucket used by the old implementation.
         auto Overlay=SNew(SWaypointMap).Host(Host).Overlay(true);
         P.CellId=0x7D640014;P.Location=FVector(60,78,12);C->GetSession()->SetLocalPosition(P);
@@ -759,12 +905,12 @@ bool FACEWaypointOverlayTest::RunTest(const FString&)
         TArray<FColor> OpaquePixels;FReadSurfaceDataFlags OpacityFlags;OpacityFlags.SetLinearToGamma(false);
         Target->GameThread_GetRenderTargetResource()->ReadPixels(OpaquePixels,OpacityFlags);
         uint64 FullAlpha=0;for(const auto& Pixel:OpaquePixels)FullAlpha+=Pixel.A;
-        Plugin->Profile->SetNumberField(TEXT("map_opacity"),.4);
+        Host->SetWaypointMapOpacity(.4f);
         Renderer.DrawWidget(Target,Overlay,Size,.016f);FlushRenderingCommands();
         Target->GameThread_GetRenderTargetResource()->ReadPixels(OpaquePixels,OpacityFlags);
         uint64 FadedAlpha=0;for(const auto& Pixel:OpaquePixels)FadedAlpha+=Pixel.A;
-        TestTrue(TEXT("Opacity fades terrain and overlays together"),FullAlpha>0&&FadedAlpha<FullAlpha*.8);
-        Plugin->Profile->SetNumberField(TEXT("map_opacity"),1);
+        TestTrue(TEXT("Background opacity also fades the overworld terrain"),FullAlpha>0&&FadedAlpha<FullAlpha*.8);
+        Host->SetWaypointMapOpacity(1.f);
         Target->ReleaseResource();
     }
     return true;

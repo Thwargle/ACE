@@ -17,7 +17,9 @@ namespace ACEDatText
 	ACECLIENT_API const FACEDatFontChar* FindChar(const FACEDatFont& Font, uint16 Code);
 	ACECLIENT_API int32 Advance(const FACEDatFont& Font, uint16 Code);
 	ACECLIENT_API FString Ellipsize(const FACEDatFont& Font, const FString& Text, int32 Width);
-	/** GlyphList::Recalculate / LinebreakUtils, with a uniform font height. */
+	/** GlyphList::Recalculate / LinebreakUtils, with a uniform font height.
+	 * Disable bBreakLongWords for UI labels that must keep oversized words intact.
+	 * Retail text retains its per-glyph fallback by default. */
 	ACECLIENT_API TArray<FACEBitmapTextLine> Layout(const FACEDatFont& Font,
-		const FString& Text, int32 MarginWidth, bool bOneLine);
+		const FString& Text, int32 MarginWidth, bool bOneLine, bool bBreakLongWords = true);
 }

@@ -1,42 +1,64 @@
-# AC:Unreal / AC:VR release 125
+# AC:Unreal / AC:VR release 126
 
 Windows desktop, PC VR, native Linux x86_64, and standalone Quest share version
-**2026.10.19.125**. Android version code: 125. Quest installer revision: 9.
+**2026.10.19.126**. Android version code: 126. Quest installer revision: 9.
 
-## Weapon lighting
+## Retail rendering, physics, and networking
 
-- Give both locally held weapons priority within the existing effect-light budget,
-  keeping nearby scenery and camera position from suppressing offhand illumination.
-- Ignore black, non-emitting overlays when estimating particle light. Preserve the
-  hue of small spark effects without dimming illumination a second time because
-  their textures contain dark padding, including the Quintessence Sickle effect.
-- Keep the existing desktop/mobile light limits and overlapping-light intensity cap.
+- Restore retail's 50-metre distance offset before selecting authored clothing
+  detail levels, preventing nearby vendors and players from abruptly changing models.
+- Cache dungeon cell distances during streaming plans to reduce repeated DAT
+  reads, including Facility Hub. Add focused streaming diagnostics and regressions.
+- Correct overlapping mansion floor presentation and let gravity-enabled objects
+  settle after their room collision is ready, including after landblock reloads.
+- Restore house-hook drag/drop and removal controls, and horizontal scrolling in
+  external containers such as mansion chests.
+- Deliver received network packets without waiting behind an unrelated missing
+  UDP packet; preserve ordered game events per owner, reject stale property
+  updates, and bound receive work across frames.
+- Use replicated elasticity and inelastic collision behavior, and retain valid
+  lower-body landing contacts at large world coordinates.
+- Use authored low, medium, and high attack/aim motions without blending attack
+  poses or falling back to another weapon style. Preserve queued stamped attacks.
 
-## Armor distance rendering
+## Third Eye and maps
 
-- Use the retail DAT's authored model levels and distance thresholds for character
-  armor, including per-view distance, object scale, and billboard draw modes.
-- Preserve clothing layers, dyes, texture replacements, and the highest-detail
-  collision geometry as other characters change visual detail with distance.
-- Keep the local player and character previews at highest detail. No item-specific
-  Celdon override is used.
+- Add Third Eye, an optional bundled spawn watcher with its own eye icon and
+  Plugin Manager checkbox. Save exact/partial name watches per character/server;
+  show nearby matches, local alerts, selection, and optional world/map markers.
+- Provide searchable, paginated Third Eye lists with compact page controls and
+  adaptive page sizes, without a panel scrollbar.
+- Give pinned maps a black background controlled by the opacity setting. Save
+  separate outdoor/interior zoom levels, optionally fill walkable floor polygons
+  in blue, and show the active UCM route and current waypoint.
+- Keep portal names visible consistently, including overlapping Town Network labels.
 
-## Accounts
+## Plugins, combat, and interface
 
-- Drag the six-dot grip at the left of an Accounts row to reorder saved accounts.
-  An insertion marker shows the destination; long lists scroll near their edges.
-- Save the order automatically and use it on Play. Preserve account identity,
-  aliases, passwords, selection, and unfinished form edits, including duplicate usernames.
-- Remove the example placeholder from the optional account alias input.
+- Distinguish active tabs, prevent mid-word label wrapping, and improve retail
+  bitmap font sampling so thin letters remain readable.
+- Restore retail green dropdown artwork and selected-row styling.
+- Preserve the user's appraisal target for server commands such as /getinfo and
+  /vendordump while plugins perform background inventory appraisals.
+- Automatically stow incompatible arrows, quarrels, or darts before equipping a
+  different ranged weapon, for both manual actions and UCM. Wait for confirmation
+  of each removal and retain compatible ammunition.
+- Recover from missing spell acknowledgments without dropping the queued next
+  buff action. Show a fixed-size Current status with a full-text tooltip.
+- Add UCM Micro F / CF controls for Force Buff and Cancel Force Buff, FC to follow
+  a selected character, and C to follow observed footsteps without skipping corners.
+  Record follow positions during casting/equipment waits and pause on lost targets
+  or exhausted movement history.
 
 ## Validation and limits
 
-- Regression coverage includes dual-wield lighting, light budgets, authored armor
-  tables and rendered distance comparisons, clothing layers, and account drag/save behavior.
-- The exact reported Celdon close-up mismatch was not reproduced; its existing
-  close geometry already matched the retail DAT. This release adds general
-  authored distance-level handling rather than claiming that specific case was reproduced.
-- Packaging and automated tests do not establish live-server or physical-headset
-  acceptance. No new sustained Quest frame-rate claim is made.
+- Regression coverage exercises network loss/reordering, dungeon streaming,
+  mansion placement, collision, attack heights, armor distances, plugin interfaces,
+  map routes, appraisal context, and ammunition switching.
+- Third Eye can only detect objects already known to the client. Route lines show
+  recorded waypoints; corner following uses observed positions, not unseen paths.
+- Automated and packaged checks do not establish full retail parity, live-server
+  soak acceptance, or sustained physical-headset frame rates. Intermittent stalls
+  and location-specific performance reports still need live confirmation.
 - Game DATs, server files, saved accounts/settings, and optional AC-WoW Transmog
   assets are excluded from client downloads.

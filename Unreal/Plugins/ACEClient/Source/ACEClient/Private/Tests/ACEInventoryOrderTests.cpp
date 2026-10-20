@@ -287,6 +287,31 @@ bool FACERetailInventoryOrderTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Failed removal cannot later equip the requested item"),Session.CachedC2SPackets.Num(),Sent);
         TestEqual(TEXT("Failure cancels pending swap"),Session.PendingEquipmentGuid,0);
     }
+    // Every launcher pair, including a matching-ammo swap, uses the same
+    // acknowledged transaction for manual equips and UCM equip intents.
+    for(int32 OldAmmo : {1,2,4})for(int32 NewAmmo : {1,2,4})
+    {
+        Session.ClearWorldState();Session.PlayerGuid=100;Session.State=EACESessionState::InWorld;
+        auto New=Item(900,100,0);New.ItemType=ACEItemType::MissileWeapon;New.AmmoType=NewAmmo;Session.UpsertWorldObject(New);
+        auto Old=Item(901,0,-1);Old.WielderId=100;Old.CurrentWieldedLocation=ACEEquipMask::MissileWeapon;
+        Old.ItemType=ACEItemType::MissileWeapon;Old.AmmoType=OldAmmo;Session.UpsertWorldObject(Old);
+        auto Ammo=Old;Ammo.Guid=902;Ammo.ItemType=0x20000;Ammo.CurrentWieldedLocation=ACEEquipMask::MissileAmmo;Ammo.StackSize=73;Session.UpsertWorldObject(Ammo);
+        Session.CachedC2SPackets.Reset();Session.SendGetAndWieldItem(900,ACEEquipMask::MissileWeapon);
+        TestEqual(TEXT("Only incompatible ammo is scheduled for removal"),Session.PendingEquipmentRemovals.Contains(902),OldAmmo!=NewAmmo);
+        TestEqual(TEXT("Launcher and incompatible ammunition are both conflicts"),Session.PendingEquipmentRemovals.Num(),OldAmmo==NewAmmo?1:2);
+        while(!Session.PendingEquipmentRemovals.IsEmpty())
+        {
+            const int32 Removing=Session.PendingEquipmentRemovals[0];
+            TestFalse(TEXT("Wield waits for every removal acknowledgement"),Session.bPendingEquipmentWieldSent);
+            Contains(Removing,100,0);
+        }
+        TestTrue(TEXT("Replacement is wielded after ammunition is stowed"),Session.bPendingEquipmentWieldSent);
+        TestEqual(TEXT("Ammunition count is preserved"),Session.WorldObjects[902].StackSize,73);
+        TestEqual(TEXT("Matching ammo stays equipped"),Session.WorldObjects[902].CurrentWieldedLocation,OldAmmo==NewAmmo?ACEEquipMask::MissileAmmo:int64(0));
+        FACEBinaryWriter Wield;Wield.WriteUInt32(900);Wield.WriteInt32(int32(ACEEquipMask::MissileWeapon));
+        FACEBinaryReader R(Wield.GetData());Session.HandleWieldItem(R);
+        TestEqual(TEXT("Ranged swap completes"),Session.PendingEquipmentGuid,0);
+    }
     // Full main pack: retail chooses the first side pack that can hold each
     // dequip, before sending it. Reconstruct normal ACE property + ContainID
     // replies and verify the old weapon is immediately usable without relog.

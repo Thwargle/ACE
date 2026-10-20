@@ -12,6 +12,7 @@
 #include "ACEPluginSubsystem.generated.h"
 
 class FACEPluginVM;
+namespace ACEWaypoint { struct FRoutePoint; }
 namespace ACEUCMPanelPrivate { class FACEUCMImportUITest; }
 class SWidget;
 class AACEPlayerController;
@@ -53,6 +54,7 @@ struct FACEClientPlugin
     FString DisplayStartLabel() const;
     FString DisplayStopLabel() const;
     bool ShowSettings() const;
+    bool ScrollPanel() const;
     bool ShowStatus() const;
     TSharedPtr<FACEPluginVM> VM;
     TSharedPtr<FJsonObject> ActivityFailure;
@@ -77,6 +79,7 @@ struct FACEClientPlugin
     uint64 ChatCursor=0;
     TArray<FACEPluginChatFilter> ChatFilters;
     uint32 PanelRevision=0;
+    FVector2D PanelSize=FVector2D::ZeroVector;
     double NextStateSave=0, NextCommand=0;
     bool CanResumeMeta = false, ResumeMetaPending = false;
     uint32 VMSourceHash = 0, VMProfileHash = 0;
@@ -102,6 +105,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEUIWorkloadTest;
     friend class FACELedgerTest;
     friend class FACEPluginCompanionTest;
+    friend class FACEThirdEyeTest;
     friend class FACEPluginPublicAPITest;
     friend class FACEPluginEquipmentTest;
     friend class FACEPluginRequestsTest;
@@ -248,6 +252,7 @@ public:
     bool IsWaypointEnabled() const;
     bool IsWaypointUnlocked() const;
     FACEPosition WaypointPlayerPosition() const;
+    TArray<ACEWaypoint::FRoutePoint> GetWaypointMapRoute(bool Dungeon) const;
     bool SetWaypoint(const FString& Coordinates);
     void SetWaypoint(FVector2D Coordinates, uint32 DungeonLandblock=0);
     bool GetWaypoint(FVector2D& Coordinates, uint32& DungeonLandblock) const;
@@ -291,6 +296,9 @@ public:
     bool RequestForceBuff();
     void CancelForceBuff();
     bool IsForceBuffRequested() const { return ForceBuffRequest!=0; }
+    bool SetUCMFollowSelected(bool Enabled);
+    bool IsUCMFollowEnabled() const;
+    FString UCMCurrentStatus() const;
 
     void RecordWaypoint(const FString& Id, const TSharedPtr<FJsonObject>& Details = nullptr);
     void AddBuff(const FString& Id, int32 SpellId);
@@ -365,6 +373,11 @@ private:
     bool bTrackRouteMovement=false, bRouteMovementOverflow=false;
     TArray<FACEPosition> RouteMovementSamples;
     uint32 RouteMovementTeleport=0;
+    void ObserveFollowPosition(int32 Guid,const FACEPosition& Position);
+    TArray<FACEPosition> FollowMovementSamples;
+    int32 FollowMovementTarget=0;
+    uint32 FollowMovementTeleport=0;
+    bool bFollowMovementOverflow=false;
     FACEUCMLog UCMLog;
     double NextUCMLogSave = 0;
     void FlushUCMLog();
@@ -442,7 +455,7 @@ private:
     TWeakPtr<class FACESession> ObservedSession;
     FDelegateHandle UseDoneHandle;
     FDelegateHandle TellHandle, MetaChatHandle, CombatFeedbackHandle;
-    FDelegateHandle TargetHealthHandle, TargetMotionHandle, TargetDeletedHandle, TargetCreatedHandle, CombatVitalsHandle;
+    FDelegateHandle TargetHealthHandle, TargetMotionHandle, TargetDeletedHandle, TargetCreatedHandle, CombatVitalsHandle, FollowPositionHandle;
     int32 CombatTarget=0;
     TSet<int32> DefeatedTargets;
     FIntVector LastCombatVitals=FIntVector(-1,-1,-1);

@@ -290,6 +290,12 @@ void UACEUIGameplayBinder::ShowKeymapImport(const FString& Report)
   FButtonStyle Button;const auto Background=Brush(0x060012b3);Button.SetNormal(Background).SetHovered(Background).SetPressed(Background).SetNormalPadding(FMargin(0)).SetPressedPadding(FMargin(0));
   auto Style=KeymapFileChoice->GetWidgetStyle();Style.ComboButtonStyle.SetButtonStyle(Button).SetDownArrowImage(Brush(0x060012b1)).SetMenuBorderBrush(Background).SetContentPadding(FMargin(0));
   KeymapFileChoice->SetWidgetStyle(Style);KeymapFileChoice->OnGenerateWidgetEvent.BindDynamic(this,&UACEUIGameplayBinder::GenerateKeymapFileLabel);
+  auto Items=KeymapFileChoice->GetItemStyle();const auto Selected=Brush(0x060012b4);
+  Items.SetEvenRowBackgroundBrush(Background).SetOddRowBackgroundBrush(Background)
+   .SetEvenRowBackgroundHoveredBrush(Selected).SetOddRowBackgroundHoveredBrush(Selected)
+   .SetActiveBrush(Selected).SetActiveHoveredBrush(Selected).SetInactiveBrush(Selected).SetInactiveHoveredBrush(Selected)
+   .SetSelectorFocusedBrush(Selected).SetTextColor(FLinearColor::White).SetSelectedTextColor(FLinearColor::White);
+  KeymapFileChoice->SetItemStyle(Items);
   KeymapImportPath=Canvas->WidgetTree->ConstructWidget<UEditableTextBox>();
   auto EntryStyle=KeymapImportPath->GetWidgetStyle();EntryStyle.SetPadding(FMargin(2,0));
   EntryStyle.SetBackgroundImageNormal(Background).SetBackgroundImageHovered(Background).SetBackgroundImageFocused(Background);

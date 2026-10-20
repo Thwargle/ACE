@@ -104,17 +104,31 @@ bool FACEArmorDistanceTest::RunTest(const FString&)
             }
             if(!TestEqual(FString::Printf(TEXT("Authored geometry at %08X level %u"),Root,I),ActualIndices,ExpectedIndices))return false;
         }
+        // These are world-camera distances, not already biased DAT distances.
+        // Check every clothing part, including vendor clothing and mixed armor,
+        // against retail's 50m near-detail region. Null/zero-distance parts keep
+        // their authored hiding behavior rather than getting a clothing exception.
+        if(Count>0 && Built.Parts[0].DistanceLevels[0].IdealDistance>0)
+        {
+            TArray<FProcMeshDistanceLevel> Levels;
+            for(const auto& L:Built.Parts[0].DistanceLevels)
+                Levels.Add({L.MinDistance,L.IdealDistance,L.MaxDistance,L.DrawMode,0,0});
+            for(float Distance:{1.f,4.f,6.f,10.f,25.f,50.f})
+                if(!TestEqual(FString::Printf(TEXT("Clothing %08X retains close model at %.0fm"),Root,Distance),
+                    ProceduralMeshDistanceLOD::Select(Levels,Distance),0))return false;
+        }
         Builder.TrimGfxCache(128);
     }
     AddInfo(FString::Printf(TEXT("Audited %d clothing tables, %d setup/table combinations, %d setups, %d distinct part roots, %d levels"),Tables,Combinations,Setups.Num(),Roots.Num(),LevelsChecked));
 
     TArray<FProcMeshDistanceLevel> Thresholds={{0,4,8,1,0,1},{0,6,12,1,1,1},{84,84,84,5,2,1},{MAX_flt,MAX_flt,MAX_flt,1,3,0}};
-    TestEqual(TEXT("Near is highest detail"),ProceduralMeshDistanceLOD::Select(Thresholds,3.99f),0);
-    TestEqual(TEXT("Threshold equality advances"),ProceduralMeshDistanceLOD::Select(Thresholds,4.f),1);
-    TestEqual(TEXT("Positive bias interpolates toward maximum"),ProceduralMeshDistanceLOD::Select(Thresholds,6.f,false,.5f),1);
-    TestEqual(TEXT("Negative bias interpolates toward minimum"),ProceduralMeshDistanceLOD::Select(Thresholds,2.f,false,-.5f),1);
+    TestEqual(TEXT("Retail's default distance offset is 50 meters"),ProceduralMeshDistanceLOD::DefaultDistanceOffset,50.f);
+    TestEqual(TEXT("Near is highest detail after retail's default offset"),ProceduralMeshDistanceLOD::Select(Thresholds,53.99f),0);
+    TestEqual(TEXT("Threshold equality advances after the near-detail region"),ProceduralMeshDistanceLOD::Select(Thresholds,54.f),1);
+    TestEqual(TEXT("Positive bias interpolates toward maximum"),ProceduralMeshDistanceLOD::Select(Thresholds,56.f,false,.5f),1);
+    TestEqual(TEXT("Negative bias interpolates toward minimum"),ProceduralMeshDistanceLOD::Select(Thresholds,52.f,false,-.5f),1);
     TestEqual(TEXT("Distance offset matches retail"),ProceduralMeshDistanceLOD::Select(Thresholds,5.f,false,0,2),0);
-    TestEqual(TEXT("Beyond final drawable level is invisible"),ProceduralMeshDistanceLOD::Select(Thresholds,84),3);
+    TestEqual(TEXT("Beyond final drawable level is invisible"),ProceduralMeshDistanceLOD::Select(Thresholds,134),3);
     TestEqual(TEXT("Local player never degrades"),ProceduralMeshDistanceLOD::Select(Thresholds,10000,true),0);
     TestEqual(TEXT("Distance includes part/object scale"),ProceduralMeshDistanceLOD::Distance(FTransform(FQuat::Identity,FVector(0,0,0),FVector(2)),FVector(0,0,50),FVector(0,0,900),100),4.f);
 
@@ -144,7 +158,7 @@ bool FACEArmorDistanceTest::RunTest(const FString&)
             if(Levels.IsEmpty())continue;
             for(int32 I=0;I<Levels.Num();++I)
             {
-                const float Distance=I==0?0:Levels[I-1].IdealDistance+.001f;
+                const float Distance=I==0?0:50.f+Levels[I-1].IdealDistance+.001f;
                 const FVector Viewer=Mesh->GetComponentTransform().TransformPosition(FACEPosition::AceVectorToUnreal(FVector(Expected.SortCenter),100))
                     +FVector(Distance*100*Mesh->GetComponentScale().Z,0,0);
                 const int32 Level=Mesh->GetDistanceLevel(Viewer);
@@ -194,7 +208,11 @@ bool FACEArmorDistanceTest::RunTest(const FString&)
         TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);return Pixels;
     };
     TArray<FColor> FirstNear;
-    for(const FIntPoint Fixture:{FIntPoint(300,0),FIntPoint(900,3),FIntPoint(4000,4),FIntPoint(9000,5),FIntPoint(300,0)})
+    // Cross the former close-range thresholds repeatedly, then the real retail
+    // transitions. The proxy must select the same level as a single-mesh reference.
+    for(const FIntPoint Fixture:{FIntPoint(300,0),FIntPoint(390,0),FIntPoint(410,0),FIntPoint(390,0),
+        FIntPoint(900,0),FIntPoint(4000,0),FIntPoint(5300,0),FIntPoint(5900,3),
+        FIntPoint(9000,4),FIntPoint(14000,5),FIntPoint(300,0)})
     {
         const FVector Eye=Center+FVector(.6,.8,0)*Fixture.X;
         Capture->SetWorldLocationAndRotation(Eye,(Center-Eye).Rotation());
@@ -219,10 +237,13 @@ bool FACEArmorDistanceTest::RunTest(const FString&)
         if(Fixture.Y==0)
         {
             TestTrue(TEXT("Close-up armor is visible in rendered capture"),Lit>500);
-            if(FirstNear.IsEmpty())FirstNear=Actual;
-            else TestTrue(TEXT("Returning close restores identical detail and coloring"),Actual==FirstNear);
+            if(Fixture.X==300)
+            {
+                if(FirstNear.IsEmpty())FirstNear=Actual;
+                else TestTrue(TEXT("Returning close restores identical detail and coloring"),Actual==FirstNear);
+            }
         }
-        if(Fixture.X==900)
+        if(Fixture.X==5900)
         {
             Chest->SetForceHighestDetail(true);const auto Self=Snap(Chest);Chest->SetForceHighestDetail(false);
             TestTrue(TEXT("Local player's rendered silhouette stays detailed at distance"),Self!=Actual);

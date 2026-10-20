@@ -174,7 +174,7 @@ bool FACECachedWorldDrawTest::RunTest(const FString&)
             else Land->SetLandEnvCellFloorPriority(Priority,Dat,true);
             TestFalse(TEXT("Doorway depth priority does not rebuild terrain buffers"),TerrainMesh->IsRenderStateDirty());
             TestEqual(TEXT("Doorway retains the authored floor-depth adjustment"),
-                TerrainMaterial->K2_GetScalarParameterValue(TEXT("LandDepthBias")),Priority?.25f:0.f);
+                TerrainMaterial->K2_GetScalarParameterValue(TEXT("LandDepthBias")),Priority?.5f:0.f);
             const auto RetainedPixels=Render();
             TestTrue(TEXT("Crossing retains the terrain render proxy"),TerrainMesh->SceneProxy==TerrainProxy);
             // Compare with the former rebuild path: retaining buffers must not

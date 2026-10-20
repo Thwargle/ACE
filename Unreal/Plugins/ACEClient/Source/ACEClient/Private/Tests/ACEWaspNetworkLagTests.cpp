@@ -37,18 +37,25 @@ bool FACEWaspNetworkLagTest::RunTest(const FString&)
   Session->Disconnect();Session->PlayerGuid=0x7100F000;Session->State=EACESessionState::InWorld;
   FACEWorldObject Self;Self.Guid=Session->PlayerGuid;Self.bIsSelf=Self.bIsPlayer=Self.bHasPosition=true;
   Self.ItemType=ACEItemType::Creature;Self.Position.CellId=0x0143015F;Self.Position.Location=FVector(43.304642,-68.413086,-.002981);
+  Self.bHasPhysicsTimestamps=true;
   Session->WorldObjects.Add(Self.Guid,Self);Session->PlayerPosition=Self.Position;
   for(int32 I=0;I<120;++I)
   {
    FACEWorldObject Wasp;ACECreatureFixtures::Apply(Wasp,2);Wasp.Guid=Self.Guid+I+1;
-   Wasp.Position=Self.Position;Wasp.bHasPosition=true;Session->WorldObjects.Add(Wasp.Guid,Wasp);
+   Wasp.Position=Self.Position;Wasp.bHasPosition=Wasp.bHasPhysicsTimestamps=true;Session->WorldObjects.Add(Wasp.Guid,Wasp);
   }
   PC->PredictedPose=Self.Position;PC->bHavePredictedPose=PC->bLocalPredicting=PC->bSyncPossessedPawn=true;
   PC->LastAppliedTeleportSeq=PC->LastAppliedForcePositionSeq=0;
   PC->PredictedPose.SetAceFacingFromUnrealDir2D(FVector(1,0,0));
   Pawn->SetActorLocation(Self.Position.ToUnrealLocation(100)+FVector(0,0,88));Pawn->SetActorRotation(PC->PredictedPose.ToUnrealQuat());
   int32 Motions=0,Corrections=0,PeakBuffered=0,MaxDispatch=0;double LargestCorrection=0;
-  const auto MotionHandle=Session->OnMotionUpdate.AddLambda([&](int32,const FACEObjectMotionState&){++Motions;});
+  TMap<int32,uint16> PresentedStamps;
+  const auto MotionHandle=Session->OnMotionUpdate.AddLambda([&](int32 Guid,const FACEObjectMotionState&)
+  {
+   const uint16 Presented=Session->WorldObjects[Guid].PhysicsTimestamps[ACEPhysicsTimeStamp::Movement];
+   TestTrue(TEXT("Delayed wasp movement cannot replay an older pose"),Presented>PresentedStamps.FindOrAdd(Guid));
+   PresentedStamps.Add(Guid,Presented);++Motions;
+  });
   const auto PositionHandle=Session->OnPositionUpdate.AddLambda([&](int32 Guid,const FACEPosition& Position)
   {
    const FVector Before=Pawn->GetActorLocation();const FQuat Heading=Pawn->GetActorQuat();
@@ -74,18 +81,21 @@ bool FACEWaspNetworkLagTest::RunTest(const FString&)
    }
    // Simulated local input advances independently of network arrivals.
    PC->PredictedPose.Location.X+=.02;Pawn->SetActorLocation(PC->PredictedPose.ToUnrealLocation(100)+FVector(0,0,88));
-   Link.Advance(Now);const uint32 Before=Link.DispatchedSequence();Session->PollSockets();
-   MaxDispatch=FMath::Max(MaxDispatch,int32(Link.DispatchedSequence()-Before));PeakBuffered=FMath::Max(PeakBuffered,Link.BufferedGameplay());
+   Link.Advance(Now);const int32 Before=Motions+Corrections;Session->PollSockets();
+   MaxDispatch=FMath::Max(MaxDispatch,Motions+Corrections-Before);PeakBuffered=FMath::Max(PeakBuffered,Link.BufferedGameplay());
    if(RttMs==23000 && Now<10)TestEqual(TEXT("Long lag cannot deliver corrections early"),Corrections,0);
   }
   for(int32 Frame=0;Frame<3600 && !Link.IsDrained();++Frame,Now+=1./60.)
   {
-   Link.Advance(Now);const uint32 Before=Link.DispatchedSequence();Session->PollSockets();
-   MaxDispatch=FMath::Max(MaxDispatch,int32(Link.DispatchedSequence()-Before));
+   Link.Advance(Now);const int32 Before=Motions+Corrections;Session->PollSockets();
+   MaxDispatch=FMath::Max(MaxDispatch,Motions+Corrections-Before);
   }
   TestTrue(TEXT("Latency and recovery cannot bypass the per-frame dispatch cap"),MaxDispatch<=16);
   TestTrue(TEXT("Reliable backlog drains after the link recovers"),Link.IsDrained());
-  TestEqual(TEXT("All wasp casts arrive exactly once despite reordered duplicates"),Motions,QueuedMotions);
+  if(RttMs==0)TestEqual(TEXT("Lossless link delivers every wasp cast"),Motions,QueuedMotions);
+  TestTrue(TEXT("Loss recovery never duplicates presented casts"),Motions<=QueuedMotions);
+  for(int32 I=0;I<120;++I)
+   TestEqual(TEXT("Every wasp finishes on its latest authoritative motion"),PresentedStamps.FindRef(Self.Guid+I+1),Stamp);
   TestEqual(TEXT("All authoritative corrections arrive exactly once"),Corrections,QueuedCorrections);
   TestEqual(TEXT("Synthetic link did not drop writes"),Link.SendErrors,0);
   if(RttMs>0)

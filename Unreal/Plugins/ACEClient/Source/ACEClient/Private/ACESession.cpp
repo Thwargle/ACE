@@ -81,6 +81,8 @@ bool FACESession::Connect(const FACELoginCredentials& Credentials)
 
 void FACESession::Disconnect()
 {
+	ManualAppraisalGuid = 0;
+	bBackgroundAppraisalContext = false;
 	PendingInventoryTransfers.Reset();
 	GiveRecipientGuid = 0;
 	Confirmations.Reset();
@@ -189,6 +191,8 @@ void FACESession::Disconnect()
 	LastReceivedPacketSequence = 1;
 	CachedC2SPackets.Reset();
 	OutOfOrderS2CPackets.Reset();
+	PendingS2CDispatch.Empty();
+	LastTimeSyncPacketSequence = 0;
 	RequestedS2CPackets.Reset();
 	RejectedS2CPackets.Reset();
 	LastRequestForRetransmitTime = 0.0;
@@ -247,6 +251,8 @@ void FACESession::RequestLogOff()
 
 void FACESession::ClearWorldState()
 {
+	ManualAppraisalGuid = 0;
+	bBackgroundAppraisalContext = false;
 	ObjectVisibilityDeadlines.Reset();
 	ClosedContainerItemDeadlines.Reset();
 	NextClosedContainerExpiryAt = 0.;
@@ -963,7 +969,8 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 		return;
 	}
 
-	// Contiguous S2C reorder (mirror ACE.Server NetworkSession).
+	// SharedNet::ProcessNewestSeqNum records gaps independently of blob delivery.
+	// Keep a contiguous ACK cursor for ACE, but dispatch each received packet now.
 	if (Sequence <= LastReceivedPacketSequence)
 	{
 		return; // duplicate / already handled
@@ -973,11 +980,17 @@ void FACESession::HandleDatagram(const uint8* Data, int32 Size, bool /*bFromS2CS
 	// as the backlog it releases. Do not overwrite a packet already retained.
 	if (!OutOfOrderS2CPackets.Contains(Sequence))
 	{
+		if (OutOfOrderS2CPackets.Num() >= 32768)
+		{
+			ConnectionError = TEXT("Too many unacknowledged network packets. Please reconnect to the server.");
+			Log(ConnectionError); SetState(EACESessionState::Failed); return;
+		}
 		FPendingS2CPacket& Pending = OutOfOrderS2CPackets.Add(Sequence);
 		Pending.Flags = Flags;
 		Pending.Fragments = MoveTemp(Fragments);
 		Pending.ServerTicks = ServerTicks;
 		Pending.ReceivedAt = ReceivedAt;
+		PendingS2CDispatch.Enqueue(Sequence);
 	}
 	if (!bDeferOrderedDispatch) DrainOutOfOrderS2C();
 	// Tick requests missing packets once after the receive/dispatch passes;
@@ -989,15 +1002,16 @@ void FACESession::ProcessOrderedS2CPacket(uint32 Sequence, EACEPacketHeaderFlags
 {
 	if (Sequence != 0 && Flags != EACEPacketHeaderFlags::AckSequence)
 	{
-		LastReceivedPacketSequence = Sequence;
 		RequestedS2CPackets.Remove(Sequence);
 		RejectedS2CPackets.Remove(Sequence);
 		bNeedAck = true;
 	}
 
-	// TimeSync is also authenticated and applied in packet order.
-	if (EnumHasAnyFlags(Flags, EACEPacketHeaderFlags::TimeSync))
+	// Late retransmissions must not move the synchronized world clock backwards.
+	if (EnumHasAnyFlags(Flags, EACEPacketHeaderFlags::TimeSync)
+		&& (Sequence == 0 || Sequence > LastTimeSyncPacketSequence))
 	{
+		LastTimeSyncPacketSequence = FMath::Max(LastTimeSyncPacketSequence, Sequence);
 		ApplyServerTime(ServerTicks, ReceivedAt, TEXT("TimeSync"));
 	}
 	for (const FReceivedFragment& Fragment : Fragments) ProcessReceivedFragment(Fragment);
@@ -1035,19 +1049,35 @@ void FACESession::DrainOutOfOrderS2C()
 	{
 		// Always permit one atomic packet, then yield the rest to later frames.
 		if (Packets > 0 && Budget > 0 && FPlatformTime::Seconds() - Start >= Budget) break;
-		const uint32 Seq = LastReceivedPacketSequence + 1;
-		if (!OutOfOrderS2CPackets.Contains(Seq) && RejectedS2CPackets.Remove(Seq))
+		if (State == EACESessionState::Failed) break;
+		// Alternate packet and ordered-event work so neither starves the other.
+		if (!ReadyGameEventOwners.IsEmpty() && ((Packets & 1) || PendingS2CDispatch.IsEmpty()))
 		{
-			RequestedS2CPackets.Remove(Seq);
-			LastReceivedPacketSequence = Seq; bNeedAck = true;
-			Log(FString::Printf(TEXT("Server cannot retransmit packet %u; continuing received updates"), Seq));
+			DispatchReadyGameEvent();
 			continue;
 		}
-		FPendingS2CPacket* Pending = OutOfOrderS2CPackets.Find(Seq);
-		if (!Pending) break;
-		FPendingS2CPacket Copy = MoveTemp(*Pending);
+		uint32 Seq;
+		if (!PendingS2CDispatch.Dequeue(Seq)) break;
+		if (FPendingS2CPacket* Pending = OutOfOrderS2CPackets.Find(Seq))
+		{
+			// Retain only the receipt until the ACK cursor crosses it. Never keep
+			// complete gameplay payloads behind a missing UDP packet.
+			FPendingS2CPacket Copy = MoveTemp(*Pending);
+			Pending->bDispatched = true;
+			Pending->Fragments.Reset();
+			ProcessOrderedS2CPacket(Seq, Copy.Flags, Copy.Fragments, Copy.ServerTicks, Copy.ReceivedAt);
+		}
+	}
+	// Receipt pruning is bounded as well: filling a long-lived hole must not
+	// walk an arbitrarily large backlog in one render frame.
+	for (int32 Count = 0; Count < MaxPackets; ++Count)
+	{
+		const uint32 Seq = LastReceivedPacketSequence + 1;
+		const FPendingS2CPacket* Receipt = OutOfOrderS2CPackets.Find(Seq);
+		if (Receipt ? !Receipt->bDispatched : !RejectedS2CPackets.Contains(Seq)) break;
 		OutOfOrderS2CPackets.Remove(Seq);
-		ProcessOrderedS2CPacket(Seq, Copy.Flags, Copy.Fragments, Copy.ServerTicks, Copy.ReceivedAt);
+		RequestedS2CPackets.Remove(Seq); RejectedS2CPackets.Remove(Seq);
+		LastReceivedPacketSequence = Seq; bNeedAck = true;
 	}
 }
 
@@ -1057,6 +1087,9 @@ void FACESession::ResetReceivedMessages()
 	EphemeralMessages.Reset();
 	PartialMessageBytes = 0;
 	LastEphemeralExpiry = 0;
+	OrderedGameEvents.Reset(); ReadyGameEventOwners.Empty();
+	PendingGameEventBytes = PendingGameEventCount = 0;
+	PropertyStamps.Reset();
 }
 
 void FACESession::RemovePartialMessage(uint64 BlobId)
@@ -1110,7 +1143,7 @@ void FACESession::ProcessReceivedFragment(const FReceivedFragment& Fragment)
 	{
 		// A conflicting single-fragment body must not bypass an existing assembly.
 		if (PartialFragments.Contains(Fragment.BlobId)) return;
-		HandleGameMessage(Fragment.Data);
+		ReceiveGameMessage(Fragment.Data);
 		return;
 	}
 	if (const FPartialMessage* Existing = PartialFragments.Find(Fragment.BlobId))
@@ -1145,7 +1178,7 @@ void FACESession::ProcessReceivedFragment(const FReceivedFragment& Fragment)
 		Message.Append(*Part);
 	}
 	RemovePartialMessage(Fragment.BlobId);
-	HandleGameMessage(Message);
+	ReceiveGameMessage(Message);
 }
 
 void FACESession::SendRequestRetransmit(const TArray<uint32>& MissingSequences)
@@ -1838,6 +1871,7 @@ void FACESession::UpsertWorldObject(const FACEWorldObject& Object, bool bForceRe
 	const bool bSameInstance = Existing && (Existing->bPhysicsDescriptionPending
 		|| !Object.bHasPhysicsTimestamps || !Existing->bHasPhysicsTimestamps
 		|| Object.PhysicsTimestamps[ACEPhysicsTimeStamp::Instance] == Existing->PhysicsTimestamps[ACEPhysicsTimeStamp::Instance]);
+	if (Existing && !bSameInstance) PropertyStamps.Remove(Object.Guid);
 	if (Existing && bSameInstance && !bForceRecreate)
 	{
 		Merged.ReceivedActionStamp=Existing->ReceivedActionStamp;
@@ -1952,6 +1986,7 @@ void FACESession::UpsertWorldObject(const FACEWorldObject& Object, bool bForceRe
 	}
 	ApplyPlayerInventoryCapacity(Merged);
 	WorldObjects.Add(Merged.Guid, Merged);
+	QueueReadyGameEvents(Merged.Guid);
 	if (Merged.Guid == PlayerGuid) AdoptPlayerPhysicsTimestamps(Merged);
 	ReconcileOpenContainerOwnership();
 	OnObjectCreated.Broadcast(Merged);
@@ -2056,8 +2091,13 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecrea
 	Obj.PhysicsEffectTableId = Decoded.PhysicsEffectTableId;
 	Obj.ItemType = Decoded.ItemType;
 	Obj.bIsHouseHook = Decoded.bIsHouseHook;
+	Obj.HookItemTypes = Decoded.HookItemTypes;
+	Obj.HookType = Decoded.HookType;
+	Obj.HouseOwnerId = Decoded.HouseOwnerId;
 	Obj.Scale = Decoded.Scale > 0.f ? Decoded.Scale : 1.f;
 	Obj.Friction = FMath::IsFinite(Decoded.Friction) ? FMath::Clamp(Decoded.Friction,0.f,1.f) : .95f;
+	Obj.Elasticity = Decoded.Elasticity;
+	Obj.Elasticity = Obj.GetValidElasticity();
 	Obj.Position = Decoded.Position;
 	Obj.bHasPosition = Decoded.bHasPosition;
 	Obj.bIsPlayer = Decoded.bIsPlayer;
@@ -2107,6 +2147,7 @@ void FACESession::HandleObjectCreate(FACEBinaryReader& Reader, bool bForceRecrea
 		Obj.PhysicsEffectTableId = Existing->PhysicsEffectTableId;
 		Obj.Scale = Existing->Scale;
 		Obj.Friction = Existing->Friction;
+		Obj.Elasticity = Existing->Elasticity;
 		Obj.Translucency = Existing->Translucency;
 		Obj.DefaultScriptId = Existing->DefaultScriptId;
 		Obj.DefaultScriptIntensity = Existing->DefaultScriptIntensity;
@@ -2354,6 +2395,7 @@ void FACESession::DeleteWorldObject(int32 Guid)
 		if (SelectedObject.Guid == Guid) SelectObject(0);
 		VRPoses.Remove(Guid);
 		WorldObjects.Remove(Guid);
+		PropertyStamps.Remove(Guid);
 		RemoveFromContainerLists(Guid);
 	}
 	OnObjectDeleted.Broadcast(Guid);
@@ -4191,6 +4233,12 @@ void FACESession::SendTalk(const FString& Message)
 	{
 		return;
 	}
+	// Server/custom commands can use RequestedAppraisalTarget OR the last
+	// successful CurrentAppraisalTarget. Silent plugin inventory scans change
+	// both on the server. Restore the user's appraisal immediately before Talk,
+	// on the same ordered WeenieQueue; no command-name whitelist or round trip.
+	if (Message.StartsWith(TEXT("@")) || Message.StartsWith(TEXT("/")))
+		RestoreManualAppraisalContext();
 	FACEBinaryWriter W;
 	W.WriteString16L(Message);
 	SendGameAction(ACEGameAction::Talk, W.GetData(), ACEQueue::WeenieQueue);
@@ -4314,11 +4362,34 @@ void FACESession::SelectObject(int32 ObjectGuid, bool bInventorySelection)
 	}
 }
 
-void FACESession::SendIdentifyObject(int32 ObjectGuid)
+void FACESession::RestoreManualAppraisalContext()
+{
+	if (!bBackgroundAppraisalContext) return;
+	// Clear both server targets first. If the user has not appraised anything,
+	// the target has disappeared, or the fresh appraisal fails, a command must
+	// never fall back to the plugin's last successfully assessed inventory item.
+	SendGameActionU32(ACEGameAction::IdentifyObject, 0);
+	if (ManualAppraisalGuid && WorldObjects.Contains(ManualAppraisalGuid))
+		SendGameActionU32(ACEGameAction::IdentifyObject, uint32(ManualAppraisalGuid));
+	bBackgroundAppraisalContext = false;
+}
+
+void FACESession::SendIdentifyObject(int32 ObjectGuid, bool bBackground)
 {
 	if (State != EACESessionState::InWorld || ObjectGuid == 0)
 	{
 		return;
+	}
+	if (bBackground)
+		bBackgroundAppraisalContext = true;
+	else
+	{
+		// A failed manual appraisal must not leave CurrentAppraisalTarget pointing
+		// at an earlier background item either. Do not restore the previous user
+		// target here: this request supersedes it.
+		if (bBackgroundAppraisalContext) SendGameActionU32(ACEGameAction::IdentifyObject, 0);
+		ManualAppraisalGuid = ObjectGuid;
+		bBackgroundAppraisalContext = false;
 	}
 	FACEBinaryWriter W;
 	W.WriteUInt32(static_cast<uint32>(ObjectGuid));
@@ -4938,7 +5009,15 @@ void FACESession::SendGetAndWieldItem(int32 Guid, int64 Loc)
 		}
 		const int64 EqLoc = Eq.CurrentWieldedLocation;
 		bool bConflict = false;
-		if ((Loc == ACEEquipMask::Shield && ((EqLoc & (ACEEquipMask::Held | ACEEquipMask::TwoHanded)) != 0
+		if ((Loc & ACEEquipMask::MissileWeapon) != 0 && Obj.AmmoType != 0
+			&& (EqLoc & ACEEquipMask::MissileAmmo) != 0 && (Eq.AmmoType & Obj.AmmoType) == 0)
+		{
+			// Launchers share a slot, ammunition does not. Stow incompatible
+			// arrows/quarrels/darts and await ContainID before wielding the new
+			// launcher, just as for the old weapon. All callers use this path.
+			bConflict = true;
+		}
+		else if ((Loc == ACEEquipMask::Shield && ((EqLoc & (ACEEquipMask::Held | ACEEquipMask::TwoHanded)) != 0
 			|| ((EqLoc & ACEEquipMask::MissileWeapon) != 0 && Eq.AmmoType != 0)))
 			|| ((EqLoc & ACEEquipMask::Shield) != 0 && ((Loc & (ACEEquipMask::Held | ACEEquipMask::TwoHanded)) != 0
 				|| ((Loc & ACEEquipMask::MissileWeapon) != 0 && Obj.AmmoType != 0))))
@@ -6341,6 +6420,9 @@ void FACESession::HandleApproachVendor(FACEBinaryReader& Reader)
 		Obj.UiEffects = static_cast<int32>(Decoded.UiEffects);
 		Obj.ItemType = Decoded.ItemType;
 		Obj.bIsHouseHook = Decoded.bIsHouseHook;
+		Obj.HookItemTypes = Decoded.HookItemTypes;
+		Obj.HookType = Decoded.HookType;
+		Obj.HouseOwnerId = Decoded.HouseOwnerId;
 		Obj.Value = Decoded.Value;
 		Obj.Burden = Decoded.Burden;
 		// Retail gmVendorUI::BuySingleItem requests one when the shop entry has
@@ -7346,6 +7428,7 @@ void FACESession::HandleInventoryRemoveObject(FACEBinaryReader& Reader)
 		ShiftContainerPlacementsAfterRemove(PrevContainer, PrevPlacement, bPackSlots);
 	}
 	WorldObjects.Remove(ItemGuid);
+	PropertyStamps.Remove(ItemGuid);
 	ObjectVisibilityDeadlines.Remove(ItemGuid);
 	OnObjectDeleted.Broadcast(ItemGuid);
 }
@@ -7503,6 +7586,8 @@ void FACESession::HandlePublicUpdatePropertyInt(FACEBinaryReader& Reader)
 		{
 			Obj->ClothingPriority = Value;
 		}
+		else if (Prop == 151) Obj->HookType = static_cast<uint16>(Value);
+		else if (Prop == 152) Obj->HookItemTypes = static_cast<uint32>(Value);
 		else if (Prop == 10) // PropertyInt.CurrentWieldedLocation
 		{
 			Obj->CurrentWieldedLocation = static_cast<int64>(Value);
@@ -7645,6 +7730,10 @@ void FACESession::HandlePublicUpdateInstanceId(FACEBinaryReader& Reader)
 		else if (Prop == 44) // PropertyInstanceId.PetOwner
 		{
 			Obj->PetOwnerId = Value;
+		}
+		else if (Prop == 32) // PropertyInstanceId.HouseOwner
+		{
+			Obj->HouseOwnerId = Value;
 		}
 	}
 }

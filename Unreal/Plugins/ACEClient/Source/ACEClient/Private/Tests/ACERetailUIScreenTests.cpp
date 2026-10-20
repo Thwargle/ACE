@@ -145,6 +145,17 @@ static FORCENOINLINE void CheckKeyboardCapture(FAutomationTestBase& Test, UACERe
             }
 }
 
+static FORCENOINLINE void CheckVendorRowArtwork(FAutomationTestBase& Test,const TArray<TObjectPtr<UBorder>>& Rows,
+    const TArray<int32>& Indices,int32 SelectedFilter,UACEUIResourceResolver* Resolver)
+{
+    for(int32 Row=0;Row<Indices.Num()&&Row<Rows.Num();++Row)
+    {
+        const bool Selected=Indices.IsValidIndex(Row)&&Indices[Row]==SelectedFilter;
+        Test.TestTrue(TEXT("Vendor category rows use retail green normal/selected textures"),
+            Rows[Row]->Background.GetResourceObject()==Resolver->ResolveTexture(Selected?0x060012B4:0x060012B3));
+    }
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FACERetailScreenTest,"ACE.RetailParity.UIScreens",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
 bool FACERetailScreenTest::RunTest(const FString& Parameters)
@@ -738,6 +749,9 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     NativeClick(TEXT("VendorItemsTab"));
     NativeClick(TEXT("Menu_Vendor_SelectionWidget"));
     TestTrue(TEXT("Actual canvas vendor filter opens"),Gameplay->bVendorFilterDropdownOpen);
+    CaptureScreen(TEXT("GameplayVendorGreenDropdown"));
+    CheckVendorRowArtwork(*this,Gameplay->VendorFilterDropdownRows,Gameplay->VendorVisibleFilterIndices,
+        Gameplay->VendorItemTypeFilter,Canvas->GetResourceResolver());
     Gameplay->HideVendorPanel();
     Gameplay->ShowExternalContainer(123);
     Gameplay->TickRefresh();
@@ -1204,6 +1218,9 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
     CaptureScreen(TEXT("GameplayCharacterOptions"));
     {
         const auto OriginalSize=ScreenSize;ScreenSize=FIntPoint(2048,1536);
+        // Desktop offsets change which chat window is under the real cursor.
+        // Freeze its intentional hover opacity while comparing static rendering.
+        TGuardValue<float> ChatOpacity(Gameplay->ChatActiveOpacity,Gameplay->ChatInactiveOpacity);
         const auto AtOrigin=CaptureScreen(TEXT("GameplayOptions2048x1536Scale125"),1.25f);
         for (const FVector2D Offset : {FVector2D(240,160),FVector2D(-1920,320)})
         {
@@ -1933,7 +1950,11 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             FACEWorldObject Source;Source.Guid=9112;Source.ContainerId=Player.Guid;Source.ItemType=ACEItemType::Misc;
             Source.StackSize=5;Source.MaxStackSize=100;Source.WeenieClassId=998871;Source.IconId=0x06004CF7;
             FACEWorldObject Target=Source;Target.Guid=9113;Target.ContainerId=Full.Guid;Target.WeenieClassId=998872;
-            for(const auto& Item:{Free,Full,Source,Target}) Session.WorldObjects.Add(Item.Guid,Item);
+            FACEWorldObject Hook=Free;Hook.Guid=9114;Hook.ContainerId=0;Hook.ItemsCapacity=1;
+            Hook.Name=TEXT("Wall hook");Hook.bIsHouseHook=true;Hook.HookType=1;
+            Hook.HookItemTypes=ACEItemType::Misc;Hook.HouseOwnerId=Player.Guid;
+            Source.HookType=1;
+            for(const auto& Item:{Free,Full,Source,Target,Hook}) Session.WorldObjects.Add(Item.Guid,Item);
             Session.WorldObjects[Player.Guid].ItemsCapacity=Client->GetPackItems(Player.Guid).Num()+10;
             Session.WorldObjects[Player.Guid].ContainersCapacity=10;
             Gameplay->ShowPanelPage(TEXT("InventoryPanel_Field"));
@@ -1977,13 +1998,26 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
                 Session.WorldObjects[Target.Guid]=Target;
                 Gameplay->CancelInventoryDrag();
                 TestFalse(TEXT("Cancel clears inventory drop feedback"),Gameplay->PaperDollDragTargetIcon->IsVisible());
+                Gameplay->ShowExternalContainer(Hook.Guid);CaptureScreen(TEXT("HookDropLayout"),Scale);
+                if(TestTrue(TEXT("Empty house hook has a target square"),!Gameplay->ExtItemSlotBgs.IsEmpty()))
+                {
+                    auto* Cell=Gameplay->ExtItemSlotBgs[0].Get();
+                    Preview(Cell,0x060011F9);CaptureScreen(TEXT("HookDropAccept"),Scale);
+                    Session.WorldObjects[Source.Guid].HookType=2;
+                    Preview(Cell,0x060011F8);CaptureScreen(TEXT("HookDropReject"),Scale);
+                    Session.WorldObjects[Source.Guid].HookType=1;
+                    Session.WorldObjects[Hook.Guid].HouseOwnerId=0;
+                    Preview(Cell,0x060011F8);
+                    Session.WorldObjects[Hook.Guid].HouseOwnerId=Player.Guid;
+                }
+                Gameplay->CancelInventoryDrag();Gameplay->HideExternalContainer(false);
             }
             TestTrue(TEXT("Reordering within a full pack remains valid"),Gameplay->CanMoveInventoryAmountToContainer(Target.Guid,Full.Guid,5));
             TestFalse(TEXT("Splitting within a full pack needs another slot"),Gameplay->CanMoveInventoryAmountToContainer(Target.Guid,Full.Guid,2));
             TestFalse(TEXT("A backpack cannot contain itself"),Gameplay->CanMoveInventoryAmountToContainer(Full.Guid,Full.Guid,1));
             TestFalse(TEXT("A backpack cannot be nested inside a side pack"),Gameplay->CanMoveInventoryAmountToContainer(Full.Guid,Free.Guid,1));
             Session.WorldObjects[Player.Guid]=SavedSelf;
-            for(const auto& Item:{Free,Full,Source,Target}) Session.WorldObjects.Remove(Item.Guid);
+            for(const auto& Item:{Free,Full,Source,Target,Hook}) Session.WorldObjects.Remove(Item.Guid);
             Gameplay->SelectedPackGuid=SavedPack;Gameplay->ShowPanelPage(SavedPage);
             CaptureScreen(TEXT("InventoryDropRestored"));
         };
@@ -3003,6 +3037,73 @@ bool FACERetailScreenTest::RunTest(const FString& Parameters)
             TestTrue(TEXT("Nested pack underlay updates even while viewing its contents"),
                 !Gameplay->ExtPackSlotBgs.IsEmpty()
                 && Gameplay->ExtPackSlotBgs[0]->Background.GetResourceObject()==Resources->ResolveItemBackground(ACEItemType::Container,NestedPack.IconUnderlayId));
+            // The chest shows all available slots, even when it contains fewer
+            // items than one page. Exercise the real mouse path, not just offsets.
+            Session.WorldObjects[Chest.Guid].ItemsCapacity=120;
+            const auto ItemBar=Manager->FindElementUnder(TEXT("ExternalContainer"),TEXT("Ext_ItemListScroll"));
+            const auto ItemList=Manager->FindElementUnder(TEXT("ExternalContainer"),TEXT("Ext_Container_ItemList"));
+            const auto Left=Manager->FindElementUnder(TEXT("Ext_ItemListScroll"),TEXT("ScrollBar_Left"));
+            const auto Right=Manager->FindElementUnder(TEXT("Ext_ItemListScroll"),TEXT("ScrollBar_Right"));
+            auto Press=[&](FVector2D Layout)
+            {
+                const auto& Geo=Canvas->GetCachedGeometry();
+                const auto Absolute=Geo.LocalToAbsolute(Canvas->LayoutToViewport(Layout));
+                Canvas->NativeOnMouseButtonDown(Geo,FPointerEvent(0,Absolute,Absolute,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
+            };
+            auto Release=[&](FVector2D Layout)
+            {
+                const auto& Geo=Canvas->GetCachedGeometry();
+                const auto Absolute=Geo.LocalToAbsolute(Canvas->LayoutToViewport(Layout));
+                Canvas->NativeOnMouseButtonUp(Geo,FPointerEvent(0,Absolute,Absolute,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
+            };
+            auto Arrow=[&](const TSharedPtr<FACEUIElement>& Element)
+            {
+                if(!TestTrue(TEXT("Chest scrollbar arrow exists"),Element.IsValid()))return;
+                const FVector2D P=FVector2D(Element->GetScreenOrigin())+FVector2D(Element->Width,Element->Height)*.5;
+                Press(P);Release(P);
+            };
+            for(float Scale:{1.f,1.5f}) for(int32 Count:{0,3,120})
+            {
+                Session.ContainerContents.Add(Chest.Guid,{{NestedPack.Guid,1}});
+                for(int32 I=0;I<120;++I)
+                {
+                    Session.WorldObjects.Remove(62100+I);
+                    if(I<Count)
+                    {
+                        FACEWorldObject ChestItem;ChestItem.Guid=62100+I;ChestItem.ContainerId=Chest.Guid;
+                        ChestItem.ItemType=ACEItemType::Misc;ChestItem.IconId=0x06004CF7;ChestItem.PlacementPosition=I;
+                        Session.WorldObjects.Add(ChestItem.Guid,ChestItem);
+                        Session.ContainerContents[Chest.Guid].Add({ChestItem.Guid,0});
+                    }
+                }
+                for(int32 Container:{Chest.Guid,NestedPack.Guid})
+                {
+                    Gameplay->OpenLootSelectedPackGuid=Container;Gameplay->ExtItemScrollOffset=0;
+                    Gameplay->LastLootOverlayHash=~uint64(0);Gameplay->RefreshExternalContainerOverlays();
+                    CaptureScreen(TEXT("GameplayChestScrollbar"),Scale);
+                    if(!TestTrue(TEXT("Chest scrollbar has a visible track"),ItemBar && ItemList && ItemBar->bVisible))continue;
+                    const int32 Maximum=Session.WorldObjects[Container].ItemsCapacity-FMath::Max(1,ItemList->Width/32);
+                    Arrow(Right);TestEqual(TEXT("Chest right arrow advances one slot"),Gameplay->ExtItemScrollOffset,1);
+                    Arrow(Left);TestEqual(TEXT("Chest left arrow returns one slot"),Gameplay->ExtItemScrollOffset,0);
+                    Arrow(Left);TestEqual(TEXT("Chest left arrow clamps at start"),Gameplay->ExtItemScrollOffset,0);
+                    const FVector2D Start=FVector2D(ItemBar->GetScreenOrigin())+FVector2D(20,ItemBar->Height*.5);
+                    const FVector2D End=Start+FVector2D(ItemBar->Width,0);
+                    Press(Start);TestTrue(TEXT("Chest thumb begins dragging regardless of item count"),Gameplay->IsScrollbarDragActive());
+                    const auto& Geo=Canvas->GetCachedGeometry();
+                    const auto From=Geo.LocalToAbsolute(Canvas->LayoutToViewport(Start));
+                    const auto To=Geo.LocalToAbsolute(Canvas->LayoutToViewport(End));
+                    Canvas->NativeOnMouseMove(Geo,FPointerEvent(0,To,From,{EKeys::LeftMouseButton},EKeys::Invalid,0,FModifierKeysState()));
+                    Release(End);
+                    TestFalse(TEXT("Chest mouse release ends scrollbar drag"),Gameplay->IsScrollbarDragActive());
+                    TestEqual(TEXT("Chest drag reaches the last capacity slot"),Gameplay->ExtItemScrollOffset,Maximum);
+                    Arrow(Right);TestEqual(TEXT("Chest right arrow clamps at end"),Gameplay->ExtItemScrollOffset,Maximum);
+                    if(Container==Chest.Guid && Count==120)
+                        TestEqual(TEXT("Chest scrolling displays its final item"),Gameplay->ExtItemGuids.Last(),62219);
+                    Arrow(Left);TestEqual(TEXT("Chest left arrow works after thumb drag"),Gameplay->ExtItemScrollOffset,Maximum-1);
+                    Gameplay->ScrollExternalContainer(1.f);
+                    TestEqual(TEXT("Chest wheel shares the scrollbar range"),Gameplay->ExtItemScrollOffset,FMath::Max(0,Maximum-4));
+                }
+            }
             Gameplay->HideExternalContainer(false);
             TestTrue(TEXT("Closing loot hides its pack background"),
                 Gameplay->ExtPackSlotBgs.IsEmpty() || Gameplay->ExtPackSlotBgs[0]->GetVisibility()==ESlateVisibility::Collapsed);

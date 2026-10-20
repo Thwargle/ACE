@@ -465,6 +465,15 @@ bool FACEVRWallContactTest::RunTest(const FString&)
   if(!TestNotNull(TEXT("Authored creature has a physical top sphere"),Top)){Monster->Destroy();continue;}
   const auto PlayerBody=PC->GetPlayerCollisionBody();
   const double ContactRadius=Top->GetScaledSphereRadius()+PlayerBody.Radii[0];
+  for(double Depth:{.007,.05,2.})
+  {
+   const FVector Normal(.35,0,FMath::Sqrt(1.-.35*.35));
+   const FVector Start=Top->GetComponentLocation()+Normal*(ContactRadius-Depth)-PlayerBody.Centers[0];
+   const auto Fall=ACEBodySweep::MoveAirborne(*World,Start,Start-FVector(0,0,2),PlayerBody,Query,true);
+   TestEqual(TEXT("Only contact-skin overlaps can land on creature tops"),Fall.bLanded,Depth<=.1);
+   if(Fall.bLanded)TestTrue(TEXT("Shallow landing separates the authored spheres"),
+    FVector::Dist(Fall.Position+PlayerBody.Centers[0],Top->GetComponentLocation())>=ContactRadius);
+  }
   for(double Offset:{0.,.35})for(bool Tracked:{false,true})for(int32 FPS:{30,144})
   {
    const FVector Rest=Top->GetComponentLocation()+FVector(ContactRadius*Offset,0,ContactRadius*FMath::Sqrt(1.-Offset*Offset))-PlayerBody.Centers[0];
@@ -477,7 +486,7 @@ bool FACEVRWallContactTest::RunTest(const FString&)
    Pawn->SetActorLocationAndRotation(Pose.ToUnrealLocation(100)+FVector(0,0,PlayerBody.HalfHeight),Pose.ToUnrealQuat());
    auto Tick=[&](){VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,84.25),FRotator(0,0,0));PC->PlayerTick(1.f/FPS);};
    for(int32 Frame=0;Frame<FPS*2;++Frame)Tick();
-   TestFalse(FString::Printf(TEXT("Creature top stays grounded: setup=%08X scale=%.1f vr=%d fps=%d"),Setup,Scale,Tracked,FPS),PC->bJumpAirborne||PC->bStandingJumpLocked);
+   TestFalse(FString::Printf(TEXT("Creature top stays grounded: setup=%08X scale=%.1f offset=%.2f vr=%d fps=%d"),Setup,Scale,Offset,Tracked,FPS),PC->bJumpAirborne||PC->bStandingJumpLocked);
    TestTrue(TEXT("Ground snap retains authored creature top height"),FMath::Abs(Pawn->GetActorLocation().Z-Rest.Z)<1.);
    TestTrue(TEXT("Creature landing reports contact to retail server"),Session->bAutoPosContact);
    PC->bJumpCharging=true;PC->JumpChargeExtent=1;PC->ReleaseJump(0,0);

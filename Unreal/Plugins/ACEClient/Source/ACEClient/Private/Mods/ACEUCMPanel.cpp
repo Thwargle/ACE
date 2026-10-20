@@ -242,7 +242,7 @@ namespace ACEUCMPanelPrivate
             auto Row=SNew(SHorizontalBox);
             Row->AddSlot().FillWidth(1)[SNew(SVerticalBox)+SVerticalBox::Slot().AutoHeight()[SNew(SBox).Visibility(ShowTitle?EVisibility::Visible:EVisibility::Collapsed)[Text(TEXT("UCM"),22)]]
                 +SVerticalBox::Slot().AutoHeight().Padding(0,6)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",14)).ColorAndOpacity(Accent).AutoWrapText(true)
-                    .Text_Lambda([P=Plugin](){return FText::FromString(P->Status);})]];
+                    .Text_Lambda([this](){return FText::FromString(TEXT("Current status: ")+Host->UCMCurrentStatus());})]];
             Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[SNew(SButton).ButtonStyle(&Style()).IsFocusable(false).ContentPadding(FMargin(16,12))
                 .OnClicked_Lambda([this](){if(Plugin->Running)Host->Stop(Plugin->Id,TEXT("Stopped"),true);else Host->Start(Plugin->Id);return FReply::Handled();})
                 [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Bold",18)).ColorAndOpacity(Ink)
@@ -258,11 +258,10 @@ namespace ACEUCMPanelPrivate
             for(const auto& Name:Names)
             {
                 const FString TargetPage=EditorOnly&&Name==TEXT("Loot rules")?TEXT("Loot"):EditorOnly&&Name==TEXT("Import")?TEXT("Import tools"):Name;
-                Row->AddSlot()[SNew(SButton).Tag(TEXT("UCMTab")).ButtonStyle(&Style()).IsFocusable(false).ContentPadding(FMargin(5,4)).HAlign(HAlign_Center).VAlign(VAlign_Center)
+                Row->AddSlot()[SNew(SACEPluginTab).Tag(TEXT("UCMTab")).ContentPadding(FMargin(5,4)).Text(FText::FromString(Name))
+                    .Selected_Lambda([this,TargetPage,Name](){return Page==TargetPage||(Name==TEXT("Import")&&(Page==TEXT("Files")||Page.StartsWith(TEXT("Import "))||Page==TEXT("Legacy loot")));})
                     .ToolTipText(FText::FromString(Name==TEXT("Import")?TEXT("Import / compatibility"):Name))
-                    .OnClicked_Lambda([this,TargetPage](){Page=TargetPage;BodyScroll->ScrollToStart();Rebuild();return FReply::Handled();})
-                    [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Bold",14)).Text(FText::FromString(Name))
-                        .ColorAndOpacity_Lambda([this,TargetPage](){return Page==TargetPage?Accent:Muted;})]];
+                    .OnClicked_Lambda([this,TargetPage](){Page=TargetPage;BodyScroll->ScrollToStart();Rebuild();return FReply::Handled();})];
             }
             return Row;
         }
@@ -296,10 +295,9 @@ namespace ACEUCMPanelPrivate
             auto Row=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(5,5));
             for(const auto& V:Values)
             {
-                Row->AddSlot()[SNew(SButton).ButtonStyle(&Style()).IsFocusable(false).ContentPadding(FMargin(12,9))
-                .OnClicked_Lambda([this,Key,V](){P()->SetStringField(Key,V);Save();return FReply::Handled();})
-                [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Bold",16)).Text(FText::FromString(V))
-                .ColorAndOpacity_Lambda([this,Key,V](){return Str(P(),Key)==V?Accent:Muted;})]];
+                Row->AddSlot()[SNew(SACEPluginTab).ContentPadding(FMargin(12,9)).Text(FText::FromString(V)).FontSize(16)
+                .Selected_Lambda([this,Key,V](){return Str(P(),Key)==V;})
+                .OnClicked_Lambda([this,Key,V](){P()->SetStringField(Key,V);Save();return FReply::Handled();})];
             }
             Add(Row);
         }
@@ -764,10 +762,12 @@ namespace ACEUCMPanelPrivate
                 Option(TEXT("navigation"),TEXT("Enable Route Navigation"),TEXT("Start joins the nearest waypoint, then follows the route in order. Route edits stop the current run."));
                 Option(TEXT("open_doors"),TEXT("Open doors along route"),TEXT("Use a closed door only when it lies on the current walking segment."),true);
                 Option(TEXT("route_preview"),TEXT("Show route in world"),TEXT("Updates as points are added or edited."),true);
-                Option(TEXT("follow_corners"),TEXT("Follow around corners"),TEXT("Imported follow routes retain the target player's observed path."));
+                Option(TEXT("follow_corners"),TEXT("Follow around corners"),TEXT("Follow the selected player's observed footsteps in order, retaining bends and elevation changes."));
                 Option(TEXT("loop_route"),TEXT("Loop route"),TEXT("Repeat from the first point when the route finishes."));
                 Option(TEXT("reverse_route"),TEXT("Reverse at route ends"),TEXT("VT Linear mode: walk back along the same points. Takes priority over Loop."));Add(Options);
                 auto Buttons=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(5,5));
+                Buttons->AddSlot()[Button(TEXT("Follow selected player"),[this](){Host->SetUCMFollowSelected(true);Rebuild();})];
+                Buttons->AddSlot()[Button(TEXT("Stop following"),[this](){Host->SetUCMFollowSelected(false);Rebuild();})];
                 Buttons->AddSlot()[Button(TEXT("+ Walk here"),[this](){Host->RecordRouteAction(TEXT("walk"));Rebuild();})];
                 Buttons->AddSlot()[Button(TEXT("+ Use selected"),[this](){Host->RecordRouteAction(TEXT("use"));Rebuild();})];
                 Buttons->AddSlot()[Button(TEXT("+ Portal selected"),[this](){Host->RecordRouteAction(TEXT("portal"));Rebuild();})];
@@ -1163,6 +1163,53 @@ bool FACEUCMImportUITest::RunTest(const FString&)
     TestFalse(TEXT("Restarting a stopped meta does not unexpectedly start UCM"),Plugin->Running);
     TestTrue(TEXT("Restart keeps meta execution enabled for the next Start"),Plugin->Profile->GetBoolField(TEXT("meta_enabled")));
     TestTrue(TEXT("Restart clears prior state diagnostics"),Plugin->MetaState.IsEmpty()&&Plugin->MetaStatus.IsEmpty());
+    auto FindTabs=[](const TSharedRef<SWidget>& Root,FName Tag)
+    {
+        TArray<TSharedRef<SACEPluginTab>> Result;TFunction<void(TSharedRef<SWidget>)> Visit;
+        Visit=[&](TSharedRef<SWidget> W){if(W->GetType()==TEXT("SACEPluginTab")&&W->GetTag()==Tag)Result.Add(StaticCastSharedRef<SACEPluginTab>(W));
+            const auto Children=W->GetChildren();for(int32 I=0;I<Children->Num();++I)Visit(Children->GetChildAt(I));};Visit(Root);return Result;
+    };
+    auto CheckTabs=[&](const TSharedRef<SWidget>& Root,FName Tag,int32 Expected)
+    {
+        auto Tabs=FindTabs(Root,Tag);if(!TestEqual(TEXT("Expected navigation tabs are present"),Tabs.Num(),Expected))return;
+        for(int32 I=0;I<Expected;++I)
+        {
+            Tabs=FindTabs(Root,Tag);Tabs[I]->SimulateClick();Root->SlatePrepass();Tabs=FindTabs(Root,Tag);
+            int32 Selected=0;for(const auto& Tab:Tabs)Selected+=Tab->IsSelected()?1:0;
+            TestTrue(TEXT("Clicking a navigation tab selects only that tab"),Selected==1&&Tabs.IsValidIndex(I)&&Tabs[I]->IsSelected());
+        }
+    };
+    CheckTabs(Panel,TEXT("UCMTab"),12);
+    // Subpages retain their parent indicator instead of leaving every tab idle.
+    Panel->Page=TEXT("Import tools");Panel->Rebuild();
+    TestTrue(TEXT("Import subpage keeps Import selected"),FindTabs(Panel,TEXT("UCMTab"))[10]->IsSelected());
+    Panel->Page=TEXT("Loot");Panel->Rebuild();CheckTabs(Panel,TEXT("UCMLootTab"),4);
+    auto Editor=SNew(SUCMPanel).Host(Host).InitialPage(TEXT("Standalone loot"));
+    CheckTabs(Editor,TEXT("UCMTab"),3);
+    auto Items=Host->MakeItemToolsPanel(false);CheckTabs(Items,TEXT("ItemToolsTab"),5);
+    if(FApp::CanEverRender())
+    {
+        TestTrue(TEXT("Retail tab artwork loads"),GI->GetSubsystem<UACEDatSubsystem>()->LoadDatDirectory(TEXT("C:/Turbine/Asheron's Call")));
+        Panel->Page=TEXT("Loot");Panel->Rebuild();Editor->Page=TEXT("Loot");Editor->Rebuild();
+        FWidgetRenderer Renderer(false,true);
+        for(int32 Width:{450,780})for(int32 View=0;View<3;++View)
+        {
+            const FVector2D Size(Width,760);TSharedRef<SWidget> Widget=View==0?StaticCastSharedRef<SWidget>(Panel):View==1?StaticCastSharedRef<SWidget>(Editor):Items;
+            auto* Target=FWidgetRenderer::CreateTargetFor(Size,TF_Bilinear,true);
+            for(int32 Pass=0;Pass<3;++Pass){++GFrameCounter;Renderer.DrawWidget(Target,Widget,Size,.016f);FlushRenderingCommands();}
+            const auto Tabs=FindTabs(Widget,View==2?TEXT("ItemToolsTab"):TEXT("UCMTab"));
+            for(const auto& Tab:Tabs)
+            {
+                const auto& G=Tab->GetCachedGeometry();const auto At=Widget->GetCachedGeometry().AbsoluteToLocal(G.GetAbsolutePosition());
+                TestTrue(TEXT("Navigation tabs fit narrow and wide plugin windows"),At.X>=0&&At.X+G.GetLocalSize().X<=Width+1&&G.GetLocalSize().Y>=24);
+                TestTrue(TEXT("Native tab labels stay on a single line"),G.GetLocalSize().Y<=40);
+            }
+            TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);TArray64<uint8> PNG;
+            FImageUtils::PNGCompressImageArray(Width,760,Pixels,PNG);
+            FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/FString::Printf(TEXT("PluginTabs-%s-%d.png"),View==0?TEXT("UCM"):View==1?TEXT("LootEditor"):TEXT("ItemTools"),Width)));
+            Target->ReleaseResource();
+        }
+    }
     return true;
 }
 }

@@ -8,7 +8,9 @@ class FACEDungeonMapContours
 {
 public:
     struct FEdge { FVector A,B; };
+    struct FTriangle { FVector A,B,C; };
     TArray<FEdge> Lines;
+    TArray<FTriangle> Triangles;
     int32 InputEdgeCount() const { return Edges.Num(); }
     bool IsComplete() const { return NextEdge==Edges.Num(); }
     void AddPolygon(const TArray<FVector>& P)
@@ -18,6 +20,10 @@ public:
         if(N.IsNearlyZero())return;
         if(N.Z>.35)
         {
+            // Collision BSP faces are convex. Triangulate each actual floor,
+            // never its contour hull, so pits and gaps remain unfilled.
+            for(int32 I=2;I<P.Num();++I)
+                if(!FVector::CrossProduct(P[I-1]-P[0],P[I]-P[0]).IsNearlyZero())Triangles.Add({P[0],P[I-1],P[I]});
             for(int32 I=0;I<P.Num();++I)
             {
                 const FEdge E{P[I],P[(I+1)%P.Num()]};if(E.A.Equals(E.B,.001))continue;

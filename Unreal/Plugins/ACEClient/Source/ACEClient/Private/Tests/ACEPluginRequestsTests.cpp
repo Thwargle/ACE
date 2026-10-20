@@ -1162,6 +1162,26 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
         Ack(0x001D);TestTrue(TEXT("Unrelated rejected manual use cannot drain a successful buff acknowledgment"),H->ConfirmedBuffAckAt&&H->DeferredBuffIntent.IsValid());
         Ack(0);H->NextMaintenanceAt=FPlatformTime::Seconds()+60;H->Tick(.016f);
         TestTrue(TEXT("Deferred intent runs exactly after acknowledgment"),!H->DeferredBuffIntent&&H->Notice==TEXT("Buff pipeline complete"));
+        // Missing trailing UseDone must not silently discard the policy's next
+        // action after it has already advanced its own state machine.
+        for(bool ForceDone:{false,true})
+        {
+            P->NextAction=0;H->Execute(*P,Intent(Focus));Result(Focus);
+            auto Queued=MakeShared<FJsonObject>(*FinishNotice);
+            if(ForceDone)
+            {
+                H->ForceBuffRequest=1234;H->bForceBuffOnly=false;
+                Queued->SetStringField(TEXT("action"),TEXT("force_buff_done"));Queued->SetNumberField(TEXT("request"),1234);
+            }
+            H->Execute(*P,Queued);H->Notice.Empty();
+            TestTrue(TEXT("Status identifies missing final buff acknowledgment"),H->UCMCurrentStatus().Contains(TEXT("final buff acknowledgment")));
+            H->ConfirmedBuffAckAt=FPlatformTime::Seconds()-31;H->UpdateBuffDispatch();
+            TestTrue(TEXT("Ack timeout preserves queued action for revalidation"),H->DeferredBuffIntent.IsValid());
+            H->Tick(.016f);
+            TestFalse(TEXT("Queued action is consumed after timeout without restarting"),H->DeferredBuffIntent.IsValid());
+            if(ForceDone)TestEqual(TEXT("Timed-out final ack cannot restart a completed Force Buff cycle"),H->ForceBuffRequest,uint32(0));
+            else TestEqual(TEXT("Queued action survives missing ack"),H->Notice,FString(TEXT("Buff pipeline complete")));
+        }
         // When queue support accepts a second buff, even an early second result
         // cannot create two acknowledgment debts or complete an unrelated action.
         P->NextAction=0;H->Execute(*P,Intent(Focus));Result(Focus);H->Execute(*P,Intent(Self));
@@ -1516,11 +1536,57 @@ bool FACEPluginRequestsTest::RunTest(const FString&)
     {
         P->Running=true;const auto OriginalVM=P->VM;
         H->PendingSpell=123;H->PendingSpellOwner=P->Id;H->PendingSpellActivity=Activity;H->PendingSpellAt=FPlatformTime::Seconds()-31;
+        const uint32 BeforeSerial=H->ActionSerial;
+        H->FastCastOwner=P->Id;H->FastCastStarted=true;
         H->CheckPendingSpellTimeout();
         TestTrue(TEXT("Cast timeout retains running UCM and its policy"),P->Running&&P->VM==OriginalVM);
         TestEqual(TEXT("Timed-out cast no longer blocks decisions"),H->PendingSpell,0);
+        TestEqual(TEXT("Policy observes a completed failed attempt after timeout"),H->ActionSerial,BeforeSerial+1);
+        TestFalse(TEXT("Cast timeout releases fast-cast locomotion"),H->FastCastStarted);
+        TestEqual(TEXT("Cast timeout identifies the spell that ended"),H->LastCompletedSpell,123);
         TestTrue(TEXT("Cast timeout reports its specific activity"),P->ActivityFailure&&P->ActivityFailure->GetStringField(TEXT("activity"))==Activity);
         P->ActivityFailure.Reset();
+    }
+    {
+        const auto OriginalProfile=P->Profile,OriginalLinks=P->ProfileLinks,OriginalBaseline=P->ProfileBaseline;
+        P->Profile=MakeShared<FJsonObject>();P->ProfileLinks.Reset();P->ProfileBaseline.Reset();
+        FACEWorldObject Friend;Friend.Guid=989;Friend.Name=TEXT("Follow friend");Friend.bIsPlayer=true;Friend.bHasPosition=true;
+        Friend.ItemType=ACEItemType::Creature;Friend.Position=Session.PlayerPosition;Session.WorldObjects.Add(Friend.Guid,Friend);
+        C->SelectObject(Friend.Guid);
+        const bool FollowSaved=H->SetUCMFollowSelected(true);
+        TestTrue(*(FString(TEXT("Follow selects another player: "))+H->Notice),FollowSaved);
+        TestTrue(TEXT("Follow enables navigation"),H->IsUCMFollowEnabled());
+        P->Profile->SetBoolField(TEXT("follow_corners"),true);P->Running=true;
+        H->PendingSpell=123;H->PendingSpellOwner=P->Id;H->PendingSpellAt=FPlatformTime::Seconds();
+        for(int32 SampleIndex=0;SampleIndex<3;++SampleIndex)
+        {
+            auto Position=Friend.Position;Position.Location.X+=SampleIndex<2?SampleIndex*5:5;Position.Location.Y+=SampleIndex==2?5:0;
+            H->ObserveFollowPosition(Friend.Guid,Position);
+        }
+        TestEqual(TEXT("Follow records network footsteps during a pending cast"),H->FollowMovementSamples.Num(),3);
+        TestEqual(TEXT("Pending footsteps reach the policy snapshot"),H->Snapshot()->GetArrayField(TEXT("follow_motion")).Num(),3);
+        TestTrue(TEXT("Current status names the pending cast"),H->UCMCurrentStatus().Contains(TEXT("awaiting result")));
+        H->PendingSpell=0;H->PendingSpellOwner.Empty();
+        H->MovementOwner=P->Id;H->MoveExpires=FPlatformTime::Seconds()+10;
+        H->SetUCMFollowSelected(false);
+        TestFalse(TEXT("Stopping follow does not start an old route"),P->Profile->GetBoolField(TEXT("navigation")));
+        TestTrue(TEXT("Stopping follow releases its movement and history"),H->MovementOwner.IsEmpty()&&H->FollowMovementSamples.IsEmpty());
+        Friend.bIsPlayer=false;Session.WorldObjects[Friend.Guid]=Friend;
+        TestFalse(TEXT("Follow rejects selected non-players"),H->SetUCMFollowSelected(true));
+        P->Running=false;P->Status=TEXT("Ready");
+        auto Micro=H->MakeUCMMicroPanel();Micro->SlatePrepass();const FVector2D Before=Micro->GetDesiredSize();
+        P->Status=FString::ChrN(500,TEXT('W'));Micro->Invalidate(EInvalidateWidgetReason::Layout);Micro->SlatePrepass();
+        TestTrue(TEXT("Long live status cannot resize Micro or its drag bar"),Before.Equals(Micro->GetDesiredSize(),.01));
+        P->Status=TEXT("Following: Follow friend");
+        if(FApp::CanEverRender())
+        {
+            FWidgetRenderer Renderer(false,true);auto* Target=FWidgetRenderer::CreateTargetFor(FVector2D(260,650),TF_Bilinear,true);
+            Renderer.DrawWidget(Target,Micro,FVector2D(260,650),.016f);FlushRenderingCommands();
+            TArray<FColor> Pixels;Target->GameThread_GetRenderTargetResource()->ReadPixels(Pixels);
+            TArray64<uint8> PNG;FImageUtils::PNGCompressImageArray(260,650,Pixels,PNG);
+            FFileHelper::SaveArrayToFile(PNG,*(FPaths::ProjectSavedDir()/TEXT("UCMMicroControls.png")));Target->ReleaseResource();
+        }
+        P->Profile=OriginalProfile;P->ProfileLinks=OriginalLinks;P->ProfileBaseline=OriginalBaseline;Session.WorldObjects.Remove(Friend.Guid);
     }
     H->MovementOwner.Empty();Session.PlayerPosition=OutdoorPosition;PC->UnPossess();Pawn->Destroy();PC->Destroy();
     if(FParse::Param(FCommandLine::Get(),TEXT("WaypointRender")))

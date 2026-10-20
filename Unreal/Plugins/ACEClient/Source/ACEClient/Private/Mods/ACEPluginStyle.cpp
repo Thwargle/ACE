@@ -80,6 +80,10 @@ void FACEPluginStyle::InitializeArtwork()
         .SetNormalForeground(Ivory).SetHoveredForeground(FLinearColor(1,.85f,.35f)).SetPressedForeground(Ivory);
     DockButton=Button;
     DockButton.SetNormal(FSlateRoundedBoxBrush(FLinearColor(.008f,.005f,.002f,.9f),0.f,FLinearColor(.4f,.26f,.09f),1.f));
+    Tab=Button;
+    Tab.SetNormal(FSlateRoundedBoxBrush(FLinearColor(.012f,.01f,.007f),0.f,FLinearColor(.24f,.18f,.1f),1.f))
+        .SetHovered(FSlateRoundedBoxBrush(FLinearColor(.055f,.039f,.018f),0.f,FLinearColor(.6f,.43f,.2f),1.f))
+        .SetPressed(FSlateRoundedBoxBrush(FLinearColor(.16f,.095f,.025f),0.f,FLinearColor(.9f,.66f,.25f),1.f));
     Check=FCoreStyle::Get().GetWidgetStyle<FCheckBoxStyle>("Checkbox");
     auto Small=[this](uint32 Id){auto B=*Image(Id);B.ImageSize=FVector2D(14,14);return B;};
     // Keep Slate's distinct states until each retail image is available. Empty
@@ -135,10 +139,40 @@ TSharedPtr<FACEPluginFont> FACEPluginStyle::Typeface(int32 Size)
         Face->Atlas=Resolver->ResolveFontAtlas(Face->Font.ForegroundSurfaceDataID,Face->Tint);
     return Face;
 }
+void SACEPluginTab::Construct(const FArguments& A)
+{
+    Retail=FACEPluginStyle::Current();Selected=A._Selected;
+    TSharedRef<SWidget> Content=A._Content.Widget;
+    if(Content==SNullWidget::NullWidget)
+        Content=SNew(SACEPluginText).Text(A._Text).Justification(ETextJustify::Center)
+            .Font_Lambda([Size=A._FontSize]{return FCoreStyle::GetDefaultFontStyle("Regular",FMath::Clamp(Size.Get(14),10,36));})
+            .ColorAndOpacity(FLinearColor(.96f,.91f,.8f));
+    SButton::Construct(SButton::FArguments().ButtonStyle(&Retail->Tab).IsFocusable(false)
+        .ContentPadding(A._ContentPadding).HAlign(HAlign_Center).VAlign(VAlign_Center).OnClicked(A._OnClicked)[Content]);
+    // Slate tracks this attribute and repaints retained tabs when selection
+    // changes, without polling, reconstructing controls or shifting their size.
+    SetAppearPressed(Selected);
+}
+int32 SACEPluginTab::OnPaint(const FPaintArgs& A,const FGeometry& G,const FSlateRect& Clip,FSlateWindowElementList& Out,int32 Layer,const FWidgetStyle& WidgetStyle,bool Enabled) const
+{
+    const int32 Top=SButton::OnPaint(A,G,Clip,Out,Layer,WidgetStyle,Enabled);
+    if(!IsSelected())return Top;
+    const auto Size=G.GetLocalSize();
+    // Keep an unmistakable shape cue even with untinted retail bitmap fonts,
+    // a hovered sibling, transparent window backgrounds or hidden window chrome.
+    FSlateDrawElement::MakeBox(Out,Top+1,G.ToPaintGeometry(FVector2D(FMath::Max(0.,Size.X-4),3),FSlateLayoutTransform(FVector2D(2,Size.Y-3))),
+        FCoreStyle::Get().GetBrush("WhiteBrush"),ShouldBeEnabled(Enabled)?ESlateDrawEffect::None:ESlateDrawEffect::DisabledEffect,
+        FLinearColor(1,.78f,.3f)*WidgetStyle.GetColorAndOpacityTint());
+    return Top+1;
+}
 void SACEPluginText::Construct(const FArguments& A)
 {
     Retail=FACEPluginStyle::Current();Wrap=A._AutoWrapText;WrapAt=A._WrapTextAt;Justification=A._Justification;
-    STextBlock::Construct(A);SetClipping(EWidgetClipping::ClipToBounds);
+    STextBlock::Construct(A);
+    // Match the bitmap path when a label uses characters absent from the DAT.
+    // Never turn a narrow plugin title, setting or button into stacked fragments.
+    SetWrappingPolicy(ETextWrappingPolicy::DefaultWrapping);
+    SetClipping(EWidgetClipping::ClipToBounds);
 }
 float SACEPluginText::BitmapScale() const
 {
@@ -150,7 +184,13 @@ void SACEPluginText::Layout(float Available) const
     const float Limit=WrapAt.Get(0)>0?WrapAt.Get():Wrap.Get(false)?Available:0;
     const int32 W=Limit>0?FMath::Max(1,FMath::FloorToInt(Limit/BitmapScale())):MAX_int32;
     const FString Text=GetText().ToString();
-    if(Text!=CachedText||W!=CachedWidth){CachedText=Text;CachedWidth=W;Lines=ACEDatText::Layout(Face->Font,Text,W,false);}
+    if(Text!=CachedText||W!=CachedWidth)
+    {
+        CachedText=Text;CachedWidth=W;
+        // Plugin labels wrap at word boundaries. Oversized words retain their
+        // natural width and clip to the widget until the user widens the window.
+        Lines=ACEDatText::Layout(Face->Font,Text,W,false,/*bBreakLongWords=*/false);
+    }
 }
 bool SACEPluginText::CanDrawNative() const
 {
@@ -187,7 +227,13 @@ int32 SACEPluginText::OnPaint(const FPaintArgs& A,const FGeometry& G,const FSlat
     const float Scale=BitmapScale();auto* Atlas=Face->Atlas.Get();const auto& DatFont=Face->Font;
     FSlateBrush B;B.DrawAs=ESlateBrushDrawType::Image;B.SetResourceObject(Atlas);
     const FLinearColor Color=(Face->Tint?GetColorAndOpacity().GetColor(Style):FLinearColor::White)*Style.GetColorAndOpacityTint();
-    const auto Effects=ShouldBeEnabled(Enabled)?ESlateDrawEffect::None:ESlateDrawEffect::DisabledEffect;
+    // Rounding each scaled glyph quad independently can squeeze a thin stem
+    // out of its sample footprint (notably 'l' at 16pt). Preserve fractional
+    // geometry and let the atlas's bilinear sampler retain its coverage.
+    // Native/integer pixel sizes still snap for crisp authored bitmap text.
+    const float RasterScale=Scale*G.GetAccumulatedLayoutTransform().GetScale();
+    const auto Effects=(ShouldBeEnabled(Enabled)?ESlateDrawEffect::None:ESlateDrawEffect::DisabledEffect)
+        | (FMath::IsNearlyEqual(RasterScale,FMath::RoundToFloat(RasterScale),1.e-4f)?ESlateDrawEffect::None:ESlateDrawEffect::NoPixelSnapping);
     E.PushClip(FSlateClippingZone(G.GetLayoutBoundingRect().IntersectionWith(Clip)));
     for(int32 N=0;N<Lines.Num();++N)
     {

@@ -9,6 +9,7 @@
 #include "Protocol/ACEIsaac.h"
 #include "Protocol/ACEBinaryWriter.h"
 #include "Protocol/ACEBinaryReader.h"
+#include "Containers/Queue.h"
 
 class FSocket;
 
@@ -78,9 +79,11 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEDesktopHighlightTest;
 	friend class FACEPluginEquipmentTest;
 	friend class FACEPluginRequestsTest;
+	friend class FACEAppraisalCommandContextTest;
 	friend class FACEUCMLootLatencyTest;
 	friend class FACEPluginLootIconsTest;
     friend class FACEPluginCompanionTest;
+    friend class FACEThirdEyeTest;
     friend class FACEPluginPublicAPITest;
 	friend class FACEItemToolsTest;
     friend class FACEAutoCraftTest;
@@ -123,6 +126,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACERetailInteriorStreamingTest;
 	friend class FACERetailCombatProtocolTest;
 	friend class FACERetailNetworkTest;
+	friend class FACEAttackHeightMotionTest;
 	friend class FACEGroundItemPlacementTest;
 	friend class FACECustomObjectReplicationTest;
 	friend class FACEInitialRestingMotionTest;
@@ -376,8 +380,8 @@ public:
 	/** Client selection and retail health/item-mana subscription. Guid 0 clears. */
 	void SelectObject(int32 ObjectGuid, bool bInventorySelection = false);
 
-	/** GameAction IdentifyObject (0x00C8) — opens appraisal. */
-	void SendIdentifyObject(int32 ObjectGuid);
+	/** Background assessments must not become the user's server-command target. */
+	void SendIdentifyObject(int32 ObjectGuid, bool bBackground = false);
 	void SendSetInscription(int32 ObjectGuid, const FString& Text);
 
 	/** GameAction RaiseAttribute (0x0045) — spend AvailableExperience on a primary attribute. */
@@ -520,6 +524,7 @@ public:
 
 	/** True while a Use / UseWithTarget is outstanding (cleared by UseDone 0x01C7). */
 	bool IsUseBusy() const { return bUseBusy || PendingEquipmentGuid != 0; }
+	int32 GetPendingEquipmentGuid() const { return PendingEquipmentGuid; }
 	bool IsEquipmentSwapPending() const { return PendingEquipmentGuid != 0; }
 	bool IsInventoryTransferPending() const { return !PendingInventoryTransfers.IsEmpty(); }
 	bool IsPendingWorldUse(int32 Guid) const { return bUseBusy && UseSourceGuid == Guid && UseTargetGuid == 0 && PendingEquipmentGuid == 0; }
@@ -944,6 +949,10 @@ private:
 	void ResetReceivedMessages();
 	void RemovePartialMessage(uint64 BlobId);
 	void ExpireEphemeralMessages(double Now);
+	void ReceiveGameMessage(const TArray<uint8>& Message);
+	bool AcceptPropertyStamp(const TArray<uint8>& Message);
+	void QueueReadyGameEvents(int32 Owner);
+	void DispatchReadyGameEvent();
 
 	static uint32 HeaderHash32(uint32 Sequence, EACEPacketHeaderFlags Flags, uint16 Id, uint16 Time, uint16 Size, uint16 Iteration);
 
@@ -957,6 +966,7 @@ private:
 
 	struct FPendingS2CPacket
 	{
+		bool bDispatched = false;
 		EACEPacketHeaderFlags Flags = EACEPacketHeaderFlags::None;
 		TArray<FReceivedFragment> Fragments;
 		double ServerTicks = 0.0;
@@ -1025,7 +1035,22 @@ private:
 	double LastRequestForRetransmitTime = 0.0;
 	TMap<uint32, FCachedC2SPacket> CachedC2SPackets;
 	TMap<uint32, FPendingS2CPacket> OutOfOrderS2CPackets;
-	/** Socket receipt handles transport first; ordered gameplay has its own bounded pass. */
+	TQueue<uint32> PendingS2CDispatch;
+	uint32 LastTimeSyncPacketSequence = 0;
+	/** Packet gaps affect ACK/NAK, not dispatch. Only F7B0 events block on their own stamps. */
+	struct FOrderedGameEvents
+	{
+		uint32 LastStamp = 0;
+		bool bReceivedFirst = false;
+		bool bReadyQueued = false;
+		TMap<uint32, TArray<uint8>> Pending;
+	};
+	TMap<int32, FOrderedGameEvents> OrderedGameEvents;
+	TQueue<int32> ReadyGameEventOwners;
+	int32 PendingGameEventBytes = 0;
+	int32 PendingGameEventCount = 0;
+	TMap<int32, TMap<uint64, uint8>> PropertyStamps;
+	/** Socket receipt handles transport first; gameplay has its own bounded pass. */
 	bool bDeferOrderedDispatch = false;
 	double LastNetworkReceiveMs = 0.0;
 	double LastNetworkDispatchMs = 0.0;
@@ -1063,6 +1088,9 @@ private:
 	FACEPosition PlayerPosition;
 	FACEPlayerVitals PlayerVitals;
 	FACESelectedObject SelectedObject;
+	int32 ManualAppraisalGuid = 0;
+	bool bBackgroundAppraisalContext = false;
+	void RestoreManualAppraisalContext();
 	int32 SelectedManaQueryGuid = 0;
 	friend class FACESelectionManaTest;
 	int32 PreviousSelectedObjectGuid = 0;

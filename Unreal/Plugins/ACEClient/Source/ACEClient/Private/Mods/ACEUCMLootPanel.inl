@@ -90,9 +90,23 @@ void DiscardLootRule()
 {
     LootDraft.Reset();ConditionDraft.Reset();ConditionIndex=INDEX_NONE;Rebuild();
 }
+void LootTabs()
+{
+    auto Menu=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
+    const TCHAR* Names[]={TEXT("Rules"),TEXT("Salvage combination"),TEXT("Open / save profile"),TEXT("Looting settings")};
+    for(int32 I=0;I<4;++I)
+        Menu->AddSlot()[SNew(SACEPluginTab).Tag(TEXT("UCMLootTab")).Text(FText::FromString(Names[I])).ContentPadding(FMargin(8,5))
+            .Selected_Lambda([this,I](){return I==(EditingSalvage?1:ShowLootFiles?2:ShowLootOptions?3:0);})
+            .OnClicked_Lambda([this,I](){
+                if(I==(EditingSalvage?1:ShowLootFiles?2:ShowLootOptions?3:0))return FReply::Handled();
+                if(!CanLeaveLootRule())return FReply::Handled();
+                if(EditingSalvage)SalvageDraft.Reset();
+                EditingSalvage=I==1;ShowLootFiles=I==2;ShowLootOptions=I==3;Rebuild();return FReply::Handled();})];
+    Add(Menu);
+}
 void LootPanel()
 {
-    if(EditingSalvage){SalvagePanel();return;}
+    if(EditingSalvage){LootTabs();SalvagePanel();return;}
     if(LootHasSource&&LootSourceProfile.Pin()!=P())
     {LootDraft.Reset();ConditionDraft.Reset();LootEditIndex=INDEX_NONE;ConditionIndex=INDEX_NONE;LootPage=0;LootRuleScroll.Reset();}
     LootSourceProfile=P();LootHasSource=true;
@@ -107,11 +121,7 @@ void LootPanel()
     if(Name.IsEmpty())Name=!Source.IsEmpty()?FPaths::GetCleanFilename(Source):Saved;
     if(Name.IsEmpty())Name=Rules.IsEmpty()?TEXT("No loot profile"):TEXT("Custom rules in ")+Host->UCMSectionName(TEXT("Loot"));
     Add(Text(TEXT("Active: ")+Name+(Bool(P(),TEXT("loot_modified"))?TEXT(" (edited)"):TEXT("")),16,Accent));
-    auto Menu=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
-    Menu->AddSlot()[LootTool(TEXT("Rules"),[this](){ShowLootOptions=false;ShowLootFiles=false;Rebuild();})];
-    Menu->AddSlot()[LootTool(TEXT("Salvage combination"),[this](){if(!CanLeaveLootRule())return;EditingSalvage=true;Rebuild();})];
-    Menu->AddSlot()[LootTool(TEXT("Open / save profile"),[this](){if(!CanLeaveLootRule())return;ShowLootFiles=!ShowLootFiles;ShowLootOptions=false;Rebuild();})];
-    Menu->AddSlot()[LootTool(TEXT("Looting settings"),[this](){if(!CanLeaveLootRule())return;ShowLootOptions=!ShowLootOptions;ShowLootFiles=false;Rebuild();})];Add(Menu);
+    LootTabs();
     if(ShowLootFiles){LootProfileFiles();return;}
     if(ShowLootOptions){LootSettings();return;}
     Add(Text(TEXT("Rules run from top to bottom. The first match decides what to do with an item."),14,Muted));

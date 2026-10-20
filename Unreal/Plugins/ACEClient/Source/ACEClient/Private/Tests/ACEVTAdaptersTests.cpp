@@ -316,6 +316,35 @@ bool FACEVTAdaptersTest::RunTest(const FString&)
         // JSON values are copied into Lua each tick; previous observations stay immutable.
         Snap->GetArrayField(TEXT("route_objects"))[0]->AsObject()->SetNumberField(TEXT("y"),10);Follow.Step(Snap,Profile,Intent,Error);
         if(Intent){TestEqual(TEXT("Follow goes to observed corner before cutting diagonally"),Intent->GetNumberField(TEXT("x")),10.);TestEqual(TEXT("Old corner remains queued"),Intent->GetNumberField(TEXT("y")),0.);}
+        auto Leader=Snap->GetArrayField(TEXT("route_objects"))[0]->AsObject();
+        Leader->SetNumberField(TEXT("x"),0);Leader->SetNumberField(TEXT("y"),1);Leader->SetNumberField(TEXT("distance"),1);
+        TestTrue(*Error,Follow.Step(Snap,Profile,Intent,Error));
+        TestEqual(TEXT("Nearby leader across a wall cannot skip the first corner"),Intent->GetNumberField(TEXT("x")),10.);
+        TestEqual(TEXT("Nearby returning segment cannot replace the oldest footstep"),Intent->GetNumberField(TEXT("y")),0.);
+        Snap->GetObjectField(TEXT("position"))->SetNumberField(TEXT("x"),10);
+        Follow.Step(Snap,Profile,Intent,Error);
+        TestEqual(TEXT("Reaching one corner advances only to the next corner"),Intent->GetNumberField(TEXT("y")),10.);
+        Snap->GetObjectField(TEXT("position"))->SetNumberField(TEXT("y"),10);Leader->SetNumberField(TEXT("distance"),14);
+        Follow.Step(Snap,Profile,Intent,Error);
+        TestEqual(TEXT("After traversing all corners follow can approach the leader"),Intent->GetNumberField(TEXT("x")),0.);
+        TestEqual(TEXT("Corner movement uses a tight arrival radius"),Intent->GetNumberField(TEXT("arrival_radius")),.15);
+        // While a cast is pending the host collects target position packets,
+        // without copying the entire inventory/spellbook through Lua per packet.
+        FACEPluginVM BusyFollow;BusyFollow.Load(Script,Error);
+        Snap->GetObjectField(TEXT("position"))->SetNumberField(TEXT("x"),0);Snap->GetObjectField(TEXT("position"))->SetNumberField(TEXT("y"),0);
+        Snap->SetNumberField(TEXT("follow_motion_target"),8);
+        Snap->SetArrayField(TEXT("follow_motion"),AdapterJSON(TEXT(R"({"v":[{"cell":2139029505,"x":10,"y":0,"z":12},{"cell":2139029505,"x":10,"y":10,"z":12}]})"))->GetArrayField(TEXT("v")));
+        BusyFollow.Step(Snap,Profile,Intent,Error);
+        TestEqual(TEXT("Buffered observations preserve corners crossed during buffing"),Intent->GetNumberField(TEXT("x")),10.);
+        TestEqual(TEXT("Buffered path starts with its oldest observation"),Intent->GetNumberField(TEXT("y")),0.);
+        Snap->SetArrayField(TEXT("follow_motion"),{});
+        FACEPluginVM Straight;Straight.Load(Script,Error);Leader->SetNumberField(TEXT("y"),0);
+        for(int32 Sample=0;Sample<2000;++Sample)
+        {Leader->SetNumberField(TEXT("x"),10+Sample*.1);TestTrue(*Error,Straight.Step(Snap,Profile,Intent,Error));}
+        TestEqual(TEXT("Straight paths coalesce without exhausting the bounded trail"),Intent->GetStringField(TEXT("action")),FString(TEXT("move")));
+        Profile->SetBoolField(TEXT("follow_corners"),false);
+        Straight.Step(Snap,Profile,Intent,Error);
+        TestEqual(TEXT("Disabling Corners resumes direct following"),Intent->GetNumberField(TEXT("x")),Leader->GetNumberField(TEXT("x")));
     }
     {
         FACEPluginVM RouteDialog;RouteDialog.Load(Script,Error);

@@ -157,6 +157,12 @@
       "section",
       "tabs"
     ],
+    "ui_layout": {
+      "compact": "boolean on rows; all children use natural width; default false",
+      "auto_width": "boolean on row children; natural width instead of equal fill; default false",
+      "wrap": "boolean for control labels; false clips to one line; default true",
+      "panel_snapshot": "panel.width/height: last measured available logical UI size for scroll=false panels; absent before first layout"
+    },
     "services": {
       "profiles": [
         "list",
@@ -193,6 +199,9 @@
       ],
       "chat": [
         "send"
+      ],
+      "notice": [
+        "show"
       ],
       "log": [
         "append",
@@ -655,6 +664,7 @@
       "owned_pet",
       "pack_slots",
       "packs",
+      "panel",
       "player",
       "portal_events",
       "portal_serial",
@@ -696,6 +706,7 @@
       "stop_label": "single-line string; max 40 characters; empty uses Stop",
       "settings": "boolean; show Settings and profiles section; default true",
       "status": "boolean; show native status text; default true",
+      "scroll": "boolean; allow host panel scrolling; default true; false supplies panel width/height for pagination",
       "icon": "PNG filename in plugin images/; max 96 characters; empty uses native emblem",
       "window": {
         "opacity": "number 0..1; background/frame only; foreground controls remain readable",

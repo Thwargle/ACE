@@ -40,10 +40,9 @@ public:
         if(!Plugin)return;
         auto Tabs=SNew(SWrapBox).UseAllottedSize(true).InnerSlotPadding(FVector2D(4,4));
         for(const TCHAR* Name:{TEXT("Give"),TEXT("Buy / Sell"),TEXT("Profiles"),TEXT("Chests"),TEXT("Restock")})
-            Tabs->AddSlot()[SNew(SButton).ButtonStyle(&ButtonStyle()).IsFocusable(false).ContentPadding(FMargin(12,9))
-                .OnClicked_Lambda([this,Name](){Page=Name;Rebuild();Scroll->ScrollToStart();return FReply::Handled();})
-                [SNew(SACEPluginText).Text(FText::FromString(Name)).Font(FCoreStyle::GetDefaultFontStyle("Bold",14))
-                    .ColorAndOpacity_Lambda([this,Name](){return Page==Name?Accent:Muted;})]];
+            Tabs->AddSlot()[SNew(SACEPluginTab).Tag(TEXT("ItemToolsTab")).ContentPadding(FMargin(12,9)).Text(FText::FromString(Name))
+                .Selected_Lambda([this,Name](){return Page==Name;})
+                .OnClicked_Lambda([this,Name](){Page=Name;Rebuild();Scroll->ScrollToStart();return FReply::Handled();})];
         ChildSlot[SNew(SBorder).BorderImage(&FACEPluginStyle::Current()->Background).Padding(16)
             [SNew(SVerticalBox)
             +SVerticalBox::Slot().AutoHeight()[SNew(SHorizontalBox)

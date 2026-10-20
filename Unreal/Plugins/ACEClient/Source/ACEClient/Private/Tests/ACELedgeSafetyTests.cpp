@@ -83,6 +83,27 @@ bool FACELedgeSafetyTest::RunTest(const FString&)
   VR->Head->SetWorldLocationAndRotation(Pawn->GetActorLocation()+FVector(0,0,175-Half)+HeadDelta,ViewDirection);
   PC->PlayerTick(Dt);
  };
+ // Real controller / sweep ceiling contacts use the same restitution as walls.
+ // CPhysicsObj::handle_all_collisions also clears tangential velocity for Inelastic.
+ auto* Ceiling=Box(FVector(0,0,Half*2+100),FVector(200,200,10));
+ for(bool Tracked:{false,true})for(bool Inelastic:{false,true})for(float Elasticity:{0.f,.1f})
+ {
+  Place(Origin+FVector(0,0,60),Tracked);
+  auto& PhysicsSelf=Session->WorldObjects[Self.Guid];PhysicsSelf.Elasticity=Elasticity;
+  PhysicsSelf.PhysicsState=ACEPhysicsState::Gravity|(Inelastic?ACEPhysicsState::Inelastic:0);
+  PC->bJumpAirborne=true;PC->JumpWorldAceVelocity=FVector(1,0,5);PC->JumpAirborneSeconds=0;
+  for(int32 I=0;I<12 && PC->JumpWorldAceVelocity.Z>0;++I)Tick(1.f/60);
+  TestTrue(TEXT("Ceiling contact occurs before the natural jump apex"),PC->JumpAirborneSeconds<.2f);
+  TestTrue(TEXT("Ceiling contact stays airborne"),PC->bJumpAirborne);
+  if(Inelastic)TestTrue(TEXT("Inelastic ceiling clears every velocity component"),PC->JumpWorldAceVelocity.IsNearlyZero(.001));
+  else
+  {
+   TestTrue(TEXT("Ceiling preserves tangential velocity"),FMath::IsNearlyEqual(PC->JumpWorldAceVelocity.X,1.,.001));
+   TestTrue(TEXT("Ceiling uses server elasticity instead of deleting upward velocity"),
+    Elasticity>0 ? PC->JumpWorldAceVelocity.Z<-.1 : FMath::IsNearlyZero(PC->JumpWorldAceVelocity.Z,.001));
+  }
+ }
+ Ceiling->Destroy();Session->WorldObjects[Self.Guid].PhysicsState=0;Session->WorldObjects[Self.Guid].Elasticity=.05f;
  // Flat and sloping platforms end in a true drop, with no lower tread.
  for(float Pitch:{0.f,25.f,-25.f})for(bool Tracked:{false,true})for(bool Run:{false,true})for(float Dt:{1.f/90,1.f/15})
  {

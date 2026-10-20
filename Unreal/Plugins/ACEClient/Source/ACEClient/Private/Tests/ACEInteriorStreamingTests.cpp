@@ -1507,12 +1507,28 @@ bool FACERetailParticleTimingTest::RunTest(const FString& Parameters)
     Second.StartTime=2; Second.Entries={Entry(0,3),Entry(1,4)};
     FX->ActiveScripts={First,Second};
     FX->TickScripts(1.f);
-    TestEqual(TEXT("First script advances without overlapping next buff"),FX->Omega.Z,30.0);
+    TestEqual(TEXT("First script advances without overlapping next buff"),FX->Omega.Z,-30.0);
     FX->TickScripts(1.1f);
-    TestEqual(TEXT("Tail first hook follows head last hook across a hitch"),FX->Omega.Z,90.0);
+    TestEqual(TEXT("Tail first hook follows head last hook across a hitch"),FX->Omega.Z,-90.0);
     FX->TickScripts(1.f);
-    TestEqual(TEXT("Second script reaches its final hook"),FX->Omega.Z,120.0);
+    TestEqual(TEXT("Second script reaches its final hook"),FX->Omega.Z,-120.0);
     TestEqual(TEXT("Finished FIFO drains"),FX->ActiveScripts.Num(),0);
+
+    // Frame::grotate premultiplies one axis-angle quaternion. Independent
+    // AC-space expectations catch swapped axes, handedness and Euler drift.
+    for(const FVector Axis : {FVector(1,0,0),FVector(0,1,0),FVector(0,0,1),FVector(1,2,3)})
+    for(int32 FPS : {30,60,144})
+    {
+        const FQuat Start(FVector(1,1,0).GetSafeNormal(),.37);
+        Owner->SetActorRotation(FACEPosition::AceQuatToUnreal(Start));
+        FACEDatAnimationHook OmegaHook;OmegaHook.Type=EACEAnimationHookType::SetOmega;
+        OmegaHook.Vector=FVector3f(Axis/30.);
+        FX->DispatchAnimationHook(OmegaHook);
+        for(int32 Frame=0;Frame<FPS;++Frame) FX->ApplyRootOmegaRotation(1.f/FPS);
+        const FQuat Expected=FACEPosition::AceQuatToUnreal(FQuat(Axis.GetSafeNormal(),Axis.Size())*Start);
+        TestTrue(TEXT("Script rotation matches retail quaternion on every axis and frame rate"),Owner->GetActorQuat().Equals(Expected,.00001));
+    }
+    FX->Omega=FVector::ZeroVector;Owner->SetActorRotation(FQuat::Identity);
     FX->StopAllEffects();
     Object.bIsPlayer=true; Object.PhysicsEffectTableId=0x34000004;
     FX->InitializeFromObject(Object,100); FX->NotifyAppearanceReady();

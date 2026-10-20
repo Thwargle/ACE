@@ -1,4 +1,5 @@
 #include "ACECharacterAppearanceComponent.h"
+#include "ACEAttackMotion.h"
 #include "ACEProfiling.h"
 #include "ACELoadingScreenActor.h"
 #include "ACERegionSceneryActor.h"
@@ -368,7 +369,7 @@ void UACECharacterAppearanceComponent::TickObjectAnimFrame(float DeltaTime)
 	FVector OmegaUe = FVector::ZeroVector;
 	if (AACEWorldEntityActor* Entity = Cast<AACEWorldEntityActor>(GetOwner()))
 	{
-		OmegaUe = FACEPosition::AceVectorToUnreal(Entity->GetAcePhysicsOmega(), 1.f);
+		OmegaUe = -FACEPosition::AceVectorToUnreal(Entity->GetAcePhysicsOmega(), 1.f);
 	}
 	else if (AActor* Owner = GetOwner())
 	{
@@ -383,11 +384,7 @@ void UACECharacterAppearanceComponent::TickObjectAnimFrame(float DeltaTime)
 	{
 		return;
 	}
-	const FVector DeltaRad = OmegaUe * DeltaTime;
-	const FQuat DeltaQ(FRotator(
-		FMath::RadiansToDegrees(-DeltaRad.X),
-		FMath::RadiansToDegrees(DeltaRad.Z),
-		FMath::RadiansToDegrees(-DeltaRad.Y)));
+	const FQuat DeltaQ(OmegaUe.GetSafeNormal(), OmegaUe.Size() * DeltaTime);
 	ObjectAnimFrame.SetRotation((DeltaQ * ObjectAnimFrame.GetRotation()).GetNormalized());
 }
 
@@ -1282,6 +1279,12 @@ void UACECharacterAppearanceComponent::SetPreferredStyle(int32 Style)
 
 void UACECharacterAppearanceComponent::BeginPoseBlendFromCurrent(float Duration)
 {
+	if (Duration <= 0.f)
+	{
+		StanceBlendFrom.Reset();
+		StanceBlendAlpha = 1.f;
+		return;
+	}
 	PoseBlendDuration = FMath::Max(.001f, Duration);
 	StanceBlendFrom.SetNum(PartMeshes.Num());
 	for (int32 i = 0; i < PartMeshes.Num(); ++i)
@@ -1392,6 +1395,14 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	}
 	const bool bFromEmote = AnimMode == EACEAnimMode::ActionOneShot && ACEIsEmoteSubstate(ActionCommand)
 		&& !(bNewAction && ActionCommand == Cmd);
+	if (bNewAction && AnimMode == EACEAnimMode::ActionOneShot && !bHoldActionFinal
+		&& ACEAttackMotion::IsAction(ActionCommand) && ACEAttackMotion::IsAction(Cmd))
+	{
+		// CMotionTable::GetObjectSequence appends actions before the cyclic
+		// tail. Changing height or hand must not truncate the preceding swing.
+		QueueActionMotion(Cmd, PlayRate, Style, bHoldFinalPose);
+		return;
+	}
 	const bool bFromMissile = AnimMode == EACEAnimMode::ActionOneShot && ACEIsMissileSubstate(ActionCommand)
 		&& (ACEIsMissileSubstate(Cmd) || Cmd == ACEMotion::Ready);
 	if (AnimMode == EACEAnimMode::ActionOneShot && (ActionCommand & 0xFF000000u) == 0x80000000u
@@ -1417,7 +1428,10 @@ void UACECharacterAppearanceComponent::PlayActionMotion(int32 InActionCommand, f
 	bActionUsesStateTransition = bFromEmote || bFromMissile;
 	// Falling already contains retail's takeoff link (~0.2 s). A full stance
 	// cross-fade hid it behind the previous jump's frozen endpoint.
-	BeginPoseBlendFromCurrent(bFromEmote || bFromMissile || ACEIsMissileSubstate(Cmd) || Cmd == 0x40000015u ? .06f : StanceBlendDuration);
+	// Attack links already contain their authored approach and recovery poses.
+	// A wall-clock stance blend flattens the height/arc, especially at fast speeds.
+	BeginPoseBlendFromCurrent(ACEAttackMotion::IsAttack(Cmd) ? 0.f
+		: bFromEmote || bFromMissile || ACEIsMissileSubstate(Cmd) || Cmd == 0x40000015u ? .06f : StanceBlendDuration);
 	AnimMode = EACEAnimMode::ActionOneShot;
 	ActionCommand = Cmd;
 	PendingActionCommands.Reset();
@@ -2238,7 +2252,7 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 				// Start next without wiping the rest of the scarab/cast queue.
 				ActionFromCommand = ACEIsEmoteSubstate(ActionCommand) || ACEIsMissileSubstate(ActionCommand) ? ActionCommand : ACEMotion::Ready;
 				bActionUsesStateTransition = ActionFromCommand != ACEMotion::Ready;
-				BeginPoseBlendFromCurrent(bActionUsesStateTransition ? .06f : StanceBlendDuration);
+				BeginPoseBlendFromCurrent(ACEAttackMotion::IsAttack(Next) ? 0.f : bActionUsesStateTransition ? .06f : StanceBlendDuration);
 				AnimMode = EACEAnimMode::ActionOneShot;
 				ActionCommand = Next;
 				bHoldActionFinal = false;
@@ -2278,7 +2292,7 @@ void UACECharacterAppearanceComponent::TickComponent(float DeltaTime, ELevelTick
 			}
 			else
 			{
-				BeginPoseBlendFromCurrent(bActionUsesStateTransition ? .06f : StanceBlendDuration);
+				BeginPoseBlendFromCurrent(ACEAttackMotion::IsAttack(ActionCommand) ? 0.f : bActionUsesStateTransition ? .06f : StanceBlendDuration);
 				ActionCommand = 0;
 				ActionFromCommand = ACEMotion::Ready;
 				bActionUsesStateTransition = false;

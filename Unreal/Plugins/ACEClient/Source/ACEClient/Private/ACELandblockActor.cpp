@@ -168,7 +168,10 @@ void AACELandblockActor::SetLandEnvCellFloorPriority(bool bEnable, UACEDatSubsys
 	// 22/48 cm depth offset detached contact shadows from correctly grounded feet.
 	// Indoor look-out uses the same physical depth as the exterior view.
 	(void)bIndoorLookOut;
-	const float Bias = bEnable ? 0.25f : 0.f;
+	// Room geometry already recedes by .0025 AC units behind coplanar
+	// furniture. Terrain must sit behind BOTH layers; giving it that same
+	// offset caused mansion floors authored at terrain height to fight again.
+	const float Bias = bEnable ? WorldScale * 0.005f : 0.f;
 	const int32 Num = TerrainMesh->GetNumSections();
 	if (AppliedLandDepthBias == Bias && AppliedLandDepthBiasSections == Num)
 	{

@@ -1,6 +1,8 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "Mods/ACELedger.h"
+#include "Mods/ACEWaypoint.h"
+#include "Misc/ScopeExit.h"
 #include "ACEClientSubsystem.h"
 #include "ACEDatSubsystem.h"
 #include "ACESession.h"
@@ -73,6 +75,20 @@ bool FACELedgerTest::RunTest(const FString&)
     auto* Manager=GI->GetSubsystem<UACEClientSubsystem>()->GetUIElementManager();Manager->SetUiLocked(false);
     H->StorageRoot=FPaths::ProjectSavedDir()/TEXT("Automation/Ledgers");H->Settings=MakeShared<FJsonObject>();
     const auto Session=GI->GetSubsystem<UACEClientSubsystem>()->GetSession();
+    {
+        auto P=H->Find(TEXT("ucm"));const bool WasEnabled=P->Enabled;P->Enabled=true;
+        ON_SCOPE_EXIT{P->Enabled=WasEnabled;};
+        auto Json=[](const TCHAR* Text){TSharedPtr<FJsonObject> Result;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Text),Result);return Result;};
+        const auto OldState=Session->State;const auto OldProfile=P->Profile;const auto OldRuntime=H->RuntimeRoute;const int32 OldPoint=H->RoutePoint;
+        ON_SCOPE_EXIT{Session->State=OldState;P->Profile=OldProfile;H->RuntimeRoute=OldRuntime;H->RoutePoint=OldPoint;};
+        P->Profile=Json(TEXT(R"({"route_preview":false,"route":[{"cell":21168385,"x":10,"y":10,"z":0}]})"));
+        TestTrue(TEXT("Map route is hidden while logged out"),H->GetWaypointMapRoute(true).IsEmpty());
+        Session->State=EACESessionState::InWorld;FACEPosition Position;Position.CellId=0x01430171;Session->SetLocalPosition(Position);
+        TestEqual(TEXT("Map route is independent of world route preview"),H->GetWaypointMapRoute(true).Num(),1);
+        H->RuntimeRoute=Json(TEXT(R"({"route":[{"cell":21168385,"x":20,"y":10,"z":0},{"cell":21168386,"x":30,"y":10,"z":0}]})"));H->RoutePoint=2;
+        const auto MapRoute=H->GetWaypointMapRoute(true);
+        TestTrue(TEXT("Map uses active runtime route and current waypoint instead of the saved profile"),MapRoute.Num()==2&&MapRoute[0].Position.Location.X==20&&MapRoute[1].Current);
+    }
     // Exercise the real packet -> session -> subsystem -> ledger path, including
     // luminance-only updates (no XP notification and no UI/ticker refresh).
     auto LoginLedger=[&](int32 Player,TOptional<int64> Balance,int64 Capacity=1500)
@@ -368,6 +384,12 @@ bool FACELedgerTest::RunTest(const FString&)
         TestFalse(TEXT("Removing and adding supplies retains global names preference"),H->AreSupplyNamesVisible());
         H->SetWaypointMapZoom(true,false,12.);H->SetWaypointMapZoom(true,true,4.5);
         H->SetWaypointMapZoom(false,false,2.);H->SetWaypointMapZoom(false,true,6.);
+        H->SetWaypointOption(TEXT("fill_dungeon"),true);H->SetWaypointOption(TEXT("show_route"),false);
+        const auto Waypoint=H->Find(TEXT("waypoint"));const FString WaypointProfile=Waypoint->ProfileName;
+        Waypoint->Profile=MakeShared<FJsonObject>();
+        TestTrue(TEXT("Map profile reload succeeds"),H->LoadProfile(TEXT("waypoint"),WaypointProfile));
+        TestTrue(TEXT("Walkable fill survives profile reload"),H->WaypointOption(TEXT("fill_dungeon"),false));
+        TestFalse(TEXT("Route visibility survives profile reload"),H->WaypointOption(TEXT("show_route"),true));
         Dock->SaveOverlayLayout();const auto SavedPosition=Dock->Windows[TEXT("supplyledger")].Position;
         FString AppearanceSaved;FFileHelper::LoadFileToString(AppearanceSaved,*(H->StorageRoot/TEXT("settings.json")));
         TSharedPtr<FJsonObject> Restored;FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(AppearanceSaved),Restored);H->Settings=Restored;

@@ -820,6 +820,18 @@ void UACEUIGameplayBinder::TickRefresh(bool bRefreshDesktopHUD)
 void UACEUIGameplayBinder::OnElementActivated(TSharedPtr<FACEUIElement> Element)
 {
 	if (HandleHouseControl(Element)) return;
+	if (OpenLootContainerGuid && Element && (Element->ElementName == TEXT("ScrollBar_Left") || Element->ElementName == TEXT("ScrollBar_Right")))
+	{
+		for (auto Parent = Element->Parent.Pin(); Parent; Parent = Parent->Parent.Pin())
+		{
+			if (Parent->ElementName == TEXT("Ext_ItemListScroll"))
+			{
+				ExtItemScrollOffset += Element->ElementName == TEXT("ScrollBar_Left") ? -1 : 1;
+				RefreshExternalContainerOverlays();
+				return;
+			}
+		}
+	}
 	if(OpenSalvageToolGuid && Element && (Element->ElementName==TEXT("ScrollBar_Left") || Element->ElementName==TEXT("ScrollBar_Right")))
 		for(auto Parent=Element->Parent.Pin();Parent;Parent=Parent->Parent.Pin())
 			if(Parent->ElementName==TEXT("Salvage_ItemListScroll"))
@@ -2892,6 +2904,7 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 	}
 
 	const double Now = FPlatformTime::Seconds();
+	const bool AdvancedCombat = Client && Client->IsCharacterOptionSet(0x0C);
 	if (Client && Client->GetSession())
 	{
 		const auto Session = Client->GetSession();
@@ -2918,11 +2931,11 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 				CombatPowerBuildStartTime = Now;
 				// Hold the requested mark through the swing and refill on AttackDone.
 				CombatPowerOrAccuracy = Session->IsServerAttackInProgress() && !bCombatAttackRequestPending
-					? RequestedAttackPower : 0.f;
+					? (AdvancedCombat ? LastCombatAttackPower : RequestedAttackPower) : 0.f;
 			}
 			// ClientCombatSystem::HandleAttackDone only replaces a server repeat when
 			// the desired slider power changed. Sending every second restarted melee turns.
-			if (!bCombatMovementBlocked && IsCombatPoseReady() && bCombatPowerCharging && bCombatRepeatActive && !bCombatAttackRequestPending
+			if (!AdvancedCombat && !bCombatMovementBlocked && IsCombatPoseReady() && bCombatPowerCharging && bCombatRepeatActive && !bCombatAttackRequestPending
 				&& !FMath::IsNearlyEqual(LastCombatAttackPower, RequestedAttackPower, .01f))
 			{
 				CombatPowerOrAccuracy = RequestedAttackPower;
@@ -2962,7 +2975,7 @@ void UACEUIGameplayBinder::TickCombatAutoAttack(float /*DeltaSeconds*/)
 	CombatPowerOrAccuracy = FMath::Clamp(static_cast<float>(Now-CombatPowerBuildStartTime)
 		/ FMath::Max(.05f,T),0.f,1.f);
 	if (!bCombatAttackRequestPending && bCombatRepeatActive)
-		CombatPowerOrAccuracy = FMath::Min(CombatPowerOrAccuracy, RequestedAttackPower);
+		CombatPowerOrAccuracy = FMath::Min(CombatPowerOrAccuracy, AdvancedCombat ? LastCombatAttackPower : RequestedAttackPower);
 	if (bCombatAttackRequestPending && !bCombatAttackHeld
 		&& (!Client || !Client->GetSession() || !Client->GetSession()->IsServerAttackInProgress())
 		&& CombatPowerOrAccuracy >= ReleasedAttackPower - KINDA_SMALL_NUMBER)
@@ -3027,11 +3040,12 @@ void UACEUIGameplayBinder::ReleaseCombatPowerCharge()
 		bCombatAttackHeld = bCombatAttackRequestPending = bCombatPowerCharging = false;
 		return;
 	}
-	// ClientCombatSystem::EndAttackRequest: a quick click builds to the
-	// requested mark; holding beyond it uses the actual charged power.
+	// ClientCombatSystem::EndAttackRequest: AdvancedCombatUI uses the actual
+	// charge on release. Normal mode builds to at least the slider's mark.
 	const float Charged = FMath::Clamp(float(FPlatformTime::Seconds() - CombatPowerBuildStartTime)
 		/ GetCombatPowerChargeDuration(), 0.f, 1.f);
-	ReleasedAttackPower = FMath::Max(RequestedAttackPower, Charged);
+	ReleasedAttackPower = Client && Client->IsCharacterOptionSet(0x0C)
+		? Charged : FMath::Max(RequestedAttackPower, Charged);
 	bCombatAttackHeld = false;
 }
 
@@ -13527,13 +13541,7 @@ bool UACEUIGameplayBinder::TryBeginScrollbarDrag(FVector2D CanvasLocalPos)
 		TSharedPtr<FACEUIElement> ItemBar = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("Ext_ItemListScroll"));
 		TSharedPtr<FACEUIElement> ListEl = Manager->FindElementUnder(TEXT("ExternalContainer"), TEXT("Ext_Container_ItemList"));
 		const int32 PageSize = ListEl.IsValid() ? FMath::Max(1, ListEl->Width / 32) : 12;
-		int32 ItemCount = 0;
-		if (Client)
-		{
-			ItemCount = Client->GetPackItems(OpenLootSelectedPackGuid != 0
-				? OpenLootSelectedPackGuid : OpenLootContainerGuid).Num();
-		}
-		if (TryBar(ItemBar, EACEUIScrollTarget::ExtItems, FMath::Max(0, ItemCount - PageSize), true))
+		if (TryBar(ItemBar, EACEUIScrollTarget::ExtItems, FMath::Max(0, GetExternalContainerItemCapacity() - PageSize), true))
 		{
 			return true;
 		}
@@ -14399,7 +14407,7 @@ void UACEUIGameplayBinder::RefreshVendorFilterDropdown()
 		VendorFilterDropdownBg->SetPadding(FMargin(0.f));
 		FSlateBrush Brush;
 		Brush.DrawAs = ESlateBrushDrawType::Box;
-		Brush.TintColor = FSlateColor(FLinearColor(0.08f, 0.07f, 0.05f, 0.94f));
+		Brush.TintColor = FSlateColor(FLinearColor::Black);
 		VendorFilterDropdownBg->SetBrush(Brush);
 		Canvas->GetElementLayer()->AddChild(VendorFilterDropdownBg);
 	}
@@ -14425,8 +14433,6 @@ void UACEUIGameplayBinder::RefreshVendorFilterDropdown()
 	{
 		auto* Row = Canvas->WidgetTree->ConstructWidget<UBorder>();
 		Row->SetPadding(FMargin(0.f));
-		Row->SetBrush(FSlateRoundedBoxBrush(FLinearColor::Transparent, 0.f,
-			FLinearColor(.45f, .32f, .14f, .65f), 1.f));
 		Canvas->GetElementLayer()->AddChild(Row);
 		VendorFilterDropdownRows.Add(Row);
 	}
@@ -14444,12 +14450,27 @@ void UACEUIGameplayBinder::RefreshVendorFilterDropdown()
 		UTextBlock* L = VendorFilterDropdownLabels[i];
 		const int32 FilterId = VendorVisibleFilterIndices.IsValidIndex(i)
 			? VendorVisibleFilterIndices[i] : i;
+		// Menu_Vendor_PopupItem (0x21000043): green normal/selected retail art.
+		// Keep the native one-pixel row border when the menu is stretched.
+		if (auto* Resolver = Canvas->GetResourceResolver())
+		{
+			if (auto* Texture = Resolver->ResolveTexture(FilterId == VendorItemTypeFilter ? 0x060012B4 : 0x060012B3))
+			{
+				FSlateBrush Brush;
+				Brush.SetResourceObject(Texture);
+				Brush.ImageSize = FVector2D(Texture->GetSizeX(), Texture->GetSizeY());
+				Brush.DrawAs = ESlateBrushDrawType::Box;
+				Brush.Margin = FMargin(1.f / Texture->GetSizeX(), 1.f / Texture->GetSizeY());
+				Row->SetBrush(Brush);
+				Row->SetBrushColor(FLinearColor::White);
+			}
+		}
 		const int32 Prev = VendorItemTypeFilter;
 		VendorItemTypeFilter = FilterId;
 		const FString Label = VendorFilterLabel();
 		VendorItemTypeFilter = Prev;
 		L->SetText(FText::FromString(Label));
-		L->SetColorAndOpacity(FSlateColor(FilterId == VendorItemTypeFilter ? TextGold : TextWhite));
+		L->SetColorAndOpacity(FSlateColor(FilterId == VendorItemTypeFilter ? TextWhite : FLinearColor::FromSRGBColor(FColor(204,204,204))));
 		L->SetVisibility(ESlateVisibility::HitTestInvisible);
 		if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(L->Slot))
 		{
@@ -15027,6 +15048,20 @@ void UACEUIGameplayBinder::HandleCharacterTitlesChanged()
 	RefreshTitleOverlays();
 }
 
+int32 UACEUIGameplayBinder::GetExternalContainerItemCapacity() const
+{
+	if (!Client || !OpenLootContainerGuid) return 1;
+	const int32 Container = OpenLootSelectedPackGuid ? OpenLootSelectedPackGuid : OpenLootContainerGuid;
+	FACEWorldObject Object;
+	Client->GetWorldObject(Container, Object);
+	// Drawing and input must include the same empty slots, not just owned items.
+	if (Object.ItemsCapacity > 0) return FMath::Clamp(Object.ItemsCapacity, 1, 120);
+	TArray<FACEWorldObject> Items = Client->GetPackItems(Container);
+	if (Container == OpenLootContainerGuid)
+		Items.RemoveAll([](const FACEWorldObject& Item) { return (Item.ItemType & ACEItemType::Container) != 0; });
+	return FMath::Clamp(Items.Num(), 1, 120);
+}
+
 void UACEUIGameplayBinder::SyncExternalContainerScrollbars()
 {
 	if (!Manager || OpenLootContainerGuid == 0)
@@ -15062,12 +15097,7 @@ void UACEUIGameplayBinder::SyncExternalContainerScrollbars()
 		return;
 	}
 	const int32 PageSize = FMath::Max(1, ListEl->Width / 32);
-	const int32 ContGuid = OpenLootSelectedPackGuid != 0 ? OpenLootSelectedPackGuid : OpenLootContainerGuid;
-	FACEWorldObject ContObj;
-	if (Client) { Client->GetWorldObject(ContGuid, ContObj); }
-	int32 Capacity = ContObj.ItemsCapacity > 0 ? ContObj.ItemsCapacity : 0;
-	const int32 Count = Client ? Client->GetPackItems(ContGuid).Num() : 0;
-	if (Capacity <= 0) { Capacity = FMath::Max(Count, PageSize); }
+	const int32 Capacity = GetExternalContainerItemCapacity();
 	const int32 MaxOff = FMath::Max(0, Capacity - PageSize);
 	ExtItemScrollOffset = FMath::Clamp(ExtItemScrollOffset, 0, MaxOff);
 	const float Frac = MaxOff > 0
@@ -15229,14 +15259,7 @@ void UACEUIGameplayBinder::RefreshExternalContainerOverlays()
 			return (O.ItemType & ACEItemType::Container) != 0;
 		});
 	}
-	FACEWorldObject ContObj;
-	Client->GetWorldObject(ContGuid, ContObj);
-	int32 Capacity = ContObj.ItemsCapacity;
-	if (Capacity <= 0)
-	{
-		Capacity = FMath::Max(Items.Num(), 1);
-	}
-	Capacity = FMath::Clamp(Capacity, 1, 120);
+	const int32 Capacity = GetExternalContainerItemCapacity();
 	const int32 PageSize = FMath::Max(1, ItemList->Width / Cell);
 	const int32 MaxOff = FMath::Max(0, Capacity - PageSize);
 	ExtItemScrollOffset = FMath::Clamp(ExtItemScrollOffset, 0, MaxOff);

@@ -185,7 +185,7 @@ bool UACEPluginSubsystem::ExecuteItemTools(FACEClientPlugin& P,const TSharedPtr<
     if(RawAmount<1||RawAmount>100000||FMath::FloorToDouble(RawAmount)!=RawAmount)return Fail(TEXT("Invalid transfer quantity."));
     const int32 Amount=int32(RawAmount);const int32 Vendor=C->GetOpenVendorGuid();
     if(Action==TEXT("it_refresh_chest"))
-    {if(!Nearby()||!Target.IsOpenable())return Fail(TEXT("Chest is no longer available."));Appraisals.Remove(TargetId);Session->SendIdentifyObject(TargetId);P.NextAction=FPlatformTime::Seconds()+1;return true;}
+    {if(!Nearby()||!Target.IsOpenable())return Fail(TEXT("Chest is no longer available."));Appraisals.Remove(TargetId);C->RequestBackgroundAppraisal(TargetId);P.NextAction=FPlatformTime::Seconds()+1;return true;}
     if(Action==TEXT("it_close"))
     {if(C->GetOpenExternalContainerGuid()==TargetId)C->SendNoLongerViewingContents(TargetId);return true;}
     if(Action==TEXT("it_give"))

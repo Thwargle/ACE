@@ -25,6 +25,23 @@ namespace
 	uint64 GEnvStabBudgetFrame = MAX_uint64;
 	double GEnvStabBudgetUsedSec = 0.0;
 	constexpr double GEnvStabGlobalBudgetSec = 0.002;
+	TMap<TWeakObjectPtr<UWorld>, TMap<int32, TWeakObjectPtr<AACEEnvCellActor>>> GEnvCollisionCells;
+	void UnregisterCollisionCell(AACEEnvCellActor* Actor)
+	{
+		const TWeakObjectPtr<UWorld> World(Actor->GetWorld());
+		if (auto* Cells = GEnvCollisionCells.Find(World))
+		{
+			if (Cells->FindRef(Actor->EnvCellId).Get() == Actor) Cells->Remove(Actor->EnvCellId);
+			if (Cells->IsEmpty()) GEnvCollisionCells.Remove(World);
+		}
+	}
+}
+
+bool AACEEnvCellActor::HasActiveCollision(UWorld* World, int32 CellId)
+{
+	const auto* Cells = GEnvCollisionCells.Find(World);
+	const auto* Actor = Cells ? Cells->FindRef(CellId).Get() : nullptr;
+	return Actor && !Actor->IsActorBeingDestroyed() && Actor->bAppliedCollisionActive && Actor->bCollisionCooked;
 }
 
 AACEEnvCellActor::AACEEnvCellActor()
@@ -506,6 +523,7 @@ void AACEEnvCellActor::EnsureStaticObjectsQueued()
 // Retail releases these objects with their owning cell/landblock.
 void AACEEnvCellActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+    UnregisterCollisionCell(this);
     ClearDoorwayLights();
     ClearStaticObjects();
     Super::EndPlay(EndPlayReason);
@@ -513,6 +531,7 @@ void AACEEnvCellActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void AACEEnvCellActor::Destroyed()
 {
+    UnregisterCollisionCell(this);
     ClearDoorwayLights();
     ClearStaticObjects();
     Super::Destroyed();
@@ -768,7 +787,15 @@ void AACEEnvCellActor::QueueStaticObjects(const TArray<FACEDatStab>& StaticObjec
 
 bool AACEEnvCellActor::LoadEnvCell(int32 InEnvCellId, const FVector& LandblockOrigin, float InWorldScale)
 {
+	UnregisterCollisionCell(this);
 	EnvCellId = InEnvCellId;
+	if (!GEnvCollisionCells.Contains(GetWorld()))
+	{
+		// Editor/test worlds can be collected without ever entering BeginPlay.
+		for (auto It = GEnvCollisionCells.CreateIterator(); It; ++It)
+			if (!It.Key().IsValid()) It.RemoveCurrent();
+	}
+	GEnvCollisionCells.FindOrAdd(GetWorld()).Add(EnvCellId, this);
 	WorldScale = InWorldScale;
 	SetLookInDepthBias(0.f);
 

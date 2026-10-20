@@ -80,6 +80,13 @@ void SACEPluginIcon::Construct(const FArguments& Args)
         Line({{9,29},{23,29}},Gold);
         Line({{7,2},{7,10}},Gold);Line({{3,6},{11,6}},Gold);
     }
+    else if(Id==TEXT("thirdeye")) // An open eye beneath a third sight ray.
+    {
+        Line({{2,18},{7,12},{12,9},{20,9},{25,12},{30,18},{25,23},{20,26},{12,26},{7,23},{2,18}},Gold);
+        Line({{16,10},{22,14},{22,21},{16,25},{10,21},{10,14},{16,10}},Teal);
+        Fill({{16,13},{19,17},{16,22},{13,17}},Paper);
+        Line({{16,1},{16,6}},Gold);Line({{6,3},{9,7}},Paper);Line({{26,3},{23,7}},Paper);
+    }
     else if(Id==TEXT("waypoint")) // Trail terminating in a north needle.
     {
         Line({{3,28},{10,28},{10,21},{18,21},{18,14}},Gold);

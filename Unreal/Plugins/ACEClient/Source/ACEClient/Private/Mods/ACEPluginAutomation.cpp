@@ -125,6 +125,7 @@ void UACEPluginSubsystem::UnbindCombatEvents()
         S->OnObjectHealth.Remove(TargetHealthHandle);S->OnMotionUpdate.Remove(TargetMotionHandle);
         S->OnObjectDeleted.Remove(TargetDeletedHandle);S->OnObjectCreated.Remove(TargetCreatedHandle);
         S->OnVitalsUpdated.Remove(CombatVitalsHandle);
+        S->OnPositionUpdate.Remove(FollowPositionHandle);
     }
 }
 void UACEPluginSubsystem::WakeCombatDecision()
@@ -454,6 +455,7 @@ void UACEPluginSubsystem::RefreshAutomationData()
         CombatFeedbackHandle=Session->OnCombatFeedback.AddUObject(this,&UACEPluginSubsystem::ObserveCombatFeedback);
         TargetHealthHandle=Session->OnObjectHealth.AddUObject(this,&UACEPluginSubsystem::ObserveTargetHealth);
         TargetMotionHandle=Session->OnMotionUpdate.AddUObject(this,&UACEPluginSubsystem::ObserveTargetMotion);
+        FollowPositionHandle=Session->OnPositionUpdate.AddUObject(this,&UACEPluginSubsystem::ObserveFollowPosition);
         TargetDeletedHandle=Session->OnObjectDeleted.AddUObject(this,&UACEPluginSubsystem::ObserveTargetDeleted);
         TargetCreatedHandle=Session->OnObjectCreated.AddUObject(this,&UACEPluginSubsystem::ObserveTargetCreated);
         CombatVitalsHandle=Session->OnVitalsUpdated.AddUObject(this,&UACEPluginSubsystem::ObserveCombatVitals);

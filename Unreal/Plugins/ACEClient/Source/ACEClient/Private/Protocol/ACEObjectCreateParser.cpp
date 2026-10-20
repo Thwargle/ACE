@@ -295,7 +295,7 @@ bool FACEObjectCreateParser::ParsePhysicsData(FACEBinaryReader& Reader, FACEDeco
 		Out.Scale = Reader.ReadFloat();
 	}
 	if (Flags & Friction) { if (!Reader.CanRead(4)) return false; Out.Friction = Reader.ReadFloat(); }
-	if (Flags & Elasticity) { if (!Reader.CanRead(4)) return false; Reader.ReadFloat(); }
+	if (Flags & Elasticity) { if (!Reader.CanRead(4)) return false; Out.Elasticity = Reader.ReadFloat(); }
 	if (Flags & Translucency)
 	{
 		if (!Reader.CanRead(4)) return false;
@@ -510,16 +510,16 @@ bool FACEObjectCreateParser::ParseWeenieHeader(FACEBinaryReader& Reader, FACEDec
 		if (!Need(2)) return false;
 		Out.SpellDID = static_cast<int32>(Reader.ReadUInt16());
 	}
-	if (WeenieFlags & HouseOwner) { if (!Need(4)) return false; Reader.ReadUInt32(); }
+	if (WeenieFlags & HouseOwner) { if (!Need(4)) return false; Out.HouseOwnerId = Reader.ReadUInt32(); }
 	if (WeenieFlags & HouseRestrictions) { if (!SkipRestrictionDB(Reader)) return false; }
 	if (WeenieFlags & HookItemTypes)
 	{
 		if (!Need(4)) return false;
-		Reader.ReadUInt32(); // Allowed item mask; even an empty hook retains this descriptor.
+		Out.HookItemTypes = Reader.ReadUInt32();
 		Out.bIsHouseHook = true;
 	}
 	if (WeenieFlags & Monarch) { if (!Need(4)) return false; Out.MonarchGuid = static_cast<int32>(Reader.ReadUInt32()); }
-	if (WeenieFlags & HookType) { if (!Need(2)) return false; Reader.ReadUInt16(); }
+	if (WeenieFlags & HookType) { if (!Need(2)) return false; Out.HookType = Reader.ReadUInt16(); }
 	if (WeenieFlags & IconOverlay) { Out.IconOverlayId = static_cast<int32>(ReadPackedKnown(Reader, 0x06000000)); }
 	if (WeenieFlags2 & IconUnderlay) { Out.IconUnderlayId = static_cast<int32>(ReadPackedKnown(Reader, 0x06000000)); }
 	if (WeenieFlags & MaterialType)

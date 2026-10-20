@@ -125,6 +125,8 @@ public:
 
 	/** True after PhysicsBSP / walkable draw has been cooked for pawn collision. */
 	bool IsCollisionCooked() const { return bCollisionCooked; }
+	/** Distinguishes an unloaded room from a loaded room with no floor below a prop. */
+	static bool HasActiveCollision(UWorld* World, int32 CellId);
 
 protected:
 	/** Last applied collision state — RecreatePhysicsState is far too costly to repeat per tick. */

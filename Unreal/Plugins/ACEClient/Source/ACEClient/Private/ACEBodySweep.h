@@ -857,10 +857,14 @@ namespace ACEBodySweep
                 // creatures too. Its creature exclusion is for support retries,
                 // not this first contact. Keep the landing before attempting
                 // the side/overlap escape below, or gravity pulls us into mobs.
-                if(!Hit.bStartPenetrating && !IsUpperBodyContact(Hit)
+                // Chaos may miss an end-of-step touch by less than our contact
+                // skin at large world coordinates. Retail land_on_sphere also
+                // accepts an intersecting lower sphere. Do not turn that tiny
+                // next-frame overlap into the side-contact escape below.
+                if((!Hit.bStartPenetrating || Hit.PenetrationDepth<=.1f) && !IsUpperBodyContact(Hit)
                     && Hit.Normal.Z>=LandingZ && Remaining.Z<0.f)
                 {
-                    Result.Position=Hit.Location+Hit.Normal*.1f;
+                    Result.Position=Hit.Location+Hit.Normal*(Hit.PenetrationDepth+.1f);
                     Result.ContactNormal=Hit.Normal;
                     Result.bLanded=true;
                     break;

@@ -3,6 +3,7 @@
 #include "UObject/GCObject.h"
 #include "Styling/SlateTypes.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Widgets/Input/SButton.h"
 #include "Dat/ACEDatFileTypes.h"
 #include "Dat/ACEDatTextLayout.h"
 
@@ -33,7 +34,7 @@ public:
     bool HasDatArtwork() const {return DatArtworkLoaded;}
     bool SetWindowAppearance(float Opacity,bool Frameless);
     TSharedPtr<FACEPluginFont> Typeface(int32 Size);
-    FButtonStyle Button,DockButton;
+    FButtonStyle Button,DockButton,Tab;
     FSliderStyle Slider;
     FCheckBoxStyle Check;
     FEditableTextBoxStyle Edit;
@@ -55,7 +56,27 @@ private:
     bool DatArtworkLoaded=false;
 };
 
-/** Native DAT bitmap text with cached wrapping; no generated text textures. */
+/** Persistent navigation selection, distinct from action buttons and hover. */
+class SACEPluginTab : public SButton
+{
+public:
+    SLATE_BEGIN_ARGS(SACEPluginTab):_Selected(false),_FontSize(14),_ContentPadding(FMargin(12,8)){}
+        SLATE_ATTRIBUTE(bool,Selected)
+        SLATE_ATTRIBUTE(FText,Text)
+        SLATE_ATTRIBUTE(int32,FontSize)
+        SLATE_ARGUMENT(FMargin,ContentPadding)
+        SLATE_EVENT(FOnClicked,OnClicked)
+        SLATE_DEFAULT_SLOT(FArguments,Content)
+    SLATE_END_ARGS()
+    void Construct(const FArguments& Args);
+    bool IsSelected() const {return Selected.Get(false);}
+    virtual int32 OnPaint(const FPaintArgs&,const FGeometry&,const FSlateRect&,FSlateWindowElementList&,int32,const FWidgetStyle&,bool) const override;
+private:
+    TSharedPtr<FACEPluginStyle> Retail;
+    TAttribute<bool> Selected;
+};
+
+/** Native DAT bitmap text with cached word-boundary wrapping; no generated text textures. */
 class SACEPluginText : public STextBlock
 {
 public:

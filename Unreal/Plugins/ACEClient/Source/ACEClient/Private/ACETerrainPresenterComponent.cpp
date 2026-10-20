@@ -1679,6 +1679,8 @@ void UACETerrainPresenterComponent::HandlePositionUpdate(int32 ObjectGuid, const
 
 void UACETerrainPresenterComponent::RetrySyncIfNeeded()
 {
+	ACE_PROFILE_SCOPE(Terrain);
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_StreamingRetry);
 	if (UWorld* World = GetWorld())
 	{
 		if (UGameInstance* GI = World->GetGameInstance())
@@ -2659,6 +2661,18 @@ void UACETerrainPresenterComponent::CollectNeededEnvCells(TArray<int32>& OutOrde
 		return Origin;
 	};
 
+	// An unbuilt cell's location comes from a DAT read/unpack. Resolve it once
+	// per plan, not on both sides of every sort comparison: first-room PVS sets
+	// can contain hundreds of cells before their asynchronous meshes are ready.
+	TMap<int32, double> CellDistances;
+	auto DistanceToCell = [&](int32 Id) -> double
+	{
+		if (const double* Existing = CellDistances.Find(Id)) return *Existing;
+		const double Distance = FVector::DistSquared(PlayerUe, CellWorldLoc(Id));
+		CellDistances.Add(Id, Distance);
+		return Distance;
+	};
+
 	bool bKeepOutdoorGrab = true;
 	if (IsIndoorCell(StreamCell))
 	{
@@ -2698,8 +2712,7 @@ void UACETerrainPresenterComponent::CollectNeededEnvCells(TArray<int32>& OutOrde
 		{
 			OutOrdered.Sort([&](int32 A, int32 B)
 			{
-				return FVector::DistSquared(PlayerUe, CellWorldLoc(A))
-					< FVector::DistSquared(PlayerUe, CellWorldLoc(B));
+				return DistanceToCell(A) < DistanceToCell(B);
 			});
 			return;
 		}
@@ -2730,8 +2743,7 @@ void UACETerrainPresenterComponent::CollectNeededEnvCells(TArray<int32>& OutOrde
 	}
 	OutOrdered.Sort([&](int32 A, int32 B)
 	{
-		return FVector::DistSquared(PlayerUe, CellWorldLoc(A))
-			< FVector::DistSquared(PlayerUe, CellWorldLoc(B));
+		return DistanceToCell(A) < DistanceToCell(B);
 	});
 }
 
@@ -3254,6 +3266,7 @@ void UACETerrainPresenterComponent::UpdateCameraVisibility()
 
 void UACETerrainPresenterComponent::UpdateBuildingVisibility()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_BuildingVisibility);
 	UWorld* World = GetWorld();
 	UGameInstance* GI = World ? World->GetGameInstance() : nullptr;
 	UACEDatSubsystem* Dat = GI ? GI->GetSubsystem<UACEDatSubsystem>() : nullptr;
@@ -4151,6 +4164,7 @@ void UACETerrainPresenterComponent::RefreshEntityShadowCasters(const FVector& Ca
 
 void UACETerrainPresenterComponent::SyncEnvCells()
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(ACE_SyncEnvCells);
 	UWorld* World = GetWorld();
 	if (!World || !EnvCellClass)
 	{
@@ -4166,7 +4180,10 @@ void UACETerrainPresenterComponent::SyncEnvCells()
 
 	TArray<int32> Ordered;
 	TSet<int32> Needed;
-	CollectNeededEnvCells(Ordered, Needed);
+	{
+		TRACE_CPUPROFILER_EVENT_SCOPE(ACE_CollectNeededEnvCells);
+		CollectNeededEnvCells(Ordered, Needed);
+	}
 
 	// Do not wipe spawned rooms when the camera looks away — that popped interiors
 	// and rebuilt them on the next look. Evict only dead landblocks / over-cap below.
@@ -4407,6 +4424,7 @@ void UACETerrainPresenterComponent::SyncEnvCells()
 			}
 		}
 
+		TRACE_CPUPROFILER_EVENT_SCOPE(ACE_LoadEnvCellActor);
 		FActorSpawnParameters Params;
 		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 		AACEEnvCellActor* Actor = World->SpawnActor<AACEEnvCellActor>(EnvCellClass, FVector::ZeroVector, FRotator::ZeroRotator, Params);

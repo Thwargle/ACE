@@ -1183,13 +1183,24 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 			// Spell / missile projectiles: integrate ACE PhysicsObj velocity (optional gravity).
 			// ACE PhysicsGlobals.Gravity = 9.8 in AC units/sec² (same magnitude as Earth m/s²).
 			const bool bMissile = (PhysicsState & ACEPhysicsState::Missile) != 0;
+			const bool bProp = !bMissile && !bIsPlayer && !(ItemType & ACEItemType::Creature);
+			const bool bNeedsFloor = bProp && (PhysicsState & ACEPhysicsState::Gravity);
+			float PropGroundZ = 0.f;
+			const bool bPropSupport = bNeedsFloor && TraceGroundZ(RemotePredictLocation, PropGroundZ, true);
+			// Wait for an unloaded room, not for a floor hit. A loaded room may
+			// contain a deep pit, and a VR drop outdoors must still follow its arc.
+			uint32 PropCell = 0;
+			const bool bWaitForRoom = bNeedsFloor && !bPropSupport
+				&& ResolveIndoorOccupancy(RemotePredictLocation, PropCell)
+				&& !AACEEnvCellActor::HasActiveCollision(GetWorld(), static_cast<int32>(PropCell));
+			const float PhysicsStep = bWaitForRoom ? 0.f : Step;
 			const FVector Acceleration = (PhysicsState & ACEPhysicsState::Gravity) != 0
 				? FVector(0.f, 0.f, -9.8f) : FVector::ZeroVector;
 			// Velocity in ObjectCreate / VectorUpdate is world-space ACE units/sec.
 			const FVector UnrealVel = FACEPosition::AceVectorToUnreal(AcePhysicsVelocity, WorldScale);
-			RemotePredictLocation += UnrealVel * Step
-				+ FACEPosition::AceVectorToUnreal(Acceleration, WorldScale) * (0.5f * Step * Step);
-			AcePhysicsVelocity += Acceleration * Step;
+			RemotePredictLocation += UnrealVel * PhysicsStep
+				+ FACEPosition::AceVectorToUnreal(Acceleration, WorldScale) * (0.5f * PhysicsStep * PhysicsStep);
+			AcePhysicsVelocity += Acceleration * PhysicsStep;
 			RemoteAnchorLocation = RemotePredictLocation;
 
 			if (!AcePhysicsOmega.IsNearlyZero())
@@ -1218,11 +1229,17 @@ void AACEWorldEntityActor::Tick(float DeltaTime)
 
 			// Creatures/pets are not Unreal pawns — ballistic integrate has no capsule contact.
 			// Seat on traced ground so summons don't fall through floors after a jump F748.
-			if (!bMissile)
+			if (!bMissile && (!bProp || bNeedsFloor))
 			{
 				float GroundZ = 0.f;
-				if (TraceGroundZ(RemotePredictLocation, GroundZ, bIsPlayer || (ItemType & ACEItemType::Creature)))
+				if (bProp ? (GroundZ = PropGroundZ, bPropSupport) : TraceGroundZ(RemotePredictLocation, GroundZ, true))
 				{
+					if (bProp && !MovementSpheresAc.IsEmpty())
+					{
+						float Bottom = MAX_flt;
+						for (const auto& S : MovementSpheresAc) Bottom = FMath::Min(Bottom,S.Z-S.W);
+						GroundZ -= Bottom*WorldScale*GetActorScale3D().GetAbsMax();
+					}
 					const float SkinCm = 1.f;
 					if (RemotePredictLocation.Z <= GroundZ + SkinCm)
 					{
@@ -2249,6 +2266,14 @@ void AACEWorldEntityActor::ApplyACEPosition(const FACEPosition& Position)
 			SetActorRotation(NewRotation);
 		}
 	}
+	// CPhysicsObj::enter_world activates a non-static body even when its initial
+	// velocity is zero. Stuck is an inventory permission, not a physics flag.
+	// Retail UpdateObjectInternal preserves translation for setups without
+	// movement spheres (e.g. hanging signs); ethereal art has no floor contact.
+	if (!Creature && !bMissile && !Position.bIsGrounded && !MovementSpheresAc.IsEmpty()
+		&& (PhysicsState & ACEPhysicsState::Gravity)
+		&& !(PhysicsState & (ACEPhysicsState::Static | ACEPhysicsState::Ethereal)))
+		bHavePhysicsVelocity = true;
 	RefreshActorTickEnabled();
 }
 
@@ -2508,11 +2533,10 @@ void AACEWorldEntityActor::ApplyMotionState(const FACEObjectMotionState& Motion)
 
 void AACEWorldEntityActor::ApplyPhysicsVelocity(const FVector& AceVelocity, const FVector& AceOmega)
 {
-	// Stuck non-creature props are anchored scenery even when their weenie carries
-	// Gravity (Rithwic Smithy is 0x10418). Never turn a velocity packet into an
-	// independent ballistic simulation of a wall fixture. F748 positions remain
-	// authoritative; creatures and missiles still predict jumps and flight.
-	const bool bAnchoredProp = (ObjectDescriptionFlags & ACEObjectDescFlag::Stuck) != 0
+	// CPhysicsObj::UpdateObjectInternal translates through the setup's movement
+	// spheres. Stuck containers still settle; sphere-less signs stay attached.
+	const bool bAnchoredProp = (MovementSpheresAc.IsEmpty()
+		|| (PhysicsState & (ACEPhysicsState::Static | ACEPhysicsState::Ethereal)))
 		&& !bIsPlayer && !bIsSelf && (ItemType & ACEItemType::Creature) == 0
 		&& (PhysicsState & ACEPhysicsState::Missile) == 0;
 	AcePhysicsVelocity = bAnchoredProp ? FVector::ZeroVector : AceVelocity;

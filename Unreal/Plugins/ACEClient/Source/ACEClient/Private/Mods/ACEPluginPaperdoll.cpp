@@ -210,8 +210,8 @@ TSharedRef<SWidget> UACEPluginCosmetics::MakePaperdollPanel()
     for(const auto& S:Slots)
     {
         FString Id=S.Id;
-        Grid->AddSlot(S.Column,S.Row).Padding(3).VAlign(VAlign_Center)[SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false).ContentPadding(FMargin(8,10))
-            .ButtonColorAndOpacity_Lambda([Self,Id](){return Self.IsValid()&&Self->SelectedSlot==Id?FLinearColor(1,.75f,.3f):FLinearColor(.6f,.5f,.3f);})
+        Grid->AddSlot(S.Column,S.Row).Padding(3).VAlign(VAlign_Center)[SNew(SACEPluginTab).ContentPadding(FMargin(8,10))
+            .Selected_Lambda([Self,Id](){return Self.IsValid()&&Self->SelectedSlot==Id;})
             .OnClicked_Lambda([Self,Id](){if(Self.IsValid())Self->SelectSlot(Id);return FReply::Handled();})
             [SNew(SHorizontalBox)
                 +SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[MakeCatalogIcon([Self,Id](){return Self.IsValid()?Self->SlotSelections.FindRef(Id):nullptr;},44)]

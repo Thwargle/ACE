@@ -1,4 +1,5 @@
 #include "Dat/ACEDatMotionPlayer.h"
+#include "ACEAttackMotion.h"
 #include "Dat/ACEDatCursor.h"
 #include "ACETypes.h"
 
@@ -63,6 +64,7 @@ const FACEDatMotionData* FACEDatMotionPlayer::FindCycle(uint32 MotionCommand, ui
 		{
 			return Cycle;
 		}
+		if (ACEAttackMotion::IsAttack(MotionCommand)) break;
 	}
 	return nullptr;
 }
@@ -192,6 +194,9 @@ const FACEDatMotionData* FACEDatMotionPlayer::FindLink(uint32 FromCommand, uint3
 		// ToMasked cross-family fallbacks (CastSpell → Attack*) made monster casts look melee.
 		for (uint32 Key : {(Style << 16) | FromMasked, (Style << 16) | (FromCommand & 0xFFFFFFu), Style << 16})
 			if (const auto* Data = TryKey(Key, ToFull)) return Data;
+		// Attacks require the actual source/style linkage. Transitions through
+		// Ready are assembled by FindTransitionAnims, including the exit clip.
+		if (ACEAttackMotion::IsAttack(ToCommand)) break;
 		if (const uint32* DefaultMotion = MotionTable->StyleDefaults.Find(Style))
 		{
 			const uint32 DefMasked = (*DefaultMotion) & 0xFFFFFu;
@@ -220,11 +225,16 @@ bool FACEDatMotionPlayer::FindTransitionAnims(uint32 From, uint32 To, TArray<FAC
 		if (const auto* Direct = Link(From, To)) { Out = Direct->Anims; return true; }
 		if (const uint32* Ready = MotionTable->StyleDefaults.Find(Style))
 		{
-			if (const auto* Exit = Link(From, *Ready)) Out.Append(Exit->Anims);
-			if (const auto* Enter = Link(*Ready, To)) Out.Append(Enter->Anims);
+			const auto* Exit = Link(From, *Ready);
+			const auto* Enter = Link(*Ready, To);
+			// Retail rejects an action unless BOTH links exist. Playing only
+			// an exit is not a successful attack and must not consume its time.
+			if (ACEAttackMotion::IsAttack(To) && (!Exit || !Enter)) return false;
+			if (Exit) Out.Append(Exit->Anims);
+			if (Enter) Out.Append(Enter->Anims);
 			if (!Out.IsEmpty()) return true;
 		}
-		if (Style == MotionTable->DefaultStyle) break;
+		if (Style == MotionTable->DefaultStyle || ACEAttackMotion::IsAttack(To)) break;
 	}
 	return false;
 }

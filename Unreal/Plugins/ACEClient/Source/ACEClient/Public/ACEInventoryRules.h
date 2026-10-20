@@ -12,6 +12,15 @@ enum class EACEOwnedItemUse : uint8
 
 namespace ACEInventoryRules
 {
+    // Retail ItemHolder::CheckHookStatus (00586E90). Ownership here means
+    // the house has an owner; the server separately checks access permissions.
+    inline bool CheckHookStatus(const FACEWorldObject& Item, const FACEWorldObject& Container)
+    {
+        if (!Container.HookType || !Container.HookItemTypes) return true;
+        return Container.HouseOwnerId && (Item.HookType & Container.HookType)
+            && (uint32(Item.ItemType) & Container.HookItemTypes);
+    }
+
     // Retail drops insert before the target ID, or append over an empty cell.
     // Resolve against the current list: transfers can compact it during a drag.
     // INDEX_NONE cancels a self-drop or a drop onto an item that has disappeared.

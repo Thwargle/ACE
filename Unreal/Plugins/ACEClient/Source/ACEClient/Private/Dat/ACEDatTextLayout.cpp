@@ -19,6 +19,8 @@ namespace
 	}
 	bool CanBreak(uint16 Prev, uint16 Cur)
 	{
+		// Treat CRLF as one hard break even when the preceding word overflows.
+		if (Prev == 13 && Cur == 10) return false;
 		return Prev == 10 || ((White(Prev) || EastAsian(Prev) || EastAsian(Cur))
 			&& !NonBeginning(Cur) && Prev != 40 && Prev != 0xFF08);
 	}
@@ -55,7 +57,7 @@ FString ACEDatText::Ellipsize(const FACEDatFont& Font, const FString& Text, int3
 }
 
 TArray<FACEBitmapTextLine> ACEDatText::Layout(const FACEDatFont& Font,
-	const FString& Text, int32 MarginWidth, bool bOneLine)
+	const FString& Text, int32 MarginWidth, bool bOneLine, bool bBreakLongWords)
 {
 	TArray<FACEBitmapTextLine> Lines;
 	if (Text.IsEmpty()) return Lines;
@@ -76,7 +78,7 @@ TArray<FACEBitmapTextLine> ACEDatText::Layout(const FACEDatFont& Font,
 				bWrappable = true;
 				bMustWrap = Prev == 10;
 			}
-			else if (I > Start && !White(C) && C != 10 && Accumulated + CharWidth > MarginWidth)
+			else if (bBreakLongWords && I > Start && !White(C) && C != 10 && Accumulated + CharWidth > MarginWidth)
 			{
 				LastBreak = I;
 				Accumulated = 0;

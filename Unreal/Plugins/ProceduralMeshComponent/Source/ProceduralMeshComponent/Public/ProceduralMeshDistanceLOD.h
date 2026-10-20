@@ -16,9 +16,14 @@ struct FProcMeshDistanceLevel
 
 namespace ProceduralMeshDistanceLOD
 {
+    // Retail Render::s_rDegradeDistance (headers/global_vars.h) starts at 50 AC
+    // meters. GfxObjDegradeInfo::get_degrade subtracts it AFTER normalizing by
+    // object/part scale. A zero default swaps clothing at its raw 4-8m thresholds.
+    inline constexpr float DefaultDistanceOffset = 50.f;
+
     // GfxObjDegradeInfo::get_degrade: equality advances to the next level.
     inline int32 Select(TConstArrayView<FProcMeshDistanceLevel> Levels, float Distance,
-        bool bForceHighest = false, float Bias = 0, float DistanceOffset = 0)
+        bool bForceHighest = false, float Bias = 0, float DistanceOffset = DefaultDistanceOffset)
     {
         if (Levels.IsEmpty()) return INDEX_NONE;
         if (bForceHighest) return 0;

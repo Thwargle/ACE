@@ -1555,6 +1555,9 @@ bool FACEVRRigTest::RunTest(const FString& Parameters)
 			TestFalse(TEXT("Desktop uses its unchanged placement even on a VR-capable server"), VR->TryDropInventoryItem(Bread.Guid));
 			VR->bActive=true; Session.VRCapabilities=DropCapabilities;
 			FACEWorldObject Falling = Bread;
+			// Supply an authored physical body; SetupId=0 has no movement spheres
+			// and retail deliberately leaves sphere-less decorations stationary.
+			Falling.SetupId=0x02000A97;
 			Falling.Guid=602; Falling.ContainerId=Falling.WielderId=Falling.ParentGuid=0;
 			Falling.PhysicsState=ACEPhysicsState::Gravity;
 			Falling.bHasPosition=Falling.bHasVelocity=true;

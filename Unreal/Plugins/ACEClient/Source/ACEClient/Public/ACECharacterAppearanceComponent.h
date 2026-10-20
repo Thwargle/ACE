@@ -30,6 +30,7 @@ class ACECLIENT_API UACECharacterAppearanceComponent : public UActorComponent
 	friend class FACERunSpeedParityTest;
 	friend class FACEEmoteTransitionTest;
 	friend class FACEArcheryMotionTest;
+	friend class FACEAttackHeightMotionTest;
 	friend class FACEPortalMotionTest;
 	friend class FACEWalkingStepTest;
 	friend class FACEMultipartUpdateTest;

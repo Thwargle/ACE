@@ -69,6 +69,11 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::PublicSnapshot(FACEClientPlugin& P)
     Result->SetArrayField(TEXT("log"),P.LogEntries);
     Result->SetStringField(TEXT("profile_name"),P.ProfileName);
     Result->SetStringField(TEXT("waiting_action"),P.WaitAction);
+    if(!P.ScrollPanel()&&P.PanelSize.X>0&&P.PanelSize.Y>0)
+    {
+        auto Panel=MakeShared<FJsonObject>();Panel->SetNumberField(TEXT("width"),P.PanelSize.X);Panel->SetNumberField(TEXT("height"),P.PanelSize.Y);
+        Result->SetObjectField(TEXT("panel"),Panel);
+    }
     if(P.ActivityFailure){Result->SetObjectField(TEXT("activity_failure"),P.ActivityFailure);P.ActivityFailure.Reset();}
     auto Capabilities=MakeShared<FJsonObject>();for(const auto& Permission:P.Permissions)Capabilities->SetBoolField(Permission,true);
     Result->SetObjectField(TEXT("capabilities"),Capabilities);
@@ -121,6 +126,9 @@ bool UACEPluginSubsystem::ValidatePluginUI(const TArray<TSharedPtr<FJsonValue>>&
             {Error=TEXT("UI controls need unique IDs and bounded text");return false;}Ids.Add(Id);
             if(!TArray<FString>{TEXT("text"),TEXT("button"),TEXT("checkbox"),TEXT("slider"),TEXT("number"),TEXT("input"),TEXT("select"),TEXT("progress"),TEXT("icon"),TEXT("item_icon"),TEXT("image"),TEXT("row"),TEXT("column"),TEXT("section"),TEXT("tabs")}.Contains(Type))
             {Error=TEXT("Unknown UI control: ")+Type;return false;}
+            for(const TCHAR* Field:{TEXT("compact"),TEXT("auto_width"),TEXT("wrap")})
+                if(R->HasField(Field)&&!R->HasTypedField<EJson::Boolean>(Field))
+                {Error=FString(Field)+TEXT(" must be a boolean");return false;}
             const FString Action=S(R,TEXT("action"));
             if(!Action.IsEmpty()&&!TArray<FString>{TEXT("event"),TEXT("select"),TEXT("waypoint"),TEXT("command")}.Contains(Action))
             {Error=TEXT("Unknown UI button action");return false;}
@@ -220,7 +228,7 @@ bool UACEPluginSubsystem::ApplyPluginServices(FACEClientPlugin& P,const TSharedP
         Reply->SetStringField(TEXT("type"),TEXT("result"));Reply->SetStringField(TEXT("id"),S(R,TEXT("id")));bool Ok=false;FString Failure;
         const FString Permission=Service==TEXT("profiles")||Service==TEXT("import")?TEXT("profiles"):
             Service==TEXT("waypoint")?TEXT("waypoint"):Service==TEXT("route")?TEXT("navigation"):
-            Service==TEXT("force_buff")?TEXT("cast"):Service==TEXT("window")?TEXT("ui"):Service==TEXT("policy")?TEXT("commands"):Service==TEXT("chat")?TEXT("say"):FString();
+            Service==TEXT("force_buff")?TEXT("cast"):(Service==TEXT("window")||Service==TEXT("notice"))?TEXT("ui"):Service==TEXT("policy")?TEXT("commands"):Service==TEXT("chat")?TEXT("say"):FString();
         if(Limited)Failure=TEXT("Service rate limit; retry after 0.5 seconds");
         else if(!Permission.IsEmpty()&&!P.Permissions.Contains(Permission))Failure=TEXT("Missing permission: ")+Permission;
         else if(Service==TEXT("profiles"))
@@ -295,6 +303,19 @@ bool UACEPluginSubsystem::ApplyPluginServices(FACEClientPlugin& P,const TSharedP
         {
             if(Op==TEXT("show")||Op==TEXT("hide")||Op==TEXT("toggle"))
             {const bool Open=IsPluginWindowOpen(P.Id);if(Op==TEXT("toggle")||Open!=(Op==TEXT("show")))TogglePluginWindow(P.Id);Ok=true;}
+        }
+        else if(Service==TEXT("notice")&&Op==TEXT("show"))
+        {
+            const FString Text=S(R,TEXT("text"));
+            if(!Text.IsEmpty()&&Text.Len()<=500&&!Text.Contains(TEXT("\n"))&&!Text.Contains(TEXT("\r")))
+            {
+                // Display-only notification. Never use the server chat path or
+                // the host's shared Notice string for plugin-owned messages.
+                auto* C=GetGameInstance()->GetSubsystem<UACEClientSubsystem>();
+                C->OnChatMessage.Broadcast(TEXT("[")+P.Name.Left(80)+TEXT("] ")+Text,TEXT(""),ACEChatMessageType::Broadcast);
+                Ok=true;
+            }
+            else Failure=TEXT("A local notice requires one line, 1-500 characters");
         }
         else if(Service==TEXT("chat")&&Op==TEXT("send"))
         {

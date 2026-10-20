@@ -145,6 +145,41 @@ bool FACEPvPCombatParityTest::RunTest(const FString&)
   TestTrue(TEXT("Attack request does not instantly face opponent"),PC->PredictedPose.GetAcQuat().Equals(Start.GetAcQuat()));
  }
 
+ // EndAttackRequest uses actual charge in AdvancedCombatUI, even below the
+ // slider. Normal mode waits for the slider. Verify both melee/missile wires.
+ for(bool Advanced:{false,true}) for(int32 Mode:{int32(ACECombatMode::Melee),int32(ACECombatMode::Missile)})
+ {
+  Client->SendSetSingleCharacterOption(0x0C,Advanced);
+  Session->bServerAttackInProgress=false;
+  Session->SetCurrentStance(Mode==int32(ACECombatMode::Melee)?ACEMotion::StanceHandCombat:ACEMotion::StanceBowCombat);
+  Binder->CombatMode=Mode;Binder->bCombatRequestSent=Binder->bCombatRepeatActive=false;
+  Binder->LastCombatEventRevision=Session->GetCombatEventRevision();Binder->RequestedAttackPower=.8f;
+  Binder->bCombatAutoRepeat=true;
+  PC->bServerControlledMotion=false;
+  Binder->BeginCombatPowerCharge(ACEAttackHeight::Medium,true);Session->CachedC2SPackets.Reset();
+  Binder->CombatPowerBuildStartTime=FPlatformTime::Seconds()-.2;
+  Binder->ReleaseCombatPowerCharge();Binder->TickCombatAutoAttack(0);
+  if(!Advanced)
+  {
+   TestTrue(TEXT("Normal quick release waits for the selected mark"),Packets().IsEmpty());
+   Binder->CombatPowerBuildStartTime=FPlatformTime::Seconds()-.81;
+   Binder->TickCombatAutoAttack(0);
+  }
+  const auto Requests=Packets();
+  TestEqual(TEXT("Each combat mode sends exactly one released attack"),Requests.Num(),1);
+  if(Requests.Num()==1)
+  {
+   FACEBinaryReader R(Requests[0].Value);R.Skip(8);
+   TestTrue(TEXT("Advanced release sends actual charge; normal sends the mark"),
+    FMath::IsNearlyEqual(R.ReadFloat(),Advanced?.2f:.8f,.03f));
+  }
+  Binder->RequestedAttackPower=.9f;Session->CachedC2SPackets.Reset();
+  FACEBinaryWriter Done;Done.WriteUInt32(Self.Guid);Done.WriteUInt32(1);Done.WriteUInt32(ACEGameEvent::AttackDone);Done.WriteUInt32(0);
+  FACEBinaryReader DoneReader(Done.GetData());Session->HandleGameEvent(DoneReader);Binder->TickCombatAutoAttack(0);
+  TestEqual(TEXT("Advanced repeat keeps released power; normal repeat follows the slider"),Packets().Num(),Advanced?0:1);
+ }
+ Client->SendSetSingleCharacterOption(0x0C,false);Binder->RequestedAttackPower=.5f;Binder->bCombatAutoRepeat=false;
+
  // Actual interpreted Reload/Aim packets block manual missile charging.
  // Ready restarts a held build without credit for the waiting time.
  uint16 ReadySequence=10;

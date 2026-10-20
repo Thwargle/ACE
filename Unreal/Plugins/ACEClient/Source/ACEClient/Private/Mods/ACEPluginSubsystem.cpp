@@ -567,7 +567,8 @@ void UACEPluginSubsystem::Stop(const FString& Id, const FString& Reason, bool Pr
     {
         P->ChatFilters.Reset();
         const bool OwnsPolicy=P->IsPolicy()&&(P->Running||PolicyPlugin()==P);
-        if(OwnsPolicy){RestoreWorldRendering();bTrackRouteMovement=false;RouteMovementSamples.Reset();bRouteMovementOverflow=false;}
+        if(OwnsPolicy){RestoreWorldRendering();bTrackRouteMovement=false;RouteMovementSamples.Reset();bRouteMovementOverflow=false;
+            FollowMovementSamples.Reset();FollowMovementTarget=0;bFollowMovementOverflow=false;}
         if(P->Companion){StopCompanion(*P,Reason);return;}
         if(P->HasPresentation()){FlushPluginState(*P);P->Markers.Reset();P->PanelRows.Reset();P->PluginEvents.Reset();++P->PanelRevision;}
         P->TargetingStatus.Empty();
@@ -1148,6 +1149,14 @@ TSharedPtr<FJsonObject> UACEPluginSubsystem::Snapshot()
         O->SetBoolField(TEXT("route_motion_overflow"),bRouteMovementOverflow);
     }
     O->SetObjectField(TEXT("server_position"),Position(C->GetPlayerPosition()));
+    if(FollowMovementTeleport==C->GetTeleportSeq())
+    {
+        TArray<TSharedPtr<FJsonValue>> Samples;
+        for(const auto& Sample:FollowMovementSamples)Samples.Add(MakeShared<FJsonValueObject>(Position(Sample)));
+        O->SetArrayField(TEXT("follow_motion"),Samples);
+        O->SetNumberField(TEXT("follow_motion_target"),uint32(FollowMovementTarget));
+        O->SetBoolField(TEXT("follow_motion_overflow"),bFollowMovementOverflow);
+    }
     O->SetBoolField(TEXT("moving"), !MovementOwner.IsEmpty() || (!FastCastOwner.IsEmpty() && FastCastStarted));
     O->SetNumberField(TEXT("heading"),PC&&PC->GetPawn()?PC->GetPawn()->GetActorRotation().Yaw:0);
     const auto Known = C->GetKnownSpells(); TSet<int32> KnownIds(Known);
@@ -1241,7 +1250,10 @@ void UACEPluginSubsystem::CheckPendingSpellTimeout()
     auto Owner=Find(PendingSpellOwner);
     auto Intent=MakeShared<FJsonObject>();Intent->SetStringField(TEXT("action"),TEXT("cast"));
     Intent->SetStringField(TEXT("activity"),PendingSpellActivity);
-    PendingSpell=0;PendingSpellOwner.Empty();PendingSpellActivity.Empty();FastCastOwner.Empty();BuffRetryAt=0;PendingBuffResultDriven=false;
+    // Release the same bookkeeping as a failed cast, including its serial and
+    // fast-cast movement state. Policy must observe that this attempt ended.
+    CompletePendingAction(0x001D);
+    PendingSpellActivity.Empty();
     if(Owner&&Owner->Running)ReportActivityFailure(*Owner,Intent,TEXT("Cast confirmation timed out; check connection and spell requirements"));
 }
 void UACEPluginSubsystem::ScheduleDecisionWake(double ReadyAt)
@@ -1299,11 +1311,15 @@ void UACEPluginSubsystem::UpdateBuffDispatch()
     if(ConfirmedBuffAckAt&&Now-ConfirmedBuffAckAt>30)
     {
         auto Owner=Find(ConfirmedBuffOwner);ConfirmedBuffAckAt=0;ConfirmedBuffOwner.Empty();
-        DeferredBuffIntent.Reset();DeferredBuffOwner.Empty();
+        // Lua already advanced when it emitted the deferred intent. Dropping
+        // it strands completion/profile-load/weapon-switch state in the policy.
+        // The buff result was confirmed; only its trailing UseDone is missing.
+        // Keep the intent and let Execute revalidate it once the gate releases.
         if(Owner&&Owner->Running)
         {
-            auto I=MakeShared<FJsonObject>();I->SetStringField(TEXT("activity"),TEXT("buffs"));
-            ReportActivityFailure(*Owner,I,TEXT("Buff acknowledgment timed out; check connection"));
+            Owner->Status=TEXT("Buff acknowledgment timed out; resuming queued action");
+            LogUCMEvent(*Owner,Owner->Status,EACEUCMLogLevel::Warning);
+            Owner->NextDecision=0;ScheduleDecisionWake(Now);
         }
     }
     if(BuffRetryAt&&Now>=BuffRetryAt)
@@ -1468,7 +1484,7 @@ bool UACEPluginSubsystem::Tick(float)
             if(Mode==TEXT("chest"))TickProfile->RemoveField(TEXT("profile_rules"));
         }
         if (!P->VM->Step(P->Api>=2?PublicSnapshot(*P):(P->Id==TEXT("itemtools")?ItemToolsSnapshot():Snapshot()), TickProfile, Intent, Error)) { Stop(P->Id, TEXT("Script error: ") + Error); continue; }
-        if(P->IsPolicy()){RouteMovementSamples.Reset();bRouteMovementOverflow=false;}
+        if(P->IsPolicy()){RouteMovementSamples.Reset();bRouteMovementOverflow=false;FollowMovementSamples.Reset();bFollowMovementOverflow=false;}
         if (Intent)
         {
             if(P->Api>=2 && !ApplyPublicOutput(*P,Intent,Error)){Stop(P->Id,TEXT("API error: ")+Error);continue;}

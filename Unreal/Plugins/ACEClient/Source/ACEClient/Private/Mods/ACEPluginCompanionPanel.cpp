@@ -56,7 +56,16 @@ namespace ACEPluginCompanionPanelPrivate
         SLATE_BEGIN_ARGS(SACECompanionRows){} SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(FString,Id) SLATE_END_ARGS()
         void Construct(const FArguments& Args)
         {Host=Args._Host;Id=Args._Id;FACEPluginStyle::Use(Args._Host,Id);ChildSlot[SAssignNew(Rows,SVerticalBox)];Refresh();}
-        void Tick(const FGeometry& G,double Time,float Delta) override {SCompoundWidget::Tick(G,Time,Delta);Refresh();}
+        void Tick(const FGeometry& G,double Time,float Delta) override
+        {
+            SCompoundWidget::Tick(G,Time,Delta);Refresh();
+            if(auto P=Last.Pin();P&&!P->ScrollPanel())
+            {
+                const FVector2D Size=G.GetLocalSize();
+                if(Size.X>0&&Size.Y>0&&!P->PanelSize.Equals(Size,1))
+                {P->PanelSize=Size;P->NextDecision=0;}
+            }
+        }
     private:
         struct FRow
         {
@@ -67,6 +76,7 @@ namespace ACEPluginCompanionPanelPrivate
             TSharedPtr<SHorizontalBox> Horizontal,TabButtons;
             TSharedPtr<SWidgetSwitcher> Switch;
             TArray<TSharedPtr<SWidget>> Children;
+            TArray<bool> AutoWidths;
             // False means this control is being edited. Retry just this control,
             // never block other rows because the game viewport has mouse capture.
             TFunction<bool()> Sync;
@@ -83,7 +93,8 @@ namespace ACEPluginCompanionPanelPrivate
         {
             return SNew(SACEPluginText).Text_Lambda([R](){return FText::FromString(S(R,TEXT("text")));})
                 .Font_Lambda([R](){return FCoreStyle::GetDefaultFontStyle(B(R,TEXT("bold"),false)?"Bold":"Regular",FMath::Clamp(int32(N(R,TEXT("size"),16)),10,36));})
-                .ColorAndOpacity_Lambda([R](){return FSlateColor(Color(S(R,TEXT("color"))));}).AutoWrapText(true);
+                .ColorAndOpacity_Lambda([R](){return FSlateColor(Color(S(R,TEXT("color"))));})
+                .AutoWrapText_Lambda([R](){return B(R,TEXT("wrap"));});
         }
         UTexture2D* Image(const FString& Asset)
         {
@@ -96,24 +107,39 @@ namespace ACEPluginCompanionPanelPrivate
             const auto R=Node.Data;const FString Key=S(R,TEXT("id"));
             const TArray<TSharedPtr<FJsonValue>>* Values=nullptr;R->TryGetArrayField(TEXT("children"),Values);
             TArray<TSharedPtr<SWidget>> Next;TArray<FString> Keys;
-            if(Values)for(const auto& V:*Values){Next.Add(Build(V->AsObject()));Keys.Add(S(V->AsObject(),TEXT("id")));}
-            if(Node.Children!=Next)
+            TArray<bool> AutoWidths;
+            if(Values)for(const auto& V:*Values){Next.Add(Build(V->AsObject()));Keys.Add(S(V->AsObject(),TEXT("id")));AutoWidths.Add(B(R,TEXT("compact"),false)||B(V->AsObject(),TEXT("auto_width"),false));}
+            if(Node.Children!=Next||Node.AutoWidths!=AutoWidths)
             {
                 // Reattach existing child widgets in their new order. In particular,
                 // a dropdown's anchor, text editor and section survive sibling edits.
                 if(Node.Vertical){Node.Vertical->ClearChildren();for(const auto& W:Next)Node.Vertical->AddSlot().AutoHeight().Padding(2)[W.ToSharedRef()];}
-                if(Node.Horizontal){Node.Horizontal->ClearChildren();for(const auto& W:Next)Node.Horizontal->AddSlot().FillWidth(1).Padding(3)[W.ToSharedRef()];}
+                if(Node.Horizontal)
+                {
+                    Node.Horizontal->ClearChildren();
+                    for(int32 I=0;I<Next.Num();++I)
+                    {
+                        auto Slot=Node.Horizontal->AddSlot();Slot.Padding(3).VAlign(VAlign_Center);
+                        if(AutoWidths[I])Slot.AutoWidth();else Slot.FillWidth(1);
+                        Slot[Next[I].ToSharedRef()];
+                    }
+                }
                 if(Node.Switch)
                 {
                     for(const auto& Old:Node.Children)Node.Switch->RemoveSlot(Old.ToSharedRef());Node.TabButtons->ClearChildren();
                     for(int32 I=0;I<Next.Num();++I)
                     {
                         Node.Switch->AddSlot()[Next[I].ToSharedRef()];const FString Page=Keys[I];
-                        Node.TabButtons->AddSlot().FillWidth(1).Padding(2)[SNew(SButton).ButtonStyle(&FACEPluginStyle::Current()->Button).IsFocusable(false)
-                            .OnClicked_Lambda([this,Key,Page,Switch=Node.Switch,I](){Tabs.Add(Key,Page);Switch->SetActiveWidgetIndex(I);return FReply::Handled();})[Label(Controls[Page]->Data)]];
+                        const auto Data=Controls[Page]->Data;
+                        Node.TabButtons->AddSlot().FillWidth(1).Padding(2)[SNew(SACEPluginTab).Tag(FName(*(TEXT("PluginTab.")+Key+TEXT(".")+Page)))
+                            .Text_Lambda([Data](){return FText::FromString(S(Data,TEXT("text")));})
+                            .FontSize_Lambda([Data](){return int32(N(Data,TEXT("size"),16));})
+                            .Selected_Lambda([this,Key,Page](){return Tabs.FindRef(Key)==Page;})
+                            .OnClicked_Lambda([this,Key,Page,Switch=Node.Switch,I](){Tabs.Add(Key,Page);Switch->SetActiveWidgetIndex(I);return FReply::Handled();})];
                     }
                 }
                 Node.Children=MoveTemp(Next);
+                Node.AutoWidths=MoveTemp(AutoWidths);
             }
             if(Node.Switch)
             {
@@ -129,6 +155,7 @@ namespace ACEPluginCompanionPanelPrivate
             if(Node&&Node->Type==Type)
             {
                 Node->Data->Values=Source->Values;
+                Node->Widget->SetClipping(B(Source,TEXT("wrap"))?EWidgetClipping::Inherit:EWidgetClipping::ClipToBounds);
                 if(Node->Vertical||Node->Horizontal||Node->Switch)Children(*Node);
                 if(Node->Sync&&!Node->Sync())Pending.Add(Node);
                 return Node->Widget.ToSharedRef();
@@ -262,7 +289,9 @@ namespace ACEPluginCompanionPanelPrivate
             else Content=Label(R);
             Content->SetEnabled(TAttribute<bool>::CreateLambda([R](){return B(R,TEXT("enabled"));}));
             Content->SetToolTipText(TAttribute<FText>::CreateLambda([R](){return FText::FromString(S(R,TEXT("tooltip")));}));
-            Node->Widget=SNew(SBox).Tag(FName(*(TEXT("PluginControl.")+Key))).Padding_Lambda([R](){return FMargin(FMath::Clamp(float(N(R,TEXT("padding"),2)),0.f,24.f));})[Content];
+            Node->Widget=SNew(SBox).Tag(FName(*(TEXT("PluginControl.")+Key)))
+                .Clipping(B(R,TEXT("wrap"))?EWidgetClipping::Inherit:EWidgetClipping::ClipToBounds)
+                .Padding_Lambda([R](){return FMargin(FMath::Clamp(float(N(R,TEXT("padding"),2)),0.f,24.f));})[Content];
             if(Node->Sync&&!Node->Sync())Pending.Add(Node);
             return Node->Widget.ToSharedRef();
         }

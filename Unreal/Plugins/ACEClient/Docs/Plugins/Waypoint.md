@@ -37,7 +37,7 @@ The desktop overlay hides with Alt+Z and is removed on logout.
 
 - **Pin map to interface** keeps a thin gold-bordered desktop overlay after closing the
   normal map window. It follows the player's predicted position and automatically
-  switches between overworld terrain and transparent dungeon/building outlines.
+  switches between overworld terrain and dungeon/building outlines on a black backdrop.
   Both views share the saved position, size and visibility; existing dungeon pins
   carry over. Each view saves its own zoom across closing the map and relogging. Clear Pin
   to hide both views; reopen the globe window to change these options.
@@ -45,8 +45,11 @@ The desktop overlay hides with Alt+Z and is removed on logout.
   including while the UI is locked. They work in both overworld and interior views.
 - Use the separate **Map − / Map +** button to minimize or restore it without
   hiding the direction arrow. Its expanded size and position are retained.
-  **Pinned map opacity** in the globe window adjusts the terrain, lines, markers,
-  and border together; this preference and minimized state are saved.
+  **Map background opacity** in the globe window adjusts the black backdrop and
+  terrain while keeping outlines, labels and markers readable. It shares the
+  Waypoint Map background setting in Plugin Manager, including the global opacity
+  override. Older pinned-map opacity preferences are retained; this preference
+  and minimized state are saved.
 - **Player facing up** rotates both maps with the character; off keeps north up.
 - Use the game UI's **lock/unlock icon** to lock the pinned map (click-through,
   except for its zoom and minimize/restore buttons)
@@ -59,14 +62,24 @@ The desktop overlay hides with Alt+Z and is removed on logout.
   of the pinned map. Reset view saves the default zoom for the current view only.
 - Click a marker or map location to set a destination.
 - Towns, Portals and POIs control marker categories. The name filter restricts markers.
-- Labels appear when zoomed in, or by hovering a marker. Detailed atlas markers
-  appear at 3× zoom or while searching. Close markers remain visible and selectable;
-  only overlapping labels are hidden. Labels omit a leading "Portal to", while
+- Portal names stay visible at every zoom level in both map views, even when
+  labels overlap. Town and other POI labels appear when zoomed in or hovered;
+  detailed non-portal atlas markers appear at 3× zoom or while searching.
+  Close markers remain selectable. Labels omit a leading "Portal to", while
   hovering shows the full name and search still matches the original name.
 - Dungeon toggles the current landblock's interior layout, including buildings.
   Floor outlines around the player's elevation are highlighted; other floors are dim.
   A destination clicked in a dungeon is tied to that landblock, so the arrow does
   not direct the player toward it in a different dungeon.
+- **Fill walkable areas** adds blue floor shading inside the dungeon outlines in
+  both map views. It uses the actual floor polygons, preserving pits and gaps;
+  floors near your elevation are brighter. The option is saved with your profile.
+- **Show active route** draws the selected UCM route in gold on both map views,
+  with the current waypoint and its incoming leg in green. Runtime routes loaded
+  by metas take precedence. Portal/recall transitions and unrelated dungeons do
+  not get connecting lines. This saved option is independent of the 3D route
+  preview and is enabled by default. These lines show recorded waypoints, not
+  collision-aware pathfinding around obstacles.
 
 The world overview uses the retail DAT map image. As you zoom in, 256-pixel
 terrain tiles replace it, generated from the installed cell and portal DATs with
