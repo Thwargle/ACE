@@ -102,6 +102,7 @@ class ACECLIENT_API FACESession : public TSharedFromThis<FACESession>
 	friend class FACEBarberTest;
 	friend class FACEItemPresentationTest;
 	friend class FACESelectionToolbarTest;
+    friend class FACEActionDeckTest;
 	friend class FACEWorldLootPlacementTest;
 	friend class FACEChatParityTest;
 	friend class FACECombatChatTest;

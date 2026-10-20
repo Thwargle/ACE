@@ -5,6 +5,7 @@
 #include "Mods/ACEPluginDesktop.h"
 #include "Mods/ACEPluginOrder.h"
 #include "Mods/ACEPluginIcon.h"
+#include "Mods/ACEActionDeckSubsystem.h"
 #include "ACEClientSubsystem.h"
 #include "ACEPlayerController.h"
 #include "ACEDatSubsystem.h"
@@ -218,6 +219,7 @@ namespace ACEPluginPanelPrivate
             if(P->Id==TEXT("waypoint")){Add(SNew(SBox).HeightOverride(650)[Host->MakeWaypointPanel()]);return;}
             if(P->Id==TEXT("looteditor")){Add(SNew(SBox).HeightOverride(650)[Host->MakeUCMPanel(TEXT("Standalone loot"))]);return;}
             if(P->Id==TEXT("ucmmicro")){Add(Host->MakeUCMMicroPanel());return;}
+            if(P->Id==TEXT("actiondeck")){Add(Host->GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>()->MakePanel());return;}
             if(P->Id==TEXT("ucm")){Add(SNew(SBox).HeightOverride(650)[Host->MakeUCMPanel()]);return;}
             if(P->Id==TEXT("itemtools")){Add(SNew(SBox).HeightOverride(650)[Host->MakeItemToolsPanel()]);return;}
             if(P->Id==TEXT("autocraft")){Add(SNew(SBox).HeightOverride(650)[Host->MakeAutoCraftPanel()]);return;}
@@ -342,6 +344,7 @@ TSharedRef<SWidget> UACEPluginSubsystem::MakePanel(const FString& PluginId)
     if(PluginId==TEXT("autocraft"))return MakeAutoCraftPanel(false);
     if(PluginId==TEXT("ucm.log"))return MakeUCMLogPanel();
     if(PluginId==TEXT("ucmmicro"))return MakeUCMMicroPanel();
+    if(PluginId==TEXT("actiondeck"))return GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>()->MakePanel();
     if(PluginId==TEXT("waypoint")||PluginId==TEXT("waypoint.map"))return MakeWaypointPanel(PluginId.EndsWith(TEXT(".map")),false,false);
     if(PluginId==TEXT("looteditor"))return MakeUCMPanel(TEXT("Standalone loot"),false);
     if(PluginId==TEXT("ucm"))return MakeUCMPanel(FString(),false);

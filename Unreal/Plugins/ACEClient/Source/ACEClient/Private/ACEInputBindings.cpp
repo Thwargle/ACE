@@ -1,5 +1,7 @@
 #include "ACEInputBindings.h"
 #include "ACERetailInputActions.h"
+#include "Mods/ACEActionDeckSubsystem.h"
+#include "Engine/GameInstance.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerInput.h"
 #include "Misc/ConfigCacheIni.h"
@@ -254,6 +256,10 @@ static bool Allows(const FBinding& C,const FInputChord& Input,const APlayerContr
 bool Matches(FKey Key,const FInputChord& Input,const APlayerController* PC)
 {
  Load();if(bEditing||!Active(Key))return false;
+ // Input can already be queued when Override is enabled. Filtering only a
+ // Slate event cannot protect the item/spell bars (or other polled actions).
+ if(PC&&PC->GetGameInstance())
+  if(const auto* Deck=PC->GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>();Deck&&Deck->ReservesKey(Input))return false;
  const auto* Bindings=Live.Find(Key);if(!Bindings)return Input.Key==Key;
  for(const auto& C:*Bindings)if(Allows(C,Input,PC))
  {
@@ -282,11 +288,12 @@ static bool Check(const APlayerController* PC,FKey Key,bool bPressed)
 {
  Load(); if(!PC || bEditing || IsTextEntryFocused())return false;
  const auto* Bindings=Live.Find(Key);
- if(!Bindings)return bPressed ? PC->WasInputKeyJustPressed(Key) : PC->IsInputKeyDown(Key);
  const bool Shift=PC->IsInputKeyDown(EKeys::LeftShift)||PC->IsInputKeyDown(EKeys::RightShift);
  const bool Ctrl=PC->IsInputKeyDown(EKeys::LeftControl)||PC->IsInputKeyDown(EKeys::RightControl);
  const bool Alt=PC->IsInputKeyDown(EKeys::LeftAlt)||PC->IsInputKeyDown(EKeys::RightAlt);
  const bool Cmd=PC->IsInputKeyDown(EKeys::LeftCommand)||PC->IsInputKeyDown(EKeys::RightCommand);
+ if(!Bindings)return (bPressed?PC->WasInputKeyJustPressed(Key):PC->IsInputKeyDown(Key))
+  && Matches(Key,FInputChord(Key,Shift,Ctrl,Alt,Cmd),PC);
  for(const auto& C:*Bindings)
   if(C.Key.IsValid() && ((bPressed||C.Key==EKeys::MouseScrollUp||C.Key==EKeys::MouseScrollDown)?PC->WasInputKeyJustPressed(C.Key):PC->IsInputKeyDown(C.Key))
    // Wheel zoom is applied once by the axis handler, with fractional deltas.

@@ -2,6 +2,7 @@
 #include "Mods/ACEPluginPresentation.h"
 #include "Mods/ACEPluginStyle.h"
 #include "Mods/ACEPluginIcon.h"
+#include "Mods/ACEActionDeckSubsystem.h"
 #include "Mods/ACEPluginOrder.h"
 #include "Widgets/Images/SImage.h"
 #include "Mods/ACEPluginSubsystem.h"
@@ -200,6 +201,11 @@ FVector2D SACEPluginDesktop::DisplaySize(const FWindow& W) const
         if(W.MapOverlay&&Host->WaypointOption(TEXT("map_minimized"),false))return FVector2D(70,26);
     }
     auto Size=W.Size;
+    if(W.Id==TEXT("actiondeck")&&Host.IsValid())
+        // Three square rows, toolbar/status, frame padding and the resize grip.
+        // The grip is outside the content area and must not cover the last row.
+        Size.Y=(Size.X-6)*.25+84+(Host->CanManipulatePluginWindow(W.Id)?24:0)
+            +(Host->GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>()->IsConfigOpen()?300:0);
     if(!W.PluginBar&&!W.MapOverlay&&W.Id!=TEXT("waypoint.arrow")&&Host.IsValid()&&Host->IsPluginWindowChromeHidden(W.Id))
         Size.Y=FMath::Max(1.,Size.Y-ACELedger::HeaderHeight);
     return Size;
@@ -242,7 +248,7 @@ void SACEPluginDesktop::Tick(const FGeometry& G,double Time,float Delta)
     for(auto& Pair:Windows)
     {
         const bool Hidden=Host.IsValid()&&Host->IsPluginWindowChromeHidden(Pair.Key);
-        if(BoundsChanged||Hidden!=Pair.Value.HiddenChrome||!Pair.Value.LedgerId.IsEmpty())Layout(Pair.Value);
+        if(BoundsChanged||Hidden!=Pair.Value.HiddenChrome||!Pair.Value.LedgerId.IsEmpty()||Pair.Key==TEXT("actiondeck"))Layout(Pair.Value);
         Pair.Value.HiddenChrome=Hidden;
     }
 }
@@ -285,13 +291,18 @@ void SACEPluginDesktop::Resize(const FString& Id,FVector2D Delta,bool Save)
              FMath::Clamp(Size.Y-Chrome,40.,FMath::Max(40.,ViewSize.Y-Chrome)));
          Layout(*W);if(Save)Host->SavePluginWindowPosition(SizeKey(Id),W->Size);return;
      }
-     W->Size+=Delta;const double MinWidth=96.,MinHeight=64.;W->Size.X=FMath::Clamp(W->Size.X,MinWidth,FMath::Max(MinWidth,ViewSize.X));W->Size.Y=FMath::Clamp(W->Size.Y,MinHeight,FMath::Max(MinHeight,ViewSize.Y));Layout(*W);
+     W->Size+=Delta;const double MinWidth=Id==TEXT("actiondeck")?360.:96.,MinHeight=64.;W->Size.X=FMath::Clamp(W->Size.X,MinWidth,FMath::Max(MinWidth,ViewSize.X));W->Size.Y=FMath::Clamp(W->Size.Y,MinHeight,FMath::Max(MinHeight,ViewSize.Y));Layout(*W);
      if(Save&&Host.IsValid())Host->SavePluginWindowPosition(Id+TEXT(".size"),W->Size);}
 }
 void SACEPluginDesktop::Raise(const FString& Id)
 {if(Id!=BarId)if(auto* W=Windows.Find(Id))W->Slot->SetZOrder(++TopOrder);}
 bool SACEPluginDesktop::IsOpen(const FString& Id) const
 {const auto* W=Windows.Find(Id);return W&&W->Open;}
+bool SACEPluginDesktop::ContainsPoint(const FString& Id,FVector2D Absolute) const
+{
+    const auto* W=Windows.Find(Id);
+    return W&&W->Open&&W->Widget&&W->Widget->GetCachedGeometry().IsUnderLocation(Absolute);
+}
 void SACEPluginDesktop::Hide(const FString& Id,bool Remember)
 {
     if(auto* W=Windows.Find(Id))
@@ -323,6 +334,7 @@ void SACEPluginDesktop::Toggle(const FString& Id)
     const bool Ledger=UACEPluginSubsystem::IsLedger(Id);
     if(Ledger){W.LedgerId=Id;W.Size=Host->GetPluginWindowPosition(SizeKey(Id),FVector2D(Id==TEXT("supplyledger")?200:290,0));}
     if(Id==TEXT("ucmmicro"))W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(270,360));
+    if(Id==TEXT("actiondeck"))W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(530,203));
     if(Id==TEXT("ucm.log"))W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(700,440));
     if(Manager)W.Size=Host->GetPluginWindowPosition(Id+TEXT(".size"),FVector2D(740,600));
     if(Arrow)W.Size=FVector2D(290,225);
@@ -431,6 +443,8 @@ void UACEPluginSubsystem::TogglePluginWindow(const FString& Id)
 {UpdateDesktopDock();if(DesktopDock)DesktopDock->Toggle(Id);}
 bool UACEPluginSubsystem::IsPluginWindowOpen(const FString& Id) const
 {return DesktopDock&&DesktopDock->IsOpen(Id);}
+bool UACEPluginSubsystem::IsPointInsidePluginWindow(const FString& Id,FVector2D Absolute) const
+{return DesktopDock&&DesktopDock->ContainsPoint(Id,Absolute);}
 bool UACEPluginSubsystem::WasPluginWindowOpen(const FString& Id) const
 {
     // Preserve ledger preferences from versions before ordinary windows saved

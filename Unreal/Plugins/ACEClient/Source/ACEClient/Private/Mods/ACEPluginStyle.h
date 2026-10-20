@@ -29,6 +29,7 @@ public:
     virtual void AddReferencedObjects(FReferenceCollector& Collector) override;
     virtual FString GetReferencerName() const override {return TEXT("ACEPluginStyle");}
     const FSlateBrush* Image(uint32 Id);
+    const FSlateBrush* SpellImage(uint32 SpellId);
     const FSlateBrush* ItemImage(const FACESupplyEntry& Item,bool Foreground);
     void Refresh();
     bool HasDatArtwork() const {return DatArtworkLoaded;}

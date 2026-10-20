@@ -446,7 +446,7 @@ bool UACEPluginSubsystem::Start(const FString& Id)
     if(P && P->Running)return true;
     if (!P || !P->Enabled || C->GetSessionState() != EACESessionState::InWorld || !C->GetPlayerVitalsView().bValid || (C->GetPlayerVitalsView().Health <= 0 && !P->Profile->HasField(TEXT("vt_meta"))))
     { Notice = TEXT("Enable the plugin and log into a living character before starting."); return false; }
-    if(Id==TEXT("looteditor")||Id==TEXT("waypoint")||Id==TEXT("ucmmicro")||IsLedger(Id)){Notice=TEXT("This plugin has no automation to start. Open its window from the plugin bar.");return false;}
+    if(Id==TEXT("looteditor")||Id==TEXT("waypoint")||Id==TEXT("ucmmicro")||Id==TEXT("actiondeck")||IsLedger(Id)){Notice=TEXT("This plugin has no automation to start. Open its window from the plugin bar.");return false;}
     if(P->Api>=2&&!ValidatePublicProfile(P->Profile)){Notice=TEXT("Invalid automation profile structures");return false;}
     if (Id == TEXT("ucm") && !P->Running && P->ProfileLinks && !P->ProfileLinks->Values.IsEmpty())
     {

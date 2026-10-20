@@ -3,6 +3,7 @@
 #include "ACERetailTurn.h"
 #include "UI/ACERadarVisuals.h"
 #include "Mods/ACEPluginSubsystem.h"
+#include "Mods/ACEActionDeckSubsystem.h"
 #include "VR/ACEVRLocomotion.h"
 #include "ACEKeyboardRouter.h"
 #include "ACEDesktopDisplay.h"
@@ -797,9 +798,15 @@ bool AACEPlayerController::InputKey(const FInputKeyEventArgs& Params)
  // Record controller buttons even when an immediate UI action consumes them:
  // they may also be held as modifiers for another button in this same frame.
  const bool GamepadHandled=Params.Key.IsGamepadKey()?Super::InputKey(Params):false;
- if(Params.Event==IE_Pressed)MovementKeyPressOrder.Add(Params.Key,++MovementKeySequence);
  const auto Mods=FSlateApplication::Get().GetModifierKeys();
  const FInputChord Chord(Params.Key,Mods.IsShiftDown(),Mods.IsControlDown(),Mods.IsAltDown(),Mods.IsCommandDown());
+ // Not every input source goes through Slate (e.g. viewport/simulated events).
+ // Claim deck chords before Super records them for the native hotbar poll.
+ // Releases always reach Super so switching override cannot leave keys held.
+ if((Params.Event==IE_Pressed||Params.Event==IE_Repeat)&&GetGameInstance())
+  if(auto* Deck=GetGameInstance()->GetSubsystem<UACEActionDeckSubsystem>())
+   if(Deck->HandleKey(Chord,Params.Event==IE_Repeat)||Deck->ReservesKey(Chord))return true;
+ if(Params.Event==IE_Pressed)MovementKeyPressOrder.Add(Params.Key,++MovementKeySequence);
  if(Params.Event==IE_Pressed && ACEInputBindings::Matches(ACEInputBindings::Action(TEXT("ToggleUCM")),Chord,this)
   && !ACEInputBindings::IsEditing() && Client && Client->GetSessionState()==EACESessionState::InWorld
   && !(DatGameplayBinder && DatGameplayBinder->IsChatEntryFocused()) && !(GameHUDWidget && GameHUDWidget->IsChatEntryFocused()))

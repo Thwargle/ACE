@@ -1,0 +1,397 @@
+#include "Mods/ACEActionDeckSubsystem.h"
+#include "Mods/ACEPluginSubsystem.h"
+#include "Mods/ACEPluginStyle.h"
+#include "Mods/ACEPluginIcon.h"
+#include "ACEClientSubsystem.h"
+#include "Engine/GameInstance.h"
+#include "Engine/GameViewportClient.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Rendering/DrawElements.h"
+#include "Rendering/SlateRenderer.h"
+#include "Fonts/FontMeasure.h"
+#include "Brushes/SlateRoundedBoxBrush.h"
+#include "Widgets/SLeafWidget.h"
+#include "Widgets/SBoxPanel.h"
+#include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SBorder.h"
+#include "Widgets/Layout/SScaleBox.h"
+#include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Input/SButton.h"
+#include "Widgets/Input/SComboBox.h"
+#include "Widgets/Input/SInputKeySelector.h"
+#include "Widgets/Text/STextBlock.h"
+
+namespace
+{
+    TSharedRef<SWidget> Label(const FString& Text,int32 Size=12)
+    {return SNew(SACEPluginText).Text(FText::FromString(Text)).Font(FCoreStyle::GetDefaultFontStyle("Regular",Size));}
+
+    void PaintIcon(const FACEDeckSlot& Slot,FACEPluginStyle& Theme,const FGeometry& G,
+        FSlateWindowElementList& Out,int32 Layer,bool Ready)
+    {
+        const auto Effect=Ready?ESlateDrawEffect::None:ESlateDrawEffect::DisabledEffect;
+        const FLinearColor Tint=Ready?FLinearColor::White:FLinearColor(.36f,.36f,.36f,1);
+        if(Slot.Action==EACEDeckAction::Item)
+        {
+            FSlateDrawElement::MakeBox(Out,Layer,G.ToPaintGeometry(),Theme.ItemImage(Slot.Item,false),Effect,Tint);
+            FSlateDrawElement::MakeBox(Out,Layer+1,G.ToPaintGeometry(),Theme.ItemImage(Slot.Item,true),Effect,Tint);
+        }
+        else if(Slot.Action==EACEDeckAction::Spell)
+            // Use the same power background, effect mask and badge as inventory.
+            FSlateDrawElement::MakeBox(Out,Layer+1,G.ToPaintGeometry(),Theme.SpellImage(Slot.Spell),Effect,Tint);
+        else if(Slot.Action==EACEDeckAction::Melee||Slot.Action==EACEDeckAction::Missile)
+        {
+            const double Y=Slot.Height==3?6:Slot.Height==2?16:26;
+            const TArray<FVector2D> Points={{5,Y},{26,Y},{21,Y-4},{26,Y},{21,Y+4}};
+            FSlateDrawElement::MakeLines(Out,Layer+1,G.ToPaintGeometry(),Points,Effect,FLinearColor(.9f,.72f,.3f)*Tint,true,2);
+            FSlateDrawElement::MakeText(Out,Layer+1,G.ToPaintGeometry(),
+                Slot.Action==EACEDeckAction::Melee?TEXT("M"):TEXT("R"),FCoreStyle::GetDefaultFontStyle("Bold",12),Effect,Tint);
+        }
+    }
+
+    // Lives above the plugin window layer, so a shortcut remains visible while
+    // being dragged over another slot, the window frame, or out into the world.
+    class SDeckDragPreview final : public SLeafWidget
+    {
+    public:
+        SLATE_BEGIN_ARGS(SDeckDragPreview){} SLATE_ARGUMENT(TSharedPtr<SWidget>,Source)
+            SLATE_ARGUMENT(UACEPluginSubsystem*,Host) SLATE_ARGUMENT(TSharedPtr<FACEPluginStyle>,Theme)
+            SLATE_ARGUMENT(FACEDeckSlot,Slot)
+        SLATE_END_ARGS()
+        void Construct(const FArguments& A)
+        {
+            Source=A._Source;Host=A._Host;Theme=A._Theme;Slot=A._Slot;
+            SetVisibility(EVisibility::HitTestInvisible);SetCanTick(false);
+        }
+        void Move(FVector2D InPosition,FVector2D InSize)
+        {Position=InPosition;Size=InSize;Invalidate(EInvalidateWidgetReason::Paint);}
+        virtual FVector2D ComputeDesiredSize(float) const override {return FVector2D::ZeroVector;}
+        virtual int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& Out,
+            int32 Layer,const FWidgetStyle&,bool) const override
+        {
+            const auto Widget=Source.Pin();
+            if(!Widget||!Widget->HasMouseCapture()||!Host.IsValid()||!Host->IsPluginWindowOpen(TEXT("actiondeck")))return Layer;
+            const auto TopLeft=G.AbsoluteToLocal(Position-Size*.5);
+            const auto BottomRight=G.AbsoluteToLocal(Position+Size*.5);
+            PaintIcon(Slot,*Theme,G.MakeChild(BottomRight-TopLeft,FSlateLayoutTransform(TopLeft)),Out,Layer,true);
+            return Layer+1;
+        }
+    private:
+        TWeakPtr<SWidget> Source;
+        TWeakObjectPtr<UACEPluginSubsystem> Host;
+        TSharedPtr<FACEPluginStyle> Theme;
+        FACEDeckSlot Slot;
+        FVector2D Position=FVector2D::ZeroVector,Size=FVector2D::ZeroVector;
+    };
+
+    class SDeckGrid final : public SLeafWidget
+    {
+    public:
+        SLATE_BEGIN_ARGS(SDeckGrid){} SLATE_ARGUMENT(UACEActionDeckSubsystem*,Deck)
+            SLATE_ARGUMENT(TFunction<void(int32)>,Configure) SLATE_ATTRIBUTE(int32,Selected)
+        SLATE_END_ARGS()
+        void Construct(const FArguments& A)
+        {
+            Deck=A._Deck;Configure=A._Configure;Selected=A._Selected;SetCanTick(false);
+            Host=Deck->GetGameInstance()->GetSubsystem<UACEPluginSubsystem>();
+            Theme=FACEPluginStyle::Use(Host.Get(),TEXT("actiondeck"));
+            SetToolTipText(TAttribute<FText>::CreateLambda([this]{return FText::FromString(Tooltip);}));
+        }
+        virtual ~SDeckGrid() override {EndDrag();}
+        virtual FVector2D ComputeDesiredSize(float) const override {return FVector2D(504,126);}
+        int32 SlotAt(FVector2D Absolute) const
+        {
+            const auto& G=GetCachedGeometry();const auto P=G.AbsoluteToLocal(Absolute),Size=G.GetLocalSize();
+            if(Size.X<=0||Size.Y<=0||P.X<0||P.Y<0||P.X>=Size.X||P.Y>=Size.Y)return INDEX_NONE;
+            return int32(P.Y/(Size.Y/3))*12+int32(P.X/(Size.X/12));
+        }
+        int32 DropSlotAt(FVector2D Absolute) const
+        {
+            auto& Slate=FSlateApplication::Get();
+            if(Slate.AnyMenusVisible()||Slate.GetActiveModalWindow())return INDEX_NONE;
+            const auto Window=Slate.FindWidgetWindow(SharedThis(this));
+            if(!Window||!Slate.LocateWindowUnderMouse(Absolute,{Window.ToSharedRef()},false,0).ContainsWidget(this))
+                return INDEX_NONE; // Do not rearrange through another window.
+            return SlotAt(Absolute);
+        }
+        virtual int32 OnPaint(const FPaintArgs&,const FGeometry& G,const FSlateRect&,FSlateWindowElementList& Out,
+            int32 Layer,const FWidgetStyle& Style,bool Enabled) const override
+        {
+            if(!Deck.IsValid())return Layer;
+            const FVector2D Cell(G.GetLocalSize().X/12,G.GetLocalSize().Y/3);
+            static const FSlateRoundedBoxBrush Border(FLinearColor(.016f,.018f,.016f,.95f),3.f,FLinearColor(.48f,.38f,.18f),1.f);
+            static const FSlateRoundedBoxBrush Highlight(FLinearColor(.08f,.12f,.11f,.98f),3.f,FLinearColor(1,.78f,.28f),2.f);
+            static const FSlateColorBrush KeyBack(FLinearColor(0,0,0,.85f));
+            for(int32 I=0;I<36;++I)
+            {
+                const auto& S=Deck->Slot(I);const auto& A=Deck->Availability(I);
+                const auto CG=G.MakeChild(Cell-FVector2D(2,2),FSlateLayoutTransform(FVector2D(I%12*Cell.X+1,I/12*Cell.Y+1)));
+                const bool Marked=Selected.Get(INDEX_NONE)==I||Hover==I;
+                const FSlateBrush* CellBrush=Marked?&Highlight:&Border;
+                FSlateDrawElement::MakeBox(Out,Layer,CG.ToPaintGeometry(),CellBrush,ESlateDrawEffect::None,CellBrush->GetTint(Style));
+                const auto IconG=CG.MakeChild(CG.GetLocalSize()-FVector2D(6,6),FSlateLayoutTransform(FVector2D(3,3)));
+                if(!Dragging||I!=From)PaintIcon(S,*Theme,IconG,Out,Layer+1,A.Ready);
+                // High-contrast key labels are independent of the disabled item art.
+                const FString Key=Deck->KeyLabel(I);
+                const auto Font=FCoreStyle::GetDefaultFontStyle("Bold",9);
+                const FVector2D TextSize=FSlateApplication::Get().GetRenderer()->GetFontMeasureService()->Measure(Key,Font);
+                const float Scale=FMath::Min(1.f,float((CG.GetLocalSize().X-4)/FMath::Max(1.,TextSize.X)));
+                const float Width=float(TextSize.X*Scale+4);
+                const auto KG=CG.MakeChild(FVector2D(Width,13),FSlateLayoutTransform(FVector2D(CG.GetLocalSize().X-Width,0)));
+                FSlateDrawElement::MakeBox(Out,Layer+3,KG.ToPaintGeometry(),&KeyBack,ESlateDrawEffect::None,KeyBack.GetTint(Style));
+                const auto TG=KG.MakeChild(TextSize,FSlateLayoutTransform(Scale,FVector2D(2,0)));
+                FSlateDrawElement::MakeText(Out,Layer+4,TG.ToPaintGeometry(),Key,Font,
+                    ESlateDrawEffect::None,FLinearColor(1,.94f,.72f));
+                if(S.Action==EACEDeckAction::Item&&(!Dragging||I!=From))
+                {
+                    const auto CountG=CG.MakeChild(FVector2D(37,12),FSlateLayoutTransform(FVector2D(3,CG.GetLocalSize().Y-13)));
+                    FSlateDrawElement::MakeText(Out,Layer+4,CountG.ToPaintGeometry(),FString::Printf(TEXT("%lld"),A.Count),
+                        FCoreStyle::GetDefaultFontStyle("Bold",9),ESlateDrawEffect::None,A.Count?FLinearColor::White:FLinearColor(.65f,.65f,.65f));
+                }
+            }
+            return Layer+4;
+        }
+        virtual FReply OnMouseButtonDown(const FGeometry&,const FPointerEvent& E) override
+        {
+            if(!Deck.IsValid())return FReply::Unhandled();
+            const int32 Index=SlotAt(E.GetScreenSpacePosition());if(Index==INDEX_NONE)return FReply::Unhandled();
+            if(E.GetEffectingButton()==EKeys::RightMouseButton){Configure(Index);return FReply::Handled();}
+            if(E.GetEffectingButton()!=EKeys::LeftMouseButton)return FReply::Unhandled();
+            EndDrag();From=Index;Start=E.GetScreenSpacePosition();
+            return FReply::Handled().CaptureMouse(SharedThis(this));
+        }
+        virtual FReply OnMouseMove(const FGeometry& G,const FPointerEvent& E) override
+        {
+            Hover=SlotAt(E.GetScreenSpacePosition());
+            if(HasMouseCapture()&&From!=INDEX_NONE)
+            {
+                Moved|=FVector2D::Distance(Start,E.GetScreenSpacePosition())>8;
+                if(!Deck.IsValid()||!Deck->IsEnabled()||!Host.IsValid()||!Host->IsPluginWindowOpen(TEXT("actiondeck")))
+                {EndDrag();return FReply::Handled().ReleaseMouseCapture();}
+                if(Moved&&!Dragging&&Deck->Slot(From).Action!=EACEDeckAction::Empty)
+                {
+                    if(auto* Viewport=Deck->GetGameInstance()->GetGameViewportClient())
+                    {
+                        DragViewport=Viewport;
+                        DragPreview=SNew(SDeckDragPreview).Tag(TEXT("ActionDeck.DragPreview"))
+                            .Source(SharedThis(this)).Host(Host.Get()).Theme(Theme).Slot(Deck->Slot(From));
+                        Viewport->AddViewportWidgetContent(DragPreview.ToSharedRef(),1600);
+                        Dragging=true;
+                    }
+                }
+                if(DragPreview)
+                {
+                    const FVector2D IconSize(G.GetLocalSize().X/12-8,G.GetLocalSize().Y/3-8);
+                    DragPreview->Move(E.GetScreenSpacePosition(),G.LocalToAbsolute(IconSize)-G.LocalToAbsolute(FVector2D::ZeroVector));
+                }
+            }
+            if(Deck.IsValid()&&Hover!=INDEX_NONE)
+            {
+                Tooltip=Deck->SlotName(Hover)+TEXT("\n")+Deck->EffectiveKey(Hover).GetInputText().ToString();
+                if(!Deck->Availability(Hover).Reason.IsEmpty())Tooltip+=TEXT("\n")+Deck->Availability(Hover).Reason;
+                Tooltip+=TEXT("\nRight-click to configure. Drag to rearrange; drop outside the window to remove the shortcut.");
+            }
+            Invalidate(EInvalidateWidgetReason::Paint);return FReply::Handled();
+        }
+        virtual void OnMouseLeave(const FPointerEvent& E) override {Hover=INDEX_NONE;SLeafWidget::OnMouseLeave(E);}
+        virtual FReply OnMouseButtonUp(const FGeometry&,const FPointerEvent& E) override
+        {
+            if(!HasMouseCapture()||E.GetEffectingButton()!=EKeys::LeftMouseButton)return FReply::Unhandled();
+            const int32 To=DropSlotAt(E.GetScreenSpacePosition());
+            if(Deck.IsValid()&&Deck->IsEnabled()&&Host.IsValid()&&Host->IsPluginWindowOpen(TEXT("actiondeck")))
+            {
+                if(Dragging)
+                {
+                    if(To!=INDEX_NONE)Deck->SwapSlots(From,To);
+                    else if(!Host->IsPointInsidePluginWindow(TEXT("actiondeck"),E.GetScreenSpacePosition()))
+                        Deck->ClearSlot(From);
+                }
+                else if(!Moved&&To==From&&To!=INDEX_NONE)
+                {
+                    if(Deck->IsConfigOpen())Configure(To);
+                    else Deck->Activate(To);
+                }
+            }
+            EndDrag();return FReply::Handled().ReleaseMouseCapture();
+        }
+        virtual void OnMouseCaptureLost(const FCaptureLostEvent& E) override
+        {EndDrag();SLeafWidget::OnMouseCaptureLost(E);}
+    private:
+        TWeakObjectPtr<UACEActionDeckSubsystem> Deck;
+        TWeakObjectPtr<UACEPluginSubsystem> Host;
+        TSharedPtr<FACEPluginStyle> Theme;
+        TSharedPtr<SDeckDragPreview> DragPreview;
+        TWeakObjectPtr<UGameViewportClient> DragViewport;
+        TFunction<void(int32)> Configure;
+        TAttribute<int32> Selected;
+        int32 From=INDEX_NONE,Hover=INDEX_NONE;
+        FVector2D Start;
+        bool Dragging=false,Moved=false;
+        FString Tooltip;
+        void EndDrag()
+        {
+            if(DragPreview&&DragViewport.IsValid())DragViewport->RemoveViewportWidgetContent(DragPreview.ToSharedRef());
+            DragPreview.Reset();DragViewport.Reset();From=INDEX_NONE;Dragging=Moved=false;
+            Invalidate(EInvalidateWidgetReason::Paint);
+        }
+    };
+}
+
+class SACEActionDeck final : public SCompoundWidget
+{
+public:
+    SLATE_BEGIN_ARGS(SACEActionDeck){} SLATE_ARGUMENT(UACEActionDeckSubsystem*,Deck) SLATE_END_ARGS()
+    void Construct(const FArguments& A)
+    {
+        Deck=A._Deck;Host=Deck->GetGameInstance()->GetSubsystem<UACEPluginSubsystem>();
+        Theme=FACEPluginStyle::Use(Host.Get(),TEXT("actiondeck"));
+        Deck->Refresh(true);
+        for(int32 Bits=0;Bits<16;++Bits)
+        {
+            FString Name;
+            if(Bits&2)Name+=TEXT("Ctrl+");if(Bits&1)Name+=TEXT("Shift+");
+            if(Bits&4)Name+=TEXT("Alt+");if(Bits&8)Name+=TEXT("Cmd+");
+            if(Name.IsEmpty())Name=TEXT("None");else Name.LeftChopInline(1);
+            Modifiers.Add(MakeShared<FString>(Name));
+        }
+        auto Toolbar=SNew(SHorizontalBox);
+        Toolbar->AddSlot().AutoWidth()[SNew(SACEPluginTab).Tag(TEXT("ActionDeck.Override")).ContentPadding(FMargin(8,3)).FontSize(12)
+            .Selected_Lambda([this]{return Deck->Override;})
+            .Text_Lambda([this]{return FText::FromString(Deck->Override?TEXT("Override: On"):TEXT("Override: Off"));})
+            .ToolTipText(FText::FromString(TEXT("Reserve deck keys while this window is open. Empty and disabled slots also block native hotbars. Typing always takes priority.")))
+            .OnClicked_Lambda([this]{Deck->Override=!Deck->Override;Deck->Save();return FReply::Handled();})];
+        Toolbar->AddSlot().AutoWidth().Padding(4,0)[SNew(SACEPluginTab).Tag(TEXT("ActionDeck.Lock")).ContentPadding(FMargin(8,3)).FontSize(12)
+            .Selected_Lambda([this]{return Host->IsPluginWindowPinned(TEXT("actiondeck"));})
+            .Text_Lambda([this]{return FText::FromString(Host->IsPluginWindowPinned(TEXT("actiondeck"))?TEXT("Locked"):TEXT("Lock"));})
+            .ToolTipText(FText::FromString(TEXT("Lock this window's position and hide its frame. Slots remain usable.")))
+            .OnClicked_Lambda([this]{Host->SetPluginWindowPinned(TEXT("actiondeck"),!Host->IsPluginWindowPinned(TEXT("actiondeck")));return FReply::Handled();})];
+        Toolbar->AddSlot().FillWidth(1);
+        Toolbar->AddSlot().AutoWidth()[SNew(SButton).Tag(TEXT("ActionDeck.Settings")).ButtonStyle(&Theme->DockButton).IsFocusable(false)
+            .ContentPadding(2).ToolTipText(FText::FromString(TEXT("Configure row modifiers, individual keys and attack shortcuts")))
+            .OnClicked_Lambda([this]
+            {
+                Deck->ConfigOpen=!Deck->ConfigOpen;Deck->CapturingKey=false;
+                if(Deck->ConfigOpen)BuildSettings();
+                else
+                {
+                    // The key selector retains focus after accepting a chord.
+                    // Closing settings must immediately restore gameplay input.
+                    auto& Slate=FSlateApplication::Get();
+                    Slate.ClearKeyboardFocus();Slate.SetAllUserFocusToGameViewport();
+                }
+                return FReply::Handled();
+            })
+            [SNew(SBox).WidthOverride(22).HeightOverride(22)[SNew(SACEPluginIcon).Id(TEXT("plugin.options"))]]];
+        ChildSlot[SNew(SVerticalBox)
+            +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(26)[Toolbar]]
+            +SVerticalBox::Slot().AutoHeight().Padding(0,3)
+                [SNew(SBox).HeightOverride_Lambda([this]{return FOptionalSize(FMath::Max(1.,GetCachedGeometry().GetLocalSize().X)*.25);})
+                [SNew(SScaleBox).Stretch(EStretch::ScaleToFit)
+                [SAssignNew(Grid,SDeckGrid).Tag(TEXT("ActionDeck.Grid")).Deck(Deck.Get())
+                    .Configure([this](int32 I){Selected=I;Deck->ConfigOpen=true;BuildSettings();})
+                    .Selected_Lambda([this]{return Deck->ConfigOpen?Selected:INDEX_NONE;})]]]
+            +SVerticalBox::Slot().AutoHeight()[SNew(SBox).HeightOverride(16)
+                [SNew(STextBlock).Font(FCoreStyle::GetDefaultFontStyle("Regular",10)).ColorAndOpacity(FLinearColor(.9f,.85f,.65f))
+                    .Text_Lambda([this]{return FText::FromString(Deck->Notice);})
+                    .ToolTipText_Lambda([this]{return FText::FromString(Deck->Notice);})
+                    .Clipping(EWidgetClipping::ClipToBounds)]]
+            +SVerticalBox::Slot().FillHeight(1)
+                [SAssignNew(Settings,SVerticalBox).Visibility_Lambda([this]{return Deck->ConfigOpen?EVisibility::Visible:EVisibility::Collapsed;})]];
+        BuildSettings();SetClipping(EWidgetClipping::ClipToBounds);
+        SetEnabled(TAttribute<bool>::CreateLambda([this]
+            {return Deck.IsValid()&&Deck->Client&&Deck->Client->GetSessionState()==EACESessionState::InWorld;}));
+    }
+    virtual void Tick(const FGeometry& G,double T,float D) override
+    {SCompoundWidget::Tick(G,T,D);if(Deck.IsValid()){Deck->Refresh();Grid->Invalidate(EInvalidateWidgetReason::Paint);}}
+    int32 SlotAt(FVector2D Absolute) const
+    {
+        if(!Grid||!FSlateApplication::IsInitialized())return INDEX_NONE;
+        return Grid->DropSlotAt(Absolute);
+    }
+private:
+    TWeakObjectPtr<UACEActionDeckSubsystem> Deck;
+    TWeakObjectPtr<UACEPluginSubsystem> Host;
+    TSharedPtr<FACEPluginStyle> Theme;
+    TSharedPtr<SDeckGrid> Grid;
+    TSharedPtr<SVerticalBox> Settings;
+    TSharedPtr<SInputKeySelector> KeySelector;
+    TArray<TSharedPtr<FString>> Modifiers;
+    int32 Selected=24;
+    TSharedRef<SWidget> Button(const FString& Title,TFunction<void()> Action)
+    {
+        return SNew(SButton).ButtonStyle(&Theme->DockButton).IsFocusable(false).ContentPadding(FMargin(7,4))
+            .OnClicked_Lambda([Action]{Action();return FReply::Handled();})[Label(Title)];
+    }
+    void BuildSettings()
+    {
+        if(!Settings)return;
+        Deck->CapturingKey=false;
+        Settings->ClearChildren();
+        auto Body=SNew(SVerticalBox);
+        Body->AddSlot().AutoHeight().Padding(0,3)[Label(TEXT("Row modifiers · custom slot keys keep their own modifiers"))];
+        auto Rows=SNew(SHorizontalBox);
+        for(int32 R=0;R<3;++R)
+        {
+            Rows->AddSlot().FillWidth(1).Padding(2)[SNew(SVerticalBox)
+                +SVerticalBox::Slot().AutoHeight()[Label(R==0?TEXT("Top"):R==1?TEXT("Middle"):TEXT("Bottom"))]
+                +SVerticalBox::Slot().AutoHeight()[SNew(SComboBox<TSharedPtr<FString>>)
+                    .ComboBoxStyle(&FCoreStyle::Get().GetWidgetStyle<FComboBoxStyle>("ComboBox"))
+                    .ButtonStyle(&Theme->DockButton).OptionsSource(&Modifiers).InitiallySelectedItem(Modifiers[Deck->RowModifiers[R]])
+                    .OnGenerateWidget_Lambda([](TSharedPtr<FString> V){return Label(*V);})
+                    .OnSelectionChanged_Lambda([this,R](TSharedPtr<FString> V,ESelectInfo::Type How)
+                    {if(V&&How!=ESelectInfo::Direct)Deck->SetRowModifier(R,uint8(Modifiers.IndexOfByKey(V)));})
+                    [SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
+                        .Text_Lambda([this,R]{return FText::FromString(*Modifiers[Deck->RowModifiers[R]]);})]]];
+        }
+        Body->AddSlot().AutoHeight()[Rows];
+        Body->AddSlot().AutoHeight().Padding(0,6)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",13))
+            .Text_Lambda([this]{return FText::FromString(FString::Printf(TEXT("Row %d · Slot %d: %s"),Selected/12+1,Selected%12+1,*Deck->SlotName(Selected)));})
+            .AutoWrapText(true)];
+        auto Binding=SNew(SHorizontalBox);
+        Binding->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(0,0,8,0)[Label(TEXT("Key"))];
+        Binding->AddSlot().FillWidth(1)[SAssignNew(KeySelector,SInputKeySelector).Tag(TEXT("ActionDeck.Key")).AllowModifierKeys(true).AllowGamepadKeys(false)
+            .SelectedKey_Lambda([this]{return Deck->EffectiveKey(Selected);})
+            .OnIsSelectingKeyChanged_Lambda([this]{Deck->CapturingKey=KeySelector&&KeySelector->GetIsSelectingKey();})
+            .OnKeySelected_Lambda([this](FInputChord K){Deck->SetKey(Selected,K);Deck->CapturingKey=false;})];
+        Binding->AddSlot().AutoWidth().Padding(4,0)[Button(TEXT("Row default"),[this]
+        {
+            const auto Old=Deck->Slots[Selected];Deck->Slots[Selected].CustomKey=false;
+            const auto K=Deck->EffectiveKey(Selected);Deck->Slots[Selected]=Old;
+            if(Deck->SetKey(Selected,K)){Deck->Slots[Selected].CustomKey=false;Deck->Save();}
+        })];
+        Binding->AddSlot().AutoWidth()[Button(TEXT("Clear slot"),[this]{Deck->ClearSlot(Selected);})];
+        Body->AddSlot().AutoHeight()[Binding];
+        Body->AddSlot().AutoHeight().Padding(0,6)[Label(TEXT("Assign an attack to the selected slot"))];
+        for(bool Missile:{false,true})
+        {
+            auto Attacks=SNew(SHorizontalBox);
+            for(int32 H=1;H<=3;++H)Attacks->AddSlot().FillWidth(1).Padding(2)
+                [Button(FString(Missile?TEXT("Missile "):TEXT("Melee "))+ (H==1?TEXT("low"):H==2?TEXT("medium"):TEXT("high")),
+                    [this,Missile,H]{Deck->BindAttack(Selected,Missile,H);})];
+            Body->AddSlot().AutoHeight()[Attacks];
+        }
+        Body->AddSlot().AutoHeight().Padding(0,4)[SNew(SACEPluginText).Font(FCoreStyle::GetDefaultFontStyle("Regular",12))
+            .AutoWrapText(true).Text(FText::FromString(TEXT("Click a slot above to edit it. Drag items from inventory and spells from the spellbook or spell bar. Drag between deck slots to swap. Settings pause deck actions; Override still blocks native hotbars.")))];
+        Body->AddSlot().AutoHeight()[Button(TEXT("Restore default keys"),[this]
+        {
+            Deck->RowModifiers[0]=1;Deck->RowModifiers[1]=2;Deck->RowModifiers[2]=0;
+            for(auto& S:Deck->Slots){S.CustomKey=false;S.Key=FInputChord();}
+            Deck->Notice.Empty();Deck->Save();
+        })];
+        Settings->AddSlot().FillHeight(1)[SNew(SScrollBox)+SScrollBox::Slot()[Body]];
+    }
+};
+
+TSharedRef<SWidget> UACEActionDeckSubsystem::MakePanel()
+{
+    auto Widget=SNew(SACEActionDeck).Deck(this);Panel=Widget;return Widget;
+}
+bool UACEActionDeckSubsystem::DropAt(FVector2D Absolute,int32 ItemGuid,int32 SpellId)
+{
+    auto Widget=Panel.Pin();
+    auto* Host=GetGameInstance()->GetSubsystem<UACEPluginSubsystem>();
+    if(!Widget||!IsEnabled()||!Host->IsPluginWindowOpen(TEXT("actiondeck")))return false;
+    const int32 Index=Widget->SlotAt(Absolute);if(Index==INDEX_NONE)return false;
+    if(SpellId)BindSpell(Index,SpellId);else BindItem(Index,ItemGuid);
+    return true;
+}

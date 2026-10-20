@@ -19,6 +19,42 @@ Retail commands such as `/fps` and `/saveui`, and server commands such as
 
 ## Users
 
+**Action Deck** is an optional bundled desktop hotbar. Enable it in Plugin
+Manager and open the gold tiles / teal spark icon. Drag inventory items or
+spellbook/spell-bar icons into its three rows of twelve slots. Click an icon
+to use it, drag between slots to swap actions, or right-click to edit a slot.
+The icon follows the pointer above other windows while dragging. Drop outside
+the Action Deck window to remove the shortcut; dropping on its toolbar or
+settings leaves it in place. Binding or removing a shortcut does not move or
+destroy the inventory item. Keys stay with their slots when actions move.
+Icons use the retail item/spell compositor, including item underlays and
+enchantment effects, spell power backgrounds and target badges, without raw
+white mask outlines.
+
+Turn **Override** on to use deck hotkeys in place of the native spell and item
+hotbars. Bottom-row defaults are `1` through `=`, middle-row defaults add Ctrl,
+and top-row defaults add Shift. Empty and unavailable slots reserve their keys
+too. Typing and keybinding editors receive their input normally. Action Deck
+settings pause deck actions while keeping its keys reserved, so editing cannot
+accidentally use a native hotbar item. Closing the deck or disabling the plugin
+restores native bindings.
+
+The gear opens row-modifier and per-slot key settings. Individual key overrides
+keep their modifiers when a row changes. Duplicate chords are rejected.
+Settings can also assign low, medium or high melee/missile attacks, clear a slot,
+or restore default keys. **Lock** pins the position and hides the window frame;
+click **Locked** to unlock it. Window placement follows the normal plugin
+layout, while actions, keys and Override save separately per character/server.
+
+Item slots search all owned packs, prefer the originally bound item, then use a
+replacement with the same item class, name and type. Depleted or missing items
+stay grey until a replacement is available. Healing kits use a selected living
+player when compatible, otherwise self, without changing selection. Other items
+use the native equip/use/targeting flow, including confirmations. Spells require
+confirmed magic stance; attacks require their corresponding confirmed stance.
+Busy actions and equipment changes temporarily disable slots. Hover a slot to
+read its name, full key binding, and the reason it is unavailable.
+
 **Third Eye** is an optional bundled spawn watcher inspired by
 [Virindi Sense](http://virindi.net/wiki/index.php/Virindi_Sense). Enable it in
 Plugin Manager and open the eye icon. On **Setup**, enter a name or use **Add

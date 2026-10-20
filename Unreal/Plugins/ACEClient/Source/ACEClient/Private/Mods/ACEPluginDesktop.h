@@ -14,12 +14,14 @@ class SACEPluginDesktop : public SCompoundWidget
     friend class FACEPluginHostTest;
     friend class FACELedgerTest;
     friend class FACEUCMLogTest;
+    friend class FACEActionDeckTest;
 public:
     SLATE_BEGIN_ARGS(SACEPluginDesktop):_Host(nullptr),_ManagerOnly(false){} SLATE_ARGUMENT(UACEPluginSubsystem*, Host) SLATE_ARGUMENT(bool,ManagerOnly) SLATE_END_ARGS()
     void Construct(const FArguments& Args);
     void Refresh();
     void Toggle(const FString& Id);
     bool IsOpen(const FString& Id) const;
+    bool ContainsPoint(const FString& Id, FVector2D Absolute) const;
     void SaveOverlayLayout();
     virtual void Tick(const FGeometry& Geometry, double Time, float Delta) override;
 private:

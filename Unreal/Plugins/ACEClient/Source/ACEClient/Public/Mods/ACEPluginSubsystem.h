@@ -124,6 +124,7 @@ class ACECLIENT_API UACEPluginSubsystem : public UGameInstanceSubsystem
     friend class FACEPluginLocalServiceTest;
     friend class FACEPluginCosmeticsIntegrationTest;
     friend class FACEPluginCosmeticsTest;
+    friend class FACEActionDeckTest;
 public:
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
     virtual void Deinitialize() override;
@@ -199,6 +200,7 @@ public:
     TSharedRef<SWidget> MakePanel(const FString& PluginId = FString());
     void TogglePluginWindow(const FString& Id);
     bool IsPluginWindowOpen(const FString& Id) const;
+    bool IsPointInsidePluginWindow(const FString& Id, FVector2D Absolute) const;
     bool WasPluginWindowOpen(const FString& Id) const;
     void SavePluginWindowVisibility(const FString& Id, bool Open);
     FVector2D GetPluginWindowPosition(const FString& Id, const FVector2D& Default) const;

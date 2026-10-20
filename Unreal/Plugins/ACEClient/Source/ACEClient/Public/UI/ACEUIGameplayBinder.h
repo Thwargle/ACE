@@ -88,6 +88,7 @@ class ACECLIENT_API UACEUIGameplayBinder : public UObject
 	friend class FACEBarberTest;
 	friend class FACEItemPresentationTest;
 	friend class FACESelectionToolbarTest;
+    friend class FACEActionDeckTest;
 
 public:
     /** Shared attack mark used by desktop controls, VR and plugin commands. */
@@ -230,6 +231,9 @@ public:
 
 	/** Number-key hotbar: cast when magic combat is up, else use shortcut slot. */
 	void ActivateHotbarSlot(int32 SlotIndex);
+    /** Manual deck actions use the same equip/target/charge paths as native UI. */
+    void UseActionDeckItem(int32 Guid) { CancelPendingUseWith(); UseInventoryItem(Guid); }
+    void RequestActionDeckAttack(uint32 Height) { BeginCombatPowerCharge(Height, false); }
 
 	/**
 	 * If a dual-use source is armed (key/tool targeting), complete UseWithTarget on TargetGuid.

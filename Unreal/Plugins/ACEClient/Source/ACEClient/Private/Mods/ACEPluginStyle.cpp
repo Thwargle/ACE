@@ -40,6 +40,15 @@ const FSlateBrush* FACEPluginStyle::Image(uint32 Id)
     if(Resolver)if(auto* T=Resolver->ResolveTexture(Id)){B->SetResourceObject(T);B->ImageSize=FVector2D(T->GetSizeX(),T->GetSizeY());}
     return B.Get();
 }
+const FSlateBrush* FACEPluginStyle::SpellImage(uint32 SpellId)
+{
+    auto& B=ItemImages.FindOrAdd(FString::Printf(TEXT("spell.%u"),SpellId));
+    if(!B)B=MakeShared<FSlateBrush>();
+    if(!B->GetResourceObject()&&Resolver)B->SetResourceObject(Resolver->ResolveSpellIcon(SpellId));
+    B->DrawAs=B->GetResourceObject()?ESlateBrushDrawType::Image:ESlateBrushDrawType::NoDrawType;
+    B->ImageSize=FVector2D(32,32);
+    return B.Get();
+}
 const FSlateBrush* FACEPluginStyle::ItemImage(const FACESupplyEntry& Item,bool Foreground)
 {
     const FString Key=Foreground?FString::Printf(TEXT("fg.%d.%d.%d"),Item.Icon,Item.Overlay,Item.Effects)

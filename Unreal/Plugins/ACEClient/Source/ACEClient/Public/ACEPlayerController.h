@@ -226,6 +226,9 @@ public:
 	/** Dual-use targeting (mana stone / key) — keep interactable cursor until cancelled. */
 	void SetPendingUseTargeting(bool bPending);
 
+public:
+    class UACEUIGameplayBinder* GetActionDeckBinder() const { return DatGameplayBinder; }
+    friend class FACEActionDeckTest;
 protected:
 	bool bDesktopInterfaceHidden = false;
 	UPROPERTY()

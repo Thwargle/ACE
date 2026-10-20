@@ -810,7 +810,8 @@ bool FACEPluginHostTest::RunTest(const FString&)
             const auto Labels=VisibleText(H->MakePanel(Id));
             for(const TCHAR* Title:{TEXT("UCM"),TEXT("Loot Profile Editor"),TEXT("Item Tools"),TEXT("Waypoint"),TEXT("Explore Dereth"),TEXT("UCM Micro"),TEXT("UCM Log"),TEXT("Supply Ledger"),TEXT("Hunt Ledger")})
                 TestFalse(FString(Id)+TEXT(" has no duplicate content heading: ")+Title,Labels.Contains(Title));
-            if(FString(Id)==TEXT("ucm"))TestTrue(TEXT("Compact UCM header keeps Start and status"),Labels.Contains(TEXT("Start"))&&Labels.Contains(P->Status)&&!Labels.Contains(TEXT("Setup: ")+P->ProfileName));
+            if(FString(Id)==TEXT("ucm"))TestTrue(TEXT("Compact UCM header keeps Start and current status"),
+                Labels.Contains(TEXT("Start"))&&Labels.Contains(TEXT("Current status: ")+H->UCMCurrentStatus())&&!Labels.Contains(TEXT("Setup: ")+P->ProfileName));
             if(FString(Id)==TEXT("looteditor"))TestTrue(TEXT("Loot editor keeps its tabs"),Labels.Contains(TEXT("Loot rules"))&&Labels.Contains(TEXT("Vendors")));
             if(FString(Id)==TEXT("itemtools"))TestTrue(TEXT("Item Tools keeps stop and task controls"),Labels.Contains(TEXT("Stop"))&&Labels.Contains(TEXT("Give")));
         }
@@ -894,10 +895,14 @@ bool FACEPluginHostTest::RunTest(const FString&)
             TArray<TSharedRef<SCheckBox>> Toggles;
             TFunction<void(TSharedRef<SWidget>)> Visit=[&](TSharedRef<SWidget> Widget)
             {if(Widget->GetTypeAsString()==TEXT("SCheckBox"))Toggles.Add(StaticCastSharedRef<SCheckBox>(Widget));auto* Children=Widget->GetChildren();for(int I=0;I<Children->Num();++I)Visit(Children->GetChildAt(I));};
-            Visit(Micro);TestEqual(TEXT("Micro includes all ten activity toggles below its Start/Stop button"),Toggles.Num(),10);
-            if(Toggles.Num()==10)
+            Visit(Micro);TestEqual(TEXT("Micro includes ten activities plus Follow Character and Corners"),Toggles.Num(),12);
+            const auto Labels=VisibleText(Micro);
+            for(const TCHAR* Label:{TEXT("F"),TEXT("CF"),TEXT("FC"),TEXT("C"),TEXT("Current status")})
+                TestTrue(FString(TEXT("Micro includes quick control/status: "))+Label,Labels.Contains(Label));
+            const auto* LootToggle=Toggles.FindByPredicate([&](const auto& Toggle){return VisibleText(Toggle).Contains(TEXT("Looting"));});
+            if(TestNotNull(TEXT("Micro has a looting control"),LootToggle))
             {
-                auto Loot=Toggles[2];const bool Before=Loot->IsChecked();const auto Geometry=Loot->GetCachedGeometry();const FVector2D At=Geometry.LocalToAbsolute(Geometry.GetLocalSize()*.5);
+                auto Loot=*LootToggle;const bool Before=Loot->IsChecked();const auto Geometry=Loot->GetCachedGeometry();const FVector2D At=Geometry.LocalToAbsolute(Geometry.GetLocalSize()*.5);
                 Loot->OnMouseButtonDown(Geometry,FPointerEvent(0,At,At,{EKeys::LeftMouseButton},EKeys::LeftMouseButton,0,FModifierKeysState()));
                 Loot->OnMouseButtonUp(Geometry,FPointerEvent(0,At,At,{},EKeys::LeftMouseButton,0,FModifierKeysState()));
                 bool Enabled=false;P->Profile->TryGetBoolField(TEXT("looting"),Enabled);

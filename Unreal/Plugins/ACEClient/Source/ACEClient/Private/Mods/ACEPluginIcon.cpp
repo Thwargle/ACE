@@ -43,6 +43,16 @@ void SACEPluginIcon::Construct(const FArguments& Args)
             const double X=I==1?10:22;Fill({{X-3,Y-3},{X+3,Y-3},{X+3,Y+3},{X-3,Y+3}},I==1?Paper:Teal);
         }
     }
+    else if(Id==TEXT("actiondeck")) // Gold hotbar tiles with a teal action spark.
+    {
+        for(int32 Y=0;Y<3;++Y)for(int32 X=0;X<3;++X)
+        {
+            const double L=3+X*9,T=4+Y*9;
+            Line({{L,T},{L+7,T},{L+7,T+7},{L,T+7},{L,T}},Gold);
+        }
+        Fill({{19,1},{12,15},{17,15},{13,30},{25,12},{19,12}},Teal);
+        Line({{19,3},{15,13},{20,13}},Paper);
+    }
     else if(Id==TEXT("supplyledger")) // Three tapers tied with a counting band.
     {
         Fill({{5,11},{10,11},{10,28},{5,28}},Paper);Fill({{13,6},{18,6},{18,28},{13,28}},Gold);

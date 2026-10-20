@@ -1,5 +1,6 @@
 #include "UI/ACEUIGameplayBinder.h"
 #include "Mods/ACEPluginSubsystem.h"
+#include "Mods/ACEActionDeckSubsystem.h"
 #include "UI/ACERetailVendorCategories.h"
 #include "ACERetailChat.h"
 #include "ACESpellbookFilters.h"
@@ -3459,18 +3460,7 @@ void UACEUIGameplayBinder::UpdateSpellDrag(FVector2D CanvasLocalPos)
 	SetSpellIcon(SpellDragIcon, SpellDragId);
 	SpellDragIcon->SetBrushColor(FLinearColor(1.f, 1.f, 1.f, 0.85f));
 	SpellDragIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
-	if (SpellDragIcon->GetParent() != Canvas->GetElementLayer())
-	{
-		Canvas->GetElementLayer()->AddChild(SpellDragIcon);
-	}
-	if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(SpellDragIcon->Slot))
-	{
-		Slot->SetAnchors(FAnchors(0.f, 0.f));
-		Slot->SetAutoSize(false);
-		Slot->SetPosition(CanvasLocalPos - FVector2D(16.f, 16.f));
-		Slot->SetSize(FVector2D(32.f, 32.f));
-		Canvas->SetOverlayOrder(SpellDragIcon, nullptr, 250000);
-	}
+    Canvas->ShowDragIcon(SpellDragIcon,CanvasLocalPos);
 	if (!SpellDropMarker)
 	{
 		SpellDropMarker = Canvas->WidgetTree->ConstructWidget<UBorder>();
@@ -3508,6 +3498,7 @@ bool UACEUIGameplayBinder::TryFinishSpellDrag(FVector2D CanvasLocalPos)
 	}
 	const int32 SpellId = SpellDragId;
 	const int32 SourceSlot = SpellDragSourceBarSlot;
+    const int32 SourceBar = SpellDragSourceBar;
 	const bool bWasDragging = bSpellDragActive;
 	CancelSpellDrag();
 	if (!Client || !bWasDragging)
@@ -3549,6 +3540,15 @@ bool UACEUIGameplayBinder::TryFinishSpellDrag(FVector2D CanvasLocalPos)
 	const FVector2D Absolute = Canvas
 		? Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos)
 		: CanvasLocalPos;
+
+    if(auto* GI=Client->GetGameInstance())
+        if(auto* Deck=GI->GetSubsystem<UACEActionDeckSubsystem>();Deck&&Deck->DropAt(Absolute,0,SpellId))
+        {
+            // Native dragging lifts the favorite at drag start. The deck is a
+            // copy destination: restore its original slot.
+            if(SourceSlot!=INDEX_NONE)Client->SendAddSpellToBar(SpellId,SourceSlot,SourceBar);
+            RefreshSpellHotbarOverlays();return true;
+        }
 
 	int32 DestSlot = INDEX_NONE;
 	for (int32 Tab = 1; Tab <= 8; ++Tab)
@@ -4496,6 +4496,7 @@ void UACEUIGameplayBinder::CancelInventoryDrag()
 	if (InvDragIcon)
 	{
 		InvDragIcon->SetVisibility(ESlateVisibility::Collapsed);
+        if(Canvas)Canvas->HideDragIcon(InvDragIcon);
 	}
 	SyncInventoryButtonVisual();
 }
@@ -4512,6 +4513,7 @@ void UACEUIGameplayBinder::CancelSpellDrag()
 	if (SpellDragIcon)
 	{
 		SpellDragIcon->SetVisibility(ESlateVisibility::Collapsed);
+        if(Canvas)Canvas->HideDragIcon(SpellDragIcon);
 	}
 }
 
@@ -4972,19 +4974,7 @@ void UACEUIGameplayBinder::UpdateInventoryDrag(FVector2D CanvasLocalPos)
 	UpdateInventoryContainerDropFeedback(CanvasLocalPos);
 	InvDragIcon->SetBrushColor(FLinearColor(1.f, 1.f, 1.f, 0.85f));
 	InvDragIcon->SetVisibility(ESlateVisibility::HitTestInvisible);
-	if (InvDragIcon->GetParent() != Canvas->GetElementLayer())
-	{
-		Canvas->GetElementLayer()->AddChild(InvDragIcon);
-	}
-	if (UCanvasPanelSlot* Slot = Cast<UCanvasPanelSlot>(InvDragIcon->Slot))
-	{
-		Slot->SetAnchors(FAnchors(0.f, 0.f));
-		Slot->SetAutoSize(false);
-		Slot->SetPosition(CanvasLocalPos - FVector2D(16.f, 16.f));
-		Slot->SetSize(FVector2D(32.f, 32.f));
-		// Above SyncElementWidgets / inventory overlays (those climb past 20k).
-		Canvas->SetOverlayOrder(InvDragIcon, nullptr, 250000);
-	}
+    Canvas->ShowDragIcon(InvDragIcon,CanvasLocalPos);
 }
 
 void UACEUIGameplayBinder::AssignInventoryShortcut(int32 Guid, int32 SlotIndex, int32 SourceShortcut)
@@ -5039,6 +5029,12 @@ bool UACEUIGameplayBinder::TryFinishInventoryDrag(FVector2D CanvasLocalPos)
 	const bool bLootSource = OpenLootContainerGuid != 0
 		&& (SourcePack == OpenLootContainerGuid || SourcePack == OpenLootSelectedPackGuid);
 	CancelInventoryDrag();
+
+    if(bWasDragging&&Client&&Canvas)
+        if(auto* GI=Client->GetGameInstance())
+            if(auto* Deck=GI->GetSubsystem<UACEActionDeckSubsystem>();Deck
+                &&Deck->DropAt(Canvas->GetCachedGeometry().LocalToAbsolute(CanvasLocalPos),Guid))
+                return true;
 
 	// A swap may have begun before mouse-down. Never submit a second weapon
 	// relocation while its dequip/wield acknowledgments are still outstanding.
